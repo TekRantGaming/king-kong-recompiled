@@ -140,12 +140,16 @@ int RenderScaleFor(std::string_view preset, int output_height) {
 
 void ApplyRenderPreset(int output_height) {
   const int scale = RenderScaleFor(REXCVAR_GET(kk_render_quality), output_height);
-  if (scale <= 0) return;
-  // Set as the cvar's default so an explicit resolution_scale (custom) is untouched
-  // and the derived value is not written to the config.
-  SetCvarDefault("resolution_scale", std::to_string(scale));
-  if (rex::cvar::GetFlagByName("resolution_scale") != std::to_string(scale))
-    rex::cvar::SetFlagByName("resolution_scale", std::to_string(scale));
+  if (scale <= 0) return;  // custom: the player's resolution_scale is used as is
+  // The runtime only honours resolution_scale when it differs from its default,
+  // so a preset drives the per-axis scales instead (read directly). They are set
+  // as defaults so the derived value is not written to the config, and any
+  // resolution_scale left over from an earlier custom choice is cleared.
+  rex::cvar::ResetToDefault("resolution_scale");
+  for (const char* axis : {"draw_resolution_scale_x", "draw_resolution_scale_y"}) {
+    SetCvarDefault(axis, std::to_string(scale));
+    rex::cvar::ResetToDefault(axis);
+  }
   REXLOG_INFO("KK: render preset {} at {}p output -> {}x ({}p)", REXCVAR_GET(kk_render_quality),
               output_height, scale, scale * 720);
 }
@@ -207,6 +211,15 @@ void ApplyRuntimeOverrides() {
       REXLOG_WARN("KK: could not set {} (cvar not registered)", name);
   }
   REXLOG_INFO("KK: frame-rate cap {}", REXCVAR_GET(kk_frame_rate));
+
+  // The draw resolution scale the GPU uses (same rule as the runtime's
+  // TextureCache::GetConfigDrawResolutionScale), for bug reports.
+  auto axis = [](const char* name) {
+    if (rex::cvar::HasNonDefaultValue("resolution_scale") && !rex::cvar::HasNonDefaultValue(name))
+      return rex::cvar::GetFlagByName("resolution_scale");
+    return rex::cvar::GetFlagByName(name);
+  };
+  REXLOG_INFO("KK: draw resolution scale {}x{}", axis("draw_resolution_scale_x"), axis("draw_resolution_scale_y"));
 
   // The GPU logs every occlusion ("viz") query at info level: thousands of
   // lines a second for this title, written from the GPU thread, plus a log
