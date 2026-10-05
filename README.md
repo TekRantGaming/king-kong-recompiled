@@ -214,6 +214,7 @@ Everything is set up before the game starts. The launcher uses art from your own
 
 - Above 30 fps some character animations are not right yet. For example, the crew rowing at the start skip part of their animation. 30 fps, the default, plays them correctly.
 - There can be a short pause when the game loads the next area. The game does the same on the Xbox 360.
+- The pre-rendered videos pause for a moment every couple of seconds while the video player keeps to the video's timing. This is being looked into.
 - The first time you see a new effect there is a short pause while it is prepared. It is saved, so this only happens once. If you prefer no pause, set **Graphics > Shader preparing** to Background, but then objects can briefly vanish or flash bright the first time.
 
 ### Reporting a problem

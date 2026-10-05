@@ -1,26 +1,28 @@
-## Peter Jackson's King Kong PC Port v1.1.0
+## Peter Jackson's King Kong PC Port v1.2.0: stability pass
 
-Play the Xbox 360 version of Peter Jackson's King Kong natively on Windows, with a launcher and modern PC options.
+This release is about making the game run properly on more PCs. Thanks to everyone on Reddit who reported problems.
 
 ### What's new
-- **Button prompts for other controllers.** The game can now show PlayStation 5, PlayStation 2, Xbox Series or keyboard buttons instead of the Xbox 360 ones, in menus and hints. Pick it in the launcher under **Controls > Button prompts**.
-  - **Keyboard** shows the keys you have actually bound, so the prompts change when you remap keys.
-  - **PlayStation 2** uses the classic coloured triangle, circle, cross and square.
-  - The pictures are free CC0 art from Xelu's Free Controllers & Keyboard Prompts, not taken from any game.
-- **Steadier launcher.** Fixed a bug where closing the launcher could use its pictures after they were freed. It crashed the game on Linux and was a hidden risk on Windows.
+- **No more vanishing objects, silhouettes or bright flashes the first time you play.** While the game prepared a new effect in the background, it skipped drawing everything that needed it, so characters could turn into silhouettes for a moment and some frames flashed bright. Effects are now prepared before they are drawn. The first time you see something new there can be a short pause instead, and only once, because prepared effects are saved for next time. If you prefer the old behaviour, set **Graphics > Shader preparing** to Background.
+- **Steadier frame pacing on more PCs.** The game now asks Windows for precise 1 ms timers and opts out of power throttling. Without this, Windows 10 and 11 can stretch the game's short waits to about 16 ms, and on laptops with Intel's newer mixed P-core/E-core processors Windows 11 can move the game onto the slower cores. Both cause stutter.
+- **Better bug reports.** Every 10 seconds the log notes the average frame rate, the 1% low, the worst frame and how many frames took over 50 or 100 ms. If the game ever crashes, it writes `crash-<date>.txt` and `crash-<date>.dmp` into the `logs` folder. The README explains what to send.
 
 ### Full changelog
-- Added the Button prompts setting (Xbox 360, Xbox Series, PlayStation 5, PlayStation 2, Keyboard), with a `glyphs` folder of button pictures next to the exe.
-- Added `tools/make_glyphs.py`, which rebuilds the `glyphs` folder from the prompt pack.
-- Fixed the launcher freeing its pictures while the last frame still used them.
-- Linux: work in progress on a Linux version (game setup, file picker, sounds, fonts and two crash fixes). It is not ready yet, so there is no Linux download.
-- README: added the new setting and the credit for the button pictures, and marked Linux as in development.
+- Shaders now finish preparing before they are used (no skipped draws). The new launcher setting **Graphics > Shader preparing** switches between Wait (default) and Background.
+- 1 ms timer resolution and Windows power-throttling opt-out at startup. The log records how long a 1 ms sleep really takes.
+- Frame-time summary in the log every 10 seconds.
+- Crash reports (`.txt` and minidump) in the `logs` folder.
+- New developer test build (`kk-dev` preset, never in releases). It can skip straight into gameplay and walk around on its own, for testing performance.
+- README: a new "Reporting a problem" section, and updated known issues.
+
+### Tested
+On an RTX 4070 Ti, gameplay held a locked 60 FPS at 720p, 1440p and 2160p, including with the game limited to 2 CPU threads and with an empty shader cache. Short pauses remain when the game loads a new area (as on the Xbox 360). The pre-rendered videos also pause briefly every couple of seconds; that is the video player keeping to the video's timing and is being looked into.
 
 ### How to update
-Download **KingKong-v1.1.0-windows-x64.zip** below and copy everything in it over your KingKong folder, including the new `glyphs` folder. Your installed `game` folder, saves and settings stay as they are.
+Download **KingKong-v1.2.0-windows-x64.zip** below and copy everything in it over your KingKong folder. Your installed `game` folder, saves and settings stay as they are.
 
 ### New install
-1. Unzip **KingKong-v1.1.0-windows-x64.zip** anywhere and run **king_kong.exe**.
+1. Unzip **KingKong-v1.2.0-windows-x64.zip** anywhere and run **king_kong.exe**.
 2. Click **Install from disc image...** and pick your own King Kong disc image (USA/Europe, title ID `555307D3`, version `0.0.0.1`).
 3. Press **PLAY**.
 
