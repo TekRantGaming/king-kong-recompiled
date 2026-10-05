@@ -6,13 +6,13 @@
 
 [![Latest release](https://img.shields.io/github/v/release/TekRantGaming/king-kong-recompiled?style=for-the-badge&label=release&color=e8a33c&labelColor=0d0b09)](https://github.com/TekRantGaming/king-kong-recompiled/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/TekRantGaming/king-kong-recompiled/total?style=for-the-badge&color=8a5a1c&labelColor=0d0b09)](https://github.com/TekRantGaming/king-kong-recompiled/releases)
-![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20soon-5b7a8c?style=for-the-badge&labelColor=0d0b09)
+![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux-5b7a8c?style=for-the-badge&labelColor=0d0b09)
 
 ### Peter Jackson's King Kong on PC, running natively, with the launcher and options of a modern PC release.
 
 [<img src="https://img.shields.io/badge/Download-Windows%20x64-e8a33c?style=for-the-badge&logo=windows&logoColor=white&labelColor=0d0b09" alt="Download for Windows" height="40">](https://github.com/TekRantGaming/king-kong-recompiled/releases/latest)
 &nbsp;
-<img src="https://img.shields.io/badge/Linux%20AppImage-coming%20soon-555555?style=for-the-badge&logo=linux&logoColor=white&labelColor=0d0b09" alt="Linux coming soon" height="40">
+[<img src="https://img.shields.io/badge/Download-Linux%20AppImage-e8a33c?style=for-the-badge&logo=linux&logoColor=white&labelColor=0d0b09" alt="Download for Linux" height="40">](https://github.com/TekRantGaming/king-kong-recompiled/releases/latest)
 
 <sub>The original Xbox 360 game code, translated to native PC code with the <a href="https://github.com/rexglue/rexglue-sdk">ReXGlue SDK</a>. <b>No game files included</b>: bring your own copy of the King Kong Xbox 360 disc.</sub>
 
@@ -247,7 +247,14 @@ Get-FileHash "C:\Games\King Kong.iso" -Algorithm SHA1
 
 The download contains only this port. **No game files are included**: they come from your own disc. Your saves and settings are kept in `Documents\king_kong`.
 
-**Linux:** an AppImage is coming soon.
+**Linux:** download the **KingKong-...-linux-x86_64.AppImage** from the [latest release](https://github.com/TekRantGaming/king-kong-recompiled/releases/latest), then:
+
+```sh
+chmod +x KingKong-*-linux-x86_64.AppImage
+./KingKong-*-linux-x86_64.AppImage
+```
+
+The launcher installs the game into a `game` folder next to the AppImage, and your settings are kept there too. You need a 64-bit distro from about 2024 on (Ubuntu 24.04, Fedora 40, Arch, SteamOS 3.6 or newer) and a Vulkan graphics driver. The disc picker uses zenity or kdialog, which most desktops include.
 
 <details>
 <summary><b>Building from source (for developers)</b></summary>

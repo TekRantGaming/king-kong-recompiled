@@ -1,5 +1,7 @@
 #include "iso.h"
 
+#include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <fstream>
 #include <functional>
@@ -93,7 +95,7 @@ uint32_t ReadTitleId(const std::filesystem::path& image) {
   Disc d;
   if (!d.Open(image)) return 0;
   for (const auto& e : d.List(d.root_sector(), d.root_size())) {
-    if (e.dir || e.name.size() != 11 || _strnicmp(e.name.c_str(), "default.xex", 11) != 0) continue;
+    if (e.dir || e.name.size() != 11 || !std::equal(e.name.begin(), e.name.end(), "default.xex", [](char a, char b) { return std::tolower(static_cast<unsigned char>(a)) == b; })) continue;
     std::vector<uint8_t> h(std::min<uint32_t>(e.size, 0x4000));
     if (!d.Read(d.base() + e.sector * kSector, h.data(), h.size()) || std::memcmp(h.data(), "XEX2", 4)) return 0;
     // Optional headers: (key, value) pairs; 0x00040006 = execution info, title ID at +12.
