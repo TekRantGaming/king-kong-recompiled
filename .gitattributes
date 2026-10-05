@@ -1,0 +1,4 @@
+docs/ export-ignore
+.github/ export-ignore
+tools/make_banner.ps1 export-ignore
+tools/make_docs_images.ps1 export-ignore

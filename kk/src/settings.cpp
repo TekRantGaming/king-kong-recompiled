@@ -1,0 +1,212 @@
+#include "settings.h"
+
+#include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <fstream>
+
+#include <rex/logging.h>
+#include <rex/string.h>
+
+REXCVAR_DEFINE_BOOL(kk_launcher, true, "OKX",
+                    "Show the launcher before starting the game (hold Shift at start to force it)");
+REXCVAR_DEFINE_BOOL(kk_skip_launcher, false, "OKX",
+                    "Internal: skip the launcher once (used when it relaunches the game)");
+REXCVAR_DEFINE_INT32(kk_frame_rate, 60, "OKX/Video",
+                     "Frame-rate cap: 30, 60, 120, 144, 165, 240, or 0 for unlimited");
+REXCVAR_DEFINE_STRING(kk_render_quality, "native", "OKX/Video",
+                      "Render resolution relative to the output: native, quality, balanced, performance, "
+                      "ultra_performance, supersample, or custom (use resolution_scale)");
+REXCVAR_DEFINE_BOOL(kk_show_fps, false, "OKX/Video", "Show a frame-rate counter (toggle in game with F2)");
+REXCVAR_DEFINE_INT32(kk_deadzone, 0, "OKX/Controls", "Extra stick deadzone in percent (0-50)");
+REXCVAR_DEFINE_INT32(kk_camera_sensitivity, 100, "OKX/Controls", "Camera (right stick) sensitivity in percent");
+REXCVAR_DEFINE_BOOL(kk_achievement_toasts, true, "OKX/Achievements", "Show achievement notifications");
+REXCVAR_DEFINE_BOOL(kk_achievement_sound, true, "OKX/Achievements", "Play the achievement sound");
+REXCVAR_DEFINE_STRING(kk_achievement_sound_file, "", "OKX/Achievements",
+                      "Achievement sound from the sounds folder (empty = built-in chime)");
+REXCVAR_DEFINE_INT32(kk_achievement_volume, 80, "OKX/Achievements", "Achievement sound volume in percent");
+REXCVAR_DEFINE_BOOL(kk_vibration, true, "OKX/Controls", "Controller vibration");
+REXCVAR_DEFINE_INT32(kk_vibration_strength, 100, "OKX/Controls", "Vibration strength in percent");
+REXCVAR_DEFINE_BOOL(kk_invert_rs_x, false, "OKX/Controls", "Invert right stick horizontal (camera)");
+REXCVAR_DEFINE_BOOL(kk_invert_rs_y, false, "OKX/Controls", "Invert right stick vertical");
+REXCVAR_DEFINE_BOOL(kk_invert_ls_x, false, "OKX/Controls", "Invert left stick horizontal");
+REXCVAR_DEFINE_BOOL(kk_invert_ls_y, false, "OKX/Controls", "Invert left stick vertical");
+
+// Button remapping: kk_map_<physical> = <game button> (or "none").
+#define KK_MAP_CVAR(id, def, label) \
+  REXCVAR_DEFINE_STRING(kk_map_##id, def, "OKX/Controls/Remap", label " sends")
+KK_MAP_CVAR(dpad_up, "dpad_up", "D-pad up");
+KK_MAP_CVAR(dpad_down, "dpad_down", "D-pad down");
+KK_MAP_CVAR(dpad_left, "dpad_left", "D-pad left");
+KK_MAP_CVAR(dpad_right, "dpad_right", "D-pad right");
+KK_MAP_CVAR(start, "start", "Start");
+KK_MAP_CVAR(back, "back", "Back");
+KK_MAP_CVAR(ls, "ls", "Left stick click");
+KK_MAP_CVAR(rs, "rs", "Right stick click");
+KK_MAP_CVAR(lb, "lb", "Left bumper");
+KK_MAP_CVAR(rb, "rb", "Right bumper");
+KK_MAP_CVAR(a, "a", "A");
+KK_MAP_CVAR(b, "b", "B");
+KK_MAP_CVAR(x, "x", "X");
+KK_MAP_CVAR(y, "y", "Y");
+KK_MAP_CVAR(lt, "lt", "Left trigger");
+KK_MAP_CVAR(rt, "rt", "Right trigger");
+#undef KK_MAP_CVAR
+
+namespace kk {
+namespace {
+
+constexpr std::array<PadInfo, kPadCount> kPads = {{
+    {"dpad_up", "D-pad Up", 0x0001},
+    {"dpad_down", "D-pad Down", 0x0002},
+    {"dpad_left", "D-pad Left", 0x0004},
+    {"dpad_right", "D-pad Right", 0x0008},
+    {"start", "Start", 0x0010},
+    {"back", "Back", 0x0020},
+    {"ls", "Left Stick Click", 0x0040},
+    {"rs", "Right Stick Click", 0x0080},
+    {"lb", "Left Bumper", 0x0100},
+    {"rb", "Right Bumper", 0x0200},
+    {"a", "A", 0x1000},
+    {"b", "B", 0x2000},
+    {"x", "X", 0x4000},
+    {"y", "Y", 0x8000},
+    {"lt", "Left Trigger", 0},
+    {"rt", "Right Trigger", 0},
+}};
+
+std::string& MapStorage(Pad p) {
+  switch (p) {
+    case Pad::kDpadUp: return REXCVAR_GET(kk_map_dpad_up);
+    case Pad::kDpadDown: return REXCVAR_GET(kk_map_dpad_down);
+    case Pad::kDpadLeft: return REXCVAR_GET(kk_map_dpad_left);
+    case Pad::kDpadRight: return REXCVAR_GET(kk_map_dpad_right);
+    case Pad::kStart: return REXCVAR_GET(kk_map_start);
+    case Pad::kBack: return REXCVAR_GET(kk_map_back);
+    case Pad::kLeftThumb: return REXCVAR_GET(kk_map_ls);
+    case Pad::kRightThumb: return REXCVAR_GET(kk_map_rs);
+    case Pad::kLeftShoulder: return REXCVAR_GET(kk_map_lb);
+    case Pad::kRightShoulder: return REXCVAR_GET(kk_map_rb);
+    case Pad::kA: return REXCVAR_GET(kk_map_a);
+    case Pad::kB: return REXCVAR_GET(kk_map_b);
+    case Pad::kX: return REXCVAR_GET(kk_map_x);
+    case Pad::kY: return REXCVAR_GET(kk_map_y);
+    case Pad::kLeftTrigger: return REXCVAR_GET(kk_map_lt);
+    default: return REXCVAR_GET(kk_map_rt);
+  }
+}
+
+}  // namespace
+
+const PadInfo& GetPadInfo(Pad pad) { return kPads[static_cast<size_t>(pad)]; }
+
+Pad ParsePad(std::string_view id) {
+  std::string lower(id);
+  for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  for (size_t i = 0; i < kPadCount; ++i)
+    if (lower == kPads[i].id) return static_cast<Pad>(i);
+  return Pad::kNone;
+}
+
+Pad GetMapping(Pad physical) { return ParsePad(MapStorage(physical)); }
+
+void SetMapping(Pad physical, Pad target) {
+  rex::cvar::SetFlagByName(std::string("kk_map_") + GetPadInfo(physical).id,
+                           target == Pad::kNone ? "none" : GetPadInfo(target).id);
+}
+
+const std::array<RenderPreset, 6>& RenderPresets() {
+  // Ratios follow the usual upscaler naming (output / render); the game renders
+  // at integer multiples of its native 720p, so the nearest multiple is used.
+  static const std::array<RenderPreset, 6> kPresets = {{
+      {"supersample", "Supersample", 0.5},
+      {"native", "Native", 1.0},
+      {"quality", "Quality", 1.5},
+      {"balanced", "Balanced", 1.7},
+      {"performance", "Performance", 2.0},
+      {"ultra_performance", "Ultra Performance", 3.0},
+  }};
+  return kPresets;
+}
+
+int RenderScaleFor(std::string_view preset, int output_height) {
+  for (const auto& p : RenderPresets()) {
+    if (preset != p.id) continue;
+    const double target = std::max(1, output_height) / p.ratio;
+    return std::clamp(static_cast<int>(std::lround(target / 720.0)), 1, 8);
+  }
+  return 0;  // custom
+}
+
+void ApplyRenderPreset(int output_height) {
+  const int scale = RenderScaleFor(REXCVAR_GET(kk_render_quality), output_height);
+  if (scale <= 0) return;
+  // Set as the cvar's default so an explicit resolution_scale (custom) is untouched
+  // and the derived value is not written to the config.
+  SetCvarDefault("resolution_scale", std::to_string(scale));
+  if (rex::cvar::GetFlagByName("resolution_scale") != std::to_string(scale))
+    rex::cvar::SetFlagByName("resolution_scale", std::to_string(scale));
+  REXLOG_INFO("KK: render preset {} at {}p output -> {}x ({}p)", REXCVAR_GET(kk_render_quality),
+              output_height, scale, scale * 720);
+}
+
+bool SaveSettings(const std::filesystem::path& path) {
+  // Like rex::cvar::SaveConfig, but values that came from the command line or
+  // environment (e.g. --game_data_root, --log_file) are one-off overrides and
+  // are not written back.
+  std::string out = "# King Kong settings (edited by the launcher)\n";
+  for (const auto& e : rex::cvar::GetRegistry()) {
+    if (e.type == rex::cvar::FlagType::Command || e.is_debug_only) continue;
+    if (e.source == rex::cvar::Source::kCommandLine || e.source == rex::cvar::Source::kEnvironment) continue;
+    const std::string value = e.getter();
+    if (value == e.default_value) continue;
+    out += e.name + " = ";
+    if (e.type == rex::cvar::FlagType::String) {
+      out += '"';
+      for (char c : value) {
+        if (c == '"' || c == '\\') out += '\\';
+        out += c;
+      }
+      out += '"';
+    } else {
+      out += value;
+    }
+    out += '\n';
+  }
+  std::ofstream file(path, std::ios::trunc);
+  if (!file) {
+    REXLOG_ERROR("KK: cannot write settings to {}", path.string());
+    return false;
+  }
+  file << out;
+  return static_cast<bool>(file);
+}
+
+void SetCvarDefault(std::string_view name, std::string_view value) {
+  for (auto& e : rex::cvar::GetRegistry()) {
+    if (e.name != name) continue;
+    e.default_value = value;
+    if (e.source == rex::cvar::Source::kDefault) e.setter(value);  // config/CLI still win
+    return;
+  }
+}
+
+void ApplyPortDefaults() {
+  // Windowed by default so the launcher isn't a giant fullscreen dialog.
+  SetCvarDefault("fullscreen", "false");
+}
+
+void ApplyRuntimeOverrides() {
+  // ReXGlue submits GPU work at every primary ring-buffer end by default, which
+  // stalls this title to ~27 ms per frame (the 30 FPS "lock"). Batching lets
+  // it run at any rate; the title's delta-time keeps game speed correct.
+  // Guest vsync only paces the emulated console (60 Hz vblank + coarse sleeps
+  // in GPU waits). Frame pacing is done by kk_frame_rate instead.
+  for (const char* name : {"d3d12_submit_on_primary_buffer_end", "vsync"}) {
+    if (!rex::cvar::SetFlagByName(name, "false"))
+      REXLOG_WARN("KK: could not set {} (cvar not registered)", name);
+  }
+  REXLOG_INFO("KK: frame-rate cap {}", REXCVAR_GET(kk_frame_rate));
+}
+
+}  // namespace kk

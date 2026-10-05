@@ -1,0 +1,6 @@
+# Manual analysis fixes for Peter Jackson's King Kong (default.xex, title 555307D3)
+
+[functions]
+# Same XDK library function as Outpost Kaloki X's 0x82294C98: a message dispatcher only
+# reachable via the this-adjusting thunk sub_822EF328 (vtable slot); gap after sub_822E7558.
+0x822E7588 = { end = 0x822E7650 }

@@ -1,0 +1,26 @@
+# --- Copyrighted game data: never commit ---
+/game/
+/kk/assets/
+/kk/image.bin
+*.xex
+*.iso
+*.bf
+*.wmv
+# Recompiled C++ is derived from the game's code; regenerate with setup.ps1
+/kk/generated/default/
+
+# --- Downloaded / build output ---
+/tools/rexglue/
+/kk/out/
+/screenshots/
+/KingKong/
+
+# --- Logs & scratch ---
+*.log
+/kk/missing_funcs.all.toml
+/kk/unres.txt
+/kk/dropped.txt
+/kk/jt_drops.txt
+
+# Player-supplied sounds (not ours to share)
+*.wav

@@ -1,0 +1,46 @@
+// Small OS helpers used by the app (kept out of the app header so it doesn't
+// pull in <windows.h>).
+
+#pragma once
+
+#include <filesystem>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+struct ImFont;
+struct ImFontAtlas;
+
+namespace kk {
+
+bool IsShiftHeld();
+
+// Primary monitor resolution in physical pixels.
+std::pair<int, int> PrimaryScreenSize();
+
+struct MonitorInfo {
+  std::string name;
+  int width = 0, height = 0;
+  bool primary = false;
+};
+std::vector<MonitorInfo> ListMonitors();
+
+// Starts a new instance of this executable with the current command line plus
+// `extra_args`.
+void RelaunchSelf(std::wstring_view extra_args);
+
+// Opens a folder (created if missing) or file in the system file browser.
+void OpenInExplorer(const std::filesystem::path& path);
+
+// Adds system UI fonts to the ImGui atlas; the regular face becomes the default.
+void LoadUiFont(ImFontAtlas* atlas);
+
+struct UiFonts {
+  ImFont* regular = nullptr;
+  ImFont* semibold = nullptr;  // falls back to regular
+  ImFont* bold = nullptr;      // falls back to regular
+};
+const UiFonts& GetUiFonts();
+
+}  // namespace kk
