@@ -21,7 +21,7 @@
 <br>
 
 > [!NOTE]
-> **Work in progress.** The game boots, saves, and plays from the opening on the ship into Skull Island. A full play-through has not been tested yet, and there is no release yet.
+> **First release.** Tested from the start of the game, through the opening on the ship, into Skull Island. A full play-through has not been tested yet. Please report anything that goes wrong.
 
 ## Highlights
 
@@ -41,8 +41,8 @@ Render at up to 7680 x 4320, with presets from Supersample to Ultra Performance 
 </td>
 <td width="33%" valign="top">
 
-**Higher frame rates**<br>
-Pick 60, 120, 144 or more, and the game still plays at its normal speed.
+**Your frame rate**<br>
+30 fps by default, just like the Xbox 360. Go up to 240 or unlimited if you want it smoother (see known issues).
 
 </td>
 </tr>
@@ -120,7 +120,7 @@ Everything is set up before the game starts. The launcher uses art from your own
 <td valign="middle">
 
 ### Gameplay
-- **Frame rate**: 30, 60, 120, 144, 165, 240 or unlimited
+- **Frame rate**: 30 (default, like the console), 60, 120, 144, 165, 240 or unlimited
 - **Frame counter** in the corner, toggled with <kbd>F2</kbd>
 - **Language**
 
@@ -193,7 +193,7 @@ Everything is set up before the game starts. The launcher uses art from your own
 | | Xbox 360 | PC port |
 | --- | :---: | :---: |
 | Resolution | 1280 x 720 | up to 7680 x 4320 |
-| Frame rate | console | 30 to 240 fps, or unlimited |
+| Frame rate | 30 fps | 30 fps, or up to 240 and unlimited |
 | Anti-aliasing | console | FXAA, 2x MSAA |
 | Texture filtering | console | up to 16x |
 | Display | TV | windowed or fullscreen, any monitor |
@@ -212,13 +212,33 @@ Everything is set up before the game starts. The launcher uses art from your own
 
 ### Known issues
 
-- The frame rate currently tops out at about 110 fps.
+- Above 30 fps some character animations are not right yet. For example, the crew rowing at the start skip part of their animation. 30 fps, the default, plays them correctly. A fix is being worked on.
 - There can be a short stutter when the game loads the next area.
 - The first time you see a new effect it can pop in for a moment while it is prepared. It is saved, so this only happens once.
 
+## Which version you need
+
+The port is made for this disc only. Other versions will not work.
+
+| | |
+| --- | --- |
+| Game | Peter Jackson's King Kong: The Official Game of the Movie |
+| Disc | Xbox 360, USA and Europe (English, French, German, Spanish, Italian, Dutch, Swedish, Norwegian, Danish, Finnish) |
+| Title ID | `555307D3` |
+| Game version | `0.0.0.1` (the original disc release) |
+| Disc image | `.iso`, 7,834,892,288 bytes |
+| SHA-1 | `075F43709E9C9A095E099AB5056CC04B768288D1` |
+| MD5 | `35D671ED4E9EAD9E6B288A3441B6C8F9` |
+
+The builder checks the title ID before it starts. To check your disc image yourself, run this in PowerShell and compare the result with the SHA-1 above:
+
+```powershell
+Get-FileHash "C:\Games\King Kong.iso" -Algorithm SHA1
+```
+
 ## Getting started
 
-**You need:** Windows 10 or 11 (64-bit), a graphics card with DirectX 12, about 15 GB of free space, and your own Peter Jackson's King Kong Xbox 360 disc as a disc image (`.iso`, title ID `555307D3`).
+**You need:** Windows 10 or 11 (64-bit), a graphics card with DirectX 12, about 15 GB of free space, and your own Peter Jackson's King Kong Xbox 360 disc as a disc image (see [Which version you need](#which-version-you-need)).
 
 1. Download the **Windows builder** from the [latest release](https://github.com/TekRantGaming/king-kong-recompiled/releases/latest) and unzip it.
 2. Double-click **Build King Kong.bat**.

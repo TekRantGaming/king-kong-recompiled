@@ -802,8 +802,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
   void PageGameplay() {
     if (!BeginRows("##gameplay")) return;
     Row("Frame rate",
-        "Higher is smoother. The game times everything by real elapsed time, so it plays at the correct speed "
-        "at any frame rate.");
+        "30 matches the Xbox 360 and keeps every animation right. Higher is smoother, but some character "
+        "animations are not right above 30 yet.");
     {
       std::vector<std::string> labels;
       for (int f : kFrameRateChoices) labels.push_back(f <= 0 ? "Unlimited" : std::to_string(f));
