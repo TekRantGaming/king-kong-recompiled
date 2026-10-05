@@ -276,7 +276,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
   void OnDraw(ImGuiIO& io) override {
     // Testing aid: KK_AUTOPLAY=1 presses Play after a couple of seconds.
     static const bool autoplay = std::getenv("KK_AUTOPLAY") != nullptr;
-    if (autoplay && files_ok_ && ++autoplay_frames_ == 120) Play();
+    if (autoplay && files_ok_ && ++autoplay_frames_ == 120) StartGame();
     s_ = ImGui::GetFontSize() / 18.0f;
     ApplyTheme(s_);
     const ImGuiViewport* vp = ImGui::GetMainViewport();
@@ -303,6 +303,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
 
     DrawFooter(ImVec2(vp->Pos.x + margin, vp->Pos.y + h - footer), w - margin * 2, footer);
     HandleHotkeys();
+    DrawFrameRateWarning();
     ImGui::End();
     (void)io;
   }
@@ -1220,7 +1221,80 @@ class Launcher final : public rex::ui::ImGuiDialog {
 
   void Save() { status_ = SaveSettings(paths_.config_path) ? "Settings saved." : "Could not save settings."; }
 
+  // Above 30 FPS some animations are wrong (game logic stepped per frame), so
+  // say so before starting and offer 30 or 60 instead.
   void Play() {
+    if (played_) return;
+    const int fps = GetInt("kk_frame_rate", 30);
+    if (fps > 0 && fps <= 30) return StartGame();
+    open_fps_warning_ = true;
+  }
+
+  void DrawFrameRateWarning() {
+    constexpr const char* kTitle = "Frame rate above 30 FPS";
+    if (open_fps_warning_) {
+      ImGui::OpenPopup(kTitle);
+      open_fps_warning_ = false;
+    }
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(vp->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(600 * s_, 0));
+    // In the launcher's own colours (the default popup style is for dropdowns).
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(24 * s_, 20 * s_));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12 * s_);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, kPanel);
+    ImGui::PushStyleColor(ImGuiCol_TitleBg, kFrame);
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, kFrame);
+    ImGui::PushStyleColor(ImGuiCol_Border, kWarn);
+    const bool open =
+        ImGui::BeginPopupModal(kTitle, nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
+    ImGui::PopStyleColor(4);
+    ImGui::PopStyleVar(3);
+    if (!open) return;
+    const int fps = GetInt("kk_frame_rate", 30);
+    const std::string current = fps <= 0 ? "an unlimited frame rate" : std::to_string(fps) + " FPS";
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextUnformatted(("You have chosen " + current + ". King Kong was made to run at 30 FPS, and above that some "
+                            "character animations can look wrong, such as the crew rowing the boat at the start.")
+                               .c_str());
+    ImGui::Dummy(ImVec2(0, 6 * s_));
+    ImGui::TextUnformatted("We recommend 30 FPS. 60 FPS also works well: the issues are still there, but much less "
+                           "noticeable. At an unlimited frame rate you may see some strange animations.");
+    ImGui::Dummy(ImVec2(0, 6 * s_));
+    ImGui::PushStyleColor(ImGuiCol_Text, kDim);
+    ImGui::TextUnformatted("This will be fixed in a future update.");
+    ImGui::PopStyleColor();
+    ImGui::PopTextWrapPos();
+    ImGui::Dummy(ImVec2(0, 10 * s_));
+    const float bw = (ImGui::GetContentRegionAvail().x - 16 * s_) / 3;
+    auto play_at = [&](int rate) {
+      SetInt("kk_frame_rate", rate);
+      ImGui::CloseCurrentPopup();
+      StartGame();
+    };
+    if (AccentButton("Play at 30 FPS", ImVec2(bw, 0))) play_at(30);
+    ImGui::SameLine(0, 8 * s_);
+    if (fps != 60) {
+      if (ImGui::Button("Play at 60 FPS", ImVec2(bw, 0))) play_at(60);
+    } else if (ImGui::Button("Keep 60 FPS", ImVec2(bw, 0))) {
+      play_at(60);
+    }
+    ImGui::SameLine(0, 8 * s_);
+    if (fps != 60) {
+      const std::string keep = fps <= 0 ? "Keep unlimited" : "Keep " + std::to_string(fps) + " FPS";
+      if (ImGui::Button(keep.c_str(), ImVec2(bw, 0))) play_at(fps);
+    } else if (ImGui::Button("Back", ImVec2(bw, 0))) {
+      ImGui::CloseCurrentPopup();
+    }
+    if (fps != 60) {
+      ImGui::Dummy(ImVec2(0, 2 * s_));
+      if (ImGui::Button("Back", ImVec2(-FLT_MIN, 0))) ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+  }
+
+  void StartGame() {
     if (played_) return;
     played_ = true;
     SaveSettings(paths_.config_path);
@@ -1241,6 +1315,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
   std::vector<std::string> restart_baseline_;
   bool files_ok_ = false;
   bool played_ = false;
+  bool open_fps_warning_ = false;
   int autoplay_frames_ = 0;
   std::string status_;
   std::string capturing_;
