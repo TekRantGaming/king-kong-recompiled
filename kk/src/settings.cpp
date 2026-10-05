@@ -17,6 +17,9 @@ REXCVAR_DEFINE_INT32(kk_frame_rate, 30, "KK/Video",
 REXCVAR_DEFINE_STRING(kk_render_quality, "native", "KK/Video",
                       "Render resolution relative to the output: native, quality, balanced, performance, "
                       "ultra_performance, supersample, or custom (use resolution_scale)");
+REXCVAR_DEFINE_STRING(kk_button_prompts, "xbox360", "KK/Controls",
+                      "Button pictures shown in the game: xbox360, xbox_series, ps5, ps2 or keyboard")
+    .allowed({"xbox360", "xbox_series", "ps5", "ps2", "keyboard"});
 REXCVAR_DEFINE_BOOL(kk_show_fps, false, "KK/Video", "Show a frame-rate counter (toggle in game with F2)");
 REXCVAR_DEFINE_INT32(kk_deadzone, 0, "KK/Controls", "Extra stick deadzone in percent (0-50)");
 REXCVAR_DEFINE_INT32(kk_camera_sensitivity, 100, "KK/Controls", "Camera (right stick) sensitivity in percent");

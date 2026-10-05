@@ -136,6 +136,7 @@ Everything is set up before the game starts. The launcher uses art from your own
 - **Vibration** on or off, with a strength slider
 - **Remap any button** on your controller
 - **Keyboard and mouse** play: click a control, press a key
+- **Button prompts** for Xbox 360, Xbox Series, PlayStation 5, PlayStation 2 or your keyboard keys
 
 </td>
 </tr>
@@ -270,10 +271,11 @@ This port finishes those reads the way the console does (`kk/src/io_fix.cpp`), s
 ## Credits
 
 - **Peter Jackson's King Kong: The Official Game of the Movie** by Ubisoft Montpellier, published by Ubisoft in 2005.
+- Button prompt pictures from [**Xelu's Free Controllers & Keyboard Prompts**](https://thoseawesomeguys.com/prompts/) (CC0).
 - [**ReXGlue SDK**](https://github.com/rexglue/rexglue-sdk), which does the code translation and runs the game, built on the work of [**Xenia**](https://github.com/xenia-project/xenia) and [**XenonRecomp**](https://github.com/hedge-dev/XenonRecomp).
 
 > [!NOTE]
 > **AI disclosure:** this port was made almost entirely with Claude Code (Anthropic). The repository owner directed and tested the work; the AI did the analysis, code, tools and documentation.
 
 > [!IMPORTANT]
-> This project is not affiliated with or endorsed by Ubisoft, Universal Studios, WingNut Films, Microsoft or Xbox. It contains no game code or assets. Do not open issues asking for game files.
+> This project is not affiliated with or endorsed by Ubisoft, Universal Studios, WingNut Films, Microsoft or Xbox. It contains no game code or assets (the button prompt pictures are free CC0 art, not taken from the game). Do not open issues asking for game files.

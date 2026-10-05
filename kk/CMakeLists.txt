@@ -26,6 +26,7 @@ set(KINGKONG_SOURCES
     src/toast.cpp
     src/io_fix.cpp
     src/menu_hook.cpp
+    src/glyphs.cpp
 )
 
 if(WIN32)
@@ -35,3 +36,7 @@ else()
 endif()
 
 rexglue_setup_target(king_kong GPU_PLUGINS xenos)
+
+# Button prompt pictures (kk_button_prompts) live beside the program.
+add_custom_command(TARGET king_kong POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/glyphs $<TARGET_FILE_DIR:king_kong>/glyphs)

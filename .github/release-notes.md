@@ -1,25 +1,31 @@
-## Peter Jackson's King Kong PC Port
+## Peter Jackson's King Kong PC Port v1.1.0
 
 Play the Xbox 360 version of Peter Jackson's King Kong natively on Windows, with a launcher and modern PC options.
 
-### How to play
-1. Download **KingKong-v1.0.0-windows-x64.zip** below and unzip it anywhere.
-2. Run **king_kong.exe**. The launcher opens.
-3. Click **Install from disc image...** and pick your own King Kong disc image. The game files (about 6.3 GB) are copied next to the exe.
-4. Press **PLAY**.
+### What's new
+- **Button prompts for other controllers.** The game can now show PlayStation 5, PlayStation 2, Xbox Series or keyboard buttons instead of the Xbox 360 ones, in menus and hints. Pick it in the launcher under **Controls > Button prompts**.
+  - **Keyboard** shows the keys you have actually bound, so the prompts change when you remap keys.
+  - **PlayStation 2** uses the classic coloured triangle, circle, cross and square.
+  - The pictures are free CC0 art from Xelu's Free Controllers & Keyboard Prompts, not taken from any game.
+- **Steadier launcher.** Fixed a bug where closing the launcher could use its pictures after they were freed. It crashed the game on Linux and was a hidden risk on Windows.
 
-**No game files are included.** You need your own Xbox 360 disc (USA/Europe, title ID `555307D3`, version `0.0.0.1`) as a disc image (`.iso`). SHA-1: `075F43709E9C9A095E099AB5056CC04B768288D1`. See the README for details.
+### Full changelog
+- Added the Button prompts setting (Xbox 360, Xbox Series, PlayStation 5, PlayStation 2, Keyboard), with a `glyphs` folder of button pictures next to the exe.
+- Added `tools/make_glyphs.py`, which rebuilds the `glyphs` folder from the prompt pack.
+- Fixed the launcher freeing its pictures while the last frame still used them.
+- Linux: work in progress on a Linux version (game setup, file picker, sounds, fonts and two crash fixes). It is not ready yet, so there is no Linux download.
+- README: added the new setting and the credit for the button pictures, and marked Linux as in development.
 
-### What's in it
-- The game plays past the "VENTURE" opening, which freezes on Xenia, with working music and voice lines
-- A launcher that installs the game from your disc, with art from your copy of the game
-- Up to 8K resolution, FXAA, 2x MSAA and 16x texture filtering
-- 30 fps like the console, or up to 240 and unlimited (some animations are not right above 30 yet)
-- Xbox 360 style achievement pop-ups, with your own choice of sound
-- Camera inversion and speed, deadzone, vibration, button remapping, keyboard and mouse
+### How to update
+Download **KingKong-v1.1.0-windows-x64.zip** below and copy everything in it over your KingKong folder, including the new `glyphs` folder. Your installed `game` folder, saves and settings stay as they are.
 
-Requires Windows 10 or 11 (64-bit) and a DirectX 12 graphics card. A full play-through has not been tested yet. Please report anything that goes wrong.
+### New install
+1. Unzip **KingKong-v1.1.0-windows-x64.zip** anywhere and run **king_kong.exe**.
+2. Click **Install from disc image...** and pick your own King Kong disc image (USA/Europe, title ID `555307D3`, version `0.0.0.1`).
+3. Press **PLAY**.
 
-Linux version in development.
+**No game files are included.** See the README for details.
+
+Requires Windows 10 or 11 (64-bit) and a DirectX 12 graphics card. Linux version in development.
 
 This port was made with AI (Claude Code). See the README for details.

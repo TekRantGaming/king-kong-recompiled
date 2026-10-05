@@ -1,0 +1,5 @@
+Button prompt images from "Xelu's FREE Controllers & Keyboard PROMPTS"
+by Nicolae (Xelu) Berbece, https://thoseawesomeguys.com/prompts/
+
+Released under Creative Commons 0 (CC0), free to use in any project.
+Trimmed and resized by tools/make_glyphs.py.

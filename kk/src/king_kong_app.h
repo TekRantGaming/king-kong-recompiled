@@ -21,6 +21,7 @@
 #include <rex/system/kernel_state.h>
 #include <rex/system/util/xdbf_utils.h>
 #include <rex/system/xcontent.h>
+#include <rex/system/xmemory.h>
 #include <rex/system/interfaces/graphics.h>
 #include <rex/ui/immediate_drawer.h>
 #include <rex/ui/presenter.h>
@@ -29,6 +30,7 @@
 
 #include "art.h"
 #include "frame_stats.h"
+#include "glyphs.h"
 
 namespace kk {
 void InstallFpeGuard();  // fpe_guard.cpp
@@ -135,6 +137,7 @@ class KingKongApp : public rex::ReXApp {
       kk::art::WriteAchievementCache(achievements().ListAchievements(),
                                       kk::art::AchievementCachePath(user_data_root_));
     ScheduleTitleCapture();
+    kk::StartButtonPrompts(runtime()->memory());
     ScheduleWelcomeAchievement();
 
     // Debug aid: set KK_DUMP_IMAGE=<file> to write the decrypted guest image

@@ -859,6 +859,12 @@ class Launcher final : public rex::ui::ImGuiDialog {
     if (BeginRows("##controls")) {
       Row("Input", "Controllers work automatically. Keyboard & mouse emulates a controller; keys are below.");
       ToggleCvar("mnk_mode", "Controller", "Keyboard & mouse");
+      Row("Button prompts", "Which controller's buttons the game shows in menus and hints.");
+      ComboCvar("kk_button_prompts", {{"Xbox 360 (original)", "xbox360"},
+                                      {"Xbox Series", "xbox_series"},
+                                      {"PlayStation 5", "ps5"},
+                                      {"PlayStation 2", "ps2"},
+                                      {"Keyboard (your keys)", "keyboard"}});
       if (GetBool("mnk_mode")) {
         Row("Mouse camera", "Move the camera (right stick) with the mouse.");
         ToggleCvar("mnk_mouse");
