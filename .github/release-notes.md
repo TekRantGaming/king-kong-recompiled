@@ -20,6 +20,6 @@ Play the Xbox 360 version of Peter Jackson's King Kong natively on Windows, with
 
 Requires Windows 10 or 11 (64-bit) and a DirectX 12 graphics card. A full play-through has not been tested yet. Please report anything that goes wrong.
 
-Linux AppImage coming soon.
+Linux version in development.
 
 This port was made with AI (Claude Code). See the README for details.
