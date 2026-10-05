@@ -100,28 +100,56 @@ namespace {
 constexpr unsigned kMxcsrMaskAll = 0x1F80;  // IM|DM|ZM|OM|UM|PM
 constexpr unsigned kMxcsrFlags = 0x3F;
 
-// Linux counterpart of the handler above: the same unmasked traps arrive as
-// SIGFPE. Re-mask them in the interrupted context and resume.
-void FloatSignalHandler(int, siginfo_t*, void* uctx) {
+struct sigaction g_previous {};
+
+// Linux counterpart of the handler above: the same unmasked float traps arrive
+// as SIGFPE. Re-mask them in the interrupted context and resume. Anything else
+// (integer division by zero) goes to whoever handled SIGFPE before.
+void FloatSignalHandler(int sig, siginfo_t* info, void* uctx) {
+  const bool float_trap = info && info->si_code >= FPE_FLTDIV && info->si_code <= FPE_FLTSUB;
+  auto* uc = static_cast<ucontext_t*>(uctx);
+  if (!float_trap || !uc || !uc->uc_mcontext.fpregs) {
+    if (g_previous.sa_flags & SA_SIGINFO) {
+      if (g_previous.sa_sigaction) return g_previous.sa_sigaction(sig, info, uctx);
+    } else if (g_previous.sa_handler != SIG_DFL && g_previous.sa_handler != SIG_IGN && g_previous.sa_handler) {
+      return g_previous.sa_handler(sig);
+    }
+    signal(SIGFPE, SIG_DFL);
+    raise(SIGFPE);
+    return;
+  }
+  // As on Windows, repair the context's cached csr so this thread doesn't trap again.
   if (auto* ts = rex::runtime::ThreadState::Get()) {
     if (auto* ctx = ts->context()) ctx->fpscr.csr |= kMxcsrMaskAll;
   }
-  auto* uc = static_cast<ucontext_t*>(uctx);
-  if (uc->uc_mcontext.fpregs) {
-    uc->uc_mcontext.fpregs->mxcsr = (uc->uc_mcontext.fpregs->mxcsr | kMxcsrMaskAll) & ~kMxcsrFlags;
-    uc->uc_mcontext.fpregs->cwd |= 0x3F;
-    uc->uc_mcontext.fpregs->swd &= ~0x3F;
-  }
+  uc->uc_mcontext.fpregs->mxcsr = (uc->uc_mcontext.fpregs->mxcsr | kMxcsrMaskAll) & ~kMxcsrFlags;
+  uc->uc_mcontext.fpregs->cwd |= 0x3F;
+  uc->uc_mcontext.fpregs->swd &= ~0x3F;
 }
 
-const bool g_installed = [] {
+}  // namespace
+
+namespace kk {
+// The runtime installs its own signal handlers during setup, so this is called
+// again afterwards (OnPostSetup) to make sure the float guard is in front.
+void InstallFpeGuard() {
   struct sigaction sa {};
   sa.sa_sigaction = FloatSignalHandler;
-  sa.sa_flags = SA_SIGINFO;
+  sa.sa_flags = SA_SIGINFO | SA_NODEFER;
   sigemptyset(&sa.sa_mask);
-  return sigaction(SIGFPE, &sa, nullptr) == 0;
-}();
+  struct sigaction old {};
+  if (sigaction(SIGFPE, &sa, &old) == 0 && old.sa_sigaction != FloatSignalHandler) g_previous = old;
+}
+}  // namespace kk
 
+namespace {
+const bool g_installed = (kk::InstallFpeGuard(), true);
 }  // namespace
+
+#else
+
+namespace kk {
+void InstallFpeGuard() {}  // Windows: the vectored handler above is installed at startup.
+}  // namespace kk
 
 #endif  // __linux__

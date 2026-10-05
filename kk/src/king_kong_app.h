@@ -29,6 +29,10 @@
 
 #include "art.h"
 #include "frame_stats.h"
+
+namespace kk {
+void InstallFpeGuard();  // fpe_guard.cpp
+}
 #include "menu_hook.h"
 #include "launcher.h"
 #include "overlay.h"
@@ -122,6 +126,7 @@ class KingKongApp : public rex::ReXApp {
   }
 
   void OnPostSetup() override {
+    kk::InstallFpeGuard();  // after the runtime's own signal handlers
     kk::ApplyRuntimeOverrides();
 
     ExportAchievementArt();
