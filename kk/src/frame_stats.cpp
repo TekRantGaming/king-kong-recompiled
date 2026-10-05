@@ -8,6 +8,7 @@
 
 #include "frame_stats.h"
 
+#include <algorithm>
 #include <atomic>
 #include <bit>
 #include <cstring>
@@ -69,6 +70,27 @@ void RunDeferredIfDue(Clock::time_point now) {
   for (auto& fn : due) fn();
 }
 
+// Every 10 s: average and 1% low frame rate, the worst frame and how many
+// frames took over 50 and 100 ms, so stutter shows up in players' logs.
+void RecordFrameTime(double frame_ms) {
+  static std::vector<double> times;
+  static Clock::time_point start = Clock::now();
+  times.push_back(frame_ms);
+  const double elapsed = std::chrono::duration<double>(Clock::now() - start).count();
+  if (elapsed < 10.0) return;
+  std::sort(times.begin(), times.end());
+  const size_t n = times.size();
+  double sum = 0, low_sum = 0;
+  for (double t : times) sum += t;
+  const size_t low_n = std::max<size_t>(1, n / 100);
+  for (size_t i = n - low_n; i < n; ++i) low_sum += times[i];
+  const auto over = [&](double ms) { return size_t(times.end() - std::upper_bound(times.begin(), times.end(), ms)); };
+  REXLOG_INFO("Frame times: {:.1f} FPS average, {:.1f} FPS 1% low, worst {:.0f} ms, {} over 50 ms, {} over 100 ms",
+              1000.0 * n / sum, 1000.0 * low_n / low_sum, times.back(), over(50.0), over(100.0));
+  times.clear();
+  start = Clock::now();
+}
+
 void OnGuestSwap() {
   RunDeferredIfDue(Clock::now());
   const uint64_t total = g_frames.fetch_add(1) + 1;
@@ -80,6 +102,7 @@ void OnGuestSwap() {
   if (last_swap != Clock::time_point{}) {
     const double frame_ms = std::chrono::duration<double, std::milli>(now - last_swap).count();
     if (frame_ms >= 50.0) REXLOG_INFO("Hitch: {:.0f} ms frame", frame_ms);
+    RecordFrameTime(frame_ms);
   }
   last_swap = now;
   const double elapsed = std::chrono::duration<double>(now - g_window_start).count();

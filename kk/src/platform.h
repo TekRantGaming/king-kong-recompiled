@@ -30,6 +30,13 @@ std::vector<MonitorInfo> ListMonitors();
 // `extra_args`.
 void RelaunchSelf(std::wstring_view extra_args);
 
+// Asks the OS for game-friendly scheduling: 1 ms timer resolution (the game's
+// short sleeps otherwise last ~15.6 ms on Windows 10 2004+ and 11) and no
+// power throttling (Windows 11 may otherwise run it on efficiency cores and drop
+// the timer request while the window is covered). Logs the measured length of
+// a 1 ms sleep before and after. Call once, early.
+void TuneProcessScheduling();
+
 // Opens a folder (created if missing) or file in the system file browser.
 void OpenInExplorer(const std::filesystem::path& path);
 

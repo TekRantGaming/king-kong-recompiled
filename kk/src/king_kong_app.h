@@ -29,6 +29,7 @@
 #include <rex/ui/windowed_app_context.h>
 
 #include "art.h"
+#include "crash_dump.h"
 #include "frame_stats.h"
 #include "glyphs.h"
 
@@ -129,6 +130,12 @@ class KingKongApp : public rex::ReXApp {
 
   void OnPostSetup() override {
     kk::InstallFpeGuard();  // after the runtime's own signal handlers
+    kk::TuneProcessScheduling();
+    {
+      const std::filesystem::path log = REXCVAR_GET(log_file);
+      kk::InstallCrashDumps(log.has_parent_path() ? log.parent_path()
+                                                  : rex::filesystem::GetExecutableFolder() / "logs");
+    }
     kk::ApplyRuntimeOverrides();
 
     ExportAchievementArt();

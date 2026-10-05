@@ -1,6 +1,8 @@
 #include "platform.h"
 
+#include <chrono>
 #include <filesystem>
+#include <thread>
 #include <string>
 
 #if defined(_WIN32)
@@ -13,6 +15,8 @@
 #include <windows.h>
 #include <shellapi.h>
 #pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "winmm.lib")
+#include <timeapi.h>
 #else
 #include <SDL3/SDL.h>
 #include <cstdlib>
@@ -132,6 +136,30 @@ void RelaunchSelf(std::wstring_view extra_args) {
   pid_t pid = 0;
   if (posix_spawn(&pid, exe.c_str(), nullptr, nullptr, argv.data(), environ) != 0)
     REXLOG_ERROR("KK: relaunch failed");
+#endif
+}
+
+namespace {
+// Average real length of Sleep(1), in milliseconds.
+double MeasureSleep1() {
+  using Clock = std::chrono::steady_clock;
+  const auto start = Clock::now();
+  for (int i = 0; i < 10; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  return std::chrono::duration<double, std::milli>(Clock::now() - start).count() / 10;
+}
+}  // namespace
+
+void TuneProcessScheduling() {
+#if defined(_WIN32)
+  const double before = MeasureSleep1();
+  const bool timer = timeBeginPeriod(1) == TIMERR_NOERROR;  // held until exit
+  PROCESS_POWER_THROTTLING_STATE throttling{};
+  throttling.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
+  throttling.ControlMask = PROCESS_POWER_THROTTLING_EXECUTION_SPEED | PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION;
+  throttling.StateMask = 0;  // opt out of both
+  const bool power = SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &throttling, sizeof(throttling));
+  REXLOG_INFO("KK: 1 ms sleep took {:.1f} ms, now {:.1f} ms (timer {}, power throttling off {})", before,
+              MeasureSleep1(), timer ? "1 ms" : "unchanged", power ? "yes" : "no");
 #endif
 }
 

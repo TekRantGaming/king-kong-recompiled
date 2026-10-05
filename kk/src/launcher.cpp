@@ -826,6 +826,11 @@ class Launcher final : public rex::ui::ImGuiDialog {
     Row("Texture filtering", "Keeps the ground and distant textures sharp at steep angles.");
     ChoiceCvar("anisotropic_override",
                {{"Game", "-1"}, {"Off", "0"}, {"2\xC3\x97", "2"}, {"4\xC3\x97", "3"}, {"8\xC3\x97", "4"}, {"16\xC3\x97", "5"}});
+    Row("Shader preparing",
+        "Each new effect is prepared the first time it appears, then saved for next time. Wait draws it "
+        "correctly with a short pause, the first time only. Background avoids the pause, but objects can "
+        "briefly vanish, turn into silhouettes or flash bright.");
+    ToggleCvar("async_shader_compilation", "Wait", "Background");
     EndRows();
   }
 

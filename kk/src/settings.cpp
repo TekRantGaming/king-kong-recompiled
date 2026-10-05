@@ -201,6 +201,11 @@ void SetCvarDefault(std::string_view name, std::string_view value) {
 void ApplyPortDefaults() {
   // Windowed by default so the launcher isn't a giant fullscreen dialog.
   SetCvarDefault("fullscreen", "false");
+  // While a shader compiles in the background, the D3D12 backend skips every
+  // draw that needs it, so objects vanish, turn into silhouettes or the frame
+  // flashes bright on first sight. Waiting costs a short pause the first time
+  // only, since shaders are saved for later runs.
+  SetCvarDefault("async_shader_compilation", "false");
 }
 
 void ApplyRuntimeOverrides() {

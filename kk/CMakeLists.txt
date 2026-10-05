@@ -27,7 +27,14 @@ set(KINGKONG_SOURCES
     src/io_fix.cpp
     src/menu_hook.cpp
     src/glyphs.cpp
+    src/crash_dump.cpp
 )
+
+# Developer-only test aids (never in release builds): -DKK_DEV_TOOLS=ON.
+option(KK_DEV_TOOLS "Build developer test aids such as KK_DEV_AUTOSKIP" OFF)
+if(KK_DEV_TOOLS)
+    list(APPEND KINGKONG_SOURCES src/dev_tools.cpp)
+endif()
 
 if(WIN32)
     add_executable(king_kong WIN32 ${KINGKONG_SOURCES})

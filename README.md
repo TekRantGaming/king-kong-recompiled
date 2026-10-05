@@ -111,6 +111,7 @@ Everything is set up before the game starts. The launcher uses art from your own
 - **FXAA** and **FXAA Extreme**
 - Real **2x MSAA**
 - **Texture filtering** up to 16x
+- **Shader preparing**: wait for new effects (default, always drawn right) or prepare them in the background
 
 </td>
 </tr>
@@ -211,9 +212,18 @@ Everything is set up before the game starts. The launcher uses art from your own
 
 ### Known issues
 
-- Above 30 fps some character animations are not right yet. For example, the crew rowing at the start skip part of their animation. 30 fps, the default, plays them correctly. A fix is being worked on.
-- There can be a short stutter when the game loads the next area.
-- The first time you see a new effect it can pop in for a moment while it is prepared. It is saved, so this only happens once.
+- Above 30 fps some character animations are not right yet. For example, the crew rowing at the start skip part of their animation. 30 fps, the default, plays them correctly.
+- There can be a short pause when the game loads the next area. The game does the same on the Xbox 360.
+- The first time you see a new effect there is a short pause while it is prepared. It is saved, so this only happens once. If you prefer no pause, set **Graphics > Shader preparing** to Background, but then objects can briefly vanish or flash bright the first time.
+
+### Reporting a problem
+
+Everything useful is in the `logs` folder next to `king_kong.exe`:
+
+- `king_kong.log` describes your settings, and every 10 seconds it notes the frame rate, the 1% low and any frames that took over 50 or 100 ms. That shows exactly where stutter happens.
+- If the game crashes, `crash-<date>.txt` and `crash-<date>.dmp` appear next to it.
+
+Please attach them to an [issue](https://github.com/TekRantGaming/king-kong-recompiled/issues) together with your CPU, graphics card and the resolution you play at.
 
 ## Which version you need
 
@@ -259,6 +269,8 @@ kk\build.bat kk-release                      # compiles
 ```
 
 The finished game is in `kk\out\build\kk-release`. `Build King Kong.bat` does all of this in one go and puts the result in a `KingKong` folder. Point the game at your files with `--game_data_root`, or keep them in a `game` folder next to the exe.
+
+For testing, `kk\build.bat kk-dev` builds a version with developer aids that release builds leave out. Set `KK_DEV_AUTOSKIP=1` and it presses through the intros, menus and story videos into gameplay on its own, logging `KK dev: gameplay reached`. Add `KK_DEV_WANDER=1` to keep walking and looking around after that.
 
 </details>
 
