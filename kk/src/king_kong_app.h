@@ -18,6 +18,9 @@
 #include <rex/rex_app.h>
 #include <rex/runtime.h>
 #include <rex/system/achievement_manager.h>
+#include <rex/system/kernel_state.h>
+#include <rex/system/util/xdbf_utils.h>
+#include <rex/system/xcontent.h>
 #include <rex/system/interfaces/graphics.h>
 #include <rex/ui/immediate_drawer.h>
 #include <rex/ui/presenter.h>
@@ -106,6 +109,7 @@ class KingKongApp : public rex::ReXApp {
   void OnPostSetup() override {
     kk::ApplyRuntimeOverrides();
 
+    ExportAchievementArt();
     // Give the launcher the achievement names (read from the game by the runtime).
     if (!user_data_root_.empty())
       kk::art::WriteAchievementCache(achievements().ListAchievements(),
@@ -141,6 +145,47 @@ class KingKongApp : public rex::ReXApp {
   std::pair<int, int> OutputSize() const {
     if (REXCVAR_QUERY(bool, fullscreen) || !window()) return kk::PrimaryScreenSize();
     return {int(window()->GetActualPhysicalWidth()), int(window()->GetActualPhysicalHeight())};
+  }
+
+  // The launcher shows the achievements' names and pictures from
+  // game/achievements. On the first run after installing, write them out of
+  // the game's own executable (its XDBF resource).
+  void ExportAchievementArt() {
+    const auto dir = kk::art::AchievementDir(game_data_root());
+    std::error_code ec;
+    if (std::filesystem::exists(dir / "achievements.toml", ec)) return;
+    auto* ks = runtime() ? runtime()->kernel_state() : nullptr;
+    if (!ks) return;
+    const auto db = ks->title_xdbf();
+    if (!db.is_valid()) return;
+    std::filesystem::create_directories(dir / "icons", ec);
+    const auto lang = db.GetExistingLanguage(rex::system::XLanguage::kEnglish);
+    auto quote = [](const std::string& s) {
+      std::string out = "\"";
+      for (char c : s) {
+        if (c == '"' || c == '\\') out += '\\';
+        if (static_cast<unsigned char>(c) >= 0x20) out += c;
+      }
+      return out + "\"";
+    };
+    std::ofstream toml(dir / "achievements.toml", std::ios::binary);
+    for (const auto& a : db.GetAchievements()) {
+      const uint32_t image = a.image_id;
+      toml << "[[achievements]]\n"
+           << "id = " << uint32_t(a.id) << "\n"
+           << "label = " << quote(db.GetStringTableEntry(lang, a.label_id)) << "\n"
+           << "description = " << quote(db.GetStringTableEntry(lang, a.description_id)) << "\n"
+           << "unachieved_description = " << quote(db.GetStringTableEntry(lang, a.unachieved_id)) << "\n"
+           << "gamerscore = " << uint32_t(a.gamerscore) << "\n"
+           << "image_id = " << image << "\n"
+           << "icon_path = \"icons/" << image << ".png\"\n\n";
+      const auto block = db.GetEntry(rex::system::util::XdbfSection::kImage, image);
+      if (block.buffer && block.size) {
+        std::ofstream png(dir / "icons" / (std::to_string(image) + ".png"), std::ios::binary);
+        png.write(reinterpret_cast<const char*>(block.buffer), std::streamsize(block.size));
+      }
+    }
+    REXLOG_INFO("KK: wrote achievement list and icons to {}", dir.string());
   }
 
   // On first play, keep a frame of the game's menu (moon over Skull Island) as

@@ -10,7 +10,7 @@
 
 ### Peter Jackson's King Kong on PC, running natively, with the launcher and options of a modern PC release.
 
-[<img src="https://img.shields.io/badge/Download-Windows%20Builder-e8a33c?style=for-the-badge&logo=windows&logoColor=white&labelColor=0d0b09" alt="Download for Windows" height="40">](https://github.com/TekRantGaming/king-kong-recompiled/releases/latest)
+[<img src="https://img.shields.io/badge/Download-Windows%20x64-e8a33c?style=for-the-badge&logo=windows&logoColor=white&labelColor=0d0b09" alt="Download for Windows" height="40">](https://github.com/TekRantGaming/king-kong-recompiled/releases/latest)
 &nbsp;
 <img src="https://img.shields.io/badge/Linux%20AppImage-coming%20soon-555555?style=for-the-badge&logo=linux&logoColor=white&labelColor=0d0b09" alt="Linux coming soon" height="40">
 
@@ -61,8 +61,8 @@ Invert the camera, change its speed, set a deadzone, remap any button, adjust vi
 </td>
 <td valign="top">
 
-**One-click builder**<br>
-Double-click, pick your disc image, and the builder makes the PC version for you. No technical steps.
+**Install from your disc**<br>
+Download, run, pick your disc image in the launcher, and play. No technical steps.
 
 </td>
 </tr>
@@ -230,7 +230,7 @@ The port is made for this disc only. Other versions will not work.
 | SHA-1 | `075F43709E9C9A095E099AB5056CC04B768288D1` |
 | MD5 | `35D671ED4E9EAD9E6B288A3441B6C8F9` |
 
-The builder checks the title ID before it starts. To check your disc image yourself, run this in PowerShell and compare the result with the SHA-1 above:
+The launcher checks the title ID before it installs. To check your disc image yourself, run this in PowerShell and compare the result with the SHA-1 above:
 
 ```powershell
 Get-FileHash "C:\Games\King Kong.iso" -Algorithm SHA1
@@ -238,27 +238,28 @@ Get-FileHash "C:\Games\King Kong.iso" -Algorithm SHA1
 
 ## Getting started
 
-**You need:** Windows 10 or 11 (64-bit), a graphics card with DirectX 12, about 15 GB of free space, and your own Peter Jackson's King Kong Xbox 360 disc as a disc image (see [Which version you need](#which-version-you-need)).
+**You need:** Windows 10 or 11 (64-bit), a graphics card with DirectX 12, about 7 GB of free space, and your own Peter Jackson's King Kong Xbox 360 disc as a disc image (see [Which version you need](#which-version-you-need)).
 
-1. Download the **Windows builder** from the [latest release](https://github.com/TekRantGaming/king-kong-recompiled/releases/latest) and unzip it.
-2. Double-click **Build King Kong.bat**.
-3. If it asks, let it install the build tools (Visual Studio Build Tools, CMake and Ninja). This is a one-time download of about 6 GB.
-4. Pick your King Kong disc image when asked.
-5. Wait while it builds (20 to 40 minutes). The finished game appears in the **KingKong** folder, with an optional desktop shortcut.
+1. Download **KingKong-v1.0.0-windows-x64.zip** from the [latest release](https://github.com/TekRantGaming/king-kong-recompiled/releases/latest) and unzip it anywhere.
+2. Run **king_kong.exe**. The launcher opens.
+3. Click **Install from disc image...** and pick your King Kong disc image. The launcher checks it and copies the game files (about 6.3 GB) into a `game` folder next to the exe.
+4. Press **PLAY**.
 
-**Why a builder and not a ready-made download?** The PC version is made from the game's own code, which belongs to its creators and can't be shared. The builder makes it on your PC from your own copy, so nothing from the game is ever downloaded or uploaded.
+The download contains only this port. **No game files are included**: they come from your own disc. Your saves and settings are kept in `Documents\king_kong`.
 
 **Linux:** an AppImage is coming soon.
 
 <details>
-<summary><b>Building by hand (for developers)</b></summary>
+<summary><b>Building from source (for developers)</b></summary>
+
+You need Visual Studio 2022 Build Tools with Clang, CMake and Ninja.
 
 ```powershell
-.\setup.ps1 -Iso "C:\path\to\King Kong.iso"   # downloads the SDK, unpacks your disc, translates the code
-kk\build.bat kk-release                        # compiles
+.\setup.ps1 -Iso "C:\Games\King Kong.iso"   # downloads the SDK, unpacks your disc, translates the code
+kk\build.bat kk-release                      # compiles
 ```
 
-The finished game is in `kk\out\build\kk-release`. Point it at your game files with `--game_data_root`, or copy them into a `game` folder next to the exe.
+The finished game is in `kk\out\build\kk-release`. `Build King Kong.bat` does all of this in one go and puts the result in a `KingKong` folder. Point the game at your files with `--game_data_root`, or keep them in a `game` folder next to the exe.
 
 </details>
 
