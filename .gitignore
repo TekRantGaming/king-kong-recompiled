@@ -24,3 +24,4 @@
 
 # Player-supplied sounds (not ours to share)
 *.wav
+/dist/

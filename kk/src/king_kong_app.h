@@ -52,8 +52,17 @@ class KingKongApp : public rex::ReXApp {
     // launcher can edit and save them, and set the port's own defaults.
     kk::PreloadGpuPlugin();
     kk::ApplyPortDefaults();
-    if (paths.game_data_root.empty())
-      paths.game_data_root = rex::filesystem::GetExecutableFolder() / "game";
+    // An AppImage runs from a read-only mount, so keep the game files and the
+    // settings beside the .AppImage file instead of beside the program.
+    std::filesystem::path base = rex::filesystem::GetExecutableFolder();
+    if (const char* appimage = std::getenv("APPIMAGE"); appimage && *appimage) {
+      const auto exe_dir = base;
+      base = std::filesystem::path(appimage).parent_path();
+      if (paths.config_path.empty() || paths.config_path.parent_path() == exe_dir)
+        paths.config_path = base / (paths.config_path.empty() ? std::filesystem::path("king_kong.toml")
+                                                              : paths.config_path.filename());
+    }
+    if (paths.game_data_root.empty()) paths.game_data_root = base / "game";
     // Achievement names and icons extracted from the player's default.xex by the builder.
     if (paths.metadata_root.empty()) paths.metadata_root = kk::art::AchievementDir(paths.game_data_root);
   }

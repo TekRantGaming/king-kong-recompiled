@@ -13,6 +13,14 @@
 #include <windows.h>
 #include <shellapi.h>
 #pragma comment(lib, "shell32.lib")
+#else
+#include <SDL3/SDL.h>
+#include <cstdlib>
+#include <fstream>
+#include <spawn.h>
+#include <sys/wait.h>
+#include <unistd.h>
+extern char** environ;
 #endif
 
 #include <imgui.h>
@@ -28,7 +36,8 @@ bool IsShiftHeld() {
 #if defined(_WIN32)
   return (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
 #else
-  return false;
+  SDL_PumpEvents();
+  return (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
 #endif
 }
 
@@ -38,6 +47,9 @@ std::pair<int, int> PrimaryScreenSize() {
   mode.dmSize = sizeof(mode);
   if (EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &mode))
     return {int(mode.dmPelsWidth), int(mode.dmPelsHeight)};
+#else
+  if (const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetPrimaryDisplay()))
+    return {int(mode->w * mode->pixel_density), int(mode->h * mode->pixel_density)};
 #endif
   return {1 << 16, 1 << 16};
 }
@@ -67,6 +79,21 @@ std::vector<MonitorInfo> ListMonitors() {
         return TRUE;
       },
       reinterpret_cast<LPARAM>(&out));
+#else
+  int count = 0;
+  SDL_DisplayID* ids = SDL_GetDisplays(&count);
+  const SDL_DisplayID primary = SDL_GetPrimaryDisplay();
+  for (int i = 0; ids && i < count; ++i) {
+    MonitorInfo m;
+    if (const char* name = SDL_GetDisplayName(ids[i])) m.name = name;
+    if (const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(ids[i])) {
+      m.width = int(mode->w * mode->pixel_density);
+      m.height = int(mode->h * mode->pixel_density);
+    }
+    m.primary = ids[i] == primary;
+    out.push_back(std::move(m));
+  }
+  SDL_free(ids);
 #endif
   return out;
 }
@@ -87,6 +114,24 @@ void RelaunchSelf(std::wstring_view extra_args) {
   } else {
     REXLOG_ERROR("KK: relaunch failed ({})", GetLastError());
   }
+#else
+  // Same arguments as this run (from /proc/self/cmdline) plus the extras.
+  std::vector<std::string> args;
+  std::ifstream cmdline("/proc/self/cmdline", std::ios::binary);
+  for (std::string arg; std::getline(cmdline, arg, '\0');) args.push_back(arg);
+  std::string extra;
+  for (wchar_t c : extra_args) extra += static_cast<char>(c);  // ASCII flags
+  args.push_back(extra);
+  // Inside an AppImage, relaunch the AppImage itself rather than the mounted binary.
+  const char* appimage = std::getenv("APPIMAGE");
+  const std::string exe = appimage ? appimage : std::filesystem::read_symlink("/proc/self/exe").string();
+  std::vector<char*> argv;
+  argv.push_back(const_cast<char*>(exe.c_str()));
+  for (size_t i = 1; i < args.size(); ++i) argv.push_back(args[i].data());
+  argv.push_back(nullptr);
+  pid_t pid = 0;
+  if (posix_spawn(&pid, exe.c_str(), nullptr, nullptr, argv.data(), environ) != 0)
+    REXLOG_ERROR("KK: relaunch failed");
 #endif
 }
 
@@ -95,6 +140,12 @@ void OpenInExplorer(const std::filesystem::path& path) {
   if (!std::filesystem::exists(path, ec) && !path.has_extension()) std::filesystem::create_directories(path, ec);
 #if defined(_WIN32)
   ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+#else
+  const std::string target = path.string();
+  const char* argv[] = {"xdg-open", target.c_str(), nullptr};
+  pid_t pid = 0;
+  if (posix_spawnp(&pid, "xdg-open", nullptr, nullptr, const_cast<char* const*>(argv), environ) != 0)
+    REXLOG_WARN("KK: could not run xdg-open for {}", target);
 #endif
 }
 
@@ -117,7 +168,34 @@ void LoadUiFont(ImFontAtlas* atlas) {
   g_fonts.bold = load("segoeuib.ttf");
   ImGui::GetIO().FontDefault = g_fonts.regular;
 #else
-  (void)atlas;
+  // Common Linux UI fonts; the first family found wins.
+  static const ImWchar kRanges[] = {0x0020, 0x00FF, 0x2010, 0x205E, 0};
+  struct Family { const char* regular; const char* semibold; const char* bold; };
+  static const Family kFamilies[] = {
+      {"/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", "/usr/share/fonts/truetype/noto/NotoSans-SemiBold.ttf",
+       "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf"},
+      {"/usr/share/fonts/noto/NotoSans-Regular.ttf", "/usr/share/fonts/noto/NotoSans-SemiBold.ttf",
+       "/usr/share/fonts/noto/NotoSans-Bold.ttf"},
+      {"/usr/share/fonts/google-noto/NotoSans-Regular.ttf", "/usr/share/fonts/google-noto/NotoSans-SemiBold.ttf",
+       "/usr/share/fonts/google-noto/NotoSans-Bold.ttf"},
+      {"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", nullptr, "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"},
+      {"/usr/share/fonts/TTF/DejaVuSans.ttf", nullptr, "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf"},
+      {"/usr/share/fonts/dejavu/DejaVuSans.ttf", nullptr, "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf"},
+      {"/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf", nullptr,
+       "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"},
+  };
+  auto load = [&](const char* file) -> ImFont* {
+    std::error_code ec;
+    return file && std::filesystem::exists(file, ec) ? atlas->AddFontFromFileTTF(file, 18.0f, nullptr, kRanges)
+                                                     : nullptr;
+  };
+  for (const auto& f : kFamilies) {
+    if (!(g_fonts.regular = load(f.regular))) continue;
+    g_fonts.semibold = load(f.semibold ? f.semibold : f.bold);
+    g_fonts.bold = load(f.bold);
+    ImGui::GetIO().FontDefault = g_fonts.regular;
+    break;
+  }
 #endif
   if (!g_fonts.semibold) g_fonts.semibold = g_fonts.regular;
   if (!g_fonts.bold) g_fonts.bold = g_fonts.regular;

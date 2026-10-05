@@ -86,3 +86,42 @@ const PVOID g_handler = AddVectoredExceptionHandler(1, FloatExceptionHandler);
 }  // namespace
 
 #endif  // _WIN32
+
+#if defined(__linux__)
+
+#include <csignal>
+#include <ucontext.h>
+
+#include <rex/ppc/context.h>
+#include <rex/system/thread_state.h>
+
+namespace {
+
+constexpr unsigned kMxcsrMaskAll = 0x1F80;  // IM|DM|ZM|OM|UM|PM
+constexpr unsigned kMxcsrFlags = 0x3F;
+
+// Linux counterpart of the handler above: the same unmasked traps arrive as
+// SIGFPE. Re-mask them in the interrupted context and resume.
+void FloatSignalHandler(int, siginfo_t*, void* uctx) {
+  if (auto* ts = rex::runtime::ThreadState::Get()) {
+    if (auto* ctx = ts->context()) ctx->fpscr.csr |= kMxcsrMaskAll;
+  }
+  auto* uc = static_cast<ucontext_t*>(uctx);
+  if (uc->uc_mcontext.fpregs) {
+    uc->uc_mcontext.fpregs->mxcsr = (uc->uc_mcontext.fpregs->mxcsr | kMxcsrMaskAll) & ~kMxcsrFlags;
+    uc->uc_mcontext.fpregs->cwd |= 0x3F;
+    uc->uc_mcontext.fpregs->swd &= ~0x3F;
+  }
+}
+
+const bool g_installed = [] {
+  struct sigaction sa {};
+  sa.sa_sigaction = FloatSignalHandler;
+  sa.sa_flags = SA_SIGINFO;
+  sigemptyset(&sa.sa_mask);
+  return sigaction(SIGFPE, &sa, nullptr) == 0;
+}();
+
+}  // namespace
+
+#endif  // __linux__

@@ -151,6 +151,10 @@ void LimitFrameRate() {
     SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE);
     WaitForSingleObject(timer, INFINITE);
   }
+#else
+  // Sleep for the bulk of the wait, then spin for precision.
+  const auto coarse = next - now - std::chrono::microseconds(500);
+  if (coarse > Clock::duration::zero()) std::this_thread::sleep_for(coarse);
 #endif
   while (Clock::now() < next) std::this_thread::yield();
   next += period;

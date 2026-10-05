@@ -8,3 +8,4 @@ tools/snap_window.ps1 export-ignore
 tools/scroll_window.ps1 export-ignore
 tools/run_to_ship.ps1 export-ignore
 tools/time_opening.ps1 export-ignore
+tools/build_appimage.sh text eol=lf

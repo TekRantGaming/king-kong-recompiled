@@ -21,6 +21,10 @@
 #include <windows.h>
 #include <commdlg.h>
 #pragma comment(lib, "comdlg32.lib")
+#else
+#include <cstdio>
+#include <dlfcn.h>
+#include <sys/wait.h>
 #endif
 
 #include <imgui.h>
@@ -189,7 +193,30 @@ std::filesystem::path BrowseForDiscImage() {
   return GetOpenFileNameW(&ofn) ? std::filesystem::path(file) : std::filesystem::path();
 }
 #else
-std::filesystem::path BrowseForDiscImage() { return {}; }
+// Linux: the desktop's own file picker through zenity (GNOME, SteamOS and
+// most others) or kdialog (KDE).
+std::filesystem::path BrowseForDiscImage() {
+  const char* commands[] = {
+      "zenity --file-selection --title='Select your King Kong Xbox 360 disc image' "
+      "--file-filter='Xbox 360 disc image (*.iso) | *.iso *.ISO' --file-filter='All files | *' 2>/dev/null",
+      "kdialog --title 'Select your King Kong Xbox 360 disc image' --getopenfilename \"$HOME\" "
+      "'*.iso *.ISO|Xbox 360 disc image' 2>/dev/null",
+  };
+  for (const char* cmd : commands) {
+    FILE* pipe = popen(cmd, "r");
+    if (!pipe) continue;
+    std::string out;
+    char buf[512];
+    while (fgets(buf, sizeof(buf), pipe)) out += buf;
+    const int status = pclose(pipe);
+    while (!out.empty() && (out.back() == '\n' || out.back() == '\r')) out.pop_back();
+    if (!out.empty()) return std::filesystem::path(out);
+    // 127: the tool isn't installed, so try the next one; anything else means
+    // the player cancelled.
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 127) return {};
+  }
+  return {};
+}
 #endif
 
 // Settings that the presenter/window read before the launcher runs; changing
@@ -1235,6 +1262,13 @@ void PreloadGpuPlugin() {
   const auto dir = rex::filesystem::GetExecutableFolder();
   for (const char* name : {"rexgpu-xenosrd.dll", "rexgpu-xenos.dll", "rexgpu-xenosd.dll"}) {
     if (std::filesystem::exists(dir / name) && LoadLibraryW((dir / name).c_str())) return;
+  }
+  REXLOG_WARN("KK: GPU plugin not found for preload; graphics settings unavailable in launcher");
+#else
+  const auto dir = rex::filesystem::GetExecutableFolder();
+  for (const char* name : {"librexgpu-xenosrd.so", "librexgpu-xenos.so", "librexgpu-xenosd.so"}) {
+    for (const auto& path : {dir / name, dir / ".." / "lib" / name})
+      if (std::filesystem::exists(path) && dlopen(path.c_str(), RTLD_NOW | RTLD_GLOBAL)) return;
   }
   REXLOG_WARN("KK: GPU plugin not found for preload; graphics settings unavailable in launcher");
 #endif

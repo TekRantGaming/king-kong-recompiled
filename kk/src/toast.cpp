@@ -16,6 +16,8 @@
 #include <windows.h>
 #include <mmsystem.h>
 #pragma comment(lib, "winmm.lib")
+#else
+#include <SDL3/SDL.h>
 #endif
 
 #include <imgui.h>
@@ -183,7 +185,6 @@ std::vector<uint8_t> LoadWavScaled(const std::filesystem::path& path, float volu
 }  // namespace
 
 void PlayAchievementSound(const std::filesystem::path& user_dir) {
-#if defined(_WIN32)
   if (!REXCVAR_GET(kk_achievement_sound)) return;
   // PlaySound reads SND_MEMORY data while playing asynchronously, so keep the
   // buffer alive and only rebuild it when the sound or volume changes.
@@ -198,14 +199,32 @@ void PlayAchievementSound(const std::filesystem::path& user_dir) {
   }
   const std::string key = file.string() + "|" + std::to_string(volume);
   if (key != wav_key) {
+#if defined(_WIN32)
     PlaySoundW(nullptr, nullptr, 0);  // stop before replacing the buffer
+#endif
     wav = file.empty() ? std::vector<uint8_t>{} : LoadWavScaled(file, volume / 100.0f);
     if (wav.empty()) wav = MakeChimeWav(volume / 100.0f);
     wav_key = key;
   }
+#if defined(_WIN32)
   PlaySoundW(reinterpret_cast<LPCWSTR>(wav.data()), nullptr, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
 #else
-  (void)user_dir;
+  // SDL3: decode the WAV and queue it on a stream to the default output. The
+  // previous stream is replaced (and stopped) by the next sound.
+  static SDL_AudioStream* stream = nullptr;
+  if (!SDL_WasInit(SDL_INIT_AUDIO) && !SDL_InitSubSystem(SDL_INIT_AUDIO)) return;
+  SDL_AudioSpec spec{};
+  Uint8* pcm = nullptr;
+  Uint32 pcm_len = 0;
+  if (!SDL_LoadWAV_IO(SDL_IOFromConstMem(wav.data(), wav.size()), true, &spec, &pcm, &pcm_len)) return;
+  if (stream) SDL_DestroyAudioStream(stream);
+  stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
+  if (stream) {
+    SDL_PutAudioStreamData(stream, pcm, int(pcm_len));
+    SDL_FlushAudioStream(stream);
+    SDL_ResumeAudioStreamDevice(stream);
+  }
+  SDL_free(pcm);
 #endif
 }
 
