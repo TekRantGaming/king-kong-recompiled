@@ -1,5 +1,5 @@
 @echo off
-rem Usage: build.bat [kk-debug|kk-release|kk-relwithdebinfo]
+rem Usage: build.bat [kk-debug|kk-release|kk-relwithdebinfo|kk-dev]
 setlocal EnableDelayedExpansion
 set PRESET=%1
 if "%PRESET%"=="" set PRESET=kk-relwithdebinfo

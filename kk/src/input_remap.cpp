@@ -103,10 +103,21 @@ void Remap(uint8_t* state) {
 
 }  // namespace
 
+namespace kk {
+// Set by developer builds (dev_tools.cpp) to feed in pad input; returns true
+// when it filled in the state.
+bool (*g_dev_pad_input)(uint32_t user, uint8_t* state) = nullptr;
+}  // namespace kk
+
 REX_EXTERN(__imp__sub_821074E8);
 REX_HOOK_RAW(sub_821074E8) {
+  const uint32_t user = ctx.r3.u32;
   const uint32_t state_ptr = ctx.r4.u32;
   __imp__sub_821074E8(ctx, base);
+  if (kk::g_dev_pad_input && state_ptr && kk::g_dev_pad_input(user, base + state_ptr)) {
+    ctx.r3.u64 = 0;  // ERROR_SUCCESS: a pad is connected
+    return;
+  }
   if (ctx.r3.u32 == 0 && state_ptr) Remap(base + state_ptr);  // ERROR_SUCCESS
 }
 
