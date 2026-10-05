@@ -61,6 +61,12 @@ class KingKongApp : public rex::ReXApp {
       if (paths.config_path.empty() || paths.config_path.parent_path() == exe_dir)
         paths.config_path = base / (paths.config_path.empty() ? std::filesystem::path("king_kong.toml")
                                                               : paths.config_path.filename());
+      // The runtime's default log folder is beside the program too.
+      if (REXCVAR_GET(log_file).empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(base / "logs", ec);
+        kk::SetCvarDefault("log_file", (base / "logs" / "king_kong.log").string());
+      }
     }
     if (paths.game_data_root.empty()) paths.game_data_root = base / "game";
     // Achievement names and icons extracted from the player's default.xex by the builder.
