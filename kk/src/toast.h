@@ -56,6 +56,11 @@ class AchievementToast final : public rex::ui::AchievementNotificationDialog {
   std::map<uint32_t, std::unique_ptr<rex::ui::ImmediateTexture>> icons_;
 };
 
+// A dialog is closed partway through a frame, and that frame's drawing (which
+// still uses the dialog's pictures) is sent to the GPU afterwards. Freeing the
+// pictures then crashes the Vulkan renderer, so dialogs hand them here instead.
+void KeepTextureAlive(std::unique_ptr<rex::ui::ImmediateTexture> texture);
+
 // Plays the achievement sound: kk_achievement_sound_file from the sounds
 // folder, or the built-in chime (respects kk_achievement_sound / _volume).
 void PlayAchievementSound(const std::filesystem::path& user_dir);

@@ -269,10 +269,14 @@ class Launcher final : public rex::ui::ImGuiDialog {
       progress_.cancel = true;
       install_thread_.join();
     }
+    for (auto& texture : textures_) KeepTextureAlive(std::move(texture));
   }
 
  protected:
   void OnDraw(ImGuiIO& io) override {
+    // Testing aid: KK_AUTOPLAY=1 presses Play after a couple of seconds.
+    static const bool autoplay = std::getenv("KK_AUTOPLAY") != nullptr;
+    if (autoplay && files_ok_ && ++autoplay_frames_ == 120) Play();
     s_ = ImGui::GetFontSize() / 18.0f;
     ApplyTheme(s_);
     const ImGuiViewport* vp = ImGui::GetMainViewport();
@@ -1226,6 +1230,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
   std::vector<std::string> restart_baseline_;
   bool files_ok_ = false;
   bool played_ = false;
+  int autoplay_frames_ = 0;
   std::string status_;
   std::string capturing_;
   std::vector<MonitorInfo> monitors_;

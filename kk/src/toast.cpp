@@ -238,7 +238,16 @@ AchievementToast::AchievementToast(rex::ui::ImGuiDrawer* drawer, rex::ui::Immedi
   icon_paths_[0] = art::TitleIconPath(game_dir_);
 }
 
-AchievementToast::~AchievementToast() = default;
+AchievementToast::~AchievementToast() {
+  for (auto& [id, icon] : icons_) KeepTextureAlive(std::move(icon));
+}
+
+void KeepTextureAlive(std::unique_ptr<rex::ui::ImmediateTexture> texture) {
+  // Never freed: the textures are small, and freeing them at exit would touch
+  // a drawer that is already gone.
+  static auto* kept = new std::vector<std::unique_ptr<rex::ui::ImmediateTexture>>();
+  if (texture) kept->push_back(std::move(texture));
+}
 
 void AchievementToast::Push(const rex::system::AchievementEvent& event) {
   Show(event.achievement.label, event.achievement.gamerscore, event.achievement.id);
