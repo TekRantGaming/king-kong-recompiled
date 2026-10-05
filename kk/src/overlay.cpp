@@ -23,11 +23,9 @@ class FpsOverlay final : public rex::ui::ImGuiDialog {
   void OnDraw(ImGuiIO& io) override {
     if (!REXCVAR_GET(kk_show_fps)) return;
     const auto stats = GetGuestFrameStats();
+    if (stats.frame_count == 0) return;  // nothing to show yet (launcher, loading)
     char text[48];
-    if (stats.frame_count == 0)
-      std::snprintf(text, sizeof(text), "-- FPS");
-    else
-      std::snprintf(text, sizeof(text), "%.0f FPS  %.1f ms", stats.fps, stats.frame_time_ms);
+    std::snprintf(text, sizeof(text), "%.0f FPS  %.1f ms", stats.fps, stats.frame_time_ms);
     const float s = ImGui::GetFontSize() / 18.0f;
     ImFont* font = GetUiFonts().semibold ? GetUiFonts().semibold : ImGui::GetFont();
     const float size = 16.0f * s;

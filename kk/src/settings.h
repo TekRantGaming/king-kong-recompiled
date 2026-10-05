@@ -1,6 +1,6 @@
 // King Kong port settings.
 //
-// Port-specific options are cvars in the "OKX" categories, so they load and
+// Port-specific options are cvars in the "KK" categories, so they load and
 // save with the rest of ReXGlue's config (king_kong.toml next to the
 // exe) and can be overridden on the command line (--kk_frame_rate=120).
 

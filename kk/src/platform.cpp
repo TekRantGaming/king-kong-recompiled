@@ -103,9 +103,13 @@ void LoadUiFont(ImFontAtlas* atlas) {
   wchar_t windir[MAX_PATH];
   if (!GetWindowsDirectoryW(windir, MAX_PATH)) return;
   const auto fonts = std::filesystem::path(windir) / "Fonts";
+  // Latin-1 plus General Punctuation: the game's achievement text uses curly
+  // quotes (as in "Kong's power").
+  static const ImWchar kRanges[] = {0x0020, 0x00FF, 0x2010, 0x205E, 0};
   auto load = [&](const char* file) -> ImFont* {
     const auto path = fonts / file;
-    return std::filesystem::exists(path) ? atlas->AddFontFromFileTTF(path.string().c_str(), 18.0f) : nullptr;
+    return std::filesystem::exists(path) ? atlas->AddFontFromFileTTF(path.string().c_str(), 18.0f, nullptr, kRanges)
+                                         : nullptr;
   };
   g_fonts.regular = load("segoeui.ttf");
   if (!g_fonts.regular) return;

@@ -8,33 +8,33 @@
 #include <rex/logging.h>
 #include <rex/string.h>
 
-REXCVAR_DEFINE_BOOL(kk_launcher, true, "OKX",
+REXCVAR_DEFINE_BOOL(kk_launcher, true, "KK",
                     "Show the launcher before starting the game (hold Shift at start to force it)");
-REXCVAR_DEFINE_BOOL(kk_skip_launcher, false, "OKX",
+REXCVAR_DEFINE_BOOL(kk_skip_launcher, false, "KK",
                     "Internal: skip the launcher once (used when it relaunches the game)");
-REXCVAR_DEFINE_INT32(kk_frame_rate, 60, "OKX/Video",
+REXCVAR_DEFINE_INT32(kk_frame_rate, 60, "KK/Video",
                      "Frame-rate cap: 30, 60, 120, 144, 165, 240, or 0 for unlimited");
-REXCVAR_DEFINE_STRING(kk_render_quality, "native", "OKX/Video",
+REXCVAR_DEFINE_STRING(kk_render_quality, "native", "KK/Video",
                       "Render resolution relative to the output: native, quality, balanced, performance, "
                       "ultra_performance, supersample, or custom (use resolution_scale)");
-REXCVAR_DEFINE_BOOL(kk_show_fps, false, "OKX/Video", "Show a frame-rate counter (toggle in game with F2)");
-REXCVAR_DEFINE_INT32(kk_deadzone, 0, "OKX/Controls", "Extra stick deadzone in percent (0-50)");
-REXCVAR_DEFINE_INT32(kk_camera_sensitivity, 100, "OKX/Controls", "Camera (right stick) sensitivity in percent");
-REXCVAR_DEFINE_BOOL(kk_achievement_toasts, true, "OKX/Achievements", "Show achievement notifications");
-REXCVAR_DEFINE_BOOL(kk_achievement_sound, true, "OKX/Achievements", "Play the achievement sound");
-REXCVAR_DEFINE_STRING(kk_achievement_sound_file, "", "OKX/Achievements",
+REXCVAR_DEFINE_BOOL(kk_show_fps, false, "KK/Video", "Show a frame-rate counter (toggle in game with F2)");
+REXCVAR_DEFINE_INT32(kk_deadzone, 0, "KK/Controls", "Extra stick deadzone in percent (0-50)");
+REXCVAR_DEFINE_INT32(kk_camera_sensitivity, 100, "KK/Controls", "Camera (right stick) sensitivity in percent");
+REXCVAR_DEFINE_BOOL(kk_achievement_toasts, true, "KK/Achievements", "Show achievement notifications");
+REXCVAR_DEFINE_BOOL(kk_achievement_sound, true, "KK/Achievements", "Play the achievement sound");
+REXCVAR_DEFINE_STRING(kk_achievement_sound_file, "", "KK/Achievements",
                       "Achievement sound from the sounds folder (empty = built-in chime)");
-REXCVAR_DEFINE_INT32(kk_achievement_volume, 80, "OKX/Achievements", "Achievement sound volume in percent");
-REXCVAR_DEFINE_BOOL(kk_vibration, true, "OKX/Controls", "Controller vibration");
-REXCVAR_DEFINE_INT32(kk_vibration_strength, 100, "OKX/Controls", "Vibration strength in percent");
-REXCVAR_DEFINE_BOOL(kk_invert_rs_x, false, "OKX/Controls", "Invert right stick horizontal (camera)");
-REXCVAR_DEFINE_BOOL(kk_invert_rs_y, false, "OKX/Controls", "Invert right stick vertical");
-REXCVAR_DEFINE_BOOL(kk_invert_ls_x, false, "OKX/Controls", "Invert left stick horizontal");
-REXCVAR_DEFINE_BOOL(kk_invert_ls_y, false, "OKX/Controls", "Invert left stick vertical");
+REXCVAR_DEFINE_INT32(kk_achievement_volume, 80, "KK/Achievements", "Achievement sound volume in percent");
+REXCVAR_DEFINE_BOOL(kk_vibration, true, "KK/Controls", "Controller vibration");
+REXCVAR_DEFINE_INT32(kk_vibration_strength, 100, "KK/Controls", "Vibration strength in percent");
+REXCVAR_DEFINE_BOOL(kk_invert_rs_x, false, "KK/Controls", "Invert right stick horizontal (camera)");
+REXCVAR_DEFINE_BOOL(kk_invert_rs_y, false, "KK/Controls", "Invert right stick vertical");
+REXCVAR_DEFINE_BOOL(kk_invert_ls_x, false, "KK/Controls", "Invert left stick horizontal");
+REXCVAR_DEFINE_BOOL(kk_invert_ls_y, false, "KK/Controls", "Invert left stick vertical");
 
 // Button remapping: kk_map_<physical> = <game button> (or "none").
 #define KK_MAP_CVAR(id, def, label) \
-  REXCVAR_DEFINE_STRING(kk_map_##id, def, "OKX/Controls/Remap", label " sends")
+  REXCVAR_DEFINE_STRING(kk_map_##id, def, "KK/Controls/Remap", label " sends")
 KK_MAP_CVAR(dpad_up, "dpad_up", "D-pad up");
 KK_MAP_CVAR(dpad_down, "dpad_down", "D-pad down");
 KK_MAP_CVAR(dpad_left, "dpad_left", "D-pad left");
@@ -207,6 +207,14 @@ void ApplyRuntimeOverrides() {
       REXLOG_WARN("KK: could not set {} (cvar not registered)", name);
   }
   REXLOG_INFO("KK: frame-rate cap {}", REXCVAR_GET(kk_frame_rate));
+
+  // The GPU logs every occlusion ("viz") query at info level: thousands of
+  // lines a second for this title, written from the GPU thread, plus a log
+  // rotation every few seconds. Keep its warnings, drop the chatter, unless
+  // the player asked for more detailed logs.
+  if (REXCVAR_GET(log_level) == "info") {
+    if (auto gpu = rex::FindCategory("gpu")) rex::SetCategoryLevel(*gpu, spdlog::level::warn);
+  }
 }
 
 }  // namespace kk

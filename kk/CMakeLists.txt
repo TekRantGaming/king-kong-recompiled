@@ -25,6 +25,7 @@ set(KINGKONG_SOURCES
     src/overlay.cpp
     src/toast.cpp
     src/io_fix.cpp
+    src/menu_hook.cpp
 )
 
 if(WIN32)

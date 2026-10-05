@@ -75,6 +75,13 @@ void OnGuestSwap() {
   std::lock_guard lock(g_mutex);
   ++g_window_frames;
   const auto now = Clock::now();
+  // Log single long frames (stutter); the per-second average hides them.
+  static Clock::time_point last_swap{};
+  if (last_swap != Clock::time_point{}) {
+    const double frame_ms = std::chrono::duration<double, std::milli>(now - last_swap).count();
+    if (frame_ms >= 50.0) REXLOG_INFO("Hitch: {:.0f} ms frame", frame_ms);
+  }
+  last_swap = now;
   const double elapsed = std::chrono::duration<double>(now - g_window_start).count();
   if (elapsed >= 1.0) {
     g_stats.fps = g_window_frames / elapsed;
@@ -104,6 +111,14 @@ rex::ui::FrameStats GetGuestFrameStats() {
 void RunAfterFirstFrame(double seconds, std::function<void()> fn) {
   std::lock_guard lock(g_mutex);
   g_deferred.push_back({seconds, std::move(fn)});
+}
+
+void RunAfterDelay(double seconds, std::function<void()> fn) {
+  std::lock_guard lock(g_mutex);
+  const double now = g_first_frame == Clock::time_point{}
+                         ? 0.0
+                         : std::chrono::duration<double>(Clock::now() - g_first_frame).count();
+  g_deferred.push_back({now + seconds, std::move(fn)});
 }
 
 }  // namespace kk

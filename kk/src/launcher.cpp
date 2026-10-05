@@ -177,7 +177,7 @@ int ImGuiKeyToVk(ImGuiKey k) {
 }
 
 #if defined(_WIN32)
-std::filesystem::path BrowseForPackage() {
+std::filesystem::path BrowseForDiscImage() {
   wchar_t file[MAX_PATH] = L"";
   OPENFILENAMEW ofn{};
   ofn.lStructSize = sizeof(ofn);
@@ -189,7 +189,7 @@ std::filesystem::path BrowseForPackage() {
   return GetOpenFileNameW(&ofn) ? std::filesystem::path(file) : std::filesystem::path();
 }
 #else
-std::filesystem::path BrowseForPackage() { return {}; }
+std::filesystem::path BrowseForDiscImage() { return {}; }
 #endif
 
 // Settings that the presenter/window read before the launcher runs; changing
@@ -357,9 +357,11 @@ class Launcher final : public rex::ui::ImGuiDialog {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 p1(origin.x + w, origin.y + h);
     if (title_art_) {
-      // The game's own title screen (captured on first play): show its top band.
-      const float band = std::min(0.96f, (h / w) * title_art_aspect_);
-      dl->AddImage(Tex(title_art_), origin, p1, ImVec2(0, 0.04f), ImVec2(1, 0.04f + band));
+      // The game's save menu backdrop (captured on first play): the sky, moon
+      // and cliffs to the right of the game's logo and above its menu text.
+      constexpr float kU0 = 0.30f, kV0 = 0.12f;
+      const float band = std::min(1.0f - kV0, (h / w) * title_art_aspect_ * (1.0f - kU0));
+      dl->AddImage(Tex(title_art_), origin, p1, ImVec2(kU0, kV0), ImVec2(1, kV0 + band));
     } else {
       // Night sky over Skull Island: a misty moon behind jagged peaks.
       dl->AddRectFilledMultiColor(origin, p1, IM_COL32(18, 24, 30, 255), IM_COL32(26, 30, 34, 255),
@@ -635,7 +637,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
   }
 
   void StartInstall() {
-    const auto pkg = BrowseForPackage();
+    const auto pkg = BrowseForDiscImage();
     if (pkg.empty()) return;
     const uint32_t title = iso::ReadTitleId(pkg);
     if (title == 0) {
@@ -773,7 +775,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
       ImGui::PopID();
       ImGui::PushStyleColor(ImGuiCol_Text, kDim);
       ImGui::PushFont(nullptr, 15.0f);
-      ImGui::Text("Your screen: %d \xC3\x97 %d", out_w, out_h);
+      ImGui::Text("%s: %d \xC3\x97 %d", GetBool("fullscreen") ? "Your screen" : "Game window", out_w, out_h);
       ImGui::PopFont();
       ImGui::PopStyleColor();
     }
@@ -790,7 +792,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
     ChoiceCvar("swap_post_effect", {{"Off", "none"}, {"FXAA", "fxaa"}, {"FXAA Extreme", "fxaa_extreme"}});
     Row("Multisampling", "Real 2\xC3\x97 MSAA wherever the game asks the Xbox 360 GPU for it.");
     ToggleCvar("native_2x_msaa", "Off", "2\xC3\x97 MSAA");
-    Row("Texture filtering", "Keeps the station floor and distant textures sharp at steep angles.");
+    Row("Texture filtering", "Keeps the ground and distant textures sharp at steep angles.");
     ChoiceCvar("anisotropic_override",
                {{"Game", "-1"}, {"Off", "0"}, {"2\xC3\x97", "2"}, {"4\xC3\x97", "3"}, {"8\xC3\x97", "4"}, {"16\xC3\x97", "5"}});
     EndRows();
@@ -1075,11 +1077,11 @@ class Launcher final : public rex::ui::ImGuiDialog {
       SaveSettings(paths_.config_path);
       OpenInExplorer(paths_.config_path);
     }
-    Row("Launcher art", "The header shows the game's own title screen, captured the first time you play.");
+    Row("Launcher art", "The header shows the game's own menu screen, captured the first time you reach it.");
     if (ImGui::Button(title_art_ ? "Capture again next time I play" : "Captured on your first play", ImVec2(-FLT_MIN, 0))) {
       std::error_code ec;
       std::filesystem::remove(art::TitleCapturePath(paths_.user_dir), ec);
-      status_ = "The title screen will be captured again next time you play.";
+      status_ = "The menu screen will be captured again next time you play.";
     }
     Row("Reset settings", "Put every setting back to its default.");
     if (ImGui::Button("Reset all settings", ImVec2(-FLT_MIN, 0))) ImGui::OpenPopup("Reset all settings?");

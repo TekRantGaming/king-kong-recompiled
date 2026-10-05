@@ -26,6 +26,7 @@
 
 #include "art.h"
 #include "frame_stats.h"
+#include "menu_hook.h"
 #include "launcher.h"
 #include "overlay.h"
 #include "platform.h"
@@ -142,19 +143,23 @@ class KingKongApp : public rex::ReXApp {
     return {int(window()->GetActualPhysicalWidth()), int(window()->GetActualPhysicalHeight())};
   }
 
-  // On first play, keep a frame of the game's title screen as launcher art.
+  // On first play, keep a frame of the game's menu (moon over Skull Island) as
+  // launcher art. The intro videos run for over a minute and can be skipped, so
+  // wait for the save menu to open, then let its backdrop fade in.
   void ScheduleTitleCapture() {
     if (user_data_root_.empty()) return;
     const auto path = kk::art::TitleCapturePath(user_data_root_);
     std::error_code ec;
     if (std::filesystem::exists(path, ec)) return;
-    kk::RunAfterFirstFrame(14.0, [this, path] {
-      app_context().CallInUIThread([this, path] {
-        rex::ui::RawImage image;
-        auto* gfx = runtime() ? runtime()->graphics_system() : nullptr;
-        auto* presenter = gfx ? gfx->presenter() : nullptr;
-        if (presenter && presenter->CaptureGuestOutput(image) && kk::art::SaveTitleCapture(image, path))
-          REXLOG_INFO("KK: saved launcher art {}x{}", image.width, image.height);
+    kk::OnSaveMenuShown([this, path] {
+      kk::RunAfterDelay(3.0, [this, path] {
+        app_context().CallInUIThread([this, path] {
+          rex::ui::RawImage image;
+          auto* gfx = runtime() ? runtime()->graphics_system() : nullptr;
+          auto* presenter = gfx ? gfx->presenter() : nullptr;
+          if (presenter && presenter->CaptureGuestOutput(image) && kk::art::SaveTitleCapture(image, path))
+            REXLOG_INFO("KK: saved launcher art {}x{}", image.width, image.height);
+        });
       });
     });
   }

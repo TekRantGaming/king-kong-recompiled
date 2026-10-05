@@ -12,7 +12,7 @@
 namespace kk::art {
 namespace {
 
-constexpr uint32_t kTitleId = 0x584107DB;
+constexpr uint32_t kTitleId = 0x555307D3;
 
 std::vector<uint8_t> ReadFile(const std::filesystem::path& path) {
   std::ifstream f(path, std::ios::binary | std::ios::ate);

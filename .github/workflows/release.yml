@@ -1,0 +1,33 @@
+# Publishes the Windows builder when a version tag (v*) is pushed.
+# The builder contains only this repository's files; players build the game
+# on their own PC from their own disc image, so no game code is released.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-builder:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package the builder
+        run: |
+          name="KingKong-Builder-${GITHUB_REF_NAME}-windows"
+          git archive --format=zip --prefix="${name}/" -o "${name}.zip" HEAD
+          echo "ZIP=${name}.zip" >> "$GITHUB_ENV"
+          unzip -l "${name}.zip" | tail -1
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "$ZIP" \
+            --title "King Kong PC Port ${GITHUB_REF_NAME}" \
+            --notes-file .github/release-notes.md
