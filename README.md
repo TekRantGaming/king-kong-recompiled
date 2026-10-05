@@ -240,7 +240,7 @@ Get-FileHash "C:\Games\King Kong.iso" -Algorithm SHA1
 
 **You need:** Windows 10 or 11 (64-bit), a graphics card with DirectX 12, about 7 GB of free space, and your own Peter Jackson's King Kong Xbox 360 disc as a disc image (see [Which version you need](#which-version-you-need)).
 
-1. Download **KingKong-v1.0.0-windows-x64.zip** from the [latest release](https://github.com/TekRantGaming/king-kong-recompiled/releases/latest) and unzip it anywhere.
+1. Download the **KingKong-...-windows-x64.zip** file from the [latest release](https://github.com/TekRantGaming/king-kong-recompiled/releases/latest) and unzip it anywhere.
 2. Run **king_kong.exe**. The launcher opens.
 3. Click **Install from disc image...** and pick your King Kong disc image. The launcher checks it and copies the game files (about 6.3 GB) into a `game` folder next to the exe.
 4. Press **PLAY**.
