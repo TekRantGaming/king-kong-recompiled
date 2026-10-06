@@ -84,6 +84,7 @@ Everything is set up before the game starts. The launcher uses art from your own
 ### Play
 - **Install the game** straight from your disc image, with a progress bar
 - Checks the disc really is King Kong
+- **Shader pack** download: every effect already prepared, so the game never pauses for a new one
 - Turn the launcher off and **hold Shift** at start to bring it back
 
 </td>
@@ -215,7 +216,11 @@ Everything is set up before the game starts. The launcher uses art from your own
 - Above 30 fps some character animations are not right yet. For example, the crew rowing at the start skip part of their animation. 30 fps, the default, plays them correctly.
 - There can be a short pause when the game loads the next area. The game does the same on the Xbox 360.
 - The pre-rendered videos pause for a moment every couple of seconds while the video player keeps to the video's timing. This is being looked into.
-- The first time you see a new effect there is a short pause while it is prepared. It is saved, so this only happens once. If you prefer no pause, set **Graphics > Shader preparing** to Background, but then objects can briefly vanish or flash bright the first time.
+- The first time you see a new effect there is a short pause while it is prepared. It is saved, so this only happens once. Download the **shader pack** on the launcher's Play page and almost every effect is prepared before you play. If you prefer no pause at all, set **Graphics > Shader preparing** to Background, but then objects can briefly vanish or flash bright the first time.
+
+### The shader pack
+
+The game prepares each new effect (a shader) the first time it appears, which can cause a short pause. The shader pack is the list of effects collected by a test build that plays every chapter on its own, published on the [shader-packs release](https://github.com/TekRantGaming/king-kong-recompiled/releases/tag/shader-packs). Click **Download shader pack** on the launcher's Play page and it is added to your shader cache (`Documents\king_kong\cache`), keeping anything your game has already prepared. Each time the game starts it prepares everything in the cache, so you get no pauses even on a first play-through. The pack is a separate, optional download, and the launcher only contacts GitHub when you click.
 
 ### Reporting a problem
 
@@ -271,7 +276,7 @@ kk\build.bat kk-release                      # compiles
 
 The finished game is in `kk\out\build\kk-release`. `Build King Kong.bat` does all of this in one go and puts the result in a `KingKong` folder. Point the game at your files with `--game_data_root`, or keep them in a `game` folder next to the exe.
 
-For testing, `kk\build.bat kk-dev` builds a version with developer aids that release builds leave out. Set `KK_DEV_AUTOSKIP=1` and it presses through the intros, menus and story videos into gameplay on its own, logging `KK dev: gameplay reached`. Add `KK_DEV_WANDER=1` to keep walking and looking around after that.
+For testing, `kk\build.bat kk-dev` builds a version with developer aids that release builds leave out. Set `KK_DEV_AUTOSKIP=1` and it presses through the intros, menus and story videos into gameplay on its own, logging `KK dev: gameplay reached`. Add `KK_DEV_WANDER=1` to keep walking and looking around after that. The shader pack is built by running every chapter this way with its own `--cache_root`, then `python tools/make_shader_pack.py <version> <out> <cache folders...>`.
 
 </details>
 

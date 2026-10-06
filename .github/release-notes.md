@@ -1,30 +1,25 @@
-## Peter Jackson's King Kong PC Port v1.2.0: stability pass
-
-This release is about making the game run properly on more PCs. Thanks to everyone on Reddit who reported problems.
+## Peter Jackson's King Kong PC Port v1.3.0: shader pack
 
 ### What's new
-- **No more vanishing objects, silhouettes or bright flashes the first time you play.** While the game prepared a new effect in the background, it skipped drawing everything that needed it, so characters could turn into silhouettes for a moment and some frames flashed bright. Effects are now prepared before they are drawn. The first time you see something new there can be a short pause instead, and only once, because prepared effects are saved for next time. If you prefer the old behaviour, set **Graphics > Shader preparing** to Background.
-- **Steadier frame pacing on more PCs.** The game now asks Windows for precise 1 ms timers and opts out of power throttling. Without this, Windows 10 and 11 can stretch the game's short waits to about 16 ms, and on laptops with Intel's newer mixed P-core/E-core processors Windows 11 can move the game onto the slower cores. Both cause stutter.
-- **Better bug reports.** Every 10 seconds the log notes the average frame rate, the 1% low, the worst frame and how many frames took over 50 or 100 ms. If the game ever crashes, it writes `crash-<date>.txt` and `crash-<date>.dmp` into the `logs` folder. The README explains what to send.
+- **Shader pack: no more pauses for new effects.** The game prepares each effect (a shader) the first time it appears, which caused the short pauses many of you reported on a first play-through. A test build has now played every chapter on its own and collected those effects into a shader pack. On the launcher's **Play** page, click **Download shader pack**: it is added to your shader cache, and every time the game starts it prepares everything in the cache before you play. Anything your own game has already prepared is kept.
+  - Pack 1 holds 4,652 prepared effects from all 42 chapters. In a hand-played test of a chapter, it already covered about 97% of what the game needed, and the rest showed up only as a few tiny pauses (under 75 ms, about two frames). Bigger packs will follow, and **Check for a newer pack** on the Play page fetches them without needing a new release of the port.
+- **A warning before playing above 30 FPS.** Pressing Play with a frame rate above 30 (or unlimited) now explains that some animations can look wrong, and offers to play at 30 or 60 FPS instead. 30 FPS plays every animation correctly. At 60 the issues are still there but much less noticeable. This will be fixed in a future update.
 
 ### Full changelog
-- Shaders now finish preparing before they are used (no skipped draws). The new launcher setting **Graphics > Shader preparing** switches between Wait (default) and Background.
-- 1 ms timer resolution and Windows power-throttling opt-out at startup. The log records how long a 1 ms sleep really takes.
-- Frame-time summary in the log every 10 seconds.
-- Crash reports (`.txt` and minidump) in the `logs` folder.
-- New developer test build (`kk-dev` preset, never in releases). It can skip straight into gameplay and walk around on its own, for testing performance.
-- README: a new "Reporting a problem" section, and updated known issues.
-
-### Tested
-On an RTX 4070 Ti, gameplay held a locked 60 FPS at 720p, 1440p and 2160p, including with the game limited to 2 CPU threads and with an empty shader cache. Short pauses remain when the game loads a new area (as on the Xbox 360). The pre-rendered videos also pause briefly every couple of seconds; that is the video player keeping to the video's timing and is being looked into.
+- Launcher: **Download shader pack** on the Play page. It downloads from the `shader-packs` release on GitHub and merges into `Documents\king_kong\cache`. The launcher only contacts GitHub when you click.
+- Launcher: frame-rate pop-up when pressing Play above 30 FPS, with Play at 30, Play at 60, Keep and Back.
+- New `tools/make_shader_pack.py` builds a pack from one or more shader caches.
+- Developer test build: the automatic tour that plays every chapter (cheats, chapter select, skip videos, walk around), used to build the pack. It is never in release builds.
+- README: a section on the shader pack.
 
 ### How to update
-Download **KingKong-v1.2.0-windows-x64.zip** below and copy everything in it over your KingKong folder. Your installed `game` folder, saves and settings stay as they are.
+Download **KingKong-v1.3.0-windows-x64.zip** below and copy everything in it over your KingKong folder. Then open the launcher and click **Download shader pack**. Your installed `game` folder, saves and settings stay as they are.
 
 ### New install
-1. Unzip **KingKong-v1.2.0-windows-x64.zip** anywhere and run **king_kong.exe**.
+1. Unzip **KingKong-v1.3.0-windows-x64.zip** anywhere and run **king_kong.exe**.
 2. Click **Install from disc image...** and pick your own King Kong disc image (USA/Europe, title ID `555307D3`, version `0.0.0.1`).
-3. Press **PLAY**.
+3. Click **Download shader pack**.
+4. Press **PLAY**.
 
 **No game files are included.** See the README for details.
 

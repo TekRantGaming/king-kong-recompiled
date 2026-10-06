@@ -28,6 +28,7 @@ set(KINGKONG_SOURCES
     src/menu_hook.cpp
     src/glyphs.cpp
     src/crash_dump.cpp
+    src/shader_pack.cpp
 )
 
 # Developer-only test aids (never in release builds): -DKK_DEV_TOOLS=ON.

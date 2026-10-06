@@ -1,4 +1,5 @@
 #include "launcher.h"
+#include "shader_pack.h"
 
 #include <algorithm>
 #include <atomic>
@@ -269,6 +270,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
       progress_.cancel = true;
       install_thread_.join();
     }
+    if (pack_thread_.joinable()) pack_thread_.join();
     for (auto& texture : textures_) KeepTextureAlive(std::move(texture));
   }
 
@@ -663,9 +665,43 @@ class Launcher final : public rex::ui::ImGuiDialog {
       StartInstall();
     ImGui::EndDisabled();
     if (installing_ && ImGui::Button("Cancel install", ImVec2(-FLT_MIN, 0))) progress_.cancel = true;
+    ShaderPackRow();
     Row("Show this launcher", "Off starts the game directly. Hold Shift while starting to bring it back.");
     ToggleCvar("kk_launcher", "Off", "At startup");
     EndRows();
+  }
+
+  std::filesystem::path CacheDir() const {
+    const std::string root = Get("cache_root");
+    return root.empty() ? paths_.user_dir / "cache" : std::filesystem::path(root);
+  }
+
+  void ShaderPackRow() {
+    Row("Shader pack",
+        "Effects already prepared by playing through every chapter. With it the game prepares them all as it "
+        "starts, so it never pauses for a new effect. Downloads from the port's GitHub page.");
+    if (pack_installed_ < 0) pack_installed_ = InstalledShaderPackVersion(CacheDir());
+    if (pack_.busy) {
+      const float total = float(pack_.total.load()), got = float(pack_.bytes.load());
+      ImGui::ProgressBar(total > 0 ? got / total : 0.0f, ImVec2(-FLT_MIN, 0),
+                         total > 0 ? nullptr : "Connecting...");
+      return;
+    }
+    if (pack_thread_.joinable()) {
+      pack_thread_.join();
+      pack_installed_ = InstalledShaderPackVersion(CacheDir());
+    }
+    const bool installed = pack_installed_ > 0;
+    if (installed ? ImGui::Button("Check for a newer pack", ImVec2(-FLT_MIN, 0))
+                  : AccentButton("Download shader pack", ImVec2(-FLT_MIN, 0))) {
+      pack_.done = pack_.failed = false;
+      pack_.busy = true;
+      pack_thread_ = std::thread([this, dir = CacheDir()] { DownloadAndInstallShaderPack(dir, pack_); });
+    }
+    ImGui::PushStyleColor(ImGuiCol_Text, kDim);
+    if (pack_.done || pack_.failed) ImGui::TextWrapped("%s", pack_.message.c_str());
+    else if (installed) ImGui::Text("Pack %d installed.", pack_installed_);
+    ImGui::PopStyleColor();
   }
 
   void StartInstall() {
@@ -1316,6 +1352,9 @@ class Launcher final : public rex::ui::ImGuiDialog {
   bool files_ok_ = false;
   bool played_ = false;
   bool open_fps_warning_ = false;
+  ShaderPackStatus pack_;
+  std::thread pack_thread_;
+  int pack_installed_ = -1;  // -1: not read yet
   int autoplay_frames_ = 0;
   std::string status_;
   std::string capturing_;
