@@ -1,4 +1,4 @@
-## Peter Jackson's King Kong PC Port v1.3.0: shader pack
+## Peter Jackson's King Kong PC Port v1.3.0
 
 ### What's new
 - **Shader pack: no more pauses for new effects.** The game prepares each effect (a shader) the first time it appears, which caused the short pauses many of you reported on a first play-through. A test build has now played every chapter on its own and collected those effects into a shader pack. On the launcher's **Play** page, click **Download shader pack**: it is added to your shader cache, and every time the game starts it prepares everything in the cache before you play. Anything your own game has already prepared is kept.

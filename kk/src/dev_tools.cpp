@@ -109,7 +109,14 @@ void StoreBE(uint8_t* p, T v) {
 bool WanderPad(uint8_t* state, int64_t now) {
   std::memset(state, 0, 16);
   StoreBE<uint32_t>(state, uint32_t(now / 50));
-  if (now % 4000 < 120) StoreBE<uint16_t>(state + 4, kA);  // jump
+  // Act like a player: jump, then cycle through the other buttons (pick up,
+  // throw, reload and so on), aim with the left trigger and fire with the
+  // right one, so combat effects get drawn too.
+  static constexpr uint16_t kActions[] = {kA, 0x4000 /*X*/, 0x8000 /*Y*/, 0x2000 /*B*/};
+  if (now % 1000 < 120) StoreBE<uint16_t>(state + 4, kActions[(now / 1000) % 4]);
+  const int64_t combat = now % 6000;
+  if (combat >= 2000 && combat < 4500) state[6] = 255;  // aim
+  if (combat >= 3000 && combat < 4500 && now % 500 < 150) state[7] = 255;  // fire
   // Left stick: walk in a direction that circles round every 16 s, so walls
   // don't stop it for long. Right stick: keep turning the camera, so every
   // direction gets drawn.
