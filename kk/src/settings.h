@@ -24,6 +24,7 @@ REXCVAR_DECLARE(bool, kk_share_poster);
 REXCVAR_DECLARE(bool, kk_show_fps);
 REXCVAR_DECLARE(int32_t, kk_deadzone);
 REXCVAR_DECLARE(int32_t, kk_camera_sensitivity);
+REXCVAR_DECLARE(bool, kk_camera_modern);
 REXCVAR_DECLARE(bool, kk_achievement_toasts);
 REXCVAR_DECLARE(bool, kk_achievement_sound);
 REXCVAR_DECLARE(std::string, kk_achievement_sound_file);
@@ -70,7 +71,7 @@ Pad GetMapping(Pad physical);
 void SetMapping(Pad physical, Pad target);
 
 // Frame-rate choices offered by the launcher (0 = unlimited).
-constexpr std::array<int32_t, 7> kFrameRateChoices = {30, 60, 120, 144, 165, 240, 0};
+constexpr std::array<int32_t, 8> kFrameRateChoices = {30, 60, 90, 120, 144, 165, 240, 0};
 
 // Render-resolution presets (kk_render_quality).
 struct RenderPreset {

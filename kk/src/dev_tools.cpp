@@ -97,6 +97,22 @@ constexpr uint32_t kLT = 1u << 16, kRT = 1u << 17;
 // add RSHALF (e.g. RSUP+RSHALF) for half way.
 constexpr uint32_t kRsUp = 1u << 18, kRsDown = 1u << 19, kRsLeft = 1u << 20, kRsRight = 1u << 21,
                    kRsHalf = 1u << 22;
+// SKIP presses Start only while a movie is playing, so skipping a chapter's
+// movies never opens the pause menu once they're over.
+constexpr uint32_t kSkip = 1u << 23;
+
+// The game's movie player (*(0x82CCAE80)): +268 and +272 are set while a movie
+// is starting or playing (sub_82723AF0 won't start another until both are 0).
+bool MoviePlaying() {
+  if (!g_guest_base) return false;
+  auto load = [](uint32_t a) {
+    uint32_t v;
+    std::memcpy(&v, g_guest_base + a, 4);
+    return std::byteswap(v);
+  };
+  const uint32_t player = load(0x82CCAE80);
+  return player && (load(player + 268) || load(player + 272));
+}
 std::vector<Step> g_script;
 double g_script_end = 0;
 
@@ -106,7 +122,7 @@ uint32_t ParseButton(const std::string& s) {
       {"BACK", 0x0020}, {"LS", 0x0040},   {"RS", 0x0080},   {"LB", 0x0100},    {"RB", 0x0200},
       {"A", 0x1000},    {"B", 0x2000},    {"X", 0x4000},    {"Y", 0x8000},     {"LT", kLT},
       {"RT", kRT},      {"RSUP", kRsUp},  {"RSDOWN", kRsDown}, {"RSLEFT", kRsLeft}, {"RSRIGHT", kRsRight},
-      {"RSHALF", kRsHalf}};
+      {"RSHALF", kRsHalf}, {"SKIP", kSkip}};
   for (auto& [name, bit] : kNames)
     if (s == name) return bit;
   REXLOG_WARN("KK dev: unknown button '{}' in KK_DEV_SCRIPT", s);
@@ -481,6 +497,7 @@ bool AutoskipPad(uint32_t user, uint8_t* state) {
         if (t >= s.at && t < s.at + s.hold) held |= s.buttons;
     }
     buttons = uint16_t(held);
+    if ((held & kSkip) && MoviePlaying()) buttons |= kStart;
     if (held & kLT) triggers[0] = 255;
     if (held & kRT) triggers[1] = 255;
     const double done_at = g_script.empty() ? kDoneAt : g_script_end + 1;

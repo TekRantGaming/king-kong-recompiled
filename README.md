@@ -142,7 +142,7 @@ Everything is set up before the game starts. The launcher uses art from your own
 <td valign="middle">
 
 ### Gameplay
-- **Frame rate**: 30 (default, like the console), 60, 120, 144, 165, 240 or unlimited
+- **Frame rate**: 30 (default, like the console), 60, 90, 120, 144, 165, 240 or unlimited
 - **Field of view** from 69° (the original) to 110°. The game draws the wider area too, Jack's gun keeps its usual size, and the menus keep their original look
 - **Frame counter** in the corner, toggled with <kbd>F2</kbd>
 - **Startup logos**: play or skip the Ubisoft, Universal and WingNut movies, straight to the title screen
@@ -158,6 +158,7 @@ Everything is set up before the game starts. The launcher uses art from your own
 ### Controls
 - **Invert the camera** left/right and up/down, separately
 - **Controller sensitivity** from 25% to 300%, for looking left and right and up and down
+- **Camera response**: Modern turns the camera the same way in every direction; Original is the Xbox 360's own feel
 - **Mouse sensitivity** and **mouse camera** for keyboard and mouse
 - **Toggle aim**: press the left trigger once to raise the gun and again to lower it, instead of holding it
 - **Stick deadzone** to stop drift

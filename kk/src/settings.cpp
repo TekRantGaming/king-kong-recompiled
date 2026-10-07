@@ -18,7 +18,7 @@ REXCVAR_DEFINE_STRING(kk_last_version, "", "KK",
 REXCVAR_DEFINE_BOOL(kk_share_poster, true, "KK",
                     "Show the \"share your shaders\" poster when the launcher opens (until \"Don't show this again\")");
 REXCVAR_DEFINE_INT32(kk_frame_rate, 30, "KK/Video",
-                     "Frame-rate cap: 30, 60, 120, 144, 165, 240, or 0 for unlimited");
+                     "Frame-rate cap: 30, 60, 90, 120, 144, 165, 240, or 0 for unlimited");
 REXCVAR_DEFINE_STRING(kk_render_quality, "native", "KK/Video",
                       "Render resolution relative to the output: native, quality, balanced, performance, "
                       "ultra_performance, supersample, or custom (use resolution_scale)");
@@ -28,6 +28,8 @@ REXCVAR_DEFINE_STRING(kk_button_prompts, "xbox360", "KK/Controls",
 REXCVAR_DEFINE_BOOL(kk_show_fps, false, "KK/Video", "Show a frame-rate counter (toggle in game with F2)");
 REXCVAR_DEFINE_INT32(kk_deadzone, 0, "KK/Controls", "Extra stick deadzone in percent (0-50)");
 REXCVAR_DEFINE_INT32(kk_camera_sensitivity, 100, "KK/Controls", "Camera (right stick) sensitivity in percent");
+REXCVAR_DEFINE_BOOL(kk_camera_modern, true, "KK/Controls",
+                    "Camera response: true = the same in every direction, false = the Xbox 360's own");
 REXCVAR_DEFINE_BOOL(kk_achievement_toasts, true, "KK/Achievements", "Show achievement notifications");
 REXCVAR_DEFINE_BOOL(kk_achievement_sound, true, "KK/Achievements", "Play the achievement sound");
 REXCVAR_DEFINE_STRING(kk_achievement_sound_file, "", "KK/Achievements",

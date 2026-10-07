@@ -8,8 +8,8 @@
 // Keyboard input arrives through the same path when ReXGlue's mnk_mode is on,
 // so remaps and inversion apply to it too.
 //
-// Camera sensitivity is applied later, to the stick vector the game asks for
-// (sub_8272C610), so it is not capped at a full push of the stick.
+// Camera sensitivity is applied to the camera's turn itself (below), so it is
+// not capped at a full push of the stick.
 
 #include <algorithm>
 #include <bit>
@@ -38,6 +38,9 @@ void StoreBE(uint8_t* p, T v) {
   v = std::byteswap(v);
   std::memcpy(p, &v, sizeof(v));
 }
+
+float LoadF(const uint8_t* p) { return std::bit_cast<float>(LoadBE<uint32_t>(p)); }
+void StoreF(uint8_t* p, float f) { StoreBE<uint32_t>(p, std::bit_cast<uint32_t>(f)); }
 
 void Invert(uint8_t* p) {
   const int16_t v = LoadBE<int16_t>(p);
@@ -167,21 +170,70 @@ REX_HOOK_RAW(sub_821074F8) {
   __imp__sub_821074F8(ctx, base);
 }
 
-// sub_8272C610(out, stick) is how the game reads a stick: out = {x, y, 0} as
-// floats, about -1 to 1, the strongest of the pads, after the game's own
-// inversion options; stick 1 is the right stick, which turns the camera and
-// moves the aim. Controller sensitivity scales that vector here, after the
-// stick's full range, so a full push turns faster or slower too and both axes
-// change together. With keyboard & mouse the mouse has its own sensitivity.
+// Camera response: Modern (kk_camera_modern, the default) or Original.
+// CM_Cam takes the right stick axis by axis: each axis
+// loses a 15% deadzone, then yaw follows its square and pitch its cube (and a
+// held, nearly full sideways push builds up extra yaw speed). So a diagonal is
+// clipped on both axes and the two axes answer to different curves: half way
+// up turns at 7% of the top pitch speed while half way across turns at 17% of
+// the top yaw speed, and circles feel lopsided. The stick vector CM_Cam reads
+// (its sub_8272C610 call) is reshaped so that, after the game's own steps,
+// both axes follow the same curve of the push's length (its square) in the
+// push's direction. A full push straight across or straight up is unchanged.
+// Original leaves the stick as the game reads it.
+namespace {
+constexpr uint32_t kCamStickReturn = 0x824703A8;  // CM_Cam's right-stick read
+constexpr float kCamDeadzone = 0.15f;             // CM_Cam's own, per axis
+
+template <typename F>
+float Reshape(float v, float share, F root) {  // share: this axis's part of the wanted speed, 0..1
+  if (v == 0.0f) return 0.0f;
+  return std::copysign(kCamDeadzone + (1.0f - kCamDeadzone) * root(share), v);
+}
+
+void EvenCameraStick(uint8_t* base, uint32_t out) {
+  float x = LoadF(base + out), y = LoadF(base + out + 4);
+  const float r = std::sqrt(x * x + y * y);
+  if (r < 1e-4f) return;
+  const float len = std::min(r, 1.0f), speed = len * len;  // the same curve for any direction
+  const float sx = speed * std::fabs(x) / r, sy = speed * std::fabs(y) / r;
+  StoreF(base + out, Reshape(x, sx, [](float a) { return std::sqrt(a); }));     // yaw squares it
+  StoreF(base + out + 4, Reshape(y, sy, [](float a) { return std::cbrt(a); }));  // pitch cubes it
+}
+}  // namespace
+
 REX_EXTERN(__imp__sub_8272C610);
 REX_HOOK_RAW(sub_8272C610) {
-  const uint32_t out = ctx.r3.u32, stick = ctx.r4.u32;
+  const uint32_t out = ctx.r3.u32, stick = ctx.r4.u32, from = uint32_t(ctx.lr);
   __imp__sub_8272C610(ctx, base);
-  if (stick != 1 || !out || rex::cvar::GetFlagByName("mnk_mode") == "true") return;
-  const float gain = std::clamp(REXCVAR_GET(kk_camera_sensitivity), 10, 400) / 100.0f;
-  if (gain == 1.0f) return;
-  for (uint32_t offset : {0u, 4u}) {
-    uint8_t* v = base + out + offset;
-    StoreBE<uint32_t>(v, std::bit_cast<uint32_t>(std::bit_cast<float>(LoadBE<uint32_t>(v)) * gain));
-  }
+  if (stick == 1 && out && from == kCamStickReturn && REXCVAR_GET(kk_camera_modern)) EvenCameraStick(base, out);
+}
+
+// Controller sensitivity. The camera manager (CM_Cam, sub_8246F180) reads the
+// right stick, limits it to -1..1, and turns the camera each frame by
+//   yaw:   (x past the deadzone)^2 * a ramp that builds while held * frame time * G[19880]
+//   pitch: (y past the deadzone)^3 * a speed * frame time * G[19884]
+// through sub_82711950 (yaw) and sub_82712300 (pitch). Both are used all over
+// the game, so only the calls from CM_Cam (return addresses below) are
+// scaled. That scales the turn at every push, a full push included, so 200%
+// turns twice as fast. Keyboard & mouse has its own mouse sensitivity.
+namespace {
+constexpr uint32_t kCamYawReturn = 0x82471360, kCamPitchReturn = 0x82471430;
+
+double CameraGain() {
+  if (rex::cvar::GetFlagByName("mnk_mode") == "true") return 1.0;
+  return std::clamp(REXCVAR_GET(kk_camera_sensitivity), 10, 400) / 100.0;
+}
+}  // namespace
+
+REX_EXTERN(__imp__sub_82711950);
+REX_HOOK_RAW(sub_82711950) {
+  if (uint32_t(ctx.lr) == kCamYawReturn) ctx.f1.f64 *= CameraGain();
+  __imp__sub_82711950(ctx, base);
+}
+
+REX_EXTERN(__imp__sub_82712300);
+REX_HOOK_RAW(sub_82712300) {
+  if (uint32_t(ctx.lr) == kCamPitchReturn) ctx.f1.f64 *= CameraGain();
+  __imp__sub_82712300(ctx, base);
 }
