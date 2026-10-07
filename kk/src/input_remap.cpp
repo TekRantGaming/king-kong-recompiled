@@ -39,6 +39,9 @@ void StoreBE(uint8_t* p, T v) {
   std::memcpy(p, &v, sizeof(v));
 }
 
+float LoadF(const uint8_t* p) { return std::bit_cast<float>(LoadBE<uint32_t>(p)); }
+void StoreF(uint8_t* p, float f) { StoreBE<uint32_t>(p, std::bit_cast<uint32_t>(f)); }
+
 void Invert(uint8_t* p) {
   const int16_t v = LoadBE<int16_t>(p);
   StoreBE<int16_t>(p, v == INT16_MIN ? INT16_MAX : static_cast<int16_t>(-v));
@@ -165,6 +168,43 @@ REX_HOOK_RAW(sub_821074F8) {
     }
   }
   __imp__sub_821074F8(ctx, base);
+}
+
+// Even camera response. CM_Cam takes the right stick axis by axis: each axis
+// loses a 15% deadzone, then yaw follows its square and pitch its cube (and a
+// held, nearly full sideways push builds up extra yaw speed). So a diagonal is
+// clipped on both axes and the two axes answer to different curves: half way
+// up turns at 7% of the top pitch speed while half way across turns at 17% of
+// the top yaw speed, and circles feel lopsided. The stick vector CM_Cam reads
+// (its sub_8272C610 call) is reshaped so that, after the game's own steps,
+// both axes follow the same curve of the push's length (its square) in the
+// push's direction. A full push straight across or straight up is unchanged.
+namespace {
+constexpr uint32_t kCamStickReturn = 0x824703A8;  // CM_Cam's right-stick read
+constexpr float kCamDeadzone = 0.15f;             // CM_Cam's own, per axis
+
+template <typename F>
+float Reshape(float v, float share, F root) {  // share: this axis's part of the wanted speed, 0..1
+  if (v == 0.0f) return 0.0f;
+  return std::copysign(kCamDeadzone + (1.0f - kCamDeadzone) * root(share), v);
+}
+
+void EvenCameraStick(uint8_t* base, uint32_t out) {
+  float x = LoadF(base + out), y = LoadF(base + out + 4);
+  const float r = std::sqrt(x * x + y * y);
+  if (r < 1e-4f) return;
+  const float len = std::min(r, 1.0f), speed = len * len;  // the same curve for any direction
+  const float sx = speed * std::fabs(x) / r, sy = speed * std::fabs(y) / r;
+  StoreF(base + out, Reshape(x, sx, [](float a) { return std::sqrt(a); }));     // yaw squares it
+  StoreF(base + out + 4, Reshape(y, sy, [](float a) { return std::cbrt(a); }));  // pitch cubes it
+}
+}  // namespace
+
+REX_EXTERN(__imp__sub_8272C610);
+REX_HOOK_RAW(sub_8272C610) {
+  const uint32_t out = ctx.r3.u32, stick = ctx.r4.u32, from = uint32_t(ctx.lr);
+  __imp__sub_8272C610(ctx, base);
+  if (stick == 1 && out && from == kCamStickReturn) EvenCameraStick(base, out);
 }
 
 // Controller sensitivity. The camera manager (CM_Cam, sub_8246F180) reads the
