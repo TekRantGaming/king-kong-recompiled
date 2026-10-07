@@ -1,22 +1,24 @@
-## Peter Jackson's King Kong PC Port v1.3.0
+## Peter Jackson's King Kong PC Port v1.4.0
 
 ### What's new
-- **Shader pack: no more pauses for new effects.** The game prepares each effect (a shader) the first time it appears, which caused the short pauses many of you reported on a first play-through. A test build has now played every chapter on its own and collected those effects into a shader pack. On the launcher's **Play** page, click **Download shader pack**: it is added to your shader cache, and every time the game starts it prepares everything in the cache before you play. Anything your own game has already prepared is kept.
-  - Pack 1 holds 4,652 prepared effects from all 42 chapters. In a hand-played test of a chapter, it already covered about 97% of what the game needed, and the rest showed up only as a few tiny pauses (under 75 ms, about two frames). Bigger packs will follow, and **Check for a newer pack** on the Play page fetches them without needing a new release of the port.
-- **A warning before playing above 30 FPS.** Pressing Play with a frame rate above 30 (or unlimited) now explains that some animations can look wrong, and offers to play at 30 or 60 FPS instead. 30 FPS plays every animation correctly. At 60 the issues are still there but much less noticeable. This will be fixed in a future update.
+- **Updates from the launcher.** When the launcher opens it checks whether a newer version of the port is out. If one is, it offers to update: **Update now** downloads it, replaces the port's own files and restarts the launcher, with your installed game, saves and settings left as they are. **What's new** opens the release notes. You can turn the check off, or check by hand, on the **About** page. From this version on, you won't need to download releases yourself.
+- **Share my shaders.** The shader pack only covers what has been played so far, and you can help fill in the rest. Once you have played a good part of the game, open the **Play** page and click **Share my shaders**. It packs your shaders into one small file, shows it to you and opens a GitHub form to drop it into. The file holds only shader data: nothing personal, no saves or settings. Shaders that at least two players have sent go into the next shader pack, so everyone after you gets a smoother first play-through.
+- **Your country needs your shaders.** A pop-up when the launcher opens explains the above, with a poster to match. Tick **Don't show this message again** and it won't appear again.
+- **MSAA is no longer a setting.** 2x MSAA is how the Xbox 360 drew those surfaces, so it now always matches the console, and the shader pack covers everyone.
 
 ### Full changelog
-- Launcher: **Download shader pack** on the Play page. It downloads from the `shader-packs` release on GitHub and merges into `Documents\king_kong\cache`. The launcher only contacts GitHub when you click.
-- Launcher: frame-rate pop-up when pressing Play above 30 FPS, with Play at 30, Play at 60, Keep and Back.
-- New `tools/make_shader_pack.py` builds a pack from one or more shader caches.
-- Developer test build: the automatic tour that plays every chapter (cheats, chapter select, skip videos, walk around), used to build the pack. It is never in release builds.
-- README: a section on the shader pack.
+- Launcher: automatic update check at startup (About page: Updates, Off / At startup, plus **Check for updates now**), with **Update now**, **What's new** and **Later**. Updates are staged next to the old files and swapped in, so a failed download never leaves a half-updated game.
+- Launcher: **Share my shaders** on the Play page, and the **Share shaders** issue form on GitHub.
+- Launcher: the "Players wants your shaders" pop-up at startup, with **Don't show this message again**.
+- Launcher: the Multisampling setting is removed (2x MSAA stays on, as on the Xbox 360). The About page shows the port's version.
+- New `tools/collect_shader_shares.py` builds the next shader pack from players' submissions, taking only records that at least two players sent.
+- The poster is Alfred Leete's 1914 "Britons wants you" (public domain), re-lettered.
 
 ### How to update
-Download **KingKong-v1.3.0-windows-x64.zip** below and copy everything in it over your KingKong folder. Then open the launcher and click **Download shader pack**. Your installed `game` folder, saves and settings stay as they are.
+Download **KingKong-v1.4.0-windows-x64.zip** below and copy everything in it over your KingKong folder. After this, the launcher updates itself.
 
 ### New install
-1. Unzip **KingKong-v1.3.0-windows-x64.zip** anywhere and run **king_kong.exe**.
+1. Unzip **KingKong-v1.4.0-windows-x64.zip** anywhere and run **king_kong.exe**.
 2. Click **Install from disc image...** and pick your own King Kong disc image (USA/Europe, title ID `555307D3`, version `0.0.0.1`).
 3. Click **Download shader pack**.
 4. Press **PLAY**.

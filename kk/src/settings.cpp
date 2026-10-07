@@ -12,6 +12,9 @@ REXCVAR_DEFINE_BOOL(kk_launcher, true, "KK",
                     "Show the launcher before starting the game (hold Shift at start to force it)");
 REXCVAR_DEFINE_BOOL(kk_skip_launcher, false, "KK",
                     "Internal: skip the launcher once (used when it relaunches the game)");
+REXCVAR_DEFINE_BOOL(kk_check_updates, true, "KK", "Check GitHub for a newer version when the launcher opens");
+REXCVAR_DEFINE_BOOL(kk_share_poster, true, "KK",
+                    "Show the \"share your shaders\" poster when the launcher opens (until \"Don't show this again\")");
 REXCVAR_DEFINE_INT32(kk_frame_rate, 30, "KK/Video",
                      "Frame-rate cap: 30, 60, 120, 144, 165, 240, or 0 for unlimited");
 REXCVAR_DEFINE_STRING(kk_render_quality, "native", "KK/Video",

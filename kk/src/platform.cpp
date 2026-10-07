@@ -163,6 +163,48 @@ void TuneProcessScheduling() {
 #endif
 }
 
+bool RunAndWait(const std::wstring& command_line) {
+#if defined(_WIN32)
+  std::wstring cmd = command_line;
+  STARTUPINFOW si{sizeof(si)};
+  si.dwFlags = STARTF_USESHOWWINDOW;
+  si.wShowWindow = SW_HIDE;
+  PROCESS_INFORMATION pi{};
+  if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+    return false;
+  WaitForSingleObject(pi.hProcess, INFINITE);
+  DWORD code = 1;
+  GetExitCodeProcess(pi.hProcess, &code);
+  CloseHandle(pi.hThread);
+  CloseHandle(pi.hProcess);
+  return code == 0;
+#else
+  std::string cmd(command_line.begin(), command_line.end());
+  return std::system(cmd.c_str()) == 0;
+#endif
+}
+
+void RevealInExplorer(const std::filesystem::path& file) {
+#if defined(_WIN32)
+  const std::wstring args = L"/select,\"" + file.wstring() + L"\"";
+  ShellExecuteW(nullptr, nullptr, L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL);
+#else
+  OpenInExplorer(file.parent_path());
+#endif
+}
+
+void OpenUrl(const std::string& url) {
+  if (url.rfind("https://", 0) != 0) return;  // web pages only
+#if defined(_WIN32)
+  const std::wstring w(url.begin(), url.end());
+  ShellExecuteW(nullptr, L"open", w.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+#else
+  const char* argv[] = {"xdg-open", url.c_str(), nullptr};
+  pid_t pid = 0;
+  posix_spawnp(&pid, "xdg-open", nullptr, nullptr, const_cast<char* const*>(argv), environ);
+#endif
+}
+
 void OpenInExplorer(const std::filesystem::path& path) {
   std::error_code ec;
   if (!std::filesystem::exists(path, ec) && !path.has_extension()) std::filesystem::create_directories(path, ec);

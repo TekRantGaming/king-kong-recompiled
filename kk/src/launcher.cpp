@@ -1,5 +1,6 @@
 #include "launcher.h"
 #include "shader_pack.h"
+#include "update.h"
 
 #include <algorithm>
 #include <atomic>
@@ -262,6 +263,10 @@ class Launcher final : public rex::ui::ImGuiDialog {
     files_ok_ = GameFilesPresent(paths_.game_dir);
     LoadArt();
     toast_ = std::make_unique<AchievementToast>(drawer, immediate_, paths_.game_dir, paths_.user_dir);
+    CleanUpAfterUpdate();
+    const bool testing = std::getenv("KK_AUTOPLAY") != nullptr;
+    if (GetBool("kk_check_updates") && !testing) StartUpdateCheck(false);
+    open_poster_ = GetBool("kk_share_poster") && !testing;
   }
 
   ~Launcher() override {
@@ -306,6 +311,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
     DrawFooter(ImVec2(vp->Pos.x + margin, vp->Pos.y + h - footer), w - margin * 2, footer);
     HandleHotkeys();
     DrawFrameRateWarning();
+    DrawSharePoster();
+    DrawUpdatePrompt();
     ImGui::End();
     (void)io;
   }
@@ -326,6 +333,10 @@ class Launcher final : public rex::ui::ImGuiDialog {
       title_art_aspect_ = float(img.width) / float(img.height);
     }
     title_icon_ = MakeTexture(art::LoadImage(art::TitleIconPath(paths_.game_dir)));
+    if (auto img = art::LoadImage(rex::filesystem::GetExecutableFolder() / "launcher_art" / "shaders_poster.png")) {
+      poster_ = MakeTexture(img);
+      poster_aspect_ = float(img.width) / float(img.height);
+    }
     LoadAchievements();
   }
 
@@ -666,6 +677,27 @@ class Launcher final : public rex::ui::ImGuiDialog {
     ImGui::EndDisabled();
     if (installing_ && ImGui::Button("Cancel install", ImVec2(-FLT_MIN, 0))) progress_.cancel = true;
     ShaderPackRow();
+    Row("Share my shaders",
+        "Played a good part of the game? Share your shaders and they go into future shader packs, so other "
+        "players' first play-through runs smoother. Only shader data goes into one small file, and a GitHub page "
+        "opens to drop it in (posting needs a free GitHub account).");
+    if (ImGui::Button("Share my shaders", ImVec2(-FLT_MIN, 0))) {
+      std::string error;
+      const auto zip = PackShadersForSharing(CacheDir(), paths_.user_dir, error);
+      if (zip.empty()) {
+        share_message_ = error;
+      } else {
+        RevealInExplorer(zip);
+        OpenUrl(kShareShadersUrl);
+        share_message_ = "Saved " + zip.filename().string() +
+                         ". Drag it into the GitHub page that just opened, then press Submit. Thank you!";
+      }
+    }
+    if (!share_message_.empty()) {
+      ImGui::PushStyleColor(ImGuiCol_Text, kDim);
+      ImGui::TextWrapped("%s", share_message_.c_str());
+      ImGui::PopStyleColor();
+    }
     Row("Show this launcher", "Off starts the game directly. Hold Shift while starting to bring it back.");
     ToggleCvar("kk_launcher", "Off", "At startup");
     EndRows();
@@ -858,8 +890,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
     }
     Row("Anti-aliasing", "Smooths jagged edges after the frame is drawn. Extreme is softer but cleaner.");
     ChoiceCvar("swap_post_effect", {{"Off", "none"}, {"FXAA", "fxaa"}, {"FXAA Extreme", "fxaa_extreme"}});
-    Row("Multisampling", "Real 2\xC3\x97 MSAA wherever the game asks the Xbox 360 GPU for it.");
-    ToggleCvar("native_2x_msaa", "Off", "2\xC3\x97 MSAA");
+    // 2x MSAA is not offered as a choice: it is how the Xbox 360 drew those
+    // surfaces (native_2x_msaa, on by default), and the shader pack is built with it.
     Row("Texture filtering", "Keeps the ground and distant textures sharp at steep angles.");
     ChoiceCvar("anisotropic_override",
                {{"Game", "-1"}, {"Off", "0"}, {"2\xC3\x97", "2"}, {"4\xC3\x97", "3"}, {"8\xC3\x97", "4"}, {"16\xC3\x97", "5"}});
@@ -1179,7 +1211,12 @@ class Launcher final : public rex::ui::ImGuiDialog {
       ImGui::Dummy(ImVec2(0, 8 * s_));
       ImGui::EndPopup();
     }
-    Row("Version", "ReXGlue SDK 0.10.0   \xC2\xB7   title 555307D3, v0.0.0.1");
+    Row("Updates", "Checks GitHub for a newer version of the port each time the launcher opens.");
+    ToggleCvar("kk_check_updates", "Off", "At startup");
+    Row("", "");
+    if (ImGui::Button(update_ && update_->busy ? "Checking..." : "Check for updates now", ImVec2(-FLT_MIN, 0)))
+      StartUpdateCheck(true);
+    Row("Version", "Port v" KK_VERSION "   \xC2\xB7   ReXGlue SDK 0.10.0   \xC2\xB7   title 555307D3, v0.0.0.1");
     ImGui::TextDisabled("github.com/TekRantGaming/king-kong-recompiled");
     EndRows();
   }
@@ -1266,16 +1303,12 @@ class Launcher final : public rex::ui::ImGuiDialog {
     open_fps_warning_ = true;
   }
 
-  void DrawFrameRateWarning() {
-    constexpr const char* kTitle = "Frame rate above 30 FPS";
-    if (open_fps_warning_) {
-      ImGui::OpenPopup(kTitle);
-      open_fps_warning_ = false;
-    }
+  // A pop-up in the launcher's own colours (the default popup style is for
+  // dropdowns), centred, `width` wide. Call ImGui::EndPopup() when it returns true.
+  bool BeginModal(const char* title, float width, bool title_bar = true) {
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(600 * s_, 0));
-    // In the launcher's own colours (the default popup style is for dropdowns).
+    ImGui::SetNextWindowSize(ImVec2(std::min(width * s_, vp->Size.x - 40 * s_), 0));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(24 * s_, 20 * s_));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12 * s_);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
@@ -1283,11 +1316,151 @@ class Launcher final : public rex::ui::ImGuiDialog {
     ImGui::PushStyleColor(ImGuiCol_TitleBg, kFrame);
     ImGui::PushStyleColor(ImGuiCol_TitleBgActive, kFrame);
     ImGui::PushStyleColor(ImGuiCol_Border, kWarn);
-    const bool open =
-        ImGui::BeginPopupModal(kTitle, nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
+    const bool open = ImGui::BeginPopupModal(
+        title, nullptr,
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | (title_bar ? 0 : ImGuiWindowFlags_NoTitleBar));
     ImGui::PopStyleColor(4);
     ImGui::PopStyleVar(3);
-    if (!open) return;
+    return open;
+  }
+
+  // ------------------------------------------------------------- updates ---
+  // The check runs on its own thread with its own status, so pressing Play
+  // never waits for the network (the launcher may be gone when it finishes).
+  void StartUpdateCheck(bool manual) {
+    if (update_ && update_->busy) return;
+    update_ = std::make_shared<UpdateStatus>();
+    update_manual_ = manual;
+    update_prompted_ = false;
+    std::thread([s = update_] { CheckForUpdate(*s); }).detach();
+  }
+
+  void DrawUpdatePrompt() {
+    constexpr const char* kTitle = "Update available";
+    if (!update_) return;
+    if (update_manual_ && !update_->busy && (update_->done || update_->failed) && !update_->found) {
+      status_ = update_->failed ? update_->message : "You have the newest version (v" KK_VERSION ").";
+      update_manual_ = false;
+    }
+    if (update_->found && !update_prompted_ && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) {
+      ImGui::OpenPopup(kTitle);
+      update_prompted_ = true;
+    }
+    if (!BeginModal(kTitle, 560)) return;
+    const UpdateInfo& info = *update_->found;
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::Text("Version %s of the King Kong PC port is out. You have version %s.", info.version.c_str(), KK_VERSION);
+    ImGui::Dummy(ImVec2(0, 6 * s_));
+    ImGui::PushStyleColor(ImGuiCol_Text, kDim);
+    ImGui::TextUnformatted("Updating replaces the port's own files and restarts the launcher. Your installed game, "
+                           "saves and settings stay as they are.");
+    ImGui::PopStyleColor();
+    ImGui::PopTextWrapPos();
+    ImGui::Dummy(ImVec2(0, 10 * s_));
+    if (installing_update_) {
+      const float total = float(update_->total.load()), got = float(update_->bytes.load());
+      if (update_->busy) {
+        ImGui::ProgressBar(total > 0 ? got / total : 0.0f, ImVec2(-FLT_MIN, 0),
+                           total > 0 ? nullptr : "Downloading...");
+      } else if (update_->failed) {
+        ImGui::TextWrapped("%s", update_->message.c_str());
+        if (ImGui::Button("Close", ImVec2(-FLT_MIN, 0))) {
+          installing_update_ = false;
+          ImGui::CloseCurrentPopup();
+        }
+      } else if (update_->done) {
+        ImGui::TextUnformatted(update_->message.c_str());
+        if (!relaunched_) {  // start the new version, then close this one
+          relaunched_ = true;
+          RelaunchSelf(L"");
+          if (cb_.quit) cb_.quit();
+        }
+      }
+      ImGui::EndPopup();
+      return;
+    }
+    const float bw = (ImGui::GetContentRegionAvail().x - 16 * s_) / 3;
+    if (AccentButton("Update now", ImVec2(bw, 0))) {
+      installing_update_ = true;
+      update_->done = update_->failed = false;
+      std::thread([s = update_, info] { InstallUpdate(info, *s); }).detach();
+    }
+    ImGui::SameLine(0, 8 * s_);
+    if (ImGui::Button("What's new", ImVec2(bw, 0))) OpenUrl(info.page_url);
+    ImGui::SameLine(0, 8 * s_);
+    if (ImGui::Button("Later", ImVec2(bw, 0))) ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+  }
+
+  // --------------------------------------------------- shaders poster ---
+  // Shown each time the launcher opens until "Don't show this message again".
+  void DrawSharePoster() {
+    constexpr const char* kTitle = "##share_poster";
+    if (open_poster_ && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) {
+      ImGui::OpenPopup(kTitle);
+      open_poster_ = false;
+    }
+    if (!BeginModal(kTitle, 1040, false)) return;
+    const UiFonts& f = GetUiFonts();
+    const float img_h = std::min(560 * s_, ImGui::GetMainViewport()->Size.y - 140 * s_);
+    if (poster_) {
+      ImGui::Image(Tex(poster_), ImVec2(img_h * poster_aspect_, img_h));
+      ImGui::SameLine(0, 24 * s_);
+    }
+    ImGui::BeginGroup();
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::PushFont(f.bold, 26.0f * s_);
+    ImGui::TextUnformatted("Help your fellow players");
+    ImGui::PopFont();
+    ImGui::Dummy(ImVec2(0, 8 * s_));
+    ImGui::TextUnformatted(
+        "King Kong prepares each of its effects (a shader) the first time it appears, and that can cause a short "
+        "pause. The shader pack removes those pauses, but only for the parts of the game it has already seen.");
+    ImGui::Dummy(ImVec2(0, 6 * s_));
+    ImGui::TextUnformatted(
+        "That's where you come in. Play the game, and once you've played a good part of it, share your shaders. "
+        "They go into future shader packs and releases, so everyone who plays after you gets a smoother first "
+        "play-through.");
+    ImGui::Dummy(ImVec2(0, 10 * s_));
+    ImGui::PushFont(f.semibold, 0.0f);
+    ImGui::TextUnformatted("Where to find it");
+    ImGui::PopFont();
+    ImGui::PushStyleColor(ImGuiCol_Text, kDim);
+    ImGui::TextUnformatted(
+        "On the Play page, under Share my shaders. It packs your shaders into one small file and opens a GitHub page "
+        "where you drop it in. Only shader data is shared: nothing personal, no saves or settings. Posting needs a "
+        "free GitHub account.");
+    ImGui::PopStyleColor();
+    ImGui::PopTextWrapPos();
+    ImGui::Dummy(ImVec2(0, 14 * s_));
+    ImGui::Checkbox("Don't show this message again", &poster_dont_show_);
+    ImGui::Dummy(ImVec2(0, 10 * s_));
+    const float bw = 180 * s_;
+    bool close = false;
+    if (AccentButton("Got it", ImVec2(bw, 0))) close = true;
+    ImGui::SameLine(0, 8 * s_);
+    if (ImGui::Button("Show me", ImVec2(bw, 0))) {
+      page_ = kPlay;
+      close = true;
+    }
+    ImGui::EndGroup();
+    if (close) {
+      if (poster_dont_show_) {
+        SetBool("kk_share_poster", false);
+        Save();
+      }
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+  }
+
+  void DrawFrameRateWarning() {
+    constexpr const char* kTitle = "Frame rate above 30 FPS";
+    if (open_fps_warning_) {
+      ImGui::OpenPopup(kTitle);
+      open_fps_warning_ = false;
+    }
+    if (!BeginModal(kTitle, 600)) return;
     const int fps = GetInt("kk_frame_rate", 30);
     const std::string current = fps <= 0 ? "an unlimited frame rate" : std::to_string(fps) + " FPS";
     ImGui::PushTextWrapPos(0.0f);
@@ -1352,6 +1525,12 @@ class Launcher final : public rex::ui::ImGuiDialog {
   bool files_ok_ = false;
   bool played_ = false;
   bool open_fps_warning_ = false;
+  std::shared_ptr<UpdateStatus> update_;
+  bool update_manual_ = false, update_prompted_ = false, installing_update_ = false, relaunched_ = false;
+  bool open_poster_ = false, poster_dont_show_ = false;
+  rex::ui::ImmediateTexture* poster_ = nullptr;
+  float poster_aspect_ = 645.0f / 900.0f;
+  std::string share_message_;
   ShaderPackStatus pack_;
   std::thread pack_thread_;
   int pack_installed_ = -1;  // -1: not read yet

@@ -19,6 +19,8 @@ REXCVAR_DECLARE(bool, kk_skip_launcher);
 REXCVAR_DECLARE(int32_t, kk_frame_rate);
 REXCVAR_DECLARE(std::string, kk_render_quality);
 REXCVAR_DECLARE(std::string, kk_button_prompts);
+REXCVAR_DECLARE(bool, kk_check_updates);
+REXCVAR_DECLARE(bool, kk_share_poster);
 REXCVAR_DECLARE(bool, kk_show_fps);
 REXCVAR_DECLARE(int32_t, kk_deadzone);
 REXCVAR_DECLARE(int32_t, kk_camera_sensitivity);
