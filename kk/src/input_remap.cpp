@@ -57,7 +57,31 @@ void ShapeStick(uint8_t* xy, float deadzone, float gain) {
   StoreBE<int16_t>(xy + 2, static_cast<int16_t>(std::clamp(y, -1.0f, 1.0f) * 32767.0f));
 }
 
-void Remap(uint8_t* state) {
+// Toggle aim (kk_toggle_aim): each press of the game's left trigger flips it
+// between released and fully held, per pad. Start or Back (the pause menu and
+// map) and unplugging the pad release it, so a menu never opens mid-aim and
+// the gun is lowered when play resumes.
+struct AimToggle {
+  bool held = false;      // what the game is told
+  bool was_down = false;  // the trigger last poll, to catch new presses
+};
+AimToggle g_aim[4];
+
+uint8_t ToggleAim(uint32_t user, uint8_t lt, uint16_t buttons) {
+  AimToggle& aim = g_aim[user & 3];
+  if (!REXCVAR_GET(kk_toggle_aim)) {
+    aim = {};
+    return lt;
+  }
+  const bool down = lt > kTriggerPressThreshold;
+  if (down && !aim.was_down) aim.held = !aim.held;
+  aim.was_down = down;
+  constexpr uint16_t kStart = 0x0010, kBack = 0x0020;
+  if (buttons & (kStart | kBack)) aim.held = false;
+  return aim.held ? 255 : 0;
+}
+
+void Remap(uint32_t user, uint8_t* state) {
   using kk::Pad;
   const uint16_t in_buttons = LoadBE<uint16_t>(state + 4);
   const uint8_t in_lt = state[6], in_rt = state[7];
@@ -87,7 +111,7 @@ void Remap(uint8_t* state) {
     }
   }
   StoreBE<uint16_t>(state + 4, out_buttons);
-  state[6] = out_lt;
+  state[6] = ToggleAim(user, out_lt, out_buttons);
   state[7] = out_rt;
 
   if (REXCVAR_GET(kk_invert_ls_x)) Invert(state + 8);
@@ -118,7 +142,11 @@ REX_HOOK_RAW(sub_821074E8) {
     ctx.r3.u64 = 0;  // ERROR_SUCCESS: a pad is connected
     return;
   }
-  if (ctx.r3.u32 == 0 && state_ptr) Remap(base + state_ptr);  // ERROR_SUCCESS
+  if (ctx.r3.u32 == 0 && state_ptr) {  // ERROR_SUCCESS
+    Remap(user, base + state_ptr);
+  } else {
+    g_aim[user & 3] = {};  // no pad: let go of a toggled aim
+  }
 }
 
 // sub_821074F8 is the title's XInputSetState(user, vibration) wrapper; scale or
