@@ -24,12 +24,15 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <rex/logging.h>
 
+#include "art.h"
 #include "menu_hook.h"
 #include "shader_pack.h"
 
@@ -128,16 +131,59 @@ bool WanderPad(uint8_t* state, int64_t now) {
   return true;
 }
 
+// KK_DEV_SHOTS="5,20" (with KK_DEV_AUTOSKIP): save the game's frame (guest
+// output only) that many seconds after gameplay is reached, as shot_<s>.bmp in
+// KK_DEV_SHOTS_DIR (default: the working folder). With KK_DEV_SHOTS_FROM=menu
+// the seconds count from the save menu opening instead (to see menus).
+bool ShotsFromMenu() {
+  static const bool from_menu = [] {
+    const char* v = std::getenv("KK_DEV_SHOTS_FROM");
+    return v && std::string(v) == "menu";
+  }();
+  return from_menu;
+}
+
+// t: seconds since gameplay was reached (or since the save menu opened).
+void TakeShots(double t) {
+  static std::vector<double> times = [] {
+    std::vector<double> t;
+    if (const char* v = std::getenv("KK_DEV_SHOTS"); v && *v) {
+      std::stringstream all(v);
+      for (std::string s; std::getline(all, s, ',');) t.push_back(std::stod(s));
+    }
+    return t;
+  }();
+  for (auto it = times.begin(); it != times.end();) {
+    if (t < *it) {
+      ++it;
+      continue;
+    }
+    const char* dir = std::getenv("KK_DEV_SHOTS_DIR");
+    art::CaptureFrame(std::filesystem::path(dir && *dir ? dir : ".") / ("shot_" + std::to_string(int(*it * 10)) + ".bmp"));
+    it = times.erase(it);
+  }
+}
+
 bool AutoskipPad(uint32_t user, uint8_t* state) {
-  if (user != 0) return false;
+  // KK_DEV_PAD_USER=n: be player n+1 instead of player 1.
+  static const uint32_t pad_user = [] {
+    const char* u = std::getenv("KK_DEV_PAD_USER");
+    return u && *u ? uint32_t(std::atoi(u)) : 0u;
+  }();
+  if (user != pad_user) return false;
   const int64_t now = NowMs();
-  if (g_done) return g_wander && WanderPad(state, now);
+  if (g_done) {
+    static const int64_t done_ms = now;
+    TakeShots((now - (ShotsFromMenu() ? g_menu_ms.load() : done_ms)) / 1000.0);
+    return g_wander && WanderPad(state, now);
+  }
   uint16_t buttons = 0;
   uint8_t triggers[2] = {0, 0};
   if (const int64_t menu = g_menu_ms; menu < 0) {
     if (now % 3000 < kHold * 1000) buttons = kStart;  // intro videos
   } else {
     const double t = (now - menu) / 1000.0;
+    if (ShotsFromMenu()) TakeShots(t);
     uint32_t held = 0;
     if (g_script.empty()) {
       for (const Press& p : kAfterMenu)
@@ -155,6 +201,10 @@ bool AutoskipPad(uint32_t user, uint8_t* state) {
       if (const char* c = std::getenv("KK_DEV_CRASH"); c && *c == '1') {  // test the crash dump
         volatile int* p = nullptr;
         *p = 1;
+      }
+      if (const char* h = std::getenv("KK_DEV_HANG"); h && *h == '1') {  // test the hang report
+        REXLOG_INFO("KK dev: freezing the game thread for 25 s");
+        std::this_thread::sleep_for(std::chrono::seconds(25));
       }
     }
   }

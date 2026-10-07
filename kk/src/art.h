@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -35,6 +36,11 @@ std::filesystem::path AchievementCachePath(const std::filesystem::path& user_dat
 std::filesystem::path AchievementUnlockPath(const std::filesystem::path& user_data_root);
 
 bool SaveTitleCapture(const rex::ui::RawImage& image, const std::filesystem::path& path);
+
+// Saves the game's current frame (the guest output only, never the desktop) as
+// a .bmp. The app provides the capturer once the GPU is up; used by dev tools.
+void SetFrameCapturer(std::function<void(const std::filesystem::path&)> capturer);
+void CaptureFrame(const std::filesystem::path& path);
 Image LoadImage(const std::filesystem::path& path);  // .bmp (ours) or .png
 
 void WriteAchievementCache(const std::vector<rex::system::AchievementInfo>& achievements,

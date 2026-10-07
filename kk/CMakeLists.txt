@@ -48,10 +48,16 @@ endif()
 
 rexglue_setup_target(king_kong GPU_PLUGINS xenos)
 
+# king_kong.map beside the program: turns addresses in players' crash and hang
+# reports into game functions. Kept with each release build, not shipped.
+if(WIN32)
+    target_link_options(king_kong PRIVATE "LINKER:/MAP")
+endif()
+
 # The port's version: shown in the launcher and compared with GitHub releases by the updater.
 # (-DKK_VERSION=x.y.z overrides it, to test the updater with an "older" build.)
 if(NOT DEFINED KK_VERSION)
-    set(KK_VERSION "1.5.0")
+    set(KK_VERSION "1.5.1")
 endif()
 target_compile_definitions(king_kong PRIVATE KK_VERSION="${KK_VERSION}" KK_VERSION_W=L"${KK_VERSION}")
 

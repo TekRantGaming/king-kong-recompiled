@@ -14,6 +14,8 @@
 #include <rex/audio/sdl/sdl_audio_system.h>
 #include <rex/cvar.h>
 #include <rex/filesystem.h>
+#include <rex/input/device_assignment.h>
+#include <rex/input/input_system.h>
 #include <rex/logging.h>
 #include <rex/rex_app.h>
 #include <rex/runtime.h>
@@ -137,6 +139,7 @@ class KingKongApp : public rex::ReXApp {
                                                   : rex::filesystem::GetExecutableFolder() / "logs");
     }
     kk::ApplyRuntimeOverrides();
+    UseOneControllerSlot();
 
     ExportAchievementArt();
     // Give the launcher the achievement names (read from the game by the runtime).
@@ -144,6 +147,15 @@ class KingKongApp : public rex::ReXApp {
       kk::art::WriteAchievementCache(achievements().ListAchievements(),
                                       kk::art::AchievementCachePath(user_data_root_));
     ScheduleTitleCapture();
+    kk::art::SetFrameCapturer([this](const std::filesystem::path& path) {
+      app_context().CallInUIThread([this, path] {
+        rex::ui::RawImage image;
+        auto* gfx = runtime() ? runtime()->graphics_system() : nullptr;
+        auto* presenter = gfx ? gfx->presenter() : nullptr;
+        if (presenter && presenter->CaptureGuestOutput(image) && kk::art::SaveTitleCapture(image, path))
+          REXLOG_INFO("KK: saved frame {} ({}x{})", path.filename().string(), image.width, image.height);
+      });
+    });
     kk::StartButtonPrompts(runtime()->memory());
     ScheduleWelcomeAchievement();
 
@@ -175,6 +187,19 @@ class KingKongApp : public rex::ReXApp {
   std::pair<int, int> OutputSize() const {
     if (REXCVAR_QUERY(bool, fullscreen) || !window()) return kk::PrimaryScreenSize();
     return {int(window()->GetActualPhysicalWidth()), int(window()->GetActualPhysicalHeight())};
+  }
+
+  // The game plays as whichever player pressed Start at the title screen, but
+  // only player 1 has a signed-in profile, so from player 2-4 it refuses to
+  // save ("sign in to save"). By default each controller gets its own player
+  // in connection order, and Steam Input, DS4Windows or a handheld's built-in
+  // pad often add a second device ahead of the one in your hands. The game is
+  // single player, so every controller (and keyboard & mouse) is player 1.
+  void UseOneControllerSlot() {
+    auto* input = dynamic_cast<rex::input::InputSystem*>(runtime()->input_system());
+    if (!input) return;
+    input->SetDeviceAssignment(std::make_unique<rex::input::SharedAssignment>());
+    REXLOG_INFO("KK: all controllers are player 1");
   }
 
   // The launcher shows the achievements' names and pictures from

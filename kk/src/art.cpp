@@ -171,4 +171,15 @@ std::filesystem::path TitleIconPath(const std::filesystem::path& game_dir) {
   return std::filesystem::exists(kong, ec) ? kong : AchievementDir(game_dir) / "icons" / "title.png";
 }
 
+std::function<void(const std::filesystem::path&)>& Capturer() {
+  static std::function<void(const std::filesystem::path&)> capturer;
+  return capturer;
+}
+
+void SetFrameCapturer(std::function<void(const std::filesystem::path&)> capturer) { Capturer() = std::move(capturer); }
+
+void CaptureFrame(const std::filesystem::path& path) {
+  if (Capturer()) Capturer()(path);
+}
+
 }  // namespace kk::art
