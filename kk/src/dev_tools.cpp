@@ -129,7 +129,12 @@ bool WanderPad(uint8_t* state, int64_t now) {
 }
 
 bool AutoskipPad(uint32_t user, uint8_t* state) {
-  if (user != 0) return false;
+  // KK_DEV_PAD_USER=n: be player n+1 instead of player 1.
+  static const uint32_t pad_user = [] {
+    const char* u = std::getenv("KK_DEV_PAD_USER");
+    return u && *u ? uint32_t(std::atoi(u)) : 0u;
+  }();
+  if (user != pad_user) return false;
   const int64_t now = NowMs();
   if (g_done) return g_wander && WanderPad(state, now);
   uint16_t buttons = 0;
