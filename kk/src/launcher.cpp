@@ -956,6 +956,9 @@ class Launcher final : public rex::ui::ImGuiDialog {
       ToggleCvar("kk_invert_rs_y", "Normal", "Inverted");
       Row("Camera speed", "How fast the right stick moves the camera.");
       SliderCvar("kk_camera_sensitivity", 25, 300, "%d%%");
+      Row("Aim", "Hold: keep the left trigger held to raise the gun, as on the console. Toggle: press it once "
+                 "to raise the gun and again to lower it. Pausing lowers it.");
+      ToggleCvar("kk_toggle_aim", "Hold", "Toggle");
       Row("Stick deadzone", "Ignores small stick movements. Raise it if the camera or cursor drifts.");
       SliderCvar("kk_deadzone", 0, 40, "%d%%");
       Row("Vibration", "Controller rumble.");

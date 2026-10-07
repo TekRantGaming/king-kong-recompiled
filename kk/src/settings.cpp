@@ -37,6 +37,8 @@ REXCVAR_DEFINE_BOOL(kk_invert_rs_x, false, "KK/Controls", "Invert right stick ho
 REXCVAR_DEFINE_BOOL(kk_invert_rs_y, false, "KK/Controls", "Invert right stick vertical");
 REXCVAR_DEFINE_BOOL(kk_invert_ls_x, false, "KK/Controls", "Invert left stick horizontal");
 REXCVAR_DEFINE_BOOL(kk_invert_ls_y, false, "KK/Controls", "Invert left stick vertical");
+REXCVAR_DEFINE_BOOL(kk_toggle_aim, false, "KK/Controls",
+                    "Aim (left trigger) toggles: press once to raise the gun, again to lower it");
 
 // Button remapping: kk_map_<physical> = <game button> (or "none").
 #define KK_MAP_CVAR(id, def, label) \
