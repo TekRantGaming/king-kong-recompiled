@@ -14,6 +14,20 @@
 // KK_DEV_WANDER=1 (with KK_DEV_AUTOSKIP): after that, keeps walking forward
 // while slowly turning the camera, jumping now and then, so a test run moves
 // through the level and loads new areas, effects and shaders.
+//
+// Investigation aids (details beside each; times are seconds after gameplay is
+// reached, or after the save menu opens where noted):
+//   KK_DEV_PAD_USER    play as player n+1
+//   KK_DEV_CRASH/HANG  test the crash dump / hang report
+//   KK_DEV_SHOTS       save game frames (guest output only, never the desktop)
+//   KK_DEV_FIND        search guest memory for strings (save menu times)
+//   KK_DEV_SNAP_AT     diff the game's static data between times
+//   KK_DEV_HEAPDIFF_AT what changed in all guest memory around a code's Confirm
+//   KK_DEV_DUMP_AT     write all guest memory to files, to compare runs offline
+//   KK_DEV_WATCH       hardware watchpoints: which function touched an address (dev_watch.cpp)
+//   KK_DEV_PROF_AT     per-function call counts (kk-prof preset, dev_prof.cpp)
+// Findings so far: the engine's heap layout differs between runs, so a value
+// found at one address must be reached through code (a hook) next time.
 
 #include <algorithm>
 #include <atomic>
@@ -293,6 +307,122 @@ void SnapAtTimes(double t) {
   REXLOG_INFO("KK dev snap: wrote snap_diff.txt, {} bytes changed", changed);
 }
 
+// KK_DEV_HEAPDIFF_AT="a,b,c,d" (seconds from the save menu opening): what a
+// cheat code changes. a = right code typed, b = after its Confirm, c = wrong
+// code typed, d = after its Confirm. Writes heapdiff.txt: every byte of guest
+// memory that changed from a to b and then kept its new value through c and d
+// (so the wrong code's Confirm and the screen change did not touch it).
+void HeapDiffAtTimes(double t) {
+#if defined(_WIN32)
+  struct Region {
+    uint32_t guest, size;
+  };
+  struct Cand {
+    uint32_t addr;
+    uint8_t before, after;
+  };
+  static std::vector<double> times = [] {
+    std::vector<double> out;
+    if (const char* v = std::getenv("KK_DEV_HEAPDIFF_AT"); v && *v) {
+      std::stringstream all(v);
+      for (std::string s; std::getline(all, s, ',');) out.push_back(std::stod(s));
+    }
+    return out;
+  }();
+  static int step = 0;
+  static std::vector<Region> regions;
+  static std::vector<uint8_t> first;
+  static std::vector<Cand> cands;
+  if (!g_guest_base || times.empty() || t < times.front()) return;
+  times.erase(times.begin());
+  if (step == 0) {
+    for (uint64_t a = 0x40000000; a < 0xC0000000;) {
+      MEMORY_BASIC_INFORMATION mbi{};
+      if (!VirtualQuery(g_guest_base + a, &mbi, sizeof(mbi))) break;
+      const uint64_t begin = uint64_t(static_cast<uint8_t*>(mbi.BaseAddress) - g_guest_base);
+      const uint64_t end = std::min<uint64_t>(begin + mbi.RegionSize, 0xC0000000);
+      const bool readable = mbi.State == MEM_COMMIT && !(mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) &&
+                            (mbi.Protect & (PAGE_READWRITE | PAGE_READONLY | PAGE_EXECUTE_READWRITE));
+      if (readable && end > a) regions.push_back({uint32_t(a), uint32_t(end - a)});
+      a = end;
+    }
+    for (const auto& r : regions) first.insert(first.end(), g_guest_base + r.guest, g_guest_base + r.guest + r.size);
+    REXLOG_INFO("KK dev heapdiff: snapshot a, {} MB", first.size() >> 20);
+  } else if (step == 1) {
+    size_t o = 0;
+    for (const auto& r : regions) {
+      const uint8_t* now = g_guest_base + r.guest;
+      for (uint32_t i = 0; i < r.size; ++i)
+        if (now[i] != first[o + i]) cands.push_back({r.guest + i, first[o + i], now[i]});
+      o += r.size;
+    }
+    std::vector<uint8_t>().swap(first);
+    REXLOG_INFO("KK dev heapdiff: b, {} bytes changed", cands.size());
+  } else {
+    size_t kept = 0;
+    for (const auto& c : cands)
+      if (g_guest_base[c.addr] == c.after) cands[kept++] = c;
+    cands.resize(kept);
+    REXLOG_INFO("KK dev heapdiff: {}, {} bytes still hold their new value", step == 2 ? "c" : "d", kept);
+    if (step == 3) {
+      if (FILE* f = std::fopen("heapdiff.txt", "w")) {
+        for (const auto& c : cands) std::fprintf(f, "%08X %02X %02X\n", c.addr, c.before, c.after);
+        std::fclose(f);
+      }
+      REXLOG_INFO("KK dev heapdiff: wrote heapdiff.txt");
+    }
+  }
+  ++step;
+#else
+  (void)t;
+#endif
+}
+
+// KK_DEV_DUMP_AT="80,84" with KK_DEV_DUMP_DIR (seconds from the save menu
+// opening): write all readable guest memory (0x40000000-0xC0000000) to
+// dump_<n>.bin there, with dump_regions.txt listing "guest_start size" per
+// region in file order. For comparing runs offline.
+void DumpAtTimes(double t) {
+#if defined(_WIN32)
+  static std::vector<double> times = [] {
+    std::vector<double> out;
+    if (const char* v = std::getenv("KK_DEV_DUMP_AT"); v && *v) {
+      std::stringstream all(v);
+      for (std::string s; std::getline(all, s, ',');) out.push_back(std::stod(s));
+    }
+    return out;
+  }();
+  static int n = 0;
+  if (!g_guest_base || times.empty() || t < times.front()) return;
+  times.erase(times.begin());
+  const char* d = std::getenv("KK_DEV_DUMP_DIR");
+  const std::filesystem::path dir = d && *d ? d : ".";
+  FILE* bin = std::fopen((dir / ("dump_" + std::to_string(n) + ".bin")).string().c_str(), "wb");
+  FILE* map = n == 0 ? std::fopen((dir / "dump_regions.txt").string().c_str(), "w") : nullptr;
+  size_t total = 0;
+  for (uint64_t a = 0x40000000; bin && a < 0xC0000000;) {
+    MEMORY_BASIC_INFORMATION mbi{};
+    if (!VirtualQuery(g_guest_base + a, &mbi, sizeof(mbi))) break;
+    const uint64_t begin = uint64_t(static_cast<uint8_t*>(mbi.BaseAddress) - g_guest_base);
+    const uint64_t end = std::min<uint64_t>(begin + mbi.RegionSize, 0xC0000000);
+    const bool readable = mbi.State == MEM_COMMIT && !(mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) &&
+                          (mbi.Protect & (PAGE_READWRITE | PAGE_READONLY | PAGE_EXECUTE_READWRITE));
+    if (readable && end > a) {
+      std::fwrite(g_guest_base + a, 1, size_t(end - a), bin);
+      if (map) std::fprintf(map, "%08X %llu\n", unsigned(a), static_cast<unsigned long long>(end - a));
+      total += size_t(end - a);
+    }
+    a = end;
+  }
+  if (bin) std::fclose(bin);
+  if (map) std::fclose(map);
+  REXLOG_INFO("KK dev dump: dump_{} at {:.1f} s, {} MB", n, t, total >> 20);
+  ++n;
+#else
+  (void)t;
+#endif
+}
+
 bool AutoskipPad(uint32_t user, uint8_t* state) {
   // KK_DEV_PAD_USER=n: be player n+1 instead of player 1.
   static const uint32_t pad_user = [] {
@@ -308,6 +438,8 @@ bool AutoskipPad(uint32_t user, uint8_t* state) {
     SnapAtTimes((now - g_menu_ms.load()) / 1000.0);
     DevWatchTick((now - g_menu_ms.load()) / 1000.0);
     DevProfTick((now - g_menu_ms.load()) / 1000.0);
+    HeapDiffAtTimes((now - g_menu_ms.load()) / 1000.0);
+    DumpAtTimes((now - g_menu_ms.load()) / 1000.0);
     return g_wander && WanderPad(state, now);
   }
   uint16_t buttons = 0;
@@ -321,6 +453,8 @@ bool AutoskipPad(uint32_t user, uint8_t* state) {
     SnapAtTimes(t);
     DevWatchTick(t);
     DevProfTick(t);
+    HeapDiffAtTimes(t);
+    DumpAtTimes(t);
     uint32_t held = 0;
     if (g_script.empty()) {
       for (const Press& p : kAfterMenu)
