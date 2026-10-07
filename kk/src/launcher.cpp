@@ -1013,6 +1013,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
     }
     Row("Frame counter", "Shows the game's frame rate in the corner. F2 toggles it while playing.");
     ToggleCvar("kk_show_fps", "Hidden", "Shown");
+    Row("Startup logos", "The Ubisoft, Universal and WingNut movies before the title screen. Story movies still play.");
+    ToggleCvar("kk_skip_intros", "Play", "Skip");
     Row("Language", "The game's language, where the game includes it.");
     // The disc's languages that the Xbox 360 system language can select.
     ComboCvar("user_language", {{"English", "1"},
@@ -1376,7 +1378,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
         return {"kk_render_quality", "resolution_scale", "draw_resolution_scale_x", "draw_resolution_scale_y",
                 "swap_post_effect", "anisotropic_override", "async_shader_compilation"};
       case kGameplay:
-        return {"kk_frame_rate", "kk_show_fps", "user_language"};
+        return {"kk_frame_rate", "kk_show_fps", "kk_skip_intros", "user_language"};
       case kControls:
         return {"mnk_mode", "kk_button_prompts", "kk_camera_sensitivity", "mnk_sensitivity", "mnk_mouse",
                 "kk_invert_rs_x", "kk_invert_rs_y", "kk_invert_ls_x", "kk_invert_ls_y", "kk_toggle_aim",

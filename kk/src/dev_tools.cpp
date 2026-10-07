@@ -19,7 +19,8 @@
 // reached, or after the save menu opens where noted):
 //   KK_DEV_PAD_USER    play as player n+1
 //   KK_DEV_CRASH/HANG  test the crash dump / hang report
-//   KK_DEV_SHOTS       save game frames (guest output only, never the desktop)
+//   KK_DEV_SHOTS       save game frames (guest output only, never the desktop);
+//                      _FROM=menu or boot changes where the seconds count from
 //   KK_DEV_FIND        search guest memory for strings (save menu times)
 //   KK_DEV_SNAP_AT     diff the game's static data between times
 //   KK_DEV_HEAPDIFF_AT what changed in all guest memory around a code's Confirm
@@ -166,13 +167,20 @@ bool WanderPad(uint8_t* state, int64_t now) {
 // KK_DEV_SHOTS="5,20" (with KK_DEV_AUTOSKIP): save the game's frame (guest
 // output only) that many seconds after gameplay is reached, as shot_<s>.bmp in
 // KK_DEV_SHOTS_DIR (default: the working folder). With KK_DEV_SHOTS_FROM=menu
-// the seconds count from the save menu opening instead (to see menus).
+// the seconds count from the save menu opening instead (to see menus). With
+// KK_DEV_SHOTS_FROM=boot they count from the start, and nothing is pressed
+// before the save menu (to see the startup movies).
+std::string ShotsFrom() {
+  const char* v = std::getenv("KK_DEV_SHOTS_FROM");
+  return v ? v : "";
+}
 bool ShotsFromMenu() {
-  static const bool from_menu = [] {
-    const char* v = std::getenv("KK_DEV_SHOTS_FROM");
-    return v && std::string(v) == "menu";
-  }();
+  static const bool from_menu = ShotsFrom() == "menu";
   return from_menu;
+}
+bool ShotsFromBoot() {
+  static const bool from_boot = ShotsFrom() == "boot";
+  return from_boot;
 }
 
 // t: seconds since gameplay was reached (or since the save menu opened).
@@ -445,6 +453,10 @@ bool AutoskipPad(uint32_t user, uint8_t* state) {
   uint16_t buttons = 0;
   uint8_t triggers[2] = {0, 0};
   if (const int64_t menu = g_menu_ms; menu < 0) {
+    if (ShotsFromBoot()) {
+      TakeShots(now / 1000.0);
+      return false;
+    }
     if (now % 3000 < kHold * 1000) buttons = kStart;  // intro videos
   } else {
     const double t = (now - menu) / 1000.0;

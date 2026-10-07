@@ -26,6 +26,7 @@ set(KINGKONG_SOURCES
     src/toast.cpp
     src/io_fix.cpp
     src/language.cpp
+    src/intros.cpp
     src/cheats.cpp
     src/changelog.cpp
     src/menu_hook.cpp
