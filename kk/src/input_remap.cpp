@@ -7,6 +7,9 @@
 //   +8 sThumbLX, +10 sThumbLY, +12 sThumbRX, +14 sThumbRY.
 // Keyboard input arrives through the same path when ReXGlue's mnk_mode is on,
 // so remaps and inversion apply to it too.
+//
+// Camera sensitivity is applied later, to the stick vector the game asks for
+// (sub_8272C610), so it is not capped at a full push of the stick.
 
 #include <algorithm>
 #include <bit>
@@ -14,6 +17,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include <rex/cvar.h>
 #include <rex/hook.h>
 
 #include "settings.h"
@@ -41,7 +45,7 @@ void Invert(uint8_t* p) {
 }
 
 // Radial deadzone (rescaled so output still starts at 0) and a gain, applied to
-// one stick's X/Y pair.
+// one stick's X/Y pair. The gain is capped at a full push.
 void ShapeStick(uint8_t* xy, float deadzone, float gain) {
   if (deadzone <= 0.0f && gain == 1.0f) return;
   float x = LoadBE<int16_t>(xy) / 32767.0f, y = LoadBE<int16_t>(xy + 2) / 32767.0f;
@@ -120,9 +124,8 @@ void Remap(uint32_t user, uint8_t* state) {
   if (REXCVAR_GET(kk_invert_rs_y)) Invert(state + 14);
 
   const float deadzone = std::clamp(REXCVAR_GET(kk_deadzone), 0, 50) / 100.0f;
-  const float camera = std::clamp(REXCVAR_GET(kk_camera_sensitivity), 10, 400) / 100.0f;
   ShapeStick(state + 8, deadzone, 1.0f);
-  ShapeStick(state + 12, deadzone, camera);
+  ShapeStick(state + 12, deadzone, 1.0f);
 }
 
 }  // namespace
@@ -162,4 +165,23 @@ REX_HOOK_RAW(sub_821074F8) {
     }
   }
   __imp__sub_821074F8(ctx, base);
+}
+
+// sub_8272C610(out, stick) is how the game reads a stick: out = {x, y, 0} as
+// floats, about -1 to 1, the strongest of the pads, after the game's own
+// inversion options; stick 1 is the right stick, which turns the camera and
+// moves the aim. Controller sensitivity scales that vector here, after the
+// stick's full range, so a full push turns faster or slower too and both axes
+// change together. With keyboard & mouse the mouse has its own sensitivity.
+REX_EXTERN(__imp__sub_8272C610);
+REX_HOOK_RAW(sub_8272C610) {
+  const uint32_t out = ctx.r3.u32, stick = ctx.r4.u32;
+  __imp__sub_8272C610(ctx, base);
+  if (stick != 1 || !out || rex::cvar::GetFlagByName("mnk_mode") == "true") return;
+  const float gain = std::clamp(REXCVAR_GET(kk_camera_sensitivity), 10, 400) / 100.0f;
+  if (gain == 1.0f) return;
+  for (uint32_t offset : {0u, 4u}) {
+    uint8_t* v = base + out + offset;
+    StoreBE<uint32_t>(v, std::bit_cast<uint32_t>(std::bit_cast<float>(LoadBE<uint32_t>(v)) * gain));
+  }
 }

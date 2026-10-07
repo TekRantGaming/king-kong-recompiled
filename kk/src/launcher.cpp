@@ -1013,9 +1013,9 @@ class Launcher final : public rex::ui::ImGuiDialog {
       for (size_t i = 0; i < labels.size(); ++i) opts.push_back({labels[i].c_str(), std::to_string(kFrameRateChoices[i])});
       ChoiceCvar("kk_frame_rate", opts);
     }
-    Row("Field of view", "How wide the camera sees. 69Â° is the original for Jack; Kong, cutscene and other "
+    Row("Field of view", "How wide the camera sees. 69\xC2\xB0 is the original for Jack; Kong, cutscene and other "
                          "cameras widen by the same amount. Jack's gun keeps its usual size.");
-    SliderCvar("kk_fov", 69, 110, GetInt("kk_fov", 69) <= 69 ? "%dÂ° (original)" : "%dÂ°");
+    SliderCvar("kk_fov", 69, 110, GetInt("kk_fov", 69) <= 69 ? "%d\xC2\xB0 (original)" : "%d\xC2\xB0");
     Row("Frame counter", "Shows the game's frame rate in the corner. F2 toggles it while playing.");
     ToggleCvar("kk_show_fps", "Hidden", "Shown");
     Row("Startup logos", "The Ubisoft, Universal and WingNut movies before the title screen. Story movies still play.");
