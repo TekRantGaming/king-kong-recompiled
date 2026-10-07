@@ -122,7 +122,9 @@ Everything is set up before the game starts. The launcher uses art from your own
 
 ### Gameplay
 - **Frame rate**: 30 (default, like the console), 60, 120, 144, 165, 240 or unlimited
+- **Field of view** from 69° (the original) to 110°
 - **Frame counter** in the corner, toggled with <kbd>F2</kbd>
+- **Startup logos**: play or skip the Ubisoft, Universal and WingNut movies
 - **Language**
 
 </td>
@@ -207,7 +209,7 @@ menu, exactly as if you had typed their codes.
 | Texture filtering | console | up to 16x |
 | Display | TV | windowed or fullscreen, any monitor |
 | Controls | Xbox 360 controller | any controller, remapping, keyboard and mouse |
-| Camera | game options | inverted axes, speed, deadzone |
+| Camera | game options | field of view, inverted axes, speed, deadzone |
 | Achievement pop-ups | console | Xbox 360 style, with your choice of sound |
 
 ### Hotkeys

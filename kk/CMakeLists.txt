@@ -27,6 +27,7 @@ set(KINGKONG_SOURCES
     src/io_fix.cpp
     src/language.cpp
     src/intros.cpp
+    src/fov.cpp
     src/cheats.cpp
     src/changelog.cpp
     src/menu_hook.cpp
