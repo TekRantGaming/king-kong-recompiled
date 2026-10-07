@@ -85,6 +85,8 @@ Everything is set up before the game starts. The launcher uses art from your own
 - **Install the game** straight from your disc image, with a progress bar
 - Checks the disc really is King Kong
 - **Shader pack** download: every effect already prepared, so the game never pauses for a new one
+- **Share my shaders**: help the next players by sharing the effects your play-through prepared
+- **Updates**: the launcher tells you when a new version is out and installs it with one click
 - Turn the launcher off and **hold Shift** at start to bring it back
 
 </td>
@@ -110,7 +112,6 @@ Everything is set up before the game starts. The launcher uses art from your own
 - **Render quality** presets: Supersample, Native, Quality, Balanced, Performance and Ultra Performance, each showing the real resolution
 - **Custom resolution** from 1x (720p) to 6x (8K)
 - **FXAA** and **FXAA Extreme**
-- Real **2x MSAA**
 - **Texture filtering** up to 16x
 - **Shader preparing**: wait for new effects (default, always drawn right) or prepare them in the background
 
@@ -195,7 +196,7 @@ Everything is set up before the game starts. The launcher uses art from your own
 | --- | :---: | :---: |
 | Resolution | 1280 x 720 | up to 7680 x 4320 |
 | Frame rate | 30 fps | 30 fps, or up to 240 and unlimited |
-| Anti-aliasing | console | FXAA, 2x MSAA |
+| Anti-aliasing | console (2x MSAA) | console 2x MSAA plus FXAA, or higher resolutions |
 | Texture filtering | console | up to 16x |
 | Display | TV | windowed or fullscreen, any monitor |
 | Controls | Xbox 360 controller | any controller, remapping, keyboard and mouse |
@@ -221,6 +222,21 @@ Everything is set up before the game starts. The launcher uses art from your own
 ### The shader pack
 
 The game prepares each new effect (a shader) the first time it appears, which can cause a short pause. The shader pack is the list of effects collected by a test build that plays every chapter on its own, published on the [shader-packs release](https://github.com/TekRantGaming/king-kong-recompiled/releases/tag/shader-packs). Click **Download shader pack** on the launcher's Play page and it is added to your shader cache (`Documents\king_kong\cache`), keeping anything your game has already prepared. Each time the game starts it prepares everything in the cache, so you get no pauses even on a first play-through. The pack is a separate, optional download, and the launcher only contacts GitHub when you click.
+
+### Share my shaders
+
+The shader pack only covers what has been played so far, and that is where you can help. Once you have played a good
+part of the game, open the launcher's **Play** page and click **Share my shaders**. It packs your shaders into one small
+`shader-share-....zip` file in `Documents\king_kong`, shows it to you, and opens a
+[Share shaders](https://github.com/TekRantGaming/king-kong-recompiled/issues/new?template=share-shaders.yml) form on
+GitHub to drop it into (you need a free GitHub account). The file holds only shader data: nothing personal, no saves or
+settings. Shaders that at least two players have sent go into the next shader pack.
+
+### Updates
+
+When the launcher opens it asks GitHub whether a newer version of the port is out. If there is one, it offers to
+update: **Update now** downloads it, replaces the port's own files and restarts the launcher. Your installed game, saves
+and settings stay as they are. Turn the check off on the **About** page.
 
 ### Reporting a problem
 

@@ -6,6 +6,10 @@
 #include <unordered_set>
 #include <vector>
 
+#include "http.h"
+#include "platform.h"
+
+#include <ctime>
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -14,8 +18,6 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
-#include <winhttp.h>
-#pragma comment(lib, "winhttp.lib")
 #endif
 
 #include <rex/logging.h>
@@ -71,59 +73,9 @@ bool Parse(const std::vector<uint8_t>& d, Records& out) {
   return false;
 }
 
-#if defined(_WIN32)
-// HTTPS GET into memory (follows GitHub's redirect to its download host).
-bool HttpGet(const std::string& url, std::vector<uint8_t>& out, ShaderPackStatus* status) {
-  URL_COMPONENTSW parts{};
-  parts.dwStructSize = sizeof(parts);
-  wchar_t host[256], path[2048];
-  parts.lpszHostName = host;
-  parts.dwHostNameLength = 256;
-  parts.lpszUrlPath = path;
-  parts.dwUrlPathLength = 2048;
-  const std::wstring wurl(url.begin(), url.end());
-  if (!WinHttpCrackUrl(wurl.c_str(), 0, 0, &parts)) return false;
-  HINTERNET session = WinHttpOpen(L"KingKongRecomp/1.0", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME,
-                                  WINHTTP_NO_PROXY_BYPASS, 0);
-  if (!session) return false;
-  bool ok = false;
-  if (HINTERNET conn = WinHttpConnect(session, host, parts.nPort, 0)) {
-    if (HINTERNET req = WinHttpOpenRequest(conn, L"GET", path, nullptr, WINHTTP_NO_REFERER,
-                                           WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE)) {
-      DWORD code = 0, len = sizeof(code);
-      if (WinHttpSendRequest(req, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
-          WinHttpReceiveResponse(req, nullptr) &&
-          WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, nullptr, &code, &len,
-                              nullptr) &&
-          code == 200) {
-        DWORD content = 0;
-        len = sizeof(content);
-        if (status && WinHttpQueryHeaders(req, WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER, nullptr,
-                                          &content, &len, nullptr))
-          status->total += content;
-        ok = true;
-        for (DWORD avail = 0; WinHttpQueryDataAvailable(req, &avail) && avail;) {
-          const size_t at = out.size();
-          out.resize(at + avail);
-          DWORD read = 0;
-          if (!WinHttpReadData(req, out.data() + at, avail, &read)) {
-            ok = false;
-            break;
-          }
-          out.resize(at + read);
-          if (status) status->bytes += read;
-        }
-      }
-      WinHttpCloseHandle(req);
-    }
-    WinHttpCloseHandle(conn);
-  }
-  WinHttpCloseHandle(session);
-  return ok;
+bool Fetch(const std::string& url, std::vector<uint8_t>& out, ShaderPackStatus* status) {
+  return kk::HttpGet(url, out, status ? &status->bytes : nullptr, status ? &status->total : nullptr);
 }
-#else
-bool HttpGet(const std::string&, std::vector<uint8_t>&, ShaderPackStatus*) { return false; }
-#endif
 
 struct Manifest {
   int version = 0;
@@ -182,6 +134,50 @@ int MergeShaderStorageFile(const std::filesystem::path& from, const std::filesys
   return added;
 }
 
+std::filesystem::path PackShadersForSharing(const std::filesystem::path& cache_dir,
+                                            const std::filesystem::path& user_dir, std::string& error) {
+  namespace fs = std::filesystem;
+  const fs::path shareable = cache_dir / "shaders" / "shareable";
+  std::error_code ec;
+  std::wstring files;
+  uint64_t size = 0;
+  for (auto& e : fs::directory_iterator(shareable, ec)) {
+    const auto ext = e.path().extension();
+    if (!e.is_regular_file() || (ext != ".xsh" && ext != ".xpso")) continue;  // shader data only
+    files += L" \"" + e.path().filename().wstring() + L"\"";
+    size += e.file_size(ec);
+  }
+  if (files.empty()) {
+    error = "There are no shaders to share yet. Play the game for a while first.";
+    return {};
+  }
+  if (size > 24ull << 20) {
+    error = "Your shaders are too big for GitHub (over 25 MB).";
+    return {};
+  }
+  char name[64];
+  const std::time_t now = std::time(nullptr);
+  std::strftime(name, sizeof(name), "shader-share-%Y%m%d-%H%M%S.zip", std::localtime(&now));
+  const fs::path zip = user_dir / name;
+#if defined(_WIN32)
+  // Windows 10 and 11 include tar, which writes zip files with -a.
+  wchar_t system_dir[260];
+  GetSystemDirectoryW(system_dir, 260);
+  const std::wstring tar = (std::filesystem::path(system_dir) / "tar.exe").wstring();
+  const std::wstring cmd =
+      L"\"" + tar + L"\" -a -c -f \"" + zip.wstring() + L"\" -C \"" + shareable.wstring() + L"\"" + files;
+  if (!RunAndWait(cmd) || !fs::exists(zip, ec)) {
+    error = "Could not create the zip file.";
+    return {};
+  }
+  REXLOG_INFO("KK: packed shaders for sharing: {}", zip.string());
+  return zip;
+#else
+  error = "Sharing shaders is only available on Windows for now.";
+  return {};
+#endif
+}
+
 int InstalledShaderPackVersion(const std::filesystem::path& cache_dir) {
   std::ifstream f(cache_dir / "shaders" / "shader-pack.txt");
   std::stringstream text;
@@ -191,7 +187,7 @@ int InstalledShaderPackVersion(const std::filesystem::path& cache_dir) {
 
 int FetchShaderPackVersion() {
   std::vector<uint8_t> data;
-  if (!HttpGet(std::string(kShaderPackUrl) + "shader-pack.txt", data, nullptr)) return 0;
+  if (!Fetch(std::string(kShaderPackUrl) + "shader-pack.txt", data, nullptr)) return 0;
   return ParseManifest(std::string(data.begin(), data.end())).version;
 }
 
@@ -206,7 +202,7 @@ void DownloadAndInstallShaderPack(const std::filesystem::path& cache_dir, Shader
     status.busy = false;
   };
   std::vector<uint8_t> manifest_data;
-  if (!HttpGet(std::string(kShaderPackUrl) + "shader-pack.txt", manifest_data, nullptr))
+  if (!Fetch(std::string(kShaderPackUrl) + "shader-pack.txt", manifest_data, nullptr))
     return fail("Could not reach GitHub. Check your internet connection and try again.");
   const std::string manifest_text(manifest_data.begin(), manifest_data.end());
   const Manifest manifest = ParseManifest(manifest_text);
@@ -225,7 +221,7 @@ void DownloadAndInstallShaderPack(const std::filesystem::path& cache_dir, Shader
   int added = 0;
   for (const auto& name : manifest.files) {
     std::vector<uint8_t> data;
-    if (!HttpGet(std::string(kShaderPackUrl) + name, data, &status)) return fail("Downloading " + name + " failed.");
+    if (!Fetch(std::string(kShaderPackUrl) + name, data, &status)) return fail("Downloading " + name + " failed.");
     const auto tmp = download_dir / name;
     std::ofstream(tmp, std::ios::binary).write(reinterpret_cast<const char*>(data.data()), std::streamsize(data.size()));
     const int n = MergeShaderStorageFile(tmp, shareable / name);

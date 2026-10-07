@@ -29,6 +29,8 @@ set(KINGKONG_SOURCES
     src/glyphs.cpp
     src/crash_dump.cpp
     src/shader_pack.cpp
+    src/http.cpp
+    src/update.cpp
 )
 
 # Developer-only test aids (never in release builds): -DKK_DEV_TOOLS=ON.
@@ -45,6 +47,14 @@ endif()
 
 rexglue_setup_target(king_kong GPU_PLUGINS xenos)
 
-# Button prompt pictures (kk_button_prompts) live beside the program.
+# The port's version: shown in the launcher and compared with GitHub releases by the updater.
+# (-DKK_VERSION=x.y.z overrides it, to test the updater with an "older" build.)
+if(NOT DEFINED KK_VERSION)
+    set(KK_VERSION "1.4.0")
+endif()
+target_compile_definitions(king_kong PRIVATE KK_VERSION="${KK_VERSION}" KK_VERSION_W=L"${KK_VERSION}")
+
+# Button prompt pictures (kk_button_prompts) and launcher art live beside the program.
 add_custom_command(TARGET king_kong POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/glyphs $<TARGET_FILE_DIR:king_kong>/glyphs)
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/glyphs $<TARGET_FILE_DIR:king_kong>/glyphs
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/launcher_art $<TARGET_FILE_DIR:king_kong>/launcher_art)

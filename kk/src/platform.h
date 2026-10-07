@@ -37,6 +37,15 @@ void RelaunchSelf(std::wstring_view extra_args);
 // a 1 ms sleep before and after. Call once, early.
 void TuneProcessScheduling();
 
+// Runs a command line (no window) and waits; true when it exits with 0.
+bool RunAndWait(const std::wstring& command_line);
+
+// Opens Explorer with `file` selected.
+void RevealInExplorer(const std::filesystem::path& file);
+
+// Opens a web page in the default browser.
+void OpenUrl(const std::string& url);
+
 // Opens a folder (created if missing) or file in the system file browser.
 void OpenInExplorer(const std::filesystem::path& path);
 
