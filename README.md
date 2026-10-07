@@ -19,7 +19,7 @@
 <br>
 
 > [!NOTE]
-> **First release.** Tested from the start of the game, through the opening on the ship, into Skull Island. A full play-through has not been tested yet. Please report anything that goes wrong.
+> **In active development.** Every chapter has been started and played for a while by automated test runs, but a full play-through hasn't been confirmed yet. New versions come out often, and the launcher offers each one when it opens. Please report anything that goes wrong.
 
 ## Highlights
 
@@ -54,13 +54,33 @@ A pop-up with a sound every time you unlock one of the game's 9 achievements, ju
 <td valign="top">
 
 **Your controls, your way**<br>
-Invert the camera, change its speed, set a deadzone, remap any button, adjust vibration, or play with keyboard and mouse.
+Invert the camera, set its sensitivity, toggle aim, set a deadzone, remap any button, adjust vibration, or play with keyboard and mouse.
 
 </td>
 <td valign="top">
 
 **Install from your disc**<br>
 Download, run, pick your disc image in the launcher, and play. No technical steps.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**A wider view**<br>
+Widen the field of view from the original 69° up to 110°. Jack's gun keeps its usual size, and nothing pops in at the edges.
+
+</td>
+<td valign="top">
+
+**Cheats as switches**<br>
+All ten of the game's cheats are switches in the launcher, so there's no typing codes every time you play.
+
+</td>
+<td valign="top">
+
+**Always up to date**<br>
+The launcher offers new versions and new shader packs when it opens, and shows you what changed.
 
 </td>
 </tr>
@@ -74,7 +94,7 @@ Until now the only way to play it was on an Xbox 360. On the Xenia emulator it b
 
 ## The launcher
 
-Everything is set up before the game starts. The launcher uses art from your own copy of the game: Kong's face, the achievement pictures and the stormy sky from the game's menu. Settings are saved to a plain text file, `king_kong.toml`, next to the game.
+Everything is set up before the game starts. The launcher uses art from your own copy of the game: Kong's face, the achievement pictures and the stormy sky from the game's menu. Settings are saved to a plain text file, `king_kong.toml`, next to the game, and every settings page has a **Reset page** button that puts just that page back to its defaults.
 
 <table>
 <tr>
@@ -113,7 +133,7 @@ Everything is set up before the game starts. The launcher uses art from your own
 - **Custom resolution** from 1x (720p) to 6x (8K)
 - **FXAA** and **FXAA Extreme**
 - **Texture filtering** up to 16x
-- **Motion blur** on or off
+- **Motion blur** on or off: Off removes the ghost trail the game blends over fast moments, mostly in Kong's sequences
 - **Shader preparing**: wait for new effects (default, always drawn right) or prepare them in the background
 
 </td>
@@ -123,9 +143,9 @@ Everything is set up before the game starts. The launcher uses art from your own
 
 ### Gameplay
 - **Frame rate**: 30 (default, like the console), 60, 120, 144, 165, 240 or unlimited
-- **Field of view** from 69° (the original) to 110°
+- **Field of view** from 69° (the original) to 110°. The game draws the wider area too, Jack's gun keeps its usual size, and the menus keep their original look
 - **Frame counter** in the corner, toggled with <kbd>F2</kbd>
-- **Startup logos**: play or skip the Ubisoft, Universal and WingNut movies
+- **Startup logos**: play or skip the Ubisoft, Universal and WingNut movies, straight to the title screen
 - **Language**
 
 </td>
@@ -137,7 +157,8 @@ Everything is set up before the game starts. The launcher uses art from your own
 
 ### Controls
 - **Invert the camera** left/right and up/down, separately
-- **Controller sensitivity** from 25% to 300%, and **mouse sensitivity** for keyboard and mouse
+- **Controller sensitivity** from 25% to 300%, for looking left and right and up and down
+- **Mouse sensitivity** and **mouse camera** for keyboard and mouse
 - **Toggle aim**: press the left trigger once to raise the gun and again to lower it, instead of holding it
 - **Stick deadzone** to stop drift
 - **Vibration** on or off, with a strength slider
@@ -150,6 +171,21 @@ Everything is set up before the game starts. The launcher uses art from your own
 <tr>
 <td valign="middle">
 
+### Cheats
+The game's own cheats, as switches instead of codes to type each time you play:
+- **All chapters** and **all bonus content**
+- **Fast healing**, **one-hit kills**, **999 bullets** and **unlimited spears**
+- The **revolver**, **machine gun**, **shotgun** and **sniper rifle**
+
+They switch on as soon as the game reaches its main menu, exactly as if you had typed their codes.
+
+</td>
+<td><img src="docs/images/launcher-cheats.jpg" alt="Cheats page"></td>
+</tr>
+<tr>
+<td><img src="docs/images/launcher-achievements.jpg" alt="Achievements page"></td>
+<td valign="middle">
+
 ### Achievements
 - All **9 achievements** with their pictures, descriptions and gamerscore
 - See which ones you have **unlocked**
@@ -159,26 +195,31 @@ Everything is set up before the game starts. The launcher uses art from your own
 - A bonus **Welcome to Skull Island** achievement the first time you play
 
 </td>
-<td><img src="docs/images/launcher-achievements.jpg" alt="Achievements page"></td>
 </tr>
 <tr>
-<td><img src="docs/images/launcher-about.jpg" alt="About page"></td>
 <td valign="middle">
 
 ### About
 - Open your **save folder**, **game folder** or **settings file** in one click
 - **Reset** every setting
 - Refresh the launcher's art from the game's menu
+- **Check for updates** now, or turn the check at start off
+- The **changelog**: the notes for every version
+
+</td>
+<td><img src="docs/images/launcher-about.jpg" alt="About page"></td>
+</tr>
+<tr>
+<td><img src="docs/images/launcher-whats-new.jpg" alt="What's new pop-up"></td>
+<td valign="middle">
+
+### What's new
+- After an update, the launcher shows **what changed** the first time it opens
+- **Every version** takes you to the full changelog on the About page
 
 </td>
 </tr>
 </table>
-
-### Cheats
-The game's own cheats, as switches on the launcher's **Cheats** page instead of codes to type each time you play:
-**all chapters**, **all bonus content**, **fast healing**, **one-hit kills**, **999 bullets**, **unlimited spears**, and the
-**revolver**, **machine gun**, **shotgun** and **sniper rifle**. They switch on as soon as the game reaches its main
-menu, exactly as if you had typed their codes.
 
 ## In game
 
@@ -210,7 +251,10 @@ menu, exactly as if you had typed their codes.
 | Texture filtering | console | up to 16x |
 | Display | TV | windowed or fullscreen, any monitor |
 | Controls | Xbox 360 controller | any controller, remapping, keyboard and mouse |
-| Camera | game options | field of view, inverted axes, speed, deadzone |
+| Camera | game options | field of view, inverted axes, sensitivity, deadzone |
+| Motion blur | always on | on or off |
+| Startup logos | always play | play or skip |
+| Cheats | typed as codes each time | switches in the launcher |
 | Achievement pop-ups | console | Xbox 360 style, with your choice of sound |
 
 ### Hotkeys
