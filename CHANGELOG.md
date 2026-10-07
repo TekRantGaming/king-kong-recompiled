@@ -3,6 +3,18 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v1.7.3 (8 October 2026)
+
+### What's new
+- **Controller sensitivity speeds up the camera itself.** Before, the slider could only make smaller pushes of the stick reach the game's top turning speed: a full push turned just as fast whatever you chose. Now 200% turns twice as fast at every push, a full push included, both looking around and while aiming (#19).
+- **Modern camera response, on by default.** A new **Camera response** setting on the **Controls** page. **Modern** turns the camera the same way in every direction, so circles and diagonals feel even. **Original** is the Xbox 360's own response, where small pushes up and down turn much more slowly than small pushes sideways. A full push straight across or straight up turns at the game's own top speed either way.
+- **90 FPS.** The frame rate choices now include 90 FPS. They're a dropdown now, so every choice fits even in a small launcher window. As with any rate above 30, the launcher explains the animation issue when you press Play.
+
+### Full changelog
+- Controller sensitivity: scales the camera's own turn each frame (the turn the game's camera code applies left and right and up and down) instead of the stick, which the game caps at a full push. Keyboard and mouse still uses **Mouse sensitivity**.
+- Camera response: `kk_camera_modern`, on by default. The game reads the right stick one direction at a time, with a 15% deadzone on each, then turns by the square of the push left and right and the cube of the push up and down. Modern reshapes the stick the camera reads so both follow the square of how far you push, in the direction you push. A half push now gives a quarter of the top speed in any direction; before, it was 17% left and right and 7% up and down.
+- Frame rate: 90 added to `kk_frame_rate`'s choices, and the setting is a dropdown.
+
 ## v1.7.2 (7 October 2026)
 
 ### What's new
