@@ -52,6 +52,9 @@ else()
 endif()
 
 rexglue_setup_target(king_kong GPU_PLUGINS xenos)
+if(KK_DEV_TOOLS)
+    target_compile_definitions(king_kong PRIVATE KK_DEV_TOOLS=1)
+endif()
 
 # Developer-only call profiler (preset kk-prof, never in release builds): every
 # recompiled game function counts its calls (src/dev_prof.cpp).
