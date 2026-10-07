@@ -3,6 +3,14 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v1.7.2 (7 October 2026)
+
+### What's new
+- **999 bullets lasts the whole chapter.** The **999 bullets** cheat was undone as soon as a chapter started: the game hands out each chapter's own weapons and ammo, so in V-Rex you got the machine gun's usual 30 rounds and nothing more. The port now gives the cheat again right after a chapter or checkpoint starts, so you really have 999 rounds. The weapon cheats (revolver, machine gun, shotgun and sniper rifle) had the same problem and are fixed too.
+
+### Full changelog
+- Cheats: about a second after a chapter or checkpoint hands out its loadout, the port gives the chosen weapon and ammo cheats again. Before, they were only given at the main menu.
+
 ## v1.7.1 (7 October 2026)
 
 ### What's new
