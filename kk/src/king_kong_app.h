@@ -34,6 +34,7 @@
 #include "crash_dump.h"
 #include "frame_stats.h"
 #include "glyphs.h"
+#include "guest.h"
 
 namespace kk {
 void InstallFpeGuard();  // fpe_guard.cpp
@@ -131,6 +132,7 @@ class KingKongApp : public rex::ReXApp {
   }
 
   void OnPostSetup() override {
+    kk::g_guest_base = runtime()->virtual_membase();
     kk::InstallFpeGuard();  // after the runtime's own signal handlers
     kk::TuneProcessScheduling();
     {

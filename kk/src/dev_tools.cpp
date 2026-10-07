@@ -24,6 +24,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <filesystem>
 #include <sstream>
 #include <string>
@@ -32,12 +33,29 @@
 
 #include <rex/logging.h>
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 #include "art.h"
+#include "guest.h"
 #include "menu_hook.h"
 #include "shader_pack.h"
 
 namespace kk {
 extern bool (*g_dev_pad_input)(uint32_t user, uint8_t* state);
+void DevWatchTick(double seconds_since_menu);
+#if defined(KK_DEV_PROFILE)
+void DevProfTick(double seconds_since_menu);
+#else
+inline void DevProfTick(double) {}
+#endif
 
 namespace {
 
@@ -164,6 +182,117 @@ void TakeShots(double t) {
   }
 }
 
+// KK_DEV_FIND="KKst0ry,8wonder" with KK_DEV_FIND_AT="70,95" (seconds from the
+// save menu opening): search guest memory for those strings (ASCII and UTF-16,
+// both byte orders) and log every hit with the bytes around it.
+void FindInMemory() {
+#if defined(_WIN32)
+  if (!g_guest_base) return;
+  std::vector<std::pair<std::string, std::string>> needles;  // (label, bytes)
+  if (const char* v = std::getenv("KK_DEV_FIND"); v && *v) {
+    std::stringstream all(v);
+    for (std::string w; std::getline(all, w, ',');) {
+      needles.push_back({w + " ascii", w});
+      std::string be, le;
+      for (char c : w) {
+        be += '\0', be += c;
+        le += c, le += '\0';
+      }
+      needles.push_back({w + " utf16be", be});
+      needles.push_back({w + " utf16le", le});
+    }
+  }
+  int hits = 0;
+  for (uint64_t a = 0x40000000; a < 0xC0000000;) {
+    MEMORY_BASIC_INFORMATION mbi{};
+    if (!VirtualQuery(g_guest_base + a, &mbi, sizeof(mbi))) break;
+    const uint64_t begin = uint64_t(static_cast<uint8_t*>(mbi.BaseAddress) - g_guest_base);
+    const uint64_t end = std::min<uint64_t>(begin + mbi.RegionSize, 0xC0000000);
+    const bool readable = mbi.State == MEM_COMMIT && !(mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) &&
+                          (mbi.Protect & (PAGE_READWRITE | PAGE_READONLY | PAGE_EXECUTE_READWRITE | PAGE_WRITECOPY));
+    if (readable && end > a) {
+      const char* base = reinterpret_cast<const char*>(g_guest_base + a);
+      const std::string_view region(base, size_t(end - a));
+      for (const auto& [label, bytes] : needles) {
+        for (size_t pos = region.find(bytes); pos != std::string_view::npos && hits < 200;
+             pos = region.find(bytes, pos + 1)) {
+          const size_t from = pos >= 32 ? pos - 32 : 0, to = std::min(region.size(), pos + bytes.size() + 32);
+          std::string hex, text;
+          for (size_t i = from; i < to; ++i) {
+            char b[4];
+            std::snprintf(b, sizeof(b), "%02X", uint8_t(region[i]));
+            hex += b;
+            text += (region[i] >= 32 && region[i] < 127) ? region[i] : '.';
+          }
+          REXLOG_INFO("KK dev find: '{}' at {:08X} (context from {:08X}) {} | {}", label, uint32_t(a + pos),
+                      uint32_t(a + from), hex, text);
+          ++hits;
+        }
+      }
+    }
+    a = end;
+  }
+  REXLOG_INFO("KK dev find: done, {} hits", hits);
+#endif
+}
+
+void FindAtTimes(double t) {
+  static std::vector<double> times = [] {
+    std::vector<double> out;
+    if (const char* v = std::getenv("KK_DEV_FIND_AT"); v && *v) {
+      std::stringstream all(v);
+      for (std::string s; std::getline(all, s, ',');) out.push_back(std::stod(s));
+    }
+    return out;
+  }();
+  for (auto it = times.begin(); it != times.end();) {
+    if (t < *it) {
+      ++it;
+      continue;
+    }
+    REXLOG_INFO("KK dev find: searching at {:.1f} s", t);
+    FindInMemory();
+    it = times.erase(it);
+  }
+}
+
+// KK_DEV_SNAP_AT="57,60,63" (seconds from the save menu opening): copy the
+// game's static data (0x82000000-0x83100000) at each time, and at the last one
+// write snap_diff.txt in the working folder: every byte that changed between
+// snapshots, with its value in each one.
+void SnapAtTimes(double t) {
+  constexpr uint32_t kBegin = 0x82000000, kEnd = 0x83100000;
+  static std::vector<double> times = [] {
+    std::vector<double> out;
+    if (const char* v = std::getenv("KK_DEV_SNAP_AT"); v && *v) {
+      std::stringstream all(v);
+      for (std::string s; std::getline(all, s, ',');) out.push_back(std::stod(s));
+    }
+    return out;
+  }();
+  static std::vector<std::vector<uint8_t>> snaps;
+  static const size_t wanted = times.size();
+  if (!g_guest_base || times.empty() || t < times.front()) return;
+  times.erase(times.begin());
+  snaps.emplace_back(g_guest_base + kBegin, g_guest_base + kEnd);
+  REXLOG_INFO("KK dev snap {} at {:.1f} s", snaps.size(), t);
+  if (snaps.size() != wanted) return;
+  FILE* f = std::fopen("snap_diff.txt", "w");
+  if (!f) return;
+  size_t changed = 0;
+  for (size_t i = 0; i < kEnd - kBegin; ++i) {
+    bool differs = false;
+    for (size_t k = 1; k < snaps.size() && !differs; ++k) differs = snaps[k][i] != snaps[0][i];
+    if (!differs) continue;
+    std::fprintf(f, "%08X", unsigned(kBegin + i));
+    for (const auto& s : snaps) std::fprintf(f, " %02X", s[i]);
+    std::fprintf(f, "\n");
+    ++changed;
+  }
+  std::fclose(f);
+  REXLOG_INFO("KK dev snap: wrote snap_diff.txt, {} bytes changed", changed);
+}
+
 bool AutoskipPad(uint32_t user, uint8_t* state) {
   // KK_DEV_PAD_USER=n: be player n+1 instead of player 1.
   static const uint32_t pad_user = [] {
@@ -175,6 +304,10 @@ bool AutoskipPad(uint32_t user, uint8_t* state) {
   if (g_done) {
     static const int64_t done_ms = now;
     TakeShots((now - (ShotsFromMenu() ? g_menu_ms.load() : done_ms)) / 1000.0);
+    FindAtTimes((now - g_menu_ms.load()) / 1000.0);
+    SnapAtTimes((now - g_menu_ms.load()) / 1000.0);
+    DevWatchTick((now - g_menu_ms.load()) / 1000.0);
+    DevProfTick((now - g_menu_ms.load()) / 1000.0);
     return g_wander && WanderPad(state, now);
   }
   uint16_t buttons = 0;
@@ -184,6 +317,10 @@ bool AutoskipPad(uint32_t user, uint8_t* state) {
   } else {
     const double t = (now - menu) / 1000.0;
     if (ShotsFromMenu()) TakeShots(t);
+    FindAtTimes(t);
+    SnapAtTimes(t);
+    DevWatchTick(t);
+    DevProfTick(t);
     uint32_t held = 0;
     if (g_script.empty()) {
       for (const Press& p : kAfterMenu)
