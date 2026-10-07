@@ -35,6 +35,7 @@ REXCVAR_DECLARE(bool, kk_invert_rs_y);
 REXCVAR_DECLARE(bool, kk_invert_ls_x);
 REXCVAR_DECLARE(bool, kk_invert_ls_y);
 REXCVAR_DECLARE(bool, kk_toggle_aim);
+REXCVAR_DECLARE(bool, kk_cheats);
 
 namespace kk {
 

@@ -40,6 +40,7 @@
 #include <rex/ui/virtual_key.h>
 
 #include "art.h"
+#include "cheats.h"
 #include "platform.h"
 #include "settings.h"
 #include "iso.h"
@@ -225,15 +226,16 @@ std::filesystem::path BrowseForDiscImage() {
 // them needs a relaunch to take effect.
 constexpr const char* kRestartCvars[] = {"present_effect", "window_width", "window_height", "monitor"};
 
-enum Page { kPlay, kDisplay, kGraphics, kGameplay, kControls, kAchievements, kAbout, kPageCount };
-constexpr const char* kPageNames[kPageCount] = {"Play",     "Display",      "Graphics", "Gameplay",
-                                                "Controls", "Achievements", "About"};
+enum Page { kPlay, kDisplay, kGraphics, kGameplay, kControls, kCheatsPage, kAchievements, kAbout, kPageCount };
+constexpr const char* kPageNames[kPageCount] = {"Play",     "Display", "Graphics",     "Gameplay",
+                                                "Controls", "Cheats",  "Achievements", "About"};
 constexpr const char* kPageBlurbs[kPageCount] = {
     "Install the game from your own disc image and start playing.",
     "Window, monitor and how the picture fits your screen.",
     "Render resolution, anti-aliasing and texture filtering.",
     "Frame rate, language and the frame counter.",
     "Camera, sticks, vibration, button remapping and keyboard play.",
+    "The game's cheats, switched on for you when the game starts.",
     "Your progress on the game's 9 achievements.",
     "About this port, and where your saves and settings live.",
 };
@@ -513,6 +515,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
       case kGraphics: PageGraphics(); break;
       case kGameplay: PageGameplay(); break;
       case kControls: PageControls(); break;
+      case kCheatsPage: PageCheats(); break;
       case kAchievements: PageAchievements(); break;
       case kAbout: PageAbout(); break;
       default: break;
@@ -1046,6 +1049,24 @@ class Launcher final : public rex::ui::ImGuiDialog {
   }
 
   // ------------------------------------------------------- Achievements ---
+  // ------------------------------------------------------------- Cheats ---
+  void PageCheats() {
+    if (BeginRows("##cheats")) {
+      Row("Cheats", "Switches on the cheats you pick below as soon as the game reaches its main menu, the same "
+                    "as typing their codes on the game's Cheat screen. They last until you quit the game.");
+      ToggleCvar("kk_cheats", "Off", "On");
+      if (GetBool("kk_cheats")) {
+        for (const auto& cheat : kCheats) {
+          const std::string cvar = std::string("kk_cheat_") + cheat.id;
+          const std::string desc = std::string("Code: ") + cheat.code;
+          Row(cheat.label, desc.c_str());
+          ToggleCvar(cvar.c_str(), "Off", "On");
+        }
+      }
+      EndRows();
+    }
+  }
+
   void PageAchievements() {
     if (BeginRows("##ach_settings")) {
       Row("Notifications", "An Xbox 360-style pop-up when you unlock an achievement in game.");
