@@ -27,6 +27,7 @@ set(KINGKONG_SOURCES
     src/io_fix.cpp
     src/language.cpp
     src/cheats.cpp
+    src/changelog.cpp
     src/menu_hook.cpp
     src/glyphs.cpp
     src/crash_dump.cpp
@@ -58,6 +59,19 @@ if(KK_DEV_PROFILE)
     file(GLOB KK_RECOMP_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/generated/default/king_kong_recomp.*.cpp")
     set_property(SOURCE ${KK_RECOMP_SOURCES} APPEND PROPERTY COMPILE_OPTIONS -finstrument-functions-after-inlining)
 endif()
+
+# CHANGELOG.md, built into the program for the launcher (About page, "What's new").
+set(KK_CHANGELOG_MD "${CMAKE_CURRENT_SOURCE_DIR}/../CHANGELOG.md")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KK_CHANGELOG_MD}")
+file(READ "${KK_CHANGELOG_MD}" KK_CHANGELOG_TEXT)
+file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/changelog_text.cpp"
+     CONTENT "namespace kk {
+extern const char* const kChangelogText;
+const char* const kChangelogText = R\"KKCHANGELOG(@KK_CHANGELOG_TEXT@)KKCHANGELOG\";
+}
+"
+     @ONLY)
+target_sources(king_kong PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/changelog_text.cpp")
 
 # king_kong.map beside the program: turns addresses in players' crash and hang
 # reports into game functions. Kept with each release build, not shipped.

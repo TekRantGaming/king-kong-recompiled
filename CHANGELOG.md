@@ -1,0 +1,118 @@
+# Changelog
+
+Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
+version's notes the first time you start it.
+
+## v1.6.0 (7 October 2026)
+
+### What's new
+- **No more freezes with PlayStation, Xbox Series or keyboard button prompts.** If you picked any button prompts other than the original Xbox 360 ones, the game could freeze for 1 to 5 seconds at a time, again and again, even during the intro videos. The port was searching the game's memory for the button picture in a way that held up the graphics. It now finds it instantly, and the freezes are gone (#11).
+- **Cheats page.** All ten of the game's cheats are now switches on the launcher's new **Cheats** page: all chapters, all bonus content, fast healing, one-hit kills, 999 bullets, unlimited spears, and the revolver, machine gun, shotgun and sniper rifle. Switch them on, and they're active as soon as the game reaches its main menu. No more typing codes every time you play (#29).
+- **Shader pack 2, and shader pack updates in the launcher.** A new shader pack covers more of the game, including the V-Rex fight and the damage effects. The launcher now checks for a newer shader pack when it opens, as well as for a newer version of the port, and offers whichever is out: they're released separately, so you're always on the latest of both.
+
+### Full changelog
+- Button prompts: the port looked for the game's button picture every second by asking Windows about each 64 KB of the game's 512 MB of memory. Each search took about 5 seconds and held the memory lock the graphics need. It now reads the emulator's own record of which memory is in use, so a search takes a few milliseconds.
+- Cheats: the launcher's **Cheats** page (`kk_cheats`, `kk_cheat_*`). The port makes the same changes the game makes when a code is typed on its Cheat screen, when the main menu appears, and again each time you return to the main menu.
+- Updates: the startup check (and **Check for updates now** on the About page) also checks the shader pack. Players with an older pack get a **Shader pack update** pop-up with **Download now** and **Later**; it waits until after a port update, since that restarts the launcher.
+- Shader pack 2: 4,931 pipelines and 2,438 shaders (pack 1 had 4,652 and 2,362).
+- For bug reports: a hidden setting, `kk_hitch_report_ms`, writes a report to the `logs` folder when a frame takes longer than that many milliseconds, showing what the game was waiting on. Off by default.
+
+## v1.5.1 (7 October 2026)
+
+### What's new
+- **No more antivirus warnings.** Some antivirus programs, including Windows Defender, wrongly flagged a file that comes with the port (`rexruntime.dll`, part of the ReXGlue toolkit the port is built with) as a virus. It was a false alarm, but it could block the download. This release ships that file rebuilt from the exact same ReXGlue source, and antivirus programs no longer flag it.
+- **Saving always works.** Some players were told to sign in before they could save, and the game never offered their save slots. This happened when the PC saw more than one controller, which is common with Steam Input, DS4Windows, or a handheld's built-in controls. The game then treated the player as player 2, and only player 1 can save. Every controller, plus keyboard and mouse, now counts as player 1, so saving works whichever one you use (#9).
+- **Rumble reaches your controller.** The game shakes the controller, for example when you fire a gun, but that rumble only went to the first controller Windows listed. With Steam Input, a wireless receiver or more than one pad, that wasn't always the one in your hands. It now reaches every connected controller, so you feel it whichever one you use.
+- **Freeze reports.** If the game ever stops responding for 20 seconds, the port now writes a freeze report to the `logs` folder. If the game recovers, the log notes how long it froze. Attaching those files to a bug report lets us find what caused the freeze (#11).
+
+### Full changelog
+- Ships `rexruntime.dll` rebuilt from the same ReXGlue v0.10.0 source, unchanged. The official build was an antivirus false positive (rexglue/rexglue-sdk#485). `rexgpu-xenos.dll` is the official one, which was never flagged.
+- Controllers: all controllers and keyboard & mouse now count as player 1. Before, each controller got its own player number in connection order, and the game refuses to save for players 2 to 4 because they have no profile. The game's rumble for player 1 now goes to every connected controller too.
+- Freeze reports: a watchdog writes `logs\hang-<date-time>.txt` (where every part of the game was at that moment) and `logs\hang-<date-time>.dmp` when no frame has been drawn for 20 seconds. Time the PC spends asleep isn't counted.
+- Crash and freeze reports can now be traced to the exact part of the game's code, so problems players report are quicker to fix.
+
+## v1.5.0 (7 October 2026)
+
+### What's new
+- **The Language setting works.** Picking Deutsch, Español, Français or Italiano in the launcher now changes the game's language. Before, the game always came up in English whatever you chose (#6).
+- **Toggle aim.** A new **Aim** setting on the launcher's **Controls** page: **Hold** (the default, as on the console) or **Toggle**. On Toggle, press the left trigger once to raise the gun and again to lower it, without holding it down. Pausing (Start or Back) lowers it. It works with keyboard and mouse too (#21).
+
+### Full changelog
+- Game language: the game asks the system which language to use, and the runtime always answered English. It now answers with the launcher's Language setting (English, German, French, Spanish or Italian, the languages on the disc).
+- Controls: **Aim: Hold / Toggle** (`kk_toggle_aim`). Each press of the left trigger flips between released and fully held. Start, Back or unplugging the controller releases it.
+
+## v1.4.0 (7 October 2026)
+
+### What's new
+- **Updates from the launcher.** When the launcher opens it checks whether a newer version of the port is out. If one is, it offers to update: **Update now** downloads it, replaces the port's own files and restarts the launcher, with your installed game, saves and settings left as they are. **What's new** opens the release notes. You can turn the check off, or check by hand, on the **About** page. From this version on, you won't need to download releases yourself.
+- **Share my shaders.** The shader pack only covers what has been played so far, and you can help fill in the rest. Once you have played a good part of the game, open the **Play** page and click **Share my shaders**. It packs your shaders into one small file, shows it to you and opens a GitHub form to drop it into. The file holds only shader data: nothing personal, no saves or settings. Shaders that at least two players have sent go into the next shader pack, so everyone after you gets a smoother first play-through.
+- **Your country needs your shaders.** A pop-up when the launcher opens explains the above, with a poster to match. Tick **Don't show this message again** and it won't appear again.
+- **MSAA is no longer a setting.** 2x MSAA is how the Xbox 360 drew those surfaces, so it now always matches the console, and the shader pack covers everyone.
+
+### Full changelog
+- Launcher: automatic update check at startup (About page: Updates, Off / At startup, plus **Check for updates now**), with **Update now**, **What's new** and **Later**. Updates are staged next to the old files and swapped in, so a failed download never leaves a half-updated game.
+- Launcher: **Share my shaders** on the Play page, and the **Share shaders** issue form on GitHub.
+- Launcher: the "Players wants your shaders" pop-up at startup, with **Don't show this message again**.
+- Launcher: the Multisampling setting is removed (2x MSAA stays on, as on the Xbox 360). The About page shows the port's version.
+- New `tools/collect_shader_shares.py` builds the next shader pack from players' submissions, taking only records that at least two players sent.
+- The poster is Alfred Leete's 1914 "Britons wants you" (public domain), re-lettered.
+
+## v1.3.0 (6 October 2026)
+
+### What's new
+- **Shader pack: no more pauses for new effects.** The game prepares each effect (a shader) the first time it appears, which caused the short pauses many of you reported on a first play-through. A test build has now played every chapter on its own and collected those effects into a shader pack. On the launcher's **Play** page, click **Download shader pack**: it is added to your shader cache, and every time the game starts it prepares everything in the cache before you play. Anything your own game has already prepared is kept.
+  - Pack 1 holds 4,652 prepared effects from all 42 chapters. In a hand-played test of a chapter, it already covered about 97% of what the game needed, and the rest showed up only as a few tiny pauses (under 75 ms, about two frames). Bigger packs will follow, and **Check for a newer pack** on the Play page fetches them without needing a new release of the port.
+- **A warning before playing above 30 FPS.** Pressing Play with a frame rate above 30 (or unlimited) now explains that some animations can look wrong, and offers to play at 30 or 60 FPS instead. 30 FPS plays every animation correctly. At 60 the issues are still there but much less noticeable. This will be fixed in a future update.
+
+### Full changelog
+- Launcher: **Download shader pack** on the Play page. It downloads from the `shader-packs` release on GitHub and merges into `Documents\king_kong\cache`. The launcher only contacts GitHub when you click.
+- Launcher: frame-rate pop-up when pressing Play above 30 FPS, with Play at 30, Play at 60, Keep and Back.
+- New `tools/make_shader_pack.py` builds a pack from one or more shader caches.
+- Developer test build: the automatic tour that plays every chapter (cheats, chapter select, skip videos, walk around), used to build the pack. It is never in release builds.
+- README: a section on the shader pack.
+
+## v1.2.0 (5 October 2026)
+
+### What's new
+- **No more vanishing objects, silhouettes or bright flashes the first time you play.** While the game prepared a new effect in the background, it skipped drawing everything that needed it, so characters could turn into silhouettes for a moment and some frames flashed bright. Effects are now prepared before they are drawn. The first time you see something new there can be a short pause instead, and only once, because prepared effects are saved for next time. If you prefer the old behaviour, set **Graphics > Shader preparing** to Background.
+- **Steadier frame pacing on more PCs.** The game now asks Windows for precise 1 ms timers and opts out of power throttling. Without this, Windows 10 and 11 can stretch the game's short waits to about 16 ms, and on laptops with Intel's newer mixed P-core/E-core processors Windows 11 can move the game onto the slower cores. Both cause stutter.
+- **Better bug reports.** Every 10 seconds the log notes the average frame rate, the 1% low, the worst frame and how many frames took over 50 or 100 ms. If the game ever crashes, it writes `crash-<date>.txt` and `crash-<date>.dmp` into the `logs` folder. The README explains what to send.
+
+### Full changelog
+- Shaders now finish preparing before they are used (no skipped draws). The new launcher setting **Graphics > Shader preparing** switches between Wait (default) and Background.
+- 1 ms timer resolution and Windows power-throttling opt-out at startup. The log records how long a 1 ms sleep really takes.
+- Frame-time summary in the log every 10 seconds.
+- Crash reports (`.txt` and minidump) in the `logs` folder.
+- New developer test build (`kk-dev` preset, never in releases). It can skip straight into gameplay and walk around on its own, for testing performance.
+- README: a new "Reporting a problem" section, and updated known issues.
+
+## v1.1.0 (5 October 2026)
+
+### What's new
+- **Button prompts for other controllers.** The game can now show PlayStation 5, PlayStation 2, Xbox Series or keyboard buttons instead of the Xbox 360 ones, in menus and hints. Pick it in the launcher under **Controls > Button prompts**.
+  - **Keyboard** shows the keys you have actually bound, so the prompts change when you remap keys.
+  - **PlayStation 2** uses the classic coloured triangle, circle, cross and square.
+  - The pictures are free CC0 art from Xelu's Free Controllers & Keyboard Prompts, not taken from any game.
+- **Steadier launcher.** Fixed a bug where closing the launcher could use its pictures after they were freed. It crashed the game on Linux and was a hidden risk on Windows.
+
+### Full changelog
+- Added the Button prompts setting (Xbox 360, Xbox Series, PlayStation 5, PlayStation 2, Keyboard), with a `glyphs` folder of button pictures next to the exe.
+- Added `tools/make_glyphs.py`, which rebuilds the `glyphs` folder from the prompt pack.
+- Fixed the launcher freeing its pictures while the last frame still used them.
+- Linux: work in progress on a Linux version (game setup, file picker, sounds, fonts and two crash fixes). It is not ready yet, so there is no Linux download.
+- README: added the new setting and the credit for the button pictures, and marked Linux as in development.
+
+## v1.0.1 (5 October 2026)
+
+### Fixed
+- **Render quality presets now change the resolution** ([#1](https://github.com/TekRantGaming/king-kong-recompiled/issues/1)). Every preset (Native, Quality, Supersample and so on) was rendering at the original 720p. Only Custom worked. Presets now render at the resolution shown next to them in the launcher.
+
+## v1.0.0 (5 October 2026)
+
+### What's new
+- The game plays past the "VENTURE" opening, which freezes on Xenia, with working music and voice lines
+- A launcher that installs the game from your disc, with art from your copy of the game
+- Up to 8K resolution, FXAA, 2x MSAA and 16x texture filtering
+- 30 fps like the console, or up to 240 and unlimited (some animations are not right above 30 yet)
+- Xbox 360 style achievement pop-ups, with your own choice of sound
+- Camera inversion and speed, deadzone, vibration, button remapping, keyboard and mouse

@@ -13,6 +13,8 @@ REXCVAR_DEFINE_BOOL(kk_launcher, true, "KK",
 REXCVAR_DEFINE_BOOL(kk_skip_launcher, false, "KK",
                     "Internal: skip the launcher once (used when it relaunches the game)");
 REXCVAR_DEFINE_BOOL(kk_check_updates, true, "KK", "Check GitHub for a newer version when the launcher opens");
+REXCVAR_DEFINE_STRING(kk_last_version, "", "KK",
+                      "Last port version the launcher has shown (it shows What's new once after an update)");
 REXCVAR_DEFINE_BOOL(kk_share_poster, true, "KK",
                     "Show the \"share your shaders\" poster when the launcher opens (until \"Don't show this again\")");
 REXCVAR_DEFINE_INT32(kk_frame_rate, 30, "KK/Video",
