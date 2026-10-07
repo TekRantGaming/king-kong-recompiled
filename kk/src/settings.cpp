@@ -54,6 +54,7 @@ KK_CHEAT_CVAR(machine_gun, "Machine gun (KKcapone)");
 KK_CHEAT_CVAR(shotgun, "Shotgun (KKsh0tgun)");
 KK_CHEAT_CVAR(sniper, "Sniper rifle (KKsn1per)");
 #undef KK_CHEAT_CVAR
+REXCVAR_DEFINE_BOOL(kk_motion_blur, true, "KK/Graphics", "The game's motion blur effect");
 REXCVAR_DEFINE_INT32(kk_fov, 69, "KK/Gameplay",
                      "Field of view in degrees for Jack's camera (69 = original); other cameras widen to match");
 REXCVAR_DEFINE_BOOL(kk_skip_intros, false, "KK/Gameplay",

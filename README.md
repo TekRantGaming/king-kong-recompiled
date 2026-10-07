@@ -113,6 +113,7 @@ Everything is set up before the game starts. The launcher uses art from your own
 - **Custom resolution** from 1x (720p) to 6x (8K)
 - **FXAA** and **FXAA Extreme**
 - **Texture filtering** up to 16x
+- **Motion blur** on or off
 - **Shader preparing**: wait for new effects (default, always drawn right) or prepare them in the background
 
 </td>

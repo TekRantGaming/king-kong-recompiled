@@ -28,6 +28,7 @@ set(KINGKONG_SOURCES
     src/language.cpp
     src/intros.cpp
     src/fov.cpp
+    src/motion_blur.cpp
     src/cheats.cpp
     src/changelog.cpp
     src/menu_hook.cpp

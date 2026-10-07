@@ -37,6 +37,7 @@ REXCVAR_DECLARE(bool, kk_invert_ls_y);
 REXCVAR_DECLARE(bool, kk_toggle_aim);
 REXCVAR_DECLARE(bool, kk_skip_intros);
 REXCVAR_DECLARE(int32_t, kk_fov);
+REXCVAR_DECLARE(bool, kk_motion_blur);
 REXCVAR_DECLARE(bool, kk_cheats);
 REXCVAR_DECLARE(int32_t, kk_hitch_report_ms);
 
