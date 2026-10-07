@@ -25,6 +25,7 @@ set(KINGKONG_SOURCES
     src/overlay.cpp
     src/toast.cpp
     src/io_fix.cpp
+    src/language.cpp
     src/menu_hook.cpp
     src/glyphs.cpp
     src/crash_dump.cpp
@@ -50,7 +51,7 @@ rexglue_setup_target(king_kong GPU_PLUGINS xenos)
 # The port's version: shown in the launcher and compared with GitHub releases by the updater.
 # (-DKK_VERSION=x.y.z overrides it, to test the updater with an "older" build.)
 if(NOT DEFINED KK_VERSION)
-    set(KK_VERSION "1.4.0")
+    set(KK_VERSION "1.5.0")
 endif()
 target_compile_definitions(king_kong PRIVATE KK_VERSION="${KK_VERSION}" KK_VERSION_W=L"${KK_VERSION}")
 
