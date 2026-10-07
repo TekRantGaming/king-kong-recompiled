@@ -137,7 +137,7 @@ Everything is set up before the game starts. The launcher uses art from your own
 
 ### Controls
 - **Invert the camera** left/right and up/down, separately
-- **Camera speed** from 25% to 300%
+- **Controller sensitivity** from 25% to 300%, and **mouse sensitivity** for keyboard and mouse
 - **Toggle aim**: press the left trigger once to raise the gun and again to lower it, instead of holding it
 - **Stick deadzone** to stop drift
 - **Vibration** on or off, with a strength slider
