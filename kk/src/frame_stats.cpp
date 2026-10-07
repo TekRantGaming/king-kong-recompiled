@@ -30,6 +30,7 @@
 #include <rex/hook.h>
 #include <rex/logging.h>
 
+#include "crash_dump.h"
 #include "settings.h"
 
 namespace kk {
@@ -92,6 +93,7 @@ void RecordFrameTime(double frame_ms) {
 }
 
 void OnGuestSwap() {
+  NoteGuestFrame();
   RunDeferredIfDue(Clock::now());
   const uint64_t total = g_frames.fetch_add(1) + 1;
   std::lock_guard lock(g_mutex);

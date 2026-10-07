@@ -26,6 +26,7 @@
 #include <cstring>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <rex/logging.h>
@@ -160,6 +161,10 @@ bool AutoskipPad(uint32_t user, uint8_t* state) {
       if (const char* c = std::getenv("KK_DEV_CRASH"); c && *c == '1') {  // test the crash dump
         volatile int* p = nullptr;
         *p = 1;
+      }
+      if (const char* h = std::getenv("KK_DEV_HANG"); h && *h == '1') {  // test the hang report
+        REXLOG_INFO("KK dev: freezing the game thread for 25 s");
+        std::this_thread::sleep_for(std::chrono::seconds(25));
       }
     }
   }
