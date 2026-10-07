@@ -19,13 +19,15 @@
         { "name": "kk-release",        "inherits": ["win-amd64-release",        "user-env"] },
         { "name": "kk-relwithdebinfo", "inherits": ["win-amd64-relwithdebinfo", "user-env"] },
         { "name": "kk-linux-release",  "inherits": ["linux-amd64-release",      "user-env-linux"] },
-        { "name": "kk-dev",            "inherits": ["kk-release"], "cacheVariables": { "KK_DEV_TOOLS": "ON" } }
+        { "name": "kk-dev",            "inherits": ["kk-release"], "cacheVariables": { "KK_DEV_TOOLS": "ON" } },
+        { "name": "kk-prof",           "inherits": ["kk-release"], "cacheVariables": { "KK_DEV_TOOLS": "ON", "KK_DEV_PROFILE": "ON" } }
     ],
     "buildPresets": [
         { "name": "kk-debug",          "configurePreset": "kk-debug" },
         { "name": "kk-release",        "configurePreset": "kk-release" },
         { "name": "kk-relwithdebinfo", "configurePreset": "kk-relwithdebinfo" },
         { "name": "kk-linux-release",  "configurePreset": "kk-linux-release" },
-        { "name": "kk-dev",            "configurePreset": "kk-dev" }
+        { "name": "kk-dev",            "configurePreset": "kk-dev" },
+        { "name": "kk-prof",           "configurePreset": "kk-prof" }
     ]
 }

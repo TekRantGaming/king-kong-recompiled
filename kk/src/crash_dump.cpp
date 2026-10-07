@@ -32,6 +32,8 @@
 #include <rex/filesystem.h>
 #include <rex/logging.h>
 
+#include "settings.h"
+
 namespace kk {
 namespace {
 
@@ -106,14 +108,19 @@ constexpr ULONGLONG kHangMs = 20000;
 std::atomic<ULONGLONG> g_last_frame{0};  // GetTickCount64 at the last guest frame; 0 before the first
 
 // Where each thread is right now: suspend it just long enough to read its
-// instruction pointer (nothing is resolved while it is stopped).
-void WriteThreadList(FILE* f) {
+// instruction pointer, and (with `stacks`) copy the top of its stack (nothing
+// is resolved or allocated while it is stopped). Afterwards, code addresses
+// found in that copy are listed as likely callers, newest first.
+void WriteThreadList(FILE* f, bool stacks = false) {
+  constexpr size_t kStackBytes = 16 * 1024;
   struct Seen {
     DWORD id;
     DWORD64 rip;
     wchar_t name[64];
+    std::vector<uint64_t> stack;
   };
   std::vector<Seen> threads;
+  std::vector<uint64_t> copy(kStackBytes / 8);
   HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
   if (snap == INVALID_HANDLE_VALUE) return;
   THREADENTRY32 te{sizeof(te)};
@@ -122,13 +129,23 @@ void WriteThreadList(FILE* f) {
     HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_LIMITED_INFORMATION, FALSE,
                           te.th32ThreadID);
     if (!h) continue;
-    Seen s{te.th32ThreadID, 0, L""};
+    Seen s{te.th32ThreadID, 0, L"", {}};
+    size_t copied = 0;
     if (SuspendThread(h) != DWORD(-1)) {
       CONTEXT ctx{};
       ctx.ContextFlags = CONTEXT_CONTROL;
-      if (GetThreadContext(h, &ctx)) s.rip = ctx.Rip;
+      if (GetThreadContext(h, &ctx)) {
+        s.rip = ctx.Rip;
+        if (stacks) {
+          SIZE_T got = 0;
+          ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(ctx.Rsp), copy.data(), kStackBytes,
+                            &got);
+          copied = got / 8;
+        }
+      }
       ResumeThread(h);
     }
+    s.stack.assign(copy.begin(), copy.begin() + copied);
     PWSTR desc = nullptr;
     if (SUCCEEDED(GetThreadDescription(h, &desc)) && desc) {
       wcsncpy_s(s.name, desc, _TRUNCATE);
@@ -142,7 +159,36 @@ void WriteThreadList(FILE* f) {
     wchar_t where[MAX_PATH + 64];
     DescribeAddress(reinterpret_cast<const void*>(s.rip), where, std::size(where));
     std::fwprintf(f, L"  thread %5lu %-32ls %ls\n", s.id, s.name[0] ? s.name : L"", where);
+    int shown = 0;
+    for (uint64_t v : s.stack) {
+      if (shown >= 12) break;
+      HMODULE module = nullptr;
+      if (v < 0x10000 || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                                 GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                             reinterpret_cast<LPCWSTR>(v), &module))
+        continue;
+      DescribeAddress(reinterpret_cast<const void*>(v), where, std::size(where));
+      std::fwprintf(f, L"        from %ls\n", where);
+      ++shown;
+    }
   }
+}
+
+// kk_hitch_report_ms: when a frame takes longer than this, write
+// logs/hitch-<time>.txt with where every thread was (diagnostics; 0 = off).
+void WriteHitchReport(ULONGLONG stalled_ms) {
+  static int written = 0;
+  if (++written > 40) return;
+  wchar_t base[MAX_PATH + 64];
+  ReportBase(L"hitch", base);
+  wchar_t path[MAX_PATH + 80];
+  swprintf(path, MAX_PATH + 80, L"%ls-%llu.txt", base, stalled_ms);
+  if (FILE* f = _wfopen(path, L"w")) {
+    std::fwprintf(f, L"No frame for %llu ms. Threads (with likely callers):\n", stalled_ms);
+    WriteThreadList(f, true);
+    std::fclose(f);
+  }
+  REXLOG_WARN("KK: no frame for {} ms, wrote {}", stalled_ms, std::filesystem::path(path).filename().string());
 }
 
 void WriteHangReport(ULONGLONG stalled_ms) {
@@ -166,8 +212,9 @@ void WriteHangReport(ULONGLONG stalled_ms) {
 void WatchForHangs() {
   ULONGLONG previous_tick = GetTickCount64();
   ULONGLONG reported_at = 0;  // g_last_frame value the current report is about
+  ULONGLONG hitch_at = 0;     // ... and the current hitch report
   for (;;) {
-    Sleep(1000);
+    Sleep(100);
     const ULONGLONG now = GetTickCount64();
     const ULONGLONG last = g_last_frame.load(std::memory_order_relaxed);
     if (now - previous_tick > 5000) {
@@ -180,6 +227,11 @@ void WatchForHangs() {
     }
     previous_tick = now;
     if (!last) continue;  // no frame yet (launcher, startup)
+    const int32_t hitch_ms = REXCVAR_GET(kk_hitch_report_ms);
+    if (hitch_ms > 0 && last != hitch_at && now - last >= ULONGLONG(hitch_ms)) {
+      hitch_at = last;
+      WriteHitchReport(now - last);
+    }
     if (reported_at) {
       if (last != reported_at) {
         REXLOG_WARN("KK: the game is drawing again after a {} s freeze", (last - reported_at) / 1000);

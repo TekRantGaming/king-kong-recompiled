@@ -1,22 +1,22 @@
-## Peter Jackson's King Kong PC Port v1.5.1
+## Peter Jackson's King Kong PC Port v1.6.0
 
 ### What's new
-- **No more antivirus warnings.** Some antivirus programs, including Windows Defender, wrongly flagged a file that comes with the port (`rexruntime.dll`, part of the ReXGlue toolkit the port is built with) as a virus. It was a false alarm, but it could block the download. This release ships that file rebuilt from the exact same ReXGlue source, and antivirus programs no longer flag it.
-- **Saving always works.** Some players were told to sign in before they could save, and the game never offered their save slots. This happened when the PC saw more than one controller, which is common with Steam Input, DS4Windows, or a handheld's built-in controls. The game then treated the player as player 2, and only player 1 can save. Every controller, plus keyboard and mouse, now counts as player 1, so saving works whichever one you use (#9).
-- **Rumble reaches your controller.** The game shakes the controller, for example when you fire a gun, but that rumble only went to the first controller Windows listed. With Steam Input, a wireless receiver or more than one pad, that wasn't always the one in your hands. It now reaches every connected controller, so you feel it whichever one you use.
-- **Freeze reports.** If the game ever stops responding for 20 seconds, the port now writes a freeze report to the `logs` folder. If the game recovers, the log notes how long it froze. Attaching those files to a bug report lets us find what caused the freeze (#11).
+- **No more freezes with PlayStation, Xbox Series or keyboard button prompts.** If you picked any button prompts other than the original Xbox 360 ones, the game could freeze for 1 to 5 seconds at a time, again and again, even during the intro videos. The port was searching the game's memory for the button picture in a way that held up the graphics. It now finds it instantly, and the freezes are gone (#11).
+- **Cheats page.** All ten of the game's cheats are now switches on the launcher's new **Cheats** page: all chapters, all bonus content, fast healing, one-hit kills, 999 bullets, unlimited spears, and the revolver, machine gun, shotgun and sniper rifle. Switch them on, and they're active as soon as the game reaches its main menu. No more typing codes every time you play (#29).
+- **Shader pack 2, and shader pack updates in the launcher.** A new shader pack covers more of the game, including the V-Rex fight and the damage effects. The launcher now checks for a newer shader pack when it opens, as well as for a newer version of the port, and offers whichever is out: they're released separately, so you're always on the latest of both.
 
 ### Full changelog
-- Ships `rexruntime.dll` rebuilt from the same ReXGlue v0.10.0 source, unchanged. The official build was an antivirus false positive (rexglue/rexglue-sdk#485). `rexgpu-xenos.dll` is the official one, which was never flagged.
-- Controllers: all controllers and keyboard & mouse now count as player 1. Before, each controller got its own player number in connection order, and the game refuses to save for players 2 to 4 because they have no profile. The game's rumble for player 1 now goes to every connected controller too.
-- Freeze reports: a watchdog writes `logs\hang-<date-time>.txt` (where every part of the game was at that moment) and `logs\hang-<date-time>.dmp` when no frame has been drawn for 20 seconds. Time the PC spends asleep isn't counted.
-- Crash and freeze reports can now be traced to the exact part of the game's code, so problems players report are quicker to fix.
+- Button prompts: the port looked for the game's button picture every second by asking Windows about each 64 KB of the game's 512 MB of memory. Each search took about 5 seconds and held the memory lock the graphics need. It now reads the emulator's own record of which memory is in use, so a search takes a few milliseconds.
+- Cheats: the launcher's **Cheats** page (`kk_cheats`, `kk_cheat_*`). The port makes the same changes the game makes when a code is typed on its Cheat screen, when the main menu appears, and again each time you return to the main menu.
+- Updates: the startup check (and **Check for updates now** on the About page) also checks the shader pack. Players with an older pack get a **Shader pack update** pop-up with **Download now** and **Later**; it waits until after a port update, since that restarts the launcher.
+- Shader pack 2: 4,931 pipelines and 2,438 shaders (pack 1 had 4,652 and 2,362).
+- For bug reports: a hidden setting, `kk_hitch_report_ms`, writes a report to the `logs` folder when a frame takes longer than that many milliseconds, showing what the game was waiting on. Off by default.
 
 ### How to update
-If you have v1.4.0 or later, the launcher offers this update when it opens: click **Update now**. Otherwise download **KingKong-v1.5.1-windows-x64.zip** below and copy everything in it over your KingKong folder.
+If you have v1.4.0 or later, the launcher offers this update when it opens: click **Update now**. After it restarts, it offers shader pack 2 if you have pack 1. Otherwise download **KingKong-v1.6.0-windows-x64.zip** below and copy everything in it over your KingKong folder.
 
 ### New install
-1. Unzip **KingKong-v1.5.1-windows-x64.zip** anywhere and run **king_kong.exe**.
+1. Unzip **KingKong-v1.6.0-windows-x64.zip** anywhere and run **king_kong.exe**.
 2. Click **Install from disc image...** and pick your own King Kong disc image (USA/Europe, title ID `555307D3`, version `0.0.0.1`).
 3. Click **Download shader pack**.
 4. Press **PLAY**.

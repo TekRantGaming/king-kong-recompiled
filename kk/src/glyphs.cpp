@@ -352,28 +352,28 @@ std::vector<uint8_t> BuildSheet(const uint8_t* original, const std::string& styl
 
 // --- Finding and patching ---------------------------------------------------------
 
-bool Readable(const uint8_t* p, size_t n) {
-#if defined(_WIN32)
-  MEMORY_BASIC_INFORMATION mbi{};
-  if (!VirtualQuery(p, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT) return false;
-  if (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) return false;
-  return p + n <= static_cast<const uint8_t*>(mbi.BaseAddress) + mbi.RegionSize;
-#else
-  (void)p, (void)n;
-  return true;  // the physical memory mapping is fully backed
-#endif
-}
-
-// Physical addresses of every copy of the game's original sheet.
-std::vector<uint32_t> FindOriginals(const uint8_t* physical) {
+// Physical addresses of every copy of the game's original sheet. Only
+// committed pages are read (others are not backed), found from the runtime's
+// own page table: asking Windows (VirtualQuery) about this 512 MB view takes
+// seconds and holds the memory lock the GPU emulation needs, which froze the
+// game for seconds at a time.
+std::vector<uint32_t> FindOriginals(rex::memory::Memory* memory, const uint8_t* physical) {
   std::vector<uint32_t> found;
-  for (uint32_t region = 0; region < kPhysicalSize; region += 0x10000) {
-    if (!Readable(physical + region, 0x10000)) continue;
-    for (uint32_t page = region; page < region + 0x10000; page += 0x1000) {
-      if (std::memcmp(physical + page + kProbeOffset, kProbe.data(), kProbe.size()) != 0) continue;
-      if (page + kSheetBytes > kPhysicalSize || !Readable(physical + page, kSheetBytes)) continue;
-      if (Fnv1a(physical + page, kSheetBytes) == kOriginalHash) found.push_back(page);
+  auto* heap = memory->GetPhysicalHeap();
+  if (!heap) return found;
+  uint32_t address = 0;
+  while (address < kPhysicalSize) {
+    rex::memory::HeapAllocationInfo info{};
+    if (!heap->QueryRegionInfo(address, &info) || !info.region_size) break;
+    const uint32_t end = std::min<uint64_t>(uint64_t(info.base_address) + info.region_size, kPhysicalSize);
+    if (info.state & rex::memory::kMemoryAllocationCommit) {
+      for (uint32_t page = (info.base_address + 0xFFF) & ~0xFFFu; page + kSheetBytes <= end; page += 0x1000) {
+        if (std::memcmp(physical + page + kProbeOffset, kProbe.data(), kProbe.size()) != 0) continue;
+        if (Fnv1a(physical + page, kSheetBytes) == kOriginalHash) found.push_back(page);
+      }
     }
+    if (end <= address) break;
+    address = end;
   }
   return found;
 }
@@ -391,7 +391,12 @@ void StartButtonPrompts(rex::memory::Memory* memory) {
     // The game keeps more than one copy (and loads it again later), so look
     // for originals every second.
     while (true) {
-      for (const uint32_t at : FindOriginals(physical_membase)) {
+      const auto scan_start = std::chrono::steady_clock::now();
+      const auto originals = FindOriginals(memory, physical_membase);
+      const auto scan_ms =
+          std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - scan_start).count();
+      if (scan_ms > 50) REXLOG_INFO("KK: button prompt scan took {} ms", scan_ms);
+      for (const uint32_t at : originals) {
         if (sheet.empty()) {
           sheet = BuildSheet(physical_membase + at, style);
           if (sheet.empty()) return;

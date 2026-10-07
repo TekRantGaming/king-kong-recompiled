@@ -37,6 +37,21 @@ REXCVAR_DEFINE_BOOL(kk_invert_rs_x, false, "KK/Controls", "Invert right stick ho
 REXCVAR_DEFINE_BOOL(kk_invert_rs_y, false, "KK/Controls", "Invert right stick vertical");
 REXCVAR_DEFINE_BOOL(kk_invert_ls_x, false, "KK/Controls", "Invert left stick horizontal");
 REXCVAR_DEFINE_BOOL(kk_invert_ls_y, false, "KK/Controls", "Invert left stick vertical");
+REXCVAR_DEFINE_INT32(kk_hitch_report_ms, 0, "KK/Debug",
+                     "Write logs/hitch-*.txt (where every thread was) when a frame takes longer than this (0 = off)");
+REXCVAR_DEFINE_BOOL(kk_cheats, false, "KK/Cheats", "Switch on the cheats chosen below when the game starts");
+#define KK_CHEAT_CVAR(id, label) REXCVAR_DEFINE_BOOL(kk_cheat_##id, false, "KK/Cheats", label)
+KK_CHEAT_CVAR(chapters, "All chapters (KKst0ry)");
+KK_CHEAT_CVAR(bonus, "All bonus content (KKmuseum)");
+KK_CHEAT_CVAR(healing, "Fast healing for Jack (8wonder)");
+KK_CHEAT_CVAR(one_hit, "One-hit kills with bullets (GrosBras)");
+KK_CHEAT_CVAR(ammo, "999 bullets (KK 999 mun)");
+KK_CHEAT_CVAR(spears, "Unlimited spears (lance 1nf)");
+KK_CHEAT_CVAR(revolver, "Revolver (KKtigun)");
+KK_CHEAT_CVAR(machine_gun, "Machine gun (KKcapone)");
+KK_CHEAT_CVAR(shotgun, "Shotgun (KKsh0tgun)");
+KK_CHEAT_CVAR(sniper, "Sniper rifle (KKsn1per)");
+#undef KK_CHEAT_CVAR
 REXCVAR_DEFINE_BOOL(kk_toggle_aim, false, "KK/Controls",
                     "Aim (left trigger) toggles: press once to raise the gun, again to lower it");
 
