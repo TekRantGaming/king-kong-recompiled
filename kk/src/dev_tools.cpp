@@ -19,7 +19,8 @@
 // reached, or after the save menu opens where noted):
 //   KK_DEV_PAD_USER    play as player n+1
 //   KK_DEV_CRASH/HANG  test the crash dump / hang report
-//   KK_DEV_SHOTS       save game frames (guest output only, never the desktop)
+//   KK_DEV_SHOTS       save game frames (guest output only, never the desktop);
+//                      _FROM=menu or boot changes where the seconds count from
 //   KK_DEV_FIND        search guest memory for strings (save menu times)
 //   KK_DEV_SNAP_AT     diff the game's static data between times
 //   KK_DEV_HEAPDIFF_AT what changed in all guest memory around a code's Confirm
@@ -92,6 +93,10 @@ struct Step {
   uint32_t buttons;
 };
 constexpr uint32_t kLT = 1u << 16, kRT = 1u << 17;
+// Right stick in scripts: RSUP, RSDOWN, RSLEFT, RSRIGHT push it all the way;
+// add RSHALF (e.g. RSUP+RSHALF) for half way.
+constexpr uint32_t kRsUp = 1u << 18, kRsDown = 1u << 19, kRsLeft = 1u << 20, kRsRight = 1u << 21,
+                   kRsHalf = 1u << 22;
 std::vector<Step> g_script;
 double g_script_end = 0;
 
@@ -100,7 +105,8 @@ uint32_t ParseButton(const std::string& s) {
       {"UP", 0x0001},   {"DOWN", 0x0002}, {"LEFT", 0x0004}, {"RIGHT", 0x0008}, {"START", 0x0010},
       {"BACK", 0x0020}, {"LS", 0x0040},   {"RS", 0x0080},   {"LB", 0x0100},    {"RB", 0x0200},
       {"A", 0x1000},    {"B", 0x2000},    {"X", 0x4000},    {"Y", 0x8000},     {"LT", kLT},
-      {"RT", kRT}};
+      {"RT", kRT},      {"RSUP", kRsUp},  {"RSDOWN", kRsDown}, {"RSLEFT", kRsLeft}, {"RSRIGHT", kRsRight},
+      {"RSHALF", kRsHalf}};
   for (auto& [name, bit] : kNames)
     if (s == name) return bit;
   REXLOG_WARN("KK dev: unknown button '{}' in KK_DEV_SCRIPT", s);
@@ -166,13 +172,20 @@ bool WanderPad(uint8_t* state, int64_t now) {
 // KK_DEV_SHOTS="5,20" (with KK_DEV_AUTOSKIP): save the game's frame (guest
 // output only) that many seconds after gameplay is reached, as shot_<s>.bmp in
 // KK_DEV_SHOTS_DIR (default: the working folder). With KK_DEV_SHOTS_FROM=menu
-// the seconds count from the save menu opening instead (to see menus).
+// the seconds count from the save menu opening instead (to see menus). With
+// KK_DEV_SHOTS_FROM=boot they count from the start, and nothing is pressed
+// before the save menu (to see the startup movies).
+std::string ShotsFrom() {
+  const char* v = std::getenv("KK_DEV_SHOTS_FROM");
+  return v ? v : "";
+}
 bool ShotsFromMenu() {
-  static const bool from_menu = [] {
-    const char* v = std::getenv("KK_DEV_SHOTS_FROM");
-    return v && std::string(v) == "menu";
-  }();
+  static const bool from_menu = ShotsFrom() == "menu";
   return from_menu;
+}
+bool ShotsFromBoot() {
+  static const bool from_boot = ShotsFrom() == "boot";
+  return from_boot;
 }
 
 // t: seconds since gameplay was reached (or since the save menu opened).
@@ -444,7 +457,12 @@ bool AutoskipPad(uint32_t user, uint8_t* state) {
   }
   uint16_t buttons = 0;
   uint8_t triggers[2] = {0, 0};
+  uint32_t held = 0;
   if (const int64_t menu = g_menu_ms; menu < 0) {
+    if (ShotsFromBoot()) {
+      TakeShots(now / 1000.0);
+      return false;
+    }
     if (now % 3000 < kHold * 1000) buttons = kStart;  // intro videos
   } else {
     const double t = (now - menu) / 1000.0;
@@ -455,7 +473,6 @@ bool AutoskipPad(uint32_t user, uint8_t* state) {
     DevProfTick(t);
     HeapDiffAtTimes(t);
     DumpAtTimes(t);
-    uint32_t held = 0;
     if (g_script.empty()) {
       for (const Press& p : kAfterMenu)
         if (t >= p.at && t < p.at + kHold) held = p.button;
@@ -484,6 +501,9 @@ bool AutoskipPad(uint32_t user, uint8_t* state) {
   StoreBE<uint16_t>(state + 4, buttons);
   state[6] = triggers[0];
   state[7] = triggers[1];
+  const int16_t push = (held & kRsHalf) ? 16384 : 32767;
+  if (held & (kRsLeft | kRsRight)) StoreBE<int16_t>(state + 12, int16_t((held & kRsLeft) ? -push : push));
+  if (held & (kRsUp | kRsDown)) StoreBE<int16_t>(state + 14, int16_t((held & kRsDown) ? -push : push));
   return true;
 }
 

@@ -13,6 +13,8 @@ REXCVAR_DEFINE_BOOL(kk_launcher, true, "KK",
 REXCVAR_DEFINE_BOOL(kk_skip_launcher, false, "KK",
                     "Internal: skip the launcher once (used when it relaunches the game)");
 REXCVAR_DEFINE_BOOL(kk_check_updates, true, "KK", "Check GitHub for a newer version when the launcher opens");
+REXCVAR_DEFINE_STRING(kk_last_version, "", "KK",
+                      "Last port version the launcher has shown (it shows What's new once after an update)");
 REXCVAR_DEFINE_BOOL(kk_share_poster, true, "KK",
                     "Show the \"share your shaders\" poster when the launcher opens (until \"Don't show this again\")");
 REXCVAR_DEFINE_INT32(kk_frame_rate, 30, "KK/Video",
@@ -52,6 +54,11 @@ KK_CHEAT_CVAR(machine_gun, "Machine gun (KKcapone)");
 KK_CHEAT_CVAR(shotgun, "Shotgun (KKsh0tgun)");
 KK_CHEAT_CVAR(sniper, "Sniper rifle (KKsn1per)");
 #undef KK_CHEAT_CVAR
+REXCVAR_DEFINE_BOOL(kk_motion_blur, true, "KK/Graphics", "The game's motion blur effect");
+REXCVAR_DEFINE_INT32(kk_fov, 69, "KK/Gameplay",
+                     "Field of view in degrees for Jack's camera (69 = original); other cameras widen to match");
+REXCVAR_DEFINE_BOOL(kk_skip_intros, false, "KK/Gameplay",
+                    "Skip the Ubisoft, Universal and WingNut logo movies when the game starts");
 REXCVAR_DEFINE_BOOL(kk_toggle_aim, false, "KK/Controls",
                     "Aim (left trigger) toggles: press once to raise the gun, again to lower it");
 

@@ -26,7 +26,11 @@ set(KINGKONG_SOURCES
     src/toast.cpp
     src/io_fix.cpp
     src/language.cpp
+    src/intros.cpp
+    src/fov.cpp
+    src/motion_blur.cpp
     src/cheats.cpp
+    src/changelog.cpp
     src/menu_hook.cpp
     src/glyphs.cpp
     src/crash_dump.cpp
@@ -59,6 +63,19 @@ if(KK_DEV_PROFILE)
     set_property(SOURCE ${KK_RECOMP_SOURCES} APPEND PROPERTY COMPILE_OPTIONS -finstrument-functions-after-inlining)
 endif()
 
+# CHANGELOG.md, built into the program for the launcher (About page, "What's new").
+set(KK_CHANGELOG_MD "${CMAKE_CURRENT_SOURCE_DIR}/../CHANGELOG.md")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KK_CHANGELOG_MD}")
+file(READ "${KK_CHANGELOG_MD}" KK_CHANGELOG_TEXT)
+file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/changelog_text.cpp"
+     CONTENT "namespace kk {
+extern const char* const kChangelogText;
+const char* const kChangelogText = R\"KKCHANGELOG(@KK_CHANGELOG_TEXT@)KKCHANGELOG\";
+}
+"
+     @ONLY)
+target_sources(king_kong PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/changelog_text.cpp")
+
 # king_kong.map beside the program: turns addresses in players' crash and hang
 # reports into game functions. Kept with each release build, not shipped.
 if(WIN32)
@@ -68,7 +85,7 @@ endif()
 # The port's version: shown in the launcher and compared with GitHub releases by the updater.
 # (-DKK_VERSION=x.y.z overrides it, to test the updater with an "older" build.)
 if(NOT DEFINED KK_VERSION)
-    set(KK_VERSION "1.6.0")
+    set(KK_VERSION "1.7.0")
 endif()
 target_compile_definitions(king_kong PRIVATE KK_VERSION="${KK_VERSION}" KK_VERSION_W=L"${KK_VERSION}")
 

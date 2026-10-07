@@ -1,22 +1,26 @@
-## Peter Jackson's King Kong PC Port v1.6.0
+## Peter Jackson's King Kong PC Port v1.7.0
 
 ### What's new
-- **No more freezes with PlayStation, Xbox Series or keyboard button prompts.** If you picked any button prompts other than the original Xbox 360 ones, the game could freeze for 1 to 5 seconds at a time, again and again, even during the intro videos. The port was searching the game's memory for the button picture in a way that held up the graphics. It now finds it instantly, and the freezes are gone (#11).
-- **Cheats page.** All ten of the game's cheats are now switches on the launcher's new **Cheats** page: all chapters, all bonus content, fast healing, one-hit kills, 999 bullets, unlimited spears, and the revolver, machine gun, shotgun and sniper rifle. Switch them on, and they're active as soon as the game reaches its main menu. No more typing codes every time you play (#29).
-- **Shader pack 2, and shader pack updates in the launcher.** A new shader pack covers more of the game, including the V-Rex fight and the damage effects. The launcher now checks for a newer shader pack when it opens, as well as for a newer version of the port, and offers whichever is out: they're released separately, so you're always on the latest of both.
+- **Field of view slider.** A new **Field of view** setting on the launcher's **Gameplay** page widens the view from 69° (the original) up to 110°. The game draws the wider area too, so nothing pops in at the edges. Jack's gun keeps its usual size, the menus keep their original look, and cutscenes widen by the same amount (#3).
+- **Controller sensitivity works up and down too.** The **Controller sensitivity** slider on the **Controls** page (it was called Camera speed) now changes how fast you look up and down, not just left and right. A full push of the stick still turns at the game's own top speed. **Mouse sensitivity** and **Mouse camera** are now always shown on the Controls page.
+- **Motion blur on or off.** A new **Motion blur** setting on the **Graphics** page. Off removes the ghost trail the game blends over fast moments, mostly in Kong's sequences and some transitions.
+- **Skip the startup logos.** A new **Startup logos** setting on the **Gameplay** page skips the Ubisoft, Universal and WingNut movies, so the title screen appears within a few seconds. The story movies still play.
+- **Reset a page.** Every settings page has a **Reset page** button that puts just that page's settings back to their defaults.
+- **What's new and the changelog.** After an update, the launcher shows what changed the first time it opens. The **About** page now lists the notes for every version.
 
 ### Full changelog
-- Button prompts: the port looked for the game's button picture every second by asking Windows about each 64 KB of the game's 512 MB of memory. Each search took about 5 seconds and held the memory lock the graphics need. It now reads the emulator's own record of which memory is in use, so a search takes a few milliseconds.
-- Cheats: the launcher's **Cheats** page (`kk_cheats`, `kk_cheat_*`). The port makes the same changes the game makes when a code is typed on its Cheat screen, when the main menu appears, and again each time you return to the main menu.
-- Updates: the startup check (and **Check for updates now** on the About page) also checks the shader pack. Players with an older pack get a **Shader pack update** pop-up with **Download now** and **Later**; it waits until after a port update, since that restarts the launcher.
-- Shader pack 2: 4,931 pipelines and 2,438 shaders (pack 1 had 4,652 and 2,362).
-- For bug reports: a hidden setting, `kk_hitch_report_ms`, writes a report to the `logs` folder when a frame takes longer than that many milliseconds, showing what the game was waiting on. Off by default.
+- Field of view: `kk_fov`, in degrees for Jack's camera (69 is the original). Every camera is widened by the same amount, so close-ups stay closer than wide shots. The area the game draws widens with it. Jack's gun is drawn with its own fixed angle and doesn't change. Nothing is widened while the menus show.
+- Controller sensitivity: `kk_camera_sensitivity` now scales the right stick as the game reads it, instead of the raw stick, so both directions change together and it is no longer limited below a full push. It no longer applies to keyboard and mouse, which has its own **Mouse sensitivity**.
+- Motion blur: `kk_motion_blur`, on by default as on the console. Off runs the game's motion blur effect at zero strength, the game's own way of having no blur.
+- Startup logos: `kk_skip_intros`, off by default.
+- Reset page: the Display, Graphics, Gameplay, Controls (including button remapping and keyboard keys), Cheats and Achievements pages each reset only their own settings. Press **Save** to keep them.
+- Changelog: `CHANGELOG.md` is built into the launcher, and the launcher remembers the last version it ran (`kk_last_version`) to know what's new.
 
 ### How to update
-If you have v1.4.0 or later, the launcher offers this update when it opens: click **Update now**. After it restarts, it offers shader pack 2 if you have pack 1. Otherwise download **KingKong-v1.6.0-windows-x64.zip** below and copy everything in it over your KingKong folder.
+If you have v1.4.0 or later, the launcher offers this update when it opens: click **Update now**. Otherwise download **KingKong-v1.7.0-windows-x64.zip** below and copy everything in it over your KingKong folder. Shader pack 2 is still the latest, so there's no new pack to download.
 
 ### New install
-1. Unzip **KingKong-v1.6.0-windows-x64.zip** anywhere and run **king_kong.exe**.
+1. Unzip **KingKong-v1.7.0-windows-x64.zip** anywhere and run **king_kong.exe**.
 2. Click **Install from disc image...** and pick your own King Kong disc image (USA/Europe, title ID `555307D3`, version `0.0.0.1`).
 3. Click **Download shader pack**.
 4. Press **PLAY**.

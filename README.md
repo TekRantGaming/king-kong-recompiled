@@ -113,6 +113,7 @@ Everything is set up before the game starts. The launcher uses art from your own
 - **Custom resolution** from 1x (720p) to 6x (8K)
 - **FXAA** and **FXAA Extreme**
 - **Texture filtering** up to 16x
+- **Motion blur** on or off
 - **Shader preparing**: wait for new effects (default, always drawn right) or prepare them in the background
 
 </td>
@@ -122,7 +123,9 @@ Everything is set up before the game starts. The launcher uses art from your own
 
 ### Gameplay
 - **Frame rate**: 30 (default, like the console), 60, 120, 144, 165, 240 or unlimited
+- **Field of view** from 69° (the original) to 110°
 - **Frame counter** in the corner, toggled with <kbd>F2</kbd>
+- **Startup logos**: play or skip the Ubisoft, Universal and WingNut movies
 - **Language**
 
 </td>
@@ -134,7 +137,7 @@ Everything is set up before the game starts. The launcher uses art from your own
 
 ### Controls
 - **Invert the camera** left/right and up/down, separately
-- **Camera speed** from 25% to 300%
+- **Controller sensitivity** from 25% to 300%, and **mouse sensitivity** for keyboard and mouse
 - **Toggle aim**: press the left trigger once to raise the gun and again to lower it, instead of holding it
 - **Stick deadzone** to stop drift
 - **Vibration** on or off, with a strength slider
@@ -207,7 +210,7 @@ menu, exactly as if you had typed their codes.
 | Texture filtering | console | up to 16x |
 | Display | TV | windowed or fullscreen, any monitor |
 | Controls | Xbox 360 controller | any controller, remapping, keyboard and mouse |
-| Camera | game options | inverted axes, speed, deadzone |
+| Camera | game options | field of view, inverted axes, speed, deadzone |
 | Achievement pop-ups | console | Xbox 360 style, with your choice of sound |
 
 ### Hotkeys

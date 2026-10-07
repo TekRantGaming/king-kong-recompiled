@@ -6,8 +6,10 @@
 #include <atomic>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <map>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <utility>
@@ -40,6 +42,7 @@
 #include <rex/ui/virtual_key.h>
 
 #include "art.h"
+#include "changelog.h"
 #include "cheats.h"
 #include "platform.h"
 #include "settings.h"
@@ -269,6 +272,18 @@ class Launcher final : public rex::ui::ImGuiDialog {
     const bool testing = std::getenv("KK_AUTOPLAY") != nullptr;
     if (GetBool("kk_check_updates") && !testing) StartUpdateCheck(false);
     open_poster_ = GetBool("kk_share_poster") && !testing;
+    // "What's new" once after an update: the settings file says the launcher
+    // has run before (a fresh install has none), and an older version ran last.
+    const std::string last = Get("kk_last_version");
+    if (last != KK_VERSION && !testing) {
+      std::error_code ec;
+      if (!last.empty() || std::filesystem::exists(paths_.config_path, ec)) {
+        whats_new_from_ = last;  // empty: from before the launcher remembered (show this version)
+        open_whats_new_ = true;
+      }
+      Set("kk_last_version", KK_VERSION);
+      SaveSettings(paths_.config_path);
+    }
   }
 
   ~Launcher() override {
@@ -313,6 +328,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
     DrawFooter(ImVec2(vp->Pos.x + margin, vp->Pos.y + h - footer), w - margin * 2, footer);
     HandleHotkeys();
     DrawFrameRateWarning();
+    DrawWhatsNew();
     DrawSharePoster();
     DrawUpdatePrompt();
     DrawPackPrompt();
@@ -505,6 +521,32 @@ class Launcher final : public rex::ui::ImGuiDialog {
     ImGui::TextUnformatted(kPageBlurbs[page_]);
     ImGui::PopStyleColor();
     ImGui::EndGroup();
+    if (!PageSettings(page_).empty()) {
+      // "Reset page" at the top right, with a confirmation.
+      const char* label = "Reset page";
+      const float bw = ImGui::CalcTextSize(label).x + 28 * s_;
+      const float below = ImGui::GetCursorPosY();
+      ImGui::SetCursorPos(ImVec2(size.x - pad - bw, pad * 0.8f + 4 * s_));
+      if (ImGui::Button(label, ImVec2(bw, 0))) ImGui::OpenPopup("Reset page?");
+      ImGui::SetCursorPosY(below);
+      if (BeginModal("Reset page?", 480)) {
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::Text("Put the %s settings back to their defaults?", kPageNames[page_]);
+        ImGui::PushStyleColor(ImGuiCol_Text, kDim);
+        ImGui::TextUnformatted("Only this page changes. Settings on the other pages stay as they are.");
+        ImGui::PopStyleColor();
+        ImGui::PopTextWrapPos();
+        ImGui::Dummy(ImVec2(0, 10 * s_));
+        const float half = (ImGui::GetContentRegionAvail().x - 8 * s_) / 2;
+        if (AccentButton("Reset", ImVec2(half, 0))) {
+          ResetPage(page_);
+          ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine(0, 8 * s_);
+        if (ImGui::Button("Cancel", ImVec2(half, 0))) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+      }
+    }
 
     ImGui::SetCursorPos(ImVec2(pad, ImGui::GetCursorPosY() + 8 * s_));
     ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
@@ -948,6 +990,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
     Row("Texture filtering", "Keeps the ground and distant textures sharp at steep angles.");
     ChoiceCvar("anisotropic_override",
                {{"Game", "-1"}, {"Off", "0"}, {"2\xC3\x97", "2"}, {"4\xC3\x97", "3"}, {"8\xC3\x97", "4"}, {"16\xC3\x97", "5"}});
+    Row("Motion blur", "The trail the game blends over fast moments, mostly in Kong's sequences and some transitions.");
+    ToggleCvar("kk_motion_blur", "Off", "On");
     Row("Shader preparing",
         "Each new effect is prepared the first time it appears, then saved for next time. Wait draws it "
         "correctly with a short pause, the first time only. Background avoids the pause, but objects can "
@@ -969,8 +1013,13 @@ class Launcher final : public rex::ui::ImGuiDialog {
       for (size_t i = 0; i < labels.size(); ++i) opts.push_back({labels[i].c_str(), std::to_string(kFrameRateChoices[i])});
       ChoiceCvar("kk_frame_rate", opts);
     }
+    Row("Field of view", "How wide the camera sees. 69\xC2\xB0 is the original for Jack; Kong, cutscene and other "
+                         "cameras widen by the same amount. Jack's gun keeps its usual size.");
+    SliderCvar("kk_fov", 69, 110, GetInt("kk_fov", 69) <= 69 ? "%d\xC2\xB0 (original)" : "%d\xC2\xB0");
     Row("Frame counter", "Shows the game's frame rate in the corner. F2 toggles it while playing.");
     ToggleCvar("kk_show_fps", "Hidden", "Shown");
+    Row("Startup logos", "The Ubisoft, Universal and WingNut movies before the title screen. Story movies still play.");
+    ToggleCvar("kk_skip_intros", "Play", "Skip");
     Row("Language", "The game's language, where the game includes it.");
     // The disc's languages that the Xbox 360 system language can select.
     ComboCvar("user_language", {{"English", "1"},
@@ -992,23 +1041,30 @@ class Launcher final : public rex::ui::ImGuiDialog {
                                       {"PlayStation 5", "ps5"},
                                       {"PlayStation 2", "ps2"},
                                       {"Keyboard (your keys)", "keyboard"}});
-      if (GetBool("mnk_mode")) {
-        Row("Mouse camera", "Move the camera (right stick) with the mouse.");
-        ToggleCvar("mnk_mouse");
-        Row("Mouse sensitivity", "");
+      Row("Controller sensitivity", "How fast the right stick turns the camera and moves your aim.");
+      SliderCvar("kk_camera_sensitivity", 25, 300, "%d%%");
+      {
+        // Mouse settings apply to Keyboard & mouse input; shown either way so they're easy to find.
+        const bool mnk = GetBool("mnk_mode");
+        Row("Mouse sensitivity", mnk ? "How fast the mouse turns the camera."
+                                     : "How fast the mouse turns the camera. Used when Input is Keyboard & mouse.");
+        ImGui::BeginDisabled(!mnk);
         float sens = 1.0f;
         try {
           sens = std::stof(Get("mnk_sensitivity"));
         } catch (...) {
         }
         if (ImGui::SliderFloat("##ms", &sens, 0.1f, 5.0f, "%.2f\xC3\x97")) Set("mnk_sensitivity", std::to_string(sens));
+        ImGui::EndDisabled();
+        Row("Mouse camera", "Move the camera (right stick) with the mouse.");
+        ImGui::BeginDisabled(!mnk);
+        ToggleCvar("mnk_mouse");
+        ImGui::EndDisabled();
       }
       Row("Camera horizontal", "Which way the camera turns when you push the right stick left or right.");
       ToggleCvar("kk_invert_rs_x", "Normal", "Inverted");
       Row("Camera vertical", "Which way the right stick moves the camera up and down.");
       ToggleCvar("kk_invert_rs_y", "Normal", "Inverted");
-      Row("Camera speed", "How fast the right stick moves the camera.");
-      SliderCvar("kk_camera_sensitivity", 25, 300, "%d%%");
       Row("Aim", "Hold: keep the left trigger held to raise the gun, as on the console. Toggle: press it once "
                  "to raise the gun and again to lower it. Pausing lowers it.");
       ToggleCvar("kk_toggle_aim", "Hold", "Toggle");
@@ -1294,6 +1350,72 @@ class Launcher final : public rex::ui::ImGuiDialog {
     Row("Version", "Port v" KK_VERSION "   \xC2\xB7   ReXGlue SDK 0.10.0   \xC2\xB7   title 555307D3, v0.0.0.1");
     ImGui::TextDisabled("github.com/TekRantGaming/king-kong-recompiled");
     EndRows();
+    // Every version's notes, newest first.
+    ImGui::Dummy(ImVec2(0, 10 * s_));
+    ImGui::PushFont(GetUiFonts().semibold, 20.0f);
+    ImGui::TextUnformatted("Changelog");
+    ImGui::PopFont();
+    ImGui::PushStyleColor(ImGuiCol_Text, kDim);
+    ImGui::TextUnformatted("What each version of the port added, newest first.");
+    ImGui::PopStyleColor();
+    ImGui::Dummy(ImVec2(0, 4 * s_));
+    ImGui::BeginChild("##changelog", ImVec2(0, 380 * s_), ImGuiChildFlags_Borders);
+    bool first = true;
+    for (const auto& e : Changelog()) {
+      if (!first) {
+        ImGui::Dummy(ImVec2(0, 6 * s_));
+        ImGui::Separator();
+      }
+      DrawChangelogEntry(e);
+      first = false;
+    }
+    ImGui::EndChild();
+  }
+
+  // The settings each page shows, for its "Reset page" button. "x_*" is a
+  // prefix, "@category" a cvar category.
+  static std::vector<std::string> PageSettings(Page page) {
+    switch (page) {
+      case kDisplay:
+        return {"fullscreen", "window_width", "window_height", "monitor",
+                "d3d12_allow_variable_refresh_rate_and_tearing", "present_letterbox"};
+      case kGraphics:
+        return {"kk_render_quality", "resolution_scale", "draw_resolution_scale_x", "draw_resolution_scale_y",
+                "swap_post_effect", "anisotropic_override", "kk_motion_blur", "async_shader_compilation"};
+      case kGameplay:
+        return {"kk_frame_rate", "kk_fov", "kk_show_fps", "kk_skip_intros", "user_language"};
+      case kControls:
+        return {"mnk_mode", "kk_button_prompts", "kk_camera_sensitivity", "mnk_sensitivity", "mnk_mouse",
+                "kk_invert_rs_x", "kk_invert_rs_y", "kk_invert_ls_x", "kk_invert_ls_y", "kk_toggle_aim",
+                "kk_deadzone", "kk_vibration", "kk_vibration_strength", "kk_map_*", "@Input/Keybinds/Controller"};
+      case kCheatsPage:
+        return {"kk_cheats", "kk_cheat_*"};
+      case kAchievements:
+        return {"kk_achievement_toasts", "kk_achievement_sound", "kk_achievement_sound_file",
+                "kk_achievement_volume"};
+      default:
+        return {};
+    }
+  }
+
+  // Puts one page's settings back to their defaults; the other pages keep theirs.
+  void ResetPage(Page page) {
+    const auto names = PageSettings(page);
+    auto on_page = [&](const rex::cvar::FlagEntry& e) {
+      for (const auto& n : names) {
+        if (n[0] == '@' ? e.category == n.substr(1)
+                        : n.back() == '*' ? e.name.rfind(n.substr(0, n.size() - 1), 0) == 0 : e.name == n)
+          return true;
+      }
+      return false;
+    };
+    for (auto& e : rex::cvar::GetRegistry()) {
+      if (e.type == rex::cvar::FlagType::Command || !on_page(e)) continue;
+      if (e.source == rex::cvar::Source::kCommandLine || e.source == rex::cvar::Source::kEnvironment) continue;
+      rex::cvar::ResetToDefault(e.name);
+    }
+    if (page == kDisplay && cb_.set_fullscreen) cb_.set_fullscreen(GetBool("fullscreen"));
+    status_ = std::string(kPageNames[page]) + " settings reset to defaults. Press Save to keep them.";
   }
 
   void ResetAllSettings() {
@@ -1481,6 +1603,97 @@ class Launcher final : public rex::ui::ImGuiDialog {
     ImGui::EndPopup();
   }
 
+  // ----------------------------------------------------------- changelog ---
+  // Draws a version's notes: "### Heading", "- bullet" (two spaces more per
+  // level), paragraphs. Inline **bold**, `code` and [text](link) show as text.
+  static std::string PlainText(std::string s) {
+    for (const char* mark : {"**", "`"})
+      for (size_t at; (at = s.find(mark)) != std::string::npos;) s.erase(at, std::strlen(mark));
+    for (size_t open; (open = s.find('[')) != std::string::npos;) {
+      const size_t mid = s.find("](", open), close = mid == std::string::npos ? mid : s.find(')', mid);
+      if (close == std::string::npos) break;
+      s = s.substr(0, open) + s.substr(open + 1, mid - open - 1) + s.substr(close + 1);
+    }
+    return s;
+  }
+
+  void DrawMarkdown(const std::string& body) {
+    std::stringstream in(body);
+    for (std::string line; std::getline(in, line);) {
+      if (line.empty()) {
+        ImGui::Dummy(ImVec2(0, 4 * s_));
+      } else if (line.rfind("### ", 0) == 0) {
+        ImGui::Dummy(ImVec2(0, 4 * s_));
+        ImGui::PushFont(GetUiFonts().semibold, 17.0f);
+        ImGui::TextUnformatted(PlainText(line.substr(4)).c_str());
+        ImGui::PopFont();
+      } else {
+        size_t indent = 0;
+        while (indent < line.size() && line[indent] == ' ') ++indent;
+        const bool bullet = line.compare(indent, 2, "- ") == 0;
+        const std::string text = PlainText(line.substr(indent + (bullet ? 2 : 0)));
+        const float x = (indent / 2) * 18 * s_;
+        if (x > 0) ImGui::Indent(x);
+        if (bullet) {
+          ImGui::Bullet();
+          ImGui::SameLine();
+        }
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextUnformatted(text.c_str());
+        ImGui::PopTextWrapPos();
+        if (x > 0) ImGui::Unindent(x);
+      }
+    }
+  }
+
+  void DrawChangelogEntry(const ChangelogEntry& e) {
+    ImGui::PushFont(GetUiFonts().semibold, 20.0f);
+    ImGui::Text("v%s", e.version.c_str());
+    ImGui::PopFont();
+    if (!e.date.empty()) {
+      ImGui::SameLine();
+      ImGui::PushStyleColor(ImGuiCol_Text, kDim);
+      ImGui::TextUnformatted(e.date.c_str());
+      ImGui::PopStyleColor();
+    }
+    DrawMarkdown(e.body);
+  }
+
+  // Shown once after an update: the notes of every version since the last one run.
+  void DrawWhatsNew() {
+    constexpr const char* kTitle = "What's new";
+    if (open_whats_new_ && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) {
+      ImGui::OpenPopup(kTitle);
+      open_whats_new_ = false;
+    }
+    if (!BeginModal(kTitle, 760)) return;
+    ImGui::PushFont(GetUiFonts().semibold, 24.0f);
+    ImGui::TextUnformatted("What's new in v" KK_VERSION);
+    ImGui::PopFont();
+    ImGui::Dummy(ImVec2(0, 6 * s_));
+    const float h = std::min(460 * s_, ImGui::GetMainViewport()->Size.y * 0.6f);
+    ImGui::BeginChild("##whats_new", ImVec2(0, h), ImGuiChildFlags_Borders);
+    bool any = false;
+    for (const auto& e : Changelog()) {
+      if (CompareVersions(e.version, KK_VERSION) > 0) continue;
+      if (!whats_new_from_.empty() && CompareVersions(e.version, whats_new_from_) <= 0) break;
+      if (any) ImGui::Separator();
+      DrawChangelogEntry(e);
+      any = true;
+      if (whats_new_from_.empty()) break;  // only this version when we don't know the last one
+    }
+    ImGui::EndChild();
+    ImGui::Dummy(ImVec2(0, 8 * s_));
+    const float half = (ImGui::GetContentRegionAvail().x - 8 * s_) / 2;
+    if (AccentButton("Close", ImVec2(half, 0))) ImGui::CloseCurrentPopup();
+    ImGui::SameLine(0, 8 * s_);
+    if (ImGui::Button("Every version", ImVec2(half, 0))) {
+      page_ = kAbout;
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+  }
+
   // --------------------------------------------------- shaders poster ---
   // Shown each time the launcher opens until "Don't show this message again".
   void DrawSharePoster() {
@@ -1617,6 +1830,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
   std::shared_ptr<UpdateStatus> update_;
   bool update_manual_ = false, update_prompted_ = false, installing_update_ = false, relaunched_ = false;
   bool open_poster_ = false, poster_dont_show_ = false;
+  bool open_whats_new_ = false;
+  std::string whats_new_from_;  // version the player had before this one
   rex::ui::ImmediateTexture* poster_ = nullptr;
   float poster_aspect_ = 645.0f / 900.0f;
   std::string share_message_;
