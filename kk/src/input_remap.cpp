@@ -8,8 +8,8 @@
 // Keyboard input arrives through the same path when ReXGlue's mnk_mode is on,
 // so remaps and inversion apply to it too.
 //
-// Camera sensitivity is applied later, to the stick vector the game asks for
-// (sub_8272C610), so it is not capped at a full push of the stick.
+// Camera sensitivity is applied to the camera's turn itself (below), so it is
+// not capped at a full push of the stick.
 
 #include <algorithm>
 #include <bit>
@@ -167,21 +167,31 @@ REX_HOOK_RAW(sub_821074F8) {
   __imp__sub_821074F8(ctx, base);
 }
 
-// sub_8272C610(out, stick) is how the game reads a stick: out = {x, y, 0} as
-// floats, about -1 to 1, the strongest of the pads, after the game's own
-// inversion options; stick 1 is the right stick, which turns the camera and
-// moves the aim. Controller sensitivity scales that vector here, after the
-// stick's full range, so a full push turns faster or slower too and both axes
-// change together. With keyboard & mouse the mouse has its own sensitivity.
-REX_EXTERN(__imp__sub_8272C610);
-REX_HOOK_RAW(sub_8272C610) {
-  const uint32_t out = ctx.r3.u32, stick = ctx.r4.u32;
-  __imp__sub_8272C610(ctx, base);
-  if (stick != 1 || !out || rex::cvar::GetFlagByName("mnk_mode") == "true") return;
-  const float gain = std::clamp(REXCVAR_GET(kk_camera_sensitivity), 10, 400) / 100.0f;
-  if (gain == 1.0f) return;
-  for (uint32_t offset : {0u, 4u}) {
-    uint8_t* v = base + out + offset;
-    StoreBE<uint32_t>(v, std::bit_cast<uint32_t>(std::bit_cast<float>(LoadBE<uint32_t>(v)) * gain));
-  }
+// Controller sensitivity. The camera manager (CM_Cam, sub_8246F180) reads the
+// right stick, limits it to -1..1, and turns the camera each frame by
+//   yaw:   (x past the deadzone)^2 * a ramp that builds while held * frame time * G[19880]
+//   pitch: (y past the deadzone)^3 * a speed * frame time * G[19884]
+// through sub_82711950 (yaw) and sub_82712300 (pitch). Both are used all over
+// the game, so only the calls from CM_Cam (return addresses below) are
+// scaled. That scales the turn at every push, a full push included, so 200%
+// turns twice as fast. Keyboard & mouse has its own mouse sensitivity.
+namespace {
+constexpr uint32_t kCamYawReturn = 0x82471360, kCamPitchReturn = 0x82471430;
+
+double CameraGain() {
+  if (rex::cvar::GetFlagByName("mnk_mode") == "true") return 1.0;
+  return std::clamp(REXCVAR_GET(kk_camera_sensitivity), 10, 400) / 100.0;
+}
+}  // namespace
+
+REX_EXTERN(__imp__sub_82711950);
+REX_HOOK_RAW(sub_82711950) {
+  if (uint32_t(ctx.lr) == kCamYawReturn) ctx.f1.f64 *= CameraGain();
+  __imp__sub_82711950(ctx, base);
+}
+
+REX_EXTERN(__imp__sub_82712300);
+REX_HOOK_RAW(sub_82712300) {
+  if (uint32_t(ctx.lr) == kCamPitchReturn) ctx.f1.f64 *= CameraGain();
+  __imp__sub_82712300(ctx, base);
 }
