@@ -19,6 +19,12 @@
 // toggling, once the start menu page (IntMIG_Page_StartMain, sub_824BB670)
 // runs (on each visit): by then the profile is loaded, and it is where the
 // codes are entered.
+//
+// Starting a chapter (or a checkpoint) empties G's weapon and ammo, then gives
+// the chapter's own loadout (V-Rex: the machine gun with 30 rounds), which
+// would undo the weapon and ammo cheats. So the port watches for that from the
+// game's input poll (sub_8272C320, every frame) and gives them again once the
+// loadout is in.
 
 #include "cheats.h"
 
@@ -70,16 +76,39 @@ void GiveWeapon(uint8_t* base, uint32_t g, int n, uint32_t ammo) {
 
 bool g_applied = false;
 
+std::string State(const uint8_t* base, uint32_t g, uint32_t p) {
+  return fmt::format("game flags {:08X}, weapon {}, ammo {}/{}/{}/{}; profile flags {:08X}", Load32(base, g + kFlags),
+                     Load32(base, g + kWeapon), Load32(base, g + kAmmo[0]), Load32(base, g + kAmmo[1]),
+                     Load32(base, g + kAmmo[2]), Load32(base, g + kAmmo[3]), Load32(base, p + kFlags));
+}
+
+// The weapon and ammo cheats. Returns how many are switched on.
+int ApplyLoadoutCheats(uint8_t* base, uint32_t g) {
+  int count = 0;
+  // Weapons: the last one switched on is the one Jack holds, like typing the codes in this order.
+  static constexpr struct {
+    const char* id;
+    int weapon;
+    uint32_t ammo;
+  } kWeapons[] = {{"revolver", 1, 80}, {"machine_gun", 2, 500}, {"shotgun", 3, 50}, {"sniper", 4, 50}};
+  for (const auto& w : kWeapons) {
+    if (!Chosen(w.id)) continue;
+    GiveWeapon(base, g, w.weapon, w.ammo);
+    ++count;
+  }
+  if (Chosen("ammo")) {
+    for (uint32_t a : kAmmo) Store32(base, g + a, 999);
+    SetFlags(base, g, kCheatsUsed);
+    ++count;
+  }
+  return count;
+}
+
 void ApplyCheats(uint8_t* base) {
   const uint32_t g = Load32(base, kGamePtr), p = Load32(base, kProfilePtr);
   if (!g || !p) return;  // not set up yet: try again next frame
   g_applied = true;
-  auto state = [&] {
-    return fmt::format("game flags {:08X}, weapon {}, ammo {}/{}/{}/{}; profile flags {:08X}", Load32(base, g + kFlags),
-                       Load32(base, g + kWeapon), Load32(base, g + kAmmo[0]), Load32(base, g + kAmmo[1]),
-                       Load32(base, g + kAmmo[2]), Load32(base, g + kAmmo[3]), Load32(base, p + kFlags));
-  };
-  const std::string before = state();
+  const std::string before = State(base, g, p);
   int count = 0;
   auto on = [&](const char* id) {
     const bool chosen = Chosen(id);
@@ -91,16 +120,35 @@ void ApplyCheats(uint8_t* base) {
   if (on("healing")) SetFlags(base, g, kCheatsUsed | 0x200);
   if (on("one_hit")) SetFlags(base, g, kCheatsUsed | 0x2);
   if (on("spears")) SetFlags(base, g, kCheatsUsed | 0x2000);
-  // Weapons: the last one switched on is the one Jack holds, like typing the codes in this order.
-  if (on("revolver")) GiveWeapon(base, g, 1, 80);
-  if (on("machine_gun")) GiveWeapon(base, g, 2, 500);
-  if (on("shotgun")) GiveWeapon(base, g, 3, 50);
-  if (on("sniper")) GiveWeapon(base, g, 4, 50);
-  if (on("ammo")) {
-    for (uint32_t a : kAmmo) Store32(base, g + a, 999);
-    SetFlags(base, g, kCheatsUsed);
+  count += ApplyLoadoutCheats(base, g);
+  REXLOG_INFO("KK: cheats on ({} chosen). Before: {}. After: {}", count, before, State(base, g, p));
+}
+
+// After a chapter or checkpoint starts: G's weapon and ammo go to 0, then the
+// chapter's loadout arrives. Give the weapon and ammo cheats again once the
+// loadout has been in place for a second (so all of it has arrived).
+bool g_loadout_cleared = false;
+std::chrono::steady_clock::time_point g_loadout_seen{};
+
+void WatchLoadout(uint8_t* base) {
+  const uint32_t g = Load32(base, kGamePtr), p = Load32(base, kProfilePtr);
+  if (!g || !p) return;
+  bool empty = Load32(base, g + kWeapon) == 0;
+  for (uint32_t a : kAmmo) empty = empty && Load32(base, g + a) == 0;
+  const auto now = std::chrono::steady_clock::now();
+  if (empty) {
+    g_loadout_cleared = true;
+    g_loadout_seen = {};
+    return;
   }
-  REXLOG_INFO("KK: cheats on ({} chosen). Before: {}. After: {}", count, before, state());
+  if (!g_loadout_cleared) return;
+  if (g_loadout_seen == std::chrono::steady_clock::time_point{}) g_loadout_seen = now;
+  if (now - g_loadout_seen < std::chrono::seconds(1)) return;
+  g_loadout_cleared = false;
+  const std::string before = State(base, g, p);
+  if (ApplyLoadoutCheats(base, g) > 0)
+    REXLOG_INFO("KK: weapon and ammo cheats given again for the new loadout. Before: {}. After: {}", before,
+                State(base, g, p));
 }
 
 }  // namespace
@@ -117,4 +165,11 @@ REX_HOOK_RAW(sub_824BB670) {
   last = now;
   if (!kk::g_applied && REXCVAR_GET(kk_cheats)) kk::ApplyCheats(base);
   __imp__sub_824BB670(ctx, base);
+}
+
+// The game's input poll, every frame: watch for a chapter's new loadout.
+REX_EXTERN(__imp__sub_8272C320);
+REX_HOOK_RAW(sub_8272C320) {
+  __imp__sub_8272C320(ctx, base);
+  if (REXCVAR_GET(kk_cheats)) kk::WatchLoadout(base);
 }
