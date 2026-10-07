@@ -18,7 +18,7 @@ REXCVAR_DEFINE_STRING(kk_last_version, "", "KK",
 REXCVAR_DEFINE_BOOL(kk_share_poster, true, "KK",
                     "Show the \"share your shaders\" poster when the launcher opens (until \"Don't show this again\")");
 REXCVAR_DEFINE_INT32(kk_frame_rate, 30, "KK/Video",
-                     "Frame-rate cap: 30, 60, 120, 144, 165, 240, or 0 for unlimited");
+                     "Frame-rate cap: 30, 60, 90, 120, 144, 165, 240, or 0 for unlimited");
 REXCVAR_DEFINE_STRING(kk_render_quality, "native", "KK/Video",
                       "Render resolution relative to the output: native, quality, balanced, performance, "
                       "ultra_performance, supersample, or custom (use resolution_scale)");

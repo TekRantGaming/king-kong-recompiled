@@ -1013,11 +1013,18 @@ class Launcher final : public rex::ui::ImGuiDialog {
         "30 matches the Xbox 360 and keeps every animation right. Higher is smoother, but some character "
         "animations are not right above 30 yet.");
     {
-      std::vector<std::string> labels;
-      for (int f : kFrameRateChoices) labels.push_back(f <= 0 ? "Unlimited" : std::to_string(f));
+      // A dropdown: there are too many choices for a row of buttons in a small window.
+      std::vector<std::pair<std::string, std::string>> choices;  // label, value
+      for (int f : kFrameRateChoices)
+        choices.emplace_back(f <= 0 ? "Unlimited" : f == 30 ? "30 FPS (like the Xbox 360)" : std::to_string(f) + " FPS",
+                             std::to_string(f));
+      const std::string cur = Get("kk_frame_rate");
+      bool listed = false;
+      for (const auto& c : choices) listed = listed || c.second == cur;
+      if (!listed && !cur.empty()) choices.emplace_back(cur + " FPS (from the settings file)", cur);
       std::vector<Option> opts;
-      for (size_t i = 0; i < labels.size(); ++i) opts.push_back({labels[i].c_str(), std::to_string(kFrameRateChoices[i])});
-      ChoiceCvar("kk_frame_rate", opts);
+      for (const auto& c : choices) opts.push_back({c.first.c_str(), c.second});
+      ComboCvar("kk_frame_rate", opts);
     }
     Row("Field of view", "How wide the camera sees. 69\xC2\xB0 is the original for Jack; Kong, cutscene and other "
                          "cameras widen by the same amount. Jack's gun keeps its usual size.");
