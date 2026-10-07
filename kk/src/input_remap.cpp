@@ -170,7 +170,8 @@ REX_HOOK_RAW(sub_821074F8) {
   __imp__sub_821074F8(ctx, base);
 }
 
-// Even camera response. CM_Cam takes the right stick axis by axis: each axis
+// Camera response: Modern (kk_camera_modern, the default) or Original.
+// CM_Cam takes the right stick axis by axis: each axis
 // loses a 15% deadzone, then yaw follows its square and pitch its cube (and a
 // held, nearly full sideways push builds up extra yaw speed). So a diagonal is
 // clipped on both axes and the two axes answer to different curves: half way
@@ -179,6 +180,7 @@ REX_HOOK_RAW(sub_821074F8) {
 // (its sub_8272C610 call) is reshaped so that, after the game's own steps,
 // both axes follow the same curve of the push's length (its square) in the
 // push's direction. A full push straight across or straight up is unchanged.
+// Original leaves the stick as the game reads it.
 namespace {
 constexpr uint32_t kCamStickReturn = 0x824703A8;  // CM_Cam's right-stick read
 constexpr float kCamDeadzone = 0.15f;             // CM_Cam's own, per axis
@@ -204,7 +206,7 @@ REX_EXTERN(__imp__sub_8272C610);
 REX_HOOK_RAW(sub_8272C610) {
   const uint32_t out = ctx.r3.u32, stick = ctx.r4.u32, from = uint32_t(ctx.lr);
   __imp__sub_8272C610(ctx, base);
-  if (stick == 1 && out && from == kCamStickReturn) EvenCameraStick(base, out);
+  if (stick == 1 && out && from == kCamStickReturn && REXCVAR_GET(kk_camera_modern)) EvenCameraStick(base, out);
 }
 
 // Controller sensitivity. The camera manager (CM_Cam, sub_8246F180) reads the

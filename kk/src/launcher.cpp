@@ -1049,6 +1049,10 @@ class Launcher final : public rex::ui::ImGuiDialog {
                                       {"Keyboard (your keys)", "keyboard"}});
       Row("Controller sensitivity", "How fast the right stick turns the camera and moves your aim.");
       SliderCvar("kk_camera_sensitivity", 25, 300, "%d%%");
+      Row("Camera response",
+          "Modern turns the camera the same way in every direction, so circles and diagonals feel even. Original is "
+          "the Xbox 360's own: small pushes up and down turn much more slowly than small pushes sideways.");
+      ToggleCvar("kk_camera_modern", "Original", "Modern");
       {
         // Mouse settings apply to Keyboard & mouse input; shown either way so they're easy to find.
         const bool mnk = GetBool("mnk_mode");
@@ -1391,7 +1395,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
       case kGameplay:
         return {"kk_frame_rate", "kk_fov", "kk_show_fps", "kk_skip_intros", "user_language"};
       case kControls:
-        return {"mnk_mode", "kk_button_prompts", "kk_camera_sensitivity", "mnk_sensitivity", "mnk_mouse",
+        return {"mnk_mode", "kk_button_prompts", "kk_camera_sensitivity", "kk_camera_modern", "mnk_sensitivity", "mnk_mouse",
                 "kk_invert_rs_x", "kk_invert_rs_y", "kk_invert_ls_x", "kk_invert_ls_y", "kk_toggle_aim",
                 "kk_deadzone", "kk_vibration", "kk_vibration_strength", "kk_map_*", "@Input/Keybinds/Controller"};
       case kCheatsPage:
@@ -1714,6 +1718,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
     static int shown = -1;
     const int step = int(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count() / each);
     if (step == shown) return;
+    if (shown < 0) open_whats_new_ = false;  // no start-up pop-up over the pages
     shown = step;
     static const std::pair<Page, const char*> kSteps[] = {
         {kPlay, "play"},         {kDisplay, "display"}, {kGraphics, "graphics"},         {kGameplay, "gameplay"},

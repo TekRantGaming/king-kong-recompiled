@@ -28,6 +28,8 @@ REXCVAR_DEFINE_STRING(kk_button_prompts, "xbox360", "KK/Controls",
 REXCVAR_DEFINE_BOOL(kk_show_fps, false, "KK/Video", "Show a frame-rate counter (toggle in game with F2)");
 REXCVAR_DEFINE_INT32(kk_deadzone, 0, "KK/Controls", "Extra stick deadzone in percent (0-50)");
 REXCVAR_DEFINE_INT32(kk_camera_sensitivity, 100, "KK/Controls", "Camera (right stick) sensitivity in percent");
+REXCVAR_DEFINE_BOOL(kk_camera_modern, true, "KK/Controls",
+                    "Camera response: true = the same in every direction, false = the Xbox 360's own");
 REXCVAR_DEFINE_BOOL(kk_achievement_toasts, true, "KK/Achievements", "Show achievement notifications");
 REXCVAR_DEFINE_BOOL(kk_achievement_sound, true, "KK/Achievements", "Play the achievement sound");
 REXCVAR_DEFINE_STRING(kk_achievement_sound_file, "", "KK/Achievements",

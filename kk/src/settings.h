@@ -24,6 +24,7 @@ REXCVAR_DECLARE(bool, kk_share_poster);
 REXCVAR_DECLARE(bool, kk_show_fps);
 REXCVAR_DECLARE(int32_t, kk_deadzone);
 REXCVAR_DECLARE(int32_t, kk_camera_sensitivity);
+REXCVAR_DECLARE(bool, kk_camera_modern);
 REXCVAR_DECLARE(bool, kk_achievement_toasts);
 REXCVAR_DECLARE(bool, kk_achievement_sound);
 REXCVAR_DECLARE(std::string, kk_achievement_sound_file);
