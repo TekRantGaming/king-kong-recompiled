@@ -3,6 +3,14 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v1.7.1 (7 October 2026)
+
+### What's new
+- **The About page is always reachable.** Since the Cheats page was added in v1.6.0, the launcher's last page, **About**, was cut off the bottom of the page list when the launcher window was small (for example 1280 x 720), with no way to scroll to it. The list now shrinks to fit, so every page is always there.
+
+### Full changelog
+- Launcher: the page list's entries get shorter when the window doesn't have room for all of them at full height.
+
 ## v1.7.0 (7 October 2026)
 
 ### What's new

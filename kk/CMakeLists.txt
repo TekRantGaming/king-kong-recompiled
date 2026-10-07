@@ -52,6 +52,9 @@ else()
 endif()
 
 rexglue_setup_target(king_kong GPU_PLUGINS xenos)
+if(KK_DEV_TOOLS)
+    target_compile_definitions(king_kong PRIVATE KK_DEV_TOOLS=1)
+endif()
 
 # Developer-only call profiler (preset kk-prof, never in release builds): every
 # recompiled game function counts its calls (src/dev_prof.cpp).
@@ -85,7 +88,7 @@ endif()
 # The port's version: shown in the launcher and compared with GitHub releases by the updater.
 # (-DKK_VERSION=x.y.z overrides it, to test the updater with an "older" build.)
 if(NOT DEFINED KK_VERSION)
-    set(KK_VERSION "1.7.0")
+    set(KK_VERSION "1.7.1")
 endif()
 target_compile_definitions(king_kong PRIVATE KK_VERSION="${KK_VERSION}" KK_VERSION_W=L"${KK_VERSION}")
 

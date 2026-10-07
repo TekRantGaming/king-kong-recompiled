@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -301,6 +302,9 @@ class Launcher final : public rex::ui::ImGuiDialog {
     // Testing aid: KK_AUTOPLAY=1 presses Play after a couple of seconds.
     static const bool autoplay = std::getenv("KK_AUTOPLAY") != nullptr;
     if (autoplay && files_ok_ && ++autoplay_frames_ == 120) StartGame();
+#if defined(KK_DEV_TOOLS)
+    DevTour();
+#endif
     s_ = ImGui::GetFontSize() / 18.0f;
     ApplyTheme(s_);
     const ImGuiViewport* vp = ImGui::GetMainViewport();
@@ -482,7 +486,9 @@ class Launcher final : public rex::ui::ImGuiDialog {
   void DrawSidebar(ImVec2 size) {
     ImGui::BeginChild("##sidebar", size, ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar);
     const float pad = 10 * s_;
-    const float item_h = 46 * s_;
+    // Shrink the entries when the window is short, so every page (About is last) stays reachable.
+    const float gap = 2 * s_ + ImGui::GetStyle().ItemSpacing.y * 2;
+    const float item_h = std::clamp((size.y - pad * 2) / kPageCount - gap, 30 * s_, 46 * s_);
     ImGui::SetCursorPos(ImVec2(pad, pad));
     ImGui::PushFont(GetUiFonts().semibold, 0.0f);
     for (int i = 0; i < kPageCount; ++i) {
@@ -1693,6 +1699,39 @@ class Launcher final : public rex::ui::ImGuiDialog {
     }
     ImGui::EndPopup();
   }
+
+#if defined(KK_DEV_TOOLS)
+  // Developer-only (README screenshots): KK_DEV_LAUNCHER_TOUR=<seconds> shows
+  // each page in turn for that long, then the What's new pop-up, logging
+  // "KK dev: tour <name>" as each appears (tools/launcher_shots.ps1 captures them).
+  void DevTour() {
+    static const double each = [] {
+      const char* v = std::getenv("KK_DEV_LAUNCHER_TOUR");
+      return v && *v ? std::atof(v) : 0.0;
+    }();
+    if (each <= 0) return;
+    static const auto start = std::chrono::steady_clock::now();
+    static int shown = -1;
+    const int step = int(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count() / each);
+    if (step == shown) return;
+    shown = step;
+    static const std::pair<Page, const char*> kSteps[] = {
+        {kPlay, "play"},         {kDisplay, "display"}, {kGraphics, "graphics"},         {kGameplay, "gameplay"},
+        {kControls, "controls"}, {kCheatsPage, "cheats"}, {kAchievements, "achievements"}, {kAbout, "about"}};
+    constexpr int kCount = int(sizeof(kSteps) / sizeof(kSteps[0]));
+    if (step < kCount) {
+      page_ = kSteps[step].first;
+      REXLOG_INFO("KK dev: tour {}", kSteps[step].second);
+    } else if (step == kCount) {
+      page_ = kPlay;
+      whats_new_from_ = "";  // this version's notes, as after an update from 1.6.0
+      open_whats_new_ = true;
+      REXLOG_INFO("KK dev: tour whats_new");
+    } else if (step == kCount + 1) {
+      REXLOG_INFO("KK dev: tour done");
+    }
+  }
+#endif
 
   // --------------------------------------------------- shaders poster ---
   // Shown each time the launcher opens until "Don't show this message again".
