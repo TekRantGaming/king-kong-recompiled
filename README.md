@@ -171,6 +171,12 @@ Everything is set up before the game starts. The launcher uses art from your own
 </tr>
 </table>
 
+### Cheats
+The game's own cheats, as switches on the launcher's **Cheats** page instead of codes to type each time you play:
+**all chapters**, **all bonus content**, **fast healing**, **one-hit kills**, **999 bullets**, **unlimited spears**, and the
+**revolver**, **machine gun**, **shotgun** and **sniper rifle**. They switch on as soon as the game reaches its main
+menu, exactly as if you had typed their codes.
+
 ## In game
 
 <div align="center">
@@ -222,7 +228,7 @@ Everything is set up before the game starts. The launcher uses art from your own
 
 ### The shader pack
 
-The game prepares each new effect (a shader) the first time it appears, which can cause a short pause. The shader pack is the list of effects collected by a test build that plays every chapter on its own, published on the [shader-packs release](https://github.com/TekRantGaming/king-kong-recompiled/releases/tag/shader-packs). Click **Download shader pack** on the launcher's Play page and it is added to your shader cache (`Documents\king_kong\cache`), keeping anything your game has already prepared. Each time the game starts it prepares everything in the cache, so you get no pauses even on a first play-through. The pack is a separate, optional download, and the launcher only contacts GitHub when you click.
+The game prepares each new effect (a shader) the first time it appears, which can cause a short pause. The shader pack is the list of effects collected by a test build that plays every chapter on its own, published on the [shader-packs release](https://github.com/TekRantGaming/king-kong-recompiled/releases/tag/shader-packs). Click **Download shader pack** on the launcher's Play page and it is added to your shader cache (`Documents\king_kong\cache`), keeping anything your game has already prepared. Each time the game starts it prepares everything in the cache, so you get no pauses even on a first play-through. New packs come out as more of the game is covered: when one does, the launcher offers it when it opens (see **Updates**).
 
 ### Share my shaders
 
@@ -235,9 +241,10 @@ settings. Shaders that at least two players have sent go into the next shader pa
 
 ### Updates
 
-When the launcher opens it asks GitHub whether a newer version of the port is out. If there is one, it offers to
-update: **Update now** downloads it, replaces the port's own files and restarts the launcher. Your installed game, saves
-and settings stay as they are. Turn the check off on the **About** page.
+When the launcher opens it asks GitHub whether a newer version of the port, or a newer shader pack, is out. They come
+out separately and each one is offered on its own. For the port, **Update now** downloads it, replaces the port's own
+files and restarts the launcher; your installed game, saves and settings stay as they are. For the shader pack,
+**Download now** adds it to the shaders your game has already prepared. Turn the checks off on the **About** page.
 
 ### Reporting a problem
 
