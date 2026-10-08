@@ -1,7 +1,7 @@
 From 68255a13422f711555916054bc786afb07c74b4f Mon Sep 17 00:00:00 2001
 From: TekRantGaming <craigferels896@gmail.com>
 Date: Thu, 8 Oct 2026 16:09:14 +0100
-Subject: [PATCH 1/2] D3D12: REX_DEV_FRAME_LOG testing aid (log each draw and
+Subject: [PATCH 1/3] D3D12: REX_DEV_FRAME_LOG testing aid (log each draw and
  resolve of a frame)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
@@ -154,7 +154,7 @@ index 439954c..c8fba5e 100644
 From 3ee522ddc7377f57f0965566cc3285dc3d883d8c Mon Sep 17 00:00:00 2001
 From: TekRantGaming <craigferels896@gmail.com>
 Date: Thu, 8 Oct 2026 16:56:18 +0100
-Subject: [PATCH 2/2] D3D12: ambient occlusion prototype (REX_DEV_AO, ao_mode,
+Subject: [PATCH 2/3] D3D12: ambient occlusion prototype (REX_DEV_AO, ao_mode,
  ao_strength)
 
 Computes AO from the scene depth the title copies out of the EDRAM and applies it to the scene color in the EDRAM buffer before each full-screen color copy in that frame. Prototype: shader loaded from a file and compiled at startup.
@@ -491,6 +491,479 @@ index dd321a5..aa3efa6 100644
  
        // Make sure there is memory to write to.
        bool copy_dest_committed;
+-- 
+2.55.0.windows.5
+
+
+From db79d952f2aaca0cad607814997872c302d96c48 Mon Sep 17 00:00:00 2001
+From: TekRantGaming <craigferels896@gmail.com>
+Date: Thu, 8 Oct 2026 17:50:46 +0100
+Subject: [PATCH 3/3] D3D12: AO prototype at half resolution, GPU timing, fixes
+
+Works the AO out once a frame at half resolution (depth, AO, separable blur, edge-aware upsample) and only multiplies it in at each scene copy. Compact formats where UAV typed loads allow. Adds a UAV barrier before reading the dumped depth (uncapped frame rates read it too early), applies only to copies to the frame's first scene destination (not the final image), and dumps the depth once a frame. REX_DEV_AO_STATS logs per-pass GPU time; REX_DEV_AO_TOGGLE and REX_DEV_AO_TRACE for testing.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../rex/graphics/d3d12/render_target_cache.h  |  43 ++-
+ src/graphics/d3d12/render_target_cache.cpp    | 281 ++++++++++++++----
+ 2 files changed, 269 insertions(+), 55 deletions(-)
+
+diff --git a/include/rex/graphics/d3d12/render_target_cache.h b/include/rex/graphics/d3d12/render_target_cache.h
+index bdd704a..cdaede9 100644
+--- a/include/rex/graphics/d3d12/render_target_cache.h
++++ b/include/rex/graphics/d3d12/render_target_cache.h
+@@ -200,6 +200,9 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
+   bool ao_available_ = false;
+   bool ao_depth_copied_ = false;
+   uint64_t ao_depth_frame_ = 0;
++  // Destination of the frame's first scene copy: only copies to it get the AO
++  // (not the final copy of the post-processed image, for instance).
++  uint32_t ao_scene_dest_ = 0;
+   bool ao_applied_this_frame_ = false;
+   uint64_t ao_computed_frame_ = UINT64_MAX;
+   uint32_t ao_depth_base_tiles_ = 0;
+@@ -207,10 +210,42 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
+   float ao_params_[8] = {};
+   double ao_cycle_seconds_ = 0.0;
+   ID3D12RootSignature* ao_root_signature_ = nullptr;
+-  ID3D12PipelineState* ao_pipeline_compute_ = nullptr;
+-  ID3D12PipelineState* ao_pipeline_apply_ = nullptr;
+-  ID3D12Resource* ao_buffer_ = nullptr;
+-  uint32_t ao_buffer_size_ = 0;
++  enum AoPass : uint32_t {
++    kAoPrepareDepth,
++    kAoComputeAO,
++    kAoBlurH,
++    kAoBlurV,
++    kAoUpsample,
++    kAoApply,
++    kAoPassCount,
++  };
++  ID3D12PipelineState* ao_pipelines_[kAoPassCount] = {};
++  // Half-resolution linear depth (R32_FLOAT), two half-resolution AO images
++  // (blurred from one to the other and back) and the full-resolution AO
++  // (R8_UNORM; R32_FLOAT if the GPU can't load it from UAVs).
++  ID3D12Resource* ao_textures_[4] = {};
++  DXGI_FORMAT ao_formats_[4] = {};
++  uint32_t ao_width_ = 0, ao_height_ = 0;
++  // Testing (REX_DEV_AO_STATS=1): GPU time of the scene copies and the AO
++  // passes from timestamp queries, logged every 2 seconds. Categories: 0 the
++  // scene copies (dump and copy, or the direct copy), 1 computing the AO, 2
++  // applying it.
++  void AoTimestamp(uint32_t category, bool end);
++  void AoReadTimestamps();
++  bool ao_stats_ = false;
++  double ao_toggle_seconds_ = 0.0;
++  ID3D12QueryHeap* ao_query_heap_ = nullptr;
++  ID3D12Resource* ao_query_readback_ = nullptr;
++  uint64_t ao_timestamp_frequency_ = 0;
++  static constexpr uint32_t kAoQuerySlots = 4, kAoQueriesPerSlot = 32;
++  uint64_t ao_query_frame_[kAoQuerySlots] = {};
++  uint32_t ao_query_count_[kAoQuerySlots] = {};
++  bool ao_query_ao_on_[kAoQuerySlots] = {};
++  uint8_t ao_query_category_[kAoQuerySlots][kAoQueriesPerSlot] = {};
++  static constexpr uint32_t kAoStatCategories = 8;
++  double ao_stat_ms_[2][kAoStatCategories] = {};
++  uint32_t ao_stat_frames_[2] = {};
++  double ao_stat_last_ = 0.0;
+ 
+   // For host render targets.
+ 
+diff --git a/src/graphics/d3d12/render_target_cache.cpp b/src/graphics/d3d12/render_target_cache.cpp
+index aa3efa6..b3447e2 100644
+--- a/src/graphics/d3d12/render_target_cache.cpp
++++ b/src/graphics/d3d12/render_target_cache.cpp
+@@ -964,9 +964,14 @@ bool D3D12RenderTargetCache::Initialize() {
+ }
+ 
+ void D3D12RenderTargetCache::Shutdown(bool from_destructor) {
+-  ui::d3d12::util::ReleaseAndNull(ao_buffer_);
+-  ui::d3d12::util::ReleaseAndNull(ao_pipeline_apply_);
+-  ui::d3d12::util::ReleaseAndNull(ao_pipeline_compute_);
++  for (ID3D12Resource*& texture : ao_textures_) {
++    ui::d3d12::util::ReleaseAndNull(texture);
++  }
++  ui::d3d12::util::ReleaseAndNull(ao_query_readback_);
++  ui::d3d12::util::ReleaseAndNull(ao_query_heap_);
++  for (ID3D12PipelineState*& pipeline : ao_pipelines_) {
++    ui::d3d12::util::ReleaseAndNull(pipeline);
++  }
+   ui::d3d12::util::ReleaseAndNull(ao_root_signature_);
+   ao_init_tried_ = false;
+   ao_available_ = false;
+@@ -1206,6 +1211,27 @@ bool D3D12RenderTargetCache::InitAmbientOcclusion() {
+   if (const char* cycle = std::getenv("REX_DEV_AO_CYCLE"); cycle && *cycle) {
+     ao_cycle_seconds_ = std::atof(cycle);
+   }
++  // REX_DEV_AO_TOGGLE=<seconds>: switch ao_mode between 0 and 1 to compare.
++  if (const char* toggle = std::getenv("REX_DEV_AO_TOGGLE"); toggle && *toggle) {
++    ao_toggle_seconds_ = std::atof(toggle);
++  }
++  if (const char* stats = std::getenv("REX_DEV_AO_STATS"); stats && *stats && *stats != '0') {
++    ID3D12Device* stats_device = command_processor_.GetD3D12Provider().GetDevice();
++    D3D12_QUERY_HEAP_DESC query_heap_desc = {};
++    query_heap_desc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
++    query_heap_desc.Count = kAoQuerySlots * kAoQueriesPerSlot;
++    D3D12_RESOURCE_DESC readback_desc;
++    ui::d3d12::util::FillBufferResourceDesc(readback_desc, query_heap_desc.Count * sizeof(uint64_t),
++                                            D3D12_RESOURCE_FLAG_NONE);
++    if (SUCCEEDED(stats_device->CreateQueryHeap(&query_heap_desc, IID_PPV_ARGS(&ao_query_heap_))) &&
++        SUCCEEDED(stats_device->CreateCommittedResource(
++            &ui::d3d12::util::kHeapPropertiesReadback, D3D12_HEAP_FLAG_NONE, &readback_desc,
++            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&ao_query_readback_))) &&
++        SUCCEEDED(command_processor_.GetD3D12Provider().GetDirectQueue()->GetTimestampFrequency(
++            &ao_timestamp_frequency_))) {
++      ao_stats_ = true;
++    }
++  }
+   HMODULE compiler = LoadLibraryW(L"D3DCompiler_47.dll");
+   auto compile = compiler ? reinterpret_cast<pD3DCompile>(GetProcAddress(compiler, "D3DCompile"))
+                           : nullptr;
+@@ -1216,14 +1242,14 @@ bool D3D12RenderTargetCache::InitAmbientOcclusion() {
+   const ui::d3d12::D3D12Provider& provider = command_processor_.GetD3D12Provider();
+   ID3D12Device* device = provider.GetDevice();
+ 
+-  D3D12_ROOT_PARAMETER root_parameters[3];
++  D3D12_ROOT_PARAMETER root_parameters[6];
+   root_parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+   root_parameters[0].Constants.ShaderRegister = 0;
+   root_parameters[0].Constants.RegisterSpace = 0;
+   root_parameters[0].Constants.Num32BitValues = 16;
+   root_parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+-  D3D12_DESCRIPTOR_RANGE ranges[2];
+-  for (uint32_t i = 0; i < 2; ++i) {
++  D3D12_DESCRIPTOR_RANGE ranges[5];
++  for (uint32_t i = 0; i < 5; ++i) {
+     ranges[i].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+     ranges[i].NumDescriptors = 1;
+     ranges[i].BaseShaderRegister = i;
+@@ -1259,11 +1285,14 @@ bool D3D12RenderTargetCache::InitAmbientOcclusion() {
+     code->Release();
+     return pipeline;
+   };
+-  ao_pipeline_compute_ = build("ComputeAO");
+-  ao_pipeline_apply_ = build("ApplyAO");
+-  if (!ao_pipeline_compute_ || !ao_pipeline_apply_) {
+-    REXGPU_WARN("AO: failed to build the pipelines");
+-    return false;
++  static const char* const kEntries[kAoPassCount] = {"PrepareDepth", "ComputeAO", "BlurH",
++                                                      "BlurV",        "Upsample",  "ApplyAO"};
++  for (uint32_t i = 0; i < kAoPassCount; ++i) {
++    ao_pipelines_[i] = build(kEntries[i]);
++    if (!ao_pipelines_[i]) {
++      REXGPU_WARN("AO: failed to build the {} pipeline", kEntries[i]);
++      return false;
++    }
+   }
+   ao_available_ = true;
+   REXGPU_WARN("AO: prototype enabled from {} (params {} {} {} {} {} {} {} {})", path, ao_params_[0],
+@@ -1272,40 +1301,141 @@ bool D3D12RenderTargetCache::InitAmbientOcclusion() {
+   return true;
+ }
+ 
++
++void D3D12RenderTargetCache::AoTimestamp(uint32_t category, bool end) {
++  if (!ao_stats_) {
++    return;
++  }
++  uint64_t frame = command_processor_.GetCurrentFrame();
++  uint32_t slot = uint32_t(frame % kAoQuerySlots);
++  if (ao_query_frame_[slot] != frame) {
++    AoReadTimestamps();
++    ao_query_frame_[slot] = frame;
++    ao_query_count_[slot] = 0;
++    ao_query_ao_on_[slot] = REXCVAR_GET(ao_mode) != 0;
++  }
++  if (ao_query_count_[slot] >= kAoQueriesPerSlot) {
++    return;
++  }
++  uint32_t index = slot * kAoQueriesPerSlot + ao_query_count_[slot];
++  ao_query_category_[slot][ao_query_count_[slot]++] = uint8_t(category | (end ? 0x80 : 0));
++  DeferredCommandList& command_list = command_processor_.GetDeferredCommandList();
++  command_list.D3DEndQuery(ao_query_heap_, D3D12_QUERY_TYPE_TIMESTAMP, index);
++  command_list.D3DResolveQueryData(ao_query_heap_, D3D12_QUERY_TYPE_TIMESTAMP, index, 1,
++                                   ao_query_readback_, index * sizeof(uint64_t));
++}
++
++void D3D12RenderTargetCache::AoReadTimestamps() {
++  uint64_t completed = command_processor_.GetCompletedFrame();
++  for (uint32_t slot = 0; slot < kAoQuerySlots; ++slot) {
++    if (!ao_query_count_[slot] || ao_query_frame_[slot] > completed) {
++      continue;
++    }
++    D3D12_RANGE range = {slot * kAoQueriesPerSlot * sizeof(uint64_t),
++                         (slot + 1) * kAoQueriesPerSlot * sizeof(uint64_t)};
++    void* mapping;
++    if (SUCCEEDED(ao_query_readback_->Map(0, &range, &mapping))) {
++      const uint64_t* times = static_cast<const uint64_t*>(mapping) + slot * kAoQueriesPerSlot;
++      double ms[kAoStatCategories] = {};
++      uint64_t start[kAoStatCategories] = {};
++      for (uint32_t i = 0; i < ao_query_count_[slot]; ++i) {
++        uint32_t category = ao_query_category_[slot][i] & 0x7F;
++        if (ao_query_category_[slot][i] & 0x80) {
++          if (start[category] && times[i] >= start[category]) {
++            ms[category] += double(times[i] - start[category]) * 1000.0 / double(ao_timestamp_frequency_);
++          }
++          start[category] = 0;
++        } else {
++          start[category] = times[i];
++        }
++      }
++      D3D12_RANGE written = {0, 0};
++      ao_query_readback_->Unmap(0, &written);
++      uint32_t on = ao_query_ao_on_[slot] ? 1 : 0;
++      for (uint32_t c = 0; c < kAoStatCategories; ++c) {
++        ao_stat_ms_[on][c] += ms[c];
++      }
++      ++ao_stat_frames_[on];
++    }
++    ao_query_count_[slot] = 0;
++  }
++  static const auto start_time = std::chrono::steady_clock::now();
++  double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
++  if (now - ao_stat_last_ >= 2.0) {
++    ao_stat_last_ = now;
++    for (uint32_t on = 0; on < 2; ++on) {
++      if (!ao_stat_frames_[on]) {
++        continue;
++      }
++      double n = double(ao_stat_frames_[on]);
++      const double* t = ao_stat_ms_[on];
++      REXGPU_WARN(
++          "AO stats ({}): scene copies {:.3f} ms; depth {:.3f}, AO {:.3f}, blur {:.3f}, upsample {:.3f}, "
++          "apply {:.3f} ms a frame over {} frames",
++          on ? "on" : "off", t[0] / n, t[3] / n, t[4] / n, t[5] / n, t[6] / n, t[2] / n,
++          ao_stat_frames_[on]);
++      for (double& value : ao_stat_ms_[on]) {
++        value = 0.0;
++      }
++      ao_stat_frames_[on] = 0;
++    }
++  }
++}
++
+ void D3D12RenderTargetCache::ApplyAmbientOcclusion(uint32_t color_base_tiles,
+                                                    uint32_t depth_base_tiles, uint32_t pitch_tiles,
+                                                    uint32_t width, uint32_t height) {
+   const ui::d3d12::D3D12Provider& provider = command_processor_.GetD3D12Provider();
+   ID3D12Device* device = provider.GetDevice();
+-  uint32_t buffer_size = width * height * sizeof(float);
+-  if (!ao_buffer_) {
+-    D3D12_RESOURCE_DESC desc;
+-    ui::d3d12::util::FillBufferResourceDesc(desc, buffer_size,
+-                                            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+-    if (FAILED(device->CreateCommittedResource(&ui::d3d12::util::kHeapPropertiesDefault,
+-                                               provider.GetHeapFlagCreateNotZeroed(), &desc,
+-                                               D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+-                                               IID_PPV_ARGS(&ao_buffer_)))) {
+-      REXGPU_WARN("AO: failed to create the {} byte buffer", buffer_size);
+-      ao_available_ = false;
+-      return;
++  uint32_t half_width = width >> 1, half_height = height >> 1;
++  if (!ao_textures_[0]) {
++    D3D12_FEATURE_DATA_D3D12_OPTIONS options = {};
++    bool compact = SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options,
++                                                         sizeof(options))) &&
++                   options.TypedUAVLoadAdditionalFormats;
++    for (uint32_t i = 0; i < 4; ++i) {
++      // 16-bit depth showed faint banding on flat surfaces.
++      ao_formats_[i] = (!compact || i == 0) ? DXGI_FORMAT_R32_FLOAT : DXGI_FORMAT_R8_UNORM;
++    }
++    REXGPU_WARN("AO: {} working images", compact ? "compact (8-bit AO)" : "32-bit");
++    for (uint32_t i = 0; i < 4; ++i) {
++      D3D12_RESOURCE_DESC desc = {};
++      desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
++      desc.Width = i < 3 ? half_width : width;
++      desc.Height = i < 3 ? half_height : height;
++      desc.DepthOrArraySize = 1;
++      desc.MipLevels = 1;
++      desc.Format = ao_formats_[i];
++      desc.SampleDesc.Count = 1;
++      desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
++      desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
++      if (FAILED(device->CreateCommittedResource(&ui::d3d12::util::kHeapPropertiesDefault,
++                                                 provider.GetHeapFlagCreateNotZeroed(), &desc,
++                                                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
++                                                 IID_PPV_ARGS(&ao_textures_[i])))) {
++        REXGPU_WARN("AO: failed to create a {}x{} texture", desc.Width, desc.Height);
++        ao_available_ = false;
++        return;
++      }
+     }
+-    ao_buffer_size_ = buffer_size;
++    ao_width_ = width;
++    ao_height_ = height;
+   }
+-  if (buffer_size > ao_buffer_size_) {
+-    return;
++  if (width != ao_width_ || height != ao_height_) {
++    return;  // Prototype: the textures are sized for the first scene seen.
+   }
+-  ui::d3d12::util::DescriptorCpuGpuHandlePair descriptors[2];
+-  if (!command_processor_.RequestOneUseSingleViewDescriptors(2, descriptors)) {
++  ui::d3d12::util::DescriptorCpuGpuHandlePair descriptors[5];
++  if (!command_processor_.RequestOneUseSingleViewDescriptors(5, descriptors)) {
+     return;
+   }
+   WriteEdramRawUAVDescriptor(descriptors[0].first);
+-  D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
+-  uav_desc.Format = DXGI_FORMAT_R32_TYPELESS;
+-  uav_desc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+-  uav_desc.Buffer.NumElements = ao_buffer_size_ / 4;
+-  uav_desc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+-  device->CreateUnorderedAccessView(ao_buffer_, nullptr, &uav_desc, descriptors[1].first);
++  for (uint32_t i = 0; i < 4; ++i) {
++    D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
++    uav_desc.Format = ao_formats_[i];
++    uav_desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
++    device->CreateUnorderedAccessView(ao_textures_[i], nullptr, &uav_desc,
++                                      descriptors[1 + i].first);
++  }
+ 
+   struct {
+     uint32_t color_base, depth_base, pitch_tiles, width;
+@@ -1330,26 +1460,45 @@ void D3D12RenderTargetCache::ApplyAmbientOcclusion(uint32_t color_base_tiles,
+   std::memcpy(constants.params, ao_params_, sizeof(constants.params));
+   ++ao_frame_;
+ 
++  // The render target dumps write the EDRAM buffer as a UAV too, so a state
++  // transition alone may not separate them from the reads here.
+   TransitionEdramBuffer(D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
++  command_processor_.PushUAVBarrier(edram_buffer_);
+   command_processor_.SubmitBarriers();
+   DeferredCommandList& command_list = command_processor_.GetDeferredCommandList();
+   command_list.D3DSetComputeRootSignature(ao_root_signature_);
+   command_list.D3DSetComputeRoot32BitConstants(0, sizeof(constants) / sizeof(uint32_t), &constants,
+                                                0);
+-  command_list.D3DSetComputeRootDescriptorTable(1, descriptors[0].second);
+-  command_list.D3DSetComputeRootDescriptorTable(2, descriptors[1].second);
+-  // The AO is computed once a frame and applied to each scene copy.
++  for (uint32_t i = 0; i < 5; ++i) {
++    command_list.D3DSetComputeRootDescriptorTable(1 + i, descriptors[i].second);
++  }
++  auto dispatch = [&](AoPass pass, uint32_t w, uint32_t h, ID3D12Resource* written) {
++    command_processor_.SetExternalPipeline(ao_pipelines_[pass]);
++    command_list.D3DDispatch((w + 7) / 8, (h + 7) / 8, 1);
++    command_processor_.PushUAVBarrier(written);
++    command_processor_.SubmitBarriers();
++  };
++  // The AO is worked out once a frame, at half resolution, then applied to
++  // each scene copy.
+   if (ao_computed_frame_ != command_processor_.GetCurrentFrame()) {
+     ao_computed_frame_ = command_processor_.GetCurrentFrame();
+-    command_processor_.SetExternalPipeline(ao_pipeline_compute_);
+-    command_list.D3DDispatch((width + 7) / 8, (height + 7) / 8, 1);
+-    command_processor_.PushUAVBarrier(ao_buffer_);
+-    command_processor_.SubmitBarriers();
+-  }
+-  command_processor_.SetExternalPipeline(ao_pipeline_apply_);
+-  command_list.D3DDispatch((width + 7) / 8, (height + 7) / 8, 1);
+-  command_processor_.PushUAVBarrier(edram_buffer_);
+-  command_processor_.SubmitBarriers();
++    AoTimestamp(3, false);
++    dispatch(kAoPrepareDepth, half_width, half_height, ao_textures_[0]);
++    AoTimestamp(3, true);
++    AoTimestamp(4, false);
++    dispatch(kAoComputeAO, half_width, half_height, ao_textures_[1]);
++    AoTimestamp(4, true);
++    AoTimestamp(5, false);
++    dispatch(kAoBlurH, half_width, half_height, ao_textures_[2]);
++    dispatch(kAoBlurV, half_width, half_height, ao_textures_[1]);
++    AoTimestamp(5, true);
++    AoTimestamp(6, false);
++    dispatch(kAoUpsample, width, height, ao_textures_[3]);
++    AoTimestamp(6, true);
++  }
++  AoTimestamp(2, false);
++  dispatch(kAoApply, width, height, edram_buffer_);
++  AoTimestamp(2, true);
+   MarkEdramBufferModified();
+ }
+ 
+@@ -1382,8 +1531,16 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
+   // the render target itself, so only the first one.
+   bool apply_ao = false;
+   uint32_t ao_color_base = 0, ao_pitch_tiles = 0;
+-  if (resolve_info.copy_dest_extent_length && InitAmbientOcclusion() &&
+-      (REXCVAR_GET(ao_mode) != 0 || ao_cycle_seconds_ > 0.0)) {
++  bool scene_copy = false;
++  if (resolve_info.copy_dest_extent_length && InitAmbientOcclusion()) {
++    if (ao_toggle_seconds_ > 0.0) {
++      static const auto toggle_start = std::chrono::steady_clock::now();
++      double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - toggle_start).count();
++      int32_t mode = int32_t(t / ao_toggle_seconds_) % 2;
++      if (REXCVAR_GET(ao_mode) != mode) {
++        rex::cvar::SetFlagByName("ao_mode", std::to_string(mode));
++      }
++    }
+     bool copying_depth = resolve_info.IsCopyingDepth();
+     const draw_util::ResolveEdramInfo& edram_info =
+         copying_depth ? resolve_info.depth_edram_info : resolve_info.color_edram_info;
+@@ -1394,17 +1551,33 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
+                        edram_info.msaa_samples == xenos::MsaaSamples::k1X &&
+                        !edram_info.format_is_64bpp;
+     uint64_t frame = command_processor_.GetCurrentFrame();
++    // Testing: REX_DEV_AO_TRACE=<count> logs that many full-screen copies.
++    static int trace_left = [] {
++      const char* v = std::getenv("REX_DEV_AO_TRACE");
++      return v && *v ? std::atoi(v) : 0;
++    }();
++    if (full_screen && trace_left > 0) {
++      --trace_left;
++      REXGPU_WARN("AO trace: frame {} completed {} {} base {} format {} dest {:08X}; depth copied {} (frame {}), computed frame {}",
++                  frame, command_processor_.GetCompletedFrame(), copying_depth ? "depth" : "color",
++                  uint32_t(edram_info.base_tiles), uint32_t(edram_info.format), resolve_info.copy_dest_base,
++                  ao_depth_copied_, ao_depth_frame_, ao_computed_frame_);
++    }
+     if (copying_depth) {
+       ao_depth_copied_ = full_screen && edram_info.format == uint32_t(xenos::DepthRenderTargetFormat::kD24S8);
+       ao_depth_base_tiles_ = edram_info.base_tiles;
+       ao_depth_frame_ = frame;
+       ao_applied_this_frame_ = false;
++      ao_scene_dest_ = 0;
+     } else if (ao_depth_copied_ && ao_depth_frame_ == frame && full_screen &&
++               (!ao_scene_dest_ || resolve_info.copy_dest_base == ao_scene_dest_) &&
+                (GetPath() == Path::kHostRenderTargets || !ao_applied_this_frame_) &&
+                (edram_info.format == uint32_t(xenos::ColorRenderTargetFormat::k_8_8_8_8) ||
+                 edram_info.format == uint32_t(xenos::ColorRenderTargetFormat::k_8_8_8_8_GAMMA))) {
+-      apply_ao = true;
+-      ao_applied_this_frame_ = true;
++      scene_copy = true;
++      ao_scene_dest_ = resolve_info.copy_dest_base;
++      apply_ao = REXCVAR_GET(ao_mode) != 0 || ao_cycle_seconds_ > 0.0;
++      ao_applied_this_frame_ = apply_ao;
+       ao_color_base = edram_info.base_tiles;
+       ao_pitch_tiles = edram_info.pitch_tiles;
+     }
+@@ -1425,6 +1598,9 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
+       const draw_util::ResolveCopyShaderInfo& copy_shader_info =
+           draw_util::resolve_copy_shader_info[size_t(copy_shader)];
+       bool direct_resolved = false;
++      if (scene_copy) {
++        AoTimestamp(0, false);
++      }
+       if (GetPath() == Path::kHostRenderTargets) {
+         if (REXCVAR_GET(direct_host_resolve) && !apply_ao) {
+           direct_resolved =
+@@ -1448,7 +1624,7 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
+             return false;
+           }
+           // The ambient occlusion pass also reads the scene depth.
+-          if (apply_ao &&
++          if (apply_ao && ao_computed_frame_ != command_processor_.GetCurrentFrame() &&
+               !DumpRenderTargets(ao_depth_base_tiles_, dump_row_length_used, dump_rows, dump_pitch)) {
+             apply_ao = false;
+           }
+@@ -1565,6 +1741,9 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
+   } else {
+     copied = true;
+   }
++  if (scene_copy) {
++    AoTimestamp(0, true);
++  }
+ 
+   // Clearing.
+   bool cleared = false;
 -- 
 2.55.0.windows.5
 
