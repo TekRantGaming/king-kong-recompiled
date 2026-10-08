@@ -48,7 +48,7 @@ $dir = Split-Path $Exe
 $log = "launcher_tour_$(Get-Date -Format HHmmss).log"
 $env:KK_DEV_LAUNCHER_TOUR = "$Each"
 $argList = @("--log_file=$log", "--window_width=$Width", "--window_height=$Height", "--fullscreen=false",
-             "--kk_check_updates=false", "--kk_share_poster=false") + $Extra
+             "--kk_check_updates=false") + $Extra
 $p = Start-Process $Exe -WorkingDirectory $dir -PassThru -ArgumentList $argList
 $env:KK_DEV_LAUNCHER_TOUR = ""
 $done = @{}

@@ -1,0 +1,275 @@
+From 43427aa2184ddd1551f83f223fd85050af10cc64 Mon Sep 17 00:00:00 2001
+From: TekRantGaming <52795608+TekRantGaming@users.noreply.github.com>
+Date: Thu, 8 Oct 2026 01:54:37 +0100
+Subject: [PATCH 1/2] D3D12: let a frame wait briefly for pipelines created in
+ the background
+
+async_shader_wait_ms (default 0, so unchanged unless set): with
+async_shader_compilation, a draw whose pipeline is still being created
+waits for it, within a per-frame budget, instead of being skipped at
+once. Pipelines are created on many threads at once, so most finish
+within a few milliseconds: no long pause, and few draws go missing.
+Pipeline::creation_done tells "still being created" from "failed".
+
+Testing aids (environment variables, no effect otherwise):
+REX_DEV_SHADER_SALT adds text to the DXBC generator name so the driver's
+shader cache sees every shader as new; REX_DEV_PIPELINE_STATS logs pipeline
+waits and skipped draws once a second.
+---
+ .../rex/graphics/d3d12/command_processor.h    |  4 ++
+ include/rex/graphics/d3d12/pipeline_cache.h   |  8 ++++
+ include/rex/graphics/flags.h                  |  1 +
+ src/graphics/command_processor.cpp            |  8 ++++
+ src/graphics/d3d12/command_processor.cpp      | 37 ++++++++++++++++++-
+ src/graphics/d3d12/pipeline_cache.cpp         | 26 +++++++++++++
+ .../pipeline/shader/dxbc_translator.cpp       | 12 +++++-
+ 7 files changed, 93 insertions(+), 3 deletions(-)
+
+diff --git a/include/rex/graphics/d3d12/command_processor.h b/include/rex/graphics/d3d12/command_processor.h
+index 96d362b..a5753f5 100644
+--- a/include/rex/graphics/d3d12/command_processor.h
++++ b/include/rex/graphics/d3d12/command_processor.h
+@@ -439,6 +439,10 @@ class D3D12CommandProcessor : public CommandProcessor {
+   bool queue_operations_done_since_submission_signal_ = false;
+ 
+   bool frame_open_ = false;
++  // What is left of this frame's wait for pipelines created in the background
++  // (async_shader_wait_ms), in microseconds.
++  int64_t pipeline_wait_left_us_ = 0;
++  void NotePipelineWait(bool ready, int64_t waited_us);
+   // Guest frame index, since some transient resources can be reused across
+   // submissions. Values updated in the beginning of a frame.
+   uint64_t frame_current_ = 1;
+diff --git a/include/rex/graphics/d3d12/pipeline_cache.h b/include/rex/graphics/d3d12/pipeline_cache.h
+index 7a9d6a2..64d48e1 100644
+--- a/include/rex/graphics/d3d12/pipeline_cache.h
++++ b/include/rex/graphics/d3d12/pipeline_cache.h
+@@ -93,6 +93,11 @@ class PipelineCache {
+ 
+   // Returns a pipeline with deferred creation by its handle. May return nullptr
+   // if failed to create the pipeline.
++  // Waits until a pipeline being created in the background is done, for at
++  // most budget_us microseconds (the time spent is taken off budget_us).
++  // Returns whether the pipeline is ready to use.
++  bool WaitForPipeline(void* handle, int64_t& budget_us) const;
++
+   ID3D12PipelineState* GetD3D12PipelineByHandle(void* handle) const {
+     return reinterpret_cast<const Pipeline*>(handle)->state.load(std::memory_order_acquire);
+   }
+@@ -345,6 +350,9 @@ class PipelineCache {
+   struct Pipeline {
+     // nullptr if creation has failed.
+     std::atomic<ID3D12PipelineState*> state{nullptr};
++    // Set once creation has been attempted (state is then final: the pipeline,
++    // or nullptr if creation failed).
++    std::atomic<bool> creation_done{false};
+     std::atomic<ID3D12RootSignature*> root_signature{nullptr};
+     PipelineRuntimeDescription description;
+     D3D12Shader::D3D12Translation* pending_vertex_shader = nullptr;
+diff --git a/include/rex/graphics/flags.h b/include/rex/graphics/flags.h
+index 2cf24c4..2fb8d24 100644
+--- a/include/rex/graphics/flags.h
++++ b/include/rex/graphics/flags.h
+@@ -18,6 +18,7 @@ REXCVAR_DECLARE(bool, vsync);
+ REXCVAR_DECLARE(bool, clear_memory_page_state);
+ REXCVAR_DECLARE(bool, half_pixel_offset);
+ REXCVAR_DECLARE(bool, async_shader_compilation);
++REXCVAR_DECLARE(int32_t, async_shader_wait_ms);
+ 
+ // GPU Resolution / Readback / Queries
+ REXCVAR_DECLARE(int32_t, resolution_scale);
+diff --git a/src/graphics/command_processor.cpp b/src/graphics/command_processor.cpp
+index a744375..1b3acdb 100644
+--- a/src/graphics/command_processor.cpp
++++ b/src/graphics/command_processor.cpp
+@@ -80,6 +80,14 @@ REXCVAR_DEFINE_BOOL(async_shader_compilation, true, "GPU",
+                     "pipelines are being prepared.")
+     .lifecycle(rex::cvar::Lifecycle::kHotReload);
+ 
++REXCVAR_DEFINE_INT32(async_shader_wait_ms, 0, "GPU",
++                     "With async_shader_compilation: how long a frame may wait, in total, for "
++                     "pipelines being prepared in the background before drawing without them. "
++                     "Pipelines are prepared on many threads at once, so most are ready within a "
++                     "few milliseconds; 0 never waits.")
++    .range(0, 1000)
++    .lifecycle(rex::cvar::Lifecycle::kHotReload);
++
+ namespace rex::graphics {
+ 
+ using namespace rex::graphics::xenos;
+diff --git a/src/graphics/d3d12/command_processor.cpp b/src/graphics/d3d12/command_processor.cpp
+index 19874a5..11c8ca3 100644
+--- a/src/graphics/d3d12/command_processor.cpp
++++ b/src/graphics/d3d12/command_processor.cpp
+@@ -10,6 +10,8 @@
+  */
+ 
+ #include <algorithm>
++#include <chrono>
++#include <cstdlib>
+ #include <cstdarg>
+ #include <cstring>
+ #include <sstream>
+@@ -2268,6 +2270,29 @@ Shader* D3D12CommandProcessor::LoadShader(xenos::ShaderType shader_type, uint32_
+   return pipeline_cache_->LoadShader(shader_type, host_address, dword_count);
+ }
+ 
++// For testing only (REX_DEV_PIPELINE_STATS set): once a second, how many draws
++// waited for a pipeline still being created in the background, how many were
++// skipped because it wasn't ready in time, and the total time waited.
++void D3D12CommandProcessor::NotePipelineWait(bool ready, int64_t waited_us) {
++  static const bool enabled = std::getenv("REX_DEV_PIPELINE_STATS") != nullptr;
++  if (!enabled) {
++    return;
++  }
++  static int64_t waited_total_us = 0;
++  static uint32_t drawn = 0, skipped = 0;
++  static auto last = std::chrono::steady_clock::now();
++  waited_total_us += waited_us;
++  (ready ? drawn : skipped)++;
++  const auto now = std::chrono::steady_clock::now();
++  if (now - last >= std::chrono::seconds(1)) {
++    REXGPU_WARN("Pipeline waits: {} drawn after waiting, {} skipped, {:.1f} ms waited", drawn, skipped,
++                waited_total_us / 1000.0);
++    waited_total_us = 0;
++    drawn = skipped = 0;
++    last = now;
++  }
++}
++
+ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint32_t index_count,
+                                       IndexBufferInfo* index_buffer_info,
+                                       bool major_mode_explicit) {
+@@ -2400,7 +2425,16 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
+   }
+   if (REXCVAR_GET(async_shader_compilation) &&
+       pipeline_cache_->GetD3D12PipelineByHandle(pipeline_handle) == nullptr) {
+-    return true;
++    // Being created in the background: wait for it within this frame's budget
++    // (many are created at once, so most are ready in a few milliseconds), and
++    // only skip the draw if it isn't ready by then.
++    const int64_t wait_before_us = pipeline_wait_left_us_;
++    const bool ready = pipeline_wait_left_us_ > 0 &&
++                       pipeline_cache_->WaitForPipeline(pipeline_handle, pipeline_wait_left_us_);
++    NotePipelineWait(ready, wait_before_us - pipeline_wait_left_us_);
++    if (!ready) {
++      return true;
++    }
+   }
+ 
+   // Update the textures - this may bind pipelines.
+@@ -3331,6 +3365,7 @@ bool D3D12CommandProcessor::BeginSubmission(bool is_guest_command) {
+ 
+   if (is_opening_frame) {
+     frame_open_ = true;
++    pipeline_wait_left_us_ = int64_t(REXCVAR_GET(async_shader_wait_ms)) * 1000;
+ 
+     // Reset bindings that depend on the data stored in the pools.
+     std::memset(current_float_constant_map_vertex_, 0, sizeof(current_float_constant_map_vertex_));
+diff --git a/src/graphics/d3d12/pipeline_cache.cpp b/src/graphics/d3d12/pipeline_cache.cpp
+index 8e6b854..f8bb865 100644
+--- a/src/graphics/d3d12/pipeline_cache.cpp
++++ b/src/graphics/d3d12/pipeline_cache.cpp
+@@ -12,6 +12,8 @@
+ #include "thirdparty/dxbc/DXBCChecksum.h"
+ 
+ #include <algorithm>
++#include <chrono>
++#include <thread>
+ #include <atomic>
+ #include <cinttypes>
+ #include <cmath>
+@@ -646,6 +648,7 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
+       } else {
+         new_pipeline->state.store(CreateD3D12Pipeline(pipeline_runtime_description),
+                                   std::memory_order_release);
++        new_pipeline->creation_done.store(true, std::memory_order_release);
+       }
+       ++pipelines_created;
+     }
+@@ -1034,6 +1037,7 @@ bool PipelineCache::ConfigurePipeline(
+     creation_request_cond_.notify_one();
+   } else {
+     new_pipeline->state.store(CreateD3D12Pipeline(runtime_description), std::memory_order_release);
++    new_pipeline->creation_done.store(true, std::memory_order_release);
+   }
+ 
+   if (pipeline_storage_file_) {
+@@ -3228,9 +3232,11 @@ void PipelineCache::CreationThread(size_t thread_index) {
+     PipelineRuntimeDescription runtime_description;
+     if (!PrepareRuntimeDescriptionForQueuedCreation(pipeline_to_create, runtime_description)) {
+       pipeline_to_create->state.store(nullptr, std::memory_order_release);
++      pipeline_to_create->creation_done.store(true, std::memory_order_release);
+     } else {
+       pipeline_to_create->state.store(CreateD3D12Pipeline(runtime_description),
+                                       std::memory_order_release);
++      pipeline_to_create->creation_done.store(true, std::memory_order_release);
+     }
+ 
+     // Pipeline created - the thread is not busy anymore, safe to set the
+@@ -3258,11 +3264,31 @@ void PipelineCache::CreateQueuedPipelinesOnProcessorThread() {
+     PipelineRuntimeDescription runtime_description;
+     if (!PrepareRuntimeDescriptionForQueuedCreation(pipeline_to_create, runtime_description)) {
+       pipeline_to_create->state.store(nullptr, std::memory_order_release);
++      pipeline_to_create->creation_done.store(true, std::memory_order_release);
+       continue;
+     }
+     pipeline_to_create->state.store(CreateD3D12Pipeline(runtime_description),
+                                     std::memory_order_release);
++    pipeline_to_create->creation_done.store(true, std::memory_order_release);
+   }
+ }
+ 
++bool PipelineCache::WaitForPipeline(void* handle, int64_t& budget_us) const {
++  const Pipeline* pipeline = reinterpret_cast<const Pipeline*>(handle);
++  const auto start = std::chrono::steady_clock::now();
++  while (!pipeline->creation_done.load(std::memory_order_acquire)) {
++    const int64_t spent =
++        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start)
++            .count();
++    if (spent >= budget_us) {
++      budget_us = 0;
++      return false;
++    }
++    std::this_thread::sleep_for(std::chrono::microseconds(100));
++  }
++  budget_us -= std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start)
++                   .count();
++  return pipeline->state.load(std::memory_order_acquire) != nullptr;
++}
++
+ }  // namespace rex::graphics::d3d12
+diff --git a/src/graphics/pipeline/shader/dxbc_translator.cpp b/src/graphics/pipeline/shader/dxbc_translator.cpp
+index 2c31a0e..7b34a20 100644
+--- a/src/graphics/pipeline/shader/dxbc_translator.cpp
++++ b/src/graphics/pipeline/shader/dxbc_translator.cpp
+@@ -13,7 +13,9 @@
+ 
+ #include <algorithm>
+ #include <atomic>
++#include <cstdlib>
+ #include <cstring>
++#include <string>
+ #include <memory>
+ 
+ #include <rex/assert.h>
+@@ -1997,8 +1999,14 @@ void DxbcShaderTranslator::WriteResourceDefinition() {
+   // Allocate space for the header, will fill when all pointers and counts are
+   // known.
+   shader_object_.resize(shader_object_.size() + sizeof(dxbc::RdefHeader) / sizeof(uint32_t));
+-  // Generator name.
+-  dxbc::AppendAlignedString(shader_object_, "Xenia");
++  // Generator name. For testing only: REX_DEV_SHADER_SALT adds text to it, so
++  // the driver's own shader cache sees every shader as new (to measure the
++  // first-time cost of creating pipelines); it changes nothing else.
++  static const std::string generator_name = [] {
++    const char* salt = std::getenv("REX_DEV_SHADER_SALT");
++    return salt && *salt ? std::string("Xenia ") + salt : std::string("Xenia");
++  }();
++  dxbc::AppendAlignedString(shader_object_, generator_name.c_str());
+ 
+   // ***************************************************************************
+   // Constant types
+-- 
+2.55.0.windows.5
+

@@ -40,9 +40,6 @@ void TuneProcessScheduling();
 // Runs a command line (no window) and waits; true when it exits with 0.
 bool RunAndWait(const std::wstring& command_line);
 
-// Opens Explorer with `file` selected.
-void RevealInExplorer(const std::filesystem::path& file);
-
 // Opens a web page in the default browser.
 void OpenUrl(const std::string& url);
 

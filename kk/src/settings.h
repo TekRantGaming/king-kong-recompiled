@@ -20,7 +20,6 @@ REXCVAR_DECLARE(int32_t, kk_frame_rate);
 REXCVAR_DECLARE(std::string, kk_render_quality);
 REXCVAR_DECLARE(std::string, kk_button_prompts);
 REXCVAR_DECLARE(bool, kk_check_updates);
-REXCVAR_DECLARE(bool, kk_share_poster);
 REXCVAR_DECLARE(bool, kk_show_fps);
 REXCVAR_DECLARE(int32_t, kk_deadzone);
 REXCVAR_DECLARE(int32_t, kk_camera_sensitivity);
@@ -71,6 +70,10 @@ Pad GetMapping(Pad physical);
 void SetMapping(Pad physical, Pad target);
 
 // Frame-rate choices offered by the launcher (0 = unlimited).
+// Shader preparing: Balanced's per-frame wait for pipelines being created, at
+// 30 FPS (half a frame; less at higher frame rates, see ApplyRuntimeOverrides).
+constexpr int32_t kBalancedShaderWaitMs = 16;
+
 constexpr std::array<int32_t, 8> kFrameRateChoices = {30, 60, 90, 120, 144, 165, 240, 0};
 
 // Render-resolution presets (kk_render_quality).

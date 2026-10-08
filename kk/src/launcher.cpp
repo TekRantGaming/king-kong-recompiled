@@ -272,7 +272,9 @@ class Launcher final : public rex::ui::ImGuiDialog {
     CleanUpAfterUpdate();
     const bool testing = std::getenv("KK_AUTOPLAY") != nullptr;
     if (GetBool("kk_check_updates") && !testing) StartUpdateCheck(false);
-    open_poster_ = GetBool("kk_share_poster") && !testing;
+    // The shader pack keeps itself up to date: each time the launcher opens,
+    // the published pack is downloaded if it is newer than the one installed.
+    if (!testing) StartPackDownload();
     // "What's new" once after an update: the settings file says the launcher
     // has run before (a fresh install has none), and an older version ran last.
     const std::string last = Get("kk_last_version");
@@ -333,9 +335,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
     HandleHotkeys();
     DrawFrameRateWarning();
     DrawWhatsNew();
-    DrawSharePoster();
     DrawUpdatePrompt();
-    DrawPackPrompt();
+    DrawPackWait();
     ImGui::End();
     (void)io;
   }
@@ -356,10 +357,6 @@ class Launcher final : public rex::ui::ImGuiDialog {
       title_art_aspect_ = float(img.width) / float(img.height);
     }
     title_icon_ = MakeTexture(art::LoadImage(art::TitleIconPath(paths_.game_dir)));
-    if (auto img = art::LoadImage(rex::filesystem::GetExecutableFolder() / "launcher_art" / "shaders_poster.png")) {
-      poster_ = MakeTexture(img);
-      poster_aspect_ = float(img.width) / float(img.height);
-    }
     LoadAchievements();
   }
 
@@ -722,34 +719,11 @@ class Launcher final : public rex::ui::ImGuiDialog {
     Row("Disc image",
         "Your own Peter Jackson's King Kong Xbox 360 disc image (.iso). Its files (about 6.3 GB) are copied "
         "next to the game.");
-    ImGui::BeginDisabled(installing_);
-    if (files_ok_ ? ImGui::Button("Reinstall from disc image...", ImVec2(-FLT_MIN, 0))
-                  : AccentButton("Install from disc image...", ImVec2(-FLT_MIN, 0)))
-      StartInstall();
-    ImGui::EndDisabled();
-    if (installing_ && ImGui::Button("Cancel install", ImVec2(-FLT_MIN, 0))) progress_.cancel = true;
-    ShaderPackRow();
-    Row("Share my shaders",
-        "Played a good part of the game? Share your shaders and they go into future shader packs, so other "
-        "players' first play-through runs smoother. Only shader data goes into one small file, and a GitHub page "
-        "opens to drop it in (posting needs a free GitHub account).");
-    if (ImGui::Button("Share my shaders", ImVec2(-FLT_MIN, 0))) {
-      std::string error;
-      const auto zip = PackShadersForSharing(CacheDir(), paths_.user_dir, error);
-      if (zip.empty()) {
-        share_message_ = error;
-      } else {
-        RevealInExplorer(zip);
-        OpenUrl(kShareShadersUrl);
-        share_message_ = "Saved " + zip.filename().string() +
-                         ". Drag it into the GitHub page that just opened, then press Submit. Thank you!";
-      }
-    }
-    if (!share_message_.empty()) {
-      ImGui::PushStyleColor(ImGuiCol_Text, kDim);
-      ImGui::TextWrapped("%s", share_message_.c_str());
-      ImGui::PopStyleColor();
-    }
+    InstallButtons();
+    Row("Shader pack",
+        "Effects already prepared by playing through the game, so it pauses for new ones less often. Each time "
+        "the launcher opens, it downloads the newest pack from the port's GitHub page by itself.");
+    PackStatus();
     Row("Show this launcher", "Off starts the game directly. Hold Shift while starting to bring it back.");
     ToggleCvar("kk_launcher", "Off", "At startup");
     EndRows();
@@ -760,29 +734,41 @@ class Launcher final : public rex::ui::ImGuiDialog {
     return root.empty() ? paths_.user_dir / "cache" : std::filesystem::path(root);
   }
 
-  void ShaderPackRow() {
-    Row("Shader pack",
-        "Effects already prepared by playing through every chapter. With it the game prepares them all as it "
-        "starts, so it never pauses for a new effect. Downloads from the port's GitHub page.");
-    if (pack_installed_ < 0) pack_installed_ = InstalledShaderPackVersion(CacheDir());
+  void InstallButtons() {
+    ImGui::BeginDisabled(installing_);
+    if (files_ok_ ? ImGui::Button("Reinstall from disc image...", ImVec2(-FLT_MIN, 0))
+                  : AccentButton("Install from disc image...", ImVec2(-FLT_MIN, 0)))
+      StartInstall();
+    ImGui::EndDisabled();
+    if (installing_ && ImGui::Button("Cancel install", ImVec2(-FLT_MIN, 0))) progress_.cancel = true;
+  }
+
+  // The shader pack download (started when the launcher opens): its progress,
+  // or how it went.
+  void PackStatus() {
+    RefreshPack();
     if (pack_.busy) {
       const float total = float(pack_.total.load()), got = float(pack_.bytes.load());
       ImGui::ProgressBar(total > 0 ? got / total : 0.0f, ImVec2(-FLT_MIN, 0),
-                         total > 0 ? nullptr : "Connecting...");
+                         total > 0 ? nullptr : "Checking for a newer pack...");
       return;
     }
-    if (pack_thread_.joinable()) {
-      pack_thread_.join();
-      pack_installed_ = InstalledShaderPackVersion(CacheDir());
-    }
-    const bool installed = pack_installed_ > 0;
-    if (installed ? ImGui::Button("Check for a newer pack", ImVec2(-FLT_MIN, 0))
-                  : AccentButton("Download shader pack", ImVec2(-FLT_MIN, 0)))
-      StartPackDownload();
     ImGui::PushStyleColor(ImGuiCol_Text, kDim);
     if (pack_.done || pack_.failed) ImGui::TextWrapped("%s", pack_.message.c_str());
-    else if (installed) ImGui::Text("Pack %d installed.", pack_installed_);
+    else if (pack_installed_ > 0) ImGui::Text("Pack %d installed.", pack_installed_);
+    else ImGui::TextUnformatted("Not downloaded yet.");
     ImGui::PopStyleColor();
+    if (!pack_.done && ImGui::Button(pack_.failed ? "Try again" : "Download now", ImVec2(-FLT_MIN, 0)))
+      StartPackDownload();
+  }
+
+  // Collects a finished download and reads which pack is installed.
+  void RefreshPack() {
+    if (!pack_.busy && pack_thread_.joinable()) {
+      pack_thread_.join();
+      pack_installed_ = -1;
+    }
+    if (pack_installed_ < 0) pack_installed_ = InstalledShaderPackVersion(CacheDir());
   }
 
   void StartPackDownload() {
@@ -791,50 +777,6 @@ class Launcher final : public rex::ui::ImGuiDialog {
     pack_.done = pack_.failed = false;
     pack_.busy = true;
     pack_thread_ = std::thread([this, dir = CacheDir()] { DownloadAndInstallShaderPack(dir, pack_); });
-  }
-
-  // When the launcher opens (with update checks on): if a newer shader pack is
-  // published than the one installed, offer it. Players without a pack get the
-  // Download button on the Play page instead. Waits for an app update offer
-  // first, as updating restarts the launcher.
-  void DrawPackPrompt() {
-    constexpr const char* kTitle = "Shader pack update";
-    const int published = pack_published_->load();
-    if (!pack_prompted_ && published > 0 && !(update_ && (update_->busy || update_->found)) &&
-        !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) {
-      pack_prompted_ = true;  // only ever ask once per launch
-      if (pack_installed_ < 0) pack_installed_ = InstalledShaderPackVersion(CacheDir());
-      if (pack_installed_ > 0 && published > pack_installed_) ImGui::OpenPopup(kTitle);
-    }
-    if (!BeginModal(kTitle, 560)) return;
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::Text("Shader pack %d is out. You have pack %d.", published, pack_installed_);
-    ImGui::Dummy(ImVec2(0, 6 * s_));
-    ImGui::PushStyleColor(ImGuiCol_Text, kDim);
-    ImGui::TextUnformatted("It adds effects prepared by playing further through the game, so it pauses for new "
-                           "effects less often. It's a small download and keeps everything your game has already "
-                           "prepared.");
-    ImGui::PopStyleColor();
-    ImGui::PopTextWrapPos();
-    ImGui::Dummy(ImVec2(0, 10 * s_));
-    if (pack_.busy) {
-      const float total = float(pack_.total.load()), got = float(pack_.bytes.load());
-      ImGui::ProgressBar(total > 0 ? got / total : 0.0f, ImVec2(-FLT_MIN, 0), total > 0 ? nullptr : "Downloading...");
-    } else if (pack_.done || pack_.failed) {
-      if (pack_thread_.joinable()) {
-        pack_thread_.join();
-        pack_installed_ = InstalledShaderPackVersion(CacheDir());
-      }
-      ImGui::TextWrapped("%s", pack_.message.c_str());
-      ImGui::Dummy(ImVec2(0, 6 * s_));
-      if (ImGui::Button("Close", ImVec2(-FLT_MIN, 0))) ImGui::CloseCurrentPopup();
-    } else {
-      const float bw = (ImGui::GetContentRegionAvail().x - 8 * s_) / 2;
-      if (AccentButton("Download now", ImVec2(bw, 0))) StartPackDownload();
-      ImGui::SameLine(0, 8 * s_);
-      if (ImGui::Button("Later", ImVec2(bw, 0))) ImGui::CloseCurrentPopup();
-    }
-    ImGui::EndPopup();
   }
 
   void StartInstall() {
@@ -999,10 +941,19 @@ class Launcher final : public rex::ui::ImGuiDialog {
     Row("Motion blur", "The trail the game blends over fast moments, mostly in Kong's sequences and some transitions.");
     ToggleCvar("kk_motion_blur", "Off", "On");
     Row("Shader preparing",
-        "Each new effect is prepared the first time it appears, then saved for next time. Wait draws it "
-        "correctly with a short pause, the first time only. Background avoids the pause, but objects can "
-        "briefly vanish, turn into silhouettes or flash bright.");
-    ToggleCvar("async_shader_compilation", "Wait", "Background");
+        "Each new effect is prepared the first time it appears, then saved for next time. Balanced prepares "
+        "many at once in the background and waits a moment for them, so there are no long pauses and things "
+        "rarely pop in. Wait always draws correctly but can pause for a second or two. Background never "
+        "pauses, but objects can briefly vanish or flash bright.");
+    {
+      const bool async = GetBool("async_shader_compilation");
+      const int mode = !async ? 0 : GetInt("async_shader_wait_ms", 0) > 0 ? 1 : 2;
+      if (int i = Segmented("shader_mode", {"Wait", "Balanced", "Background"}, mode); i >= 0 && i != mode) {
+        SetBool("async_shader_compilation", i != 0);
+        if (i == 1) rex::cvar::ResetToDefault("async_shader_wait_ms");
+        if (i == 2) SetInt("async_shader_wait_ms", 0);
+      }
+    }
     EndRows();
   }
 
@@ -1012,20 +963,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
     Row("Frame rate",
         "30 matches the Xbox 360 and keeps every animation right. Higher is smoother, but some character "
         "animations are not right above 30 yet.");
-    {
-      // A dropdown: there are too many choices for a row of buttons in a small window.
-      std::vector<std::pair<std::string, std::string>> choices;  // label, value
-      for (int f : kFrameRateChoices)
-        choices.emplace_back(f <= 0 ? "Unlimited" : f == 30 ? "30 FPS (like the Xbox 360)" : std::to_string(f) + " FPS",
-                             std::to_string(f));
-      const std::string cur = Get("kk_frame_rate");
-      bool listed = false;
-      for (const auto& c : choices) listed = listed || c.second == cur;
-      if (!listed && !cur.empty()) choices.emplace_back(cur + " FPS (from the settings file)", cur);
-      std::vector<Option> opts;
-      for (const auto& c : choices) opts.push_back({c.first.c_str(), c.second});
-      ComboCvar("kk_frame_rate", opts);
-    }
+    FrameRateCombo();
     Row("Field of view", "How wide the camera sees. 69\xC2\xB0 is the original for Jack; Kong, cutscene and other "
                          "cameras widen by the same amount. Jack's gun keeps its usual size.");
     SliderCvar("kk_fov", 69, 110, GetInt("kk_fov", 69) <= 69 ? "%d\xC2\xB0 (original)" : "%d\xC2\xB0");
@@ -1041,6 +979,21 @@ class Launcher final : public rex::ui::ImGuiDialog {
                                 {"Fran\xC3\xA7" "ais", "4"},
                                 {"Italiano", "6"}});
     EndRows();
+  }
+
+  // A dropdown: there are too many choices for a row of buttons in a small window.
+  void FrameRateCombo() {
+    std::vector<std::pair<std::string, std::string>> choices;  // label, value
+    for (int f : kFrameRateChoices)
+      choices.emplace_back(f <= 0 ? "Unlimited" : f == 30 ? "30 FPS (like the Xbox 360)" : std::to_string(f) + " FPS",
+                           std::to_string(f));
+    const std::string cur = Get("kk_frame_rate");
+    bool listed = false;
+    for (const auto& c : choices) listed = listed || c.second == cur;
+    if (!listed && !cur.empty()) choices.emplace_back(cur + " FPS (from the settings file)", cur);
+    std::vector<Option> opts;
+    for (const auto& c : choices) opts.push_back({c.first.c_str(), c.second});
+    ComboCvar("kk_frame_rate", opts);
   }
 
   // ----------------------------------------------------------- Controls ---
@@ -1358,8 +1311,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
       ImGui::Dummy(ImVec2(0, 8 * s_));
       ImGui::EndPopup();
     }
-    Row("Updates", "Checks GitHub for a newer version of the port, and of the shader pack, each time the launcher "
-                   "opens. They come out separately, and you're offered each one.");
+    Row("Updates", "Checks GitHub for a newer version of the port each time the launcher opens, and offers it. "
+                   "The shader pack keeps itself up to date either way.");
     ToggleCvar("kk_check_updates", "Off", "At startup");
     Row("", "");
     if (ImGui::Button(update_ && update_->busy ? "Checking..." : "Check for updates now", ImVec2(-FLT_MIN, 0)))
@@ -1398,7 +1351,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
                 "d3d12_allow_variable_refresh_rate_and_tearing", "present_letterbox"};
       case kGraphics:
         return {"kk_render_quality", "resolution_scale", "draw_resolution_scale_x", "draw_resolution_scale_y",
-                "swap_post_effect", "anisotropic_override", "kk_motion_blur", "async_shader_compilation"};
+                "swap_post_effect", "anisotropic_override", "kk_motion_blur", "async_shader_compilation",
+                "async_shader_wait_ms"};
       case kGameplay:
         return {"kk_frame_rate", "kk_fov", "kk_show_fps", "kk_skip_intros", "user_language"};
       case kControls:
@@ -1541,33 +1495,20 @@ class Launcher final : public rex::ui::ImGuiDialog {
   // ------------------------------------------------------------- updates ---
   // The check runs on its own thread with its own status, so pressing Play
   // never waits for the network (the launcher may be gone when it finishes).
-  // Checks for a newer port (DrawUpdatePrompt) and, separately, a newer shader
-  // pack (DrawPackPrompt): they are released independently.
+  // The shader pack updates itself separately (StartPackDownload).
   void StartUpdateCheck(bool manual) {
     if (update_ && update_->busy) return;
     update_ = std::make_shared<UpdateStatus>();
     update_manual_ = manual;
     update_prompted_ = false;
     std::thread([s = update_] { CheckForUpdate(*s); }).detach();
-    pack_published_ = std::make_shared<std::atomic<int>>(-1);  // checking
-    pack_prompted_ = false;
-    std::thread([v = pack_published_] { v->store(FetchShaderPackVersion()); }).detach();
   }
 
   void DrawUpdatePrompt() {
     constexpr const char* kTitle = "Update available";
     if (!update_) return;
-    if (update_manual_ && !update_->busy && (update_->done || update_->failed) && !update_->found &&
-        pack_published_->load() != -1) {
-      if (update_->failed) {
-        status_ = update_->message;
-      } else {
-        if (pack_installed_ < 0) pack_installed_ = InstalledShaderPackVersion(CacheDir());
-        const int pack = pack_published_->load();
-        status_ = "You have the newest version (v" KK_VERSION ")";
-        if (pack > 0 && pack_installed_ >= pack) status_ += " and the newest shader pack (" + std::to_string(pack) + ")";
-        status_ += ".";
-      }
+    if (update_manual_ && !update_->busy && (update_->done || update_->failed) && !update_->found) {
+      status_ = update_->failed ? update_->message : "You have the newest version (v" KK_VERSION ").";
       update_manual_ = false;
     }
     if (update_->found && !update_prompted_ && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) {
@@ -1745,63 +1686,31 @@ class Launcher final : public rex::ui::ImGuiDialog {
   }
 #endif
 
-  // --------------------------------------------------- shaders poster ---
-  // Shown each time the launcher opens until "Don't show this message again".
-  void DrawSharePoster() {
-    constexpr const char* kTitle = "##share_poster";
-    if (open_poster_ && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) {
-      ImGui::OpenPopup(kTitle);
-      open_poster_ = false;
-    }
-    if (!BeginModal(kTitle, 1040, false)) return;
-    const UiFonts& f = GetUiFonts();
-    const float img_h = std::min(560 * s_, ImGui::GetMainViewport()->Size.y - 140 * s_);
-    if (poster_) {
-      ImGui::Image(Tex(poster_), ImVec2(img_h * poster_aspect_, img_h));
-      ImGui::SameLine(0, 24 * s_);
-    }
-    ImGui::BeginGroup();
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::PushFont(f.bold, 26.0f * s_);
-    ImGui::TextUnformatted("Help your fellow players");
-    ImGui::PopFont();
-    ImGui::Dummy(ImVec2(0, 8 * s_));
-    ImGui::TextUnformatted(
-        "King Kong prepares each of its effects (a shader) the first time it appears, and that can cause a short "
-        "pause. The shader pack removes those pauses, but only for the parts of the game it has already seen.");
-    ImGui::Dummy(ImVec2(0, 6 * s_));
-    ImGui::TextUnformatted(
-        "That's where you come in. Play the game, and once you've played a good part of it, share your shaders. "
-        "They go into future shader packs and releases, so everyone who plays after you gets a smoother first "
-        "play-through.");
-    ImGui::Dummy(ImVec2(0, 10 * s_));
-    ImGui::PushFont(f.semibold, 0.0f);
-    ImGui::TextUnformatted("Where to find it");
-    ImGui::PopFont();
-    ImGui::PushStyleColor(ImGuiCol_Text, kDim);
-    ImGui::TextUnformatted(
-        "On the Play page, under Share my shaders. It packs your shaders into one small file and opens a GitHub page "
-        "where you drop it in. Only shader data is shared: nothing personal, no saves or settings. Posting needs a "
-        "free GitHub account.");
-    ImGui::PopStyleColor();
-    ImGui::PopTextWrapPos();
-    ImGui::Dummy(ImVec2(0, 14 * s_));
-    ImGui::Checkbox("Don't show this message again", &poster_dont_show_);
-    ImGui::Dummy(ImVec2(0, 10 * s_));
-    const float bw = 180 * s_;
-    bool close = false;
-    if (AccentButton("Got it", ImVec2(bw, 0))) close = true;
-    ImGui::SameLine(0, 8 * s_);
-    if (ImGui::Button("Show me", ImVec2(bw, 0))) {
-      page_ = kPlay;
-      close = true;
-    }
-    ImGui::EndGroup();
-    if (close) {
-      if (poster_dont_show_) {
-        SetBool("kk_share_poster", false);
-        Save();
+  // Play was pressed while the shader pack was still downloading: wait for it,
+  // then start the game.
+  void DrawPackWait() {
+    constexpr const char* kTitle = "Shader pack";
+    if (!waiting_for_pack_) return;
+    if (!pack_.busy) {
+      waiting_for_pack_ = false;
+      if (BeginModal(kTitle, 560)) {
+        ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
       }
+      StartGame();
+      return;
+    }
+    if (!ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) ImGui::OpenPopup(kTitle);
+    if (!BeginModal(kTitle, 560)) return;
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextUnformatted("The newest shader pack is still downloading. The game starts as soon as it's done.");
+    ImGui::PopTextWrapPos();
+    ImGui::Dummy(ImVec2(0, 10 * s_));
+    const float total = float(pack_.total.load()), got = float(pack_.bytes.load());
+    ImGui::ProgressBar(total > 0 ? got / total : 0.0f, ImVec2(-FLT_MIN, 0), total > 0 ? nullptr : "Connecting...");
+    ImGui::Dummy(ImVec2(0, 6 * s_));
+    if (ImGui::Button("Back", ImVec2(-FLT_MIN, 0))) {
+      waiting_for_pack_ = false;
       ImGui::CloseCurrentPopup();
     }
     ImGui::EndPopup();
@@ -1858,6 +1767,12 @@ class Launcher final : public rex::ui::ImGuiDialog {
 
   void StartGame() {
     if (played_) return;
+    // The pack is merged into the shader cache, which the game opens as it
+    // starts: a download in progress finishes first (DrawPackWait).
+    if (pack_.busy) {
+      waiting_for_pack_ = true;
+      return;
+    }
     played_ = true;
     SaveSettings(paths_.config_path);
     bool needs_restart = false;
@@ -1880,18 +1795,12 @@ class Launcher final : public rex::ui::ImGuiDialog {
   bool open_fps_warning_ = false;
   std::shared_ptr<UpdateStatus> update_;
   bool update_manual_ = false, update_prompted_ = false, installing_update_ = false, relaunched_ = false;
-  bool open_poster_ = false, poster_dont_show_ = false;
   bool open_whats_new_ = false;
   std::string whats_new_from_;  // version the player had before this one
-  rex::ui::ImmediateTexture* poster_ = nullptr;
-  float poster_aspect_ = 645.0f / 900.0f;
-  std::string share_message_;
   ShaderPackStatus pack_;
-  // Published shader pack version, fetched in the background (0 until known).
-  std::shared_ptr<std::atomic<int>> pack_published_ = std::make_shared<std::atomic<int>>(0);  // -1 while checking
-  bool pack_prompted_ = false;
   std::thread pack_thread_;
-  int pack_installed_ = -1;  // -1: not read yet
+  int pack_installed_ = -1;        // -1: not read yet
+  bool waiting_for_pack_ = false;  // Play was pressed during the download
   int autoplay_frames_ = 0;
   std::string status_;
   std::string capturing_;

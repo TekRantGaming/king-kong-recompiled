@@ -28,22 +28,15 @@ struct ShaderPackStatus {
 // Installed pack version (0 if none), from <cache>/shaders/shader-pack.txt.
 int InstalledShaderPackVersion(const std::filesystem::path& cache_dir);
 
-// Downloads the manifest and returns the published pack version (0 on error).
-int FetchShaderPackVersion();
-
 // Downloads the pack and merges it into <cache>/shaders/shareable, keeping
 // everything already there. Runs on the calling thread; reports in `status`.
 void DownloadAndInstallShaderPack(const std::filesystem::path& cache_dir, ShaderPackStatus& status);
 
-// "Share my shaders": a GitHub form for players to attach their shaders to.
-constexpr const char* kShareShadersUrl =
-    "https://github.com/TekRantGaming/king-kong-recompiled/issues/new?template=share-shaders.yml";
-
-// Packs the player's shader cache (only <cache>/shaders/shareable) into
-// <user_dir>/shader-share-<date-time>.zip for them to attach to that form.
-// Returns the zip's path, or an empty path with `error` set.
-std::filesystem::path PackShadersForSharing(const std::filesystem::path& cache_dir,
-                                            const std::filesystem::path& user_dir, std::string& error);
+// Removes damaged records from the shader and pipeline storage files in
+// <cache>/shaders (a write the game never finished). The runtime stops reading
+// a file at the first damaged record, so one would hide all the rest. Returns
+// how many were removed. Call before the runtime opens the files.
+int RepairShaderStorage(const std::filesystem::path& cache_dir);
 
 // Merges a shader (.xsh) or pipeline (.xpso) storage file into another,
 // adding only records it doesn't have. Returns records added, or -1 if the
