@@ -134,7 +134,7 @@ Everything is set up before the game starts. The launcher uses art from your own
 - **FXAA** and **FXAA Extreme**
 - **Texture filtering** up to 16x
 - **Motion blur** on or off: Off removes the ghost trail the game blends over fast moments, mostly in Kong's sequences
-- **Shader preparing**: wait for new effects (default, always drawn right) or prepare them in the background
+- **Shader preparing**: Balanced (default: new effects are prepared on many threads at once, with a moment's wait for them, so no long pauses), Wait (always drawn right, can pause) or Background (never waits)
 
 </td>
 </tr>
@@ -272,7 +272,7 @@ They switch on as soon as the game reaches its main menu, exactly as if you had 
 - Above 30 fps some character animations are not right yet. For example, the crew rowing at the start skip part of their animation. 30 fps, the default, plays them correctly.
 - There can be a short pause when the game loads the next area. The game does the same on the Xbox 360.
 - The pre-rendered videos pause for a moment every couple of seconds while the video player keeps to the video's timing. This is being looked into.
-- The first time you see a new effect there is a short pause while it is prepared. It is saved, so this only happens once. Download the **shader pack** on the launcher's Play page and almost every effect is prepared before you play. If you prefer no pause at all, set **Graphics > Shader preparing** to Background, but then objects can briefly vanish or flash bright the first time.
+- The first time you see a new effect it has to be prepared. With **Graphics > Shader preparing** on Balanced (the default), many are prepared at once in the background and the game waits only a moment for them, so there are no long pauses, but an object can occasionally appear a moment late the first time. Effects are saved, so this only happens once, and the **shader pack** on the launcher's Play page prepares the effects other players have already seen before you play.
 
 ### The shader pack
 

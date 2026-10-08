@@ -71,6 +71,9 @@ Pad GetMapping(Pad physical);
 void SetMapping(Pad physical, Pad target);
 
 // Frame-rate choices offered by the launcher (0 = unlimited).
+// Shader preparing: Balanced's per-frame wait for pipelines being created.
+constexpr int32_t kBalancedShaderWaitMs = 16;
+
 constexpr std::array<int32_t, 8> kFrameRateChoices = {30, 60, 90, 120, 144, 165, 240, 0};
 
 // Render-resolution presets (kk_render_quality).

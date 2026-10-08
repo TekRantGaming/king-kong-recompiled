@@ -230,11 +230,15 @@ void SetCvarDefault(std::string_view name, std::string_view value) {
 void ApplyPortDefaults() {
   // Windowed by default so the launcher isn't a giant fullscreen dialog.
   SetCvarDefault("fullscreen", "false");
-  // While a shader compiles in the background, the D3D12 backend skips every
-  // draw that needs it, so objects vanish, turn into silhouettes or the frame
-  // flashes bright on first sight. Waiting costs a short pause the first time
-  // only, since shaders are saved for later runs.
-  SetCvarDefault("async_shader_compilation", "false");
+  // Shader preparing: Balanced. New pipelines are created on background
+  // threads, many at once, and a frame may wait up to async_shader_wait_ms in
+  // total for them (a setting added to this port's build of the GPU plugin),
+  // drawing without one only if it still isn't ready. Creating them one at a
+  // time while the game waits (Wait) froze V-Rex for up to 2 seconds the first
+  // time; never waiting (Background) skips the draws, so objects vanish or
+  // flash for a moment instead.
+  SetCvarDefault("async_shader_compilation", "true");
+  SetCvarDefault("async_shader_wait_ms", std::to_string(kBalancedShaderWaitMs));
 }
 
 void ApplyRuntimeOverrides() {

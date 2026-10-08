@@ -999,10 +999,19 @@ class Launcher final : public rex::ui::ImGuiDialog {
     Row("Motion blur", "The trail the game blends over fast moments, mostly in Kong's sequences and some transitions.");
     ToggleCvar("kk_motion_blur", "Off", "On");
     Row("Shader preparing",
-        "Each new effect is prepared the first time it appears, then saved for next time. Wait draws it "
-        "correctly with a short pause, the first time only. Background avoids the pause, but objects can "
-        "briefly vanish, turn into silhouettes or flash bright.");
-    ToggleCvar("async_shader_compilation", "Wait", "Background");
+        "Each new effect is prepared the first time it appears, then saved for next time. Balanced prepares "
+        "many at once in the background and waits a moment for them, so there are no long pauses and things "
+        "rarely pop in. Wait always draws correctly but can pause for a second or two. Background never "
+        "pauses, but objects can briefly vanish or flash bright.");
+    {
+      const bool async = GetBool("async_shader_compilation");
+      const int mode = !async ? 0 : GetInt("async_shader_wait_ms", 0) > 0 ? 1 : 2;
+      if (int i = Segmented("shader_mode", {"Wait", "Balanced", "Background"}, mode); i >= 0 && i != mode) {
+        SetBool("async_shader_compilation", i != 0);
+        if (i == 1) rex::cvar::ResetToDefault("async_shader_wait_ms");
+        if (i == 2) SetInt("async_shader_wait_ms", 0);
+      }
+    }
     EndRows();
   }
 
@@ -1398,7 +1407,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
                 "d3d12_allow_variable_refresh_rate_and_tearing", "present_letterbox"};
       case kGraphics:
         return {"kk_render_quality", "resolution_scale", "draw_resolution_scale_x", "draw_resolution_scale_y",
-                "swap_post_effect", "anisotropic_override", "kk_motion_blur", "async_shader_compilation"};
+                "swap_post_effect", "anisotropic_override", "kk_motion_blur", "async_shader_compilation",
+                "async_shader_wait_ms"};
       case kGameplay:
         return {"kk_frame_rate", "kk_fov", "kk_show_fps", "kk_skip_intros", "user_language"};
       case kControls:
