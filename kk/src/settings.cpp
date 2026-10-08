@@ -251,8 +251,9 @@ void ApplyPortDefaults() {
 const std::vector<std::pair<const char*, const char*>>& OriginalLookSettings() {
   // 720p at 30 FPS, the console's anti-aliasing (its own 2x MSAA, no FXAA) and
   // texture filtering, Jack's 69 degree field of view, motion blur and fog on,
-  // no ambient occlusion.
+  // no ambient occlusion, no upscaler.
   static const std::vector<std::pair<const char*, const char*>> settings = {
+      {"present_effect", "bilinear"},
       {"kk_render_quality", "custom"}, {"resolution_scale", "1"}, {"swap_post_effect", "none"},
       {"anisotropic_override", "-1"},  {"ao_mode", "0"},          {"ao_strength", "1"},
       {"kk_motion_blur", "true"},      {"kk_fog", "true"},        {"kk_frame_rate", "30"},

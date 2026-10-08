@@ -1,7 +1,8 @@
 # ReXGlue SDK patches
 
 The port ships the GPU plugin (`rexgpu-xenos.dll`) built from the ReXGlue SDK **v0.10.0** source (tag commit
-`f5337cdc`) with the patches in this folder (applied in order). `rexruntime.dll` is the plain v0.10.0 rebuild (no patches).
+`f5337cdc`) with the patches in this folder (applied in order), and `rexruntime.dll` from the same build (it has
+the upscalers of 0008; before that it was the plain v0.10.0 rebuild).
 
 ## 0001: let a frame wait briefly for pipelines created in the background
 
@@ -54,6 +55,21 @@ off; `REX_DEV_AO_CYCLE=<seconds>` steps through views 0 to 7 (off, depth, AO onl
 `REX_DEV_AO_PARAMS` value above 0 stamps the view number; `REX_DEV_AO_TRACE=<count>` logs the full-screen copies seen.
 Developer builds of the port also have F8 (off / on / AO only) and F9 (strength).
 
+## 0008: AMD FSR 1 and NVIDIA Image Scaling upscalers
+
+Changes `rexruntime.dll` (the presenter that scales the game's picture to the window). The spatial FidelityFX effects
+(FSR 1 EASU and RCAS, CAS) were only built when the AMD FidelityFX SDK was found, though their shaders are built in
+and don't need it; they're now always built (`present_effect` `fsr` and `cas`). The temporal FSR 2/3 path still needs
+the SDK.
+
+Adds NVIDIA Image Scaling (`present_effect` `nis`, D3D12 only, FSR elsewhere; `present_nis_sharpness` 0 to 1,
+default 0.5) from the [NVIDIA Image Scaling SDK](https://github.com/NVIDIAGameWorks/NVIDIAImageScaling) v1.0.3 (MIT,
+`thirdparty/nis`). NVScaler upscales by 1x to 2x along each axis, so for bigger factors it runs again (like the FSR
+EASU passes), sharpening only in the last pass; without upscaling, NVSharpen. Both are compute shaders
+(`src/ui/shaders/guest_output_nis.cs.hlsl`, the filter banks as constant arrays instead of textures) writing to an
+intermediate image, followed by a 1:1 (or, for a supersampled picture, downscaling) bilinear pass. Also fixes the
+size of the presenter's RTV heap, which only had room for 2 intermediate images (FSR from 720p to 8K needs 3).
+
 ## Building
 
 ```
@@ -66,4 +82,4 @@ cmake --build out/build/win-amd64 --config Release --target install --parallel
 ```
 
 Use Visual Studio 2022 Build Tools with its Clang on the PATH. Copy `out/install/win-amd64/bin/rexgpu-xenos.dll`
-over `tools/rexglue/win-amd64/bin/rexgpu-xenos.dll`.
+and `rexruntime.dll` over the ones in `tools/rexglue/win-amd64/bin/`.

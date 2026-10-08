@@ -34,7 +34,7 @@ On Xenia this game gets stuck at the start, staring at the word "VENTURE". This 
 <td width="33%" valign="top">
 
 **Up to 8K**<br>
-Render at up to 7680 x 4320, with presets from Supersample to Ultra Performance that match your screen.
+Render at up to 7680 x 4320, with presets from Supersample to Ultra Performance that match your screen, and AMD FSR 1 or NVIDIA Image Scaling to upscale.
 
 </td>
 <td width="33%" valign="top">
@@ -129,8 +129,9 @@ Everything is set up before the game starts. The launcher uses art from your own
 
 ### Graphics
 - **Look**: Original Xbox 360 (720p at 30 FPS, the console's anti-aliasing, texture filtering and field of view, motion blur and fog, no ambient occlusion) or Modern. Switching back to Modern puts your own settings back
-- **Graphics presets**: Low, Medium (the default), High, Ultra and Steam Deck, or Custom when you set things yourself
-- **Render quality** presets: Supersample, Native, Quality, Balanced, Performance and Ultra Performance, each showing the real resolution
+- **Graphics presets**: Low (with FSR 1), Medium (the default), High, Ultra and Steam Deck, or Custom when you set things yourself
+- **Upscaler**: AMD FSR 1 or NVIDIA Image Scaling (NIS), both for any graphics card, or Off (the default). Each has Native, Quality, Balanced and Performance modes, showing the resolution the game draws at; they scale the picture to your screen and sharpen it
+- **Render quality** presets (with the upscaler off): Supersample, Native, Quality, Balanced, Performance and Ultra Performance, each showing the real resolution
 - **Custom resolution** from 1x (720p) to 6x (8K)
 - **FXAA** (on by default) and **FXAA Extreme**
 - **Texture filtering** up to 16x (4x by default)
@@ -252,6 +253,7 @@ They switch on as soon as the game reaches its main menu, exactly as if you had 
 | Resolution | 1280 x 720 | up to 7680 x 4320 |
 | Frame rate | 30 fps | 30 fps, or up to 240 and unlimited |
 | Anti-aliasing | console (2x MSAA) | console 2x MSAA plus FXAA, or higher resolutions |
+| Upscaling | console | AMD FSR 1 or NVIDIA Image Scaling, four modes each |
 | Texture filtering | console | up to 16x |
 | Display | TV | windowed or fullscreen, any monitor |
 | Controls | Xbox 360 controller | any controller, remapping, keyboard and mouse |
@@ -358,6 +360,7 @@ This port finishes those reads the way the console does (`kk/src/io_fix.cpp`), s
 - **Peter Jackson's King Kong: The Official Game of the Movie** by Ubisoft Montpellier, published by Ubisoft in 2005.
 - Button prompt pictures from [**Xelu's Free Controllers & Keyboard Prompts**](https://thoseawesomeguys.com/prompts/) (CC0).
 - [**ReXGlue SDK**](https://github.com/rexglue/rexglue-sdk), which does the code translation and runs the game, built on the work of [**Xenia**](https://github.com/xenia-project/xenia) and [**XenonRecomp**](https://github.com/hedge-dev/XenonRecomp).
+- Upscaling: [**AMD FidelityFX Super Resolution 1**](https://github.com/GPUOpen-Effects/FidelityFX-FSR) (in the ReXGlue SDK) and the [**NVIDIA Image Scaling SDK**](https://github.com/NVIDIAGameWorks/NVIDIAImageScaling), both MIT licensed.
 
 > [!NOTE]
 > **AI disclosure:** this port was made almost entirely with Claude Code (Anthropic). The repository owner directed and tested the work; the AI did the analysis, code, tools and documentation.

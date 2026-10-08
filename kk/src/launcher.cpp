@@ -236,7 +236,7 @@ constexpr const char* kPageNames[kPageCount] = {"Play",     "Display", "Graphics
 constexpr const char* kPageBlurbs[kPageCount] = {
     "Install the game from your own disc image and start playing.",
     "Window, monitor and how the picture fits your screen.",
-    "Render resolution, anti-aliasing and texture filtering.",
+    "Upscaling, render resolution, anti-aliasing and texture filtering.",
     "Frame rate, language and the frame counter.",
     "Camera, sticks, vibration, button remapping and keyboard play.",
     "The game's cheats, switched on for you when the game starts.",
@@ -890,29 +890,43 @@ class Launcher final : public rex::ui::ImGuiDialog {
 
   // ----------------------------------------------------------- Graphics ---
   // ------------------------------------------------------------ presets ---
-  // Graphics presets set render quality, anti-aliasing, texture filtering and
-  // ambient occlusion (motion blur and fog are left to taste). The preset shown
-  // is the one the settings match; anything else is Custom. Medium is the
-  // default settings.
+  // Graphics presets set the upscaler, render quality, anti-aliasing, texture
+  // filtering and ambient occlusion (motion blur and fog are left to taste).
+  // The preset shown is the one the settings match; anything else is Custom.
+  // Medium is the default settings.
   struct GraphicsPreset {
     const char* label;
+    const char* upscaler;   // present_effect
     const char* quality;    // kk_render_quality
     const char* aa;         // swap_post_effect
     const char* filtering;  // anisotropic_override: 2 = 2x, 3 = 4x, 4 = 8x, 5 = 16x
     bool ao;                // ao_mode 1 at strength 1
   };
   static constexpr GraphicsPreset kGraphicsPresets[] = {
-      {"Low", "performance", "fxaa", "2", false},       {"Medium", "native", "fxaa", "3", false},
-      {"High", "native", "fxaa", "4", true},            {"Ultra", "supersample", "fxaa_extreme", "5", true},
-      {"Steam Deck", "native", "fxaa", "2", false},
+      {"Low", "fsr", "performance", "fxaa", "2", false},
+      {"Medium", "bilinear", "native", "fxaa", "3", false},
+      {"High", "bilinear", "native", "fxaa", "4", true},
+      {"Ultra", "bilinear", "supersample", "fxaa_extreme", "5", true},
+      {"Steam Deck", "bilinear", "native", "fxaa", "2", false},
   };
   static constexpr int kGraphicsPresetCount = int(std::size(kGraphicsPresets));
+
+  // The upscaler modes (kk_render_quality); -1 for another render quality.
+  static constexpr const char* kUpscalerModes[] = {"native", "quality", "balanced", "performance"};
+  static constexpr const char* kUpscalerModeNames[] = {"Native", "Quality", "Balanced", "Performance"};
+  int UpscalerMode() {
+    const std::string q = Get("kk_render_quality");
+    for (int i = 0; i < 4; ++i)
+      if (q == kUpscalerModes[i]) return i;
+    return -1;
+  }
 
   int MatchGraphicsPreset() {
     for (int i = 0; i < kGraphicsPresetCount; ++i) {
       const GraphicsPreset& p = kGraphicsPresets[i];
       const bool ao = GetInt("ao_mode", 0) != 0;
-      if (Get("kk_render_quality") == p.quality && Get("swap_post_effect") == p.aa &&
+      if (Get("present_effect") == p.upscaler && Get("kk_render_quality") == p.quality &&
+          Get("swap_post_effect") == p.aa &&
           Get("anisotropic_override") == p.filtering && ao == p.ao && (!ao || GetInt("ao_strength", 1) == 1))
         return i;
     }
@@ -921,6 +935,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
 
   void ApplyGraphicsPreset(int index) {
     const GraphicsPreset& p = kGraphicsPresets[index];
+    Set("present_effect", p.upscaler);
     Set("kk_render_quality", p.quality);
     Set("swap_post_effect", p.aa);
     Set("anisotropic_override", p.filtering);
@@ -966,8 +981,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
     const bool original_look = GetBool("kk_original_look");
     ImGui::BeginDisabled(original_look);
     Row("Preset",
-        "Quick settings for render quality, anti-aliasing, texture filtering and ambient occlusion. Change any of "
-        "them yourself and it shows Custom. Medium is the default.");
+        "Quick settings for the upscaler, render quality, anti-aliasing, texture filtering and ambient occlusion. "
+        "Change any of them yourself and it shows Custom. Medium is the default.");
     {
       const int match = MatchGraphicsPreset();
       const float button_w = (ImGui::GetContentRegionAvail().x - 6 * s_ * kGraphicsPresetCount) /
@@ -982,36 +997,92 @@ class Launcher final : public rex::ui::ImGuiDialog {
       if (int i = Segmented("graphics_preset", labels, selected); i >= 0 && i < kGraphicsPresetCount)
         ApplyGraphicsPreset(i);
     }
-    Row("Render quality",
-        "How sharply the game is drawn compared with your screen. Native matches it; Quality, Balanced and the "
-        "Performance modes draw fewer pixels and scale up; Supersample draws more for the cleanest edges. The "
-        "game renders in steps of its original 720p.");
+    Row("Upscaler",
+        "Scales the picture up to your screen and sharpens it, for a clearer image when the game draws fewer "
+        "pixels than your screen has. AMD FSR 1 and NVIDIA Image Scaling (NIS) both work on any graphics card. "
+        "Off uses plain smooth scaling.");
     {
-      const std::string cur = Get("kk_render_quality");
-      std::vector<std::string> labels, values;
+      // NIS is in the D3D12 presenter only (the Vulkan one, used on Linux, would give FSR).
+      static const char* const kUpscalers[] = {"bilinear", "fsr", "nis"};
+#if defined(_WIN32)
+      const std::vector<std::string> labels = {"Off", "AMD FSR 1", "NVIDIA NIS"};
+#else
+      const std::vector<std::string> labels = {"Off", "AMD FSR 1"};
+#endif
+      const std::string cur = Get("present_effect");
       int sel = -1;
-      for (const auto& p : RenderPresets()) {
-        const int scale = RenderScaleFor(p.id, out_h);
-        labels.push_back(std::string(p.label) + "   " + std::to_string(1280 * scale) + " \xC3\x97 " +
-                         std::to_string(720 * scale));
-        values.push_back(p.id);
+      for (size_t i = 0; i < labels.size(); ++i)
+        if (cur == kUpscalers[i]) sel = int(i);
+      if (int i = Segmented("upscaler", labels, sel); i >= 0 && i != sel) {
+        Set("present_effect", kUpscalers[i]);
+        // The upscaler modes are Native to Performance; others start at Native.
+        if (i != 0 && UpscalerMode() < 0) Set("kk_render_quality", "native");
       }
-      labels.push_back("Custom");
-      values.push_back("custom");
-      for (size_t i = 0; i < values.size(); ++i)
-        if (values[i] == cur) sel = int(i);
-      ImGui::PushID("quality");
-      if (ImGui::BeginCombo("##q", sel >= 0 ? labels[size_t(sel)].c_str() : cur.c_str(), ImGuiComboFlags_HeightLarge)) {
-        for (size_t i = 0; i < labels.size(); ++i)
-          if (ImGui::Selectable(labels[i].c_str(), int(i) == sel)) Set("kk_render_quality", values[i]);
-        ImGui::EndCombo();
-      }
-      ImGui::PopID();
+    }
+    if (Get("present_effect") != "bilinear") {
+      Row("Upscaler mode",
+          "How many pixels the game draws before the upscaler scales them to your screen. Native draws at your "
+          "screen's size and only sharpens; Quality, Balanced and Performance draw fewer for more speed. The game "
+          "draws in steps of its original 720p, so some modes can be the same at your screen size.");
+      const int mode = UpscalerMode();
+      if (int i = Segmented("upscaler_mode", {kUpscalerModeNames, kUpscalerModeNames + 4}, mode); i >= 0)
+        Set("kk_render_quality", kUpscalerModes[i]);
       ImGui::PushStyleColor(ImGuiCol_Text, kDim);
       ImGui::PushFont(nullptr, 15.0f);
-      ImGui::Text("%s: %d \xC3\x97 %d", GetBool("fullscreen") ? "Your screen" : "Game window", out_w, out_h);
+      ImGui::PushTextWrapPos(0.0f);
+      if (mode >= 0) {
+        const int scale = RenderScaleFor(kUpscalerModes[mode], out_h);
+        std::string same;
+        for (int m = 0; m < 4; ++m) {
+          if (m == mode || RenderScaleFor(kUpscalerModes[m], out_h) != scale) continue;
+          same += same.empty() ? kUpscalerModeNames[m] : std::string(" and ") + kUpscalerModeNames[m];
+        }
+        ImGui::Text("Draws %d \xC3\x97 %d for your %d \xC3\x97 %d %s.%s%s", 1280 * scale, 720 * scale, out_w, out_h,
+                    GetBool("fullscreen") ? "screen" : "window", same.empty() ? "" : " Same as ",
+                    same.empty() ? "" : (same + " here.").c_str());
+      } else {
+        const std::string q = Get("kk_render_quality");
+        std::string label = q == "custom" ? "Custom (the internal resolution below)" : q;
+        for (const auto& p : RenderPresets())
+          if (q == p.id) label = p.label;
+        ImGui::TextUnformatted(("Now set to " + label + ". Pick a mode to use one of these.").c_str());
+      }
+      ImGui::PopTextWrapPos();
       ImGui::PopFont();
       ImGui::PopStyleColor();
+    }
+    if (Get("present_effect") == "bilinear") {
+      Row("Render quality",
+          "How sharply the game is drawn compared with your screen. Native matches it; Quality, Balanced and the "
+          "Performance modes draw fewer pixels and scale up (an upscaler above makes that sharper); Supersample "
+          "draws more for the cleanest edges. The game renders in steps of its original 720p.");
+      {
+        const std::string cur = Get("kk_render_quality");
+        std::vector<std::string> labels, values;
+        int sel = -1;
+        for (const auto& p : RenderPresets()) {
+          const int scale = RenderScaleFor(p.id, out_h);
+          labels.push_back(std::string(p.label) + "   " + std::to_string(1280 * scale) + " \xC3\x97 " +
+                           std::to_string(720 * scale));
+          values.push_back(p.id);
+        }
+        labels.push_back("Custom");
+        values.push_back("custom");
+        for (size_t i = 0; i < values.size(); ++i)
+          if (values[i] == cur) sel = int(i);
+        ImGui::PushID("quality");
+        if (ImGui::BeginCombo("##q", sel >= 0 ? labels[size_t(sel)].c_str() : cur.c_str(), ImGuiComboFlags_HeightLarge)) {
+          for (size_t i = 0; i < labels.size(); ++i)
+            if (ImGui::Selectable(labels[i].c_str(), int(i) == sel)) Set("kk_render_quality", values[i]);
+          ImGui::EndCombo();
+        }
+        ImGui::PopID();
+        ImGui::PushStyleColor(ImGuiCol_Text, kDim);
+        ImGui::PushFont(nullptr, 15.0f);
+        ImGui::Text("%s: %d \xC3\x97 %d", GetBool("fullscreen") ? "Your screen" : "Game window", out_w, out_h);
+        ImGui::PopFont();
+        ImGui::PopStyleColor();
+      }
     }
     if (Get("kk_render_quality") == "custom") {
       Row("Internal resolution", "Draw the game at an exact multiple of its native 1280 \xC3\x97 720.");
@@ -1465,7 +1536,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
         return {"fullscreen", "window_width", "window_height", "monitor",
                 "d3d12_allow_variable_refresh_rate_and_tearing", "present_letterbox"};
       case kGraphics:
-        return {"kk_original_look", "kk_modern_settings", "kk_render_quality", "resolution_scale",
+        return {"kk_original_look", "kk_modern_settings", "present_effect", "kk_render_quality", "resolution_scale",
                 "draw_resolution_scale_x", "draw_resolution_scale_y",
                 "swap_post_effect", "anisotropic_override", "kk_motion_blur", "kk_fog", "ao_mode", "ao_strength",
                 "async_shader_compilation", "async_shader_wait_ms"};
