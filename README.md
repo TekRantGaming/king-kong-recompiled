@@ -60,7 +60,7 @@ Invert the camera, set its sensitivity, toggle aim, set a deadzone, remap any bu
 <td valign="top">
 
 **Install from your disc**<br>
-Download, run, pick your disc image in the launcher, and play. No technical steps.
+Download and run it. A short setup the first time takes you through picking your disc image and the main settings. No technical steps.
 
 </td>
 </tr>
@@ -80,7 +80,7 @@ All ten of the game's cheats are switches in the launcher, so there's no typing 
 <td valign="top">
 
 **Always up to date**<br>
-The launcher offers new versions and new shader packs when it opens, and shows you what changed.
+The launcher offers new versions when it opens and shows you what changed. The newest shader pack downloads by itself.
 
 </td>
 </tr>
@@ -94,7 +94,7 @@ Until now the only way to play it was on an Xbox 360. On the Xenia emulator it b
 
 ## The launcher
 
-Everything is set up before the game starts. The launcher uses art from your own copy of the game: Kong's face, the achievement pictures and the stormy sky from the game's menu. Settings are saved to a plain text file, `king_kong.toml`, next to the game, and every settings page has a **Reset page** button that puts just that page back to its defaults.
+Everything is set up before the game starts. The first time it opens, a short **setup** takes you through installing the game, the shader pack and the main settings, a step at a time. The launcher uses art from your own copy of the game: Kong's face, the achievement pictures and the stormy sky from the game's menu. Settings are saved to a plain text file, `king_kong.toml`, next to the game, and every settings page has a **Reset page** button that puts just that page back to its defaults.
 
 <table>
 <tr>
@@ -104,7 +104,7 @@ Everything is set up before the game starts. The launcher uses art from your own
 ### Play
 - **Install the game** straight from your disc image, with a progress bar
 - Checks the disc really is King Kong
-- **Shader pack** download: every effect already prepared, so the game never pauses for a new one
+- **Shader pack**: effects other play-throughs have already prepared, downloaded and kept up to date by itself, so the game rarely pauses for a new one
 - **Share my shaders**: help the next players by sharing the effects your play-through prepared
 - **Updates**: the launcher tells you when a new version is out and installs it with one click
 - Turn the launcher off and **hold Shift** at start to bring it back
@@ -211,6 +211,16 @@ They switch on as soon as the game reaches its main menu, exactly as if you had 
 <td><img src="docs/images/launcher-about.jpg" alt="About page"></td>
 </tr>
 <tr>
+<td><img src="docs/images/launcher-setup.jpg" alt="First-run setup"></td>
+<td valign="middle">
+
+### Setup
+- The first time the launcher opens, a few steps get you ready: **install the game** from your disc image, the **shader pack** (it downloads by itself), and your **window mode, frame rate, input and startup logos**
+- **Skip setup** at any point; everything is on the launcher's pages too
+
+</td>
+</tr>
+<tr>
 <td><img src="docs/images/launcher-whats-new.jpg" alt="What's new pop-up"></td>
 <td valign="middle">
 
@@ -272,11 +282,11 @@ They switch on as soon as the game reaches its main menu, exactly as if you had 
 - Above 30 fps some character animations are not right yet. For example, the crew rowing at the start skip part of their animation. 30 fps, the default, plays them correctly.
 - There can be a short pause when the game loads the next area. The game does the same on the Xbox 360.
 - The pre-rendered videos pause for a moment every couple of seconds while the video player keeps to the video's timing. This is being looked into.
-- The first time you see a new effect it has to be prepared. With **Graphics > Shader preparing** on Balanced (the default), many are prepared at once in the background and the game waits only a moment for them, so there are no long pauses, but an object can occasionally appear a moment late the first time. Effects are saved, so this only happens once, and the **shader pack** on the launcher's Play page prepares the effects other players have already seen before you play.
+- The first time you see a new effect it has to be prepared. With **Graphics > Shader preparing** on Balanced (the default), many are prepared at once in the background and the game waits only a moment for them, so there are no long pauses, but an object can occasionally appear a moment late the first time. Effects are saved, so this only happens once, and the **shader pack** prepares the effects other play-throughs have already seen before you play.
 
 ### The shader pack
 
-The game prepares each new effect (a shader) the first time it appears, which can cause a short pause. The shader pack is the list of effects collected by a test build that plays every chapter on its own, published on the [shader-packs release](https://github.com/TekRantGaming/king-kong-recompiled/releases/tag/shader-packs). Click **Download shader pack** on the launcher's Play page and it is added to your shader cache (`Documents\king_kong\cache`), keeping anything your game has already prepared. Each time the game starts it prepares everything in the cache, so you get no pauses even on a first play-through. New packs come out as more of the game is covered: when one does, the launcher offers it when it opens (see **Updates**).
+The game prepares each new effect (a shader) the first time it appears, which can cause a short pause. The shader pack is the list of effects collected by playing through the game, published on the [shader-packs release](https://github.com/TekRantGaming/king-kong-recompiled/releases/tag/shader-packs). You don't need to do anything to get it: each time the launcher opens, it downloads the newest pack if you don't have it yet and adds it to your shader cache (`Documents\king_kong\cache`), keeping anything your game has already prepared. The Play page shows how it went. If you press **PLAY** while a download is still going, the game starts as soon as it finishes. Each time the game starts it prepares everything in the cache, so the parts of the game the pack covers don't pause even on a first play-through. New packs come out as more of the game is covered.
 
 ### Share my shaders
 
@@ -289,10 +299,9 @@ settings. Shaders that at least two players have sent go into the next shader pa
 
 ### Updates
 
-When the launcher opens it asks GitHub whether a newer version of the port, or a newer shader pack, is out. They come
-out separately and each one is offered on its own. For the port, **Update now** downloads it, replaces the port's own
-files and restarts the launcher; your installed game, saves and settings stay as they are. For the shader pack,
-**Download now** adds it to the shaders your game has already prepared. Turn the checks off on the **About** page.
+When the launcher opens it asks GitHub whether a newer version of the port is out. **Update now** downloads it,
+replaces the port's own files and restarts the launcher; your installed game, saves and settings stay as they are. Turn
+the check off on the **About** page. The shader pack updates itself on its own (see **The shader pack**).
 
 ### Reporting a problem
 
@@ -328,9 +337,9 @@ Get-FileHash "C:\Games\King Kong.iso" -Algorithm SHA1
 **You need:** Windows 10 or 11 (64-bit), a graphics card with DirectX 12, about 7 GB of free space, and your own Peter Jackson's King Kong Xbox 360 disc as a disc image (see [Which version you need](#which-version-you-need)).
 
 1. Download the **KingKong-...-windows-x64.zip** file from the [latest release](https://github.com/TekRantGaming/king-kong-recompiled/releases/latest) and unzip it anywhere.
-2. Run **king_kong.exe**. The launcher opens.
-3. Click **Install from disc image...** and pick your King Kong disc image. The launcher checks it and copies the game files (about 6.3 GB) into a `game` folder next to the exe.
-4. Press **PLAY**.
+2. Run **king_kong.exe**. The launcher opens with a short setup.
+3. Click **Install from disc image...** and pick your King Kong disc image. The launcher checks it and copies the game files (about 6.3 GB) into a `game` folder next to the exe. Meanwhile the shader pack downloads by itself.
+4. Pick your main settings, then press **Play**.
 
 The download contains only this port. **No game files are included**: they come from your own disc. Your saves and settings are kept in `Documents\king_kong`.
 

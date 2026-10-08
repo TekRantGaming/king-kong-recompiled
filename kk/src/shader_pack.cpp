@@ -229,12 +229,6 @@ int InstalledShaderPackVersion(const std::filesystem::path& cache_dir) {
   return ParseManifest(text.str()).version;
 }
 
-int FetchShaderPackVersion() {
-  std::vector<uint8_t> data;
-  if (!Fetch(std::string(kShaderPackUrl) + "shader-pack.txt", data, nullptr)) return 0;
-  return ParseManifest(std::string(data.begin(), data.end())).version;
-}
-
 void DownloadAndInstallShaderPack(const std::filesystem::path& cache_dir, ShaderPackStatus& status) {
   status.busy = true;
   status.bytes = 0;

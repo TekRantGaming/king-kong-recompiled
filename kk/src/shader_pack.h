@@ -28,9 +28,6 @@ struct ShaderPackStatus {
 // Installed pack version (0 if none), from <cache>/shaders/shader-pack.txt.
 int InstalledShaderPackVersion(const std::filesystem::path& cache_dir);
 
-// Downloads the manifest and returns the published pack version (0 on error).
-int FetchShaderPackVersion();
-
 // Downloads the pack and merges it into <cache>/shaders/shareable, keeping
 // everything already there. Runs on the calling thread; reports in `status`.
 void DownloadAndInstallShaderPack(const std::filesystem::path& cache_dir, ShaderPackStatus& status);
