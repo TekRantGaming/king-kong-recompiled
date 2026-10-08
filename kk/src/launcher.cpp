@@ -940,6 +940,20 @@ class Launcher final : public rex::ui::ImGuiDialog {
                {{"Game", "-1"}, {"Off", "0"}, {"2\xC3\x97", "2"}, {"4\xC3\x97", "3"}, {"8\xC3\x97", "4"}, {"16\xC3\x97", "5"}});
     Row("Motion blur", "The trail the game blends over fast moments, mostly in Kong's sequences and some transitions.");
     ToggleCvar("kk_motion_blur", "Off", "On");
+    // Ambient occlusion lives in the GPU plugin (ao_mode, ao_strength).
+    Row("Ambient occlusion",
+        "Soft shading where surfaces meet: in corners and creases, and on the ground under rocks, grass and "
+        "people. Costs about 1 ms a frame at 4K. Not available with Intel graphics yet.");
+    {
+      const bool on = GetInt("ao_mode", 0) != 0;
+      if (int i = Segmented("ao_mode", {"Off", "On"}, on ? 1 : 0); i >= 0) SetInt("ao_mode", i);
+    }
+    if (GetInt("ao_mode", 0) != 0) {
+      Row("AO strength", "How dark the shading gets. 1 is recommended.");
+      const int strength = std::clamp(GetInt("ao_strength", 1), 1, 3);
+      if (int i = Segmented("ao_strength", {"1 (recommended)", "2", "3"}, strength - 1); i >= 0)
+        SetInt("ao_strength", i + 1);
+    }
     Row("Shader preparing",
         "Each new effect is prepared the first time it appears, then saved for next time. Balanced prepares "
         "many at once in the background and waits a moment for them, so there are no long pauses and things "
@@ -1351,8 +1365,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
                 "d3d12_allow_variable_refresh_rate_and_tearing", "present_letterbox"};
       case kGraphics:
         return {"kk_render_quality", "resolution_scale", "draw_resolution_scale_x", "draw_resolution_scale_y",
-                "swap_post_effect", "anisotropic_override", "kk_motion_blur", "async_shader_compilation",
-                "async_shader_wait_ms"};
+                "swap_post_effect", "anisotropic_override", "kk_motion_blur", "ao_mode", "ao_strength",
+                "async_shader_compilation", "async_shader_wait_ms"};
       case kGameplay:
         return {"kk_frame_rate", "kk_fov", "kk_show_fps", "kk_skip_intros", "user_language"};
       case kControls:
