@@ -3,6 +3,14 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v1.9.1 (8 October 2026)
+
+### What's new
+- **Fixed: the whole game drawing at low resolution for some players** (#32). The game picks its picture size from the TV it thinks it's connected to, and the port was giving it your window size. Windows display scaling shrinks the size the launcher saves (a 1280 x 720 window at 125% is kept as 1024 x 576), and below 720 lines the game falls back to standard definition: 640 x 480, stretched to widescreen, even in fullscreen and whatever your **Render quality**. It now always sees a 720p TV, as on an Xbox 360, and **Render quality** scales that up as intended. Thanks to GrummelFritz and leocmp for the reports and the log.
+
+### Full changelog
+- Video mode: the port sets `video_mode_width` and `video_mode_height` to 1280 x 720 each time it starts (they aren't saved to `king_kong.toml`). Before, the runtime reported `window_width` and `window_height` as the console's video mode whenever a window size was set. The log now notes the video mode at startup (`KK: video mode 1280x720 (window ...)`).
+
 ## v1.9.0 (8 October 2026)
 
 ### What's new
