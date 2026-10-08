@@ -1,0 +1,496 @@
+From 68255a13422f711555916054bc786afb07c74b4f Mon Sep 17 00:00:00 2001
+From: TekRantGaming <craigferels896@gmail.com>
+Date: Thu, 8 Oct 2026 16:09:14 +0100
+Subject: [PATCH 1/2] D3D12: REX_DEV_FRAME_LOG testing aid (log each draw and
+ resolve of a frame)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/graphics/d3d12/command_processor.cpp | 110 +++++++++++++++++++++++
+ 1 file changed, 110 insertions(+)
+
+diff --git a/src/graphics/d3d12/command_processor.cpp b/src/graphics/d3d12/command_processor.cpp
+index 439954c..c8fba5e 100644
+--- a/src/graphics/d3d12/command_processor.cpp
++++ b/src/graphics/d3d12/command_processor.cpp
+@@ -1893,9 +1893,62 @@ void D3D12CommandProcessor::OnGammaRampPWLValueWritten() {
+   gamma_ramp_pwl_up_to_date_ = false;
+ }
+ 
++
++namespace {
++
++// Testing aid: REX_DEV_FRAME_LOG=<seconds>[,<frames>] logs every draw and
++// resolve of <frames> frames (default 1) starting <seconds> after launch, to
++// see how a title builds its frames.
++struct DevFrameLog {
++  double start_after = -1.0;
++  int frames = 1;
++  bool active = false;
++  int draws = 0;
++  int copies = 0;
++  std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
++
++  DevFrameLog() {
++    if (const char* v = std::getenv("REX_DEV_FRAME_LOG"); v && *v) {
++      start_after = std::atof(v);
++      if (const char* comma = std::strchr(v, ',')) {
++        frames = std::max(1, std::atoi(comma + 1));
++      }
++    }
++  }
++
++  void OnSwap() {
++    if (start_after < 0.0) {
++      return;
++    }
++    if (active) {
++      REXGPU_WARN("Frame log: frame end, {} draws, {} resolves", draws, copies);
++      draws = copies = 0;
++      if (--frames <= 0) {
++        active = false;
++        start_after = -1.0;
++      }
++      return;
++    }
++    if (std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count() >=
++        start_after) {
++      active = true;
++      draws = copies = 0;
++      REXGPU_WARN("Frame log: frame start");
++    }
++  }
++};
++
++DevFrameLog& GetDevFrameLog() {
++  static DevFrameLog log;
++  return log;
++}
++
++}  // namespace
++
+ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbuffer_width,
+                                       uint32_t frontbuffer_height) {
+   SCOPE_profile_cpu_f("gpu");
++  GetDevFrameLog().OnSwap();
+   vertex_buffers_in_sync_[0] = 0;
+   vertex_buffers_in_sync_[1] = 0;
+ 
+@@ -2357,6 +2410,35 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
+   bool memexport_used_pixel = pixel_shader && (pixel_shader->memexport_eM_written() != 0);
+   bool memexport_used = memexport_used_vertex || memexport_used_pixel;
+ 
++  if (DevFrameLog& frame_log = GetDevFrameLog(); frame_log.active) {
++    auto surface_info = regs.Get<reg::RB_SURFACE_INFO>();
++    auto depth_control = regs.Get<reg::RB_DEPTHCONTROL>();
++    auto depth_info = regs.Get<reg::RB_DEPTH_INFO>();
++    auto window_offset = regs.Get<reg::PA_SC_WINDOW_OFFSET>();
++    uint32_t color_mask = regs[XE_GPU_REG_RB_COLOR_MASK];
++    uint32_t written = pixel_shader ? pixel_shader->writes_color_targets() : 0;
++    std::string targets;
++    for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
++      if (!(written & (1u << i)) || !((color_mask >> (i * 4)) & 0xF)) {
++        continue;
++      }
++      auto color_info = regs.Get<reg::RB_COLOR_INFO>(reg::RB_COLOR_INFO::rt_register_indices[i]);
++      targets += fmt::format(" rt{}@{}:f{}", i, uint32_t(color_info.color_base),
++                             uint32_t(color_info.color_format));
++    }
++    uint32_t scissor_br = regs[XE_GPU_REG_PA_SC_WINDOW_SCISSOR_BR];
++    REXGPU_WARN(
++        "Frame log: draw {} ps {:016X} vs {:016X} pitch {} msaa {} z {}{} @{}:f{} off {},{} "
++        "scissor {}x{}{} count {}",
++        frame_log.draws++, pixel_shader ? pixel_shader->ucode_data_hash() : 0,
++        vertex_shader->ucode_data_hash(), uint32_t(surface_info.surface_pitch),
++        1u << uint32_t(surface_info.msaa_samples), depth_control.z_enable ? "test" : "off",
++        depth_control.z_write_enable ? "+write" : "", uint32_t(depth_info.depth_base),
++        uint32_t(depth_info.depth_format), int32_t(window_offset.window_x_offset),
++        int32_t(window_offset.window_y_offset), scissor_br & 0x7FFF, (scissor_br >> 16) & 0x7FFF, targets,
++        index_count);
++  }
++
+   if (!BeginSubmission(true)) {
+     return false;
+   }
+@@ -2913,6 +2995,34 @@ bool D3D12CommandProcessor::IssueCopy() {
+ #if XE_GPU_FINE_GRAINED_DRAW_SCOPES
+   SCOPE_profile_cpu_f("gpu");
+ #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
++  if (DevFrameLog& frame_log = GetDevFrameLog(); frame_log.active) {
++    const RegisterFile& regs = *register_file_;
++    auto copy_control = regs.Get<reg::RB_COPY_CONTROL>();
++    auto dest_info = regs.Get<reg::RB_COPY_DEST_INFO>();
++    auto dest_pitch = regs.Get<reg::RB_COPY_DEST_PITCH>();
++    auto surface_info = regs.Get<reg::RB_SURFACE_INFO>();
++    auto window_offset = regs.Get<reg::PA_SC_WINDOW_OFFSET>();
++    std::string source;
++    if (copy_control.copy_src_select >= xenos::kMaxColorRenderTargets) {
++      auto depth_info = regs.Get<reg::RB_DEPTH_INFO>();
++      source = fmt::format("depth@{}:f{}", uint32_t(depth_info.depth_base), uint32_t(depth_info.depth_format));
++    } else {
++      auto color_info = regs.Get<reg::RB_COLOR_INFO>(
++          reg::RB_COLOR_INFO::rt_register_indices[copy_control.copy_src_select]);
++      source = fmt::format("rt{}@{}:f{}", uint32_t(copy_control.copy_src_select), uint32_t(color_info.color_base),
++                           uint32_t(color_info.color_format));
++    }
++    REXGPU_WARN(
++        "Frame log: resolve {} {} -> {:08X} format {} pitch {} height {} command {} clear "
++        "color {} depth {} off {},{} surface pitch {} msaa {}",
++        frame_log.copies++, source, regs[XE_GPU_REG_RB_COPY_DEST_BASE],
++        uint32_t(dest_info.copy_dest_format), uint32_t(dest_pitch.copy_dest_pitch),
++        uint32_t(dest_pitch.copy_dest_height), uint32_t(copy_control.copy_command),
++        uint32_t(copy_control.color_clear_enable), uint32_t(copy_control.depth_clear_enable),
++        int32_t(window_offset.window_x_offset), int32_t(window_offset.window_y_offset),
++        uint32_t(surface_info.surface_pitch),
++        1u << uint32_t(surface_info.msaa_samples));
++  }
+   if (!BeginSubmission(true)) {
+     return false;
+   }
+-- 
+2.55.0.windows.5
+
+
+From 3ee522ddc7377f57f0965566cc3285dc3d883d8c Mon Sep 17 00:00:00 2001
+From: TekRantGaming <craigferels896@gmail.com>
+Date: Thu, 8 Oct 2026 16:56:18 +0100
+Subject: [PATCH 2/2] D3D12: ambient occlusion prototype (REX_DEV_AO, ao_mode,
+ ao_strength)
+
+Computes AO from the scene depth the title copies out of the EDRAM and applies it to the scene color in the EDRAM buffer before each full-screen color copy in that frame. Prototype: shader loaded from a file and compiled at startup.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../rex/graphics/d3d12/render_target_cache.h  |  23 ++
+ src/graphics/d3d12/render_target_cache.cpp    | 242 +++++++++++++++++-
+ 2 files changed, 264 insertions(+), 1 deletion(-)
+
+diff --git a/include/rex/graphics/d3d12/render_target_cache.h b/include/rex/graphics/d3d12/render_target_cache.h
+index cd7693a..bdd704a 100644
+--- a/include/rex/graphics/d3d12/render_target_cache.h
++++ b/include/rex/graphics/d3d12/render_target_cache.h
+@@ -189,6 +189,29 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
+   ID3D12PipelineState* resolve_copy_pipelines_[size_t(draw_util::ResolveCopyShaderIndex::kCount)] =
+       {};
+ 
++  // Ambient occlusion (prototype, REX_DEV_AO=<HLSL file>). Computed from the
++  // scene depth that the title copies out of the EDRAM (a full-screen depth
++  // resolve), and applied to the scene color in the EDRAM buffer just before
++  // the next full-screen color resolve copies it out for post-processing.
++  bool InitAmbientOcclusion();
++  void ApplyAmbientOcclusion(uint32_t color_base_tiles, uint32_t depth_base_tiles,
++                             uint32_t pitch_tiles, uint32_t width, uint32_t height);
++  bool ao_init_tried_ = false;
++  bool ao_available_ = false;
++  bool ao_depth_copied_ = false;
++  uint64_t ao_depth_frame_ = 0;
++  bool ao_applied_this_frame_ = false;
++  uint64_t ao_computed_frame_ = UINT64_MAX;
++  uint32_t ao_depth_base_tiles_ = 0;
++  uint32_t ao_frame_ = 0;
++  float ao_params_[8] = {};
++  double ao_cycle_seconds_ = 0.0;
++  ID3D12RootSignature* ao_root_signature_ = nullptr;
++  ID3D12PipelineState* ao_pipeline_compute_ = nullptr;
++  ID3D12PipelineState* ao_pipeline_apply_ = nullptr;
++  ID3D12Resource* ao_buffer_ = nullptr;
++  uint32_t ao_buffer_size_ = 0;
++
+   // For host render targets.
+ 
+   class D3D12RenderTarget final : public RenderTarget {
+diff --git a/src/graphics/d3d12/render_target_cache.cpp b/src/graphics/d3d12/render_target_cache.cpp
+index dd321a5..aa3efa6 100644
+--- a/src/graphics/d3d12/render_target_cache.cpp
++++ b/src/graphics/d3d12/render_target_cache.cpp
+@@ -13,8 +13,12 @@
+ 
+ #include <algorithm>
+ #include <array>
++#include <chrono>
+ #include <cstdint>
++#include <cstdlib>
+ #include <cstring>
++#include <d3dcompiler.h>
++#include <fstream>
+ #include <iterator>
+ #include <memory>
+ #include <string>
+@@ -960,6 +964,12 @@ bool D3D12RenderTargetCache::Initialize() {
+ }
+ 
+ void D3D12RenderTargetCache::Shutdown(bool from_destructor) {
++  ui::d3d12::util::ReleaseAndNull(ao_buffer_);
++  ui::d3d12::util::ReleaseAndNull(ao_pipeline_apply_);
++  ui::d3d12::util::ReleaseAndNull(ao_pipeline_compute_);
++  ui::d3d12::util::ReleaseAndNull(ao_root_signature_);
++  ao_init_tried_ = false;
++  ao_available_ = false;
+   ui::d3d12::util::ReleaseAndNull(resolve_rov_clear_64bpp_pipeline_);
+   ui::d3d12::util::ReleaseAndNull(resolve_rov_clear_32bpp_pipeline_);
+   ui::d3d12::util::ReleaseAndNull(resolve_rov_clear_root_signature_);
+@@ -1159,6 +1169,190 @@ void D3D12RenderTargetCache::WriteEdramUintPow2UAVDescriptor(D3D12_CPU_DESCRIPTO
+                                 D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+ }
+ 
++
++REXCVAR_DEFINE_INT32(ao_mode, 1, "GPU",
++                     "Ambient occlusion prototype (needs REX_DEV_AO): 0 off, 1 on, 2 AO only");
++REXCVAR_DEFINE_INT32(ao_strength, 1, "GPU", "Ambient occlusion prototype strength set: 1, 2 or 3");
++
++bool D3D12RenderTargetCache::InitAmbientOcclusion() {
++  if (ao_init_tried_) {
++    return ao_available_;
++  }
++  ao_init_tried_ = true;
++  const char* path = std::getenv("REX_DEV_AO");
++  if (!path || !*path) {
++    return false;
++  }
++  std::ifstream file(path, std::ios::binary);
++  if (!file) {
++    REXGPU_WARN("AO: can't read {}", path);
++    return false;
++  }
++  std::string source((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
++  // Tuning values (REX_DEV_AO_PARAMS="a,b,c,..."), passed to the shader as is.
++  if (const char* params = std::getenv("REX_DEV_AO_PARAMS"); params && *params) {
++    const char* at = params;
++    for (size_t i = 0; i < std::size(ao_params_) && *at; ++i) {
++      ao_params_[i] = float(std::atof(at));
++      const char* comma = std::strchr(at, ',');
++      if (!comma) {
++        break;
++      }
++      at = comma + 1;
++    }
++  }
++  // REX_DEV_AO_CYCLE=<seconds>: step through the debug views (passed as the
++  // view index) to compare them in one run.
++  if (const char* cycle = std::getenv("REX_DEV_AO_CYCLE"); cycle && *cycle) {
++    ao_cycle_seconds_ = std::atof(cycle);
++  }
++  HMODULE compiler = LoadLibraryW(L"D3DCompiler_47.dll");
++  auto compile = compiler ? reinterpret_cast<pD3DCompile>(GetProcAddress(compiler, "D3DCompile"))
++                          : nullptr;
++  if (!compile) {
++    REXGPU_WARN("AO: D3DCompiler_47.dll not available");
++    return false;
++  }
++  const ui::d3d12::D3D12Provider& provider = command_processor_.GetD3D12Provider();
++  ID3D12Device* device = provider.GetDevice();
++
++  D3D12_ROOT_PARAMETER root_parameters[3];
++  root_parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
++  root_parameters[0].Constants.ShaderRegister = 0;
++  root_parameters[0].Constants.RegisterSpace = 0;
++  root_parameters[0].Constants.Num32BitValues = 16;
++  root_parameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
++  D3D12_DESCRIPTOR_RANGE ranges[2];
++  for (uint32_t i = 0; i < 2; ++i) {
++    ranges[i].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
++    ranges[i].NumDescriptors = 1;
++    ranges[i].BaseShaderRegister = i;
++    ranges[i].RegisterSpace = 0;
++    ranges[i].OffsetInDescriptorsFromTableStart = 0;
++    root_parameters[1 + i].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
++    root_parameters[1 + i].DescriptorTable.NumDescriptorRanges = 1;
++    root_parameters[1 + i].DescriptorTable.pDescriptorRanges = &ranges[i];
++    root_parameters[1 + i].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
++  }
++  D3D12_ROOT_SIGNATURE_DESC root_signature_desc = {};
++  root_signature_desc.NumParameters = UINT(std::size(root_parameters));
++  root_signature_desc.pParameters = root_parameters;
++  ao_root_signature_ = ui::d3d12::util::CreateRootSignature(provider, root_signature_desc);
++  if (!ao_root_signature_) {
++    REXGPU_WARN("AO: failed to create the root signature");
++    return false;
++  }
++  auto build = [&](const char* entry) -> ID3D12PipelineState* {
++    ID3DBlob* code = nullptr;
++    ID3DBlob* errors = nullptr;
++    HRESULT result = compile(source.data(), source.size(), path, nullptr, nullptr, entry, "cs_5_0",
++                             D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &errors);
++    if (errors) {
++      REXGPU_WARN("AO: {}: {}", entry, static_cast<const char*>(errors->GetBufferPointer()));
++      errors->Release();
++    }
++    if (FAILED(result) || !code) {
++      return nullptr;
++    }
++    ID3D12PipelineState* pipeline = ui::d3d12::util::CreateComputePipeline(
++        device, code->GetBufferPointer(), code->GetBufferSize(), ao_root_signature_);
++    code->Release();
++    return pipeline;
++  };
++  ao_pipeline_compute_ = build("ComputeAO");
++  ao_pipeline_apply_ = build("ApplyAO");
++  if (!ao_pipeline_compute_ || !ao_pipeline_apply_) {
++    REXGPU_WARN("AO: failed to build the pipelines");
++    return false;
++  }
++  ao_available_ = true;
++  REXGPU_WARN("AO: prototype enabled from {} (params {} {} {} {} {} {} {} {})", path, ao_params_[0],
++              ao_params_[1], ao_params_[2], ao_params_[3], ao_params_[4], ao_params_[5],
++              ao_params_[6], ao_params_[7]);
++  return true;
++}
++
++void D3D12RenderTargetCache::ApplyAmbientOcclusion(uint32_t color_base_tiles,
++                                                   uint32_t depth_base_tiles, uint32_t pitch_tiles,
++                                                   uint32_t width, uint32_t height) {
++  const ui::d3d12::D3D12Provider& provider = command_processor_.GetD3D12Provider();
++  ID3D12Device* device = provider.GetDevice();
++  uint32_t buffer_size = width * height * sizeof(float);
++  if (!ao_buffer_) {
++    D3D12_RESOURCE_DESC desc;
++    ui::d3d12::util::FillBufferResourceDesc(desc, buffer_size,
++                                            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
++    if (FAILED(device->CreateCommittedResource(&ui::d3d12::util::kHeapPropertiesDefault,
++                                               provider.GetHeapFlagCreateNotZeroed(), &desc,
++                                               D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
++                                               IID_PPV_ARGS(&ao_buffer_)))) {
++      REXGPU_WARN("AO: failed to create the {} byte buffer", buffer_size);
++      ao_available_ = false;
++      return;
++    }
++    ao_buffer_size_ = buffer_size;
++  }
++  if (buffer_size > ao_buffer_size_) {
++    return;
++  }
++  ui::d3d12::util::DescriptorCpuGpuHandlePair descriptors[2];
++  if (!command_processor_.RequestOneUseSingleViewDescriptors(2, descriptors)) {
++    return;
++  }
++  WriteEdramRawUAVDescriptor(descriptors[0].first);
++  D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
++  uav_desc.Format = DXGI_FORMAT_R32_TYPELESS;
++  uav_desc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
++  uav_desc.Buffer.NumElements = ao_buffer_size_ / 4;
++  uav_desc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
++  device->CreateUnorderedAccessView(ao_buffer_, nullptr, &uav_desc, descriptors[1].first);
++
++  struct {
++    uint32_t color_base, depth_base, pitch_tiles, width;
++    uint32_t height, tile_width, tile_height, view;
++    float params[8];
++  } constants;
++  constants.color_base = color_base_tiles;
++  constants.depth_base = depth_base_tiles;
++  constants.pitch_tiles = pitch_tiles;
++  constants.width = width;
++  constants.height = height;
++  constants.tile_width = xenos::kEdramTileWidthSamples * draw_resolution_scale_x();
++  constants.tile_height = xenos::kEdramTileHeightSamples * draw_resolution_scale_y();
++  // Views: 0 off, 1 depth, 2-4 AO only with set 1-3, 5-7 applied with set 1-3.
++  uint32_t set = uint32_t(std::clamp(REXCVAR_GET(ao_strength), 1, 3) - 1);
++  constants.view = REXCVAR_GET(ao_mode) == 2 ? 2 + set : 5 + set;
++  if (ao_cycle_seconds_ > 0.0) {
++    static const auto start = std::chrono::steady_clock::now();
++    double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
++    constants.view = uint32_t(t / ao_cycle_seconds_) % 8;
++  }
++  std::memcpy(constants.params, ao_params_, sizeof(constants.params));
++  ++ao_frame_;
++
++  TransitionEdramBuffer(D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
++  command_processor_.SubmitBarriers();
++  DeferredCommandList& command_list = command_processor_.GetDeferredCommandList();
++  command_list.D3DSetComputeRootSignature(ao_root_signature_);
++  command_list.D3DSetComputeRoot32BitConstants(0, sizeof(constants) / sizeof(uint32_t), &constants,
++                                               0);
++  command_list.D3DSetComputeRootDescriptorTable(1, descriptors[0].second);
++  command_list.D3DSetComputeRootDescriptorTable(2, descriptors[1].second);
++  // The AO is computed once a frame and applied to each scene copy.
++  if (ao_computed_frame_ != command_processor_.GetCurrentFrame()) {
++    ao_computed_frame_ = command_processor_.GetCurrentFrame();
++    command_processor_.SetExternalPipeline(ao_pipeline_compute_);
++    command_list.D3DDispatch((width + 7) / 8, (height + 7) / 8, 1);
++    command_processor_.PushUAVBarrier(ao_buffer_);
++    command_processor_.SubmitBarriers();
++  }
++  command_processor_.SetExternalPipeline(ao_pipeline_apply_);
++  command_list.D3DDispatch((width + 7) / 8, (height + 7) / 8, 1);
++  command_processor_.PushUAVBarrier(edram_buffer_);
++  command_processor_.SubmitBarriers();
++  MarkEdramBufferModified();
++}
++
+ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMemory& shared_memory,
+                                      D3D12TextureCache& texture_cache,
+                                      uint32_t& written_address_out, uint32_t& written_length_out) {
+@@ -1180,6 +1374,42 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
+     return true;
+   }
+ 
++  // Ambient occlusion prototype: a full-screen 32bpp depth copy marks the
++  // scene depth as complete. Every full-screen 8888 color copy later in that
++  // frame is the scene going to an effect (such as water refraction) or to
++  // post-processing. With host render targets each copy is dumped afresh from
++  // the render target, so each gets the AO once; with ROV the EDRAM buffer is
++  // the render target itself, so only the first one.
++  bool apply_ao = false;
++  uint32_t ao_color_base = 0, ao_pitch_tiles = 0;
++  if (resolve_info.copy_dest_extent_length && InitAmbientOcclusion() &&
++      (REXCVAR_GET(ao_mode) != 0 || ao_cycle_seconds_ > 0.0)) {
++    bool copying_depth = resolve_info.IsCopyingDepth();
++    const draw_util::ResolveEdramInfo& edram_info =
++        copying_depth ? resolve_info.depth_edram_info : resolve_info.color_edram_info;
++    bool full_screen = resolve_info.coordinate_info.width_div_8 * 8 >= 1280 &&
++                       resolve_info.height_div_8 * 8 >= 720 &&
++                       !resolve_info.coordinate_info.edram_offset_x_div_8 &&
++                       !resolve_info.coordinate_info.edram_offset_y_div_8 &&
++                       edram_info.msaa_samples == xenos::MsaaSamples::k1X &&
++                       !edram_info.format_is_64bpp;
++    uint64_t frame = command_processor_.GetCurrentFrame();
++    if (copying_depth) {
++      ao_depth_copied_ = full_screen && edram_info.format == uint32_t(xenos::DepthRenderTargetFormat::kD24S8);
++      ao_depth_base_tiles_ = edram_info.base_tiles;
++      ao_depth_frame_ = frame;
++      ao_applied_this_frame_ = false;
++    } else if (ao_depth_copied_ && ao_depth_frame_ == frame && full_screen &&
++               (GetPath() == Path::kHostRenderTargets || !ao_applied_this_frame_) &&
++               (edram_info.format == uint32_t(xenos::ColorRenderTargetFormat::k_8_8_8_8) ||
++                edram_info.format == uint32_t(xenos::ColorRenderTargetFormat::k_8_8_8_8_GAMMA))) {
++      apply_ao = true;
++      ao_applied_this_frame_ = true;
++      ao_color_base = edram_info.base_tiles;
++      ao_pitch_tiles = edram_info.pitch_tiles;
++    }
++  }
++
+   DeferredCommandList& command_list = command_processor_.GetDeferredCommandList();
+ 
+   // Copying.
+@@ -1196,7 +1426,7 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
+           draw_util::resolve_copy_shader_info[size_t(copy_shader)];
+       bool direct_resolved = false;
+       if (GetPath() == Path::kHostRenderTargets) {
+-        if (REXCVAR_GET(direct_host_resolve)) {
++        if (REXCVAR_GET(direct_host_resolve) && !apply_ao) {
+           direct_resolved =
+               TryResolveCopyDirectly(resolve_info, copy_shader, draw_resolution_scaled);
+           if (direct_resolved) {
+@@ -1217,8 +1447,18 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
+             REXGPU_ERROR("D3D12RenderTargetCache: Failed to dump host render targets for resolve");
+             return false;
+           }
++          // The ambient occlusion pass also reads the scene depth.
++          if (apply_ao &&
++              !DumpRenderTargets(ao_depth_base_tiles_, dump_row_length_used, dump_rows, dump_pitch)) {
++            apply_ao = false;
++          }
+         }
+       }
++      if (apply_ao) {
++        ApplyAmbientOcclusion(ao_color_base, ao_depth_base_tiles_, ao_pitch_tiles,
++                              resolve_info.coordinate_info.width_div_8 * 8 * draw_resolution_scale_x(),
++                              resolve_info.height_div_8 * 8 * draw_resolution_scale_y());
++      }
+ 
+       // Make sure there is memory to write to.
+       bool copy_dest_committed;
+-- 
+2.55.0.windows.5
+
