@@ -1,37 +1,61 @@
-## Peter Jackson's King Kong PC Port v1.8.0
+## Peter Jackson's King Kong PC Port v1.9.0
 
 ### What's new
-- **Shader freezes cut from 2 seconds to under half a second.** A new **Balanced** choice for **Shader preparing** on the **Graphics** page, now the default for everyone. New effects are prepared on many threads at once in the background, and each frame waits a moment for them, instead of the game stopping while they're prepared one at a time. Once in a while an object can appear a moment late the first time it's seen. **Wait** and **Background** are still there if you prefer them. The numbers are below.
-- **The shader pack looks after itself.** Each time the launcher opens, it downloads the newest shader pack if you don't have it yet. There's no button to click and nothing to remember. The Play page shows how it went, and if you press **PLAY** while a download is still going, the game starts as soon as it finishes.
-- **Prepared effects are kept after a crash.** If the game closed while saving a newly prepared effect, everything prepared after that point was ignored and had to be prepared again. Now only the damaged entry is dropped, and the rest is kept.
-- **New defaults.** FXAA is on, motion blur is off, **Controller sensitivity** is 150% and the **Stick deadzone** is 5%. The achievement sound is the Xbox 360's when you have `Xbox_360.wav` in the `sounds` folder; otherwise the built-in chime plays as before. Settings you had changed from the old defaults stay as you set them.
-- The "share your shaders" pop-up and the **Share my shaders** button are gone.
+- **Ambient occlusion.** A new setting on the **Graphics** page adds soft shading where surfaces meet: in corners and creases, and on the ground under rocks, grass and people. It's off by default. Choose strength 1 (recommended), 2 or 3. It stays under the game's distance fog, so far-off walls don't show through the haze. It costs about 1 ms a frame at 4K, and works with NVIDIA and AMD graphics for now (not Intel yet) (#24).
+- **AMD FSR 1 and NVIDIA Image Scaling.** A new **Upscaler** setting: **Off** (the default), **AMD FSR 1** or **NVIDIA NIS**. Both work on any graphics card. Each has **Native**, **Quality**, **Balanced** and **Performance** modes, and the launcher shows the resolution the game draws at in each one. They scale the picture up to your screen and sharpen it, so a lower resolution still looks crisp.
+- **Original Xbox 360 or Modern.** A new **Look** setting at the top of the **Graphics** page. **Original** is the game as it was on the console: 720p at 30 FPS, the console's own anti-aliasing and texture filtering, the 69° field of view, motion blur and fog, no ambient occlusion and no upscaler. **Modern** gives you every setting, and switching back to it puts your own settings back.
+- **Graphics presets.** **Low**, **Medium** (the default settings), **High**, **Ultra** and **Steam Deck** set the upscaler, render quality, anti-aliasing, texture filtering and ambient occlusion in one click. Change any of them yourself and it shows **Custom**.
+- **Distance fog on or off.** **Off** clears the haze over far scenery. It's on by default, as the fog is part of Skull Island's look and also hides the edges of each area, so some empty backdrops can show with it off.
+- **Performance draws one step lower.** The game draws in steps of its original 720p, so on a 4K screen **Performance** used to come out the same as **Quality** (1440p). It now goes one step lower where there is one: 720p at 4K, 2160p at 8K.
 
-### Performance
-Tested on the V-Rex chapter at 30 FPS on its first visit, with the graphics driver's own shader cache bypassed so every effect really was new.
+### Before and after
+Ambient occlusion off and on, in the V-Rex chapter (strength 1):
 
-| | Wait (old default) | Balanced (new default) |
-| --- | :---: | :---: |
-| Longest freeze | 2.08 s | **0.45 s** |
-| All the freezes added up | 3.9 s | **1.3 s** |
-| Longest freeze with shader pack 2 | 0.33 s | **0.16 s** |
+<table>
+<tr>
+<td width="50%"><img src="https://raw.githubusercontent.com/TekRantGaming/king-kong-recompiled/main/docs/images/ao-off.jpg" alt="Ambient occlusion off"></td>
+<td width="50%"><img src="https://raw.githubusercontent.com/TekRantGaming/king-kong-recompiled/main/docs/images/ao-on.jpg" alt="Ambient occlusion on"></td>
+</tr>
+</table>
 
-The freezes came as the chapter started, when the game meets the most new effects at once: up to about 240 in a second, each taking the graphics driver about 20 ms to prepare. In the minute of play after that, neither mode froze. Without a shader pack, Balanced drew about 80 objects a frame late in that minute; with shader pack 2, none.
+<img src="https://raw.githubusercontent.com/TekRantGaming/king-kong-recompiled/main/docs/images/ao-detail.jpg" alt="Close-up of the rocks and grass with ambient occlusion off and on" width="100%">
+
+Distance fog on and off:
+
+<table>
+<tr>
+<td width="50%"><img src="https://raw.githubusercontent.com/TekRantGaming/king-kong-recompiled/main/docs/images/fog-on.jpg" alt="Distance fog on"></td>
+<td width="50%"><img src="https://raw.githubusercontent.com/TekRantGaming/king-kong-recompiled/main/docs/images/fog-off.jpg" alt="Distance fog off"></td>
+</tr>
+</table>
+
+The title screen at 1920 x 1080 in Performance mode (drawn at 1280 x 720), zoomed 2x: plain scaling, AMD FSR 1 and NVIDIA NIS.
+
+<img src="https://raw.githubusercontent.com/TekRantGaming/king-kong-recompiled/main/docs/images/upscalers.jpg" alt="No upscaler, AMD FSR 1 and NVIDIA NIS" width="100%">
+
+### Graphics presets
+
+| Preset | Upscaler | Render quality | Anti-aliasing | Texture filtering | Ambient occlusion |
+| --- | :---: | :---: | :---: | :---: | :---: |
+| Low | AMD FSR 1 | Performance | FXAA | 2x | off |
+| Medium (default) | off | Native | FXAA | 4x | off |
+| High | off | Native | FXAA | 8x | on |
+| Ultra | off | Supersample | FXAA Extreme | 16x | on |
+| Steam Deck | off | Native | FXAA | 2x | off |
 
 ### Full changelog
-- Shader preparing: `async_shader_compilation` is now on by default with a new `async_shader_wait_ms`. A draw whose effect is still being prepared waits for it within a budget for each frame of half a frame at your frame rate cap (16 ms at 30 FPS, 8 at 60, 4 from 120 or unlimited), and is skipped only once that is used up. **Background** sets the wait to 0, and **Wait** turns preparing in the background off.
-- GPU plugin: `rexgpu-xenos.dll` is now built from the ReXGlue SDK 0.10.0 source with the port's patch for that wait. The patch and build steps are in `tools/rexglue-patches`.
-- Shader cache: at startup the port checks the cache's records and drops any that were only partly written, instead of the runtime ignoring everything after the first one.
-- Shader pack: downloaded automatically each time the launcher opens, whether or not update checks are on. The **Shader pack update** pop-up and the **Download shader pack** button are gone. Shader pack 2 is still the latest; it covers about 40% of the game's effects, and Balanced handles the rest smoothly.
-- Defaults: `swap_post_effect` fxaa, `kk_motion_blur` false, `kk_camera_sensitivity` 150, `kk_deadzone` 5, `kk_achievement_sound_file` `Xbox_360.wav` (the built-in chime if that file isn't in the `sounds` folder). VSync off (`d3d12_allow_variable_refresh_rate_and_tearing`), 4x texture filtering (`anisotropic_override` 3) and the Modern camera response were already the defaults; the port now sets the first two itself.
-- Launcher: the share-shaders poster (`kk_share_poster`) and the **Share my shaders** button are removed.
-- `tools/shader_coverage.py`: measures how many of the game's own effects (listed in its `Shaders/xeshaders.bin`) a shader cache has prepared.
+- Ambient occlusion: built into the GPU plugin (`rexgpu-xenos.dll`, patches 0003 to 0007 in `tools/rexglue-patches`), set with `ao_mode` (0 off, 1 on) and `ao_strength` (1 to 3). Once a frame, at half resolution, it reads the scene depth the game copies out before lighting, works out the occlusion from 10 samples, blurs it and scales it up to full resolution. It's applied to the scene before the game's post effects, so the HUD isn't touched, and it uses the game's own fog values so only the part of the scene in front of the fog is darkened. Measured at 0.7 to 1.0 ms a frame at 3840 x 2160 on an RTX 4070 Ti. It needs the host render target path that NVIDIA and AMD graphics use; Intel graphics use a different path that isn't supported yet.
+- Distance fog: `kk_fog` (on by default). Off skips the game's fog pass.
+- Look: `kk_original_look`. While it's on, your Modern settings are kept in `kk_modern_settings`, and the Original values are set again each time the game starts in case the settings file was edited.
+- Upscalers: `present_effect` (`bilinear` for Off, `fsr`, `nis`) and `present_nis_sharpness` (0.5). `rexruntime.dll` is now built from the ReXGlue SDK source with patch 0008: AMD FSR 1 and CAS without the AMD SDK, and the NVIDIA Image Scaling SDK v1.0.3 as a compute pass, run more than once for scale factors over 2x like FSR's own passes. The patch also fixes a heap in the presenter that only had room for two in-between images, too few for FSR from 720p to 8K. Their MIT licences are in `THIRD-PARTY-NOTICES.txt`.
+- Upscaler mode: sets `kk_render_quality` (`native`, `quality`, `balanced`, `performance`). While an upscaler is on, it replaces the **Render quality** setting. `performance` now goes one 720p step below `quality` where there is one, with or without an upscaler.
+- Presets: the Graphics page shows which preset your settings match. Motion blur and fog aren't part of them.
 
 ### How to update
-If you have v1.4.0 or later, the launcher offers this update when it opens: click **Update now**. Otherwise download **KingKong-v1.8.0-windows-x64.zip** below and copy everything in it over your KingKong folder. Your settings move to **Balanced** shader preparing on their own.
+If you have v1.4.0 or later, the launcher offers this update when it opens: click **Update now**. Otherwise download **KingKong-v1.9.0-windows-x64.zip** below and copy everything in it over your KingKong folder. Your settings stay as they are: ambient occlusion and the upscalers start off, and your preset shows as whichever one your settings match (or **Custom**).
 
 ### New install
-1. Unzip **KingKong-v1.8.0-windows-x64.zip** anywhere and run **king_kong.exe**. The shader pack downloads by itself.
+1. Unzip **KingKong-v1.9.0-windows-x64.zip** anywhere and run **king_kong.exe**. The shader pack downloads by itself.
 2. Click **Install from disc image...** and pick your own King Kong disc image (USA/Europe, title ID `555307D3`, version `0.0.0.1`).
 3. Press **PLAY**.
 

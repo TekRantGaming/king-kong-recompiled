@@ -7,6 +7,7 @@
 [![Latest release](https://img.shields.io/github/v/release/TekRantGaming/king-kong-recompiled?style=for-the-badge&label=release&color=e8a33c&labelColor=0d0b09)](https://github.com/TekRantGaming/king-kong-recompiled/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/TekRantGaming/king-kong-recompiled/total?style=for-the-badge&color=8a5a1c&labelColor=0d0b09)](https://github.com/TekRantGaming/king-kong-recompiled/releases)
 ![Platforms](https://img.shields.io/badge/platforms-Windows-5b7a8c?style=for-the-badge&labelColor=0d0b09)
+[![Listed on Quiver Launcher](https://img.shields.io/badge/listed%20on-Quiver%20Launcher-5b7a8c?style=for-the-badge&labelColor=0d0b09)](https://quiverlauncher.com/apps/peter-jackson-s-king-kong-the-official-game-of-the-movie-king-kong-pc-port)
 
 ### Peter Jackson's King Kong on PC, running natively, with the launcher and options of a modern PC release.
 
@@ -34,7 +35,7 @@ On Xenia this game gets stuck at the start, staring at the word "VENTURE". This 
 <td width="33%" valign="top">
 
 **Up to 8K**<br>
-Render at up to 7680 x 4320, with presets from Supersample to Ultra Performance that match your screen, and AMD FSR 1 or NVIDIA Image Scaling to upscale.
+Render at up to 7680 x 4320, with presets from Supersample to Ultra Performance that match your screen.
 
 </td>
 <td width="33%" valign="top">
@@ -84,7 +85,79 @@ The launcher offers new versions when it opens and shows you what changed. The n
 
 </td>
 </tr>
+<tr>
+<td valign="top">
+
+**Ambient occlusion**<br>
+Soft shading in corners and creases and under rocks, grass and people, that stays under the game's fog. About 1 ms a frame at 4K.
+
+</td>
+<td valign="top">
+
+**AMD FSR 1 and NVIDIA NIS**<br>
+Two upscalers for any graphics card, each with Native, Quality, Balanced and Performance modes, to keep a lower resolution sharp.
+
+</td>
+<td valign="top">
+
+**Original or Modern**<br>
+Play it exactly as the Xbox 360 did with one click, or pick a preset from Low to Ultra, or one made for the Steam Deck.
+
+</td>
+</tr>
 </table>
+
+## New in v1.9.0
+
+Ambient occlusion, two upscalers, graphics presets, the Original Xbox 360 look and a switch for the distance fog, all on the launcher's **Graphics** page. The game shots below are from the V-Rex chapter; in each pair only the setting being compared changes.
+
+### Ambient occlusion
+
+Soft shading where surfaces meet: in corners and creases, and on the ground under rocks, grass and people, so they sit in the scene instead of floating on it. It stays under the game's own distance fog, so far-off walls don't show through the haze. It's off by default: turn it on with **Ambient occlusion**, at strength 1 (recommended), 2 or 3. It costs about 1 ms a frame at 4K, and works with NVIDIA and AMD graphics for now.
+
+<table>
+<tr>
+<td width="50%"><img src="docs/images/ao-off.jpg" alt="The V-Rex chapter with ambient occlusion off"></td>
+<td width="50%"><img src="docs/images/ao-on.jpg" alt="The same view with ambient occlusion on"></td>
+</tr>
+</table>
+
+<img src="docs/images/ao-detail.jpg" alt="Close-up of the rocks and grass with ambient occlusion off and on" width="100%">
+
+<sub>2560 x 1440 at strength 1, taken half a second apart (the rain and the firelight move in between). The close-up is at full size.</sub>
+
+### Distance fog
+
+**Distance fog** is on by default. Off clears the haze over far scenery, though the fog is part of Skull Island's look and also hides the edges of each area, so some empty backdrops can show.
+
+<table>
+<tr>
+<td width="50%"><img src="docs/images/fog-on.jpg" alt="The V-Rex chapter with the distance fog on"></td>
+<td width="50%"><img src="docs/images/fog-off.jpg" alt="The same view with the distance fog off"></td>
+</tr>
+</table>
+
+### AMD FSR 1 and NVIDIA Image Scaling
+
+Pick **AMD FSR 1** or **NVIDIA NIS** under **Upscaler**. Both work on any graphics card. They scale the game's picture up to your screen and sharpen it, so drawing fewer pixels for a higher frame rate still looks crisp. **Upscaler mode** picks how many pixels the game draws: **Native**, **Quality**, **Balanced** or **Performance**, with the resolution shown for your screen. The game draws in steps of its original 720p, so some modes come out the same on some screens.
+
+<img src="docs/images/upscalers.jpg" alt="The title screen logo with no upscaler, AMD FSR 1 and NVIDIA NIS" width="100%">
+
+<sub>The title screen at 1920 x 1080 in Performance mode (drawn at 1280 x 720), zoomed 2x: plain scaling, AMD FSR 1 and NVIDIA NIS.</sub>
+
+### Original Xbox 360 or Modern, and presets
+
+**Look** at the top of the **Graphics** page switches between **Original Xbox 360**, the game as it was on the console (720p at 30 FPS, its own anti-aliasing and texture filtering, the 69° field of view, motion blur and fog, no ambient occlusion and no upscaler), and **Modern**, with every setting. Switching back to Modern puts your own settings back. In Modern, a **Preset** sets several things at once:
+
+| Preset | Upscaler | Render quality | Anti-aliasing | Texture filtering | Ambient occlusion |
+| --- | :---: | :---: | :---: | :---: | :---: |
+| Low | AMD FSR 1 | Performance | FXAA | 2x | off |
+| Medium (default) | off | Native | FXAA | 4x | off |
+| High | off | Native | FXAA | 8x | on |
+| Ultra | off | Supersample | FXAA Extreme | 16x | on |
+| Steam Deck | off | Native | FXAA | 2x | off |
+
+Change any of them yourself and the preset shows **Custom**.
 
 ## Why this port?
 
@@ -261,6 +334,7 @@ They switch on as soon as the game reaches its main menu, exactly as if you had 
 | Motion blur | always on | on or off |
 | Distance fog | always on | on or off |
 | Ambient occlusion | none | optional, three strengths |
+| Graphics presets | none | Original Xbox 360 look, Low to Ultra, Steam Deck |
 | Startup logos | always play | play or skip |
 | Cheats | typed as codes each time | switches in the launcher |
 | Achievement pop-ups | console | Xbox 360 style, with your choice of sound |
@@ -330,6 +404,8 @@ Get-FileHash "C:\Games\King Kong.iso" -Algorithm SHA1
 4. Press **PLAY**.
 
 The download contains only this port. **No game files are included**: they come from your own disc. Your saves and settings are kept in `Documents\king_kong`.
+
+**Quiver Launcher:** the port is also listed on [Quiver Launcher](https://quiverlauncher.com/apps/peter-jackson-s-king-kong-the-official-game-of-the-movie-king-kong-pc-port), where you can find it alongside other PC ports and see how it runs for other players.
 
 **Linux:** in development. A Linux version is being worked on but is not ready yet, so there is no Linux download for now.
 
