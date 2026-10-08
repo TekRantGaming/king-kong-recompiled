@@ -275,19 +275,12 @@ class Launcher final : public rex::ui::ImGuiDialog {
     // The shader pack keeps itself up to date: each time the launcher opens,
     // the published pack is downloaded if it is newer than the one installed.
     if (!testing) StartPackDownload();
-    // A fresh install has no settings file, and no version it last ran.
+    // "What's new" once after an update: the settings file says the launcher
+    // has run before (a fresh install has none), and an older version ran last.
     const std::string last = Get("kk_last_version");
-    std::error_code ec;
-    const bool fresh = last.empty() && !std::filesystem::exists(paths_.config_path, ec);
-    // First-run setup, until it is finished or skipped. Players updating from a
-    // version without it (1.7.x and older) already have everything set up.
-    if (!GetBool("kk_setup_done") && !testing) {
-      if (fresh || (!last.empty() && CompareVersions(last, "1.8.0") >= 0)) open_setup_ = true;
-      else SetBool("kk_setup_done", true);
-    }
-    // "What's new" once after an update: an older version ran last.
     if (last != KK_VERSION && !testing) {
-      if (!fresh) {
+      std::error_code ec;
+      if (!last.empty() || std::filesystem::exists(paths_.config_path, ec)) {
         whats_new_from_ = last;  // empty: from before the launcher remembered (show this version)
         open_whats_new_ = true;
       }
@@ -341,7 +334,6 @@ class Launcher final : public rex::ui::ImGuiDialog {
     DrawFooter(ImVec2(vp->Pos.x + margin, vp->Pos.y + h - footer), w - margin * 2, footer);
     HandleHotkeys();
     DrawFrameRateWarning();
-    DrawSetup();
     DrawWhatsNew();
     DrawUpdatePrompt();
     DrawPackWait();
@@ -1683,7 +1675,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
 
 #if defined(KK_DEV_TOOLS)
   // Developer-only (README screenshots): KK_DEV_LAUNCHER_TOUR=<seconds> shows
-  // each page in turn for that long, then the setup and What's new pop-ups, logging
+  // each page in turn for that long, then the What's new pop-up, logging
   // "KK dev: tour <name>" as each appears (tools/launcher_shots.ps1 captures them).
   void DevTour() {
     static const double each = [] {
@@ -1695,7 +1687,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
     static int shown = -1;
     const int step = int(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count() / each);
     if (step == shown) return;
-    if (shown < 0) open_whats_new_ = open_setup_ = false;  // no start-up pop-up over the pages
+    if (shown < 0) open_whats_new_ = false;  // no start-up pop-up over the pages
     shown = step;
     static const std::pair<Page, const char*> kSteps[] = {
         {kPlay, "play"},         {kDisplay, "display"}, {kGraphics, "graphics"},         {kGameplay, "gameplay"},
@@ -1706,170 +1698,14 @@ class Launcher final : public rex::ui::ImGuiDialog {
       REXLOG_INFO("KK dev: tour {}", kSteps[step].second);
     } else if (step == kCount) {
       page_ = kPlay;
-      open_setup_ = true;
-      REXLOG_INFO("KK dev: tour setup");
-    } else if (step <= kCount + 3) {
-      static const char* const kSetup[] = {"setup_pack", "setup_settings", "setup_ready"};
-      setup_step_ = step - kCount;
-      REXLOG_INFO("KK dev: tour {}", kSetup[setup_step_ - 1]);
-    } else if (step == kCount + 4) {
-      dev_close_setup_ = true;
       whats_new_from_ = "";  // this version's notes, as after an update from 1.6.0
       open_whats_new_ = true;
       REXLOG_INFO("KK dev: tour whats_new");
-    } else if (step == kCount + 5) {
+    } else if (step == kCount + 1) {
       REXLOG_INFO("KK dev: tour done");
     }
   }
 #endif
-
-  // -------------------------------------------------------------- setup ---
-  // First run: install the game, get the shader pack and pick the main
-  // settings, a step at a time. Everything can be changed later on the pages.
-  void DrawSetup() {
-    constexpr const char* kTitle = "##setup";
-    constexpr int kSteps = 4;
-    if (open_setup_ && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) {
-      ImGui::OpenPopup(kTitle);
-      open_setup_ = false;
-      setup_step_ = 0;
-    }
-    if (!BeginModal(kTitle, 780, false)) return;
-#if defined(KK_DEV_TOOLS)
-    if (dev_close_setup_) {
-      dev_close_setup_ = false;
-      ImGui::CloseCurrentPopup();
-    }
-#endif
-    FinishInstallIfDone();
-    RefreshPack();
-    const UiFonts& f = GetUiFonts();
-    const ImVec4 good(0.55f, 0.95f, 0.7f, 1);
-    auto heading = [&](const char* text) {
-      ImGui::PushFont(f.bold, 26.0f);
-      ImGui::TextUnformatted(text);
-      ImGui::PopFont();
-      ImGui::Dummy(ImVec2(0, 4 * s_));
-    };
-    auto subheading = [&](const char* text) {
-      ImGui::Dummy(ImVec2(0, 10 * s_));
-      ImGui::PushFont(f.semibold, 0.0f);
-      ImGui::TextUnformatted(text);
-      ImGui::PopFont();
-    };
-    auto dim = [&](const std::string& text) {
-      ImGui::PushStyleColor(ImGuiCol_Text, kDim);
-      ImGui::TextUnformatted(text.c_str());
-      ImGui::PopStyleColor();
-    };
-    auto status = [&](bool ok, const std::string& text) {
-      ImGui::PushStyleColor(ImGuiCol_Text, ok ? good : kAccent);
-      ImGui::TextUnformatted(text.c_str());
-      ImGui::PopStyleColor();
-    };
-
-    dim("Setup: step " + std::to_string(setup_step_ + 1) + " of " + std::to_string(kSteps));
-    const float body_h = std::min(400 * s_, ImGui::GetMainViewport()->Size.y - 190 * s_);
-    ImGui::BeginChild("##setup_body", ImVec2(0, body_h));
-    ImGui::PushTextWrapPos(0.0f);
-    switch (setup_step_) {
-      case 0:
-        heading("Welcome to King Kong on PC");
-        ImGui::TextUnformatted("A few quick steps and you're ready to play. Everything here can be changed later in "
-                               "the launcher.");
-        subheading("Your game files");
-        dim("The port plays your own copy of Peter Jackson's King Kong for Xbox 360. Choose your disc image (.iso) "
-            "and its files (about 6.3 GB) are copied next to the game.");
-        ImGui::Dummy(ImVec2(0, 8 * s_));
-        if (installing_) {
-          const double total = std::max<double>(1.0, double(progress_.bytes_total.load()));
-          ImGui::ProgressBar(float(progress_.bytes_done.load() / total), ImVec2(-FLT_MIN, 0));
-          dim("Copying the game files. You can carry on with the setup meanwhile.");
-        } else if (files_ok_) {
-          status(true, "Game files installed.");
-          dim(paths_.game_dir.string());
-        }
-        if (!files_ok_ || installing_) InstallButtons();
-        if (!install_message_.empty() && !installing_ && !files_ok_) dim(install_message_);
-        break;
-      case 1:
-        heading("Shader pack");
-        ImGui::TextUnformatted("King Kong prepares each of its effects (a shader) the first time it appears. The "
-                               "shader pack holds effects already prepared by playing through the game, so the game "
-                               "pauses for new ones far less often.");
-        ImGui::Dummy(ImVec2(0, 6 * s_));
-        dim("It downloads by itself, and each time the launcher opens it gets the newest pack. There's nothing you "
-            "need to do.");
-        ImGui::Dummy(ImVec2(0, 10 * s_));
-        PackStatus();
-        break;
-      case 2:
-        heading("Your settings");
-        dim("The ones most players want to choose first. The launcher's pages have the rest.");
-        ImGui::Dummy(ImVec2(0, 8 * s_));
-        if (BeginRows("##setup_rows")) {
-          Row("Window mode", "Fullscreen uses a borderless window at your desktop resolution.");
-          {
-            const bool fs = GetBool("fullscreen");
-            if (int i = Segmented("mode", {"Windowed", "Fullscreen"}, fs ? 1 : 0); i >= 0) SetFullscreen(i == 1);
-          }
-          Row("Frame rate", "30 matches the Xbox 360 and keeps every animation right.");
-          FrameRateCombo();
-          Row("Input", "Controllers work automatically. Keyboard & mouse emulates a controller.");
-          ToggleCvar("mnk_mode", "Controller", "Keyboard & mouse");
-          Row("Startup logos", "The company movies before the title screen.");
-          ToggleCvar("kk_skip_intros", "Play", "Skip");
-          EndRows();
-        }
-        break;
-      default: {
-        const bool ready = files_ok_ && !installing_;
-        heading(ready ? "Ready to play" : "Almost ready");
-        subheading("Game files");
-        if (installing_) status(false, "Still copying. Play starts once they're in.");
-        else status(files_ok_, files_ok_ ? "Installed." : "Not installed yet. Go back a step, or use the Play page.");
-        subheading("Shader pack");
-        if (pack_.busy) status(true, "Downloading. If you press Play first, the game starts once it's done.");
-        else if (pack_.failed) status(false, "Not downloaded this time. The launcher tries again each time it opens.");
-        else if (pack_installed_ > 0) status(true, "Pack " + std::to_string(pack_installed_) + " installed.");
-        else status(false, "Not downloaded yet. The launcher tries again each time it opens.");
-        ImGui::Dummy(ImVec2(0, 14 * s_));
-        dim("The launcher opens each time you start the game, with every setting on its pages.");
-        break;
-      }
-    }
-    ImGui::PopTextWrapPos();
-    ImGui::EndChild();
-
-    ImGui::Dummy(ImVec2(0, 10 * s_));
-    bool finish = false, play = false;
-    if (setup_step_ < kSteps - 1) {
-      const float bw = (ImGui::GetContentRegionAvail().x - 8 * s_) / 2;
-      if (setup_step_ == 0 ? ImGui::Button("Skip setup", ImVec2(bw, 0)) : ImGui::Button("Back", ImVec2(bw, 0))) {
-        if (setup_step_ == 0) finish = true;
-        else --setup_step_;
-      }
-      ImGui::SameLine(0, 8 * s_);
-      if (AccentButton("Next", ImVec2(bw, 0))) ++setup_step_;
-    } else {
-      const float bw = (ImGui::GetContentRegionAvail().x - 16 * s_) / 3;
-      if (ImGui::Button("Back", ImVec2(bw, 0))) --setup_step_;
-      ImGui::SameLine(0, 8 * s_);
-      if (ImGui::Button("Go to the launcher", ImVec2(bw, 0))) finish = true;
-      ImGui::SameLine(0, 8 * s_);
-      ImGui::BeginDisabled(!files_ok_ || installing_);
-      if (AccentButton("Play", ImVec2(bw, 0))) finish = play = true;
-      ImGui::EndDisabled();
-    }
-    if (finish) {
-      SetBool("kk_setup_done", true);
-      SaveSettings(paths_.config_path);
-      page_ = kPlay;
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::EndPopup();
-    if (play) Play();
-  }
 
   // Play was pressed while the shader pack was still downloading: wait for it,
   // then start the game.
@@ -1982,17 +1818,12 @@ class Launcher final : public rex::ui::ImGuiDialog {
   bool update_manual_ = false, update_prompted_ = false, installing_update_ = false, relaunched_ = false;
   bool open_whats_new_ = false;
   std::string whats_new_from_;  // version the player had before this one
-  bool open_setup_ = false;
-  int setup_step_ = 0;
   std::string share_message_;
   ShaderPackStatus pack_;
   std::thread pack_thread_;
   int pack_installed_ = -1;        // -1: not read yet
   bool waiting_for_pack_ = false;  // Play was pressed during the download
   int autoplay_frames_ = 0;
-#if defined(KK_DEV_TOOLS)
-  bool dev_close_setup_ = false;  // DevTour: close the setup pop-up
-#endif
   std::string status_;
   std::string capturing_;
   std::vector<MonitorInfo> monitors_;

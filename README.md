@@ -60,7 +60,7 @@ Invert the camera, set its sensitivity, toggle aim, set a deadzone, remap any bu
 <td valign="top">
 
 **Install from your disc**<br>
-Download and run it. A short setup the first time takes you through picking your disc image and the main settings. No technical steps.
+Download, run, pick your disc image in the launcher, and play. No technical steps.
 
 </td>
 </tr>
@@ -94,7 +94,7 @@ Until now the only way to play it was on an Xbox 360. On the Xenia emulator it b
 
 ## The launcher
 
-Everything is set up before the game starts. The first time it opens, a short **setup** takes you through installing the game, the shader pack and the main settings, a step at a time. The launcher uses art from your own copy of the game: Kong's face, the achievement pictures and the stormy sky from the game's menu. Settings are saved to a plain text file, `king_kong.toml`, next to the game, and every settings page has a **Reset page** button that puts just that page back to its defaults.
+Everything is set up before the game starts. The launcher uses art from your own copy of the game: Kong's face, the achievement pictures and the stormy sky from the game's menu. Settings are saved to a plain text file, `king_kong.toml`, next to the game, and every settings page has a **Reset page** button that puts just that page back to its defaults.
 
 <table>
 <tr>
@@ -209,16 +209,6 @@ They switch on as soon as the game reaches its main menu, exactly as if you had 
 
 </td>
 <td><img src="docs/images/launcher-about.jpg" alt="About page"></td>
-</tr>
-<tr>
-<td><img src="docs/images/launcher-setup.jpg" alt="First-run setup"></td>
-<td valign="middle">
-
-### Setup
-- The first time the launcher opens, a few steps get you ready: **install the game** from your disc image, the **shader pack** (it downloads by itself), and your **window mode, frame rate, input and startup logos**
-- **Skip setup** at any point; everything is on the launcher's pages too
-
-</td>
 </tr>
 <tr>
 <td><img src="docs/images/launcher-whats-new.jpg" alt="What's new pop-up"></td>
@@ -337,9 +327,9 @@ Get-FileHash "C:\Games\King Kong.iso" -Algorithm SHA1
 **You need:** Windows 10 or 11 (64-bit), a graphics card with DirectX 12, about 7 GB of free space, and your own Peter Jackson's King Kong Xbox 360 disc as a disc image (see [Which version you need](#which-version-you-need)).
 
 1. Download the **KingKong-...-windows-x64.zip** file from the [latest release](https://github.com/TekRantGaming/king-kong-recompiled/releases/latest) and unzip it anywhere.
-2. Run **king_kong.exe**. The launcher opens with a short setup.
-3. Click **Install from disc image...** and pick your King Kong disc image. The launcher checks it and copies the game files (about 6.3 GB) into a `game` folder next to the exe. Meanwhile the shader pack downloads by itself.
-4. Pick your main settings, then press **Play**.
+2. Run **king_kong.exe**. The launcher opens, and the shader pack downloads by itself.
+3. Click **Install from disc image...** and pick your King Kong disc image. The launcher checks it and copies the game files (about 6.3 GB) into a `game` folder next to the exe.
+4. Press **PLAY**.
 
 The download contains only this port. **No game files are included**: they come from your own disc. Your saves and settings are kept in `Documents\king_kong`.
 
