@@ -29,6 +29,7 @@ set(KINGKONG_SOURCES
     src/intros.cpp
     src/fov.cpp
     src/motion_blur.cpp
+    src/fog.cpp
     src/cheats.cpp
     src/changelog.cpp
     src/menu_hook.cpp
@@ -42,7 +43,7 @@ set(KINGKONG_SOURCES
 # Developer-only test aids (never in release builds): -DKK_DEV_TOOLS=ON.
 option(KK_DEV_TOOLS "Build developer test aids such as KK_DEV_AUTOSKIP" OFF)
 if(KK_DEV_TOOLS)
-    list(APPEND KINGKONG_SOURCES src/dev_tools.cpp src/dev_watch.cpp)
+    list(APPEND KINGKONG_SOURCES src/dev_tools.cpp src/dev_watch.cpp src/dev_ae.cpp)
 endif()
 
 if(WIN32)
@@ -88,7 +89,7 @@ endif()
 # The port's version: shown in the launcher and compared with GitHub releases by the updater.
 # (-DKK_VERSION=x.y.z overrides it, to test the updater with an "older" build.)
 if(NOT DEFINED KK_VERSION)
-    set(KK_VERSION "1.8.0")
+    set(KK_VERSION "1.9.0")
 endif()
 target_compile_definitions(king_kong PRIVATE KK_VERSION="${KK_VERSION}" KK_VERSION_W=L"${KK_VERSION}")
 

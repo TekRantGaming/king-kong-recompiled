@@ -92,6 +92,7 @@ class KingKongApp : public rex::ReXApp {
     const bool files_ok = kk::GameFilesPresent(defaults.game_data_root);
     const bool show = !files_ok || kk::IsShiftHeld() || (REXCVAR_GET(kk_launcher) && !skip_once);
     if (!show) {
+      kk::EnforceOriginalLook();
       kk::ApplyRenderPreset(OutputSize().second);
       return defaults;
     }

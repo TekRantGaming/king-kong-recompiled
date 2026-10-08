@@ -236,7 +236,7 @@ constexpr const char* kPageNames[kPageCount] = {"Play",     "Display", "Graphics
 constexpr const char* kPageBlurbs[kPageCount] = {
     "Install the game from your own disc image and start playing.",
     "Window, monitor and how the picture fits your screen.",
-    "Render resolution, anti-aliasing and texture filtering.",
+    "Upscaling, render resolution, anti-aliasing and texture filtering.",
     "Frame rate, language and the frame counter.",
     "Camera, sticks, vibration, button remapping and keyboard play.",
     "The game's cheats, switched on for you when the game starts.",
@@ -267,6 +267,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
     saved_style_ = ImGui::GetStyle();
     for (const char* name : kRestartCvars) restart_baseline_.push_back(Get(name));
     files_ok_ = GameFilesPresent(paths_.game_dir);
+    EnforceOriginalLook();
     LoadArt();
     toast_ = std::make_unique<AchievementToast>(drawer, immediate_, paths_.game_dir, paths_.user_dir);
     CleanUpAfterUpdate();
@@ -888,39 +889,200 @@ class Launcher final : public rex::ui::ImGuiDialog {
   }
 
   // ----------------------------------------------------------- Graphics ---
+  // ------------------------------------------------------------ presets ---
+  // Graphics presets set the upscaler, render quality, anti-aliasing, texture
+  // filtering and ambient occlusion (motion blur and fog are left to taste).
+  // The preset shown is the one the settings match; anything else is Custom.
+  // Medium is the default settings.
+  struct GraphicsPreset {
+    const char* label;
+    const char* upscaler;   // present_effect
+    const char* quality;    // kk_render_quality
+    const char* aa;         // swap_post_effect
+    const char* filtering;  // anisotropic_override: 2 = 2x, 3 = 4x, 4 = 8x, 5 = 16x
+    bool ao;                // ao_mode 1 at strength 1
+  };
+  static constexpr GraphicsPreset kGraphicsPresets[] = {
+      {"Low", "fsr", "performance", "fxaa", "2", false},
+      {"Medium", "bilinear", "native", "fxaa", "3", false},
+      {"High", "bilinear", "native", "fxaa", "4", true},
+      {"Ultra", "bilinear", "supersample", "fxaa_extreme", "5", true},
+      {"Steam Deck", "bilinear", "native", "fxaa", "2", false},
+  };
+  static constexpr int kGraphicsPresetCount = int(std::size(kGraphicsPresets));
+
+  // The upscaler modes (kk_render_quality); -1 for another render quality.
+  static constexpr const char* kUpscalerModes[] = {"native", "quality", "balanced", "performance"};
+  static constexpr const char* kUpscalerModeNames[] = {"Native", "Quality", "Balanced", "Performance"};
+  int UpscalerMode() {
+    const std::string q = Get("kk_render_quality");
+    for (int i = 0; i < 4; ++i)
+      if (q == kUpscalerModes[i]) return i;
+    return -1;
+  }
+
+  int MatchGraphicsPreset() {
+    for (int i = 0; i < kGraphicsPresetCount; ++i) {
+      const GraphicsPreset& p = kGraphicsPresets[i];
+      const bool ao = GetInt("ao_mode", 0) != 0;
+      if (Get("present_effect") == p.upscaler && Get("kk_render_quality") == p.quality &&
+          Get("swap_post_effect") == p.aa &&
+          Get("anisotropic_override") == p.filtering && ao == p.ao && (!ao || GetInt("ao_strength", 1) == 1))
+        return i;
+    }
+    return -1;
+  }
+
+  void ApplyGraphicsPreset(int index) {
+    const GraphicsPreset& p = kGraphicsPresets[index];
+    Set("present_effect", p.upscaler);
+    Set("kk_render_quality", p.quality);
+    Set("swap_post_effect", p.aa);
+    Set("anisotropic_override", p.filtering);
+    SetInt("ao_mode", p.ao ? 1 : 0);
+    if (p.ao) SetInt("ao_strength", 1);
+  }
+
+  // The Original look: the Xbox 360's own settings (OriginalLookSettings).
+  // Switching to it keeps the Modern ones in kk_modern_settings, and switching
+  // back puts them back.
+  void SetOriginalLook(bool on) {
+    if (on == GetBool("kk_original_look")) return;
+    if (on) {
+      std::string saved;
+      for (const auto& [name, value] : OriginalLookSettings()) saved += std::string(name) + "=" + Get(name) + ";";
+      Set("kk_modern_settings", saved);
+      for (const auto& [name, value] : OriginalLookSettings()) Set(name, value);
+    } else {
+      const std::string saved = Get("kk_modern_settings");
+      if (saved.empty()) ApplyGraphicsPreset(1);  // Medium
+      std::stringstream in(saved);
+      for (std::string item; std::getline(in, item, ';');) {
+        const size_t eq = item.find('=');
+        if (eq != std::string::npos) Set(item.substr(0, eq).c_str(), item.substr(eq + 1));
+      }
+      Set("kk_modern_settings", "");
+    }
+    SetBool("kk_original_look", on);
+  }
+
   void PageGraphics() {
     const auto [out_w, out_h] = cb_.output_size ? cb_.output_size() : std::pair<int, int>{1280, 720};
     if (!BeginRows("##graphics")) return;
-    Row("Render quality",
-        "How sharply the game is drawn compared with your screen. Native matches it; Quality, Balanced and the "
-        "Performance modes draw fewer pixels and scale up; Supersample draws more for the cleanest edges. The "
-        "game renders in steps of its original 720p.");
+    Row("Look",
+        "Original is the Xbox 360 version as it was: 720p at 30 FPS, the console's own anti-aliasing and texture "
+        "filtering, its 69\xC2\xB0 field of view, motion blur and distance fog, and no ambient occlusion. Modern "
+        "gives you the presets and every setting below.");
     {
-      const std::string cur = Get("kk_render_quality");
-      std::vector<std::string> labels, values;
-      int sel = -1;
-      for (const auto& p : RenderPresets()) {
-        const int scale = RenderScaleFor(p.id, out_h);
-        labels.push_back(std::string(p.label) + "   " + std::to_string(1280 * scale) + " \xC3\x97 " +
-                         std::to_string(720 * scale));
-        values.push_back(p.id);
+      const bool original = GetBool("kk_original_look");
+      if (int i = Segmented("look", {"Original Xbox 360", "Modern"}, original ? 0 : 1); i >= 0)
+        SetOriginalLook(i == 0);
+    }
+    const bool original_look = GetBool("kk_original_look");
+    ImGui::BeginDisabled(original_look);
+    Row("Preset",
+        "Quick settings for the upscaler, render quality, anti-aliasing, texture filtering and ambient occlusion. "
+        "Change any of them yourself and it shows Custom. Medium is the default.");
+    {
+      const int match = MatchGraphicsPreset();
+      const float button_w = (ImGui::GetContentRegionAvail().x - 6 * s_ * kGraphicsPresetCount) /
+                             float(kGraphicsPresetCount + 1);
+      std::vector<std::string> labels;
+      for (const auto& p : kGraphicsPresets) {
+        const bool fits = ImGui::CalcTextSize(p.label).x + 2 * ImGui::GetStyle().FramePadding.x <= button_w;
+        labels.push_back(fits || std::strcmp(p.label, "Steam Deck") != 0 ? p.label : "Deck");
       }
       labels.push_back("Custom");
-      values.push_back("custom");
-      for (size_t i = 0; i < values.size(); ++i)
-        if (values[i] == cur) sel = int(i);
-      ImGui::PushID("quality");
-      if (ImGui::BeginCombo("##q", sel >= 0 ? labels[size_t(sel)].c_str() : cur.c_str(), ImGuiComboFlags_HeightLarge)) {
-        for (size_t i = 0; i < labels.size(); ++i)
-          if (ImGui::Selectable(labels[i].c_str(), int(i) == sel)) Set("kk_render_quality", values[i]);
-        ImGui::EndCombo();
+      const int selected = original_look ? -1 : match < 0 ? kGraphicsPresetCount : match;
+      if (int i = Segmented("graphics_preset", labels, selected); i >= 0 && i < kGraphicsPresetCount)
+        ApplyGraphicsPreset(i);
+    }
+    Row("Upscaler",
+        "Scales the picture up to your screen and sharpens it, for a clearer image when the game draws fewer "
+        "pixels than your screen has. AMD FSR 1 and NVIDIA Image Scaling (NIS) both work on any graphics card. "
+        "Off uses plain smooth scaling.");
+    {
+      // NIS is in the D3D12 presenter only (the Vulkan one, used on Linux, would give FSR).
+      static const char* const kUpscalers[] = {"bilinear", "fsr", "nis"};
+#if defined(_WIN32)
+      const std::vector<std::string> labels = {"Off", "AMD FSR 1", "NVIDIA NIS"};
+#else
+      const std::vector<std::string> labels = {"Off", "AMD FSR 1"};
+#endif
+      const std::string cur = Get("present_effect");
+      int sel = -1;
+      for (size_t i = 0; i < labels.size(); ++i)
+        if (cur == kUpscalers[i]) sel = int(i);
+      if (int i = Segmented("upscaler", labels, sel); i >= 0 && i != sel) {
+        Set("present_effect", kUpscalers[i]);
+        // The upscaler modes are Native to Performance; others start at Native.
+        if (i != 0 && UpscalerMode() < 0) Set("kk_render_quality", "native");
       }
-      ImGui::PopID();
+    }
+    if (Get("present_effect") != "bilinear") {
+      Row("Upscaler mode",
+          "How many pixels the game draws before the upscaler scales them to your screen. Native draws at your "
+          "screen's size and only sharpens; Quality, Balanced and Performance draw fewer for more speed. The game "
+          "draws in steps of its original 720p, so some modes can be the same at your screen size.");
+      const int mode = UpscalerMode();
+      if (int i = Segmented("upscaler_mode", {kUpscalerModeNames, kUpscalerModeNames + 4}, mode); i >= 0)
+        Set("kk_render_quality", kUpscalerModes[i]);
       ImGui::PushStyleColor(ImGuiCol_Text, kDim);
       ImGui::PushFont(nullptr, 15.0f);
-      ImGui::Text("%s: %d \xC3\x97 %d", GetBool("fullscreen") ? "Your screen" : "Game window", out_w, out_h);
+      ImGui::PushTextWrapPos(0.0f);
+      if (mode >= 0) {
+        const int scale = RenderScaleFor(kUpscalerModes[mode], out_h);
+        std::string same;
+        for (int m = 0; m < 4; ++m) {
+          if (m == mode || RenderScaleFor(kUpscalerModes[m], out_h) != scale) continue;
+          same += same.empty() ? kUpscalerModeNames[m] : std::string(" and ") + kUpscalerModeNames[m];
+        }
+        ImGui::Text("Draws %d \xC3\x97 %d for your %d \xC3\x97 %d %s.%s%s", 1280 * scale, 720 * scale, out_w, out_h,
+                    GetBool("fullscreen") ? "screen" : "window", same.empty() ? "" : " Same as ",
+                    same.empty() ? "" : (same + " here.").c_str());
+      } else {
+        const std::string q = Get("kk_render_quality");
+        std::string label = q == "custom" ? "Custom (the internal resolution below)" : q;
+        for (const auto& p : RenderPresets())
+          if (q == p.id) label = p.label;
+        ImGui::TextUnformatted(("Now set to " + label + ". Pick a mode to use one of these.").c_str());
+      }
+      ImGui::PopTextWrapPos();
       ImGui::PopFont();
       ImGui::PopStyleColor();
+    }
+    if (Get("present_effect") == "bilinear") {
+      Row("Render quality",
+          "How sharply the game is drawn compared with your screen. Native matches it; Quality, Balanced and the "
+          "Performance modes draw fewer pixels and scale up (an upscaler above makes that sharper); Supersample "
+          "draws more for the cleanest edges. The game renders in steps of its original 720p.");
+      {
+        const std::string cur = Get("kk_render_quality");
+        std::vector<std::string> labels, values;
+        int sel = -1;
+        for (const auto& p : RenderPresets()) {
+          const int scale = RenderScaleFor(p.id, out_h);
+          labels.push_back(std::string(p.label) + "   " + std::to_string(1280 * scale) + " \xC3\x97 " +
+                           std::to_string(720 * scale));
+          values.push_back(p.id);
+        }
+        labels.push_back("Custom");
+        values.push_back("custom");
+        for (size_t i = 0; i < values.size(); ++i)
+          if (values[i] == cur) sel = int(i);
+        ImGui::PushID("quality");
+        if (ImGui::BeginCombo("##q", sel >= 0 ? labels[size_t(sel)].c_str() : cur.c_str(), ImGuiComboFlags_HeightLarge)) {
+          for (size_t i = 0; i < labels.size(); ++i)
+            if (ImGui::Selectable(labels[i].c_str(), int(i) == sel)) Set("kk_render_quality", values[i]);
+          ImGui::EndCombo();
+        }
+        ImGui::PopID();
+        ImGui::PushStyleColor(ImGuiCol_Text, kDim);
+        ImGui::PushFont(nullptr, 15.0f);
+        ImGui::Text("%s: %d \xC3\x97 %d", GetBool("fullscreen") ? "Your screen" : "Game window", out_w, out_h);
+        ImGui::PopFont();
+        ImGui::PopStyleColor();
+      }
     }
     if (Get("kk_render_quality") == "custom") {
       Row("Internal resolution", "Draw the game at an exact multiple of its native 1280 \xC3\x97 720.");
@@ -940,6 +1102,25 @@ class Launcher final : public rex::ui::ImGuiDialog {
                {{"Game", "-1"}, {"Off", "0"}, {"2\xC3\x97", "2"}, {"4\xC3\x97", "3"}, {"8\xC3\x97", "4"}, {"16\xC3\x97", "5"}});
     Row("Motion blur", "The trail the game blends over fast moments, mostly in Kong's sequences and some transitions.");
     ToggleCvar("kk_motion_blur", "Off", "On");
+    Row("Distance fog",
+        "The haze over far-away scenery. Off shows distant scenery clearly, but the fog is part of Skull Island's "
+        "look and also hides the edges of each area, so some empty or unfinished backdrops can show.");
+    ToggleCvar("kk_fog", "Off", "On");
+    // Ambient occlusion lives in the GPU plugin (ao_mode, ao_strength).
+    Row("Ambient occlusion",
+        "Soft shading where surfaces meet: in corners and creases, and on the ground under rocks, grass and "
+        "people. Costs about 1 ms a frame at 4K. Not available with Intel graphics yet.");
+    {
+      const bool on = GetInt("ao_mode", 0) != 0;
+      if (int i = Segmented("ao_mode", {"Off", "On"}, on ? 1 : 0); i >= 0) SetInt("ao_mode", i);
+    }
+    if (GetInt("ao_mode", 0) != 0) {
+      Row("AO strength", "How dark the shading gets. 1 is recommended.");
+      const int strength = std::clamp(GetInt("ao_strength", 1), 1, 3);
+      if (int i = Segmented("ao_strength", {"1 (recommended)", "2", "3"}, strength - 1); i >= 0)
+        SetInt("ao_strength", i + 1);
+    }
+    ImGui::EndDisabled();
     Row("Shader preparing",
         "Each new effect is prepared the first time it appears, then saved for next time. Balanced prepares "
         "many at once in the background and waits a moment for them, so there are no long pauses and things "
@@ -960,13 +1141,18 @@ class Launcher final : public rex::ui::ImGuiDialog {
   // ----------------------------------------------------------- Gameplay ---
   void PageGameplay() {
     if (!BeginRows("##gameplay")) return;
-    Row("Frame rate",
-        "30 matches the Xbox 360 and keeps every animation right. Higher is smoother, but some character "
-        "animations are not right above 30 yet.");
+    const bool original_look = GetBool("kk_original_look");
+    Row("Frame rate", original_look ? "30, set by the Original Xbox 360 look on the Graphics page."
+                                    : "30 matches the Xbox 360 and keeps every animation right. Higher is smoother, "
+                                      "but some character animations are not right above 30 yet.");
+    ImGui::BeginDisabled(original_look);
     FrameRateCombo();
+    ImGui::EndDisabled();
     Row("Field of view", "How wide the camera sees. 69\xC2\xB0 is the original for Jack; Kong, cutscene and other "
                          "cameras widen by the same amount. Jack's gun keeps its usual size.");
+    ImGui::BeginDisabled(original_look);
     SliderCvar("kk_fov", 69, 110, GetInt("kk_fov", 69) <= 69 ? "%d\xC2\xB0 (original)" : "%d\xC2\xB0");
+    ImGui::EndDisabled();
     Row("Frame counter", "Shows the game's frame rate in the corner. F2 toggles it while playing.");
     ToggleCvar("kk_show_fps", "Hidden", "Shown");
     Row("Startup logos", "The Ubisoft, Universal and WingNut movies before the title screen. Story movies still play.");
@@ -1350,9 +1536,10 @@ class Launcher final : public rex::ui::ImGuiDialog {
         return {"fullscreen", "window_width", "window_height", "monitor",
                 "d3d12_allow_variable_refresh_rate_and_tearing", "present_letterbox"};
       case kGraphics:
-        return {"kk_render_quality", "resolution_scale", "draw_resolution_scale_x", "draw_resolution_scale_y",
-                "swap_post_effect", "anisotropic_override", "kk_motion_blur", "async_shader_compilation",
-                "async_shader_wait_ms"};
+        return {"kk_original_look", "kk_modern_settings", "present_effect", "kk_render_quality", "resolution_scale",
+                "draw_resolution_scale_x", "draw_resolution_scale_y",
+                "swap_post_effect", "anisotropic_override", "kk_motion_blur", "kk_fog", "ao_mode", "ao_strength",
+                "async_shader_compilation", "async_shader_wait_ms"};
       case kGameplay:
         return {"kk_frame_rate", "kk_fov", "kk_show_fps", "kk_skip_intros", "user_language"};
       case kControls:

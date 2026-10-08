@@ -10,6 +10,8 @@
 #include <filesystem>
 #include <cstdint>
 #include <string>
+#include <vector>
+#include <utility>
 #include <string_view>
 
 #include <rex/cvar.h>
@@ -38,6 +40,9 @@ REXCVAR_DECLARE(bool, kk_toggle_aim);
 REXCVAR_DECLARE(bool, kk_skip_intros);
 REXCVAR_DECLARE(int32_t, kk_fov);
 REXCVAR_DECLARE(bool, kk_motion_blur);
+REXCVAR_DECLARE(bool, kk_fog);
+REXCVAR_DECLARE(bool, kk_original_look);
+REXCVAR_DECLARE(std::string, kk_modern_settings);
 REXCVAR_DECLARE(bool, kk_cheats);
 REXCVAR_DECLARE(int32_t, kk_hitch_report_ms);
 
@@ -99,5 +104,13 @@ void ApplyPortDefaults();
 
 // Forces the ReXGlue settings the port depends on (see settings.cpp).
 void ApplyRuntimeOverrides();
+
+// The Original look (launcher: Graphics > Look): the Xbox 360's own settings,
+// as cvar name and value.
+const std::vector<std::pair<const char*, const char*>>& OriginalLookSettings();
+
+// With kk_original_look on, sets those values (in case the settings file was
+// edited). Call before the GPU starts, as it sets the render resolution.
+void EnforceOriginalLook();
 
 }  // namespace kk

@@ -55,6 +55,11 @@ KK_CHEAT_CVAR(shotgun, "Shotgun (KKsh0tgun)");
 KK_CHEAT_CVAR(sniper, "Sniper rifle (KKsn1per)");
 #undef KK_CHEAT_CVAR
 REXCVAR_DEFINE_BOOL(kk_motion_blur, false, "KK/Graphics", "The game's motion blur effect");
+REXCVAR_DEFINE_BOOL(kk_fog, true, "KK/Graphics", "The game's distance fog (the haze over far scenery)");
+REXCVAR_DEFINE_BOOL(kk_original_look, false, "KK/Graphics",
+                    "Play with the Xbox 360's own settings (launcher: Graphics > Look)");
+REXCVAR_DEFINE_STRING(kk_modern_settings, "", "KK/Graphics",
+                      "Internal: the Modern settings to put back when leaving the Original look");
 REXCVAR_DEFINE_INT32(kk_fov, 69, "KK/Gameplay",
                      "Field of view in degrees for Jack's camera (69 = original); other cameras widen to match");
 REXCVAR_DEFINE_BOOL(kk_skip_intros, false, "KK/Gameplay",
@@ -163,7 +168,11 @@ int RenderScaleFor(std::string_view preset, int output_height) {
   for (const auto& p : RenderPresets()) {
     if (preset != p.id) continue;
     const double target = std::max(1, output_height) / p.ratio;
-    return std::clamp(static_cast<int>(std::lround(target / 720.0)), 1, 8);
+    const int scale = std::clamp(static_cast<int>(std::lround(target / 720.0)), 1, 8);
+    // In 720p steps Performance often rounds to the same step as Quality (both
+    // 1440p at 4K), so it goes one step below Quality where there is one.
+    if (preset == "performance") return std::max(1, std::min(scale, RenderScaleFor("quality", output_height) - 1));
+    return scale;
   }
   return 0;  // custom
 }
@@ -241,6 +250,25 @@ void ApplyPortDefaults() {
   // flash for a moment instead.
   SetCvarDefault("async_shader_compilation", "true");
   SetCvarDefault("async_shader_wait_ms", std::to_string(kBalancedShaderWaitMs));
+}
+
+const std::vector<std::pair<const char*, const char*>>& OriginalLookSettings() {
+  // 720p at 30 FPS, the console's anti-aliasing (its own 2x MSAA, no FXAA) and
+  // texture filtering, Jack's 69 degree field of view, motion blur and fog on,
+  // no ambient occlusion, no upscaler.
+  static const std::vector<std::pair<const char*, const char*>> settings = {
+      {"present_effect", "bilinear"},
+      {"kk_render_quality", "custom"}, {"resolution_scale", "1"}, {"swap_post_effect", "none"},
+      {"anisotropic_override", "-1"},  {"ao_mode", "0"},          {"ao_strength", "1"},
+      {"kk_motion_blur", "true"},      {"kk_fog", "true"},        {"kk_frame_rate", "30"},
+      {"kk_fov", "69"},
+  };
+  return settings;
+}
+
+void EnforceOriginalLook() {
+  if (!REXCVAR_GET(kk_original_look)) return;
+  for (const auto& [name, value] : OriginalLookSettings()) rex::cvar::SetFlagByName(name, value);
 }
 
 void ApplyRuntimeOverrides() {

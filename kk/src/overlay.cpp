@@ -1,6 +1,9 @@
 #include "overlay.h"
 
+#include <chrono>
 #include <cstdio>
+#include <cstdlib>
+#include <string>
 
 #include <imgui.h>
 
@@ -15,12 +18,37 @@
 namespace kk {
 namespace {
 
+#if defined(KK_DEV_TOOLS)
+// Developer build: a short note after a test hotkey (F8/F9 ambient occlusion).
+std::string g_note;
+std::chrono::steady_clock::time_point g_note_until;
+
+void ShowNote(std::string text) {
+  g_note = std::move(text);
+  g_note_until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+}
+
+void ShowAoNote() {
+  static const char* const kModes[] = {"off", "on", "AO only"};
+  const int mode = std::atoi(rex::cvar::GetFlagByName("ao_mode").c_str());
+  ShowNote("Ambient occlusion: " + std::string(kModes[mode < 0 || mode > 2 ? 0 : mode]) + ", strength " +
+           rex::cvar::GetFlagByName("ao_strength"));
+}
+#endif
+
 class FpsOverlay final : public rex::ui::ImGuiDialog {
  public:
   explicit FpsOverlay(rex::ui::ImGuiDrawer* drawer) : ImGuiDialog(drawer) {}
 
  protected:
   void OnDraw(ImGuiIO& io) override {
+#if defined(KK_DEV_TOOLS)
+    if (!g_note.empty() && std::chrono::steady_clock::now() < g_note_until) {
+      const float s = ImGui::GetFontSize() / 18.0f;
+      ImGui::GetForegroundDrawList()->AddText(nullptr, 22.0f * s, ImVec2(24 * s, 24 * s),
+                                              IM_COL32(255, 230, 120, 255), g_note.c_str());
+    }
+#endif
     if (!REXCVAR_GET(kk_show_fps)) return;
     const auto stats = GetGuestFrameStats();
     if (stats.frame_count == 0) return;  // nothing to show yet (launcher, loading)
@@ -49,6 +77,20 @@ void CreateFpsOverlay(rex::ui::ImGuiDrawer* drawer) {
   rex::ui::RegisterBind("bind_kk_fps", "F2", "Toggle frame counter", [] {
     rex::cvar::SetFlagByName("kk_show_fps", REXCVAR_GET(kk_show_fps) ? "false" : "true");
   });
+#if defined(KK_DEV_TOOLS)
+  // Ambient occlusion prototype (GPU plugin, REX_DEV_AO): F8 off / on / AO
+  // only, F9 strength 1 / 2 / 3.
+  rex::ui::RegisterBind("bind_kk_dev_ao", "F8", "Ambient occlusion (prototype)", [] {
+    const int mode = std::atoi(rex::cvar::GetFlagByName("ao_mode").c_str());
+    rex::cvar::SetFlagByName("ao_mode", std::to_string((mode + 1) % 3));
+    ShowAoNote();
+  });
+  rex::ui::RegisterBind("bind_kk_dev_ao_strength", "F9", "Ambient occlusion strength (prototype)", [] {
+    const int strength = std::atoi(rex::cvar::GetFlagByName("ao_strength").c_str());
+    rex::cvar::SetFlagByName("ao_strength", std::to_string(strength % 3 + 1));
+    ShowAoNote();
+  });
+#endif
 }
 
 }  // namespace kk
