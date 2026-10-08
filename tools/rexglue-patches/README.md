@@ -23,7 +23,7 @@ limit per pipeline, lower-priority creation threads, and more creation threads.
 `REX_DEV_FRAME_LOG=<seconds>[,<frames>]` logs every draw and copy of a frame (render targets, depth, the game shader
 each draw uses), to see how the game builds its frames. Does nothing unless set.
 
-## 0004 to 0006: ambient occlusion
+## 0004 to 0007: ambient occlusion
 
 Screen-space AO, off by default (`ao_mode` 0 off, 1 on, 2 show the AO only; `ao_strength` 1 to 3), set from the
 launcher's Graphics page. King Kong draws its scene depth first and copies it out of the console's graphics memory
@@ -35,7 +35,10 @@ later copy to the same place):
    resolution, edge-aware, fading it out with distance;
 2. at each such copy: multiplies it into the scene color in the EDRAM buffer just before the copy.
 
-The final copy of the post-processed image goes elsewhere, so the HUD isn't touched. Only with host render targets
+The final copy of the post-processed image goes elsewhere, so the HUD isn't touched. The game draws its distance
+fog before that scene copy, so the plugin notes the constants of the game's fog pass (its two AfterEffects fog shaders:
+c0 fog color, c1 `g_vFogParams`, c2 `g_vFogNormalizing`), works out the same fog amount per pixel, and applies
+`color * ao + fog color * fog * (1 - ao)`: only the scene under the fog is darkened, and fogged walls don't show through. Only with host render targets
 (NVIDIA and AMD) for now: the ROV path, which Intel GPUs use, is untested.
 
 The shaders are `src/graphics/shaders/ambient_occlusion.cs.hlsl`, compiled into `bytecode/d3d12_5_1/ao_*_cs.h` with
