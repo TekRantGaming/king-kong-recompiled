@@ -168,7 +168,11 @@ int RenderScaleFor(std::string_view preset, int output_height) {
   for (const auto& p : RenderPresets()) {
     if (preset != p.id) continue;
     const double target = std::max(1, output_height) / p.ratio;
-    return std::clamp(static_cast<int>(std::lround(target / 720.0)), 1, 8);
+    const int scale = std::clamp(static_cast<int>(std::lround(target / 720.0)), 1, 8);
+    // In 720p steps Performance often rounds to the same step as Quality (both
+    // 1440p at 4K), so it goes one step below Quality where there is one.
+    if (preset == "performance") return std::max(1, std::min(scale, RenderScaleFor("quality", output_height) - 1));
+    return scale;
   }
   return 0;  // custom
 }
