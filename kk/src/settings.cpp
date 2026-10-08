@@ -253,6 +253,19 @@ void ApplyRuntimeOverrides() {
   }
   REXLOG_INFO("KK: frame-rate cap {}", REXCVAR_GET(kk_frame_rate));
 
+  // Shader preparing: Balanced waits up to half a frame at the frame-rate cap
+  // for pipelines being prepared (16 ms at 30 FPS, 8 at 60, 4 from 120 or
+  // unlimited), which fits in the frame's spare time. A fixed 16 ms caused a
+  // hitch at 60 FPS. Only the default changes: a chosen value still wins.
+  {
+    const int32_t fps = REXCVAR_GET(kk_frame_rate);
+    const int32_t wait = fps > 0 ? std::clamp(500 / fps, 4, kBalancedShaderWaitMs) : 4;
+    SetCvarDefault("async_shader_wait_ms", std::to_string(wait));
+    REXLOG_INFO("KK: shader preparing {}, waiting up to {} ms a frame",
+                rex::cvar::GetFlagByName("async_shader_compilation") == "true" ? "in the background" : "on demand",
+                rex::cvar::GetFlagByName("async_shader_wait_ms"));
+  }
+
   // The draw resolution scale the GPU uses (same rule as the runtime's
   // TextureCache::GetConfigDrawResolutionScale), for bug reports.
   auto axis = [](const char* name) {
