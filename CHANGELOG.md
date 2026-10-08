@@ -6,11 +6,19 @@ version's notes the first time you start it.
 ## v1.8.0 (8 October 2026)
 
 ### What's new
-- **No more shader pauses.** A new **Balanced** choice for **Shader preparing** on the **Graphics** page, now the default for everyone. New effects are prepared on many threads at once in the background, and each frame waits a moment for them, so the game no longer stops for a second or two when it meets an effect for the first time. In tests of the V-Rex chapter with nothing prepared yet, **Wait** (the old default) paused for up to 2 seconds at a time while playing; **Balanced** didn't pause at all while playing, and its longest wait was under half a second while the chapter loaded. Once in a while an object can appear a moment late the first time it's seen. **Wait** and **Background** are still there if you prefer them.
+- **Shader freezes cut from 2 seconds to under half a second.** A new **Balanced** choice for **Shader preparing** on the **Graphics** page, now the default for everyone. New effects are prepared on many threads at once in the background, and each frame waits a moment for them, instead of the game stopping while they're prepared one at a time. Once in a while an object can appear a moment late the first time it's seen. **Wait** and **Background** are still there if you prefer them. The numbers are below.
 - **The shader pack looks after itself.** Each time the launcher opens, it downloads the newest shader pack if you don't have it yet. There's no button to click and nothing to remember. The Play page shows how it went, and if you press **PLAY** while a download is still going, the game starts as soon as it finishes.
 - **Prepared effects are kept after a crash.** If the game closed while saving a newly prepared effect, everything prepared after that point was ignored and had to be prepared again. Now only the damaged entry is dropped, and the rest is kept.
 - **New defaults.** FXAA is on, motion blur is off, **Controller sensitivity** is 150% and the **Stick deadzone** is 5%. The achievement sound is the Xbox 360's when you have `Xbox_360.wav` in the `sounds` folder; otherwise the built-in chime plays as before. Settings you had changed from the old defaults stay as you set them.
 - The "share your shaders" pop-up and the **Share my shaders** button are gone.
+
+### Performance
+Tested on the V-Rex chapter at 30 FPS on its first visit, with the graphics driver's own shader cache bypassed so every effect really was new.
+- **Longest freeze:** 2.08 seconds with Wait (the old default), 0.45 seconds with Balanced.
+- **All the freezes added up:** 3.9 seconds with Wait, 1.3 seconds with Balanced.
+- **With shader pack 2:** the longest freeze was 0.33 seconds with Wait and 0.16 seconds with Balanced.
+
+The freezes came as the chapter started, when the game meets the most new effects at once: up to about 240 in a second, each taking the graphics driver about 20 ms to prepare. In the minute of play after that, neither mode froze. Without a shader pack, Balanced drew about 80 objects a frame late in that minute; with shader pack 2, none.
 
 ### Full changelog
 - Shader preparing: `async_shader_compilation` is now on by default with a new `async_shader_wait_ms`. A draw whose effect is still being prepared waits for it within a budget for each frame of half a frame at your frame rate cap (16 ms at 30 FPS, 8 at 60, 4 from 120 or unlimited), and is skipped only once that is used up. **Background** sets the wait to 0, and **Wait** turns preparing in the background off.
