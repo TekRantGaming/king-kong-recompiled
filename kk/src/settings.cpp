@@ -201,6 +201,8 @@ bool SaveSettings(const std::filesystem::path& path) {
   for (const auto& e : rex::cvar::GetRegistry()) {
     if (e.type == rex::cvar::FlagType::Command || e.is_debug_only) continue;
     if (e.source == rex::cvar::Source::kCommandLine || e.source == rex::cvar::Source::kEnvironment) continue;
+    // Set by the port at every start (ApplyRuntimeOverrides).
+    if (e.name == "video_mode_width" || e.name == "video_mode_height") continue;
     const std::string value = e.getter();
     if (value == e.default_value) continue;
     out += e.name + " = ";
@@ -295,6 +297,25 @@ void ApplyRuntimeOverrides() {
                 rex::cvar::GetFlagByName("async_shader_compilation") == "true" ? "in the background" : "on demand",
                 rex::cvar::GetFlagByName("async_shader_wait_ms"));
   }
+
+  // The game sizes its frame from the console's video mode: 1280x720 on an HD
+  // mode, but the whole game at 640x480 (stretched to 16:9) on a mode under 720
+  // lines. The runtime reports the window size as that mode whenever a window
+  // size is set, even in fullscreen, and window sizes are kept in DPI-scaled
+  // units (1280x720 at 125% is saved as 1024x576), so some players got
+  // 640x480 everywhere (#32). Always report 720p, like a console on a 720p TV;
+  // the render resolution scales it up. A non-default value is needed for it
+  // to win over the window size, so the default moves to 0 (and SaveSettings
+  // leaves these out). This runs after the window is created, so its size
+  // doesn't change.
+  for (const auto& [name, value] :
+       {std::pair{"video_mode_width", "1280"}, std::pair{"video_mode_height", "720"}}) {
+    SetCvarDefault(name, "0");
+    rex::cvar::SetFlagByName(name, value);
+  }
+  REXLOG_INFO("KK: video mode {}x{} (window {}x{})", rex::cvar::GetFlagByName("video_mode_width"),
+              rex::cvar::GetFlagByName("video_mode_height"), rex::cvar::GetFlagByName("window_width"),
+              rex::cvar::GetFlagByName("window_height"));
 
   // The draw resolution scale the GPU uses (same rule as the runtime's
   // TextureCache::GetConfigDrawResolutionScale), for bug reports.
