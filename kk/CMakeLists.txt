@@ -29,6 +29,7 @@ set(KINGKONG_SOURCES
     src/intros.cpp
     src/fov.cpp
     src/motion_blur.cpp
+    src/fog.cpp
     src/cheats.cpp
     src/changelog.cpp
     src/menu_hook.cpp
@@ -42,7 +43,7 @@ set(KINGKONG_SOURCES
 # Developer-only test aids (never in release builds): -DKK_DEV_TOOLS=ON.
 option(KK_DEV_TOOLS "Build developer test aids such as KK_DEV_AUTOSKIP" OFF)
 if(KK_DEV_TOOLS)
-    list(APPEND KINGKONG_SOURCES src/dev_tools.cpp src/dev_watch.cpp)
+    list(APPEND KINGKONG_SOURCES src/dev_tools.cpp src/dev_watch.cpp src/dev_ae.cpp)
 endif()
 
 if(WIN32)

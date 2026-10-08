@@ -940,6 +940,10 @@ class Launcher final : public rex::ui::ImGuiDialog {
                {{"Game", "-1"}, {"Off", "0"}, {"2\xC3\x97", "2"}, {"4\xC3\x97", "3"}, {"8\xC3\x97", "4"}, {"16\xC3\x97", "5"}});
     Row("Motion blur", "The trail the game blends over fast moments, mostly in Kong's sequences and some transitions.");
     ToggleCvar("kk_motion_blur", "Off", "On");
+    Row("Distance fog",
+        "The haze over far-away scenery. Off shows distant scenery clearly, but the fog is part of Skull Island's "
+        "look and also hides the edges of each area, so some empty or unfinished backdrops can show.");
+    ToggleCvar("kk_fog", "Off", "On");
     // Ambient occlusion lives in the GPU plugin (ao_mode, ao_strength).
     Row("Ambient occlusion",
         "Soft shading where surfaces meet: in corners and creases, and on the ground under rocks, grass and "
@@ -1365,7 +1369,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
                 "d3d12_allow_variable_refresh_rate_and_tearing", "present_letterbox"};
       case kGraphics:
         return {"kk_render_quality", "resolution_scale", "draw_resolution_scale_x", "draw_resolution_scale_y",
-                "swap_post_effect", "anisotropic_override", "kk_motion_blur", "ao_mode", "ao_strength",
+                "swap_post_effect", "anisotropic_override", "kk_motion_blur", "kk_fog", "ao_mode", "ao_strength",
                 "async_shader_compilation", "async_shader_wait_ms"};
       case kGameplay:
         return {"kk_frame_rate", "kk_fov", "kk_show_fps", "kk_skip_intros", "user_language"};
