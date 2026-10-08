@@ -45,6 +45,12 @@ constexpr const char* kShareShadersUrl =
 std::filesystem::path PackShadersForSharing(const std::filesystem::path& cache_dir,
                                             const std::filesystem::path& user_dir, std::string& error);
 
+// Removes damaged records from the shader and pipeline storage files in
+// <cache>/shaders (a write the game never finished). The runtime stops reading
+// a file at the first damaged record, so one would hide all the rest. Returns
+// how many were removed. Call before the runtime opens the files.
+int RepairShaderStorage(const std::filesystem::path& cache_dir);
+
 // Merges a shader (.xsh) or pipeline (.xpso) storage file into another,
 // adding only records it doesn't have. Returns records added, or -1 if the
 // files are from a different runtime version (or unreadable).

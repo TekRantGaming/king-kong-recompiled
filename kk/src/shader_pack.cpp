@@ -20,6 +20,7 @@
 #include <windows.h>
 #endif
 
+#include <rex/hash.h>
 #include <rex/logging.h>
 
 namespace kk {
@@ -47,9 +48,16 @@ uint32_t Load32(const uint8_t* p) {
 constexpr uint32_t kShaderMagic = 0x48534558, kPipelineMagic = 0x53504558;
 constexpr size_t kPipelineRecord = 72;
 
+// Each record starts with the XXH3 of the rest of it (a shader's microcode, or
+// a pipeline's description). The runtime stops reading a file at the first
+// record that doesn't match, so one record damaged by a write the game never
+// finished (it was closed or killed mid-save) hides every record after it,
+// including a shader pack merged in later. Parse keeps only whole, matching
+// records and counts the rest.
 struct Records {
   size_t header = 0;
   std::vector<std::pair<size_t, size_t>> spans;  // offset, size
+  size_t damaged = 0;                            // records left out
 };
 
 bool Parse(const std::vector<uint8_t>& d, Records& out) {
@@ -59,18 +67,37 @@ bool Parse(const std::vector<uint8_t>& d, Records& out) {
     out.header = 8;
     for (size_t at = 8; at + 12 <= d.size();) {
       const size_t size = 12 + size_t(Load32(&d[at + 8]) & 0x7FFFFFFF) * 4;
-      if (at + size > d.size()) break;  // cut short: keep what is whole
-      out.spans.push_back({at, size});
+      if (at + size > d.size()) {  // cut short: keep what is whole
+        ++out.damaged;
+        break;
+      }
+      if (XXH3_64bits(&d[at + 12], size - 12) == Load64(&d[at])) out.spans.push_back({at, size});
+      else ++out.damaged;
       at += size;
     }
     return true;
   }
   if (magic == kPipelineMagic && d.size() >= 12) {
     out.header = 12;
-    for (size_t at = 12; at + kPipelineRecord <= d.size(); at += kPipelineRecord) out.spans.push_back({at, kPipelineRecord});
+    for (size_t at = 12; at + kPipelineRecord <= d.size(); at += kPipelineRecord) {
+      if (XXH3_64bits(&d[at + 8], kPipelineRecord - 8) == Load64(&d[at])) out.spans.push_back({at, kPipelineRecord});
+      else ++out.damaged;
+    }
+    if ((d.size() - 12) % kPipelineRecord) ++out.damaged;  // a partly written last record
     return true;
   }
   return false;
+}
+
+// Writes the header and the given records (whole records only).
+bool WriteRecords(const std::filesystem::path& path, const std::vector<uint8_t>& d, const Records& r,
+                  const std::vector<uint8_t>* extra = nullptr) {
+  std::vector<uint8_t> out(d.begin(), d.begin() + r.header);
+  for (auto [at, size] : r.spans) out.insert(out.end(), d.begin() + at, d.begin() + at + size);
+  if (extra) out.insert(out.end(), extra->begin(), extra->end());
+  std::ofstream f(path, std::ios::binary | std::ios::trunc);
+  f.write(reinterpret_cast<const char*>(out.data()), std::streamsize(out.size()));
+  return bool(f);
 }
 
 bool Fetch(const std::string& url, std::vector<uint8_t>& out, ShaderPackStatus* status) {
@@ -112,26 +139,43 @@ int MergeShaderStorageFile(const std::filesystem::path& from, const std::filesys
   if (!Parse(dst, dst_records) || dst_records.header != src_records.header ||
       std::memcmp(dst.data(), src.data(), src_records.header) != 0)
     return -1;  // another runtime version: leave the player's cache alone
-  // Drop a partly written last record, then append what is missing.
-  size_t end = dst_records.header;
+  // Keep the player's whole records (dropping any damaged ones), then append what is missing.
   std::unordered_set<uint64_t> have;
-  for (auto [at, size] : dst_records.spans) {
-    have.insert(Load64(&dst[at]));
-    end = at + size;
-  }
-  dst.resize(end);
+  for (auto [at, size] : dst_records.spans) have.insert(Load64(&dst[at]));
+  std::vector<uint8_t> extra;
   int added = 0;
   for (auto [at, size] : src_records.spans) {
     if (!have.insert(Load64(&src[at])).second) continue;
-    dst.insert(dst.end(), src.begin() + at, src.begin() + at + size);
+    extra.insert(extra.end(), src.begin() + at, src.begin() + at + size);
     ++added;
   }
-  if (added) {
-    std::ofstream out(into, std::ios::binary | std::ios::trunc);
-    out.write(reinterpret_cast<const char*>(dst.data()), std::streamsize(dst.size()));
-    if (!out) return -1;
-  }
+  if (dst_records.damaged)
+    REXLOG_WARN("KK: shader cache {}: dropped {} damaged record(s)", into.filename().string(), dst_records.damaged);
+  if ((added || dst_records.damaged) && !WriteRecords(into, dst, dst_records, &extra)) return -1;
   return added;
+}
+
+int RepairShaderStorage(const std::filesystem::path& cache_dir) {
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  int dropped = 0;
+  for (const char* sub : {"shareable", "local"}) {
+    const fs::path dir = cache_dir / "shaders" / sub;
+    if (!fs::is_directory(dir, ec)) continue;
+    for (const auto& entry : fs::directory_iterator(dir, ec)) {
+      const auto ext = entry.path().extension().string();
+      if (ext != ".xsh" && ext != ".xpso") continue;
+      const auto data = ReadAll(entry.path());
+      Records r;
+      if (!Parse(data, r) || !r.damaged) continue;
+      if (WriteRecords(entry.path(), data, r)) {
+        REXLOG_WARN("KK: shader cache {}: dropped {} damaged record(s), kept {}", entry.path().filename().string(),
+                    r.damaged, r.spans.size());
+        dropped += int(r.damaged);
+      }
+    }
+  }
+  return dropped;
 }
 
 std::filesystem::path PackShadersForSharing(const std::filesystem::path& cache_dir,

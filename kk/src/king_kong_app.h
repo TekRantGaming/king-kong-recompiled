@@ -40,6 +40,7 @@ namespace kk {
 void InstallFpeGuard();  // fpe_guard.cpp
 }
 #include "menu_hook.h"
+#include "shader_pack.h"
 #include "launcher.h"
 #include "overlay.h"
 #include "platform.h"
@@ -126,6 +127,10 @@ class KingKongApp : public rex::ReXApp {
   void OnConfigureFonts(ImFontAtlas* atlas) override { kk::LoadUiFont(atlas); }
 
   void OnPreSetup(rex::RuntimeConfig& config) override {
+    {  // before the runtime reads the shader cache: drop records a finished-early write damaged
+      const std::string root = rex::cvar::GetFlagByName("cache_root");
+      kk::RepairShaderStorage(root.empty() ? user_data_root_ / "cache" : std::filesystem::path(root));
+    }
     if (!config.graphics && config.gpu_plugin.empty()) config.gpu_plugin = "xenos";
     if (!config.audio_factory)
       config.audio_factory = REX_AUDIO_BACKEND(rex::audio::sdl::SDLAudioSystem);
