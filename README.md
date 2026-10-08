@@ -128,6 +128,8 @@ Everything is set up before the game starts. The launcher uses art from your own
 <td valign="middle">
 
 ### Graphics
+- **Look**: Original Xbox 360 (720p at 30 FPS, the console's anti-aliasing, texture filtering and field of view, motion blur and fog, no ambient occlusion) or Modern. Switching back to Modern puts your own settings back
+- **Graphics presets**: Low, Medium (the default), High, Ultra and Steam Deck, or Custom when you set things yourself
 - **Render quality** presets: Supersample, Native, Quality, Balanced, Performance and Ultra Performance, each showing the real resolution
 - **Custom resolution** from 1x (720p) to 6x (8K)
 - **FXAA** (on by default) and **FXAA Extreme**

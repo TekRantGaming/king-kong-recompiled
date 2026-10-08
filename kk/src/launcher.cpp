@@ -267,6 +267,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
     saved_style_ = ImGui::GetStyle();
     for (const char* name : kRestartCvars) restart_baseline_.push_back(Get(name));
     files_ok_ = GameFilesPresent(paths_.game_dir);
+    EnforceOriginalLook();
     LoadArt();
     toast_ = std::make_unique<AchievementToast>(drawer, immediate_, paths_.game_dir, paths_.user_dir);
     CleanUpAfterUpdate();
@@ -888,9 +889,99 @@ class Launcher final : public rex::ui::ImGuiDialog {
   }
 
   // ----------------------------------------------------------- Graphics ---
+  // ------------------------------------------------------------ presets ---
+  // Graphics presets set render quality, anti-aliasing, texture filtering and
+  // ambient occlusion (motion blur and fog are left to taste). The preset shown
+  // is the one the settings match; anything else is Custom. Medium is the
+  // default settings.
+  struct GraphicsPreset {
+    const char* label;
+    const char* quality;    // kk_render_quality
+    const char* aa;         // swap_post_effect
+    const char* filtering;  // anisotropic_override: 2 = 2x, 3 = 4x, 4 = 8x, 5 = 16x
+    bool ao;                // ao_mode 1 at strength 1
+  };
+  static constexpr GraphicsPreset kGraphicsPresets[] = {
+      {"Low", "performance", "fxaa", "2", false},       {"Medium", "native", "fxaa", "3", false},
+      {"High", "native", "fxaa", "4", true},            {"Ultra", "supersample", "fxaa_extreme", "5", true},
+      {"Steam Deck", "native", "fxaa", "2", false},
+  };
+  static constexpr int kGraphicsPresetCount = int(std::size(kGraphicsPresets));
+
+  int MatchGraphicsPreset() {
+    for (int i = 0; i < kGraphicsPresetCount; ++i) {
+      const GraphicsPreset& p = kGraphicsPresets[i];
+      const bool ao = GetInt("ao_mode", 0) != 0;
+      if (Get("kk_render_quality") == p.quality && Get("swap_post_effect") == p.aa &&
+          Get("anisotropic_override") == p.filtering && ao == p.ao && (!ao || GetInt("ao_strength", 1) == 1))
+        return i;
+    }
+    return -1;
+  }
+
+  void ApplyGraphicsPreset(int index) {
+    const GraphicsPreset& p = kGraphicsPresets[index];
+    Set("kk_render_quality", p.quality);
+    Set("swap_post_effect", p.aa);
+    Set("anisotropic_override", p.filtering);
+    SetInt("ao_mode", p.ao ? 1 : 0);
+    if (p.ao) SetInt("ao_strength", 1);
+  }
+
+  // The Original look: the Xbox 360's own settings (OriginalLookSettings).
+  // Switching to it keeps the Modern ones in kk_modern_settings, and switching
+  // back puts them back.
+  void SetOriginalLook(bool on) {
+    if (on == GetBool("kk_original_look")) return;
+    if (on) {
+      std::string saved;
+      for (const auto& [name, value] : OriginalLookSettings()) saved += std::string(name) + "=" + Get(name) + ";";
+      Set("kk_modern_settings", saved);
+      for (const auto& [name, value] : OriginalLookSettings()) Set(name, value);
+    } else {
+      const std::string saved = Get("kk_modern_settings");
+      if (saved.empty()) ApplyGraphicsPreset(1);  // Medium
+      std::stringstream in(saved);
+      for (std::string item; std::getline(in, item, ';');) {
+        const size_t eq = item.find('=');
+        if (eq != std::string::npos) Set(item.substr(0, eq).c_str(), item.substr(eq + 1));
+      }
+      Set("kk_modern_settings", "");
+    }
+    SetBool("kk_original_look", on);
+  }
+
   void PageGraphics() {
     const auto [out_w, out_h] = cb_.output_size ? cb_.output_size() : std::pair<int, int>{1280, 720};
     if (!BeginRows("##graphics")) return;
+    Row("Look",
+        "Original is the Xbox 360 version as it was: 720p at 30 FPS, the console's own anti-aliasing and texture "
+        "filtering, its 69\xC2\xB0 field of view, motion blur and distance fog, and no ambient occlusion. Modern "
+        "gives you the presets and every setting below.");
+    {
+      const bool original = GetBool("kk_original_look");
+      if (int i = Segmented("look", {"Original Xbox 360", "Modern"}, original ? 0 : 1); i >= 0)
+        SetOriginalLook(i == 0);
+    }
+    const bool original_look = GetBool("kk_original_look");
+    ImGui::BeginDisabled(original_look);
+    Row("Preset",
+        "Quick settings for render quality, anti-aliasing, texture filtering and ambient occlusion. Change any of "
+        "them yourself and it shows Custom. Medium is the default.");
+    {
+      const int match = MatchGraphicsPreset();
+      const float button_w = (ImGui::GetContentRegionAvail().x - 6 * s_ * kGraphicsPresetCount) /
+                             float(kGraphicsPresetCount + 1);
+      std::vector<std::string> labels;
+      for (const auto& p : kGraphicsPresets) {
+        const bool fits = ImGui::CalcTextSize(p.label).x + 2 * ImGui::GetStyle().FramePadding.x <= button_w;
+        labels.push_back(fits || std::strcmp(p.label, "Steam Deck") != 0 ? p.label : "Deck");
+      }
+      labels.push_back("Custom");
+      const int selected = original_look ? -1 : match < 0 ? kGraphicsPresetCount : match;
+      if (int i = Segmented("graphics_preset", labels, selected); i >= 0 && i < kGraphicsPresetCount)
+        ApplyGraphicsPreset(i);
+    }
     Row("Render quality",
         "How sharply the game is drawn compared with your screen. Native matches it; Quality, Balanced and the "
         "Performance modes draw fewer pixels and scale up; Supersample draws more for the cleanest edges. The "
@@ -958,6 +1049,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
       if (int i = Segmented("ao_strength", {"1 (recommended)", "2", "3"}, strength - 1); i >= 0)
         SetInt("ao_strength", i + 1);
     }
+    ImGui::EndDisabled();
     Row("Shader preparing",
         "Each new effect is prepared the first time it appears, then saved for next time. Balanced prepares "
         "many at once in the background and waits a moment for them, so there are no long pauses and things "
@@ -978,13 +1070,18 @@ class Launcher final : public rex::ui::ImGuiDialog {
   // ----------------------------------------------------------- Gameplay ---
   void PageGameplay() {
     if (!BeginRows("##gameplay")) return;
-    Row("Frame rate",
-        "30 matches the Xbox 360 and keeps every animation right. Higher is smoother, but some character "
-        "animations are not right above 30 yet.");
+    const bool original_look = GetBool("kk_original_look");
+    Row("Frame rate", original_look ? "30, set by the Original Xbox 360 look on the Graphics page."
+                                    : "30 matches the Xbox 360 and keeps every animation right. Higher is smoother, "
+                                      "but some character animations are not right above 30 yet.");
+    ImGui::BeginDisabled(original_look);
     FrameRateCombo();
+    ImGui::EndDisabled();
     Row("Field of view", "How wide the camera sees. 69\xC2\xB0 is the original for Jack; Kong, cutscene and other "
                          "cameras widen by the same amount. Jack's gun keeps its usual size.");
+    ImGui::BeginDisabled(original_look);
     SliderCvar("kk_fov", 69, 110, GetInt("kk_fov", 69) <= 69 ? "%d\xC2\xB0 (original)" : "%d\xC2\xB0");
+    ImGui::EndDisabled();
     Row("Frame counter", "Shows the game's frame rate in the corner. F2 toggles it while playing.");
     ToggleCvar("kk_show_fps", "Hidden", "Shown");
     Row("Startup logos", "The Ubisoft, Universal and WingNut movies before the title screen. Story movies still play.");
@@ -1368,7 +1465,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
         return {"fullscreen", "window_width", "window_height", "monitor",
                 "d3d12_allow_variable_refresh_rate_and_tearing", "present_letterbox"};
       case kGraphics:
-        return {"kk_render_quality", "resolution_scale", "draw_resolution_scale_x", "draw_resolution_scale_y",
+        return {"kk_original_look", "kk_modern_settings", "kk_render_quality", "resolution_scale",
+                "draw_resolution_scale_x", "draw_resolution_scale_y",
                 "swap_post_effect", "anisotropic_override", "kk_motion_blur", "kk_fog", "ao_mode", "ao_strength",
                 "async_shader_compilation", "async_shader_wait_ms"};
       case kGameplay:
