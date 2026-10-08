@@ -184,15 +184,6 @@ bool RunAndWait(const std::wstring& command_line) {
 #endif
 }
 
-void RevealInExplorer(const std::filesystem::path& file) {
-#if defined(_WIN32)
-  const std::wstring args = L"/select,\"" + file.wstring() + L"\"";
-  ShellExecuteW(nullptr, nullptr, L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL);
-#else
-  OpenInExplorer(file.parent_path());
-#endif
-}
-
 void OpenUrl(const std::string& url) {
   if (url.rfind("https://", 0) != 0) return;  // web pages only
 #if defined(_WIN32)

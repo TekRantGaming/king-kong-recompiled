@@ -105,7 +105,6 @@ Everything is set up before the game starts. The launcher uses art from your own
 - **Install the game** straight from your disc image, with a progress bar
 - Checks the disc really is King Kong
 - **Shader pack**: effects other play-throughs have already prepared, downloaded and kept up to date by itself, so the game rarely pauses for a new one
-- **Share my shaders**: help the next players by sharing the effects your play-through prepared
 - **Updates**: the launcher tells you when a new version is out and installs it with one click
 - Turn the launcher off and **hold Shift** at start to bring it back
 
@@ -118,7 +117,7 @@ Everything is set up before the game starts. The launcher uses art from your own
 - **Windowed** or **fullscreen**
 - **Window size** that fits your screen
 - **Choose the monitor**
-- **VSync** on or off (off works great with G-Sync and FreeSync)
+- **VSync** on or off (off by default, and great with G-Sync and FreeSync)
 - **Keep 16:9** with borders, or **stretch** to fill
 
 </td>
@@ -131,9 +130,9 @@ Everything is set up before the game starts. The launcher uses art from your own
 ### Graphics
 - **Render quality** presets: Supersample, Native, Quality, Balanced, Performance and Ultra Performance, each showing the real resolution
 - **Custom resolution** from 1x (720p) to 6x (8K)
-- **FXAA** and **FXAA Extreme**
-- **Texture filtering** up to 16x
-- **Motion blur** on or off: Off removes the ghost trail the game blends over fast moments, mostly in Kong's sequences
+- **FXAA** (on by default) and **FXAA Extreme**
+- **Texture filtering** up to 16x (4x by default)
+- **Motion blur** on or off (off by default): Off removes the ghost trail the game blends over fast moments, mostly in Kong's sequences
 - **Shader preparing**: Balanced (default: new effects are prepared on many threads at once, with a moment's wait for them, so no long pauses), Wait (always drawn right, can pause) or Background (never waits)
 
 </td>
@@ -157,11 +156,11 @@ Everything is set up before the game starts. The launcher uses art from your own
 
 ### Controls
 - **Invert the camera** left/right and up/down, separately
-- **Controller sensitivity** from 25% to 300%, for looking left and right and up and down
-- **Camera response**: Modern turns the camera the same way in every direction; Original is the Xbox 360's own feel
+- **Controller sensitivity** from 25% to 300% (150% by default), for looking left and right and up and down
+- **Camera response**: Modern (the default) turns the camera the same way in every direction; Original is the Xbox 360's own feel
 - **Mouse sensitivity** and **mouse camera** for keyboard and mouse
 - **Toggle aim**: press the left trigger once to raise the gun and again to lower it, instead of holding it
-- **Stick deadzone** to stop drift
+- **Stick deadzone** to stop drift (5% by default)
 - **Vibration** on or off, with a strength slider
 - **Remap any button** on your controller
 - **Keyboard and mouse** play: click a control, press a key
@@ -191,7 +190,7 @@ They switch on as soon as the game reaches its main menu, exactly as if you had 
 - All **9 achievements** with their pictures, descriptions and gamerscore
 - See which ones you have **unlocked**
 - Turn **pop-ups** and their **sound** on or off, set the volume
-- **Pick the sound**: the built-in chime or any `.wav` you put in the `sounds` folder
+- **Pick the sound**: the built-in chime or any `.wav` you put in the `sounds` folder. Name the Xbox 360 sound `Xbox_360.wav` and it plays by default
 - A **test button** to see and hear it
 - A bonus **Welcome to Skull Island** achievement the first time you play
 
@@ -277,15 +276,6 @@ They switch on as soon as the game reaches its main menu, exactly as if you had 
 ### The shader pack
 
 The game prepares each new effect (a shader) the first time it appears, which can cause a short pause. The shader pack is the list of effects collected by playing through the game, published on the [shader-packs release](https://github.com/TekRantGaming/king-kong-recompiled/releases/tag/shader-packs). You don't need to do anything to get it: each time the launcher opens, it downloads the newest pack if you don't have it yet and adds it to your shader cache (`Documents\king_kong\cache`), keeping anything your game has already prepared. The Play page shows how it went. If you press **PLAY** while a download is still going, the game starts as soon as it finishes. Each time the game starts it prepares everything in the cache, so the parts of the game the pack covers don't pause even on a first play-through. New packs come out as more of the game is covered.
-
-### Share my shaders
-
-The shader pack only covers what has been played so far, and that is where you can help. Once you have played a good
-part of the game, open the launcher's **Play** page and click **Share my shaders**. It packs your shaders into one small
-`shader-share-....zip` file in `Documents\king_kong`, shows it to you, and opens a
-[Share shaders](https://github.com/TekRantGaming/king-kong-recompiled/issues/new?template=share-shaders.yml) form on
-GitHub to drop it into (you need a free GitHub account). The file holds only shader data: nothing personal, no saves or
-settings. Shaders that at least two players have sent go into the next shader pack.
 
 ### Updates
 

@@ -7,18 +7,6 @@
 #include <vector>
 
 #include "http.h"
-#include "platform.h"
-
-#include <ctime>
-#if defined(_WIN32)
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#endif
 
 #include <rex/hash.h>
 #include <rex/logging.h>
@@ -176,50 +164,6 @@ int RepairShaderStorage(const std::filesystem::path& cache_dir) {
     }
   }
   return dropped;
-}
-
-std::filesystem::path PackShadersForSharing(const std::filesystem::path& cache_dir,
-                                            const std::filesystem::path& user_dir, std::string& error) {
-  namespace fs = std::filesystem;
-  const fs::path shareable = cache_dir / "shaders" / "shareable";
-  std::error_code ec;
-  std::wstring files;
-  uint64_t size = 0;
-  for (auto& e : fs::directory_iterator(shareable, ec)) {
-    const auto ext = e.path().extension();
-    if (!e.is_regular_file() || (ext != ".xsh" && ext != ".xpso")) continue;  // shader data only
-    files += L" \"" + e.path().filename().wstring() + L"\"";
-    size += e.file_size(ec);
-  }
-  if (files.empty()) {
-    error = "There are no shaders to share yet. Play the game for a while first.";
-    return {};
-  }
-  if (size > 24ull << 20) {
-    error = "Your shaders are too big for GitHub (over 25 MB).";
-    return {};
-  }
-  char name[64];
-  const std::time_t now = std::time(nullptr);
-  std::strftime(name, sizeof(name), "shader-share-%Y%m%d-%H%M%S.zip", std::localtime(&now));
-  const fs::path zip = user_dir / name;
-#if defined(_WIN32)
-  // Windows 10 and 11 include tar, which writes zip files with -a.
-  wchar_t system_dir[260];
-  GetSystemDirectoryW(system_dir, 260);
-  const std::wstring tar = (std::filesystem::path(system_dir) / "tar.exe").wstring();
-  const std::wstring cmd =
-      L"\"" + tar + L"\" -a -c -f \"" + zip.wstring() + L"\" -C \"" + shareable.wstring() + L"\"" + files;
-  if (!RunAndWait(cmd) || !fs::exists(zip, ec)) {
-    error = "Could not create the zip file.";
-    return {};
-  }
-  REXLOG_INFO("KK: packed shaders for sharing: {}", zip.string());
-  return zip;
-#else
-  error = "Sharing shaders is only available on Windows for now.";
-  return {};
-#endif
 }
 
 int InstalledShaderPackVersion(const std::filesystem::path& cache_dir) {

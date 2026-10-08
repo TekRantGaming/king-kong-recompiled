@@ -32,16 +32,6 @@ int InstalledShaderPackVersion(const std::filesystem::path& cache_dir);
 // everything already there. Runs on the calling thread; reports in `status`.
 void DownloadAndInstallShaderPack(const std::filesystem::path& cache_dir, ShaderPackStatus& status);
 
-// "Share my shaders": a GitHub form for players to attach their shaders to.
-constexpr const char* kShareShadersUrl =
-    "https://github.com/TekRantGaming/king-kong-recompiled/issues/new?template=share-shaders.yml";
-
-// Packs the player's shader cache (only <cache>/shaders/shareable) into
-// <user_dir>/shader-share-<date-time>.zip for them to attach to that form.
-// Returns the zip's path, or an empty path with `error` set.
-std::filesystem::path PackShadersForSharing(const std::filesystem::path& cache_dir,
-                                            const std::filesystem::path& user_dir, std::string& error);
-
 // Removes damaged records from the shader and pipeline storage files in
 // <cache>/shaders (a write the game never finished). The runtime stops reading
 // a file at the first damaged record, so one would hide all the rest. Returns

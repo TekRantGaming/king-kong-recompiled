@@ -724,27 +724,6 @@ class Launcher final : public rex::ui::ImGuiDialog {
         "Effects already prepared by playing through the game, so it pauses for new ones less often. Each time "
         "the launcher opens, it downloads the newest pack from the port's GitHub page by itself.");
     PackStatus();
-    Row("Share my shaders",
-        "Played a good part of the game? Share your shaders and they go into future shader packs, so other "
-        "players' first play-through runs smoother. Only shader data goes into one small file, and a GitHub page "
-        "opens to drop it in (posting needs a free GitHub account).");
-    if (ImGui::Button("Share my shaders", ImVec2(-FLT_MIN, 0))) {
-      std::string error;
-      const auto zip = PackShadersForSharing(CacheDir(), paths_.user_dir, error);
-      if (zip.empty()) {
-        share_message_ = error;
-      } else {
-        RevealInExplorer(zip);
-        OpenUrl(kShareShadersUrl);
-        share_message_ = "Saved " + zip.filename().string() +
-                         ". Drag it into the GitHub page that just opened, then press Submit. Thank you!";
-      }
-    }
-    if (!share_message_.empty()) {
-      ImGui::PushStyleColor(ImGuiCol_Text, kDim);
-      ImGui::TextWrapped("%s", share_message_.c_str());
-      ImGui::PopStyleColor();
-    }
     Row("Show this launcher", "Off starts the game directly. Hold Shift while starting to bring it back.");
     ToggleCvar("kk_launcher", "Off", "At startup");
     EndRows();
@@ -1818,7 +1797,6 @@ class Launcher final : public rex::ui::ImGuiDialog {
   bool update_manual_ = false, update_prompted_ = false, installing_update_ = false, relaunched_ = false;
   bool open_whats_new_ = false;
   std::string whats_new_from_;  // version the player had before this one
-  std::string share_message_;
   ShaderPackStatus pack_;
   std::thread pack_thread_;
   int pack_installed_ = -1;        // -1: not read yet

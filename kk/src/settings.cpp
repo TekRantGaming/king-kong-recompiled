@@ -24,14 +24,14 @@ REXCVAR_DEFINE_STRING(kk_button_prompts, "xbox360", "KK/Controls",
                       "Button pictures shown in the game: xbox360, xbox_series, ps5, ps2 or keyboard")
     .allowed({"xbox360", "xbox_series", "ps5", "ps2", "keyboard"});
 REXCVAR_DEFINE_BOOL(kk_show_fps, false, "KK/Video", "Show a frame-rate counter (toggle in game with F2)");
-REXCVAR_DEFINE_INT32(kk_deadzone, 0, "KK/Controls", "Extra stick deadzone in percent (0-50)");
-REXCVAR_DEFINE_INT32(kk_camera_sensitivity, 100, "KK/Controls", "Camera (right stick) sensitivity in percent");
+REXCVAR_DEFINE_INT32(kk_deadzone, 5, "KK/Controls", "Extra stick deadzone in percent (0-50)");
+REXCVAR_DEFINE_INT32(kk_camera_sensitivity, 150, "KK/Controls", "Camera (right stick) sensitivity in percent");
 REXCVAR_DEFINE_BOOL(kk_camera_modern, true, "KK/Controls",
                     "Camera response: true = the same in every direction, false = the Xbox 360's own");
 REXCVAR_DEFINE_BOOL(kk_achievement_toasts, true, "KK/Achievements", "Show achievement notifications");
 REXCVAR_DEFINE_BOOL(kk_achievement_sound, true, "KK/Achievements", "Play the achievement sound");
-REXCVAR_DEFINE_STRING(kk_achievement_sound_file, "", "KK/Achievements",
-                      "Achievement sound from the sounds folder (empty = built-in chime)");
+REXCVAR_DEFINE_STRING(kk_achievement_sound_file, "Xbox_360.wav", "KK/Achievements",
+                      "Achievement sound from the sounds folder (empty, or a file that isn't there = built-in chime)");
 REXCVAR_DEFINE_INT32(kk_achievement_volume, 80, "KK/Achievements", "Achievement sound volume in percent");
 REXCVAR_DEFINE_BOOL(kk_vibration, true, "KK/Controls", "Controller vibration");
 REXCVAR_DEFINE_INT32(kk_vibration_strength, 100, "KK/Controls", "Vibration strength in percent");
@@ -54,7 +54,7 @@ KK_CHEAT_CVAR(machine_gun, "Machine gun (KKcapone)");
 KK_CHEAT_CVAR(shotgun, "Shotgun (KKsh0tgun)");
 KK_CHEAT_CVAR(sniper, "Sniper rifle (KKsn1per)");
 #undef KK_CHEAT_CVAR
-REXCVAR_DEFINE_BOOL(kk_motion_blur, true, "KK/Graphics", "The game's motion blur effect");
+REXCVAR_DEFINE_BOOL(kk_motion_blur, false, "KK/Graphics", "The game's motion blur effect");
 REXCVAR_DEFINE_INT32(kk_fov, 69, "KK/Gameplay",
                      "Field of view in degrees for Jack's camera (69 = original); other cameras widen to match");
 REXCVAR_DEFINE_BOOL(kk_skip_intros, false, "KK/Gameplay",
@@ -228,6 +228,10 @@ void SetCvarDefault(std::string_view name, std::string_view value) {
 void ApplyPortDefaults() {
   // Windowed by default so the launcher isn't a giant fullscreen dialog.
   SetCvarDefault("fullscreen", "false");
+  // VSync off (the frame rate cap paces the game), FXAA, 4x texture filtering.
+  SetCvarDefault("d3d12_allow_variable_refresh_rate_and_tearing", "true");
+  SetCvarDefault("swap_post_effect", "fxaa");
+  SetCvarDefault("anisotropic_override", "3");
   // Shader preparing: Balanced. New pipelines are created on background
   // threads, many at once, and a frame may wait up to async_shader_wait_ms in
   // total for them (a setting added to this port's build of the GPU plugin),
