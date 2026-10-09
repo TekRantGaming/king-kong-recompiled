@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cmath>
 #include <fstream>
+#include <iterator>
 #include <utility>
 
 #include <rex/logging.h>
@@ -252,6 +253,19 @@ void MigrateSettings(const std::filesystem::path& config_path) {
   if (REXCVAR_GET(kk_settings_version) >= kVersion) return;
   std::error_code ec;
   if (std::filesystem::exists(config_path, ec)) {
+    // A file this version wrote already has the version in it: if it still
+    // reads as older, the file couldn't be read, and saving now would put the
+    // defaults over every setting in it (issue #37). Keep a copy and leave it.
+    std::ifstream file(config_path, std::ios::binary);
+    const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    if (text.find("kk_settings_version") != std::string::npos) {
+      auto backup = config_path;
+      backup += ".bak";
+      std::filesystem::copy_file(config_path, backup, std::filesystem::copy_options::overwrite_existing, ec);
+      REXLOG_ERROR("KK: the settings in {} couldn't be read; left as they are (copy in {})",
+                   config_path.filename().string(), backup.filename().string());
+      return;
+    }
     static constexpr std::pair<const char*, const char*> kOldDefaults[] = {{"present_effect", "bilinear"},
                                                                            {"kk_render_quality", "native"}};
     for (const auto& [name, value] : kOldDefaults)

@@ -3,6 +3,15 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v1.9.8 (9 October 2026)
+
+### What's new
+- **Fixed: settings not being kept** (#37). If the path to the game's folder, or to your Windows user folder, had a letter like á, é or ñ in it, the game couldn't read its settings file (`king_kong.toml`), so every start went back to the default settings, the language included, and saved them over yours. The same problem could also stop achievement names and your unlocked achievements from loading. Thanks to ulyssesaot for the report and the video.
+
+### Full changelog
+- The exe's manifest makes UTF-8 its code page (Windows 10 version 1903 and later), so the runtime's text paths are UTF-8. It opens its settings and achievement files with toml++, which reads a path as UTF-8, and in the system code page a path with an accented letter couldn't be opened.
+- The settings migration no longer saves over a settings file it couldn't read; it keeps a copy (`king_kong.toml.bak`) and logs an error.
+
 ## v1.9.7 (9 October 2026)
 
 ### What's new

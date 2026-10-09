@@ -63,6 +63,11 @@ else()
 endif()
 
 rexglue_setup_target(king_kong GPU_PLUGINS xenos)
+if(WIN32)
+    # UTF-8 as the program's code page (src/king_kong.manifest, issue #37).
+    target_link_options(king_kong PRIVATE "LINKER:/MANIFEST:EMBED" "LINKER:/MANIFESTUAC:NO"
+                        "LINKER:/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/src/king_kong.manifest")
+endif()
 if(KK_DEV_TOOLS)
     target_compile_definitions(king_kong PRIVATE KK_DEV_TOOLS=1)
 endif()
@@ -99,7 +104,7 @@ endif()
 # The port's version: shown in the launcher and compared with GitHub releases by the updater.
 # (-DKK_VERSION=x.y.z overrides it, to test the updater with an "older" build.)
 if(NOT DEFINED KK_VERSION)
-    set(KK_VERSION "1.9.7")
+    set(KK_VERSION "1.9.8")
 endif()
 target_compile_definitions(king_kong PRIVATE KK_VERSION="${KK_VERSION}" KK_VERSION_W=L"${KK_VERSION}")
 
