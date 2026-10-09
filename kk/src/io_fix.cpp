@@ -13,8 +13,10 @@
 // successful status, finish it the way the console does.
 
 #include <cstdint>
+#include <cstdlib>
 
 #include <rex/hook.h>
+#include <rex/logging.h>
 
 namespace kk {
 namespace {
@@ -43,6 +45,14 @@ REX_HOOK_RAW(sub_82106DE0) {
   const uint32_t bytes_read = ctx.r6.u32;
   const uint32_t overlapped = ctx.r7.u32;
   const uint32_t caller = static_cast<uint32_t>(ctx.lr);
+#if defined(KK_DEV_TOOLS)
+  // Developer aid: KK_DEV_LOG_READS=1 logs overlapped reads (the sound
+  // streamer's), to find which part of Sound_Common.bf is playing.
+  static const bool log_reads = std::getenv("KK_DEV_LOG_READS") != nullptr;
+  if (log_reads && overlapped)
+    REXLOG_INFO("KK dev: read h={:08X} offset={:#x} size={:#x} lr={:08X}", ctx.r3.u32,
+                kk::Load32(base, overlapped + 8), ctx.r5.u32, caller);
+#endif
   __imp__sub_82106DE0(ctx, base);
   if (ctx.r3.u32 != 0 || !overlapped || kk::IsVideoPlayer(caller)) return;
   // OVERLAPPED: Internal (status), InternalHigh (bytes transferred), ...

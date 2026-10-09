@@ -1,0 +1,195 @@
+From 94d6ec2c12648d357ec88371543d759a8ec3c449 Mon Sep 17 00:00:00 2001
+From: TekRantGaming <craigferels896@gmail.com>
+Date: Fri, 9 Oct 2026 05:58:47 +0100
+Subject: [PATCH] UI: ImGui textures through RendererHasTextures, sharp text at
+ any scale
+
+ImGuiDrawer now tells ImGui it handles textures itself (RendererHasTextures)
+and sets DisplayFramebufferScale, so ImGui 1.92 bakes fonts at the size they
+are drawn instead of scaling an 18 px atlas. UpdateTextures creates, updates
+and destroys the textures ImGui asks for after ImGui::Render(); they live in a
+map in imgui_drawer.cpp so the class layout stays the same for apps built
+with older headers (ReXApp, compiled into the app, allocates the drawer).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ include/rex/ui/imgui_drawer.h | 12 ++++--
+ src/ui/imgui_drawer.cpp       | 79 ++++++++++++++++++++++++-----------
+ 2 files changed, 64 insertions(+), 27 deletions(-)
+
+diff --git a/include/rex/ui/imgui_drawer.h b/include/rex/ui/imgui_drawer.h
+index a570fa0..944d8bd 100644
+--- a/include/rex/ui/imgui_drawer.h
++++ b/include/rex/ui/imgui_drawer.h
+@@ -77,7 +77,12 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
+  private:
+   void Initialize();
+ 
+-  void SetupFontTexture();
++  // Creates, updates and destroys ImGui's textures (the font atlas) as it
++  // asks, after ImGui::Render().
++  void UpdateTextures();
++  // Drops every texture (the immediate drawer is changing); ImGui asks for
++  // them again.
++  void DestroyTextures();
+ 
+   void RenderDrawLists(ImDrawData* data, UIDrawContext& ui_draw_context);
+ 
+@@ -110,8 +115,9 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
+   Presenter* presenter_ = nullptr;
+ 
+   ImmediateDrawer* immediate_drawer_ = nullptr;
+-  // Resources specific to an immediate drawer - must be destroyed before
+-  // detaching the presenter.
++  // Unused (the textures ImGui asks for are kept in imgui_drawer.cpp); kept
++  // so the class's layout stays the same for apps built with older headers
++  // (ReXApp, compiled into the app, allocates the drawer).
+   std::unique_ptr<ImmediateTexture> font_texture_;
+ 
+   // If there's an active pointer, the ImGui mouse is controlled by this touch.
+diff --git a/src/ui/imgui_drawer.cpp b/src/ui/imgui_drawer.cpp
+index f270f3c..b6b9b03 100644
+--- a/src/ui/imgui_drawer.cpp
++++ b/src/ui/imgui_drawer.cpp
+@@ -97,6 +97,12 @@ ImGuiDrawer::ImGuiDrawer(rex::ui::Window* window, size_t z_order, FontSetupCallb
+   Initialize();
+ }
+ 
++namespace {
++// Each drawer's textures, by ImTextureData::UniqueID. Kept here rather than in
++// the class so its layout doesn't change.
++std::map<const ImGuiDrawer*, std::map<int, std::unique_ptr<ImmediateTexture>>> g_textures;
++}  // namespace
++
+ ImGuiDrawer::~ImGuiDrawer() {
+   SetPresenter(nullptr);
+   SetWindowTextInputActive(false);
+@@ -109,6 +115,7 @@ ImGuiDrawer::~ImGuiDrawer() {
+       }
+     }
+   }
++  g_textures.erase(this);
+   if (internal_state_) {
+     ImGui::DestroyContext(internal_state_);
+     internal_state_ = nullptr;
+@@ -168,6 +175,11 @@ void ImGuiDrawer::Initialize() {
+   // Windows.
+   io.IniFilename = nullptr;
+ 
++  // The font atlas is a texture ImGui updates as glyphs are needed, at the
++  // sizes they're drawn and the display's density (UpdateTextures).
++  io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
++  io.Fonts->TexDesiredFormat = ImTextureFormat_RGBA32;
++
+   // Setup the font glyphs.
+   ImFontConfig font_config;
+   font_config.OversampleH = font_config.OversampleV = 1;
+@@ -328,17 +340,45 @@ std::optional<ImGuiKey> ImGuiDrawer::VirtualKeyToImGuiKey(VirtualKey vkey) {
+   }
+ }
+ 
+-void ImGuiDrawer::SetupFontTexture() {
+-  if (font_texture_ || !immediate_drawer_) {
++void ImGuiDrawer::UpdateTextures() {
++  if (!immediate_drawer_) {
++    return;
++  }
++  GetIO();  // makes this drawer's context current
++  auto& textures_ = g_textures[this];
++  for (ImTextureData* tex : ImGui::GetPlatformIO().Textures) {
++    if (tex->Status == ImTextureStatus_WantCreate || tex->Status == ImTextureStatus_WantUpdates) {
++      // Uploads the whole texture again; the immediate drawer keeps the old
++      // one until the GPU has finished with it.
++      auto texture = immediate_drawer_->CreateTexture(
++          uint32_t(tex->Width), uint32_t(tex->Height), ImmediateTextureFilter::kLinear, true,
++          static_cast<const uint8_t*>(tex->GetPixels()));
++      if (!texture) {
++        continue;
++      }
++      tex->SetTexID(reinterpret_cast<ImTextureID>(texture.get()));
++      tex->SetStatus(ImTextureStatus_OK);
++      textures_[tex->UniqueID] = std::move(texture);
++    } else if (tex->Status == ImTextureStatus_WantDestroy && tex->UnusedFrames > 0) {
++      textures_.erase(tex->UniqueID);
++      tex->SetTexID(ImTextureID_Invalid);
++      tex->SetStatus(ImTextureStatus_Destroyed);
++    }
++  }
++}
++
++void ImGuiDrawer::DestroyTextures() {
++  if (!internal_state_) {
+     return;
+   }
+-  ImGuiIO& io = GetIO();
+-  unsigned char* pixels;
+-  int width, height;
+-  io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+-  font_texture_ = immediate_drawer_->CreateTexture(width, height, ImmediateTextureFilter::kLinear,
+-                                                   true, reinterpret_cast<uint8_t*>(pixels));
+-  io.Fonts->TexID = reinterpret_cast<ImTextureID>(font_texture_.get());
++  g_textures.erase(this);
++  GetIO();
++  for (ImTextureData* tex : ImGui::GetPlatformIO().Textures) {
++    if (tex->Status == ImTextureStatus_OK || tex->Status == ImTextureStatus_WantUpdates) {
++      tex->SetTexID(ImTextureID_Invalid);
++      tex->SetStatus(ImTextureStatus_WantCreate);
++    }
++  }
+ }
+ 
+ void ImGuiDrawer::SetPresenter(Presenter* new_presenter) {
+@@ -363,17 +403,10 @@ void ImGuiDrawer::SetImmediateDrawer(ImmediateDrawer* new_immediate_drawer) {
+     return;
+   }
+   if (immediate_drawer_) {
+-    GetIO().Fonts->TexID = ImTextureID{};
+-    font_texture_.reset();
++    DestroyTextures();
+   }
++  // Textures are created for the new drawer when ImGui next renders.
+   immediate_drawer_ = new_immediate_drawer;
+-  // Eagerly upload the font atlas only when a presenter is attached (SDK mode).
+-  // In detached mode (presenter_ == nullptr) the app's renderer device may not
+-  // exist yet at SetupPresentation, so defer to the idempotent Draw-time
+-  // SetupFontTexture().
+-  if (immediate_drawer_ && presenter_) {
+-    SetupFontTexture();
+-  }
+ }
+ 
+ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
+@@ -384,12 +417,6 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
+     return;
+   }
+ 
+-  // In detached mode the app's immediate drawer (and the renderer device
+-  // backing it) may only become usable on the first frame, after the guest
+-  // creates its D3D device. Upload the font atlas lazily and idempotently;
+-  // SetupFontTexture early-returns once font_texture_ is set.
+-  SetupFontTexture();
+-
+   if (dialogs_.empty()) {
+     return;
+   }
+@@ -411,6 +438,9 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
+   float physical_to_logical = float(window_->GetMediumDpi()) / float(window_->GetDpi());
+   io.DisplaySize.x = window_->GetActualPhysicalWidth() * physical_to_logical;
+   io.DisplaySize.y = window_->GetActualPhysicalHeight() * physical_to_logical;
++  // Text is rasterized at the display's density, so it stays sharp with
++  // Windows display scaling.
++  io.DisplayFramebufferScale = ImVec2(1.0f / physical_to_logical, 1.0f / physical_to_logical);
+ 
+   ImGui::NewFrame();
+ 
+@@ -422,6 +452,7 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
+   dialog_loop_next_index_ = SIZE_MAX;
+ 
+   ImGui::Render();
++  UpdateTextures();
+   ImDrawData* draw_data = ImGui::GetDrawData();
+   if (draw_data) {
+     RenderDrawLists(draw_data, ui_draw_context);
+-- 
+2.55.0.windows.5
+

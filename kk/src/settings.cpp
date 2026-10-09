@@ -13,11 +13,17 @@ REXCVAR_DEFINE_BOOL(kk_launcher, true, "KK",
 REXCVAR_DEFINE_BOOL(kk_skip_launcher, false, "KK",
                     "Internal: skip the launcher once (used when it relaunches the game)");
 REXCVAR_DEFINE_BOOL(kk_check_updates, true, "KK", "Check GitHub for a newer version when the launcher opens");
+REXCVAR_DEFINE_BOOL(kk_launcher_music, true, "KK", "Play the game's main menu music in the launcher");
+REXCVAR_DEFINE_INT32(kk_launcher_music_volume, 50, "KK", "The launcher's music volume, 0-100").range(0, 100);
+REXCVAR_DEFINE_BOOL(kk_launcher_sounds, true, "KK", "The game's menu sounds when moving around and choosing in the launcher");
+REXCVAR_DEFINE_INT32(kk_launcher_sounds_volume, 50, "KK", "The launcher's interface sound volume, 0-100").range(0, 100);
+REXCVAR_DEFINE_INT32(kk_settings_version, 0, "KK",
+                     "Internal: which defaults the settings file was written with (see MigrateSettings)");
 REXCVAR_DEFINE_STRING(kk_last_version, "", "KK",
                       "Last port version the launcher has shown (it shows What's new once after an update)");
 REXCVAR_DEFINE_INT32(kk_frame_rate, 30, "KK/Video",
                      "Frame-rate cap: 30, 60, 90, 120, 144, 165, 240, or 0 for unlimited");
-REXCVAR_DEFINE_STRING(kk_render_quality, "native", "KK/Video",
+REXCVAR_DEFINE_STRING(kk_render_quality, "quality", "KK/Video",
                       "Render resolution relative to the output: native, quality, balanced, performance, "
                       "ultra_performance, supersample, or custom (use resolution_scale)");
 REXCVAR_DEFINE_STRING(kk_button_prompts, "xbox360", "KK/Controls",
@@ -64,7 +70,7 @@ REXCVAR_DEFINE_STRING(kk_modern_settings, "", "KK/Graphics",
                       "Internal: the Modern settings to put back when leaving the Original look");
 REXCVAR_DEFINE_INT32(kk_fov, 69, "KK/Gameplay",
                      "Field of view in degrees for Jack's camera (69 = original); other cameras widen to match");
-REXCVAR_DEFINE_BOOL(kk_skip_intros, false, "KK/Gameplay",
+REXCVAR_DEFINE_BOOL(kk_skip_intros, true, "KK/Gameplay",
                     "Skip the Ubisoft, Universal and WingNut logo movies when the game starts");
 REXCVAR_DEFINE_BOOL(kk_toggle_aim, false, "KK/Controls",
                     "Aim (left trigger) toggles: press once to raise the gun, again to lower it");
@@ -229,6 +235,41 @@ bool SaveSettings(const std::filesystem::path& path) {
   return static_cast<bool>(file);
 }
 
+void MigrateSettings(const std::filesystem::path& config_path) {
+  // 2: FSR 1 at Quality became the default (it was no upscaler at Native).
+  // A settings file only keeps values that differ from the defaults, so an
+  // older one that has no upscaler setting meant the old default: keep it, so
+  // an update doesn't change a player's picture (or turn their High, Ultra or
+  // Steam Deck preset into Custom). New installs get the new defaults.
+  constexpr int32_t kVersion = 2;
+  if (REXCVAR_GET(kk_settings_version) >= kVersion) return;
+  std::error_code ec;
+  if (std::filesystem::exists(config_path, ec)) {
+    static constexpr std::pair<const char*, const char*> kOldDefaults[] = {{"present_effect", "bilinear"},
+                                                                           {"kk_render_quality", "native"}};
+    for (const auto& [name, value] : kOldDefaults)
+      for (const auto& e : rex::cvar::GetRegistry())
+        if (e.name == name && e.source == rex::cvar::Source::kDefault) rex::cvar::SetFlagByName(name, value);
+    REXLOG_INFO("KK: settings from an older version: kept its upscaler settings ({}, {})",
+                rex::cvar::GetFlagByName("present_effect"), rex::cvar::GetFlagByName("kk_render_quality"));
+    rex::cvar::SetFlagByName("kk_settings_version", std::to_string(kVersion));
+    SaveSettings(config_path);
+    return;
+  }
+  // A new install: saved with the rest later (writing the file now would look
+  // like an earlier run to the launcher's What's new).
+  rex::cvar::SetFlagByName("kk_settings_version", std::to_string(kVersion));
+}
+
+void ApplyFixedSettings() {
+  // Shader preparing is always Balanced (no longer a setting): Wait paused the
+  // game for up to 2 seconds the first time an effect appeared, and
+  // Background made objects vanish or flash. A settings file from before keeps
+  // no say in it (the values equal the defaults, so they aren't saved again).
+  rex::cvar::SetFlagByName("async_shader_compilation", "true");
+  rex::cvar::ResetToDefault("async_shader_wait_ms");
+}
+
 void SetCvarDefault(std::string_view name, std::string_view value) {
   for (auto& e : rex::cvar::GetRegistry()) {
     if (e.name != name) continue;
@@ -245,6 +286,12 @@ void ApplyPortDefaults() {
   SetCvarDefault("d3d12_allow_variable_refresh_rate_and_tearing", "true");
   SetCvarDefault("swap_post_effect", "fxaa");
   SetCvarDefault("anisotropic_override", "3");
+  // AMD FSR 1 at Quality (kk_render_quality), where this build has it.
+  for (auto& e : rex::cvar::GetRegistry()) {
+    const auto& allowed = e.constraints.allowed_values;
+    if (e.name == "present_effect" && std::find(allowed.begin(), allowed.end(), "fsr") != allowed.end())
+      SetCvarDefault("present_effect", "fsr");
+  }
   // Shader preparing: Balanced. New pipelines are created on background
   // threads, many at once, and a frame may wait up to async_shader_wait_ms in
   // total for them (a setting added to this port's build of the GPU plugin),
@@ -290,7 +337,7 @@ void ApplyRuntimeOverrides() {
   // Shader preparing: Balanced waits up to half a frame at the frame-rate cap
   // for pipelines being prepared (16 ms at 30 FPS, 8 at 60, 4 from 120 or
   // unlimited), which fits in the frame's spare time. A fixed 16 ms caused a
-  // hitch at 60 FPS. Only the default changes: a chosen value still wins.
+  // hitch at 60 FPS.
   {
     const int32_t fps = REXCVAR_GET(kk_frame_rate);
     const int32_t wait = fps > 0 ? std::clamp(500 / fps, 4, kBalancedShaderWaitMs) : 4;

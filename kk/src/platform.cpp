@@ -227,6 +227,7 @@ void LoadUiFont(ImFontAtlas* atlas) {
   if (!g_fonts.regular) return;
   g_fonts.semibold = load("seguisb.ttf");
   g_fonts.bold = load("segoeuib.ttf");
+  g_fonts.display = load("bahnschrift.ttf");
   ImGui::GetIO().FontDefault = g_fonts.regular;
 #else
   // Common Linux UI fonts; the first family found wins.
@@ -260,6 +261,7 @@ void LoadUiFont(ImFontAtlas* atlas) {
 #endif
   if (!g_fonts.semibold) g_fonts.semibold = g_fonts.regular;
   if (!g_fonts.bold) g_fonts.bold = g_fonts.regular;
+  if (!g_fonts.display) g_fonts.display = g_fonts.bold;
 }
 
 const UiFonts& GetUiFonts() { return g_fonts; }

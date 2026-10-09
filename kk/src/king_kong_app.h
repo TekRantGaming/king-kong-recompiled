@@ -87,6 +87,8 @@ class KingKongApp : public rex::ReXApp {
   std::optional<rex::PathConfig> OnFinalizePaths(
       const rex::PathConfig& defaults, std::function<void(rex::PathConfig)> resume) override {
     user_data_root_ = defaults.user_data_root;
+    kk::MigrateSettings(defaults.config_path);
+    kk::ApplyFixedSettings();
     const bool skip_once = REXCVAR_GET(kk_skip_launcher);
     rex::cvar::ResetToDefault("kk_skip_launcher");  // never persist it
     const bool files_ok = kk::GameFilesPresent(defaults.game_data_root);

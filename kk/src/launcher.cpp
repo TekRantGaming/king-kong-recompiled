@@ -1,11 +1,18 @@
 #include "launcher.h"
+#include "launcher_art.h"
+#include "launcher_music.h"
+#include "launcher_sounds.h"
+#include "launcher_text.h"
+#include "launcher_ui.h"
 #include "shader_pack.h"
+#include "steam_shortcut.h"
 #include "update.h"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <map>
@@ -53,74 +60,23 @@
 namespace kk {
 namespace {
 
+using text::F;
+using text::T;
+using ui::Action;
+using ui::Item;
+using ui::ItemType;
+namespace color = ui::color;
+
 constexpr uint32_t kTitleId = 0x555307D3;
-
-// ------------------------------------------------------------------ theme ---
-// Skull Island at night: warm near-black, weathered stone and torchlight amber.
-const ImVec4 kBg = ImVec4(0.035f, 0.031f, 0.027f, 1.0f);
-const ImVec4 kPanel = ImVec4(0.075f, 0.067f, 0.059f, 1.0f);
-const ImVec4 kFrame = ImVec4(0.125f, 0.110f, 0.094f, 1.0f);
-const ImVec4 kFrameHot = ImVec4(0.169f, 0.149f, 0.125f, 1.0f);
-const ImVec4 kFrameActive = ImVec4(0.204f, 0.180f, 0.149f, 1.0f);
-const ImVec4 kAccent = ImVec4(0.910f, 0.639f, 0.235f, 1.0f);
-const ImVec4 kAccentHot = ImVec4(0.957f, 0.725f, 0.353f, 1.0f);
-const ImVec4 kOnAccent = ImVec4(0.090f, 0.055f, 0.016f, 1.0f);
-const ImVec4 kDim = ImVec4(0.690f, 0.643f, 0.580f, 1.0f);
-const ImVec4 kGood = ImVec4(0.118f, 0.420f, 0.239f, 1.0f);
-const ImVec4 kWarn = ImVec4(0.490f, 0.318f, 0.090f, 1.0f);
-
-ImU32 Col(const ImVec4& c, float alpha_mul = 1.0f) {
-  return ImGui::ColorConvertFloat4ToU32(ImVec4(c.x, c.y, c.z, c.w * alpha_mul));
-}
-
-void ApplyTheme(float scale) {
-  ImGuiStyle& s = ImGui::GetStyle();
-  s.WindowPadding = ImVec2(0, 0);
-  s.WindowBorderSize = 0;
-  s.ChildBorderSize = 0;
-  s.PopupBorderSize = 0;
-  s.FrameBorderSize = 0;
-  s.WindowRounding = 0;
-  s.ChildRounding = 12 * scale;
-  s.FrameRounding = 7 * scale;
-  s.PopupRounding = 8 * scale;
-  s.GrabRounding = 7 * scale;
-  s.ScrollbarRounding = 8 * scale;
-  s.ScrollbarSize = 10 * scale;
-  s.FramePadding = ImVec2(12 * scale, 8 * scale);
-  s.ItemSpacing = ImVec2(10 * scale, 10 * scale);
-  s.CellPadding = ImVec2(0, 12 * scale);
-  s.GrabMinSize = 14 * scale;
-  ImVec4* c = s.Colors;
-  c[ImGuiCol_Text] = ImVec4(0.95f, 0.97f, 1.0f, 1.0f);
-  c[ImGuiCol_TextDisabled] = kDim;
-  c[ImGuiCol_WindowBg] = kBg;
-  c[ImGuiCol_ChildBg] = kPanel;
-  c[ImGuiCol_PopupBg] = ImVec4(0.075f, 0.110f, 0.212f, 0.99f);
-  c[ImGuiCol_FrameBg] = kFrame;
-  c[ImGuiCol_FrameBgHovered] = kFrameHot;
-  c[ImGuiCol_FrameBgActive] = kFrameActive;
-  c[ImGuiCol_Button] = kFrame;
-  c[ImGuiCol_ButtonHovered] = kFrameHot;
-  c[ImGuiCol_ButtonActive] = kFrameActive;
-  c[ImGuiCol_Header] = kFrame;
-  c[ImGuiCol_HeaderHovered] = kFrameHot;
-  c[ImGuiCol_HeaderActive] = kFrameActive;
-  c[ImGuiCol_SliderGrab] = kAccent;
-  c[ImGuiCol_SliderGrabActive] = kAccentHot;
-  c[ImGuiCol_CheckMark] = kAccent;
-  c[ImGuiCol_ScrollbarBg] = ImVec4(0, 0, 0, 0);
-  c[ImGuiCol_ScrollbarGrab] = kFrameHot;
-  c[ImGuiCol_ScrollbarGrabHovered] = kFrameActive;
-  c[ImGuiCol_Separator] = ImVec4(1, 1, 1, 0.07f);
-  c[ImGuiCol_TableBorderLight] = ImVec4(1, 1, 1, 0.06f);
-  c[ImGuiCol_TableRowBg] = ImVec4(0, 0, 0, 0);
-  c[ImGuiCol_TableRowBgAlt] = ImVec4(0, 0, 0, 0);
-  c[ImGuiCol_NavCursor] = kAccent;
-  c[ImGuiCol_ModalWindowDimBg] = ImVec4(0, 0, 0, 0.6f);
-}
+constexpr const char* kProjectUrl = "https://github.com/TekRantGaming/king-kong-recompiled";
+#define KK_TIMES "\xC3\x97"
+#define KK_DOT "\xC2\xB7"
+#define KK_DEG "\xC2\xB0"
 
 // ---------------------------------------------------------- cvar helpers ---
+// Every change bumps g_changes; the launcher saves the settings shortly after.
+int g_changes = 0;
+
 std::string Get(const char* name) { return rex::cvar::GetFlagByName(name); }
 bool GetBool(const char* name) { return Get(name) == "true"; }
 int GetInt(const char* name, int fallback = 0) {
@@ -130,15 +86,34 @@ int GetInt(const char* name, int fallback = 0) {
     return fallback;
   }
 }
-void Set(const char* name, const std::string& value) { rex::cvar::SetFlagByName(name, value); }
+float GetFloat(const char* name, float fallback) {
+  try {
+    return std::stof(Get(name));
+  } catch (...) {
+    return fallback;
+  }
+}
+void Set(const char* name, const std::string& value) {
+  if (Get(name) == value) return;
+  rex::cvar::SetFlagByName(name, value);
+  ++g_changes;
+}
 void SetBool(const char* name, bool v) { Set(name, v ? "true" : "false"); }
 void SetInt(const char* name, int v) { Set(name, std::to_string(v)); }
+void Reset(const char* name) {
+  rex::cvar::ResetToDefault(name);
+  ++g_changes;
+}
 
 const rex::cvar::FlagEntry* FindFlag(std::string_view name) {
   for (auto& e : rex::cvar::GetRegistry())
     if (e.name == name) return &e;
   return nullptr;
 }
+
+std::string Upper(std::string s) { return text::Upper(std::move(s)); }
+
+std::string Size(int w, int h) { return std::to_string(w) + " " KK_TIMES " " + std::to_string(h); }
 
 // ImGuiKey -> Win32 virtual-key code (ReXGlue's VirtualKey uses the same values).
 int ImGuiKeyToVk(ImGuiKey k) {
@@ -226,23 +201,20 @@ std::filesystem::path BrowseForDiscImage() {
 }
 #endif
 
+// The languages the game has (user_language, Xbox 360 language numbers), in
+// their own names. The launcher's text follows the same setting.
+constexpr std::pair<int, const char*> kLanguages[] = {
+    {1, "English"}, {3, "Deutsch"}, {5, "Espa\xC3\xB1ol"}, {4, "Fran\xC3\xA7" "ais"}, {6, "Italiano"}};
+
 // Settings that the presenter/window read before the launcher runs; changing
 // them needs a relaunch to take effect.
 constexpr const char* kRestartCvars[] = {"present_effect", "window_width", "window_height", "monitor"};
 
-enum Page { kPlay, kDisplay, kGraphics, kGameplay, kControls, kCheatsPage, kAchievements, kAbout, kPageCount };
-constexpr const char* kPageNames[kPageCount] = {"Play",     "Display", "Graphics",     "Gameplay",
+enum Page { kHome, kDisplay, kGraphics, kGameplay, kControls, kCheatsPage, kAchievements, kAbout, kPageCount };
+constexpr const char* kPageNames[kPageCount] = {"Home",     "Display", "Graphics",     "Gameplay",
                                                 "Controls", "Cheats",  "Achievements", "About"};
-constexpr const char* kPageBlurbs[kPageCount] = {
-    "Install the game from your own disc image and start playing.",
-    "Window, monitor and how the picture fits your screen.",
-    "Upscaling, render resolution, anti-aliasing and texture filtering.",
-    "Frame rate, language and the frame counter.",
-    "Camera, sticks, vibration, button remapping and keyboard play.",
-    "The game's cheats, switched on for you when the game starts.",
-    "Your progress on the game's 9 achievements.",
-    "About this port, and where your saves and settings live.",
-};
+// Sub-pages of Controls.
+enum SubPage { kNoSubPage, kRemapPage, kKeysPage };
 
 struct Achievement {
   uint32_t id = 0;
@@ -253,26 +225,233 @@ struct Achievement {
 };
 
 struct Option {
-  const char* label;
+  std::string label;
   std::string value;
 };
 
-ImTextureRef Tex(rex::ui::ImmediateTexture* t) { return ImTextureRef(reinterpret_cast<ImTextureID>(t)); }
+// ------------------------------------------------------------ presets ---
+// Graphics presets set the upscaler, render quality, anti-aliasing, texture
+// filtering and ambient occlusion (motion blur and fog are left to taste).
+// The preset shown is the one the settings match; anything else is Custom.
+// Medium is the default settings (FSR 1 at Quality).
+struct GraphicsPreset {
+  const char* label;
+  const char* upscaler;   // present_effect
+  const char* quality;    // kk_render_quality
+  const char* aa;         // swap_post_effect
+  const char* filtering;  // anisotropic_override: 2 = 2x, 3 = 4x, 4 = 8x, 5 = 16x
+  bool ao;                // ao_mode 1 at strength 1
+};
+constexpr GraphicsPreset kGraphicsPresets[] = {
+    {"Low", "fsr", "performance", "fxaa", "2", false},
+    {"Medium", "fsr", "quality", "fxaa", "3", false},
+    {"High", "bilinear", "native", "fxaa", "4", true},
+    {"Ultra", "bilinear", "supersample", "fxaa_extreme", "5", true},
+    {"Steam Deck", "bilinear", "native", "fxaa", "2", false},
+};
+constexpr int kGraphicsPresetCount = int(std::size(kGraphicsPresets));
+
+// The upscaler modes (kk_render_quality); -1 for another render quality.
+constexpr const char* kUpscalerModes[] = {"native", "quality", "balanced", "performance"};
+constexpr const char* kUpscalerModeNames[] = {"Native", "Quality", "Balanced", "Performance"};
+int UpscalerMode() {
+  const std::string q = Get("kk_render_quality");
+  for (int i = 0; i < 4; ++i)
+    if (q == kUpscalerModes[i]) return i;
+  return -1;
+}
+
+int MatchGraphicsPreset() {
+  for (int i = 0; i < kGraphicsPresetCount; ++i) {
+    const GraphicsPreset& p = kGraphicsPresets[i];
+    const bool ao = GetInt("ao_mode", 0) != 0;
+    if (Get("present_effect") == p.upscaler && Get("kk_render_quality") == p.quality &&
+        Get("swap_post_effect") == p.aa && Get("anisotropic_override") == p.filtering && ao == p.ao &&
+        (!ao || GetInt("ao_strength", 1) == 1))
+      return i;
+  }
+  return -1;
+}
+
+void ApplyGraphicsPreset(int index) {
+  const GraphicsPreset& p = kGraphicsPresets[index];
+  Set("present_effect", p.upscaler);
+  Set("kk_render_quality", p.quality);
+  Set("swap_post_effect", p.aa);
+  Set("anisotropic_override", p.filtering);
+  SetInt("ao_mode", p.ao ? 1 : 0);
+  if (p.ao) SetInt("ao_strength", 1);
+}
+
+// The Original look: the Xbox 360's own settings (OriginalLookSettings).
+// Switching to it keeps the Modern ones in kk_modern_settings, and switching
+// back puts them back.
+void SetOriginalLook(bool on) {
+  if (on == GetBool("kk_original_look")) return;
+  if (on) {
+    std::string saved;
+    for (const auto& [name, value] : OriginalLookSettings()) saved += std::string(name) + "=" + Get(name) + ";";
+    Set("kk_modern_settings", saved);
+    for (const auto& [name, value] : OriginalLookSettings()) Set(name, value);
+  } else {
+    const std::string saved = Get("kk_modern_settings");
+    if (saved.empty()) ApplyGraphicsPreset(1);  // Medium
+    std::stringstream in(saved);
+    for (std::string item; std::getline(in, item, ';');) {
+      const size_t eq = item.find('=');
+      if (eq != std::string::npos) Set(item.substr(0, eq).c_str(), item.substr(eq + 1));
+    }
+    Set("kk_modern_settings", "");
+  }
+  SetBool("kk_original_look", on);
+}
+
+// ----------------------------------------------------------- backdrop ---
+// A box blur of the colour channels, `passes` times (close to a Gaussian).
+void Blur(std::vector<uint8_t>& px, int w, int h, int r, int passes) {
+  std::vector<uint8_t> tmp(px.size());
+  auto pass = [&](const uint8_t* src, uint8_t* dst, bool horizontal) {
+    const int n = horizontal ? w : h, lines = horizontal ? h : w;
+    const int stride = horizontal ? 4 : w * 4, line_stride = horizontal ? w * 4 : 4;
+    for (int l = 0; l < lines; ++l) {
+      const uint8_t* s = src + size_t(l) * line_stride;
+      uint8_t* d = dst + size_t(l) * line_stride;
+      for (int c = 0; c < 3; ++c) {
+        int sum = 0;
+        for (int k = -r; k <= r; ++k) sum += s[std::clamp(k, 0, n - 1) * stride + c];
+        for (int i = 0; i < n; ++i) {
+          d[i * stride + c] = uint8_t(sum / (2 * r + 1));
+          sum += s[std::min(i + r + 1, n - 1) * stride + c] - s[std::max(i - r, 0) * stride + c];
+        }
+      }
+      for (int i = 0; i < n; ++i) d[i * stride + 3] = 255;
+    }
+  };
+  for (int p = 0; p < passes; ++p) {
+    pass(px.data(), tmp.data(), true);
+    pass(tmp.data(), px.data(), false);
+  }
+}
+
+// The launcher's backdrop from the captured menu screen: the part right of the
+// game's logo (moon, cliffs and the sea), 16:9, with the save message's box
+// in the middle painted out. `soft` is a blurred copy for behind the settings.
+void MakeBackdrops(const art::Image& src, art::Image* sharp, art::Image* soft) {
+  const int sw = src.width, sh = src.height;
+  const int x0 = int(float(sw) * 0.30f), cw = sw - x0;
+  const int ch = std::min(sh, cw * 9 / 16);
+  const int y0 = std::clamp(int(float(sh) * 0.15f), 0, sh - ch);
+  art::Image out;
+  out.width = cw;
+  out.height = ch;
+  out.rgba.resize(size_t(cw) * ch * 4);
+  for (int y = 0; y < ch; ++y)
+    std::memcpy(&out.rgba[size_t(y) * cw * 4], &src.rgba[(size_t(y0 + y) * sw + x0) * 4], size_t(cw) * 4);
+  // The box (its width depends on the language): fill its rows with a blend
+  // of the rows just above and below it.
+  const int ya = std::clamp(int(float(sh) * 0.40f) - y0, 1, ch - 3);
+  const int yb = std::clamp(int(float(sh) * 0.545f) - y0, ya + 1, ch - 2);
+  const int xb = std::clamp(int(float(sw) * 0.80f) - x0, 0, cw);
+  auto px = [&](std::vector<uint8_t>& v, int x, int y) { return &v[(size_t(y) * cw + x) * 4]; };
+  for (int x = 0; x < xb; ++x) {
+    const uint8_t* above = px(out.rgba, x, ya - 1);
+    const uint8_t* below = px(out.rgba, x, yb + 1);
+    for (int y = ya; y <= yb; ++y) {
+      const float t = float(y - ya + 1) / float(yb - ya + 2);
+      uint8_t* d = px(out.rgba, x, y);
+      for (int c = 0; c < 3; ++c) d[c] = uint8_t(float(above[c]) + (float(below[c]) - float(above[c])) * t);
+      d[3] = 255;
+    }
+  }
+  // Soften the painted area into its surroundings.
+  art::Image blurred = out;
+  Blur(blurred.rgba, cw, ch, std::max(2, cw / 110), 3);
+  const float feather = float(ch) / 12.0f;
+  for (int y = 0; y < ch; ++y) {
+    const float dy = y < ya ? float(ya - y) : y > yb ? float(y - yb) : 0.0f;
+    if (dy > feather) continue;
+    for (int x = 0; x < cw; ++x) {
+      const float dx = x >= xb ? float(x - xb + 1) : 0.0f;
+      const float d = std::sqrt(dx * dx + dy * dy);
+      if (d > feather) continue;
+      const float t = 1.0f - d / feather;
+      const float k = t * t * (3 - 2 * t);
+      uint8_t* o = px(out.rgba, x, y);
+      const uint8_t* b = px(blurred.rgba, x, y);
+      for (int c = 0; c < 3; ++c) o[c] = uint8_t(float(o[c]) + (float(b[c]) - float(o[c])) * k);
+    }
+  }
+  Blur(blurred.rgba, cw, ch, std::max(3, cw / 70), 3);
+  *sharp = std::move(out);
+  *soft = std::move(blurred);
+}
+
+// A small, blurred copy of a backdrop, for behind the settings.
+art::Image SoftCopy(const art::Image& src) {
+  constexpr int kStep = 4;
+  art::Image out;
+  out.width = src.width / kStep;
+  out.height = src.height / kStep;
+  if (!out) return out;
+  out.rgba.resize(size_t(out.width) * out.height * 4);
+  for (int y = 0; y < out.height; ++y)
+    for (int x = 0; x < out.width; ++x) {
+      int sum[3] = {};
+      for (int dy = 0; dy < kStep; ++dy)
+        for (int dx = 0; dx < kStep; ++dx) {
+          const uint8_t* p = &src.rgba[(size_t(y * kStep + dy) * src.width + x * kStep + dx) * 4];
+          for (int c = 0; c < 3; ++c) sum[c] += p[c];
+        }
+      uint8_t* d = &out.rgba[(size_t(y) * out.width + x) * 4];
+      for (int c = 0; c < 3; ++c) d[c] = uint8_t(sum[c] / (kStep * kStep));
+      d[3] = 255;
+    }
+  Blur(out.rgba, out.width, out.height, std::max(2, out.width / 100), 3);
+  return out;
+}
+
+// Add to Steam, shared with its worker threads.
+struct SteamState {
+  std::atomic<bool> available{false};   // Steam is here, and this copy wasn't started from it
+  std::atomic<bool> in_library{false};  // every account has it already
+  std::atomic<bool> busy{false}, done{false};
+  std::atomic<int> phase{0};  // kSteamPhases
+  steam::Result result;       // read once done
+  bool reopened = false;
+};
+constexpr const char* kSteamPhases[] = {"Downloading the artwork from SteamGridDB", "Waiting for Steam to close",
+                                        "Adding King Kong to your library", "Opening Steam again"};
 
 class Launcher final : public rex::ui::ImGuiDialog {
  public:
   Launcher(rex::ui::ImGuiDrawer* drawer, rex::ui::ImmediateDrawer* immediate, LauncherPaths paths,
            LauncherCallbacks callbacks)
-      : ImGuiDialog(drawer), immediate_(immediate), paths_(std::move(paths)), cb_(std::move(callbacks)) {
-    saved_style_ = ImGui::GetStyle();
+      : ImGuiDialog(drawer),
+        immediate_(immediate),
+        paths_(std::move(paths)),
+        cb_(std::move(callbacks)),
+        glyphs_(immediate, rex::filesystem::GetExecutableFolder() / "glyphs") {
+    glyphs_.AddSet("xbox360", art::LauncherArtDir(paths_.user_dir) / "glyphs" / "xbox360");
     for (const char* name : kRestartCvars) restart_baseline_.push_back(Get(name));
     files_ok_ = GameFilesPresent(paths_.game_dir);
+    home_focus_ = 0;
     EnforceOriginalLook();
     LoadArt();
+    // Installed before the launcher took its art from the game files: take it now.
+    if (files_ok_ && !art::HasLauncherArt(ArtDir())) StartArtExtraction(false);
     toast_ = std::make_unique<AchievementToast>(drawer, immediate_, paths_.game_dir, paths_.user_dir);
     CleanUpAfterUpdate();
     const bool testing = std::getenv("KK_AUTOPLAY") != nullptr;
     if (GetBool("kk_check_updates") && !testing) StartUpdateCheck(false);
+    StartSteamCheck();
+    // Menu sounds (the device opens in OnDraw while they're on).
+    ui::SetSoundHandler([this](ui::Sound sound, float value) {
+      if (!GetBool("kk_launcher_sounds")) return;
+      if (!ui_sounds_ && files_ok_) ui_sounds_ = std::make_unique<LauncherSounds>(paths_.game_dir);  // just switched on
+      if (!ui_sounds_) return;
+      const float v = GetInt("kk_launcher_sounds_volume", 50) / 100.0f;
+      ui_sounds_->Play(sound, value, v * v);
+    });
     // The shader pack keeps itself up to date: each time the launcher opens,
     // the published pack is downloaded if it is newer than the one installed.
     if (!testing) StartPackDownload();
@@ -288,15 +467,17 @@ class Launcher final : public rex::ui::ImGuiDialog {
       Set("kk_last_version", KK_VERSION);
       SaveSettings(paths_.config_path);
     }
+    saved_changes_ = seen_changes_ = g_changes;
   }
 
   ~Launcher() override {
-    ImGui::GetStyle() = saved_style_;
+    ui::SetSoundHandler(nullptr);
     if (install_thread_.joinable()) {
       progress_.cancel = true;
       install_thread_.join();
     }
     if (pack_thread_.joinable()) pack_thread_.join();
+    if (art_thread_.joinable()) art_thread_.join();
     for (auto& texture : textures_) KeepTextureAlive(std::move(texture));
   }
 
@@ -305,44 +486,68 @@ class Launcher final : public rex::ui::ImGuiDialog {
     // Testing aid: KK_AUTOPLAY=1 presses Play after a couple of seconds.
     static const bool autoplay = std::getenv("KK_AUTOPLAY") != nullptr;
     if (autoplay && files_ok_ && ++autoplay_frames_ == 120) StartGame();
-#if defined(KK_DEV_TOOLS)
-    DevTour();
-#endif
-    s_ = ImGui::GetFontSize() / 18.0f;
-    ApplyTheme(s_);
+
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->Pos);
     ImGui::SetNextWindowSize(vp->Size);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImGui::ColorConvertU32ToFloat4(color::kBase));
     ImGui::Begin("##kk_launcher", nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
-                     ImGuiWindowFlags_NoBringToFrontOnFocus);
-    const float w = vp->Size.x, h = vp->Size.y;
-    const float header = std::clamp(h * 0.2f, 120 * s_, 190 * s_);
-    const float footer = 78 * s_;
-    const float margin = 22 * s_;
+                     ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollWithMouse |
+                     ImGuiWindowFlags_NoNav);
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(2);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    o_ = vp->Pos;
+    w_ = vp->Size.x;
+    h_ = vp->Size.y;
+    // Laid out for 1280 x 720 and scaled with the window.
+    const float s = std::clamp(std::min(w_ / 1280.0f, h_ / 720.0f), 0.7f, 3.0f);
+    m_.s = s;
+    m_.row_h = 46 * s;
+    m_.tall_h = 74 * s;
+    m_.section_h = 52 * s;
 
-    DrawHeader(vp->Pos, w, header);
+    input_.set_keyboard_enabled(capturing_.empty());  // keys go to the binding being set
+    input_.Update();
+    if (pending_click_ != Action::kCount) {
+      input_.Inject(pending_click_, ui::Device::kKeyboard);
+      pending_click_ = Action::kCount;
+    }
+#if defined(KK_DEV_TOOLS)
+    DevTour();
+    DevInput();
+#endif
+    Tick();
+    if (files_ok_ && !music_) music_ = std::make_unique<LauncherMusic>(paths_.game_dir);
+    if (music_) {
+      const float v = GetBool("kk_launcher_music") ? GetInt("kk_launcher_music_volume", 50) / 100.0f : 0.0f;
+      music_->Update(v * v, io.DeltaTime);  // a gentler curve than linear
+    }
+    if (files_ok_ && GetBool("kk_launcher_sounds") && !ui_sounds_)
+      ui_sounds_ = std::make_unique<LauncherSounds>(paths_.game_dir);
 
-    const float body_top = header + margin * 0.6f;
-    const float body_h = h - body_top - footer;
-    const float sidebar_w = std::clamp(w * 0.17f, 170 * s_, 230 * s_);
-
-    ImGui::SetCursorPos(ImVec2(margin, body_top));
-    DrawSidebar(ImVec2(sidebar_w, body_h));
-    ImGui::SetCursorPos(ImVec2(margin * 2 + sidebar_w, body_top));
-    DrawContent(ImVec2(w - sidebar_w - margin * 3, body_h));
-
-    DrawFooter(ImVec2(vp->Pos.x + margin, vp->Pos.y + h - footer), w - margin * 2, footer);
-    HandleHotkeys();
-    DrawFrameRateWarning();
-    DrawWhatsNew();
-    DrawUpdatePrompt();
-    DrawPackWait();
+    DrawBackdrop(dl);
+    if (InSetup()) {
+      DrawSetup(dl);
+    } else {
+      if (!modal_.open) HandleGlobalInput();
+      DrawTopBar(dl);
+      if (page_ == kHome) DrawHome(dl);
+      else DrawSettings(dl);
+    }
+    ui::DrawModal(dl, modal_, o_, ImVec2(o_.x + w_, o_.y + h_), m_, input_);
+    DrawBottomBar(dl);  // over a pop-up's shade: its prompts stay clear
     ImGui::End();
     (void)io;
   }
 
  private:
+  float S() const { return m_.s; }
+  float Margin() const { return 64 * m_.s; }
+
   // ---------------------------------------------------------------- art ---
   rex::ui::ImmediateTexture* MakeTexture(const art::Image& img) {
     if (!img || !immediate_) return nullptr;
@@ -352,13 +557,98 @@ class Launcher final : public rex::ui::ImGuiDialog {
     return textures_.back().get();
   }
 
+  std::filesystem::path ArtDir() const { return art::LauncherArtDir(paths_.user_dir); }
+
+  // The artwork: the game's logo and stills from the movie, taken from the
+  // game files; without them, the capture of the title screen from the first
+  // play.
   void LoadArt() {
-    if (auto img = art::LoadImage(art::TitleCapturePath(paths_.user_dir))) {
-      title_art_ = MakeTexture(img);
-      title_art_aspect_ = float(img.width) / float(img.height);
+    slides_.clear();
+    logo_ = nullptr;
+    if (art::HasLauncherArt(ArtDir())) {
+      const art::LauncherArt a = art::LoadLauncherArt(ArtDir());
+      if (a.logo) {
+        logo_ = MakeTexture(a.logo);
+        logo_aspect_ = float(a.logo.width) / float(a.logo.height);
+      }
+      for (const art::Image& img : a.backdrops) AddSlide(img, SoftCopy(img));
+    }
+    if (slides_.empty()) {
+      if (auto img = art::LoadImage(art::TitleCapturePath(paths_.user_dir)); img && img.width >= 64) {
+        art::Image sharp, soft;
+        MakeBackdrops(img, &sharp, &soft);
+        AddSlide(sharp, soft);
+      }
     }
     title_icon_ = MakeTexture(art::LoadImage(art::TitleIconPath(paths_.game_dir)));
     LoadAchievements();
+  }
+
+  // Loads the art again (after the install, or after it was extracted).
+  void ReloadArt() {
+    for (auto& texture : textures_) KeepTextureAlive(std::move(texture));
+    textures_.clear();
+    title_icon_ = glow_ = nullptr;
+    glyphs_.Reload();
+    LoadArt();
+  }
+
+  // A soft moonlight glow (smooth falloff, no bands) for the night sky.
+  static art::Image Glow() {
+    constexpr int kSize = 256;
+    art::Image img;
+    img.width = img.height = kSize;
+    img.rgba.resize(size_t(kSize) * kSize * 4);
+    for (int y = 0; y < kSize; ++y)
+      for (int x = 0; x < kSize; ++x) {
+        const float dx = (x + 0.5f) / kSize * 2 - 1, dy = (y + 0.5f) / kSize * 2 - 1;
+        const float d = std::min(1.0f, std::sqrt(dx * dx + dy * dy));
+        const float a = 0.30f * std::exp(-d * d * 4.5f) * (1 - d * d);
+        uint8_t* p = &img.rgba[(size_t(y) * kSize + x) * 4];
+        p[0] = 160;
+        p[1] = 178;
+        p[2] = 200;
+        const uint32_t hash = uint32_t(x * 73856093) ^ uint32_t(y * 19349663);
+        const float dither = float(hash % 1024) / 1024.0f;  // breaks up the 8-bit steps
+        p[3] = uint8_t(std::clamp(a * 255 + dither, 0.0f, 255.0f));
+      }
+    return img;
+  }
+
+  void AddSlide(const art::Image& sharp, const art::Image& soft) {
+    if (!sharp) return;
+    slides_.push_back({MakeTexture(sharp), MakeTexture(soft ? soft : sharp), float(sharp.width) / float(sharp.height)});
+  }
+
+  // Takes the logo and stills from the game files on a worker thread; during
+  // the first install it's the setup screen's last step.
+  void StartArtExtraction(bool during_setup) {
+    if (art_progress_.busy) return;
+    if (art_thread_.joinable()) art_thread_.join();
+    art_progress_.busy = true;
+    art_progress_.done = art_progress_.failed = false;
+    setup_art_ = during_setup;
+    art_thread_ = std::thread([this, game = paths_.game_dir, dir = ArtDir()] {
+      art::ExtractLauncherArt(game, dir, art_progress_);
+    });
+  }
+
+  void FinishArtIfDone() {
+    if (art_progress_.busy || !art_thread_.joinable()) return;
+    art_thread_.join();
+    if (art_progress_.done) {
+      ReloadArt();
+      slide_clock_ = 0;
+    } else {
+      REXLOG_WARN("KK: launcher art: {}", art_progress_.message);
+    }
+    if (setup_art_) {
+      setup_art_ = false;
+      page_ = kHome;
+      home_focus_ = 0;
+      home_mix_ = 0;  // the art fades in
+      Status("Installed. Your copy of King Kong is ready to play.");
+    }
   }
 
   void LoadAchievements() {
@@ -402,445 +692,720 @@ class Launcher final : public rex::ui::ImGuiDialog {
     }
   }
 
-  // ------------------------------------------------------------- header ---
-  void DrawStarfield(ImDrawList* dl, ImVec2 p0, ImVec2 p1) {
-    const float t = float(ImGui::GetTime());
-    uint32_t seed = 0x5841u;
-    auto rnd = [&seed] {
-      seed = seed * 1664525u + 1013904223u;
-      return float(seed >> 8) / float(1 << 24);
-    };
-    for (int i = 0; i < 150; ++i) {
-      const ImVec2 p(p0.x + rnd() * (p1.x - p0.x), p0.y + rnd() * (p1.y - p0.y));
-      const float size = (0.6f + rnd() * 1.4f) * s_;
-      const float speed = 0.6f + rnd() * 1.8f, phase = rnd() * 6.28f;
-      const float twinkle = 0.55f + 0.45f * std::sin(t * speed + phase);
-      dl->AddCircleFilled(p, size, IM_COL32(255, 255, 255, int(200 * twinkle)));
-    }
-  }
+  // The stills behind everything, one after another (each drifts slowly
+  // closer while it's up): clear on Home, blurred and darker behind the
+  // settings, cross-fading between the two.
+  static constexpr float kSlideTime = 10.0f, kFadeTime = 2.0f;
 
-  void DrawHeader(ImVec2 origin, float w, float h) {
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ImVec2 p1(origin.x + w, origin.y + h);
-    if (title_art_) {
-      // The game's save menu backdrop (captured on first play): the sky, moon
-      // and cliffs to the right of the game's logo and above its menu text.
-      constexpr float kU0 = 0.30f, kV0 = 0.12f;
-      const float band = std::min(1.0f - kV0, (h / w) * title_art_aspect_ * (1.0f - kU0));
-      dl->AddImage(Tex(title_art_), origin, p1, ImVec2(kU0, kV0), ImVec2(1, kV0 + band));
-    } else {
-      // Night sky over Skull Island: a misty moon behind jagged peaks.
-      dl->AddRectFilledMultiColor(origin, p1, IM_COL32(18, 24, 30, 255), IM_COL32(26, 30, 34, 255),
-                                  IM_COL32(12, 12, 12, 255), IM_COL32(10, 10, 10, 255));
-      DrawStarfield(dl, origin, ImVec2(p1.x, origin.y + h * 0.6f));
-      const ImVec2 moon(origin.x + w * 0.78f, origin.y + h * 0.42f);
-      for (int i = 6; i > 0; --i)
-        dl->AddCircleFilled(moon, h * (0.22f + 0.09f * i), IM_COL32(220, 210, 180, 6), 64);
-      dl->AddCircleFilled(moon, h * 0.22f, IM_COL32(232, 224, 200, 235), 64);
-      dl->AddCircleFilled(ImVec2(moon.x + h * 0.06f, moon.y - h * 0.04f), h * 0.05f, IM_COL32(205, 196, 170, 200), 32);
-      // Two layers of peaks, the nearer one darker.
-      auto ridge = [&](float base, float height, uint32_t seed, ImU32 color) {
-        float x = origin.x;
-        while (x < p1.x) {
-          seed = seed * 1664525u + 1013904223u;
-          const float span = h * (0.35f + float(seed >> 24) / 255.0f * 0.5f);
-          const float peak = base - height * (0.4f + float((seed >> 16) & 255) / 255.0f * 0.6f);
-          dl->AddTriangleFilled(ImVec2(x, p1.y), ImVec2(x + span * 0.5f, peak), ImVec2(x + span, p1.y), color);
-          dl->AddRectFilled(ImVec2(x, base), ImVec2(x + span, p1.y), color);
-          x += span * 0.6f;
+  void DrawBackdrop(ImDrawList* dl) {
+    const float s = S();
+    const bool home = page_ == kHome && !InSetup();
+    home_mix_ = ui::Approach(home_mix_ * 100.0f, home ? 100.0f : 0.0f, 9.0f) / 100.0f;
+    slide_clock_ += std::min(ImGui::GetIO().DeltaTime, 0.1f);
+    const ImVec2 p1(o_.x + w_, o_.y + h_);
+    if (!slides_.empty() && !InSetup()) {
+      const int n = int(slides_.size());
+      const int cur = int(slide_clock_ / kSlideTime) % n, next = (cur + 1) % n;
+      const float into = float(std::fmod(slide_clock_, double(kSlideTime)));
+      const float fade = n > 1 ? std::clamp((into - (kSlideTime - kFadeTime)) / kFadeTime, 0.0f, 1.0f) : 0.0f;
+      auto draw = [&](int i, float age, bool soft, float alpha) {
+        const Slide& sl = slides_[size_t(i)];
+        // Fill the window, cropping the still's sides or top and bottom.
+        const float view = w_ / h_;
+        float u0 = 0, v0 = 0, u1 = 1, v1 = 1;
+        if (view > sl.aspect) {
+          const float v = sl.aspect / view;
+          v0 = (1 - v) * 0.5f;
+          v1 = v0 + v;
+        } else {
+          const float u = view / sl.aspect;
+          u0 = (1 - u) * 0.5f;
+          u1 = u0 + u;
         }
+        // Closer over time, towards the right (the left is under the menu).
+        const float zoom = 1.0f + 0.07f * std::clamp(age / (kSlideTime + kFadeTime), 0.0f, 1.0f);
+        const float cu = (u0 + u1) * 0.5f, cv = (v0 + v1) * 0.5f;
+        const float fu = cu + (0.62f - cu) * (1 - 1 / zoom), fv = cv + ((i % 2 ? 0.42f : 0.55f) - cv) * (1 - 1 / zoom);
+        const float hu = (u1 - u0) * 0.5f / zoom, hv = (v1 - v0) * 0.5f / zoom;
+        dl->AddImage(ui::Tex(soft ? sl.soft : sl.sharp), o_, p1, ImVec2(fu - hu, fv - hv), ImVec2(fu + hu, fv + hv),
+                     ui::WithAlpha(IM_COL32_WHITE, alpha));
       };
-      ridge(origin.y + h * 0.85f, h * 0.45f, 7u, IM_COL32(28, 32, 30, 255));
-      ridge(origin.y + h * 0.95f, h * 0.35f, 23u, IM_COL32(14, 15, 14, 255));
-      // Mist drifting over the ridges.
-      dl->AddRectFilledMultiColor(ImVec2(origin.x, origin.y + h * 0.55f), p1, IM_COL32(150, 160, 160, 0),
-                                  IM_COL32(150, 160, 160, 0), IM_COL32(150, 160, 160, 40), IM_COL32(150, 160, 160, 40));
+      const float age_next = into - (kSlideTime - kFadeTime);
+      draw(cur, into + kFadeTime, true, 1.0f);
+      if (fade > 0) draw(next, age_next, true, fade);
+      if (home_mix_ > 0.01f) {
+        draw(cur, into + kFadeTime, false, home_mix_);
+        if (fade > 0) draw(next, age_next, false, home_mix_ * fade);
+      }
+    } else {
+      // Nothing yet (before the install): night sky with the moon's glow.
+      dl->AddRectFilledMultiColor(o_, p1, IM_COL32(22, 28, 36, 255), IM_COL32(26, 33, 42, 255),
+                                  color::kBase, color::kBase);
+      if (!glow_) glow_ = MakeTexture(Glow());
+      const ImVec2 moon(o_.x + w_ * 0.76f, o_.y + h_ * 0.28f);
+      const float r = h_ * 0.62f;
+      dl->AddImage(ui::Tex(glow_), ImVec2(moon.x - r, moon.y - r), ImVec2(moon.x + r, moon.y + r));
     }
-    // Shade the left side for the title and fade the bottom into the page.
-    dl->AddRectFilledMultiColor(origin, ImVec2(origin.x + w * 0.65f, p1.y), Col(kBg, 0.82f), Col(kBg, 0.0f),
-                                Col(kBg, 0.0f), Col(kBg, 0.82f));
-    dl->AddRectFilledMultiColor(ImVec2(origin.x, p1.y - h * 0.35f), p1, Col(kBg, 0.0f), Col(kBg, 0.0f),
-                                Col(kBg, 1.0f), Col(kBg, 1.0f));
-
-    float x = origin.x + 30 * s_;
-    if (title_icon_) {
-      const float icon = h * 0.46f;
-      const ImVec2 i0(x, origin.y + (h - icon) * 0.45f);
-      dl->AddImageRounded(Tex(title_icon_), i0, ImVec2(i0.x + icon, i0.y + icon), ImVec2(0, 0), ImVec2(1, 1),
-                          IM_COL32_WHITE, 10 * s_);
-      x += icon + 20 * s_;
-    }
-    const UiFonts& f = GetUiFonts();
-    const float title_size = std::clamp(h * 0.27f, 30 * s_, 46 * s_);
-    const float title_y = origin.y + h * 0.5f - title_size * 0.85f;
-    const char* title = "KING KONG";
-    dl->AddText(f.bold, title_size, ImVec2(x + 2 * s_, title_y + 3 * s_), IM_COL32(0, 0, 0, 150), title);
-    dl->AddText(f.bold, title_size, ImVec2(x, title_y), IM_COL32_WHITE, title);
-    dl->AddText(f.semibold, 15 * s_, ImVec2(x + 2 * s_, title_y + title_size * 1.15f), Col(kAccent),
-                "PETER JACKSON'S   \xC2\xB7   PC PORT");
+    auto lerp = [](float a, float b, float t) { return a + (b - a) * t; };
+    const float hm = home_mix_;
+    dl->AddRectFilled(o_, p1, ui::WithAlpha(color::kBase, InSetup() ? 0.1f : lerp(0.80f, 0.16f, hm)));
+    // Darker on the left for the menu and the list, and at the top and bottom
+    // for the tabs and prompts.
+    const ImU32 c0 = ui::WithAlpha(color::kBase, lerp(0.30f, 0.88f, hm)), c1 = ui::WithAlpha(color::kBase, 0.0f);
+    dl->AddRectFilledMultiColor(o_, ImVec2(o_.x + w_ * 0.72f, p1.y), c0, c1, c1, c0);
+    const ImU32 t0 = ui::WithAlpha(color::kBase, lerp(0.5f, 0.9f, hm));  // the tabs stay clear over bright skies
+    dl->AddRectFilledMultiColor(o_, ImVec2(p1.x, o_.y + 180 * s), t0, t0, c1, c1);
+    const ImU32 b0 = ui::WithAlpha(color::kBase, lerp(0.55f, 0.85f, hm));
+    dl->AddRectFilledMultiColor(ImVec2(o_.x, p1.y - 180 * s), p1, c1, c1, b0, b0);
   }
 
-  // ------------------------------------------------------------ sidebar ---
-  void DrawSidebar(ImVec2 size) {
-    ImGui::BeginChild("##sidebar", size, ImGuiChildFlags_None, ImGuiWindowFlags_NoScrollbar);
-    const float pad = 10 * s_;
-    // Shrink the entries when the window is short, so every page (About is last) stays reachable.
-    const float gap = 2 * s_ + ImGui::GetStyle().ItemSpacing.y * 2;
-    const float item_h = std::clamp((size.y - pad * 2) / kPageCount - gap, 30 * s_, 46 * s_);
-    ImGui::SetCursorPos(ImVec2(pad, pad));
-    ImGui::PushFont(GetUiFonts().semibold, 0.0f);
-    for (int i = 0; i < kPageCount; ++i) {
-      const bool selected = page_ == i;
-      ImGui::SetCursorPosX(pad);
-      ImGui::PushID(i);
-      const ImVec2 pos = ImGui::GetCursorScreenPos();
-      const ImVec2 item(size.x - pad * 2, item_h);
-      if (ImGui::InvisibleButton("##page", item)) page_ = Page(i);
-      const bool hot = ImGui::IsItemHovered();
-      ImDrawList* dl = ImGui::GetWindowDrawList();
-      if (selected || hot)
-        dl->AddRectFilled(pos, ImVec2(pos.x + item.x, pos.y + item.y), Col(selected ? kAccent : kFrame), 8 * s_);
-      dl->AddText(ImVec2(pos.x + 16 * s_, pos.y + (item_h - ImGui::GetFontSize()) * 0.5f),
-                  Col(selected ? kOnAccent : ImVec4(0.92f, 0.95f, 1, 1)), kPageNames[i]);
-      if (i == kPlay && !files_ok_)
-        dl->AddCircleFilled(ImVec2(pos.x + item.x - 18 * s_, pos.y + item_h * 0.5f), 4.5f * s_,
-                            Col(ImVec4(1.0f, 0.65f, 0.25f, 1)));
-      ImGui::PopID();
-      ImGui::Dummy(ImVec2(0, 2 * s_));
+  // ------------------------------------------------------------ top bar ---
+  void DrawTopBar(ImDrawList* dl) {
+    const float s = S();
+    std::vector<std::string> names;
+    for (const char* n : kPageNames) names.push_back(Upper(T(n)));
+    float ux = 0, uw = 0;
+    const int clicked = ui::DrawTabs(dl, glyphs_, PromptSet(), names, page_, ImVec2(o_.x + Margin(), o_.y + 44 * s),
+                                     m_, !modal_.open, &ux, &uw);
+    if (clicked >= 0 && clicked != int(page_)) {
+      ui::Cue(ui::Sound::kTab);
+      GoTo(Page(clicked));
     }
-    ImGui::PopFont();
-    ImGui::EndChild();
+    if (tab_x_ < 0) {
+      tab_x_ = ux;
+      tab_w_ = uw;
+    }
+    tab_x_ = ui::Approach(tab_x_, ux, 22.0f);
+    tab_w_ = ui::Approach(tab_w_, uw, 22.0f);
+    const float ly = std::round(o_.y + 74 * s);
+    dl->AddLine(ImVec2(o_.x + Margin(), ly), ImVec2(o_.x + w_ - Margin(), ly), color::kHairline, 1.0f);
+    dl->AddRectFilled(ImVec2(tab_x_, ly - 2 * s), ImVec2(tab_x_ + tab_w_, ly), color::kAccent);
+    // The game's name at the right, away from Home (which shows it large).
+    if (home_mix_ < 0.99f) {
+      const ui::Fonts f = ui::GetFonts();
+      const std::string name = "KING KONG";
+      const float fs = 15 * s, tr = 4 * s;
+      const float tw = ui::TrackedWidth(f.display, fs, name, tr);
+      ui::DrawTracked(dl, f.display, fs, ImVec2(o_.x + w_ - Margin() - tw, o_.y + 44 * s - fs * 0.5f),
+                      ui::WithAlpha(color::kTextDim, 1.0f - home_mix_), name, tr);
+    }
   }
 
-  // ------------------------------------------------------------ content ---
-  void DrawContent(ImVec2 size) {
-    ImGui::BeginChild("##content", size, ImGuiChildFlags_None);
-    const float pad = 26 * s_;
-    ImGui::SetCursorPos(ImVec2(pad, pad * 0.8f));
-    ImGui::BeginGroup();
-    ImGui::PushFont(GetUiFonts().semibold, 26.0f);
-    ImGui::TextUnformatted(kPageNames[page_]);
-    ImGui::PopFont();
-    ImGui::PushStyleColor(ImGuiCol_Text, kDim);
-    ImGui::TextUnformatted(kPageBlurbs[page_]);
-    ImGui::PopStyleColor();
-    ImGui::EndGroup();
-    if (!PageSettings(page_).empty()) {
-      // "Reset page" at the top right, with a confirmation.
-      const char* label = "Reset page";
-      const float bw = ImGui::CalcTextSize(label).x + 28 * s_;
-      const float below = ImGui::GetCursorPosY();
-      ImGui::SetCursorPos(ImVec2(size.x - pad - bw, pad * 0.8f + 4 * s_));
-      if (ImGui::Button(label, ImVec2(bw, 0))) ImGui::OpenPopup("Reset page?");
-      ImGui::SetCursorPosY(below);
-      if (BeginModal("Reset page?", 480)) {
-        ImGui::PushTextWrapPos(0.0f);
-        ImGui::Text("Put the %s settings back to their defaults?", kPageNames[page_]);
-        ImGui::PushStyleColor(ImGuiCol_Text, kDim);
-        ImGui::TextUnformatted("Only this page changes. Settings on the other pages stay as they are.");
-        ImGui::PopStyleColor();
-        ImGui::PopTextWrapPos();
-        ImGui::Dummy(ImVec2(0, 10 * s_));
-        const float half = (ImGui::GetContentRegionAvail().x - 8 * s_) / 2;
-        if (AccentButton("Reset", ImVec2(half, 0))) {
-          ResetPage(page_);
-          ImGui::CloseCurrentPopup();
-        }
-        ImGui::SameLine(0, 8 * s_);
-        if (ImGui::Button("Cancel", ImVec2(half, 0))) ImGui::CloseCurrentPopup();
-        ImGui::EndPopup();
+  // The button pictures the Button prompts setting picks, as in the game.
+  std::string PadSet() const {
+    const std::string p = Get("kk_button_prompts");
+    if (p == "xbox360" || p == "xbox_series" || p == "ps5" || p == "ps2" || p == "keyboard") return p;
+    return input_.pad_device() == ui::Device::kPlayStation ? "ps5" : "xbox_series";
+  }
+  // The prompts' pictures: keys while the keyboard and mouse are in use.
+  std::string PromptSet() const { return input_.device() == ui::Device::kKeyboard ? "keyboard" : PadSet(); }
+
+  void GoTo(Page page) {
+    if (page != page_) sub_ = kNoSubPage;
+    page_ = page;
+  }
+
+  // ---------------------------------------------------------- bottom bar ---
+  void DrawBottomBar(ImDrawList* dl) {
+    const float s = S();
+    const float cy = o_.y + h_ - 42 * s;
+    const ui::Fonts f = ui::GetFonts();
+    const double now = ImGui::GetTime();
+    if (!status_.empty() && now - status_time_ < 6.0) {
+      const float a = float(std::clamp((6.0 - (now - status_time_)) / 0.6, 0.0, 1.0));
+      dl->AddText(f.text, 15 * s, ImVec2(o_.x + Margin(), cy - 9 * s), ui::WithAlpha(color::kTextDim, a),
+                  T(status_).c_str());
+    } else if (now - saved_time_ < 1.6) {
+      const float a = float(std::clamp((1.6 - (now - saved_time_)) / 0.5, 0.0, 1.0));
+      dl->AddText(f.text, 15 * s, ImVec2(o_.x + Margin(), cy - 9 * s), ui::WithAlpha(color::kTextFaint, a),
+                  T("Settings saved"));
+    }
+    const Action clicked = ui::DrawPrompts(dl, glyphs_, PromptSet(), Prompts(), o_.x + w_ - Margin(), cy, m_,
+                                           true);
+    if (clicked != Action::kCount) pending_click_ = clicked;
+  }
+
+  std::vector<ui::Prompt> Prompts() const {
+    std::vector<ui::Prompt> p;
+    if (modal_.open) {
+      if (!capturing_.empty()) return {{Action::kBack, "Cancel"}};
+      if (!modal_.reader.empty()) p.push_back({Action::kUp, "Scroll"});
+      if (!modal_.buttons.empty()) p.push_back({Action::kAccept, "Select"});
+      if (modal_.cancel >= 0) p.push_back({Action::kBack, "Back"});
+      return p;
+    }
+    if (InSetup()) {
+      switch (SetupStage()) {
+        case 0: return {{Action::kAccept, "Select"}, {Action::kBack, "Quit"}};
+        case 1: return {{Action::kBack, "Cancel"}};
+        default: return {};
       }
     }
+    if (page_ == kHome) {
+      p.push_back({Action::kAccept, "Select"});
+      p.push_back({Action::kBack, "Quit"});
+      return p;
+    }
+    if (focused_) {
+      switch (focused_->type) {
+        case ItemType::kChoice:
+        case ItemType::kSlider:
+          if (!focused_->disabled) p.push_back({Action::kLeft, "Change"});
+          break;
+        case ItemType::kAction:
+        case ItemType::kLink:
+          if (!focused_->disabled && focused_->on_activate) p.push_back({Action::kAccept, "Select"});
+          break;
+        default:
+          break;
+      }
+      if (focused_->on_default && !focused_->disabled) p.push_back({Action::kDefault, "Default"});
+    }
+    if (sub_ == kNoSubPage && !PageSettings(page_).empty()) p.push_back({Action::kResetPage, "Reset page"});
+    if (CanPlay()) p.push_back({Action::kPlay, "Play"});
+    p.push_back({Action::kBack, "Back"});
+    return p;
+  }
 
-    ImGui::SetCursorPos(ImVec2(pad, ImGui::GetCursorPosY() + 8 * s_));
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
-    ImGui::BeginChild("##page_body", ImVec2(size.x - pad * 2, size.y - ImGui::GetCursorPosY() - pad * 0.6f),
-                      ImGuiChildFlags_None);
+  void Status(std::string text) {
+    status_ = std::move(text);
+    status_time_ = ImGui::GetTime();
+  }
+
+  // ------------------------------------------------------- global input ---
+  void HandleGlobalInput() {
+    ui::Input& in = input_;
+    if (in.Pressed(Action::kPrevTab) || in.Pressed(Action::kNextTab)) {
+      const int dir = in.Pressed(Action::kNextTab) ? 1 : -1;
+      ui::Cue(ui::Sound::kTab);
+      GoTo(Page((int(page_) + dir + kPageCount) % kPageCount));
+      in.Consume(Action::kPrevTab);
+      in.Consume(Action::kNextTab);
+    }
+    if (in.Pressed(Action::kPlay)) {
+      in.Consume(Action::kPlay);
+      if (CanPlay()) Play();
+    }
+    if (in.Pressed(Action::kResetPage) && page_ != kHome && sub_ == kNoSubPage && !PageSettings(page_).empty()) {
+      in.Consume(Action::kResetPage);
+      OpenResetPage();
+    }
+    if (in.Pressed(Action::kBack)) {
+      in.Consume(Action::kBack);
+      ui::Cue(ui::Sound::kBack);
+      if (sub_ != kNoSubPage) sub_ = kNoSubPage;
+      else if (page_ != kHome) GoTo(kHome);
+      else OpenQuit();
+    }
+  }
+
+  // ---------------------------------------------------------------- Home ---
+  struct HomeEntry {
+    std::string label;
+    bool enabled = true;
+    std::function<void()> action;
+    std::string value;                // shown after the label (left/right change it)
+    std::function<void(int)> change;  // -1 / +1
+  };
+
+  std::vector<HomeEntry> HomeEntries() {
+    std::vector<HomeEntry> e;
+    e.push_back({"Play", CanPlay(), [this] { Play(); }});
+    if (installing_) e.push_back({"Cancel install", true, [this] { progress_.cancel = true; }});
+    else e.push_back({files_ok_ ? "Reinstall game" : "Install game", true, [this] { StartInstall(); }});
+    if (update_ && update_->found && !installing_update_)
+      e.push_back({F("Update to v{0}", {update_->found->version}), true, [this] { OpenUpdatePrompt(); }});
+    else if (update_ && update_->busy)
+      e.push_back({"Checking for updates", false, nullptr});
+    else
+      e.push_back({"Check for updates", true, [this] { StartUpdateCheck(true); }});
+    if (steam_ && steam_->available && !steam_->in_library)
+      e.push_back({"Add to Steam", !steam_->busy, [this] { OpenSteamPrompt(); }});
+    e.push_back({"Settings", true, [this] { GoTo(kDisplay); }});
+    e.push_back({"Achievements", true, [this] { GoTo(kAchievements); }});
+    e.push_back({"Quit", true, [this] { Quit(); }});
+    return e;
+  }
+
+  // A column of large menu entries (Home and the setup screen): the focused
+  // one moves in, with a brass mark. Returns the one chosen, or -1.
+  int DrawMenu(ImDrawList* dl, const std::vector<HomeEntry>& entries, int& focus, float x, float y, float alpha) {
+    const float s = S();
+    const ui::Fonts f = ui::GetFonts();
+    const int n = int(entries.size());
+    if (n == 0) return -1;
+    focus = std::clamp(focus, 0, n - 1);
+    const int focus_before = focus;
+    const bool active = !modal_.open;
+    if (active && n > 1) {
+      if (input_.Pressed(Action::kUp)) focus = (focus + n - 1) % n;
+      if (input_.Pressed(Action::kDown)) focus = (focus + 1) % n;
+    }
+    if (active && entries[size_t(focus)].change) {
+      for (const int dir : {-1, +1}) {
+        if (!input_.Pressed(dir < 0 ? Action::kLeft : Action::kRight)) continue;
+        ui::Cue(ui::Sound::kChange);
+        entries[size_t(focus)].change(dir);
+      }
+    }
+    const float item_h = 42 * s, fs = 24 * s, tr = 3 * s;
+    home_offset_.resize(size_t(std::max<int>(n, int(home_offset_.size()))), 0.0f);
+    int chosen = -1;
+    for (int i = 0; i < n; ++i) {
+      const HomeEntry& e = entries[size_t(i)];
+      const std::string label = Upper(T(e.label));
+      const float iy = y + item_h * float(i);
+      float tw = ui::TrackedWidth(f.display, fs, label, tr);
+      const std::string value = Upper(e.value);
+      if (!value.empty()) tw += 30 * s + ui::TrackedWidth(f.display, fs, value, tr) + 30 * s;
+      const ImVec2 r0(x - 12 * s, iy), r1(x + 40 * s + tw, iy + item_h);
+      if (active && ImGui::IsMouseHoveringRect(r0, r1, false)) {
+        if (input_.mouse_moved()) focus = i;
+        if (ImGui::IsMouseClicked(0)) {
+          focus = i;
+          chosen = i;
+        }
+      }
+      const bool on = i == focus;
+      home_offset_[size_t(i)] = ui::Approach(home_offset_[size_t(i)], on ? 22 * s : 0.0f, 18.0f);
+      const float off = home_offset_[size_t(i)];
+      const float k = off / (22 * s);
+      if (k > 0.02f)
+        dl->AddRectFilled(ImVec2(x, iy + item_h * 0.5f - 11 * s), ImVec2(x + 3 * s, iy + item_h * 0.5f + 11 * s),
+                          ui::WithAlpha(color::kAccent, k * alpha));
+      const ImU32 col = !e.enabled ? color::kTextFaint : on ? color::kText : color::kTextDim;
+      const float ty = iy + (item_h - fs) * 0.5f;
+      ui::DrawTracked(dl, f.display, fs, ImVec2(x + off, ty), ui::WithAlpha(col, alpha), label, tr);
+      if (!value.empty()) {
+        // The value between arrows when focused: < ENGLISH >
+        const float vx = x + off + ui::TrackedWidth(f.display, fs, label, tr) + 30 * s;
+        const float cy = iy + item_h * 0.5f, aw = 6 * s, ah = 10 * s;
+        const ImU32 vc = ui::WithAlpha(on ? color::kAccent : color::kTextDim, alpha);
+        const float vw = ui::TrackedWidth(f.display, fs, value, tr);
+        if (on) {
+          dl->AddTriangleFilled(ImVec2(vx - 16 * s, cy), ImVec2(vx - 16 * s + aw, cy - ah * 0.5f),
+                                ImVec2(vx - 16 * s + aw, cy + ah * 0.5f), vc);
+          dl->AddTriangleFilled(ImVec2(vx + vw + 10 * s, cy - ah * 0.5f), ImVec2(vx + vw + 10 * s + aw, cy),
+                                ImVec2(vx + vw + 10 * s, cy + ah * 0.5f), vc);
+        }
+        ui::DrawTracked(dl, f.display, fs, ImVec2(vx, ty), vc, value, tr);
+      }
+    }
+    if (active && input_.Pressed(Action::kAccept)) chosen = focus;
+    if (focus != focus_before) ui::Cue(ui::Sound::kMove);
+    // An entry with a value: selecting it moves to the next value.
+    if (chosen >= 0 && entries[size_t(chosen)].change) {
+      ui::Cue(ui::Sound::kChange);
+      entries[size_t(chosen)].change(+1);
+      chosen = -1;
+    }
+    if (chosen >= 0 && !entries[size_t(chosen)].enabled) {
+      ui::Cue(ui::Sound::kDeny);
+      chosen = -1;
+    }
+    // Play starts the game at once, and its sound would be cut off.
+    if (chosen >= 0 && entries[size_t(chosen)].label != "Play") ui::Cue(ui::Sound::kSelect);
+    return chosen;
+  }
+
+  void DrawHome(ImDrawList* dl) {
+    const float s = S();
+    const ui::Fonts f = ui::GetFonts();
+    const float x = o_.x + Margin();
+    const float a = home_mix_;  // fades in with the clear backdrop
+    const std::vector<HomeEntry> entries = HomeEntries();
+    // The title and the menu stay clear of the status row: with more entries
+    // they move up, then the logo gets smaller.
+    const float bottom = o_.y + h_ - 150 * s - 42 * s * float(entries.size());
+    float y = o_.y + std::max(100 * s, h_ * 0.14f);
+    if (logo_) {
+      // The game's own logo.
+      float lw = std::min(360 * s, (h_ * 0.34f) * logo_aspect_), lh = lw / logo_aspect_;
+      y = std::max(o_.y + 88 * s, std::min(y, bottom - 34 * s - lh));
+      lh = std::max(100 * s, std::min(lh, bottom - 34 * s - y));
+      lw = lh * logo_aspect_;
+      dl->AddImage(ui::Tex(logo_), ImVec2(x - 8 * s, y), ImVec2(x - 8 * s + lw, y + lh), ImVec2(0, 0), ImVec2(1, 1),
+                   ui::WithAlpha(IM_COL32_WHITE, a));
+      y += lh + 34 * s;
+    } else {
+      y = std::max(o_.y + 88 * s, std::min(y, bottom - 188 * s));
+      ui::DrawTracked(dl, f.display, 17 * s, ImVec2(x + 3 * s, y), ui::WithAlpha(color::kAccent, a), "PETER JACKSON'S",
+                      7 * s);
+      y += 22 * s;
+      ui::DrawTracked(dl, f.display, 100 * s, ImVec2(x - 2 * s, y), ui::WithAlpha(color::kText, a), "KING KONG", 3 * s);
+      y += 100 * s;
+      ui::DrawTracked(dl, f.display, 14 * s, ImVec2(x + 3 * s, y), ui::WithAlpha(color::kTextDim, a),
+                      "THE OFFICIAL GAME OF THE MOVIE", 5.2f * s);
+      y += 66 * s;
+    }
+    if (const int i = DrawMenu(dl, entries, home_focus_, x, y, a); i >= 0) entries[size_t(i)].action();
+    DrawHomeStatus(dl, x, o_.y + h_ - 120 * s, a);
+  }
+
+  // ------------------------------------------------------------- setup ---
+  // Before the game is installed, the launcher is a setup screen of its own:
+  // it asks for the player's copy of the game (the launcher's artwork comes
+  // from it too), then shows the install and the artwork being prepared.
+  bool InSetup() const {
+#if defined(KK_DEV_TOOLS)
+    if (dev_setup_ >= 0) return true;
+#endif
+    return !files_ok_ || installing_ || setup_art_ || installing_update_;
+  }
+
+  // 0: asking for the disc image, 1: installing, 2: taking the artwork,
+  // 3: updating the port.
+  int SetupStage() const {
+#if defined(KK_DEV_TOOLS)
+    if (dev_setup_ >= 0) return dev_setup_;
+#endif
+    return installing_update_ ? 3 : installing_ ? 1 : setup_art_ ? 2 : 0;
+  }
+
+  void DrawSetup(ImDrawList* dl) {
+    const float s = S();
+    const ui::Fonts f = ui::GetFonts();
+    const float x = o_.x + Margin();
+    float y = o_.y + std::max(84 * s, h_ * 0.12f);
+    const int stage = SetupStage();
+    float copied = 0, copy_total = 0;
+    if (installing_) {
+      copied = float(progress_.bytes_done.load());
+      copy_total = float(progress_.bytes_total.load());
+    }
+    float art_fraction = art_progress_.fraction.load();
+#if defined(KK_DEV_TOOLS)
+    if (dev_setup_ >= 0) {  // screenshots of each stage
+      copy_total = 6.3e9f;
+      copied = copy_total * 0.37f;
+      art_fraction = 0.6f;
+    }
+#endif
+
+    ui::DrawTracked(dl, f.display, 15 * s, ImVec2(x + 2 * s, y), color::kAccent, "PETER JACKSON'S", 6 * s);
+    y += 20 * s;
+    ui::DrawTracked(dl, f.display, 66 * s, ImVec2(x - 1 * s, y), color::kText, "KING KONG", 2 * s);
+    y += 70 * s;
+    ui::DrawTracked(dl, f.display, 13 * s, ImVec2(x + 2 * s, y), color::kTextFaint,
+                    Upper(T("PC port")) + "  " KK_DOT "  " + Upper(T(stage == 3 ? "Update" : "Setup")), 4 * s);
+    y += 62 * s;
+
+    // The steps (of the first install).
+    static const char* const kSteps[] = {"Your copy", "Install", "Play"};
+    if (stage != 3) {
+    const int step = stage == 0 ? 0 : 1;
+    float sx = x;
+    for (int i = 0; i < 3; ++i) {
+      const ImU32 num = i < step ? color::kTextDim : i == step ? color::kAccent : color::kTextFaint;
+      const ImU32 lab = i < step ? color::kTextDim : i == step ? color::kText : color::kTextFaint;
+      const std::string n = "0" + std::to_string(i + 1);
+      ui::DrawTracked(dl, f.display, 13 * s, ImVec2(sx, y), num, n, 1.5f * s);
+      sx += ui::TrackedWidth(f.display, 13 * s, n, 1.5f * s) + 10 * s;
+      const std::string step_name = Upper(T(kSteps[i]));
+      ui::DrawTracked(dl, f.display, 13 * s, ImVec2(sx, y), lab, step_name, 2.2f * s);
+      sx += ui::TrackedWidth(f.display, 13 * s, step_name, 2.2f * s) + 18 * s;
+      if (i < 2) {
+        dl->AddLine(ImVec2(sx, std::round(y + 7 * s)), ImVec2(sx + 36 * s, std::round(y + 7 * s)),
+                    i < step ? WithAlphaText(0.4f) : color::kHairline, 1.0f);
+        sx += 36 * s + 18 * s;
+      }
+    }
+    }
+    y += stage == 3 ? 8 * s : 48 * s;
+
+    const float col_w = std::min(620 * s, w_ * 0.52f);
+    auto heading = [&](const char* english) {
+      dl->AddText(f.display, 30 * s, ImVec2(x, y), color::kText, T(english));
+      y += 46 * s;
+    };
+    auto body = [&](const std::string& english) {
+      const std::string text = T(english);
+      dl->AddText(f.text, 16 * s, ImVec2(x, y), color::kTextDim, text.c_str(), nullptr, col_w);
+      y += ui::TextSize(f.text, 16 * s, text, col_w).y + 18 * s;
+    };
+    auto bar = [&](float fraction) {
+      const float by = std::round(y);
+      dl->AddRectFilled(ImVec2(x, by), ImVec2(x + col_w, by + 3 * s), ui::WithAlpha(color::kText, 0.12f));
+      if (fraction >= 0) {
+        dl->AddRectFilled(ImVec2(x, by), ImVec2(x + col_w * std::clamp(fraction, 0.0f, 1.0f), by + 3 * s), color::kAccent);
+      } else {
+        const float t = float(std::fmod(ImGui::GetTime() * 0.6, 1.0));
+        const float a0 = x + col_w * std::max(0.0f, t * 1.3f - 0.3f), a1 = x + col_w * std::min(1.0f, t * 1.3f);
+        dl->AddRectFilled(ImVec2(a0, by), ImVec2(a1, by + 3 * s), color::kAccent);
+      }
+      y += 16 * s;
+    };
+    auto caption_pair = [&](const std::string& left, const std::string& right) {
+      dl->AddText(f.text, 15 * s, ImVec2(x, y), color::kText, left.c_str());
+      const float rw = ui::TextSize(f.text, 15 * s, right).x;
+      dl->AddText(f.text, 15 * s, ImVec2(x + col_w - rw, y), color::kTextDim, right.c_str());
+      y += 46 * s;
+    };
+    auto gb = [](float bytes) {
+      char buf[32];
+      std::snprintf(buf, sizeof(buf), "%.1f", bytes / 1e9f);
+      return std::string(buf);
+    };
+
+    std::vector<HomeEntry> entries;
+    if (stage == 0) {
+      heading("Your copy of the game");
+      body("This port plays the original Xbox 360 game, so it needs your own copy: a disc image (.iso) of "
+           "Peter Jackson's King Kong for Xbox 360. The game's files are copied from it, and so is the artwork "
+           "this launcher shows. Nothing from the game comes with the port.");
+      body("The game takes about 6.3 GB once it's installed.");
+      y += 8 * s;
+      entries.push_back({"Select disc image", true, [this] { StartInstall(); }});
+      entries.push_back(LanguageEntry());
+      entries.push_back({"Quit", true, [this] { Quit(); }});
+    } else if (stage == 1) {
+      heading("Installing");
+      body("Copying the game's files from your disc image. This takes a few minutes.");
+      bar(copy_total > 0 ? copied / copy_total : -1.0f);
+      caption_pair(copy_total > 0 ? F("{0} of {1} GB", {gb(copied), gb(copy_total)}) : T("Reading the disc image"),
+                   copy_total > 0 ? std::to_string(int(copied / copy_total * 100)) + "%" : "");
+      entries.push_back({"Cancel", true, [this] { progress_.cancel = true; }});
+    } else if (stage == 2) {
+      heading("Preparing the launcher");
+      body("Taking the game's logo and stills from the movie from your copy of the game.");
+      bar(art_fraction);
+      y += 30 * s;
+    } else {
+      float got = 0, size = 0;
+      std::string version;
+      if (update_) {
+        got = float(update_->bytes.load());
+        size = float(update_->total.load());
+        if (update_->found) version = update_->found->version;
+      }
+      bool finishing = update_ && !update_->busy && update_->done;
+#if defined(KK_DEV_TOOLS)
+      if (dev_setup_ >= 0) version = "9.9.9", size = 61.4e6f, got = size * 0.42f, finishing = false;
+#endif
+      heading(finishing ? "Restarting" : "Updating");
+      body(F("Downloading version {0} of the port. The launcher restarts by itself when it's done; your installed "
+             "game, saves and settings stay as they are.",
+             {version}));
+      bar(finishing ? 1.0f : size > 0 ? got / size : -1.0f);
+      auto mb = [](float bytes) {
+        char buf[32];
+        std::snprintf(buf, sizeof(buf), "%.1f", bytes / 1e6f);
+        return std::string(buf);
+      };
+      caption_pair(size > 0 ? F("{0} of {1} MB", {mb(got), mb(size)}) : T(std::string("Connecting")),
+                   size > 0 ? std::to_string(int(got / size * 100)) + "%" : "");
+    }
+    if (const int i = DrawMenu(dl, entries, setup_focus_, x, y, 1.0f); i >= 0) entries[size_t(i)].action();
+    if (!modal_.open && input_.Pressed(Action::kBack)) {
+      input_.Consume(Action::kBack);
+      if (stage <= 1) ui::Cue(ui::Sound::kBack);
+      if (stage == 0) OpenQuit();
+      else if (stage == 1) progress_.cancel = true;
+    }
+  }
+
+  static ImU32 WithAlphaText(float a) { return ui::WithAlpha(color::kText, a); }
+
+  // The game's language (and the launcher's), on the setup screen.
+  HomeEntry LanguageEntry() {
+    HomeEntry e;
+    e.label = "Language";
+    const int cur = GetInt("user_language", 1);
+    int index = 0;
+    for (size_t i = 0; i < std::size(kLanguages); ++i)
+      if (kLanguages[i].first == cur) index = int(i);
+    e.value = kLanguages[size_t(index)].second;
+    e.change = [index](int dir) {
+      const int n = int(std::size(kLanguages));
+      SetInt("user_language", kLanguages[size_t((index + dir + n) % n)].first);
+    };
+    return e;
+  }
+
+  // Game, shader pack and version, in three columns.
+  void DrawHomeStatus(ImDrawList* dl, float x, float y, float alpha) {
+    const float s = S();
+    const ui::Fonts f = ui::GetFonts();
+    struct Column {
+      std::string caption;
+      std::string value;
+      ImU32 color;
+      float progress;  // < 0: none
+    };
+    Column cols[3];
+    if (installing_) {
+      const double total = std::max<double>(1.0, double(progress_.bytes_total.load()));
+      const float p = float(double(progress_.bytes_done.load()) / total);
+      cols[0] = {Upper(T("Game")), F("Installing {0}%", {std::to_string(int(p * 100))}), color::kText, p};
+    } else {
+      cols[0] = {Upper(T("Game")), T(files_ok_ ? "Ready to play" : "Not installed"),
+                 files_ok_ ? color::kText : color::kWarn, -1};
+    }
+    cols[1] = {Upper(T("Shader pack")), PackStatusText(), pack_.failed ? color::kWarn : color::kText, PackProgress()};
+    if (update_ && update_->found)
+      cols[2] = {Upper(T("Version")), F("v{0}   " KK_DOT "   v{1} is out", {KK_VERSION, update_->found->version}),
+                 color::kAccent, -1};
+    else
+      cols[2] = {Upper(T("Version")), "v" KK_VERSION, color::kText, -1};
+    float cx = x;
+    for (const Column& c : cols) {
+      ui::DrawTracked(dl, f.display, 12 * s, ImVec2(cx, y), ui::WithAlpha(color::kTextFaint, alpha), c.caption, 2.2f * s);
+      dl->AddText(f.text, 15.5f * s, ImVec2(cx, y + 20 * s), ui::WithAlpha(c.color, alpha), c.value.c_str());
+      if (c.progress >= 0) {
+        const float bw = 150 * s, by = y + 46 * s;
+        dl->AddRectFilled(ImVec2(cx, by), ImVec2(cx + bw, by + 2 * s), ui::WithAlpha(color::kText, 0.12f * alpha));
+        dl->AddRectFilled(ImVec2(cx, by), ImVec2(cx + bw * std::clamp(c.progress, 0.0f, 1.0f), by + 2 * s),
+                          ui::WithAlpha(color::kAccent, alpha));
+      }
+      cx += std::max(210 * s, ui::TextSize(f.text, 15.5f * s, c.value).x + 48 * s);
+    }
+  }
+
+  // ----------------------------------------------------- settings pages ---
+  void DrawSettings(ImDrawList* dl) {
+    const float s = S();
+    std::vector<Item> items;
     switch (page_) {
-      case kPlay: PagePlay(); break;
-      case kDisplay: PageDisplay(); break;
-      case kGraphics: PageGraphics(); break;
-      case kGameplay: PageGameplay(); break;
-      case kControls: PageControls(); break;
-      case kCheatsPage: PageCheats(); break;
-      case kAchievements: PageAchievements(); break;
-      case kAbout: PageAbout(); break;
+      case kDisplay: items = DisplayItems(); break;
+      case kGraphics: items = GraphicsItems(); break;
+      case kGameplay: items = GameplayItems(); break;
+      case kControls:
+        items = sub_ == kRemapPage ? RemapItems() : sub_ == kKeysPage ? KeyItems() : ControlsItems();
+        break;
+      case kCheatsPage: items = CheatItems(); break;
+      case kAchievements: items = AchievementItems(); break;
+      case kAbout: items = AboutItems(); break;
       default: break;
     }
-    ImGui::Dummy(ImVec2(0, 8 * s_));
-    ImGui::EndChild();
-    ImGui::PopStyleColor();
-    ImGui::EndChild();
+    const float top = o_.y + 104 * s, bottom = o_.y + h_ - 96 * s;
+    const float x0 = o_.x + Margin();
+    const float avail = w_ - Margin() * 2;
+    const float list_w = std::round(avail * 0.56f);
+    ui::ListState& st = lists_[page_ * 4 + sub_];
+    const Item* focused = ui::DrawList(dl, items, st, ImVec2(x0, top), ImVec2(x0 + list_w, bottom), m_, input_,
+                                       !modal_.open);
+    const float dx = x0 + list_w + 76 * s;
+    ui::DrawDescription(dl, focused, ImVec2(dx, top + 18 * s), ImVec2(o_.x + w_ - Margin(), bottom), m_);
+    // Kept for the prompts (the items live until the next frame's rebuild).
+    focused_items_ = std::move(items);
+    focused_ = st.focus >= 0 && st.focus < int(focused_items_.size()) ? &focused_items_[size_t(st.focus)] : nullptr;
   }
 
-  // Rows: a label and description on the left, the control on the right.
-  bool BeginRows(const char* id) {
-    if (!ImGui::BeginTable(id, 2, ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp)) return false;
-    ImGui::TableSetupColumn("label", ImGuiTableColumnFlags_WidthStretch, 0.46f);
-    ImGui::TableSetupColumn("control", ImGuiTableColumnFlags_WidthStretch, 0.54f);
-    return true;
-  }
-  void EndRows() { ImGui::EndTable(); }
-
-  void Row(const char* label, const char* desc) {
-    ImGui::TableNextRow();
-    ImGui::TableSetColumnIndex(0);
-    ImGui::PushFont(GetUiFonts().semibold, 0.0f);
-    ImGui::TextUnformatted(label);
-    ImGui::PopFont();
-    if (desc && *desc) {
-      ImGui::PushStyleColor(ImGuiCol_Text, kDim);
-      ImGui::PushFont(nullptr, 15.0f);
-      ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - 24 * s_);
-      ImGui::TextUnformatted(desc);
-      ImGui::PopTextWrapPos();
-      ImGui::PopFont();
-      ImGui::PopStyleColor();
-    }
-    ImGui::TableSetColumnIndex(1);
-    ImGui::SetNextItemWidth(-FLT_MIN);
+  // Item builders.
+  static Item Section(const std::string& label) {
+    Item it;
+    it.type = ItemType::kSection;
+    it.label = label;  // translated and upper-cased as it's drawn
+    return it;
   }
 
-  // Segmented buttons; returns the index clicked (or -1).
-  int Segmented(const char* id, const std::vector<std::string>& labels, int selected) {
-    ImGui::PushID(id);
-    const float avail = ImGui::GetContentRegionAvail().x;
-    const float gap = 6 * s_;
-    const float bw = (avail - gap * float(labels.size() - 1)) / float(labels.size());
-    int clicked = -1;
-    for (size_t i = 0; i < labels.size(); ++i) {
-      if (i) ImGui::SameLine(0, gap);
-      const bool sel = int(i) == selected;
-      if (sel) {
-        ImGui::PushStyleColor(ImGuiCol_Button, kAccent);
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kAccentHot);
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, kAccentHot);
-        ImGui::PushStyleColor(ImGuiCol_Text, kOnAccent);
-      }
-      ImGui::PushID(int(i));
-      if (ImGui::Button(labels[i].c_str(), ImVec2(bw, 0))) clicked = int(i);
-      ImGui::PopID();
-      if (sel) ImGui::PopStyleColor(4);
-    }
-    ImGui::PopID();
-    return clicked;
-  }
-
-  // Segmented control bound to a cvar's string value; options the cvar refuses
-  // in this build are hidden.
-  void ChoiceCvar(const char* cvar, std::vector<Option> options) {
+  // A choice bound to a cvar's values; values the cvar refuses in this build
+  // are left out.
+  static Item CvarChoice(std::string label, std::string desc, std::string cvar, std::vector<Option> options) {
     if (const auto* flag = FindFlag(cvar); flag && !flag->constraints.allowed_values.empty()) {
       const auto& allowed = flag->constraints.allowed_values;
       std::erase_if(options, [&](const Option& o) {
         return std::find(allowed.begin(), allowed.end(), o.value) == allowed.end();
       });
     }
-    const std::string cur = Get(cvar);
-    std::vector<std::string> labels;
-    int sel = -1;
+    Item it;
+    it.type = ItemType::kChoice;
+    it.label = std::move(label);
+    it.description = std::move(desc);
+    const std::string cur = Get(cvar.c_str());
+    it.index = -1;
+    it.value_text = cur;
+    std::vector<std::string> values;
     for (size_t i = 0; i < options.size(); ++i) {
-      labels.push_back(options[i].label);
-      if (options[i].value == cur) sel = int(i);
+      it.options.push_back(options[i].label);
+      values.push_back(options[i].value);
+      if (options[i].value == cur) it.index = int(i);
     }
-    if (int i = Segmented(cvar, labels, sel); i >= 0) Set(cvar, options[size_t(i)].value);
+    it.on_choice = [cvar, values](int i) { Set(cvar.c_str(), values[size_t(i)]); };
+    it.on_default = [cvar] { Reset(cvar.c_str()); };
+    if (const auto* flag = FindFlag(cvar))
+      for (const Option& o : options)
+        if (o.value == flag->default_value) it.default_text = o.label;
+    return it;
   }
 
-  void ToggleCvar(const char* cvar, const char* off = "Off", const char* on = "On", bool invert = false) {
-    const bool v = GetBool(cvar) != invert;
-    if (int i = Segmented(cvar, {off, on}, v ? 1 : 0); i >= 0) SetBool(cvar, (i == 1) != invert);
+  static Item CvarToggle(std::string label, std::string desc, std::string cvar, const char* off = "Off",
+                         const char* on = "On", bool invert = false) {
+    return CvarChoice(std::move(label), std::move(desc), std::move(cvar),
+                      {{off, invert ? "true" : "false"}, {on, invert ? "false" : "true"}});
   }
 
-  void ComboCvar(const char* cvar, const std::vector<Option>& options) {
-    const std::string cur = Get(cvar);
-    const char* preview = options.empty() ? "" : options.front().label;
-    for (auto& o : options)
-      if (o.value == cur) preview = o.label;
-    ImGui::PushID(cvar);
-    if (ImGui::BeginCombo("##c", preview, ImGuiComboFlags_HeightLarge)) {
-      for (auto& o : options)
-        if (ImGui::Selectable(o.label, o.value == cur)) Set(cvar, o.value);
-      ImGui::EndCombo();
+  static Item CvarSlider(std::string label, std::string desc, std::string cvar, float lo, float hi, float step,
+                         std::function<std::string(float)> format) {
+    Item it;
+    it.type = ItemType::kSlider;
+    it.label = std::move(label);
+    it.description = std::move(desc);
+    it.lo = lo;
+    it.hi = hi;
+    it.step = step;
+    it.value = std::clamp(GetFloat(cvar.c_str(), lo), lo, hi);
+    it.value_text = format(it.value);
+    const bool integral = step >= 1.0f;
+    it.on_value = [cvar, integral](float v) {
+      Set(cvar.c_str(), integral ? std::to_string(int(std::lround(v))) : std::to_string(v));
+    };
+    it.on_default = [cvar] { Reset(cvar.c_str()); };
+    if (const auto* flag = FindFlag(cvar)) {
+      try {
+        it.default_text = format(std::stof(flag->default_value));
+      } catch (...) {
+      }
     }
-    ImGui::PopID();
+    return it;
   }
 
-  void SliderCvar(const char* cvar, int lo, int hi, const char* fmt) {
-    int v = GetInt(cvar, lo);
-    ImGui::PushID(cvar);
-    if (ImGui::SliderInt("##s", &v, lo, hi, fmt, ImGuiSliderFlags_AlwaysClamp)) SetInt(cvar, v);
-    ImGui::PopID();
+  static Item ActionItem(std::string label, std::string desc, std::string value, std::function<void()> fn) {
+    Item it;
+    it.type = ItemType::kAction;
+    it.label = std::move(label);
+    it.description = std::move(desc);
+    it.value_text = std::move(value);
+    it.on_activate = std::move(fn);
+    return it;
   }
 
-  bool AccentButton(const char* label, ImVec2 size) {
-    ImGui::PushStyleColor(ImGuiCol_Button, kAccent);
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kAccentHot);
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, kAccentHot);
-    ImGui::PushStyleColor(ImGuiCol_Text, kOnAccent);
-    const bool r = ImGui::Button(label, size);
-    ImGui::PopStyleColor(4);
-    return r;
-  }
-
-  // --------------------------------------------------------------- Play ---
-  void StatusCard() {
-    const bool ok = files_ok_ && !installing_;
-    const ImVec2 p = ImGui::GetCursorScreenPos();
-    const float w = ImGui::GetContentRegionAvail().x, h = 76 * s_;
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), Col(installing_ ? kFrame : ok ? kGood : kWarn), 12 * s_);
-    dl->AddCircleFilled(ImVec2(p.x + 34 * s_, p.y + h * 0.5f), 12 * s_,
-                        Col(ok ? ImVec4(0.55f, 0.95f, 0.7f, 1) : ImVec4(1.0f, 0.75f, 0.35f, 1)));
-    ImGui::SetCursorScreenPos(ImVec2(p.x + 64 * s_, p.y + 14 * s_));
-    ImGui::BeginGroup();
-    ImGui::PushFont(GetUiFonts().semibold, 0.0f);
-    ImGui::TextUnformatted(installing_ ? "Installing..." : ok ? "Ready to play" : "Game files needed");
-    ImGui::PopFont();
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.9f, 0.95f, 1));
-    if (installing_) {
-      const double total = std::max<double>(1.0, double(progress_.bytes_total.load()));
-      ImGui::ProgressBar(float(progress_.bytes_done.load() / total), ImVec2(w - 100 * s_, 6 * s_), "");
-    } else {
-      ImGui::TextUnformatted(ok ? paths_.game_dir.string().c_str()
-                                : "Install from your King Kong Xbox 360 disc image below.");
+  static Item& Disable(Item& it, bool disabled, std::string note) {
+    if (disabled) {
+      it.disabled = true;
+      it.disabled_note = std::move(note);
     }
-    ImGui::PopStyleColor();
-    ImGui::EndGroup();
-    ImGui::SetCursorScreenPos(ImVec2(p.x, p.y + h + 14 * s_));
+    return it;
   }
 
-  void PagePlay() {
-    FinishInstallIfDone();
-    StatusCard();
-    if (!install_message_.empty()) {
-      ImGui::PushStyleColor(ImGuiCol_Text, kDim);
-      ImGui::TextWrapped("%s", install_message_.c_str());
-      ImGui::PopStyleColor();
-    }
-    if (!BeginRows("##play")) return;
-    Row("Disc image",
-        "Your own Peter Jackson's King Kong Xbox 360 disc image (.iso). Its files (about 6.3 GB) are copied "
-        "next to the game.");
-    InstallButtons();
-    Row("Shader pack",
-        "Effects already prepared by playing through the game, so it pauses for new ones less often. Each time "
-        "the launcher opens, it downloads the newest pack from the port's GitHub page by itself.");
-    PackStatus();
-    Row("Show this launcher", "Off starts the game directly. Hold Shift while starting to bring it back.");
-    ToggleCvar("kk_launcher", "Off", "At startup");
-    EndRows();
-  }
-
-  std::filesystem::path CacheDir() const {
-    const std::string root = Get("cache_root");
-    return root.empty() ? paths_.user_dir / "cache" : std::filesystem::path(root);
-  }
-
-  void InstallButtons() {
-    ImGui::BeginDisabled(installing_);
-    if (files_ok_ ? ImGui::Button("Reinstall from disc image...", ImVec2(-FLT_MIN, 0))
-                  : AccentButton("Install from disc image...", ImVec2(-FLT_MIN, 0)))
-      StartInstall();
-    ImGui::EndDisabled();
-    if (installing_ && ImGui::Button("Cancel install", ImVec2(-FLT_MIN, 0))) progress_.cancel = true;
-  }
-
-  // The shader pack download (started when the launcher opens): its progress,
-  // or how it went.
-  void PackStatus() {
-    RefreshPack();
-    if (pack_.busy) {
-      const float total = float(pack_.total.load()), got = float(pack_.bytes.load());
-      ImGui::ProgressBar(total > 0 ? got / total : 0.0f, ImVec2(-FLT_MIN, 0),
-                         total > 0 ? nullptr : "Checking for a newer pack...");
-      return;
-    }
-    ImGui::PushStyleColor(ImGuiCol_Text, kDim);
-    if (pack_.done || pack_.failed) ImGui::TextWrapped("%s", pack_.message.c_str());
-    else if (pack_installed_ > 0) ImGui::Text("Pack %d installed.", pack_installed_);
-    else ImGui::TextUnformatted("Not downloaded yet.");
-    ImGui::PopStyleColor();
-    if (!pack_.done && ImGui::Button(pack_.failed ? "Try again" : "Download now", ImVec2(-FLT_MIN, 0)))
-      StartPackDownload();
-  }
-
-  // Collects a finished download and reads which pack is installed.
-  void RefreshPack() {
-    if (!pack_.busy && pack_thread_.joinable()) {
-      pack_thread_.join();
-      pack_installed_ = -1;
-    }
-    if (pack_installed_ < 0) pack_installed_ = InstalledShaderPackVersion(CacheDir());
-  }
-
-  void StartPackDownload() {
-    if (pack_.busy) return;
-    if (pack_thread_.joinable()) pack_thread_.join();
-    pack_.done = pack_.failed = false;
-    pack_.busy = true;
-    pack_thread_ = std::thread([this, dir = CacheDir()] { DownloadAndInstallShaderPack(dir, pack_); });
-  }
-
-  void StartInstall() {
-    const auto pkg = BrowseForDiscImage();
-    if (pkg.empty()) return;
-    const uint32_t title = iso::ReadTitleId(pkg);
-    if (title == 0) {
-      install_message_ = "That file is not an Xbox 360 disc image.";
-      return;
-    }
-    if (title != kTitleId) {
-      char buf[160];
-      std::snprintf(buf, sizeof(buf), "That disc is title %08X, not King Kong (%08X).", title, kTitleId);
-      install_message_ = buf;
-      return;
-    }
-    install_message_.clear();
-    progress_.cancel = false;
-    installing_ = true;
-    install_done_ = false;
-    install_thread_ = std::thread([this, pkg] {
-      install_result_ = iso::Extract(pkg, paths_.game_dir, &progress_);
-      install_done_ = true;
-    });
-  }
-
-  void FinishInstallIfDone() {
-    if (!installing_ || !install_done_) return;
-    install_thread_.join();
-    installing_ = false;
-    files_ok_ = GameFilesPresent(paths_.game_dir);
-    install_message_ = install_result_.empty()
-                           ? (files_ok_ ? "Installed successfully." : "Extraction finished but default.xex is missing.")
-                           : "Install failed: " + install_result_;
-    if (files_ok_) {
-      textures_.clear();
-      title_art_ = title_icon_ = nullptr;
-      LoadArt();
-    }
-  }
+  static constexpr const char* kSetByOriginal =
+      "Set by the Original Xbox 360 look. Switch Look to Modern on the Graphics page to change it.";
 
   // ------------------------------------------------------------ Display ---
-  void PageDisplay() {
-    if (!BeginRows("##display")) return;
-    Row("Window mode", "Fullscreen uses a borderless window at your desktop resolution.");
+  std::vector<Item> DisplayItems() {
+    std::vector<Item> items;
+    items.push_back(Section("Window"));
     {
-      const bool fs = GetBool("fullscreen");
-      if (int i = Segmented("mode", {"Windowed", "Fullscreen"}, fs ? 1 : 0); i >= 0) SetFullscreen(i == 1);
+      Item it = CvarToggle("Window mode", "Fullscreen uses a borderless window at your desktop resolution.",
+                           "fullscreen", "Windowed", "Fullscreen");
+      it.on_choice = [this](int i) { SetFullscreen(i == 1); };
+      it.on_default = [this] {
+        Reset("fullscreen");
+        if (cb_.set_fullscreen) cb_.set_fullscreen(GetBool("fullscreen"));
+      };
+      items.push_back(std::move(it));
     }
-    Row("Window size", "Size of the window in windowed mode. Applies when the game starts.");
-    WindowSizeCombo();
-    Row("Monitor", "Which display the game opens on. Applies when the game starts.");
-    MonitorCombo();
-    Row("VSync", "On waits for the display for tear-free frames. Off has the lowest latency and lets "
-                 "G-Sync/FreeSync displays run freely.");
-    ToggleCvar("d3d12_allow_variable_refresh_rate_and_tearing", "Off", "On", /*invert=*/true);
-    Row("Aspect ratio", "The game is 16:9. Letterbox keeps its shape on other screens; stretch fills them.");
-    {
-      const bool letterbox = GetBool("present_letterbox");
-      if (int i = Segmented("aspect", {"Letterbox 16:9", "Stretch"}, letterbox ? 0 : 1); i >= 0)
-        SetBool("present_letterbox", i == 0);
-    }
-    EndRows();
+    items.push_back(WindowSizeItem());
+    items.push_back(MonitorItem());
+    items.push_back(Section("Picture"));
+    items.push_back(CvarToggle("VSync",
+                               "On waits for the display for tear-free frames. Off has the lowest latency and lets "
+                               "G-Sync and FreeSync displays run freely.",
+                               "d3d12_allow_variable_refresh_rate_and_tearing", "Off", "On", /*invert=*/true));
+    items.push_back(CvarChoice("Aspect ratio",
+                               "The game is 16:9. Letterbox keeps its shape on other screens; Stretch fills them.",
+                               "present_letterbox", {{"Letterbox 16:9", "true"}, {"Stretch", "false"}}));
+    return items;
   }
 
   void SetFullscreen(bool on) {
@@ -848,7 +1413,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
     if (cb_.set_fullscreen) cb_.set_fullscreen(on);
   }
 
-  void WindowSizeCombo() {
+  Item WindowSizeItem() {
     // window_width/height are in logical pixels (96 DPI); offer real pixel sizes
     // that fit on the screen and convert with the window's DPI scale.
     const double scale = cb_.dpi_scale ? cb_.dpi_scale() : 1.0;
@@ -856,450 +1421,474 @@ class Launcher final : public rex::ui::ImGuiDialog {
     const int w = to_physical(GetInt("window_width")), h = to_physical(GetInt("window_height"));
     static const std::pair<int, int> kSizes[] = {{0, 0},       {1280, 720},  {1600, 900},
                                                  {1920, 1080}, {2560, 1440}, {3200, 1800}};
-    auto label = [](int sw, int sh) {
-      return sw == 0 ? std::string("Default") : std::to_string(sw) + " \xC3\x97 " + std::to_string(sh);
-    };
     const auto [screen_w, screen_h] = cb_.screen_size ? cb_.screen_size() : std::pair<int, int>{1 << 16, 1 << 16};
     auto close_to = [](int a, int b) { return std::abs(a - b) <= 2; };
-    ImGui::BeginDisabled(GetBool("fullscreen"));
-    if (ImGui::BeginCombo("##winsize", label(w, h).c_str())) {
-      for (auto [sw, sh] : kSizes) {
-        if (sw >= screen_w || sh >= screen_h) continue;  // must fit with its frame
-        if (ImGui::Selectable(label(sw, sh).c_str(), close_to(sw, w) && close_to(sh, h))) {
-          SetInt("window_width", int(sw / scale + 0.5));
-          SetInt("window_height", int(sh / scale + 0.5));
-        }
-      }
-      ImGui::EndCombo();
+    Item it;
+    it.type = ItemType::kChoice;
+    it.label = "Window size";
+    it.description = "The window's size in windowed mode. Applies when the game starts.";
+    it.index = -1;
+    it.value_text = Size(w, h);
+    it.default_text = "Default";
+    std::vector<std::pair<int, int>> sizes;
+    for (auto [sw, sh] : kSizes) {
+      if (sw >= screen_w || sh >= screen_h) continue;  // must fit with its frame
+      if (close_to(sw, w) && close_to(sh, h)) it.index = int(sizes.size());
+      it.options.push_back(sw == 0 ? std::string("Default") : Size(sw, sh));
+      sizes.emplace_back(sw, sh);
     }
-    ImGui::EndDisabled();
+    it.on_choice = [sizes, scale](int i) {
+      const auto [sw, sh] = sizes[size_t(i)];
+      SetInt("window_width", int(sw / scale + 0.5));
+      SetInt("window_height", int(sh / scale + 0.5));
+    };
+    it.on_default = [] {
+      Reset("window_width");
+      Reset("window_height");
+    };
+    Disable(it, GetBool("fullscreen"), "Only used in windowed mode.");
+    return it;
   }
 
-  void MonitorCombo() {
+  Item MonitorItem() {
     if (monitors_.empty()) monitors_ = ListMonitors();
-    std::vector<std::string> names;
+    std::vector<Option> opts = {{"Default", "0"}};
     for (size_t i = 0; i < monitors_.size(); ++i) {
       const auto& m = monitors_[i];
-      names.push_back("Display " + std::to_string(i + 1) + (m.primary ? " (primary)" : "") + "   " +
-                      std::to_string(m.width) + " \xC3\x97 " + std::to_string(m.height));
+      opts.push_back({F("Display {0}", {std::to_string(i + 1)}) + (m.primary ? " " + T(std::string("(main)")) : "") +
+                          "  " KK_DOT "  " + Size(m.width, m.height),
+                      std::to_string(i + 1)});
     }
-    std::vector<Option> opts = {{"Default", "0"}};
-    for (size_t i = 0; i < names.size(); ++i) opts.push_back({names[i].c_str(), std::to_string(i + 1)});
-    ComboCvar("monitor", opts);
+    return CvarChoice("Monitor", "Which display the game opens on. Applies when the game starts.", "monitor",
+                      std::move(opts));
   }
 
   // ----------------------------------------------------------- Graphics ---
-  // ------------------------------------------------------------ presets ---
-  // Graphics presets set the upscaler, render quality, anti-aliasing, texture
-  // filtering and ambient occlusion (motion blur and fog are left to taste).
-  // The preset shown is the one the settings match; anything else is Custom.
-  // Medium is the default settings.
-  struct GraphicsPreset {
-    const char* label;
-    const char* upscaler;   // present_effect
-    const char* quality;    // kk_render_quality
-    const char* aa;         // swap_post_effect
-    const char* filtering;  // anisotropic_override: 2 = 2x, 3 = 4x, 4 = 8x, 5 = 16x
-    bool ao;                // ao_mode 1 at strength 1
-  };
-  static constexpr GraphicsPreset kGraphicsPresets[] = {
-      {"Low", "fsr", "performance", "fxaa", "2", false},
-      {"Medium", "bilinear", "native", "fxaa", "3", false},
-      {"High", "bilinear", "native", "fxaa", "4", true},
-      {"Ultra", "bilinear", "supersample", "fxaa_extreme", "5", true},
-      {"Steam Deck", "bilinear", "native", "fxaa", "2", false},
-  };
-  static constexpr int kGraphicsPresetCount = int(std::size(kGraphicsPresets));
-
-  // The upscaler modes (kk_render_quality); -1 for another render quality.
-  static constexpr const char* kUpscalerModes[] = {"native", "quality", "balanced", "performance"};
-  static constexpr const char* kUpscalerModeNames[] = {"Native", "Quality", "Balanced", "Performance"};
-  int UpscalerMode() {
-    const std::string q = Get("kk_render_quality");
-    for (int i = 0; i < 4; ++i)
-      if (q == kUpscalerModes[i]) return i;
-    return -1;
-  }
-
-  int MatchGraphicsPreset() {
-    for (int i = 0; i < kGraphicsPresetCount; ++i) {
-      const GraphicsPreset& p = kGraphicsPresets[i];
-      const bool ao = GetInt("ao_mode", 0) != 0;
-      if (Get("present_effect") == p.upscaler && Get("kk_render_quality") == p.quality &&
-          Get("swap_post_effect") == p.aa &&
-          Get("anisotropic_override") == p.filtering && ao == p.ao && (!ao || GetInt("ao_strength", 1) == 1))
-        return i;
-    }
-    return -1;
-  }
-
-  void ApplyGraphicsPreset(int index) {
-    const GraphicsPreset& p = kGraphicsPresets[index];
-    Set("present_effect", p.upscaler);
-    Set("kk_render_quality", p.quality);
-    Set("swap_post_effect", p.aa);
-    Set("anisotropic_override", p.filtering);
-    SetInt("ao_mode", p.ao ? 1 : 0);
-    if (p.ao) SetInt("ao_strength", 1);
-  }
-
-  // The Original look: the Xbox 360's own settings (OriginalLookSettings).
-  // Switching to it keeps the Modern ones in kk_modern_settings, and switching
-  // back puts them back.
-  void SetOriginalLook(bool on) {
-    if (on == GetBool("kk_original_look")) return;
-    if (on) {
-      std::string saved;
-      for (const auto& [name, value] : OriginalLookSettings()) saved += std::string(name) + "=" + Get(name) + ";";
-      Set("kk_modern_settings", saved);
-      for (const auto& [name, value] : OriginalLookSettings()) Set(name, value);
-    } else {
-      const std::string saved = Get("kk_modern_settings");
-      if (saved.empty()) ApplyGraphicsPreset(1);  // Medium
-      std::stringstream in(saved);
-      for (std::string item; std::getline(in, item, ';');) {
-        const size_t eq = item.find('=');
-        if (eq != std::string::npos) Set(item.substr(0, eq).c_str(), item.substr(eq + 1));
-      }
-      Set("kk_modern_settings", "");
-    }
-    SetBool("kk_original_look", on);
-  }
-
-  void PageGraphics() {
+  std::vector<Item> GraphicsItems() {
     const auto [out_w, out_h] = cb_.output_size ? cb_.output_size() : std::pair<int, int>{1280, 720};
-    if (!BeginRows("##graphics")) return;
-    Row("Look",
-        "Original is the Xbox 360 version as it was: 720p at 30 FPS, the console's own anti-aliasing and texture "
-        "filtering, its 69\xC2\xB0 field of view, motion blur, screen blur and distance fog, and no ambient occlusion. Modern "
-        "gives you the presets and every setting below.");
+    const bool original = GetBool("kk_original_look");
+    const char* draws = GetBool("fullscreen") ? "Draws {0} for your {1} screen." : "Draws {0} for your {1} window.";
+    std::vector<Item> items;
+    items.push_back(Section("Look"));
     {
-      const bool original = GetBool("kk_original_look");
-      if (int i = Segmented("look", {"Original Xbox 360", "Modern"}, original ? 0 : 1); i >= 0)
-        SetOriginalLook(i == 0);
+      Item it = CvarChoice("Look",
+                           "Original is the Xbox 360 version as it was: 720p at 30 FPS, the console's own "
+                           "anti-aliasing and texture filtering, its 69" KK_DEG " field of view, motion blur, screen "
+                           "blur and distance fog, and no ambient occlusion. Modern gives you the presets and every "
+                           "setting on this page.",
+                           "kk_original_look", {{"Original Xbox 360", "true"}, {"Modern", "false"}});
+      it.on_choice = [](int i) { SetOriginalLook(i == 0); };
+      it.on_default = [] { SetOriginalLook(false); };
+      items.push_back(std::move(it));
     }
-    const bool original_look = GetBool("kk_original_look");
-    ImGui::BeginDisabled(original_look);
-    Row("Preset",
-        "Quick settings for the upscaler, render quality, anti-aliasing, texture filtering and ambient occlusion. "
-        "Change any of them yourself and it shows Custom. Medium is the default.");
     {
+      Item it;
+      it.type = ItemType::kChoice;
+      it.label = "Preset";
+      it.description =
+          "Quick settings for the upscaler, render quality, anti-aliasing, texture filtering and ambient occlusion. "
+          "Change any of them yourself and it shows Custom.";
+      for (const auto& p : kGraphicsPresets) it.options.push_back(p.label);
+      it.options.push_back("Custom");
       const int match = MatchGraphicsPreset();
-      const float button_w = (ImGui::GetContentRegionAvail().x - 6 * s_ * kGraphicsPresetCount) /
-                             float(kGraphicsPresetCount + 1);
-      std::vector<std::string> labels;
-      for (const auto& p : kGraphicsPresets) {
-        const bool fits = ImGui::CalcTextSize(p.label).x + 2 * ImGui::GetStyle().FramePadding.x <= button_w;
-        labels.push_back(fits || std::strcmp(p.label, "Steam Deck") != 0 ? p.label : "Deck");
-      }
-      labels.push_back("Custom");
-      const int selected = original_look ? -1 : match < 0 ? kGraphicsPresetCount : match;
-      if (int i = Segmented("graphics_preset", labels, selected); i >= 0 && i < kGraphicsPresetCount)
-        ApplyGraphicsPreset(i);
+      it.index = original ? -1 : match < 0 ? kGraphicsPresetCount : match;
+      it.value_text = "Xbox 360";  // the Original look's own settings
+      it.on_choice = [](int i) {
+        if (i < kGraphicsPresetCount) ApplyGraphicsPreset(i);
+      };
+      it.on_default = [] { ApplyGraphicsPreset(1); };
+      it.default_text = "Medium";
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
-    Row("Upscaler",
-        "Scales the picture up to your screen and sharpens it, for a clearer image when the game draws fewer "
-        "pixels than your screen has. AMD FSR 1 and NVIDIA Image Scaling (NIS) both work on any graphics card. "
-        "Off uses plain smooth scaling.");
+
+    items.push_back(Section("Resolution"));
     {
       // NIS is in the D3D12 presenter only (the Vulkan one, used on Linux, would give FSR).
-      static const char* const kUpscalers[] = {"bilinear", "fsr", "nis"};
+      std::vector<Option> opts = {{"Off", "bilinear"}, {"AMD FSR 1", "fsr"}};
 #if defined(_WIN32)
-      const std::vector<std::string> labels = {"Off", "AMD FSR 1", "NVIDIA NIS"};
-#else
-      const std::vector<std::string> labels = {"Off", "AMD FSR 1"};
+      opts.push_back({"NVIDIA NIS", "nis"});
 #endif
-      const std::string cur = Get("present_effect");
-      int sel = -1;
-      for (size_t i = 0; i < labels.size(); ++i)
-        if (cur == kUpscalers[i]) sel = int(i);
-      if (int i = Segmented("upscaler", labels, sel); i >= 0 && i != sel) {
-        Set("present_effect", kUpscalers[i]);
+      Item it = CvarChoice("Upscaler",
+                           "Scales the picture up to your screen and sharpens it, for a clearer image when the game "
+                           "draws fewer pixels than your screen has. AMD FSR 1 and NVIDIA Image Scaling (NIS) both "
+                           "work on any graphics card. Off uses plain smooth scaling.",
+                           "present_effect", opts);
+      std::vector<std::string> values;
+      for (const auto& o : opts) values.push_back(o.value);
+      it.on_choice = [values](int i) {
+        Set("present_effect", values[size_t(i)]);
         // The upscaler modes are Native to Performance; others start at Native.
         if (i != 0 && UpscalerMode() < 0) Set("kk_render_quality", "native");
-      }
+      };
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
     if (Get("present_effect") != "bilinear") {
-      Row("Upscaler mode",
+      Item it;
+      it.type = ItemType::kChoice;
+      it.label = "Upscaler mode";
+      it.description =
           "How many pixels the game draws before the upscaler scales them to your screen. Native draws at your "
           "screen's size and only sharpens; Quality, Balanced and Performance draw fewer for more speed. The game "
-          "draws in steps of its original 720p, so some modes can be the same at your screen size.");
+          "draws in steps of its original 720p, so some modes can be the same at your screen size.";
+      it.options.assign(std::begin(kUpscalerModeNames), std::end(kUpscalerModeNames));
       const int mode = UpscalerMode();
-      if (int i = Segmented("upscaler_mode", {kUpscalerModeNames, kUpscalerModeNames + 4}, mode); i >= 0)
-        Set("kk_render_quality", kUpscalerModes[i]);
-      ImGui::PushStyleColor(ImGuiCol_Text, kDim);
-      ImGui::PushFont(nullptr, 15.0f);
-      ImGui::PushTextWrapPos(0.0f);
+      it.index = mode;
       if (mode >= 0) {
         const int scale = RenderScaleFor(kUpscalerModes[mode], out_h);
+        it.facts.push_back(F(draws, {Size(1280 * scale, 720 * scale), Size(out_w, out_h)}));
         std::string same;
         for (int m = 0; m < 4; ++m) {
           if (m == mode || RenderScaleFor(kUpscalerModes[m], out_h) != scale) continue;
-          same += same.empty() ? kUpscalerModeNames[m] : std::string(" and ") + kUpscalerModeNames[m];
+          same += same.empty() ? T(std::string(kUpscalerModeNames[m]))
+                               : " " + T(std::string("and")) + " " + T(std::string(kUpscalerModeNames[m]));
         }
-        ImGui::Text("Draws %d \xC3\x97 %d for your %d \xC3\x97 %d %s.%s%s", 1280 * scale, 720 * scale, out_w, out_h,
-                    GetBool("fullscreen") ? "screen" : "window", same.empty() ? "" : " Same as ",
-                    same.empty() ? "" : (same + " here.").c_str());
+        if (!same.empty()) it.facts.push_back(F("Same as {0} here.", {same}));
       } else {
-        const std::string q = Get("kk_render_quality");
-        std::string label = q == "custom" ? "Custom (the internal resolution below)" : q;
-        for (const auto& p : RenderPresets())
-          if (q == p.id) label = p.label;
-        ImGui::TextUnformatted(("Now set to " + label + ". Pick a mode to use one of these.").c_str());
+        it.value_text = "Custom";
+        it.facts.push_back("Now set to another render quality. Pick a mode to use one of these.");
       }
-      ImGui::PopTextWrapPos();
-      ImGui::PopFont();
-      ImGui::PopStyleColor();
-    }
-    if (Get("present_effect") == "bilinear") {
-      Row("Render quality",
+      it.on_choice = [](int i) { Set("kk_render_quality", kUpscalerModes[i]); };
+      it.on_default = [] { Reset("kk_render_quality"); };
+      if (const auto* flag = FindFlag("kk_render_quality"))
+        for (int m = 0; m < 4; ++m)
+          if (flag->default_value == kUpscalerModes[m]) it.default_text = kUpscalerModeNames[m];
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    } else {
+      Item it;
+      it.type = ItemType::kChoice;
+      it.label = "Render quality";
+      it.description =
           "How sharply the game is drawn compared with your screen. Native matches it; Quality, Balanced and the "
-          "Performance modes draw fewer pixels and scale up (an upscaler above makes that sharper); Supersample "
-          "draws more for the cleanest edges. The game renders in steps of its original 720p.");
-      {
-        const std::string cur = Get("kk_render_quality");
-        std::vector<std::string> labels, values;
-        int sel = -1;
-        for (const auto& p : RenderPresets()) {
-          const int scale = RenderScaleFor(p.id, out_h);
-          labels.push_back(std::string(p.label) + "   " + std::to_string(1280 * scale) + " \xC3\x97 " +
-                           std::to_string(720 * scale));
-          values.push_back(p.id);
+          "Performance modes draw fewer pixels and scale up (an upscaler makes that sharper); Supersample draws more "
+          "for the cleanest edges. The game renders in steps of its original 720p.";
+      const std::string cur = Get("kk_render_quality");
+      std::vector<std::string> values;
+      it.index = -1;
+      for (const auto& p : RenderPresets()) {
+        const int scale = RenderScaleFor(p.id, out_h);
+        if (cur == p.id) {
+          it.index = int(values.size());
+          it.facts.push_back(F(draws, {Size(1280 * scale, 720 * scale), Size(out_w, out_h)}));
         }
-        labels.push_back("Custom");
-        values.push_back("custom");
-        for (size_t i = 0; i < values.size(); ++i)
-          if (values[i] == cur) sel = int(i);
-        ImGui::PushID("quality");
-        if (ImGui::BeginCombo("##q", sel >= 0 ? labels[size_t(sel)].c_str() : cur.c_str(), ImGuiComboFlags_HeightLarge)) {
-          for (size_t i = 0; i < labels.size(); ++i)
-            if (ImGui::Selectable(labels[i].c_str(), int(i) == sel)) Set("kk_render_quality", values[i]);
-          ImGui::EndCombo();
-        }
-        ImGui::PopID();
-        ImGui::PushStyleColor(ImGuiCol_Text, kDim);
-        ImGui::PushFont(nullptr, 15.0f);
-        ImGui::Text("%s: %d \xC3\x97 %d", GetBool("fullscreen") ? "Your screen" : "Game window", out_w, out_h);
-        ImGui::PopFont();
-        ImGui::PopStyleColor();
+        it.options.push_back(p.label);
+        values.push_back(p.id);
       }
+      it.options.push_back("Custom");
+      values.push_back("custom");
+      if (cur == "custom") it.index = int(values.size()) - 1;
+      it.value_text = cur;
+      it.on_choice = [values](int i) { Set("kk_render_quality", values[size_t(i)]); };
+      it.on_default = [] { Reset("kk_render_quality"); };
+      if (const auto* flag = FindFlag("kk_render_quality"))
+        for (const auto& p : RenderPresets())
+          if (flag->default_value == p.id) it.default_text = p.label;
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
     if (Get("kk_render_quality") == "custom") {
-      Row("Internal resolution", "Draw the game at an exact multiple of its native 1280 \xC3\x97 720.");
-      ComboCvar("resolution_scale", {{"1\xC3\x97   1280 \xC3\x97 720 (original)", "1"},
-                                     {"2\xC3\x97   2560 \xC3\x97 1440", "2"},
-                                     {"3\xC3\x97   3840 \xC3\x97 2160 (4K)", "3"},
-                                     {"4\xC3\x97   5120 \xC3\x97 2880", "4"},
-                                     {"5\xC3\x97   6400 \xC3\x97 3600", "5"},
-                                     {"6\xC3\x97   7680 \xC3\x97 4320 (8K)", "6"}});
+      Item it = CvarChoice("Internal resolution", "Draw the game at an exact multiple of its native 1280 " KK_TIMES " 720.",
+                           "resolution_scale",
+                           {{"1" KK_TIMES "  " KK_DOT "  1280 " KK_TIMES " 720", "1"},
+                            {"2" KK_TIMES "  " KK_DOT "  2560 " KK_TIMES " 1440", "2"},
+                            {"3" KK_TIMES "  " KK_DOT "  3840 " KK_TIMES " 2160", "3"},
+                            {"4" KK_TIMES "  " KK_DOT "  5120 " KK_TIMES " 2880", "4"},
+                            {"5" KK_TIMES "  " KK_DOT "  6400 " KK_TIMES " 3600", "5"},
+                            {"6" KK_TIMES "  " KK_DOT "  7680 " KK_TIMES " 4320", "6"}});
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
-    Row("Anti-aliasing", "Smooths jagged edges after the frame is drawn. Extreme is softer but cleaner.");
-    ChoiceCvar("swap_post_effect", {{"Off", "none"}, {"FXAA", "fxaa"}, {"FXAA Extreme", "fxaa_extreme"}});
+
+    items.push_back(Section("Image"));
+    {
+      Item it = CvarChoice("Anti-aliasing", "Smooths jagged edges after the frame is drawn. Extreme is softer but cleaner.",
+                           "swap_post_effect", {{"Off", "none"}, {"FXAA", "fxaa"}, {"FXAA Extreme", "fxaa_extreme"}});
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
     // 2x MSAA is not offered as a choice: it is how the Xbox 360 drew those
     // surfaces (native_2x_msaa, on by default), and the shader pack is built with it.
-    Row("Texture filtering", "Keeps the ground and distant textures sharp at steep angles.");
-    ChoiceCvar("anisotropic_override",
-               {{"Game", "-1"}, {"Off", "0"}, {"2\xC3\x97", "2"}, {"4\xC3\x97", "3"}, {"8\xC3\x97", "4"}, {"16\xC3\x97", "5"}});
-    Row("Motion blur", "The trail the game blends over fast moments, mostly in Kong's sequences and some transitions.");
-    ToggleCvar("kk_motion_blur", "Off", "On");
-    Row("Screen blur",
-        "Some levels (Necropolis, Brontosaurus) blur the whole picture slightly. The blur is sized for the Xbox "
-        "360's 720p, so on a sharper screen it makes those levels look low resolution. Off keeps them sharp.");
-    ToggleCvar("kk_big_blur", "Off", "On");
-    Row("Distance fog",
-        "The haze over far-away scenery. Off shows distant scenery clearly, but the fog is part of Skull Island's "
-        "look and also hides the edges of each area, so some empty or unfinished backdrops can show.");
-    ToggleCvar("kk_fog", "Off", "On");
-    // Ambient occlusion lives in the GPU plugin (ao_mode, ao_strength).
-    Row("Ambient occlusion",
-        "Soft shading where surfaces meet: in corners and creases, and on the ground under rocks, grass and "
-        "people. Costs about 1 ms a frame at 4K. Not available with Intel graphics yet.");
     {
-      const bool on = GetInt("ao_mode", 0) != 0;
-      if (int i = Segmented("ao_mode", {"Off", "On"}, on ? 1 : 0); i >= 0) SetInt("ao_mode", i);
+      Item it = CvarChoice("Texture filtering", "Keeps the ground and distant textures sharp at steep angles.",
+                           "anisotropic_override",
+                           {{"Game", "-1"}, {"Off", "0"}, {"2" KK_TIMES, "2"}, {"4" KK_TIMES, "3"}, {"8" KK_TIMES, "4"},
+                            {"16" KK_TIMES, "5"}});
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
-    if (GetInt("ao_mode", 0) != 0) {
-      Row("AO strength", "How dark the shading gets. 1 is recommended.");
-      const int strength = std::clamp(GetInt("ao_strength", 1), 1, 3);
-      if (int i = Segmented("ao_strength", {"1 (recommended)", "2", "3"}, strength - 1); i >= 0)
-        SetInt("ao_strength", i + 1);
-    }
-    ImGui::EndDisabled();
-    Row("Shader preparing",
-        "Each new effect is prepared the first time it appears, then saved for next time. Balanced prepares "
-        "many at once in the background and waits a moment for them, so there are no long pauses and things "
-        "rarely pop in. Wait always draws correctly but can pause for a second or two. Background never "
-        "pauses, but objects can briefly vanish or flash bright.");
     {
-      const bool async = GetBool("async_shader_compilation");
-      const int mode = !async ? 0 : GetInt("async_shader_wait_ms", 0) > 0 ? 1 : 2;
-      if (int i = Segmented("shader_mode", {"Wait", "Balanced", "Background"}, mode); i >= 0 && i != mode) {
-        SetBool("async_shader_compilation", i != 0);
-        if (i == 1) rex::cvar::ResetToDefault("async_shader_wait_ms");
-        if (i == 2) SetInt("async_shader_wait_ms", 0);
+      // Ambient occlusion lives in the GPU plugin (ao_mode, ao_strength).
+      Item it = CvarChoice("Ambient occlusion",
+                           "Soft shading where surfaces meet: in corners and creases, and on the ground under rocks, "
+                           "grass and people. Costs about 1 ms a frame at 4K. Not available with Intel graphics yet.",
+                           "ao_mode", {{"Off", "0"}, {"On", "1"}});
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+      if (GetInt("ao_mode", 0) != 0) {
+        Item st = CvarChoice("AO strength", "How dark the shading gets. 1 is recommended.", "ao_strength",
+                             {{"1 (recommended)", "1"}, {"2", "2"}, {"3", "3"}});
+        items.push_back(std::move(Disable(st, original, kSetByOriginal)));
       }
     }
-    EndRows();
+
+    items.push_back(Section("Effects"));
+    {
+      Item it = CvarToggle("Motion blur",
+                           "The trail the game blends over fast moments, mostly in Kong's sequences and some "
+                           "transitions.",
+                           "kk_motion_blur");
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
+    {
+      Item it = CvarToggle("Screen blur",
+                           "Some levels (Necropolis, Brontosaurus) blur the whole picture slightly. The blur is sized "
+                           "for the Xbox 360's 720p, so on a sharper screen it makes those levels look low resolution. "
+                           "Off keeps them sharp.",
+                           "kk_big_blur");
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
+    {
+      Item it = CvarToggle("Distance fog",
+                           "The haze over far-away scenery. Off shows distant scenery clearly, but the fog is part of "
+                           "Skull Island's look and also hides the edges of each area, so some empty or unfinished "
+                           "backdrops can show.",
+                           "kk_fog");
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
+
+    return items;
   }
 
   // ----------------------------------------------------------- Gameplay ---
-  void PageGameplay() {
-    if (!BeginRows("##gameplay")) return;
-    const bool original_look = GetBool("kk_original_look");
-    Row("Frame rate", original_look ? "30, set by the Original Xbox 360 look on the Graphics page."
-                                    : "30 matches the Xbox 360 and keeps every animation right. Higher is smoother, "
-                                      "but some character animations are not right above 30 yet.");
-    ImGui::BeginDisabled(original_look);
-    FrameRateCombo();
-    ImGui::EndDisabled();
-    Row("Field of view", "How wide the camera sees. 69\xC2\xB0 is the original for Jack; Kong, cutscene and other "
-                         "cameras widen by the same amount. Jack's gun keeps its usual size.");
-    ImGui::BeginDisabled(original_look);
-    SliderCvar("kk_fov", 69, 110, GetInt("kk_fov", 69) <= 69 ? "%d\xC2\xB0 (original)" : "%d\xC2\xB0");
-    ImGui::EndDisabled();
-    Row("Frame counter", "Shows the game's frame rate in the corner. F2 toggles it while playing.");
-    ToggleCvar("kk_show_fps", "Hidden", "Shown");
-    Row("Startup logos", "The Ubisoft, Universal and WingNut movies before the title screen. Story movies still play.");
-    ToggleCvar("kk_skip_intros", "Play", "Skip");
-    Row("Language", "The game's language, where the game includes it.");
-    // The disc's languages that the Xbox 360 system language can select.
-    ComboCvar("user_language", {{"English", "1"},
+  std::vector<Item> GameplayItems() {
+    const bool original = GetBool("kk_original_look");
+    std::vector<Item> items;
+    items.push_back(Section("Game"));
+    {
+      std::vector<Option> opts;
+      for (int f : kFrameRateChoices)
+        opts.push_back({f <= 0 ? "Unlimited" : f == 30 ? "30 FPS (Xbox 360)" : std::to_string(f) + " FPS",
+                        std::to_string(f)});
+      const std::string cur = Get("kk_frame_rate");
+      bool listed = false;
+      for (const auto& o : opts) listed = listed || o.value == cur;
+      if (!listed && !cur.empty()) opts.push_back({F("{0} FPS (settings file)", {cur}), cur});
+      Item it = CvarChoice("Frame rate",
+                           "30 matches the Xbox 360 and keeps every animation right. Higher is smoother, but some "
+                           "character animations are not right above 30 yet.",
+                           "kk_frame_rate", opts);
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
+    {
+      Item it = CvarSlider("Field of view",
+                           "How wide the camera sees. 69" KK_DEG " is the original for Jack; Kong, cutscene and other "
+                           "cameras widen by the same amount. Jack's gun keeps its usual size.",
+                           "kk_fov", 69, 110, 1, [](float v) {
+                             const int d = int(std::lround(v));
+                             return d <= 69 ? F("{0}\xC2\xB0 (original)", {std::to_string(d)}) : std::to_string(d) + KK_DEG;
+                           });
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
+    items.push_back(CvarChoice("Language", "The game's language, where the game includes it.", "user_language",
+                               {{"English", "1"},
                                 {"Deutsch", "3"},
                                 {"Espa\xC3\xB1ol", "5"},
                                 {"Fran\xC3\xA7" "ais", "4"},
-                                {"Italiano", "6"}});
-    EndRows();
-  }
-
-  // A dropdown: there are too many choices for a row of buttons in a small window.
-  void FrameRateCombo() {
-    std::vector<std::pair<std::string, std::string>> choices;  // label, value
-    for (int f : kFrameRateChoices)
-      choices.emplace_back(f <= 0 ? "Unlimited" : f == 30 ? "30 FPS (like the Xbox 360)" : std::to_string(f) + " FPS",
-                           std::to_string(f));
-    const std::string cur = Get("kk_frame_rate");
-    bool listed = false;
-    for (const auto& c : choices) listed = listed || c.second == cur;
-    if (!listed && !cur.empty()) choices.emplace_back(cur + " FPS (from the settings file)", cur);
-    std::vector<Option> opts;
-    for (const auto& c : choices) opts.push_back({c.first.c_str(), c.second});
-    ComboCvar("kk_frame_rate", opts);
+                                {"Italiano", "6"}}));
+    items.push_back(Section("Extras"));
+    items.push_back(CvarToggle("Frame counter", "Shows the game's frame rate in the corner. F2 toggles it while playing.",
+                               "kk_show_fps", "Hidden", "Shown"));
+    items.push_back(CvarToggle("Startup logos",
+                               "The Ubisoft, Universal and WingNut movies before the title screen. Story movies "
+                               "still play.",
+                               "kk_skip_intros", "Play", "Skip"));
+    return items;
   }
 
   // ----------------------------------------------------------- Controls ---
-  void PageControls() {
-    if (BeginRows("##controls")) {
-      Row("Input", "Controllers work automatically. Keyboard & mouse emulates a controller; keys are below.");
-      ToggleCvar("mnk_mode", "Controller", "Keyboard & mouse");
-      Row("Button prompts", "Which controller's buttons the game shows in menus and hints.");
-      ComboCvar("kk_button_prompts", {{"Xbox 360 (original)", "xbox360"},
-                                      {"Xbox Series", "xbox_series"},
-                                      {"PlayStation 5", "ps5"},
-                                      {"PlayStation 2", "ps2"},
-                                      {"Keyboard (your keys)", "keyboard"}});
-      Row("Controller sensitivity", "How fast the right stick turns the camera and moves your aim.");
-      SliderCvar("kk_camera_sensitivity", 25, 300, "%d%%");
-      Row("Camera response",
-          "Modern turns the camera the same way in every direction, so circles and diagonals feel even. Original is "
-          "the Xbox 360's own: small pushes up and down turn much more slowly than small pushes sideways.");
-      ToggleCvar("kk_camera_modern", "Original", "Modern");
-      {
-        // Mouse settings apply to Keyboard & mouse input; shown either way so they're easy to find.
-        const bool mnk = GetBool("mnk_mode");
-        Row("Mouse sensitivity", mnk ? "How fast the mouse turns the camera."
-                                     : "How fast the mouse turns the camera. Used when Input is Keyboard & mouse.");
-        ImGui::BeginDisabled(!mnk);
-        float sens = 1.0f;
-        try {
-          sens = std::stof(Get("mnk_sensitivity"));
-        } catch (...) {
-        }
-        if (ImGui::SliderFloat("##ms", &sens, 0.1f, 5.0f, "%.2f\xC3\x97")) Set("mnk_sensitivity", std::to_string(sens));
-        ImGui::EndDisabled();
-        Row("Mouse camera", "Move the camera (right stick) with the mouse.");
-        ImGui::BeginDisabled(!mnk);
-        ToggleCvar("mnk_mouse");
-        ImGui::EndDisabled();
-      }
-      Row("Camera horizontal", "Which way the camera turns when you push the right stick left or right.");
-      ToggleCvar("kk_invert_rs_x", "Normal", "Inverted");
-      Row("Camera vertical", "Which way the right stick moves the camera up and down.");
-      ToggleCvar("kk_invert_rs_y", "Normal", "Inverted");
-      Row("Aim", "Hold: keep the left trigger held to raise the gun, as on the console. Toggle: press it once "
-                 "to raise the gun and again to lower it. Pausing lowers it.");
-      ToggleCvar("kk_toggle_aim", "Hold", "Toggle");
-      Row("Stick deadzone", "Ignores small stick movements. Raise it if the camera or cursor drifts.");
-      SliderCvar("kk_deadzone", 0, 40, "%d%%");
-      Row("Vibration", "Controller rumble.");
-      ToggleCvar("kk_vibration");
-      if (GetBool("kk_vibration")) {
-        Row("Vibration strength", "");
-        SliderCvar("kk_vibration_strength", 10, 100, "%d%%");
-      }
-      Row("Left stick", "Invert the left stick's axes.");
-      {
-        const bool x = GetBool("kk_invert_ls_x"), y = GetBool("kk_invert_ls_y");
-        const int sel = x && y ? 3 : x ? 1 : y ? 2 : 0;
-        if (int i = Segmented("ls", {"Normal", "Invert X", "Invert Y", "Both"}, sel); i >= 0) {
-          SetBool("kk_invert_ls_x", i == 1 || i == 3);
-          SetBool("kk_invert_ls_y", i == 2 || i == 3);
-        }
-      }
-      EndRows();
+  std::vector<Item> ControlsItems() {
+    std::vector<Item> items;
+    const auto percent = [](float v) { return std::to_string(int(std::lround(v))) + "%"; };
+    items.push_back(Section("Controller"));
+    items.push_back(CvarToggle("Input",
+                               "Controllers work automatically. Keyboard & mouse plays with a keyboard and mouse "
+                               "instead; its keys are under Keyboard bindings.",
+                               "mnk_mode", "Controller", "Keyboard & mouse"));
+    items.push_back(CvarChoice("Button prompts", "Which controller's buttons the game shows in menus and hints.",
+                               "kk_button_prompts",
+                               {{"Xbox 360", "xbox360"},
+                                {"Xbox Series", "xbox_series"},
+                                {"PlayStation 5", "ps5"},
+                                {"PlayStation 2", "ps2"},
+                                {"Keyboard", "keyboard"}}));
+    items.push_back(CvarSlider("Camera sensitivity", "How fast the right stick turns the camera and moves your aim.",
+                               "kk_camera_sensitivity", 25, 300, 5, percent));
+    items.push_back(CvarToggle("Camera response",
+                               "Modern turns the camera the same way in every direction, so circles and diagonals feel "
+                               "even. Original is the Xbox 360's own: small pushes up and down turn much more slowly "
+                               "than small pushes sideways.",
+                               "kk_camera_modern", "Original", "Modern"));
+    items.push_back(CvarToggle("Camera horizontal",
+                               "Which way the camera turns when you push the right stick left or right.",
+                               "kk_invert_rs_x", "Normal", "Inverted"));
+    items.push_back(CvarToggle("Camera vertical", "Which way the right stick moves the camera up and down.",
+                               "kk_invert_rs_y", "Normal", "Inverted"));
+    {
+      Item it;
+      it.type = ItemType::kChoice;
+      it.label = "Left stick";
+      it.description = "Invert the left stick's axes.";
+      it.options = {"Normal", "Invert X", "Invert Y", "Both"};
+      const bool x = GetBool("kk_invert_ls_x"), y = GetBool("kk_invert_ls_y");
+      it.index = x && y ? 3 : x ? 1 : y ? 2 : 0;
+      it.on_choice = [](int i) {
+        SetBool("kk_invert_ls_x", i == 1 || i == 3);
+        SetBool("kk_invert_ls_y", i == 2 || i == 3);
+      };
+      it.on_default = [] {
+        Reset("kk_invert_ls_x");
+        Reset("kk_invert_ls_y");
+      };
+      it.default_text = "Normal";
+      items.push_back(std::move(it));
     }
-    ImGui::Dummy(ImVec2(0, 6 * s_));
-    if (ImGui::CollapsingHeader("Button remapping")) DrawRemapTable();
-    if (ImGui::CollapsingHeader("Keyboard bindings")) DrawKeyboardTable();
+    items.push_back(CvarSlider("Stick deadzone", "Ignores small stick movements. Raise it if the camera or cursor drifts.",
+                               "kk_deadzone", 0, 40, 1, percent));
+    items.push_back(CvarToggle("Aim",
+                               "Hold: keep the left trigger held to raise the gun, as on the console. Toggle: press "
+                               "it once to raise the gun and again to lower it. Pausing lowers it.",
+                               "kk_toggle_aim", "Hold", "Toggle"));
+    items.push_back(CvarToggle("Vibration", "Controller rumble.", "kk_vibration"));
+    {
+      Item it = CvarSlider("Vibration strength", "How strong the rumble is.", "kk_vibration_strength", 10, 100, 5,
+                           percent);
+      items.push_back(std::move(Disable(it, !GetBool("kk_vibration"), "Switch Vibration on to set its strength.")));
+    }
+
+    const bool mnk = GetBool("mnk_mode");
+    const char* mnk_note = "Used when Input is Keyboard & mouse.";
+    items.push_back(Section("Keyboard & mouse"));
+    {
+      Item it = CvarSlider("Mouse sensitivity", "How fast the mouse turns the camera.", "mnk_sensitivity", 0.1f, 5.0f,
+                           0.05f, [](float v) {
+                             char buf[32];
+                             std::snprintf(buf, sizeof(buf), "%.2f" KK_TIMES, v);
+                             return std::string(buf);
+                           });
+      items.push_back(std::move(Disable(it, !mnk, mnk_note)));
+    }
+    {
+      Item it = CvarToggle("Mouse camera", "Move the camera (right stick) with the mouse.", "mnk_mouse");
+      items.push_back(std::move(Disable(it, !mnk, mnk_note)));
+    }
+
+    items.push_back(Section("Mapping"));
+    {
+      Item it;
+      it.type = ItemType::kLink;
+      it.label = "Button remapping";
+      it.description = "Choose what each controller button does in the game.";
+      it.on_activate = [this] { sub_ = kRemapPage; };
+      items.push_back(std::move(it));
+    }
+    {
+      Item it;
+      it.type = ItemType::kLink;
+      it.label = "Keyboard bindings";
+      it.description = "The keys that stand in for each controller button when Input is Keyboard & mouse.";
+      it.on_activate = [this] { sub_ = kKeysPage; };
+      items.push_back(std::move(it));
+    }
+    return items;
   }
 
-  void DrawRemapTable() {
-    if (ImGui::Button("Reset to defaults##remap"))
-      for (size_t i = 0; i < kPadCount; ++i) SetMapping(static_cast<Pad>(i), static_cast<Pad>(i));
-    if (!BeginRows("##remap")) return;
+  // The picture for a controller button on remapping rows.
+  rex::ui::ImmediateTexture* PadGlyph(Pad pad, float* aspect) {
+    static const char* const kNames[] = {"dpad_up", "dpad",  "dpad",        "dpad",        "start", "back",
+                                         "stick_click", "stick_click", "lb", "rb", "a", "b", "x", "y", "lt", "rt"};
+    const size_t i = size_t(pad);
+    if (i >= std::size(kNames)) return nullptr;
+    const std::string set = PadSet();
+    if (auto* t = glyphs_.Named(set, kNames[i], aspect)) return t;
+    return glyphs_.Named("xbox_series", kNames[i], aspect);
+  }
+
+  std::vector<Item> RemapItems() {
+    std::vector<Item> items;
+    items.push_back(Section(T("Controls") + std::string("  " KK_DOT "  ") + T("Button remapping")));
+    items.push_back(ActionItem("Reset to defaults", "Every button back to doing what it does on the Xbox 360.", "",
+                               [this] {
+                                 for (size_t i = 0; i < kPadCount; ++i) SetMapping(Pad(i), Pad(i));
+                                 ++g_changes;
+                                 Status("Buttons reset to the defaults.");
+                               }));
     for (size_t i = 0; i < kPadCount; ++i) {
-      const auto physical = static_cast<Pad>(i);
+      const Pad physical = static_cast<Pad>(i);
       const Pad target = GetMapping(physical);
-      Row(GetPadInfo(physical).label, nullptr);
-      ImGui::PushID(int(i));
-      const char* preview = target == Pad::kNone ? "(nothing)" : GetPadInfo(target).label;
-      if (ImGui::BeginCombo("##t", preview, ImGuiComboFlags_HeightLarge)) {
-        if (ImGui::Selectable("(nothing)", target == Pad::kNone)) SetMapping(physical, Pad::kNone);
-        for (size_t j = 0; j < kPadCount; ++j)
-          if (ImGui::Selectable(GetPadInfo(static_cast<Pad>(j)).label, target == static_cast<Pad>(j)))
-            SetMapping(physical, static_cast<Pad>(j));
-        ImGui::EndCombo();
-      }
-      ImGui::PopID();
+      Item it;
+      it.type = ItemType::kChoice;
+      it.label = GetPadInfo(physical).label;
+      it.description = F("What pressing {0} does in the game.", {T(std::string(GetPadInfo(physical).label))});
+      it.icon = PadGlyph(physical, &it.icon_aspect);
+      it.options.push_back("Nothing");
+      for (size_t j = 0; j < kPadCount; ++j) it.options.push_back(GetPadInfo(static_cast<Pad>(j)).label);
+      it.index = target == Pad::kNone ? 0 : int(target) + 1;
+      if (target != physical) it.value_color = color::kAccent;  // changed from the default
+      it.on_choice = [physical](int k) {
+        SetMapping(physical, k == 0 ? Pad::kNone : static_cast<Pad>(k - 1));
+        ++g_changes;
+      };
+      it.on_default = [physical] {
+        SetMapping(physical, physical);
+        ++g_changes;
+      };
+      it.default_text = GetPadInfo(physical).label;
+      items.push_back(std::move(it));
     }
-    EndRows();
+    return items;
   }
 
-  void DrawKeyboardTable() {
+  std::vector<Item> KeyItems() {
     std::vector<const rex::cvar::FlagEntry*> binds;
     for (auto& e : rex::cvar::GetRegistry())
       if (e.category == "Input/Keybinds/Controller") binds.push_back(&e);
-    if (ImGui::Button("Reset to defaults##keys"))
-      for (auto* e : binds) rex::cvar::ResetToDefault(e->name);
-    ImGui::SameLine();
-    ImGui::TextDisabled("Click a binding, then press a key (Esc cancels).");
-    if (!BeginRows("##keys")) return;
+    std::vector<Item> items;
+    items.push_back(Section(T("Controls") + std::string("  " KK_DOT "  ") + T("Keyboard bindings")));
+    items.push_back(ActionItem("Reset to defaults", "Every key back to its default.", "", [this, binds] {
+      for (auto* e : binds) Reset(e->name.c_str());
+      Status("Keys reset to the defaults.");
+    }));
+    auto pretty = [](std::string keys) {  // "Semicolon,Space" -> "Semicolon, Space"
+      for (size_t at = 0; (at = keys.find(',', at)) != std::string::npos; at += 2) keys.insert(at + 1, " ");
+      return keys;
+    };
     for (auto* e : binds) {
-      Row(e->description.c_str(), nullptr);
-      ImGui::PushID(e->name.c_str());
-      const bool capturing = capturing_ == e->name;
-      const std::string value = e->getter();
-      if (capturing ? AccentButton("Press a key...", ImVec2(-FLT_MIN, 0))
-                    : ImGui::Button(value.empty() ? "(none)" : value.c_str(), ImVec2(-FLT_MIN, 0)))
-        capturing_ = e->name;
-      ImGui::PopID();
-      if (capturing) CaptureKey(e->name);
+      const std::string value = pretty(e->getter());
+      Item it = ActionItem(e->description, "Select, then press the key to use. Esc cancels.",
+                           value.empty() ? "None" : value, [this, name = e->name, label = e->description] {
+                             capturing_ = name;
+                             ui::Modal m;
+                             m.open = true;
+                             m.title = "Press a key";
+                             m.body = F("For {0}. Esc cancels.", {T(label)});
+                             m.buttons = {"Cancel"};
+                             m.cancel = 0;
+                             m.on_button = [this](int) { capturing_.clear(); };
+                             modal_ = std::move(m);
+                           });
+      it.value_color = color::kText;
+      it.on_default = [name = e->name] { Reset(name.c_str()); };
+      it.default_text = e->default_value.empty() ? "None" : pretty(e->default_value);
+      items.push_back(std::move(it));
     }
-    EndRows();
+    return items;
   }
 
-  void CaptureKey(const std::string& cvar) {
-    if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+  // Waits for a key while a binding is being captured.
+  void CaptureKey() {
+    if (capturing_.empty()) return;
+    if (!modal_.open) {  // closed with the controller
       capturing_.clear();
+      return;
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+      capturing_.clear();
+      modal_.open = false;
+      input_.ConsumeAll();
       return;
     }
     for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; ++k) {
@@ -1308,78 +1897,105 @@ class Launcher final : public rex::ui::ImGuiDialog {
       const int vk = ImGuiKeyToVk(key);
       if (!vk) continue;
       const std::string name = rex::ui::VirtualKeyToString(static_cast<rex::ui::VirtualKey>(vk));
-      if (!name.empty()) rex::cvar::SetFlagByName(cvar, name);
+      if (!name.empty()) Set(capturing_.c_str(), name);
       capturing_.clear();
+      modal_.open = false;
+      input_.ConsumeAll();
       return;
     }
+  }
+
+  // ------------------------------------------------------------- Cheats ---
+  std::vector<Item> CheatItems() {
+    std::vector<Item> items;
+    items.push_back(Section("Cheats"));
+    items.push_back(CvarToggle("Cheats",
+                               "Switches on the cheats you pick below as soon as the game reaches its main menu, the "
+                               "same as typing their codes on the game's Cheat screen. They last until you quit the "
+                               "game.",
+                               "kk_cheats"));
+    const bool on = GetBool("kk_cheats");
+    items.push_back(Section("Cheat list"));
+    for (const auto& cheat : kCheats) {
+      Item it = CvarToggle(cheat.label, "One of the game's own cheats.", std::string("kk_cheat_") + cheat.id);
+      it.facts.push_back(F("Code: {0}", {cheat.code}));
+      items.push_back(std::move(Disable(it, !on, "Switch Cheats on to use it.")));
+    }
+    return items;
   }
 
   // ------------------------------------------------------- Achievements ---
-  // ------------------------------------------------------------- Cheats ---
-  void PageCheats() {
-    if (BeginRows("##cheats")) {
-      Row("Cheats", "Switches on the cheats you pick below as soon as the game reaches its main menu, the same "
-                    "as typing their codes on the game's Cheat screen. They last until you quit the game.");
-      ToggleCvar("kk_cheats", "Off", "On");
-      if (GetBool("kk_cheats")) {
-        for (const auto& cheat : kCheats) {
-          const std::string cvar = std::string("kk_cheat_") + cheat.id;
-          const std::string desc = std::string("Code: ") + cheat.code;
-          Row(cheat.label, desc.c_str());
-          ToggleCvar(cvar.c_str(), "Off", "On");
-        }
+  std::vector<Item> AchievementItems() {
+    std::vector<Item> items;
+    items.push_back(Section("Notifications"));
+    items.push_back(CvarToggle("Notifications", "An Xbox 360-style pop-up when you unlock an achievement in game.",
+                               "kk_achievement_toasts"));
+    items.push_back(CvarToggle("Sound", "The sound that plays with each pop-up.", "kk_achievement_sound"));
+    const bool sound = GetBool("kk_achievement_sound");
+    const char* sound_note = "Switch Sound on to choose it.";
+    {
+      if (sounds_.empty() || ImGui::GetTime() - sounds_scanned_ > 3.0) {
+        sounds_ = ListSounds(paths_.user_dir);
+        sounds_.insert(sounds_.begin(), std::filesystem::path());  // built-in chime
+        sounds_scanned_ = ImGui::GetTime();
       }
-      EndRows();
+      Item it;
+      it.type = ItemType::kChoice;
+      it.label = "Sound to play";
+      it.description =
+          "The built-in chime or a sound you added. Put .wav files in the sounds folder to see them here.";
+      const std::string cur = Get("kk_achievement_sound_file");
+      it.index = 0;
+      std::vector<std::string> values;
+      for (size_t i = 0; i < sounds_.size(); ++i) {
+        it.options.push_back(sounds_[i].empty() ? std::string("Original chime") : SoundLabel(sounds_[i]));
+        values.push_back(sounds_[i].string());
+        if (values.back() == cur) it.index = int(i);
+      }
+      it.on_choice = [this, values](int i) {
+        Set("kk_achievement_sound_file", values[size_t(i)]);
+        PlayAchievementSound(paths_.user_dir);  // preview
+      };
+      it.on_default = [] { Reset("kk_achievement_sound_file"); };
+      it.default_text = "Original chime";
+      items.push_back(std::move(Disable(it, !sound, sound_note)));
     }
-  }
-
-  void PageAchievements() {
-    if (BeginRows("##ach_settings")) {
-      Row("Notifications", "An Xbox 360-style pop-up when you unlock an achievement in game.");
-      ToggleCvar("kk_achievement_toasts", "Off", "On");
-      Row("Sound", "The sound that plays with each pop-up.");
-      ToggleCvar("kk_achievement_sound", "Off", "On");
-      if (GetBool("kk_achievement_sound")) {
-        Row("Sound to play",
-            "Pick the built-in chime or a sound you added. Put .wav files in the sounds folder to see them here.");
-        SoundCombo();
-        if (ImGui::Button("Open sounds folder", ImVec2(-FLT_MIN, 0))) {
-          OpenInExplorer(SoundsDir(paths_.user_dir));
-          sounds_.clear();  // rescan when the list is next drawn
-        }
-        Row("Volume", "");
-        int v = GetInt("kk_achievement_volume", 80);
-        if (ImGui::SliderInt("##vol", &v, 0, 100, "%d%%", ImGuiSliderFlags_AlwaysClamp))
-          SetInt("kk_achievement_volume", v);
-        if (ImGui::IsItemDeactivatedAfterEdit()) PlayAchievementSound(paths_.user_dir);
-      }
-      Row("Test", "Shows a sample notification right now.");
-      if (AccentButton("Test notification", ImVec2(-FLT_MIN, 0))) {
-        if (!GetBool("kk_achievement_toasts")) status_ = "Notifications are off; switch them on to see the test.";
-        const uint32_t icon = achievements_.empty() ? 0 : achievements_[test_index_++ % achievements_.size()].id;
-        toast_->Show("Test achievement", 10, icon);
-      }
-      EndRows();
+    {
+      Item it = CvarSlider("Volume", "How loud the sound is. It plays as you change it.", "kk_achievement_volume", 0,
+                           100, 5, [](float v) { return std::to_string(int(std::lround(v))) + "%"; });
+      auto set = it.on_value;
+      it.on_value = [this, set](float v) {
+        set(v);
+        preview_at_ = ImGui::GetTime() + 0.3;  // once it settles
+      };
+      items.push_back(std::move(Disable(it, !sound, sound_note)));
     }
-    ImGui::Dummy(ImVec2(0, 10 * s_));
+    items.push_back(ActionItem("Open sounds folder", "Where your own .wav sounds go.", "", [this] {
+      OpenInExplorer(SoundsDir(paths_.user_dir));
+      sounds_.clear();  // rescan when the list is next built
+    }));
+    items.push_back(ActionItem("Test notification", "Shows a sample notification right now.", "", [this] {
+      if (!GetBool("kk_achievement_toasts")) Status("Notifications are off; switch them on to see the test.");
+      const uint32_t icon = achievements_.empty() ? 0 : achievements_[test_index_++ % achievements_.size()].id;
+      toast_->Show("Test achievement", 10, icon);
+    }));
 
-    ImGui::PushFont(GetUiFonts().semibold, 0.0f);
-    ImGui::TextUnformatted("PC port");
-    ImGui::PopFont();
+    items.push_back(Section("PC port"));
     for (const auto& pa : PortAchievements()) {
-      Achievement card;
-      card.label = pa.title;
-      card.description = pa.description;
-      card.unlocked = IsPortAchievementUnlocked(paths_.user_dir, pa.id);
-      card.icon = title_icon_;
-      DrawAchievementCard(card, ImGui::GetContentRegionAvail().x);
+      const bool unlocked = IsPortAchievementUnlocked(paths_.user_dir, pa.id);
+      Item it;
+      it.type = ItemType::kInfo;
+      it.tall = true;
+      it.label = pa.title;
+      it.description = pa.description;
+      it.icon = title_icon_;
+      it.icon_dim = !unlocked;
+      it.value_text = unlocked ? "Unlocked" : "Locked";
+      it.value_color = unlocked ? color::kAccent : color::kTextFaint;
+      it.facts.push_back(unlocked ? "Unlocked" : "Not unlocked yet");
+      items.push_back(std::move(it));
     }
-    ImGui::Dummy(ImVec2(0, 10 * s_));
 
-    if (achievements_.empty()) {
-      ImGui::TextDisabled("Install the game to see its achievements.");
-      return;
-    }
     uint32_t unlocked = 0, score = 0, total_score = 0;
     for (auto& a : achievements_) {
       total_score += a.gamerscore;
@@ -1388,152 +2004,147 @@ class Launcher final : public rex::ui::ImGuiDialog {
         score += a.gamerscore;
       }
     }
-    ImGui::PushFont(GetUiFonts().semibold, 0.0f);
-    if (have_achievement_names_)
-      ImGui::Text("%u / %zu unlocked     %u / %u G", unlocked, achievements_.size(), score, total_score);
-    else
-      ImGui::Text("%u / %zu unlocked", unlocked, achievements_.size());
-    ImGui::PopFont();
-    if (!have_achievement_names_)
-      ImGui::TextDisabled("Names and descriptions appear after you have played the game once.");
-    ImGui::Dummy(ImVec2(0, 4 * s_));
-
-    const float avail = ImGui::GetContentRegionAvail().x;
-    const int cols = avail > 700 * s_ ? 2 : 1;
-    const float gap = 12 * s_;
-    const float card_w = (avail - gap * float(cols - 1)) / float(cols);
-    for (size_t i = 0; i < achievements_.size(); ++i) {
-      if (i % cols) ImGui::SameLine(0, gap);
-      DrawAchievementCard(achievements_[i], card_w);
+    std::string caption = "King Kong";
+    if (!achievements_.empty()) {
+      caption += "   " KK_DOT "   " +
+                 F("{0} of {1} unlocked", {std::to_string(unlocked), std::to_string(achievements_.size())});
+      if (have_achievement_names_)
+        caption += "   " KK_DOT "   " + std::to_string(score) + " / " + std::to_string(total_score) + " G";
     }
-  }
-
-  void SoundCombo() {
-    if (sounds_.empty() || ImGui::GetTime() - sounds_scanned_ > 3.0) {
-      sounds_ = ListSounds(paths_.user_dir);
-      sounds_.insert(sounds_.begin(), std::filesystem::path());  // built-in chime
-      sounds_scanned_ = ImGui::GetTime();
+    items.push_back(Section(caption));
+    if (achievements_.empty()) {
+      Item it;
+      it.type = ItemType::kInfo;
+      it.label = files_ok_ ? "Start the game once to see them" : "Install the game to see its achievements";
+      it.description = "The game's achievements, with their pictures, are read from the game the first time it runs.";
+      items.push_back(std::move(it));
     }
-    const std::string cur = Get("kk_achievement_sound_file");
-    auto label = [](const std::filesystem::path& p) { return p.empty() ? std::string("Original chime (built in)") : SoundLabel(p); };
-    std::string preview = "Original chime (built in)";
-    for (auto& p : sounds_)
-      if (p.string() == cur) preview = label(p);
-    if (ImGui::BeginCombo("##sound", preview.c_str(), ImGuiComboFlags_HeightLarge)) {
-      for (auto& p : sounds_) {
-        if (ImGui::Selectable(label(p).c_str(), p.string() == cur)) {
-          Set("kk_achievement_sound_file", p.string());
-          PlayAchievementSound(paths_.user_dir);  // preview
-        }
-      }
-      ImGui::EndCombo();
+    for (const auto& a : achievements_) {
+      Item it;
+      it.type = ItemType::kInfo;
+      it.tall = true;
+      it.label = a.label.empty() ? F("Achievement {0}", {std::to_string(a.id)}) : a.label;
+      it.description = a.unlocked || a.unachieved.empty() ? a.description : a.unachieved;
+      if (!have_achievement_names_) it.description = "Its name and description appear after you've played once.";
+      it.icon = a.icon;
+      it.icon_dim = !a.unlocked;
+      if (a.gamerscore) it.value_text = std::to_string(a.gamerscore) + " G";
+      it.value_color = a.unlocked ? color::kAccent : color::kTextFaint;
+      it.facts.push_back(a.unlocked ? "Unlocked" : "Not unlocked yet");
+      if (a.gamerscore) it.facts.push_back(F("{0} Gamerscore", {std::to_string(a.gamerscore)}));
+      items.push_back(std::move(it));
     }
-  }
-
-  void DrawAchievementCard(const Achievement& a, float card_w) {
-    const float card_h = 86 * s_, icon = 60 * s_;
-    const UiFonts& f = GetUiFonts();
-    const ImVec2 p = ImGui::GetCursorScreenPos();
-    ImGui::Dummy(ImVec2(card_w, card_h));
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->AddRectFilled(p, ImVec2(p.x + card_w, p.y + card_h), Col(a.unlocked ? kFrameHot : kFrame), 10 * s_);
-    if (a.unlocked)
-      dl->AddRectFilled(p, ImVec2(p.x + 4 * s_, p.y + card_h), Col(kAccent), 10 * s_, ImDrawFlags_RoundCornersLeft);
-    const ImVec2 i0(p.x + 14 * s_, p.y + (card_h - icon) * 0.5f);
-    if (a.icon)
-      dl->AddImageRounded(Tex(a.icon), i0, ImVec2(i0.x + icon, i0.y + icon), ImVec2(0, 0), ImVec2(1, 1),
-                          a.unlocked ? IM_COL32_WHITE : IM_COL32(105, 110, 125, 200), 8 * s_);
-    const float tx = i0.x + icon + 14 * s_;
-    const float right = p.x + card_w - 14 * s_;
-    const std::string title = a.label.empty() ? "Achievement " + std::to_string(a.id) : a.label;
-    dl->AddText(f.semibold, 18 * s_, ImVec2(tx, p.y + 12 * s_), a.unlocked ? IM_COL32_WHITE : Col(kDim), title.c_str());
-    if (a.gamerscore) {
-      const std::string g = std::to_string(a.gamerscore) + " G";
-      const ImVec2 gs = f.semibold->CalcTextSizeA(16 * s_, FLT_MAX, 0, g.c_str());
-      dl->AddText(f.semibold, 16 * s_, ImVec2(right - gs.x, p.y + 13 * s_), Col(a.unlocked ? kAccent : kDim), g.c_str());
-    }
-    const std::string& desc = a.unlocked || a.unachieved.empty() ? a.description : a.unachieved;
-    dl->AddText(f.regular, 15 * s_, ImVec2(tx, p.y + 38 * s_), Col(kDim), desc.c_str(), nullptr, right - tx);
-    if (a.unlocked) dl->AddText(f.semibold, 13 * s_, ImVec2(tx, p.y + card_h - 22 * s_), Col(kAccent), "UNLOCKED");
+    return items;
   }
 
   // -------------------------------------------------------------- About ---
-  void PageAbout() {
-    ImGui::PushStyleColor(ImGuiCol_Text, kDim);
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted(
-        "Peter Jackson's King Kong: The Official Game of the Movie (Ubisoft, 2005) running natively on PC: the "
-        "original Xbox 360 game code statically recompiled to C++ with the ReXGlue SDK. No game code or assets are "
-        "included; the game runs from your own disc image.");
-    ImGui::PopTextWrapPos();
-    ImGui::PopStyleColor();
-    ImGui::Dummy(ImVec2(0, 4 * s_));
-    if (!BeginRows("##about")) return;
-    Row("Save data", "Your saves, achievements and caches.");
-    if (ImGui::Button("Open save folder", ImVec2(-FLT_MIN, 0))) OpenInExplorer(paths_.user_dir);
-    Row("Game files", "Where the game is installed.");
-    if (ImGui::Button("Open game folder", ImVec2(-FLT_MIN, 0))) OpenInExplorer(paths_.game_dir);
-    Row("Settings file", "Every launcher setting, as plain text.");
-    if (ImGui::Button("Open settings file", ImVec2(-FLT_MIN, 0))) {
+  std::vector<Item> AboutItems() {
+    std::vector<Item> items;
+    items.push_back(Section("King Kong PC port"));
+    {
+      Item it;
+      it.type = ItemType::kInfo;
+      it.label = "Version";
+      it.value_text = "v" KK_VERSION;
+      it.description =
+          "Peter Jackson's King Kong: The Official Game of the Movie (Ubisoft, 2005) running natively on PC: the "
+          "original Xbox 360 game code statically recompiled to C++ with the ReXGlue SDK. No game code or assets are "
+          "included; the game runs from your own disc image.";
+      it.facts = {"ReXGlue SDK 0.10.0", F("Title {0}, v{1}", {"555307D3", "0.0.0.1"})};
+      items.push_back(std::move(it));
+    }
+    {
+      Item it;
+      it.type = ItemType::kLink;
+      it.label = "Version history";
+      it.description = "What each version of the port added, newest first.";
+      it.on_activate = [this] { OpenVersionHistory(); };
+      items.push_back(std::move(it));
+    }
+    items.push_back(ActionItem("Project page", "The port's GitHub page: releases, issues and the source code.",
+                               "GitHub", [] { OpenUrl(kProjectUrl); }));
+
+    items.push_back(Section("Launcher"));
+    items.push_back(CvarToggle("Show this launcher",
+                               "Off starts the game directly. Hold Shift while starting to bring the launcher back.",
+                               "kk_launcher", "Off", "At startup"));
+    items.push_back(CvarToggle("Music", "The game's main menu music while the launcher is open, from your copy of the game.",
+                               "kk_launcher_music"));
+    {
+      Item it = CvarSlider("Music volume", "How loud the launcher's music is.", "kk_launcher_music_volume", 0, 100, 5,
+                           [](float v) { return std::to_string(int(std::lround(v))) + "%"; });
+      items.push_back(std::move(Disable(it, !GetBool("kk_launcher_music"), "Switch Music on to set its volume.")));
+    }
+    items.push_back(CvarToggle("Menu sounds", "The game's own menu sounds as you move around the launcher and choose things.",
+                               "kk_launcher_sounds"));
+    {
+      Item it = CvarSlider("Menu sound volume", "How loud the launcher's menu sounds are.",
+                           "kk_launcher_sounds_volume", 0, 100, 5,
+                           [](float v) { return std::to_string(int(std::lround(v))) + "%"; });
+      items.push_back(std::move(Disable(it, !GetBool("kk_launcher_sounds"), "Switch Menu sounds on to set their volume.")));
+    }
+    items.push_back(CvarToggle("Check for updates",
+                               "Checks GitHub for a newer version of the port each time the launcher opens, and offers "
+                               "it. The shader pack keeps itself up to date either way.",
+                               "kk_check_updates", "Off", "At startup"));
+    items.push_back(ActionItem("Check for updates now", "Looks for a newer version of the port right now.",
+                               update_ && update_->busy ? "Checking..." : "",
+                               [this] { StartUpdateCheck(true); }));
+    {
+      Item it = ActionItem("Shader pack",
+                           "Effects already prepared by playing through the game, so it pauses for new ones less "
+                           "often. Each time the launcher opens, it downloads the newest pack from the port's GitHub "
+                           "page by itself.",
+                           PackStatusText(), [this] {
+                             if (!pack_.busy) StartPackDownload();
+                           });
+      if (pack_.failed) {
+        it.value_color = color::kWarn;
+        it.facts.push_back(pack_.message);
+        it.facts.push_back("Select to try again.");
+      } else if (!pack_.busy && !pack_.done) {
+        it.facts.push_back("Select to download it now.");
+      }
+      if (pack_.busy) it.on_activate = nullptr;
+      items.push_back(std::move(it));
+    }
+
+    items.push_back(Section("Files"));
+    items.push_back(ActionItem("Open save folder", "Your saves, achievements and caches.", "",
+                               [this] { OpenInExplorer(paths_.user_dir); }));
+    {
+      Item it = ActionItem("Open game folder", "Where the game is installed.", "", [this] { OpenInExplorer(paths_.game_dir); });
+      it.facts.push_back(paths_.game_dir.string());
+      items.push_back(std::move(it));
+    }
+    items.push_back(ActionItem("Open settings file", "Every launcher setting, as plain text.", "", [this] {
       SaveSettings(paths_.config_path);
       OpenInExplorer(paths_.config_path);
+    }));
+    {
+      const bool have = art::HasLauncherArt(ArtDir());
+      Item it = ActionItem("Launcher art",
+                           "The launcher's logo and backgrounds come from your copy of the game: the game's own logo, "
+                           "and stills from the movie trailer and the intro on the disc.",
+                           art_progress_.busy ? "Preparing..." : have ? "From your game files" : "Not taken yet",
+                           [this] {
+                             if (files_ok_) StartArtExtraction(false);
+                           });
+      if (art_progress_.failed) it.facts.push_back(art_progress_.message);
+      if (files_ok_ && !art_progress_.busy) it.facts.push_back("Select to take it from the game files again.");
+      if (!files_ok_ || art_progress_.busy) it.on_activate = nullptr;
+      items.push_back(std::move(it));
     }
-    Row("Launcher art", "The header shows the game's own menu screen, captured the first time you reach it.");
-    if (ImGui::Button(title_art_ ? "Capture again next time I play" : "Captured on your first play", ImVec2(-FLT_MIN, 0))) {
-      std::error_code ec;
-      std::filesystem::remove(art::TitleCapturePath(paths_.user_dir), ec);
-      status_ = "The menu screen will be captured again next time you play.";
-    }
-    Row("Reset settings", "Put every setting back to its default.");
-    if (ImGui::Button("Reset all settings", ImVec2(-FLT_MIN, 0))) ImGui::OpenPopup("Reset all settings?");
-    if (ImGui::BeginPopupModal("Reset all settings?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-      ImGui::Dummy(ImVec2(320 * s_, 4 * s_));
-      ImGui::SetCursorPosX(16 * s_);
-      ImGui::TextUnformatted("Every setting goes back to its default.");
-      ImGui::Dummy(ImVec2(0, 4 * s_));
-      ImGui::SetCursorPosX(16 * s_);
-      if (AccentButton("Reset", ImVec2(140 * s_, 0))) {
-        ResetAllSettings();
-        ImGui::CloseCurrentPopup();
-      }
-      ImGui::SameLine();
-      if (ImGui::Button("Cancel", ImVec2(140 * s_, 0))) ImGui::CloseCurrentPopup();
-      ImGui::Dummy(ImVec2(0, 8 * s_));
-      ImGui::EndPopup();
-    }
-    Row("Updates", "Checks GitHub for a newer version of the port each time the launcher opens, and offers it. "
-                   "The shader pack keeps itself up to date either way.");
-    ToggleCvar("kk_check_updates", "Off", "At startup");
-    Row("", "");
-    if (ImGui::Button(update_ && update_->busy ? "Checking..." : "Check for updates now", ImVec2(-FLT_MIN, 0)))
-      StartUpdateCheck(true);
-    Row("Version", "Port v" KK_VERSION "   \xC2\xB7   ReXGlue SDK 0.10.0   \xC2\xB7   title 555307D3, v0.0.0.1");
-    ImGui::TextDisabled("github.com/TekRantGaming/king-kong-recompiled");
-    EndRows();
-    // Every version's notes, newest first.
-    ImGui::Dummy(ImVec2(0, 10 * s_));
-    ImGui::PushFont(GetUiFonts().semibold, 20.0f);
-    ImGui::TextUnformatted("Changelog");
-    ImGui::PopFont();
-    ImGui::PushStyleColor(ImGuiCol_Text, kDim);
-    ImGui::TextUnformatted("What each version of the port added, newest first.");
-    ImGui::PopStyleColor();
-    ImGui::Dummy(ImVec2(0, 4 * s_));
-    ImGui::BeginChild("##changelog", ImVec2(0, 380 * s_), ImGuiChildFlags_Borders);
-    bool first = true;
-    for (const auto& e : Changelog()) {
-      if (!first) {
-        ImGui::Dummy(ImVec2(0, 6 * s_));
-        ImGui::Separator();
-      }
-      DrawChangelogEntry(e);
-      first = false;
-    }
-    ImGui::EndChild();
+
+    items.push_back(Section("Reset"));
+    items.push_back(ActionItem("Reset all settings", "Put every setting on every page back to its default.", "",
+                               [this] { OpenResetAll(); }));
+    return items;
   }
 
-  // The settings each page shows, for its "Reset page" button. "x_*" is a
-  // prefix, "@category" a cvar category.
+  // ------------------------------------------------------------- reset ---
+  // The settings each page shows, for Reset page. "x_*" is a prefix,
+  // "@category" a cvar category.
   static std::vector<std::string> PageSettings(Page page) {
     switch (page) {
       case kDisplay:
@@ -1541,15 +2152,15 @@ class Launcher final : public rex::ui::ImGuiDialog {
                 "d3d12_allow_variable_refresh_rate_and_tearing", "present_letterbox"};
       case kGraphics:
         return {"kk_original_look", "kk_modern_settings", "present_effect", "kk_render_quality", "resolution_scale",
-                "draw_resolution_scale_x", "draw_resolution_scale_y",
-                "swap_post_effect", "anisotropic_override", "kk_motion_blur", "kk_big_blur", "kk_fog", "ao_mode", "ao_strength",
-                "async_shader_compilation", "async_shader_wait_ms"};
+                "draw_resolution_scale_x", "draw_resolution_scale_y", "swap_post_effect", "anisotropic_override",
+                "kk_motion_blur", "kk_big_blur", "kk_fog", "ao_mode", "ao_strength"};
       case kGameplay:
         return {"kk_frame_rate", "kk_fov", "kk_show_fps", "kk_skip_intros", "user_language"};
       case kControls:
-        return {"mnk_mode", "kk_button_prompts", "kk_camera_sensitivity", "kk_camera_modern", "mnk_sensitivity", "mnk_mouse",
-                "kk_invert_rs_x", "kk_invert_rs_y", "kk_invert_ls_x", "kk_invert_ls_y", "kk_toggle_aim",
-                "kk_deadzone", "kk_vibration", "kk_vibration_strength", "kk_map_*", "@Input/Keybinds/Controller"};
+        return {"mnk_mode", "kk_button_prompts", "kk_camera_sensitivity", "kk_camera_modern", "mnk_sensitivity",
+                "mnk_mouse", "kk_invert_rs_x", "kk_invert_rs_y", "kk_invert_ls_x", "kk_invert_ls_y",
+                "kk_toggle_aim", "kk_deadzone", "kk_vibration", "kk_vibration_strength", "kk_map_*",
+                "@Input/Keybinds/Controller"};
       case kCheatsPage:
         return {"kk_cheats", "kk_cheat_*"};
       case kAchievements:
@@ -1576,8 +2187,9 @@ class Launcher final : public rex::ui::ImGuiDialog {
       if (e.source == rex::cvar::Source::kCommandLine || e.source == rex::cvar::Source::kEnvironment) continue;
       rex::cvar::ResetToDefault(e.name);
     }
+    ++g_changes;
     if (page == kDisplay && cb_.set_fullscreen) cb_.set_fullscreen(GetBool("fullscreen"));
-    status_ = std::string(kPageNames[page]) + " settings reset to defaults. Press Save to keep them.";
+    Status(F("{0} settings are back to their defaults.", {T(std::string(kPageNames[page]))}));
   }
 
   void ResetAllSettings() {
@@ -1586,101 +2198,105 @@ class Launcher final : public rex::ui::ImGuiDialog {
       if (e.source == rex::cvar::Source::kCommandLine || e.source == rex::cvar::Source::kEnvironment) continue;
       rex::cvar::ResetToDefault(e.name);
     }
+    ++g_changes;
     if (cb_.set_fullscreen) cb_.set_fullscreen(GetBool("fullscreen"));
-    status_ = "Settings reset to defaults.";
+    Status("Every setting is back to its default.");
   }
 
-  // ------------------------------------------------------------- footer ---
-  void DrawFooter(ImVec2 origin, float w, float h) {
-    const float bw = 130 * s_, play_w = 210 * s_;
-    const float bh = 48 * s_;
-    const float cy = origin.y + h * 0.5f;
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    const UiFonts& f = GetUiFonts();
-    dl->AddText(f.regular, 15 * s_, ImVec2(origin.x, cy - 20 * s_), Col(kDim),
-                "Enter  Play        Esc  Quit        Ctrl+S  Save");
-    dl->AddText(f.regular, 15 * s_, ImVec2(origin.x, cy + 2 * s_), Col(kDim),
-                status_.empty() ? "Settings are saved when you press Play." : status_.c_str());
-
-    const float right = origin.x + w;
-    ImGui::SetCursorScreenPos(ImVec2(right - play_w - bw * 2 - 24 * s_, cy - bh * 0.5f));
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 12 * s_);
-    if (ImGui::Button("Quit", ImVec2(bw, bh)) && cb_.quit) cb_.quit();
-    ImGui::SameLine(0, 12 * s_);
-    if (ImGui::Button("Save", ImVec2(bw, bh))) Save();
-    ImGui::SameLine(0, 12 * s_);
-    ImGui::PopStyleVar();
-    DrawPlayButton(ImVec2(play_w, bh));
+  // ------------------------------------------------------------ pop-ups ---
+  void OpenModal(std::string title, std::string body, std::vector<std::string> buttons, int cancel,
+                 std::function<void(int)> on_button, int focus = 0) {
+    ui::Modal m;
+    m.open = true;
+    m.title = std::move(title);
+    m.body = std::move(body);
+    m.buttons = std::move(buttons);
+    m.cancel = cancel;
+    m.focus = focus;
+    m.on_button = std::move(on_button);
+    modal_ = std::move(m);
   }
 
-  void DrawPlayButton(ImVec2 size) {
-    const bool can_play = files_ok_ && !installing_;
-    const ImVec2 p = ImGui::GetCursorScreenPos();
-    ImGui::BeginDisabled(!can_play);
-    const bool clicked = ImGui::InvisibleButton("##play", size);
-    ImGui::EndDisabled();
-    const bool hot = can_play && ImGui::IsItemHovered();
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    if (can_play)
-      dl->AddRectFilled(ImVec2(p.x - 3 * s_, p.y - 3 * s_), ImVec2(p.x + size.x + 3 * s_, p.y + size.y + 3 * s_),
-                        Col(kAccent, hot ? 0.35f : 0.18f), size.y * 0.5f + 3 * s_);
-    dl->AddRectFilled(p, ImVec2(p.x + size.x, p.y + size.y), can_play ? Col(hot ? kAccentHot : kAccent) : Col(kFrame),
-                      size.y * 0.5f);
-    const UiFonts& f = GetUiFonts();
-    const float fs = 22 * s_;
-    const ImVec2 ts = f.bold->CalcTextSizeA(fs, FLT_MAX, 0, "PLAY");
-    const float tri = fs * 0.5f;
-    const float total = ts.x + 12 * s_ + tri;
-    const float tx = p.x + (size.x - total) * 0.5f, ty = p.y + (size.y - ts.y) * 0.5f;
-    const ImU32 ink = can_play ? Col(kOnAccent) : Col(kDim);
-    dl->AddText(f.bold, fs, ImVec2(tx, ty), ink, "PLAY");
-    const float ax = tx + ts.x + 12 * s_, ay = p.y + size.y * 0.5f;
-    dl->AddTriangleFilled(ImVec2(ax, ay - tri * 0.6f), ImVec2(ax, ay + tri * 0.6f), ImVec2(ax + tri, ay), ink);
-    if (clicked) Play();
+  void OpenQuit() {
+    OpenModal("Quit", "Close the launcher without starting the game?", {"Quit", "Cancel"}, 1, [this](int i) {
+      if (i == 0) Quit();
+    });
   }
 
-  void HandleHotkeys() {
-    if (!capturing_.empty() || ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) || ImGui::GetIO().WantTextInput)
-      return;
-    if (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)) {
-      if (files_ok_ && !installing_) Play();
-    } else if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
-      if (cb_.quit) cb_.quit();
-    } else if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) {
-      Save();
+  void OpenResetPage() {
+    const Page page = page_;
+    const std::string name = T(std::string(kPageNames[page]));
+    OpenModal(F("Reset {0}", {name}),
+              F("Put the {0} settings back to their defaults? Settings on the other pages stay as they are.", {name}),
+              {"Reset", "Cancel"}, 1, [this, page](int i) {
+                if (i == 0) ResetPage(page);
+              }, 1);
+  }
+
+  void OpenResetAll() {
+    OpenModal("Reset all settings", "Put every setting on every page back to its default?", {"Reset", "Cancel"}, 1,
+              [this](int i) {
+                if (i == 0) ResetAllSettings();
+              }, 1);
+  }
+
+  static std::string ChangelogText(const ChangelogEntry& e) {
+    return "## v" + e.version + "|" + e.date + "\n" + e.body + "\n";
+  }
+
+  void OpenVersionHistory() {
+    std::string text;
+    for (const auto& e : Changelog()) text += ChangelogText(e);
+    OpenModal("Version history", "", {"Close"}, 0, nullptr);
+    modal_.reader = text;
+    modal_.width = 780;
+  }
+
+  // Shown once after an update: the notes of every version since the last one run.
+  void OpenWhatsNew() {
+    std::string text;
+    for (const auto& e : Changelog()) {
+      if (CompareVersions(e.version, KK_VERSION) > 0) continue;
+      if (!whats_new_from_.empty() && CompareVersions(e.version, whats_new_from_) <= 0) break;
+      text += ChangelogText(e);
+      if (whats_new_from_.empty()) break;  // only this version when we don't know the last one
     }
+    OpenModal(F("What's new in v{0}", {KK_VERSION}), "", {"Close", "Every version"}, 0, [this](int i) {
+      if (i == 1) OpenVersionHistory();
+    });
+    modal_.reader = text;
+    modal_.width = 780;
   }
-
-  void Save() { status_ = SaveSettings(paths_.config_path) ? "Settings saved." : "Could not save settings."; }
 
   // Above 30 FPS some animations are wrong (game logic stepped per frame), so
   // say so before starting and offer 30 or 60 instead.
-  void Play() {
-    if (played_) return;
+  void OpenFrameRateWarning() {
     const int fps = GetInt("kk_frame_rate", 30);
-    if (fps > 0 && fps <= 30) return StartGame();
-    open_fps_warning_ = true;
-  }
-
-  // A pop-up in the launcher's own colours (the default popup style is for
-  // dropdowns), centred, `width` wide. Call ImGui::EndPopup() when it returns true.
-  bool BeginModal(const char* title, float width, bool title_bar = true) {
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(vp->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(std::min(width * s_, vp->Size.x - 40 * s_), 0));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(24 * s_, 20 * s_));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12 * s_);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
-    ImGui::PushStyleColor(ImGuiCol_PopupBg, kPanel);
-    ImGui::PushStyleColor(ImGuiCol_TitleBg, kFrame);
-    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, kFrame);
-    ImGui::PushStyleColor(ImGuiCol_Border, kWarn);
-    const bool open = ImGui::BeginPopupModal(
-        title, nullptr,
-        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | (title_bar ? 0 : ImGuiWindowFlags_NoTitleBar));
-    ImGui::PopStyleColor(4);
-    ImGui::PopStyleVar(3);
-    return open;
+    const std::string current = fps <= 0 ? T(std::string("an unlimited frame rate")) : std::to_string(fps) + " FPS";
+    std::vector<std::string> buttons = {"Play at 30 FPS"};
+    std::vector<int> rates = {30};
+    if (fps != 60) {
+      buttons.push_back("Play at 60 FPS");
+      rates.push_back(60);
+      buttons.push_back(fps <= 0 ? std::string("Keep unlimited") : F("Keep {0} FPS", {std::to_string(fps)}));
+      rates.push_back(fps);
+    } else {
+      buttons.push_back("Keep 60 FPS");
+      rates.push_back(60);
+    }
+    buttons.push_back("Back");
+    OpenModal("Frame rate above 30 FPS",
+              F("You have chosen {0}. King Kong was made to run at 30 FPS, and above that some character animations "
+                "can look wrong, such as the crew rowing the boat at the start.\n\nWe recommend 30 FPS. 60 FPS also "
+                "works well: the issues are still there, but much less noticeable. This will be fixed in a future "
+                "update.",
+                {current}),
+              buttons, int(buttons.size()) - 1, [this, rates](int i) {
+                if (i >= int(rates.size())) return;
+                SetInt("kk_frame_rate", rates[size_t(i)]);
+                StartGame();
+              });
+    modal_.width = 640;
   }
 
   // ------------------------------------------------------------- updates ---
@@ -1695,157 +2311,299 @@ class Launcher final : public rex::ui::ImGuiDialog {
     std::thread([s = update_] { CheckForUpdate(*s); }).detach();
   }
 
-  void DrawUpdatePrompt() {
-    constexpr const char* kTitle = "Update available";
+  void OpenUpdatePrompt() {
+    if (!update_ || !update_->found) return;
+    const UpdateInfo info = *update_->found;
+    OpenModal("Update available",
+              F("Version {0} of the King Kong PC port is out. You have version {1}.\n\nUpdating replaces the port's "
+                "own files and restarts the launcher. Your installed game, saves and settings stay as they are.",
+                {info.version, KK_VERSION}),
+              {"Update now", "What's new", "Later"}, 2, [this, info](int i) {
+                if (i == 0) {
+                  // The update screen shows the download (SetupStage 3).
+                  installing_update_ = true;
+                  update_->done = update_->failed = false;
+                  update_->busy = true;
+                  update_->bytes = update_->total = 0;
+                  std::thread([s = update_, info] { InstallUpdate(info, *s); }).detach();
+                } else if (i == 1) {
+                  OpenUrl(info.page_url);
+                  OpenUpdatePrompt();
+                }
+              });
+  }
+
+  void TickUpdate() {
     if (!update_) return;
     if (update_manual_ && !update_->busy && (update_->done || update_->failed) && !update_->found) {
-      status_ = update_->failed ? update_->message : "You have the newest version (v" KK_VERSION ").";
+      Status(update_->failed ? update_->message : F("You have the newest version (v{0}).", {KK_VERSION}));
       update_manual_ = false;
     }
-    if (update_->found && !update_prompted_ && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) {
-      ImGui::OpenPopup(kTitle);
+    if (update_->found && !update_prompted_ && !modal_.open && !installing_update_) {
+      OpenUpdatePrompt();
       update_prompted_ = true;
     }
-    if (!BeginModal(kTitle, 560)) return;
-    const UpdateInfo& info = *update_->found;
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::Text("Version %s of the King Kong PC port is out. You have version %s.", info.version.c_str(), KK_VERSION);
-    ImGui::Dummy(ImVec2(0, 6 * s_));
-    ImGui::PushStyleColor(ImGuiCol_Text, kDim);
-    ImGui::TextUnformatted("Updating replaces the port's own files and restarts the launcher. Your installed game, "
-                           "saves and settings stay as they are.");
-    ImGui::PopStyleColor();
-    ImGui::PopTextWrapPos();
-    ImGui::Dummy(ImVec2(0, 10 * s_));
-    if (installing_update_) {
-      const float total = float(update_->total.load()), got = float(update_->bytes.load());
-      if (update_->busy) {
-        ImGui::ProgressBar(total > 0 ? got / total : 0.0f, ImVec2(-FLT_MIN, 0),
-                           total > 0 ? nullptr : "Downloading...");
-      } else if (update_->failed) {
-        ImGui::TextWrapped("%s", update_->message.c_str());
-        if (ImGui::Button("Close", ImVec2(-FLT_MIN, 0))) {
-          installing_update_ = false;
-          ImGui::CloseCurrentPopup();
-        }
-      } else if (update_->done) {
-        ImGui::TextUnformatted(update_->message.c_str());
-        if (!relaunched_) {  // start the new version, then close this one
-          relaunched_ = true;
-          RelaunchSelf(L"");
-          if (cb_.quit) cb_.quit();
-        }
+    if (!installing_update_ || update_->busy) return;
+    if (update_->failed) {
+      installing_update_ = false;
+      OpenModal("Update failed", update_->message, {"Close"}, 0, nullptr);
+    } else if (update_->done && !relaunched_) {  // start the new version, then close this one
+      relaunched_ = true;
+      RelaunchSelf(L"");
+      if (cb_.quit) cb_.quit();
+    }
+  }
+
+  // ------------------------------------------------------ add to Steam ---
+  // Home offers Add to Steam while Steam is installed and this copy isn't in
+  // its library yet (steam_shortcut.h). Steam reads its non-Steam games only
+  // when it starts, so an open Steam closes first and opens again afterwards.
+  void StartSteamCheck() {
+    steam_ = std::make_shared<SteamState>();
+    std::thread([s = steam_] {
+      if (steam::StartedFromSteam()) return;
+      if (const auto where = steam::Locate()) {
+        s->in_library = steam::HasShortcut(*where);
+        s->available = true;
       }
-      ImGui::EndPopup();
+    }).detach();
+  }
+
+  void OpenSteamPrompt() {
+    if (!steam_ || steam_->busy) return;
+    const bool running = steam::SteamRunning();
+    OpenModal("Add to Steam",
+              running ? "Adds King Kong to your Steam library as a non-Steam game, with artwork from SteamGridDB, so "
+                        "you can start it from Steam, Big Picture or a Steam Deck.\n\nSteam reads its list of games "
+                        "only when it starts, so it closes for a moment and opens again afterwards."
+                      : "Adds King Kong to your Steam library as a non-Steam game, with artwork from SteamGridDB, so "
+                        "you can start it from Steam, Big Picture or a Steam Deck.",
+              {running ? "Close Steam and add" : "Add to Steam", "Cancel"}, 1, [this](int i) {
+                if (i == 0) StartAddToSteam();
+              });
+  }
+
+  void StartAddToSteam() {
+    auto s = steam_;
+    s->busy = true;
+    s->done = false;
+    s->phase = 0;
+    OpenModal("Adding to Steam", "", {}, -1, nullptr);
+    modal_.progress = [] { return -1.0f; };
+    modal_.live = [s] { return T(kSteamPhases[std::clamp(s->phase.load(), 0, 3)]); };
+    std::thread([s] {
+      auto finish = [&](steam::Result r) {
+        s->result = std::move(r);
+        s->busy = false;
+        s->done = true;
+      };
+      const auto where = steam::Locate();
+      if (!where) return finish({false, false, 0, "Steam wasn't found on this computer, or nobody has signed in to it yet."});
+      const auto art = steam::DownloadArt();
+      const bool running = steam::SteamRunning();
+      if (running) {
+        s->phase = 1;
+        steam::CloseSteam();
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        while (steam::SteamRunning()) {
+          if (std::chrono::steady_clock::now() > deadline)
+            return finish({false, false, 0, "Steam didn't close. Close Steam yourself, then choose Add to Steam again."});
+          std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));  // Steam's last writes
+      }
+      s->phase = 2;
+      steam::Result r = steam::AddShortcut(*where, art);
+      if (running) {
+        s->phase = 3;
+        steam::OpenSteam();
+        s->reopened = true;
+      }
+      finish(std::move(r));
+    }).detach();
+  }
+
+  void TickSteam() {
+    if (!steam_ || !steam_->done) return;
+    steam_->done = false;
+    const steam::Result& r = steam_->result;
+    if (!r.ok) {
+      OpenModal("Add to Steam", r.error, {"Close"}, 0, nullptr);
       return;
     }
-    const float bw = (ImGui::GetContentRegionAvail().x - 16 * s_) / 3;
-    if (AccentButton("Update now", ImVec2(bw, 0))) {
-      installing_update_ = true;
-      update_->done = update_->failed = false;
-      std::thread([s = update_, info] { InstallUpdate(info, *s); }).detach();
-    }
-    ImGui::SameLine(0, 8 * s_);
-    if (ImGui::Button("What's new", ImVec2(bw, 0))) OpenUrl(info.page_url);
-    ImGui::SameLine(0, 8 * s_);
-    if (ImGui::Button("Later", ImVec2(bw, 0))) ImGui::CloseCurrentPopup();
-    ImGui::EndPopup();
+    steam_->in_library = true;
+    std::string body = r.art == 5   ? T("King Kong is in your Steam library, with its artwork.")
+                       : r.art > 0 ? F("King Kong is in your Steam library, with {0} of its 5 artwork pictures; the "
+                                       "others didn't download.",
+                                       {std::to_string(r.art)})
+                                   : T("King Kong is in your Steam library, but its artwork didn't download, so Steam "
+                                       "shows a plain tile.");
+    if (steam_->reopened) body += std::string("\n\n") + T("Steam is opening again.");
+    OpenModal("Added to Steam", body, {"OK"}, 0, nullptr);
   }
 
-  // ----------------------------------------------------------- changelog ---
-  // Draws a version's notes: "### Heading", "- bullet" (two spaces more per
-  // level), paragraphs. Inline **bold**, `code` and [text](link) show as text.
-  static std::string PlainText(std::string s) {
-    for (const char* mark : {"**", "`"})
-      for (size_t at; (at = s.find(mark)) != std::string::npos;) s.erase(at, std::strlen(mark));
-    for (size_t open; (open = s.find('[')) != std::string::npos;) {
-      const size_t mid = s.find("](", open), close = mid == std::string::npos ? mid : s.find(')', mid);
-      if (close == std::string::npos) break;
-      s = s.substr(0, open) + s.substr(open + 1, mid - open - 1) + s.substr(close + 1);
-    }
-    return s;
+  // ------------------------------------------------------- shader pack ---
+  std::filesystem::path CacheDir() const {
+    const std::string root = Get("cache_root");
+    return root.empty() ? paths_.user_dir / "cache" : std::filesystem::path(root);
   }
 
-  void DrawMarkdown(const std::string& body) {
-    std::stringstream in(body);
-    for (std::string line; std::getline(in, line);) {
-      if (line.empty()) {
-        ImGui::Dummy(ImVec2(0, 4 * s_));
-      } else if (line.rfind("### ", 0) == 0) {
-        ImGui::Dummy(ImVec2(0, 4 * s_));
-        ImGui::PushFont(GetUiFonts().semibold, 17.0f);
-        ImGui::TextUnformatted(PlainText(line.substr(4)).c_str());
-        ImGui::PopFont();
-      } else {
-        size_t indent = 0;
-        while (indent < line.size() && line[indent] == ' ') ++indent;
-        const bool bullet = line.compare(indent, 2, "- ") == 0;
-        const std::string text = PlainText(line.substr(indent + (bullet ? 2 : 0)));
-        const float x = (indent / 2) * 18 * s_;
-        if (x > 0) ImGui::Indent(x);
-        if (bullet) {
-          ImGui::Bullet();
-          ImGui::SameLine();
-        }
-        ImGui::PushTextWrapPos(0.0f);
-        ImGui::TextUnformatted(text.c_str());
-        ImGui::PopTextWrapPos();
-        if (x > 0) ImGui::Unindent(x);
-      }
+  // Collects a finished download and reads which pack is installed.
+  void RefreshPack() {
+    if (!pack_.busy && pack_thread_.joinable()) {
+      pack_thread_.join();
+      pack_installed_ = -1;
+    }
+    if (pack_installed_ < 0) pack_installed_ = InstalledShaderPackVersion(CacheDir());
+  }
+
+  void StartPackDownload() {
+    if (pack_.busy) return;
+    if (pack_thread_.joinable()) pack_thread_.join();
+    pack_.done = pack_.failed = false;
+    pack_.busy = true;
+    pack_thread_ = std::thread([this, dir = CacheDir()] { DownloadAndInstallShaderPack(dir, pack_); });
+  }
+
+  float PackProgress() const {
+    if (!pack_.busy) return -1;
+    const float total = float(pack_.total.load());
+    return total > 0 ? float(pack_.bytes.load()) / total : -1.0f;
+  }
+
+  std::string PackStatusText() const {
+    if (pack_.busy) {
+      const float p = PackProgress();
+      return p >= 0 ? F("Downloading {0}%", {std::to_string(int(p * 100))}) : T(std::string("Checking for a newer pack"));
+    }
+    if (pack_.failed) return T(std::string("Download failed"));
+    if (pack_installed_ > 0) return F("Pack {0}", {std::to_string(pack_installed_)});
+    return T(std::string("Not downloaded"));
+  }
+
+  // ------------------------------------------------------------ install ---
+  void StartInstall() {
+    const auto pkg = BrowseForDiscImage();
+    if (pkg.empty()) return;
+    const uint32_t title = iso::ReadTitleId(pkg);
+    if (title == 0) {
+      OpenModal("Can't install", "That file is not an Xbox 360 disc image.", {"OK"}, 0, nullptr);
+      return;
+    }
+    if (title != kTitleId) {
+      char ids[2][16];
+      std::snprintf(ids[0], sizeof(ids[0]), "%08X", title);
+      std::snprintf(ids[1], sizeof(ids[1]), "%08X", kTitleId);
+      OpenModal("Can't install", F("That disc is title {0}, not King Kong ({1}).", {ids[0], ids[1]}), {"OK"}, 0, nullptr);
+      return;
+    }
+    progress_.cancel = false;
+    installing_ = true;
+    install_done_ = false;
+    install_thread_ = std::thread([this, pkg] {
+      install_result_ = iso::Extract(pkg, paths_.game_dir, &progress_);
+      install_done_ = true;
+    });
+  }
+
+  void FinishInstallIfDone() {
+    if (!installing_ || !install_done_) return;
+    install_thread_.join();
+    installing_ = false;
+    files_ok_ = GameFilesPresent(paths_.game_dir);
+    if (!install_result_.empty() && progress_.cancel) {
+      Status("The install was cancelled.");
+    } else if (!install_result_.empty()) {
+      OpenModal("Install failed", install_result_, {"OK"}, 0, nullptr);
+    } else if (!files_ok_) {
+      OpenModal("Install failed", "Extraction finished but default.xex is missing.", {"OK"}, 0, nullptr);
+    } else {
+      ReloadArt();               // the title icon and achievements from the new files
+      StartArtExtraction(true);  // then the logo and stills (the setup screen's last step)
     }
   }
 
-  void DrawChangelogEntry(const ChangelogEntry& e) {
-    ImGui::PushFont(GetUiFonts().semibold, 20.0f);
-    ImGui::Text("v%s", e.version.c_str());
-    ImGui::PopFont();
-    if (!e.date.empty()) {
-      ImGui::SameLine();
-      ImGui::PushStyleColor(ImGuiCol_Text, kDim);
-      ImGui::TextUnformatted(e.date.c_str());
-      ImGui::PopStyleColor();
-    }
-    DrawMarkdown(e.body);
+  // --------------------------------------------------------------- play ---
+  bool CanPlay() const { return files_ok_ && !installing_ && !played_; }
+
+  void Play() {
+    if (!CanPlay()) return;
+    const int fps = GetInt("kk_frame_rate", 30);
+    if (fps > 0 && fps <= 30) return StartGame();
+    OpenFrameRateWarning();
   }
 
-  // Shown once after an update: the notes of every version since the last one run.
-  void DrawWhatsNew() {
-    constexpr const char* kTitle = "What's new";
-    if (open_whats_new_ && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) {
-      ImGui::OpenPopup(kTitle);
+  void Quit() {
+    SaveIfChanged();
+    input_.Release();
+    if (cb_.quit) cb_.quit();
+  }
+
+  void StartGame() {
+    if (played_) return;
+    // The pack is merged into the shader cache, which the game opens as it
+    // starts: a download in progress finishes first.
+    if (pack_.busy) {
+      waiting_for_pack_ = true;
+      OpenModal("Shader pack", "The newest shader pack is still downloading. The game starts as soon as it's done.",
+                {"Back"}, 0, [this](int) { waiting_for_pack_ = false; });
+      modal_.progress = [this] { return PackProgress(); };
+      return;
+    }
+    played_ = true;
+    SaveSettings(paths_.config_path);
+    bool needs_restart = false;
+    for (size_t i = 0; i < std::size(kRestartCvars); ++i)
+      if (Get(kRestartCvars[i]) != restart_baseline_[i]) needs_restart = true;
+    auto action = needs_restart ? cb_.restart_and_play : cb_.play;
+    input_.Release();  // the game opens the controllers itself
+    Close();  // deletes this dialog after the current draw
+    if (action) action();
+  }
+
+  // --------------------------------------------------------------- tick ---
+  void SaveIfChanged() {
+    if (saved_changes_ == g_changes) return;
+    SaveSettings(paths_.config_path);
+    saved_changes_ = seen_changes_ = g_changes;
+  }
+
+  // Bookkeeping each frame: downloads, the install, pop-ups that open by
+  // themselves, and saving settings a moment after they change.
+  void Tick() {
+    const double now = ImGui::GetTime();
+    FinishInstallIfDone();
+    FinishArtIfDone();
+    RefreshPack();
+    TickUpdate();
+    TickSteam();
+    CaptureKey();
+    if (open_whats_new_ && !modal_.open) {
       open_whats_new_ = false;
+      OpenWhatsNew();
     }
-    if (!BeginModal(kTitle, 760)) return;
-    ImGui::PushFont(GetUiFonts().semibold, 24.0f);
-    ImGui::TextUnformatted("What's new in v" KK_VERSION);
-    ImGui::PopFont();
-    ImGui::Dummy(ImVec2(0, 6 * s_));
-    const float h = std::min(460 * s_, ImGui::GetMainViewport()->Size.y * 0.6f);
-    ImGui::BeginChild("##whats_new", ImVec2(0, h), ImGuiChildFlags_Borders);
-    bool any = false;
-    for (const auto& e : Changelog()) {
-      if (CompareVersions(e.version, KK_VERSION) > 0) continue;
-      if (!whats_new_from_.empty() && CompareVersions(e.version, whats_new_from_) <= 0) break;
-      if (any) ImGui::Separator();
-      DrawChangelogEntry(e);
-      any = true;
-      if (whats_new_from_.empty()) break;  // only this version when we don't know the last one
+    if (waiting_for_pack_ && !pack_.busy) {
+      waiting_for_pack_ = false;
+      modal_.open = false;
+      StartGame();
     }
-    ImGui::EndChild();
-    ImGui::Dummy(ImVec2(0, 8 * s_));
-    const float half = (ImGui::GetContentRegionAvail().x - 8 * s_) / 2;
-    if (AccentButton("Close", ImVec2(half, 0))) ImGui::CloseCurrentPopup();
-    ImGui::SameLine(0, 8 * s_);
-    if (ImGui::Button("Every version", ImVec2(half, 0))) {
-      page_ = kAbout;
-      ImGui::CloseCurrentPopup();
+    if (preview_at_ > 0 && now >= preview_at_ && !ImGui::IsMouseDown(0)) {
+      preview_at_ = 0;
+      PlayAchievementSound(paths_.user_dir);
     }
-    ImGui::EndPopup();
+    if (g_changes != seen_changes_) {
+      seen_changes_ = g_changes;
+      changed_time_ = now;
+    }
+    if (seen_changes_ != saved_changes_ && now - changed_time_ > 0.8 && !ImGui::IsMouseDown(0)) {
+      if (SaveSettings(paths_.config_path)) saved_time_ = now;
+      saved_changes_ = seen_changes_;
+    }
   }
 
 #if defined(KK_DEV_TOOLS)
-  // Developer-only (README screenshots): KK_DEV_LAUNCHER_TOUR=<seconds> shows
-  // each page in turn for that long, then the What's new pop-up, logging
+  // Developer-only (screenshots): KK_DEV_LAUNCHER_TOUR=<seconds> shows each
+  // page in turn for that long, then the What's new pop-up, logging
   // "KK dev: tour <name>" as each appears (tools/launcher_shots.ps1 captures them).
   void DevTour() {
     static const double each = [] {
@@ -1859,132 +2617,125 @@ class Launcher final : public rex::ui::ImGuiDialog {
     if (step == shown) return;
     if (shown < 0) open_whats_new_ = false;  // no start-up pop-up over the pages
     shown = step;
-    static const std::pair<Page, const char*> kSteps[] = {
-        {kPlay, "play"},         {kDisplay, "display"}, {kGraphics, "graphics"},         {kGameplay, "gameplay"},
-        {kControls, "controls"}, {kCheatsPage, "cheats"}, {kAchievements, "achievements"}, {kAbout, "about"}};
-    constexpr int kCount = int(sizeof(kSteps) / sizeof(kSteps[0]));
+    struct Step {
+      Page page;
+      SubPage sub;
+      const char* name;
+    };
+    static const Step kSteps[] = {
+        {kHome, kNoSubPage, "play"},         {kDisplay, kNoSubPage, "display"},
+        {kGraphics, kNoSubPage, "graphics"}, {kGameplay, kNoSubPage, "gameplay"},
+        {kControls, kNoSubPage, "controls"}, {kControls, kRemapPage, "remap"},
+        {kCheatsPage, kNoSubPage, "cheats"}, {kAchievements, kNoSubPage, "achievements"},
+        {kAbout, kNoSubPage, "about"}};
+    constexpr int kCount = int(std::size(kSteps));
     if (step < kCount) {
-      page_ = kSteps[step].first;
-      REXLOG_INFO("KK dev: tour {}", kSteps[step].second);
+      page_ = kSteps[step].page;
+      sub_ = kSteps[step].sub;
+      modal_.open = false;
+      REXLOG_INFO("KK dev: tour {}", kSteps[step].name);
     } else if (step == kCount) {
-      page_ = kPlay;
-      whats_new_from_ = "";  // this version's notes, as after an update from 1.6.0
-      open_whats_new_ = true;
+      page_ = kHome;
+      whats_new_from_ = "";  // this version's notes, as after an update from an unknown version
+      OpenWhatsNew();
       REXLOG_INFO("KK dev: tour whats_new");
     } else if (step == kCount + 1) {
+      modal_.open = false;
       REXLOG_INFO("KK dev: tour done");
     }
   }
-#endif
 
-  // Play was pressed while the shader pack was still downloading: wait for it,
-  // then start the game.
-  void DrawPackWait() {
-    constexpr const char* kTitle = "Shader pack";
-    if (!waiting_for_pack_) return;
-    if (!pack_.busy) {
-      waiting_for_pack_ = false;
-      if (BeginModal(kTitle, 560)) {
-        ImGui::CloseCurrentPopup();
-        ImGui::EndPopup();
-      }
-      StartGame();
+  // Developer-only: KK_DEV_LAUNCHER_INPUT="pad:down,pad:a,kb:right,shot:name,..."
+  // ("setup:N" shows a stage of the setup screen) presses buttons (a, b, x, y,
+  // lb, rb, start, up, down, left, right, lt, rt)
+  // one at a time as a controller ("pad:", "ps:") or the keyboard ("kb:", the
+  // default), logging "KK dev: input <step>"; "shot:<name>" logs
+  // "KK dev: shot <name>" and waits for a capture. The mouse, at 1280 x 720
+  // layout positions: "move:X:Y", "click:X:Y", "down:X:Y", "up", "wheel:N".
+  void DevInput() {
+    ImGuiIO& io = ImGui::GetIO();
+    static bool release = false;
+    if (release) {
+      io.AddMouseButtonEvent(0, false);
+      release = false;
+    }
+    static std::vector<std::string> steps = [] {
+      std::vector<std::string> out;
+      const char* v = std::getenv("KK_DEV_LAUNCHER_INPUT");
+      std::stringstream in(v ? v : "");
+      for (std::string t; std::getline(in, t, ',');)
+        if (!t.empty()) out.push_back(t);
+      return out;
+    }();
+    static size_t next = 0;
+    static double at = 2.5;
+    const double now = ImGui::GetTime();
+    if (next >= steps.size() || now < at) return;
+    std::string t = steps[next++];
+    at = now + 0.45;
+    REXLOG_INFO("KK dev: input {}", t);
+    if (t.rfind("shot:", 0) == 0) {
+      REXLOG_INFO("KK dev: shot {}", t.substr(5));
+      at = now + 1.6;
       return;
     }
-    if (!ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) ImGui::OpenPopup(kTitle);
-    if (!BeginModal(kTitle, 560)) return;
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted("The newest shader pack is still downloading. The game starts as soon as it's done.");
-    ImGui::PopTextWrapPos();
-    ImGui::Dummy(ImVec2(0, 10 * s_));
-    const float total = float(pack_.total.load()), got = float(pack_.bytes.load());
-    ImGui::ProgressBar(total > 0 ? got / total : 0.0f, ImVec2(-FLT_MIN, 0), total > 0 ? nullptr : "Connecting...");
-    ImGui::Dummy(ImVec2(0, 6 * s_));
-    if (ImGui::Button("Back", ImVec2(-FLT_MIN, 0))) {
-      waiting_for_pack_ = false;
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::EndPopup();
-  }
-
-  void DrawFrameRateWarning() {
-    constexpr const char* kTitle = "Frame rate above 30 FPS";
-    if (open_fps_warning_) {
-      ImGui::OpenPopup(kTitle);
-      open_fps_warning_ = false;
-    }
-    if (!BeginModal(kTitle, 600)) return;
-    const int fps = GetInt("kk_frame_rate", 30);
-    const std::string current = fps <= 0 ? "an unlimited frame rate" : std::to_string(fps) + " FPS";
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextUnformatted(("You have chosen " + current + ". King Kong was made to run at 30 FPS, and above that some "
-                            "character animations can look wrong, such as the crew rowing the boat at the start.")
-                               .c_str());
-    ImGui::Dummy(ImVec2(0, 6 * s_));
-    ImGui::TextUnformatted("We recommend 30 FPS. 60 FPS also works well: the issues are still there, but much less "
-                           "noticeable. At an unlimited frame rate you may see some strange animations.");
-    ImGui::Dummy(ImVec2(0, 6 * s_));
-    ImGui::PushStyleColor(ImGuiCol_Text, kDim);
-    ImGui::TextUnformatted("This will be fixed in a future update.");
-    ImGui::PopStyleColor();
-    ImGui::PopTextWrapPos();
-    ImGui::Dummy(ImVec2(0, 10 * s_));
-    const float bw = (ImGui::GetContentRegionAvail().x - 16 * s_) / 3;
-    auto play_at = [&](int rate) {
-      SetInt("kk_frame_rate", rate);
-      ImGui::CloseCurrentPopup();
-      StartGame();
+    auto at_point = [&](const std::string& xy) {
+      const size_t colon = xy.find(':');
+      const float x = std::stof(xy.substr(0, colon)), y = std::stof(xy.substr(colon + 1));
+      io.AddMousePosEvent(o_.x + x * m_.s, o_.y + y * m_.s);
     };
-    if (AccentButton("Play at 30 FPS", ImVec2(bw, 0))) play_at(30);
-    ImGui::SameLine(0, 8 * s_);
-    if (fps != 60) {
-      if (ImGui::Button("Play at 60 FPS", ImVec2(bw, 0))) play_at(60);
-    } else if (ImGui::Button("Keep 60 FPS", ImVec2(bw, 0))) {
-      play_at(60);
-    }
-    ImGui::SameLine(0, 8 * s_);
-    if (fps != 60) {
-      const std::string keep = fps <= 0 ? "Keep unlimited" : "Keep " + std::to_string(fps) + " FPS";
-      if (ImGui::Button(keep.c_str(), ImVec2(bw, 0))) play_at(fps);
-    } else if (ImGui::Button("Back", ImVec2(bw, 0))) {
-      ImGui::CloseCurrentPopup();
-    }
-    if (fps != 60) {
-      ImGui::Dummy(ImVec2(0, 2 * s_));
-      if (ImGui::Button("Back", ImVec2(-FLT_MIN, 0))) ImGui::CloseCurrentPopup();
-    }
-    ImGui::EndPopup();
-  }
-
-  void StartGame() {
-    if (played_) return;
-    // The pack is merged into the shader cache, which the game opens as it
-    // starts: a download in progress finishes first (DrawPackWait).
-    if (pack_.busy) {
-      waiting_for_pack_ = true;
+    if (t.rfind("setup:", 0) == 0) {  // show a setup stage: 0 your copy, 1 install, 2 artwork; -1 back
+      dev_setup_ = std::atoi(t.c_str() + 6);
       return;
     }
-    played_ = true;
-    SaveSettings(paths_.config_path);
-    bool needs_restart = false;
-    for (size_t i = 0; i < std::size(kRestartCvars); ++i)
-      if (Get(kRestartCvars[i]) != restart_baseline_[i]) needs_restart = true;
-    auto action = needs_restart ? cb_.restart_and_play : cb_.play;
-    Close();  // deletes this dialog after the current draw
-    if (action) action();
+    if (t.rfind("move:", 0) == 0) return at_point(t.substr(5));
+    if (t.rfind("click:", 0) == 0 || t.rfind("down:", 0) == 0) {
+      at_point(t.substr(t.find(':') + 1));
+      io.AddMouseButtonEvent(0, true);
+      release = t[0] == 'c';
+      return;
+    }
+    if (t == "up") return io.AddMouseButtonEvent(0, false);
+    if (t.rfind("wheel:", 0) == 0) return io.AddMouseWheelEvent(0, std::stof(t.substr(6)));
+    ui::Device d = ui::Device::kKeyboard;
+    if (t.rfind("pad:", 0) == 0) d = ui::Device::kXbox, t = t.substr(4);
+    else if (t.rfind("ps:", 0) == 0) d = ui::Device::kPlayStation, t = t.substr(3);
+    else if (t.rfind("kb:", 0) == 0) t = t.substr(3);
+    static const std::map<std::string, Action> kNames = {
+        {"up", Action::kUp},          {"down", Action::kDown},       {"left", Action::kLeft},
+        {"right", Action::kRight},    {"lt", Action::kPageUp},       {"rt", Action::kPageDown},
+        {"a", Action::kAccept},       {"b", Action::kBack},          {"x", Action::kDefault},
+        {"y", Action::kResetPage},    {"lb", Action::kPrevTab},      {"rb", Action::kNextTab},
+        {"start", Action::kPlay}};
+    if (auto it = kNames.find(t); it != kNames.end()) input_.Inject(it->second, d);
   }
+#endif
 
   rex::ui::ImmediateDrawer* immediate_;
   LauncherPaths paths_;
   LauncherCallbacks cb_;
-  ImGuiStyle saved_style_;
-  float s_ = 1.0f;
-  Page page_ = kPlay;
+  ui::Input input_;
+  ui::Glyphs glyphs_;
+  ui::Metrics m_;
+  ui::Modal modal_;
+  ImVec2 o_{0, 0};
+  float w_ = 1280, h_ = 720;
+  Page page_ = kHome;
+  SubPage sub_ = kNoSubPage;
+  std::map<int, ui::ListState> lists_;
+  std::vector<Item> focused_items_;
+  const Item* focused_ = nullptr;
+  Action pending_click_ = Action::kCount;
+  int home_focus_ = 0;
+  std::vector<float> home_offset_;
+  float home_mix_ = 1.0f;
+  float tab_x_ = -1, tab_w_ = 0;
+
   std::vector<std::string> restart_baseline_;
   bool files_ok_ = false;
   bool played_ = false;
-  bool open_fps_warning_ = false;
   std::shared_ptr<UpdateStatus> update_;
+  std::shared_ptr<SteamState> steam_;
   bool update_manual_ = false, update_prompted_ = false, installing_update_ = false, relaunched_ = false;
   bool open_whats_new_ = false;
   std::string whats_new_from_;  // version the player had before this one
@@ -1994,16 +2745,37 @@ class Launcher final : public rex::ui::ImGuiDialog {
   bool waiting_for_pack_ = false;  // Play was pressed during the download
   int autoplay_frames_ = 0;
   std::string status_;
+  double status_time_ = -100, saved_time_ = -100;
+  int seen_changes_ = 0, saved_changes_ = 0;
+  double changed_time_ = 0;
+  double preview_at_ = 0;
   std::string capturing_;
   std::vector<MonitorInfo> monitors_;
 
   std::vector<std::unique_ptr<rex::ui::ImmediateTexture>> textures_;
-  rex::ui::ImmediateTexture* title_art_ = nullptr;
-  float title_art_aspect_ = 16.0f / 9.0f;
+  struct Slide {
+    rex::ui::ImmediateTexture* sharp;
+    rex::ui::ImmediateTexture* soft;
+    float aspect;
+  };
+  std::vector<Slide> slides_;
+  double slide_clock_ = 0;
+  rex::ui::ImmediateTexture* logo_ = nullptr;
+  rex::ui::ImmediateTexture* glow_ = nullptr;
+  float logo_aspect_ = 1.6f;
+  art::ArtProgress art_progress_;
+  std::thread art_thread_;
+  bool setup_art_ = false;  // the art is being taken as the install's last step
+  int setup_focus_ = 0;
+#if defined(KK_DEV_TOOLS)
+  int dev_setup_ = -1;  // KK_DEV_LAUNCHER_SETUP: show a setup stage (screenshots)
+#endif
   rex::ui::ImmediateTexture* title_icon_ = nullptr;
   std::vector<Achievement> achievements_;
   bool have_achievement_names_ = false;
   std::unique_ptr<AchievementToast> toast_;
+  std::unique_ptr<LauncherMusic> music_;  // once the game is installed
+  std::unique_ptr<LauncherSounds> ui_sounds_;
   size_t test_index_ = 0;
   std::vector<std::filesystem::path> sounds_;
   double sounds_scanned_ = -10.0;
@@ -2013,7 +2785,6 @@ class Launcher final : public rex::ui::ImGuiDialog {
   std::atomic<bool> install_done_{false};
   bool installing_ = false;
   std::string install_result_;
-  std::string install_message_;
 };
 
 }  // namespace

@@ -1,6 +1,7 @@
 #include "update.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -88,9 +89,15 @@ void CheckForUpdate(UpdateStatus& status) {
     if (url.empty()) break;
     if (url.find("windows-x64.zip") != std::string::npos) info.zip_url = url;
   }
-  if (!info.version.empty() && IsNewerVersion(info.version, KK_VERSION) && !info.zip_url.empty()) {
+  std::string current = KK_VERSION;
+#if defined(KK_DEV_TOOLS)
+  // Developer aid: KK_DEV_UPDATE_FROM=1.9.1 acts as that version, to test
+  // updating to the latest release.
+  if (const char* v = std::getenv("KK_DEV_UPDATE_FROM"); v && *v) current = v;
+#endif
+  if (!info.version.empty() && IsNewerVersion(info.version, current) && !info.zip_url.empty()) {
     status.found = info;
-    REXLOG_INFO("KK: update available: v{} (this is v{})", info.version, KK_VERSION);
+    REXLOG_INFO("KK: update available: v{} (this is v{})", info.version, current);
   }
   status.done = true;
   status.busy = false;
