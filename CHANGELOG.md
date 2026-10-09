@@ -3,6 +3,14 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v1.9.2 (9 October 2026)
+
+### What's new
+- **Fixed: Necropolis and Brontosaurus looking low resolution** (#32). Those levels turn on one of the game's own effects, a light blur over the whole picture (any other level that uses it is fixed too). The blur is sized for the Xbox 360's 720p, so whatever resolution you played at, those levels came out about as sharp as 720p. It's a new **Screen blur** setting on the **Graphics** page, off by default, so those levels are as sharp as the rest of the game. The **Original Xbox 360** look keeps it on. Thanks to GrummelFritz and leocmp for sticking with this one and sending logs and screenshots.
+
+### Full changelog
+- Screen blur: `kk_big_blur` (off by default). The game's "BigBlur" after effect averages four slightly offset copies of the frame, with offsets for 1280 x 720; off skips it. Found by turning the game's after effects off one at a time in Necropolis and identifying the draw it adds by its shader key.
+
 ## v1.9.1 (8 October 2026)
 
 ### What's new

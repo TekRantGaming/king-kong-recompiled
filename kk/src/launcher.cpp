@@ -971,7 +971,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
     if (!BeginRows("##graphics")) return;
     Row("Look",
         "Original is the Xbox 360 version as it was: 720p at 30 FPS, the console's own anti-aliasing and texture "
-        "filtering, its 69\xC2\xB0 field of view, motion blur and distance fog, and no ambient occlusion. Modern "
+        "filtering, its 69\xC2\xB0 field of view, motion blur, screen blur and distance fog, and no ambient occlusion. Modern "
         "gives you the presets and every setting below.");
     {
       const bool original = GetBool("kk_original_look");
@@ -1102,6 +1102,10 @@ class Launcher final : public rex::ui::ImGuiDialog {
                {{"Game", "-1"}, {"Off", "0"}, {"2\xC3\x97", "2"}, {"4\xC3\x97", "3"}, {"8\xC3\x97", "4"}, {"16\xC3\x97", "5"}});
     Row("Motion blur", "The trail the game blends over fast moments, mostly in Kong's sequences and some transitions.");
     ToggleCvar("kk_motion_blur", "Off", "On");
+    Row("Screen blur",
+        "Some levels (Necropolis, Brontosaurus) blur the whole picture slightly. The blur is sized for the Xbox "
+        "360's 720p, so on a sharper screen it makes those levels look low resolution. Off keeps them sharp.");
+    ToggleCvar("kk_big_blur", "Off", "On");
     Row("Distance fog",
         "The haze over far-away scenery. Off shows distant scenery clearly, but the fog is part of Skull Island's "
         "look and also hides the edges of each area, so some empty or unfinished backdrops can show.");
@@ -1538,7 +1542,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
       case kGraphics:
         return {"kk_original_look", "kk_modern_settings", "present_effect", "kk_render_quality", "resolution_scale",
                 "draw_resolution_scale_x", "draw_resolution_scale_y",
-                "swap_post_effect", "anisotropic_override", "kk_motion_blur", "kk_fog", "ao_mode", "ao_strength",
+                "swap_post_effect", "anisotropic_override", "kk_motion_blur", "kk_big_blur", "kk_fog", "ao_mode", "ao_strength",
                 "async_shader_compilation", "async_shader_wait_ms"};
       case kGameplay:
         return {"kk_frame_rate", "kk_fov", "kk_show_fps", "kk_skip_intros", "user_language"};
