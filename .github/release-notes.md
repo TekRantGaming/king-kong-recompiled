@@ -1,18 +1,18 @@
-## Peter Jackson's King Kong PC Port v1.9.1
+## Peter Jackson's King Kong PC Port v1.9.2
 
 ### What's new
-- **Fixed: the whole game drawing at low resolution for some players** (#32). The game picks its picture size from the TV it thinks it's connected to, and the port was giving it your window size. Windows display scaling shrinks the size the launcher saves (a 1280 x 720 window at 125% is kept as 1024 x 576), and below 720 lines the game falls back to standard definition: 640 x 480, stretched to widescreen, even in fullscreen and whatever your **Render quality**. It now always sees a 720p TV, as on an Xbox 360, and **Render quality** scales that up as intended. Thanks to GrummelFritz and leocmp for the reports and the log.
+- **Fixed: Necropolis and Brontosaurus looking low resolution** (#32). Those levels turn on one of the game's own effects, a light blur over the whole picture (any other level that uses it is fixed too). The blur is sized for the Xbox 360's 720p, so whatever resolution you played at, those levels came out about as sharp as 720p. It's a new **Screen blur** setting on the **Graphics** page, off by default, so those levels are as sharp as the rest of the game. The **Original Xbox 360** look keeps it on. Thanks to GrummelFritz and leocmp for sticking with this one and sending logs and screenshots.
 
 ### Full changelog
-- Video mode: the port sets `video_mode_width` and `video_mode_height` to 1280 x 720 each time it starts (they aren't saved to `king_kong.toml`). Before, the runtime reported `window_width` and `window_height` as the console's video mode whenever a window size was set. The log now notes the video mode at startup (`KK: video mode 1280x720 (window ...)`).
+- Screen blur: `kk_big_blur` (off by default). The game's "BigBlur" after effect averages four slightly offset copies of the frame, with offsets for 1280 x 720; off skips it. Found by turning the game's after effects off one at a time in Necropolis and identifying the draw it adds by its shader key.
 
-If the game looked low resolution for you, in Necropolis, Brontosaurus or anywhere else, please update and let us know in [#32](https://github.com/TekRantGaming/king-kong-recompiled/issues/32) whether it's sharp now.
+If Necropolis, Brontosaurus or another level looked low resolution for you, please update and let us know in [#32](https://github.com/TekRantGaming/king-kong-recompiled/issues/32) whether it's sharp now.
 
 ### How to update
-If you have v1.4.0 or later, the launcher offers this update when it opens: click **Update now**. Otherwise download **KingKong-v1.9.1-windows-x64.zip** below and copy everything in it over your KingKong folder. Your settings stay as they are.
+If you have v1.4.0 or later, the launcher offers this update when it opens: click **Update now**. Otherwise download **KingKong-v1.9.2-windows-x64.zip** below and copy everything in it over your KingKong folder. Your settings stay as they are, and **Screen blur** starts off.
 
 ### New install
-1. Unzip **KingKong-v1.9.1-windows-x64.zip** anywhere and run **king_kong.exe**. The shader pack downloads by itself.
+1. Unzip **KingKong-v1.9.2-windows-x64.zip** anywhere and run **king_kong.exe**. The shader pack downloads by itself.
 2. Click **Install from disc image...** and pick your own King Kong disc image (USA/Europe, title ID `555307D3`, version `0.0.0.1`).
 3. Press **PLAY**.
 
