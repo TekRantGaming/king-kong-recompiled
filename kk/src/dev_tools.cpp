@@ -150,6 +150,7 @@ void ParseScript(const char* text) {
 std::atomic<int64_t> g_menu_ms{-1};  // ms since start when the save menu opened
 std::atomic<bool> g_done{false};
 bool g_wander = false;
+bool g_wander_calm = false;  // KK_DEV_WANDER=2
 
 int64_t NowMs() {
   static const auto start = Clock::now();
@@ -177,6 +178,15 @@ bool WanderPad(uint8_t* state, int64_t now) {
   // Left stick: walk in a direction that circles round every 16 s, so walls
   // don't stop it for long. Right stick: keep turning the camera, so every
   // direction gets drawn.
+  if (g_wander_calm) {
+    // KK_DEV_WANDER=2 (filming): walk mostly forward, steering gently, and
+    // pan the camera slowly from side to side.
+    const double t = now / 1000.0;
+    StoreBE<int16_t>(state + 8, int16_t(9000 * std::sin(t * 0.45)));
+    StoreBE<int16_t>(state + 10, 24000);
+    StoreBE<int16_t>(state + 12, int16_t(5000 * std::sin(t * 0.3)));
+    return true;
+  }
   const double angle = (now % 16000) / 16000.0 * 6.283185307;
   StoreBE<int16_t>(state + 8, int16_t(26000 * std::sin(angle)));
   StoreBE<int16_t>(state + 10, int16_t(26000 * std::cos(angle)));
@@ -546,6 +556,7 @@ const bool g_installed = [] {
   if (const char* s = std::getenv("KK_DEV_SCRIPT"); s && *s) ParseScript(s);
   const char* w = std::getenv("KK_DEV_WANDER");
   g_wander = w && *w && *w != '0';
+  g_wander_calm = w && *w == '2';
   OnSaveMenuShown([] { g_menu_ms = NowMs(); });
   return true;
 }();

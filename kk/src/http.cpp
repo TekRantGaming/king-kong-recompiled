@@ -10,6 +10,13 @@
 #include <windows.h>
 #include <winhttp.h>
 #pragma comment(lib, "winhttp.lib")
+#else
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
+#include <sstream>
+
+#include "platform.h"
 #endif
 
 namespace kk {
@@ -66,8 +73,25 @@ bool HttpGet(const std::string& url, std::vector<uint8_t>& out, std::atomic<uint
   return ok;
 }
 #else
-bool HttpGet(const std::string&, std::vector<uint8_t>&, std::atomic<uint64_t>*, std::atomic<uint64_t>*) {
-  return false;
+// Linux: through curl (on SteamOS, Bazzite and the usual desktop distributions).
+bool HttpGet(const std::string& url, std::vector<uint8_t>& out, std::atomic<uint64_t>* bytes,
+             std::atomic<uint64_t>* total) {
+  const std::string agent = "KingKongRecomp/" KK_VERSION;
+  if (total) {
+    // The size, from the last response's headers (GitHub downloads redirect).
+    std::vector<uint8_t> head;
+    if (RunCapture({"curl", "-sSfIL", "-A", agent, url}, head)) {
+      uint64_t size = 0;
+      std::stringstream lines(std::string(head.begin(), head.end()));
+      for (std::string line; std::getline(lines, line);) {
+        std::string lower = line;
+        std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return std::tolower(c); });
+        if (lower.rfind("content-length:", 0) == 0) size = std::strtoull(line.c_str() + 15, nullptr, 10);
+      }
+      *total += size;
+    }
+  }
+  return RunCapture({"curl", "-sSfL", "-A", agent, url}, out, bytes);
 }
 #endif
 

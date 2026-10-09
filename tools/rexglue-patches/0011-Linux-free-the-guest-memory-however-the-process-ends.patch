@@ -1,0 +1,35 @@
+From 555d353876d0c205140ac9b0b45739976bdd5261 Mon Sep 17 00:00:00 2001
+From: TekRantGaming <craigferels896@gmail.com>
+Date: Fri, 9 Oct 2026 17:20:55 +0100
+Subject: [PATCH 11/12] Linux: free the guest memory however the process ends
+
+The guest address space is a POSIX shared memory object (/dev/shm, RAM).
+Its name was only removed on a clean shutdown, so a crash or a kill left
+the whole thing in /dev/shm until a reboot, and once that filled up the
+next run died with SIGBUS while mapping it. Only the descriptor is used
+after creation, so the name is now removed right away.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/core/memory_posix.cpp | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/src/core/memory_posix.cpp b/src/core/memory_posix.cpp
+index b52bf39..00e43c5 100644
+--- a/src/core/memory_posix.cpp
++++ b/src/core/memory_posix.cpp
+@@ -483,6 +483,11 @@ FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path, siz
+     shm_unlink(full_path.c_str());
+     return kFileMappingHandleInvalid;
+   }
++  // Only the descriptor is used from here on, so remove the name now: the
++  // memory then goes away with the process however it ends. Otherwise a
++  // crash or a kill leaves the whole guest address space in /dev/shm (RAM)
++  // until a reboot, and once that fills the next run dies with SIGBUS.
++  shm_unlink(full_path.c_str());
+   return static_cast<FileMappingHandle>(ret);
+ #endif
+ }
+-- 
+2.55.0.windows.5
+

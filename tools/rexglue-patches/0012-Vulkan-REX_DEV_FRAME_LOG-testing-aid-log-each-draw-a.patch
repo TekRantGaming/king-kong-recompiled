@@ -1,0 +1,179 @@
+From bed1a24535a6827ed2abfad7b8c518a69fa0fb2e Mon Sep 17 00:00:00 2001
+From: TekRantGaming <craigferels896@gmail.com>
+Date: Fri, 9 Oct 2026 17:20:55 +0100
+Subject: [PATCH 12/12] Vulkan: REX_DEV_FRAME_LOG testing aid (log each draw
+ and resolve of a frame)
+
+The D3D12 backend's frame log for the Vulkan one: REX_DEV_FRAME_LOG=
+<seconds>[,<frames>] logs every draw (shaders, render targets, depth test
+and function) and resolve of those frames, and notes draws whose pipeline
+is still a placeholder or missing.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/graphics/vulkan/command_processor.cpp | 117 ++++++++++++++++++++++
+ 1 file changed, 117 insertions(+)
+
+diff --git a/src/graphics/vulkan/command_processor.cpp b/src/graphics/vulkan/command_processor.cpp
+index 001f36b..fe410b5 100644
+--- a/src/graphics/vulkan/command_processor.cpp
++++ b/src/graphics/vulkan/command_processor.cpp
+@@ -11,7 +11,9 @@
+ 
+ #include <algorithm>
+ #include <array>
++#include <chrono>
+ #include <cstdint>
++#include <cstdlib>
+ #include <cstring>
+ #include <iterator>
+ #include <mutex>
+@@ -2269,9 +2271,61 @@ void VulkanCommandProcessor::OnGammaRampPWLValueWritten() {
+   gamma_ramp_pwl_current_frame_ = UINT32_MAX;
+ }
+ 
++namespace {
++
++// Testing aid: REX_DEV_FRAME_LOG=<seconds>[,<frames>] logs every draw and
++// resolve of <frames> frames (default 1) starting <seconds> after launch, to
++// see how a title builds its frames (as in the D3D12 backend).
++struct DevFrameLog {
++  double start_after = -1.0;
++  int frames = 1;
++  bool active = false;
++  int draws = 0;
++  int copies = 0;
++  std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
++
++  DevFrameLog() {
++    if (const char* v = std::getenv("REX_DEV_FRAME_LOG"); v && *v) {
++      start_after = std::atof(v);
++      if (const char* comma = std::strchr(v, ',')) {
++        frames = std::max(1, std::atoi(comma + 1));
++      }
++    }
++  }
++
++  void OnSwap() {
++    if (start_after < 0.0) {
++      return;
++    }
++    if (active) {
++      REXGPU_WARN("Frame log: frame end, {} draws, {} resolves", draws, copies);
++      draws = copies = 0;
++      if (--frames <= 0) {
++        active = false;
++        start_after = -1.0;
++      }
++      return;
++    }
++    if (std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count() >=
++        start_after) {
++      active = true;
++      draws = copies = 0;
++      REXGPU_WARN("Frame log: frame start");
++    }
++  }
++};
++
++DevFrameLog& GetDevFrameLog() {
++  static DevFrameLog log;
++  return log;
++}
++
++}  // namespace
++
+ void VulkanCommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbuffer_width,
+                                        uint32_t frontbuffer_height) {
+   SCOPE_profile_cpu_f("gpu");
++  GetDevFrameLog().OnSwap();
+   vertex_buffers_in_sync_[0] = 0;
+   vertex_buffers_in_sync_[1] = 0;
+ 
+@@ -3681,6 +3735,36 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t
+   }
+   reg::RB_DEPTHCONTROL normalized_depth_control = draw_util::GetNormalizedDepthControl(regs);
+ 
++  if (DevFrameLog& frame_log = GetDevFrameLog(); frame_log.active) {
++    auto surface_info = regs.Get<reg::RB_SURFACE_INFO>();
++    auto depth_control = regs.Get<reg::RB_DEPTHCONTROL>();
++    auto depth_info = regs.Get<reg::RB_DEPTH_INFO>();
++    auto window_offset = regs.Get<reg::PA_SC_WINDOW_OFFSET>();
++    uint32_t color_mask = regs[XE_GPU_REG_RB_COLOR_MASK];
++    uint32_t written = pixel_shader ? pixel_shader->writes_color_targets() : 0;
++    std::string targets;
++    for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
++      if (!(written & (1u << i)) || !((color_mask >> (i * 4)) & 0xF)) {
++        continue;
++      }
++      auto color_info = regs.Get<reg::RB_COLOR_INFO>(reg::RB_COLOR_INFO::rt_register_indices[i]);
++      targets += fmt::format(" rt{}@{}:f{}", i, uint32_t(color_info.color_base),
++                             uint32_t(color_info.color_format));
++    }
++    uint32_t scissor_br = regs[XE_GPU_REG_PA_SC_WINDOW_SCISSOR_BR];
++    REXGPU_WARN(
++        "Frame log: draw {} ps {:016X} vs {:016X} pitch {} msaa {} z {}{} func {} @{}:f{} off {},{} "
++        "scissor {}x{}{} count {}",
++        frame_log.draws++, pixel_shader ? pixel_shader->ucode_data_hash() : 0,
++        vertex_shader->ucode_data_hash(), uint32_t(surface_info.surface_pitch),
++        1u << uint32_t(surface_info.msaa_samples), depth_control.z_enable ? "test" : "off",
++        depth_control.z_write_enable ? "+write" : "", uint32_t(depth_control.zfunc),
++        uint32_t(depth_info.depth_base),
++        uint32_t(depth_info.depth_format), int32_t(window_offset.window_x_offset),
++        int32_t(window_offset.window_y_offset), scissor_br & 0x7FFF, (scissor_br >> 16) & 0x7FFF, targets,
++        index_count);
++  }
++
+   uint32_t ps_param_gen_pos = UINT32_MAX;
+   uint32_t interpolator_mask =
+       pixel_shader ? (vertex_shader->writes_interpolators() &
+@@ -3861,6 +3945,11 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t
+   // may happen between pipeline configuration and binding.
+   pipeline_cache_->GetPipelineAndLayoutByHandle(pipeline_handle, pipeline, pipeline_layout_provider,
+                                                 &pipeline_is_placeholder);
++  if (DevFrameLog& frame_log = GetDevFrameLog();
++      frame_log.active && (pipeline_is_placeholder || pipeline == VK_NULL_HANDLE)) {
++    REXGPU_WARN("Frame log: draw {} pipeline {}", frame_log.draws - 1,
++                pipeline_is_placeholder ? "placeholder (skipped)" : "missing");
++  }
+   if (REXCVAR_GET(async_shader_compilation) && pipeline_is_placeholder) {
+     frame_used_async_placeholder_pipeline_ = true;
+     return true;
+@@ -4385,6 +4474,34 @@ bool VulkanCommandProcessor::IssueCopy() {
+ #if XE_GPU_FINE_GRAINED_DRAW_SCOPES
+   SCOPE_profile_cpu_f("gpu");
+ #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
++  if (DevFrameLog& frame_log = GetDevFrameLog(); frame_log.active) {
++    const RegisterFile& regs = *register_file_;
++    auto copy_control = regs.Get<reg::RB_COPY_CONTROL>();
++    auto dest_info = regs.Get<reg::RB_COPY_DEST_INFO>();
++    auto dest_pitch = regs.Get<reg::RB_COPY_DEST_PITCH>();
++    auto surface_info = regs.Get<reg::RB_SURFACE_INFO>();
++    auto window_offset = regs.Get<reg::PA_SC_WINDOW_OFFSET>();
++    std::string source;
++    if (copy_control.copy_src_select >= xenos::kMaxColorRenderTargets) {
++      auto depth_info = regs.Get<reg::RB_DEPTH_INFO>();
++      source = fmt::format("depth@{}:f{}", uint32_t(depth_info.depth_base), uint32_t(depth_info.depth_format));
++    } else {
++      auto color_info = regs.Get<reg::RB_COLOR_INFO>(
++          reg::RB_COLOR_INFO::rt_register_indices[copy_control.copy_src_select]);
++      source = fmt::format("rt{}@{}:f{}", uint32_t(copy_control.copy_src_select), uint32_t(color_info.color_base),
++                           uint32_t(color_info.color_format));
++    }
++    REXGPU_WARN(
++        "Frame log: resolve {} {} -> {:08X} format {} pitch {} height {} command {} clear "
++        "color {} depth {} off {},{} surface pitch {} msaa {}",
++        frame_log.copies++, source, regs[XE_GPU_REG_RB_COPY_DEST_BASE],
++        uint32_t(dest_info.copy_dest_format), uint32_t(dest_pitch.copy_dest_pitch),
++        uint32_t(dest_pitch.copy_dest_height), uint32_t(copy_control.copy_command),
++        uint32_t(copy_control.color_clear_enable), uint32_t(copy_control.depth_clear_enable),
++        int32_t(window_offset.window_x_offset), int32_t(window_offset.window_y_offset),
++        uint32_t(surface_info.surface_pitch),
++        1u << uint32_t(surface_info.msaa_samples));
++  }
+ 
+   if (!BeginSubmission(true)) {
+     return false;
+-- 
+2.55.0.windows.5
+

@@ -37,19 +37,33 @@ echo "== Source"
 mkdir -p "$WORK"
 rsync -a --delete --exclude out --exclude assets --exclude image.bin "$ROOT/kk/" "$WORK/kk/"
 mkdir -p "$WORK/tools/rexglue" "$WORK/kk/assets"
+cp "$ROOT/CHANGELOG.md" "$WORK/"  # the launcher's What's new and version history are built in
 # The build checks the translated code against your default.xex (from your own disc).
 cp "$ROOT/kk/assets/default.xex" "$WORK/kk/assets/"
 
-echo "== ReXGlue SDK $SDK_VERSION (linux-amd64)"
-if [ ! -d "$WORK/tools/rexglue/linux-amd64" ]; then
+# The SDK: the official v$SDK_VERSION release, or REXGLUE_SDK_DIR=<an install> (the SDK built from
+# source with tools/rexglue-patches, as the Windows release ships it).
+SDK="$WORK/tools/rexglue/linux-amd64"
+WANT="${REXGLUE_SDK_DIR:-official-$SDK_VERSION}"
+if [ -n "${REXGLUE_SDK_DIR:-}" ]; then
+  # A local build may have changed since the last run: refresh the copy every time.
+  echo "== ReXGlue SDK from $REXGLUE_SDK_DIR"
+  mkdir -p "$SDK"
+  rsync -a --delete "$REXGLUE_SDK_DIR/" "$SDK/"
+  echo "$WANT" > "$SDK/.kk-sdk-source"
+elif [ "$(cat "$SDK/.kk-sdk-source" 2>/dev/null)" != "$WANT" ]; then
+  rm -rf "$SDK"
+  echo "== ReXGlue SDK $SDK_VERSION (linux-amd64)"
   wget -q -O /tmp/rexglue-linux.zip \
     "https://github.com/rexglue/rexglue-sdk/releases/download/v$SDK_VERSION/rexglue-sdk-$SDK_VERSION-linux-amd64.zip"
   unzip -q -o /tmp/rexglue-linux.zip -d "$WORK/tools/rexglue"
+  echo "$WANT" > "$SDK/.kk-sdk-source"
 fi
 
 echo "== Build"
 cd "$WORK/kk"
-cmake --preset kk-linux-release
+# KK_DEV_TOOLS=ON builds the developer test aids in (for testing only, never a release).
+cmake --preset kk-linux-release -DKK_DEV_TOOLS="${KK_DEV_TOOLS:-OFF}"
 cmake --build --preset kk-linux-release -- -k 0
 BIN="$WORK/kk/out/build/kk-linux-release"
 
@@ -60,9 +74,11 @@ mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/lib"
 cp "$BIN/king_kong" "$APPDIR/usr/bin/"
 # The runtime, the GPU plugin and anything else the build put beside the binary.
 find "$BIN" -maxdepth 1 -name '*.so*' -exec cp -a {} "$APPDIR/usr/bin/" \;
+# The button prompt pictures (kk_button_prompts and the launcher) live beside the program.
+cp -a "$BIN/glyphs" "$APPDIR/usr/bin/"
+# The SDK's own copies win: the build only refreshes the ones beside the binary when it relinks.
 for lib in librexruntime.so librexgpu-xenos.so libTracyClient.so; do
-  [ -e "$BIN/$lib" ] || [ ! -e "$WORK/tools/rexglue/linux-amd64/lib/$lib" ] || \
-    cp -a "$WORK/tools/rexglue/linux-amd64/lib/$lib" "$APPDIR/usr/bin/"
+  [ ! -e "$SDK/lib/$lib" ] || cp -a "$SDK/lib/$lib" "$APPDIR/usr/bin/"
 done
 # The SDK needs a GCC 13 C++ runtime (GLIBCXX_3.4.32); bundle it for older distros.
 for lib in libstdc++.so.6 libgcc_s.so.1; do

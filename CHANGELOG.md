@@ -3,6 +3,20 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v1.9.6 (9 October 2026)
+
+### What's new
+- **Play on Linux and Steam Deck now, through Proton (experimental).** This is not the native Linux version: it's the Windows download running through Steam's Proton, so Linux players can play while the native Linux version is finished. That will come in a future update. To play, add **king_kong.exe** to Steam as a non-Steam game and set it to use **Proton Experimental** (the README has the steps). Tested on a ROG Ally (Z1 Extreme) with Bazzite: the launcher, installing from a disc image and the game all work, and it held 120 FPS on the 10 W power profile. The first start takes about half a minute while Steam sets Proton up for the game; after that it starts straight away. Under Proton the launcher uses your system's font, and **Add to Steam** is hidden, since the game is already in Steam.
+- **Fixed: the game could freeze on the black LOADING screen** as the main menu loads. When a load starts, the loading screen and the game's frame presenter both need the graphics device, and if the loading screen got it first, each waited for the other forever. It happened often on Linux; on Windows the presenter nearly always got there first, but it could happen there too.
+- **Fixed: one controller press counting twice in the launcher while Steam is open.** Steam's desktop controller layout also types keys for the controller's buttons (arrow keys, Enter), so the selection moved two places and switches flipped twice and stayed as they were. A press and the key Steam types for it now count once.
+- **Fixed: the Home menu running into the status line in a small window.** Its entries now shrink to fit.
+
+### Full changelog
+- Loading screen: `loading_fix.cpp` hooks the present that the graphics device's worker thread makes each frame (`sub_8278D0C8`). While the loading screen thread (`sub_8278E450`) is up, it skips that present, since the loading screen draws every frame itself. Found by tracing the handshake between the two (`KK_DEV_LOAD_TRACE` in developer builds).
+- Launcher input: `launcher_ui.cpp` reads the controllers before the keyboard and treats a key and a controller press of the same action within 0.25 s as one press.
+- Proton: when Windows' fonts aren't there (Wine), the launcher loads Noto Sans (or DejaVu Sans, or Liberation Sans) from the Linux system through Wine's `Z:` drive. Proton plays videos it can't convert as colour bars, so stills that are colour bars are no longer used as backdrops; the launcher takes its artwork again once (a few seconds) to drop any it already took.
+- Native Linux version (in development, not in this release): the launcher no longer swallows the window's paint events when it reads controllers, draws at 60 FPS (it used 72% of a CPU core), downloads with curl, takes its stills with ffmpeg and can update its AppImage. `tools/rexglue-patches` 0011 frees the game's memory however it ends (a crash or kill left it all in `/dev/shm` until a reboot), and 0012 adds the frame log to the Vulkan backend. The Vulkan renderer still draws some scenes wrong, which is why Linux goes through Proton for now.
+
 ## v1.9.5 (9 October 2026)
 
 ### What's new

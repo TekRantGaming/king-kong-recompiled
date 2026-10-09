@@ -483,6 +483,16 @@ class Launcher final : public rex::ui::ImGuiDialog {
 
  protected:
   void OnDraw(ImGuiIO& io) override {
+#if !defined(_WIN32)
+    // The SDK holds the launcher to the display's refresh rate on Windows only: elsewhere
+    // it draws as fast as it can (a handheld's battery), so keep it to 60 frames a second.
+    {
+      using clock = std::chrono::steady_clock;
+      constexpr auto kFrame = std::chrono::microseconds(16667);
+      if (next_frame_ > clock::now()) std::this_thread::sleep_until(next_frame_);
+      next_frame_ = std::max(next_frame_, clock::now() - kFrame) + kFrame;
+    }
+#endif
     // Testing aid: KK_AUTOPLAY=1 presses Play after a couple of seconds.
     static const bool autoplay = std::getenv("KK_AUTOPLAY") != nullptr;
     if (autoplay && files_ok_ && ++autoplay_frames_ == 120) StartGame();
@@ -928,8 +938,10 @@ class Launcher final : public rex::ui::ImGuiDialog {
   }
 
   // A column of large menu entries (Home and the setup screen): the focused
-  // one moves in, with a brass mark. Returns the one chosen, or -1.
-  int DrawMenu(ImDrawList* dl, const std::vector<HomeEntry>& entries, int& focus, float x, float y, float alpha) {
+  // one moves in, with a brass mark. Returns the one chosen, or -1. `item_h`:
+  // each entry's height when there's less room than usual (0: the usual).
+  int DrawMenu(ImDrawList* dl, const std::vector<HomeEntry>& entries, int& focus, float x, float y, float alpha,
+               float item_h = 0) {
     const float s = S();
     const ui::Fonts f = ui::GetFonts();
     const int n = int(entries.size());
@@ -948,7 +960,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
         entries[size_t(focus)].change(dir);
       }
     }
-    const float item_h = 42 * s, fs = 24 * s, tr = 3 * s;
+    if (item_h <= 0) item_h = 42 * s;
+    const float fs = item_h * (24.0f / 42.0f), tr = 3 * s;
     home_offset_.resize(size_t(std::max<int>(n, int(home_offset_.size()))), 0.0f);
     int chosen = -1;
     for (int i = 0; i < n; ++i) {
@@ -1038,7 +1051,11 @@ class Launcher final : public rex::ui::ImGuiDialog {
                       "THE OFFICIAL GAME OF THE MOVIE", 5.2f * s);
       y += 66 * s;
     }
-    if (const int i = DrawMenu(dl, entries, home_focus_, x, y, a); i >= 0) entries[size_t(i)].action();
+    // In a small window (the scale stops shrinking at 0.7) the entries close
+    // up rather than run into the status row.
+    const float room = o_.y + h_ - 150 * s - y;
+    const float item_h = std::clamp(room / float(std::max<size_t>(entries.size(), 1)), 28 * s, 42 * s);
+    if (const int i = DrawMenu(dl, entries, home_focus_, x, y, a, item_h); i >= 0) entries[size_t(i)].action();
     DrawHomeStatus(dl, x, o_.y + h_ - 120 * s, a);
   }
 
@@ -1507,11 +1524,14 @@ class Launcher final : public rex::ui::ImGuiDialog {
       std::vector<Option> opts = {{"Off", "bilinear"}, {"AMD FSR 1", "fsr"}};
 #if defined(_WIN32)
       opts.push_back({"NVIDIA NIS", "nis"});
+      const char* which = "AMD FSR 1 and NVIDIA Image Scaling (NIS) both work";
+#else
+      const char* which = "AMD FSR 1 works";
 #endif
       Item it = CvarChoice("Upscaler",
-                           "Scales the picture up to your screen and sharpens it, for a clearer image when the game "
-                           "draws fewer pixels than your screen has. AMD FSR 1 and NVIDIA Image Scaling (NIS) both "
-                           "work on any graphics card. Off uses plain smooth scaling.",
+                           std::string("Scales the picture up to your screen and sharpens it, for a clearer image "
+                                       "when the game draws fewer pixels than your screen has. ") +
+                               which + " on any graphics card. Off uses plain smooth scaling.",
                            "present_effect", opts);
       std::vector<std::string> values;
       for (const auto& o : opts) values.push_back(o.value);
@@ -2744,6 +2764,9 @@ class Launcher final : public rex::ui::ImGuiDialog {
   int pack_installed_ = -1;        // -1: not read yet
   bool waiting_for_pack_ = false;  // Play was pressed during the download
   int autoplay_frames_ = 0;
+#if !defined(_WIN32)
+  std::chrono::steady_clock::time_point next_frame_{};
+#endif
   std::string status_;
   double status_time_ = -100, saved_time_ = -100;
   int seen_changes_ = 0, saved_changes_ = 0;

@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <atomic>
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -39,6 +41,15 @@ void TuneProcessScheduling();
 
 // Runs a command line (no window) and waits; true when it exits with 0.
 bool RunAndWait(const std::wstring& command_line);
+
+#if !defined(_WIN32)
+// Runs a program found on the PATH (argv[0]) with the arguments and collects
+// what it writes, adding the byte count to *bytes as it arrives. Its errors are
+// dropped. The AppImage's library path isn't passed on, so system programs
+// (curl, ffmpeg) load their own libraries. True when it exits with 0.
+bool RunCapture(const std::vector<std::string>& argv, std::vector<uint8_t>& out,
+                std::atomic<uint64_t>* bytes = nullptr);
+#endif
 
 // Opens a web page in the default browser.
 void OpenUrl(const std::string& url);

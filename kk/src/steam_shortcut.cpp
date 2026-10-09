@@ -20,7 +20,7 @@
 #include <tlhelp32.h>
 #else
 #include <spawn.h>
-extern char** environ;
+#include <unistd.h>  // environ (declared there with C linkage)
 #endif
 
 #include <rex/logging.h>

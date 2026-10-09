@@ -124,6 +124,11 @@ class Input {
   bool sdl_ready_ = false;
   std::vector<void*> pads_;  // SDL_Gamepad*
   std::array<bool, 8> buttons_down_{};
+  // When each action was last held on a controller / pressed on the keyboard:
+  // Steam's desktop controller layout also types keys for the controller's
+  // buttons (arrows, Enter, Escape), and one press must count once.
+  std::array<double, kActionCount> pad_held_at_{};
+  std::array<double, kActionCount> key_pressed_at_{};
 };
 
 // --------------------------------------------------------------- prompts ---

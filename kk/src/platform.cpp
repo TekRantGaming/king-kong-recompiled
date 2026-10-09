@@ -19,7 +19,10 @@
 #include <timeapi.h>
 #else
 #include <SDL3/SDL.h>
+#include <cerrno>
 #include <cstdlib>
+#include <cstring>
+#include <fcntl.h>
 #include <fstream>
 #include <spawn.h>
 #include <sys/wait.h>
@@ -184,6 +187,46 @@ bool RunAndWait(const std::wstring& command_line) {
 #endif
 }
 
+#if !defined(_WIN32)
+bool RunCapture(const std::vector<std::string>& argv, std::vector<uint8_t>& out, std::atomic<uint64_t>* bytes) {
+  int fds[2];
+  if (pipe(fds) != 0) return false;
+  posix_spawn_file_actions_t actions;
+  posix_spawn_file_actions_init(&actions);
+  posix_spawn_file_actions_adddup2(&actions, fds[1], STDOUT_FILENO);
+  posix_spawn_file_actions_addclose(&actions, fds[0]);
+  posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+  std::vector<char*> args;
+  for (const std::string& a : argv) args.push_back(const_cast<char*>(a.c_str()));
+  args.push_back(nullptr);
+  std::vector<char*> env;  // without the AppImage's LD_LIBRARY_PATH
+  for (char** e = environ; *e; ++e)
+    if (std::strncmp(*e, "LD_LIBRARY_PATH=", 16) != 0) env.push_back(*e);
+  env.push_back(nullptr);
+  pid_t pid = 0;
+  const int rc = posix_spawnp(&pid, args[0], &actions, nullptr, args.data(), env.data());
+  posix_spawn_file_actions_destroy(&actions);
+  close(fds[1]);
+  if (rc != 0) {
+    close(fds[0]);
+    return false;
+  }
+  uint8_t buf[1 << 16];
+  for (;;) {
+    const ssize_t n = read(fds[0], buf, sizeof(buf));
+    if (n < 0 && errno == EINTR) continue;
+    if (n <= 0) break;
+    out.insert(out.end(), buf, buf + n);
+    if (bytes) *bytes += uint64_t(n);
+  }
+  close(fds[0]);
+  int status = 0;
+  while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+  }
+  return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+#endif
+
 void OpenUrl(const std::string& url) {
   if (url.rfind("https://", 0) != 0) return;  // web pages only
 #if defined(_WIN32)
@@ -211,54 +254,59 @@ void OpenInExplorer(const std::filesystem::path& path) {
 }
 
 void LoadUiFont(ImFontAtlas* atlas) {
-#if defined(_WIN32)
-  wchar_t windir[MAX_PATH];
-  if (!GetWindowsDirectoryW(windir, MAX_PATH)) return;
-  const auto fonts = std::filesystem::path(windir) / "Fonts";
   // Latin-1 plus General Punctuation: the game's achievement text uses curly
   // quotes (as in "Kong's power").
   static const ImWchar kRanges[] = {0x0020, 0x00FF, 0x2010, 0x205E, 0};
-  auto load = [&](const char* file) -> ImFont* {
-    const auto path = fonts / file;
-    return std::filesystem::exists(path) ? atlas->AddFontFromFileTTF(path.string().c_str(), 18.0f, nullptr, kRanges)
-                                         : nullptr;
+  auto load = [&](const std::filesystem::path& path) -> ImFont* {
+    std::error_code ec;
+    return !path.empty() && std::filesystem::exists(path, ec)
+               ? atlas->AddFontFromFileTTF(path.string().c_str(), 18.0f, nullptr, kRanges)
+               : nullptr;
   };
-  g_fonts.regular = load("segoeui.ttf");
-  if (!g_fonts.regular) return;
-  g_fonts.semibold = load("seguisb.ttf");
-  g_fonts.bold = load("segoeuib.ttf");
-  g_fonts.display = load("bahnschrift.ttf");
-  ImGui::GetIO().FontDefault = g_fonts.regular;
+#if defined(_WIN32)
+  wchar_t windir[MAX_PATH];
+  if (GetWindowsDirectoryW(windir, MAX_PATH)) {
+    const auto fonts = std::filesystem::path(windir) / "Fonts";
+    if ((g_fonts.regular = load(fonts / "segoeui.ttf"))) {
+      g_fonts.semibold = load(fonts / "seguisb.ttf");
+      g_fonts.bold = load(fonts / "segoeuib.ttf");
+      g_fonts.display = load(fonts / "bahnschrift.ttf");
+    }
+  }
+  // Under Wine (Proton on Linux) there are no Windows fonts: the system's
+  // below, through Wine's Z: drive (the Linux root).
+  const std::string root = g_fonts.regular ? "" : "Z:";
 #else
-  // Common Linux UI fonts; the first family found wins.
-  static const ImWchar kRanges[] = {0x0020, 0x00FF, 0x2010, 0x205E, 0};
-  struct Family { const char* regular; const char* semibold; const char* bold; };
+  const std::string root;
+#endif
+  // Common Linux UI fonts; the first family found wins. The display font stands
+  // in for Bahnschrift (narrow, DIN-like): a semi-condensed or condensed cut.
+  struct Family { const char* regular; const char* semibold; const char* bold; const char* display; };
   static const Family kFamilies[] = {
       {"/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", "/usr/share/fonts/truetype/noto/NotoSans-SemiBold.ttf",
-       "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf"},
+       "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf", "/usr/share/fonts/truetype/noto/NotoSans-SemiCondensedMedium.ttf"},
       {"/usr/share/fonts/noto/NotoSans-Regular.ttf", "/usr/share/fonts/noto/NotoSans-SemiBold.ttf",
-       "/usr/share/fonts/noto/NotoSans-Bold.ttf"},
+       "/usr/share/fonts/noto/NotoSans-Bold.ttf", "/usr/share/fonts/noto/NotoSans-SemiCondensedMedium.ttf"},
       {"/usr/share/fonts/google-noto/NotoSans-Regular.ttf", "/usr/share/fonts/google-noto/NotoSans-SemiBold.ttf",
-       "/usr/share/fonts/google-noto/NotoSans-Bold.ttf"},
-      {"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", nullptr, "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"},
-      {"/usr/share/fonts/TTF/DejaVuSans.ttf", nullptr, "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf"},
-      {"/usr/share/fonts/dejavu/DejaVuSans.ttf", nullptr, "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf"},
+       "/usr/share/fonts/google-noto/NotoSans-Bold.ttf", "/usr/share/fonts/google-noto/NotoSans-SemiCondensedMedium.ttf"},
+      {"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", nullptr, "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+       "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf"},
+      {"/usr/share/fonts/TTF/DejaVuSans.ttf", nullptr, "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+       "/usr/share/fonts/TTF/DejaVuSansCondensed.ttf"},
+      {"/usr/share/fonts/dejavu/DejaVuSans.ttf", nullptr, "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+       "/usr/share/fonts/dejavu/DejaVuSansCondensed.ttf"},
       {"/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf", nullptr,
-       "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"},
+       "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf", nullptr},
   };
-  auto load = [&](const char* file) -> ImFont* {
-    std::error_code ec;
-    return file && std::filesystem::exists(file, ec) ? atlas->AddFontFromFileTTF(file, 18.0f, nullptr, kRanges)
-                                                     : nullptr;
-  };
+  auto file = [&](const char* path) { return path ? std::filesystem::path(root + path) : std::filesystem::path(); };
   for (const auto& f : kFamilies) {
-    if (!(g_fonts.regular = load(f.regular))) continue;
-    g_fonts.semibold = load(f.semibold ? f.semibold : f.bold);
-    g_fonts.bold = load(f.bold);
-    ImGui::GetIO().FontDefault = g_fonts.regular;
-    break;
+    if (g_fonts.regular) break;  // Windows' own, or the family just loaded
+    if (!(g_fonts.regular = load(file(f.regular)))) continue;
+    g_fonts.semibold = load(file(f.semibold ? f.semibold : f.bold));
+    g_fonts.bold = load(file(f.bold));
+    g_fonts.display = load(file(f.display));
   }
-#endif
+  if (g_fonts.regular) ImGui::GetIO().FontDefault = g_fonts.regular;
   if (!g_fonts.semibold) g_fonts.semibold = g_fonts.regular;
   if (!g_fonts.bold) g_fonts.bold = g_fonts.regular;
   if (!g_fonts.display) g_fonts.display = g_fonts.bold;
