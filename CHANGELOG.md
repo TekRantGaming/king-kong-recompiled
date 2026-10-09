@@ -3,6 +3,14 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v1.9.9 (10 October 2026)
+
+### What's new
+- **Stronger vibration if you want it** (#35). **Vibration strength** on the **Controls** page now goes up to 200%. The game's own rumble is gentle: each machine gun, revolver or sniper rifle shot runs the controller's big motor at about half speed, and the shotgun at about three quarters. At **160%** the other guns kick about as hard as the shotgun does at 100%, and the shotgun reaches the controller's full strength. 100% is still the default, as on the Xbox 360. Thanks to tedwards75 for the suggestion.
+
+### Full changelog
+- `kk_vibration_strength` takes 10 to 200; each motor's speed is capped at its maximum. The game's own values are now put back after each rumble call, so a vibration it sends again is never scaled twice.
+
 ## v1.9.8 (9 October 2026)
 
 ### What's new

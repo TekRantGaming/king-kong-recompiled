@@ -42,7 +42,8 @@ REXCVAR_DEFINE_STRING(kk_achievement_sound_file, "Xbox_360.wav", "KK/Achievement
                       "Achievement sound from the sounds folder (empty, or a file that isn't there = built-in chime)");
 REXCVAR_DEFINE_INT32(kk_achievement_volume, 80, "KK/Achievements", "Achievement sound volume in percent");
 REXCVAR_DEFINE_BOOL(kk_vibration, true, "KK/Controls", "Controller vibration");
-REXCVAR_DEFINE_INT32(kk_vibration_strength, 100, "KK/Controls", "Vibration strength in percent");
+REXCVAR_DEFINE_INT32(kk_vibration_strength, 100, "KK/Controls",
+                     "Vibration strength in percent (10-200; above 100 is stronger than on the Xbox 360)");
 REXCVAR_DEFINE_BOOL(kk_invert_rs_x, false, "KK/Controls", "Invert right stick horizontal (camera)");
 REXCVAR_DEFINE_BOOL(kk_invert_rs_y, false, "KK/Controls", "Invert right stick vertical");
 REXCVAR_DEFINE_BOOL(kk_invert_ls_x, false, "KK/Controls", "Invert left stick horizontal");
