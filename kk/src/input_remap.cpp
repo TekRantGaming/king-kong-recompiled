@@ -20,6 +20,7 @@
 #include <rex/cvar.h>
 #include <rex/hook.h>
 
+#include "mouse_look.h"
 #include "settings.h"
 
 namespace {
@@ -206,7 +207,13 @@ REX_EXTERN(__imp__sub_8272C610);
 REX_HOOK_RAW(sub_8272C610) {
   const uint32_t out = ctx.r3.u32, stick = ctx.r4.u32, from = uint32_t(ctx.lr);
   __imp__sub_8272C610(ctx, base);
-  if (stick == 1 && out && from == kCamStickReturn && REXCVAR_GET(kk_camera_modern)) EvenCameraStick(base, out);
+  if (stick != 1 || !out || from != kCamStickReturn) return;
+  if (REXCVAR_GET(kk_camera_modern)) EvenCameraStick(base, out);
+  // Keyboard & mouse: the mouse's turn this frame (mouse_look.cpp).
+  float x = LoadF(base + out), y = LoadF(base + out + 4);
+  kk::mouse_look::OnCameraStick(x, y);
+  StoreF(base + out, x);
+  StoreF(base + out + 4, y);
 }
 
 // Controller sensitivity. The camera manager (CM_Cam, sub_8246F180) reads the
@@ -216,7 +223,8 @@ REX_HOOK_RAW(sub_8272C610) {
 // through sub_82711950 (yaw) and sub_82712300 (pitch). Both are used all over
 // the game, so only the calls from CM_Cam (return addresses below) are
 // scaled. That scales the turn at every push, a full push included, so 200%
-// turns twice as fast. Keyboard & mouse has its own mouse sensitivity.
+// turns twice as fast. Keyboard & mouse has its own mouse sensitivity, and the
+// mouse's turn is put in here too (mouse_look.cpp).
 namespace {
 constexpr uint32_t kCamYawReturn = 0x82471360, kCamPitchReturn = 0x82471430;
 
@@ -228,12 +236,12 @@ double CameraGain() {
 
 REX_EXTERN(__imp__sub_82711950);
 REX_HOOK_RAW(sub_82711950) {
-  if (uint32_t(ctx.lr) == kCamYawReturn) ctx.f1.f64 *= CameraGain();
+  if (uint32_t(ctx.lr) == kCamYawReturn) ctx.f1.f64 = kk::mouse_look::Yaw(ctx.f1.f64 * CameraGain());
   __imp__sub_82711950(ctx, base);
 }
 
 REX_EXTERN(__imp__sub_82712300);
 REX_HOOK_RAW(sub_82712300) {
-  if (uint32_t(ctx.lr) == kCamPitchReturn) ctx.f1.f64 *= CameraGain();
+  if (uint32_t(ctx.lr) == kCamPitchReturn) ctx.f1.f64 = kk::mouse_look::Pitch(ctx.f1.f64 * CameraGain());
   __imp__sub_82712300(ctx, base);
 }

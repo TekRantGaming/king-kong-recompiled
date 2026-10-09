@@ -40,6 +40,7 @@ KEY_ALIASES = {
     "LBracket": "Bracket_Left", "RBracket": "Bracket_Right", "Backtick": "Tilda", "PageUp": "Page_Up",
     "PageDown": "Page_Down", "CapsLock": "Caps_Lock", "NumLock": "Num_Lock", "PrintScreen": "Print_Screen",
     "NumpadPlus": "Plus", "NumpadMinus": "Minus", "NumpadStar": "Asterisk", "NumpadSlash": "Slash",
+    "LMB": "Mouse_Left", "RMB": "Mouse_Right", "MMB": "Mouse_Middle",
 }
 
 

@@ -15,6 +15,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <imgui.h>
@@ -257,6 +258,7 @@ struct Modal {
   float reader_scroll = 0;
   float width = 620;
   int shown_frame = -1;  // input waits a frame after opening
+  std::vector<std::pair<ImVec2, ImVec2>> button_rects;  // where the buttons were last drawn
 };
 
 // Draws the open pop-up and handles its input. Returns true if one is open.

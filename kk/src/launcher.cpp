@@ -1425,6 +1425,20 @@ class Launcher final : public rex::ui::ImGuiDialog {
     return items;
   }
 
+  // Keyboard & mouse shows the keys in the game's hints and turns the camera
+  // with the mouse; back on Controller, the controller's prompts come back.
+  static void SetInputMode(bool keyboard) {
+    SetBool("mnk_mode", keyboard);
+    const std::string prompts = Get("kk_button_prompts");
+    if (keyboard) {
+      if (prompts != "keyboard") Set("kk_pad_prompts", prompts);
+      Set("kk_button_prompts", "keyboard");
+      SetBool("mnk_mouse", true);
+    } else if (prompts == "keyboard") {
+      Set("kk_button_prompts", Get("kk_pad_prompts"));
+    }
+  }
+
   void SetFullscreen(bool on) {
     SetBool("fullscreen", on);
     if (cb_.set_fullscreen) cb_.set_fullscreen(on);
@@ -1724,10 +1738,16 @@ class Launcher final : public rex::ui::ImGuiDialog {
     std::vector<Item> items;
     const auto percent = [](float v) { return std::to_string(int(std::lround(v))) + "%"; };
     items.push_back(Section("Controller"));
-    items.push_back(CvarToggle("Input",
-                               "Controllers work automatically. Keyboard & mouse plays with a keyboard and mouse "
-                               "instead; its keys are under Keyboard bindings.",
-                               "mnk_mode", "Controller", "Keyboard & mouse"));
+    {
+      Item it = CvarToggle("Input",
+                           "Controllers work automatically. Keyboard & mouse plays with a keyboard and mouse instead: "
+                           "the game's hints show the keys and the mouse turns the camera. The keys are under "
+                           "Keyboard bindings.",
+                           "mnk_mode", "Controller", "Keyboard & mouse");
+      it.on_choice = [](int i) { SetInputMode(i == 1); };
+      it.on_default = [] { SetInputMode(false); };
+      items.push_back(std::move(it));
+    }
     items.push_back(CvarChoice("Button prompts", "Which controller's buttons the game shows in menus and hints.",
                                "kk_button_prompts",
                                {{"Xbox 360", "xbox360"},
@@ -1783,8 +1803,10 @@ class Launcher final : public rex::ui::ImGuiDialog {
     const char* mnk_note = "Used when Input is Keyboard & mouse.";
     items.push_back(Section("Keyboard & mouse"));
     {
-      Item it = CvarSlider("Mouse sensitivity", "How fast the mouse turns the camera.", "mnk_sensitivity", 0.1f, 5.0f,
-                           0.05f, [](float v) {
+      Item it = CvarSlider("Mouse sensitivity",
+                           "How far the camera turns as you move the mouse. It turns the same however fast you move "
+                           "it, as in other first-person games.",
+                           "kk_mouse_sensitivity", 0.1f, 5.0f, 0.05f, [](float v) {
                              char buf[32];
                              std::snprintf(buf, sizeof(buf), "%.2f" KK_TIMES, v);
                              return std::string(buf);
@@ -1792,8 +1814,15 @@ class Launcher final : public rex::ui::ImGuiDialog {
       items.push_back(std::move(Disable(it, !mnk, mnk_note)));
     }
     {
-      Item it = CvarToggle("Mouse camera", "Move the camera (right stick) with the mouse.", "mnk_mouse");
+      Item it = CvarToggle("Mouse camera",
+                           "Turn the camera with the mouse. Off, it turns with the keys bound to the right stick.",
+                           "mnk_mouse");
       items.push_back(std::move(Disable(it, !mnk, mnk_note)));
+    }
+    {
+      Item it = CvarToggle("Mouse vertical", "Which way moving the mouse up and down moves the camera.",
+                           "kk_mouse_invert_y", "Normal", "Inverted");
+      items.push_back(std::move(Disable(it, !mnk || !GetBool("mnk_mouse"), mnk_note)));
     }
 
     items.push_back(Section("Mapping"));
@@ -1876,14 +1905,44 @@ class Launcher final : public rex::ui::ImGuiDialog {
       for (size_t at = 0; (at = keys.find(',', at)) != std::string::npos; at += 2) keys.insert(at + 1, " ");
       return keys;
     };
+    // What each button does in the game (the Xbox 360 manual), so the keys make sense.
+    static const std::map<std::string, const char*> kActions = {
+        {"keybind_a", "In play: Jack calls his companion; Kong hits. In menus: select."},
+        {"keybind_b", "In play: Jack checks his reserve bullets; Kong jumps, dodges and climbs. In menus: back."},
+        {"keybind_x", "In play: Kong grabs and throws, and picks up and puts down Ann."},
+        {"keybind_y", "In play: Jack drops his spear; Kong pushes back, bites and goes into fury mode."},
+        {"keybind_left_trigger", "In play: Jack takes aim (raises his gun)."},
+        {"keybind_right_trigger", "In play: Jack shoots, takes, uses and repels."},
+        {"keybind_left_shoulder", "Not used in play."},
+        {"keybind_right_shoulder", "In play: Jack reloads."},
+        {"keybind_lstick_up", "Moves Jack and Kong."},
+        {"keybind_lstick_down", "Moves Jack and Kong."},
+        {"keybind_lstick_left", "Moves Jack and Kong."},
+        {"keybind_lstick_right", "Moves Jack and Kong."},
+        {"keybind_lstick_press", "In play: Jack crouches."},
+        {"keybind_rstick_up", "Turns the camera when Mouse camera is off."},
+        {"keybind_rstick_down", "Turns the camera when Mouse camera is off."},
+        {"keybind_rstick_left", "Turns the camera when Mouse camera is off."},
+        {"keybind_rstick_right", "Turns the camera when Mouse camera is off."},
+        {"keybind_rstick_press", "In play: Jack zooms in."},
+        {"keybind_dpad_up", "Moves around the game's menus."},
+        {"keybind_dpad_down", "Moves around the game's menus."},
+        {"keybind_dpad_left", "Moves around the game's menus."},
+        {"keybind_dpad_right", "Moves around the game's menus."},
+        {"keybind_start", "Opens the pause menu."},
+        {"keybind_back", "Not used in play."},
+        {"keybind_guide", "Not used in play."},
+    };
     for (auto* e : binds) {
       const std::string value = pretty(e->getter());
-      Item it = ActionItem(e->description, "Select, then press the key to use. Esc cancels.",
+      std::string desc = T("Select, then press the key or mouse button to use. Esc cancels.");
+      if (auto a = kActions.find(e->name); a != kActions.end()) desc = std::string(T(a->second)) + " " + desc;
+      Item it = ActionItem(e->description, desc,
                            value.empty() ? "None" : value, [this, name = e->name, label = e->description] {
                              capturing_ = name;
                              ui::Modal m;
                              m.open = true;
-                             m.title = "Press a key";
+                             m.title = "Press a key or mouse button";
                              m.body = F("For {0}. Esc cancels.", {T(label)});
                              m.buttons = {"Cancel"};
                              m.cancel = 0;
@@ -1906,6 +1965,22 @@ class Launcher final : public rex::ui::ImGuiDialog {
       return;
     }
     if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+      capturing_.clear();
+      modal_.open = false;
+      input_.ConsumeAll();
+      return;
+    }
+    // A mouse button, unless it's a click on the pop-up's own button (Cancel).
+    static constexpr std::pair<ImGuiMouseButton, const char*> kMouse[] = {
+        {ImGuiMouseButton_Left, "LMB"}, {ImGuiMouseButton_Right, "RMB"}, {ImGuiMouseButton_Middle, "MMB"}};
+    const ImVec2 mouse = ImGui::GetIO().MousePos;
+    bool on_button = false;
+    for (const auto& [a, b] : modal_.button_rects)
+      on_button = on_button || (mouse.x >= a.x && mouse.y >= a.y && mouse.x < b.x && mouse.y < b.y);
+    for (const auto& [button, name] : kMouse) {
+      if (ImGui::GetFrameCount() <= modal_.shown_frame + 1 || !ImGui::IsMouseClicked(button)) continue;
+      if (button == ImGuiMouseButton_Left && on_button) continue;
+      Set(capturing_.c_str(), name);
       capturing_.clear();
       modal_.open = false;
       input_.ConsumeAll();
@@ -2177,8 +2252,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
       case kGameplay:
         return {"kk_frame_rate", "kk_fov", "kk_show_fps", "kk_skip_intros", "user_language"};
       case kControls:
-        return {"mnk_mode", "kk_button_prompts", "kk_camera_sensitivity", "kk_camera_modern", "mnk_sensitivity",
-                "mnk_mouse", "kk_invert_rs_x", "kk_invert_rs_y", "kk_invert_ls_x", "kk_invert_ls_y",
+        return {"mnk_mode", "kk_button_prompts", "kk_camera_sensitivity", "kk_camera_modern", "kk_mouse_sensitivity",
+                "mnk_mouse", "kk_mouse_invert_y", "kk_invert_rs_x", "kk_invert_rs_y", "kk_invert_ls_x", "kk_invert_ls_y",
                 "kk_toggle_aim", "kk_deadzone", "kk_vibration", "kk_vibration_strength", "kk_map_*",
                 "@Input/Keybinds/Controller"};
       case kCheatsPage:

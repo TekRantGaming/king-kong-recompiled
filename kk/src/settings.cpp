@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cmath>
 #include <fstream>
+#include <utility>
 
 #include <rex/logging.h>
 #include <rex/string.h>
@@ -74,6 +75,12 @@ REXCVAR_DEFINE_BOOL(kk_skip_intros, true, "KK/Gameplay",
                     "Skip the Ubisoft, Universal and WingNut logo movies when the game starts");
 REXCVAR_DEFINE_BOOL(kk_toggle_aim, false, "KK/Controls",
                     "Aim (left trigger) toggles: press once to raise the gun, again to lower it");
+REXCVAR_DEFINE_DOUBLE(kk_mouse_sensitivity, 1.0, "KK/Controls",
+                      "Keyboard & mouse: how far the mouse turns the camera (1 = 0.066 degrees per count)")
+    .range(0.05, 10.0);
+REXCVAR_DEFINE_BOOL(kk_mouse_invert_y, false, "KK/Controls", "Keyboard & mouse: mouse up looks down");
+REXCVAR_DEFINE_STRING(kk_pad_prompts, "xbox360", "KK/Controls",
+                      "Internal: the controller's button prompts, put back when Input goes back to Controller");
 
 // Button remapping: kk_map_<physical> = <game button> (or "none").
 #define KK_MAP_CVAR(id, def, label) \
@@ -268,6 +275,10 @@ void ApplyFixedSettings() {
   // no say in it (the values equal the defaults, so they aren't saved again).
   rex::cvar::SetFlagByName("async_shader_compilation", "true");
   rex::cvar::ResetToDefault("async_shader_wait_ms");
+  // The mouse turns the camera itself (mouse_look.cpp), so the runtime's
+  // mouse-to-right-stick part is kept at its lowest, where it never gets past
+  // the camera's deadzone (kk_mouse_sensitivity is the setting now).
+  rex::cvar::SetFlagByName("mnk_sensitivity", "0.010000");
 }
 
 void SetCvarDefault(std::string_view name, std::string_view value) {
@@ -282,6 +293,33 @@ void SetCvarDefault(std::string_view name, std::string_view value) {
 void ApplyPortDefaults() {
   // Windowed by default so the launcher isn't a giant fullscreen dialog.
   SetCvarDefault("fullscreen", "false");
+  SetCvarDefault("mnk_sensitivity", "0.010000");  // as the setting writes it, so it is not saved
+  // Keyboard & mouse: laid out like other first-person games. The mouse turns
+  // the camera (mouse_look.cpp; the runtime's own mouse-to-stick part is off,
+  // see ApplyFixedSettings), the buttons fire and aim, and the keys follow
+  // what each button does in the game (Jack / Kong, from the Xbox 360 manual).
+  SetCvarDefault("mnk_mouse", "true");
+  static constexpr std::pair<const char*, const char*> kKeys[] = {
+      {"keybind_right_trigger", "LMB,E"},         // shoot, take, use, repel
+      {"keybind_left_trigger", "RMB"},            // take aim
+      {"keybind_right_shoulder", "R"},            // reload
+      {"keybind_left_shoulder", "1"},             // (unused)
+      {"keybind_lstick_press", "C,Control"},      // crouch
+      {"keybind_rstick_press", "MMB,Z"},          // zoom
+      {"keybind_a", "Return,F"},                  // select; call companion / Kong: hit
+      {"keybind_b", "Space,Backspace"},           // back; check reserve bullets / Kong: jump, dodge, climb
+      {"keybind_x", "Q"},                         // Kong: grab, throw, take Ann
+      {"keybind_y", "G"},                         // drop spear / Kong: push back, bite, fury
+      {"keybind_start", "Escape,P"},              // menu
+      {"keybind_back", "Tab"},
+      {"keybind_lstick_up", "W"},  {"keybind_lstick_down", "S"},
+      {"keybind_lstick_left", "A"}, {"keybind_lstick_right", "D"},
+      {"keybind_rstick_up", "I"},  {"keybind_rstick_down", "K"},  // the camera without the mouse
+      {"keybind_rstick_left", "J"}, {"keybind_rstick_right", "L"},
+      {"keybind_dpad_up", "Up"},   {"keybind_dpad_down", "Down"},  // menus
+      {"keybind_dpad_left", "Left"}, {"keybind_dpad_right", "Right"},
+  };
+  for (const auto& [name, keys] : kKeys) SetCvarDefault(name, keys);
   // VSync off (the frame rate cap paces the game), FXAA, 4x texture filtering.
   SetCvarDefault("d3d12_allow_variable_refresh_rate_and_tearing", "true");
   SetCvarDefault("swap_post_effect", "fxaa");

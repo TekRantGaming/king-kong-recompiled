@@ -33,6 +33,7 @@ set(KINGKONG_SOURCES
     src/toast.cpp
     src/io_fix.cpp
     src/loading_fix.cpp
+    src/mouse_look.cpp
     src/language.cpp
     src/intros.cpp
     src/fov.cpp
@@ -98,7 +99,7 @@ endif()
 # The port's version: shown in the launcher and compared with GitHub releases by the updater.
 # (-DKK_VERSION=x.y.z overrides it, to test the updater with an "older" build.)
 if(NOT DEFINED KK_VERSION)
-    set(KK_VERSION "1.9.6")
+    set(KK_VERSION "1.9.7")
 endif()
 target_compile_definitions(king_kong PRIVATE KK_VERSION="${KK_VERSION}" KK_VERSION_W=L"${KK_VERSION}")
 
