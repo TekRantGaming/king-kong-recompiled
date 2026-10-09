@@ -105,7 +105,33 @@ Play it exactly as the Xbox 360 did with one click, or pick a preset from Low to
 
 </td>
 </tr>
+<tr>
+<td valign="top">
+
+**A launcher made for controllers**<br>
+Set everything up from the couch with a controller, or use the keyboard and mouse. The button pictures match your controller.
+
+</td>
+<td valign="top">
+
+**Add to Steam**<br>
+One click puts it in your Steam library with its artwork, ready for Big Picture and the Steam Deck, with your controller still working.
+
+</td>
+<td valign="top">
+
+**Looks and sounds like the game**<br>
+The launcher takes the logo, stills from the movie, the menu music and the menu sounds from your own copy of the game.
+
+</td>
+</tr>
 </table>
+
+## New in v1.9.5
+
+A new launcher, rebuilt from scratch. It works fully with a controller, and it looks and sounds like the game: the King Kong logo over stills from the movie trailer, the main menu music and the game's menu sounds, all taken from your own copy. **Add to Steam** puts the port in your Steam library with its artwork in one click. More in [The launcher](#the-launcher).
+
+<img src="docs/images/launcher-home.jpg" alt="The new launcher's Home screen" width="100%">
 
 ## New in v1.9.0
 
@@ -167,19 +193,43 @@ Until now the only way to play it was on an Xbox 360. On the Xenia emulator it b
 
 ## The launcher
 
-Everything is set up before the game starts. The launcher uses art from your own copy of the game: Kong's face, the achievement pictures and the stormy sky from the game's menu. Settings are saved to a plain text file, `king_kong.toml`, next to the game, and every settings page has a **Reset page** button that puts just that page back to its defaults.
+Everything is set up before the game starts, with a controller, the keyboard or the mouse. The launcher looks and sounds like the game, using your own copy of it: the King Kong logo, stills from the movie trailer, the main menu music and the game's own menu sounds. Nothing from the game comes in the download. It follows the game's **Language** setting (English, French, German, Spanish or Italian). Settings are saved to a plain text file, `king_kong.toml`, next to the game, and every settings page has **Reset page** to put just that page back to its defaults.
 
 <table>
 <tr>
-<td width="55%"><img src="docs/images/launcher-play.jpg" alt="Play page"></td>
+<td width="55%"><img src="docs/images/launcher-home.jpg" alt="Home screen"></td>
 <td valign="middle">
 
-### Play
-- **Install the game** straight from your disc image, with a progress bar
-- Checks the disc really is King Kong
-- **Shader pack**: effects other play-throughs have already prepared, downloaded and kept up to date by itself, so the game rarely pauses for a new one
-- **Updates**: the launcher tells you when a new version is out and installs it with one click
+### Home
+- **Play**, with the game's logo over a slow slideshow of stills from the movie
+- **Reinstall** the game from your disc image, with a progress bar
+- **Check for updates**: a new version downloads on its own screen with a progress bar, then the launcher restarts
+- **Add to Steam** (see below)
+- How the game, the **shader pack** and the port's version stand, at a glance
 - Turn the launcher off and **hold Shift** at start to bring it back
+
+</td>
+</tr>
+<tr>
+<td valign="middle">
+
+### First start
+- The launcher asks for **your copy of the game** first: pick your disc image and it checks it really is King Kong, then installs it
+- It takes its **artwork** from your copy, then opens on Home
+- Choose your **language** before you start
+
+</td>
+<td width="55%"><img src="docs/images/launcher-setup.jpg" alt="Setup screen"></td>
+</tr>
+<tr>
+<td><img src="docs/images/launcher-steam.jpg" alt="Add to Steam"></td>
+<td valign="middle">
+
+### Add to Steam
+- Adds the port to your **Steam library** as a non-Steam game, so you can start it from Steam, Big Picture or a **Steam Deck**
+- With its **artwork** from [SteamGridDB](https://www.steamgriddb.com/game/5249080): cover, banner, header, logo and icon
+- **Steam Input** is switched off for it, so your controller keeps working
+- Steam closes for a moment while it's added and opens again afterwards
 
 </td>
 </tr>
@@ -194,7 +244,7 @@ Everything is set up before the game starts. The launcher uses art from your own
 - **Keep 16:9** with borders, or **stretch** to fill
 
 </td>
-<td width="55%"><img src="docs/images/launcher-display.jpg" alt="Display page"></td>
+<td><img src="docs/images/launcher-display.jpg" alt="Display page"></td>
 </tr>
 <tr>
 <td><img src="docs/images/launcher-graphics.jpg" alt="Graphics page"></td>
@@ -202,8 +252,8 @@ Everything is set up before the game starts. The launcher uses art from your own
 
 ### Graphics
 - **Look**: Original Xbox 360 (720p at 30 FPS, the console's anti-aliasing, texture filtering and field of view, motion blur and fog, no ambient occlusion) or Modern. Switching back to Modern puts your own settings back
-- **Graphics presets**: Low (with FSR 1), Medium (the default), High, Ultra and Steam Deck, or Custom when you set things yourself
-- **Upscaler**: AMD FSR 1 or NVIDIA Image Scaling (NIS), both for any graphics card, or Off (the default). Each has Native, Quality, Balanced and Performance modes, showing the resolution the game draws at; they scale the picture to your screen and sharpen it
+- **Graphics presets**: Low and Medium (with FSR 1), High, Ultra and Steam Deck, or Custom when you set things yourself
+- **Upscaler**: AMD FSR 1 (at Quality by default) or NVIDIA Image Scaling (NIS), both for any graphics card, or Off. Each has Native, Quality, Balanced and Performance modes, showing the resolution the game draws at; they scale the picture to your screen and sharpen it
 - **Render quality** presets (with the upscaler off): Supersample, Native, Quality, Balanced, Performance and Ultra Performance, each showing the real resolution
 - **Custom resolution** from 1x (720p) to 6x (8K)
 - **FXAA** (on by default) and **FXAA Extreme**
@@ -212,7 +262,6 @@ Everything is set up before the game starts. The launcher uses art from your own
 - **Screen blur** on or off (off by default): some levels (Necropolis, Brontosaurus) blur the whole picture slightly, sized for the Xbox 360's 720p, which makes them look low resolution on a sharper screen
 - **Distance fog** on or off (on by default): Off clears the haze over far scenery, though it can show empty backdrops at the edges of an area
 - **Ambient occlusion** (off by default): soft shading where surfaces meet, in corners and creases and under rocks, grass and people, at strength 1 (recommended), 2 or 3. About 1 ms a frame at 4K; NVIDIA and AMD graphics for now
-- **Shader preparing**: Balanced (default: new effects are prepared on many threads at once, with a moment's wait for them, so no long pauses), Wait (always drawn right, can pause) or Background (never waits)
 
 </td>
 </tr>
@@ -222,9 +271,9 @@ Everything is set up before the game starts. The launcher uses art from your own
 ### Gameplay
 - **Frame rate**: 30 (default, like the console), 60, 90, 120, 144, 165, 240 or unlimited
 - **Field of view** from 69° (the original) to 110°. The game draws the wider area too, Jack's gun keeps its usual size, and the menus keep their original look
+- **Language** of the game and the launcher
 - **Frame counter** in the corner, toggled with <kbd>F2</kbd>
-- **Startup logos**: play or skip the Ubisoft, Universal and WingNut movies, straight to the title screen
-- **Language**
+- **Startup logos**: skip the Ubisoft, Universal and WingNut movies (the default) or play them
 
 </td>
 <td><img src="docs/images/launcher-gameplay.jpg" alt="Gameplay page"></td>
@@ -242,8 +291,8 @@ Everything is set up before the game starts. The launcher uses art from your own
 - **Stick deadzone** to stop drift (5% by default)
 - **Vibration** on or off, with a strength slider
 - **Remap any button** on your controller
-- **Keyboard and mouse** play: click a control, press a key
-- **Button prompts** for Xbox 360, Xbox Series, PlayStation 5, PlayStation 2 or your keyboard keys
+- **Keyboard and mouse** play: pick a control, press a key
+- **Button prompts** for Xbox 360, Xbox Series, PlayStation 5, PlayStation 2 or your keyboard keys, in the game and in the launcher
 
 </td>
 </tr>
@@ -279,11 +328,13 @@ They switch on as soon as the game reaches its main menu, exactly as if you had 
 <td valign="middle">
 
 ### About
-- Open your **save folder**, **game folder** or **settings file** in one click
-- **Reset** every setting
-- Refresh the launcher's art from the game's menu
+- The **version history**: the notes for every version
+- The launcher's **music** and **menu sounds**, each with a volume slider
 - **Check for updates** now, or turn the check at start off
-- The **changelog**: the notes for every version
+- How the **shader pack** stands
+- Open your **save folder**, **game folder** or **settings file** in one click
+- Take the launcher's **artwork** from your copy again
+- **Reset** every setting
 
 </td>
 <td><img src="docs/images/launcher-about.jpg" alt="About page"></td>
@@ -294,7 +345,7 @@ They switch on as soon as the game reaches its main menu, exactly as if you had 
 
 ### What's new
 - After an update, the launcher shows **what changed** the first time it opens
-- **Every version** takes you to the full changelog on the About page
+- **Every version** takes you to the full version history
 
 </td>
 </tr>
@@ -355,11 +406,11 @@ They switch on as soon as the game reaches its main menu, exactly as if you had 
 - Above 30 fps some character animations are not right yet. For example, the crew rowing at the start skip part of their animation. 30 fps, the default, plays them correctly.
 - There can be a short pause when the game loads the next area. The game does the same on the Xbox 360.
 - The pre-rendered videos pause for a moment every couple of seconds while the video player keeps to the video's timing. This is being looked into.
-- The first time you see a new effect it has to be prepared. With **Graphics > Shader preparing** on Balanced (the default), many are prepared at once in the background and the game waits only a moment for them, so there are no long pauses, but an object can occasionally appear a moment late the first time. Effects are saved, so this only happens once, and the **shader pack** prepares the effects other play-throughs have already seen before you play.
+- The first time you see a new effect it has to be prepared. Many are prepared at once in the background and the game waits only a moment for them, so there are no long pauses, but an object can occasionally appear a moment late the first time. Effects are saved, so this only happens once, and the **shader pack** prepares the effects other play-throughs have already seen before you play.
 
 ### The shader pack
 
-The game prepares each new effect (a shader) the first time it appears, which can cause a short pause. The shader pack is the list of effects collected by playing through the game, published on the [shader-packs release](https://github.com/TekRantGaming/king-kong-recompiled/releases/tag/shader-packs). You don't need to do anything to get it: each time the launcher opens, it downloads the newest pack if you don't have it yet and adds it to your shader cache (`Documents\king_kong\cache`), keeping anything your game has already prepared. The Play page shows how it went. If you press **PLAY** while a download is still going, the game starts as soon as it finishes. Each time the game starts it prepares everything in the cache, so the parts of the game the pack covers don't pause even on a first play-through. New packs come out as more of the game is covered.
+The game prepares each new effect (a shader) the first time it appears, which can cause a short pause. The shader pack is the list of effects collected by playing through the game, published on the [shader-packs release](https://github.com/TekRantGaming/king-kong-recompiled/releases/tag/shader-packs). You don't need to do anything to get it: each time the launcher opens, it downloads the newest pack if you don't have it yet and adds it to your shader cache (`Documents\king_kong\cache`), keeping anything your game has already prepared. The Home screen shows how it went. If you press **PLAY** while a download is still going, the game starts as soon as it finishes. Each time the game starts it prepares everything in the cache, so the parts of the game the pack covers don't pause even on a first play-through. New packs come out as more of the game is covered.
 
 ### Updates
 
@@ -402,7 +453,7 @@ Get-FileHash "C:\Games\King Kong.iso" -Algorithm SHA1
 
 1. Download the **KingKong-...-windows-x64.zip** file from the [latest release](https://github.com/TekRantGaming/king-kong-recompiled/releases/latest) and unzip it anywhere.
 2. Run **king_kong.exe**. The launcher opens, and the shader pack downloads by itself.
-3. Click **Install from disc image...** and pick your King Kong disc image. The launcher checks it and copies the game files (about 6.3 GB) into a `game` folder next to the exe.
+3. Choose **Select disc image** and pick your King Kong disc image. The launcher checks it, copies the game files (about 6.3 GB) into a `game` folder next to the exe and takes its artwork from them.
 4. Press **PLAY**.
 
 The download contains only this port. **No game files are included**: they come from your own disc. Your saves and settings are kept in `Documents\king_kong`.

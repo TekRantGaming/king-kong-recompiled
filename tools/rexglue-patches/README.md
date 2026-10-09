@@ -2,7 +2,8 @@
 
 The port ships the GPU plugin (`rexgpu-xenos.dll`) built from the ReXGlue SDK **v0.10.0** source (tag commit
 `f5337cdc`) with the patches in this folder (applied in order), and `rexruntime.dll` from the same build (it has
-the upscalers of 0008; before that it was the plain v0.10.0 rebuild).
+the upscalers of 0008 and the launcher text of 0010; before 0008 it was the plain v0.10.0 rebuild). There is no
+0009 here: that number belongs to unreleased HDR work.
 
 ## 0001: let a frame wait briefly for pipelines created in the background
 
@@ -70,13 +71,22 @@ EASU passes), sharpening only in the last pass; without upscaling, NVSharpen. Bo
 intermediate image, followed by a 1:1 (or, for a supersampled picture, downscaling) bilinear pass. Also fixes the
 size of the presenter's RTV heap, which only had room for 2 intermediate images (FSR from 720p to 8K needs 3).
 
+## 0010: sharp launcher text
+
+Changes `rexruntime.dll`. ImGui 1.92 can bake its fonts at the size they're drawn, but only when the renderer
+creates and updates the textures it asks for (`ImGuiBackendFlags_RendererHasTextures`); otherwise every size is
+scaled from one small atlas and text looks soft on high-DPI screens. `ImGuiDrawer` now does that (`UpdateTextures`
+after `ImGui::Render()`, `DestroyTextures` when the immediate drawer changes) and sets `DisplayFramebufferScale`.
+The textures are kept in a map in `imgui_drawer.cpp`, not in the class: apps compile `ReXApp` themselves, and it
+allocates the drawer, so the class layout must not change (a layout change crashed the game with heap corruption).
+
 ## Building
 
 ```
 git clone https://github.com/rexglue/rexglue-sdk.git
 cd rexglue-sdk
 git checkout f5337cdc
-git am <this folder>/*.patch
+git am <this folder>/*.patch   # 0001-0008, then 0010
 cmake --preset win-amd64
 cmake --build out/build/win-amd64 --config Release --target install --parallel
 ```

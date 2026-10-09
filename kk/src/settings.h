@@ -102,6 +102,12 @@ void SetCvarDefault(std::string_view name, std::string_view value);
 
 // Port defaults that differ from ReXGlue's (call before the config is loaded).
 void ApplyPortDefaults();
+// Once the settings file is read: brings one from an older version up to date
+// (keeping the defaults it was made with) and saves it; a new install just
+// gets the current defaults.
+void MigrateSettings(const std::filesystem::path& config_path);
+// Settings the player can't change (shader preparing is always Balanced).
+void ApplyFixedSettings();
 
 // Forces the ReXGlue settings the port depends on (see settings.cpp).
 void ApplyRuntimeOverrides();

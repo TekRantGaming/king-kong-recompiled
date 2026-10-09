@@ -53,6 +53,7 @@ struct UiFonts {
   ImFont* regular = nullptr;
   ImFont* semibold = nullptr;  // falls back to regular
   ImFont* bold = nullptr;      // falls back to regular
+  ImFont* display = nullptr;   // the launcher's headings (Bahnschrift); falls back to bold
 };
 const UiFonts& GetUiFonts();
 
