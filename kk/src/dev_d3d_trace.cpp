@@ -3,6 +3,7 @@
 // Every call is counted per frame; <frames> frames (default 2) starting <seconds> after launch are logged
 // call by call with the arguments (r3-r10, f1) and the call site (lr), and each frame ends with a
 // histogram. The frame boundary is the engine's present call (sub_821147B8).
+// KK_DEV_TEX_CENSUS=<file> and KK_DEV_TEX_DUMP=<dir>[,<count>]: the resource census (see census below).
 #if defined(KK_DEV_TOOLS)
 
 #include <algorithm>
@@ -12,10 +13,24 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <rex/hook.h>
 #include <rex/logging.h>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>  // VirtualQuery (census texture dumps)
+#endif
 
 namespace {
 
@@ -459,6 +474,321 @@ void OnPresent(uint32_t device, uint8_t* base) {
   for (int i = 0; i < kCount; ++i) g_entries[i].frame_calls.store(0, std::memory_order_relaxed);
 }
 
+
+// ---- Resource census (brief 03) ----
+// KK_DEV_TEX_CENSUS=<file>: from launch, one line per distinct thing the engine hands the library: TEX
+// (SetTexture: the texture's 16-byte header and its 6 fetch-constant words at +16), RT (CreateRenderTarget
+// arguments, the params words and the 64-byte surface), RSV (Resolve arguments and the destination's fetch
+// constant), IB / VB (the object's 32 bytes), DECL (the declaration's first 256 bytes), CTEX / CTEXI
+// (texture creation, every call), LOCK / UNLOCK (per call site), SRT / SDS (surfaces set as render target
+// or depth). Distinct = a new content hash (pointers and reference counts left out where known), so the
+// file stays small; each kind stops after a cap.
+// KK_DEV_TEX_DUMP=<dir>[,<count>]: also writes the guest memory of distinct textures as they are first bound
+// (at most 4 per format / tiling / endian / dimension combination, <count> in all, default 200) as
+// <dir>/tex_<base>_<hash>.bin: "KKTX", version 1, the 6 fetch words, base bytes, mip bytes (little-endian
+// header), then the base and mip regions exactly as stored (upper-bound sizes, cut at uncommitted memory).
+namespace census {
+
+struct Args {
+  uint32_t r[8];  // r3..r10
+  double f1;
+  uint32_t lr;
+};
+
+Args Capture(const PPCContext& ctx) {
+  return {{ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32},
+          ctx.f1.f64,
+          uint32_t(ctx.lr)};
+}
+
+enum Kind { kTex, kRt, kRsv, kIb, kVb, kDecl, kCtex, kCtexi, kLock, kUnlock, kSrt, kSds, kKinds };
+const char* const kKindNames[kKinds] = {"TEX", "RT", "RSV", "IB", "VB", "DECL", "CTEX", "CTEXI", "LOCK", "UNLOCK",
+                                        "SRT", "SDS"};
+const int kKindCaps[kKinds] = {20000, 2000, 2000, 4000, 4000, 2000, 4000, 4000, 500, 500, 2000, 2000};
+
+std::once_flag g_once;
+bool g_on = false;
+std::mutex g_mutex;
+FILE* g_file = nullptr;
+std::unordered_set<uint64_t> g_seen;
+int g_kind_lines[kKinds] = {};
+std::string g_dump_dir;
+int g_dump_left = 0;
+std::unordered_map<uint32_t, int> g_dump_per_combo;
+
+void InitOnce() {
+  if (const char* p = std::getenv("KK_DEV_TEX_CENSUS"); p && *p) g_file = std::fopen(p, "w");
+  if (const char* d = std::getenv("KK_DEV_TEX_DUMP"); d && *d) {
+    g_dump_dir = d;
+    g_dump_left = 200;
+    if (const size_t comma = g_dump_dir.find(','); comma != std::string::npos) {
+      g_dump_left = std::atoi(g_dump_dir.c_str() + comma + 1);
+      g_dump_dir.resize(comma);
+    }
+  }
+  g_on = g_file != nullptr;
+  if (g_on) REXLOG_INFO("KK d3d: resource census on");
+}
+
+bool On() {
+  std::call_once(g_once, InitOnce);
+  return g_on;
+}
+
+bool Ptr(uint32_t a) { return a >= 0x10000 && a < 0xFFFF0000; }
+
+uint32_t Be32(const uint8_t* base, uint32_t addr) {
+  const uint8_t* p = base + addr;
+  return uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | uint32_t(p[3]);
+}
+
+void Words(const uint8_t* base, uint32_t addr, uint32_t* out, int n) {
+  for (int i = 0; i < n; ++i) out[i] = Ptr(addr) ? Be32(base, addr + 4 * i) : 0;
+}
+
+uint64_t Hash(Kind kind, const uint32_t* w, int n, uint64_t h = 0xCBF29CE484222325ull) {
+  h ^= uint64_t(kind) << 56;
+  for (int i = 0; i < n; ++i) {
+    h ^= w[i];
+    h *= 0x100000001B3ull;
+  }
+  return h;
+}
+
+std::string Hex(const uint32_t* w, int n) {
+  std::string s;
+  char b[12];
+  for (int i = 0; i < n; ++i) {
+    std::snprintf(b, sizeof(b), i ? " %08X" : "%08X", w[i]);
+    s += b;
+  }
+  return s;
+}
+
+std::string Hex1(uint32_t v) { return Hex(&v, 1); }
+
+// Under g_mutex: true (and counted) when the key is new and the kind is under its cap.
+bool First(Kind kind, uint64_t key) {
+  if (g_kind_lines[kind] >= kKindCaps[kind]) return false;
+  if (!g_seen.insert(key).second) return false;
+  ++g_kind_lines[kind];
+  return true;
+}
+
+void Line(Kind kind, const Args& a, const std::string& body) {
+  const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - g_start).count();
+  std::fprintf(g_file, "%s t=%.2f f=%llu lr=%08X %s\n", kKindNames[kind], t, (unsigned long long)g_frame, a.lr,
+               body.c_str());
+  std::fflush(g_file);
+}
+
+// Block width, height and bits per texel by format (the SDK's FormatInfo table).
+struct Fmt {
+  uint8_t bw, bh;
+  uint16_t bits;
+};
+const Fmt kFmts[64] = {
+    {1, 1, 1},  {1, 1, 1},  {1, 1, 8},  {1, 1, 16}, {1, 1, 16}, {1, 1, 16}, {1, 1, 32},  {1, 1, 32},
+    {1, 1, 8},  {1, 1, 8},  {1, 1, 16}, {2, 1, 16}, {2, 1, 16}, {1, 1, 32}, {1, 1, 32},  {1, 1, 16},
+    {1, 1, 32}, {1, 1, 32}, {4, 4, 4},  {4, 4, 8},  {4, 4, 8},  {1, 1, 64}, {1, 1, 32},  {1, 1, 32},
+    {1, 1, 16}, {1, 1, 32}, {1, 1, 64}, {1, 1, 16}, {1, 1, 32}, {1, 1, 64}, {1, 1, 16},  {1, 1, 32},
+    {1, 1, 64}, {1, 1, 32}, {1, 1, 64}, {1, 1, 128}, {1, 1, 32}, {1, 1, 64}, {1, 1, 128}, {4, 1, 8},
+    {2, 1, 16}, {1, 1, 16}, {1, 1, 32}, {1, 1, 8},  {4, 1, 8},  {1, 1, 16}, {1, 1, 16},  {1, 1, 16},
+    {1, 1, 32}, {4, 4, 8},  {1, 1, 32}, {4, 4, 4},  {4, 4, 8},  {4, 4, 8},  {1, 1, 32},  {1, 1, 32},
+    {1, 1, 32}, {1, 1, 96}, {4, 4, 4},  {4, 4, 4},  {4, 4, 4},  {4, 4, 4},  {1, 1, 32},  {1, 1, 32}};
+
+uint32_t Align(uint32_t v, uint32_t a) { return (v + a - 1) / a * a; }
+
+uint32_t NextPow2(uint32_t v) {
+  uint32_t p = 1;
+  while (p < v) p <<= 1;
+  return p;
+}
+
+// Upper bounds of the base and mip regions (32x32-block tiles, 4 KB subresources, no mip tail packing).
+void RegionSizes(const uint32_t* fc, uint32_t& base_bytes, uint32_t& mip_bytes) {
+  const Fmt f = kFmts[fc[1] & 63];
+  const uint32_t bpb = uint32_t(f.bits) * f.bw * f.bh / 8;
+  const uint32_t dim = (fc[5] >> 9) & 3;
+  uint32_t w, h, d = 1, layers = 1;
+  if (dim == 0) {
+    w = (fc[2] & 0xFFFFFF) + 1;
+    h = 1;
+  } else if (dim == 2) {
+    w = (fc[2] & 0x7FF) + 1;
+    h = ((fc[2] >> 11) & 0x7FF) + 1;
+    d = (fc[2] >> 22) + 1;
+  } else {
+    w = (fc[2] & 0x1FFF) + 1;
+    h = ((fc[2] >> 13) & 0x1FFF) + 1;
+    layers = dim == 3 ? 6 : (((fc[1] >> 10) & 1) ? (fc[2] >> 26) + 1 : 1);
+  }
+  const uint32_t pitch = std::max(((fc[0] >> 22) & 0x1FF) * 32, w);
+  const uint32_t slices = Align(d, dim == 2 ? 4 : 1) * layers;
+  auto level_bytes = [&](uint32_t lw, uint32_t lh) {
+    return Align(Align((lw + f.bw - 1) / f.bw, 32) * bpb * Align((lh + f.bh - 1) / f.bh, 32), 4096) * slices;
+  };
+  base_bytes = (fc[1] >> 12) ? level_bytes(pitch, h) : 0;
+  mip_bytes = 0;
+  if (fc[5] >> 12) {
+    uint32_t levels = 0;
+    for (uint32_t m = std::max({w, h, d}); m > 1; m >>= 1) ++levels;
+    for (uint32_t l = 1; l <= levels; ++l)
+      mip_bytes += level_bytes(std::max(NextPow2(w) >> l, 1u), std::max(NextPow2(h) >> l, 1u));
+  }
+}
+
+// How many of n bytes from p are committed and readable.
+size_t Readable(const uint8_t* p, size_t n) {
+#if defined(_WIN32)
+  size_t ok = 0;
+  while (ok < n) {
+    MEMORY_BASIC_INFORMATION mbi;
+    if (!VirtualQuery(p + ok, &mbi, sizeof(mbi))) break;
+    if (mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) || mbi.Protect == 0) break;
+    ok = std::min(n, size_t(reinterpret_cast<const uint8_t*>(mbi.BaseAddress) + mbi.RegionSize - p));
+  }
+  return ok;
+#else
+  return n;
+#endif
+}
+
+// Under g_mutex.
+void DumpTexture(const uint8_t* base, const uint32_t* fc, uint64_t key) {
+  if (g_dump_dir.empty() || g_dump_left <= 0) return;
+  const uint32_t combo = (fc[1] & 0xFF) | ((fc[0] >> 31) << 8) | (((fc[5] >> 9) & 7) << 9);
+  if (++g_dump_per_combo[combo] > 4) return;
+  uint32_t base_bytes, mip_bytes;
+  RegionSizes(fc, base_bytes, mip_bytes);
+  if (base_bytes > (64u << 20) || mip_bytes > (64u << 20)) return;
+  // Physical addresses: the 0xA0000000 view maps physical memory from 0.
+  const uint8_t* base_ptr = base + 0xA0000000u + (((fc[1] >> 12) & 0x1FFFF) << 12);
+  const uint8_t* mip_ptr = base + 0xA0000000u + (((fc[5] >> 12) & 0x1FFFF) << 12);
+  if (base_bytes) base_bytes = uint32_t(Readable(base_ptr, base_bytes));
+  if (mip_bytes) mip_bytes = uint32_t(Readable(mip_ptr, mip_bytes));
+  char name[64];
+  std::snprintf(name, sizeof(name), "/tex_%08X_%016llX.bin", ((fc[1] >> 12) & 0x1FFFF) << 12,
+                (unsigned long long)key);
+  if (FILE* f = std::fopen((g_dump_dir + name).c_str(), "wb")) {
+    const uint32_t header[10] = {0x58544B4Bu /* "KKTX" */, 1, fc[0], fc[1], fc[2], fc[3], fc[4], fc[5],
+                                 base_bytes, mip_bytes};
+    std::fwrite(header, 4, 10, f);
+    if (base_bytes) std::fwrite(base_ptr, 1, base_bytes, f);
+    if (mip_bytes) std::fwrite(mip_ptr, 1, mip_bytes, f);
+    std::fclose(f);
+    --g_dump_left;
+  }
+}
+
+void SetTexture(const Args& a, PPCContext&, uint8_t* base) {
+  if (!On() || !Ptr(a.r[2])) return;
+  uint32_t w[10];
+  Words(base, a.r[2], w, 10);  // header (4 words) + fetch constant (6)
+  const uint64_t key = Hash(kTex, w + 4, 6);
+  std::lock_guard<std::mutex> lock(g_mutex);
+  if (!First(kTex, key)) return;
+  Line(kTex, a, "s=" + std::to_string(a.r[1]) + " obj=" + Hex1(a.r[2]) + " hdr=" + Hex(w, 4) + " fc=" + Hex(w + 4, 6));
+  DumpTexture(base, w + 4, key);
+}
+
+void CreateRenderTarget(const Args& a, PPCContext& ctx, uint8_t* base) {
+  if (!On()) return;
+  uint32_t p[4], s[16];
+  Words(base, a.r[4], p, 4);
+  Words(base, ctx.r3.u32, s, 16);
+  const uint32_t k[11] = {a.r[0], a.r[1], a.r[2], a.r[3], a.r[5], a.r[6], a.r[7], p[0], p[1], p[2], p[3]};
+  std::lock_guard<std::mutex> lock(g_mutex);
+  if (!First(kRt, Hash(kRt, k, 11))) return;
+  Line(kRt, a, "args=" + Hex(a.r, 8) + " params=" + Hex(p, 4) + " ret=" + Hex1(ctx.r3.u32) + " surf=" + Hex(s, 16));
+}
+
+void Resolve(const Args& a, PPCContext&, uint8_t* base) {
+  if (!On()) return;
+  uint32_t rect[4], dest[10], point[2], color[4];
+  Words(base, a.r[2], rect, 4);
+  Words(base, a.r[3], dest, 10);
+  Words(base, a.r[4], point, 2);
+  Words(base, a.r[7], color, 4);
+  float z = float(a.f1);
+  uint32_t zbits;
+  std::memcpy(&zbits, &z, 4);
+  const uint32_t k[16] = {a.r[1], rect[0], rect[1], rect[2], rect[3], dest[4], dest[5], dest[6], dest[7], dest[8],
+                          dest[9], point[0], point[1], a.r[5], a.r[6], zbits};
+  std::lock_guard<std::mutex> lock(g_mutex);
+  if (!First(kRsv, Hash(kRsv, k, 16))) return;
+  Line(kRsv, a, "flags=" + Hex1(a.r[1]) + " rect=" + Hex(rect, 4) + " dest=" + Hex1(a.r[3]) + " fc=" + Hex(dest + 4, 6) +
+                    " point=" + Hex(point, 2) + " level=" + Hex1(a.r[5]) + " slice=" + Hex1(a.r[6]) +
+                    " color=" + Hex(color, 4) + " z=" + Hex1(zbits) + " args=" + Hex(a.r, 8));
+}
+
+void BufferObject(Kind kind, const Args& a, uint8_t* base, uint32_t obj, uint32_t extra) {
+  if (!On() || !Ptr(obj)) return;
+  uint32_t w[8];
+  Words(base, obj, w, 8);
+  const uint32_t k[5] = {w[4], w[5], w[6], w[7], extra};
+  std::lock_guard<std::mutex> lock(g_mutex);
+  if (!First(kind, Hash(kind, k, 5))) return;
+  Line(kind, a, "obj=" + Hex1(obj) + " words=" + Hex(w, 8) + " args=" + Hex(a.r, 5));
+}
+
+void SetIndices(const Args& a, PPCContext&, uint8_t* base) { BufferObject(kIb, a, base, a.r[1], 0); }
+void SetStreamSource(const Args& a, PPCContext&, uint8_t* base) {
+  BufferObject(kVb, a, base, a.r[2], a.r[4] | a.r[1] << 24);
+}
+
+void SetVertexDeclaration(const Args& a, PPCContext&, uint8_t* base) {
+  if (!On() || !Ptr(a.r[1])) return;
+  uint32_t w[64];
+  Words(base, a.r[1], w, 64);
+  const uint32_t refcount = w[1];
+  w[1] = 0;
+  const uint64_t key = Hash(kDecl, w, 64, a.r[1]);
+  w[1] = refcount;
+  std::lock_guard<std::mutex> lock(g_mutex);
+  if (!First(kDecl, key)) return;
+  Line(kDecl, a, "obj=" + Hex1(a.r[1]) + " words=" + Hex(w, 64));
+}
+
+void Created(Kind kind, const Args& a, PPCContext& ctx, uint8_t* base) {
+  if (!On()) return;
+  uint32_t w[10];
+  Words(base, ctx.r3.u32, w, 10);
+  std::lock_guard<std::mutex> lock(g_mutex);
+  if (!First(kind, Hash(kind, a.r, 8, g_kind_lines[kind]))) return;  // every call (up to the cap)
+  Line(kind, a, "args=" + Hex(a.r, 8) + " ret=" + Hex1(ctx.r3.u32) + " words=" + Hex(w, 10));
+}
+void CreateTextureInner(const Args& a, PPCContext& ctx, uint8_t* base) { Created(kCtexi, a, ctx, base); }
+void CreateTexture(const Args& a, PPCContext& ctx, uint8_t* base) { Created(kCtex, a, ctx, base); }
+
+void LockSite(Kind kind, const Args& a, uint8_t* base) {
+  if (!On()) return;
+  uint32_t w[8];
+  Words(base, a.r[0], w, 8);
+  const uint32_t k[2] = {a.lr, w[0] & 0xFFFF0000u};
+  std::lock_guard<std::mutex> lock(g_mutex);
+  if (!First(kind, Hash(kind, k, 2))) return;
+  Line(kind, a, "obj=" + Hex1(a.r[0]) + " words=" + Hex(w, 8) + " args=" + Hex(a.r, 8));
+}
+void Lock(const Args& a, PPCContext&, uint8_t* base) { LockSite(kLock, a, base); }
+void Unlock(const Args& a, PPCContext&, uint8_t* base) { LockSite(kUnlock, a, base); }
+
+void Surface(Kind kind, const Args& a, uint8_t* base, uint32_t obj, uint32_t index) {
+  if (!On() || !Ptr(obj)) return;
+  uint32_t s[16];
+  Words(base, obj, s, 16);
+  uint32_t k[13];
+  k[0] = index;
+  std::memcpy(k + 1, s + 4, 12 * 4);
+  std::lock_guard<std::mutex> lock(g_mutex);
+  if (!First(kind, Hash(kind, k, 13))) return;
+  Line(kind, a, "index=" + std::to_string(index) + " obj=" + Hex1(obj) + " surf=" + Hex(s, 16));
+}
+void SetRenderTarget(const Args& a, PPCContext&, uint8_t* base) { Surface(kSrt, a, base, a.r[2], a.r[1]); }
+void SetDepthStencilSurface(const Args& a, PPCContext&, uint8_t* base) { Surface(kSds, a, base, a.r[1], 0); }
+
+}  // namespace census
+
 }  // namespace
 
 #define KK_D3D_HOOK(INDEX, ADDR)                     \
@@ -475,6 +805,15 @@ void OnPresent(uint32_t device, uint8_t* base) {
     const uint32_t device = ctx.r3.u32;              \
     __imp__sub_##ADDR(ctx, base);                    \
     OnPresent(device, base);                         \
+  }
+
+#define KK_D3D_HOOK_CENSUS(INDEX, ADDR, FN)          \
+  REX_EXTERN(__imp__sub_##ADDR);                     \
+  REX_HOOK_RAW(sub_##ADDR) {                         \
+    OnCall(INDEX, ctx);                              \
+    const census::Args args = census::Capture(ctx);  \
+    __imp__sub_##ADDR(ctx, base);                    \
+    census::FN(args, ctx, base);                     \
   }
 
 KK_D3D_HOOK(0, 82108040)
@@ -495,23 +834,23 @@ KK_D3D_HOOK(14, 82108CB0)
 KK_D3D_HOOK(15, 821091C8)
 KK_D3D_HOOK(16, 82109248)
 KK_D3D_HOOK(17, 821092B0)
-KK_D3D_HOOK(18, 82109360)
-KK_D3D_HOOK(19, 821093D0)
+KK_D3D_HOOK_CENSUS(18, 82109360, Lock)
+KK_D3D_HOOK_CENSUS(19, 821093D0, Unlock)
 KK_D3D_HOOK(20, 821093E0)
 KK_D3D_HOOK(21, 82109490)
 KK_D3D_HOOK(22, 821094F8)
 KK_D3D_HOOK(23, 8210BAC8)
 KK_D3D_HOOK(24, 8210BD10)
-KK_D3D_HOOK(25, 8210BD38)
+KK_D3D_HOOK_CENSUS(25, 8210BD38, SetStreamSource)
 KK_D3D_HOOK(26, 8210BDD8)
-KK_D3D_HOOK(27, 8210BE38)
+KK_D3D_HOOK_CENSUS(27, 8210BE38, SetIndices)
 KK_D3D_HOOK(28, 8210BEB8)
 KK_D3D_HOOK(29, 8210BF00)
 KK_D3D_HOOK(30, 8210BF40)
 KK_D3D_HOOK(31, 8210C060)
 KK_D3D_HOOK(32, 8210C130)
-KK_D3D_HOOK(33, 8210C378)
-KK_D3D_HOOK(34, 8210C6E0)
+KK_D3D_HOOK_CENSUS(33, 8210C378, SetRenderTarget)
+KK_D3D_HOOK_CENSUS(34, 8210C6E0, SetDepthStencilSurface)
 KK_D3D_HOOK(35, 8210C8B0)
 KK_D3D_HOOK(36, 8210C918)
 KK_D3D_HOOK(37, 8210C990)
@@ -541,7 +880,7 @@ KK_D3D_HOOK(60, 82110E48)
 KK_D3D_HOOK(61, 82110F48)
 KK_D3D_HOOK(62, 82111CA0)
 KK_D3D_HOOK(63, 82111D90)
-KK_D3D_HOOK(64, 82111E68)
+KK_D3D_HOOK_CENSUS(64, 82111E68, SetVertexDeclaration)
 KK_D3D_HOOK(65, 82111EE8)
 KK_D3D_HOOK(66, 82111EF0)
 KK_D3D_HOOK(67, 82111EF8)
@@ -572,7 +911,7 @@ KK_D3D_HOOK(91, 82115418)
 KK_D3D_HOOK(92, 821154C8)
 KK_D3D_HOOK(93, 82115708)
 KK_D3D_HOOK(94, 821159F8)
-KK_D3D_HOOK(95, 82116178)
+KK_D3D_HOOK_CENSUS(95, 82116178, Resolve)
 KK_D3D_HOOK(96, 82116F00)
 KK_D3D_HOOK(97, 82116F98)
 KK_D3D_HOOK(98, 82116FC0)
@@ -586,13 +925,13 @@ KK_D3D_HOOK(105, 82118838)
 KK_D3D_HOOK(106, 821188E0)
 KK_D3D_HOOK(107, 821188F8)
 KK_D3D_HOOK(108, 821189B0)
-KK_D3D_HOOK(109, 82118A68)
-KK_D3D_HOOK(110, 82118B88)
+KK_D3D_HOOK_CENSUS(109, 82118A68, CreateTextureInner)
+KK_D3D_HOOK_CENSUS(110, 82118B88, CreateRenderTarget)
 KK_D3D_HOOK(111, 82118E90)
 KK_D3D_HOOK(112, 82118EE8)
 KK_D3D_HOOK(113, 82118F10)
 KK_D3D_HOOK(114, 82118F58)
-KK_D3D_HOOK(115, 82118F78)
+KK_D3D_HOOK_CENSUS(115, 82118F78, SetTexture)
 KK_D3D_HOOK(116, 82119490)
 KK_D3D_HOOK(117, 82119508)
 KK_D3D_HOOK(118, 82119560)
@@ -624,7 +963,7 @@ KK_D3D_HOOK(143, 82125258)
 KK_D3D_HOOK(144, 82125318)
 KK_D3D_HOOK(145, 82125348)
 KK_D3D_HOOK(146, 82125B70)
-KK_D3D_HOOK(147, 82126E70)
+KK_D3D_HOOK_CENSUS(147, 82126E70, CreateTexture)
 KK_D3D_HOOK(148, 82127058)
 KK_D3D_HOOK(149, 82127840)
 KK_D3D_HOOK(150, 82127848)
