@@ -30,6 +30,7 @@ set(KINGKONG_SOURCES
     src/fov.cpp
     src/motion_blur.cpp
     src/fog.cpp
+    src/big_blur.cpp
     src/cheats.cpp
     src/changelog.cpp
     src/menu_hook.cpp
@@ -89,7 +90,7 @@ endif()
 # The port's version: shown in the launcher and compared with GitHub releases by the updater.
 # (-DKK_VERSION=x.y.z overrides it, to test the updater with an "older" build.)
 if(NOT DEFINED KK_VERSION)
-    set(KK_VERSION "1.9.1")
+    set(KK_VERSION "1.9.2")
 endif()
 target_compile_definitions(king_kong PRIVATE KK_VERSION="${KK_VERSION}" KK_VERSION_W=L"${KK_VERSION}")
 

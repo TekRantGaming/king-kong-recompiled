@@ -41,6 +41,7 @@ REXCVAR_DECLARE(bool, kk_skip_intros);
 REXCVAR_DECLARE(int32_t, kk_fov);
 REXCVAR_DECLARE(bool, kk_motion_blur);
 REXCVAR_DECLARE(bool, kk_fog);
+REXCVAR_DECLARE(bool, kk_big_blur);
 REXCVAR_DECLARE(bool, kk_original_look);
 REXCVAR_DECLARE(std::string, kk_modern_settings);
 REXCVAR_DECLARE(bool, kk_cheats);

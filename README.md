@@ -209,6 +209,7 @@ Everything is set up before the game starts. The launcher uses art from your own
 - **FXAA** (on by default) and **FXAA Extreme**
 - **Texture filtering** up to 16x (4x by default)
 - **Motion blur** on or off (off by default): Off removes the ghost trail the game blends over fast moments, mostly in Kong's sequences
+- **Screen blur** on or off (off by default): some levels (Necropolis, Brontosaurus) blur the whole picture slightly, sized for the Xbox 360's 720p, which makes them look low resolution on a sharper screen
 - **Distance fog** on or off (on by default): Off clears the haze over far scenery, though it can show empty backdrops at the edges of an area
 - **Ambient occlusion** (off by default): soft shading where surfaces meet, in corners and creases and under rocks, grass and people, at strength 1 (recommended), 2 or 3. About 1 ms a frame at 4K; NVIDIA and AMD graphics for now
 - **Shader preparing**: Balanced (default: new effects are prepared on many threads at once, with a moment's wait for them, so no long pauses), Wait (always drawn right, can pause) or Background (never waits)
@@ -332,6 +333,7 @@ They switch on as soon as the game reaches its main menu, exactly as if you had 
 | Controls | Xbox 360 controller | any controller, remapping, keyboard and mouse |
 | Camera | game options | field of view, inverted axes, sensitivity, deadzone |
 | Motion blur | always on | on or off |
+| Screen blur (some levels) | always on | on or off |
 | Distance fog | always on | on or off |
 | Ambient occlusion | none | optional, three strengths |
 | Graphics presets | none | Original Xbox 360 look, Low to Ultra, Steam Deck |

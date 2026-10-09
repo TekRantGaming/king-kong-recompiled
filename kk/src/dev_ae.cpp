@@ -3,8 +3,9 @@
 //
 // The after effects are classes in the engine's post-processing code, with
 // vtables at 0x820A3CF0-0x820A400C; slot 10 of each runs the effect every
-// frame. Left out here: motion blur's (sub_82768DE8, motion_blur.cpp) and the
-// distance fog's (sub_827648A8, fog.cpp), which this found.
+// frame. Left out here: motion blur's (sub_82768DE8, motion_blur.cpp), and the
+// distance fog's (sub_827648A8, fog.cpp) and the screen blur's (sub_82762A38,
+// big_blur.cpp), which this found.
 // KK_DEV_AE_CYCLE=<seconds> skips effect 0 for that long, then effect 1, and
 // so on, then none, and starts over, logging
 // "KK dev: AE skip <i> (<address>)" at each change. KK_DEV_AE_SKIP=<i> skips
@@ -21,8 +22,8 @@
 namespace {
 
 constexpr uint32_t kApply[] = {0x82769868, 0x82769278, 0x827689A0, 0x82767A00, 0x82766828, 0x82765D78,
-                               0x82765318, 0x82764DE0, 0x82764448, 0x82763A68, 0x82762A38,
-                               0x827623C0, 0x82761E70, 0x827619E8, 0x827614E0, 0x82760DE8, 0x82760710};
+                               0x82765318, 0x82764DE0, 0x82764448, 0x82763A68, 0x827623C0, 0x82761E70,
+                               0x827619E8, 0x827614E0, 0x82760DE8, 0x82760710};
 constexpr int kCount = int(sizeof(kApply) / sizeof(kApply[0]));
 
 int Skipped() {
@@ -69,10 +70,9 @@ KK_DEV_AE_HOOK(6, 82765318)
 KK_DEV_AE_HOOK(7, 82764DE0)
 KK_DEV_AE_HOOK(8, 82764448)
 KK_DEV_AE_HOOK(9, 82763A68)
-KK_DEV_AE_HOOK(10, 82762A38)
-KK_DEV_AE_HOOK(11, 827623C0)
-KK_DEV_AE_HOOK(12, 82761E70)
-KK_DEV_AE_HOOK(13, 827619E8)
-KK_DEV_AE_HOOK(14, 827614E0)
-KK_DEV_AE_HOOK(15, 82760DE8)
-KK_DEV_AE_HOOK(16, 82760710)
+KK_DEV_AE_HOOK(10, 827623C0)
+KK_DEV_AE_HOOK(11, 82761E70)
+KK_DEV_AE_HOOK(12, 827619E8)
+KK_DEV_AE_HOOK(13, 827614E0)
+KK_DEV_AE_HOOK(14, 82760DE8)
+KK_DEV_AE_HOOK(15, 82760710)

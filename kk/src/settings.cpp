@@ -56,6 +56,8 @@ KK_CHEAT_CVAR(sniper, "Sniper rifle (KKsn1per)");
 #undef KK_CHEAT_CVAR
 REXCVAR_DEFINE_BOOL(kk_motion_blur, false, "KK/Graphics", "The game's motion blur effect");
 REXCVAR_DEFINE_BOOL(kk_fog, true, "KK/Graphics", "The game's distance fog (the haze over far scenery)");
+REXCVAR_DEFINE_BOOL(kk_big_blur, false, "KK/Graphics",
+                    "The game's full-screen blur in some levels (Necropolis, Brontosaurus), sized for 720p");
 REXCVAR_DEFINE_BOOL(kk_original_look, false, "KK/Graphics",
                     "Play with the Xbox 360's own settings (launcher: Graphics > Look)");
 REXCVAR_DEFINE_STRING(kk_modern_settings, "", "KK/Graphics",
@@ -256,14 +258,14 @@ void ApplyPortDefaults() {
 
 const std::vector<std::pair<const char*, const char*>>& OriginalLookSettings() {
   // 720p at 30 FPS, the console's anti-aliasing (its own 2x MSAA, no FXAA) and
-  // texture filtering, Jack's 69 degree field of view, motion blur and fog on,
-  // no ambient occlusion, no upscaler.
+  // texture filtering, Jack's 69 degree field of view, motion blur, fog and
+  // the screen blur on, no ambient occlusion, no upscaler.
   static const std::vector<std::pair<const char*, const char*>> settings = {
       {"present_effect", "bilinear"},
       {"kk_render_quality", "custom"}, {"resolution_scale", "1"}, {"swap_post_effect", "none"},
       {"anisotropic_override", "-1"},  {"ao_mode", "0"},          {"ao_strength", "1"},
-      {"kk_motion_blur", "true"},      {"kk_fog", "true"},        {"kk_frame_rate", "30"},
-      {"kk_fov", "69"},
+      {"kk_motion_blur", "true"},      {"kk_fog", "true"},        {"kk_big_blur", "true"},
+      {"kk_frame_rate", "30"},         {"kk_fov", "69"},
   };
   return settings;
 }
