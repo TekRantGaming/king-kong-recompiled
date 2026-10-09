@@ -40,6 +40,7 @@ namespace kk {
 void InstallFpeGuard();  // fpe_guard.cpp
 }
 #include "menu_hook.h"
+#include "mouse_look.h"
 #include "shader_pack.h"
 #include "launcher.h"
 #include "overlay.h"
@@ -150,6 +151,7 @@ class KingKongApp : public rex::ReXApp {
     }
     kk::ApplyRuntimeOverrides();
     UseOneControllerSlot();
+    kk::mouse_look::Install(window());
 
     ExportAchievementArt();
     // Give the launcher the achievement names (read from the game by the runtime).

@@ -127,6 +127,10 @@ The launcher takes the logo, stills from the movie, the menu music and the menu 
 </tr>
 </table>
 
+## New in v1.9.7
+
+**Keyboard and mouse, done properly.** Real mouse look (the same movement always turns the camera the same amount, as in other first-person games), a modern layout (left mouse button shoots, right mouse button aims, R reloads, WASD moves), mouse buttons you can bind, and choosing **Keyboard & mouse** now switches the game's prompts to your keys and turns the mouse camera on. More in [Controls](#controls).
+
 ## New in v1.9.6
 
 **Play on Linux and Steam Deck now**, with an **experimental Proton build**: the Windows download running through Steam's Proton (see [Linux and Steam Deck](#linux-and-steam-deck-experimental)). This is not native Linux support; a native Linux version is in development and will come in a future update. Also fixed: the game could freeze on the black loading screen as the main menu loads.
@@ -290,12 +294,12 @@ Everything is set up before the game starts, with a controller, the keyboard or 
 - **Invert the camera** left/right and up/down, separately
 - **Controller sensitivity** from 25% to 300% (150% by default), for looking left and right and up and down
 - **Camera response**: Modern (the default) turns the camera the same way in every direction; Original is the Xbox 360's own feel
-- **Mouse sensitivity** and **mouse camera** for keyboard and mouse
+- **Real mouse look** for keyboard and mouse: the same movement always turns the camera the same amount, with **Mouse sensitivity** and **Mouse vertical** (invert)
 - **Toggle aim**: press the left trigger once to raise the gun and again to lower it, instead of holding it
 - **Stick deadzone** to stop drift (5% by default)
 - **Vibration** on or off, with a strength slider
 - **Remap any button** on your controller
-- **Keyboard and mouse** play: pick a control, press a key
+- **Keyboard and mouse** play with a modern layout (left mouse button shoots, right mouse button aims, R reloads, WASD moves); rebind any control to a key or mouse button, and each one says what it does in the game
 - **Button prompts** for Xbox 360, Xbox Series, PlayStation 5, PlayStation 2 or your keyboard keys, in the game and in the launcher
 
 </td>

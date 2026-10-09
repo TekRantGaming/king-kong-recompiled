@@ -3,6 +3,20 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v1.9.7 (9 October 2026)
+
+### What's new
+- **Real mouse look.** The mouse now turns the camera directly: the same movement always turns it the same amount, however fast you move, as in other first-person games. Before, the mouse was treated like a thumbstick, so small movements did nothing and fast ones were capped at the stick's top speed. **Mouse sensitivity** (1.00x is 0.066 degrees per count) and a new **Mouse vertical** setting (to invert it) are on the **Controls** page.
+- **A modern keyboard and mouse layout.** Left mouse button shoots (and takes, uses and repels), right mouse button aims, R reloads, C or Ctrl crouches, middle mouse button or Z zooms, WASD moves, F calls your companion, Space checks your reserve bullets, G drops the spear and Esc pauses. As Kong: F hits, Space jumps, dodges and climbs, Q grabs and throws, G pushes back, bites and goes into fury mode. In the menus: Enter selects, Space or Backspace goes back and the arrow keys move around. Any key you changed yourself stays as you set it; **Reset to defaults** on the **Keyboard bindings** page gives you the whole new layout.
+- **Mouse buttons can be bound.** The **Keyboard bindings** page now takes the left, right and middle mouse buttons, and each binding says what its button does in the game, for Jack and for Kong.
+- **Choosing Keyboard & mouse sets things up.** It switches the game's button prompts to **Keyboard**, so hints show your keys and mouse buttons, and turns **Mouse camera** on. Going back to **Controller** brings your controller's prompts back.
+
+### Full changelog
+- Mouse look: `mouse_look.cpp` adds up the window's raw mouse movement and gives Jack's camera (CM_Cam, `sub_8246F180`) the angle the mouse moved through its yaw and pitch turns (`sub_82711950`, `sub_82712300`). CM_Cam only turns an axis whose stick is past its 15% deadzone, so while the mouse moves, its stick read is nudged just past it. The runtime's own mouse-to-stick path is kept at its lowest (`mnk_sensitivity` 0.01), where it never gets past that deadzone. While Jack aims, the game turns about 75% as far.
+- Settings: `kk_mouse_sensitivity`, `kk_mouse_invert_y` and `kk_pad_prompts` (the controller prompts to bring back). The new `keybind_*` defaults and `mnk_mouse` on are set with the port's other defaults.
+- Prompt pictures `LMB`, `RMB` and `MMB` in `glyphs/keyboard`.
+- Launcher: key capture takes mouse buttons (a click on Cancel still cancels).
+
 ## v1.9.6 (9 October 2026)
 
 ### What's new

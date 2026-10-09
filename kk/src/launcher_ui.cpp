@@ -1070,9 +1070,11 @@ bool DrawModal(ImDrawList* dl, Modal& modal, ImVec2 view0, ImVec2 view1, const M
     y += 10 * s;
     float bx = stacked ? x : p1.x - pad - row_w;
     int chosen = -1;
+    modal.button_rects.clear();
     for (int i = 0; i < n; ++i) {
       const float bwi = stacked ? inner : bw[size_t(i)];
       const ImVec2 a(bx, y), b(bx + bwi, y + bh);
+      modal.button_rects.emplace_back(a, b);
       const bool hot = take_input && MouseIn(a, b);
       if (hot && in.mouse_moved()) modal.focus = i;
       const bool on = modal.focus == i;
