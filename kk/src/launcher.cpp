@@ -1794,7 +1794,10 @@ class Launcher final : public rex::ui::ImGuiDialog {
                                "kk_toggle_aim", "Hold", "Toggle"));
     items.push_back(CvarToggle("Vibration", "Controller rumble.", "kk_vibration"));
     {
-      Item it = CvarSlider("Vibration strength", "How strong the rumble is.", "kk_vibration_strength", 10, 100, 5,
+      Item it = CvarSlider("Vibration strength",
+                           "How strong the rumble is. Above 100% it is stronger than on the Xbox 360, up to the "
+                           "controller's full strength.",
+                           "kk_vibration_strength", 10, 200, 5,
                            percent);
       items.push_back(std::move(Disable(it, !GetBool("kk_vibration"), "Switch Vibration on to set its strength.")));
     }
