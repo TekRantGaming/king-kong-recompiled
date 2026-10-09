@@ -37,11 +37,18 @@
 
 #include <rex/logging.h>
 
+#if !defined(_WIN32)
+#include <cstdio>
+
+#include "platform.h"
+#endif
+
 namespace kk::art {
 namespace {
 
-// Bumped when what's extracted changes, so it's extracted again.
-constexpr const char* kArtVersion = "2";
+// Bumped when what's extracted changes, so it's extracted again (3: colour
+// bars taken from Proton's videos dropped).
+constexpr const char* kArtVersion = "3";
 
 // ------------------------------------------------------------------- LZO ---
 // LZO1X decompression with bounds checks (as lzo1x_decompress_safe). Returns
@@ -455,7 +462,47 @@ std::vector<Image> GrabStills(const std::filesystem::path& video, const std::vec
   Release(attrs);
   return stills;
 }
+#else
+// Frames of a video at the given times, through ffmpeg when it's installed
+// (SteamOS and most desktops have it; without it the launcher has no stills).
+std::vector<Image> GrabStills(const std::filesystem::path& video, const std::vector<double>& seconds) {
+  std::vector<Image> stills;
+  constexpr int kW = 1280, kH = 720;  // the game's videos
+  for (double t : seconds) {
+    std::vector<uint8_t> raw;
+    char at[32];
+    std::snprintf(at, sizeof(at), "%.3f", t);
+    if (!RunCapture({"ffmpeg", "-v", "error", "-ss", at, "-i", video.string(), "-frames:v", "1", "-s",
+                     std::to_string(kW) + "x" + std::to_string(kH), "-f", "rawvideo", "-pix_fmt", "rgba", "-"},
+                    raw) ||
+        raw.size() < size_t(kW) * kH * 4)
+      break;
+    Image img;
+    img.width = kW;
+    img.height = kH;
+    raw.resize(size_t(kW) * kH * 4);
+    img.rgba = std::move(raw);
+    stills.push_back(std::move(img));
+  }
+  return stills;
+}
 #endif
+
+// Proton plays videos it can't convert as colour bars (white, yellow, cyan,
+// green, magenta, red, blue across the top two thirds): not a backdrop.
+bool IsColourBars(const Image& img) {
+  if (!img) return false;
+  static constexpr uint8_t kBars[7][3] = {{1, 1, 1}, {1, 1, 0}, {0, 1, 1}, {0, 1, 0}, {1, 0, 1}, {1, 0, 0}, {0, 0, 1}};
+  for (const float row : {0.2f, 0.5f}) {
+    const int y = int(img.height * row);
+    for (int b = 0; b < 7; ++b) {
+      const uint8_t* p = &img.rgba[(size_t(y) * img.width + size_t(img.width * (2 * b + 1) / 14)) * 4];
+      for (int c = 0; c < 3; ++c)
+        if (kBars[b][c] ? p[c] < 128 : p[c] > 64) return false;
+    }
+  }
+  return true;
+}
 
 // The backdrops: Kong roaring at a V. rex, a valley on Skull Island, the
 // mossy bridge in the jungle, 1930s New York from above and at street level,
@@ -546,10 +593,14 @@ bool ExtractLauncherArt(const std::filesystem::path& game_dir, const std::filesy
   }
   progress.fraction = 0.4f;
 
-  // The backdrops.
+  // The backdrops (none left over from an earlier extraction).
+  for (size_t i = 0; i < std::size(kStills); ++i) std::filesystem::remove(BackdropPath(dir, i), ec);
 #if defined(_WIN32)
   const HRESULT co = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
   if (SUCCEEDED(MFStartup(MF_VERSION, MFSTARTUP_LITE))) {
+#else
+  {
+#endif
     size_t index = 0;
     for (size_t i = 0; i < std::size(kStills);) {
       // The stills from one video together.
@@ -557,15 +608,24 @@ bool ExtractLauncherArt(const std::filesystem::path& game_dir, const std::filesy
       const char* video = kStills[i].video;
       size_t j = i;
       for (; j < std::size(kStills) && std::strcmp(kStills[j].video, video) == 0; ++j) times.push_back(kStills[j].seconds);
-      for (const Image& still : GrabStills(game_dir / "Video" / video, times))
+      for (const Image& still : GrabStills(game_dir / "Video" / video, times)) {
+        if (IsColourBars(still)) {
+          REXLOG_WARN("KK: launcher art: {} plays as colour bars here (Proton), no backdrop from it", video);
+          break;
+        }
         if (SaveImage(still, BackdropPath(dir, index++))) ++saved;
+      }
       i = j;
       progress.fraction = 0.4f + 0.6f * float(i) / float(std::size(kStills));
     }
+#if defined(_WIN32)
     MFShutdown();
     if (index == 0) REXLOG_WARN("KK: launcher art: no stills from the videos (Media Foundation's WMV decoder missing?)");
   }
   if (SUCCEEDED(co)) CoUninitialize();
+#else
+    if (index == 0) REXLOG_WARN("KK: launcher art: no stills from the videos (is ffmpeg installed?)");
+  }
 #endif
 
   progress.fraction = 1;

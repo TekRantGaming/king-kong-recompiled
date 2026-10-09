@@ -9,7 +9,7 @@ namespace kk {
 
 // HTTPS GET into memory, following GitHub's redirects to its download host.
 // Adds to `bytes` as data arrives and the response's size to `total`, when
-// given. Windows only for now (WinHTTP); false elsewhere.
+// given. WinHTTP on Windows; curl elsewhere (false when it isn't installed).
 bool HttpGet(const std::string& url, std::vector<uint8_t>& out, std::atomic<uint64_t>* bytes = nullptr,
              std::atomic<uint64_t>* total = nullptr);
 

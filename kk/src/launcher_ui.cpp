@@ -21,6 +21,9 @@ using text::T;
 namespace {
 
 constexpr double kRepeatDelay = 0.34, kRepeatRate = 0.075;
+// A controller press and a key press of the same action this close together
+// are one press (Steam's desktop layout types keys for the controller).
+constexpr double kSameInput = 0.25;
 
 int Utf8Length(unsigned char c) {
   return c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xE ? 3 : (c >> 3) == 0x1E ? 4 : 1;
@@ -119,6 +122,8 @@ Input::Input() {
   // The program's own SDL (the game's input runs in the runtime's): only
   // while the launcher is open. Gamepads already connected arrive as events.
   sdl_ready_ = SDL_InitSubSystem(SDL_INIT_GAMEPAD);
+  pad_held_at_.fill(-1e9);
+  key_pressed_at_.fill(-1e9);
 }
 
 Input::~Input() { Release(); }
@@ -162,7 +167,19 @@ void Input::Inject(Action a, Device d) {
 void Input::UpdateGamepads(double now) {
   if (!sdl_ready_) return;
   SDL_Event e;
-  while (SDL_PollEvent(&e)) {
+#if defined(_WIN32)
+  // The program's own SDL (the runtime DLL has its own): everything queued is ours.
+  auto next = [&e] { return SDL_PollEvent(&e); };
+#else
+  // Elsewhere the program and the runtime share one SDL, whose queue also holds
+  // the window's events (its paint requests, keys and the mouse): take only the
+  // controllers' and leave the rest for the window.
+  SDL_PumpEvents();
+  auto next = [&e] {
+    return SDL_PeepEvents(&e, 1, SDL_GETEVENT, SDL_EVENT_JOYSTICK_AXIS_MOTION, SDL_EVENT_FINGER_DOWN - 1) > 0;
+  };
+#endif
+  while (next()) {
     if (e.type == SDL_EVENT_GAMEPAD_ADDED) {
       if (SDL_Gamepad* g = SDL_OpenGamepad(e.gdevice.which)) pads_.push_back(g);
     } else if (e.type == SDL_EVENT_GAMEPAD_REMOVED) {
@@ -215,18 +232,26 @@ void Input::UpdateGamepads(double now) {
       pad_device_ = device_ = ps ? Device::kPlayStation : Device::kXbox;
     }
   }
+  // A press the keyboard just reported (typed by Steam for this controller) already counted.
+  auto press = [&](Action a) {
+    if (now - key_pressed_at_[size_t(a)] >= kSameInput) pressed_[size_t(a)] = true;
+  };
   static constexpr Action kDirActions[6] = {Action::kUp,   Action::kDown,   Action::kLeft,
                                             Action::kRight, Action::kPageUp, Action::kPageDown};
   for (size_t i = 0; i < 6; ++i) {
-    if (RepeatHeld(dir_[i], dir[i], now)) pressed_[size_t(kDirActions[i])] = true;
-    if (dir[i]) held_[size_t(kDirActions[i])] = float(now - dir_[i].since);
+    if (RepeatHeld(dir_[i], dir[i], now)) press(kDirActions[i]);
+    if (dir[i]) {
+      held_[size_t(kDirActions[i])] = float(now - dir_[i].since);
+      pad_held_at_[size_t(kDirActions[i])] = now;
+    }
   }
   static constexpr Action kButtonActions[8] = {Action::kAccept,  Action::kBack,    Action::kDefault,
                                                Action::kResetPage, Action::kPrevTab, Action::kNextTab,
                                                Action::kPlay,    Action::kCount};
   for (size_t i = 0; i < 8; ++i) {
-    if (down[i] && !buttons_down_[i] && kButtonActions[i] != Action::kCount)
-      pressed_[size_t(kButtonActions[i])] = true;
+    if (!down[i] || kButtonActions[i] == Action::kCount) continue;
+    if (!buttons_down_[i]) press(kButtonActions[i]);
+    pad_held_at_[size_t(kButtonActions[i])] = now;
   }
   buttons_down_ = down;
 }
@@ -249,6 +274,9 @@ void Input::Update() {
   }
   if (ImGui::IsMouseClicked(0) || io.MouseWheel != 0) device_ = Device::kKeyboard;
 
+  UpdateGamepads(now);  // first: a key typed for a held controller button is skipped
+  // A key for an action a controller is holding (or just let go of) is that controller's press.
+  auto from_pad = [&](Action a) { return now - pad_held_at_[size_t(a)] < kSameInput; };
   if (keyboard_enabled_) {
     struct Key {
       ImGuiKey key;
@@ -267,12 +295,15 @@ void Input::Update() {
     };
     const bool ctrl_or_alt = io.KeyCtrl || io.KeyAlt;
     for (const Key& k : kKeys) {
-      if (ctrl_or_alt || !ImGui::IsKeyPressed(k.key, k.repeat)) continue;
+      if (ctrl_or_alt || !ImGui::IsKeyPressed(k.key, k.repeat) || from_pad(k.action)) continue;
       pressed_[size_t(k.action)] = true;
+      key_pressed_at_[size_t(k.action)] = now;
       device_ = Device::kKeyboard;
     }
-    if (!ctrl_or_alt && ImGui::IsKeyPressed(ImGuiKey_Tab, true)) {
-      pressed_[size_t(io.KeyShift ? Action::kPrevTab : Action::kNextTab)] = true;
+    const Action tab = io.KeyShift ? Action::kPrevTab : Action::kNextTab;
+    if (!ctrl_or_alt && ImGui::IsKeyPressed(ImGuiKey_Tab, true) && !from_pad(tab)) {
+      pressed_[size_t(tab)] = true;
+      key_pressed_at_[size_t(tab)] = now;
       device_ = Device::kKeyboard;
     }
     static constexpr std::pair<ImGuiKey, Action> kHeld[] = {{ImGuiKey_UpArrow, Action::kUp},
@@ -284,7 +315,6 @@ void Input::Update() {
       held_[size_t(kHeld[i].second)] = std::max(held_[size_t(kHeld[i].second)], key_held_[i]);
     }
   }
-  UpdateGamepads(now);
 }
 
 // --------------------------------------------------------------- prompts ---

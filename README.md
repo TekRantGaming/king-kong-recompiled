@@ -127,6 +127,10 @@ The launcher takes the logo, stills from the movie, the menu music and the menu 
 </tr>
 </table>
 
+## New in v1.9.6
+
+**Play on Linux and Steam Deck now**, with an **experimental Proton build**: the Windows download running through Steam's Proton (see [Linux and Steam Deck](#linux-and-steam-deck-experimental)). This is not native Linux support; a native Linux version is in development and will come in a future update. Also fixed: the game could freeze on the black loading screen as the main menu loads.
+
 ## New in v1.9.5
 
 A new launcher, rebuilt from scratch. It works fully with a controller, and it looks and sounds like the game: the King Kong logo over stills from the movie trailer, the main menu music and the game's menu sounds, all taken from your own copy. **Add to Steam** puts the port in your Steam library with its artwork in one click. More in [The launcher](#the-launcher).
@@ -406,6 +410,7 @@ They switch on as soon as the game reaches its main menu, exactly as if you had 
 - Above 30 fps some character animations are not right yet. For example, the crew rowing at the start skip part of their animation. 30 fps, the default, plays them correctly.
 - There can be a short pause when the game loads the next area. The game does the same on the Xbox 360.
 - The pre-rendered videos pause for a moment every couple of seconds while the video player keeps to the video's timing. This is being looked into.
+- Under Proton the launcher has no stills from the movie trailer (Proton can't play the trailer to it). It shows the title screen from your first play instead.
 - The first time you see a new effect it has to be prepared. Many are prepared at once in the background and the game waits only a moment for them, so there are no long pauses, but an object can occasionally appear a moment late the first time. Effects are saved, so this only happens once, and the **shader pack** prepares the effects other play-throughs have already seen before you play.
 
 ### The shader pack
@@ -460,7 +465,18 @@ The download contains only this port. **No game files are included**: they come 
 
 **Quiver Launcher:** the port is also listed on [Quiver Launcher](https://quiverlauncher.com/apps/peter-jackson-s-king-kong-the-official-game-of-the-movie-king-kong-pc-port), where you can find it alongside other PC ports and see how it runs for other players.
 
-**Linux:** in development. A Linux version is being worked on but is not ready yet, so there is no Linux download for now.
+### Linux and Steam Deck (experimental)
+
+**This is an experimental Proton build, not native Linux support.** It's the Windows download running through Steam's **Proton**, so Linux and Steam Deck players can play now. A native Linux version is in development and will come in a future update. The Proton build was tested on a ROG Ally (Z1 Extreme) with Bazzite, where it held 120 FPS on the 10 W power profile.
+
+1. Unzip **KingKong-...-windows-x64.zip** anywhere, for example in your home folder.
+2. In Steam (in desktop mode on a Steam Deck), choose **Games > Add a Non-Steam Game to My Library**, browse to **king_kong.exe** and add it.
+3. Right-click it in your library, choose **Properties > Compatibility**, tick **Force the use of a specific Steam Play compatibility tool** and pick **Proton Experimental**.
+4. Start it from Steam (Game Mode works too). The first start takes about half a minute while Steam sets Proton up for it. Pick your disc image as on Windows: your Linux home folder is on the **Z:** drive.
+
+Your saves and settings are kept in Steam's Proton folder for the game, under `steamapps/compatdata`.
+
+**Native Linux:** in development, and coming in a future update. A native build already runs the launcher on Linux, but its renderer still draws some scenes wrong (black screens in some chapters), so until that's fixed, Proton is the way to play on Linux.
 
 <details>
 <summary><b>Building from source (for developers)</b></summary>

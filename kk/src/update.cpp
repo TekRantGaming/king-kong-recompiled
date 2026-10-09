@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -87,7 +88,11 @@ void CheckForUpdate(UpdateStatus& status) {
   for (size_t at = 0;;) {
     const std::string url = JsonString(json, "browser_download_url", at, &at);
     if (url.empty()) break;
+#if defined(_WIN32)
     if (url.find("windows-x64.zip") != std::string::npos) info.zip_url = url;
+#else
+    if (url.find("linux-x86_64.AppImage") != std::string::npos) info.zip_url = url;
+#endif
   }
   std::string current = KK_VERSION;
 #if defined(KK_DEV_TOOLS)
@@ -182,8 +187,36 @@ void InstallUpdate(const UpdateInfo& info, UpdateStatus& status) {
   status.done = true;
   status.busy = false;
 #else
-  (void)info;
-  fail("Automatic updates are only available on Windows for now.");
+  // Linux: the port is one AppImage file. Download the new one beside it and
+  // rename it over the old (allowed while it runs); the restart starts it.
+  const char* appimage = std::getenv("APPIMAGE");
+  if (!appimage || !*appimage)
+    return fail("Updates install themselves in the AppImage only. Download the new version from the release page.");
+  const fs::path target = appimage;
+  std::vector<uint8_t> data;
+  if (!HttpGet(info.zip_url, data, &status.bytes, &status.total))
+    return fail("The download failed. Check your internet connection and try again.");
+  if (data.size() < (1u << 20) || std::memcmp(data.data(), "\x7f" "ELF", 4) != 0)
+    return fail("The download wasn't the game's AppImage.");
+  fs::path tmp = target;
+  tmp += ".new";
+  std::error_code ec;
+  {
+    std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+    if (!f.write(reinterpret_cast<const char*>(data.data()), std::streamsize(data.size())))
+      return fail("Could not save the update beside the AppImage. Is its folder read-only?");
+  }
+  fs::permissions(tmp, fs::perms::owner_all | fs::perms::group_read | fs::perms::group_exec | fs::perms::others_read |
+                           fs::perms::others_exec, ec);
+  fs::rename(tmp, target, ec);
+  if (ec) {
+    fs::remove(tmp, ec);
+    return fail("Could not replace the AppImage with the new version.");
+  }
+  status.message = "Updated to v" + info.version + ". Restarting...";
+  REXLOG_INFO("KK: {}", status.message);
+  status.done = true;
+  status.busy = false;
 #endif
 }
 

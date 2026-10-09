@@ -20,7 +20,7 @@ constexpr const char* kReleasesApi = "https://api.github.com/repos/TekRantGaming
 struct UpdateInfo {
   std::string version;   // "1.4.1" (from the tag "v1.4.1")
   std::string page_url;  // the release page (what's new)
-  std::string zip_url;   // the Windows zip
+  std::string zip_url;   // this platform's download: the Windows zip, or the Linux AppImage
 };
 
 struct UpdateStatus {

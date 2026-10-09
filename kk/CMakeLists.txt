@@ -32,6 +32,7 @@ set(KINGKONG_SOURCES
     src/overlay.cpp
     src/toast.cpp
     src/io_fix.cpp
+    src/loading_fix.cpp
     src/language.cpp
     src/intros.cpp
     src/fov.cpp
@@ -51,7 +52,7 @@ set(KINGKONG_SOURCES
 # Developer-only test aids (never in release builds): -DKK_DEV_TOOLS=ON.
 option(KK_DEV_TOOLS "Build developer test aids such as KK_DEV_AUTOSKIP" OFF)
 if(KK_DEV_TOOLS)
-    list(APPEND KINGKONG_SOURCES src/dev_tools.cpp src/dev_watch.cpp src/dev_ae.cpp src/dev_sound_trace.cpp)
+    list(APPEND KINGKONG_SOURCES src/dev_tools.cpp src/dev_watch.cpp src/dev_ae.cpp src/dev_sound_trace.cpp src/dev_load_trace.cpp)
 endif()
 
 if(WIN32)
@@ -97,7 +98,7 @@ endif()
 # The port's version: shown in the launcher and compared with GitHub releases by the updater.
 # (-DKK_VERSION=x.y.z overrides it, to test the updater with an "older" build.)
 if(NOT DEFINED KK_VERSION)
-    set(KK_VERSION "1.9.5")
+    set(KK_VERSION "1.9.6")
 endif()
 target_compile_definitions(king_kong PRIVATE KK_VERSION="${KK_VERSION}" KK_VERSION_W=L"${KK_VERSION}")
 

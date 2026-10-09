@@ -80,13 +80,24 @@ after `ImGui::Render()`, `DestroyTextures` when the immediate drawer changes) an
 The textures are kept in a map in `imgui_drawer.cpp`, not in the class: apps compile `ReXApp` themselves, and it
 allocates the drawer, so the class layout must not change (a layout change crashed the game with heap corruption).
 
+## 0011: guest memory freed however the game ends (Linux)
+
+Changes the Linux runtime only. The guest address space is a POSIX shared memory object in `/dev/shm` (RAM), and
+its name was only removed on a clean shutdown: a crash or a kill left all of it there until a reboot, and once
+`/dev/shm` filled up the next start died with SIGBUS. The name is now removed as soon as it's created.
+
+## 0012: frame log for Vulkan (testing)
+
+`REX_DEV_FRAME_LOG` (see 0003) for the Vulkan backend too, with each draw's depth function and a note for draws
+whose pipeline is still a placeholder or missing.
+
 ## Building
 
 ```
 git clone https://github.com/rexglue/rexglue-sdk.git
 cd rexglue-sdk
 git checkout f5337cdc
-git am <this folder>/*.patch   # 0001-0008, then 0010
+git am <this folder>/*.patch   # 0001-0008, then 0010-0012
 cmake --preset win-amd64
 cmake --build out/build/win-amd64 --config Release --target install --parallel
 ```
