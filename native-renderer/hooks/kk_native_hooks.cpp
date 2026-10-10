@@ -12,6 +12,7 @@
 
 #include <atomic>
 
+#include <rex/cvar.h>
 #include <rex/hook.h>
 #include <rex/logging.h>
 
@@ -31,6 +32,12 @@ namespace {
 using GetApiFn = const NrApi* (*)();
 
 const NrApi* LookUpApi() {
+  // The launcher preloads rexgpu-native in every run of a native-enabled build
+  // (for its cvars), so its export is found even when another plugin draws:
+  // connect only when it is the GPU plugin.
+  if (rex::cvar::GetFlagByName("gpu_plugin") != "native") {
+    return nullptr;
+  }
   GetApiFn get_api = nullptr;
 #if defined(_WIN32)
   for (const char* name : {"rexgpu-nativerd.dll", "rexgpu-native.dll", "rexgpu-natived.dll"}) {
