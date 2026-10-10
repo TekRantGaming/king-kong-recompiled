@@ -8,6 +8,7 @@ run.ps1 launches the game; this file plans the runs and does everything else:
   compare    compare a capture with the golden set: per-frame scores, heat maps, report.html, summary.json
   calibrate  compare two captures of the same plugin and suggest thresholds per scene
   framelog   print a frame log in canonical form, or diff two of them
+  images     compare two images or two folders of images (BMP or PNG) outside the scene layout
 
 Run it with `python -I`. Needs numpy and Pillow. Exit codes: 0 pass, 1 fail, 2 missing data or bad input.
 """
@@ -20,7 +21,6 @@ import difflib
 import html
 import json
 import math
-import os
 import re
 import shutil
 import statistics
@@ -168,17 +168,41 @@ def measured_offset(golden_root: Path, run_name: str):
 # Game log parsing
 
 LOG_LINE = re.compile(r"^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3})\] \[(\w+)\] \[(\w+)\] \[t\d+\] (.*)$")
+# Fallbacks for other log layouts (a Linux build, a copied console log): find the parts by shape.
+LOG_TS = re.compile(r"(\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d(?:\.\d+)?)")
+LOG_LEVEL = re.compile(r"\[(trace|debug|info|warn|warning|error|critical)\]", re.I)
+LOG_MARKERS = ("Frame log: ", "KK: ")
+
+
+def parse_log_line(line: str):
+    """(timestamp seconds or None, level, category, message) or None for lines the harness has no use for."""
+    line = line.rstrip("\r\n")
+    m = LOG_LINE.match(line)
+    if m:
+        ts = dt.datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S.%f").timestamp()
+        return ts, m.group(2), m.group(3), m.group(4)
+    for marker in LOG_MARKERS:
+        i = line.find(marker)
+        if i >= 0:
+            head = line[:i]
+            tm, lv = LOG_TS.search(head), LOG_LEVEL.search(head)
+            ts = None
+            if tm:
+                try:
+                    ts = dt.datetime.fromisoformat(tm.group(1)).timestamp()
+                except ValueError:
+                    ts = None
+            return ts, (lv.group(1).lower() if lv else ""), "", line[i:]
+    return None
 
 
 def read_log(path: Path):
-    """Yields (timestamp seconds, level, category, message) for each log line."""
+    """Yields (timestamp seconds or None, level, category, message) for each log line."""
     with open(path, encoding="utf-8", errors="replace") as f:
         for line in f:
-            m = LOG_LINE.match(line.rstrip("\n"))
-            if not m:
-                continue
-            ts = dt.datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S.%f").timestamp()
-            yield ts, m.group(2), m.group(3), m.group(4)
+            r = parse_log_line(line)
+            if r:
+                yield r
 
 
 def frame_log_blocks(messages):
@@ -229,7 +253,7 @@ def cmd_collect(a) -> int:
     for s in scenes:
         for t in all_times(s, a.golden):
             n = shot_name(t)
-            if n in saved:
+            if n in saved and saved[n][0] is not None:
                 origins.append(saved[n][0] - float(t))
     origin = min(origins) if origins else None
     blocks = frame_log_blocks(messages)
@@ -240,7 +264,7 @@ def cmd_collect(a) -> int:
     if blocks:
         first_ts = blocks[0][0]
         fl_meta = {"frames": len(blocks), "trigger": trigger}
-        if origin is not None:
+        if origin is not None and first_ts is not None:
             fl_meta["scene_time"] = round(first_ts - origin, 2)
             if trigger is not None:
                 # frame-log clock starts at about first_ts - trigger; offset = shot origin - that start
@@ -251,13 +275,12 @@ def cmd_collect(a) -> int:
         dest.mkdir(parents=True, exist_ok=True)
         got = []
         for t in all_times(s, a.golden):
-            n = shot_name(t)
-            src = run_dir / n
-            if src.exists():
-                shutil.copyfile(src, dest / n)
-                got.append(n)
+            src = find_shot(run_dir, t)
+            if src is not None:
+                shutil.copyfile(src, dest / src.name)
+                got.append(src.name)
             else:
-                missing.append(f"{s['name']}/{n}")
+                missing.append(f"{s['name']}/{shot_name(t)}")
         meta = {
             "scene": s["name"],
             "run": a.run,
@@ -287,7 +310,7 @@ def cmd_collect(a) -> int:
         "plugin": a.plugin,
         "label": a.label,
         "run_dir": str(run_dir),
-        "menu_after_shot_origin": round(menu_ts - origin, 2) if (menu_ts and origin) else None,
+        "menu_after_shot_origin": round(menu_ts - origin, 2) if (menu_ts is not None and origin is not None) else None,
         "frame_log": fl_meta,
         "missing": missing,
         "errors_in_log": warnings[:20],
@@ -303,23 +326,84 @@ def cmd_collect(a) -> int:
 # Images
 
 
+IMAGE_EXTS = (".bmp", ".png")
+
+
 def load_image(path: Path) -> np.ndarray:
-    """RGB uint8 (H, W, 3). Reads the game's 32-bit BMPs directly; anything else through Pillow."""
-    raw = path.read_bytes()
-    if raw[:2] == b"BM" and len(raw) >= 54:
-        off, = np.frombuffer(raw, "<u4", 1, 10)
-        w, h = np.frombuffer(raw, "<i4", 2, 18)
-        bpp, = np.frombuffer(raw, "<u2", 1, 28)
-        comp, = np.frombuffer(raw, "<u4", 1, 30)
-        if comp in (0, 3) and bpp in (24, 32):
-            rows, stride = abs(int(h)), ((int(w) * int(bpp) + 31) // 32) * 4
-            px = np.frombuffer(raw, np.uint8, rows * stride, int(off)).reshape(rows, stride)
-            px = px[:, : int(w) * (bpp // 8)].reshape(rows, int(w), bpp // 8)[..., 2::-1]
-            if h > 0:
-                px = px[::-1]
-            return np.ascontiguousarray(px)
-    with Image.open(path) as im:
-        return np.asarray(im.convert("RGB"))
+    """RGB uint8 (H, W, 3) from a BMP or PNG; alpha is dropped.
+
+    The game writes 32-bit top-down BMPs (BGRA, alpha 255); those and other plain 24 / 32-bit BMPs (bottom-up or
+    top-down, BI_RGB or BI_BITFIELDS with byte-aligned masks) are read directly with numpy. Everything else
+    (PNG of any kind, palette or 16-bit BMPs) goes through Pillow."""
+    raw = Path(path).read_bytes()
+    px = _read_plain_bmp(raw)
+    if px is not None:
+        return px
+    try:
+        with Image.open(path) as im:
+            im.load()
+            if im.mode in ("I;16", "I;16B", "I;16L", "I"):
+                # 16-bit greyscale PNG: keep the top 8 bits
+                a = np.asarray(im, dtype=np.uint32) >> 8
+                return np.repeat(np.clip(a, 0, 255).astype(np.uint8)[..., None], 3, axis=2)
+            if im.mode == "P":
+                im = im.convert("RGBA")  # palette with transparency: drop it through RGBA, no warning
+            return np.ascontiguousarray(np.asarray(im.convert("RGB")))
+    except (OSError, ValueError) as ex:
+        raise ImageError(f"{path}: not a readable BMP or PNG ({ex})") from ex
+
+
+class ImageError(Exception):
+    pass
+
+
+def _read_plain_bmp(raw: bytes):
+    if raw[:2] != b"BM" or len(raw) < 54:
+        return None
+    off = int.from_bytes(raw[10:14], "little")
+    hdr = int.from_bytes(raw[14:18], "little")
+    if hdr < 40:
+        return None
+    w = int.from_bytes(raw[18:22], "little", signed=True)
+    h = int.from_bytes(raw[22:26], "little", signed=True)
+    bpp = int.from_bytes(raw[28:30], "little")
+    comp = int.from_bytes(raw[30:34], "little")
+    if bpp not in (24, 32) or w <= 0 or h == 0:
+        return None
+    order = (2, 1, 0)  # byte positions of R, G, B in a pixel (BGR(A))
+    if comp == 3:
+        if bpp != 32:
+            return None
+        # BI_BITFIELDS: masks follow a 40-byte header, or sit inside a V4 / V5 header
+        if len(raw) < 14 + 40 + 12:
+            return None
+        masks = [int.from_bytes(raw[54 + 4 * i:58 + 4 * i], "little") for i in range(3)]
+        pos = []
+        for m in masks:
+            if m not in (0xFF, 0xFF00, 0xFF0000, 0xFF000000):
+                return None  # not byte aligned: let Pillow decode it
+            pos.append({0xFF: 0, 0xFF00: 1, 0xFF0000: 2, 0xFF000000: 3}[m])
+        order = tuple(pos)
+    elif comp != 0:
+        return None
+    rows, stride = abs(h), ((w * bpp + 31) // 32) * 4
+    if len(raw) < off + rows * stride:
+        raise ImageError(f"BMP is cut short ({len(raw)} bytes, needs {off + rows * stride})")
+    px = np.frombuffer(raw, np.uint8, rows * stride, off).reshape(rows, stride)
+    px = px[:, : w * (bpp // 8)].reshape(rows, w, bpp // 8)[..., list(order)]
+    if h > 0:
+        px = px[::-1]
+    return np.ascontiguousarray(px)
+
+
+def find_shot(folder: Path, t: float):
+    """The shot file for a time: shot_<tenths>.bmp, or the same name as .png (a converted or Linux capture)."""
+    stem = shot_name(t)[:-4]
+    for ext in IMAGE_EXTS:
+        p = folder / (stem + ext)
+        if p.exists():
+            return p
+    return None
 
 
 def box_mean(x: np.ndarray, k: int) -> np.ndarray:
@@ -351,7 +435,11 @@ def tile_mae(d: np.ndarray, tiles=(16, 9)) -> float:
     return float(t.max())
 
 
-def metrics(g: np.ndarray, t: np.ndarray, bad_level: int) -> dict:
+def metrics(g: np.ndarray, t: np.ndarray, bad_level: int, ignore: np.ndarray | None = None) -> dict:
+    """Scores of a test frame against one golden frame. Pixels in `ignore` count as equal."""
+    if ignore is not None:
+        t = t.copy()
+        t[ignore] = g[ignore]
     d = np.abs(g.astype(np.int16) - t.astype(np.int16)).astype(np.uint8)
     dmax = d.max(axis=2)
     mse = float((d.astype(np.float64) ** 2).mean())
@@ -365,15 +453,76 @@ def metrics(g: np.ndarray, t: np.ndarray, bad_level: int) -> dict:
     }
 
 
-def envelope_metrics(gmin: np.ndarray, gmax: np.ndarray, t: np.ndarray, tol: int) -> dict:
-    """How far the test frame leaves the golden range (the per-pixel span of the scene's golden frames).
+def _window_reduce(x: np.ndarray, r: int, fn) -> np.ndarray:
+    """min or max over a (2r+1) x (2r+1) window, edges clamped. Separable, so cheap for small r."""
+    if r <= 0:
+        return x
+    k = 2 * r + 1
+    pad = [(r, r), (0, 0)] + [(0, 0)] * (x.ndim - 2)
+    y = fn(np.lib.stride_tricks.sliding_window_view(np.pad(x, pad, mode="edge"), k, axis=0), axis=-1)
+    pad = [(0, 0), (r, r)] + [(0, 0)] * (x.ndim - 2)
+    return fn(np.lib.stride_tricks.sliding_window_view(np.pad(y, pad, mode="edge"), k, axis=1), axis=-1)
 
-    Animated parts (videos, rain, a blinking prompt) have a wide range and accept any value in it; still
-    parts have a range of zero and must match. Distances are per pixel, the largest over the channels."""
-    ti = t.astype(np.int16)
-    below = gmin.astype(np.int16) - ti
-    above = ti - gmax.astype(np.int16)
-    dist = np.maximum(np.maximum(below, above), 0).max(axis=2).astype(np.uint8)
+
+def region_mask(shape, regions, ref=(1280, 720)) -> np.ndarray | None:
+    """Pixels inside the scene's ignore rectangles ([x, y, w, h] in a 1280x720 frame, scaled to the image)."""
+    if not regions:
+        return None
+    h, w = shape[:2]
+    sx, sy = w / ref[0], h / ref[1]
+    m = np.zeros((h, w), bool)
+    for x, y, rw, rh in regions:
+        x0, y0 = max(0, int(round(x * sx))), max(0, int(round(y * sy)))
+        x1, y1 = min(w, int(round((x + rw) * sx))), min(h, int(round((y + rh) * sy)))
+        m[y0:y1, x0:x1] = True
+    return m
+
+
+class GoldenRange:
+    """The tolerance model for a scene: what a test pixel may look like, from the scene's golden burst.
+
+    Per pixel and channel, the lowest and highest value over all golden frames. Where the golden frames moved
+    (span above `anim_level`), the range is also widened by the values within `radius` pixels, so a moving
+    object (rain, a flame, a swinging prompt) may sit a few pixels from where any golden frame had it. Still
+    pixels (span at or below `anim_level`) keep their exact range, so a missing or wrong still object fails.
+    Pixels in `ignore` rectangles accept anything."""
+
+    def __init__(self, frames, radius: int = 0, anim_level: int = 0, ignore=None):
+        gmin, gmax = frames[0].copy(), frames[0].copy()
+        for g in frames[1:]:
+            np.minimum(gmin, g, out=gmin)
+            np.maximum(gmax, g, out=gmax)
+        span = (gmax.astype(np.int16) - gmin.astype(np.int16)).max(axis=2)
+        self.animated = span > anim_level
+        if radius > 0 and self.animated.any():
+            near = _window_reduce(self.animated, radius, np.max)
+            wmin, wmax = _window_reduce(gmin, radius, np.min), _window_reduce(gmax, radius, np.max)
+            gmin = np.where(near[..., None], wmin, gmin)
+            gmax = np.where(near[..., None], wmax, gmax)
+            self.widened = near
+        else:
+            self.widened = self.animated
+        self.ignore = region_mask(gmin.shape, ignore)
+        if self.ignore is not None:
+            gmin[self.ignore] = 0
+            gmax[self.ignore] = 255
+        self.gmin, self.gmax = gmin, gmax
+
+    @property
+    def animated_share(self) -> float:
+        return float(self.animated.mean())
+
+    def distance(self, t: np.ndarray) -> np.ndarray:
+        """Per pixel, how far (0-255, the worst channel) the test frame leaves the range."""
+        ti = t.astype(np.int16)
+        below = self.gmin.astype(np.int16) - ti
+        above = ti - self.gmax.astype(np.int16)
+        return np.maximum(np.maximum(below, above), 0).max(axis=2).astype(np.uint8)
+
+
+def envelope_metrics(rng: GoldenRange, t: np.ndarray, tol: int) -> dict:
+    """How far the test frame leaves the golden range (see GoldenRange)."""
+    dist = rng.distance(t)
     return {
         "env_mae": round(float(dist.mean()), 3),
         "env_bad": round(float((dist > tol).mean()), 5),
@@ -382,8 +531,18 @@ def envelope_metrics(gmin: np.ndarray, gmax: np.ndarray, t: np.ndarray, tol: int
     }
 
 
-def quick_mae(g: np.ndarray, t: np.ndarray) -> float:
-    return float(np.abs(g[::4, ::4].astype(np.int16) - t[::4, ::4].astype(np.int16)).mean())
+def small(img: np.ndarray, ignore: np.ndarray | None = None, f: int = 4) -> np.ndarray:
+    """A 1/f size copy (block means, so thin objects still count) for picking the closest golden frame.
+    Ignored pixels are set to 0 so they never decide."""
+    h, w = img.shape[0] // f * f, img.shape[1] // f * f
+    x = img[:h, :w].astype(np.float32)
+    if ignore is not None:
+        x = x * ~ignore[:h, :w, None]
+    return x.reshape(h // f, f, w // f, f, -1).mean(axis=(1, 3))
+
+
+def quick_mae(g_small: np.ndarray, t_small: np.ndarray) -> float:
+    return float(np.abs(g_small - t_small).mean())
 
 
 _HEAT = None
@@ -399,8 +558,18 @@ def heat_lut() -> np.ndarray:
     return _HEAT
 
 
-def heat_image(g: np.ndarray, dmax: np.ndarray, full_at: int = 64) -> Image.Image:
-    """Difference heat map over a dimmed grey copy of the golden frame."""
+def heat_image(g: np.ndarray, dmax: np.ndarray, full_at: int = 64, width: int | None = None) -> Image.Image:
+    """Difference heat map over a dimmed grey copy of the golden frame (black = same, white = full_at or more).
+
+    With `width`, the map is made at that width: the difference is shrunk by taking the largest value of each
+    block (so a one-pixel error still shows), the golden frame by averaging."""
+    if width and width < dmax.shape[1]:
+        f = math.ceil(dmax.shape[1] / width)
+        h, w = dmax.shape
+        ph, pw = -h % f, -w % f
+        dm = np.pad(dmax, ((0, ph), (0, pw)), mode="edge")
+        dmax = dm.reshape(dm.shape[0] // f, f, dm.shape[1] // f, f).max(axis=(1, 3))
+        g = np.asarray(Image.fromarray(g).resize((dmax.shape[1], dmax.shape[0]), Image.Resampling.BOX))
     v = np.clip(dmax.astype(np.float64) / full_at, 0, 1) ** 0.5
     heat = heat_lut()[(v * 255).astype(np.uint8)].astype(np.float64)
     grey = (g.astype(np.float64) @ np.array([0.299, 0.587, 0.114]))[..., None] * 0.3
@@ -408,10 +577,10 @@ def heat_image(g: np.ndarray, dmax: np.ndarray, full_at: int = 64) -> Image.Imag
     return Image.fromarray(out)
 
 
-def save_thumb(img, path: Path, width: int):
+def save_thumb(img, path: Path, width: int | None):
     im = img if isinstance(img, Image.Image) else Image.fromarray(img)
-    h = round(im.height * width / im.width)
-    im = im.resize((width, h), Image.Resampling.BOX)
+    if width and im.width != width:
+        im = im.resize((width, round(im.height * width / im.width)), Image.Resampling.BOX)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.suffix == ".jpg":
         im.save(path, quality=88)
@@ -428,6 +597,9 @@ DRAW_RE = re.compile(
 RESOLVE_RE = re.compile(
     r"resolve (\d+) (rt\d+|depth)@(\d+):f(\d+) -> ([0-9A-Fa-f]{8}) format (\d+) pitch (\d+) height (\d+) "
     r"command (\d+) clear color (\d+) depth (\d+) off (-?\d+),(-?\d+) surface pitch (\d+) msaa (\d+)$")
+# Vulkan only: the draw just logged was not drawn (its pipeline was still compiling, or none).
+PIPELINE_RE = re.compile(r"draw (\d+) pipeline (.+)$")
+FRAME_END_RE = re.compile(r"frame end, (\d+) draws, (\d+) resolves$")
 RT_RE = re.compile(r"rt(\d+)@(\d+):f(\d+)")
 
 
@@ -451,6 +623,36 @@ def parse_entry(line: str):
         strict = loose + f" dest={dest.upper()} srcbase={sbase} off={ox},{oy} spitch={spitch} msaa={msaa}"
         return loose, strict, "resolve"
     return None
+
+
+def frame_stats(lines) -> dict:
+    """Counts for one logged frame, and anything that looks wrong with the log itself."""
+    st = {"draws": 0, "resolves": 0, "skipped": 0, "unparsed": [], "declared": None}
+    for line in lines:
+        p = parse_entry(line)
+        if p:
+            st[p[2] + "s"] += 1
+            continue
+        m = FRAME_END_RE.match(line)
+        if m:
+            st["declared"] = (int(m.group(1)), int(m.group(2)))
+            continue
+        m = PIPELINE_RE.match(line)
+        if m:
+            st["skipped"] += 1
+            continue
+        if line.strip():
+            st["unparsed"].append(line)
+    problems = []
+    if st["declared"] and st["declared"] != (st["draws"], st["resolves"]):
+        problems.append(f"frame end says {st['declared'][0]} draws, {st['declared'][1]} resolves; "
+                        f"{st['draws']} and {st['resolves']} lines read")
+    if st["skipped"]:
+        problems.append(f"{st['skipped']} draw(s) skipped (pipeline not ready)")
+    if st["unparsed"]:
+        problems.append(f"{len(st['unparsed'])} line(s) not understood, first: {st['unparsed'][0][:120]}")
+    st["problems"] = problems
+    return st
 
 
 def read_framelog(path: Path):
@@ -478,15 +680,20 @@ def frame_keys(lines, strict=False):
 
 
 def compare_framelogs(golden_frames, test_frames, strict=False) -> dict:
-    """For each test frame, the most similar golden frame (difflib ratio over the canonical lines)."""
+    """For each test frame, the most similar golden frame (difflib ratio over the canonical lines).
+
+    The result describes the worst of those pairs: its ratio, counts, the shader pairs drawn more often on
+    either side and a unified diff of the canonical lines."""
+    gkeys = [frame_keys(gl, strict) for gl in golden_frames]
     best_all = []
     for ti, tl in enumerate(test_frames):
         tk = frame_keys(tl, strict)
         best = None
-        for gi, gl in enumerate(golden_frames):
-            gk = frame_keys(gl, strict)
-            sm = difflib.SequenceMatcher(None, gk, tk, autojunk=False)
-            r = sm.ratio() if (gk or tk) else 1.0
+        for gi, gk in enumerate(gkeys):
+            if not gk and not tk:
+                r = 1.0
+            else:
+                r = difflib.SequenceMatcher(None, gk, tk, autojunk=False).ratio()
             if best is None or r > best["ratio"]:
                 best = {"test_frame": ti, "golden_frame": gi, "ratio": round(r, 4), "_g": gk, "_t": tk}
         if best:
@@ -500,7 +707,11 @@ def compare_framelogs(golden_frames, test_frames, strict=False) -> dict:
         return Counter(" ".join(k.split()[:3]) for k in keys if k.startswith("draw"))
 
     gp, tp = pairs(gk), pairs(tk)
-    out = {
+    problems = []
+    for who, frames in (("golden", golden_frames), ("test", test_frames)):
+        for i, lines in enumerate(frames):
+            problems += [f"{who} frame {i}: {x}" for x in frame_stats(lines)["problems"]]
+    return {
         "ratio": worst["ratio"],
         "ratios": [b["ratio"] for b in best_all],
         "golden_frame": worst["golden_frame"],
@@ -511,29 +722,38 @@ def compare_framelogs(golden_frames, test_frames, strict=False) -> dict:
         "test_resolves": sum(1 for k in tk if k.startswith("resolve")),
         "only_golden": [f"{n}x {p}" for p, n in (gp - tp).most_common(12)],
         "only_test": [f"{n}x {p}" for p, n in (tp - gp).most_common(12)],
-        "diff": list(difflib.unified_diff(gk, tk, "golden", "test", n=2, lineterm="")),
+        "problems": problems,
+        "diff": list(difflib.unified_diff(gk, tk, f"golden frame {worst['golden_frame']}",
+                                          f"test frame {worst['test_frame']}", n=2, lineterm="")),
     }
-    return out
 
 
 def cmd_framelog(a) -> int:
     fa = read_framelog(Path(a.log))
+    if not fa:
+        print(f"no complete logged frame in {a.log}")
+        return 2
     if not a.other:
         for i, lines in enumerate(fa):
-            print(f"# frame {i}")
+            st = frame_stats(lines)
+            print(f"# frame {i}: {st['draws']} draws, {st['resolves']} resolves")
+            for x in st["problems"]:
+                print(f"# warning: {x}")
             for k in frame_keys(lines, a.strict):
                 print(k)
         return 0
     fb = read_framelog(Path(a.other))
     r = compare_framelogs(fa, fb, a.strict)
     if not r:
-        print("no frames to compare")
+        print(f"no complete logged frame in {a.other}")
         return 2
     print(f"similarity {r['ratio']:.4f} (golden frame {r['golden_frame']} vs test frame {r['test_frame']}); "
           f"draws {r['golden_draws']} -> {r['test_draws']}, resolves {r['golden_resolves']} -> {r['test_resolves']}")
+    for x in r["problems"]:
+        print(f"warning: {x}")
     for line in r["diff"]:
         print(line)
-    return 0
+    return 0 if a.min_ratio is None or r["ratio"] >= a.min_ratio else 1
 
 
 # ---------------------------------------------------------------------------
@@ -541,7 +761,83 @@ def cmd_framelog(a) -> int:
 
 
 def scene_shots(folder: Path, times):
-    return [(float(t), folder / shot_name(t)) for t in times]
+    """(time, path) of the shots that exist (BMP or PNG)."""
+    out = []
+    for t in times:
+        p = find_shot(folder, t)
+        if p is not None:
+            out.append((float(t), p))
+    return out
+
+
+DIFF_LINES_IN_REPORT = 400
+
+
+def score_frames(res: dict, gshots, tshots, th: dict, ignore, out_dir: Path | None, folder: str) -> bool:
+    """Scores each test shot against the golden shots (closest frame and golden range); fills res["frames"].
+
+    gshots and tshots are lists of (time, path). Images go to out_dir/img/<folder> when out_dir is given.
+    Returns False when the golden frames cannot be read."""
+    try:
+        golden = [(t, p, load_image(p)) for t, p in gshots]
+    except ImageError as ex:
+        res["status"] = "missing"
+        res["notes"].append(str(ex))
+        return False
+    gshape = golden[0][2].shape
+    odd = [p.name for _t, p, g in golden if g.shape != gshape]
+    if odd:
+        res["notes"].append(f"golden frames of another size left out: {', '.join(odd)}")
+    golden = [g for g in golden if g[2].shape == gshape]
+    rng = GoldenRange([g[2] for g in golden], radius=int(th.get("env_radius") or 0),
+                      anim_level=int(th.get("env_anim_level") or 0), ignore=ignore)
+    res["animated_share"] = round(rng.animated_share, 4)
+    bad_level = int(th.get("bad_level", 40))
+    env_tol = int(th.get("env_tol", 16))
+    gsmall = [small(g[2], rng.ignore) for g in golden]
+    for t, tp in tshots:
+        try:
+            timg = load_image(tp)
+        except ImageError as ex:
+            res["notes"].append(str(ex))
+            continue
+        note = ""
+        if timg.shape != gshape:
+            note = f"size {timg.shape[1]}x{timg.shape[0]}, golden {gshape[1]}x{gshape[0]}"
+            timg = np.asarray(Image.fromarray(timg).resize((gshape[1], gshape[0]), Image.Resampling.BOX))
+        # Timing between runs is never exact: match each test frame with the closest golden frame of the scene.
+        ts = small(timg, rng.ignore)
+        gi = min(range(len(golden)), key=lambda i: quick_mae(gsmall[i], ts))
+        gt, gp, gimg = golden[gi]
+        m = metrics(gimg, timg, bad_level, rng.ignore)
+        dmax = m.pop("_dmax")
+        env = envelope_metrics(rng, timg, env_tol)
+        edist = env.pop("_dist")
+        m.update(env)
+        fails = [k for k in ("mae", "tile_mae", "bad", "env_bad", "env_tile") if th.get(k) is not None and m[k] > th[k]]
+        if th.get("ssim") is not None and m["ssim"] < th["ssim"]:
+            fails.append("ssim")
+        if note:
+            fails.append("size")
+        fr = {"time": t, "golden_time": gt, "test": str(tp), "golden": str(gp), "fails": fails, "note": note, **m}
+        if out_dir is not None:
+            stem = tp.stem
+            img = out_dir / "img" / folder
+            save_thumb(gimg, img / f"{stem}_golden.jpg", 640)
+            save_thumb(timg, img / f"{stem}_test.jpg", 640)
+            save_thumb(heat_image(gimg, dmax, width=640), img / f"{stem}_diff.png", None)
+            save_thumb(heat_image(gimg, edist, width=640), img / f"{stem}_range.png", None)
+            fr["img"] = {k: f"img/{folder}/{stem}_{k}.{'jpg' if k in ('golden', 'test') else 'png'}"
+                         for k in ("golden", "test", "diff", "range")}
+            if fails:
+                # Full-size heat maps for failing frames only (they are large).
+                save_thumb(heat_image(gimg, dmax), img / f"{stem}_diff_full.png", None)
+                save_thumb(heat_image(gimg, edist), img / f"{stem}_range_full.png", None)
+                fr["img"]["diff_full"] = f"img/{folder}/{stem}_diff_full.png"
+                fr["img"]["range_full"] = f"img/{folder}/{stem}_range_full.png"
+        res["frames"].append(fr)
+    res["golden_frames"] = len(golden)
+    return True
 
 
 def compare_scene(data: dict, scene: dict, golden_root: Path, test_root: Path, out_dir: Path | None,
@@ -550,8 +846,8 @@ def compare_scene(data: dict, scene: dict, golden_root: Path, test_root: Path, o
     gdir, tdir = golden_root / scene["name"], test_root / scene["name"]
     res = {"scene": scene["name"], "description": scene.get("description", ""), "thresholds": th,
            "frames": [], "notes": [], "status": "pass"}
-    gshots = [(t, p) for t, p in scene_shots(gdir, all_times(scene, True)) if p.exists()]
-    tshots = [(t, p) for t, p in scene_shots(tdir, scene["times"]) if p.exists()]
+    gshots = scene_shots(gdir, all_times(scene, True))
+    tshots = scene_shots(tdir, scene["times"])
     if not gshots:
         res["status"] = "missing"
         res["notes"].append(f"no golden frames in {gdir}")
@@ -562,46 +858,8 @@ def compare_scene(data: dict, scene: dict, golden_root: Path, test_root: Path, o
         return res
     if len(tshots) < len(scene["times"]):
         res["notes"].append(f"{len(scene['times']) - len(tshots)} test frame(s) missing")
-    golden = [(t, p, load_image(p)) for t, p in gshots]
-    gshape = golden[0][2].shape
-    golden = [g for g in golden if g[2].shape == gshape]
-    # The golden range: per pixel and channel, the lowest and highest value over all golden frames of the scene.
-    gmin, gmax = golden[0][2].copy(), golden[0][2].copy()
-    for _t, _p, g in golden[1:]:
-        np.minimum(gmin, g, out=gmin)
-        np.maximum(gmax, g, out=gmax)
-    bad_level = int(th.get("bad_level", 40))
-    env_tol = int(th.get("env_tol", 16))
-    for t, tp in tshots:
-        timg = load_image(tp)
-        note = ""
-        if timg.shape != gshape:
-            note = f"size {timg.shape[1]}x{timg.shape[0]}, golden {gshape[1]}x{gshape[0]}"
-            timg = np.asarray(Image.fromarray(timg).resize((gshape[1], gshape[0]), Image.Resampling.BOX))
-        # Timing between runs is never exact: match each test frame with the closest golden frame of the scene.
-        gt, gp, gimg = min(golden, key=lambda g: quick_mae(g[2], timg))
-        m = metrics(gimg, timg, bad_level)
-        dmax = m.pop("_dmax")
-        env = envelope_metrics(gmin, gmax, timg, env_tol)
-        edist = env.pop("_dist")
-        m.update(env)
-        fails = [k for k in ("mae", "tile_mae", "bad", "env_bad", "env_tile") if th.get(k) is not None and m[k] > th[k]]
-        if th.get("ssim") is not None and m["ssim"] < th["ssim"]:
-            fails.append("ssim")
-        if note:
-            fails.append("size")
-        fr = {"time": t, "golden_time": gt, "test": str(tp), "golden": str(gp), "fails": fails, "note": note, **m}
-        if out_dir is not None and thumbs:
-            stem = shot_name(t)[:-4]
-            img = out_dir / "img" / scene["name"]
-            save_thumb(gimg, img / f"{stem}_golden.jpg", 640)
-            save_thumb(timg, img / f"{stem}_test.jpg", 640)
-            save_thumb(heat_image(gimg, dmax), img / f"{stem}_diff.png", 640)
-            save_thumb(heat_image(gimg, edist), img / f"{stem}_range.png", 640)
-            fr["img"] = {k: f"img/{scene['name']}/{stem}_{k}.{'jpg' if k in ('golden', 'test') else 'png'}"
-                         for k in ("golden", "test", "diff", "range")}
-        res["frames"].append(fr)
-    res["golden_frames"] = len(golden)
+    if not score_frames(res, gshots, tshots, th, scene.get("ignore"), out_dir if thumbs else None, scene["name"]):
+        return res
     # Scenes with random events (lightning, rain) may let a share of their frames miss.
     passed = sum(1 for f in res["frames"] if not f["fails"])
     need = math.ceil(float(th.get("min_pass", 1.0)) * len(scene["times"]) - 1e-9)
@@ -614,6 +872,8 @@ def compare_scene(data: dict, scene: dict, golden_root: Path, test_root: Path, o
         dl = compare_framelogs(read_framelog(gfl), read_framelog(tfl), strict=bool(th.get("drawlog_strict")))
         if dl:
             res["drawlog"] = {k: v for k, v in dl.items() if k != "diff"}
+            res["drawlog"]["diff_head"] = dl["diff"][:DIFF_LINES_IN_REPORT]
+            res["drawlog"]["diff_lines"] = len(dl["diff"])
             if out_dir is not None:
                 p = out_dir / "drawlog" / f"{scene['name']}.diff.txt"
                 p.parent.mkdir(parents=True, exist_ok=True)
@@ -622,6 +882,8 @@ def compare_scene(data: dict, scene: dict, golden_root: Path, test_root: Path, o
             if th.get("drawlog") is not None and dl["ratio"] < th["drawlog"]:
                 res["status"] = "fail"
                 res["drawlog"]["fail"] = True
+        else:
+            res["notes"].append("a frame log has no complete frame (no 'frame end' line)")
         gm, tm = read_meta(gdir), read_meta(tdir)
         for who, mm in (("golden", gm), ("test", tm)):
             st = mm.get("frame_log", {}).get("scene_time")
@@ -705,6 +967,73 @@ def cmd_calibrate(a) -> int:
     return 0
 
 
+def image_set(path: Path):
+    """(time or index, path) for one image, or for every BMP / PNG in a folder (by name)."""
+    if path.is_dir():
+        files = sorted(f for f in path.iterdir() if f.suffix.lower() in IMAGE_EXTS)
+    elif path.exists():
+        files = [path]
+    else:
+        raise SystemExit(f"not found: {path}")
+    out = []
+    for i, f in enumerate(files):
+        m = re.fullmatch(r"shot_(\d+)", f.stem)
+        out.append((int(m.group(1)) / 10 if m else float(i), f))
+    return out
+
+
+def cmd_images(a) -> int:
+    """Compares any two images or folders of images, without scenes.json scene folders.
+
+    Every image of the first set is a golden frame (one golden range over all of them); every image of the
+    second set is scored against the closest of them. Thresholds: the defaults in scenes.json, a scene's
+    with --scene, then any given on the command line."""
+    data = load_scenes(Path(a.scenes_file))
+    th = dict(data["defaults"]["thresholds"])
+    ignore = None
+    if a.scene:
+        sc = pick_scenes(data, a.scene)[0]
+        th, ignore = thresholds_for(data, sc), sc.get("ignore")
+    for kv in a.set or []:
+        k, _, v = kv.partition("=")
+        th[k] = None if v in ("", "null", "none") else float(v)
+    gshots, tshots = image_set(Path(a.golden)), image_set(Path(a.test))
+    if not gshots or not tshots:
+        print("no BMP or PNG images to compare")
+        return 2
+    out_dir = Path(a.out) if a.out else None
+    if out_dir is not None:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    res = {"scene": a.name, "description": f"{a.golden} against {a.test}", "thresholds": th, "frames": [],
+           "notes": [], "status": "pass"}
+    if not score_frames(res, gshots, tshots, th, ignore, out_dir, a.name):
+        print("; ".join(res["notes"]))
+        return 2
+    passed = sum(1 for f in res["frames"] if not f["fails"])
+    need = math.ceil(float(th.get("min_pass") or 1.0) * len(tshots) - 1e-9)
+    res["passed_frames"], res["needed_frames"] = passed, need
+    if passed < need or any("size" in f["fails"] for f in res["frames"]):
+        res["status"] = "fail"
+    keys = ("mae", "ssim", "tile_mae", "bad", "psnr", "env_bad", "env_tile")
+    print(f"{'test':24} {'closest golden':24} " + " ".join(f"{k:>9}" for k in keys) + "  result")
+    for f in res["frames"]:
+        print(f"{Path(f['test']).name:24} {Path(f['golden']).name:24} "
+              + " ".join(f"{f[k]:9.4f}" for k in keys)
+              + ("  fails: " + ",".join(f["fails"]) if f["fails"] else "  ok"))
+    for n in res["notes"]:
+        print(f"note: {n}")
+    if out_dir is not None:
+        summary = {"status": res["status"], "plugin": "", "golden_root": str(Path(a.golden).resolve()),
+                   "test_root": str(Path(a.test).resolve()),
+                   "created": dt.datetime.now().isoformat(timespec="seconds"), "scenes": [res]}
+        with open(out_dir / "summary.json", "w", encoding="utf-8") as f:
+            json.dump(summary, f, indent=1)
+        (out_dir / "report.html").write_text(render_report(summary), encoding="utf-8")
+        print(f"report {out_dir / 'report.html'}")
+    print(f"{res['status'].upper()}: {passed}/{len(res['frames'])} frames pass (need {need})")
+    return 0 if res["status"] == "pass" else 1
+
+
 # ---------------------------------------------------------------------------
 # report.html
 
@@ -733,6 +1062,9 @@ summary{cursor:pointer;padding:12px 0;font-weight:600}summary .badge{margin-left
 figcaption{font-size:12px;color:var(--muted)}.m{font-size:12px;margin:2px 0 0;color:var(--fg)}
 .m b.bad{color:var(--fail)}ul{margin:4px 0 12px;padding-left:18px}code{font-size:12px}
 a{color:var(--accent)}
+details.diff{margin:6px 0 14px;padding:0 10px}details.diff summary{font-weight:400;padding:8px 0}
+pre{overflow-x:auto;font-size:12px;line-height:1.35;margin:0 0 10px}pre .add{color:var(--pass)}
+pre .del{color:var(--fail)}pre .hunk{color:var(--muted)}
 @media (max-width:1000px){.frame{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:560px){.frame{grid-template-columns:1fr}}
 """
@@ -803,6 +1135,15 @@ def render_report(summary: dict) -> str:
             out.append(f"<p class=desc>{e(r['description'])}</p>")
         for n in r["notes"]:
             out.append(f"<p class=desc>{e(n)}</p>")
+        if "animated_share" in r:
+            ng = r.get("golden_frames", 0)
+            if r["animated_share"] > 0:
+                out.append(f"<p class=desc>{ng} golden frames; {r['animated_share'] * 100:.1f}% of the picture moves "
+                           f"between them (the golden range is wider there"
+                           + (f", widened by {th.get('env_radius')} px" if th.get("env_radius") else "") + ").</p>")
+            else:
+                out.append(f"<p class=desc>{ng} golden frame{'s' if ng != 1 else ''}; nothing moves between them, "
+                           f"so every pixel must match.</p>")
         out.append("<div class=frames>")
         for f in r["frames"]:
             def mv(k, label, digits, scale=1.0):
@@ -818,14 +1159,23 @@ def render_report(summary: dict) -> str:
             imgs = f.get("img", {})
             status = "<b class=bad>fails: " + e(", ".join(f["fails"])) + "</b>" if f["fails"] else "passes"
             out.append("<div class=frame>")
-            out.append(f"<figure><a href=\"{e(Path(f['golden']).as_uri())}\"><img loading=lazy src=\"{imgs.get('golden', '')}\" alt=golden></a>"
-                       f"<figcaption>golden, closest frame ({f['golden_time']} s)</figcaption></figure>")
-            out.append(f"<figure><a href=\"{e(Path(f['test']).as_uri())}\"><img loading=lazy src=\"{imgs.get('test', '')}\" alt=test></a>"
-                       f"<figcaption>test, {f['time']} s: {status}</figcaption></figure>")
-            out.append(f"<figure><img loading=lazy src=\"{imgs.get('diff', '')}\" alt=\"difference heat map\">"
-                       f"<figcaption>difference from the closest golden frame</figcaption><p class=m>{diff_line}</p></figure>")
-            out.append(f"<figure><img loading=lazy src=\"{imgs.get('range', '')}\" alt=\"outside the golden range\">"
-                       f"<figcaption>outside the golden range</figcaption><p class=m>{range_line}</p></figure>")
+            gname, tname = Path(f["golden"]).name, Path(f["test"]).name
+
+            def fig(key, full, alt, caption, extra=""):
+                src = e(imgs.get(key, ""))
+                img = f"<img loading=lazy src=\"{src}\" alt=\"{e(alt)}\">"
+                if full:
+                    img = f"<a href=\"{e(full)}\">{img}</a>"
+                return f"<figure>{img}<figcaption>{caption}</figcaption>{extra}</figure>"
+
+            out.append(fig("golden", Path(f["golden"]).resolve().as_uri(), "golden",
+                           f"golden, closest frame: {e(gname)} ({f['golden_time']:g} s)"))
+            out.append(fig("test", Path(f["test"]).resolve().as_uri(), "test",
+                           f"test {e(tname)} ({f['time']:g} s): {status}"))
+            out.append(fig("diff", imgs.get("diff_full"), "difference heat map",
+                           "difference from the closest golden frame", f"<p class=m>{diff_line}</p>"))
+            out.append(fig("range", imgs.get("range_full"), "outside the golden range",
+                           "outside the golden range", f"<p class=m>{range_line}</p>"))
             out.append("</div>")
         out.append("</div>")
         d = r.get("drawlog")
@@ -835,11 +1185,24 @@ def render_report(summary: dict) -> str:
                        f"{th.get('drawlog', 0)}); draws {d['golden_draws']} golden / {d['test_draws']} test, resolves "
                        f"{d['golden_resolves']} / {d['test_resolves']}. "
                        f"<a href=\"{e(d.get('diff_file', ''))}\">diff</a></p>")
-            if d["only_golden"] or d["only_test"]:
-                out.append("<p class=m>Shader pairs drawn more often in golden:</p><ul>"
-                           + "".join(f"<li><code>{e(x)}</code></li>" for x in d["only_golden"]) + "</ul>")
-                out.append("<p class=m>Shader pairs drawn more often in test:</p><ul>"
-                           + "".join(f"<li><code>{e(x)}</code></li>" for x in d["only_test"]) + "</ul>")
+            for x in d.get("problems", [])[:20]:
+                out.append(f"<p class=m><b class=bad>frame log:</b> {e(x)}</p>")
+            if d.get("diff_head"):
+                more = d.get("diff_lines", 0) - len(d["diff_head"])
+                lines = []
+                for line in d["diff_head"]:
+                    c = "add" if line.startswith("+") and not line.startswith("+++") else (
+                        "del" if line.startswith("-") and not line.startswith("---") else (
+                            "hunk" if line.startswith("@@") else ""))
+                    lines.append(f"<span class=\"{c}\">{e(line)}</span>")
+                if more > 0:
+                    lines.append(f"<span class=hunk>... {more} more lines in the diff file</span>")
+                out.append(f"<details class=diff><summary>Draw list diff (golden frame {d['golden_frame']}, "
+                           f"test frame {d['test_frame']})</summary><pre>" + "\n".join(lines) + "</pre></details>")
+            for key, who in (("only_golden", "golden"), ("only_test", "test")):
+                if d[key]:
+                    out.append(f"<p class=m>Shader pairs drawn more often in {who}:</p><ul>"
+                               + "".join(f"<li><code>{e(x)}</code></li>" for x in d[key]) + "</ul>")
         out.append("</details>")
     out.append("</main></body></html>")
     return "\n".join(out)
@@ -893,10 +1256,20 @@ def main(argv=None) -> int:
     q.add_argument("--floor-env-tile", type=float, default=0.5)
     q.set_defaults(fn=cmd_calibrate)
 
+    q = sub.add_parser("images", help="compare two images or two folders of BMP / PNG images")
+    q.add_argument("golden", help="golden image or folder (all its images make one golden range)")
+    q.add_argument("test", help="test image or folder")
+    q.add_argument("--out", default="", help="folder for heat maps, summary.json and report.html")
+    q.add_argument("--scene", default="", help="use this scene's thresholds and ignore regions")
+    q.add_argument("--set", action="append", metavar="KEY=VALUE", help="override a threshold (null = not checked)")
+    q.add_argument("--name", default="images", help="name shown in the report")
+    q.set_defaults(fn=cmd_images)
+
     q = sub.add_parser("framelog", help="print a frame log canonically, or diff two")
     q.add_argument("log", help="a game log or a scene's framelog.txt")
     q.add_argument("other", nargs="?", help="a second log to diff against the first")
     q.add_argument("--strict", action="store_true", help="also compare EDRAM bases, offsets and addresses")
+    q.add_argument("--min-ratio", type=float, default=None, help="exit 1 when the similarity is below this")
     q.set_defaults(fn=cmd_framelog)
 
     a = p.parse_args(argv)

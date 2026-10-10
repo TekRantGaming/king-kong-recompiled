@@ -7,8 +7,9 @@ the desktop) and a frame log, and compares them with a golden set captured from 
 | File | What it does |
 |---|---|
 | `tests/run.ps1` | Launches the game once per run, waits for the shots, stops the game, collects, compares |
-| `tests/compare.py` | The Python half: `plan`, `collect`, `compare`, `calibrate`, `framelog` (run with `python -I`; numpy, Pillow) |
+| `tests/compare.py` | The Python half: `plan`, `collect`, `compare`, `calibrate`, `framelog`, `images` (run with `python -I`; numpy, Pillow) |
 | `tests/scenes.json` | Runs (script, start clock, extra arguments, frame-log scene) and scenes (shot times, thresholds) |
+| `tests/test_compare.py` | Tests of the compare tool with synthetic images and logs (no game data); runs on any OS |
 
 ## Use
 
@@ -85,11 +86,20 @@ are random. So:
    (smallest mean difference on a quarter-size copy), and scored with MAE (mean absolute difference per channel,
    0-255), SSIM (8x8 windows on brightness), tile MAE (the worst of 16x9 tiles of 80x80 pixels) and the share of
    bad pixels (off by more than `bad_level`). Tight for still scenes, not checked for animated ones.
-2. **Golden range.** Over all golden frames of the scene (the dense burst), each pixel has a lowest and highest
-   value per channel. A test pixel that leaves that range by more than `env_tol` is "outside". Still parts
-   (menu text, the HUD, a paused frame) have no range and must match; animated parts accept anything the golden
-   frames showed. Scored as the share of outside pixels (`env_bad`) and the worst 80x80 tile of the outside
-   distance (`env_tile`, which catches a small missing or wrong object).
+2. **Golden range** (the tolerance model for animated parts). Over all golden frames of the scene (the dense
+   burst), each pixel has a lowest and highest value per channel. A test pixel that leaves that range by more
+   than `env_tol` is "outside". Still parts (menu text, the HUD, a paused frame) have no range and must match;
+   animated parts accept anything the golden frames showed. Scored as the share of outside pixels (`env_bad`)
+   and the worst 80x80 tile of the outside distance (`env_tile`, which catches a small missing or wrong object).
+   Three settings shape it:
+   - `env_anim_level` (default 0): a pixel counts as animated when its golden span is above this. Raise it to a
+     few levels if the golden frames show dither or video noise that should still count as still.
+   - `env_radius` (default 0): in and near the animated parts only, the range also takes in the values within
+     this many pixels. A golden burst never shows every position of a raindrop or a flame; with a radius of a
+     few pixels a test frame may draw it a little away from every golden position. Still parts keep their exact
+     range, so a still object that moved or is missing still fails.
+   - `ignore` (on the scene, not in `thresholds`): rectangles `[x, y, w, h]` in 1280x720 coordinates (scaled to
+     the frame) that accept anything and count as equal in every score, for parts that cannot be compared at all.
 3. **Draw list.** If both sides have a frame log for the scene, the canonical draw and resolve lines are diffed
    (Python `difflib` ratio, 1 = the same list), best golden frame per test frame. The report lists the shader
    pairs drawn more often on either side and links the diff.
@@ -102,7 +112,26 @@ floors), see "Calibration" below.
 The report (`report.html`) starts with one PASS / FAIL badge and a table, one row per scene, every value next to
 its limit and red when over. Failing scenes open below it with, per frame: the closest golden frame, the test
 frame, the difference heat map and the outside-the-range heat map (black = same, white = 64 or more off; click
-a frame for the full-size BMP). `summary.json` beside it has every number.
+a frame for the full-size BMP, a heat map of a failing frame for its full-size PNG). The 640-pixel heat maps keep
+the largest difference of each 2x2 block, so a one-pixel error still shows. Below the frames: the draw-list
+similarity, problems found in the frame logs themselves, the shader pairs drawn more often on either side and the
+first 400 lines of the draw-list diff (the whole diff is in `drawlog\<scene>.diff.txt`). `summary.json` beside it
+has every number.
+
+Shots may be BMP (the game's own 32-bit top-down files, or any plain 24 / 32-bit BMP) or PNG (any kind; alpha
+is dropped). A scene folder may hold `shot_<tenths>.png` in place of `.bmp`, for example frames converted on
+another machine; when both exist the BMP is used.
+
+To compare frames outside the scene layout (two screenshots, or two folders):
+
+```powershell
+python -I native-renderer\tests\compare.py images <golden image or folder> <test image or folder> --out <folder>
+python -I native-renderer\tests\compare.py images golden\vrex_140 run\vrex_140 --scene vrex_140 --set env_radius=3
+```
+
+Every image of the first set is a golden frame (one golden range over all of them), every image of the second is
+scored against the closest of them. Thresholds are the defaults, a scene's with `--scene`, then `--set KEY=VALUE`
+(`null` = not checked). With `--out` it writes heat maps and a `report.html` like the full compare.
 
 ## The frame log format (`REX_DEV_FRAME_LOG`)
 
@@ -120,7 +149,12 @@ Frame log: frame end, <d> draws, <r> resolves
 ```
 
 `frame start` is written once; every logged frame ends with `frame end`. The Vulkan backend adds ` func <n>`
-(the depth function) after the z state; D3D12 does not. Field meanings, as the native plugin should fill them:
+(the depth function) after the z state; D3D12 does not. Vulkan also writes `Frame log: draw <i> pipeline
+placeholder (skipped)` (or `missing`) after a draw whose pipeline was not ready, so that draw was not drawn. The
+compare tool reports per frame: such skipped draws, a `frame end` count that does not match the lines read, and
+lines it does not understand. A frame without its `frame end` (log cut short) is left out. The log lines are found
+by their `Frame log: ` text, so a log in another layout (a Linux build) works too. Field meanings, as the native
+plugin should fill them:
 
 | Field | Meaning |
 |---|---|
@@ -143,8 +177,10 @@ canonical form or diff two:
 
 ```powershell
 python -I native-renderer\tests\compare.py framelog F:\KK-native-renderer\golden\vrex_140\framelog.txt
-python -I native-renderer\tests\compare.py framelog <golden framelog.txt> <test game.log>
+python -I native-renderer\tests\compare.py framelog <golden framelog.txt> <test game.log> --min-ratio 0.98
 ```
+
+With `--min-ratio` the diff exits 1 when the similarity is lower (for scripts).
 
 Timing: the log's clock is not the scripts' clock. The runner asks for `scene time + clock_offset`, where
 `clock_offset` (seconds from the log clock's start to the shot clock's zero) is measured in each run and stored
@@ -154,6 +190,20 @@ was actually taken (`frame_log.scene_time`), and the report shows it. Measured: 
 ## Calibration and the self-consistency check
 
 NN
+
+## Testing the compare tool
+
+`tests/test_compare.py` checks the tool itself with synthetic frames and logs, no game or golden data needed:
+BMP variants (the game's top-down 32-bit, bottom-up 24-bit with row padding, bitfields, Pillow's) and PNG
+variants load to the same pixels; the scores react to a small missing object; the golden range accepts rain
+streaks where the golden frames had them (and, with `env_radius`, near them) but not a missing still object, a
+wrong colour or rain in a still part; `min_pass` lets one lightning frame of three miss but not two; the frame log
+parser reads both backends' lines and reports skipped draws and bad counts; `collect`, `compare`, `images` and
+`plan` run end to end on temporary folders.
+
+```powershell
+python -I native-renderer\tests\test_compare.py
+```
 
 ## Adding a scene
 

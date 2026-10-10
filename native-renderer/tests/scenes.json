@@ -28,6 +28,8 @@
    "bad": 0.002,
    "bad_level": 40,
    "env_tol": 16,
+   "env_radius": 0,
+   "env_anim_level": 0,
    "env_bad": 0.002,
    "env_tile": 3.0,
    "drawlog": 0.98,
