@@ -37,7 +37,13 @@ $compare = Join-Path $PSScriptRoot 'compare.py'
 if (-not $Exe) { $Exe = Join-Path $repo 'kk\out\build\kk-dev\king_kong.exe' }
 if (-not $GameData) { $GameData = Join-Path $repo 'kk\assets' }
 foreach ($p in @($Exe, $GameData, $UserData)) {
-  if (-not (Test-Path $p)) { Write-Error "not found: $p" -ErrorAction Continue; exit 4 }
+  if (-not (Test-Path $p)) { Write-Output "not found: $p"; exit 4 }
+}
+# The runtime loads rexgpu-<name>.dll (rexgpu-<name>rd.dll in RelWithDebInfo builds) from the game's folder.
+$exeDir = Split-Path $Exe
+if (-not (Get-ChildItem -Path $exeDir -Filter "rexgpu-$Plugin*.dll" -ErrorAction SilentlyContinue)) {
+  Write-Output "no rexgpu-$Plugin.dll beside $Exe"
+  exit 4
 }
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 if ($Golden) { $root = $GoldenRoot } elseif ($Out) { $root = $Out } else { $root = Join-Path $RunsRoot "$Plugin-$stamp" }
