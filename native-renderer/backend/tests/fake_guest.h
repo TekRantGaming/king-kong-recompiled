@@ -34,6 +34,9 @@ class FakeGuestMemory final : public GuestMemory {
     return p < physical_.size() ? physical_.data() + p : nullptr;
   }
   uint8_t* Writable(uint32_t va) { return const_cast<uint8_t*>(Virtual(va)); }
+  // Physical memory from address 0 (the game renderer's kknr::GuestMemory).
+  const uint8_t* PhysicalBase() const { return physical_.data(); }
+  uint32_t PhysicalSize() const { return uint32_t(physical_.size()); }
 
   uint32_t AllocHeap(uint32_t bytes, uint32_t align = 16) {
     heap_used_ = (heap_used_ + align - 1) & ~(align - 1);

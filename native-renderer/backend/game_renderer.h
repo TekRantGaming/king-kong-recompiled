@@ -95,6 +95,16 @@ class GameRenderer {
   // After the frame's command list was submitted.
   void EndFrame();
 
+  // The host render targets made so far (tests and debugging).
+  struct TargetInfo {
+    bool depth = false;
+    uint32_t edram_base = 0, pitch = 0, format = 0;  // the key
+    uint32_t width = 0, height = 0;
+    nvrhi::Format host_format = nvrhi::Format::UNKNOWN;
+    nvrhi::ITexture* texture = nullptr;
+  };
+  std::vector<TargetInfo> DebugTargets() const;
+
  private:
   // ---- bindless tables
   enum Table : uint32_t { kTex2D, kTex3D, kTexCube, kTex2DArray, kSamplers, kBuffers, kTableCount };

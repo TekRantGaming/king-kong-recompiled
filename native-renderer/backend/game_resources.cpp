@@ -100,6 +100,24 @@ GameRenderer::HostTarget* GameRenderer::GetTarget(bool depth, uint32_t edram_bas
   return slot.get();
 }
 
+std::vector<GameRenderer::TargetInfo> GameRenderer::DebugTargets() const {
+  std::vector<TargetInfo> out;
+  for (const auto& [key, t] : targets_) {
+    if (!t) continue;
+    TargetInfo i;
+    i.depth = t->depth;
+    i.edram_base = uint32_t(key & 0xFFF);
+    i.pitch = uint32_t((key >> 16) & 0x3FFF);
+    i.format = uint32_t((key >> 40) & 0xFF);
+    i.width = t->width;
+    i.height = t->height;
+    i.host_format = t->format;
+    i.texture = t->texture;
+    out.push_back(i);
+  }
+  return out;
+}
+
 uint64_t GameRenderer::FormatSignature(const std::array<HostTarget*, 4>& colors, const HostTarget* depth) {
   uint64_t h = 0x51ED27;
   for (const HostTarget* c : colors) h = Mix64(h, c ? uint64_t(c->format) + 1 : 0);
