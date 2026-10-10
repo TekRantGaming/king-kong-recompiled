@@ -252,9 +252,9 @@ SV_VertexID includes the base vertex on D3D12 as on Vulkan for these draws (the 
   per frame (about 360 invalidations a frame in the Venture opening's movie, 3 texture uploads of 3 ms each).
   Fine at 30 frames a second, worth a look for higher frame rates (the planes could skip the watches: their
   Lock / Unlock is hooked-able).
-- **Draw-list comparison.** The native plugin does not write `REX_DEV_FRAME_LOG` lines yet, so the harness
-  compares pictures only (runs use `-NoFrameLog`). The Xenos log hashes the vertex shader microcode after the
-  library patched it for the declaration, which the native side would need to reproduce.
+- **Draw-list comparison.** The native plugin now writes `REX_DEV_FRAME_LOG` lines (see "The frame log" below).
+  Unverified against the game: the vertex shader hash is reproduced from the library's patching rules and has
+  not been compared with the Xenos log. Run `kkshaders vfetch-check <xeshaders.bin>` on Windows first.
 - **Linux tests and the endian default.** `nr_game_tests` (Linux, lavapipe) were written with the buffer's
   endian; with `element_endian` on by default, a test whose elements' declared endian differs from the
   buffer's would now read differently. Not run here (no Linux).
@@ -476,8 +476,7 @@ golden range and MAE (0-255).
 
 2/13 pass on both, and both "passes" are artefacts of the scene limits, not matches. Vulkan and D3D12 give the
 same pictures (the small differences are timing). Contact sheets (golden left, native right):
-`F:\KK-native-renderer\analysis\04\sheet_vulkan_final.png`, `sheet_vulkan.png`. No frame logs on the native side
-(`REX_DEV_FRAME_LOG` is a Xenos plugin feature), so every native run waits for its time limit.
+`F:\KK-native-renderer\analysis\04\sheet_vulkan_final.png`, `sheet_vulkan.png`. (That run predates the native frame log.)
 
 ## What the Windows side had to do (the cloud session's list; done, see above)
 
@@ -503,3 +502,37 @@ same pictures (the small differences are timing). Contact sheets (golden left, n
    the Windows SDK bundle on `CMAKE_PREFIX_PATH`, or on Linux).
 8. Vulkan on Windows: the Windows bundle has no Vulkan, so not before a Vulkan-enabled SDK build; then
    `sdk-patches/0001` is required there too.
+
+## The frame log
+
+`REX_DEV_FRAME_LOG=<seconds>[,<frames>]` (same meaning as on the Xenos plugin) makes the native plugin log one
+`Frame log: ...` line per draw and resolve at warning level, in the format `compare.py framelog` reads. Code:
+`backend/frame_log.*` (formatting, clock, frame selection) and `backend/game_frame_log.cpp` (the hooks).
+Assumptions, none checked against the game yet:
+- A game Clear is logged as a null-copy resolve (command 3); the Present front-buffer copy is a resolve line;
+  other resolves use command 0/1 from `PlanResolveConversion`.
+- The pixel shader hash is the database (template) hash.
+- `--native_dump_frame=N` also logs three vertex hashes per draw: database, object memory and the reproduced patch.
+
+### The vertex shader hash
+
+The Xenos log hashes the vertex microcode after the library patched its vfetch instructions for the declaration.
+`kkshaders/vertex_patch.*` reproduces it from `d3d-api-map.md` and `d3d-structs.md`: per full fetch the format,
+integer and signed bits, offset/4, fetch slot (95 - stream) and stride/4; mini fetches keep the previous slot and
+stride. The hash is XXH3-64 of the big-endian bytes. Fields not confirmed by the game are listed by
+`kkshaders vfetch-check`, which patches the first container of each database entry with the dummy declaration of
+the second and prints the differing bits. If they differ, the alternatives are the PM4 IM_LOAD path or hashing
+the in-place patched object memory (already logged under `--native_dump_frame`).
+
+## Pipeline cache
+
+Options (all off by default): `--native_pipeline_cache=true`, `--native_pipeline_cache_dir=<dir>` (default
+`<cache root>/native-pipelines/<TITLE8>.pipelines`, set through `InitializeShaderStorage`; unverified that the app
+calls it for the native plugin), `--native_pipeline_wait=true`.
+- Every pipeline description is appended once to the file as a 128-byte `PipelineRecord` (16-byte header: magic,
+  version 1, record size, byte-order marker). A torn tail is repaired on open; a version mismatch starts a new file.
+- At start all records are queued on the pipeline worker threads. Shaders come from the pack by hash, or the
+  record waits until the game creates the shader (retried at the end of each frame).
+- Without `pipeline_wait` a draw whose pipeline is not ready is skipped (as on the Xenos plugin); with it the
+  draw waits (`stats().pipeline_waits`, `pipeline_wait_ms`).
+- Prewarm needs Vulkan with async pipelines; the D3D12 backend is not supported for it.

@@ -147,7 +147,7 @@ scored against the closest of them. Thresholds are the defaults, a scene's with 
 
 ## The frame log format (`REX_DEV_FRAME_LOG`)
 
-`REX_DEV_FRAME_LOG=<seconds>[,<frames>]` makes the Xenos plugin (D3D12: `src/graphics/d3d12/command_processor.cpp`,
+`REX_DEV_FRAME_LOG=<seconds>[,<frames>]` makes the Xenos plugin (and, since phase 2b, the native plugin, see `backend.md`) (D3D12: `src/graphics/d3d12/command_processor.cpp`,
 Vulkan: `src/graphics/vulkan/command_processor.cpp` in the SDK) log every draw and resolve of `<frames>` frames
 (default 1), starting at the first swap at least `<seconds>` after the log's clock started (the first draw or
 swap of the run). The lines go to the game log (`--log_file`; level warning, category gpu). The native plugin
