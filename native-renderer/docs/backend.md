@@ -149,17 +149,27 @@ Without the SDK on the prefix path the plugin is skipped and the libraries and G
 
 ## Open questions
 
-- Clear's stencil register (r8 or r9) and the clear flag bits: look at Clear calls in `analysis/d3dtrace2.log`
-  (r8 / r9 next to f1) and at `sub_82114D10`.
-- Whether the recompiled code's indirect calls (the render-state setter table, `*(dev + 96 + state)`) reach
-  `REX_HOOK_RAW` overrides. They should (the function table maps addresses to the `sub_` symbols), but if
-  `SetRenderState(...)` log lines never appear, they do not.
-- Whether c0..c3 are really the world-view-projection rows for most draws (`--native_wvp_transpose=true`
-  reads them as columns).
-- `d3d12_host.cpp` has never been compiled. It matches the current `HostDevice` interface and the D3D12
-  presenter's contract by reading.
+Settled on Windows: Clear's stencil register (r9) and flag bits (above); the recompiled code's indirect calls
+through the render-state setter table do reach the `REX_HOOK_RAW` overrides (the draws carry the depth states
+the game sets, 1/1/3, 1/0/3, 0/0/3 and so on); c0..c3 is the world-view-projection for the static world only
+(above); `d3d12_host.cpp` compiles and works.
+
+Still open:
+
+- Skinned meshes are drawn in their bind pose (the placeholder does no skinning), so characters are at about
+  the right place but not posed. Real vertex shaders (stream 02's translator and packs) replace this.
+- The Venture opening (the ship's hull close up) comes out black with the main-pass filter: its hull draws
+  are not drawn (no perspective matrix found, or not counted as main pass). Look at a `--native_dump_frame`
+  of that scene.
+- V-Rex (and the pause menu over it) shows one large shape over most of the frame: probably geometry close
+  to the camera (the cave roof) or positions that the real vertex shader scales or offsets with other
+  constants. A `--native_dump_frame` of that scene, or the real shaders, settles it.
+- The launcher preloads `rexgpu-native.dll` into every run of a native-enabled build (for its cvars); since
+  f83d351 the hooks check `gpu_plugin` and stay disconnected unless it is `native`.
 - The presenter wraps are cached by resource pointer and size (D3D12) or image and version (Vulkan); a freed
   and reallocated resource at the same address and size would reuse a stale NVRHI handle.
+- Stream 03's resolve paths into a k_8 texture and an 8:8:8:8 with endian none need a frame comparison once
+  render targets are pooled.
 
 ## Windows: status and how it was proven
 
@@ -225,7 +235,42 @@ register, first vertex and its clip position, blend, depth states), resolve and 
 (`rexgpu-native: swap ...`, in the core category, since the app keeps only warnings of the gpu one);
 `--native_log_packets=true` logs every PM4 packet with its first data words.
 
-@@BASELINE@@
+### Xenos unchanged
+
+- `tests/run.ps1 -Plugin xenos` with the native-enabled `kk-dev` build (D3D12 bundle, commit d42804d): 13/13
+  scenes pass against the golden set (`F:\KK-native-renderer\runs\xenos-20261010-070111`), the same as the
+  golden self-check in `testing.md`.
+- No `--gpu_plugin` flag (the app picks xenos): the title frame at 9 s equals the golden one (MAE 0.0), and
+  since f83d351 the hooks no longer connect to the preloaded native plugin in such runs.
+- `KK_NATIVE_RENDERER=OFF`: see the stream report (built in `kk/out/build/kk-dev-off`).
+
+### Test harness baseline (expected to fail)
+
+`tests/run.ps1 -Plugin native` at commit 6db14b3, all 13 scenes. Vulkan:
+`F:\KK-native-renderer\runs\native-20261010-073756` (`-Exe kk\out\build\kk-dev-vulkan\king_kong.exe`); D3D12:
+`F:\KK-native-renderer\runs\native-20261010-075125`. Worst frame of each scene: share of pixels outside the
+golden range and MAE (0-255).
+
+| Scene | Vulkan | D3D12 | What the native frames show |
+|---|---|---|---|
+| video | pass 0.0000 / 0.000 | pass 0.0000 / 0.000 | black (the movie is not drawn); passes only because the golden burst holds black frames |
+| title | fail 0.1255 / 11.3 | fail 0.1255 / 11.3 | black: the title is 2D, not main pass |
+| save_menu | fail 0.9426 / 102.7 | fail 0.9427 / 102.7 | the menu's 3D backdrop as silhouettes: moon, the ship, Skull Island's cliffs, the sea, in their golden places |
+| main_menu | fail 0.9434 / 100.8 | fail 0.9434 / 100.8 | the same backdrop |
+| chapter_select | fail 0.9335 / 100.9 | fail 0.9335 / 100.9 | the same backdrop |
+| loading | pass (2/3) 0.9810 / 116.6 | pass 0.0000 / 0.000 | black; the scene's limits are loose |
+| vrex_110 | fail 0.9404 / 144.9 | fail 0.9375 / 144.4 | one large shape over most of the frame (open problem) |
+| vrex_140 | fail 0.9404 / 91.4 | fail 0.9375 / 91.2 | as vrex_110 |
+| vrex_170 | fail 0.9404 / 91.3 | fail 0.9375 / 91.0 | as vrex_110 |
+| pause | fail 0.9404 / 163.6 | fail 0.9375 / 163.1 | the V-Rex frame under the (undrawn) pause menu |
+| venture | fail 0.0906 / 19.0 | fail 0.0906 / 19.0 | black (open problem) |
+| kong_cutscene | fail 0.8277 / 62.6 | fail 0.8360 / 63.3 | Kong, the V-Rex, trees and the ground as silhouettes roughly where the golden frame has them |
+| kong | fail 0.7676 / 94.2 | fail 0.7826 / 97.6 | the V-Rex, Kong and the rocks; characters in bind pose |
+
+2/13 pass on both, and both "passes" are artefacts of the scene limits, not matches. Vulkan and D3D12 give the
+same pictures (the small differences are timing). Contact sheets (golden left, native right):
+`F:\KK-native-renderer\analysis\04\sheet_vulkan_final.png`, `sheet_vulkan.png`. No frame logs on the native side
+(`REX_DEV_FRAME_LOG` is a Xenos plugin feature), so every native run waits for its time limit.
 
 ## What the Windows side had to do (the cloud session's list; done, see above)
 
