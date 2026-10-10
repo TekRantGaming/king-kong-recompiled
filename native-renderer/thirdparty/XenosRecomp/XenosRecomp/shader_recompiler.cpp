@@ -840,15 +840,15 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
         case AluScalarOpcode::Frcs: value = "(ka_ - floor(ka_))"; break;
         case AluScalarOpcode::Truncs: value = "trunc(ka_)"; break;
         case AluScalarOpcode::Floors: value = "floor(ka_)"; break;
-        case AluScalarOpcode::Exp: value = "exp2(ka_)"; break;
+        case AluScalarOpcode::Exp: value = "kk_Exp(ka_)"; break;
         case AluScalarOpcode::Logc: value = "kk_LogC(ka_)"; break;
-        case AluScalarOpcode::Log: value = "log2(ka_)"; break;
+        case AluScalarOpcode::Log: value = "kk_Log(ka_)"; break;
         case AluScalarOpcode::Rcpc: value = "kk_RcpC(ka_)"; break;
         case AluScalarOpcode::Rcpf: value = "kk_RcpF(ka_)"; break;
-        case AluScalarOpcode::Rcp: value = "(1.0 / ka_)"; break;
+        case AluScalarOpcode::Rcp: value = "kk_Rcp(ka_)"; break;
         case AluScalarOpcode::Rsqc: value = "kk_RsqC(ka_)"; break;
         case AluScalarOpcode::Rsqf: value = "kk_RsqF(ka_)"; break;
-        case AluScalarOpcode::Rsq: value = "rsqrt(ka_)"; break;
+        case AluScalarOpcode::Rsq: value = "kk_Rsq(ka_)"; break;
         case AluScalarOpcode::MaxAs:
         case AluScalarOpcode::MaxAsf:
             indent();
@@ -916,7 +916,7 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
             value = "select(ksk, 1.0, 0.0)";
             break;
         }
-        case AluScalarOpcode::Sqrt: value = "sqrt(ka_)"; break;
+        case AluScalarOpcode::Sqrt: value = "kk_Sqrt(ka_)"; break;
         case AluScalarOpcode::Sin: value = "sin(ka_)"; break;
         case AluScalarOpcode::Cos: value = "cos(ka_)"; break;
         default:

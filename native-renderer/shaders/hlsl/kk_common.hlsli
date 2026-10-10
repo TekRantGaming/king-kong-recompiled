@@ -121,11 +121,20 @@ float kk_ClampInf(float v, float replacement)
     return select(isinf(v), select(v < 0.0, -replacement, replacement), v);
 }
 
-float kk_RcpC(float a) { return kk_ClampInf(1.0 / a, KK_FLT_MAX); }
-float kk_RcpF(float a) { float r = 1.0 / a; return select(isinf(r), select(r < 0.0, -0.0, 0.0), r); }
-float kk_RsqC(float a) { return kk_ClampInf(rsqrt(a), KK_FLT_MAX); }
-float kk_RsqF(float a) { float r = rsqrt(a); return select(isinf(r), select(r < 0.0, -0.0, 0.0), r); }
-float kk_LogC(float a) { float r = log2(a); return select(and(isinf(r), r < 0.0), -KK_FLT_MAX, r); }
+// The IEEE forms as ucode.h states them: exact at 1 (and exp at 0), NaN for a negative input of
+// log / sqrt / rsq. Vulkan leaves log2, sqrt and inversesqrt of a negative undefined and allows a
+// few ulp at 1, so both are explicit.
+float kk_Exp(float a) { return select(a == 0.0, 1.0, exp2(a)); }
+float kk_Log(float a) { return select(a == 1.0, 0.0, select(a < 0.0, asfloat(0x7FC00000u), log2(a))); }
+float kk_Rcp(float a) { return select(a == 1.0, 1.0, 1.0 / a); }
+float kk_Rsq(float a) { return select(a == 1.0, 1.0, select(a < 0.0, asfloat(0x7FC00000u), rsqrt(a))); }
+float kk_Sqrt(float a) { return select(a < 0.0, asfloat(0x7FC00000u), sqrt(a)); }
+
+float kk_RcpC(float a) { return kk_ClampInf(kk_Rcp(a), KK_FLT_MAX); }
+float kk_RcpF(float a) { float r = kk_Rcp(a); return select(isinf(r), select(r < 0.0, -0.0, 0.0), r); }
+float kk_RsqC(float a) { return kk_ClampInf(kk_Rsq(a), KK_FLT_MAX); }
+float kk_RsqF(float a) { float r = kk_Rsq(a); return select(isinf(r), select(r < 0.0, -0.0, 0.0), r); }
+float kk_LogC(float a) { float r = kk_Log(a); return select(and(isinf(r), r < 0.0), -KK_FLT_MAX, r); }
 
 float kk_MulsPrev2(float a, float b, float previous)
 {
