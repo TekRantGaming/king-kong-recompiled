@@ -46,6 +46,10 @@ struct SurfaceDesc {
            edram_base == o.edram_base && depth == o.depth;
   }
 };
+// Same host resource description (size, host format, samples), wherever it sits in EDRAM.
+inline bool SameShape(const SurfaceDesc& a, const SurfaceDesc& b) {
+  return a.width == b.width && a.height == b.height && a.host == b.host && a.msaa == b.msaa && a.depth == b.depth;
+}
 // From the CreateRenderTarget arguments: width, height, D3DFORMAT, D3DMULTISAMPLE_TYPE (0 none, 1 2x, 2 4x)
 // and the parameters' EDRAM base.
 bool DecodeSurfaceDesc(uint32_t width, uint32_t height, uint32_t d3d_format, uint32_t multisample,
@@ -63,8 +67,9 @@ class RenderTargetPool {
     uint64_t last_used_frame = 0;
     uint64_t released_order = 0;  // larger = released more recently
   };
-  // A free slot with the same description (the most recently released), or a new one (host == nullptr: the
-  // renderer must create it). created reports which.
+  // A free slot with the same description (the most recently released), else a free one of the same shape
+  // at another EDRAM base, else a new one (host == nullptr: the renderer must create it). created reports
+  // whether the renderer must create the host resource.
   size_t Acquire(const SurfaceDesc& desc, uint64_t frame, bool* created = nullptr);
   void Release(size_t handle);
   Slot& Get(size_t handle) { return slots_[handle]; }

@@ -76,11 +76,22 @@ uint32_t SurfaceEdramTiles(const SurfaceDesc& d) {
 }
 
 size_t RenderTargetPool::Acquire(const SurfaceDesc& desc, uint64_t frame, bool* created) {
-  size_t best = SIZE_MAX;
+  // First choice: a free slot with the same description, EDRAM base included (the most recently released,
+  // so a surface re-created at the same EDRAM place sees what was drawn there). Second: a free slot of the
+  // same shape at another base (its contents are as undefined as fresh EDRAM would be).
+  size_t best = SIZE_MAX, shape = SIZE_MAX;
   for (size_t i = 0; i < slots_.size(); ++i) {
     const Slot& s = slots_[i];
-    if (s.in_use || !(s.desc == desc)) continue;
-    if (best == SIZE_MAX || s.released_order > slots_[best].released_order) best = i;
+    if (s.in_use || !s.desc.width) continue;
+    if (s.desc == desc) {
+      if (best == SIZE_MAX || s.released_order > slots_[best].released_order) best = i;
+    } else if (SameShape(s.desc, desc)) {
+      if (shape == SIZE_MAX || s.released_order > slots_[shape].released_order) shape = i;
+    }
+  }
+  if (best == SIZE_MAX && shape != SIZE_MAX) {
+    best = shape;
+    slots_[best].desc = desc;
   }
   if (created) *created = best == SIZE_MAX;
   if (best == SIZE_MAX) {

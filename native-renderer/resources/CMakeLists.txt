@@ -22,7 +22,7 @@ add_library(kknr_resources STATIC
     src/render_targets.cpp
 )
 target_include_directories(kknr_resources PUBLIC include)
-if(MSVC OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(kknr_resources PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
 endif()
 
@@ -38,6 +38,7 @@ enable_testing()
 add_executable(kknr_resources_tests
     tests/test_main.cpp
     tests/test_tiling.cpp
+    tests/test_roundtrip.cpp
     tests/test_convert.cpp
     tests/test_buffers.cpp
     tests/test_cache.cpp
