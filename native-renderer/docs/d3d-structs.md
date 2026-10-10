@@ -6,6 +6,20 @@ MSB; converted here). "Code" means read in the recompiled library (`kk/generated
 trace writes, see `d3d-api-map.md`); a layout counts as confirmed when both agree. Machine-readable names are
 in `native-renderer/d3d_api.json`.
 
+## Verification
+
+Every layout below was read in the code and then checked against memory: `tools/analysis/check_d3d_objects.py`
+over the object dumps of nine scenes (33,200 dumps: 7,600 textures, 5,300 vertex buffers, 11,300 index
+buffers, 930 surfaces, 6,900 shaders, 240 declarations) finds no mismatch in the type, count, fetch-constant
+type, dimension, address, pitch, EDRAM size, parent and container fields. Cross-check of the same objects
+against a gameplay device dump (window 6 of the V-Rex run):
+
+- sampler 0: texture word 1 0xFFC9604A (CPU address 0xFFC96000) became 0x1FC9704A in the device copy (low 29
+  bits + 0x1000 for the 0xE0000000 view); word 3 gained the filter bits 0x01280000, word 4 the LOD bias -1.0
+  (0x003E0000) and the volume filter bits; words 2 and 5 are unchanged.
+- stream 0: vertex buffer {0x01010001, fence 0x2E11, 0xFFFF0000, 0xFC665003, 0x0000024E}, offset 0, stride
+  12 gives vertex fetch constant 95 = {0x1C666003, 0x1000024E} at device+1912.
+
 ## The common resource header
 
 Every resource (vertex buffer, index buffer, texture, surface) starts with:
@@ -149,7 +163,8 @@ the traces.
 | +52 / +592 | copy of the shader container's virtual part (header, constant table, input semantics, shader block) | same |
 
 The container passed to CreateVertexShader / CreatePixelShader (`sub_82111CA0` / `sub_82111D90`) is the
-`xeshaders.bin` / compiler output: word 0 flags (low 7 bits non-zero = pixel shader), word 1 virtual size,
+`xeshaders.bin` / compiler output: word 0 flags (low 7 bits non-zero = pixel shader; every vertex shader seen
+has 0x102A0E00 and every pixel shader 0x102A0E01), word 1 virtual size,
 word 2 physical (microcode) size, word 3 offset of the "shader block". The object is header + a copy of the
 first virtual-size bytes; the microcode (physical part, which follows the virtual part in the container) is
 copied to its own physical allocation.
