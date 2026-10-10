@@ -173,7 +173,11 @@ void Backend::Present(rex::ui::Presenter* presenter, uint32_t frontbuffer_width,
                       uint32_t display_height) {
   std::lock_guard lock(mutex_);
   if (!renderer_) return;
-  const bool game_frame = submitted_frames_ != shown_frames_ && renderer_->presented_image();
+  // Once the game has submitted a frame, keep showing the last one: the ring
+  // skimmer's swaps and the hooked Presents run on different threads, so a
+  // swap can come before its frame's Present, and showing the test picture
+  // then made it flicker into the game's frames.
+  const bool game_frame = submitted_frames_ != 0 && renderer_->presented_image();
   shown_frames_ = submitted_frames_;
   const uint32_t width = renderer_->width(), height = renderer_->height();
   const uint32_t swap = swaps_++;

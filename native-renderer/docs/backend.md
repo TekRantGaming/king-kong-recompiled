@@ -1,7 +1,9 @@
 # Stream 04: the backend and the `rexgpu-native` plugin
 
-Status, 10 October 2026 (cloud session, branch `cloud-04-backend`): milestones 1 and 2 and milestone 3's
-call path are built and verified on Linux without the game; nothing has run inside the game yet.
+Status, 10 October 2026: milestones 1, 2 and 3 run in the game on Windows, on Vulkan (the primary API, built
+against a Vulkan-enabled SDK from source) and on D3D12, proven with the game's own frame captures; see
+"Windows: status and how it was proven" below. The cloud session (branch `cloud-04-backend`) built and
+verified the pieces on Linux without the game first.
 
 ## Layout
 
@@ -34,8 +36,10 @@ the library's packets -> ring skimmer (fences, interrupts, VdSwap) -> Backend::P
 ```
 
 At the game's Present the renderer closes and submits the frame's command list. At the guest's swap the
-backend copies the last submitted frame into the presenter's guest output; if no game frame arrived since the
-last swap (hooks not built in, or `--native_draws=false`), it draws the test picture instead
+backend copies the last submitted frame into the presenter's guest output; if no game frame has arrived yet
+(hooks not built in, or `--native_draws=false`), it draws the test picture instead (until the Windows runs it
+also did so whenever a swap came before its frame's Present, which flickered the test picture into the game's
+frames)
 (`--native_test=clear` for milestone 1, `triangle` for milestone 2).
 
 ## Decisions (made in the cloud session; revisit freely)
@@ -56,19 +60,44 @@ last swap (hooks not built in, or `--native_draws=false`), it draws the test pic
   13-15, the census says 16-18; nothing here depends on it.
 - **Placeholder pipeline (milestone 3).** Every draw is expanded to a triangle list on the CPU (base vertex
   applied, indices rebased), its vertices are copied raw (big-endian) into a per-frame ring, and the vertex
-  shader byte-swaps the position (three floats at the declaration's POSITION offset) and multiplies by
-  c0..c3 as rows (`mul(wvp, pos)`, which is what the guest's `dp4 oPos.x, v0, c0` computes; the draft had
-  `mul(pos, wvp)`). `Renderer::Options::transpose_wvp` flips it. Colour: a hash of the shader pair.
+  shader byte-swaps the position (three floats at the declaration's POSITION offset) and multiplies by a
+  matrix used as rows (`mul(wvp, pos)`, which is what the guest's `dp4 oPos.x, v0, c0` computes).
+  Colour: a hash of the (vertex shader, pixel shader) pair.
+- **Which matrix (Windows, from the game's frames).** c0..c3 is the world-view-projection only for the
+  static world; skinned meshes (strides 32 and 56) keep other rows there and their projection at c36, c48,
+  c68, c72, c108 or c120. The tracker keeps all 256 vertex constants and the draw takes the first four
+  consecutive registers that look like a perspective matrix (`LooksLikePerspectiveRows`: the z row a
+  multiple 0.8-1.25 of the w row, the w row not affine). Skinned meshes are therefore drawn in their bind
+  pose at about the right place and size, not animated. `--native_wvp_transpose=true` uses c0..c3 as
+  columns.
+- **Which draws (Windows).** Placeholder draws are the main pass only (`--native_main_pass_only`, default
+  on): depth-tested draws (compare function other than always) that write depth or are opaque
+  (RB_BLENDCONTROL0 colour part ONE, ADD, ZERO). The game draws a depth pre-pass, resolves, then the colour
+  pass with depth writes off; full-screen post effects, the fog, particles (sprites the vertex shader
+  expands) and the HUD would otherwise cover the frame with flat colour. Positions that are not 32-bit
+  floats are skipped (none seen). Each frame image has a D32 depth buffer, cleared at the frame start and by
+  the game's depth clears; the pipelines follow the draw's depth test, write and compare function.
 - **Only the main surface is drawn.** Render target 0 at the last Present is the frame's surface; draws to
   other targets (shadow maps, post effects) are skipped until there is a render-target pool. The first frame
   draws everything. `--native_all_targets=true` draws them all.
 - **Push constants** for the placeholder's per-draw data (96 bytes; root constants on D3D12).
 - **Shaders** are compiled by DXC (Linux release 1.8.2505.1, with `libdxil.so`, so the DXIL is signed) to
   both DXIL and SPIR-V; `compile_shaders.sh` / `.ps1`; the headers are checked in.
-- **Clear's stencil argument** is read from r9 (`hooks::kClearStencilRegister`), on the assumption that the
-  float Z takes a GPR slot as in the 64-bit PowerPC ELF ABI. Unconfirmed; see open questions.
-- **Clear flags**: bit 0 or bits 4-7 colour, bit 1 depth, bit 2 stencil (traced values 1, 0xF, 0x3F, 0x30).
-  Unconfirmed.
+- **Clear's stencil argument** is r9 (`hooks::kClearStencilRegister`): confirmed, `sub_82115418` passes r9
+  on as the stencil (r8) of the clear path `sub_82114D10`.
+- **Clear flags** (confirmed from `sub_82114D10`: `clrlwi 28`, `rlwinm 0,27,27`, `rlwinm 0,26,26`): bits 0-3
+  render targets 0-3, 0x10 Z, 0x20 stencil. The cloud guess (bit 1 = Z) made the colour-only clear before
+  the colour pass wipe the depth pre-pass.
+- **The shader setters are the other way round from `d3d-api-map.md`**: `sub_821108B8` is SetPixelShader and
+  `sub_82110C28` SetVertexShader. Proof (frame dump, `--native_dump_frame`): every object passed to
+  `sub_82110C28` has the 592-byte header with container flags 0x102A0E01 at +592 and is never null; every
+  object passed to `sub_821108B8` has the 52-byte header with 0x102A0E00 at +52 and is null in the depth
+  pre-pass. With the shader stream's finding (the vs_3_0 container at 0x8203E800 goes to `sub_82111D90`),
+  the D3D map's create functions and setters are each swapped, and so are the header sizes in
+  `d3d-structs.md` (the vertex shader object has the 592-byte header). The hook table is fixed.
+- **Vertex buffer address**: the fetch constant at +12 holds a CPU physical-view address like the index
+  buffer's, so it goes through `CpuToPhysical` (the 0xE0000000 view is 4 KB ahead); masking read every
+  vertex 4 KB early and drew large random triangles.
 - **NrApi version 2**: adds `set_render_state` and `set_sampler_state`. The hooks refuse a plugin of another
   version (logged, originals only).
 
@@ -132,7 +161,73 @@ Without the SDK on the prefix path the plugin is skipped and the libraries and G
 - The presenter wraps are cached by resource pointer and size (D3D12) or image and version (Vulkan); a freed
   and reallocated resource at the same address and size would reuse a stale NVRHI handle.
 
-## What the Windows side must do (milestones 1-3 in the game)
+## Windows: status and how it was proven
+
+Work done on the Windows PC on 10 October 2026, branch `nr-04-backend` (worktree
+`F:\KK-native-renderer\wt\04-backend`). Run folders with logs and captures: `F:\KK-native-renderer\analysis\04\runs\`
+and `F:\KK-native-renderer\runs\` (harness), never in git.
+
+### Builds
+
+| Preset | SDK | Graphics | Output |
+|---|---|---|---|
+| `kk-dev` (with `-DKK_NATIVE_RENDERER=ON` set once in its cache) | `tools/rexglue` (the shared bundle) | D3D12 only | `kk/out/build/kk-dev` |
+| `kk-dev-vulkan` (new; native renderer on) | `tools/rexglue-vulkan`, a junction to `F:\KK-native-renderer\sdk-vulkan` | Vulkan and D3D12 | `kk/out/build/kk-dev-vulkan` |
+
+`tools/rexglue-vulkan` is a local junction (git-ignored, like `tools/rexglue`); to recreate it:
+`mklink /J tools\rexglue-vulkan F:\KK-native-renderer\sdk-vulkan`. Build with `kk\build.bat kk-dev-vulkan`.
+
+First-compile fixes on Windows: NVRHI's D3D12 backend needs the preview DirectX-Headers (v1.717.0-preview, now
+vendored in `thirdparty/DirectX-Headers`, see `thirdparty/NOTES.md`; the shim that forwarded to the Windows SDK
+is gone); the tracker class is `DrawTracker` (windows.h defines `DrawState` as `DrawStateA`); the plugin is
+copied beside the game after every plugin build (a POST_BUILD step on the game's target left a stale copy
+when only the plugin changed). `d3d12_host.cpp` and `vulkan_host.cpp` compiled and worked unchanged.
+
+### The Vulkan-enabled SDK
+
+`F:\KK-native-renderer\sdk-src`: rexglue-sdk tag v0.10.0 (f5337cdc) with its submodules, `tools/rexglue-patches`
+0001-0012 applied with `git am` in order, then `sdk-patches/0001` (timelineSemaphore, synchronization2); HEAD
+471c628, version string 0.10.0.12-dev.g471c628. Configured with the user's `build_win.bat` recipe (preset
+`win-amd64`, VS 2022 Build Tools clang) plus `-DREXGLUE_USE_VULKAN=ON -DREXGLUE_USE_D3D12=ON
+-DCMAKE_INSTALL_PREFIX=F:/KK-native-renderer/sdk-vulkan/win-amd64`, built Release and installed (about 20
+minutes, no source changes). One snag: git on Windows checks symbolic links out as small text files, so
+libmspack's `cabextract/mspack/*` (and two MoltenVK headers, unused on Windows) were replaced by copies of
+their targets before building. The install registered itself in the CMake user package registry
+(`HKCU\Software\Kitware\CMake\Packages\rexglue`, value `56c053aa55b612f5f5de379a820459d8`, next to the user's own
+`C:/rexsrc/out/install/win-amd64`). kk's presets set `CMAKE_PREFIX_PATH`, so they are not affected, but the
+user may want to delete that value.
+
+The plugin takes Vulkan whenever the SDK has it (`--native_backend=auto`); `--native_backend=d3d12` forces
+D3D12 in the Vulkan build. No validation layer is installed on this PC, so the run has not been checked
+under the Khronos layer on Windows (the Linux test does that); NVRHI's own layer is `--native_validation`.
+
+### Milestones, proven with the game's own captures
+
+Launch: `king_kong.exe --gpu_plugin=native --game_data_root=<kk/assets> --user_data_root=<private copy of
+F:\KK-native-renderer\userdata> --cache_root=F:/KK-native-renderer/cache --kk_launcher=false --kk_frame_rate=30
+--fullscreen=false --window_width=1280 --window_height=720`, `KK_DEV_AUTOSKIP=1`, `KK_DEV_SHOTS`
+(+ `KK_DEV_SHOTS_FROM=boot`); the scenes through `tests/run.ps1 -Plugin native [-Exe <vulkan build>]`.
+
+| Milestone | D3D12 (`kk-dev`) | Vulkan (`kk-dev-vulkan`) |
+|---|---|---|
+| 1: `--native_draws=false --native_test=clear` | shots at 5, 6, 12, 30 s: one uniform colour each, changing ((123,217,47), (251,89,81), (4,166,174)); the game runs at 30 FPS to gameplay | the same colours at the same times; log `rexgpu-native: created (Vulkan)` |
+| 2: `--native_test=triangle` | the RGB triangle over the cycling colour, green vertex at the top | the identical picture |
+| 3: default | log `native renderer: D3D hooks connected to rexgpu-native (39 entry points)`; the Kong to the Rescue cutscene shows Kong, the V-Rex, trees and the ground as flat silhouettes where the golden frame has them | identical frames |
+
+The first in-game run hung after one frame: the library's fences are type 0 writes to SCRATCH_REG0-7 that the
+GPU mirrors to memory at SCRATCH_ADDR, and the skimmer did not mirror them (a WAIT_REG_MEM on that memory never
+matched). The skimmer now does what the SDK's `CommandProcessor::WriteRegister` does (scratch writeback,
+COHER_STATUS_HOST marked pending) and logs any WAIT_REG_MEM stuck for 2 s.
+
+Logging aids (all off unless set): `--native_dump_frame=N` logs every clear, draw (shader object kinds, matrix
+register, first vertex and its clip position, blend, depth states), resolve and present of game frame N
+(frames count Presents, about 30 a second); the backend logs the hook and renderer counts every 300 swaps
+(`rexgpu-native: swap ...`, in the core category, since the app keeps only warnings of the gpu one);
+`--native_log_packets=true` logs every PM4 packet with its first data words.
+
+@@BASELINE@@
+
+## What the Windows side had to do (the cloud session's list; done, see above)
 
 1. Fetch `cloud-04-backend` into the worktree (`F:\KK-native-renderer`), branch `native-renderer/04-backend`.
 2. Turn the option on in the dev build's cache once (it stays; `build.bat` re-runs the preset without
