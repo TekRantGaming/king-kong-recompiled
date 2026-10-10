@@ -21,36 +21,127 @@ struct StringBuffer
     }
 };
 
+// King Kong: the recompiler no longer reads a container itself. The game's 2005 containers are
+// parsed by the kkshaders container adapter, which fills this in (so does the raw microcode path
+// for shaders that come without a container, such as the emulator's shader cache records).
+struct RecompilerConstant
+{
+    std::string name;
+    RegisterSet registerSet = RegisterSet::Float4;
+    uint32_t registerIndex = 0;
+    uint32_t registerCount = 0;
+};
+
+// A vertex shader input: the vfetch instruction at `address` (in 12-byte instruction units)
+// reads the declaration element with this usage. Its index in the list is its binding index.
+struct RecompilerVertexElement
+{
+    uint32_t address = 0;
+    DeclUsage usage = DeclUsage::Position;
+    uint32_t usageIndex = 0;
+};
+
+// Vertex shader: export register `reg` carries this semantic. Pixel shader: register r<reg>
+// starts with this semantic's interpolated value.
+struct RecompilerInterpolator
+{
+    DeclUsage usage = DeclUsage::TexCoord;
+    uint32_t usageIndex = 0;
+    uint32_t reg = 0;
+};
+
+struct RecompilerInput
+{
+    bool isPixelShader = false;
+    std::vector<uint32_t> ucode;                 // microcode dwords, host byte order
+    std::vector<RecompilerConstant> constants;   // the D3DX constant table (names for comments)
+    std::map<uint32_t, std::array<uint32_t, 4>> floatLiterals; // stage-relative register -> value
+    std::map<uint32_t, uint32_t> loopLiterals;   // loop constant 0-31 -> packed value
+    std::map<uint32_t, bool> boolLiterals;       // bool constant 0-255 -> value
+    // Vertex fetch: binding mode (the vfetch instructions are unpatched templates and every one
+    // has an element here) or, when rawVertexFetch is set, instruction mode (the instructions
+    // carry their real format, offset and stride, as in patched microcode).
+    std::vector<RecompilerVertexElement> vertexElements;
+    bool rawVertexFetch = false;
+    std::vector<RecompilerInterpolator> interpolators;
+    // Raw linkage (no container): vertex export register k is TEXCOORDk, pixel registers r0-r15
+    // start as TEXCOORD0-15.
+    bool rawInterpolators = false;
+    uint32_t pixelOutputs = 0;                   // outputs to declare even if never written
+    int32_t paramGenRegister = -1;               // pixel: register that receives the pixel position
+};
+
+// What the backend binds for a shader (see kkshaders abi.h).
+struct RecompilerSampler
+{
+    uint32_t slot = 0;                // texture fetch constant 0-31
+    TextureDimension dimension = TextureDimension::Texture2D;
+    uint32_t magFilter = 3, minFilter = 3, mipFilter = 3; // 3 = from the fetch constant
+    uint32_t anisoFilter = 7, volMagFilter = 3, volMinFilter = 3; // 7 / 3 = from the fetch constant
+};
+
+struct RecompilerVertexBinding
+{
+    bool raw = false;                 // instruction mode
+    uint32_t element = 0;             // binding mode: index into vertexElements
+    uint32_t fetchConstant = 0;       // instruction mode: vertex fetch constant 0-95
+};
+
+struct RecompilerTexture
+{
+    uint32_t slot = 0;
+    TextureDimension dimension = TextureDimension::Texture2D;
+};
+
 struct ShaderRecompiler : StringBuffer
 {
     uint32_t indentation = 0;
     bool isPixelShader = false;
-    const uint8_t* constantTableData = nullptr;
-    std::unordered_map<uint32_t, VertexElement> vertexElements;
-    std::unordered_map<uint32_t, std::string> interpolators;
-    std::unordered_map<uint32_t, const ConstantInfo*> float4Constants;
-    std::unordered_map<uint32_t, const char*> boolConstants;
-    std::unordered_map<uint32_t, const char*> samplers;
-    std::unordered_map<uint32_t, uint32_t> ifEndLabels;
-    uint32_t specConstantsMask = 0;
+    const RecompilerInput* input = nullptr;
 
-#ifdef UNLEASHED_RECOMP
-    bool hasMtxProjection = false;
-    bool hasMtxPrevInvViewProjection = false;
-#endif
+    // Results besides the HLSL text.
+    std::string error;                // empty when recompile() succeeded
+    std::vector<std::string> warnings;
+    std::vector<RecompilerSampler> samplerBindings;
+    std::vector<RecompilerVertexBinding> vertexBindings;
+    std::vector<RecompilerTexture> textures;
+    bool generalControlFlow = false;  // emitted as a pc / switch state machine
+    bool usesRegisterArray = false;   // relative temporary register addressing
+    uint32_t tempRegisterCount = 0;
+    uint32_t pixelOutputs = 0;        // pixel: PixelShaderOutputs written (plus RecompilerInput::pixelOutputs)
+    uint32_t exportedInterpolators = 0; // vertex: semantic slots written (TEXCOORD0-15, COLOR0-1)
 
-    void indent()
-    {
-        for (uint32_t i = 0; i < indentation; i++)
-            out += '\t';
-    }
+    bool recompile(const RecompilerInput& in, std::string_view include);
 
-    void printDstSwizzle(uint32_t dstSwizzle, bool operand);
-    void printDstSwizzle01(uint32_t dstRegister, uint32_t dstSwizzle);
+private:
+    std::vector<ControlFlowInstruction> cf;
+    uint32_t instructionCount = 0;
+    std::map<uint32_t, uint32_t> elementByAddress;        // vfetch address -> vertex element index
+    std::map<uint32_t, uint32_t> rawBindingByConstant;    // instruction mode: fetch constant -> binding
+    std::map<uint32_t, uint32_t> vfetchBinding;           // vfetch address -> binding index
+    std::map<uint32_t, uint32_t> vfetchStride;            // vfetch address -> stride (dwords) of its vfetch_full
+    std::map<uint32_t, uint32_t> tfetchSampler;           // tfetch address -> sampler binding
+    std::map<uint32_t, uint32_t> vsExportSlot;            // vertex export register -> output slot
+    std::string epilogue;
+
+    void fail(std::string message);
+    void indent();
+    std::string reg(uint32_t index, bool relative) const;
+    std::string floatConstant(uint32_t index, bool addressed, bool a0Relative) const;
+    std::string boolCondition(uint32_t index, bool condition) const;
+    std::string loopConstant(uint32_t index) const;
+    std::string aluOperand(const AluInstruction& instr, uint32_t i) const;
+    std::string scalarOperandBase(const AluInstruction& instr) const;
+
+    bool decodeControlFlow();
+    bool analyze();
+    bool checkStructured() const;
+    void emitExec(uint32_t cfIndex);
+    void emitInstructions(uint32_t address, uint32_t count, uint32_t sequence);
+    void emitEnd();
+    void emitFetchResult(uint32_t dst, bool dstRelative, uint32_t dstSwizzle, std::string_view value);
 
     void recompile(const VertexFetchInstruction& instr, uint32_t address);
-    void recompile(const TextureFetchInstruction& instr, bool bicubic);
+    void recompile(const TextureFetchInstruction& instr, uint32_t address);
     void recompile(const AluInstruction& instr);
-
-    void recompile(const uint8_t* shaderData, const std::string_view& include);
 };

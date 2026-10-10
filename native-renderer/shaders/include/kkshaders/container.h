@@ -8,9 +8,12 @@
 //   word 0  0x102A0E00 pixel / 0x102A0E01 vertex
 //   word 1  virtual size: the header and tables; the game copies it into the shader object
 //   word 2  physical size: the microcode that follows the virtual part
-//   word 3  offset of the register block (0 = none): literal float constants the shader
-//           needs (c249..c255), applied by SetVertexShader / SetPixelShader to the device's
-//           constant shadow as {u16 offset into device+1152, u16 count, count dwords} lists
+//   word 3  offset of the register block (0 = none): literal constants the shader needs
+//           (float ones at c249..c255), applied by SetVertexShader / SetPixelShader to the
+//           device's constant shadow as {u16 offset into device+1152, u16 count, count dwords}
+//           lists. Offsets 768-8959 are the float constants (device +1920), 8960-8991 the bool
+//           constants (+10112, inferred: the dwords before the loop constants) and 8992-9119
+//           the loop constants (+10144; XenosRecomp's own containers use the same 8992 base).
 //   word 4  offset of the D3DX constant table (u32 size, then a standard CTAB)
 //   word 5  offset of the binding table: word 0 = this stage's SQ_PROGRAM_CNTL bits; vertex:
 //           word 7 = number of vfetch entries (at word 10 + word 6) {address:12, usage:4,
@@ -62,6 +65,13 @@ struct LiteralConstant {
     uint32_t value[4] = {};
 };
 
+// One write of the register block, as the XDK applies it when the shader is set: `values`
+// go to the device's register image at +1152 + offset (big-endian words as stored).
+struct RegisterWrite {
+    uint16_t offset = 0;
+    std::vector<uint32_t> values;
+};
+
 // Vertex shader: which declaration element a vfetch instruction reads.
 struct FetchBinding {
     uint16_t address = 0;      // instruction address (12-byte units) of the vfetch
@@ -88,11 +98,18 @@ struct ShaderInfo {
     std::string target;                    // "vs_3_0" / "ps_3_0" (CTAB target)
     std::vector<ConstantInfo> constants;
     std::vector<LiteralConstant> literals;
+    std::vector<std::pair<uint32_t, uint32_t>> loopLiterals;  // loop constant 0-31, packed value
+    std::vector<std::pair<uint32_t, uint32_t>> boolLiterals;  // bool dword 0-7 (32 bools each), value
+    std::vector<RegisterWrite> registerWrites;
     std::vector<FetchBinding> fetches;     // vertex only, in binding-table order
     std::vector<Interpolator> interpolators;
     bool readsPixelPosition = false;       // pixel: VPOS
     uint8_t pixelPositionRegister = 0;
     std::vector<uint32_t> bindingTable;    // raw, for reference
+    std::vector<uint8_t> constantTable;    // the CTAB bytes (after its size word), for hashing
+    // No container: microcode only (the emulator's shader cache records). Vertex fetches are
+    // taken as patched (instruction mode) and interpolators are linked by register number.
+    bool rawMicrocode = false;
 };
 
 struct ParseResult {
@@ -105,6 +122,9 @@ struct ParseResult {
 // size is only known from the header).
 ParseResult parseContainer(const uint8_t* data, size_t maxSize);
 inline ParseResult parseContainer(std::span<const uint8_t> bytes) { return parseContainer(bytes.data(), bytes.size()); }
+
+// Bare microcode (big-endian bytes as in guest memory or a shader cache record).
+ParseResult parseMicrocode(ShaderKind kind, const uint8_t* data, size_t size);
 
 // XXH3-64 over bytes (the cache key convention for microcode).
 uint64_t hashBytes(const void* data, size_t size);

@@ -100,20 +100,37 @@ ParseResult parseContainer(const uint8_t* data, size_t maxSize) {
             at += 4;
             if (count == 0) break;
             if (at + size_t(count) * 4 > end) return fail("register write list runs past the block");
-            // offset is into the device's register image at +1152; ALU constants start at +1920
-            // (vertex 0..255, then pixel 256..511, 16 bytes each).
-            int32_t byteOffset = int32_t(1152) + offset - 1920;
-            if (byteOffset < 0 || (byteOffset & 15) || (count & 3))
-                return fail("register write outside the float constant range");
-            uint32_t absReg = uint32_t(byteOffset) / 16;
-            for (uint32_t k = 0; k < count / 4; k++) {
-                uint32_t reg = absReg + k;
-                uint32_t rel = info.kind == ShaderKind::Pixel ? (reg >= 256 ? reg - 256 : 0xFFFF) : reg;
-                if (rel > 255) return fail("literal constant register outside this stage's range");
-                LiteralConstant lit;
-                lit.registerIndex = uint16_t(rel);
-                for (int c = 0; c < 4; c++) lit.value[c] = be32(data + at + (k * 4 + c) * 4);
-                info.literals.push_back(lit);
+            // offset is into the device's register image at +1152: float constants from 768
+            // (+1920; vertex 0-255 then pixel 256-511, 16 bytes each), bool constants at 8960
+            // (+10112, 8 dwords), loop constants at 8992 (+10144, 32 dwords).
+            RegisterWrite write;
+            write.offset = offset;
+            for (uint32_t k = 0; k < count; k++) write.values.push_back(be32(data + at + k * 4));
+            info.registerWrites.push_back(write);
+            if (offset >= 768 && offset < 8960) {
+                uint32_t byteOffset = offset - 768u;
+                if ((byteOffset & 15) || (count & 3)) return fail("register write not aligned to float constants");
+                uint32_t absReg = byteOffset / 16;
+                if (absReg + count / 4 > 512) return fail("register write past the float constants");
+                for (uint32_t k = 0; k < count / 4; k++) {
+                    uint32_t reg = absReg + k;
+                    uint32_t rel = info.kind == ShaderKind::Pixel ? (reg >= 256 ? reg - 256 : 0xFFFF) : reg;
+                    if (rel > 255) return fail("literal constant register outside this stage's range");
+                    LiteralConstant lit;
+                    lit.registerIndex = uint16_t(rel);
+                    for (int c = 0; c < 4; c++) lit.value[c] = be32(data + at + (k * 4 + c) * 4);
+                    info.literals.push_back(lit);
+                }
+            } else if (offset >= 8960 && offset < 8992) {
+                if ((offset & 3) || offset + count * 4 > 8992) return fail("bool constant write out of range");
+                for (uint32_t k = 0; k < count; k++)
+                    info.boolLiterals.push_back({(offset - 8960u) / 4 + k, be32(data + at + k * 4)});
+            } else if (offset >= 8992 && offset < 9120) {
+                if ((offset & 3) || offset + count * 4 > 9120) return fail("loop constant write out of range");
+                for (uint32_t k = 0; k < count; k++)
+                    info.loopLiterals.push_back({(offset - 8992u) / 4 + k, be32(data + at + k * 4)});
+            } else {
+                return fail("register write outside the shader constants (offset " + std::to_string(offset) + ")");
             }
             at += size_t(count) * 4;
         }
@@ -138,6 +155,7 @@ ParseResult parseContainer(const uint8_t* data, size_t maxSize) {
         uint32_t target = be32(data + ctab + 24);
         (void)creator;
         if (target && !r.cstring(ctab + target, info.target)) return fail("constant table target string out of range");
+        info.constantTable.assign(data + ctab, data + ctab + ctabSize);
         for (uint32_t i = 0; i < constants; i++) {
             size_t ci = ctab + constantInfo + size_t(i) * 20;
             if (ci + 20 > virtualSize) return fail("constant info out of range");
@@ -213,6 +231,20 @@ ParseResult parseContainer(const uint8_t* data, size_t maxSize) {
         }
     }
 
+    result.ok = true;
+    return result;
+}
+
+ParseResult parseMicrocode(ShaderKind kind, const uint8_t* data, size_t size) {
+    if (!data || size == 0 || size % 12 != 0) return fail("microcode size is not a multiple of 12 bytes");
+    ParseResult result;
+    ShaderInfo& info = result.info;
+    info.kind = kind;
+    info.rawMicrocode = true;
+    info.physicalSize = uint32_t(size);
+    info.ucode.resize(size / 4);
+    for (size_t i = 0; i < info.ucode.size(); i++) info.ucode[i] = be32(data + i * 4);
+    info.ucodeHash = hashBytes(data, size);
     result.ok = true;
     return result;
 }
