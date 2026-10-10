@@ -643,7 +643,7 @@ def read_meta(folder: Path) -> dict:
 def cmd_compare(a) -> int:
     data = load_scenes(Path(a.scenes_file))
     scenes = pick_scenes(data, a.scenes)
-    golden_root, test_root = Path(a.golden_root), Path(a.test_root)
+    golden_root, test_root = Path(a.golden_root).resolve(), Path(a.test_root).resolve()
     out_dir = Path(a.report_dir) if a.report_dir else test_root / "report"
     out_dir.mkdir(parents=True, exist_ok=True)
     results = []

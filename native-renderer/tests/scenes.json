@@ -3,100 +3,365 @@
  "about": "Scenes for tests/run.ps1 and tests/compare.py. A run is one launch of the game; a scene is a named set of shot times in a run. Times are seconds after the save menu opens (from: menu) or after the game first reads the pad (from: boot); multiples of 0.1. golden_times are extra frames captured only for the golden set, so a test frame can be matched with the closest golden frame. See docs/testing.md.",
  "defaults": {
   "args": [
-   "--kk_launcher=false", "--kk_frame_rate=30", "--kk_cheats=true", "--kk_cheat_chapters=true",
-   "--fullscreen=false", "--window_width=1280", "--window_height=720", "--kk_original_look=true",
+   "--kk_launcher=false",
+   "--kk_frame_rate=30",
+   "--kk_cheats=true",
+   "--kk_cheat_chapters=true",
+   "--fullscreen=false",
+   "--window_width=1280",
+   "--window_height=720",
+   "--kk_original_look=true",
    "--log_max_file_size_mb=500"
   ],
-  "env": {"KK_DEV_AUTOSKIP": "1"},
-  "clock_offset": {"menu": 7.7, "boot": 1.0},
+  "env": {
+   "KK_DEV_AUTOSKIP": "1"
+  },
+  "clock_offset": {
+   "menu": 7.7,
+   "boot": 1.0
+  },
   "startup_allowance": 60,
-  "thresholds": {"mae": 1.0, "ssim": 0.99, "tile_mae": 6.0, "bad": 0.002, "bad_level": 40, "drawlog": 0.98, "min_pass": 1.0}
+  "thresholds": {
+   "mae": 1.0,
+   "ssim": 0.99,
+   "tile_mae": 6.0,
+   "bad": 0.002,
+   "bad_level": 40,
+   "env_tol": 16,
+   "env_bad": 0.002,
+   "env_tile": 3.0,
+   "drawlog": 0.98,
+   "min_pass": 1.0
+  }
  },
  "runs": {
   "logos": {
    "from": "boot",
-   "args": ["--kk_skip_intros=false"],
-   "frame_log": {"scene": "video", "at": 8.8, "frames": 2}
+   "args": [
+    "--kk_skip_intros=false"
+   ],
+   "frame_log": {
+    "scene": "video",
+    "at": 8.8,
+    "frames": 2
+   }
   },
   "title": {
    "from": "boot",
-   "frame_log": {"scene": "title", "at": 9.0, "frames": 2}
+   "frame_log": {
+    "scene": "title",
+    "at": 9.0,
+    "frames": 2
+   }
   },
   "menus": {
    "from": "menu",
    "script": "12:A,18:A,24:A",
-   "frame_log": {"scene": "save_menu", "at": 7.0, "frames": 2}
+   "frame_log": {
+    "scene": "save_menu",
+    "at": 7.0,
+    "frames": 2
+   }
   },
   "vrex": {
    "from": "menu",
    "script": "12:A,18:A,24:A,30:RIGHT,30.7:RIGHT,31.4:RIGHT,32.1:RIGHT,32.8:RIGHT,33.5:RIGHT,34.2:RIGHT,34.9:RIGHT,37:A,70:START,74:START,78:START,82:START,86:START,90:START,94:B,96:B,176:START",
-   "frame_log": {"scene": "vrex_140", "at": 140.0, "frames": 2}
+   "frame_log": {
+    "scene": "vrex_140",
+    "at": 140.0,
+    "frames": 2
+   }
+  },
+  "venture": {
+   "from": "menu",
+   "script": "12:A,18:A,24:A,30:A",
+   "frame_log": {
+    "scene": "venture",
+    "at": 120.0,
+    "frames": 2
+   }
+  },
+  "kong": {
+   "from": "menu",
+   "script": "12:A,18:A,24:A,30.0:RIGHT,30.6:RIGHT,31.2:RIGHT,31.8:RIGHT,32.4:RIGHT,33.0:RIGHT,33.6:RIGHT,34.2:RIGHT,34.8:RIGHT,35.4:RIGHT,36.0:RIGHT,36.6:RIGHT,37.2:RIGHT,37.8:RIGHT,38.4:RIGHT,39.0:RIGHT,39.6:RIGHT,40.2:RIGHT,40.8:RIGHT,41.4:RIGHT,42.0:RIGHT,42.6:RIGHT,43.2:RIGHT,43.8:RIGHT,44.4:RIGHT,45.0:RIGHT,45.6:RIGHT,48:A",
+   "frame_log": {
+    "scene": "kong",
+    "at": 62.0,
+    "frames": 2
+   }
   }
  },
  "scenes": [
   {
-   "name": "video", "run": "logos",
+   "name": "video",
+   "run": "logos",
    "description": "A pre-rendered video: the Ubisoft logo movie while the logo is held (startup logos not skipped).",
-   "times": [8.4, 8.8, 9.2],
-   "golden_times": {"from": 7.6, "to": 10.0, "step": 0.2}
+   "times": [
+    8.4,
+    8.8,
+    9.2
+   ],
+   "golden_times": {
+    "from": 7.6,
+    "to": 10.0,
+    "step": 0.2
+   }
   },
   {
-   "name": "title", "run": "title",
+   "name": "title",
+   "run": "title",
    "description": "The title screen with the blinking Press START prompt.",
-   "times": [8.0, 9.0, 10.0],
-   "golden_times": {"from": 6.0, "to": 11.0, "step": 0.2}
+   "times": [
+    8.0,
+    9.0,
+    10.0
+   ],
+   "golden_times": {
+    "from": 6.0,
+    "to": 11.0,
+    "step": 0.2
+   }
   },
   {
-   "name": "save_menu", "run": "menus",
+   "name": "save_menu",
+   "run": "menus",
    "description": "The save menu over the animated title background (a video).",
-   "times": [6.0, 7.0, 8.0],
-   "golden_times": {"from": 5.0, "to": 9.0, "step": 0.1}
+   "times": [
+    6.0,
+    7.0,
+    8.0
+   ],
+   "golden_times": {
+    "from": 5.0,
+    "to": 9.0,
+    "step": 0.1
+   },
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null
+   }
   },
   {
-   "name": "main_menu", "run": "menus",
+   "name": "main_menu",
+   "run": "menus",
    "description": "The main menu (Play, Options, Extras) after loading the test save.",
-   "times": [21.0, 22.0, 23.0],
-   "golden_times": {"from": 20.0, "to": 23.6, "step": 0.2}
+   "times": [
+    21.0,
+    22.0,
+    23.0
+   ],
+   "golden_times": {
+    "from": 20.0,
+    "to": 23.6,
+    "step": 0.2
+   },
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null
+   }
   },
   {
-   "name": "chapter_select", "run": "menus",
+   "name": "chapter_select",
+   "run": "menus",
    "description": "The chapter select (all chapters unlocked by the cheat), on the first chapter.",
-   "times": [27.0, 28.0, 29.0],
-   "golden_times": {"from": 26.0, "to": 30.0, "step": 0.2}
+   "times": [
+    27.0,
+    28.0,
+    29.0
+   ],
+   "golden_times": {
+    "from": 26.0,
+    "to": 30.0,
+    "step": 0.2
+   },
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null
+   }
   },
   {
-   "name": "loading", "run": "vrex",
+   "name": "loading",
+   "run": "vrex",
    "description": "The loading screen for V-Rex (chapter name, LOADING and the sweeping picture).",
-   "times": [38.0, 38.4, 38.8],
-   "golden_times": {"from": 37.4, "to": 39.6, "step": 0.1},
-   "thresholds": {"min_pass": 0.66}
+   "times": [
+    38.0,
+    38.4,
+    38.8
+   ],
+   "golden_times": {
+    "from": 37.4,
+    "to": 39.6,
+    "step": 0.1
+   },
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.66
+   }
   },
   {
-   "name": "vrex_110", "run": "vrex",
+   "name": "vrex_110",
+   "run": "vrex",
    "description": "V-Rex gameplay, Jack standing in the rain under the cave roof (lightning comes at random).",
-   "times": [109.0, 109.5, 110.0, 110.5, 111.0],
-   "golden_times": {"from": 108.0, "to": 112.0, "step": 0.2},
-   "thresholds": {"min_pass": 0.6}
+   "times": [
+    109.0,
+    109.5,
+    110.0,
+    110.5,
+    111.0
+   ],
+   "golden_times": {
+    "from": 108.0,
+    "to": 112.0,
+    "step": 0.2
+   },
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
   },
   {
-   "name": "vrex_140", "run": "vrex",
+   "name": "vrex_140",
+   "run": "vrex",
    "description": "V-Rex gameplay at the time of the Phase 0 traces; the frame log is taken here.",
-   "times": [139.0, 139.5, 140.0, 140.5, 141.0],
-   "golden_times": {"from": 138.0, "to": 142.0, "step": 0.2},
-   "thresholds": {"min_pass": 0.6}
+   "times": [
+    139.0,
+    139.5,
+    140.0,
+    140.5,
+    141.0
+   ],
+   "golden_times": {
+    "from": 138.0,
+    "to": 142.0,
+    "step": 0.2
+   },
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
   },
   {
-   "name": "vrex_170", "run": "vrex",
+   "name": "vrex_170",
+   "run": "vrex",
    "description": "V-Rex gameplay, half a minute later.",
-   "times": [169.0, 169.5, 170.0, 170.5, 171.0],
-   "golden_times": {"from": 168.0, "to": 172.0, "step": 0.2},
-   "thresholds": {"min_pass": 0.6}
+   "times": [
+    169.0,
+    169.5,
+    170.0,
+    170.5,
+    171.0
+   ],
+   "golden_times": {
+    "from": 168.0,
+    "to": 172.0,
+    "step": 0.2
+   },
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
   },
   {
-   "name": "pause", "run": "vrex",
+   "name": "pause",
+   "run": "vrex",
    "description": "The pause menu (START during V-Rex gameplay).",
-   "times": [180.0, 181.0, 182.0],
-   "golden_times": {"from": 179.0, "to": 183.0, "step": 0.5}
+   "times": [
+    180.0,
+    181.0,
+    182.0
+   ],
+   "golden_times": {
+    "from": 179.0,
+    "to": 183.0,
+    "step": 0.5
+   }
+  },
+  {
+   "name": "venture",
+   "run": "venture",
+   "description": "The Venture opening (chapter select entry 0): the hull of the rocking ship with VENTURE painted on it and the Right stick to aim hint; lightning comes at random.",
+   "times": [
+    119.0,
+    119.5,
+    120.0,
+    120.5,
+    121.0
+   ],
+   "golden_times": {
+    "from": 118.0,
+    "to": 122.0,
+    "step": 0.2
+   },
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "kong_cutscene",
+   "run": "kong",
+   "description": "Kong to the Rescue (chapter select entry 27): the opening cutscene, Kong facing the V-Rex in the jungle.",
+   "times": [
+    53.0,
+    54.0,
+    55.0
+   ],
+   "golden_times": {
+    "from": 51.6,
+    "to": 56.4,
+    "step": 0.2
+   },
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null
+   }
+  },
+  {
+   "name": "kong",
+   "run": "kong",
+   "description": "Kong to the Rescue gameplay: Jack with a spear behind the rocks, a V-Rex coming in, fires and rain.",
+   "times": [
+    61.0,
+    61.5,
+    62.0,
+    62.5,
+    63.0
+   ],
+   "golden_times": {
+    "from": 59.6,
+    "to": 64.4,
+    "step": 0.2
+   },
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
   }
  ]
 }
