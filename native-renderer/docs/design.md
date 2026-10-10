@@ -70,6 +70,9 @@ device-struct shadows by those calls. So the renderer replaces those functions a
   0x102A0E01), but the parts XenosRecomp needs are standard: a D3DX-style `ps_3_0` / `vs_3_0` constant table
   (CTAB) and Xenos microcode. The translator workstream starts with a container adapter checked against the
   37 HLSL sources shipped in the same file.
+  In memory (the objects the engine creates and binds) every vertex shader container starts 0x102A0E00 and
+  every pixel shader container 0x102A0E01; CreateVertexShader / CreatePixelShader tell them apart by the low
+  bits (brief 01, `d3d-structs.md`).
 - The port's existing tooling: `REX_DEV_FRAME_LOG` (per-draw log, D3D12 and Vulkan), `CaptureFrame`
   (`KK_DEV_SHOTS`), `KK_DEV_AUTOSKIP` / `KK_DEV_SCRIPT` (scripted play into any chapter), the AI name table,
   the Vulkan `/dev/shm` and loading fixes.
