@@ -272,6 +272,39 @@ class ToleranceModel(unittest.TestCase):
         self.assertGreater(r["env_mae"], 0)
         self.assertGreater(self.outside(rng, t, tol=4)["env_bad"], 0)
 
+    def test_env_tile_counts_only_beyond_tolerance(self):
+        bg = background()
+        rng = C.GoldenRange([bg, bg])
+        noisy = np.clip(bg.astype(np.int16) + 10, 0, 255).astype(np.uint8)  # inside env_tol 16 everywhere
+        self.assertEqual(self.outside(rng, noisy)["env_tile"], 0)
+        t = noisy.copy()
+        t[10:20, 10:50] = 0  # the text block missing as well
+        self.assertGreater(self.outside(rng, t)["env_tile"], 100)
+
+    def test_flash_frames_are_left_out_of_the_range(self):
+        bg = background()
+        flash = np.clip(bg.astype(np.int16) + 120, 0, 255).astype(np.uint8)  # lightning
+        res = {"notes": [], "frames": []}
+        gshots, tshots = [], []
+        with tempfile.TemporaryDirectory() as d:
+            for i, img in enumerate([bg, bg, flash, bg]):
+                p = Path(d) / f"shot_{10 + i}.png"
+                Image.fromarray(img).save(p)
+                gshots.append((1.0 + i / 10, p))
+            t = bg.copy()
+            # brighter than it should be, but within the range a flash frame would give
+            t[50:70, 60:100] = np.clip(bg[50:70, 60:100].astype(np.int16) + 60, 0, 255)
+            p = Path(d) / "test.png"
+            Image.fromarray(t).save(p)
+            tshots.append((1.0, p))
+            th = {"env_tol": 16, "env_bad": 0.002, "env_tile": 3.0}
+            C.score_frames(res, gshots, tshots, th, None, None, "x")
+            self.assertEqual(res["frames"][0]["fails"], [])  # the flash makes the range useless
+            res = {"notes": [], "frames": []}
+            C.score_frames(res, gshots, tshots, dict(th, env_flash_level=6), None, None, "x")
+            self.assertIn("env_tile", res["frames"][0]["fails"])
+            self.assertTrue(any("flashes" in n for n in res["notes"]))
+
     def test_anim_level_ignores_dither_noise(self):
         bg = background()
         rng0 = np.random.default_rng(5)

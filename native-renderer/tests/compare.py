@@ -800,7 +800,20 @@ def score_frames(res: dict, gshots, tshots, th: dict, ignore, out_dir: Path | No
     if odd:
         res["notes"].append(f"golden frames of another size left out: {', '.join(odd)}")
     golden = [g for g in golden if g[2].shape == gshape]
-    rng = GoldenRange([g[2] for g in golden], radius=int(th.get("env_radius") or 0),
+    range_frames = [g[2] for g in golden]
+    flash = th.get("env_flash_level")
+    if flash is not None and len(golden) > 2:
+        # Lightning: a golden frame much brighter or darker than the scene's usual would widen the range of
+        # every pixel. Such frames stay candidates for the closest frame but are left out of the range.
+        luma = [float(g[2][::4, ::4].mean()) for g in golden]
+        mid = statistics.median(luma)
+        keep = [g[2] for g, l in zip(golden, luma) if abs(l - mid) <= float(flash)]
+        if keep:
+            left = [g[1].name for g, l in zip(golden, luma) if abs(l - mid) > float(flash)]
+            if left:
+                res["notes"].append(f"golden frames left out of the range (flashes): {', '.join(left)}")
+            range_frames = keep
+    rng = GoldenRange(range_frames, radius=int(th.get("env_radius") or 0),
                       anim_level=int(th.get("env_anim_level") or 0), ignore=ignore)
     res["animated_share"] = round(rng.animated_share, 4)
     bad_level = int(th.get("bad_level", 40))

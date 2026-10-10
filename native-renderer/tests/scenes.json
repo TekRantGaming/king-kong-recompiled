@@ -24,16 +24,17 @@
   "thresholds": {
    "mae": 1.0,
    "ssim": 0.99,
-   "tile_mae": 6.0,
-   "bad": 0.002,
+   "tile_mae": 2.0,
+   "bad": 0.0002,
    "bad_level": 40,
    "env_tol": 16,
    "env_radius": 2,
-   "env_anim_level": 0,
+   "env_anim_level": 16,
    "env_bad": 0.002,
    "env_tile": 1.5,
    "drawlog": 0.98,
-   "min_pass": 1.0
+   "min_pass": 1.0,
+   "env_flash_level": null
   }
  },
  "runs": {
@@ -107,7 +108,8 @@
     "from": 7.6,
     "to": 10.0,
     "step": 0.2
-   }
+   },
+   "thresholds": {}
   },
   {
    "name": "title",
@@ -122,7 +124,8 @@
     "from": 6.0,
     "to": 11.0,
     "step": 0.2
-   }
+   },
+   "thresholds": {}
   },
   {
    "name": "save_menu",
@@ -202,10 +205,6 @@
     "step": 0.1
    },
    "thresholds": {
-    "mae": null,
-    "ssim": null,
-    "tile_mae": null,
-    "bad": null,
     "min_pass": 0.66
    }
   },
@@ -231,7 +230,8 @@
     "tile_mae": null,
     "bad": null,
     "min_pass": 0.6,
-    "env_tol": 32
+    "env_tol": 32,
+    "env_flash_level": 6
    }
   },
   {
@@ -257,7 +257,8 @@
     "bad": null,
     "min_pass": 0.6,
     "env_tol": 32,
-    "drawlog": 0.93
+    "drawlog": 0.93,
+    "env_flash_level": 6
    }
   },
   {
@@ -282,7 +283,8 @@
     "tile_mae": null,
     "bad": null,
     "min_pass": 0.6,
-    "env_tol": 32
+    "env_tol": 32,
+    "env_flash_level": 6
    }
   },
   {
@@ -298,7 +300,8 @@
     "from": 179.0,
     "to": 183.0,
     "step": 0.5
-   }
+   },
+   "thresholds": {}
   },
   {
    "name": "venture",
@@ -317,12 +320,13 @@
     "step": 0.2
    },
    "thresholds": {
-    "mae": null,
-    "ssim": null,
-    "tile_mae": null,
+    "mae": 5.0,
+    "ssim": 0.85,
+    "tile_mae": 18.0,
     "bad": null,
     "min_pass": 0.6,
-    "drawlog": 0.97
+    "drawlog": 0.97,
+    "env_flash_level": 6
    }
   },
   {
@@ -371,7 +375,8 @@
     "env_tol": 32,
     "env_tile": 3.0,
     "env_bad": 0.003,
-    "drawlog": 0.95
+    "drawlog": 0.95,
+    "env_flash_level": 6
    }
   }
  ]
