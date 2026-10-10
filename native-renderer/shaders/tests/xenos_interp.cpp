@@ -177,6 +177,9 @@ Num saturate(Num x) {
 
 // Transcendentals: f(a) with derivative bound `slope` (|f'| over the error interval) and
 // the GPU's own error `own`.
+// An input known to be exactly v (the special cases ucode.h gives exact results for).
+bool exactInput(const Num& a, float v) { return !a.unknown && a.e == 0.0f && a.v == v; }
+
 Num transcendental(Num a, float r, float slope, float own) {
     if (a.unknown) return unknown();
     if (special(r) || std::isnan(a.v)) return (a.e > 0.0f) ? unknown() : exact(r);
@@ -753,6 +756,7 @@ void Machine::alu(const uint32_t* w) {
         case 14: {                                                         // exp (exp2)
             float r = std::exp2(sa.v);
             s = transcendental(sa, r, std::fabs(r) * 0.6931472f * (1.0f + sa.e), std::fabs(r) * kExpRel + FLT_MIN);
+            if (exactInput(sa, 0.0f)) s = exact(1.0f);  // ucode.h: exactly 1 at 0
             break;
         }
         case 15: case 16: {                                                // logc, log
@@ -762,6 +766,7 @@ void Machine::alu(const uint32_t* w) {
             float slope = (sa.e > 0.0f) ? (lo > 0.0f ? 1.4426950f / lo : kInf) : 0.0f;
             s = transcendental(sa, r, slope, kLogAbs + std::fabs(r) * 0x1p-20f);
             if (sop == 15 && !s.unknown && sa.e > 0.0f && std::fabs(sa.v) <= sa.e) s = unknown();
+            if (exactInput(sa, 1.0f)) s = exact(0.0f);  // ucode.h: exactly 0 at 1
             break;
         }
         case 17: case 18: case 19: {                                       // rcpc, rcpf, rcp
@@ -776,6 +781,7 @@ void Machine::alu(const uint32_t* w) {
             // Of a zero: the sign of the infinity follows the zero's, which Vulkan does not
             // preserve by default (no signed-zero float controls), so it is not compared.
             if (sa.v == 0.0f && sop != 18) s = unknown();
+            if (exactInput(sa, 1.0f)) s = exact(1.0f);  // ucode.h: exactly 1 at 1
             break;
         }
         case 20: case 21: case 22: {                                       // rsqc, rsqf, rsq
@@ -788,6 +794,7 @@ void Machine::alu(const uint32_t* w) {
             float slope = (sa.e > 0.0f) ? (lo > 0.0f ? 0.5f / (lo * std::sqrt(lo)) : kInf) : 0.0f;
             s = transcendental(sa, r, slope, std::fabs(r) * kRsqRel);
             if (sa.v == 0.0f && sop != 21) s = unknown();  // the sign of zero, as for rcp
+            if (exactInput(sa, 1.0f)) s = exact(1.0f);     // ucode.h: exactly 1 at 1
             break;
         }
         case 23: case 24: {                                                // maxas, maxasf
