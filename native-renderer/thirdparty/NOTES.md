@@ -32,3 +32,10 @@ Changes we make to vendored code are kept as small as possible and listed here:
   `dxc_compiler.cpp` are not built.
 - `XenosRecomp/XenosRecomp/pch.h`: includes `<iterator>` (Phase 2: with the SDK's fmt, which no longer pulls it
   in, `shader_recompiler.h` did not compile in the plugin build).
+- `nvrhi/src/validation/validation-device.cpp` (Phase 2, Linux): the validation layer refused a sampler in an
+  immutable bindless layout ("Bindless samplers are not implemented"), so the game renderer's sampler table
+  (set 5) failed to initialise whenever NVRHI validation was on. The Vulkan backend makes such a table like any
+  other descriptor array and the game renderer's tests draw through it under the Khronos layer, so the check now
+  lets it through on Vulkan. It still refuses it on D3D12, where it is right to: that backend binds an immutable
+  table from the CBV/SRV/UAV heap (`DescriptorTable::isSamplerTable()` is true only for `MutableSampler`
+  layouts), which cannot hold samplers.

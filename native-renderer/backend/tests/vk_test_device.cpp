@@ -164,6 +164,33 @@ bool VulkanTestDevice::Init(bool validation) {
   features12.pNext = &features13;
   vk::PhysicalDeviceFeatures2 features2;
   features2.pNext = &features12;
+  // The game renderer's bindless tables (sdk-patches/0002 enables the same on
+  // the SDK's device): every feature that is supported.
+  const auto& s10 = supported.get<vk::PhysicalDeviceFeatures2>().features;
+  const auto& s12 = supported.get<vk::PhysicalDeviceVulkan12Features>();
+  // And the Vulkan 1.0 features the SDK enables for GPU emulation that the
+  // game renderer relies on: clip distances in the translated vertex shaders,
+  // a blend state per render target, depth clamping (no depth clip), wireframe,
+  // anisotropy.
+  features2.features.fullDrawIndexUint32 = s10.fullDrawIndexUint32;
+  features2.features.independentBlend = s10.independentBlend;
+  features2.features.depthClamp = s10.depthClamp;
+  features2.features.fillModeNonSolid = s10.fillModeNonSolid;
+  features2.features.samplerAnisotropy = s10.samplerAnisotropy;
+  features2.features.shaderClipDistance = s10.shaderClipDistance;
+  features2.features.shaderCullDistance = s10.shaderCullDistance;
+  features2.features.shaderUniformBufferArrayDynamicIndexing = s10.shaderUniformBufferArrayDynamicIndexing;
+  features2.features.shaderSampledImageArrayDynamicIndexing = s10.shaderSampledImageArrayDynamicIndexing;
+  features2.features.shaderStorageBufferArrayDynamicIndexing = s10.shaderStorageBufferArrayDynamicIndexing;
+  features12.descriptorIndexing = s12.descriptorIndexing;
+  features12.shaderSampledImageArrayNonUniformIndexing = s12.shaderSampledImageArrayNonUniformIndexing;
+  features12.shaderStorageBufferArrayNonUniformIndexing = s12.shaderStorageBufferArrayNonUniformIndexing;
+  features12.descriptorBindingSampledImageUpdateAfterBind = s12.descriptorBindingSampledImageUpdateAfterBind;
+  features12.descriptorBindingStorageBufferUpdateAfterBind = s12.descriptorBindingStorageBufferUpdateAfterBind;
+  features12.descriptorBindingUpdateUnusedWhilePending = s12.descriptorBindingUpdateUnusedWhilePending;
+  features12.descriptorBindingPartiallyBound = s12.descriptorBindingPartiallyBound;
+  features12.descriptorBindingVariableDescriptorCount = s12.descriptorBindingVariableDescriptorCount;
+  features12.runtimeDescriptorArray = s12.runtimeDescriptorArray;
   float priority = 1.0f;
   vk::DeviceQueueCreateInfo qci({}, impl_->queue_family, 1, &priority);
   vk::DeviceCreateInfo dci({}, qci, {}, {});

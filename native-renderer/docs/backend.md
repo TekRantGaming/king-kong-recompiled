@@ -123,16 +123,40 @@ the game with this plugin therefore needs an SDK built from source with the patc
 
 ## Building and testing on Linux
 
-Packages: `cmake ninja-build g++` (or clang-20), `libvulkan-dev mesa-vulkan-drivers vulkan-validationlayers
-spirv-tools`, and for the plugin `libx11-dev libx11-xcb-dev libwayland-dev libxkbcommon-dev`.
+Packages: `cmake ninja-build clang-20 lld-20` (or g++), `libvulkan-dev mesa-vulkan-drivers
+vulkan-validationlayers spirv-tools`, and for the plugin `libx11-dev libx11-xcb-dev libwayland-dev
+libxkbcommon-dev`. The game renderer (Phase 2) also needs DXC: the Linux SDK bundle has no `dxcapi.h`, so
+`NR_DXC_DIR` names a DXC release folder (`include/dxc/dxcapi.h`, `lib/libdxcompiler.so`, `lib/libdxil.so`;
+v1.8.2505.1 here). Without it the game renderer is left out (`NR_GAME_RENDERER OFF`, the placeholder only).
+
+The SDK, built from source with every patch (the official bundle lacks the Vulkan features NVRHI needs, see
+above):
 
 ```
-unzip rexglue-sdk-0.10.0-linux-amd64.zip -d /opt/rexsdk      # or a patched source build's install
-cmake -S native-renderer -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-      -DCMAKE_PREFIX_PATH=/opt/rexsdk/linux-amd64
+# from the repository root (the patch paths below are relative to it)
+git clone --branch v0.10.0 https://github.com/rexglue/rexglue-sdk sdk-src && cd sdk-src
+git submodule update --init --recursive
+for p in ../tools/rexglue-patches/0*.patch ../native-renderer/sdk-patches/0*.patch; do git am -3 "$p"; done
+cmake -S . -B out/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 \
+      -DCMAKE_C_FLAGS=-march=x86-64-v2 -DCMAKE_CXX_FLAGS=-march=x86-64-v2 -DCMAKE_CXX_STANDARD=23 \
+      -DREXGLUE_USE_VULKAN=ON -DREXGLUE_ENABLE_TRACY=OFF -DCMAKE_INSTALL_PREFIX=/opt/rexsdk/linux-amd64
+cmake --build out/build && cmake --install out/build
+```
+
+Then native-renderer against it:
+
+```
+cmake -S native-renderer -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_C_COMPILER=clang-20 -DCMAKE_CXX_COMPILER=clang++-20 \
+      -DCMAKE_PREFIX_PATH=/opt/rexsdk/linux-amd64 -DNR_DXC_DIR=/opt/dxc
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
+
+The build type must be the SDK's: the runtime's plugin loader adds the postfix of the configuration
+`rexruntime` was built in (`d` Debug, `rd` RelWithDebInfo, none for Release), so a RelWithDebInfo plugin
+(`librexgpu-nativerd.so`) next to a Release SDK is "not found" and `nr_plugin_tests` fails.
 
 Without the SDK on the prefix path the plugin is skipped and the libraries and GPU tests still build
 (Vulkan-Headers 1.3.318 or newer are needed: the bundle's, or `-DNR_VULKAN_HEADERS=<dir>`).
@@ -143,8 +167,16 @@ Without the SDK on the prefix path the plugin is skipped and the libraries and G
 | `nr_render_tests` | the test host: its own Vulkan 1.3 device on lavapipe, NVRHI on it (plus NVRHI's and Khronos' validation, which must stay silent). M1: clear colour read back on every pixel; the per-frame colour. M2: the triangle's centroid, vertex colours (orientation), outside pixels, coverage. M3: the recorded frame through hook table, NrApi, tracker and renderer: what reached NVRHI (pipeline, framebuffer, viewport, index buffer, draw arguments, push constants) and the pixels (triangle placed by c0..c3 with the translation, the render-to-texture draw skipped on frame 2); the viewport; the transpose option |
 | `nr_plugin_tests` | with the SDK: the runtime's `LoadGpuPlugin` loads `librexgpu-native*.so`, `nr_get_api` is found as the hooks find it and is inactive before setup; `d3d12` is refused; NVRHI on the SDK's own `VulkanProvider` (headless, lavapipe) renders M1, M2 and the M3 frame correctly. Run under the Khronos layer; fails on any validation error, so it passes only with the SDK patch |
 | `nr_spirv_val` | the checked-in SPIR-V validates for Vulkan 1.2 |
+| `nr_game_tests` | the game renderer without the game (needs `NR_GAME_RENDERER`): a 20,608-byte device struct in synthetic guest memory, shader objects and containers from the shader tests' microcode assembler and container writer (`shaders/tests/xenos_asm`, `container_writer`), textures, vertex and index buffers laid out as `d3d-structs.md` says. A helper plays the D3D library: each setter writes the register images and D3D fields the real one writes, then calls the hook (hook table, NrApi, tracker, Renderer, GameRenderer; shader creation to the ShaderLibrary, DXC at run time). Checked by reading pixels back from lavapipe: clears (whole target, rectangles, the viewport), vertex colours and orientation (D3DCOLOR, +y up), indexed draws (16 / 32-bit, base vertex, start index), point / quad / fan / strip, stream offsets, vertex and pixel constants per draw, blend (add, alpha, reverse subtract), depth (less, always without writes, greater, depth-only clear, test off), cull (front, back, both faces' windings), colour mask, MRT with a per-target mask, render targets keyed by EDRAM base / pitch / format (shared by two surface objects, a new one per base, format and pitch, depth apart, re-created taller), resolves into k_8_8_8_8 endian-none, A8R8G8B8 (8in32, R and B exchanged) and k_8 textures sampled back, resolve rectangle and destination point, resolve colour and depth clears, a shader parsed from its object without the create hook, a tiled guest texture uploaded, sampled, rewritten and re-uploaded after `InvalidateRange`. Every test checks that the Khronos and NVRHI layers stayed silent |
 
-`NR_TEST_IMAGES=<dir>` makes `nr_render_tests` write the read-back images as PPM files.
+`NR_TEST_IMAGES=<dir>` makes `nr_render_tests` and `nr_game_tests` write the read-back images as PPM files.
+
+The test device (`backend/tests/vk_test_device.cpp`) enables what the SDK's device enables for the plugin:
+timeline semaphores, synchronization2 and dynamic rendering, the descriptor indexing features
+(`sdk-patches/0002`), and the Vulkan 1.0 features the SDK turns on for GPU emulation that the game renderer
+uses (clip distances in the translated vertex shaders, independent blend for MRT, depth clamp, fill mode,
+anisotropy). Without them the layer reports `VUID-VkShaderModuleCreateInfo-pCode-08740` (ClipDistance) and
+`VUID-VkPipelineColorBlendStateCreateInfo-pAttachments-00605`.
 `nr_trace_replay <log>` replays a `KK_DEV_D3D_TRACE` log and prints per-frame counts.
 
 ## Open questions
@@ -169,7 +201,16 @@ Still open:
 - The presenter wraps are cached by resource pointer and size (D3D12) or image and version (Vulkan); a freed
   and reallocated resource at the same address and size would reuse a stale NVRHI handle.
 - Stream 03's resolve paths into a k_8 texture and an 8:8:8:8 with endian none need a frame comparison once
-  render targets are pooled.
+  render targets are pooled. (`nr_game_tests` now checks both against synthetic scenes on Linux, plus
+  A8R8G8B8; a frame of the game is still the real proof.)
+- D3D12 and the sampler table (found on Linux, not tried on Windows): the game renderer's set 5 is an
+  immutable bindless layout holding samplers. NVRHI's D3D12 backend gives the root parameter a SAMPLER range
+  but binds every immutable table from the CBV/SRV/UAV heap (`d3d12-resource-bindings.cpp`,
+  `SetGraphicsRootDescriptorTable(..., shaderResourceViewHeap.getGpuHandle(...))`; only `MutableSampler`
+  layouts use the sampler heap), and NVRHI's validation layer refuses the layout outright on D3D12. Run the
+  game renderer on Windows with `--native_validation` and the D3D12 debug layer to see whether it works
+  there; if not, the samplers need the sampler heap (a `MutableSampler` layout with `SamplerDescriptorHeap[]`
+  in the shaders, or static samplers).
 
 ## Windows: status and how it was proven
 

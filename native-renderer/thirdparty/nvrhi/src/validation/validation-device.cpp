@@ -1483,6 +1483,10 @@ namespace nvrhi::validation
                 anyErrors = true;
                 break;
             case ResourceType::Sampler:
+                // KK: the Vulkan backend makes a sampler descriptor array like any other type. The D3D12
+                // backend binds an immutable table from the CBV/SRV/UAV heap, which cannot hold samplers.
+                if (m_Device->getGraphicsAPI() == GraphicsAPI::VULKAN)
+                    continue;
                 errorStream << "Bindless samplers are not implemented (slot " << item.slot << ")" << std::endl;
                 anyErrors = true;
                 break;
