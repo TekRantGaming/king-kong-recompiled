@@ -55,6 +55,7 @@ out.append('''// Developer-only: KK_DEV_D3D_TRACE=<seconds>[,<frames>][;<seconds
 // its arguments (r3-r10, f1) and call site (lr), objects passed to or returned by the functions listed in
 // the generator are logged as hex ("KK d3d obj:" / "KK d3d ret:", once per distinct content per window),
 // and each frame ends with a histogram. The frame boundary is the engine's present call (sub_821147B8).
+// KK_DEV_D3D_TRACE_FROM=menu: the window times count from the save menu opening instead of launch.
 // KK_DEV_D3D_DUMP=<file>: the device struct (20,608 bytes) is written to <file>.<window> at each window start.
 #if defined(KK_DEV_TOOLS)
 
@@ -72,6 +73,8 @@ out.append('''// Developer-only: KK_DEV_D3D_TRACE=<seconds>[,<frames>][;<seconds
 
 #include <rex/hook.h>
 #include <rex/logging.h>
+
+#include "menu_hook.h"
 
 namespace {
 
@@ -100,6 +103,17 @@ uint64_t g_frame = 0;
 const auto g_start = std::chrono::steady_clock::now();
 std::mutex g_seen_mutex;
 std::unordered_set<uint64_t> g_seen;
+// Seconds after launch when the save menu opened (KK_DEV_D3D_TRACE_FROM=menu), or -1 before that.
+std::atomic<double> g_menu_seconds{-1.0};
+const bool g_from_menu = [] {
+  const char* v = std::getenv("KK_DEV_D3D_TRACE_FROM");
+  if (!v || std::strcmp(v, "menu") != 0) return false;
+  kk::OnSaveMenuShown([] {
+    g_menu_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - g_start).count();
+    REXLOG_INFO("KK d3d: save menu opened at {:.1f} s", g_menu_seconds.load());
+  });
+  return true;
+}();
 
 void Init() {
   static bool done = false;
@@ -197,7 +211,8 @@ void OnPresent(uint32_t device, uint8_t* base) {
       for (auto& [n, i] : totals) if (n) s += std::string(" ") + g_entries[i].name + "=" + std::to_string(n);
       REXLOG_INFO("KK d3d: window end after frame {} ({:.1f} s); totals since launch:{}", g_frame, t, s);
     }
-  } else if (g_next_window < g_windows.size() && t >= g_windows[g_next_window].start) {
+  } else if (g_next_window < g_windows.size() && (!g_from_menu || g_menu_seconds >= 0.0) &&
+             t >= g_windows[g_next_window].start + (g_from_menu ? g_menu_seconds.load() : 0.0)) {
     {
       std::lock_guard<std::mutex> lock(g_seen_mutex);
       g_seen.clear();
