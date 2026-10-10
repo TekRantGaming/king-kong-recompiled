@@ -37,6 +37,11 @@ struct Spec {
     std::vector<Fetch> fetches;
     std::vector<Interp> interpolators;
     bool paramGen = false;      // the pixel position goes in the register after the interpolators
+    // Quirks of the game's database: a stripped table (creator 0, stale bytes in the target
+    // field), no constant table at all, words after a vertex shader's interpolators.
+    bool strippedTable = false;
+    bool noConstantTable = false;
+    std::vector<uint32_t> extraBindingWords;
 };
 
 std::vector<uint8_t> writeContainer(const Spec& spec);

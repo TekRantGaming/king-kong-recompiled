@@ -78,8 +78,8 @@ std::vector<uint8_t> writeCtab(const Spec& spec) {
     }
     t.append(strings.b);
     t.align(4);
-    t.set32(4, uint32_t(creator));
-    t.set32(24, uint32_t(target));
+    t.set32(4, spec.strippedTable ? 0u : uint32_t(creator));
+    t.set32(24, spec.strippedTable ? 0x5F465552u : uint32_t(target));  // "_FUR", as in the database
     return t.b;
 }
 
@@ -121,10 +121,13 @@ std::vector<uint8_t> writeContainer(const Spec& spec) {
         c.append(list.b);
     }
 
-    uint32_t ctabOffset = uint32_t(c.size());
-    std::vector<uint8_t> ctab = writeCtab(spec);
-    c.u32(uint32_t(ctab.size()));
-    c.append(ctab);
+    uint32_t ctabOffset = 0;
+    if (!spec.noConstantTable) {
+        ctabOffset = uint32_t(c.size());
+        std::vector<uint8_t> ctab = writeCtab(spec);
+        c.u32(uint32_t(ctab.size()));
+        c.append(ctab);
+    }
 
     // Binding table.
     uint32_t tableOffset = uint32_t(c.size());
@@ -134,10 +137,11 @@ std::vector<uint8_t> writeContainer(const Spec& spec) {
         for (int i = 1; i < 6; i++) c.u32(0);
         c.u32(0);  // fetch list offset (words after word 10)
         c.u32(uint32_t(spec.fetches.size()));
-        c.u32(nInterp);
+        c.u32(nInterp + uint32_t(spec.extraBindingWords.size()));
         c.u32(0);
         for (const auto& f : spec.fetches) c.u32((f.address & 0xFFF) | (f.usage << 12) | (f.usageIndex << 16) | (f.classHint << 20));
         for (const auto& i : spec.interpolators) c.u32(i.usageIndex | (i.usage << 4) | (i.reg << 8) | (i.mask << 12));
+        for (uint32_t w : spec.extraBindingWords) c.u32(w);
     } else {
         c.u32(spec.paramGen ? (1u << 18) : 0u);
         c.u32(nInterp << 8);

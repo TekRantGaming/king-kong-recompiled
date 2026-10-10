@@ -286,6 +286,19 @@ int testContainer() {
     CHECK(r.ok && r.info.kind == ShaderKind::Pixel && r.info.literals.size() == 1 && r.info.literals[0].registerIndex == 255);
     CHECK(r.ok && r.info.readsPixelPosition && r.info.pixelPositionRegister == 2 && r.info.interpolators.size() == 2);
 
+    // The database's quirks: stripped tables with stale target bytes, no table, and words after
+    // the interpolators that are not semantics (0x10F6 would read as usage 15).
+    {
+        ctest::Spec q = spec;
+        q.strippedTable = true;
+        q.extraBindingWords = {0x10F6, 0x10F7, 0xAC};
+        r = parseContainer(ctest::writeContainer(q));
+        CHECK(r.ok && r.info.target.empty() && r.info.constants.size() == 3 && r.info.interpolators.size() == 2);
+        q.noConstantTable = true;
+        r = parseContainer(ctest::writeContainer(q));
+        CHECK(r.ok && r.info.constants.empty() && r.info.interpolators.size() == 2);
+    }
+
     // Malformed input is refused, never read out of bounds.
     std::vector<uint8_t> bad = bytes;
     bad[2] = 0x11;

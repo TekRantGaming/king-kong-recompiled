@@ -1,6 +1,8 @@
 #include "kkshaders/container.h"
 
 #include <cstdio>
+#include <algorithm>
+#include <cctype>
 #include <cstring>
 
 #include <xxh3.h>
@@ -85,7 +87,8 @@ ParseResult parseContainer(const uint8_t* data, size_t maxSize) {
     uint32_t blockOffset = be32(data + 12);
     uint32_t ctabOffset = be32(data + 16);
     uint32_t tableOffset = be32(data + 20);
-    if (ctabOffset == 0 || ctabOffset + 4 + 28 > virtualSize) return fail("constant table offset out of range");
+    // Two vertex shaders of the database have no constant table (offset 0).
+    if (ctabOffset != 0 && ctabOffset + 4 + 28 > virtualSize) return fail("constant table offset out of range");
     if (tableOffset == 0 || tableOffset + 4 > virtualSize) return fail("binding table offset out of range");
 
     // Register block: literal constants. {u64 dirty mask, u64 ?, u32 list length, u32 ?, list}.
@@ -145,7 +148,7 @@ ParseResult parseContainer(const uint8_t* data, size_t maxSize) {
     }
 
     // Constant table: u32 size, then D3DXSHADER_CONSTANTTABLE with offsets from its start.
-    {
+    if (ctabOffset) {
         size_t ctab = ctabOffset + 4;
         uint32_t ctabSize = be32(data + ctabOffset);
         if (ctabOffset + 4 + ctabSize > virtualSize) return fail("constant table size out of range");
@@ -154,7 +157,9 @@ ParseResult parseContainer(const uint8_t* data, size_t maxSize) {
         uint32_t constantInfo = be32(data + ctab + 16);
         uint32_t target = be32(data + ctab + 24);
         (void)creator;
-        if (target && !r.cstring(ctab + target, info.target)) return fail("constant table target string out of range");
+        // Stripped tables (creator 0, 2,137 vertex shaders of the database) leave stale bytes in
+        // the target field (for example "_FUR"): no target then.
+        if (target && (target >= ctabSize || !r.cstring(ctab + target, info.target))) info.target.clear();
         info.constantTable.assign(data + ctab, data + ctab + ctabSize);
         for (uint32_t i = 0; i < constants; i++) {
             size_t ci = ctab + constantInfo + size_t(i) * 20;
@@ -188,8 +193,13 @@ ParseResult parseContainer(const uint8_t* data, size_t maxSize) {
         if (info.kind == ShaderKind::Vertex) {
             if (t.size() < 11) return fail("vertex binding table too short");
             size_t fetchStart = 10 + t[6];
-            uint32_t nFetch = t[7], nInterp = t[8];
-            if (fetchStart + nFetch + nInterp > t.size()) return fail("vertex binding table lists out of range");
+            uint32_t nFetch = t[7], nWords = t[8];
+            if (fetchStart + nFetch + nWords > t.size()) return fail("vertex binding table lists out of range");
+            // Word 8 counts the words after the vfetch list. The interpolators are the first
+            // SQ_PROGRAM_CNTL.VS_EXPORT_COUNT + 1 of them (bits 20-23 of word 0); in 20 shaders of the
+            // database more words follow (instruction addresses, not semantics). Checked on all 4,240
+            // vertex shaders: the semantics then match the export registers the microcode writes.
+            uint32_t nInterp = std::min<uint32_t>(nWords, ((t[0] >> 20) & 0xF) + 1);
             uint32_t instructionCount = physicalSize / 12;
             for (uint32_t i = 0; i < nFetch; i++) {
                 uint32_t e = t[fetchStart + i];
@@ -333,6 +343,37 @@ std::span<const uint8_t> Database::secondContainer(const DatabaseEntry& entry) c
     uint32_t a = be32(r.data()), b = be32(r.data() + 4);
     if (8 + size_t(a) + b > r.size()) return {};
     return r.subspan(8 + a, b);
+}
+
+namespace {
+bool isIdentifier(const std::string& s) {
+    if (s.empty() || !(std::isalpha(uint8_t(s[0])) || s[0] == '_')) return false;
+    for (char c : s)
+        if (!(std::isalnum(uint8_t(c)) || c == '_')) return false;
+    return true;
+}
+}  // namespace
+
+ParseResult Database::parse(const DatabaseEntry& entry) const {
+    ParseResult p = parseContainer(container(entry));
+    if (!p.ok || entry.kind != 1) return p;
+    // The vertex containers the game uses (A) carry a stripped constant table whose string area
+    // was partly overwritten when the database was built: late names are cut short ("g_vF") or
+    // point at garbage. The second container (B, a separate compile of the same source with a
+    // full table) has the same registers; take the names from it. Names only feed comments and
+    // the structural check, never the translation.
+    ParseResult b = parseContainer(secondContainer(entry));
+    if (!b.ok) return p;
+    for (auto& c : p.info.constants) {
+        for (const auto& bc : b.info.constants) {
+            if (bc.registerSet == c.registerSet && bc.registerIndex == c.registerIndex && bc.registerCount == c.registerCount) {
+                // Damaged names can still look like identifiers ("Z", "K"): take B's.
+                if (isIdentifier(bc.name)) c.name = bc.name;
+                break;
+            }
+        }
+    }
+    return p;
 }
 
 std::string Database::familyName(ShaderKind kind, uint32_t family) const {
