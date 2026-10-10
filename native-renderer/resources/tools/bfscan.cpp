@@ -1,18 +1,23 @@
-// kknr_bfscan: lists the textures stored in the game's KKTextures.bf and, with --dump, writes each one as a
-// KKTX file for kknr_texdump. Reads game data: run it on the Windows PC, never commit what it writes.
+// kknr_bfscan: lists the textures stored in the game's KKTextures.bf and, with --dump, writes them as KKTX
+// files for kknr_texdump / kknr_sdkref. Reads game data: run it on the Windows PC, never commit what it writes.
 //
-//   kknr_bfscan <KKTextures.bf> [--dump DIR] [--limit N] [--pack KEY] [--assume-tiled]
+//   kknr_bfscan <KKTextures.bf> [--dump DIR] [--limit N] [--pack KEY] [--per-shape K] [--assume-tiled]
 //
-// --assume-tiled: treat every record as tiled whatever its format word says (the port's launcher reads the
-// front-end logo as tiled; whether the record's word carries the tiling bit is not confirmed).
+// --per-shape K: dump at most K records per (D3DFORMAT, width, height, levels) shape (default: all).
+// --assume-tiled: treat every record as tiled whatever its format word says.
 //
 // The file is a Jade engine BIG file: a table of (offset, key) entries at 0x44, one per pack; a pack is a run
 // of 12-byte-header chunks of LZO1X data (kk/src/launcher_art.cpp reads the front end's pack the same way).
 // A texture record has the magic 0xCAD01234 (little-endian) 12 bytes before "D2KK", then big-endian width,
-// height and a 360 D3DFORMAT word, four more words (printed, meaning not known yet) and the texels from +0x20.
-// The fetch constant written with --dump is synthesized from that: base level only, the D3DFORMAT's format,
-// endian, tiling, signs and swizzle. Mip chains are not described by these records as far as is known, so
-// only level 0 converts; the listing's extra words are there to find out more.
+// height, a 360 D3DFORMAT word, the level count, the first level of the packed mip tail (0xFFFF: none), the
+// data size in bytes and a zero word; the data follows from +0x20: the base level, then (when the base is not
+// itself the packed tail) the mip levels, exactly as the GPU reads them (the census confirms the engine binds
+// these textures with the mip address right after the base). Every record's size is checked against the
+// library's layout (base extent + mip extent, each 4 KB aligned); a mismatch is reported.
+// The fetch constant written with --dump is synthesized from the record: format, endian, tiling, signs and
+// swizzle from the D3DFORMAT, the XDK's default pitch, every level, packed mips when the record has a tail,
+// the mip address 4 KB aligned after the base (none when the whole chain is in the base's tail: the engine
+// leaves the mip address 0 there, so the SDK and this library read only level 0 of those).
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -135,13 +140,15 @@ uint32_t BE32(const uint8_t* p) { return uint32_t(p[0]) << 24 | uint32_t(p[1]) <
 
 int main(int argc, char** argv) {
   if (argc < 2) {
-    std::printf("usage: kknr_bfscan <KKTextures.bf> [--dump DIR] [--limit N] [--pack KEY] [--assume-tiled]\n");
+    std::printf("usage: kknr_bfscan <KKTextures.bf> [--dump DIR] [--limit N] [--pack KEY] [--per-shape K] "
+                "[--assume-tiled]\n");
     return 2;
   }
   fs::path dump;
   long limit = -1;
   long long only_pack = -1;
   bool assume_tiled = false;
+  long per_shape = -1;
   for (int i = 2; i < argc; ++i) {
     const std::string a = argv[i];
     if (a == "--dump" && i + 1 < argc)
@@ -150,6 +157,8 @@ int main(int argc, char** argv) {
       limit = std::atol(argv[++i]);
     else if (a == "--pack" && i + 1 < argc)
       only_pack = std::stoll(argv[++i], nullptr, 16);
+    else if (a == "--per-shape" && i + 1 < argc)
+      per_shape = std::atol(argv[++i]);
     else if (a == "--assume-tiled")
       assume_tiled = true;
   }
@@ -175,7 +184,8 @@ int main(int argc, char** argv) {
   if (!dump.empty()) fs::create_directories(dump);
 
   std::map<std::string, int> combos;
-  long found = 0;
+  std::map<std::string, long> shapes;
+  long found = 0, dumped = 0, size_ok = 0, size_bad = 0;
   std::vector<uint8_t> pack;
   for (uint32_t e = 0; e < count && (limit < 0 || found < limit); ++e) {
     const uint32_t offset = LE32(&table[e * 8]), key = LE32(&table[e * 8 + 4]);
@@ -193,7 +203,9 @@ int main(int argc, char** argv) {
                   fmt.value, info.name, EndianName(fmt.EndianMode()), fmt.Tiled() ? "tiled" : "linear",
                   BE32(&pack[i + 16]), BE32(&pack[i + 20]), BE32(&pack[i + 24]), BE32(&pack[i + 28]));
       ++combos[std::string(info.name) + " " + EndianName(fmt.EndianMode()) + (fmt.Tiled() ? " tiled" : " linear")];
-      if (dump.empty()) continue;
+      // The fetch constant the record describes.
+      const uint32_t levels = BE32(&pack[i + 16]), packed_level = BE32(&pack[i + 20]);
+      const uint32_t stored_size = BE32(&pack[i + 24]);
       TextureFetchDesc d;
       d.format = fmt.Format();
       d.endian = fmt.EndianMode();
@@ -204,21 +216,50 @@ int main(int argc, char** argv) {
       d.swizzle = fmt.Swizzle();
       d.integer = fmt.NumFormatInteger();
       for (int c = 0; c < 4; ++c) d.signs[c] = fmt.Sign(c);
+      d.max_level = levels > 1 ? std::min(levels - 1, 13u) : 0;
+      d.packed_mips = levels > 1 && packed_level != 0xFFFF;
+      GuestLayout layout = ComputeGuestLayout(MakeTextureFetch(d));
+      const uint32_t base_alloc = (layout.base_extent_bytes + 0xFFF) & ~0xFFFu;
+      if (d.max_level && !(d.packed_mips && packed_level == 0)) {
+        d.mip_address = d.base_address + base_alloc;
+        layout = ComputeGuestLayout(MakeTextureFetch(d));
+      }
       const TextureFetch fetch = MakeTextureFetch(d);
-      const GuestLayout layout = ComputeGuestLayout(fetch);
+      const uint32_t mips_alloc = d.mip_address ? (layout.mips_extent_bytes + 0xFFF) & ~0xFFFu : 0;
+      const bool packed_matches = !d.packed_mips || packed_level == layout.packed_level;
+      if (base_alloc + mips_alloc == stored_size && packed_matches) {
+        ++size_ok;
+      } else {
+        ++size_bad;
+        if (size_bad <= 20)
+          std::printf("  size check: record %u bytes, layout %u + %u (packed level %u vs %u)\n", stored_size,
+                      base_alloc, mips_alloc, packed_level, layout.packed_level);
+      }
+      if (dump.empty()) continue;
+      char shape[64];
+      std::snprintf(shape, sizeof(shape), "%08X %ux%u %u", fmt.value, w, h, levels);
+      if (per_shape >= 0 && ++shapes[shape] > per_shape) continue;
       const size_t data = i + 0x20;
-      const uint32_t bytes = uint32_t(std::min<size_t>(layout.base_extent_bytes, pack.size() - data));
+      const uint32_t base_bytes = uint32_t(std::min<size_t>(layout.base_extent_bytes, pack.size() - data));
+      const uint32_t mip_bytes =
+          d.mip_address && pack.size() > data + base_alloc
+              ? uint32_t(std::min<size_t>(layout.mips_extent_bytes, pack.size() - data - base_alloc))
+              : 0;
       char name[64];
       std::snprintf(name, sizeof(name), "bf_%08X_%08zX.bin", key, i);
       std::ofstream o(dump / name, std::ios::binary);
-      const uint32_t hdr[10] = {0x58544B4Bu, 1, fetch.words[0], fetch.words[1], fetch.words[2],
-                                fetch.words[3], fetch.words[4], fetch.words[5], bytes, 0};
+      const uint32_t hdr[10] = {0x58544B4Bu, 2, fetch.words[0], fetch.words[1], fetch.words[2],
+                                fetch.words[3], fetch.words[4], fetch.words[5], base_bytes, mip_bytes};
       for (uint32_t v : hdr)
         for (int s = 0; s < 32; s += 8) o.put(char(v >> s));
-      o.write(reinterpret_cast<const char*>(&pack[data]), bytes);
+      o.write(reinterpret_cast<const char*>(&pack[data]), base_bytes);
+      if (mip_bytes) o.write(reinterpret_cast<const char*>(&pack[data + base_alloc]), mip_bytes);
+      ++dumped;
     }
   }
-  std::printf("\n%ld textures; by format / endian / tiling:\n", found);
+  std::printf("\n%ld textures (%ld dumped); size check against the layout: %ld match, %ld differ\n", found,
+              dumped, size_ok, size_bad);
+  std::printf("by format / endian / tiling:\n");
   for (const auto& [k, n] : combos) std::printf("%6d  %s\n", n, k.c_str());
   return 0;
 }
