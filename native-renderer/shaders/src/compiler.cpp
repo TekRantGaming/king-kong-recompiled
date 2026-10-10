@@ -133,16 +133,20 @@ Compiler::~Compiler() = default;
 bool Compiler::ok() const { return bool(impl_->compiler); }
 
 CompileOutput Compiler::compile(const std::string& hlsl, ShaderKind kind, CompileTarget target) {
+    return compileEntry(hlsl, kind == ShaderKind::Vertex ? L"vs_6_0" : L"ps_6_0", L"main", target, kind == ShaderKind::Vertex);
+}
+
+CompileOutput Compiler::compileEntry(const std::string& hlsl, const std::wstring& profile, const std::wstring& entry,
+                                     CompileTarget target, bool invertY) {
     CompileOutput out;
     if (!impl_->compiler) {
         out.messages = "DXC is not loaded";
         return out;
     }
-    std::vector<std::wstring> args = {L"-T", kind == ShaderKind::Vertex ? L"vs_6_0" : L"ps_6_0", L"-E", L"main",
-                                      L"-HV", L"2021", L"-O3", L"-Qstrip_debug"};
+    std::vector<std::wstring> args = {L"-T", profile, L"-E", entry, L"-HV", L"2021", L"-O3", L"-Qstrip_debug"};
     if (target == CompileTarget::Spirv) {
         args.insert(args.end(), {L"-spirv", L"-fspv-target-env=vulkan1.2", L"-fvk-use-dx-layout"});
-        if (kind == ShaderKind::Vertex) args.push_back(L"-fvk-invert-y");
+        if (invertY) args.push_back(L"-fvk-invert-y");
     } else {
         args.push_back(L"-Qstrip_reflect");
     }
