@@ -24,5 +24,5 @@ for g, title in groups:
     print('|---|---|---|---|---|---|---|')
     for f in fs:
         pf = f['per_frame'].get(scene_key, '')
-        print(f"| `{f['sub']}` | {f['name']} | {args(f)} | {f['returns']} | {f['renderer']} | {pf} | {f['notes']} |")
+        print(f"| `{f['sub']}` | {f['name']} | {args(f)} | {f['returns']} | {f['renderer']} | {pf} | {f['notes'].replace('|', chr(92) + '|')} |")
     print()

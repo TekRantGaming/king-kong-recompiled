@@ -187,7 +187,7 @@ relies on the clamp.
 | `sub_82110448` | D3DDevice_SetPixelShaderConstantF | pDevice (r3), StartRegister (r4), pConstantData (r5), Vector4fCount (r6) | void | keep | 321 | Shadow device+6016+16*reg (ALU constants 256-511, register 0x4400); pending +24. |
 | `sub_82110590` | D3DDevice_SetVertexShaderConstantB | pDevice (r3), StartRegister (r4), pConstantData (r5), BoolCount (r6) | void | keep |  | Bits of the dword at device+10112+4*(reg/32) (bool constants 0x4900); pending bit 31 of +32. |
 | `sub_821105E8` | D3DDevice_SetPixelShaderConstantB | pDevice (r3), StartRegister (r4), pConstantData (r5), BoolCount (r6) | void | keep |  | device+10128+4*(reg/32) (pixel bools are 128 after the vertex ones). |
-| `sub_82110640` | D3DDevice_SetVertexShaderConstantI | pDevice (r3), StartRegister (r4), pConstantData (r5), Vector4iCount (r6) | void | keep | 35 | Loop constant dword at device+10144+4*reg = x | y<<8 | z<<16 (count, start, step); register 0x4908. |
+| `sub_82110640` | D3DDevice_SetVertexShaderConstantI | pDevice (r3), StartRegister (r4), pConstantData (r5), Vector4iCount (r6) | void | keep | 35 | Loop constant dword at device+10144+4*reg = x \| y<<8 \| z<<16 (count, start, step); register 0x4908. |
 | `sub_82110690` | D3DDevice_SetPixelShaderConstantI | pDevice (r3), StartRegister (r4), pConstantData (r5), Vector4iCount (r6) | void | keep |  | device+10208+4*reg (pixel loop constants 16-31). |
 
 ### Other state
@@ -211,7 +211,7 @@ relies on the clamp.
 
 | Function | Name | Arguments | Returns | Native | Per frame | Notes |
 |---|---|---|---|---|---|---|
-| `sub_8210C9B8` | D3DDevice_BeginConditionalSurvey | pDevice (r3), Index (r4), Flags (r5) | void | replace | 64 | PA_SC_VIZ_QUERY (0x2293) = 1 | index<<1 | ...; device+12160 = mask of surveys used. |
+| `sub_8210C9B8` | D3DDevice_BeginConditionalSurvey | pDevice (r3), Index (r4), Flags (r5) | void | replace | 64 | PA_SC_VIZ_QUERY (0x2293) = 1 \| index<<1 \| ...; device+12160 = mask of surveys used. |
 | `sub_8210CA70` | D3DDevice_EndConditionalSurvey | pDevice (r3), Flags (r4) | void | replace | 64 |  |
 | `sub_8210CB50` | D3DDevice_BeginConditionalRendering | pDevice (r3), Index (r4) | void | keep | 64 | Pushes Index on the byte stack device+12234 (depth byte +12299). The draws inside are predicated on survey Index. First native version: draw everything. |
 | `sub_8210CB70` | D3DDevice_EndConditionalRendering | pDevice (r3) | void | keep | 64 | Pops. |
