@@ -55,6 +55,7 @@ struct GameSettings {
   bool texture_tail_mips = false;
   int32_t dump_frame = -1;
   uint32_t debug = 0;
+  bool async_pipelines = true;
 };
 
 class Backend {

@@ -212,6 +212,7 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
       renderer->options().texture_tail_mips = game.texture_tail_mips;
       renderer->options().dump_frame = game.dump_frame;
       renderer->options().debug = game.debug;
+      renderer->options().async_pipelines = game.async_pipelines;
       rex::memory::Memory* memory = memory_;
       renderer->set_watch([memory](uint32_t physical_address, uint32_t bytes) {
         memory->EnablePhysicalMemoryAccessCallbacks(physical_address, bytes, true, false);
@@ -283,11 +284,11 @@ void Backend::Present(rex::ui::Presenter* presenter, uint32_t frontbuffer_width,
       const ShaderLibrary::Stats sh = shaders_->stats();
       REXLOG_INFO(
           "rexgpu-native: game renderer: {} draws, skipped {} (shader) {} (target) {} (primitive) {} "
-          "(pipeline) {} (device); {} pipelines; {} texture uploads ({} failed), {} buffer uploads, "
+          "(pipeline) {} (pipeline not ready) {} (device); {} pipelines; {} texture uploads ({} failed), {} buffer uploads, "
           "{} clears, {} resolves ({} failed), {} invalidations; shaders {} created, {} from the pack, "
           "{} compiled, {} failed, {} from objects; {:.0f} ms in pipeline creation, {:.0f} ms in texture uploads, {} aliased ({} failed)",
           s.draws, s.skipped_shader, s.skipped_target, s.skipped_primitive, s.skipped_pipeline,
-          s.skipped_device, s.pipelines, s.texture_uploads, s.texture_failures, s.buffer_uploads,
+          s.skipped_pending, s.skipped_device, s.pipelines, s.texture_uploads, s.texture_failures, s.buffer_uploads,
           s.clears, s.resolves, s.resolve_failures, s.invalidations, sh.created, sh.from_pack,
           sh.compiled, sh.failed, sh.from_object, s.pipeline_ms, s.texture_ms, s.aliases, s.alias_failures);
     }

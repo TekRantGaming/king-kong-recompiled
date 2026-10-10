@@ -69,6 +69,11 @@ REXCVAR_DEFINE_BOOL(native_element_endian, true, "Native renderer",
                     "game's frames need) instead of the vertex buffer's")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_BOOL(native_async_pipelines, true, "Native renderer",
+                    "Vulkan: create pipelines on a worker thread and skip a draw until its pipeline "
+                    "is ready, instead of stalling the game for the driver's compile")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_BOOL(native_flip_front_face, false, "Native renderer",
                     "Swap the front face of every draw (a debugging aid for culling)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);

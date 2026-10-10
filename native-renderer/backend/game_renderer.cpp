@@ -1,6 +1,7 @@
 #include "backend/game_renderer.h"
 
 #include <algorithm>
+#include <mutex>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -113,6 +114,14 @@ GameRenderer::GameRenderer(nvrhi::IDevice* device, const GuestMemory& memory,
 }
 
 GameRenderer::~GameRenderer() {
+  if (!pipeline_threads_.empty()) {
+    {
+      std::lock_guard lock(pipeline_mutex_);
+      pipeline_stop_ = true;
+    }
+    pipeline_cv_.notify_all();
+    for (std::thread& t : pipeline_threads_) t.join();
+  }
   textures_.Trim(UINT64_MAX / 2, 0);
   vertex_buffers_.Trim(UINT64_MAX / 2, 0);
   index_buffers_.Trim(UINT64_MAX / 2, 0);
@@ -346,10 +355,53 @@ void GameRenderer::EndFrame() {
   }
 }
 
+void GameRenderer::PipelineWorker() {
+  for (;;) {
+    PipelineJob job;
+    {
+      std::unique_lock lock(pipeline_mutex_);
+      pipeline_cv_.wait(lock, [&] { return pipeline_stop_ || !pipeline_jobs_.empty(); });
+      if (pipeline_stop_) return;
+      job = std::move(pipeline_jobs_.front());
+      pipeline_jobs_.pop_front();
+    }
+    const auto start = std::chrono::steady_clock::now();
+    nvrhi::GraphicsPipelineHandle p = device_->createGraphicsPipeline(job.desc, job.framebuffer);
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    std::lock_guard lock(pipeline_mutex_);
+    pipeline_worker_ms_ += ms;
+    pipelines_done_.emplace_back(job.key, p);
+  }
+}
+
 nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelineDesc& desc,
-                                                    nvrhi::IFramebuffer* framebuffer, uint64_t key) {
+                                                    nvrhi::IFramebuffer* framebuffer, uint64_t key, bool async) {
   auto it = pipelines_.find(key);
   if (it != pipelines_.end()) return it->second;
+  async = async && options_.async_pipelines && device_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN;
+  if (async) {
+    std::lock_guard lock(pipeline_mutex_);
+    for (auto& [k, p] : pipelines_done_) {
+      pipelines_[k] = p;
+      pipelines_pending_.erase(k);
+      if (p) ++stats_.pipelines;
+    }
+    pipelines_done_.clear();
+    stats_.pipeline_ms = pipeline_worker_ms_;
+    if (auto found = pipelines_.find(key); found != pipelines_.end()) return found->second;
+    if (!pipelines_pending_.count(key)) {
+      if (pipeline_threads_.empty()) {
+        // A few workers: drivers compile pipelines in parallel.
+        const unsigned n = std::clamp(std::thread::hardware_concurrency() / 4, 1u, 4u);
+        for (unsigned i = 0; i < n; ++i) pipeline_threads_.emplace_back([this] { PipelineWorker(); });
+      }
+      pipelines_pending_[key] = true;
+      pipeline_jobs_.push_back({key, desc, framebuffer->getFramebufferInfo()});
+      pipeline_cv_.notify_one();
+    }
+    ++stats_.skipped_pending;
+    return nullptr;
+  }
   const auto start = std::chrono::steady_clock::now();
   nvrhi::GraphicsPipelineHandle p =
       device_->createGraphicsPipeline(desc, framebuffer->getFramebufferInfo());
@@ -616,9 +668,9 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     key = Mix64(key, (uint64_t(d.u32(dev::kPaSuPolyOffset)) << 32) | d.u32(dev::kPaSuPolyOffset + 4));
   }
   key = Mix64(key, (mode & 0x7FF) | ((clip_cntl >> 16) & 1) << 12 | (options_.flip_front_face ? 1u << 13 : 0));
-  nvrhi::IGraphicsPipeline* pipeline = GetPipeline(pd, framebuffer, key);
+  nvrhi::IGraphicsPipeline* pipeline = GetPipeline(pd, framebuffer, key, true);
   if (!pipeline) {
-    ++stats_.skipped_pipeline;
+    if (pipelines_pending_.count(key) == 0) ++stats_.skipped_pipeline;
     return;
   }
 

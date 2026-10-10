@@ -15,6 +15,8 @@
 #pragma once
 
 #include <array>
+#include <condition_variable>
+#include <thread>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -54,6 +56,12 @@ class GameRenderer {
     // (kknr::TextureOptions::mips_from_base_tail). Off: level 0 only, as the
     // SDK.
     bool texture_tail_mips = false;
+    // Create the game's pipelines on a worker thread; a draw whose pipeline
+    // is not ready yet is skipped (a missing object for a frame or two the
+    // first time a state combination appears) instead of stalling the render
+    // thread for the driver's compile. Vulkan only (NVRHI's D3D12 backend
+    // caches root signatures without a lock).
+    bool async_pipelines = true;
     // Log every draw of this game frame (-1 none).
     int32_t dump_frame = -1;
     // Debugging aids (bits): 1 the game's clears are green, 2 the frame image
@@ -67,6 +75,7 @@ class GameRenderer {
     uint64_t skipped_target = 0;     // nothing to draw into
     uint64_t skipped_primitive = 0;  // primitive type not handled
     uint64_t skipped_pipeline = 0;   // pipeline creation failed
+    uint64_t skipped_pending = 0;    // pipeline still being created (async_pipelines)
     uint64_t skipped_device = 0;     // no device struct
     uint64_t texture_uploads = 0;
     uint64_t texture_failures = 0;
@@ -196,8 +205,24 @@ class GameRenderer {
   void ProcessInvalidations();
 
   // ---- pipelines
+  // async: the game's draws (may return null while the worker creates it);
+  // the built-in passes create theirs at once.
   nvrhi::IGraphicsPipeline* GetPipeline(const nvrhi::GraphicsPipelineDesc& desc,
-                                        nvrhi::IFramebuffer* framebuffer, uint64_t key);
+                                        nvrhi::IFramebuffer* framebuffer, uint64_t key, bool async = false);
+  void PipelineWorker();
+  struct PipelineJob {
+    uint64_t key = 0;
+    nvrhi::GraphicsPipelineDesc desc;
+    nvrhi::FramebufferInfo framebuffer;
+  };
+  std::vector<std::thread> pipeline_threads_;
+  std::mutex pipeline_mutex_;
+  std::condition_variable pipeline_cv_;
+  std::deque<PipelineJob> pipeline_jobs_;
+  std::vector<std::pair<uint64_t, nvrhi::GraphicsPipelineHandle>> pipelines_done_;
+  std::unordered_map<uint64_t, bool> pipelines_pending_;
+  bool pipeline_stop_ = false;
+  double pipeline_worker_ms_ = 0;
 
   // ---- passes
   struct ViewportSetup {
