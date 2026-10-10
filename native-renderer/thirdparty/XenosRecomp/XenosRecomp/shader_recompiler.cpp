@@ -1696,7 +1696,7 @@ bool ShaderRecompiler::recompile(const RecompilerInput& in, std::string_view inc
                 out += "{\n";
                 ++indentation;
                 indent();
-                println("aL = int((kkLoop{0} >> 8) & 0xFFu) + int(kkIt{0}) * (int(kkLoop{0} << 8) >> 24);", t);
+                println("aL = clamp(int((kkLoop{0} >> 8) & 0xFFu) + int(kkIt{0}) * (int(kkLoop{0} << 8) >> 24), -256, 256);", t);
                 stack.push_back({ true, uint32_t(c.loopStart.address - 1) });
                 break;
             }
@@ -1741,8 +1741,9 @@ bool ShaderRecompiler::recompile(const RecompilerInput& in, std::string_view inc
         out += "\tuint kkLoopIt[4] = { 0, 0, 0, 0 };\n\tuint kkLoopConst[4] = { 0, 0, 0, 0 };\n\tuint kkLoopDepth = 0;\n";
         out += "\tuint kkCallStack[4] = { 0, 0, 0, 0 };\n\tuint kkCallDepth = 0;\n";
         out += "\t[loop] while (pc != 0xFFFFFFFFu)\n\t{\n\t\tswitch (pc)\n\t\t{\n";
-        const char* setAL = "aL = select(kkLoopDepth == 0, 0, int((kkLoopConst[(kkLoopDepth - 1) & 3] >> 8) & 0xFFu) + "
-            "int(kkLoopIt[(kkLoopDepth - 1) & 3]) * (int(kkLoopConst[(kkLoopDepth - 1) & 3] << 8) >> 24));";
+        // aL is clamped to [-256, 256] (the SDK, after the IPR2015-00325 sequencer specification).
+        const char* setAL = "aL = select(kkLoopDepth == 0, 0, clamp(int((kkLoopConst[(kkLoopDepth - 1) & 3] >> 8) & 0xFFu) + "
+            "int(kkLoopIt[(kkLoopDepth - 1) & 3]) * (int(kkLoopConst[(kkLoopDepth - 1) & 3] << 8) >> 24), -256, 256));";
         for (uint32_t i = 0; i < n; i++)
         {
             const auto& c = cf[i];

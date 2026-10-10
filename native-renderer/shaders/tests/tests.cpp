@@ -319,6 +319,27 @@ int testContainer() {
         CHECK(r.ok && t.ok && t.hlsl.find("kkIn[") == std::string::npos && t.hlsl.find("vfIndex = uint(") != std::string::npos);
     }
 
+    // Bool literals: the bits of a literal dword the constant table does not name are inlined;
+    // a named bool (g_Skin, b3) is read from the draw constants even inside a literal dword.
+    {
+        ctest::Spec b = spec;
+        xasm::Program pb;
+        auto op = [] { return std::vector<xasm::Op>{{xasm::Alu().v(xasm::ADDv, 2, "xyzw", xasm::r(1), xasm::c(3)).encode(), false}}; };
+        pb.condExec(op(), 2, true);
+        pb.condExec(op(), 3, true);
+        pb.condExec(op(), 32, true);
+        pb.condExec(op(), 33, false);
+        pb.condExec(op(), 40, true, true);
+        b.ucode = pb.assemble();
+        b.boolLiterals = {{0, 0xFu}, {1, 0x80000001u}};
+        r = parseContainer(ctest::writeContainer(b));
+        TranslateResult t = translate(r.info);
+        CHECK(r.ok && t.ok);
+        for (uint32_t index : {2u, 32u, 33u, 40u})
+            CHECK(t.hlsl.find("kk_BoolConst(" + std::to_string(index) + ")") == std::string::npos);
+        CHECK(t.hlsl.find("kk_BoolConst(3)") != std::string::npos);
+    }
+
     // Malformed input is refused, never read out of bounds.
     std::vector<uint8_t> bad = bytes;
     bad[2] = 0x11;
