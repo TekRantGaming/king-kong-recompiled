@@ -1,5 +1,7 @@
 #include "kknr/render_targets.h"
 
+#include "kknr/resolve.h"
+
 #include <algorithm>
 
 namespace kknr {
@@ -169,12 +171,7 @@ ResolveOp PlanResolve(uint32_t flags_value, const SurfaceDesc& source, const uin
     op.kind = ResolveKind::kDepthToFloat;
     return op;
   }
-  const uint16_t swizzle = dest->Swizzle();
-  const bool four = df == TextureFormat::k_8_8_8_8 || df == TextureFormat::k_8_8_8_8_A ||
-                    df == TextureFormat::k_8_8_8_8_AS_16_16_16_16 || df == TextureFormat::k_2_10_10_10 ||
-                    df == TextureFormat::k_2_10_10_10_AS_16_16_16_16 || df == TextureFormat::k_16_16_16_16 ||
-                    df == TextureFormat::k_16_16_16_16_FLOAT;
-  op.swap_red_blue = four && SwizzleComponent(swizzle, 0) == kSwzZ && SwizzleComponent(swizzle, 2) == kSwzX;
+  op.swap_red_blue = ResolveDestSwap(*dest);
   SurfaceDesc as_target;
   const bool same = DecodeSurfaceDesc(source.width, source.height, D3DFormat{uint32_t(df)}.value, 0, 0, as_target) &&
                     as_target.host == source.host;

@@ -7,6 +7,7 @@
 #include "backend/log.h"
 #include "kknr/buffers.h"
 #include "kknr/nvrhi_format.h"
+#include "kknr/resolve.h"
 
 namespace nr {
 
@@ -30,29 +31,9 @@ uint64_t TargetKey(bool depth, uint32_t base, uint32_t pitch, uint32_t format) {
 nvrhi::Format GameRenderer::ColorTargetFormat(uint32_t format) {
   // xenos::ColorRenderTargetFormat -> host (docs/formats.md, render targets;
   // the 16-bit fixed formats as floats: their -32..32 range does not fit a
-  // normalized host format without the scaling the shaders do not do).
-  switch (format) {
-    case 0:   // k_8_8_8_8
-    case 1:   // k_8_8_8_8_GAMMA
-      return nvrhi::Format::RGBA8_UNORM;
-    case 2:   // k_2_10_10_10
-    case 10:  // k_2_10_10_10_AS_10_10_10_10
-      return nvrhi::Format::R10G10B10A2_UNORM;
-    case 3:   // k_2_10_10_10_FLOAT
-    case 12:  // k_2_10_10_10_FLOAT_AS_16_16_16_16
-    case 5:   // k_16_16_16_16
-    case 7:   // k_16_16_16_16_FLOAT
-      return nvrhi::Format::RGBA16_FLOAT;
-    case 4:  // k_16_16
-    case 6:  // k_16_16_FLOAT
-      return nvrhi::Format::RG16_FLOAT;
-    case 14:  // k_32_FLOAT
-      return nvrhi::Format::R32_FLOAT;
-    case 15:  // k_32_32_FLOAT
-      return nvrhi::Format::RG32_FLOAT;
-    default:
-      return nvrhi::Format::RGBA8_UNORM;
-  }
+  // normalized host format without the scaling the shaders do not do). The
+  // table is the resources library's, which its resolve tests rely on.
+  return kknr::ToNvrhi(kknr::EdramColorHostFormat(format));
 }
 
 GameRenderer::HostTarget* GameRenderer::FindTarget(bool depth, uint32_t edram_base, uint32_t pitch,

@@ -23,6 +23,7 @@ if(TARGET rex::runtime AND TARGET fmt::fmt)
         ${NR_ROOT}/resources/src/buffers.cpp
         ${NR_ROOT}/resources/src/texture_cache.cpp
         ${NR_ROOT}/resources/src/render_targets.cpp
+        ${NR_ROOT}/resources/src/resolve.cpp
     )
     target_include_directories(kknr_resources PUBLIC ${NR_ROOT}/resources/include)
     target_compile_features(kknr_resources PUBLIC cxx_std_20)

@@ -23,6 +23,7 @@ add_library(kknr_resources STATIC
     src/buffers.cpp
     src/texture_cache.cpp
     src/render_targets.cpp
+    src/resolve.cpp
 )
 target_include_directories(kknr_resources PUBLIC include)
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
@@ -69,6 +70,7 @@ add_executable(kknr_resources_tests
     tests/test_buffers.cpp
     tests/test_cache.cpp
     tests/test_render_targets.cpp
+    tests/test_resolve.cpp
 )
 target_link_libraries(kknr_resources_tests PRIVATE kknr_resources)
 add_test(NAME kknr_resources_tests COMMAND kknr_resources_tests)

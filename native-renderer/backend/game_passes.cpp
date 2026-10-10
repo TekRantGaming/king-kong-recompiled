@@ -8,6 +8,7 @@
 #include "backend/log.h"
 #include "kknr/nvrhi_format.h"
 #include "kknr/render_targets.h"
+#include "kknr/resolve.h"
 
 namespace nr {
 
@@ -297,19 +298,21 @@ void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
         const uint32_t level = call.dest_level, slice = call.dest_slice;
         const int32_t dw = int32_t(std::max(plan.width >> level, 1u)), dh = int32_t(std::max(plan.height >> level, 1u));
         const int32_t cw = std::min(w, dw - dx), ch = std::min(h, dh - dy);
-        // The render target holds the shader's red in R; a destination read
-        // as A8R8G8B8 (X = blue) needs R and B exchanged.
-        const uint16_t swizzle = fetch.Swizzle();
-        const kknr::TextureFormat df = fetch.Format();
-        const bool four = df == kknr::TextureFormat::k_8_8_8_8 || df == kknr::TextureFormat::k_8_8_8_8_A ||
-                          df == kknr::TextureFormat::k_8_8_8_8_AS_16_16_16_16 ||
-                          df == kknr::TextureFormat::k_2_10_10_10 ||
-                          df == kknr::TextureFormat::k_2_10_10_10_AS_16_16_16_16 ||
-                          df == kknr::TextureFormat::k_16_16_16_16 || df == kknr::TextureFormat::k_16_16_16_16_FLOAT;
-        const bool swap = !from_depth && four && kknr::SwizzleComponent(swizzle, 0) == kknr::kSwzZ &&
-                          kknr::SwizzleComponent(swizzle, 2) == kknr::kSwzX;
+        // Copy or blit, and the blit's channels: kknr::PlanResolveConversion
+        // (docs/formats.md, "Resolves"); its CPU reference is tested
+        // against ConvertTexture of what the 360 writes to memory.
+        const kknr::ResolveConversion conv =
+            kknr::PlanResolveConversion(kknr::ResolveSource{from_depth, format}, fetch, TextureOptions());
         if (cw > 0 && ch > 0 && slice < plan.layers && level < plan.levels) {
-          if (!from_depth && !swap && host->format == source->format) {
+          if (conv.method == kknr::ResolveMethod::kUnsupported || conv.scale != 1.0f) {
+            // scale != 1: the blit has no scale (16-bit fixed targets into
+            // 16-bit textures; the game has none).
+            if (stats_.resolve_failures < 20) {
+              Logf(LogLevel::kWarning, "rexgpu-native: resolve %s format %u -> %08X %08X: %s",
+                   from_depth ? "depth" : "colour", format, fetch.words[0], fetch.words[1],
+                   conv.method == kknr::ResolveMethod::kUnsupported ? conv.why : "needs a scaled blit");
+            }
+          } else if (conv.method == kknr::ResolveMethod::kCopy && host->format == source->format) {
             nvrhi::TextureSlice src_slice, dst_slice;
             src_slice.setOrigin(uint32_t(sx), uint32_t(sy)).setSize(uint32_t(cw), uint32_t(ch), 1);
             dst_slice.setOrigin(uint32_t(dx), uint32_t(dy)).setSize(uint32_t(cw), uint32_t(ch), 1)
@@ -318,14 +321,7 @@ void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
             cl->copyTexture(host->texture, dst_slice, source->texture, src_slice);
             copied = true;
           } else if (host->render_target) {
-            uint32_t channels[4] = {0, 1, 2, 3};
-            if (from_depth) {
-              channels[1] = channels[2] = 4;
-              channels[3] = 5;
-            } else if (swap) {
-              channels[0] = 2;
-              channels[2] = 0;
-            }
+            const uint32_t channels[4] = {conv.channels[0], conv.channels[1], conv.channels[2], conv.channels[3]};
             copied = Blit(cl, source->texture, sx, sy, cw, ch, host->texture, level, slice, dx, dy, channels);
           }
           cl->setTextureState(host->texture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);

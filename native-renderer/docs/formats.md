@@ -298,6 +298,43 @@ constants are checked against it) drives the swaps:
   R to Z), so that copy has to exchange R and B: a blit, not a raw copy. Brief 04 decides how (a compute or
   draw blit; a typed copy cannot swap).
 
+### Resolves
+
+`kknr/resolve.h` (tests: `test_resolve.cpp`). A resolve copies an EDRAM render target into a texture. The
+D3D-level call gives the destination texture, not the GPU's copy registers, so the copy's format is the
+texture's and its red / blue swap comes from the texture's swizzle (`ResolveDestSwap`: set when the swizzle
+reads X as the blue of a four-component colour, ZYXW or ZYX1), which is what makes an A8R8G8B8 texture read back
+the colours that were drawn.
+
+- **The 360's side, as a CPU reference** (`ResolveToGuest`), from the SDK's resolve shaders (the disassembly
+  in `resolve_full_8bpp_cs.h` / `resolve_full_32bpp_cs.h` of rexglue-sdk v0.10.0): unpack the EDRAM pixel to
+  floats (8:8:8:8 / 255, 2:10:10:10 / 1023 and alpha / 3, 7e3, 16-bit fixed / 1024, halves, floats; depth as
+  the raw word), exchange red and blue when the swap is set, saturate and round to the destination format
+  (round(x * max + 0.5)), pack with the first component in the low bits, swap to the texture's endian and
+  store tiled. Bitwise-equivalent pairs (the SDK's fast path) copy bits: this matters only for 16-bit fixed
+  targets into 16-bit textures. The 8 bpp shader writes bytes without an endian step; the reference applies the
+  texture's endian, which is the same for the game's k_8 targets (endian none). The k_8 mask takes the first
+  component, red.
+- **The renderer's side** (`PlanResolveConversion`): the render target is a host texture
+  (`EdramColorHostFormat`; depth is a float depth buffer), the destination a host texture in the format
+  `PlanHostTexture` picks. The plan is a raw copy when nothing changes (same host format, no swap, a `kCopy`
+  destination), else a blit with a channel mapping (`channels`: R and B exchanged for A8R8G8B8 destinations,
+  depth into R, constant alpha for three-component destinations), or unsupported: block-compressed or
+  integer destinations, signed destinations from unsigned colours (the 360 would reinterpret the bits), depth
+  into anything but the matching k_24_8 / k_24_8_FLOAT texture. A 16-bit fixed target into a signed 16-bit
+  texture needs a scale of 1/32; the backend's blit has no scale, so it counts that pair as a failure (the game
+  has none).
+- **Checked**: for each pair, random EDRAM pixels through both sides must give the same host texels (exact for
+  8-bit, 10-bit, half and float destinations; within half a destination step where the 360 keeps fewer bits
+  than the host texture, 10:11:11 and the 16-bit fixed pair), texels outside the rectangle unchanged, and
+  sampling through the view swizzle returns what was drawn (the mask's W is the target's red). Pairs: the
+  census's five (A8R8G8B8 8in32, X8R8G8B8 endian none, the k_8 mask endian none, the R32F shadow maps bound
+  signed with the integer number format, D24S8 into k_24_8) plus 14 others, a mip level, a level inside the
+  packed tail and a cube face.
+- **Wired**: `GameRenderer::Resolve` (backend/game_passes.cpp) takes copy / blit / channels from the plan and
+  logs unsupported pairs; `GameRenderer::ColorTargetFormat` is `EdramColorHostFormat`, so the tests and the
+  renderer share one table.
+
 ## What the game binds (census)
 
 Sources: stream 01's object dumps (the 40-byte texture object passed to every SetTexture, `KK d3d obj:
@@ -384,7 +421,8 @@ Findings:
 - The shadow maps' D3DFORMAT (0x2DA2ABA4) sets the integer number format on a float format; ignored, as the
   SDK does (kShaderInteger is only set for fixed-point formats).
 - The resolve into a k_8 texture (from an 8:8:8:8 target) and the endian-none 8:8:8:8 resolve are the two
-  unusual resolves; their contents can only be checked on frames (stream 04).
+  unusual resolves. Both now have a CPU reference of what the 360 writes and a test that the GPU path gives
+  the same texture (see "Resolves"); the frames on Windows remain the final check.
 - Resolve targets in guest memory are stale in dumps (today's renderer keeps resolves on the GPU), so their
   contents were checked with random data instead; the cache must treat them as GPU-written (it does).
 
