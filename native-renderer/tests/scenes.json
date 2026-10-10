@@ -28,10 +28,10 @@
    "bad": 0.002,
    "bad_level": 40,
    "env_tol": 16,
-   "env_radius": 0,
+   "env_radius": 2,
    "env_anim_level": 0,
    "env_bad": 0.002,
-   "env_tile": 3.0,
+   "env_tile": 1.5,
    "drawlog": 0.98,
    "min_pass": 1.0
   }
@@ -230,7 +230,8 @@
     "ssim": null,
     "tile_mae": null,
     "bad": null,
-    "min_pass": 0.6
+    "min_pass": 0.6,
+    "env_tol": 32
    }
   },
   {
@@ -254,7 +255,9 @@
     "ssim": null,
     "tile_mae": null,
     "bad": null,
-    "min_pass": 0.6
+    "min_pass": 0.6,
+    "env_tol": 32,
+    "drawlog": 0.93
    }
   },
   {
@@ -278,7 +281,8 @@
     "ssim": null,
     "tile_mae": null,
     "bad": null,
-    "min_pass": 0.6
+    "min_pass": 0.6,
+    "env_tol": 32
    }
   },
   {
@@ -317,7 +321,8 @@
     "ssim": null,
     "tile_mae": null,
     "bad": null,
-    "min_pass": 0.6
+    "min_pass": 0.6,
+    "drawlog": 0.97
    }
   },
   {
@@ -362,7 +367,11 @@
     "ssim": null,
     "tile_mae": null,
     "bad": null,
-    "min_pass": 0.6
+    "min_pass": 0.6,
+    "env_tol": 32,
+    "env_tile": 3.0,
+    "env_bad": 0.003,
+    "drawlog": 0.95
    }
   }
  ]

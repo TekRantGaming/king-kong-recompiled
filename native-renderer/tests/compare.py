@@ -528,12 +528,16 @@ class GoldenRange:
 
 
 def envelope_metrics(rng: GoldenRange, t: np.ndarray, tol: int) -> dict:
-    """How far the test frame leaves the golden range (see GoldenRange)."""
+    """How far the test frame leaves the golden range (see GoldenRange).
+
+    env_bad: share of pixels more than `tol` outside. env_tile: the worst 80x80 tile of the distance beyond
+    `tol` (noise within the tolerance adds nothing, so a small missing or wrong object stands out)."""
     dist = rng.distance(t)
+    excess = np.maximum(dist.astype(np.int16) - tol, 0)
     return {
         "env_mae": round(float(dist.mean()), 3),
         "env_bad": round(float((dist > tol).mean()), 5),
-        "env_tile": round(tile_mae(dist[..., None]), 2),
+        "env_tile": round(tile_mae(excess[..., None]), 2),
         "_dist": dist,
     }
 
