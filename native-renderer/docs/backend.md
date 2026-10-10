@@ -191,8 +191,9 @@ beside `king_kong.exe`, `dxcompiler.dll` and `dxil.dll` from the DXC release bes
 `--native_render_scale` (default `1`; `1.5`, `2`, `3`, any number from 0.25 to 8, or a frame size `1920x1080`
 that sets each axis to size / 1280 or 720) and `--native_shadow_scale` (0 = like the render scale; `1` keeps the
 shadow maps at the console's size). Both are init-only. At `1` nothing below happens: the same paths, the same
-constants, the same pipeline layout (a test compares the frame of an explicit 1 with the default's bit for bit,
-and the translator's output and hashes at 1 equal the commit before this work for the 1,557 translatable
+constants, the same pipeline layout (a test compares the frame of an explicit 1 with the default's float for float; the
+22 images the pre-existing game tests write are byte-identical to those of the commit before this work; the
+translator's output and hashes at 1 equal the commit before this work for the 1,557 translatable
 corpus shaders, see `shaders.md`).
 
 What scales, and how (`backend/game_renderer.*`, `game_resources.cpp`, `game_passes.cpp`, `render_scale.h`):
@@ -442,7 +443,8 @@ refused) but Playwright's Chromium ships SwiftShader (`vk_swiftshader_icd.json`,
 works for `nr_draw_tests` and `nr_render_tests`, but reports `maxBoundDescriptorSets = 4` while the game renderer
 uses 7 sets (set 0 plus the six bindless tables), and writing past its fixed array corrupts the heap, so
 `nr_game_tests` crashes in `vkCmdBindDescriptorSets` (glibc "malloc(): invalid" aborts, not a validation error).
-SwiftShader built from source with `MAX_BOUND_DESCRIPTOR_SETS = 8` (`src/Vulkan/VkConfig.hpp`, the only change;
+SwiftShader built from source with `MAX_BOUND_DESCRIPTOR_SETS = 8` (`src/Vulkan/VkConfig.hpp`, the only change, as
+`tests/swiftshader-8-descriptor-sets.patch`;
 `cmake -DREACTOR_BACKEND=Subzero -DSWIFTSHADER_BUILD_TESTS=OFF ... && ninja vk_swiftshader`, about 25 minutes on
 three cores) runs the whole game suite: 27 tests, 0 failed checks, with `NR_TEST_SYNC_PIPELINES=1`. It has no
 Khronos validation layer, so the "validation stayed silent" half of the checks did not run there; lavapipe with
