@@ -330,6 +330,11 @@ struct Fixture {
       Fail(__FILE__, __LINE__, "GameRenderer::Initialize failed");
       return false;
     }
+    // Pipelines are made on the render thread here: the tests draw once and
+    // read the picture back, so a draw skipped while a worker builds its
+    // pipeline (the plugin's default) would fail them. The asynchronous path
+    // has its own tests (PipelineCache_*).
+    g->options().async_pipelines = false;
     game = g.get();
     renderer->EnableGame(std::move(g));
     sink.renderer = renderer.get();
