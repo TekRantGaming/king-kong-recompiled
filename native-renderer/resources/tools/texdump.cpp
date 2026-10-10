@@ -2,9 +2,7 @@
 //
 //   kknr_texdump [--out DIR] [--csv FILE] [--no-images] FILE_OR_DIR...
 //
-// Input: KKTX files (KK_DEV_TEX_DUMP in kk/src/dev_d3d_trace.cpp, or kknr_bfscan --dump): "KKTX", version 1,
-// the 6 fetch-constant words, base bytes, mip bytes (little-endian header), then the base and mip regions as
-// stored in guest memory. For each one it writes <name>.dds (the host format, every level and layer) and
+// Input: KKTX files (KK_DEV_TEX_DUMP in kk/src/dev_d3d_trace.cpp, or kknr_bfscan --dump; see kktx.h). For each one it writes <name>.dds (the host format, every level and layer) and
 // <name>.png (level 0, layers or depth slices stacked vertically, with the view swizzle applied), prints one
 // summary line and adds a CSV row (with an FNV-1a hash of the host data, to compare runs).
 #include <algorithm>
@@ -17,13 +15,12 @@
 
 #include "image_io.h"
 #include "kknr/texture_convert.h"
+#include "kktx.h"
 
 namespace fs = std::filesystem;
 using namespace kknr;
 
 namespace {
-
-uint32_t LE32(const uint8_t* p) { return uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24; }
 
 std::string Hex(uint32_t v) {
   char b[16];
@@ -60,28 +57,22 @@ struct Options {
 };
 
 bool Process(const fs::path& path, const Options& o, FILE* csv) {
-  std::ifstream f(path, std::ios::binary);
-  std::vector<uint8_t> file((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-  if (file.size() < 40 || std::memcmp(file.data(), "KKTX", 4) != 0 || LE32(&file[4]) != 1) {
-    std::printf("%s: not a KKTX v1 file\n", path.string().c_str());
+  kknr_tools::Kktx dump;
+  std::string load_why;
+  if (!kknr_tools::LoadKktx(path, dump, load_why)) {
+    std::printf("%s: %s\n", path.string().c_str(), load_why.c_str());
     return false;
   }
-  uint32_t words[6];
-  for (int i = 0; i < 6; ++i) words[i] = LE32(&file[8 + 4 * i]);
-  const uint32_t base_bytes = LE32(&file[32]), mip_bytes = LE32(&file[36]);
-  if (40ull + base_bytes + mip_bytes > file.size()) {
-    std::printf("%s: truncated\n", path.string().c_str());
-    return false;
-  }
-  TextureFetch fetch = TextureFetch::FromWords(words);
+  TextureFetch fetch = TextureFetch::FromWords(dump.words);
   const uint32_t original_base = fetch.BaseAddress(), original_mip = fetch.MipAddress();
+  const uint32_t base_bytes = uint32_t(dump.base.size()), mip_bytes = uint32_t(dump.mips.size());
 
   // Rebuild a small physical memory: the base region at 4 KB, the mips after it (both stay 4 KB aligned, so
   // the layout and the endian swap units are unchanged).
   const uint32_t base_at = 0x1000, mip_at = (base_at + base_bytes + 0x1FFF) & ~0xFFFu;
   std::vector<uint8_t> memory(size_t(mip_at) + mip_bytes + 0x1000, 0);
-  std::memcpy(memory.data() + base_at, file.data() + 40, base_bytes);
-  std::memcpy(memory.data() + mip_at, file.data() + 40 + base_bytes, mip_bytes);
+  if (base_bytes) std::memcpy(memory.data() + base_at, dump.base.data(), base_bytes);
+  if (mip_bytes) std::memcpy(memory.data() + mip_at, dump.mips.data(), mip_bytes);
   if (original_base) fetch.words[1] = (fetch.words[1] & 0xFFFu) | base_at;
   if (original_mip) fetch.words[5] = (fetch.words[5] & 0xFFFu) | mip_at;
 
@@ -93,8 +84,9 @@ bool Process(const fs::path& path, const Options& o, FILE* csv) {
   const std::string stem = path.stem().string();
   std::string signs;
   for (int i = 0; i < 4; ++i) signs += "uSbg"[int(fetch.Sign(i))];
-  const std::string short_regions =
+  std::string short_regions =
       (base_bytes < ranges.base_bytes || mip_bytes < ranges.mip_bytes) ? " (dump shorter than the layout: zeros)" : "";
+  if (dump.v1_page_fix) short_regions += " (version 1 dump: moved up a page, last page zero)";
   std::printf("%s: %s %s %s %s %ux%ux%u levels %u-%u%s signs %s swizzle %s -> %s %s view %s flags %s%s%s\n",
               stem.c_str(), info.name, EndianName(fetch.EndianMode()), fetch.Tiled() ? "tiled" : "linear",
               DimensionName(fetch.Dim()), data.plan.width, data.plan.height,

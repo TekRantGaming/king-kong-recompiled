@@ -556,7 +556,7 @@ void OnPresent(uint32_t device, uint8_t* base) {
 // file stays small; each kind stops after a cap.
 // KK_DEV_TEX_DUMP=<dir>[,<count>]: also writes the guest memory of distinct textures as they are first bound
 // (at most 4 per format / tiling / endian / dimension combination, <count> in all, default 200) as
-// <dir>/tex_<base>_<hash>.bin: "KKTX", version 1, the 6 fetch words, base bytes, mip bytes (little-endian
+// <dir>/tex_<base>_<hash>.bin: "KKTX", version 2, the 6 fetch words, base bytes, mip bytes (little-endian
 // header), then the base and mip regions exactly as stored (upper-bound sizes, cut at uncommitted memory).
 namespace census {
 
@@ -725,6 +725,9 @@ size_t Readable(const uint8_t* p, size_t n) {
 #endif
 }
 
+// GPU physical address of a CPU address in a physical view (0xA0000000, 0xC0000000, 0xE0000000).
+uint32_t PhysicalAddress(uint32_t cpu) { return (cpu & 0x1FFFFFFFu) + (cpu >= 0xE0000000u ? 0x1000u : 0u); }
+
 // Under g_mutex.
 void DumpTexture(const uint8_t* base, const uint32_t* fc, uint64_t key) {
   if (g_dump_dir.empty() || g_dump_left <= 0) return;
@@ -733,16 +736,19 @@ void DumpTexture(const uint8_t* base, const uint32_t* fc, uint64_t key) {
   uint32_t base_bytes, mip_bytes;
   RegionSizes(fc, base_bytes, mip_bytes);
   if (base_bytes > (64u << 20) || mip_bytes > (64u << 20)) return;
-  // Physical addresses: the 0xA0000000 view maps physical memory from 0.
-  const uint8_t* base_ptr = base + 0xA0000000u + (((fc[1] >> 12) & 0x1FFFF) << 12);
-  const uint8_t* mip_ptr = base + 0xA0000000u + (((fc[5] >> 12) & 0x1FFFF) << 12);
+  // The object's addresses are CPU addresses in one of the physical views; the 0xA0000000 view maps physical
+  // memory from 0 and the 0xE0000000 view is 4 KB ahead of it (as SetTexture converts them: CPU 0xFFC96000 is
+  // GPU 0x1FC97000). Version 1 of this dump read the low 29 bits without that page, one page early.
+  const uint32_t base_phys = PhysicalAddress(fc[1] & 0xFFFFF000u), mip_phys = PhysicalAddress(fc[5] & 0xFFFFF000u);
+  const uint8_t* base_ptr = base + 0xA0000000u + base_phys;
+  const uint8_t* mip_ptr = base + 0xA0000000u + mip_phys;
   if (base_bytes) base_bytes = uint32_t(Readable(base_ptr, base_bytes));
   if (mip_bytes) mip_bytes = uint32_t(Readable(mip_ptr, mip_bytes));
   char name[64];
-  std::snprintf(name, sizeof(name), "/tex_%08X_%016llX.bin", ((fc[1] >> 12) & 0x1FFFF) << 12,
+  std::snprintf(name, sizeof(name), "/tex_%08X_%016llX.bin", base_phys,
                 (unsigned long long)key);
   if (FILE* f = std::fopen((g_dump_dir + name).c_str(), "wb")) {
-    const uint32_t header[10] = {0x58544B4Bu /* "KKTX" */, 1, fc[0], fc[1], fc[2], fc[3], fc[4], fc[5],
+    const uint32_t header[10] = {0x58544B4Bu /* "KKTX" */, 2, fc[0], fc[1], fc[2], fc[3], fc[4], fc[5],
                                  base_bytes, mip_bytes};
     std::fwrite(header, 4, 10, f);
     if (base_bytes) std::fwrite(base_ptr, 1, base_bytes, f);
