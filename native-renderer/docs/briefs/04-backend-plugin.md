@@ -47,3 +47,8 @@ routes DrawIndexedVertices into the backend. Output: `native-renderer/plugin/` a
 
 Milestones 1-3 run on D3D12 and on Vulkan (Windows; Linux through the AppImage build later), with the
 plugin selectable from the command line and the old plugin untouched.
+
+## API priority
+
+Vulkan is the primary backend (user decision, 10 October 2026): every milestone is reached on Vulkan first;
+D3D12 follows behind the same NVRHI interface and must not hold Vulkan work up.
