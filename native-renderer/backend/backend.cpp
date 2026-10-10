@@ -285,11 +285,11 @@ void Backend::Present(rex::ui::Presenter* presenter, uint32_t frontbuffer_width,
           "rexgpu-native: game renderer: {} draws, skipped {} (shader) {} (target) {} (primitive) {} "
           "(pipeline) {} (device); {} pipelines; {} texture uploads ({} failed), {} buffer uploads, "
           "{} clears, {} resolves ({} failed), {} invalidations; shaders {} created, {} from the pack, "
-          "{} compiled, {} failed, {} from objects",
+          "{} compiled, {} failed, {} from objects; {:.0f} ms in pipeline creation, {:.0f} ms in texture uploads",
           s.draws, s.skipped_shader, s.skipped_target, s.skipped_primitive, s.skipped_pipeline,
           s.skipped_device, s.pipelines, s.texture_uploads, s.texture_failures, s.buffer_uploads,
           s.clears, s.resolves, s.resolve_failures, s.invalidations, sh.created, sh.from_pack,
-          sh.compiled, sh.failed, sh.from_object);
+          sh.compiled, sh.failed, sh.from_object, s.pipeline_ms, s.texture_ms);
     }
 #endif
   }

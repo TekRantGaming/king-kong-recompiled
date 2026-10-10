@@ -40,10 +40,12 @@ namespace nr {
 class GameRenderer {
  public:
   struct Options {
-    // Read each vertex element with its declaration's own endian field
-    // instead of the vertex buffer's (the hardware uses the fetch constant's,
-    // which the XDK builds from the buffer: 8in32).
-    bool element_endian = false;
+    // Read each vertex element with its declaration's own endian field (the
+    // game's SHORT4N normals and tangents are 8in16 in 8in32 streams) rather
+    // than the vertex buffer's. Proven on the game's frames: with the
+    // buffer's endian, Kong's fur shells and the V-Rex's lighting follow
+    // scrambled normals.
+    bool element_endian = true;
     // Flip the guest's front face (in case the host's winding came out the
     // other way round).
     bool flip_front_face = false;
@@ -75,6 +77,8 @@ class GameRenderer {
     uint64_t pipelines = 0;
     uint64_t invalidations = 0;
     uint64_t presents_missing = 0;  // no host target for the back buffer
+    double pipeline_ms = 0;         // time spent creating pipelines
+    double texture_ms = 0;          // time spent converting and uploading textures
   };
 
   GameRenderer(nvrhi::IDevice* device, const GuestMemory& memory, kknr::GuestMemory physical,

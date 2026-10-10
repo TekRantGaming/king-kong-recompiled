@@ -64,9 +64,9 @@ REXCVAR_DEFINE_STRING(native_dxc, "", "Native renderer",
                       "beside the game, then the system's search path")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-REXCVAR_DEFINE_BOOL(native_element_endian, false, "Native renderer",
-                    "Read each vertex element with its declaration's endian field instead of the "
-                    "vertex buffer's (the hardware's)")
+REXCVAR_DEFINE_BOOL(native_element_endian, true, "Native renderer",
+                    "Read each vertex element with its declaration's endian field (on: what the "
+                    "game's frames need) instead of the vertex buffer's")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_BOOL(native_flip_front_face, false, "Native renderer",

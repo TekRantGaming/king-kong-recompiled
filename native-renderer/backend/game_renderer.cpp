@@ -1,6 +1,7 @@
 #include "backend/game_renderer.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 
@@ -346,8 +347,10 @@ nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelin
                                                     nvrhi::IFramebuffer* framebuffer, uint64_t key) {
   auto it = pipelines_.find(key);
   if (it != pipelines_.end()) return it->second;
+  const auto start = std::chrono::steady_clock::now();
   nvrhi::GraphicsPipelineHandle p =
       device_->createGraphicsPipeline(desc, framebuffer->getFramebufferInfo());
+  stats_.pipeline_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
   pipelines_[key] = p;  // a failure is remembered too (null)
   if (p) ++stats_.pipelines;
   return p;

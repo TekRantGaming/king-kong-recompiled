@@ -1,6 +1,7 @@
 // GameRenderer: render targets, framebuffers, textures, samplers and buffers.
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 
 #include "backend/game_renderer.h"
@@ -178,6 +179,12 @@ void GameRenderer::ReleaseHostTexture(HostTexture* host) {
 GameRenderer::HostTexture* GameRenderer::UploadTexture(nvrhi::ICommandList* cl,
                                                        kknr::TextureCache::Entry& entry,
                                                        const kknr::TextureFetch& fetch) {
+  const auto start = std::chrono::steady_clock::now();
+  struct Timer {
+    std::chrono::steady_clock::time_point start;
+    double& total;
+    ~Timer() { total += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(); }
+  } timer{start, stats_.texture_ms};
   kknr::HostTextureData data;
   std::string why;
   if (!kknr::ConvertTexture(fetch, physical_, data, &why, TextureOptions())) {
