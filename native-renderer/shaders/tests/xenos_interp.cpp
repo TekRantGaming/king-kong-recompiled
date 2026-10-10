@@ -818,8 +818,8 @@ void Machine::alu(const uint32_t* w) {
         }
         case 32: {                                                         // setp_pop
             Num t = add(sa, exact(-1.0f));
-            Dec d = compare(t, exact(0.0f), Cmp::Gt);
-            Dec le = d == Dec::Ambiguous ? Dec::Ambiguous : (d == Dec::True ? Dec::False : Dec::True);
+            // t <= 0 as the SDK's islessequal (false for NaN), not as !(t > 0).
+            Dec le = compare(exact(0.0f), t, Cmp::Ge);
             setPredicate(le);
             s = le == Dec::Ambiguous ? unknown() : (le == Dec::True ? exact(0.0f) : t);
             break;
