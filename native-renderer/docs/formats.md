@@ -309,6 +309,14 @@ A8R8G8B8 (0x18280186), 640x480 X8R8G8B8 (0x28280186), 1280x720 D24S8 (0x2D200196
 pool's formats. Resolves go into k_32_FLOAT, k_8_8_8_8 (8in32, and once endian none ZYX1), k_8 (endian none,
 000X) and k_24_8 textures, with clear flags 0x100, 0x200 and 0x300.
 
+Vertex and index buffers (stream 01's SetVertexDeclaration dumps and the census run): 20 distinct
+declarations, up to 8 elements on streams 0 and 1, using six element types only: FLOAT3 0x002A23B9 (position,
+normal), FLOAT2 0x002C23A5 (texture coordinates), FLOAT4 0x001A23A6, D3DCOLOR 0x00182886 (colour), SHORT4N
+0x001A215A (8in16, normals and tangents) and UBYTE4 0x001A2286 (blend indices). Streams mix 8in32 and 8in16
+elements (FLOAT3, D3DCOLOR, FLOAT2, SHORT4N and UBYTE4 in one vertex), which is what the per-element swap plan is
+for; all six map to host input formats without shader unpacking (`test_buffers.cpp` checks each). Every vertex
+buffer has fetch type 3 and endian 8in32; every index buffer is 16-bit.
+
 ## Checked against today's renderer
 
 The reference is the SDK's own texture code rather than a capture: `kknr_sdkref` compiles the SDK's
