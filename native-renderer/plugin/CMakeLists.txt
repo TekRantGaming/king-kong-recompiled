@@ -42,3 +42,11 @@ target_link_libraries(rexgpu-native PRIVATE nr_renderer rex::runtime rex::render
 if(NR_HAS_D3D12)
     target_link_libraries(rexgpu-native PRIVATE d3d12 dxgi dxguid)
 endif()
+# From kk: copy the plugin beside the game after every plugin build (a change
+# in the plugin alone does not relink the game, so a step on the game's target
+# would leave a stale copy there).
+if(NR_PLUGIN_COPY_BESIDE)
+    add_custom_command(TARGET rexgpu-native POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:rexgpu-native>
+                $<TARGET_FILE_DIR:${NR_PLUGIN_COPY_BESIDE}>)
+endif()

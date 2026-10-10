@@ -74,14 +74,14 @@ rexglue_setup_target(king_kong GPU_PLUGINS xenos)
 
 if(KK_NATIVE_RENDERER)
     set(NR_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    # plugin/CMakeLists.txt copies rexgpu-native beside this target after each plugin build.
+    set(NR_PLUGIN_COPY_BESIDE king_kong)
     add_subdirectory(../native-renderer native-renderer)
     target_sources(king_kong PRIVATE ../native-renderer/hooks/kk_native_hooks.cpp)
     target_link_libraries(king_kong PRIVATE nr_hooks)
     target_compile_definitions(king_kong PRIVATE KK_NATIVE_RENDERER=1)
     # The runtime loads the plugin from beside the program.
     add_dependencies(king_kong rexgpu-native)
-    add_custom_command(TARGET king_kong POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:rexgpu-native> $<TARGET_FILE_DIR:king_kong>)
 endif()
 if(KK_DEV_TOOLS)
     target_compile_definitions(king_kong PRIVATE KK_DEV_TOOLS=1)

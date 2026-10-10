@@ -1,5 +1,6 @@
 #include "plugin/ring_skimmer.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 
@@ -157,6 +158,10 @@ bool RingSkimmer::ExecutePacketType0(RingBuffer* reader, uint32_t packet) {
   uint32_t write_one_reg = (packet >> 15) & 0x1;
   for (uint32_t m = 0; m < count; m++) {
     uint32_t value = reader->ReadAndSwap<uint32_t>();
+    if (log_packets_) {
+      REXGPU_DEBUG("rexgpu-native: register {:04X} = {:08X}", write_one_reg ? base_index : base_index + m,
+                   value);
+    }
     WriteRegister(write_one_reg ? base_index : base_index + m, value);
   }
   return true;
@@ -188,7 +193,13 @@ bool RingSkimmer::ExecutePacketType3(RingBuffer* reader, uint32_t packet) {
     }
   }
   if (log_packets_) {
-    REXGPU_DEBUG("rexgpu-native: packet opcode {:02X} count {}", opcode, count);
+    RingBuffer peek = *reader;
+    uint32_t data[6] = {};
+    for (uint32_t i = 0; i < std::min<uint32_t>(count, 6); i++) {
+      data[i] = peek.ReadAndSwap<uint32_t>();
+    }
+    REXGPU_DEBUG("rexgpu-native: packet opcode {:02X} count {}: {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
+                 opcode, count, data[0], data[1], data[2], data[3], data[4], data[5]);
   }
 
   switch (opcode) {
@@ -370,14 +381,27 @@ bool RingSkimmer::ExecuteWaitRegMem(RingBuffer* reader) {
   uint32_t wait = reader->ReadAndSwap<uint32_t>();
   bool is_memory = (wait_info & 0x10) != 0;
   bool matched = false;
+  const auto wait_start = std::chrono::steady_clock::now();
+  bool reported = false;
   do {
+    if (!reported && std::chrono::steady_clock::now() - wait_start > std::chrono::seconds(2)) {
+      reported = true;
+      REXGPU_WARN(
+          "rexgpu-native: WAIT_REG_MEM stuck for 2 s: {} {:08X} (value {:08X}) mask {:08X} "
+          "function {} ref {:08X}",
+          is_memory ? "memory" : "register", poll_reg_addr,
+          is_memory ? ReadGuestDword(poll_reg_addr) : ReadRegister(poll_reg_addr), mask,
+          wait_info & 7, ref);
+    }
     uint32_t value;
     if (is_memory) {
       value = ReadGuestDword(poll_reg_addr);
     } else {
       if (poll_reg_addr == rex::graphics::XE_GPU_REG_COHER_STATUS_HOST) {
         // Cache flush request: nothing to flush, report it done.
-        WriteRegister(rex::graphics::XE_GPU_REG_COHER_STATUS_HOST, 0);
+        // (Directly: WriteRegister marks a write to it as a new request.)
+        const_cast<volatile uint32_t&>(
+            system_->registers()[rex::graphics::XE_GPU_REG_COHER_STATUS_HOST]) = 0;
       }
       value = ReadRegister(poll_reg_addr);
     }
@@ -498,8 +522,25 @@ bool RingSkimmer::ExecuteSetConstant(RingBuffer* reader, uint32_t count) {
 }
 
 void RingSkimmer::WriteRegister(uint32_t index, uint32_t value) {
-  if (index < NativeGraphicsSystem::kRegisterCount) {
-    system_->registers()[index] = value;
+  if (index >= NativeGraphicsSystem::kRegisterCount) {
+    return;
+  }
+  uint32_t* regs = system_->registers();
+  const_cast<volatile uint32_t&>(regs[index]) = value;
+  // Scratch register writeback, as the SDK's CommandProcessor::WriteRegister
+  // does: the library's fences are type 0 writes to SCRATCH_REG0..7 that the
+  // GPU mirrors to SCRATCH_ADDR, and the game's WAIT_REG_MEM / CPU waits poll
+  // that memory (the first run in the game hung on exactly that).
+  if (index >= rex::graphics::XE_GPU_REG_SCRATCH_REG0 &&
+      index <= rex::graphics::XE_GPU_REG_SCRATCH_REG7) {
+    uint32_t scratch_reg = index - rex::graphics::XE_GPU_REG_SCRATCH_REG0;
+    if ((1u << scratch_reg) & regs[rex::graphics::XE_GPU_REG_SCRATCH_UMSK]) {
+      uint32_t mem_addr = regs[rex::graphics::XE_GPU_REG_SCRATCH_ADDR] + scratch_reg * 4;
+      rex::memory::store_and_swap<uint32_t>(memory_->TranslatePhysical(mem_addr), value);
+    }
+  } else if (index == rex::graphics::XE_GPU_REG_COHER_STATUS_HOST) {
+    // Flush request pending; WAIT_REG_MEM on it reports it done.
+    const_cast<volatile uint32_t&>(regs[index]) |= UINT32_C(0x80000000);
   }
 }
 
