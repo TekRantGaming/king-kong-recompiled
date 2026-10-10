@@ -8,8 +8,9 @@ namespace {
 
 #define F(name, kind, bw, bh, bits) {#name, FormatKind::kind, bw, bh, bits}
 const FormatInfo kFormats[64] = {
-    F(k_1_REVERSE, kOther, 1, 1, 1),
-    F(k_1, kOther, 1, 1, 1),
+    // 1 bpp: the SDK's table has 1x1 blocks of 1 bit (0 bytes, unusable); we treat 8 texels as one byte.
+    F(k_1_REVERSE, kOther, 8, 1, 1),
+    F(k_1, kOther, 8, 1, 1),
     F(k_8, kUncompressed, 1, 1, 8),
     F(k_1_5_5_5, kUncompressed, 1, 1, 16),
     F(k_5_6_5, kUncompressed, 1, 1, 16),
@@ -142,6 +143,50 @@ uint32_t TextureFetch::DepthOrLayers() const {
     default:
       return 1;
   }
+}
+
+uint32_t DefaultPitchTexels(TextureFormat format, uint32_t width, bool tiled) {
+  const FormatInfo& info = GetFormatInfo(format);
+  const uint32_t bpb = std::max(info.BytesPerBlock(), 1u);
+  uint32_t blocks = (width + info.block_width - 1) / info.block_width;
+  // Tiled: whole 32-block tiles. Linear: rows of whole 256-byte units, and a pitch the field can hold
+  // (texels / 32).
+  for (;; ++blocks) {
+    const uint32_t texels = blocks * info.block_width;
+    if (texels % 32) continue;
+    if (tiled ? blocks % 32 == 0 : (blocks * bpb) % 256 == 0) return texels;
+  }
+}
+
+TextureFetch MakeTextureFetch(const TextureFetchDesc& d) {
+  TextureFetch f;
+  uint32_t* w = f.words;
+  const uint32_t pitch = d.pitch_texels ? d.pitch_texels : DefaultPitchTexels(d.format, d.width, d.tiled);
+  w[0] = 2;  // texture
+  for (int i = 0; i < 4; ++i) w[0] |= uint32_t(d.signs[i]) << (2 + 2 * i);
+  w[0] |= ((pitch >> 5) & 0x1FF) << 22;
+  w[0] |= uint32_t(d.tiled) << 31;
+  const bool stacked = d.dimension == Dimension::k2D && d.stacked;
+  w[1] = uint32_t(d.format) | uint32_t(d.endian) << 6 | uint32_t(stacked) << 10 | (d.base_address & 0x1FFFF000u);
+  switch (d.dimension) {
+    case Dimension::k1D:
+      w[2] = (d.width - 1) & 0xFFFFFF;
+      break;
+    case Dimension::k3D:
+      w[2] = ((d.width - 1) & 0x7FF) | ((d.height - 1) & 0x7FF) << 11 | ((d.depth_or_layers - 1) & 0x3FF) << 22;
+      break;
+    case Dimension::kCube:
+      w[2] = ((d.width - 1) & 0x1FFF) | ((d.height - 1) & 0x1FFF) << 13 | 5u << 26;
+      break;
+    default:
+      w[2] = ((d.width - 1) & 0x1FFF) | ((d.height - 1) & 0x1FFF) << 13 |
+             (stacked ? ((d.depth_or_layers - 1) & 63) << 26 : 0);
+      break;
+  }
+  w[3] = uint32_t(d.integer) | uint32_t(d.swizzle & 0xFFF) << 1 | (uint32_t(d.exp_adjust) & 63) << 13;
+  w[4] = (d.min_level & 15) << 2 | (d.max_level & 15) << 6;
+  w[5] = uint32_t(d.dimension) << 9 | uint32_t(d.packed_mips) << 11 | (d.mip_address & 0x1FFFF000u);
+  return f;
 }
 
 TextureLevels GetTextureLevels(const TextureFetch& fetch) {

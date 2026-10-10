@@ -130,15 +130,21 @@ const char* HostVertexFormatName(HostVertexFormat format) {
 }
 
 std::vector<VertexSwapRange> PlanVertexSwap(const std::vector<VertexElement>& elements, uint32_t stream,
-                                            uint32_t stride, Endian default_endian) {
+                                            uint32_t stride, Endian default_endian, bool* conflict) {
   // Mark each 4-byte unit of the stride with the endian of the element covering it (elements and strides are
   // multiples of 4 bytes on the 360), then merge runs.
   const uint32_t units = stride / 4;
   std::vector<Endian> unit_endian(units, default_endian);
+  std::vector<bool> claimed(units, false);
+  if (conflict) *conflict = false;
   for (const VertexElement& e : elements) {
     if (e.stream != stream) continue;
     const uint32_t bytes = VertexFormatBytes(e.type.Format());
-    for (uint32_t b = e.offset; b < e.offset + bytes && b / 4 < units; b += 4) unit_endian[b / 4] = e.type.EndianMode();
+    for (uint32_t b = e.offset; b < e.offset + bytes && b / 4 < units; b += 4) {
+      if (conflict && claimed[b / 4] && unit_endian[b / 4] != e.type.EndianMode()) *conflict = true;
+      unit_endian[b / 4] = e.type.EndianMode();
+      claimed[b / 4] = true;
+    }
   }
   std::vector<VertexSwapRange> plan;
   for (uint32_t u = 0; u < units; ++u) {
@@ -149,6 +155,16 @@ std::vector<VertexSwapRange> PlanVertexSwap(const std::vector<VertexElement>& el
   }
   if (stride % 4) plan.push_back({units * 4, stride % 4, Endian::kNone});
   return plan;
+}
+
+uint64_t VertexConversionId(const std::vector<VertexSwapRange>& plan, uint32_t stride) {
+  uint64_t h = 0xCBF29CE484222325ull ^ stride;
+  for (const VertexSwapRange& r : plan) {
+    const uint64_t v = uint64_t(r.offset) | uint64_t(r.size) << 24 | uint64_t(r.endian) << 48;
+    h = (h ^ v) * 0x100000001B3ull;
+    h ^= h >> 29;
+  }
+  return h;
 }
 
 void ConvertVertices(const uint8_t* guest, uint8_t* host, uint32_t vertex_count, uint32_t stride,

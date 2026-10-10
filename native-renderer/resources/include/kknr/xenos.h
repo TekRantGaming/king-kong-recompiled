@@ -98,7 +98,7 @@ enum class FormatKind : uint8_t {
   kUncompressed,  // one texel per block
   kBlock4x4,      // DXT / DXN / CTX1 style 4x4 blocks
   kPacked422,     // two texels per 32-bit block (Y'CbCr 4:2:2)
-  kOther,         // block layouts with no host use (k_32_AS_8 ...)
+  kOther,         // rare layouts: 1 bpp, 32-bit blocks split in texels, MPEG and interlaced variants
 };
 
 struct FormatInfo {
@@ -162,6 +162,29 @@ struct TextureFetch {
   uint32_t BorderColor() const { return words[5] & 3; }
   bool PackedMips() const { return ((words[5] >> 11) & 1) != 0; }
 };
+
+// Builds a fetch constant (tests, tools and host-side descriptions; the game's own come from its objects).
+struct TextureFetchDesc {
+  TextureFormat format = TextureFormat::k_8_8_8_8;
+  Endian endian = Endian::kNone;
+  Dimension dimension = Dimension::k2D;
+  bool tiled = false;
+  bool packed_mips = false;
+  bool stacked = false;            // 2D only: an array of depth_or_layers layers
+  uint32_t width = 1, height = 1;
+  uint32_t depth_or_layers = 1;    // 3D depth or stacked layers (cubes are always 6)
+  uint32_t pitch_texels = 0;       // 0: what the XDK would pick (32-block tiles, or 256-byte linear rows)
+  uint32_t base_address = 0;       // physical, 4 KB aligned; 0 = no base level
+  uint32_t mip_address = 0;        // physical, 4 KB aligned; 0 = no mips
+  uint32_t min_level = 0, max_level = 0;
+  uint16_t swizzle = kSwizzleXYZW;
+  TextureSign signs[4] = {};
+  bool integer = false;
+  int32_t exp_adjust = 0;
+};
+TextureFetch MakeTextureFetch(const TextureFetchDesc& desc);
+// The base pitch the XDK gives a texture (texels, a multiple of 32).
+uint32_t DefaultPitchTexels(TextureFormat format, uint32_t width, bool tiled);
 
 // Levels actually stored, as the SDK's GetSubresourcesFromFetchConstant decides: the base exists if its
 // address is set and mips start at 1 only when the mip address is set.

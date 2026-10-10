@@ -73,6 +73,19 @@ struct DeclType {
   uint16_t Swizzle() const { return uint16_t((value >> 10) & 0xFFF); }
   bool Unused() const { return value == 0xFFFFFFFFu; }
 };
+// Builds a D3DDECLTYPE word from its fields (for declarations described on the host side and for tests).
+constexpr DeclType MakeDeclType(VertexFormat format, Endian endian, bool is_signed, bool integer,
+                                uint16_t swizzle = kSwizzleXYZW) {
+  return DeclType{uint32_t(format) | uint32_t(endian) << 6 | uint32_t(is_signed) << 8 | uint32_t(integer) << 9 |
+                  uint32_t(swizzle & 0xFFF) << 10};
+}
+// The 360 types the traces show (the constants named in the comment above).
+constexpr DeclType kDeclFloat2{0x002C23A5};
+constexpr DeclType kDeclFloat3{0x002A23B9};
+constexpr DeclType kDeclFloat4{0x001A23A6};
+constexpr DeclType kDeclColor{0x00182886};
+constexpr DeclType kDeclUByte4{0x001A2286};
+constexpr DeclType kDeclShort4N{0x001A215A};
 
 // One D3DVERTEXELEMENT9 as the 360 stores it (12 bytes, big-endian): Stream, Offset, Type, Method, Usage,
 // UsageIndex and a byte the runtime fills in.
@@ -114,8 +127,15 @@ struct VertexSwapRange {
 };
 // The swap plan for one stream of a declaration: each element of that stream with its own endian; the rest
 // of the stride (gaps, data no element reads) with default_endian.
+// conflict (optional) is set when two elements of the stream overlap with different endian modes (the later
+// element wins; the GPU would fetch the same bytes twice with different swaps, which one host buffer cannot
+// reproduce).
 std::vector<VertexSwapRange> PlanVertexSwap(const std::vector<VertexElement>& elements, uint32_t stream,
-                                            uint32_t stride, Endian default_endian);
+                                            uint32_t stride, Endian default_endian, bool* conflict = nullptr);
+// Identifies a swap plan for the buffer cache (BufferCache::Bind's conversion_id): equal plans, equal ids.
+uint64_t VertexConversionId(const std::vector<VertexSwapRange>& plan, uint32_t stride);
+// The index buffer's conversion id.
+inline uint64_t IndexConversionId(bool index32) { return index32 ? 0x1D32 : 0x1D16; }
 // Converts vertex_count vertices (stride bytes each) from guest to host order.
 void ConvertVertices(const uint8_t* guest, uint8_t* host, uint32_t vertex_count, uint32_t stride,
                      const std::vector<VertexSwapRange>& plan);

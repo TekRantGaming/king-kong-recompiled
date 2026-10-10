@@ -14,6 +14,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_library(kknr_resources STATIC
     src/xenos.cpp
     src/tiling.cpp
+    src/guest_texture.cpp
     src/endian.cpp
     src/texture_convert.cpp
     src/buffers.cpp
