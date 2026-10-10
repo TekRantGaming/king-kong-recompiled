@@ -21,9 +21,10 @@
 // byte-swap). A shader's literal constants (ShaderInfo::registerWrites) must be applied to the
 // shadow when the shader is set, as the XDK's SetVertexShader / SetPixelShader do. The
 // translated code does not depend on it for float literals (read directly or relatively, they
-// are answered in the shader) nor for loop literals (inlined); bool literals go through the
-// buffers (no shader of the game's database reads a bool constant). Applying them keeps the
-// shadow identical to the console's for anything else that reads it.
+// are answered in the shader) nor for loop literals (inlined) nor for the bits of a bool
+// literal dword that the constant table does not name (inlined; named bools are read from
+// boolConstants, where the game's own values land). Applying them keeps the shadow identical
+// to the console's for anything else that reads it.
 #pragma once
 
 #include <cstdint>

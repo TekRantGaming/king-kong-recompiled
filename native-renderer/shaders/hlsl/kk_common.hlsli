@@ -64,6 +64,18 @@ float4 kk_PSConst(int index)
     return select(uint(index) < 256u, kk_PC[min(uint(index), 255u)], float4(0.0, 0.0, 0.0, 0.0));
 }
 
+// Not-equal as on Xenos: unordered (true when either side is NaN). DXC lowers HLSL's != to an
+// ordered compare for SPIR-V, which is false for NaN.
+bool kk_Ne(float a, float b)
+{
+    return !(a == b);
+}
+
+bool4 kk_Ne(float4 a, float4 b)
+{
+    return !(a == b);
+}
+
 bool kk_BoolConst(uint index)
 {
     return (kk_Bool[index >> 7][(index >> 5) & 3] & (1u << (index & 31))) != 0;
@@ -90,16 +102,17 @@ SamplerState kk_PSSamplerState(uint binding)
 }
 
 // ---------------------------------------------------------------------------------------------
-// ALU helpers with the Xenos (Direct3D 9) rules: 0 * anything = +0, max / min as comparisons.
+// ALU helpers with the Xenos (Direct3D 9) rules: 0 or a denormal * anything = +0, max / min as
+// comparisons. The denormal test is explicit: hosts need not flush denormals (lavapipe does not).
 
 float4 kk_Mul(float4 a, float4 b)
 {
-    return select(or(a == 0.0, b == 0.0), float4(0.0, 0.0, 0.0, 0.0), a * b);
+    return select(or(abs(a) < 1.17549435e-38, abs(b) < 1.17549435e-38), float4(0.0, 0.0, 0.0, 0.0), a * b);
 }
 
 float kk_Muls(float a, float b)
 {
-    return select(or(a == 0.0, b == 0.0), 0.0, a * b);
+    return select(or(abs(a) < 1.17549435e-38, abs(b) < 1.17549435e-38), 0.0, a * b);
 }
 
 // Scalar operations with the clamping variants of rcp / rsq / log.
@@ -108,11 +121,20 @@ float kk_ClampInf(float v, float replacement)
     return select(isinf(v), select(v < 0.0, -replacement, replacement), v);
 }
 
-float kk_RcpC(float a) { return kk_ClampInf(1.0 / a, KK_FLT_MAX); }
-float kk_RcpF(float a) { float r = 1.0 / a; return select(isinf(r), select(r < 0.0, -0.0, 0.0), r); }
-float kk_RsqC(float a) { return kk_ClampInf(rsqrt(a), KK_FLT_MAX); }
-float kk_RsqF(float a) { float r = rsqrt(a); return select(isinf(r), select(r < 0.0, -0.0, 0.0), r); }
-float kk_LogC(float a) { float r = log2(a); return select(and(isinf(r), r < 0.0), -KK_FLT_MAX, r); }
+// The IEEE forms as ucode.h states them: exact at 1 (and exp at 0), NaN for a negative input of
+// log / sqrt / rsq. Vulkan leaves log2, sqrt and inversesqrt of a negative undefined and allows a
+// few ulp at 1, so both are explicit.
+float kk_Exp(float a) { return select(a == 0.0, 1.0, exp2(a)); }
+float kk_Log(float a) { return select(a == 1.0, 0.0, select(a < 0.0, asfloat(0x7FC00000u), log2(a))); }
+float kk_Rcp(float a) { return select(a == 1.0, 1.0, 1.0 / a); }
+float kk_Rsq(float a) { return select(a == 1.0, 1.0, select(a < 0.0, asfloat(0x7FC00000u), rsqrt(a))); }
+float kk_Sqrt(float a) { return select(a < 0.0, asfloat(0x7FC00000u), sqrt(a)); }
+
+float kk_RcpC(float a) { return kk_ClampInf(kk_Rcp(a), KK_FLT_MAX); }
+float kk_RcpF(float a) { float r = kk_Rcp(a); return select(isinf(r), select(r < 0.0, -0.0, 0.0), r); }
+float kk_RsqC(float a) { return kk_ClampInf(kk_Rsq(a), KK_FLT_MAX); }
+float kk_RsqF(float a) { float r = kk_Rsq(a); return select(isinf(r), select(r < 0.0, -0.0, 0.0), r); }
+float kk_LogC(float a) { float r = kk_Log(a); return select(and(isinf(r), r < 0.0), -KK_FLT_MAX, r); }
 
 float kk_MulsPrev2(float a, float b, float previous)
 {
@@ -182,7 +204,8 @@ float3 kk_CubeDirection(float3 c)
 {
     float u = (c.x - 1.5) * 2.0;
     float v = (c.y - 1.5) * 2.0;
-    uint face = uint(clamp(floor(c.z + 0.5), 0.0, 5.0));
+    // The face index is truncated after clamping to 0-5 (NaN reads face 0), as the SDK does.
+    uint face = uint(min(select(c.z >= 0.0, c.z, 0.0), 5.0));
     switch (face)
     {
     case 0: return float3(1.0, -v, -u);
@@ -370,7 +393,7 @@ void kk_AlphaTest(float alpha)
     case 3u: pass = alpha == reference; break;
     case 4u: pass = alpha <= reference; break;
     case 5u: pass = alpha > reference; break;
-    case 6u: pass = alpha != reference; break;
+    case 6u: pass = kk_Ne(alpha, reference); break;
     case 7u: pass = alpha >= reference; break;
     default: pass = true; break;
     }

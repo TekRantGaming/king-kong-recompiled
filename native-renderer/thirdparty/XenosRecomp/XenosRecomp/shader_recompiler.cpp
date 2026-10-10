@@ -185,6 +185,16 @@ std::string ShaderRecompiler::floatConstant(uint32_t index, bool addressed, bool
     return fmt::format("kk_{}[{}]", isPixelShader ? "PC" : "VC", index);
 }
 
+// A float comparison as HLSL. Not-equal is unordered on Xenos (true for NaN, as the SDK's
+// OpFUnordNotEqual), but DXC lowers HLSL's != to an ordered compare for SPIR-V, so it goes
+// through kk_Ne (the prelude's !(a == b)).
+static std::string compare(const char* a, const char* op, const char* b)
+{
+    if (std::string_view(op) == "!=")
+        return fmt::format("kk_Ne({}, {})", a, b);
+    return fmt::format("{} {} {}", a, op, b);
+}
+
 std::string ShaderRecompiler::boolCondition(uint32_t index, bool condition) const
 {
     auto literal = input->boolLiterals.find(index);
@@ -306,6 +316,15 @@ void ShaderRecompiler::recompile(const VertexFetchInstruction& instr, uint32_t a
         indent();
         println("vfIndex = uint(int(floor({}.{}{})));", reg(instr.srcRegister, instr.srcRegisterAm),
             SWIZZLES[instr.srcSwizzle & 3], instr.isIndexRounded ? " + 0.5" : "");
+        if (input->rawVertexFetch)
+        {
+            // vfetch_mini reuses the address of the vfetch_full that ran last (the SDK keeps it
+            // in a variable), which in a loop need not be the previous one in program order.
+            indent();
+            println("vfBinding = {}u;", binding);
+            indent();
+            println("vfStride = {}u;", vfetchStride.at(address) * 4);
+        }
     }
 
     indent();
@@ -317,8 +336,7 @@ void ShaderRecompiler::recompile(const VertexFetchInstruction& instr, uint32_t a
         uint32_t word = uint32_t(instr.format) | (instr.formatCompAll ? 0x40u : 0u) | (instr.numFormatAll ? 0x80u : 0u) |
             (instr.signedRfModeAll ? 0x100u : 0u) | ((uint32_t(instr.expAdjust) & 0x3Fu) << 11) |
             ((0u | (1u << 3) | (2u << 6) | (3u << 9)) << 17);
-        println("float4 kf = kk_FetchRaw({}, vfIndex, {}u, {}, 0x{:X}u);", binding, vfetchStride.at(address) * 4,
-            int32_t(instr.offset) * 4, word);
+        println("float4 kf = kk_FetchRaw(vfBinding, vfIndex, vfStride, {}, 0x{:X}u);", int32_t(instr.offset) * 4, word);
     }
     else
     {
@@ -584,10 +602,35 @@ void ShaderRecompiler::recompile(const TextureFetchInstruction& instr, uint32_t 
         }
         case TextureDimension::TextureCube:
         {
+            // tfetchCube takes (S, T, face). The S and T offsets are in texels of a face (added
+            // before the division by the size with unnormalised coordinates), the face offset
+            // is added to the face index (as the SDK's translators do).
             indent();
-            println("float3 kc = kk_CubeDirection({});", srcComponents(3));
+            println("float3 kc = {};", srcComponents(3));
             indent();
             out += "TextureCube<float4> kto = kk_TexCube[kti];\n";
+            bool stOffset = instr.opcode == FetchOpcode::TextureFetch && (offset[0] != 0.0f || offset[1] != 0.0f);
+            if (instr.texCoordDenorm || stOffset)
+            {
+                indent();
+                out += "uint2 ktd;\n";
+                indent();
+                out += "kto.GetDimensions(ktd.x, ktd.y);\n";
+                indent();
+                if (instr.texCoordDenorm && stOffset)
+                    println("kc.xy = (kc.xy + float2({}, {})) / float2(ktd);", offset[0], offset[1]);
+                else if (instr.texCoordDenorm)
+                    out += "kc.xy /= float2(ktd);\n";
+                else
+                    println("kc.xy += float2({}, {}) / float2(ktd);", offset[0], offset[1]);
+            }
+            if (instr.opcode == FetchOpcode::TextureFetch && offset[2] != 0.0f)
+            {
+                indent();
+                println("kc.z += {};", offset[2]);
+            }
+            indent();
+            out += "kc = kk_CubeDirection(kc);\n";
             body("kto", "kc", 3, "");
             break;
         }
@@ -628,7 +671,7 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
         constant0Mask = instr.scalarDestRelative ? (0xF & ~(instr.vectorWriteMask | instr.scalarWriteMask)) : 0;
     }
 
-    bool newP0 = false, newA0 = false;
+    bool newP0 = false, newA0 = false, vectorP0 = false, vectorA0 = false;
 
     // Vector operation (sources are read before anything this instruction writes).
     bool doVector = vectorMask != 0 || vectorChangesState(vop);
@@ -651,7 +694,7 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
         case AluVectorOpcode::Seq: value = "float4(kv1 == kv2)"; break;
         case AluVectorOpcode::Sgt: value = "float4(kv1 > kv2)"; break;
         case AluVectorOpcode::Sge: value = "float4(kv1 >= kv2)"; break;
-        case AluVectorOpcode::Sne: value = "float4(kv1 != kv2)"; break;
+        case AluVectorOpcode::Sne: value = "float4(kk_Ne(kv1, kv2))"; break;
         case AluVectorOpcode::Frc: value = "kv1 - floor(kv1)"; break;
         case AluVectorOpcode::Trunc: value = "trunc(kv1)"; break;
         case AluVectorOpcode::Floor: value = "floor(kv1)"; break;
@@ -672,9 +715,9 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
             const char* cmp = vop == AluVectorOpcode::SetpEqPush ? "==" :
                 (vop == AluVectorOpcode::SetpNePush ? "!=" : (vop == AluVectorOpcode::SetpGtPush ? ">" : ">="));
             indent();
-            println("bool kp = and(kv1.w == 0.0, kv2.w {} 0.0);", cmp);
-            newP0 = true;
-            value = fmt::format("select(and(kv1.x == 0.0, kv2.x {} 0.0), 0.0, kv1.x + 1.0).xxxx", cmp);
+            println("bool kp = and(kv1.w == 0.0, {});", compare("kv2.w", cmp, "0.0"));
+            vectorP0 = true;
+            value = fmt::format("select(and(kv1.x == 0.0, {}), 0.0, kv1.x + 1.0).xxxx", compare("kv2.x", cmp, "0.0"));
             break;
         }
         case AluVectorOpcode::KillEq:
@@ -685,7 +728,7 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
             const char* cmp = vop == AluVectorOpcode::KillEq ? "==" :
                 (vop == AluVectorOpcode::KillGt ? ">" : (vop == AluVectorOpcode::KillGe ? ">=" : "!="));
             indent();
-            println("bool kk = any(kv1 {} kv2);", cmp);
+            println("bool kk = any({});", compare("kv1", cmp, "kv2"));
             if (isPixelShader)
             {
                 indent();
@@ -698,7 +741,7 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
         case AluVectorOpcode::MaxA:
             indent();
             out += "int ka = int(floor(clamp(kv1.w, -256.0, 255.0) + 0.5));\n";
-            newA0 = true;
+            vectorA0 = true;
             value = "kk_Max(kv1, kv2)";
             break;
         default:
@@ -712,6 +755,21 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
             println("float4 kvr = saturate({});", value);
         else
             println("float4 kvr = {};", value);
+
+        // The vector operation's state changes take effect before the scalar operation reads
+        // its sources, and a scalar predicate or a0 write replaces them (the SDK's interpreter
+        // runs the two halves in that order).
+        if (vectorP0)
+        {
+            predicateChanged = true;
+            indent();
+            out += "p0 = kp;\n";
+        }
+        if (vectorA0)
+        {
+            indent();
+            out += "a0 = ka;\n";
+        }
     }
 
     // Scalar operation: always runs (it updates the previous scalar result ps).
@@ -778,19 +836,19 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
         case AluScalarOpcode::Seqs: value = "select(ka_ == 0.0, 1.0, 0.0)"; break;
         case AluScalarOpcode::Sgts: value = "select(ka_ > 0.0, 1.0, 0.0)"; break;
         case AluScalarOpcode::Sges: value = "select(ka_ >= 0.0, 1.0, 0.0)"; break;
-        case AluScalarOpcode::Snes: value = "select(ka_ != 0.0, 1.0, 0.0)"; break;
+        case AluScalarOpcode::Snes: value = "select(kk_Ne(ka_, 0.0), 1.0, 0.0)"; break;
         case AluScalarOpcode::Frcs: value = "(ka_ - floor(ka_))"; break;
         case AluScalarOpcode::Truncs: value = "trunc(ka_)"; break;
         case AluScalarOpcode::Floors: value = "floor(ka_)"; break;
-        case AluScalarOpcode::Exp: value = "exp2(ka_)"; break;
+        case AluScalarOpcode::Exp: value = "kk_Exp(ka_)"; break;
         case AluScalarOpcode::Logc: value = "kk_LogC(ka_)"; break;
-        case AluScalarOpcode::Log: value = "log2(ka_)"; break;
+        case AluScalarOpcode::Log: value = "kk_Log(ka_)"; break;
         case AluScalarOpcode::Rcpc: value = "kk_RcpC(ka_)"; break;
         case AluScalarOpcode::Rcpf: value = "kk_RcpF(ka_)"; break;
-        case AluScalarOpcode::Rcp: value = "(1.0 / ka_)"; break;
+        case AluScalarOpcode::Rcp: value = "kk_Rcp(ka_)"; break;
         case AluScalarOpcode::Rsqc: value = "kk_RsqC(ka_)"; break;
         case AluScalarOpcode::Rsqf: value = "kk_RsqF(ka_)"; break;
-        case AluScalarOpcode::Rsq: value = "rsqrt(ka_)"; break;
+        case AluScalarOpcode::Rsq: value = "kk_Rsq(ka_)"; break;
         case AluScalarOpcode::MaxAs:
         case AluScalarOpcode::MaxAsf:
             indent();
@@ -811,7 +869,7 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
             const char* cmp = sop == AluScalarOpcode::SetpEq ? "==" :
                 (sop == AluScalarOpcode::SetpNe ? "!=" : (sop == AluScalarOpcode::SetpGt ? ">" : ">="));
             indent();
-            println("bool ksp = ka_ {} 0.0;", cmp);
+            println("bool ksp = {};", compare("ka_", cmp, "0.0"));
             newP0 = true;
             value = "select(ksp, 0.0, 1.0)";
             break;
@@ -851,14 +909,14 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
             const char* test = sop == AluScalarOpcode::KillsEq ? "ka_ == 0.0" :
                 (sop == AluScalarOpcode::KillsGt ? "ka_ > 0.0" :
                 (sop == AluScalarOpcode::KillsGe ? "ka_ >= 0.0" :
-                (sop == AluScalarOpcode::KillsNe ? "ka_ != 0.0" : "ka_ == 1.0")));
+                (sop == AluScalarOpcode::KillsNe ? "kk_Ne(ka_, 0.0)" : "ka_ == 1.0")));
             indent();
             println("bool ksk = {};", test);
             scalarKill = true;
             value = "select(ksk, 1.0, 0.0)";
             break;
         }
-        case AluScalarOpcode::Sqrt: value = "sqrt(ka_)"; break;
+        case AluScalarOpcode::Sqrt: value = "kk_Sqrt(ka_)"; break;
         case AluScalarOpcode::Sin: value = "sin(ka_)"; break;
         case AluScalarOpcode::Cos: value = "cos(ka_)"; break;
         default:
@@ -869,17 +927,17 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
         println("ps = {};", value);
     }
 
-    // State changes take effect after both operations have read their sources.
+    // The scalar operation's state changes.
     if (newP0)
     {
         predicateChanged = true;
         indent();
-        out += (vop >= AluVectorOpcode::SetpEqPush && vop <= AluVectorOpcode::SetpGePush && doVector) ? "p0 = kp;\n" : "p0 = ksp;\n";
+        out += "p0 = ksp;\n";
     }
     if (newA0)
     {
         indent();
-        out += (vop == AluVectorOpcode::MaxA && doVector) ? "a0 = ka;\n" : "a0 = ksa;\n";
+        out += "a0 = ksa;\n";
     }
     if (scalarKill && isPixelShader)
     {
@@ -1525,8 +1583,8 @@ bool ShaderRecompiler::recompile(const RecompilerInput& in, std::string_view inc
     else
         for (uint32_t i = 0; i < tempRegisterCount; i++)
             println("\tfloat4 r{} = 0.0;", i);
-    out += "\tint a0 = 0;\n\tint aL = 0;\n\tbool p0 = false;\n\tfloat ps = 0.0;\n";
-    out += "\tuint vfIndex = 0;\n\tfloat kkTexLod = 0.0;\n\tfloat3 kkGradH = 0.0;\n\tfloat3 kkGradV = 0.0;\n";
+    out += "\tint a0 = 0;\n\tint aL = 0;\n\tint kkRawAL = 0;\n\tbool p0 = false;\n\tfloat ps = 0.0;\n";
+    out += "\tuint vfIndex = 0;\n\tuint vfBinding = 0;\n\tuint vfStride = 0;\n\tfloat kkTexLod = 0.0;\n\tfloat3 kkGradH = 0.0;\n\tfloat3 kkGradV = 0.0;\n";
     out += "\tfloat4 oMemExport = 0.0;\n";
 
     if (isPixelShader)
@@ -1647,16 +1705,27 @@ bool ShaderRecompiler::recompile(const RecompilerInput& in, std::string_view inc
                 out += "{\n";
                 ++indentation;
                 indent();
-                println("int kkSavedAL{} = aL;", t);
+                println("int kkSavedAL{0} = aL;", t);
+                indent();
+                println("int kkSavedRawAL{0} = kkRawAL;", t);
                 indent();
                 println("uint kkLoop{} = {};", t, loopConstant(c.loopStart.loopId));
+                // aL starts at the loop constant's start, or stays where it is with repeat
+                // (ucode.h); it is clamped to [-256, 256] when used.
+                indent();
+                if (c.loopStart.isRepeat)
+                    println("int kkBaseAL{0} = kkRawAL;", t);
+                else
+                    println("int kkBaseAL{0} = int((kkLoop{0} >> 8) & 0xFFu);", t);
                 indent();
                 println("[loop] for (uint kkIt{0} = 0; kkIt{0} < (kkLoop{0} & 0xFFu); kkIt{0}++)", t);
                 indent();
                 out += "{\n";
                 ++indentation;
                 indent();
-                println("aL = int((kkLoop{0} >> 8) & 0xFFu) + int(kkIt{0}) * (int(kkLoop{0} << 8) >> 24);", t);
+                println("kkRawAL = kkBaseAL{0} + int(kkIt{0}) * (int(kkLoop{0} << 8) >> 24);", t);
+                indent();
+                out += "aL = clamp(kkRawAL, -256, 256);\n";
                 stack.push_back({ true, uint32_t(c.loopStart.address - 1) });
                 break;
             }
@@ -1672,7 +1741,9 @@ bool ShaderRecompiler::recompile(const RecompilerInput& in, std::string_view inc
                 out += "}\n";
                 uint32_t t = --loopTemp;
                 indent();
-                println("aL = kkSavedAL{};", t);
+                println("aL = kkSavedAL{0};", t);
+                indent();
+                println("kkRawAL = kkSavedRawAL{0};", t);
                 --indentation;
                 indent();
                 out += "}\n";
@@ -1698,11 +1769,12 @@ bool ShaderRecompiler::recompile(const RecompilerInput& in, std::string_view inc
     {
         // General: a pc / switch state machine with loop and call stacks.
         out += "\tuint pc = 0;\n";
-        out += "\tuint kkLoopIt[4] = { 0, 0, 0, 0 };\n\tuint kkLoopConst[4] = { 0, 0, 0, 0 };\n\tuint kkLoopDepth = 0;\n";
+        out += "\tuint kkLoopIt[4] = { 0, 0, 0, 0 };\n\tuint kkLoopConst[4] = { 0, 0, 0, 0 };\n\tint kkLoopBase[4] = { 0, 0, 0, 0 };\n\tuint kkLoopDepth = 0;\n";
         out += "\tuint kkCallStack[4] = { 0, 0, 0, 0 };\n\tuint kkCallDepth = 0;\n";
         out += "\t[loop] while (pc != 0xFFFFFFFFu)\n\t{\n\t\tswitch (pc)\n\t\t{\n";
-        const char* setAL = "aL = select(kkLoopDepth == 0, 0, int((kkLoopConst[(kkLoopDepth - 1) & 3] >> 8) & 0xFFu) + "
-            "int(kkLoopIt[(kkLoopDepth - 1) & 3]) * (int(kkLoopConst[(kkLoopDepth - 1) & 3] << 8) >> 24));";
+        // aL is clamped to [-256, 256] (the SDK, after the IPR2015-00325 sequencer specification).
+        const char* setAL = "kkRawAL = select(kkLoopDepth == 0, 0, kkLoopBase[(kkLoopDepth - 1) & 3] + "
+            "int(kkLoopIt[(kkLoopDepth - 1) & 3]) * (int(kkLoopConst[(kkLoopDepth - 1) & 3] << 8) >> 24)); aL = clamp(kkRawAL, -256, 256);";
         for (uint32_t i = 0; i < n; i++)
         {
             const auto& c = cf[i];
@@ -1723,11 +1795,14 @@ bool ShaderRecompiler::recompile(const RecompilerInput& in, std::string_view inc
                 case ControlFlowOpcode::LoopStart:
                     indent();
                     println("kkLoopConst[kkLoopDepth & 3] = {};", loopConstant(c.loopStart.loopId));
-                    if (!c.loopStart.isRepeat)
-                    {
-                        indent();
-                        out += "kkLoopIt[kkLoopDepth & 3] = 0;\n";
-                    }
+                    // Repeat keeps the current aL as the base instead of the start (ucode.h).
+                    indent();
+                    if (c.loopStart.isRepeat)
+                        out += "kkLoopBase[kkLoopDepth & 3] = kkRawAL;\n";
+                    else
+                        out += "kkLoopBase[kkLoopDepth & 3] = int((kkLoopConst[kkLoopDepth & 3] >> 8) & 0xFFu);\n";
+                    indent();
+                    out += "kkLoopIt[kkLoopDepth & 3] = 0;\n";
                     indent();
                     out += "kkLoopDepth++;\n";
                     indent();

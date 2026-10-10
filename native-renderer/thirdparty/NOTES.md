@@ -39,3 +39,10 @@ Changes we make to vendored code are kept as small as possible and listed here:
   lets it through on Vulkan. It still refuses it on D3D12, where it is right to: that backend binds an immutable
   table from the CBV/SRV/UAV heap (`DescriptorTable::isSamplerTable()` is true only for `MutableSampler`
   layouts), which cannot hold samplers.
+- `XenosRecomp/XenosRecomp/shader_recompiler.cpp` (Phase 2, differential tests; translator version 4): cube
+  fetches apply the instruction's offsets and unnormalized coordinates; the vector half's a0 / p0 changes
+  take effect before the scalar half reads its operands and a scalar write replaces them; aL is clamped to
+  [-256, 256]; loop repeat keeps the current aL; not-equal goes through `kk_Ne` (unordered); in instruction
+  mode `vfetch_mini` uses the binding and stride of the `vfetch_full` that ran last; bool literals are
+  inlined (the prelude's multiply rule changed too, in `native-renderer/shaders`). Listed with the reasons in
+  `docs/shaders.md`.

@@ -93,6 +93,11 @@ uint64_t translationInputHash(const ShaderInfo& info) {
         w.u32(i);
         w.u32(v);
     }
+    w.u32(uint32_t(info.boolLiterals.size()));
+    for (const auto& [i, v] : info.boolLiterals) {
+        w.u32(i);
+        w.u32(v);
+    }
     w.u32(uint32_t(info.fetches.size()));
     for (const auto& f : info.fetches) {
         w.u32(f.address);
@@ -128,7 +133,27 @@ TranslateResult translate(const ShaderInfo& info) {
         in.floatLiterals[l.registerIndex] = v;
     }
     for (const auto& [index, value] : info.loopLiterals) in.loopLiterals[index] = value;
-    // Bool literals are left to the backend (they share dwords with constants the game sets).
+    // Bool literals: the register block writes whole dwords of 32 bools, and the game sets
+    // the bools its constant table names afterwards (SetVertexShaderConstantB and the pixel
+    // equivalent; vertex bools are 0-127, pixel ones 128-255). So the bits of a literal dword
+    // that the table does not name are the shader's own and are inlined; named ones are read
+    // from the draw constants.
+    {
+        uint32_t named[8] = {};
+        uint32_t base = info.kind == ShaderKind::Pixel ? 128 : 0;
+        for (const auto& c : info.constants) {
+            if (c.registerSet != RegisterSet::Bool) continue;
+            for (uint32_t k = 0; k < c.registerCount; k++) {
+                uint32_t index = base + c.registerIndex + k;
+                if (index < 256) named[index >> 5] |= 1u << (index & 31);
+            }
+        }
+        for (const auto& [dword, value] : info.boolLiterals) {
+            if (dword >= 8) continue;
+            for (uint32_t bit = 0; bit < 32; bit++)
+                if (!(named[dword] & (1u << bit))) in.boolLiterals[dword * 32 + bit] = ((value >> bit) & 1) != 0;
+        }
+    }
 
     if (info.rawMicrocode) {
         in.rawVertexFetch = true;

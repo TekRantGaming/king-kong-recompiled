@@ -38,6 +38,10 @@ public:
 
     bool ok() const;
     CompileOutput compile(const std::string& hlsl, ShaderKind kind, CompileTarget target);
+    // Any profile and entry point (tests: compute wrappers, harness shaders), with the same
+    // options as compile() otherwise; invertY applies -fvk-invert-y for SPIR-V.
+    CompileOutput compileEntry(const std::string& hlsl, const std::wstring& profile, const std::wstring& entry,
+                               CompileTarget target, bool invertY = false);
     // Runs DXC's DXIL validator on a compiled blob (it is already validated and signed by
     // compile(); this is a second, explicit check).
     bool validateDxil(const std::vector<uint8_t>& blob, std::string* messages);
