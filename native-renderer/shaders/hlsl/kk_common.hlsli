@@ -182,7 +182,8 @@ float3 kk_CubeDirection(float3 c)
 {
     float u = (c.x - 1.5) * 2.0;
     float v = (c.y - 1.5) * 2.0;
-    uint face = uint(clamp(floor(c.z + 0.5), 0.0, 5.0));
+    // The face index is truncated after clamping to 0-5 (NaN reads face 0), as the SDK does.
+    uint face = uint(min(select(c.z >= 0.0, c.z, 0.0), 5.0));
     switch (face)
     {
     case 0: return float3(1.0, -v, -u);

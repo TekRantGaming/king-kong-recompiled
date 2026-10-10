@@ -584,10 +584,35 @@ void ShaderRecompiler::recompile(const TextureFetchInstruction& instr, uint32_t 
         }
         case TextureDimension::TextureCube:
         {
+            // tfetchCube takes (S, T, face). The S and T offsets are in texels of a face (added
+            // before the division by the size with unnormalised coordinates), the face offset
+            // is added to the face index (as the SDK's translators do).
             indent();
-            println("float3 kc = kk_CubeDirection({});", srcComponents(3));
+            println("float3 kc = {};", srcComponents(3));
             indent();
             out += "TextureCube<float4> kto = kk_TexCube[kti];\n";
+            bool stOffset = instr.opcode == FetchOpcode::TextureFetch && (offset[0] != 0.0f || offset[1] != 0.0f);
+            if (instr.texCoordDenorm || stOffset)
+            {
+                indent();
+                out += "uint2 ktd;\n";
+                indent();
+                out += "kto.GetDimensions(ktd.x, ktd.y);\n";
+                indent();
+                if (instr.texCoordDenorm && stOffset)
+                    println("kc.xy = (kc.xy + float2({}, {})) / float2(ktd);", offset[0], offset[1]);
+                else if (instr.texCoordDenorm)
+                    out += "kc.xy /= float2(ktd);\n";
+                else
+                    println("kc.xy += float2({}, {}) / float2(ktd);", offset[0], offset[1]);
+            }
+            if (instr.opcode == FetchOpcode::TextureFetch && offset[2] != 0.0f)
+            {
+                indent();
+                println("kc.z += {};", offset[2]);
+            }
+            indent();
+            out += "kc = kk_CubeDirection(kc);\n";
             body("kto", "kc", 3, "");
             break;
         }
@@ -628,7 +653,7 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
         constant0Mask = instr.scalarDestRelative ? (0xF & ~(instr.vectorWriteMask | instr.scalarWriteMask)) : 0;
     }
 
-    bool newP0 = false, newA0 = false;
+    bool newP0 = false, newA0 = false, vectorP0 = false, vectorA0 = false;
 
     // Vector operation (sources are read before anything this instruction writes).
     bool doVector = vectorMask != 0 || vectorChangesState(vop);
@@ -673,7 +698,7 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
                 (vop == AluVectorOpcode::SetpNePush ? "!=" : (vop == AluVectorOpcode::SetpGtPush ? ">" : ">="));
             indent();
             println("bool kp = and(kv1.w == 0.0, kv2.w {} 0.0);", cmp);
-            newP0 = true;
+            vectorP0 = true;
             value = fmt::format("select(and(kv1.x == 0.0, kv2.x {} 0.0), 0.0, kv1.x + 1.0).xxxx", cmp);
             break;
         }
@@ -698,7 +723,7 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
         case AluVectorOpcode::MaxA:
             indent();
             out += "int ka = int(floor(clamp(kv1.w, -256.0, 255.0) + 0.5));\n";
-            newA0 = true;
+            vectorA0 = true;
             value = "kk_Max(kv1, kv2)";
             break;
         default:
@@ -712,6 +737,21 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
             println("float4 kvr = saturate({});", value);
         else
             println("float4 kvr = {};", value);
+
+        // The vector operation's state changes take effect before the scalar operation reads
+        // its sources, and a scalar predicate or a0 write replaces them (the SDK's interpreter
+        // runs the two halves in that order).
+        if (vectorP0)
+        {
+            predicateChanged = true;
+            indent();
+            out += "p0 = kp;\n";
+        }
+        if (vectorA0)
+        {
+            indent();
+            out += "a0 = ka;\n";
+        }
     }
 
     // Scalar operation: always runs (it updates the previous scalar result ps).
@@ -869,17 +909,17 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
         println("ps = {};", value);
     }
 
-    // State changes take effect after both operations have read their sources.
+    // The scalar operation's state changes.
     if (newP0)
     {
         predicateChanged = true;
         indent();
-        out += (vop >= AluVectorOpcode::SetpEqPush && vop <= AluVectorOpcode::SetpGePush && doVector) ? "p0 = kp;\n" : "p0 = ksp;\n";
+        out += "p0 = ksp;\n";
     }
     if (newA0)
     {
         indent();
-        out += (vop == AluVectorOpcode::MaxA && doVector) ? "a0 = ka;\n" : "a0 = ksa;\n";
+        out += "a0 = ksa;\n";
     }
     if (scalarKill && isPixelShader)
     {
