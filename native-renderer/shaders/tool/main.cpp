@@ -15,6 +15,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cctype>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -397,8 +398,8 @@ int cmdDbBuild(const Args& a) {
         std::string label = db.familyName(kind, family) + " entry " + std::to_string(i);
         std::vector<std::span<const uint8_t>> containers = {db.container(e)};
         if (a.has("--both") && e.kind == 1) containers.push_back(db.secondContainer(e));
-        for (auto c : containers) {
-            ParseResult p = parseContainer(c);
+        for (size_t k = 0; k < containers.size(); k++) {
+            ParseResult p = k == 0 ? db.parse(e) : parseContainer(containers[k]);
             if (!p.ok) {
                 std::printf("entry %zu: parse error: %s\n", i, p.error.c_str());
                 parseFailures++;
@@ -413,8 +414,50 @@ int cmdDbBuild(const Args& a) {
     return parseFailures ? 1 : rc;
 }
 
-// Rough structural check against the shipped HLSL sources: every constant and sampler a
-// family's shaders declare must be named in the family's source, and the pixel outputs used.
+// Structural diff of the translated HLSL against the HLSL sources shipped in the database.
+// Per family (the source file and everything it includes) and per shader:
+//  - constants: every name of the shader's constant table is declared in the source; every
+//    float, bool and loop constant the translated code reads lies in a range of the constant
+//    table (or is one of the shader's literal constants, which must not overlap the table);
+//  - textures: every texture fetch constant the translated code samples is a sampler register
+//    of the constant table, with the dimension of its declared sampler type;
+//  - outputs: the pixel outputs written are declared by the source (COLORn, arrays, DEPTH);
+//  - interpolators: the vertex outputs and pixel inputs (semantics from the container) are
+//    semantics the source declares.
+std::string lowerName(std::string s) {
+    for (auto& c : s) c = char(std::tolower(uint8_t(c)));
+    size_t slash = s.find_last_of("\\/");
+    return slash == std::string::npos ? s : s.substr(slash + 1);
+}
+
+std::string expandSource(const Database& db, const DatabaseSource& source, std::set<std::string>& visited) {
+    if (!visited.insert(lowerName(source.name)).second) return "";
+    std::string text = source.text;
+    static const std::regex include("^[ \\t]*#include[ \\t]*\"([^\"]+)\"");
+    std::string extra;
+    std::istringstream lines(source.text);
+    for (std::string line; std::getline(lines, line);) {
+        std::smatch m;
+        if (!std::regex_search(line, m, include)) continue;  // commented-out includes do not match
+        std::string want = lowerName(m[1].str());
+        for (const auto& s : db.sources())
+            if (lowerName(s.name) == want) extra += "\n" + expandSource(db, s, visited);
+    }
+    return text + extra;
+}
+
+// Semantics declared in a text: name -> number of registers (arrays count).
+std::set<std::string> declaredSemantics(const std::string& text, const char* base) {
+    std::set<std::string> out;
+    std::regex decl(std::string("(\\[\\s*(\\d+)\\s*\\])?\\s*:\\s*") + base + "(\\d*)(_centroid)?\\b", std::regex::icase);
+    for (std::sregex_iterator it(text.begin(), text.end(), decl), end; it != end; ++it) {
+        uint32_t count = (*it)[2].matched ? uint32_t(std::stoul((*it)[2].str())) : 1;
+        uint32_t first = (*it)[3].str().empty() ? 0 : uint32_t(std::stoul((*it)[3].str()));
+        for (uint32_t k = 0; k < count; k++) out.insert(std::string(base) + std::to_string(first + k));
+    }
+    return out;
+}
+
 int cmdDbStructure(const Args& a) {
     if (a.positional.empty()) return 2;
     Database db;
@@ -424,48 +467,215 @@ int cmdDbStructure(const Args& a) {
         return 1;
     }
     struct Family {
-        std::set<std::string> names;
-        std::set<std::string> samplers;
-        uint32_t outputs = 0;
-        int shaders = 0;
+        const DatabaseSource* source = nullptr;
+        std::string text;
+        std::string variantText;          // sources that include this one
+        std::set<std::string> semantics;  // TEXCOORDn / COLORn declared anywhere
+        std::set<uint32_t> outputs;       // pixel: colour targets declared as outputs; 4 = depth
+        int shaders = 0, translated = 0, clean = 0;
+        uint32_t outputsUsed = 0;
+        std::map<std::string, int> problems;
+        std::set<std::string> names, samplers;
     };
     std::map<std::string, Family> families;
-    for (const auto& e : db.entries()) {
+    std::map<std::string, int> features;  // how many shaders use each feature
+    std::ostringstream detail;
+    for (size_t index = 0; index < db.entries().size(); index++) {
+        const auto& e = db.entries()[index];
         if (e.kind != 1 && e.kind != 2) continue;
         ShaderKind kind = e.kind == 1 ? ShaderKind::Vertex : ShaderKind::Pixel;
-        std::string name = db.familyName(kind, Database::familyIndex(e.kind == 1 ? e.vertexKey : e.pixelKey));
-        ParseResult p = parseContainer(db.container(e));
-        if (!p.ok) continue;
+        bool pixel = kind == ShaderKind::Pixel;
+        std::string name = db.familyName(kind, Database::familyIndex(pixel ? e.pixelKey : e.vertexKey));
         Family& f = families[name];
-        f.shaders++;
-        for (const auto& c : p.info.constants) (c.registerSet == RegisterSet::Sampler ? f.samplers : f.names).insert(c.name);
-        if (kind == ShaderKind::Pixel) {
-            TranslateResult t = translate(p.info);
-            if (t.ok) f.outputs |= t.bindings.pixelOutputs;
-        }
-    }
-    int missing = 0;
-    for (const auto& [name, f] : families) {
-        const DatabaseSource* source = nullptr;
-        for (const auto& s : db.sources()) {
-            std::string n = s.name.substr(0, s.name.rfind('.'));
-            if (n == name) source = &s;
-        }
-        std::printf("%s: %d shaders, %zu constants, %zu samplers, pixel outputs %X%s\n", name.c_str(), f.shaders, f.names.size(),
-                    f.samplers.size(), f.outputs, source ? "" : " (no source of that name)");
-        if (!source) continue;
-        auto check = [&](const std::string& n) {
-            std::regex word("\\b" + std::regex_replace(n, std::regex("[\\[\\]\\.$]"), "\\$&") + "\\b");
-            if (!std::regex_search(source->text, word)) {
-                std::printf("  not in %s: %s\n", source->name.c_str(), n.c_str());
-                missing++;
+        if (!f.source) {
+            for (const auto& s : db.sources())
+                if (lowerName(s.name) == name + ".hlsl") f.source = &s;
+            if (f.source) {
+                std::set<std::string> visited;
+                f.text = expandSource(db, *f.source, visited);
+                for (const char* b : {"TEXCOORD", "COLOR"})
+                    for (const auto& s : declaredSemantics(f.text, b)) f.semantics.insert(s);
+                if (pixel) {
+                    // Return semantics of functions, and members of output structs.
+                    static const std::regex ret("\\)\\s*:\\s*COLOR(\\d*)\\b", std::regex::icase);
+                    for (std::sregex_iterator it(f.text.begin(), f.text.end(), ret), end; it != end; ++it)
+                        f.outputs.insert((*it)[1].str().empty() ? 0u : uint32_t(std::stoul((*it)[1].str())));
+                    static const std::regex outStruct("struct\\s+PS_?OUT\\w*\\s*\\{([^}]*)\\}", std::regex::icase);
+                    for (std::sregex_iterator it(f.text.begin(), f.text.end(), outStruct), end; it != end; ++it) {
+                        std::string body = (*it)[1].str();
+                        for (const auto& s : declaredSemantics(body, "COLOR")) f.outputs.insert(uint32_t(std::stoul(s.substr(5))));
+                        if (std::regex_search(body, std::regex(":\\s*DEPTH", std::regex::icase))) f.outputs.insert(4);
+                    }
+                    // Entry points that return a float4 without a semantic (psocean, pssprite,
+                    // the shadow blur and composite passes) get COLOR0 from the compiler.
+                    if (f.outputs.empty()) f.outputs.insert(0);
+                }
+                // Variants: sources that include this one (vsspg22 and vssymmetry include
+                // vsgeneric, psspg2 includes psgeneric) are compiled under its family keys too.
+                for (const auto& s : db.sources()) {
+                    if (&s == f.source) continue;
+                    std::set<std::string> v2;
+                    std::string other = expandSource(db, s, v2);
+                    if (v2.count(lowerName(f.source->name))) f.variantText += "\n" + other;
+                }
             }
+        }
+        f.shaders++;
+        ParseResult p = db.parse(e);
+        if (!p.ok) {
+            f.problems["parse error"]++;
+            continue;
+        }
+        const ShaderInfo& info = p.info;
+        TranslateResult t = translate(info);
+        if (!t.ok) {
+            f.problems["translation failed"]++;
+            continue;
+        }
+        f.translated++;
+        std::vector<std::string> found;
+        auto problem = [&](const std::string& kindOfProblem, const std::string& what) {
+            f.problems[kindOfProblem]++;
+            found.push_back(kindOfProblem + ": " + what);
         };
-        for (const auto& n : f.names) check(n);
-        for (const auto& n : f.samplers) check(n);
+
+        // Names.
+        for (const auto& c : info.constants) {
+            (c.registerSet == RegisterSet::Sampler ? f.samplers : f.names).insert(c.name);
+            if (f.source) {
+                std::regex word("\\b" + std::regex_replace(c.name, std::regex("[\\[\\]\\.$]"), "\\$&") + "\\b");
+                if (!std::regex_search(f.text, word)) {
+                    if (std::regex_search(f.variantText, word)) f.problems["(names found only in a source that includes this one)"]++;
+                    else problem("constant name not in the source", c.name);
+                }
+            }
+        }
+        // Register ranges of the constant table.
+        auto inTable = [&](RegisterSet set, uint32_t reg) {
+            for (const auto& c : info.constants)
+                if (c.registerSet == set && reg >= c.registerIndex && reg < uint32_t(c.registerIndex) + c.registerCount) return &c;
+            return static_cast<const ConstantInfo*>(nullptr);
+        };
+        std::set<uint32_t> literalRegs;
+        for (const auto& l : info.literals) {
+            literalRegs.insert(l.registerIndex);
+            if (const ConstantInfo* c = inTable(RegisterSet::Float4, l.registerIndex))
+                problem("literal constant overlaps the constant table", "c" + std::to_string(l.registerIndex) + " " + c->name);
+        }
+        // The translated code only (the prelude declares the buffers).
+        const std::string h = t.hlsl.substr(std::min(t.hlsl.size(), t.hlsl.find("void main(")));
+        auto each = [&](const char* pattern, auto fn) {
+            std::regex re(pattern);
+            for (std::sregex_iterator it(h.begin(), h.end(), re), end; it != end; ++it) fn(*it);
+        };
+        std::set<std::string> seen;
+        each(pixel ? "kk_PC\\[(\\d+)\\]" : "kk_VC\\[(\\d+)\\]", [&](const std::smatch& m) {
+            uint32_t r = uint32_t(std::stoul(m[1].str()));
+            if (!inTable(RegisterSet::Float4, r) && seen.insert("c" + m[1].str()).second)
+                problem("float constant read outside the constant table", "c" + m[1].str());
+        });
+        each(pixel ? "(?:kk_PSConst|kkConstRel)\\((\\d+) \\+" : "(?:kk_VSConst|kkConstRel)\\((\\d+) \\+", [&](const std::smatch& m) {
+            uint32_t r = uint32_t(std::stoul(m[1].str()));
+            if (!inTable(RegisterSet::Float4, r) && !literalRegs.count(r) && seen.insert("rel c" + m[1].str()).second)
+                problem("relative float constant base outside the constant table", "c" + m[1].str());
+        });
+        each("kk_BoolConst\\((\\d+)\\)", [&](const std::smatch& m) {
+            uint32_t r = uint32_t(std::stoul(m[1].str()));
+            uint32_t rel = pixel ? r - 128 : r;
+            if ((pixel && r < 128) || (!pixel && r >= 128) || !inTable(RegisterSet::Bool, rel)) {
+                if (seen.insert("b" + m[1].str()).second) problem("bool constant outside the constant table", "b" + m[1].str());
+            }
+        });
+        each("kk_LoopConst\\((\\d+)\\)", [&](const std::smatch& m) {
+            uint32_t r = uint32_t(std::stoul(m[1].str()));
+            uint32_t rel = pixel ? r - 16 : r;
+            if ((pixel && r < 16) || (!pixel && r >= 16) || !inTable(RegisterSet::Int4, rel)) {
+                if (seen.insert("i" + m[1].str()).second) problem("loop constant outside the constant table", "i" + m[1].str());
+            }
+        });
+        for (const auto& tex : t.bindings.textures) {
+            const ConstantInfo* c = inTable(RegisterSet::Sampler, tex.slot);
+            if (!c) {
+                problem("texture slot without a sampler in the constant table", "s" + std::to_string(tex.slot));
+                continue;
+            }
+            // D3DXPT_SAMPLER 10 (any), 1D 11, 2D 12, 3D 13, CUBE 14.
+            static const int want[] = {11, 12, 13, 14};
+            // An array's table entry has one type for all its samplers: check single ones only.
+            if (c->registerCount == 1 && c->type >= 11 && c->type <= 14 && c->type != want[uint32_t(tex.dimension) & 3] &&
+                !(c->type == 12 && tex.dimension == TextureDimension::Tex1D))
+                problem("texture dimension differs from the sampler type", c->name + " s" + std::to_string(tex.slot));
+        }
+        // Outputs and interpolators.
+        if (pixel) {
+            f.outputsUsed |= t.bindings.pixelOutputs;
+            if (f.source) {
+                for (uint32_t k = 0; k < 5; k++)
+                    if ((t.bindings.pixelOutputs >> k) & 1 && !f.outputs.count(k))
+                        problem("pixel output not declared by the source", k == 4 ? "DEPTH" : "COLOR" + std::to_string(k));
+            }
+        }
+        if (f.source) {
+            for (const auto& i : info.interpolators) {
+                std::string sem = std::string(declUsageName(i.usage)) + std::to_string(i.usageIndex);
+                if (!f.semantics.count(sem)) problem(pixel ? "pixel input semantic not in the source" : "vertex output semantic not in the source", sem);
+            }
+        }
+        {
+            auto uses = [&](const char* what, bool yes) { features[what] += yes ? 1 : 0; };
+            uses("bool constants", h.find("kk_BoolConst(") != std::string::npos);
+            uses("loop constants (or loop literals)", h.find("[loop] for (uint kkIt") != std::string::npos);
+            uses("relative constant addressing", h.find("Const(") != std::string::npos);
+            uses("predicated instructions", h.find("p0)") != std::string::npos);
+            uses("kill / discard", h.find("discard") != std::string::npos);
+            uses("cube textures", h.find("kk_TexCube[") != std::string::npos);
+            uses("3D textures", h.find("kk_Tex3D[") != std::string::npos);
+            uses("texture LOD / gradients", h.find("SampleLevel(") != std::string::npos || h.find("SampleGrad(") != std::string::npos);
+            uses("pixel position (VPOS)", pixel && info.readsPixelPosition);
+            uses("depth output", (t.bindings.pixelOutputs & 16) != 0);
+            uses("general control flow", t.bindings.generalControlFlow);
+            uses("literal float constants", !info.literals.empty());
+        }
+        if (found.empty()) f.clean++;
+        else {
+            detail << name << " entry " << index << " (" << hex16(info.ucodeHash) << "):\n";
+            for (const auto& s : found) detail << "  " << s << "\n";
+        }
     }
-    std::printf("%d names not found in the sources\n", missing);
-    return missing ? 1 : 0;
+
+    std::ostringstream report;
+    int totalShaders = 0, totalClean = 0;
+    report << "Structural diff against the HLSL sources of " << a.positional[0] << "\n\n";
+    for (const auto& [name, f] : families) {
+        totalShaders += f.shaders;
+        totalClean += f.clean;
+        report << name << ": " << f.shaders << " shaders, " << f.translated << " translated, " << f.clean << " clean; "
+               << f.names.size() << " constant names, " << f.samplers.size() << " sampler names";
+        if (!f.source) report << " (no source of that name)";
+        if (name.rfind("ps", 0) == 0) {
+            report << "; outputs written";
+            for (uint32_t k = 0; k < 5; k++)
+                if ((f.outputsUsed >> k) & 1) report << (k == 4 ? " DEPTH" : " COLOR" + std::to_string(k));
+            report << ", declared";
+            for (uint32_t k : f.outputs) report << (k == 4 ? " DEPTH" : " COLOR" + std::to_string(k));
+        }
+        report << "\n";
+        for (const auto& [p, n] : f.problems) report << "    " << n << "  " << p << "\n";
+    }
+    report << "\nfeatures (number of shaders):\n";
+    for (const auto& [what, n] : features) report << "  " << n << "  " << what << "\n";
+    report << "\n" << totalClean << " of " << totalShaders << " shaders match their source structurally\n";
+    std::string text = report.str();
+    std::fwrite(text.data(), 1, text.size(), stdout);
+    if (!a.get("--out").empty()) {
+        fs::path out = a.get("--out");
+        writeFile(out / "structure.txt", text.data(), text.size());
+        std::string d = detail.str();
+        writeFile(out / "structure-detail.txt", d.data(), d.size());
+    }
+    // The differences are a report, not an error (the synthetic test database cannot match);
+    // --strict makes them one.
+    return a.has("--strict") && totalClean != totalShaders ? 1 : 0;
 }
 
 int cmdXsh(const Args& a) {
@@ -480,7 +690,7 @@ int cmdXsh(const Args& a) {
         }
         for (const auto& e : db.entries()) {
             if (e.kind != 1 && e.kind != 2) continue;
-            ParseResult p = parseContainer(db.container(e));
+            ParseResult p = db.parse(e);
             if (p.ok) databaseHashes.insert(p.info.ucodeHash);
         }
     }
@@ -576,3 +786,4 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "unknown command %s\n", command.c_str());
     return 2;
 }
+
