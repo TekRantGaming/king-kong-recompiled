@@ -60,6 +60,12 @@ class Renderer final : public DrawSink {
     bool only_main_surface = true;
     // Use c0..c3 as columns instead of rows.
     bool transpose_wvp = false;
+    // Draw only opaque depth-writing draws (depth test and write on, compare
+    // function other than always): the main pass and its depth pre-pass.
+    // Full-screen post effects, fog, the HUD and particles (sprites the
+    // vertex shader expands, which the placeholder cannot) would otherwise
+    // cover the frame with flat colour.
+    bool only_depth_tested = true;
   };
 
   struct Stats {
@@ -67,6 +73,9 @@ class Renderer final : public DrawSink {
     uint64_t draws_skipped_target = 0;     // other render target than the main surface
     uint64_t draws_skipped_primitive = 0;  // points, lines, rectangles
     uint64_t draws_skipped_range = 0;      // indices outside the vertex buffer
+    uint64_t draws_skipped_overlay = 0;    // not depth-tested and -written (only_depth_tested)
+    uint64_t draws_skipped_no_wvp = 0;     // no perspective matrix in the vertex constants
+    uint64_t draws_skipped_format = 0;     // position not 32-bit float x, y, z
     uint64_t clears_recorded = 0;
     uint64_t frames_submitted = 0;
   };

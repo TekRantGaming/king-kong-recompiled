@@ -192,6 +192,12 @@ nvrhi::ICommandList* Renderer::FrameCommandList() {
   if (!frame_open_) {
     frame_command_list_->open();
     frame_open_ = true;
+    // A defined depth at the start of every frame (the game's own depth clear
+    // comes later, if at all).
+    if (nvrhi::ITexture* depth = DepthFor(frames_[recording_])) {
+      frame_command_list_->clearDepthStencilTexture(depth, nvrhi::AllSubresources, true, 1.0f,
+                                                    false, 0);
+    }
   }
   return frame_command_list_;
 }
@@ -259,6 +265,20 @@ void Renderer::OnDraw(const DrawCall& call) {
     ++stats_.draws_skipped_target;
     return;
   }
+  if (options_.only_depth_tested && (!call.states.z_enable || !call.states.z_write_enable ||
+                                     (call.states.z_func & 7) == 7)) {
+    ++stats_.draws_skipped_overlay;
+    return;
+  }
+  if (call.position_from_declaration && DeclTypeFormat(call.position_type) != 57 &&
+      DeclTypeFormat(call.position_type) != 38) {
+    ++stats_.draws_skipped_format;
+    return;
+  }
+  if (call.wvp_register < 0 && !options_.transpose_wvp) {
+    ++stats_.draws_skipped_no_wvp;
+    return;
+  }
   PrimitiveInput in;
   in.primitive = call.primitive;
   in.index_data = call.indexed ? call.index_data : nullptr;
@@ -302,7 +322,7 @@ void Renderer::OnDraw(const DrawCall& call) {
   for (int r = 0; r < 4; ++r) {
     for (int c = 0; c < 4; ++c) {
       constants.wvp[r * 4 + c] =
-          options_.transpose_wvp ? call.vs_c0_c3[c * 4 + r] : call.vs_c0_c3[r * 4 + c];
+          options_.transpose_wvp ? call.vs_c0_c3[c * 4 + r] : call.wvp[r * 4 + c];
     }
   }
   nvrhi::Color color = DrawColor(call.vertex_shader, call.pixel_shader);

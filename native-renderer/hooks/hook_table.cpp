@@ -112,8 +112,13 @@ constexpr HookEntry kEntries[] = {
     {0x82110300, "SetVertexShaderConstantF", Kind::kState, SetVsConstantsF},
     {0x82110448, "SetPixelShaderConstantF", Kind::kState, SetPsConstantsF},
     {0x82110640, "SetVertexShaderConstantI", Kind::kState, SetVsConstantsI},
-    {0x821108B8, "SetVertexShader", Kind::kState, SetVertexShader},
-    {0x82110C28, "SetPixelShader", Kind::kState, SetPixelShader},
+    // These two are the other way round in d3d-api-map.md: in a frame dump the
+    // object passed to 821108B8 has the 52-byte header and a pixel shader
+    // container, and is null for the depth-only passes; the one passed to
+    // 82110C28 has the 592-byte header and a vertex shader container, and is
+    // never null (the shader stream found the create functions swapped too).
+    {0x821108B8, "SetPixelShader", Kind::kState, SetPixelShader},
+    {0x82110C28, "SetVertexShader", Kind::kState, SetVertexShader},
     {0x82111E68, "SetVertexDeclaration", Kind::kState, SetVertexDeclaration},
     {0x821147B8, "Present", Kind::kFrame, Present},
     {0x82115418, "Clear", Kind::kDraw, Clear},

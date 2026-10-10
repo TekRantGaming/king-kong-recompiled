@@ -41,8 +41,8 @@ inline bool DecodeIndexBuffer(const uint8_t* object, IndexBufferInfo& out) {
 }
 
 // Vertex buffer object: Common, RefCount, Fence, then the 2-word vertex fetch
-// constant at +12: dword 0 = type (bits 0-1, 3 = vertex) | address (bytes,
-// bits 2-31), dword 1 = endian (bits 0-1) | size in dwords (bits 2-25).
+// constant at +12: dword 0 = type (bits 0-1, 3 = vertex) | CPU physical-view
+// address (bytes, bits 2-31), dword 1 = endian (bits 0-1) | size in dwords (bits 2-25).
 struct VertexBufferInfo {
   uint32_t physical = 0;
   uint32_t size_bytes = 0;
@@ -53,7 +53,11 @@ inline bool DecodeVertexBuffer(const uint8_t* object, VertexBufferInfo& out) {
   const uint32_t w0 = LoadBE32(object + 12);
   const uint32_t w1 = LoadBE32(object + 16);
   if ((w0 & 3) != 3) return false;
-  out.physical = (w0 & ~3u) & 0x1FFFFFFFu;
+  // A CPU address in one of the physical views (the census example
+  // 0xFC665003): 0xE0000000 is 4 KB ahead of physical memory, as for index
+  // buffers (d3d-structs.md). Masking alone read every vertex 4 KB too early
+  // there, which turned the first in-game frames into large random triangles.
+  out.physical = CpuToPhysical(w0 & ~3u);
   out.size_bytes = ((w1 >> 2) & 0xFFFFFF) * 4;
   out.endian = w1 & 3;
   return true;

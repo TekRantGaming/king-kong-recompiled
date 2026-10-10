@@ -72,10 +72,13 @@ struct TriangleScene {
     decl = m.NewDeclaration({{0, 0, kDeclColor, kUsageColor, 0},
                              {0, 4, kDeclFloat3, kUsagePosition, 0},
                              {0, 16, kDeclFloat2, kUsageTexcoord, 0}});
+    // A perspective-shaped matrix (z row parallel to the w row, which the
+    // renderer looks for): w = 2z = 1 for these positions, so x and y come out
+    // as above, at depth 0.5.
     wvp = m.NewFloats({1.6f, 0, 0, 0.1f,  //
                        0, 1.6f, 0, 0,     //
-                       0, 0, 1, 0,        //
-                       0, 0, 0, 1});
+                       0, 0, 2, -0.5f,    //
+                       0, 0, 2, 0});
     viewport = m.NewViewport(0, 0, w, h, 0.0f, 1.0f);
   }
 
@@ -93,8 +96,8 @@ struct TriangleScene {
     s += TraceLine(0x8210BD38, {0, vb, 0, kStride});     // SetStreamSource(0, vb, 0, stride)
     s += TraceLine(0x82111E68, {decl});                  // SetVertexDeclaration
     s += TraceLine(0x82118F78, {0, texture});            // SetTexture(0, texture)
-    s += TraceLine(0x82110C28, {pixel_shader});          // SetPixelShader
-    s += TraceLine(0x821108B8, {vertex_shader});         // SetVertexShader
+    s += TraceLine(0x821108B8, {pixel_shader});          // SetPixelShader (see hook_table.cpp)
+    s += TraceLine(0x82110C28, {vertex_shader});         // SetVertexShader
     s += TraceLine(0x8210C130, {0, kBlend});             // blend control RT0
     s += TraceLine(0x82109788, {6});                     // CULLMODE = CCW
     s += TraceLine(0x82109E78, {1});                     // ZENABLE

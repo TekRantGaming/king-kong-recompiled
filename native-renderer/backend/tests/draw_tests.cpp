@@ -189,7 +189,9 @@ TEST(PerDrawSequenceReachesTheSink) {
     CHECK_NEAR(d.vs_c0_c3[0], 1.6, 1e-6);
     CHECK_NEAR(d.vs_c0_c3[3], 0.1, 1e-6);
     CHECK_NEAR(d.vs_c0_c3[5], 1.6, 1e-6);
-    CHECK_NEAR(d.vs_c0_c3[15], 1.0, 1e-6);
+    CHECK_NEAR(d.vs_c0_c3[15], 0.0, 1e-6);
+    CHECK_EQ(d.wvp_register, 0);
+    CHECK_NEAR(d.wvp[14], 2.0, 1e-6);
     CHECK_EQ(d.vertex_shader, scene.vertex_shader);
     CHECK_EQ(d.pixel_shader, scene.pixel_shader);
     CHECK_EQ(d.vertex_declaration, scene.decl);

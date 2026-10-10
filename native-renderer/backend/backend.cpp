@@ -22,7 +22,8 @@ namespace {
 // Records every renderer call under the backend's lock.
 class LockedSink final : public DrawSink {
  public:
-  LockedSink(DrawSink& inner, std::mutex& mutex) : inner_(inner), mutex_(mutex) {}
+  LockedSink(DrawSink& inner, std::mutex& mutex, const GuestMemory& memory)
+      : inner_(inner), mutex_(mutex), memory_(memory) {}
   void OnClear(const ClearCall& c) override {
     if (Dump(c.frame)) {
       REXLOG_INFO("rexgpu-native: frame {} clear flags {:X} rgba {} {} {} {} z {} rt0 {:08X} ds {:08X}",
@@ -38,13 +39,14 @@ class LockedSink final : public DrawSink {
       REXLOG_INFO(
           "rexgpu-native: frame {} draw {} {} prim {} start {} count {} base {} stride {} pos {}{} "
           "vbytes {} vs {:08X} ps {:08X} rt0 {:08X} ds {:08X} vp {},{} {}x{} z {}..{} "
-          "zstate {}/{}/{} cull {} c0 {} {} {} {} c1 {} {} {} {} c2 {} {} {} {} c3 {} {} {} {}",
+          "postype {:X} wvp c{} vsobj {} psobj {} zstate {}/{}/{} cull {} c0 {} {} {} {} c1 {} {} {} {} c2 {} {} {} {} c3 {} {} {} {}",
           d.frame, d.index_in_frame, d.indexed ? "indexed" : "plain", int(d.primitive), d.start,
           d.count, d.base_vertex, d.stride, d.position_offset,
           d.position_from_declaration ? "" : " (no decl)", d.vertex_data_size, d.vertex_shader,
           d.pixel_shader, d.render_targets[0], d.depth_stencil, d.viewport.x, d.viewport.y,
           d.viewport.width, d.viewport.height, d.viewport.min_z, d.viewport.max_z,
-          d.states.z_enable, d.states.z_write_enable, d.states.z_func, d.states.cull_mode, m[0], m[1],
+          d.position_type, d.wvp_register, ShaderKind(d.vertex_shader), ShaderKind(d.pixel_shader), d.states.z_enable,
+          d.states.z_write_enable, d.states.z_func, d.states.cull_mode, m[0], m[1],
           m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], m[12], m[13], m[14],
           m[15]);
     }
@@ -68,6 +70,17 @@ class LockedSink final : public DrawSink {
   }
 
  private:
+  // Which kind of shader object `object` is, from the container copy that
+  // follows its header: a 52-byte header puts the container's flags word at
+  // +52, a 592-byte one at +592 (d3d-structs.md). Settles which setter is
+  // which (the shader stream found the create functions swapped).
+  std::string ShaderKind(uint32_t object) const {
+    if (!object) return "none";
+    const uint8_t* p = memory_.Virtual(object);
+    if (!p) return "unmapped";
+    return fmt::format("[+52 {:08X} +592 {:08X}]", LoadBE32(p + 52), LoadBE32(p + 592));
+  }
+
   // --native_dump_frame=N logs every call of the game's frame N.
   static bool Dump(uint32_t frame) {
     const int32_t wanted = REXCVAR_GET(native_dump_frame);
@@ -76,6 +89,7 @@ class LockedSink final : public DrawSink {
 
   DrawSink& inner_;
   std::mutex& mutex_;
+  const GuestMemory& memory_;
 };
 
 class LogCallback final : public nvrhi::IMessageCallback {
@@ -117,7 +131,7 @@ bool Backend::Initialize(uint32_t width, uint32_t height) {
     host_->ExecuteCommandList(cl);
     ++submitted_frames_;
   });
-  sink_ = std::make_unique<LockedSink>(*renderer_, mutex_);
+  sink_ = std::make_unique<LockedSink>(*renderer_, mutex_, guest_memory_);
   draws_ = std::make_unique<DrawTracker>(guest_memory_, sink_.get());
   REXGPU_INFO("rexgpu-native: NVRHI renderer ready ({}x{})", width, height);
   return true;
@@ -148,10 +162,11 @@ void Backend::Present(rex::ui::Presenter* presenter, uint32_t frontbuffer_width,
     REXLOG_INFO(
         "rexgpu-native: swap {}: hooks saw {} draws ({} indexed, {} dropped), {} clears, {} "
         "resolves, {} presents; renderer drew {}, skipped {} (other target) {} (primitive) {} "
-        "(range), {} clears, {} frames",
+        "(range) {} (not depth-written) {} (no projection matrix) {} (position format), {} clears, "
+        "{} frames",
         swap, d.draws, d.indexed_draws, d.dropped_draws, d.clears, d.resolves, d.presents,
         r.draws_recorded, r.draws_skipped_target, r.draws_skipped_primitive, r.draws_skipped_range,
-        r.clears_recorded, r.frames_submitted);
+        r.draws_skipped_overlay, r.draws_skipped_no_wvp, r.draws_skipped_format, r.clears_recorded, r.frames_submitted);
   }
   (void)frontbuffer_width;
   (void)frontbuffer_height;

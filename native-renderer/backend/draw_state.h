@@ -20,6 +20,12 @@
 
 namespace nr {
 
+// True when rows[0..3] (4 floats each) look like a perspective projection
+// times a view and world transform: the z row is a multiple (0.8 to 1.25) of
+// the w row in x, y, z, the w row is not (0, 0, 0, *) as in an affine matrix,
+// and the x and y rows are not zero.
+bool LooksLikePerspectiveRows(const float* rows);
+
 class DrawTracker {
  public:
   static constexpr uint32_t kMaxStreams = 16;

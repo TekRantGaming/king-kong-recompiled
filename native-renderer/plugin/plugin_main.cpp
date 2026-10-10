@@ -43,6 +43,12 @@ REXCVAR_DEFINE_BOOL(native_all_targets, false, "Native renderer",
                     "Placeholder draws: also draw render-to-texture passes into the frame")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_BOOL(native_main_pass_only, true, "Native renderer",
+                    "Placeholder draws: draw only opaque depth-tested and depth-writing draws (the "
+                    "main pass); off also draws full-screen passes, particles and the HUD, which "
+                    "cover the frame")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_INT32(native_dump_frame, -1, "Native renderer",
                      "Log every clear, draw, resolve and present the hooks see in this game "
                      "frame (counted from the first Present; -1 for none)");

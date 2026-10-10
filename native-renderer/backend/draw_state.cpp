@@ -182,12 +182,24 @@ bool DrawTracker::FillCommon(DrawCall& call) {
   if (vertex_declaration_ &&
       FindPositionElement(memory_.Virtual(vertex_declaration_), 0, position)) {
     call.position_offset = position.offset;
+    call.position_type = position.type;
     call.position_from_declaration = true;
   }
 
   for (uint32_t r = 0; r < 4; ++r) {
     for (uint32_t c = 0; c < 4; ++c) {
       call.vs_c0_c3[r * 4 + c] = vs_f_[r][c];
+    }
+  }
+  for (uint32_t r = 0; r + 4 <= kVsFloatConstants; ++r) {
+    float rows[16];
+    for (uint32_t i = 0; i < 4; ++i) {
+      for (uint32_t c = 0; c < 4; ++c) rows[i * 4 + c] = vs_f_[r + i][c];
+    }
+    if (LooksLikePerspectiveRows(rows)) {
+      call.wvp_register = int32_t(r);
+      std::copy(rows, rows + 16, call.wvp.begin());
+      break;
     }
   }
   call.vertex_shader = vertex_shader_;
@@ -203,6 +215,21 @@ bool DrawTracker::FillCommon(DrawCall& call) {
   call.states = states_;
   call.conditional_id = conditional_id();
   return true;
+}
+
+bool LooksLikePerspectiveRows(const float* m) {
+  auto dot3 = [](const float* a, const float* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; };
+  const float* x = m;
+  const float* y = m + 4;
+  const float* z = m + 8;
+  const float* w = m + 12;
+  const float ww = dot3(w, w);
+  if (!(ww > 1e-8f) || !(dot3(x, x) > 1e-8f) || !(dot3(y, y) > 1e-8f)) return false;
+  const float k = dot3(z, w) / ww;
+  if (!(k > 0.8f && k < 1.25f)) return false;
+  float residual = 0;
+  for (int i = 0; i < 3; ++i) residual += (z[i] - k * w[i]) * (z[i] - k * w[i]);
+  return residual <= 0.0025f * ww;  // within 5 % of the w row's length
 }
 
 void DrawTracker::DrawIndexed(uint32_t primitive, int32_t base_vertex, uint32_t start_index,

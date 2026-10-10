@@ -34,6 +34,7 @@ REXCVAR_DECLARE(bool, native_log_packets);
 REXCVAR_DECLARE(std::string, native_test);
 REXCVAR_DECLARE(bool, native_wvp_transpose);
 REXCVAR_DECLARE(bool, native_all_targets);
+REXCVAR_DECLARE(bool, native_main_pass_only);
 
 namespace nr {
 
@@ -171,6 +172,7 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
   }
   backend_->renderer().options().transpose_wvp = REXCVAR_GET(native_wvp_transpose);
   backend_->renderer().options().only_main_surface = !REXCVAR_GET(native_all_targets);
+  backend_->renderer().options().only_depth_tested = REXCVAR_GET(native_main_pass_only);
   backend_->set_test_picture(REXCVAR_GET(native_test) == "clear" ? TestPicture::kClear
                                                                   : TestPicture::kTriangle);
 

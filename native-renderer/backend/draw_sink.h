@@ -64,10 +64,20 @@ struct DrawCall {
   uint32_t stride = 0;
   uint32_t position_offset = 0;
   bool position_from_declaration = false;
+  // The position element's D3DDECLTYPE (0 without a declaration); the
+  // placeholder reads only 32-bit float positions (DeclTypeFormat 57 or 38).
+  uint32_t position_type = 0;
 
   // Vertex shader float constants c0..c3 (the world-view-projection matrix in
   // the per-draw sequence), as the guest stored them.
   std::array<float, 16> vs_c0_c3 = {};
+  // The first four consecutive vertex float constants (from c0) that look like
+  // a perspective world-view-projection matrix (FindPerspectiveRows), and their
+  // first register; -1 when none does. c0..c3 for the static world, elsewhere
+  // (or nowhere: post effects, HUD) for other shaders, e.g. skinned meshes
+  // keep bone or world rows in c0..c3.
+  int32_t wvp_register = -1;
+  std::array<float, 16> wvp = {};
 
   uint32_t vertex_shader = 0;
   uint32_t pixel_shader = 0;
