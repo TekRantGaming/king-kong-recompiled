@@ -1,0 +1,39 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+    "configurePresets": [
+        {
+            "name": "base",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++",
+                "CMAKE_BUILD_TYPE": "Release",
+                "KKSHADERS_DXC_DIR": "$env{KK_DXC_DIR}",
+                "KKSHADERS_SPIRV_VAL": "$env{KK_SPIRV_VAL}"
+            }
+        },
+        {
+            "name": "release",
+            "description": "Windows: the SDK clone at C:/rexsrc (fmt, xxHash, dxcapi.h); DXC from KK_DXC_DIR or the DLL search path",
+            "inherits": "base",
+            "cacheVariables": { "KKSHADERS_SDK_DIR": "C:/rexsrc" }
+        },
+        {
+            "name": "linux",
+            "description": "Linux: KK_SDK_DIR = an SDK clone with thirdparty/fmt and thirdparty/xxHash, KK_DXC_DIR = a DXC release",
+            "inherits": "base",
+            "cacheVariables": { "KKSHADERS_SDK_DIR": "$env{KK_SDK_DIR}" }
+        }
+    ],
+    "buildPresets": [
+        { "name": "release", "configurePreset": "release" },
+        { "name": "linux", "configurePreset": "linux" }
+    ],
+    "testPresets": [
+        { "name": "release", "configurePreset": "release", "output": { "outputOnFailure": true } },
+        { "name": "linux", "configurePreset": "linux", "output": { "outputOnFailure": true } }
+    ]
+}

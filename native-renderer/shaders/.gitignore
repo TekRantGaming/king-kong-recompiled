@@ -1,0 +1,4 @@
+# Build output and anything derived from the game's files (extracted shaders, dumps, logs, packs).
+/out/
+/work/
+*.log
