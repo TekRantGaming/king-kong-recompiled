@@ -140,6 +140,10 @@ private:
     void emitInstructions(uint32_t address, uint32_t count, uint32_t sequence);
     void emitEnd();
     void emitFetchResult(uint32_t dst, bool dstRelative, uint32_t dstSwizzle, std::string_view value);
+    void beginPredicate(bool predicated, bool condition);
+    void endPredicate();
+    int openPredicate = -1;           // condition of the open predicate block, -1 none
+    bool predicateChanged = false;    // the last instruction wrote p0
 
     void recompile(const VertexFetchInstruction& instr, uint32_t address);
     void recompile(const TextureFetchInstruction& instr, uint32_t address);

@@ -55,12 +55,12 @@ ByteAddressBuffer kk_Buffer[] : register(t0, space6);
 
 float4 kk_VSConst(int index)
 {
-    return uint(index) < 256u ? kk_VC[uint(index)] : float4(0.0, 0.0, 0.0, 0.0);
+    return select(uint(index) < 256u, kk_VC[min(uint(index), 255u)], float4(0.0, 0.0, 0.0, 0.0));
 }
 
 float4 kk_PSConst(int index)
 {
-    return uint(index) < 256u ? kk_PC[uint(index)] : float4(0.0, 0.0, 0.0, 0.0);
+    return select(uint(index) < 256u, kk_PC[min(uint(index), 255u)], float4(0.0, 0.0, 0.0, 0.0));
 }
 
 bool kk_BoolConst(uint index)
@@ -98,26 +98,25 @@ float4 kk_Mul(float4 a, float4 b)
 
 float kk_Muls(float a, float b)
 {
-    return (a == 0.0 || b == 0.0) ? 0.0 : a * b;
+    return select(or(a == 0.0, b == 0.0), 0.0, a * b);
 }
 
 // Scalar operations with the clamping variants of rcp / rsq / log.
 float kk_ClampInf(float v, float replacement)
 {
-    return isinf(v) ? (v < 0.0 ? -replacement : replacement) : v;
+    return select(isinf(v), select(v < 0.0, -replacement, replacement), v);
 }
 
 float kk_RcpC(float a) { return kk_ClampInf(1.0 / a, KK_FLT_MAX); }
-float kk_RcpF(float a) { float r = 1.0 / a; return isinf(r) ? (r < 0.0 ? -0.0 : 0.0) : r; }
+float kk_RcpF(float a) { float r = 1.0 / a; return select(isinf(r), select(r < 0.0, -0.0, 0.0), r); }
 float kk_RsqC(float a) { return kk_ClampInf(rsqrt(a), KK_FLT_MAX); }
-float kk_RsqF(float a) { float r = rsqrt(a); return isinf(r) ? (r < 0.0 ? -0.0 : 0.0) : r; }
-float kk_LogC(float a) { float r = log2(a); return (isinf(r) && r < 0.0) ? -KK_FLT_MAX : r; }
+float kk_RsqF(float a) { float r = rsqrt(a); return select(isinf(r), select(r < 0.0, -0.0, 0.0), r); }
+float kk_LogC(float a) { float r = log2(a); return select(and(isinf(r), r < 0.0), -KK_FLT_MAX, r); }
 
 float kk_MulsPrev2(float a, float b, float previous)
 {
-    if (previous == -KK_FLT_MAX || !isfinite(previous) || !isfinite(b) || b <= 0.0)
-        return -KK_FLT_MAX;
-    return kk_Muls(a, previous);
+    bool invalid = or(or(previous == -KK_FLT_MAX, !isfinite(previous)), or(!isfinite(b), b <= 0.0));
+    return select(invalid, -KK_FLT_MAX, kk_Muls(a, previous));
 }
 
 float4 kk_Max(float4 a, float4 b)
@@ -150,11 +149,9 @@ float kk_Dot2Add(float4 a, float4 b, float4 c)
 
 float kk_Max4(float4 a)
 {
-    if (a.x >= a.y && a.x >= a.z && a.x >= a.w)
-        return a.x;
-    if (a.y >= a.z && a.y >= a.w)
-        return a.y;
-    return a.z >= a.w ? a.z : a.w;
+    float zw = select(a.z >= a.w, a.z, a.w);
+    float yzw = select(and(a.y >= a.z, a.y >= a.w), a.y, zw);
+    return select(and(and(a.x >= a.y, a.x >= a.z), a.x >= a.w), a.x, yzw);
 }
 
 float4 kk_Dst(float4 a, float4 b)
@@ -228,25 +225,12 @@ float kk_UnpackPacked(uint v, uint offset, uint width, uint word)
 {
     bool isSigned = (word & 0x40u) != 0;
     bool isInteger = (word & 0x80u) != 0;
-    float r;
-    if (isSigned)
-    {
-        r = float(int(v << (32u - width - offset)) >> int(32u - width));
-        if (!isInteger)
-        {
-            if ((word & 0x100u) != 0)
-                r = (r + 0.5) * 2.0 / float((1u << width) - 1u);
-            else
-                r = max(-1.0, r / float((1u << (width - 1u)) - 1u));
-        }
-    }
-    else
-    {
-        r = float((v >> offset) & ((1u << width) - 1u));
-        if (!isInteger)
-            r /= float((1u << width) - 1u);
-    }
-    return r;
+    float s = float(int(v << (32u - width - offset)) >> int(32u - width));
+    float sn = select((word & 0x100u) != 0, (s + 0.5) * 2.0 / float((1u << width) - 1u),
+                      max(-1.0, s / float((1u << (width - 1u)) - 1u)));
+    float u = float((v >> offset) & ((1u << width) - 1u));
+    float un = u / float((1u << width) - 1u);
+    return select(isSigned, select(isInteger, s, sn), select(isInteger, u, un));
 }
 
 float kk_Unpack32(uint v, uint word)
@@ -257,71 +241,60 @@ float kk_Unpack32(uint v, uint word)
     {
         float r = float(int(v));
         if (!isInteger)
-            r = (word & 0x100u) != 0 ? (r + 0.5) / 2147483647.5 : r / 2147483647.0;
+            r = select((word & 0x100u) != 0, (r + 0.5) / 2147483647.5, r / 2147483647.0);
         return r;
     }
     float r = float(v);
-    return isInteger ? r : r / 4294967295.0;
+    return select(isInteger, r, r / 4294967295.0);
+}
+
+// A vertex format as data: bits 0-23 the width of each component (6 bits each, packed from bit 0
+// of the first dword on), 24-26 the component count, 27-28 the kind (0 packed integers, 1 16-bit
+// floats, 2 32-bit floats). Table-driven so every vfetch site expands to one small loop instead
+// of a switch over every format (this kept the SPIR-V of a five-input shader from 190 KB down).
+uint kk_VertexFormatDesc(uint format)
+{
+    switch (format)
+    {
+    case 6u: return 8u | (8u << 6) | (8u << 12) | (8u << 18) | (4u << 24);            // 8_8_8_8
+    case 7u: return 10u | (10u << 6) | (10u << 12) | (2u << 18) | (4u << 24);         // 2_10_10_10
+    case 16u: return 11u | (11u << 6) | (10u << 12) | (3u << 24);                     // 10_11_11
+    case 17u: return 10u | (11u << 6) | (11u << 12) | (3u << 24);                     // 11_11_10
+    case 25u: return 16u | (16u << 6) | (2u << 24);                                   // 16_16
+    case 26u: return 16u | (16u << 6) | (16u << 12) | (16u << 18) | (4u << 24);       // 16_16_16_16
+    case 31u: return 16u | (16u << 6) | (2u << 24) | (1u << 27);                      // 16_16_FLOAT
+    case 32u: return 16u | (16u << 6) | (16u << 12) | (16u << 18) | (4u << 24) | (1u << 27);
+    case 33u: return 32u | (1u << 24);                                                // 32
+    case 34u: return 32u | (32u << 6) | (2u << 24);                                   // 32_32
+    case 35u: return 32u | (32u << 6) | (32u << 12) | (32u << 18) | (4u << 24);       // 32_32_32_32
+    case 36u: return 32u | (1u << 24) | (2u << 27);                                   // 32_FLOAT
+    case 37u: return 32u | (32u << 6) | (2u << 24) | (2u << 27);                      // 32_32_FLOAT
+    case 38u: return 32u | (32u << 6) | (32u << 12) | (32u << 18) | (4u << 24) | (2u << 27);
+    case 57u: return 32u | (32u << 6) | (32u << 12) | (3u << 24) | (2u << 27);        // 32_32_32_FLOAT
+    default: return 0u;  // undefined: the element is missing from the declaration
+    }
 }
 
 float4 kk_DecodeVertex(uint4 d, uint word)
 {
-    uint format = word & 0x3Fu;
-    float4 r = float4(0.0, 0.0, 0.0, 0.0);
-    switch (format)
-    {
-    case 6u: // 8_8_8_8
-        r = float4(kk_UnpackPacked(d.x, 0u, 8u, word), kk_UnpackPacked(d.x, 8u, 8u, word),
-                   kk_UnpackPacked(d.x, 16u, 8u, word), kk_UnpackPacked(d.x, 24u, 8u, word));
-        break;
-    case 7u: // 2_10_10_10
-        r = float4(kk_UnpackPacked(d.x, 0u, 10u, word), kk_UnpackPacked(d.x, 10u, 10u, word),
-                   kk_UnpackPacked(d.x, 20u, 10u, word), kk_UnpackPacked(d.x, 30u, 2u, word));
-        break;
-    case 16u: // 10_11_11
-        r.xyz = float3(kk_UnpackPacked(d.x, 0u, 11u, word), kk_UnpackPacked(d.x, 11u, 11u, word),
-                       kk_UnpackPacked(d.x, 22u, 10u, word));
-        break;
-    case 17u: // 11_11_10
-        r.xyz = float3(kk_UnpackPacked(d.x, 0u, 10u, word), kk_UnpackPacked(d.x, 10u, 11u, word),
-                       kk_UnpackPacked(d.x, 21u, 11u, word));
-        break;
-    case 25u: // 16_16
-        r.xy = float2(kk_UnpackPacked(d.x, 0u, 16u, word), kk_UnpackPacked(d.x, 16u, 16u, word));
-        break;
-    case 26u: // 16_16_16_16
-        r = float4(kk_UnpackPacked(d.x, 0u, 16u, word), kk_UnpackPacked(d.x, 16u, 16u, word),
-                   kk_UnpackPacked(d.y, 0u, 16u, word), kk_UnpackPacked(d.y, 16u, 16u, word));
-        break;
-    case 31u: // 16_16_FLOAT
-        r.xy = f16tof32(uint2(d.x, d.x >> 16));
-        break;
-    case 32u: // 16_16_16_16_FLOAT
-        r = f16tof32(uint4(d.x, d.x >> 16, d.y, d.y >> 16));
-        break;
-    case 33u: // 32
-        r.x = kk_Unpack32(d.x, word);
-        break;
-    case 34u: // 32_32
-        r.xy = float2(kk_Unpack32(d.x, word), kk_Unpack32(d.y, word));
-        break;
-    case 35u: // 32_32_32_32
-        r = float4(kk_Unpack32(d.x, word), kk_Unpack32(d.y, word), kk_Unpack32(d.z, word), kk_Unpack32(d.w, word));
-        break;
-    case 36u: // 32_FLOAT
-        r.x = asfloat(d.x);
-        break;
-    case 37u: // 32_32_FLOAT
-        r.xy = asfloat(d.xy);
-        break;
-    case 38u: // 32_32_32_32_FLOAT
-        r = asfloat(d);
-        break;
-    case 57u: // 32_32_32_FLOAT
-        r.xyz = asfloat(d.xyz);
-        break;
-    default: // undefined: the element is missing from the declaration
+    uint desc = kk_VertexFormatDesc(word & 0x3Fu);
+    uint count = (desc >> 24) & 7u;
+    if (count == 0u)
         return float4(0.0, 0.0, 0.0, 1.0);
+    uint kind = (desc >> 27) & 3u;
+    float4 r = float4(0.0, 0.0, 0.0, 0.0);
+    uint position = 0u;
+    [loop] for (uint c = 0u; c < count; c++)
+    {
+        uint width = (desc >> (c * 6u)) & 63u;
+        uint dword = position >> 5;
+        uint shift = position & 31u;
+        uint v = select(dword == 0u, d.x, select(dword == 1u, d.y, select(dword == 2u, d.z, d.w)));
+        float f = select(kind == 2u, asfloat(v),
+                         select(kind == 1u, f16tof32(v >> shift),
+                                select(width == 32u, kk_Unpack32(v, word), kk_UnpackPacked(v, shift, min(width, 31u), word))));
+        r[c] = f;
+        position += width;
     }
     int expAdjust = int(word << 15) >> 26;
     if (expAdjust != 0)
@@ -331,15 +304,7 @@ float4 kk_DecodeVertex(uint4 d, uint word)
 
 float kk_SwizzleComponent(float4 v, uint s)
 {
-    switch (s)
-    {
-    case 0u: return v.x;
-    case 1u: return v.y;
-    case 2u: return v.z;
-    case 3u: return v.w;
-    case 5u: return 1.0;
-    default: return 0.0;
-    }
+    return select(s < 4u, v[min(s, 3u)], select(s == 5u, 1.0, 0.0));
 }
 
 float4 kk_ApplyElementSwizzle(float4 v, uint word)
@@ -411,7 +376,7 @@ void kk_AlphaTest(float alpha)
 
 float kk_ClipDistance(float4 position, uint plane)
 {
-    return (kk_Flags.x & (1u << plane)) != 0 ? dot(position, kk_ClipPlane[plane]) : 1.0;
+    return select((kk_Flags.x & (1u << plane)) != 0, dot(position, kk_ClipPlane[plane]), 1.0);
 }
 
 #endif

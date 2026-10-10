@@ -172,7 +172,14 @@ std::string ShaderRecompiler::floatConstant(uint32_t index, bool addressed, bool
 {
     const char* stage = isPixelShader ? "PS" : "VS";
     if (addressed)
+    {
+        // With literal constants, relative reads go through kkConstRel, which serves the literal
+        // registers from the shader itself (the game's skinning shaders index c250-c254 by the
+        // loop counter), so the result never depends on the backend having applied them.
+        if (!input->floatLiterals.empty())
+            return fmt::format("kkConstRel({} + {})", index, a0Relative ? "a0" : "aL");
         return fmt::format("kk_{}Const({} + {})", stage, index, a0Relative ? "a0" : "aL");
+    }
     if (input->floatLiterals.count(index))
         return fmt::format("kkLiteral{}", index);
     return fmt::format("kk_{}[{}]", isPixelShader ? "PC" : "VC", index);
@@ -285,14 +292,7 @@ void ShaderRecompiler::recompile(const VertexFetchInstruction& instr, uint32_t a
         return;
     }
 
-    if (instr.isPredicated)
-    {
-        indent();
-        println("if ({}p0)", instr.predicateCondition ? "" : "!");
-        indent();
-        out += "{\n";
-        ++indentation;
-    }
+    beginPredicate(instr.isPredicated, instr.predicateCondition);
 
     if (!instr.isMiniFetch)
     {
@@ -323,24 +323,11 @@ void ShaderRecompiler::recompile(const VertexFetchInstruction& instr, uint32_t a
     indent();
     out += "}\n";
 
-    if (instr.isPredicated)
-    {
-        --indentation;
-        indent();
-        out += "}\n";
-    }
 }
 
 void ShaderRecompiler::recompile(const TextureFetchInstruction& instr, uint32_t address)
 {
-    if (instr.isPredicated)
-    {
-        indent();
-        println("if ({}p0)", instr.predCondition ? "" : "!");
-        indent();
-        out += "{\n";
-        ++indentation;
-    }
+    beginPredicate(instr.isPredicated, instr.predCondition);
 
     auto srcComponents = [&](uint32_t count)
         {
@@ -611,24 +598,11 @@ void ShaderRecompiler::recompile(const TextureFetchInstruction& instr, uint32_t 
         break;
     }
 
-    if (instr.isPredicated)
-    {
-        --indentation;
-        indent();
-        out += "}\n";
-    }
 }
 
 void ShaderRecompiler::recompile(const AluInstruction& instr)
 {
-    if (instr.isPredicated)
-    {
-        indent();
-        println("if ({}p0)", instr.predicateCondition ? "" : "!");
-        indent();
-        out += "{\n";
-        ++indentation;
-    }
+    beginPredicate(instr.isPredicated, instr.predicateCondition);
 
     indent();
     out += "{\n";
@@ -692,9 +666,9 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
             const char* cmp = vop == AluVectorOpcode::SetpEqPush ? "==" :
                 (vop == AluVectorOpcode::SetpNePush ? "!=" : (vop == AluVectorOpcode::SetpGtPush ? ">" : ">="));
             indent();
-            println("bool kp = kv1.w == 0.0 && kv2.w {} 0.0;", cmp);
+            println("bool kp = and(kv1.w == 0.0, kv2.w {} 0.0);", cmp);
             newP0 = true;
-            value = fmt::format("((kv1.x == 0.0 && kv2.x {} 0.0) ? 0.0 : kv1.x + 1.0).xxxx", cmp);
+            value = fmt::format("select(and(kv1.x == 0.0, kv2.x {} 0.0), 0.0, kv1.x + 1.0).xxxx", cmp);
             break;
         }
         case AluVectorOpcode::KillEq:
@@ -711,7 +685,7 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
                 indent();
                 out += "if (kk) discard;\n";
             }
-            value = "(kk ? 1.0 : 0.0).xxxx";
+            value = "select(kk, 1.0, 0.0).xxxx";
             break;
         }
         case AluVectorOpcode::Dst: value = "kk_Dst(kv1, kv2)"; break;
@@ -793,12 +767,12 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
             value = "kk_Muls(ka_, kb_)"; break;
         case AluScalarOpcode::MulsPrev: value = "kk_Muls(ka_, ps)"; break;
         case AluScalarOpcode::MulsPrev2: value = "kk_MulsPrev2(ka_, kb_, ps)"; break;
-        case AluScalarOpcode::Maxs: value = "(ka_ >= kb_ ? ka_ : kb_)"; break;
-        case AluScalarOpcode::Mins: value = "(ka_ < kb_ ? ka_ : kb_)"; break;
-        case AluScalarOpcode::Seqs: value = "(ka_ == 0.0 ? 1.0 : 0.0)"; break;
-        case AluScalarOpcode::Sgts: value = "(ka_ > 0.0 ? 1.0 : 0.0)"; break;
-        case AluScalarOpcode::Sges: value = "(ka_ >= 0.0 ? 1.0 : 0.0)"; break;
-        case AluScalarOpcode::Snes: value = "(ka_ != 0.0 ? 1.0 : 0.0)"; break;
+        case AluScalarOpcode::Maxs: value = "select(ka_ >= kb_, ka_, kb_)"; break;
+        case AluScalarOpcode::Mins: value = "select(ka_ < kb_, ka_, kb_)"; break;
+        case AluScalarOpcode::Seqs: value = "select(ka_ == 0.0, 1.0, 0.0)"; break;
+        case AluScalarOpcode::Sgts: value = "select(ka_ > 0.0, 1.0, 0.0)"; break;
+        case AluScalarOpcode::Sges: value = "select(ka_ >= 0.0, 1.0, 0.0)"; break;
+        case AluScalarOpcode::Snes: value = "select(ka_ != 0.0, 1.0, 0.0)"; break;
         case AluScalarOpcode::Frcs: value = "(ka_ - floor(ka_))"; break;
         case AluScalarOpcode::Truncs: value = "trunc(ka_)"; break;
         case AluScalarOpcode::Floors: value = "floor(ka_)"; break;
@@ -816,7 +790,7 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
             indent();
             println("int ksa = int(floor(clamp(ka_, -256.0, 255.0){}));", sop == AluScalarOpcode::MaxAs ? " + 0.5" : "");
             newA0 = true;
-            value = "(ka_ >= kb_ ? ka_ : kb_)";
+            value = "select(ka_ >= kb_, ka_, kb_)";
             break;
         case AluScalarOpcode::Subs:
         case AluScalarOpcode::Subsc0:
@@ -833,14 +807,14 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
             indent();
             println("bool ksp = ka_ {} 0.0;", cmp);
             newP0 = true;
-            value = "(ksp ? 0.0 : 1.0)";
+            value = "select(ksp, 0.0, 1.0)";
             break;
         }
         case AluScalarOpcode::SetpInv:
             indent();
             out += "bool ksp = ka_ == 1.0;\n";
             newP0 = true;
-            value = "(ksp ? 0.0 : (ka_ == 0.0 ? 1.0 : ka_))";
+            value = "select(ksp, 0.0, select(ka_ == 0.0, 1.0, ka_))";
             break;
         case AluScalarOpcode::SetpPop:
             indent();
@@ -848,7 +822,7 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
             indent();
             out += "bool ksp = kst <= 0.0;\n";
             newP0 = true;
-            value = "(ksp ? 0.0 : kst)";
+            value = "select(ksp, 0.0, kst)";
             break;
         case AluScalarOpcode::SetpClr:
             indent();
@@ -860,7 +834,7 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
             indent();
             out += "bool ksp = ka_ == 0.0;\n";
             newP0 = true;
-            value = "(ksp ? 0.0 : ka_)";
+            value = "select(ksp, 0.0, ka_)";
             break;
         case AluScalarOpcode::KillsEq:
         case AluScalarOpcode::KillsGt:
@@ -875,7 +849,7 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
             indent();
             println("bool ksk = {};", test);
             scalarKill = true;
-            value = "(ksk ? 1.0 : 0.0)";
+            value = "select(ksk, 1.0, 0.0)";
             break;
         }
         case AluScalarOpcode::Sqrt: value = "sqrt(ka_)"; break;
@@ -892,6 +866,7 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
     // State changes take effect after both operations have read their sources.
     if (newP0)
     {
+        predicateChanged = true;
         indent();
         out += (vop >= AluVectorOpcode::SetpEqPush && vop <= AluVectorOpcode::SetpGePush && doVector) ? "p0 = kp;\n" : "p0 = ksp;\n";
     }
@@ -992,12 +967,6 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
     indent();
     out += "}\n";
 
-    if (instr.isPredicated)
-    {
-        --indentation;
-        indent();
-        out += "}\n";
-    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1364,7 +1333,40 @@ void ShaderRecompiler::emitInstructions(uint32_t address, uint32_t count, uint32
         {
             recompile(alu);
         }
+        // An instruction that sets p0 ends the run sharing one predicate test.
+        if (predicateChanged)
+            endPredicate();
     }
+    endPredicate();
+}
+
+// Consecutive instructions predicated on the same p0 test share one if block (fewer branches
+// for the SPIR-V back end, which does not flatten them as the DXIL one does).
+void ShaderRecompiler::beginPredicate(bool predicated, bool condition)
+{
+    int want = predicated ? int(condition) : -1;
+    if (want == openPredicate)
+        return;
+    endPredicate();
+    if (want < 0)
+        return;
+    indent();
+    println("if ({}p0)", condition ? "" : "!");
+    indent();
+    out += "{\n";
+    ++indentation;
+    openPredicate = want;
+}
+
+void ShaderRecompiler::endPredicate()
+{
+    predicateChanged = false;
+    if (openPredicate < 0)
+        return;
+    --indentation;
+    indent();
+    out += "}\n";
+    openPredicate = -1;
 }
 
 void ShaderRecompiler::emitExec(uint32_t cfIndex)
@@ -1453,7 +1455,12 @@ bool ShaderRecompiler::recompile(const RecompilerInput& in, std::string_view inc
             hexFloat(value[2]), hexFloat(value[3]));
     }
     if (!in.floatLiterals.empty())
-        out += '\n';
+    {
+        println("float4 kkConstRel(int index)\n{{\n\tfloat4 v = kk_{}Const(index);", isPixelShader ? "PS" : "VS");
+        for (const auto& [index, value] : in.floatLiterals)
+            println("\tv = select(index == {0}, kkLiteral{0}, v);", index);
+        out += "\treturn v;\n}\n\n";
+    }
 
     // Entry point.
     out += "void main(\n";
@@ -1516,7 +1523,7 @@ bool ShaderRecompiler::recompile(const RecompilerInput& in, std::string_view inc
             }
         }
         if (in.paramGenRegister >= 0)
-            println("\t{} = float4((iPos.xy - 0.5) * float2(iFace ? 1.0 : -1.0, 1.0), 0.0, 0.0);",
+            println("\t{} = float4((iPos.xy - 0.5) * float2(select(iFace, 1.0, -1.0), 1.0), 0.0, 0.0);",
                 reg(uint32_t(in.paramGenRegister), false));
     }
     else
@@ -1658,8 +1665,8 @@ bool ShaderRecompiler::recompile(const RecompilerInput& in, std::string_view inc
         out += "\tuint kkLoopIt[4] = { 0, 0, 0, 0 };\n\tuint kkLoopConst[4] = { 0, 0, 0, 0 };\n\tuint kkLoopDepth = 0;\n";
         out += "\tuint kkCallStack[4] = { 0, 0, 0, 0 };\n\tuint kkCallDepth = 0;\n";
         out += "\t[loop] while (pc != 0xFFFFFFFFu)\n\t{\n\t\tswitch (pc)\n\t\t{\n";
-        const char* setAL = "aL = kkLoopDepth == 0 ? 0 : int((kkLoopConst[(kkLoopDepth - 1) & 3] >> 8) & 0xFFu) + "
-            "int(kkLoopIt[(kkLoopDepth - 1) & 3]) * (int(kkLoopConst[(kkLoopDepth - 1) & 3] << 8) >> 24);";
+        const char* setAL = "aL = select(kkLoopDepth == 0, 0, int((kkLoopConst[(kkLoopDepth - 1) & 3] >> 8) & 0xFFu) + "
+            "int(kkLoopIt[(kkLoopDepth - 1) & 3]) * (int(kkLoopConst[(kkLoopDepth - 1) & 3] << 8) >> 24));";
         for (uint32_t i = 0; i < n; i++)
         {
             const auto& c = cf[i];
