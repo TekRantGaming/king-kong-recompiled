@@ -43,6 +43,10 @@ REXCVAR_DEFINE_BOOL(native_all_targets, false, "Native renderer",
                     "Placeholder draws: also draw render-to-texture passes into the frame")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_INT32(native_dump_frame, -1, "Native renderer",
+                     "Log every clear, draw, resolve and present the hooks see in this game "
+                     "frame (counted from the first Present; -1 for none)");
+
 REXCVAR_DEFINE_BOOL(native_log_packets, false, "Native renderer",
                     "Log the GPU packets the ring skimmer sees (very noisy)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);

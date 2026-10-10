@@ -48,6 +48,10 @@ class SubmitObserver {
 class Renderer final : public DrawSink {
  public:
   static constexpr nvrhi::Format kFrameFormat = nvrhi::Format::R10G10B10A2_UNORM;
+  // Each frame image has a depth buffer, so the placeholder draws hide each
+  // other as the game's depth states say (without it the sky dome, drawn late,
+  // covers the frame).
+  static constexpr nvrhi::Format kDepthFormat = nvrhi::Format::D32;
 
   struct Options {
     // Draw only into the surface that was bound at the last Present (the
@@ -113,6 +117,8 @@ class Renderer final : public DrawSink {
 
  private:
   nvrhi::IFramebuffer* FramebufferFor(nvrhi::ITexture* target);
+  nvrhi::ITexture* DepthFor(nvrhi::ITexture* target);
+  nvrhi::IGraphicsPipeline* PlaceholderPipeline(const RenderStates& states);
   nvrhi::ICommandList* FrameCommandList();
   bool OnMainSurface(uint32_t render_target0) const;
   nvrhi::Viewport ViewportFor(const Viewport& v) const;
@@ -128,6 +134,12 @@ class Renderer final : public DrawSink {
   int recording_ = 0;
   int presented_ = -1;
   std::unordered_map<nvrhi::ITexture*, nvrhi::FramebufferHandle> framebuffers_;
+  // Depth buffers by colour target (the frame images, and any test target).
+  std::unordered_map<nvrhi::ITexture*, nvrhi::TextureHandle> depth_;
+  // Placeholder pipelines by depth state: bit 4 test, bit 3 write, bits 0-2
+  // the Xenos compare function.
+  std::unordered_map<uint32_t, nvrhi::GraphicsPipelineHandle> placeholder_pipelines_;
+  nvrhi::GraphicsPipelineDesc placeholder_desc_;
 
   nvrhi::ShaderHandle triangle_vs_, triangle_ps_, placeholder_vs_, placeholder_ps_;
   nvrhi::BindingLayoutHandle placeholder_layout_;

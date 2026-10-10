@@ -14,6 +14,8 @@ void Renderer::Shutdown() {
   frame_command_list_ = nullptr;
   frame_open_ = false;
   framebuffers_.clear();
+  placeholder_pipelines_.clear();
+  depth_.clear();
   placeholder_set_ = nullptr;
   placeholder_pipeline_ = nullptr;
   triangle_pipeline_ = nullptr;
@@ -99,22 +101,66 @@ bool Renderer::Initialize(uint32_t width, uint32_t height) {
   triangle_pipeline_ = device_->createGraphicsPipeline(tri, fb->getFramebufferInfo());
   if (!triangle_pipeline_) return false;
 
-  nvrhi::GraphicsPipelineDesc ph = tri;
-  ph.VS = placeholder_vs_;
-  ph.PS = placeholder_ps_;
-  ph.bindingLayouts = {placeholder_layout_};
-  placeholder_pipeline_ = device_->createGraphicsPipeline(ph, fb->getFramebufferInfo());
+  placeholder_desc_ = tri;
+  placeholder_desc_.VS = placeholder_vs_;
+  placeholder_desc_.PS = placeholder_ps_;
+  placeholder_desc_.bindingLayouts = {placeholder_layout_};
+  placeholder_pipeline_ = device_->createGraphicsPipeline(placeholder_desc_, fb->getFramebufferInfo());
   if (!placeholder_pipeline_) return false;
 
   frame_command_list_ = device_->createCommandList();
   return frame_command_list_ != nullptr;
 }
 
+nvrhi::ITexture* Renderer::DepthFor(nvrhi::ITexture* target) {
+  auto it = depth_.find(target);
+  if (it != depth_.end()) return it->second;
+  const nvrhi::TextureDesc& color = target->getDesc();
+  nvrhi::TextureDesc desc;
+  desc.width = color.width;
+  desc.height = color.height;
+  desc.format = kDepthFormat;
+  desc.isRenderTarget = true;
+  desc.initialState = nvrhi::ResourceStates::DepthWrite;
+  desc.keepInitialState = true;
+  desc.clearValue = nvrhi::Color(1.0f, 0.0f, 0.0f, 0.0f);
+  desc.useClearValue = true;
+  desc.debugName = "Native depth";
+  nvrhi::TextureHandle depth = device_->createTexture(desc);
+  if (!depth) return nullptr;
+  if (depth_.size() > 16) depth_.clear();
+  depth_[target] = depth;
+  return depth;
+}
+
+nvrhi::IGraphicsPipeline* Renderer::PlaceholderPipeline(const RenderStates& states) {
+  const bool test = states.z_enable != 0;
+  const bool write = test && states.z_write_enable != 0;
+  const uint32_t func = test ? (states.z_func & 7) : 7;
+  const uint32_t key = (test ? 16u : 0u) | (write ? 8u : 0u) | func;
+  auto it = placeholder_pipelines_.find(key);
+  if (it != placeholder_pipelines_.end()) return it->second;
+  nvrhi::GraphicsPipelineDesc desc = placeholder_desc_;
+  desc.renderState.depthStencilState.depthTestEnable = test;
+  desc.renderState.depthStencilState.depthWriteEnable = write;
+  // Xenos 0 never .. 7 always is NVRHI's Never (1) .. Always (8).
+  desc.renderState.depthStencilState.depthFunc = nvrhi::ComparisonFunc(func + 1);
+  nvrhi::IFramebuffer* fb = FramebufferFor(frames_[0]);
+  if (!fb) return nullptr;
+  nvrhi::GraphicsPipelineHandle pipeline = device_->createGraphicsPipeline(desc, fb->getFramebufferInfo());
+  if (!pipeline) return nullptr;
+  placeholder_pipelines_[key] = pipeline;
+  return pipeline;
+}
+
 nvrhi::IFramebuffer* Renderer::FramebufferFor(nvrhi::ITexture* target) {
   auto it = framebuffers_.find(target);
   if (it != framebuffers_.end()) return it->second;
+  nvrhi::ITexture* depth = DepthFor(target);
+  if (!depth) return nullptr;
   nvrhi::FramebufferDesc desc;
   desc.addColorAttachment(target);
+  desc.setDepthAttachment(depth);
   nvrhi::FramebufferHandle fb = device_->createFramebuffer(desc);
   if (!fb) return nullptr;
   // Keep a few: the frame images plus test targets.
@@ -188,9 +234,22 @@ nvrhi::Color Renderer::TestClearColor(uint32_t frame) {
 }
 
 void Renderer::OnClear(const ClearCall& call) {
-  if (!call.color || !OnMainSurface(call.render_target0)) return;
+  if (!(call.color || call.depth) || !OnMainSurface(call.render_target0)) return;
+  if (!call.color) {
+    if (nvrhi::ITexture* depth = DepthFor(frames_[recording_])) {
+      FrameCommandList()->clearDepthStencilTexture(depth, nvrhi::AllSubresources, true,
+                                                   std::clamp(call.z, 0.0f, 1.0f), false, 0);
+    }
+    return;
+  }
   nvrhi::Color color(call.rgba[0], call.rgba[1], call.rgba[2], call.rgba[3]);
   RecordClear(FrameCommandList(), frames_[recording_], color);
+  if (call.depth) {
+    if (nvrhi::ITexture* depth = DepthFor(frames_[recording_])) {
+      FrameCommandList()->clearDepthStencilTexture(depth, nvrhi::AllSubresources, true,
+                                                   std::clamp(call.z, 0.0f, 1.0f), false, 0);
+    }
+  }
   ++stats_.clears_recorded;
   if (observer_) observer_->OnClearRecorded(call, color);
 }
@@ -256,7 +315,8 @@ void Renderer::OnDraw(const DrawCall& call) {
   constants.vertex_base = uint32_t(vertex_ring_used_);
 
   nvrhi::GraphicsState state;
-  state.pipeline = placeholder_pipeline_;
+  state.pipeline = PlaceholderPipeline(call.states);
+  if (!state.pipeline) state.pipeline = placeholder_pipeline_;
   state.framebuffer = FramebufferFor(frames_[recording_]);
   state.bindings = {placeholder_set_};
   state.indexBuffer = nvrhi::IndexBufferBinding()

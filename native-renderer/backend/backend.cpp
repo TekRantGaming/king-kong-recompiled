@@ -1,7 +1,10 @@
 #include "backend/backend.h"
 
+#include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/system/xmemory.h>
+
+REXCVAR_DECLARE(int32_t, native_dump_frame);
 
 namespace nr {
 
@@ -21,23 +24,56 @@ class LockedSink final : public DrawSink {
  public:
   LockedSink(DrawSink& inner, std::mutex& mutex) : inner_(inner), mutex_(mutex) {}
   void OnClear(const ClearCall& c) override {
+    if (Dump(c.frame)) {
+      REXLOG_INFO("rexgpu-native: frame {} clear flags {:X} rgba {} {} {} {} z {} rt0 {:08X} ds {:08X}",
+                  c.frame, c.flags, c.rgba[0], c.rgba[1], c.rgba[2], c.rgba[3], c.z,
+                  c.render_target0, c.depth_stencil);
+    }
     std::lock_guard lock(mutex_);
     inner_.OnClear(c);
   }
   void OnDraw(const DrawCall& d) override {
+    if (Dump(d.frame)) {
+      const auto& m = d.vs_c0_c3;
+      REXLOG_INFO(
+          "rexgpu-native: frame {} draw {} {} prim {} start {} count {} base {} stride {} pos {}{} "
+          "vbytes {} vs {:08X} ps {:08X} rt0 {:08X} ds {:08X} vp {},{} {}x{} z {}..{} "
+          "zstate {}/{}/{} cull {} c0 {} {} {} {} c1 {} {} {} {} c2 {} {} {} {} c3 {} {} {} {}",
+          d.frame, d.index_in_frame, d.indexed ? "indexed" : "plain", int(d.primitive), d.start,
+          d.count, d.base_vertex, d.stride, d.position_offset,
+          d.position_from_declaration ? "" : " (no decl)", d.vertex_data_size, d.vertex_shader,
+          d.pixel_shader, d.render_targets[0], d.depth_stencil, d.viewport.x, d.viewport.y,
+          d.viewport.width, d.viewport.height, d.viewport.min_z, d.viewport.max_z,
+          d.states.z_enable, d.states.z_write_enable, d.states.z_func, d.states.cull_mode, m[0], m[1],
+          m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], m[12], m[13], m[14],
+          m[15]);
+    }
     std::lock_guard lock(mutex_);
     inner_.OnDraw(d);
   }
   void OnResolve(const ResolveCall& r) override {
+    if (Dump(r.frame)) {
+      REXLOG_INFO("rexgpu-native: frame {} resolve flags {:X} to {:08X} rt0 {:08X}", r.frame,
+                  r.flags, r.dest_texture, r.render_target0);
+    }
     std::lock_guard lock(mutex_);
     inner_.OnResolve(r);
   }
   void OnPresent(uint32_t frame, uint32_t rt0) override {
+    if (Dump(frame)) {
+      REXLOG_INFO("rexgpu-native: frame {} present rt0 {:08X}", frame, rt0);
+    }
     std::lock_guard lock(mutex_);
     inner_.OnPresent(frame, rt0);
   }
 
  private:
+  // --native_dump_frame=N logs every call of the game's frame N.
+  static bool Dump(uint32_t frame) {
+    const int32_t wanted = REXCVAR_GET(native_dump_frame);
+    return wanted >= 0 && uint32_t(wanted) == frame;
+  }
+
   DrawSink& inner_;
   std::mutex& mutex_;
 };
@@ -105,6 +141,18 @@ void Backend::Present(rex::ui::Presenter* presenter, uint32_t frontbuffer_width,
   shown_frames_ = submitted_frames_;
   const uint32_t width = renderer_->width(), height = renderer_->height();
   const uint32_t swap = swaps_++;
+  if (swap % 300 == 0 && draws_) {
+    // In the core category: the app keeps only warnings of the gpu one.
+    const DrawTracker::Stats& d = draws_->stats();
+    const Renderer::Stats& r = renderer_->stats();
+    REXLOG_INFO(
+        "rexgpu-native: swap {}: hooks saw {} draws ({} indexed, {} dropped), {} clears, {} "
+        "resolves, {} presents; renderer drew {}, skipped {} (other target) {} (primitive) {} "
+        "(range), {} clears, {} frames",
+        swap, d.draws, d.indexed_draws, d.dropped_draws, d.clears, d.resolves, d.presents,
+        r.draws_recorded, r.draws_skipped_target, r.draws_skipped_primitive, r.draws_skipped_range,
+        r.clears_recorded, r.frames_submitted);
+  }
   (void)frontbuffer_width;
   (void)frontbuffer_height;
   presenter->RefreshGuestOutput(
