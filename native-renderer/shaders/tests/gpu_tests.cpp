@@ -10,6 +10,7 @@
 //       --out DIR           failing shaders' HLSL and a report (default gpu-out)
 //       --max-report K      mismatches printed per shader (default 4)
 //       --progress 1        a line per shader with its time
+//       --hlsl FILE         debugging: compile FILE instead of the translation (with --filter)
 //
 // Each shader is translated as the game's shaders are (kkshaders::translate), compiled to
 // SPIR-V with DXC, and run on the Vulkan device (lavapipe in the container):
@@ -388,6 +389,9 @@ private:
     fs::path out_;
     uint32_t maxReport_;
     bool trace_;
+public:
+    std::string hlslOverride;
+private:
     VkShaderModule harnessVs_ = VK_NULL_HANDLE;
 
     bool runRound(const CorpusShader& shader, const ShaderInfo& info, const TranslateResult& tr, const GpuProgram& prog,
@@ -406,6 +410,11 @@ void Runner::runShader(const CorpusShader& shader, uint32_t rounds, uint32_t see
     }
     const ShaderInfo& info = parsed.info;
     TranslateResult tr = translate(info);
+    if (!hlslOverride.empty() && tr.ok) {
+        // Debugging: an edited translation (for instance with a register routed to an export).
+        std::ifstream f(hlslOverride);
+        tr.hlsl.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+    }
     if (!tr.ok) {
         stats.translateFailures++;
         return;  // the translator refusing a random program (too many bindings and the like)
@@ -742,6 +751,7 @@ int runGpu(int argc, char** argv) {
 
     Compiler compiler;
     Runner runner(gpu, compiler, out, maxReport, option(argc, argv, "--trace", "0") != "0");
+    runner.hlslOverride = option(argc, argv, "--hlsl");
     if (!runner.init()) return 1;
     Stats stats;
     uint32_t index = 0;

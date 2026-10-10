@@ -252,6 +252,7 @@ private:
     // Loop stack (as the sequencer: up to 4).
     uint32_t loopDepth_ = 0;
     std::array<uint32_t, 4> loopIt_{}, loopConst_{};
+    std::array<int32_t, 4> loopBase_{};  // aL at iteration 0: the start, or the enclosing aL (repeat)
     std::array<uint32_t, 4> callStack_{};
     uint32_t callDepth_ = 0;
     // Texture fetch state.
@@ -275,13 +276,15 @@ private:
     }
     bool boolConst(uint32_t index) const { return (in_.bools[index >> 5] >> (index & 31)) & 1; }
 
-    int32_t loopAddress() const {
+    // aL before the clamp: the loop's base plus the step per iteration done.
+    int32_t rawLoopAddress() const {
         if (loopDepth_ == 0) return 0;
-        uint32_t c = loopConst_[(loopDepth_ - 1) & 3];
-        int32_t start = int32_t(bits(c, 8, 8)), step = sbits(c, 16, 8);
-        int32_t aL = int32_t(loopIt_[(loopDepth_ - 1) & 3]) * step + start;
+        uint32_t slot = (loopDepth_ - 1) & 3;
+        return loopBase_[slot] + int32_t(loopIt_[slot]) * sbits(loopConst_[slot], 16, 8);
+    }
+    int32_t loopAddress() const {
         // The real range of aL (IPR2015-00325 sequencer specification, as the SDK notes).
-        return std::clamp(aL, -256, 256);
+        return std::clamp(rawLoopAddress(), -256, 256);
     }
     uint32_t tempIndex(uint32_t index, bool relative) const {
         return uint32_t(int32_t(index) + (relative ? loopAddress() : 0)) & 63u;
@@ -377,8 +380,12 @@ void Machine::run() {
                     return;
                 }
                 uint32_t slot = loopDepth_;
+                // Repeat reuses the current aL instead of the loop's start (ucode.h, and the
+                // SDK's SPIR-V translator); the iteration count always starts again.
+                int32_t base = repeat ? rawLoopAddress() : int32_t(bits(in_.loops[id], 8, 8));
                 loopConst_[slot] = in_.loops[id];
-                if (!repeat) loopIt_[slot] = 0;
+                loopBase_[slot] = base;
+                loopIt_[slot] = 0;
                 if (loopIt_[slot] >= bits(loopConst_[slot], 0, 8)) {
                     next = c.field(0, 13);
                 } else {
@@ -766,6 +773,9 @@ void Machine::alu(const uint32_t* w) {
             float lo = std::fabs(sa.v) - sa.e;
             float slope = (sa.e > 0.0f) ? (lo > 0.0f ? 1.0f / (lo * lo) : kInf) : 0.0f;
             s = transcendental(sa, r, slope, std::fabs(r) * kRcpRel);
+            // Of a zero: the sign of the infinity follows the zero's, which Vulkan does not
+            // preserve by default (no signed-zero float controls), so it is not compared.
+            if (sa.v == 0.0f && sop != 18) s = unknown();
             break;
         }
         case 20: case 21: case 22: {                                       // rsqc, rsqf, rsq
@@ -777,6 +787,7 @@ void Machine::alu(const uint32_t* w) {
             float lo = std::fabs(sa.v) - sa.e;
             float slope = (sa.e > 0.0f) ? (lo > 0.0f ? 0.5f / (lo * std::sqrt(lo)) : kInf) : 0.0f;
             s = transcendental(sa, r, slope, std::fabs(r) * kRsqRel);
+            if (sa.v == 0.0f && sop != 21) s = unknown();  // the sign of zero, as for rcp
             break;
         }
         case 23: case 24: {                                                // maxas, maxasf
@@ -1123,6 +1134,13 @@ Vec Machine::sample(const Texture& t, uint32_t dim, const std::array<Num, 3>& c,
         // Cube: direction to face and face coordinates (the Vulkan / D3D cube rules).
         float x = c[0].v, y = c[1].v, z = c[2].v;
         float ax = std::fabs(x), ay = std::fabs(y), az = std::fabs(z);
+        // An infinite, NaN, huge or tiny direction: implementations may normalise it first
+        // (lavapipe does), so the face and coordinates are theirs.
+        float big = std::max({ax, ay, az});
+        if (c[0].unknown || c[1].unknown || c[2].unknown || !(big <= 1e18f) || big < 1e-18f) {
+            unknownOut = true;
+            return r;
+        }
         float e = c[0].e + c[1].e + c[2].e;
         float ma, sc, tc;
         if (ax >= ay && ax >= az) {
@@ -1161,7 +1179,9 @@ Vec Machine::sample(const Texture& t, uint32_t dim, const std::array<Num, 3>& c,
     if (dim == 1 || dim == 3) layer = (dim == 3) ? layer : 0;
     float pos[3] = {}, posErr[3] = {};
     for (uint32_t a = 0; a < axes; a++) {
-        if (cc[a].unknown || !std::isfinite(cc[a].v)) {
+        // Far outside the texture (beyond 1024 repeats) the wrap or clamp depends on the
+        // implementation's coordinate precision: not modelled.
+        if (cc[a].unknown || !(std::fabs(cc[a].v) <= 1024.0f)) {
             unknownOut = true;
             return r;
         }
@@ -1296,6 +1316,11 @@ void Machine::tfetch(const uint32_t* w) {
             if (dim == 3) {
                 // tfetchCube: (S, T, face) with S and T in [1, 2] from the cube sequence; to a
                 // direction (the SDK's SPIR-V translator: 2 * c - 3, then the face's axes).
+                if (in_.trace) {
+                    char b[160];
+                    std::snprintf(b, sizeof(b), "    cube coordinates (%.9g, %.9g, %.9g)", double(c[0].v), double(c[1].v), double(c[2].v));
+                    trace(b);
+                }
                 Num faceN = c[2];
                 float face = faceN.v + offsets[2];
                 if (faceN.unknown || std::isnan(face)) {
@@ -1323,6 +1348,13 @@ void Machine::tfetch(const uint32_t* w) {
                         default: dir = {negative ? neg(sc) : sc, neg(tc), sign}; break;
                     }
                     c = dir;
+                    if (in_.trace) {
+                        char b[160];
+                        std::snprintf(b, sizeof(b), "    cube face %u, direction (%.9g, %.9g, %.9g), offsets (%g, %g, %g)%s", f,
+                                      double(dir[0].v), double(dir[1].v), double(dir[2].v), double(offsets[0]),
+                                      double(offsets[1]), double(offsets[2]), denorm ? ", unnormalized" : "");
+                        trace(b);
+                    }
                 }
             } else {
                 for (uint32_t i = 0; i < axes; i++) {
