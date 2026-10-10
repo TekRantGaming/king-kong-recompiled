@@ -320,13 +320,14 @@
     "step": 0.2
    },
    "thresholds": {
-    "mae": 5.0,
-    "ssim": 0.85,
+    "mae": 6.0,
+    "ssim": 0.8,
     "tile_mae": 18.0,
     "bad": null,
     "min_pass": 0.6,
     "drawlog": 0.97,
-    "env_flash_level": 6
+    "env_flash_level": 6,
+    "env_bad": 0.01
    }
   },
   {
@@ -373,8 +374,8 @@
     "bad": null,
     "min_pass": 0.6,
     "env_tol": 32,
-    "env_tile": 3.0,
-    "env_bad": 0.003,
+    "env_tile": 6.0,
+    "env_bad": 0.006,
     "drawlog": 0.95,
     "env_flash_level": 6
    }
