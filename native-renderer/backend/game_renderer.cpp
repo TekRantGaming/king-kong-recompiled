@@ -96,6 +96,9 @@ GameRenderer::GameRenderer(nvrhi::IDevice* device, const GuestMemory& memory,
                            kknr::GuestMemory physical, ShaderLibrary* shaders)
     : device_(device), memory_(memory), physical_(physical), shaders_(shaders) {
   textures_.release_host = [this](kknr::TextureCache::Entry& e) {
+    for (auto it = resolved_by_base_.begin(); it != resolved_by_base_.end();) {
+      it = it->second == &e ? resolved_by_base_.erase(it) : std::next(it);
+    }
     ReleaseHostTexture(static_cast<HostTexture*>(e.host));
     e.host = nullptr;
   };

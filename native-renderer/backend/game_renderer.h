@@ -77,6 +77,8 @@ class GameRenderer {
     uint64_t pipelines = 0;
     uint64_t invalidations = 0;
     uint64_t presents_missing = 0;  // no host target for the back buffer
+    uint64_t aliases = 0;           // textures converted from a resolve through another format
+    uint64_t alias_failures = 0;
     double pipeline_ms = 0;         // time spent creating pipelines
     double texture_ms = 0;          // time spent converting and uploading textures
   };
@@ -157,7 +159,20 @@ class GameRenderer {
     nvrhi::Format format = nvrhi::Format::UNKNOWN;
     bool render_target = false;  // made by a resolve (usable as a blit target)
     std::unordered_map<uint32_t, uint32_t> views;  // view key -> descriptor index
+    // Resolves: bumped on every write, and whether the texels are depth
+    // values (a depth source into R32F).
+    uint64_t serial = 0;
+    bool depth = false;
+    // A texture whose memory a resolve wrote through another texture object
+    // (other format or size): the converted copy and the write it holds.
+    const HostTexture* alias_source = nullptr;
+    uint64_t alias_serial = 0;
   };
+  // The texture at a resolved texture's address seen through another fetch
+  // constant (the light shafts read the depth resolve's k_24_8 memory as
+  // k_8_8_8_8): a converted copy of the resolve's texture.
+  HostTexture* AliasTexture(nvrhi::ICommandList* cl, kknr::TextureCache::Entry& entry,
+                            const kknr::TextureFetch& fetch, const HostTexture* source);
   // Descriptor index (with bit 31 for a 2D array) for a texture fetch slot.
   // base_map: a sampler of the slot uses the base level only (mip filter
   // "base map"), so the view holds one level.
@@ -197,7 +212,11 @@ class GameRenderer {
                  uint32_t stencil);
   bool Blit(nvrhi::ICommandList* cl, nvrhi::ITexture* source, int32_t sx, int32_t sy, int32_t w,
             int32_t h, nvrhi::ITexture* dest, uint32_t dest_level, uint32_t dest_slice, int32_t dx,
-            int32_t dy, const uint32_t channels[4], bool gamma_ramp = false);
+            int32_t dy, const uint32_t channels[4], uint32_t blit_flags = 0);
+  static constexpr uint32_t kBlitGammaRamp = 1;   // r, g, b through the display gamma ramp
+  static constexpr uint32_t kBlitDepthBytes = 2;  // a depth value as the D24S8 word's bytes
+  static constexpr uint32_t kBlitBytesToDepth = 4;  // 8:8:8:8 colour holding those bytes back to depth
+  static constexpr uint32_t kBlitTexelBytesToDepth = 8;  // the same from a texture's X, Y, Z, W bytes
   bool Dump(uint32_t frame) const {
     return options_.dump_frame >= 0 && uint32_t(options_.dump_frame) == frame;
   }
@@ -226,6 +245,10 @@ class GameRenderer {
   std::unordered_map<uint64_t, nvrhi::GraphicsPipelineHandle> pipelines_;
 
   kknr::TextureCache textures_;
+  // GPU-written (resolved) textures by base address, for other fetch
+  // constants over the same memory.
+  std::unordered_map<uint32_t, kknr::TextureCache::Entry*> resolved_by_base_;
+  uint64_t resolve_serial_ = 0;
   kknr::BufferCache vertex_buffers_;
   kknr::BufferCache index_buffers_;
   std::unordered_map<uint64_t, std::pair<nvrhi::SamplerHandle, uint32_t>> samplers_;

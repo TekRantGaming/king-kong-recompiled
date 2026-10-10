@@ -12,7 +12,7 @@
 struct BlitConstants {
   int4 src_rect;   // x, y, width, height in source texels
   uint4 channels;  // output channel i = source channel channels[i]: 0-3 r g b a, 4 zero, 5 one
-  uint4 flags;     // x: 1 = map r, g, b through the gamma ramp
+  uint4 flags;     // x: 1 = map r, g, b through the gamma ramp, 2 = depth to D24S8 bytes, 4 = back
 };
 #ifdef __spirv__
 [[vk::push_constant]]
@@ -46,6 +46,25 @@ float4 ps_main(VSOut i) : SV_Target0 {
   int2 p = c.src_rect.xy + int2(floor(i.uv * float2(c.src_rect.zw)));
   p = clamp(p, c.src_rect.xy, c.src_rect.xy + c.src_rect.zw - 1);
   float4 v = source.Load(int3(p, 0));
+  if (c.flags.x & 8u) {
+    // A texture's X, Y, Z, W bytes (host R, G, B, A) as a D24S8 word: depth
+    // from Y up.
+    uint3 b = uint3(round(saturate(v.gba) * 255.0));
+    v = float4(float(b.x | (b.y << 8) | (b.z << 16)) / 16777215.0, 0.0, 0.0, 1.0);
+  }
+  if (c.flags.x & 4u) {
+    // 8:8:8:8 colour holding a D24S8 word's bytes (see below, sampled through
+    // an A8R8G8B8 view) back to the depth: the resolve's word with R and B
+    // exchanged, its top 24 bits.
+    uint3 b = uint3(round(saturate(v.gra) * 255.0));
+    v = float4(float(b.x | (b.y << 8) | (b.z << 16)) / 16777215.0, 0.0, 0.0, 1.0);
+  }
+  if (c.flags.x & 2u) {
+    // A depth value as the bytes of the D24S8 word (depth << 8 | stencil),
+    // X (the low byte, stencil) first.
+    uint d = uint(round(saturate(v.r) * 16777215.0));
+    v = float4(0.0, float(d & 255u), float((d >> 8) & 255u), float(d >> 16)) / 255.0;
+  }
   float4 o = float4(Pick(v, c.channels.x), Pick(v, c.channels.y), Pick(v, c.channels.z),
                     Pick(v, c.channels.w));
   if (c.flags.x & 1u) {

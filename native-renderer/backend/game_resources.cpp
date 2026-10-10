@@ -210,6 +210,7 @@ GameRenderer::HostTexture* GameRenderer::UploadTexture(nvrhi::ICommandList* cl,
                      sub.depth_pitch);
   }
   cl->setTextureState(host->texture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
+  host->alias_source = nullptr;
   textures_.OnUploaded(entry, physical_);
   ++stats_.texture_uploads;
   return host;
@@ -283,6 +284,19 @@ uint32_t GameRenderer::BindTexture(nvrhi::ICommandList* cl, const uint32_t words
   kknr::TextureCache::BindResult r = textures_.Bind(fetch, physical_, frame_);
   if (!r.entry) return 0;
   auto* host = static_cast<HostTexture*>(r.entry->host);
+  if (!r.entry->gpu_written) {
+    auto it = resolved_by_base_.find(fetch.BaseAddress());
+    if (it != resolved_by_base_.end() && it->second != r.entry && it->second->gpu_written && it->second->host) {
+      if (HostTexture* alias = AliasTexture(cl, *r.entry, fetch, static_cast<HostTexture*>(it->second->host))) {
+        cl->setTextureState(alias->texture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
+        return TextureView(alias, fetch, dimension, base_map);
+      }
+    }
+    if (host && host->alias_source) {
+      // The resolve's memory was rewritten since: the guest's data again.
+      r.action = kknr::BindAction::kReupload;
+    }
+  }
   if (r.action != kknr::BindAction::kUseExisting || !host) {
     if (r.entry->gpu_written && host && r.action == kknr::BindAction::kUseExisting) {
       // The resolve's copy is the truth.
@@ -293,6 +307,60 @@ uint32_t GameRenderer::BindTexture(nvrhi::ICommandList* cl, const uint32_t words
   }
   cl->setTextureState(host->texture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
   return TextureView(host, fetch, dimension, base_map);
+}
+
+GameRenderer::HostTexture* GameRenderer::AliasTexture(nvrhi::ICommandList* cl, kknr::TextureCache::Entry& entry,
+                                                      const kknr::TextureFetch& fetch, const HostTexture* source) {
+  auto* host = static_cast<HostTexture*>(entry.host);
+  if (host && host->alias_source == source && host->alias_serial == source->serial) return host;
+  kknr::HostTexturePlan plan;
+  if (!kknr::PlanHostTexture(fetch, plan, nullptr, TextureOptions())) return nullptr;
+  if (kknr::GetHostFormatInfo(plan.format).block_size != 1) return nullptr;  // not drawable
+  if (!host || !host->render_target || host->plan.format != plan.format || host->plan.width != plan.width ||
+      host->plan.height != plan.height || host->plan.levels != plan.levels || host->plan.layers != plan.layers ||
+      host->plan.dimension != plan.dimension) {
+    ReleaseHostTexture(host);
+    host = CreateHostTexture(plan, true);
+    entry.host = host;
+    if (!host) return nullptr;
+  }
+  const int32_t w = int32_t(std::min(plan.width, source->plan.width));
+  const int32_t h = int32_t(std::min(plan.height, source->plan.height));
+  const uint32_t identity[4] = {0, 1, 2, 3};
+  bool ok;
+  const bool four = host->format == nvrhi::Format::RGBA8_UNORM;
+  if (source->depth && four) {
+    // The 360's resolve wrote the D24S8 word (depth << 8 | stencil); read as
+    // 8:8:8:8 its bytes are X stencil, Y-W the depth from the low byte up.
+    ok = Blit(cl, source->texture, 0, 0, w, h, host->texture, 0, 0, 0, 0, identity, kBlitDepthBytes);
+  } else if (!source->depth && source->format == nvrhi::Format::RGBA8_UNORM &&
+             host->format == nvrhi::Format::R32_FLOAT &&
+             (fetch.Format() == kknr::TextureFormat::k_24_8 || fetch.Format() == kknr::TextureFormat::k_24_8_FLOAT)) {
+    // An 8:8:8:8 resolve read back as depth (the light shafts' downsampled
+    // depth): the texture's 32-bit words, their top 24 bits.
+    ok = Blit(cl, source->texture, 0, 0, w, h, host->texture, 0, 0, 0, 0, identity, kBlitTexelBytesToDepth);
+    if (ok) host->depth = true;
+  } else if (source->format == host->format && !source->depth) {
+    nvrhi::TextureSlice slice;
+    slice.setSize(uint32_t(w), uint32_t(h), 1);
+    cl->copyTexture(host->texture, slice, source->texture, slice);
+    ok = true;
+  } else if (!source->depth) {
+    ok = Blit(cl, source->texture, 0, 0, w, h, host->texture, 0, 0, 0, 0, identity);
+  } else {
+    ok = false;
+  }
+  if (!ok) {
+    if (stats_.alias_failures++ < 20) {
+      Logf(LogLevel::kWarning, "rexgpu-native: texture %08X %08X over a resolve's memory not converted (format %u)",
+           fetch.words[0], fetch.words[1], uint32_t(host->format));
+    }
+    return nullptr;
+  }
+  host->alias_source = source;
+  host->alias_serial = source->serial;
+  ++stats_.aliases;
+  return host;
 }
 
 // ---------------------------------------------------------------- samplers

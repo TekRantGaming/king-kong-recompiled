@@ -51,7 +51,7 @@ kknr::TextureFetch FetchFromObject(const uint8_t* object) {
 
 bool GameRenderer::Blit(nvrhi::ICommandList* cl, nvrhi::ITexture* source, int32_t sx, int32_t sy, int32_t w,
                         int32_t h, nvrhi::ITexture* dest, uint32_t dest_level, uint32_t dest_slice,
-                        int32_t dx, int32_t dy, const uint32_t channels[4], bool gamma_ramp) {
+                        int32_t dx, int32_t dy, const uint32_t channels[4], uint32_t blit_flags) {
   if (w <= 0 || h <= 0) return false;
   nvrhi::FramebufferDesc fd;
   fd.addColorAttachment(nvrhi::FramebufferAttachment().setTexture(dest).setMipLevel(dest_level).setArraySlice(dest_slice));
@@ -99,7 +99,7 @@ bool GameRenderer::Blit(nvrhi::ICommandList* cl, nvrhi::ITexture* source, int32_
   gs.viewport.addViewport(nvrhi::Viewport(float(dx), float(dx + w), float(dy), float(dy + h), 0.0f, 1.0f));
   gs.viewport.addScissorRect(nvrhi::Rect(dx, dx + w, dy, dy + h));
   cl->setGraphicsState(gs);
-  BlitConstants c = {{sx, sy, w, h}, {channels[0], channels[1], channels[2], channels[3]}, {gamma_ramp ? 1u : 0u, 0, 0, 0}};
+  BlitConstants c = {{sx, sy, w, h}, {channels[0], channels[1], channels[2], channels[3]}, {blit_flags, 0, 0, 0}};
   cl->setPushConstants(&c, sizeof(c));
   nvrhi::DrawArguments args;
   args.vertexCount = 3;
@@ -304,7 +304,20 @@ void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
         const kknr::ResolveConversion conv =
             kknr::PlanResolveConversion(kknr::ResolveSource{from_depth, format}, fetch, TextureOptions());
         if (cw > 0 && ch > 0 && slice < plan.layers && level < plan.levels) {
-          if (conv.method == kknr::ResolveMethod::kUnsupported || conv.scale != 1.0f) {
+          const bool bytes_to_depth =
+              !from_depth && format == 0 && host->format == nvrhi::Format::R32_FLOAT &&
+              (fetch.Format() == kknr::TextureFormat::k_24_8 || fetch.Format() == kknr::TextureFormat::k_24_8_FLOAT);
+          host->depth = from_depth;
+          if (bytes_to_depth && host->render_target) {
+            // A colour target holding a depth buffer's bytes (the light shafts
+            // copy the depth, seen as 8:8:8:8, into a smaller target) resolved
+            // into a depth texture: the 360 copies the 32-bit word, with R and
+            // B exchanged, and the texture reads its top 24 bits.
+            const uint32_t identity[4] = {0, 1, 2, 3};
+            copied = Blit(cl, source->texture, sx, sy, cw, ch, host->texture, level, slice, dx, dy, identity,
+                          kBlitBytesToDepth);
+            if (copied) host->depth = true;
+          } else if (conv.method == kknr::ResolveMethod::kUnsupported || conv.scale != 1.0f) {
             // scale != 1: the blit has no scale (16-bit fixed targets into
             // 16-bit textures; the game has none).
             if (stats_.resolve_failures < 20) {
@@ -325,6 +338,10 @@ void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
             copied = Blit(cl, source->texture, sx, sy, cw, ch, host->texture, level, slice, dx, dy, channels);
           }
           cl->setTextureState(host->texture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
+          if (copied) {
+            host->serial = ++resolve_serial_;
+            resolved_by_base_[fetch.BaseAddress()] = &entry;
+          }
         }
       }
     }
@@ -355,8 +372,10 @@ void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
   }
   if (Dump(call.frame)) {
     Logf(LogLevel::kInfo,
-         "rexgpu-native: resolve flags %X %s base %u fmt %u pitch %u rect %d,%d %dx%d -> %08X %s", call.flags,
-         from_depth ? "depth" : "colour", base, format, pitch, sx, sy, w, h, call.dest_texture,
+         "rexgpu-native: resolve flags %X %s base %u fmt %u pitch %u rect %d,%d %dx%d -> %08X (fetch %08X %08X %08X %08X) %s",
+         call.flags, from_depth ? "depth" : "colour", base, format, pitch, sx, sy, w, h, call.dest_texture,
+         dest_object ? LoadBE32(dest_object + 16) : 0, dest_object ? LoadBE32(dest_object + 20) : 0,
+         dest_object ? LoadBE32(dest_object + 24) : 0, dest_object ? LoadBE32(dest_object + 28) : 0,
          copied ? "copied" : "not copied");
   }
 }
@@ -408,7 +427,7 @@ bool GameRenderer::Present(nvrhi::ICommandList* cl, uint32_t device, nvrhi::ITex
          ramp[128], ramp[192], ramp[255]);
   }
   return Blit(cl, source->texture, 0, 0, int32_t(std::min(s.width, td.width)), int32_t(std::min(s.height, td.height)),
-              target, 0, 0, 0, 0, channels, use_ramp);
+              target, 0, 0, 0, 0, channels, use_ramp ? kBlitGammaRamp : 0);
 }
 
 }  // namespace nr
