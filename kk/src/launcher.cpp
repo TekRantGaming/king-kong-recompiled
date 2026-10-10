@@ -2893,21 +2893,33 @@ bool GameFilesPresent(const std::filesystem::path& game_dir) {
          std::filesystem::exists(game_dir / "KKMaps.bf", ec) && std::filesystem::exists(game_dir / "KKTextures.bf", ec);
 }
 
-void PreloadGpuPlugin() {
+namespace {
+
+// Loads rexgpu-<name> (any build config) from beside the program; true if one loaded.
+bool PreloadGpuPluginNamed(const char* name) {
+  const auto dir = rex::filesystem::GetExecutableFolder();
+  for (const char* postfix : {"rd", "", "d"}) {
 #if defined(_WIN32)
-  const auto dir = rex::filesystem::GetExecutableFolder();
-  for (const char* name : {"rexgpu-xenosrd.dll", "rexgpu-xenos.dll", "rexgpu-xenosd.dll"}) {
-    if (std::filesystem::exists(dir / name) && LoadLibraryW((dir / name).c_str())) return;
-  }
-  REXLOG_WARN("KK: GPU plugin not found for preload; graphics settings unavailable in launcher");
+    const std::string file = std::string("rexgpu-") + name + postfix + ".dll";
+    if (std::filesystem::exists(dir / file) && LoadLibraryW((dir / file).c_str())) return true;
 #else
-  const auto dir = rex::filesystem::GetExecutableFolder();
-  for (const char* name : {"librexgpu-xenosrd.so", "librexgpu-xenos.so", "librexgpu-xenosd.so"}) {
-    for (const auto& path : {dir / name, dir / ".." / "lib" / name})
-      if (std::filesystem::exists(path) && dlopen(path.c_str(), RTLD_NOW | RTLD_GLOBAL)) return;
-  }
-  REXLOG_WARN("KK: GPU plugin not found for preload; graphics settings unavailable in launcher");
+    const std::string file = std::string("librexgpu-") + name + postfix + ".so";
+    for (const auto& path : {dir / file, dir / ".." / "lib" / file})
+      if (std::filesystem::exists(path) && dlopen(path.c_str(), RTLD_NOW | RTLD_GLOBAL)) return true;
 #endif
+  }
+  return false;
+}
+
+}  // namespace
+
+void PreloadGpuPlugin() {
+  if (!PreloadGpuPluginNamed("xenos"))
+    REXLOG_WARN("KK: GPU plugin not found for preload; graphics settings unavailable in launcher");
+  // The native renderer (--gpu_plugin=native), when it was built
+  // (KK_NATIVE_RENDERER): its cvars (native_test, native_draws, ...) must exist
+  // before the command line and the config are read, like the Xenos plugin's.
+  PreloadGpuPluginNamed("native");
 }
 
 void ShowLauncher(rex::ui::ImGuiDrawer* drawer, rex::ui::ImmediateDrawer* immediate, LauncherPaths paths,

@@ -152,6 +152,10 @@ the traces.
 
 ## Vertex shader and pixel shader
 
+Correction (stream 04, from the game's frames): the two columns below are swapped. The object with the
+52-byte header is the pixel shader (set by `sub_821108B8`, null in depth-only passes) and the one with the
+592-byte header the vertex shader (set by `sub_82110C28`); see `d3d-api-map.md`, Corrections.
+
 | Offset | Vertex shader (52-byte header) | Pixel shader (592-byte header) |
 |---|---|---|
 | +4 | reference count (AddRef `sub_821106E0`, Release `sub_821106F8` / `sub_821107B0`) | reference count |

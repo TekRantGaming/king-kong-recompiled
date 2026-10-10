@@ -477,6 +477,14 @@ render target 0, resolves it into the front buffer texture and swaps.
 
 ## Corrections to the Phase 0 map
 
+- Found in the game by stream 04 (Windows, 10 October 2026; details in `backend.md`): the shader functions are
+  swapped. `sub_821108B8` is D3DDevice_SetPixelShader and `sub_82110C28` D3DDevice_SetVertexShader (the object
+  passed to `sub_82110C28` has the 592-byte header and a vertex container and is never null; the one passed to
+  `sub_821108B8` has the 52-byte header and is null in the depth pre-pass), and with the shader stream's finding
+  `sub_82111D90` is CreateVertexShader and `sub_82111CA0` CreatePixelShader. The rows below still carry the old
+  names. Clear's flags are D3DCLEAR_TARGET0-3 = bits 0-3, ZBUFFER 0x10, STENCIL 0x20 (`sub_82114D10`), and its
+  stencil is r9. The vertex buffer's fetch-constant address is a CPU physical-view address (the 0xE0000000 view
+  is 4 KB ahead), like the index buffer's.
 - SetStreamSource: +12556+8s is the offset and +12560+8s the buffer (not the reverse).
 - `sub_8210C060` is SetClipPlane (PA_CL_UCP), not a pixel-shader constant writer.
 - `sub_8210C130` is SetBlendState (packed D3DBLENDSTATE = RB_BLENDCONTROL); it bypasses the render-state blend cache.
