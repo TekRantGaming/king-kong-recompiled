@@ -893,12 +893,15 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
     if (newP0)
     {
         indent();
-        out += (vop >= AluVectorOpcode::SetpEqPush && vop <= AluVectorOpcode::SetpGePush && doVector) ? "p0 = kp;\n" : "p0 = ksp;\n";
+        // Both operations setting it: the scalar one is applied last.
+        bool scalarSets = doScalar && sop >= AluScalarOpcode::SetpEq && sop <= AluScalarOpcode::SetpRstr;
+        out += scalarSets ? "p0 = ksp;\n" : "p0 = kp;\n";
     }
     if (newA0)
     {
         indent();
-        out += (vop == AluVectorOpcode::MaxA && doVector) ? "a0 = ka;\n" : "a0 = ksa;\n";
+        bool scalarSets = doScalar && (sop == AluScalarOpcode::MaxAs || sop == AluScalarOpcode::MaxAsf);
+        out += scalarSets ? "a0 = ksa;\n" : "a0 = ka;\n";
     }
     if (scalarKill && isPixelShader)
     {
@@ -1305,8 +1308,8 @@ bool ShaderRecompiler::checkStructured() const
         case ControlFlowOpcode::LoopStart:
         {
             uint32_t after = c.loopStart.address;
-            if (after <= i + 1 || after > n)
-                return false;
+            if (after <= i + 1 || after > n || c.loopStart.isRepeat || stack.size() >= 4)
+                return false; // repeat loops keep their counter: the general form handles them
             uint32_t endIndex = after - 1;
             const auto& e = cf[endIndex];
             if (e.opcode != ControlFlowOpcode::LoopEnd || e.loopEnd.address != i + 1 || e.loopEnd.loopId != c.loopStart.loopId)
@@ -1613,7 +1616,7 @@ bool ShaderRecompiler::recompile(const RecompilerInput& in, std::string_view inc
                 out += "{\n";
                 ++indentation;
                 indent();
-                println("aL = int((kkLoop{0} >> 8) & 0xFFu) + int(kkIt{0}) * (int(kkLoop{0} << 8) >> 24);", t);
+                println("aL = clamp(int((kkLoop{0} >> 8) & 0xFFu) + int(kkIt{0}) * (int(kkLoop{0} << 8) >> 24), -256, 256);", t);
                 stack.push_back({ true, uint32_t(c.loopStart.address - 1) });
                 break;
             }
@@ -1658,8 +1661,8 @@ bool ShaderRecompiler::recompile(const RecompilerInput& in, std::string_view inc
         out += "\tuint kkLoopIt[4] = { 0, 0, 0, 0 };\n\tuint kkLoopConst[4] = { 0, 0, 0, 0 };\n\tuint kkLoopDepth = 0;\n";
         out += "\tuint kkCallStack[4] = { 0, 0, 0, 0 };\n\tuint kkCallDepth = 0;\n";
         out += "\t[loop] while (pc != 0xFFFFFFFFu)\n\t{\n\t\tswitch (pc)\n\t\t{\n";
-        const char* setAL = "aL = kkLoopDepth == 0 ? 0 : int((kkLoopConst[(kkLoopDepth - 1) & 3] >> 8) & 0xFFu) + "
-            "int(kkLoopIt[(kkLoopDepth - 1) & 3]) * (int(kkLoopConst[(kkLoopDepth - 1) & 3] << 8) >> 24);";
+        const char* setAL = "aL = kkLoopDepth == 0 ? 0 : clamp(int((kkLoopConst[(kkLoopDepth - 1) & 3] >> 8) & 0xFFu) + "
+            "int(kkLoopIt[(kkLoopDepth - 1) & 3]) * (int(kkLoopConst[(kkLoopDepth - 1) & 3] << 8) >> 24), -256, 256);";
         for (uint32_t i = 0; i < n; i++)
         {
             const auto& c = cf[i];
@@ -1678,6 +1681,9 @@ bool ShaderRecompiler::recompile(const RecompilerInput& in, std::string_view inc
                 switch (c.opcode)
                 {
                 case ControlFlowOpcode::LoopStart:
+                    // Loops nest up to 4 deep; a deeper one is skipped.
+                    indent();
+                    println("if (kkLoopDepth >= 4) {{ pc = {}u; break; }}", c.loopStart.address);
                     indent();
                     println("kkLoopConst[kkLoopDepth & 3] = {};", loopConstant(c.loopStart.loopId));
                     if (!c.loopStart.isRepeat)
@@ -1697,6 +1703,8 @@ bool ShaderRecompiler::recompile(const RecompilerInput& in, std::string_view inc
                     println("{{ {} pc = 0x{:X}u; }}", setAL, next);
                     break;
                 case ControlFlowOpcode::LoopEnd:
+                    indent();
+                    println("if (kkLoopDepth == 0) {{ pc = 0x{:X}u; break; }}", next);
                     indent();
                     out += "kkLoopIt[(kkLoopDepth - 1) & 3]++;\n";
                     indent();
@@ -1718,7 +1726,7 @@ bool ShaderRecompiler::recompile(const RecompilerInput& in, std::string_view inc
                         condition = c.condCall.isPredicated ? (c.condCall.condition ? "p0" : "!p0") :
                             boolCondition(c.condCall.boolAddress, c.condCall.condition);
                     indent();
-                    println("if ({})", condition);
+                    println("if (({}) && kkCallDepth < 4)", condition);
                     indent();
                     println("{{ kkCallStack[kkCallDepth & 3] = 0x{:X}u; kkCallDepth++; pc = {}u; }}", next, c.condCall.address);
                     indent();

@@ -351,6 +351,8 @@ float4 kk_ApplyElementSwizzle(float4 v, uint word)
 
 float4 kk_LoadVertex(uint buffer, uint byteAddress, uint word)
 {
+    if ((word & 0x3Fu) == 0u)
+        return float4(0.0, 0.0, 0.0, 1.0);  // the declaration lacks the element
     uint endian = (word >> 9) & 3u;
     uint dwords = kk_VertexFormatDwords(word & 0x3Fu);
     uint4 d = uint4(0u, 0u, 0u, 0u);

@@ -115,6 +115,18 @@ add_test(NAME assembler COMMAND kkshaders_tests assembler)
 add_test(NAME container COMMAND kkshaders_tests container)
 add_test(NAME corpus COMMAND kkshaders_tests corpus ${KK_TEST_ARGS} --out "${CMAKE_CURRENT_BINARY_DIR}/corpus-out")
 add_test(NAME cache COMMAND kkshaders_tests cache ${KK_TEST_ARGS} --out "${CMAKE_CURRENT_BINARY_DIR}/cache-out")
+# Execution tests (need Vulkan headers and a device; Mesa's lavapipe works): translated shaders
+# run on the device and are compared with a CPU reference interpreter.
+find_package(Vulkan QUIET)
+if(Vulkan_FOUND)
+    add_executable(kkshaders_exec_tests tests/exec_tests.cpp tests/vk_runner.cpp tests/xenos_ref.cpp tests/xenos_asm.cpp
+        tests/container_writer.cpp tests/corpus.cpp)
+    target_include_directories(kkshaders_exec_tests PRIVATE tests)
+    target_link_libraries(kkshaders_exec_tests PRIVATE kkshaders Vulkan::Vulkan)
+    add_test(NAME execution COMMAND kkshaders_exec_tests --dxc "${KKSHADERS_DXC_DIR}" --count 100 --out "${CMAKE_CURRENT_BINARY_DIR}/exec-out")
+    set_tests_properties(execution PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
 # The tool's database commands on a synthetic database and shader storage file.
 set(KK_FIX "${CMAKE_CURRENT_BINARY_DIR}/fixtures")
 add_test(NAME fixtures COMMAND kkshaders_tests make-fixtures "${KK_FIX}")

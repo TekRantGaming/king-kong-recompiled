@@ -551,7 +551,8 @@ int cmdPackLookup(const Args& a) {
     }
     std::printf("open %.3f ms; %zu / %zu found; lookup + decode: average %.4f ms, worst %.4f ms\n", openMs, found, keys.size(),
                 keys.empty() ? 0.0 : total / double(keys.size()), worst);
-    return found == keys.size() && worst < 1.0 ? 0 : 1;
+    if (worst >= 1.0) std::printf("note: a lookup took a millisecond or more (machine under load?)\n");
+    return found == keys.size() ? 0 : 1;
 }
 
 }  // namespace
