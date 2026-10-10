@@ -91,7 +91,7 @@ struct Harness {
 
 TEST(HookTableIsSortedAndComplete) {
   auto table = hooks::Table();
-  CHECK_EQ(table.size(), size_t(39));
+  CHECK_EQ(table.size(), size_t(41));  // 39 state, draw and frame entry points + 2 shader creations
   std::set<std::string> names;
   for (size_t i = 0; i < table.size(); ++i) {
     CHECK(table[i].handler != nullptr);

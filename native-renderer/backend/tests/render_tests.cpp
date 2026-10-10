@@ -232,6 +232,9 @@ TEST(Milestone3_RecordedFrameThroughNvrhi) {
   TriangleScene scene(memory, kWidth, kHeight);
   NvrhiRecorder recorder;
   f.renderer->set_observer(&recorder);
+  // The scene draws with ZFUNC always (an overlay for the main-pass filter,
+  // which has its own test below): this test is about the plumbing.
+  f.renderer->options().only_depth_tested = false;
   DrawTracker state(memory, f.renderer.get());
   ApiBinding binding;
   InitApiBinding(binding, &state, [](void* s) { return static_cast<DrawTracker*>(s); });
@@ -321,6 +324,7 @@ TEST(Milestone3_ViewportAndTranspose) {
   TriangleScene scene(memory, kWidth, kHeight);
   // The right half of the target only.
   scene.viewport = memory.NewViewport(kWidth / 2, 0, kWidth / 2, kHeight, 0.0f, 1.0f);
+  f.renderer->options().only_depth_tested = false;
   DrawTracker state(memory, f.renderer.get());
   ApiBinding binding;
   InitApiBinding(binding, &state, [](void* s) { return static_cast<DrawTracker*>(s); });
@@ -347,6 +351,22 @@ TEST(Milestone3_ViewportAndTranspose) {
     differs = std::fabs(pixels.rgba[i] - pixels2.rgba[i]) > 0.01;
   }
   CHECK(differs);
+}
+
+// The main-pass filter (Renderer::Options::only_depth_tested, on by default):
+// the scene's ZFUNC always draw is an overlay and is skipped.
+TEST(Milestone3_MainPassFilterSkipsOverlays) {
+  Fixture f;
+  if (!f.Init()) return;
+  FakeGuestMemory memory;
+  TriangleScene scene(memory, kWidth, kHeight);
+  DrawTracker state(memory, f.renderer.get());
+  ApiBinding binding;
+  InitApiBinding(binding, &state, [](void* s) { return static_cast<DrawTracker*>(s); });
+  std::istringstream log(scene.Log());
+  hooks::ReplayTrace(log, &binding.api);
+  CHECK_EQ(f.renderer->stats().draws_recorded, uint64_t(0));
+  CHECK_EQ(f.renderer->stats().draws_skipped_overlay, uint64_t(2));
 }
 
 NR_TEST_MAIN()
