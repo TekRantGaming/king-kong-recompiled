@@ -2,6 +2,14 @@
 
 #include <cstdint>
 
+#include "backend/shaders/generated/blit_ps_dxil.h"
+#include "backend/shaders/generated/blit_ps_spirv.h"
+#include "backend/shaders/generated/blit_vs_dxil.h"
+#include "backend/shaders/generated/blit_vs_spirv.h"
+#include "backend/shaders/generated/clear_ps_dxil.h"
+#include "backend/shaders/generated/clear_ps_spirv.h"
+#include "backend/shaders/generated/clear_vs_dxil.h"
+#include "backend/shaders/generated/clear_vs_spirv.h"
 #include "backend/shaders/generated/placeholder_ps_dxil.h"
 #include "backend/shaders/generated/placeholder_ps_spirv.h"
 #include "backend/shaders/generated/placeholder_vs_dxil.h"
@@ -23,6 +31,10 @@ ShaderBytecode GetShaderBytecode(nvrhi::GraphicsAPI api, ShaderId id) {
     case ShaderId::kTrianglePs: return NR_BLOB(triangle_ps);
     case ShaderId::kPlaceholderVs: return NR_BLOB(placeholder_vs);
     case ShaderId::kPlaceholderPs: return NR_BLOB(placeholder_ps);
+    case ShaderId::kBlitVs: return NR_BLOB(blit_vs);
+    case ShaderId::kBlitPs: return NR_BLOB(blit_ps);
+    case ShaderId::kClearVs: return NR_BLOB(clear_vs);
+    case ShaderId::kClearPs: return NR_BLOB(clear_ps);
   }
 #undef NR_BLOB
   return {};

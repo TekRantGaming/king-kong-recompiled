@@ -97,7 +97,10 @@ nr::hooks::GuestArgs ArgsFrom(const PPCContext& ctx) {
   REX_EXTERN(__imp__sub_##ADDR);                                                         \
   REX_HOOK_RAW(sub_##ADDR) {                                                             \
     static const nr::hooks::HookEntry* entry = nr::hooks::Find(0x##ADDR);                \
-    nr::hooks::Run(*entry, Api(), ArgsFrom(ctx), [&] { __imp__sub_##ADDR(ctx, base); }); \
+    nr::hooks::Run(*entry, Api(), ArgsFrom(ctx), [&] {                                \
+      __imp__sub_##ADDR(ctx, base);                                                   \
+      return uint32_t(ctx.r3.u32);                                                    \
+    });                                                                               \
   }
 
 // One per entry of hook_table.cpp (the test nr_hook_tests checks the count).
@@ -134,6 +137,8 @@ nr::hooks::GuestArgs ArgsFrom(const PPCContext& ctx) {
   X(82110640)           \
   X(821108B8)           \
   X(82110C28)           \
+  X(82111CA0)           \
+  X(82111D90)           \
   X(82111E68)           \
   X(821147B8)           \
   X(82115418)           \

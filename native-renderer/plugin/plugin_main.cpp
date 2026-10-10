@@ -49,6 +49,35 @@ REXCVAR_DEFINE_BOOL(native_main_pass_only, true, "Native renderer",
                     "which cover the frame")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_BOOL(native_game, true, "Native renderer",
+                    "Draw the game with its own shaders, textures and states (Phase 2); off: the "
+                    "milestone 3 placeholder pipeline (flat-coloured silhouettes)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_STRING(native_shader_pack, "", "Native renderer",
+                      "The translated shader pack (kkshaders db-build). Empty: kkshaders-spirv.pack "
+                      "(Vulkan) or kkshaders-dxil.pack (D3D12), else kkshaders.pack, beside the game")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_STRING(native_dxc, "", "Native renderer",
+                      "DXC (dxcompiler) folder or library, for shaders missing from the pack. Empty: "
+                      "beside the game, then the system's search path")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_BOOL(native_element_endian, false, "Native renderer",
+                    "Read each vertex element with its declaration's endian field instead of the "
+                    "vertex buffer's (the hardware's)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_BOOL(native_flip_front_face, false, "Native renderer",
+                    "Swap the front face of every draw (a debugging aid for culling)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_INT32(native_debug, 0, "Native renderer",
+                     "Debugging aids (bits): 1 the game's clears are green, 2 the frame image is "
+                     "magenta under the back buffer")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_INT32(native_dump_frame, -1, "Native renderer",
                      "Log every clear, draw, resolve and present the hooks see in this game "
                      "frame (counted from the first Present; -1 for none)");

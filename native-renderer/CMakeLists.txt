@@ -36,6 +36,7 @@ if(NR_BUILD_PLUGIN AND NOT TARGET rex::runtime)
 endif()
 
 include(cmake/nvrhi.cmake)
+include(cmake/kk_libs.cmake)
 
 add_subdirectory(backend)
 add_subdirectory(hooks)

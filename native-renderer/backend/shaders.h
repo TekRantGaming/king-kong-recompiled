@@ -13,7 +13,16 @@ struct ShaderBytecode {
   size_t size = 0;
 };
 
-enum class ShaderId { kTriangleVs, kTrianglePs, kPlaceholderVs, kPlaceholderPs };
+enum class ShaderId {
+  kTriangleVs,
+  kTrianglePs,
+  kPlaceholderVs,
+  kPlaceholderPs,
+  kBlitVs,
+  kBlitPs,
+  kClearVs,
+  kClearPs,
+};
 
 // Empty bytecode when the API has no build of the shader.
 ShaderBytecode GetShaderBytecode(nvrhi::GraphicsAPI api, ShaderId id);

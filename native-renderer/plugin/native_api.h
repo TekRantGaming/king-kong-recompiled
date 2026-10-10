@@ -13,7 +13,9 @@
 extern "C" {
 #endif
 
-#define NR_API_VERSION 2
+// 3: the device pointer on draws, clears, resolves and presents; Clear's
+// rectangles; Resolve's full argument list; shader creation (Phase 2).
+#define NR_API_VERSION 3
 
 typedef struct NrApi {
   uint32_t version;  // NR_API_VERSION
@@ -46,15 +48,30 @@ typedef struct NrApi {
   void (*begin_conditional_rendering)(void* self, uint32_t id);
   void (*end_conditional_rendering)(void* self);
 
-  // Draw and frame.
-  void (*clear)(void* self, uint32_t flags, uint32_t color_argb, float z, uint32_t stencil);
-  void (*resolve)(void* self, uint32_t flags, uint32_t dest_texture);
-  void (*draw_indexed)(void* self, uint32_t prim_type, int32_t base_vertex, uint32_t start_index,
-                       uint32_t index_count);
-  void (*draw)(void* self, uint32_t prim_type, uint32_t start_vertex, uint32_t vertex_count);
+  // Draw and frame. `device` is the guest D3D device (r3): the renderer reads
+  // the register images and constant shadows from it.
+  // Clear(dev, Count, pRects, Flags, Color, Z, Stencil); rects are D3DRECTs.
+  void (*clear)(void* self, uint32_t device, uint32_t rect_count, uint32_t rects_guest,
+                uint32_t flags, uint32_t color_argb, float z, uint32_t stencil);
+  // Resolve(dev, Flags, pSourceRect, pDestTexture, pDestPoint, DestLevel,
+  // DestSliceOrFace, pClearColor, ClearZ); ClearStencil is on the stack and
+  // taken as 0.
+  void (*resolve)(void* self, uint32_t device, uint32_t flags, uint32_t source_rect_guest,
+                  uint32_t dest_texture, uint32_t dest_point_guest, uint32_t dest_level,
+                  uint32_t dest_slice, uint32_t clear_color_guest, float clear_z);
+  void (*draw_indexed)(void* self, uint32_t device, uint32_t prim_type, int32_t base_vertex,
+                       uint32_t start_index, uint32_t index_count);
+  void (*draw)(void* self, uint32_t device, uint32_t prim_type, uint32_t start_vertex,
+               uint32_t vertex_count);
   // The game's Present: ends the frame being recorded. The picture is shown
   // when the game's VdSwap reaches the ring skimmer.
-  void (*present)(void* self);
+  void (*present)(void* self, uint32_t device);
+
+  // Resource creation, after the library's own function returned: kind 0
+  // vertex shader, 1 pixel shader; container is the XDK shader container the
+  // engine passed (CreateVertexShader / CreatePixelShader's pFunction),
+  // object the shader the library returned (0 on failure).
+  void (*shader_created)(void* self, uint32_t kind, uint32_t container, uint32_t object);
 } NrApi;
 
 #ifdef __cplusplus

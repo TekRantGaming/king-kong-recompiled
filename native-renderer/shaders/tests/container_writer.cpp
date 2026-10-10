@@ -145,7 +145,9 @@ std::vector<uint8_t> writeContainer(const Spec& spec) {
     } else {
         c.u32(spec.paramGen ? (1u << 18) : 0u);
         c.u32(nInterp << 8);
-        for (int i = 2; i < 8; i++) c.u32(0);
+        for (int i = 2; i < 6; i++) c.u32(0);
+        c.u32(nInterp ? (1u << nInterp) - 1 : 0u);  // word 6: the interpolator mask, as in the game's
+        c.u32(1);
         for (const auto& i : spec.interpolators) c.u32(i.usageIndex | (i.usage << 4) | (i.reg << 8) | (i.mask << 12));
     }
     uint32_t virtualSize = uint32_t(c.size());

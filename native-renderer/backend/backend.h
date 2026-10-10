@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <string>
 
 #include "backend/draw_state.h"
 #include "backend/guest_memory.h"
@@ -42,12 +43,25 @@ class RuntimeGuestMemory final : public GuestMemory {
 
 enum class TestPicture { kClear, kTriangle };
 
+class ShaderLibrary;
+
+// Phase 2 settings (the plugin's cvars).
+struct GameSettings {
+  bool enabled = true;          // the game renderer; off: the placeholder pipeline
+  std::string shader_pack;      // a kkshaders pack for the host API
+  std::string dxc;              // DXC's folder or library, for shaders missing from the pack
+  bool element_endian = false;  // see GameRenderer::Options
+  bool flip_front_face = false;
+  int32_t dump_frame = -1;
+  uint32_t debug = 0;
+};
+
 class Backend {
  public:
   Backend(std::unique_ptr<HostDevice> host, rex::memory::Memory* memory);
   ~Backend();
 
-  bool Initialize(uint32_t width, uint32_t height);
+  bool Initialize(uint32_t width, uint32_t height, const GameSettings& game = {});
   void Shutdown();
 
   void set_test_picture(TestPicture picture) { test_picture_ = picture; }
@@ -61,6 +75,9 @@ class Backend {
  private:
   std::unique_ptr<HostDevice> host_;
   RuntimeGuestMemory guest_memory_;
+  rex::memory::Memory* memory_;
+  std::unique_ptr<ShaderLibrary> shaders_;
+  void* invalidation_handle_ = nullptr;
   std::unique_ptr<Renderer> renderer_;
   std::unique_ptr<DrawSink> sink_;  // the renderer, under mutex_
   std::unique_ptr<DrawTracker> draws_;

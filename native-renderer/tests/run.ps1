@@ -29,7 +29,9 @@ param(
   [string]$Label = '',
   [string]$Python = 'python',
   [switch]$NoCompare,
-  [switch]$NoFrameLog
+  [switch]$NoFrameLog,
+  # Extra game arguments for every launch (for example --native_dump_frame=200).
+  [string[]]$ExtraArgs = @()
 )
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -118,7 +120,7 @@ foreach ($run in $plan.runs) {
     if (-not $saved.ContainsKey($kv.Name)) { $saved[$kv.Name] = $null }
   }
   $gameArgs = @("--game_data_root=$GameData", "--user_data_root=$saveCopy", "--cache_root=$CacheRoot",
-    "--log_file=$(Join-Path $runDir 'game.log')") + @($run.args) | ForEach-Object { Format-Arg $_ }
+    "--log_file=$(Join-Path $runDir 'game.log')") + @($run.args) + @($ExtraArgs) | ForEach-Object { Format-Arg $_ }
   $log = Join-Path $runDir 'game.log'
   $proc = $null
   $started = Get-Date

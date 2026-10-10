@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <filesystem>
+#include <iterator>
 
 #include <rex/assert.h>
 #include <rex/chrono/clock.h>
@@ -18,6 +20,15 @@
 
 #if NR_HAS_D3D12
 #include <rex/ui/d3d12/d3d12_provider.h>
+#endif
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #endif
 #if NR_HAS_VULKAN
 #include <rex/ui/vulkan/provider.h>
@@ -35,8 +46,44 @@ REXCVAR_DECLARE(std::string, native_test);
 REXCVAR_DECLARE(bool, native_wvp_transpose);
 REXCVAR_DECLARE(bool, native_all_targets);
 REXCVAR_DECLARE(bool, native_main_pass_only);
+REXCVAR_DECLARE(bool, native_game);
+REXCVAR_DECLARE(std::string, native_shader_pack);
+REXCVAR_DECLARE(std::string, native_dxc);
+REXCVAR_DECLARE(bool, native_element_endian);
+REXCVAR_DECLARE(bool, native_flip_front_face);
+REXCVAR_DECLARE(int32_t, native_dump_frame);
+REXCVAR_DECLARE(int32_t, native_debug);
 
 namespace nr {
+
+namespace {
+
+// The folder of the running executable (the game's).
+std::filesystem::path ExecutableFolder() {
+#if defined(_WIN32)
+  wchar_t path[32768];
+  DWORD n = GetModuleFileNameW(nullptr, path, DWORD(std::size(path)));
+  if (n == 0 || n >= std::size(path)) return {};
+  return std::filesystem::path(std::wstring(path, n)).parent_path();
+#else
+  std::error_code ec;
+  auto p = std::filesystem::read_symlink("/proc/self/exe", ec);
+  return ec ? std::filesystem::path() : p.parent_path();
+#endif
+}
+
+std::string FindShaderPack(bool vulkan) {
+  std::string wanted = REXCVAR_GET(native_shader_pack);
+  if (!wanted.empty()) return wanted;
+  const std::filesystem::path folder = ExecutableFolder();
+  for (const char* name : {vulkan ? "kkshaders-spirv.pack" : "kkshaders-dxil.pack", "kkshaders.pack"}) {
+    std::error_code ec;
+    if (std::filesystem::exists(folder / name, ec)) return (folder / name).string();
+  }
+  return {};
+}
+
+}  // namespace
 
 NativeGraphicsSystem* NativeGraphicsSystem::instance_ = nullptr;
 
@@ -171,8 +218,17 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
   rex::system::X_VIDEO_MODE video_mode;
   rex::kernel::xboxkrnl::VdQueryVideoMode(&video_mode);
   backend_ = std::make_unique<Backend>(std::move(host), memory_);
+  GameSettings game;
+  game.enabled = REXCVAR_GET(native_game);
+  game.shader_pack = FindShaderPack(api_ == HostApi::kVulkan);
+  game.dxc = REXCVAR_GET(native_dxc);
+  if (game.dxc.empty()) game.dxc = ExecutableFolder().string();
+  game.element_endian = REXCVAR_GET(native_element_endian);
+  game.flip_front_face = REXCVAR_GET(native_flip_front_face);
+  game.dump_frame = REXCVAR_GET(native_dump_frame);
+  game.debug = uint32_t(REXCVAR_GET(native_debug));
   if (!backend_->Initialize(std::max<uint32_t>(1, video_mode.display_width),
-                            std::max<uint32_t>(1, video_mode.display_height))) {
+                            std::max<uint32_t>(1, video_mode.display_height), game)) {
     REXGPU_ERROR("rexgpu-native: backend initialisation failed");
     backend_.reset();
     return X_STATUS_UNSUCCESSFUL;

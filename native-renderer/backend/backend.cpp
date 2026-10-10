@@ -4,6 +4,12 @@
 #include <rex/logging.h>
 #include <rex/system/xmemory.h>
 
+#include "backend/log.h"
+#if NR_GAME_RENDERER
+#include "backend/game_renderer.h"
+#include "backend/shader_library.h"
+#endif
+
 REXCVAR_DECLARE(int32_t, native_dump_frame);
 
 namespace nr {
@@ -22,8 +28,19 @@ namespace {
 // Records every renderer call under the backend's lock.
 class LockedSink final : public DrawSink {
  public:
-  LockedSink(DrawSink& inner, std::mutex& mutex, const GuestMemory& memory)
-      : inner_(inner), mutex_(mutex), memory_(memory) {}
+  LockedSink(DrawSink& inner, std::mutex& mutex, const GuestMemory& memory, ShaderLibrary* shaders)
+      : inner_(inner), mutex_(mutex), memory_(memory), shaders_(shaders) {}
+  // Shader creation is the shader library's (its own lock): it may come from
+  // loader threads while the render thread draws.
+  void OnShaderCreated(uint32_t kind, uint32_t container, uint32_t object) override {
+#if NR_GAME_RENDERER
+    if (shaders_) shaders_->OnCreated(kind, container, object);
+#else
+    (void)kind;
+    (void)container;
+    (void)object;
+#endif
+  }
   void OnClear(const ClearCall& c) override {
     if (Dump(c.frame)) {
       REXLOG_INFO("rexgpu-native: frame {} clear flags {:X} rgba {} {} {} {} z {} rt0 {:08X} ds {:08X}",
@@ -61,12 +78,12 @@ class LockedSink final : public DrawSink {
     std::lock_guard lock(mutex_);
     inner_.OnResolve(r);
   }
-  void OnPresent(uint32_t frame, uint32_t rt0) override {
+  void OnPresent(uint32_t frame, uint32_t rt0, uint32_t device) override {
     if (Dump(frame)) {
       REXLOG_INFO("rexgpu-native: frame {} present rt0 {:08X}", frame, rt0);
     }
     std::lock_guard lock(mutex_);
-    inner_.OnPresent(frame, rt0);
+    inner_.OnPresent(frame, rt0, device);
   }
 
  private:
@@ -112,7 +129,37 @@ class LockedSink final : public DrawSink {
   DrawSink& inner_;
   std::mutex& mutex_;
   const GuestMemory& memory_;
+  ShaderLibrary* shaders_;
 };
+
+void LogToRuntime(LogLevel level, const char* text) {
+  switch (level) {
+    case LogLevel::kDebug:
+      REXGPU_DEBUG("{}", text);
+      break;
+    case LogLevel::kInfo:
+      // In the core category: the app keeps only warnings of the gpu one.
+      REXLOG_INFO("{}", text);
+      break;
+    case LogLevel::kWarning:
+      REXLOG_WARN("{}", text);
+      break;
+    default:
+      REXLOG_ERROR("{}", text);
+      break;
+  }
+}
+
+#if NR_GAME_RENDERER
+// CPU writes to watched guest memory (any thread, inside the SDK's fault
+// handling): the textures and buffers there must be checked again.
+std::pair<uint32_t, uint32_t> InvalidationThunk(void* context, uint32_t start, uint32_t length,
+                                                bool /*exact_range*/) {
+  auto* game = static_cast<GameRenderer*>(context);
+  game->InvalidateRange(start, length);
+  return {start, length};
+}
+#endif
 
 class LogCallback final : public nvrhi::IMessageCallback {
  public:
@@ -139,31 +186,67 @@ nvrhi::IMessageCallback* GetMessageCallback() {
 }
 
 Backend::Backend(std::unique_ptr<HostDevice> host, rex::memory::Memory* memory)
-    : host_(std::move(host)), guest_memory_(memory) {}
+    : host_(std::move(host)), guest_memory_(memory), memory_(memory) {}
 
 Backend::~Backend() { Shutdown(); }
 
-bool Backend::Initialize(uint32_t width, uint32_t height) {
+bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& game) {
+  SetLogSink(LogToRuntime);
   renderer_ = std::make_unique<Renderer>(host_->device());
   if (!renderer_->Initialize(width, height)) {
     REXGPU_ERROR("rexgpu-native: renderer initialisation failed ({}x{})", width, height);
     return false;
   }
+#if NR_GAME_RENDERER
+  if (game.enabled) {
+    shaders_ = std::make_unique<ShaderLibrary>(host_->device(), guest_memory_);
+    shaders_->Initialize(game.shader_pack, game.dxc);
+    kknr::GuestMemory physical;
+    physical.base = memory_->TranslatePhysical(0);
+    physical.size = 0x20000000;
+    physical.origin = 0;
+    auto renderer = std::make_unique<GameRenderer>(host_->device(), guest_memory_, physical, shaders_.get());
+    if (renderer->Initialize()) {
+      renderer->options().element_endian = game.element_endian;
+      renderer->options().flip_front_face = game.flip_front_face;
+      renderer->options().dump_frame = game.dump_frame;
+      renderer->options().debug = game.debug;
+      rex::memory::Memory* memory = memory_;
+      renderer->set_watch([memory](uint32_t physical_address, uint32_t bytes) {
+        memory->EnablePhysicalMemoryAccessCallbacks(physical_address, bytes, true, false);
+      });
+      invalidation_handle_ = memory_->RegisterPhysicalMemoryInvalidationCallback(InvalidationThunk, renderer.get());
+      renderer_->EnableGame(std::move(renderer));
+      REXLOG_INFO("rexgpu-native: game renderer ready");
+    } else {
+      REXGPU_ERROR("rexgpu-native: game renderer initialisation failed; placeholder pipeline instead");
+      shaders_.reset();
+    }
+  }
+#else
+  (void)game;
+#endif
   renderer_->set_submit([this](nvrhi::ICommandList* cl) {
     host_->ExecuteCommandList(cl);
     ++submitted_frames_;
   });
-  sink_ = std::make_unique<LockedSink>(*renderer_, mutex_, guest_memory_);
+  sink_ = std::make_unique<LockedSink>(*renderer_, mutex_, guest_memory_, shaders_.get());
   draws_ = std::make_unique<DrawTracker>(guest_memory_, sink_.get());
+  draws_->set_find_wvp(renderer_->game() == nullptr);
   REXGPU_INFO("rexgpu-native: NVRHI renderer ready ({}x{})", width, height);
   return true;
 }
 
 void Backend::Shutdown() {
+  if (invalidation_handle_) {
+    memory_->UnregisterPhysicalMemoryInvalidationCallback(invalidation_handle_);
+    invalidation_handle_ = nullptr;
+  }
   if (host_) host_->WaitForIdle();
   draws_.reset();
   sink_.reset();
   renderer_.reset();
+  shaders_.reset();
   if (host_) host_->WaitForIdle();
   host_.reset();
 }
@@ -193,6 +276,21 @@ void Backend::Present(rex::ui::Presenter* presenter, uint32_t frontbuffer_width,
         swap, d.draws, d.indexed_draws, d.dropped_draws, d.clears, d.resolves, d.presents,
         r.draws_recorded, r.draws_skipped_target, r.draws_skipped_primitive, r.draws_skipped_range,
         r.draws_skipped_overlay, r.draws_skipped_no_wvp, r.draws_skipped_format, r.clears_recorded, r.frames_submitted);
+#if NR_GAME_RENDERER
+    if (GameRenderer* g = renderer_->game()) {
+      const GameRenderer::Stats& s = g->stats();
+      const ShaderLibrary::Stats sh = shaders_->stats();
+      REXLOG_INFO(
+          "rexgpu-native: game renderer: {} draws, skipped {} (shader) {} (target) {} (primitive) {} "
+          "(pipeline) {} (device); {} pipelines; {} texture uploads ({} failed), {} buffer uploads, "
+          "{} clears, {} resolves ({} failed), {} invalidations; shaders {} created, {} from the pack, "
+          "{} compiled, {} failed, {} from objects",
+          s.draws, s.skipped_shader, s.skipped_target, s.skipped_primitive, s.skipped_pipeline,
+          s.skipped_device, s.pipelines, s.texture_uploads, s.texture_failures, s.buffer_uploads,
+          s.clears, s.resolves, s.resolve_failures, s.invalidations, sh.created, sh.from_pack,
+          sh.compiled, sh.failed, sh.from_object);
+    }
+#endif
   }
   (void)frontbuffer_width;
   (void)frontbuffer_height;

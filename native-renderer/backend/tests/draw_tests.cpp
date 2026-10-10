@@ -43,7 +43,7 @@ class RecordingSink final : public DrawSink {
     resolves.push_back(r);
     order += 'R';
   }
-  void OnPresent(uint32_t frame, uint32_t rt0) override {
+  void OnPresent(uint32_t frame, uint32_t rt0, uint32_t) override {
     presents.push_back({frame, rt0});
     order += 'P';
   }

@@ -127,13 +127,15 @@ void DrawTracker::EndConditionalRendering() {
   }
 }
 
-void DrawTracker::Clear(uint32_t flags, uint32_t color_argb, float z, uint32_t stencil) {
+void DrawTracker::Clear(uint32_t device, uint32_t rect_count, uint32_t rects_guest,
+                        uint32_t flags, uint32_t color_argb, float z, uint32_t stencil) {
   ++stats_.clears;
   if (!sink_) {
     return;
   }
   ClearCall call;
   call.frame = frame_;
+  call.device = device;
   call.flags = flags;
   call.color = (flags & clear_flags::kTargetMask) != 0;
   call.depth = (flags & clear_flags::kZBuffer) != 0;
@@ -147,14 +149,49 @@ void DrawTracker::Clear(uint32_t flags, uint32_t color_argb, float z, uint32_t s
   call.render_target0 = render_targets_[0];
   call.depth_stencil = depth_stencil_;
   call.viewport = viewport_;
+  if (rect_count && rects_guest) {
+    if (const uint8_t* p = memory_.Virtual(rects_guest)) {
+      call.rect_count = std::min<uint32_t>(rect_count, uint32_t(call.rects.size()));
+      for (uint32_t i = 0; i < call.rect_count; ++i) {
+        for (uint32_t c = 0; c < 4; ++c) call.rects[i][c] = int32_t(LoadBE32(p + i * 16 + c * 4));
+      }
+    }
+  }
   sink_->OnClear(call);
 }
 
-void DrawTracker::Resolve(uint32_t flags, uint32_t dest_texture) {
+void DrawTracker::Resolve(uint32_t device, uint32_t flags, uint32_t source_rect_guest,
+                          uint32_t dest_texture, uint32_t dest_point_guest, uint32_t dest_level,
+                          uint32_t dest_slice, uint32_t clear_color_guest, float clear_z) {
   ++stats_.resolves;
-  if (sink_) {
-    sink_->OnResolve(ResolveCall{frame_, flags, dest_texture, render_targets_[0]});
+  if (!sink_) {
+    return;
   }
+  ResolveCall call;
+  call.frame = frame_;
+  call.device = device;
+  call.flags = flags;
+  call.dest_texture = dest_texture;
+  call.render_target0 = render_targets_[0];
+  call.render_targets = render_targets_;
+  call.depth_stencil = depth_stencil_;
+  if (const uint8_t* p = source_rect_guest ? memory_.Virtual(source_rect_guest) : nullptr) {
+    call.has_rect = true;
+    for (uint32_t c = 0; c < 4; ++c) call.rect[c] = int32_t(LoadBE32(p + c * 4));
+  }
+  if (const uint8_t* p = dest_point_guest ? memory_.Virtual(dest_point_guest) : nullptr) {
+    call.has_point = true;
+    call.point[0] = int32_t(LoadBE32(p));
+    call.point[1] = int32_t(LoadBE32(p + 4));
+  }
+  call.dest_level = dest_level;
+  call.dest_slice = dest_slice;
+  if (const uint8_t* p = clear_color_guest ? memory_.Virtual(clear_color_guest) : nullptr) {
+    call.has_clear_color = true;
+    for (uint32_t c = 0; c < 4; ++c) call.clear_color[c] = LoadBEFloat(p + c * 4);
+  }
+  call.clear_z = clear_z;
+  sink_->OnResolve(call);
 }
 
 bool DrawTracker::FillCommon(DrawCall& call) {
@@ -191,7 +228,7 @@ bool DrawTracker::FillCommon(DrawCall& call) {
       call.vs_c0_c3[r * 4 + c] = vs_f_[r][c];
     }
   }
-  for (uint32_t r = 0; r + 4 <= kVsFloatConstants; ++r) {
+  for (uint32_t r = 0; find_wvp_ && r + 4 <= kVsFloatConstants; ++r) {
     float rows[16];
     for (uint32_t i = 0; i < 4; ++i) {
       for (uint32_t c = 0; c < 4; ++c) rows[i * 4 + c] = vs_f_[r + i][c];
@@ -232,11 +269,12 @@ bool LooksLikePerspectiveRows(const float* m) {
   return residual <= 0.0025f * ww;  // within 5 % of the w row's length
 }
 
-void DrawTracker::DrawIndexed(uint32_t primitive, int32_t base_vertex, uint32_t start_index,
-                            uint32_t index_count) {
+void DrawTracker::DrawIndexed(uint32_t device, uint32_t primitive, int32_t base_vertex,
+                              uint32_t start_index, uint32_t index_count) {
   ++stats_.draws;
   ++stats_.indexed_draws;
   DrawCall call;
+  call.device = device;
   call.indexed = true;
   call.primitive = GuestPrimitive(primitive);
   call.base_vertex = base_vertex;
@@ -261,9 +299,11 @@ void DrawTracker::DrawIndexed(uint32_t primitive, int32_t base_vertex, uint32_t 
   }
 }
 
-void DrawTracker::Draw(uint32_t primitive, uint32_t start_vertex, uint32_t vertex_count) {
+void DrawTracker::Draw(uint32_t device, uint32_t primitive, uint32_t start_vertex,
+                       uint32_t vertex_count) {
   ++stats_.draws;
   DrawCall call;
+  call.device = device;
   call.indexed = false;
   call.primitive = GuestPrimitive(primitive);
   call.start = start_vertex;
@@ -277,10 +317,10 @@ void DrawTracker::Draw(uint32_t primitive, uint32_t start_vertex, uint32_t verte
   }
 }
 
-void DrawTracker::Present() {
+void DrawTracker::Present(uint32_t device) {
   ++stats_.presents;
   if (sink_) {
-    sink_->OnPresent(frame_, render_targets_[0]);
+    sink_->OnPresent(frame_, render_targets_[0], device);
   }
   ++frame_;
   draws_in_frame_ = 0;

@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <algorithm>
+#include <bit>
 #include <cctype>
 #include <cstring>
 
@@ -224,7 +225,11 @@ ParseResult parseContainer(const uint8_t* data, size_t maxSize) {
             }
         } else {
             if (t.size() < 8) return fail("pixel binding table too short");
-            uint32_t nInterp = (t[1] >> 8) & 0xFF;
+            // The interpolator count: word 6 is a mask of the interpolators (one bit each, from
+            // bit 0), word 1 bits 8-15 a count that is 0 in about 700 of the database's 2,343 pixel
+            // shaders although their descriptors follow word 8 as usual (found by the native
+            // renderer: those shaders read zeros for every input). The larger of the two.
+            uint32_t nInterp = std::max<uint32_t>((t[1] >> 8) & 0xFF, uint32_t(std::popcount(t[6] & 0xFFFFu)));
             if (8 + nInterp > t.size()) return fail("pixel interpolator list out of range");
             for (uint32_t i = 0; i < nInterp; i++) {
                 uint32_t e = t[8 + i];

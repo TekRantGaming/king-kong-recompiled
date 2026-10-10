@@ -4,13 +4,33 @@
 #include <cstring>
 
 #include "backend/primitive.h"
+#if NR_GAME_RENDERER
+#include "backend/game_renderer.h"
+#else
+namespace nr {
+// Without the game renderer: never created, never called.
+class GameRenderer {
+ public:
+  template <typename... A> void Draw(A&&...) {}
+  template <typename... A> void Clear(A&&...) {}
+  template <typename... A> void Resolve(A&&...) {}
+  template <typename... A> bool Present(A&&...) { return false; }
+  void EndFrame() {}
+};
+}  // namespace nr
+#endif
 #include "backend/shaders.h"
 
 namespace nr {
 
+Renderer::Renderer(nvrhi::IDevice* device) : device_(device) {}
+
 Renderer::~Renderer() { Shutdown(); }
 
+void Renderer::EnableGame(std::unique_ptr<GameRenderer> game) { game_ = std::move(game); }
+
 void Renderer::Shutdown() {
+  game_.reset();
   frame_command_list_ = nullptr;
   frame_open_ = false;
   framebuffers_.clear();
@@ -194,7 +214,7 @@ nvrhi::ICommandList* Renderer::FrameCommandList() {
     frame_open_ = true;
     // A defined depth at the start of every frame (the game's own depth clear
     // comes later, if at all).
-    if (nvrhi::ITexture* depth = DepthFor(frames_[recording_])) {
+    if (nvrhi::ITexture* depth = game_ ? nullptr : DepthFor(frames_[recording_])) {
       frame_command_list_->clearDepthStencilTexture(depth, nvrhi::AllSubresources, true, 1.0f,
                                                     false, 0);
     }
@@ -240,6 +260,10 @@ nvrhi::Color Renderer::TestClearColor(uint32_t frame) {
 }
 
 void Renderer::OnClear(const ClearCall& call) {
+  if (game_) {
+    game_->Clear(FrameCommandList(), call);
+    return;
+  }
   if (!(call.color || call.depth) || !OnMainSurface(call.render_target0)) return;
   if (!call.color) {
     if (nvrhi::ITexture* depth = DepthFor(frames_[recording_])) {
@@ -261,6 +285,10 @@ void Renderer::OnClear(const ClearCall& call) {
 }
 
 void Renderer::OnDraw(const DrawCall& call) {
+  if (game_) {
+    game_->Draw(FrameCommandList(), call);
+    return;
+  }
   if (!OnMainSurface(call.render_targets[0])) {
     ++stats_.draws_skipped_target;
     return;
@@ -359,15 +387,19 @@ void Renderer::OnDraw(const DrawCall& call) {
   if (observer_) observer_->OnDrawRecorded(call, state, args, constants, scratch_indices_);
 }
 
-void Renderer::OnResolve(const ResolveCall& /*call*/) {
-  // Render-to-texture is not modelled yet: resolves (and their clears) wait
-  // for the render-target pool.
+void Renderer::OnResolve(const ResolveCall& call) {
+  // The placeholder does not model render-to-texture.
+  if (game_) game_->Resolve(FrameCommandList(), call);
 }
 
-void Renderer::OnPresent(uint32_t frame, uint32_t render_target0) {
+void Renderer::OnPresent(uint32_t frame, uint32_t render_target0, uint32_t device) {
   main_surface_ = render_target0;
   vertex_ring_used_ = 0;
   index_ring_used_ = 0;
+  if (game_) {
+    // The game's back buffer into the frame image.
+    game_->Present(FrameCommandList(), device, frames_[recording_]);
+  }
   if (!frame_open_) return;
   frame_command_list_->close();
   frame_open_ = false;
@@ -376,6 +408,7 @@ void Renderer::OnPresent(uint32_t frame, uint32_t render_target0) {
   presented_ = recording_;
   recording_ ^= 1;
   if (observer_) observer_->OnFrameSubmitted(frame, frames_[presented_]);
+  if (game_) game_->EndFrame();
 }
 
 }  // namespace nr

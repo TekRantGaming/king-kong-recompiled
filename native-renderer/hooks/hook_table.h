@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <type_traits>
 
 #include "plugin/native_api.h"
 
@@ -20,8 +21,9 @@ namespace nr::hooks {
 
 // The PowerPC argument registers of a guest call: r3..r10 and f1.
 struct GuestArgs {
-  uint32_t r[8] = {};  // r[0] = r3 (the device for every entry here)
+  uint32_t r[8] = {};  // r[0] = r3 (the device for every entry but the creators)
   double f1 = 0.0;
+  uint32_t ret = 0;    // Kind::kCreate: r3 after the original returned
   uint32_t r3() const { return r[0]; }
   uint32_t r4() const { return r[1]; }
   uint32_t r5() const { return r[2]; }
@@ -34,7 +36,9 @@ struct GuestArgs {
 
 using Handler = void (*)(const NrApi& api, const GuestArgs& args);
 
-enum class Kind : uint8_t { kDraw, kFrame, kState, kRenderState, kSamplerState };
+// kCreate entries run after the original (they need its return value) and
+// are forwarded like state calls, nested or not.
+enum class Kind : uint8_t { kDraw, kFrame, kState, kRenderState, kSamplerState, kCreate };
 
 struct HookEntry {
   uint32_t address;  // guest address: the recompiled function is sub_<address>
@@ -73,15 +77,28 @@ class CallScope {
 };
 
 inline bool IsStateKind(Kind kind) {
-  return kind == Kind::kState || kind == Kind::kRenderState || kind == Kind::kSamplerState;
+  return kind == Kind::kState || kind == Kind::kRenderState || kind == Kind::kSamplerState ||
+         kind == Kind::kCreate;
 }
 
 // Forwards the call to `api` (when it is active, and for draws and frame
-// calls only when not nested), then runs the game's original.
+// calls only when not nested), then runs the game's original. Creators run
+// the original first and forward its return value. `original` returns r3
+// after the call.
 template <typename Original>
-void Run(const HookEntry& entry, const NrApi* api, const GuestArgs& args, Original&& original) {
+void Run(const HookEntry& entry, const NrApi* api, GuestArgs args, Original&& original) {
   CallScope scope;
-  if ((scope.outermost() || IsStateKind(entry.kind)) && api && api->is_active(api->self)) {
+  const bool forward = (scope.outermost() || IsStateKind(entry.kind)) && api;
+  if (entry.kind == Kind::kCreate) {
+    if constexpr (std::is_void_v<decltype(original())>) {
+      original();
+    } else {
+      args.ret = uint32_t(original());
+    }
+    if (forward && api->is_active(api->self)) entry.handler(*api, args);
+    return;
+  }
+  if (forward && api->is_active(api->self)) {
     entry.handler(*api, args);
   }
   original();

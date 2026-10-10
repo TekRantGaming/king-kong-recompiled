@@ -30,3 +30,5 @@ Changes we make to vendored code are kept as small as possible and listed here:
   instructions with the same predicate, and branch-free `select` forms for scalar conditionals (the
   SPIR-V back end keeps short-circuit `?:` as branches). The submodules and `main.cpp` /
   `dxc_compiler.cpp` are not built.
+- `XenosRecomp/XenosRecomp/pch.h`: includes `<iterator>` (Phase 2: with the SDK's fmt, which no longer pulls it
+  in, `shader_recompiler.h` did not compile in the plugin build).

@@ -12,6 +12,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <span>
 #include <unordered_map>
 #include <vector>
@@ -21,6 +22,8 @@
 #include "backend/draw_sink.h"
 
 namespace nr {
+
+class GameRenderer;
 
 // The placeholder pipeline's push constants (shaders/placeholder.hlsl).
 struct PlaceholderConstants {
@@ -81,7 +84,7 @@ class Renderer final : public DrawSink {
     uint64_t frames_submitted = 0;
   };
 
-  explicit Renderer(nvrhi::IDevice* device) : device_(device) {}
+  explicit Renderer(nvrhi::IDevice* device);
   ~Renderer() override;
 
   // Creates the two frame images (width x height, kFrameFormat) and the
@@ -115,7 +118,12 @@ class Renderer final : public DrawSink {
   void OnClear(const ClearCall& call) override;
   void OnDraw(const DrawCall& call) override;
   void OnResolve(const ResolveCall& call) override;
-  void OnPresent(uint32_t frame, uint32_t render_target0) override;
+  void OnPresent(uint32_t frame, uint32_t render_target0, uint32_t device) override;
+
+  // Phase 2: the game's draws through the real shaders, textures and state
+  // (GameRenderer) instead of the placeholder pipeline.
+  void EnableGame(std::unique_ptr<GameRenderer> game);
+  GameRenderer* game() { return game_.get(); }
 
   // Milestone 1's picture: a colour that changes every frame (a slow cycle
   // through the hues, so a stalled frame loop is visible).
@@ -163,6 +171,7 @@ class Renderer final : public DrawSink {
   nvrhi::BufferHandle vertex_ring_, index_ring_;
   uint64_t vertex_ring_used_ = 0, index_ring_used_ = 0;
 
+  std::unique_ptr<GameRenderer> game_;
   nvrhi::CommandListHandle frame_command_list_;
   bool frame_open_ = false;
   uint32_t main_surface_ = 0;  // render target 0 at the last Present

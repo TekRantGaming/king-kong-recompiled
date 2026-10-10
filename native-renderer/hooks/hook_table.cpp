@@ -15,21 +15,32 @@ thread_local int g_depth = 0;
 // Draw and frame.
 void DrawIndexedVertices(const NrApi& a, const GuestArgs& g) {
   // dev, primType, baseVertex, startIndex, indexCount
-  a.draw_indexed(a.self, g.r4(), int32_t(g.r5()), g.r6(), g.r7());
+  a.draw_indexed(a.self, g.r3(), g.r4(), int32_t(g.r5()), g.r6(), g.r7());
 }
 void DrawVertices(const NrApi& a, const GuestArgs& g) {
   // dev, primType, startVertex, vertexCount
-  a.draw(a.self, g.r4(), g.r5(), g.r6());
+  a.draw(a.self, g.r3(), g.r4(), g.r5(), g.r6());
 }
 void Resolve(const NrApi& a, const GuestArgs& g) {
-  // dev, flags, srcRect, destTexture, destPoint, slice, level, clear values...
-  a.resolve(a.self, g.r4(), g.r6());
+  // dev, flags, srcRect, destTexture, destPoint, destLevel, destSliceOrFace,
+  // clearColor, clearZ (f1); clearStencil and the parameters on the stack.
+  a.resolve(a.self, g.r3(), g.r4(), g.r5(), g.r6(), g.r7(), g.r8(), g.r9(), g.r10(),
+            float(g.f1));
 }
 void Clear(const NrApi& a, const GuestArgs& g) {
   // dev, count, rects, flags, color, z (f1), stencil
-  a.clear(a.self, g.r6(), g.r7(), float(g.f1), g.r[kClearStencilRegister - 3]);
+  a.clear(a.self, g.r3(), g.r4(), g.r5(), g.r6(), g.r7(), float(g.f1),
+          g.r[kClearStencilRegister - 3]);
 }
-void Present(const NrApi& a, const GuestArgs&) { a.present(a.self); }
+void Present(const NrApi& a, const GuestArgs& g) { a.present(a.self, g.r3()); }
+
+// Creation, after the original: r3 was the container, ret is the object.
+void CreatePixelShader(const NrApi& a, const GuestArgs& g) {
+  a.shader_created(a.self, 1, g.r3(), g.ret);
+}
+void CreateVertexShader(const NrApi& a, const GuestArgs& g) {
+  a.shader_created(a.self, 0, g.r3(), g.ret);
+}
 
 // State.
 void SetTexture(const NrApi& a, const GuestArgs& g) { a.set_texture(a.self, g.r4(), g.r5()); }
@@ -119,6 +130,10 @@ constexpr HookEntry kEntries[] = {
     // never null (the shader stream found the create functions swapped too).
     {0x821108B8, "SetPixelShader", Kind::kState, SetPixelShader},
     {0x82110C28, "SetVertexShader", Kind::kState, SetVertexShader},
+    // Created after the original returns (docs/shaders.md: 82111CA0 makes
+    // pixel shaders, 82111D90 vertex shaders, against d3d-api-map.md).
+    {0x82111CA0, "CreatePixelShader", Kind::kCreate, CreatePixelShader},
+    {0x82111D90, "CreateVertexShader", Kind::kCreate, CreateVertexShader},
     {0x82111E68, "SetVertexDeclaration", Kind::kState, SetVertexDeclaration},
     {0x821147B8, "Present", Kind::kFrame, Present},
     {0x82115418, "Clear", Kind::kDraw, Clear},

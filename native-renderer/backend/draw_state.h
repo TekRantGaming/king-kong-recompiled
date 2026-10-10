@@ -73,12 +73,35 @@ class DrawTracker {
   void EndConditionalRendering();
 
   // Draw and frame.
-  void Clear(uint32_t flags, uint32_t color_argb, float z, uint32_t stencil);
-  void Resolve(uint32_t flags, uint32_t dest_texture);
+  void Clear(uint32_t flags, uint32_t color_argb, float z, uint32_t stencil) {
+    Clear(0, 0, 0, flags, color_argb, z, stencil);
+  }
+  void Clear(uint32_t device, uint32_t rect_count, uint32_t rects_guest, uint32_t flags,
+             uint32_t color_argb, float z, uint32_t stencil);
+  void Resolve(uint32_t flags, uint32_t dest_texture) {
+    Resolve(0, flags, 0, dest_texture, 0, 0, 0, 0, 1.0f);
+  }
+  void Resolve(uint32_t device, uint32_t flags, uint32_t source_rect_guest, uint32_t dest_texture,
+               uint32_t dest_point_guest, uint32_t dest_level, uint32_t dest_slice,
+               uint32_t clear_color_guest, float clear_z);
   void DrawIndexed(uint32_t primitive, int32_t base_vertex, uint32_t start_index,
+                   uint32_t index_count) {
+    DrawIndexed(0, primitive, base_vertex, start_index, index_count);
+  }
+  void DrawIndexed(uint32_t device, uint32_t primitive, int32_t base_vertex, uint32_t start_index,
                    uint32_t index_count);
-  void Draw(uint32_t primitive, uint32_t start_vertex, uint32_t vertex_count);
-  void Present();
+  void Draw(uint32_t primitive, uint32_t start_vertex, uint32_t vertex_count) {
+    Draw(0, primitive, start_vertex, vertex_count);
+  }
+  void Draw(uint32_t device, uint32_t primitive, uint32_t start_vertex, uint32_t vertex_count);
+  void Present(uint32_t device = 0);
+  // Forwarded to the sink as is (any thread; touches no tracker state).
+  void ShaderCreated(uint32_t kind, uint32_t container, uint32_t object) {
+    if (sink_) sink_->OnShaderCreated(kind, container, object);
+  }
+  // Search the vertex constants for a perspective matrix on every draw (the
+  // placeholder pipeline needs it; the real shaders do not).
+  void set_find_wvp(bool on) { find_wvp_ = on; }
 
   // Read access (tests, logging).
   uint32_t frame() const { return frame_; }
@@ -127,6 +150,7 @@ class DrawTracker {
 
   uint32_t frame_ = 0;
   uint32_t draws_in_frame_ = 0;
+  bool find_wvp_ = true;
   Stats stats_;
 };
 

@@ -78,7 +78,7 @@ TEST(RuntimeLoadsThePlugin) {
       // Before SetupGuestGpu the plugin is inactive: the hooks only run the
       // game's originals.
       CHECK_EQ(api->is_active(api->self), 0);
-      api->draw_indexed(api->self, 4, 0, 0, 3);  // dropped, no crash
+      api->draw_indexed(api->self, 0, 4, 0, 0, 3);  // dropped, no crash
     }
     dlclose(module);
   }

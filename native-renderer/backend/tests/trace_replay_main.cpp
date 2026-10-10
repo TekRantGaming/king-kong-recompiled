@@ -20,7 +20,7 @@ class CountingSink final : public nr::DrawSink {
   void OnClear(const nr::ClearCall&) override { ++clears; }
   void OnDraw(const nr::DrawCall&) override { ++draws; }
   void OnResolve(const nr::ResolveCall&) override { ++resolves; }
-  void OnPresent(uint32_t frame, uint32_t rt0) override {
+  void OnPresent(uint32_t frame, uint32_t rt0, uint32_t) override {
     std::printf("frame %u: %u clears, %u resolves, render target 0 at present %08X\n", frame,
                 clears, resolves, rt0);
     clears = draws = resolves = 0;

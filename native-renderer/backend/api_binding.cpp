@@ -56,18 +56,27 @@ void BeginConditionalRendering(void* self, uint32_t id) {
   NR_FORWARD(BeginConditionalRendering(id));
 }
 void EndConditionalRendering(void* self) { NR_FORWARD(EndConditionalRendering()); }
-void Clear(void* self, uint32_t flags, uint32_t color, float z, uint32_t stencil) {
-  NR_FORWARD(Clear(flags, color, z, stencil));
+void Clear(void* self, uint32_t device, uint32_t rect_count, uint32_t rects, uint32_t flags,
+           uint32_t color, float z, uint32_t stencil) {
+  NR_FORWARD(Clear(device, rect_count, rects, flags, color, z, stencil));
 }
-void ApiResolve(void* self, uint32_t flags, uint32_t dest) { NR_FORWARD(Resolve(flags, dest)); }
-void DrawIndexed(void* self, uint32_t prim, int32_t base_vertex, uint32_t start_index,
-                 uint32_t index_count) {
-  NR_FORWARD(DrawIndexed(prim, base_vertex, start_index, index_count));
+void ApiResolve(void* self, uint32_t device, uint32_t flags, uint32_t rect, uint32_t dest,
+                uint32_t point, uint32_t level, uint32_t slice, uint32_t clear_color,
+                float clear_z) {
+  NR_FORWARD(Resolve(device, flags, rect, dest, point, level, slice, clear_color, clear_z));
 }
-void Draw(void* self, uint32_t prim, uint32_t start_vertex, uint32_t vertex_count) {
-  NR_FORWARD(Draw(prim, start_vertex, vertex_count));
+void DrawIndexed(void* self, uint32_t device, uint32_t prim, int32_t base_vertex,
+                 uint32_t start_index, uint32_t index_count) {
+  NR_FORWARD(DrawIndexed(device, prim, base_vertex, start_index, index_count));
 }
-void Present(void* self) { NR_FORWARD(Present()); }
+void Draw(void* self, uint32_t device, uint32_t prim, uint32_t start_vertex,
+          uint32_t vertex_count) {
+  NR_FORWARD(Draw(device, prim, start_vertex, vertex_count));
+}
+void Present(void* self, uint32_t device) { NR_FORWARD(Present(device)); }
+void ShaderCreated(void* self, uint32_t kind, uint32_t container, uint32_t object) {
+  NR_FORWARD(ShaderCreated(kind, container, object));
+}
 
 #undef NR_FORWARD
 
@@ -104,6 +113,7 @@ void InitApiBinding(ApiBinding& binding, void* owner, DrawTracker* (*resolve)(vo
   a.draw_indexed = DrawIndexed;
   a.draw = Draw;
   a.present = Present;
+  a.shader_created = ShaderCreated;
 }
 
 }  // namespace nr

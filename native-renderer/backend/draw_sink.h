@@ -30,6 +30,7 @@ struct RenderStates {
 
 struct ClearCall {
   uint32_t frame = 0;
+  uint32_t device = 0;  // the guest D3D device
   uint32_t flags = 0;
   bool color = false, depth = false, stencil = false;
   float rgba[4] = {};  // from the D3DCOLOR (ARGB)
@@ -38,10 +39,15 @@ struct ClearCall {
   uint32_t render_target0 = 0;
   uint32_t depth_stencil = 0;
   Viewport viewport;
+  // The rectangles (D3DRECT: x1, y1, x2, y2), at most 8 kept; none = the
+  // whole viewport.
+  uint32_t rect_count = 0;
+  std::array<std::array<int32_t, 4>, 8> rects = {};
 };
 
 struct DrawCall {
   uint32_t frame = 0;
+  uint32_t device = 0;  // the guest D3D device
   uint32_t index_in_frame = 0;  // draws (indexed and not) since the frame began
   bool indexed = false;
   GuestPrimitive primitive = GuestPrimitive::kTriangleList;
@@ -93,9 +99,22 @@ struct DrawCall {
 
 struct ResolveCall {
   uint32_t frame = 0;
+  uint32_t device = 0;
   uint32_t flags = 0;
   uint32_t dest_texture = 0;
   uint32_t render_target0 = 0;
+  // The source surface (render target flags & 3, or the depth surface with
+  // flags & 4) as bound at the call.
+  std::array<uint32_t, 4> render_targets = {};
+  uint32_t depth_stencil = 0;
+  bool has_rect = false;
+  int32_t rect[4] = {};  // x1, y1, x2, y2
+  bool has_point = false;
+  int32_t point[2] = {};
+  uint32_t dest_level = 0, dest_slice = 0;
+  bool has_clear_color = false;
+  float clear_color[4] = {};
+  float clear_z = 1.0f;
 };
 
 class DrawSink {
@@ -107,7 +126,11 @@ class DrawSink {
   // The game's Present: the frame being recorded is complete.
   // render_target0 is the surface bound at that point (the frame's main
   // surface, which the library resolves to the frontbuffer).
-  virtual void OnPresent(uint32_t frame, uint32_t render_target0) = 0;
+  virtual void OnPresent(uint32_t frame, uint32_t render_target0, uint32_t device) = 0;
+  // A shader was created (kind 0 vertex, 1 pixel): container is the guest
+  // container the engine passed, object the library's shader object. May come
+  // from any game thread.
+  virtual void OnShaderCreated(uint32_t /*kind*/, uint32_t /*container*/, uint32_t /*object*/) {}
 };
 
 }  // namespace nr
