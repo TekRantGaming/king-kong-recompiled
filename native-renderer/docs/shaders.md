@@ -335,7 +335,50 @@ average, a five-input shader 190 KB):
 Keys: `(XXH3-64 of the big-endian microcode, hash of the translation inputs)`; each entry carries the
 translator hash (translator version 2, ABI version, prelude text), and a pack from another translator is refused.
 
+## Render scale (session E)
+
+The backend can draw at a multiple of the console's size (`backend.md`, "Render scale"). Two things in a pixel
+shader's translation depend on the size of a surface: the pixel position register (VPOS) and the texture size a
+fetch reads with `GetDimensions` (unnormalised coordinates, fetch offsets in half texels, `GetTextureWeights`).
+`ShaderInfo::renderScaleAware` (pixel shaders only) switches the translator, through
+`RecompilerInput::renderScaleAware` into `XenosRecomp/shader_recompiler.cpp`, to code that works in guest units:
+
+- the pixel position is `(iPos.xy * kk_RenderScale.zw - 0.5) * (±1, 1)` instead of `(iPos.xy - 0.5) * (±1, 1)`;
+- after every fetch's `GetDimensions(ktd...)` a line `ktd.xy = kk_GuestSize(ktd.xy, <fetch constant>)`: the host
+  size times `kk_TexInvScale[slot].xy`, rounded; everything after (`kc /= size`, offsets, the weights, the
+  cube face, the 3D and stacked paths) is untouched and uses the guest size;
+- the declarations, emitted only in aware code:
+  `cbuffer KKScaleConstants : register(b3, space0) { float4 kk_RenderScale; float4 kk_TexInvScale[32]; }` and
+  `kk_GuestSize`. The struct is `kkshaders::ScaleConstants` in `abi.h`; the binding exists only when the renderer
+  runs scaled, so the root signature of the 1:1 renderer is unchanged.
+
+Nothing else changed, and nothing at all when the flag is off: the prelude, `kTranslatorVersion` (4), `kAbiVersion`
+(2) and so `translatorHash()` are as before, and a plain shader's input hash is unchanged (the aware flag adds
+`"render-scale-aware/1"` to the hash only when set). Checked: the plain HLSL of all 1,557 translatable corpus
+shaders (the test corpus at seed 20261010) and their input hashes are byte-identical to the commit before this
+work (the build of that commit dumped them; `kkshaders_tests scale --dump-hlsl <dir>` writes the same files).
+
+`kkshaders_tests scale [--dxc dir]` (a CTest test): for every corpus shader the plain translation mentions none
+of the new identifiers; vertex shaders do not change with the flag; for the 822 pixel shaders the aware text
+equals the plain text once the scale additions are removed (the declarations, the guest-size lines, the
+position expression), every `GetDimensions` has its guest-size line, VPOS readers use the scaled position, the
+hashes differ, every aware shader builds to signed DXIL and SPIR-V, and a plain and an aware variant sit in one
+pack under their own hashes. The corpus has 2 VPOS readers and 1,314 size reads; the backend's GPU tests
+(`Scale_PostPass...`) run both through the renderer.
+
+The pack and the tool. `kkshaders db-build ... --also-scaled` adds an aware variant of every pixel shader to the
+pack (the same file; about twice the pixel shaders: expect ~+60 MB of the 119 MB SPIR-V pack, not measured).
+`ShaderLibrary` asks for the aware variant when the backend scales and then does not use the lookup that ignores
+the input hash (`find(ucode, 0)`), which would answer with the plain code. `kkshaders scale-report
+xeshaders.bin` prints, per pixel family, how many shaders read VPOS, fetch with unnormalised coordinates, with
+offsets, ask for weights or sample cubes, and lists the constants whose names look like sizes (texel size, screen
+size, `1/width`): the data for deciding per family. It could not be run on the real database in the cloud (no game
+files); on the fixture database it runs and counts. The decisions it feeds are in `backend.md`.
+
 ## Decisions
+
+- Render scale: the translator's aware mode is for pixel shaders only, makes VPOS guest pixels and fetch sizes
+  guest texels, and leaves texel-size constants and normalised coordinates to the game (`backend.md`).
 
 - Kind of a container: the magic (`0x102A0E01` vertex), confirmed by the database's CTAB targets and the
   library's own shaders. Runtime hooks should still pass what the creating function implies.

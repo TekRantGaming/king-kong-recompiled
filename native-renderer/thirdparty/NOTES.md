@@ -46,6 +46,11 @@ Changes we make to vendored code are kept as small as possible and listed here:
   mode `vfetch_mini` uses the binding and stride of the `vfetch_full` that ran last; bool literals are
   inlined (the prelude's multiply rule changed too, in `native-renderer/shaders`). Listed with the reasons in
   `docs/shaders.md`.
+- `XenosRecomp/XenosRecomp/shader_recompiler.{h,cpp}` (Phase 2b, render scale): `RecompilerInput::renderScaleAware`
+  (off: byte-identical output). On: the pixel position register is `(iPos.xy * kk_RenderScale.zw - 0.5)`, each
+  texture fetch's `GetDimensions` size goes through `kk_GuestSize(size, fetch constant)`, and the
+  `KKScaleConstants` buffer (b3) and `kk_GuestSize` are declared. Reasons and checks in `docs/shaders.md`,
+  "Render scale".
 - `nvrhi/src/d3d12/d3d12-resource-bindings.cpp` (Phase 2, Windows): `DescriptorTable::isSamplerTable()` is also
   true for an immutable bindless layout whose register spaces are all samplers, and descriptor tables are bound
   from their own heap (`getDescriptorHeap()`) instead of always the CBV/SRV/UAV heap, so the game renderer's

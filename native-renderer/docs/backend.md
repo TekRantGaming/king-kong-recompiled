@@ -186,6 +186,107 @@ For a run: `kkshaders-spirv.pack` (and `kkshaders-dxil.pack` for D3D12) from `kk
 beside `king_kong.exe`, `dxcompiler.dll` and `dxil.dll` from the DXC release beside it too (neither in git).
 `tests/run.ps1` takes `-ExtraArgs` for extra game arguments.
 
+### Render scale (session E)
+
+`--native_render_scale` (default `1`; `1.5`, `2`, `3`, any number from 0.25 to 8, or a frame size `1920x1080`
+that sets each axis to size / 1280 or 720) and `--native_shadow_scale` (0 = like the render scale; `1` keeps the
+shadow maps at the console's size). Both are init-only. At `1` nothing below happens: the same paths, the same
+constants, the same pipeline layout (a test compares the frame of an explicit 1 with the default's bit for bit,
+and the translator's output and hashes at 1 equal the commit before this work for the 1,557 translatable
+corpus shaders, see `shaders.md`).
+
+What scales, and how (`backend/game_renderer.*`, `game_resources.cpp`, `game_passes.cpp`, `render_scale.h`):
+
+- **Render targets** are keyed as before (depth flag, EDRAM base, pitch, format). A `HostTarget` keeps its
+  guest size (`width` = pitch, `height` = rows drawn so far) and gets `host_width` / `host_height` =
+  `round(guest * scale)` (`ScaleCoord`, the same rounding everywhere) and `scale_x` / `scale_y`. The texture
+  is the host size. Everything that reasons about the console's surfaces (the "grow to the tallest" rule,
+  rectangle clamps, the key) stays in guest pixels.
+- **Clip space stays in guest pixels.** `ComputeViewport` computes `ndcScale` / `ndcOffset` from the guest
+  size, so the vertex shaders are untouched; the host viewport is the whole scaled target, and the window
+  scissor is clamped in guest pixels, then scaled (`ScaleRect` rounds each edge, so neighbours still tile).
+- **Clears**: whole-target clears are the same calls; a rectangle (the call's, or the viewport) is clamped in
+  guest pixels and its scissor scaled. **Resolves**: the source rectangle, the destination point and the clear
+  rectangles are guest pixels; the copy or blit uses scaled rectangles (origins round on their own, the size is
+  `round(size * scale)` on both sides, clamped to what both textures hold).
+- **Resolved textures** take their source's scale: the host texture is the guest plan's size times it
+  (`HostTexture::scale_x/y`, only for textures a resolve can write, i.e. uncompressed formats). It is
+  re-created when the scale differs, and a CPU upload over memory that was a scaled resolve re-creates it at 1:1
+  (`UploadTexture`). Aliases (the light shafts read a depth resolve's memory through other formats) are made at
+  the source's scale, with scaled blit rectangles. Mip levels above 0 of a scaled texture are the host size
+  shifted (not `round(guest_level * scale)`): not checked against the game (a resolve into a higher level of a scaled texture is approximate).
+- **Present**: the back buffer's target is blitted 1:1 into the frame image, which `Backend::Initialize`
+  creates at `round(display * scale)` (`Renderer::Initialize(width, height)`). `Backend::Present` already
+  hands `renderer_->width()/height()` to `RefreshGuestOutput`, and `CopyToGuestOutput` copies whatever size it
+  is told, so the presenter gets the scaled image and its upscalers (FSR1, NIS) and FXAA work on it as before
+  (they see a larger source and the window's size as the display).
+- **Shadow maps**: a colour target of format `k_32_FLOAT` whose pitch is not the frame's (832x832 in the game)
+  is a shadow map; its pitch is remembered and every attachment of that pitch (its depth buffer) gets the
+  shadow scale. The rule is by pitch because every attachment of a draw has one size. A game `k_32_FLOAT`
+  target of another purpose and another pitch would also get the shadow scale (none seen); `guest_frame_width`
+  is the backend's display width.
+
+What the shaders see. Three things in a translated pixel shader are in host pixels or host texels, and each
+has a rule (the translation is only different for pixel shaders, and only when the renderer scales; vertex
+shaders are never changed):
+
+| Case | Decision |
+|---|---|
+| `VPOS` (the pixel position register, 1,621 database pixel shaders) | **Scaled back to guest pixels**: `iPos.xy * (1/scale) - 0.5`. A host pixel centre becomes the point of the guest pixel grid it covers, so a shader that uses VPOS as a screen coordinate (screen-space lookups, noise or dither tiled by position, the depth of a pixel) reads the same place at every scale. It is fractional now: a shader that takes `floor`/`fmod` of it for a pattern gets a pattern in guest pixels, sampled more finely, as intended. |
+| Unnormalised fetches (`texCoordDenorm`), fetch offsets (half texels) and `GetTextureWeights` (the fraction of a texel position) | **The texture size they divide by is the guest's**: after each `GetDimensions` the aware code applies `kk_GuestSize`, the host size times the inverse scale of the texture bound at that fetch constant (1 for textures the guest uploaded, the resolve's scale for resolved ones). A coordinate in guest texels is then normalised by the guest's size, an offset of half a guest texel is still half a guest texel, and the weights are those of the guest's texture. The texture is sampled by its normalised coordinate, so a larger texture with more texels just samples finer. |
+| Normalised fetches, and constants that hold texel sizes or pixel steps (`1/width`, blur taps) | **Left alone**. A normalised coordinate is the same at any size. A constant the game sets as `1/1280` (blur taps, the shadow filter's steps) still steps one guest texel; at scale 2 that is two host texels, so the filter samples every other host texel: the same footprint, coarser taps. That is a quality choice, not an error, and changing it would mean knowing every constant (`kkshaders scale-report` lists the constants whose names look like sizes per family). |
+| Derivatives, LOD (`CalculateLevelOfDetail`, implicit LOD) | Left alone: they are per host pixel and per host texel, so the chosen mip follows the ratio on screen, as with any higher resolution. |
+| `GetDimensions` in vertex shaders (vertex texture fetch) | Not translated aware, and not checked against the database (a vertex shader that fetches a resolved texture with unnormalised coordinates would see the host size). |
+| Point sprites and line widths | Not scaled: sizes the rasteriser takes in pixels stay host pixels (a point sprite or line gets thinner relative to the picture). Not checked against what the game draws. |
+
+The scale constants (`kkshaders::ScaleConstants`, `shaders/include/kkshaders/abi.h`): `b3 space0`, a
+volatile buffer written per draw: the draw's render scale and its inverse, and for each of the 32 texture fetch
+constants the inverse scale of the texture bound there. `BindTexture` reports the scale of what it bound
+(`bound_scale_x_/y_`, alias or resolve copy). The binding exists in set 0's layout only when `scaled()`;
+the 1:1 layout still has b0 to b2. Aware pixel shaders declare it, plain ones never mention it.
+
+Shader packs. A pack made with `kkshaders db-build ... --also-scaled` holds the 1:1 and the aware variant of
+every pixel shader (different translation input hashes, one pack). At a scale the library asks for the aware
+variant and does **not** fall back to the plain translation of the same microcode (it would be wrong at that
+scale); a shader missing from the pack is compiled at startup (needs DXC). Without `--also-scaled` every
+pixel shader the game uses is compiled with DXC the first time it is seen: a stutter for the first minutes, and
+nothing at all without `dxcompiler`. The plain pack keeps working at scale 1.
+
+Known limits, decided, not fixed:
+
+- The window's size is not followed: `1920x1080` is typed by hand. Targets and the frame image are made at init,
+  and re-making them when a window is resized is future work (a reset of `targets_`, `resolved_by_base_` and
+  the frame images).
+- A texture partly written by a resolve (a rectangle) keeps the scale of its source; the rest of it holds what
+  it held before (as at 1:1).
+- Non-integer scales round rectangle edges to host pixels: a one-pixel row can differ from the exact position.
+  Integer scales are exact on the guest grid.
+- Rendering that depends on sub-pixel alignment of 1:1 targets (the half pixel offset stays in guest pixels,
+  as it must) is the same picture, not the same pixels, at another scale; the tests state the tolerance below.
+- Memory and time grow with the area: a scale of 3 is 9 times the pixels of every target (3840x2160 colour,
+  depth and the post chain), and the resolves copy that much.
+
+Tests (`nr_game_tests`, all on a CPU Vulkan device; the scene is drawn at scale 1 and at the other scales and
+the frame is reduced to the guest's size by an area average before comparing):
+
+| Test | Checks |
+|---|---|
+| `Scale_ParseSetting` | the setting's forms and refusals, rounding, clamping, never zero |
+| `Scale_UnitModeIsTheSameRenderer` | an explicit scale 1 (and shadow scale 1) is not `scaled()` and gives the same frame, float for float |
+| `Scale_FlatSceneMatchesAtScales` | quadrants, a clear rectangle, a slanted triangle, a draw under a smaller viewport at 2, 3, 1.5 and 2x1.5; the frame image has the scaled size |
+| `Scale_ClearRectsAndViewportClearAreExact` | clear rectangles and viewport clears land on the exact host pixels at 2 and 1.5 |
+| `Scale_ResolveToTextureAndSample` | draw, resolve into a texture, draw the texture: the same quadrants at 2, 3, 1.5; the targets and their sizes |
+| `Scale_ResolveRectAndDestinationPoint` | a resolve rectangle to a destination point at 2 and 1.5 |
+| `Scale_ResolveClearsColourAndDepth` | the resolve's colour and depth clears (with a depth buffer) at 2 |
+| `Scale_PostPassWithVposAndUnnormalizedFetch` | a full-screen pass that reads VPOS and fetches a resolved texture with unnormalised coordinates and a half texel offset: the picture of scale 1 at 2, 3, 1.5 |
+| `Scale_PostPassOverAnUnscaledTexture` | the same pass over a guest-uploaded texture (not scaled) at 2, 3, 1.5, and the control: with the plain pixel shaders at scale 2 the picture is wrong |
+| `Scale_ShadowMapsHaveTheirOwnScale` | a 32x32 `k_32_FLOAT` target follows the shadow scale (like the render scale, 1, or 3) and the main target the render scale |
+
+Stated tolerance of the comparison against scale 1: flat regions and edges on the guest grid to the existing
+colour tolerance (2.5/255); over a frame the mean absolute difference per channel is at most 1% and at least
+96% of the pixels are within 10% (the slanted edge's pixels are partly covered on one grid and whole on the other).
+The translator side has its own test (`kkshaders_tests scale`, `shaders.md`).
+
 ### Scores (Vulkan, `kk-dev-vulkan`)
 
 `tests/run.ps1 -Plugin native -Exe kk\out\build\kk-dev-vulkan\king_kong.exe -NoFrameLog`, commit 0adac16
@@ -332,6 +433,20 @@ Without the SDK on the prefix path the plugin is skipped and the libraries and G
 | `nr_game_tests` | the game renderer without the game (needs `NR_GAME_RENDERER`): a 20,608-byte device struct in synthetic guest memory, shader objects and containers from the shader tests' microcode assembler and container writer (`shaders/tests/xenos_asm`, `container_writer`), textures, vertex and index buffers laid out as `d3d-structs.md` says. A helper plays the D3D library: each setter writes the register images and D3D fields the real one writes, then calls the hook (hook table, NrApi, tracker, Renderer, GameRenderer; shader creation to the ShaderLibrary, DXC at run time). Checked by reading pixels back from lavapipe: clears (whole target, rectangles, the viewport), vertex colours and orientation (D3DCOLOR, +y up), indexed draws (16 / 32-bit, base vertex, start index), point / quad / fan / strip, stream offsets, vertex and pixel constants per draw, blend (add, alpha, reverse subtract), depth (less, always without writes, greater, depth-only clear, test off), cull (front, back, both faces' windings), colour mask, MRT with a per-target mask, render targets keyed by EDRAM base / pitch / format (shared by two surface objects, a new one per base, format and pitch, depth apart, re-created taller), resolves into k_8_8_8_8 endian-none, A8R8G8B8 (8in32, R and B exchanged) and k_8 textures sampled back, resolve rectangle and destination point, resolve colour and depth clears, a shader parsed from its object without the create hook, a tiled guest texture uploaded, sampled, rewritten and re-uploaded after `InvalidateRange`. Every test checks that the Khronos and NVRHI layers stayed silent |
 
 `NR_TEST_IMAGES=<dir>` makes `nr_render_tests` and `nr_game_tests` write the read-back images as PPM files.
+`NR_TEST_SYNC_PIPELINES=1` makes `nr_game_tests` create pipelines on the draw thread (the renderer's default skips
+a draw while its pipeline is built on a worker, and the tests read the first frame back), and
+`NR_TEST_VERBOSE=1` prints the renderer's draw and skip counts after each test.
+
+**No lavapipe (the Phase 2b cloud container).** The container has no `mesa-vulkan-drivers` (its apt mirrors are
+refused) but Playwright's Chromium ships SwiftShader (`vk_swiftshader_icd.json`, `VK_ICD_FILENAMES=...`). It
+works for `nr_draw_tests` and `nr_render_tests`, but reports `maxBoundDescriptorSets = 4` while the game renderer
+uses 7 sets (set 0 plus the six bindless tables), and writing past its fixed array corrupts the heap, so
+`nr_game_tests` crashes in `vkCmdBindDescriptorSets` (glibc "malloc(): invalid" aborts, not a validation error).
+SwiftShader built from source with `MAX_BOUND_DESCRIPTOR_SETS = 8` (`src/Vulkan/VkConfig.hpp`, the only change;
+`cmake -DREACTOR_BACKEND=Subzero -DSWIFTSHADER_BUILD_TESTS=OFF ... && ninja vk_swiftshader`, about 25 minutes on
+three cores) runs the whole game suite: 27 tests, 0 failed checks, with `NR_TEST_SYNC_PIPELINES=1`. It has no
+Khronos validation layer, so the "validation stayed silent" half of the checks did not run there; lavapipe with
+the layer remains the reference run.
 
 The test device (`backend/tests/vk_test_device.cpp`) enables what the SDK's device enables for the plugin:
 timeline semaphores, synchronization2 and dynamic rendering, the descriptor indexing features
