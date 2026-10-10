@@ -51,6 +51,7 @@ REXCVAR_DECLARE(std::string, native_shader_pack);
 REXCVAR_DECLARE(std::string, native_dxc);
 REXCVAR_DECLARE(bool, native_element_endian);
 REXCVAR_DECLARE(bool, native_flip_front_face);
+REXCVAR_DECLARE(bool, native_texture_tail_mips);
 REXCVAR_DECLARE(int32_t, native_dump_frame);
 REXCVAR_DECLARE(int32_t, native_debug);
 
@@ -225,6 +226,7 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
   if (game.dxc.empty()) game.dxc = ExecutableFolder().string();
   game.element_endian = REXCVAR_GET(native_element_endian);
   game.flip_front_face = REXCVAR_GET(native_flip_front_face);
+  game.texture_tail_mips = REXCVAR_GET(native_texture_tail_mips);
   game.dump_frame = REXCVAR_GET(native_dump_frame);
   game.debug = uint32_t(REXCVAR_GET(native_debug));
   if (!backend_->Initialize(std::max<uint32_t>(1, video_mode.display_width),

@@ -186,14 +186,28 @@ TextureFetch MakeTextureFetch(const TextureFetchDesc& desc);
 // The base pitch the XDK gives a texture (texels, a multiple of 32).
 uint32_t DefaultPitchTexels(TextureFormat format, uint32_t width, bool tiled);
 
+// Choices where the hardware's behaviour is not settled; the defaults match the SDK (today's renderer).
+struct TextureOptions {
+  // A texture small enough for its whole chain to sit in the base level's packed tail (shorter side 16
+  // texels or less) bound with mip address 0 and a max level above 0: the SDK reads level 0 only. With this
+  // set, levels 1+ are read from the base's own tail at their packed offsets (docs/formats.md, "Mips in the
+  // base's tail").
+  bool mips_from_base_tail = false;
+};
+
 // Levels actually stored, as the SDK's GetSubresourcesFromFetchConstant decides: the base exists if its
-// address is set and mips start at 1 only when the mip address is set.
+// address is set and mips start at 1 only when the mip address is set (or, with mips_from_base_tail, when
+// the whole chain is in the base's tail).
 struct TextureLevels {
   uint32_t width = 0, height = 0, depth_or_layers = 0;
   uint32_t base_address = 0, mip_address = 0;  // 0 when that region is absent
   uint32_t min_level = 0, max_level = 0;
+  bool mips_in_base_tail = false;  // levels 1..max_level come from the base region (mip_address is 0)
 };
-TextureLevels GetTextureLevels(const TextureFetch& fetch);
+TextureLevels GetTextureLevels(const TextureFetch& fetch, const TextureOptions& options = TextureOptions());
+// Whether a fetch constant is one of those textures (mip address 0, max level above 0, packed mips, whole
+// chain in the base's tail), whatever the option says.
+bool HasMipsInBaseTail(const TextureFetch& fetch);
 
 // The 360 D3DFORMAT word (MAKED3DFMT): the texture format, endian, tiling, signs, number format and
 // swizzle that become the fetch constant. Examples: 0x18280186 A8R8G8B8, 0x28280186 X8R8G8B8,

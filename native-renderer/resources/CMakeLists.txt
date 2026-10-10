@@ -64,6 +64,7 @@ add_executable(kknr_resources_tests
     tests/test_main.cpp
     tests/test_tiling.cpp
     tests/test_roundtrip.cpp
+    tests/test_tail_mips.cpp
     tests/test_convert.cpp
     tests/test_buffers.cpp
     tests/test_cache.cpp

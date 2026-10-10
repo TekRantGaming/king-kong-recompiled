@@ -209,6 +209,7 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
     if (renderer->Initialize()) {
       renderer->options().element_endian = game.element_endian;
       renderer->options().flip_front_face = game.flip_front_face;
+      renderer->options().texture_tail_mips = game.texture_tail_mips;
       renderer->options().dump_frame = game.dump_frame;
       renderer->options().debug = game.debug;
       rex::memory::Memory* memory = memory_;

@@ -47,6 +47,11 @@ class GameRenderer {
     // Flip the guest's front face (in case the host's winding came out the
     // other way round).
     bool flip_front_face = false;
+    // Small textures whose whole mip chain is in the base level's packed tail
+    // and that are bound with mip address 0: read levels 1+ from that tail
+    // (kknr::TextureOptions::mips_from_base_tail). Off: level 0 only, as the
+    // SDK.
+    bool texture_tail_mips = false;
     // Log every draw of this game frame (-1 none).
     int32_t dump_frame = -1;
     // Debugging aids (bits): 1 the game's clears are green, 2 the frame image
@@ -122,6 +127,11 @@ class GameRenderer {
                         uint32_t height);
   HostTarget* FindTarget(bool depth, uint32_t edram_base, uint32_t pitch, uint32_t format);
   static nvrhi::Format ColorTargetFormat(uint32_t format);
+  kknr::TextureOptions TextureOptions() const {
+    kknr::TextureOptions o;
+    o.mips_from_base_tail = options_.texture_tail_mips;
+    return o;
+  }
   nvrhi::IFramebuffer* GetFramebuffer(const std::array<HostTarget*, 4>& colors, HostTarget* depth);
   // The attachment formats, for pipeline keys.
   static uint64_t FormatSignature(const std::array<HostTarget*, 4>& colors, const HostTarget* depth);

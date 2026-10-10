@@ -85,7 +85,33 @@ function):
 - A fetch constant whose base address is 0 stores mips only (the minimum level becomes 1); a minimum level
   above 0 drops the base; a mip address with max level 0 means no mips, and so does a mip address of 0
   whatever the max level (as the SDK's `GetSubresourcesFromFetchConstant`; the game binds its 8x8 and 16x16
-  textures whose whole chain sits in the base's tail that way, see the findings below).
+  textures whose whole chain sits in the base's tail that way: `TextureOptions::mips_from_base_tail` reads
+  their smaller levels, see "Mips in the base's tail").
+
+### Mips in the base's tail
+
+A texture whose shorter side is 16 texels or less has its packed tail starting at level 0: the base level is
+itself stored in the 32x32 tail (at x = 16 for a square texture) and every smaller level has its own slot in
+the same tile (8x8 at x = 8, 4x4 at x = 4, 2x2 at y = 8, 1x1 at y = 4, from `PackedMipOffset`). The game binds
+its 8x8 and 16x16 8:8:8:8 and 16x16 DXT1 textures with packed mips, max level 3 or 4 and mip address 0. Two
+facts say where the smaller levels are:
+
+- The bigfile's records of these textures hold the base allocation only (one 4 KB-aligned tail, no mip
+  region; `kknr_bfscan`'s size check passes for all 11,940 records with that rule), yet they carry the full
+  level count. The only place the levels can be is the free slots of the base's own tail.
+- For packed level 0 the layout of a separate mips' tail is the base's tail again (same tile, same offsets):
+  `tail_mips_same_bytes_as_a_mip_tail_at_the_base_address` checks that reading levels 1+ from the base's tail
+  touches exactly the bytes a mip tail placed at the base address would, block for block, for 1, 4, 8 and
+  16-byte blocks, tiled and linear, 2D and cube. So "the GPU treats mip address 0 as the base address" and
+  "the levels live in the base's tail" are the same statement for these textures.
+
+Today's renderer (the SDK) reads level 0 only, so when such a texture is minified it samples level 0 where
+the 360 would sample a smaller level. The option `TextureOptions::mips_from_base_tail` (default off; the
+game renderer's `native_texture_tail_mips` cvar) makes `GetTextureLevels` keep the chain (levels up to the
+fetch constant's max level, the base kept), the layout's base extent cover every level of the tail (so the
+cache watches all of it), and `GetLevelSource` read levels 1+ from the base region. Only textures for which
+`HasMipsInBaseTail` holds change. The Windows side should compare a minified one (a distant 16x16 decal or
+icon) against the golden frames with the option on and off: on is expected to match the 360.
 
 Untiling and tiling share one address walk (`ReadGuestBlocks` / `WriteGuestBlocks` in
 `kknr/guest_texture.h`). `EncodeGuestTexture` is the full inverse of reading (tiling plus the endian swap); the
@@ -351,9 +377,10 @@ targets) in the unit tests, through the tiling round trip and the host plan.
 Findings:
 - The census dump (version 1) read every texture one 4 KB page early (fixed, see KKTX below).
 - Small textures whose whole chain sits in the base's packed tail (8x8 and 16x16 8:8:8:8, 16x16 DXT1) are bound
-  with max level 3 or 4 and mip address 0. The SDK then loads level 0 only, and so does this library, to match
-  today's renderer; the hardware probably reads levels 1+ from the base's tail. Visible only when such a
-  texture is minified. Open.
+  with max level 3 or 4 and mip address 0. The SDK then loads level 0 only, and so does this library by default,
+  to match today's renderer. `TextureOptions::mips_from_base_tail` (cvar `native_texture_tail_mips`) reads
+  levels 1+ from the base's tail instead; see "Mips in the base's tail" below. Visible only when such a texture
+  is minified.
 - The shadow maps' D3DFORMAT (0x2DA2ABA4) sets the integer number format on a float format; ignored, as the
   SDK does (kShaderInteger is only set for fixed-point formats).
 - The resolve into a k_8 texture (from an 8:8:8:8 target) and the endian-none 8:8:8:8 resolve are the two

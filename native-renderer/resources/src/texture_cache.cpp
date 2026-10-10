@@ -105,7 +105,7 @@ TextureCache::Entry& TextureCache::Create(const TextureFetch& fetch, const Textu
   auto e = std::make_unique<Entry>();
   e->key = key;
   e->fetch = fetch;
-  const TextureRanges r = GetTextureRanges(fetch);
+  const TextureRanges r = GetTextureRanges(fetch, options);
   e->ranges[0] = {r.base, r.base_bytes};
   e->ranges[1] = {r.mip, r.mip_bytes};
   Entry& ref = *e;

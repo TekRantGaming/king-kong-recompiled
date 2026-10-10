@@ -181,7 +181,7 @@ GameRenderer::HostTexture* GameRenderer::UploadTexture(nvrhi::ICommandList* cl,
                                                        const kknr::TextureFetch& fetch) {
   kknr::HostTextureData data;
   std::string why;
-  if (!kknr::ConvertTexture(fetch, physical_, data, &why)) {
+  if (!kknr::ConvertTexture(fetch, physical_, data, &why, TextureOptions())) {
     ++stats_.texture_failures;
     if (stats_.texture_failures < 50) {
       Logf(LogLevel::kWarning, "rexgpu-native: texture %08X %08X %08X not converted: %s", fetch.words[0],
@@ -212,7 +212,7 @@ GameRenderer::HostTexture* GameRenderer::UploadTexture(nvrhi::ICommandList* cl,
 uint32_t GameRenderer::TextureView(HostTexture* host, const kknr::TextureFetch& fetch,
                                    kkshaders::TextureDimension dimension, bool base_map) {
   kknr::HostTexturePlan plan;
-  if (!kknr::PlanHostTexture(fetch, plan)) plan = host->plan;
+  if (!kknr::PlanHostTexture(fetch, plan, nullptr, TextureOptions())) plan = host->plan;
   const uint32_t levels = std::max(host->plan.levels, 1u);
   uint32_t lo = std::max(fetch.MipMinLevel(), host->plan.min_level);
   uint32_t hi = std::min(fetch.MipMaxLevel(), levels - 1);
@@ -273,6 +273,7 @@ uint32_t GameRenderer::BindTexture(nvrhi::ICommandList* cl, const uint32_t words
                                    kkshaders::TextureDimension dimension, bool base_map) {
   const kknr::TextureFetch fetch = kknr::TextureFetch::FromWords(words);
   if (fetch.Type() != 2) return 0;
+  textures_.options = TextureOptions();  // ranges are computed with it when an entry is made
   kknr::TextureCache::BindResult r = textures_.Bind(fetch, physical_, frame_);
   if (!r.entry) return 0;
   auto* host = static_cast<HostTexture*>(r.entry->host);

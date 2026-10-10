@@ -130,7 +130,7 @@ bool PackedMipOffset(uint32_t width, uint32_t height, uint32_t depth, TextureFor
 
 GuestLayout ComputeGuestLayout(Dimension dimension, uint32_t base_pitch_texels, uint32_t width, uint32_t height,
                                uint32_t depth_or_layers, bool tiled, TextureFormat format, bool packed_mips,
-                               bool has_base, uint32_t max_level) {
+                               bool has_base, uint32_t max_level, bool mips_in_base_tail) {
   GuestLayout layout;
   layout.dimension = dimension;
   layout.format = format;
@@ -147,6 +147,8 @@ GuestLayout ComputeGuestLayout(Dimension dimension, uint32_t base_pitch_texels, 
   max_level = std::min(max_level, kMaxLevels - 1);
   layout.max_level = max_level;
   layout.packed_level = packed_mips ? PackedMipLevel(width, height) : UINT32_MAX;
+  // Levels 1+ in the base's tail: only when the base itself is the tail.
+  layout.mips_in_base_tail = mips_in_base_tail && has_base && layout.packed_level == 0 && max_level != 0;
 
   const FormatInfo& info = GetFormatInfo(format);
   const uint32_t bpb = info.BytesPerBlock();
@@ -154,8 +156,9 @@ GuestLayout ComputeGuestLayout(Dimension dimension, uint32_t base_pitch_texels, 
 
   // With the tail at level 0, iteration 0 is the base's tail and 1 the mips' tail; otherwise the iteration
   // is the level.
-  const uint32_t last = layout.packed_level == 0 ? uint32_t(max_level != 0)
-                                                 : std::min(max_level, layout.packed_level);
+  const uint32_t last = layout.mips_in_base_tail ? 0
+                         : layout.packed_level == 0 ? uint32_t(max_level != 0)
+                                                    : std::min(max_level, layout.packed_level);
   uint32_t mip_offset = 0;
   for (uint32_t it = has_base ? 0 : 1; it <= last; ++it) {
     const bool is_base = it == 0;
@@ -181,7 +184,7 @@ GuestLayout ComputeGuestLayout(Dimension dimension, uint32_t base_pitch_texels, 
 
     if (level == layout.packed_level) {
       // The used part of the tail: the union of the packed levels stored in it.
-      const uint32_t sub_last = is_base ? 0 : max_level;
+      const uint32_t sub_last = is_base && !layout.mips_in_base_tail ? 0 : max_level;
       for (uint32_t sub = layout.packed_level; sub <= sub_last; ++sub) {
         uint32_t xb, yb, z;
         PackedMipOffset(width, height, layout.depth, format, sub, xb, yb, z);
@@ -217,18 +220,18 @@ GuestLayout ComputeGuestLayout(Dimension dimension, uint32_t base_pitch_texels, 
   return layout;
 }
 
-GuestLayout ComputeGuestLayout(const TextureFetch& fetch) {
-  const TextureLevels levels = GetTextureLevels(fetch);
+GuestLayout ComputeGuestLayout(const TextureFetch& fetch, const TextureOptions& options) {
+  const TextureLevels levels = GetTextureLevels(fetch, options);
   return ComputeGuestLayout(fetch.Dim(), fetch.PitchTexels(), levels.width, levels.height, levels.depth_or_layers,
                             fetch.Tiled(), fetch.Format(), fetch.PackedMips(), levels.base_address != 0,
-                            levels.max_level);
+                            levels.max_level, levels.mips_in_base_tail);
 }
 
 bool GetLevelSource(const GuestLayout& layout, uint32_t level, uint32_t layer, LevelSource& out) {
   out = LevelSource();
   if (level > layout.max_level || layer >= layout.layers) return false;
   const FormatInfo& info = GetFormatInfo(layout.format);
-  if (level == 0) {
+  if (level == 0 || layout.mips_in_base_tail) {
     if (!layout.has_base) return false;
     out.storage = &layout.base;
   } else {

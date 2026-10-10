@@ -282,7 +282,7 @@ void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
   if (dest_object && w > 0 && h > 0) {
     const kknr::TextureFetch fetch = FetchFromObject(dest_object);
     kknr::HostTexturePlan plan;
-    if (fetch.Type() == 2 && kknr::PlanHostTexture(fetch, plan)) {
+    if (fetch.Type() == 2 && kknr::PlanHostTexture(fetch, plan, nullptr, TextureOptions())) {
       kknr::TextureCache::Entry& entry = textures_.MarkGpuWritten(fetch, frame_);
       auto* host = static_cast<HostTexture*>(entry.host);
       if (!host || !host->render_target || host->plan.format != plan.format || host->plan.width != plan.width ||

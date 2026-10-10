@@ -73,6 +73,11 @@ REXCVAR_DEFINE_BOOL(native_flip_front_face, false, "Native renderer",
                     "Swap the front face of every draw (a debugging aid for culling)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_BOOL(native_texture_tail_mips, false, "Native renderer",
+                    "Small textures whose whole mip chain sits in the base level's packed tail (bound with "
+                    "mip address 0): read the smaller levels from that tail. Off: level 0 only, as the SDK")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_INT32(native_debug, 0, "Native renderer",
                      "Debugging aids (bits): 1 the game's clears are green, 2 the frame image is "
                      "magenta under the back buffer")

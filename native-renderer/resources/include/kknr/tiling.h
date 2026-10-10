@@ -55,6 +55,7 @@ struct GuestLayout {
   uint32_t max_level = 0;
   uint32_t packed_level = UINT32_MAX;  // UINT32_MAX: no packed tail
   bool has_base = false;
+  bool mips_in_base_tail = false;      // levels 1+ inside the base's tail (TextureOptions::mips_from_base_tail)
   LevelStorage base;                   // level 0 (or the base's packed tail if packed_level == 0)
   LevelStorage mips[kMaxLevels];       // levels 1..min(max_level, packed_level); [0] = the mips' tail when
                                        // packed_level == 0
@@ -64,8 +65,8 @@ struct GuestLayout {
 
 GuestLayout ComputeGuestLayout(Dimension dimension, uint32_t base_pitch_texels, uint32_t width, uint32_t height,
                                uint32_t depth_or_layers, bool tiled, TextureFormat format, bool packed_mips,
-                               bool has_base, uint32_t max_level);
-GuestLayout ComputeGuestLayout(const TextureFetch& fetch);
+                               bool has_base, uint32_t max_level, bool mips_in_base_tail = false);
+GuestLayout ComputeGuestLayout(const TextureFetch& fetch, const TextureOptions& options = TextureOptions());
 
 // Where one host level of one layer comes from: the storage (base or a mip, possibly a tail) and the block /
 // slice offset inside it.
