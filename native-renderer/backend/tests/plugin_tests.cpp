@@ -32,6 +32,8 @@
 
 // vulkan_host.cpp reads it (plugin_main.cpp defines it in the plugin).
 REXCVAR_DEFINE_BOOL(native_validation, true, "Native renderer", "NVRHI validation layer");
+// backend.cpp reads it (the plugin defines it in plugin_main.cpp).
+REXCVAR_DEFINE_INT32(native_dump_frame, -1, "Native renderer", "Log every call of this game frame");
 
 using namespace nr;
 using namespace nr::test;
@@ -124,6 +126,8 @@ TEST(NvrhiOnTheSdkVulkanProvider) {
     // Milestone 3: the recorded frame through the hook table.
     FakeGuestMemory memory;
     TriangleScene scene(memory, w, h);
+    // The scene draws with ZFUNC always: the main-pass filter would skip it.
+    renderer.options().only_depth_tested = false;
     DrawTracker state(memory, &renderer);
     ApiBinding binding;
     InitApiBinding(binding, &state, [](void* s) { return static_cast<DrawTracker*>(s); });

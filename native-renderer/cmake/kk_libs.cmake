@@ -28,6 +28,10 @@ if(TARGET rex::runtime AND TARGET fmt::fmt)
     target_compile_features(kknr_resources PUBLIC cxx_std_20)
 
     # The SDK's include folder (xxh3.h, dxc/dxcapi.h) without linking it here.
+    # The Linux SDK install has no dxcapi.h: NR_DXC_DIR names a DXC release
+    # (include/dxc/dxcapi.h with WinAdapter.h, lib/libdxcompiler.so), which the
+    # tests also load the compiler from.
+    set(NR_DXC_DIR "" CACHE PATH "DXC release folder (include/dxc, lib or bin)")
     get_target_property(_nr_rex_includes rex::runtime INTERFACE_INCLUDE_DIRECTORIES)
     set(_nr_dxc_include "")
     foreach(_dir IN LISTS _nr_rex_includes)
@@ -35,6 +39,18 @@ if(TARGET rex::runtime AND TARGET fmt::fmt)
             set(_nr_dxc_include "${_dir}/dxc")
         endif()
     endforeach()
+    if(NR_DXC_DIR AND EXISTS "${NR_DXC_DIR}/include/dxc/dxcapi.h")
+        set(_nr_dxc_include "${NR_DXC_DIR}/include/dxc")
+    elseif(NR_DXC_DIR AND EXISTS "${NR_DXC_DIR}/inc/dxcapi.h")
+        set(_nr_dxc_include "${NR_DXC_DIR}/inc")
+    endif()
+    if(NOT _nr_dxc_include)
+        message(STATUS "native-renderer: no dxcapi.h in the SDK; set NR_DXC_DIR to a DXC release. "
+                       "The game renderer is left out.")
+        set(NR_GAME_RENDERER OFF)
+    endif()
+endif()
+if(NR_GAME_RENDERER)
 
     set(_nr_xenos_dir "${NR_ROOT}/thirdparty/XenosRecomp/XenosRecomp")
     add_library(nr_xenosrecomp STATIC "${_nr_xenos_dir}/shader_recompiler.cpp")

@@ -18,7 +18,11 @@ target_link_libraries(nr_trace_replay PRIVATE nr_draw nr_hooks)
 if(NR_HAS_VULKAN)
     add_executable(nr_render_tests render_tests.cpp vk_test_device.cpp readback.cpp)
     target_link_libraries(nr_render_tests PRIVATE nr_renderer nr_hooks ${CMAKE_DL_LIBS})
-    add_test(NAME nr_render_tests COMMAND nr_render_tests)
+    # Under the Khronos layer (the device enables it when installed and counts
+    # its errors; check_validation.py also fails on any it prints).
+    add_test(NAME nr_render_tests
+             COMMAND ${Python3_EXECUTABLE} -I "${CMAKE_CURRENT_SOURCE_DIR}/check_validation.py"
+                     $<TARGET_FILE:nr_render_tests>)
     # Prefer lavapipe when several Vulkan drivers are installed.
     set(_lvp "/usr/share/vulkan/icd.d/lvp_icd.json")
     if(EXISTS "${_lvp}")
