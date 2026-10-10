@@ -11,7 +11,8 @@
                 "CMAKE_C_COMPILER": "clang",
                 "CMAKE_CXX_COMPILER": "clang++",
                 "CMAKE_BUILD_TYPE": "Release",
-                "KKSHADERS_DXC_DIR": "$env{KK_DXC_DIR}"
+                "KKSHADERS_DXC_DIR": "$env{KK_DXC_DIR}",
+                "KKSHADERS_SPIRV_VAL": "$env{KK_SPIRV_VAL}"
             }
         },
         {
