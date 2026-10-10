@@ -127,6 +127,14 @@ tracking, DXC shaders. It has no occlusion queries (timer and event queries only
 doesn't need. Alternative: the SDK's own thin device layers (what the Xenos plugin uses), more work.
 Unleashed Recompiled's renderer is GPL-3.0 and is studied, not copied.
 
+### Graphics API: Vulkan first (decided 10 October 2026)
+
+The user chose Vulkan as the native renderer's primary API: one code path for Windows, Linux and the Steam Deck,
+and the Linux port is a main goal. NVRHI keeps D3D12 available behind the same interface, so D3D12 is a
+secondary backend for Windows, built and tested after Vulkan and only kept if it earns its place (for example
+a driver problem on some Windows machines). OpenGL is not considered. Bring-up, milestones and golden-frame
+comparisons are done on Vulkan first.
+
 ### Licence
 
 The repository has no LICENSE file. Reusing MIT code (XenosRecomp, NVRHI) is fine under any licence we pick;
