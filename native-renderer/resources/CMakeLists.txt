@@ -37,6 +37,26 @@ if(KKNR_RESOURCES_TOOLS)
     target_link_libraries(kknr_bfscan PRIVATE kknr_resources)
     add_executable(kknr_formats tools/formats_table.cpp)
     target_link_libraries(kknr_formats PRIVATE kknr_resources)
+    if(MSVC OR CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
+        target_compile_definitions(kknr_texdump PRIVATE _CRT_SECURE_NO_WARNINGS)
+        target_compile_definitions(kknr_bfscan PRIVATE _CRT_SECURE_NO_WARNINGS)
+    endif()
+
+    # kknr_sdkref: the conversion checked against the SDK's own texture code (today's renderer), compiled
+    # from an SDK source tree (read only; nothing of it is copied here). Built when the tree exists.
+    set(KKNR_SDK_SOURCE "C:/rexsrc" CACHE PATH "rexglue-sdk source tree for kknr_sdkref")
+    if(EXISTS "${KKNR_SDK_SOURCE}/src/graphics/pipeline/texture/util.cpp")
+        add_executable(kknr_sdkref tools/sdkref.cpp tools/sdkref_gpu.cpp tools/image_io.cpp
+            "${KKNR_SDK_SOURCE}/src/graphics/pipeline/texture/util.cpp"
+            "${KKNR_SDK_SOURCE}/src/graphics/pipeline/texture/info_formats.cpp")
+        target_include_directories(kknr_sdkref PRIVATE "${KKNR_SDK_SOURCE}/include"
+            "${KKNR_SDK_SOURCE}/src/graphics/shaders/bytecode/d3d12_5_1")
+        target_link_libraries(kknr_sdkref PRIVATE kknr_resources)
+        set_target_properties(kknr_sdkref PROPERTIES CXX_STANDARD 23)  # the SDK headers use std::byteswap
+        if(MSVC OR CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
+            target_compile_definitions(kknr_sdkref PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)
+        endif()
+    endif()
 endif()
 
 enable_testing()
