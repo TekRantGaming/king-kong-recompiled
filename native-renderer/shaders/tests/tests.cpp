@@ -2,6 +2,7 @@
 //   kkshaders_tests assembler                 the test assembler's encodings against XenosRecomp's
 //   kkshaders_tests container                 container writer / parser round trip, bad input
 //   kkshaders_tests corpus --dxc <dir> [--spirv-val <exe>] [--out <dir>] [--fuzz N] [--seed S] [--filter text]
+//   kkshaders_tests vfetch                    the vertex fetch patching (kkshaders/vertex_patch.h)
 //   kkshaders_tests cache --dxc <dir> [--out <dir>]
 #include <algorithm>
 #include <atomic>
@@ -23,6 +24,7 @@
 #include "kkshaders/compiler.h"
 #include "kkshaders/container.h"
 #include "kkshaders/translator.h"
+#include "kkshaders/vertex_patch.h"
 #include "xenos_asm.h"
 
 // XenosRecomp's instruction structs, for the encoding cross-check.
@@ -385,6 +387,141 @@ int testContainer() {
 }
 
 // --------------------------------------------------------------------------------------------
+// A template vertex shader: position (full fetch), colour (full fetch), texcoord (mini fetch
+// after the colour), and a second texcoord set the declarations below leave out.
+// The instruction addresses of the vertex fetches (a template's execs reach them through the
+// control flow words at the start of the microcode).
+std::vector<uint32_t> vfetchAddresses(const std::vector<uint32_t>& ucode) {
+    std::vector<uint32_t> out;
+    uint32_t cfEnd = uint32_t(ucode.size() / 3);
+    for (uint32_t t = 0; t < cfEnd; t++) {
+        uint64_t a = ucode[t * 3] | (uint64_t(ucode[t * 3 + 1] & 0xFFFF) << 32);
+        uint64_t b = (ucode[t * 3 + 1] >> 16) | (uint64_t(ucode[t * 3 + 2]) << 16);
+        for (uint64_t cf : {a, b}) {
+            uint32_t op = uint32_t(cf >> 44) & 0xF;
+            if (!((op >= 1 && op <= 6) || op == 13 || op == 14)) continue;
+            uint32_t address = uint32_t(cf & 0xFFF), count = uint32_t(cf >> 12) & 7, sequence = uint32_t(cf >> 16) & 0xFFF;
+            if (count) cfEnd = std::min(cfEnd, address);
+            for (uint32_t i = 0; i < count; i++)
+                if (((sequence >> (i * 2)) & 1) && (ucode[(address + i) * 3] & 0x1F) == 0) out.push_back(address + i);
+        }
+    }
+    return out;
+}
+
+ctest::Spec vfetchTemplate() {
+    ctest::Spec spec;
+    spec.vertex = true;
+    xasm::Program p;
+    xasm::VFetch pos;
+    pos.dst = 1;
+    pos.fetchConstant = 0;
+    xasm::VFetch col = pos;
+    col.dst = 2;
+    xasm::VFetch uv = pos;
+    uv.dst = 3;
+    uv.mini = true;
+    xasm::VFetch uv1 = pos;
+    uv1.dst = 4;
+    uv1.mini = true;
+    p.exec({{pos.encode(), true}, {col.encode(), true}, {uv.encode(), true}, {uv1.encode(), true}});
+    p.alloc(1, 0);
+    p.exec({{xasm::Alu().v(xasm::MAXv, 62, "xyzw", xasm::r(1), xasm::r(1)).exp(62).encode(), false}});
+    p.alloc(2, 0);
+    p.exec({{xasm::Alu().v(xasm::MAXv, 0, "xyzw", xasm::r(2), xasm::r(2)).exp(0).encode(), false}}, true);
+    spec.ucode = p.assemble();
+    spec.interpolators = {{5, 0, 0, 0xF}};
+    const std::vector<uint32_t> at = vfetchAddresses(spec.ucode);
+    if (at.size() == 4) spec.fetches = {{at[0], 0, 0, 0}, {at[1], 10, 0, 0}, {at[2], 5, 0, 0}, {at[3], 5, 1, 0}};
+    return spec;
+}
+
+int testVertexPatch() {
+    ParseResult r = parseContainer(ctest::writeContainer(vfetchTemplate()));
+    CHECK(r.ok);
+    if (!r.ok) return 1;
+    const ShaderInfo& info = r.info;
+    CHECK(info.fetches.size() == 4);
+    if (info.fetches.size() != 4) return 1;
+    const uint32_t base = info.fetches[0].address;  // the four fetches are consecutive
+    // The template: format 0, slot 0 everywhere.
+    for (uint32_t a = base; a < base + 4; a++) {
+        VertexFetchFields f = readVertexFetch(info.ucode, a);
+        CHECK(f.isFetch && f.format == 0 && f.slot == 0 && f.stride == 0);
+    }
+    CHECK(readVertexFetch(info.ucode, base + 2).mini);
+
+    // Position FLOAT3 and colour D3DCOLOR in stream 0 (stride 16), texcoord SHORT2N (signed) in
+    // stream 2 at offset 8 of a 12-byte vertex; TEXCOORD1 is not in the declaration.
+    const DeclElement decl[] = {
+        {0, 0, 57, false, false, DeclUsage::Position, 0},
+        {0, 12, 6, false, false, DeclUsage::Color, 0},
+        {2, 8, 25, true, false, DeclUsage::TexCoord, 0},
+    };
+    uint32_t strides[16] = {16, 0, 12};
+    VertexPatchResult out = patchVertexFetches(info, decl, strides);
+    CHECK(out.patched == 3 && out.missing == 1 && out.misaligned == 0);
+    CHECK(out.ucode.size() == info.ucode.size());
+
+    // Against the assembler's own encoding of what the library should leave behind.
+    xasm::VFetch want = {};
+    want.dst = 1;
+    want.fetchConstant = 95;
+    want.format = 57;
+    want.stride = 4;
+    want.offset = 0;
+    xasm::Instr w0 = want.encode();
+    CHECK(std::equal(w0.begin(), w0.end(), out.ucode.begin() + base * 3));
+    xasm::VFetch wcol = want;
+    wcol.dst = 2;
+    wcol.format = 6;
+    wcol.offset = 3;
+    xasm::Instr w1 = wcol.encode();
+    CHECK(std::equal(w1.begin(), w1.end(), out.ucode.begin() + (base + 1) * 3));
+    // The mini fetch keeps the slot and stride of the template (0), takes format, sign and offset.
+    VertexFetchFields mini = readVertexFetch(out.ucode, base + 2);
+    CHECK(mini.mini && mini.format == 25 && mini.isSigned && !mini.integer && mini.offset == 2 && mini.slot == 0 && mini.stride == 0);
+    // The unmatched one is untouched.
+    CHECK(std::equal(info.ucode.begin() + (base + 3) * 3, info.ucode.begin() + (base + 4) * 3, out.ucode.begin() + (base + 3) * 3));
+    // Control flow and the code after the fetches are untouched.
+    CHECK(std::equal(info.ucode.begin(), info.ucode.begin() + base * 3, out.ucode.begin()));
+    CHECK(std::equal(info.ucode.begin() + (base + 4) * 3, info.ucode.end(), out.ucode.begin() + (base + 4) * 3));
+
+    // The slot is 95 - stream: stream 15 is slot 80 = constant 26, select 2.
+    {
+        const DeclElement d[] = {{15, 0, 57, false, false, DeclUsage::Position, 0}};
+        const uint32_t s15[16] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 20};
+        VertexPatchResult o = patchVertexFetches(info, d, s15);
+        VertexFetchFields f = readVertexFetch(o.ucode, base);
+        CHECK(f.slot == 80 && f.stride == 5 && o.missing == 3);
+    }
+    // Integer elements set the number format bit; sub-dword offsets are counted.
+    {
+        const DeclElement d[] = {{0, 6, 6, false, true, DeclUsage::Position, 0}};
+        VertexPatchResult o = patchVertexFetches(info, d, strides);
+        VertexFetchFields f = readVertexFetch(o.ucode, base);
+        CHECK(f.integer && !f.isSigned && o.misaligned == 1);
+    }
+
+    // The hash: XXH3-64 of the big-endian bytes, different from the template's, different for
+    // other strides, equal for equal input.
+    CHECK(hashMicrocode(info.ucode) == info.ucodeHash);
+    const uint64_t patched = hashMicrocode(out.ucode);
+    CHECK(patched != info.ucodeHash);
+    CHECK(patched == hashMicrocode(patchVertexFetches(info, decl, strides).ucode));
+    uint32_t other[16] = {20, 0, 12};
+    CHECK(patched != hashMicrocode(patchVertexFetches(info, decl, other).ucode));
+    std::vector<uint8_t> be;
+    for (uint32_t v : out.ucode)
+        for (int s = 24; s >= 0; s -= 8) be.push_back(uint8_t(v >> s));
+    CHECK(patched == hashBytes(be.data(), be.size()));
+    if (failures) std::printf("%d failure(s)\n", failures);
+    else std::printf("vfetch: ok\n");
+    return failures ? 1 : 0;
+}
+
+
+// --------------------------------------------------------------------------------------------
 struct Outcome {
     std::string stage;  // empty = passed
     std::string error;
@@ -628,6 +765,7 @@ int main(int argc, char** argv) {
     std::string what = argv[1];
     if (what == "assembler") return testAssembler();
     if (what == "container") return testContainer();
+    if (what == "vfetch") return testVertexPatch();
     if (what == "corpus") return testCorpus(argc, argv);
     if (what == "cache") return testCache(argc, argv);
     if (what == "make-fixtures") return makeFixtures(argc, argv);

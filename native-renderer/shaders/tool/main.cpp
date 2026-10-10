@@ -6,6 +6,7 @@
 //   kkshaders db-check <xeshaders.bin>
 //   kkshaders db-build <xeshaders.bin> --dxc <dir> [--out <dir>] [--spirv-val <exe>] [--jobs N] [--limit N] [--both] [--image <image.bin>]
 //   kkshaders db-structure <xeshaders.bin>
+//   kkshaders vfetch-check <xeshaders.bin>      the vertex fetch patcher against the database's second containers
 //   kkshaders xsh <file.xsh> [<file.xsh> ...] --dxc <dir> [--out <dir>] [--spirv-val <exe>] [--jobs N] [--database <xeshaders.bin>]
 //   kkshaders pack-lookup <pack> [<hash> ...]
 //
@@ -32,6 +33,7 @@
 #include "kkshaders/compiler.h"
 #include "kkshaders/container.h"
 #include "kkshaders/translator.h"
+#include "kkshaders/vertex_patch.h"
 
 using namespace kkshaders;
 namespace fs = std::filesystem;
@@ -289,6 +291,84 @@ int cmdDbCheck(const Args& a) {
     std::printf("parsed %d, failed %d (second vertex containers parsed: %d)\n", ok, failed, secondOk);
     for (const auto& [e, n] : errors) std::printf("  %5d  %s\n", n, e.c_str());
     return failed ? 1 : 0;
+}
+
+// The database keeps, for every vertex shader, a second container: the library's own patched
+// copy for a dummy declaration (container.h). Rebuild that declaration from the second
+// container's fetch instructions, patch the first container for it, and compare the two
+// microcodes. Equal means the patcher does what the library does; the bits that differ say which
+// fields the library also writes (or which of ours it does not).
+int cmdVfetchCheck(const Args& a) {
+    if (a.positional.empty()) return 2;
+    Database db;
+    std::string error;
+    if (!db.load(a.positional[0], &error)) {
+        std::fprintf(stderr, "%s\n", error.c_str());
+        return 1;
+    }
+    size_t compared = 0, identical = 0, skipped = 0, fetchesSeen = 0, absent = 0;
+    uint32_t diffBits[3] = {0, 0, 0};
+    std::map<std::string, int> notes;
+    int shown = 0;
+    for (size_t i = 0; i < db.entries().size(); i++) {
+        const auto& e = db.entries()[i];
+        if (e.kind != 1) continue;
+        ParseResult pa = parseContainer(db.container(e)), pb = parseContainer(db.secondContainer(e));
+        if (!pa.ok || !pb.ok) {
+            skipped++;
+            notes["a container did not parse"]++;
+            continue;
+        }
+        if (pa.info.ucode.size() != pb.info.ucode.size()) {
+            skipped++;
+            notes["the two microcodes differ in size"]++;
+            continue;
+        }
+        std::vector<FetchBinding> order = pa.info.fetches;
+        std::sort(order.begin(), order.end(), [](const FetchBinding& x, const FetchBinding& y) { return x.address < y.address; });
+        std::vector<DeclElement> decl;
+        uint32_t strides[16] = {};
+        int stream = -1;
+        for (const FetchBinding& b : order) {
+            VertexFetchFields f = readVertexFetch(pb.info.ucode, b.address);
+            fetchesSeen++;
+            if (!f.isFetch) {
+                notes["a binding table address is not a vertex fetch"]++;
+                continue;
+            }
+            if (!f.mini) stream = int(95 - f.slot);
+            if (f.format == 0 || stream < 0 || stream > 15) {
+                absent++;
+                continue;
+            }
+            if (!f.mini) strides[stream] = f.stride * 4;
+            decl.push_back({uint8_t(stream), uint16_t(f.offset * 4), uint8_t(f.format), f.isSigned, f.integer, b.usage, b.usageIndex});
+        }
+        VertexPatchResult patched = patchVertexFetches(pa.info, decl, strides);
+        compared++;
+        bool same = true;
+        for (size_t w = 0; w < patched.ucode.size(); w++) {
+            uint32_t x = patched.ucode[w] ^ pb.info.ucode[w];
+            if (!x) continue;
+            same = false;
+            diffBits[w % 3] |= x;
+            if (shown < 12) {
+                shown++;
+                std::printf("entry %zu dword %zu (instruction %zu word %zu): library %08X, patched %08X, template %08X\n", i,
+                            w, w / 3, w % 3, pb.info.ucode[w], patched.ucode[w], pa.info.ucode[w]);
+            }
+        }
+        if (same) identical++;
+    }
+    std::printf("%zu vertex shaders compared, %zu identical, %zu skipped; %zu fetch entries, %zu absent from the dummy declaration\n",
+                compared, identical, skipped, fetchesSeen, absent);
+    for (const auto& [n, c] : notes) std::printf("  %5d  %s\n", c, n.c_str());
+    if (compared != identical)
+        std::printf("bits that differ (OR over all shaders): word 0 %08X, word 1 %08X, word 2 %08X\n"
+                    "  word 0: fetch slot bits 20-26; word 1: dst swizzle 0-11, num format 13, signed 14, format 16-21, exp adjust 24-29;\n"
+                    "  word 2: stride 0-7, offset 8-30\n",
+                    diffBits[0], diffBits[1], diffBits[2]);
+    return compared == identical ? 0 : 1;
 }
 
 struct Job {
@@ -825,7 +905,7 @@ int cmdPackLookup(const Args& a) {
 int main(int argc, char** argv) {
     if (argc < 2) {
         std::fprintf(stderr,
-                     "usage: kkshaders info|translate|compile|db-check|db-build|db-structure|xsh|pack-lookup ...\n"
+                     "usage: kkshaders info|translate|compile|db-check|vfetch-check|db-build|db-structure|xsh|pack-lookup ...\n"
                      "(see the comment at the top of tool/main.cpp)\n");
         return 2;
     }
@@ -836,6 +916,7 @@ int main(int argc, char** argv) {
     if (command == "compile") return cmdCompile(a);
     if (command == "db-check") return cmdDbCheck(a);
     if (command == "db-build") return cmdDbBuild(a);
+    if (command == "vfetch-check") return cmdVfetchCheck(a);
     if (command == "db-structure") return cmdDbStructure(a);
     if (command == "xsh") return cmdXsh(a);
     if (command == "pack-lookup") return cmdPackLookup(a);
