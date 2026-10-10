@@ -756,6 +756,114 @@ TEST(Draw_ConstantsReachShaders) {
 
 // ------------------------------------------------- pipeline state ---
 
+// ------------------------------------------- vertex element endian ---
+//
+// The declaration's element type carries its own endian mode, and the
+// library's buffers need not match it: one buffer can hold a position in
+// 8in32 and a colour in 16in32. With element_endian (the default) each
+// element is read with its own mode; without it the buffer's mode (the
+// fetch constant of the vertex buffer object, 8in32 here) is used for all.
+
+namespace {
+
+uint32_t SwapForEndian(uint32_t v, uint32_t endian) {
+  switch (endian) {
+    case 1: return ((v & 0x00FF00FFu) << 8) | ((v & 0xFF00FF00u) >> 8);
+    case 2: return (v << 24) | ((v & 0xFF00u) << 8) | ((v >> 8) & 0xFF00u) | (v >> 24);
+    case 3: return (v << 16) | (v >> 16);
+    default: return v;
+  }
+}
+uint32_t TypeWithEndian(uint32_t type, uint32_t endian) { return (type & ~(3u << 6)) | (endian << 6); }
+
+// The bytes in memory for a dword that a reader of `endian` turns into `value`.
+void PutStored(std::vector<uint8_t>& out, uint32_t value, uint32_t endian) {
+  const uint32_t stored = SwapForEndian(value, endian);  // the modes are their own inverse
+  for (int s = 0; s < 32; s += 8) out.push_back(uint8_t(stored >> s));
+}
+
+// Position (three floats) and colour, each stored for its own endian mode.
+std::vector<uint8_t> BytesWithEndians(const std::vector<ColorVertex>& vs, uint32_t pos_endian, uint32_t color_endian) {
+  std::vector<uint8_t> out;
+  for (const ColorVertex& v : vs) {
+    for (float c : {v.x, v.y, v.z}) {
+      uint32_t u;
+      std::memcpy(&u, &c, 4);
+      PutStored(out, u, pos_endian);
+    }
+    PutStored(out, v.argb, color_endian);
+  }
+  return out;
+}
+
+// The four quadrants drawn with a declaration saying `decl_*` and a buffer
+// laid out for `data_*`.
+Pixels QuadrantsWithEndians(Fixture& f, uint32_t decl_pos, uint32_t decl_color, uint32_t data_pos,
+                            uint32_t data_color) {
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  p.decl = f.mem.NewDeclaration({{0, 0, TypeWithEndian(kDeclFloat3, decl_pos), kUsagePosition, 0},
+                                 {0, 12, TypeWithEndian(kDeclColor, decl_color), kUsageColor, 0}});
+  f.Clear(kClearTarget0, 0xFF000000);
+  std::vector<ColorVertex> v;
+  for (int q = 0; q < 4; ++q) {
+    auto t = QuadTriangles(kQuadrants[q], kQuadrantColors[q]);
+    v.insert(v.end(), t.begin(), t.end());
+  }
+  f.SetDeclaration(p.decl);
+  f.SetShaders(p.vs, p.ps_interp);
+  f.SetStream(0, f.NewVertexBuffer(BytesWithEndians(v, data_pos, data_color)), 0, 16);
+  f.Draw(4, 0, uint32_t(v.size()));
+  return f.Present(rt);
+}
+
+}  // namespace
+
+TEST(Endian_ElementsReadWithTheirOwnMode) {
+  // The colour in each of the other three modes, the position in the buffer's.
+  for (uint32_t mode : {0u, 1u, 3u}) {
+    Fixture f;
+    if (!f.Init()) return;
+    CHECK(f.game->options().element_endian);
+    Pixels px = QuadrantsWithEndians(f, 2, mode, 2, mode);
+    f.CheckQuadrantColors(px, __LINE__);
+    CHECK_EQ(f.game->stats().draws, uint64_t(1));
+  }
+}
+
+TEST(Endian_OneBufferWithDifferentModes) {
+  // Position 16in32, colour 8in16, and then position none with colour 8in32:
+  // elements of one buffer that disagree with each other and with the buffer.
+  const uint32_t modes[2][2] = {{3, 1}, {0, 2}};
+  for (const auto& m : modes) {
+    Fixture f;
+    if (!f.Init()) return;
+    Pixels px = QuadrantsWithEndians(f, m[0], m[1], m[0], m[1]);
+    f.CheckQuadrantColors(px, __LINE__);
+  }
+}
+
+TEST(Endian_DeclarationWinsOverTheBuffer) {
+  // The declaration says "none" for the colour but the bytes are laid out for
+  // 8in32: the colour is read as the little-endian dword, bytes reversed.
+  Fixture f;
+  if (!f.Init()) return;
+  Pixels px = QuadrantsWithEndians(f, 2, 0, 2, 2);
+  Rgb want[4];
+  for (int q = 0; q < 4; ++q) want[q] = FromArgb(SwapForEndian(kQuadrantColors[q], 2));
+  f.CheckQuadrants(px, want, __LINE__);
+}
+
+TEST(Endian_LegacyUsesTheBuffersMode) {
+  // element_endian off: every element is read with the buffer's mode (8in32),
+  // whatever the declaration says.
+  Fixture f;
+  if (!f.Init()) return;
+  f.game->options().element_endian = false;
+  Pixels px = QuadrantsWithEndians(f, 3, 1, 2, 2);
+  f.CheckQuadrantColors(px, __LINE__);
+}
+
 TEST(State_Blend) {
   Fixture f;
   if (!f.Init()) return;
