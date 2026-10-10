@@ -1,0 +1,39 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+    "configurePresets": [
+        {
+            "name": "windows-base",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_CXX_COMPILER": "clang++"
+            },
+            "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+        },
+        {
+            "name": "linux-base",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_CXX_COMPILER": "clang++"
+            },
+            "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" }
+        },
+        { "name": "res-debug", "inherits": "windows-base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" } },
+        { "name": "res-release", "inherits": "windows-base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" } },
+        { "name": "res-linux-release", "inherits": "linux-base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" } }
+    ],
+    "buildPresets": [
+        { "name": "res-debug", "configurePreset": "res-debug" },
+        { "name": "res-release", "configurePreset": "res-release" },
+        { "name": "res-linux-release", "configurePreset": "res-linux-release" }
+    ],
+    "testPresets": [
+        { "name": "res-debug", "configurePreset": "res-debug", "output": { "outputOnFailure": true } },
+        { "name": "res-release", "configurePreset": "res-release", "output": { "outputOnFailure": true } },
+        { "name": "res-linux-release", "configurePreset": "res-linux-release", "output": { "outputOnFailure": true } }
+    ]
+}
