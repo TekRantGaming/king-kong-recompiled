@@ -64,6 +64,18 @@ float4 kk_PSConst(int index)
     return select(uint(index) < 256u, kk_PC[min(uint(index), 255u)], float4(0.0, 0.0, 0.0, 0.0));
 }
 
+// Not-equal as on Xenos: unordered (true when either side is NaN). DXC lowers HLSL's != to an
+// ordered compare for SPIR-V, which is false for NaN.
+bool kk_Ne(float a, float b)
+{
+    return !(a == b);
+}
+
+bool4 kk_Ne(float4 a, float4 b)
+{
+    return !(a == b);
+}
+
 bool kk_BoolConst(uint index)
 {
     return (kk_Bool[index >> 7][(index >> 5) & 3] & (1u << (index & 31))) != 0;
@@ -371,7 +383,7 @@ void kk_AlphaTest(float alpha)
     case 3u: pass = alpha == reference; break;
     case 4u: pass = alpha <= reference; break;
     case 5u: pass = alpha > reference; break;
-    case 6u: pass = alpha != reference; break;
+    case 6u: pass = kk_Ne(alpha, reference); break;
     case 7u: pass = alpha >= reference; break;
     default: pass = true; break;
     }
