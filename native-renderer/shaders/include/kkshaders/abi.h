@@ -31,7 +31,7 @@
 namespace kkshaders {
 
 // Bumped whenever the binding model, the constant layouts or the prelude change incompatibly.
-constexpr uint32_t kAbiVersion = 1;
+constexpr uint32_t kAbiVersion = 2;  // 2: the position goes through ndcScale / ndcOffset
 
 struct alignas(16) DrawConstants {
     uint32_t boolConstants[8];      // 256 bool constants, bit (n & 31) of word n >> 5 (vertex 0-127, pixel 128-255)
@@ -41,13 +41,14 @@ struct alignas(16) DrawConstants {
     uint32_t pixelSamplers[32];     // the same for the pixel shader
     uint32_t vertexFetch[16][4];    // per vertex binding, see VertexBinding
     float clipPlanes[6][4];         // user clip planes in clip space
-    float positionOffset[4];        // xy: added to the position's xy times w (half-pixel offset)
+    float ndcScale[4];              // xyz: position = position * ndcScale + ndcOffset * w, after the
+    float ndcOffset[4];             // clip distances: the guest viewport transform into host clip space
     uint32_t clipPlaneMask;         // planes enabled (bit per plane)
     uint32_t alphaFunc;             // 0 = no alpha test, else D3DCMPFUNC (1 never ... 8 always)
     float alphaRef;                 // 0-1
     uint32_t reserved;
 };
-static_assert(sizeof(DrawConstants) == 58 * 16, "DrawConstants must match KKDrawConstants");
+static_assert(sizeof(DrawConstants) == 59 * 16, "DrawConstants must match KKDrawConstants");
 
 // A vertex fetch format word (the w of a binding mode entry; built by the translator for
 // instruction mode).

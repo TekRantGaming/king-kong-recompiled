@@ -38,7 +38,8 @@ cbuffer KKDrawConstants : register(b2, space0)
     uint4 kk_PSSampler[8];       // pixel shader sampler bindings
     uint4 kk_VertexFetch[16];    // per vertex binding: see abi.h (VertexBinding)
     float4 kk_ClipPlane[6];      // user clip planes in clip space
-    float4 kk_PosOffset;         // xy: added to the vertex position xy times w (half-pixel offset)
+    float4 kk_NdcScale;          // xyz: the vertex position's scale into host clip space (viewport, no-clip pixels)
+    float4 kk_NdcOffset;         // xyz: added to the vertex position times w (viewport offset, half-pixel offset)
     uint4 kk_Flags;              // x: clip plane enable mask, y: alpha test function (0 off, 1-8 D3DCMP),
                                  // z: asuint(alpha reference 0-1), w: reserved
 };

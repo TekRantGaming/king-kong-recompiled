@@ -1587,7 +1587,7 @@ bool ShaderRecompiler::recompile(const RecompilerInput& in, std::string_view inc
         {
             e.println("{}oClip0 = float4(kk_ClipDistance(oPos, 0), kk_ClipDistance(oPos, 1), kk_ClipDistance(oPos, 2), kk_ClipDistance(oPos, 3));", tabs);
             e.println("{}oClip1 = float2(kk_ClipDistance(oPos, 4), kk_ClipDistance(oPos, 5));", tabs);
-            e.println("{}oPos.xy += kk_PosOffset.xy * oPos.w;", tabs);
+            e.println("{}oPos.xyz = oPos.xyz * kk_NdcScale.xyz + kk_NdcOffset.xyz * oPos.w;", tabs);
         }
         epilogue = e.out;
     }

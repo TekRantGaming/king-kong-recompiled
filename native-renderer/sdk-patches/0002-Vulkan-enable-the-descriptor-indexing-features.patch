@@ -1,0 +1,80 @@
+From 664b0c0876d385f4c9590bfcd34883de71e64803 Mon Sep 17 00:00:00 2001
+From: TekRantGaming <craigferels896@gmail.com>
+Date: Sat, 10 Oct 2026 12:45:09 +0100
+Subject: [PATCH 2/2] Vulkan: enable the descriptor indexing features when
+ supported
+
+Libraries created on the provider's device (the native renderer's NVRHI)
+use bindless descriptor tables: runtime descriptor arrays, partially bound
+and update-after-bind sampled images and storage buffers, and the dynamic
+indexing features they build on. Enabling them changes nothing for the
+SDK's own code. Properties gains the flags and device.h defines
+REX_UI_VULKAN_DEVICE_HAS_DESCRIPTOR_INDEXING.
+---
+ include/rex/ui/vulkan/device.h  | 17 +++++++++++++++++
+ src/ui/vulkan/vulkan_device.cpp | 14 ++++++++++++++
+ 2 files changed, 31 insertions(+)
+
+diff --git a/include/rex/ui/vulkan/device.h b/include/rex/ui/vulkan/device.h
+index 714c107..46b31d5 100644
+--- a/include/rex/ui/vulkan/device.h
++++ b/include/rex/ui/vulkan/device.h
+@@ -24,6 +24,9 @@ namespace vulkan {
+ // are enabled when supported), for libraries such as NVRHI created on this
+ // device.
+ #define REX_UI_VULKAN_DEVICE_HAS_SYNC_FEATURES 1
++// Properties has the descriptor indexing (bindless) features below, enabled
++// when supported, for the same libraries.
++#define REX_UI_VULKAN_DEVICE_HAS_DESCRIPTOR_INDEXING 1
+ 
+ class VulkanDevice {
+  public:
+@@ -141,6 +144,20 @@ class VulkanDevice {
+     // but by libraries created on this device, such as NVRHI).
+ 
+     bool timelineSemaphore = false;
++    // Descriptor indexing (bindless tables), with the Vulkan 1.0 dynamic
++    // indexing features they build on.
++    bool shaderUniformBufferArrayDynamicIndexing = false;
++    bool shaderSampledImageArrayDynamicIndexing = false;
++    bool shaderStorageBufferArrayDynamicIndexing = false;
++    bool descriptorIndexing = false;
++    bool shaderSampledImageArrayNonUniformIndexing = false;
++    bool shaderStorageBufferArrayNonUniformIndexing = false;
++    bool descriptorBindingSampledImageUpdateAfterBind = false;
++    bool descriptorBindingStorageBufferUpdateAfterBind = false;
++    bool descriptorBindingUpdateUnusedWhilePending = false;
++    bool descriptorBindingPartiallyBound = false;
++    bool descriptorBindingVariableDescriptorCount = false;
++    bool runtimeDescriptorArray = false;
+ 
+     // Vulkan 1.3 core, enabled whenever supported (as above).
+ 
+diff --git a/src/ui/vulkan/vulkan_device.cpp b/src/ui/vulkan/vulkan_device.cpp
+index 3b5c7a1..1255e14 100644
+--- a/src/ui/vulkan/vulkan_device.cpp
++++ b/src/ui/vulkan/vulkan_device.cpp
+@@ -647,6 +647,20 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
+ 
+   if (properties.apiVersion >= VK_MAKE_API_VERSION(0, 1, 2, 0)) {
+     XE_UI_VULKAN_FEATURE_2(features_1_2, timelineSemaphore);
++    // Bindless tables for libraries created on this device (the native
++    // renderer's NVRHI); the SDK itself does not use them.
++    XE_UI_VULKAN_FEATURE(shaderUniformBufferArrayDynamicIndexing)
++    XE_UI_VULKAN_FEATURE(shaderSampledImageArrayDynamicIndexing)
++    XE_UI_VULKAN_FEATURE(shaderStorageBufferArrayDynamicIndexing)
++    XE_UI_VULKAN_FEATURE_2(features_1_2, descriptorIndexing);
++    XE_UI_VULKAN_FEATURE_2(features_1_2, shaderSampledImageArrayNonUniformIndexing);
++    XE_UI_VULKAN_FEATURE_2(features_1_2, shaderStorageBufferArrayNonUniformIndexing);
++    XE_UI_VULKAN_FEATURE_2(features_1_2, descriptorBindingSampledImageUpdateAfterBind);
++    XE_UI_VULKAN_FEATURE_2(features_1_2, descriptorBindingStorageBufferUpdateAfterBind);
++    XE_UI_VULKAN_FEATURE_2(features_1_2, descriptorBindingUpdateUnusedWhilePending);
++    XE_UI_VULKAN_FEATURE_2(features_1_2, descriptorBindingPartiallyBound);
++    XE_UI_VULKAN_FEATURE_2(features_1_2, descriptorBindingVariableDescriptorCount);
++    XE_UI_VULKAN_FEATURE_2(features_1_2, runtimeDescriptorArray);
+     if (with_gpu_emulation) {
+       XE_UI_VULKAN_FEATURE_2(features_1_2, samplerMirrorClampToEdge);
+       XE_UI_VULKAN_FEATURE_2(features_1_2, uniformBufferStandardLayout);
+-- 
+2.55.0.windows.5
+
