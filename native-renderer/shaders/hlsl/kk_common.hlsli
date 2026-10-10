@@ -333,6 +333,10 @@ float4 kk_LoadVertex(uint buffer, uint byteAddress, uint word)
 float4 kk_FetchElement(uint binding, uint index)
 {
     uint4 e = kk_VertexFetch[binding];
+    // An element the declaration lacks (format 0) reads (0, 0, 0, 1) without touching memory,
+    // so its descriptor index need not be valid.
+    [branch] if ((e.w & 0x3Fu) == 0u)
+        return float4(0.0, 0.0, 0.0, 1.0);
     return kk_LoadVertex(e.x, e.y + index * e.z, e.w);
 }
 

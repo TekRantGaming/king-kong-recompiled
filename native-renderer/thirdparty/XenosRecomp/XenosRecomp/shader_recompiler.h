@@ -107,6 +107,7 @@ struct ShaderRecompiler : StringBuffer
     std::vector<RecompilerTexture> textures;
     bool generalControlFlow = false;  // emitted as a pc / switch state machine
     bool usesRegisterArray = false;   // relative temporary register addressing
+    bool hoistVertexFetch = false;    // all vertex inputs fetched once at the top (kkIn)
     uint32_t tempRegisterCount = 0;
     uint32_t pixelOutputs = 0;        // pixel: PixelShaderOutputs written (plus RecompilerInput::pixelOutputs)
     uint32_t exportedInterpolators = 0; // vertex: semantic slots written (TEXCOORD0-15, COLOR0-1)

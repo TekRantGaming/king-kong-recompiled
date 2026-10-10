@@ -19,9 +19,11 @@
 //
 // The float constants are uploaded as the device holds them (little-endian floats, the hooks
 // byte-swap). A shader's literal constants (ShaderInfo::registerWrites) must be applied to the
-// shadow when the shader is set, as the XDK's SetVertexShader / SetPixelShader do: the
-// translated code inlines the float ones where they are read directly, but relative reads and
-// bool / loop literals go through the buffers.
+// shadow when the shader is set, as the XDK's SetVertexShader / SetPixelShader do. The
+// translated code does not depend on it for float literals (read directly or relatively, they
+// are answered in the shader) nor for loop literals (inlined); bool literals go through the
+// buffers (no shader of the game's database reads a bool constant). Applying them keeps the
+// shadow identical to the console's for anything else that reads it.
 #pragma once
 
 #include <cstdint>

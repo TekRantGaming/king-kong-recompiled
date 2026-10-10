@@ -294,6 +294,13 @@ void ShaderRecompiler::recompile(const VertexFetchInstruction& instr, uint32_t a
 
     beginPredicate(instr.isPredicated, instr.predicateCondition);
 
+    uint32_t binding = vfetchBinding.at(address);
+    if (hoistVertexFetch)
+    {
+        emitFetchResult(instr.dstRegister, instr.dstRegisterAam, instr.dstSwizzle, fmt::format("kkIn[{}]", binding));
+        return;
+    }
+
     if (!instr.isMiniFetch)
     {
         indent();
@@ -301,7 +308,6 @@ void ShaderRecompiler::recompile(const VertexFetchInstruction& instr, uint32_t a
             SWIZZLES[instr.srcSwizzle & 3], instr.isIndexRounded ? " + 0.5" : "");
     }
 
-    uint32_t binding = vfetchBinding.at(address);
     indent();
     out += "{\n";
     ++indentation;
@@ -1035,11 +1041,23 @@ bool ShaderRecompiler::analyze()
 
     // Every exec in order of control flow (vfetch_mini depends on the previous vfetch_full in
     // program order, which the compiler keeps within one exec sequence).
+    // Vertex fetch hoisting (binding mode): when every vfetch_full indexes by r0.x and nothing
+    // writes r0 or changes the flow before it in program order, r0.x still holds the vertex
+    // index there, so all inputs can be fetched once at the top through one decode loop instead
+    // of one inlined decoder per fetch (most of a vertex shader's size).
+    bool hoistable = !isPixelShader && !input->rawVertexFetch;
+    bool r0Dirty = false, flowChanged = false;
+    auto writes = [&](uint32_t index, bool relative) { if (index == 0 || relative) r0Dirty = true; };
+
     for (uint32_t cfIndex = 0; cfIndex < cf.size(); cfIndex++)
     {
         const auto& c = cf[cfIndex];
         if (!isExecOpcode(c.opcode))
+        {
+            if (c.opcode != ControlFlowOpcode::Nop && c.opcode != ControlFlowOpcode::Alloc)
+                flowChanged = true;
             continue;
+        }
         uint32_t address = c.exec.address, count = c.exec.count, sequence = c.exec.sequence;
         if (address + count > instructionCount)
         {
@@ -1065,6 +1083,8 @@ bool ShaderRecompiler::analyze()
                 {
                     if (!vfetch.isMiniFetch)
                     {
+                        if (vfetch.srcRegister != 0 || vfetch.srcRegisterAm || (vfetch.srcSwizzle & 3) != 0 || r0Dirty || flowChanged)
+                            hoistable = false;
                         useRegister(vfetch.srcRegister, vfetch.srcRegisterAm);
                         lastFullFetchConstant = vfetch.constIndex * 3 + vfetch.constIndexSelect;
                         lastFullFetchStride = vfetch.stride;
@@ -1076,6 +1096,7 @@ bool ShaderRecompiler::analyze()
                         return false;
                     }
                     useRegister(vfetch.dstRegister, vfetch.dstRegisterAam);
+                    writes(vfetch.dstRegister, vfetch.dstRegisterAam);
                     vfetchStride[at] = lastFullFetchStride;
                     if (input->rawVertexFetch)
                     {
@@ -1106,6 +1127,9 @@ bool ShaderRecompiler::analyze()
                 {
                     useRegister(tfetch.srcRegister, tfetch.srcRegisterAm);
                     useRegister(tfetch.dstRegister, tfetch.dstRegisterAm);
+                    if (tfetch.opcode != FetchOpcode::SetTextureLod && tfetch.opcode != FetchOpcode::SetTextureGradientsHorz &&
+                        tfetch.opcode != FetchOpcode::SetTextureGradientsVert)
+                        writes(tfetch.dstRegister, tfetch.dstRegisterAm);
                     switch (tfetch.opcode)
                     {
                     case FetchOpcode::TextureFetch:
@@ -1174,9 +1198,15 @@ bool ShaderRecompiler::analyze()
                 if (!a.exportData)
                 {
                     if (a.vectorWriteMask)
+                    {
                         useRegister(a.vectorDest, a.vectorDestRelative);
+                        writes(a.vectorDest, a.vectorDestRelative);
+                    }
                     if (a.scalarWriteMask)
+                    {
                         useRegister(a.scalarDest, a.scalarDestRelative);
+                        writes(a.scalarDest, a.scalarDestRelative);
+                    }
                 }
                 else if (isPixelShader && a.vectorDest > 3 && a.vectorDest != uint32_t(ExportRegister::PSDepth) &&
                     !(a.vectorDest >= 32 && a.vectorDest <= 37))
@@ -1235,6 +1265,7 @@ bool ShaderRecompiler::analyze()
             vertexBindings.push_back(b);
         }
     }
+    hoistVertexFetch = hoistable && !vfetchBinding.empty();
     return true;
 }
 
@@ -1533,6 +1564,11 @@ bool ShaderRecompiler::recompile(const RecompilerInput& in, std::string_view inc
             println("\t{} = 0.0;", slotName(true, slot));
         out += "\tfloat4 oMisc = 0.0;\n\tfloat4 oUnlinked = 0.0;\n";
         println("\t{}.x = float(iVertexId);", reg(0, false));
+        if (hoistVertexFetch)
+        {
+            println("\tfloat4 kkIn[{}];", vertexBindings.size());
+            println("\t[loop] for (uint kb = 0; kb < {}u; kb++)\n\t\tkkIn[kb] = kk_FetchElement(kb, iVertexId);", vertexBindings.size());
+        }
     }
     out += '\n';
 

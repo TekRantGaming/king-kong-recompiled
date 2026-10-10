@@ -299,6 +299,26 @@ int testContainer() {
         CHECK(r.ok && r.info.constants.empty() && r.info.interpolators.size() == 2);
     }
 
+    // Vertex fetch hoisting: fetches indexed by an untouched r0.x are done once at the top;
+    // a write to r0 before a fetch keeps them in place.
+    {
+        r = parseContainer(bytes);
+        TranslateResult t = translate(r.info);
+        CHECK(t.ok && t.hlsl.find("kkIn[") != std::string::npos && t.hlsl.find("vfIndex = uint(") == std::string::npos);
+        ctest::Spec w = spec;
+        xasm::Program pw;
+        xasm::VFetch fw;
+        fw.dst = 1;
+        fw.format = xasm::F_32_32_32_FLOAT;
+        pw.exec({{xasm::Alu().v(xasm::ADDv, 0, "x", xasm::r(0), xasm::c(3)).encode(), false}, {fw.encode(), true},
+                 {xasm::Alu().v(xasm::ADDv, 2, "xyzw", xasm::r(1), xasm::c(3)).encode(), false}}, true);
+        w.ucode = pw.assemble();
+        w.fetches = {{2, 0, 0, 1}};
+        r = parseContainer(ctest::writeContainer(w));
+        t = translate(r.info);
+        CHECK(r.ok && t.ok && t.hlsl.find("kkIn[") == std::string::npos && t.hlsl.find("vfIndex = uint(") != std::string::npos);
+    }
+
     // Malformed input is refused, never read out of bounds.
     std::vector<uint8_t> bad = bytes;
     bad[2] = 0x11;

@@ -11,7 +11,7 @@ namespace kkshaders {
 
 // The translator's own version: part of every cache key together with the prelude text and
 // abi.h's kAbiVersion. Bump it when the generated code changes.
-constexpr uint32_t kTranslatorVersion = 1;
+constexpr uint32_t kTranslatorVersion = 2;  // 2: Windows validation pass (literal relative reads, select forms, predicate runs)
 
 enum class TextureDimension : uint8_t { Tex1D = 0, Tex2D = 1, Tex3D = 2, Cube = 3 };
 
