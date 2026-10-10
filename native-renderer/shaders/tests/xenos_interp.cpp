@@ -1229,6 +1229,12 @@ Vec Machine::sample(const Texture& t, uint32_t dim, const std::array<Num, 3>& c,
     std::vector<float> candidates[3];
     for (uint32_t a = 0; a < axes; a++) {
         float lo = pos[a] - posErr[a], hi = pos[a] + posErr[a];
+        // An error interval of many texels, or a coordinate past 2^20 texels (where the GPU's
+        // sub-texel position is gone and the walk below would not advance): not modelled.
+        if (!(hi - lo <= 8.0f) || !(std::fabs(pos[a]) <= 0x1p20f)) {
+            unknownOut = true;
+            return r;
+        }
         candidates[a] = {lo, pos[a], hi};
         for (float k = std::floor(lo - 0.5f) + 0.5f; k <= hi; k += 1.0f)
             if (k > lo) candidates[a].push_back(k);

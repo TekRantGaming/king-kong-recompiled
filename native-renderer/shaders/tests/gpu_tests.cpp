@@ -9,6 +9,7 @@
 //       --filter TEXT       only shaders whose name contains TEXT
 //       --out DIR           failing shaders' HLSL and a report (default gpu-out)
 //       --max-report K      mismatches printed per shader (default 4)
+//       --progress 1        a line per shader with its time
 //
 // Each shader is translated as the game's shaders are (kkshaders::translate), compiled to
 // SPIR-V with DXC, and run on the Vulkan device (lavapipe in the container):
@@ -26,6 +27,7 @@
 // answer them itself.
 
 #include <algorithm>
+#include <chrono>
 #include <bit>
 #include <cmath>
 #include <cstdio>
@@ -142,6 +144,12 @@ Env makeEnv(Rng& rng, const ShaderInfo& info, const ShaderBindings& b) {
     for (auto& l : env.loops) {
         uint32_t count = rng.below(5), start = rng.below(7);
         int32_t step = int32_t(rng.below(5)) - 2;
+        // Now and then an aL that leaves [-256, 256] within a few iterations (it is clamped).
+        if (rng.below(8) == 0) {
+            bool up = rng.below(2) != 0;
+            start = up ? 200 + rng.below(56) : rng.below(8);
+            step = up ? 64 + int32_t(rng.below(64)) : -128 + int32_t(rng.below(16));
+        }
         l = count | (start << 8) | ((uint32_t(step) & 0xFF) << 16);
     }
     // Textures for the slots the shader samples.
@@ -724,6 +732,7 @@ int runGpu(int argc, char** argv) {
     uint32_t fuzz = uint32_t(std::stoul(option(argc, argv, "--fuzz", "100")));
     bool corpus = option(argc, argv, "--corpus", "1") != "0";
     std::string filter = option(argc, argv, "--filter");
+    bool progress = option(argc, argv, "--progress", "0") != "0";
     uint32_t maxReport = uint32_t(std::stoul(option(argc, argv, "--max-report", "4")));
 
     std::vector<CorpusShader> shaders;
@@ -739,7 +748,11 @@ int runGpu(int argc, char** argv) {
     for (const auto& s : shaders) {
         index++;
         if (!filter.empty() && (s.name + " " + s.group).find(filter) == std::string::npos) continue;
+        auto start = std::chrono::steady_clock::now();
         runner.runShader(s, rounds, seed ^ (index * 2654435761u), stats);
+        if (progress)
+            std::printf("  %s [%s] %.1f s\n", s.name.c_str(), s.group.c_str(),
+                        std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
         if (stats.gpuFailures) break;
     }
 
