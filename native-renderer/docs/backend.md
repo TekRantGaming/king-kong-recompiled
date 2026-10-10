@@ -212,6 +212,56 @@ is Phase 1's placeholder (`native-20261010-073756`).
 (`native-20261010-165855`) passed 10/13: Venture missed on timing, both Kong scenes on the cold pipeline cache
 and the missing light shafts.
 
+### D3D12
+
+The same build with `--native_backend=d3d12` (commit 9167e9a, `kkshaders-dxil.pack` beside the game). Two
+fixes were needed: NVRHI's D3D12 backend bound the sampler table from the CBV/SRV/UAV heap (patched, see
+`thirdparty/NOTES.md`), and the sampler table's 2,048 slots did not fit NVRHI's default sampler heap (now
+1,024 slots, heaps 65,536 views and 2,048 samplers). Full run `native-20261010-173555`: 10/13 pass, with the
+first D3D12 visit to Kong to the Rescue compiling its pipelines cold (4.4 s; the cutscene shots came before
+the chapter had loaded) and Venture on a lightning flash. Run again with warm caches
+(`native-20261010-174427`, `native-20261010-174811`): kong_cutscene pass 0.0005 / 7.85, kong pass 0.0076 /
+8.96, venture pass 0.0000 / 3.49 (5/5). Every scene has therefore passed on D3D12 as well:
+
+| Scene | D3D12 worst frame (outside, MAE) |
+|---|---|
+| video | 0.0000 / 0.10 |
+| title | 0.0000 / 0.01 |
+| save_menu | 0.0000 / 1.20 |
+| main_menu | 0.0000 / 1.34 |
+| chapter_select | 0.0000 / 1.21 |
+| loading | 0.0000 / 0.01 |
+| vrex_110 | 0.0001 / 3.86 |
+| vrex_140 | 0.0006 / 3.73 |
+| vrex_170 | 0.0005 / 4.26 |
+| pause | 0.0000 / 0.00 |
+| venture | 0.0000 / 3.49 (second run) |
+| kong_cutscene | 0.0005 / 7.85 (warm caches) |
+| kong | 0.0076 / 8.96 (warm caches) |
+
+SV_VertexID includes the base vertex on D3D12 as on Vulkan for these draws (the indexed scenes match).
+
+### Open problems (Phase 2)
+
+- **Cold pipeline caches.** Pipelines are created on the render thread when a draw first needs them; the
+  first visit to a chapter on a machine whose driver has not seen them stalls for seconds (Kong to the
+  Rescue: about 9 s on Vulkan, 4 s on D3D12). Creating pipelines on a worker (and skipping the draw until it
+  is ready, as the Xenos plugin can), or recording the pipeline descriptions and creating them at start,
+  would fix it.
+- **Write watches during movies.** The movie planes are rewritten every frame; each page write faults once
+  per frame (about 360 invalidations a frame in the Venture opening's movie, 3 texture uploads of 3 ms each).
+  Fine at 30 frames a second, worth a look for higher frame rates (the planes could skip the watches: their
+  Lock / Unlock is hooked-able).
+- **Draw-list comparison.** The native plugin does not write `REX_DEV_FRAME_LOG` lines yet, so the harness
+  compares pictures only (runs use `-NoFrameLog`). The Xenos log hashes the vertex shader microcode after the
+  library patched it for the declaration, which the native side would need to reproduce.
+- **Linux tests and the endian default.** `nr_game_tests` (Linux, lavapipe) were written with the buffer's
+  endian; with `element_endian` on by default, a test whose elements' declared endian differs from the
+  buffer's would now read differently. Not run here (no Linux).
+- **Stencil in depth resolves seen as colour** is written as 0 (the D32S8 host depth keeps it, the blit does not
+  read it).
+- **Conditional rendering and the occlusion surveys** are ignored: everything is drawn (same picture, more work).
+
 
 ## NVRHI needs more from the SDK's Vulkan device
 
