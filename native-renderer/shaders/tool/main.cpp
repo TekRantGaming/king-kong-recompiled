@@ -4,7 +4,7 @@
 //   kkshaders translate <container> [-o out.hlsl] [--raw-vs | --raw-ps]
 //   kkshaders compile <container> --dxc <dir> [--out <dir>] [--spirv-val <exe>] [--raw-vs | --raw-ps]
 //   kkshaders db-check <xeshaders.bin>
-//   kkshaders db-build <xeshaders.bin> --dxc <dir> [--out <dir>] [--spirv-val <exe>] [--jobs N] [--limit N] [--both]
+//   kkshaders db-build <xeshaders.bin> --dxc <dir> [--out <dir>] [--spirv-val <exe>] [--jobs N] [--limit N] [--both] [--image <image.bin>]
 //   kkshaders db-structure <xeshaders.bin>
 //   kkshaders xsh <file.xsh> [<file.xsh> ...] --dxc <dir> [--out <dir>] [--spirv-val <exe>] [--jobs N] [--database <xeshaders.bin>]
 //   kkshaders pack-lookup <pack> [<hash> ...]
@@ -51,7 +51,7 @@ struct Args {
 };
 
 Args parseArgs(int argc, char** argv, int first) {
-    static const std::set<std::string> withValue = {"-o", "--out", "--dxc", "--spirv-val", "--jobs", "--limit", "--database"};
+    static const std::set<std::string> withValue = {"-o", "--out", "--dxc", "--spirv-val", "--jobs", "--limit", "--database", "--image"};
     Args a;
     for (int i = first; i < argc; i++) {
         std::string s = argv[i];
@@ -351,6 +351,20 @@ int runJobs(std::vector<Job>& jobs, const Args& a, const fs::path& out, const st
     report << "built " << built.size() << " of " << jobs.size() << " (DXIL signed and validated, SPIR-V "
            << (spirvVal.empty() ? "validated by DXC" : "validated by DXC and spirv-val") << ") in " << seconds << " s\n";
     report << "general control flow: " << general << ", dynamic register indexing: " << dynamic << "\n";
+    {
+        uint64_t dxil[2] = {}, spirv[2] = {}, count[2] = {};
+        for (const auto& s : built) {
+            int k = s.kind == ShaderKind::Pixel ? 1 : 0;
+            dxil[k] += s.dxil.size();
+            spirv[k] += s.spirv.size();
+            count[k]++;
+        }
+        for (int k = 0; k < 2; k++)
+            if (count[k])
+                report << (k ? "pixel" : "vertex") << " shaders: " << count[k] << ", DXIL " << dxil[k] / 1024 << " KB (average "
+                       << dxil[k] / count[k] << " bytes), SPIR-V " << spirv[k] / 1024 << " KB (average " << spirv[k] / count[k]
+                       << " bytes)\n";
+    }
     report << "\nby family:\n";
     for (const auto& [f, n] : byFamily) report << "  " << f << " " << n.first << " / " << n.second << "\n";
     if (!causes.empty()) {
@@ -374,7 +388,25 @@ int runJobs(std::vector<Job>& jobs, const Args& a, const fs::path& out, const st
         std::fprintf(stderr, "%s\n", error.c_str());
         return 1;
     }
-    std::printf("pack: %s (%zu shaders)\n", packPath.string().c_str(), built.size());
+    {
+        ShaderPack check;
+        size_t unique = check.open(packPath, &error) ? check.size() : 0;
+        std::printf("pack: %s (%zu shaders built, %zu distinct by microcode and inputs, %llu bytes)\n", packPath.string().c_str(),
+                    built.size(), unique, static_cast<unsigned long long>(fs::file_size(packPath)));
+    }
+    // --split: also one pack per backend (a player only needs the one their renderer uses).
+    if (a.has("--split")) {
+        for (int backend = 0; backend < 2; backend++) {
+            std::vector<CompiledShader> one = built;
+            for (auto& s : one) (backend == 0 ? s.spirv : s.dxil).clear();
+            fs::path p = out / (backend == 0 ? "kkshaders-dxil.pack" : "kkshaders-spirv.pack");
+            if (!ShaderPack::write(p, one, &error)) {
+                std::fprintf(stderr, "%s\n", error.c_str());
+                return 1;
+            }
+            std::printf("pack: %s (%llu bytes)\n", p.string().c_str(), static_cast<unsigned long long>(fs::file_size(p)));
+        }
+    }
     return built.size() == jobs.size() ? 0 : 1;
 }
 
@@ -408,6 +440,28 @@ int cmdDbBuild(const Args& a) {
             jobs.push_back({i, label, std::move(p.info), family});
         }
         if (limit && jobs.size() >= limit) break;
+    }
+    // The D3D library's own shaders live in the game image (kk/image.bin): find the containers
+    // there too (magic, sane sizes, and a clean parse), once per microcode.
+    if (!a.get("--image").empty()) {
+        std::vector<uint8_t> image;
+        if (!readFile(a.get("--image"), image)) {
+            std::fprintf(stderr, "cannot read %s\n", a.get("--image").c_str());
+            return 1;
+        }
+        std::set<uint64_t> have;
+        for (const auto& j : jobs) have.insert(j.info.ucodeHash);
+        int found = 0;
+        for (size_t o = 0; o + 24 <= image.size(); o += 4) {
+            if (image[o] != 0x10 || image[o + 1] != 0x2A || image[o + 2] != 0x0E || image[o + 3] > 1) continue;
+            ParseResult p = parseContainer(image.data() + o, std::min<size_t>(image.size() - o, 0x40000));
+            if (!p.ok || !have.insert(p.info.ucodeHash).second) continue;
+            char label[64];
+            std::snprintf(label, sizeof(label), "image 0x%08zX", size_t(0x82000000u) + o);
+            jobs.push_back({o, label, std::move(p.info), 0});
+            found++;
+        }
+        std::printf("%d shaders from the game image\n", found);
     }
     std::printf("%zu shaders to build (%d parse failures)\n", jobs.size(), parseFailures);
     int rc = runJobs(jobs, a, out, "xeshaders.bin: " + a.positional[0]);
@@ -635,6 +689,8 @@ int cmdDbStructure(const Args& a) {
             uses("depth output", (t.bindings.pixelOutputs & 16) != 0);
             uses("general control flow", t.bindings.generalControlFlow);
             uses("literal float constants", !info.literals.empty());
+            uses("vertex fetches hoisted into one decode loop", h.find("kkIn[") != std::string::npos);
+            uses("vertex fetches decoded in place", h.find("kk_FetchElement(") != std::string::npos && h.find("kkIn[") == std::string::npos);
         }
         if (found.empty()) f.clean++;
         else {
