@@ -463,6 +463,18 @@ int cmdDbBuild(const Args& a) {
         }
         std::printf("%d shaders from the game image\n", found);
     }
+    // --also-scaled: a render scale aware variant of every pixel shader beside the 1:1 one, in
+    // the same pack (the input hash tells them apart; docs/shaders.md, "Render scale").
+    if (a.has("--also-scaled")) {
+        size_t n = jobs.size();
+        for (size_t i = 0; i < n; i++) {
+            if (jobs[i].info.kind != ShaderKind::Pixel) continue;
+            Job j = jobs[i];
+            j.info.renderScaleAware = true;
+            j.label += " (scaled)";
+            jobs.push_back(std::move(j));
+        }
+    }
     std::printf("%zu shaders to build (%d parse failures)\n", jobs.size(), parseFailures);
     int rc = runJobs(jobs, a, out, "xeshaders.bin: " + a.positional[0]);
     return parseFailures ? 1 : rc;

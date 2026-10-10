@@ -54,6 +54,9 @@ class ShaderLibrary {
   // library (empty: the default search). Both optional: without the pack
   // every shader is compiled, without DXC only the pack's shaders exist.
   void Initialize(const std::string& pack, const std::string& dxc);
+  // Pixel shaders are translated render scale aware (the scaled variants of a pack). Set before
+  // any shader is created.
+  void SetRenderScaleAware(bool aware) { scale_aware_ = aware; }
 
   // A shader was created: kind 0 vertex, 1 pixel.
   void OnCreated(uint32_t kind, uint32_t container, uint32_t object);
@@ -73,6 +76,7 @@ class ShaderLibrary {
   bool pack_open_ = false;
   std::unique_ptr<kkshaders::Compiler> compiler_;
   bool dxc_ok_ = false;
+  bool scale_aware_ = false;
 
   mutable std::mutex mutex_;
   // Object address -> shader (addresses are reused after a release; a new

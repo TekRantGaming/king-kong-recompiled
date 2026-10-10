@@ -326,6 +326,8 @@ struct Fixture {
     renderer->set_submit([this](nvrhi::ICommandList* cl) { gpu->Execute(cl); });
     auto g = std::make_unique<GameRenderer>(
         gpu->device(), mem, kknr::GuestMemory{mem.PhysicalBase(), mem.PhysicalSize(), 0}, shaders.get());
+    // SwiftShader's JIT is not safe against pipeline creation racing draws: NR_TEST_SYNC_PIPELINES=1.
+    if (std::getenv("NR_TEST_SYNC_PIPELINES")) g->options().async_pipelines = false;
     if (!g->Initialize()) {
       Fail(__FILE__, __LINE__, "GameRenderer::Initialize failed");
       return false;

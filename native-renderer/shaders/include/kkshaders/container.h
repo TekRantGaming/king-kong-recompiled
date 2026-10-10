@@ -118,6 +118,9 @@ struct ShaderInfo {
     // No container: microcode only (the emulator's shader cache records). Vertex fetches are
     // taken as patched (instruction mode) and interpolators are linked by register number.
     bool rawMicrocode = false;
+    // Pixel shaders only: translate for a render scale other than 1 (see translator.h). Part of
+    // the input hash only when set, so every hash of a 1:1 shader is what it always was.
+    bool renderScaleAware = false;
 };
 
 struct ParseResult {

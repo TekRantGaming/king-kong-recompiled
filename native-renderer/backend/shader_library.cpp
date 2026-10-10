@@ -57,8 +57,9 @@ std::shared_ptr<GameShader> ShaderLibrary::Build(const kkshaders::ShaderInfo& in
   kkshaders::CompiledShader compiled;
   bool from_pack = false;
   if (pack_open_) {
-    from_pack = pack_.find(info.ucodeHash, kkshaders::translationInputHash(info), compiled) ||
-                pack_.find(info.ucodeHash, 0, compiled);
+    from_pack = pack_.find(info.ucodeHash, kkshaders::translationInputHash(info), compiled);
+    // The ucode-only fallback answers with the 1:1 translation: wrong for an aware shader.
+    if (!from_pack && !info.renderScaleAware) from_pack = pack_.find(info.ucodeHash, 0, compiled);
   }
   if (!from_pack) {
     if (!dxc_ok_) {
@@ -122,6 +123,7 @@ void ShaderLibrary::OnCreated(uint32_t kind, uint32_t container, uint32_t object
   const kkshaders::ShaderKind want = kind == 0 ? kkshaders::ShaderKind::Vertex : kkshaders::ShaderKind::Pixel;
   std::lock_guard lock(mutex_);
   ++stats_.created;
+  if (parsed.ok) parsed.info.renderScaleAware = scale_aware_ && parsed.info.kind == kkshaders::ShaderKind::Pixel;
   if (!parsed.ok || parsed.info.kind != want) {
     ++stats_.failed;
     by_object_[object] = nullptr;
@@ -158,6 +160,7 @@ std::shared_ptr<GameShader> ShaderLibrary::FromObject(kkshaders::ShaderKind kind
   std::memcpy(container.data() + virtual_size, ucode, physical_size);
   kkshaders::ParseResult parsed = kkshaders::parseContainer(container.data(), container.size());
   if (!parsed.ok || parsed.info.kind != kind) return nullptr;
+  parsed.info.renderScaleAware = scale_aware_ && kind == kkshaders::ShaderKind::Pixel;
   ++stats_.from_object;
   return Build(parsed.info);
 }

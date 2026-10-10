@@ -443,6 +443,16 @@ void ShaderRecompiler::recompile(const TextureFetchInstruction& instr, uint32_t 
                 return fmt::format("{}.SampleBias(kts, {}, clamp({}, -16.0, 15.99))", object, coord, lod);
             };
 
+        // Render scale aware: a texture made by a scaled resolve is bigger than the guest's;
+        // the guest's size is what unnormalised coordinates, offsets and weights are in.
+        auto guestSize = [&](std::string_view var, uint32_t components)
+            {
+                if (!input->renderScaleAware)
+                    return;
+                indent();
+                println("{0}.xy = kk_GuestSize({0}.xy, {1});", var, instr.constIndex);
+            };
+
         // Coordinates with unnormalised addressing and offsets applied, given the size.
         auto adjustCoords = [&](std::string_view sizeExpr)
             {
@@ -517,6 +527,7 @@ void ShaderRecompiler::recompile(const TextureFetchInstruction& instr, uint32_t 
                 out += "uint2 ktd;\n";
                 indent();
                 out += "kto.GetDimensions(ktd.x, ktd.y);\n";
+                guestSize("ktd", 2);
             }
             adjustCoords(dim == TextureDimension::Texture1D ? "float(ktd.x)" : "float2(ktd)");
             if (dim == TextureDimension::Texture1D)
@@ -552,6 +563,7 @@ void ShaderRecompiler::recompile(const TextureFetchInstruction& instr, uint32_t 
             out += "uint3 ktd;\n";
             indent();
             out += "kto.GetDimensions(ktd.x, ktd.y, ktd.z);\n";
+            guestSize("ktd", 3);
             adjustCoords("float3(ktd)");
             indent();
             out += "float3 kcl = float3(kc.xy, kc.z * float(ktd.z) - 0.5);\n";
@@ -593,6 +605,7 @@ void ShaderRecompiler::recompile(const TextureFetchInstruction& instr, uint32_t 
             out += "uint3 ktd;\n";
             indent();
             out += "kto.GetDimensions(ktd.x, ktd.y, ktd.z);\n";
+            guestSize("ktd", 3);
             adjustCoords("float3(ktd)");
             body("kto", "kc", 3, "float3(ktd)");
             --indentation;
@@ -616,6 +629,7 @@ void ShaderRecompiler::recompile(const TextureFetchInstruction& instr, uint32_t 
                 out += "uint2 ktd;\n";
                 indent();
                 out += "kto.GetDimensions(ktd.x, ktd.y);\n";
+                guestSize("ktd", 2);
                 indent();
                 if (instr.texCoordDenorm && stOffset)
                     println("kc.xy = (kc.xy + float2({}, {})) / float2(ktd);", offset[0], offset[1]);
@@ -1543,6 +1557,13 @@ bool ShaderRecompiler::recompile(const RecompilerInput& in, std::string_view inc
         println("static const float4 kkLiteral{} = float4({}, {}, {}, {});", index, hexFloat(value[0]), hexFloat(value[1]),
             hexFloat(value[2]), hexFloat(value[3]));
     }
+    if (in.renderScaleAware)
+    {
+        // b3: xy = render scale of the colour targets, zw = its inverse; per texture fetch
+        // constant xy = the inverse scale of the texture bound there (1 for ordinary textures).
+        out += "cbuffer KKScaleConstants : register(b3, space0)\n{\n\tfloat4 kk_RenderScale;\n\tfloat4 kk_TexInvScale[32];\n};\n\n";
+        out += "uint2 kk_GuestSize(uint2 hostSize, uint slot)\n{\n\treturn uint2(float2(hostSize) * kk_TexInvScale[slot].xy + 0.5);\n}\n\n";
+    }
     if (!in.floatLiterals.empty())
     {
         println("float4 kkConstRel(int index)\n{{\n\tfloat4 v = kk_{}Const(index);", isPixelShader ? "PS" : "VS");
@@ -1612,8 +1633,9 @@ bool ShaderRecompiler::recompile(const RecompilerInput& in, std::string_view inc
             }
         }
         if (in.paramGenRegister >= 0)
-            println("\t{} = float4((iPos.xy - 0.5) * float2(select(iFace, 1.0, -1.0), 1.0), 0.0, 0.0);",
-                reg(uint32_t(in.paramGenRegister), false));
+            println("\t{} = float4({} * float2(select(iFace, 1.0, -1.0), 1.0), 0.0, 0.0);",
+                reg(uint32_t(in.paramGenRegister), false),
+                in.renderScaleAware ? "(iPos.xy * kk_RenderScale.zw - 0.5)" : "(iPos.xy - 0.5)");
     }
     else
     {
