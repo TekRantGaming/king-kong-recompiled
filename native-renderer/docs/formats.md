@@ -7,11 +7,13 @@ EDRAM render targets map to pooled host targets. The code is `native-renderer/re
 `src/graphics/pipeline/texture/` and the D3D12 / Vulkan texture caches (rexglue-sdk v0.10.0, Xenia-derived,
 BSD), read but not copied.
 
-Status: everything below is implemented and unit-tested with synthetic data on Linux (`ctest`: 58 converter,
-tiling, buffer, cache and render-target tests plus 3 NVRHI format-table tests). Nothing here has been run
-against the game's own textures yet; "Validating on Windows" at the end lists what to run there. Choices
-marked "unverified" have no hardware or SDK reference and are the first to check when a real texture looks
-wrong.
+Status: implemented, unit-tested with synthetic data (`ctest`: 58 converter, tiling, buffer, cache and
+render-target tests plus 3 NVRHI format-table tests, passing on Linux and on Windows with Visual Studio 2022
+clang and Ninja, release and debug), and checked on the game's own data: every texture shape the game binds
+converts byte for byte as today's renderer converts it (the census and the results are in "What the game
+binds" and "Checked against today's renderer" below). Choices marked "unverified" in the table concern
+formats the game does not bind; they have no hardware or SDK reference and are the first to check if a
+future use shows them wrong.
 
 ## Conventions
 
@@ -81,8 +83,9 @@ function):
 - **Cube maps** are 6 layers; **stacked 2D** textures are arrays; **3D** textures have depth slices inside one
   volume; **1D** textures are linear rows.
 - A fetch constant whose base address is 0 stores mips only (the minimum level becomes 1); a minimum level
-  above 0 drops the base; a mip address with max level 0 means no mips (as the SDK's
-  `GetSubresourcesFromFetchConstant`).
+  above 0 drops the base; a mip address with max level 0 means no mips, and so does a mip address of 0
+  whatever the max level (as the SDK's `GetSubresourcesFromFetchConstant`; the game binds its 8x8 and 16x16
+  textures whose whole chain sits in the base's tail that way, see the findings below).
 
 Untiling and tiling share one address walk (`ReadGuestBlocks` / `WriteGuestBlocks` in
 `kknr/guest_texture.h`). `EncodeGuestTexture` is the full inverse of reading (tiling plus the endian swap); the
@@ -179,12 +182,13 @@ the data stays unsigned and `kShaderMixedSigns` is set); the texel format used i
   `VK_FORMAT_B5G5R5A1_UNORM_PACK16`, whose bit layouts are not the DXGI ones (only `BGRA4_UNORM` is mapped to
   the matching `A4R4G4B4`), so the same bytes would read differently on the two backends. Widening by bit
   replication is exact at 0 and the maximum and within half a step elsewhere; it costs memory only for
-  formats the game is not known to use much. Brief 04 should know about the NVRHI mapping either way.
+  formats the game does not bind at all (census below). Brief 04 should know about the NVRHI mapping either way.
 - **Formats the SDK leaves unsupported get a conversion** (1 bpp, k_8_B, k_8_8_8_8_A, the EDRAM-only formats,
   the 32-bit integer formats, k_32_32_32_FLOAT, the split, MPEG and interlaced formats). These are marked
-  unverified in the table; a census of the game's bound textures (below) tells which ones matter.
+  unverified in the table; the census (below) finds none of them bound.
 - **Signed DXN and DXT5A** use BC5_SNORM / BC4_SNORM (the SDK says it does not support signed compressed
   textures). Unverified: if the 360 decodes signed DXN end points differently, this shows as wrong normals.
+  The game binds DXN unsigned only, and no DXT5A.
 
 ### Depth, gamma, exponent
 
@@ -268,39 +272,114 @@ constants are checked against it) drives the swaps:
   R to Z), so that copy has to exchange R and B: a blit, not a raw copy. Brief 04 decides how (a compute or
   draw blit; a typed copy cannot swap).
 
+## What the game binds (census)
+
+Sources: stream 01's object dumps (the 40-byte texture object passed to every SetTexture, `KK d3d obj:
+sub_82118F78` lines, in `analysis\01`: the title screen, startup movie, save menu, main menu, chapter select,
+loading screen, Jack gameplay in the V-Rex chapter, the pause menu, Kong gameplay and a Kong chapter with
+Jack, plus every other window of the four runs) and this stream's resource census run (`KK_DEV_TEX_CENSUS`,
+from launch into the V-Rex chapter: every distinct texture bound). A texture is one distinct fetch constant as
+the object holds it (no sampler state). `tools/analysis/tex_census.py` builds the table; 441 distinct textures.
+
+| Format | Endian | Tiling | Dim | Textures | Sizes (levels) | Seen in |
+|---|---|---|---|---|---|---|
+| k_DXN | 8in16 | tiled | 2D | 102 | 32x32 to 1024x1024, all with full mip chains and packed tails | menus, gameplay |
+| k_DXT4_5 | 8in16 | tiled | 2D | 100 | 32x32 to 1024x1024 with mips; 1024x64, 512x64, 128x64, 256x128, 512x512 without | everywhere but the movie |
+| k_DXT1 | 8in16 | tiled | 2D | 71 | 64x64 to 1024x1024 with mips; 16x16 levels 0-4 with the whole chain in the base's tail | menus, gameplay |
+| k_8_8_8_8 | 8in32 | tiled | 2D | 67 | 64x64 to 512x512 with mips; 8x8 and 16x16 chains in the base's tail; resolve targets 1280x720, 640x480, 640x360, 320x180; 16x16, 64x32, 256x128, 256x256 without mips | everywhere |
+| k_8 | none | tiled | 2D | 55 | 128x512 to 1024x1024 with mips (masks); 1280x720 resolve targets | menus, gameplay |
+| k_8 | none | linear | 2D | 30 | 1280x720 and 640x360 (the video's Y, U and V planes) | movie, loading |
+| k_8_8_8_8 | 8in32 | linear | 2D | 6 | 512x32 | loading |
+| k_32_FLOAT | 8in32 | tiled | 2D | 6 | 832x832 (shadow maps, resolved; number format "integer", signs SSSS) | gameplay |
+| k_24_8 | 8in32 | tiled | 2D | 2 | 1280x720, 320x180 (depth resolved into a texture) | menus, gameplay |
+| k_8_8 | 8in16 | tiled | 2D | 1 | 64x64, signed (SSSS) | Jack gameplay |
+| k_DXT1 | 8in16 | linear | cube | 1 | 128x128, levels 0-7, packed tail | Jack gameplay |
+
+Every texture has signs uuuu except the k_32_FLOAT and k_8_8 ones (SSSS); swizzles are XYZW (block formats),
+ZYXW / ZYX1 (A8R8G8B8 / X8R8G8B8), 000X (k_8 masks), XXX1 (video planes), X111 (shadow maps) and XY11 (depth,
+k_8_8). No exp_adjust, no 3D or stacked textures, and no format the table marks unverified.
+
+KKTextures.bf holds 11,940 texture records (`kknr_bfscan`): k_DXN 4,134, k_DXT4_5 3,284, k_DXT1 2,495, k_8 1,798
+and k_8_8_8_8 229, all tiled; KKMaps.bf holds none. The bound textures not from the bigfile are made at run
+time: render-target resolves, the video planes (written by the CPU through LockRect every frame), the cube
+map, the 512x32 linear and the small 8:8:8:8 and signed 8:8 textures.
+
+Render targets (CreateRenderTarget, census run): 832x832 k_32_FLOAT (0x2DA2ABA4), 320x180 / 640x360 / 1280x720
+A8R8G8B8 (0x18280186), 640x480 X8R8G8B8 (0x28280186), 1280x720 D24S8 (0x2D200196), no MSAA; all map to the
+pool's formats. Resolves go into k_32_FLOAT, k_8_8_8_8 (8in32, and once endian none ZYX1), k_8 (endian none,
+000X) and k_24_8 textures, with clear flags 0x100, 0x200 and 0x300.
+
+## Checked against today's renderer
+
+The reference is the SDK's own texture code rather than a capture: `kknr_sdkref` compiles the SDK's
+`texture_util` (which levels exist, the guest layout, tiled addressing, packed mip offsets) from `C:\rexsrc`
+and emulates `D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl` on the CPU, and with `--gpu` runs the
+SDK's compiled load shaders (the same bytecode the game's renderer dispatches) through D3D12 with the cache's
+constants, dispatch sizes, copy-buffer layout and CopyTextureRegion boxes. This needs no game run (stream 04
+has the game) and compares exact bytes per subresource, which a RenderDoc capture would also give but only for
+the textures of one captured frame. Both references must match ConvertTexture's output block for block, and
+the view swizzle must equal the SRV swizzle the SDK binds. A one-block change in the reference is caught
+(checked by a temporary mutation).
+
+| Data | Textures | Result |
+|---|---|---|
+| Memory dumps of bound textures, V-Rex run (every combination in the census, version 1 dumps corrected) | 45 | all match, CPU and GPU |
+| KKTextures.bf records, up to 10 per shape (all 77 shapes: sizes, level counts, packed tails, the 5 formats) | 680 | all match, CPU and GPU |
+| Every bound fetch constant (441) with random texel data | 441 | all match, CPU and GPU |
+| Resolve-target dumps (stale memory in the dumps) refilled with random data: k_24_8 depth conversion, k_32_FLOAT, k_8 | 7 | all match bit for bit, CPU and GPU |
+| bf record sizes (level count, packed level, data size) against the library's layout | 11,940 | all equal |
+| Fetch constants synthesized from bf records against the bound ones of the same shape | 341 | all fields equal (5 with mips allocated apart from the base) |
+| The front-end logo (512x256 8:8:8:8) against the launcher's own untiling (`kk/src/launcher_art.cpp`) | 1 | identical |
+
+PNG previews (`kknr_texdump`, and `<name>.ref.png` from `kknr_sdkref --png`) were looked at for every
+combination: textures come out whole (Kong's normal map, the environment cube map, the logo, the masks);
+`texcompare.py` over 265 pairs finds no texel difference.
+
+No converter change was needed: the cloud's conversions and layout match today's renderer on all of it.
+
+Findings:
+- The census dump (version 1) read every texture one 4 KB page early (fixed, see KKTX below).
+- Small textures whose whole chain sits in the base's packed tail (8x8 and 16x16 8:8:8:8, 16x16 DXT1) are bound
+  with max level 3 or 4 and mip address 0. The SDK then loads level 0 only, and so does this library, to match
+  today's renderer; the hardware probably reads levels 1+ from the base's tail. Visible only when such a
+  texture is minified. Open.
+- The shadow maps' D3DFORMAT (0x2DA2ABA4) sets the integer number format on a float format; ignored, as the
+  SDK does (kShaderInteger is only set for fixed-point formats).
+- The resolve into a k_8 texture (from an 8:8:8:8 target) and the endian-none 8:8:8:8 resolve are the two
+  unusual resolves; their contents can only be checked on frames (stream 04).
+- Resolve targets in guest memory are stale in dumps (today's renderer keeps resolves on the GPU), so their
+  contents were checked with random data instead; the cache must treat them as GPU-written (it does).
+
 ## Tools
 
 | Tool | What it does |
 |---|---|
 | `kknr_texdump [--out DIR] [--csv FILE] [--no-images] FILE_OR_DIR...` | Converts KKTX dumps with the library: DDS in the host format (every level and layer), a PNG preview (level 0, layers or slices stacked, view swizzle applied), one summary line and a CSV row each, with an FNV-1a hash of the host data |
-| `kknr_bfscan <KKTextures.bf> [--dump DIR] [--limit N] [--pack KEY] [--assume-tiled]` | Lists the texture records in the game's texture bigfile (size, D3DFORMAT, four unknown header words) and a count per format / endian / tiling; with `--dump` writes them as KKTX (base level only, fetch constant synthesized from the D3DFORMAT word) |
+| `kknr_sdkref [--out DIR] [--csv FILE] [--png] [--quiet] [--gpu] FILE_OR_DIR...` | Checks ConvertTexture against the SDK's texture code (CPU emulation; `--gpu`: also the SDK's load shaders on D3D12), block for block, plus the view swizzle; `--png` writes the reference's level 0 as `<name>.ref.png`. Built when `KKNR_SDK_SOURCE` (default `C:/rexsrc`) holds the SDK source |
+| `kknr_bfscan <KKTextures.bf> [--dump DIR] [--limit N] [--pack KEY] [--per-shape K] [--assume-tiled]` | Lists the bigfile's texture records (size, D3DFORMAT, level count, first packed level, data size), checks each record's size against the layout, counts per format; `--dump` writes KKTX files with the whole mip chain (`--per-shape K`: at most K per shape) |
 | `kknr_formats` | Prints the table above |
-| `native-renderer/tools/texcompare.py OURS THEIRS [--tolerance N] [--html FILE]` | Compares our PNGs with textures exported from today's renderer: max / mean difference, PSNR, share of texels off by more than the tolerance (default 2 / 255) |
+| `tools/analysis/tex_census.py [--bf LISTING] [--csv FILE] LABEL=FILE...` | The census table from census files and stream 01 logs (and a bfscan listing) |
+| `tools/analysis/census_synth.py CENSUS_CSV OUT_DIR` | One KKTX per bound fetch constant with random data, for kknr_sdkref |
+| `tools/analysis/check_bf_fetch.py CENSUS_CSV BFDUMP_DIR` | Synthesized bigfile fetch constants against the bound ones |
+| `native-renderer/tools/texcompare.py OURS THEIRS [--tolerance N] [--html FILE]` | Compares PNGs in pairs (ours against `.ref.png` or RenderDoc exports): max / mean difference, PSNR, share of texels off by more than the tolerance |
 
-KKTX (written by `KK_DEV_TEX_DUMP` in the trace build and by `kknr_bfscan --dump`): "KKTX", version 1, the 6
-fetch-constant words, base bytes, mip bytes (little-endian), then the base and mip regions exactly as stored.
+KKTX (`tools/kktx.h`): "KKTX", a version, the 6 fetch-constant words as the object holds them, base bytes, mip
+bytes (little-endian), then the base and mip regions exactly as stored. Version 1 trace dumps took the low 29
+bits of the object's CPU address as the physical address; for the 0xE0000000 view the GPU address is a page
+further, so those dumps start one page early and miss their last page. The readers move version 1 regions up a
+page (last page zero). The trace writes version 2 with the right page; kknr_bfscan writes version 2.
 
-## Validating on Windows
+## Reproducing the validation
 
-The cloud has no game data, so these steps are for the PC (paths as in `docs/briefs/README.md`):
+On the PC (outputs under `F:\KK-native-renderer\analysis\03`, never in git):
 
-1. Build and test the library: `native-renderer\resources\build.bat res-release` (configure, build, ctest; the
-   NVRHI format test builds from `native-renderer\thirdparty\nvrhi`).
-2. Census and dumps from the game (trace build generated by `tools/analysis/gen_d3d_trace.py`):
-   `KK_DEV_TEX_CENSUS=F:/KK-native-renderer/analysis/census_<scene>.txt` and
-   `KK_DEV_TEX_DUMP=F:/KK-native-renderer/analysis/texdump_<scene>,400` for the menus, a video, a Jack chapter
-   and a Kong chapter (`KK_DEV_SCRIPT` / `KK_DEV_AUTOSKIP`), then
-   `python native-renderer\tools\analysis\census_report.py analysis\census_*.txt > analysis\census_report.txt`
-   for the set of (format, endian, tiling, dimension, signs, swizzle, mips) combinations the game binds.
-3. Convert every dump: `kknr_texdump --out analysis\texout --csv analysis\texout.csv analysis\texdump_*`. Every
-   line must say ok; any failure or any format marked unverified in the table above that shows up in the
-   census is a finding.
-4. Ten (or more) real textures against today's renderer: capture a frame of the same scene with RenderDoc on
-   today's renderer (D3D12), save the matching textures (by base address: the KKTX name holds it) as PNG into
-   `analysis\texref`, and run `python native-renderer\tools\texcompare.py analysis\texout analysis\texref --html
-   analysis\texcompare.html`. Pick at least one of each format / tiling / endian combination the census lists,
-   one cube map, one texture with packed mips, one resolve target (shadow map or post-effect texture).
-5. Optionally, the bigfile path without running the game: `kknr_bfscan "<game>\KKTextures.bf" --dump
-   analysis\bfdump --limit 200` (add `--assume-tiled` if the listing shows the tiling bit clear on textures
-   that look scrambled) and `kknr_texdump --out analysis\bfout analysis\bfdump`. The front-end logo (pack
-   FF80C45A, 512x256 8:8:8:8) must come out the same as the launcher's extraction.
+1. `native-renderer\resources\build.bat res-release` (and `res-debug`): library, tools, tests.
+2. Census: `python -I native-renderer\tools\analysis\tex_census.py --bf analysis\03\bfscan_list.txt --csv
+   analysis\03\tex_census.csv title=analysis\01\scene_title.log ... census=analysis\03\census_vrex.txt` (one
+   LABEL=FILE per stream 01 scene log or run log and per census file; the bfscan listing from step 3).
+3. Bigfile: `kknr_bfscan kk\assets\KKTextures.bf > analysis\03\bfscan_list.txt` (size check of every record),
+   then `kknr_bfscan kk\assets\KKTextures.bf --dump analysis\03\bfdump10 --per-shape 10`.
+4. `kknr_sdkref --gpu --quiet --csv analysis\03\sdkref_bf10_gpu.csv analysis\03\bfdump10`, the same on the
+   census dumps (`analysis\03\dumps_vrex`) and on `census_synth.py`'s output; every line must say match.
+5. More dumps from the game, when it is free: the trace build (`kk\build.bat kk-dev`) with
+   `KK_DEV_TEX_CENSUS=<file>` and `KK_DEV_TEX_DUMP=<dir>,400`, then steps 2 and 4 on them.
