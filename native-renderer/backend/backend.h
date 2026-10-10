@@ -52,6 +52,7 @@ struct GameSettings {
   std::string dxc;              // DXC's folder or library, for shaders missing from the pack
   bool element_endian = false;  // see GameRenderer::Options
   bool flip_front_face = false;
+  bool texture_tail_mips = false;
   int32_t dump_frame = -1;
   uint32_t debug = 0;
 };

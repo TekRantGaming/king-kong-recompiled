@@ -74,6 +74,8 @@ class TextureCache {
     BindAction action = BindAction::kUseExisting;
   };
 
+  // Layout choices (the watched ranges depend on them); set before the first Bind.
+  TextureOptions options;
   // Called when an entry needs its guest ranges watched for CPU writes again (after an upload or check).
   std::function<void(uint32_t physical, uint32_t bytes)> watch_range;
   // Called before an entry is dropped, to free its host resource.

@@ -1,5 +1,7 @@
 #include "kknr/xenos.h"
 
+#include "kknr/tiling.h"
+
 #include <algorithm>
 
 namespace kknr {
@@ -189,7 +191,13 @@ TextureFetch MakeTextureFetch(const TextureFetchDesc& d) {
   return f;
 }
 
-TextureLevels GetTextureLevels(const TextureFetch& fetch) {
+bool HasMipsInBaseTail(const TextureFetch& fetch) {
+  if (fetch.MipAddress() || !fetch.BaseAddress() || !fetch.PackedMips() || !fetch.MipMaxLevel()) return false;
+  if (fetch.Dim() == Dimension::k1D) return false;
+  return PackedMipLevel(fetch.Width(), fetch.Height()) == 0;
+}
+
+TextureLevels GetTextureLevels(const TextureFetch& fetch, const TextureOptions& options) {
   TextureLevels l;
   l.width = fetch.Width();
   l.height = fetch.Height();
@@ -208,6 +216,12 @@ TextureLevels GetTextureLevels(const TextureFetch& fetch) {
     if (min_level != 0) base = 0;
   } else {
     mip = 0;
+  }
+  if (options.mips_from_base_tail && max_level == 0 && HasMipsInBaseTail(fetch)) {
+    // The chain is read from the base's tail; the base stays (a minimum level only narrows the view).
+    max_level = std::min(fetch.MipMaxLevel(), size_max_level);
+    min_level = std::min(fetch.MipMinLevel(), max_level);
+    l.mips_in_base_tail = max_level != 0;
   }
   l.base_address = base;
   l.mip_address = mip;

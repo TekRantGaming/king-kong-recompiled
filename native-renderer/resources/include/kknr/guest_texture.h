@@ -76,6 +76,6 @@ struct GuestTextureImage {
 // of LoadSwappedRegion + ReadGuestBlocks; tests and replacement textures use it.
 bool EncodeGuestTexture(const TextureFetch& fetch,
                         const std::function<const uint8_t*(uint32_t level, uint32_t layer)>& blocks,
-                        GuestTextureImage& out);
+                        GuestTextureImage& out, const TextureOptions& options = TextureOptions());
 
 }  // namespace kknr

@@ -664,7 +664,8 @@ float HalfToFloat(uint16_t h) {
   return f;
 }
 
-bool PlanHostTexture(const TextureFetch& fetch, HostTexturePlan& plan, std::string* why) {
+bool PlanHostTexture(const TextureFetch& fetch, HostTexturePlan& plan, std::string* why,
+                     const TextureOptions& options) {
   plan = HostTexturePlan();
   if (fetch.Type() != 2) {
     if (why) *why = "not a texture fetch constant (type " + std::to_string(fetch.Type()) + ")";
@@ -676,7 +677,7 @@ bool PlanHostTexture(const TextureFetch& fetch, HostTexturePlan& plan, std::stri
     if (why) *why = std::string("unsupported format ") + GetFormatInfo(format).name;
     return false;
   }
-  const TextureLevels levels = GetTextureLevels(fetch);
+  const TextureLevels levels = GetTextureLevels(fetch, options);
   plan.dimension = fetch.Dim();
   plan.width = levels.width;
   plan.height = levels.height;
@@ -757,10 +758,10 @@ bool PlanHostTexture(const TextureFetch& fetch, HostTexturePlan& plan, std::stri
   return true;
 }
 
-TextureRanges GetTextureRanges(const TextureFetch& fetch) {
+TextureRanges GetTextureRanges(const TextureFetch& fetch, const TextureOptions& options) {
   TextureRanges r;
-  const GuestLayout layout = ComputeGuestLayout(fetch);
-  const TextureLevels levels = GetTextureLevels(fetch);
+  const GuestLayout layout = ComputeGuestLayout(fetch, options);
+  const TextureLevels levels = GetTextureLevels(fetch, options);
   if (levels.base_address && layout.has_base) {
     r.base = levels.base_address;
     r.base_bytes = layout.base_extent_bytes;
@@ -804,12 +805,13 @@ void ConvertBlocks(Conversion conversion, TextureFormat guest_format, HostFormat
   }
 }
 
-bool ConvertTexture(const TextureFetch& fetch, const GuestMemory& memory, HostTextureData& out, std::string* why) {
+bool ConvertTexture(const TextureFetch& fetch, const GuestMemory& memory, HostTextureData& out, std::string* why,
+                    const TextureOptions& options) {
   out = HostTextureData();
-  if (!PlanHostTexture(fetch, out.plan, why)) return false;
+  if (!PlanHostTexture(fetch, out.plan, why, options)) return false;
   const HostTexturePlan& plan = out.plan;
-  const GuestLayout layout = ComputeGuestLayout(fetch);
-  const TextureRanges ranges = GetTextureRanges(fetch);
+  const GuestLayout layout = ComputeGuestLayout(fetch, options);
+  const TextureRanges ranges = GetTextureRanges(fetch, options);
   const HostFormatInfo& host = GetHostFormatInfo(plan.format);
 
   std::vector<uint8_t> base, mips;
@@ -827,7 +829,7 @@ bool ConvertTexture(const TextureFetch& fetch, const GuestMemory& memory, HostTe
   std::vector<uint8_t> blocks;
   for (uint32_t level = plan.min_level; level < plan.levels; ++level) {
     if (level == 0 && !ranges.base_bytes) continue;
-    if (level > 0 && !ranges.mip_bytes) break;
+    if (level > 0 && !ranges.mip_bytes && !layout.mips_in_base_tail) break;
     for (uint32_t layer = 0; layer < plan.layers; ++layer) {
       BlockExtent extent;
       if (!ReadGuestBlocks(layout, regions, level, layer, blocks, extent)) continue;

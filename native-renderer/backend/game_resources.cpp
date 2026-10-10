@@ -7,6 +7,7 @@
 #include "backend/log.h"
 #include "kknr/buffers.h"
 #include "kknr/nvrhi_format.h"
+#include "kknr/resolve.h"
 
 namespace nr {
 
@@ -30,29 +31,9 @@ uint64_t TargetKey(bool depth, uint32_t base, uint32_t pitch, uint32_t format) {
 nvrhi::Format GameRenderer::ColorTargetFormat(uint32_t format) {
   // xenos::ColorRenderTargetFormat -> host (docs/formats.md, render targets;
   // the 16-bit fixed formats as floats: their -32..32 range does not fit a
-  // normalized host format without the scaling the shaders do not do).
-  switch (format) {
-    case 0:   // k_8_8_8_8
-    case 1:   // k_8_8_8_8_GAMMA
-      return nvrhi::Format::RGBA8_UNORM;
-    case 2:   // k_2_10_10_10
-    case 10:  // k_2_10_10_10_AS_10_10_10_10
-      return nvrhi::Format::R10G10B10A2_UNORM;
-    case 3:   // k_2_10_10_10_FLOAT
-    case 12:  // k_2_10_10_10_FLOAT_AS_16_16_16_16
-    case 5:   // k_16_16_16_16
-    case 7:   // k_16_16_16_16_FLOAT
-      return nvrhi::Format::RGBA16_FLOAT;
-    case 4:  // k_16_16
-    case 6:  // k_16_16_FLOAT
-      return nvrhi::Format::RG16_FLOAT;
-    case 14:  // k_32_FLOAT
-      return nvrhi::Format::R32_FLOAT;
-    case 15:  // k_32_32_FLOAT
-      return nvrhi::Format::RG32_FLOAT;
-    default:
-      return nvrhi::Format::RGBA8_UNORM;
-  }
+  // normalized host format without the scaling the shaders do not do). The
+  // table is the resources library's, which its resolve tests rely on.
+  return kknr::ToNvrhi(kknr::EdramColorHostFormat(format));
 }
 
 GameRenderer::HostTarget* GameRenderer::FindTarget(bool depth, uint32_t edram_base, uint32_t pitch,
@@ -181,7 +162,7 @@ GameRenderer::HostTexture* GameRenderer::UploadTexture(nvrhi::ICommandList* cl,
                                                        const kknr::TextureFetch& fetch) {
   kknr::HostTextureData data;
   std::string why;
-  if (!kknr::ConvertTexture(fetch, physical_, data, &why)) {
+  if (!kknr::ConvertTexture(fetch, physical_, data, &why, TextureOptions())) {
     ++stats_.texture_failures;
     if (stats_.texture_failures < 50) {
       Logf(LogLevel::kWarning, "rexgpu-native: texture %08X %08X %08X not converted: %s", fetch.words[0],
@@ -212,7 +193,7 @@ GameRenderer::HostTexture* GameRenderer::UploadTexture(nvrhi::ICommandList* cl,
 uint32_t GameRenderer::TextureView(HostTexture* host, const kknr::TextureFetch& fetch,
                                    kkshaders::TextureDimension dimension, bool base_map) {
   kknr::HostTexturePlan plan;
-  if (!kknr::PlanHostTexture(fetch, plan)) plan = host->plan;
+  if (!kknr::PlanHostTexture(fetch, plan, nullptr, TextureOptions())) plan = host->plan;
   const uint32_t levels = std::max(host->plan.levels, 1u);
   uint32_t lo = std::max(fetch.MipMinLevel(), host->plan.min_level);
   uint32_t hi = std::min(fetch.MipMaxLevel(), levels - 1);
@@ -273,6 +254,7 @@ uint32_t GameRenderer::BindTexture(nvrhi::ICommandList* cl, const uint32_t words
                                    kkshaders::TextureDimension dimension, bool base_map) {
   const kknr::TextureFetch fetch = kknr::TextureFetch::FromWords(words);
   if (fetch.Type() != 2) return 0;
+  textures_.options = TextureOptions();  // ranges are computed with it when an entry is made
   kknr::TextureCache::BindResult r = textures_.Bind(fetch, physical_, frame_);
   if (!r.entry) return 0;
   auto* host = static_cast<HostTexture*>(r.entry->host);

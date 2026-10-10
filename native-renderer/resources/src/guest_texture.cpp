@@ -83,10 +83,10 @@ bool WriteGuestBlocks(const GuestLayout& layout, uint8_t* base, size_t base_size
 
 bool EncodeGuestTexture(const TextureFetch& fetch,
                         const std::function<const uint8_t*(uint32_t level, uint32_t layer)>& blocks,
-                        GuestTextureImage& out) {
+                        GuestTextureImage& out, const TextureOptions& options) {
   out = GuestTextureImage();
-  const GuestLayout layout = ComputeGuestLayout(fetch);
-  const TextureLevels levels = GetTextureLevels(fetch);
+  const GuestLayout layout = ComputeGuestLayout(fetch, options);
+  const TextureLevels levels = GetTextureLevels(fetch, options);
   if (!layout.width) return false;
   // Whole 32-bit units, so the swap covers every byte (see LoadSwappedRegion).
   out.base.assign(levels.base_address ? (layout.base_extent_bytes + 3) & ~3u : 0, 0);
@@ -94,7 +94,7 @@ bool EncodeGuestTexture(const TextureFetch& fetch,
   bool ok = true;
   for (uint32_t level = levels.min_level; level <= layout.max_level; ++level) {
     if (level == 0 && out.base.empty()) continue;
-    if (level > 0 && out.mips.empty()) break;
+    if (level > 0 && out.mips.empty() && !layout.mips_in_base_tail) break;
     for (uint32_t layer = 0; layer < layout.layers; ++layer) {
       const uint8_t* data = blocks(level, layer);
       if (!data) continue;

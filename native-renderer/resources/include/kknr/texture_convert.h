@@ -160,9 +160,10 @@ struct HostTextureData {
   const HostSubresource* Find(uint32_t level, uint32_t layer) const;
 };
 
-bool PlanHostTexture(const TextureFetch& fetch, HostTexturePlan& plan, std::string* why = nullptr);
+bool PlanHostTexture(const TextureFetch& fetch, HostTexturePlan& plan, std::string* why = nullptr,
+                     const TextureOptions& options = TextureOptions());
 bool ConvertTexture(const TextureFetch& fetch, const GuestMemory& memory, HostTextureData& out,
-                    std::string* why = nullptr);
+                    std::string* why = nullptr, const TextureOptions& options = TextureOptions());
 
 // Guest blocks of one subresource (host byte order, as ReadGuestBlocks returns them) -> host data.
 // width / height / depth are the level's size in texels; dst has row_pitch bytes per row of host blocks and
@@ -176,7 +177,7 @@ void ConvertBlocks(Conversion conversion, TextureFormat guest_format, HostFormat
 struct TextureRanges {
   uint32_t base = 0, base_bytes = 0, mip = 0, mip_bytes = 0;
 };
-TextureRanges GetTextureRanges(const TextureFetch& fetch);
+TextureRanges GetTextureRanges(const TextureFetch& fetch, const TextureOptions& options = TextureOptions());
 
 // Single-block decoders (also used by the tests). Inputs are host-order (already endian-swapped) blocks;
 // outputs are 4x4 texels, row-major, 4 bytes (RGBA8) / 2 bytes (RG8) / 1 byte (R8) per texel.
