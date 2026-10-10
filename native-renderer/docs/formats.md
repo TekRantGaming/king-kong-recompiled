@@ -7,7 +7,7 @@ EDRAM render targets map to pooled host targets. The code is `native-renderer/re
 `src/graphics/pipeline/texture/` and the D3D12 / Vulkan texture caches (rexglue-sdk v0.10.0, Xenia-derived,
 BSD), read but not copied.
 
-Status: implemented, unit-tested with synthetic data (`ctest`: 58 converter, tiling, buffer, cache and
+Status: implemented, unit-tested with synthetic data (`ctest`: 59 converter, tiling, buffer, cache and
 render-target tests plus 3 NVRHI format-table tests, passing on Linux and on Windows with Visual Studio 2022
 clang and Ninja, release and debug), and checked on the game's own data: every texture shape the game binds
 converts byte for byte as today's renderer converts it (the census and the results are in "What the game
@@ -344,6 +344,9 @@ combination: textures come out whole (Kong's normal map, the environment cube ma
 `texcompare.py` over 265 pairs finds no texel difference.
 
 No converter change was needed: the cloud's conversions and layout match today's renderer on all of it.
+`roundtrip_census_fetch_constants` keeps one fetch constant of each bound combination (25 in all: the cube map
+whose mips are allocated before its base, the chains kept in the base's tail, the video planes, the resolve
+targets) in the unit tests, through the tiling round trip and the host plan.
 
 Findings:
 - The census dump (version 1) read every texture one 4 KB page early (fixed, see KKTX below).

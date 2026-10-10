@@ -2,6 +2,7 @@
 // (EncodeGuestTexture: tiling and the endian swap) and read back (LoadSwappedRegion + ReadGuestBlocks: the
 // path ConvertTexture uses). Also checks that no two blocks of a texture share bytes and that every block
 // lies inside the extent the cache watches.
+#include <cstdio>
 #include <cstring>
 #include <map>
 #include <string>
@@ -33,12 +34,12 @@ std::string Describe(const TextureFetchDesc& d) {
          std::to_string(d.max_level) + " endian " + EndianName(d.endian) + (d.base_address ? "" : " no-base");
 }
 
-// Runs one round trip; returns false (and reports) on the first mismatch.
-bool RoundTrip(const TextureFetchDesc& desc, uint64_t seed) {
-  const TextureFetch fetch = MakeTextureFetch(desc);
+// Runs one round trip; returns false (and reports) on the first mismatch. The fetch constant's base and mip
+// addresses must be kBase / kMips (or 0).
+bool RoundTripFetch(const TextureFetch& fetch, const std::string& what, uint64_t seed) {
   const GuestLayout layout = ComputeGuestLayout(fetch);
   const TextureLevels levels = GetTextureLevels(fetch);
-  const uint32_t bpb = GetFormatInfo(desc.format).BytesPerBlock();
+  const uint32_t bpb = GetFormatInfo(fetch.Format()).BytesPerBlock();
   Rng rng(seed);
 
   std::map<std::pair<uint32_t, uint32_t>, std::vector<uint8_t>> data;
@@ -59,7 +60,7 @@ bool RoundTrip(const TextureFetchDesc& desc, uint64_t seed) {
       },
       image);
   if (!encoded) {
-    kknr_test::Fail(__FILE__, __LINE__, "a block falls outside the computed extent: " + Describe(desc));
+    kknr_test::Fail(__FILE__, __LINE__, "a block falls outside the computed extent: " + what);
     return false;
   }
 
@@ -80,7 +81,7 @@ bool RoundTrip(const TextureFetchDesc& desc, uint64_t seed) {
               if (owner[o + b] != 0) {
                 kknr_test::Fail(__FILE__, __LINE__,
                                 "level " + std::to_string(key.first) + " layer " + std::to_string(key.second) +
-                                    " overlaps another block: " + Describe(desc));
+                                    " overlaps another block: " + what);
                 return false;
               }
               owner[o + b] = id;
@@ -109,11 +110,15 @@ bool RoundTrip(const TextureFetchDesc& desc, uint64_t seed) {
     if (!ReadGuestBlocks(layout, regions, key.first, key.second, back, extent) || back != blocks) {
       kknr_test::Fail(__FILE__, __LINE__,
                       "level " + std::to_string(key.first) + " layer " + std::to_string(key.second) +
-                          " differs after the round trip: " + Describe(desc));
+                          " differs after the round trip: " + what);
       return false;
     }
   }
   return true;
+}
+
+bool RoundTrip(const TextureFetchDesc& desc, uint64_t seed) {
+  return RoundTripFetch(MakeTextureFetch(desc), Describe(desc), seed);
 }
 
 const TextureFormat kFormats[] = {
@@ -313,4 +318,53 @@ TEST(packed_tail_known_overlaps) {
   CHECK_EQ(z3, 4u);
   CHECK_EQ(z4, 4u);
   CHECK_EQ(x3 + y3 + x4 + y4, 0u);
+}
+
+// One fetch constant of every combination the game binds (texture objects from the census, docs/formats.md),
+// with the addresses moved to the test's: the layouts the converter must get right, including the cube map
+// with mips allocated before its base, the chains kept whole in the base's packed tail (mip address 0), the
+// linear video planes and the resolve targets.
+TEST(roundtrip_census_fetch_constants) {
+  const uint32_t kCensus[][6] = {
+      {0x8A000002, 0xFE2BB096, 0x0059E4FF, 0x00001690, 0x00000000, 0x00000200},  // k_24_8 1280x720
+      {0x82800002, 0xFC84D096, 0x0016613F, 0x00001690, 0x00000000, 0x00000200},  // k_24_8 320x180
+      {0x86800156, 0xFD5810A4, 0x0067E33F, 0x000016D1, 0x00000000, 0x00000200},  // k_32_FLOAT 832x832
+      {0x88000002, 0xF672C002, 0x007FE3FF, 0x00000248, 0x00000280, 0xF682CA00},  // k_8 1024x1024 mips
+      {0x0A000002, 0xF9FEC002, 0x0059E4FF, 0x00001400, 0x00000000, 0x00000200},  // k_8 linear 1280x720
+      {0x8A000002, 0xFEB49002, 0x0059E4FF, 0x00000248, 0x00000000, 0x00000200},  // k_8 tiled 1280x720
+      {0x06000002, 0xF9FA8002, 0x002CE27F, 0x00001400, 0x00000000, 0x00000200},  // k_8 linear 640x360
+      {0x80800156, 0xFFC9604A, 0x0007E03F, 0x00001690, 0x00000000, 0x00000200},  // k_8_8 signed 64x64
+      {0x8A000002, 0xFEFC7086, 0x0059E4FF, 0x00000C14, 0x00000000, 0x00000200},  // 8888 1280x720
+      {0x81000002, 0xF8DB1086, 0x000FE07F, 0x00000C14, 0x000001C0, 0xF8DABA00},  // 8888 128x128 mips
+      {0x80400002, 0xF7095086, 0x0001E00F, 0x00000C14, 0x00000100, 0x00000A00},  // 8888 16x16, tail in base
+      {0x80400002, 0xF823C086, 0x0001E00F, 0x00000C14, 0x00000000, 0x00000200},  // 8888 16x16
+      {0x82000002, 0xFAAA6086, 0x000FE0FF, 0x00000C14, 0x00000000, 0x00000200},  // 8888 256x128
+      {0x82800002, 0xFE68F086, 0x0016613F, 0x00000C14, 0x00000000, 0x00000200},  // 8888 320x180
+      {0x04000002, 0xF9624086, 0x0003E1FF, 0x00000C14, 0x00000000, 0x00000200},  // 8888 linear 512x32
+      {0x85000002, 0xFC759086, 0x002CE27F, 0x00000C14, 0x00000000, 0x00000200},  // 8888 640x360
+      {0x85000002, 0xFCF59086, 0x003BE27F, 0x00000C14, 0x00000000, 0x00000200},  // 8888 640x480
+      {0x80800002, 0xFAAA2086, 0x0003E03F, 0x00000C14, 0x00000000, 0x00000200},  // 8888 64x32
+      {0x80400002, 0xFAA83086, 0x0000E007, 0x00000C14, 0x000000C0, 0x00000A00},  // 8888 8x8, tail in base
+      {0x88000002, 0xF5F52071, 0x007FE3FF, 0x00000D10, 0x00000280, 0xF6052A00},  // DXN 1024x1024 mips
+      {0x88000002, 0xF6FB5052, 0x007FE3FF, 0x00000D10, 0x00000280, 0xF7035A00},  // DXT1 1024x1024 mips
+      {0x01000002, 0xF19C6052, 0x140FE07F, 0x00000D10, 0x000001C0, 0xF19A2E00},  // DXT1 linear cube mips
+      {0x81000002, 0xF826D052, 0x0001E00F, 0x00000D10, 0x00000100, 0x00000A00},  // DXT1 16x16, tail in base
+      {0x88000002, 0xFAB06054, 0x007FE3FF, 0x00000D10, 0x00000280, 0xFAC06A00},  // DXT5 1024x1024 mips
+      {0x88000002, 0xFAA53054, 0x0007E3FF, 0x00000D10, 0x00000000, 0x00000200},  // DXT5 1024x64
+  };
+  uint64_t seed = 1000;
+  int failed = 0;
+  for (const auto& words : kCensus) {
+    TextureFetch fetch = TextureFetch::FromWords(words);
+    if (fetch.BaseAddress()) fetch.words[1] = (fetch.words[1] & 0xFFFu) | kBase;
+    if (fetch.MipAddress()) fetch.words[5] = (fetch.words[5] & 0xFFFu) | kMips;
+    char what[96];
+    std::snprintf(what, sizeof(what), "census %08X %08X %08X", words[0], words[1], words[2]);
+    if (!RoundTripFetch(fetch, what, seed++)) ++failed;
+    // And it converts.
+    HostTexturePlan plan;
+    CHECK(PlanHostTexture(fetch, plan));
+    CHECK(plan.format != HostFormat::UNKNOWN);
+  }
+  CHECK_EQ(failed, 0);
 }
