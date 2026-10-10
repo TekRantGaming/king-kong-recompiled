@@ -102,16 +102,17 @@ SamplerState kk_PSSamplerState(uint binding)
 }
 
 // ---------------------------------------------------------------------------------------------
-// ALU helpers with the Xenos (Direct3D 9) rules: 0 * anything = +0, max / min as comparisons.
+// ALU helpers with the Xenos (Direct3D 9) rules: 0 or a denormal * anything = +0, max / min as
+// comparisons. The denormal test is explicit: hosts need not flush denormals (lavapipe does not).
 
 float4 kk_Mul(float4 a, float4 b)
 {
-    return select(or(a == 0.0, b == 0.0), float4(0.0, 0.0, 0.0, 0.0), a * b);
+    return select(or(abs(a) < 1.17549435e-38, abs(b) < 1.17549435e-38), float4(0.0, 0.0, 0.0, 0.0), a * b);
 }
 
 float kk_Muls(float a, float b)
 {
-    return select(or(a == 0.0, b == 0.0), 0.0, a * b);
+    return select(or(abs(a) < 1.17549435e-38, abs(b) < 1.17549435e-38), 0.0, a * b);
 }
 
 // Scalar operations with the clamping variants of rcp / rsq / log.
