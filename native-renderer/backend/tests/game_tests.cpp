@@ -20,6 +20,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <memory>
@@ -31,6 +32,7 @@
 #include "backend/api_binding.h"
 #include "backend/draw_state.h"
 #include "backend/frame_log.h"
+#include "backend/pipeline_cache.h"
 #include "backend/game_renderer.h"
 #include "backend/guest_device.h"
 #include "backend/renderer.h"
@@ -41,6 +43,8 @@
 #include "container_writer.h"
 #include "hooks/hook_table.h"
 #include "kknr/guest_texture.h"
+#include "kkshaders/cache.h"
+#include "kkshaders/compiler.h"
 #include "kkshaders/container.h"
 #include "kkshaders/vertex_patch.h"
 #include "xenos_asm.h"
@@ -1479,5 +1483,224 @@ TEST(FrameLog_TheHarnessReadsTheLines) {
   CHECK(text.str().find("not understood") == std::string::npos && text.str().find("unknown") == std::string::npos);
 #endif
 }
+
+// -------------------------------------------------------- pipeline cache ---
+//
+// Cold pipeline caches: the descriptions the draws need go to a file under the cache root and
+// are created on the workers at the next start; with pipeline_wait a draw waits for its
+// pipeline instead of being skipped. Synthetic draws throughout (the quadrant scene).
+
+namespace {
+
+std::string CachePath(const char* name) {
+  const std::filesystem::path dir = std::filesystem::temp_directory_path() / "nr_game_tests_pipelines";
+  std::filesystem::create_directories(dir);
+  const std::string path = (dir / (std::string(name) + ".pipelines")).string();
+  std::filesystem::remove(path);
+  return path;
+}
+
+// A pack with the colour scene's shaders (what db-build makes for the whole database), so the
+// library can make them from their hashes alone.
+std::string MakePack(const char* name) {
+  const std::string path = CachePath(name) + ".pack";
+  std::string error;
+  CHECK(kkshaders::loadDxc(NR_TEST_DXC_DIR, &error));
+  kkshaders::Compiler compiler;
+  std::vector<kkshaders::CompiledShader> shaders;
+  for (const std::vector<uint8_t>& container :
+       {VertexShader(kColor, F_8_8_8_8), PixelShaderInterpolator(), PixelShaderConstants()}) {
+    kkshaders::ParseResult parsed = kkshaders::parseContainer(container);
+    kkshaders::BuildResult built = kkshaders::buildShader(parsed.info, compiler, false);
+    CHECK(built.ok);
+    if (built.ok) shaders.push_back(std::move(built.shader));
+  }
+  CHECK(kkshaders::ShaderPack::write(path, shaders, &error));
+  return path;
+}
+
+// One frame of the quadrant scene, presented and read back.
+Pixels DrawQuadrantFrame(Fixture& f, uint32_t rt, const Fixture::ColorPipeline& p) {
+  f.Clear(kClearTarget0, 0xFF000000);
+  f.DrawQuadrants(p);
+  return f.Present(rt);
+}
+
+// A first run that only records: the scene drawn once into `path`.
+void RecordTheScene(const std::string& path, uint64_t expect_records = 1) {
+  Fixture f;
+  if (!f.Init()) return;
+  CHECK(f.game->SetPipelineCache(path));
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  DrawQuadrantFrame(f, rt, p);
+  CHECK_EQ(f.game->stats().cache_recorded, expect_records);
+}
+
+}  // namespace
+
+TEST(PipelineCache_RecordsEachPipelineOnce) {
+  const std::string path = CachePath("record_once");
+  {
+    Fixture f;
+    if (!f.Init()) return;
+    CHECK(f.game->SetPipelineCache(path));
+    const uint32_t rt = f.BindMainSurface();
+    auto p = f.MakeColorPipeline();
+    DrawQuadrantFrame(f, rt, p);
+    DrawQuadrantFrame(f, rt, p);
+    CHECK_EQ(f.game->stats().cache_recorded, uint64_t(1));
+    f.Reg(dev::kRbColorMask, 0x7777);  // another write mask: another pipeline
+    DrawQuadrantFrame(f, rt, p);
+    DrawQuadrantFrame(f, rt, p);
+    CHECK_EQ(f.game->stats().cache_recorded, uint64_t(2));
+    CHECK_EQ(f.game->stats().draw_pipelines, uint64_t(2));
+  }
+  PipelineCacheFile file;
+  CHECK(file.Open(path));
+  CHECK_EQ(file.loaded().size(), size_t(2));
+  if (file.loaded().size() == 2) {
+    const PipelineRecord& r = file.loaded()[0];
+    CHECK_EQ(r.color_count, 1u);
+    CHECK_EQ(r.color_mask[0], 0xFu);
+    CHECK(r.ps_hash != 0 && r.vs_hash != 0);
+    CHECK_EQ(file.loaded()[1].color_mask[0], 0x7u);
+  }
+}
+
+TEST(PipelineCache_NothingIsRecordedWhenOff) {
+  Fixture f;
+  if (!f.Init()) return;
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  DrawQuadrantFrame(f, rt, p);
+  CHECK_EQ(f.game->stats().cache_recorded, uint64_t(0));
+  CHECK_EQ(f.game->stats().prewarm_queued, uint64_t(0));
+}
+
+TEST(PipelineCache_PrewarmFromThePackBeforeTheGameCreatesAnything) {
+  const std::string path = CachePath("prewarm_pack");
+  const std::string pack = MakePack("prewarm_pack");
+  RecordTheScene(path);
+  // The next run: the cache is read at start, before a shader or a draw exists.
+  Fixture f;
+  if (!f.Init()) return;
+  f.shaders->Initialize(pack, NR_TEST_DXC_DIR);
+  f.game->options().async_pipelines = true;
+  CHECK(f.game->SetPipelineCache(path));
+  CHECK_EQ(f.game->stats().prewarm_queued, uint64_t(1));
+  CHECK_EQ(f.game->stats().prewarm_deferred, uint64_t(0));
+  f.game->WaitForPrewarm();
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  Pixels px = DrawQuadrantFrame(f, rt, p);
+  // The first draw found its pipeline made: not skipped, no wait, no second creation.
+  f.CheckQuadrantColors(px, __LINE__);
+  CHECK_EQ(f.game->stats().draws, uint64_t(1));
+  CHECK_EQ(f.game->stats().skipped_pending, uint64_t(0));
+  CHECK_EQ(f.game->stats().pipeline_waits, uint64_t(0));
+  CHECK_EQ(f.game->stats().draw_pipelines, uint64_t(1));
+  CHECK_EQ(f.game->stats().cache_recorded, uint64_t(0));  // known already
+}
+
+TEST(PipelineCache_PrewarmWaitsForShadersTheGameCreates) {
+  const std::string path = CachePath("prewarm_late");
+  RecordTheScene(path);
+  // No pack: the shaders exist when the game creates them, and the swap that follows tries again.
+  Fixture f;
+  if (!f.Init()) return;
+  f.game->options().async_pipelines = true;
+  CHECK(f.game->SetPipelineCache(path));
+  CHECK_EQ(f.game->stats().prewarm_queued, uint64_t(0));
+  CHECK_EQ(f.game->stats().prewarm_deferred, uint64_t(1));
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  f.Present(rt);  // the frame's end retries
+  CHECK_EQ(f.game->stats().prewarm_queued, uint64_t(1));
+  f.game->WaitForPrewarm();
+  Pixels px = DrawQuadrantFrame(f, rt, p);
+  f.CheckQuadrantColors(px, __LINE__);
+  CHECK_EQ(f.game->stats().draws, uint64_t(1));
+  CHECK_EQ(f.game->stats().skipped_pending, uint64_t(0));
+}
+
+TEST(PipelineCache_RecordsOfShadersThatNeverComeStayHarmless) {
+  const std::string path = CachePath("unknown_shaders");
+  {
+    PipelineCacheFile file;
+    CHECK(file.Open(path));
+    PipelineRecord r;
+    r.vs_hash = 0xDEAD;
+    r.ps_hash = 0xBEEF;
+    r.topology = uint32_t(nvrhi::PrimitiveType::TriangleList);
+    r.color_count = 1;
+    r.color_format[0] = uint32_t(nvrhi::Format::RGBA8_UNORM);
+    r.color_mask[0] = 0xF;
+    file.Append(r);
+  }
+  Fixture f;
+  if (!f.Init()) return;
+  f.game->options().async_pipelines = true;
+  CHECK(f.game->SetPipelineCache(path));
+  CHECK_EQ(f.game->stats().prewarm_deferred, uint64_t(1));
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  f.game->options().pipeline_wait = true;
+  Pixels px = DrawQuadrantFrame(f, rt, p);
+  f.CheckQuadrantColors(px, __LINE__);
+  CHECK_EQ(f.game->stats().draws, uint64_t(1));
+  CHECK_EQ(f.game->stats().prewarm_failed, uint64_t(0));
+}
+
+TEST(PipelineWait_TheDrawWaitsInsteadOfBeingSkipped) {
+  // Default: the draw is skipped while its pipeline is made. With pipeline_wait it waits for it.
+  {
+    Fixture f;
+    if (!f.Init()) return;
+    f.game->options().async_pipelines = true;
+    const uint32_t rt = f.BindMainSurface();
+    auto p = f.MakeColorPipeline();
+    DrawQuadrantFrame(f, rt, p);
+    CHECK_EQ(f.game->stats().skipped_pending, uint64_t(1));
+    CHECK_EQ(f.game->stats().pipeline_waits, uint64_t(0));
+  }
+  Fixture f;
+  if (!f.Init()) return;
+  f.game->options().async_pipelines = true;
+  f.game->options().pipeline_wait = true;
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  Pixels px = DrawQuadrantFrame(f, rt, p);
+  f.CheckQuadrantColors(px, __LINE__);
+  CHECK_EQ(f.game->stats().draws, uint64_t(1));
+  CHECK_EQ(f.game->stats().skipped_pending, uint64_t(0));
+  CHECK_EQ(f.game->stats().pipeline_waits, uint64_t(1));
+  CHECK_EQ(f.game->stats().draw_pipelines, uint64_t(1));
+  // The second frame finds it made: no wait.
+  DrawQuadrantFrame(f, rt, p);
+  CHECK_EQ(f.game->stats().pipeline_waits, uint64_t(1));
+}
+
+TEST(PipelineWait_AlsoWaitsForAPrewarmInFlight) {
+  // The prewarm queued the pipeline and the worker is on it when the draw comes: the draw waits for
+  // that job and does not queue a second.
+  const std::string path = CachePath("wait_prewarm");
+  const std::string pack = MakePack("wait_prewarm");
+  RecordTheScene(path);
+  Fixture f;
+  if (!f.Init()) return;
+  f.shaders->Initialize(pack, NR_TEST_DXC_DIR);
+  f.game->options().async_pipelines = true;
+  f.game->options().pipeline_wait = true;
+  CHECK(f.game->SetPipelineCache(path));
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  Pixels px = DrawQuadrantFrame(f, rt, p);  // no WaitForPrewarm: the draw waits if it is not done
+  f.CheckQuadrantColors(px, __LINE__);
+  CHECK_EQ(f.game->stats().draws, uint64_t(1));
+  CHECK_EQ(f.game->stats().skipped_pending, uint64_t(0));
+  CHECK_EQ(f.game->stats().draw_pipelines, uint64_t(1));
+}
+
 
 NR_TEST_MAIN()

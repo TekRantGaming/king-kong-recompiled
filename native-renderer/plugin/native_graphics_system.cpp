@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <iterator>
@@ -56,6 +57,19 @@ REXCVAR_DECLARE(bool, native_texture_tail_mips);
 REXCVAR_DECLARE(int32_t, native_dump_frame);
 REXCVAR_DECLARE(int32_t, native_debug);
 REXCVAR_DECLARE(bool, native_async_pipelines);
+REXCVAR_DECLARE(bool, native_pipeline_cache);
+REXCVAR_DECLARE(std::string, native_pipeline_cache_dir);
+REXCVAR_DECLARE(bool, native_pipeline_wait);
+
+namespace {
+// <title id>.pipelines, or game.pipelines when the title is not known (a folder from the cvar).
+std::string PipelineCacheFileName(uint32_t title_id) {
+  if (!title_id) return "game.pipelines";
+  char name[32];
+  std::snprintf(name, sizeof(name), "%08X.pipelines", title_id);
+  return name;
+}
+}  // namespace
 
 namespace nr {
 
@@ -232,12 +246,20 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
   game.dump_frame = REXCVAR_GET(native_dump_frame);
   game.debug = uint32_t(REXCVAR_GET(native_debug));
   game.async_pipelines = REXCVAR_GET(native_async_pipelines);
+  game.pipeline_wait = REXCVAR_GET(native_pipeline_wait);
   if (const char* frame_log = std::getenv("REX_DEV_FRAME_LOG")) game.frame_log = frame_log;
   if (!backend_->Initialize(std::max<uint32_t>(1, video_mode.display_width),
                             std::max<uint32_t>(1, video_mode.display_height), game)) {
     REXGPU_ERROR("rexgpu-native: backend initialisation failed");
     backend_.reset();
     return X_STATUS_UNSUCCESSFUL;
+  }
+  if (REXCVAR_GET(native_pipeline_cache)) {
+    // --native_pipeline_cache_dir wins; otherwise the cache root arrives in InitializeShaderStorage
+    // (before or after this point).
+    const std::string dir = REXCVAR_GET(native_pipeline_cache_dir);
+    if (!dir.empty()) pipeline_cache_path_ = (std::filesystem::path(dir) / PipelineCacheFileName(0)).string();
+    if (!pipeline_cache_path_.empty()) backend_->SetPipelineCache(pipeline_cache_path_);
   }
   backend_->renderer().options().transpose_wvp = REXCVAR_GET(native_wvp_transpose);
   backend_->renderer().options().only_main_surface = !REXCVAR_GET(native_all_targets);
@@ -285,6 +307,16 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
   REXGPU_INFO("rexgpu-native: guest GPU ready ({}x{} @ {} Hz)", uint32_t(video_mode.display_width),
               uint32_t(video_mode.display_height), uint32_t(video_mode.refresh_rate));
   return X_STATUS_SUCCESS;
+}
+
+// The cache root the application gives the graphics system for persistent storage: the pipeline
+// cache file goes under it (the Xenos plugin keeps its shader storage there too).
+void NativeGraphicsSystem::InitializeShaderStorage(const std::filesystem::path& cache_root, uint32_t title_id,
+                                                   bool blocking) {
+  (void)blocking;
+  if (!REXCVAR_GET(native_pipeline_cache) || !pipeline_cache_path_.empty()) return;
+  pipeline_cache_path_ = (cache_root / "native-pipelines" / PipelineCacheFileName(title_id)).string();
+  if (backend_) backend_->SetPipelineCache(pipeline_cache_path_);
 }
 
 void NativeGraphicsSystem::Shutdown() {

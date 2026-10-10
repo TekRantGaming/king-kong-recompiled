@@ -89,6 +89,22 @@ uint64_t GameRenderer::PatchedVertexShaderHash(const GameShader& vs, uint32_t de
   return hash;
 }
 
+void GameRenderer::DumpVertexShaderHashes(const DrawCall& call, const dev::DeviceView& d, const GameShader& vs) {
+  uint64_t live = 0;
+  uint32_t live_bytes = 0;
+  if (const uint8_t* object = call.vertex_shader ? memory_.Virtual(call.vertex_shader) : nullptr) {
+    // The vertex shader object: a 592-byte header, the container's virtual part, the microcode's
+    // physical address at +40 (d3d-structs.md, corrected by the game's frames).
+    live_bytes = LoadBE32(object + 592 + 8);
+    const uint8_t* ucode = memory_.Physical(CpuToPhysical(LoadBE32(object + 40)));
+    if (ucode && live_bytes && live_bytes <= (1u << 20)) live = kkshaders::hashBytes(ucode, live_bytes);
+  }
+  Logf(LogLevel::kInfo,
+       "rexgpu-native:   vs hashes: database %016llX, object memory %016llX (%u bytes), reproduced patch %016llX",
+       static_cast<unsigned long long>(vs.ucode_hash), static_cast<unsigned long long>(live), live_bytes,
+       static_cast<unsigned long long>(PatchedVertexShaderHash(vs, call.vertex_declaration, d)));
+}
+
 void GameRenderer::LogDraw(const DrawCall& call, const dev::DeviceView& d, const GameShader& vs, const GameShader* ps) {
   frame_log_->Touch();
   if (!frame_log_->active()) return;

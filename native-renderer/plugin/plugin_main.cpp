@@ -74,6 +74,23 @@ REXCVAR_DEFINE_BOOL(native_async_pipelines, true, "Native renderer",
                     "is ready, instead of stalling the game for the driver's compile")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_BOOL(native_pipeline_cache, false, "Native renderer",
+                    "Record every pipeline description the game's draws need to a file under the cache root "
+                    "and create them all on the worker threads at the next start, so the first visit to a "
+                    "level does not stall for the driver's compile (Vulkan; needs native_async_pipelines)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_STRING(native_pipeline_cache_dir, "", "Native renderer",
+                      "Folder for the pipeline cache file when native_pipeline_cache is on. Empty: "
+                      "<cache root>/native-pipelines")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_BOOL(native_pipeline_wait, false, "Native renderer",
+                    "A draw whose pipeline is still being created waits for it (true) instead of being "
+                    "skipped for a frame or two (false, the Xenos plugin's choice). Only with "
+                    "native_async_pipelines")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_BOOL(native_flip_front_face, false, "Native renderer",
                     "Swap the front face of every draw (a debugging aid for culling)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);

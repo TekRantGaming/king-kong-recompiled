@@ -97,6 +97,7 @@ class GameRenderer {
     uint64_t resolves = 0;
     uint64_t resolve_failures = 0;
     uint64_t pipelines = 0;
+    uint64_t draw_pipelines = 0;     // of those, the game draws' (and the prewarm's), not the built-in passes'
     uint64_t invalidations = 0;
     uint64_t presents_missing = 0;  // no host target for the back buffer
     uint64_t aliases = 0;           // textures converted from a resolve through another format
@@ -276,6 +277,10 @@ class GameRenderer {
   double pipeline_worker_ms_ = 0;
 
   // ---- frame log (game_frame_log.cpp)
+  // --native_dump_frame: the three candidates for the Xenos log's vs hash (docs/backend.md, "The vertex
+  // shader hash"): the database's microcode, the microcode in the shader object's memory right now (the
+  // library may patch in place), and the reproduced patching.
+  void DumpVertexShaderHashes(const DrawCall& call, const dev::DeviceView& d, const GameShader& vs);
   void LogDraw(const DrawCall& call, const dev::DeviceView& d, const GameShader& vs, const GameShader* ps);
   void LogResolve(const ResolveCall& call, const dev::DeviceView& d);
   void LogClear(const ClearCall& call, const dev::DeviceView& d);

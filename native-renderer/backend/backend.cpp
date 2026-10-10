@@ -214,6 +214,7 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
       renderer->options().dump_frame = game.dump_frame;
       renderer->options().debug = game.debug;
       renderer->options().async_pipelines = game.async_pipelines;
+      renderer->options().pipeline_wait = game.pipeline_wait;
       renderer->SetFrameLog(FrameLogConfig::Parse(game.frame_log.c_str()));
       rex::memory::Memory* memory = memory_;
       renderer->set_watch([memory](uint32_t physical_address, uint32_t bytes) {
@@ -239,6 +240,15 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
   draws_->set_find_wvp(renderer_->game() == nullptr);
   REXGPU_INFO("rexgpu-native: NVRHI renderer ready ({}x{})", width, height);
   return true;
+}
+
+bool Backend::SetPipelineCache(const std::string& path) {
+#if NR_GAME_RENDERER
+  if (renderer_ && renderer_->game()) return renderer_->game()->SetPipelineCache(path);
+#else
+  (void)path;
+#endif
+  return false;
 }
 
 void Backend::Shutdown() {

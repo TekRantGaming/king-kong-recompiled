@@ -392,6 +392,7 @@ nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelin
                                                     bool async) {
   auto it = pipelines_.find(key);
   if (it != pipelines_.end()) return it->second;
+  const bool for_draws = async;
   async = async && options_.async_pipelines && device_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN;
   if (async) {
     // Finished pipelines (the draws' and the prewarm's) join the map.
@@ -399,7 +400,10 @@ nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelin
       for (auto& [k, p] : pipelines_done_) {
         pipelines_[k] = p;
         pipelines_pending_.erase(k);
-        if (p) ++stats_.pipelines;
+        if (p) {
+          ++stats_.pipelines;
+          ++stats_.draw_pipelines;
+        }
       }
       pipelines_done_.clear();
       stats_.pipeline_ms = pipeline_worker_ms_;
@@ -432,7 +436,10 @@ nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelin
   nvrhi::GraphicsPipelineHandle p = device_->createGraphicsPipeline(desc, framebuffer);
   stats_.pipeline_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
   pipelines_[key] = p;  // a failure is remembered too (null)
-  if (p) ++stats_.pipelines;
+  if (p) {
+    ++stats_.pipelines;
+    if (for_draws) ++stats_.draw_pipelines;
+  }
   return p;
 }
 
@@ -799,6 +806,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   const uint64_t key = PipelineKey(record);
   NoteRecord(record, key);
   if (frame_log_ && frame_log_->enabled()) LogDraw(call, d, *vs, ps.get());
+  if (dump) DumpVertexShaderHashes(call, d, *vs);
   nvrhi::IGraphicsPipeline* pipeline = GetPipeline(pd, framebuffer_info, key, true);
   if (!pipeline) {
     const bool pending = IsPending(key);

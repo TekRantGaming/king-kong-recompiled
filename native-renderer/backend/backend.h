@@ -56,6 +56,7 @@ struct GameSettings {
   int32_t dump_frame = -1;
   uint32_t debug = 0;
   bool async_pipelines = true;
+  bool pipeline_wait = false;  // see GameRenderer::Options
   std::string frame_log;       // REX_DEV_FRAME_LOG: "<seconds>[,<frames>]", empty = off
 };
 
@@ -67,6 +68,9 @@ class Backend {
   bool Initialize(uint32_t width, uint32_t height, const GameSettings& game = {});
   void Shutdown();
 
+  // The game renderer's pipeline cache file (GameRenderer::SetPipelineCache); false without a game
+  // renderer or when the file cannot be opened.
+  bool SetPipelineCache(const std::string& path);
   void set_test_picture(TestPicture picture) { test_picture_ = picture; }
   Renderer& renderer() { return *renderer_; }
   DrawTracker* draws() { return draws_.get(); }

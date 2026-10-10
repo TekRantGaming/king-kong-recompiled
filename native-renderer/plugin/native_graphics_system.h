@@ -10,7 +10,9 @@
 
 #include <array>
 #include <atomic>
+#include <filesystem>
 #include <memory>
+#include <string>
 #include <string_view>
 
 #include <rex/system/interfaces/graphics.h>
@@ -60,6 +62,7 @@ class NativeGraphicsSystem final : public rex::system::IGraphicsSystem {
   void SetInterruptCallback(uint32_t callback, uint32_t user_data) override;
   void InitializeRingBuffer(uint32_t ptr, uint32_t size_log2) override;
   void EnableReadPointerWriteBack(uint32_t ptr, uint32_t block_size_log2) override;
+  void InitializeShaderStorage(const std::filesystem::path& cache_root, uint32_t title_id, bool blocking) override;
   void Shutdown() override;
 
   // For the ring skimmer and the vblank worker (both guest host-threads).
@@ -97,6 +100,7 @@ class NativeGraphicsSystem final : public rex::system::IGraphicsSystem {
   bool provider_supports_presentation_ = false;
   std::unique_ptr<rex::ui::Presenter> presenter_;
   std::unique_ptr<Backend> backend_;
+  std::string pipeline_cache_path_;  // --native_pipeline_cache: the file, once the cache root is known
   std::unique_ptr<RingSkimmer> skimmer_;
   std::atomic<bool> guest_gpu_ready_{false};
 
