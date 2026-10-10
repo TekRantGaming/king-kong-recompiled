@@ -1,47 +1,25 @@
-# Compiles the backend's test shaders into C headers under generated/:
-#   DXIL (shader model 6.0) with the Windows SDK's dxc.exe, for D3D12
-#   SPIR-V with glslangValidator (its HLSL front end), for Vulkan
-# The generated headers are checked in so the build needs neither tool.
+# Windows twin of compile_shaders.sh: compiles the backend's shaders into C
+# headers under generated/ with DXC (DXIL for D3D12; SPIR-V for Vulkan with
+# NVRHI's binding offsets). Needs a DXC with the SPIR-V back end (the GitHub
+# release, not the Windows SDK's dxc.exe, which has no -spirv).
+# The headers are checked in so the build needs no shader compiler.
 #
-# Usage: compile_shaders.ps1 [-Dxc <path\dxc.exe>] [-Glslang <path\glslangValidator.exe>]
-# glslangValidator can be built from the SDK's sources (C:\rexsrc\thirdparty\glslang,
-# cmake with ENABLE_HLSL=ON); dxc.exe is in the Windows SDK's bin folder.
-param(
-    [string]$Dxc = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\dxc.exe",
-    [string]$Glslang = ""
-)
+# Usage: compile_shaders.ps1 -Dxc <path\dxc.exe>
+param([Parameter(Mandatory = $true)][string]$Dxc)
 $ErrorActionPreference = "Stop"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $out = Join-Path $here "generated"
 New-Item -ItemType Directory -Force $out | Out-Null
-
-$shaders = @(
-    @{ File = "triangle.hlsl";    Name = "triangle" },
-    @{ File = "placeholder.hlsl"; Name = "placeholder" }
-)
-$stages = @(
-    @{ Entry = "vs_main"; Profile = "vs_6_0"; Glsl = "vert"; Suffix = "vs" },
-    @{ Entry = "ps_main"; Profile = "ps_6_0"; Glsl = "frag"; Suffix = "ps" }
-)
-
-foreach ($s in $shaders) {
-    $src = Join-Path $here $s.File
-    foreach ($st in $stages) {
-        $base = "$($s.Name)_$($st.Suffix)"
-        # DXIL: dxc writes a header with a byte array named by -Vn.
-        $dxil = Join-Path $out "${base}_dxil.h"
-        & $Dxc -T $st.Profile -E $st.Entry -O3 -Fh $dxil -Vn "k_$($base)_dxil" $src
-        if ($LASTEXITCODE -ne 0) { throw "dxc failed on $src $($st.Entry)" }
-        # SPIR-V: glslang's HLSL front end, with NVRHI's Vulkan binding layout
-        # (shader resources at 0, samplers at 128, constant buffers at 256,
-        # unordered access at 384).
-        if ($Glslang -ne "") {
-            $spv = Join-Path $out "${base}_spirv.h"
-            & $Glslang -V -D -e $st.Entry -S $st.Glsl --auto-map-locations --auto-map-bindings `
-                --shift-sampler-binding 128 --shift-cbuffer-binding 256 --shift-uav-binding 384 `
-                --vn "k_$($base)_spirv" -o $spv $src
-            if ($LASTEXITCODE -ne 0) { throw "glslang failed on $src $($st.Entry)" }
-        }
+foreach ($name in @("triangle", "placeholder")) {
+    $src = Join-Path $here "$name.hlsl"
+    foreach ($stage in @("vs", "ps")) {
+        $base = "${name}_${stage}"
+        & $Dxc -nologo -T "${stage}_6_0" -E "${stage}_main" -O3 -Fh (Join-Path $out "${base}_dxil.h") -Vn "k_${base}_dxil" $src
+        if ($LASTEXITCODE -ne 0) { throw "dxc (DXIL) failed on $src $stage" }
+        & $Dxc -nologo -T "${stage}_6_0" -E "${stage}_main" -O3 -spirv -fspv-target-env=vulkan1.2 `
+            -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-b-shift 256 0 -fvk-u-shift 384 0 `
+            -Fh (Join-Path $out "${base}_spirv.h") -Vn "k_${base}_spirv" $src
+        if ($LASTEXITCODE -ne 0) { throw "dxc (SPIR-V) failed on $src $stage" }
     }
 }
 Write-Host "Shaders written to $out"

@@ -1,6 +1,6 @@
 // Milestone 2 test triangle: three vertices from SV_VertexID, no buffers.
-// Compiled by compile_shaders.ps1 into generated/triangle_*.h (DXIL for D3D12,
-// SPIR-V for Vulkan).
+// Compiled by compile_shaders.sh (or .ps1) into generated/triangle_*.h (DXIL
+// for D3D12, SPIR-V for Vulkan).
 
 struct VSOut {
   float4 pos : SV_Position;

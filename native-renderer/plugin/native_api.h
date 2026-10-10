@@ -1,6 +1,7 @@
 // The C interface between the D3D hooks in king_kong.exe and the native
-// renderer plugin (rexgpu-native.dll). The hooks run on the game's threads and
-// pass guest addresses; the plugin reads guest memory itself.
+// renderer plugin (rexgpu-native.dll / librexgpu-native.so). The hooks run on
+// the game's threads and pass guest addresses; the plugin reads guest memory
+// itself (at call time: constants and viewports may live on the guest stack).
 //
 // Exported by the plugin: const NrApi* nr_get_api(void). The pointer is valid
 // for the life of the process. Every function takes `self` first.
@@ -12,7 +13,7 @@
 extern "C" {
 #endif
 
-#define NR_API_VERSION 1
+#define NR_API_VERSION 2
 
 typedef struct NrApi {
   uint32_t version;  // NR_API_VERSION
@@ -38,6 +39,10 @@ typedef struct NrApi {
   void (*set_ps_constants_f)(void* self, uint32_t reg, uint32_t data_guest, uint32_t count);
   void (*set_vs_constants_i)(void* self, uint32_t reg, uint32_t data_guest, uint32_t count);
   void (*set_blend_control)(void* self, uint32_t render_target, uint32_t value);
+  // The device's render-state / sampler-state setter table: state is the
+  // D3DRENDERSTATETYPE / D3DSAMPLERSTATETYPE value (a byte offset).
+  void (*set_render_state)(void* self, uint32_t state, uint32_t value);
+  void (*set_sampler_state)(void* self, uint32_t sampler, uint32_t type, uint32_t value);
   void (*begin_conditional_rendering)(void* self, uint32_t id);
   void (*end_conditional_rendering)(void* self);
 

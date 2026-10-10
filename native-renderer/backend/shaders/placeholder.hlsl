@@ -1,18 +1,26 @@
 // Milestone 3 placeholder pipeline for the game's draws. The vertex shader
-// reads the position as three big-endian floats at pos_offset in each vertex of
-// stream 0 (a raw buffer holding the guest vertex buffer bytes) and transforms
-// it by vertex shader constants c0..c3 (assumed to be the world-view-projection
-// matrix, rows in c0..c3, so mul(pos, m) matches dp4 oPos, v0, c0..c3). The
-// pixel shader outputs a flat colour that differs per draw.
+// reads the position as three big-endian floats at pos_offset in each vertex
+// (a raw buffer holding the guest vertex bytes unchanged, the draw's vertices
+// starting at vertex_base) and transforms it by the vertex shader constants
+// c0..c3, taken as the rows of the world-view-projection matrix: the guest
+// shader's dp4 oPos.x, v0, c0 (and so on) is mul(wvp, pos) with wvp's rows
+// c0..c3. The pixel shader outputs a flat colour chosen per draw.
+//
+// The constants are push constants on Vulkan and root constants on D3D12
+// (NVRHI's PushConstants binding at b0).
 
 struct DrawConstants {
   row_major float4x4 wvp;
   float4 color;
   uint stride;
   uint pos_offset;
-  uint2 pad;
+  uint vertex_base;
+  uint pad;
 };
-cbuffer DrawConstantsBuffer : register(b0) { DrawConstants c; }
+#ifdef __spirv__
+[[vk::push_constant]]
+#endif
+ConstantBuffer<DrawConstants> c : register(b0);
 
 ByteAddressBuffer vertices : register(t0);
 
@@ -26,10 +34,10 @@ uint bswap32(uint v) {
 }
 
 VSOut vs_main(uint id : SV_VertexID) {
-  uint3 raw = vertices.Load3(id * c.stride + c.pos_offset);
+  uint3 raw = vertices.Load3(c.vertex_base + id * c.stride + c.pos_offset);
   float3 p = asfloat(uint3(bswap32(raw.x), bswap32(raw.y), bswap32(raw.z)));
   VSOut o;
-  o.pos = mul(float4(p, 1.0), c.wvp);
+  o.pos = mul(c.wvp, float4(p, 1.0));
   o.color = c.color.rgb;
   return o;
 }
