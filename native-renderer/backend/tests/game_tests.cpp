@@ -28,6 +28,7 @@
 #include "backend/draw_state.h"
 #include "backend/game_renderer.h"
 #include "backend/guest_device.h"
+#include "backend/render_scale.h"
 #include "backend/renderer.h"
 #include "backend/shader_library.h"
 #include "backend/tests/check.h"
@@ -260,13 +261,16 @@ std::vector<uint8_t> Bytes(const std::vector<ColorVertex>& vs) {
 
 // Position + FLOAT2 texture coordinate vertices (stride 20): a full-screen
 // triangle list with (0, 0) at the top left.
-std::vector<uint8_t> FullScreenTextured() {
+std::vector<uint8_t> FullScreenTextured(bool reversed = false) {
   struct V {
     float x, y, u, v;
   };
   const V tl{-1, 1, 0, 0}, tr{1, 1, 1, 0}, br{1, -1, 1, 1}, bl{-1, -1, 0, 1};
   std::vector<uint8_t> out;
-  for (const V& v : {tl, tr, br, tl, br, bl}) {
+  // reversed: the other winding (VPOS.x is negated on the 360 for a back face, so a screen
+  // pass that reads it needs the facing its culling mode calls front).
+  const V order[2][6] = {{tl, tr, br, tl, br, bl}, {tl, br, tr, tl, bl, br}};
+  for (const V& v : order[reversed ? 1 : 0]) {
     PutBEFloat(out, v.x);
     PutBEFloat(out, v.y);
     PutBEFloat(out, 0.5f);
@@ -309,6 +313,12 @@ struct Fixture {
   ApiBinding binding;
   uint32_t device = 0;
   int errors_before = 0;
+  // The render scale under test (1: the renderer as it was) and the shadow map scale (0: the same).
+  float scale_x = 1.0f, scale_y = 1.0f, shadow_scale = 0.0f;
+  bool force_unaware = false;  // scaled, but with the 1:1 pixel shaders (a negative control)
+  Fixture() = default;
+  explicit Fixture(float sx, float sy = 0.0f, float shadow = 0.0f)
+      : scale_x(sx), scale_y(sy > 0.0f ? sy : sx), shadow_scale(shadow) {}
 
   bool Init() {
     if (!gpu) {
@@ -317,9 +327,11 @@ struct Fixture {
     }
     errors_before = gpu->errors();
     shaders = std::make_unique<ShaderLibrary>(gpu->device(), mem);
+    shaders->SetRenderScaleAware((scale_x != 1.0f || scale_y != 1.0f || (shadow_scale > 0.0f && shadow_scale != 1.0f)) &&
+                                 !force_unaware);
     shaders->Initialize("", NR_TEST_DXC_DIR);
     renderer = std::make_unique<Renderer>(gpu->device());
-    if (!renderer->Initialize(kSize, kSize)) {
+    if (!renderer->Initialize(ScaledSize(kSize, scale_x), ScaledSize(kSize, scale_y))) {
       Fail(__FILE__, __LINE__, "Renderer::Initialize failed");
       return false;
     }
@@ -328,6 +340,10 @@ struct Fixture {
         gpu->device(), mem, kknr::GuestMemory{mem.PhysicalBase(), mem.PhysicalSize(), 0}, shaders.get());
     // SwiftShader's JIT is not safe against pipeline creation racing draws: NR_TEST_SYNC_PIPELINES=1.
     if (std::getenv("NR_TEST_SYNC_PIPELINES")) g->options().async_pipelines = false;
+    g->options().render_scale_x = scale_x;
+    g->options().render_scale_y = scale_y;
+    g->options().shadow_scale = shadow_scale;
+    g->options().guest_frame_width = kSize;
     if (!g->Initialize()) {
       Fail(__FILE__, __LINE__, "GameRenderer::Initialize failed");
       return false;
@@ -354,6 +370,13 @@ struct Fixture {
   ~Fixture() {
     if (!gpu) return;
     gpu->WaitIdle();
+    if (std::getenv("NR_TEST_VERBOSE") && game) {
+      const GameRenderer::Stats& st = game->stats();
+      std::printf("  game stats: %llu draws, skipped shader %llu target %llu primitive %llu pipeline %llu pending %llu; %llu pipelines\n",
+                  (unsigned long long)st.draws, (unsigned long long)st.skipped_shader, (unsigned long long)st.skipped_target,
+                  (unsigned long long)st.skipped_primitive, (unsigned long long)st.skipped_pipeline,
+                  (unsigned long long)st.skipped_pending, (unsigned long long)st.pipelines);
+    }
     renderer.reset();
     shaders.reset();
     gpu->WaitIdle();
@@ -1159,6 +1182,415 @@ TEST(Textures_UploadSampleAndInvalidate) {
   check(px, 100, __LINE__);
   CHECK_EQ(f.game->stats().texture_uploads, uint64_t(2));
   CHECK_EQ(f.game->stats().texture_failures, uint64_t(0));
+}
+
+
+// -------------------------------------------------------- render scale ---
+//
+// The same synthetic frames at scale 1 and at other scales, compared after reducing the scaled
+// frame to the guest's size (area average of the host pixels whose centres fall in each guest
+// pixel). Stated tolerance: flat regions and axis aligned edges on the guest grid match to kTol;
+// across a whole frame the mean absolute difference per channel is at most 1% and at least 96%
+// of the pixels are within 10% (the rest are the pixels along slanted edges, which one rasteriser
+// grid covers as a whole and the other in part).
+
+namespace {
+
+Pixels Downsample(const Pixels& p, uint32_t gw, uint32_t gh, float sx, float sy) {
+  Pixels out;
+  out.width = gw;
+  out.height = gh;
+  out.rgba.assign(size_t(gw) * gh * 4, 0.0f);
+  std::vector<uint32_t> count(size_t(gw) * gh, 0);
+  for (uint32_t y = 0; y < p.height; ++y) {
+    for (uint32_t x = 0; x < p.width; ++x) {
+      const uint32_t gx = std::min(gw - 1, uint32_t(std::floor((x + 0.5) / sx)));
+      const uint32_t gy = std::min(gh - 1, uint32_t(std::floor((y + 0.5) / sy)));
+      const float* v = p.at(x, y);
+      float* o = &out.rgba[(size_t(gy) * gw + gx) * 4];
+      for (int c = 0; c < 4; ++c) o[c] += v[c];
+      ++count[size_t(gy) * gw + gx];
+    }
+  }
+  for (size_t i = 0; i < count.size(); ++i)
+    if (count[i])
+      for (int c = 0; c < 4; ++c) out.rgba[i * 4 + c] /= float(count[i]);
+  return out;
+}
+
+void CompareFrames(const Pixels& scaled, const Pixels& reference, float sx, float sy, const char* what, int line) {
+  if (scaled.width == 0 || reference.width == 0) {
+    Fail(__FILE__, line, std::string(what) + ": no frame");
+    return;
+  }
+  const Pixels down = Downsample(scaled, reference.width, reference.height, sx, sy);
+  double sum = 0;
+  size_t within = 0;
+  for (uint32_t y = 0; y < reference.height; ++y) {
+    for (uint32_t x = 0; x < reference.width; ++x) {
+      double worst = 0;
+      for (int c = 0; c < 3; ++c) {
+        const double d = std::fabs(double(down.at(x, y)[c]) - double(reference.at(x, y)[c]));
+        sum += d;
+        worst = std::max(worst, d);
+      }
+      if (worst <= 0.1) ++within;
+    }
+  }
+  const double mean = sum / (3.0 * reference.width * reference.height);
+  const double fraction = double(within) / (double(reference.width) * reference.height);
+  if (mean > 0.01 || fraction < 0.96) {
+    std::ostringstream m;
+    m << what << ": mean difference " << mean << " (limit 0.01), " << fraction * 100 << "% of the pixels within 10% (limit 96%)";
+    Fail(__FILE__, line, m.str());
+  }
+}
+
+// A frame with flat quadrants, a clear rectangle, a slanted triangle and a draw under a smaller
+// viewport; the render target is scaled, the picture is read from the frame image.
+Pixels SceneFlat(Fixture& f, const char* name) {
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  f.Clear(kClearTarget0, 0xFF000000);
+  f.DrawQuadrants(p);
+  f.Clear(kClearTarget0, 0xFFFFFF00, 1.0f, 0, {{4, 4, 12, 20}});
+  f.DrawColored(p, {{-0.5f, -0.5f, 0.5f, 0xFFFFFFFF}, {0.5f, -0.5f, 0.5f, 0xFFFFFFFF}, {0.0f, 0.6f, 0.5f, 0xFF204080}});
+  f.SetViewport(16, 16, 32, 32);
+  f.DrawColored(p, QuadTriangles({-0.5f, -0.5f, 0.5f, 0.5f}, 0xFF00FFFF, 0.4f));
+  return f.Present(rt, name);
+}
+
+}  // namespace
+
+TEST(Scale_ParseSetting) {
+  auto parse = [](const char* text) { return ParseRenderScale(text, 1280, 720); };
+  CHECK(parse("1").unit() && parse("1").valid);
+  CHECK(parse("").unit() && parse("").valid);
+  CHECK_EQ(parse("2").x, 2.0f);
+  CHECK_EQ(parse("2").y, 2.0f);
+  CHECK_EQ(parse("1.5").x, 1.5f);
+  CHECK_EQ(parse("3").x, 3.0f);
+  CHECK_EQ(parse("1.0004").x, 1.0f);   // within a thousandth of 1: exactly 1
+  CHECK_EQ(parse("100").x, kMaxRenderScale);
+  CHECK_EQ(parse("0.01").x, kMinRenderScale);
+  CHECK_EQ(parse("1920x1080").x, 1.5f);
+  CHECK_EQ(parse("1920x1080").y, 1.5f);
+  CHECK_EQ(parse("2560X1440").x, 2.0f);
+  CHECK_EQ(parse("1920x1200").y, 1200.0f / 720.0f);  // another aspect ratio stretches
+  CHECK_EQ(parse("1280x720").unit(), true);
+  CHECK(!parse("big").valid);
+  CHECK(!parse("-2").valid);
+  CHECK(!parse("0").valid);
+  CHECK(!parse("1920x").valid);
+  CHECK(!parse("x1080").valid);
+  CHECK(!parse("nan").valid);
+  CHECK(parse("big").unit());
+  CHECK_EQ(ScaledSize(1280, 1.0f), 1280u);
+  CHECK_EQ(ScaledSize(1280, 1.5f), 1920u);
+  CHECK_EQ(ScaledSize(720, 3.0f), 2160u);
+  CHECK_EQ(ScaledSize(1, 0.25f), 1u);  // never zero
+}
+
+TEST(Scale_UnitModeIsTheSameRenderer) {
+  // Scale 1 given explicitly takes the 1:1 paths: no scale buffer, pixel for pixel the same frame.
+  Fixture a, b(1.0f, 1.0f, 1.0f);
+  if (!a.Init() || !b.Init()) return;
+  CHECK(!a.game->scaled());
+  CHECK(!b.game->scaled());
+  Pixels pa = SceneFlat(a, "scale_unit_a");
+  Pixels pb = SceneFlat(b, "scale_unit_b");
+  CHECK_EQ(pa.width, pb.width);
+  CHECK(pa.rgba == pb.rgba);
+  CHECK_EQ(pa.width, kSize);
+}
+
+TEST(Scale_FlatSceneMatchesAtScales) {
+  Fixture reference;
+  if (!reference.Init()) return;
+  const Pixels want = SceneFlat(reference, "scale_flat_1");
+  // The reference itself still draws what the unscaled tests expect.
+  CHECK_COLOR(want, 16, 48, FromArgb(kQuadrantColors[2]), "quadrant");
+  const float scales[][2] = {{2, 2}, {3, 3}, {1.5f, 1.5f}, {2, 1.5f}};
+  for (const auto& s : scales) {
+    Fixture f(s[0], s[1]);
+    if (!f.Init()) return;
+    Pixels got = SceneFlat(f, "scale_flat_n");
+    CHECK_EQ(got.width, ScaledSize(kSize, s[0]));
+    CHECK_EQ(got.height, ScaledSize(kSize, s[1]));
+    char what[64];
+    std::snprintf(what, sizeof(what), "scene at %gx%g", s[0], s[1]);
+    CompareFrames(got, want, s[0], s[1], what, __LINE__);
+    CHECK(f.game->scaled());
+    CHECK_EQ(f.game->stats().skipped_shader, uint64_t(0));
+  }
+}
+
+TEST(Scale_ClearRectsAndViewportClearAreExact) {
+  // Rectangles on even guest coordinates land on host pixel boundaries at 2 and 1.5: exact.
+  for (float scale : {2.0f, 1.5f}) {
+    Fixture f(scale);
+    if (!f.Init()) return;
+    const uint32_t rt = f.BindMainSurface();
+    f.Clear(kClearTarget0, 0xFF000000);
+    f.Clear(kClearTarget0, 0xFFFF0000, 1.0f, 0, {{0, 0, 16, 16}, {32, 32, 64, 48}});
+    Pixels px = f.Present(rt, "scale_clear_rects");
+    auto at = [&](double gx, double gy) { return std::pair<uint32_t, uint32_t>{uint32_t(gx * scale), uint32_t(gy * scale)}; };
+    auto red = [&](double gx, double gy, const char* what) {
+      auto [x, y] = at(gx, gy);
+      CHECK_COLOR(px, x, y, FromArgb(0xFFFF0000), what);
+    };
+    auto black = [&](double gx, double gy, const char* what) {
+      auto [x, y] = at(gx, gy);
+      CHECK_COLOR(px, x, y, FromArgb(0xFF000000), what);
+    };
+    red(0, 0, "first rectangle's first pixel");
+    red(15.5, 15.5, "first rectangle's last guest pixel");
+    black(16, 16, "outside the first rectangle");
+    red(32, 32, "second rectangle");
+    red(63.5, 47.5, "second rectangle's last guest pixel");
+    black(40, 48, "below the second rectangle");
+    black(20, 40, "left of the second rectangle");
+    // No rectangles: the viewport.
+    f.Clear(kClearTarget0, 0xFF000000);
+    f.SetViewport(0, 0, kSize / 2, kSize);
+    f.Clear(kClearTarget0, 0xFF0000FF);
+    px = f.Present(rt, "scale_clear_viewport");
+    CHECK_COLOR(px, at(10, 30).first, at(10, 30).second, FromArgb(0xFF0000FF), "inside the viewport");
+    CHECK_COLOR(px, at(50, 30).first, at(50, 30).second, FromArgb(0xFF000000), "outside the viewport");
+  }
+}
+
+TEST(Scale_ResolveToTextureAndSample) {
+  // The quadrants resolved into a texture and that texture drawn into a second surface: the
+  // texture is the scaled size and the normalised fetch of the translated shader still maps it
+  // onto the whole frame.
+  for (float scale : {2.0f, 3.0f, 1.5f}) {
+    Fixture f(scale);
+    if (!f.Init()) return;
+    const uint32_t tex =
+        f.NewTexture(Desc(kknr::TextureFormat::k_8_8_8_8, kknr::Endian::kNone, kknr::kSwizzleXYZW));
+    Pixels px = ResolveAndShow(f, tex, "scale_resolve");
+    Pixels down = Downsample(px, kSize, kSize, scale, scale);
+    f.CheckQuadrantColors(down, __LINE__);
+    CHECK_EQ(f.game->stats().resolves, uint64_t(1));
+    CHECK_EQ(f.game->stats().resolve_failures, uint64_t(0));
+    CHECK_EQ(f.game->stats().texture_uploads, uint64_t(0));
+    // The targets and the resolved texture are the scaled size.
+    for (const GameRenderer::TargetInfo& t : f.game->DebugTargets()) {
+      CHECK_EQ(t.width, kSize);
+      CHECK_EQ(t.host_width, ScaledSize(kSize, scale));
+      CHECK_EQ(t.host_height, ScaledSize(kSize, scale));
+    }
+  }
+}
+
+TEST(Scale_ResolveRectAndDestinationPoint) {
+  for (float scale : {2.0f, 1.5f}) {
+    Fixture f(scale);
+    if (!f.Init()) return;
+    const uint32_t tex =
+        f.NewTexture(Desc(kknr::TextureFormat::k_8_8_8_8, kknr::Endian::kNone, kknr::kSwizzleXYZW));
+    f.BindMainSurface();
+    auto p = f.MakeColorPipeline();
+    f.Clear(kClearTarget0, 0xFF000000);
+    f.DrawQuadrants(p);
+    f.Resolve(0, 0, tex);
+    f.Resolve(0, f.NewRect(32, 0, 64, 32), tex, f.NewPoint(0, 32));  // top right over bottom left
+    const uint32_t shown = f.NewSurface(kSize, kSize, 400, 0);
+    f.SetRenderTarget(0, shown);
+    f.DrawTextured(tex);
+    Pixels px = f.Present(shown, "scale_resolve_rect");
+    Rgb want[4];
+    for (int q = 0; q < 4; ++q) want[q] = FromArgb(kQuadrantColors[q == 2 ? 1 : q]);
+    f.CheckQuadrants(Downsample(px, kSize, kSize, scale, scale), want, __LINE__);
+    CHECK_EQ(f.game->stats().resolve_failures, uint64_t(0));
+  }
+}
+
+TEST(Scale_ResolveClearsColourAndDepth) {
+  Fixture f(2.0f);
+  if (!f.Init()) return;
+  const uint32_t rt = f.BindMainSurface();
+  f.SetDepthStencil(f.NewSurface(kSize, kSize, 200, 0));
+  auto p = f.MakeColorPipeline();
+  f.Clear(kClearTarget0 | kClearZ, 0xFF000000, 1.0f);
+  f.Reg(dev::kRbDepthControl, kDepthLess);
+  f.DrawColored(p, QuadTriangles(kFull, 0xFFFF0000, 0.3f));
+  f.Resolve(0x200, f.NewRect(0, 0, 32, 64), 0, 0, 0, 1.0f);
+  f.DrawColored(p, QuadTriangles(kFull, 0xFF00FF00, 0.7f));
+  const uint32_t color = f.mem.NewFloats({0.2f, 0.4f, 0.6f, 1.0f});
+  f.Resolve(0x100, f.NewRect(0, 0, 64, 32), 0, 0, color);
+  Pixels px = f.Present(rt, "scale_resolve_clears");
+  const Rgb blue{0.2, 0.4, 0.6};
+  const Rgb want[4] = {blue, blue, {0, 1, 0}, {1, 0, 0}};
+  f.CheckQuadrants(Downsample(px, kSize, kSize, 2.0f, 2.0f), want, __LINE__);
+  CHECK_EQ(f.game->stats().resolve_failures, uint64_t(0));
+}
+
+namespace {
+
+// oC0 = tfetch2D(fetch constant 0, VPOS) with unnormalised coordinates and a half texel
+// offset: the texel under the pixel, read by its position on screen (a post effect's copy).
+std::vector<uint8_t> PixelShaderScreenCopy() {
+  TFetch t;
+  t.dst = 0;
+  t.src = 1;  // the pixel position: the register after the interpolators
+  t.srcSwizzle = fetchSrcSwizzle("xy");
+  t.slot = 0;
+  t.dim = Dim::D2;
+  t.denorm = true;
+  t.offsetX = 1;  // half texels
+  t.offsetY = 1;
+  Program p;
+  p.exec({F(t)});
+  p.alloc(2, 0);
+  p.exec({Export(0, 0)}, true);
+  ctest::Spec spec = PixelSpec();
+  spec.ucode = p.assemble();
+  spec.paramGen = true;
+  spec.constants.push_back({"g_Texture", 3, 0, 1, 4, 12, 1, 1, 1});
+  return ctest::writeContainer(spec);
+}
+
+// The quadrants resolved into a texture, then a full-screen pass that copies it by VPOS.
+Pixels PostPass(Fixture& f, const char* name) {
+  const uint32_t tex = f.NewTexture(Desc(kknr::TextureFormat::k_8_8_8_8, kknr::Endian::kNone, kknr::kSwizzleXYZW));
+  f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  f.Clear(kClearTarget0, 0xFF000000);
+  f.DrawQuadrants(p);
+  f.Resolve(0, 0, tex);
+  const uint32_t shown = f.NewSurface(kSize, kSize, 400, 0);
+  f.SetRenderTarget(0, shown);
+  const uint32_t vs = f.CreateShader(true, VertexShader(kTexcoord, F_32_32_FLOAT));
+  const uint32_t ps = f.CreateShader(false, PixelShaderScreenCopy());
+  const uint32_t decl =
+      f.mem.NewDeclaration({{0, 0, kDeclFloat3, kUsagePosition, 0}, {0, 12, kDeclFloat2, kUsageTexcoord, 0}});
+  f.SetDeclaration(decl);
+  f.SetShaders(vs, ps);
+  f.SetTexture(0, tex);
+  f.SetStream(0, f.NewVertexBuffer(FullScreenTextured(true)), 0, 20);
+  f.Draw(4, 0, 6);
+  return f.Present(shown, name);
+}
+
+}  // namespace
+
+TEST(Scale_PostPassWithVposAndUnnormalizedFetch) {
+  // The risk the brief names: a pixel shader that reads VPOS and fetches with unnormalised
+  // coordinates and a texel offset. Scale 1 is the console's answer; the aware translation at
+  // other scales must give the same picture.
+  Fixture reference;
+  if (!reference.Init()) return;
+  Pixels want = PostPass(reference, "scale_post_1");
+  reference.CheckQuadrantColors(want, __LINE__);
+  CHECK_EQ(reference.game->stats().skipped_shader, uint64_t(0));
+  for (float scale : {2.0f, 3.0f, 1.5f}) {
+    Fixture f(scale);
+    if (!f.Init()) return;
+    Pixels got = PostPass(f, "scale_post_n");
+    CHECK_EQ(f.game->stats().skipped_shader, uint64_t(0));
+    f.CheckQuadrantColors(Downsample(got, kSize, kSize, scale, scale), __LINE__);
+    CompareFrames(got, want, scale, scale, "post pass", __LINE__);
+  }
+}
+
+namespace {
+
+// The same screen pass over a texture the guest uploaded (never resolved, so never scaled):
+// 64x64 texels holding the quadrants. VPOS (guest pixels) over the guest's texture size is the
+// only coordinate that works at every scale.
+Pixels PostPassOverUploaded(Fixture& f, const char* name) {
+  std::vector<uint8_t> texels(64 * 64 * 4);
+  for (uint32_t y = 0; y < 64; ++y) {
+    for (uint32_t x = 0; x < 64; ++x) {
+      const uint32_t argb = kQuadrantColors[(y >= 32 ? 2 : 0) + (x >= 32 ? 1 : 0)];
+      uint8_t* t = &texels[(size_t(y) * 64 + x) * 4];
+      t[0] = uint8_t(argb >> 16);
+      t[1] = uint8_t(argb >> 8);
+      t[2] = uint8_t(argb);
+      t[3] = 255;
+    }
+  }
+  const uint32_t tex = f.NewTexture(Desc(kknr::TextureFormat::k_8_8_8_8, kknr::Endian::kNone, kknr::kSwizzleXYZW),
+                                    [&](uint32_t, uint32_t) { return texels.data(); });
+  const uint32_t shown = f.NewSurface(kSize, kSize, 400, 0);
+  f.SetRenderTarget(0, shown);
+  f.SetViewport(0, 0, kSize, kSize);
+  f.Clear(kClearTarget0, 0xFF000000);
+  const uint32_t vs = f.CreateShader(true, VertexShader(kTexcoord, F_32_32_FLOAT));
+  const uint32_t ps = f.CreateShader(false, PixelShaderScreenCopy());
+  const uint32_t decl =
+      f.mem.NewDeclaration({{0, 0, kDeclFloat3, kUsagePosition, 0}, {0, 12, kDeclFloat2, kUsageTexcoord, 0}});
+  f.SetDeclaration(decl);
+  f.SetShaders(vs, ps);
+  f.SetTexture(0, tex);
+  f.SetStream(0, f.NewVertexBuffer(FullScreenTextured(true)), 0, 20);
+  f.Draw(4, 0, 6);
+  return f.Present(shown, name);
+}
+
+}  // namespace
+
+TEST(Scale_PostPassOverAnUnscaledTexture) {
+  // A pass that reads VPOS and a texture that is not scaled: what a host pixel position over a
+  // guest-sized texture does without the translation's help is wrong, with it right.
+  Fixture reference;
+  if (!reference.Init()) return;
+  Pixels want = PostPassOverUploaded(reference, "scale_post_uploaded_1");
+  reference.CheckQuadrantColors(want, __LINE__);
+  for (float scale : {2.0f, 3.0f, 1.5f}) {
+    Fixture f(scale);
+    if (!f.Init()) return;
+    Pixels got = PostPassOverUploaded(f, "scale_post_uploaded_n");
+    f.CheckQuadrantColors(Downsample(got, kSize, kSize, scale, scale), __LINE__);
+    CompareFrames(got, want, scale, scale, "post pass over an uploaded texture", __LINE__);
+  }
+  // The control: the 1:1 pixel shaders at scale 2 read the texture at twice the coordinates.
+  Fixture wrong(2.0f);
+  wrong.force_unaware = true;
+  if (!wrong.Init()) return;
+  Pixels bad = PostPassOverUploaded(wrong, "scale_post_uploaded_unaware");
+  const Pixels down = Downsample(bad, kSize, kSize, 2.0f, 2.0f);
+  const float* v = down.at(kQuadrantPixels[2][0], kQuadrantPixels[2][1]);
+  const Rgb q2 = FromArgb(kQuadrantColors[2]);
+  CHECK(std::fabs(v[0] - q2.r) > 0.1 || std::fabs(v[1] - q2.g) > 0.1 || std::fabs(v[2] - q2.b) > 0.1);
+}
+
+TEST(Scale_ShadowMapsHaveTheirOwnScale) {
+  struct Case {
+    float render, shadow, expect_shadow;
+  };
+  // shadow_scale 0 follows the render scale; 1 keeps the maps at the console's size.
+  const Case cases[] = {{2.0f, 0.0f, 2.0f}, {2.0f, 1.0f, 1.0f}, {1.0f, 3.0f, 3.0f}};
+  for (const Case& c : cases) {
+    Fixture f(c.render, 0.0f, c.shadow);
+    if (!f.Init()) return;
+    // A 32x32 k_32_FLOAT colour target (pitch 32, not the frame's): a shadow map.
+    const uint32_t shadow = f.NewSurface(32, 32, 800, 14);
+    f.SetRenderTarget(0, shadow);
+    f.SetViewport(0, 0, 32, 32);
+    auto p = f.MakeColorPipeline();
+    f.Clear(kClearTarget0, 0xFFFFFFFF);
+    f.DrawColored(p, QuadTriangles(kFull, 0xFFFFFFFF), true);
+    const uint32_t rt = f.BindMainSurface();
+    f.Clear(kClearTarget0, 0xFF336699);
+    f.Present(rt);
+    bool saw_shadow = false, saw_main = false;
+    for (const GameRenderer::TargetInfo& t : f.game->DebugTargets()) {
+      if (t.format == 14) {
+        saw_shadow = true;
+        CHECK_EQ(t.width, 32u);
+        CHECK_EQ(t.host_width, ScaledSize(32, c.expect_shadow));
+        CHECK_EQ(t.host_height, ScaledSize(32, c.expect_shadow));
+      } else {
+        saw_main = true;
+        CHECK_EQ(t.host_width, ScaledSize(kSize, c.render));
+      }
+    }
+    CHECK(saw_shadow);
+    CHECK(saw_main);
+  }
 }
 
 NR_TEST_MAIN()

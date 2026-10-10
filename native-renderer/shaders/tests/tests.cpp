@@ -620,9 +620,150 @@ int makeFixtures(int argc, char** argv) {
 
 }  // namespace
 
+
+// ---------------------------------------------------------------- render scale
+
+size_t countOf(const std::string& text, const std::string& what) {
+    size_t n = 0;
+    for (size_t at = text.find(what); at != std::string::npos; at = text.find(what, at + what.size())) n++;
+    return n;
+}
+
+// The aware translation is the plain one plus: the scale buffer and its size helper, a
+// guest-size line after every GetDimensions of a fetch, and the position scaled. Remove those
+// and what is left is the plain translation, byte for byte.
+std::string withoutScaleAdditions(std::string hlsl) {
+    auto cut = [&](const std::string& begin, const std::string& end) {
+        size_t a = hlsl.find(begin);
+        if (a == std::string::npos) return;
+        size_t b = hlsl.find(end, a);
+        if (b == std::string::npos) return;
+        hlsl.erase(a, b + end.size() - a);
+    };
+    cut("cbuffer KKScaleConstants", "};\n\n");
+    cut("uint2 kk_GuestSize(", "}\n\n");
+    std::string out;
+    size_t at = 0;
+    while (at < hlsl.size()) {
+        size_t eol = hlsl.find('\n', at);
+        size_t end = eol == std::string::npos ? hlsl.size() : eol + 1;
+        std::string line = hlsl.substr(at, end - at);
+        if (line.find(" = kk_GuestSize(") == std::string::npos) out += line;
+        at = end;
+    }
+    const std::string aware = "(iPos.xy * kk_RenderScale.zw - 0.5)", plain = "(iPos.xy - 0.5)";
+    for (size_t k = out.find(aware); k != std::string::npos; k = out.find(aware, k + plain.size())) out.replace(k, aware.size(), plain);
+    return out;
+}
+
+int testScale(int argc, char** argv) {
+    std::string dxc = option(argc, argv, "--dxc");
+    uint32_t fuzz = uint32_t(std::stoul(option(argc, argv, "--fuzz", "400")));
+    uint32_t seed = uint32_t(std::stoul(option(argc, argv, "--seed", "20261010")));
+    std::string dump = option(argc, argv, "--dump-hlsl");  // the plain translation of everything, for diffing against another build
+    std::string error;
+    if (!loadDxc(dxc, &error)) {
+        std::printf("scale: %s\n", error.c_str());
+        return 1;
+    }
+    std::vector<CorpusShader> corpus = buildCorpus(fuzz, seed);
+    Compiler compiler;
+    int failed = 0, pixel = 0, vpos = 0, fetches = 0, built = 0;
+    auto fail = [&](const CorpusShader& s, const std::string& why) {
+        failed++;
+        std::printf("FAILED [%s] %s: %s\n", s.group.c_str(), s.name.c_str(), why.c_str());
+    };
+    for (size_t i = 0; i < corpus.size(); i++) {
+        const CorpusShader& s = corpus[i];
+        ParseResult p = s.raw ? parseMicrocode(s.vertex ? ShaderKind::Vertex : ShaderKind::Pixel, s.bytes.data(), s.bytes.size())
+                              : parseContainer(s.bytes);
+        if (!p.ok) continue;
+        ShaderInfo plain = p.info, aware = p.info;
+        plain.renderScaleAware = false;
+        aware.renderScaleAware = true;
+        TranslateResult a = translate(plain), b = translate(aware);
+        if (!a.ok || !b.ok) continue;  // the corpus test reports translation failures
+        if (!dump.empty()) {
+            char name[64];
+            std::snprintf(name, sizeof(name), "%05zu-%016llx.hlsl", i, static_cast<unsigned long long>(translationInputHash(plain)));
+            writeFile(fs::path(dump) / name, a.hlsl);
+        }
+        for (const char* word : {"KKScaleConstants", "kk_GuestSize", "kk_RenderScale", "kk_TexInvScale"})
+            if (a.hlsl.find(word) != std::string::npos) fail(s, std::string("the plain translation mentions ") + word);
+        if (p.info.kind == ShaderKind::Vertex) {
+            if (a.hlsl != b.hlsl || translationInputHash(plain) != translationInputHash(aware)) fail(s, "a vertex shader changed with the flag");
+            continue;
+        }
+        pixel++;
+        if (translationInputHash(plain) == translationInputHash(aware)) fail(s, "plain and aware share a hash");
+        const size_t sizes = countOf(a.hlsl, "GetDimensions(ktd");
+        fetches += int(sizes);
+        if (countOf(b.hlsl, " = kk_GuestSize(ktd") != sizes) fail(s, "a GetDimensions without its guest size");
+        if (p.info.readsPixelPosition) {
+            vpos++;
+            if (b.hlsl.find("kk_RenderScale.zw") == std::string::npos) fail(s, "VPOS not scaled");
+            if (b.hlsl.find("(iPos.xy - 0.5)") != std::string::npos) fail(s, "VPOS left in host pixels");
+        }
+        if (withoutScaleAdditions(b.hlsl) != a.hlsl) fail(s, "the aware translation differs from the plain one by more than the scale additions");
+        BuildResult built1 = buildShader(aware, compiler, false);
+        if (!built1.ok) {
+            fail(s, "aware build: " + built1.stage + ": " + built1.error.substr(0, 400));
+            continue;
+        }
+        if (!isDxilSigned(built1.shader.dxil)) fail(s, "aware DXIL not signed");
+        built++;
+    }
+    // Both variants of a shader live in one pack, found by their own input hashes.
+    {
+        std::vector<CompiledShader> both;
+        int pairs = 0;
+        for (const CorpusShader& s : corpus) {
+            if (s.raw || s.vertex || pairs >= 12) continue;
+            ParseResult p = parseContainer(s.bytes);
+            if (!p.ok || p.info.kind != ShaderKind::Pixel) continue;
+            ShaderInfo aware = p.info;
+            aware.renderScaleAware = true;
+            BuildResult x = buildShader(p.info, compiler, false), y = buildShader(aware, compiler, false);
+            if (!x.ok || !y.ok) continue;
+            both.push_back(x.shader);
+            both.push_back(y.shader);
+            pairs++;
+        }
+        fs::path packPath = fs::temp_directory_path() / "kkshaders-scale-test.pack";
+        ShaderPack pack;
+        std::string packError;
+        if (!ShaderPack::write(packPath, both, &packError) || !pack.open(packPath, &packError)) {
+            std::printf("FAILED pack: %s\n", packError.c_str());
+            failed++;
+        } else {
+            for (size_t k = 0; k + 1 < both.size(); k += 2) {
+                CompiledShader plainBack, awareBack;
+                if (!pack.find(both[k].ucodeHash, both[k].inputHash, plainBack) || plainBack.spirv != both[k].spirv ||
+                    !pack.find(both[k + 1].ucodeHash, both[k + 1].inputHash, awareBack) || awareBack.spirv != both[k + 1].spirv ||
+                    both[k].inputHash == both[k + 1].inputHash) {
+                    std::printf("FAILED pack lookup of shader %016llx\n", static_cast<unsigned long long>(both[k].ucodeHash));
+                    failed++;
+                }
+            }
+            if (pairs == 0) failed++;
+        }
+        pack.close();
+        std::error_code ec;
+        fs::remove(packPath, ec);
+        std::printf("scale: %d plain / aware pairs through a pack\n", pairs);
+    }
+    std::printf("scale: %d pixel shaders (%d read VPOS, %d size reads), %d built render scale aware, %d failed\n", pixel, vpos, fetches, built,
+                failed);
+    if (pixel == 0 || vpos == 0 || fetches == 0) {
+        std::printf("scale: the corpus has nothing to test\n");
+        return 1;
+    }
+    return failed ? 1 : 0;
+}
+
 int main(int argc, char** argv) {
     if (argc < 2) {
-        std::printf("usage: kkshaders_tests assembler|container|corpus|cache [options]\n");
+        std::printf("usage: kkshaders_tests assembler|container|corpus|cache|scale [options]\n");
         return 2;
     }
     std::string what = argv[1];
@@ -630,6 +771,7 @@ int main(int argc, char** argv) {
     if (what == "container") return testContainer();
     if (what == "corpus") return testCorpus(argc, argv);
     if (what == "cache") return testCache(argc, argv);
+    if (what == "scale") return testScale(argc, argv);
     if (what == "make-fixtures") return makeFixtures(argc, argv);
     std::printf("unknown test %s\n", what.c_str());
     return 2;

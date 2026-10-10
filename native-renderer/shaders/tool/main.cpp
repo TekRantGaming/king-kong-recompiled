@@ -5,7 +5,9 @@
 //   kkshaders compile <container> --dxc <dir> [--out <dir>] [--spirv-val <exe>] [--raw-vs | --raw-ps]
 //   kkshaders db-check <xeshaders.bin>
 //   kkshaders db-build <xeshaders.bin> --dxc <dir> [--out <dir>] [--spirv-val <exe>] [--jobs N] [--limit N] [--both] [--image <image.bin>]
+//                      [--also-scaled] (render scale aware variants of the pixel shaders too)
 //   kkshaders db-structure <xeshaders.bin>
+//   kkshaders scale-report <xeshaders.bin>
 //   kkshaders xsh <file.xsh> [<file.xsh> ...] --dxc <dir> [--out <dir>] [--spirv-val <exe>] [--jobs N] [--database <xeshaders.bin>]
 //   kkshaders pack-lookup <pack> [<hash> ...]
 //
@@ -832,12 +834,65 @@ int cmdPackLookup(const Args& a) {
     return found == keys.size() && worst < 1.0 ? 0 : 1;
 }
 
+
+// scale-report: where the render scale matters in the database's pixel shaders, per family: the
+// shaders that read the pixel position, that fetch with unnormalised coordinates, with texel
+// offsets, that ask for the fraction of a texel position (GetTextureWeights), and the constants
+// whose names look like texel or screen sizes (they carry 1 / width, pixel steps and so on; the
+// report lists them for reading, it does not decide).
+int cmdScaleReport(const Args& a) {
+    if (a.positional.empty()) return 2;
+    Database db;
+    std::string error;
+    if (!db.load(a.positional[0], &error)) {
+        std::fprintf(stderr, "%s\n", error.c_str());
+        return 1;
+    }
+    struct Family {
+        int shaders = 0, vpos = 0, denorm = 0, offsets = 0, weights = 0, cube = 0, sizeConstants = 0;
+        std::map<std::string, int> names;
+    };
+    std::map<std::string, Family> families;
+    const std::regex sizeLike("(size|texel|pixel|screen|resolution|invres|vpos|viewport|dimension|width|height|rcp)", std::regex::icase);
+    for (size_t i = 0; i < db.entries().size(); i++) {
+        const auto& e = db.entries()[i];
+        if (e.kind != 2) continue;
+        ParseResult p = db.parse(e);
+        if (!p.ok) continue;
+        TranslateResult t = translate(p.info);
+        if (!t.ok) continue;
+        Family& f = families[db.familyName(ShaderKind::Pixel, Database::familyIndex(e.pixelKey))];
+        f.shaders++;
+        if (p.info.readsPixelPosition) f.vpos++;
+        if (t.hlsl.find("kc /= ") != std::string::npos) f.denorm++;
+        if (t.hlsl.find("kc += ") != std::string::npos || t.hlsl.find("kc.xy +=") != std::string::npos) f.offsets++;
+        if (t.hlsl.find("frac(kc * ") != std::string::npos) f.weights++;
+        if (t.hlsl.find("TextureCube<float4> kto") != std::string::npos) f.cube++;
+        bool any = false;
+        for (const auto& c : p.info.constants) {
+            if (c.registerSet == RegisterSet::Float4 && std::regex_search(c.name, sizeLike)) {
+                f.names[c.name]++;
+                any = true;
+            }
+        }
+        if (any) f.sizeConstants++;
+    }
+    std::printf("%-20s %7s %6s %7s %8s %8s %5s %10s\n", "pixel family", "shaders", "VPOS", "denorm", "offsets", "weights", "cube", "size names");
+    for (const auto& [name, f] : families)
+        std::printf("%-20s %7d %6d %7d %8d %8d %5d %10d\n", name.c_str(), f.shaders, f.vpos, f.denorm, f.offsets, f.weights, f.cube,
+                    f.sizeConstants);
+    std::printf("\nconstants whose names look like sizes (family: name x shaders)\n");
+    for (const auto& [name, f] : families)
+        for (const auto& [constant, n] : f.names) std::printf("  %s: %s x %d\n", name.c_str(), constant.c_str(), n);
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     if (argc < 2) {
         std::fprintf(stderr,
-                     "usage: kkshaders info|translate|compile|db-check|db-build|db-structure|xsh|pack-lookup ...\n"
+                     "usage: kkshaders info|translate|compile|db-check|db-build|db-structure|scale-report|xsh|pack-lookup ...\n"
                      "(see the comment at the top of tool/main.cpp)\n");
         return 2;
     }
@@ -849,6 +904,7 @@ int main(int argc, char** argv) {
     if (command == "db-check") return cmdDbCheck(a);
     if (command == "db-build") return cmdDbBuild(a);
     if (command == "db-structure") return cmdDbStructure(a);
+    if (command == "scale-report") return cmdScaleReport(a);
     if (command == "xsh") return cmdXsh(a);
     if (command == "pack-lookup") return cmdPackLookup(a);
     std::fprintf(stderr, "unknown command %s\n", command.c_str());
