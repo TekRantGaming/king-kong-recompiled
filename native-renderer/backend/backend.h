@@ -56,6 +56,10 @@ struct GameSettings {
   int32_t dump_frame = -1;
   uint32_t debug = 0;
   bool async_pipelines = true;
+  // Render scale (backend/render_scale.h): "1", "1.5", "2", "1920x1080". shadow_scale: 0 like the
+  // render scale, else its own (a number).
+  std::string render_scale = "1";
+  float shadow_scale = 0.0f;
 };
 
 class Backend {

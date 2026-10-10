@@ -149,6 +149,8 @@ bool GameRenderer::Initialize() {
   constants.bindings = {nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
                         nvrhi::BindingLayoutItem::VolatileConstantBuffer(1),
                         nvrhi::BindingLayoutItem::VolatileConstantBuffer(2)};
+  // b3: the render scale constants, only when scaling (the 1:1 layout is the one it always was).
+  if (scaled()) constants.bindings.push_back(nvrhi::BindingLayoutItem::VolatileConstantBuffer(3));
   constants_layout_ = device_->createBindingLayout(constants);
   if (!constants_layout_) return false;
 
@@ -169,6 +171,11 @@ bool GameRenderer::Initialize() {
   cs.bindings = {nvrhi::BindingSetItem::ConstantBuffer(0, vs_constants_),
                  nvrhi::BindingSetItem::ConstantBuffer(1, ps_constants_),
                  nvrhi::BindingSetItem::ConstantBuffer(2, draw_constants_)};
+  if (scaled()) {
+    scale_constants_ = make_cb(sizeof(kkshaders::ScaleConstants), "Game scale constants");
+    if (!scale_constants_) return false;
+    cs.bindings.push_back(nvrhi::BindingSetItem::ConstantBuffer(3, scale_constants_));
+  }
   constants_set_ = device_->createBindingSet(cs, constants_layout_);
   if (!constants_set_) return false;
 
@@ -414,7 +421,7 @@ nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelin
 // ---------------------------------------------------------------- viewport
 
 GameRenderer::ViewportSetup GameRenderer::ComputeViewport(const dev::DeviceView& d, uint32_t width,
-                                                          uint32_t height) const {
+                                                          uint32_t height, float scale_x, float scale_y) const {
   // As the Xenos plugin does (src/graphics/util/draw.cpp GetHostViewportInfo):
   // the host viewport is the whole target and the vertex shader applies the
   // guest's viewport transform (or none: screen-space draws give pixels), the
@@ -455,7 +462,9 @@ GameRenderer::ViewportSetup GameRenderer::ComputeViewport(const dev::DeviceView&
     v.ndc_scale[1] = -v.ndc_scale[1];
     v.ndc_offset[1] = -v.ndc_offset[1];
   }
-  v.viewport = nvrhi::Viewport(0.0f, w, 0.0f, h, 0.0f, 1.0f);
+  // The clip space above is in guest pixels; the host viewport is the whole (scaled) target.
+  v.viewport = nvrhi::Viewport(0.0f, float(std::max(ScaleCoord(int32_t(width), scale_x), 1)), 0.0f,
+                               float(std::max(ScaleCoord(int32_t(height), scale_y), 1)), 0.0f, 1.0f);
   if (clip & (1u << 16)) {  // clip_disable: depth from the shader as is
     v.ndc_scale[2] = sz;
     v.ndc_offset[2] = oz;
@@ -483,7 +492,7 @@ GameRenderer::ViewportSetup GameRenderer::ComputeViewport(const dev::DeviceView&
   x1 = std::clamp(x1, 0, int32_t(width));
   y0 = std::clamp(y0, 0, int32_t(height));
   y1 = std::clamp(y1, 0, int32_t(height));
-  v.scissor = nvrhi::Rect(x0, std::max(x0, x1), y0, std::max(y0, y1));
+  v.scissor = ScaleRect(nvrhi::Rect(x0, std::max(x0, x1), y0, std::max(y0, y1)), scale_x, scale_y);
   return v;
 }
 
@@ -690,12 +699,18 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   for (const auto& sb : vs->bindings.samplers) note_base_map(sb);
   if (ps)
     for (const auto& sb : ps->bindings.samplers) note_base_map(sb);
+  kkshaders::ScaleConstants sc = {};
+  for (auto& v : sc.texInvScale) v[0] = v[1] = v[2] = v[3] = 1.0f;
   auto bind_textures = [&](const GameShader& shader) {
     for (const kkshaders::TextureUse& t : shader.bindings.textures) {
       uint32_t words[6];
       d.fetch_constant(t.slot & 31, words);
       dc.textureIndex[t.slot & 31] =
           BindTexture(cl, words, t.dimension, (base_map_slots >> (t.slot & 31)) & 1);
+      if (scaled()) {
+        sc.texInvScale[t.slot & 31][0] = 1.0f / bound_scale_x_;
+        sc.texInvScale[t.slot & 31][1] = 1.0f / bound_scale_y_;
+      }
       if (dump) {
         Logf(LogLevel::kInfo, "rexgpu-native:   %s texture slot %u dim %u fetch %08X %08X %08X %08X %08X %08X -> %08X",
              &shader == vs.get() ? "vs" : "ps", t.slot, uint32_t(t.dimension), words[0], words[1], words[2],
@@ -773,7 +788,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   const HostTarget* size_from = colors[0] ? colors[0] : (depth ? depth : nullptr);
   for (HostTarget* c : colors)
     if (!size_from && c) size_from = c;
-  const ViewportSetup vp = ComputeViewport(d, size_from->width, size_from->height);
+  const ViewportSetup vp = ComputeViewport(d, size_from->width, size_from->height, size_from->scale_x, size_from->scale_y);
   for (uint32_t c = 0; c < 3; ++c) {
     dc.ndcScale[c] = vp.ndc_scale[c];
     dc.ndcOffset[c] = vp.ndc_offset[c];
@@ -805,6 +820,13 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   constants_list_ = cl;
   constants_frame_ = frame_;
   cl->writeBuffer(draw_constants_, &dc, sizeof(dc));
+  if (scaled()) {
+    sc.renderScale[0] = size_from->scale_x;
+    sc.renderScale[1] = size_from->scale_y;
+    sc.renderScale[2] = 1.0f / size_from->scale_x;
+    sc.renderScale[3] = 1.0f / size_from->scale_y;
+    cl->writeBuffer(scale_constants_, &sc, sizeof(sc));
+  }
 
   // State and draw.
   nvrhi::GraphicsState gs;

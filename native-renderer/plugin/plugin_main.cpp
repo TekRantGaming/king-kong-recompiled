@@ -74,6 +74,20 @@ REXCVAR_DEFINE_BOOL(native_async_pipelines, true, "Native renderer",
                     "is ready, instead of stalling the game for the driver's compile")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_STRING(native_render_scale, "1", "Native renderer",
+                      "Render scale: the game's render targets, viewports, resolves and textures made from "
+                      "them are this many times the 360's 1280x720 (1 = the 360's size; 1.5, 2, 3, any number "
+                      "from 0.25 to 8), or a frame size such as 1920x1080. The frame handed to the presenter "
+                      "is the scaled one; its upscalers and FXAA still apply. Above 1 the pixel shaders are "
+                      "the render scale aware ones: build the pack with kkshaders db-build --also-scaled, "
+                      "else they are compiled at startup (needs DXC)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_DOUBLE(native_shadow_scale, 0.0, "Native renderer",
+                      "Render scale of the shadow maps (k_32_FLOAT targets that are not the frame's size, "
+                      "832x832 in the game). 0: like native_render_scale; 1: keep them at the 360's size")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_BOOL(native_flip_front_face, false, "Native renderer",
                     "Swap the front face of every draw (a debugging aid for culling)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);

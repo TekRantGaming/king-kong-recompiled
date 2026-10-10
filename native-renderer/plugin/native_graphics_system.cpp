@@ -55,6 +55,8 @@ REXCVAR_DECLARE(bool, native_texture_tail_mips);
 REXCVAR_DECLARE(int32_t, native_dump_frame);
 REXCVAR_DECLARE(int32_t, native_debug);
 REXCVAR_DECLARE(bool, native_async_pipelines);
+REXCVAR_DECLARE(std::string, native_render_scale);
+REXCVAR_DECLARE(double, native_shadow_scale);
 
 namespace nr {
 
@@ -231,6 +233,8 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
   game.dump_frame = REXCVAR_GET(native_dump_frame);
   game.debug = uint32_t(REXCVAR_GET(native_debug));
   game.async_pipelines = REXCVAR_GET(native_async_pipelines);
+  game.render_scale = REXCVAR_GET(native_render_scale);
+  game.shadow_scale = float(REXCVAR_GET(native_shadow_scale));
   if (!backend_->Initialize(std::max<uint32_t>(1, video_mode.display_width),
                             std::max<uint32_t>(1, video_mode.display_height), game)) {
     REXGPU_ERROR("rexgpu-native: backend initialisation failed");

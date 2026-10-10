@@ -17,6 +17,7 @@
 #include <array>
 #include <condition_variable>
 #include <thread>
+#include <cmath>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -24,6 +25,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <nvrhi/nvrhi.h>
@@ -62,6 +64,16 @@ class GameRenderer {
     // thread for the driver's compile. Vulkan only (NVRHI's D3D12 backend
     // caches root signatures without a lock).
     bool async_pipelines = true;
+    // Render scale: host pixels per guest pixel of the colour and depth targets (1 = the
+    // console's size, bit for bit what the renderer always did). Resolved textures and the
+    // screen copies follow. docs/backend.md, "Render scale". Set before Initialize.
+    float render_scale_x = 1.0f, render_scale_y = 1.0f;
+    // The same for shadow maps (colour targets k_32_FLOAT whose pitch is not the frame's);
+    // 0: like the render scale.
+    float shadow_scale = 0.0f;
+    // The guest frame's width (the back buffer's pitch): a k_32_FLOAT target of any other pitch
+    // is a shadow map.
+    uint32_t guest_frame_width = 1280;
     // Log every draw of this game frame (-1 none).
     int32_t dump_frame = -1;
     // Debugging aids (bits): 1 the game's clears are green, 2 the frame image
@@ -98,6 +110,11 @@ class GameRenderer {
 
   bool Initialize();
   Options& options() { return options_; }
+  // Any target or texture at a scale other than 1 (the pixel shaders must be render scale aware).
+  bool scaled() const {
+    return options_.render_scale_x != 1.0f || options_.render_scale_y != 1.0f ||
+           (options_.shadow_scale > 0.0f && options_.shadow_scale != 1.0f);
+  }
   const Stats& stats() const { return stats_; }
 
   // Enables CPU write notifications for a physical range (the SDK's watches);
@@ -119,7 +136,8 @@ class GameRenderer {
   struct TargetInfo {
     bool depth = false;
     uint32_t edram_base = 0, pitch = 0, format = 0;  // the key
-    uint32_t width = 0, height = 0;
+    uint32_t width = 0, height = 0;           // the guest's size
+    uint32_t host_width = 0, host_height = 0;  // the texture's
     nvrhi::Format host_format = nvrhi::Format::UNKNOWN;
     nvrhi::ITexture* texture = nullptr;
   };
@@ -144,10 +162,23 @@ class GameRenderer {
   struct HostTarget {
     nvrhi::TextureHandle texture;
     nvrhi::Format format = nvrhi::Format::UNKNOWN;
-    uint32_t width = 0, height = 0;
+    uint32_t width = 0, height = 0;  // in guest pixels (the pitch and the rows drawn so far)
+    uint32_t host_width = 0, host_height = 0;  // the texture's: the guest's times the scale
+    float scale_x = 1.0f, scale_y = 1.0f;
     bool depth = false;
     uint64_t key = 0;
   };
+  struct Scale {
+    float x = 1.0f, y = 1.0f;
+  };
+  // The scale of the targets with this pitch (shadow maps have their own).
+  Scale ScaleFor(bool depth, uint32_t pitch, uint32_t format);
+  static int32_t ScaleCoord(int32_t v, float s) { return s == 1.0f ? v : int32_t(std::lround(double(v) * s)); }
+  static nvrhi::Rect ScaleRect(const nvrhi::Rect& r, float sx, float sy) {
+    return nvrhi::Rect(ScaleCoord(r.minX, sx), ScaleCoord(r.maxX, sx), ScaleCoord(r.minY, sy),
+                       ScaleCoord(r.maxY, sy));
+  }
+  std::unordered_set<uint32_t> shadow_pitches_;
   HostTarget* GetTarget(bool depth, uint32_t edram_base, uint32_t pitch, uint32_t format,
                         uint32_t height);
   HostTarget* FindTarget(bool depth, uint32_t edram_base, uint32_t pitch, uint32_t format);
@@ -167,6 +198,8 @@ class GameRenderer {
     kknr::HostTexturePlan plan;
     nvrhi::Format format = nvrhi::Format::UNKNOWN;
     bool render_target = false;  // made by a resolve (usable as a blit target)
+    // Resolved from a scaled target: the host texture is the guest's size times this.
+    float scale_x = 1.0f, scale_y = 1.0f;
     std::unordered_map<uint32_t, uint32_t> views;  // view key -> descriptor index
     // Resolves: bumped on every write, and whether the texels are depth
     // values (a depth source into R32F).
@@ -189,7 +222,10 @@ class GameRenderer {
                        kkshaders::TextureDimension dimension, bool base_map);
   HostTexture* UploadTexture(nvrhi::ICommandList* cl, kknr::TextureCache::Entry& entry,
                              const kknr::TextureFetch& fetch);
-  HostTexture* CreateHostTexture(const kknr::HostTexturePlan& plan, bool render_target);
+  HostTexture* CreateHostTexture(const kknr::HostTexturePlan& plan, bool render_target, float scale_x = 1.0f,
+                                 float scale_y = 1.0f);
+  // The scale of the texture BindTexture bound last (1 when none).
+  float bound_scale_x_ = 1.0f, bound_scale_y_ = 1.0f;
   void ReleaseHostTexture(HostTexture* host);
   uint32_t TextureView(HostTexture* host, const kknr::TextureFetch& fetch,
                        kkshaders::TextureDimension dimension, bool base_map);
@@ -231,7 +267,10 @@ class GameRenderer {
     float ndc_scale[3] = {1, 1, 1};
     float ndc_offset[3] = {0, 0, 0};
   };
-  ViewportSetup ComputeViewport(const dev::DeviceView& d, uint32_t width, uint32_t height) const;
+  // width, height: the guest's target size (the vertex shaders' clip space is in guest pixels);
+  // the viewport and scissor are in host pixels (the guest's times the scale).
+  ViewportSetup ComputeViewport(const dev::DeviceView& d, uint32_t width, uint32_t height, float scale_x,
+                                float scale_y) const;
   void ClearRect(nvrhi::ICommandList* cl, HostTarget* color, HostTarget* depth, const nvrhi::Rect& rect,
                  const float rgba[4], bool clear_color, bool clear_depth, bool clear_stencil, float z,
                  uint32_t stencil);
@@ -257,7 +296,7 @@ class GameRenderer {
   std::array<DescriptorTable, kTableCount> tables_;
   nvrhi::BindingLayoutHandle constants_layout_;
   nvrhi::BindingSetHandle constants_set_;
-  nvrhi::BufferHandle vs_constants_, ps_constants_, draw_constants_;
+  nvrhi::BufferHandle vs_constants_, ps_constants_, draw_constants_, scale_constants_;
   std::vector<nvrhi::BindingLayoutHandle> pipeline_layouts_;  // set 0 + the six tables
 
   nvrhi::TextureHandle dummy_2d_, dummy_3d_, dummy_cube_, dummy_array_;

@@ -163,8 +163,8 @@ void GameRenderer::ClearRect(nvrhi::ICommandList* cl, HostTarget* color, HostTar
   gs.pipeline = pipeline;
   gs.framebuffer = fb;
   gs.bindings = {clear_set_};
-  gs.viewport.addViewport(nvrhi::Viewport(float(size_from->width), float(size_from->height)));
-  gs.viewport.addScissorRect(rect);
+  gs.viewport.addViewport(nvrhi::Viewport(float(size_from->host_width), float(size_from->host_height)));
+  gs.viewport.addScissorRect(ScaleRect(rect, size_from->scale_x, size_from->scale_y));
   gs.dynamicStencilRefValue = uint8_t(stencil);
   cl->setGraphicsState(gs);
   ClearConstants c = {{rgba[0], rgba[1], rgba[2], rgba[3]}, std::clamp(z, 0.0f, 1.0f), {0, 0, 0}};
@@ -278,6 +278,9 @@ void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
   w = std::clamp(w, 0, int32_t(source->width) - sx);
   h = std::clamp(h, 0, int32_t(source->height) - sy);
 
+  // The source's scale: the resolved texture gets it, and every rectangle below is in host
+  // pixels (the guest's times it; the clears further down take the guest's).
+  const float tsx = source->scale_x, tsy = source->scale_y;
   const uint8_t* dest_object = call.dest_texture ? memory_.Virtual(call.dest_texture) : nullptr;
   bool copied = false;
   if (dest_object && w > 0 && h > 0) {
@@ -286,11 +289,13 @@ void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
     if (fetch.Type() == 2 && kknr::PlanHostTexture(fetch, plan, nullptr, TextureOptions())) {
       kknr::TextureCache::Entry& entry = textures_.MarkGpuWritten(fetch, frame_);
       auto* host = static_cast<HostTexture*>(entry.host);
+      const bool drawable = kknr::GetHostFormatInfo(plan.format).block_size == 1;
       if (!host || !host->render_target || host->plan.format != plan.format || host->plan.width != plan.width ||
           host->plan.height != plan.height || host->plan.levels != plan.levels || host->plan.layers != plan.layers ||
-          host->plan.dimension != plan.dimension) {
+          host->plan.dimension != plan.dimension || host->scale_x != (drawable ? tsx : 1.0f) ||
+          host->scale_y != (drawable ? tsy : 1.0f)) {
         ReleaseHostTexture(host);
-        host = CreateHostTexture(plan, kknr::GetHostFormatInfo(plan.format).block_size == 1);
+        host = CreateHostTexture(plan, drawable, tsx, tsy);
         entry.host = host;
       }
       if (host) {
@@ -303,7 +308,14 @@ void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
         // against ConvertTexture of what the 360 writes to memory.
         const kknr::ResolveConversion conv =
             kknr::PlanResolveConversion(kknr::ResolveSource{from_depth, format}, fetch, TextureOptions());
-        if (cw > 0 && ch > 0 && slice < plan.layers && level < plan.levels) {
+        // Host pixels. The size is the same on both sides (the origins round on their own).
+        const nvrhi::TextureDesc& hd = host->texture->getDesc();
+        const int32_t hdw = int32_t(std::max(hd.width >> level, 1u)), hdh = int32_t(std::max(hd.height >> level, 1u));
+        const int32_t hsx = ScaleCoord(sx, tsx), hsy = ScaleCoord(sy, tsy);
+        const int32_t hdx = ScaleCoord(dx, host->scale_x), hdy = ScaleCoord(dy, host->scale_y);
+        const int32_t hcw = std::min({ScaleCoord(cw, tsx), hdw - hdx, int32_t(source->host_width) - hsx});
+        const int32_t hch = std::min({ScaleCoord(ch, tsy), hdh - hdy, int32_t(source->host_height) - hsy});
+        if (cw > 0 && ch > 0 && hcw > 0 && hch > 0 && slice < plan.layers && level < plan.levels) {
           const bool bytes_to_depth =
               !from_depth && format == 0 && host->format == nvrhi::Format::R32_FLOAT &&
               (fetch.Format() == kknr::TextureFormat::k_24_8 || fetch.Format() == kknr::TextureFormat::k_24_8_FLOAT);
@@ -314,7 +326,7 @@ void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
             // into a depth texture: the 360 copies the 32-bit word, with R and
             // B exchanged, and the texture reads its top 24 bits.
             const uint32_t identity[4] = {0, 1, 2, 3};
-            copied = Blit(cl, source->texture, sx, sy, cw, ch, host->texture, level, slice, dx, dy, identity,
+            copied = Blit(cl, source->texture, hsx, hsy, hcw, hch, host->texture, level, slice, hdx, hdy, identity,
                           kBlitBytesToDepth);
             if (copied) host->depth = true;
           } else if (conv.method == kknr::ResolveMethod::kUnsupported || conv.scale != 1.0f) {
@@ -327,15 +339,15 @@ void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
             }
           } else if (conv.method == kknr::ResolveMethod::kCopy && host->format == source->format) {
             nvrhi::TextureSlice src_slice, dst_slice;
-            src_slice.setOrigin(uint32_t(sx), uint32_t(sy)).setSize(uint32_t(cw), uint32_t(ch), 1);
-            dst_slice.setOrigin(uint32_t(dx), uint32_t(dy)).setSize(uint32_t(cw), uint32_t(ch), 1)
+            src_slice.setOrigin(uint32_t(hsx), uint32_t(hsy)).setSize(uint32_t(hcw), uint32_t(hch), 1);
+            dst_slice.setOrigin(uint32_t(hdx), uint32_t(hdy)).setSize(uint32_t(hcw), uint32_t(hch), 1)
                 .setMipLevel(level)
                 .setArraySlice(slice);
             cl->copyTexture(host->texture, dst_slice, source->texture, src_slice);
             copied = true;
           } else if (host->render_target) {
             const uint32_t channels[4] = {conv.channels[0], conv.channels[1], conv.channels[2], conv.channels[3]};
-            copied = Blit(cl, source->texture, sx, sy, cw, ch, host->texture, level, slice, dx, dy, channels);
+            copied = Blit(cl, source->texture, hsx, hsy, hcw, hch, host->texture, level, slice, hdx, hdy, channels);
           }
           cl->setTextureState(host->texture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
           if (copied) {
@@ -426,8 +438,10 @@ bool GameRenderer::Present(nvrhi::ICommandList* cl, uint32_t device, nvrhi::ITex
     Logf(LogLevel::kInfo, "rexgpu-native: gamma ramp %u %u %u %u %u (red 0, 64, 128, 192, 255)", ramp[0], ramp[64],
          ramp[128], ramp[192], ramp[255]);
   }
-  return Blit(cl, source->texture, 0, 0, int32_t(std::min(s.width, td.width)), int32_t(std::min(s.height, td.height)),
-              target, 0, 0, 0, 0, channels, use_ramp ? kBlitGammaRamp : 0);
+  // The frame image is the scaled size: the whole back buffer 1:1 in host pixels.
+  return Blit(cl, source->texture, 0, 0, int32_t(std::min(uint32_t(ScaleCoord(int32_t(s.width), source->scale_x)), td.width)),
+              int32_t(std::min(uint32_t(ScaleCoord(int32_t(s.height), source->scale_y)), td.height)), target, 0, 0, 0, 0,
+              channels, use_ramp ? kBlitGammaRamp : 0);
 }
 
 }  // namespace nr

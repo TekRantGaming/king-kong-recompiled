@@ -5,6 +5,7 @@
 #include <rex/system/xmemory.h>
 
 #include "backend/log.h"
+#include "backend/render_scale.h"
 #if NR_GAME_RENDERER
 #include "backend/game_renderer.h"
 #include "backend/shader_library.h"
@@ -192,20 +193,42 @@ Backend::~Backend() { Shutdown(); }
 
 bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& game) {
   SetLogSink(LogToRuntime);
+  RenderScale scale;
+  float shadow_scale = 0.0f;
+#if NR_GAME_RENDERER
+  if (game.enabled) {
+    scale = ParseRenderScale(game.render_scale, width, height);
+    if (!scale.valid) {
+      REXGPU_ERROR("rexgpu-native: render scale '{}' not understood (a number, or WxH): using 1", game.render_scale);
+    }
+    if (game.shadow_scale > 0.0f) shadow_scale = std::clamp(game.shadow_scale, kMinRenderScale, kMaxRenderScale);
+    if (!scale.unit() || shadow_scale > 0.0f) {
+      REXLOG_INFO("rexgpu-native: render scale {:.4g} x {:.4g}, shadow maps {:.4g} (frame image {}x{})", scale.x, scale.y,
+                  shadow_scale > 0.0f ? shadow_scale : scale.x, ScaledSize(width, scale.x), ScaledSize(height, scale.y));
+    }
+  }
+#endif
+  // The frame image is the scaled size: it is what the presenter gets (its upscalers and FXAA
+  // work from it).
   renderer_ = std::make_unique<Renderer>(host_->device());
-  if (!renderer_->Initialize(width, height)) {
+  if (!renderer_->Initialize(ScaledSize(width, scale.x), ScaledSize(height, scale.y))) {
     REXGPU_ERROR("rexgpu-native: renderer initialisation failed ({}x{})", width, height);
     return false;
   }
 #if NR_GAME_RENDERER
   if (game.enabled) {
     shaders_ = std::make_unique<ShaderLibrary>(host_->device(), guest_memory_);
+    shaders_->SetRenderScaleAware(!scale.unit() || (shadow_scale > 0.0f && shadow_scale != 1.0f));
     shaders_->Initialize(game.shader_pack, game.dxc);
     kknr::GuestMemory physical;
     physical.base = memory_->TranslatePhysical(0);
     physical.size = 0x20000000;
     physical.origin = 0;
     auto renderer = std::make_unique<GameRenderer>(host_->device(), guest_memory_, physical, shaders_.get());
+    renderer->options().render_scale_x = scale.x;
+    renderer->options().render_scale_y = scale.y;
+    renderer->options().shadow_scale = shadow_scale;
+    renderer->options().guest_frame_width = width;
     if (renderer->Initialize()) {
       renderer->options().element_endian = game.element_endian;
       renderer->options().flip_front_face = game.flip_front_face;
