@@ -17,15 +17,22 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <chrono>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "backend/api_binding.h"
 #include "backend/draw_state.h"
+#include "backend/frame_log.h"
+#include "backend/pipeline_cache.h"
 #include "backend/game_renderer.h"
 #include "backend/guest_device.h"
 #include "backend/renderer.h"
@@ -36,6 +43,10 @@
 #include "container_writer.h"
 #include "hooks/hook_table.h"
 #include "kknr/guest_texture.h"
+#include "kkshaders/cache.h"
+#include "kkshaders/compiler.h"
+#include "kkshaders/container.h"
+#include "kkshaders/vertex_patch.h"
 #include "xenos_asm.h"
 
 #ifndef NR_TEST_DXC_DIR
@@ -330,6 +341,11 @@ struct Fixture {
       Fail(__FILE__, __LINE__, "GameRenderer::Initialize failed");
       return false;
     }
+    // Pipelines are made on the render thread here: the tests draw once and
+    // read the picture back, so a draw skipped while a worker builds its
+    // pipeline (the plugin's default) would fail them. The asynchronous path
+    // has its own tests (PipelineCache_*).
+    g->options().async_pipelines = false;
     game = g.get();
     renderer->EnableGame(std::move(g));
     sink.renderer = renderer.get();
@@ -751,6 +767,114 @@ TEST(Draw_ConstantsReachShaders) {
 
 // ------------------------------------------------- pipeline state ---
 
+// ------------------------------------------- vertex element endian ---
+//
+// The declaration's element type carries its own endian mode, and the
+// library's buffers need not match it: one buffer can hold a position in
+// 8in32 and a colour in 16in32. With element_endian (the default) each
+// element is read with its own mode; without it the buffer's mode (the
+// fetch constant of the vertex buffer object, 8in32 here) is used for all.
+
+namespace {
+
+uint32_t SwapForEndian(uint32_t v, uint32_t endian) {
+  switch (endian) {
+    case 1: return ((v & 0x00FF00FFu) << 8) | ((v & 0xFF00FF00u) >> 8);
+    case 2: return (v << 24) | ((v & 0xFF00u) << 8) | ((v >> 8) & 0xFF00u) | (v >> 24);
+    case 3: return (v << 16) | (v >> 16);
+    default: return v;
+  }
+}
+uint32_t TypeWithEndian(uint32_t type, uint32_t endian) { return (type & ~(3u << 6)) | (endian << 6); }
+
+// The bytes in memory for a dword that a reader of `endian` turns into `value`.
+void PutStored(std::vector<uint8_t>& out, uint32_t value, uint32_t endian) {
+  const uint32_t stored = SwapForEndian(value, endian);  // the modes are their own inverse
+  for (int s = 0; s < 32; s += 8) out.push_back(uint8_t(stored >> s));
+}
+
+// Position (three floats) and colour, each stored for its own endian mode.
+std::vector<uint8_t> BytesWithEndians(const std::vector<ColorVertex>& vs, uint32_t pos_endian, uint32_t color_endian) {
+  std::vector<uint8_t> out;
+  for (const ColorVertex& v : vs) {
+    for (float c : {v.x, v.y, v.z}) {
+      uint32_t u;
+      std::memcpy(&u, &c, 4);
+      PutStored(out, u, pos_endian);
+    }
+    PutStored(out, v.argb, color_endian);
+  }
+  return out;
+}
+
+// The four quadrants drawn with a declaration saying `decl_*` and a buffer
+// laid out for `data_*`.
+Pixels QuadrantsWithEndians(Fixture& f, uint32_t decl_pos, uint32_t decl_color, uint32_t data_pos,
+                            uint32_t data_color) {
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  p.decl = f.mem.NewDeclaration({{0, 0, TypeWithEndian(kDeclFloat3, decl_pos), kUsagePosition, 0},
+                                 {0, 12, TypeWithEndian(kDeclColor, decl_color), kUsageColor, 0}});
+  f.Clear(kClearTarget0, 0xFF000000);
+  std::vector<ColorVertex> v;
+  for (int q = 0; q < 4; ++q) {
+    auto t = QuadTriangles(kQuadrants[q], kQuadrantColors[q]);
+    v.insert(v.end(), t.begin(), t.end());
+  }
+  f.SetDeclaration(p.decl);
+  f.SetShaders(p.vs, p.ps_interp);
+  f.SetStream(0, f.NewVertexBuffer(BytesWithEndians(v, data_pos, data_color)), 0, 16);
+  f.Draw(4, 0, uint32_t(v.size()));
+  return f.Present(rt);
+}
+
+}  // namespace
+
+TEST(Endian_ElementsReadWithTheirOwnMode) {
+  // The colour in each of the other three modes, the position in the buffer's.
+  for (uint32_t mode : {0u, 1u, 3u}) {
+    Fixture f;
+    if (!f.Init()) return;
+    CHECK(f.game->options().element_endian);
+    Pixels px = QuadrantsWithEndians(f, 2, mode, 2, mode);
+    f.CheckQuadrantColors(px, __LINE__);
+    CHECK_EQ(f.game->stats().draws, uint64_t(1));
+  }
+}
+
+TEST(Endian_OneBufferWithDifferentModes) {
+  // Position 16in32, colour 8in16, and then position none with colour 8in32:
+  // elements of one buffer that disagree with each other and with the buffer.
+  const uint32_t modes[2][2] = {{3, 1}, {0, 2}};
+  for (const auto& m : modes) {
+    Fixture f;
+    if (!f.Init()) return;
+    Pixels px = QuadrantsWithEndians(f, m[0], m[1], m[0], m[1]);
+    f.CheckQuadrantColors(px, __LINE__);
+  }
+}
+
+TEST(Endian_DeclarationWinsOverTheBuffer) {
+  // The declaration says "none" for the colour but the bytes are laid out for
+  // 8in32: the colour is read as the little-endian dword, bytes reversed.
+  Fixture f;
+  if (!f.Init()) return;
+  Pixels px = QuadrantsWithEndians(f, 2, 0, 2, 2);
+  Rgb want[4];
+  for (int q = 0; q < 4; ++q) want[q] = FromArgb(SwapForEndian(kQuadrantColors[q], 2));
+  f.CheckQuadrants(px, want, __LINE__);
+}
+
+TEST(Endian_LegacyUsesTheBuffersMode) {
+  // element_endian off: every element is read with the buffer's mode (8in32),
+  // whatever the declaration says.
+  Fixture f;
+  if (!f.Init()) return;
+  f.game->options().element_endian = false;
+  Pixels px = QuadrantsWithEndians(f, 3, 1, 2, 2);
+  f.CheckQuadrantColors(px, __LINE__);
+}
+
 TEST(State_Blend) {
   Fixture f;
   if (!f.Init()) return;
@@ -1158,5 +1282,425 @@ TEST(Textures_UploadSampleAndInvalidate) {
   CHECK_EQ(f.game->stats().texture_uploads, uint64_t(2));
   CHECK_EQ(f.game->stats().texture_failures, uint64_t(0));
 }
+
+// ------------------------------------------------------------- frame log ---
+//
+// REX_DEV_FRAME_LOG lines from the game renderer, against values worked out here from the
+// containers and the registers the fixture sets (backend/frame_log.h has the formats).
+
+namespace {
+
+struct LoggedFixture {
+  Fixture f;
+  std::vector<std::string> lines;
+  bool Init(const char* option = "0") {
+    if (!f.Init()) return false;
+    f.game->SetFrameLog(FrameLogConfig::Parse(option), [this](const std::string& l) { lines.push_back(l); });
+    return true;
+  }
+  std::vector<std::string> With(const char* prefix) const {
+    std::vector<std::string> out;
+    for (const std::string& l : lines)
+      if (l.rfind(prefix, 0) == 0) out.push_back(l);
+    return out;
+  }
+};
+
+// The hash the Xenos log would print for a vertex shader: the container's microcode patched for
+// the colour declaration (position FLOAT3 at 0, D3DCOLOR at 12) and stream 0's stride.
+uint64_t ExpectedVertexHash(const std::vector<uint8_t>& container, uint32_t stride, uint32_t color_offset = 12) {
+  kkshaders::ParseResult parsed = kkshaders::parseContainer(container);
+  const auto element = [](uint8_t stream, uint16_t offset, uint32_t type, kkshaders::DeclUsage usage) {
+    kkshaders::DeclElement e;
+    e.stream = stream;
+    e.offset = offset;
+    e.format = uint8_t(type & 63);
+    e.isSigned = ((type >> 8) & 1) != 0;
+    e.integer = ((type >> 9) & 1) != 0;
+    e.usage = usage;
+    return e;
+  };
+  const kkshaders::DeclElement decl[] = {element(0, 0, kDeclFloat3, kkshaders::DeclUsage::Position),
+                                         element(0, uint16_t(color_offset), kDeclColor, kkshaders::DeclUsage::Color)};
+  uint32_t strides[16] = {stride};
+  return kkshaders::hashMicrocode(kkshaders::patchVertexFetches(parsed.info, decl, strides).ucode);
+}
+
+}  // namespace
+
+TEST(FrameLog_OffByDefault) {
+  Fixture f;
+  if (!f.Init()) return;
+  CHECK(f.game->frame_log() == nullptr);
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  f.DrawQuadrants(p);
+  f.Present(rt);
+  CHECK_EQ(f.game->stats().draws, uint64_t(1));
+}
+
+TEST(FrameLog_OneFrameOfClearDrawAndPresent) {
+  LoggedFixture t;
+  if (!t.Init()) return;
+  Fixture& f = t.f;
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  f.Present(rt);  // the first swap: the frame starts
+  f.Clear(kClearTarget0, 0xFF000000);
+  f.DrawQuadrants(p);
+  f.Present(rt);  // ends it
+  f.DrawQuadrants(p);
+  f.Present(rt);  // quiet again
+  if (t.lines.size() != 5) {
+    for (const std::string& l : t.lines) std::printf("  %s\n", l.c_str());
+  }
+  CHECK_EQ(t.lines.size(), size_t(5));
+  if (t.lines.size() != 5) return;
+  CHECK_EQ(t.lines[0], std::string("Frame log: frame start"));
+  // A clear goes through the resolve path: a null copy that clears.
+  CHECK_EQ(t.lines[1],
+           std::string("Frame log: resolve 0 rt0@0:f0 -> 00000000 format 0 pitch 0 height 0 command 3 clear color 1 depth 0 "
+                       "off 0,0 surface pitch 64 msaa 1"));
+  FrameLogDraw want;
+  want.ps_hash = kkshaders::parseContainer(PixelShaderInterpolator()).info.ucodeHash;
+  want.vs_hash = ExpectedVertexHash(VertexShader(kColor, F_8_8_8_8), 16);
+  want.pitch = kSize;
+  want.msaa = 1;
+  want.scissor_w = want.scissor_h = kSize;
+  want.targets = {{0, 0, 0}};
+  want.count = 24;
+  CHECK_EQ(t.lines[2], FrameLog::FormatDraw(0, want));
+  // The Present's own copy of the back buffer (no front buffer texture in the fixture).
+  CHECK(t.lines[3].rfind("Frame log: resolve 1 rt0@0:f0 -> ", 0) == 0);
+  CHECK_EQ(t.lines[4], std::string("Frame log: frame end, 1 draws, 2 resolves"));
+}
+
+TEST(FrameLog_VertexHashFollowsTheStrides) {
+  // The same shader and declaration with a wider vertex: the library patches another copy.
+  LoggedFixture t;
+  if (!t.Init()) return;
+  Fixture& f = t.f;
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  f.Present(rt);
+  f.DrawQuadrants(p);
+  // Stride 20: each vertex followed by a padding dword.
+  std::vector<uint8_t> wide;
+  for (const ColorVertex& v : QuadTriangles(kFull, 0xFFFFFFFF)) {
+    PutBEFloat(wide, v.x);
+    PutBEFloat(wide, v.y);
+    PutBEFloat(wide, v.z);
+    PutBE32(wide, v.argb);
+    PutBE32(wide, 0);
+  }
+  f.SetStream(0, f.NewVertexBuffer(wide), 0, 20);
+  f.Draw(4, 0, 6);
+  f.Present(rt);
+  std::vector<std::string> draws = t.With("Frame log: draw ");
+  CHECK_EQ(draws.size(), size_t(2));
+  if (draws.size() != 2) return;
+  const std::vector<uint8_t> container = VertexShader(kColor, F_8_8_8_8);
+  auto vs_of = [](const std::string& line) { return line.substr(line.find(" vs ") + 4, 16); };
+  char want16[17], want20[17];
+  std::snprintf(want16, sizeof(want16), "%016llX", static_cast<unsigned long long>(ExpectedVertexHash(container, 16)));
+  std::snprintf(want20, sizeof(want20), "%016llX", static_cast<unsigned long long>(ExpectedVertexHash(container, 20)));
+  CHECK_EQ(vs_of(draws[0]), std::string(want16));
+  CHECK_EQ(vs_of(draws[1]), std::string(want20));
+  CHECK(vs_of(draws[0]) != vs_of(draws[1]));
+  // Neither is the template's hash (what the shader library keys by).
+  char tmpl[17];
+  std::snprintf(tmpl, sizeof(tmpl), "%016llX", static_cast<unsigned long long>(kkshaders::parseContainer(container).info.ucodeHash));
+  CHECK(vs_of(draws[0]) != std::string(tmpl));
+}
+
+TEST(FrameLog_ResolveIntoATexture) {
+  LoggedFixture t;
+  if (!t.Init()) return;
+  Fixture& f = t.f;
+  const uint32_t tex = f.NewTexture(Desc(kknr::TextureFormat::k_8_8_8_8, kknr::Endian::kNone, kknr::kSwizzleXYZW));
+  const uint32_t rt = f.BindMainSurface();
+  f.Present(rt);
+  f.Resolve(0x100 /* clear the colour too */, 0, tex, 0, 0xFF000000);
+  f.Present(rt);
+  std::vector<std::string> resolves = t.With("Frame log: resolve 0 ");
+  CHECK_EQ(resolves.size(), size_t(1));
+  if (resolves.empty()) return;
+  // Source rt0 at EDRAM 0 in k_8_8_8_8 (format 6 as a texture), a 64x64 destination, the copy
+  // (the formats agree), clearing the colour.
+  CHECK(resolves[0].find(" rt0@0:f0 -> ") != std::string::npos);
+  CHECK(resolves[0].find(" format 6 pitch 64 height 64 command 0 clear color 1 depth 0 ") != std::string::npos);
+}
+
+TEST(FrameLog_DrawWhosePipelineIsNotReady) {
+  // The plugin's default: a pipeline is made on a worker, the draw waits for the next frame, and
+  // the log says so (the line the Vulkan Xenos log has for its placeholder pipelines).
+  LoggedFixture t;
+  if (!t.Init("0,2")) return;
+  Fixture& f = t.f;
+  f.game->options().async_pipelines = true;
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  f.Present(rt);
+  f.DrawQuadrants(p);
+  CHECK_EQ(f.game->stats().skipped_pending, uint64_t(1));
+  f.Present(rt);
+  for (int i = 0; i < 500 && f.game->stats().pipelines == 0; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    f.DrawQuadrants(p);  // polls the worker's result
+    if (f.game->stats().pipelines) break;
+  }
+  f.Present(rt);
+  const std::vector<std::string> notes = t.With("Frame log: draw 0 pipeline ");
+  CHECK(!notes.empty());
+  if (!notes.empty()) CHECK_EQ(notes[0], std::string("Frame log: draw 0 pipeline placeholder (skipped)"));
+}
+
+TEST(FrameLog_TheHarnessReadsTheLines) {
+  // The lines through tests/compare.py's own parser (the tool that diffs them against a golden
+  // log): it must find the frame, the draw's shaders and no line it does not understand.
+#ifdef NR_COMPARE_PY
+  LoggedFixture t;
+  if (!t.Init()) return;
+  Fixture& f = t.f;
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  f.Present(rt);
+  f.Clear(kClearTarget0, 0xFF000000);
+  f.DrawQuadrants(p);
+  f.Present(rt);
+  const std::string path = "nr_game_tests_framelog.txt";
+  {
+    std::ofstream out(path);
+    for (const std::string& l : t.lines) out << "[warning] [gpu] " << l << "\n";
+  }
+  const std::string command = std::string("python3 -I \"") + NR_COMPARE_PY + "\" framelog " + path + " > " + path + ".out 2>&1";
+  CHECK_EQ(std::system(command.c_str()), 0);
+  std::ifstream in(path + ".out");
+  std::stringstream text;
+  text << in.rdbuf();
+  CHECK(text.str().find("# frame 0: 1 draws, 2 resolves") != std::string::npos);
+  CHECK(text.str().find("draw ps=") != std::string::npos);
+  CHECK(text.str().find("not understood") == std::string::npos && text.str().find("unknown") == std::string::npos);
+#endif
+}
+
+// -------------------------------------------------------- pipeline cache ---
+//
+// Cold pipeline caches: the descriptions the draws need go to a file under the cache root and
+// are created on the workers at the next start; with pipeline_wait a draw waits for its
+// pipeline instead of being skipped. Synthetic draws throughout (the quadrant scene).
+
+namespace {
+
+std::string CachePath(const char* name) {
+  const std::filesystem::path dir = std::filesystem::temp_directory_path() / "nr_game_tests_pipelines";
+  std::filesystem::create_directories(dir);
+  const std::string path = (dir / (std::string(name) + ".pipelines")).string();
+  std::filesystem::remove(path);
+  return path;
+}
+
+// A pack with the colour scene's shaders (what db-build makes for the whole database), so the
+// library can make them from their hashes alone.
+std::string MakePack(const char* name) {
+  const std::string path = CachePath(name) + ".pack";
+  std::string error;
+  CHECK(kkshaders::loadDxc(NR_TEST_DXC_DIR, &error));
+  kkshaders::Compiler compiler;
+  std::vector<kkshaders::CompiledShader> shaders;
+  for (const std::vector<uint8_t>& container :
+       {VertexShader(kColor, F_8_8_8_8), PixelShaderInterpolator(), PixelShaderConstants()}) {
+    kkshaders::ParseResult parsed = kkshaders::parseContainer(container);
+    kkshaders::BuildResult built = kkshaders::buildShader(parsed.info, compiler, false);
+    CHECK(built.ok);
+    if (built.ok) shaders.push_back(std::move(built.shader));
+  }
+  CHECK(kkshaders::ShaderPack::write(path, shaders, &error));
+  return path;
+}
+
+// One frame of the quadrant scene, presented and read back.
+Pixels DrawQuadrantFrame(Fixture& f, uint32_t rt, const Fixture::ColorPipeline& p) {
+  f.Clear(kClearTarget0, 0xFF000000);
+  f.DrawQuadrants(p);
+  return f.Present(rt);
+}
+
+// A first run that only records: the scene drawn once into `path`.
+void RecordTheScene(const std::string& path, uint64_t expect_records = 1) {
+  Fixture f;
+  if (!f.Init()) return;
+  CHECK(f.game->SetPipelineCache(path));
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  DrawQuadrantFrame(f, rt, p);
+  CHECK_EQ(f.game->stats().cache_recorded, expect_records);
+}
+
+}  // namespace
+
+TEST(PipelineCache_RecordsEachPipelineOnce) {
+  const std::string path = CachePath("record_once");
+  {
+    Fixture f;
+    if (!f.Init()) return;
+    CHECK(f.game->SetPipelineCache(path));
+    const uint32_t rt = f.BindMainSurface();
+    auto p = f.MakeColorPipeline();
+    DrawQuadrantFrame(f, rt, p);
+    DrawQuadrantFrame(f, rt, p);
+    CHECK_EQ(f.game->stats().cache_recorded, uint64_t(1));
+    f.Reg(dev::kRbColorMask, 0x7777);  // another write mask: another pipeline
+    DrawQuadrantFrame(f, rt, p);
+    DrawQuadrantFrame(f, rt, p);
+    CHECK_EQ(f.game->stats().cache_recorded, uint64_t(2));
+    CHECK_EQ(f.game->stats().draw_pipelines, uint64_t(2));
+  }
+  PipelineCacheFile file;
+  CHECK(file.Open(path));
+  CHECK_EQ(file.loaded().size(), size_t(2));
+  if (file.loaded().size() == 2) {
+    const PipelineRecord& r = file.loaded()[0];
+    CHECK_EQ(r.color_count, 1u);
+    CHECK_EQ(r.color_mask[0], 0xFu);
+    CHECK(r.ps_hash != 0 && r.vs_hash != 0);
+    CHECK_EQ(file.loaded()[1].color_mask[0], 0x7u);
+  }
+}
+
+TEST(PipelineCache_NothingIsRecordedWhenOff) {
+  Fixture f;
+  if (!f.Init()) return;
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  DrawQuadrantFrame(f, rt, p);
+  CHECK_EQ(f.game->stats().cache_recorded, uint64_t(0));
+  CHECK_EQ(f.game->stats().prewarm_queued, uint64_t(0));
+}
+
+TEST(PipelineCache_PrewarmFromThePackBeforeTheGameCreatesAnything) {
+  const std::string path = CachePath("prewarm_pack");
+  const std::string pack = MakePack("prewarm_pack");
+  RecordTheScene(path);
+  // The next run: the cache is read at start, before a shader or a draw exists.
+  Fixture f;
+  if (!f.Init()) return;
+  f.shaders->Initialize(pack, NR_TEST_DXC_DIR);
+  f.game->options().async_pipelines = true;
+  CHECK(f.game->SetPipelineCache(path));
+  CHECK_EQ(f.game->stats().prewarm_queued, uint64_t(1));
+  CHECK_EQ(f.game->stats().prewarm_deferred, uint64_t(0));
+  f.game->WaitForPrewarm();
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  Pixels px = DrawQuadrantFrame(f, rt, p);
+  // The first draw found its pipeline made: not skipped, no wait, no second creation.
+  f.CheckQuadrantColors(px, __LINE__);
+  CHECK_EQ(f.game->stats().draws, uint64_t(1));
+  CHECK_EQ(f.game->stats().skipped_pending, uint64_t(0));
+  CHECK_EQ(f.game->stats().pipeline_waits, uint64_t(0));
+  CHECK_EQ(f.game->stats().draw_pipelines, uint64_t(1));
+  CHECK_EQ(f.game->stats().cache_recorded, uint64_t(0));  // known already
+}
+
+TEST(PipelineCache_PrewarmWaitsForShadersTheGameCreates) {
+  const std::string path = CachePath("prewarm_late");
+  RecordTheScene(path);
+  // No pack: the shaders exist when the game creates them, and the swap that follows tries again.
+  Fixture f;
+  if (!f.Init()) return;
+  f.game->options().async_pipelines = true;
+  CHECK(f.game->SetPipelineCache(path));
+  CHECK_EQ(f.game->stats().prewarm_queued, uint64_t(0));
+  CHECK_EQ(f.game->stats().prewarm_deferred, uint64_t(1));
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  f.Present(rt);  // the frame's end retries
+  CHECK_EQ(f.game->stats().prewarm_queued, uint64_t(1));
+  f.game->WaitForPrewarm();
+  Pixels px = DrawQuadrantFrame(f, rt, p);
+  f.CheckQuadrantColors(px, __LINE__);
+  CHECK_EQ(f.game->stats().draws, uint64_t(1));
+  CHECK_EQ(f.game->stats().skipped_pending, uint64_t(0));
+}
+
+TEST(PipelineCache_RecordsOfShadersThatNeverComeStayHarmless) {
+  const std::string path = CachePath("unknown_shaders");
+  {
+    PipelineCacheFile file;
+    CHECK(file.Open(path));
+    PipelineRecord r;
+    r.vs_hash = 0xDEAD;
+    r.ps_hash = 0xBEEF;
+    r.topology = uint32_t(nvrhi::PrimitiveType::TriangleList);
+    r.color_count = 1;
+    r.color_format[0] = uint32_t(nvrhi::Format::RGBA8_UNORM);
+    r.color_mask[0] = 0xF;
+    file.Append(r);
+  }
+  Fixture f;
+  if (!f.Init()) return;
+  f.game->options().async_pipelines = true;
+  CHECK(f.game->SetPipelineCache(path));
+  CHECK_EQ(f.game->stats().prewarm_deferred, uint64_t(1));
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  f.game->options().pipeline_wait = true;
+  Pixels px = DrawQuadrantFrame(f, rt, p);
+  f.CheckQuadrantColors(px, __LINE__);
+  CHECK_EQ(f.game->stats().draws, uint64_t(1));
+  CHECK_EQ(f.game->stats().prewarm_failed, uint64_t(0));
+}
+
+TEST(PipelineWait_TheDrawWaitsInsteadOfBeingSkipped) {
+  // Default: the draw is skipped while its pipeline is made. With pipeline_wait it waits for it.
+  {
+    Fixture f;
+    if (!f.Init()) return;
+    f.game->options().async_pipelines = true;
+    const uint32_t rt = f.BindMainSurface();
+    auto p = f.MakeColorPipeline();
+    DrawQuadrantFrame(f, rt, p);
+    CHECK_EQ(f.game->stats().skipped_pending, uint64_t(1));
+    CHECK_EQ(f.game->stats().pipeline_waits, uint64_t(0));
+  }
+  Fixture f;
+  if (!f.Init()) return;
+  f.game->options().async_pipelines = true;
+  f.game->options().pipeline_wait = true;
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  Pixels px = DrawQuadrantFrame(f, rt, p);
+  f.CheckQuadrantColors(px, __LINE__);
+  CHECK_EQ(f.game->stats().draws, uint64_t(1));
+  CHECK_EQ(f.game->stats().skipped_pending, uint64_t(0));
+  CHECK_EQ(f.game->stats().pipeline_waits, uint64_t(1));
+  CHECK_EQ(f.game->stats().draw_pipelines, uint64_t(1));
+  // The second frame finds it made: no wait.
+  DrawQuadrantFrame(f, rt, p);
+  CHECK_EQ(f.game->stats().pipeline_waits, uint64_t(1));
+}
+
+TEST(PipelineWait_AlsoWaitsForAPrewarmInFlight) {
+  // The prewarm queued the pipeline and the worker is on it when the draw comes: the draw waits for
+  // that job and does not queue a second.
+  const std::string path = CachePath("wait_prewarm");
+  const std::string pack = MakePack("wait_prewarm");
+  RecordTheScene(path);
+  Fixture f;
+  if (!f.Init()) return;
+  f.shaders->Initialize(pack, NR_TEST_DXC_DIR);
+  f.game->options().async_pipelines = true;
+  f.game->options().pipeline_wait = true;
+  CHECK(f.game->SetPipelineCache(path));
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  Pixels px = DrawQuadrantFrame(f, rt, p);  // no WaitForPrewarm: the draw waits if it is not done
+  f.CheckQuadrantColors(px, __LINE__);
+  CHECK_EQ(f.game->stats().draws, uint64_t(1));
+  CHECK_EQ(f.game->stats().skipped_pending, uint64_t(0));
+  CHECK_EQ(f.game->stats().draw_pipelines, uint64_t(1));
+}
+
 
 NR_TEST_MAIN()

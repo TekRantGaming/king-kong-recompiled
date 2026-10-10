@@ -12,6 +12,14 @@ target_link_libraries(nr_draw_tests PRIVATE nr_draw nr_hooks)
 target_compile_definitions(nr_draw_tests PRIVATE NR_SOURCE_DIR="${NR_ROOT}")
 add_test(NAME nr_draw_tests COMMAND nr_draw_tests)
 
+add_executable(nr_frame_log_tests frame_log_tests.cpp)
+target_link_libraries(nr_frame_log_tests PRIVATE nr_draw)
+add_test(NAME nr_frame_log_tests COMMAND nr_frame_log_tests)
+
+add_executable(nr_pipeline_cache_tests pipeline_cache_tests.cpp)
+target_link_libraries(nr_pipeline_cache_tests PRIVATE nr_draw)
+add_test(NAME nr_pipeline_cache_tests COMMAND nr_pipeline_cache_tests)
+
 add_executable(nr_trace_replay trace_replay_main.cpp)
 target_link_libraries(nr_trace_replay PRIVATE nr_draw nr_hooks)
 
@@ -67,7 +75,8 @@ if(NR_HAS_VULKAN AND NR_GAME_RENDERER)
         "${NR_ROOT}/shaders/tests/xenos_asm.cpp" "${NR_ROOT}/shaders/tests/container_writer.cpp")
     target_include_directories(nr_game_tests PRIVATE "${NR_ROOT}/shaders/tests")
     target_link_libraries(nr_game_tests PRIVATE nr_renderer nr_hooks ${CMAKE_DL_LIBS})
-    target_compile_definitions(nr_game_tests PRIVATE NR_TEST_DXC_DIR="${NR_DXC_DIR}")
+    target_compile_definitions(nr_game_tests PRIVATE NR_TEST_DXC_DIR="${NR_DXC_DIR}"
+                              NR_COMPARE_PY="${NR_ROOT}/tests/compare.py")
     add_test(NAME nr_game_tests
              COMMAND ${Python3_EXECUTABLE} -I "${CMAKE_CURRENT_SOURCE_DIR}/check_validation.py"
                      $<TARGET_FILE:nr_game_tests>)

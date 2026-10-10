@@ -179,6 +179,7 @@ void GameRenderer::ClearRect(nvrhi::ICommandList* cl, HostTarget* color, HostTar
 void GameRenderer::Clear(nvrhi::ICommandList* cl, const ClearCall& call) {
   dev::DeviceView d(call.device ? memory_.Virtual(call.device) : nullptr);
   if (!d.valid() || !(call.color || call.depth || call.stencil)) return;
+  if (frame_log_ && frame_log_->enabled()) LogClear(call, d);
   ProcessInvalidations();
   const uint32_t pitch = d.u32(dev::kRbSurfaceInfo) & 0x3FFF;
   if (!pitch) return;
@@ -242,6 +243,7 @@ void GameRenderer::Clear(nvrhi::ICommandList* cl, const ClearCall& call) {
 void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
   dev::DeviceView d(call.device ? memory_.Virtual(call.device) : nullptr);
   if (!d.valid()) return;
+  if (frame_log_ && frame_log_->enabled()) LogResolve(call, d);
   ProcessInvalidations();
   ++stats_.resolves;
   const kknr::ResolveFlags flags{call.flags};
@@ -385,6 +387,7 @@ void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
 bool GameRenderer::Present(nvrhi::ICommandList* cl, uint32_t device, nvrhi::ITexture* target) {
   dev::DeviceView d(device ? memory_.Virtual(device) : nullptr);
   if (!d.valid()) return false;
+  if (frame_log_ && frame_log_->enabled()) LogSwap(d);
   const uint32_t back_buffer = d.u32(dev::kBackBuffer);
   const uint8_t* object = back_buffer ? memory_.Virtual(back_buffer) : nullptr;
   dev::SurfaceInfo s;
