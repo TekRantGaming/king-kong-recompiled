@@ -129,3 +129,23 @@ if(EXISTS "${KKSHADERS_DATABASE}")
     add_test(NAME database COMMAND kkshaders_tool db-build "${KKSHADERS_DATABASE}"
         --out "${CMAKE_CURRENT_BINARY_DIR}/db-out" ${KK_TEST_ARGS})
 endif()
+
+# What the translated shaders compute: a reference interpreter for Xenos microcode and a
+# differential test that runs the translator's output on a Vulkan device (lavapipe without a
+# GPU) against it (tests/gpu_tests.cpp). Needs the Vulkan loader and headers.
+find_package(Vulkan QUIET)
+if(Vulkan_FOUND)
+    add_executable(kkshaders_gpu_tests tests/xenos_asm.cpp tests/container_writer.cpp tests/corpus.cpp
+        tests/random_program.cpp tests/xenos_interp.cpp tests/vk_harness.cpp tests/gpu_tests.cpp)
+    target_include_directories(kkshaders_gpu_tests PRIVATE tests)
+    target_link_libraries(kkshaders_gpu_tests PRIVATE kkshaders Vulkan::Vulkan Threads::Threads)
+    add_test(NAME interpreter COMMAND kkshaders_gpu_tests interp)
+    add_test(NAME gpu COMMAND kkshaders_gpu_tests gpu --dxc "${KKSHADERS_DXC_DIR}" --out "${CMAKE_CURRENT_BINARY_DIR}/gpu-out")
+    set(_kk_lvp "/usr/share/vulkan/icd.d/lvp_icd.json")
+    if(EXISTS "${_kk_lvp}")
+        set_tests_properties(gpu PROPERTIES ENVIRONMENT "VK_ICD_FILENAMES=${_kk_lvp}")
+    endif()
+    set_tests_properties(gpu PROPERTIES TIMEOUT 3600)
+else()
+    message(STATUS "kkshaders: Vulkan not found, the GPU differential test is skipped")
+endif()
