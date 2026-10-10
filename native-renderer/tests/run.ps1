@@ -13,7 +13,7 @@
 [CmdletBinding()]
 param(
   [string]$Plugin = 'xenos',
-  [string]$Scenes = 'all',
+  [string[]]$Scenes = @('all'),
   [switch]$Golden,
   [switch]$Force,
   [string]$Out = '',
@@ -34,6 +34,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $compare = Join-Path $PSScriptRoot 'compare.py'
+# -Scenes title,pause arrives as an array from PowerShell and as one "title,pause" string from cmd or bash.
+$SceneList = ($Scenes -join ',')
 if (-not $Exe) { $Exe = Join-Path $repo 'kk\out\build\kk-dev\king_kong.exe' }
 if (-not $GameData) { $GameData = Join-Path $repo 'kk\assets' }
 foreach ($p in @($Exe, $GameData, $UserData)) {
@@ -56,7 +58,7 @@ function Invoke-Py([string[]]$PyArgs) {
 }
 
 # What to launch: one game run per group of scenes (see scenes.json).
-$planArgs = @('plan', '--scenes', $Scenes, '--plugin', $Plugin, '--golden-root', $GoldenRoot)
+$planArgs = @('plan', '--scenes', $SceneList, '--plugin', $Plugin, '--golden-root', $GoldenRoot)
 if ($Golden) { $planArgs += '--golden' }
 if ($NoFrameLog) { $planArgs += '--no-frame-log' }
 $r = Invoke-Py $planArgs
@@ -147,7 +149,7 @@ foreach ($run in $plan.runs) {
     foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k], 'Process') }
   }
   # --name=value forms: Windows PowerShell drops empty arguments when it calls a program.
-  $collect = @('collect', '--run', $run.name, '--run-dir', $runDir, '--out-root', $root, '--scenes', $Scenes,
+  $collect = @('collect', '--run', $run.name, '--run-dir', $runDir, '--out-root', $root, '--scenes', $SceneList,
     "--plugin=$Plugin", "--label=$Label", "--trigger=$($run.env.REX_DEV_FRAME_LOG)")
   if ($Golden) { $collect += '--golden' }
   $r = Invoke-Py $collect
@@ -160,7 +162,7 @@ if ($Golden) {
   exit $status
 }
 if ($NoCompare) { exit $status }
-$r = Invoke-Py @('compare', '--golden-root', $GoldenRoot, '--test-root', $root, '--scenes', $Scenes, '--plugin', $Plugin)
+$r = Invoke-Py @('compare', '--golden-root', $GoldenRoot, '--test-root', $root, '--scenes', $SceneList, '--plugin', $Plugin)
 Write-Output $r.out
 if ($r.code -ne 0) { exit $r.code }
 exit $status

@@ -305,6 +305,13 @@ def cmd_collect(a) -> int:
             json.dump(meta, f, indent=1)
     runs_dir = out_root / "_runs"
     runs_dir.mkdir(parents=True, exist_ok=True)
+    if not fl_meta:
+        # A run of only some of its scenes may take no frame log: keep the clock offset measured before.
+        try:
+            with open(runs_dir / f"{a.run}.json", encoding="utf-8") as f:
+                fl_meta = json.load(f).get("frame_log") or {}
+        except (OSError, ValueError):
+            pass
     run_meta = {
         "run": a.run,
         "plugin": a.plugin,

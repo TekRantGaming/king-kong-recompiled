@@ -83,7 +83,7 @@
     "frames": 2
    }
   },
-  "kong": {
+  "rescue": {
    "from": "menu",
    "script": "12:A,18:A,24:A,30.0:RIGHT,30.6:RIGHT,31.2:RIGHT,31.8:RIGHT,32.4:RIGHT,33.0:RIGHT,33.6:RIGHT,34.2:RIGHT,34.8:RIGHT,35.4:RIGHT,36.0:RIGHT,36.6:RIGHT,37.2:RIGHT,37.8:RIGHT,38.4:RIGHT,39.0:RIGHT,39.6:RIGHT,40.2:RIGHT,40.8:RIGHT,41.4:RIGHT,42.0:RIGHT,42.6:RIGHT,43.2:RIGHT,43.8:RIGHT,44.4:RIGHT,45.0:RIGHT,45.6:RIGHT,48:A",
    "frame_log": {
@@ -192,13 +192,13 @@
    "run": "vrex",
    "description": "The loading screen for V-Rex (chapter name, LOADING and the sweeping picture).",
    "times": [
+    37.8,
     38.0,
-    38.4,
-    38.8
+    38.2
    ],
    "golden_times": {
-    "from": 37.4,
-    "to": 39.6,
+    "from": 37.5,
+    "to": 38.5,
     "step": 0.1
    },
    "thresholds": {
@@ -322,7 +322,7 @@
   },
   {
    "name": "kong_cutscene",
-   "run": "kong",
+   "run": "rescue",
    "description": "Kong to the Rescue (chapter select entry 27): the opening cutscene, Kong facing the V-Rex in the jungle.",
    "times": [
     53.0,
@@ -343,7 +343,7 @@
   },
   {
    "name": "kong",
-   "run": "kong",
+   "run": "rescue",
    "description": "Kong to the Rescue gameplay: Jack with a spear behind the rocks, a V-Rex coming in, fires and rain.",
    "times": [
     61.0,
