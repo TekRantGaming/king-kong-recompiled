@@ -28,6 +28,11 @@ class D3D12Host final : public HostDevice {
     desc.errorCB = GetMessageCallback();
     desc.pDevice = provider_.GetDevice();
     desc.pGraphicsCommandQueue = provider_.GetDirectQueue();
+    // The game renderer's bindless tables (backend/game_renderer.cpp): about
+    // 35,000 views and 1,024 samplers; a shader-visible sampler heap holds at
+    // most 2,048.
+    desc.shaderResourceViewHeapSize = 65536;
+    desc.samplerHeapSize = 2048;
     device_ = nvrhi::d3d12::createDevice(desc);
     if (!device_) {
       return false;

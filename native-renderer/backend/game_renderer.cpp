@@ -175,7 +175,7 @@ bool GameRenderer::Initialize() {
       {kTex3D, nvrhi::BindingLayoutItem::Texture_SRV(2), 256},
       {kTexCube, nvrhi::BindingLayoutItem::Texture_SRV(3), 2048},
       {kTex2DArray, nvrhi::BindingLayoutItem::Texture_SRV(4), 256},
-      {kSamplers, nvrhi::BindingLayoutItem::Sampler(5), 2048},
+      {kSamplers, nvrhi::BindingLayoutItem::Sampler(5), 1024},
       {kBuffers, nvrhi::BindingLayoutItem::RawBuffer_SRV(6), 16384},
   };
   pipeline_layouts_ = {constants_layout_};
