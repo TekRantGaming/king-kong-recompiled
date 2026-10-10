@@ -1,9 +1,9 @@
 # Stream 04: the backend and the `rexgpu-native` plugin
 
-Status, 10 October 2026: milestones 1, 2 and 3 run in the game on Windows, on Vulkan (the primary API, built
-against a Vulkan-enabled SDK from source) and on D3D12, proven with the game's own frame captures; see
-"Windows: status and how it was proven" below. The cloud session (branch `cloud-04-backend`) built and
-verified the pieces on Linux without the game first.
+Status, 10 October 2026 (Phase 2): the game renderer draws the game with its own translated shaders, textures,
+states, render targets and resolves. On Windows with Vulkan **all 13 golden scenes pass**
+(`F:\KK-native-renderer\runs\native-20261010-172553`); see "Phase 2: the game renderer" below. Milestones 1-3
+(Phase 1) are described further down; the placeholder pipeline remains behind `--native_game=false`.
 
 ## Layout
 
@@ -14,7 +14,11 @@ verified the pieces on Linux without the game first.
 | `backend/api_binding.*` | the `NrApi` table (`plugin/native_api.h`) bound to a tracker; the plugin and the tests use the same code | nothing |
 | `backend/guest_layout.h`, `guest_memory.h` | guest object layouts (vertex / index buffer, declaration, viewport), big-endian helpers | nothing |
 | `backend/primitive.*` | strips, fans, quads, base vertex, reset index to host triangle lists | nothing |
-| `backend/renderer.*`, `shaders.*`, `shaders/` | the NVRHI renderer: frame images, the milestone pictures, the placeholder pipeline for game draws | NVRHI |
+| `backend/renderer.*`, `shaders.*`, `shaders/` | the NVRHI renderer: frame images, the milestone pictures, the placeholder pipeline; the built-in blit and clear shaders | NVRHI |
+| `backend/game_renderer.*`, `game_resources.cpp`, `game_passes.cpp` | Phase 2: the game's draws with their own shaders, textures and states; render targets, resolves, clears, Present | NVRHI, `kknr_resources`, `kkshaders` |
+| `backend/shader_library.*` | the game's shader objects as NVRHI shaders (the pack, else translated and compiled with DXC) | `kkshaders` |
+| `backend/guest_device.h` | the D3D device struct's register images, shadows and fields the game renderer reads | nothing |
+| `cmake/kk_libs.cmake` | the resources and shader libraries built into the plugin | the SDK (fmt, xxHash, dxcapi.h) |
 | `backend/vulkan_dispatch.*` | the vulkan.hpp dispatcher NVRHI's static Vulkan backend needs | Vulkan-Headers |
 | `backend/host_device.h`, `vulkan_host.cpp`, `d3d12_host.cpp`, `backend.*` | NVRHI on the SDK provider's device, frame hand-over to the presenter | SDK |
 | `hooks/hook_table.*` | the 39 hooked entry points, their argument mapping, the nesting rule | nothing |
@@ -100,6 +104,114 @@ frames)
   vertex 4 KB early and drew large random triangles.
 - **NrApi version 2**: adds `set_render_state` and `set_sampler_state`. The hooks refuse a plugin of another
   version (logged, originals only).
+
+## Phase 2: the game renderer
+
+Branch `nr-integration` (worktree `F:\KK-native-renderer\wt\04-backend`), on top of `native-renderer` with the
+three Phase 2 cloud sessions merged in (resolve planning, Linux tests, translator version 4).
+
+### How a frame is drawn
+
+The hooks keep calling the library's originals, so the D3D device struct (20,608 bytes, `guest_device.h`) is
+always what the GPU would have been sent. At every draw the game renderer reads it:
+
+- **Shaders.** `ShaderLibrary` registers every shader when it is created (hooks on `sub_82111CA0` /
+  `sub_82111D90`, run after the original so the object is known): the container's microcode hash is looked up
+  in the pack (`kkshaders-spirv.pack` or `kkshaders-dxil.pack` beside the game, or `--native_shader_pack`);
+  shaders missing from it (the D3D library's own two) are translated and compiled with DXC
+  (`dxcompiler.dll` beside the game, or `--native_dxc`). A shader object the hooks did not see is parsed from
+  the object (container copy + microcode). The game creates all 6,585 shaders at boot: 4,073 distinct ones
+  come from the pack, 2 are compiled.
+- **Constants.** Vertex and pixel float constants (+1920, +6016) are byte-swapped into two volatile constant
+  buffers (rewritten only when they change, and once per frame); bool and loop constants, texture and sampler
+  descriptor indices, the vertex fetch table, clip planes, the viewport transform and the alpha test go into
+  the draw constants (`kkshaders::DrawConstants`, ABI 2).
+- **Bindless.** Set 0 holds the three constant buffers; sets 1-6 are NVRHI bindless tables (2D, 3D, cube and
+  2D-array textures, samplers, raw vertex buffers). Slot 0 of each is a dummy; freed slots are reused after 8
+  frames. Vulkan needs the descriptor indexing features: `sdk-patches/0002`.
+- **Vertex data** is pulled by the shaders from guest memory as it is (big-endian): each guest vertex buffer
+  is one host raw buffer (`kknr::BufferCache`), each declaration element found by usage and index, read with
+  **the element's own endian field** (`--native_element_endian`, default on). The fetch constant's endian
+  (8in32) scrambled the game's SHORT4N normals and tangents (8in16): Kong's fur shells pointed everywhere.
+  Index buffers are converted to little-endian host buffers; quad lists and fans become triangle lists
+  (static patterns for non-indexed draws, a per-frame ring for indexed ones).
+- **Textures and samplers** come from the fetch constants SetTexture merged into the device (+1152 + 24n):
+  `kknr::TextureCache` keys, `ConvertTexture` uploads, a view per (swizzle, dimension, mip range), a sampler
+  per (clamp, filters, anisotropy, border, LOD bias). Uploads are redone only after a CPU write: the SDK's
+  physical write watches (`EnablePhysicalMemoryAccessCallbacks` + an invalidation callback) feed
+  `InvalidateRange`.
+- **Pipeline state** from the register images: RB_BLENDCONTROL0-3, RB_COLOR_MASK, RB_DEPTHCONTROL and the
+  stencil masks, PA_SU_SC_MODE_CNTL (cull, face, fill, polygon offset), PA_CL_CLIP_CNTL, RB_COLORCONTROL /
+  RB_ALPHA_REF (alpha test in the shader). Pipelines are cached by a hash of all of it plus the shaders and
+  attachment formats.
+- **Viewport.** As the Xenos plugin does: the host viewport is the whole target and the vertex shader applies
+  the guest's transform (PA_CL_VTE_CNTL, PA_CL_VPORT_*), the window offset and D3D9's half-pixel offset
+  (`ndcScale` / `ndcOffset`); the window scissor is the host scissor. NVRHI flips Vulkan viewports to D3D's
+  +Y up and the translated shaders are compiled with `-fvk-invert-y`: the Y scale is negated once on Vulkan.
+- **Render targets** are host textures keyed by EDRAM base, pitch (RB_SURFACE_INFO) and format, as tall as
+  the tallest surface seen there, so the game's small passes inside the 1280-pitch surface land where the 360
+  puts them. Depth is D32S8 on every API (RADV has no D24S8 attachments).
+- **Clears** clear the bound targets over the rectangles or the viewport (whole texture, or a triangle under a
+  scissor). **Resolves** copy or blit the source rectangle into the destination texture's host copy
+  (`kknr::PlanResolveConversion`: raw copy, R / B exchange for A8R8G8B8, depth into R32F) and mark it
+  GPU-written; their clears follow. **Present** blits the back buffer (+13964) into the frame image through
+  the display gamma ramp (the device's copy of SetGammaRamp's table at +14060), which the Xenos plugin also
+  applies at the swap; without it every mid-tone was a few levels too bright.
+
+### Found on the way
+
+- **Pixel interpolators.** About 700 of the database's 2,343 pixel shaders have 0 in the binding table's word 1
+  count and read every input as zero (the title's logo was a black rectangle). The count is now also taken
+  from the interpolator mask in word 6 (`shaders/src/container.cpp`, translator version 3). The structural
+  check passed before because an empty list has nothing to compare.
+- **Textures over a resolve's memory.** The light shafts read the depth resolve's k_24_8 memory as
+  k_8_8_8_8, copy that into a 320x180 target, resolve it as k_8_8_8_8 and read it back as k_24_8. A texture
+  whose base address a resolve wrote through another fetch constant is now a converted copy of the resolve's
+  texture (depth to the D24S8 word's bytes, those bytes back to depth, same format copied), redone after each
+  new resolve there. Without it Kong to the Rescue had no light shafts.
+- **Pipeline creation** on a cold driver cache takes seconds per scene (186 new pipelines on entering Kong to
+  the Rescue made the chapter load about 9 s later than on Xenos, so the scripted shots missed the
+  cutscene). NVIDIA's own disk cache makes the second run normal (290 ms of pipeline creation for the whole
+  chapter). A pipeline cache of our own, or creating pipelines off the render thread, is still to do.
+
+### Settings
+
+`--native_game` (on; off = the placeholder), `--native_shader_pack`, `--native_dxc`, `--native_element_endian`
+(on), `--native_flip_front_face`, `--native_dump_frame=N` (every clear, draw with its textures and vertex
+fetch, resolve with its destination, of frame N), `--native_debug` (bits: 1 green clears, 2 magenta frame
+image under the back buffer, 4 no gamma ramp). The stats line every 300 swaps counts draws, skips, pipelines,
+uploads, resolves, aliases and the time spent creating pipelines and uploading textures.
+
+For a run: `kkshaders-spirv.pack` (and `kkshaders-dxil.pack` for D3D12) from `kkshaders db-build ... --split`
+beside `king_kong.exe`, `dxcompiler.dll` and `dxil.dll` from the DXC release beside it too (neither in git).
+`tests/run.ps1` takes `-ExtraArgs` for extra game arguments.
+
+### Scores (Vulkan, `kk-dev-vulkan`)
+
+`tests/run.ps1 -Plugin native -Exe kk\out\build\kk-dev-vulkan\king_kong.exe -NoFrameLog`, commit 0adac16
+(`F:\KK-native-renderer\runs\native-20261010-172553`). Worst frame (outside-range share, MAE); the baseline
+is Phase 1's placeholder (`native-20261010-073756`).
+
+| Scene | Phase 2 | Frames | Baseline (placeholder) |
+|---|---|---|---|
+| video | pass 0.0000 / 0.10 | 3/3 | pass (black) 0.0000 / 0.00 |
+| title | pass 0.0000 / 0.01 | 3/3 | fail 0.1255 / 11.3 |
+| save_menu | pass 0.0000 / 1.42 | 3/3 | fail 0.9426 / 102.7 |
+| main_menu | pass 0.0001 / 2.22 | 3/3 | fail 0.9434 / 100.8 |
+| chapter_select | pass 0.0001 / 2.04 | 3/3 | fail 0.9335 / 100.9 |
+| loading | pass 0.0000 / 0.01 | 3/3 | pass (black) 0.9810 / 116.6 |
+| vrex_110 | pass 0.0003 / 3.61 | 5/5 | fail 0.9404 / 144.9 |
+| vrex_140 | pass 0.8566 / 17.63 (a lightning flash; 3/5 needed) | 3/5 | fail 0.9404 / 91.4 |
+| vrex_170 | pass 0.0001 / 3.17 | 5/5 | fail 0.9404 / 91.3 |
+| pause | pass 0.0000 / 0.00 | 3/3 | fail 0.9404 / 163.6 |
+| venture | pass 0.0082 / 4.65 | 4/5 | fail 0.0906 / 19.0 |
+| kong_cutscene | pass 0.0005 / 5.48 | 3/3 | fail 0.8277 / 62.6 |
+| kong | pass 0.0059 / 9.89 | 4/5 | fail 0.7676 / 94.2 |
+
+13/13 pass (the Xenos self-check also passes 13/13). The earlier run of the same build before the alias fix
+(`native-20261010-165855`) passed 10/13: Venture missed on timing, both Kong scenes on the cold pipeline cache
+and the missing light shafts.
+
 
 ## NVRHI needs more from the SDK's Vulkan device
 

@@ -398,7 +398,19 @@ namespace nvrhi::d3d12
     bool DescriptorTable::isSamplerTable() const
     {
         const BindlessLayoutDesc* bindlessDesc = layout ? layout->getBindlessDesc() : nullptr;
-        return bindlessDesc && bindlessDesc->layoutType == BindlessLayoutDesc::LayoutType::MutableSampler;
+        if (!bindlessDesc)
+            return false;
+        if (bindlessDesc->layoutType == BindlessLayoutDesc::LayoutType::MutableSampler)
+            return true;
+        // King Kong native renderer: an immutable layout of samplers only lives in the sampler heap too.
+        if (bindlessDesc->layoutType != BindlessLayoutDesc::LayoutType::Immutable || bindlessDesc->registerSpaces.empty())
+            return false;
+        for (const BindingLayoutItem& item : bindlessDesc->registerSpaces)
+        {
+            if (item.type != ResourceType::Sampler)
+                return false;
+        }
+        return true;
     }
 
     StaticDescriptorHeap& DescriptorTable::getDescriptorHeap() const
@@ -1051,7 +1063,7 @@ namespace nvrhi::d3d12
                 {
                     DescriptorTable* descriptorTable = checked_cast<DescriptorTable*>(_bindingSet);
 
-                    m_ActiveCommandList->commandList->SetComputeRootDescriptorTable(rootParameterOffset, m_Resources.shaderResourceViewHeap.getGpuHandle(descriptorTable->firstDescriptor));
+                    m_ActiveCommandList->commandList->SetComputeRootDescriptorTable(rootParameterOffset, descriptorTable->getDescriptorHeap().getGpuHandle(descriptorTable->firstDescriptor));
                 }
             }
 
@@ -1178,7 +1190,7 @@ namespace nvrhi::d3d12
                 {
                     DescriptorTable* descriptorTable = checked_cast<DescriptorTable*>(_bindingSet);
 
-                    m_ActiveCommandList->commandList->SetGraphicsRootDescriptorTable(rootParameterOffset, m_Resources.shaderResourceViewHeap.getGpuHandle(descriptorTable->firstDescriptor));
+                    m_ActiveCommandList->commandList->SetGraphicsRootDescriptorTable(rootParameterOffset, descriptorTable->getDescriptorHeap().getGpuHandle(descriptorTable->firstDescriptor));
                 }
             }
 

@@ -46,3 +46,7 @@ Changes we make to vendored code are kept as small as possible and listed here:
   mode `vfetch_mini` uses the binding and stride of the `vfetch_full` that ran last; bool literals are
   inlined (the prelude's multiply rule changed too, in `native-renderer/shaders`). Listed with the reasons in
   `docs/shaders.md`.
+- `nvrhi/src/d3d12/d3d12-resource-bindings.cpp` (Phase 2, Windows): `DescriptorTable::isSamplerTable()` is also
+  true for an immutable bindless layout whose register spaces are all samplers, and descriptor tables are bound
+  from their own heap (`getDescriptorHeap()`) instead of always the CBV/SRV/UAV heap, so the game renderer's
+  sampler table (set 5) lives in and binds from the sampler heap on D3D12 as well.
