@@ -353,6 +353,9 @@ void GameRenderer::EndFrame() {
     vertex_buffers_.Trim(frame_, 1800);
     index_buffers_.Trim(frame_, 1800);
   }
+  RetryDeferred();
+  std::lock_guard lock(cache_mutex_);
+  cache_file_.Flush();
 }
 
 void GameRenderer::PipelineWorker() {
@@ -364,51 +367,150 @@ void GameRenderer::PipelineWorker() {
       if (pipeline_stop_) return;
       job = std::move(pipeline_jobs_.front());
       pipeline_jobs_.pop_front();
+      ++pipelines_active_;
     }
     const auto start = std::chrono::steady_clock::now();
     nvrhi::GraphicsPipelineHandle p = device_->createGraphicsPipeline(job.desc, job.framebuffer);
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
-    std::lock_guard lock(pipeline_mutex_);
-    pipeline_worker_ms_ += ms;
-    pipelines_done_.emplace_back(job.key, p);
+    {
+      std::lock_guard lock(pipeline_mutex_);
+      pipeline_worker_ms_ += ms;
+      pipelines_done_.emplace_back(job.key, p);
+      --pipelines_active_;
+    }
+    pipeline_done_cv_.notify_all();
   }
 }
 
+bool GameRenderer::IsPending(uint64_t key) {
+  std::lock_guard lock(pipeline_mutex_);
+  return pipelines_pending_.count(key) != 0;
+}
+
 nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelineDesc& desc,
-                                                    nvrhi::IFramebuffer* framebuffer, uint64_t key, bool async) {
+                                                    const nvrhi::FramebufferInfo& framebuffer, uint64_t key,
+                                                    bool async) {
   auto it = pipelines_.find(key);
   if (it != pipelines_.end()) return it->second;
   async = async && options_.async_pipelines && device_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN;
   if (async) {
-    std::lock_guard lock(pipeline_mutex_);
-    for (auto& [k, p] : pipelines_done_) {
-      pipelines_[k] = p;
-      pipelines_pending_.erase(k);
-      if (p) ++stats_.pipelines;
-    }
-    pipelines_done_.clear();
-    stats_.pipeline_ms = pipeline_worker_ms_;
+    // Finished pipelines (the draws' and the prewarm's) join the map.
+    auto drain = [&] {
+      for (auto& [k, p] : pipelines_done_) {
+        pipelines_[k] = p;
+        pipelines_pending_.erase(k);
+        if (p) ++stats_.pipelines;
+      }
+      pipelines_done_.clear();
+      stats_.pipeline_ms = pipeline_worker_ms_;
+    };
+    std::unique_lock lock(pipeline_mutex_);
+    drain();
     if (auto found = pipelines_.find(key); found != pipelines_.end()) return found->second;
     if (!pipelines_pending_.count(key)) {
-      if (pipeline_threads_.empty()) {
-        // A few workers: drivers compile pipelines in parallel.
-        const unsigned n = std::clamp(std::thread::hardware_concurrency() / 4, 1u, 4u);
-        for (unsigned i = 0; i < n; ++i) pipeline_threads_.emplace_back([this] { PipelineWorker(); });
-      }
+      EnsureWorkers();
       pipelines_pending_[key] = true;
-      pipeline_jobs_.push_back({key, desc, framebuffer->getFramebufferInfo()});
+      pipeline_jobs_.push_back({key, desc, framebuffer});
       pipeline_cv_.notify_one();
+    }
+    if (options_.pipeline_wait) {
+      // Wait for the worker that has this pipeline (the draw's own job, or the prewarm's).
+      const auto start = std::chrono::steady_clock::now();
+      pipeline_done_cv_.wait(lock, [&] {
+        drain();
+        return pipelines_.count(key) != 0 || pipeline_stop_;
+      });
+      ++stats_.pipeline_waits;
+      stats_.pipeline_wait_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+      auto found = pipelines_.find(key);
+      return found != pipelines_.end() ? found->second.Get() : nullptr;
     }
     ++stats_.skipped_pending;
     return nullptr;
   }
   const auto start = std::chrono::steady_clock::now();
-  nvrhi::GraphicsPipelineHandle p =
-      device_->createGraphicsPipeline(desc, framebuffer->getFramebufferInfo());
+  nvrhi::GraphicsPipelineHandle p = device_->createGraphicsPipeline(desc, framebuffer);
   stats_.pipeline_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
   pipelines_[key] = p;  // a failure is remembered too (null)
   if (p) ++stats_.pipelines;
   return p;
+}
+
+// ------------------------------------------------------- the pipeline cache
+
+void GameRenderer::EnsureWorkers() {
+  // With pipeline_mutex_ held. A few workers: drivers compile pipelines in parallel.
+  if (!pipeline_threads_.empty()) return;
+  const unsigned n = std::clamp(std::thread::hardware_concurrency() / 4, 1u, 4u);
+  for (unsigned i = 0; i < n; ++i) pipeline_threads_.emplace_back([this] { PipelineWorker(); });
+}
+
+void GameRenderer::NoteRecord(const PipelineRecord& record, uint64_t key) {
+  if (!cache_recording_.load(std::memory_order_relaxed)) return;
+  if (!noted_keys_.insert(key).second) return;  // the render thread's own set: no lock for a known pipeline
+  std::lock_guard lock(cache_mutex_);
+  if (cache_file_.is_open() && cache_file_.Append(record)) ++stats_.cache_recorded;
+}
+
+bool GameRenderer::QueuePrewarm(const PipelineRecord& record) {
+  const kkshaders::ShaderKind vk = kkshaders::ShaderKind::Vertex, pk = kkshaders::ShaderKind::Pixel;
+  std::shared_ptr<const GameShader> vs = shaders_->GetByHash(vk, record.vs_hash);
+  std::shared_ptr<const GameShader> ps = record.ps_hash ? shaders_->GetByHash(pk, record.ps_hash) : nullptr;
+  if (!vs || (record.ps_hash && !ps)) return false;
+  nvrhi::GraphicsPipelineDesc desc;
+  nvrhi::FramebufferInfo framebuffer;
+  BuildPipelineDesc(record, vs->handle, ps ? ps->handle.Get() : nullptr, desc, framebuffer);
+  const uint64_t key = PipelineKey(record);
+  std::lock_guard lock(pipeline_mutex_);
+  if (pipelines_pending_.count(key)) return true;
+  EnsureWorkers();
+  pipelines_pending_[key] = true;
+  pipeline_jobs_.push_back({key, std::move(desc), framebuffer});
+  pipeline_cv_.notify_one();
+  ++stats_.prewarm_queued;
+  return true;
+}
+
+bool GameRenderer::SetPipelineCache(const std::string& path) {
+  std::lock_guard lock(cache_mutex_);
+  const bool opened = cache_file_.Open(path);
+  cache_recording_.store(opened, std::memory_order_relaxed);
+  if (!cache_file_.note().empty()) {
+    Logf(LogLevel::kWarning, "rexgpu-native: pipeline cache %s ignored and started again: %s", path.c_str(),
+         cache_file_.note().c_str());
+  }
+  const bool can_prewarm = options_.async_pipelines && device_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN;
+  if (can_prewarm) {
+    for (const PipelineRecord& record : cache_file_.loaded()) {
+      if (!QueuePrewarm(record)) {
+        deferred_.push_back(record);
+        ++stats_.prewarm_deferred;
+      }
+    }
+    deferred_shader_count_ = shaders_->created_count();
+  }
+  Logf(LogLevel::kInfo, "rexgpu-native: pipeline cache %s: %zu descriptions, %llu queued, %llu waiting for their shaders%s",
+       path.c_str(), cache_file_.loaded().size(), static_cast<unsigned long long>(stats_.prewarm_queued),
+       static_cast<unsigned long long>(stats_.prewarm_deferred), can_prewarm ? "" : " (no prewarm: needs Vulkan with async pipelines)");
+  return opened;
+}
+
+void GameRenderer::RetryDeferred() {
+  std::lock_guard lock(cache_mutex_);
+  if (deferred_.empty()) return;
+  const uint64_t created = shaders_->created_count();
+  if (created == deferred_shader_count_) return;  // no new shader since the last try
+  deferred_shader_count_ = created;
+  std::vector<PipelineRecord> still;
+  for (const PipelineRecord& record : deferred_) {
+    if (!QueuePrewarm(record)) still.push_back(record);
+  }
+  deferred_ = std::move(still);
+}
+
+void GameRenderer::WaitForPrewarm() {
+  std::unique_lock lock(pipeline_mutex_);
+  pipeline_done_cv_.wait(lock, [&] { return pipeline_stop_ || (pipeline_jobs_.empty() && pipelines_active_ == 0); });
 }
 
 // ---------------------------------------------------------------- viewport
@@ -488,6 +590,68 @@ GameRenderer::ViewportSetup GameRenderer::ComputeViewport(const dev::DeviceView&
 }
 
 // ---------------------------------------------------------------- draw
+
+// The pipeline description for a record (pipeline_cache.h): the same in a draw and in the prewarm.
+void GameRenderer::BuildPipelineDesc(const PipelineRecord& r, nvrhi::IShader* vs, nvrhi::IShader* ps,
+                                     nvrhi::GraphicsPipelineDesc& pd, nvrhi::FramebufferInfo& fb) const {
+  pd.primType = nvrhi::PrimitiveType(r.topology);
+  pd.VS = vs;
+  pd.PS = ps;
+  for (const nvrhi::BindingLayoutHandle& l : pipeline_layouts_) pd.bindingLayouts.push_back(l);
+  for (uint32_t i = 0; i < r.color_count && i < 4; ++i) {
+    pd.renderState.blendState.targets[i] = BlendTargetFrom(r.color_control[i], r.color_mask[i]);
+    fb.colorFormats.push_back(nvrhi::Format(r.color_format[i]));
+  }
+  const uint32_t depth_control = r.depth_control, ref_mask = r.ref_mask, mode = r.mode_control;
+  nvrhi::DepthStencilState& ds = pd.renderState.depthStencilState;
+  const bool depth = r.depth_format != 0;
+  if (depth) {
+    fb.depthFormat = nvrhi::Format(r.depth_format);
+    ds.depthTestEnable = (depth_control & 2) != 0;
+    ds.depthWriteEnable = ds.depthTestEnable && (depth_control & 4) != 0;
+    ds.depthFunc = CompareFrom(depth_control >> 4);
+    ds.stencilEnable = (depth_control & 1) != 0;
+    ds.stencilReadMask = uint8_t(ref_mask >> 8);
+    ds.stencilWriteMask = uint8_t(ref_mask >> 16);
+    ds.dynamicStencilRef = true;
+    ds.frontFaceStencil.stencilFunc = CompareFrom(depth_control >> 8);
+    ds.frontFaceStencil.failOp = StencilOpFrom(depth_control >> 11);
+    ds.frontFaceStencil.passOp = StencilOpFrom(depth_control >> 14);
+    ds.frontFaceStencil.depthFailOp = StencilOpFrom(depth_control >> 17);
+    if (depth_control & 0x80) {
+      ds.backFaceStencil.stencilFunc = CompareFrom(depth_control >> 20);
+      ds.backFaceStencil.failOp = StencilOpFrom(depth_control >> 23);
+      ds.backFaceStencil.passOp = StencilOpFrom(depth_control >> 26);
+      ds.backFaceStencil.depthFailOp = StencilOpFrom(depth_control >> 29);
+    } else {
+      ds.backFaceStencil = ds.frontFaceStencil;
+    }
+  } else {
+    ds.depthTestEnable = false;
+    ds.depthWriteEnable = false;
+    ds.stencilEnable = false;
+  }
+  nvrhi::RasterState& rs = pd.renderState.rasterState;
+  const bool cull_front = mode & 1, cull_back = mode & 2;
+  rs.cullMode = cull_front ? nvrhi::RasterCullMode::Front
+                           : (cull_back ? nvrhi::RasterCullMode::Back : nvrhi::RasterCullMode::None);
+  // face = 0: counter-clockwise is the front face.
+  rs.frontCounterClockwise = ((mode >> 2) & 1) == 0;
+  if (r.flags & 1) rs.frontCounterClockwise = !rs.frontCounterClockwise;
+  const uint32_t poly_mode = (mode >> 3) & 3;
+  rs.fillMode = (poly_mode != 0 && ((mode >> 5) & 7) == 1) ? nvrhi::RasterFillMode::Wireframe
+                                                            : nvrhi::RasterFillMode::Solid;
+  rs.scissorEnable = true;
+  rs.depthClipEnable = (r.clip_control & (1u << 16)) == 0;
+  if (depth && (mode & (1u << 11))) {  // poly_offset_front_enable
+    float scale, offset;
+    std::memcpy(&scale, &r.poly_scale, 4);
+    std::memcpy(&offset, &r.poly_offset, 4);
+    rs.slopeScaledDepthBias = scale / 16.0f;
+    rs.depthBias = int(offset * 16777216.0f);
+  }
+  fb.sampleCount = 1;
+}
 
 void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   const bool dump = Dump(call.frame);
@@ -593,85 +757,51 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     return;
   }
 
-  // Pipeline state from the register images.
+  // Pipeline state from the register images: a record of the inputs (pipeline_cache.h), which
+  // builds the description here and in the prewarm.
   const uint32_t color_mask = d.u32(dev::kRbColorMask);
   const uint32_t depth_control = d.u32(dev::kRbDepthControl);
   const uint32_t mode = d.u32(dev::kPaSuScModeCntl);
   const uint32_t clip_cntl = d.u32(dev::kPaClClipCntl);
   const uint32_t ref_mask = d.u32(dev::kRbStencilRefMask);
-  const uint32_t ref_mask_bf = d.u32(dev::kRbStencilRefMaskBf);
-  nvrhi::GraphicsPipelineDesc pd;
-  pd.primType = topology;
-  pd.VS = vs->handle;
-  pd.PS = ps ? ps->handle.Get() : nullptr;
-  for (const nvrhi::BindingLayoutHandle& l : pipeline_layouts_) pd.bindingLayouts.push_back(l);
-  uint64_t key = Mix64(FormatSignature(colors, depth), vs->id);
-  key = Mix64(key, ps ? ps->id : 0);
-  key = Mix64(key, uint64_t(topology));
-  uint32_t rt_index = 0;
+  if ((mode & 1) && (mode & 2)) return;  // everything culled
+  PipelineRecord record;
+  record.vs_hash = vs->ucode_hash;
+  record.ps_hash = ps ? ps->ucode_hash : 0;
+  record.topology = uint32_t(topology);
   for (uint32_t i = 0; i < 4; ++i) {
     if (!colors[i]) continue;
     uint32_t mask = (color_mask >> (4 * i)) & 0xF;
     if (!ps || !(ps->bindings.pixelOutputs & (1u << i))) mask = 0;
-    const uint32_t control = d.u32(i == 0 ? dev::kRbBlendControl0 : dev::kRbBlendControl1 + 4 * (i - 1));
-    pd.renderState.blendState.targets[rt_index] = BlendTargetFrom(control, mask);
-    key = Mix64(key, (uint64_t(control) << 8) | (mask << 4) | i);
-    key = Mix64(key, uint64_t(colors[i]->format));
-    ++rt_index;
+    const uint32_t n = record.color_count++;
+    record.color_format[n] = uint32_t(colors[i]->format);
+    record.color_control[n] = d.u32(i == 0 ? dev::kRbBlendControl0 : dev::kRbBlendControl1 + 4 * (i - 1));
+    record.color_mask[n] = mask;
+    record.color_index[n] = i;
   }
-  nvrhi::DepthStencilState& ds = pd.renderState.depthStencilState;
   if (depth) {
-    ds.depthTestEnable = (depth_control & 2) != 0;
-    ds.depthWriteEnable = ds.depthTestEnable && (depth_control & 4) != 0;
-    ds.depthFunc = CompareFrom(depth_control >> 4);
-    ds.stencilEnable = (depth_control & 1) != 0;
-    ds.stencilReadMask = uint8_t(ref_mask >> 8);
-    ds.stencilWriteMask = uint8_t(ref_mask >> 16);
-    ds.dynamicStencilRef = true;
-    ds.frontFaceStencil.stencilFunc = CompareFrom(depth_control >> 8);
-    ds.frontFaceStencil.failOp = StencilOpFrom(depth_control >> 11);
-    ds.frontFaceStencil.passOp = StencilOpFrom(depth_control >> 14);
-    ds.frontFaceStencil.depthFailOp = StencilOpFrom(depth_control >> 17);
-    if (depth_control & 0x80) {
-      ds.backFaceStencil.stencilFunc = CompareFrom(depth_control >> 20);
-      ds.backFaceStencil.failOp = StencilOpFrom(depth_control >> 23);
-      ds.backFaceStencil.passOp = StencilOpFrom(depth_control >> 26);
-      ds.backFaceStencil.depthFailOp = StencilOpFrom(depth_control >> 29);
-    } else {
-      ds.backFaceStencil = ds.frontFaceStencil;
-    }
-    key = Mix64(key, depth_control);
-    key = Mix64(key, ((ref_mask >> 8) & 0xFFFF) | (uint64_t(depth->format) << 16));
-  } else {
-    ds.depthTestEnable = false;
-    ds.depthWriteEnable = false;
-    ds.stencilEnable = false;
+    record.depth_format = uint32_t(depth->format);
+    record.depth_control = depth_control;
+    record.ref_mask = ref_mask;
   }
-  nvrhi::RasterState& rs = pd.renderState.rasterState;
-  const bool cull_front = mode & 1, cull_back = mode & 2;
-  if (cull_front && cull_back) return;  // everything culled
-  rs.cullMode = cull_front ? nvrhi::RasterCullMode::Front
-                           : (cull_back ? nvrhi::RasterCullMode::Back : nvrhi::RasterCullMode::None);
-  // face = 0: counter-clockwise is the front face.
-  rs.frontCounterClockwise = ((mode >> 2) & 1) == 0;
-  if (options_.flip_front_face) rs.frontCounterClockwise = !rs.frontCounterClockwise;
-  const uint32_t poly_mode = (mode >> 3) & 3;
-  rs.fillMode = (poly_mode != 0 && ((mode >> 5) & 7) == 1) ? nvrhi::RasterFillMode::Wireframe
-                                                            : nvrhi::RasterFillMode::Solid;
-  rs.scissorEnable = true;
-  rs.depthClipEnable = (clip_cntl & (1u << 16)) == 0;
+  record.mode_control = mode;
+  record.clip_control = clip_cntl;
   if (depth && (mode & (1u << 11))) {  // poly_offset_front_enable
     const float scale = d.f32(dev::kPaSuPolyOffset + 0);
     const float offset = d.f32(dev::kPaSuPolyOffset + 4);
-    rs.slopeScaledDepthBias = scale / 16.0f;
-    rs.depthBias = int(offset * 16777216.0f);
-    key = Mix64(key, (uint64_t(d.u32(dev::kPaSuPolyOffset)) << 32) | d.u32(dev::kPaSuPolyOffset + 4));
+    std::memcpy(&record.poly_scale, &scale, 4);
+    std::memcpy(&record.poly_offset, &offset, 4);
   }
-  key = Mix64(key, (mode & 0x7FF) | ((clip_cntl >> 16) & 1) << 12 | (options_.flip_front_face ? 1u << 13 : 0));
+  record.flags = options_.flip_front_face ? 1u : 0u;
+  nvrhi::GraphicsPipelineDesc pd;
+  nvrhi::FramebufferInfo framebuffer_info;
+  BuildPipelineDesc(record, vs->handle, ps ? ps->handle.Get() : nullptr, pd, framebuffer_info);
+  const uint64_t key = PipelineKey(record);
+  NoteRecord(record, key);
   if (frame_log_ && frame_log_->enabled()) LogDraw(call, d, *vs, ps.get());
-  nvrhi::IGraphicsPipeline* pipeline = GetPipeline(pd, framebuffer, key, true);
+  nvrhi::IGraphicsPipeline* pipeline = GetPipeline(pd, framebuffer_info, key, true);
   if (!pipeline) {
-    const bool pending = pipelines_pending_.count(key) != 0;
+    const bool pending = IsPending(key);
     if (!pending) ++stats_.skipped_pipeline;
     if (frame_log_ && frame_log_->active()) frame_log_->DrawNotDrawn(pending);
     return;
@@ -820,7 +950,6 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   gs.blendConstantColor = nvrhi::Color(d.f32(dev::kRbBlendRgba), d.f32(dev::kRbBlendRgba + 4),
                                        d.f32(dev::kRbBlendRgba + 8), d.f32(dev::kRbBlendRgba + 12));
   gs.dynamicStencilRefValue = uint8_t(ref_mask & 0xFF);
-  (void)ref_mask_bf;
 
   nvrhi::DrawArguments args;
   bool indexed_draw = false;

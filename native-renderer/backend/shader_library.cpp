@@ -51,7 +51,15 @@ void ShaderLibrary::Initialize(const std::string& pack, const std::string& dxc) 
 std::shared_ptr<GameShader> ShaderLibrary::Build(const kkshaders::ShaderInfo& info) {
   // Called with mutex_ held.
   const uint64_t key = HashKey(info.kind, info.ucodeHash);
-  if (auto it = by_hash_.find(key); it != by_hash_.end()) return it->second;
+  if (auto it = by_hash_.find(key); it != by_hash_.end()) {
+    // Made from the pack alone (GetByHash): a copy that also has the container's fetch table.
+    if (info.kind == kkshaders::ShaderKind::Vertex && !it->second->source) {
+      auto copy = std::make_shared<GameShader>(*it->second);
+      copy->source = std::make_shared<const kkshaders::ShaderInfo>(info);
+      it->second = copy;
+    }
+    return it->second;
+  }
   if (failed_.count(key)) return nullptr;
 
   kkshaders::CompiledShader compiled;
@@ -83,6 +91,14 @@ std::shared_ptr<GameShader> ShaderLibrary::Build(const kkshaders::ShaderInfo& in
     ++stats_.from_pack;
   }
 
+  std::shared_ptr<GameShader> shader = Finish(info.kind, info.ucodeHash, std::move(compiled), from_pack);
+  if (shader && info.kind == kkshaders::ShaderKind::Vertex) shader->source = std::make_shared<const kkshaders::ShaderInfo>(info);
+  return shader;
+}
+
+std::shared_ptr<GameShader> ShaderLibrary::Finish(kkshaders::ShaderKind kind, uint64_t hash,
+                                                   kkshaders::CompiledShader&& compiled, bool from_pack) {
+  const uint64_t key = HashKey(kind, hash);
   const bool spirv = device_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN;
   const std::vector<uint8_t>& blob = spirv ? compiled.spirv : compiled.dxil;
   if (blob.empty()) {
@@ -91,19 +107,16 @@ std::shared_ptr<GameShader> ShaderLibrary::Build(const kkshaders::ShaderInfo& in
     return nullptr;
   }
   auto shader = std::make_shared<GameShader>();
-  shader->kind = info.kind;
-  shader->ucode_hash = info.ucodeHash;
+  shader->kind = kind;
+  shader->ucode_hash = hash;
   shader->id = next_id_++;
   shader->bindings = std::move(compiled.bindings);
   shader->from_pack = from_pack;
-  if (info.kind == kkshaders::ShaderKind::Vertex) shader->source = std::make_shared<const kkshaders::ShaderInfo>(info);
   nvrhi::ShaderDesc desc;
-  desc.shaderType = info.kind == kkshaders::ShaderKind::Vertex ? nvrhi::ShaderType::Vertex
-                                                               : nvrhi::ShaderType::Pixel;
+  desc.shaderType = kind == kkshaders::ShaderKind::Vertex ? nvrhi::ShaderType::Vertex : nvrhi::ShaderType::Pixel;
   desc.entryName = "main";
   char name[48];
-  std::snprintf(name, sizeof(name), "%s %016llX", KindName(info.kind),
-                static_cast<unsigned long long>(info.ucodeHash));
+  std::snprintf(name, sizeof(name), "%s %016llX", KindName(kind), static_cast<unsigned long long>(hash));
   desc.debugName = name;
   shader->handle = device_->createShader(desc, blob.data(), blob.size());
   if (!shader->handle) {
@@ -113,6 +126,22 @@ std::shared_ptr<GameShader> ShaderLibrary::Build(const kkshaders::ShaderInfo& in
   }
   by_hash_[key] = shader;
   return shader;
+}
+
+std::shared_ptr<const GameShader> ShaderLibrary::GetByHash(kkshaders::ShaderKind kind, uint64_t ucode_hash) {
+  std::lock_guard lock(mutex_);
+  const uint64_t key = HashKey(kind, ucode_hash);
+  if (auto it = by_hash_.find(key); it != by_hash_.end()) return it->second;
+  if (!pack_open_ || failed_.count(key)) return nullptr;
+  kkshaders::CompiledShader compiled;
+  if (!pack_.find(ucode_hash, 0, compiled)) return nullptr;
+  ++stats_.from_pack;
+  return Finish(kind, ucode_hash, std::move(compiled), true);
+}
+
+uint64_t ShaderLibrary::created_count() const {
+  std::lock_guard lock(mutex_);
+  return stats_.created;
 }
 
 void ShaderLibrary::OnCreated(uint32_t kind, uint32_t container, uint32_t object) {

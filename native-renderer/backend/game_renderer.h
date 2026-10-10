@@ -15,6 +15,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <condition_variable>
 #include <thread>
 #include <cstdint>
@@ -24,12 +25,14 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <nvrhi/nvrhi.h>
 
 #include "backend/draw_sink.h"
 #include "backend/frame_log.h"
+#include "backend/pipeline_cache.h"
 #include "backend/guest_device.h"
 #include "backend/guest_memory.h"
 #include "backend/shader_library.h"
@@ -63,6 +66,9 @@ class GameRenderer {
     // thread for the driver's compile. Vulkan only (NVRHI's D3D12 backend
     // caches root signatures without a lock).
     bool async_pipelines = true;
+    // A draw whose pipeline is still being made: false skips the draw (the Xenos plugin can do
+    // the same), true waits for the worker to finish it. Only with async_pipelines.
+    bool pipeline_wait = false;
     // Log every draw of this game frame (-1 none).
     int32_t dump_frame = -1;
     // Debugging aids (bits): 1 the game's clears are green, 2 the frame image
@@ -77,6 +83,12 @@ class GameRenderer {
     uint64_t skipped_primitive = 0;  // primitive type not handled
     uint64_t skipped_pipeline = 0;   // pipeline creation failed
     uint64_t skipped_pending = 0;    // pipeline still being created (async_pipelines)
+    uint64_t pipeline_waits = 0;     // draws that waited for their pipeline (pipeline_wait)
+    double pipeline_wait_ms = 0;
+    uint64_t cache_recorded = 0;     // descriptions appended to the pipeline cache file
+    uint64_t prewarm_queued = 0;     // cached descriptions sent to the workers
+    uint64_t prewarm_deferred = 0;   // cached descriptions whose shaders were not available yet
+    uint64_t prewarm_failed = 0;     // cached descriptions that could not be built or created
     uint64_t skipped_device = 0;     // no device struct
     uint64_t texture_uploads = 0;
     uint64_t texture_failures = 0;
@@ -115,6 +127,14 @@ class GameRenderer {
   bool Present(nvrhi::ICommandList* cl, uint32_t device, nvrhi::ITexture* target);
   // After the frame's command list was submitted.
   void EndFrame();
+
+  // The pipeline cache file (pipeline_cache.h): reads the descriptions of earlier runs and
+  // starts creating them on the worker threads, then appends each new description the draws
+  // need. Needs async_pipelines on Vulkan (the workers); otherwise the file is only recorded.
+  // Call before the first draw; may be called from another thread.
+  bool SetPipelineCache(const std::string& path);
+  // Blocks until the worker threads have finished the queued prewarm (tests, shutdown).
+  void WaitForPrewarm();
 
   // REX_DEV_FRAME_LOG: the draw and resolve lines of frame_log.h, from the game's
   // calls. Off until set; emit null = the warning log (the harness reads it there).
@@ -217,7 +237,21 @@ class GameRenderer {
   // async: the game's draws (may return null while the worker creates it);
   // the built-in passes create theirs at once.
   nvrhi::IGraphicsPipeline* GetPipeline(const nvrhi::GraphicsPipelineDesc& desc,
-                                        nvrhi::IFramebuffer* framebuffer, uint64_t key, bool async = false);
+                                        nvrhi::IFramebuffer* framebuffer, uint64_t key, bool async = false) {
+    return GetPipeline(desc, framebuffer->getFramebufferInfo(), key, async);
+  }
+  nvrhi::IGraphicsPipeline* GetPipeline(const nvrhi::GraphicsPipelineDesc& desc,
+                                        const nvrhi::FramebufferInfo& framebuffer, uint64_t key, bool async = false);
+  void BuildPipelineDesc(const PipelineRecord& record, nvrhi::IShader* vs, nvrhi::IShader* ps,
+                         nvrhi::GraphicsPipelineDesc& desc, nvrhi::FramebufferInfo& framebuffer) const;
+  bool IsPending(uint64_t key);
+  void EnsureWorkers();
+  // A description the draws need: appended to the cache file the first time.
+  void NoteRecord(const PipelineRecord& record, uint64_t key);
+  // Queues the description of a cached record for the workers; false when a shader is not there
+  // yet (the record waits in deferred_ for the next try).
+  bool QueuePrewarm(const PipelineRecord& record);
+  void RetryDeferred();
   void PipelineWorker();
   struct PipelineJob {
     uint64_t key = 0;
@@ -225,6 +259,14 @@ class GameRenderer {
     nvrhi::FramebufferInfo framebuffer;
   };
   std::vector<std::thread> pipeline_threads_;
+  std::condition_variable pipeline_done_cv_;
+  PipelineCacheFile cache_file_;
+  std::mutex cache_mutex_;                    // the file and deferred_ (SetPipelineCache comes from another thread)
+  std::vector<PipelineRecord> deferred_;
+  std::atomic<bool> cache_recording_{false};
+  std::unordered_set<uint64_t> noted_keys_;   // render thread only
+  int pipelines_active_ = 0;                  // jobs a worker is compiling (pipeline_mutex_)
+  uint64_t deferred_shader_count_ = 0;        // shaders registered when deferred_ was last tried
   std::mutex pipeline_mutex_;
   std::condition_variable pipeline_cv_;
   std::deque<PipelineJob> pipeline_jobs_;

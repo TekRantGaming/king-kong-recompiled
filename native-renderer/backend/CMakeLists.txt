@@ -10,6 +10,7 @@
 add_library(nr_draw STATIC
     draw_state.cpp
     frame_log.cpp
+    pipeline_cache.cpp
     api_binding.cpp
     primitive.cpp
 )
