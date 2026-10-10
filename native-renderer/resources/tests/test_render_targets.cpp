@@ -131,10 +131,10 @@ TEST(pool_trim) {
 
 TEST(resolve_plans) {
   const SurfaceDesc rt = Surface(640, 360, 0x18280186);
-  // Whole surface into an A8R8G8B8 texture of the same size: a copy with the R / B order noted.
+  // Whole surface into an A8R8G8B8 texture of the same size: R and B exchanged, so a blit, not a copy.
   TextureFetch dest = DestTexture(TextureFormat::k_8_8_8_8, 640, 360, MakeSwizzle(kSwzZ, kSwzY, kSwzX, kSwzW));
   ResolveOp op = PlanResolve(0, rt, nullptr, &dest, nullptr, 0, 0);
-  CHECK(op.kind == ResolveKind::kCopy);
+  CHECK(op.kind == ResolveKind::kConvert);
   CHECK(op.swap_red_blue);
   CHECK_EQ(op.width, 640u);
   CHECK_EQ(op.height, 360u);

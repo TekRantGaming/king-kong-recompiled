@@ -176,17 +176,22 @@ TEST(endian_32bit_elements) {
 // ---- Packed formats ----
 
 TEST(convert_565_1555_4444_655) {
-  HostTextureData t = ConvertRow(TextureFormat::k_5_6_5, Endian::k8in16, 2, BE16({0x001F, 0x07E0}));
-  CHECK_EQ(int(t.plan.format), int(HostFormat::B5G6R5_UNORM));
-  CHECK_EQ(U16(Texel(t, 0)), 0xF800);  // X (bits 0-4) -> host R (bits 11-15)
-  CHECK_EQ(U16(Texel(t, 1)), 0x07E0);
+  // Widened to RGBA8 (no portable host 16-bit packed format, see docs/formats.md); X is the lowest field.
+  auto rgba = [](const uint8_t* p, int r, int g, int b, int a) {
+    return p && p[0] == r && p[1] == g && p[2] == b && p[3] == a;
+  };
+  HostTextureData t = ConvertRow(TextureFormat::k_5_6_5, Endian::k8in16, 3, BE16({0x001F, 0x07E0, 0x0821}));
+  CHECK_EQ(int(t.plan.format), int(HostFormat::RGBA8_UNORM));
+  CHECK(rgba(Texel(t, 0), 255, 0, 0, 255));
+  CHECK(rgba(Texel(t, 1), 0, 255, 0, 255));
+  CHECK(rgba(Texel(t, 2), 8, 4, 8, 255));  // 1 of 31 -> 00001000b, 1 of 63 -> 00000100b
   CHECK_EQ(t.plan.view_swizzle, MakeSwizzle(0, 1, 2, 2));  // no W: reads Z (the SDK's RGBB)
   t = ConvertRow(TextureFormat::k_1_5_5_5, Endian::k8in16, 2, BE16({0x801F, 0x7C00}));
-  CHECK_EQ(U16(Texel(t, 0)), 0xFC00);
-  CHECK_EQ(U16(Texel(t, 1)), 0x001F);
+  CHECK(rgba(Texel(t, 0), 255, 0, 0, 255));
+  CHECK(rgba(Texel(t, 1), 0, 0, 255, 0));
   t = ConvertRow(TextureFormat::k_4_4_4_4, Endian::k8in16, 2, BE16({0x000F, 0xF0A0}));
-  CHECK_EQ(U16(Texel(t, 0)), 0x0F00);
-  CHECK_EQ(U16(Texel(t, 1)), 0xF0A0);
+  CHECK(rgba(Texel(t, 0), 255, 0, 0, 0));
+  CHECK(rgba(Texel(t, 1), 0, 170, 0, 255));
   t = ConvertRow(TextureFormat::k_6_5_5, Endian::k8in16, 2, BE16({0xFC1F, 0x03E0}));
   const uint8_t* p = Texel(t, 0);
   CHECK(p[0] == 255 && p[1] == 0 && p[2] == 255 && p[3] == 255);
@@ -503,7 +508,7 @@ TEST(plan_signs_and_flags) {
   // Signed with no signed host format: unsigned data, the shader converts.
   o.sign = TextureSign::kSigned;
   t = ConvertRow(TextureFormat::k_5_6_5, Endian::k8in16, 1, {0, 0}, o);
-  CHECK_EQ(int(t.plan.format), int(HostFormat::B5G6R5_UNORM));
+  CHECK_EQ(int(t.plan.format), int(HostFormat::RGBA8_UNORM));
   CHECK(t.plan.shader_flags & kShaderMixedSigns);
   // 32-bit fixed point: integer data the shader normalises unless the number format is integer.
   t = ConvertRow(TextureFormat::k_32_32, Endian::k8in32, 1, BE32({1, 2}));

@@ -73,9 +73,9 @@ const HostFormatInfo& GetHostFormatInfo(HostFormat format);
 // How guest blocks become host blocks / texels.
 enum class Conversion : uint8_t {
   kCopy,                 // bytes unchanged after the endian swap (block for block)
-  kSwapRB565,            // k_5_6_5 -> B5G6R5 with X in R
-  kSwapRB1555,           // k_1_5_5_5 -> B5G5R5A1 with X in R
-  kSwapRB4444,           // k_4_4_4_4 -> B4G4R4A4 with X in R
+  k565ToRGBA8,           // k_5_6_5: X 5, Y 6, Z 5 bits from the bottom, widened by bit replication
+  k1555ToRGBA8,          // k_1_5_5_5: X 5, Y 5, Z 5, W 1
+  k4444ToRGBA8,          // k_4_4_4_4: X 4, Y 4, Z 4, W 4
   k655ToRGBA8,           // k_6_5_5: X 5, Y 5, Z 6 bits from the bottom
   k11_11_10ToRGBA16,     // k_10_11_11: X 11, Y 11, Z 10 bits from the bottom
   k10_11_11ToRGBA16,     // k_11_11_10: X 10, Y 11, Z 11 bits from the bottom

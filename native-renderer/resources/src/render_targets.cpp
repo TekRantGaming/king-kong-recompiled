@@ -175,11 +175,12 @@ ResolveOp PlanResolve(uint32_t flags_value, const SurfaceDesc& source, const uin
                     df == TextureFormat::k_2_10_10_10_AS_16_16_16_16 || df == TextureFormat::k_16_16_16_16 ||
                     df == TextureFormat::k_16_16_16_16_FLOAT;
   op.swap_red_blue = four && SwizzleComponent(swizzle, 0) == kSwzZ && SwizzleComponent(swizzle, 2) == kSwzX;
-  // Same host family: a plain copy (with the swap done by the view or a blit, see docs/formats.md).
   SurfaceDesc as_target;
   const bool same = DecodeSurfaceDesc(source.width, source.height, D3DFormat{uint32_t(df)}.value, 0, 0, as_target) &&
                     as_target.host == source.host;
-  op.kind = same ? ResolveKind::kCopy : ResolveKind::kConvert;
+  // The render target holds the shader's red in R; a destination read as A8R8G8B8 (X = blue) needs R and B
+  // exchanged, which a raw copy cannot do.
+  op.kind = same && !op.swap_red_blue ? ResolveKind::kCopy : ResolveKind::kConvert;
   return op;
 }
 

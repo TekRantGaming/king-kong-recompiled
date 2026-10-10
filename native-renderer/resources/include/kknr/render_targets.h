@@ -95,7 +95,7 @@ struct ResolveFlags {
 
 enum class ResolveKind : uint8_t {
   kCopy,          // same format family: copy (rect / offset applied)
-  kConvert,       // colour formats differ: a blit converts
+  kConvert,       // colour formats differ, or R and B must be exchanged: a blit converts
   kDepthToFloat,  // depth buffer -> k_24_8 / k_32_FLOAT texture: read depth, write R32_FLOAT
   kNone,          // nothing to copy (no destination), clears only
 };

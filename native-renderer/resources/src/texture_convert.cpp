@@ -212,25 +212,23 @@ void ConvertTexel(Conversion c, const uint8_t* s, uint8_t* d, uint32_t guest_bpb
     case C::kCopy:
       std::memcpy(d, s, guest_bpb);
       return;
-    case C::kSwapRB565: {
+    case C::k565ToRGBA8:
+    case C::k1555ToRGBA8:
+    case C::k4444ToRGBA8: {
+      // Fields from bit 0 up in X, Y, Z, W order; widened by bit replication (exact at 0 and the maximum).
+      static const uint8_t kBits[3][4] = {{5, 6, 5, 0}, {5, 5, 5, 1}, {4, 4, 4, 4}};
+      const uint8_t* bits = kBits[c == C::k565ToRGBA8 ? 0 : (c == C::k1555ToRGBA8 ? 1 : 2)];
       uint16_t v;
       std::memcpy(&v, s, 2);
-      v = uint16_t((v & 0x07E0) | (v >> 11) | (v << 11));
-      std::memcpy(d, &v, 2);
-      return;
-    }
-    case C::kSwapRB1555: {
-      uint16_t v;
-      std::memcpy(&v, s, 2);
-      v = uint16_t((v & 0x83E0) | ((v >> 10) & 0x1F) | ((v & 0x1F) << 10));
-      std::memcpy(d, &v, 2);
-      return;
-    }
-    case C::kSwapRB4444: {
-      uint16_t v;
-      std::memcpy(&v, s, 2);
-      v = uint16_t((v & 0xF0F0) | ((v >> 8) & 0xF) | ((v & 0xF) << 8));
-      std::memcpy(d, &v, 2);
+      uint32_t shift = 0;
+      for (int i = 0; i < 4; ++i) {
+        if (!bits[i]) {
+          d[i] = 255;
+          continue;
+        }
+        d[i] = uint8_t(Expand((v >> shift) & ((1u << bits[i]) - 1), bits[i], 8));
+        shift += bits[i];
+      }
       return;
     }
     case C::k655ToRGBA8: {
@@ -320,9 +318,9 @@ const HostFormatInfo& GetHostFormatInfo(HostFormat format) {
 const char* ConversionName(Conversion conversion) {
   static const char* const kNames[] = {
       "copy",
-      "swap_rb_565",
-      "swap_rb_1555",
-      "swap_rb_4444",
+      "565_to_rgba8",
+      "1555_to_rgba8",
+      "4444_to_rgba8",
       "655_to_rgba8",
       "11_11_10_to_rgba16",
       "10_11_11_to_rgba16",
@@ -389,9 +387,9 @@ FormatChoice GetFormatChoice(TextureFormat format) {
     case T::k_8_INTERLACED:
       return Choice(H::R8_UNORM, C::kCopy, H::R8_SNORM, C::kCopy, kRRRR);
     case T::k_1_5_5_5:
-      return Choice(H::B5G5R5A1_UNORM, C::kSwapRB1555, H::UNKNOWN, C::kCopy, kRGBA);
+      return Choice(H::RGBA8_UNORM, C::k1555ToRGBA8, H::UNKNOWN, C::kCopy, kRGBA);
     case T::k_5_6_5:
-      return Choice(H::B5G6R5_UNORM, C::kSwapRB565, H::UNKNOWN, C::kCopy, kRGBB);
+      return Choice(H::RGBA8_UNORM, C::k565ToRGBA8, H::UNKNOWN, C::kCopy, kRGBB);
     case T::k_6_5_5:
       return Choice(H::RGBA8_UNORM, C::k655ToRGBA8, H::UNKNOWN, C::kCopy, kRGBB);
     case T::k_8_8_8_8:
@@ -417,7 +415,7 @@ FormatChoice GetFormatChoice(TextureFormat format) {
     case T::k_16_16_16_16_EDRAM:
       return Choice(H::RGBA16_FLOAT, C::kFixed16ToHalf, H::RGBA16_FLOAT, C::kFixed16ToHalf, kRGBA);
     case T::k_4_4_4_4:
-      return Choice(H::BGRA4_UNORM, C::kSwapRB4444, H::UNKNOWN, C::kCopy, kRGBA);
+      return Choice(H::RGBA8_UNORM, C::k4444ToRGBA8, H::UNKNOWN, C::kCopy, kRGBA);
     case T::k_10_11_11:
     case T::k_10_11_11_AS_16_16_16_16:
       return Choice(H::RGBA16_UNORM, C::k11_11_10ToRGBA16, H::RGBA16_SNORM, C::k11_11_10ToRGBA16S, kRGBB);

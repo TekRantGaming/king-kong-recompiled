@@ -8,7 +8,6 @@
             "generator": "Ninja",
             "binaryDir": "${sourceDir}/out/build/${presetName}",
             "cacheVariables": {
-                "CMAKE_C_COMPILER": "clang",
                 "CMAKE_CXX_COMPILER": "clang++"
             },
             "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
@@ -19,8 +18,7 @@
             "generator": "Ninja",
             "binaryDir": "${sourceDir}/out/build/${presetName}",
             "cacheVariables": {
-                "CMAKE_C_COMPILER": "clang-20",
-                "CMAKE_CXX_COMPILER": "clang++-20"
+                "CMAKE_CXX_COMPILER": "clang++"
             },
             "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" }
         },
@@ -35,6 +33,7 @@
     ],
     "testPresets": [
         { "name": "res-debug", "configurePreset": "res-debug", "output": { "outputOnFailure": true } },
-        { "name": "res-release", "configurePreset": "res-release", "output": { "outputOnFailure": true } }
+        { "name": "res-release", "configurePreset": "res-release", "output": { "outputOnFailure": true } },
+        { "name": "res-linux-release", "configurePreset": "res-linux-release", "output": { "outputOnFailure": true } }
     ]
 }

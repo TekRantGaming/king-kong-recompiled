@@ -1,10 +1,13 @@
 # King Kong native renderer: guest resource conversion (brief 03).
 # A standalone library with unit tests that need neither the game nor the SDK:
 #   build.bat            configure, build and run the tests (Visual Studio 2022 clang + Ninja, like kk/)
+#   Linux: cmake --preset res-linux-release && cmake --build --preset res-linux-release &&
+#          ctest --preset res-linux-release
 #   kknr_resources       the library (texture formats, tiling, conversion, buffers, caches, render targets)
 #   kknr_resources_tests the unit tests (ctest, or run the exe)
 #   kknr_texdump         converts a texture dump (KK_DEV_TEX_DUMP) to host data, DDS and PNG (dev tool)
 #   kknr_bfscan          lists the texture formats stored in a KKTextures.bf (dev tool, reads game data)
+#   kknr_formats         prints the guest -> host format table of docs/formats.md
 cmake_minimum_required(VERSION 3.25)
 project(kknr_resources LANGUAGES CXX)
 
@@ -32,6 +35,8 @@ if(KKNR_RESOURCES_TOOLS)
     target_link_libraries(kknr_texdump PRIVATE kknr_resources)
     add_executable(kknr_bfscan tools/bfscan.cpp tools/image_io.cpp)
     target_link_libraries(kknr_bfscan PRIVATE kknr_resources)
+    add_executable(kknr_formats tools/formats_table.cpp)
+    target_link_libraries(kknr_formats PRIVATE kknr_resources)
 endif()
 
 enable_testing()
