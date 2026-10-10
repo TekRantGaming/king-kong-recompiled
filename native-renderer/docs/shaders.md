@@ -3,7 +3,9 @@
 Status: 10 October 2026. Every shader of the game's database and every shader in today's shader caches is
 translated from Xbox 360 microcode to HLSL, compiled to DXIL and SPIR-V, and validated. The translated HLSL
 matches the 37 HLSL sources shipped in the database structurally. A prebuilt pack holds all of them; a lookup
-by hash takes about 0.01 ms.
+by hash takes about 0.01 ms. Phase 2 (same date): what the translated code computes is checked on a GPU
+against a reference interpreter; nine translator fixes came out of it, one more from ucode.h, and bool literals are now inlined (translator version 4, see "What the
+translated shaders compute"), so packs and caches built before must be rebuilt.
 
 Generated shaders, packs and reports derived from the game's files live in `F:\KK-native-renderer\analysis\02\`
 (the final run is `analysis\02\final*`), never in git.
@@ -21,6 +23,8 @@ Generated shaders, packs and reports derived from the game's files live in `F:\K
 | `native-renderer/shaders/include/kkshaders/cache.h`, `src/cache.cpp` | Disk cache, the memory-mapped pack, `ShaderProvider` (pack, then cache, then compile) |
 | `native-renderer/shaders/tool/main.cpp` | `kkshaders`: `info`, `translate`, `compile`, `db-check`, `db-build`, `db-structure`, `xsh`, `pack-lookup` |
 | `native-renderer/shaders/tests/` | A Xenos microcode assembler, a container writer and a synthetic corpus (no game data) |
+| `native-renderer/shaders/tests/xenos_interp.*` | The reference interpreter: Xenos microcode on the CPU, with an error bound on every value |
+| `native-renderer/shaders/tests/gpu_tests.cpp`, `vk_harness.*`, `random_program.*` | `kkshaders_gpu_tests`: translated shaders run on Vulkan and compared with the interpreter |
 
 ## Building and testing on Windows
 
@@ -112,10 +116,123 @@ skipped.
   constants (the register block, applied by SetVertexShader / SetPixelShader) should still be applied to the
   shadow, but the translated code no longer depends on it for floats: direct reads are inlined and relative
   reads that land on a literal register are answered in the shader (`kkConstRel`; the skinning shaders index
-  c250-c254 by the loop counter). Loop literals are inlined. Bool literals go through `b2`; no shader of the
-  database reads a bool constant.
+  c250-c254 by the loop counter). Loop literals are inlined. Bool literals are inlined too, except the bools
+  the constant table names: the literal block writes whole dwords of 32 bools and the game then sets the named
+  ones itself, so those are read from `b2`. No shader of the database reads a bool constant today.
 - Interpolators: one signature for all shaders (TEXCOORD0-15, COLOR0-1), so any vertex shader links with any
   pixel shader; the container's semantics place each export register.
+
+## What the translated shaders compute (differential tests)
+
+Phase 2 (cloud session, Linux). `kkshaders_gpu_tests` runs translated shaders on a Vulkan device and compares
+every output with a reference interpreter. No game data is involved: the shaders are the generated corpus
+(`tests/corpus.cpp`, including its fuzz group) and random programs (`tests/random_program.cpp`).
+
+The reference interpreter (`tests/xenos_interp.*`) decodes the microcode bit by bit, independently of
+XenosRecomp, and follows the SDK's shader code: `ucode.h` for the encodings and notes,
+`pipeline/shader/interpreter.cpp` for the ALU and control flow, `spirv_translator_alu.cpp` and
+`spirv_translator_fetch.cpp` for vertex formats (`formats.md`) and texture coordinates. It covers the vector
+and scalar ALU with their modifiers (negate, abs, saturate, swizzles, write masks, exports), predicates and
+predicated exec / jump / call / loop break, bool-conditioned exec / jump / call, loops with aL (clamped to
+[-256, 256]), calls up to depth 4, a0 and aL addressing of temporaries and constants, vertex fetch in every
+format in both binding mode and instruction mode, and texture fetch on 1D / 2D / 3D / cube textures with point
+and linear filtering, wrap or clamp, offsets, unnormalized coordinates and an explicit LOD. Not modelled (not
+compared): getCompTexLOD, getWeights, getBCF, getGradients, mipmaps and gradients.
+
+Tolerance. Integer and bit results (fetch decoding of integer and normalized formats, a0, aL, predicates,
+comparisons, select, floor) are compared exactly. Every float carries an error bound: inputs are exact
+dyadic values, arithmetic adds one ulp per inexact rounding (fused or separate multiply-add both accepted),
+`rcp` 2^-21, `rsq` 2^-20, `sqrt` 2^-21 relative, `exp` 2^-18 relative, `log` 2^-18 absolute, `sin` / `cos` 2^-17
+absolute (growing with the argument beyond pi), linear filter weights 2^-8 (8-bit sub-texel precision, evaluated over the coordinate's error
+interval). A GPU value passes when it is within that bound plus 2^-20 relative (and the smallest normal, for
+flushed denormals); NaN must be NaN and infinities exact. A value whose bound cannot be stated (a comparison
+or floor that could go either way within its error) is "unknown" and skipped; a control decision of that kind
+(predicate, kill, a0, branch) marks the invocation "fragile" and the whole invocation is skipped. Both are
+counted in the report.
+
+The harness (`tests/vk_harness.*`, plain Vulkan 1.3; lavapipe here) binds the descriptor layout of `abi.h`
+(set 0: b0-b2, sets 1-6: the bindless arrays) plus a set 7 of its own. Vertex shaders are wrapped in a compute
+shader that calls the translated `main` for 64 vertices and stores all outputs; pixel shaders are drawn as 64
+one-pixel points with their interpolators from a harness vertex shader, into four RGBA32F targets. Each
+round draws random float, bool and loop constants (now and then a loop whose aL leaves [-256, 256]), vertex
+data in every format with random declarations or fetch constants, random textures and interpolators. The
+float literals are not applied to the uploaded constants, so the translated code has to answer them itself.
+
+Run (Linux here; on Windows the target is built when CMake finds the Vulkan SDK, and runs on any Vulkan driver):
+
+```
+cmake -S native-renderer/shaders -B build -G Ninja -DKKSHADERS_SDK_DIR=<sdk src> -DKKSHADERS_DXC_DIR=<dxc>
+cmake --build build
+build/kkshaders_gpu_tests interp                               # the interpreter's own checks
+VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json \
+  build/kkshaders_gpu_tests gpu --dxc <dxc> --corpus 1 --fuzz 100 --random 100 --rounds 2
+```
+
+`ctest` runs both (`interpreter`, `gpu`) when CMake finds Vulkan. A failing shader's HLSL and report go to
+`--out`; `--filter NAME --trace 1` prints the interpreter's step by step trace for it.
+
+Results (10 October 2026, lavapipe / LLVM 20.1.2, DXC v1.9.2609, validation layer on, no validation errors),
+after the fixes below, all with 0 mismatches:
+
+| Run | Shaders | Invocations compared | Fragile (skipped) | Components compared | Unknown (skipped) |
+|---|---|---|---|---|---|
+| `ctest` `gpu` (defaults: corpus with fuzz group, 200 random programs per kind, 3 rounds) | 1,757 | 308,112 | 28,976 | 7,429,881 | 356,191 |
+| corpus with `--fuzz 100`, 3 rounds | 957 | 175,384 | 8,104 | 3,809,275 | 147,137 |
+| random, 150 per kind, 2 rounds, seeds 101, 777, 2026, 31337 | 2,400 | 263,614 | 43,586 | 7,253,097 | 420,255 |
+
+Random programs mark about one invocation in seven fragile (a predicate, kill or branch on a value within
+its error, mostly comparisons of results of transcendental functions); the corpus about one in twenty.
+4 of the corpus's 2,871 rounds are skipped: the program does not end within 200,000 control-flow steps on the
+reference (a loop whose count comes from a random constant), so that round is not run on the GPU.
+
+### Translator fixes from the differential tests (translator version 4)
+
+1. Cube fetches ignored the instruction's S / T / face offsets and its unnormalized-coordinates flag. They
+   are now applied before the cube coordinates become a direction (offsets in texels of the face).
+2. The cube face index was rounded (`floor(z + 0.5)`); the SDK truncates it after clamping to 0-5
+   (`kk_CubeDirection`).
+3. In one ALU instruction, the vector half's a0 (`maxa`) and p0 (`setp_*_push`) took effect only after the
+   scalar half had read its operands, and the vector predicate won over a scalar predicate write. The SDK
+   runs the vector half first: its state changes are visible to the scalar half's operands and a scalar
+   predicate or a0 write replaces them.
+4. aL was not clamped; it is now clamped to [-256, 256] as in the SDK's interpreter (the SDK's SPIR-V
+   translator does not clamp; the game's shaders never come near the limit).
+5. A loop with the repeat flag reset aL to the loop constant's start (structured mode) or kept the iteration
+   counter (general mode). ucode.h and the SDK's SPIR-V translator define it as "reuse the current aL instead
+   of resetting it to the loop start": aL starts from the enclosing aL and the count always restarts. The
+   SDK's CPU interpreter keeps the counter instead; it is the outlier and is not followed.
+6. Not-equal (`sne`, `setp_ne`, `kill_ne`, `snes`, `kills_ne` and the alpha test's NOTEQUAL) must be
+   unordered, true when a side is NaN (the SDK uses `OpFUnordNotEqual`). DXC lowers HLSL's `!=` to an ordered
+   compare for SPIR-V (false for NaN) and to `fcmp fast une` for DXIL; it now goes through `kk_Ne`,
+   `!(a == b)`, which DXC lowers to `OpFOrdEqual` + `OpLogicalNot` and to a plain `fcmp une`.
+7. In instruction mode (bare microcode) a `vfetch_mini` took its binding and stride from the previous
+   `vfetch_full` in program order. The SDK keeps the address of the `vfetch_full` that ran last, which in a
+   loop is not the same one; the translated code now does the same (`vfBinding`, `vfStride`). Binding mode
+   is unaffected (each fetch has its own declaration element).
+8. Multiplication (`kk_Mul`, `kk_Muls`, so also mad, dp*, dst, muls_prev2) tested `a == 0` for the Direct3D 9
+   rule "+0 or a denormal times anything is +0", leaving denormals to the host's flush mode. lavapipe keeps
+   denormals; the test is now `|a| < FLT_MIN`, the SDK's stated rule.
+9. Shaders are now compiled with DXC `-Gis` (IEEE strictness). Without it DXC folds `x - x` and `x * 0` to 0
+   in DXIL (fast-math flags) and leaves SPIR-V open to the same in the driver; lavapipe folded `NaN - NaN` to 0.
+   With it DXIL keeps plain `fsub` / `fmul` and SPIR-V arithmetic is marked `NoContraction` (no fused
+   multiply-add either, which the reference accepts both ways). The cost is the driver's freedom to
+   reassociate; correctness of NaN and infinity was preferred.
+10. Not from a mismatch but from ucode.h while chasing one: `log`, `sqrt` and `rsq` of a negative input are
+   NaN, and `log(1) = 0`, `rcp(1) = rsq(1) = 1`, `exp(0) = 1` exactly. Vulkan leaves `log2`, `sqrt` and
+   `inversesqrt` of a negative undefined and allows a few ulp at those points, so the prelude makes both
+   explicit (`kk_Exp`, `kk_Log`, `kk_Rcp`, `kk_Rsq`, `kk_Sqrt`); the reference now expects the exact values.
+11. Bool literals (not a mismatch, the brief's request): the bits of a literal bool dword that the constant
+   table does not name are inlined (see "The model the backend implements"). A unit test checks it.
+
+What the reference does not compare, with the reason (each found as a false mismatch, then excluded):
+texture coordinates beyond 1024 repeats and cube directions that are infinite, NaN, beyond 1e18 or below
+1e-18 (how a GPU wraps or normalises them is its own precision; lavapipe normalises cube directions);
+`rcp`, `rcpc`, `rsq`, `rsqc` of an exact zero (the sign of the result follows the sign of the zero, and
+Vulkan does not preserve the sign of zero by default: lavapipe turned `0 - floor(0)` into -0).
+
+Some mismatches were the reference's own mistakes, fixed there, not in the translator: `setp_pop` of NaN
+(the SDK's `islessequal`, false for NaN), a cube direction component that had overflowed being used
+although marked unknown, and the linear-filter bound never ending for coordinates past 2^24.
 
 ## Coverage
 
@@ -226,19 +343,32 @@ translator hash (translator version 2, ABI version, prelude text), and a pack fr
 - Pack: one per backend for shipping; the both-backends pack stays the default output of `db-build`.
 - No compression in the pack (none is available in the SDK bundle, and loads are already far below 1 ms);
   revisit if download size matters (DXIL and SPIR-V compress well).
-- DXC v1.9.2609 (the current release) for everything; the version is in each report.
+- DXC v1.9.2609 (the current release) for everything; the version is in each report. Compiled with `-Gis`
+  (phase 2, IEEE behaviour of NaN and infinity over fast-math).
+- Where the SDK's two descriptions of Xenos disagree (its CPU interpreter and its SPIR-V translator), the
+  differential tests follow ucode.h's comments, then the SPIR-V translator: loop repeat (ucode.h), vertex
+  halves as IEEE and the packed formats' component offsets (SPIR-V translator). aL is clamped as the CPU
+  interpreter does (the SPIR-V translator does not; no shader of the game gets near the limit).
+- The SDK's semantics are the reference, not the console: where the SDK is wrong about the hardware, so are
+  the tests.
 
 ## Open problems
 
-- Nothing here executes a translated shader. Correctness beyond compilation and the structural diff (ALU
-  semantics, vertex decoding, cube coordinates, the half-pixel offset) is checked only when the backend draws the
-  golden scenes (streams 04 and 05).
+- The differential tests (above) check what the translated code computes against the SDK's semantics as the
+  reference interpreter reads them, on lavapipe. They do not check the fixed-function steps the backend owns
+  (clipping, the viewport transform, the half-pixel offset, blending), derivatives (`getGradients`, LOD from
+  the screen), mip selection beyond the explicit LOD, or anything the SDK itself gets wrong; those still rest
+  on the golden scenes (streams 04 and 05). Only SPIR-V is executed (lavapipe); DXIL compiles from the
+  same HLSL, and its two changes (`-Gis`, `kk_Ne`) were checked by reading DXC's output, not by running it.
+  The alpha test (`kk_AlphaTest`) is not exercised (the harness leaves it off).
 - Shaders the D3D library builds in code (the two 24-byte pixel shaders, and probably some of the 8 unmatched
   vertex records) are not in the pack; `ShaderProvider` compiles them on first use (a few ms each), or the
   backend replaces the paths that use them (Clear, Resolve).
-- Bool literals are not inlined; harmless today (no shader reads a bool constant).
 - Stream 01's documents name `sub_82111CA0` / `sub_82111D90` and the container magic the other way round (see
   above); `SetVertexShader` / `SetPixelShader` (`sub_821108B8` / `sub_82110C28`) may be swapped as well, since
   each one's literal block marks the other stage's pending constants. To be settled in stream 01.
+- The sign of zero is not guaranteed on the host: Xenos `rcp(-0)` is -infinity, but Vulkan (without the
+  `SignedZeroInfNanPreserve` float controls, which DXC does not emit) and D3D may return either sign.
+  Harmless unless a shader divides by a zero it computed; the differential tests exclude these cases.
 - `psheatshimmer` declares a DEPTH output that no compiled shader writes; if the game expects depth from it, it
   comes from elsewhere.

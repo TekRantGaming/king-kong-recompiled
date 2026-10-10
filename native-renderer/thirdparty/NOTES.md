@@ -32,3 +32,10 @@ Changes we make to vendored code are kept as small as possible and listed here:
   `dxc_compiler.cpp` are not built.
 - `XenosRecomp/XenosRecomp/pch.h`: includes `<iterator>` (Phase 2: with the SDK's fmt, which no longer pulls it
   in, `shader_recompiler.h` did not compile in the plugin build).
+- `XenosRecomp/XenosRecomp/shader_recompiler.cpp` (Phase 2, differential tests; translator version 4): cube
+  fetches apply the instruction's offsets and unnormalized coordinates; the vector half's a0 / p0 changes
+  take effect before the scalar half reads its operands and a scalar write replaces them; aL is clamped to
+  [-256, 256]; loop repeat keeps the current aL; not-equal goes through `kk_Ne` (unordered); in instruction
+  mode `vfetch_mini` uses the binding and stride of the `vfetch_full` that ran last; bool literals are
+  inlined (the prelude's multiply rule changed too, in `native-renderer/shaders`). Listed with the reasons in
+  `docs/shaders.md`.
