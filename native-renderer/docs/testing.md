@@ -252,11 +252,11 @@ that was not used for tuning.
 
 ## Render scale runs
 
-The golden set is made at the console's size. A scale run compares a scaled frame against it only through the
-compare tool's tolerant settings, and is judged by eye first: `--native_render_scale 2` on the same scenes gives
-a larger frame image (the capture is the presenter's output, at the window's size, so its size does not change
-unless the window does). Commands for it are in `backend.md`, "Render scale"; the synthetic frames that decide
-whether scaling is right are `nr_game_tests`' `Scale_*` tests.
+The golden set is made at the console's size, and the capture is the presenter's output at the window's size, so
+a scaled run (`--native_render_scale 2`) is compared against it like any other run of the new renderer: the
+picture should match and the edges get cleaner. Whether scaling itself is right is decided by the synthetic
+`Scale_*` tests in `nr_game_tests` (`backend.md`, "Render scale"); the commands for a run on the game are in
+that section too.
 
 ## Testing the compare tool
 
