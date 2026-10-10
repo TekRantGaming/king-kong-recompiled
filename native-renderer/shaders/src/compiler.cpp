@@ -18,6 +18,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <unknwn.h>  // IUnknown (WIN32_LEAN_AND_MEAN leaves out the OLE headers)
 #else
 #include <dlfcn.h>
 #endif

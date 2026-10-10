@@ -52,7 +52,7 @@ endif()
 
 add_library(kkshaders_deps INTERFACE)
 target_include_directories(kkshaders_deps INTERFACE "${KK_FMT_INCLUDE}" "${KK_XXHASH_INCLUDE}")
-target_compile_definitions(kkshaders_deps INTERFACE FMT_HEADER_ONLY=1 XXH_INLINE_ALL=1)
+target_compile_definitions(kkshaders_deps INTERFACE FMT_HEADER_ONLY=1)  # xxh3.h inlines everything itself
 if(WIN32)
     target_compile_definitions(kkshaders_deps INTERFACE NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
 endif()
