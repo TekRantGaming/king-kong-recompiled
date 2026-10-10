@@ -4,6 +4,7 @@
 #include <rex/logging.h>
 #include <rex/system/xmemory.h>
 
+#include "backend/frame_log.h"
 #include "backend/log.h"
 #if NR_GAME_RENDERER
 #include "backend/game_renderer.h"
@@ -213,6 +214,7 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
       renderer->options().dump_frame = game.dump_frame;
       renderer->options().debug = game.debug;
       renderer->options().async_pipelines = game.async_pipelines;
+      renderer->SetFrameLog(FrameLogConfig::Parse(game.frame_log.c_str()));
       rex::memory::Memory* memory = memory_;
       renderer->set_watch([memory](uint32_t physical_address, uint32_t bytes) {
         memory->EnablePhysicalMemoryAccessCallbacks(physical_address, bytes, true, false);

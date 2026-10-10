@@ -24,6 +24,7 @@
 
 #include "backend/guest_memory.h"
 #include "kkshaders/cache.h"
+#include "kkshaders/container.h"
 #include "kkshaders/translator.h"
 
 namespace nr {
@@ -35,6 +36,9 @@ struct GameShader {
   kkshaders::ShaderBindings bindings;
   nvrhi::ShaderHandle handle;
   bool from_pack = false;
+  // Vertex shaders: the parsed container (microcode and fetch table), for rebuilding the
+  // library's patched microcode (kkshaders/vertex_patch.h; the frame log's vs hash).
+  std::shared_ptr<const kkshaders::ShaderInfo> source;
 };
 
 class ShaderLibrary {

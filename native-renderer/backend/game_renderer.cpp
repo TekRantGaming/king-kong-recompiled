@@ -668,9 +668,12 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     key = Mix64(key, (uint64_t(d.u32(dev::kPaSuPolyOffset)) << 32) | d.u32(dev::kPaSuPolyOffset + 4));
   }
   key = Mix64(key, (mode & 0x7FF) | ((clip_cntl >> 16) & 1) << 12 | (options_.flip_front_face ? 1u << 13 : 0));
+  if (frame_log_ && frame_log_->enabled()) LogDraw(call, d, *vs, ps.get());
   nvrhi::IGraphicsPipeline* pipeline = GetPipeline(pd, framebuffer, key, true);
   if (!pipeline) {
-    if (pipelines_pending_.count(key) == 0) ++stats_.skipped_pipeline;
+    const bool pending = pipelines_pending_.count(key) != 0;
+    if (!pending) ++stats_.skipped_pipeline;
+    if (frame_log_ && frame_log_->active()) frame_log_->DrawNotDrawn(pending);
     return;
   }
 

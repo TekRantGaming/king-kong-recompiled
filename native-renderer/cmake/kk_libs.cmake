@@ -81,6 +81,7 @@ if(NR_GAME_RENDERER)
         ${NR_ROOT}/shaders/src/translator.cpp
         ${NR_ROOT}/shaders/src/compiler.cpp
         ${NR_ROOT}/shaders/src/cache.cpp
+        ${NR_ROOT}/shaders/src/vertex_patch.cpp
         "${CMAKE_CURRENT_BINARY_DIR}/kkshaders_prelude.cpp")
     target_include_directories(kkshaders PUBLIC ${NR_ROOT}/shaders/include PRIVATE "${_nr_dxc_include}")
     target_link_libraries(kkshaders PUBLIC nr_xenosrecomp ${CMAKE_DL_LIBS})

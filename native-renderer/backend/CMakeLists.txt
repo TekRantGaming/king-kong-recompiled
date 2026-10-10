@@ -9,6 +9,7 @@
 
 add_library(nr_draw STATIC
     draw_state.cpp
+    frame_log.cpp
     api_binding.cpp
     primitive.cpp
 )
@@ -29,6 +30,7 @@ if(NR_GAME_RENDERER)
         game_renderer.cpp
         game_resources.cpp
         game_passes.cpp
+        game_frame_log.cpp
         shader_library.cpp
     )
     target_link_libraries(nr_renderer PUBLIC kknr_resources kkshaders)

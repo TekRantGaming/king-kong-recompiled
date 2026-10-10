@@ -29,6 +29,7 @@
 #include <nvrhi/nvrhi.h>
 
 #include "backend/draw_sink.h"
+#include "backend/frame_log.h"
 #include "backend/guest_device.h"
 #include "backend/guest_memory.h"
 #include "backend/shader_library.h"
@@ -114,6 +115,14 @@ class GameRenderer {
   bool Present(nvrhi::ICommandList* cl, uint32_t device, nvrhi::ITexture* target);
   // After the frame's command list was submitted.
   void EndFrame();
+
+  // REX_DEV_FRAME_LOG: the draw and resolve lines of frame_log.h, from the game's
+  // calls. Off until set; emit null = the warning log (the harness reads it there).
+  void SetFrameLog(const FrameLogConfig& config, FrameLog::Emit emit = nullptr);
+  FrameLog* frame_log() { return frame_log_.get(); }
+  // The microcode hash the Xenos log prints for a vertex shader bound with this declaration
+  // and these streams: the library patches the fetches (kkshaders/vertex_patch.h).
+  uint64_t PatchedVertexShaderHash(const GameShader& vs, uint32_t declaration, const dev::DeviceView& d);
 
   // The host render targets made so far (tests and debugging).
   struct TargetInfo {
@@ -223,6 +232,14 @@ class GameRenderer {
   std::unordered_map<uint64_t, bool> pipelines_pending_;
   bool pipeline_stop_ = false;
   double pipeline_worker_ms_ = 0;
+
+  // ---- frame log (game_frame_log.cpp)
+  void LogDraw(const DrawCall& call, const dev::DeviceView& d, const GameShader& vs, const GameShader* ps);
+  void LogResolve(const ResolveCall& call, const dev::DeviceView& d);
+  void LogClear(const ClearCall& call, const dev::DeviceView& d);
+  void LogSwap(const dev::DeviceView& d);
+  std::unique_ptr<FrameLog> frame_log_;
+  std::unordered_map<uint64_t, uint64_t> patched_hashes_;
 
   // ---- passes
   struct ViewportSetup {

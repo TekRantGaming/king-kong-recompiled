@@ -17,15 +17,18 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <chrono>
 #include <cstring>
 #include <functional>
 #include <memory>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "backend/api_binding.h"
 #include "backend/draw_state.h"
+#include "backend/frame_log.h"
 #include "backend/game_renderer.h"
 #include "backend/guest_device.h"
 #include "backend/renderer.h"
@@ -36,6 +39,8 @@
 #include "container_writer.h"
 #include "hooks/hook_table.h"
 #include "kknr/guest_texture.h"
+#include "kkshaders/container.h"
+#include "kkshaders/vertex_patch.h"
 #include "xenos_asm.h"
 
 #ifndef NR_TEST_DXC_DIR
@@ -1270,6 +1275,178 @@ TEST(Textures_UploadSampleAndInvalidate) {
   check(px, 100, __LINE__);
   CHECK_EQ(f.game->stats().texture_uploads, uint64_t(2));
   CHECK_EQ(f.game->stats().texture_failures, uint64_t(0));
+}
+
+// ------------------------------------------------------------- frame log ---
+//
+// REX_DEV_FRAME_LOG lines from the game renderer, against values worked out here from the
+// containers and the registers the fixture sets (backend/frame_log.h has the formats).
+
+namespace {
+
+struct LoggedFixture {
+  Fixture f;
+  std::vector<std::string> lines;
+  bool Init(const char* option = "0") {
+    if (!f.Init()) return false;
+    f.game->SetFrameLog(FrameLogConfig::Parse(option), [this](const std::string& l) { lines.push_back(l); });
+    return true;
+  }
+  std::vector<std::string> With(const char* prefix) const {
+    std::vector<std::string> out;
+    for (const std::string& l : lines)
+      if (l.rfind(prefix, 0) == 0) out.push_back(l);
+    return out;
+  }
+};
+
+// The hash the Xenos log would print for a vertex shader: the container's microcode patched for
+// the colour declaration (position FLOAT3 at 0, D3DCOLOR at 12) and stream 0's stride.
+uint64_t ExpectedVertexHash(const std::vector<uint8_t>& container, uint32_t stride, uint32_t color_offset = 12) {
+  kkshaders::ParseResult parsed = kkshaders::parseContainer(container);
+  const auto element = [](uint8_t stream, uint16_t offset, uint32_t type, kkshaders::DeclUsage usage) {
+    kkshaders::DeclElement e;
+    e.stream = stream;
+    e.offset = offset;
+    e.format = uint8_t(type & 63);
+    e.isSigned = ((type >> 8) & 1) != 0;
+    e.integer = ((type >> 9) & 1) != 0;
+    e.usage = usage;
+    return e;
+  };
+  const kkshaders::DeclElement decl[] = {element(0, 0, kDeclFloat3, kkshaders::DeclUsage::Position),
+                                         element(0, uint16_t(color_offset), kDeclColor, kkshaders::DeclUsage::Color)};
+  uint32_t strides[16] = {stride};
+  return kkshaders::hashMicrocode(kkshaders::patchVertexFetches(parsed.info, decl, strides).ucode);
+}
+
+}  // namespace
+
+TEST(FrameLog_OffByDefault) {
+  Fixture f;
+  if (!f.Init()) return;
+  CHECK(f.game->frame_log() == nullptr);
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  f.DrawQuadrants(p);
+  f.Present(rt);
+  CHECK_EQ(f.game->stats().draws, uint64_t(1));
+}
+
+TEST(FrameLog_OneFrameOfClearDrawAndPresent) {
+  LoggedFixture t;
+  if (!t.Init()) return;
+  Fixture& f = t.f;
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  f.Present(rt);  // the first swap: the frame starts
+  f.Clear(kClearTarget0, 0xFF000000);
+  f.DrawQuadrants(p);
+  f.Present(rt);  // ends it
+  f.DrawQuadrants(p);
+  f.Present(rt);  // quiet again
+  if (t.lines.size() != 5) {
+    for (const std::string& l : t.lines) std::printf("  %s\n", l.c_str());
+  }
+  CHECK_EQ(t.lines.size(), size_t(5));
+  if (t.lines.size() != 5) return;
+  CHECK_EQ(t.lines[0], std::string("Frame log: frame start"));
+  // A clear goes through the resolve path: a null copy that clears.
+  CHECK_EQ(t.lines[1],
+           std::string("Frame log: resolve 0 rt0@0:f0 -> 00000000 format 0 pitch 0 height 0 command 3 clear color 1 depth 0 "
+                       "off 0,0 surface pitch 64 msaa 1"));
+  FrameLogDraw want;
+  want.ps_hash = kkshaders::parseContainer(PixelShaderInterpolator()).info.ucodeHash;
+  want.vs_hash = ExpectedVertexHash(VertexShader(kColor, F_8_8_8_8), 16);
+  want.pitch = kSize;
+  want.msaa = 1;
+  want.scissor_w = want.scissor_h = kSize;
+  want.targets = {{0, 0, 0}};
+  want.count = 24;
+  CHECK_EQ(t.lines[2], FrameLog::FormatDraw(0, want));
+  // The Present's own copy of the back buffer (no front buffer texture in the fixture).
+  CHECK(t.lines[3].rfind("Frame log: resolve 1 rt0@0:f0 -> ", 0) == 0);
+  CHECK_EQ(t.lines[4], std::string("Frame log: frame end, 1 draws, 2 resolves"));
+}
+
+TEST(FrameLog_VertexHashFollowsTheStrides) {
+  // The same shader and declaration with a wider vertex: the library patches another copy.
+  LoggedFixture t;
+  if (!t.Init()) return;
+  Fixture& f = t.f;
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  f.Present(rt);
+  f.DrawQuadrants(p);
+  // Stride 20: each vertex followed by a padding dword.
+  std::vector<uint8_t> wide;
+  for (const ColorVertex& v : QuadTriangles(kFull, 0xFFFFFFFF)) {
+    PutBEFloat(wide, v.x);
+    PutBEFloat(wide, v.y);
+    PutBEFloat(wide, v.z);
+    PutBE32(wide, v.argb);
+    PutBE32(wide, 0);
+  }
+  f.SetStream(0, f.NewVertexBuffer(wide), 0, 20);
+  f.Draw(4, 0, 6);
+  f.Present(rt);
+  std::vector<std::string> draws = t.With("Frame log: draw ");
+  CHECK_EQ(draws.size(), size_t(2));
+  if (draws.size() != 2) return;
+  const std::vector<uint8_t> container = VertexShader(kColor, F_8_8_8_8);
+  auto vs_of = [](const std::string& line) { return line.substr(line.find(" vs ") + 4, 16); };
+  char want16[17], want20[17];
+  std::snprintf(want16, sizeof(want16), "%016llX", static_cast<unsigned long long>(ExpectedVertexHash(container, 16)));
+  std::snprintf(want20, sizeof(want20), "%016llX", static_cast<unsigned long long>(ExpectedVertexHash(container, 20)));
+  CHECK_EQ(vs_of(draws[0]), std::string(want16));
+  CHECK_EQ(vs_of(draws[1]), std::string(want20));
+  CHECK(vs_of(draws[0]) != vs_of(draws[1]));
+  // Neither is the template's hash (what the shader library keys by).
+  char tmpl[17];
+  std::snprintf(tmpl, sizeof(tmpl), "%016llX", static_cast<unsigned long long>(kkshaders::parseContainer(container).info.ucodeHash));
+  CHECK(vs_of(draws[0]) != std::string(tmpl));
+}
+
+TEST(FrameLog_ResolveIntoATexture) {
+  LoggedFixture t;
+  if (!t.Init()) return;
+  Fixture& f = t.f;
+  const uint32_t tex = f.NewTexture(Desc(kknr::TextureFormat::k_8_8_8_8, kknr::Endian::kNone, kknr::kSwizzleXYZW));
+  const uint32_t rt = f.BindMainSurface();
+  f.Present(rt);
+  f.Resolve(0x100 /* clear the colour too */, 0, tex, 0, 0xFF000000);
+  f.Present(rt);
+  std::vector<std::string> resolves = t.With("Frame log: resolve 0 ");
+  CHECK_EQ(resolves.size(), size_t(1));
+  if (resolves.empty()) return;
+  // Source rt0 at EDRAM 0 in k_8_8_8_8 (format 6 as a texture), a 64x64 destination, the copy
+  // (the formats agree), clearing the colour.
+  CHECK(resolves[0].find(" rt0@0:f0 -> ") != std::string::npos);
+  CHECK(resolves[0].find(" format 6 pitch 64 height 64 command 0 clear color 1 depth 0 ") != std::string::npos);
+}
+
+TEST(FrameLog_DrawWhosePipelineIsNotReady) {
+  // The plugin's default: a pipeline is made on a worker, the draw waits for the next frame, and
+  // the log says so (the line the Vulkan Xenos log has for its placeholder pipelines).
+  LoggedFixture t;
+  if (!t.Init("0,2")) return;
+  Fixture& f = t.f;
+  f.game->options().async_pipelines = true;
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  f.Present(rt);
+  f.DrawQuadrants(p);
+  CHECK_EQ(f.game->stats().skipped_pending, uint64_t(1));
+  f.Present(rt);
+  for (int i = 0; i < 500 && f.game->stats().pipelines == 0; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    f.DrawQuadrants(p);  // polls the worker's result
+    if (f.game->stats().pipelines) break;
+  }
+  f.Present(rt);
+  const std::vector<std::string> notes = t.With("Frame log: draw 0 pipeline ");
+  CHECK(!notes.empty());
+  if (!notes.empty()) CHECK_EQ(notes[0], std::string("Frame log: draw 0 pipeline placeholder (skipped)"));
 }
 
 NR_TEST_MAIN()

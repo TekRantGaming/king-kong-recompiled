@@ -56,6 +56,7 @@ struct GameSettings {
   int32_t dump_frame = -1;
   uint32_t debug = 0;
   bool async_pipelines = true;
+  std::string frame_log;       // REX_DEV_FRAME_LOG: "<seconds>[,<frames>]", empty = off
 };
 
 class Backend {

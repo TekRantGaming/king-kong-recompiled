@@ -96,6 +96,7 @@ std::shared_ptr<GameShader> ShaderLibrary::Build(const kkshaders::ShaderInfo& in
   shader->id = next_id_++;
   shader->bindings = std::move(compiled.bindings);
   shader->from_pack = from_pack;
+  if (info.kind == kkshaders::ShaderKind::Vertex) shader->source = std::make_shared<const kkshaders::ShaderInfo>(info);
   nvrhi::ShaderDesc desc;
   desc.shaderType = info.kind == kkshaders::ShaderKind::Vertex ? nvrhi::ShaderType::Vertex
                                                                : nvrhi::ShaderType::Pixel;

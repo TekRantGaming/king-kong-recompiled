@@ -12,6 +12,10 @@ target_link_libraries(nr_draw_tests PRIVATE nr_draw nr_hooks)
 target_compile_definitions(nr_draw_tests PRIVATE NR_SOURCE_DIR="${NR_ROOT}")
 add_test(NAME nr_draw_tests COMMAND nr_draw_tests)
 
+add_executable(nr_frame_log_tests frame_log_tests.cpp)
+target_link_libraries(nr_frame_log_tests PRIVATE nr_draw)
+add_test(NAME nr_frame_log_tests COMMAND nr_frame_log_tests)
+
 add_executable(nr_trace_replay trace_replay_main.cpp)
 target_link_libraries(nr_trace_replay PRIVATE nr_draw nr_hooks)
 
