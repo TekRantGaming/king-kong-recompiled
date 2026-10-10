@@ -20,7 +20,7 @@
 
 namespace nr {
 
-class DrawState {
+class DrawTracker {
  public:
   static constexpr uint32_t kMaxStreams = 16;
   static constexpr uint32_t kMaxSamplers = 32;
@@ -43,7 +43,7 @@ class DrawState {
     uint64_t dropped_draws = 0;  // missing index / vertex buffer or unmapped memory
   };
 
-  DrawState(const GuestMemory& memory, DrawSink* sink) : memory_(memory), sink_(sink) {}
+  DrawTracker(const GuestMemory& memory, DrawSink* sink) : memory_(memory), sink_(sink) {}
 
   void set_sink(DrawSink* sink) { sink_ = sink; }
 

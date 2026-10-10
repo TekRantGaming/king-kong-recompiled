@@ -232,9 +232,9 @@ TEST(Milestone3_RecordedFrameThroughNvrhi) {
   TriangleScene scene(memory, kWidth, kHeight);
   NvrhiRecorder recorder;
   f.renderer->set_observer(&recorder);
-  DrawState state(memory, f.renderer.get());
+  DrawTracker state(memory, f.renderer.get());
   ApiBinding binding;
-  InitApiBinding(binding, &state, [](void* s) { return static_cast<DrawState*>(s); });
+  InitApiBinding(binding, &state, [](void* s) { return static_cast<DrawTracker*>(s); });
 
   // Frame 1: the main surface is not known yet, so both draws are recorded.
   std::istringstream log1(scene.Log());
@@ -321,9 +321,9 @@ TEST(Milestone3_ViewportAndTranspose) {
   TriangleScene scene(memory, kWidth, kHeight);
   // The right half of the target only.
   scene.viewport = memory.NewViewport(kWidth / 2, 0, kWidth / 2, kHeight, 0.0f, 1.0f);
-  DrawState state(memory, f.renderer.get());
+  DrawTracker state(memory, f.renderer.get());
   ApiBinding binding;
-  InitApiBinding(binding, &state, [](void* s) { return static_cast<DrawState*>(s); });
+  InitApiBinding(binding, &state, [](void* s) { return static_cast<DrawTracker*>(s); });
   // Clear the whole target first with a full viewport, then draw.
   std::istringstream log(scene.Log());
   hooks::ReplayTrace(log, &binding.api);

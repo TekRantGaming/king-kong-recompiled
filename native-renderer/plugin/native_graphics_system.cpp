@@ -363,7 +363,7 @@ ApiBinding g_api_binding;
 
 // The binding is created once and may be cached by the hooks before the
 // system exists: look the system up on every call.
-DrawState* ResolveDraws(void* /*owner*/) {
+DrawTracker* ResolveDraws(void* /*owner*/) {
   NativeGraphicsSystem* system = NativeGraphicsSystem::Instance();
   if (!system || !system->guest_gpu_ready() || !system->backend() || !REXCVAR_GET(native_draws)) {
     return nullptr;

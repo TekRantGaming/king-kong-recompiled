@@ -124,9 +124,9 @@ TEST(NvrhiOnTheSdkVulkanProvider) {
     // Milestone 3: the recorded frame through the hook table.
     FakeGuestMemory memory;
     TriangleScene scene(memory, w, h);
-    DrawState state(memory, &renderer);
+    DrawTracker state(memory, &renderer);
     ApiBinding binding;
-    InitApiBinding(binding, &state, [](void* s) { return static_cast<DrawState*>(s); });
+    InitApiBinding(binding, &state, [](void* s) { return static_cast<DrawTracker*>(s); });
     std::istringstream log(scene.Log());
     hooks::ReplayTrace(log, &binding.api);
     CHECK_EQ(renderer.stats().draws_recorded, uint64_t(2));

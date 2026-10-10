@@ -59,11 +59,11 @@ class RecordingSink final : public DrawSink {
 struct Harness {
   FakeGuestMemory memory;
   RecordingSink sink;
-  DrawState state{memory, &sink};
+  DrawTracker state{memory, &sink};
   ApiBinding binding;
   bool active = true;
   Harness() {
-    InitApiBinding(binding, this, [](void* owner) -> DrawState* {
+    InitApiBinding(binding, this, [](void* owner) -> DrawTracker* {
       auto* h = static_cast<Harness*>(owner);
       return h->active ? &h->state : nullptr;
     });

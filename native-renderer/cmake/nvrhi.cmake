@@ -53,13 +53,17 @@ set(NVRHI_FETCH_VULKAN_HEADERS OFF CACHE BOOL "" FORCE)
 set(NVRHI_FETCH_DIRECTX_HEADERS OFF CACHE BOOL "" FORCE)
 
 if(NR_HAS_D3D12 AND NOT TARGET Microsoft::DirectX-Headers)
-    # NVRHI includes <directx/d3d12.h> (DirectX-Headers); thirdparty/directx-shim
-    # forwards that to the Windows SDK's d3d12.h. The GUIDs come from dxguid.
+    # NVRHI includes <directx/d3d12.h> from Microsoft's DirectX-Headers and uses
+    # preview-only names (the linear algebra barriers, ID3D12DevicePreview)
+    # that the retail Windows SDK's d3d12.h lacks, so the headers of the tag
+    # NVRHI asks for (v1.717.0-preview) are vendored in thirdparty/DirectX-Headers.
+    # Only <directx/...> is on the include path: plain <d3d12.h> (the SDK's
+    # headers) stays the Windows SDK's.
     add_library(nr_directx_headers INTERFACE)
-    target_include_directories(nr_directx_headers INTERFACE "${NR_ROOT}/thirdparty/directx-shim")
+    target_include_directories(nr_directx_headers SYSTEM INTERFACE "${NR_ROOT}/thirdparty/DirectX-Headers/include")
     add_library(Microsoft::DirectX-Headers ALIAS nr_directx_headers)
-    add_library(nr_directx_guids INTERFACE)
-    target_link_libraries(nr_directx_guids INTERFACE dxguid)
+    add_library(nr_directx_guids STATIC "${NR_ROOT}/thirdparty/DirectX-Headers/src/dxguids.cpp")
+    target_link_libraries(nr_directx_guids PUBLIC nr_directx_headers dxguid)
     add_library(Microsoft::DirectX-Guids ALIAS nr_directx_guids)
 endif()
 

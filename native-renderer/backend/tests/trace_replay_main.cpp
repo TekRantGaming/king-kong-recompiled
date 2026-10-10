@@ -42,9 +42,9 @@ int main(int argc, char** argv) {
   }
   nr::test::FakeGuestMemory memory(16, 16);  // nothing mapped
   CountingSink sink;
-  nr::DrawState state(memory, &sink);
+  nr::DrawTracker state(memory, &sink);
   nr::ApiBinding binding;
-  nr::InitApiBinding(binding, &state, [](void* s) { return static_cast<nr::DrawState*>(s); });
+  nr::InitApiBinding(binding, &state, [](void* s) { return static_cast<nr::DrawTracker*>(s); });
   nr::hooks::ReplayStats stats = nr::hooks::ReplayTrace(log, &binding.api);
   const auto& s = state.stats();
   std::printf(

@@ -4,40 +4,40 @@
 
 namespace nr {
 
-void DrawState::SetRenderTarget(uint32_t index, uint32_t surface) {
+void DrawTracker::SetRenderTarget(uint32_t index, uint32_t surface) {
   if (index < render_targets_.size()) {
     render_targets_[index] = surface;
   }
 }
 
-void DrawState::SetDepthStencilSurface(uint32_t surface) { depth_stencil_ = surface; }
+void DrawTracker::SetDepthStencilSurface(uint32_t surface) { depth_stencil_ = surface; }
 
-void DrawState::SetViewport(uint32_t viewport_guest) {
+void DrawTracker::SetViewport(uint32_t viewport_guest) {
   if (const uint8_t* p = memory_.Virtual(viewport_guest)) {
     viewport_ = DecodeViewport(p);
   }
 }
 
-void DrawState::SetTexture(uint32_t sampler, uint32_t texture) {
+void DrawTracker::SetTexture(uint32_t sampler, uint32_t texture) {
   if (sampler < kMaxSamplers) {
     textures_[sampler] = texture;
   }
 }
 
-void DrawState::SetIndices(uint32_t index_buffer) { index_buffer_ = index_buffer; }
+void DrawTracker::SetIndices(uint32_t index_buffer) { index_buffer_ = index_buffer; }
 
-void DrawState::SetStreamSource(uint32_t stream, uint32_t vertex_buffer, uint32_t offset,
+void DrawTracker::SetStreamSource(uint32_t stream, uint32_t vertex_buffer, uint32_t offset,
                                 uint32_t stride) {
   if (stream < kMaxStreams) {
     streams_[stream] = Stream{vertex_buffer, offset, stride};
   }
 }
 
-void DrawState::SetPixelShader(uint32_t pixel_shader) { pixel_shader_ = pixel_shader; }
-void DrawState::SetVertexShader(uint32_t vertex_shader) { vertex_shader_ = vertex_shader; }
-void DrawState::SetVertexDeclaration(uint32_t declaration) { vertex_declaration_ = declaration; }
+void DrawTracker::SetPixelShader(uint32_t pixel_shader) { pixel_shader_ = pixel_shader; }
+void DrawTracker::SetVertexShader(uint32_t vertex_shader) { vertex_shader_ = vertex_shader; }
+void DrawTracker::SetVertexDeclaration(uint32_t declaration) { vertex_declaration_ = declaration; }
 
-void DrawState::CopyFloatConstants(std::array<float, 4>* dest, uint32_t dest_count, uint32_t reg,
+void DrawTracker::CopyFloatConstants(std::array<float, 4>* dest, uint32_t dest_count, uint32_t reg,
                                    uint32_t data_guest, uint32_t count) {
   if (reg >= dest_count) {
     return;
@@ -54,15 +54,15 @@ void DrawState::CopyFloatConstants(std::array<float, 4>* dest, uint32_t dest_cou
   }
 }
 
-void DrawState::SetVsConstantsF(uint32_t reg, uint32_t data_guest, uint32_t count) {
+void DrawTracker::SetVsConstantsF(uint32_t reg, uint32_t data_guest, uint32_t count) {
   CopyFloatConstants(vs_f_.data(), kVsFloatConstants, reg, data_guest, count);
 }
 
-void DrawState::SetPsConstantsF(uint32_t reg, uint32_t data_guest, uint32_t count) {
+void DrawTracker::SetPsConstantsF(uint32_t reg, uint32_t data_guest, uint32_t count) {
   CopyFloatConstants(ps_f_.data(), kPsFloatConstants, reg, data_guest, count);
 }
 
-void DrawState::SetVsConstantsI(uint32_t reg, uint32_t data_guest, uint32_t count) {
+void DrawTracker::SetVsConstantsI(uint32_t reg, uint32_t data_guest, uint32_t count) {
   // int4s; the library packs x, y, z into the bytes of the loop constant
   // (count, start, step).
   const uint8_t* p = memory_.Virtual(data_guest);
@@ -76,13 +76,13 @@ void DrawState::SetVsConstantsI(uint32_t reg, uint32_t data_guest, uint32_t coun
   }
 }
 
-void DrawState::SetBlendControl(uint32_t render_target, uint32_t value) {
+void DrawTracker::SetBlendControl(uint32_t render_target, uint32_t value) {
   if (render_target < blend_control_.size()) {
     blend_control_[render_target] = value;
   }
 }
 
-void DrawState::SetRenderState(uint32_t state, uint32_t value) {
+void DrawTracker::SetRenderState(uint32_t state, uint32_t value) {
   if (state >= rs::kCount || (state & 3)) {
     return;
   }
@@ -102,32 +102,32 @@ void DrawState::SetRenderState(uint32_t state, uint32_t value) {
   }
 }
 
-uint32_t DrawState::render_state(uint32_t state) const {
+uint32_t DrawTracker::render_state(uint32_t state) const {
   return state < rs::kCount && !(state & 3) ? render_state_values_[state / 4] : 0;
 }
 
-void DrawState::SetSamplerState(uint32_t sampler, uint32_t type, uint32_t value) {
+void DrawTracker::SetSamplerState(uint32_t sampler, uint32_t type, uint32_t value) {
   if (sampler < kMaxSamplers && type < ss::kCount && !(type & 3)) {
     sampler_state_values_[sampler][type / 4] = value;
   }
 }
 
-uint32_t DrawState::sampler_state(uint32_t sampler, uint32_t type) const {
+uint32_t DrawTracker::sampler_state(uint32_t sampler, uint32_t type) const {
   if (sampler < kMaxSamplers && type < ss::kCount && !(type & 3)) {
     return sampler_state_values_[sampler][type / 4];
   }
   return 0;
 }
 
-void DrawState::BeginConditionalRendering(uint32_t id) { conditional_stack_.push_back(id); }
+void DrawTracker::BeginConditionalRendering(uint32_t id) { conditional_stack_.push_back(id); }
 
-void DrawState::EndConditionalRendering() {
+void DrawTracker::EndConditionalRendering() {
   if (!conditional_stack_.empty()) {
     conditional_stack_.pop_back();
   }
 }
 
-void DrawState::Clear(uint32_t flags, uint32_t color_argb, float z, uint32_t stencil) {
+void DrawTracker::Clear(uint32_t flags, uint32_t color_argb, float z, uint32_t stencil) {
   ++stats_.clears;
   if (!sink_) {
     return;
@@ -150,14 +150,14 @@ void DrawState::Clear(uint32_t flags, uint32_t color_argb, float z, uint32_t ste
   sink_->OnClear(call);
 }
 
-void DrawState::Resolve(uint32_t flags, uint32_t dest_texture) {
+void DrawTracker::Resolve(uint32_t flags, uint32_t dest_texture) {
   ++stats_.resolves;
   if (sink_) {
     sink_->OnResolve(ResolveCall{frame_, flags, dest_texture, render_targets_[0]});
   }
 }
 
-bool DrawState::FillCommon(DrawCall& call) {
+bool DrawTracker::FillCommon(DrawCall& call) {
   call.frame = frame_;
   call.index_in_frame = draws_in_frame_++;
 
@@ -205,7 +205,7 @@ bool DrawState::FillCommon(DrawCall& call) {
   return true;
 }
 
-void DrawState::DrawIndexed(uint32_t primitive, int32_t base_vertex, uint32_t start_index,
+void DrawTracker::DrawIndexed(uint32_t primitive, int32_t base_vertex, uint32_t start_index,
                             uint32_t index_count) {
   ++stats_.draws;
   ++stats_.indexed_draws;
@@ -234,7 +234,7 @@ void DrawState::DrawIndexed(uint32_t primitive, int32_t base_vertex, uint32_t st
   }
 }
 
-void DrawState::Draw(uint32_t primitive, uint32_t start_vertex, uint32_t vertex_count) {
+void DrawTracker::Draw(uint32_t primitive, uint32_t start_vertex, uint32_t vertex_count) {
   ++stats_.draws;
   DrawCall call;
   call.indexed = false;
@@ -250,7 +250,7 @@ void DrawState::Draw(uint32_t primitive, uint32_t start_vertex, uint32_t vertex_
   }
 }
 
-void DrawState::Present() {
+void DrawTracker::Present() {
   ++stats_.presents;
   if (sink_) {
     sink_->OnPresent(frame_, render_targets_[0]);

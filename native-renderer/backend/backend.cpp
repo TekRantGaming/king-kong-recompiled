@@ -82,7 +82,7 @@ bool Backend::Initialize(uint32_t width, uint32_t height) {
     ++submitted_frames_;
   });
   sink_ = std::make_unique<LockedSink>(*renderer_, mutex_);
-  draws_ = std::make_unique<DrawState>(guest_memory_, sink_.get());
+  draws_ = std::make_unique<DrawTracker>(guest_memory_, sink_.get());
   REXGPU_INFO("rexgpu-native: NVRHI renderer ready ({}x{})", width, height);
   return true;
 }

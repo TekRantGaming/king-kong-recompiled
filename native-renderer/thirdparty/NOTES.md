@@ -1,17 +1,20 @@
-# Third-party code
+﻿# Third-party code
 
 Vendored copies (exported with `git archive`, no `.git` data), each with its own licence file.
 
 | Folder | Upstream | Commit | Licence |
 |---|---|---|---|
 | `nvrhi/` | https://github.com/NVIDIA-RTX/NVRHI | 6b96fb03e07539f08327aea76c56d55f1de9d906 (2026-10-05) | MIT (`nvrhi/LICENSE.txt`; `ThirdPartyLicenses.txt` for what it bundles) |
+| `DirectX-Headers/` | https://github.com/microsoft/DirectX-Headers | v1.717.0-preview, d873b344dc540898868697245f100c2a67fe68d9 (2025-05-28): only `include/directx/*.h`, `include/dxguids`, `include/wsl`, `src/dxguids.cpp` | MIT (`DirectX-Headers/LICENSE`) |
 | `XenosRecomp/` | https://github.com/hedge-dev/XenosRecomp | 990d03b28a27b50277ee5d8d942e1c5f873869d1 (2025-08-03) | MIT (`XenosRecomp/LICENSE.md`) |
 
 Not vendored:
 
-- NVRHI fetches `Vulkan-Headers` (v1.4.352) and `DirectX-Headers` (v1.717.0-preview) with CMake FetchContent
-  unless `Vulkan::Headers` / `Microsoft::DirectX-Headers` targets already exist. Point it at the SDK's copies
-  (brief 04) rather than letting it download.
+- NVRHI fetches `Vulkan-Headers` (v1.4.352) with CMake FetchContent unless a `Vulkan::Headers` target already
+  exists; `cmake/nvrhi.cmake` points it at the SDK's copy and never lets it download. `DirectX-Headers` is vendored
+  (above) because NVRHI's D3D12 backend uses preview names (`ID3D12DevicePreview`, the linear algebra barrier
+  sync) that the retail Windows SDK 10.0.26100 `d3d12.h` lacks, although it defines `D3D12_PREVIEW_SDK_VERSION`
+  as 717. The first Windows build failed on exactly that.
 - XenosRecomp's submodules are not included: `thirdparty/fmt` (873670ba), `thirdparty/xxHash` (2bf8313b),
   `thirdparty/zstd` (f7a8bb12), `thirdparty/smol-v` (9dd54c37) and `thirdparty/dxc-bin` (737ac9f5, prebuilt
   DXC binaries). Its own code is `XenosRecomp/XenosRecomp/` (ten files). Build it against the libraries the

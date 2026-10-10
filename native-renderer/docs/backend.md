@@ -28,7 +28,7 @@ call path are built and verified on Linux without the game; nothing has run insi
 engine -> sub_8211xxxx (hooked, kk_native_hooks.cpp)
             |-- hooks::Run: forward if the plugin is active (nested draws not forwarded)
             |     -> hook table handler: r3..r10 / f1 -> NrApi call
-            |          -> (plugin) ApiBinding -> DrawState -> Renderer (NVRHI) -> command list
+            |          -> (plugin) ApiBinding -> DrawTracker -> Renderer (NVRHI) -> command list
             '-- the game's original (__imp__sub_...): the library keeps running
 the library's packets -> ring skimmer (fences, interrupts, VdSwap) -> Backend::Present -> presenter
 ```

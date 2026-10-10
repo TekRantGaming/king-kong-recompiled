@@ -52,7 +52,7 @@ class Backend {
 
   void set_test_picture(TestPicture picture) { test_picture_ = picture; }
   Renderer& renderer() { return *renderer_; }
-  DrawState* draws() { return draws_.get(); }
+  DrawTracker* draws() { return draws_.get(); }
 
   // At the guest's swap, from the ring skimmer's thread.
   void Present(rex::ui::Presenter* presenter, uint32_t frontbuffer_width,
@@ -63,7 +63,7 @@ class Backend {
   RuntimeGuestMemory guest_memory_;
   std::unique_ptr<Renderer> renderer_;
   std::unique_ptr<DrawSink> sink_;  // the renderer, under mutex_
-  std::unique_ptr<DrawState> draws_;
+  std::unique_ptr<DrawTracker> draws_;
   TestPicture test_picture_ = TestPicture::kTriangle;
   // The renderer is used from the game's thread (hooks) and the skimmer's
   // (swap): one at a time.

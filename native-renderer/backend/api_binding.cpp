@@ -6,13 +6,13 @@ namespace nr {
 
 namespace {
 
-DrawState* Resolve(void* self) {
+DrawTracker* Resolve(void* self) {
   auto* binding = static_cast<ApiBinding*>(self);
   return binding && binding->resolve ? binding->resolve(binding->owner) : nullptr;
 }
 
 #define NR_FORWARD(call)               \
-  if (DrawState* d = Resolve(self)) { \
+  if (DrawTracker* d = Resolve(self)) { \
     d->call;                          \
   }
 
@@ -73,7 +73,7 @@ void Present(void* self) { NR_FORWARD(Present()); }
 
 }  // namespace
 
-void InitApiBinding(ApiBinding& binding, void* owner, DrawState* (*resolve)(void* owner)) {
+void InitApiBinding(ApiBinding& binding, void* owner, DrawTracker* (*resolve)(void* owner)) {
   binding.owner = owner;
   binding.resolve = resolve;
   NrApi& a = binding.api;
