@@ -18,7 +18,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <sstream>
@@ -1447,6 +1449,35 @@ TEST(FrameLog_DrawWhosePipelineIsNotReady) {
   const std::vector<std::string> notes = t.With("Frame log: draw 0 pipeline ");
   CHECK(!notes.empty());
   if (!notes.empty()) CHECK_EQ(notes[0], std::string("Frame log: draw 0 pipeline placeholder (skipped)"));
+}
+
+TEST(FrameLog_TheHarnessReadsTheLines) {
+  // The lines through tests/compare.py's own parser (the tool that diffs them against a golden
+  // log): it must find the frame, the draw's shaders and no line it does not understand.
+#ifdef NR_COMPARE_PY
+  LoggedFixture t;
+  if (!t.Init()) return;
+  Fixture& f = t.f;
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  f.Present(rt);
+  f.Clear(kClearTarget0, 0xFF000000);
+  f.DrawQuadrants(p);
+  f.Present(rt);
+  const std::string path = "nr_game_tests_framelog.txt";
+  {
+    std::ofstream out(path);
+    for (const std::string& l : t.lines) out << "[warning] [gpu] " << l << "\n";
+  }
+  const std::string command = std::string("python3 -I \"") + NR_COMPARE_PY + "\" framelog " + path + " > " + path + ".out 2>&1";
+  CHECK_EQ(std::system(command.c_str()), 0);
+  std::ifstream in(path + ".out");
+  std::stringstream text;
+  text << in.rdbuf();
+  CHECK(text.str().find("# frame 0: 1 draws, 2 resolves") != std::string::npos);
+  CHECK(text.str().find("draw ps=") != std::string::npos);
+  CHECK(text.str().find("not understood") == std::string::npos && text.str().find("unknown") == std::string::npos);
+#endif
 }
 
 NR_TEST_MAIN()

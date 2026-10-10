@@ -71,7 +71,8 @@ if(NR_HAS_VULKAN AND NR_GAME_RENDERER)
         "${NR_ROOT}/shaders/tests/xenos_asm.cpp" "${NR_ROOT}/shaders/tests/container_writer.cpp")
     target_include_directories(nr_game_tests PRIVATE "${NR_ROOT}/shaders/tests")
     target_link_libraries(nr_game_tests PRIVATE nr_renderer nr_hooks ${CMAKE_DL_LIBS})
-    target_compile_definitions(nr_game_tests PRIVATE NR_TEST_DXC_DIR="${NR_DXC_DIR}")
+    target_compile_definitions(nr_game_tests PRIVATE NR_TEST_DXC_DIR="${NR_DXC_DIR}"
+                              NR_COMPARE_PY="${NR_ROOT}/tests/compare.py")
     add_test(NAME nr_game_tests
              COMMAND ${Python3_EXECUTABLE} -I "${CMAKE_CURRENT_SOURCE_DIR}/check_validation.py"
                      $<TARGET_FILE:nr_game_tests>)
