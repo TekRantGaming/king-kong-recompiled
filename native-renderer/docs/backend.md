@@ -242,7 +242,11 @@ register, first vertex and its clip position, blend, depth states), resolve and 
   golden self-check in `testing.md`.
 - No `--gpu_plugin` flag (the app picks xenos): the title frame at 9 s equals the golden one (MAE 0.0), and
   since f83d351 the hooks no longer connect to the preloaded native plugin in such runs.
-- `KK_NATIVE_RENDERER=OFF`: see the stream report (built in `kk/out/build/kk-dev-off`).
+- `KK_NATIVE_RENDERER=OFF` (`cmake --preset kk-dev -B out/build/kk-dev-off -DKK_NATIVE_RENDERER=OFF`, commit
+  6db14b3, no plugin built, `dev_d3d_trace.cpp` in): 12/13 in the full run
+  (`F:\KK-native-renderer\runs\xenos-20261010-121738`); venture failed on 2/5 frames (MAE 50, its timeline
+  drifted) and passed 5/5 when run again alone (`xenos-20261010-122554`). The Venture scene is timing-sensitive
+  for Xenos too.
 
 ### Test harness baseline (expected to fail)
 
