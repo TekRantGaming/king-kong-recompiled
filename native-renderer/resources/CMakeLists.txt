@@ -46,3 +46,13 @@ add_executable(kknr_resources_tests
 )
 target_link_libraries(kknr_resources_tests PRIVATE kknr_resources)
 add_test(NAME kknr_resources_tests COMMAND kknr_resources_tests)
+
+# The host format map against NVRHI's own format table (needs only NVRHI's headers and format-info.cpp).
+set(KKNR_NVRHI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../thirdparty/nvrhi" CACHE PATH "NVRHI source tree")
+if(EXISTS "${KKNR_NVRHI_DIR}/include/nvrhi/nvrhi.h")
+    add_executable(kknr_nvrhi_format_tests tests/test_main.cpp tests/test_nvrhi_format.cpp
+        "${KKNR_NVRHI_DIR}/src/common/format-info.cpp")
+    target_include_directories(kknr_nvrhi_format_tests PRIVATE "${KKNR_NVRHI_DIR}/include")
+    target_link_libraries(kknr_nvrhi_format_tests PRIVATE kknr_resources)
+    add_test(NAME kknr_nvrhi_format_tests COMMAND kknr_nvrhi_format_tests)
+endif()

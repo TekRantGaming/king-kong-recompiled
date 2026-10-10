@@ -18,13 +18,20 @@
 
 namespace kknr {
 
-// Physical guest memory: base points at physical address 0 (in hooks: base + 0xA0000000).
+// Physical guest memory: base points at physical address `origin` (in hooks: base + 0xA0000000 with origin 0;
+// tools that load a dump of just a texture's pages set origin to the first dumped address).
 struct GuestMemory {
   const uint8_t* base = nullptr;
   uint64_t size = 0x20000000;
+  uint32_t origin = 0;
   const uint8_t* At(uint32_t physical, uint32_t length) const {
-    if (!base || uint64_t(physical) + length > size) return nullptr;
-    return base + physical;
+    if (!base || physical < origin || uint64_t(physical - origin) + length > size) return nullptr;
+    return base + (physical - origin);
+  }
+  // Bytes readable from physical (0 if outside).
+  uint64_t Available(uint32_t physical) const {
+    if (!base || physical < origin || physical - origin >= size) return 0;
+    return size - (physical - origin);
   }
 };
 

@@ -19,10 +19,11 @@ bool LoadSwappedRegion(const GuestMemory& memory, uint32_t address, uint32_t byt
   const uint32_t rounded = (bytes + 3) & ~3u;
   out.assign(rounded, 0);
   if (!bytes) return true;
-  if (!memory.base || address >= memory.size) return false;
-  const uint32_t readable = uint32_t(std::min<uint64_t>(rounded, memory.size - address));
+  const uint64_t available = memory.Available(address);
+  if (!available) return false;
+  const uint32_t readable = uint32_t(std::min<uint64_t>(rounded, available));
   // Whole swap units only; a partial unit at the very end of guest memory stays zero.
-  CopySwap(endian, memory.base + address, out.data(), readable & ~3u);
+  CopySwap(endian, memory.At(address, 0), out.data(), readable & ~3u);
   return true;
 }
 
