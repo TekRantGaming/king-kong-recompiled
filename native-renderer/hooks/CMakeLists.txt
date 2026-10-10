@@ -11,4 +11,5 @@ if(TARGET rex::runtime)
     # game's recompiled code, so this is never linked here.
     add_library(nr_kk_hooks_check OBJECT kk_native_hooks.cpp)
     target_link_libraries(nr_kk_hooks_check PRIVATE nr_hooks rex::runtime)
+    target_compile_features(nr_kk_hooks_check PRIVATE cxx_std_23)
 endif()

@@ -23,6 +23,7 @@
 #include <rex/ui/vulkan/provider.h>
 #endif
 
+#include "backend/api_binding.h"
 #include "backend/backend.h"
 #include "backend/draw_state.h"
 #include "backend/host_device.h"
@@ -30,6 +31,9 @@
 
 REXCVAR_DECLARE(bool, native_draws);
 REXCVAR_DECLARE(bool, native_log_packets);
+REXCVAR_DECLARE(std::string, native_test);
+REXCVAR_DECLARE(bool, native_wvp_transpose);
+REXCVAR_DECLARE(bool, native_all_targets);
 
 namespace nr {
 
@@ -165,6 +169,10 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
     backend_.reset();
     return X_STATUS_UNSUCCESSFUL;
   }
+  backend_->renderer().options().transpose_wvp = REXCVAR_GET(native_wvp_transpose);
+  backend_->renderer().options().only_main_surface = !REXCVAR_GET(native_all_targets);
+  backend_->set_test_picture(REXCVAR_GET(native_test) == "clear" ? TestPicture::kClear
+                                                                  : TestPicture::kTriangle);
 
   // GPU registers: 0x7FC80000-0x7FCFFFFF. The game's library writes the ring
   // buffer write pointer here and reads a few status registers.
@@ -351,103 +359,27 @@ void NativeGraphicsSystem::OnSwap(uint32_t /*frontbuffer_ptr*/, uint32_t width, 
 
 namespace {
 
-DrawState* Draws(void* self) {
-  auto* system = static_cast<NativeGraphicsSystem*>(self);
-  if (!system || !system->guest_gpu_ready() || !system->backend()) {
+ApiBinding g_api_binding;
+
+// The binding is created once and may be cached by the hooks before the
+// system exists: look the system up on every call.
+DrawState* ResolveDraws(void* /*owner*/) {
+  NativeGraphicsSystem* system = NativeGraphicsSystem::Instance();
+  if (!system || !system->guest_gpu_ready() || !system->backend() || !REXCVAR_GET(native_draws)) {
     return nullptr;
   }
   return system->backend()->draws();
 }
 
-int ApiIsActive(void* self) { return Draws(self) != nullptr && REXCVAR_GET(native_draws) ? 1 : 0; }
-
-#define NR_FORWARD(name, call)        \
-  if (DrawState* d = Draws(self)) { \
-    d->call;                        \
-  }
-
-void ApiSetRenderTarget(void* self, uint32_t index, uint32_t surface) {
-  NR_FORWARD(set_render_target, SetRenderTarget(index, surface));
-}
-void ApiSetDepthStencilSurface(void* self, uint32_t surface) {
-  NR_FORWARD(set_depth_stencil_surface, SetDepthStencilSurface(surface));
-}
-void ApiSetViewport(void* self, uint32_t viewport) { NR_FORWARD(set_viewport, SetViewport(viewport)); }
-void ApiSetTexture(void* self, uint32_t sampler, uint32_t texture) {
-  NR_FORWARD(set_texture, SetTexture(sampler, texture));
-}
-void ApiSetIndices(void* self, uint32_t ib) { NR_FORWARD(set_indices, SetIndices(ib)); }
-void ApiSetStreamSource(void* self, uint32_t stream, uint32_t vb, uint32_t offset, uint32_t stride) {
-  NR_FORWARD(set_stream_source, SetStreamSource(stream, vb, offset, stride));
-}
-void ApiSetPixelShader(void* self, uint32_t ps) { NR_FORWARD(set_pixel_shader, SetPixelShader(ps)); }
-void ApiSetVertexShader(void* self, uint32_t vs) { NR_FORWARD(set_vertex_shader, SetVertexShader(vs)); }
-void ApiSetVertexDeclaration(void* self, uint32_t decl) {
-  NR_FORWARD(set_vertex_declaration, SetVertexDeclaration(decl));
-}
-void ApiSetVsConstantsF(void* self, uint32_t reg, uint32_t data, uint32_t count) {
-  NR_FORWARD(set_vs_constants_f, SetVsConstantsF(reg, data, count));
-}
-void ApiSetPsConstantsF(void* self, uint32_t reg, uint32_t data, uint32_t count) {
-  NR_FORWARD(set_ps_constants_f, SetPsConstantsF(reg, data, count));
-}
-void ApiSetVsConstantsI(void* self, uint32_t reg, uint32_t data, uint32_t count) {
-  NR_FORWARD(set_vs_constants_i, SetVsConstantsI(reg, data, count));
-}
-void ApiSetBlendControl(void* self, uint32_t rt, uint32_t value) {
-  NR_FORWARD(set_blend_control, SetBlendControl(rt, value));
-}
-void ApiBeginConditionalRendering(void* self, uint32_t id) {
-  NR_FORWARD(begin_conditional_rendering, BeginConditionalRendering(id));
-}
-void ApiEndConditionalRendering(void* self) {
-  NR_FORWARD(end_conditional_rendering, EndConditionalRendering());
-}
-void ApiClear(void* self, uint32_t flags, uint32_t color, float z, uint32_t stencil) {
-  NR_FORWARD(clear, Clear(flags, color, z, stencil));
-}
-void ApiResolve(void* self, uint32_t flags, uint32_t dest) { NR_FORWARD(resolve, Resolve(flags, dest)); }
-void ApiDrawIndexed(void* self, uint32_t prim, int32_t base_vertex, uint32_t start_index,
-                    uint32_t index_count) {
-  NR_FORWARD(draw_indexed, DrawIndexed(prim, base_vertex, start_index, index_count));
-}
-void ApiDraw(void* self, uint32_t prim, uint32_t start_vertex, uint32_t vertex_count) {
-  NR_FORWARD(draw, Draw(prim, start_vertex, vertex_count));
-}
-void ApiPresent(void* self) { NR_FORWARD(present, Present()); }
-
-#undef NR_FORWARD
-
-NrApi g_api = {};
-
 }  // namespace
 
 const NrApi* NativeGraphicsSystem::GetApi() {
-  g_api.version = NR_API_VERSION;
-  g_api.size = sizeof(NrApi);
-  g_api.self = instance_;
-  g_api.is_active = ApiIsActive;
-  g_api.set_render_target = ApiSetRenderTarget;
-  g_api.set_depth_stencil_surface = ApiSetDepthStencilSurface;
-  g_api.set_viewport = ApiSetViewport;
-  g_api.set_texture = ApiSetTexture;
-  g_api.set_indices = ApiSetIndices;
-  g_api.set_stream_source = ApiSetStreamSource;
-  g_api.set_pixel_shader = ApiSetPixelShader;
-  g_api.set_vertex_shader = ApiSetVertexShader;
-  g_api.set_vertex_declaration = ApiSetVertexDeclaration;
-  g_api.set_vs_constants_f = ApiSetVsConstantsF;
-  g_api.set_ps_constants_f = ApiSetPsConstantsF;
-  g_api.set_vs_constants_i = ApiSetVsConstantsI;
-  g_api.set_blend_control = ApiSetBlendControl;
-  g_api.begin_conditional_rendering = ApiBeginConditionalRendering;
-  g_api.end_conditional_rendering = ApiEndConditionalRendering;
-  g_api.clear = ApiClear;
-  g_api.resolve = ApiResolve;
-  g_api.draw_indexed = ApiDrawIndexed;
-  g_api.draw = ApiDraw;
-  g_api.present = ApiPresent;
-  return &g_api;
+  static const bool initialized = [] {
+    InitApiBinding(g_api_binding, nullptr, ResolveDraws);
+    return true;
+  }();
+  (void)initialized;
+  return &g_api_binding.api;
 }
 
 }  // namespace nr

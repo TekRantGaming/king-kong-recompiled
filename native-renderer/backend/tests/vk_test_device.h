@@ -11,6 +11,8 @@
 
 #include <nvrhi/nvrhi.h>
 
+#include "backend/tests/readback.h"
+
 namespace nr::test {
 
 class VulkanTestDevice {
@@ -29,13 +31,8 @@ class VulkanTestDevice {
   void Execute(nvrhi::ICommandList* command_list);
   void WaitIdle();
 
-  // Reads a 2D R10G10B10A2_UNORM or RGBA8_UNORM image back as RGBA floats.
-  struct Pixels {
-    uint32_t width = 0, height = 0;
-    std::vector<float> rgba;  // width * height * 4
-    const float* at(uint32_t x, uint32_t y) const { return &rgba[(size_t(y) * width + x) * 4]; }
-  };
-  Pixels ReadBack(nvrhi::ITexture* texture);
+  using Pixels = nr::test::Pixels;
+  Pixels ReadBack(nvrhi::ITexture* texture) { return ReadBackTexture(nvrhi_device_, texture); }
 
  private:
   VulkanTestDevice() = default;
@@ -48,7 +45,5 @@ class VulkanTestDevice {
   bool khronos_validation_ = false;
 };
 
-// Writes an image as a binary PPM (for looking at failures).
-bool WritePpm(const std::string& path, const VulkanTestDevice::Pixels& pixels);
 
 }  // namespace nr::test

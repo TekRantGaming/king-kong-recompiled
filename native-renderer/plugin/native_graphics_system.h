@@ -33,6 +33,8 @@ class FunctionDispatcher;
 
 namespace nr {
 
+using rex::X_STATUS;
+
 class Backend;
 class RingSkimmer;
 
@@ -45,6 +47,7 @@ class NativeGraphicsSystem final : public rex::system::IGraphicsSystem {
   static NativeGraphicsSystem* Create(std::string_view backend);
   // The C interface for the hooks (plugin_main.cpp exports it).
   static const NrApi* GetApi();
+  static NativeGraphicsSystem* Instance() { return instance_; }
 
   ~NativeGraphicsSystem() override;
 

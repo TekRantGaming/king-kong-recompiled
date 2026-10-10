@@ -1,14 +1,19 @@
 // NVRHI on the SDK's VulkanProvider device and graphics queue, and the
 // hand-over of a frame to the VulkanPresenter's guest output image.
 //
-// Not buildable on the Windows SDK bundle (no Vulkan there); compiled as a
-// check with KK_NATIVE_VULKAN_HEADERS, and for real on the Linux bundle.
-// Known gap: NVRHI's Vulkan queue uses timeline semaphores (Vulkan 1.2), and
-// the SDK's VulkanDevice does not enable that feature when it creates the
-// device; the Linux bring-up has to enable it (SDK change) before this works.
+// Built with the Linux SDK bundle (the Windows bundle has no Vulkan).
+// NVRHI is a Vulkan 1.3 library: on a device it did not create it needs
+// timelineSemaphore, dynamicRendering and synchronization2 enabled. The SDK's
+// VulkanDevice (v0.10.0) enables dynamicRendering only, so the SDK patch in
+// native-renderer/sdk-patches is required; without it this logs what is
+// missing and fails, and the plugin falls back to no renderer.
 
 #include <array>
 #include <vector>
+
+// First: the SDK fixes the Vulkan macros (beta extensions, platforms) every
+// includer must agree on.
+#include <rex/ui/vulkan/api.h>
 
 #include <nvrhi/validation.h>
 #include <nvrhi/vulkan.h>
@@ -20,6 +25,7 @@
 #include <rex/ui/vulkan/provider.h>
 
 #include "backend/host_device.h"
+#include "backend/vulkan_dispatch.h"
 
 REXCVAR_DECLARE(bool, native_validation);
 
@@ -37,7 +43,14 @@ class VulkanHost final : public HostDevice {
     if (!vulkan_device || !vulkan_instance) {
       return false;
     }
+    if (!HasRequiredFeatures(*vulkan_device)) {
+      return false;
+    }
     queue_family_ = vulkan_device->queue_family_graphics_compute();
+    // The SDK loads the Vulkan loader itself; NVRHI's calls go through
+    // vulkan.hpp's dispatcher, filled from the same loader.
+    InitVulkanDispatch(vulkan_instance->functions().vkGetInstanceProcAddr,
+                       vulkan_instance->instance(), vulkan_device->device());
     nvrhi::vulkan::DeviceDesc desc;
     desc.errorCB = GetMessageCallback();
     desc.instance = vulkan_instance->instance();
@@ -128,6 +141,35 @@ class VulkanHost final : public HostDevice {
   }
 
  private:
+  // NVRHI needs Vulkan 1.3 with dynamicRendering, synchronization2 and
+  // timelineSemaphore enabled on the device. The SDK reports what it enabled
+  // in its Properties; the last two only with sdk-patches/0001 applied
+  // (REX_UI_VULKAN_DEVICE_HAS_SYNC_FEATURES).
+  static bool HasRequiredFeatures(const rex::ui::vulkan::VulkanDevice& device) {
+    const auto& props = device.properties();
+    if (props.apiVersion < VK_MAKE_API_VERSION(0, 1, 3, 0)) {
+      REXGPU_ERROR("rexgpu-native: Vulkan 1.3 is required (the device has {}.{})",
+                   VK_API_VERSION_MAJOR(props.apiVersion), VK_API_VERSION_MINOR(props.apiVersion));
+      return false;
+    }
+    bool ok = true;
+    if (!props.dynamicRendering) {
+      REXGPU_ERROR("rexgpu-native: the Vulkan device was created without dynamicRendering");
+      ok = false;
+    }
+#if defined(REX_UI_VULKAN_DEVICE_HAS_SYNC_FEATURES)
+    if (!props.timelineSemaphore || !props.synchronization2) {
+      REXGPU_ERROR("rexgpu-native: the Vulkan device lacks timelineSemaphore or synchronization2");
+      ok = false;
+    }
+#else
+    REXGPU_WARN(
+        "rexgpu-native: this SDK does not enable timelineSemaphore and synchronization2 "
+        "(apply native-renderer/sdk-patches/0001); NVRHI uses both, expect validation errors");
+#endif
+    return ok;
+  }
+
   struct Wrapped {
     VkImage image = VK_NULL_HANDLE;
     uint64_t version = UINT64_MAX;

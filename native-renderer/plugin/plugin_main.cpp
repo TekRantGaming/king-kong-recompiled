@@ -30,6 +30,19 @@ REXCVAR_DEFINE_BOOL(native_draws, true, "Native renderer",
                     "placeholder pipeline (needs the hooks built into the game)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_BOOL(native_validation, false, "Native renderer",
+                    "Wrap the NVRHI device in NVRHI's validation layer (slow; for debugging)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_BOOL(native_wvp_transpose, false, "Native renderer",
+                    "Placeholder draws: read vertex shader constants c0..c3 as the columns of "
+                    "the world-view-projection matrix instead of its rows")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_BOOL(native_all_targets, false, "Native renderer",
+                    "Placeholder draws: also draw render-to-texture passes into the frame")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_BOOL(native_log_packets, false, "Native renderer",
                     "Log the GPU packets the ring skimmer sees (very noisy)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
