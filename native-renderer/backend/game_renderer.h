@@ -70,6 +70,13 @@ class GameRenderer {
     // A draw whose pipeline is still being made: false skips the draw (the Xenos plugin can do
     // the same), true waits for the worker to finish it. Only with async_pipelines.
     bool pipeline_wait = false;
+    // Without pipeline_wait: the time a frame may spend waiting for pipelines being made before
+    // its draws are skipped (milliseconds, all draws of the frame together; 0 skips at once).
+    // The workers usually finish a pipeline in a few milliseconds, so most new pipelines are
+    // drawn in their first frame, and the frame the game leaves on screen during a load (the
+    // V-Rex loading screen) is complete, while a burst of hundreds at a chapter start still
+    // costs one long frame at most rather than a stall.
+    double pipeline_wait_budget_ms = 30.0;
     // Render scale: host pixels per guest pixel of the colour and depth targets (1 = the
     // console's size, bit for bit what the renderer always did). Resolved textures and the
     // screen copies follow. docs/backend.md, "Render scale". Set before Initialize.
@@ -96,6 +103,7 @@ class GameRenderer {
     uint64_t skipped_pending = 0;    // pipeline still being created (async_pipelines)
     uint64_t pipeline_waits = 0;     // draws that waited for their pipeline (pipeline_wait)
     double pipeline_wait_ms = 0;
+    uint64_t pipeline_budget_waits = 0;  // draws drawn after waiting within pipeline_wait_budget_ms
     uint64_t cache_recorded = 0;     // descriptions appended to the pipeline cache file
     uint64_t prewarm_queued = 0;     // cached descriptions sent to the workers
     uint64_t prewarm_deferred = 0;   // cached descriptions whose shaders were not available yet
@@ -159,6 +167,10 @@ class GameRenderer {
   FrameLog* frame_log() { return frame_log_.get(); }
   // The microcode hash the Xenos log prints for a vertex shader bound with this declaration
   // and these streams: the library patches the fetches (kkshaders/vertex_patch.h).
+  uint64_t ObjectVertexShaderHash(uint32_t object_address, uint32_t* bytes_out);
+  // NrApi::vertex_shader_patched: the hash of the microcode the library patched for the shader's
+  // declaration (what the GPU runs and the Xenos log hashes), for the frame log.
+  void VertexShaderPatched(uint32_t shader, uint32_t microcode, uint32_t declaration);
   uint64_t PatchedVertexShaderHash(const GameShader& vs, uint32_t declaration, const dev::DeviceView& d);
 
   // The host render targets made so far (tests and debugging).
@@ -256,6 +268,13 @@ class GameRenderer {
   // The scale of the texture BindTexture bound last (1 when none).
   float bound_scale_x_ = 1.0f, bound_scale_y_ = 1.0f;
   void ReleaseHostTexture(HostTexture* host);
+  // Textures and buffers the caches let go of, kept for as many frames as a retired descriptor
+  // slot. The frames still on the GPU may sample them through the bindless tables, and the open
+  // command list may hold their state without a reference (NVRHI's Vulkan clears and the tables
+  // do not add one): destroying them at once freed images the command list then put a barrier on
+  // at its close (a crash in the NVIDIA driver at the start of the Venture chapter).
+  void RetireResource(nvrhi::IResource* resource);
+  std::deque<std::pair<uint64_t, nvrhi::ResourceHandle>> retired_resources_;  // (frame, resource)
   uint32_t TextureView(HostTexture* host, const kknr::TextureFetch& fetch,
                        kkshaders::TextureDimension dimension, bool base_map);
   uint32_t BindSampler(const uint32_t words[6], const kkshaders::SamplerBinding& binding);
@@ -320,6 +339,20 @@ class GameRenderer {
   void LogResolve(const ResolveCall& call, const dev::DeviceView& d);
   void LogClear(const ClearCall& call, const dev::DeviceView& d);
   void LogSwap(const dev::DeviceView& d);
+  // A draw's line waits for the next call the library forwards (draw, clear, resolve, present):
+  // the library patches the vertex shader's fetches for the draw's declaration inside its draw,
+  // after the hook, so the object holds this draw's microcode only once the draw returned.
+  void FlushPendingDraw();
+  void NoteDrawNotDrawn(bool pending);
+  bool has_pending_draw_ = false;
+  FrameLogDraw pending_draw_;
+  uint32_t pending_vs_object_ = 0;
+  uint64_t pending_vs_template_ = 0;
+  int pending_not_drawn_ = -1;  // -1 drawn, 0 pipeline missing, 1 pipeline not ready
+  // The library keeps a patched copy per (shader, declaration, strides) and patches again only for
+  // a new combination, so the hash is kept per combination (VertexShaderPatched).
+  std::unordered_map<uint64_t, uint64_t> patched_vs_hash_;
+  uint64_t pending_vs_key_ = 0;
   std::unique_ptr<FrameLog> frame_log_;
   std::unordered_map<uint64_t, uint64_t> patched_hashes_;
 
@@ -409,6 +442,8 @@ class GameRenderer {
   bool constants_valid_ = false;
   nvrhi::ICommandList* constants_list_ = nullptr;
   uint64_t constants_frame_ = 0;
+  uint64_t wait_budget_frame_ = ~0ull;  // the frame frame_wait_ms_ counts for
+  double frame_wait_ms_ = 0;
 };
 
 }  // namespace nr

@@ -60,6 +60,7 @@ REXCVAR_DECLARE(bool, native_async_pipelines);
 REXCVAR_DECLARE(bool, native_pipeline_cache);
 REXCVAR_DECLARE(std::string, native_pipeline_cache_dir);
 REXCVAR_DECLARE(bool, native_pipeline_wait);
+REXCVAR_DECLARE(double, native_pipeline_wait_budget_ms);
 
 namespace {
 // <title id>.pipelines, or game.pipelines when the title is not known (a folder from the cvar).
@@ -249,6 +250,7 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
   game.debug = uint32_t(REXCVAR_GET(native_debug));
   game.async_pipelines = REXCVAR_GET(native_async_pipelines);
   game.pipeline_wait = REXCVAR_GET(native_pipeline_wait);
+  game.pipeline_wait_budget_ms = REXCVAR_GET(native_pipeline_wait_budget_ms);
   if (const char* frame_log = std::getenv("REX_DEV_FRAME_LOG")) game.frame_log = frame_log;
   game.render_scale = REXCVAR_GET(native_render_scale);
   game.shadow_scale = float(REXCVAR_GET(native_shadow_scale));

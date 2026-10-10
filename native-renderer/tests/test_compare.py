@@ -420,6 +420,14 @@ class FrameLogs(unittest.TestCase):
         self.assertTrue(any(line.startswith("-draw ps=0000000000000033") for line in r["diff"]))
         self.assertTrue(any(line.startswith("+draw ps=0000000000000044") for line in r["diff"]))
 
+    def test_no_effect_draws_are_left_out(self):
+        survey = "draw 9 ps 0000000000000000 vs 6DD9DD041F740550 pitch 1280 msaa 1 z off @720:f0 off 0,0 scissor 1280x720 count 1"
+        with_surveys = frame_lines(SCENE_DRAWS, extra=[survey] * 5)
+        self.assertEqual(C.frame_keys(with_surveys), C.frame_keys(frame_lines(SCENE_DRAWS)))
+        # A one-vertex draw that writes colour, or with depth on, still counts.
+        kept = survey.replace(" count 1", " rt0@0:f0 count 1")
+        self.assertEqual(len(C.frame_keys(frame_lines(SCENE_DRAWS, extra=[kept]))), len(C.frame_keys(frame_lines(SCENE_DRAWS))) + 1)
+
     def test_log_problems_are_reported(self):
         bad = frame_lines(SCENE_DRAWS, VK_DRAW, extra=["draw 3 pipeline placeholder (skipped)", "something odd"])
         bad[-1] = "frame end, 9 draws, 1 resolves"

@@ -43,6 +43,10 @@ class LockedSink final : public DrawSink {
     (void)object;
 #endif
   }
+  void OnVertexShaderPatched(uint32_t shader, uint32_t microcode, uint32_t declaration) override {
+    std::lock_guard lock(mutex_);
+    inner_.OnVertexShaderPatched(shader, microcode, declaration);
+  }
   void OnClear(const ClearCall& c) override {
     if (Dump(c.frame)) {
       REXLOG_INFO("rexgpu-native: frame {} clear flags {:X} rgba {} {} {} {} z {} rt0 {:08X} ds {:08X}",
@@ -238,6 +242,7 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
       renderer->options().debug = game.debug;
       renderer->options().async_pipelines = game.async_pipelines;
       renderer->options().pipeline_wait = game.pipeline_wait;
+      renderer->options().pipeline_wait_budget_ms = game.pipeline_wait_budget_ms;
       renderer->SetFrameLog(FrameLogConfig::Parse(game.frame_log.c_str()));
       rex::memory::Memory* memory = memory_;
       renderer->set_watch([memory](uint32_t physical_address, uint32_t bytes) {
@@ -319,11 +324,12 @@ void Backend::Present(rex::ui::Presenter* presenter, uint32_t frontbuffer_width,
       const ShaderLibrary::Stats sh = shaders_->stats();
       REXLOG_INFO(
           "rexgpu-native: game renderer: {} draws, skipped {} (shader) {} (target) {} (primitive) {} "
-          "(pipeline) {} (pipeline not ready) {} (device); {} pipelines; {} texture uploads ({} failed), {} buffer uploads, "
+          "(pipeline) {} (pipeline not ready) {} (device); {} pipelines ({} drawn after a wait, {:.0f} ms waited); {} texture uploads ({} failed), {} buffer uploads, "
           "{} clears, {} resolves ({} failed), {} invalidations; shaders {} created, {} from the pack, "
           "{} compiled, {} failed, {} from objects; {:.0f} ms in pipeline creation, {:.0f} ms in texture uploads, {} aliased ({} failed)",
           s.draws, s.skipped_shader, s.skipped_target, s.skipped_primitive, s.skipped_pipeline,
-          s.skipped_pending, s.skipped_device, s.pipelines, s.texture_uploads, s.texture_failures, s.buffer_uploads,
+          s.skipped_pending, s.skipped_device, s.pipelines, s.pipeline_budget_waits + s.pipeline_waits,
+          s.pipeline_wait_ms, s.texture_uploads, s.texture_failures, s.buffer_uploads,
           s.clears, s.resolves, s.resolve_failures, s.invalidations, sh.created, sh.from_pack,
           sh.compiled, sh.failed, sh.from_object, s.pipeline_ms, s.texture_ms, s.aliases, s.alias_failures);
     }

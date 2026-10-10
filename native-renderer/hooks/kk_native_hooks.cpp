@@ -145,7 +145,8 @@ nr::hooks::GuestArgs ArgsFrom(const PPCContext& ctx) {
   X(821154C8)           \
   X(82115708)           \
   X(82116178)           \
-  X(82118F78)
+  X(82118F78)           \
+  X(82120028)
 
 NR_HOOK_LIST(NR_HOOK)
 

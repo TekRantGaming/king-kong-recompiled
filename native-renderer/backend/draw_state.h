@@ -99,6 +99,9 @@ class DrawTracker {
   void ShaderCreated(uint32_t kind, uint32_t container, uint32_t object) {
     if (sink_) sink_->OnShaderCreated(kind, container, object);
   }
+  void VertexShaderPatched(uint32_t shader, uint32_t microcode, uint32_t declaration) {
+    if (sink_) sink_->OnVertexShaderPatched(shader, microcode, declaration);
+  }
   // Search the vertex constants for a perspective matrix on every draw (the
   // placeholder pipeline needs it; the real shaders do not).
   void set_find_wvp(bool on) { find_wvp_ = on; }

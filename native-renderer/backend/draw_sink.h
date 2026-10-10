@@ -131,6 +131,9 @@ class DrawSink {
   // container the engine passed, object the library's shader object. May come
   // from any game thread.
   virtual void OnShaderCreated(uint32_t /*kind*/, uint32_t /*container*/, uint32_t /*object*/) {}
+  // The library patched a vertex shader's fetches (NrApi::vertex_shader_patched): the draw thread,
+  // inside the draw that binds it.
+  virtual void OnVertexShaderPatched(uint32_t /*shader*/, uint32_t /*microcode*/, uint32_t /*declaration*/) {}
 };
 
 }  // namespace nr

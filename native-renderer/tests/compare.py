@@ -681,11 +681,22 @@ def read_framelog(path: Path):
     return frames
 
 
+NO_EFFECT_RE = re.compile(r"^draw .* z=off .*rt=- ds=- n=[01]$")
+
+
+def is_no_effect(loose_key: str) -> bool:
+    """A draw that cannot change a pixel: one vertex or none, no colour target, depth off. The D3D
+    library's conditional surveys draw 48 of these a frame on the Xenos plugin's log (they come from
+    the library's own packets, not from a call the game makes); the native renderer has nothing to
+    draw for them. Left out of the draw-list comparison on both sides."""
+    return bool(NO_EFFECT_RE.match(loose_key))
+
+
 def frame_keys(lines, strict=False):
     keys = []
     for line in lines:
         p = parse_entry(line)
-        if p:
+        if p and not (p[2] == "draw" and is_no_effect(p[0])):
             keys.append(p[1] if strict else p[0])
     return keys
 

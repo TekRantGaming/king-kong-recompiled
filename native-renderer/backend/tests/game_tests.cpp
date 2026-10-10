@@ -1383,10 +1383,17 @@ TEST(FrameLog_OneFrameOfClearDrawAndPresent) {
   CHECK_EQ(t.lines.size(), size_t(5));
   if (t.lines.size() != 5) return;
   CHECK_EQ(t.lines[0], std::string("Frame log: frame start"));
-  // A clear goes through the resolve path: a null copy that clears.
-  CHECK_EQ(t.lines[1],
-           std::string("Frame log: resolve 0 rt0@0:f0 -> 00000000 format 0 pitch 0 height 0 command 3 clear color 1 depth 0 "
-                       "off 0,0 surface pitch 64 msaa 1"));
+  // A clear is the library's own draw (its clear shaders, three vertices; colour only: depth off).
+  FrameLogDraw clear;
+  clear.ps_hash = 0x2B4F1D2C5EDCC366ull;
+  clear.vs_hash = 0x6DD9DD041F740550ull;
+  clear.pitch = kSize;
+  clear.msaa = 1;
+  clear.z_func = 7;
+  clear.scissor_w = clear.scissor_h = kSize;
+  clear.targets = {{0, 0, 0}};
+  clear.count = 3;
+  CHECK_EQ(t.lines[1], FrameLog::FormatDraw(0, clear));
   FrameLogDraw want;
   want.ps_hash = kkshaders::parseContainer(PixelShaderInterpolator()).info.ucodeHash;
   want.vs_hash = ExpectedVertexHash(VertexShader(kColor, F_8_8_8_8), 16);
@@ -1395,10 +1402,10 @@ TEST(FrameLog_OneFrameOfClearDrawAndPresent) {
   want.scissor_w = want.scissor_h = kSize;
   want.targets = {{0, 0, 0}};
   want.count = 24;
-  CHECK_EQ(t.lines[2], FrameLog::FormatDraw(0, want));
+  CHECK_EQ(t.lines[2], FrameLog::FormatDraw(1, want));
   // The Present's own copy of the back buffer (no front buffer texture in the fixture).
-  CHECK(t.lines[3].rfind("Frame log: resolve 1 rt0@0:f0 -> ", 0) == 0);
-  CHECK_EQ(t.lines[4], std::string("Frame log: frame end, 1 draws, 2 resolves"));
+  CHECK(t.lines[3].rfind("Frame log: resolve 0 rt0@0:f0 -> ", 0) == 0);
+  CHECK_EQ(t.lines[4], std::string("Frame log: frame end, 2 draws, 1 resolves"));
 }
 
 TEST(FrameLog_VertexHashFollowsTheStrides) {
@@ -1451,19 +1458,20 @@ TEST(FrameLog_ResolveIntoATexture) {
   std::vector<std::string> resolves = t.With("Frame log: resolve 0 ");
   CHECK_EQ(resolves.size(), size_t(1));
   if (resolves.empty()) return;
-  // Source rt0 at EDRAM 0 in k_8_8_8_8 (format 6 as a texture), a 64x64 destination, the copy
-  // (the formats agree), clearing the colour.
+  // Source rt0 at EDRAM 0 in k_8_8_8_8 (format 6 as a texture), a 64x64 destination, the library's
+  // convert command (every colour resolve in the Xenos logs), clearing the colour.
   CHECK(resolves[0].find(" rt0@0:f0 -> ") != std::string::npos);
-  CHECK(resolves[0].find(" format 6 pitch 64 height 64 command 0 clear color 1 depth 0 ") != std::string::npos);
+  CHECK(resolves[0].find(" format 6 pitch 64 height 64 command 1 clear color 1 depth 0 ") != std::string::npos);
 }
 
 TEST(FrameLog_DrawWhosePipelineIsNotReady) {
-  // The plugin's default: a pipeline is made on a worker, the draw waits for the next frame, and
+  // A pipeline is made on a worker, the draw waits for the next frame (no wait budget), and
   // the log says so (the line the Vulkan Xenos log has for its placeholder pipelines).
   LoggedFixture t;
   if (!t.Init("0,2")) return;
   Fixture& f = t.f;
   f.game->options().async_pipelines = true;
+  f.game->options().pipeline_wait_budget_ms = 0;
   const uint32_t rt = f.BindMainSurface();
   auto p = f.MakeColorPipeline();
   f.Present(rt);
@@ -1679,11 +1687,13 @@ TEST(PipelineCache_RecordsOfShadersThatNeverComeStayHarmless) {
 }
 
 TEST(PipelineWait_TheDrawWaitsInsteadOfBeingSkipped) {
-  // Default: the draw is skipped while its pipeline is made. With pipeline_wait it waits for it.
+  // Without a wait budget the draw is skipped while its pipeline is made. With pipeline_wait it
+  // waits for it.
   {
     Fixture f;
     if (!f.Init()) return;
     f.game->options().async_pipelines = true;
+    f.game->options().pipeline_wait_budget_ms = 0;
     const uint32_t rt = f.BindMainSurface();
     auto p = f.MakeColorPipeline();
     DrawQuadrantFrame(f, rt, p);
@@ -1705,6 +1715,23 @@ TEST(PipelineWait_TheDrawWaitsInsteadOfBeingSkipped) {
   // The second frame finds it made: no wait.
   DrawQuadrantFrame(f, rt, p);
   CHECK_EQ(f.game->stats().pipeline_waits, uint64_t(1));
+}
+
+TEST(PipelineWait_TheFrameBudgetDrawsANewPipelineInItsFirstFrame) {
+  // The default: a draw waits for its pipeline within the frame's budget (generous here, so a
+  // slow test machine still makes it), and the frame is complete.
+  Fixture f;
+  if (!f.Init()) return;
+  f.game->options().async_pipelines = true;
+  f.game->options().pipeline_wait_budget_ms = 5000;
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  Pixels px = DrawQuadrantFrame(f, rt, p);
+  f.CheckQuadrantColors(px, __LINE__);
+  CHECK_EQ(f.game->stats().draws, uint64_t(1));
+  CHECK_EQ(f.game->stats().skipped_pending, uint64_t(0));
+  CHECK_EQ(f.game->stats().pipeline_budget_waits, uint64_t(1));
+  CHECK_EQ(f.game->stats().pipeline_waits, uint64_t(0));
 }
 
 TEST(PipelineWait_AlsoWaitsForAPrewarmInFlight) {

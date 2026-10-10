@@ -89,24 +89,96 @@ uint64_t GameRenderer::PatchedVertexShaderHash(const GameShader& vs, uint32_t de
   return hash;
 }
 
-void GameRenderer::DumpVertexShaderHashes(const DrawCall& call, const dev::DeviceView& d, const GameShader& vs) {
+// XXH3 of the vertex shader object's microcode as it sits in memory: the library patches it in place
+// for the declaration and strides of its draws, and that is what the Xenos plugin hashes. Found on the
+// game's frames: it equals the Xenos log's hash for every draw of the title, the reproduced patching
+// (kkshaders/vertex_patch) does not. 0 when the object cannot be read. Before the library's draw of
+// this call: a shader drawn with a new declaration still shows the previous patch (rare).
+uint64_t GameRenderer::ObjectVertexShaderHash(uint32_t object_address, uint32_t* bytes_out) {
   uint64_t live = 0;
   uint32_t live_bytes = 0;
-  if (const uint8_t* object = call.vertex_shader ? memory_.Virtual(call.vertex_shader) : nullptr) {
+  if (const uint8_t* object = object_address ? memory_.Virtual(object_address) : nullptr) {
     // The vertex shader object: a 592-byte header, the container's virtual part, the microcode's
     // physical address at +40 (d3d-structs.md, corrected by the game's frames).
     live_bytes = LoadBE32(object + 592 + 8);
     const uint8_t* ucode = memory_.Physical(CpuToPhysical(LoadBE32(object + 40)));
     if (ucode && live_bytes && live_bytes <= (1u << 20)) live = kkshaders::hashBytes(ucode, live_bytes);
   }
+  if (bytes_out) *bytes_out = live_bytes;
+  return live;
+}
+
+void GameRenderer::DumpVertexShaderHashes(const DrawCall& call, const dev::DeviceView& d, const GameShader& vs) {
+  uint32_t live_bytes = 0;
+  const uint64_t live = ObjectVertexShaderHash(call.vertex_shader, &live_bytes);
   Logf(LogLevel::kInfo,
        "rexgpu-native:   vs hashes: database %016llX, object memory %016llX (%u bytes), reproduced patch %016llX",
        static_cast<unsigned long long>(vs.ucode_hash), static_cast<unsigned long long>(live), live_bytes,
        static_cast<unsigned long long>(PatchedVertexShaderHash(vs, call.vertex_declaration, d)));
 }
 
+// The library copies a vertex shader's microcode into the command ring (or patches the object's
+// own copy) and rewrites its fetches for the declaration, inside the draw that binds it
+// (sub_82120608 / sub_82120A70 call sub_82120028). That patched microcode is what the GPU runs and
+// what the Xenos plugin hashes.
+namespace {
+// The streams' strides the library binds a vertex shader with (device +12688, 16 bytes; copied to
+// +11424 after the binding, d3d-structs.md).
+constexpr uint32_t kBindingStrides = 12688;
+inline uint64_t Mix64(uint64_t h, uint64_t v) {
+  h ^= v + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2);
+  h *= 0xFF51AFD7ED558CCDull;
+  return h ^ (h >> 29);
+}
+uint64_t VertexVariantKey(uint32_t shader, uint32_t declaration, const uint8_t* device) {
+  uint64_t h = Mix64(0x5653, shader);
+  h = Mix64(h, declaration);
+  for (uint32_t i = 0; i < 4; ++i) h = Mix64(h, device ? LoadBE32(device + kBindingStrides + 4 * i) : 0);
+  return h;
+}
+}  // namespace
+
+void GameRenderer::VertexShaderPatched(uint32_t shader, uint32_t microcode, uint32_t declaration) {
+  if (!frame_log_ || !frame_log_->enabled()) return;
+  const uint8_t* object = shader ? memory_.Virtual(shader) : nullptr;
+  const uint8_t* ucode = microcode ? memory_.Virtual(microcode) : nullptr;
+  if (!object || !ucode) return;
+  const uint32_t bytes = LoadBE32(object + 600);
+  if (!bytes || bytes > (1u << 20)) return;
+  // The device: the global the library keeps it in (the call's r3 is the same).
+  const uint8_t* global = memory_.Virtual(0x82D62324);
+  const uint32_t device_address = global ? LoadBE32(global) : 0;
+  const uint8_t* device = device_address ? memory_.Virtual(device_address) : nullptr;
+  patched_vs_hash_[VertexVariantKey(shader, declaration, device)] = kkshaders::hashBytes(ucode, bytes);
+}
+
+void GameRenderer::FlushPendingDraw() {
+  if (!has_pending_draw_) return;
+  has_pending_draw_ = false;
+  // The microcode as the library patched it for this draw (its draw has returned by now). Without
+  // the patch hook (the tests' synthetic device), the object's microcode when it differs from the
+  // template, else the reproduced patching computed at the draw.
+  if (auto it = patched_vs_hash_.find(pending_vs_key_); it != patched_vs_hash_.end()) {
+    pending_draw_.vs_hash = it->second;
+  } else {
+    const uint64_t live = ObjectVertexShaderHash(pending_vs_object_, nullptr);
+    if (live && live != pending_vs_template_) pending_draw_.vs_hash = live;
+  }
+  frame_log_->Draw(pending_draw_);
+  if (pending_not_drawn_ >= 0) frame_log_->DrawNotDrawn(pending_not_drawn_ == 1);
+}
+
+void GameRenderer::NoteDrawNotDrawn(bool pending) {
+  if (has_pending_draw_) {
+    pending_not_drawn_ = pending ? 1 : 0;
+  } else {
+    frame_log_->DrawNotDrawn(pending);
+  }
+}
+
 void GameRenderer::LogDraw(const DrawCall& call, const dev::DeviceView& d, const GameShader& vs, const GameShader* ps) {
   frame_log_->Touch();
+  FlushPendingDraw();
   if (!frame_log_->active()) return;
   FrameLogDraw out;
   out.ps_hash = ps ? ps->ucode_hash : 0;
@@ -132,7 +204,13 @@ void GameRenderer::LogDraw(const DrawCall& call, const dev::DeviceView& d, const
     out.targets.push_back({i, info & 0xFFF, (info >> 16) & 0xF});
   }
   out.count = call.count;
-  frame_log_->Draw(out);
+  pending_draw_ = std::move(out);
+  pending_vs_object_ = call.vertex_shader;
+  pending_vs_key_ = VertexVariantKey(call.vertex_shader, call.vertex_declaration,
+                                     call.device ? memory_.Virtual(call.device) : nullptr);
+  pending_vs_template_ = vs.ucode_hash;
+  pending_not_drawn_ = -1;
+  has_pending_draw_ = true;
 }
 
 // A resolve's destination and command from the texture object, shared by the resolves the game
@@ -145,6 +223,7 @@ struct ResolveDestination {
 
 void GameRenderer::LogResolve(const ResolveCall& call, const dev::DeviceView& d) {
   frame_log_->Touch();
+  FlushPendingDraw();
   if (!frame_log_->active()) return;
   const kknr::ResolveFlags flags{call.flags};
   const bool from_depth = flags.DepthStencil();
@@ -163,12 +242,14 @@ void GameRenderer::LogResolve(const ResolveCall& call, const dev::DeviceView& d)
     const kknr::TextureFetch fetch = FetchFromObject(object);
     if (fetch.Type() == 2) {
       dest.address = fetch.BaseAddress();
-      dest.format = uint32_t(fetch.Format());
+      // A depth resolve is a raw copy the library sets up with k_8_8_8_8 as the destination
+      // format whatever the texture's (every depth resolve in the Xenos logs: format 6).
+      dest.format = from_depth ? 6u : uint32_t(fetch.Format());
       dest.pitch = fetch.PitchTexels();
       dest.height = fetch.Height();
-      const kknr::ResolveConversion conv = kknr::PlanResolveConversion(
-          kknr::ResolveSource{from_depth, out.source_format}, fetch, TextureOptions());
-      dest.command = conv.method == kknr::ResolveMethod::kCopy ? 0 : 1;
+      // The library's copy command (RB_COPY_CONTROL), as the Xenos logs of the golden scenes show
+      // it: convert for every colour resolve, raw for depth, whatever the formats.
+      dest.command = from_depth ? 0 : 1;
     }
   }
   out.dest_address = dest.address;
@@ -185,31 +266,44 @@ void GameRenderer::LogResolve(const ResolveCall& call, const dev::DeviceView& d)
   frame_log_->Resolve(out);
 }
 
-// The library clears through the resolve path (a null copy that clears): one resolve line for the
-// clear, from the colour target when it clears colour, else from the depth buffer.
+// The library's Clear is a draw of its own shaders (pixel 2B4F1D2C5EDCC366, vertex 6DD9DD041F740550,
+// three vertices: a rectangle list) with depth test and write on when it clears depth or stencil,
+// and the colour targets written when it clears colour: that is what the Xenos plugin's log shows
+// for each Clear the game calls (two in the title's frame, eight in V-Rex's).
 void GameRenderer::LogClear(const ClearCall& call, const dev::DeviceView& d) {
   frame_log_->Touch();
+  FlushPendingDraw();
   if (!frame_log_->active()) return;
-  FrameLogResolve out;
-  out.from_depth = !call.color;
-  const uint32_t info = call.color ? d.u32(dev::kRbColorInfo) : d.u32(dev::kRbDepthInfo);
-  out.source_index = 0;
-  out.source_base = info & 0xFFF;
-  out.source_format = call.color ? (info >> 16) & 0xF : (info >> 16) & 1;
-  out.command = 3;
-  out.clear_color = call.color;
-  out.clear_depth = call.depth || call.stencil;
-  WindowOffset(d, out.offset_x, out.offset_y);
+  FrameLogDraw out;
+  out.ps_hash = 0x2B4F1D2C5EDCC366ull;
+  out.vs_hash = 0x6DD9DD041F740550ull;
   const uint32_t surface_info = d.u32(dev::kRbSurfaceInfo);
-  out.surface_pitch = surface_info & 0x3FFF;
+  out.pitch = surface_info & 0x3FFF;
   out.msaa = 1u << ((surface_info >> 16) & 3);
-  frame_log_->Resolve(out);
+  out.z_test = out.z_write = call.depth || call.stencil;
+  out.z_func = 7;
+  const uint32_t depth_info = d.u32(dev::kRbDepthInfo);
+  out.depth_base = depth_info & 0xFFF;
+  out.depth_format = (depth_info >> 16) & 1;
+  WindowOffset(d, out.offset_x, out.offset_y);
+  const uint32_t scissor_br = d.u32(dev::kPaScWindowScissorBr);
+  out.scissor_w = scissor_br & 0x7FFF;
+  out.scissor_h = (scissor_br >> 16) & 0x7FFF;
+  for (uint32_t i = 0; i < 4; ++i) {
+    // Only the targets bound: the game's flags name all four (0x3F, 0xF).
+    if (!(call.flags & (1u << i)) || !d.u32(dev::kRenderTargets + 4 * i)) continue;
+    const uint32_t info = d.u32(i == 0 ? dev::kRbColorInfo : dev::kRbColor1Info + 4 * (i - 1));
+    out.targets.push_back({i, info & 0xFFF, (info >> 16) & 0xF});
+  }
+  out.count = 3;
+  frame_log_->Draw(out);
 }
 
 // The game's Present: the library resolves the back buffer into the front buffer texture and
 // swaps. The resolve is a line of the frame being ended; then the swap.
 void GameRenderer::LogSwap(const dev::DeviceView& d) {
   frame_log_->Touch();
+  FlushPendingDraw();
   if (frame_log_->active()) {
     FrameLogResolve out;
     const uint32_t back = d.u32(dev::kBackBuffer);
@@ -228,9 +322,7 @@ void GameRenderer::LogSwap(const dev::DeviceView& d) {
         out.dest_format = uint32_t(fetch.Format());
         out.dest_pitch = fetch.PitchTexels();
         out.dest_height = fetch.Height();
-        const kknr::ResolveConversion conv = kknr::PlanResolveConversion(
-            kknr::ResolveSource{false, out.source_format}, fetch, TextureOptions());
-        out.command = conv.method == kknr::ResolveMethod::kCopy ? 0 : 1;
+        out.command = 1;  // a colour resolve: convert (see LogResolve)
       }
     }
     frame_log_->Resolve(out);

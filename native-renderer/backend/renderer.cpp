@@ -392,6 +392,10 @@ void Renderer::OnResolve(const ResolveCall& call) {
   if (game_) game_->Resolve(FrameCommandList(), call);
 }
 
+void Renderer::OnVertexShaderPatched(uint32_t shader, uint32_t microcode, uint32_t declaration) {
+  if (game_) game_->VertexShaderPatched(shader, microcode, declaration);
+}
+
 void Renderer::OnPresent(uint32_t frame, uint32_t render_target0, uint32_t device) {
   main_surface_ = render_target0;
   vertex_ring_used_ = 0;

@@ -103,7 +103,9 @@ frames)
   buffer's, so it goes through `CpuToPhysical` (the 0xE0000000 view is 4 KB ahead); masking read every
   vertex 4 KB early and drew large random triangles.
 - **NrApi version 2**: adds `set_render_state` and `set_sampler_state`. The hooks refuse a plugin of another
-  version (logged, originals only).
+  version (logged, originals only). Version 3 (Phase 2) passes the device, Clear's rectangles, Resolve's
+  arguments and shader creation; version 4 (Phase 2b) adds `vertex_shader_patched`, a hook after the
+  library's `sub_82120028` (the rewrite of a vertex shader's fetches for a declaration), for the frame log.
 
 ## Phase 2: the game renderer
 
@@ -625,10 +627,27 @@ same pictures (the small differences are timing). Contact sheets (golden left, n
 `REX_DEV_FRAME_LOG=<seconds>[,<frames>]` (same meaning as on the Xenos plugin) makes the native plugin log one
 `Frame log: ...` line per draw and resolve at warning level, in the format `compare.py framelog` reads. Code:
 `backend/frame_log.*` (formatting, clock, frame selection) and `backend/game_frame_log.cpp` (the hooks).
-Assumptions, none checked against the game yet:
-- A game Clear is logged as a null-copy resolve (command 3); the Present front-buffer copy is a resolve line;
-  other resolves use command 0/1 from `PlanResolveConversion`.
+Checked against the Xenos logs of the golden scenes (Phase 2b):
+- A game Clear is the library's own draw on the Xenos plugin: pixel shader 2B4F1D2C5EDCC366, vertex shader
+  6DD9DD041F740550, three vertices (a rectangle list), depth test and write on when it clears depth or stencil,
+  and the colour targets that are both flagged and bound. The native log writes the same line.
 - The pixel shader hash is the database (template) hash.
+- The vertex shader hash is XXH3 of the microcode the library patched for the draw: inside its draw it copies
+  the shader's microcode into the command ring (`sub_82120608`, an IM_LOAD_IMMEDIATE packet) or uses the
+  object's copy (`sub_82120A70`), and `sub_82120028` rewrites the fetches for the declaration and strides. A hook
+  after `sub_82120028` (NrApi 4, `vertex_shader_patched`) hashes the patched bytes and keeps the hash per
+  (shader, declaration, strides at device +12688); the library only patches a new combination. Since the patch
+  runs inside the draw, after the draw's hook, a draw's line is held until the next draw, clear, resolve or
+  present (`FlushPendingDraw`). Hashing the object's microcode at the draw (the first attempt) gave the
+  previous draw's patch for a shader drawn with two declarations (Venture's shadow pass: draw list 0.915);
+  the patch hook gives the Xenos hash for every draw of the title, menus, V-Rex and Venture. Fallbacks: the
+  object's microcode, then the reproduced patching below (the tests' synthetic device has no library).
+- Resolve lines: the copy command is the library's (convert for every colour resolve, raw for depth, as the
+  Xenos logs show it whatever the formats), and a depth resolve's destination format is k_8_8_8_8 (6).
+- The library draws a few shaders with colour writes off, no depth and no targets, one or no vertices (its own
+  survey of shaders; the Xenos log has them, the native plugin never sees them). `compare.py` leaves such draws
+  out on both sides.
+- The Present front-buffer copy is a resolve line; other resolves use command 0/1 from `PlanResolveConversion`.
 - `--native_dump_frame=N` also logs three vertex hashes per draw: database, object memory and the reproduced patch.
 
 ### The vertex shader hash
@@ -650,6 +669,12 @@ calls it for the native plugin), `--native_pipeline_wait=true`.
   version 1, record size, byte-order marker). A torn tail is repaired on open; a version mismatch starts a new file.
 - At start all records are queued on the pipeline worker threads. Shaders come from the pack by hash, or the
   record waits until the game creates the shader (retried at the end of each frame).
-- Without `pipeline_wait` a draw whose pipeline is not ready is skipped (as on the Xenos plugin); with it the
-  draw waits (`stats().pipeline_waits`, `pipeline_wait_ms`).
+- Without `pipeline_wait` a draw whose pipeline is not ready waits within the frame's budget
+  (`--native_pipeline_wait_budget_ms`, default 30 ms for all draws of a frame together) and is skipped when the
+  budget is spent (`stats().skipped_pending`); with `pipeline_wait` the draw always waits
+  (`stats().pipeline_waits`, `pipeline_wait_ms`). The budget is there for the V-Rex loading screen: the game leaves
+  the last frame of a fade on screen during the load, and that frame needs pipelines nothing drew before. With
+  skipping alone (budget 0) the frame missed its darkening draws and the loading scene failed (MAE 0.62, tile MAE
+  12.9); the workers make a pipeline in about 4 ms (1351 ms for 341 at the chapter start), so the budget lets
+  most new pipelines draw in their first frame and caps a burst at one slower frame.
 - Prewarm needs Vulkan with async pipelines; the D3D12 backend is not supported for it.

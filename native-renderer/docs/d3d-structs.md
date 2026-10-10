@@ -187,6 +187,13 @@ stride set (`sub_82120028` rewrites each vertex fetch instruction with the fetch
 stride and format of the declaration element that matches its usage). A translated vertex shader therefore
 depends on (shader, declaration, strides); bind vertex inputs by usage / usage index from the declaration.
 
+Phase 2b, from the recompiled code: `sub_82120608` (binding through the ring) reserves ring space, writes an
+IM_LOAD_IMMEDIATE header (type 3, opcode 0x2B), copies the microcode ([shader + 600] bytes from the physical
+address at +40) into the ring and calls `sub_82120028(device, shader, microcode copy, declaration)` on the
+copy; then it stores the strides (+12688, 16 bytes) at +11424. `sub_82120A70` calls `sub_82120028` on another
+copy. So the object's own microcode at +40 is not the patched one the GPU runs; the native plugin hooks
+`sub_82120028` to hash the patched copy (`backend.md`, frame log).
+
 ## Vertex declaration (40 + 12 * elements bytes)
 
 | Offset | Field |

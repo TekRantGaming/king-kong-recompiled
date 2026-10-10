@@ -92,6 +92,7 @@ GameRenderer::HostTarget* GameRenderer::GetTarget(bool depth, uint32_t edram_bas
     // Framebuffers holding the old texture are dropped with it.
     framebuffers_.clear();
     blit_sets_.erase(slot->texture.Get());
+    RetireResource(slot->texture);
   }
   slot = std::move(t);
   return slot.get();
@@ -193,6 +194,7 @@ void GameRenderer::ReleaseHostTexture(HostTexture* host) {
     RetireSlot(table, slot);
   }
   blit_sets_.erase(host->texture.Get());
+  RetireResource(host->texture);
   delete host;
 }
 

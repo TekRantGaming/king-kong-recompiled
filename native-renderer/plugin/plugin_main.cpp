@@ -91,6 +91,11 @@ REXCVAR_DEFINE_BOOL(native_pipeline_wait, false, "Native renderer",
                     "native_async_pipelines")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_DOUBLE(native_pipeline_wait_budget_ms, 30.0, "Native renderer",
+                      "Without native_pipeline_wait: milliseconds a frame may wait in all for pipelines "
+                      "being created before its draws are skipped (0: skip at once)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_STRING(native_render_scale, "1", "Native renderer",
                       "Render scale: the game's render targets, viewports, resolves and textures made from "
                       "them are this many times the 360's 1280x720 (1 = the 360's size; 1.5, 2, 3, any number "

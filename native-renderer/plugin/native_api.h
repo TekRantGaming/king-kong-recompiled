@@ -15,7 +15,8 @@ extern "C" {
 
 // 3: the device pointer on draws, clears, resolves and presents; Clear's
 // rectangles; Resolve's full argument list; shader creation (Phase 2).
-#define NR_API_VERSION 3
+// 4: vertex_shader_patched (Phase 2b, the frame log's vertex shader hash).
+#define NR_API_VERSION 4
 
 typedef struct NrApi {
   uint32_t version;  // NR_API_VERSION
@@ -72,6 +73,13 @@ typedef struct NrApi {
   // engine passed (CreateVertexShader / CreatePixelShader's pFunction),
   // object the shader the library returned (0 on failure).
   void (*shader_created)(void* self, uint32_t kind, uint32_t container, uint32_t object);
+
+  // The library rewrote a vertex shader's fetch instructions for a vertex
+  // declaration (sub_82120028, after it returned): microcode is the guest
+  // address of the patched microcode (a copy in the command ring, or the
+  // object's own), [shader + 600] bytes long. Called inside the draw that binds
+  // the shader, so after the hook of that draw.
+  void (*vertex_shader_patched)(void* self, uint32_t shader, uint32_t microcode, uint32_t declaration);
 } NrApi;
 
 #ifdef __cplusplus

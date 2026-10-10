@@ -119,6 +119,7 @@ class Renderer final : public DrawSink {
   void OnDraw(const DrawCall& call) override;
   void OnResolve(const ResolveCall& call) override;
   void OnPresent(uint32_t frame, uint32_t render_target0, uint32_t device) override;
+  void OnVertexShaderPatched(uint32_t shader, uint32_t microcode, uint32_t declaration) override;
 
   // Phase 2: the game's draws through the real shaders, textures and state
   // (GameRenderer) instead of the placeholder pipeline.

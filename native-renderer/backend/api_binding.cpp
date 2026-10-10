@@ -77,6 +77,9 @@ void Present(void* self, uint32_t device) { NR_FORWARD(Present(device)); }
 void ShaderCreated(void* self, uint32_t kind, uint32_t container, uint32_t object) {
   NR_FORWARD(ShaderCreated(kind, container, object));
 }
+void VertexShaderPatched(void* self, uint32_t shader, uint32_t microcode, uint32_t declaration) {
+  NR_FORWARD(VertexShaderPatched(shader, microcode, declaration));
+}
 
 #undef NR_FORWARD
 
@@ -114,6 +117,7 @@ void InitApiBinding(ApiBinding& binding, void* owner, DrawTracker* (*resolve)(vo
   a.draw = Draw;
   a.present = Present;
   a.shader_created = ShaderCreated;
+  a.vertex_shader_patched = VertexShaderPatched;
 }
 
 }  // namespace nr

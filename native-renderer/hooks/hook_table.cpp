@@ -41,6 +41,10 @@ void CreatePixelShader(const NrApi& a, const GuestArgs& g) {
 void CreateVertexShader(const NrApi& a, const GuestArgs& g) {
   a.shader_created(a.self, 0, g.r3(), g.ret);
 }
+// The fetch patching, after the original: (dev, shader, microcode, declaration).
+void VertexShaderPatched(const NrApi& a, const GuestArgs& g) {
+  a.vertex_shader_patched(a.self, g.r4(), g.r5(), g.r6());
+}
 
 // State.
 void SetTexture(const NrApi& a, const GuestArgs& g) { a.set_texture(a.self, g.r4(), g.r5()); }
@@ -141,6 +145,9 @@ constexpr HookEntry kEntries[] = {
     {0x82115708, "DrawIndexedVertices", Kind::kDraw, DrawIndexedVertices},
     {0x82116178, "Resolve", Kind::kDraw, Resolve},
     {0x82118F78, "SetTexture", Kind::kState, SetTexture},
+    // Not an XDK call: the library's rewrite of a vertex shader's fetches for
+    // the declaration (d3d-structs.md), run after the original like a creator.
+    {0x82120028, "PatchVertexShaderFetches", Kind::kCreate, VertexShaderPatched},
 };
 // clang-format on
 
