@@ -26,7 +26,7 @@ native-renderer\tests\run.ps1 -Plugin xenos -Golden -Force
 
 It needs the `kk-dev` build (`kk\build.bat kk-dev`). The report is `report\report.html` in the run folder
 (`F:\KK-native-renderer\runs\<plugin>-<time>\`); exit code 0 pass, 1 fail, 2 frames missing, 3 the game was
-already running, 4 setup error. A full run takes about NN minutes.
+already running, 4 setup error. A full run takes about 8 minutes (six launches; golden capture about 10).
 
 Before every launch the runner checks for a `king_kong` process and never starts a second copy or stops one it
 did not start (`-WaitMinutes` re-checks every 5 minutes). While it runs, `F:\KK-native-renderer\game.lock` names
@@ -35,7 +35,10 @@ written) and stops the process if it has not exited 15 s later. Each run gets a 
 (`F:\KK-native-renderer\userdata`, profile `B13EBABEBABEBABE`), so runs never change it.
 
 Golden data, run folders and logs are never in git: `F:\KK-native-renderer\golden\<scene>\` (shots, `meta.json`,
-`framelog.txt`) and `golden\_runs\` (raw run folders with `game.log`).
+`framelog.txt`) and `golden\_runs\` (raw run folders with `game.log`, and `<run>.json` with the measured clock
+offset). The golden set captured on 10 October 2026 (Xenos plugin, D3D12, `kk-dev` build of commit 9aa5734):
+296 frames of 1280x720 in 13 scene folders, about 1.0 GB, plus 1.2 GB of raw run folders. Test runs go to
+`F:\KK-native-renderer\runs\`.
 
 ## Settings every run uses
 
@@ -59,11 +62,15 @@ the console's picture, so the golden set is the Original look.
 | `save_menu` | menus | 6, 7, 8 after the save menu opens | the save menu over the animated title background (a video) |
 | `main_menu` | menus | 21, 22, 23 | Play / Options / Extras after loading the save |
 | `chapter_select` | menus | 27, 28, 29 | the chapter select on the first chapter |
-| `loading` | vrex | 38.0, 38.4, 38.8 | the V-Rex loading screen (sweeping picture) |
-| `vrex_110`, `vrex_140`, `vrex_170` | vrex | five shots, t-1 .. t+1 | V-Rex gameplay: Jack idle in the rain under the cave roof |
+| `loading` | vrex | 37.8, 38.0, 38.2 | the V-Rex loading screen (it shows for about half a second) |
+| `vrex_110`, `vrex_140`, `vrex_170` | vrex | five shots, t-1 .. t+1 | V-Rex gameplay: Jack idle in the rain under the cave roof, random lightning |
 | `pause` | vrex | 180, 181, 182 | the pause menu (START at 176 s) |
-| `venture` | venture | NN | the Venture opening (chapter select entry 0) |
-| `kong_cutscene`, `kong` | kong | NN | Kong to the Rescue (entry 27): the opening cutscene with Kong, then Jack's fight |
+| `venture` | venture | 119 .. 121 (five) | the Venture opening (entry 0): the rocking hull with VENTURE painted on it, the "Right stick to aim" hint |
+| `kong_cutscene` | rescue | 53, 54, 55 | Kong to the Rescue (entry 27): the opening cutscene, Kong facing the V-Rex |
+| `kong` | rescue | 61 .. 63 (five) | the same chapter in play: Jack behind the rocks, a V-Rex coming in, fires, rain |
+
+Frame logs: `video` (logos), `title`, `save_menu` (menus), `vrex_140` (vrex), `venture` and `kong` (rescue); a
+run can log one window only. Selecting a run name (`-Scenes rescue`) selects all its scenes.
 
 Times from the save menu (`KK_DEV_SHOTS_FROM=menu`) follow the script's clock; the boot scenes count from the
 first time the game reads the pad (`from: boot`, nothing pressed). Shot times are multiples of 0.1 s
@@ -75,6 +82,9 @@ opens the chapter select from the main menu, `RIGHT` presses move along it (0.6 
 chapter. The V-Rex script is the known-good one from Phase 0 (its START presses after the chapter starts only
 open and close the pause menu: this chapter has no story movie when started from the chapter select). Chapter
 order: entry 0 Venture, 8 V-Rex, 27 Kong to the Rescue (see the chapter list in the main project's notes).
+Timelines seen (seconds after the save menu opens): Venture shows a black screen from 32 to about 92 s, then the
+hull; Kong to the Rescue loads in about 2 s after `48:A` and plays its cutscene from about 51 s, Jack's view from
+about 58 s.
 
 ## How frames are compared
 
@@ -90,11 +100,14 @@ are random. So:
    burst), each pixel has a lowest and highest value per channel. A test pixel that leaves that range by more
    than `env_tol` is "outside". Still parts (menu text, the HUD, a paused frame) have no range and must match;
    animated parts accept anything the golden frames showed. Scored as the share of outside pixels (`env_bad`)
-   and the worst 80x80 tile of the outside distance (`env_tile`, which catches a small missing or wrong object).
-   Three settings shape it:
-   - `env_anim_level` (default 0): a pixel counts as animated when its golden span is above this. Raise it to a
-     few levels if the golden frames show dither or video noise that should still count as still.
-   - `env_radius` (default 0): in and near the animated parts only, the range also takes in the values within
+   and the worst 80x80 tile of the distance beyond `env_tol` (`env_tile`: noise inside the tolerance adds
+   nothing, so a small missing or wrong object stands out). Four settings shape it:
+   - `env_anim_level` (default 16): a pixel counts as animated when its golden span is above this. At 16 the
+     menu text over the moving background video stays still (its span is about 11), so missing text fails.
+   - `env_flash_level` (default off; 6 for the storm scenes): golden frames whose mean brightness is more than
+     this many levels from the scene's median (lightning) are left out of the range; they stay candidates for
+     the closest frame. One flash in the burst would otherwise widen the range of every pixel.
+   - `env_radius` (default 2): in and near the animated parts only, the range also takes in the values within
      this many pixels. A golden burst never shows every position of a raindrop or a flame; with a radius of a
      few pixels a test frame may draw it a little away from every golden position. Still parts keep their exact
      range, so a still object that moved or is missing still fails.
@@ -106,8 +119,7 @@ are random. So:
 
 A scene passes when at least `min_pass` of its test frames pass every check that has a threshold, and the draw
 list (if any) reaches `drawlog`. Thresholds are in `scenes.json` (defaults, then per scene); `null` means not
-checked. They were set from two independent Xenos captures with `compare.py calibrate` (worst value x2, with
-floors), see "Calibration" below.
+checked. They were set from Xenos captures against the golden set, see "Calibration" below.
 
 The report (`report.html`) starts with one PASS / FAIL badge and a table, one row per scene, every value next to
 its limit and red when over. Failing scenes open below it with, per frame: the closest golden frame, the test
@@ -185,11 +197,58 @@ With `--min-ratio` the diff exits 1 when the similarity is lower (for scripts).
 Timing: the log's clock is not the scripts' clock. The runner asks for `scene time + clock_offset`, where
 `clock_offset` (seconds from the log clock's start to the shot clock's zero) is measured in each run and stored
 in `golden\_runs\<run>.json` (`frame_log.clock_offset`); the next run uses it. `meta.json` records when the log
-was actually taken (`frame_log.scene_time`), and the report shows it. Measured: NN.
+was actually taken (`frame_log.scene_time`), and the report shows it. Measured: the log clock starts 7.65 to
+7.78 s before the save menu opens and 0.2 s before the first pad read; with the stored offsets every frame log
+landed within 0.15 s of the wanted scene time.
 
 ## Calibration and the self-consistency check
 
-NN
+How the thresholds were set (10 October 2026, all Xenos on D3D12, the golden set above):
+
+1. `xenos-calib1`, the first run against the golden set, showed what varies between runs: nothing in the still
+   scenes (video, title, loading, pause match to the pixel); the menu background video (closest-frame MAE about
+   1.1 to 1.4, a few pixels up to 12 levels outside the range); in V-Rex the drifting rain haze (up to about 25
+   levels over the lit part of the frame, MAE 3.5 even between frames without lightning) and lightning; in Kong
+   to the Rescue the V-Rex's own movement; particle draws in the gameplay frame logs (draw-list similarity 0.96
+   to 0.99). From that: closest-frame checks only for still scenes and the Venture hull; `env_tol` 32 for the
+   storm gameplay; `env_flash_level` 6; `min_pass` 0.6 where lightning comes at random; per-scene draw-list
+   limits for gameplay (0.93 V-Rex, 0.97 Venture, 0.95 Kong).
+2. `xenos-selfcheck1` and `xenos-selfcheck2`: the first passed 13 of 13; the second failed Venture (two frames
+   beside a lightning flash) and nearly Kong, so their `env_bad` / closest-frame limits were widened once.
+3. `xenos-selfcheck3`, a run not used for any setting: **13 of 13 scenes pass**. Its worst values (k-th worst
+   where `min_pass` lets frames miss):
+
+| Scene | MAE | SSIM | Tile MAE | Outside % | Worst tile outside | Draw list |
+|---|---|---|---|---|---|---|
+| video | 0.000 | 1.0000 | 0.0 | 0.000 | 0.00 | 1.000 |
+| title | 0.003 | 1.0000 | 0.2 | 0.000 | 0.00 | 1.000 |
+| save_menu | 1.261 | 0.9760 | 9.2 | 0.001 | 0.00 | 0.988 |
+| main_menu | 2.078 | 0.9496 | 11.2 | 0.002 | 0.01 | - |
+| chapter_select | 1.577 | 0.9617 | 11.0 | 0.027 | 0.08 | - |
+| loading | 0.000 | 1.0000 | 0.0 | 0.000 | 0.00 | - |
+| vrex_110 | 3.359 | 0.9432 | 20.6 | 0.018 | 0.08 | - |
+| vrex_140 | 3.639 | 0.9278 | 20.8 | 0.074 | 0.36 | 0.995 |
+| vrex_170 | 3.344 | 0.9341 | 19.9 | 0.003 | 0.01 | - |
+| pause | 0.000 | 1.0000 | 0.0 | 0.000 | 0.00 | - |
+| venture | 2.093 | 0.9311 | 7.4 | 0.000 | 0.00 | 0.988 |
+| kong_cutscene | 7.066 | 0.6074 | 28.7 | 0.026 | 0.18 | - |
+| kong | 9.564 | 0.7849 | 51.0 | 0.119 | 1.38 | 0.991 |
+
+What the limits catch: each test frame of a passing capture was damaged one way at a time and compared again
+(a scratch script; the same `compare_scene`). Caught everywhere except where noted: a black 96x96 square in the
+middle (missed on the already black loading and pause frames, on the rocking Venture hull and in the Kong
+fight), colours with red and blue swapped (missed on the loading screen, which is mostly black and white), a UI
+element removed (Ubisoft logo, title logo, save menu DELETE, Venture hint, loading text; caught), brightness
+x1.1 (missed in the storm scenes, pause, Venture and the Kong fight), every channel +6 levels (missed in the
+storm scenes, both Kong scenes, the main menu and the chapter select) and a blur like wrong texture filtering
+(missed in the storm scenes and the Kong cutscene). So: still scenes and menus are strict, the
+storm and fight scenes catch gross errors only (missing or black objects, wrong colours), and small global
+shifts are left to the still scenes, which share the same shaders for text, video and post effects.
+
+To re-tune after a change: capture a run against the golden set, then
+`python -I native-renderer\tests\compare.py calibrate --golden-root F:\KK-native-renderer\golden --test-root <run>`
+prints the worst values per scene and suggested limits (worst x2, with floors); check them with one more run
+that was not used for tuning.
 
 ## Testing the compare tool
 
@@ -197,7 +256,8 @@ NN
 BMP variants (the game's top-down 32-bit, bottom-up 24-bit with row padding, bitfields, Pillow's) and PNG
 variants load to the same pixels; the scores react to a small missing object; the golden range accepts rain
 streaks where the golden frames had them (and, with `env_radius`, near them) but not a missing still object, a
-wrong colour or rain in a still part; `min_pass` lets one lightning frame of three miss but not two; the frame log
+wrong colour or rain in a still part; `env_tile` ignores noise inside the tolerance; a flash frame left out of
+the range (`env_flash_level`); `min_pass` lets one lightning frame of three miss but not two; the frame log
 parser reads both backends' lines and reports skipped draws and bad counts; `collect`, `compare`, `images` and
 `plan` run end to end on temporary folders.
 
