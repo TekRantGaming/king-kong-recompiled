@@ -69,6 +69,10 @@ struct RecompilerInput
     bool rawInterpolators = false;
     uint32_t pixelOutputs = 0;                   // outputs to declare even if never written
     int32_t paramGenRegister = -1;               // pixel: register that receives the pixel position
+    // Render scale aware code (kkshaders RenderScaleAware): the pixel position and the sizes
+    // read with GetDimensions are brought back to guest units through the KKScaleConstants
+    // buffer (b3). Off: the output is byte for byte what it was before this existed.
+    bool renderScaleAware = false;
 };
 
 // What the backend binds for a shader (see kkshaders abi.h).

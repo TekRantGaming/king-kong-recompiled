@@ -111,6 +111,7 @@ uint64_t translationInputHash(const ShaderInfo& info) {
         w.u32(i.reg);
     }
     w.u32(info.readsPixelPosition ? 1u + info.pixelPositionRegister : 0u);
+    if (info.renderScaleAware && info.kind == ShaderKind::Pixel) w.str("render-scale-aware/1");
     return XXH3_64bits(w.bytes.data(), w.bytes.size());
 }
 
@@ -175,6 +176,8 @@ TranslateResult translate(const ShaderInfo& info) {
         }
         if (info.kind == ShaderKind::Pixel && info.readsPixelPosition) in.paramGenRegister = info.pixelPositionRegister;
     }
+
+    in.renderScaleAware = info.renderScaleAware && info.kind == ShaderKind::Pixel;
 
     ShaderRecompiler recompiler;
     std::string header = "// Translated by kkshaders (XenosRecomp core) from Xbox 360 microcode.\n";

@@ -13,6 +13,9 @@
 //   s0 space5  SamplerState[]
 //   t0 space6  ByteAddressBuffer[] vertex data as it is in guest memory (big-endian)
 //
+//   b3 space0  ScaleConstants    render scale aware shaders only (below); the binding exists only
+//                                when the renderer runs at a scale other than 1
+//
 // In SPIR-V the register is the binding and the space the descriptor set (DXC's default
 // mapping); constant buffers use the D3D layout (-fvk-use-dx-layout) so these structs serve both.
 // Vertex shaders are compiled with -fvk-invert-y for Vulkan.
@@ -50,6 +53,14 @@ struct alignas(16) DrawConstants {
     uint32_t reserved;
 };
 static_assert(sizeof(DrawConstants) == 59 * 16, "DrawConstants must match KKDrawConstants");
+
+// The render scale (docs/backend.md, "Render scale"). Read by pixel shaders translated with
+// RecompilerInput::renderScaleAware, which is the only thing that declares it.
+struct alignas(16) ScaleConstants {
+    float renderScale[4];       // xy: host pixels per guest pixel of the draw's targets; zw: the inverse
+    float texInvScale[32][4];   // per texture fetch constant, xy: guest texels per host texel of the texture bound there
+};
+static_assert(sizeof(ScaleConstants) == 16 + 32 * 16, "ScaleConstants must match KKScaleConstants");
 
 // A vertex fetch format word (the w of a binding mode entry; built by the translator for
 // instruction mode).

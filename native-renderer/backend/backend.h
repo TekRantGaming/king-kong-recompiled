@@ -58,6 +58,10 @@ struct GameSettings {
   bool async_pipelines = true;
   bool pipeline_wait = false;  // see GameRenderer::Options
   std::string frame_log;       // REX_DEV_FRAME_LOG: "<seconds>[,<frames>]", empty = off
+  // Render scale (backend/render_scale.h): "1", "1.5", "2", "1920x1080". shadow_scale: 0 like the
+  // render scale, else its own (a number).
+  std::string render_scale = "1";
+  float shadow_scale = 0.0f;
 };
 
 class Backend {

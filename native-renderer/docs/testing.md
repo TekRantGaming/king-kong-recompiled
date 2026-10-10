@@ -250,6 +250,14 @@ To re-tune after a change: capture a run against the golden set, then
 prints the worst values per scene and suggested limits (worst x2, with floors); check them with one more run
 that was not used for tuning.
 
+## Render scale runs
+
+The golden set is made at the console's size, and the capture is the presenter's output at the window's size, so
+a scaled run (`--native_render_scale 2`) is compared against it like any other run of the new renderer: the
+picture should match and the edges get cleaner. Whether scaling itself is right is decided by the synthetic
+`Scale_*` tests in `nr_game_tests` (`backend.md`, "Render scale"); the commands for a run on the game are in
+that section too.
+
 ## Testing the compare tool
 
 `tests/test_compare.py` checks the tool itself with synthetic frames and logs, no game or golden data needed:

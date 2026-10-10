@@ -43,11 +43,21 @@ GameRenderer::HostTarget* GameRenderer::FindTarget(bool depth, uint32_t edram_ba
   return it == targets_.end() ? nullptr : it->second.get();
 }
 
+GameRenderer::Scale GameRenderer::ScaleFor(bool depth, uint32_t pitch, uint32_t format) {
+  // Shadow maps: k_32_FLOAT colour targets that are not the frame's size, and the depth
+  // buffers of that pitch (every attachment of a draw has one size).
+  if (!depth && format == 14 && pitch != options_.guest_frame_width) shadow_pitches_.insert(pitch);
+  if (options_.shadow_scale > 0.0f && shadow_pitches_.count(pitch)) return {options_.shadow_scale, options_.shadow_scale};
+  return {options_.render_scale_x, options_.render_scale_y};
+}
+
 GameRenderer::HostTarget* GameRenderer::GetTarget(bool depth, uint32_t edram_base, uint32_t pitch,
                                                   uint32_t format, uint32_t height) {
   const uint64_t key = TargetKey(depth, edram_base, pitch, format);
   auto& slot = targets_[key];
-  if (slot && slot->height >= height) return slot.get();
+  if (slot && slot->height >= height) {
+    if (slot->scale_x == ScaleFor(depth, pitch, format).x) return slot.get();
+  }
   // New, or taller than before (the old contents are lost; this happens once
   // per placement as the game's surfaces are first seen).
   auto t = std::make_unique<HostTarget>();
@@ -55,12 +65,17 @@ GameRenderer::HostTarget* GameRenderer::GetTarget(bool depth, uint32_t edram_bas
   t->depth = depth;
   t->width = pitch;
   t->height = std::max(height, slot ? slot->height : 0u);
+  const Scale scale = ScaleFor(depth, pitch, format);
+  t->scale_x = scale.x;
+  t->scale_y = scale.y;
+  t->host_width = uint32_t(std::max(ScaleCoord(int32_t(t->width), scale.x), 1));
+  t->host_height = uint32_t(std::max(ScaleCoord(int32_t(t->height), scale.y), 1));
   // Depth: 24-bit integer depth is not a render target format everywhere
   // (RADV has no D24S8), so both 360 depth formats become D32S8.
   t->format = depth ? nvrhi::Format::D32S8 : ColorTargetFormat(format);
   nvrhi::TextureDesc desc;
-  desc.width = t->width;
-  desc.height = t->height;
+  desc.width = t->host_width;
+  desc.height = t->host_height;
   desc.format = t->format;
   desc.isRenderTarget = true;
   desc.initialState = depth ? nvrhi::ResourceStates::DepthWrite : nvrhi::ResourceStates::RenderTarget;
@@ -93,6 +108,8 @@ std::vector<GameRenderer::TargetInfo> GameRenderer::DebugTargets() const {
     i.format = uint32_t((key >> 40) & 0xFF);
     i.width = t->width;
     i.height = t->height;
+    i.host_width = t->host_width;
+    i.host_height = t->host_height;
     i.host_format = t->format;
     i.texture = t->texture;
     out.push_back(i);
@@ -126,15 +143,18 @@ nvrhi::IFramebuffer* GameRenderer::GetFramebuffer(const std::array<HostTarget*, 
 // ---------------------------------------------------------------- textures
 
 GameRenderer::HostTexture* GameRenderer::CreateHostTexture(const kknr::HostTexturePlan& plan,
-                                                           bool render_target) {
+                                                           bool render_target, float scale_x, float scale_y) {
   auto host = std::make_unique<HostTexture>();
+  if (!render_target) scale_x = scale_y = 1.0f;  // only a resolve makes a scaled texture
+  host->scale_x = scale_x;
+  host->scale_y = scale_y;
   host->plan = plan;
   host->format = kknr::ToNvrhi(plan.format);
   host->render_target = render_target;
   if (host->format == nvrhi::Format::UNKNOWN) return nullptr;
   nvrhi::TextureDesc desc;
-  desc.width = std::max(plan.width, 1u);
-  desc.height = std::max(plan.height, 1u);
+  desc.width = uint32_t(std::max(ScaleCoord(int32_t(std::max(plan.width, 1u)), scale_x), 1));
+  desc.height = uint32_t(std::max(ScaleCoord(int32_t(std::max(plan.height, 1u)), scale_y), 1));
   desc.depth = std::max(plan.depth, 1u);
   desc.arraySize = std::max(plan.layers, 1u);
   desc.mipLevels = std::max(plan.levels, 1u);
@@ -199,7 +219,7 @@ GameRenderer::HostTexture* GameRenderer::UploadTexture(nvrhi::ICommandList* cl,
   const kknr::HostTexturePlan& p = data.plan;
   if (!host || host->plan.format != p.format || host->plan.width != p.width || host->plan.height != p.height ||
       host->plan.depth != p.depth || host->plan.layers != p.layers || host->plan.levels != p.levels ||
-      host->plan.dimension != p.dimension) {
+      host->plan.dimension != p.dimension || host->scale_x != 1.0f || host->scale_y != 1.0f) {
     ReleaseHostTexture(host);
     host = CreateHostTexture(p, false);
     entry.host = host;
@@ -279,6 +299,7 @@ uint32_t GameRenderer::TextureView(HostTexture* host, const kknr::TextureFetch& 
 uint32_t GameRenderer::BindTexture(nvrhi::ICommandList* cl, const uint32_t words[6],
                                    kkshaders::TextureDimension dimension, bool base_map) {
   const kknr::TextureFetch fetch = kknr::TextureFetch::FromWords(words);
+  bound_scale_x_ = bound_scale_y_ = 1.0f;
   if (fetch.Type() != 2) return 0;
   textures_.options = TextureOptions();  // ranges are computed with it when an entry is made
   kknr::TextureCache::BindResult r = textures_.Bind(fetch, physical_, frame_);
@@ -289,6 +310,8 @@ uint32_t GameRenderer::BindTexture(nvrhi::ICommandList* cl, const uint32_t words
     if (it != resolved_by_base_.end() && it->second != r.entry && it->second->gpu_written && it->second->host) {
       if (HostTexture* alias = AliasTexture(cl, *r.entry, fetch, static_cast<HostTexture*>(it->second->host))) {
         cl->setTextureState(alias->texture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
+        bound_scale_x_ = alias->scale_x;
+        bound_scale_y_ = alias->scale_y;
         return TextureView(alias, fetch, dimension, base_map);
       }
     }
@@ -306,6 +329,8 @@ uint32_t GameRenderer::BindTexture(nvrhi::ICommandList* cl, const uint32_t words
     }
   }
   cl->setTextureState(host->texture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
+  bound_scale_x_ = host->scale_x;
+  bound_scale_y_ = host->scale_y;
   return TextureView(host, fetch, dimension, base_map);
 }
 
@@ -318,14 +343,15 @@ GameRenderer::HostTexture* GameRenderer::AliasTexture(nvrhi::ICommandList* cl, k
   if (kknr::GetHostFormatInfo(plan.format).block_size != 1) return nullptr;  // not drawable
   if (!host || !host->render_target || host->plan.format != plan.format || host->plan.width != plan.width ||
       host->plan.height != plan.height || host->plan.levels != plan.levels || host->plan.layers != plan.layers ||
-      host->plan.dimension != plan.dimension) {
+      host->plan.dimension != plan.dimension || host->scale_x != source->scale_x || host->scale_y != source->scale_y) {
     ReleaseHostTexture(host);
-    host = CreateHostTexture(plan, true);
+    host = CreateHostTexture(plan, true, source->scale_x, source->scale_y);
     entry.host = host;
     if (!host) return nullptr;
   }
-  const int32_t w = int32_t(std::min(plan.width, source->plan.width));
-  const int32_t h = int32_t(std::min(plan.height, source->plan.height));
+  // In host pixels: the overlap of the two (the guest's size times the scale).
+  const int32_t w = ScaleCoord(int32_t(std::min(plan.width, source->plan.width)), source->scale_x);
+  const int32_t h = ScaleCoord(int32_t(std::min(plan.height, source->plan.height)), source->scale_y);
   const uint32_t identity[4] = {0, 1, 2, 3};
   bool ok;
   const bool four = host->format == nvrhi::Format::RGBA8_UNORM;
