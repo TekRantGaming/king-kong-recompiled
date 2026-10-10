@@ -23,4 +23,10 @@ Not vendored:
 
 Changes we make to vendored code are kept as small as possible and listed here:
 
-- (none yet)
+- `XenosRecomp/XenosRecomp/shader_recompiler.cpp`, `shader_recompiler.h`, `pch.h`: reworked for King Kong
+  by the shader translator (stream 02): the container reading moved to `native-renderer/shaders`
+  (`RecompilerInput`), bindless resources, vertex pulling from guest memory, the full constant and
+  control-flow model, literal constants served in the shader (`kkConstRel`), one `if` block per run of
+  instructions with the same predicate, and branch-free `select` forms for scalar conditionals (the
+  SPIR-V back end keeps short-circuit `?:` as branches). The submodules and `main.cpp` /
+  `dxc_compiler.cpp` are not built.

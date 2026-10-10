@@ -1,23 +1,22 @@
 #pragma once
 
-#ifdef _WIN32
-#include <Windows.h>
-#endif
+// King Kong: trimmed to what the translator core needs (no DXC, smol-v, zstd, xxHash or
+// <execution>; the kkshaders library owns compiling and caching).
 
-#include <dxcapi.h>
-
+#include <algorithm>
+#include <array>
 #include <bit>
 #include <cassert>
+#include <cmath>
 #include <cstdint>
-#include <execution>
-#include <filesystem>
+#include <cstring>
 #include <map>
-#include <smolv.h>
 #include <fmt/core.h>
+#include <set>
 #include <string>
+#include <string_view>
 #include <unordered_map>
-#include <xxhash.h>
-#include <zstd.h>
+#include <vector>
 
 template<typename T>
 static T byteSwap(T value)
@@ -28,7 +27,7 @@ static T byteSwap(T value)
         return static_cast<T>(__builtin_bswap16(static_cast<uint16_t>(value)));
     else if constexpr (sizeof(T) == 4)
         return static_cast<T>(__builtin_bswap32(static_cast<uint32_t>(value)));
-    else if constexpr (sizeof(T) == 8) 
+    else if constexpr (sizeof(T) == 8)
         return static_cast<T>(__builtin_bswap64(static_cast<uint64_t>(value)));
 
     assert(false && "Unexpected byte size.");
@@ -52,4 +51,4 @@ struct be
     {
         return get();
     }
-};  
+};
