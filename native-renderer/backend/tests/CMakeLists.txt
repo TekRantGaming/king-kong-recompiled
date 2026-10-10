@@ -59,3 +59,21 @@ if(NR_BUILD_PLUGIN AND NR_HAS_VULKAN AND UNIX)
                      $<TARGET_FILE:nr_plugin_tests>)
     set_tests_properties(nr_plugin_tests PROPERTIES ENVIRONMENT "${_env}")
 endif()
+
+# The game renderer without the game: synthetic guest memory, shaders from the
+# shader tests' assembler and container writer, through the hooks on lavapipe.
+if(NR_HAS_VULKAN AND NR_GAME_RENDERER)
+    add_executable(nr_game_tests game_tests.cpp vk_test_device.cpp readback.cpp
+        "${NR_ROOT}/shaders/tests/xenos_asm.cpp" "${NR_ROOT}/shaders/tests/container_writer.cpp")
+    target_include_directories(nr_game_tests PRIVATE "${NR_ROOT}/shaders/tests")
+    target_link_libraries(nr_game_tests PRIVATE nr_renderer nr_hooks ${CMAKE_DL_LIBS})
+    target_compile_definitions(nr_game_tests PRIVATE NR_TEST_DXC_DIR="${NR_DXC_DIR}")
+    add_test(NAME nr_game_tests
+             COMMAND ${Python3_EXECUTABLE} -I "${CMAKE_CURRENT_SOURCE_DIR}/check_validation.py"
+                     $<TARGET_FILE:nr_game_tests>)
+    set(_env "VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation")
+    if(EXISTS "${_lvp}")
+        list(APPEND _env "VK_ICD_FILENAMES=${_lvp}")
+    endif()
+    set_tests_properties(nr_game_tests PROPERTIES ENVIRONMENT "${_env}")
+endif()
