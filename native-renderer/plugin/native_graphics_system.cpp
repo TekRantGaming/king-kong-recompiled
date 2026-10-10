@@ -41,6 +41,13 @@ namespace nr {
 NativeGraphicsSystem* NativeGraphicsSystem::instance_ = nullptr;
 
 NativeGraphicsSystem* NativeGraphicsSystem::Create(std::string_view backend) {
+  // Vulkan is the primary backend (user decision, 10 October 2026): "any"
+  // takes it whenever the SDK was built with it, D3D12 otherwise.
+#if NR_HAS_VULKAN
+  if (backend == "any") {
+    backend = "vulkan";
+  }
+#endif
 #if NR_HAS_D3D12
   if (backend == "any" || backend == "d3d12") {
     if (rex::ui::d3d12::D3D12Provider::IsD3D12APIAvailable()) {

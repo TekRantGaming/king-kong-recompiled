@@ -265,8 +265,11 @@ void Renderer::OnDraw(const DrawCall& call) {
     ++stats_.draws_skipped_target;
     return;
   }
-  if (options_.only_depth_tested && (!call.states.z_enable || !call.states.z_write_enable ||
-                                     (call.states.z_func & 7) == 7)) {
+  // Opaque: RB_BLENDCONTROL0 colour part = source ONE, ADD, destination ZERO.
+  const bool opaque = (call.blend_control[0] & 0x1FFF) == 0x0001;
+  if (options_.only_depth_tested &&
+      (!call.states.z_enable || (call.states.z_func & 7) == 7 ||
+       (!call.states.z_write_enable && !opaque))) {
     ++stats_.draws_skipped_overlay;
     return;
   }

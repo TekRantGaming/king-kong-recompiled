@@ -39,13 +39,13 @@ class LockedSink final : public DrawSink {
       REXLOG_INFO(
           "rexgpu-native: frame {} draw {} {} prim {} start {} count {} base {} stride {} pos {}{} "
           "vbytes {} vs {:08X} ps {:08X} rt0 {:08X} ds {:08X} vp {},{} {}x{} z {}..{} "
-          "postype {:X} wvp c{} vsobj {} psobj {} zstate {}/{}/{} cull {} c0 {} {} {} {} c1 {} {} {} {} c2 {} {} {} {} c3 {} {} {} {}",
+          "blend {:08X} {} postype {:X} wvp c{} vsobj {} psobj {} zstate {}/{}/{} cull {} c0 {} {} {} {} c1 {} {} {} {} c2 {} {} {} {} c3 {} {} {} {}",
           d.frame, d.index_in_frame, d.indexed ? "indexed" : "plain", int(d.primitive), d.start,
           d.count, d.base_vertex, d.stride, d.position_offset,
           d.position_from_declaration ? "" : " (no decl)", d.vertex_data_size, d.vertex_shader,
           d.pixel_shader, d.render_targets[0], d.depth_stencil, d.viewport.x, d.viewport.y,
           d.viewport.width, d.viewport.height, d.viewport.min_z, d.viewport.max_z,
-          d.position_type, d.wvp_register, ShaderKind(d.vertex_shader), ShaderKind(d.pixel_shader), d.states.z_enable,
+          d.blend_control[0], FirstVertex(d), d.position_type, d.wvp_register, ShaderKind(d.vertex_shader), ShaderKind(d.pixel_shader), d.states.z_enable,
           d.states.z_write_enable, d.states.z_func, d.states.cull_mode, m[0], m[1],
           m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], m[12], m[13], m[14],
           m[15]);
@@ -79,6 +79,28 @@ class LockedSink final : public DrawSink {
     const uint8_t* p = memory_.Virtual(object);
     if (!p) return "unmapped";
     return fmt::format("[+52 {:08X} +592 {:08X}]", LoadBE32(p + 52), LoadBE32(p + 592));
+  }
+
+  // The draw's first vertex: its position and where the found matrix puts it
+  // (x/w, y/w, z/w, w).
+  static std::string FirstVertex(const DrawCall& d) {
+    if (!d.vertex_data || d.stride == 0) return "v0 none";
+    uint32_t first = d.indexed ? 0 : d.start;
+    if (d.indexed && d.index_data) {
+      first = d.index_info.index32 ? LoadBE32(d.index_data + size_t(d.start) * 4)
+                                   : LoadBE16(d.index_data + size_t(d.start) * 2);
+      first = uint32_t(int64_t(first) + d.base_vertex);
+    }
+    const uint64_t at = uint64_t(first) * d.stride + d.position_offset;
+    if (at + 12 > d.vertex_data_size) return "v0 out of range";
+    float p[4] = {LoadBEFloat(d.vertex_data + at), LoadBEFloat(d.vertex_data + at + 4),
+                  LoadBEFloat(d.vertex_data + at + 8), 1.0f};
+    float c[4];
+    for (int r = 0; r < 4; ++r) {
+      c[r] = d.wvp[r * 4] * p[0] + d.wvp[r * 4 + 1] * p[1] + d.wvp[r * 4 + 2] * p[2] + d.wvp[r * 4 + 3];
+    }
+    return fmt::format("v0 ({:.3g} {:.3g} {:.3g}) clip ({:.3g} {:.3g} {:.3g} w {:.3g})", p[0], p[1],
+                       p[2], c[0] / c[3], c[1] / c[3], c[2] / c[3], c[3]);
   }
 
   // --native_dump_frame=N logs every call of the game's frame N.
@@ -162,7 +184,7 @@ void Backend::Present(rex::ui::Presenter* presenter, uint32_t frontbuffer_width,
     REXLOG_INFO(
         "rexgpu-native: swap {}: hooks saw {} draws ({} indexed, {} dropped), {} clears, {} "
         "resolves, {} presents; renderer drew {}, skipped {} (other target) {} (primitive) {} "
-        "(range) {} (not depth-written) {} (no projection matrix) {} (position format), {} clears, "
+        "(range) {} (not main pass) {} (no projection matrix) {} (position format), {} clears, "
         "{} frames",
         swap, d.draws, d.indexed_draws, d.dropped_draws, d.clears, d.resolves, d.presents,
         r.draws_recorded, r.draws_skipped_target, r.draws_skipped_primitive, r.draws_skipped_range,

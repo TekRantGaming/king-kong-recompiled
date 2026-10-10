@@ -44,9 +44,9 @@ REXCVAR_DEFINE_BOOL(native_all_targets, false, "Native renderer",
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_BOOL(native_main_pass_only, true, "Native renderer",
-                    "Placeholder draws: draw only opaque depth-tested and depth-writing draws (the "
-                    "main pass); off also draws full-screen passes, particles and the HUD, which "
-                    "cover the frame")
+                    "Placeholder draws: draw only depth-tested draws that write depth or are opaque "
+                    "(the main pass); off also draws full-screen passes, particles and the HUD, "
+                    "which cover the frame")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_INT32(native_dump_frame, -1, "Native renderer",

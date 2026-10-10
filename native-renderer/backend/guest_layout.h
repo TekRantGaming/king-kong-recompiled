@@ -167,14 +167,15 @@ constexpr uint32_t kMipMapLodBias = 28;
 constexpr uint32_t kCount = 20 * 4;  // values 0..76
 }  // namespace ss
 
-// D3DCLEAR flags as the game passes them (traced: 1, 0xF, 0x3F, 0x30). Taken
-// as: bit 0 or bits 4-7 (the 360's per-target bits) = colour, bit 1 = z,
-// bit 2 = stencil. To be confirmed by brief 01 against the clear path
-// (sub_82114D10).
+// D3DCLEAR flags on the 360 (traced: 1, 0xF, 0x3F, 0x30): bits 0-3 render
+// targets 0-3, 0x10 Z, 0x20 stencil. Read from the clear path sub_82114D10:
+// clrlwi 28 (targets), rlwinm 0,27,27 (0x10) and 0,26,26 (0x20) on the flags.
+// (The first guess, bit 1 = Z, made the colour-only clear before the game's
+// colour pass also wipe the depth pre-pass.)
 namespace clear_flags {
-constexpr uint32_t kTargetMask = 0xF1;
-constexpr uint32_t kZBuffer = 0x2;
-constexpr uint32_t kStencil = 0x4;
+constexpr uint32_t kTargetMask = 0xF;
+constexpr uint32_t kZBuffer = 0x10;
+constexpr uint32_t kStencil = 0x20;
 }  // namespace clear_flags
 
 }  // namespace nr

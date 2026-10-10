@@ -11,6 +11,7 @@
 
 # --- Downloaded / build output ---
 /tools/rexglue/
+/tools/rexglue-vulkan/
 /kk/out/
 /screenshots/
 /KingKong/
