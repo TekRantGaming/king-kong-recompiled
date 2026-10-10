@@ -86,6 +86,12 @@ supported (harmless for the SDK's own code), adds them to `VulkanDevice::Propert
 `REX_UI_VULKAN_DEVICE_HAS_SYNC_FEATURES`; the plugin then checks them at start and refuses a device without
 them. It applies cleanly on v0.10.0 after `tools/rexglue-patches`. D3D12 is not affected.
 
+Verified: v0.10.0 + this patch built from source on Linux (clang-20, the `linux-amd64` preset's
+`-march=x86-64-v2`, C++23), then `nr_plugin_tests` against that install: all checks pass, zero validation
+errors. Against the official bundle the same test fails on the validation errors, by design. A Linux build of
+the game with this plugin therefore needs an SDK built from source with the patch
+(`REXGLUE_SDK_DIR` in `tools/build_appimage.sh`).
+
 ## Building and testing on Linux
 
 Packages: `cmake ninja-build g++` (or clang-20), `libvulkan-dev mesa-vulkan-drivers vulkan-validationlayers
@@ -125,3 +131,28 @@ Without the SDK on the prefix path the plugin is skipped and the libraries and G
   presenter's contract by reading.
 - The presenter wraps are cached by resource pointer and size (D3D12) or image and version (Vulkan); a freed
   and reallocated resource at the same address and size would reuse a stale NVRHI handle.
+
+## What the Windows side must do (milestones 1-3 in the game)
+
+1. Fetch `cloud-04-backend` into the worktree (`F:\KK-native-renderer`), branch `native-renderer/04-backend`.
+2. Turn the option on in the dev build's cache once (it stays; `build.bat` re-runs the preset without
+   clearing it): `cmake -S kk -B kk/out/build/kk-dev -DKK_NATIVE_RENDERER=ON`, then `kk\build.bat kk-dev`.
+   With `KK_DEV_TOOLS` on (the kk-dev preset), `dev_d3d_trace.cpp` is left out, since it hooks the same
+   functions. This builds `rexgpu-native*.dll` (D3D12 through NVRHI's D3D12 backend and the DirectX-Headers
+   shim) and copies it beside `king_kong.exe`. It is the first time this code meets the Windows toolchain and
+   the first time `d3d12_host.cpp` is compiled at all: expect a round of compile fixes.
+3. Milestone 1: run with `--gpu_plugin=native --native_draws=false --native_test=clear` (plus the usual
+   `--game_data_root ... --kk_launcher=false`). Expected: the window cycles through colours, the game logic
+   runs (audio, vblank-driven waits), the log shows `rexgpu-native: created (Direct3D 12)`,
+   `NVRHI renderer ready` and `guest GPU ready`.
+4. Milestone 2: the same with `--native_test=triangle`: the RGB triangle over the cycling colour.
+5. Milestone 3: `--gpu_plugin=native` (native_draws defaults to on). Expected log line: `D3D hooks connected to
+   rexgpu-native (39 entry points)`. The screen shows flat-coloured silhouettes of the main pass, over the
+   game's clear colour. If they are garbage, try `--native_wvp_transpose=true`; if they are missing, try
+   `--native_all_targets=true`.
+6. Check `--gpu_plugin=xenos` (and no flag) is unchanged, with `KK_NATIVE_RENDERER=ON` and with it off.
+7. Settle the open questions below from a trace: build once with `KK_NATIVE_RENDERER=OFF -DKK_DEV_TOOLS=ON`,
+   record `KK_DEV_D3D_TRACE`, and replay it with `nr_trace_replay` (build `native-renderer` standalone with
+   the Windows SDK bundle on `CMAKE_PREFIX_PATH`, or on Linux).
+8. Vulkan on Windows: the Windows bundle has no Vulkan, so not before a Vulkan-enabled SDK build; then
+   `sdk-patches/0001` is required there too.
