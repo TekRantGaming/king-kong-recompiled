@@ -43,6 +43,12 @@ float EaseOutBack(float t) {
   const float c1 = 1.70158f, c3 = c1 + 1.0f;
   return 1.0f + c3 * std::pow(t - 1.0f, 3.0f) + c1 * std::pow(t - 1.0f, 2.0f);
 }
+// The pop-up's size: in step with the screen (1 at 1080p, 2 at 4K), and never
+// smaller than the UI font says.
+float ToastScale(const ImGuiIO& io) {
+  return std::max(ImGui::GetFontSize() / 18.0f, io.DisplaySize.y / 1080.0f);
+}
+
 float EaseInOut(float t) { return t < 0.5f ? 4 * t * t * t : 1 - std::pow(-2 * t + 2, 3.0f) / 2; }
 
 constexpr double kPi = 3.14159265358979323846;
@@ -301,7 +307,7 @@ void AchievementToast::OnDraw(ImGuiIO& io) {
 // Steam's style: a dark panel in the bottom-right corner with the square icon,
 // sliding up from the edge of the screen.
 void AchievementToast::DrawSteam(ImGuiIO& io, const Toast& toast, float t) {
-  const float s = ImGui::GetFontSize() / 18.0f;
+  const float s = ToastScale(io);
   const UiFonts& fonts = GetUiFonts();
   ImFont* regular = fonts.regular ? fonts.regular : ImGui::GetFont();
   ImFont* semibold = fonts.semibold ? fonts.semibold : regular;
@@ -340,7 +346,7 @@ void AchievementToast::DrawSteam(ImGuiIO& io, const Toast& toast, float t) {
 }
 
 void AchievementToast::DrawXbox(ImGuiIO& io, const Toast& toast, float t) {
-  const float s = ImGui::GetFontSize() / 18.0f;
+  const float s = ToastScale(io);
   const UiFonts& fonts = GetUiFonts();
   ImFont* regular = fonts.regular ? fonts.regular : ImGui::GetFont();
   ImFont* semibold = fonts.semibold ? fonts.semibold : regular;

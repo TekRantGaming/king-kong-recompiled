@@ -2,158 +2,51 @@
 
 <img src="docs/images/banner.jpg" alt="Peter Jackson's King Kong PC Port" width="100%">
 
-<br>
-
-[![Latest release](https://img.shields.io/github/v/release/TekRantGaming/king-kong-recompiled?style=for-the-badge&label=release&color=e8a33c&labelColor=0d0b09)](https://github.com/TekRantGaming/king-kong-recompiled/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/TekRantGaming/king-kong-recompiled/total?style=for-the-badge&color=8a5a1c&labelColor=0d0b09)](https://github.com/TekRantGaming/king-kong-recompiled/releases)
-![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20(Proton)-5b7a8c?style=for-the-badge&labelColor=0d0b09)
-[![Listed on Quiver Launcher](https://img.shields.io/badge/listed%20on-Quiver%20Launcher-5b7a8c?style=for-the-badge&labelColor=0d0b09)](https://quiverlauncher.com/apps/peter-jackson-s-king-kong-the-official-game-of-the-movie-king-kong-pc-port)
-
 ### Peter Jackson's King Kong on PC, running natively, with the launcher and options of a modern PC release.
 
-[<img src="https://img.shields.io/badge/Download-Windows%20x64-e8a33c?style=for-the-badge&logo=windows&logoColor=white&labelColor=0d0b09" alt="Download for Windows" height="40">](https://github.com/TekRantGaming/king-kong-recompiled/releases/latest)
+[<img src="https://img.shields.io/badge/Download-Windows%20x64-e8a33c?style=for-the-badge&logo=windows&logoColor=white&labelColor=0d0b09" alt="Download for Windows" height="44">](https://github.com/TekRantGaming/king-kong-recompiled/releases/latest)
 &nbsp;
-[<img src="https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?style=for-the-badge&logo=discord&logoColor=white&labelColor=0d0b09" alt="Join the Discord" height="40">](https://discord.gg/PET2xU5FJq)
+[<img src="https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?style=for-the-badge&logo=discord&logoColor=white&labelColor=0d0b09" alt="Join the Discord" height="44">](https://discord.gg/PET2xU5FJq)
 
-<sub>The original Xbox 360 game code, translated to native PC code with the <a href="https://github.com/rexglue/rexglue-sdk">ReXGlue SDK</a>. <b>No game files included</b>: bring your own copy of the King Kong Xbox 360 disc.</sub>
+[![Latest release](https://img.shields.io/github/v/release/TekRantGaming/king-kong-recompiled?style=flat-square&label=release&color=e8a33c&labelColor=0d0b09)](https://github.com/TekRantGaming/king-kong-recompiled/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/TekRantGaming/king-kong-recompiled/total?style=flat-square&color=8a5a1c&labelColor=0d0b09)](https://github.com/TekRantGaming/king-kong-recompiled/releases)
+![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20(Proton)-5b7a8c?style=flat-square&labelColor=0d0b09)
+[![Listed on Quiver Launcher](https://img.shields.io/badge/listed%20on-Quiver%20Launcher-5b7a8c?style=flat-square&labelColor=0d0b09)](https://quiverlauncher.com/apps/peter-jackson-s-king-kong-the-official-game-of-the-movie-king-kong-pc-port)
+
+<br>
+
+<a href="https://www.youtube.com/watch?v=XDixAgLN6w4"><img src="https://img.youtube.com/vi/XDixAgLN6w4/maxresdefault.jpg" alt="Watch the trailer on YouTube" width="100%"></a>
+<sub>▶&nbsp; <a href="https://www.youtube.com/watch?v=XDixAgLN6w4"><b>Watch the trailer</b></a></sub>
 
 <br><br>
 
-<a href="https://www.youtube.com/watch?v=XDixAgLN6w4"><img src="https://img.youtube.com/vi/XDixAgLN6w4/maxresdefault.jpg" alt="Watch the trailer on YouTube" width="85%"></a>
+<img src="docs/images/launcher-home.jpg" alt="The launcher's Home screen" width="100%">
 
-<sub>▶ <a href="https://www.youtube.com/watch?v=XDixAgLN6w4">Watch the trailer on YouTube</a></sub>
+<img src="docs/images/game-menu.jpg" alt="The game's main menu" width="49%">
+<img src="docs/images/game-rowboat.jpg" alt="Rowing to Skull Island in the storm" width="49%">
+<img src="docs/images/game-island.jpg" alt="Ann and the crew on Skull Island" width="49%">
+<img src="docs/images/game-vrex.jpg" alt="The V-Rex chapter with ambient occlusion" width="49%">
+<img src="docs/images/launcher-setup.jpg" alt="Setting up from your own disc" width="49%">
+<img src="docs/images/achievement-popup.jpg" alt="An achievement pop-up" width="49%">
+
+<sub>The original Xbox 360 game code, translated to native PC code with the <a href="https://github.com/rexglue/rexglue-sdk">ReXGlue SDK</a>. <b>No game files included</b>: bring your own copy of the King Kong Xbox 360 disc.</sub>
 
 </div>
 
 <br>
 
+## At a glance
+
+| | | |
+| :--- | :--- | :--- |
+| 🖥️ **Up to 8K**, any frame rate up to 240 or unlimited | 🎮 **Any controller**, or a real keyboard and mouse layout | 🧩 **Plays past the "VENTURE" freeze** that stops Xenia |
+| ✨ **FSR 1 and NIS upscaling**, ambient occlusion, presets | 📺 **Original Xbox 360 look** in one click, or Modern | 🔭 **Wider field of view**, up to 110° |
+| 🏆 **Achievements** with Xbox 360 or Steam style pop-ups | 🕹️ **All ten cheats** as switches | 🎥 **Camera shake**, vibration and every control tunable |
+| 💿 **Install from your own disc** in a few clicks | 🔄 **Updates itself**, with a stable and a beta channel | 🚂 **Add to Steam** with artwork, ready for the Steam Deck |
+| 🐧 **Linux and Steam Deck** through Proton (experimental) | 👥 **See who's playing**, anonymously | 💬 **[Join the Discord](https://discord.gg/PET2xU5FJq)** for news and early builds |
+
 > [!NOTE]
-> **In active development.** New versions come out often, and the launcher offers each one when it opens. Every chapter has been started and played for a while by automated test runs, but a full play-through hasn't been confirmed yet, so please [report anything that goes wrong](#reporting-a-problem). What changed in each version is on the [releases page](https://github.com/TekRantGaming/king-kong-recompiled/releases).
-
-## Highlights
-
-<table>
-<tr>
-<td width="33%" valign="top">
-
-**Plays past the freeze**<br>
-On Xenia this game gets stuck at the start, staring at the word "VENTURE". This port fixes it, with working music and voice lines.
-
-</td>
-<td width="33%" valign="top">
-
-**Up to 8K**<br>
-Render at up to 7680 x 4320, or supersample for the cleanest edges, with quality settings that match your screen.
-
-</td>
-<td width="33%" valign="top">
-
-**Your frame rate**<br>
-30 fps by default, just like the Xbox 360. Go up to 240 or unlimited if you want it smoother (see known issues).
-
-</td>
-</tr>
-<tr>
-<td valign="top">
-
-**Achievements with pop-ups**<br>
-A pop-up with a sound every time you unlock one of the game's 9 achievements, in the Xbox 360's style or Steam's. Choose the sound in the launcher.
-
-</td>
-<td valign="top">
-
-**Your controls, your way**<br>
-Remap any button, invert and tune the camera, toggle aim, set a deadzone and vibration, or play with a proper keyboard and mouse layout.
-
-</td>
-<td valign="top">
-
-**Install from your disc**<br>
-Download, run, pick your disc image in the launcher, and play. No technical steps.
-
-</td>
-</tr>
-<tr>
-<td valign="top">
-
-**A wider view**<br>
-Widen the field of view from the original 69° up to 110°. Jack's gun keeps its usual size, and nothing pops in at the edges.
-
-</td>
-<td valign="top">
-
-**Cheats as switches**<br>
-All ten of the game's cheats are switches in the launcher, so there's no typing codes every time you play.
-
-</td>
-<td valign="top">
-
-**Always up to date**<br>
-The launcher offers new versions when it opens and shows you what changed. The newest shader pack downloads by itself.
-
-</td>
-</tr>
-<tr>
-<td valign="top">
-
-**Ambient occlusion**<br>
-Soft shading in corners and creases and under rocks, grass and people, that stays under the game's fog. About 1 ms a frame at 4K.
-
-</td>
-<td valign="top">
-
-**AMD FSR 1 and NVIDIA NIS**<br>
-Two upscalers for any graphics card, picked for yours by default, each with Native, Quality, Balanced and Performance modes.
-
-</td>
-<td valign="top">
-
-**Original or Modern**<br>
-Play it exactly as the Xbox 360 did with one click, or pick a preset from Low to Ultra, or one made for the Steam Deck.
-
-</td>
-</tr>
-<tr>
-<td valign="top">
-
-**A launcher made for controllers**<br>
-Set everything up from the couch with a controller, or use the keyboard and mouse. The button pictures match your controller automatically.
-
-</td>
-<td valign="top">
-
-**Add to Steam**<br>
-One click puts it in your Steam library with its artwork, ready for Big Picture and the Steam Deck, with your controller still working.
-
-</td>
-<td valign="top">
-
-**Looks and sounds like the game**<br>
-The launcher takes the logo, stills from the movie, the menu music and the menu sounds from your own copy of the game.
-
-</td>
-</tr>
-<tr>
-<td valign="top">
-
-**Linux and Steam Deck**<br>
-Play now through Steam's Proton, as an experimental build. A native Linux version is in development.
-
-</td>
-<td valign="top">
-
-**See who's playing**<br>
-The launcher shows how many players are online, with an anonymous check-in you can switch off at any time.
-
-</td>
-<td valign="top">
-
-**Join the community**<br>
-News, upcoming features, early builds and a place to tell us what you think, on the official [Discord](https://discord.gg/PET2xU5FJq).
-
-</td>
-</tr>
-</table>
+> **In active development.** New versions come out often, and the launcher offers each one when it opens. A full play-through hasn't been confirmed yet, so please [report anything that goes wrong](#reporting-a-problem). What changed in each version is on the [releases page](https://github.com/TekRantGaming/king-kong-recompiled/releases).
 
 ## Getting started
 
@@ -412,27 +305,7 @@ Pick **AMD FSR 1** or **NVIDIA NIS** under **Upscaler**. Both work on any graphi
 
 The presets use NVIDIA NIS on an NVIDIA graphics card and AMD FSR 1 on any other; at Native it only sharpens. Change any of them yourself and the preset shows **Custom**.
 
-## In game
-
-<div align="center">
-<img src="docs/images/game-menu.jpg" alt="The main menu" width="100%">
-<sub>The main menu.</sub>
-</div>
-
-<br>
-
-<table>
-<tr>
-<td width="50%"><img src="docs/images/game-venture.jpg" alt="The opening on the ship, where Xenia gets stuck"></td>
-<td width="50%"><img src="docs/images/game-rowboat.jpg" alt="Rowing to Skull Island in the storm"></td>
-</tr>
-<tr>
-<td><img src="docs/images/game-island.jpg" alt="Ann and the crew on Skull Island"></td>
-<td><img src="docs/images/achievement-popup.jpg" alt="An achievement pop-up in the launcher"></td>
-</tr>
-</table>
-
-### Xbox 360 vs PC port
+## Xbox 360 vs PC port
 
 | | Xbox 360 | PC port |
 | --- | :---: | :---: |
