@@ -14,7 +14,12 @@ using namespace nr::test;
 namespace {
 
 std::string TempPath(const char* name) {
-  return (std::filesystem::temp_directory_path() / (std::string("nr_pipeline_cache_test_") + name)).string();
+  // A file left by an earlier run that stopped half way would hold the records already.
+  const std::string path =
+      (std::filesystem::temp_directory_path() / (std::string("nr_pipeline_cache_test_") + name)).string();
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+  return path;
 }
 
 PipelineRecord Sample(uint64_t vs = 0x1111, uint64_t ps = 0x2222) {
