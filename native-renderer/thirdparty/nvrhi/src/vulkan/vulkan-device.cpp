@@ -243,14 +243,23 @@ namespace nvrhi::vulkan
             m_Context.warning("Opacity micro-maps are not currently supported by RTXMU.");
         }
 #endif
-        auto pipelineInfo = vk::PipelineCacheCreateInfo();
-        vk::Result res = m_Context.device.createPipelineCache(&pipelineInfo,
-            m_Context.allocationCallbacks,
-            &m_Context.pipelineCache);
-
-        if (res != vk::Result::eSuccess)
+        vk::Result res = vk::Result::eSuccess;
+        if (desc.pipelineCache)
         {
-            m_Context.error("Failed to create the pipeline cache");
+            m_Context.pipelineCache = vk::PipelineCache(desc.pipelineCache);
+            m_OwnsPipelineCache = false;
+        }
+        else
+        {
+            auto pipelineInfo = vk::PipelineCacheCreateInfo();
+            res = m_Context.device.createPipelineCache(&pipelineInfo,
+                m_Context.allocationCallbacks,
+                &m_Context.pipelineCache);
+
+            if (res != vk::Result::eSuccess)
+            {
+                m_Context.error("Failed to create the pipeline cache");
+            }
         }
 
         // Create an empty Vk::DescriptorSetLayout
@@ -281,7 +290,8 @@ namespace nvrhi::vulkan
 
         if (m_Context.pipelineCache)
         {
-            m_Context.device.destroyPipelineCache(m_Context.pipelineCache);
+            if (m_OwnsPipelineCache)
+                m_Context.device.destroyPipelineCache(m_Context.pipelineCache);
             m_Context.pipelineCache = vk::PipelineCache();
         }
 

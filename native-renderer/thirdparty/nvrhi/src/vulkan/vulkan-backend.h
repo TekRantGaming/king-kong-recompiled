@@ -1217,6 +1217,7 @@ namespace nvrhi::vulkan
         VulkanAllocator m_Allocator;
         
         vk::QueryPool m_TimerQueryPool = nullptr;
+        bool m_OwnsPipelineCache = true;  // false: DeviceDesc::pipelineCache, the application's
         utils::BitSetAllocator m_TimerQueryAllocator;
 
         std::mutex m_Mutex;

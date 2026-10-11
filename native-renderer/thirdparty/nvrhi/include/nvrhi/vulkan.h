@@ -83,6 +83,11 @@ namespace nvrhi::vulkan
         bool logBufferLifetime = false;
 
         std::string vulkanLibraryName; // if empty, use default
+
+        // A pipeline cache to create every pipeline with, made and kept by the application (which can
+        // fill it from a file and save it). The device does not destroy it. VK_NULL_HANDLE: the device
+        // makes an empty cache of its own.
+        VkPipelineCache pipelineCache = VK_NULL_HANDLE;
     };
 
     NVRHI_API DeviceHandle createDevice(const DeviceDesc& desc);
