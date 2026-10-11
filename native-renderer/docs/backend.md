@@ -502,6 +502,23 @@ the untouched game target, the depth copy, off, and 1x against 2x. Run on SwiftS
 was not installable in the cloud container): GPU and reference agree to a few levels. On Windows on
 the RTX 4070 Ti (Phase 2b): 12 tests pass (scale 2 against 1: mean 0.008, 893 pixels off by more than 0.1).
 
+**In the game (Phase 2b).** `--kk_original_look=true` (every golden run) forces `ao_mode=0`, so AO given on
+the command line was silently off; `--kk_original_look_keep=ao_mode,ao_strength` (new, `kk/src/settings.cpp`)
+keeps them. (Turning the Original look off instead changes the menus the scripts walk: the "vrex" run lands in
+Venture and the "rescue" run stays black, on both plugins.) Both plugins, the same shots, MAE between the
+plugins' frames (V-Rex / Venture; the animation's timing alone gives about 3 to 5 at 1x without AO):
+
+| Setting | V-Rex | Venture | Kong to the Rescue |
+|---|---|---|---|
+| ao_mode 2 (AO only), strength 2 | 1.5 to 2.5: the same occlusion image (crops `analysis\phase2\sbs_ao3_m2_*.png`) | 0.1 | no AO on either plugin (no full-screen D24S8 depth resolve is detected there) |
+| ao_mode 1, strength 1 | 3.1 to 4.8 | 3.0 to 6.3 | as off |
+| ao_mode 1, strength 2 | 4.1 to 7.0 | 2.9 to 5.1 | as off |
+| ao_mode 1, strength 3 | 2.3 to 2.7 | 5.1 to 6.1 | as off |
+
+(One V-Rex frame of strengths 1 and 2 has a lightning flash on one side, 28 to 32.) Strength 3 against AO off
+on the native renderer is 5 in V-Rex, so the AO itself is visible and matches the Xenos plugin's by eye: the
+same darkening under the beams, in the grass and around the rocks. Runs `runs\ao3-native-*`, `runs\ao3-xenos-*`.
+
 **Shaders.** `compile_shaders.sh` / `.ps1` build `ao_*` SPIR-V and DXIL. The DXIL is now the official
 DXC release's (v1.9.2609, regenerated on Windows with `compile_shaders.ps1 -Dxc <dxc.exe>` after the merge;
 the cloud session's source build could not sign it). The SPIR-V came out byte-identical.
