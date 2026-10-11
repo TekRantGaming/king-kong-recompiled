@@ -22,6 +22,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <functional>
 #include <memory>
 #include <sstream>
@@ -1729,6 +1730,98 @@ TEST(PipelineCache_EachRenderScaleHasItsOwnRecords) {
   CHECK(f.game->SetPipelineCache(path));
   CHECK_EQ(f.game->stats().prewarm_other_kind, uint64_t(1));
   CHECK_EQ(f.game->stats().prewarm_deferred, uint64_t(1));  // its own, waiting for the game's shaders
+}
+
+// The shipped list of a fresh install: the cache file of a recording run merged (as the
+// nr_pipelines tool does) into a list beside the game.
+std::string ShipTheScene(const char* name) {
+  const std::string recorded = CachePath((std::string(name) + "_recorded").c_str());
+  RecordTheScene(recorded);
+  PipelineListMerger merger;
+  CHECK(merger.Add(recorded).read);
+  const std::string list = CachePath(name) + ".list";
+  CHECK(WritePipelineList(list, merger.records()));
+  std::filesystem::remove(recorded);
+  return list;
+}
+
+std::vector<char> FileBytes(const std::string& path) {
+  std::ifstream in(path, std::ios::binary);
+  return std::vector<char>(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+TEST(PipelineList_AFreshInstallPrewarmsEverything) {
+  const std::string list = ShipTheScene("ship_fresh");
+  const std::string pack = MakePack("ship_fresh");
+  const std::vector<char> before = FileBytes(list);
+  // No cache file of this player's yet, only the list beside the game.
+  Fixture f;
+  if (!f.Init()) return;
+  f.shaders->Initialize(pack, NR_TEST_DXC_DIR);
+  f.game->options().async_pipelines = true;
+  CHECK(f.game->LoadPipelineList(list));
+  CHECK_EQ(f.game->stats().list_records, uint64_t(1));
+  CHECK_EQ(f.game->stats().prewarm_queued, uint64_t(1));
+  f.game->WaitForPrewarm();
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  Pixels px = DrawQuadrantFrame(f, rt, p);
+  f.CheckQuadrantColors(px, __LINE__);
+  CHECK_EQ(f.game->stats().draws, uint64_t(1));
+  CHECK_EQ(f.game->stats().skipped_pending, uint64_t(0));
+  CHECK_EQ(f.game->stats().pipeline_waits, uint64_t(0));
+  CHECK_EQ(f.game->stats().pipeline_budget_waits, uint64_t(0));
+  CHECK_EQ(f.game->stats().draw_pipelines, uint64_t(1));  // the prewarm's, nothing made at the draw
+  CHECK(FileBytes(list) == before);                       // a list is never written
+}
+
+TEST(PipelineList_WithTheCacheFileEachPipelineIsMadeOnce) {
+  const std::string list = ShipTheScene("ship_both");
+  const std::string pack = MakePack("ship_both");
+  const std::string path = CachePath("ship_both_cache");
+  {
+    // The player's first run: the list prewarms, and the player's own file still records what was
+    // drawn (it is their history, whatever the list holds).
+    Fixture f;
+    if (!f.Init()) return;
+    f.shaders->Initialize(pack, NR_TEST_DXC_DIR);
+    f.game->options().async_pipelines = true;
+    CHECK(f.game->SetPipelineCache(path));
+    CHECK(f.game->LoadPipelineList(list));
+    CHECK_EQ(f.game->stats().prewarm_queued, uint64_t(1));
+    f.game->WaitForPrewarm();
+    const uint32_t rt = f.BindMainSurface();
+    auto p = f.MakeColorPipeline();
+    DrawQuadrantFrame(f, rt, p);
+    CHECK_EQ(f.game->stats().skipped_pending, uint64_t(0));
+    CHECK_EQ(f.game->stats().cache_recorded, uint64_t(1));
+  }
+  // The next run: both name the pipeline, it is queued once.
+  Fixture f;
+  if (!f.Init()) return;
+  f.shaders->Initialize(pack, NR_TEST_DXC_DIR);
+  f.game->options().async_pipelines = true;
+  CHECK(f.game->SetPipelineCache(path));
+  CHECK(f.game->LoadPipelineList(list));
+  CHECK_EQ(f.game->stats().prewarm_queued, uint64_t(1));
+  f.game->WaitForPrewarm();
+}
+
+TEST(PipelineList_AbsentOrOfAnotherVersion) {
+  Fixture f;
+  if (!f.Init()) return;
+  f.game->options().async_pipelines = true;
+  const std::string list = CachePath("ship_absent") + ".list";
+  CHECK(!f.game->LoadPipelineList(list));
+  {
+    std::ofstream old(list, std::ios::binary);
+    const uint32_t header[4] = {kPipelineCacheMagic, 2, sizeof(PipelineRecord), 0x01020304u};
+    old.write(reinterpret_cast<const char*>(header), sizeof(header));
+  }
+  CHECK(!f.game->LoadPipelineList(list));
+  CHECK_EQ(f.game->stats().list_records, uint64_t(0));
+  CHECK_EQ(f.game->stats().prewarm_queued, uint64_t(0));
+  std::filesystem::remove(list);
 }
 
 TEST(PipelineWait_TheDrawWaitsInsteadOfBeingSkipped) {

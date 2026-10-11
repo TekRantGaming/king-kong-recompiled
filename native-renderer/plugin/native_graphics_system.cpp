@@ -60,6 +60,8 @@ REXCVAR_DECLARE(int32_t, native_debug);
 REXCVAR_DECLARE(bool, native_async_pipelines);
 REXCVAR_DECLARE(bool, native_pipeline_cache);
 REXCVAR_DECLARE(std::string, native_pipeline_cache_dir);
+REXCVAR_DECLARE(bool, native_pipeline_list);
+REXCVAR_DECLARE(std::string, native_pipeline_list_file);
 REXCVAR_DECLARE(bool, native_pipeline_wait);
 REXCVAR_DECLARE(double, native_pipeline_wait_budget_ms);
 REXCVAR_DECLARE(bool, native_present_unlocked);
@@ -301,12 +303,13 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
     backend_.reset();
     return X_STATUS_UNSUCCESSFUL;
   }
-  if (REXCVAR_GET(native_pipeline_cache)) {
+  {
     // --native_pipeline_cache_dir wins; otherwise the cache root arrives in InitializeShaderStorage
-    // (before or after this point).
+    // (after this point when the SDK's app runs the game; a folder it brought earlier is kept). A
+    // shipped list alone needs no folder: it starts now.
     const std::string dir = REXCVAR_GET(native_pipeline_cache_dir);
-    if (!dir.empty()) pipeline_cache_path_ = (std::filesystem::path(dir) / PipelineCacheFileName(0)).string();
-    if (!pipeline_cache_path_.empty()) backend_->SetPipelineCache(pipeline_cache_path_);
+    if (!dir.empty()) pipeline_folder_ = dir;
+    if (!pipeline_folder_.empty() || !REXCVAR_GET(native_pipeline_cache)) StartPipelines();
   }
   backend_->set_unlocked_present(REXCVAR_GET(native_present_unlocked));
   backend_->set_async_submit(REXCVAR_GET(native_async_submit));
@@ -370,9 +373,26 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
 void NativeGraphicsSystem::InitializeShaderStorage(const std::filesystem::path& cache_root, uint32_t title_id,
                                                    bool blocking) {
   (void)blocking;
-  if (!REXCVAR_GET(native_pipeline_cache) || !pipeline_cache_path_.empty()) return;
-  pipeline_cache_path_ = (cache_root / "native-pipelines" / PipelineCacheFileName(title_id)).string();
-  if (backend_) backend_->SetPipelineCache(pipeline_cache_path_);
+  if (pipelines_started_ || !pipeline_folder_.empty()) return;
+  pipeline_folder_ = cache_root / "native-pipelines";
+  pipeline_title_id_ = title_id;
+  if (backend_) StartPipelines();
+}
+
+// In this order: the player's cache file, then the shipped list (each description is made once,
+// whichever names it first). Before the game's first draw: the SDK's app initialises the shader
+// storage before the game's main thread starts.
+void NativeGraphicsSystem::StartPipelines() {
+  if (pipelines_started_ || !backend_) return;
+  pipelines_started_ = true;
+  if (REXCVAR_GET(native_pipeline_cache) && !pipeline_folder_.empty()) {
+    backend_->SetPipelineCache((pipeline_folder_ / PipelineCacheFileName(pipeline_title_id_)).string());
+  }
+  if (REXCVAR_GET(native_pipeline_list)) {
+    std::filesystem::path list = REXCVAR_GET(native_pipeline_list_file);
+    if (list.empty()) list = ExecutableFolder() / "kkpipelines.list";
+    backend_->LoadPipelineList(list.string());
+  }
 }
 
 void NativeGraphicsSystem::Shutdown() {

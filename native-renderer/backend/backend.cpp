@@ -483,6 +483,15 @@ bool Backend::SetPipelineCache(const std::string& path) {
   return false;
 }
 
+bool Backend::LoadPipelineList(const std::string& path) {
+#if NR_GAME_RENDERER
+  if (renderer_ && renderer_->game()) return renderer_->game()->LoadPipelineList(path);
+#else
+  (void)path;
+#endif
+  return false;
+}
+
 void Backend::set_async_present(bool on) {
   if (on && !present_thread_) present_thread_ = std::make_unique<PresentThread>(*this);
 }

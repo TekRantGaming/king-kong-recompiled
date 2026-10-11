@@ -644,8 +644,10 @@ uint32_t GameRenderer::RecordFlags() const {
 }
 
 void GameRenderer::QueueOrDefer(const PipelineRecord& record) {
-  // With cache_mutex_ held. Another run's kind of pipeline (render scale, flipped faces) is never
-  // drawn here: not made.
+  // With cache_mutex_ held. Each description once, from whichever source (the cache file, the
+  // shipped list) names it first.
+  if (!prewarm_seen_.insert(PipelineKey(record)).second) return;
+  // Another run's kind of pipeline (render scale, flipped faces) is never drawn here: not made.
   if (record.flags != RecordFlags()) {
     ++stats_.prewarm_other_kind;
     return;
@@ -673,6 +675,34 @@ bool GameRenderer::SetPipelineCache(const std::string& path) {
        path.c_str(), cache_file_.loaded().size(), static_cast<unsigned long long>(stats_.prewarm_queued),
        static_cast<unsigned long long>(stats_.prewarm_deferred), can_prewarm ? "" : " (no prewarm: needs Vulkan with async pipelines)");
   return opened;
+}
+
+bool GameRenderer::LoadPipelineList(const std::string& path) {
+  std::vector<PipelineRecord> records;
+  std::string note;
+  size_t torn = 0;
+  if (!ReadPipelineList(path, records, &note, &torn)) {
+    Logf(note.empty() ? LogLevel::kInfo : LogLevel::kWarning, "rexgpu-native: pipeline list %s not used: %s",
+         path.c_str(), note.empty() ? "absent" : note.c_str());
+    return false;
+  }
+  std::lock_guard lock(cache_mutex_);
+  const uint64_t queued = stats_.prewarm_queued, deferred = stats_.prewarm_deferred,
+                 other = stats_.prewarm_other_kind;
+  const bool can_prewarm = options_.async_pipelines && device_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN;
+  if (can_prewarm) {
+    for (const PipelineRecord& record : records) QueueOrDefer(record);
+    deferred_shader_count_ = shaders_->created_count();
+  }
+  stats_.list_records += records.size();
+  Logf(LogLevel::kInfo,
+       "rexgpu-native: pipeline list %s: %zu descriptions, %llu queued, %llu waiting for their shaders, %llu of "
+       "another render scale%s%s",
+       path.c_str(), records.size(), static_cast<unsigned long long>(stats_.prewarm_queued - queued),
+       static_cast<unsigned long long>(stats_.prewarm_deferred - deferred),
+       static_cast<unsigned long long>(stats_.prewarm_other_kind - other), torn ? " (an incomplete last record)" : "",
+       can_prewarm ? "" : " (no prewarm: needs Vulkan with async pipelines)");
+  return true;
 }
 
 void GameRenderer::RetryDeferred() {

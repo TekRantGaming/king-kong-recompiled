@@ -134,6 +134,7 @@ class GameRenderer {
     uint64_t prewarm_deferred = 0;   // cached descriptions whose shaders were not available yet
     uint64_t prewarm_failed = 0;     // cached descriptions that could not be built or created
     uint64_t prewarm_other_kind = 0;  // cached descriptions of another render scale or face flip: not made
+    uint64_t list_records = 0;       // descriptions read from shipped pipeline lists
     uint64_t skipped_device = 0;     // no device struct
     uint64_t texture_uploads = 0;
     uint64_t texture_failures = 0;
@@ -190,6 +191,12 @@ class GameRenderer {
   // need. Needs async_pipelines on Vulkan (the workers); otherwise the file is only recorded.
   // Call before the first draw; may be called from another thread.
   bool SetPipelineCache(const std::string& path);
+  // A pipeline list shipped beside the game (the nr_pipelines tool merges the cache files of several
+  // runs into one): read, never written, and its descriptions made on the workers like the cache
+  // file's (each description once, whichever source names it first), so a fresh install makes every
+  // pipeline at start. Needs async_pipelines on Vulkan, as the cache file's prewarm. False when the
+  // file is absent or of another version. May be called with or without SetPipelineCache.
+  bool LoadPipelineList(const std::string& path);
   // Blocks until the worker threads have finished the queued prewarm (tests, shutdown).
   void WaitForPrewarm();
 
@@ -367,6 +374,7 @@ class GameRenderer {
   PipelineCacheFile cache_file_;
   std::mutex cache_mutex_;                    // the file and deferred_ (SetPipelineCache comes from another thread)
   std::vector<PipelineRecord> deferred_;
+  std::unordered_set<uint64_t> prewarm_seen_;  // keys sent to the prewarm from any source (cache_mutex_)
   std::atomic<bool> cache_recording_{false};
   std::unordered_set<uint64_t> noted_keys_;   // render thread only
   int pipelines_active_ = 0;                  // jobs a worker is compiling (pipeline_mutex_)

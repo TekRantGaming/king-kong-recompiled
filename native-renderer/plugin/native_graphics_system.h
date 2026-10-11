@@ -100,7 +100,13 @@ class NativeGraphicsSystem final : public rex::system::IGraphicsSystem {
   bool provider_supports_presentation_ = false;
   std::unique_ptr<rex::ui::Presenter> presenter_;
   std::unique_ptr<Backend> backend_;
-  std::string pipeline_cache_path_;  // --native_pipeline_cache: the file, once the cache root is known
+  // The pipeline files (docs/backend.md, "Pipeline cache", "Pipeline lists"): started once the
+  // folder under the cache root is known (InitializeShaderStorage), or at once when no file of
+  // ours needs it.
+  void StartPipelines();
+  std::filesystem::path pipeline_folder_;  // <cache root>/native-pipelines, or native_pipeline_cache_dir
+  uint32_t pipeline_title_id_ = 0;
+  bool pipelines_started_ = false;
   std::unique_ptr<RingSkimmer> skimmer_;
   std::atomic<bool> guest_gpu_ready_{false};
 

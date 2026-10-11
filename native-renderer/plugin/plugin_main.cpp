@@ -85,6 +85,18 @@ REXCVAR_DEFINE_STRING(native_pipeline_cache_dir, "", "Native renderer",
                       "<cache root>/native-pipelines")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_BOOL(native_pipeline_list, false, "Native renderer",
+                    "Load the pipeline list shipped beside the game (kkpipelines.list, made by nr_pipelines merge "
+                    "from the pipeline cache files of several runs) at start and create its pipelines on the "
+                    "worker threads, so a fresh install draws everything from its first frame (Vulkan; needs "
+                    "native_async_pipelines). The list is never written")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_STRING(native_pipeline_list_file, "", "Native renderer",
+                      "The shipped pipeline list when native_pipeline_list is on. Empty: kkpipelines.list beside "
+                      "the game")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_BOOL(native_pipeline_wait, false, "Native renderer",
                     "A draw whose pipeline is still being created waits for it (true) instead of being "
                     "skipped for a frame or two (false, the Xenos plugin's choice). Only with "

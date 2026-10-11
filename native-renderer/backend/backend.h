@@ -85,6 +85,8 @@ class Backend {
   // The game renderer's pipeline cache file (GameRenderer::SetPipelineCache); false without a game
   // renderer or when the file cannot be opened.
   bool SetPipelineCache(const std::string& path);
+  // A shipped pipeline list (GameRenderer::LoadPipelineList).
+  bool LoadPipelineList(const std::string& path);
   void set_test_picture(TestPicture picture) { test_picture_ = picture; }
   Renderer& renderer() { return *renderer_; }
   DrawTracker* draws() { return draws_.get(); }
