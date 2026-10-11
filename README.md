@@ -21,7 +21,7 @@
 <img src="docs/images/game-rowboat.jpg" alt="Rowing to Skull Island in the storm" width="49%">
 <img src="docs/images/game-island.jpg" alt="Ann and the crew on Skull Island" width="49%">
 <img src="docs/images/game-vrex.jpg" alt="The V-Rex chapter with ambient occlusion" width="49%">
-<img src="docs/images/launcher-setup.jpg" alt="Setting up from your own disc" width="49%">
+<img src="docs/images/game-venture.jpg" alt="The opening on the ship, where Xenia gets stuck" width="49%">
 <img src="docs/images/achievement-popup.jpg" alt="An achievement pop-up" width="49%">
 
 <sub>The original Xbox 360 game code, translated to native PC code with the <a href="https://github.com/rexglue/rexglue-sdk">ReXGlue SDK</a>. <b>No game files included</b>: bring your own copy of the King Kong Xbox 360 disc.</sub>
@@ -39,6 +39,64 @@
 | 🏆 **Achievements** with Xbox 360 or Steam style pop-ups | 🕹️ **All ten cheats** as switches | 🎥 **Camera shake**, vibration and every control tunable |
 | 💿 **Install from your own disc** in a few clicks | 🔄 **Updates itself**, with a stable and a beta channel | 🚂 **Add to Steam** with artwork, ready for the Steam Deck |
 | 🐧 **Linux and Steam Deck** through Proton (experimental) | 👥 **See who's playing**, anonymously | 💬 **[Join the Discord](https://discord.gg/PET2xU5FJq)** for news and early builds |
+
+<div align="center">
+
+## Modern graphics
+
+<img src="docs/images/ao-off.jpg" alt="The V-Rex chapter with ambient occlusion off" width="49%">
+<img src="docs/images/ao-on.jpg" alt="The same view with ambient occlusion on" width="49%">
+<sub><b>Ambient occlusion</b>: soft shading in corners, creases and under rocks, grass and people</sub>
+
+<br><br>
+
+<img src="docs/images/ao-detail.jpg" alt="Close-up of the rocks and grass with ambient occlusion off and on" width="98%">
+<sub>Up close, at full size</sub>
+
+<br><br>
+
+<img src="docs/images/fog-on.jpg" alt="The V-Rex chapter with the distance fog on" width="49%">
+<img src="docs/images/fog-off.jpg" alt="The same view with the distance fog off" width="49%">
+<sub><b>Distance fog</b>, on or off</sub>
+
+<br><br>
+
+<img src="docs/images/upscalers.jpg" alt="The title screen logo with no upscaler, AMD FSR 1 and NVIDIA NIS" width="98%">
+<sub><b>AMD FSR 1 and NVIDIA NIS</b> keep a lower resolution sharp (zoomed 2x)</sub>
+
+## A launcher made for the couch
+
+<img src="docs/images/launcher-setup.jpg" alt="The setup screen" width="49%">
+<img src="docs/images/launcher-graphics.jpg" alt="The Graphics page" width="49%">
+<sub><b>Set up from your own disc</b> &nbsp;·&nbsp; <b>Graphics</b>: presets, upscalers, resolution and effects</sub>
+
+<br><br>
+
+<img src="docs/images/launcher-gameplay.jpg" alt="The Gameplay page" width="49%">
+<img src="docs/images/launcher-controls.jpg" alt="The Controls page" width="49%">
+<sub><b>Gameplay</b>: frame rate, field of view, camera shake &nbsp;·&nbsp; <b>Controls</b>: remapping, mouse look, button prompts</sub>
+
+<br><br>
+
+<img src="docs/images/launcher-cheats.jpg" alt="The Cheats page" width="49%">
+<img src="docs/images/launcher-achievements.jpg" alt="The Achievements page" width="49%">
+<sub><b>Cheats</b> as switches &nbsp;·&nbsp; <b>Achievements</b> with pop-ups and your choice of sound</sub>
+
+<br><br>
+
+<img src="docs/images/launcher-steam.jpg" alt="Add to Steam" width="49%">
+<img src="docs/images/launcher-display.jpg" alt="The Display page" width="49%">
+<sub><b>Add to Steam</b> with its artwork &nbsp;·&nbsp; <b>Display</b>: windowed, fullscreen, any monitor</sub>
+
+<br><br>
+
+<img src="docs/images/launcher-about.jpg" alt="The About page" width="49%">
+<img src="docs/images/launcher-whats-new.jpg" alt="What's new after an update" width="49%">
+<sub><b>About</b>: updates, stable or beta, Discord &nbsp;·&nbsp; <b>What's new</b> after every update</sub>
+
+</div>
+
+<br>
 
 > [!NOTE]
 > **In active development.** New versions come out often, and the launcher offers each one when it opens. A full play-through hasn't been confirmed yet, so please [report anything that goes wrong](#reporting-a-problem). What changed in each version is on the [releases page](https://github.com/TekRantGaming/king-kong-recompiled/releases).
