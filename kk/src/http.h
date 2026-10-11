@@ -13,4 +13,7 @@ namespace kk {
 bool HttpGet(const std::string& url, std::vector<uint8_t>& out, std::atomic<uint64_t>* bytes = nullptr,
              std::atomic<uint64_t>* total = nullptr);
 
+// HTTP(S) POST of a JSON body; the reply into `out`. True on a 200.
+bool HttpPost(const std::string& url, const std::string& json, std::vector<uint8_t>& out);
+
 }  // namespace kk

@@ -100,6 +100,9 @@ class Input {
   // The kind of controller last used (for controller pictures while the
   // keyboard is in use).
   Device pad_device() const { return pad_device_; }
+  // The prompt style of the controller last used (glyphs.h PadPromptsFor), or
+  // empty before any controller was used.
+  const std::string& pad_style() const { return pad_style_; }
   bool mouse_moved() const { return mouse_moved_; }
   int gamepad_count() const { return int(pads_.size()); }
   // While a key binding is being captured, keys aren't actions.
@@ -119,6 +122,7 @@ class Input {
   std::array<float, 4> key_held_{};  // arrow keys
   Device device_ = Device::kKeyboard;
   Device pad_device_ = Device::kXbox;
+  std::string pad_style_;
   bool mouse_moved_ = false;
   bool keyboard_enabled_ = true;
   ImVec2 last_mouse_{-1, -1};

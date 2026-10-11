@@ -3,6 +3,10 @@
 Download the pack from https://thoseawesomeguys.com/prompts/, unzip it, then:
     python tools/make_glyphs.py <unzipped pack folder>
 
+The Steam Deck set comes from Kenney's Input Prompts (CC0,
+https://kenney.nl/assets/input-prompts), which Xelu's pack doesn't cover:
+    python tools/make_glyphs.py --kenney <unzipped Kenney pack folder>
+
 Writes kk/glyphs/<system>/<slot>.png for each controller style and
 kk/glyphs/keyboard/<key>.png named like the runtime's keybind names, trimmed to
 their visible pixels and scaled down to 64 px.
@@ -12,7 +16,6 @@ import sys
 
 from PIL import Image
 
-PACK = sys.argv[1]
 OUT = os.path.join(os.path.dirname(__file__), "..", "kk", "glyphs")
 SIZE = 64
 
@@ -54,6 +57,21 @@ def save(src, dst):
     im.save(dst, optimize=True)
 
 
+# Kenney's Steam Deck pictures, for the same slots.
+STEAM_DECK = {
+    "a": "button_a", "b": "button_b", "x": "button_x", "y": "button_y", "back": "button_view",
+    "start": "button_options", "dpad": "dpad", "dpad_up": "dpad_up", "stick": "stick_l",
+    "stick_click": "stick_l_press", "stick_move": "stick_l", "lt": "button_l2", "rt": "button_r2",
+    "lb": "button_l1", "rb": "button_r1"}
+
+if sys.argv[1] == "--kenney":
+    deck = os.path.join(sys.argv[2], "Steam Deck", "Default")
+    for slot, name in STEAM_DECK.items():
+        save(os.path.join(deck, f"steamdeck_{name}.png"), os.path.join(OUT, "steam_deck", f"{slot}.png"))
+    print("done")
+    sys.exit(0)
+
+PACK = sys.argv[1]
 for system, (folder, prefix, slots) in SYSTEMS.items():
     for slot, name in slots.items():
         save(os.path.join(PACK, folder, f"{prefix}{name}.png"), os.path.join(OUT, system, f"{slot}.png"))

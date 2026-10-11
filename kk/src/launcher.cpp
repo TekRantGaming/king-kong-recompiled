@@ -7,6 +7,8 @@
 #include "shader_pack.h"
 #include "steam_shortcut.h"
 #include "update.h"
+#include "glyphs.h"
+#include "online.h"
 
 #include <algorithm>
 #include <atomic>
@@ -69,6 +71,14 @@ namespace color = ui::color;
 
 constexpr uint32_t kTitleId = 0x555307D3;
 constexpr const char* kProjectUrl = "https://github.com/TekRantGaming/king-kong-recompiled";
+constexpr const char* kDiscordUrl = "https://discord.gg/PET2xU5FJq";  // permanent (expires_at null)
+#include "discord_icon.inc"
+#include "steam_icon.inc"
+constexpr const char* kOnlineAbout =
+    "Shows how many players are online, at the top right of the launcher. To count you, the launcher sends a tiny "
+    "anonymous check-in every 5 minutes with just four things: a random number that isn't linked to you, the "
+    "port's version (stable or beta), Windows or Linux, and whether you're in the game. That's all. No name, "
+    "account, IP address or anything from your PC is kept, and switching it off deletes the random number.";
 #define KK_TIMES "\xC3\x97"
 #define KK_DOT "\xC2\xB7"
 #define KK_DEG "\xC2\xB0"
@@ -236,18 +246,18 @@ struct Option {
 // Medium is the default settings (FSR 1 at Quality).
 struct GraphicsPreset {
   const char* label;
-  const char* upscaler;   // present_effect
+  const char* upscaler;   // present_effect ("auto": this graphics card's, DefaultUpscaler)
   const char* quality;    // kk_render_quality
   const char* aa;         // swap_post_effect
   const char* filtering;  // anisotropic_override: 2 = 2x, 3 = 4x, 4 = 8x, 5 = 16x
   bool ao;                // ao_mode 1 at strength 1
 };
 constexpr GraphicsPreset kGraphicsPresets[] = {
-    {"Low", "fsr", "performance", "fxaa", "2", false},
-    {"Medium", "fsr", "quality", "fxaa", "3", false},
-    {"High", "bilinear", "native", "fxaa", "4", true},
-    {"Ultra", "bilinear", "supersample", "fxaa_extreme", "5", true},
-    {"Steam Deck", "bilinear", "native", "fxaa", "2", false},
+    {"Low", "auto", "performance", "fxaa", "2", false},
+    {"Medium", "auto", "quality", "fxaa", "3", false},
+    {"High", "auto", "native", "fxaa", "4", true},
+    {"Ultra", "auto", "native", "fxaa", "5", true},
+    {"Steam Deck", "auto", "native", "fxaa", "2", false},
 };
 constexpr int kGraphicsPresetCount = int(std::size(kGraphicsPresets));
 
@@ -261,11 +271,15 @@ int UpscalerMode() {
   return -1;
 }
 
+std::string PresetUpscaler(const GraphicsPreset& p) {
+  return std::string_view(p.upscaler) == "auto" ? DefaultUpscaler() : p.upscaler;
+}
+
 int MatchGraphicsPreset() {
   for (int i = 0; i < kGraphicsPresetCount; ++i) {
     const GraphicsPreset& p = kGraphicsPresets[i];
     const bool ao = GetInt("ao_mode", 0) != 0;
-    if (Get("present_effect") == p.upscaler && Get("kk_render_quality") == p.quality &&
+    if (Get("present_effect") == PresetUpscaler(p) && Get("kk_render_quality") == p.quality &&
         Get("swap_post_effect") == p.aa && Get("anisotropic_override") == p.filtering && ao == p.ao &&
         (!ao || GetInt("ao_strength", 1) == 1))
       return i;
@@ -275,7 +289,7 @@ int MatchGraphicsPreset() {
 
 void ApplyGraphicsPreset(int index) {
   const GraphicsPreset& p = kGraphicsPresets[index];
-  Set("present_effect", p.upscaler);
+  Set("present_effect", PresetUpscaler(p));
   Set("kk_render_quality", p.quality);
   Set("swap_post_effect", p.aa);
   Set("anisotropic_override", p.filtering);
@@ -441,6 +455,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
     if (files_ok_ && !art::HasLauncherArt(ArtDir())) StartArtExtraction(false);
     toast_ = std::make_unique<AchievementToast>(drawer, immediate_, paths_.game_dir, paths_.user_dir);
     CleanUpAfterUpdate();
+    online::Start();
     const bool testing = std::getenv("KK_AUTOPLAY") != nullptr;
     if (GetBool("kk_check_updates") && !testing) StartUpdateCheck(false);
     StartSteamCheck();
@@ -479,6 +494,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
     if (pack_thread_.joinable()) pack_thread_.join();
     if (art_thread_.joinable()) art_thread_.join();
     for (auto& texture : textures_) KeepTextureAlive(std::move(texture));
+    KeepTextureAlive(std::move(discord_icon_));
+    KeepTextureAlive(std::move(steam_icon_));
   }
 
  protected:
@@ -791,20 +808,36 @@ class Launcher final : public rex::ui::ImGuiDialog {
     dl->AddLine(ImVec2(o_.x + Margin(), ly), ImVec2(o_.x + w_ - Margin(), ly), color::kHairline, 1.0f);
     dl->AddRectFilled(ImVec2(tab_x_, ly - 2 * s), ImVec2(tab_x_ + tab_w_, ly), color::kAccent);
     // The game's name at the right, away from Home (which shows it large).
-    if (home_mix_ < 0.99f) {
+    // The online player count takes its place while it's shown.
+    const float right = o_.x + w_ - Margin();
+    const online::Counts counts = online::Get();
+    const bool show_counts = counts.known && !InSetup();
+    if (home_mix_ < 0.99f && !show_counts) {
       const ui::Fonts f = ui::GetFonts();
       const std::string name = "KING KONG";
       const float fs = 15 * s, tr = 4 * s;
       const float tw = ui::TrackedWidth(f.display, fs, name, tr);
-      ui::DrawTracked(dl, f.display, fs, ImVec2(o_.x + w_ - Margin() - tw, o_.y + 44 * s - fs * 0.5f),
+      ui::DrawTracked(dl, f.display, fs, ImVec2(right - tw, o_.y + 44 * s - fs * 0.5f),
                       ui::WithAlpha(color::kTextDim, 1.0f - home_mix_), name, tr);
+    }
+    // The online player count, while it's on and the server has answered.
+    if (show_counts) {
+      const online::Counts& c = counts;
+      const ui::Fonts f = ui::GetFonts();
+      const std::string text = Upper(F("Players online: {0}", {std::to_string(c.online)}));
+      const float fs = 13 * s, tr = 2.2f * s, cy = o_.y + 44 * s;
+      const float tw = ui::TrackedWidth(f.display, fs, text, tr);
+      ui::DrawTracked(dl, f.display, fs, ImVec2(right - tw, cy - fs * 0.5f), color::kTextDim, text, tr);
+      dl->AddCircleFilled(ImVec2(right - tw - 12 * s, cy), 3.5f * s, color::kGood, 16);
     }
   }
 
   // The button pictures the Button prompts setting picks, as in the game.
   std::string PadSet() const {
     const std::string p = Get("kk_button_prompts");
-    if (p == "xbox360" || p == "xbox_series" || p == "ps5" || p == "ps2" || p == "keyboard") return p;
+    if (p == "auto") return input_.pad_style().empty() ? DetectedPadPrompts() : input_.pad_style();
+    if (p == "xbox360" || p == "xbox_series" || p == "ps5" || p == "ps2" || p == "steam_deck" || p == "keyboard")
+      return p;
     return input_.pad_device() == ui::Device::kPlayStation ? "ps5" : "xbox_series";
   }
   // The prompts' pictures: keys while the keyboard and mouse are in use.
@@ -812,6 +845,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
 
   void GoTo(Page page) {
     if (page != page_) sub_ = kNoSubPage;
+    side_focus_ = -1;
     page_ = page;
   }
 
@@ -846,14 +880,18 @@ class Launcher final : public rex::ui::ImGuiDialog {
     }
     if (InSetup()) {
       switch (SetupStage()) {
-        case 0: return {{Action::kAccept, "Select"}, {Action::kBack, "Quit"}};
+        case 0:
+          if (side_focus_ >= 0) return {{Action::kAccept, SidePanelVerb(false)}, {Action::kBack, "Back"}};
+          if (menu_value_) return {{Action::kLeft, "Change"}, {Action::kAccept, "Select"}, {Action::kBack, "Quit"}};
+          return {{Action::kAccept, "Select"}, {Action::kBack, "Quit"}};
         case 1: return {{Action::kBack, "Cancel"}};
         default: return {};
       }
     }
     if (page_ == kHome) {
-      p.push_back({Action::kAccept, "Select"});
-      p.push_back({Action::kBack, "Quit"});
+      if (side_focus_ < 0 && menu_value_) p.push_back({Action::kLeft, "Change"});
+      p.push_back({Action::kAccept, side_focus_ >= 0 ? SidePanelVerb(true) : "Select"});
+      p.push_back({Action::kBack, side_focus_ >= 0 ? "Back" : "Quit"});
       return p;
     }
     if (focused_) {
@@ -929,8 +967,6 @@ class Launcher final : public rex::ui::ImGuiDialog {
       e.push_back({"Checking for updates", false, nullptr});
     else
       e.push_back({"Check for updates", true, [this] { StartUpdateCheck(true); }});
-    if (steam_ && steam_->available && !steam_->in_library)
-      e.push_back({"Add to Steam", !steam_->busy, [this] { OpenSteamPrompt(); }});
     e.push_back({"Settings", true, [this] { GoTo(kDisplay); }});
     e.push_back({"Achievements", true, [this] { GoTo(kAchievements); }});
     e.push_back({"Quit", true, [this] { Quit(); }});
@@ -948,7 +984,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
     if (n == 0) return -1;
     focus = std::clamp(focus, 0, n - 1);
     const int focus_before = focus;
-    const bool active = !modal_.open;
+    menu_value_ = bool(entries[size_t(focus)].change);
+    const bool active = !modal_.open && side_focus_ < 0;
     if (active && n > 1) {
       if (input_.Pressed(Action::kUp)) focus = (focus + n - 1) % n;
       if (input_.Pressed(Action::kDown)) focus = (focus + 1) % n;
@@ -979,7 +1016,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
           chosen = i;
         }
       }
-      const bool on = i == focus;
+      const bool on = i == focus && side_focus_ < 0;
       home_offset_[size_t(i)] = ui::Approach(home_offset_[size_t(i)], on ? 22 * s : 0.0f, 18.0f);
       const float off = home_offset_[size_t(i)];
       const float k = off / (22 * s);
@@ -1021,6 +1058,201 @@ class Launcher final : public rex::ui::ImGuiDialog {
     return chosen;
   }
 
+  // ------------------------------------------------------- side panels ---
+  // Panels on the bottom status row of Home and the setup screen, as tall as
+  // it and right-aligned with the button prompts: Add to Steam (while it can)
+  // then Discord. Right from the menu (or the mouse) moves to them, Left and
+  // Right between them; A or a click uses one; Left from the first, Up, Down
+  // or B go back to the menu.
+  struct SidePanel {
+    rex::ui::ImmediateTexture* icon;
+    ImU32 tile;  // the brand's colour, behind its white mark
+    std::string title, text;
+    const char* verb;  // the footer's A prompt while it has the focus
+    Action key;        // its own button (X or Y), on the screens with the panels
+    bool enabled;
+    std::function<void()> action;
+  };
+
+  rex::ui::ImmediateTexture* BrandIcon(std::unique_ptr<rex::ui::ImmediateTexture>& slot, const unsigned char* mask,
+                                       int size) {
+    if (!slot && immediate_) {
+      const size_t n = size_t(size) * size;
+      std::vector<uint8_t> rgba(n * 4, 255);
+      for (size_t i = 0; i < n; ++i) rgba[i * 4 + 3] = mask[i];
+      slot = immediate_->CreateTexture(uint32_t(size), uint32_t(size), rex::ui::ImmediateTextureFilter::kLinear, false,
+                                       rgba.data());
+    }
+    return slot.get();
+  }
+
+  std::vector<SidePanel> SidePanels(bool home) {
+    std::vector<SidePanel> panels;
+    if (home && steam_ && steam_->available && steam_->in_library) {
+      // Already added (this copy's program is in a Steam library): opens Steam instead.
+      panels.push_back({BrandIcon(steam_icon_, kSteamIcon, kSteamIconSize), IM_COL32(27, 40, 56, 255),
+                        T("In your Steam library"), T("Start King Kong from Steam, Big Picture or a Steam Deck."),
+                        "Open Steam", Action::kDefault, true, [] { steam::OpenSteam(); }});
+    } else if (home && steam_ && steam_->available) {
+      const bool busy = steam_->busy;
+      const int phase = std::clamp(steam_->phase.load(), 0, int(std::size(kSteamPhases)) - 1);
+      panels.push_back({BrandIcon(steam_icon_, kSteamIcon, kSteamIconSize), IM_COL32(27, 40, 56, 255),
+                        T("Add King Kong to Steam"),
+                        busy ? T(kSteamPhases[phase]) : T("Play it from your Steam library, with its artwork."),
+                        "Add to Steam", Action::kDefault, !busy, [this] { OpenSteamPrompt(); }});
+    }
+    panels.push_back({BrandIcon(discord_icon_, kDiscordIcon, kDiscordIconSize), IM_COL32(88, 101, 242, 255),
+                      T("Join King Kong Recompiled's Discord"), T("Chat with players, share feedback, shape the project."),
+                      "Open in browser", Action::kResetPage, true, [] { OpenUrl(kDiscordUrl); }});
+    return panels;
+  }
+
+  // The footer's A prompt while a side panel has the focus (matches SidePanels).
+  const char* SidePanelVerb(bool home) const {
+    const bool steam = home && steam_ && steam_->available;
+    if (!steam || side_focus_ != 0) return "Open in browser";
+    return steam_->in_library ? "Open Steam" : "Add to Steam";
+  }
+
+  // `row_top`: the top of the bottom status row (Game, Shader pack, Version).
+  void DrawSidePanels(ImDrawList* dl, float alpha, bool home, const std::vector<HomeEntry>& entries, int focus,
+                      float row_top) {
+    const float s = S();
+    const ui::Fonts f = ui::GetFonts();
+    const std::vector<SidePanel> panels = SidePanels(home);
+    const int n = int(panels.size());
+    if (side_focus_ >= n) side_focus_ = n - 1;
+
+    // They arrive once per launch, a moment after the screen settles, from the
+    // right: each fades in as it rises a few pixels into place. No sound.
+    const double now = ImGui::GetTime();
+    if (side_since_ < 0) side_since_ = now;
+    auto arrival = [&](int i) {
+      const float t = std::clamp(float((now - side_since_ - 0.6 - 0.15 * (n - 1 - i)) / 0.45), 0.0f, 1.0f);
+      return 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t);  // ease out
+    };
+    if (arrival(n - 1) <= 0.0f) {
+      side_focus_ = -1;
+      return;
+    }
+    auto use = [&](int i) {
+      const SidePanel& p = panels[size_t(i)];
+      ui::Cue(p.enabled ? ui::Sound::kSelect : ui::Sound::kDeny);
+      if (p.enabled) p.action();
+    };
+
+    // Controller and keyboard. Right is free unless the menu's entry uses it
+    // for a value (Language).
+    if (!modal_.open) {
+      // Each panel's own button (X: Steam, Y: Discord) works from anywhere on this screen.
+      for (int i = 0; i < n; ++i) {
+        if (arrival(i) < 1.0f || !input_.Pressed(panels[size_t(i)].key)) continue;
+        input_.Consume(panels[size_t(i)].key);
+        use(i);
+      }
+      const bool right_free =
+          entries.empty() || !entries[size_t(std::clamp(focus, 0, int(entries.size()) - 1))].change;
+      if (side_focus_ < 0 && right_free && input_.Pressed(Action::kRight)) {
+        input_.Consume(Action::kRight);
+        side_focus_ = 0;
+        while (side_focus_ < n - 1 && arrival(side_focus_) < 1.0f) ++side_focus_;  // the ones shown yet
+        ui::Cue(ui::Sound::kMove);
+      } else if (side_focus_ >= 0) {
+        for (const Action a : {Action::kLeft, Action::kRight, Action::kUp, Action::kDown, Action::kBack}) {
+          if (side_focus_ < 0 || !input_.Pressed(a)) continue;
+          input_.Consume(a);
+          const int next = a == Action::kLeft ? side_focus_ - 1 : a == Action::kRight ? side_focus_ + 1 : -1;
+          if (next >= n) continue;  // already the last
+          side_focus_ = next;
+          ui::Cue(a == Action::kBack ? ui::Sound::kBack : ui::Sound::kMove);
+        }
+        if (side_focus_ >= 0 && input_.Pressed(Action::kAccept)) {
+          input_.Consume(Action::kAccept);
+          use(side_focus_);
+        }
+      }
+    }
+
+    // As tall as the status row (its caption, value and progress bar).
+    const float h = 48 * s, ft = 13 * s, fs = 11 * s, tile = 34 * s;
+    const float pad_l = 7 * s, pad_r = 11 * s, gap = 10 * s, between = 10 * s, r = 10 * s;
+    const float key_h = 21 * s;
+    const std::string prompt_set = PromptSet();
+    auto key_glyph = [&](Action a, float* w) {
+      float aspect = 1.0f;
+      rex::ui::ImmediateTexture* t = glyphs_.Get(a, prompt_set, &aspect);
+      *w = t ? key_h * aspect : 0.0f;
+      return t;
+    };
+    std::vector<float> widths;
+    for (const auto& p : panels) {
+      const float text_w = std::max(ui::TextSize(f.semibold, ft, p.title).x, ui::TextSize(f.text, fs, p.text).x);
+      float key_w = 0;
+      key_glyph(p.key, &key_w);
+      widths.push_back(pad_l + tile + gap + text_w + gap + key_w + pad_r);
+    }
+    const ImVec2 row(o_.x + w_ - Margin(), row_top - 1 * s);  // right end, top
+
+    // Right to left from the button prompts' right edge.
+    std::vector<float> lefts(static_cast<size_t>(n));
+    float right = row.x;
+    for (int i = n - 1; i >= 0; --i) {
+      lefts[size_t(i)] = right - widths[size_t(i)];
+      right = lefts[size_t(i)] - between;
+    }
+
+    // The mouse.
+    int hovered = -1;
+    for (int i = 0; i < n && !modal_.open; ++i)
+      if (arrival(i) >= 1.0f && ImGui::IsMouseHoveringRect(ImVec2(lefts[size_t(i)], row.y),
+                                                           ImVec2(lefts[size_t(i)] + widths[size_t(i)], row.y + h), false))
+        hovered = i;
+    if (input_.mouse_moved()) side_focus_ = hovered;
+    if (hovered >= 0 && ImGui::IsMouseClicked(0)) use(hovered);
+
+    for (int i = 0; i < n; ++i) {
+      const SidePanel& p = panels[size_t(i)];
+      const float arrive = arrival(i);
+      const float a = alpha * arrive;
+      if (a <= 0.0f) continue;
+      const float w = widths[size_t(i)];
+      const ImVec2 p0(lefts[size_t(i)], row.y + (1.0f - arrive) * 10 * s), p1(p0.x + w, p0.y + h);
+      const bool focused = side_focus_ == i, on = focused || hovered == i;
+      dl->AddRectFilled(ImVec2(p0.x, p0.y + 5 * s), ImVec2(p1.x, p1.y + 5 * s),
+                        ui::WithAlpha(IM_COL32(0, 0, 0, 255), 0.18f * a), r);
+      dl->AddRectFilled(p0, p1, ui::WithAlpha(on ? IM_COL32(30, 33, 40, 255) : IM_COL32(16, 18, 22, 255), (on ? 0.78f : 0.55f) * a), r);
+      dl->AddRectFilled(ImVec2(p0.x + 1, p0.y + 1), ImVec2(p1.x - 1, p0.y + h * 0.45f),
+                        ui::WithAlpha(IM_COL32(255, 255, 255, 255), (on ? 0.05f : 0.025f) * a), r - 1,
+                        ImDrawFlags_RoundCornersTop);
+      dl->AddRect(p0, p1, ui::WithAlpha(color::kText, (on ? 0.30f : 0.08f) * a), r, 0, 1.0f * s);
+      if (focused)  // the focus ring, as on the other focused things
+        dl->AddRect(ImVec2(p0.x - 3 * s, p0.y - 3 * s), ImVec2(p1.x + 3 * s, p1.y + 3 * s),
+                    ui::WithAlpha(color::kFocus, 0.85f * a), r + 3 * s, 0, 2.0f * s);
+
+      const float dim = p.enabled ? 1.0f : 0.55f;
+      const ImVec2 t0(p0.x + pad_l, p0.y + (h - tile) * 0.5f);
+      dl->AddRectFilled(t0, ImVec2(t0.x + tile, t0.y + tile), ui::WithAlpha(p.tile, a * dim), 8 * s);
+      if (p.icon) {
+        const float g = 19 * s, gx = t0.x + (tile - g) * 0.5f, gy = t0.y + (tile - g) * 0.5f;
+        dl->AddImage(ui::Tex(p.icon), ImVec2(gx, gy), ImVec2(gx + g, gy + g), ImVec2(0, 0), ImVec2(1, 1),
+                     ui::WithAlpha(IM_COL32_WHITE, a * dim));
+      }
+      const float tx = t0.x + tile + gap;
+      const float title_h = ft * 1.25f, text_h = fs * 1.25f;
+      const float ty = p0.y + (h - (title_h + 1 * s + text_h)) * 0.5f;
+      dl->AddText(f.semibold, ft, ImVec2(tx, ty), ui::WithAlpha(color::kText, a * dim), p.title.c_str());
+      dl->AddText(f.text, fs, ImVec2(tx, ty + title_h + 1 * s), ui::WithAlpha(on ? color::kText : color::kTextDim, a * dim),
+                  p.text.c_str());
+      // Its button, in the picked prompt style.
+      float key_w = 0;
+      if (auto* key = key_glyph(p.key, &key_w)) {
+        const ImVec2 k0(p1.x - pad_r - key_w, p0.y + (h - key_h) * 0.5f);
+        dl->AddImage(ui::Tex(key), k0, ImVec2(k0.x + key_w, k0.y + key_h), ImVec2(0, 0), ImVec2(1, 1),
+                     ui::WithAlpha(IM_COL32_WHITE, a * (on ? 1.0f : 0.8f) * dim));
+      }
+    }
+  }
+
   void DrawHome(ImDrawList* dl) {
     const float s = S();
     const ui::Fonts f = ui::GetFonts();
@@ -1055,6 +1287,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
     // up rather than run into the status row.
     const float room = o_.y + h_ - 150 * s - y;
     const float item_h = std::clamp(room / float(std::max<size_t>(entries.size(), 1)), 28 * s, 42 * s);
+    DrawSidePanels(dl, a, true, entries, home_focus_, o_.y + h_ - 120 * s);
     if (const int i = DrawMenu(dl, entries, home_focus_, x, y, a, item_h); i >= 0) entries[size_t(i)].action();
     DrawHomeStatus(dl, x, o_.y + h_ - 120 * s, a);
   }
@@ -1167,13 +1400,20 @@ class Launcher final : public rex::ui::ImGuiDialog {
     std::vector<HomeEntry> entries;
     if (stage == 0) {
       heading("Your copy of the game");
-      body("This port plays the original Xbox 360 game, so it needs your own copy: a disc image (.iso) of "
-           "Peter Jackson's King Kong for Xbox 360. The game's files are copied from it, and so is the artwork "
-           "this launcher shows. Nothing from the game comes with the port.");
-      body("The game takes about 6.3 GB once it's installed.");
+      body("This port plays the original Xbox 360 game, so it needs a disc image (.iso) that you made from your "
+           "own disc. The game's files are copied from it, and so is the artwork this launcher shows. Nothing from "
+           "the game comes with the port.");
+      DrawSetupCards(dl);
       y += 8 * s;
       entries.push_back({"Select disc image", true, [this] { StartInstall(); }});
       entries.push_back(LanguageEntry());
+      {
+        HomeEntry e;
+        e.label = "Online players";
+        e.value = T(GetBool("kk_online_count") ? "On" : "Off");
+        e.change = [this](int) { SetOnlineCount(!GetBool("kk_online_count")); };
+        entries.push_back(std::move(e));
+      }
       entries.push_back({"Quit", true, [this] { Quit(); }});
     } else if (stage == 1) {
       heading("Installing");
@@ -1212,6 +1452,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
       caption_pair(size > 0 ? F("{0} of {1} MB", {mb(got), mb(size)}) : T(std::string("Connecting")),
                    size > 0 ? std::to_string(int(got / size * 100)) + "%" : "");
     }
+    if (stage == 0) DrawSidePanels(dl, 1.0f, false, entries, setup_focus_, o_.y + h_ - 120 * s);
+    else side_focus_ = -1;
     if (const int i = DrawMenu(dl, entries, setup_focus_, x, y, 1.0f); i >= 0) entries[size_t(i)].action();
     if (!modal_.open && input_.Pressed(Action::kBack)) {
       input_.Consume(Action::kBack);
@@ -1222,6 +1464,79 @@ class Launcher final : public rex::ui::ImGuiDialog {
   }
 
   static ImU32 WithAlphaText(float a) { return ui::WithAlpha(color::kText, a); }
+
+  // The setup screen's right side: which disc works, and Online players.
+  void DrawSetupCards(ImDrawList* dl) {
+    const float s = S();
+    const ui::Fonts f = ui::GetFonts();
+    const float right = o_.x + w_ - Margin();
+    const float x0 = std::max(o_.x + Margin() + std::min(620 * s, w_ * 0.52f) + 48 * s, right - 470 * s);
+    const float w = right - x0, pad = 18 * s, r = 10 * s;
+    const float label_w = 118 * s, value_w = w - pad * 2 - label_w;
+    float y = o_.y + std::max(84 * s, h_ * 0.12f) + 4 * s;
+
+    auto card = [&](float top, float bottom) {
+      dl->AddRectFilled(ImVec2(x0, top + 5 * s), ImVec2(right, bottom + 5 * s), IM_COL32(0, 0, 0, 40), r);
+      dl->AddRectFilled(ImVec2(x0, top), ImVec2(right, bottom), ui::WithAlpha(IM_COL32(16, 18, 22, 255), 0.62f), r);
+      dl->AddRect(ImVec2(x0, top), ImVec2(right, bottom), ui::WithAlpha(color::kText, 0.09f), r, 0, 1.0f * s);
+    };
+    auto caption = [&](float cy, const char* english) {
+      ui::DrawTracked(dl, f.display, 12 * s, ImVec2(x0 + pad, cy), color::kAccent, Upper(T(english)), 2.6f * s);
+    };
+
+    // Which disc works.
+    struct Row {
+      const char* label;
+      std::string value;
+      bool mono;
+    };
+    const Row rows[] = {
+        {"Game", T("Peter Jackson's King Kong: The Official Game of the Movie"), false},
+        {"Console", "Xbox 360", false},
+        {"Region", T("USA and Europe"), false},
+        {"Title ID", "555307D3", true},
+        {"Version", "0.0.0.1", true},
+        {"Disc image", T(".iso, 7,834,892,288 bytes"), false},
+        {"SHA-1", "075F43709E9C9A095E099AB5056CC04B768288D1", true},
+        {"Installed", T("About 6.3 GB"), false},
+    };
+    const float fs = 13.5f * s, line = 7 * s;
+    float h = pad + 22 * s;
+    for (const Row& row : rows) h += ui::TextSize(f.text, row.mono ? 12.5f * s : fs, row.value, value_w).y + line;
+    const std::string note = T("Make the image from your own disc. Other versions and regions won't work.");
+    h += 6 * s + ui::TextSize(f.text, 12.5f * s, note, w - pad * 2).y + pad;
+    card(y, y + h);
+    caption(y + pad, "Supported disc");
+    float ry = y + pad + 26 * s;
+    for (const Row& row : rows) {
+      const float vfs = row.mono ? 12.5f * s : fs;
+      dl->AddText(f.text, 13 * s, ImVec2(x0 + pad, ry + (vfs - 13 * s) * 0.5f), color::kTextDim, T(row.label));
+      dl->AddText(row.mono ? f.semibold : f.text, vfs, ImVec2(x0 + pad + label_w, ry), color::kText, row.value.c_str(),
+                  nullptr, value_w);
+      ry += ui::TextSize(f.text, vfs, row.value, value_w).y + line;
+    }
+    dl->AddLine(ImVec2(x0 + pad, ry + 2 * s), ImVec2(right - pad, ry + 2 * s), color::kHairline, 1.0f);
+    dl->AddText(f.text, 12.5f * s, ImVec2(x0 + pad, ry + 8 * s), color::kTextDim, note.c_str(), nullptr, w - pad * 2);
+    y += h + 14 * s;
+
+    // Online players.
+    const bool on = GetBool("kk_online_count");
+    const std::string text = T(
+        "Shows how many players are online, at the top right of the launcher. It only sends a tiny anonymous check-in "
+        "every 5 minutes: a random number, the port's version, Windows or Linux, and whether you're playing. Nothing "
+        "that identifies you or your PC is kept. Switch it off with Online players on the left, or on the About page, "
+        "at any time.");
+    const float th = ui::TextSize(f.text, 12.5f * s, text, w - pad * 2).y;
+    const float oh = pad + 22 * s + th + pad;
+    card(y, y + oh);
+    caption(y + pad, "Online players");
+    const std::string state = Upper(T(on ? "On" : "Off"));
+    const float sw = ui::TrackedWidth(f.display, 12 * s, state, 2.6f * s);
+    ui::DrawTracked(dl, f.display, 12 * s, ImVec2(right - pad - sw, y + pad), on ? color::kGood : color::kTextFaint,
+                    state, 2.6f * s);
+    dl->AddText(f.text, 12.5f * s, ImVec2(x0 + pad, y + pad + 24 * s), color::kTextDim, text.c_str(), nullptr,
+                w - pad * 2);
+  }
 
   // The game's language (and the launcher's), on the setup screen.
   HomeEntry LanguageEntry() {
@@ -1551,11 +1866,15 @@ class Launcher final : public rex::ui::ImGuiDialog {
       for (const auto& o : opts) values.push_back(o.value);
       it.on_choice = [values](int i) {
         Set("present_effect", values[size_t(i)]);
-        // The upscaler modes are Native to Performance; others start at Native.
-        if (i != 0 && UpscalerMode() < 0) Set("kk_render_quality", "native");
+        // The upscaler modes are Native to Performance; others start at Native
+        // (Supersampling stays on).
+        if (i != 0 && UpscalerMode() < 0 && Get("kk_render_quality") != "supersample")
+          Set("kk_render_quality", "native");
       };
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
+    const bool supersampling = Get("kk_render_quality") == "supersample";
+    const char* const kSupersamplingOn = "Supersampling is on: switch it off to choose this.";
     if (Get("present_effect") != "bilinear") {
       Item it;
       it.type = ItemType::kChoice;
@@ -1586,6 +1905,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
       if (const auto* flag = FindFlag("kk_render_quality"))
         for (int m = 0; m < 4; ++m)
           if (flag->default_value == kUpscalerModes[m]) it.default_text = kUpscalerModeNames[m];
+      if (supersampling) it.facts.clear();
+      Disable(it, supersampling, kSupersamplingOn);
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     } else {
       Item it;
@@ -1599,6 +1920,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
       std::vector<std::string> values;
       it.index = -1;
       for (const auto& p : RenderPresets()) {
+        if (std::string_view(p.id) == "supersample") continue;  // its own setting, below
         const int scale = RenderScaleFor(p.id, out_h);
         if (cur == p.id) {
           it.index = int(values.size());
@@ -1610,12 +1932,31 @@ class Launcher final : public rex::ui::ImGuiDialog {
       it.options.push_back("Custom");
       values.push_back("custom");
       if (cur == "custom") it.index = int(values.size()) - 1;
-      it.value_text = cur;
+      it.value_text = supersampling ? "Supersampling" : cur;
       it.on_choice = [values](int i) { Set("kk_render_quality", values[size_t(i)]); };
       it.on_default = [] { Reset("kk_render_quality"); };
       if (const auto* flag = FindFlag("kk_render_quality"))
         for (const auto& p : RenderPresets())
           if (flag->default_value == p.id) it.default_text = p.label;
+      Disable(it, supersampling, kSupersamplingOn);
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
+    {
+      Item it;
+      it.type = ItemType::kChoice;
+      it.label = "Supersampling";
+      it.description =
+          "Draws the game at more pixels than your screen has, then shrinks the picture down, for the cleanest "
+          "edges and the most detail. Very demanding: for powerful graphics cards.";
+      it.options = {"Off", "On"};
+      it.index = supersampling ? 1 : 0;
+      it.default_text = "Off";
+      if (supersampling) {
+        const int scale = RenderScaleFor("supersample", out_h);
+        it.facts.push_back(F(draws, {Size(1280 * scale, 720 * scale), Size(out_w, out_h)}));
+      }
+      it.on_choice = [](int i) { Set("kk_render_quality", i == 1 ? "supersample" : "native"); };
+      it.on_default = [] { Set("kk_render_quality", "native"); };
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
     if (Get("kk_render_quality") == "custom") {
@@ -1632,8 +1973,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
 
     items.push_back(Section("Image"));
     {
-      Item it = CvarChoice("Anti-aliasing", "Smooths jagged edges after the frame is drawn. Extreme is softer but cleaner.",
-                           "swap_post_effect", {{"Off", "none"}, {"FXAA", "fxaa"}, {"FXAA Extreme", "fxaa_extreme"}});
+      Item it = CvarChoice("Anti-aliasing", "Smooths jagged edges after the frame is drawn.", "swap_post_effect",
+                           {{"Off", "none"}, {"FXAA", "fxaa"}});
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
     // 2x MSAA is not offered as a choice: it is how the Xbox 360 drew those
@@ -1723,6 +2064,17 @@ class Launcher final : public rex::ui::ImGuiDialog {
                                 {"Espa\xC3\xB1ol", "5"},
                                 {"Fran\xC3\xA7" "ais", "4"},
                                 {"Italiano", "6"}}));
+    items.push_back(CvarToggle("Camera shake",
+                               "The camera shaking from the V-Rex's footsteps, explosions and Kong's blows.",
+                               "kk_camera_shake"));
+    {
+      Item it = CvarSlider("Camera shake strength",
+                           "How hard the camera shakes. 100% is the Xbox 360's; lower it if the shaking bothers you.",
+                           "kk_camera_shake_strength", 10, 200, 5,
+                           [](float v) { return std::to_string(int(std::lround(v))) + "%"; });
+      items.push_back(
+          std::move(Disable(it, !GetBool("kk_camera_shake"), "Switch Camera shake on to set its strength.")));
+    }
     items.push_back(Section("Extras"));
     items.push_back(CvarToggle("Frame counter", "Shows the game's frame rate in the corner. F2 toggles it while playing.",
                                "kk_show_fps", "Hidden", "Shown"));
@@ -1748,13 +2100,28 @@ class Launcher final : public rex::ui::ImGuiDialog {
       it.on_default = [] { SetInputMode(false); };
       items.push_back(std::move(it));
     }
-    items.push_back(CvarChoice("Button prompts", "Which controller's buttons the game shows in menus and hints.",
-                               "kk_button_prompts",
-                               {{"Xbox 360", "xbox360"},
+    {
+      Item it = CvarChoice("Button prompts",
+                           "Which controller's buttons the game and this launcher show in menus and hints. Automatic "
+                           "matches the controller you're using.",
+                           "kk_button_prompts",
+                               {{"Automatic", "auto"},
+                                {"Xbox 360", "xbox360"},
                                 {"Xbox Series", "xbox_series"},
                                 {"PlayStation 5", "ps5"},
                                 {"PlayStation 2", "ps2"},
-                                {"Keyboard", "keyboard"}}));
+                                {"Steam Deck", "steam_deck"},
+                                {"Keyboard", "keyboard"}});
+      if (Get("kk_button_prompts") == "auto") {
+        static const std::pair<const char*, const char*> kStyles[] = {
+            {"xbox360", "Xbox 360"}, {"xbox_series", "Xbox Series"}, {"ps5", "PlayStation 5"},
+            {"ps2", "PlayStation 2"}, {"steam_deck", "Steam Deck"}};
+        const std::string now = PadSet();
+        for (const auto& [id, label] : kStyles)
+          if (now == id) it.facts.push_back(F("Now showing {0}.", {T(std::string(label))}));
+      }
+      items.push_back(std::move(it));
+    }
     items.push_back(CvarSlider("Camera sensitivity", "How fast the right stick turns the camera and moves your aim.",
                                "kk_camera_sensitivity", 25, 300, 5, percent));
     items.push_back(CvarToggle("Camera response",
@@ -1794,7 +2161,10 @@ class Launcher final : public rex::ui::ImGuiDialog {
                                "kk_toggle_aim", "Hold", "Toggle"));
     items.push_back(CvarToggle("Vibration", "Controller rumble.", "kk_vibration"));
     {
-      Item it = CvarSlider("Vibration strength", "How strong the rumble is.", "kk_vibration_strength", 10, 100, 5,
+      Item it = CvarSlider("Vibration strength",
+                           "How strong the rumble is. Above 100% it is stronger than on the Xbox 360, up to the "
+                           "controller's full strength.",
+                           "kk_vibration_strength", 10, 200, 5,
                            percent);
       items.push_back(std::move(Disable(it, !GetBool("kk_vibration"), "Switch Vibration on to set its strength.")));
     }
@@ -2023,8 +2393,12 @@ class Launcher final : public rex::ui::ImGuiDialog {
   std::vector<Item> AchievementItems() {
     std::vector<Item> items;
     items.push_back(Section("Notifications"));
-    items.push_back(CvarToggle("Notifications", "An Xbox 360-style pop-up when you unlock an achievement in game.",
+    items.push_back(CvarToggle("Notifications", "A pop-up when you unlock an achievement in game.",
                                "kk_achievement_toasts"));
+    items.push_back(CvarChoice("Pop-up style",
+                               "Xbox 360 unfolds from a green ring at the bottom of the screen. Steam slides up in "
+                               "the bottom-right corner. Try them with Test notification.",
+                               "kk_achievement_style", {{"Xbox 360", "xbox360"}, {"Steam", "steam"}}));
     items.push_back(CvarToggle("Sound", "The sound that plays with each pop-up.", "kk_achievement_sound"));
     const bool sound = GetBool("kk_achievement_sound");
     const char* sound_note = "Switch Sound on to choose it.";
@@ -2158,6 +2532,10 @@ class Launcher final : public rex::ui::ImGuiDialog {
     }
     items.push_back(ActionItem("Project page", "The port's GitHub page: releases, issues and the source code.",
                                "GitHub", [] { OpenUrl(kProjectUrl); }));
+    items.push_back(ActionItem("Discord",
+                               "The official Discord server: news, upcoming features, early builds, and a place to "
+                               "tell us what you think.",
+                               "Join", [] { OpenUrl(kDiscordUrl); }));
 
     items.push_back(Section("Launcher"));
     items.push_back(CvarToggle("Show this launcher",
@@ -2185,6 +2563,23 @@ class Launcher final : public rex::ui::ImGuiDialog {
     items.push_back(ActionItem("Check for updates now", "Looks for a newer version of the port right now.",
                                update_ && update_->busy ? "Checking..." : "",
                                [this] { StartUpdateCheck(true); }));
+    {
+      Item it = CvarToggle("Online player count", kOnlineAbout, "kk_online_count");
+      it.on_choice = [this](int i) { SetOnlineCount(i == 1); };
+      it.on_default = [this] { SetOnlineCount(false); };
+      if (const online::Counts c = online::Get(); c.known)
+        it.facts.push_back(F("Players online: {0}", {std::to_string(c.online)}));
+      items.push_back(std::move(it));
+    }
+    {
+      Item it = ActionItem("Change version",
+                           "Stable is the tested version of the port. Beta gets test builds of upcoming features "
+                           "early, which can have problems. Your saves and settings are kept either way.",
+                           Get("kk_update_channel") == "beta" ? "Beta" : "Stable", [this] { OpenChannelPrompt(); });
+      if (!switch_to_.empty()) it.value_text = "Checking...";
+      if (!switch_to_.empty() || installing_update_) it.on_activate = nullptr;
+      items.push_back(std::move(it));
+    }
     {
       Item it = ActionItem("Shader pack",
                            "Effects already prepared by playing through the game, so it pauses for new ones less "
@@ -2250,7 +2645,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
                 "draw_resolution_scale_x", "draw_resolution_scale_y", "swap_post_effect", "anisotropic_override",
                 "kk_motion_blur", "kk_big_blur", "kk_fog", "ao_mode", "ao_strength"};
       case kGameplay:
-        return {"kk_frame_rate", "kk_fov", "kk_show_fps", "kk_skip_intros", "user_language"};
+        return {"kk_frame_rate", "kk_fov", "kk_camera_shake", "kk_camera_shake_strength", "kk_show_fps",
+                "kk_skip_intros", "user_language"};
       case kControls:
         return {"mnk_mode", "kk_button_prompts", "kk_camera_sensitivity", "kk_camera_modern", "kk_mouse_sensitivity",
                 "mnk_mouse", "kk_mouse_invert_y", "kk_invert_rs_x", "kk_invert_rs_y", "kk_invert_ls_x", "kk_invert_ls_y",
@@ -2259,7 +2655,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
       case kCheatsPage:
         return {"kk_cheats", "kk_cheat_*"};
       case kAchievements:
-        return {"kk_achievement_toasts", "kk_achievement_sound", "kk_achievement_sound_file",
+        return {"kk_achievement_toasts", "kk_achievement_style", "kk_achievement_sound", "kk_achievement_sound_file",
                 "kk_achievement_volume"};
       default:
         return {};
@@ -2398,12 +2794,118 @@ class Launcher final : public rex::ui::ImGuiDialog {
   // The check runs on its own thread with its own status, so pressing Play
   // never waits for the network (the launcher may be gone when it finishes).
   // The shader pack updates itself separately (StartPackDownload).
-  void StartUpdateCheck(bool manual) {
+  void StartUpdateCheck(bool manual, const std::string& switch_to = "") {
     if (update_ && update_->busy) return;
     update_ = std::make_shared<UpdateStatus>();
     update_manual_ = manual;
-    update_prompted_ = false;
-    std::thread([s = update_] { CheckForUpdate(*s); }).detach();
+    update_prompted_ = !switch_to.empty();  // a switch installs without asking again
+    switch_to_ = switch_to;
+    const std::string channel = switch_to.empty() ? Get("kk_update_channel") : switch_to;
+    std::thread([s = update_, channel, switching = !switch_to.empty()] { CheckForUpdate(*s, channel, switching); })
+        .detach();
+  }
+
+  // Change version (About): stable <-> beta. Only once the player has accepted
+  // the warning does it look for that channel's newest version and install it,
+  // older or newer; the saves and settings stay as they are.
+  void OpenChannelPrompt() {
+    if (Get("kk_update_channel") == "beta") {
+      OpenModal("Switch back to stable?",
+                "This installs the newest stable version of the port and restarts the launcher. If your beta is "
+                "newer than it, this goes back a version.\n\nYour installed game, saves and settings stay as they "
+                "are.",
+                {"Switch to stable", "Cancel"}, 1, [this](int i) {
+                  if (i == 0) StartChannelSwitch("stable");
+                });
+    } else {
+      OpenModal("Switch to the beta?",
+                "Beta versions are test builds of what's coming next. They can have bugs, some things may not work, "
+                "and support for them is limited.\n\nChanging version replaces the port's own files with the newest "
+                "beta and restarts the launcher. Your installed game, saves and settings stay as they are, and you "
+                "can switch back to stable here at any time.\n\nTell us how the beta runs on the Discord.",
+                {"I understand, switch to beta", "Join Discord", "Cancel"}, 2,
+                [this](int i) {
+                  if (i == 0) StartChannelSwitch("beta");
+                  if (i == 1) {
+                    OpenUrl(kDiscordUrl);
+                    OpenChannelPrompt();
+                  }
+                },
+                2);
+    }
+  }
+
+  void StartChannelSwitch(const std::string& channel) {
+    if (update_ && update_->busy) {
+      Status("Still checking for updates. Try again in a moment.");
+      return;
+    }
+    Status(channel == "beta" ? "Looking for the newest beta..." : "Looking for the newest stable version...");
+    StartUpdateCheck(false, channel);
+  }
+
+  // Once a channel switch's check is back: keep the new channel, then install
+  // its version (or say there's nothing to install).
+  void FinishChannelSwitch() {
+    const std::string channel = switch_to_;
+    switch_to_.clear();
+    if (update_->failed) {
+      OpenModal("Couldn't change version", T(update_->message) + "\n\n" + T("Nothing was changed."), {"Close"}, 0,
+                nullptr);
+      return;
+    }
+    Set("kk_update_channel", channel);
+    SaveSettings(paths_.config_path);
+    if (update_->found) {
+      BeginUpdateInstall(*update_->found);
+    } else if (channel == "beta") {
+      OpenModal("Beta", F("There's no beta build right now, so you stay on v{0}. You're on the beta channel now, so "
+                          "the launcher offers the next beta as soon as it's out.",
+                          {KK_VERSION}),
+                {"Close"}, 0, nullptr);
+    } else {
+      Status(F("You're on stable, and v{0} is the newest stable version.", {KK_VERSION}));
+    }
+  }
+
+  // The online player count: on makes a new random ID and checks in now; off
+  // deletes the ID, so nothing can link a later check-in to this one.
+  void SetOnlineCount(bool on) {
+    SetBool("kk_online_asked", true);
+    if (on && Get("kk_install_id").empty()) Set("kk_install_id", online::NewInstallId());
+    if (!on) Set("kk_install_id", "");
+    SetBool("kk_online_count", on);
+    SaveSettings(paths_.config_path);
+    online::Wake();
+  }
+
+  // Once ever, for players who installed before it existed (new players see it
+  // on the setup screen): told on Home after What's new that it's on, with a
+  // choice. Saved as asked the moment it shows, so closing the launcher, an
+  // update or a restart never asks again; the About page changes it.
+  void MaybeAskOnline() {
+    if (online_asked_ || modal_.open || open_whats_new_ || InSetup() || page_ != kHome || ImGui::GetTime() < 1.5)
+      return;
+    online_asked_ = true;
+    if (GetBool("kk_online_asked") || std::getenv("KK_AUTOPLAY")) return;
+#if defined(KK_DEV_TOOLS)
+    if (std::getenv("KK_DEV_LAUNCHER_INPUT")) return;  // scripted test runs
+#endif
+    SetBool("kk_online_asked", true);
+    SaveSettings(paths_.config_path);
+    OpenModal("Online player count",
+              std::string(T(kOnlineAbout)) + "\n\n" +
+                  T("It's on unless you switch it off, here or at any time on the About page."),
+              {"Keep it on", "Switch it off"}, 0, [this](int i) { SetOnlineCount(i == 0); });
+  }
+
+  // The update screen shows the download (SetupStage 3).
+  void BeginUpdateInstall(const UpdateInfo& info) {
+    installing_update_ = true;
+    update_->done = update_->failed = false;
+    update_->busy = true;
+    update_->bytes = update_->total = 0;
+    std::thread([s = update_, info] { InstallUpdate(info, *s); }).detach();
   }
 
   void OpenUpdatePrompt() {
@@ -2415,12 +2917,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
                 {info.version, KK_VERSION}),
               {"Update now", "What's new", "Later"}, 2, [this, info](int i) {
                 if (i == 0) {
-                  // The update screen shows the download (SetupStage 3).
-                  installing_update_ = true;
-                  update_->done = update_->failed = false;
-                  update_->busy = true;
-                  update_->bytes = update_->total = 0;
-                  std::thread([s = update_, info] { InstallUpdate(info, *s); }).detach();
+                  BeginUpdateInstall(info);
                 } else if (i == 1) {
                   OpenUrl(info.page_url);
                   OpenUpdatePrompt();
@@ -2430,10 +2927,15 @@ class Launcher final : public rex::ui::ImGuiDialog {
 
   void TickUpdate() {
     if (!update_) return;
+    if (!switch_to_.empty()) {
+      if (!update_->busy && (update_->done || update_->failed)) FinishChannelSwitch();
+      return;
+    }
     if (update_manual_ && !update_->busy && (update_->done || update_->failed) && !update_->found) {
       Status(update_->failed ? update_->message : F("You have the newest version (v{0}).", {KK_VERSION}));
       update_manual_ = false;
     }
+    if (update_->found) online::SetAvailableVersion(update_->found->version);
     if (update_->found && !update_prompted_ && !modal_.open && !installing_update_) {
       OpenUpdatePrompt();
       update_prompted_ = true;
@@ -2671,6 +3173,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
     FinishArtIfDone();
     RefreshPack();
     TickUpdate();
+    MaybeAskOnline();
     TickSteam();
     CaptureKey();
     if (open_whats_new_ && !modal_.open) {
@@ -2822,6 +3325,11 @@ class Launcher final : public rex::ui::ImGuiDialog {
   const Item* focused_ = nullptr;
   Action pending_click_ = Action::kCount;
   int home_focus_ = 0;
+  bool online_asked_ = false;  // MaybeAskOnline has looked this session
+  bool menu_value_ = false;    // the menu's focused entry has a value (Left and Right change it)
+  int side_focus_ = -1;      // the side panel (Home, setup) with the focus, or -1
+  double side_since_ = -1;   // when the side panels were first drawn (their fade-in)
+  std::unique_ptr<rex::ui::ImmediateTexture> discord_icon_, steam_icon_;
   std::vector<float> home_offset_;
   float home_mix_ = 1.0f;
   float tab_x_ = -1, tab_w_ = 0;
@@ -2832,6 +3340,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
   std::shared_ptr<UpdateStatus> update_;
   std::shared_ptr<SteamState> steam_;
   bool update_manual_ = false, update_prompted_ = false, installing_update_ = false, relaunched_ = false;
+  std::string switch_to_;  // the channel Change version is switching to, while it checks
   bool open_whats_new_ = false;
   std::string whats_new_from_;  // version the player had before this one
   ShaderPackStatus pack_;

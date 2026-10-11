@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- UTF-8 as the program's code page (Windows 10 1903 and later), so text paths
+     (std::filesystem::path::string()) are UTF-8 everywhere. The runtime opens
+     its settings and achievement files through such paths with a library that
+     reads them as UTF-8; in the system code page, a folder with an accented
+     name (C:\Juegos\versión) couldn't be opened, and the settings came back as
+     the defaults on every start (issue #37). -->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+    </windowsSettings>
+  </application>
+</assembly>

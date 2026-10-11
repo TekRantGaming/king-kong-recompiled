@@ -1,5 +1,5 @@
-// Xbox 360-style achievement notifications ("toasts") with a chime, drawn over
-// the game or the launcher.
+// Achievement notifications ("toasts") with a chime, drawn over the game or the
+// launcher, in the Xbox 360's style or Steam's (kk_achievement_style).
 //
 // The chime is an original sound generated at runtime; players can replace it
 // with their own achievement.wav in the save folder.
@@ -45,7 +45,10 @@ class AchievementToast final : public rex::ui::AchievementNotificationDialog {
     uint32_t gamerscore = 0;
     uint32_t icon_id = 0;
     double started = -1.0;  // ImGui time when it became visible
+    bool steam = false;     // Steam style (fixed when it becomes visible)
   };
+  void DrawXbox(ImGuiIO& io, const Toast& toast, float t);
+  void DrawSteam(ImGuiIO& io, const Toast& toast, float t);
   rex::ui::ImmediateTexture* Icon(uint32_t id);
 
   rex::ui::ImmediateDrawer* immediate_;
