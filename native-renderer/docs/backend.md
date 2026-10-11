@@ -174,7 +174,8 @@ always what the GPU would have been sent. At every draw the game renderer reads 
 - **Pipeline creation** on a cold driver cache takes seconds per scene (186 new pipelines on entering Kong to
   the Rescue made the chapter load about 9 s later than on Xenos, so the scripted shots missed the
   cutscene). NVIDIA's own disk cache makes the second run normal (290 ms of pipeline creation for the whole
-  chapter). A pipeline cache of our own, or creating pipelines off the render thread, is still to do.
+  chapter). Since then pipelines are made on worker threads, draws wait for them within a budget, and a
+  pipeline cache of our own is on by default ("Pipeline cache").
 
 ### Settings
 
@@ -408,8 +409,9 @@ pictures of twelve scenes and draw lists far off):
 ### Open problems (Phase 2)
 
 - **Cold pipeline caches.** Pipelines are made on four worker threads (Vulkan) and draws wait up to 30 ms a
-  frame for them, then skip; with `--native_pipeline_cache` the descriptions of earlier runs are made at
-  start. See "Pipeline cache" below for the measurements.
+  frame for them, then skip; the pipeline cache (on by default) makes the descriptions of earlier runs at
+  start. A truly cold driver cache was not measured again (see "Pipeline cache"). On D3D12 pipelines are
+  still made on the draw thread (NVRHI's D3D12 backend caches root signatures without a lock).
 - **Write watches.** Venture's gameplay still has about 10,000 invalidations a second and its movie about 360
   a frame (texture pages; textures are never unwatched whole, see Phase 2b above). The movie planes could
   skip the watches (their Lock / Unlock can be hooked).
@@ -718,9 +720,21 @@ the in-place patched object memory (already logged under `--native_dump_frame`).
 
 ## Pipeline cache
 
-Options (all off by default): `--native_pipeline_cache=true`, `--native_pipeline_cache_dir=<dir>` (default
-`<cache root>/native-pipelines/<TITLE8>.pipelines`, set through `InitializeShaderStorage`; unverified that the app
-calls it for the native plugin), `--native_pipeline_wait=true`.
+Options: `--native_pipeline_cache` (on by default since Phase 2b), `--native_pipeline_cache_dir=<dir>` (default
+`<cache root>/native-pipelines/<TITLE8>.pipelines`, set through `InitializeShaderStorage`: the game calls it,
+`555307D3.pipelines` under `--cache_root`), `--native_pipeline_wait` (off), `--native_pipeline_wait_budget_ms`
+(30).
+
+Measured on Kong to the Rescue (`rescue` run, Vulkan, Phase 2b): without the cache the chapter start has 317
+draws skipped while their pipelines were made (139 drawn after waiting within the budget, 185 ms waited in all,
+241 pipelines, 510 ms of creation on the workers); with the cache recorded by one run, the next run queues the
+238 descriptions at start and no draw is skipped or waits (0 and 0; 2,888 ms of creation on the workers,
+spread over the start). Both pass; the hitches of the chapter load are the same (worst 200 ms, as on
+Xenos). The cold stall that made Kong miss its shots in Phase 2 (about 9 s) is gone with the workers alone:
+the draws no longer wait for the driver. `__GL_SHADER_DISK_CACHE=0` does not switch NVIDIA's Windows driver
+cache off (creation time unchanged), so a truly cold driver was not measured again; on a cold driver the
+budget caps the wait at 30 ms a frame and the rest of the draws skip a frame or two. The cache is on by
+default: a second session of a chapter then draws everything from its first frame.
 - Every pipeline description is appended once to the file as a 128-byte `PipelineRecord` (16-byte header: magic,
   version 1, record size, byte-order marker). A torn tail is repaired on open; a version mismatch starts a new file.
 - At start all records are queued on the pipeline worker threads. Shaders come from the pack by hash, or the

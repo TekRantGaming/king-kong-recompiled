@@ -74,7 +74,7 @@ REXCVAR_DEFINE_BOOL(native_async_pipelines, true, "Native renderer",
                     "is ready, instead of stalling the game for the driver's compile")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-REXCVAR_DEFINE_BOOL(native_pipeline_cache, false, "Native renderer",
+REXCVAR_DEFINE_BOOL(native_pipeline_cache, true, "Native renderer",
                     "Record every pipeline description the game's draws need to a file under the cache root "
                     "and create them all on the worker threads at the next start, so the first visit to a "
                     "level does not stall for the driver's compile (Vulkan; needs native_async_pipelines)")
