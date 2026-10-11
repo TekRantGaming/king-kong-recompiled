@@ -247,6 +247,16 @@ TEST(LauncherPrewarmEntryPoints) {
   CHECK(nr::kk::StutterLine().empty());  // no game renderer, option off
   nr::kk::StartLauncherPrewarm(root);
   NrPrewarmStatus s = {};
+#if !NR_GAME_RENDERER
+  // Built without the game renderer (no DXC): the prewarm is never on.
+  CHECK_EQ(status(&s), uint32_t(NR_PREWARM_OFF));
+  rex::cvar::SetFlagByName("native_launcher_prewarm", "false");
+  rex::cvar::SetFlagByName("gpu_plugin", plugin_before);
+  dlclose(module);
+  system->Shutdown();
+  std::filesystem::remove_all(root);
+  return;
+#endif
   s.size = sizeof(s);
   for (int i = 0; i < 600 && status(&s) == NR_PREWARM_RUNNING; ++i) {
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
