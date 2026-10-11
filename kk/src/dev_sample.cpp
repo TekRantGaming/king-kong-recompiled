@@ -323,3 +323,24 @@ REX_HOOK_RAW(sub_8271D498) {
 }
 
 #endif
+
+#if defined(KK_DEV_TOOLS)
+// KK_DEV_FORCE_DT=0.004 (seconds): after the game computes its frame time
+// (sub_8272CA20), replace it with this value, as if every frame took that
+// long. The game then runs slower or faster than real time, but each system
+// steps exactly as it would at 1 / value frames a second: a way to test 250
+// or 1000 FPS behaviour (or 16 FPS frame drops) on a machine that cannot
+// reach that rate.
+REX_EXTERN(__imp__sub_8272CA20);
+REX_HOOK_RAW(sub_8272CA20) {
+  __imp__sub_8272CA20(ctx, base);
+  static const float forced = [] {
+    const char* v = std::getenv("KK_DEV_FORCE_DT");
+    return v && *v ? std::stof(v) : 0.0f;
+  }();
+  if (forced <= 0.0f) return;
+  const float scale = kk::hfr::LoadF(base, 0x828D178C);  // the game's time scale
+  kk::hfr::StoreF(base, 0x82C4EDBC, forced);
+  kk::hfr::StoreF(base, kk::hfr::kFrameTime, forced * scale);
+}
+#endif
