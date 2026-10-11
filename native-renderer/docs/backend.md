@@ -523,7 +523,21 @@ frame rate (`runs\native-fast-full2`).
 | Motion blur, fog, big blur, field of view (`kk_motion_blur`, `kk_fog`, `kk_big_blur`, `kk_fov`) | the game's own code (patched by the port), so the same with either plugin |
 | Original look (`kk_original_look`) | sets all of the above to the console's values when the game starts; `kk_original_look_keep` (new, for tests) lists settings it leaves alone |
 
+**Latest full run** (`runs\native-final-default`, default options, after the main merge, FXAA, the frame-rate
+work and the four new chapters): 15 of 17 pass with the loading scene's new tolerance (title, menus, video,
+pause, loading, the three V-Rex scenes, Venture, both Kong scenes, chap20, chap33; draw lists title and menus
+1.000, V-Rex 0.994, Venture 0.989, Kong 0.985); chap04 and chap12 fail on their camera offset (below).
+
 ### Open problems (Phase 2)
+
+- **chap04 and chap12 cameras** sit half a pixel and one pixel higher than on the Xenos plugin, the same in
+  every run and with any of the options (so not timing); the draw order changes with it (sorted by distance).
+  Something the game reads back from the GPU differs; the suspects are resolves (written back to guest memory
+  by the Xenos plugin, never by the native renderer).
+- **Defaults.** The four frame-rate options and `--native_render_scale=auto` are off by default (today's
+  behaviour); turning them on is the next decision. The 13 golden scenes pass with all four on, except the
+  loading screen's fade frame before its new tolerance.
+- **FXAA** matches the Xenos plugin's in kind but changes fewer pixels on small text.
 
 - **Cold pipeline caches.** Pipelines are made on four worker threads (Vulkan) and draws wait up to 30 ms a
   frame for them, then skip; the pipeline cache (on by default) makes the descriptions of earlier runs at
