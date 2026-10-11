@@ -330,7 +330,8 @@ REX_HOOK_RAW(sub_8271D498) {
 // long. The game then runs slower or faster than real time, but each system
 // steps exactly as it would at 1 / value frames a second: a way to test 250
 // or 1000 FPS behaviour (or 16 FPS frame drops) on a machine that cannot
-// reach that rate.
+// reach that rate. KK_DEV_FORCE_DT_AT=55 starts it that many seconds after the
+// save menu opens, so the menus and loading run as usual.
 REX_EXTERN(__imp__sub_8272CA20);
 REX_HOOK_RAW(sub_8272CA20) {
   __imp__sub_8272CA20(ctx, base);
@@ -338,7 +339,11 @@ REX_HOOK_RAW(sub_8272CA20) {
     const char* v = std::getenv("KK_DEV_FORCE_DT");
     return v && *v ? std::stof(v) : 0.0f;
   }();
-  if (forced <= 0.0f) return;
+  static const double from = [] {
+    const char* v = std::getenv("KK_DEV_FORCE_DT_AT");  // seconds after the save menu opens (default 0)
+    return v && *v ? std::stod(v) : 0.0;
+  }();
+  if (forced <= 0.0f || kk::DevSecondsSinceMenu() < from) return;
   const float scale = kk::hfr::LoadF(base, 0x828D178C);  // the game's time scale
   kk::hfr::StoreF(base, 0x82C4EDBC, forced);
   kk::hfr::StoreF(base, kk::hfr::kFrameTime, forced * scale);

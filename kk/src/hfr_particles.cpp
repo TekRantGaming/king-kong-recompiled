@@ -46,12 +46,27 @@ REX_HOOK_RAW(sub_82862460) {
     static auto start = std::chrono::steady_clock::now();
     static float lo = 1, hi = 0;
     static int calls = 0, damped = 0;
+    static double speed_sum = 0, vz_sum = 0;
+    static int particles = 0;
     ++calls;
-    if (drag > 0.0f && drag < 1.0f) ++damped, lo = std::min(lo, drag), hi = std::max(hi, drag);
+    if (drag > 0.0f && drag < 1.0f) {
+      ++damped, lo = std::min(lo, drag), hi = std::max(hi, drag);
+      // Particles: [+112] array of 36-byte entries ([+104] of them), velocity at +16.
+      const uint32_t list = Load32(base, ctx.r3.u32 + 112), count = Load32(base, ctx.r3.u32 + 104);
+      for (uint32_t i = 0; list && i < count && i < 4096; ++i) {
+        const uint32_t p = list + i * 36;
+        const float vx = LoadF(base, p + 16), vy = LoadF(base, p + 20), vz = LoadF(base, p + 24);
+        speed_sum += std::sqrt(vx * vx + vy * vy + vz * vz), vz_sum += vz, ++particles;
+      }
+    }
     if (std::chrono::steady_clock::now() - start >= std::chrono::seconds(1)) {
-      REXLOG_INFO("KK dev hfr particles: {} generator updates, {} with drag {:.3f}..{:.3f}, dt {:.4f}, steps {}", calls,
-                  damped, lo, hi, dt, DragSteps(dt));
+      REXLOG_INFO(
+          "KK dev hfr particles: {} generator updates, {} with drag {:.3f}..{:.3f}, dt {:.4f}, steps {}, {} particles "
+          "mean speed {:.3f} mean vz {:.3f}",
+          calls, damped, lo, hi, dt, DragSteps(dt), particles, particles ? speed_sum / particles : 0.0,
+          particles ? vz_sum / particles : 0.0);
       start = std::chrono::steady_clock::now(), lo = 1, hi = 0, calls = damped = 0;
+      speed_sum = vz_sum = 0, particles = 0;
     }
   }
 #endif
