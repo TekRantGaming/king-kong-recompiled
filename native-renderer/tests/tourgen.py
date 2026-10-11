@@ -55,10 +55,12 @@ def scene_name(idx: int) -> str:
 FIRST_SELECT = 30.0  # the chapter select is open (12:A save, 18:A loaded, 24:A Play)
 MOVE_STEP = 0.6  # between RIGHT / LEFT presses on the chapter select
 MOVE_SETTLE = 2.0  # after the last move, before A
-QUIT_SEQUENCE = [(0.0, "START"), (1.5, "UP"), (2.2, "UP"), (3.0, "A"), (5.0, "A")]  # pause, Quit game, Yes
+# The pause menu is a ring with the cursor on Resume: Options, Quit game, Start again, Resume, Score in most
+# chapters, Options, Quit game, Resume in some (Venture, The Log). Seven UP presses reach Quit game in both.
+QUIT_SEQUENCE = [(0.0, "START")] + [(1.5 + 0.5 * i, "UP") for i in range(7)] + [(5.5, "A"), (7.5, "A")]
 # Yes goes straight back to the chapter select (no main menu), with the cursor on the chapter just played;
 # it shows about 3 s after Yes.
-QUIT_TO_SELECT = 10.0  # from START until the chapter select takes moves
+QUIT_TO_SELECT = 13.0  # from START until the chapter select takes moves
 SKIP_EVERY = 2.0  # SKIP (Start while a movie plays) presses
 SKIP_FROM, SKIP_TO = 4.0, 40.0  # after the chapter's A
 
