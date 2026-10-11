@@ -60,9 +60,23 @@ __attribute__((no_instrument_function)) void DevProfTick(double t) {
     return out;
   }();
   static std::vector<std::vector<uint32_t>> snaps;
-  static const size_t wanted = times.size();
-  if (!ready || times.empty() || t < times.front()) return;
-  times.erase(times.begin());
+  // KK_DEV_PROF_KEY=4: snapshot each time F9 is pressed instead, that many times.
+  static const int keyed = [] {
+    const char* v = std::getenv("KK_DEV_PROF_KEY");
+    return v ? std::atoi(v) : 0;
+  }();
+  static const size_t wanted = keyed > 0 ? size_t(keyed) : times.size();
+  if (!ready) return;
+  if (keyed > 0) {
+    static bool held = false;
+    const bool down = (GetAsyncKeyState(VK_F9) & 0x8000) != 0;
+    const bool pressed = down && !held;
+    held = down;
+    if (!pressed || snaps.size() >= wanted) return;
+  } else {
+    if (times.empty() || t < times.front()) return;
+    times.erase(times.begin());
+  }
   const size_t slots = (g_end - g_begin) / 16;
   std::vector<uint32_t> snap(slots);
   for (size_t i = 0; i < slots; ++i) snap[i] = g_counts[i].load(std::memory_order_relaxed);
@@ -84,6 +98,21 @@ __attribute__((no_instrument_function)) void DevProfTick(double t) {
   std::fclose(f);
   REXLOG_INFO("KK dev prof: wrote prof_diff.txt, {} functions", rows);
 }
+
+namespace {
+// With KK_DEV_PROF_KEY the player plays by hand, so watch for F9 on a thread.
+__attribute__((no_instrument_function)) DWORD WINAPI KeyThread(void*) {
+  for (;;) {
+    DevProfTick(0);
+    Sleep(20);
+  }
+}
+const bool g_key_thread = [] {
+  if (const char* v = std::getenv("KK_DEV_PROF_KEY"); v && std::atoi(v) > 0)
+    CloseHandle(CreateThread(nullptr, 0, KeyThread, nullptr, 0, nullptr));
+  return true;
+}();
+}  // namespace
 
 }  // namespace kk
 

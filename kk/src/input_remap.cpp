@@ -15,10 +15,12 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 
 #include <rex/cvar.h>
 #include <rex/hook.h>
+#include <rex/logging.h>
 
 #include "mouse_look.h"
 #include "settings.h"
@@ -160,15 +162,36 @@ REX_HOOK_RAW(sub_821074E8) {
 // drop the guest XINPUT_VIBRATION {u16 left, u16 right} before it is applied.
 REX_EXTERN(__imp__sub_821074F8);
 REX_HOOK_RAW(sub_821074F8) {
-  if (const uint32_t vib = ctx.r4.u32) {
+  // Above 100% makes the game's rumble stronger than on the Xbox 360, up to the
+  // motors' full speed (its guns pulse the big motor at 48% for the machine
+  // gun and 78% for the shotgun). The game's own values are put back after the
+  // call, so a structure it sends again isn't scaled twice.
+  const uint32_t vib = ctx.r4.u32;
+  uint16_t game_speed[2] = {};
+  if (vib) {
     const float strength =
-        REXCVAR_GET(kk_vibration) ? std::clamp(REXCVAR_GET(kk_vibration_strength), 0, 100) / 100.0f : 0.0f;
-    for (uint32_t offset : {0u, 2u}) {
-      uint8_t* motor = base + vib + offset;
-      StoreBE<uint16_t>(motor, static_cast<uint16_t>(LoadBE<uint16_t>(motor) * strength));
+        REXCVAR_GET(kk_vibration) ? std::clamp(REXCVAR_GET(kk_vibration_strength), 0, 200) / 100.0f : 0.0f;
+    for (uint32_t i = 0; i < 2; ++i) {
+      uint8_t* motor = base + vib + i * 2;
+      game_speed[i] = LoadBE<uint16_t>(motor);
+      StoreBE<uint16_t>(motor, static_cast<uint16_t>(std::min(65535.0f, game_speed[i] * strength)));
     }
   }
+#if defined(KK_DEV_TOOLS)
+  // KK_DEV_RUMBLE_TRACE=1: log each change of the game's motor speeds, and what was sent.
+  static const bool trace = std::getenv("KK_DEV_RUMBLE_TRACE") != nullptr;
+  if (trace && vib) {
+    static uint32_t last = UINT32_MAX;
+    const uint32_t both = uint32_t(game_speed[0]) << 16 | game_speed[1];
+    if (both != last)
+      REXLOG_INFO("KK dev rumble: left {} right {} (sent {} {})", game_speed[0], game_speed[1],
+                  LoadBE<uint16_t>(base + vib), LoadBE<uint16_t>(base + vib + 2));
+    last = both;
+  }
+#endif
   __imp__sub_821074F8(ctx, base);
+  if (vib)
+    for (uint32_t i = 0; i < 2; ++i) StoreBE<uint16_t>(base + vib + i * 2, game_speed[i]);
 }
 
 // Camera response: Modern (kk_camera_modern, the default) or Original.
