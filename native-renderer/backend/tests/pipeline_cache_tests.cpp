@@ -71,6 +71,99 @@ TEST(PipelineKey_ChangesWithEveryField) {
   changed([](PipelineRecord& r) { r.poly_scale = 0x3F800000; }, "poly_scale");
   changed([](PipelineRecord& r) { r.poly_offset = 0x3F800000; }, "poly_offset");
   changed([](PipelineRecord& r) { r.flags = 1; }, "flags");
+  changed([](PipelineRecord& r) { r.flags = kRecordScaled; }, "flags (scaled)");
+  // The same microcode with another translation (render scale aware, other interpolators) is
+  // another pipeline: version 2 keys ignored these, and a file with both kinds lost one of them.
+  changed([](PipelineRecord& r) { r.vs_input = 0x77; }, "vs_input");
+  changed([](PipelineRecord& r) { r.ps_input = 0x88; }, "ps_input");
+}
+
+TEST(PipelineCacheFile_TwoTranslationsOfOneShaderAreTwoRecords) {
+  const std::string path = TempPath("translations");
+  PipelineRecord plain = Sample();
+  plain.ps_input = 0x1000;
+  PipelineRecord aware = plain;
+  aware.ps_input = 0x2000;
+  aware.flags = kRecordScaled;
+  {
+    PipelineCacheFile file;
+    CHECK(file.Open(path));
+    CHECK(file.Append(plain));
+    CHECK(file.Append(aware));
+  }
+  PipelineCacheFile file;
+  CHECK(file.Open(path));
+  CHECK_EQ(file.loaded().size(), size_t(2));
+  std::remove(path.c_str());
+}
+
+TEST(PipelineCacheFile_Version2IsStartedAgain) {
+  // Version 2 records could hold both render scales under one key: such a file is not trusted.
+  const std::string path = TempPath("version2");
+  {
+    std::ofstream out(path, std::ios::binary);
+    const uint32_t header[4] = {kPipelineCacheMagic, 2, sizeof(PipelineRecord), 0x01020304u};
+    out.write(reinterpret_cast<const char*>(header), sizeof(header));
+    PipelineRecord r = Sample();
+    out.write(reinterpret_cast<const char*>(&r), sizeof(r));
+  }
+  std::vector<PipelineRecord> records;
+  std::string note;
+  CHECK(!ReadPipelineList(path, records, &note));
+  CHECK(records.empty());
+  CHECK(!note.empty());
+  PipelineCacheFile file;
+  CHECK(file.Open(path));
+  CHECK(file.loaded().empty());
+  CHECK(!file.note().empty());
+  std::remove(path.c_str());
+}
+
+TEST(PipelineList_ReadLeavesTheFileAlone) {
+  const std::string path = TempPath("read_only");
+  {
+    PipelineCacheFile file;
+    CHECK(file.Open(path));
+    CHECK(file.Append(Sample(1)));
+    CHECK(file.Append(Sample(2)));
+  }
+  const uintmax_t torn = 16 + 2 * sizeof(PipelineRecord) + 40;
+  std::filesystem::resize_file(path, torn);
+  std::vector<PipelineRecord> records;
+  std::string note;
+  size_t torn_bytes = 0;
+  CHECK(ReadPipelineList(path, records, &note, &torn_bytes));
+  CHECK(note.empty());
+  CHECK_EQ(records.size(), size_t(2));
+  CHECK_EQ(torn_bytes, size_t(40));
+  CHECK_EQ(std::filesystem::file_size(path), torn);  // not repaired: a reader never writes
+  // Absent: false, and no note (nothing was wrong).
+  std::vector<PipelineRecord> none;
+  CHECK(!ReadPipelineList(path + ".absent", none, &note));
+  CHECK(note.empty());
+  std::remove(path.c_str());
+}
+
+TEST(PipelineList_WriteThenRead) {
+  const std::string path = TempPath("write");
+  std::vector<PipelineRecord> records = {Sample(1), Sample(2), Sample(1)};  // written as given
+  std::string error;
+  CHECK(WritePipelineList(path, records, &error));
+  CHECK(error.empty());
+  CHECK(!std::filesystem::exists(path + ".tmp"));
+  CHECK_EQ(std::filesystem::file_size(path), uintmax_t(16 + 3 * sizeof(PipelineRecord)));
+  std::vector<PipelineRecord> back;
+  CHECK(ReadPipelineList(path, back));
+  CHECK(back == records);
+  // The file is also a valid cache file.
+  PipelineCacheFile file;
+  CHECK(file.Open(path));
+  CHECK_EQ(file.loaded().size(), size_t(2));
+  file.Close();
+  // An empty list is a header alone.
+  CHECK(WritePipelineList(path, {}, &error));
+  CHECK_EQ(std::filesystem::file_size(path), uintmax_t(16));
+  std::remove(path.c_str());
 }
 
 TEST(PipelineCacheFile_RoundTripAndDeduplication) {

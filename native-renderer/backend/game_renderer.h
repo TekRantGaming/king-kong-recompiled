@@ -133,6 +133,7 @@ class GameRenderer {
     uint64_t prewarm_queued = 0;     // cached descriptions sent to the workers
     uint64_t prewarm_deferred = 0;   // cached descriptions whose shaders were not available yet
     uint64_t prewarm_failed = 0;     // cached descriptions that could not be built or created
+    uint64_t prewarm_other_kind = 0;  // cached descriptions of another render scale or face flip: not made
     uint64_t skipped_device = 0;     // no device struct
     uint64_t texture_uploads = 0;
     uint64_t texture_failures = 0;
@@ -349,6 +350,11 @@ class GameRenderer {
   // Queues the description of a cached record for the workers; false when a shader is not there
   // yet (the record waits in deferred_ for the next try).
   bool QueuePrewarm(const PipelineRecord& record);
+  // QueuePrewarm, or into deferred_ when its shaders are not there yet; a record of another kind of
+  // run is left out (cache_mutex_ held).
+  void QueueOrDefer(const PipelineRecord& record);
+  // PipelineRecord::flags for this renderer's draws.
+  uint32_t RecordFlags() const;
   void RetryDeferred();
   void PipelineWorker();
   struct PipelineJob {

@@ -1694,6 +1694,43 @@ TEST(PipelineCache_RecordsOfShadersThatNeverComeStayHarmless) {
   CHECK_EQ(f.game->stats().prewarm_failed, uint64_t(0));
 }
 
+TEST(PipelineCache_EachRenderScaleHasItsOwnRecords) {
+  // One file used at scale 1 and at scale 2: each run records its own pipeline (another pixel
+  // shader translation and pipeline layout) and prewarms only the records of its own kind.
+  const std::string path = CachePath("two_scales");
+  RecordTheScene(path);  // scale 1
+  {
+    Fixture f(2.0f);
+    if (!f.Init()) return;
+    f.game->options().async_pipelines = true;
+    f.game->options().pipeline_wait = true;
+    CHECK(f.game->SetPipelineCache(path));
+    CHECK_EQ(f.game->stats().prewarm_other_kind, uint64_t(1));
+    CHECK_EQ(f.game->stats().prewarm_queued, uint64_t(0));
+    CHECK_EQ(f.game->stats().prewarm_deferred, uint64_t(0));
+    const uint32_t rt = f.BindMainSurface();
+    auto p = f.MakeColorPipeline();
+    DrawQuadrantFrame(f, rt, p);
+    CHECK_EQ(f.game->stats().draws, uint64_t(1));
+    CHECK_EQ(f.game->stats().cache_recorded, uint64_t(1));
+  }
+  std::vector<PipelineRecord> records;
+  CHECK(ReadPipelineList(path, records));
+  CHECK_EQ(records.size(), size_t(2));
+  if (records.size() == 2) {
+    CHECK_EQ(records[0].flags, 0u);
+    CHECK_EQ(records[1].flags, kRecordScaled);
+    CHECK_EQ(records[0].ps_hash, records[1].ps_hash);    // the same microcode
+    CHECK(records[0].ps_input != records[1].ps_input);  // another translation
+  }
+  Fixture f;
+  if (!f.Init()) return;
+  f.game->options().async_pipelines = true;
+  CHECK(f.game->SetPipelineCache(path));
+  CHECK_EQ(f.game->stats().prewarm_other_kind, uint64_t(1));
+  CHECK_EQ(f.game->stats().prewarm_deferred, uint64_t(1));  // its own, waiting for the game's shaders
+}
+
 TEST(PipelineWait_TheDrawWaitsInsteadOfBeingSkipped) {
   // Without a wait budget the draw is skipped while its pipeline is made. With pipeline_wait it
   // waits for it.

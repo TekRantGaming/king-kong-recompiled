@@ -639,6 +639,23 @@ bool GameRenderer::QueuePrewarm(const PipelineRecord& record) {
   return true;
 }
 
+uint32_t GameRenderer::RecordFlags() const {
+  return (options_.flip_front_face ? kRecordFlipFrontFace : 0u) | (scaled() ? kRecordScaled : 0u);
+}
+
+void GameRenderer::QueueOrDefer(const PipelineRecord& record) {
+  // With cache_mutex_ held. Another run's kind of pipeline (render scale, flipped faces) is never
+  // drawn here: not made.
+  if (record.flags != RecordFlags()) {
+    ++stats_.prewarm_other_kind;
+    return;
+  }
+  if (!QueuePrewarm(record)) {
+    deferred_.push_back(record);
+    ++stats_.prewarm_deferred;
+  }
+}
+
 bool GameRenderer::SetPipelineCache(const std::string& path) {
   std::lock_guard lock(cache_mutex_);
   const bool opened = cache_file_.Open(path);
@@ -649,12 +666,7 @@ bool GameRenderer::SetPipelineCache(const std::string& path) {
   }
   const bool can_prewarm = options_.async_pipelines && device_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN;
   if (can_prewarm) {
-    for (const PipelineRecord& record : cache_file_.loaded()) {
-      if (!QueuePrewarm(record)) {
-        deferred_.push_back(record);
-        ++stats_.prewarm_deferred;
-      }
-    }
+    for (const PipelineRecord& record : cache_file_.loaded()) QueueOrDefer(record);
     deferred_shader_count_ = shaders_->created_count();
   }
   Logf(LogLevel::kInfo, "rexgpu-native: pipeline cache %s: %zu descriptions, %llu queued, %llu waiting for their shaders%s",
@@ -807,7 +819,7 @@ void GameRenderer::BuildPipelineDesc(const PipelineRecord& r, nvrhi::IShader* vs
                            : (cull_back ? nvrhi::RasterCullMode::Back : nvrhi::RasterCullMode::None);
   // face = 0: counter-clockwise is the front face.
   rs.frontCounterClockwise = ((mode >> 2) & 1) == 0;
-  if (r.flags & 1) rs.frontCounterClockwise = !rs.frontCounterClockwise;
+  if (r.flags & kRecordFlipFrontFace) rs.frontCounterClockwise = !rs.frontCounterClockwise;
   const uint32_t poly_mode = (mode >> 3) & 3;
   rs.fillMode = (poly_mode != 0 && ((mode >> 5) & 7) == 1) ? nvrhi::RasterFillMode::Wireframe
                                                             : nvrhi::RasterFillMode::Solid;
@@ -984,7 +996,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     std::memcpy(&record.poly_scale, &scale, 4);
     std::memcpy(&record.poly_offset, &offset, 4);
   }
-  record.flags = options_.flip_front_face ? 1u : 0u;
+  record.flags = RecordFlags();
   const uint64_t key = PipelineKey(record);
   NoteRecord(record, key);
   if (frame_log_ && frame_log_->enabled()) LogDraw(call, d, *vs, ps.get());
