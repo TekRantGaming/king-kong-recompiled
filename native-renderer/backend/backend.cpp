@@ -433,11 +433,15 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
       renderer->SetFrameLog(FrameLogConfig::Parse(game.frame_log.c_str()));
       renderer->options().ao_settings = game.ao_settings;
       rex::memory::Memory* memory = memory_;
-      renderer->set_watch([memory](uint32_t physical_address, uint32_t bytes) {
-        CallTimer timer(4);
-        g_watch_calls.fetch_add(1, std::memory_order_relaxed);
-        memory->EnablePhysicalMemoryAccessCallbacks(physical_address, bytes, true, false);
-      });
+      // --native_debug bit 256: no write watches at all (debugging: a CPU write never reaches a
+      // texture or buffer already uploaded).
+      if (!(game.debug & 256)) {
+        renderer->set_watch([memory](uint32_t physical_address, uint32_t bytes) {
+          CallTimer timer(4);
+          g_watch_calls.fetch_add(1, std::memory_order_relaxed);
+          memory->EnablePhysicalMemoryAccessCallbacks(physical_address, bytes, true, false);
+        });
+      }
       invalidation_handle_ = memory_->RegisterPhysicalMemoryInvalidationCallback(InvalidationThunk, renderer.get());
       renderer_->EnableGame(std::move(renderer));
       REXLOG_INFO("rexgpu-native: game renderer ready");

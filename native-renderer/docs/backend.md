@@ -531,9 +531,39 @@ pause, loading, the three V-Rex scenes, Venture, both Kong scenes, chap20, chap3
 ### Open problems (Phase 2)
 
 - **chap04 and chap12 cameras** sit half a pixel and one pixel higher than on the Xenos plugin, the same in
-  every run and with any of the options (so not timing); the draw order changes with it (sorted by distance).
-  Something the game reads back from the GPU differs; the suspects are resolves (written back to guest memory
-  by the Xenos plugin, never by the native renderer).
+  every run; the draw order changes with it (sorted by distance). Phase 2c (WIP, runs `runs\p2c-*`, dumps
+  and notes in `analysis\phase2c`) found that it is not a readback:
+  - **Not resolves**: the Xenos plugin does not write resolves to guest memory either (the SDK's
+    `readback_resolve` defaults to none); guest memory dumps at 126 s show every resolve destination of the
+    frame as zeros under both plugins.
+  - **Not occlusion queries or memexport**: the game sends no EVENT_WRITE_ZPD, MEM_WRITE or REG_TO_MEM packets
+    (the ring skimmer now logs packets by opcode); the Xenos plugin with `--occlusion_query_enable=false` or
+    `--readback_memexport=false` still matches the golden frames exactly. The CPU reads no viz-query status
+    register (the only MMIO reads in the recompiled code are vblank, viewport size, RB_BC_CONTROL and a hang
+    report).
+  - **Not the floating-point state**: the hooks now restore MXCSR around every handler and log a change
+    (`hook_table.h`, `CallHandler`); no handler ever changed it.
+  - **Not the frame rate**: Xenos at `--kk_frame_rate=60`, with the chapter start moved by 0.5 s, or with
+    synchronous shader compilation gives the golden picture.
+  - **What it is**: Jack lands 0.152 units higher. Static-data snapshots (`KK_DEV_SNAP_AT`) of the spawn
+    show his height at 0x82D64254 (copied there by sub_82796730; his object at 0x40E734E4 in these runs)
+    settling to -7.6450 under Xenos (every run) and -7.4931 under native (every run, with any option, the
+    pipeline cache, no watches, no pipeline waits). His first position after the spawn already differs in z
+    (-174.4717 against -174.4783): he lands next to a step and the 0.007 decides which side.
+  - **What decides it** (`--native_debug` bits added for the hunt: 256 no write watches, 512 no draws,
+    1024 no clears, 2048 no resolves, 8192 a 10 us spin per draw instead, bits 16-18 end each draw at a
+    stage): draws that stop before the pipeline lookup (stage 7, stage 1, 512, the spin, prewarmed cache with
+    stage 7) give the Xenos value; draws that reach the pipeline lookup with waits (stage 2) or do the full
+    work without waits give the native one; `--native_draws=false` gives a third value (-7.6754). So the
+    game thread's stalls in the first frames of the chapter (pipeline waits, texture and buffer uploads, the
+    Present's queue waits, all on the game's render thread, where the Xenos plugin does that work on its
+    command processor thread) change the spawn frames' timing and Jack's landing. A steady per-draw cost
+    does not.
+  - **Next**: move the per-draw work off the game thread (a renderer thread fed by the hooks, with the device
+    state the draw needs copied at the call, like the Xenos plugin's command processor), or find which spawn
+    frame's timing the landing reads (dt at 0x82C636E0, written by sub_8272CA20 from the kernel tick count) and
+    keep the render thread from stalling then. Per-frame snapshots: `runs\p2c-probe-fx` (Xenos) and `-fn`
+    (native).
 - **Defaults.** The four frame-rate options and `--native_render_scale=auto` are off by default (today's
   behaviour); turning them on is the next decision. The 13 golden scenes pass with all four on, except the
   loading screen's fade frame before its new tolerance.

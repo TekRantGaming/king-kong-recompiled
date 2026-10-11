@@ -82,6 +82,9 @@ class RingSkimmer {
   uint64_t bin_mask_ = 0xFFFFFFFFFFFFFFFFull;
   uint64_t bin_select_ = 0xFFFFFFFFFFFFFFFFull;
   uint64_t swaps_ = 0;
+  // Type 3 packets by opcode (executed ones), logged with the statistics.
+  uint64_t opcode_counts_[128] = {};
+  uint64_t zpd_logged_ = 0;
 };
 
 }  // namespace nr

@@ -824,6 +824,14 @@ void GameRenderer::BuildPipelineDesc(const PipelineRecord& r, nvrhi::IShader* vs
 }
 
 void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
+  if (options_.debug & 512) return;  // debugging: no draws
+  if (options_.debug & 8192) {       // debugging: no draws, but 10 us of the game thread's time each
+    const auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(10);
+    while (std::chrono::steady_clock::now() < until) {
+    }
+    return;
+  }
+  const uint32_t stop_at = (options_.debug >> 16) & 7;  // debugging: end the draw at a stage
   const bool dump = Dump(call.frame);
   dev::DeviceView d(call.device ? memory_.Virtual(call.device) : nullptr);
   if (!d.valid()) {
@@ -845,6 +853,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     return;
   }
 
+  if (stop_at == 1) return;
   // The game's fog pass: its two AfterEffects fog pixel shaders (microcode
   // hashes as the Xenos plugin's patch 0007 matches them). Their constants c0
   // (colour), c1 (g_vFogParams) and c2 (g_vFogNormalizing) tell the ambient
@@ -937,6 +946,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     return;
   }
 
+  if (stop_at == 6) return;
   // Pipeline state from the register images: a record of the inputs (pipeline_cache.h), which
   // builds the description here and in the prewarm.
   const uint32_t color_mask = d.u32(dev::kRbColorMask);
@@ -979,6 +989,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   NoteRecord(record, key);
   if (frame_log_ && frame_log_->enabled()) LogDraw(call, d, *vs, ps.get());
   if (dump) DumpVertexShaderHashes(call, d, *vs);
+  if (stop_at == 7) return;
   // The description only when the pipeline is not made yet (most draws find it).
   nvrhi::IGraphicsPipeline* pipeline = nullptr;
   if (auto known = pipelines_.find(key); known != pipelines_.end()) {
@@ -996,6 +1007,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     return;
   }
 
+  if (stop_at == 2) return;
   // Draw constants: textures, samplers, vertex fetch, clip planes, viewport,
   // alpha test.
   kkshaders::DrawConstants dc = {};
@@ -1046,6 +1058,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     }
   }
 
+  if (stop_at == 3) return;
   // The vertices this draw reads (for dynamic vertex buffers): the index range, or the vertex range.
   uint32_t first_vertex = 0, last_vertex = ~0u;
   if (options_.dynamic_vertex_buffers) {
@@ -1122,6 +1135,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     }
   }
 
+  if (stop_at == 4) return;
   // Clip planes (PA_CL_CLIP_CNTL ucp_ena, unless clipping is off).
   if (!(clip_cntl & (1u << 16))) dc.clipPlaneMask = clip_cntl & 0x3F;
   for (uint32_t p = 0; p < 6; ++p)
@@ -1248,6 +1262,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   }
   if (!args.vertexCount) return;
 
+  if (stop_at == 5) return;
   cl->setGraphicsState(gs);
   if (indexed_draw) {
     cl->drawIndexed(args);

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <string>
 
 #include <rex/graphics/registers.h>
 #include <rex/graphics/xenos.h>
@@ -104,6 +105,11 @@ void RingSkimmer::WorkerMain() {
     if (busy_end - stats_logged_ > std::chrono::seconds(10)) {
       REXLOG_INFO("rexgpu-native: ring skimmer: {} ms executing packets, {} WAIT_REG_MEM waits, {} ms waiting",
                   busy_us_ / 1000, waits_, wait_us_ / 1000);
+      std::string ops;
+      for (uint32_t op = 0; op < 128; ++op) {
+        if (opcode_counts_[op]) ops += fmt::format(" {:02X}:{}", op, opcode_counts_[op]);
+      }
+      REXLOG_INFO("rexgpu-native: ring skimmer: type 3 packets by opcode:{}", ops);
       stats_logged_ = busy_end;
     }
     if (read_ptr_writeback_ptr_) {
@@ -209,6 +215,7 @@ bool RingSkimmer::ExecutePacketType3(RingBuffer* reader, uint32_t packet) {
     REXGPU_DEBUG("rexgpu-native: packet opcode {:02X} count {}: {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
                  opcode, count, data[0], data[1], data[2], data[3], data[4], data[5]);
   }
+  ++opcode_counts_[opcode & 0x7F];
 
   switch (opcode) {
     case PM4_INTERRUPT: {
@@ -309,6 +316,10 @@ bool RingSkimmer::ExecutePacketType3(RingBuffer* reader, uint32_t packet) {
             memory_->TranslatePhysical<xe_gpu_depth_sample_counts*>(counts_address);
         bool is_end = counts->ZPass_A == kQueryFinished || counts->ZPass_B == kQueryFinished ||
                       counts->ZFail_A == kQueryFinished || counts->ZFail_B == kQueryFinished;
+        if (zpd_logged_ < 10) {
+          ++zpd_logged_;
+          REXLOG_INFO("rexgpu-native: EVENT_WRITE_ZPD at {:08X}, {}", counts_address, is_end ? "end" : "begin");
+        }
         std::memset(counts, 0, sizeof(xe_gpu_depth_sample_counts));
         if (is_end) {
           counts->ZPass_A = kFakeSampleCount;

@@ -178,6 +178,7 @@ void GameRenderer::ClearRect(nvrhi::ICommandList* cl, HostTarget* color, HostTar
 // ---------------------------------------------------------------- clear
 
 void GameRenderer::Clear(nvrhi::ICommandList* cl, const ClearCall& call) {
+  if (options_.debug & 1024) return;  // debugging: no clears
   dev::DeviceView d(call.device ? memory_.Virtual(call.device) : nullptr);
   if (!d.valid() || !(call.color || call.depth || call.stencil)) return;
   if (frame_log_ && frame_log_->enabled()) LogClear(call, d);
@@ -242,6 +243,7 @@ void GameRenderer::Clear(nvrhi::ICommandList* cl, const ClearCall& call) {
 // ---------------------------------------------------------------- resolve
 
 void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
+  if (options_.debug & 2048) return;  // debugging: no resolves
   dev::DeviceView d(call.device ? memory_.Virtual(call.device) : nullptr);
   if (!d.valid()) return;
   if (frame_log_ && frame_log_->enabled()) LogResolve(call, d);

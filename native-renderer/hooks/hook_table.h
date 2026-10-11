@@ -15,6 +15,10 @@
 #include <span>
 #include <type_traits>
 
+#if defined(__x86_64__) || defined(_M_X64)
+#include <immintrin.h>
+#endif
+
 #include "plugin/native_api.h"
 
 namespace nr::hooks {
@@ -85,6 +89,37 @@ inline bool IsStateKind(Kind kind) {
 // calls only when not nested), then runs the game's original. Creators run
 // the original first and forward its return value. `original` returns r3
 // after the call.
+// The guest's floating-point state (MXCSR on x86: rounding and denormal flushing, which the
+// recompiled code sets from the guest's FPSCR / VSCR) must come back from the plugin as it went
+// in: the renderer and the graphics driver run on the game's thread inside the handler. Called
+// when a handler changed it (the state is put back either way).
+inline void (*g_fp_state_changed)(const HookEntry& entry, uint32_t before, uint32_t after) = nullptr;
+
+inline uint32_t ReadFpState() {
+#if defined(__x86_64__) || defined(_M_X64)
+  return _mm_getcsr();
+#else
+  return 0;
+#endif
+}
+inline void WriteFpState([[maybe_unused]] uint32_t value) {
+#if defined(__x86_64__) || defined(_M_X64)
+  _mm_setcsr(value);
+#endif
+}
+
+inline void CallHandler(const HookEntry& entry, const NrApi& api, const GuestArgs& args) {
+  const uint32_t before = ReadFpState();
+  entry.handler(api, args);
+  const uint32_t after = ReadFpState();
+  // Only the control bits (rounding, flush to zero, denormals are zero, exception masks): the
+  // status flags (bits 0-5) collect whatever the handler's arithmetic raised.
+  if ((after ^ before) & ~0x3Fu) {
+    WriteFpState(before);
+    if (g_fp_state_changed) g_fp_state_changed(entry, before, after);
+  }
+}
+
 template <typename Original>
 void Run(const HookEntry& entry, const NrApi* api, GuestArgs args, Original&& original) {
   CallScope scope;
@@ -95,11 +130,11 @@ void Run(const HookEntry& entry, const NrApi* api, GuestArgs args, Original&& or
     } else {
       args.ret = uint32_t(original());
     }
-    if (forward && api->is_active(api->self)) entry.handler(*api, args);
+    if (forward && api->is_active(api->self)) CallHandler(entry, *api, args);
     return;
   }
   if (forward && api->is_active(api->self)) {
-    entry.handler(*api, args);
+    CallHandler(entry, *api, args);
   }
   original();
 }

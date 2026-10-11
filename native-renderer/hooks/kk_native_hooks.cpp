@@ -70,10 +70,24 @@ const NrApi* LookUpApi() {
   return api;
 }
 
+// A handler that came back with another floating-point control state (Run puts it back): the
+// first few are logged with the entry, then one line every 1000.
+void OnFpStateChanged(const nr::hooks::HookEntry& entry, uint32_t before, uint32_t after) {
+  static std::atomic<uint64_t> count{0};
+  const uint64_t n = ++count;
+  if (n <= 20 || n % 1000 == 0) {
+    REXLOG_WARN("native renderer: {} ({:08X}) changed MXCSR {:08X} -> {:08X}, restored ({} times)", entry.name,
+                entry.address, before, after, n);
+  }
+}
+
 // Looked up once, on the first hooked call (the plugin is loaded before the
 // game's code runs).
 const NrApi* Api() {
-  static const NrApi* api = LookUpApi();
+  static const NrApi* api = [] {
+    nr::hooks::g_fp_state_changed = OnFpStateChanged;
+    return LookUpApi();
+  }();
   return api;
 }
 
