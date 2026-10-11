@@ -51,8 +51,12 @@ PipelineRecord Sample(uint64_t vs = 0x1111, uint64_t ps = 0x2222) {
 
 // Runs the nr_pipelines tool; its exit code.
 int RunTool(const std::string& args) {
-  const std::string command = std::string("\"") + NR_PIPELINES_TOOL + "\" " + args + " > \"" +
-                              TempPath("tool_output.txt") + "\"";
+  std::string command = std::string("\"") + NR_PIPELINES_TOOL + "\" " + args + " > \"" +
+                        TempPath("tool_output.txt") + "\"";
+#if defined(_WIN32)
+  // cmd /c drops the first and the last quote of a line that starts with one: one more pair.
+  command = "\"" + command + "\"";
+#endif
   const int status = std::system(command.c_str());
 #if defined(_WIN32)
   return status;
