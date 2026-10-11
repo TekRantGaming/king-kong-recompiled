@@ -13,6 +13,10 @@ add_library(nr_draw STATIC
     pipeline_cache.cpp
     api_binding.cpp
     primitive.cpp
+    # Ambient occlusion (docs/ao.md): the draw classifier, the camera, the settings.
+    ao_classifier.cpp
+    ao_camera.cpp
+    ao_config.cpp
 )
 target_include_directories(nr_draw PUBLIC "${NR_ROOT}")
 target_compile_features(nr_draw PUBLIC cxx_std_20)
