@@ -12,10 +12,12 @@
 #include <rex/logging.h>
 #include <rex/system/gpu_plugin.h>
 
+#include "backend/backend.h"
 #include "plugin/launcher_prewarm.h"
 #include "plugin/native_api.h"
 #include "plugin/native_graphics_system.h"
 #include "plugin/native_prewarm.h"
+#include "plugin/native_stutter.h"
 
 REXCVAR_DEFINE_STRING(native_backend, "auto", "Native renderer",
                       "Host API for the native renderer: auto, d3d12 or vulkan")
@@ -100,6 +102,12 @@ REXCVAR_DEFINE_BOOL(native_launcher_prewarm, false, "Native renderer",
                     "shipped list) on a Vulkan device of the plugin's own while the player is still there. The driver "
                     "keeps what it compiled (its own disk cache, and native_vk_pipeline_cache's file), so the game's "
                     "start makes them again quickly. Stopped when the game starts")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_BOOL(native_stutter_stats, false, "Native renderer",
+                    "Pipeline stutter counter: frames in which a draw waited for its pipeline or was skipped "
+                    "because it was not ready, and the worst wait, in the log (every 300 swaps and at the end) and "
+                    "under the frame counter (kk_show_fps, F2)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_BOOL(native_pipeline_list, false, "Native renderer",
@@ -235,3 +243,18 @@ extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_prewarm_status(NrPrewarmStatus* sta
 }
 
 extern "C" REX_GPU_PLUGIN_EXPORT void nr_prewarm_stop(void) { nr::StopLauncherPrewarm(); }
+
+// The pipeline stutter counter for the overlay (native_stutter.h).
+extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_stutter_stats(NrStutterStats* stats) {
+  nr::StutterSnapshot s;
+  if (!stats || stats->size < sizeof(NrStutterStats) || !nr::ReadStutterSnapshot(&s)) return 0;
+  stats->frames = s.frames;
+  stats->stutter_frames = s.stutter_frames;
+  stats->frames_waited = s.frames_waited;
+  stats->frames_skipped = s.frames_skipped;
+  stats->draws_skipped = s.draws_skipped;
+  stats->worst_wait_frame = s.worst_wait_frame;
+  stats->wait_ms = s.wait_ms;
+  stats->worst_wait_ms = s.worst_wait_ms;
+  return 1;
+}

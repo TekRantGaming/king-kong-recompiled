@@ -34,6 +34,7 @@
 #include "backend/pipeline_cache.h"
 #include "plugin/native_api.h"
 #include "plugin/native_prewarm.h"
+#include "plugin/native_stutter.h"
 
 // vulkan_host.cpp reads it (plugin_main.cpp defines it in the plugin).
 REXCVAR_DEFINE_BOOL(native_validation, true, "Native renderer", "NVRHI validation layer");
@@ -255,6 +256,16 @@ TEST(LauncherPrewarmEntryPoints) {
   CHECK_EQ(status(&s), uint32_t(NR_PREWARM_DONE));
   rex::cvar::SetFlagByName("native_launcher_prewarm", "false");
   rex::cvar::SetFlagByName("gpu_plugin", plugin_before);
+  // The overlay's counter: nothing without a game renderer (and --native_stutter_stats off).
+  using Stutter = uint32_t (*)(NrStutterStats*);
+  auto stutter = reinterpret_cast<Stutter>(dlsym(module, "nr_stutter_stats"));
+  CHECK(stutter != nullptr);
+  if (stutter) {
+    NrStutterStats st = {};
+    st.size = sizeof(st);
+    CHECK_EQ(stutter(&st), 0u);
+    CHECK_EQ(stutter(nullptr), 0u);
+  }
   dlclose(module);
   system->Shutdown();
   std::filesystem::remove_all(root);

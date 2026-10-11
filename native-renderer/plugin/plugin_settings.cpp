@@ -37,6 +37,7 @@ REXCVAR_DECLARE(bool, native_pipeline_cache);
 REXCVAR_DECLARE(std::string, native_pipeline_cache_dir);
 REXCVAR_DECLARE(bool, native_vk_pipeline_cache);
 REXCVAR_DECLARE(std::string, native_pipeline_list_file);
+REXCVAR_DECLARE(bool, native_stutter_stats);
 
 namespace nr {
 
@@ -106,6 +107,7 @@ GameSettings ReadGameSettings(bool vulkan) {
     REXGPU_INFO("rexgpu-native: render scale auto: {}x{} (the draw resolution scale)", x, y);
   }
   game.shadow_scale = float(REXCVAR_GET(native_shadow_scale));
+  game.stutter_stats = REXCVAR_GET(native_stutter_stats);
   // Ambient occlusion: the Xenos plugin's own settings (ao_mode 0 off, 1 on, 2 AO only; ao_strength
   // 1 to 3), looked up by name at every use. They are defined by rexgpu-xenos, which the launcher
   // and the game's start load first so that its cvars exist when the config and command line are read
