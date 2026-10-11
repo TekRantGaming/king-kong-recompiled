@@ -28,6 +28,8 @@ param(
   [string]$LockFile = 'F:\KK-native-renderer\game.lock',
   [string]$LockName = 'tests/run.ps1',
   [int]$WaitMinutes = 0,
+  # Minutes to wait after each launch before the next one, so others sharing the game get a turn.
+  [double]$PauseMinutes = 0,
   [string]$Label = '',
   [string]$Python = 'python',
   [switch]$NoCompare,
@@ -128,7 +130,14 @@ function Set-Lock([string]$Text) {
 function Format-Arg([string]$a) { if ($a -match '\s') { '"' + $a + '"' } else { $a } }
 
 $status = 0
+$launches = 0
 foreach ($run in $plan.runs) {
+  if ($launches -gt 0 -and $PauseMinutes -gt 0) {
+    # Leave the game to others between launches (the PC's game is shared).
+    Write-Output ("{0:HH:mm} pausing {1} minutes before the next launch" -f (Get-Date), $PauseMinutes)
+    Start-Sleep -Seconds ([int]($PauseMinutes * 60))
+  }
+  $launches++
   $runDir = Join-Path $root ("_runs\{0}-{1}" -f $run.name, (Get-Date -Format 'yyyyMMdd-HHmmss'))
   New-Item -ItemType Directory -Force $runDir | Out-Null
   if (-not (Wait-GameFree)) {
