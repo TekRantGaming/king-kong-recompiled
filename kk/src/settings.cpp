@@ -65,6 +65,9 @@ REXCVAR_DEFINE_BOOL(kk_invert_rs_x, false, "KK/Controls", "Invert right stick ho
 REXCVAR_DEFINE_BOOL(kk_invert_rs_y, false, "KK/Controls", "Invert right stick vertical");
 REXCVAR_DEFINE_BOOL(kk_invert_ls_x, false, "KK/Controls", "Invert left stick horizontal");
 REXCVAR_DEFINE_BOOL(kk_invert_ls_y, false, "KK/Controls", "Invert left stick vertical");
+REXCVAR_DEFINE_STRING(kk_original_look_keep, "", "KK/Debug",
+                      "Settings (comma-separated cvar names) the Original look leaves as given, e.g. "
+                      "ao_mode,ao_strength,kk_frame_rate (testing)");
 REXCVAR_DEFINE_INT32(kk_hitch_report_ms, 0, "KK/Debug",
                      "Write logs/hitch-*.txt (where every thread was) when a frame takes longer than this (0 = off)");
 REXCVAR_DEFINE_BOOL(kk_cheats, false, "KK/Cheats", "Switch on the cheats chosen below when the game starts");
@@ -421,7 +424,13 @@ const std::vector<std::pair<const char*, const char*>>& OriginalLookSettings() {
 
 void EnforceOriginalLook() {
   if (!REXCVAR_GET(kk_original_look)) return;
-  for (const auto& [name, value] : OriginalLookSettings()) rex::cvar::SetFlagByName(name, value);
+  const std::string keep = REXCVAR_GET(kk_original_look_keep);
+  for (const auto& [name, value] : OriginalLookSettings()) {
+    // kk_original_look_keep: comma-separated settings the Original look leaves as they are (testing:
+    // the golden-frame harness turns AO or the frame-rate cap on over the Original look).
+    if (!keep.empty() && ("," + keep + ",").find("," + std::string(name) + ",") != std::string::npos) continue;
+    rex::cvar::SetFlagByName(name, value);
+  }
 }
 
 void ApplyRuntimeOverrides() {

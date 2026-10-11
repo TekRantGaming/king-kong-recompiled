@@ -102,7 +102,9 @@ REXCVAR_DEFINE_STRING(native_render_scale, "1", "Native renderer",
                       "from 0.25 to 8), or a frame size such as 1920x1080. The frame handed to the presenter "
                       "is the scaled one; its upscalers and FXAA still apply. Above 1 the pixel shaders are "
                       "the render scale aware ones: build the pack with kkshaders db-build --also-scaled, "
-                      "else they are compiled at startup (needs DXC)")
+                      "else they are compiled at startup (needs DXC). auto: the port's draw resolution scale "
+                      "(draw_resolution_scale_x / _y, which the launcher's render quality presets set, or "
+                      "resolution_scale), as the Xenos plugin uses it")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_DOUBLE(native_shadow_scale, 0.0, "Native renderer",

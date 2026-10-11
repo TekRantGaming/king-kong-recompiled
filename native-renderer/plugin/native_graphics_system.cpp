@@ -255,6 +255,21 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
   game.pipeline_wait_budget_ms = REXCVAR_GET(native_pipeline_wait_budget_ms);
   if (const char* frame_log = std::getenv("REX_DEV_FRAME_LOG")) game.frame_log = frame_log;
   game.render_scale = REXCVAR_GET(native_render_scale);
+  if (game.render_scale == "auto") {
+    // The scale the Xenos plugin would draw at (the runtime's rule, as kk/src/settings.cpp logs it):
+    // resolution_scale when the player set it and the axis was left alone, else the axis, whose
+    // default the launcher's render quality preset sets.
+    auto axis = [](const char* name) {
+      std::string v = rex::cvar::HasNonDefaultValue("resolution_scale") && !rex::cvar::HasNonDefaultValue(name)
+                          ? rex::cvar::GetFlagByName("resolution_scale")
+                          : rex::cvar::GetFlagByName(name);
+      const int n = std::atoi(v.c_str());
+      return n >= 1 && n <= 8 ? n : 1;
+    };
+    const int x = axis("draw_resolution_scale_x"), y = axis("draw_resolution_scale_y");
+    game.render_scale = std::to_string(1280 * x) + "x" + std::to_string(720 * y);
+    REXGPU_INFO("rexgpu-native: render scale auto: {}x{} (the draw resolution scale)", x, y);
+  }
   game.shadow_scale = float(REXCVAR_GET(native_shadow_scale));
   // Ambient occlusion: the Xenos plugin's own settings (ao_mode 0 off, 1 on, 2 AO only; ao_strength
   // 1 to 3), looked up by name at every use. They are defined by rexgpu-xenos, which the launcher
