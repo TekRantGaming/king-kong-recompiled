@@ -39,6 +39,7 @@ set(KINGKONG_SOURCES
     src/hfr_dt_floor.cpp
     src/hfr_step_decay.cpp
     src/hfr_follow.cpp
+    src/hfr_frame_time.cpp
     src/online.cpp
     src/mouse_look.cpp
     src/language.cpp
