@@ -298,7 +298,9 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
   }
 
   // Guest vblank timer at the video mode's refresh rate: the game waits for
-  // these interrupts every frame.
+  // these interrupts every frame. Like the SDK's GraphicsSystem, it ticks at
+  // 1000 Hz when the Xenos plugin's "vsync" cvar is off: the port turns it off
+  // and paces frames with kk_frame_rate, so a fixed 60 Hz here capped the game.
   vsync_running_ = true;
   vsync_thread_ = rex::system::object_ref<rex::system::XHostThread>(
       new rex::system::XHostThread(kernel_state_, 128 * 1024, 0, [this]() {
@@ -306,10 +308,14 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
         rex::kernel::xboxkrnl::VdQueryVideoMode(&mode);
         double refresh_rate_hz = std::max(1.0, double(float(mode.refresh_rate)));
         uint64_t tick_frequency = rex::chrono::Clock::guest_tick_frequency();
-        uint64_t interval_ticks =
+        uint64_t vsync_interval_ticks =
             std::max<uint64_t>(1, uint64_t(double(tick_frequency) / refresh_rate_hz));
+        uint64_t no_vsync_interval_ticks = std::max<uint64_t>(1, tick_frequency / 1000);
         uint64_t last_frame_time = rex::chrono::Clock::QueryGuestTickCount();
         while (vsync_running_) {
+          uint64_t interval_ticks = rex::cvar::GetFlagByName("vsync") == "false"
+                                        ? no_vsync_interval_ticks
+                                        : vsync_interval_ticks;
           uint64_t current_time = rex::chrono::Clock::QueryGuestTickCount();
           while (current_time - last_frame_time >= interval_ticks) {
             MarkVblank();
