@@ -992,7 +992,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   NoteRecord(record, key);
   // AO hook (game_ao.cpp): classify the draw; at the end of the opaque pass the occlusion goes into
   // the scene before this draw.
-  if (scene_ao_) AoDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
+  if (scene_ao_ || ao_constants_) AoDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
   if (frame_log_ && frame_log_->enabled()) LogDraw(call, d, *vs, ps.get());
   if (dump) DumpVertexShaderHashes(call, d, *vs);
   if (stop_at == 7) return;

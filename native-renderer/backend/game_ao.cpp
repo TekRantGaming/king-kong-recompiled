@@ -71,6 +71,10 @@ AoSettings GameRenderer::AoSettingsFor(uint64_t frame) {
 void GameRenderer::AoDrawHook(nvrhi::ICommandList* cl, const DrawCall& call, const dev::DeviceView& d,
                               const std::array<HostTarget*, 4>& colors, HostTarget* depth, const PipelineRecord& record,
                               const GameShader& vs, const GameShader* ps) {
+  if (!scene_ao_) {
+    AoWriteAmbientConstants(cl, false);  // b4 is bound all the same (the GTAO method did not start)
+    return;
+  }
   const AoSettings s = AoSettingsFor(call.frame);
   if (ps && (ps->ucode_hash == kFogShaderA || ps->ucode_hash == kFogShaderB) && s.mode > 0) {
     float fog[16];
@@ -121,7 +125,7 @@ void GameRenderer::AoDrawHook(nvrhi::ICommandList* cl, const DrawCall& call, con
 }
 
 void GameRenderer::AoWriteAmbientConstants(nvrhi::ICommandList* cl, bool reads) {
-  const SceneAo::AmbientView v = scene_ao_->ambient_view();
+  const SceneAo::AmbientView v = scene_ao_ ? scene_ao_->ambient_view() : SceneAo::AmbientView{};
   AmbientConstants k = {};
   if (reads && v.texture) {
     // The occlusion in the bindless 2D table (a new slot when Gtao made a new image).
