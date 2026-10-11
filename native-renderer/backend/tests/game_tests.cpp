@@ -2132,6 +2132,77 @@ TEST(LauncherPrewarm_StopsBeforeItIsDone) {
   dev->WaitIdle();
 }
 
+// ------------------------------------------------- the stutter counter
+
+TEST(Stutter_ASkippedDrawIsAStutterFrame) {
+  Fixture f;
+  if (!f.Init()) return;
+  f.game->options().async_pipelines = true;
+  f.game->options().pipeline_wait_budget_ms = 0;  // skip at once
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  DrawQuadrantFrame(f, rt, p);  // skipped: its pipeline is being made
+  f.game->WaitForPrewarm();
+  DrawQuadrantFrame(f, rt, p);  // drawn: no stutter
+  const GameRenderer::StutterStats s = f.game->stutter();
+  CHECK_EQ(s.frames, uint64_t(2));
+  CHECK_EQ(s.stutter_frames, uint64_t(1));
+  CHECK_EQ(s.frames_skipped, uint64_t(1));
+  CHECK_EQ(s.draws_skipped, uint64_t(1));
+  // The present's own pass is made on the render thread (a built-in, not a game draw): no wait.
+  CHECK_EQ(s.frames_waited, uint64_t(0));
+}
+
+TEST(Stutter_AWaitIsCountedWithItsTime) {
+  Fixture f;
+  if (!f.Init()) return;
+  f.game->options().async_pipelines = true;
+  f.game->options().pipeline_wait = true;
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  DrawQuadrantFrame(f, rt, p);  // frame 0 waits for its pipeline
+  DrawQuadrantFrame(f, rt, p);
+  const GameRenderer::StutterStats s = f.game->stutter();
+  CHECK_EQ(s.frames, uint64_t(2));
+  CHECK_EQ(s.frames_waited, uint64_t(1));
+  CHECK_EQ(s.stutter_frames, uint64_t(1));
+  CHECK_EQ(s.frames_skipped, uint64_t(0));
+  CHECK(s.worst_wait_ms > 0.0);
+  CHECK(s.wait_ms >= s.worst_wait_ms);
+  CHECK_EQ(s.worst_wait_frame, uint64_t(0));
+}
+
+TEST(Stutter_APipelineMadeOnTheDrawThreadIsAWait) {
+  Fixture f;  // the tests' default: pipelines made by the draw
+  if (!f.Init()) return;
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  DrawQuadrantFrame(f, rt, p);
+  DrawQuadrantFrame(f, rt, p);
+  const GameRenderer::StutterStats s = f.game->stutter();
+  CHECK_EQ(s.frames_waited, uint64_t(1));
+  CHECK_EQ(s.stutter_frames, uint64_t(1));
+}
+
+TEST(Stutter_NoneWhenThePrewarmMadeEverything) {
+  const std::string path = CachePath("stutter_prewarm");
+  const std::string pack = MakePack("stutter_prewarm");
+  RecordTheScene(path);
+  Fixture f;
+  if (!f.Init()) return;
+  f.shaders->Initialize(pack, NR_TEST_DXC_DIR);
+  f.game->options().async_pipelines = true;
+  CHECK(f.game->SetPipelineCache(path));
+  f.game->WaitForPrewarm();
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  DrawQuadrantFrame(f, rt, p);
+  const GameRenderer::StutterStats s = f.game->stutter();
+  CHECK_EQ(s.frames, uint64_t(1));
+  CHECK_EQ(s.stutter_frames, uint64_t(0));
+  CHECK_EQ(s.wait_ms, 0.0);
+}
+
 TEST(PipelineWait_TheDrawWaitsInsteadOfBeingSkipped) {
   // Without a wait budget the draw is skipped while its pipeline is made. With pipeline_wait it
   // waits for it.

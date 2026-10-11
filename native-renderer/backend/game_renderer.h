@@ -178,6 +178,21 @@ class GameRenderer {
   }
   const Stats& stats() const { return stats_; }
 
+  // Pipeline stutter (docs/backend.md, "Stutter counter"): frames in which a draw waited for its
+  // pipeline (on a worker within the budget or with pipeline_wait, or made on the draw thread) or
+  // was skipped because it was not ready. Counted at each frame's end; any thread may read it.
+  struct StutterStats {
+    uint64_t frames = 0;
+    uint64_t stutter_frames = 0;   // frames that waited or skipped
+    uint64_t frames_waited = 0;    // frames in which a draw waited for a pipeline
+    uint64_t frames_skipped = 0;   // frames in which a draw was skipped, its pipeline not ready
+    uint64_t draws_skipped = 0;    // those draws
+    double wait_ms = 0;            // all the waiting
+    double worst_wait_ms = 0;      // the most one frame waited, in all
+    uint64_t worst_wait_frame = 0;
+  };
+  StutterStats stutter() const;
+
   // Enables CPU write notifications for a physical range (the SDK's watches);
   // the notifications come back through InvalidateRange.
   void set_watch(std::function<void(uint32_t physical, uint32_t bytes)> watch);
@@ -556,6 +571,13 @@ class GameRenderer {
   uint64_t constants_frame_ = 0;
   uint64_t wait_budget_frame_ = ~0ull;  // the frame frame_wait_ms_ counts for
   double frame_wait_ms_ = 0;
+  // This frame's stutter (render thread), folded into stutter_ at EndFrame.
+  void NoteFrameWait(double ms);
+  bool frame_waited_ = false;
+  double frame_stutter_wait_ms_ = 0;
+  uint64_t frame_skips_ = 0;
+  mutable std::mutex stutter_mutex_;
+  StutterStats stutter_;
 };
 
 }  // namespace nr

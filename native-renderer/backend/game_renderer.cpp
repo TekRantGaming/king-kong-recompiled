@@ -477,7 +477,37 @@ void GameRenderer::LogInvalidationHistogram() {
   invalidation_bytes_ = 0;
 }
 
+void GameRenderer::NoteFrameWait(double ms) {
+  frame_waited_ = true;
+  frame_stutter_wait_ms_ += ms;
+}
+
+GameRenderer::StutterStats GameRenderer::stutter() const {
+  std::lock_guard lock(stutter_mutex_);
+  return stutter_;
+}
+
 void GameRenderer::EndFrame() {
+  {
+    std::lock_guard lock(stutter_mutex_);
+    ++stutter_.frames;
+    if (frame_waited_) {
+      ++stutter_.frames_waited;
+      stutter_.wait_ms += frame_stutter_wait_ms_;
+      if (frame_stutter_wait_ms_ > stutter_.worst_wait_ms) {
+        stutter_.worst_wait_ms = frame_stutter_wait_ms_;
+        stutter_.worst_wait_frame = frame_;
+      }
+    }
+    if (frame_skips_) {
+      ++stutter_.frames_skipped;
+      stutter_.draws_skipped += frame_skips_;
+    }
+    if (frame_waited_ || frame_skips_) ++stutter_.stutter_frames;
+  }
+  frame_waited_ = false;
+  frame_stutter_wait_ms_ = 0;
+  frame_skips_ = 0;
   ++frame_;
   index_ring_used_ = 0;
   for (DescriptorTable& t : tables_) {
@@ -588,7 +618,9 @@ nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelin
         return pipelines_.count(key) != 0 || pipeline_stop_;
       });
       ++stats_.pipeline_waits;
-      stats_.pipeline_wait_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+      const double waited = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+      stats_.pipeline_wait_ms += waited;
+      NoteFrameWait(waited);
       auto found = pipelines_.find(key);
       return found != pipelines_.end() ? found->second.Get() : nullptr;
     }
@@ -608,6 +640,7 @@ nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelin
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
         frame_wait_ms_ += ms;
         stats_.pipeline_wait_ms += ms;
+        NoteFrameWait(ms);
         if (auto found = pipelines_.find(key); found != pipelines_.end()) {
           ++stats_.pipeline_budget_waits;
           return found->second;
@@ -615,11 +648,14 @@ nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelin
       }
     }
     ++stats_.skipped_pending;
+    ++frame_skips_;
     return nullptr;
   }
   const auto start = std::chrono::steady_clock::now();
   nvrhi::GraphicsPipelineHandle p = CreatePipeline(desc, framebuffer);
-  stats_.pipeline_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+  const double made_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+  stats_.pipeline_ms += made_ms;
+  if (for_draws) NoteFrameWait(made_ms);  // the draw waited for the driver on its own thread
   pipelines_[key] = p;  // a failure is remembered too (null)
   if (p) {
     ++stats_.pipelines;
