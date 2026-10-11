@@ -72,6 +72,14 @@ uint64_t translatorHash();
 
 TranslateResult translate(const ShaderInfo& info);
 
+// Debugging output only (never for shaders that are built): annotateAddresses puts a comment with
+// each instruction's address before its code, which names the place of an ambient term of kind
+// Register (kkshaders/ambient.h).
+struct TranslateOptions {
+    bool annotateAddresses = false;
+};
+TranslateResult translate(const ShaderInfo& info, const TranslateOptions& options);
+
 // Bindings to / from bytes (cache entries).
 std::vector<uint8_t> serializeBindings(const ShaderBindings& bindings);
 bool deserializeBindings(const uint8_t* data, size_t size, ShaderBindings& out);

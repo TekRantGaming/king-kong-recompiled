@@ -56,6 +56,13 @@ Changes we make to vendored code are kept as small as possible and listed here:
   true for an immutable bindless layout whose register spaces are all samplers, and descriptor tables are bound
   from their own heap (`getDescriptorHeap()`) instead of always the CBV/SRV/UAV heap, so the game renderer's
   sampler table (set 5) lives in and binds from the sampler heap on D3D12 as well.
+- `XenosRecomp/XenosRecomp/shader_recompiler.{h,cpp}` (Phase 3, ambient-only AO, `docs/ao.md`):
+  `RecompilerInput::ambientOcclusion` (kind None: byte-identical output, checked on the 1,557 corpus
+  translations). Set, a pixel shader declares the `KKAmbientOcclusion` buffer (b4) and `kk_AmbientOcclusion`,
+  reads the occlusion once (`kkAoMul`) and multiplies one term by it: its colour output, every direct read of a
+  constant, an interpolated input, the result of one fetch constant's texture fetches, or a register after one
+  instruction. `RecompilerInput::annotateAddresses` (the tool's `translate --addresses` only) writes each
+  instruction's address as a comment.
 - `XeGTAO/` (Phase 3, ambient occlusion, `docs/ao.md`): not changed. `backend/shaders/gtao.hlsl` includes
   `XeGTAO.hlsli` as it is and adapts it from outside: `XE_GTAO_USE_HALF_FLOAT_PRECISION 0` and `XE_GTAO_FP32_DEPTHS`
   (32-bit depth everywhere), `VA_SATURATE` defined as `saturate`, and `unorm` defined away before the include, so
