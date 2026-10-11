@@ -104,3 +104,5 @@ cmake --build out/build/win-amd64 --config Release --target install --parallel
 
 Use Visual Studio 2022 Build Tools with its Clang on the PATH. Copy `out/install/win-amd64/bin/rexgpu-xenos.dll`
 and `rexruntime.dll` over the ones in `tools/rexglue/win-amd64/bin/`.
+
+The native renderer has its own port of this AO (`native-renderer/docs/backend.md`, "Ambient occlusion"). It reads the same `ao_mode` and `ao_strength` cvars, which this plugin defines.

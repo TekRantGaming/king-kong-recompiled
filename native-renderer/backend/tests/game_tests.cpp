@@ -1507,12 +1507,20 @@ TEST(FrameLog_TheHarnessReadsTheLines) {
     std::ofstream out(path);
     for (const std::string& l : t.lines) out << "[warning] [gpu] " << l << "\n";
   }
-  const std::string command = std::string("python3 -I \"") + NR_COMPARE_PY + "\" framelog " + path + " > " + path + ".out 2>&1";
+#ifdef NR_PYTHON
+  const std::string python = std::string("\"") + NR_PYTHON + "\"";
+#else
+  const std::string python = "python3";
+#endif
+  std::string command = python + " -I \"" + NR_COMPARE_PY + "\" framelog " + path + " > " + path + ".out 2>&1";
+#ifdef _WIN32
+  command = "\"" + command + "\"";  // cmd.exe keeps the inner quotes only inside an outer pair
+#endif
   CHECK_EQ(std::system(command.c_str()), 0);
   std::ifstream in(path + ".out");
   std::stringstream text;
   text << in.rdbuf();
-  CHECK(text.str().find("# frame 0: 1 draws, 2 resolves") != std::string::npos);
+  CHECK(text.str().find("# frame 0: 2 draws, 1 resolves") != std::string::npos);  // the clear is a draw
   CHECK(text.str().find("draw ps=") != std::string::npos);
   CHECK(text.str().find("not understood") == std::string::npos && text.str().find("unknown") == std::string::npos);
 #endif

@@ -295,11 +295,8 @@ void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
       const nvrhi::TextureDesc& sd = source->texture->getDesc();
       const int32_t guest_w = call.has_rect ? call.rect[2] - call.rect[0] : int32_t(s.width);
       const int32_t guest_h = call.has_rect ? call.rect[3] - call.rect[1] : int32_t(s.height);
-      // The host size of a guest pixel: 1 here; a render scale makes the host
-      // targets as many times larger (the ratio of the texture to the guest's
-      // size, per axis).
-      const double host_x = double(sd.width) / double(std::max(source->width, 1u));
-      const double host_y = double(sd.height) / double(std::max(source->height, 1u));
+      // The rectangle in host pixels, rounded as every other scaled rectangle is (ScaleRect: the
+      // source target's scale, each edge rounded; the AO only takes full-screen copies from 0,0).
       AoResolve r;
       r.frame = call.frame;
       r.from_depth = from_depth;
@@ -307,8 +304,9 @@ void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
       r.format_ok = from_depth ? format == 0 : format <= 1;  // D24S8; 8:8:8:8 (gamma)
       r.dest_key = ao_dest ? FetchFromObject(ao_dest).BaseAddress() : 0;
       r.source = source->texture;
-      r.width = std::min(uint32_t(std::lround(double(guest_w) * host_x)), sd.width);
-      r.height = std::min(uint32_t(std::lround(double(guest_h) * host_y)), sd.height);
+      const nvrhi::Rect host_rect = ScaleRect(nvrhi::Rect(0, guest_w, 0, guest_h), source->scale_x, source->scale_y);
+      r.width = std::min(uint32_t(std::max(host_rect.maxX, 0)), sd.width);
+      r.height = std::min(uint32_t(std::max(host_rect.maxY, 0)), sd.height);
       if (nvrhi::ITexture* scene = ao_->OnResolve(cl, r, ao_settings)) {
         ao_original = source->texture;
         source->texture = scene;

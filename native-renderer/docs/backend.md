@@ -406,6 +406,15 @@ pictures of twelve scenes and draw lists far off):
   hitches per run; V-Rex 7). The statistics line every 300 swaps now also gives the game thread's time in the
   renderer's draws, clears, resolves and presents and in the watches.
 
+**Tests on Windows.** The standalone build runs on Windows too, on the real GPU (no lavapipe):
+`cmake -S native-renderer -B <dir> -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+-DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=tools/rexglue-vulkan/win-amd64 -DNR_BUILD_TESTS=ON
+-DNR_DXC_DIR=<dxc release>/bin/x64` from a Visual Studio x64 prompt with its Clang on the PATH. On the RTX 4070 Ti
+(Phase 2b, after the AO merge): `nr_game_tests` 45 tests, `nr_ao_tests` 12, `nr_render_tests` 6, `nr_draw_tests`
+14, `nr_frame_log_tests` 8, `nr_pipeline_cache_tests` 6, all pass (Khronos validation not installed there).
+Three test fixes came out of the first Windows run: the harness test called `python3` (now CMake's Python), and
+two counts had not followed this phase (the clear as a draw in the frame log, the hook table's 42nd entry).
+
 ### Open problems (Phase 2)
 
 - **Cold pipeline caches.** Pipelines are made on four worker threads (Vulkan) and draws wait up to 30 ms a
