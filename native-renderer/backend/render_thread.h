@@ -125,6 +125,15 @@ class ThreadedSink final : public DrawSink {
 
   DrawSink& inner_;
   const GuestMemory& memory_;
+  // Device copies that no call holds any more, for reuse.
+  struct DevicePool {
+    std::mutex mutex;
+    std::vector<std::vector<uint8_t>*> free;
+    ~DevicePool() {
+      for (auto* p : free) delete p;
+    }
+  };
+  std::shared_ptr<DevicePool> device_pool_ = std::make_shared<DevicePool>();
   // The last device copy (game's thread only).
   std::shared_ptr<const std::vector<uint8_t>> last_device_;
   uint32_t last_device_address_ = 0;

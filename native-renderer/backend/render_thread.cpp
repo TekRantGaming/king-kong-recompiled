@@ -13,7 +13,19 @@ thread_local const GuestSnapshot* t_snapshot = nullptr;
 
 // How far the game may run ahead of the render thread: two frames, or this many calls.
 constexpr uint32_t kMaxQueuedPresents = 2;
-constexpr size_t kMaxQueuedCommands = 20000;
+constexpr size_t kMaxQueuedCommands = 8000;
+
+// The parts of the device the renderer reads (guest_device.h): fetch, float, bool and loop constants;
+// the register images; the bound objects, streams and strides, viewport and clip planes; the front
+// and back buffers; the gamma ramp. A call whose device differs from the previous call's elsewhere
+// only (the library's dirty bits and counters change at every call) shares the previous copy.
+constexpr uint32_t kReadRanges[][2] = {{1152, 10272}, {11424, 12000}, {12532, 12944}, {13960, 13968}, {14060, 15596}};
+
+bool SameReadParts(const uint8_t* a, const uint8_t* b) {
+  for (const auto& r : kReadRanges)
+    if (std::memcmp(a + r[0], b + r[0], r[1] - r[0]) != 0) return false;
+  return true;
+}
 
 // Object sizes copied (d3d-structs.md): surfaces are 64 bytes, a texture's fetch constant ends at
 // +40, a vertex buffer's at +20; a declaration has its count at +8 and 12-byte elements from +36.
@@ -71,8 +83,22 @@ ThreadedSink::~ThreadedSink() {
 void ThreadedSink::CaptureDevice(GuestSnapshot& s, uint32_t device) {
   const uint8_t* live = device ? memory_.Virtual(device) : nullptr;
   if (!live) return;
-  if (!last_device_ || last_device_address_ != device || std::memcmp(last_device_->data(), live, dev::kSize) != 0) {
-    last_device_ = std::make_shared<const std::vector<uint8_t>>(live, live + dev::kSize);
+  if (!last_device_ || last_device_address_ != device || !SameReadParts(last_device_->data(), live)) {
+    // From the pool: a copy goes back when its last call has run (no allocation per call).
+    std::vector<uint8_t>* copy = nullptr;
+    {
+      std::lock_guard lock(device_pool_->mutex);
+      if (!device_pool_->free.empty()) {
+        copy = device_pool_->free.back();
+        device_pool_->free.pop_back();
+      }
+    }
+    if (!copy) copy = new std::vector<uint8_t>(dev::kSize);
+    std::memcpy(copy->data(), live, dev::kSize);
+    last_device_ = std::shared_ptr<const std::vector<uint8_t>>(copy, [pool = device_pool_](const std::vector<uint8_t>* p) {
+      std::lock_guard lock(pool->mutex);
+      pool->free.push_back(const_cast<std::vector<uint8_t>*>(p));
+    });
     last_device_address_ = device;
     device_copies_.fetch_add(1, std::memory_order_relaxed);
   }
