@@ -17,6 +17,9 @@ states, render targets and resolves. On Windows with Vulkan **all 13 golden scen
 | `backend/renderer.*`, `shaders.*`, `shaders/` | the NVRHI renderer: frame images, the milestone pictures, the placeholder pipeline; the built-in blit and clear shaders | NVRHI |
 | `backend/game_renderer.*`, `game_resources.cpp`, `game_passes.cpp` | Phase 2: the game's draws with their own shaders, textures and states; render targets, resolves, clears, Present | NVRHI, `kknr_resources`, `kkshaders` |
 | `backend/shader_library.*` | the game's shader objects as NVRHI shaders (the pack, else translated and compiled with DXC) | `kkshaders` |
+| `backend/pipeline_cache.*` | pipeline records, the player's pipeline file, shipped lists and their merging | nothing |
+| `backend/driver_pipeline_cache.h`, `vk_pipeline_cache.*` | the driver's pipeline cache kept in a file (Vulkan) | Vulkan-Headers |
+| `backend/pipeline_prewarm.*` | the game's pipelines made on a device of their own before the game (the launcher's prewarm) | NVRHI, `kkshaders` |
 | `backend/guest_device.h` | the D3D device struct's register images, shadows and fields the game renderer reads | nothing |
 | `cmake/kk_libs.cmake` | the resources and shader libraries built into the plugin | the SDK (fmt, xxHash, dxcapi.h) |
 | `backend/vulkan_dispatch.*` | the vulkan.hpp dispatcher NVRHI's static Vulkan backend needs | Vulkan-Headers |
@@ -24,7 +27,9 @@ states, render targets and resolves. On Windows with Vulkan **all 13 golden scen
 | `hooks/hook_table.*` | the 39 hooked entry points, their argument mapping, the nesting rule | nothing |
 | `hooks/trace_replay.*` | replays `KK_DEV_D3D_TRACE` logs through the hook table | nothing |
 | `hooks/kk_native_hooks.cpp` | the game-side `REX_HOOK_RAW` wrappers (linked into king_kong) | SDK, the game's code |
-| `plugin/` | `rexgpu-native`: `IGraphicsSystem`, ring skimmer, vblank, exports | SDK |
+| `hooks/kk_native_ui.*` | the game-side calls of the launcher's prewarm and the overlay's stutter line (linked into king_kong) | the plugin's exports |
+| `plugin/` | `rexgpu-native`: `IGraphicsSystem`, ring skimmer, vblank, exports (`native_api.h`, `native_prewarm.h`, `native_stutter.h`), the settings from the cvars (`plugin_settings.*`), the launcher's prewarm | SDK |
+| `tools/nr_pipelines.cpp` | merges the pipeline files of several runs into the shipped list | `backend/pipeline_cache.*` |
 | `sdk-patches/` | SDK changes the plugin needs (apply after `tools/rexglue-patches`) | |
 | `backend/tests/` | tests and the standalone test host | |
 
@@ -572,7 +577,10 @@ pause, loading, the three V-Rex scenes, Venture, both Kong scenes, chap20, chap3
 - **Cold pipeline caches.** Pipelines are made on four worker threads (Vulkan) and draws wait up to 30 ms a
   frame for them, then skip; the pipeline cache (on by default) makes the descriptions of earlier runs at
   start. A truly cold driver cache was not measured again (see "Pipeline cache"). On D3D12 pipelines are
-  still made on the draw thread (NVRHI's D3D12 backend caches root signatures without a lock).
+  still made on the draw thread (NVRHI's D3D12 backend caches root signatures without a lock). Phase 2c
+  (cloud) adds a shipped pipeline list, the driver's pipeline cache in a file, a prewarm from the launcher and a
+  stutter counter, all off by default and not yet tried in the game ("Phase 2c" under "Pipeline cache"); turning
+  them on is the next decision, after the Windows checks listed there.
 - **Write watches.** Venture's gameplay still has about 10,000 invalidations a second and its movie about 360
   a frame (texture pages; textures are never unwatched whole, see Phase 2b above). The movie planes could
   skip the watches (their Lock / Unlock can be hooked).
@@ -709,8 +717,9 @@ Without the SDK on the prefix path the plugin is skipped and the libraries and G
 |---|---|
 | `nr_draw_tests` | the hook table (sorted, complete, matches `kk_native_hooks.cpp`), log parsing, the per-draw sequence from `d3d-api-map.md` replayed as a trace and every field of the resulting records, constants copied at call time, every render / sampler state setter, nesting, an inactive or absent plugin, dropped draws, primitive expansion, the decoders |
 | `nr_render_tests` | the test host: its own Vulkan 1.3 device on lavapipe, NVRHI on it (plus NVRHI's and Khronos' validation, which must stay silent). M1: clear colour read back on every pixel; the per-frame colour. M2: the triangle's centroid, vertex colours (orientation), outside pixels, coverage. M3: the recorded frame through hook table, NrApi, tracker and renderer: what reached NVRHI (pipeline, framebuffer, viewport, index buffer, draw arguments, push constants) and the pixels (triangle placed by c0..c3 with the translation, the render-to-texture draw skipped on frame 2); the viewport; the transpose option |
-| `nr_plugin_tests` | with the SDK: the runtime's `LoadGpuPlugin` loads `librexgpu-native*.so`, `nr_get_api` is found as the hooks find it and is inactive before setup; `d3d12` is refused; NVRHI on the SDK's own `VulkanProvider` (headless, lavapipe) renders M1, M2 and the M3 frame correctly. Run under the Khronos layer; fails on any validation error, so it passes only with the SDK patch |
+| `nr_plugin_tests` | with the SDK: the runtime's `LoadGpuPlugin` loads `librexgpu-native*.so`, `nr_get_api` is found as the hooks find it and is inactive before setup; `d3d12` is refused; NVRHI on the SDK's own `VulkanProvider` (headless, lavapipe) renders M1, M2 and the M3 frame correctly. Phase 2c: the driver's pipeline cache on that provider (saved, then loaded by the next device), the launcher prewarm's exports (off unless asked for, a run on the provider started through `kk_native_ui.cpp`) and `nr_stutter_stats`. Run under the Khronos layer; fails on any validation error, so it passes only with the SDK patch |
 | `nr_spirv_val` | the checked-in SPIR-V validates for Vulkan 1.2 |
+| `nr_pipeline_cache_tests` | pipeline records and keys, the player's file (round trip, torn tail, other versions), shipped lists read only and written whole, the merger, and the `nr_pipelines` tool run on files it writes |
 | `nr_game_tests` | the game renderer without the game (needs `NR_GAME_RENDERER`): a 20,608-byte device struct in synthetic guest memory, shader objects and containers from the shader tests' microcode assembler and container writer (`shaders/tests/xenos_asm`, `container_writer`), textures, vertex and index buffers laid out as `d3d-structs.md` says. A helper plays the D3D library: each setter writes the register images and D3D fields the real one writes, then calls the hook (hook table, NrApi, tracker, Renderer, GameRenderer; shader creation to the ShaderLibrary, DXC at run time). Checked by reading pixels back from lavapipe: clears (whole target, rectangles, the viewport), vertex colours and orientation (D3DCOLOR, +y up), indexed draws (16 / 32-bit, base vertex, start index), point / quad / fan / strip, stream offsets, vertex and pixel constants per draw, blend (add, alpha, reverse subtract), depth (less, always without writes, greater, depth-only clear, test off), cull (front, back, both faces' windings), colour mask, MRT with a per-target mask, render targets keyed by EDRAM base / pitch / format (shared by two surface objects, a new one per base, format and pitch, depth apart, re-created taller), resolves into k_8_8_8_8 endian-none, A8R8G8B8 (8in32, R and B exchanged) and k_8 textures sampled back, resolve rectangle and destination point, resolve colour and depth clears, a shader parsed from its object without the create hook, a tiled guest texture uploaded, sampled, rewritten and re-uploaded after `InvalidateRange`. Every test checks that the Khronos and NVRHI layers stayed silent |
 
 `NR_TEST_IMAGES=<dir>` makes `nr_render_tests` and `nr_game_tests` write the read-back images as PPM files.
@@ -728,7 +737,9 @@ SwiftShader built from source with `MAX_BOUND_DESCRIPTOR_SETS = 8` (`src/Vulkan/
 `cmake -DREACTOR_BACKEND=Subzero -DSWIFTSHADER_BUILD_TESTS=OFF ... && ninja vk_swiftshader`, about 25 minutes on
 three cores) runs the whole game suite: 27 tests, 0 failed checks, with `NR_TEST_SYNC_PIPELINES=1`. It has no
 Khronos validation layer, so the "validation stayed silent" half of the checks did not run there; lavapipe with
-the layer remains the reference run.
+the layer remains the reference run. The Phase 2c container had working apt mirrors again: lavapipe (Mesa 25.2.8) and the
+layer from Ubuntu's packages, and clang-20 from Ubuntu's own `noble-updates` for the SDK's source build
+(apt.llvm.org was refused there).
 
 The test device (`backend/tests/vk_test_device.cpp`) enables what the SDK's device enables for the plugin:
 timeline semaphores, synchronization2 and dynamic rendering, the descriptor indexing features
@@ -942,8 +953,8 @@ the in-place patched object memory (already logged under `--native_dump_frame`).
 
 Options: `--native_pipeline_cache` (on by default since Phase 2b), `--native_pipeline_cache_dir=<dir>` (default
 `<cache root>/native-pipelines/<TITLE8>.pipelines`, set through `InitializeShaderStorage`: the game calls it,
-`555307D3.pipelines` under `--cache_root`), `--native_pipeline_wait` (off), `--native_pipeline_wait_budget_ms`
-(30).
+`555307D3.pipelines` under `--cache_root`; with the folder option the file is `game.pipelines`), `--native_pipeline_wait`
+(off), `--native_pipeline_wait_budget_ms` (30). Phase 2c adds four more, all off by default (below).
 
 Measured on Kong to the Rescue (`rescue` run, Vulkan, Phase 2b): without the cache the chapter start has 317
 draws skipped while their pipelines were made (139 drawn after waiting within the budget, 185 ms waited in all,
@@ -963,15 +974,26 @@ interpolators: 8,929 translations of 6,828 microcode and input pairs), and the s
 shader per microcode, so the prewarm's pick became the draw's shader as well. V-Rex then drew its fog and rain
 lighting with the wrong translation: a bright haze over the left of the picture, at scale 1 once the cache
 had records (MAE 90 against 3.4 with `--native_pipeline_cache=false`) and at every render scale. Records now
-carry both translations' input hashes (`vs_input`, `ps_input`; 144 bytes, version 2, older files are
-ignored), the library keys shaders by microcode and translation inputs, and the prewarm asks the pack for
-exactly that translation.
+carry both translations' input hashes (`vs_input`, `ps_input`), the library keys shaders by microcode and
+translation inputs, and the prewarm asks the pack for exactly that translation.
+
+**Record version 3 (Phase 2c).** Version 2 left the input hashes out of the pipeline key (`PipelineKey`), so the
+plain and the render scale aware translation of one pixel shader had the same key. A file used at two render
+scales kept only the first run's record; at the other scale the prewarm made that record (the plain shader
+with the 1:1 pipeline layout, or the aware shader in a layout without its b3 buffer) under the key the draw
+then looked up, so the draw could get the other scale's pipeline. Decided: the key takes every field of the
+record, the translations' input hashes too, and a record has `kRecordScaled` when its renderer draws at a render
+scale (the scaled pipeline layout with b3). A run prewarms only the records of its own kind
+(`stats().prewarm_other_kind` counts the others; the face flip of `--native_flip_front_face` is part of the kind).
+Version 2 files are not trusted and are started afresh once (the shipped list below covers a fresh start).
+Test: `PipelineCache_EachRenderScaleHasItsOwnRecords`.
 
 The test harness turns the cache off for native runs (`docs/testing.md`): with every pipeline made in
 advance, Kong to the Rescue's chapter loads faster and its scripted animation is ahead of the golden frames
 (0/5 frames twice, 5/5 with the cache off).
-- Every pipeline description is appended once to the file as a 128-byte `PipelineRecord` (16-byte header: magic,
-  version 1, record size, byte-order marker). A torn tail is repaired on open; a version mismatch starts a new file.
+- Every pipeline description is appended once to the file as a 144-byte `PipelineRecord` (16-byte header: magic
+  `KGPC`, version 3, record size, byte-order marker). A torn tail is repaired on open; another version starts a new
+  file.
 - At start all records are queued on the pipeline worker threads. Shaders come from the pack by hash, or the
   record waits until the game creates the shader (retried at the end of each frame).
 - Without `pipeline_wait` a draw whose pipeline is not ready waits within the frame's budget
@@ -983,3 +1005,190 @@ advance, Kong to the Rescue's chapter loads faster and its scripted animation is
   12.9); the workers make a pipeline in about 4 ms (1351 ms for 341 at the chapter start), so the budget lets
   most new pipelines draw in their first frame and caps a burst at one slower frame.
 - Prewarm needs Vulkan with async pipelines; the D3D12 backend is not supported for it.
+
+### Phase 2c: the pipelines before the first frame (cloud session, branch `cloud-p2c-pipelines`)
+
+Four options, each off by default, so a run without them is today's run: `--native_pipeline_list` (a shipped
+list), `--native_vk_pipeline_cache` (the driver's pipeline cache in a file), `--native_launcher_prewarm` (the
+launcher makes the pipelines), `--native_stutter_stats` (the stutter counter in the log and the overlay). With
+the game's cache root known (`InitializeShaderStorage`, before the game's main thread starts) the plugin starts
+them in one place, `NativeGraphicsSystem::StartPipelines`, in this order: the driver's pipeline cache is read
+(nothing may create a pipeline meanwhile), the player's pipeline file is opened and queued, the shipped list is
+queued. A description named by both files is made once.
+
+#### Pipeline lists
+
+A shipped pipeline list is a pipeline file (the format above) made from the files of several runs, put beside the
+game as `kkpipelines.list`, so a fresh install makes every pipeline at start instead of learning them over its
+first sessions.
+
+- `nr_pipelines merge -o <out> <file>...` (`tools/nr_pipelines.cpp`, built in the standalone build; the merging is
+  `PipelineListMerger` in `backend/pipeline_cache.*`): every pipeline once (by its key), in the order first seen,
+  so the first input's pipelines are made first. Decided: records of runs with `--native_flip_front_face` (a
+  debugging aid) are left out unless `--keep-debug`; nothing is written when any input is absent, damaged or of
+  another version (a list for a release is made from good files or not at all); an incomplete last record is
+  left out and reported. The output may be one of the inputs (adding a run to a list). `nr_pipelines info <file>`
+  says what a file holds (pipelines at 1:1 and at a render scale, shader translations).
+- `--native_pipeline_list` reads `kkpipelines.list` beside the game (or `--native_pipeline_list_file`) at start,
+  read only (`ReadPipelineList`, `GameRenderer::LoadPipelineList`), and queues its descriptions like the player's
+  file: the render scale's own kind only, those whose shaders are not in the pack wait for the game to create
+  them. Decided: the player's file still records everything the run draws, also what the list holds (it is the
+  player's history, and the input of the next merge). A list from runs at several render scales holds both
+  kinds; each run makes its own. Without `--native_pipeline_cache` the list still loads (it needs no cache root).
+- Tests: `PipelineList_*` (a fresh install draws its first frame with every pipeline made and the list
+  unchanged; with the player's file each pipeline is queued once; an absent or version 2 list is refused),
+  `PipelineListMerger_*`, `PipelinesTool_MergeAndInfo` (runs the tool), `PipelineList_ReadLeavesTheFileAlone`.
+
+#### The driver's pipeline cache
+
+`--native_vk_pipeline_cache` (Vulkan) keeps the driver's compiled pipelines, a `VkPipelineCache`, in
+`<cache root>/native-pipelines/<TITLE8>.vkcache` (or `game.vkcache` in `--native_pipeline_cache_dir`) and loads it at
+start, so the prewarm and the draws find compiled code instead of compiling. NVIDIA's driver keeps its own disk
+cache as well (the Phase 2b measurements above), so the gain is largest where that cache is cold or absent: a
+cleared or full driver cache, or drivers without one.
+
+- NVRHI made an empty `VkPipelineCache` of its own and offered no way to fill or read it:
+  `nvrhi::vulkan::DeviceDesc::pipelineCache` (vendored change, `thirdparty/NOTES.md`) gives it ours, which the
+  device uses and does not destroy. `backend/vk_pipeline_cache.*` (`VulkanPipelineCache`) makes it before NVRHI's
+  device (`vulkan_host.cpp`), reads a file into it (`vkCreatePipelineCache` with the data, then
+  `vkMergePipelineCaches` into the live cache) and saves it (`vkGetPipelineCacheData`, a temporary file renamed
+  over the old one). `backend/driver_pipeline_cache.h` is the API-free interface the game renderer uses.
+- The file: a 72-byte header of ours (magic `KVPC`, version, vendor ID, device ID, driver version,
+  `pipelineCacheUUID`, `driverUUID` from `VkPhysicalDeviceIDProperties`, data size, an FNV-1a hash of the data),
+  then the driver's data, which starts with Vulkan's own header (`VkPipelineCacheHeaderVersionOne`: vendor ID,
+  device ID, `pipelineCacheUUID`). The file is used only when both headers match the device: the same vendor
+  and device, driver version, driver UUID and pipeline cache UUID. Decided: the driver version and driver UUID
+  are checked too, although Vulkan only promises the pipeline cache UUID, because a driver update that keeps the
+  UUID and changes the compiler would otherwise feed it stale data.
+- When the driver changed (or the file is damaged, or the driver refuses the data): the log says what changed
+  (`driver pipeline cache ...: driver changed (made with driver version X, now Y)`), the cache starts empty, the
+  prewarm of the player's file and the shipped list rebuilds it on the workers in the background while the
+  game runs, and the first time the workers run out of work the new cache is saved over the old file. A first
+  run (no file) is saved the same way. Without a prewarm source (both files off) the cache fills as the game
+  draws.
+- Saves: from the worker that empties the queue (it stays counted, so `WaitForPrewarm` includes the save), when
+  16 pipelines (`Options::driver_cache_save_every`) were made since the last save or 30 s passed
+  (`driver_cache_save_seconds`), and when the renderer is destroyed (the end of the game, the end of the launcher's
+  prewarm). Never on the render thread. Decided against saving after every pipeline: NVIDIA's data for a few
+  thousand pipelines is tens of megabytes.
+- Pipeline creation holds a shared lock (`GameRenderer::CreatePipeline`), reading the file an exclusive one;
+  `SetDriverPipelineCache` must come before the first draw and before the prewarm starts (it does: shader storage
+  is initialised before the game's main thread runs). The built-in passes outside the game renderer (AO, the
+  placeholder) create pipelines only while frames are drawn.
+- D3D12 has no such cache here (its equivalent is `ID3D12PipelineLibrary`; not done): the option logs that it is
+  not used.
+- On lavapipe the cache's data is Vulkan's 32-byte header only (Mesa's CPU driver keeps no compiled pipelines in
+  it), so the tests prove the file handling, the checks, the hand-over between devices and the rebuild, not a
+  speed-up. Tests: `VkPipelineCache_*` in `nr_game_tests` (each part of the identity, damage, two runs on two
+  devices, another driver's file rebuilt and saved by the prewarm, a damaged file replaced, the save threshold),
+  `VkPipelineCacheOnTheSdkVulkanProvider` in `nr_plugin_tests` (on the SDK's own provider).
+
+#### Prewarm from the launcher
+
+The launcher calls the plugin when it opens (`nr_prewarm_start`, `plugin/native_prewarm.h`; the game's side is
+`hooks/kk_native_ui.cpp`, compiled into `king_kong` with `KK_NATIVE_RENDERER`), so the game's pipelines are made
+while the player is still choosing. With `--native_launcher_prewarm` off (the default), `--gpu_plugin` other than
+`native`, `--native_backend=d3d12`, `--native_game=false` or `--native_async_pipelines=false` the call does nothing.
+
+- A pipeline belongs to the device that made it, and the game's device does not exist yet (the runtime makes the
+  graphics system after the launcher), so the prewarm runs on a device of its own: the SDK's `VulkanProvider`,
+  headless, made as the game's start makes it (the same GPU and features), with a game renderer and no game
+  (`backend/pipeline_prewarm.*`, `PipelinePrewarm`), fed the player's pipeline file and the shipped list read only.
+  Its pipelines go with its device. What the game keeps is what the driver keeps: its own disk cache (NVIDIA's and
+  most others), and with `--native_vk_pipeline_cache` the cache file, which the prewarm saves when it stops and
+  the game's device reads at its start. Decided this over handing the launcher's device to the game: the runtime
+  makes the provider, presenter and graphics system after the launcher, and the pipeline layouts depend on the
+  render scale the launcher can still change.
+- Settings: read from the cvars on the launcher's UI thread when it opens (after the launcher applied the Original
+  look), never on the prewarm's thread; the same functions the game's start uses (`plugin_settings.cpp`,
+  `ResolveRenderScale`), so the pipelines are the game's. Limits, decided and left: a setting changed in the
+  launcher after it opened (`--native_render_scale=auto` follows the render quality preset, which the launcher
+  applies at Play) makes the prewarm's pipelines of the other kind, which the game does not use (no harm; the
+  game's own prewarm makes its kind); on a machine with two GPUs a headless provider could pick another one
+  than the game's (the driver cache file's header check then rebuilds it).
+- Shaders come from the pack only: descriptions whose shaders the game compiles with DXC (the D3D library's own
+  two) are left to the game.
+- The game's start (`SetupGuestGpu`) stops the prewarm before making its own device: the workers finish the
+  pipeline in hand, the driver's cache is saved, the device is destroyed. The launcher stops it on Quit and on a
+  restart (`nr_prewarm_stop`). Once a process; the plugin never frees it at exit (a static destructor joining a
+  thread inside the driver at exit could hang). `nr_prewarm_status` gives its state and counts (for a progress
+  display, not used by the launcher yet).
+- Log: `launcher prewarm started: N descriptions, M to make`, then `launcher prewarm done` or `stopped: X of M
+  pipelines made, Y left to the game, T s`.
+- Tests: `LauncherPrewarm_*` in `nr_game_tests` (the files read and left as they were, the pipeline made once, the
+  game's device loading the driver cache the prewarm saved and drawing at once; a stop before the end),
+  `LauncherPrewarmEntryPoints` in `nr_plugin_tests` (the exports found as the launcher finds them, off unless asked
+  for, started through `kk_native_ui.cpp` with the game's cache root and title, on the SDK's provider).
+
+#### Stutter counter
+
+`GameRenderer::stutter()` counts, at each frame's end: frames in which a game draw waited for its pipeline (on a
+worker within the budget, with `--native_pipeline_wait`, or made on the draw thread when pipelines are not
+asynchronous), frames in which a draw was skipped because its pipeline was not ready (and those draws), the time
+waited in all and the worst frame's wait (with its frame number). A frame that waited and then skipped counts in
+both; `stutter_frames` counts it once. The built-in passes (clears, blits, AO) are not counted. Counted always;
+shown only with `--native_stutter_stats`:
+
+- the log: `rexgpu-native: pipeline stutter so far: S of F frames (W waited for pipelines, T ms in all; K skipped D
+  draws whose pipelines were not ready); worst wait X ms (frame N)` every 300 swaps with the other statistics,
+  and `pipeline stutter at the end` when the game closes;
+- the overlay: a line `Pipeline stutter: S frames (W waited, K skipped), worst X ms` under the frame counter
+  (`kk_show_fps`, F2), from `nr_stutter_stats` (`plugin/native_stutter.h`), which reads a snapshot the backend takes
+  after each Present (the overlay never reaches into the renderer).
+
+Tests: `Stutter_*` (a skip, a wait with its time, a pipeline made by the draw, nothing after a full prewarm).
+
+#### Checked here, and what the Windows side runs
+
+Linux, lavapipe (Mesa 25.2.8) with the Khronos layer, the SDK built from source with every patch (clang-20 from
+Ubuntu's own `noble-updates`; apt.llvm.org was refused): `nr_game_tests` 60 tests, `nr_pipeline_cache_tests` 12,
+`nr_plugin_tests` 5, `nr_render_tests`, `nr_ao_tests`, `nr_draw_tests`, `nr_frame_log_tests`, `nr_spirv_val` pass, the
+layer silent. The build without the game renderer (no `NR_DXC_DIR`) builds and passes again (two stubs it lacked on
+`nr-integration`). The kk side cannot be built here: `kk/src/overlay.cpp` and `kk/src/king_kong_app.h` were compiled
+against the SDK headers with `KK_NATIVE_RENDERER` on and off (a stub for the recompiled image config), and
+`kk_native_ui.cpp` compiles in `nr_kk_hooks_check`.
+
+On Windows (`kk-dev-vulkan`, from a Visual Studio x64 prompt):
+
+1. Build: `kk\build.bat kk-dev-vulkan`, and the standalone tests on the RTX 4070 Ti with the command in "Tests on
+   Windows" above, then `ctest --test-dir <dir> --output-on-failure` (expect `nr_game_tests` 60 and
+   `nr_pipeline_cache_tests` 12 passing; the `VkPipelineCache_*` tests print the driver's data sizes, which on
+   NVIDIA should be far above lavapipe's 32 bytes).
+2. Defaults unchanged: `tests\run.ps1 -Plugin native -Exe kk\out\build\kk-dev-vulkan\king_kong.exe` gives the
+   result of `runs\native-final-default` (15 of 17).
+3. A shipped list: record two or three runs, each into a folder of its own, for example
+   `tests\run.ps1 -Plugin native -Exe kk\out\build\kk-dev-vulkan\king_kong.exe -Scenes all -NoCompare -ExtraArgs
+   "--native_pipeline_cache=true","--native_pipeline_cache_dir=F:\KK-native-renderer\pipelines\run1"` (and `run2`
+   with `--native_render_scale=2` added; `-ExtraArgs` replaces the scene file's `--native_pipeline_cache=false`),
+   then `<test build>\nr_pipelines.exe merge -o kk\out\build\kk-dev-vulkan\kkpipelines.list
+   F:\KK-native-renderer\pipelines\run1\game.pipelines F:\KK-native-renderer\pipelines\run2\game.pipelines` and
+   `nr_pipelines.exe info` on the result.
+4. A fresh install with the list: `tests\run.ps1 -Plugin native -Exe ... -Scenes kong_cutscene,kong -NoCompare`
+   (with every pipeline made early Kong's timeline moves ahead of the golden frames, as with the cache in Phase 2b:
+   the log is the check here, not the score) with an empty pipeline folder,
+   `-ExtraArgs "--native_pipeline_cache=true","--native_pipeline_cache_dir=F:\KK-native-renderer\pipelines\empty1",
+   "--native_pipeline_list=true","--native_stutter_stats=true"`, against the same without `--native_pipeline_list=true`
+   (and another empty folder). Expected: the log's `pipeline list ...: N descriptions, N queued`, and the last
+   `pipeline stutter so far` line (every 300 swaps; `at the end` too when the game closes by itself) with few or
+   no skipped frames where the run without the list has the Phase 2b numbers (hundreds of skipped draws at the
+   chapter start).
+5. The driver's pipeline cache: with NVIDIA's own cache off (NVIDIA Control Panel, Manage 3D settings, Shader
+   Cache Size: Disabled, so the difference shows), run `-Scenes kong_cutscene,kong -NoCompare` twice with
+   `-ExtraArgs "--native_vk_pipeline_cache=true","--native_pipeline_cache=true",
+   "--native_pipeline_cache_dir=F:\KK-native-renderer\pipelines\vk1","--native_stutter_stats=true"`. Expected: the
+   first log has `driver pipeline cache ...: no file yet, made by this run` and `saved: N KB`, the second
+   `loaded (N KB)`, and its statistics line's `ms in pipeline creation` far lower than the first's. After a
+   driver update the log says `driver changed (...)` and a `saved` line follows once the workers are done. Put
+   the shader cache setting back afterwards.
+6. The launcher: `king_kong.exe --gpu_plugin=native --kk_launcher=true --native_launcher_prewarm=true
+   --native_vk_pipeline_cache=true --native_stutter_stats=true --kk_show_fps=true` (the player's recorded file under
+   the cache root, or the list beside the game with `--native_pipeline_list=true`), wait in the launcher until the
+   log has `launcher prewarm done`, press Play: the game's log has `driver pipeline cache ...: loaded` and lower
+   pipeline creation times than a run that pressed Play at once (`launcher prewarm stopped`). Also Quit from the launcher while it runs (no hang, `stopped` in the
+   log) and the restart path (a setting that restarts the game). With the defaults no `launcher prewarm` line
+   appears.
+7. The overlay: in the game F2 shows the frame counter with the `Pipeline stutter: ...` line under it when
+   `--native_stutter_stats=true`, nothing more without it.
+8. D3D12 (`--native_backend=d3d12` with all four on, and the D3D12-only `kk-dev` build): the list, the driver
+   cache and the launcher prewarm log that they need Vulkan and change nothing; the stutter counter works there
+   too (pipelines are made on the draw thread on D3D12, so every new pipeline is a waited frame).
