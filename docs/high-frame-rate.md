@@ -82,8 +82,7 @@ Runs on this PC (Xenos plugin, `kk-dev` build, private copy of the test save). T
 110 FPS, also uncapped (a driver limit), so "120" and "unlimited" runs are 110 FPS; behaviour at 250 FPS and
 more was tested with `KK_DEV_FORCE_DT=0.004` (every frame counts as 4 ms; the game runs slower than real time
 but each system steps as it would at 250 FPS). Raw logs, samples and captures are in
-`F:\KK-native-renderernalysis\hfr
-uns` (not in git).
+`F:\KK-native-renderer\analysis\hfr\runs` (not in git).
 
 ### Venture opening (chapter select entry 0)
 
