@@ -1,5 +1,7 @@
 #include "backend/renderer.h"
 
+#include <mutex>
+
 #include <chrono>
 
 #include <algorithm>
@@ -10,6 +12,7 @@
 #include "backend/game_renderer.h"
 #else
 namespace nr {
+
 // Without the game renderer: never created, never called.
 class GameRenderer {
  public:
@@ -24,6 +27,17 @@ class GameRenderer {
 #include "backend/shaders.h"
 
 namespace nr {
+
+// NVRHI's D3D12 backend keeps its root signatures in a cache without a lock: on D3D12 one pipeline is
+// made at a time (the workers, and the render thread's own blits and clears), still off the draws' thread.
+nvrhi::GraphicsPipelineHandle CreateGraphicsPipeline(nvrhi::IDevice* device, const nvrhi::GraphicsPipelineDesc& desc,
+                                                     const nvrhi::FramebufferInfo& framebuffer) {
+  if (device->getGraphicsAPI() != nvrhi::GraphicsAPI::D3D12) return device->createGraphicsPipeline(desc, framebuffer);
+  static std::mutex mutex;
+  std::lock_guard lock(mutex);
+  return device->createGraphicsPipeline(desc, framebuffer);
+}
+
 
 Renderer::Renderer(nvrhi::IDevice* device) : device_(device) {}
 
@@ -173,7 +187,7 @@ nvrhi::IGraphicsPipeline* Renderer::PlaceholderPipeline(const RenderStates& stat
   desc.renderState.depthStencilState.depthFunc = nvrhi::ComparisonFunc(func + 1);
   nvrhi::IFramebuffer* fb = FramebufferFor(frames_[0]);
   if (!fb) return nullptr;
-  nvrhi::GraphicsPipelineHandle pipeline = device_->createGraphicsPipeline(desc, fb->getFramebufferInfo());
+  nvrhi::GraphicsPipelineHandle pipeline = CreateGraphicsPipeline(device_, desc, fb->getFramebufferInfo());
   if (!pipeline) return nullptr;
   placeholder_pipelines_[key] = pipeline;
   return pipeline;

@@ -11,7 +11,8 @@ namespace {
 
 thread_local const GuestSnapshot* t_snapshot = nullptr;
 
-// How far the game may run ahead of the render thread: two frames, or this many calls.
+// How far the game may run ahead of the render thread: one frame (two made unlimited frame rates
+// more uneven), or this many calls.
 constexpr uint32_t kMaxQueuedPresents = 1;
 constexpr size_t kMaxQueuedCommands = 8000;
 

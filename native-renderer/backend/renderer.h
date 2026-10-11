@@ -25,6 +25,10 @@ namespace nr {
 
 class GameRenderer;
 
+// device->createGraphicsPipeline, one at a time on D3D12 (NVRHI's D3D12 root signature cache has no lock).
+nvrhi::GraphicsPipelineHandle CreateGraphicsPipeline(nvrhi::IDevice* device, const nvrhi::GraphicsPipelineDesc& desc,
+                                                     const nvrhi::FramebufferInfo& framebuffer);
+
 // The placeholder pipeline's push constants (shaders/placeholder.hlsl).
 struct PlaceholderConstants {
   float wvp[16];  // row-major, rows = guest c0..c3

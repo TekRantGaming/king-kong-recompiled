@@ -8,6 +8,7 @@
 
 #include "backend/guest_layout.h"
 #include "backend/log.h"
+#include "backend/renderer.h"
 #include "backend/shaders.h"
 #include "kknr/buffers.h"
 #include "kknr/nvrhi_format.h"
@@ -508,7 +509,7 @@ void GameRenderer::PipelineWorker() {
       ++pipelines_active_;
     }
     const auto start = std::chrono::steady_clock::now();
-    nvrhi::GraphicsPipelineHandle p = device_->createGraphicsPipeline(job.desc, job.framebuffer);
+    nvrhi::GraphicsPipelineHandle p = CreateGraphicsPipeline(device_, job.desc, job.framebuffer);
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     {
       std::lock_guard lock(pipeline_mutex_);
@@ -531,7 +532,7 @@ nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelin
   auto it = pipelines_.find(key);
   if (it != pipelines_.end()) return it->second;
   const bool for_draws = async;
-  async = async && options_.async_pipelines && device_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN;
+  async = async && options_.async_pipelines;
   if (async) {
     // Finished pipelines (the draws' and the prewarm's) join the map.
     auto drain = [&] {
@@ -593,7 +594,7 @@ nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelin
     return nullptr;
   }
   const auto start = std::chrono::steady_clock::now();
-  nvrhi::GraphicsPipelineHandle p = device_->createGraphicsPipeline(desc, framebuffer);
+  nvrhi::GraphicsPipelineHandle p = CreateGraphicsPipeline(device_, desc, framebuffer);
   stats_.pipeline_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
   pipelines_[key] = p;  // a failure is remembered too (null)
   if (p) {
@@ -647,7 +648,7 @@ bool GameRenderer::SetPipelineCache(const std::string& path) {
     Logf(LogLevel::kWarning, "rexgpu-native: pipeline cache %s ignored and started again: %s", path.c_str(),
          cache_file_.note().c_str());
   }
-  const bool can_prewarm = options_.async_pipelines && device_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN;
+  const bool can_prewarm = options_.async_pipelines;
   if (can_prewarm) {
     for (const PipelineRecord& record : cache_file_.loaded()) {
       if (!QueuePrewarm(record)) {
@@ -659,7 +660,7 @@ bool GameRenderer::SetPipelineCache(const std::string& path) {
   }
   Logf(LogLevel::kInfo, "rexgpu-native: pipeline cache %s: %zu descriptions, %llu queued, %llu waiting for their shaders%s",
        path.c_str(), cache_file_.loaded().size(), static_cast<unsigned long long>(stats_.prewarm_queued),
-       static_cast<unsigned long long>(stats_.prewarm_deferred), can_prewarm ? "" : " (no prewarm: needs Vulkan with async pipelines)");
+       static_cast<unsigned long long>(stats_.prewarm_deferred), can_prewarm ? "" : " (no prewarm: needs async pipelines)");
   return opened;
 }
 
