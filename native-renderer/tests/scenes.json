@@ -100,11 +100,21 @@
   },
   "chap04": {
    "from": "menu",
-   "script": "12:A,18:A,24:A,30.0:RIGHT,30.6:RIGHT,31.2:RIGHT,31.8:RIGHT,34.4:A,54.4:START,58.4:START,62.4:START,66.4:START,70.4:START,74.4:START,78.4:B,80.4:B"
+   "script": "12:A,18:A,24:A,30.0:RIGHT,30.6:RIGHT,31.2:RIGHT,31.8:RIGHT,34.4:A,54.4:START,58.4:START,62.4:START,66.4:START,70.4:START,74.4:START,78.4:B,80.4:B",
+   "frame_log": {
+    "scene": "chap04",
+    "at": 121.0,
+    "frames": 2
+   }
   },
   "chap12": {
    "from": "menu",
-   "script": "12:A,18:A,24:A,30.0:RIGHT,30.6:RIGHT,31.2:RIGHT,31.8:RIGHT,32.4:RIGHT,33.0:RIGHT,33.6:RIGHT,34.2:RIGHT,34.8:RIGHT,35.4:RIGHT,36.0:RIGHT,36.6:RIGHT,39.2:A,59.2:START,63.2:START,67.2:START,71.2:START,75.2:START,79.2:START,83.2:B,85.2:B"
+   "script": "12:A,18:A,24:A,30.0:RIGHT,30.6:RIGHT,31.2:RIGHT,31.8:RIGHT,32.4:RIGHT,33.0:RIGHT,33.6:RIGHT,34.2:RIGHT,34.8:RIGHT,35.4:RIGHT,36.0:RIGHT,36.6:RIGHT,39.2:A,59.2:START,63.2:START,67.2:START,71.2:START,75.2:START,79.2:START,83.2:B,85.2:B",
+   "frame_log": {
+    "scene": "chap12",
+    "at": 126.0,
+    "frames": 2
+   }
   },
   "chap20": {
    "from": "menu",
@@ -226,7 +236,9 @@
     "step": 0.1
    },
    "thresholds": {
-    "min_pass": 0.66
+    "min_pass": 0.66,
+    "tile_mae": 5.0,
+    "ssim": 0.985
    }
   },
   {
