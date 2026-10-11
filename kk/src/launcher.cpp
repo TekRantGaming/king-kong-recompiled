@@ -1340,7 +1340,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
       copy_total = 6.3e9f;
       copied = copy_total * 0.37f;
       art_fraction = 0.6f;
-      if (!native_pack_.Busy()) shaders_total = 4796, shaders_done = 2158, shader_fraction = 0.45f;
+      if (!native_pack_.Busy()) shaders_total = 4794, shaders_done = 2157, shader_fraction = 0.45f;
     }
 #endif
 

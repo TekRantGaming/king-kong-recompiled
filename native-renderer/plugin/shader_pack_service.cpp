@@ -1,5 +1,6 @@
 #include "plugin/shader_pack_service.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
