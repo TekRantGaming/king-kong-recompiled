@@ -1,4 +1,4 @@
-﻿# Third-party code
+# Third-party code
 
 Vendored copies (exported with `git archive`, no `.git` data), each with its own licence file.
 
@@ -62,3 +62,8 @@ Changes we make to vendored code are kept as small as possible and listed here:
   it back; the native renderer's `--native_vk_pipeline_cache` keeps it in a file (`backend/vk_pipeline_cache.*`,
   docs/backend.md, "The driver's pipeline cache"). Without the field (VK_NULL_HANDLE, the default) the device does
   what it always did.
+- `nvrhi/src/d3d12/d3d12-backend.h`, `nvrhi/src/d3d12/d3d12-resource-bindings.cpp` (Phase 2c, the render thread): the
+  root signature cache (`DeviceResources::rootsigCache`) is locked (`rootsigCacheMutex`, recursive) in
+  `Device::getRootSignature` and `RootSignature::~RootSignature`, so D3D12 pipelines can be made on several
+  threads (the game renderer's pipeline workers) as on Vulkan. Before it, the renderer made D3D12 pipelines on the
+  draw thread.

@@ -813,6 +813,8 @@ namespace nvrhi::d3d12
         
         hash_combine(hash, allowInputLayout ? 1u : 0u);
         
+        std::lock_guard<std::recursive_mutex> lock(m_Resources.rootsigCacheMutex);  // KK: see thirdparty/NOTES.md
+
         // Get a cached RS and AddRef it (if it exists)
         RefCountPtr<RootSignature> rootsig = m_Resources.rootsigCache[hash];
 
@@ -832,6 +834,7 @@ namespace nvrhi::d3d12
     RootSignature::~RootSignature()
     {
         // Remove the root signature from the cache
+        std::lock_guard<std::recursive_mutex> lock(m_Resources.rootsigCacheMutex);  // KK: see thirdparty/NOTES.md
         const auto it = m_Resources.rootsigCache.find(hash);
         if (it != m_Resources.rootsigCache.end())
             m_Resources.rootsigCache.erase(it);

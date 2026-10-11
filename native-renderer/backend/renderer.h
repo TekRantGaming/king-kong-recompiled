@@ -25,7 +25,7 @@ namespace nr {
 
 class GameRenderer;
 
-// device->createGraphicsPipeline, one at a time on D3D12 (NVRHI's D3D12 root signature cache has no lock).
+// device->createGraphicsPipeline: every pipeline of the renderer is made through it (renderer.cpp).
 nvrhi::GraphicsPipelineHandle CreateGraphicsPipeline(nvrhi::IDevice* device, const nvrhi::GraphicsPipelineDesc& desc,
                                                      const nvrhi::FramebufferInfo& framebuffer);
 

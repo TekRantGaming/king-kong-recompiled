@@ -29,13 +29,11 @@ class GameRenderer {
 
 namespace nr {
 
-// NVRHI's D3D12 backend keeps its root signatures in a cache without a lock: on D3D12 one pipeline is
-// made at a time (the workers, and the render thread's own blits and clears), still off the draws' thread.
+// Every pipeline of the renderer is made here. On D3D12 NVRHI's root signature cache had no lock, so this made
+// one pipeline at a time; the vendored NVRHI now locks the cache (thirdparty/NOTES.md, Phase 2c) and the
+// workers make D3D12 pipelines in parallel as on Vulkan.
 nvrhi::GraphicsPipelineHandle CreateGraphicsPipeline(nvrhi::IDevice* device, const nvrhi::GraphicsPipelineDesc& desc,
                                                      const nvrhi::FramebufferInfo& framebuffer) {
-  if (device->getGraphicsAPI() != nvrhi::GraphicsAPI::D3D12) return device->createGraphicsPipeline(desc, framebuffer);
-  static std::mutex mutex;
-  std::lock_guard lock(mutex);
   return device->createGraphicsPipeline(desc, framebuffer);
 }
 

@@ -571,7 +571,7 @@ void GameRenderer::PipelineWorker() {
 nvrhi::GraphicsPipelineHandle GameRenderer::CreatePipeline(const nvrhi::GraphicsPipelineDesc& desc,
                                                            const nvrhi::FramebufferInfo& framebuffer) {
   std::shared_lock lock(creation_mutex_);
-  nvrhi::GraphicsPipelineHandle p = CreateGraphicsPipeline(device_, desc, framebuffer);  // one at a time on D3D12
+  nvrhi::GraphicsPipelineHandle p = CreateGraphicsPipeline(device_, desc, framebuffer);
   if (p && driver_cache_) driver_cache_new_.fetch_add(1, std::memory_order_relaxed);
   return p;
 }
@@ -751,7 +751,7 @@ bool GameRenderer::LoadPipelineList(const std::string& path) {
   std::lock_guard lock(cache_mutex_);
   const uint64_t queued = stats_.prewarm_queued, deferred = stats_.prewarm_deferred,
                  other = stats_.prewarm_other_kind;
-  const bool can_prewarm = options_.async_pipelines;  // on D3D12 made one at a time (CreateGraphicsPipeline)
+  const bool can_prewarm = options_.async_pipelines;
   if (can_prewarm) {
     for (const PipelineRecord& record : records) QueueOrDefer(record);
     deferred_shader_count_ = shaders_->created_count();
