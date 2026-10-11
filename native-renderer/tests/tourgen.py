@@ -257,7 +257,9 @@ def make_tour() -> dict:
         run = f"tour{chr(ord('A') + b)}"
         script, out = build_batch(chapters, lambda i: MOMENTS[i])
         log_idx = next((i for i in chapters if i in FRAME_LOG), chapters[0])
-        run_def = {"from": "menu", "script": script}
+        # A freeze (the game once stopped drawing for 23 s just after the save menu opened) would otherwise
+        # make every later press miss its screen.
+        run_def = {"from": "menu", "script": script, "env": {"KK_DEV_FREEZE_SKIP": "10"}}
         for idx, start, times, golden in out:
             m = MOMENTS[idx]
             if idx == log_idx:
