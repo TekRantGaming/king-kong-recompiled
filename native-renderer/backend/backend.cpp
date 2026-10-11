@@ -276,8 +276,8 @@ nvrhi::IMessageCallback* GetMessageCallback() {
   return &callback;
 }
 
-// Submits closed command lists in order on a thread of its own. At most two wait (the renderer
-// keeps three frame lists in turn, so the one it opens next has been submitted).
+// Submits closed command lists in order on a thread of its own. At most three wait (the renderer
+// keeps four frame lists in turn, so the one it opens next has been submitted).
 class Backend::Submitter {
  public:
   explicit Submitter(HostDevice& host) : host_(host), thread_([this] { Run(); }) {}
@@ -291,7 +291,7 @@ class Backend::Submitter {
   }
   void Enqueue(nvrhi::ICommandList* list) {
     std::unique_lock lock(mutex_);
-    done_cv_.wait(lock, [&] { return pending_.size() + busy_ < 2; });
+    done_cv_.wait(lock, [&] { return pending_.size() + busy_ < 3; });
     pending_.emplace_back(list);
     cv_.notify_one();
   }

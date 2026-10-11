@@ -12,7 +12,7 @@ namespace {
 thread_local const GuestSnapshot* t_snapshot = nullptr;
 
 // How far the game may run ahead of the render thread: two frames, or this many calls.
-constexpr uint32_t kMaxQueuedPresents = 2;
+constexpr uint32_t kMaxQueuedPresents = 1;
 constexpr size_t kMaxQueuedCommands = 8000;
 
 // The parts of the device the renderer reads (guest_device.h): fetch, float, bool and loop constants;
@@ -94,7 +94,8 @@ void ThreadedSink::CaptureDevice(GuestSnapshot& s, uint32_t device) {
       }
     }
     if (!copy) copy = new std::vector<uint8_t>(dev::kSize);
-    std::memcpy(copy->data(), live, dev::kSize);
+    // Only the parts the renderer reads (the rest of a pooled copy is stale and never read).
+    for (const auto& r : kReadRanges) std::memcpy(copy->data() + r[0], live + r[0], r[1] - r[0]);
     last_device_ = std::shared_ptr<const std::vector<uint8_t>>(copy, [pool = device_pool_](const std::vector<uint8_t>* p) {
       std::lock_guard lock(pool->mutex);
       pool->free.push_back(const_cast<std::vector<uint8_t>*>(p));
