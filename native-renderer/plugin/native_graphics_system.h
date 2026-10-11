@@ -77,6 +77,9 @@ class NativeGraphicsSystem final : public rex::system::IGraphicsSystem {
   HostApi api() const { return api_; }
   rex::memory::Memory* memory() const { return memory_; }
   Backend* backend() const { return backend_.get(); }
+  // --native_render_thread: waits until the renderer has run the calls of 	icket (the ring
+  // skimmer, before a fence, swap or interrupt).
+  void WaitForRenderer(uint64_t ticket);
   bool guest_gpu_ready() const { return guest_gpu_ready_.load(); }
 
  private:

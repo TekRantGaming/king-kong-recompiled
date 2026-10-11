@@ -96,6 +96,12 @@ REXCVAR_DEFINE_BOOL(native_dynamic_vertex_buffers, false, "Native renderer",
                     "uploads the vertices it reads (no write fault per page and frame)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_BOOL(native_render_thread, false, "Native renderer",
+                    "Draw on a thread of the renderer's own, as the Xenos plugin's command processor does: "
+                    "the game's thread only copies each call's state, and the guest GPU's fences wait for "
+                    "the renderer (the game's timing then follows the Xenos plugin's)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_BOOL(native_async_present, false, "Native renderer",
                     "Hand each frame to the presenter from a thread of its own, so the guest GPU's command "
                     "stream (and the game waiting on it) does not wait for the presenter")

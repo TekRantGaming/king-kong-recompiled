@@ -24,6 +24,7 @@
 #include "backend/draw_state.h"
 #include "backend/guest_memory.h"
 #include "backend/host_device.h"
+#include "backend/render_thread.h"
 #include "backend/renderer.h"
 
 namespace rex::memory {
@@ -61,6 +62,7 @@ struct GameSettings {
   bool async_pipelines = true;
   bool pipeline_wait = false;  // see GameRenderer::Options
   bool dynamic_vertex_buffers = false;
+  bool render_thread = false;  // --native_render_thread (render_thread.h)
   int32_t anisotropic_override = -1;
   uint32_t fxaa = 0;
   double pipeline_wait_budget_ms = 30.0;
@@ -95,15 +97,25 @@ class Backend {
                uint32_t frontbuffer_height, uint32_t display_width, uint32_t display_height);
   void set_async_present(bool on);
 
+  // --native_render_thread: the calls queued so far, and a wait until the render thread has run
+  // them (0 and nothing without it).
+  uint64_t RenderTicket() const { return threaded_ ? threaded_->Ticket() : 0; }
+  void WaitRendered(uint64_t ticket) {
+    if (threaded_) threaded_->WaitDone(ticket);
+  }
+
  private:
   std::unique_ptr<HostDevice> host_;
   RuntimeGuestMemory guest_memory_;
+  // What the game renderer reads objects through: the render thread's copies first.
+  SnapshotGuestMemory snapshot_memory_{guest_memory_};
   rex::memory::Memory* memory_;
   std::unique_ptr<ShaderLibrary> shaders_;
   void* invalidation_handle_ = nullptr;
   std::unique_ptr<Renderer> renderer_;
   std::unique_ptr<DrawSink> sink_;  // the renderer, under mutex_
   std::unique_ptr<DrawTracker> draws_;
+  std::unique_ptr<ThreadedSink> threaded_;  // between draws_ and sink_ with --native_render_thread
   TestPicture test_picture_ = TestPicture::kTriangle;
   // The renderer is used from the game's thread (hooks) and the skimmer's
   // (swap): one at a time.

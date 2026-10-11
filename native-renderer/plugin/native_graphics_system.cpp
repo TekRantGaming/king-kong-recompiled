@@ -66,6 +66,7 @@ REXCVAR_DECLARE(bool, native_present_unlocked);
 REXCVAR_DECLARE(bool, native_async_submit);
 REXCVAR_DECLARE(bool, native_async_present);
 REXCVAR_DECLARE(bool, native_dynamic_vertex_buffers);
+REXCVAR_DECLARE(bool, native_render_thread);
 
 namespace {
 // <title id>.pipelines, or game.pipelines when the title is not known (a folder from the cvar).
@@ -257,6 +258,7 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
   game.async_pipelines = REXCVAR_GET(native_async_pipelines);
   game.pipeline_wait = REXCVAR_GET(native_pipeline_wait);
   game.dynamic_vertex_buffers = REXCVAR_GET(native_dynamic_vertex_buffers);
+  game.render_thread = REXCVAR_GET(native_render_thread);
   {
     // The launcher's texture filtering (defined by the runtime / Xenos plugin; absent: the game's own).
     const std::string aniso = rex::cvar::GetFlagByName("anisotropic_override");
@@ -451,7 +453,8 @@ void NativeGraphicsSystem::WriteRegister(uint32_t addr, uint32_t value) {
   switch (r) {
     case 0x01C5:  // CP_RB_WPTR
       if (skimmer_) {
-        skimmer_->UpdateWritePointer(value);
+        // The renderer's calls queued so far precede every packet of this kick (render thread).
+        skimmer_->UpdateWritePointer(value, backend_ ? backend_->RenderTicket() : 0);
       }
       break;
     case 0x1844:  // AVIVO_D1GRPH_PRIMARY_SURFACE_ADDRESS
@@ -497,6 +500,10 @@ void NativeGraphicsSystem::DispatchInterruptCallback(uint32_t source, uint32_t c
   thread->SetActiveCpu(uint8_t(cpu));
   uint64_t args[] = {source, interrupt_callback_data_};
   function_dispatcher_->ExecuteInterrupt(thread->thread_state(), interrupt_callback_, args, 2);
+}
+
+void NativeGraphicsSystem::WaitForRenderer(uint64_t ticket) {
+  if (backend_ && ticket) backend_->WaitRendered(ticket);
 }
 
 void NativeGraphicsSystem::MarkVblank() {

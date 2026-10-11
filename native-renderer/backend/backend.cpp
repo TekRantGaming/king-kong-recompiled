@@ -412,7 +412,7 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
     physical.base = memory_->TranslatePhysical(0);
     physical.size = 0x20000000;
     physical.origin = 0;
-    auto renderer = std::make_unique<GameRenderer>(host_->device(), guest_memory_, physical, shaders_.get());
+    auto renderer = std::make_unique<GameRenderer>(host_->device(), snapshot_memory_, physical, shaders_.get());
     renderer->options().render_scale_x = scale.x;
     renderer->options().render_scale_y = scale.y;
     renderer->options().shadow_scale = shadow_scale;
@@ -468,7 +468,21 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
 #endif
     sink_ = std::move(sink);
   }
-  draws_ = std::make_unique<DrawTracker>(guest_memory_, sink_.get());
+  DrawSink* sink = sink_.get();
+  if (game.render_thread) {
+    threaded_ = std::make_unique<ThreadedSink>(*sink_, guest_memory_);
+#if NR_GAME_RENDERER
+    // The library patches a shader's microcode again for the next declaration: hashed at once.
+    if (GameRenderer* g = renderer_->game()) {
+      threaded_->on_patched = [g](uint32_t shader, uint32_t microcode, uint32_t declaration) {
+        g->VertexShaderPatched(shader, microcode, declaration);
+      };
+    }
+#endif
+    sink = threaded_.get();
+    REXLOG_INFO("rexgpu-native: render thread on");
+  }
+  draws_ = std::make_unique<DrawTracker>(guest_memory_, sink);
   draws_->set_find_wvp(renderer_->game() == nullptr);
   REXGPU_INFO("rexgpu-native: NVRHI renderer ready ({}x{})", width, height);
   return true;
@@ -503,6 +517,7 @@ void Backend::set_async_submit(bool on) {
 Backend::~Backend() { Shutdown(); }
 
 void Backend::Shutdown() {
+  threaded_.reset();  // runs what is queued
   present_thread_.reset();
   submitter_.reset();  // submits what waits
   if (invalidation_handle_) {
@@ -575,6 +590,14 @@ void Backend::PresentNow(rex::ui::Presenter* presenter, uint32_t frontbuffer_wid
           g_swap_refresh_us.load() / 1000);
     }
 #endif
+    if (threaded_) {
+      const ThreadedSink::Stats t = threaded_->stats();
+      REXLOG_INFO(
+          "rexgpu-native: render thread: {} calls ({} device copies), at most {} waiting; game thread {} ms "
+          "copying, {} ms waiting for room; ring skimmer waited {} times, {} ms",
+          t.commands, t.device_copies, t.max_backlog, t.enqueue_us / 1000, t.backpressure_us / 1000, t.fence_waits,
+          t.fence_wait_us / 1000);
+    }
     {
       std::lock_guard frames_lock(g_frames_mutex);
       std::string text;

@@ -395,6 +395,7 @@ class GameRenderer {
   // The library keeps a patched copy per (shader, declaration, strides) and patches again only for
   // a new combination, so the hash is kept per combination (VertexShaderPatched).
   std::unordered_map<uint64_t, uint64_t> patched_vs_hash_;
+  std::mutex patched_mutex_;  // the hook's thread writes it, the render thread reads it
   uint64_t pending_vs_key_ = 0;
   std::unique_ptr<FrameLog> frame_log_;
   std::unordered_map<uint64_t, uint64_t> patched_hashes_;
