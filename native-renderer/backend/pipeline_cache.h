@@ -87,6 +87,33 @@ bool ReadPipelineList(const std::string& path, std::vector<PipelineRecord>& reco
 bool WritePipelineList(const std::string& path, const std::vector<PipelineRecord>& records,
                        std::string* error = nullptr);
 
+// Merges pipeline files into one list (the nr_pipelines tool): every record once, in the order first
+// seen, so the first input's pipelines are made first at start.
+class PipelineListMerger {
+ public:
+  struct Input {
+    std::string path;
+    bool read = false;       // a pipeline file of this version
+    std::string note;        // why it was not read ("absent" when it does not exist)
+    size_t records = 0;      // whole records in it
+    size_t added = 0;        // new to the list
+    size_t duplicates = 0;   // already in the list
+    size_t debug = 0;        // drawn with --native_flip_front_face (a debugging aid): left out
+    size_t torn_bytes = 0;   // an incomplete last record, left out
+  };
+  // keep_debug: also keep the records of runs with flipped faces.
+  explicit PipelineListMerger(bool keep_debug = false) : keep_debug_(keep_debug) {}
+  Input Add(const std::string& path);
+  // Adds records that are not files (tests).
+  size_t AddRecords(const std::vector<PipelineRecord>& records);
+  const std::vector<PipelineRecord>& records() const { return records_; }
+
+ private:
+  bool keep_debug_;
+  std::vector<PipelineRecord> records_;
+  std::unordered_set<uint64_t> keys_;
+};
+
 class PipelineCacheFile {
  public:
   PipelineCacheFile() = default;

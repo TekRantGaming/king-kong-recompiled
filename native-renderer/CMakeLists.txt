@@ -24,6 +24,7 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 option(NR_BUILD_TESTS "Build the native renderer tests" ${NR_STANDALONE})
 option(NR_BUILD_PLUGIN "Build rexgpu-native (needs the ReXGlue SDK)" ON)
+option(NR_BUILD_TOOLS "Build the native renderer tools (nr_pipelines)" ${NR_STANDALONE})
 
 set(NR_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 
@@ -42,6 +43,10 @@ add_subdirectory(backend)
 add_subdirectory(hooks)
 if(NR_BUILD_PLUGIN)
     add_subdirectory(plugin)
+endif()
+
+if(NR_BUILD_TOOLS OR NR_BUILD_TESTS)
+    add_subdirectory(tools)
 endif()
 
 if(NR_BUILD_TESTS)

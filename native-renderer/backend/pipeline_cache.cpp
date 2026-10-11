@@ -89,6 +89,42 @@ bool WritePipelineList(const std::string& path, const std::vector<PipelineRecord
   return ok;
 }
 
+PipelineListMerger::Input PipelineListMerger::Add(const std::string& path) {
+  Input in;
+  in.path = path;
+  std::vector<PipelineRecord> records;
+  in.read = ReadPipelineList(path, records, &in.note, &in.torn_bytes);
+  if (!in.read) {
+    std::error_code ec;
+    if (in.note.empty()) in.note = std::filesystem::exists(path, ec) ? "cannot be read" : "absent";
+    return in;
+  }
+  in.records = records.size();
+  for (const PipelineRecord& r : records) {
+    if ((r.flags & kRecordFlipFrontFace) && !keep_debug_) {
+      ++in.debug;
+    } else if (keys_.insert(PipelineKey(r)).second) {
+      records_.push_back(r);
+      ++in.added;
+    } else {
+      ++in.duplicates;
+    }
+  }
+  return in;
+}
+
+size_t PipelineListMerger::AddRecords(const std::vector<PipelineRecord>& records) {
+  size_t added = 0;
+  for (const PipelineRecord& r : records) {
+    if ((r.flags & kRecordFlipFrontFace) && !keep_debug_) continue;
+    if (keys_.insert(PipelineKey(r)).second) {
+      records_.push_back(r);
+      ++added;
+    }
+  }
+  return added;
+}
+
 bool PipelineCacheFile::Open(const std::string& path) {
   Close();
   loaded_.clear();
