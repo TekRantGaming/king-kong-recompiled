@@ -72,6 +72,52 @@ bool HttpGet(const std::string& url, std::vector<uint8_t>& out, std::atomic<uint
   WinHttpCloseHandle(session);
   return ok;
 }
+
+bool HttpPost(const std::string& url, const std::string& json, std::vector<uint8_t>& out) {
+  URL_COMPONENTSW parts{};
+  parts.dwStructSize = sizeof(parts);
+  wchar_t host[256], path[2048];
+  parts.lpszHostName = host;
+  parts.dwHostNameLength = 256;
+  parts.lpszUrlPath = path;
+  parts.dwUrlPathLength = 2048;
+  const std::wstring wurl(url.begin(), url.end());
+  if (!WinHttpCrackUrl(wurl.c_str(), 0, 0, &parts)) return false;
+  HINTERNET session = WinHttpOpen(L"KingKongRecomp/" KK_VERSION_W, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                                  WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+  if (!session) return false;
+  WinHttpSetTimeouts(session, 10000, 10000, 10000, 10000);
+  bool ok = false;
+  if (HINTERNET conn = WinHttpConnect(session, host, parts.nPort, 0)) {
+    const DWORD secure = parts.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0;
+    if (HINTERNET req = WinHttpOpenRequest(conn, L"POST", path, nullptr, WINHTTP_NO_REFERER,
+                                           WINHTTP_DEFAULT_ACCEPT_TYPES, secure)) {
+      DWORD code = 0, len = sizeof(code);
+      if (WinHttpSendRequest(req, L"Content-Type: application/json\r\n", DWORD(-1),
+                             const_cast<char*>(json.data()), DWORD(json.size()), DWORD(json.size()), 0) &&
+          WinHttpReceiveResponse(req, nullptr) &&
+          WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, nullptr, &code, &len,
+                              nullptr) &&
+          code == 200) {
+        ok = true;
+        for (DWORD avail = 0; WinHttpQueryDataAvailable(req, &avail) && avail;) {
+          const size_t at = out.size();
+          out.resize(at + avail);
+          DWORD read = 0;
+          if (!WinHttpReadData(req, out.data() + at, avail, &read)) {
+            ok = false;
+            break;
+          }
+          out.resize(at + read);
+        }
+      }
+      WinHttpCloseHandle(req);
+    }
+    WinHttpCloseHandle(conn);
+  }
+  WinHttpCloseHandle(session);
+  return ok;
+}
 #else
 // Linux: through curl (on SteamOS, Bazzite and the usual desktop distributions).
 bool HttpGet(const std::string& url, std::vector<uint8_t>& out, std::atomic<uint64_t>* bytes,
@@ -92,6 +138,13 @@ bool HttpGet(const std::string& url, std::vector<uint8_t>& out, std::atomic<uint
     }
   }
   return RunCapture({"curl", "-sSfL", "-A", agent, url}, out, bytes);
+}
+
+bool HttpPost(const std::string& url, const std::string& json, std::vector<uint8_t>& out) {
+  const std::string agent = "KingKongRecomp/" KK_VERSION;
+  return RunCapture({"curl", "-sSf", "-m", "10", "-A", agent, "-H", "Content-Type: application/json", "--data-binary",
+                     json, url},
+                    out);
 }
 #endif
 

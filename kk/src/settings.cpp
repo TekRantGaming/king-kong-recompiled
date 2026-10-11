@@ -17,6 +17,11 @@ REXCVAR_DEFINE_BOOL(kk_launcher, true, "KK",
 REXCVAR_DEFINE_BOOL(kk_skip_launcher, false, "KK",
                     "Internal: skip the launcher once (used when it relaunches the game)");
 REXCVAR_DEFINE_BOOL(kk_check_updates, true, "KK", "Check GitHub for a newer version when the launcher opens");
+REXCVAR_DEFINE_BOOL(kk_online_count, true, "KK",
+                    "Show how many people are playing, with an anonymous check-in every 5 minutes (see online.h)");
+REXCVAR_DEFINE_BOOL(kk_online_asked, false, "KK", "Internal: the launcher has asked about the online player count");
+REXCVAR_DEFINE_STRING(kk_install_id, "", "KK",
+                      "Internal: the random ID the online player count checks in with (deleted when it's off)");
 REXCVAR_DEFINE_STRING(kk_update_channel, "stable", "KK",
                       "Which versions the launcher offers: stable, or beta (test builds of what's coming next)")
     .allowed({"stable", "beta"});
