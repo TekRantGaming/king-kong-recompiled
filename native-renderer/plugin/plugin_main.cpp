@@ -55,8 +55,10 @@ REXCVAR_DEFINE_BOOL(native_game, true, "Native renderer",
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_STRING(native_shader_pack, "", "Native renderer",
-                      "The translated shader pack (kkshaders db-build). Empty: kkshaders-spirv.pack "
-                      "(Vulkan) or kkshaders-dxil.pack (D3D12), else kkshaders.pack, beside the game")
+                      "The translated shader pack. Empty: kkshaders-spirv.pack (Vulkan) or "
+                      "kkshaders-dxil.pack (D3D12) in <cache root>/native-shaders, where the launcher "
+                      "builds it from the game's files, else beside the game (kkshaders db-build), else "
+                      "every shader is compiled with DXC on first use")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_STRING(native_dxc, "", "Native renderer",

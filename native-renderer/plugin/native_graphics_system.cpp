@@ -41,6 +41,9 @@
 #include "backend/draw_state.h"
 #include "backend/host_device.h"
 #include "plugin/ring_skimmer.h"
+#if NR_GAME_RENDERER
+#include "plugin/shader_pack_service.h"
+#endif
 
 REXCVAR_DECLARE(bool, native_draws);
 REXCVAR_DECLARE(bool, native_log_packets);
@@ -97,15 +100,12 @@ std::filesystem::path ExecutableFolder() {
 #endif
 }
 
+// --native_shader_pack. Without it the pack is looked for once the cache root is known
+// (InitializeShaderStorage, before the game creates its first shader): the user's cache, then
+// beside the game (plugin/shader_pack_service.h).
 std::string FindShaderPack(bool vulkan) {
-  std::string wanted = REXCVAR_GET(native_shader_pack);
-  if (!wanted.empty()) return wanted;
-  const std::filesystem::path folder = ExecutableFolder();
-  for (const char* name : {vulkan ? "kkshaders-spirv.pack" : "kkshaders-dxil.pack", "kkshaders.pack"}) {
-    std::error_code ec;
-    if (std::filesystem::exists(folder / name, ec)) return (folder / name).string();
-  }
-  return {};
+  (void)vulkan;
+  return REXCVAR_GET(native_shader_pack);
 }
 
 }  // namespace
@@ -268,21 +268,14 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
   game.pipeline_wait_budget_ms = REXCVAR_GET(native_pipeline_wait_budget_ms);
   if (const char* frame_log = std::getenv("REX_DEV_FRAME_LOG")) game.frame_log = frame_log;
   game.render_scale = REXCVAR_GET(native_render_scale);
+#if NR_GAME_RENDERER
   if (game.render_scale == "auto") {
-    // The scale the Xenos plugin would draw at (the runtime's rule, as kk/src/settings.cpp logs it):
-    // resolution_scale when the player set it and the axis was left alone, else the axis, whose
-    // default the launcher's render quality preset sets.
-    auto axis = [](const char* name) {
-      std::string v = rex::cvar::HasNonDefaultValue("resolution_scale") && !rex::cvar::HasNonDefaultValue(name)
-                          ? rex::cvar::GetFlagByName("resolution_scale")
-                          : rex::cvar::GetFlagByName(name);
-      const int n = std::atoi(v.c_str());
-      return n >= 1 && n <= 8 ? n : 1;
-    };
-    const int x = axis("draw_resolution_scale_x"), y = axis("draw_resolution_scale_y");
-    game.render_scale = std::to_string(1280 * x) + "x" + std::to_string(720 * y);
-    REXGPU_INFO("rexgpu-native: render scale auto: {}x{} (the draw resolution scale)", x, y);
+    // The port's draw resolution scale (shader_pack_service.cpp; the launcher's shader pack
+    // build decides the same way whether the pack needs the render scale aware shaders).
+    game.render_scale = ResolvedRenderScale();
+    REXGPU_INFO("rexgpu-native: render scale auto: {} (the draw resolution scale)", game.render_scale);
   }
+#endif
   game.shadow_scale = float(REXCVAR_GET(native_shadow_scale));
   // Ambient occlusion: the Xenos plugin's own settings (ao_mode 0 off, 1 on, 2 AO only; ao_strength
   // 1 to 3), looked up by name at every use. They are defined by rexgpu-xenos, which the launcher
@@ -370,6 +363,22 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
 void NativeGraphicsSystem::InitializeShaderStorage(const std::filesystem::path& cache_root, uint32_t title_id,
                                                    bool blocking) {
   (void)blocking;
+#if NR_GAME_RENDERER
+  // The shader pack (unless --native_shader_pack named one): the user's cache, where the launcher
+  // builds it from the player's game files, else beside the game, else every shader is compiled
+  // with DXC when the game creates it.
+  if (backend_ && REXCVAR_GET(native_game) && !backend_->has_shader_pack() && REXCVAR_GET(native_shader_pack).empty()) {
+    std::string where;
+    const std::string pack = FindShaderPackForRun(cache_root, api_ == HostApi::kVulkan, &where);
+    if (!pack.empty() && backend_->OpenShaderPack(pack)) {
+      REXGPU_INFO("rexgpu-native: shader pack from {}: {}", where, pack);
+    } else {
+      REXGPU_WARN("rexgpu-native: no shader pack{} (the launcher builds it into {}): shaders are compiled with "
+                  "DXC on first use",
+                  pack.empty() ? "" : " that opens", (cache_root / kkshaders::kPackFolderName).string());
+    }
+  }
+#endif
   if (!REXCVAR_GET(native_pipeline_cache) || !pipeline_cache_path_.empty()) return;
   pipeline_cache_path_ = (cache_root / "native-pipelines" / PipelineCacheFileName(title_id)).string();
   if (backend_) backend_->SetPipelineCache(pipeline_cache_path_);
