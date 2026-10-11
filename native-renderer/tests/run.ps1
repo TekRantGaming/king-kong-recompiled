@@ -31,7 +31,9 @@ param(
   [switch]$NoCompare,
   [switch]$NoFrameLog,
   # Extra game arguments for every launch (for example --native_dump_frame=200).
-  [string[]]$ExtraArgs = @()
+  [string[]]$ExtraArgs = @(),
+  # Another scene file than tests/scenes.json (probes for new scenes).
+  [string]$ScenesFile = ''
 )
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -55,6 +57,7 @@ New-Item -ItemType Directory -Force $root | Out-Null
 if (-not $Label) { $Label = "$Plugin $stamp" }
 
 function Invoke-Py([string[]]$PyArgs) {
+  if ($ScenesFile) { $PyArgs = @('--scenes-file', $ScenesFile) + $PyArgs }
   $out = & $Python -I $compare @PyArgs
   return @{ code = $LASTEXITCODE; out = ($out -join "`n") }
 }

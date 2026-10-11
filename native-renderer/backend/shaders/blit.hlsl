@@ -81,8 +81,9 @@ float4 Fxaa(int2 p, uint steps) {
   const float hi = max(max(max(ln, ls), max(le, lw)), lm);
   const float lo = min(min(min(ln, ls), min(le, lw)), lm);
   const float range = hi - lo;
-  // Flat enough: leave it (relative threshold 1/8, absolute 1/24 for the darks).
-  if (range < max(0.0833, hi * 0.125)) return centre;
+  // Flat enough: leave it (FXAA 3.11's lowest thresholds: relative 0.063, absolute 0.0312; the Xenos
+  // plugin's FXAA changes about four times the pixels the default thresholds do).
+  if (range < max(0.0312, hi * 0.063)) return centre;
   const float lnw = FxaaLuma(FxaaTexel(p + int2(-1, -1)).rgb);
   const float lne = FxaaLuma(FxaaTexel(p + int2(1, -1)).rgb);
   const float lsw = FxaaLuma(FxaaTexel(p + int2(-1, 1)).rgb);
