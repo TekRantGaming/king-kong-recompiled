@@ -10,6 +10,7 @@
 #include <rex/ui/immediate_drawer.h>
 
 #include "art.h"
+#include "glyphs.h"
 #include "launcher_text.h"
 #include "platform.h"
 #include "toast.h"
@@ -162,6 +163,7 @@ void Input::Inject(Action a, Device d) {
   pressed_[size_t(a)] = true;
   device_ = d;
   if (d != Device::kKeyboard) pad_device_ = d;
+  if (d != Device::kKeyboard) pad_style_ = d == Device::kPlayStation ? "ps5" : "xbox360";
 }
 
 void Input::UpdateGamepads(double now) {
@@ -230,6 +232,7 @@ void Input::UpdateGamepads(double now) {
       const SDL_GamepadType type = SDL_GetGamepadType(g);
       const bool ps = type == SDL_GAMEPAD_TYPE_PS3 || type == SDL_GAMEPAD_TYPE_PS4 || type == SDL_GAMEPAD_TYPE_PS5;
       pad_device_ = device_ = ps ? Device::kPlayStation : Device::kXbox;
+      pad_style_ = PadPromptsFor(type, SDL_GetGamepadName(g));
     }
   }
   // A press the keyboard just reported (typed by Steam for this controller) already counted.

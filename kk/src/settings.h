@@ -22,15 +22,19 @@ REXCVAR_DECLARE(int32_t, kk_frame_rate);
 REXCVAR_DECLARE(std::string, kk_render_quality);
 REXCVAR_DECLARE(std::string, kk_button_prompts);
 REXCVAR_DECLARE(bool, kk_check_updates);
+REXCVAR_DECLARE(std::string, kk_update_channel);
 REXCVAR_DECLARE(bool, kk_show_fps);
 REXCVAR_DECLARE(int32_t, kk_deadzone);
 REXCVAR_DECLARE(int32_t, kk_camera_sensitivity);
 REXCVAR_DECLARE(bool, kk_camera_modern);
 REXCVAR_DECLARE(bool, kk_achievement_toasts);
 REXCVAR_DECLARE(bool, kk_achievement_sound);
+REXCVAR_DECLARE(std::string, kk_achievement_style);
 REXCVAR_DECLARE(std::string, kk_achievement_sound_file);
 REXCVAR_DECLARE(int32_t, kk_achievement_volume);
 REXCVAR_DECLARE(bool, kk_vibration);
+REXCVAR_DECLARE(bool, kk_camera_shake);
+REXCVAR_DECLARE(int32_t, kk_camera_shake_strength);
 REXCVAR_DECLARE(int32_t, kk_vibration_strength);
 REXCVAR_DECLARE(bool, kk_invert_rs_x);
 REXCVAR_DECLARE(bool, kk_invert_rs_y);
@@ -105,6 +109,10 @@ void SetCvarDefault(std::string_view name, std::string_view value);
 
 // Port defaults that differ from ReXGlue's (call before the config is loaded).
 void ApplyPortDefaults();
+
+// The upscaler for this computer's graphics card (present_effect): NVIDIA
+// Image Scaling on an NVIDIA card, AMD FSR 1 on any other or an unknown one.
+std::string DefaultUpscaler();
 // Once the settings file is read: brings one from an older version up to date
 // (keeping the defaults it was made with) and saves it; a new install just
 // gets the current defaults.

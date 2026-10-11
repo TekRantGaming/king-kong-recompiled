@@ -21,6 +21,7 @@
 #include <fstream>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -33,6 +34,8 @@
 #endif
 #include <windows.h>
 #endif
+
+#include <SDL3/SDL.h>
 
 #include <rex/cvar.h>
 #include <rex/filesystem.h>
@@ -382,9 +385,36 @@ std::atomic<bool> g_running{false};
 
 }  // namespace
 
+std::string PadPromptsFor(int sdl_gamepad_type, const char* name) {
+  if (name && std::string_view(name).find("Steam Deck") != std::string_view::npos) return "steam_deck";
+  switch (sdl_gamepad_type) {
+    case SDL_GAMEPAD_TYPE_XBOXONE: return "xbox_series";
+    case SDL_GAMEPAD_TYPE_PS3: return "ps2";
+    case SDL_GAMEPAD_TYPE_PS4:
+    case SDL_GAMEPAD_TYPE_PS5: return "ps5";
+    default: return "xbox360";
+  }
+}
+
+std::string DetectedPadPrompts() {
+  if (!SDL_WasInit(SDL_INIT_GAMEPAD)) return "xbox360";
+  int count = 0;
+  SDL_JoystickID* ids = SDL_GetGamepads(&count);
+  std::string style = "xbox360";
+  if (ids && count > 0) style = PadPromptsFor(SDL_GetGamepadTypeForID(ids[0]), SDL_GetGamepadNameForID(ids[0]));
+  SDL_free(ids);
+  return style;
+}
+
+std::string ButtonPromptStyle() {
+  const std::string style = REXCVAR_GET(kk_button_prompts);
+  return style == "auto" ? DetectedPadPrompts() : style;
+}
+
 void StartButtonPrompts(rex::memory::Memory* memory) {
   uint8_t* physical_membase = memory->physical_membase();
-  const std::string style = REXCVAR_GET(kk_button_prompts);
+  const std::string style = ButtonPromptStyle();
+  REXLOG_INFO("KK: button prompts: {} ({})", style, REXCVAR_GET(kk_button_prompts));
   if (style.empty() || style == "xbox360" || g_running.exchange(true)) return;
   std::thread([memory, physical_membase, style] {
     std::vector<uint8_t> sheet;

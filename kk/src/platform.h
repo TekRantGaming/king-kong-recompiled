@@ -21,6 +21,16 @@ bool IsShiftHeld();
 // Primary monitor resolution in physical pixels.
 std::pair<int, int> PrimaryScreenSize();
 
+// The graphics card the game runs on: the dedicated one when there is one,
+// else the integrated one (Windows' high-performance adapter). Unknown when it
+// can't be told (and on Linux).
+enum class GpuVendor { kUnknown, kNvidia, kAmd, kIntel };
+struct GpuInfo {
+  GpuVendor vendor = GpuVendor::kUnknown;
+  std::string name;
+};
+GpuInfo DetectGpu();
+
 struct MonitorInfo {
   std::string name;
   int width = 0, height = 0;

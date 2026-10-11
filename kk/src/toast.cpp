@@ -35,6 +35,9 @@ namespace {
 // Timeline of one toast, in seconds.
 constexpr double kOrbIn = 0.30, kUnfold = 0.40, kHold = 4.6, kFold = 0.35, kOrbOut = 0.25;
 constexpr double kTotal = kOrbIn + kUnfold + kHold + kFold + kOrbOut;
+// Steam style: slides up, waits, slides down.
+constexpr double kSlide = 0.30, kSteamHold = 4.8;
+constexpr double kSteamTotal = kSlide + kSteamHold + kSlide;
 
 float EaseOutBack(float t) {
   const float c1 = 1.70158f, c3 = c1 + 1.0f;
@@ -279,16 +282,64 @@ void AchievementToast::OnDraw(ImGuiIO& io) {
     if (queue_.empty()) return;
     if (queue_.front().started < 0) {
       queue_.front().started = now;
+      queue_.front().steam = REXCVAR_GET(kk_achievement_style) == "steam";
       PlayAchievementSound(user_dir_);
     }
-    if (now - queue_.front().started > kTotal) {
+    if (now - queue_.front().started > (queue_.front().steam ? kSteamTotal : kTotal)) {
       queue_.pop_front();
       return;
     }
     toast = queue_.front();
   }
-
   const float t = float(now - toast.started);
+  if (toast.steam)
+    DrawSteam(io, toast, t);
+  else
+    DrawXbox(io, toast, t);
+}
+
+// Steam's style: a dark panel in the bottom-right corner with the square icon,
+// sliding up from the edge of the screen.
+void AchievementToast::DrawSteam(ImGuiIO& io, const Toast& toast, float t) {
+  const float s = ImGui::GetFontSize() / 18.0f;
+  const UiFonts& fonts = GetUiFonts();
+  ImFont* regular = fonts.regular ? fonts.regular : ImGui::GetFont();
+  ImFont* semibold = fonts.semibold ? fonts.semibold : regular;
+
+  float shown = 1.0f;
+  if (t < kSlide)
+    shown = EaseInOut(t / float(kSlide));
+  else if (t > kSteamTotal - kSlide)
+    shown = 1.0f - EaseInOut((t - float(kSteamTotal - kSlide)) / float(kSlide));
+
+  const std::string line1 = "Achievement unlocked";
+  const float pad = 12 * s, icon = 56 * s, h = icon + pad * 2;
+  const float text_w = std::max(semibold->CalcTextSizeA(17 * s, FLT_MAX, 0, line1.c_str()).x,
+                                regular->CalcTextSizeA(16 * s, FLT_MAX, 0, toast.title.c_str()).x);
+  const float w = std::clamp(pad + icon + 14 * s + text_w + pad * 1.5f, 300 * s, io.DisplaySize.x * 0.45f);
+  const float margin = 18 * s;
+  const float x0 = io.DisplaySize.x - margin - w;
+  const float y0 = io.DisplaySize.y - (margin + h) * shown;
+  const ImVec2 b0(x0, y0), b1(x0 + w, y0 + h);
+
+  ImDrawList* dl = ImGui::GetForegroundDrawList();
+  dl->AddRectFilled(ImVec2(b0.x - 2 * s, b0.y - 2 * s), ImVec2(b1.x + 4 * s, b1.y + 6 * s), IM_COL32(0, 0, 0, 70), 4 * s);
+  dl->AddRectFilledMultiColor(b0, b1, IM_COL32(52, 60, 74, 250), IM_COL32(52, 60, 74, 250), IM_COL32(26, 31, 40, 250),
+                              IM_COL32(26, 31, 40, 250));
+  dl->AddRect(b0, b1, IM_COL32(255, 255, 255, 26), 0, 0, 1.0f * s);
+  const ImVec2 i0(x0 + pad, y0 + pad), i1(i0.x + icon, i0.y + icon);
+  dl->AddRectFilled(i0, i1, IM_COL32(14, 17, 22, 255));
+  if (auto* tex = Icon(toast.icon_id))
+    dl->AddImage(ImTextureRef(reinterpret_cast<ImTextureID>(tex)), i0, i1);
+  dl->AddRect(i0, i1, IM_COL32(255, 255, 255, 30), 0, 0, 1.0f * s);
+  const float tx = i1.x + 14 * s;
+  dl->PushClipRect(b0, ImVec2(b1.x - pad, b1.y), true);
+  dl->AddText(semibold, 17 * s, ImVec2(tx, y0 + h * 0.5f - 21 * s), IM_COL32(255, 255, 255, 255), line1.c_str());
+  dl->AddText(regular, 16 * s, ImVec2(tx, y0 + h * 0.5f + 2 * s), IM_COL32(170, 180, 192, 255), toast.title.c_str());
+  dl->PopClipRect();
+}
+
+void AchievementToast::DrawXbox(ImGuiIO& io, const Toast& toast, float t) {
   const float s = ImGui::GetFontSize() / 18.0f;
   const UiFonts& fonts = GetUiFonts();
   ImFont* regular = fonts.regular ? fonts.regular : ImGui::GetFont();
