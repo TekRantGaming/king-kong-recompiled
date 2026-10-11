@@ -15,6 +15,9 @@
 // and every frame one row with i = -1 and obj = the world (the frame's dt), so
 // frame pacing and the sum of frame times can be checked too.
 //
+// KK_DEV_SAMPLE_GLOBALS="82D1CDC8,828E8378/i": also writes those guest
+// addresses (floats, or 32-bit integers with /i) every frame to globals.csv.
+//
 // KK_DEV_SAMPLE_DUMP="t1,t2" (same clock): at those times writes the raw bytes
 // of each active object and of the blocks it points to (dump_<t>.txt), to find
 // where things live.
@@ -96,6 +99,40 @@ struct Sampler {
   uint64_t frame = 0;
   double gt = 0;
   uint32_t last_world = 0;
+  // KK_DEV_SAMPLE_GLOBALS="82D1CDC8,82D623E0/i,..." (hex guest addresses; /i
+  // reads a 32-bit integer, else a float): every frame to globals.csv.
+  std::vector<std::pair<uint32_t, bool>> globals = [] {
+    std::vector<std::pair<uint32_t, bool>> out;
+    if (const char* v = std::getenv("KK_DEV_SAMPLE_GLOBALS"); v && *v) {
+      std::stringstream all(v);
+      for (std::string s; std::getline(all, s, ',');)
+        out.push_back({uint32_t(std::stoul(s, nullptr, 16)), s.find("/i") != std::string::npos});
+    }
+    return out;
+  }();
+  FILE* g = nullptr;
+
+  void Globals(const uint8_t* base, double t, float dt) {
+    if (globals.empty()) return;
+    if (!g) {
+      g = std::fopen((OutDir() / "globals.csv").string().c_str(), "w");
+      if (!g) {
+        globals.clear();
+        return;
+      }
+      std::fprintf(g, "t,gt,dt");
+      for (const auto& [a, is_int] : globals) std::fprintf(g, ",%08X", a);
+      std::fprintf(g, "\n");
+    }
+    std::fprintf(g, "%.4f,%.4f,%.5f", t, gt, dt);
+    for (const auto& [a, is_int] : globals) {
+      if (is_int)
+        std::fprintf(g, ",%d", int32_t(Load32(base, a)));
+      else
+        std::fprintf(g, ",%.6g", LoadF(base, a));
+    }
+    std::fprintf(g, "\n");
+  }
   std::unordered_map<uint32_t, uint32_t> keys;
   double keys_at = -100;
 
@@ -200,6 +237,10 @@ struct Sampler {
         f = nullptr;
         REXLOG_INFO("KK dev sample: done");
       }
+      if (g) {
+        std::fclose(g);
+        g = nullptr;
+      }
       range.clear();
       return;
     }
@@ -225,6 +266,7 @@ struct Sampler {
     gt += dt;
     std::fprintf(f, "%.4f,%llu,%.4f,%.5f,-1,%08X,0,0,0,0,0,0,0,0,-1,0,0,0\n", t,
                  static_cast<unsigned long long>(frame), gt, dt, world);
+    Globals(base, t, dt);
     const double interval = range.size() >= 3 ? range[2] : 0.05;
     if (t >= next) {
       Objects(base, world, t, dt, true);
