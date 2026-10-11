@@ -263,6 +263,46 @@ SV_VertexID includes the base vertex on D3D12 as on Vulkan for these draws (the 
 - **Conditional rendering and the occlusion surveys** are ignored: everything is drawn (same picture, more work).
 
 
+## Ambient occlusion (session F)
+
+The native renderer has the same screen-space AO as the Xenos plugin (patches 0004 to 0007 in
+`tools/rexglue-patches`). Code: `backend/ambient_occlusion.{h,cpp}`, shaders:
+`backend/shaders/ambient_occlusion.hlsl`, tests: `backend/tests/ao_tests.cpp` (`nr_ao_tests`).
+
+**Settings.** `ao_mode` (0 off, 1 on, 2 show the AO only) and `ao_strength` (1 to 3) are read each
+frame with `rex::cvar::GetFlagByName`, the way the launcher sets them. They are defined by the
+Xenos plugin (rexgpu-xenos), which the launcher preloads, so the Graphics page keeps working. Off
+(the default) costs nothing and changes nothing.
+
+**Detection** (in `GameRenderer::Resolve`, the same rules as the plugin). A full-screen D24S8 depth
+resolve (at least 1280 x 720, from the top-left corner) is noticed and the depth is copied at once,
+because the game clears it right after. The next full-screen 8:8:8:8 colour resolve of that frame
+gets the occlusion; later colour resolves to the same destination get it too, the final
+post-processed copy goes elsewhere so the HUD is untouched. The two AfterEffects fog pixel shaders
+(ucode hashes 0x1B65AC7429B67FE9 and 0x9F699E763A41FE07) are recognised in `Draw` and their
+constants read, so the fog colour is kept: `colour * ao + fog colour * fog * (1 - ao)`.
+
+**Passes** (all full-screen pixel shaders, no compute): depth copy, linear half-size depth, 10-sample
+occlusion on a normal rebuilt from depth, depth-aware 9-tap blur each way, edge-aware 4-tap upscale
+with the distance fade, then the apply. The apply writes into a scratch copy of the colour target
+and the resolve reads that copy, so the game's own target is never changed (the plugin dumps a
+fresh copy per resolve; this matches it without compounding).
+
+**Render scale.** Every image is sized from the host texture it is given, so a bigger target gives
+a bigger half-size image. The blur taps and the sample radius keep their size in the picture. The
+scale is worked out from the texture size against the guest size, so this works with or without
+session E's `render_scale.h`. After merging E, check `AoResolve` width/height in `Resolve` against
+E's `ScaleRect`.
+
+**Tests.** `nr_ao_tests` compares the GPU output with a CPU reference of the whole pipeline on
+synthetic scenes (a box on a wall, a floor, sky, a far strip, fog), and checks detection rules,
+the untouched game target, the depth copy, off, and 1x against 2x. Run on SwiftShader (lavapipe
+was not installable in the cloud container): GPU and reference agree to a few levels.
+
+**Shaders.** `compile_shaders.sh` / `.ps1` build `ao_*` SPIR-V and DXIL. The DXIL checked in was
+built with a source build of DXC that cannot sign, so regenerate it on Windows with
+`compile_shaders.ps1 -Dxc <dxc.exe>` before trusting the D3D12 path.
+
 ## NVRHI needs more from the SDK's Vulkan device
 
 NVRHI is a Vulkan 1.3 library: its queues use timeline semaphores, its render passes dynamic rendering and its
