@@ -122,6 +122,11 @@ foreach ($run in $plan.runs) {
     [Environment]::SetEnvironmentVariable($kv.Name, [string]$kv.Value, 'Process')
     if (-not $saved.ContainsKey($kv.Name)) { $saved[$kv.Name] = $null }
   }
+  # The game's window is shown without taking the focus (someone may be using the PC meanwhile).
+  foreach ($name in 'SDL_WINDOW_ACTIVATE_WHEN_SHOWN', 'SDL_WINDOW_ACTIVATE_WHEN_RAISED') {
+    if (-not $saved.ContainsKey($name)) { $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
+    [Environment]::SetEnvironmentVariable($name, '0', 'Process')
+  }
   # -ExtraArgs replace the scene file's arguments of the same name (the game keeps the first of two).
   $extraNames = @($ExtraArgs | ForEach-Object { ($_ -split '=', 2)[0] })
   $runArgs = @($run.args | Where-Object { $extraNames -notcontains (($_ -split '=', 2)[0]) })
