@@ -42,6 +42,7 @@
 #include "backend/tests/check.h"
 #include "backend/tests/fake_guest.h"
 #include "backend/tests/vk_test_device.h"
+#include "backend/vk_pipeline_cache.h"
 #include "container_writer.h"
 #include "hooks/hook_table.h"
 #include "kknr/guest_texture.h"
@@ -338,6 +339,7 @@ struct Fixture {
       return false;
     }
     errors_before = gpu->errors();
+    gpu->MakeCurrent();  // a test may have made another device since
     shaders = std::make_unique<ShaderLibrary>(gpu->device(), mem);
     shaders->SetRenderScaleAware((scale_x != 1.0f || scale_y != 1.0f || (shadow_scale > 0.0f && shadow_scale != 1.0f)) &&
                                  !force_unaware);
@@ -1822,6 +1824,218 @@ TEST(PipelineList_AbsentOrOfAnotherVersion) {
   CHECK_EQ(f.game->stats().list_records, uint64_t(0));
   CHECK_EQ(f.game->stats().prewarm_queued, uint64_t(0));
   std::filesystem::remove(list);
+}
+
+// ------------------------------------------------- the driver's pipeline cache
+
+namespace {
+
+// A device of its own whose NVRHI device creates pipelines through a VulkanPipelineCache (a second
+// "run" is a second device).
+std::unique_ptr<VulkanTestDevice> CachedDevice() {
+  auto d = VulkanTestDevice::Create(true, true);
+  if (!d) Fail(__FILE__, __LINE__, "no Vulkan device with a pipeline cache");
+  return d;
+}
+
+std::vector<uint8_t> ReadAll(const std::string& path) {
+  std::ifstream in(path, std::ios::binary);
+  return std::vector<uint8_t>(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+void WriteAll(const std::string& path, const std::vector<uint8_t>& bytes) {
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  out.write(reinterpret_cast<const char*>(bytes.data()), std::streamsize(bytes.size()));
+}
+
+// The data of a VkPipelineCache: Vulkan's header naming `id`, then some bytes.
+std::vector<uint8_t> FakeCacheData(const VulkanPipelineCache::Identity& id, size_t extra = 100) {
+  std::vector<uint8_t> data(32 + extra, 0x5A);
+  const uint32_t header[4] = {32, VK_PIPELINE_CACHE_HEADER_VERSION_ONE, id.vendor_id, id.device_id};
+  std::memcpy(data.data(), header, sizeof(header));
+  std::memcpy(data.data() + 16, id.pipeline_cache_uuid, VK_UUID_SIZE);
+  return data;
+}
+
+}  // namespace
+
+TEST(VkPipelineCache_TheFileMustMatchTheDriver) {
+  VulkanPipelineCache::Identity id;
+  id.vendor_id = 0x10DE;
+  id.device_id = 0x2782;
+  id.driver_version = 0x91234000;
+  for (int i = 0; i < VK_UUID_SIZE; ++i) {
+    id.pipeline_cache_uuid[i] = uint8_t(i);
+    id.driver_uuid[i] = uint8_t(0x80 + i);
+  }
+  const std::vector<uint8_t> data = FakeCacheData(id);
+  const std::vector<uint8_t> file = VulkanPipelineCache::MakeFile(id, data);
+  using Load = DriverPipelineCache::Load;
+  std::string note;
+  size_t offset = 0;
+  CHECK(VulkanPipelineCache::CheckFile(file, id, &note, &offset) == Load::kLoaded);
+  CHECK_EQ(offset, size_t(72));
+  CHECK(std::vector<uint8_t>(file.begin() + 72, file.end()) == data);
+  // Each part of the identity: another driver.
+  auto changed = [&](auto edit, const char* what) {
+    VulkanPipelineCache::Identity now = id;
+    edit(now);
+    if (VulkanPipelineCache::CheckFile(file, now, &note, nullptr) != Load::kDriverChanged)
+      Fail(__FILE__, __LINE__, std::string("not a driver change: ") + what);
+  };
+  changed([](auto& i) { i.vendor_id = 0x1002; }, "vendor");
+  changed([](auto& i) { i.device_id ^= 1; }, "device");
+  changed([](auto& i) { i.driver_version += 1; }, "driver version");
+  changed([](auto& i) { i.driver_uuid[3] ^= 1; }, "driver UUID");
+  changed([](auto& i) { i.pipeline_cache_uuid[15] ^= 1; }, "pipeline cache UUID");
+  CHECK(note.find("pipeline cache UUID") != std::string::npos);
+  // Our header right, Vulkan's header in the data naming another GPU.
+  VulkanPipelineCache::Identity other = id;
+  other.device_id = 0x1234;
+  CHECK(VulkanPipelineCache::CheckFile(VulkanPipelineCache::MakeFile(id, FakeCacheData(other)), id, &note, nullptr) ==
+        Load::kDriverChanged);
+  // Damaged: cut short, a byte changed, not a cache file, too short for Vulkan's header.
+  std::vector<uint8_t> cut(file.begin(), file.end() - 10);
+  CHECK(VulkanPipelineCache::CheckFile(cut, id, &note, nullptr) == Load::kDamaged);
+  std::vector<uint8_t> flipped = file;
+  flipped[100] ^= 0x40;
+  CHECK(VulkanPipelineCache::CheckFile(flipped, id, &note, nullptr) == Load::kDamaged);
+  std::vector<uint8_t> garbage(200, 7);
+  CHECK(VulkanPipelineCache::CheckFile(garbage, id, &note, nullptr) == Load::kDamaged);
+  CHECK(VulkanPipelineCache::CheckFile({}, id, &note, nullptr) == Load::kDamaged);
+  CHECK(VulkanPipelineCache::CheckFile(VulkanPipelineCache::MakeFile(id, std::vector<uint8_t>(20, 1)), id, &note,
+                                       nullptr) == Load::kDamaged);
+}
+
+TEST(VkPipelineCache_SavedByOneRunLoadedByTheNext) {
+  const std::string path = CachePath("vk_two_runs") + ".vkcache";
+  std::filesystem::remove(path);
+  size_t first_size = 0;
+  {
+    auto dev = CachedDevice();
+    if (!dev) return;
+    Fixture f;
+    f.gpu = dev.get();
+    if (!f.Init()) return;
+    CHECK(f.game->SetDriverPipelineCache(dev->pipeline_cache(), path) == DriverPipelineCache::Load::kAbsent);
+    const size_t empty = dev->pipeline_cache()->Data().size();
+    const uint32_t rt = f.BindMainSurface();
+    auto p = f.MakeColorPipeline();
+    Pixels px = DrawQuadrantFrame(f, rt, p);
+    f.CheckQuadrantColors(px, __LINE__);
+    first_size = dev->pipeline_cache()->Data().size();
+    std::printf("  lavapipe's pipeline cache: %zu bytes empty, %zu with the scene's pipelines\n", empty, first_size);
+    CHECK(first_size >= 32);
+    CHECK(!std::filesystem::exists(path));  // the first save comes when the renderer goes (no workers here)
+  }
+  CHECK(std::filesystem::exists(path));
+  CHECK_EQ(ReadAll(path).size(), size_t(72) + first_size);
+  // The next run: the same driver, the file is taken.
+  auto dev = CachedDevice();
+  if (!dev) return;
+  Fixture f;
+  f.gpu = dev.get();
+  if (!f.Init()) return;
+  CHECK(f.game->SetDriverPipelineCache(dev->pipeline_cache(), path) == DriverPipelineCache::Load::kLoaded);
+  CHECK_EQ(f.game->stats().driver_cache_load, int32_t(DriverPipelineCache::Load::kLoaded));
+  CHECK(dev->pipeline_cache()->Data().size() >= first_size);
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  Pixels px = DrawQuadrantFrame(f, rt, p);
+  f.CheckQuadrantColors(px, __LINE__);
+}
+
+TEST(VkPipelineCache_AnotherDriversFileIsRebuiltInTheBackground) {
+  const std::string path = CachePath("vk_driver_changed") + ".vkcache";
+  const std::string records = CachePath("vk_driver_changed_records");
+  const std::string pack = MakePack("vk_driver_changed");
+  RecordTheScene(records);
+  auto dev = CachedDevice();
+  if (!dev) return;
+  // A file the previous driver version wrote.
+  VulkanPipelineCache::Identity old = dev->pipeline_cache()->identity();
+  old.driver_version -= 1;
+  WriteAll(path, VulkanPipelineCache::MakeFile(old, FakeCacheData(old)));
+  Fixture f;
+  f.gpu = dev.get();
+  if (!f.Init()) return;
+  f.shaders->Initialize(pack, NR_TEST_DXC_DIR);
+  f.game->options().async_pipelines = true;
+  f.game->options().driver_cache_save_every = 1000;  // the rebuild is saved whatever the count
+  CHECK(f.game->SetDriverPipelineCache(dev->pipeline_cache(), path) == DriverPipelineCache::Load::kDriverChanged);
+  CHECK(f.game->SetPipelineCache(records));
+  CHECK_EQ(f.game->stats().prewarm_queued, uint64_t(1));
+  f.game->WaitForPrewarm();  // the worker that empties the queue saves
+  CHECK_EQ(f.game->driver_cache_saves(), uint64_t(1));
+  std::string note;
+  CHECK(VulkanPipelineCache::CheckFile(ReadAll(path), dev->pipeline_cache()->identity(), &note, nullptr) ==
+        DriverPipelineCache::Load::kLoaded);
+  // The game draws with the rebuilt pipeline at once.
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  Pixels px = DrawQuadrantFrame(f, rt, p);
+  f.CheckQuadrantColors(px, __LINE__);
+  CHECK_EQ(f.game->stats().skipped_pending, uint64_t(0));
+}
+
+TEST(VkPipelineCache_ADamagedFileStartsEmptyAndIsReplaced) {
+  const std::string path = CachePath("vk_damaged") + ".vkcache";
+  WriteAll(path, std::vector<uint8_t>(1000, 0xEE));
+  {
+    auto dev = CachedDevice();
+    if (!dev) return;
+    Fixture f;
+    f.gpu = dev.get();
+    if (!f.Init()) return;
+    CHECK(f.game->SetDriverPipelineCache(dev->pipeline_cache(), path) == DriverPipelineCache::Load::kDamaged);
+    const uint32_t rt = f.BindMainSurface();
+    auto p = f.MakeColorPipeline();
+    DrawQuadrantFrame(f, rt, p);
+  }
+  auto dev = CachedDevice();
+  if (!dev) return;
+  std::string note;
+  CHECK(VulkanPipelineCache::CheckFile(ReadAll(path), dev->pipeline_cache()->identity(), &note, nullptr) ==
+        DriverPipelineCache::Load::kLoaded);
+}
+
+TEST(VkPipelineCache_SavedAfterEnoughNewPipelines) {
+  // After a file was loaded, the workers save when they run out of work with
+  // driver_cache_save_every new pipelines, not after each one.
+  const std::string path = CachePath("vk_save_every") + ".vkcache";
+  std::filesystem::remove(path);
+  {
+    auto dev = CachedDevice();
+    if (!dev) return;
+    Fixture f;
+    f.gpu = dev.get();
+    if (!f.Init()) return;
+    f.game->SetDriverPipelineCache(dev->pipeline_cache(), path);
+    const uint32_t rt = f.BindMainSurface();
+    auto p = f.MakeColorPipeline();
+    DrawQuadrantFrame(f, rt, p);
+  }
+  auto dev = CachedDevice();
+  if (!dev) return;
+  Fixture f;
+  f.gpu = dev.get();
+  if (!f.Init()) return;
+  f.game->options().driver_cache_save_every = 4;
+  f.game->options().driver_cache_save_seconds = 3600;
+  CHECK(f.game->SetDriverPipelineCache(dev->pipeline_cache(), path) == DriverPipelineCache::Load::kLoaded);
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  DrawQuadrantFrame(f, rt, p);  // on the render thread: the draw's and the present's pipelines, 2 new
+  f.game->options().async_pipelines = true;
+  f.game->options().pipeline_wait = true;
+  f.Reg(dev::kRbColorMask, 0x7777);
+  DrawQuadrantFrame(f, rt, p);  // a worker makes the third: idle, but not enough
+  f.game->WaitForPrewarm();
+  CHECK_EQ(f.game->driver_cache_saves(), uint64_t(0));
+  f.Reg(dev::kRbColorMask, 0x3333);
+  DrawQuadrantFrame(f, rt, p);  // the fourth
+  f.game->WaitForPrewarm();
+  CHECK_EQ(f.game->driver_cache_saves(), uint64_t(1));
 }
 
 TEST(PipelineWait_TheDrawWaitsInsteadOfBeingSkipped) {

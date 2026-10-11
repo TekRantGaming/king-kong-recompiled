@@ -16,6 +16,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <thread>
 #include <cmath>
@@ -25,6 +26,7 @@
 #include <memory>
 #include <map>
 #include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -34,6 +36,7 @@
 
 #include "backend/ambient_occlusion.h"
 #include "backend/draw_sink.h"
+#include "backend/driver_pipeline_cache.h"
 #include "backend/frame_log.h"
 #include "backend/pipeline_cache.h"
 #include "backend/guest_device.h"
@@ -90,6 +93,12 @@ class GameRenderer {
     // V-Rex loading screen) is complete, while a burst of hundreds at a chapter start still
     // costs one long frame at most rather than a stall.
     double pipeline_wait_budget_ms = 30.0;
+    // The driver's pipeline cache (SetDriverPipelineCache) is saved when the workers run out of work
+    // with at least this many new pipelines made since the last save, or with any after
+    // driver_cache_save_seconds. A rebuild (the file was another driver's) is saved when the workers
+    // first run out of work, whatever the count.
+    uint32_t driver_cache_save_every = 16;
+    double driver_cache_save_seconds = 30.0;
     // Render scale: host pixels per guest pixel of the colour and depth targets (1 = the
     // console's size, bit for bit what the renderer always did). Resolved textures and the
     // screen copies follow. docs/backend.md, "Render scale". Set before Initialize.
@@ -135,6 +144,9 @@ class GameRenderer {
     uint64_t prewarm_failed = 0;     // cached descriptions that could not be built or created
     uint64_t prewarm_other_kind = 0;  // cached descriptions of another render scale or face flip: not made
     uint64_t list_records = 0;       // descriptions read from shipped pipeline lists
+    int32_t driver_cache_load = -1;  // DriverPipelineCache::Load of the driver's cache file, -1 none
+    uint64_t driver_cache_saves = 0;
+    uint64_t driver_cache_bytes = 0;  // the driver's data at the last save
     uint64_t skipped_device = 0;     // no device struct
     uint64_t texture_uploads = 0;
     uint64_t texture_failures = 0;
@@ -197,7 +209,20 @@ class GameRenderer {
   // pipeline at start. Needs async_pipelines on Vulkan, as the cache file's prewarm. False when the
   // file is absent or of another version. May be called with or without SetPipelineCache.
   bool LoadPipelineList(const std::string& path);
-  // Blocks until the worker threads have finished the queued prewarm (tests, shutdown).
+  // The driver's pipeline cache (driver_pipeline_cache.h; the cache NVRHI's device creates every
+  // pipeline with): reads `path` into it now, and saves it there when the workers run out of work
+  // (Options::driver_cache_save_every) and when the renderer is destroyed. Call before the first
+  // draw and before SetPipelineCache / LoadPipelineList, which start the workers: nothing may create
+  // a pipeline while the file is read. When the file was another driver's (or damaged) the cache
+  // starts empty, the prewarm fills it again in the background and the first save after it replaces
+  // the file. `cache` must outlive the renderer.
+  DriverPipelineCache::Load SetDriverPipelineCache(DriverPipelineCache* cache, const std::string& path);
+  // Saves the driver's pipeline cache now (when one is set). False when nothing could be saved.
+  bool SaveDriverPipelineCache();
+  // Saves so far (any thread; stats() has them from the frame's end).
+  uint64_t driver_cache_saves() const { return driver_cache_saves_.load(); }
+  // Blocks until the worker threads have finished the queued prewarm (tests, shutdown), the save of
+  // the driver's pipeline cache that may follow included.
   void WaitForPrewarm();
 
   // REX_DEV_FRAME_LOG: the draw and resolve lines of frame_log.h, from the game's
@@ -386,6 +411,21 @@ class GameRenderer {
   std::unordered_map<uint64_t, bool> pipelines_pending_;
   bool pipeline_stop_ = false;
   double pipeline_worker_ms_ = 0;
+  // Pipeline creation holds it shared, reading the driver's cache file exclusively.
+  std::shared_mutex creation_mutex_;
+  nvrhi::GraphicsPipelineHandle CreatePipeline(const nvrhi::GraphicsPipelineDesc& desc,
+                                               const nvrhi::FramebufferInfo& framebuffer);
+  // The driver's pipeline cache: the file, pipelines made since the last save, and whether the
+  // first save is due as soon as the workers are idle (a rebuild).
+  void MaybeSaveDriverCache();
+  bool SaveDriverCacheLocked();  // driver_cache_save_mutex_ held
+  std::atomic<uint64_t> driver_cache_saves_{0}, driver_cache_bytes_{0};  // stats_ takes them at EndFrame
+  DriverPipelineCache* driver_cache_ = nullptr;
+  std::string driver_cache_path_;
+  std::atomic<uint64_t> driver_cache_new_{0};
+  std::atomic<bool> driver_cache_rebuild_{false};
+  std::mutex driver_cache_save_mutex_;
+  std::chrono::steady_clock::time_point driver_cache_saved_at_;
 
   // ---- frame log (game_frame_log.cpp)
   // --native_dump_frame: the three candidates for the Xenos log's vs hash (docs/backend.md, "The vertex

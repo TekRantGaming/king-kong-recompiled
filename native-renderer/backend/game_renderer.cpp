@@ -127,6 +127,8 @@ GameRenderer::~GameRenderer() {
     pipeline_cv_.notify_all();
     for (std::thread& t : pipeline_threads_) t.join();
   }
+  // What this run added to the driver's pipeline cache (the workers are stopped).
+  if (driver_cache_ && driver_cache_new_.load() > 0) SaveDriverPipelineCache();
   textures_.Trim(UINT64_MAX / 2, 0);
   vertex_buffers_.Trim(UINT64_MAX / 2, 0);
   index_buffers_.Trim(UINT64_MAX / 2, 0);
@@ -492,6 +494,8 @@ void GameRenderer::EndFrame() {
     index_buffers_.Trim(frame_, 1800);
   }
   RetryDeferred();
+  stats_.driver_cache_saves = driver_cache_saves_.load(std::memory_order_relaxed);
+  stats_.driver_cache_bytes = driver_cache_bytes_.load(std::memory_order_relaxed);
   std::lock_guard lock(cache_mutex_);
   cache_file_.Flush();
 }
@@ -508,16 +512,36 @@ void GameRenderer::PipelineWorker() {
       ++pipelines_active_;
     }
     const auto start = std::chrono::steady_clock::now();
-    nvrhi::GraphicsPipelineHandle p = device_->createGraphicsPipeline(job.desc, job.framebuffer);
+    nvrhi::GraphicsPipelineHandle p = CreatePipeline(job.desc, job.framebuffer);
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    bool idle = false;
     {
       std::lock_guard lock(pipeline_mutex_);
       pipeline_worker_ms_ += ms;
       pipelines_done_.emplace_back(job.key, p);
-      --pipelines_active_;
+      // The last job of a burst: this worker stays counted while it saves the driver's cache, so
+      // WaitForPrewarm includes the save.
+      idle = pipeline_jobs_.empty() && pipelines_active_ == 1;
+      if (!idle) --pipelines_active_;
     }
     pipeline_done_cv_.notify_all();
+    if (idle) {
+      MaybeSaveDriverCache();
+      {
+        std::lock_guard lock(pipeline_mutex_);
+        --pipelines_active_;
+      }
+      pipeline_done_cv_.notify_all();
+    }
   }
+}
+
+nvrhi::GraphicsPipelineHandle GameRenderer::CreatePipeline(const nvrhi::GraphicsPipelineDesc& desc,
+                                                           const nvrhi::FramebufferInfo& framebuffer) {
+  std::shared_lock lock(creation_mutex_);
+  nvrhi::GraphicsPipelineHandle p = device_->createGraphicsPipeline(desc, framebuffer);
+  if (p && driver_cache_) driver_cache_new_.fetch_add(1, std::memory_order_relaxed);
+  return p;
 }
 
 bool GameRenderer::IsPending(uint64_t key) {
@@ -593,7 +617,7 @@ nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelin
     return nullptr;
   }
   const auto start = std::chrono::steady_clock::now();
-  nvrhi::GraphicsPipelineHandle p = device_->createGraphicsPipeline(desc, framebuffer);
+  nvrhi::GraphicsPipelineHandle p = CreatePipeline(desc, framebuffer);
   stats_.pipeline_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
   pipelines_[key] = p;  // a failure is remembered too (null)
   if (p) {
@@ -716,6 +740,75 @@ void GameRenderer::RetryDeferred() {
     if (!QueuePrewarm(record)) still.push_back(record);
   }
   deferred_ = std::move(still);
+}
+
+DriverPipelineCache::Load GameRenderer::SetDriverPipelineCache(DriverPipelineCache* cache, const std::string& path) {
+  std::unique_lock lock(creation_mutex_);  // no pipeline is created while the file is read
+  std::lock_guard save_lock(driver_cache_save_mutex_);
+  driver_cache_ = cache;
+  driver_cache_path_ = path;
+  std::string note;
+  const DriverPipelineCache::Load load = cache->LoadFile(path, &note);
+  stats_.driver_cache_load = int32_t(load);
+  driver_cache_new_.store(0);
+  driver_cache_saved_at_ = std::chrono::steady_clock::now();
+  if (load == DriverPipelineCache::Load::kLoaded) {
+    Logf(LogLevel::kInfo, "rexgpu-native: driver pipeline cache %s: loaded (%s)", path.c_str(), note.c_str());
+  } else if (load == DriverPipelineCache::Load::kAbsent) {
+    // The first run: saved as soon as the workers are first idle, not after the usual count.
+    driver_cache_rebuild_.store(true);
+    Logf(LogLevel::kInfo, "rexgpu-native: driver pipeline cache %s: %s, made by this run", path.c_str(), note.c_str());
+  } else {
+    driver_cache_rebuild_.store(true);
+    Logf(LogLevel::kWarning,
+         "rexgpu-native: driver pipeline cache %s: %s (%s): started empty, rebuilt in the background by the "
+         "prewarm and saved over the old file when the workers are done",
+         path.c_str(), LoadResultName(load), note.c_str());
+  }
+  return load;
+}
+
+void GameRenderer::MaybeSaveDriverCache() {
+  if (!driver_cache_) return;
+  const uint64_t fresh = driver_cache_new_.load(std::memory_order_relaxed);
+  if (fresh == 0) return;
+  std::unique_lock lock(driver_cache_save_mutex_, std::try_to_lock);
+  if (!lock.owns_lock()) return;  // another worker is saving
+  const double since =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - driver_cache_saved_at_).count();
+  if (!driver_cache_rebuild_.load() && fresh < options_.driver_cache_save_every &&
+      since < options_.driver_cache_save_seconds) {
+    return;
+  }
+  SaveDriverCacheLocked();
+}
+
+bool GameRenderer::SaveDriverPipelineCache() {
+  if (!driver_cache_) return false;
+  std::lock_guard lock(driver_cache_save_mutex_);
+  return SaveDriverCacheLocked();
+}
+
+bool GameRenderer::SaveDriverCacheLocked() {
+  const uint64_t fresh = driver_cache_new_.exchange(0);
+  const auto start = std::chrono::steady_clock::now();
+  size_t bytes = 0;
+  std::string note;
+  const bool ok = driver_cache_->SaveFile(driver_cache_path_, &bytes, &note);
+  driver_cache_saved_at_ = std::chrono::steady_clock::now();
+  const double ms = std::chrono::duration<double, std::milli>(driver_cache_saved_at_ - start).count();
+  if (!ok) {
+    driver_cache_new_.fetch_add(fresh);  // still to be saved
+    Logf(LogLevel::kWarning, "rexgpu-native: driver pipeline cache %s not saved: %s", driver_cache_path_.c_str(),
+         note.c_str());
+    return false;
+  }
+  driver_cache_rebuild_.store(false);
+  driver_cache_saves_.fetch_add(1);
+  driver_cache_bytes_.store(bytes);
+  Logf(LogLevel::kInfo, "rexgpu-native: driver pipeline cache %s saved: %s, %llu pipelines new since the last save, %.0f ms",
+       driver_cache_path_.c_str(), note.c_str(), static_cast<unsigned long long>(fresh), ms);
+  return true;
 }
 
 void GameRenderer::WaitForPrewarm() {
