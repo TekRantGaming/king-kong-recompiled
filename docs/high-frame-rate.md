@@ -123,6 +123,20 @@ grab and finisher scripts ran, and the step-decay fix corrected a V-Rex knock-ba
 second during hits. Gameplay with AI fights diverges between any two runs (random numbers are drawn per
 frame), so their effect is not compared run against run.
 
+## How the systems were found
+
+1. Static scans of the recompiled code (`kk/generated/default`, one function per `DEFINE_REX_FUNC`), with each
+   function's script name from the executable's tables: stores of a float field that was loaded, multiplied or
+   added to and stored back with no frame time in the chain (per-frame decays, about 1200 candidates, mostly
+   vector maths); small loops that subtract a step from a time (`while (t > step)`, 50 of them); every compare
+   of the frame time with a constant (clamps, 25); integer fields counted up by one (frame counters); calls of the
+   animation frame function and how its result is tested. Each candidate that runs during play was then read.
+2. The call profiler (`kk-prof`) in the same windows of the same scripted scene at 30 and 60 FPS: functions run
+   once a frame show a ratio of 2, events 1; event-like functions whose rate changes with the frame rate, and
+   functions that run at one rate only, are suspects.
+3. The sampler and the compare tool over game time, for positions, animation clocks and AI states, and the
+   fixes' own dev traces (`KK_DEV_HFR_TRACE`) for what they act on.
+
 ## Fixed
 
 - Camera shake (v1.9.10, `kk/src/camera_shake.cpp`): `CM_Sfx` (`sub_8245EC90`) and `SCC_SFX`
