@@ -295,6 +295,10 @@ bool ReadStutterSnapshot(StutterSnapshot* out) {
   return true;
 }
 
+// Command lists recorded on several threads at once (the frame's, the presenter's): not "immediate", a
+// DX11 notion that NVRHI's validation layer enforces for every API (two open at once is an error there).
+nvrhi::CommandListParameters NonImmediateList() { return nvrhi::CommandListParameters().setEnableImmediateExecution(false); }
+
 nvrhi::IMessageCallback* GetMessageCallback() {
   static LogCallback callback;
   return &callback;
@@ -707,7 +711,7 @@ void Backend::PresentNow(rex::ui::Presenter* presenter, uint32_t frontbuffer_wid
     presenter->RefreshGuestOutput(
         width, height, display_width, display_height,
         [&](rex::ui::Presenter::GuestOutputRefreshContext& context) -> bool {
-          nvrhi::CommandListHandle cl = host_->device()->createCommandList();
+          nvrhi::CommandListHandle cl = host_->device()->createCommandList(NonImmediateList());
           cl->open();
           const bool ok = host_->CopyToGuestOutput(context, cl, image, width, height);
           cl->close();
@@ -720,7 +724,7 @@ void Backend::PresentNow(rex::ui::Presenter* presenter, uint32_t frontbuffer_wid
   presenter->RefreshGuestOutput(
       width, height, display_width, display_height,
       [&](rex::ui::Presenter::GuestOutputRefreshContext& context) -> bool {
-        nvrhi::CommandListHandle cl = host_->device()->createCommandList();
+        nvrhi::CommandListHandle cl = host_->device()->createCommandList(NonImmediateList());
         cl->open();
         nvrhi::ITexture* source = renderer_->presented_image();
         if (!game_frame) {

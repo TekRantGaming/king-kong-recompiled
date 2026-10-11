@@ -90,7 +90,7 @@ REXCVAR_DEFINE_STRING(native_pipeline_cache_dir, "", "Native renderer",
                       "<cache root>/native-pipelines")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-REXCVAR_DEFINE_BOOL(native_vk_pipeline_cache, false, "Native renderer",
+REXCVAR_DEFINE_BOOL(native_vk_pipeline_cache, true, "Native renderer",
                     "Vulkan: keep the driver's compiled pipelines (a VkPipelineCache) in a file under the cache "
                     "root (<cache root>/native-pipelines/<title>.vkcache, or native_pipeline_cache_dir) and load it "
                     "at start, so making the pipelines again is fast. A file another GPU, driver or driver version "
@@ -110,11 +110,11 @@ REXCVAR_DEFINE_BOOL(native_stutter_stats, false, "Native renderer",
                     "under the frame counter (kk_show_fps, F2)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-REXCVAR_DEFINE_BOOL(native_pipeline_list, false, "Native renderer",
+REXCVAR_DEFINE_BOOL(native_pipeline_list, true, "Native renderer",
                     "Load the pipeline list shipped beside the game (kkpipelines.list, made by nr_pipelines merge "
                     "from the pipeline cache files of several runs) at start and create its pipelines on the "
-                    "worker threads, so a fresh install draws everything from its first frame (Vulkan; needs "
-                    "native_async_pipelines). The list is never written")
+                    "worker threads, so a fresh install draws everything from its first frame (needs "
+                    "native_async_pipelines; without the file nothing is loaded). The list is never written")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_STRING(native_pipeline_list_file, "", "Native renderer",
@@ -128,28 +128,28 @@ REXCVAR_DEFINE_BOOL(native_pipeline_wait, false, "Native renderer",
                     "native_async_pipelines")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-REXCVAR_DEFINE_BOOL(native_dynamic_vertex_buffers, false, "Native renderer",
+REXCVAR_DEFINE_BOOL(native_dynamic_vertex_buffers, true, "Native renderer",
                     "Vertex buffers the game rewrites every frame are not watched for writes: each draw "
                     "uploads the vertices it reads (no write fault per page and frame)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-REXCVAR_DEFINE_BOOL(native_render_thread, false, "Native renderer",
+REXCVAR_DEFINE_BOOL(native_render_thread, true, "Native renderer",
                     "Draw on a thread of the renderer's own, as the Xenos plugin's command processor does: "
                     "the game's thread only copies each call's state, and the guest GPU's fences wait for "
                     "the renderer (the game's timing then follows the Xenos plugin's)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-REXCVAR_DEFINE_BOOL(native_async_present, false, "Native renderer",
+REXCVAR_DEFINE_BOOL(native_async_present, true, "Native renderer",
                     "Hand each frame to the presenter from a thread of its own, so the guest GPU's command "
                     "stream (and the game waiting on it) does not wait for the presenter")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-REXCVAR_DEFINE_BOOL(native_async_submit, false, "Native renderer",
+REXCVAR_DEFINE_BOOL(native_async_submit, true, "Native renderer",
                     "Submit each frame's GPU work from a thread of its own, so the game's thread does not "
                     "wait for the queue while the presenter holds it")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-REXCVAR_DEFINE_BOOL(native_present_unlocked, false, "Native renderer",
+REXCVAR_DEFINE_BOOL(native_present_unlocked, true, "Native renderer",
                     "Hand the game's frame to the presenter without holding the renderer's lock, so the "
                     "game's draws do not wait while the presenter waits for its previous paint")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
@@ -159,7 +159,7 @@ REXCVAR_DEFINE_DOUBLE(native_pipeline_wait_budget_ms, 30.0, "Native renderer",
                       "being created before its draws are skipped (0: skip at once)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-REXCVAR_DEFINE_STRING(native_render_scale, "1", "Native renderer",
+REXCVAR_DEFINE_STRING(native_render_scale, "auto", "Native renderer",
                       "Render scale: the game's render targets, viewports, resolves and textures made from "
                       "them are this many times the 360's 1280x720 (1 = the 360's size; 1.5, 2, 3, any number "
                       "from 0.25 to 8), or a frame size such as 1920x1080. The frame handed to the presenter "
@@ -167,7 +167,7 @@ REXCVAR_DEFINE_STRING(native_render_scale, "1", "Native renderer",
                       "the render scale aware ones: build the pack with kkshaders db-build --also-scaled, "
                       "else they are compiled at startup (needs DXC). auto: the port's draw resolution scale "
                       "(draw_resolution_scale_x / _y, which the launcher's render quality presets set, or "
-                      "resolution_scale), as the Xenos plugin uses it")
+                      "resolution_scale), as the Xenos plugin uses it (the default; 1 = the old default)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_DOUBLE(native_shadow_scale, 0.0, "Native renderer",

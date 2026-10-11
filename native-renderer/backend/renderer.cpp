@@ -144,7 +144,7 @@ bool Renderer::Initialize(uint32_t width, uint32_t height) {
   if (!placeholder_pipeline_) return false;
 
   for (auto& list : frame_lists_) {
-    list = device_->createCommandList();
+    list = device_->createCommandList(nvrhi::CommandListParameters().setEnableImmediateExecution(false));
     if (!list) return false;
   }
   frame_command_list_ = frame_lists_[0];
