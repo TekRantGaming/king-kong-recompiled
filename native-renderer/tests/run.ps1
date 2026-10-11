@@ -26,6 +26,8 @@ param(
   [string]$LockFile = 'F:\KK-native-renderer\game.lock',
   [string]$LockName = 'tests/run.ps1',
   [int]$WaitMinutes = 0,
+  # Seconds between two checks while waiting for the game (another runner may be using it).
+  [int]$WaitPollSeconds = 300,
   [string]$Label = '',
   [string]$Python = 'python',
   [switch]$NoCompare,
@@ -88,8 +90,8 @@ function Wait-GameFree {
     $busy = Get-Process king_kong -ErrorAction SilentlyContinue
     if (-not $busy) { return $true }
     if ((Get-Date) -ge $deadline) { return $false }
-    Write-Output ("{0:HH:mm} the game is running (pid {1}); checking again in 5 minutes" -f (Get-Date), ($busy.Id -join ','))
-    Start-Sleep -Seconds 300
+    Write-Output ("{0:HH:mm} the game is running (pid {1}); checking again in {2} s" -f (Get-Date), ($busy.Id -join ','), $WaitPollSeconds)
+    Start-Sleep -Seconds $WaitPollSeconds
   }
 }
 
