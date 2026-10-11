@@ -519,6 +519,7 @@ void GameRenderer::PipelineWorker() {
       std::lock_guard lock(pipeline_mutex_);
       pipeline_worker_ms_ += ms;
       pipelines_done_.emplace_back(job.key, p);
+      ++pipelines_made_;
       // The last job of a burst: this worker stays counted while it saves the driver's cache, so
       // WaitForPrewarm includes the save.
       idle = pipeline_jobs_.empty() && pipelines_active_ == 1;
@@ -809,6 +810,11 @@ bool GameRenderer::SaveDriverCacheLocked() {
   Logf(LogLevel::kInfo, "rexgpu-native: driver pipeline cache %s saved: %s, %llu pipelines new since the last save, %.0f ms",
        driver_cache_path_.c_str(), note.c_str(), static_cast<unsigned long long>(fresh), ms);
   return true;
+}
+
+GameRenderer::WorkerProgress GameRenderer::worker_progress() {
+  std::lock_guard lock(pipeline_mutex_);
+  return {stats_.prewarm_queued, pipelines_made_, uint64_t(pipeline_jobs_.size()), uint64_t(pipelines_active_)};
 }
 
 void GameRenderer::WaitForPrewarm() {

@@ -34,6 +34,7 @@ if(NR_GAME_RENDERER)
         game_passes.cpp
         game_frame_log.cpp
         shader_library.cpp
+        pipeline_prewarm.cpp
     )
     target_link_libraries(nr_renderer PUBLIC kknr_resources kkshaders)
     target_compile_definitions(nr_renderer PUBLIC NR_GAME_RENDERER=1)

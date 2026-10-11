@@ -59,4 +59,23 @@ inline uint32_t ScaledSize(uint32_t guest, float s) {
   return s == 1.0f ? guest : uint32_t(std::max<long>(std::lround(double(guest) * s), 1));
 }
 
+// What a renderer of these settings draws at: the render scale, the shadow maps' (0: like the
+// render scale) and whether the pixel shaders are the render scale aware translations
+// (--native_debug bit 16 keeps the plain ones). The game's renderer (Backend::Initialize) and the
+// launcher's prewarm both take it from here: their pipelines must be the same.
+struct RenderScaleSetup {
+  RenderScale scale;
+  float shadow_scale = 0.0f;
+  bool shaders_aware = false;
+};
+
+inline RenderScaleSetup ResolveRenderScale(const std::string& text, float shadow_setting, uint32_t debug,
+                                           uint32_t guest_width, uint32_t guest_height) {
+  RenderScaleSetup out;
+  out.scale = ParseRenderScale(text, guest_width, guest_height);
+  if (shadow_setting > 0.0f) out.shadow_scale = std::clamp(shadow_setting, kMinRenderScale, kMaxRenderScale);
+  out.shaders_aware = !(debug & 16) && (!out.scale.unit() || (out.shadow_scale > 0.0f && out.shadow_scale != 1.0f));
+  return out;
+}
+
 }  // namespace nr

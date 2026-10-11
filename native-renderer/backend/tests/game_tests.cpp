@@ -34,6 +34,7 @@
 #include "backend/draw_state.h"
 #include "backend/frame_log.h"
 #include "backend/pipeline_cache.h"
+#include "backend/pipeline_prewarm.h"
 #include "backend/game_renderer.h"
 #include "backend/guest_device.h"
 #include "backend/render_scale.h"
@@ -2036,6 +2037,99 @@ TEST(VkPipelineCache_SavedAfterEnoughNewPipelines) {
   DrawQuadrantFrame(f, rt, p);  // the fourth
   f.game->WaitForPrewarm();
   CHECK_EQ(f.game->driver_cache_saves(), uint64_t(1));
+}
+
+// ------------------------------------------------- the launcher's prewarm
+
+TEST(LauncherPrewarm_MakesThePipelinesBeforeTheGameAndHandsOverTheDriverCache) {
+  // The launcher's prewarm on a device of its own: it reads the player's file and the shipped
+  // list (never writing either), makes their pipelines, and leaves the driver's cache in its file
+  // for the game's device, which then loads it.
+  const std::string records = CachePath("launcher_records");
+  RecordTheScene(records);
+  const std::string list = ShipTheScene("launcher_list");
+  const std::string pack = MakePack("launcher");
+  const std::string vkcache = CachePath("launcher") + ".vkcache";
+  std::filesystem::remove(vkcache);
+  const std::vector<char> records_before = FileBytes(records), list_before = FileBytes(list);
+  {
+    auto dev = CachedDevice();
+    if (!dev) return;
+    PipelinePrewarm prewarm(dev->device());
+    PipelinePrewarm::Settings s;
+    s.shader_pack = pack;
+    s.dxc = NR_TEST_DXC_DIR;
+    s.lists = {records, list};
+    s.driver_cache = dev->pipeline_cache();
+    s.driver_cache_path = vkcache;
+    CHECK(prewarm.Start(s));
+    CHECK(prewarm.Wait(60.0));
+    const PipelinePrewarm::Progress p = prewarm.progress();
+    CHECK_EQ(p.listed, uint64_t(2));  // one in each file, the same pipeline
+    CHECK_EQ(p.queued, uint64_t(1));
+    CHECK_EQ(p.made, uint64_t(1));
+    CHECK_EQ(p.waiting, uint64_t(0));
+    CHECK(p.done);
+    prewarm.Stop();
+    CHECK(std::filesystem::exists(vkcache));  // saved when the workers ran out of work, or at Stop
+    dev->WaitIdle();
+  }
+  CHECK(FileBytes(records) == records_before);
+  CHECK(FileBytes(list) == list_before);
+  // The game starts: its own device reads the driver's cache the prewarm left.
+  auto dev = CachedDevice();
+  if (!dev) return;
+  Fixture f;
+  f.gpu = dev.get();
+  if (!f.Init()) return;
+  f.shaders->Initialize(pack, NR_TEST_DXC_DIR);
+  f.game->options().async_pipelines = true;
+  CHECK(f.game->SetDriverPipelineCache(dev->pipeline_cache(), vkcache) == DriverPipelineCache::Load::kLoaded);
+  CHECK(f.game->SetPipelineCache(records));
+  f.game->WaitForPrewarm();
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  Pixels px = DrawQuadrantFrame(f, rt, p);
+  f.CheckQuadrantColors(px, __LINE__);
+  CHECK_EQ(f.game->stats().skipped_pending, uint64_t(0));
+}
+
+TEST(LauncherPrewarm_StopsBeforeItIsDone) {
+  // Play pressed at once: Stop leaves the rest to the game and returns after the pipelines being
+  // made. A list of many descriptions (the scene's pipeline under 64 colour masks and blends).
+  const std::string records = CachePath("launcher_stop_records");
+  RecordTheScene(records);
+  std::vector<PipelineRecord> many;
+  {
+    std::vector<PipelineRecord> one;
+    CHECK(ReadPipelineList(records, one));
+    if (one.empty()) return;
+    for (uint32_t i = 0; i < 64; ++i) {
+      PipelineRecord r = one[0];
+      r.color_mask[0] = i & 0xF;
+      r.color_control[0] = (i >> 4) == 0 ? 0x00010001u : (0x00010001u + (i >> 4));
+      many.push_back(r);
+    }
+  }
+  const std::string list = CachePath("launcher_stop") + ".list";
+  CHECK(WritePipelineList(list, many));
+  const std::string pack = MakePack("launcher_stop");
+  auto dev = VulkanTestDevice::Create(true);
+  if (!dev) return;
+  PipelinePrewarm prewarm(dev->device());
+  PipelinePrewarm::Settings s;
+  s.shader_pack = pack;
+  s.lists = {list};
+  CHECK(prewarm.Start(s));
+  CHECK_EQ(prewarm.progress().queued, uint64_t(64));
+  const auto start = std::chrono::steady_clock::now();
+  prewarm.Stop();
+  const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+  std::printf("  stopped after %.0f ms\n", ms);
+  CHECK(ms < 20000.0);
+  prewarm.Stop();  // again: nothing
+  CHECK(!prewarm.progress().done);  // no renderer any more
+  dev->WaitIdle();
 }
 
 TEST(PipelineWait_TheDrawWaitsInsteadOfBeingSkipped) {
