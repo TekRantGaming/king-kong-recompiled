@@ -109,6 +109,14 @@ exec "$HERE/usr/bin/king_kong" "$@"
 EOF
 chmod +x "$APPDIR/AppRun"
 
+echo "== Game data check"
+# Nothing derived from the game may ship: the native renderer's shader packs are built on the
+# player's machine (native-renderer/docs/shaders.md, "The pack on the player's machine").
+if find "$APPDIR" \( -iname '*.pack' -o -iname '*.pack.stamp' -o -iname '*.kksh' -o -iname 'xeshaders.bin'     -o -iname 'image.bin' -o -iname '*.xex' -o -iname '*.bf' -o -iname '*.xsh' \) | grep .; then
+  echo "error: files derived from the game are in the AppDir (above)" >&2
+  exit 1
+fi
+
 echo "== Missing libraries check"
 LD_LIBRARY_PATH="$APPDIR/usr/bin" ldd "$APPDIR/usr/bin/king_kong" | grep "not found" || echo "none"
 
