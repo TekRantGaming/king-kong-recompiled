@@ -88,6 +88,15 @@ class SceneAo {
   // Whether a pixel shader is on the ambient list.
   bool IsAmbientShader(uint64_t ucode_hash) const { return ambient_ && ambient_->find(ucode_hash); }
 
+  // What the last OnDraw decided (--native_dump_frame logs it).
+  struct LastDraw {
+    AoDrawClass cls = AoDrawClass::kIgnore;
+    AoFrameTracker::Events events;
+    bool computed = false;  // the occlusion was worked out before this draw
+    bool applied = false;   // and went into the scene before it
+  };
+  const LastDraw& last_draw() const { return last_; }
+
   struct Stats {
     uint64_t frames = 0;             // frames with AO on
     uint64_t computed = 0;           // XeGTAO runs
@@ -139,6 +148,8 @@ class SceneAo {
   uint64_t fog_frame_ = UINT64_MAX;
   AmbientView ambient_view_;
   bool warned_camera_ = false;
+  LastDraw last_;
+  Stats logged_;  // the statistics at the last periodic log line
 };
 
 }  // namespace nr

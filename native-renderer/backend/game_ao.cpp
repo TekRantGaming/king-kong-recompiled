@@ -122,6 +122,17 @@ void GameRenderer::AoDrawHook(nvrhi::ICommandList* cl, const DrawCall& call, con
   }
   const bool reads = scene_ao_->OnDraw(cl, a, s);
   if (ao_constants_) AoWriteAmbientConstants(cl, reads);
+  if (Dump(call.frame) && s.mode > 0) {
+    // --native_dump_frame: the classifier's view of the draw (docs/ao.md, the Windows checklist).
+    const SceneAo::LastDraw& l = scene_ao_->last_draw();
+    Logf(LogLevel::kInfo,
+         "rexgpu-native:   AO draw %u: %s%s%s%s%s%s%s (colour %d depth test %d write %d blend %08X alpha test %d, ps %016llX)",
+         call.index_in_frame, AoDrawClassName(l.cls), l.events.in_scene ? ", scene" : "",
+         l.events.depth_complete ? ", depth pre-pass ended before it" : "",
+         l.events.opaque_complete ? ", opaque pass ended before it" : "", l.computed ? ", occlusion worked out" : "",
+         l.applied ? ", occlusion applied" : "", reads ? ", reads the occlusion" : "", int(st.color), int(st.depth_test),
+         int(st.depth_write), st.blend_control, int(st.alpha_test), static_cast<unsigned long long>(st.ps_hash));
+  }
 }
 
 void GameRenderer::AoWriteAmbientConstants(nvrhi::ICommandList* cl, bool reads) {

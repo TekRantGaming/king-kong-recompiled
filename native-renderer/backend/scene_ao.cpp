@@ -50,6 +50,20 @@ void SceneAo::NewFrame(uint64_t frame) {
   depth_copied_ = scene_dest_set_ = resolve_applied_ = false;
   ambient_view_ = {};
   ++stats_.frames;
+  // Every 600 frames with AO on: where the occlusion went (the Windows checklist reads this).
+  if (stats_.frames % 600 == 0) {
+    Logf(LogLevel::kInfo,
+         "rexgpu-native: AO last 600 frames: %llu computed, %llu at the opaque pass's end, %llu in a scene copy, %llu at "
+         "Present, %llu ambient-only; %llu moments without a camera, %llu without this frame's depth",
+         static_cast<unsigned long long>(stats_.computed - logged_.computed),
+         static_cast<unsigned long long>(stats_.applied_opaque - logged_.applied_opaque),
+         static_cast<unsigned long long>(stats_.applied_resolve - logged_.applied_resolve),
+         static_cast<unsigned long long>(stats_.applied_present - logged_.applied_present),
+         static_cast<unsigned long long>(stats_.ambient_frames - logged_.ambient_frames),
+         static_cast<unsigned long long>(stats_.no_camera - logged_.no_camera),
+         static_cast<unsigned long long>(stats_.no_depth - logged_.no_depth));
+    logged_ = stats_;
+  }
 }
 
 bool SceneAo::Compute(nvrhi::ICommandList* cl, const AoSettings& s, nvrhi::ITexture* depth_override) {
@@ -99,6 +113,8 @@ bool SceneAo::OnDraw(nvrhi::ICommandList* cl, const Draw& d, const AoSettings& s
   if (s.mode <= 0 || !gtao_) return false;
   if (d.frame != frame_) NewFrame(d.frame);
   const AoDrawClass cls = rules_.Classify(d.state);
+  const uint64_t computed_before = stats_.computed;
+  const bool applied_before = applied_;
   // The camera, from the frame's first scene draws with a depth test.
   if ((cls == AoDrawClass::kOpaque || cls == AoDrawClass::kDepthOnly) && d.frame_size && d.depth.key && d.vs_constants &&
       camera_.offers(frame_) < 16) {
@@ -140,6 +156,10 @@ bool SceneAo::OnDraw(nvrhi::ICommandList* cl, const Draw& d, const AoSettings& s
   }
   const bool reads = apply == AoApply::kAmbient && ambient_ready_ && e.in_scene;
   if (reads && d.state.ps_hash && IsAmbientShader(d.state.ps_hash)) ambient_drawn_ = true;
+  last_.cls = cls;
+  last_.events = e;
+  last_.computed = stats_.computed != computed_before;
+  last_.applied = applied_ && !applied_before;
   return reads;
 }
 

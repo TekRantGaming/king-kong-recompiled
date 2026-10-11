@@ -34,6 +34,7 @@
 #include "backend/draw_state.h"
 #include "backend/game_renderer.h"
 #include "backend/guest_device.h"
+#include "backend/log.h"
 #include "backend/render_scale.h"
 #include "backend/renderer.h"
 #include "backend/shader_library.h"
@@ -850,6 +851,37 @@ TEST(GameAo_RenderScaleTwoMatchesOne) {
     CHECK(mae < 0.012);
     CHECK(worst_probe < (q == AoQuality::kHalf ? 0.08f : 0.04f));
   }
+}
+
+std::vector<std::string>& Captured() {
+  static std::vector<std::string> lines;
+  return lines;
+}
+
+TEST(GameAo_DumpFrameNamesTheMoments) {
+  // --native_dump_frame logs the classifier's view of every draw: the depth pre-pass, the opaque pass
+  // (whose first draw ends the pre-pass), the water (before which the occlusion is worked out and
+  // applied) and the particle.
+  Options o;
+  o.ao = GtaoConfig(AoApply::kOpaque);
+  Fixture f(o);
+  if (!f.Init()) return;
+  f.game->options().dump_frame = 0;
+  Captured().clear();
+  SetLogSink([](LogLevel, const char* text) {
+    if (std::strstr(text, "AO draw")) Captured().push_back(text);
+  });
+  f.Render({}, "dump");
+  SetLogSink(nullptr);
+  CHECK_EQ(Captured().size(), size_t(4));
+  if (Captured().size() == 4) {
+    CHECK(Captured()[0].find(": depth, scene") != std::string::npos);
+    CHECK(Captured()[1].find(": opaque, scene, depth pre-pass ended before it") != std::string::npos);
+    CHECK(Captured()[2].find(": transparent, scene, opaque pass ended before it, occlusion worked out, occlusion applied") !=
+          std::string::npos);
+    CHECK(Captured()[3].find(": transparent, scene (") != std::string::npos);
+  }
+  for (const std::string& l : Captured()) std::printf("  %s\n", l.c_str());
 }
 
 TEST(GameAo_OffChangesNothing) {
