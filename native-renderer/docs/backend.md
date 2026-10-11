@@ -784,6 +784,17 @@ the draws no longer wait for the driver. `__GL_SHADER_DISK_CACHE=0` does not swi
 cache off (creation time unchanged), so a truly cold driver was not measured again; on a cold driver the
 budget caps the wait at 30 ms a frame and the rest of the draws skip a frame or two. The cache is on by
 default: a second session of a chapter then draws everything from its first frame.
+
+**Found with the cache on (record version 2).** Version 1 named a record's shaders by their microcode hash
+only, and the prewarm asked the pack for "any translation of this microcode". A pack made with
+`--also-scaled` holds two or more translations of many pixel shaders (render scale aware or not, other
+interpolators: 8,929 translations of 6,828 microcode and input pairs), and the shader library also kept one
+shader per microcode, so the prewarm's pick became the draw's shader as well. V-Rex then drew its fog and rain
+lighting with the wrong translation: a bright haze over the left of the picture, at scale 1 once the cache
+had records (MAE 90 against 3.4 with `--native_pipeline_cache=false`) and at every render scale. Records now
+carry both translations' input hashes (`vs_input`, `ps_input`; 144 bytes, version 2, older files are
+ignored), the library keys shaders by microcode and translation inputs, and the prewarm asks the pack for
+exactly that translation.
 - Every pipeline description is appended once to the file as a 128-byte `PipelineRecord` (16-byte header: magic,
   version 1, record size, byte-order marker). A torn tail is repaired on open; a version mismatch starts a new file.
 - At start all records are queued on the pipeline worker threads. Shaders come from the pack by hash, or the

@@ -82,6 +82,9 @@ class TextureCache {
   TextureOptions options;
   // Called when an entry needs its guest ranges watched for CPU writes again (after an upload or check).
   std::function<void(uint32_t physical, uint32_t bytes)> watch_range;
+  // Skip arming the watch of an entry that is still watched (ResidentEntry::watched). Off: arm
+  // it at every check, upload and resolve (debugging).
+  bool watch_once = true;
   // Called before an entry is dropped, to free its host resource.
   std::function<void(Entry&)> release_host;
 
@@ -126,6 +129,9 @@ class BufferCache {
     BindAction action = BindAction::kUseExisting;
   };
   std::function<void(uint32_t physical, uint32_t bytes)> watch_range;
+  // Skip arming the watch of an entry that is still watched (ResidentEntry::watched). Off: arm
+  // it at every check, upload and resolve (debugging).
+  bool watch_once = true;
   std::function<void(Entry&)> release_host;
 
   BindResult Bind(uint32_t physical, uint32_t bytes, uint64_t conversion_id, const GuestMemory& memory,

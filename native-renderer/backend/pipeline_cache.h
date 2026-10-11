@@ -43,12 +43,18 @@ struct PipelineRecord {
   uint32_t poly_offset = 0;    // PA_SU_POLY_OFFSET_FRONT_OFFSET, float bits
   uint32_t flags = 0;          // bit 0: front face flipped (--native_flip_front_face)
   uint32_t reserved[2] = {};
+  // The translations' input hashes (kkshaders::translationInputHash): the same microcode has
+  // several translations in a pack (render scale aware or not, other interpolators), and the
+  // prewarm must make the one the draw uses. Version 1 named the microcode only, and its
+  // prewarm made whichever translation the pack gave first (V-Rex's fog lookups broke).
+  uint64_t vs_input = 0;
+  uint64_t ps_input = 0;
   bool operator==(const PipelineRecord&) const = default;
 };
-static_assert(sizeof(PipelineRecord) == 128, "PipelineRecord layout changed: bump kPipelineCacheVersion");
+static_assert(sizeof(PipelineRecord) == 144, "PipelineRecord layout changed: bump kPipelineCacheVersion");
 
 constexpr uint32_t kPipelineCacheMagic = 0x4350474Bu;  // 'KGPC'
-constexpr uint32_t kPipelineCacheVersion = 1;
+constexpr uint32_t kPipelineCacheVersion = 2;
 
 // The pipeline key: a hash of the record's contents (stable between runs and machines).
 uint64_t PipelineKey(const PipelineRecord& record);

@@ -157,6 +157,8 @@ std::map<uint32_t, uint32_t>::iterator FirstOverlap(std::map<uint32_t, uint32_t>
 
 void GameRenderer::set_watch(std::function<void(uint32_t, uint32_t)> watch) {
   watch_ = watch;
+  // --native_debug bit 64: arm the watches at every check, upload and resolve (debugging).
+  textures_.watch_once = vertex_buffers_.watch_once = index_buffers_.watch_once = !(options_.debug & 64);
   if (watch) {
     // Buffers: their ranges are unwatched whole on a write (OnGuestWrite). Textures: never
     // widened, and a widening that would reach one is not made: a texture a resolve wrote holds
@@ -385,6 +387,10 @@ void GameRenderer::WriteSlot(Table table, const nvrhi::BindingSetItem& item) {
 }
 
 std::pair<uint32_t, uint32_t> GameRenderer::OnGuestWrite(uint32_t physical, uint32_t bytes) {
+  if (options_.debug & 128) {  // debugging: the written range only
+    InvalidateRange(physical, bytes);
+    return {physical, bytes};
+  }
   const uint32_t write_end = physical + std::max(bytes, 1u);
   uint32_t start = physical, end = write_end;
   {
@@ -615,8 +621,9 @@ void GameRenderer::NoteRecord(const PipelineRecord& record, uint64_t key) {
 
 bool GameRenderer::QueuePrewarm(const PipelineRecord& record) {
   const kkshaders::ShaderKind vk = kkshaders::ShaderKind::Vertex, pk = kkshaders::ShaderKind::Pixel;
-  std::shared_ptr<const GameShader> vs = shaders_->GetByHash(vk, record.vs_hash);
-  std::shared_ptr<const GameShader> ps = record.ps_hash ? shaders_->GetByHash(pk, record.ps_hash) : nullptr;
+  std::shared_ptr<const GameShader> vs = shaders_->GetByHash(vk, record.vs_hash, record.vs_input);
+  std::shared_ptr<const GameShader> ps =
+      record.ps_hash ? shaders_->GetByHash(pk, record.ps_hash, record.ps_input) : nullptr;
   if (!vs || (record.ps_hash && !ps)) return false;
   nvrhi::GraphicsPipelineDesc desc;
   nvrhi::FramebufferInfo framebuffer;
@@ -941,6 +948,8 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   PipelineRecord record;
   record.vs_hash = vs->ucode_hash;
   record.ps_hash = ps ? ps->ucode_hash : 0;
+  record.vs_input = vs->input_hash;
+  record.ps_input = ps ? ps->input_hash : 0;
   record.topology = uint32_t(topology);
   for (uint32_t i = 0; i < 4; ++i) {
     if (!colors[i]) continue;

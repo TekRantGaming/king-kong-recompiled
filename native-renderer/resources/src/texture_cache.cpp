@@ -84,8 +84,8 @@ uint64_t HashResident(const ResidentEntry& e, const GuestMemory& memory) {
   return h;
 }
 
-void Watch(const std::function<void(uint32_t, uint32_t)>& watch, ResidentEntry& e) {
-  if (!watch || e.watched) return;
+void Watch(const std::function<void(uint32_t, uint32_t)>& watch, ResidentEntry& e, bool once = true) {
+  if (!watch || (once && e.watched)) return;
   for (const GuestRange& r : e.ranges)
     if (r.bytes) watch(r.start, r.bytes);
   e.watched = true;
@@ -165,7 +165,7 @@ TextureCache::BindResult TextureCache::Bind(const TextureFetch& fetch, const Gue
   const uint64_t hash = HashRanges(e, memory);
   if (hash == e.content_hash && !e.gpu_written) {
     e.dirty = false;
-    Watch(watch_range, e);
+    Watch(watch_range, e, watch_once);
     return result;
   }
   result.action = BindAction::kReupload;
@@ -177,7 +177,7 @@ void TextureCache::OnUploaded(Entry& e, const GuestMemory& memory) {
   e.dirty = false;
   e.gpu_written = false;
   ++e.uploads;
-  Watch(watch_range, e);
+  Watch(watch_range, e, watch_once);
 }
 
 void TextureCache::InvalidateRange(uint32_t physical, uint32_t bytes) { InvalidateIndexed(pages_, physical, bytes); }
@@ -193,7 +193,7 @@ TextureCache::Entry& TextureCache::MarkGpuWritten(const TextureFetch& fetch, uin
   e.dirty = false;
   e.content_hash = 0;
   e.last_used_frame = frame;
-  Watch(watch_range, e);  // a later CPU write makes guest memory the truth again
+  Watch(watch_range, e, watch_once);  // a later CPU write makes guest memory the truth again
   return e;
 }
 
@@ -238,7 +238,7 @@ BufferCache::BindResult BufferCache::Bind(uint32_t physical, uint32_t bytes, uin
   if (!e.dirty) return result;
   if (HashResident(e, memory) == e.content_hash) {
     e.dirty = false;
-    Watch(watch_range, e);
+    Watch(watch_range, e, watch_once);
     return result;
   }
   result.action = BindAction::kReupload;
@@ -249,7 +249,7 @@ void BufferCache::OnUploaded(Entry& e, const GuestMemory& memory) {
   e.content_hash = HashResident(e, memory);
   e.dirty = false;
   ++e.uploads;
-  Watch(watch_range, e);
+  Watch(watch_range, e, watch_once);
 }
 
 void BufferCache::InvalidateRange(uint32_t physical, uint32_t bytes) { InvalidateIndexed(pages_, physical, bytes); }

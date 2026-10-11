@@ -100,7 +100,8 @@ class GameRenderer {
     int32_t dump_frame = -1;
     // Debugging aids (bits): 1 the game's clears are green, 2 the frame image
     // is magenta before the back buffer is copied in, 4 no gamma ramp, 16 plain pixel shaders at a
-    // render scale (not the scale-aware ones), 32 only frame-wide targets scale, 8 log the pages CPU writes
+    // render scale (not the scale-aware ones), 32 only frame-wide targets scale, 64 watches armed every
+    // time, 128 no widening of a written range, 8 log the pages CPU writes
     // invalidate most (every 300 frames).
     uint32_t debug = 0;
   };

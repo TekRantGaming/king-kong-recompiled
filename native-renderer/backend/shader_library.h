@@ -32,6 +32,7 @@ namespace nr {
 struct GameShader {
   kkshaders::ShaderKind kind = kkshaders::ShaderKind::Pixel;
   uint64_t ucode_hash = 0;
+  uint64_t input_hash = 0;  // kkshaders::translationInputHash of the translation
   uint32_t id = 0;  // small unique number, for pipeline keys
   kkshaders::ShaderBindings bindings;
   nvrhi::ShaderHandle handle;
@@ -68,7 +69,7 @@ class ShaderLibrary {
   // made, else one built from the pack alone (no container needed). Null when neither exists
   // (a shader that DXC would translate waits for the game to create it). For the pipeline
   // prewarm, which knows shaders only by hash.
-  std::shared_ptr<const GameShader> GetByHash(kkshaders::ShaderKind kind, uint64_t ucode_hash);
+  std::shared_ptr<const GameShader> GetByHash(kkshaders::ShaderKind kind, uint64_t ucode_hash, uint64_t input_hash);
   // Number of shader objects registered so far (changes when the game creates one).
   uint64_t created_count() const;
   // The shader for a bound object (null when it cannot be made).
@@ -80,7 +81,8 @@ class ShaderLibrary {
  private:
   std::shared_ptr<GameShader> Build(const kkshaders::ShaderInfo& info);
   // The common tail: the host shader from a compiled blob, registered under (kind, hash).
-  std::shared_ptr<GameShader> Finish(kkshaders::ShaderKind kind, uint64_t hash, kkshaders::CompiledShader&& compiled,
+  std::shared_ptr<GameShader> Finish(kkshaders::ShaderKind kind, uint64_t hash, uint64_t input_hash,
+                                     kkshaders::CompiledShader&& compiled,
                                      bool from_pack);
   std::shared_ptr<GameShader> FromObject(kkshaders::ShaderKind kind, uint32_t object);
 

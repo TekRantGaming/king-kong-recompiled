@@ -10,8 +10,12 @@ namespace nr {
 
 namespace {
 
-uint64_t HashKey(kkshaders::ShaderKind kind, uint64_t ucode_hash) {
-  return ucode_hash ^ (kind == kkshaders::ShaderKind::Vertex ? 0x9E3779B97F4A7C15ull : 0);
+// A translation: the microcode and the translation's inputs (the same microcode from two
+// containers, or with and without render scale awareness, is two shaders).
+uint64_t HashKey(kkshaders::ShaderKind kind, uint64_t ucode_hash, uint64_t input_hash) {
+  uint64_t h = ucode_hash ^ (kind == kkshaders::ShaderKind::Vertex ? 0x9E3779B97F4A7C15ull : 0);
+  h ^= input_hash + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2);
+  return h;
 }
 
 const char* KindName(kkshaders::ShaderKind kind) {
@@ -50,7 +54,8 @@ void ShaderLibrary::Initialize(const std::string& pack, const std::string& dxc) 
 
 std::shared_ptr<GameShader> ShaderLibrary::Build(const kkshaders::ShaderInfo& info) {
   // Called with mutex_ held.
-  const uint64_t key = HashKey(info.kind, info.ucodeHash);
+  const uint64_t input_hash = kkshaders::translationInputHash(info);
+  const uint64_t key = HashKey(info.kind, info.ucodeHash, input_hash);
   if (auto it = by_hash_.find(key); it != by_hash_.end()) {
     // Made from the pack alone (GetByHash): a copy that also has the container's fetch table.
     if (info.kind == kkshaders::ShaderKind::Vertex && !it->second->source) {
@@ -65,7 +70,7 @@ std::shared_ptr<GameShader> ShaderLibrary::Build(const kkshaders::ShaderInfo& in
   kkshaders::CompiledShader compiled;
   bool from_pack = false;
   if (pack_open_) {
-    from_pack = pack_.find(info.ucodeHash, kkshaders::translationInputHash(info), compiled);
+    from_pack = pack_.find(info.ucodeHash, input_hash, compiled);
     // The ucode-only fallback answers with the 1:1 translation: wrong for an aware shader.
     if (!from_pack && !info.renderScaleAware) from_pack = pack_.find(info.ucodeHash, 0, compiled);
   }
@@ -92,14 +97,14 @@ std::shared_ptr<GameShader> ShaderLibrary::Build(const kkshaders::ShaderInfo& in
     ++stats_.from_pack;
   }
 
-  std::shared_ptr<GameShader> shader = Finish(info.kind, info.ucodeHash, std::move(compiled), from_pack);
+  std::shared_ptr<GameShader> shader = Finish(info.kind, info.ucodeHash, input_hash, std::move(compiled), from_pack);
   if (shader && info.kind == kkshaders::ShaderKind::Vertex) shader->source = std::make_shared<const kkshaders::ShaderInfo>(info);
   return shader;
 }
 
-std::shared_ptr<GameShader> ShaderLibrary::Finish(kkshaders::ShaderKind kind, uint64_t hash,
+std::shared_ptr<GameShader> ShaderLibrary::Finish(kkshaders::ShaderKind kind, uint64_t hash, uint64_t input_hash,
                                                    kkshaders::CompiledShader&& compiled, bool from_pack) {
-  const uint64_t key = HashKey(kind, hash);
+  const uint64_t key = HashKey(kind, hash, input_hash);
   const bool spirv = device_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN;
   const std::vector<uint8_t>& blob = spirv ? compiled.spirv : compiled.dxil;
   if (blob.empty()) {
@@ -110,6 +115,7 @@ std::shared_ptr<GameShader> ShaderLibrary::Finish(kkshaders::ShaderKind kind, ui
   auto shader = std::make_shared<GameShader>();
   shader->kind = kind;
   shader->ucode_hash = hash;
+  shader->input_hash = input_hash;
   shader->id = next_id_++;
   shader->bindings = std::move(compiled.bindings);
   shader->from_pack = from_pack;
@@ -129,15 +135,17 @@ std::shared_ptr<GameShader> ShaderLibrary::Finish(kkshaders::ShaderKind kind, ui
   return shader;
 }
 
-std::shared_ptr<const GameShader> ShaderLibrary::GetByHash(kkshaders::ShaderKind kind, uint64_t ucode_hash) {
+std::shared_ptr<const GameShader> ShaderLibrary::GetByHash(kkshaders::ShaderKind kind, uint64_t ucode_hash,
+                                                          uint64_t input_hash) {
   std::lock_guard lock(mutex_);
-  const uint64_t key = HashKey(kind, ucode_hash);
+  const uint64_t key = HashKey(kind, ucode_hash, input_hash);
   if (auto it = by_hash_.find(key); it != by_hash_.end()) return it->second;
   if (!pack_open_ || failed_.count(key)) return nullptr;
   kkshaders::CompiledShader compiled;
-  if (!pack_.find(ucode_hash, 0, compiled)) return nullptr;
+  // Exactly that translation (input 0 would answer with any of them).
+  if (!input_hash || !pack_.find(ucode_hash, input_hash, compiled)) return nullptr;
   ++stats_.from_pack;
-  return Finish(kind, ucode_hash, std::move(compiled), true);
+  return Finish(kind, ucode_hash, input_hash, std::move(compiled), true);
 }
 
 uint64_t ShaderLibrary::created_count() const {
