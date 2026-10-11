@@ -72,6 +72,7 @@ void Correct(const Site& site, PPCContext& ctx, uint8_t* base, Fn original) {
     if (!ours) continue;
     const float want = std::pow(k, 90.0f * dt);
     for (int i = 0; i < 3; ++i) StoreF(base, at + i * 4, before[i] * want);
+    Count("step_decay corrections");
     return;
   }
 }
@@ -105,4 +106,5 @@ REX_HOOK_RAW(sub_8261AD78) {
     return;
   }
   ctx.f1.f64 = double(std::pow(k, 90.0f * dt));
+  kk::hfr::Count("step_decay helper");
 }

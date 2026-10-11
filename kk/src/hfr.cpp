@@ -2,7 +2,11 @@
 
 #include "hfr.h"
 
+#include <rex/logging.h>
+
+#include <chrono>
 #include <cstdlib>
+#include <map>
 #include <cstring>
 #include <sstream>
 #include <string>
@@ -23,6 +27,24 @@ bool On(const char* name) {
   (void)name;
 #endif
   return true;
+}
+
+void Count(const char* name) {
+#if defined(KK_DEV_TOOLS)
+  static const bool trace = std::getenv("KK_DEV_HFR_TRACE") != nullptr;
+  if (!trace) return;
+  static std::map<std::string, int> counts;
+  static auto start = std::chrono::steady_clock::now();
+  ++counts[name];
+  if (std::chrono::steady_clock::now() - start < std::chrono::seconds(1)) return;
+  start = std::chrono::steady_clock::now();
+  for (auto& [n, c] : counts) {
+    if (c) REXLOG_INFO("KK dev hfr {}: {}", n, c);
+    c = 0;
+  }
+#else
+  (void)name;
+#endif
 }
 
 void SetupDtFloor(rex::memory::Memory* memory);

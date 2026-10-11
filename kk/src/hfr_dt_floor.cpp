@@ -44,6 +44,7 @@ void WithRealStep(PPCContext& ctx, uint8_t* base, Fn original) {
     original(ctx, base);
     return;
   }
+  Count("dt_floor calls with a frame under 0.016 s");
   const uint32_t saved = Load32(base, kFloor);
   StoreF(base, kFloor, dt);
   original(ctx, base);

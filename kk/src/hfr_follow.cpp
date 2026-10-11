@@ -50,6 +50,7 @@ REX_HOOK_RAW(sub_828271E8) {
   const float keep = 1.0f - (1.0f - p) * (1.0f - p);  // s, the part kept per step
   const float want = std::pow(keep, 310.0f * dt / float(FollowSteps(dt)));
   StoreF(base, self + 8, 1.0f - std::sqrt(std::max(0.0f, 1.0f - want)));
+  Count("follow calls");
   __imp__sub_828271E8(ctx, base);
   StoreF(base, self + 8, p);
 }

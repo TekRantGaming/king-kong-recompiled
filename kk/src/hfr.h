@@ -56,6 +56,10 @@ inline bool Active() { return REXCVAR_GET(kk_hfr_fixes) && REXCVAR_GET(kk_frame_
 // ("particles,decay,..." or "all"), so each one can be measured on and off.
 bool On(const char* name);
 
+// Dev builds with KK_DEV_HFR_TRACE: count an event of a fix (logged once a
+// second as "KK dev hfr <name>: n"). No-op otherwise.
+void Count(const char* name);
+
 // Once the runtime is up (OnPostSetup): what some fixes need from it.
 void Setup(rex::memory::Memory* memory);
 
