@@ -24,6 +24,7 @@ target_compile_features(nr_draw PUBLIC cxx_std_20)
 add_library(nr_renderer STATIC
     renderer.cpp
     ambient_occlusion.cpp
+    gtao.cpp
     shaders.cpp
     log.cpp
 )

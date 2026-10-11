@@ -40,10 +40,15 @@ if(NR_HAS_VULKAN)
     add_test(NAME nr_ao_tests
              COMMAND ${Python3_EXECUTABLE} -I "${CMAKE_CURRENT_SOURCE_DIR}/check_validation.py"
                      $<TARGET_FILE:nr_ao_tests>)
+    add_executable(nr_gtao_tests gtao_tests.cpp vk_test_device.cpp readback.cpp)
+    target_link_libraries(nr_gtao_tests PRIVATE nr_renderer nr_hooks ${CMAKE_DL_LIBS})
+    add_test(NAME nr_gtao_tests
+             COMMAND ${Python3_EXECUTABLE} -I "${CMAKE_CURRENT_SOURCE_DIR}/check_validation.py"
+                     $<TARGET_FILE:nr_gtao_tests>)
     # Prefer lavapipe when several Vulkan drivers are installed.
     set(_lvp "/usr/share/vulkan/icd.d/lvp_icd.json")
     if(EXISTS "${_lvp}")
-        set_tests_properties(nr_render_tests nr_ao_tests PROPERTIES ENVIRONMENT "VK_ICD_FILENAMES=${_lvp}")
+        set_tests_properties(nr_render_tests nr_ao_tests nr_gtao_tests PROPERTIES ENVIRONMENT "VK_ICD_FILENAMES=${_lvp}")
     endif()
 endif()
 

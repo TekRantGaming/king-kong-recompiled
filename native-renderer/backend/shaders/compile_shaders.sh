@@ -35,4 +35,16 @@ for spec in ao_vs:vs:vs_main ao_copy_ps:ps:ps_copy ao_depth_ps:ps:ps_depth ao_ao
     -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-b-shift 256 0 -fvk-u-shift 384 0 \
     -Fh "$out/${base}_spirv.h" -Vn "k_${base}_spirv" "$src"
 done
+# GTAO (gtao.hlsl, docs/ao.md): compute passes and the apply passes, one blob per entry point.
+src="$here/gtao.hlsl"
+for spec in gtao_prepare_cs:cs:cs_prepare gtao_prefilter_cs:cs:cs_prefilter gtao_normals_cs:cs:cs_normals \
+            gtao_main_cs:cs:cs_main gtao_denoise_cs:cs:cs_denoise gtao_denoise_last_cs:cs:cs_denoise_last \
+            gtao_output_cs:cs:cs_output gtao_vs:vs:vs_main gtao_apply_ps:ps:ps_apply \
+            gtao_apply_resolve_ps:ps:ps_apply_resolve; do
+  base=${spec%%:*}; rest=${spec#*:}; stage=${rest%%:*}; entry=${rest#*:}
+  "$DXC" -nologo -T "${stage}_6_0" -E "$entry" -O3 -Fh "$out/${base}_dxil.h" -Vn "k_${base}_dxil" "$src"
+  "$DXC" -nologo -T "${stage}_6_0" -E "$entry" -O3 -spirv -fspv-target-env=vulkan1.2 \
+    -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-b-shift 256 0 -fvk-u-shift 384 0 \
+    -Fh "$out/${base}_spirv.h" -Vn "k_${base}_spirv" "$src"
+done
 echo "Shaders written to $out"
