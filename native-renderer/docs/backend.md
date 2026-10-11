@@ -445,6 +445,48 @@ texture a resolve wrote there instead of the frame).
 Three test fixes came out of the first Windows run: the harness test called `python3` (now CMake's Python), and
 two counts had not followed this phase (the clear as a draw in the frame log, the hook table's 42nd entry).
 
+### Frame rate (Phase 2b)
+
+Measured with the port's own frame statistics (`Frame times` every 10 s after `KK dev: gameplay reached`, or the
+last minute of the V-Rex run), `--kk_original_look_keep=kk_frame_rate --kk_frame_rate=N`, RTX 4070 Ti, 1280x720
+window. Average FPS / 1% low; the Xenos plugin at `--draw_resolution_scale_x/y`, the native renderer at
+`--native_render_scale`. Runs `runs\perfA-*` (Xenos) and `runs\perfG-*` (native with the four options below);
+tables in `analysis\phase2\perfA_table.txt`, `perfG_table.txt`.
+
+| Cap, scale | V-Rex: Xenos | V-Rex: native | Venture: Xenos | Venture: native | Kong: Xenos | Kong: native |
+|---|---|---|---|---|---|---|
+| 60, 1 | 60.0 / 59.6 | 60.0 / 48.3 | 60.0 / 59.8 | 60.0 / 57.6 | 57.8 / 10.5 | 57.6 / 10.3 |
+| 60, 2 | 60.0 / 59.8 | 60.0 / 59.9 | 60.0 / 59.9 | 60.0 / 59.9 | 57.6 / 9.5 | 57.5 / 10.3 |
+| 120, 1 | 109.9 / 92.2 | 120.0 / 111.7 | 110.3 / 96.7 | 120.0 / 103.3 | 105.2 / 13.7 | 113.8 / 14.3 |
+| 120, 2 | 110.0 / 92.2 | 120.0 / 110.6 | 110.3 / 104.7 | 120.0 / 106.5 | 104.8 / 12.1 | 113.8 / 14.1 |
+| unlimited, 1 | 110.0 / 92.9 | 161.0 / 84.0 | 110.0 / 104.8 | 223.8 / 75.7 | 105.0 / 13.6 | 176.3 / 17.2 |
+| unlimited, 2 | 110.0 / 92.2 | 159.8 / 91.9 | 109.9 / 89.2 | 232.4 / 88.8 | 105.2 / 11.9 | 173.0 / 16.9 |
+
+(Kong's 1% low is the chapter load inside the measured minute, on both plugins. The Xenos plugin tops out at
+110: its command processor waits for the presenter the way the native renderer did before the fourth option.
+Unlimited on native means the game runs faster than the presenter shows frames; the presenter takes the newest.)
+
+Where the time went, and the options that fix it (all off by default, to keep today's behaviour; turn all four
+on for the numbers above):
+
+| Option | What it fixes | Venture, unlimited |
+|---|---|---|
+| (none) | | 66 FPS (Xenos 110) |
+| `--native_present_unlocked` | the swap held the renderer's lock through the presenter's refresh, blocking the game's draws (6.5 ms a frame in presents, 2.3 ms in clears at 60 FPS) | |
+| `--native_async_submit` | the game's thread submitted each frame and waited about 6 ms for the queue, which the presenter holds; a submission thread takes three frame command lists in turn | 70 |
+| `--native_dynamic_vertex_buffers` | a 4 MB particle vertex ring rewritten every frame faulted per 4 KB page (340 write faults a frame); such buffers stop being watched and each draw uploads the vertices it reads (7 to 13 MB a frame) | 107 |
+| `--native_async_present` | the ring skimmer waited the presenter's refresh (7.7 ms a swap) at every swap, and the game waited for the skimmer through the ring; a present thread takes the newest swap | 224 (V-Rex 162, 1% low 84 to 90) |
+
+Also, without an option: a draw builds its pipeline description only when the pipeline is not made yet, and
+compares the constants as guest bytes before converting them. The statistics line every 300 swaps now also
+gives the hooks' time and calls, the Present's parts (copy, close, submit, frame end), the queue waits, the
+swap's flush and refresh times, the ring skimmer's busy and waiting time, and the slowest frames of the window
+with their renderer, present, pipeline and texture time (`rexgpu-native: slowest frames:`).
+
+With all four options the 13 golden scenes pass except `loading`, whose frozen fade frame is one fade step
+later (MAE 0.21, tile MAE 4.2 against a limit of 2): the timing the frozen frame depends on moves with the
+frame rate (`runs\native-fast-full2`).
+
 ### The launcher's settings and the native renderer (Phase 2b, launcher v1.9.11)
 
 | Setting (cvar) | With `--gpu_plugin=native` |
