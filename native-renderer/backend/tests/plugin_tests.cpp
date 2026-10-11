@@ -30,6 +30,7 @@
 #include "backend/tests/fake_guest.h"
 #include "backend/tests/readback.h"
 #include "backend/tests/scene.h"
+#include "hooks/kk_native_ui.h"
 #include "hooks/trace_replay.h"
 #include "backend/pipeline_cache.h"
 #include "plugin/native_api.h"
@@ -241,7 +242,10 @@ TEST(LauncherPrewarmEntryPoints) {
   NrPrewarmRequest old = request;
   old.version = NR_PREWARM_VERSION + 1;
   CHECK_EQ(start(&old), uint32_t(NR_PREWARM_OFF));
-  CHECK_EQ(start(&request), uint32_t(NR_PREWARM_RUNNING));
+  // Started the way the game's launcher starts it (hooks/kk_native_ui.cpp): the cache root and King
+  // Kong's title, so the player's file is <root>/native-pipelines/555307D3.pipelines.
+  CHECK(nr::kk::StutterLine().empty());  // no game renderer, option off
+  nr::kk::StartLauncherPrewarm(root);
   NrPrewarmStatus s = {};
   s.size = sizeof(s);
   for (int i = 0; i < 600 && status(&s) == NR_PREWARM_RUNNING; ++i) {

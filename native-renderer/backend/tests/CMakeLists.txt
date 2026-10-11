@@ -59,7 +59,8 @@ endif()
 # LoadGpuPlugin finds it (it looks beside the executable).
 if(NR_BUILD_PLUGIN AND NR_HAS_VULKAN AND UNIX)
     add_executable(nr_plugin_tests plugin_tests.cpp readback.cpp
-        "${NR_ROOT}/backend/vulkan_host.cpp" "${NR_ROOT}/backend/backend.cpp")
+        "${NR_ROOT}/backend/vulkan_host.cpp" "${NR_ROOT}/backend/backend.cpp"
+        "${NR_ROOT}/hooks/kk_native_ui.cpp")
     target_link_libraries(nr_plugin_tests PRIVATE nr_renderer nr_hooks rex::runtime rex::renderdoc
                           ${CMAKE_DL_LIBS})
     target_compile_features(nr_plugin_tests PRIVATE cxx_std_23)
