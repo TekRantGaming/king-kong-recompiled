@@ -28,6 +28,8 @@ def load(path):
     frames, objs = [], defaultdict(list)
     with open(path, newline='') as f:
         for r in csv.DictReader(f):
+            if None in r.values() or None in r:
+                continue  # a line cut short when the game was stopped
             row = {k: (float(v) if k not in ('obj', 'flags', 'ai_f', 'key') else v) for k, v in r.items()}
             if int(row['i']) < 0:
                 frames.append(row)

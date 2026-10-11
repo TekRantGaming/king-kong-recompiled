@@ -9,7 +9,8 @@
 //   gt (sum of the frame times since this world was first seen, s: the
 //   level's own clock, to line runs up), dt, i (index in the active list),
 //   obj (guest address), flags (+0), x y z (global matrix translation),
-//   ax ay az (its first axis), ev_t ev_i (first event track: time, key index),
+//   ax ay az (its first axis), ev_t ev_i (animation: frame in seconds, and
+//   current action * 256 + action item),
 //   ai_t ai_f (first AI track: wait timer, its compiled function),
 //   key (the object's file key, stable between runs; 0 if not found)
 // and every frame one row with i = -1 and obj = the world (the frame's dt), so
@@ -44,6 +45,8 @@
 #include <rex/logging.h>
 
 #include "hfr.h"
+
+REX_EXTERN(__imp__sub_823F8AF0);  // the animation frame of an object's layer
 
 namespace kk {
 double DevSecondsSinceMenu();
@@ -84,9 +87,14 @@ std::unordered_map<uint32_t, uint32_t> KeysByAddress(const uint8_t* base) {
   }
   const uint32_t keys = Load32(base, 0x82C4ED94), n = Load32(base, 0x82C4ED98);
   if (!Valid(keys) || n > 1000000) return out;
+  static bool logged = false;
   for (uint32_t k = 0; k < n; ++k) {
     const auto it = index_to_address.find(Load32(base, keys + k * 8 + 4));
     if (it != index_to_address.end()) out[it->second] = Load32(base, keys + k * 8);
+  }
+  if (!logged) {
+    logged = true;
+    REXLOG_INFO("KK dev sample: {} keys, {} loaded indices, {} addresses", n, index_to_address.size(), out.size());
   }
   return out;
 }
@@ -138,7 +146,7 @@ struct Sampler {
 
   bool on() const { return range.size() >= 2 || !dumps.empty(); }
 
-  void Objects(uint8_t* base, uint32_t world, double t, float dt, bool rows) {
+  void Objects(PPCContext* ctx, uint8_t* base, uint32_t world, double t, float dt, bool rows) {
     if (t - keys_at > 2.0) {
       keys = KeysByAddress(base);
       keys_at = t;
@@ -158,13 +166,24 @@ struct Sampler {
       float ev_t = 0, ai_t = 0;
       int ev_i = -1;
       uint32_t ai_f = 0;
-      if (const uint32_t ext = Load32(base, obj + 24); Valid(ext)) {
-        if (const uint32_t ev = Load32(base, ext + 32); Valid(ev)) {
-          if (const uint32_t data = Load32(base, ev + 4); Valid(data)) {
-            ev_t = LoadF(base, data + 0);
-            ev_i = Load16(base, data + 8);
+      // Animation: [[obj+20]+0] is the object's animation block: +156 the
+      // current action, +160 its item, +132 the first layer's animation. Its
+      // frame (1/60 s units) comes from the game's own sub_823F8AF0(obj, 0).
+      if (const uint32_t b = Load32(base, obj + 20); Valid(b)) {
+        if (const uint32_t anim = Load32(base, b); Valid(anim)) {
+          ev_i = int(Load16(base, anim + 156)) * 256 + base[anim + 160];
+          const uint32_t layer = Load32(base, anim + 132);
+          if (ctx && Valid(layer) && Valid(Load32(base, layer + 4))) {
+            PPCContext saved = *ctx;
+            ctx->r3.u64 = obj;
+            ctx->r4.u64 = 0;
+            __imp__sub_823F8AF0(*ctx, base);
+            ev_t = float(int32_t(ctx->r3.u32)) / 60.0f;
+            *ctx = saved;
           }
         }
+      }
+      if (const uint32_t ext = Load32(base, obj + 24); Valid(ext)) {
         if (const uint32_t ai = Load32(base, ext + 4); Valid(ai)) {
           if (Load16(base, ai + 82) >= Load16(base, ai + 80)) {
             const uint32_t first = Load16(base, ai + 80);
@@ -218,7 +237,7 @@ struct Sampler {
     REXLOG_INFO("KK dev sample: wrote {}", name);
   }
 
-  void Tick(uint8_t* base, uint32_t world) {
+  void Tick(PPCContext* ctx, uint8_t* base, uint32_t world) {
     const double t = DevSecondsSinceMenu();
     if (t < 0) return;
     const float dt = hfr::FrameTime(base);
@@ -254,9 +273,8 @@ struct Sampler {
       next = t;
       REXLOG_INFO("KK dev sample: sampling from {:.2f} s", t);
     }
-    // One world a frame counts (the universe's current one, [0x828E8378]).
-    const uint32_t current = Load32(base, 0x828E8378);
-    if (world != current && current) return;
+    // (Levels run one world; if a second one ran, its rows would carry its own
+    // address and clock.)
     if (world != last_world) {
       last_world = world;
       gt = 0;
@@ -269,11 +287,18 @@ struct Sampler {
     Globals(base, t, dt);
     const double interval = range.size() >= 3 ? range[2] : 0.05;
     if (t >= next) {
-      Objects(base, world, t, dt, true);
+      Objects(ctx, base, world, t, dt, true);
       next += interval;
       if (next < t) next = t + interval;
     }
+    // The game may be stopped at any time: keep the files current.
+    if (t - flushed >= 1.0) {
+      flushed = t;
+      std::fflush(f);
+      if (g) std::fflush(g);
+    }
   }
+  double flushed = 0;
 };
 
 Sampler& Get() {
@@ -284,16 +309,16 @@ Sampler& Get() {
 }  // namespace
 
 // For other dev aids that sample inside the AI pass.
-void DevSampleTick(uint8_t* base, uint32_t world) {
+void DevSampleTick(PPCContext* ctx, uint8_t* base, uint32_t world) {
   static const bool on = Get().on();
-  if (on) Get().Tick(base, world);
+  if (on) Get().Tick(ctx, base, world);
 }
 
 }  // namespace kk
 
 REX_EXTERN(__imp__sub_8271D498);
 REX_HOOK_RAW(sub_8271D498) {
-  kk::DevSampleTick(base, ctx.r3.u32);
+  kk::DevSampleTick(&ctx, base, ctx.r3.u32);
   __imp__sub_8271D498(ctx, base);
 }
 
