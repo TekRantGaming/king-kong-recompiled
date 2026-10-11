@@ -153,9 +153,10 @@ TOUR_THRESHOLDS = {
 
 # Launches: chapters played in one launch, in order. Every batch starts from the chapter select on entry 0.
 # Four launches of about ten chapters (8 to 12 minutes each). A chapter that ends by itself (Kong's Death) is
-# followed straight from the chapter select; Credits come last.
+# followed straight from the chapter select; Credits come last. Venture comes last in its launch: the quit
+# failed there in the first golden capture (seven UP presses ended on Options), and The Log is last in its own.
 BATCHES: list[list[int]] = [
-    list(range(0, 11)),
+    list(range(1, 11)) + [0],
     list(range(11, 21)),
     list(range(21, 31)),
     list(range(31, 42)),
