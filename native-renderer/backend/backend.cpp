@@ -21,6 +21,10 @@
 #if NR_GAME_RENDERER
 #include "backend/game_renderer.h"
 #include "backend/shader_library.h"
+#else
+namespace nr {
+class ShaderLibrary {};  // never made without the game renderer; Backend's unique_ptr needs a type
+}  // namespace nr
 #endif
 
 REXCVAR_DECLARE(int32_t, native_dump_frame);
