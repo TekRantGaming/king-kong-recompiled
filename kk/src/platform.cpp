@@ -13,7 +13,9 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <dxgi1_6.h>
 #include <shellapi.h>
+#pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "winmm.lib")
 #include <timeapi.h>
@@ -46,6 +48,51 @@ bool IsShiftHeld() {
   SDL_PumpEvents();
   return (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
 #endif
+}
+
+GpuInfo DetectGpu() {
+  GpuInfo info;
+#if defined(_WIN32)
+  IDXGIFactory1* factory = nullptr;
+  if (FAILED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), reinterpret_cast<void**>(&factory)))) return info;
+  IDXGIAdapter1* adapter = nullptr;
+  // Windows 10 1803 and later list the high-performance card first: the
+  // dedicated one if there is one. Older ones: the first that isn't software.
+  IDXGIFactory6* factory6 = nullptr;
+  if (SUCCEEDED(factory->QueryInterface(__uuidof(IDXGIFactory6), reinterpret_cast<void**>(&factory6)))) {
+    for (UINT i = 0; !adapter; ++i) {
+      IDXGIAdapter1* a = nullptr;
+      if (FAILED(factory6->EnumAdapterByGpuPreference(i, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, __uuidof(IDXGIAdapter1),
+                                                      reinterpret_cast<void**>(&a))))
+        break;
+      DXGI_ADAPTER_DESC1 d{};
+      if (SUCCEEDED(a->GetDesc1(&d)) && !(d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) adapter = a;
+      else a->Release();
+    }
+    factory6->Release();
+  }
+  for (UINT i = 0; !adapter; ++i) {
+    IDXGIAdapter1* a = nullptr;
+    if (factory->EnumAdapters1(i, &a) == DXGI_ERROR_NOT_FOUND) break;
+    DXGI_ADAPTER_DESC1 d{};
+    if (SUCCEEDED(a->GetDesc1(&d)) && !(d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) adapter = a;
+    else a->Release();
+  }
+  factory->Release();
+  if (!adapter) return info;
+  DXGI_ADAPTER_DESC1 d{};
+  if (SUCCEEDED(adapter->GetDesc1(&d))) {
+    info.vendor = d.VendorId == 0x10DE   ? GpuVendor::kNvidia
+                  : d.VendorId == 0x1002 ? GpuVendor::kAmd
+                  : d.VendorId == 0x8086 ? GpuVendor::kIntel
+                                         : GpuVendor::kUnknown;
+    char name[256] = {};
+    WideCharToMultiByte(CP_UTF8, 0, d.Description, -1, name, sizeof(name) - 1, nullptr, nullptr);
+    info.name = name;
+  }
+  adapter->Release();
+#endif
+  return info;
 }
 
 std::pair<int, int> PrimaryScreenSize() {

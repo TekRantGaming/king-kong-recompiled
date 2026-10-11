@@ -52,37 +52,29 @@ std::string JsonString(const std::string& json, const std::string& key, size_t f
   return {};
 }
 
-std::vector<int> VersionParts(std::string v) {
+// "v2.0.0-beta.3" -> {2, 0, 0}, with pre = 3 (-1 when it isn't a beta).
+std::vector<int> VersionParts(std::string v, int* pre = nullptr) {
   if (!v.empty() && (v[0] == 'v' || v[0] == 'V')) v.erase(0, 1);
+  if (pre) *pre = -1;
+  if (const size_t dash = v.find('-'); dash != std::string::npos) {
+    if (pre) {
+      const size_t digit = v.find_first_of("0123456789", dash);
+      *pre = digit == std::string::npos ? 0 : std::atoi(v.c_str() + digit);
+    }
+    v.erase(dash);
+  }
   std::vector<int> parts;
   std::stringstream in(v);
   for (std::string p; std::getline(in, p, '.');) parts.push_back(std::atoi(p.c_str()));
   return parts;
 }
 
-}  // namespace
-
-bool IsNewerVersion(const std::string& a, const std::string& b) {
-  const auto pa = VersionParts(a), pb = VersionParts(b);
-  for (size_t i = 0; i < std::max(pa.size(), pb.size()); ++i) {
-    const int x = i < pa.size() ? pa[i] : 0, y = i < pb.size() ? pb[i] : 0;
-    if (x != y) return x > y;
-  }
-  return false;
-}
-
-void CheckForUpdate(UpdateStatus& status) {
-  status.busy = true;
+// The latest release in one repo (its releases/latest API), for this platform.
+bool LatestRelease(const char* api, UpdateInfo& info) {
   std::vector<uint8_t> data;
-  if (!HttpGet(kReleasesApi, data)) {
-    status.message = "Could not check for updates.";
-    status.failed = true;
-    status.busy = false;
-    return;
-  }
+  if (!HttpGet(api, data)) return false;
   const std::string json(data.begin(), data.end());
   const std::string tag = JsonString(json, "tag_name");
-  UpdateInfo info;
   info.version = tag.size() > 1 && (tag[0] == 'v' || tag[0] == 'V') ? tag.substr(1) : tag;
   info.page_url = JsonString(json, "html_url");  // the release's own page comes first
   for (size_t at = 0;;) {
@@ -94,15 +86,48 @@ void CheckForUpdate(UpdateStatus& status) {
     if (url.find("linux-x86_64.AppImage") != std::string::npos) info.zip_url = url;
 #endif
   }
+  return !info.version.empty() && !info.zip_url.empty();
+}
+
+}  // namespace
+
+bool IsNewerVersion(const std::string& a, const std::string& b) {
+  int pre_a, pre_b;
+  const auto pa = VersionParts(a, &pre_a), pb = VersionParts(b, &pre_b);
+  for (size_t i = 0; i < std::max(pa.size(), pb.size()); ++i) {
+    const int x = i < pa.size() ? pa[i] : 0, y = i < pb.size() ? pb[i] : 0;
+    if (x != y) return x > y;
+  }
+  if (pre_a == pre_b) return false;
+  if (pre_a < 0 || pre_b < 0) return pre_a < 0;  // the release beats its betas
+  return pre_a > pre_b;
+}
+
+void CheckForUpdate(UpdateStatus& status, const std::string& channel, bool switching) {
+  status.busy = true;
+  UpdateInfo info;
+  if (!LatestRelease(kReleasesApi, info)) {
+    status.message = "Could not check for updates.";
+    status.failed = true;
+    status.busy = false;
+    return;
+  }
+  if (channel == "beta") {
+    // No beta repo or release yet: beta players get the stable build.
+    UpdateInfo beta;
+    if (LatestRelease(kBetaReleasesApi, beta) && IsNewerVersion(beta.version, info.version)) info = beta;
+  }
   std::string current = KK_VERSION;
 #if defined(KK_DEV_TOOLS)
   // Developer aid: KK_DEV_UPDATE_FROM=1.9.1 acts as that version, to test
   // updating to the latest release.
   if (const char* v = std::getenv("KK_DEV_UPDATE_FROM"); v && *v) current = v;
 #endif
-  if (!info.version.empty() && IsNewerVersion(info.version, current) && !info.zip_url.empty()) {
+  const bool differs = IsNewerVersion(info.version, current) || IsNewerVersion(current, info.version);
+  if (switching ? differs : IsNewerVersion(info.version, current)) {
     status.found = info;
-    REXLOG_INFO("KK: update available: v{} (this is v{})", info.version, current);
+    REXLOG_INFO("KK: {} {}: v{} (this is v{})", channel, switching ? "version" : "update available", info.version,
+                current);
   }
   status.done = true;
   status.busy = false;

@@ -49,7 +49,7 @@ Render at up to 7680 x 4320, with presets from Supersample to Ultra Performance 
 <td valign="top">
 
 **Xbox 360 style achievements**<br>
-A pop-up with a sound every time you unlock one of the game's 9 achievements, just like the console. Choose the sound in the launcher.
+A pop-up with a sound every time you unlock one of the game's 9 achievements, just like the console, or a Steam style one. Choose the sound in the launcher.
 
 </td>
 <td valign="top">
@@ -127,6 +127,10 @@ The launcher takes the logo, stills from the movie, the menu music and the menu 
 </tr>
 </table>
 
+## New in v1.9.10
+
+**The V-Rex chapter's endless screen shake is fixed**, with new **Camera shake** settings on the Gameplay page. The default upscaler now suits your graphics card (NVIDIA NIS on NVIDIA, AMD FSR 1 on anything else), and the launcher has a **Discord** panel, **Change version** (stable or beta), Steam Deck button prompts and a Steam style achievement pop-up.
+
 ## New in v1.9.7
 
 **Keyboard and mouse, done properly.** Real mouse look (the same movement always turns the camera the same amount, as in other first-person games), a modern layout (left mouse button shoots, right mouse button aims, R reloads, WASD moves), mouse buttons you can bind, and choosing **Keyboard & mouse** now switches the game's prompts to your keys and turns the mouse camera on. More in [Controls](#controls).
@@ -185,13 +189,13 @@ Pick **AMD FSR 1** or **NVIDIA NIS** under **Upscaler**. Both work on any graphi
 
 | Preset | Upscaler | Render quality | Anti-aliasing | Texture filtering | Ambient occlusion |
 | --- | :---: | :---: | :---: | :---: | :---: |
-| Low | AMD FSR 1 | Performance | FXAA | 2x | off |
-| Medium (default) | off | Native | FXAA | 4x | off |
-| High | off | Native | FXAA | 8x | on |
-| Ultra | off | Supersample | FXAA Extreme | 16x | on |
-| Steam Deck | off | Native | FXAA | 2x | off |
+| Low | NVIDIA NIS or AMD FSR 1 | Performance | FXAA | 2x | off |
+| Medium (default) | NVIDIA NIS or AMD FSR 1 | Quality | FXAA | 4x | off |
+| High | NVIDIA NIS or AMD FSR 1 | Native | FXAA | 8x | on |
+| Ultra | NVIDIA NIS or AMD FSR 1 | Native | FXAA | 16x | on |
+| Steam Deck | AMD FSR 1 | Native | FXAA | 2x | off |
 
-Change any of them yourself and the preset shows **Custom**.
+The presets use NVIDIA NIS on an NVIDIA graphics card and AMD FSR 1 on any other; at Native it only sharpens. **Supersampling**, its own setting, draws more pixels than your screen has for the cleanest edges. Change any of them yourself and the preset shows **Custom**.
 
 ## Why this port?
 
@@ -260,11 +264,12 @@ Everything is set up before the game starts, with a controller, the keyboard or 
 
 ### Graphics
 - **Look**: Original Xbox 360 (720p at 30 FPS, the console's anti-aliasing, texture filtering and field of view, motion blur and fog, no ambient occlusion) or Modern. Switching back to Modern puts your own settings back
-- **Graphics presets**: Low and Medium (with FSR 1), High, Ultra and Steam Deck, or Custom when you set things yourself
-- **Upscaler**: AMD FSR 1 (at Quality by default) or NVIDIA Image Scaling (NIS), both for any graphics card, or Off. Each has Native, Quality, Balanced and Performance modes, showing the resolution the game draws at; they scale the picture to your screen and sharpen it
-- **Render quality** presets (with the upscaler off): Supersample, Native, Quality, Balanced, Performance and Ultra Performance, each showing the real resolution
+- **Graphics presets**: Low, Medium, High, Ultra and Steam Deck, each with the upscaler for your graphics card, or Custom when you set things yourself
+- **Upscaler**: AMD FSR 1 or NVIDIA Image Scaling (NIS), both for any graphics card, or Off. At Quality by default: NIS on an NVIDIA card, FSR 1 on any other (the launcher checks your dedicated card, or your integrated graphics if you have no dedicated card). Each has Native, Quality, Balanced and Performance modes, showing the resolution the game draws at; they scale the picture to your screen and sharpen it
+- **Render quality** presets (with the upscaler off): Native, Quality, Balanced, Performance and Ultra Performance, each showing the real resolution
+- **Supersampling** on or off (off by default): draws more pixels than your screen has, then shrinks the picture, for the cleanest edges
 - **Custom resolution** from 1x (720p) to 6x (8K)
-- **FXAA** (on by default) and **FXAA Extreme**
+- **FXAA** (on by default)
 - **Texture filtering** up to 16x (4x by default)
 - **Motion blur** on or off (off by default): Off removes the ghost trail the game blends over fast moments, mostly in Kong's sequences
 - **Screen blur** on or off (off by default): some levels (Necropolis, Brontosaurus) blur the whole picture slightly, sized for the Xbox 360's 720p, which makes them look low resolution on a sharper screen
@@ -278,6 +283,7 @@ Everything is set up before the game starts, with a controller, the keyboard or 
 
 ### Gameplay
 - **Frame rate**: 30 (default, like the console), 60, 90, 120, 144, 165, 240 or unlimited
+- **Camera shake** on or off, with a strength from 10% to 200%
 - **Field of view** from 69° (the original) to 110°. The game draws the wider area too, Jack's gun keeps its usual size, and the menus keep their original look
 - **Language** of the game and the launcher
 - **Frame counter** in the corner, toggled with <kbd>F2</kbd>
@@ -300,7 +306,7 @@ Everything is set up before the game starts, with a controller, the keyboard or 
 - **Vibration** on or off, with a strength slider
 - **Remap any button** on your controller
 - **Keyboard and mouse** play with a modern layout (left mouse button shoots, right mouse button aims, R reloads, WASD moves); rebind any control to a key or mouse button, and each one says what it does in the game
-- **Button prompts** for Xbox 360, Xbox Series, PlayStation 5, PlayStation 2 or your keyboard keys, in the game and in the launcher
+- **Button prompts** that match your controller automatically, or pick Xbox 360, Xbox Series, PlayStation 5, PlayStation 2, Steam Deck or your keyboard keys, in the game and in the launcher
 
 </td>
 </tr>
@@ -326,6 +332,7 @@ They switch on as soon as the game reaches its main menu, exactly as if you had 
 - All **9 achievements** with their pictures, descriptions and gamerscore
 - See which ones you have **unlocked**
 - Turn **pop-ups** and their **sound** on or off, set the volume
+- **Pop-up style**: Xbox 360, or Steam style in the bottom-right corner
 - **Pick the sound**: the built-in chime or any `.wav` you put in the `sounds` folder. Name the Xbox 360 sound `Xbox_360.wav` and it plays by default
 - A **test button** to see and hear it
 - A bonus **Welcome to Skull Island** achievement the first time you play
@@ -339,6 +346,8 @@ They switch on as soon as the game reaches its main menu, exactly as if you had 
 - The **version history**: the notes for every version
 - The launcher's **music** and **menu sounds**, each with a volume slider
 - **Check for updates** now, or turn the check at start off
+- **Change version** between stable and beta (early test builds; your saves and settings are kept)
+- **Discord**: join the official server, also from the panel on the Home and setup screens
 - How the **shader pack** stands
 - Open your **save folder**, **game folder** or **settings file** in one click
 - Take the launcher's **artwork** from your copy again
@@ -398,7 +407,7 @@ They switch on as soon as the game reaches its main menu, exactly as if you had 
 | Graphics presets | none | Original Xbox 360 look, Low to Ultra, Steam Deck |
 | Startup logos | always play | play or skip |
 | Cheats | typed as codes each time | switches in the launcher |
-| Achievement pop-ups | console | Xbox 360 style, with your choice of sound |
+| Achievement pop-ups | console | Xbox 360 or Steam style, with your choice of sound |
 
 ### Hotkeys
 
@@ -508,6 +517,7 @@ This port finishes those reads the way the console does (`kk/src/io_fix.cpp`), s
 
 - **Peter Jackson's King Kong: The Official Game of the Movie** by Ubisoft Montpellier, published by Ubisoft in 2005.
 - Button prompt pictures from [**Xelu's Free Controllers & Keyboard Prompts**](https://thoseawesomeguys.com/prompts/) (CC0).
+- Steam Deck button prompt pictures from [**Kenney's Input Prompts**](https://kenney.nl/assets/input-prompts) (CC0).
 - [**ReXGlue SDK**](https://github.com/rexglue/rexglue-sdk), which does the code translation and runs the game, built on the work of [**Xenia**](https://github.com/xenia-project/xenia) and [**XenonRecomp**](https://github.com/hedge-dev/XenonRecomp).
 - Upscaling: [**AMD FidelityFX Super Resolution 1**](https://github.com/GPUOpen-Effects/FidelityFX-FSR) (in the ReXGlue SDK) and the [**NVIDIA Image Scaling SDK**](https://github.com/NVIDIAGameWorks/NVIDIAImageScaling), both MIT licensed.
 

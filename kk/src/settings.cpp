@@ -10,11 +10,16 @@
 #include <rex/logging.h>
 #include <rex/string.h>
 
+#include "platform.h"
+
 REXCVAR_DEFINE_BOOL(kk_launcher, true, "KK",
                     "Show the launcher before starting the game (hold Shift at start to force it)");
 REXCVAR_DEFINE_BOOL(kk_skip_launcher, false, "KK",
                     "Internal: skip the launcher once (used when it relaunches the game)");
 REXCVAR_DEFINE_BOOL(kk_check_updates, true, "KK", "Check GitHub for a newer version when the launcher opens");
+REXCVAR_DEFINE_STRING(kk_update_channel, "stable", "KK",
+                      "Which versions the launcher offers: stable, or beta (test builds of what's coming next)")
+    .allowed({"stable", "beta"});
 REXCVAR_DEFINE_BOOL(kk_launcher_music, true, "KK", "Play the game's main menu music in the launcher");
 REXCVAR_DEFINE_INT32(kk_launcher_music_volume, 50, "KK", "The launcher's music volume, 0-100").range(0, 100);
 REXCVAR_DEFINE_BOOL(kk_launcher_sounds, true, "KK", "The game's menu sounds when moving around and choosing in the launcher");
@@ -28,9 +33,10 @@ REXCVAR_DEFINE_INT32(kk_frame_rate, 30, "KK/Video",
 REXCVAR_DEFINE_STRING(kk_render_quality, "quality", "KK/Video",
                       "Render resolution relative to the output: native, quality, balanced, performance, "
                       "ultra_performance, supersample, or custom (use resolution_scale)");
-REXCVAR_DEFINE_STRING(kk_button_prompts, "xbox360", "KK/Controls",
-                      "Button pictures shown in the game: xbox360, xbox_series, ps5, ps2 or keyboard")
-    .allowed({"xbox360", "xbox_series", "ps5", "ps2", "keyboard"});
+REXCVAR_DEFINE_STRING(kk_button_prompts, "auto", "KK/Controls",
+                      "Button pictures shown in the game: auto (matches your controller), xbox360, xbox_series, ps5, "
+                      "ps2, steam_deck or keyboard")
+    .allowed({"auto", "xbox360", "xbox_series", "ps5", "ps2", "steam_deck", "keyboard"});
 REXCVAR_DEFINE_BOOL(kk_show_fps, false, "KK/Video", "Show a frame-rate counter (toggle in game with F2)");
 REXCVAR_DEFINE_INT32(kk_deadzone, 5, "KK/Controls", "Extra stick deadzone in percent (0-50)");
 REXCVAR_DEFINE_INT32(kk_camera_sensitivity, 150, "KK/Controls", "Camera (right stick) sensitivity in percent");
@@ -38,10 +44,16 @@ REXCVAR_DEFINE_BOOL(kk_camera_modern, true, "KK/Controls",
                     "Camera response: true = the same in every direction, false = the Xbox 360's own");
 REXCVAR_DEFINE_BOOL(kk_achievement_toasts, true, "KK/Achievements", "Show achievement notifications");
 REXCVAR_DEFINE_BOOL(kk_achievement_sound, true, "KK/Achievements", "Play the achievement sound");
+REXCVAR_DEFINE_STRING(kk_achievement_style, "xbox360", "KK/Achievements",
+                      "Achievement pop-up style: xbox360 or steam")
+    .allowed({"xbox360", "steam"});
 REXCVAR_DEFINE_STRING(kk_achievement_sound_file, "Xbox_360.wav", "KK/Achievements",
                       "Achievement sound from the sounds folder (empty, or a file that isn't there = built-in chime)");
 REXCVAR_DEFINE_INT32(kk_achievement_volume, 80, "KK/Achievements", "Achievement sound volume in percent");
 REXCVAR_DEFINE_BOOL(kk_vibration, true, "KK/Controls", "Controller vibration");
+REXCVAR_DEFINE_BOOL(kk_camera_shake, true, "KK/Gameplay", "Camera shake (footsteps, explosions, blows)");
+REXCVAR_DEFINE_INT32(kk_camera_shake_strength, 100, "KK/Gameplay", "Camera shake strength in percent (10-200)")
+    .range(10, 200);
 REXCVAR_DEFINE_INT32(kk_vibration_strength, 100, "KK/Controls",
                      "Vibration strength in percent (10-200; above 100 is stronger than on the Xbox 360)");
 REXCVAR_DEFINE_BOOL(kk_invert_rs_x, false, "KK/Controls", "Invert right stick horizontal (camera)");
@@ -81,7 +93,7 @@ REXCVAR_DEFINE_DOUBLE(kk_mouse_sensitivity, 1.0, "KK/Controls",
                       "Keyboard & mouse: how far the mouse turns the camera (1 = 0.066 degrees per count)")
     .range(0.05, 10.0);
 REXCVAR_DEFINE_BOOL(kk_mouse_invert_y, false, "KK/Controls", "Keyboard & mouse: mouse up looks down");
-REXCVAR_DEFINE_STRING(kk_pad_prompts, "xbox360", "KK/Controls",
+REXCVAR_DEFINE_STRING(kk_pad_prompts, "auto", "KK/Controls",
                       "Internal: the controller's button prompts, put back when Input goes back to Controller");
 
 // Button remapping: kk_map_<physical> = <game button> (or "none").
@@ -106,6 +118,13 @@ KK_MAP_CVAR(rt, "rt", "Right trigger");
 #undef KK_MAP_CVAR
 
 namespace kk {
+
+namespace {
+const GpuInfo& Gpu() {
+  static const GpuInfo gpu = DetectGpu();
+  return gpu;
+}
+}  // namespace
 namespace {
 
 constexpr std::array<PadInfo, kPadCount> kPads = {{
@@ -284,6 +303,18 @@ void MigrateSettings(const std::filesystem::path& config_path) {
 }
 
 void ApplyFixedSettings() {
+  {
+    const GpuInfo& gpu = Gpu();
+    REXLOG_INFO("KK: graphics card: {} ({}); default upscaler {}", gpu.name.empty() ? "not found" : gpu.name,
+                gpu.vendor == GpuVendor::kNvidia ? "NVIDIA"
+                : gpu.vendor == GpuVendor::kAmd  ? "AMD"
+                : gpu.vendor == GpuVendor::kIntel ? "Intel"
+                                                  : "unknown",
+                DefaultUpscaler());
+  }
+  // FXAA Extreme is no longer offered: a settings file that chose it gets FXAA.
+  if (rex::cvar::GetFlagByName("swap_post_effect") == "fxaa_extreme")
+    rex::cvar::SetFlagByName("swap_post_effect", "fxaa");
   // Shader preparing is always Balanced (no longer a setting): Wait paused the
   // game for up to 2 seconds the first time an effect appeared, and
   // Background made objects vanish or flash. A settings file from before keeps
@@ -294,6 +325,22 @@ void ApplyFixedSettings() {
   // mouse-to-right-stick part is kept at its lowest, where it never gets past
   // the camera's deadzone (kk_mouse_sensitivity is the setting now).
   rex::cvar::SetFlagByName("mnk_sensitivity", "0.010000");
+}
+
+std::string DefaultUpscaler() {
+  static const std::string upscaler = [] {
+    auto has = [](const char* value) {
+      for (const auto& e : rex::cvar::GetRegistry()) {
+        if (e.name != "present_effect") continue;
+        const auto& allowed = e.constraints.allowed_values;
+        return std::find(allowed.begin(), allowed.end(), value) != allowed.end();
+      }
+      return false;
+    };
+    const GpuInfo& gpu = Gpu();
+    return std::string(gpu.vendor == GpuVendor::kNvidia && has("nis") ? "nis" : has("fsr") ? "fsr" : "bilinear");
+  }();
+  return upscaler;
 }
 
 void SetCvarDefault(std::string_view name, std::string_view value) {
@@ -339,12 +386,9 @@ void ApplyPortDefaults() {
   SetCvarDefault("d3d12_allow_variable_refresh_rate_and_tearing", "true");
   SetCvarDefault("swap_post_effect", "fxaa");
   SetCvarDefault("anisotropic_override", "3");
-  // AMD FSR 1 at Quality (kk_render_quality), where this build has it.
-  for (auto& e : rex::cvar::GetRegistry()) {
-    const auto& allowed = e.constraints.allowed_values;
-    if (e.name == "present_effect" && std::find(allowed.begin(), allowed.end(), "fsr") != allowed.end())
-      SetCvarDefault("present_effect", "fsr");
-  }
+  // An upscaler at Quality (kk_render_quality): NIS on an NVIDIA card, FSR 1
+  // on any other. The player's own choice in the settings file still wins.
+  SetCvarDefault("present_effect", DefaultUpscaler());
   // Shader preparing: Balanced. New pipelines are created on background
   // threads, many at once, and a frame may wait up to async_shader_wait_ms in
   // total for them (a setting added to this port's build of the GPU plugin),

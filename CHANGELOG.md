@@ -3,6 +3,33 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v1.9.10 (11 October 2026)
+
+### What's new
+- **Fixed: the screen shaking non-stop in the V-Rex chapter** (#39). Above 30 FPS, the camera shake from the V-Rex's footsteps could stop fading out and keep going until you died. The shake now fades the same way at any frame rate, as it does on the Xbox 360 at 30 FPS. Thanks to MustopuhGgi for the report.
+- **Camera shake settings.** **Camera shake** (on or off) and **Camera shake strength** (10% to 200%) are on the **Gameplay** page, for anyone who finds the shaking too much, or not enough.
+- **The best upscaler for your graphics card, by default.** The launcher now checks which graphics card you have (your dedicated card if you have one, otherwise your integrated graphics). On an NVIDIA card the default is now **NVIDIA NIS** at Quality; on AMD, Intel or anything else it stays **AMD FSR 1** at Quality. If you've picked an upscaler yourself, it stays as you set it.
+- **Every graphics preset uses that upscaler.** Low draws at Performance, Medium at Quality, and High, Ultra and Steam Deck at Native, where the upscaler only sharpens.
+- **Supersampling is its own setting.** **Supersampling** on the **Graphics** page draws the game at more pixels than your screen has, for the cleanest edges. The Ultra preset no longer turns it on.
+- **FXAA Extreme is gone.** It cost a lot for little gain. The **Ultra** preset now uses FXAA, and anyone who had Extreme on gets FXAA.
+- **Join the official Discord.** A panel at the bottom right of the Home and setup screens (press right to reach it with a controller or the keyboard), and **Discord** on the **About** page: news, upcoming features, early builds, and a place to tell us what you think.
+- **Add to Steam is a panel too**, beside the Discord one: it adds the game to your Steam library as a non-Steam game, with its artwork, so you can start it from Steam. It's there until the game is in your library. Left and right move between the two panels, and each has its own button: **X** adds to Steam and **Y** opens the Discord (Del and R on the keyboard), shown in your button prompt style.
+- **Button prompts that match your controller.** **Button prompts** on the **Controls** page has a new **Automatic** setting, now the default: an Xbox 360 controller shows Xbox 360 buttons, an Xbox One or Series controller shows Xbox Series buttons, a PlayStation 4 or 5 controller shows PlayStation buttons and a Steam Deck shows its own, in the game and in the launcher. Pick any style yourself and it stays as you set it.
+- **Stable or beta.** **Change version** on the **About** page switches between the stable version and the beta, for early test builds of upcoming features. You'll see a warning first: betas can have bugs and support for them is limited. The warning has a **Join Discord** button too, to tell us how the beta runs. Your saves and settings are kept either way, and you can switch back at any time. There's no beta build yet; until there is, the beta gets stable versions.
+- **Steam Deck button prompts.** **Button prompts** on the **Controls** page now has **Steam Deck**, in the game and in the launcher.
+- **Steam style achievement pop-ups.** **Pop-up style** on the **Achievements** page picks between the Xbox 360 pop-up and a Steam style one in the bottom-right corner.
+
+### Full changelog
+- Camera shake: the camera's effects script, CM_Sfx (`sub_8245EC90`), and SFX_ShakeCam's SCC_SFX (`sub_82553F20`) multiply their fall rate once a frame, so above 30 FPS it wore away faster with every footstep until a shake could no longer reach zero. `camera_shake.cpp` keeps the falloff per second (the multiplier to the power of frame time x 30), so 30 FPS is unchanged. `kk_camera_shake` and `kk_camera_shake_strength` scale the shake's size for the call only, so a shake still lasts as long as the game meant.
+- Upscaler default: the high-performance DXGI adapter's vendor (`DetectGpu` in `platform.cpp`) picks `present_effect`: `nis` on NVIDIA, `fsr` otherwise. The card is written to the log at start. Every graphics preset uses the same upscaler (`auto` in the preset table), and Ultra's render quality is `native`; Supersampling sets `kk_render_quality` to `supersample`.
+- `swap_post_effect` `fxaa_extreme` is moved to `fxaa`.
+- Updates: `kk_update_channel` (`stable` or `beta`). Beta builds come from the separate `king-kong-recompiled-beta` repo, so the main Releases page only ever shows stable versions; the beta channel takes whichever of the two is newer. Versions like `2.0.0-beta.1` sort before `2.0.0`. Change version installs the other channel's newest version, older or newer.
+- `kk_button_prompts` takes `auto` (the new default; `PadPromptsFor` in `glyphs.cpp` turns SDL's controller type into a style, for the game and the launcher) and `steam_deck`; the pictures are from Kenney's Input Prompts (CC0), built by `tools/make_glyphs.py --kenney`.
+- `kk_achievement_style` (`xbox360` or `steam`).
+- The Discord and Steam marks are from Simple Icons (CC0), built into the launcher by `tools/make_brand_icon.py`.
+- New launcher text in German, Spanish, French and Italian.
+- `rexruntime.dll` and `rexgpu-xenos.dll` are the same as in v1.9.5 to v1.9.9.
+
 ## v1.9.9 (10 October 2026)
 
 ### What's new
