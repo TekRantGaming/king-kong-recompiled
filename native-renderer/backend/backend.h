@@ -60,6 +60,7 @@ struct GameSettings {
   uint32_t debug = 0;
   bool async_pipelines = true;
   bool pipeline_wait = false;  // see GameRenderer::Options
+  bool dynamic_vertex_buffers = false;
   double pipeline_wait_budget_ms = 30.0;
   std::string frame_log;       // REX_DEV_FRAME_LOG: "<seconds>[,<frames>]", empty = off
   // Render scale (backend/render_scale.h): "1", "1.5", "2", "1920x1080". shadow_scale: 0 like the
@@ -106,6 +107,16 @@ class Backend {
   uint64_t submitted_frames_ = 0;
   uint64_t shown_frames_ = 0;
   uint32_t swaps_ = 0;
+  // --native_present_unlocked: the presenter's refresh of a game frame runs outside mutex_.
+  bool unlocked_present_ = false;
+  // --native_async_submit: the frames' command lists are submitted by a thread of their own, so
+  // the game's thread does not wait for the queue (the presenter holds it for milliseconds).
+  class Submitter;
+  std::unique_ptr<Submitter> submitter_;
+ public:
+  void set_unlocked_present(bool on) { unlocked_present_ = on; }
+  void set_async_submit(bool on);
+ private:
 };
 
 }  // namespace nr

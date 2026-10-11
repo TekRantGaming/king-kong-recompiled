@@ -245,6 +245,16 @@ BufferCache::BindResult BufferCache::Bind(uint32_t physical, uint32_t bytes, uin
   return result;
 }
 
+BufferCache::Entry* BufferCache::Find(uint32_t physical, uint32_t bytes, uint64_t conversion_id) {
+  const uint64_t key = Mix(uint64_t(physical) << 32 ^ bytes) ^ Mix(conversion_id + 0x51ED27);
+  auto it = entries_.find(key);
+  return it == entries_.end() ? nullptr : it->second.get();
+}
+
+void BufferCache::Touch(uint32_t physical, uint32_t bytes, uint64_t conversion_id, uint64_t frame) {
+  if (Entry* e = Find(physical, bytes, conversion_id)) e->last_used_frame = frame;
+}
+
 void BufferCache::OnUploaded(Entry& e, const GuestMemory& memory) {
   e.content_hash = HashResident(e, memory);
   e.dirty = false;

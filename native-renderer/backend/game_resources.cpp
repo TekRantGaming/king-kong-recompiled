@@ -441,10 +441,34 @@ uint32_t GameRenderer::BindSampler(const uint32_t words[6], const kkshaders::Sam
 // ---------------------------------------------------------------- buffers
 
 GameRenderer::HostBuffer* GameRenderer::BindVertexBuffer(nvrhi::ICommandList* cl, uint32_t physical,
-                                                         uint32_t bytes) {
+                                                         uint32_t bytes, uint32_t used_begin, uint32_t used_end) {
   if (!bytes) return nullptr;
   const uint8_t* data = physical_.At(physical, bytes);
   if (!data) return nullptr;
+  if (options_.dynamic_vertex_buffers) {
+    // A dynamic buffer: no watch, no hash; this draw's vertices go up every time.
+    if (const kknr::BufferCache::Entry* known = vertex_buffers_.Find(physical, bytes, 0)) {
+      auto* host = static_cast<HostBuffer*>(known->host);
+      if (host && host->dynamic && host->buffer && host->slot) {
+        vertex_buffers_.Touch(physical, bytes, 0, frame_);
+        const uint32_t begin = std::min(used_begin, bytes) & ~3u;
+        const uint32_t end = std::min((uint64_t(std::min(used_end, bytes)) + 3) & ~uint64_t(3), uint64_t(host->bytes + 3) & ~uint64_t(3));
+        if (end > begin) {
+          std::vector<uint8_t> tail;
+          const uint8_t* src = data + begin;
+          if (begin + (end - begin) > bytes) {  // the last word runs past the guest buffer
+            tail.assign(src, data + bytes);
+            tail.resize(end - begin, 0);
+            src = tail.data();
+          }
+          cl->writeBuffer(host->buffer, src, end - begin, begin);
+          stats_.dynamic_vertex_bytes += end - begin;
+        }
+        cl->setBufferState(host->buffer, nvrhi::ResourceStates::ShaderResource);
+        return host;
+      }
+    }
+  }
   kknr::BufferCache::BindResult r = vertex_buffers_.Bind(physical, bytes, 0, physical_, frame_);
   auto* host = static_cast<HostBuffer*>(r.entry->host);
   if (!host) {
@@ -466,8 +490,20 @@ GameRenderer::HostBuffer* GameRenderer::BindVertexBuffer(nvrhi::ICommandList* cl
   }
   if (!host->buffer || !host->slot) return nullptr;
   if (r.action != kknr::BindAction::kUseExisting) {
+    if (r.action == kknr::BindAction::kReupload && options_.dynamic_vertex_buffers) {
+      // Uploaded again within four frames (rings of three buffers are common): three times running makes it dynamic (the
+      // watch is not armed again; the next draws upload what they read).
+      host->upload_streak = host->last_upload_frame + 4 >= frame_ ? host->upload_streak + 1 : 0;
+      host->last_upload_frame = frame_;
+      if (host->upload_streak >= 3) {
+        host->dynamic = true;
+        ++stats_.dynamic_vertex_buffers;
+      }
+    } else {
+      host->last_upload_frame = frame_;
+    }
     cl->writeBuffer(host->buffer, data, (uint64_t(bytes) + 3) & ~uint64_t(3));
-    vertex_buffers_.OnUploaded(*r.entry, physical_);
+    if (!host->dynamic) vertex_buffers_.OnUploaded(*r.entry, physical_);
     ++stats_.buffer_uploads;
   }
   cl->setBufferState(host->buffer, nvrhi::ResourceStates::ShaderResource);

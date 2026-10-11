@@ -62,6 +62,9 @@ REXCVAR_DECLARE(bool, native_pipeline_cache);
 REXCVAR_DECLARE(std::string, native_pipeline_cache_dir);
 REXCVAR_DECLARE(bool, native_pipeline_wait);
 REXCVAR_DECLARE(double, native_pipeline_wait_budget_ms);
+REXCVAR_DECLARE(bool, native_present_unlocked);
+REXCVAR_DECLARE(bool, native_async_submit);
+REXCVAR_DECLARE(bool, native_dynamic_vertex_buffers);
 
 namespace {
 // <title id>.pipelines, or game.pipelines when the title is not known (a folder from the cvar).
@@ -252,6 +255,7 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
   game.debug = uint32_t(REXCVAR_GET(native_debug));
   game.async_pipelines = REXCVAR_GET(native_async_pipelines);
   game.pipeline_wait = REXCVAR_GET(native_pipeline_wait);
+  game.dynamic_vertex_buffers = REXCVAR_GET(native_dynamic_vertex_buffers);
   game.pipeline_wait_budget_ms = REXCVAR_GET(native_pipeline_wait_budget_ms);
   if (const char* frame_log = std::getenv("REX_DEV_FRAME_LOG")) game.frame_log = frame_log;
   game.render_scale = REXCVAR_GET(native_render_scale);
@@ -295,6 +299,8 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
     if (!dir.empty()) pipeline_cache_path_ = (std::filesystem::path(dir) / PipelineCacheFileName(0)).string();
     if (!pipeline_cache_path_.empty()) backend_->SetPipelineCache(pipeline_cache_path_);
   }
+  backend_->set_unlocked_present(REXCVAR_GET(native_present_unlocked));
+  backend_->set_async_submit(REXCVAR_GET(native_async_submit));
   backend_->renderer().options().transpose_wvp = REXCVAR_GET(native_wvp_transpose);
   backend_->renderer().options().only_main_surface = !REXCVAR_GET(native_all_targets);
   backend_->renderer().options().only_depth_tested = REXCVAR_GET(native_main_pass_only);

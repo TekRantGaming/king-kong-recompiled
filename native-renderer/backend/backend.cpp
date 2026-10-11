@@ -2,6 +2,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <thread>
+#include <deque>
+#include <condition_variable>
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
@@ -212,10 +215,60 @@ nvrhi::IMessageCallback* GetMessageCallback() {
   return &callback;
 }
 
+// Submits closed command lists in order on a thread of its own. At most two wait (the renderer
+// keeps three frame lists in turn, so the one it opens next has been submitted).
+class Backend::Submitter {
+ public:
+  explicit Submitter(HostDevice& host) : host_(host), thread_([this] { Run(); }) {}
+  ~Submitter() {
+    {
+      std::lock_guard lock(mutex_);
+      stop_ = true;
+    }
+    cv_.notify_all();
+    thread_.join();
+  }
+  void Enqueue(nvrhi::ICommandList* list) {
+    std::unique_lock lock(mutex_);
+    done_cv_.wait(lock, [&] { return pending_.size() + busy_ < 2; });
+    pending_.emplace_back(list);
+    cv_.notify_one();
+  }
+  // Waits until everything enqueued so far was submitted.
+  void Flush() {
+    std::unique_lock lock(mutex_);
+    done_cv_.wait(lock, [&] { return pending_.empty() && !busy_; });
+  }
+
+ private:
+  void Run() {
+    std::unique_lock lock(mutex_);
+    for (;;) {
+      cv_.wait(lock, [&] { return stop_ || !pending_.empty(); });
+      if (pending_.empty()) return;  // stopping, and nothing left
+      nvrhi::CommandListHandle list = std::move(pending_.front());
+      pending_.pop_front();
+      busy_ = 1;
+      lock.unlock();
+      host_.ExecuteCommandList(list);
+      list = nullptr;
+      lock.lock();
+      busy_ = 0;
+      done_cv_.notify_all();
+    }
+  }
+  HostDevice& host_;
+  std::mutex mutex_;
+  std::condition_variable cv_, done_cv_;
+  std::deque<nvrhi::CommandListHandle> pending_;
+  uint32_t busy_ = 0;
+  bool stop_ = false;
+  std::thread thread_;
+};
+
 Backend::Backend(std::unique_ptr<HostDevice> host, rex::memory::Memory* memory)
     : host_(std::move(host)), guest_memory_(memory), memory_(memory) {}
 
-Backend::~Backend() { Shutdown(); }
 
 bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& game) {
   SetLogSink(LogToRuntime);
@@ -265,6 +318,7 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
       renderer->options().debug = game.debug;
       renderer->options().async_pipelines = game.async_pipelines;
       renderer->options().pipeline_wait = game.pipeline_wait;
+      renderer->options().dynamic_vertex_buffers = game.dynamic_vertex_buffers;
       renderer->options().pipeline_wait_budget_ms = game.pipeline_wait_budget_ms;
       renderer->SetFrameLog(FrameLogConfig::Parse(game.frame_log.c_str()));
       renderer->options().ao_settings = game.ao_settings;
@@ -286,7 +340,11 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
   (void)game;
 #endif
   renderer_->set_submit([this](nvrhi::ICommandList* cl) {
-    host_->ExecuteCommandList(cl);
+    if (submitter_) {
+      submitter_->Enqueue(cl);
+    } else {
+      host_->ExecuteCommandList(cl);
+    }
     ++submitted_frames_;
   });
   sink_ = std::make_unique<LockedSink>(*renderer_, mutex_, guest_memory_, shaders_.get());
@@ -305,7 +363,14 @@ bool Backend::SetPipelineCache(const std::string& path) {
   return false;
 }
 
+void Backend::set_async_submit(bool on) {
+  if (on && !submitter_ && host_) submitter_ = std::make_unique<Submitter>(*host_);
+}
+
+Backend::~Backend() { Shutdown(); }
+
 void Backend::Shutdown() {
+  submitter_.reset();  // submits what waits
   if (invalidation_handle_) {
     memory_->UnregisterPhysicalMemoryInvalidationCallback(invalidation_handle_);
     invalidation_handle_ = nullptr;
@@ -322,7 +387,12 @@ void Backend::Shutdown() {
 void Backend::Present(rex::ui::Presenter* presenter, uint32_t frontbuffer_width,
                       uint32_t frontbuffer_height, uint32_t display_width,
                       uint32_t display_height) {
-  std::lock_guard lock(mutex_);
+  // The presenter's refresh can wait (for its previous paint, the swap chain): holding the
+  // backend's lock through it blocked every draw of the game's thread meanwhile (6.5 ms a frame
+  // in the renderer's presents and 2.3 ms in its clears at 60 frames a second). A game frame's
+  // image is therefore taken under the lock and copied after it is released; the test pictures
+  // before the first game frame still draw under it.
+  std::unique_lock lock(mutex_);
   if (!renderer_) return;
   // Once the game has submitted a frame, keep showing the last one: the ring
   // skimmer's swaps and the hooked Presents run on different threads, so a
@@ -340,10 +410,14 @@ void Backend::Present(rex::ui::Presenter* presenter, uint32_t frontbuffer_width,
         "rexgpu-native: swap {}: hooks saw {} draws ({} indexed, {} dropped), {} clears, {} "
         "resolves, {} presents; renderer drew {}, skipped {} (other target) {} (primitive) {} "
         "(range) {} (not main pass) {} (no projection matrix) {} (position format), {} clears, "
-        "{} frames",
+        "{} frames; presents: {} ms copy, {} ms close, {} ms submit, {} ms frame end; submissions: {} ({} ms "
+        "waiting for the queue, {} ms submitting, {} ms collecting)",
         swap, d.draws, d.indexed_draws, d.dropped_draws, d.clears, d.resolves, d.presents,
         r.draws_recorded, r.draws_skipped_target, r.draws_skipped_primitive, r.draws_skipped_range,
-        r.draws_skipped_overlay, r.draws_skipped_no_wvp, r.draws_skipped_format, r.clears_recorded, r.frames_submitted);
+        r.draws_skipped_overlay, r.draws_skipped_no_wvp, r.draws_skipped_format, r.clears_recorded, r.frames_submitted,
+        r.present_copy_us / 1000, r.present_close_us / 1000, r.present_submit_us / 1000, r.present_end_us / 1000,
+        host_->submit_times().count, host_->submit_times().wait_us / 1000, host_->submit_times().execute_us / 1000,
+        host_->submit_times().garbage_us / 1000);
 #if NR_GAME_RENDERER
     if (GameRenderer* g = renderer_->game()) {
       const GameRenderer::Stats& s = g->stats();
@@ -353,19 +427,41 @@ void Backend::Present(rex::ui::Presenter* presenter, uint32_t frontbuffer_width,
           "(pipeline) {} (pipeline not ready) {} (device); {} pipelines ({} drawn after a wait, {:.0f} ms waited); {} texture uploads ({} failed), {} buffer uploads, "
           "{} clears, {} resolves ({} failed), {} invalidations; shaders {} created, {} from the pack, "
           "{} compiled, {} failed, {} from objects; {:.0f} ms in pipeline creation, {:.0f} ms in texture uploads, {} aliased ({} failed); "
-          "game thread in the renderer: {} ms draws, {} ms clears, {} ms resolves, {} ms presents ({} ms in {} watch calls)",
+          "game thread in the renderer: {} ms draws, {} ms clears, {} ms resolves, {} ms presents ({} ms in {} watch calls); "
+          "{} dynamic vertex buffers, {} MB of their vertices",
           s.draws, s.skipped_shader, s.skipped_target, s.skipped_primitive, s.skipped_pipeline,
           s.skipped_pending, s.skipped_device, s.pipelines, s.pipeline_budget_waits + s.pipeline_waits,
           s.pipeline_wait_ms, s.texture_uploads, s.texture_failures, s.buffer_uploads,
           s.clears, s.resolves, s.resolve_failures, s.invalidations, sh.created, sh.from_pack,
           sh.compiled, sh.failed, sh.from_object, s.pipeline_ms, s.texture_ms, s.aliases, s.alias_failures,
           g_call_us[0].load() / 1000, g_call_us[1].load() / 1000, g_call_us[2].load() / 1000,
-          g_call_us[3].load() / 1000, g_call_us[4].load() / 1000, g_watch_calls.load());
+          g_call_us[3].load() / 1000, g_call_us[4].load() / 1000, g_watch_calls.load(), s.dynamic_vertex_buffers,
+          s.dynamic_vertex_bytes >> 20);
     }
 #endif
   }
   (void)frontbuffer_width;
   (void)frontbuffer_height;
+  if (game_frame && unlocked_present_) {
+    // The image stays alive by its handle; a newer frame drawn into it meanwhile only shows that
+    // frame (the queue orders the copy after or before the frame's own submission).
+    nvrhi::TextureHandle image = renderer_->presented_image();
+    lock.unlock();
+    // The frame's own commands first (the copy reads what they drew).
+    if (submitter_) submitter_->Flush();
+    presenter->RefreshGuestOutput(
+        width, height, display_width, display_height,
+        [&](rex::ui::Presenter::GuestOutputRefreshContext& context) -> bool {
+          nvrhi::CommandListHandle cl = host_->device()->createCommandList();
+          cl->open();
+          const bool ok = host_->CopyToGuestOutput(context, cl, image, width, height);
+          cl->close();
+          host_->ExecuteCommandList(cl);
+          return ok;
+        });
+    return;
+  }
+  if (submitter_) submitter_->Flush();
   presenter->RefreshGuestOutput(
       width, height, display_width, display_height,
       [&](rex::ui::Presenter::GuestOutputRefreshContext& context) -> bool {

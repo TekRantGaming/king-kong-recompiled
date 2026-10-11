@@ -9,6 +9,8 @@
 // missing and fails, and the plugin falls back to no renderer.
 
 #include <array>
+#include <chrono>
+#include <mutex>
 #include <vector>
 
 // First: the SDK fixes the Vulkan macros (beta extensions, platforms) every
@@ -79,9 +81,26 @@ class VulkanHost final : public HostDevice {
   void ExecuteCommandList(nvrhi::ICommandList* command_list) override {
     // Host access to a VkQueue must be externally synchronised: hold the SDK's
     // queue lock (recursive) while NVRHI submits.
+    using clock = std::chrono::steady_clock;
+    const auto t0 = clock::now();
     auto acquisition = provider_.vulkan_device()->AcquireQueue(queue_family_, 0);
+    const auto t1 = clock::now();
     device_->executeCommandList(command_list);
+    const auto t2 = clock::now();
     device_->runGarbageCollection();
+    const auto t3 = clock::now();
+    auto us = [](clock::time_point a, clock::time_point b) {
+      return uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(b - a).count());
+    };
+    std::lock_guard lock(times_mutex_);
+    times_.wait_us += us(t0, t1);
+    times_.execute_us += us(t1, t2);
+    times_.garbage_us += us(t2, t3);
+    ++times_.count;
+  }
+  SubmitTimes submit_times() const override {
+    std::lock_guard lock(times_mutex_);
+    return times_;
   }
 
   void WaitForIdle() override {
@@ -205,6 +224,8 @@ class VulkanHost final : public HostDevice {
   }
 
   rex::ui::vulkan::VulkanProvider& provider_;
+  mutable std::mutex times_mutex_;
+  SubmitTimes times_;
   uint32_t queue_family_ = 0;
   nvrhi::DeviceHandle device_;
   std::array<Wrapped, 4> wrapped_;

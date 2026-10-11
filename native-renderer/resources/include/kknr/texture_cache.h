@@ -137,6 +137,10 @@ class BufferCache {
   BindResult Bind(uint32_t physical, uint32_t bytes, uint64_t conversion_id, const GuestMemory& memory,
                   uint64_t frame);
   void OnUploaded(Entry& entry, const GuestMemory& memory);
+  // The entry Bind would use, or null (no hashing, no watch, nothing changes).
+  Entry* Find(uint32_t physical, uint32_t bytes, uint64_t conversion_id);
+  // Marks it used in `frame` (Trim keeps it).
+  void Touch(uint32_t physical, uint32_t bytes, uint64_t conversion_id, uint64_t frame);
   void InvalidateRange(uint32_t physical, uint32_t bytes);
   // How many entries own guest memory in [physical, physical + bytes) (debugging), and of those
   // how many uploads they had in all.

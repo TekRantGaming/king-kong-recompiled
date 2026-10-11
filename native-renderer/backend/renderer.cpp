@@ -1,5 +1,7 @@
 #include "backend/renderer.h"
 
+#include <chrono>
+
 #include <algorithm>
 #include <cstring>
 
@@ -128,8 +130,12 @@ bool Renderer::Initialize(uint32_t width, uint32_t height) {
   placeholder_pipeline_ = device_->createGraphicsPipeline(placeholder_desc_, fb->getFramebufferInfo());
   if (!placeholder_pipeline_) return false;
 
-  frame_command_list_ = device_->createCommandList();
-  return frame_command_list_ != nullptr;
+  for (auto& list : frame_lists_) {
+    list = device_->createCommandList();
+    if (!list) return false;
+  }
+  frame_command_list_ = frame_lists_[0];
+  return true;
 }
 
 nvrhi::ITexture* Renderer::DepthFor(nvrhi::ITexture* target) {
@@ -397,22 +403,37 @@ void Renderer::OnVertexShaderPatched(uint32_t shader, uint32_t microcode, uint32
 }
 
 void Renderer::OnPresent(uint32_t frame, uint32_t render_target0, uint32_t device) {
+  using clock = std::chrono::steady_clock;
+  auto us = [](clock::time_point a, clock::time_point b) {
+    return uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(b - a).count());
+  };
   main_surface_ = render_target0;
   vertex_ring_used_ = 0;
   index_ring_used_ = 0;
+  const auto t0 = clock::now();
   if (game_) {
     // The game's back buffer into the frame image.
     game_->Present(FrameCommandList(), device, frames_[recording_]);
   }
+  const auto t1 = clock::now();
+  stats_.present_copy_us += us(t0, t1);
   if (!frame_open_) return;
   frame_command_list_->close();
   frame_open_ = false;
+  const auto t2 = clock::now();
   if (submit_) submit_(frame_command_list_);
+  frame_list_index_ = (frame_list_index_ + 1) % uint32_t(frame_lists_.size());
+  frame_command_list_ = frame_lists_[frame_list_index_];
+  const auto t3 = clock::now();
   ++stats_.frames_submitted;
   presented_ = recording_;
   recording_ ^= 1;
   if (observer_) observer_->OnFrameSubmitted(frame, frames_[presented_]);
   if (game_) game_->EndFrame();
+  const auto t4 = clock::now();
+  stats_.present_close_us += us(t1, t2);
+  stats_.present_submit_us += us(t2, t3);
+  stats_.present_end_us += us(t3, t4);
 }
 
 }  // namespace nr

@@ -91,6 +91,21 @@ REXCVAR_DEFINE_BOOL(native_pipeline_wait, false, "Native renderer",
                     "native_async_pipelines")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_BOOL(native_dynamic_vertex_buffers, false, "Native renderer",
+                    "Vertex buffers the game rewrites every frame are not watched for writes: each draw "
+                    "uploads the vertices it reads (no write fault per page and frame)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_BOOL(native_async_submit, false, "Native renderer",
+                    "Submit each frame's GPU work from a thread of its own, so the game's thread does not "
+                    "wait for the queue while the presenter holds it")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_BOOL(native_present_unlocked, false, "Native renderer",
+                    "Hand the game's frame to the presenter without holding the renderer's lock, so the "
+                    "game's draws do not wait while the presenter waits for its previous paint")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_DOUBLE(native_pipeline_wait_budget_ms, 30.0, "Native renderer",
                       "Without native_pipeline_wait: milliseconds a frame may wait in all for pipelines "
                       "being created before its draws are skipped (0: skip at once)")

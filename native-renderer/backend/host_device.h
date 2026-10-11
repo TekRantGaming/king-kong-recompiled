@@ -27,6 +27,11 @@ class HostDevice {
   // the queue where that matters).
   virtual void ExecuteCommandList(nvrhi::ICommandList* command_list) = 0;
   virtual void WaitForIdle() = 0;
+  // Microseconds spent in ExecuteCommandList: waiting for the queue, submitting, collecting garbage.
+  struct SubmitTimes {
+    uint64_t wait_us = 0, execute_us = 0, garbage_us = 0, count = 0;
+  };
+  virtual SubmitTimes submit_times() const { return {}; }
 
   // Records, into the open `command_list`, a copy of `source` (width x
   // height, R10G10B10A2_UNORM) into the presenter's guest output image behind

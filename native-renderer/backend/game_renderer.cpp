@@ -1040,6 +1040,29 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     }
   }
 
+  // The vertices this draw reads (for dynamic vertex buffers): the index range, or the vertex range.
+  uint32_t first_vertex = 0, last_vertex = ~0u;
+  if (options_.dynamic_vertex_buffers) {
+    if (!call.indexed) {
+      first_vertex = call.start;
+      last_vertex = call.start + call.count;
+    } else if (call.index_data) {
+      uint32_t lo = ~0u, hi = 0;
+      for (uint32_t i = 0; i < call.count; ++i) {
+        const uint32_t v = call.index_info.index32 ? LoadBE32(call.index_data + size_t(call.start + i) * 4)
+                                                   : LoadBE16(call.index_data + size_t(call.start + i) * 2);
+        if (v == (call.index_info.index32 ? 0xFFFFFFFFu : 0xFFFFu)) continue;  // a strip's restart
+        lo = std::min(lo, v);
+        hi = std::max(hi, v);
+      }
+      if (lo <= hi) {
+        const int64_t base = call.base_vertex;
+        first_vertex = uint32_t(std::max<int64_t>(0, int64_t(lo) + base));
+        last_vertex = uint32_t(std::max<int64_t>(0, int64_t(hi) + base + 1));
+      }
+    }
+  }
+
   // Vertex fetch: each binding's declaration element, from its stream.
   std::vector<kknr::VertexElement> elements;
   if (const uint8_t* decl = call.vertex_declaration ? memory_.Virtual(call.vertex_declaration) : nullptr)
@@ -1067,7 +1090,12 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     const uint32_t stride = uint32_t(*d.at(12688 + stream)) * 4;
     VertexBufferInfo info;
     if (!vb_object || !DecodeVertexBuffer(memory_.Virtual(vb_object), info)) continue;
-    HostBuffer* host = BindVertexBuffer(cl, info.physical, info.size_bytes);
+    uint32_t used_begin = 0, used_end = ~0u;
+    if (!vb.raw && stride && last_vertex != ~0u) {
+      used_begin = uint32_t(std::min<uint64_t>(uint64_t(offset) + uint64_t(first_vertex) * stride, info.size_bytes));
+      used_end = uint32_t(std::min<uint64_t>(uint64_t(offset) + uint64_t(last_vertex) * stride, info.size_bytes));
+    }
+    HostBuffer* host = BindVertexBuffer(cl, info.physical, info.size_bytes, used_begin, used_end);
     if (!host) continue;
     if (vb.raw) {
       dc.vertexFetch[b][0] = host->slot;

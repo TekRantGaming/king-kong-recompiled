@@ -63,6 +63,10 @@ class GameRenderer {
     // (kknr::TextureOptions::mips_from_base_tail). Off: level 0 only, as the
     // SDK.
     bool texture_tail_mips = false;
+    // Vertex buffers the game rewrites every frame stop being watched: each draw uploads the
+    // vertices it reads instead. Watching them cost a write fault per 4 KB page and frame (340 a
+    // frame in Venture: the game writes a 4 MB ring of particle vertices between its draws).
+    bool dynamic_vertex_buffers = false;
     // Create the game's pipelines on a worker thread; a draw whose pipeline
     // is not ready yet is skipped (a missing object for a frame or two the
     // first time a state combination appears) instead of stalling the render
@@ -116,6 +120,8 @@ class GameRenderer {
     uint64_t pipeline_waits = 0;     // draws that waited for their pipeline (pipeline_wait)
     double pipeline_wait_ms = 0;
     uint64_t pipeline_budget_waits = 0;  // draws drawn after waiting within pipeline_wait_budget_ms
+    uint64_t dynamic_vertex_buffers = 0;  // vertex buffers turned dynamic
+    uint64_t dynamic_vertex_bytes = 0;    // bytes their draws uploaded
     uint64_t cache_recorded = 0;     // descriptions appended to the pipeline cache file
     uint64_t prewarm_queued = 0;     // cached descriptions sent to the workers
     uint64_t prewarm_deferred = 0;   // cached descriptions whose shaders were not available yet
@@ -300,8 +306,16 @@ class GameRenderer {
     nvrhi::BufferHandle buffer;
     uint32_t slot = 0;  // kBuffers descriptor (vertex data)
     uint32_t bytes = 0;
+    // Dynamic vertex data (Options::dynamic_vertex_buffers): re-uploaded in consecutive frames.
+    uint64_t last_upload_frame = ~0ull;
+    uint32_t upload_streak = 0;
+    bool dynamic = false;
+    kknr::BufferCache::Entry* entry = nullptr;
   };
-  HostBuffer* BindVertexBuffer(nvrhi::ICommandList* cl, uint32_t physical, uint32_t bytes);
+  // used_begin / used_end: the bytes of the buffer this draw reads (a dynamic buffer uploads only
+  // those); the whole buffer when unknown.
+  HostBuffer* BindVertexBuffer(nvrhi::ICommandList* cl, uint32_t physical, uint32_t bytes, uint32_t used_begin = 0,
+                               uint32_t used_end = ~0u);
   HostBuffer* BindIndexBuffer(nvrhi::ICommandList* cl, uint32_t physical, uint32_t bytes,
                               bool index32);
   void ProcessInvalidations();
