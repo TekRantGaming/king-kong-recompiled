@@ -34,6 +34,10 @@ set(KINGKONG_SOURCES
     src/io_fix.cpp
     src/loading_fix.cpp
     src/camera_shake.cpp
+    src/hfr.cpp
+    src/hfr_particles.cpp
+    src/hfr_dt_floor.cpp
+    src/hfr_step_decay.cpp
     src/online.cpp
     src/mouse_look.cpp
     src/language.cpp

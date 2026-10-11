@@ -14,6 +14,10 @@
 
 #include <rex/cvar.h>
 
+namespace rex::memory {
+class Memory;
+}
+
 REXCVAR_DECLARE(bool, kk_hfr_fixes);
 REXCVAR_DECLARE(int32_t, kk_frame_rate);
 
@@ -47,6 +51,13 @@ inline void StoreF(uint8_t* base, uint32_t addr, float f) {
 
 // The fixes apply: kk_hfr_fixes on and a frame rate other than 30 (0 = unlimited).
 inline bool Active() { return REXCVAR_GET(kk_hfr_fixes) && REXCVAR_GET(kk_frame_rate) != 30; }
+
+// One fix by name: Active(), and in dev builds not listed in KK_DEV_HFR_OFF
+// ("particles,decay,..." or "all"), so each one can be measured on and off.
+bool On(const char* name);
+
+// Once the runtime is up (OnPostSetup): what some fixes need from it.
+void Setup(rex::memory::Memory* memory);
 
 inline float FrameTime(const uint8_t* base) { return LoadF(base, kFrameTime); }
 
