@@ -40,7 +40,13 @@ $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $compare = Join-Path $PSScriptRoot 'compare.py'
 # -Scenes title,pause arrives as an array from PowerShell and as one "title,pause" string from cmd or bash.
 $SceneList = ($Scenes -join ',')
-if (-not $Exe) { $Exe = Join-Path $repo 'kk\out\build\kk-dev\king_kong.exe' }
+if (-not $Exe) {
+  # kk-dev has the Xenos plugin only; the native plugin comes with the kk-dev-vulkan build.
+  $Exe = Join-Path $repo 'kk\out\build\kk-dev\king_kong.exe'
+  $vk = Join-Path $repo 'kk\out\build\kk-dev-vulkan\king_kong.exe'
+  if (-not (Get-ChildItem -Path (Split-Path $Exe) -Filter "rexgpu-$Plugin*.dll" -ErrorAction SilentlyContinue) -and
+      (Get-ChildItem -Path (Split-Path $vk) -Filter "rexgpu-$Plugin*.dll" -ErrorAction SilentlyContinue)) { $Exe = $vk }
+}
 if (-not $GameData) { $GameData = Join-Path $repo 'kk\assets' }
 foreach ($p in @($Exe, $GameData, $UserData)) {
   if (-not (Test-Path $p)) { Write-Output "not found: $p"; exit 4 }
@@ -83,12 +89,19 @@ if ($Golden -and -not $Force) {
 
 function Wait-GameFree {
   # At most one copy of the game may run on this PC: never start a second one, never stop someone else's.
+  # A lock file saying "hold" or "user" (someone is about to use the game, or playing it) counts as busy too.
   $deadline = (Get-Date).AddMinutes($WaitMinutes)
   while ($true) {
     $busy = Get-Process king_kong -ErrorAction SilentlyContinue
-    if (-not $busy) { return $true }
+    $held = $false
+    if (Test-Path $LockFile) {
+      $lockText = [string](Get-Content -Path $LockFile -TotalCount 1 -ErrorAction SilentlyContinue)
+      $held = $lockText -match '^\s*(hold|user)'
+    }
+    if (-not $busy -and -not $held) { return $true }
     if ((Get-Date) -ge $deadline) { return $false }
-    Write-Output ("{0:HH:mm} the game is running (pid {1}); checking again in 5 minutes" -f (Get-Date), ($busy.Id -join ','))
+    if ($busy) { $why = "the game is running (pid $($busy.Id -join ','))" } else { $why = "the lock file says '$lockText'" }
+    Write-Output ("{0:HH:mm} {1}; checking again in 5 minutes" -f (Get-Date), $why)
     Start-Sleep -Seconds 300
   }
 }
