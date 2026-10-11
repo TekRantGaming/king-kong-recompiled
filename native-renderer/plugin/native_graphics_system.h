@@ -21,6 +21,7 @@
 #include <rex/ui/presenter.h>
 
 #include "plugin/native_api.h"
+#include "plugin/plugin_settings.h"
 
 namespace rex::memory {
 class Memory;
@@ -104,8 +105,7 @@ class NativeGraphicsSystem final : public rex::system::IGraphicsSystem {
   // folder under the cache root is known (InitializeShaderStorage), or at once when no file of
   // ours needs it.
   void StartPipelines();
-  std::filesystem::path pipeline_folder_;  // <cache root>/native-pipelines, or native_pipeline_cache_dir
-  uint32_t pipeline_title_id_ = 0;
+  PipelinePlace pipeline_place_;  // <cache root>/native-pipelines, or native_pipeline_cache_dir
   bool pipelines_started_ = false;
   std::unique_ptr<RingSkimmer> skimmer_;
   std::atomic<bool> guest_gpu_ready_{false};

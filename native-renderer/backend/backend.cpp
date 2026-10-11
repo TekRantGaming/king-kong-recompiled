@@ -271,6 +271,8 @@ class LogCallback final : public nvrhi::IMessageCallback {
 
 }  // namespace
 
+void InstallRuntimeLog() { SetLogSink(LogToRuntime); }
+
 nvrhi::IMessageCallback* GetMessageCallback() {
   static LogCallback callback;
   return &callback;
@@ -382,13 +384,16 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
   SetLogSink(LogToRuntime);
   RenderScale scale;
   float shadow_scale = 0.0f;
+  bool shaders_aware = false;
 #if NR_GAME_RENDERER
   if (game.enabled) {
-    scale = ParseRenderScale(game.render_scale, width, height);
+    const RenderScaleSetup setup = ResolveRenderScale(game.render_scale, game.shadow_scale, game.debug, width, height);
+    scale = setup.scale;
+    shadow_scale = setup.shadow_scale;
+    shaders_aware = setup.shaders_aware;
     if (!scale.valid) {
       REXGPU_ERROR("rexgpu-native: render scale '{}' not understood (a number, or WxH): using 1", game.render_scale);
     }
-    if (game.shadow_scale > 0.0f) shadow_scale = std::clamp(game.shadow_scale, kMinRenderScale, kMaxRenderScale);
     if (!scale.unit() || shadow_scale > 0.0f) {
       REXLOG_INFO("rexgpu-native: render scale {:.4g} x {:.4g}, shadow maps {:.4g} (frame image {}x{})", scale.x, scale.y,
                   shadow_scale > 0.0f ? shadow_scale : scale.x, ScaledSize(width, scale.x), ScaledSize(height, scale.y));
@@ -406,7 +411,7 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
   if (game.enabled) {
     shaders_ = std::make_unique<ShaderLibrary>(host_->device(), guest_memory_);
     // --native_debug bit 16: the plain pixel shaders at a scale too (to tell the aware translation's part).
-    shaders_->SetRenderScaleAware(!(game.debug & 16) && (!scale.unit() || (shadow_scale > 0.0f && shadow_scale != 1.0f)));
+    shaders_->SetRenderScaleAware(shaders_aware);
     shaders_->Initialize(game.shader_pack, game.dxc);
     kknr::GuestMemory physical;
     physical.base = memory_->TranslatePhysical(0);
@@ -452,6 +457,7 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
   }
 #else
   (void)game;
+  (void)shaders_aware;
 #endif
   renderer_->set_submit([this](nvrhi::ICommandList* cl) {
     if (submitter_) {

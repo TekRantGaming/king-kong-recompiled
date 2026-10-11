@@ -45,6 +45,10 @@ class RuntimeGuestMemory final : public GuestMemory {
 
 enum class TestPicture { kClear, kTriangle };
 
+// Sends the backend libraries' log (backend/log.h) to the runtime's (Backend::Initialize does it too;
+// the launcher's prewarm runs before any backend).
+void InstallRuntimeLog();
+
 class ShaderLibrary;
 
 // Phase 2 settings (the plugin's cvars).

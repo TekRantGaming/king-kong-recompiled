@@ -13,6 +13,8 @@
 
 #include <memory>
 #include <sstream>
+#include <chrono>
+#include <thread>
 
 #include <rex/cvar.h>
 #include <rex/filesystem.h>
@@ -29,12 +31,17 @@
 #include "backend/tests/readback.h"
 #include "backend/tests/scene.h"
 #include "hooks/trace_replay.h"
+#include "backend/pipeline_cache.h"
 #include "plugin/native_api.h"
+#include "plugin/native_prewarm.h"
 
 // vulkan_host.cpp reads it (plugin_main.cpp defines it in the plugin).
 REXCVAR_DEFINE_BOOL(native_validation, true, "Native renderer", "NVRHI validation layer");
 // vulkan_host.cpp reads it too: the host keeps a VkPipelineCache of its own when it is on.
 REXCVAR_DEFINE_BOOL(native_vk_pipeline_cache, false, "Native renderer", "Keep the driver's pipeline cache");
+// The SDK's app defines it (rex_app.cpp, not in the runtime library this test links); the plugin
+// reads it by name (the launcher's prewarm runs only for the native plugin).
+REXCVAR_DEFINE_STRING(gpu_plugin, "", "GPU", "GPU plugin");
 // backend.cpp reads it (the plugin defines it in plugin_main.cpp).
 REXCVAR_DEFINE_INT32(native_dump_frame, -1, "Native renderer", "Log every call of this game frame");
 
@@ -188,6 +195,69 @@ TEST(VkPipelineCacheOnTheSdkVulkanProvider) {
     CHECK(host != nullptr);
     if (host) CHECK(host->pipeline_cache() == nullptr);
   }
+}
+
+TEST(LauncherPrewarmEntryPoints) {
+  // The launcher finds the exports in the plugin it preloaded; off unless asked for.
+  std::unique_ptr<rex::system::IGraphicsSystem> system = rex::system::LoadGpuPlugin("native", "vulkan");
+  CHECK(system != nullptr);
+  void* module = nullptr;
+  for (const char* name : {"librexgpu-nativerd.so", "librexgpu-native.so", "librexgpu-natived.so"}) {
+    if ((module = dlopen(name, RTLD_NOW | RTLD_NOLOAD))) break;
+  }
+  CHECK(module != nullptr);
+  if (!module) return;
+  using Start = uint32_t (*)(const NrPrewarmRequest*);
+  using Status = uint32_t (*)(NrPrewarmStatus*);
+  using Stop = void (*)();
+  auto start = reinterpret_cast<Start>(dlsym(module, "nr_prewarm_start"));
+  auto status = reinterpret_cast<Status>(dlsym(module, "nr_prewarm_status"));
+  auto stop = reinterpret_cast<Stop>(dlsym(module, "nr_prewarm_stop"));
+  CHECK(start && status && stop);
+  if (!start || !status || !stop) return;
+
+  // The player's pipeline file under the cache root the launcher passes: one description whose
+  // shaders no pack has (the game would make them), so the prewarm lists it and leaves it.
+  const std::filesystem::path root = std::filesystem::temp_directory_path() / "nr_plugin_tests_prewarm";
+  std::filesystem::remove_all(root);
+  PipelineRecord r;
+  r.vs_hash = 0xDEAD;
+  r.vs_input = 1;
+  r.topology = 3;
+  r.color_count = 1;
+  r.color_format[0] = 11;
+  r.color_mask[0] = 0xF;
+  CHECK(WritePipelineList((root / "native-pipelines" / "555307D3.pipelines").string(), {r}));
+  const std::string root_text = root.string();
+  NrPrewarmRequest request = {sizeof(NrPrewarmRequest), NR_PREWARM_VERSION, root_text.c_str(), 0x555307D3u};
+
+  CHECK_EQ(start(&request), uint32_t(NR_PREWARM_OFF));  // --native_launcher_prewarm is off by default
+  rex::cvar::SetFlagByName("native_launcher_prewarm", "true");
+  const std::string plugin_before = rex::cvar::GetFlagByName("gpu_plugin");
+  rex::cvar::SetFlagByName("gpu_plugin", "xenos");
+  CHECK_EQ(start(&request), uint32_t(NR_PREWARM_OFF));  // another GPU plugin draws the game
+  rex::cvar::SetFlagByName("gpu_plugin", "native");
+  NrPrewarmRequest old = request;
+  old.version = NR_PREWARM_VERSION + 1;
+  CHECK_EQ(start(&old), uint32_t(NR_PREWARM_OFF));
+  CHECK_EQ(start(&request), uint32_t(NR_PREWARM_RUNNING));
+  NrPrewarmStatus s = {};
+  s.size = sizeof(s);
+  for (int i = 0; i < 600 && status(&s) == NR_PREWARM_RUNNING; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+  CHECK_EQ(s.state, uint32_t(NR_PREWARM_DONE));
+  CHECK_EQ(s.listed, 1u);
+  CHECK_EQ(s.queued, 0u);
+  CHECK_EQ(s.waiting, 1u);
+  CHECK_EQ(start(&request), uint32_t(NR_PREWARM_DONE));  // once a process
+  stop();  // nothing left to stop
+  CHECK_EQ(status(&s), uint32_t(NR_PREWARM_DONE));
+  rex::cvar::SetFlagByName("native_launcher_prewarm", "false");
+  rex::cvar::SetFlagByName("gpu_plugin", plugin_before);
+  dlclose(module);
+  system->Shutdown();
+  std::filesystem::remove_all(root);
 }
 
 NR_TEST_MAIN()
