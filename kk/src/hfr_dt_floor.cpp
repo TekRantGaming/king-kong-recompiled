@@ -53,6 +53,12 @@ void WithRealStep(PPCContext& ctx, uint8_t* base, Fn original) {
 
 }  // namespace
 
+// For a hook that also wraps one of these scripts (k_ETAT_grab, see
+// hfr_step_decay.cpp).
+void WithRealStepFn(PPCContext& ctx, uint8_t* base, void (*original)(PPCContext&, uint8_t*)) {
+  WithRealStep(ctx, base, original);
+}
+
 void SetupDtFloor(rex::memory::Memory* memory) {
   auto* heap = memory ? memory->LookupHeap(kFloor) : nullptr;
   g_writable = heap && heap->Protect(kFloor, 4, rex::memory::kMemoryProtectRead | rex::memory::kMemoryProtectWrite);
@@ -65,7 +71,7 @@ void SetupDtFloor(rex::memory::Memory* memory) {
   REX_EXTERN(__imp__sub_##addr);                                                  \
   REX_HOOK_RAW(sub_##addr) { kk::hfr::WithRealStep(ctx, base, __imp__sub_##addr); }
 
-KK_DT_FLOOR_HOOK(825CA350)  // k_ETAT_grab
+// k_ETAT_grab (sub_825CA350) is hooked in hfr_step_decay.cpp, which calls WithRealStepFn.
 KK_DT_FLOOR_HOOK(8259D998)  // k_ETAT_grab_mashing
 KK_DT_FLOOR_HOOK(825B3288)  // k_ETAT_finished
 KK_DT_FLOOR_HOOK(825B62E0)  // k_ETAT_cine

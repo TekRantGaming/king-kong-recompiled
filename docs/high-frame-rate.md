@@ -71,7 +71,7 @@ These were found by scanning the recompiled code for how the frame time is used 
 | Menu background drift | `IntMIG_Background` `sub_824A0E70` | Its drift velocity is multiplied by 0.999 once a frame (0.97 a second at 30 FPS, 0.90 at 110) before it is steered back to its speed; hardly visible | found, left |
 | Motion blur strength | `sub_82768DE8` (after effect; only with `kk_motion_blur` or the Original look) | Its blend weight is `s * (0.6 + 0.4 * frame_ms / 30)`, `frame_ms` being the device's measured frame time (`0x82D623E0`): 1.04 s at 30 FPS, 0.72 s at 110. For the same trail length in seconds a weight for the previous frame would have to rise with the frame rate (`a ^ (30 / fps)`), so the trail is about 3x shorter at 110 FPS. Whether the shader's weight is the previous frame's or the new one's decides the right formula; not changed until that is checked on screen | found |
 | Raft | `Raft_exec_compute_position` `sub_825EFE78` | A fixed 0.016 s step from an accumulator: right speed at any rate, but moves in 62.5 Hz steps | ok (note) |
-| Animation frame equal to 0 | `PNJInd_State_Attack` `sub_826F3BE8` | Tests `frame == 0` of the attack animation (frames in 1/60 s): seen on one game frame at 30 or 60 FPS, on two at 120 | found |
+| Animation frame tests | 177 calls of `sub_823F8AF0` (an object's animation frame, in 1/60 s) | A test like `frame == N` would fire on one frame at 30 FPS and on two or more at 120. All the tests found compare with `<`, `<=`, `>` or `>=` | ok |
 
 Looked at and frame-rate correct: the dt pipeline itself, the event (animation) key player `sub_8271BA18`, the
 particle spawner `sub_82862B10` (a time accumulator), the 1/30 s sub-stepper `sub_827C8C20` (its damping uses

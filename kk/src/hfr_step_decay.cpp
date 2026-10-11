@@ -23,8 +23,11 @@
 //   KBC_ETAT_Fight_BB_Poursuit (sub_8252E1E8) +1244, k 0.9
 //   k_ETAT_grab_ANN (sub_8259F698)        +3332, k 0.95
 //   CM_Kong_Mode_Swing_Horiz (sub_826245B8) +312, k 0.98 (Kong's swing camera)
-// k_ETAT_grab (sub_825CA350) has more of them but is hooked by the dt_floor
-// fix; see docs/high-frame-rate.md.
+//   k_ETAT_grab (sub_825CA350)            +928 (a scalar), k 0.9 or 0.95
+// k_ETAT_grab also grows a vector (+980) by 1.005 per 1/60 s in whole steps
+// rounded up (ceil(frame time x 60) times a frame: 70 a second on the
+// console, 110 at 110 FPS); it is set to 1.005 ^ (70 x frame time) the same
+// way. Its hook also applies the dt_floor fix (hfr_dt_floor.cpp).
 
 #include <cmath>
 
@@ -83,8 +86,64 @@ constexpr Site kKbcPoursuit = {1244, {0.9f, 0.0f}};
 constexpr Site kGrabAnn = {3332, {0.95f, 0.0f}};
 constexpr Site kKongSwing = {312, {0.98f, 0.0f}};
 
+// k_ETAT_grab's growth: f = 1; do { t -= 1/60; f *= 1.005; } while (t > 0).
+float GrowthFactor(float dt) {
+  constexpr float kStep = 0.01666f, kGrow = 1.005f;  // 0x820B24F0, 0x820B24EC
+  float f = 1.0f;
+  int n = 0;
+  for (float t = dt; t > 0.0f && n < 10000; ++n) {
+    t -= kStep;
+    f *= kGrow;
+  }
+  return f;
+}
+
+uint32_t Vars(const uint8_t* base) {
+  const uint32_t ai = Load32(base, kScriptContext);
+  const uint32_t vars = ai >= 0x40000000 && ai < 0xA0000000 ? Load32(base, ai + 64) : 0;
+  return vars >= 0x40000000 && vars < 0xA0000000 ? vars : 0;
+}
+
 }  // namespace
+
+void WithRealStepFn(PPCContext& ctx, uint8_t* base, void (*original)(PPCContext&, uint8_t*));
+
+void KongGrab(PPCContext& ctx, uint8_t* base, void (*original)(PPCContext&, uint8_t*)) {
+  const float dt = FrameTime(base);
+  const uint32_t vars = Vars(base);
+  if (!On("step_decay") || !(dt > 0.0f) || !vars) {
+    WithRealStepFn(ctx, base, original);
+    return;
+  }
+  const float scalar = LoadF(base, vars + 928);
+  float vec[3];
+  for (int i = 0; i < 3; ++i) vec[i] = LoadF(base, vars + 980 + i * 4);
+  WithRealStepFn(ctx, base, original);
+  if (scalar != 0.0f) {
+    for (const float k : {0.9f, 0.95f}) {
+      if (LoadF(base, vars + 928) != scalar * GameFactor(k, dt)) continue;
+      const float v = scalar * std::pow(k, 90.0f * dt);
+      StoreF(base, vars + 928, v);
+      Count("step_decay corrections");
+      break;
+    }
+  }
+  if (vec[0] != 0.0f || vec[1] != 0.0f || vec[2] != 0.0f) {
+    const float g = GrowthFactor(dt);
+    bool ours = true;
+    for (int i = 0; i < 3 && ours; ++i) ours = LoadF(base, vars + 980 + i * 4) == vec[i] * g;
+    if (ours) {
+      const float want = std::pow(1.005f, 70.0f * dt);
+      for (int i = 0; i < 3; ++i) StoreF(base, vars + 980 + i * 4, vec[i] * want);
+      Count("step_decay corrections");
+    }
+  }
+}
+
 }  // namespace kk::hfr
+
+REX_EXTERN(__imp__sub_825CA350);
+REX_HOOK_RAW(sub_825CA350) { kk::hfr::KongGrab(ctx, base, __imp__sub_825CA350); }  // k_ETAT_grab
 
 #define KK_STEP_DECAY_HOOK(addr, site)                                                         \
   REX_EXTERN(__imp__sub_##addr);                                                               \
