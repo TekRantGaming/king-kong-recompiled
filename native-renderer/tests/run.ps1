@@ -7,6 +7,8 @@
   tests\run.ps1 -Plugin native -Scenes all          # capture with rexgpu-native, compare, write the report
   tests\run.ps1 -Plugin xenos -Golden -Force        # (re)capture the golden set with today's renderer
   tests\run.ps1 -Plugin xenos -Scenes title,pause   # a few scenes only (scene or run names)
+  tests\run.ps1 -Plugin native -Tour                # the chapter tour (tests/tour.json): all 42 chapters
+  tests\run.ps1 -Tour -RecordPipelines              # the tour on the native plugin, recording every pipeline
 
   Exit codes: 0 pass, 1 fail, 2 missing frames, 3 the game was busy, 4 setup error. See docs/testing.md.
 #>
@@ -33,13 +35,26 @@ param(
   # Extra game arguments for every launch (for example --native_dump_frame=200).
   [string[]]$ExtraArgs = @(),
   # Another scene file than tests/scenes.json (probes for new scenes).
-  [string]$ScenesFile = ''
+  [string]$ScenesFile = '',
+  # The chapter tour: tests/tour.json (every chapter-select entry, several chapters per launch).
+  [switch]$Tour,
+  # Native plugin with its pipeline cache recording into a fresh file per launch; the files are collected in
+  # <run folder>\pipelines\<run>.pipelines (a prewarm list for every chapter played).
+  [switch]$RecordPipelines
 )
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $compare = Join-Path $PSScriptRoot 'compare.py'
 # -Scenes title,pause arrives as an array from PowerShell and as one "title,pause" string from cmd or bash.
 $SceneList = ($Scenes -join ',')
+if ($Tour -and -not $ScenesFile) { $ScenesFile = Join-Path $PSScriptRoot 'tour.json' }
+if ($RecordPipelines) {
+  if ($PSBoundParameters.ContainsKey('Plugin') -and $Plugin -ne 'native') {
+    Write-Output '-RecordPipelines needs the native plugin'; exit 4
+  }
+  $Plugin = 'native'
+  if ($Golden) { Write-Output '-RecordPipelines and -Golden do not go together'; exit 4 }
+}
 if (-not $Exe) {
   # kk-dev has the Xenos plugin only; the native plugin comes with the kk-dev-vulkan build.
   $Exe = Join-Path $repo 'kk\out\build\kk-dev\king_kong.exe'
@@ -136,10 +151,17 @@ foreach ($run in $plan.runs) {
     if (-not $saved.ContainsKey($kv.Name)) { $saved[$kv.Name] = $null }
   }
   # -ExtraArgs replace the scene file's arguments of the same name (the game keeps the first of two).
-  $extraNames = @($ExtraArgs | ForEach-Object { ($_ -split '=', 2)[0] })
+  $launchExtra = @($ExtraArgs)
+  $pipeDir = Join-Path $runDir 'pipelines'
+  if ($RecordPipelines) {
+    # A fresh, empty cache file per launch: nothing is prewarmed, so the timeline stays that of a cold run.
+    New-Item -ItemType Directory -Force $pipeDir | Out-Null
+    $launchExtra += @('--native_pipeline_cache=true', "--native_pipeline_cache_dir=$pipeDir")
+  }
+  $extraNames = @($launchExtra | ForEach-Object { ($_ -split '=', 2)[0] })
   $runArgs = @($run.args | Where-Object { $extraNames -notcontains (($_ -split '=', 2)[0]) })
   $gameArgs = @("--game_data_root=$GameData", "--user_data_root=$saveCopy", "--cache_root=$CacheRoot",
-    "--log_file=$(Join-Path $runDir 'game.log')") + $runArgs + @($ExtraArgs) | ForEach-Object { Format-Arg $_ }
+    "--log_file=$(Join-Path $runDir 'game.log')") + $runArgs + $launchExtra | ForEach-Object { Format-Arg $_ }
   $log = Join-Path $runDir 'game.log'
   $proc = $null
   $started = Get-Date
@@ -176,7 +198,28 @@ foreach ($run in $plan.runs) {
   $r = Invoke-Py $collect
   Write-Output ("  {0:N0} s; {1}" -f ((Get-Date) - $started).TotalSeconds, $r.out)
   if ($r.code -ne 0) { $status = 2 }
+  if ($RecordPipelines) {
+    # The plugin names the file game.pipelines when the folder comes from --native_pipeline_cache_dir.
+    $file = Get-ChildItem -Path $pipeDir -Filter '*.pipelines' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($file) {
+      $collected = Join-Path $root 'pipelines'
+      New-Item -ItemType Directory -Force $collected | Out-Null
+      $dest = Join-Path $collected "$($run.name).pipelines"
+      Copy-Item -LiteralPath $file.FullName -Destination $dest -Force
+      $bytes = [IO.File]::ReadAllBytes($file.FullName)
+      $records = 0
+      if ($bytes.Length -ge 16) {
+        $size = [BitConverter]::ToUInt32($bytes, 8)  # header: magic, version, record size, byte order
+        if ($size -gt 0) { $records = [math]::Floor(($bytes.Length - 16) / $size) }
+      }
+      Write-Output ("  pipelines: {0} records -> {1}" -f $records, $dest)
+    } else {
+      Write-Output "  pipelines: no file in $pipeDir"
+      $status = 2
+    }
+  }
 }
+if ($RecordPipelines) { Write-Output "pipeline descriptions of every launch: $(Join-Path $root 'pipelines')" }
 
 if ($Golden) {
   Write-Output "golden set written to $root"
