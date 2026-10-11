@@ -38,6 +38,8 @@ if(NR_GAME_RENDERER)
         game_resources.cpp
         game_passes.cpp
         game_frame_log.cpp
+        game_ao.cpp
+        scene_ao.cpp
         shader_library.cpp
     )
     target_link_libraries(nr_renderer PUBLIC kknr_resources kkshaders)

@@ -356,8 +356,8 @@ Projected Project(const M4& proj, const M4& view, const AoScreen& s, const float
   Apply(Mul(proj, view), pos, c);
   Projected r;
   const float nx = c[0] / c[3], ny = c[1] / c[3], nz = c[2] / c[3];
-  r.host_x = (nx * s.x_scale + s.x_offset + s.offset_x) * s.host_scale_x;
-  r.host_y = (ny * s.y_scale + s.y_offset + s.offset_y) * s.host_scale_y;
+  r.host_x = (nx * s.x_scale + s.x_offset + s.offset_x()) * s.host_scale_x;
+  r.host_y = (ny * s.y_scale + s.y_offset + s.offset_y()) * s.host_scale_y;
   r.depth = nz * s.z_scale + s.z_offset;
   for (int i = 0; i < 3; ++i) r.view[i] = v[i];
   return r;
@@ -382,7 +382,7 @@ TEST(AoCamera_ViewMappingRebuildsViewSpace) {
         const float x0 = inner ? 100.0f : 0.0f, y0 = inner ? 50.0f : 0.0f;
         s.x_scale = w / 2, s.x_offset = x0 + w / 2, s.y_scale = -h / 2, s.y_offset = y0 + h / 2;
         s.z_scale = 0.9f, s.z_offset = 0.05f;
-        s.offset_x = s.offset_y = 0.5f;
+        s.half_pixel = 0.5f;
         s.host_scale_x = s.host_scale_y = scale;
         const int32_t ox = int32_t(std::lround(x0 * scale)), oy = int32_t(std::lround(y0 * scale));
         const uint32_t ww = uint32_t(std::lround(w * scale)) / step, wh = uint32_t(std::lround(h * scale)) / step;

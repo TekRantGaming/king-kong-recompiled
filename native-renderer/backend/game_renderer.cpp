@@ -202,6 +202,7 @@ bool GameRenderer::Initialize() {
                         nvrhi::BindingLayoutItem::VolatileConstantBuffer(2)};
   // b3: the render scale constants, only when scaling (the 1:1 layout is the one it always was).
   if (scaled()) constants.bindings.push_back(nvrhi::BindingLayoutItem::VolatileConstantBuffer(3));
+  AoLayoutBindings(constants);  // AO hook (game_ao.cpp): b4 for the ambient-only shaders
   constants_layout_ = device_->createBindingLayout(constants);
   if (!constants_layout_) return false;
 
@@ -227,6 +228,7 @@ bool GameRenderer::Initialize() {
     if (!scale_constants_) return false;
     cs.bindings.push_back(nvrhi::BindingSetItem::ConstantBuffer(3, scale_constants_));
   }
+  if (!AoSetBindings(cs)) return false;  // AO hook (game_ao.cpp)
   constants_set_ = device_->createBindingSet(cs, constants_layout_);
   if (!constants_set_) return false;
 
@@ -358,6 +360,7 @@ bool GameRenderer::Initialize() {
   // Ambient occlusion: optional, never a reason to refuse to start.
   ao_ = std::make_unique<AmbientOcclusion>(device_);
   if (!ao_->Initialize()) ao_.reset();
+  AoInitialize();  // AO hook (game_ao.cpp): the GTAO method
   return true;
 }
 
@@ -987,6 +990,9 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   record.flags = options_.flip_front_face ? 1u : 0u;
   const uint64_t key = PipelineKey(record);
   NoteRecord(record, key);
+  // AO hook (game_ao.cpp): classify the draw; at the end of the opaque pass the occlusion goes into
+  // the scene before this draw.
+  if (scene_ao_) AoDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
   if (frame_log_ && frame_log_->enabled()) LogDraw(call, d, *vs, ps.get());
   if (dump) DumpVertexShaderHashes(call, d, *vs);
   if (stop_at == 7) return;

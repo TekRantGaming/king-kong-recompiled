@@ -124,7 +124,7 @@ float Hit(V3 o, V3 d) {
 AoScreen Screen(float gw, float gh, float scale) {
   AoScreen s;
   s.x_scale = gw / 2, s.x_offset = gw / 2, s.y_scale = -gh / 2, s.y_offset = gh / 2;
-  s.offset_x = s.offset_y = 0.5f;
+  s.half_pixel = 0.5f;
   s.host_scale_x = s.host_scale_y = scale;
   return s;
 }
@@ -136,7 +136,7 @@ std::vector<float> RayCast(const Camera& cam, const AoScreen& s, uint32_t w, uin
   for (uint32_t j = 0; j < h; ++j) {
     for (uint32_t i = 0; i < w; ++i) {
       const float gx = (float(i) + 0.5f) / s.host_scale_x, gy = (float(j) + 0.5f) / s.host_scale_y;
-      const float nx = (gx - s.x_offset - s.offset_x) / s.x_scale, ny = (gy - s.y_offset - s.offset_y) / s.y_scale;
+      const float nx = (gx - s.x_offset - s.offset_x()) / s.x_scale, ny = (gy - s.y_offset - s.offset_y()) / s.y_scale;
       const V3 dir = cam.r * (nx / cam.px) + cam.u * (ny / cam.py) + cam.f;  // view z = 1 along it
       const float t = Hit(cam.eye, dir);
       if (t > 0.0f) z[size_t(j) * w + i] = cam.a + cam.b / t;  // t is the view z: dir has view z 1
@@ -150,8 +150,8 @@ void ToPixel(const Camera& cam, const AoScreen& s, V3 p, int& x, int& y) {
   const V3 v = p - cam.eye;
   const float vz = Dot(v, cam.f);
   const float nx = cam.px * Dot(v, cam.r) / vz, ny = cam.py * Dot(v, cam.u) / vz;
-  x = int(std::floor((nx * s.x_scale + s.x_offset + s.offset_x) * s.host_scale_x));
-  y = int(std::floor((ny * s.y_scale + s.y_offset + s.offset_y) * s.host_scale_y));
+  x = int(std::floor((nx * s.x_scale + s.x_offset + s.offset_x()) * s.host_scale_x));
+  y = int(std::floor((ny * s.y_scale + s.y_offset + s.offset_y()) * s.host_scale_y));
 }
 
 // ------------------------------------------------------------- textures ---

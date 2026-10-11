@@ -40,11 +40,16 @@ int FindAoPerspectiveRegister(const uint8_t* vs_constants_be, float rows[16]);
 // applied, the window offset and D3D9's half-pixel offset) and the target's render scale.
 struct AoScreen {
   float x_scale = 1, x_offset = 0, y_scale = 1, y_offset = 0, z_scale = 1, z_offset = 0;
-  float offset_x = 0, offset_y = 0;  // window offset plus the half-pixel offset, guest pixels
+  float window_x = 0, window_y = 0;  // the window offset (guest pixels), when enabled
+  float half_pixel = 0;              // 0.5 with D3D9's half-pixel offset (PA_SU_VTX_CNTL pix_center 0)
   float host_scale_x = 1, host_scale_y = 1;
-  // The picture the viewport covers, in guest pixels.
-  float left() const { return x_offset - (x_scale < 0 ? -x_scale : x_scale) + offset_x; }
-  float top() const { return y_offset - (y_scale < 0 ? -y_scale : y_scale) + offset_y; }
+  // What the viewport transform adds to a pixel's position besides its offset.
+  float offset_x() const { return window_x + half_pixel; }
+  float offset_y() const { return window_y + half_pixel; }
+  // The picture the viewport covers, in guest pixels (the half-pixel offset moves pixel centres,
+  // not the picture).
+  float left() const { return x_offset - (x_scale < 0 ? -x_scale : x_scale) + window_x; }
+  float top() const { return y_offset - (y_scale < 0 ? -y_scale : y_scale) + window_y; }
   float width() const { return 2.0f * (x_scale < 0 ? -x_scale : x_scale); }
   float height() const { return 2.0f * (y_scale < 0 ? -y_scale : y_scale); }
 };

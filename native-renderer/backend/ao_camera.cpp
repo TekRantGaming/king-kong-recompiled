@@ -68,8 +68,8 @@ AoViewMapping ComputeAoViewMapping(const AoProjection& p, const AoScreen& s, int
     mul = k * float(padded) / (hs * ss * projection);
     add = (((float(origin) + 0.5f - 0.5f * k) / hs - vp_offset - extra) / ss - centre) / projection;
   };
-  axis(s.host_scale_x, s.x_scale, s.x_offset, s.offset_x, p.px, p.cx, origin_x, padded_w, m.mul[0], m.add[0]);
-  axis(s.host_scale_y, s.y_scale, s.y_offset, s.offset_y, p.py, p.cy, origin_y, padded_h, m.mul[1], m.add[1]);
+  axis(s.host_scale_x, s.x_scale, s.x_offset, s.offset_x(), p.px, p.cx, origin_x, padded_w, m.mul[0], m.add[0]);
+  axis(s.host_scale_y, s.y_scale, s.y_offset, s.offset_y(), p.py, p.cy, origin_y, padded_h, m.mul[1], m.add[1]);
   // Stored depth = z_scale * (a + b / view z) + z_offset.
   m.depth_mul = -p.b * s.z_scale;
   m.depth_add = s.z_scale * p.a + s.z_offset;
@@ -81,7 +81,8 @@ bool AoCameraFinder::Same(const Candidate& c, const AoProjection& p, const AoScr
          Near(c.p.cy, p.cy, 0.0f, 0.005f) && Near(c.p.a, p.a, 0.005f, 1e-6f) && Near(c.p.b, p.b, 0.005f, 1e-6f) &&
          c.s.x_scale == s.x_scale && c.s.x_offset == s.x_offset && c.s.y_scale == s.y_scale &&
          c.s.y_offset == s.y_offset && c.s.z_scale == s.z_scale && c.s.z_offset == s.z_offset &&
-         c.s.offset_x == s.offset_x && c.s.offset_y == s.offset_y && c.s.host_scale_x == s.host_scale_x &&
+         c.s.window_x == s.window_x && c.s.window_y == s.window_y && c.s.half_pixel == s.half_pixel &&
+         c.s.host_scale_x == s.host_scale_x &&
          c.s.host_scale_y == s.host_scale_y;
 }
 

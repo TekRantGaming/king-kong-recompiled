@@ -6,7 +6,9 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iterator>
+#include <sstream>
 
 #include <rex/assert.h>
 #include <rex/chrono/clock.h>
@@ -66,6 +68,12 @@ REXCVAR_DECLARE(bool, native_present_unlocked);
 REXCVAR_DECLARE(bool, native_async_submit);
 REXCVAR_DECLARE(bool, native_async_present);
 REXCVAR_DECLARE(bool, native_dynamic_vertex_buffers);
+REXCVAR_DECLARE(std::string, native_ao_method);
+REXCVAR_DECLARE(std::string, native_ao_apply);
+REXCVAR_DECLARE(std::string, native_ao_quality);
+REXCVAR_DECLARE(double, native_ao_radius);
+REXCVAR_DECLARE(std::string, native_ao_rules);
+REXCVAR_DECLARE(std::string, native_ao_shaders);
 
 namespace {
 // <title id>.pipelines, or game.pipelines when the title is not known (a folder from the cvar).
@@ -206,6 +214,42 @@ X_STATUS NativeGraphicsSystem::SetupPresentation(rex::ui::WindowedAppContext* ap
   return X_STATUS_SUCCESS;
 }
 
+namespace {
+
+std::string ReadTextFile(const std::string& path) {
+  std::ifstream f(path, std::ios::binary);
+  if (!f) return {};
+  std::stringstream text;
+  text << f.rdbuf();
+  return text.str();
+}
+
+// --native_ao_* (docs/ao.md): a value it cannot read is logged and its default kept.
+void ReadAoConfig(AoConfig& ao) {
+  if (!ParseAoMethod(REXCVAR_GET(native_ao_method), ao.method))
+    REXGPU_WARN("rexgpu-native: native_ao_method '{}' is not legacy or gtao", REXCVAR_GET(native_ao_method));
+  if (!ParseAoApply(REXCVAR_GET(native_ao_apply), ao.apply))
+    REXGPU_WARN("rexgpu-native: native_ao_apply '{}' is not resolve, opaque or ambient", REXCVAR_GET(native_ao_apply));
+  if (!ParseAoQuality(REXCVAR_GET(native_ao_quality), ao.quality))
+    REXGPU_WARN("rexgpu-native: native_ao_quality '{}' is not full or half", REXCVAR_GET(native_ao_quality));
+  ao.radius = float(std::max(0.0, REXCVAR_GET(native_ao_radius)));
+  if (const std::string path = REXCVAR_GET(native_ao_rules); !path.empty()) {
+    std::vector<std::string> errors;
+    ao.rules = ParseAoRules(ReadTextFile(path), &errors);
+    for (const std::string& e : errors) REXGPU_WARN("rexgpu-native: {}: {}", path, e);
+    REXGPU_INFO("rexgpu-native: {} AO classifier rules from {}", ao.rules.size(), path);
+  }
+  if (const std::string path = REXCVAR_GET(native_ao_shaders); !path.empty()) {
+    ao.ambient_shaders = ReadTextFile(path);
+    if (ao.ambient_shaders.empty()) REXGPU_WARN("rexgpu-native: the AO shader list {} is empty or missing", path);
+  }
+  if (ao.method == AoMethod::kLegacy && ao.apply != AoApply::kResolve)
+    REXGPU_WARN("rexgpu-native: native_ao_apply={} needs native_ao_method=gtao; the legacy AO uses resolve",
+                AoApplyName(ao.apply));
+}
+
+}  // namespace
+
 X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* function_dispatcher,
                                              rex::system::KernelState* kernel_state) {
   memory_ = function_dispatcher->memory();
@@ -295,6 +339,7 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
     s.strength = std::clamp(std::atoi(rex::cvar::GetFlagByName("ao_strength").c_str()), 1, 3);
     return s;
   };
+  ReadAoConfig(game.ao);
   if (!backend_->Initialize(std::max<uint32_t>(1, video_mode.display_width),
                             std::max<uint32_t>(1, video_mode.display_height), game)) {
     REXGPU_ERROR("rexgpu-native: backend initialisation failed");
