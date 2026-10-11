@@ -35,6 +35,7 @@ if(NR_GAME_RENDERER)
         game_passes.cpp
         game_frame_log.cpp
         shader_library.cpp
+        pipeline_prewarm.cpp
     )
     target_link_libraries(nr_renderer PUBLIC kknr_resources kkshaders)
     target_compile_definitions(nr_renderer PUBLIC NR_GAME_RENDERER=1)
@@ -42,7 +43,7 @@ else()
     target_compile_definitions(nr_renderer PUBLIC NR_GAME_RENDERER=0)
 endif()
 if(NR_HAS_VULKAN)
-    target_sources(nr_renderer PRIVATE vulkan_dispatch.cpp)
+    target_sources(nr_renderer PRIVATE vulkan_dispatch.cpp vk_pipeline_cache.cpp)
     target_link_libraries(nr_renderer PUBLIC nvrhi_vk Vulkan::Headers)
     target_compile_definitions(nr_renderer PUBLIC NR_HAS_VULKAN=1 VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1)
 else()

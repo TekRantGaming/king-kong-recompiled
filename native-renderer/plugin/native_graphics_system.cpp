@@ -40,6 +40,8 @@
 #include "backend/backend.h"
 #include "backend/draw_state.h"
 #include "backend/host_device.h"
+#include "plugin/launcher_prewarm.h"
+#include "plugin/plugin_settings.h"
 #include "plugin/ring_skimmer.h"
 
 REXCVAR_DECLARE(bool, native_draws);
@@ -48,68 +50,16 @@ REXCVAR_DECLARE(std::string, native_test);
 REXCVAR_DECLARE(bool, native_wvp_transpose);
 REXCVAR_DECLARE(bool, native_all_targets);
 REXCVAR_DECLARE(bool, native_main_pass_only);
-REXCVAR_DECLARE(bool, native_game);
-REXCVAR_DECLARE(std::string, native_shader_pack);
-REXCVAR_DECLARE(std::string, native_dxc);
-REXCVAR_DECLARE(bool, native_element_endian);
-REXCVAR_DECLARE(bool, native_flip_front_face);
-REXCVAR_DECLARE(bool, native_texture_tail_mips);
-REXCVAR_DECLARE(int32_t, native_dump_frame);
-REXCVAR_DECLARE(std::string, native_show_texture);
-REXCVAR_DECLARE(int32_t, native_debug);
-REXCVAR_DECLARE(bool, native_async_pipelines);
 REXCVAR_DECLARE(bool, native_pipeline_cache);
-REXCVAR_DECLARE(std::string, native_pipeline_cache_dir);
-REXCVAR_DECLARE(bool, native_pipeline_wait);
-REXCVAR_DECLARE(double, native_pipeline_wait_budget_ms);
+REXCVAR_DECLARE(bool, native_pipeline_list);
+REXCVAR_DECLARE(bool, native_vk_pipeline_cache);
 REXCVAR_DECLARE(bool, native_present_unlocked);
 REXCVAR_DECLARE(bool, native_async_submit);
 REXCVAR_DECLARE(bool, native_async_present);
-REXCVAR_DECLARE(bool, native_dynamic_vertex_buffers);
-REXCVAR_DECLARE(bool, native_render_thread);
 
-namespace {
-// <title id>.pipelines, or game.pipelines when the title is not known (a folder from the cvar).
-std::string PipelineCacheFileName(uint32_t title_id) {
-  if (!title_id) return "game.pipelines";
-  char name[32];
-  std::snprintf(name, sizeof(name), "%08X.pipelines", title_id);
-  return name;
-}
-}  // namespace
-REXCVAR_DECLARE(std::string, native_render_scale);
-REXCVAR_DECLARE(double, native_shadow_scale);
 
 namespace nr {
 
-namespace {
-
-// The folder of the running executable (the game's).
-std::filesystem::path ExecutableFolder() {
-#if defined(_WIN32)
-  wchar_t path[32768];
-  DWORD n = GetModuleFileNameW(nullptr, path, DWORD(std::size(path)));
-  if (n == 0 || n >= std::size(path)) return {};
-  return std::filesystem::path(std::wstring(path, n)).parent_path();
-#else
-  std::error_code ec;
-  auto p = std::filesystem::read_symlink("/proc/self/exe", ec);
-  return ec ? std::filesystem::path() : p.parent_path();
-#endif
-}
-
-std::string FindShaderPack(bool vulkan) {
-  std::string wanted = REXCVAR_GET(native_shader_pack);
-  if (!wanted.empty()) return wanted;
-  const std::filesystem::path folder = ExecutableFolder();
-  for (const char* name : {vulkan ? "kkshaders-spirv.pack" : "kkshaders-dxil.pack", "kkshaders.pack"}) {
-    std::error_code ec;
-    if (std::filesystem::exists(folder / name, ec)) return (folder / name).string();
-  }
-  return {};
-}
-
-}  // namespace
 
 NativeGraphicsSystem* NativeGraphicsSystem::instance_ = nullptr;
 
@@ -209,6 +159,9 @@ X_STATUS NativeGraphicsSystem::SetupPresentation(rex::ui::WindowedAppContext* ap
 
 X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* function_dispatcher,
                                              rex::system::KernelState* kernel_state) {
+  // The launcher's prewarm ends here: its device goes (saving the driver's pipeline cache) before
+  // the game's is made.
+  StopLauncherPrewarm();
   memory_ = function_dispatcher->memory();
   function_dispatcher_ = function_dispatcher;
   kernel_state_ = kernel_state;
@@ -244,71 +197,19 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
   rex::system::X_VIDEO_MODE video_mode;
   rex::kernel::xboxkrnl::VdQueryVideoMode(&video_mode);
   backend_ = std::make_unique<Backend>(std::move(host), memory_);
-  GameSettings game;
-  game.enabled = REXCVAR_GET(native_game);
-  game.shader_pack = FindShaderPack(api_ == HostApi::kVulkan);
-  game.dxc = REXCVAR_GET(native_dxc);
-  if (game.dxc.empty()) game.dxc = ExecutableFolder().string();
-  game.element_endian = REXCVAR_GET(native_element_endian);
-  game.flip_front_face = REXCVAR_GET(native_flip_front_face);
-  game.texture_tail_mips = REXCVAR_GET(native_texture_tail_mips);
-  game.dump_frame = REXCVAR_GET(native_dump_frame);
-  game.show_texture = uint32_t(std::strtoul(REXCVAR_GET(native_show_texture).c_str(), nullptr, 16));
-  game.debug = uint32_t(REXCVAR_GET(native_debug));
-  game.async_pipelines = REXCVAR_GET(native_async_pipelines);
-  game.pipeline_wait = REXCVAR_GET(native_pipeline_wait);
-  game.dynamic_vertex_buffers = REXCVAR_GET(native_dynamic_vertex_buffers);
-  game.render_thread = REXCVAR_GET(native_render_thread);
-  {
-    // The launcher's texture filtering (defined by the runtime / Xenos plugin; absent: the game's own).
-    const std::string aniso = rex::cvar::GetFlagByName("anisotropic_override");
-    game.anisotropic_override = aniso.empty() ? -1 : std::atoi(aniso.c_str());
-    // The launcher's anti-aliasing (swap_post_effect, the Xenos plugin's swap pass).
-    const std::string aa = rex::cvar::GetFlagByName("swap_post_effect");
-    game.fxaa = aa == "fxaa" ? 1u : (aa == "fxaa_extreme" ? 2u : 0u);
-  }
-  game.pipeline_wait_budget_ms = REXCVAR_GET(native_pipeline_wait_budget_ms);
-  if (const char* frame_log = std::getenv("REX_DEV_FRAME_LOG")) game.frame_log = frame_log;
-  game.render_scale = REXCVAR_GET(native_render_scale);
-  if (game.render_scale == "auto") {
-    // The scale the Xenos plugin would draw at (the runtime's rule, as kk/src/settings.cpp logs it):
-    // resolution_scale when the player set it and the axis was left alone, else the axis, whose
-    // default the launcher's render quality preset sets.
-    auto axis = [](const char* name) {
-      std::string v = rex::cvar::HasNonDefaultValue("resolution_scale") && !rex::cvar::HasNonDefaultValue(name)
-                          ? rex::cvar::GetFlagByName("resolution_scale")
-                          : rex::cvar::GetFlagByName(name);
-      const int n = std::atoi(v.c_str());
-      return n >= 1 && n <= 8 ? n : 1;
-    };
-    const int x = axis("draw_resolution_scale_x"), y = axis("draw_resolution_scale_y");
-    game.render_scale = std::to_string(1280 * x) + "x" + std::to_string(720 * y);
-    REXGPU_INFO("rexgpu-native: render scale auto: {}x{} (the draw resolution scale)", x, y);
-  }
-  game.shadow_scale = float(REXCVAR_GET(native_shadow_scale));
-  // Ambient occlusion: the Xenos plugin's own settings (ao_mode 0 off, 1 on, 2 AO only; ao_strength
-  // 1 to 3), looked up by name at every use. They are defined by rexgpu-xenos, which the launcher
-  // and the game's start load first so that its cvars exist when the config and command line are read
-  // (the launcher's Graphics page and F8 / F9 set them by name too). Without that plugin loaded
-  // the lookup finds nothing and AO stays off.
-  game.ao_settings = [] {
-    AoSettings s;
-    s.mode = std::clamp(std::atoi(rex::cvar::GetFlagByName("ao_mode").c_str()), 0, 2);
-    s.strength = std::clamp(std::atoi(rex::cvar::GetFlagByName("ao_strength").c_str()), 1, 3);
-    return s;
-  };
+  const GameSettings game = ReadGameSettings(api_ == HostApi::kVulkan);
   if (!backend_->Initialize(std::max<uint32_t>(1, video_mode.display_width),
                             std::max<uint32_t>(1, video_mode.display_height), game)) {
     REXGPU_ERROR("rexgpu-native: backend initialisation failed");
     backend_.reset();
     return X_STATUS_UNSUCCESSFUL;
   }
-  if (REXCVAR_GET(native_pipeline_cache)) {
+  {
     // --native_pipeline_cache_dir wins; otherwise the cache root arrives in InitializeShaderStorage
-    // (before or after this point).
-    const std::string dir = REXCVAR_GET(native_pipeline_cache_dir);
-    if (!dir.empty()) pipeline_cache_path_ = (std::filesystem::path(dir) / PipelineCacheFileName(0)).string();
-    if (!pipeline_cache_path_.empty()) backend_->SetPipelineCache(pipeline_cache_path_);
+    // (after this point when the SDK's app runs the game; a place it brought earlier is kept). A
+    // shipped list alone needs no folder: it starts now.
+    if (pipeline_place_.empty()) pipeline_place_ = PipelinePlaceFromCvar();
+    if (!pipeline_place_.empty() || !PipelineFilesNeedCacheRoot()) StartPipelines();
   }
   backend_->set_unlocked_present(REXCVAR_GET(native_present_unlocked));
   backend_->set_async_submit(REXCVAR_GET(native_async_submit));
@@ -372,9 +273,26 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
 void NativeGraphicsSystem::InitializeShaderStorage(const std::filesystem::path& cache_root, uint32_t title_id,
                                                    bool blocking) {
   (void)blocking;
-  if (!REXCVAR_GET(native_pipeline_cache) || !pipeline_cache_path_.empty()) return;
-  pipeline_cache_path_ = (cache_root / "native-pipelines" / PipelineCacheFileName(title_id)).string();
-  if (backend_) backend_->SetPipelineCache(pipeline_cache_path_);
+  if (pipelines_started_ || !pipeline_place_.empty()) return;
+  pipeline_place_ = PipelinePlaceUnder(cache_root, title_id);
+  if (backend_) StartPipelines();
+}
+
+// In this order: the driver's pipeline cache (read while nothing creates a pipeline), the player's
+// cache file, then the shipped list (each description is made once, whichever names it first).
+// Before the game's first draw: the SDK's app initialises the shader storage before the game's
+// main thread starts.
+void NativeGraphicsSystem::StartPipelines() {
+  if (pipelines_started_ || !backend_) return;
+  pipelines_started_ = true;
+  if (REXCVAR_GET(native_vk_pipeline_cache) && !pipeline_place_.empty() &&
+      !backend_->SetDriverPipelineCache(pipeline_place_.driver_cache())) {
+    REXGPU_WARN("rexgpu-native: native_vk_pipeline_cache needs Vulkan and the game renderer; not used");
+  }
+  if (REXCVAR_GET(native_pipeline_cache) && !pipeline_place_.empty()) {
+    backend_->SetPipelineCache(pipeline_place_.records());
+  }
+  if (REXCVAR_GET(native_pipeline_list)) backend_->LoadPipelineList(ShippedPipelineList());
 }
 
 void NativeGraphicsSystem::Shutdown() {

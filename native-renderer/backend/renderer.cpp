@@ -20,6 +20,7 @@ class GameRenderer {
   template <typename... A> void Clear(A&&...) {}
   template <typename... A> void Resolve(A&&...) {}
   template <typename... A> bool Present(A&&...) { return false; }
+  template <typename... A> void VertexShaderPatched(A&&...) {}
   void EndFrame() {}
 };
 }  // namespace nr

@@ -44,7 +44,7 @@ class RingSkimmer {
   // From the Vd* kernel exports (through the graphics system).
   void InitializeRingBuffer(uint32_t ptr, uint32_t size_log2);
   void EnableReadPointerWriteBack(uint32_t ptr, uint32_t block_size_log2);
-  // From the CP_RB_WPTR register write. 	icket: the renderer's calls queued before the kick
+  // From the CP_RB_WPTR register write. The ticket: the renderer's calls queued before the kick
   // (--native_render_thread; 0 without it).
   void UpdateWritePointer(uint32_t value, uint64_t ticket = 0);
 

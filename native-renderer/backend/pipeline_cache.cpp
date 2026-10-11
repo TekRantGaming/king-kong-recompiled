@@ -34,7 +34,95 @@ uint64_t PipelineKey(const PipelineRecord& r) {
   h = Mix(h, (uint64_t(r.ref_mask) << 32) | r.mode_control);
   h = Mix(h, (uint64_t(r.clip_control) << 32) | r.flags);
   h = Mix(h, (uint64_t(r.poly_scale) << 32) | r.poly_offset);
+  h = Mix(h, r.vs_input);
+  h = Mix(h, r.ps_input);
   return h;
+}
+
+bool ReadPipelineList(const std::string& path, std::vector<PipelineRecord>& records, std::string* note,
+                      size_t* torn_bytes) {
+  if (note) note->clear();
+  if (torn_bytes) *torn_bytes = 0;
+  std::FILE* in = std::fopen(path.c_str(), "rb");
+  if (!in) return false;
+  Header header;
+  const Header want;
+  bool ok = false;
+  if (std::fread(&header, sizeof(header), 1, in) != 1) {
+    if (note) *note = "empty or truncated header";
+  } else if (std::memcmp(&header, &want, sizeof(header)) != 0) {
+    if (note) *note = "another version, record size or byte order";
+  } else {
+    ok = true;
+    PipelineRecord record;
+    size_t got = 0;
+    while ((got = std::fread(&record, 1, sizeof(record), in)) == sizeof(record)) records.push_back(record);
+    if (torn_bytes) *torn_bytes = got;
+  }
+  std::fclose(in);
+  return ok;
+}
+
+bool WritePipelineList(const std::string& path, const std::vector<PipelineRecord>& records, std::string* error) {
+  std::error_code ec;
+  const std::filesystem::path p(path);
+  if (p.has_parent_path()) std::filesystem::create_directories(p.parent_path(), ec);
+  const std::string temp = path + ".tmp";
+  std::FILE* out = std::fopen(temp.c_str(), "wb");
+  if (!out) {
+    if (error) *error = "cannot create " + temp;
+    return false;
+  }
+  const Header header;
+  bool ok = std::fwrite(&header, sizeof(header), 1, out) == 1;
+  if (ok && !records.empty()) ok = std::fwrite(records.data(), sizeof(PipelineRecord), records.size(), out) == records.size();
+  ok = std::fflush(out) == 0 && ok;
+  ok = std::fclose(out) == 0 && ok;
+  if (ok) {
+    std::filesystem::rename(temp, p, ec);
+    ok = !ec;
+  }
+  if (!ok) {
+    if (error) *error = "cannot write " + path;
+    std::filesystem::remove(temp, ec);
+  }
+  return ok;
+}
+
+PipelineListMerger::Input PipelineListMerger::Add(const std::string& path) {
+  Input in;
+  in.path = path;
+  std::vector<PipelineRecord> records;
+  in.read = ReadPipelineList(path, records, &in.note, &in.torn_bytes);
+  if (!in.read) {
+    std::error_code ec;
+    if (in.note.empty()) in.note = std::filesystem::exists(path, ec) ? "cannot be read" : "absent";
+    return in;
+  }
+  in.records = records.size();
+  for (const PipelineRecord& r : records) {
+    if ((r.flags & kRecordFlipFrontFace) && !keep_debug_) {
+      ++in.debug;
+    } else if (keys_.insert(PipelineKey(r)).second) {
+      records_.push_back(r);
+      ++in.added;
+    } else {
+      ++in.duplicates;
+    }
+  }
+  return in;
+}
+
+size_t PipelineListMerger::AddRecords(const std::vector<PipelineRecord>& records) {
+  size_t added = 0;
+  for (const PipelineRecord& r : records) {
+    if ((r.flags & kRecordFlipFrontFace) && !keep_debug_) continue;
+    if (keys_.insert(PipelineKey(r)).second) {
+      records_.push_back(r);
+      ++added;
+    }
+  }
+  return added;
 }
 
 bool PipelineCacheFile::Open(const std::string& path) {
@@ -47,25 +135,12 @@ bool PipelineCacheFile::Open(const std::string& path) {
   const std::filesystem::path p(path);
   if (p.has_parent_path()) std::filesystem::create_directories(p.parent_path(), ec);
 
-  bool keep = false;
-  size_t good_bytes = sizeof(Header);
-  if (std::FILE* in = std::fopen(path.c_str(), "rb")) {
-    Header header;
-    Header want;
-    if (std::fread(&header, sizeof(header), 1, in) != 1) {
-      note_ = "empty or truncated header";
-    } else if (std::memcmp(&header, &want, sizeof(header)) != 0) {
-      note_ = "another version, record size or byte order";
-    } else {
-      keep = true;
-      PipelineRecord record;
-      while (std::fread(&record, sizeof(record), 1, in) == 1) {
-        good_bytes += sizeof(record);
-        if (keys_.insert(PipelineKey(record)).second) loaded_.push_back(record);
-      }
-    }
-    std::fclose(in);
+  std::vector<PipelineRecord> records;
+  const bool keep = ReadPipelineList(path, records, &note_);
+  for (const PipelineRecord& record : records) {
+    if (keys_.insert(PipelineKey(record)).second) loaded_.push_back(record);
   }
+  const size_t good_bytes = sizeof(Header) + records.size() * sizeof(PipelineRecord);
   if (keep) {
     // Drop a torn last record (the run was killed mid-write) before appending.
     std::filesystem::resize_file(p, good_bytes, ec);

@@ -13,16 +13,26 @@
 
 #include "backend/tests/readback.h"
 
+namespace nr {
+class VulkanPipelineCache;
+}
+
 namespace nr::test {
 
 class VulkanTestDevice {
  public:
   // Validation: the Khronos validation layer when installed, plus NVRHI's
   // validation layer. Errors from either are counted (and printed).
-  static std::unique_ptr<VulkanTestDevice> Create(bool validation = true);
+  // driver_pipeline_cache: NVRHI's device creates its pipelines through a VulkanPipelineCache of
+  // ours (the plugin's --native_vk_pipeline_cache), pipeline_cache().
+  static std::unique_ptr<VulkanTestDevice> Create(bool validation = true, bool driver_pipeline_cache = false);
   ~VulkanTestDevice();
 
   nvrhi::IDevice* device() const { return nvrhi_device_; }
+  nr::VulkanPipelineCache* pipeline_cache() const { return pipeline_cache_.get(); }
+  // vulkan.hpp's dispatcher is one for the process: point it at this device again (after another
+  // test device was made).
+  void MakeCurrent();
   const std::string& device_name() const { return device_name_; }
   bool khronos_validation() const { return khronos_validation_; }
   // Validation errors so far (Vulkan layer + NVRHI).
@@ -36,10 +46,11 @@ class VulkanTestDevice {
 
  private:
   VulkanTestDevice() = default;
-  bool Init(bool validation);
+  bool Init(bool validation, bool driver_pipeline_cache);
 
   struct Impl;
   std::unique_ptr<Impl> impl_;
+  std::unique_ptr<nr::VulkanPipelineCache> pipeline_cache_;  // destroyed after nvrhi_device_
   nvrhi::DeviceHandle nvrhi_device_;
   std::string device_name_;
   bool khronos_validation_ = false;

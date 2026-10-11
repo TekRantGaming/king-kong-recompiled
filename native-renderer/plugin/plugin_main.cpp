@@ -5,14 +5,19 @@
 // nr_get_api is the second export: the D3D hooks compiled into king_kong.exe
 // (native-renderer/hooks) use it to reach the backend (native_api.h).
 
+#include <filesystem>
 #include <string_view>
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/system/gpu_plugin.h>
 
+#include "backend/backend.h"
+#include "plugin/launcher_prewarm.h"
 #include "plugin/native_api.h"
 #include "plugin/native_graphics_system.h"
+#include "plugin/native_prewarm.h"
+#include "plugin/native_stutter.h"
 
 REXCVAR_DEFINE_STRING(native_backend, "auto", "Native renderer",
                       "Host API for the native renderer: auto, d3d12 or vulkan")
@@ -83,6 +88,38 @@ REXCVAR_DEFINE_BOOL(native_pipeline_cache, true, "Native renderer",
 REXCVAR_DEFINE_STRING(native_pipeline_cache_dir, "", "Native renderer",
                       "Folder for the pipeline cache file when native_pipeline_cache is on. Empty: "
                       "<cache root>/native-pipelines")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_BOOL(native_vk_pipeline_cache, false, "Native renderer",
+                    "Vulkan: keep the driver's compiled pipelines (a VkPipelineCache) in a file under the cache "
+                    "root (<cache root>/native-pipelines/<title>.vkcache, or native_pipeline_cache_dir) and load it "
+                    "at start, so making the pipelines again is fast. A file another GPU, driver or driver version "
+                    "made is not used: the cache is rebuilt in the background and the file replaced")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_BOOL(native_launcher_prewarm, false, "Native renderer",
+                    "When the launcher opens, make the game's known pipelines (native_pipeline_cache's file and the "
+                    "shipped list) on a Vulkan device of the plugin's own while the player is still there. The driver "
+                    "keeps what it compiled (its own disk cache, and native_vk_pipeline_cache's file), so the game's "
+                    "start makes them again quickly. Stopped when the game starts")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_BOOL(native_stutter_stats, false, "Native renderer",
+                    "Pipeline stutter counter: frames in which a draw waited for its pipeline or was skipped "
+                    "because it was not ready, and the worst wait, in the log (every 300 swaps and at the end) and "
+                    "under the frame counter (kk_show_fps, F2)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_BOOL(native_pipeline_list, false, "Native renderer",
+                    "Load the pipeline list shipped beside the game (kkpipelines.list, made by nr_pipelines merge "
+                    "from the pipeline cache files of several runs) at start and create its pipelines on the "
+                    "worker threads, so a fresh install draws everything from its first frame (Vulkan; needs "
+                    "native_async_pipelines). The list is never written")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_STRING(native_pipeline_list_file, "", "Native renderer",
+                      "The shipped pipeline list when native_pipeline_list is on. Empty: kkpipelines.list beside "
+                      "the game")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_BOOL(native_pipeline_wait, false, "Native renderer",
@@ -195,4 +232,35 @@ extern "C" REX_GPU_PLUGIN_EXPORT rex::system::IGraphicsSystem* rex_gpu_create(
 
 extern "C" REX_GPU_PLUGIN_EXPORT const NrApi* nr_get_api(void) {
   return nr::NativeGraphicsSystem::GetApi();
+}
+
+// The launcher's prewarm (native_prewarm.h).
+extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_prewarm_start(const NrPrewarmRequest* request) {
+  if (!request || request->size < sizeof(NrPrewarmRequest) || request->version != NR_PREWARM_VERSION) {
+    REXLOG_ERROR("rexgpu-native: nr_prewarm_start: a request of another version");
+    return NR_PREWARM_OFF;
+  }
+  const char* root = request->cache_root ? request->cache_root : "";
+  return nr::StartLauncherPrewarm(std::filesystem::path(reinterpret_cast<const char8_t*>(root)), request->title_id);
+}
+
+extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_prewarm_status(NrPrewarmStatus* status) {
+  return nr::LauncherPrewarmStatus(status);
+}
+
+extern "C" REX_GPU_PLUGIN_EXPORT void nr_prewarm_stop(void) { nr::StopLauncherPrewarm(); }
+
+// The pipeline stutter counter for the overlay (native_stutter.h).
+extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_stutter_stats(NrStutterStats* stats) {
+  nr::StutterSnapshot s;
+  if (!stats || stats->size < sizeof(NrStutterStats) || !nr::ReadStutterSnapshot(&s)) return 0;
+  stats->frames = s.frames;
+  stats->stutter_frames = s.stutter_frames;
+  stats->frames_waited = s.frames_waited;
+  stats->frames_skipped = s.frames_skipped;
+  stats->draws_skipped = s.draws_skipped;
+  stats->worst_wait_frame = s.worst_wait_frame;
+  stats->wait_ms = s.wait_ms;
+  stats->worst_wait_ms = s.worst_wait_ms;
+  return 1;
 }

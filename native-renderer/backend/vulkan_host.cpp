@@ -27,9 +27,11 @@
 #include <rex/ui/vulkan/provider.h>
 
 #include "backend/host_device.h"
+#include "backend/vk_pipeline_cache.h"
 #include "backend/vulkan_dispatch.h"
 
 REXCVAR_DECLARE(bool, native_validation);
+REXCVAR_DECLARE(bool, native_vk_pipeline_cache);
 
 namespace nr {
 
@@ -65,6 +67,15 @@ class VulkanHost final : public HostDevice {
     desc.graphicsQueueIndex = int(queue_family_);
     desc.transferQueue = nullptr;
     desc.computeQueue = nullptr;
+    if (REXCVAR_GET(native_vk_pipeline_cache)) {
+      // Ours, so it can be filled from a file and saved (the game renderer does both).
+      pipeline_cache_ = VulkanPipelineCache::Create(vulkan_device->physical_device(), vulkan_device->device());
+      if (pipeline_cache_) {
+        desc.pipelineCache = pipeline_cache_->handle();
+      } else {
+        REXGPU_WARN("rexgpu-native: unable to create the Vulkan pipeline cache; pipelines are not kept");
+      }
+    }
     device_ = nvrhi::vulkan::createDevice(desc);
     if (!device_) {
       return false;
@@ -102,6 +113,7 @@ class VulkanHost final : public HostDevice {
     std::lock_guard lock(times_mutex_);
     return times_;
   }
+  DriverPipelineCache* pipeline_cache() override { return pipeline_cache_.get(); }
 
   void WaitForIdle() override {
     auto acquisition = provider_.vulkan_device()->AcquireQueue(queue_family_, 0);
@@ -227,6 +239,8 @@ class VulkanHost final : public HostDevice {
   mutable std::mutex times_mutex_;
   SubmitTimes times_;
   uint32_t queue_family_ = 0;
+  // Before device_: destroyed after it (NVRHI's device only borrows the cache).
+  std::unique_ptr<VulkanPipelineCache> pipeline_cache_;
   nvrhi::DeviceHandle device_;
   std::array<Wrapped, 4> wrapped_;
   size_t next_slot_ = 0;

@@ -18,6 +18,9 @@ add_test(NAME nr_frame_log_tests COMMAND nr_frame_log_tests)
 
 add_executable(nr_pipeline_cache_tests pipeline_cache_tests.cpp)
 target_link_libraries(nr_pipeline_cache_tests PRIVATE nr_draw)
+# The tests also run the nr_pipelines tool on files they write.
+target_compile_definitions(nr_pipeline_cache_tests PRIVATE NR_PIPELINES_TOOL="$<TARGET_FILE:nr_pipelines>")
+add_dependencies(nr_pipeline_cache_tests nr_pipelines)
 add_test(NAME nr_pipeline_cache_tests COMMAND nr_pipeline_cache_tests)
 
 add_executable(nr_trace_replay trace_replay_main.cpp)
@@ -56,7 +59,8 @@ endif()
 # LoadGpuPlugin finds it (it looks beside the executable).
 if(NR_BUILD_PLUGIN AND NR_HAS_VULKAN AND UNIX)
     add_executable(nr_plugin_tests plugin_tests.cpp readback.cpp
-        "${NR_ROOT}/backend/vulkan_host.cpp" "${NR_ROOT}/backend/backend.cpp")
+        "${NR_ROOT}/backend/vulkan_host.cpp" "${NR_ROOT}/backend/backend.cpp"
+        "${NR_ROOT}/hooks/kk_native_ui.cpp")
     target_link_libraries(nr_plugin_tests PRIVATE nr_renderer nr_hooks rex::runtime rex::renderdoc
                           ${CMAKE_DL_LIBS})
     target_compile_features(nr_plugin_tests PRIVATE cxx_std_23)

@@ -9,6 +9,8 @@
 set(NR_PLUGIN_SOURCES
     plugin_main.cpp
     native_graphics_system.cpp
+    plugin_settings.cpp
+    launcher_prewarm.cpp
     ring_skimmer.cpp
     ${NR_ROOT}/backend/backend.cpp
 )

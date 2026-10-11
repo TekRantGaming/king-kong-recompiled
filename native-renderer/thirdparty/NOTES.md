@@ -55,3 +55,10 @@ Changes we make to vendored code are kept as small as possible and listed here:
   true for an immutable bindless layout whose register spaces are all samplers, and descriptor tables are bound
   from their own heap (`getDescriptorHeap()`) instead of always the CBV/SRV/UAV heap, so the game renderer's
   sampler table (set 5) lives in and binds from the sampler heap on D3D12 as well.
+- `nvrhi/include/nvrhi/vulkan.h`, `nvrhi/src/vulkan/vulkan-device.cpp`, `nvrhi/src/vulkan/vulkan-backend.h` (Phase 2c,
+  the driver's pipeline cache): `nvrhi::vulkan::DeviceDesc::pipelineCache`. When the application gives a
+  `VkPipelineCache`, the device creates every pipeline with it instead of the empty cache it made for itself, and
+  does not destroy it (`Device::m_OwnsPipelineCache`). NVRHI had no way to fill its cache from saved data or to read
+  it back; the native renderer's `--native_vk_pipeline_cache` keeps it in a file (`backend/vk_pipeline_cache.*`,
+  docs/backend.md, "The driver's pipeline cache"). Without the field (VK_NULL_HANDLE, the default) the device does
+  what it always did.

@@ -46,6 +46,20 @@ class RuntimeGuestMemory final : public GuestMemory {
 
 enum class TestPicture { kClear, kTriangle };
 
+// The pipeline stutter counter (GameRenderer::StutterStats) as the backend last saw it, after the
+// game's last Present, for the overlay (any thread). False before the first frame, without a game
+// renderer, or when GameSettings::stutter_stats is off.
+struct StutterSnapshot {
+  uint64_t frames = 0, stutter_frames = 0, frames_waited = 0, frames_skipped = 0, draws_skipped = 0;
+  uint64_t worst_wait_frame = 0;
+  double wait_ms = 0, worst_wait_ms = 0;
+};
+bool ReadStutterSnapshot(StutterSnapshot* out);
+
+// Sends the backend libraries' log (backend/log.h) to the runtime's (Backend::Initialize does it too;
+// the launcher's prewarm runs before any backend).
+void InstallRuntimeLog();
+
 class ShaderLibrary;
 
 // Phase 2 settings (the plugin's cvars).
@@ -71,6 +85,9 @@ struct GameSettings {
   // render scale, else its own (a number).
   std::string render_scale = "1";
   float shadow_scale = 0.0f;
+  // The pipeline stutter counter in the log (a line with the statistics every 300 swaps, and one
+  // at the end) and for the overlay (ReadStutterSnapshot). Counted either way.
+  bool stutter_stats = false;
   // Ambient occlusion settings, read at every resolve (null: off). The plugin reads ao_mode and
   // ao_strength, the Xenos plugin's cvars.
   std::function<AoSettings()> ao_settings;
@@ -87,6 +104,12 @@ class Backend {
   // The game renderer's pipeline cache file (GameRenderer::SetPipelineCache); false without a game
   // renderer or when the file cannot be opened.
   bool SetPipelineCache(const std::string& path);
+  // A shipped pipeline list (GameRenderer::LoadPipelineList).
+  bool LoadPipelineList(const std::string& path);
+  // The host device's own pipeline cache (HostDevice::pipeline_cache) kept in `path`
+  // (GameRenderer::SetDriverPipelineCache): before SetPipelineCache and LoadPipelineList. False when
+  // there is none or no game renderer.
+  bool SetDriverPipelineCache(const std::string& path);
   void set_test_picture(TestPicture picture) { test_picture_ = picture; }
   Renderer& renderer() { return *renderer_; }
   DrawTracker* draws() { return draws_.get(); }
@@ -123,6 +146,8 @@ class Backend {
   uint64_t submitted_frames_ = 0;
   uint64_t shown_frames_ = 0;
   uint32_t swaps_ = 0;
+  bool stutter_stats_ = false;  // GameSettings::stutter_stats
+  void LogStutter(const char* when);
   // --native_present_unlocked: the presenter's refresh of a game frame runs outside mutex_.
   bool unlocked_present_ = false;
   // --native_async_submit: the frames' command lists are submitted by a thread of their own, so
