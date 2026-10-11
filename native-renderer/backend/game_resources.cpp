@@ -48,6 +48,8 @@ GameRenderer::Scale GameRenderer::ScaleFor(bool depth, uint32_t pitch, uint32_t 
   // buffers of that pitch (every attachment of a draw has one size).
   if (!depth && format == 14 && pitch != options_.guest_frame_width) shadow_pitches_.insert(pitch);
   if (options_.shadow_scale > 0.0f && shadow_pitches_.count(pitch)) return {options_.shadow_scale, options_.shadow_scale};
+  // --native_debug bit 32: only the frame-wide targets scale (to find a pass that breaks).
+  if ((options_.debug & 32) && pitch != options_.guest_frame_width) return {1.0f, 1.0f};
   return {options_.render_scale_x, options_.render_scale_y};
 }
 

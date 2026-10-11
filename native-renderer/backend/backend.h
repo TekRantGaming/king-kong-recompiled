@@ -54,6 +54,7 @@ struct GameSettings {
   bool flip_front_face = false;
   bool texture_tail_mips = false;
   int32_t dump_frame = -1;
+  uint32_t show_texture = 0;  // see GameRenderer::Options
   uint32_t debug = 0;
   bool async_pipelines = true;
   bool pipeline_wait = false;  // see GameRenderer::Options

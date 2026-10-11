@@ -244,7 +244,8 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
 #if NR_GAME_RENDERER
   if (game.enabled) {
     shaders_ = std::make_unique<ShaderLibrary>(host_->device(), guest_memory_);
-    shaders_->SetRenderScaleAware(!scale.unit() || (shadow_scale > 0.0f && shadow_scale != 1.0f));
+    // --native_debug bit 16: the plain pixel shaders at a scale too (to tell the aware translation's part).
+    shaders_->SetRenderScaleAware(!(game.debug & 16) && (!scale.unit() || (shadow_scale > 0.0f && shadow_scale != 1.0f)));
     shaders_->Initialize(game.shader_pack, game.dxc);
     kknr::GuestMemory physical;
     physical.base = memory_->TranslatePhysical(0);
@@ -260,6 +261,7 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
       renderer->options().flip_front_face = game.flip_front_face;
       renderer->options().texture_tail_mips = game.texture_tail_mips;
       renderer->options().dump_frame = game.dump_frame;
+      renderer->options().show_texture = game.show_texture;
       renderer->options().debug = game.debug;
       renderer->options().async_pipelines = game.async_pipelines;
       renderer->options().pipeline_wait = game.pipeline_wait;

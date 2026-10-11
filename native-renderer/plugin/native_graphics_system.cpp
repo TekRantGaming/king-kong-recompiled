@@ -55,6 +55,7 @@ REXCVAR_DECLARE(bool, native_element_endian);
 REXCVAR_DECLARE(bool, native_flip_front_face);
 REXCVAR_DECLARE(bool, native_texture_tail_mips);
 REXCVAR_DECLARE(int32_t, native_dump_frame);
+REXCVAR_DECLARE(std::string, native_show_texture);
 REXCVAR_DECLARE(int32_t, native_debug);
 REXCVAR_DECLARE(bool, native_async_pipelines);
 REXCVAR_DECLARE(bool, native_pipeline_cache);
@@ -247,6 +248,7 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
   game.flip_front_face = REXCVAR_GET(native_flip_front_face);
   game.texture_tail_mips = REXCVAR_GET(native_texture_tail_mips);
   game.dump_frame = REXCVAR_GET(native_dump_frame);
+  game.show_texture = uint32_t(std::strtoul(REXCVAR_GET(native_show_texture).c_str(), nullptr, 16));
   game.debug = uint32_t(REXCVAR_GET(native_debug));
   game.async_pipelines = REXCVAR_GET(native_async_pipelines);
   game.pipeline_wait = REXCVAR_GET(native_pipeline_wait);

@@ -88,10 +88,13 @@ class GameRenderer {
     // The guest frame's width (the back buffer's pitch): a k_32_FLOAT target of any other pitch
     // is a shadow map.
     uint32_t guest_frame_width = 1280;
+    // Debugging: show the texture a resolve wrote at this guest address instead of the frame (0 off).
+    uint32_t show_texture = 0;
     // Log every draw of this game frame (-1 none).
     int32_t dump_frame = -1;
     // Debugging aids (bits): 1 the game's clears are green, 2 the frame image
-    // is magenta before the back buffer is copied in, 4 no gamma ramp, 8 log the pages CPU writes
+    // is magenta before the back buffer is copied in, 4 no gamma ramp, 16 plain pixel shaders at a
+    // render scale (not the scale-aware ones), 32 only frame-wide targets scale, 8 log the pages CPU writes
     // invalidate most (every 300 frames).
     uint32_t debug = 0;
   };

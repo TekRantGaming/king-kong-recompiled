@@ -124,6 +124,11 @@ REXCVAR_DEFINE_INT32(native_debug, 0, "Native renderer",
                      "magenta under the back buffer")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_STRING(native_show_texture, "", "Native renderer",
+                      "Debugging: show the texture a resolve wrote at this guest address (hex, the fetch "
+                      "constant's base) instead of the frame")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_INT32(native_dump_frame, -1, "Native renderer",
                      "Log every clear, draw, resolve and present the hooks see in this game "
                      "frame (counted from the first Present; -1 for none)");

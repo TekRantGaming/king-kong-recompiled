@@ -441,6 +441,19 @@ bool GameRenderer::Present(nvrhi::ICommandList* cl, uint32_t device, nvrhi::ITex
     Logf(LogLevel::kInfo, "rexgpu-native: gamma ramp %u %u %u %u %u (red 0, 64, 128, 192, 255)", ramp[0], ramp[64],
          ramp[128], ramp[192], ramp[255]);
   }
+  // --native_show_texture=<guest address>: the texture a resolve wrote at that base instead of the
+  // back buffer (from its top left, 1:1 in host pixels), so the game's own captures show an
+  // intermediate pass.
+  if (options_.show_texture) {
+    auto it = resolved_by_base_.find(options_.show_texture & 0x1FFFF000u);
+    const auto* host = it != resolved_by_base_.end() ? static_cast<const HostTexture*>(it->second->host) : nullptr;
+    if (host && host->texture && host->render_target) {
+      const nvrhi::TextureDesc& sd = host->texture->getDesc();
+      cl->clearTextureFloat(target, nvrhi::AllSubresources, nvrhi::Color(0.0f, 0.0f, 0.0f, 1.0f));
+      return Blit(cl, host->texture, 0, 0, int32_t(std::min(sd.width, td.width)), int32_t(std::min(sd.height, td.height)),
+                  target, 0, 0, 0, 0, channels, 0);
+    }
+  }
   // The frame image is the scaled size: the whole back buffer 1:1 in host pixels.
   return Blit(cl, source->texture, 0, 0, int32_t(std::min(uint32_t(ScaleCoord(int32_t(s.width), source->scale_x)), td.width)),
               int32_t(std::min(uint32_t(ScaleCoord(int32_t(s.height), source->scale_y)), td.height)), target, 0, 0, 0, 0,
