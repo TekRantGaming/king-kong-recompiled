@@ -135,14 +135,15 @@ class KingKongApp : public rex::ReXApp {
     };
     cb.screen_size = [] { return kk::PrimaryScreenSize(); };
     cb.output_size = [this] { return OutputSize(); };
-#if defined(KK_NATIVE_RENDERER)
-    // The native renderer makes the game's pipelines while the player is in the launcher, when
-    // --native_launcher_prewarm is on (the plugin decides; nothing happens otherwise).
-    nr::kk::StartLauncherPrewarm(defaults.cache_root);
-#endif
     kk::ShowLauncher(imgui_drawer(), immediate_drawer(),
                       {defaults.game_data_root, defaults.user_data_root, defaults.config_path},
                       std::move(cb));
+#if defined(KK_NATIVE_RENDERER)
+    // The native renderer makes the game's pipelines while the player is in the launcher, when
+    // --native_launcher_prewarm is on (the plugin decides; nothing happens otherwise). After the
+    // launcher is made: it applies the Original look, which the settings the prewarm reads follow.
+    nr::kk::StartLauncherPrewarm(defaults.cache_root);
+#endif
     return std::nullopt;
   }
 

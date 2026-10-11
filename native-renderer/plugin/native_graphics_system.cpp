@@ -285,8 +285,9 @@ void NativeGraphicsSystem::InitializeShaderStorage(const std::filesystem::path& 
 void NativeGraphicsSystem::StartPipelines() {
   if (pipelines_started_ || !backend_) return;
   pipelines_started_ = true;
-  if (REXCVAR_GET(native_vk_pipeline_cache) && !pipeline_place_.empty()) {
-    backend_->SetDriverPipelineCache(pipeline_place_.driver_cache());
+  if (REXCVAR_GET(native_vk_pipeline_cache) && !pipeline_place_.empty() &&
+      !backend_->SetDriverPipelineCache(pipeline_place_.driver_cache())) {
+    REXGPU_WARN("rexgpu-native: native_vk_pipeline_cache needs Vulkan and the game renderer; not used");
   }
   if (REXCVAR_GET(native_pipeline_cache) && !pipeline_place_.empty()) {
     backend_->SetPipelineCache(pipeline_place_.records());
