@@ -127,6 +127,10 @@ The launcher takes the logo, stills from the movie, the menu music and the menu 
 </tr>
 </table>
 
+## New in v1.9.11
+
+**See how many people are playing.** The top right of the launcher shows how many players are online. It's on by default and you can switch it off at any time on the **About** page. See [Online player count](#online-player-count) for exactly what it sends.
+
 ## New in v1.9.10
 
 **The V-Rex chapter's endless screen shake is fixed**, with new **Camera shake** settings on the Gameplay page. The default upscaler now suits your graphics card (NVIDIA NIS on NVIDIA, AMD FSR 1 on anything else), and the launcher has a **Discord** panel, **Change version** (stable or beta), Steam Deck button prompts and a Steam style achievement pop-up.
@@ -347,6 +351,7 @@ They switch on as soon as the game reaches its main menu, exactly as if you had 
 - The launcher's **music** and **menu sounds**, each with a volume slider
 - **Check for updates** now, or turn the check at start off
 - **Change version** between stable and beta (early test builds; your saves and settings are kept)
+- **Online player count** on or off (on by default)
 - **Discord**: join the official server, also from the panel on the Home and setup screens
 - How the **shader pack** stands
 - Open your **save folder**, **game folder** or **settings file** in one click
@@ -429,6 +434,17 @@ They switch on as soon as the game reaches its main menu, exactly as if you had 
 ### The shader pack
 
 The game prepares each new effect (a shader) the first time it appears, which can cause a short pause. The shader pack is the list of effects collected by playing through the game, published on the [shader-packs release](https://github.com/TekRantGaming/king-kong-recompiled/releases/tag/shader-packs). You don't need to do anything to get it: each time the launcher opens, it downloads the newest pack if you don't have it yet and adds it to your shader cache (`Documents\king_kong\cache`), keeping anything your game has already prepared. The Home screen shows how it went. If you press **PLAY** while a download is still going, the game starts as soon as it finishes. Each time the game starts it prepares everything in the cache, so the parts of the game the pack covers don't pause even on a first play-through. New packs come out as more of the game is covered.
+
+### Online player count
+
+On by default: the setup screen explains it, players who already have the game are told once, and you can switch it off at any time on the **About** page. While it's on, the top right of the launcher shows how many players are online, and the launcher checks in with the port's server every 5 minutes, also while you play. A check-in holds:
+
+- a random number that isn't linked to you, deleted when you switch it off
+- the port's version (and the newest one it was offered), and whether it's stable or beta
+- Windows or Linux (Linux and Steam Deck players count as Linux, Proton included)
+- whether you're in the game
+
+That's all. No name, account, IP address or anything from your PC is kept, and installs that haven't checked in for 90 days are deleted. Nothing is sent while it's off. The server is the port's own, on Cloudflare.
 
 ### Updates
 

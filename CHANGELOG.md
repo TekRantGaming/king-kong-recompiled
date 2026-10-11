@@ -3,6 +3,17 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v1.9.11 (11 October 2026)
+
+### What's new
+- **See how many people are playing.** The top right of the launcher shows how many players are online. **Online player count** is on by default: the setup screen explains it, players who already have the game are told once, and you can switch it off at any time on the **About** page (or with **Online players** on the setup screen). While it's on, the launcher sends a tiny anonymous check-in every 5 minutes with just four things: a random number that isn't linked to you, the port's version (stable or beta), Windows or Linux, and whether you're in the game. No name, account, IP address or anything from your PC is kept, and switching it off deletes the random number.
+- **A clearer setup screen.** A **Supported disc** card says exactly which disc image works: a full image (7,834,892,288 bytes) that you made from your own Xbox 360 disc of Peter Jackson's King Kong: The Official Game of the Movie, the USA and Europe release (title ID `555307D3`, version `0.0.0.1`), with its SHA-1 to check it against. An **Online players** card beside it explains the player count.
+- **The Steam panel stays on Home.** Once the game is in your Steam library, it says **In your Steam library** and opens Steam, instead of disappearing.
+
+### Full changelog
+- `online.cpp`: a background check-in (`POST /v1/heartbeat`) every 5 minutes, and at once when it's switched on or the game starts, to the port's own server (a Cloudflare Worker with a D1 database). Settings `kk_online_count` (on by default), `kk_online_asked` and `kk_install_id` (a random UUID, deleted when the count is switched off). Linux and Proton report as `linux`. Nothing is sent while it's off.
+- `HttpPost` (WinHTTP on Windows, curl on Linux).
+
 ## v1.9.10 (11 October 2026)
 
 ### What's new

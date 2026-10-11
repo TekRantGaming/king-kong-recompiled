@@ -41,6 +41,7 @@ void InstallFpeGuard();  // fpe_guard.cpp
 }
 #include "menu_hook.h"
 #include "mouse_look.h"
+#include "online.h"
 #include "shader_pack.h"
 #include "launcher.h"
 #include "overlay.h"
@@ -97,6 +98,8 @@ class KingKongApp : public rex::ReXApp {
     if (!show) {
       kk::EnforceOriginalLook();
       kk::ApplyRenderPreset(OutputSize().second);
+      kk::online::SetPlaying(true);
+      kk::online::Start();
       return defaults;
     }
 
@@ -104,6 +107,7 @@ class KingKongApp : public rex::ReXApp {
     cb.play = [this, resume, defaults] {
       app_context().CallInUIThreadDeferred([this, resume, defaults] {
         kk::ApplyRenderPreset(OutputSize().second);
+        kk::online::SetPlaying(true);
         resume(defaults);
       });
     };
