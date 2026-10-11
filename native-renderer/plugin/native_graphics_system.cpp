@@ -64,6 +64,7 @@ REXCVAR_DECLARE(bool, native_pipeline_wait);
 REXCVAR_DECLARE(double, native_pipeline_wait_budget_ms);
 REXCVAR_DECLARE(bool, native_present_unlocked);
 REXCVAR_DECLARE(bool, native_async_submit);
+REXCVAR_DECLARE(bool, native_async_present);
 REXCVAR_DECLARE(bool, native_dynamic_vertex_buffers);
 
 namespace {
@@ -256,6 +257,14 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
   game.async_pipelines = REXCVAR_GET(native_async_pipelines);
   game.pipeline_wait = REXCVAR_GET(native_pipeline_wait);
   game.dynamic_vertex_buffers = REXCVAR_GET(native_dynamic_vertex_buffers);
+  {
+    // The launcher's texture filtering (defined by the runtime / Xenos plugin; absent: the game's own).
+    const std::string aniso = rex::cvar::GetFlagByName("anisotropic_override");
+    game.anisotropic_override = aniso.empty() ? -1 : std::atoi(aniso.c_str());
+    // The launcher's anti-aliasing (swap_post_effect, the Xenos plugin's swap pass).
+    const std::string aa = rex::cvar::GetFlagByName("swap_post_effect");
+    game.fxaa = aa == "fxaa" ? 1u : (aa == "fxaa_extreme" ? 2u : 0u);
+  }
   game.pipeline_wait_budget_ms = REXCVAR_GET(native_pipeline_wait_budget_ms);
   if (const char* frame_log = std::getenv("REX_DEV_FRAME_LOG")) game.frame_log = frame_log;
   game.render_scale = REXCVAR_GET(native_render_scale);
@@ -301,6 +310,7 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
   }
   backend_->set_unlocked_present(REXCVAR_GET(native_present_unlocked));
   backend_->set_async_submit(REXCVAR_GET(native_async_submit));
+  backend_->set_async_present(REXCVAR_GET(native_async_present));
   backend_->renderer().options().transpose_wvp = REXCVAR_GET(native_wvp_transpose);
   backend_->renderer().options().only_main_surface = !REXCVAR_GET(native_all_targets);
   backend_->renderer().options().only_depth_tested = REXCVAR_GET(native_main_pass_only);

@@ -445,6 +445,20 @@ texture a resolve wrote there instead of the frame).
 Three test fixes came out of the first Windows run: the harness test called `python3` (now CMake's Python), and
 two counts had not followed this phase (the clear as a draw in the frame log, the hook table's 42nd entry).
 
+### The launcher's settings and the native renderer (Phase 2b, launcher v1.9.11)
+
+| Setting (cvar) | With `--gpu_plugin=native` |
+|---|---|
+| Frame rate cap (`kk_frame_rate`) | works since d4bd455: the native vblank ticks at 1000 Hz when the port turns `vsync` off, like the SDK's graphics system; 30, 60, 120 and unlimited measured below |
+| Render quality / resolution (`kk_render_quality`, `resolution_scale`, `draw_resolution_scale_x/_y`) | not followed by default: the native renderer draws at `--native_render_scale` (default 1). `--native_render_scale=auto` (new) takes the scale the Xenos plugin would draw at, which the presets set. Not the default yet, to keep today's behaviour |
+| Ambient occlusion (`ao_mode`, `ao_strength`) | works: read at every resolve; the same picture as the Xenos plugin's ("Ambient occlusion") |
+| Upscalers (`present_effect`: FSR 1, NIS, bilinear) | work: the presenter's (`rex/ui/flags.h`), which paints the native renderer's frame image like the Xenos plugin's. Not checked in captures: the game's captures are the frame before the presenter |
+| Anti-aliasing (`swap_post_effect`, FXAA) | **not applied**: FXAA is the Xenos command processor's own swap pass (`rex/graphics/command_processor.h`, `SwapPostEffect`), not the presenter's. The native renderer would need its own FXAA pass over the frame image before `CopyToGuestOutput` (to do) |
+| Texture filtering (`anisotropic_override`) | wired now: every native sampler takes the override's AnisoFilter (-1, the default and the Original look's, keeps the game's own) |
+| Fullscreen, window size, monitor | the app's (window and swap chain); the native frame image is made at the display size the plugin is given at start, so a resize after start keeps the old render size (scaled by the presenter) |
+| Motion blur, fog, big blur, field of view (`kk_motion_blur`, `kk_fog`, `kk_big_blur`, `kk_fov`) | the game's own code (patched by the port), so the same with either plugin |
+| Original look (`kk_original_look`) | sets all of the above to the console's values when the game starts; `kk_original_look_keep` (new, for tests) lists settings it leaves alone |
+
 ### Open problems (Phase 2)
 
 - **Cold pipeline caches.** Pipelines are made on four worker threads (Vulkan) and draws wait up to 30 ms a

@@ -400,7 +400,8 @@ uint32_t GameRenderer::BindSampler(const uint32_t words[6], const kkshaders::Sam
   const uint32_t mag = b.magFilter == 3 ? f.MagFilter() : b.magFilter;
   const uint32_t min = b.minFilter == 3 ? f.MinFilter() : b.minFilter;
   const uint32_t mip = b.mipFilter == 3 ? f.MipFilter() : b.mipFilter;
-  const uint32_t aniso = b.anisoFilter == 7 ? f.AnisoFilter() : b.anisoFilter;
+  uint32_t aniso = b.anisoFilter == 7 ? f.AnisoFilter() : b.anisoFilter;
+  if (options_.anisotropic_override >= 0 && options_.anisotropic_override <= 5) aniso = uint32_t(options_.anisotropic_override);
   const uint32_t key = f.ClampX() | f.ClampY() << 3 | f.ClampZ() << 6 | (mag & 3) << 9 | (min & 3) << 11 |
                        (mip & 3) << 13 | (aniso & 7) << 15 | (f.BorderColor() & 3) << 18 |
                        (uint32_t(f.LodBiasFixed()) & 0x3FF) << 20;

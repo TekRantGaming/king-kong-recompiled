@@ -61,6 +61,8 @@ struct GameSettings {
   bool async_pipelines = true;
   bool pipeline_wait = false;  // see GameRenderer::Options
   bool dynamic_vertex_buffers = false;
+  int32_t anisotropic_override = -1;
+  uint32_t fxaa = 0;
   double pipeline_wait_budget_ms = 30.0;
   std::string frame_log;       // REX_DEV_FRAME_LOG: "<seconds>[,<frames>]", empty = off
   // Render scale (backend/render_scale.h): "1", "1.5", "2", "1920x1080". shadow_scale: 0 like the
@@ -87,9 +89,11 @@ class Backend {
   Renderer& renderer() { return *renderer_; }
   DrawTracker* draws() { return draws_.get(); }
 
-  // At the guest's swap, from the ring skimmer's thread.
+  // At the guest's swap, from the ring skimmer's thread. With set_async_present the work is
+  // handed to a thread of its own (the newest swap wins) and this returns at once.
   void Present(rex::ui::Presenter* presenter, uint32_t frontbuffer_width,
                uint32_t frontbuffer_height, uint32_t display_width, uint32_t display_height);
+  void set_async_present(bool on);
 
  private:
   std::unique_ptr<HostDevice> host_;
@@ -113,6 +117,12 @@ class Backend {
   // the game's thread does not wait for the queue (the presenter holds it for milliseconds).
   class Submitter;
   std::unique_ptr<Submitter> submitter_;
+  // --native_async_present: the presenter's refresh runs on this thread, so the ring skimmer
+  // (and through the ring, the game) does not wait the presenter's 5 to 8 ms a frame.
+  class PresentThread;
+  std::unique_ptr<PresentThread> present_thread_;
+  void PresentNow(rex::ui::Presenter* presenter, uint32_t frontbuffer_width, uint32_t frontbuffer_height,
+                  uint32_t display_width, uint32_t display_height);
  public:
   void set_unlocked_present(bool on) { unlocked_present_ = on; }
   void set_async_submit(bool on);

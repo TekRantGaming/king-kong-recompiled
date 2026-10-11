@@ -51,7 +51,8 @@ kknr::TextureFetch FetchFromObject(const uint8_t* object) {
 
 bool GameRenderer::Blit(nvrhi::ICommandList* cl, nvrhi::ITexture* source, int32_t sx, int32_t sy, int32_t w,
                         int32_t h, nvrhi::ITexture* dest, uint32_t dest_level, uint32_t dest_slice,
-                        int32_t dx, int32_t dy, const uint32_t channels[4], uint32_t blit_flags) {
+                        int32_t dx, int32_t dy, const uint32_t channels[4], uint32_t blit_flags,
+                        uint32_t blit_arg) {
   if (w <= 0 || h <= 0) return false;
   nvrhi::FramebufferDesc fd;
   fd.addColorAttachment(nvrhi::FramebufferAttachment().setTexture(dest).setMipLevel(dest_level).setArraySlice(dest_slice));
@@ -99,7 +100,7 @@ bool GameRenderer::Blit(nvrhi::ICommandList* cl, nvrhi::ITexture* source, int32_
   gs.viewport.addViewport(nvrhi::Viewport(float(dx), float(dx + w), float(dy), float(dy + h), 0.0f, 1.0f));
   gs.viewport.addScissorRect(nvrhi::Rect(dx, dx + w, dy, dy + h));
   cl->setGraphicsState(gs);
-  BlitConstants c = {{sx, sy, w, h}, {channels[0], channels[1], channels[2], channels[3]}, {blit_flags, 0, 0, 0}};
+  BlitConstants c = {{sx, sy, w, h}, {channels[0], channels[1], channels[2], channels[3]}, {blit_flags, blit_arg, 0, 0}};
   cl->setPushConstants(&c, sizeof(c));
   nvrhi::DrawArguments args;
   args.vertexCount = 3;
@@ -488,9 +489,29 @@ bool GameRenderer::Present(nvrhi::ICommandList* cl, uint32_t device, nvrhi::ITex
     }
   }
   // The frame image is the scaled size: the whole back buffer 1:1 in host pixels.
-  return Blit(cl, source->texture, 0, 0, int32_t(std::min(uint32_t(ScaleCoord(int32_t(s.width), source->scale_x)), td.width)),
-              int32_t(std::min(uint32_t(ScaleCoord(int32_t(s.height), source->scale_y)), td.height)), target, 0, 0, 0, 0,
-              channels, use_ramp ? kBlitGammaRamp : 0);
+  const int32_t fw = int32_t(std::min(uint32_t(ScaleCoord(int32_t(s.width), source->scale_x)), td.width));
+  const int32_t fh = int32_t(std::min(uint32_t(ScaleCoord(int32_t(s.height), source->scale_y)), td.height));
+  if (options_.fxaa) {
+    // FXAA (the port's swap_post_effect): the back buffer through the ramp into a scratch image,
+    // then anti-aliased into the frame image.
+    if (!fxaa_source_ || fxaa_source_->getDesc().width != td.width || fxaa_source_->getDesc().height != td.height) {
+      nvrhi::TextureDesc fd;
+      fd.width = td.width;
+      fd.height = td.height;
+      fd.format = td.format;
+      fd.isRenderTarget = true;
+      fd.initialState = nvrhi::ResourceStates::ShaderResource;
+      fd.keepInitialState = true;
+      fd.debugName = "FXAA source";
+      if (fxaa_source_) RetireResource(fxaa_source_);
+      fxaa_source_ = device_->createTexture(fd);
+    }
+    if (fxaa_source_ && Blit(cl, source->texture, 0, 0, fw, fh, fxaa_source_, 0, 0, 0, 0, channels,
+                             use_ramp ? kBlitGammaRamp : 0)) {
+      return Blit(cl, fxaa_source_, 0, 0, fw, fh, target, 0, 0, 0, 0, channels, kBlitFxaa, options_.fxaa == 2 ? 24u : 12u);
+    }
+  }
+  return Blit(cl, source->texture, 0, 0, fw, fh, target, 0, 0, 0, 0, channels, use_ramp ? kBlitGammaRamp : 0);
 }
 
 }  // namespace nr

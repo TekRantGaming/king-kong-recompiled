@@ -975,14 +975,20 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     std::memcpy(&record.poly_offset, &offset, 4);
   }
   record.flags = options_.flip_front_face ? 1u : 0u;
-  nvrhi::GraphicsPipelineDesc pd;
-  nvrhi::FramebufferInfo framebuffer_info;
-  BuildPipelineDesc(record, vs->handle, ps ? ps->handle.Get() : nullptr, pd, framebuffer_info);
   const uint64_t key = PipelineKey(record);
   NoteRecord(record, key);
   if (frame_log_ && frame_log_->enabled()) LogDraw(call, d, *vs, ps.get());
   if (dump) DumpVertexShaderHashes(call, d, *vs);
-  nvrhi::IGraphicsPipeline* pipeline = GetPipeline(pd, framebuffer_info, key, true);
+  // The description only when the pipeline is not made yet (most draws find it).
+  nvrhi::IGraphicsPipeline* pipeline = nullptr;
+  if (auto known = pipelines_.find(key); known != pipelines_.end()) {
+    pipeline = known->second;
+  } else {
+    nvrhi::GraphicsPipelineDesc pd;
+    nvrhi::FramebufferInfo framebuffer_info;
+    BuildPipelineDesc(record, vs->handle, ps ? ps->handle.Get() : nullptr, pd, framebuffer_info);
+    pipeline = GetPipeline(pd, framebuffer_info, key, true);
+  }
   if (!pipeline) {
     const bool pending = IsPending(key);
     if (!pending) ++stats_.skipped_pipeline;
@@ -1134,23 +1140,21 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     dc.alphaRef = d.f32(dev::kRbAlphaRef);
   }
 
-  // Constants: the device's shadows, byte-swapped.
-  std::array<float, 1024> vsc, psc;
-  for (uint32_t i = 0; i < 1024; ++i) {
-    vsc[i] = LoadBEFloat(d.at(dev::kVsConstants + i * 4));
-    psc[i] = LoadBEFloat(d.at(dev::kPsConstants + i * 4));
-  }
+  // Constants: the device's shadows, byte-swapped. Compared as the guest's bytes first, so a
+  // draw whose constants did not change converts nothing.
   // Volatile buffers must be written in every command list that binds them
   // (one per frame; the same object is reopened, hence the frame number).
   const bool new_list = !constants_valid_ || constants_list_ != cl || constants_frame_ != frame_;
-  if (new_list || std::memcmp(vsc.data(), last_vs_.data(), sizeof(vsc)) != 0) {
-    cl->writeBuffer(vs_constants_, vsc.data(), sizeof(vsc));
-    last_vs_ = vsc;
-  }
-  if (new_list || std::memcmp(psc.data(), last_ps_.data(), sizeof(psc)) != 0) {
-    cl->writeBuffer(ps_constants_, psc.data(), sizeof(psc));
-    last_ps_ = psc;
-  }
+  auto upload = [&](uint32_t base, std::array<uint8_t, 4096>& last_raw, std::array<float, 1024>& last,
+                    const nvrhi::BufferHandle& buffer) {
+    const uint8_t* raw = d.at(base);
+    if (!new_list && std::memcmp(raw, last_raw.data(), last_raw.size()) == 0) return;
+    std::memcpy(last_raw.data(), raw, last_raw.size());
+    for (uint32_t i = 0; i < 1024; ++i) last[i] = LoadBEFloat(raw + i * 4);
+    cl->writeBuffer(buffer, last.data(), sizeof(last));
+  };
+  upload(dev::kVsConstants, last_vs_raw_, last_vs_, vs_constants_);
+  upload(dev::kPsConstants, last_ps_raw_, last_ps_, ps_constants_);
   constants_valid_ = true;
   constants_list_ = cl;
   constants_frame_ = frame_;

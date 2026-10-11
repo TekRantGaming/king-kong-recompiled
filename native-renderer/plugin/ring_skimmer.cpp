@@ -97,7 +97,15 @@ void RingSkimmer::WorkerMain() {
       read_ptr_index_ = write_ptr_index;
       continue;
     }
+    const auto busy_start = std::chrono::steady_clock::now();
     read_ptr_index_ = ExecutePrimaryBuffer(read_ptr_index_, write_ptr_index);
+    const auto busy_end = std::chrono::steady_clock::now();
+    busy_us_ += uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(busy_end - busy_start).count());
+    if (busy_end - stats_logged_ > std::chrono::seconds(10)) {
+      REXLOG_INFO("rexgpu-native: ring skimmer: {} ms executing packets, {} WAIT_REG_MEM waits, {} ms waiting",
+                  busy_us_ / 1000, waits_, wait_us_ / 1000);
+      stats_logged_ = busy_end;
+    }
     if (read_ptr_writeback_ptr_) {
       rex::memory::store_and_swap<uint32_t>(memory_->TranslatePhysical(read_ptr_writeback_ptr_),
                                             read_ptr_index_);
@@ -383,6 +391,7 @@ bool RingSkimmer::ExecuteWaitRegMem(RingBuffer* reader) {
   bool matched = false;
   const auto wait_start = std::chrono::steady_clock::now();
   bool reported = false;
+  bool reported_wait = false;
   do {
     if (!reported && std::chrono::steady_clock::now() - wait_start > std::chrono::seconds(2)) {
       reported = true;
@@ -432,6 +441,10 @@ bool RingSkimmer::ExecuteWaitRegMem(RingBuffer* reader) {
         break;
     }
     if (!matched) {
+      if (!reported_wait) {
+        reported_wait = true;
+        ++waits_;
+      }
       if (wait >= 0x100) {
         rex::thread::Sleep(std::chrono::milliseconds(wait / 0x100));
         rex::thread::SyncMemory();
@@ -443,6 +456,10 @@ bool RingSkimmer::ExecuteWaitRegMem(RingBuffer* reader) {
       }
     }
   } while (!matched);
+  if (reported_wait) {
+    wait_us_ += uint64_t(
+        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - wait_start).count());
+  }
   return true;
 }
 

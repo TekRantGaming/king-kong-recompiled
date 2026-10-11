@@ -13,6 +13,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 
@@ -67,6 +68,10 @@ class RingSkimmer {
   bool log_packets_;
 
   std::atomic<bool> running_{false};
+  // Statistics, logged every 10 seconds: WAIT_REG_MEM packets that had to wait, the time they
+  // waited, and the time the worker spent executing packets.
+  uint64_t waits_ = 0, wait_us_ = 0, busy_us_ = 0;
+  std::chrono::steady_clock::time_point stats_logged_;
   rex::system::object_ref<rex::system::XHostThread> thread_;
   std::unique_ptr<rex::thread::Event> write_ptr_event_;
   std::atomic<uint32_t> write_ptr_index_{0};

@@ -67,6 +67,13 @@ class GameRenderer {
     // vertices it reads instead. Watching them cost a write fault per 4 KB page and frame (340 a
     // frame in Venture: the game writes a 4 MB ring of particle vertices between its draws).
     bool dynamic_vertex_buffers = false;
+    // The port's anisotropic_override (the launcher's texture filtering): -1 the game's own, else the
+    // Xenos AnisoFilter value every sampler uses (0 off, 1 1:1, 2 2:1, 3 4:1, 4 8:1, 5 16:1), as the
+    // Xenos plugin applies it.
+    int32_t anisotropic_override = -1;
+    // The port's swap_post_effect, which the Xenos plugin applies in its swap: 0 none, 1 "fxaa",
+    // 2 "fxaa_extreme" (more edge search steps). Applied to the frame image at Present.
+    uint32_t fxaa = 0;
     // Create the game's pipelines on a worker thread; a draw whose pipeline
     // is not ready yet is skipped (a missing object for a frame or two the
     // first time a state combination appears) instead of stalling the render
@@ -298,6 +305,7 @@ class GameRenderer {
   // do not add one): destroying them at once freed images the command list then put a barrier on
   // at its close (a crash in the NVIDIA driver at the start of the Venture chapter).
   void RetireResource(nvrhi::IResource* resource);
+  nvrhi::TextureHandle fxaa_source_;  // Options::fxaa: the frame before the anti-aliasing
   std::deque<std::pair<uint64_t, nvrhi::ResourceHandle>> retired_resources_;  // (frame, resource)
   uint32_t TextureView(HostTexture* host, const kknr::TextureFetch& fetch,
                        kkshaders::TextureDimension dimension, bool base_map);
@@ -407,8 +415,9 @@ class GameRenderer {
                  uint32_t stencil);
   bool Blit(nvrhi::ICommandList* cl, nvrhi::ITexture* source, int32_t sx, int32_t sy, int32_t w,
             int32_t h, nvrhi::ITexture* dest, uint32_t dest_level, uint32_t dest_slice, int32_t dx,
-            int32_t dy, const uint32_t channels[4], uint32_t blit_flags = 0);
+            int32_t dy, const uint32_t channels[4], uint32_t blit_flags = 0, uint32_t blit_arg = 0);
   static constexpr uint32_t kBlitGammaRamp = 1;   // r, g, b through the display gamma ramp
+  static constexpr uint32_t kBlitFxaa = 16;       // FXAA (blit_arg: edge search steps)
   static constexpr uint32_t kBlitDepthBytes = 2;  // a depth value as the D24S8 word's bytes
   static constexpr uint32_t kBlitBytesToDepth = 4;  // 8:8:8:8 colour holding those bytes back to depth
   static constexpr uint32_t kBlitTexelBytesToDepth = 8;  // the same from a texture's X, Y, Z, W bytes
@@ -480,6 +489,7 @@ class GameRenderer {
   // The previous draw's constants, to rewrite the volatile buffers only when
   // they changed (and once per command list).
   std::array<float, 1024> last_vs_ = {}, last_ps_ = {};
+  std::array<uint8_t, 4096> last_vs_raw_ = {}, last_ps_raw_ = {};  // the guest bytes of those
   bool constants_valid_ = false;
   nvrhi::ICommandList* constants_list_ = nullptr;
   uint64_t constants_frame_ = 0;

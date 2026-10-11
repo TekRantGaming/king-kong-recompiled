@@ -4,6 +4,8 @@
 // runs in both.
 #pragma once
 
+#include <cstdint>
+
 #include "plugin/native_api.h"
 
 namespace nr {
@@ -20,5 +22,9 @@ struct ApiBinding {
 
 // Fills binding.api; api.self points at the binding, which must outlive it.
 void InitApiBinding(ApiBinding& binding, void* owner, DrawTracker* (*resolve)(void* owner));
+
+// The time the game's threads spent in the forwarded calls, and their number (all bindings).
+uint64_t ApiCallMicroseconds();
+uint64_t ApiCallCount();
 
 }  // namespace nr

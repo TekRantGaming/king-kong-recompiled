@@ -12,7 +12,8 @@
 struct BlitConstants {
   int4 src_rect;   // x, y, width, height in source texels
   uint4 channels;  // output channel i = source channel channels[i]: 0-3 r g b a, 4 zero, 5 one
-  uint4 flags;     // x: 1 = map r, g, b through the gamma ramp, 2 = depth to D24S8 bytes, 4 = back
+  uint4 flags;     // x: 1 = map r, g, b through the gamma ramp, 2 = depth to D24S8 bytes, 4 = back,
+                   // 16 = FXAA (y: edge search steps)
 };
 #ifdef __spirv__
 [[vk::push_constant]]
@@ -42,9 +43,105 @@ float Pick(float4 v, uint s) {
   return s < 4u ? v[s] : (s == 5u ? 1.0 : 0.0);
 }
 
+
+// ---------------------------------------------------------------- FXAA
+// flags.x & 16: fast approximate anti-aliasing of the source rectangle (the port's swap_post_effect
+// "fxaa"; flags.y = the number of edge search steps, 12 or 24 for "fxaa_extreme"). The luma-based
+// method of Timothy Lottes' FXAA 3.11 (quality preset): find the local contrast, skip flat areas,
+// pick the edge's orientation, walk along it both ways to its ends, and blend the pixel with its
+// neighbour across the edge by how close it is to the nearer end, plus a sub-pixel term. Everything
+// is read with Load and a bilinear helper, so the blit's layout (no sampler) stays.
+
+float FxaaLuma(float3 c) { return dot(c, float3(0.299, 0.587, 0.114)); }
+
+float4 FxaaTexel(int2 p) {
+  p = clamp(p, c.src_rect.xy, c.src_rect.xy + c.src_rect.zw - 1);
+  return source.Load(int3(p, 0));
+}
+
+// Bilinear read at a position in texels (texel centres at +0.5).
+float4 FxaaSample(float2 pos) {
+  float2 q = pos - 0.5;
+  int2 i = int2(floor(q));
+  float2 f = q - float2(i);
+  float4 a = lerp(FxaaTexel(i), FxaaTexel(i + int2(1, 0)), f.x);
+  float4 b = lerp(FxaaTexel(i + int2(0, 1)), FxaaTexel(i + int2(1, 1)), f.x);
+  return lerp(a, b, f.y);
+}
+
+float FxaaLumaAt(float2 pos) { return FxaaLuma(FxaaSample(pos).rgb); }
+
+float4 Fxaa(int2 p, uint steps) {
+  const float4 centre = FxaaTexel(p);
+  const float lm = FxaaLuma(centre.rgb);
+  const float ln = FxaaLuma(FxaaTexel(p + int2(0, -1)).rgb);
+  const float ls = FxaaLuma(FxaaTexel(p + int2(0, 1)).rgb);
+  const float le = FxaaLuma(FxaaTexel(p + int2(1, 0)).rgb);
+  const float lw = FxaaLuma(FxaaTexel(p + int2(-1, 0)).rgb);
+  const float hi = max(max(max(ln, ls), max(le, lw)), lm);
+  const float lo = min(min(min(ln, ls), min(le, lw)), lm);
+  const float range = hi - lo;
+  // Flat enough: leave it (relative threshold 1/8, absolute 1/24 for the darks).
+  if (range < max(0.0833, hi * 0.125)) return centre;
+  const float lnw = FxaaLuma(FxaaTexel(p + int2(-1, -1)).rgb);
+  const float lne = FxaaLuma(FxaaTexel(p + int2(1, -1)).rgb);
+  const float lsw = FxaaLuma(FxaaTexel(p + int2(-1, 1)).rgb);
+  const float lse = FxaaLuma(FxaaTexel(p + int2(1, 1)).rgb);
+  // Sub-pixel aliasing: how much the pixel stands out from its 3x3 average.
+  const float average = (2.0 * (ln + ls + le + lw) + lnw + lne + lsw + lse) / 12.0;
+  float sub = saturate(abs(average - lm) / range);
+  sub = smoothstep(0.0, 1.0, sub);
+  sub = sub * sub * 0.75;
+  // Orientation: the larger second difference across rows or across columns.
+  const float edge_h = abs(lnw + lne - 2.0 * ln) + 2.0 * abs(lw + le - 2.0 * lm) + abs(lsw + lse - 2.0 * ls);
+  const float edge_v = abs(lnw + lsw - 2.0 * lw) + 2.0 * abs(ln + ls - 2.0 * lm) + abs(lne + lse - 2.0 * le);
+  const bool horizontal = edge_h >= edge_v;
+  // The neighbour across the edge: the side with the larger gradient.
+  float l1 = horizontal ? ln : lw;
+  float l2 = horizontal ? ls : le;
+  const float g1 = abs(l1 - lm), g2 = abs(l2 - lm);
+  const bool first = g1 >= g2;
+  const float gradient = 0.25 * max(g1, g2);
+  float2 across = horizontal ? float2(0.0, 1.0) : float2(1.0, 0.0);
+  if (first) across = -across;
+  const float l_side = first ? l1 : l2;
+  const float edge_luma = 0.5 * (lm + l_side);
+  // Walk along the edge, half a texel towards the neighbour, both ways.
+  const float2 along = horizontal ? float2(1.0, 0.0) : float2(0.0, 1.0);
+  const float2 start = float2(p) + 0.5 + across * 0.5;
+  float2 pos_n = start - along, pos_p = start + along;
+  float d_n = FxaaLumaAt(pos_n) - edge_luma, d_p = FxaaLumaAt(pos_p) - edge_luma;
+  bool done_n = abs(d_n) >= gradient, done_p = abs(d_p) >= gradient;
+  for (uint k = 1u; k < steps && !(done_n && done_p); ++k) {
+    const float stride = k < 5u ? 1.0 : (k < 9u ? 2.0 : 4.0);
+    if (!done_n) {
+      pos_n -= along * stride;
+      d_n = FxaaLumaAt(pos_n) - edge_luma;
+      done_n = abs(d_n) >= gradient;
+    }
+    if (!done_p) {
+      pos_p += along * stride;
+      d_p = FxaaLumaAt(pos_p) - edge_luma;
+      done_p = abs(d_p) >= gradient;
+    }
+  }
+  const float dist_n = horizontal ? (start.x - pos_n.x) : (start.y - pos_n.y);
+  const float dist_p = horizontal ? (pos_p.x - start.x) : (pos_p.y - start.y);
+  const bool nearer_n = dist_n < dist_p;
+  const float dist = min(dist_n, dist_p);
+  const float length = dist_n + dist_p;
+  // The end found must lie on the other side of the edge's luma from the pixel, else no blend.
+  const bool centre_below = lm < edge_luma;
+  const bool good = ((nearer_n ? d_n : d_p) < 0.0) != centre_below;
+  const float edge_offset = good ? 0.5 - dist / max(length, 1e-4) : 0.0;
+  const float offset = max(edge_offset, sub);
+  return FxaaSample(float2(p) + 0.5 + across * offset);
+}
+
 float4 ps_main(VSOut i) : SV_Target0 {
   int2 p = c.src_rect.xy + int2(floor(i.uv * float2(c.src_rect.zw)));
   p = clamp(p, c.src_rect.xy, c.src_rect.xy + c.src_rect.zw - 1);
+  if (c.flags.x & 16u) return float4(Fxaa(p, max(c.flags.y, 1u)).rgb, 1.0);
   float4 v = source.Load(int3(p, 0));
   if (c.flags.x & 8u) {
     // A texture's X, Y, Z, W bytes (host R, G, B, A) as a D24S8 word: depth

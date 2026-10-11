@@ -96,6 +96,11 @@ REXCVAR_DEFINE_BOOL(native_dynamic_vertex_buffers, false, "Native renderer",
                     "uploads the vertices it reads (no write fault per page and frame)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_BOOL(native_async_present, false, "Native renderer",
+                    "Hand each frame to the presenter from a thread of its own, so the guest GPU's command "
+                    "stream (and the game waiting on it) does not wait for the presenter")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_BOOL(native_async_submit, false, "Native renderer",
                     "Submit each frame's GPU work from a thread of its own, so the game's thread does not "
                     "wait for the queue while the presenter holds it")

@@ -1,6 +1,10 @@
 #include "backend/backend.h"
 
 #include <atomic>
+#include <mutex>
+#include <vector>
+#include <functional>
+#include <algorithm>
 #include <chrono>
 #include <thread>
 #include <deque>
@@ -10,6 +14,7 @@
 #include <rex/logging.h>
 #include <rex/system/xmemory.h>
 
+#include "backend/api_binding.h"
 #include "backend/frame_log.h"
 #include "backend/log.h"
 #include "backend/render_scale.h"
@@ -37,6 +42,20 @@ namespace {
 // for the periodic statistics line: draws, clears, resolves, presents.
 std::atomic<uint64_t> g_call_us[5];  // + 4: watching guest memory (inside the others)
 std::atomic<uint64_t> g_watch_calls;
+// The swap's own time (the ring skimmer's thread): waiting for the frame's submission, and the
+// presenter's refresh of its guest output.
+std::atomic<uint64_t> g_swap_flush_us, g_swap_refresh_us;
+
+// The slowest frames since the last statistics line (the game thread's interval between two
+// Presents) and where their time went, for finding stutters.
+struct FrameRecord {
+  uint32_t interval_us = 0, renderer_us = 0, present_us = 0, pipeline_wait_us = 0, texture_us = 0;
+  uint32_t draws = 0;
+};
+std::mutex g_frames_mutex;
+std::vector<FrameRecord> g_worst_frames;
+std::chrono::steady_clock::time_point g_last_present;
+uint64_t g_last_calls_us = 0, g_frame_draws = 0;
 struct CallTimer {
   explicit CallTimer(int kind) : kind_(kind), start_(std::chrono::steady_clock::now()) {}
   ~CallTimer() {
@@ -112,10 +131,52 @@ class LockedSink final : public DrawSink {
     if (Dump(frame)) {
       REXLOG_INFO("rexgpu-native: frame {} present rt0 {:08X}", frame, rt0);
     }
-    CallTimer timer(3);
-    std::lock_guard lock(mutex_);
-    inner_.OnPresent(frame, rt0, device);
+    const auto start = std::chrono::steady_clock::now();
+    {
+      CallTimer timer(3);
+      std::lock_guard lock(mutex_);
+      inner_.OnPresent(frame, rt0, device);
+    }
+    RecordFrame(start);
   }
+
+  // Keeps the eight slowest frames of the window (see g_worst_frames).
+  void RecordFrame(std::chrono::steady_clock::time_point present_start) {
+    const auto now = std::chrono::steady_clock::now();
+    uint64_t calls = 0;
+    for (int i = 0; i < 4; ++i) calls += g_call_us[i].load(std::memory_order_relaxed);
+    FrameRecord r;
+    if (g_last_present.time_since_epoch().count() != 0) {
+      r.interval_us = uint32_t(std::chrono::duration_cast<std::chrono::microseconds>(now - g_last_present).count());
+    }
+    r.renderer_us = uint32_t(calls - g_last_calls_us);
+    r.present_us = uint32_t(std::chrono::duration_cast<std::chrono::microseconds>(now - present_start).count());
+#if NR_GAME_RENDERER
+    if (const GameRenderer* g = renderer_game_ ? renderer_game_() : nullptr) {
+      const GameRenderer::Stats& s = g->stats();
+      r.pipeline_wait_us = uint32_t((s.pipeline_wait_ms - last_wait_ms_) * 1000.0);
+      r.texture_us = uint32_t((s.texture_ms - last_texture_ms_) * 1000.0);
+      r.draws = uint32_t(s.draws - last_draws_);
+      last_wait_ms_ = s.pipeline_wait_ms;
+      last_texture_ms_ = s.texture_ms;
+      last_draws_ = s.draws;
+    }
+#endif
+    g_last_present = now;
+    g_last_calls_us = calls;
+    std::lock_guard lock(g_frames_mutex);
+    g_worst_frames.push_back(r);
+    std::sort(g_worst_frames.begin(), g_worst_frames.end(),
+              [](const FrameRecord& a, const FrameRecord& b) { return a.interval_us > b.interval_us; });
+    if (g_worst_frames.size() > 8) g_worst_frames.resize(8);
+  }
+
+ public:
+  std::function<const GameRenderer*()> renderer_game_;
+
+ private:
+  double last_wait_ms_ = 0, last_texture_ms_ = 0;
+  uint64_t last_draws_ = 0;
 
  private:
   // Which kind of shader object `object` is, from the container copy that
@@ -266,6 +327,53 @@ class Backend::Submitter {
   std::thread thread_;
 };
 
+// The swap's presenter work on a thread of its own: the newest request wins (a swap that comes
+// while one is being presented replaces the waiting one).
+class Backend::PresentThread {
+ public:
+  explicit PresentThread(Backend& backend) : backend_(backend), thread_([this] { Run(); }) {}
+  ~PresentThread() {
+    {
+      std::lock_guard lock(mutex_);
+      stop_ = true;
+    }
+    cv_.notify_all();
+    thread_.join();
+  }
+  void Request(rex::ui::Presenter* presenter, uint32_t fw, uint32_t fh, uint32_t dw, uint32_t dh) {
+    {
+      std::lock_guard lock(mutex_);
+      request_ = {presenter, fw, fh, dw, dh};
+      pending_ = true;
+    }
+    cv_.notify_one();
+  }
+
+ private:
+  struct Args {
+    rex::ui::Presenter* presenter = nullptr;
+    uint32_t fw = 0, fh = 0, dw = 0, dh = 0;
+  };
+  void Run() {
+    std::unique_lock lock(mutex_);
+    for (;;) {
+      cv_.wait(lock, [&] { return stop_ || pending_; });
+      if (stop_) return;
+      const Args a = request_;
+      pending_ = false;
+      lock.unlock();
+      backend_.PresentNow(a.presenter, a.fw, a.fh, a.dw, a.dh);
+      lock.lock();
+    }
+  }
+  Backend& backend_;
+  std::mutex mutex_;
+  std::condition_variable cv_;
+  Args request_;
+  bool pending_ = false, stop_ = false;
+  std::thread thread_;
+};
+
 Backend::Backend(std::unique_ptr<HostDevice> host, rex::memory::Memory* memory)
     : host_(std::move(host)), guest_memory_(memory), memory_(memory) {}
 
@@ -319,6 +427,8 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
       renderer->options().async_pipelines = game.async_pipelines;
       renderer->options().pipeline_wait = game.pipeline_wait;
       renderer->options().dynamic_vertex_buffers = game.dynamic_vertex_buffers;
+      renderer->options().anisotropic_override = game.anisotropic_override;
+      renderer->options().fxaa = game.fxaa;
       renderer->options().pipeline_wait_budget_ms = game.pipeline_wait_budget_ms;
       renderer->SetFrameLog(FrameLogConfig::Parse(game.frame_log.c_str()));
       renderer->options().ao_settings = game.ao_settings;
@@ -347,7 +457,13 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
     }
     ++submitted_frames_;
   });
-  sink_ = std::make_unique<LockedSink>(*renderer_, mutex_, guest_memory_, shaders_.get());
+  {
+    auto sink = std::make_unique<LockedSink>(*renderer_, mutex_, guest_memory_, shaders_.get());
+#if NR_GAME_RENDERER
+    sink->renderer_game_ = [this]() -> const GameRenderer* { return renderer_ ? renderer_->game() : nullptr; };
+#endif
+    sink_ = std::move(sink);
+  }
   draws_ = std::make_unique<DrawTracker>(guest_memory_, sink_.get());
   draws_->set_find_wvp(renderer_->game() == nullptr);
   REXGPU_INFO("rexgpu-native: NVRHI renderer ready ({}x{})", width, height);
@@ -363,6 +479,19 @@ bool Backend::SetPipelineCache(const std::string& path) {
   return false;
 }
 
+void Backend::set_async_present(bool on) {
+  if (on && !present_thread_) present_thread_ = std::make_unique<PresentThread>(*this);
+}
+
+void Backend::Present(rex::ui::Presenter* presenter, uint32_t frontbuffer_width, uint32_t frontbuffer_height,
+                      uint32_t display_width, uint32_t display_height) {
+  if (present_thread_) {
+    present_thread_->Request(presenter, frontbuffer_width, frontbuffer_height, display_width, display_height);
+    return;
+  }
+  PresentNow(presenter, frontbuffer_width, frontbuffer_height, display_width, display_height);
+}
+
 void Backend::set_async_submit(bool on) {
   if (on && !submitter_ && host_) submitter_ = std::make_unique<Submitter>(*host_);
 }
@@ -370,6 +499,7 @@ void Backend::set_async_submit(bool on) {
 Backend::~Backend() { Shutdown(); }
 
 void Backend::Shutdown() {
+  present_thread_.reset();
   submitter_.reset();  // submits what waits
   if (invalidation_handle_) {
     memory_->UnregisterPhysicalMemoryInvalidationCallback(invalidation_handle_);
@@ -384,9 +514,9 @@ void Backend::Shutdown() {
   host_.reset();
 }
 
-void Backend::Present(rex::ui::Presenter* presenter, uint32_t frontbuffer_width,
-                      uint32_t frontbuffer_height, uint32_t display_width,
-                      uint32_t display_height) {
+void Backend::PresentNow(rex::ui::Presenter* presenter, uint32_t frontbuffer_width,
+                         uint32_t frontbuffer_height, uint32_t display_width,
+                         uint32_t display_height) {
   // The presenter's refresh can wait (for its previous paint, the swap chain): holding the
   // backend's lock through it blocked every draw of the game's thread meanwhile (6.5 ms a frame
   // in the renderer's presents and 2.3 ms in its clears at 60 frames a second). A game frame's
@@ -428,7 +558,8 @@ void Backend::Present(rex::ui::Presenter* presenter, uint32_t frontbuffer_width,
           "{} clears, {} resolves ({} failed), {} invalidations; shaders {} created, {} from the pack, "
           "{} compiled, {} failed, {} from objects; {:.0f} ms in pipeline creation, {:.0f} ms in texture uploads, {} aliased ({} failed); "
           "game thread in the renderer: {} ms draws, {} ms clears, {} ms resolves, {} ms presents ({} ms in {} watch calls); "
-          "{} dynamic vertex buffers, {} MB of their vertices",
+          "{} dynamic vertex buffers, {} MB of their vertices; hooks: {} calls, {} ms; swaps: {} ms waiting for "
+          "the frame's submission, {} ms in the presenter's refresh",
           s.draws, s.skipped_shader, s.skipped_target, s.skipped_primitive, s.skipped_pipeline,
           s.skipped_pending, s.skipped_device, s.pipelines, s.pipeline_budget_waits + s.pipeline_waits,
           s.pipeline_wait_ms, s.texture_uploads, s.texture_failures, s.buffer_uploads,
@@ -436,9 +567,21 @@ void Backend::Present(rex::ui::Presenter* presenter, uint32_t frontbuffer_width,
           sh.compiled, sh.failed, sh.from_object, s.pipeline_ms, s.texture_ms, s.aliases, s.alias_failures,
           g_call_us[0].load() / 1000, g_call_us[1].load() / 1000, g_call_us[2].load() / 1000,
           g_call_us[3].load() / 1000, g_call_us[4].load() / 1000, g_watch_calls.load(), s.dynamic_vertex_buffers,
-          s.dynamic_vertex_bytes >> 20);
+          s.dynamic_vertex_bytes >> 20, ApiCallCount(), ApiCallMicroseconds() / 1000, g_swap_flush_us.load() / 1000,
+          g_swap_refresh_us.load() / 1000);
     }
 #endif
+    {
+      std::lock_guard frames_lock(g_frames_mutex);
+      std::string text;
+      for (const FrameRecord& f : g_worst_frames) {
+        text += fmt::format(" [{:.1f} ms: renderer {:.1f}, present {:.1f}, pipeline waits {:.1f}, textures {:.1f}, {} draws]",
+                            f.interval_us / 1000.0, f.renderer_us / 1000.0, f.present_us / 1000.0,
+                            f.pipeline_wait_us / 1000.0, f.texture_us / 1000.0, f.draws);
+      }
+      g_worst_frames.clear();
+      REXLOG_INFO("rexgpu-native: slowest frames:{}", text);
+    }
   }
   (void)frontbuffer_width;
   (void)frontbuffer_height;
@@ -448,7 +591,17 @@ void Backend::Present(rex::ui::Presenter* presenter, uint32_t frontbuffer_width,
     nvrhi::TextureHandle image = renderer_->presented_image();
     lock.unlock();
     // The frame's own commands first (the copy reads what they drew).
+    const auto t0 = std::chrono::steady_clock::now();
     if (submitter_) submitter_->Flush();
+    const auto t1 = std::chrono::steady_clock::now();
+    struct RefreshTimer {
+      std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+      ~RefreshTimer() {
+        g_swap_refresh_us += uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
+                                          std::chrono::steady_clock::now() - start).count());
+      }
+    } refresh_timer;
+    g_swap_flush_us += uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count());
     presenter->RefreshGuestOutput(
         width, height, display_width, display_height,
         [&](rex::ui::Presenter::GuestOutputRefreshContext& context) -> bool {

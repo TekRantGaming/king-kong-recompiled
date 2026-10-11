@@ -2,6 +2,9 @@
 
 #include "backend/draw_state.h"
 
+#include <atomic>
+#include <chrono>
+
 namespace nr {
 
 namespace {
@@ -11,9 +14,23 @@ DrawTracker* Resolve(void* self) {
   return binding && binding->resolve ? binding->resolve(binding->owner) : nullptr;
 }
 
-#define NR_FORWARD(call)               \
+std::atomic<uint64_t> g_api_us{0}, g_api_calls{0};
+
+// Every call the hooks forward, timed (the statistics line shows the total).
+struct ApiTimer {
+  std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+  ~ApiTimer() {
+    g_api_us.fetch_add(uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
+                                    std::chrono::steady_clock::now() - start).count()),
+                       std::memory_order_relaxed);
+    g_api_calls.fetch_add(1, std::memory_order_relaxed);
+  }
+};
+
+#define NR_FORWARD(call)                \
+  ApiTimer api_timer;                   \
   if (DrawTracker* d = Resolve(self)) { \
-    d->call;                          \
+    d->call;                            \
   }
 
 int IsActive(void* self) { return Resolve(self) ? 1 : 0; }
@@ -84,6 +101,9 @@ void VertexShaderPatched(void* self, uint32_t shader, uint32_t microcode, uint32
 #undef NR_FORWARD
 
 }  // namespace
+
+uint64_t ApiCallMicroseconds() { return g_api_us.load(std::memory_order_relaxed); }
+uint64_t ApiCallCount() { return g_api_calls.load(std::memory_order_relaxed); }
 
 void InitApiBinding(ApiBinding& binding, void* owner, DrawTracker* (*resolve)(void* owner)) {
   binding.owner = owner;
