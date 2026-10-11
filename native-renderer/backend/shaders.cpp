@@ -18,6 +18,20 @@
 #include "backend/shaders/generated/triangle_ps_spirv.h"
 #include "backend/shaders/generated/triangle_vs_dxil.h"
 #include "backend/shaders/generated/triangle_vs_spirv.h"
+#include "backend/shaders/generated/ao_vs_dxil.h"
+#include "backend/shaders/generated/ao_vs_spirv.h"
+#include "backend/shaders/generated/ao_copy_ps_dxil.h"
+#include "backend/shaders/generated/ao_copy_ps_spirv.h"
+#include "backend/shaders/generated/ao_depth_ps_dxil.h"
+#include "backend/shaders/generated/ao_depth_ps_spirv.h"
+#include "backend/shaders/generated/ao_ao_ps_dxil.h"
+#include "backend/shaders/generated/ao_ao_ps_spirv.h"
+#include "backend/shaders/generated/ao_blur_ps_dxil.h"
+#include "backend/shaders/generated/ao_blur_ps_spirv.h"
+#include "backend/shaders/generated/ao_upsample_ps_dxil.h"
+#include "backend/shaders/generated/ao_upsample_ps_spirv.h"
+#include "backend/shaders/generated/ao_apply_ps_dxil.h"
+#include "backend/shaders/generated/ao_apply_ps_spirv.h"
 
 namespace nr {
 
@@ -35,6 +49,13 @@ ShaderBytecode GetShaderBytecode(nvrhi::GraphicsAPI api, ShaderId id) {
     case ShaderId::kBlitPs: return NR_BLOB(blit_ps);
     case ShaderId::kClearVs: return NR_BLOB(clear_vs);
     case ShaderId::kClearPs: return NR_BLOB(clear_ps);
+    case ShaderId::kAoVs: return NR_BLOB(ao_vs);
+    case ShaderId::kAoCopyPs: return NR_BLOB(ao_copy_ps);
+    case ShaderId::kAoDepthPs: return NR_BLOB(ao_depth_ps);
+    case ShaderId::kAoPs: return NR_BLOB(ao_ao_ps);
+    case ShaderId::kAoBlurPs: return NR_BLOB(ao_blur_ps);
+    case ShaderId::kAoUpsamplePs: return NR_BLOB(ao_upsample_ps);
+    case ShaderId::kAoApplyPs: return NR_BLOB(ao_apply_ps);
   }
 #undef NR_BLOB
   return {};

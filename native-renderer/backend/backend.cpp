@@ -267,6 +267,7 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
       renderer->options().pipeline_wait = game.pipeline_wait;
       renderer->options().pipeline_wait_budget_ms = game.pipeline_wait_budget_ms;
       renderer->SetFrameLog(FrameLogConfig::Parse(game.frame_log.c_str()));
+      renderer->options().ao_settings = game.ao_settings;
       rex::memory::Memory* memory = memory_;
       renderer->set_watch([memory](uint32_t physical_address, uint32_t bytes) {
         CallTimer timer(4);

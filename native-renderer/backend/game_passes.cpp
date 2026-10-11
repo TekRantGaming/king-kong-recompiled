@@ -283,6 +283,40 @@ void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
   // The source's scale: the resolved texture gets it, and every rectangle below is in host
   // pixels (the guest's times it; the clears further down take the guest's).
   const float tsx = source->scale_x, tsy = source->scale_y;
+  // Ambient occlusion: the depth resolve before lighting is noticed, and the
+  // scene colour copies after it get the occlusion multiplied in. The copy
+  // reads a scratch texture for the duration of the copy (the game's own
+  // target stays as it was).
+  nvrhi::TextureHandle ao_original;
+  if (ao_ && options_.ao_settings) {
+    const AoSettings ao_settings = options_.ao_settings();
+    if (ao_settings.mode > 0 && call.dest_texture) {
+      const uint8_t* ao_dest = memory_.Virtual(call.dest_texture);
+      const nvrhi::TextureDesc& sd = source->texture->getDesc();
+      const int32_t guest_w = call.has_rect ? call.rect[2] - call.rect[0] : int32_t(s.width);
+      const int32_t guest_h = call.has_rect ? call.rect[3] - call.rect[1] : int32_t(s.height);
+      // The host size of a guest pixel: 1 here; a render scale makes the host
+      // targets as many times larger (the ratio of the texture to the guest's
+      // size, per axis).
+      const double host_x = double(sd.width) / double(std::max(source->width, 1u));
+      const double host_y = double(sd.height) / double(std::max(source->height, 1u));
+      AoResolve r;
+      r.frame = call.frame;
+      r.from_depth = from_depth;
+      r.full_screen = ao_dest && sx == 0 && sy == 0 && guest_w >= 1280 && guest_h >= 720;
+      r.format_ok = from_depth ? format == 0 : format <= 1;  // D24S8; 8:8:8:8 (gamma)
+      r.dest_key = ao_dest ? FetchFromObject(ao_dest).BaseAddress() : 0;
+      r.source = source->texture;
+      r.width = std::min(uint32_t(std::lround(double(guest_w) * host_x)), sd.width);
+      r.height = std::min(uint32_t(std::lround(double(guest_h) * host_y)), sd.height);
+      if (nvrhi::ITexture* scene = ao_->OnResolve(cl, r, ao_settings)) {
+        ao_original = source->texture;
+        source->texture = scene;
+        ++stats_.ao_applied;
+      }
+    }
+  }
+
   const uint8_t* dest_object = call.dest_texture ? memory_.Virtual(call.dest_texture) : nullptr;
   bool copied = false;
   if (dest_object && w > 0 && h > 0) {
@@ -361,6 +395,7 @@ void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
     }
   }
   if (!copied && dest_object) ++stats_.resolve_failures;
+  if (ao_original) source->texture = ao_original;  // the clears below are the game's own target's
 
   // The resolve's clears, over the source rectangle.
   if (flags.ClearRenderTarget() || flags.ClearDepthStencil()) {
