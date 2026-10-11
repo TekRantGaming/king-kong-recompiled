@@ -15,11 +15,6 @@
 
 <br>
 
-<a href="https://www.youtube.com/watch?v=XDixAgLN6w4"><img src="https://img.youtube.com/vi/XDixAgLN6w4/maxresdefault.jpg" alt="Watch the trailer on YouTube" width="100%"></a>
-<sub>▶&nbsp; <a href="https://www.youtube.com/watch?v=XDixAgLN6w4"><b>Watch the trailer</b></a></sub>
-
-<br><br>
-
 <img src="docs/images/launcher-home.jpg" alt="The launcher's Home screen" width="100%">
 
 <img src="docs/images/game-menu.jpg" alt="The game's main menu" width="49%">
