@@ -369,7 +369,12 @@ first run's Venture):
 | kong_cutscene | pass 0.0004 / 7.99 | 3/3 | |
 | kong | pass 0.0035 / 9.17 | 5/5 | 0.997 |
 
-13/13. What it took after the merges (the first run with frame logs, `native-20261010-235005`, had the
+13/13. Again after the AO merge (AO off, the default) and the pipeline cache's version 2:
+`runs
+ative-p2b-final1` (eleven scenes; vrex_170 4/5 with a lightning frame, kong_cutscene 0.0007 / 8.3)
+and `runs
+ative-p2b-kong-nocache` (kong_cutscene 0.0005 / 7.6, kong 0.0025 / 10.4, draw list 0.992); with the
+cache on Kong's timeline moves, see "Pipeline cache". What it took after the merges (the first run with frame logs, `native-20261010-235005`, had the
 pictures of twelve scenes and draw lists far off):
 
 - **Frame log parity** ("The frame log" below): the library's Clear is its own draw, the vertex shader hash
@@ -405,6 +410,31 @@ pictures of twelve scenes and draw lists far off):
   Venture's gameplay now runs at 30 frames a second (about 65 frames over 50 ms per 10 s remain, 200
   hitches per run; V-Rex 7). The statistics line every 300 swaps now also gives the game thread's time in the
   renderer's draws, clears, resolves and presents and in the watches.
+
+**Render scale in the game.** The game's own captures are the presenter's image, so at `--native_render_scale 2`
+they are 2560x1440 and at 1.5 1920x1080 (`docs/testing.md` said window size; corrected there). `compare.py` then
+fails every frame on `size`; the pictures were judged shot by shot instead (MAE, box-downscaled to the
+reference's size) against the Xenos plugin at `--draw_resolution_scale_x/y=2` (Xenia scales by integers only)
+and, for 1.5, against the golden set:
+
+| Scene | native 2x vs Xenos 2x | native 1x vs golden (same shot, for the noise) | native 1.5x vs golden |
+|---|---|---|---|
+| title, video, loading, pause | 0.00 to 0.02 | 0.00 to 0.10 | 0.1 to 0.9 (resampling) |
+| save, main, chapter select | 1.2 to 1.5 | 0.8 to 1.0 | 1.8 to 2.3 |
+| vrex_110 / 140 / 170 | 3.1 to 3.7 (lightning frames 9 to 21) | 4.3 to 5.1 | 3.2 to 4.0 (lightning 30 to 71) |
+| venture | 7.7 to 10.1 (one lightning frame 52) | 4.5 to 10.0 | 3.8 to 10.0 |
+| kong_cutscene / kong | 9.5 to 13.7 | 8.0 to 12.4 | 6.5 to 12.9 |
+
+Post effects (Kong's light shafts, the bloom, the V-Rex fog and rain lighting), shadows, the menus and the
+HUD (Venture's "Right stick to aim") look the same as at 1x and as the Xenos plugin's at 2x; crops side by side
+in `F:\KK-native-renderer\analysis\phase2\sbs_*.png`. The animated scenes differ by their timing as much at 2x
+as at 1x. Runs: `runs\native-scale2-v2`, `runs\xenos-scale2-ref`, `runs\native-scale15`.
+
+The first scale 2 run (`native-20261011-014649`) had a bright haze over V-Rex: not the scale but the pipeline
+cache's wrong shader translations (above), which showed at scale 2 first because the cache had just been
+turned on. From the hunt these stay: `--native_debug` 16 (plain pixel shaders at a scale), 32 (only
+frame-wide targets scale), 64 and 128 (watch toggles), and `--native_show_texture=<address>` (shows the
+texture a resolve wrote there instead of the frame).
 
 **Tests on Windows.** The standalone build runs on Windows too, on the real GPU (no lavapipe):
 `cmake -S native-renderer -B <dir> -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
@@ -462,17 +492,19 @@ fresh copy per resolve; this matches it without compounding).
 **Render scale.** Every image is sized from the host texture it is given, so a bigger target gives
 a bigger half-size image. The blur taps and the sample radius keep their size in the picture. The
 scale is worked out from the texture size against the guest size, so this works with or without
-session E's `render_scale.h`. After merging E, check `AoResolve` width/height in `Resolve` against
-E's `ScaleRect`.
+session E's `render_scale.h`. Since the merge (Phase 2b) `AoResolve` width and height in `Resolve` come
+from E's `ScaleRect` of the guest rectangle with the source target's scale, the rounding every other
+scaled rectangle uses.
 
 **Tests.** `nr_ao_tests` compares the GPU output with a CPU reference of the whole pipeline on
 synthetic scenes (a box on a wall, a floor, sky, a far strip, fog), and checks detection rules,
 the untouched game target, the depth copy, off, and 1x against 2x. Run on SwiftShader (lavapipe
-was not installable in the cloud container): GPU and reference agree to a few levels.
+was not installable in the cloud container): GPU and reference agree to a few levels. On Windows on
+the RTX 4070 Ti (Phase 2b): 12 tests pass (scale 2 against 1: mean 0.008, 893 pixels off by more than 0.1).
 
-**Shaders.** `compile_shaders.sh` / `.ps1` build `ao_*` SPIR-V and DXIL. The DXIL checked in was
-built with a source build of DXC that cannot sign, so regenerate it on Windows with
-`compile_shaders.ps1 -Dxc <dxc.exe>` before trusting the D3D12 path.
+**Shaders.** `compile_shaders.sh` / `.ps1` build `ao_*` SPIR-V and DXIL. The DXIL is now the official
+DXC release's (v1.9.2609, regenerated on Windows with `compile_shaders.ps1 -Dxc <dxc.exe>` after the merge;
+the cloud session's source build could not sign it). The SPIR-V came out byte-identical.
 
 ## NVRHI needs more from the SDK's Vulkan device
 

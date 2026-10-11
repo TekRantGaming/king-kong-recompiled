@@ -258,9 +258,11 @@ that was not used for tuning.
 
 ## Render scale runs
 
-The golden set is made at the console's size, and the capture is the presenter's output at the window's size, so
-a scaled run (`--native_render_scale 2`) is compared against it like any other run of the new renderer: the
-picture should match and the edges get cleaner. Whether scaling itself is right is decided by the synthetic
+The golden set is made at the console's size, and the capture is the presenter's image at the render size
+(2560x1440 at `--native_render_scale 2`), so `compare.py` fails a scaled run on `size` (Phase 2b). Judge such a
+run against the Xenos plugin's at the same integer scale (`--draw_resolution_scale_x=2
+--draw_resolution_scale_y=2`, `-Plugin xenos -Out <folder>`), shot by shot; `backend.md`, "Render scale in the
+game", has the numbers. Whether scaling itself is right is decided by the synthetic
 `Scale_*` tests in `nr_game_tests` (`backend.md`, "Render scale"); the commands for a run on the game are in
 that section too.
 
