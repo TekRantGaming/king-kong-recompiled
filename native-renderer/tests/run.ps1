@@ -119,8 +119,11 @@ foreach ($run in $plan.runs) {
     [Environment]::SetEnvironmentVariable($kv.Name, [string]$kv.Value, 'Process')
     if (-not $saved.ContainsKey($kv.Name)) { $saved[$kv.Name] = $null }
   }
+  # -ExtraArgs replace the scene file's arguments of the same name (the game keeps the first of two).
+  $extraNames = @($ExtraArgs | ForEach-Object { ($_ -split '=', 2)[0] })
+  $runArgs = @($run.args | Where-Object { $extraNames -notcontains (($_ -split '=', 2)[0]) })
   $gameArgs = @("--game_data_root=$GameData", "--user_data_root=$saveCopy", "--cache_root=$CacheRoot",
-    "--log_file=$(Join-Path $runDir 'game.log')") + @($run.args) + @($ExtraArgs) | ForEach-Object { Format-Arg $_ }
+    "--log_file=$(Join-Path $runDir 'game.log')") + $runArgs + @($ExtraArgs) | ForEach-Object { Format-Arg $_ }
   $log = Join-Path $runDir 'game.log'
   $proc = $null
   $started = Get-Date
