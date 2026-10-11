@@ -16,6 +16,8 @@ class GraphicsProvider;
 
 namespace nr {
 
+class DriverPipelineCache;
+
 class HostDevice {
  public:
   virtual ~HostDevice() = default;
@@ -32,6 +34,9 @@ class HostDevice {
     uint64_t wait_us = 0, execute_us = 0, garbage_us = 0, count = 0;
   };
   virtual SubmitTimes submit_times() const { return {}; }
+  // The cache the device creates every pipeline with, when the host keeps one in a file
+  // (--native_vk_pipeline_cache, Vulkan); null otherwise.
+  virtual DriverPipelineCache* pipeline_cache() { return nullptr; }
 
   // Records, into the open `command_list`, a copy of `source` (width x
   // height, R10G10B10A2_UNORM) into the presenter's guest output image behind

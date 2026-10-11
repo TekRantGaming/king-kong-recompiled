@@ -85,6 +85,13 @@ REXCVAR_DEFINE_STRING(native_pipeline_cache_dir, "", "Native renderer",
                       "<cache root>/native-pipelines")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_BOOL(native_vk_pipeline_cache, false, "Native renderer",
+                    "Vulkan: keep the driver's compiled pipelines (a VkPipelineCache) in a file under the cache "
+                    "root (<cache root>/native-pipelines/<title>.vkcache, or native_pipeline_cache_dir) and load it "
+                    "at start, so making the pipelines again is fast. A file another GPU, driver or driver version "
+                    "made is not used: the cache is rebuilt in the background and the file replaced")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_BOOL(native_pipeline_list, false, "Native renderer",
                     "Load the pipeline list shipped beside the game (kkpipelines.list, made by nr_pipelines merge "
                     "from the pipeline cache files of several runs) at start and create its pipelines on the "

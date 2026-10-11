@@ -61,6 +61,7 @@ REXCVAR_DECLARE(bool, native_async_pipelines);
 REXCVAR_DECLARE(bool, native_pipeline_cache);
 REXCVAR_DECLARE(std::string, native_pipeline_cache_dir);
 REXCVAR_DECLARE(bool, native_pipeline_list);
+REXCVAR_DECLARE(bool, native_vk_pipeline_cache);
 REXCVAR_DECLARE(std::string, native_pipeline_list_file);
 REXCVAR_DECLARE(bool, native_pipeline_wait);
 REXCVAR_DECLARE(double, native_pipeline_wait_budget_ms);
@@ -70,12 +71,13 @@ REXCVAR_DECLARE(bool, native_async_present);
 REXCVAR_DECLARE(bool, native_dynamic_vertex_buffers);
 
 namespace {
-// <title id>.pipelines, or game.pipelines when the title is not known (a folder from the cvar).
-std::string PipelineCacheFileName(uint32_t title_id) {
-  if (!title_id) return "game.pipelines";
+// <title id>.pipelines, or game.pipelines when the title is not known (a folder from the cvar); the
+// driver's cache (.vkcache) the same way.
+std::string PipelineCacheFileName(uint32_t title_id, const char* extension = ".pipelines") {
+  if (!title_id) return std::string("game") + extension;
   char name[32];
-  std::snprintf(name, sizeof(name), "%08X.pipelines", title_id);
-  return name;
+  std::snprintf(name, sizeof(name), "%08X", title_id);
+  return name + std::string(extension);
 }
 }  // namespace
 REXCVAR_DECLARE(std::string, native_render_scale);
@@ -309,7 +311,9 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
     // shipped list alone needs no folder: it starts now.
     const std::string dir = REXCVAR_GET(native_pipeline_cache_dir);
     if (!dir.empty()) pipeline_folder_ = dir;
-    if (!pipeline_folder_.empty() || !REXCVAR_GET(native_pipeline_cache)) StartPipelines();
+    if (!pipeline_folder_.empty() || !(REXCVAR_GET(native_pipeline_cache) || REXCVAR_GET(native_vk_pipeline_cache))) {
+      StartPipelines();
+    }
   }
   backend_->set_unlocked_present(REXCVAR_GET(native_present_unlocked));
   backend_->set_async_submit(REXCVAR_GET(native_async_submit));
@@ -379,12 +383,16 @@ void NativeGraphicsSystem::InitializeShaderStorage(const std::filesystem::path& 
   if (backend_) StartPipelines();
 }
 
-// In this order: the player's cache file, then the shipped list (each description is made once,
-// whichever names it first). Before the game's first draw: the SDK's app initialises the shader
-// storage before the game's main thread starts.
+// In this order: the driver's pipeline cache (read while nothing creates a pipeline), the player's
+// cache file, then the shipped list (each description is made once, whichever names it first).
+// Before the game's first draw: the SDK's app initialises the shader storage before the game's
+// main thread starts.
 void NativeGraphicsSystem::StartPipelines() {
   if (pipelines_started_ || !backend_) return;
   pipelines_started_ = true;
+  if (REXCVAR_GET(native_vk_pipeline_cache) && !pipeline_folder_.empty()) {
+    backend_->SetDriverPipelineCache((pipeline_folder_ / PipelineCacheFileName(pipeline_title_id_, ".vkcache")).string());
+  }
   if (REXCVAR_GET(native_pipeline_cache) && !pipeline_folder_.empty()) {
     backend_->SetPipelineCache((pipeline_folder_ / PipelineCacheFileName(pipeline_title_id_)).string());
   }

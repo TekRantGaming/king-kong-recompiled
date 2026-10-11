@@ -483,6 +483,18 @@ bool Backend::SetPipelineCache(const std::string& path) {
   return false;
 }
 
+bool Backend::SetDriverPipelineCache(const std::string& path) {
+#if NR_GAME_RENDERER
+  if (renderer_ && renderer_->game() && host_ && host_->pipeline_cache()) {
+    renderer_->game()->SetDriverPipelineCache(host_->pipeline_cache(), path);
+    return true;
+  }
+#else
+  (void)path;
+#endif
+  return false;
+}
+
 bool Backend::LoadPipelineList(const std::string& path) {
 #if NR_GAME_RENDERER
   if (renderer_ && renderer_->game()) return renderer_->game()->LoadPipelineList(path);

@@ -22,6 +22,7 @@
 #include "backend/api_binding.h"
 #include "backend/draw_state.h"
 #include "backend/host_device.h"
+#include "backend/driver_pipeline_cache.h"
 #include "backend/renderer.h"
 #include "backend/tests/check.h"
 #include "backend/tests/fake_guest.h"
@@ -32,6 +33,8 @@
 
 // vulkan_host.cpp reads it (plugin_main.cpp defines it in the plugin).
 REXCVAR_DEFINE_BOOL(native_validation, true, "Native renderer", "NVRHI validation layer");
+// vulkan_host.cpp reads it too: the host keeps a VkPipelineCache of its own when it is on.
+REXCVAR_DEFINE_BOOL(native_vk_pipeline_cache, false, "Native renderer", "Keep the driver's pipeline cache");
 // backend.cpp reads it (the plugin defines it in plugin_main.cpp).
 REXCVAR_DEFINE_INT32(native_dump_frame, -1, "Native renderer", "Log every call of this game frame");
 
@@ -145,6 +148,46 @@ TEST(NvrhiOnTheSdkVulkanProvider) {
   }
   host->WaitForIdle();
   host.reset();
+}
+
+TEST(VkPipelineCacheOnTheSdkVulkanProvider) {
+  // --native_vk_pipeline_cache: the host makes the cache NVRHI's device uses, it is saved with what
+  // the device made and taken by the next device on the same driver.
+  const std::string path =
+      (std::filesystem::temp_directory_path() / "nr_plugin_tests_pipelines" / "game.vkcache").string();
+  std::filesystem::remove(path);
+  REXCVAR_SET(native_vk_pipeline_cache, true);
+  for (int run = 0; run < 2; ++run) {
+    auto provider = rex::ui::vulkan::VulkanProvider::Create(true, false);
+    CHECK(provider != nullptr);
+    if (!provider) break;
+    std::unique_ptr<HostDevice> host = CreateVulkanHostDevice(*provider);
+    CHECK(host != nullptr);
+    if (!host) break;
+    DriverPipelineCache* cache = host->pipeline_cache();
+    CHECK(cache != nullptr);
+    if (!cache) break;
+    std::string note;
+    const DriverPipelineCache::Load load = cache->LoadFile(path, &note);
+    CHECK(load == (run == 0 ? DriverPipelineCache::Load::kAbsent : DriverPipelineCache::Load::kLoaded));
+    {
+      Renderer renderer(host->device());  // makes its pipelines through the cache
+      CHECK(renderer.Initialize(64, 64));
+      size_t bytes = 0;
+      CHECK(cache->SaveFile(path, &bytes, &note));
+      CHECK(bytes >= 32);
+    }
+    host->WaitForIdle();
+    host.reset();
+  }
+  REXCVAR_SET(native_vk_pipeline_cache, false);
+  // Off (the default): no cache of ours.
+  auto provider = rex::ui::vulkan::VulkanProvider::Create(true, false);
+  if (provider) {
+    std::unique_ptr<HostDevice> host = CreateVulkanHostDevice(*provider);
+    CHECK(host != nullptr);
+    if (host) CHECK(host->pipeline_cache() == nullptr);
+  }
 }
 
 NR_TEST_MAIN()

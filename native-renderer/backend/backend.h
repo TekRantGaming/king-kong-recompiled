@@ -87,6 +87,10 @@ class Backend {
   bool SetPipelineCache(const std::string& path);
   // A shipped pipeline list (GameRenderer::LoadPipelineList).
   bool LoadPipelineList(const std::string& path);
+  // The host device's own pipeline cache (HostDevice::pipeline_cache) kept in `path`
+  // (GameRenderer::SetDriverPipelineCache): before SetPipelineCache and LoadPipelineList. False when
+  // there is none or no game renderer.
+  bool SetDriverPipelineCache(const std::string& path);
   void set_test_picture(TestPicture picture) { test_picture_ = picture; }
   Renderer& renderer() { return *renderer_; }
   DrawTracker* draws() { return draws_.get(); }
