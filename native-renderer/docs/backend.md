@@ -445,6 +445,28 @@ texture a resolve wrote there instead of the frame).
 Three test fixes came out of the first Windows run: the harness test called `python3` (now CMake's Python), and
 two counts had not followed this phase (the clear as a draw in the frame log, the hook table's 42nd entry).
 
+### Four more chapters (Phase 2b)
+
+New golden scenes `chap04`, `chap12`, `chap20` and `chap33` (`tests/scenes.json`): chapter-select entries 4,
+12, 20 and 33, the opening skipped as in the V-Rex run (six START, two B), five shots 0.5 s apart once Jack
+stands still (a jungle gate at dusk, a dark path to a lit gate, a mossy rock wall over mist, a cave with a water
+channel). Found with a probe scene file (shots every 5 s, `run.ps1 -ScenesFile`); golden set captured with the
+Xenos plugin, and a second Xenos run repeats it closely (chap12 MAE 0.01, chap04 0.32).
+
+| Scene | Native (default options) | Xenos self-check |
+|---|---|---|
+| chap04 | pass 0.0020 / 1.24 | pass 0.0004 / 0.32 |
+| chap12 | **fail** 0.0029 / 2.33 (outside-range share above the 0.002 limit) | pass 0.0000 / 0.01 |
+| chap20 | pass 0.0000 / 1.41 | pass |
+| chap33 | pass 0.0000 / 0.71 | pass |
+
+chap12's native frames are the golden picture moved up by exactly one pixel (chap04's by half a pixel; the
+other scenes, menus and V-Rex by none), measured by the best shift between the frames. Same textures, same
+brightness (channel means equal to 0.01). The Xenos plugin repeats its own frames exactly there, so the game's
+camera is not random: something the game reads back from the GPU differs. The native renderer reports every
+occlusion query as visible and does not write resolves back to guest memory; either could move a camera that
+settles on what it sees. Open.
+
 ### Frame rate (Phase 2b)
 
 Measured with the port's own frame statistics (`Frame times` every 10 s after `KK dev: gameplay reached`, or the

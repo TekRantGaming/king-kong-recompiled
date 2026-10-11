@@ -97,6 +97,22 @@
     "at": 62.0,
     "frames": 2
    }
+  },
+  "chap04": {
+   "from": "menu",
+   "script": "12:A,18:A,24:A,30.0:RIGHT,30.6:RIGHT,31.2:RIGHT,31.8:RIGHT,34.4:A,54.4:START,58.4:START,62.4:START,66.4:START,70.4:START,74.4:START,78.4:B,80.4:B"
+  },
+  "chap12": {
+   "from": "menu",
+   "script": "12:A,18:A,24:A,30.0:RIGHT,30.6:RIGHT,31.2:RIGHT,31.8:RIGHT,32.4:RIGHT,33.0:RIGHT,33.6:RIGHT,34.2:RIGHT,34.8:RIGHT,35.4:RIGHT,36.0:RIGHT,36.6:RIGHT,39.2:A,59.2:START,63.2:START,67.2:START,71.2:START,75.2:START,79.2:START,83.2:B,85.2:B"
+  },
+  "chap20": {
+   "from": "menu",
+   "script": "12:A,18:A,24:A,30.0:RIGHT,30.6:RIGHT,31.2:RIGHT,31.8:RIGHT,32.4:RIGHT,33.0:RIGHT,33.6:RIGHT,34.2:RIGHT,34.8:RIGHT,35.4:RIGHT,36.0:RIGHT,36.6:RIGHT,37.2:RIGHT,37.8:RIGHT,38.4:RIGHT,39.0:RIGHT,39.6:RIGHT,40.2:RIGHT,40.8:RIGHT,41.4:RIGHT,44.0:A,64.0:START,68.0:START,72.0:START,76.0:START,80.0:START,84.0:START,88.0:B,90.0:B"
+  },
+  "chap33": {
+   "from": "menu",
+   "script": "12:A,18:A,24:A,30.0:RIGHT,30.6:RIGHT,31.2:RIGHT,31.8:RIGHT,32.4:RIGHT,33.0:RIGHT,33.6:RIGHT,34.2:RIGHT,34.8:RIGHT,35.4:RIGHT,36.0:RIGHT,36.6:RIGHT,37.2:RIGHT,37.8:RIGHT,38.4:RIGHT,39.0:RIGHT,39.6:RIGHT,40.2:RIGHT,40.8:RIGHT,41.4:RIGHT,42.0:RIGHT,42.6:RIGHT,43.2:RIGHT,43.8:RIGHT,44.4:RIGHT,45.0:RIGHT,45.6:RIGHT,46.2:RIGHT,46.8:RIGHT,47.4:RIGHT,48.0:RIGHT,48.6:RIGHT,49.2:RIGHT,51.8:A,71.8:START,75.8:START,79.8:START,83.8:START,87.8:START,91.8:START,95.8:B,97.8:B"
   }
  },
  "scenes": [
@@ -382,6 +398,110 @@
     "env_tile": 6.0,
     "env_bad": 0.006,
     "drawlog": 0.95,
+    "env_flash_level": 6
+   }
+  },
+  {
+   "name": "chap04",
+   "run": "chap04",
+   "description": "Chapter-select entry 4: a jungle clearing at dusk, a spiked wooden gate against the sky (gameplay, Jack still).",
+   "times": [
+    120.0,
+    120.5,
+    121.0,
+    121.5,
+    122.0
+   ],
+   "golden_times": {
+    "from": 119.0,
+    "to": 123.0,
+    "step": 0.2
+   },
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6,
+    "env_tol": 32,
+    "env_flash_level": 6
+   }
+  },
+  {
+   "name": "chap12",
+   "run": "chap12",
+   "description": "Chapter-select entry 12: a dark jungle path towards a lit gate in a wall of vines (gameplay, Jack still).",
+   "times": [
+    125.0,
+    125.5,
+    126.0,
+    126.5,
+    127.0
+   ],
+   "golden_times": {
+    "from": 124.0,
+    "to": 128.0,
+    "step": 0.2
+   },
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6,
+    "env_tol": 32,
+    "env_flash_level": 6
+   }
+  },
+  {
+   "name": "chap20",
+   "run": "chap20",
+   "description": "Chapter-select entry 20: a mossy rock wall over mist (gameplay, Jack still).",
+   "times": [
+    130.0,
+    130.5,
+    131.0,
+    131.5,
+    132.0
+   ],
+   "golden_times": {
+    "from": 129.0,
+    "to": 133.0,
+    "step": 0.2
+   },
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6,
+    "env_tol": 32,
+    "env_flash_level": 6
+   }
+  },
+  {
+   "name": "chap33",
+   "run": "chap33",
+   "description": "Chapter-select entry 33: a cave with a water channel, dark green rock (gameplay, Jack still).",
+   "times": [
+    135.0,
+    135.5,
+    136.0,
+    136.5,
+    137.0
+   ],
+   "golden_times": {
+    "from": 134.0,
+    "to": 138.0,
+    "step": 0.2
+   },
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6,
+    "env_tol": 32,
     "env_flash_level": 6
    }
   }
