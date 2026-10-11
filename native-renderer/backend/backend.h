@@ -15,10 +15,12 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
 
+#include "backend/ambient_occlusion.h"
 #include "backend/draw_state.h"
 #include "backend/guest_memory.h"
 #include "backend/host_device.h"
@@ -56,6 +58,9 @@ struct GameSettings {
   int32_t dump_frame = -1;
   uint32_t debug = 0;
   bool async_pipelines = true;
+  // Ambient occlusion settings, read at every resolve (null: off). The plugin reads ao_mode and
+  // ao_strength, the Xenos plugin's cvars.
+  std::function<AoSettings()> ao_settings;
 };
 
 class Backend {

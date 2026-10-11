@@ -13,7 +13,7 @@ DXC=${1:-dxc}
 here=$(cd "$(dirname "$0")" && pwd)
 out="$here/generated"
 mkdir -p "$out"
-for name in triangle placeholder; do
+for name in triangle placeholder blit clear; do
   src="$here/$name.hlsl"
   for stage in vs ps; do
     entry="${stage}_main"
@@ -24,5 +24,15 @@ for name in triangle placeholder; do
       -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-b-shift 256 0 -fvk-u-shift 384 0 \
       -Fh "$out/${base}_spirv.h" -Vn "k_${base}_spirv" "$src"
   done
+done
+# Ambient occlusion: one source, one blob per entry point (output name, stage, entry).
+src="$here/ambient_occlusion.hlsl"
+for spec in ao_vs:vs:vs_main ao_copy_ps:ps:ps_copy ao_depth_ps:ps:ps_depth ao_ao_ps:ps:ps_ao \
+            ao_blur_ps:ps:ps_blur ao_upsample_ps:ps:ps_upsample ao_apply_ps:ps:ps_apply; do
+  base=${spec%%:*}; rest=${spec#*:}; stage=${rest%%:*}; entry=${rest#*:}
+  "$DXC" -nologo -T "${stage}_6_0" -E "$entry" -O3 -Fh "$out/${base}_dxil.h" -Vn "k_${base}_dxil" "$src"
+  "$DXC" -nologo -T "${stage}_6_0" -E "$entry" -O3 -spirv -fspv-target-env=vulkan1.2 \
+    -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-b-shift 256 0 -fvk-u-shift 384 0 \
+    -Fh "$out/${base}_spirv.h" -Vn "k_${base}_spirv" "$src"
 done
 echo "Shaders written to $out"

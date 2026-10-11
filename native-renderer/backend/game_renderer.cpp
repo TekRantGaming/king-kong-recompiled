@@ -16,6 +16,10 @@ namespace nr {
 
 namespace {
 
+// XXH3-64 of the microcode of the title's two AfterEffects fog pixel shaders.
+constexpr uint64_t kAoFogShaderA = UINT64_C(0x1B65AC7429B67FE9);
+constexpr uint64_t kAoFogShaderB = UINT64_C(0x9F699E763A41FE07);
+
 inline uint64_t Mix64(uint64_t h, uint64_t v) {
   h ^= v + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2);
   h *= 0xFF51AFD7ED558CCDull;
@@ -296,7 +300,11 @@ bool GameRenderer::Initialize() {
   nvrhi::BindingSetDesc cset;
   cset.bindings = {nvrhi::BindingSetItem::PushConstants(0, 32)};
   clear_set_ = device_->createBindingSet(cset, clear_layout_);
-  return clear_set_ != nullptr;
+  if (!clear_set_) return false;
+  // Ambient occlusion: optional, never a reason to refuse to start.
+  ao_ = std::make_unique<AmbientOcclusion>(device_);
+  if (!ao_->Initialize()) ao_.reset();
+  return true;
 }
 
 // ---------------------------------------------------------------- tables
@@ -509,6 +517,16 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
            call.pixel_shader ? (ps ? "ok" : "missing") : "none");
     }
     return;
+  }
+
+  // The game's fog pass: its two AfterEffects fog pixel shaders (microcode
+  // hashes as the Xenos plugin's patch 0007 matches them). Their constants c0
+  // (colour), c1 (g_vFogParams) and c2 (g_vFogNormalizing) tell the ambient
+  // occlusion how much fog covers each pixel.
+  if (ao_ && ps && (ps->ucode_hash == kAoFogShaderA || ps->ucode_hash == kAoFogShaderB)) {
+    float fog[16];
+    for (uint32_t i = 0; i < 16; ++i) fog[i] = LoadBEFloat(d.at(dev::kPsConstants + i * 4));
+    ao_->NoteFog(fog, call.frame);
   }
 
   // Primitive.

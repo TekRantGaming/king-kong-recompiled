@@ -22,4 +22,16 @@ foreach ($name in @("triangle", "placeholder", "blit", "clear")) {
         if ($LASTEXITCODE -ne 0) { throw "dxc (SPIR-V) failed on $src $stage" }
     }
 }
+# Ambient occlusion: one source, one blob per entry point.
+$ao = Join-Path $here "ambient_occlusion.hlsl"
+foreach ($spec in @("ao_vs:vs:vs_main", "ao_copy_ps:ps:ps_copy", "ao_depth_ps:ps:ps_depth", "ao_ao_ps:ps:ps_ao",
+                    "ao_blur_ps:ps:ps_blur", "ao_upsample_ps:ps:ps_upsample", "ao_apply_ps:ps:ps_apply")) {
+    $base, $stage, $entry = $spec.Split(":")
+    & $Dxc -nologo -T "${stage}_6_0" -E $entry -O3 -Fh (Join-Path $out "${base}_dxil.h") -Vn "k_${base}_dxil" $ao
+    if ($LASTEXITCODE -ne 0) { throw "dxc (DXIL) failed on $ao $entry" }
+    & $Dxc -nologo -T "${stage}_6_0" -E $entry -O3 -spirv "-fspv-target-env=vulkan1.2" `
+        -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-b-shift 256 0 -fvk-u-shift 384 0 `
+        -Fh (Join-Path $out "${base}_spirv.h") -Vn "k_${base}_spirv" $ao
+    if ($LASTEXITCODE -ne 0) { throw "dxc (SPIR-V) failed on $ao $entry" }
+}
 Write-Host "Shaders written to $out"

@@ -28,6 +28,7 @@
 
 #include <nvrhi/nvrhi.h>
 
+#include "backend/ambient_occlusion.h"
 #include "backend/draw_sink.h"
 #include "backend/guest_device.h"
 #include "backend/guest_memory.h"
@@ -62,6 +63,11 @@ class GameRenderer {
     // thread for the driver's compile. Vulkan only (NVRHI's D3D12 backend
     // caches root signatures without a lock).
     bool async_pipelines = true;
+    // Ambient occlusion (docs/backend.md, "Ambient occlusion"): the settings,
+    // asked for at every depth and colour resolve, so the launcher's change of
+    // ao_mode / ao_strength applies at once. Unset (or mode 0): off, and nothing
+    // of it runs.
+    std::function<AoSettings()> ao_settings;
     // Log every draw of this game frame (-1 none).
     int32_t dump_frame = -1;
     // Debugging aids (bits): 1 the game's clears are green, 2 the frame image
@@ -86,6 +92,7 @@ class GameRenderer {
     uint64_t pipelines = 0;
     uint64_t invalidations = 0;
     uint64_t presents_missing = 0;  // no host target for the back buffer
+    uint64_t ao_applied = 0;        // scene copies the ambient occlusion went into
     uint64_t aliases = 0;           // textures converted from a resolve through another format
     uint64_t alias_failures = 0;
     double pipeline_ms = 0;         // time spent creating pipelines
@@ -268,6 +275,9 @@ class GameRenderer {
   std::unordered_map<uint64_t, std::unique_ptr<HostTarget>> targets_;
   std::unordered_map<uint64_t, nvrhi::FramebufferHandle> framebuffers_;
   std::unordered_map<uint64_t, nvrhi::GraphicsPipelineHandle> pipelines_;
+
+  // Ambient occlusion (null until Initialize, and when its shaders are missing).
+  std::unique_ptr<AmbientOcclusion> ao_;
 
   kknr::TextureCache textures_;
   // GPU-written (resolved) textures by base address, for other fetch

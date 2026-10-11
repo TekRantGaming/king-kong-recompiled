@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <iterator>
@@ -231,6 +232,17 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
   game.dump_frame = REXCVAR_GET(native_dump_frame);
   game.debug = uint32_t(REXCVAR_GET(native_debug));
   game.async_pipelines = REXCVAR_GET(native_async_pipelines);
+  // Ambient occlusion: the Xenos plugin's own settings (ao_mode 0 off, 1 on, 2 AO only; ao_strength
+  // 1 to 3), looked up by name at every use. They are defined by rexgpu-xenos, which the launcher
+  // and the game's start load first so that its cvars exist when the config and command line are read
+  // (the launcher's Graphics page and F8 / F9 set them by name too). Without that plugin loaded
+  // the lookup finds nothing and AO stays off.
+  game.ao_settings = [] {
+    AoSettings s;
+    s.mode = std::clamp(std::atoi(rex::cvar::GetFlagByName("ao_mode").c_str()), 0, 2);
+    s.strength = std::clamp(std::atoi(rex::cvar::GetFlagByName("ao_strength").c_str()), 1, 3);
+    return s;
+  };
   if (!backend_->Initialize(std::max<uint32_t>(1, video_mode.display_width),
                             std::max<uint32_t>(1, video_mode.display_height), game)) {
     REXGPU_ERROR("rexgpu-native: backend initialisation failed");

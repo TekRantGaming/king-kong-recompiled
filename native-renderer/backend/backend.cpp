@@ -213,6 +213,7 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
       renderer->options().dump_frame = game.dump_frame;
       renderer->options().debug = game.debug;
       renderer->options().async_pipelines = game.async_pipelines;
+      renderer->options().ao_settings = game.ao_settings;
       rex::memory::Memory* memory = memory_;
       renderer->set_watch([memory](uint32_t physical_address, uint32_t bytes) {
         memory->EnablePhysicalMemoryAccessCallbacks(physical_address, bytes, true, false);
