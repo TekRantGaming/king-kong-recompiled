@@ -795,6 +795,10 @@ had records (MAE 90 against 3.4 with `--native_pipeline_cache=false`) and at eve
 carry both translations' input hashes (`vs_input`, `ps_input`; 144 bytes, version 2, older files are
 ignored), the library keys shaders by microcode and translation inputs, and the prewarm asks the pack for
 exactly that translation.
+
+The test harness turns the cache off for native runs (`docs/testing.md`): with every pipeline made in
+advance, Kong to the Rescue's chapter loads faster and its scripted animation is ahead of the golden frames
+(0/5 frames twice, 5/5 with the cache off).
 - Every pipeline description is appended once to the file as a 128-byte `PipelineRecord` (16-byte header: magic,
   version 1, record size, byte-order marker). A torn tail is repaired on open; a version mismatch starts a new file.
 - At start all records are queued on the pipeline worker threads. Shaders come from the pack by hash, or the

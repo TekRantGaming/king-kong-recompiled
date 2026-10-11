@@ -13,6 +13,11 @@
    "--kk_original_look=true",
    "--log_max_file_size_mb=500"
   ],
+  "plugin_args": {
+   "native": [
+    "--native_pipeline_cache=false"
+   ]
+  },
   "env": {
    "KK_DEV_AUTOSKIP": "1"
   },

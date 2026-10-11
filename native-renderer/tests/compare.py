@@ -135,6 +135,7 @@ def cmd_plan(a) -> int:
         else:
             env["REX_DEV_FRAME_LOG"] = ""
         args = list(d.get("args", [])) + list(run.get("args", []))
+        args += list(d.get("plugin_args", {}).get(a.plugin or "", []))
         if a.plugin:
             args.append(f"--gpu_plugin={a.plugin}")
         startup = float(d.get("startup_allowance", 60))
