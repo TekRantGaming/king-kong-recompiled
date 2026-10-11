@@ -299,7 +299,7 @@ bool ShaderPack::find(uint64_t ucodeHash, uint64_t inputHash, CompiledShader& ou
     return false;
 }
 
-BuildResult buildShader(const ShaderInfo& info, Compiler& compiler, bool keepHlsl) {
+BuildResult buildShader(const ShaderInfo& info, Compiler& compiler, bool keepHlsl, uint32_t targets) {
     BuildResult r;
     TranslateResult t = translate(info);
     if (!t.ok) {
@@ -311,19 +311,24 @@ BuildResult buildShader(const ShaderInfo& info, Compiler& compiler, bool keepHls
     r.shader.ucodeHash = info.ucodeHash;
     r.shader.inputHash = translationInputHash(info);
     r.shader.bindings = std::move(t.bindings);
-    CompileOutput dxil = compiler.compile(t.hlsl, info.kind, CompileTarget::Dxil);
-    if (!dxil.ok) {
-        r.stage = "dxil";
-        r.error = dxil.messages;
-        r.shader.hlsl = std::move(t.hlsl);
-        return r;
+    CompileOutput dxil, spirv;
+    if (targets & kBuildDxil) {
+        dxil = compiler.compile(t.hlsl, info.kind, CompileTarget::Dxil);
+        if (!dxil.ok) {
+            r.stage = "dxil";
+            r.error = dxil.messages;
+            r.shader.hlsl = std::move(t.hlsl);
+            return r;
+        }
     }
-    CompileOutput spirv = compiler.compile(t.hlsl, info.kind, CompileTarget::Spirv);
-    if (!spirv.ok) {
-        r.stage = "spirv";
-        r.error = spirv.messages;
-        r.shader.hlsl = std::move(t.hlsl);
-        return r;
+    if (targets & kBuildSpirv) {
+        spirv = compiler.compile(t.hlsl, info.kind, CompileTarget::Spirv);
+        if (!spirv.ok) {
+            r.stage = "spirv";
+            r.error = spirv.messages;
+            r.shader.hlsl = std::move(t.hlsl);
+            return r;
+        }
     }
     r.shader.dxil = std::move(dxil.blob);
     r.shader.spirv = std::move(spirv.blob);

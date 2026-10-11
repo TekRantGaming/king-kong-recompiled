@@ -32,6 +32,7 @@ namespace {
 std::mutex gLoadMutex;
 DxcCreateInstanceProc gCreateInstance = nullptr;
 std::string gVersion;
+std::string gIdentity;
 
 template <typename T>
 struct Ref {
@@ -96,6 +97,14 @@ bool loadDxc(const std::string& pathIn, std::string* error) {
             info->GetVersion(&major, &minor);
             gVersion = std::to_string(major) + "." + std::to_string(minor);
         }
+        gIdentity = "dxcompiler " + gVersion;
+        Ref<IDxcVersionInfo2> info2;
+        if (SUCCEEDED(compiler->QueryInterface(IID_PPV_ARGS(info2.put())))) {
+            UINT32 commits = 0;
+            char* hash = nullptr;  // allocated by DXC (CoTaskMemAlloc); kept, once per process
+            if (SUCCEEDED(info2->GetCommitInfo(&commits, &hash)) && hash)
+                gIdentity += " commit " + std::to_string(commits) + " " + hash;
+        }
     }
     Ref<IDxcValidator> validator;
     if (FAILED(gCreateInstance(CLSID_DxcValidator, IID_PPV_ARGS(validator.put())))) {
@@ -114,6 +123,8 @@ bool loadDxc(const std::string& pathIn, std::string* error) {
 bool dxcLoaded() { return gCreateInstance != nullptr; }
 
 std::string dxcVersion() { return gVersion; }
+
+std::string dxcIdentity() { return gIdentity; }
 
 struct Compiler::Impl {
     Ref<IDxcCompiler3> compiler;

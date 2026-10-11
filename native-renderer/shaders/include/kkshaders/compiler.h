@@ -27,6 +27,9 @@ struct CompileOutput {
 bool loadDxc(const std::string& path, std::string* error = nullptr);
 bool dxcLoaded();
 std::string dxcVersion();
+// Which compiler exactly: its version and the commit it was built from ("dxcompiler 1.9 commit N
+// <hash>"). Part of a pack's stamp: another DXC makes the pack stale (kkshaders/pack_builder.h).
+std::string dxcIdentity();
 
 // One compiler per thread (the DXC objects are not shared between threads).
 class Compiler {

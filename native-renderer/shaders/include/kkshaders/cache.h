@@ -68,14 +68,16 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-// Translate and compile one shader for both backends.
+// Translate and compile one shader for both backends (or only one: `targets` is a mask of
+// kBuildDxil and kBuildSpirv; the other blob stays empty).
 struct BuildResult {
     bool ok = false;
     std::string stage;            // where it failed: "translate", "dxil", "spirv"
     std::string error;
     CompiledShader shader;
 };
-BuildResult buildShader(const ShaderInfo& info, Compiler& compiler, bool keepHlsl);
+constexpr uint32_t kBuildDxil = 1, kBuildSpirv = 2, kBuildBoth = 3;
+BuildResult buildShader(const ShaderInfo& info, Compiler& compiler, bool keepHlsl, uint32_t targets = kBuildBoth);
 
 // What the runtime does at CreateVertexShader / CreatePixelShader: the pack, then the cache,
 // then translate, compile and store in the cache.
