@@ -181,7 +181,7 @@ always what the GPU would have been sent. At every draw the game renderer reads 
 `--native_game` (on; off = the placeholder), `--native_shader_pack`, `--native_dxc`, `--native_element_endian`
 (on), `--native_flip_front_face`, `--native_dump_frame=N` (every clear, draw with its textures and vertex
 fetch, resolve with its destination, of frame N), `--native_debug` (bits: 1 green clears, 2 magenta frame
-image under the back buffer, 4 no gamma ramp). The stats line every 300 swaps counts draws, skips, pipelines,
+image under the back buffer, 4 no gamma ramp, 8 the most invalidated pages every 300 frames). The stats line every 300 swaps counts draws, skips, pipelines,
 uploads, resolves, aliases and the time spent creating pipelines and uploading textures.
 
 For a run: `kkshaders-spirv.pack` (and `kkshaders-dxil.pack` for D3D12) from `kkshaders db-build ... --split`
@@ -345,20 +345,76 @@ the chapter had loaded) and Venture on a lightning flash. Run again with warm ca
 
 SV_VertexID includes the base vertex on D3D12 as on Vulkan for these draws (the indexed scenes match).
 
+### Phase 2b: after the cloud merges (render scale, pipeline cache, frame log)
+
+Scores with frame logs (no `-NoFrameLog`), Vulkan, worst frame (outside-range share / MAE) and the draw-list
+ratio where the scene has a frame log. Runs `native-20261011-011849` (the first eleven scenes) and
+`native-20261011-013000` (Venture and Kong to the Rescue, run again after a demo of the user's ran beside the
+first run's Venture):
+
+| Scene | Result | Frames | Draw list |
+|---|---|---|---|
+| video | pass 0.0000 / 0.10 | 3/3 | 1.000 |
+| title | pass 0.0000 / 0.01 | 3/3 | 1.000 |
+| save_menu | pass 0.0001 / 1.25 | 3/3 | 1.000 |
+| main_menu | pass 0.0002 / 1.49 | 3/3 | |
+| chapter_select | pass 0.0008 / 1.39 | 3/3 | |
+| loading | pass 0.0000 / 0.01 | 3/3 | |
+| vrex_110 | pass 0.2433 / 27.32 (a lightning frame; 3 of 5 needed) | 4/5 | |
+| vrex_140 | pass 0.0006 / 3.42 | 5/5 | 0.986 |
+| vrex_170 | pass 0.0002 / 3.20 | 5/5 | |
+| pause | pass 0.0000 / 0.00 | 3/3 | |
+| venture | pass 0.0024 / 3.79 | 5/5 | 0.975 |
+| kong_cutscene | pass 0.0004 / 7.99 | 3/3 | |
+| kong | pass 0.0035 / 9.17 | 5/5 | 0.997 |
+
+13/13. What it took after the merges (the first run with frame logs, `native-20261010-235005`, had the
+pictures of twelve scenes and draw lists far off):
+
+- **Frame log parity** ("The frame log" below): the library's Clear is its own draw, the vertex shader hash
+  comes from a hook after the library's fetch patching (NrApi 4), a draw's line waits for its draw to return,
+  resolve lines carry the library's copy command and depth format, the library's shader survey draws are
+  left out by `compare.py`. Title and menus 1.000, V-Rex 0.986, Venture 0.975 (the Xenos self-checks give
+  Venture 0.988 to 0.995: rain and lightning differ from run to run), Kong 0.997.
+- **The V-Rex loading screen** keeps the last frame of a fade on screen while the chapter loads, and that
+  frame's darkening draws had pipelines nobody had made yet: skipped, the frozen picture was too bright
+  (MAE 0.62, tile MAE 12.9). Draws now wait up to 30 ms a frame for their pipelines
+  (`--native_pipeline_wait_budget_ms`, "Pipeline cache" below). Which fade frame freezes still depends on
+  timing: one run in three froze a frame later (MAE 0.21, tile MAE 4.2 against a limit of 2).
+- **A crash in the NVIDIA driver** at the start of Venture (`nvoglv64.dll`, inside `vkCmdPipelineBarrier2` at
+  the frame command list's `close()`): textures and buffers the caches released were destroyed at once,
+  while the open command list still held their state (NVRHI's Vulkan clears do not keep a reference) and
+  frames in flight could still sample them through the bindless tables. They are now kept for 8 frames
+  (`RetireResource`). Found from the crash dump by relinking the plugin with a map file (the build has no
+  PDB): Renderer::OnPresent, CommandList::close, commitBarriersInternal.
+- **Venture ran at 18 frames a second** in gameplay (Xenos: 30), every run since Phase 2 began (about 370
+  hitches per Venture run against 4 on Xenos; V-Rex about 170 against 4). Two causes in the guest memory
+  watches:
+  - Every resolve re-armed the watch on its destination (`TextureCache::MarkGpuWritten`): about 0.8 ms each
+    for a 1280x720 target, 13 ms a frame. Entries now remember that they are watched (`ResidentEntry::watched`,
+    cleared by an invalidation) and are not armed again.
+  - The game rewrites a 7 MB vertex buffer every three frames and each 4 KB page faulted on its own (about
+    600 faults a frame; `--native_debug=8` logs the most invalidated pages and which cache owns them). The
+    invalidation callback now returns the whole watched buffer range that the write touched
+    (`GameRenderer::OnGuestWrite`), so the SDK unwatches it at once: one fault per buffer. Texture ranges are
+    never widened, and no widening may reach over a texture: a first version that widened every watched
+    range invalidated textures a resolve had written and replaced their picture with stale guest memory
+    (Venture's hull too bright, MAE 14).
+
+  Venture's gameplay now runs at 30 frames a second (about 65 frames over 50 ms per 10 s remain, 200
+  hitches per run; V-Rex 7). The statistics line every 300 swaps now also gives the game thread's time in the
+  renderer's draws, clears, resolves and presents and in the watches.
+
 ### Open problems (Phase 2)
 
-- **Cold pipeline caches.** Pipelines are created on the render thread when a draw first needs them; the
-  first visit to a chapter on a machine whose driver has not seen them stalls for seconds (Kong to the
-  Rescue: about 9 s on Vulkan, 4 s on D3D12). Creating pipelines on a worker (and skipping the draw until it
-  is ready, as the Xenos plugin can), or recording the pipeline descriptions and creating them at start,
-  would fix it.
-- **Write watches during movies.** The movie planes are rewritten every frame; each page write faults once
-  per frame (about 360 invalidations a frame in the Venture opening's movie, 3 texture uploads of 3 ms each).
-  Fine at 30 frames a second, worth a look for higher frame rates (the planes could skip the watches: their
-  Lock / Unlock is hooked-able).
-- **Draw-list comparison.** The native plugin now writes `REX_DEV_FRAME_LOG` lines (see "The frame log" below).
-  Unverified against the game: the vertex shader hash is reproduced from the library's patching rules and has
-  not been compared with the Xenos log. Run `kkshaders vfetch-check <xeshaders.bin>` on Windows first.
+- **Cold pipeline caches.** Pipelines are made on four worker threads (Vulkan) and draws wait up to 30 ms a
+  frame for them, then skip; with `--native_pipeline_cache` the descriptions of earlier runs are made at
+  start. See "Pipeline cache" below for the measurements.
+- **Write watches.** Venture's gameplay still has about 10,000 invalidations a second and its movie about 360
+  a frame (texture pages; textures are never unwatched whole, see Phase 2b above). The movie planes could
+  skip the watches (their Lock / Unlock can be hooked).
+- **The Xenos plugin leaves a draw's pixel shader out of its log** when the draw writes no colour (no target,
+  no kill or depth output, Xenia's "pixel shader not needed"); the native log keeps it. One line in Venture.
 - **Linux tests and the endian default.** `nr_game_tests` (Linux, lavapipe) were written with the buffer's
   endian; with `element_endian` on by default, a test whose elements' declared endian differs from the
   buffer's would now read differently. Not run here (no Linux).

@@ -54,6 +54,10 @@ struct ResidentEntry {
   uint32_t uploads = 0;        // how many times the host copy was (re)built
   bool dirty = false;          // guest memory written since the last upload / check
   bool gpu_written = false;    // a resolve wrote the host copy; guest memory is stale
+  // The ranges are watched for CPU writes (watch_range called, no invalidation since): watching
+  // again is skipped. Arming a watch protects every page of the range, which for a resolved
+  // 1280x720 target is close to a millisecond; the game resolves into the same textures every frame.
+  bool watched = false;
   void* host = nullptr;        // the renderer's host resource
 };
 
@@ -87,6 +91,9 @@ class TextureCache {
 
   // Guest memory [physical, physical + bytes) was written by the CPU (write watch or Unlock).
   void InvalidateRange(uint32_t physical, uint32_t bytes);
+  // How many entries own guest memory in [physical, physical + bytes) (debugging), and of those
+  // how many uploads they had in all.
+  size_t CountOverlapping(uint32_t physical, uint32_t bytes, uint64_t* uploads = nullptr) const;
   // A resolve wrote this texture on the GPU.
   Entry& MarkGpuWritten(const TextureFetch& fetch, uint64_t frame);
 
@@ -125,6 +132,9 @@ class BufferCache {
                   uint64_t frame);
   void OnUploaded(Entry& entry, const GuestMemory& memory);
   void InvalidateRange(uint32_t physical, uint32_t bytes);
+  // How many entries own guest memory in [physical, physical + bytes) (debugging), and of those
+  // how many uploads they had in all.
+  size_t CountOverlapping(uint32_t physical, uint32_t bytes, uint64_t* uploads = nullptr) const;
   size_t Trim(uint64_t frame, uint64_t max_age);
   size_t size() const { return entries_.size(); }
 

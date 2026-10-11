@@ -44,8 +44,34 @@ void InvalidateIndexed(std::unordered_map<uint32_t, std::vector<E*>>& pages, uin
     if (it == pages.end()) continue;
     for (E* e : it->second)
       for (const GuestRange& r : e->ranges)
-        if (r.Overlaps(physical, bytes)) e->dirty = true;
+        if (r.Overlaps(physical, bytes)) {
+          e->dirty = true;
+          e->watched = false;  // the write disarmed the watch
+        }
   }
+}
+
+template <typename E>
+size_t CountIndexed(const std::unordered_map<uint32_t, std::vector<E*>>& pages, uint32_t physical, uint32_t bytes,
+                    uint64_t* uploads) {
+  size_t n = 0;
+  if (uploads) *uploads = 0;
+  if (!bytes) return 0;
+  const uint32_t first = physical >> kPageShift, last = (physical + bytes - 1) >> kPageShift;
+  std::vector<const E*> seen;
+  for (uint32_t p = first; p <= last; ++p) {
+    auto it = pages.find(p);
+    if (it == pages.end()) continue;
+    for (const E* e : it->second) {
+      bool hit = false;
+      for (const GuestRange& r : e->ranges) hit = hit || r.Overlaps(physical, bytes);
+      if (!hit || std::find(seen.begin(), seen.end(), e) != seen.end()) continue;
+      seen.push_back(e);
+      ++n;
+      if (uploads) *uploads += e->uploads;
+    }
+  }
+  return n;
 }
 
 uint64_t HashResident(const ResidentEntry& e, const GuestMemory& memory) {
@@ -58,10 +84,11 @@ uint64_t HashResident(const ResidentEntry& e, const GuestMemory& memory) {
   return h;
 }
 
-void Watch(const std::function<void(uint32_t, uint32_t)>& watch, const ResidentEntry& e) {
-  if (!watch) return;
+void Watch(const std::function<void(uint32_t, uint32_t)>& watch, ResidentEntry& e) {
+  if (!watch || e.watched) return;
   for (const GuestRange& r : e.ranges)
     if (r.bytes) watch(r.start, r.bytes);
+  e.watched = true;
 }
 
 }  // namespace
@@ -154,6 +181,9 @@ void TextureCache::OnUploaded(Entry& e, const GuestMemory& memory) {
 }
 
 void TextureCache::InvalidateRange(uint32_t physical, uint32_t bytes) { InvalidateIndexed(pages_, physical, bytes); }
+size_t TextureCache::CountOverlapping(uint32_t physical, uint32_t bytes, uint64_t* uploads) const {
+  return CountIndexed(pages_, physical, bytes, uploads);
+}
 
 TextureCache::Entry& TextureCache::MarkGpuWritten(const TextureFetch& fetch, uint64_t frame) {
   const TextureKey key = MakeTextureKey(fetch);
@@ -223,6 +253,9 @@ void BufferCache::OnUploaded(Entry& e, const GuestMemory& memory) {
 }
 
 void BufferCache::InvalidateRange(uint32_t physical, uint32_t bytes) { InvalidateIndexed(pages_, physical, bytes); }
+size_t BufferCache::CountOverlapping(uint32_t physical, uint32_t bytes, uint64_t* uploads) const {
+  return CountIndexed(pages_, physical, bytes, uploads);
+}
 
 size_t BufferCache::Trim(uint64_t frame, uint64_t max_age) {
   size_t dropped = 0;

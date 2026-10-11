@@ -23,6 +23,7 @@
 #include <deque>
 #include <functional>
 #include <memory>
+#include <map>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -90,7 +91,8 @@ class GameRenderer {
     // Log every draw of this game frame (-1 none).
     int32_t dump_frame = -1;
     // Debugging aids (bits): 1 the game's clears are green, 2 the frame image
-    // is magenta before the back buffer is copied in.
+    // is magenta before the back buffer is copied in, 4 no gamma ramp, 8 log the pages CPU writes
+    // invalidate most (every 300 frames).
     uint32_t debug = 0;
   };
 
@@ -143,6 +145,11 @@ class GameRenderer {
   void set_watch(std::function<void(uint32_t physical, uint32_t bytes)> watch);
   // Guest memory was written by the CPU (any thread).
   void InvalidateRange(uint32_t physical, uint32_t bytes);
+  // The SDK's notification of a CPU write to watched memory (any thread, inside its fault handler):
+  // invalidates and returns the range that may be unwatched, which is every watched range the write
+  // touched, whole. A game that rewrites a 7 MB vertex buffer then faults once for it instead of
+  // once per 4 KB page (1,800 faults a frame in Venture, 18 instead of 30 frames a second).
+  std::pair<uint32_t, uint32_t> OnGuestWrite(uint32_t physical, uint32_t bytes);
 
   void Draw(nvrhi::ICommandList* cl, const DrawCall& call);
   void Clear(nvrhi::ICommandList* cl, const ClearCall& call);
@@ -287,6 +294,9 @@ class GameRenderer {
   HostBuffer* BindIndexBuffer(nvrhi::ICommandList* cl, uint32_t physical, uint32_t bytes,
                               bool index32);
   void ProcessInvalidations();
+  void LogInvalidationHistogram();
+  std::unordered_map<uint32_t, uint64_t> invalidation_histogram_;  // --native_debug=8
+  uint64_t invalidation_bytes_ = 0;
 
   // ---- pipelines
   // async: the game's draws (may return null while the worker creates it);
@@ -413,6 +423,9 @@ class GameRenderer {
   kknr::BufferCache index_buffers_;
   std::unordered_map<uint64_t, std::pair<nvrhi::SamplerHandle, uint32_t>> samplers_;
   std::function<void(uint32_t, uint32_t)> watch_;
+  // The ranges watched now (start -> end, overlapping ones merged), for OnGuestWrite.
+  std::mutex watched_mutex_;
+  std::map<uint32_t, uint32_t> watched_buffers_, watched_textures_;
   std::mutex invalidation_mutex_;
   std::vector<std::pair<uint32_t, uint32_t>> invalidations_;
 

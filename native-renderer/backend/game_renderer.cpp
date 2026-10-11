@@ -128,11 +128,55 @@ GameRenderer::~GameRenderer() {
   index_buffers_.Trim(UINT64_MAX / 2, 0);
 }
 
+namespace {
+// Adds [start, start + bytes) to a map of disjoint ranges (start -> end), merged with the ranges it
+// overlaps (not the ones it only touches: neighbours stay apart).
+void AddRange(std::map<uint32_t, uint32_t>& ranges, uint32_t physical, uint32_t bytes) {
+  uint32_t start = physical, end = physical + bytes;
+  auto it = ranges.upper_bound(start);
+  if (it != ranges.begin() && std::prev(it)->second > start) --it;
+  while (it != ranges.end() && it->first < end) {
+    start = std::min(start, it->first);
+    end = std::max(end, it->second);
+    it = ranges.erase(it);
+  }
+  ranges[start] = end;
+}
+// The first range of the map that overlaps [start, end), or end().
+std::map<uint32_t, uint32_t>::iterator FirstOverlap(std::map<uint32_t, uint32_t>& ranges, uint32_t start,
+                                                    uint32_t end) {
+  auto it = ranges.upper_bound(start);
+  if (it != ranges.begin() && std::prev(it)->second > start) --it;
+  return it != ranges.end() && it->first < end ? it : ranges.end();
+}
+}  // namespace
+
 void GameRenderer::set_watch(std::function<void(uint32_t, uint32_t)> watch) {
-  watch_ = std::move(watch);
-  textures_.watch_range = watch_;
-  vertex_buffers_.watch_range = watch_;
-  index_buffers_.watch_range = watch_;
+  watch_ = watch;
+  if (watch) {
+    // Buffers: their ranges are unwatched whole on a write (OnGuestWrite). Textures: never
+    // widened, and a widening that would reach one is not made: a texture a resolve wrote holds
+    // the GPU's picture, which guest memory does not have, and invalidating it for a write
+    // beside it would replace the picture with stale memory.
+    vertex_buffers_.watch_range = index_buffers_.watch_range = [this, watch](uint32_t physical, uint32_t bytes) {
+      if (!bytes) return;
+      {
+        std::lock_guard lock(watched_mutex_);
+        AddRange(watched_buffers_, physical, bytes);
+      }
+      watch(physical, bytes);
+    };
+    textures_.watch_range = [this, watch](uint32_t physical, uint32_t bytes) {
+      if (!bytes) return;
+      {
+        std::lock_guard lock(watched_mutex_);
+        AddRange(watched_textures_, physical, bytes);
+      }
+      watch(physical, bytes);
+    };
+  } else {
+    textures_.watch_range = vertex_buffers_.watch_range = index_buffers_.watch_range = nullptr;
+  }
 }
 
 bool GameRenderer::Initialize() {
@@ -332,6 +376,44 @@ void GameRenderer::WriteSlot(Table table, const nvrhi::BindingSetItem& item) {
   device_->writeDescriptorTable(tables_[table].table, item);
 }
 
+std::pair<uint32_t, uint32_t> GameRenderer::OnGuestWrite(uint32_t physical, uint32_t bytes) {
+  const uint32_t write_end = physical + std::max(bytes, 1u);
+  uint32_t start = physical, end = write_end;
+  {
+    std::lock_guard lock(watched_mutex_);
+    // The buffer ranges the write touches, whole.
+    for (auto it = FirstOverlap(watched_buffers_, physical, write_end); it != watched_buffers_.end() &&
+                                                                         it->first < write_end;
+         ++it) {
+      start = std::min(start, it->first);
+      end = std::max(end, it->second);
+    }
+    // Not over a texture beyond what the write itself touched.
+    const bool widened = start < physical || end > write_end;
+    const bool over_texture = widened && ((start < physical && FirstOverlap(watched_textures_, start, physical) !=
+                                                                   watched_textures_.end()) ||
+                                          (end > write_end && FirstOverlap(watched_textures_, write_end, end) !=
+                                                                  watched_textures_.end()));
+    if (over_texture) {
+      start = physical;
+      end = write_end;
+    }
+    // What is unwatched now is watched no more.
+    for (auto* ranges : {&watched_buffers_, &watched_textures_}) {
+      for (auto it = FirstOverlap(*ranges, start, end); it != ranges->end() && it->first < end;) {
+        // A range partly outside stays (the SDK keeps the rest of its pages watched).
+        if (it->first >= start && it->second <= end) {
+          it = ranges->erase(it);
+        } else {
+          ++it;
+        }
+      }
+    }
+  }
+  InvalidateRange(start, end - start);
+  return {start, end - start};
+}
+
 void GameRenderer::InvalidateRange(uint32_t physical, uint32_t bytes) {
   std::lock_guard lock(invalidation_mutex_);
   invalidations_.emplace_back(physical, bytes);
@@ -347,8 +429,36 @@ void GameRenderer::ProcessInvalidations() {
     textures_.InvalidateRange(start, bytes);
     vertex_buffers_.InvalidateRange(start, bytes);
     index_buffers_.InvalidateRange(start, bytes);
+    if (options_.debug & 8) {
+      ++invalidation_histogram_[start & ~0xFFFu];
+      invalidation_bytes_ += bytes;
+    }
   }
   stats_.invalidations += list.size();
+}
+
+void GameRenderer::LogInvalidationHistogram() {
+  // --native_debug=8: the pages CPU writes invalidated most since the last report.
+  std::vector<std::pair<uint64_t, uint32_t>> top;
+  for (const auto& [page, count] : invalidation_histogram_) top.emplace_back(count, page);
+  std::sort(top.begin(), top.end(), std::greater<>());
+  std::string text;
+  for (size_t i = 0; i < top.size() && i < 12; ++i) {
+    // Which caches own the page: textures, vertex and index buffers (entries, their uploads).
+    uint64_t tu = 0, vu = 0, iu = 0;
+    const size_t t = textures_.CountOverlapping(top[i].second, 4096, &tu);
+    const size_t v = vertex_buffers_.CountOverlapping(top[i].second, 4096, &vu);
+    const size_t n = index_buffers_.CountOverlapping(top[i].second, 4096, &iu);
+    char item[128];
+    std::snprintf(item, sizeof(item), " %08X x%llu [t%zu/%llu v%zu/%llu i%zu/%llu]", top[i].second,
+                  static_cast<unsigned long long>(top[i].first), t, static_cast<unsigned long long>(tu), v,
+                  static_cast<unsigned long long>(vu), n, static_cast<unsigned long long>(iu));
+    text += item;
+  }
+  Logf(LogLevel::kInfo, "rexgpu-native: invalidations by page (%zu pages, %llu bytes):%s", top.size(),
+       static_cast<unsigned long long>(invalidation_bytes_), text.c_str());
+  invalidation_histogram_.clear();
+  invalidation_bytes_ = 0;
 }
 
 void GameRenderer::EndFrame() {
@@ -362,6 +472,7 @@ void GameRenderer::EndFrame() {
   }
   while (!retired_resources_.empty() && retired_resources_.front().first + 8 < frame_) retired_resources_.pop_front();
   if (frame_ % 300 == 0) {
+    if (options_.debug & 8) LogInvalidationHistogram();
     textures_.Trim(frame_, 1800);
     vertex_buffers_.Trim(frame_, 1800);
     index_buffers_.Trim(frame_, 1800);

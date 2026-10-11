@@ -65,6 +65,30 @@ TEST(texture_cache_upload_only_on_change) {
   CHECK(cache.Bind(f, memory, 5).action == BindAction::kUseExisting);
 }
 
+TEST(texture_cache_watches_once_until_a_write) {
+  // Arming a watch is costly (every page of the range is protected): an entry still watched is not
+  // watched again, by a check, an upload or a resolve; a write disarms it.
+  FakeGuest guest;
+  const GuestMemory memory{guest.bytes.data(), guest.bytes.size()};
+  TextureCache cache;
+  int calls = 0;
+  cache.watch_range = [&](uint32_t, uint32_t) { ++calls; };
+  const TextureFetch f = Fetch64();
+  TextureCache::BindResult r = cache.Bind(f, memory, 1);
+  cache.OnUploaded(*r.entry, memory);
+  CHECK_EQ(calls, 2);  // base and mips
+  CHECK(r.entry->watched);
+  cache.MarkGpuWritten(f, 2);  // a resolve into it, every frame in the game
+  cache.MarkGpuWritten(f, 3);
+  CHECK_EQ(calls, 2);
+  cache.InvalidateRange(kBase + 100, 4);
+  CHECK(!r.entry->watched);
+  CHECK(cache.Bind(f, memory, 4).action == BindAction::kReupload);  // the resolve's copy is stale now
+  cache.OnUploaded(*r.entry, memory);
+  CHECK_EQ(calls, 4);
+  CHECK(r.entry->watched);
+}
+
 TEST(texture_cache_key_ignores_sampler_state) {
   FakeGuest guest;
   const GuestMemory memory{guest.bytes.data(), guest.bytes.size()};

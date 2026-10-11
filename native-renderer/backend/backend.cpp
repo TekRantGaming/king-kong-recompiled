@@ -1,5 +1,8 @@
 #include "backend/backend.h"
 
+#include <atomic>
+#include <chrono>
+
 #include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/system/xmemory.h>
@@ -27,6 +30,21 @@ const uint8_t* RuntimeGuestMemory::Physical(uint32_t address) const {
 
 namespace {
 
+// Time the game's thread spends in the renderer's calls (lock wait included), in microseconds,
+// for the periodic statistics line: draws, clears, resolves, presents.
+std::atomic<uint64_t> g_call_us[5];  // + 4: watching guest memory (inside the others)
+std::atomic<uint64_t> g_watch_calls;
+struct CallTimer {
+  explicit CallTimer(int kind) : kind_(kind), start_(std::chrono::steady_clock::now()) {}
+  ~CallTimer() {
+    g_call_us[kind_].fetch_add(uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
+                                            std::chrono::steady_clock::now() - start_).count()),
+                               std::memory_order_relaxed);
+  }
+  int kind_;
+  std::chrono::steady_clock::time_point start_;
+};
+
 // Records every renderer call under the backend's lock.
 class LockedSink final : public DrawSink {
  public:
@@ -53,6 +71,7 @@ class LockedSink final : public DrawSink {
                   c.frame, c.flags, c.rgba[0], c.rgba[1], c.rgba[2], c.rgba[3], c.z,
                   c.render_target0, c.depth_stencil);
     }
+    CallTimer timer(1);
     std::lock_guard lock(mutex_);
     inner_.OnClear(c);
   }
@@ -73,6 +92,7 @@ class LockedSink final : public DrawSink {
           m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], m[12], m[13], m[14],
           m[15]);
     }
+    CallTimer timer(0);
     std::lock_guard lock(mutex_);
     inner_.OnDraw(d);
   }
@@ -81,6 +101,7 @@ class LockedSink final : public DrawSink {
       REXLOG_INFO("rexgpu-native: frame {} resolve flags {:X} to {:08X} rt0 {:08X}", r.frame,
                   r.flags, r.dest_texture, r.render_target0);
     }
+    CallTimer timer(2);
     std::lock_guard lock(mutex_);
     inner_.OnResolve(r);
   }
@@ -88,6 +109,7 @@ class LockedSink final : public DrawSink {
     if (Dump(frame)) {
       REXLOG_INFO("rexgpu-native: frame {} present rt0 {:08X}", frame, rt0);
     }
+    CallTimer timer(3);
     std::lock_guard lock(mutex_);
     inner_.OnPresent(frame, rt0, device);
   }
@@ -162,8 +184,7 @@ void LogToRuntime(LogLevel level, const char* text) {
 std::pair<uint32_t, uint32_t> InvalidationThunk(void* context, uint32_t start, uint32_t length,
                                                 bool /*exact_range*/) {
   auto* game = static_cast<GameRenderer*>(context);
-  game->InvalidateRange(start, length);
-  return {start, length};
+  return game->OnGuestWrite(start, length);
 }
 #endif
 
@@ -246,6 +267,8 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
       renderer->SetFrameLog(FrameLogConfig::Parse(game.frame_log.c_str()));
       rex::memory::Memory* memory = memory_;
       renderer->set_watch([memory](uint32_t physical_address, uint32_t bytes) {
+        CallTimer timer(4);
+        g_watch_calls.fetch_add(1, std::memory_order_relaxed);
         memory->EnablePhysicalMemoryAccessCallbacks(physical_address, bytes, true, false);
       });
       invalidation_handle_ = memory_->RegisterPhysicalMemoryInvalidationCallback(InvalidationThunk, renderer.get());
@@ -326,12 +349,15 @@ void Backend::Present(rex::ui::Presenter* presenter, uint32_t frontbuffer_width,
           "rexgpu-native: game renderer: {} draws, skipped {} (shader) {} (target) {} (primitive) {} "
           "(pipeline) {} (pipeline not ready) {} (device); {} pipelines ({} drawn after a wait, {:.0f} ms waited); {} texture uploads ({} failed), {} buffer uploads, "
           "{} clears, {} resolves ({} failed), {} invalidations; shaders {} created, {} from the pack, "
-          "{} compiled, {} failed, {} from objects; {:.0f} ms in pipeline creation, {:.0f} ms in texture uploads, {} aliased ({} failed)",
+          "{} compiled, {} failed, {} from objects; {:.0f} ms in pipeline creation, {:.0f} ms in texture uploads, {} aliased ({} failed); "
+          "game thread in the renderer: {} ms draws, {} ms clears, {} ms resolves, {} ms presents ({} ms in {} watch calls)",
           s.draws, s.skipped_shader, s.skipped_target, s.skipped_primitive, s.skipped_pipeline,
           s.skipped_pending, s.skipped_device, s.pipelines, s.pipeline_budget_waits + s.pipeline_waits,
           s.pipeline_wait_ms, s.texture_uploads, s.texture_failures, s.buffer_uploads,
           s.clears, s.resolves, s.resolve_failures, s.invalidations, sh.created, sh.from_pack,
-          sh.compiled, sh.failed, sh.from_object, s.pipeline_ms, s.texture_ms, s.aliases, s.alias_failures);
+          sh.compiled, sh.failed, sh.from_object, s.pipeline_ms, s.texture_ms, s.aliases, s.alias_failures,
+          g_call_us[0].load() / 1000, g_call_us[1].load() / 1000, g_call_us[2].load() / 1000,
+          g_call_us[3].load() / 1000, g_call_us[4].load() / 1000, g_watch_calls.load());
     }
 #endif
   }
