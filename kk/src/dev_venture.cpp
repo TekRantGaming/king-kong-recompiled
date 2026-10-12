@@ -83,7 +83,7 @@ REX_HOOK_RAW(sub_82850100) {
 REX_EXTERN(__imp__sub_823F8AF0);
 REX_EXTERN(__imp__sub_82702518);
 REX_HOOK_RAW(sub_82702518) {
-  if (ActionTrace()) {
+  if (ActionTrace() && kk::hfr::FrameTime(base) != 0.0f) {  // (pose evaluations run with a zero step)
     using namespace kk::hfr;
     const uint32_t key = ctx.r3.u32;
     const uint32_t obj = Load32(base, 0x82CCBF8C);  // the object being animated (-16500)
@@ -104,5 +104,31 @@ REX_HOOK_RAW(sub_82702518) {
                 FrameTime(base));
   }
   __imp__sub_82702518(ctx, base);
+}
+#endif
+
+#if defined(KK_DEV_TOOLS)
+// KK_DEV_KEYS_OBJ=421329F0: the event key player (sub_8271BA18(track list,
+// state, ?, out)) for that object's main track: key index and count, time in
+// the key before and after, the time step, and what it returns (1: the end of
+// the animation, which counts a loop and can move to the next action).
+REX_EXTERN(__imp__sub_8271BA18);
+REX_HOOK_RAW(sub_8271BA18) {
+  using namespace kk::hfr;
+  static const uint32_t want = [] {
+    const char* v = std::getenv("KK_DEV_KEYS_OBJ");
+    return v && *v ? uint32_t(std::stoul(v, nullptr, 16)) : 0u;
+  }();
+  const uint32_t tracks = ctx.r3.u32, state = ctx.r4.u32;
+  const uint32_t obj = Load32(base, 0x82CCBF88);  // -16504: the object being animated
+  const uint32_t main_track = Load32(base, 0x82CCBF94) ? Load32(base, Load32(base, 0x82CCBF94)) : 0;  // [[-16492]]
+  const bool trace = want && obj == want && tracks == main_track;
+  const uint16_t i0 = trace ? Load16(base, state + 8) : 0;
+  const float t0 = trace ? LoadF(base, state) : 0.0f;
+  const float step = FrameTime(base);
+  __imp__sub_8271BA18(ctx, base);
+  if (!trace) return;
+  REXLOG_INFO("KK dev keys: key {}->{} of {} t {:.5f}->{:.5f} step {:.5f} ret {} action {}", i0, Load16(base, state + 8),
+              Load16(base, tracks + 16), t0, LoadF(base, state), step, int32_t(ctx.r3.u32), CurrentAction(base, obj));
 }
 #endif
