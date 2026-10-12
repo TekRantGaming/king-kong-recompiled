@@ -16,7 +16,7 @@ launcher backdrop; the Original card shows a smaller copy of it), a caption, a t
 | Card | Applies |
 |---|---|
 | **Original**, "The Xbox 360 as it was" | the Original look (`kk_original_look`, `OriginalLookSettings`: 720p, 30 FPS, the console's AA and filtering, 69 degree FOV, motion blur, screen blur, fog, no AO) |
-| **Remastered**, "Sharper, with soft shadows" | the Modern look, renamed **Remastered** on the Graphics page, with the preset below, `ao_mode` 1 at strength 1, and with the native renderer `native_ao_method = gtao`, `native_ao_apply = opaque`, `native_ao_quality = auto` |
+| **Remastered**, "Sharper, with soft shadows" | the Modern look, renamed **Remastered** on the Graphics page, with the preset below, **60 FPS** (`kk_frame_rate` 60), `ao_mode` 1 at strength 1, and with the native renderer `native_ao_method = gtao`, `native_ao_apply = opaque`, `native_ao_quality = auto` |
 
 Both keep the native renderer (`kk_renderer = native`). Left / Right (and Up / Down) move between the cards, A or
 Enter or a click picks one; the footer shows Change and Select. The step cannot be skipped (it has no Back); it ends
@@ -36,6 +36,11 @@ With `--native_render_scale=auto` (the beta's default) the native renderer draws
 gives for the screen (`backend.md`, "Defaults"). Medium and Steam Deck with GTAO show as Custom in the Preset row
 (those presets have no AO); High and Ultra match their presets.
 
+**Frame rate**: Remastered sets 60 FPS, Original keeps the console's 30 (the Original look sets it). Look ->
+Remastered with no settings put aside yet (the look step wasn't used) gives Medium at 60 FPS. The frame rate can
+still be changed on the Gameplay page. The warning before Play ("Frame rate above 30 FPS") now opens only above
+60 FPS, so a Remastered player is not asked at every Play (this beta has the high-frame-rate fixes).
+
 **Changing it later**: Graphics > Look ("Original Xbox 360" / "Remastered"). Choosing Original at setup first
 applies Remastered and then the Original look, so the settings the Original look puts aside (`kk_modern_settings`)
 are the Remastered ones: switching Look to Remastered later gives exactly Remastered. With AO on and the native
@@ -45,6 +50,11 @@ renderer, Graphics shows **AO method** (GTAO (new) / Classic = `native_ao_method
 **The renderer**: Graphics > Advanced > **Renderer**: "Native (beta)" or "Classic (emulated GPU)", with a description
 saying Classic is there to compare. It is `kk_renderer` (below); changing it restarts the game when Play is pressed
 (`gpu_plugin` is in the launcher's restart list), because the plugin is loaded before the launcher opens.
+
+**Shader preparation wording**: wherever the native shaders are being prepared, the launcher says "Your PC may run
+slower until this finishes, because preparing the shaders uses its processor." (`KK_SLOW_PC` in `launcher.cpp`):
+the setup's shader step, the recompile pop-up, the "Preparing shaders" wait pop-up, and a short faint line under the
+SHADERS progress bar on Home ("Your PC may run slower until this finishes.").
 
 ### 2. Recompile shaders on Home
 
@@ -110,6 +120,22 @@ Reset page (Graphics) also resets `kk_renderer` and the three `native_ao_*`; Res
 
 ## Stable and beta
 
+**Which update a player is offered** (`PickUpdate` in `kk/src/update.cpp`, used by `CheckForUpdate`):
+
+| Channel | Offered |
+|---|---|
+| stable | the main repo's latest release when newer; betas never |
+| beta | the beta repo's latest release when newer; a stable release only when its numbers (x.y.z) are at least the running build's and it is newer, i.e. the beta's own final release (stable 2.0.0 for 2.0.0-beta.N) or later; a lower stable (a 1.9.12 hotfix) is ignored. Beta repo empty or not answering: no update (not stable). Neither repo answering: "Could not check for updates." |
+| Change version to stable | the main repo's latest, when it differs from this build (older too) |
+| Change version to beta | the beta repo's latest, when it differs; none: "There's no beta build right now" (as before) |
+
+Checked with the dev token `update-test` (`RunUpdatePickTests`, 13 cases, all ok in
+`runs\1012-161018-beta1-changes`): beta on 2.0.0-beta.1 sees beta.2; ignores stable 1.9.12 (with and without a beta);
+takes stable 2.0.0 (also over a newer beta) and 2.1.0; beta repo empty -> no update; stable never sees betas; both
+switches. `update.h`'s header comment says the same. CHANGELOG.md's v1.9.10 notes ("until there is, the beta gets
+stable versions", "the beta channel takes whichever of the two is newer") describe the old rule: the release notes of
+the beta should say the new one.
+
 From the release session's review of the update channel:
 
 1. **Switching back to stable** (`FinishChannelSwitch`, when a stable version was found and is about to be
@@ -149,6 +175,7 @@ uns`):
 | `1012-151800-recompile` | Home: mouse click on SHADERS, the pop-up, Enter on Yes, Play during the build | `shader pack: rebuilding (asked for)`, status "Preparing N%", "Preparing shaders" pop-up, built in 42.4 s, the game started from the new pack |
 | `1012-153324-fullscreen-mode` | fullscreen with a mode | found the SDL problem above; the feature is now off |
 | `1012-154855-classic-switch` | Graphics > Renderer to Classic, Play | the launcher restarted the game; `KK: renderer xenos (kk_renderer classic)`; the Xenos renderer reached the menus; `kk_renderer = "classic"` saved, no `gpu_plugin` |
+| `1012-161018-beta1-changes` | `update-test`; `setup:4` wording; look step -> Remastered; Home recompile with the new wording; Play at 60 FPS | the 13 update cases ok; `kk_frame_rate = 60` saved; no frame-rate warning at Play, the wait pop-up and the Home line show the new wording |
 | `1012-155323-channel-checks` | a settings file with `gpu_plugin = "native"`, `kk_renderer`, `kk_fullscreen_mode`, `native_ao_*`; dev token `reset-beta` | all five reset, the saved file keeps only stable's settings |
 
 ## Decisions
