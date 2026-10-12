@@ -22,6 +22,7 @@ add_library(nr_renderer STATIC
     renderer.cpp
     ambient_occlusion.cpp
     shaders.cpp
+    output_blit.cpp
     log.cpp
 )
 target_include_directories(nr_renderer PUBLIC "${NR_ROOT}")

@@ -1,5 +1,6 @@
 // NVRHI on the SDK's VulkanProvider device and graphics queue, and the
-// hand-over of a frame to the VulkanPresenter's guest output image.
+// hand-over of a frame to the VulkanPresenter's guest output image (drawn,
+// not copied: the SDK makes that image without TRANSFER_DST usage).
 //
 // Built with the Linux SDK bundle (the Windows bundle has no Vulkan).
 // NVRHI is a Vulkan 1.3 library: on a device it did not create it needs
@@ -27,11 +28,13 @@
 #include <rex/ui/vulkan/provider.h>
 
 #include "backend/host_device.h"
+#include "backend/output_blit.h"
 #include "backend/vk_pipeline_cache.h"
 #include "backend/vulkan_dispatch.h"
 
 REXCVAR_DECLARE(bool, native_validation);
 REXCVAR_DECLARE(bool, native_vk_pipeline_cache);
+REXCVAR_DECLARE(int32_t, native_debug);
 
 namespace nr {
 
@@ -83,6 +86,7 @@ class VulkanHost final : public HostDevice {
     if (REXCVAR_GET(native_validation)) {
       device_ = nvrhi::validation::createValidationLayer(device_);
     }
+    output_blit_ = std::make_unique<OutputBlit>(device_);
     return true;
   }
 
@@ -136,7 +140,7 @@ class VulkanHost final : public HostDevice {
     command_list->commitBarriers();
 
     // Acquire: from the presenter's internal layout (or undefined for a
-    // never-written image) to transfer destination.
+    // never-written image) to colour attachment.
     VkImageMemoryBarrier barrier = {};
     barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -147,28 +151,39 @@ class VulkanHost final : public HostDevice {
     barrier.subresourceRange.layerCount = 1;
     bool written = vulkan_context.image_ever_written_previously();
     barrier.srcAccessMask = written ? VulkanPresenter::kGuestOutputInternalAccessMask : 0;
-    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     barrier.oldLayout =
         written ? VulkanPresenter::kGuestOutputInternalLayout : VK_IMAGE_LAYOUT_UNDEFINED;
-    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     fn.vkCmdPipelineBarrier(native,
                             written ? VkPipelineStageFlags(VulkanPresenter::kGuestOutputInternalStageMask)
                                     : VkPipelineStageFlags(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT),
-                            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+                            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1,
+                            &barrier);
 
-    command_list->copyTexture(target, nvrhi::TextureSlice(), source, nvrhi::TextureSlice());
-    command_list->commitBarriers();
+    // The source's own barrier (to shader resource) comes with the draw's state. --native_debug bit
+    // 1048576: the old copy instead (against the image's usage; to compare validation runs).
+    bool ok = true;
+    if (REXCVAR_GET(native_debug) & 1048576) {
+      // NVRHI moves the wrapped image (tracked as a render target) to copy destination and back.
+      command_list->copyTexture(target, nvrhi::TextureSlice(), source, nvrhi::TextureSlice());
+      command_list->setTextureState(target, nvrhi::AllSubresources, nvrhi::ResourceStates::RenderTarget);
+      command_list->commitBarriers();
+    } else {
+      ok = output_blit_->Record(command_list, source, target, width, height);
+      command_list->commitBarriers();
+    }
 
     // Release: back to the presenter's internal layout.
-    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     barrier.dstAccessMask = VulkanPresenter::kGuestOutputInternalAccessMask;
-    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     barrier.newLayout = VulkanPresenter::kGuestOutputInternalLayout;
-    fn.vkCmdPipelineBarrier(native, VK_PIPELINE_STAGE_TRANSFER_BIT,
+    fn.vkCmdPipelineBarrier(native, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                             VulkanPresenter::kGuestOutputInternalStageMask, 0, 0, nullptr, 0,
                             nullptr, 1, &barrier);
     context.SetIs8bpc(true);
-    return true;
+    return ok;
   }
 
  private:
@@ -220,7 +235,8 @@ class VulkanHost final : public HostDevice {
     desc.height = height;
     desc.format = nvrhi::Format::R10G10B10A2_UNORM;
     desc.isRenderTarget = true;
-    desc.initialState = nvrhi::ResourceStates::CopyDest;
+    // Only ever drawn into; the layouts around the draw are set by hand.
+    desc.initialState = nvrhi::ResourceStates::RenderTarget;
     desc.keepInitialState = true;
     desc.debugName = "Presenter guest output";
     nvrhi::TextureHandle texture = device_->createHandleForNativeTexture(
@@ -231,6 +247,9 @@ class VulkanHost final : public HostDevice {
     }
     Wrapped& slot = wrapped_[next_slot_];
     next_slot_ = (next_slot_ + 1) % wrapped_.size();
+    if (slot.texture) output_blit_->Forget(slot.texture);
+    REXLOG_INFO("rexgpu-native: guest output image {:#x} ({}x{}, version {}) wrapped", uint64_t(image), width, height,
+                 version);
     slot = Wrapped{image, version, width, height, texture};
     return slot.texture;
   }
@@ -242,6 +261,7 @@ class VulkanHost final : public HostDevice {
   // Before device_: destroyed after it (NVRHI's device only borrows the cache).
   std::unique_ptr<VulkanPipelineCache> pipeline_cache_;
   nvrhi::DeviceHandle device_;
+  std::unique_ptr<OutputBlit> output_blit_;
   std::array<Wrapped, 4> wrapped_;
   size_t next_slot_ = 0;
 };
