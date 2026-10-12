@@ -3,6 +3,31 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v2.0.0-beta.1 (12 October 2026)
+
+**This is a beta**: an early test build of the next big update, from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/PET2xU5FJq). Your saves and settings are kept, and you can switch back to stable at any time. Windows only for now: on Linux, keep using the stable version through Proton.
+
+### What's new
+- **A renderer of our own.** The game is now drawn by a new native renderer on Vulkan, instead of an imitation of the Xbox 360's graphics chip. It draws the game the same way the console did, runs much faster (well past the old limit of about 110 FPS), and draws at higher resolutions for real instead of upscaling a 720p picture. **Graphics** > **Advanced** > **Renderer** switches back to the **Classic** renderer to compare.
+- **Shaders prepared once, from your own game files.** At the end of setup (or the first time you start this version) the launcher prepares the game's shaders from your own disc files, which takes about a minute, so effects don't stutter the first time they appear. The **SHADERS** status on Home shows how it's going; select it to prepare them again if something looks wrong.
+- **Original or Remastered.** The last step of setup asks how you'd like the game to look: **Original**, the Xbox 360 as it was (720p, 30 FPS, the console's look), or **Remastered**, sharper and at your screen's resolution with soft ambient occlusion, set up for your graphics card. **Look** on the **Graphics** page changes it at any time.
+- **New ambient occlusion.** With the native renderer, **AO method** on the **Graphics** page picks the new **GTAO**: sharper soft shadows in corners and creases that never darken water, smoke, fire, Kong's fur or the sky, and that now work in the chapters where the old one did nothing. **Classic** is the old one.
+- **Higher frame rates done properly.** Things that were tied to the console's 30 FPS now run at the right speed at any frame rate: the lifeboat crew's rowing, particles, Kong's grabs, button mashing and finishers, knock-backs, and the splashes and ripples in water. At 30 FPS nothing changes.
+- **Choose your fullscreen resolution.** **Resolution** on the **Display** page picks any of your monitor's modes for fullscreen, or **Desktop** as before.
+
+### Known issues
+- Coming in a later beta: DLSS, FSR 3 and 4, and XeSS upscaling, screen-space global illumination, sharper shadows, reflections on water and volumetric light shafts.
+- In a few chapters the camera starts a pixel or two higher than on the console, because of how loading is timed.
+- With motion blur on, its trail is shorter at high frame rates.
+
+### Full changelog
+- `rexgpu-native`: a GPU plugin that hooks the game's Direct3D calls and draws with its own Vulkan (or Direct3D 12) renderer through NVRHI, on its own render thread, with the game's shaders translated from Xbox 360 microcode (XenosRecomp-based) and its textures converted on upload. `kk_renderer` (`native` or `classic`) picks it; switching back to the stable channel resets it and every other beta-only setting first.
+- The shader pack is built by the launcher from the player's `Shaders/xeshaders.bin` into the user's cache (`native-shaders`), with a stamp so it is rebuilt exactly when needed; no translated shader ships. `dxcompiler.dll` (DirectX Shader Compiler, LLVM Release License) is included for that.
+- `kkpipelines.list` lists the game's pipelines across all chapters, made in the background before the game starts; the driver's pipeline cache is kept between runs.
+- GTAO: Intel's XeGTAO (MIT), applied before the game's fog pass so transparent effects are drawn over it.
+- High frame rate fixes (`kk_hfr_fixes`, on): the rowing crew's animation time, particle drag, a precise frame clock, scripts that clamped the frame time to 0.016 s, per-step decays, follow smoothing, footstep splashes and water ripples.
+- What's new orders beta versions like the updater does.
+
 ## v1.9.11 (11 October 2026)
 
 ### What's new
