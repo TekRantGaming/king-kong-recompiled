@@ -271,6 +271,11 @@ bool VulkanTestDevice::Init(bool validation, bool driver_pipeline_cache, bool up
                 needs.features.size());
     for (const auto& e : upscaler_instance_extensions) std::printf("    instance: %s\n", e.c_str());
     for (const auto& e : needs.extensions) std::printf("    device: %s\n", e.c_str());
+    for (const auto& f : needs.features) {
+      VkStructureType type;
+      std::memcpy(&type, f.data(), sizeof(type));
+      std::printf("    features: structure type %d (%zu bytes)\n", int(type), f.size());
+    }
   }
   std::vector<const char*> device_extension_names;
   for (const std::string& name : upscaler_device_extensions) device_extension_names.push_back(name.c_str());

@@ -927,5 +927,6 @@ void CheckRealUpscaler(UpscalerKind kind, const char* name, int frames = 24, cha
 TEST(GameUpscale_Fsr3) { CheckRealUpscaler(UpscalerKind::kFsr3, "fsr3"); }
 TEST(GameUpscale_Dlss) { CheckRealUpscaler(UpscalerKind::kDlss, "dlss"); }
 TEST(GameUpscale_DlssPresetM) { CheckRealUpscaler(UpscalerKind::kDlss, "dlss_m", 24, 'M'); }
+TEST(GameUpscale_Xess) { CheckRealUpscaler(UpscalerKind::kXess, "xess"); }
 
 NR_TEST_MAIN()
