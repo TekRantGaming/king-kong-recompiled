@@ -137,15 +137,16 @@ void XessLog(const char* message, xess_logging_level_t level) {
 }
 
 xess_quality_settings_t Quality(UpscaleQuality q) {
-  // With the legacy scale factors: ULTRA_QUALITY 1.5, QUALITY 1.7, PERFORMANCE 2.0, ULTRA_PERFORMANCE 3.0.
+  // With the legacy scale factors (xessForceLegacyScaleFactors, XeSS 1.2's): QUALITY 1.5, BALANCED 1.7,
+  // PERFORMANCE 2.0, ULTRA_PERFORMANCE 3.0 (ULTRA_QUALITY would be 1.3), the other upscalers' ratios.
   switch (q) {
     case UpscaleQuality::kNative: return XESS_QUALITY_SETTING_AA;
-    case UpscaleQuality::kQuality: return XESS_QUALITY_SETTING_ULTRA_QUALITY;
-    case UpscaleQuality::kBalanced: return XESS_QUALITY_SETTING_QUALITY;
+    case UpscaleQuality::kQuality: return XESS_QUALITY_SETTING_QUALITY;
+    case UpscaleQuality::kBalanced: return XESS_QUALITY_SETTING_BALANCED;
     case UpscaleQuality::kPerformance: return XESS_QUALITY_SETTING_PERFORMANCE;
     case UpscaleQuality::kUltraPerformance: return XESS_QUALITY_SETTING_ULTRA_PERFORMANCE;
   }
-  return XESS_QUALITY_SETTING_ULTRA_QUALITY;
+  return XESS_QUALITY_SETTING_QUALITY;
 }
 
 const char* ResultName(xess_result_t r) {

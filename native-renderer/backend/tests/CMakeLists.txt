@@ -137,17 +137,21 @@ if(NR_HAS_VULKAN AND NR_GAME_RENDERER)
     endforeach()
 endif()
 
-# The upscalers on Direct3D 12 without the game renderer (docs/upscalers.md, "Tests"): a device of
-# its own on the first hardware adapter; skipped without one.
+# The upscalers' SDKs alone on Direct3D 12 and Vulkan, without the game renderer (docs/upscalers.md,
+# "Tests"): devices of their own on the first hardware adapter; skipped without one.
 if(WIN32 AND NR_HAS_D3D12 AND NR_GAME_RENDERER)
-    add_executable(nr_upscaler_d3d12_tests upscaler_d3d12_tests.cpp readback.cpp)
-    target_link_libraries(nr_upscaler_d3d12_tests PRIVATE nr_renderer d3d12 dxgi)
-    add_test(NAME nr_upscaler_d3d12_tests COMMAND nr_upscaler_d3d12_tests)
+    set(_nr_sdk_test_sources upscaler_sdk_tests.cpp readback.cpp)
+    if(NR_HAS_VULKAN)
+        list(APPEND _nr_sdk_test_sources vk_test_device.cpp)
+    endif()
+    add_executable(nr_upscaler_sdk_tests ${_nr_sdk_test_sources})
+    target_link_libraries(nr_upscaler_sdk_tests PRIVATE nr_renderer d3d12 dxgi ${CMAKE_DL_LIBS})
+    add_test(NAME nr_upscaler_sdk_tests COMMAND nr_upscaler_sdk_tests)
     get_property(_nr_up_runtime GLOBAL PROPERTY NR_UPSCALER_RUNTIME_FILES)
     foreach(_f IN LISTS _nr_up_runtime)
         get_filename_component(_name "${_f}" NAME)
-        add_custom_command(TARGET nr_upscaler_d3d12_tests POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_f}" $<TARGET_FILE_DIR:nr_upscaler_d3d12_tests>/${_name})
+        add_custom_command(TARGET nr_upscaler_sdk_tests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_f}" $<TARGET_FILE_DIR:nr_upscaler_sdk_tests>/${_name})
     endforeach()
 endif()
 

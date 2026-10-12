@@ -84,7 +84,7 @@ negate y after the offset, so the y offset has the other sign there.
 The convention handed to every SDK: the jitter is the picture's shift in input pixels, +x right, +y down
 (FSR's `jitterOffset`, DLSS's `InJitterOffset`, XeSS's `jitterOffset` all mean that). Checked both ways:
 with either sign flipped every upscaler's result gets worse (nr_game_upscale_tests on Vulkan, by hand;
-nr_upscaler_d3d12_tests on D3D12, as a check).
+nr_upscaler_sdk_tests on both APIs, as a check).
 
 The mip bias (auto) is log2(input / output): -0.585 in quality mode, -1 in performance.
 
@@ -251,10 +251,30 @@ NVIDIA's licence asks more of the project than a notice; these are for the maint
   marks water and a particle but not the opaque floor and wall; the upscale point lands before the post pass;
   then FSR 3.1, DLSS (default and preset M) and XeSS for real: on this PC's RTX 4070 Ti the mean
   difference to the native picture is FSR 3.1 0.0007, DLSS 0.0004, XeSS 0.0007, the plain stretch 0.0009.
-- `nr_upscaler_d3d12_tests` (D3D12, the SDKs alone): a still synthetic picture sampled at the jittered
-  positions, 32 frames, against the picture supersampled at the output size. RTX 4070 Ti: FSR 3.1 0.0224
-  (jitter flipped 0.0328), DLSS 0.0138 (0.0149), XeSS 0.0196 (0.1115), bilinear stretch 0.0319. FSR 4 falls
-  back to FSR 3.1 with its reason.
+- `nr_upscaler_sdk_tests` (the SDKs alone, on a D3D12 device and a Vulkan device of its own): a still
+  synthetic picture sampled at the jittered positions, 32 frames, against the picture supersampled at the
+  output size. RTX 4070 Ti, the same on both APIs: FSR 3.1 0.0224 (jitter flipped 0.0328), DLSS 0.0138
+  (0.0149), XeSS 0.0196 (0.1115), bilinear stretch 0.0319. FSR 4 falls back to FSR 3.1 with its reason (on
+  Vulkan: "FSR 4 needs Direct3D 12"). With `NR_UPSCALER_COST=1` it also times each SDK (below).
+
+## Cost
+
+Each SDK's own upscale to 2560x1440 (the game at render scale 2), GPU timer queries around the SDK's
+work alone, the median of 60 frames (`nr_upscaler_sdk_tests`, `NR_UPSCALER_COST=1`), RTX 4070 Ti, D3D12 /
+Vulkan in ms:
+
+| Mode (input) | FSR 3.1 | DLSS 310.9.1 | XeSS 2.0.2 |
+|---|---|---|---|
+| native (2560x1440) | 1.07 / 1.57 (noisy: 0.8 at best) | 1.06 / 1.14 (DLAA, preset K) | 1.06 / 1.08 |
+| quality (1707x960) | 0.56 / 0.50 | 0.95 / 0.99 (K) | 0.99 / 1.00 |
+| balanced (1506x847; DLSS 1485x835) | 0.46 / 0.47 | 0.93 / 0.96 (K) | 0.98 / 0.99 |
+| performance (1280x720) | 0.42 / 0.42 | 1.15 / 1.18 (M, the DLSS 4.5 model) | 0.95 / 0.96 |
+| ultra_performance (853x480) | 0.36 / 0.36 | 0.94 / 0.94 (L) | 0.96 / 0.96 |
+
+DLSS's default presets per mode are the DLL's (K for DLAA, quality and balanced, M for performance, L for
+ultra performance), which is why performance costs more than quality. The renderer's own passes (the camera
+and object motion, the reactive mask, the depth carried over) come on top; `native_upscaler_gpu_time` logs
+both in the game.
 
 ## Open problems
 
