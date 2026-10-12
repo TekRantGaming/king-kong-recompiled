@@ -377,6 +377,15 @@ void GameRenderer::UpscaleRecordMotion(const DrawCall& call, const dev::DeviceVi
   m.key.count = call.count;
   m.key.base_vertex = call.base_vertex;
   m.key.primitive = uint32_t(call.primitive);
+  if (m.camera_only) {
+    // Rewritten buffers move (V-Rex's world is streamed into a ring each frame: no draw kept its
+    // address, so none met its last-frame self and the camera had no vote). For the camera's vote
+    // such a draw is known by its shader, size and kind alone; draws alike are told apart by order or
+    // by the closest constants (MotionHistory::FindPrevious).
+    m.key.vertex_buffer = m.key.vertex_offset = m.key.vertex_buffer2 = m.key.index_buffer = 0;
+    m.key.start = 0;
+    m.key.base_vertex = 0;
+  }
   m.vs = vs;
   std::memcpy(m.constants.data(), last_vs_.data(), sizeof(float) * 1024);
   float rows[16];
