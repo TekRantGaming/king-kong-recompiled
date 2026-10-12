@@ -17,7 +17,8 @@ struct WaterEntry {
 
 // The game's pswater shaders with a reflection of their own and psocean (kkshaders ao-list --family
 // pswater --translate: which fetch constants each one reads). Fetch 1 is the planar reflection, 2 the
-// environment cube, 3 the normal map.
+// environment cube, 3 the normal map. psocean is not listed: the game draws it with colour writes off
+// (a depth pass of the sea; the census in docs/lighting.md), so its output hook would show nothing.
 constexpr uint32_t kPlanar = 1u << 1, kCube = 1u << 2;
 const WaterEntry kWater[] = {
     {0x2C85A92BB1A137E8ull, {kPlanar | kCube, false, true}},
@@ -33,7 +34,6 @@ const WaterEntry kWater[] = {
     {0xAEEE430797CBBE09ull, {kPlanar, false, true}},
     {0xF22A76FB8F40F38Bull, {kPlanar, false, true}},
     {0xFDC4105FB5172BD8ull, {kPlanar, false, false}},
-    {0x4D6658690CFAE9E3ull, {0, true, false}},  // psocean
 };
 
 }  // namespace

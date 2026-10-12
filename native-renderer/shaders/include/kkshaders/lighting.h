@@ -54,7 +54,7 @@ struct WaterReflectionHook {
 };
 
 // The game's water pixel shaders and their hook, by microcode hash (pswater with its planar reflection
-// at fetch constant 1 and the environment cube at 2, the normal map at 3; psocean on its output). A
+// at fetch constant 1 and the environment cube at 2, the normal map at 3). A
 // shader without a reflection of its own in pswater gets none (the game's look keeps its matt water).
 WaterReflectionHook waterReflectionHookFor(uint64_t ucodeHash);
 // Every shader of that list (the pack builder adds their hooked translations).

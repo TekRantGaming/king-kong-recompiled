@@ -122,6 +122,7 @@ class SceneLighting {
   uint32_t ssr_w_ = 0, ssr_h_ = 0;
   SsrView ssr_;
   bool ssr_tried_ = false;  // this frame
+  uint64_t hooked_water_frame_ = 0;  // the last frame that drew a water shader with the reflection hook
   bool warned_camera_ = false;
 
   // Volumetric light.

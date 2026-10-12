@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "backend/log.h"
+#include "kkshaders/lighting.h"
 #include "backend/shaders/generated/lighting_ssr_color_cs_dxil.h"
 #include "backend/shaders/generated/lighting_ssr_color_cs_spirv.h"
 #include "backend/shaders/generated/lighting_ssr_color_down_cs_dxil.h"
@@ -333,7 +334,12 @@ void SceneLighting::OnDraw(nvrhi::ICommandList* cl, const Draw& d) {
   }
 
   // The water's reflections: the scene, once, before its first water draw.
-  if (water && config_.water_on() && !ssr_tried_) {
+  // Only when the frame before drew a water shader with the reflection hook: the game's water masks
+  // (pswater's mask shader, psocean's depth-only pass) come first and write the water's depth, so the
+  // scene is taken before them, and frames with masks only (Ann, The Cave) do not pay for it.
+  const bool hooked = kkshaders::waterReflectionHookFor(d.state.ps_hash).fetchMask != 0;
+  if (hooked) hooked_water_frame_ = frame_;
+  if (water && config_.water_on() && !ssr_tried_ && hooked_water_frame_ + 1 >= frame_) {
     ssr_tried_ = true;
     if (!e.in_scene || !scene_color_.texture || !scene_depth_.texture || !tracker_.depth_valid()) {
       ++stats_.ssr_no_scene;
