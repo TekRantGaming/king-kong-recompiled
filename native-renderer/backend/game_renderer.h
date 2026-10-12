@@ -651,7 +651,8 @@ class GameRenderer {
   // The upscalers' full-screen passes (upscale.hlsl), into `color` (and `depth`) over `rect`.
   bool UpscalePass(nvrhi::ICommandList* cl, nvrhi::IShader* ps, const void* params, uint32_t params_size,
                    nvrhi::ITexture* source0, nvrhi::ITexture* source1, nvrhi::ITexture* color0,
-                   nvrhi::ITexture* color1, nvrhi::ITexture* depth, const nvrhi::Rect& rect, uint64_t key);
+                   nvrhi::ITexture* color1, nvrhi::ITexture* depth, const nvrhi::Rect& rect, uint64_t key,
+                   nvrhi::ColorMask mask = nvrhi::ColorMask::All);
   void UpscaleMotionPass(nvrhi::ICommandList* cl, HostTarget* depth_target);
   void UpscaleLogStats();
   std::function<void(uint32_t, uint32_t)> watch_;

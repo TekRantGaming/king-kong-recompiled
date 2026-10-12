@@ -507,7 +507,8 @@ void GameRenderer::UpscaleLogStats() {
 
 bool GameRenderer::UpscalePass(nvrhi::ICommandList* cl, nvrhi::IShader* ps, const void* params, uint32_t params_size,
                                nvrhi::ITexture* source0, nvrhi::ITexture* source1, nvrhi::ITexture* color0,
-                               nvrhi::ITexture* color1, nvrhi::ITexture* depth, const nvrhi::Rect& rect, uint64_t key) {
+                               nvrhi::ITexture* color1, nvrhi::ITexture* depth, const nvrhi::Rect& rect, uint64_t key,
+                               nvrhi::ColorMask mask) {
   GameUpscale& u = *upscale_;
   if (rect.maxX <= rect.minX || rect.maxY <= rect.minY) return false;
   uint64_t fb_key = Mix64(0xF00B, reinterpret_cast<uintptr_t>(color0));
@@ -538,8 +539,9 @@ bool GameRenderer::UpscalePass(nvrhi::ICommandList* cl, nvrhi::IShader* ps, cons
   pd.renderState.rasterState.cullMode = nvrhi::RasterCullMode::None;
   pd.renderState.rasterState.scissorEnable = true;
   pd.renderState.rasterState.depthClipEnable = false;
+  for (auto& target : pd.renderState.blendState.targets) target.colorWriteMask = mask;
   // The pass's pipeline: its pixel shader and the attachments' formats.
-  uint64_t pipe_key = Mix64(Mix64(0x0BCA1E00ull, key), reinterpret_cast<uintptr_t>(ps));
+  uint64_t pipe_key = Mix64(Mix64(Mix64(0x0BCA1E00ull, key), reinterpret_cast<uintptr_t>(ps)), uint64_t(mask));
   for (nvrhi::Format f : fb->getFramebufferInfo().colorFormats) pipe_key = Mix64(pipe_key, uint64_t(f) + 1);
   pipe_key = Mix64(pipe_key, uint64_t(fb->getFramebufferInfo().depthFormat) + 0x100);
   nvrhi::IGraphicsPipeline* pipeline = GetPipeline(pd, fb, pipe_key);
@@ -893,6 +895,13 @@ void GameRenderer::RunUpscale(nvrhi::ICommandList* cl, UpscaleFrameTracker::Trig
   stretch.p0[2] = float(render.width) / float(cd.width);
   stretch.p0[3] = float(render.height) / float(cd.height);
   if (!done) UpscalePass(cl, u.stretch_ps, &stretch, sizeof(stretch), color->texture, nullptr, u.output, nullptr, nullptr, out_rect, 5);
+  // The scene's alpha, which the game's post chain reads (V-Rex's mist and glow: FSR 3.1's and XeSS's
+  // outputs had none, and the post effects washed the picture out). The SDKs rebuild colour only: the
+  // alpha is the input's, stretched.
+  if (done) {
+    UpscalePass(cl, u.stretch_ps, &stretch, sizeof(stretch), color->texture, nullptr, u.output, nullptr, nullptr, out_rect,
+                9, nvrhi::ColorMask::Alpha);
+  }
   // Debugging: the motion vectors read back (every 150 frames, mapped 4 frames later).
   if (u.config.debug & 512) {
     if (u.probe && u.frame >= u.probe_frame + 4) {
