@@ -498,9 +498,7 @@ wrong colours or black frames: every failure is position or timing.
 
 **Pipelines of every chapter** (`-RecordPipelines`, same run): one file per launch, collected in
 `runs\tour-native-record3\pipelines\tour<A-D>.pipelines` (1529, 1398, 1018 and 989 records) and merged with
-`nr_pipelines merge` (standalone build, `F:\KK-native-renderer
-r-standalone\tools`) into
-`F:\KK-native-renderer\analysis\tour\pipelines\tour-all.list`: **3214 pipelines** (all at 1:1, 21 without a
+`nr_pipelines merge` (standalone build, `F:\KK-native-renderer\nr-standalone\tools`) into `F:\KK-native-renderer\analysis\tour\pipelines\tour-all.list`: **3214 pipelines** (all at 1:1, 21 without a
 pixel shader; 1268 vertex and 605 pixel shader translations). Launch B added 846 new ones to A's, C 421, D 418,
 so later chapters still bring new pipelines. The list is game data and stays out of git. Not in it: the title
 and menus are in every launch, but the render scales other than 1 and the launcher's prewarm are not (one run
