@@ -398,7 +398,99 @@ The moments (seconds after the chapter's A; times in `tour.json` are seconds aft
 | 40 | `tour40_kong_death` | Kong's Death | tourD | 17, 17.5, 18, 18.5, 19 | cutscene | the closing cutscene: Carl Denham standing by Kong's head in the street; it goes back to the chapter select by itself at about 57 s |
 | 41 | `tour41_credits` | Credits | tourD | 3, 3.5, 4, 4.5, 5 | cutscene | the credits over a misty mountain in the jungle, the title lines at the start (text scrolls) |
 
-TOUR_RESULTS
+### Results (12 October 2026)
+
+**Golden set**: captured 11 October 23:06-23:53 with the Xenos plugin (D3D12, `kk-dev` of this branch):
+42 scene folders `golden\tour00_venture` .. `golden\tour41_credits`, 23 frames each (five test shots and the
+burst), 966 frames of 1280x720, about 4.2 GB; raw run folders `golden\_runs\tour<A-D>-*`. Launch A was
+captured twice (the first time Venture's quit went to Options and every later chapter landed in the Options
+screen) and launch D twice (a 23 s freeze just after the save menu opened put every press late; that is what
+`KK_DEV_FREEZE_SKIP` is for). Checked by eye on one frame per scene (all 42 show their chapter's moment).
+
+**Xenos self-check** (`runs\tour-xenos-check3`, 12 October 06:08-07:54, the `kk-dev` build after the merge
+of nr-integration): 36 of 42 passed with the starting limits. The six that did not repeat:
+`tour02_necropolis` (Ann's idle animation), `tour10_kong` (Kong breathing, debris settling), `tour11_canyon`
+(the fog over the pool brighter in the golden run), `tour16_rapids` (the white water), `tour21_islanders`
+(Kong's fight with the raptors is at another moment in every run) and `tour22_save_ann` (Jimmy's animation).
+Their limits were widened to twice the worst value of that run (`SELF_CHECK_LIMITS` in `tourgen.py`); with
+them the run passes 42 of 42 (`report-tuned`). That is the run the limits came from, so it is not an
+independent check: a second Xenos run that was not used for tuning is still to do. `tour21_islanders` is a
+gross check only (30 % outside, worst tile 250): its moment should be moved to before the fight.
+
+**Native plugin** (`runs\tour-native3`, 12 October 04:21-06:00, `kk-dev-vulkan` after the merge, default
+options plus the harness's `--native_pipeline_cache=false --native_pipeline_list=false
+--native_vk_pipeline_cache=false`, the developer shader pack and DXC beside the game): **36 of 41 pass**
+against the tuned limits, and Venture is missing (the first version of `KK_DEV_FREEZE_SKIP` took Venture's
+57 s load without pad reads for a freeze and moved its shots past the end of the run; now limited to the
+menus). Full report: `runs\tour-native3\report-tuned\report.html`.
+
+| Entry | Scene | Limits (outside % / tile) | Xenos self-check: frames, worst outside % / tile (MAE) | Native, default options |
+|---|---|---|---|---|
+| 0 | `tour00_venture` | 1 / 1.5 | pass 4/5, 0.01 % / 0.07 (MAE 3.90) | missing |
+| 1 | `tour01_skull_island` | 0.2 / 1.5 | pass 5/5, 0.00 % / 0.00 (MAE 0.73) | pass 5/5, 0.00 % / 0.00 (MAE 1.26) |
+| 2 | `tour02_necropolis` | 3.3 / 28 | pass 5/5, 1.71 % / 14.15 (MAE 1.98) | pass 5/5, 0.19 % / 2.04 (MAE 1.28) |
+| 3 | `tour03_scorpions` | 0.2 / 1.5 | pass 5/5, 0.00 % / 0.01 (MAE 0.48) | pass 5/5, 0.00 % / 0.01 (MAE 0.64) |
+| 4 | `tour04_the_wall` | 0.2 / 1.5 | pass 5/5, 0.14 % / 0.61 (MAE 0.92), draw list 0.995 | **fail** 0/5, 0.56 % / 2.63 (MAE 2.52), draw list 0.988 |
+| 5 | `tour05_sacrifice` | 0.2 / 1.5 | pass 5/5, 0.00 % / 0.00 (MAE 0.33) | pass 5/5, 0.00 % / 0.00 (MAE 0.29) |
+| 6 | `tour06_kongs_tracks` | 0.2 / 1.5 | pass 5/5, 0.01 % / 0.20 (MAE 2.26) | pass 3/5, 1.01 % / 0.64 (MAE 5.08) |
+| 7 | `tour07_hayes` | 0.2 / 1.5 | pass 5/5, 0.04 % / 0.30 (MAE 1.21) | pass 5/5, 0.02 % / 0.15 (MAE 0.94) |
+| 8 | `tour08_vrex` | 0.2 / 1.5 | pass 5/5, 0.03 % / 0.26 (MAE 6.39) | pass 4/5, 0.24 % / 2.28 (MAE 6.09) |
+| 9 | `tour09_ann` | 0.2 / 1.5 | pass 5/5, 0.00 % / 0.00 (MAE 0.03) | pass 5/5, 0.00 % / 0.01 (MAE 0.26) |
+| 10 | `tour10_kong` | 0.55 / 3.2 | pass 5/5, 0.27 % / 1.56 (MAE 2.40) | pass 5/5, 0.31 % / 1.60 (MAE 2.75) |
+| 11 | `tour11_canyon` | 2.7 / 11.4 | pass 5/5, 1.33 % / 5.66 (MAE 5.39) | pass 5/5, 0.16 % / 0.57 (MAE 2.82) |
+| 12 | `tour12_millipedes` | 0.2 / 1.5 | pass 5/5, 0.00 % / 0.00 (MAE 0.00) | pass 5/5, 0.00 % / 0.02 (MAE 0.03) |
+| 13 | `tour13_brontosaurus` | 0.2 / 1.5 | pass 5/5, 0.00 % / 0.00 (MAE 0.62) | pass 5/5, 0.00 % / 0.02 (MAE 0.60) |
+| 14 | `tour14_jimmy` | 0.2 / 1.5 | pass 5/5, 0.00 % / 0.00 (MAE 0.20) | pass 5/5, 0.00 % / 0.01 (MAE 0.52) |
+| 15 | `tour15_raft` | 0.2 / 1.5 | pass 5/5, 0.18 % / 1.27 (MAE 6.89) | pass 4/5, 0.12 % / 2.04 (MAE 8.01) |
+| 16 | `tour16_rapids` | 7.1 / 20.2 | pass 3/5, 9.02 % / 48.37 (MAE 21.47) | pass 4/5, 10.06 % / 31.83 (MAE 18.98) |
+| 17 | `tour17_fight` | 0.2 / 1.5 | pass 5/5, 0.12 % / 0.63 (MAE 9.91) | pass 4/5, 0.21 % / 0.51 (MAE 10.62) |
+| 18 | `tour18_swamps` | 0.2 / 1.5 | pass 5/5, 0.10 % / 0.28 (MAE 2.68), draw list 0.997 | **fail** 0/5, 0.58 % / 1.55 (MAE 5.16), draw list 0.996 |
+| 19 | `tour19_chased_vrex` | 0.2 / 1.5 | pass 5/5, 0.01 % / 0.02 (MAE 8.75) | pass 5/5, 0.01 % / 0.08 (MAE 8.53) |
+| 20 | `tour20_the_log` | 0.2 / 1.5 | pass 5/5, 0.00 % / 0.00 (MAE 1.11) | pass 5/5, 0.00 % / 0.01 (MAE 1.41) |
+| 21 | `tour21_islanders` | 30 / 250 | pass 5/5, 14.70 % / 124.45 (MAE 27.39) | pass 5/5, 14.50 % / 124.47 (MAE 27.23) |
+| 22 | `tour22_save_ann` | 2.2 / 13 | pass 5/5, 1.11 % / 6.46 (MAE 5.43), draw list 0.991 | pass 5/5, 0.40 % / 3.25 (MAE 4.09), draw list 0.996 |
+| 23 | `tour23_the_cave` | 0.2 / 1.5 | pass 5/5, 0.00 % / 0.00 (MAE 0.87) | pass 5/5, 0.00 % / 0.01 (MAE 0.85) |
+| 24 | `tour24_venatosaurus` | 0.2 / 1.5 | pass 5/5, 0.00 % / 0.02 (MAE 0.17) | **fail** 0/5, 0.22 % / 0.38 (MAE 2.39) |
+| 25 | `tour25_in_the_mud` | 0.2 / 1.5 | pass 5/5, 0.00 % / 0.00 (MAE 0.35) | **fail** 0/5, 0.51 % / 3.02 (MAE 2.70) |
+| 26 | `tour26_call_kong` | 0.2 / 1.5 | pass 5/5, 0.00 % / 0.00 (MAE 0.01) | pass 5/5, 0.00 % / 0.00 (MAE 0.28) |
+| 27 | `tour27_kong_rescue` | 0.6 / 6 | pass 5/5, 0.22 % / 4.48 (MAE 7.46) | pass 3/5, 1.39 % / 6.18 (MAE 8.00) |
+| 28 | `tour28_to_the_plane` | 0.2 / 1.5 | pass 5/5, 0.04 % / 0.27 (MAE 0.52) | pass 5/5, 0.04 % / 0.15 (MAE 0.66) |
+| 29 | `tour29_to_the_lair` | 0.2 / 1.5 | pass 5/5, 0.00 % / 0.00 (MAE 0.11) | pass 5/5, 0.00 % / 0.00 (MAE 0.12) |
+| 30 | `tour30_kongs_lair` | 0.2 / 1.5 | pass 5/5, 0.00 % / 0.00 (MAE 0.02) | pass 5/5, 0.00 % / 0.00 (MAE 0.14) |
+| 31 | `tour31_lair_fight` | 0.2 / 1.5 | pass 4/5, 0.10 % / 2.26 (MAE 7.15) | pass 4/5, 0.31 % / 1.87 (MAE 10.48) |
+| 32 | `tour32_free` | 0.2 / 1.5 | pass 5/5, 0.00 % / 0.00 (MAE 0.08) | pass 5/5, 0.00 % / 0.00 (MAE 0.38) |
+| 33 | `tour33_chased_by_kong` | 0.2 / 1.5 | pass 5/5, 0.00 % / 0.00 (MAE 0.67), draw list 0.993 | pass 5/5, 0.00 % / 0.00 (MAE 0.77), draw list 0.992 |
+| 34 | `tour34_heading_back` | 0.2 / 1.5 | pass 5/5, 0.13 % / 1.21 (MAE 1.61) | pass 5/5, 0.00 % / 0.03 (MAE 0.68) |
+| 35 | `tour35_back_village` | 0.2 / 1.5 | pass 5/5, 0.00 % / 0.03 (MAE 2.33) | pass 5/5, 0.00 % / 0.00 (MAE 0.77) |
+| 36 | `tour36_kong_capture` | 0.2 / 1.5 | pass 5/5, 0.00 % / 0.02 (MAE 0.26) | pass 5/5, 0.01 % / 0.05 (MAE 0.36) |
+| 37 | `tour37_kong_struck` | 0.2 / 1.5 | pass 5/5, 0.01 % / 0.17 (MAE 3.25) | pass 5/5, 0.04 % / 0.58 (MAE 4.35) |
+| 38 | `tour38_new_york` | 0.2 / 1.5 | pass 5/5, 0.00 % / 0.00 (MAE 0.14) | pass 5/5, 0.00 % / 0.00 (MAE 0.24) |
+| 39 | `tour39_empire_state` | 0.2 / 1.5 | pass 5/5, 0.00 % / 0.00 (MAE 0.08) | pass 5/5, 0.00 % / 0.00 (MAE 0.20) |
+| 40 | `tour40_kong_death` | 0.2 / 1.5 | pass 5/5, 0.00 % / 0.02 (MAE 0.92) | pass 5/5, 0.00 % / 0.03 (MAE 1.11) |
+| 41 | `tour41_credits` | 0.2 / 1.5 | pass 5/5, 0.06 % / 1.02 (MAE 0.28) | **fail** 2/5, 0.24 % / 2.82 (MAE 1.83) |
+
+**Native failures** for the native renderer agent (panels golden | native | outside-the-range map, one per
+scene, in `F:\KK-native-renderer\analysis\tour\native3_failures\`; the best whole-pixel shift between native and
+golden frames measured with a scratch script):
+
+| Scene | What differs | Shift |
+|---|---|---|
+| `tour04_the_wall` | the chap04 camera again: the whole picture one pixel off vertically, every frame; draw list 0.988 (draw order sorted by distance) | dy 1 (MAE 2.4 to 0.9 when shifted) |
+| `tour18_swamps` | camera one pixel off vertically, and the sailors' idle poses differ (Jimmy's camera on its tripod in another place) | dy -1 (5.4 to 3.1) |
+| `tour25_in_the_mud` | camera two pixels off vertically; streaks of falling water in front of the left pillar where the golden frames have none | dy -2 (2.6 to 0.9) |
+| `tour24_venatosaurus` | no whole-pixel shift, but fine texture-scale differences over the whole picture and the sailors a little apart: a sub-pixel camera offset like chap04's half pixel, or the sailors' timing | none (2.5) |
+| `tour41_credits` | 2 of 5 frames pass: the scrolling credit lines are a frame or two out of step with every golden frame (the text's edges outside the range); the picture itself matches | none |
+| `tour00_venture` | not captured (the freeze-skip bug above, harness side); the 17-scene `venture` scene passes on native | - |
+
+The common thread of the first four is the one found for chap04 and chap12 in Phase 2c (backend.md, "Open
+problems"): the player's character lands or settles a little differently when the render thread's timing
+differs in the chapter's first frames, and the camera follows him. With the render thread chap12 now matches,
+but these chapters (and chap04) still do not; they are where to look next. No scene shows missing objects,
+wrong colours or black frames: every failure is position or timing.
+
+Scenes that passed with noticeably higher numbers than the Xenos run (worth a look, not failures):
+`tour06_kongs_tracks` and `tour08_vrex` (3 and 4 of 5 frames: lightning), `tour27_kong_rescue` (3 of 5, the
+fight as in the `kong` scene), `tour31_lair_fight` (MAE 6.2 against 3.8).
 
 ## Later: Linux on the Ally
 
