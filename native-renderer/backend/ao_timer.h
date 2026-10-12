@@ -17,7 +17,9 @@ namespace nr {
 
 class AoGpuTimer {
  public:
-  AoGpuTimer(nvrhi::IDevice* device, const char* what) : device_(device), what_(what) {}
+  // prefix: what the log line says it times ("AO"; the lighting options use the same timer).
+  AoGpuTimer(nvrhi::IDevice* device, const char* what, const char* prefix = "AO")
+      : device_(device), what_(what), prefix_(prefix) {}
 
   // Around one piece of AO work in a command list (Begin and End in the same list).
   void Begin(nvrhi::ICommandList* cl) {
@@ -56,8 +58,8 @@ class AoGpuTimer {
     }
     ++frame_;
     if (frames_ >= 600) {
-      Logf(LogLevel::kInfo, "rexgpu-native: AO GPU time (%s): %.3f ms a frame on average over %llu frames (%llu timed passes)",
-           what_, 1000.0 * total_s_ / double(frames_), static_cast<unsigned long long>(frames_),
+      Logf(LogLevel::kInfo, "rexgpu-native: %s GPU time (%s): %.3f ms a frame on average over %llu frames (%llu timed passes)",
+           prefix_, what_, 1000.0 * total_s_ / double(frames_), static_cast<unsigned long long>(frames_),
            static_cast<unsigned long long>(pieces_));
       total_s_ = 0.0;
       frames_ = pieces_ = 0;
@@ -71,6 +73,7 @@ class AoGpuTimer {
   };
   nvrhi::IDevice* device_;
   const char* what_;
+  const char* prefix_;
   nvrhi::TimerQueryHandle open_;
   std::deque<Pending> pending_;
   std::vector<nvrhi::TimerQueryHandle> free_;

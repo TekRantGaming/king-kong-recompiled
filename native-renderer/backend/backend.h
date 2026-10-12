@@ -25,6 +25,7 @@
 #include "backend/draw_state.h"
 #include "backend/guest_memory.h"
 #include "backend/host_device.h"
+#include "backend/lighting_config.h"
 #include "backend/render_thread.h"
 #include "backend/renderer.h"
 
@@ -96,6 +97,9 @@ struct GameSettings {
   // The rest of the AO's settings (docs/ao.md): --native_ao_method, _apply, _quality, _radius, and
   // the rules and shader list files. The default is today's AO.
   AoConfig ao;
+  // The lighting options (docs/lighting.md): --native_shadow_quality, --native_water_reflections,
+  // --native_volumetrics and their tuning. All original by default.
+  LightingConfig lighting;
 };
 
 class Backend {

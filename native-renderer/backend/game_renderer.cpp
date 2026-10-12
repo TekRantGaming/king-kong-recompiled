@@ -206,6 +206,7 @@ bool GameRenderer::Initialize() {
   // b3: the render scale constants, only when scaling (the 1:1 layout is the one it always was).
   if (scaled()) constants.bindings.push_back(nvrhi::BindingLayoutItem::VolatileConstantBuffer(3));
   AoLayoutBindings(constants);  // AO hook (game_ao.cpp): b4 for the ambient-only shaders
+  LightingLayoutBindings(constants);  // Lighting hook (game_lighting.cpp): b5 for the lighting options
   constants_layout_ = device_->createBindingLayout(constants);
   if (!constants_layout_) return false;
 
@@ -232,6 +233,7 @@ bool GameRenderer::Initialize() {
     cs.bindings.push_back(nvrhi::BindingSetItem::ConstantBuffer(3, scale_constants_));
   }
   if (!AoSetBindings(cs)) return false;  // AO hook (game_ao.cpp)
+  if (!LightingSetBindings(cs)) return false;  // Lighting hook (game_lighting.cpp)
   constants_set_ = device_->createBindingSet(cs, constants_layout_);
   if (!constants_set_) return false;
 
@@ -364,6 +366,7 @@ bool GameRenderer::Initialize() {
   ao_ = std::make_unique<AmbientOcclusion>(device_);
   if (!ao_->Initialize()) ao_.reset();
   AoInitialize();  // AO hook (game_ao.cpp): the GTAO method
+  LightingInitialize();  // Lighting hook (game_lighting.cpp)
   return true;
 }
 
@@ -1099,6 +1102,8 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     ++stats_.skipped_target;
     return;
   }
+  // Lighting hook (game_lighting.cpp): the soft shadows draw the screen-space shadow mask finer.
+  if (ps && options_.lighting.shadows_on()) LightingNoteShadowMask(*ps, pitch);
   // All attachments the same size: grow to the largest existing one.
   for (uint32_t i = 0; i < 4; ++i) {
     if (!want_color[i].used) continue;
@@ -1171,6 +1176,8 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   // AO hook (game_ao.cpp): classify the draw; at the end of the opaque pass the occlusion goes into
   // the scene before this draw.
   if (scene_ao_ || ao_constants_) AoDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
+  // Lighting hook (game_lighting.cpp): the lighting options' moments and the census.
+  if (options_.lighting.active()) LightingDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
   if (frame_log_ && frame_log_->enabled()) LogDraw(call, d, *vs, ps.get());
   if (dump) DumpVertexShaderHashes(call, d, *vs);
   if (stop_at == 7) return;

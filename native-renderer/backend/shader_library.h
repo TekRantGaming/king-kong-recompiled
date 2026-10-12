@@ -68,6 +68,19 @@ class ShaderLibrary {
   // multiplied by the occlusion (they are not in the pack: DXC compiles them). Set before any shader
   // is created; null: none.
   void SetAmbientOcclusion(std::shared_ptr<const kkshaders::AmbientTable> table) { ambient_ = std::move(table); }
+  // The lighting options (docs/lighting.md): pixel shaders drawn with a shader of the renderer's own in
+  // place of their translation (the soft shadows' psshadowquad). Keyed by microcode hash; the blob is
+  // for this device's API and keeps the translation's bindings; 	ag makes its input hash (and so its
+  // pipelines) distinct. Set before any shader is created.
+  struct Replacement {
+    const void* data = nullptr;
+    size_t size = 0;
+    uint64_t tag = 0;
+  };
+  void SetReplacements(std::unordered_map<uint64_t, Replacement> replacements) { replacements_ = std::move(replacements); }
+  // The lighting options' water reflections: the game's water shaders are translated with the reflection hook
+  // (kkshaders/lighting.h; the pack holds them when it was built for the setting). Set before any shader is created.
+  void SetWaterReflections(bool on) { water_reflections_ = on; }
 
   // A shader was created: kind 0 vertex, 1 pixel.
   void OnCreated(uint32_t kind, uint32_t container, uint32_t object);
@@ -100,6 +113,16 @@ class ShaderLibrary {
   bool dxc_ok_ = false;
   bool scale_aware_ = false;
   std::shared_ptr<const kkshaders::AmbientTable> ambient_;
+  std::unordered_map<uint64_t, Replacement> replacements_;
+  bool water_reflections_ = false;
+  void ApplyLighting(kkshaders::ShaderInfo& info) const {
+    if (water_reflections_ && info.kind == kkshaders::ShaderKind::Pixel) info.waterReflection = kkshaders::waterReflectionHookFor(info.ucodeHash);
+  }
+  const Replacement* FindReplacement(const kkshaders::ShaderInfo& info) const {
+    if (info.kind != kkshaders::ShaderKind::Pixel) return nullptr;
+    auto it = replacements_.find(info.ucodeHash);
+    return it == replacements_.end() ? nullptr : &it->second;
+  }
   // The ambient-only term of a pixel shader, if it is on the list.
   void ApplyAmbient(kkshaders::ShaderInfo& info) const {
     if (!ambient_ || info.kind != kkshaders::ShaderKind::Pixel) return;

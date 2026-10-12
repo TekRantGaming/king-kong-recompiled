@@ -18,6 +18,9 @@ add_library(nr_draw STATIC
     ao_classifier.cpp
     ao_camera.cpp
     ao_config.cpp
+    # The lighting options (docs/lighting.md): the settings and the game's shaders they act on.
+    lighting_config.cpp
+    lighting_shaders.cpp
 )
 target_include_directories(nr_draw PUBLIC "${NR_ROOT}")
 target_compile_features(nr_draw PUBLIC cxx_std_20)
@@ -41,6 +44,8 @@ if(NR_GAME_RENDERER)
         game_passes.cpp
         game_frame_log.cpp
         game_ao.cpp
+        game_lighting.cpp
+        scene_lighting.cpp
         scene_ao.cpp
         shader_library.cpp
         pipeline_prewarm.cpp

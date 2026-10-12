@@ -244,6 +244,46 @@ REXCVAR_DEFINE_BOOL(native_ao_gpu_time, false, "Native renderer",
                     "Time the ambient occlusion's GPU passes and log the average every 600 frames")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+// The lighting options (docs/lighting.md). Every default is the game's own picture; the Original
+// look keeps them there.
+REXCVAR_DEFINE_STRING(native_shadow_quality, "original", "Native renderer",
+                      "Shadows: original (the game's 832x832 shadow maps, hard edges), high (shadow maps at twice "
+                      "the resolution, soft edges from a wide rotated filter) or ultra (four times the resolution, "
+                      "edges that soften with the distance to what casts the shadow). native_shadow_scale, when "
+                      "set, still sets the shadow maps' resolution")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_STRING(native_water_reflections, "original", "Native renderer",
+                      "Water reflections: original (the game's planar reflection and environment colour) or ssr "
+                      "(screen-space reflections of the scene, the game's own where a ray finds nothing)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_STRING(native_volumetrics, "off", "Native renderer",
+                      "Light shafts: off (the game's own), low or high (volumetric light from the sun's shadow map "
+                      "added where the game has light shafts or fog)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_DOUBLE(native_shadow_softness, 1.0, "Native renderer",
+                      "The soft shadows' filter size times this (tuning, docs/lighting.md)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_DOUBLE(native_ssr_strength, 1.0, "Native renderer",
+                      "The water's screen-space reflections' strength times this (tuning, docs/lighting.md)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_DOUBLE(native_volumetric_strength, 1.0, "Native renderer",
+                      "The volumetric light's strength times this (tuning, docs/lighting.md)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_INT32(native_lighting_census, 0, "Native renderer",
+                     "Every this many frames, log the frame's draws with the lighting passes' targets, textures "
+                     "and constants (0: off; docs/lighting.md)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_BOOL(native_lighting_gpu_time, false, "Native renderer",
+                    "Time the lighting options' GPU passes and log the averages every 600 frames")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_BOOL(native_flip_front_face, false, "Native renderer",
                     "Swap the front face of every draw (a debugging aid for culling)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);

@@ -31,6 +31,7 @@ REXCVAR_DECLARE(std::string, native_backend);
 REXCVAR_DECLARE(std::string, native_dxc);
 REXCVAR_DECLARE(std::string, native_render_scale);
 REXCVAR_DECLARE(double, native_shadow_scale);
+REXCVAR_DECLARE(std::string, native_water_reflections);
 
 namespace nr {
 
@@ -93,9 +94,11 @@ kkshaders::PackBuildOptions PackOptionsForSettings(const std::filesystem::path& 
   // the game only applies when it starts (the launcher still sees the default scale 1 when it checks
   // the pack): with "auto" the pack always carries the render scale variants, so it fits every run.
   const RenderScale scale = ParseRenderScale(ResolvedRenderScale(), 1280, 720);
-  const float shadow = float(REXCVAR_GET(native_shadow_scale));
+  const float shadow = EffectiveShadowScale();  // native_shadow_quality too (docs/lighting.md)
   o.scaled = REXCVAR_GET(native_render_scale) == "auto" || (scale.valid && !scale.unit()) ||
              (shadow > 0.0f && shadow != 1.0f);
+  // The lighting options' water reflections: their hooked water shaders (docs/lighting.md).
+  o.lighting = REXCVAR_GET(native_water_reflections) == "ssr";
   o.dxc = DxcLocation();
   return o;
 }

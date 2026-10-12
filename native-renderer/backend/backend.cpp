@@ -443,6 +443,7 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
     shaders_ = std::make_unique<ShaderLibrary>(host_->device(), guest_memory_);
     // --native_debug bit 16: the plain pixel shaders at a scale too (to tell the aware translation's part).
     shaders_->SetRenderScaleAware(shaders_aware);
+    shaders_->SetWaterReflections(game.lighting.water_on());  // docs/lighting.md
     shaders_->Initialize(game.shader_pack, game.dxc);
     kknr::GuestMemory physical;
     physical.base = memory_->TranslatePhysical(0);
@@ -454,8 +455,10 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
     renderer->options().shadow_scale = shadow_scale;
     renderer->options().guest_frame_width = width;
     renderer->options().ao = game.ao;  // before Initialize: the ambient-only AO adds a binding
+    renderer->options().lighting = game.lighting;  // before Initialize too (docs/lighting.md)
     if (renderer->Initialize()) {
       shaders_->SetAmbientOcclusion(renderer->ao_ambient_table());
+      shaders_->SetReplacements(renderer->LightingReplacements());  // docs/lighting.md
       renderer->options().element_endian = game.element_endian;
       renderer->options().flip_front_face = game.flip_front_face;
       renderer->options().texture_tail_mips = game.texture_tail_mips;
