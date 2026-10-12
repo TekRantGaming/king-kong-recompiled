@@ -164,7 +164,33 @@ renderer"), which the stable version does not have (the beta-launcher branch res
 
 ## In the game
 
-(Filled in below as the runs come in.)
+Paused on 12 October 2026, 16:35, at the coordinator's request (the PC is needed). State:
+
+- Built and committed: all three options, the translator hook with its pack variants, the launcher rows, the
+  tests (kkshaders_lighting_tests 0 failed, the 20 translator tests, 
+r_ao_rules_tests 14 with the new
+  Lighting_SettingsAndShaders). kkshaders pack-build --scaled --lighting builds all 6853 shaders.
+- One launch so far (uns\lighting-s1-high, lsmoke: Skull Island, V-Rex, Ann). **The options did not apply**:
+  the harness runs with --kk_original_look=true, and the Original look now sets the three options to the game's
+  values (as intended for players). Test runs must add
+  --kk_original_look_keep=native_shadow_quality,native_water_reflections,native_volumetrics. So that run measured
+  the game's own passes with --native_lighting_gpu_time: the screen-space shadow 0.045 to 0.10 ms a frame, the
+  water 0.033 to 0.041 ms (RTX 4070 Ti, scale 1).
+- In that run the game exited by itself (code -1) in Ann, after Skull Island and V-Rex were captured. Not yet
+  known whether it is the lighting code (only the GPU timers and the per-frame tracking ran) or something else;
+  the next run should tell (look at the end of its game.log; run once without --native_lighting_gpu_time).
+
+Next (the reduced verification bar: one sheet per feature, render scale 1, GPU cost, defaults unchanged in one
+scene):
+
+1. nalysis\lighting\lightrun.ps1 -Scenes lsmoke three times, each with the --kk_original_look_keep above:
+   all original with --native_lighting_gpu_time=true; high + ssr + volumetrics high; ultra + volumetrics
+   low. Sheets with nalysis\lighting\tools\sheets.py --tour native-renderer\tests\lighting_tour.json --run
+   lsmoke (shadows: Skull Island, V-Rex; water: V-Rex's C28D09A8 if it is in view, else a chapter where it is;
+   volumetric light: Ann).
+2. Defaults change nothing: lightrun.ps1 -GoldenScenes -Scenes vrex -Compare with no lighting arguments.
+3. Tune from the sheets (PCSS light size, slope limit, SSR thickness and ray length, the volumetric ambient
+   share), fill in this section, commit each feature when it looks right.
 
 ## Open problems
 
