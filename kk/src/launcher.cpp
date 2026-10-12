@@ -514,9 +514,11 @@ class Launcher final : public rex::ui::ImGuiDialog {
       next_frame_ = std::max(next_frame_, clock::now() - kFrame) + kFrame;
     }
 #endif
-    // Testing aid: KK_AUTOPLAY=1 presses Play after a couple of seconds.
-    static const bool autoplay = std::getenv("KK_AUTOPLAY") != nullptr;
-    if (autoplay && files_ok_ && ++autoplay_frames_ == 120) StartGame();
+    // Testing aid: KK_AUTOPLAY=1 presses Play after a couple of seconds (120 frames); KK_AUTOPLAY=40
+    // after 40 s (60 frames a second), to keep the launcher open as a player might.
+    static const char* autoplay = std::getenv("KK_AUTOPLAY");
+    static const int autoplay_after = autoplay ? std::max(120, int(std::atof(autoplay) * 60)) : 0;
+    if (autoplay && files_ok_ && ++autoplay_frames_ == autoplay_after) StartGame();
 
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->Pos);
