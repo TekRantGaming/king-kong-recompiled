@@ -12,7 +12,7 @@ Runs:
   lshadow  sunlit chapters for the shadows
   lwater   the water chapters for the reflections
   lshaft   the chapters with light shafts or mist for the volumetrics
-  lsmoke   V-Rex and Ann: a quick look at all three
+  lsmoke   Skull Island, V-Rex and Ann: one launch for the comparison sheets of all three
 
   python -I lightgen.py            write lighting_tour.json beside this file
   python -I lightgen.py --check    print each run's chapters with their start times and the launch's length
@@ -51,7 +51,7 @@ RUNS = {
     "lshadow": [1, 4, 8, 9, 12, 29, 36],
     "lwater": [11, 23, 26, 27, 33, 37, 0],
     "lshaft": [4, 9, 12, 26, 27, 29, 36],
-    "lsmoke": [8, 9],
+    "lsmoke": [1, 8, 9],
 }
 SHOTS = [0.0, 0.5, 1.0]
 

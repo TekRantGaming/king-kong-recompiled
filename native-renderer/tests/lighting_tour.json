@@ -75,7 +75,7 @@
   },
   "lsmoke": {
    "from": "menu",
-   "script": "12:A,18:A,24:A,30:RIGHT,30.6:RIGHT,31.2:RIGHT,31.8:RIGHT,32.4:RIGHT,33:RIGHT,33.6:RIGHT,34.2:RIGHT,36.8:A,40.8:SKIP,42.8:SKIP,44.8:SKIP,46.8:SKIP,48.8:SKIP,50.8:SKIP,52.8:SKIP,54.8:SKIP,56.8:SKIP,58.8:SKIP,60.8:SKIP,62.8:SKIP,64.8:SKIP,66.8:SKIP,68.8:SKIP,70.8:SKIP,72.8:SKIP,74.8:SKIP,76.8:SKIP,80.8:START,82.3:UP,82.8:UP,83.3:UP,83.8:UP,84.3:UP,84.8:UP,85.3:UP,86.3:A,88.3:A,93.8:RIGHT,96.4:A,100.4:SKIP,102.4:SKIP,104.4:SKIP,106.4:SKIP,108.4:SKIP,110.4:SKIP,112.4:SKIP,114.4:SKIP,116.4:SKIP,118.4:SKIP,120.4:SKIP,122.4:SKIP,124.4:SKIP,126.4:SKIP,128.4:SKIP",
+   "script": "12:A,18:A,24:A,30:RIGHT,32.6:A,36.6:SKIP,38.6:SKIP,40.6:SKIP,42.6:SKIP,44.6:SKIP,46.6:SKIP,48.6:SKIP,50.6:SKIP,52.6:SKIP,54.6:SKIP,56.6:SKIP,58.6:SKIP,60.6:SKIP,62.6:SKIP,64.6:START,66.1:UP,66.6:UP,67.1:UP,67.6:UP,68.1:UP,68.6:UP,69.1:UP,70.1:A,72.1:A,77.6:RIGHT,78.2:RIGHT,78.8:RIGHT,79.4:RIGHT,80:RIGHT,80.6:RIGHT,81.2:RIGHT,83.8:A,87.8:SKIP,89.8:SKIP,91.8:SKIP,93.8:SKIP,95.8:SKIP,97.8:SKIP,99.8:SKIP,101.8:SKIP,103.8:SKIP,105.8:SKIP,107.8:SKIP,109.8:SKIP,111.8:SKIP,113.8:SKIP,115.8:SKIP,117.8:SKIP,119.8:SKIP,121.8:SKIP,123.8:SKIP,127.8:START,129.3:UP,129.8:UP,130.3:UP,130.8:UP,131.3:UP,131.8:UP,132.3:UP,133.3:A,135.3:A,140.8:RIGHT,143.4:A,147.4:SKIP,149.4:SKIP,151.4:SKIP,153.4:SKIP,155.4:SKIP,157.4:SKIP,159.4:SKIP,161.4:SKIP,163.4:SKIP,165.4:SKIP,167.4:SKIP,169.4:SKIP,171.4:SKIP,173.4:SKIP,175.4:SKIP",
    "env": {
     "KK_DEV_FREEZE_SKIP": "10"
    }
@@ -818,16 +818,37 @@
    }
   },
   {
+   "name": "lsmoke01_skull_island",
+   "run": "lsmoke",
+   "chapter": 1,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 1: Ann's face leaning over Jack on the beach (sunlit, characters)",
+   "chapter_start": 32.6,
+   "times": [
+    60.6,
+    61.1,
+    61.6
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
    "name": "lsmoke08_vrex",
    "run": "lsmoke",
    "chapter": 8,
    "kind": "gameplay",
    "description": "Chapter-select entry 8: Jack in the rain under the cave roof, random lightning (shadows, rain)",
-   "chapter_start": 36.8,
+   "chapter_start": 83.8,
    "times": [
-    76.8,
-    77.3,
-    77.8
+    123.8,
+    124.3,
+    124.8
    ],
    "golden_times": [],
    "thresholds": {
@@ -844,11 +865,11 @@
    "chapter": 9,
    "kind": "gameplay",
    "description": "Chapter-select entry 9: a cave mouth with shafts of light falling in (light shafts)",
-   "chapter_start": 96.4,
+   "chapter_start": 143.4,
    "times": [
-    126.4,
-    126.9,
-    127.4
+    173.4,
+    173.9,
+    174.4
    ],
    "golden_times": [],
    "thresholds": {
