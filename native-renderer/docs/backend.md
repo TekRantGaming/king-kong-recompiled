@@ -493,7 +493,7 @@ tables in `analysis\phase2\perfA_table.txt`, `perfG_table.txt`.
 110: its command processor waits for the presenter the way the native renderer did before the fourth option.
 Unlimited on native means the game runs faster than the presenter shows frames; the presenter takes the newest.)
 
-Where the time went, and the options that fix it (all off by default, to keep today's behaviour; turn all four
+Where the time went, and the options that fix it (off by default in Phase 2b; on by default since Phase 2c, see "Defaults (Phase 2c)"; turn all four
 on for the numbers above):
 
 | Option | What it fixes | Venture, unlimited |
@@ -519,7 +519,7 @@ frame rate (`runs\native-fast-full2`).
 | Setting (cvar) | With `--gpu_plugin=native` |
 |---|---|
 | Frame rate cap (`kk_frame_rate`) | works since d4bd455: the native vblank ticks at 1000 Hz when the port turns `vsync` off, like the SDK's graphics system; 30, 60, 120 and unlimited measured below |
-| Render quality / resolution (`kk_render_quality`, `resolution_scale`, `draw_resolution_scale_x/_y`) | not followed by default: the native renderer draws at `--native_render_scale` (default 1). `--native_render_scale=auto` (new) takes the scale the Xenos plugin would draw at, which the presets set. Not the default yet, to keep today's behaviour |
+| Render quality / resolution (`kk_render_quality`, `resolution_scale`, `draw_resolution_scale_x/_y`) | followed: `--native_render_scale=auto`, the default since Phase 2c, takes the scale the Xenos plugin would draw at, which the presets set (the Original look: 1). `--native_render_scale=1` is the old default |
 | Ambient occlusion (`ao_mode`, `ao_strength`) | works: read at every resolve; the same picture as the Xenos plugin's ("Ambient occlusion") |
 | Upscalers (`present_effect`: FSR 1, NIS, bilinear) | work: the presenter's (`rex/ui/flags.h`), which paints the native renderer's frame image like the Xenos plugin's. Not checked in captures: the game's captures are the frame before the presenter |
 | Anti-aliasing (`swap_post_effect`, FXAA) | **not applied**: FXAA is the Xenos command processor's own swap pass (`rex/graphics/command_processor.h`, `SwapPostEffect`), not the presenter's. The native renderer would need its own FXAA pass over the frame image before `CopyToGuestOutput` (to do) |
@@ -582,6 +582,13 @@ keep the draw-state tracker on the game's thread; `ThreadedSink` sits between it
   CPU writes outside that discipline reach the renderer through the write watches, as before.
 - The library's vertex shader patch is hashed at once on the calling thread (the frame log's vertex shader
   hash; the library patches the microcode again for the next declaration). Shader creation stays on its thread.
+- Pipelines, one mechanism with the merged Phase 2c pipeline work ("Phase 2c: the pipelines before the first
+  frame" below): every pipeline of the game renderer is made by `GameRenderer::CreatePipeline` (the driver
+  cache's shared lock, then `CreateGraphicsPipeline`), on the pipeline workers for draws, the player's pipeline
+  file and the shipped list alike, on Vulkan and now on D3D12 too (the vendored NVRHI locks its D3D12 root
+  signature cache, `thirdparty/NOTES.md`). The render thread only looks pipelines up and waits within the
+  frame's budget; with the render thread off the game's thread does. The stutter counter counts the render
+  thread's waits and skips.
 - Statistics every 300 swaps: `rexgpu-native: render thread: N calls (device copies), at most M waiting; game
   thread ms copying, ms waiting for room; ring skimmer waited`. In the 17-scene run about 1 µs per call on the
   game's thread (V-Rex: 4.2 million calls, 5.0 s in 190 s).
@@ -620,22 +627,97 @@ frames (9 ms) are its waits for the submitter. The first measurement of the four
 (`runs\perfC-four-r0`: V-Rex 155 / 84) was before the submitter kept three frames instead of two; that
 change alone raised V-Rex's unlimited 1% low to 110-120 (`runs\perfC-four3-r0`).
 
+**D3D12** (`--native_backend=d3d12`, `kkshaders-dxil.pack`):
+
+- **Crashes, fixed.** With the asynchronous submit and present threads, D3D12 runs at a 120 FPS cap or
+  unlimited crashed or lost the device in six of eight game runs (heap corruption, access violations, "NVRHI:
+  Device Removed!" after a 3 s hitch; `runs\perfC-d3d12-*`). NVRHI's D3D12 queue is not thread safe
+  (`executeCommandList` and `runGarbageCollection` share its list of command lists in flight) and the Vulkan
+  host already held the queue's lock there; the D3D12 host now holds one too (`d3d12_host.cpp`). After it: no
+  crash in 25 D3D12 game runs.
+- **Pipelines.** D3D12 pipelines were made on the draw thread (NVRHI's D3D12 root signature cache has no lock),
+  which with the render thread stalled the guest GPU's fences at a chapter start. The vendored NVRHI now locks
+  that cache (`thirdparty/NOTES.md`) and the workers make D3D12 pipelines as on Vulkan; the pipeline cache's
+  prewarm and the shipped list work on D3D12 too.
+- **Scenes** (render thread + the four options): 15 of 17 before the fixes (`runs\p2c-d3d12-rt-fast-full`:
+  chap04 two pixels off, chap12's draw list 0.979), then 15 of 16 with every other scene passing
+  (`runs\p2c-d3d12b-rt-fast-full`; chap20's launch opened the launcher instead of the game, which the port does when Shift is held at start, and someone was using the PC). With the root
+  signature lock chap12 passes (outside 0.0000, MAE 0.028, draw list 0.989, `runs\p2c-d3d12c-chap`); chap04
+  still lands Jack off by a pixel (MAE 2.1; 4.4 with the render thread alone, `runs\p2c-d3d12-rtonly-chap04`):
+  the spawn still sees D3D12's timing (see "Open problems").
+- **With the new defaults** (below; `runs\p2c-defaults-d3d12-full`): 16 of 17, chap04 the miss (MAE 3.9).
+- **Frame rate** (as for Vulkan; `analysis\phase2c\perfC_defaults_table.txt`). The new defaults against the four
+  options alone measured before the D3D12 fixes' last step (`perfC-d3d12b-four-*`):
+
+| Cap | V-Rex: four | V-Rex: defaults | Venture: four | Venture: defaults | Kong: four | Kong: defaults |
+|---|---|---|---|---|---|---|
+| 60 | 60.0 / 57.1 / 45.1 | 60.0 / 59.7 / 59.4 | (no window) | 60.0 / 59.8 / 59.7 | 60.0 / 58.7 | 60.0 / 59.9 |
+| 120 | 120.0 / 110.4 / 101.3 | 120.0 / 118.5 / 117.5 | 119.9 / 109.7 / 94.5 | 120.0 / 118.2 / 117.3 | 120.0 / 94.3 | 120.0 / 119.0 |
+| unlimited | 46.9 / 11.0 / 4.2 | 235.0 / 107.6 / 74.4 | 207.4 / 98.5 / 93.2 | 237.5 / 144.5 / 141.5 | 186.1 / 13.7 | 198.3 / 15.9 |
+
+  The unlimited V-Rex run of the four options alone slowed from 243 to 17 FPS over its last minutes (each
+  submission took about 5 ms on D3D12 against 0.04 ms on Vulkan; the game thread was outside the renderer
+  in its slow frames). It did not happen again in the later D3D12 runs; the process's memory stayed flat in them
+  (`analysis\phase2c\memsamples.txt`). Seen once, not explained.
+
+**The merged pipeline work in the game** (Vulkan, render thread + four options, `F:\KK-native-renderer\pipelines`):
+
+- A shipped list: one recording run of V-Rex and Kong to the Rescue (title and menus on the way) into an empty
+  folder (`runs\p2c-pl-rec1`: 564 pipelines), `nr_pipelines merge -o <game folder>\kkpipelines.list` (built in the
+  standalone build, `F:\KK-native-renderer\nr-standalone`).
+- A fresh cache folder with the list (`runs\p2c-pl-fresh-list`): `pipeline list ...: 564 descriptions, 562
+  queued` when the renderer is ready, 0.7 s before the first frame; the 566 pipelines (1.0 s of creation on the
+  workers) were all made within the first 10 s, during the title. Stutter counter: one frame waited 2 ms (frame
+  160, the title), **no skipped draw in V-Rex or Kong to the Rescue on their first visit**; 7 of 7 golden scenes
+  pass. The same without the list (`runs\p2c-pl-fresh-nolist`): V-Rex 61 frames waited (256 ms) and 4 frames
+  skipped 398 draws; Kong 13 waited (125 ms) and 3 skipped 269 draws; 7 of 7 pass.
+- The driver's cache file, Kong to the Rescue twice in a new folder (`runs\p2c-vk1a`, `-vk1b`; NVIDIA's own disk
+  cache left on: turning it off is a system setting): the second start loaded 5,654 KB, its prewarm made the
+  first run's 249 pipelines in 18 ms, 85 ms of pipeline creation in all against 416 ms, 5 frames waited and none
+  skipped against 23 and 4 (339 draws), and the save menu opened 8.4 s after the start against 10.2 s.
+- The launcher's prewarm was not tried in the game (it needs the launcher's Play button pressed by hand).
+
+### Defaults (Phase 2c)
+
+On by default since this phase (`plugin_main.cpp`); each is still an option and `=false` (`=1` for the render
+scale) gives the old behaviour:
+
+| Option | Why it is safe |
+|---|---|
+| `--native_render_thread` | fixes chap04 / chap12's Jack (above); 17/17 golden scenes in two full runs with the four options (`p2c-rt-fast-full2`, `-full3`); at a 60 or 120 cap the best 1% lows measured (within 1 to 6 FPS of the cap); unlimited 3 to 32% faster on average |
+| the four speed options | Vulkan: 17/17 with them (above, and Phase 2b's 13/13); D3D12: needed the submission lock above, after it no crash |
+| `--native_render_scale=auto` | the scale the Xenos plugin draws at; the Original look (the golden set) gives 1, so the tests are unchanged; the presets' 2x was checked against the Xenos plugin's 2x in Phase 2b ("Render scale in the game") |
+| `--native_pipeline_list` | nothing without `kkpipelines.list` beside the game; with it no skipped draw on a first visit (above) |
+| `--native_vk_pipeline_cache` | Vulkan only (D3D12 logs that it is not used); a file of another driver is rebuilt; the second start's pipelines in 18 ms (above) |
+
+Left off: `--native_launcher_prewarm` (not tried in the game), `--native_stutter_stats` (a diagnostic).
+
+With the new defaults (the harness still adds `--native_pipeline_cache=false`): Vulkan 14/17 in the first full
+run (`runs\p2c-defaults-vk-full`: chap04, and Kong to the Rescue's two scenes because the scripted chapter
+select landed on another chapter, a missed press); D3D12 16/17 (chap04). Unlimited on Vulkan
+(`perfC-defaults-vk-r0`): V-Rex 224.1 / 113.6 / 103.2, Venture 235.1 / 150.4 / 143.8, Kong 231.9 / 21.0, all
+at least the four options' (`perfC-four3-r0`: V-Rex 162.5 / 115.7 / 109.8).
+
+Validation (Khronos layer from the SDK, loaded through `VK_ADD_LAYER_PATH`, plus `--native_validation`; title and
+chap12; `analysis\phase2c\validation`): the old defaults and the new give the same messages. Khronos: three
+(`VUID-vkCmdCopyImage-aspect-06663` and the two `oldLayout-01213`), all the presenter's guest output image,
+which the SDK makes without TRANSFER_DST usage while `CopyToGuestOutput` copies into it (to fix: draw into it, it
+has COLOR_ATTACHMENT usage). NVRHI: the shadow pass's 880x832 colour target with the 880x720 depth target
+(attachment sizes differ). Before this phase NVRHI's layer stopped the game at once ("two immediate command lists
+open"): the renderer's lists are now not "immediate".
+
 ### Open problems (Phase 2)
 
 - **chap04 and chap12 cameras**: solved by the render thread (`--native_render_thread`, "The render thread
   (Phase 2c)" above).
-- **Defaults.** The four frame-rate options and `--native_render_scale=auto` are off by default (today's
-  behaviour); turning them on is the next decision. The 13 golden scenes pass with all four on, except the
-  loading screen's fade frame before its new tolerance.
+- **Defaults**: decided and done, "Defaults (Phase 2c)" above.
 - **FXAA** matches the Xenos plugin's in kind but changes fewer pixels on small text.
 
 - **Cold pipeline caches.** Pipelines are made on four worker threads (Vulkan) and draws wait up to 30 ms a
   frame for them, then skip; the pipeline cache (on by default) makes the descriptions of earlier runs at
-  start. A truly cold driver cache was not measured again (see "Pipeline cache"). On D3D12 pipelines are
-  still made on the draw thread (NVRHI's D3D12 backend caches root signatures without a lock). Phase 2c
-  (cloud) adds a shipped pipeline list, the driver's pipeline cache in a file, a prewarm from the launcher and a
-  stutter counter, all off by default and not yet tried in the game ("Phase 2c" under "Pipeline cache"); turning
-  them on is the next decision, after the Windows checks listed there.
+  start. A truly cold driver cache was not measured (NVIDIA's own cache cannot be turned off from here). The
+  shipped list and the driver cache file are on by default (above); a release needs a `kkpipelines.list`
+  made from runs of every chapter. The launcher's prewarm is still off and untried in the game.
 - **Write watches.** Venture's gameplay still has about 10,000 invalidations a second and its movie about 360
   a frame (texture pages; textures are never unwatched whole, see Phase 2b above). The movie planes could
   skip the watches (their Lock / Unlock can be hooked).

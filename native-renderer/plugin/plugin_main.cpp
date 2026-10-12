@@ -139,6 +139,12 @@ REXCVAR_DEFINE_BOOL(native_render_thread, true, "Native renderer",
                     "the renderer (the game's timing then follows the Xenos plugin's)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_BOOL(native_render_thread_fences, true, "Native renderer",
+                    "With native_render_thread: the guest GPU's fences, swaps and interrupts wait until the render "
+                    "thread has run the calls queued before them (false: they pass at once, as without the render "
+                    "thread; for testing)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_BOOL(native_async_present, true, "Native renderer",
                     "Hand each frame to the presenter from a thread of its own, so the guest GPU's command "
                     "stream (and the game waiting on it) does not wait for the presenter")

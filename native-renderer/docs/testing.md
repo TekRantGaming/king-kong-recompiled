@@ -48,7 +48,8 @@ offset). The golden set captured on 10 October 2026 (Xenos plugin, D3D12, `kk-de
 variable of the calling shell is cleared for the launch, and `SDL_WINDOW_ACTIVATE_WHEN_SHOWN=0` /
 `SDL_WINDOW_ACTIVATE_WHEN_RAISED=0` are set so the game's window does not take the focus from whoever uses the PC.
 
-Native runs add `--native_pipeline_cache=false` (`plugin_args` in `scenes.json`): with the cache, a run makes every
+Native runs add `--native_pipeline_cache=false`, and since Phase 2c `--native_pipeline_list=false` and
+`--native_vk_pipeline_cache=false` (`plugin_args` in `scenes.json`; the other new defaults stay on): with the cache, a run makes every
 pipeline earlier runs recorded, and the chapter loads then lose no draws and wait for no pipelines, which moves
 the Kong to the Rescue timeline against the golden frames (the V-Rex is in another pose at the same shot time:
 0/5 frames, against 5/5 without the cache). The golden set was made with the Xenos plugin's own waits for

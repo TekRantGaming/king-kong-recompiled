@@ -56,6 +56,7 @@ REXCVAR_DECLARE(bool, native_vk_pipeline_cache);
 REXCVAR_DECLARE(bool, native_present_unlocked);
 REXCVAR_DECLARE(bool, native_async_submit);
 REXCVAR_DECLARE(bool, native_async_present);
+REXCVAR_DECLARE(bool, native_render_thread_fences);
 
 
 namespace nr {
@@ -421,7 +422,8 @@ void NativeGraphicsSystem::DispatchInterruptCallback(uint32_t source, uint32_t c
 }
 
 void NativeGraphicsSystem::WaitForRenderer(uint64_t ticket) {
-  if (backend_ && ticket) backend_->WaitRendered(ticket);
+  static const bool gate = REXCVAR_GET(native_render_thread_fences);
+  if (gate && backend_ && ticket) backend_->WaitRendered(ticket);
 }
 
 void NativeGraphicsSystem::MarkVblank() {
