@@ -1,7 +1,7 @@
 # Screen-space global illumination (beta)
 
-Status, 12 October 2026: branch `beta-ssgi` (from `beta` = `nr-integration` 1ba7339). Spatial only (no
-temporal accumulation yet: the per-pixel motion vectors come with branch `beta-upscalers`). Off by default
+Status, 12 October 2026: branch `beta-ssgi` (from `beta` = `nr-integration` 1ba7339, with `beta-upscalers`
+038dfe7 merged for its camera reprojection vote). Spatial and temporal (camera reprojection). Off by default
 (`--native_gi=off`); the launcher's Graphics page has the row "Global illumination: Off / Low / Medium / High"
 next to Ambient occlusion. Ray-traced GI is for later; this is screen space only.
 
@@ -68,9 +68,36 @@ with four smaller mips, normals rebuilt from the depth; full or half resolution 
    scene colour's units), a = the share of its hemisphere nothing hides (the visibility). Flat surfaces do not
    hide their own sky (sector edges are rounded to the nearest boundary, so a sample grazing the horizon covers
    nothing).
-3. `cs_denoise`, 2 or 3 times: a 5x5 a-trous blur with steps 1, 2, 4, weighted by depth and normal (edges stay).
-4. `ps_composite` (a full-screen triangle over the picture, the colour target's alpha left alone), reading a
+3. `cs_temporal` (with `--native_gi_temporal`, the default): this frame's light blended into last frame's;
+   see "Temporal accumulation".
+4. `cs_denoise`, 2 or 3 times: a 5x5 a-trous blur with steps 1, 2, 4, weighted by depth and normal (edges stay).
+5. `ps_composite` (a full-screen triangle over the picture, the colour target's alpha left alone), reading a
    copy of the colour: the result upsampled by depth (as GTAO's `cs_output`) and added to the surface.
+
+### Temporal accumulation
+
+The upscalers' branch makes per-pixel motion vectors at its upscale point, after the post chain begins: later in
+the frame than the GI's moment, and only with an upscaler on. The GI needs where each pixel was last frame
+before the fog pass, with or without an upscaler, so it uses the same camera reprojection the upscalers' camera
+pass uses (`upscale_motion.h`, `CameraReprojectionVote`) with its own small history:
+
+- every opaque or depth-only scene draw before the moment is keyed by its identity across frames (vertex
+  shader, vertex streams and offset, index buffer, range, primitive, as the upscalers' `MotionDrawKey`), and its
+  world-view-projection rows are kept for one frame;
+- a draw met again offers last frame's rows times the inverse of this frame's: for anything that did not move
+  that is the camera's reprojection (the world cancels out); the matrix most draws agree on wins (at least two,
+  and at least half of the offers), else the frame has no history;
+- `cs_temporal`: each working pixel's NDC (from the viewport and its stored depth) goes through the matrix to
+  last frame's picture; the history's four texels there count only where their view depth was this point's depth
+  then (5 %); the history is clamped to the 3x3 neighbourhood's range of this frame's light, widened by half of
+  it (what moved or changed does not linger); the new light weighs 0.15. A point last frame did not see, or off
+  the picture, takes this frame's light alone.
+- The result before the blur becomes the next frame's history, with this frame's view depth. The noise changes
+  every frame (XeGTAO's temporal offset), so the history averages 64 patterns.
+
+Moving objects (Kong, characters, the V-Rex) are reprojected as if they had not moved: the depth test and the
+clamp keep their light from trailing; their own per-object motion (the upscalers' motion pass) would do better
+and can be used once it runs before the fog pass.
 
 ### The composite: telling surface colour from light
 
@@ -117,6 +144,7 @@ also the path for slower GPUs (the Steam Deck class): at 1280 x 800 Low works on
 | `--native_gi_thickness` | 0, world units | how deep a surface on the screen is taken to be (0: a quarter of the radius) |
 | `--native_gi_albedo` | 0.6, 0.05 to 1 | the brightest albedo the composite assumes |
 | `--native_gi_occlusion` | 1, 0 to 1 | with the AO off: how much of the hidden ambient light is taken away |
+| `--native_gi_temporal` | true, false | temporal accumulation (above) |
 | `--native_gi_debug` | 0 to 3 | 1 the bounce light alone, 2 the change on grey (+ brighter, - darker), 3 the visibility |
 | `--native_gi_gpu_time` | false, true | GPU timer queries around the GI's passes, the average logged every 600 frames |
 
@@ -141,6 +169,8 @@ set to 0.3), then an alpha-blended quad over the floor by the wall. The tests' r
 | `GameGi_TransparentDrawAfterIsUntouched` | the quad is half its colour plus half the lit scene behind it (within 0.002), where painting over the finished picture would move it by 0.03 |
 | `GameGi_WithAoItOnlyAddsLight` | with GTAO at the opaque moment the GI adds red and takes nothing away |
 | `GameGi_VisibilityTakesTheHiddenAmbientAway` | with the AO off, by the wall green and blue get darker (the wall hides the sky) while red rises; the open floor is unchanged; the debug view shows the red bounce |
+| `GameGi_TemporalStaticCameraSettles` | eight frames from a still camera: the history is used from the second frame on, and the light settles where a frame without it is (mean difference below 0.0001) |
+| `GameGi_TemporalMovingCameraFollows` | the camera moves every frame: the history is reprojected (used 7 times) and the red bleed sits where a fresh frame from the last camera puts it (0.329 against 0.334; mean difference 0.0003) |
 | `GameGi_RenderScaleTwoMatchesOne` | Medium and High: mean difference 0.0012 to 0.0018 after an area average |
 | `GameGi_OffChangesNothing` | off: nothing made, the frame equal to the bit |
 
@@ -160,13 +190,15 @@ split.
 - Light only when the AO is on; light and ambient occlusion when it is off.
 - The frame's ambient light from `g_vAmbientColor` by name in the shaders' own constant tables: no game data in
   the code, no list file.
-- No temporal noise (the same pattern every frame, nothing crawls); spatial blur only until motion vectors exist.
+- Temporal accumulation from the camera's reprojection (voted as the upscalers vote it), not from the
+  upscalers' motion vectors: those are made later in the frame and only with an upscaler on. Without a history
+  the noise is the same every frame (nothing crawls).
 - Off by default until the user has seen the comparisons.
 
 ## Later
 
-- **Temporal accumulation** once `beta-upscalers` has working per-pixel motion vectors: reproject the last
-  frame's result, reject by depth and normal, blend (fewer samples, less blur).
+- **Per-object motion** for the history (Kong, characters), once the upscalers' motion pass can run before
+  the fog pass; then fewer samples or blur passes per frame.
 - **The lighting shaders' ambient term** (the `ambient` hook of `ao.md` extended to `ambient x ao + bounce`):
   the right albedo and the right place relative to the per-object fog, but the bounce must exist before the lit
   draws, so it would come from the last frame's colour, reprojected (motion vectors); the hooked shader variants
