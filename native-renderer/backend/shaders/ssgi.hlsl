@@ -131,9 +131,10 @@ void cs_radiance_down(uint2 id : SV_DispatchThreadID)
 
 // The slice's measure of light from its lower edge (the normal's horizon, n - pi/2) up to angle t
 // (both from the view vector, signed): the integral of cos(t - n) |sin t| (GTAO's integrand).
-float SliceMeasure(float t, float n)
+// sinN, cosN: sin(n), cos(n) (the same for the whole slice).
+float SliceMeasure(float t, float n, float sinN, float cosN)
 {
-    float c = cos(2.0 * t - n) * 0.25, k = t * sin(n) * 0.5, z = cos(n) * 0.25;
+    float c = cos(2.0 * t - n) * 0.25, k = t * sinN * 0.5, z = cosN * 0.25;
     return t >= 0.0 ? (-c + k + z) : (c - k - z);
 }
 
@@ -200,8 +201,10 @@ void cs_gather(uint2 pix : SV_DispatchThreadID)
         float cosN = saturate(dot(projN, V) / max(projLen, 1e-4));
         float n = (dot(ortho, projN) >= 0.0 ? 1.0 : -1.0) * XeGTAO_FastACos(cosN);
         // The slice's measure from the normal's one horizon to the other (cos n + n sin n).
-        float low = SliceMeasure(n - kHalfPi, n);
-        float total = max(SliceMeasure(n + kHalfPi, n) - low, 1e-4);
+        float sinN = sin(n), cosNs = cos(n);
+        float low = SliceMeasure(n - kHalfPi, n, sinN, cosNs);
+        float total = max(SliceMeasure(n + kHalfPi, n, sinN, cosNs) - low, 1e-4);
+        float invTotal = 1.0 / total;
 
         uint mask = 0u;
         float3 sliceLight = 0.0;
@@ -235,7 +238,7 @@ void cs_gather(uint2 pix : SV_DispatchThreadID)
                 // normal's hemisphere; into the sector space (the share of the slice's light below them).
                 float2 h = side == 0 ? float2(af, ab) : float2(-ab, -af);
                 h = clamp(h, n - kHalfPi, n + kHalfPi);
-                float2 u = saturate((float2(SliceMeasure(h.x, n), SliceMeasure(h.y, n)) - low) / total);
+                float2 u = saturate((float2(SliceMeasure(h.x, n, sinN, cosNs), SliceMeasure(h.y, n, sinN, cosNs)) - low) * invTotal);
                 uint bits = SectorBits(u.x, u.y);
                 uint fresh = bits & ~mask;
                 mask |= bits;
@@ -294,7 +297,10 @@ void cs_denoise(uint2 pix : SV_DispatchThreadID)
             float3 Nq = LoadNormalAt(g_srcDenoiseNormals, q);
             float w = kKernel[abs(i)] * kKernel[abs(j)];
             w *= exp(-abs(zq - z) / max(z * 0.03 * float(stepPx), 1e-5));
-            w *= pow(saturate(dot(N, Nq)), 8.0);
+            float nd = saturate(dot(N, Nq));
+            nd *= nd;
+            nd *= nd;
+            w *= nd * nd;
             if (g_srcRawDepth.Load(int3(q, 0)).x >= kk_Params.y)
                 w = 0.0;  // the sky has no light to share
             sum += g_srcGi.Load(int3(q, 0)) * w;
