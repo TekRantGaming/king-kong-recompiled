@@ -287,3 +287,20 @@ both in the game.
 - The legacy and resolve-moment AO cannot run with an upscaler (GTAO replaces them).
 - The launcher has no upscaler choice yet: the setting is the cvar (`QueryUpscalerSupport` is there for a
   menu that offers only what this GPU runs).
+
+## Status (12 October 2026, paused)
+
+Done: the foundation, FSR 3.1, DLSS, XeSS and FSR 4 in the renderer and the plugin, the SDK patch, the
+notices, the offline tests above on this PC's RTX 4070 Ti (both APIs) and the SDKs' GPU cost.
+
+Not done yet (paused when the PC was needed; nothing of it has run in the game):
+
+- The game runs, through the fair queue: `--native_upscaler=off` against the golden `vrex_140`; at
+  `--native_render_scale=2`, quality mode, V-Rex and Kong to the Rescue for native 2x, DLSS, FSR 3.1 and XeSS
+  (one comparison sheet each in `F:\KK-native-renderer\analysis\upscalers\`, with the in-game GPU time from
+  `--native_upscaler_gpu_time`); the motion vectors over Kong to the Rescue (`--native_upscaler_debug=1`) for
+  the camera, the characters, Kong's fur and the particles; a D3D12 start with DLSS and with FSR 4 (its
+  fallback). The scene file is `analysis\upscalers\runs\upscaler_scenes.json`; the build folder has the shader
+  packs and DXC beside `king_kong.exe`.
+- The launcher's upscaler menu on the Graphics page, offering only what `QueryUpscalerSupport` says this GPU
+  runs, DLSS named in text only.
