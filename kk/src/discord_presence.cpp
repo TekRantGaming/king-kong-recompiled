@@ -37,7 +37,7 @@ namespace {
 
 // The port's Discord application (discord.com/developers/applications): profiles show "Playing"
 // and its name, with its icon. kk_discord_app_id (testing) overrides it.
-constexpr const char* kApplicationId = "";
+constexpr const char* kApplicationId = "1559247649289412788";  // "King Kong Recompiled"
 constexpr const char* kWebsite = "https://kong.tekrantgaming.com";
 constexpr const char* kDiscordInvite = "https://discord.gg/PET2xU5FJq";  // as the launcher's (permanent)
 constexpr auto kPoll = std::chrono::seconds(5);   // pings answered, the status kept current
@@ -207,8 +207,10 @@ std::string Activity() {
     playing = g_playing;
     since = g_since;
   }
+  // "logo": the application's Rich Presence art asset (the website's mark, discord-app\logo.png).
   return std::string("{\"details\":") + Quoted(playing ? "In the game" : "In the launcher") +
          ",\"state\":" + Quoted(std::string("PC port v") + KK_VERSION) +
+         ",\"assets\":{\"large_image\":\"logo\",\"large_text\":\"King Kong Recompiled\"}" +
          ",\"timestamps\":{\"start\":" + std::to_string(since) + "},\"buttons\":[{\"label\":\"Get the PC port\",\"url\":" +
          Quoted(kWebsite) + "},{\"label\":\"Join the Discord\",\"url\":" + Quoted(kDiscordInvite) + "}]}";
 }
