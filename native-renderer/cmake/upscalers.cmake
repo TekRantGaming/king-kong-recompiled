@@ -37,6 +37,9 @@ if(WIN32)
     if(EXISTS "${NR_ROOT}/thirdparty/FidelityFX-API/ffx_api/ffx_api.h")
         set(NR_HAS_FFX 1)
         target_include_directories(nr_renderer PRIVATE "${NR_ROOT}/thirdparty/FidelityFX-API")
+        # FSR 4: the FSR SDK 2.3 API headers (MIT, thirdparty/FSR-SDK-API), for upscaler_fsr4.cpp alone.
+        set_source_files_properties("${NR_ROOT}/backend/upscaler_fsr4.cpp" PROPERTIES
+            INCLUDE_DIRECTORIES "${NR_ROOT}/thirdparty/FSR-SDK-API")
         foreach(_f amd_fidelityfx_vk.dll amd_fidelityfx_dx12.dll)
             if(EXISTS "${NR_FFX_SDK_DIR}/PrebuiltSignedDLL/${_f}")
                 list(APPEND _nr_up_runtime "${NR_FFX_SDK_DIR}/PrebuiltSignedDLL/${_f}")

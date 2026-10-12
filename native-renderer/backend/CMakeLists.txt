@@ -53,6 +53,7 @@ if(NR_GAME_RENDERER)
         # Temporal upscalers (docs/upscalers.md): the choice, and each SDK (loaded at run time).
         upscaler.cpp
         upscaler_ffx.cpp
+        upscaler_fsr4.cpp
         upscaler_dlss.cpp
         upscaler_xess.cpp
         upscaler_vulkan.cpp

@@ -2570,3 +2570,36 @@ As an exception, if, as a result of your compiling your source code, portions
 of this Software are embedded into a machine-executable object form of such
 source code, you may redistribute such embedded portions in such object form
 without including the above copyright and permission notices.
+
+------------------------------------------------------------------------------
+AMD FSR SDK 2.3.0: FSR 4 (FSR Upscaling 4.1.1, temporal upscaler, the native
+renderer, Direct3D 12)
+amd_fidelityfx_loader_dx12.dll and amd_fidelityfx_upscaler_dx12.dll beside
+the game (AMD-signed binaries, unmodified), and the FidelityFX API headers
+inside rexgpu-native
+https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK
+------------------------------------------------------------------------------
+
+Copyright (C) Advanced Micro Devices, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+(The SDK's docs/license.md lists these DLLs and headers among the files under
+this licence.) AMD, the AMD Arrow logo, Radeon, RDNA and FidelityFX are
+trademarks of Advanced Micro Devices, Inc.

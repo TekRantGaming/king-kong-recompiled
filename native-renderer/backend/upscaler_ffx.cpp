@@ -297,11 +297,3 @@ std::unique_ptr<Upscaler> CreateFsr3Upscaler(nvrhi::IDevice*, const UpscaleConfi
 }  // namespace nr
 
 #endif
-
-namespace nr {
-// FSR 4 (upscaler_fsr4.cpp) comes in a later stage: on D3D12 with AMD's FSR SDK 2.x.
-std::unique_ptr<Upscaler> CreateFsr4Upscaler(nvrhi::IDevice*, const UpscaleConfig&, std::string* why) {
-  if (why) *why = "not built in yet";
-  return nullptr;
-}
-}  // namespace nr

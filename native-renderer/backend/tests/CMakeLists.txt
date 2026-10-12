@@ -137,6 +137,20 @@ if(NR_HAS_VULKAN AND NR_GAME_RENDERER)
     endforeach()
 endif()
 
+# The upscalers on Direct3D 12 without the game renderer (docs/upscalers.md, "Tests"): a device of
+# its own on the first hardware adapter; skipped without one.
+if(WIN32 AND NR_HAS_D3D12 AND NR_GAME_RENDERER)
+    add_executable(nr_upscaler_d3d12_tests upscaler_d3d12_tests.cpp readback.cpp)
+    target_link_libraries(nr_upscaler_d3d12_tests PRIVATE nr_renderer d3d12 dxgi)
+    add_test(NAME nr_upscaler_d3d12_tests COMMAND nr_upscaler_d3d12_tests)
+    get_property(_nr_up_runtime GLOBAL PROPERTY NR_UPSCALER_RUNTIME_FILES)
+    foreach(_f IN LISTS _nr_up_runtime)
+        get_filename_component(_name "${_f}" NAME)
+        add_custom_command(TARGET nr_upscaler_d3d12_tests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_f}" $<TARGET_FILE_DIR:nr_upscaler_d3d12_tests>/${_name})
+    endforeach()
+endif()
+
 # The motion variant of the translated vertex shaders, on the translator's generated corpus
 # (docs/upscalers.md).
 if(NR_GAME_RENDERER)
