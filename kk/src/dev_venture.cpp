@@ -153,3 +153,34 @@ REX_HOOK_RAW(sub_8271BA18) {
               LoadF(base, state), step, int32_t(ctx.r3.u32), CurrentAction(base, obj));
 }
 #endif
+
+#if defined(KK_DEV_TOOLS)
+// KK_DEV_GFX_TRACE=1: once a second, how many effects were added to the world's
+// effect list (sub_827F9978) by each caller and effect type, and the frames in
+// that second, to find effects created once a frame.
+#include <map>
+#include <utility>
+
+REX_EXTERN(__imp__sub_827F9978);
+REX_HOOK_RAW(sub_827F9978) {
+  using namespace kk::hfr;
+  static const bool on = std::getenv("KK_DEV_GFX_TRACE") != nullptr;
+  if (on) {
+    static std::map<std::pair<uint32_t, uint32_t>, int> counts;
+    static auto start = std::chrono::steady_clock::now();
+    // Frames with at least one add: the game clock (as sub_825845E0 reads it) changes once a frame.
+    static int frames = 0;
+    static uint32_t last_clock = 0;
+    const uint32_t clock = Load32(base, 0x82CCAE1C);
+    if (clock != last_clock) ++frames, last_clock = clock;
+    ++counts[{uint32_t(ctx.lr), ctx.r4.u32}];
+    if (std::chrono::steady_clock::now() - start >= std::chrono::seconds(1)) {
+      std::string line;
+      for (const auto& [k, n] : counts) line += fmt::format(" {:08X}/{}={}", k.first, k.second, n);
+      REXLOG_INFO("KK dev gfx adds ({} frames with adds, dt {:.4f}):{}", frames, FrameTime(base), line);
+      counts.clear(), frames = 0, start = std::chrono::steady_clock::now();
+    }
+  }
+  __imp__sub_827F9978(ctx, base);
+}
+#endif
