@@ -41,6 +41,7 @@ cbuffer GTAOConstantBuffer : register(b0)
     float4 kk_FogNorm;  // the game's fog (ps_apply_resolve): xyz g_vFogNormalizing, w 1 with a fog pass
     float4 kk_FogPar;   // x near over distance, y density, z inverse distance
     float4 kk_FogCol;   // rgb fog colour
+    float4 kk_Fade;     // x: view depth (world units) at which the occlusion has faded out linearly, 0: no fade
 };
 
 #include "../../thirdparty/XeGTAO/XeGTAO.hlsli"
@@ -186,6 +187,9 @@ void cs_output(uint2 id : SV_DispatchThreadID)
             }
             ao = weight > 0.0 ? total / weight : 1.0;
         }
+        // The legacy method's distance fade (distant terrain under the game's own per-pixel fog).
+        if (kk_Fade.x > 0.0)
+            ao = lerp(1.0, ao, saturate(1.0 - ViewDepth(stored) / kk_Fade.x));
     }
     g_outOcclusion[id] = saturate(ao);
 }

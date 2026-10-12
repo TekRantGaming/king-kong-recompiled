@@ -48,6 +48,7 @@ GtaoSettings SceneAo::Settings(const AoSettings& s) const {
   g.radius_scale = config_.radius_scale;
   g.falloff = config_.falloff;
   g.power = config_.power;
+  g.fade = config_.fade;
   return g;
 }
 

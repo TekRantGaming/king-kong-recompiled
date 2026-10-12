@@ -51,6 +51,7 @@ REXCVAR_DECLARE(std::string, native_ao_shaders);
 REXCVAR_DECLARE(double, native_ao_radius_scale);
 REXCVAR_DECLARE(double, native_ao_falloff);
 REXCVAR_DECLARE(double, native_ao_power);
+REXCVAR_DECLARE(double, native_ao_fade);
 REXCVAR_DECLARE(int32_t, native_ao_dump_every);
 REXCVAR_DECLARE(bool, native_ao_gpu_time);
 
@@ -102,6 +103,7 @@ void ReadAoConfig(AoConfig& ao) {
   ao.radius_scale = float(std::clamp(REXCVAR_GET(native_ao_radius_scale), 0.01, 100.0));
   ao.falloff = float(std::clamp(REXCVAR_GET(native_ao_falloff), 0.0, 1.0));
   ao.power = float(std::max(0.0, REXCVAR_GET(native_ao_power)));
+  ao.fade = float(std::max(0.0, REXCVAR_GET(native_ao_fade)));
   ao.dump_every = uint32_t(std::max(0, REXCVAR_GET(native_ao_dump_every)));
   ao.gpu_time = REXCVAR_GET(native_ao_gpu_time);
   if (const std::string path = REXCVAR_GET(native_ao_rules); !path.empty()) {

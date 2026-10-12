@@ -34,6 +34,7 @@ struct GtaoSettings {
   float radius_scale = 1.0f;  // times the radius from the camera
   float falloff = 0.0f;       // XeGTAO's falloff range (0: its default)
   float power = 0.0f;         // XeGTAO's final power (0: FinalPower(strength))
+  float fade = 0.0f;          // near-plane distances where the occlusion has faded out linearly (0: none)
 };
 
 struct GtaoInput {

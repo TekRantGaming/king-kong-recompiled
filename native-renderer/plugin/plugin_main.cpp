@@ -218,6 +218,10 @@ REXCVAR_DEFINE_DOUBLE(native_ao_power, 0.0, "Native renderer",
                       "The gtao method's final power (0: from ao_strength)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_DOUBLE(native_ao_fade, 0.0, "Native renderer",
+                      "The gtao method's occlusion fades out linearly to this many near-plane distances (0: none)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_INT32(native_ao_dump_every, 0, "Native renderer",
                      "Every this many frames, log the AO classifier's view of each draw (0: off)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);

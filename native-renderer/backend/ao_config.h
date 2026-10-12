@@ -36,6 +36,9 @@ struct AoConfig {
   float falloff = 0.0f;
   // --native_ao_power: XeGTAO's final power (0: from ao_strength, Gtao::FinalPower).
   float power = 0.0f;
+  // --native_ao_fade: the occlusion fades out linearly to this many near-plane distances (0: none;
+  // the legacy method uses 2000).
+  float fade = 0.0f;
   // --native_ao_dump_every: every this many frames, the classifier's view of each draw in the log
   // (as --native_dump_frame does for one frame); 0 off.
   uint32_t dump_every = 0;

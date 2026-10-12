@@ -43,6 +43,7 @@ struct Gtao::Constants {
   float fog_norm[4] = {};
   float fog_par[4] = {};
   float fog_col[4] = {};
+  float fade[4] = {};          // x: view depth (world units) where the occlusion has faded out, 0: no fade
 };
 
 namespace {
@@ -291,6 +292,7 @@ void Gtao::FillConstants(Constants& k, const GtaoInput& in, const GtaoSettings& 
   const float zs = in.screen.z_scale, zo = in.screen.z_offset;
   k.params[1] = zs > 0.0f ? zo + zs * (1.0f - 1e-6f) : 2.0f;
   k.params[2] = float(s.mode);
+  k.fade[0] = s.fade > 0.0f ? s.fade * in.projection.near_plane() : 0.0f;
 }
 
 nvrhi::ITexture* Gtao::Compute(nvrhi::ICommandList* cl, const GtaoInput& in, const GtaoSettings& s) {
