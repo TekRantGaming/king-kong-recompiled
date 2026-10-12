@@ -22,6 +22,13 @@ native-renderer\tests\run.ps1 -Plugin native
 native-renderer\tests\run.ps1 -Plugin native -Scenes title,pause,vrex -WaitMinutes 60
 # Capture the golden set again (asks for -Force when one exists):
 native-renderer\tests\run.ps1 -Plugin xenos -Golden -Force
+# The chapter tour (tests/tour.json, all 42 chapter-select entries in four launches, about 35 minutes):
+native-renderer\tests\run.ps1 -Plugin native -Tour
+# The tour on the native plugin with its pipeline cache recording, one file per launch collected in
+# <run folder>\pipelines\ (see "The chapter tour"):
+native-renderer\tests\run.ps1 -Tour -RecordPipelines
+# On a shared PC: wait for the game up to 10 hours and leave it to others 6 minutes between launches:
+native-renderer\tests\run.ps1 -Plugin native -Tour -WaitMinutes 600 -PauseMinutes 6
 ```
 
 It needs the `kk-dev` build (`kk\build.bat kk-dev`). The report is `report\report.html` in the run folder
@@ -29,8 +36,12 @@ It needs the `kk-dev` build (`kk\build.bat kk-dev`). The report is `report\repor
 already running, 4 setup error. A full run takes about 8 minutes (six launches; golden capture about 10).
 
 Before every launch the runner checks for a `king_kong` process and never starts a second copy or stops one it
-did not start (`-WaitMinutes` re-checks every 5 minutes). While it runs, `F:\KK-native-renderer\game.lock` names
-it; afterwards the file says `free`. It closes the game window when the shots are in (so the shader cache is
+did not start (`-WaitMinutes` re-checks every 5 minutes); a lock file saying `hold` or `user` counts as busy too.
+While it runs, `F:\KK-native-renderer\game.lock` names it (`-LockName`); afterwards the file says `free`. The
+game is launched with `SDL_WINDOW_ACTIVATE_WHEN_SHOWN=0` and `SDL_WINDOW_ACTIVATE_WHEN_RAISED=0`, so its window
+never takes the focus from whoever is using the PC (the captures are the game's own frames either way). Without
+`-Exe` the runner takes `kk\out\build\kk-dev\king_kong.exe`, or the `kk-dev-vulkan` build's when only that one
+has the plugin asked for (`rexgpu-native.dll`). It closes the game window when the shots are in (so the shader cache is
 written) and stops the process if it has not exited 15 s later. Each run gets a private copy of the test save
 (`F:\KK-native-renderer\userdata`, profile `B13EBABEBABEBABE`), so runs never change it.
 
@@ -287,6 +298,97 @@ Add a run (if the scene needs its own launch) and a scene to `scenes.json`; chec
 `KK_DEV_SHOTS` every second or two (the frames show what is on screen when); capture the golden frames for it
 (`run.ps1 -Golden -Scenes <name>`), run it twice more against the golden set and set its thresholds from
 `compare.py calibrate`.
+
+## The chapter tour
+
+`tests/tour.json` has a scene for every chapter-select entry (0-41), written by `tests/tourgen.py` from its
+chapter table (do not edit the JSON by hand: change `MOMENTS` or `BATCHES` in `tourgen.py` and run
+`python -I native-renderer\tests\tourgen.py`; `--check` prints each launch's timeline, `--table` the table
+below). `run.ps1 -Tour` runs it; every other switch works as with `scenes.json` (`-Tour -Scenes tourB`,
+`-Tour -Scenes tour27_kong_rescue`, `-Tour -Golden`). Golden frames are in `golden\tour<NN>_<name>\` beside
+the 17 scenes, raw run folders in `golden\_runs\tour<A-D>-<time>`.
+
+**How a launch plays several chapters.** From the chapter select a launch starts a chapter (RIGHT presses
+0.6 s apart, A 2 s after the last), presses SKIP every 2 s from 4 to 40 s after A (Start only while a movie
+plays, so a chapter's movies are skipped and the pause menu never opens by mistake; the SKIP presses stop a
+second before the quit), takes the shots, and quits: START, seven UP presses 0.5 s apart, A (Quit game), A
+(Yes, "You are about to lose your latest progress"). Yes goes straight back to the chapter select, its cursor
+on the chapter just played, about 3 s later; the next moves start 13 s after the START. Found in the probes:
+
+- The pause menu is a ring with the cursor on Resume. Most chapters have Options, Quit game, Start again,
+  Resume, Score (UP twice reaches Quit game); The Log has only Options, Quit game, Resume (UP twice reaches
+  Options and the first A opens it). Seven UP presses reach Quit game in both (7 = 2 mod 5 = 1 mod 3), and
+  did in every chapter tried except Venture, where both two and seven UP presses ended on Options (its menu
+  was not looked at; Venture is simply last in its launch, as The Log is in its own).
+- The quit must come while the game is in play: START during a death fade or a checkpoint restart does
+  nothing, the next chapter's presses then land in the old chapter, and every later chapter of the launch is
+  one entry off. So the shots come early where the player dies when idle (Rapids, Fight, Kong, Chased by
+  V-Rex, The Skull Islanders, To the Plane, Fight in the Lair) and the quit 3 s after the last shot.
+- Kong's Death (40) is a cutscene that returns to the chapter select by itself (about 57 s after A; the
+  tour waits 60 s and moves on without a quit). Credits (41) come last, without SKIP.
+- Loads are short (3 to 7 s from A to the first frame of the chapter); Venture shows 60 s of black first.
+
+Four launches (`tourA` 0-10, `tourB` 11-20, `tourC` 21-30, `tourD` 31-41) take about 35 minutes together (11,
+8, 9 and 10 minutes from the save menu, plus about 40 s of start each). One launch for all 42 would save three
+starts (2 minutes) but one missed quit would cost every chapter after it, so a launch is about ten chapters.
+Each launch takes one frame log (`tour04_the_wall`, `tour18_swamps`, `tour22_save_ann`, `tour33_chased_by_kong`).
+
+**Finding the moments** (probe files written by `tourgen.py --probe <file> --chapters ... --every 3
+--stay 80`, run with `run.ps1 -ScenesFile <file> -Out <folder> -NoCompare -NoFrameLog`, contact sheets
+looked at offline; probe data in `F:\KK-native-renderer\analysis\tour\`): five shots 0.5 s apart where the
+picture holds still (Jack or Kong idle after the opening, the camera at rest), 30 s after A where the chapter
+allows it. The thresholds start as those of chap04-chap33 (closest-frame checks off, golden range with
+`env_tol` 32, `env_flash_level` 6, `min_pass` 0.6); scenes where the whole picture moves (the raft, the
+fights, the credits) add `env_radius` 4.
+
+The moments (seconds after the chapter's A; times in `tour.json` are seconds after the save menu opens). Kind: gameplay (the player's character in play, standing still unless noted) or cutscene (in-engine, including Skull Island's opening, which waits for the player). Every scene has five test shots 0.5 s apart and a golden burst every 0.2 s from 1 s before to 1 s after them (23 frames).
+
+| Entry | Scene | Chapter | Run | Shots (s after A) | Kind | What |
+|---|---|---|---|---|---|---|
+| 1 | `tour01_skull_island` | Skull Island | tourA | 28, 28.5, 29, 29.5, 30 | cutscene | Ann's face leaning over Jack on the beach, the in-engine opening that waits for the player; birds cross the sky |
+| 2 | `tour02_necropolis` | Necropolis | tourA | 30, 30.5, 31, 31.5, 32 | gameplay | a cave mouth against a pale sky, Ann and a sailor beside it (Jack still) |
+| 3 | `tour03_scorpions` | Scorpions | tourA | 30, 30.5, 31, 31.5, 32 | gameplay | a dark stone passage with a carved wall (Jack still) |
+| 4 | `tour04_the_wall` | The Wall | tourA | 30, 30.5, 31, 31.5, 32 | gameplay | a jungle clearing at dusk, a spiked wooden gate against the sky (as chap04) |
+| 5 | `tour05_sacrifice` | Sacrifice | tourA | 40, 40.5, 41, 41.5, 42 | gameplay | bones and torch glow on the floor of a dark pit (Jack still) |
+| 6 | `tour06_kongs_tracks` | On Kong's Tracks | tourA | 40, 40.5, 41, 41.5, 42 | gameplay | under a wooden scaffold in the rain, lightning lights it now and then (Jack still) |
+| 7 | `tour07_hayes` | Hayes | tourA | 40, 40.5, 41, 41.5, 42 | gameplay | Hayes by a stone pillar under the scaffold, rain beyond (Jack still) |
+| 8 | `tour08_vrex` | V-Rex | tourA | 40, 40.5, 41, 41.5, 42 | gameplay | Jack in the rain under the cave roof, random lightning (as the vrex scenes) |
+| 9 | `tour09_ann` | Ann | tourA | 30, 30.5, 31, 31.5, 32 | gameplay | a cave mouth with shafts of light falling in (Jack still) |
+| 10 | `tour10_kong` | Kong | tourA | 12, 12.5, 13, 13.5, 14 | gameplay | Kong crouching on a ledge by a ruined wall (Kong idle; Ann is caught at about 24 s, so the shots come before that) |
+| 0 | `tour00_venture` | Venture | tourA | 89, 89.5, 90, 90.5, 91 | gameplay | the hull of the rocking ship with VENTURE painted on it and the Right stick to aim hint, after about 60 s of black (the same moment as the venture scene) |
+| 11 | `tour11_canyon` | The Canyon | tourB | 30, 30.5, 31, 31.5, 32 | gameplay | a canyon path between mossy rocks, a pool beyond (Jack still) |
+| 12 | `tour12_millipedes` | Millipedes | tourB | 30, 30.5, 31, 31.5, 32 | gameplay | a dark jungle path towards a lit gate in a wall of vines (as chap12) |
+| 13 | `tour13_brontosaurus` | Brontosaurus | tourB | 30, 30.5, 31, 31.5, 32 | gameplay | a dark cave, a thin stream of water falling from the roof (Jack still) |
+| 14 | `tour14_jimmy` | Jimmy | tourB | 20, 20.5, 21, 21.5, 22 | gameplay | a dark rock wall lit by a torch, Carl with his camera at the start (Jack still) |
+| 15 | `tour15_raft` | On the Raft | tourB | 4, 4.5, 5, 5.5, 6 | gameplay | the raft on the river at the start, a torch in the foreground (the raft moves) |
+| 16 | `tour16_rapids` | Rapids | tourB | 6, 6.5, 7, 7.5, 8 | gameplay | the raft going down the rapids in white water (moves; Jack drowns at about 20 s and the checkpoint restarts, so the shots come early) |
+| 17 | `tour17_fight` | Fight | tourB | 6, 6.5, 7, 7.5, 8 | gameplay | Kong and a V-Rex facing each other in a misty clearing (fight; Kong dies at about 50 s) |
+| 18 | `tour18_swamps` | Swamps | tourB | 20, 20.5, 21, 21.5, 22 | gameplay | Jack under a shelter, Jimmy and the sailors looking out over the swamp (Jack still) |
+| 19 | `tour19_chased_vrex` | Chased by V-Rex | tourB | 6, 6.5, 7, 7.5, 8 | gameplay | Kong fighting raptors in the misty jungle, Ann behind him (Kong dies at about 25 s) |
+| 20 | `tour20_the_log` | The Log | tourB | 55, 55.5, 56, 56.5, 57 | gameplay | after the log falls: a mossy rock wall over mist (as chap20) |
+| 21 | `tour21_islanders` | The Skull Islanders | tourC | 12, 12.5, 13, 13.5, 14 | gameplay | Kong by a broken stone block in the ruins, Ann at his feet, raptors coming (Kong idle; he dies at about 40 s) |
+| 22 | `tour22_save_ann` | To Save Ann | tourC | 30, 30.5, 31, 31.5, 32 | gameplay | a narrow rocky gorge with a stream, light at its end (Jack still) |
+| 23 | `tour23_the_cave` | The Cave | tourC | 30, 30.5, 31, 31.5, 32 | gameplay | a dark wooden scaffold over a pool, figures behind it (Jack still) |
+| 24 | `tour24_venatosaurus` | Venatosaurus | tourC | 30, 30.5, 31, 31.5, 32 | gameplay | a rocky stream bed, two figures in front of a pale rock beyond (Jack still) |
+| 25 | `tour25_in_the_mud` | In the Mud | tourC | 30, 30.5, 31, 31.5, 32 | gameplay | carved stone pillars in the dark, rain beyond (Jack still) |
+| 26 | `tour26_call_kong` | Call Kong | tourC | 30, 30.5, 31, 31.5, 32 | gameplay | a dark hall with a lattice of beams over pale water (Jack still) |
+| 27 | `tour27_kong_rescue` | Kong to the Rescue | tourC | 13, 13.5, 14, 14.5, 15 | gameplay | Kong to the Rescue in play: Jack with a spear behind the rocks, a V-Rex, fires and rain (the same moment as the kong scene) |
+| 28 | `tour28_to_the_plane` | To the Plane | tourC | 12, 12.5, 13, 13.5, 14 | gameplay | Jack crouching by a body in a mossy stone corridor at the start (he dies at about 48 s) |
+| 29 | `tour29_to_the_lair` | To the Lair | tourC | 30, 30.5, 31, 31.5, 32 | gameplay | a great tree's roots in green mist (Jack still) |
+| 30 | `tour30_kongs_lair` | Kong's Lair | tourC | 30, 30.5, 31, 31.5, 32 | gameplay | dark carved stone walls in Kong's lair (Jack still) |
+| 31 | `tour31_lair_fight` | Fight in the Lair | tourD | 3, 3.5, 4, 4.5, 5 | gameplay | Kong crouching in the lair as the giant snake comes at him, a waterfall behind (fight; Kong is hurt from about 6 s and dies at about 30 s) |
+| 32 | `tour32_free` | Free! | tourD | 30, 30.5, 31, 31.5, 32 | gameplay | a very dark rock face, water dripping in front of it (Jack still) |
+| 33 | `tour33_chased_by_kong` | Chased by Kong | tourD | 30, 30.5, 31, 31.5, 32 | gameplay | a cave with a water channel, dark green rock (as chap33) |
+| 34 | `tour34_heading_back` | Heading Back | tourD | 30, 30.5, 31, 31.5, 32 | gameplay | under a torch-lit wooden roof on stone posts, a dark gap beyond (Jack still) |
+| 35 | `tour35_back_village` | Back to the Village | tourD | 30, 30.5, 31, 31.5, 32 | gameplay | worn stone steps going up through dark rock, water dripping (Jack still) |
+| 36 | `tour36_kong_capture` | Kong's Capture | tourD | 30, 30.5, 31, 31.5, 32 | gameplay | Kong from behind in a misty gorge, a wall of rock and roots beyond (Kong idle) |
+| 37 | `tour37_kong_struck` | Kong Struck Down | tourD | 30, 30.5, 31, 31.5, 32 | gameplay | the Venture at anchor in the bay, seen from the rocks of the shore at dusk (Jack still) |
+| 38 | `tour38_new_york` | In the Streets of New York | tourD | 20, 20.5, 21, 21.5, 22 | cutscene | Kong in chains on the dark theatre stage, before the lights come up at about 33 s |
+| 39 | `tour39_empire_state` | The Empire State Building | tourD | 30, 30.5, 31, 31.5, 32 | gameplay | a New York rooftop at night, lit windows in the building beside it (Kong still) |
+| 40 | `tour40_kong_death` | Kong's Death | tourD | 17, 17.5, 18, 18.5, 19 | cutscene | the closing cutscene: Carl Denham standing by Kong's head in the street; it goes back to the chapter select by itself at about 57 s |
+| 41 | `tour41_credits` | Credits | tourD | 3, 3.5, 4, 4.5, 5 | cutscene | the credits over a misty mountain in the jungle, the title lines at the start (text scrolls) |
+
+TOUR_RESULTS
 
 ## Later: Linux on the Ally
 
