@@ -160,9 +160,10 @@ int64_t NowMs() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - start).count();
 }
 
-// KK_DEV_FREEZE_SKIP=<seconds>: when the game reads no pad for longer than this (a freeze), the script and
-// shot clock leave the freeze out, so the presses after it still meet the screens they were written for.
-// Off by default (the clock is wall time).
+// KK_DEV_FREEZE_SKIP=<seconds>[,<until>]: when the game reads no pad for longer than <seconds> (a freeze),
+// the script and shot clock leave the freeze out, so the presses after it still meet the screens they were
+// written for. With <until>, only before that many seconds after the save menu opened (the menus): some loads
+// read no pad for a minute (Venture's opening), and those must stay on the clock. Off by default.
 std::atomic<int64_t> g_skipped_ms{0};
 int64_t ScriptNowMs() { return NowMs() - g_skipped_ms.load(); }
 void SkipFreezes(int64_t raw) {
@@ -170,8 +171,15 @@ void SkipFreezes(int64_t raw) {
     const char* v = std::getenv("KK_DEV_FREEZE_SKIP");
     return v && *v ? int64_t(std::atof(v) * 1000.0) : int64_t(0);
   }();
+  static const int64_t until_ms = [] {
+    const char* v = std::getenv("KK_DEV_FREEZE_SKIP");
+    const char* comma = v ? std::strchr(v, ',') : nullptr;
+    return comma ? int64_t(std::atof(comma + 1) * 1000.0) : int64_t(-1);
+  }();
   static int64_t last = -1;
-  if (limit_ms > 0 && last >= 0 && raw - last > limit_ms) {
+  const int64_t menu = g_menu_ms.load();
+  const bool in_window = until_ms < 0 || menu < 0 || (last - g_skipped_ms.load()) - menu < until_ms;
+  if (limit_ms > 0 && last >= 0 && raw - last > limit_ms && in_window) {
     g_skipped_ms += raw - last - 33;  // count the freeze as one frame
     REXLOG_WARN("KK dev: no pad read for {} ms; the script clock leaves it out ({} ms in all)", raw - last,
                 g_skipped_ms.load());
