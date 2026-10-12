@@ -1,0 +1,863 @@
+{
+ "version": 1,
+ "about": "The lighting options' chapters (written by tests/lightgen.py, do not edit by hand). Times are seconds after the save menu opens. See docs/lighting.md.",
+ "defaults": {
+  "args": [
+   "--kk_launcher=false",
+   "--kk_frame_rate=30",
+   "--kk_cheats=true",
+   "--kk_cheat_chapters=true",
+   "--fullscreen=false",
+   "--window_width=1280",
+   "--window_height=720",
+   "--kk_original_look=true",
+   "--log_max_file_size_mb=500"
+  ],
+  "plugin_args": {
+   "native": [
+    "--native_pipeline_cache=false",
+    "--native_pipeline_list=false",
+    "--native_vk_pipeline_cache=false"
+   ]
+  },
+  "env": {
+   "KK_DEV_AUTOSKIP": "1"
+  },
+  "clock_offset": {
+   "menu": 7.7,
+   "boot": 1.0
+  },
+  "startup_allowance": 60,
+  "thresholds": {
+   "mae": 1.0,
+   "ssim": 0.99,
+   "tile_mae": 2.0,
+   "bad": 0.0002,
+   "bad_level": 40,
+   "env_tol": 16,
+   "env_radius": 2,
+   "env_anim_level": 16,
+   "env_bad": 0.002,
+   "env_tile": 1.5,
+   "drawlog": 0.98,
+   "min_pass": 1.0,
+   "env_flash_level": null
+  }
+ },
+ "runs": {
+  "light": {
+   "from": "menu",
+   "script": "12:A,18:A,24:A,30:RIGHT,32.6:A,36.6:SKIP,38.6:SKIP,40.6:SKIP,42.6:SKIP,44.6:SKIP,46.6:SKIP,48.6:SKIP,50.6:SKIP,52.6:SKIP,54.6:SKIP,56.6:SKIP,58.6:SKIP,60.6:SKIP,62.6:SKIP,64.6:START,66.1:UP,66.6:UP,67.1:UP,67.6:UP,68.1:UP,68.6:UP,69.1:UP,70.1:A,72.1:A,77.6:RIGHT,78.2:RIGHT,78.8:RIGHT,81.4:A,85.4:SKIP,87.4:SKIP,89.4:SKIP,91.4:SKIP,93.4:SKIP,95.4:SKIP,97.4:SKIP,99.4:SKIP,101.4:SKIP,103.4:SKIP,105.4:SKIP,107.4:SKIP,109.4:SKIP,111.4:SKIP,113.4:SKIP,115.4:START,116.9:UP,117.4:UP,117.9:UP,118.4:UP,118.9:UP,119.4:UP,119.9:UP,120.9:A,122.9:A,128.4:RIGHT,129:RIGHT,129.6:RIGHT,130.2:RIGHT,132.8:A,136.8:SKIP,138.8:SKIP,140.8:SKIP,142.8:SKIP,144.8:SKIP,146.8:SKIP,148.8:SKIP,150.8:SKIP,152.8:SKIP,154.8:SKIP,156.8:SKIP,158.8:SKIP,160.8:SKIP,162.8:SKIP,164.8:SKIP,166.8:SKIP,168.8:SKIP,170.8:SKIP,172.8:SKIP,176.8:START,178.3:UP,178.8:UP,179.3:UP,179.8:UP,180.3:UP,180.8:UP,181.3:UP,182.3:A,184.3:A,189.8:RIGHT,192.4:A,196.4:SKIP,198.4:SKIP,200.4:SKIP,202.4:SKIP,204.4:SKIP,206.4:SKIP,208.4:SKIP,210.4:SKIP,212.4:SKIP,214.4:SKIP,216.4:SKIP,218.4:SKIP,220.4:SKIP,222.4:SKIP,224.4:SKIP,226.4:START,227.9:UP,228.4:UP,228.9:UP,229.4:UP,229.9:UP,230.4:UP,230.9:UP,231.9:A,233.9:A,239.4:RIGHT,240:RIGHT,242.6:A,246.6:SKIP,248.6:SKIP,250.6:SKIP,252.6:SKIP,254.6:SKIP,256.6:SKIP,258.6:SKIP,260.6:SKIP,262.6:SKIP,264.6:SKIP,266.6:SKIP,268.6:SKIP,270.6:SKIP,272.6:SKIP,274.6:SKIP,276.6:START,278.1:UP,278.6:UP,279.1:UP,279.6:UP,280.1:UP,280.6:UP,281.1:UP,282.1:A,284.1:A,289.6:RIGHT,292.2:A,296.2:SKIP,298.2:SKIP,300.2:SKIP,302.2:SKIP,304.2:SKIP,306.2:SKIP,308.2:SKIP,310.2:SKIP,312.2:SKIP,314.2:SKIP,316.2:SKIP,318.2:SKIP,320.2:SKIP,322.2:SKIP,324.2:SKIP,326.2:START,327.7:UP,328.2:UP,328.7:UP,329.2:UP,329.7:UP,330.2:UP,330.7:UP,331.7:A,333.7:A,339.2:RIGHT,339.8:RIGHT,340.4:RIGHT,341:RIGHT,341.6:RIGHT,342.2:RIGHT,342.8:RIGHT,343.4:RIGHT,344:RIGHT,344.6:RIGHT,345.2:RIGHT,347.8:A,351.8:SKIP,353.8:SKIP,355.8:SKIP,357.8:SKIP,359.8:SKIP,361.8:SKIP,363.8:SKIP,365.8:SKIP,367.8:SKIP,369.8:SKIP,371.8:SKIP,373.8:SKIP,375.8:SKIP,377.8:SKIP,379.8:SKIP,381.8:START,383.3:UP,383.8:UP,384.3:UP,384.8:UP,385.3:UP,385.8:UP,386.3:UP,387.3:A,389.3:A,394.8:RIGHT,395.4:RIGHT,396:RIGHT,398.6:A,402.6:SKIP,404.6:SKIP,406.6:SKIP,408.6:SKIP,410.6:SKIP,412.6:SKIP,414.6:SKIP,416.6:SKIP,418.6:SKIP,420.6:SKIP,422.6:SKIP,424.6:SKIP,426.6:SKIP,428.6:SKIP,430.6:SKIP,432.6:START,434.1:UP,434.6:UP,435.1:UP,435.6:UP,436.1:UP,436.6:UP,437.1:UP,438.1:A,440.1:A,445.6:RIGHT,448.2:A,452.2:SKIP,454.2:SKIP,456.2:SKIP,458.2:SKIP,460.2:SKIP,462.2:SKIP,464.2:SKIP,465.2:START,466.7:UP,467.2:UP,467.7:UP,468.2:UP,468.7:UP,469.2:UP,469.7:UP,470.7:A,472.7:A,478.2:RIGHT,478.8:RIGHT,481.4:A,485.4:SKIP,487.4:SKIP,489.4:SKIP,491.4:SKIP,493.4:SKIP,495.4:SKIP,497.4:SKIP,499.4:SKIP,501.4:SKIP,503.4:SKIP,505.4:SKIP,507.4:SKIP,509.4:SKIP,511.4:SKIP,513.4:SKIP,515.4:START,516.9:UP,517.4:UP,517.9:UP,518.4:UP,518.9:UP,519.4:UP,519.9:UP,520.9:A,522.9:A,528.4:RIGHT,529:RIGHT,529.6:RIGHT,530.2:RIGHT,532.8:A,536.8:SKIP,538.8:SKIP,540.8:SKIP,542.8:SKIP,544.8:SKIP,546.8:SKIP,548.8:SKIP,550.8:SKIP,552.8:SKIP,554.8:SKIP,556.8:SKIP,558.8:SKIP,560.8:SKIP,562.8:SKIP,564.8:SKIP,566.8:START,568.3:UP,568.8:UP,569.3:UP,569.8:UP,570.3:UP,570.8:UP,571.3:UP,572.3:A,574.3:A,579.8:RIGHT,580.4:RIGHT,581:RIGHT,583.6:A,587.6:SKIP,589.6:SKIP,591.6:SKIP,593.6:SKIP,595.6:SKIP,597.6:SKIP,599.6:SKIP,601.6:SKIP,603.6:SKIP,605.6:SKIP,607.6:SKIP,609.6:SKIP,611.6:SKIP,613.6:SKIP,615.6:SKIP,617.6:START,619.1:UP,619.6:UP,620.1:UP,620.6:UP,621.1:UP,621.6:UP,622.1:UP,623.1:A,625.1:A,630.6:RIGHT,633.2:A,637.2:SKIP,639.2:SKIP,641.2:SKIP,643.2:SKIP,645.2:SKIP,647.2:SKIP,649.2:SKIP,651.2:SKIP,653.2:SKIP,655.2:SKIP,657.2:SKIP,659.2:SKIP,661.2:SKIP,663.2:SKIP,665.2:SKIP,667.2:START,668.7:UP,669.2:UP,669.7:UP,670.2:UP,670.7:UP,671.2:UP,671.7:UP,672.7:A,674.7:A,680.2:LEFT,680.8:LEFT,681.4:LEFT,682:LEFT,682.6:LEFT,683.2:LEFT,683.8:LEFT,684.4:LEFT,685:LEFT,685.6:LEFT,686.2:LEFT,686.8:LEFT,687.4:LEFT,688:LEFT,688.6:LEFT,689.2:LEFT,689.8:LEFT,690.4:LEFT,691:LEFT,691.6:LEFT,692.2:LEFT,692.8:LEFT,693.4:LEFT,694:LEFT,694.6:LEFT,695.2:LEFT,695.8:LEFT,696.4:LEFT,697:LEFT,697.6:LEFT,698.2:LEFT,698.8:LEFT,699.4:LEFT,700:LEFT,700.6:LEFT,701.2:LEFT,701.8:LEFT,704.4:A,708.4:SKIP,710.4:SKIP,712.4:SKIP,714.4:SKIP,716.4:SKIP,718.4:SKIP,720.4:SKIP,722.4:SKIP,724.4:SKIP,726.4:SKIP,728.4:SKIP,730.4:SKIP,732.4:SKIP,734.4:SKIP,736.4:SKIP,738.4:SKIP,740.4:SKIP,742.4:SKIP,744.4:SKIP",
+   "env": {
+    "KK_DEV_FREEZE_SKIP": "10"
+   }
+  },
+  "lshadow": {
+   "from": "menu",
+   "script": "12:A,18:A,24:A,30:RIGHT,32.6:A,36.6:SKIP,38.6:SKIP,40.6:SKIP,42.6:SKIP,44.6:SKIP,46.6:SKIP,48.6:SKIP,50.6:SKIP,52.6:SKIP,54.6:SKIP,56.6:SKIP,58.6:SKIP,60.6:SKIP,62.6:SKIP,64.6:START,66.1:UP,66.6:UP,67.1:UP,67.6:UP,68.1:UP,68.6:UP,69.1:UP,70.1:A,72.1:A,77.6:RIGHT,78.2:RIGHT,78.8:RIGHT,81.4:A,85.4:SKIP,87.4:SKIP,89.4:SKIP,91.4:SKIP,93.4:SKIP,95.4:SKIP,97.4:SKIP,99.4:SKIP,101.4:SKIP,103.4:SKIP,105.4:SKIP,107.4:SKIP,109.4:SKIP,111.4:SKIP,113.4:SKIP,115.4:START,116.9:UP,117.4:UP,117.9:UP,118.4:UP,118.9:UP,119.4:UP,119.9:UP,120.9:A,122.9:A,128.4:RIGHT,129:RIGHT,129.6:RIGHT,130.2:RIGHT,132.8:A,136.8:SKIP,138.8:SKIP,140.8:SKIP,142.8:SKIP,144.8:SKIP,146.8:SKIP,148.8:SKIP,150.8:SKIP,152.8:SKIP,154.8:SKIP,156.8:SKIP,158.8:SKIP,160.8:SKIP,162.8:SKIP,164.8:SKIP,166.8:SKIP,168.8:SKIP,170.8:SKIP,172.8:SKIP,176.8:START,178.3:UP,178.8:UP,179.3:UP,179.8:UP,180.3:UP,180.8:UP,181.3:UP,182.3:A,184.3:A,189.8:RIGHT,192.4:A,196.4:SKIP,198.4:SKIP,200.4:SKIP,202.4:SKIP,204.4:SKIP,206.4:SKIP,208.4:SKIP,210.4:SKIP,212.4:SKIP,214.4:SKIP,216.4:SKIP,218.4:SKIP,220.4:SKIP,222.4:SKIP,224.4:SKIP,226.4:START,227.9:UP,228.4:UP,228.9:UP,229.4:UP,229.9:UP,230.4:UP,230.9:UP,231.9:A,233.9:A,239.4:RIGHT,240:RIGHT,240.6:RIGHT,243.2:A,247.2:SKIP,249.2:SKIP,251.2:SKIP,253.2:SKIP,255.2:SKIP,257.2:SKIP,259.2:SKIP,261.2:SKIP,263.2:SKIP,265.2:SKIP,267.2:SKIP,269.2:SKIP,271.2:SKIP,273.2:SKIP,275.2:SKIP,277.2:START,278.7:UP,279.2:UP,279.7:UP,280.2:UP,280.7:UP,281.2:UP,281.7:UP,282.7:A,284.7:A,290.2:RIGHT,290.8:RIGHT,291.4:RIGHT,292:RIGHT,292.6:RIGHT,293.2:RIGHT,293.8:RIGHT,294.4:RIGHT,295:RIGHT,295.6:RIGHT,296.2:RIGHT,296.8:RIGHT,297.4:RIGHT,298:RIGHT,298.6:RIGHT,299.2:RIGHT,299.8:RIGHT,302.4:A,306.4:SKIP,308.4:SKIP,310.4:SKIP,312.4:SKIP,314.4:SKIP,316.4:SKIP,318.4:SKIP,320.4:SKIP,322.4:SKIP,324.4:SKIP,326.4:SKIP,328.4:SKIP,330.4:SKIP,332.4:SKIP,334.4:SKIP,336.4:START,337.9:UP,338.4:UP,338.9:UP,339.4:UP,339.9:UP,340.4:UP,340.9:UP,341.9:A,343.9:A,349.4:RIGHT,350:RIGHT,350.6:RIGHT,351.2:RIGHT,351.8:RIGHT,352.4:RIGHT,353:RIGHT,355.6:A,359.6:SKIP,361.6:SKIP,363.6:SKIP,365.6:SKIP,367.6:SKIP,369.6:SKIP,371.6:SKIP,373.6:SKIP,375.6:SKIP,377.6:SKIP,379.6:SKIP,381.6:SKIP,383.6:SKIP,385.6:SKIP,387.6:SKIP",
+   "env": {
+    "KK_DEV_FREEZE_SKIP": "10"
+   }
+  },
+  "lwater": {
+   "from": "menu",
+   "script": "12:A,18:A,24:A,30:RIGHT,30.6:RIGHT,31.2:RIGHT,31.8:RIGHT,32.4:RIGHT,33:RIGHT,33.6:RIGHT,34.2:RIGHT,34.8:RIGHT,35.4:RIGHT,36:RIGHT,38.6:A,42.6:SKIP,44.6:SKIP,46.6:SKIP,48.6:SKIP,50.6:SKIP,52.6:SKIP,54.6:SKIP,56.6:SKIP,58.6:SKIP,60.6:SKIP,62.6:SKIP,64.6:SKIP,66.6:SKIP,68.6:SKIP,70.6:SKIP,72.6:START,74.1:UP,74.6:UP,75.1:UP,75.6:UP,76.1:UP,76.6:UP,77.1:UP,78.1:A,80.1:A,85.6:RIGHT,86.2:RIGHT,86.8:RIGHT,87.4:RIGHT,88:RIGHT,88.6:RIGHT,89.2:RIGHT,89.8:RIGHT,90.4:RIGHT,91:RIGHT,91.6:RIGHT,92.2:RIGHT,94.8:A,98.8:SKIP,100.8:SKIP,102.8:SKIP,104.8:SKIP,106.8:SKIP,108.8:SKIP,110.8:SKIP,112.8:SKIP,114.8:SKIP,116.8:SKIP,118.8:SKIP,120.8:SKIP,122.8:SKIP,124.8:SKIP,126.8:SKIP,128.8:START,130.3:UP,130.8:UP,131.3:UP,131.8:UP,132.3:UP,132.8:UP,133.3:UP,134.3:A,136.3:A,141.8:RIGHT,142.4:RIGHT,143:RIGHT,145.6:A,149.6:SKIP,151.6:SKIP,153.6:SKIP,155.6:SKIP,157.6:SKIP,159.6:SKIP,161.6:SKIP,163.6:SKIP,165.6:SKIP,167.6:SKIP,169.6:SKIP,171.6:SKIP,173.6:SKIP,175.6:SKIP,177.6:SKIP,179.6:START,181.1:UP,181.6:UP,182.1:UP,182.6:UP,183.1:UP,183.6:UP,184.1:UP,185.1:A,187.1:A,192.6:RIGHT,195.2:A,199.2:SKIP,201.2:SKIP,203.2:SKIP,205.2:SKIP,207.2:SKIP,209.2:SKIP,211.2:SKIP,212.2:START,213.7:UP,214.2:UP,214.7:UP,215.2:UP,215.7:UP,216.2:UP,216.7:UP,217.7:A,219.7:A,225.2:RIGHT,225.8:RIGHT,226.4:RIGHT,227:RIGHT,227.6:RIGHT,228.2:RIGHT,230.8:A,234.8:SKIP,236.8:SKIP,238.8:SKIP,240.8:SKIP,242.8:SKIP,244.8:SKIP,246.8:SKIP,248.8:SKIP,250.8:SKIP,252.8:SKIP,254.8:SKIP,256.8:SKIP,258.8:SKIP,260.8:SKIP,262.8:SKIP,264.8:START,266.3:UP,266.8:UP,267.3:UP,267.8:UP,268.3:UP,268.8:UP,269.3:UP,270.3:A,272.3:A,277.8:RIGHT,278.4:RIGHT,279:RIGHT,279.6:RIGHT,282.2:A,286.2:SKIP,288.2:SKIP,290.2:SKIP,292.2:SKIP,294.2:SKIP,296.2:SKIP,298.2:SKIP,300.2:SKIP,302.2:SKIP,304.2:SKIP,306.2:SKIP,308.2:SKIP,310.2:SKIP,312.2:SKIP,314.2:SKIP,316.2:START,317.7:UP,318.2:UP,318.7:UP,319.2:UP,319.7:UP,320.2:UP,320.7:UP,321.7:A,323.7:A,329.2:LEFT,329.8:LEFT,330.4:LEFT,331:LEFT,331.6:LEFT,332.2:LEFT,332.8:LEFT,333.4:LEFT,334:LEFT,334.6:LEFT,335.2:LEFT,335.8:LEFT,336.4:LEFT,337:LEFT,337.6:LEFT,338.2:LEFT,338.8:LEFT,339.4:LEFT,340:LEFT,340.6:LEFT,341.2:LEFT,341.8:LEFT,342.4:LEFT,343:LEFT,343.6:LEFT,344.2:LEFT,344.8:LEFT,345.4:LEFT,346:LEFT,346.6:LEFT,347.2:LEFT,347.8:LEFT,348.4:LEFT,349:LEFT,349.6:LEFT,350.2:LEFT,350.8:LEFT,353.4:A,357.4:SKIP,359.4:SKIP,361.4:SKIP,363.4:SKIP,365.4:SKIP,367.4:SKIP,369.4:SKIP,371.4:SKIP,373.4:SKIP,375.4:SKIP,377.4:SKIP,379.4:SKIP,381.4:SKIP,383.4:SKIP,385.4:SKIP,387.4:SKIP,389.4:SKIP,391.4:SKIP,393.4:SKIP",
+   "env": {
+    "KK_DEV_FREEZE_SKIP": "10"
+   }
+  },
+  "lshaft": {
+   "from": "menu",
+   "script": "12:A,18:A,24:A,30:RIGHT,30.6:RIGHT,31.2:RIGHT,31.8:RIGHT,34.4:A,38.4:SKIP,40.4:SKIP,42.4:SKIP,44.4:SKIP,46.4:SKIP,48.4:SKIP,50.4:SKIP,52.4:SKIP,54.4:SKIP,56.4:SKIP,58.4:SKIP,60.4:SKIP,62.4:SKIP,64.4:SKIP,66.4:SKIP,68.4:START,69.9:UP,70.4:UP,70.9:UP,71.4:UP,71.9:UP,72.4:UP,72.9:UP,73.9:A,75.9:A,81.4:RIGHT,82:RIGHT,82.6:RIGHT,83.2:RIGHT,83.8:RIGHT,86.4:A,90.4:SKIP,92.4:SKIP,94.4:SKIP,96.4:SKIP,98.4:SKIP,100.4:SKIP,102.4:SKIP,104.4:SKIP,106.4:SKIP,108.4:SKIP,110.4:SKIP,112.4:SKIP,114.4:SKIP,116.4:SKIP,118.4:SKIP,120.4:START,121.9:UP,122.4:UP,122.9:UP,123.4:UP,123.9:UP,124.4:UP,124.9:UP,125.9:A,127.9:A,133.4:RIGHT,134:RIGHT,134.6:RIGHT,137.2:A,141.2:SKIP,143.2:SKIP,145.2:SKIP,147.2:SKIP,149.2:SKIP,151.2:SKIP,153.2:SKIP,155.2:SKIP,157.2:SKIP,159.2:SKIP,161.2:SKIP,163.2:SKIP,165.2:SKIP,167.2:SKIP,169.2:SKIP,171.2:START,172.7:UP,173.2:UP,173.7:UP,174.2:UP,174.7:UP,175.2:UP,175.7:UP,176.7:A,178.7:A,184.2:RIGHT,184.8:RIGHT,185.4:RIGHT,186:RIGHT,186.6:RIGHT,187.2:RIGHT,187.8:RIGHT,188.4:RIGHT,189:RIGHT,189.6:RIGHT,190.2:RIGHT,190.8:RIGHT,191.4:RIGHT,192:RIGHT,194.6:A,198.6:SKIP,200.6:SKIP,202.6:SKIP,204.6:SKIP,206.6:SKIP,208.6:SKIP,210.6:SKIP,212.6:SKIP,214.6:SKIP,216.6:SKIP,218.6:SKIP,220.6:SKIP,222.6:SKIP,224.6:SKIP,226.6:SKIP,228.6:START,230.1:UP,230.6:UP,231.1:UP,231.6:UP,232.1:UP,232.6:UP,233.1:UP,234.1:A,236.1:A,241.6:RIGHT,244.2:A,248.2:SKIP,250.2:SKIP,252.2:SKIP,254.2:SKIP,256.2:SKIP,258.2:SKIP,260.2:SKIP,261.2:START,262.7:UP,263.2:UP,263.7:UP,264.2:UP,264.7:UP,265.2:UP,265.7:UP,266.7:A,268.7:A,274.2:RIGHT,274.8:RIGHT,277.4:A,281.4:SKIP,283.4:SKIP,285.4:SKIP,287.4:SKIP,289.4:SKIP,291.4:SKIP,293.4:SKIP,295.4:SKIP,297.4:SKIP,299.4:SKIP,301.4:SKIP,303.4:SKIP,305.4:SKIP,307.4:SKIP,309.4:SKIP,311.4:START,312.9:UP,313.4:UP,313.9:UP,314.4:UP,314.9:UP,315.4:UP,315.9:UP,316.9:A,318.9:A,324.4:RIGHT,325:RIGHT,325.6:RIGHT,326.2:RIGHT,326.8:RIGHT,327.4:RIGHT,328:RIGHT,330.6:A,334.6:SKIP,336.6:SKIP,338.6:SKIP,340.6:SKIP,342.6:SKIP,344.6:SKIP,346.6:SKIP,348.6:SKIP,350.6:SKIP,352.6:SKIP,354.6:SKIP,356.6:SKIP,358.6:SKIP,360.6:SKIP,362.6:SKIP",
+   "env": {
+    "KK_DEV_FREEZE_SKIP": "10"
+   }
+  },
+  "lsmoke": {
+   "from": "menu",
+   "script": "12:A,18:A,24:A,30:RIGHT,30.6:RIGHT,31.2:RIGHT,31.8:RIGHT,32.4:RIGHT,33:RIGHT,33.6:RIGHT,34.2:RIGHT,36.8:A,40.8:SKIP,42.8:SKIP,44.8:SKIP,46.8:SKIP,48.8:SKIP,50.8:SKIP,52.8:SKIP,54.8:SKIP,56.8:SKIP,58.8:SKIP,60.8:SKIP,62.8:SKIP,64.8:SKIP,66.8:SKIP,68.8:SKIP,70.8:SKIP,72.8:SKIP,74.8:SKIP,76.8:SKIP,80.8:START,82.3:UP,82.8:UP,83.3:UP,83.8:UP,84.3:UP,84.8:UP,85.3:UP,86.3:A,88.3:A,93.8:RIGHT,96.4:A,100.4:SKIP,102.4:SKIP,104.4:SKIP,106.4:SKIP,108.4:SKIP,110.4:SKIP,112.4:SKIP,114.4:SKIP,116.4:SKIP,118.4:SKIP,120.4:SKIP,122.4:SKIP,124.4:SKIP,126.4:SKIP,128.4:SKIP",
+   "env": {
+    "KK_DEV_FREEZE_SKIP": "10"
+   }
+  }
+ },
+ "scenes": [
+  {
+   "name": "light01_skull_island",
+   "run": "light",
+   "chapter": 1,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 1: Ann's face leaning over Jack on the beach (sunlit, characters)",
+   "chapter_start": 32.6,
+   "times": [
+    60.6,
+    61.1,
+    61.6
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "light04_the_wall",
+   "run": "light",
+   "chapter": 4,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 4: a jungle clearing at dusk, a spiked wooden gate against the sky (jungle, sky)",
+   "chapter_start": 81.4,
+   "times": [
+    111.4,
+    111.9,
+    112.4
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "light08_vrex",
+   "run": "light",
+   "chapter": 8,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 8: Jack in the rain under the cave roof, random lightning (shadows, rain)",
+   "chapter_start": 132.8,
+   "times": [
+    172.8,
+    173.3,
+    173.8
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "light09_ann",
+   "run": "light",
+   "chapter": 9,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 9: a cave mouth with shafts of light falling in (light shafts)",
+   "chapter_start": 192.4,
+   "times": [
+    222.4,
+    222.9,
+    223.4
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "light11_canyon",
+   "run": "light",
+   "chapter": 11,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 11: a canyon path between mossy rocks, a pool beyond (pool, mist)",
+   "chapter_start": 242.6,
+   "times": [
+    272.6,
+    273.1,
+    273.6
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "light12_millipedes",
+   "run": "light",
+   "chapter": 12,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 12: a dark jungle path towards a lit gate in a wall of vines (mist, jungle)",
+   "chapter_start": 292.2,
+   "times": [
+    322.2,
+    322.7,
+    323.2
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "light23_the_cave",
+   "run": "light",
+   "chapter": 23,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 23: a dark wooden scaffold over a pool, figures behind it (water)",
+   "chapter_start": 347.8,
+   "times": [
+    377.8,
+    378.3,
+    378.8
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "light26_call_kong",
+   "run": "light",
+   "chapter": 26,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 26: a dark hall with a lattice of beams over pale water (water, beams)",
+   "chapter_start": 398.6,
+   "times": [
+    428.6,
+    429.1,
+    429.6
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "light27_kong_rescue",
+   "run": "light",
+   "chapter": 27,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 27: Jack with a spear behind the rocks, a V-Rex, fires and rain (water, fire, shafts)",
+   "chapter_start": 448.2,
+   "times": [
+    461.2,
+    461.7,
+    462.2
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "light29_to_the_lair",
+   "run": "light",
+   "chapter": 29,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 29: a great tree's roots in green mist (mist, jungle)",
+   "chapter_start": 481.4,
+   "times": [
+    511.4,
+    511.9,
+    512.4
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "light33_chased_by_kong",
+   "run": "light",
+   "chapter": 33,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 33: a cave with a water channel, dark green rock (water channel)",
+   "chapter_start": 532.8,
+   "times": [
+    562.8,
+    563.3,
+    563.8
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "light36_kong_capture",
+   "run": "light",
+   "chapter": 36,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 36: Kong from behind in a misty gorge, a wall of rock and roots beyond (mist, Kong)",
+   "chapter_start": 583.6,
+   "times": [
+    613.6,
+    614.1,
+    614.6
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "light37_kong_struck",
+   "run": "light",
+   "chapter": 37,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 37: the Venture at anchor in the bay, seen from the rocks of the shore at dusk (sea)",
+   "chapter_start": 633.2,
+   "times": [
+    663.2,
+    663.7,
+    664.2
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "light00_venture",
+   "run": "light",
+   "chapter": 0,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 0: the hull of the rocking ship with VENTURE painted on it, rain (the sea)",
+   "chapter_start": 704.4,
+   "times": [
+    793.4,
+    793.9,
+    794.4
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "lshadow01_skull_island",
+   "run": "lshadow",
+   "chapter": 1,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 1: Ann's face leaning over Jack on the beach (sunlit, characters)",
+   "chapter_start": 32.6,
+   "times": [
+    60.6,
+    61.1,
+    61.6
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "lshadow04_the_wall",
+   "run": "lshadow",
+   "chapter": 4,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 4: a jungle clearing at dusk, a spiked wooden gate against the sky (jungle, sky)",
+   "chapter_start": 81.4,
+   "times": [
+    111.4,
+    111.9,
+    112.4
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "lshadow08_vrex",
+   "run": "lshadow",
+   "chapter": 8,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 8: Jack in the rain under the cave roof, random lightning (shadows, rain)",
+   "chapter_start": 132.8,
+   "times": [
+    172.8,
+    173.3,
+    173.8
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "lshadow09_ann",
+   "run": "lshadow",
+   "chapter": 9,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 9: a cave mouth with shafts of light falling in (light shafts)",
+   "chapter_start": 192.4,
+   "times": [
+    222.4,
+    222.9,
+    223.4
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "lshadow12_millipedes",
+   "run": "lshadow",
+   "chapter": 12,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 12: a dark jungle path towards a lit gate in a wall of vines (mist, jungle)",
+   "chapter_start": 243.2,
+   "times": [
+    273.2,
+    273.7,
+    274.2
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "lshadow29_to_the_lair",
+   "run": "lshadow",
+   "chapter": 29,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 29: a great tree's roots in green mist (mist, jungle)",
+   "chapter_start": 302.4,
+   "times": [
+    332.4,
+    332.9,
+    333.4
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "lshadow36_kong_capture",
+   "run": "lshadow",
+   "chapter": 36,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 36: Kong from behind in a misty gorge, a wall of rock and roots beyond (mist, Kong)",
+   "chapter_start": 355.6,
+   "times": [
+    385.6,
+    386.1,
+    386.6
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "lwater11_canyon",
+   "run": "lwater",
+   "chapter": 11,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 11: a canyon path between mossy rocks, a pool beyond (pool, mist)",
+   "chapter_start": 38.6,
+   "times": [
+    68.6,
+    69.1,
+    69.6
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "lwater23_the_cave",
+   "run": "lwater",
+   "chapter": 23,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 23: a dark wooden scaffold over a pool, figures behind it (water)",
+   "chapter_start": 94.8,
+   "times": [
+    124.8,
+    125.3,
+    125.8
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "lwater26_call_kong",
+   "run": "lwater",
+   "chapter": 26,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 26: a dark hall with a lattice of beams over pale water (water, beams)",
+   "chapter_start": 145.6,
+   "times": [
+    175.6,
+    176.1,
+    176.6
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "lwater27_kong_rescue",
+   "run": "lwater",
+   "chapter": 27,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 27: Jack with a spear behind the rocks, a V-Rex, fires and rain (water, fire, shafts)",
+   "chapter_start": 195.2,
+   "times": [
+    208.2,
+    208.7,
+    209.2
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "lwater33_chased_by_kong",
+   "run": "lwater",
+   "chapter": 33,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 33: a cave with a water channel, dark green rock (water channel)",
+   "chapter_start": 230.8,
+   "times": [
+    260.8,
+    261.3,
+    261.8
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "lwater37_kong_struck",
+   "run": "lwater",
+   "chapter": 37,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 37: the Venture at anchor in the bay, seen from the rocks of the shore at dusk (sea)",
+   "chapter_start": 282.2,
+   "times": [
+    312.2,
+    312.7,
+    313.2
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "lwater00_venture",
+   "run": "lwater",
+   "chapter": 0,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 0: the hull of the rocking ship with VENTURE painted on it, rain (the sea)",
+   "chapter_start": 353.4,
+   "times": [
+    442.4,
+    442.9,
+    443.4
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "lshaft04_the_wall",
+   "run": "lshaft",
+   "chapter": 4,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 4: a jungle clearing at dusk, a spiked wooden gate against the sky (jungle, sky)",
+   "chapter_start": 34.4,
+   "times": [
+    64.4,
+    64.9,
+    65.4
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "lshaft09_ann",
+   "run": "lshaft",
+   "chapter": 9,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 9: a cave mouth with shafts of light falling in (light shafts)",
+   "chapter_start": 86.4,
+   "times": [
+    116.4,
+    116.9,
+    117.4
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "lshaft12_millipedes",
+   "run": "lshaft",
+   "chapter": 12,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 12: a dark jungle path towards a lit gate in a wall of vines (mist, jungle)",
+   "chapter_start": 137.2,
+   "times": [
+    167.2,
+    167.7,
+    168.2
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "lshaft26_call_kong",
+   "run": "lshaft",
+   "chapter": 26,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 26: a dark hall with a lattice of beams over pale water (water, beams)",
+   "chapter_start": 194.6,
+   "times": [
+    224.6,
+    225.1,
+    225.6
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "lshaft27_kong_rescue",
+   "run": "lshaft",
+   "chapter": 27,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 27: Jack with a spear behind the rocks, a V-Rex, fires and rain (water, fire, shafts)",
+   "chapter_start": 244.2,
+   "times": [
+    257.2,
+    257.7,
+    258.2
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "lshaft29_to_the_lair",
+   "run": "lshaft",
+   "chapter": 29,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 29: a great tree's roots in green mist (mist, jungle)",
+   "chapter_start": 277.4,
+   "times": [
+    307.4,
+    307.9,
+    308.4
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "lshaft36_kong_capture",
+   "run": "lshaft",
+   "chapter": 36,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 36: Kong from behind in a misty gorge, a wall of rock and roots beyond (mist, Kong)",
+   "chapter_start": 330.6,
+   "times": [
+    360.6,
+    361.1,
+    361.6
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "lsmoke08_vrex",
+   "run": "lsmoke",
+   "chapter": 8,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 8: Jack in the rain under the cave roof, random lightning (shadows, rain)",
+   "chapter_start": 36.8,
+   "times": [
+    76.8,
+    77.3,
+    77.8
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "lsmoke09_ann",
+   "run": "lsmoke",
+   "chapter": 9,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 9: a cave mouth with shafts of light falling in (light shafts)",
+   "chapter_start": 96.4,
+   "times": [
+    126.4,
+    126.9,
+    127.4
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  }
+ ]
+}
