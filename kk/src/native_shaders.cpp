@@ -104,14 +104,15 @@ NativeShaderPack::~NativeShaderPack() {
 
 bool NativeShaderPack::Wanted() { return rex::cvar::GetFlagByName("gpu_plugin") == "native" && PluginApi() != nullptr; }
 
-void NativeShaderPack::Start(const std::filesystem::path& cache_dir, const std::filesystem::path& game_dir) {
+void NativeShaderPack::Start(const std::filesystem::path& cache_dir, const std::filesystem::path& game_dir,
+                             bool force) {
   if (!Wanted() || Busy()) return;
   if (impl_->job) impl_->api->release(impl_->job);
   impl_->api = PluginApi();
   impl_->last = {};
   impl_->logged = false;
   impl_->started = true;
-  impl_->job = impl_->api->start(Utf8(cache_dir).c_str(), Utf8(game_dir).c_str(), 0, 1);
+  impl_->job = impl_->api->start(Utf8(cache_dir).c_str(), Utf8(game_dir).c_str(), 0, 1, force ? 1 : 0);
 }
 
 void NativeShaderPack::Cancel() {
@@ -162,7 +163,7 @@ struct NativeShaderPack::Impl {};
 NativeShaderPack::NativeShaderPack() : impl_(std::make_unique<Impl>()) {}
 NativeShaderPack::~NativeShaderPack() = default;
 bool NativeShaderPack::Wanted() { return false; }
-void NativeShaderPack::Start(const std::filesystem::path&, const std::filesystem::path&) {}
+void NativeShaderPack::Start(const std::filesystem::path&, const std::filesystem::path&, bool) {}
 void NativeShaderPack::Cancel() {}
 bool NativeShaderPack::Busy() { return false; }
 bool NativeShaderPack::Finished() { return false; }

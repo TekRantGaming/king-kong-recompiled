@@ -32,6 +32,7 @@
 
 #include "art.h"
 #include "crash_dump.h"
+#include "display_modes.h"
 #include "frame_stats.h"
 #include "glyphs.h"
 #include "guest.h"
@@ -101,6 +102,7 @@ class KingKongApp : public rex::ReXApp {
     const bool show = !files_ok || kk::IsShiftHeld() || (REXCVAR_GET(kk_launcher) && !skip_once);
     if (!show) {
       kk::EnforceOriginalLook();
+      if (kk::kFullscreenResolution) kk::ApplyFullscreenMode(window() ? window()->GetNativeWindowHandle() : nullptr);
       kk::ApplyRenderPreset(OutputSize().second);
       kk::online::SetPlaying(true);
       kk::online::Start();
@@ -110,6 +112,8 @@ class KingKongApp : public rex::ReXApp {
     kk::LauncherCallbacks cb;
     cb.play = [this, resume, defaults] {
       app_context().CallInUIThreadDeferred([this, resume, defaults] {
+        // The Resolution (Display page) before the render quality, which follows it.
+        if (kk::kFullscreenResolution) kk::ApplyFullscreenMode(window() ? window()->GetNativeWindowHandle() : nullptr);
         kk::ApplyRenderPreset(OutputSize().second);
         kk::online::SetPlaying(true);
         resume(defaults);
@@ -155,7 +159,10 @@ class KingKongApp : public rex::ReXApp {
       const std::string root = rex::cvar::GetFlagByName("cache_root");
       kk::RepairShaderStorage(root.empty() ? user_data_root_ / "cache" : std::filesystem::path(root));
     }
+    // The renderer: kk_renderer (Graphics > Renderer) unless gpu_plugin was given (launcher.h).
+    if (!config.graphics) config.gpu_plugin = kk::ApplyRendererChoice();
     if (!config.graphics && config.gpu_plugin.empty()) config.gpu_plugin = "xenos";
+    REXLOG_INFO("KK: renderer {} (kk_renderer {})", config.gpu_plugin, rex::cvar::GetFlagByName("kk_renderer"));
     if (!config.audio_factory)
       config.audio_factory = REX_AUDIO_BACKEND(rex::audio::sdl::SDLAudioSystem);
   }
@@ -216,9 +223,14 @@ class KingKongApp : public rex::ReXApp {
   }
 
  private:
-  // Size the game is shown at: the monitor in fullscreen, else the window.
+  // Size the game is shown at: in fullscreen the Resolution picked on the Display page, or the
+  // monitor's; else the window.
   std::pair<int, int> OutputSize() const {
-    if (REXCVAR_QUERY(bool, fullscreen) || !window()) return kk::PrimaryScreenSize();
+    if (REXCVAR_QUERY(bool, fullscreen) || !window()) {
+      if (kk::kFullscreenResolution && REXCVAR_QUERY(bool, fullscreen))
+        if (const auto mode = kk::FullscreenModeSize()) return *mode;
+      return kk::PrimaryScreenSize();
+    }
     return {int(window()->GetActualPhysicalWidth()), int(window()->GetActualPhysicalHeight())};
   }
 

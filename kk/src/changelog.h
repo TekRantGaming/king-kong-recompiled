@@ -18,7 +18,8 @@ struct ChangelogEntry {
 // Every version, newest first.
 const std::vector<ChangelogEntry>& Changelog();
 
-// Compares "1.6.0"-style versions: <0, 0 or >0.
+// Compares versions ("1.6.0", "2.0.0-beta.1") as the updater does: <0, 0 or >0. A beta comes
+// before the release with the same numbers.
 int CompareVersions(const std::string& a, const std::string& b);
 
 }  // namespace kk
