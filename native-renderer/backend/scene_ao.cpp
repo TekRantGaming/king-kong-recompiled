@@ -112,7 +112,9 @@ bool SceneAo::Compute(nvrhi::ICommandList* cl, const AoSettings& s, nvrhi::IText
   in.projection = p;
   in.screen = sc;
   TimeBegin(cl);
-  const bool ok = gtao_->Compute(cl, in, Settings(s)) != nullptr;
+  GtaoSettings gs = Settings(s);
+  if (config_.quality == AoQuality::kAuto) gs.half = sc.host_scale_x > 1.5f || sc.host_scale_y > 1.5f;
+  const bool ok = gtao_->Compute(cl, in, gs) != nullptr;
   TimeEnd(cl);
   if (!ok) return false;
   if (stats_.computed == 0 || (stats_.computed % 1800) == 0) {

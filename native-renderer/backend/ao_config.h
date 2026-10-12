@@ -19,8 +19,9 @@ enum class AoMethod : uint8_t { kLegacy, kGtao };
 // names (their ambient term times the occlusion), with opaque as the fallback. The legacy method
 // always uses resolve.
 enum class AoApply : uint8_t { kResolve, kOpaque, kAmbient };
-// --native_ao_quality: GTAO at half or full resolution of the scene target.
-enum class AoQuality : uint8_t { kHalf, kFull };
+// --native_ao_quality: GTAO at half or full resolution of the scene target; auto: full up to a render scale
+// of 1.5 per axis, half above it (at scale 2 that is the same number of pixels as full at scale 1).
+enum class AoQuality : uint8_t { kHalf, kFull, kAuto };
 
 struct AoConfig {
   AoMethod method = AoMethod::kLegacy;

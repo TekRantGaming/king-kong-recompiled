@@ -128,6 +128,7 @@ TEST(AoSettings_Names) {
   CHECK(!ParseAoApply("late", a));
   CHECK(ParseAoQuality("half", q) && q == AoQuality::kHalf);
   CHECK(ParseAoQuality("full", q) && q == AoQuality::kFull);
+  CHECK(ParseAoQuality("auto", q) && q == AoQuality::kAuto);
   CHECK(!ParseAoQuality("ultra", q));
   // The defaults are today's AO.
   const AoConfig defaults;

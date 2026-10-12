@@ -98,7 +98,7 @@ void ReadAoConfig(AoConfig& ao) {
   if (!ParseAoApply(REXCVAR_GET(native_ao_apply), ao.apply))
     REXGPU_WARN("rexgpu-native: native_ao_apply '{}' is not resolve, opaque or ambient", REXCVAR_GET(native_ao_apply));
   if (!ParseAoQuality(REXCVAR_GET(native_ao_quality), ao.quality))
-    REXGPU_WARN("rexgpu-native: native_ao_quality '{}' is not full or half", REXCVAR_GET(native_ao_quality));
+    REXGPU_WARN("rexgpu-native: native_ao_quality '{}' is not full, half or auto", REXCVAR_GET(native_ao_quality));
   ao.radius = float(std::max(0.0, REXCVAR_GET(native_ao_radius)));
   ao.radius_scale = float(std::clamp(REXCVAR_GET(native_ao_radius_scale), 0.01, 100.0));
   ao.falloff = float(std::clamp(REXCVAR_GET(native_ao_falloff), 0.0, 1.0));

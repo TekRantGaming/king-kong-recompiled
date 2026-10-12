@@ -189,8 +189,9 @@ REXCVAR_DEFINE_STRING(native_ao_apply, "resolve", "Native renderer",
                       "otherwise). The legacy method always uses resolve")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-REXCVAR_DEFINE_STRING(native_ao_quality, "full", "Native renderer",
-                      "The gtao method's resolution: full or half (of the scene target, at the render scale)")
+REXCVAR_DEFINE_STRING(native_ao_quality, "auto", "Native renderer",
+                      "The gtao method's resolution: full or half (of the scene target, at the render scale), "
+                      "or auto (full up to a render scale of 1.5, half above)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_DOUBLE(native_ao_radius, 0.0, "Native renderer",

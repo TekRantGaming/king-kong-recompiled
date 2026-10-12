@@ -41,6 +41,10 @@ bool ParseAoQuality(const std::string& t, AoQuality& out) {
     out = AoQuality::kHalf;
     return true;
   }
+  if (t == "auto") {
+    out = AoQuality::kAuto;
+    return true;
+  }
   return false;
 }
 
@@ -48,6 +52,8 @@ const char* AoMethodName(AoMethod m) { return m == AoMethod::kGtao ? "gtao" : "l
 const char* AoApplyName(AoApply a) {
   return a == AoApply::kOpaque ? "opaque" : (a == AoApply::kAmbient ? "ambient" : "resolve");
 }
-const char* AoQualityName(AoQuality q) { return q == AoQuality::kHalf ? "half" : "full"; }
+const char* AoQualityName(AoQuality q) {
+  return q == AoQuality::kHalf ? "half" : (q == AoQuality::kAuto ? "auto" : "full");
+}
 
 }  // namespace nr
