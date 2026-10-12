@@ -89,9 +89,13 @@ kkshaders::PackBuildOptions PackOptionsForSettings(const std::filesystem::path& 
   o.backend = kkshaders::PackBackend::Dxil;
 #endif
   // As Backend::Initialize decides it (the frame image's size does not matter for the decision).
+  // "auto" follows the launcher's render quality, which the player can change at any time and which
+  // the game only applies when it starts (the launcher still sees the default scale 1 when it checks
+  // the pack): with "auto" the pack always carries the render scale variants, so it fits every run.
   const RenderScale scale = ParseRenderScale(ResolvedRenderScale(), 1280, 720);
   const float shadow = float(REXCVAR_GET(native_shadow_scale));
-  o.scaled = (scale.valid && !scale.unit()) || (shadow > 0.0f && shadow != 1.0f);
+  o.scaled = REXCVAR_GET(native_render_scale) == "auto" || (scale.valid && !scale.unit()) ||
+             (shadow > 0.0f && shadow != 1.0f);
   o.dxc = DxcLocation();
   return o;
 }
