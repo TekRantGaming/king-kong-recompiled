@@ -5,6 +5,7 @@
 #include <cmath>
 #include <fstream>
 #include <iterator>
+#include <string_view>
 #include <utility>
 
 #include <rex/logging.h>
@@ -350,6 +351,17 @@ void ApplyFixedSettings() {
   // mouse-to-right-stick part is kept at its lowest, where it never gets past
   // the camera's deadzone (kk_mouse_sensitivity is the setting now).
   rex::cvar::SetFlagByName("mnk_sensitivity", "0.010000");
+  // A beta follows the beta channel unless a channel was chosen: one unzipped by hand, rather than
+  // switched to with Change version, would otherwise look for stable versions only and never be
+  // offered the next beta (Beta 1 copies installed by hand). Set, not made the default, so the
+  // settings file keeps it.
+  if (std::string_view(KK_VERSION).find("-beta") != std::string_view::npos)
+    for (const auto& e : rex::cvar::GetRegistry())
+      if (e.name == "kk_update_channel" && e.source == rex::cvar::Source::kDefault) {
+        rex::cvar::SetFlagByName("kk_update_channel", "beta");
+        REXLOG_INFO("KK: a beta with no update channel chosen: on the beta channel");
+        break;
+      }
   // Supersampling is no longer offered (Beta 2: Display > Resolution picks the size the game is
   // shown at): a settings file that chose it gets Native.
   if (rex::cvar::GetFlagByName("kk_render_quality") == "supersample")
