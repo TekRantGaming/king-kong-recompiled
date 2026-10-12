@@ -98,12 +98,16 @@ the runtime then prepares again as they play: not useful, and not easy to make s
 Also fixed on the way: B while a Home side panel (Steam, Discord) had the focus opened the Quit pop-up (the global
 Back ran first); it now goes back to the menu, as the footer said.
 
-### 3. Display > Resolution and Refresh rate (Beta 1.1)
+### 3. Display > Window mode, Resolution and Refresh rate (Beta 1.1)
 
-Under Window mode: **Resolution**, "Desktop" (the default: a borderless window at the desktop's resolution, as in
-v1.9.11) or one of the monitor's sizes, and, with a size chosen, **Refresh rate** (that size's rates, highest first).
-Both are kept in `kk_fullscreen_mode` (`desktop` or `WIDTHxHEIGHT@HZ`) and disabled in windowed mode ("Only used in
-fullscreen."). The list is the display's fullscreen modes (the Monitor setting's display, in SDL's order as the SDK
+**Window mode** is Windowed (`fullscreen` off), Borderless (`fullscreen` on, `kk_fullscreen_mode` `desktop`: a
+window at the desktop's resolution, as v1.9.11's fullscreen) or Fullscreen (`kk_fullscreen_mode` a mode). Each shows
+its own size rows: Windowed the Window size, Fullscreen **Resolution** (the monitor's sizes) and **Refresh rate**
+(that size's rates, highest first), Borderless none. Choosing Fullscreen starts at the desktop's own mode
+(`rex::ui::GetDesktopDisplayMode`). The launcher itself stays borderless in Fullscreen; the screen changes when the
+game starts. Since Beta 1.1 the Display page also has **Frame rate** (from Gameplay) with VSync, and **Upscaling**
+(Upscaler, Upscaler mode or Render quality, Internal resolution: from Graphics); the Reset page lists moved with
+them. The list is the display's fullscreen modes (the Monitor setting's display, in SDL's order as the SDK
 uses it, or the window's for Default), from 1280 x 720 up, each size once; a rate a hair under a whole one (59.94,
 119.88) is left out when the whole one is there. On this PC's monitor SDL reports 307 modes: 22 sizes and up to 9
 rates each in the rows. A saved size the display doesn't have stays listed as "(not on this display)".
@@ -122,8 +126,14 @@ The render scale follows it: `OutputSize()` (`king_kong_app.h`) returns the chos
 (`AutoRenderScale`). The Graphics page's "Draws ... for your ... screen" shows the chosen size too. The native
 shader pack is unaffected (with `auto` it always carries the render scale variants).
 
-Checked: the mode list and both rows in the launcher (windowed, `runs11-launcher-*`). Not checked on this PC: the
-exclusive switch itself, which would change the monitor's mode under the user; the user tests it.
+Checked: the mode list, the rows and the pages in the launcher (windowed, `runs\b11-launcher-*`). Not checked on
+this PC: Borderless and Fullscreen themselves, which would cover or change the user's screen; the user tests them.
+
+Alt+Tab (GPUnity, Beta 1: "Can't fully alt+tab out of the game"): the SDK's Vulkan presenter created its swapchain
+without `VK_EXT_full_screen_exclusive`, which leaves it to the driver, and drivers may take a borderless window that
+covers the screen into exclusive fullscreen by themselves (the stable version presents through DXGI, which doesn't).
+SDK patch 0016 enables the extension (with `VK_KHR_get_surface_capabilities2` on the instance) and creates the
+swapchain with `VK_FULL_SCREEN_EXCLUSIVE_DISALLOWED_EXT`; `--vulkan_allow_fullscreen_exclusive` turns it back.
 
 ### 4. Beta 1.1: Discord status, GTAO only, no Supersampling
 

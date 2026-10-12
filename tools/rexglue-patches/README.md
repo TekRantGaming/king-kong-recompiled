@@ -93,11 +93,18 @@ whose pipeline is still a placeholder or missing.
 
 ## 0015: fullscreen display modes
 
-`rex::ui::GetFullscreenDisplayModes` lists a display's fullscreen modes and `rex::ui::SetFullscreenDisplayMode`
+`rex::ui::GetFullscreenDisplayModes` lists a display's fullscreen modes, `rex::ui::GetDesktopDisplayMode` gives its desktop mode, and `rex::ui::SetFullscreenDisplayMode`
 sets the mode SDL uses whenever the window is fullscreen (none: borderless at the desktop's resolution, the
 default). The launcher's Display > Resolution (Beta 1.1) uses them: the port can't call SDL for this itself, as SDL
 is linked into both `rexruntime.dll` and `king_kong.exe` and the port's copy sees neither the SDK's window nor the
 displays. Numbered 0015 because 0013 and 0014 are taken on the Linux branch (`nr-linux`).
+
+## 0016: no implicit exclusive fullscreen for Vulkan on Windows
+
+The Vulkan presenter enables `VK_EXT_full_screen_exclusive` (and `VK_KHR_get_surface_capabilities2` on the instance)
+and creates its swapchain with `VK_FULL_SCREEN_EXCLUSIVE_DISALLOWED_EXT`, so the driver can't take a borderless
+window covering the screen into exclusive fullscreen by itself, which broke Alt+Tab in the native renderer's Beta 1.
+`vulkan_allow_fullscreen_exclusive` (off) turns it back.
 
 ## Building
 
@@ -105,7 +112,7 @@ displays. Numbered 0015 because 0013 and 0014 are taken on the Linux branch (`nr
 git clone https://github.com/rexglue/rexglue-sdk.git
 cd rexglue-sdk
 git checkout f5337cdc
-git am <this folder>/*.patch   # 0001-0008, 0010-0012, then 0015
+git am <this folder>/*.patch   # 0001-0008, 0010-0012, then 0015-0016
 cmake --preset win-amd64
 cmake --build out/build/win-amd64 --config Release --target install --parallel
 ```
