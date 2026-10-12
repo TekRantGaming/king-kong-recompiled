@@ -3,7 +3,10 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <iterator>
+#include <sstream>
+#include <vector>
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
@@ -40,6 +43,18 @@ REXCVAR_DECLARE(std::string, native_pipeline_cache_dir);
 REXCVAR_DECLARE(bool, native_vk_pipeline_cache);
 REXCVAR_DECLARE(std::string, native_pipeline_list_file);
 REXCVAR_DECLARE(bool, native_stutter_stats);
+REXCVAR_DECLARE(std::string, native_ao_method);
+REXCVAR_DECLARE(std::string, native_ao_apply);
+REXCVAR_DECLARE(std::string, native_ao_quality);
+REXCVAR_DECLARE(double, native_ao_radius);
+REXCVAR_DECLARE(std::string, native_ao_rules);
+REXCVAR_DECLARE(std::string, native_ao_shaders);
+REXCVAR_DECLARE(double, native_ao_radius_scale);
+REXCVAR_DECLARE(double, native_ao_falloff);
+REXCVAR_DECLARE(double, native_ao_power);
+REXCVAR_DECLARE(double, native_ao_fade);
+REXCVAR_DECLARE(int32_t, native_ao_dump_every);
+REXCVAR_DECLARE(bool, native_ao_gpu_time);
 
 namespace nr {
 
@@ -77,6 +92,48 @@ std::string AutoRenderScale() {
   const int x = axis("draw_resolution_scale_x"), y = axis("draw_resolution_scale_y");
   return std::to_string(1280 * x) + "x" + std::to_string(720 * y);
 }
+
+namespace {
+
+std::string ReadTextFile(const std::string& path) {
+  std::ifstream f(path, std::ios::binary);
+  if (!f) return {};
+  std::stringstream text;
+  text << f.rdbuf();
+  return text.str();
+}
+
+// --native_ao_* (docs/ao.md): a value it cannot read is logged and its default kept.
+void ReadAoConfig(AoConfig& ao) {
+  if (!ParseAoMethod(REXCVAR_GET(native_ao_method), ao.method))
+    REXGPU_WARN("rexgpu-native: native_ao_method '{}' is not legacy or gtao", REXCVAR_GET(native_ao_method));
+  if (!ParseAoApply(REXCVAR_GET(native_ao_apply), ao.apply))
+    REXGPU_WARN("rexgpu-native: native_ao_apply '{}' is not resolve, opaque or ambient", REXCVAR_GET(native_ao_apply));
+  if (!ParseAoQuality(REXCVAR_GET(native_ao_quality), ao.quality))
+    REXGPU_WARN("rexgpu-native: native_ao_quality '{}' is not full, half or auto", REXCVAR_GET(native_ao_quality));
+  ao.radius = float(std::max(0.0, REXCVAR_GET(native_ao_radius)));
+  ao.radius_scale = float(std::clamp(REXCVAR_GET(native_ao_radius_scale), 0.01, 100.0));
+  ao.falloff = float(std::clamp(REXCVAR_GET(native_ao_falloff), 0.0, 1.0));
+  ao.power = float(std::max(0.0, REXCVAR_GET(native_ao_power)));
+  ao.fade = float(std::max(0.0, REXCVAR_GET(native_ao_fade)));
+  ao.dump_every = uint32_t(std::max(0, REXCVAR_GET(native_ao_dump_every)));
+  ao.gpu_time = REXCVAR_GET(native_ao_gpu_time);
+  if (const std::string path = REXCVAR_GET(native_ao_rules); !path.empty()) {
+    std::vector<std::string> errors;
+    ao.rules = ParseAoRules(ReadTextFile(path), &errors);
+    for (const std::string& e : errors) REXGPU_WARN("rexgpu-native: {}: {}", path, e);
+    REXGPU_INFO("rexgpu-native: {} AO classifier rules from {}", ao.rules.size(), path);
+  }
+  if (const std::string path = REXCVAR_GET(native_ao_shaders); !path.empty()) {
+    ao.ambient_shaders = ReadTextFile(path);
+    if (ao.ambient_shaders.empty()) REXGPU_WARN("rexgpu-native: the AO shader list {} is empty or missing", path);
+  }
+  if (ao.method == AoMethod::kLegacy && ao.apply != AoApply::kResolve)
+    REXGPU_WARN("rexgpu-native: native_ao_apply={} needs native_ao_method=gtao; the legacy AO uses resolve",
+                AoApplyName(ao.apply));
+}
+
+}  // namespace
 
 GameSettings ReadGameSettings(bool vulkan) {
   GameSettings game;
@@ -123,6 +180,7 @@ GameSettings ReadGameSettings(bool vulkan) {
     s.strength = std::clamp(std::atoi(rex::cvar::GetFlagByName("ao_strength").c_str()), 1, 3);
     return s;
   };
+  ReadAoConfig(game.ao);
   return game;
 }
 

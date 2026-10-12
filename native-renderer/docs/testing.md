@@ -306,6 +306,13 @@ parser reads both backends' lines and reports skipped draws and bad counts; `col
 python -I native-renderer\tests\test_compare.py
 ```
 
+## The ambient occlusion's chapters
+
+`tests/ao_tour.json` (written by `tests/aogen.py`) is one launch through nine chapters chosen for the ambient
+occlusion (sky, rain, Kong, mist, water, fire and smoke, the bay), three shots each and no golden set:
+`tests\run.ps1 -Plugin native -ScenesFile native-renderer\tests\ao_tour.json -Scenes ao -NoCompare -ExtraArgs ...`,
+one launch per AO setting; `docs/ao.md` has what it was used for.
+
 ## Adding a scene
 
 Add a run (if the scene needs its own launch) and a scene to `scenes.json`; check the timeline first with

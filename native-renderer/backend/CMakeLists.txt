@@ -14,6 +14,10 @@ add_library(nr_draw STATIC
     api_binding.cpp
     primitive.cpp
     render_thread.cpp
+    # Ambient occlusion (docs/ao.md): the draw classifier, the camera, the settings.
+    ao_classifier.cpp
+    ao_camera.cpp
+    ao_config.cpp
 )
 target_include_directories(nr_draw PUBLIC "${NR_ROOT}")
 target_compile_features(nr_draw PUBLIC cxx_std_20)
@@ -21,6 +25,7 @@ target_compile_features(nr_draw PUBLIC cxx_std_20)
 add_library(nr_renderer STATIC
     renderer.cpp
     ambient_occlusion.cpp
+    gtao.cpp
     shaders.cpp
     output_blit.cpp
     log.cpp
@@ -35,6 +40,8 @@ if(NR_GAME_RENDERER)
         game_resources.cpp
         game_passes.cpp
         game_frame_log.cpp
+        game_ao.cpp
+        scene_ao.cpp
         shader_library.cpp
         pipeline_prewarm.cpp
     )

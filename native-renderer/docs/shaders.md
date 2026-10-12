@@ -640,6 +640,17 @@ offsets, ask for weights or sample cubes, and lists the constants whose names lo
 size, `1/width`): the data for deciding per family. It could not be run on the real database in the cloud (no game
 files); on the fixture database it runs and counts. The decisions it feeds are in `backend.md`.
 
+## Ambient-only AO (Phase 3)
+
+`ShaderInfo::ambientOcclusion` (`kkshaders/ambient.h`) makes a pixel shader multiply one term (its colour output, a
+constant, an interpolated input, a fetch constant's texture reads, or a register after an instruction) by the
+occlusion of its pixel, read through the `KKAmbientOcclusion` buffer (b4) from the bindless 2D table. Part of the
+input hash only when set: without it every translation and hash is as before (the 1,557 corpus translations
+compared). `kkshaders_ambient_tests` checks every kind of term on the corpus; `kkshaders translate --addresses` and
+`--ambient`, and `kkshaders ao-list` (each pixel family's constants, inputs and samplers; a family expanded into the
+list; the database's HLSL sources), are for finding the game's ambient terms. Design, list format and the Windows
+checklist: `ao.md`.
+
 ## Decisions
 
 - Render scale: the translator's aware mode is for pixel shaders only, makes VPOS guest pixels and fetch sizes

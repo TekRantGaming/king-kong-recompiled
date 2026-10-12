@@ -208,6 +208,7 @@ void GameRenderer::Clear(nvrhi::ICommandList* cl, const ClearCall& call) {
                         std::max(s.height, existing ? existing->height : 0u));
     }
   }
+  if (scene_ao_) AoClearHook(call, depth);  // AO hook (game_ao.cpp): the scene's depth is cleared
   // The rectangles, or the viewport (the device's, after its clamp).
   std::vector<nvrhi::Rect> rects;
   for (uint32_t r = 0; r < call.rect_count; ++r)
@@ -291,7 +292,7 @@ void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
   // reads a scratch texture for the duration of the copy (the game's own
   // target stays as it was).
   nvrhi::TextureHandle ao_original;
-  if (ao_ && options_.ao_settings) {
+  if ((ao_ || scene_ao_) && options_.ao_settings) {
     const AoSettings ao_settings = options_.ao_settings();
     if (ao_settings.mode > 0 && call.dest_texture) {
       const uint8_t* ao_dest = memory_.Virtual(call.dest_texture);
@@ -310,7 +311,8 @@ void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
       const nvrhi::Rect host_rect = ScaleRect(nvrhi::Rect(0, guest_w, 0, guest_h), source->scale_x, source->scale_y);
       r.width = std::min(uint32_t(std::max(host_rect.maxX, 0)), sd.width);
       r.height = std::min(uint32_t(std::max(host_rect.maxY, 0)), sd.height);
-      if (nvrhi::ITexture* scene = ao_->OnResolve(cl, r, ao_settings)) {
+      // AO hook (game_ao.cpp): the legacy method, or the GTAO method's resolve moment.
+      if (nvrhi::ITexture* scene = AoResolveHook(cl, r, ao_settings, call, source)) {
         ao_original = source->texture;
         source->texture = scene;
         ++stats_.ao_applied;
@@ -435,6 +437,7 @@ void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
 bool GameRenderer::Present(nvrhi::ICommandList* cl, uint32_t device, nvrhi::ITexture* target) {
   dev::DeviceView d(device ? memory_.Virtual(device) : nullptr);
   if (!d.valid()) return false;
+  if (scene_ao_ || ao_timer_) AoPresentHook(cl);  // AO hook (game_ao.cpp): a scene the moments above missed
   if (frame_log_ && frame_log_->enabled()) LogSwap(d);
   const uint32_t back_buffer = d.u32(dev::kBackBuffer);
   const uint8_t* object = back_buffer ? memory_.Virtual(back_buffer) : nullptr;

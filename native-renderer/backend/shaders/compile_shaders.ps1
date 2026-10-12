@@ -34,4 +34,18 @@ foreach ($spec in @("ao_vs:vs:vs_main", "ao_copy_ps:ps:ps_copy", "ao_depth_ps:ps
         -Fh (Join-Path $out "${base}_spirv.h") -Vn "k_${base}_spirv" $ao
     if ($LASTEXITCODE -ne 0) { throw "dxc (SPIR-V) failed on $ao $entry" }
 }
+# GTAO (gtao.hlsl, docs/ao.md): compute passes and the apply passes, one blob per entry point.
+$gtao = Join-Path $here "gtao.hlsl"
+foreach ($spec in @("gtao_prepare_cs:cs:cs_prepare", "gtao_prefilter_cs:cs:cs_prefilter", "gtao_normals_cs:cs:cs_normals",
+                    "gtao_main_cs:cs:cs_main", "gtao_denoise_cs:cs:cs_denoise", "gtao_denoise_last_cs:cs:cs_denoise_last",
+                    "gtao_output_cs:cs:cs_output", "gtao_vs:vs:vs_main", "gtao_apply_ps:ps:ps_apply",
+                    "gtao_apply_resolve_ps:ps:ps_apply_resolve")) {
+    $base, $stage, $entry = $spec.Split(":")
+    & $Dxc -nologo -T "${stage}_6_0" -E $entry -O3 -Fh (Join-Path $out "${base}_dxil.h") -Vn "k_${base}_dxil" $gtao
+    if ($LASTEXITCODE -ne 0) { throw "dxc (DXIL) failed on $gtao $entry" }
+    & $Dxc -nologo -T "${stage}_6_0" -E $entry -O3 -spirv "-fspv-target-env=vulkan1.2" `
+        -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-b-shift 256 0 -fvk-u-shift 384 0 `
+        -Fh (Join-Path $out "${base}_spirv.h") -Vn "k_${base}_spirv" $gtao
+    if ($LASTEXITCODE -ne 0) { throw "dxc (SPIR-V) failed on $gtao $entry" }
+}
 Write-Host "Shaders written to $out"

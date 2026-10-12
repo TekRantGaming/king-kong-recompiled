@@ -78,6 +78,7 @@ configure_file("${CMAKE_CURRENT_BINARY_DIR}/prelude.cpp.new" "${CMAKE_CURRENT_BI
 
 add_library(kkshaders STATIC
     src/container.cpp
+    src/ambient.cpp
     src/translator.cpp
     src/compiler.cpp
     src/cache.cpp
@@ -121,6 +122,11 @@ add_test(NAME cache COMMAND kkshaders_tests cache ${KK_TEST_ARGS} --out "${CMAKE
 add_test(NAME scale COMMAND kkshaders_tests scale ${KK_TEST_ARGS})
 add_test(NAME pack-stamp COMMAND kkshaders_tests pack-stamp)
 add_test(NAME pack-build COMMAND kkshaders_tests pack-build ${KK_TEST_ARGS} --out "${CMAKE_CURRENT_BINARY_DIR}/pack-out")
+# The ambient-only AO hook (docs/ao.md).
+add_executable(kkshaders_ambient_tests tests/xenos_asm.cpp tests/container_writer.cpp tests/corpus.cpp tests/ambient_tests.cpp)
+target_include_directories(kkshaders_ambient_tests PRIVATE tests)
+target_link_libraries(kkshaders_ambient_tests PRIVATE kkshaders xenosrecomp_core Threads::Threads)
+add_test(NAME ambient COMMAND kkshaders_ambient_tests --dxc "${KKSHADERS_DXC_DIR}")
 # The tool's database commands on a synthetic database and shader storage file.
 set(KK_FIX "${CMAKE_CURRENT_BINARY_DIR}/fixtures")
 add_test(NAME fixtures COMMAND kkshaders_tests make-fixtures "${KK_FIX}")
@@ -131,6 +137,10 @@ add_test(NAME tool-db-structure COMMAND kkshaders_tool db-structure "${KK_FIX}/x
 add_test(NAME tool-scale-report COMMAND kkshaders_tool scale-report "${KK_FIX}/xeshaders.bin")
 add_test(NAME tool-xsh COMMAND kkshaders_tool xsh "${KK_FIX}/fixture.xsh" --out "${KK_FIX}/xsh-out" ${KK_TEST_ARGS})
 add_test(NAME tool-pack-lookup COMMAND kkshaders_tool pack-lookup "${KK_FIX}/db-out/kkshaders.pack")
+add_test(NAME tool-ao-list COMMAND kkshaders_tool ao-list "${KK_FIX}/xeshaders.bin")
+add_test(NAME tool-ao-list-family COMMAND kkshaders_tool ao-list "${KK_FIX}/xeshaders.bin" --family psFixture
+         --term "constant g_Constants rgb" -o "${KK_FIX}/ao-list.txt" --sources "${KK_FIX}/ao-sources")
+set_tests_properties(tool-ao-list tool-ao-list-family PROPERTIES DEPENDS fixtures)
 set_tests_properties(tool-vfetch-check tool-db-check tool-db-build tool-db-structure tool-scale-report tool-xsh PROPERTIES DEPENDS fixtures)
 set_tests_properties(tool-pack-lookup PROPERTIES DEPENDS tool-db-build)
 if(EXISTS "${KKSHADERS_DATABASE}")

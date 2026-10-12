@@ -188,6 +188,62 @@ REXCVAR_DEFINE_DOUBLE(native_shadow_scale, 0.0, "Native renderer",
                       "832x832 in the game). 0: like native_render_scale; 1: keep them at the 360's size")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+// Ambient occlusion beyond the launcher's ao_mode and ao_strength (docs/ao.md). The defaults are
+// today's AO.
+REXCVAR_DEFINE_STRING(native_ao_method, "legacy", "Native renderer",
+                      "Ambient occlusion method: legacy (the occlusion ported from the Xenos plugin) or gtao "
+                      "(XeGTAO from the scene's depth). ao_mode and ao_strength still turn it on and set its strength")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_STRING(native_ao_apply, "resolve", "Native renderer",
+                      "When the gtao method's occlusion reaches the picture: resolve (at the scene copy after the "
+                      "depth resolve, today's moment), opaque (at the end of the opaque pass, before water, smoke, "
+                      "particles and fog), ambient (inside the lighting shaders of native_ao_shaders, opaque "
+                      "otherwise). The legacy method always uses resolve")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_STRING(native_ao_quality, "auto", "Native renderer",
+                      "The gtao method's resolution: full or half (of the scene target, at the render scale), "
+                      "or auto (full up to a render scale of 1.5, half above)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_DOUBLE(native_ao_radius, 0.0, "Native renderer",
+                      "The gtao method's occlusion radius in the game's world units; 0: from the camera (the "
+                      "legacy method's radius for the strength, in near-plane distances)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_STRING(native_ao_rules, "", "Native renderer",
+                      "A file of draw classifier rules placed before the built-in ones (docs/ao.md)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_STRING(native_ao_shaders, "", "Native renderer",
+                      "The ambient-only mode's list of lighting pixel shaders and their ambient term (docs/ao.md)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_DOUBLE(native_ao_radius_scale, 1.0, "Native renderer",
+                      "The gtao method's radius from the camera times this (tuning, docs/ao.md)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_DOUBLE(native_ao_falloff, 0.0, "Native renderer",
+                      "The gtao method's falloff range, 0 to 1 of the radius (0: XeGTAO's 0.615)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_DOUBLE(native_ao_power, 0.0, "Native renderer",
+                      "The gtao method's final power (0: from ao_strength)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_DOUBLE(native_ao_fade, 0.0, "Native renderer",
+                      "The gtao method's occlusion fades out linearly to this many near-plane distances (0: none)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_INT32(native_ao_dump_every, 0, "Native renderer",
+                     "Every this many frames, log the AO classifier's view of each draw (0: off)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_BOOL(native_ao_gpu_time, false, "Native renderer",
+                    "Time the ambient occlusion's GPU passes and log the average every 600 frames")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_BOOL(native_flip_front_face, false, "Native renderer",
                     "Swap the front face of every draw (a debugging aid for culling)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
