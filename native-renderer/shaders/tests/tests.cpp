@@ -4,6 +4,8 @@
 //   kkshaders_tests corpus --dxc <dir> [--spirv-val <exe>] [--out <dir>] [--fuzz N] [--seed S] [--filter text]
 //   kkshaders_tests vfetch                    the vertex fetch patching (kkshaders/vertex_patch.h)
 //   kkshaders_tests cache --dxc <dir> [--out <dir>]
+//   kkshaders_tests pack-stamp                the pack's stamp and when a pack is current
+//   kkshaders_tests pack-build --dxc <dir> [--out <dir>]   the player's pack from a synthetic database
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -11,6 +13,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <mutex>
 #include <random>
@@ -23,6 +26,7 @@
 #include "kkshaders/cache.h"
 #include "kkshaders/compiler.h"
 #include "kkshaders/container.h"
+#include "kkshaders/pack_builder.h"
 #include "kkshaders/translator.h"
 #include "kkshaders/vertex_patch.h"
 #include "xenos_asm.h"
@@ -755,6 +759,212 @@ int makeFixtures(int argc, char** argv) {
     return 0;
 }
 
+// --------------------------------------------------------------------------------------------
+// The pack the launcher builds on the player's machine (kkshaders/pack_builder.h): its stamp,
+// when it is current, and a build on a synthetic database.
+std::vector<uint8_t> readAll(const fs::path& path) {
+    std::ifstream f(path, std::ios::binary);
+    return std::vector<uint8_t>(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+}
+
+int testPackStamp() {
+    PackStamp s;
+    s.backend = PackBackend::Dxil;
+    s.translator = 0x0123456789ABCDEFull;
+    s.dxc = "dxcompiler 1.9 commit 5512 01b62ad4";
+    s.database = 0xFEDCBA9876543210ull;
+    s.scaled = true;
+    s.shaders = 4796;
+    PackStamp back;
+    CHECK(PackStamp::parse(s.toText(), back));
+    CHECK(back.backend == s.backend && back.translator == s.translator && back.dxc == s.dxc && back.database == s.database &&
+          back.scaled == s.scaled && back.shaders == s.shaders);
+    {  // Windows line ends and unknown keys are fine.
+        std::string text = s.toText() + "future 7\n", crlf;
+        for (char c : text) crlf += c == '\n' ? std::string("\r\n") : std::string(1, c);
+        CHECK(PackStamp::parse(crlf, back) && back.dxc == s.dxc);
+    }
+    CHECK(!PackStamp::parse("", back));
+    CHECK(!PackStamp::parse("kkshaders pack stamp 2\n" + s.toText().substr(s.toText().find('\n') + 1), back));
+    {  // Every compared field must be there.
+        for (const char* key : {"backend ", "translator ", "dxc ", "database ", "scaled "}) {
+            std::string text = s.toText();
+            const size_t at = text.find(std::string("\n") + key);
+            text.erase(at + 1, text.find('\n', at + 1) - at);
+            CHECK(!PackStamp::parse(text, back));
+        }
+        std::string bad = s.toText();
+        bad.replace(bad.find("backend dxil"), 12, "backend metal");
+        CHECK(!PackStamp::parse(bad, back));
+    }
+
+    // Which differences make a pack stale.
+    PackStamp want = s;
+    want.scaled = false;
+    CHECK(comparePackStamp(nullptr, want).state == PackState::Missing);
+    CHECK(comparePackStamp(&s, want).state == PackState::Current);   // scaled serves plain too
+    PackStamp plain = want;
+    want.scaled = true;
+    CHECK(comparePackStamp(&plain, want).state == PackState::Stale);  // but not the other way
+    CHECK(comparePackStamp(&s, want).state == PackState::Current);
+    PackStamp other = s;
+    other.shaders = 1;  // information only
+    CHECK(comparePackStamp(&other, want).state == PackState::Current);
+    other = s, other.backend = PackBackend::Spirv;
+    CHECK(comparePackStamp(&other, want).state == PackState::Stale);
+    other = s, other.translator ^= 1;
+    CHECK(comparePackStamp(&other, want).state == PackState::Stale);
+    other = s, other.dxc = "dxcompiler 1.8 commit 4900 0123abcd";
+    CHECK(comparePackStamp(&other, want).state == PackState::Stale);
+    CHECK(comparePackStamp(&other, want).reason.find("DXC") != std::string::npos);
+    other = s, other.database ^= 0x100;
+    CHECK(comparePackStamp(&other, want).state == PackState::Stale);
+    CHECK(std::string(packFileName(PackBackend::Spirv)) == "kkshaders-spirv.pack");
+    CHECK(std::string(packFileName(PackBackend::Dxil)) == "kkshaders-dxil.pack");
+    std::printf("pack-stamp: %s\n", failures ? "FAILED" : "ok");
+    return failures ? 1 : 0;
+}
+
+int testPackBuild(int argc, char** argv) {
+    std::string dxc = option(argc, argv, "--dxc");
+    fs::path out = option(argc, argv, "--out", "pack-out");
+    std::string error;
+    if (!loadDxc(dxc, &error)) {
+        std::printf("pack-build: %s\n", error.c_str());
+        return 1;
+    }
+    std::error_code ec;
+    fs::remove_all(out, ec);
+    fs::create_directories(out, ec);
+
+    // A small database from the corpus: some vertex and pixel shaders, and one shader twice
+    // (the same container under two entries is built once).
+    std::vector<CorpusShader> corpus = buildCorpus(0, 5);
+    std::vector<ctest::DbEntry> entries;
+    std::vector<ShaderInfo> infos;
+    int vertex = 0, pixel = 0;
+    for (const auto& s : corpus) {
+        if (s.raw || (s.vertex ? vertex : pixel) >= 24) continue;
+        ParseResult p = parseContainer(s.bytes);
+        if (!p.ok || !translate(p.info).ok) continue;
+        (s.vertex ? vertex : pixel)++;
+        entries.push_back({s.vertex ? 1u : 2u, (uint64_t(1) << 56) | entries.size(), s.bytes});
+        infos.push_back(p.info);
+    }
+    entries.push_back(entries.front());
+    const size_t distinct = infos.size();
+    std::vector<uint8_t> dbBytes = ctest::writeDatabase({{"vsFixture.hlsl", "// v\n"}, {"psFixture.hlsl", "// p\n"}}, entries);
+    const fs::path db = out / "xeshaders.bin";
+    writeFile(db, std::string(dbBytes.begin(), dbBytes.end()));
+
+    PackBuildOptions o;
+    o.database = db;
+    o.folder = out / "cache" / kPackFolderName;
+    o.backend = PackBackend::Spirv;
+    o.threads = 4;
+    o.dxc = dxc;
+    CHECK(checkPack(o).state == PackState::Missing);
+    PackBuildProgress progress;
+    PackBuildResult r = buildPack(o, &progress);
+    CHECK(r.ok && !r.upToDate && !r.cancelled);
+    CHECK(r.compiled == distinct && r.failed == 0 && r.parseFailures == 0);
+    CHECK(progress.total == distinct && progress.done == distinct && progress.phase == PackBuildProgress::kFinished);
+    CHECK(r.pack == o.folder / "kkshaders-spirv.pack" && fs::exists(r.pack));
+    PackStamp stamp;
+    CHECK(readPackStamp(r.pack, stamp));
+    CHECK(stamp.backend == PackBackend::Spirv && stamp.translator == translatorHash() && stamp.dxc == dxcIdentity() &&
+          !stamp.scaled && stamp.shaders == distinct);
+    CHECK(stamp.database == hashBytes(dbBytes.data(), dbBytes.size()));
+    {
+        ShaderPack pack;
+        CHECK(pack.open(r.pack, &error));
+        CHECK(pack.size() == distinct);
+        for (const ShaderInfo& info : infos) {
+            CompiledShader c;
+            CHECK(pack.find(info.ucodeHash, translationInputHash(info), c) && !c.spirv.empty() && c.dxil.empty());
+        }
+    }
+    // Current now: a second build does nothing; with the aware variants wanted it is stale.
+    CHECK(checkPack(o).state == PackState::Current);
+    PackBuildResult again = buildPack(o);
+    CHECK(again.ok && again.upToDate && again.compiled == 0);
+    {
+        PackBuildOptions scaled = o;
+        scaled.scaled = true;
+        CHECK(checkPack(scaled).state == PackState::Stale);
+        PackBuildResult s = buildPack(scaled);
+        CHECK(s.ok && !s.upToDate && s.compiled == distinct + size_t(pixel));
+        CHECK(checkPack(scaled).state == PackState::Current);
+        CHECK(checkPack(o).state == PackState::Current);  // the scaled pack serves 1:1 too
+        ShaderPack pack;
+        CHECK(pack.open(s.pack, &error));
+        for (ShaderInfo info : infos) {
+            if (info.kind != ShaderKind::Pixel) continue;
+            info.renderScaleAware = true;
+            CompiledShader c;
+            CHECK(pack.find(info.ucodeHash, translationInputHash(info), c));
+        }
+    }
+    // The same pack, byte for byte, from one thread (the order of the workers does not matter).
+    {
+        PackBuildOptions one = o;
+        one.folder = out / "one-thread";
+        one.threads = 1;
+        one.lowPriority = true;
+        PackBuildOptions four = o;
+        four.folder = out / "four-threads";
+        PackBuildResult a = buildPack(one), b = buildPack(four);
+        CHECK(a.ok && b.ok && a.threads == 1 && b.threads == 4);
+        CHECK(readAll(a.pack) == readAll(b.pack) && !readAll(a.pack).empty());
+    }
+    // DXIL: signed by DXC itself (no dxil.dll is needed from DXC 1.8.2505 on), no SPIR-V.
+    {
+        PackBuildOptions d = o;
+        d.backend = PackBackend::Dxil;
+        PackBuildResult x = buildPack(d);
+        CHECK(x.ok && x.pack == o.folder / "kkshaders-dxil.pack" && x.compiled == distinct);
+        CHECK(checkPack(o).state == PackState::Current);  // the SPIR-V pack beside it is untouched
+        ShaderPack pack;
+        CHECK(pack.open(x.pack, &error));
+        for (const ShaderInfo& info : infos) {
+            CompiledShader c;
+            CHECK(pack.find(info.ucodeHash, translationInputHash(info), c) && c.spirv.empty() && isDxilSigned(c.dxil));
+        }
+    }
+    // Another database (the game's files changed): stale, and rebuilt.
+    {
+        entries.pop_back();
+        std::vector<uint8_t> changed = ctest::writeDatabase({{"vsFixture.hlsl", "// v\n"}, {"psFixture.hlsl", "// p\n"}}, entries);
+        writeFile(db, std::string(changed.begin(), changed.end()));
+        PackCheck c = checkPack(o);
+        CHECK(c.state == PackState::Stale && c.reason.find("database") != std::string::npos);
+        PackBuildResult n = buildPack(o);
+        CHECK(n.ok && !n.upToDate && checkPack(o).state == PackState::Current);
+    }
+    // Cancelled: nothing written. A missing database: an error, nothing written.
+    {
+        PackBuildOptions c = o;
+        c.folder = out / "cancelled";
+        PackBuildProgress stop;
+        stop.cancel = true;
+        PackBuildResult x = buildPack(c, &stop);
+        CHECK(!x.ok && x.cancelled && !fs::exists(c.folder / "kkshaders-spirv.pack"));
+        c.folder = out / "no-database";
+        c.database = out / "missing.bin";
+        PackBuildResult y = buildPack(c);
+        CHECK(!y.ok && !y.error.empty() && !fs::exists(c.folder));
+        CHECK(checkPack(c).state == PackState::Missing);
+    }
+    // A pack without its stamp (a build that stopped between the two) is not taken as current.
+    {
+        fs::remove(stampPath(r.pack), ec);
+        CHECK(checkPack(o).state == PackState::Missing);
+    }
+    std::printf("pack-build: %zu distinct shaders (%d vertex, %d pixel), %.2f s on 4 threads: %s\n", distinct, vertex, pixel, r.seconds,
+                failures ? "FAILED" : "ok");
+    return failures ? 1 : 0;
+}
+
 }  // namespace
 
 
@@ -911,6 +1121,8 @@ int main(int argc, char** argv) {
     if (what == "cache") return testCache(argc, argv);
     if (what == "scale") return testScale(argc, argv);
     if (what == "make-fixtures") return makeFixtures(argc, argv);
+    if (what == "pack-stamp") return testPackStamp();
+    if (what == "pack-build") return testPackBuild(argc, argv);
     std::printf("unknown test %s\n", what.c_str());
     return 2;
 }

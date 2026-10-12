@@ -44,8 +44,9 @@ class RingSkimmer {
   // From the Vd* kernel exports (through the graphics system).
   void InitializeRingBuffer(uint32_t ptr, uint32_t size_log2);
   void EnableReadPointerWriteBack(uint32_t ptr, uint32_t block_size_log2);
-  // From the CP_RB_WPTR register write.
-  void UpdateWritePointer(uint32_t value);
+  // From the CP_RB_WPTR register write. The ticket: the renderer's calls queued before the kick
+  // (--native_render_thread; 0 without it).
+  void UpdateWritePointer(uint32_t value, uint64_t ticket = 0);
 
  private:
   void WorkerMain();
@@ -59,6 +60,10 @@ class RingSkimmer {
   bool ExecuteCondWrite(rex::memory::RingBuffer* reader);
   bool ExecuteSetConstant(rex::memory::RingBuffer* reader, uint32_t count);
   void WriteRegister(uint32_t index, uint32_t value);
+  // Before anything the CPU can see as the GPU's progress (a fence, a swap, an interrupt): the
+  // render thread runs the calls queued before this batch's kick first, so a draw's guest data is
+  // read before the game may reuse it. Once per batch.
+  void WaitForRenderer();
   uint32_t ReadRegister(uint32_t index);
   void WriteGuestDword(uint32_t address_with_endian, uint32_t value);
   uint32_t ReadGuestDword(uint32_t address_with_endian);
@@ -75,6 +80,9 @@ class RingSkimmer {
   rex::system::object_ref<rex::system::XHostThread> thread_;
   std::unique_ptr<rex::thread::Event> write_ptr_event_;
   std::atomic<uint32_t> write_ptr_index_{0};
+  std::atomic<uint64_t> write_ticket_{0};
+  uint64_t batch_ticket_ = 0;
+  bool batch_waited_ = false;
   uint32_t read_ptr_index_ = 0;
   uint32_t primary_buffer_ptr_ = 0;
   uint32_t primary_buffer_size_ = 0;

@@ -1,8 +1,9 @@
 // King Kong native renderer: HLSL to DXIL and SPIR-V with the DirectX Shader Compiler.
 //
 // DXC is loaded at run time (dxcompiler.dll / libdxcompiler.so). DXIL is validated and signed
-// by DXC's validator (dxil.dll / libdxil.so, found next to the compiler); SPIR-V is checked by
-// DXC's built-in SPIRV-Tools validator, and can also be checked with an external spirv-val.
+// by the compiler's own validator (DXC 1.8.2505 and later; older releases needed dxil.dll /
+// libdxil.so next to the compiler, which the port no longer ships); SPIR-V is checked by DXC's
+// built-in SPIRV-Tools validator, and can also be checked with an external spirv-val.
 #pragma once
 
 #include <cstdint>
@@ -27,6 +28,9 @@ struct CompileOutput {
 bool loadDxc(const std::string& path, std::string* error = nullptr);
 bool dxcLoaded();
 std::string dxcVersion();
+// Which compiler exactly: its version and the commit it was built from ("dxcompiler 1.9 commit N
+// <hash>"). Part of a pack's stamp: another DXC makes the pack stale (kkshaders/pack_builder.h).
+std::string dxcIdentity();
 
 // One compiler per thread (the DXC objects are not shared between threads).
 class Compiler {

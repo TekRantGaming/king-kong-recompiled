@@ -48,6 +48,7 @@ set(KINGKONG_SOURCES
     src/glyphs.cpp
     src/crash_dump.cpp
     src/shader_pack.cpp
+    src/native_shaders.cpp
     src/http.cpp
     src/update.cpp
 )
@@ -79,7 +80,8 @@ if(KK_NATIVE_RENDERER)
     # plugin/CMakeLists.txt copies rexgpu-native beside this target after each plugin build.
     set(NR_PLUGIN_COPY_BESIDE king_kong)
     add_subdirectory(../native-renderer native-renderer)
-    target_sources(king_kong PRIVATE ../native-renderer/hooks/kk_native_hooks.cpp)
+    target_sources(king_kong PRIVATE ../native-renderer/hooks/kk_native_hooks.cpp
+                                     ../native-renderer/hooks/kk_native_ui.cpp)
     target_link_libraries(king_kong PRIVATE nr_hooks)
     target_compile_definitions(king_kong PRIVATE KK_NATIVE_RENDERER=1)
     # The runtime loads the plugin from beside the program.

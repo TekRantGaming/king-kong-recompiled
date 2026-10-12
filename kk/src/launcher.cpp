@@ -5,6 +5,7 @@
 #include "launcher_text.h"
 #include "launcher_ui.h"
 #include "shader_pack.h"
+#include "native_shaders.h"
 #include "steam_shortcut.h"
 #include "update.h"
 #include "glyphs.h"
@@ -453,6 +454,9 @@ class Launcher final : public rex::ui::ImGuiDialog {
     LoadArt();
     // Installed before the launcher took its art from the game files: take it now.
     if (files_ok_ && !art::HasLauncherArt(ArtDir())) StartArtExtraction(false);
+    // The native renderer's shaders (native_shaders.h): checked each time the launcher opens,
+    // built in the background from the game files when missing or stale.
+    if (files_ok_) native_pack_.Start(CacheDir(), paths_.game_dir);
     toast_ = std::make_unique<AchievementToast>(drawer, immediate_, paths_.game_dir, paths_.user_dir);
     CleanUpAfterUpdate();
     online::Start();
@@ -671,6 +675,11 @@ class Launcher final : public rex::ui::ImGuiDialog {
     }
     if (setup_art_) {
       setup_art_ = false;
+      // With the native renderer, the setup's last step: its shaders from the new game files.
+      if (NativeShaderPack::Wanted()) {
+        native_pack_.Start(CacheDir(), paths_.game_dir);
+        setup_shaders_ = true;
+      }
       page_ = kHome;
       home_focus_ = 0;
       home_mix_ = 0;  // the art fades in
@@ -1300,16 +1309,16 @@ class Launcher final : public rex::ui::ImGuiDialog {
 #if defined(KK_DEV_TOOLS)
     if (dev_setup_ >= 0) return true;
 #endif
-    return !files_ok_ || installing_ || setup_art_ || installing_update_;
+    return !files_ok_ || installing_ || setup_art_ || setup_shaders_ || installing_update_;
   }
 
   // 0: asking for the disc image, 1: installing, 2: taking the artwork,
-  // 3: updating the port.
+  // 3: updating the port, 4: preparing the native renderer's shaders.
   int SetupStage() const {
 #if defined(KK_DEV_TOOLS)
     if (dev_setup_ >= 0) return dev_setup_;
 #endif
-    return installing_update_ ? 3 : installing_ ? 1 : setup_art_ ? 2 : 0;
+    return installing_update_ ? 3 : installing_ ? 1 : setup_art_ ? 2 : setup_shaders_ ? 4 : 0;
   }
 
   void DrawSetup(ImDrawList* dl) {
@@ -1324,11 +1333,14 @@ class Launcher final : public rex::ui::ImGuiDialog {
       copy_total = float(progress_.bytes_total.load());
     }
     float art_fraction = art_progress_.fraction.load();
+    float shader_fraction = native_pack_.Fraction();
+    uint32_t shaders_done = native_pack_.Done(), shaders_total = native_pack_.Total();
 #if defined(KK_DEV_TOOLS)
     if (dev_setup_ >= 0) {  // screenshots of each stage
       copy_total = 6.3e9f;
       copied = copy_total * 0.37f;
       art_fraction = 0.6f;
+      if (!native_pack_.Busy()) shaders_total = 4794, shaders_done = 2157, shader_fraction = 0.45f;
     }
 #endif
 
@@ -1427,6 +1439,16 @@ class Launcher final : public rex::ui::ImGuiDialog {
       body("Taking the game's logo and stills from the movie from your copy of the game.");
       bar(art_fraction);
       y += 30 * s;
+    } else if (stage == 4) {
+      heading("Preparing the shaders");
+      body("Translating the game's shaders for the native renderer, from your copy of the game. This is done once, "
+           "and again only when the port or the game's files change.");
+      bar(shader_fraction);
+      caption_pair(shaders_total > 0 ? F("{0} of {1} shaders", {std::to_string(shaders_done), std::to_string(shaders_total)})
+                                     : T(std::string("Checking")),
+                   shader_fraction >= 0 ? std::to_string(int(shader_fraction * 100)) + "%" : "");
+      // The build goes on behind the Home screen (its status line), and Play waits for it.
+      entries.push_back({"Continue in the background", true, [this] { setup_shaders_ = false; }});
     } else {
       float got = 0, size = 0;
       std::string version;
@@ -1574,6 +1596,9 @@ class Launcher final : public rex::ui::ImGuiDialog {
                  files_ok_ ? color::kText : color::kWarn, -1};
     }
     cols[1] = {Upper(T("Shader pack")), PackStatusText(), pack_.failed ? color::kWarn : color::kText, PackProgress()};
+    if (NativeShaderPack::Wanted())  // the native renderer's own shaders instead (native_shaders.h)
+      cols[1] = {Upper(T("Shaders")), native_pack_.StatusText(),
+                 native_pack_.Finished() && !native_pack_.Ok() ? color::kWarn : color::kText, native_pack_.Fraction()};
     if (update_ && update_->found)
       cols[2] = {Upper(T("Version")), F("v{0}   " KK_DOT "   v{1} is out", {KK_VERSION, update_->found->version}),
                  color::kAccent, -1};
@@ -3147,6 +3172,14 @@ class Launcher final : public rex::ui::ImGuiDialog {
       modal_.progress = [this] { return PackProgress(); };
       return;
     }
+    // The native renderer's shaders for the settings the game starts with (they may have changed
+    // here): a build in progress, or one these settings need, finishes first (Tick).
+    if (NativeShaderPack::Wanted() && !std::exchange(native_pack_checked_, false)) {
+      if (!native_pack_.Busy()) native_pack_.Start(CacheDir(), paths_.game_dir);
+      waiting_for_native_ = true;
+      native_wait_since_ = ImGui::GetTime();
+      return;
+    }
     played_ = true;
     SaveSettings(paths_.config_path);
     bool needs_restart = false;
@@ -3180,6 +3213,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
       open_whats_new_ = false;
       OpenWhatsNew();
     }
+    TickNativeShaders();
     if (waiting_for_pack_ && !pack_.busy) {
       waiting_for_pack_ = false;
       modal_.open = false;
@@ -3196,6 +3230,31 @@ class Launcher final : public rex::ui::ImGuiDialog {
     if (seen_changes_ != saved_changes_ && now - changed_time_ > 0.8 && !ImGui::IsMouseDown(0)) {
       if (SaveSettings(paths_.config_path)) saved_time_ = now;
       saved_changes_ = seen_changes_;
+    }
+  }
+
+  // The native renderer's shaders: the end of the setup step, and Play waiting for them (the
+  // pop-up only when the check takes more than a moment, i.e. there is something to build).
+  void TickNativeShaders() {
+    if (setup_shaders_ && !native_pack_.Busy()) {
+      setup_shaders_ = false;
+      Status(native_pack_.Ok() ? "Installed. Your copy of King Kong is ready to play."
+                               : "Installed. The shaders were not prepared: the game compiles them as it starts.");
+    }
+    if (!waiting_for_native_) return;
+    if (!native_pack_.Busy()) {
+      waiting_for_native_ = false;
+      if (native_modal_) modal_.open = false;
+      native_modal_ = false;
+      native_pack_checked_ = true;
+      StartGame();
+    } else if (!native_modal_ && !modal_.open && ImGui::GetTime() - native_wait_since_ > 0.5) {
+      native_modal_ = true;
+      OpenModal("Preparing shaders",
+                "The native renderer's shaders are still being prepared from your copy of the game. The game starts "
+                "as soon as they're done.",
+                {"Back"}, 0, [this](int) { waiting_for_native_ = native_modal_ = false; });
+      modal_.progress = [this] { return native_pack_.Fraction(); };
     }
   }
 
@@ -3347,6 +3406,12 @@ class Launcher final : public rex::ui::ImGuiDialog {
   std::thread pack_thread_;
   int pack_installed_ = -1;        // -1: not read yet
   bool waiting_for_pack_ = false;  // Play was pressed during the download
+  NativeShaderPack native_pack_;      // the native renderer's shaders (native_shaders.h)
+  bool setup_shaders_ = false;        // being prepared as the install's last step
+  bool waiting_for_native_ = false;   // Play was pressed: they are checked (and built) first
+  bool native_modal_ = false;         // the pop-up of that wait is open
+  bool native_pack_checked_ = false;  // checked for this Play: StartGame goes on
+  double native_wait_since_ = 0;
   int autoplay_frames_ = 0;
 #if !defined(_WIN32)
   std::chrono::steady_clock::time_point next_frame_{};

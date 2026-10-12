@@ -149,7 +149,9 @@ void GameRenderer::VertexShaderPatched(uint32_t shader, uint32_t microcode, uint
   const uint8_t* global = memory_.Virtual(0x82D62324);
   const uint32_t device_address = global ? LoadBE32(global) : 0;
   const uint8_t* device = device_address ? memory_.Virtual(device_address) : nullptr;
-  patched_vs_hash_[VertexVariantKey(shader, declaration, device)] = kkshaders::hashBytes(ucode, bytes);
+  const uint64_t hash = kkshaders::hashBytes(ucode, bytes);
+  std::lock_guard lock(patched_mutex_);
+  patched_vs_hash_[VertexVariantKey(shader, declaration, device)] = hash;
 }
 
 void GameRenderer::FlushPendingDraw() {
@@ -158,8 +160,13 @@ void GameRenderer::FlushPendingDraw() {
   // The microcode as the library patched it for this draw (its draw has returned by now). Without
   // the patch hook (the tests' synthetic device), the object's microcode when it differs from the
   // template, else the reproduced patching computed at the draw.
-  if (auto it = patched_vs_hash_.find(pending_vs_key_); it != patched_vs_hash_.end()) {
-    pending_draw_.vs_hash = it->second;
+  uint64_t patched = 0;
+  {
+    std::lock_guard lock(patched_mutex_);
+    if (auto it = patched_vs_hash_.find(pending_vs_key_); it != patched_vs_hash_.end()) patched = it->second;
+  }
+  if (patched) {
+    pending_draw_.vs_hash = patched;
   } else {
     const uint64_t live = ObjectVertexShaderHash(pending_vs_object_, nullptr);
     if (live && live != pending_vs_template_) pending_draw_.vs_hash = live;

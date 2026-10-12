@@ -5,14 +5,19 @@
 // nr_get_api is the second export: the D3D hooks compiled into king_kong.exe
 // (native-renderer/hooks) use it to reach the backend (native_api.h).
 
+#include <filesystem>
 #include <string_view>
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/system/gpu_plugin.h>
 
+#include "backend/backend.h"
+#include "plugin/launcher_prewarm.h"
 #include "plugin/native_api.h"
 #include "plugin/native_graphics_system.h"
+#include "plugin/native_prewarm.h"
+#include "plugin/native_stutter.h"
 
 REXCVAR_DEFINE_STRING(native_backend, "auto", "Native renderer",
                       "Host API for the native renderer: auto, d3d12 or vulkan")
@@ -55,8 +60,10 @@ REXCVAR_DEFINE_BOOL(native_game, true, "Native renderer",
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_STRING(native_shader_pack, "", "Native renderer",
-                      "The translated shader pack (kkshaders db-build). Empty: kkshaders-spirv.pack "
-                      "(Vulkan) or kkshaders-dxil.pack (D3D12), else kkshaders.pack, beside the game")
+                      "The translated shader pack. Empty: kkshaders-spirv.pack (Vulkan) or "
+                      "kkshaders-dxil.pack (D3D12) in <cache root>/native-shaders, where the launcher "
+                      "builds it from the game's files, else beside the game (kkshaders db-build), else "
+                      "every shader is compiled with DXC on first use")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_STRING(native_dxc, "", "Native renderer",
@@ -85,28 +92,72 @@ REXCVAR_DEFINE_STRING(native_pipeline_cache_dir, "", "Native renderer",
                       "<cache root>/native-pipelines")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_BOOL(native_vk_pipeline_cache, true, "Native renderer",
+                    "Vulkan: keep the driver's compiled pipelines (a VkPipelineCache) in a file under the cache "
+                    "root (<cache root>/native-pipelines/<title>.vkcache, or native_pipeline_cache_dir) and load it "
+                    "at start, so making the pipelines again is fast. A file another GPU, driver or driver version "
+                    "made is not used: the cache is rebuilt in the background and the file replaced")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_BOOL(native_launcher_prewarm, false, "Native renderer",
+                    "When the launcher opens, make the game's known pipelines (native_pipeline_cache's file and the "
+                    "shipped list) on a Vulkan device of the plugin's own while the player is still there. The driver "
+                    "keeps what it compiled (its own disk cache, and native_vk_pipeline_cache's file), so the game's "
+                    "start makes them again quickly. Stopped when the game starts")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_BOOL(native_stutter_stats, false, "Native renderer",
+                    "Pipeline stutter counter: frames in which a draw waited for its pipeline or was skipped "
+                    "because it was not ready, and the worst wait, in the log (every 300 swaps and at the end) and "
+                    "under the frame counter (kk_show_fps, F2)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_BOOL(native_pipeline_list, true, "Native renderer",
+                    "Load the pipeline list shipped beside the game (kkpipelines.list, made by nr_pipelines merge "
+                    "from the pipeline cache files of several runs) at start and create its pipelines on the "
+                    "worker threads, so a fresh install draws everything from its first frame (needs "
+                    "native_async_pipelines; without the file nothing is loaded). The list is never written")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_STRING(native_pipeline_list_file, "", "Native renderer",
+                      "The shipped pipeline list when native_pipeline_list is on. Empty: kkpipelines.list beside "
+                      "the game")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_BOOL(native_pipeline_wait, false, "Native renderer",
                     "A draw whose pipeline is still being created waits for it (true) instead of being "
                     "skipped for a frame or two (false, the Xenos plugin's choice). Only with "
                     "native_async_pipelines")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-REXCVAR_DEFINE_BOOL(native_dynamic_vertex_buffers, false, "Native renderer",
+REXCVAR_DEFINE_BOOL(native_dynamic_vertex_buffers, true, "Native renderer",
                     "Vertex buffers the game rewrites every frame are not watched for writes: each draw "
                     "uploads the vertices it reads (no write fault per page and frame)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-REXCVAR_DEFINE_BOOL(native_async_present, false, "Native renderer",
+REXCVAR_DEFINE_BOOL(native_render_thread, true, "Native renderer",
+                    "Draw on a thread of the renderer's own, as the Xenos plugin's command processor does: "
+                    "the game's thread only copies each call's state, and the guest GPU's fences wait for "
+                    "the renderer (the game's timing then follows the Xenos plugin's)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_BOOL(native_render_thread_fences, true, "Native renderer",
+                    "With native_render_thread: the guest GPU's fences, swaps and interrupts wait until the render "
+                    "thread has run the calls queued before them (false: they pass at once, as without the render "
+                    "thread; for testing)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_BOOL(native_async_present, true, "Native renderer",
                     "Hand each frame to the presenter from a thread of its own, so the guest GPU's command "
                     "stream (and the game waiting on it) does not wait for the presenter")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-REXCVAR_DEFINE_BOOL(native_async_submit, false, "Native renderer",
+REXCVAR_DEFINE_BOOL(native_async_submit, true, "Native renderer",
                     "Submit each frame's GPU work from a thread of its own, so the game's thread does not "
                     "wait for the queue while the presenter holds it")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-REXCVAR_DEFINE_BOOL(native_present_unlocked, false, "Native renderer",
+REXCVAR_DEFINE_BOOL(native_present_unlocked, true, "Native renderer",
                     "Hand the game's frame to the presenter without holding the renderer's lock, so the "
                     "game's draws do not wait while the presenter waits for its previous paint")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
@@ -116,7 +167,7 @@ REXCVAR_DEFINE_DOUBLE(native_pipeline_wait_budget_ms, 30.0, "Native renderer",
                       "being created before its draws are skipped (0: skip at once)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-REXCVAR_DEFINE_STRING(native_render_scale, "1", "Native renderer",
+REXCVAR_DEFINE_STRING(native_render_scale, "auto", "Native renderer",
                       "Render scale: the game's render targets, viewports, resolves and textures made from "
                       "them are this many times the 360's 1280x720 (1 = the 360's size; 1.5, 2, 3, any number "
                       "from 0.25 to 8), or a frame size such as 1920x1080. The frame handed to the presenter "
@@ -124,7 +175,7 @@ REXCVAR_DEFINE_STRING(native_render_scale, "1", "Native renderer",
                       "the render scale aware ones: build the pack with kkshaders db-build --also-scaled, "
                       "else they are compiled at startup (needs DXC). auto: the port's draw resolution scale "
                       "(draw_resolution_scale_x / _y, which the launcher's render quality presets set, or "
-                      "resolution_scale), as the Xenos plugin uses it")
+                      "resolution_scale), as the Xenos plugin uses it (the default; 1 = the old default)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_DOUBLE(native_shadow_scale, 0.0, "Native renderer",
@@ -189,4 +240,35 @@ extern "C" REX_GPU_PLUGIN_EXPORT rex::system::IGraphicsSystem* rex_gpu_create(
 
 extern "C" REX_GPU_PLUGIN_EXPORT const NrApi* nr_get_api(void) {
   return nr::NativeGraphicsSystem::GetApi();
+}
+
+// The launcher's prewarm (native_prewarm.h).
+extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_prewarm_start(const NrPrewarmRequest* request) {
+  if (!request || request->size < sizeof(NrPrewarmRequest) || request->version != NR_PREWARM_VERSION) {
+    REXLOG_ERROR("rexgpu-native: nr_prewarm_start: a request of another version");
+    return NR_PREWARM_OFF;
+  }
+  const char* root = request->cache_root ? request->cache_root : "";
+  return nr::StartLauncherPrewarm(std::filesystem::path(reinterpret_cast<const char8_t*>(root)), request->title_id);
+}
+
+extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_prewarm_status(NrPrewarmStatus* status) {
+  return nr::LauncherPrewarmStatus(status);
+}
+
+extern "C" REX_GPU_PLUGIN_EXPORT void nr_prewarm_stop(void) { nr::StopLauncherPrewarm(); }
+
+// The pipeline stutter counter for the overlay (native_stutter.h).
+extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_stutter_stats(NrStutterStats* stats) {
+  nr::StutterSnapshot s;
+  if (!stats || stats->size < sizeof(NrStutterStats) || !nr::ReadStutterSnapshot(&s)) return 0;
+  stats->frames = s.frames;
+  stats->stutter_frames = s.stutter_frames;
+  stats->frames_waited = s.frames_waited;
+  stats->frames_skipped = s.frames_skipped;
+  stats->draws_skipped = s.draws_skipped;
+  stats->worst_wait_frame = s.worst_wait_frame;
+  stats->wait_ms = s.wait_ms;
+  stats->worst_wait_ms = s.worst_wait_ms;
+  return 1;
 }

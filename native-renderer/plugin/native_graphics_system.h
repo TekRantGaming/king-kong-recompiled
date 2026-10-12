@@ -21,6 +21,7 @@
 #include <rex/ui/presenter.h>
 
 #include "plugin/native_api.h"
+#include "plugin/plugin_settings.h"
 
 namespace rex::memory {
 class Memory;
@@ -77,6 +78,9 @@ class NativeGraphicsSystem final : public rex::system::IGraphicsSystem {
   HostApi api() const { return api_; }
   rex::memory::Memory* memory() const { return memory_; }
   Backend* backend() const { return backend_.get(); }
+  // --native_render_thread: waits until the renderer has run the calls of a ticket (the ring
+  // skimmer, before a fence, swap or interrupt).
+  void WaitForRenderer(uint64_t ticket);
   bool guest_gpu_ready() const { return guest_gpu_ready_.load(); }
 
  private:
@@ -100,7 +104,14 @@ class NativeGraphicsSystem final : public rex::system::IGraphicsSystem {
   bool provider_supports_presentation_ = false;
   std::unique_ptr<rex::ui::Presenter> presenter_;
   std::unique_ptr<Backend> backend_;
-  std::string pipeline_cache_path_;  // --native_pipeline_cache: the file, once the cache root is known
+  // The pipeline files (docs/backend.md, "Pipeline cache", "Pipeline lists"): started once the
+  // folder under the cache root is known (InitializeShaderStorage), or at once when no file of
+  // ours needs it.
+  void StartPipelines();
+  void OpenShaderPackFor(const std::filesystem::path& cache_root);
+  std::filesystem::path shader_cache_root_;  // from InitializeShaderStorage
+  PipelinePlace pipeline_place_;  // <cache root>/native-pipelines, or native_pipeline_cache_dir
+  bool pipelines_started_ = false;
   std::unique_ptr<RingSkimmer> skimmer_;
   std::atomic<bool> guest_gpu_ready_{false};
 

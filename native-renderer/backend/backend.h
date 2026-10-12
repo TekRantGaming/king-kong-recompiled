@@ -24,6 +24,7 @@
 #include "backend/draw_state.h"
 #include "backend/guest_memory.h"
 #include "backend/host_device.h"
+#include "backend/render_thread.h"
 #include "backend/renderer.h"
 
 namespace rex::memory {
@@ -45,6 +46,20 @@ class RuntimeGuestMemory final : public GuestMemory {
 
 enum class TestPicture { kClear, kTriangle };
 
+// The pipeline stutter counter (GameRenderer::StutterStats) as the backend last saw it, after the
+// game's last Present, for the overlay (any thread). False before the first frame, without a game
+// renderer, or when GameSettings::stutter_stats is off.
+struct StutterSnapshot {
+  uint64_t frames = 0, stutter_frames = 0, frames_waited = 0, frames_skipped = 0, draws_skipped = 0;
+  uint64_t worst_wait_frame = 0;
+  double wait_ms = 0, worst_wait_ms = 0;
+};
+bool ReadStutterSnapshot(StutterSnapshot* out);
+
+// Sends the backend libraries' log (backend/log.h) to the runtime's (Backend::Initialize does it too;
+// the launcher's prewarm runs before any backend).
+void InstallRuntimeLog();
+
 class ShaderLibrary;
 
 // Phase 2 settings (the plugin's cvars).
@@ -61,6 +76,7 @@ struct GameSettings {
   bool async_pipelines = true;
   bool pipeline_wait = false;  // see GameRenderer::Options
   bool dynamic_vertex_buffers = false;
+  bool render_thread = false;  // --native_render_thread (render_thread.h)
   int32_t anisotropic_override = -1;
   uint32_t fxaa = 0;
   double pipeline_wait_budget_ms = 30.0;
@@ -69,6 +85,9 @@ struct GameSettings {
   // render scale, else its own (a number).
   std::string render_scale = "1";
   float shadow_scale = 0.0f;
+  // The pipeline stutter counter in the log (a line with the statistics every 300 swaps, and one
+  // at the end) and for the overlay (ReadStutterSnapshot). Counted either way.
+  bool stutter_stats = false;
   // Ambient occlusion settings, read at every resolve (null: off). The plugin reads ao_mode and
   // ao_strength, the Xenos plugin's cvars.
   std::function<AoSettings()> ao_settings;
@@ -85,6 +104,17 @@ class Backend {
   // The game renderer's pipeline cache file (GameRenderer::SetPipelineCache); false without a game
   // renderer or when the file cannot be opened.
   bool SetPipelineCache(const std::string& path);
+  // A shipped pipeline list (GameRenderer::LoadPipelineList).
+  bool LoadPipelineList(const std::string& path);
+  // The host device's own pipeline cache (HostDevice::pipeline_cache) kept in `path`
+  // (GameRenderer::SetDriverPipelineCache): before SetPipelineCache and LoadPipelineList. False when
+  // there is none or no game renderer.
+  bool SetDriverPipelineCache(const std::string& path);
+  // The shader pack when it is found after Initialize (the plugin learns the cache root later,
+  // before the game creates its first shader). False without a game renderer, when a pack is
+  // already open, or when this one does not open (logged).
+  bool OpenShaderPack(const std::string& path);
+  bool has_shader_pack() const;
   void set_test_picture(TestPicture picture) { test_picture_ = picture; }
   Renderer& renderer() { return *renderer_; }
   DrawTracker* draws() { return draws_.get(); }
@@ -95,15 +125,25 @@ class Backend {
                uint32_t frontbuffer_height, uint32_t display_width, uint32_t display_height);
   void set_async_present(bool on);
 
+  // --native_render_thread: the calls queued so far, and a wait until the render thread has run
+  // them (0 and nothing without it).
+  uint64_t RenderTicket() const { return threaded_ ? threaded_->Ticket() : 0; }
+  void WaitRendered(uint64_t ticket) {
+    if (threaded_) threaded_->WaitDone(ticket);
+  }
+
  private:
   std::unique_ptr<HostDevice> host_;
   RuntimeGuestMemory guest_memory_;
+  // What the game renderer reads objects through: the render thread's copies first.
+  SnapshotGuestMemory snapshot_memory_{guest_memory_};
   rex::memory::Memory* memory_;
   std::unique_ptr<ShaderLibrary> shaders_;
   void* invalidation_handle_ = nullptr;
   std::unique_ptr<Renderer> renderer_;
   std::unique_ptr<DrawSink> sink_;  // the renderer, under mutex_
   std::unique_ptr<DrawTracker> draws_;
+  std::unique_ptr<ThreadedSink> threaded_;  // between draws_ and sink_ with --native_render_thread
   TestPicture test_picture_ = TestPicture::kTriangle;
   // The renderer is used from the game's thread (hooks) and the skimmer's
   // (swap): one at a time.
@@ -111,6 +151,8 @@ class Backend {
   uint64_t submitted_frames_ = 0;
   uint64_t shown_frames_ = 0;
   uint32_t swaps_ = 0;
+  bool stutter_stats_ = false;  // GameSettings::stutter_stats
+  void LogStutter(const char* when);
   // --native_present_unlocked: the presenter's refresh of a game frame runs outside mutex_.
   bool unlocked_present_ = false;
   // --native_async_submit: the frames' command lists are submitted by a thread of their own, so

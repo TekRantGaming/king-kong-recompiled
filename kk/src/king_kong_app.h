@@ -48,6 +48,9 @@ void InstallFpeGuard();  // fpe_guard.cpp
 #include "platform.h"
 #include "settings.h"
 #include "toast.h"
+#if defined(KK_NATIVE_RENDERER)
+#include "hooks/kk_native_ui.h"  // the native renderer's launcher prewarm
+#endif
 
 class KingKongApp : public rex::ReXApp {
  public:
@@ -112,10 +115,16 @@ class KingKongApp : public rex::ReXApp {
       });
     };
     cb.restart_and_play = [this] {
+#if defined(KK_NATIVE_RENDERER)
+      nr::kk::StopLauncherPrewarm();  // its device goes before this process does
+#endif
       kk::RelaunchSelf(L"--kk_skip_launcher=true");
       app_context().CallInUIThreadDeferred([this] { app_context().QuitFromUIThread(); });
     };
     cb.quit = [this] {
+#if defined(KK_NATIVE_RENDERER)
+      nr::kk::StopLauncherPrewarm();
+#endif
       app_context().CallInUIThreadDeferred([this] { app_context().QuitFromUIThread(); });
     };
     cb.set_fullscreen = [this](bool on) {
@@ -129,6 +138,12 @@ class KingKongApp : public rex::ReXApp {
     kk::ShowLauncher(imgui_drawer(), immediate_drawer(),
                       {defaults.game_data_root, defaults.user_data_root, defaults.config_path},
                       std::move(cb));
+#if defined(KK_NATIVE_RENDERER)
+    // The native renderer makes the game's pipelines while the player is in the launcher, when
+    // --native_launcher_prewarm is on (the plugin decides; nothing happens otherwise). After the
+    // launcher is made: it applies the Original look, which the settings the prewarm reads follow.
+    nr::kk::StartLauncherPrewarm(defaults.cache_root);
+#endif
     return std::nullopt;
   }
 

@@ -82,6 +82,7 @@ add_library(kkshaders STATIC
     src/compiler.cpp
     src/cache.cpp
     src/vertex_patch.cpp
+    src/pack_builder.cpp
     "${CMAKE_CURRENT_BINARY_DIR}/prelude.cpp")
 target_include_directories(kkshaders PUBLIC include PRIVATE "${KK_DXC_INCLUDE}")
 target_link_libraries(kkshaders PUBLIC kkshaders_deps PRIVATE xenosrecomp_core ${CMAKE_DL_LIBS})
@@ -118,6 +119,8 @@ add_test(NAME vfetch COMMAND kkshaders_tests vfetch)
 add_test(NAME corpus COMMAND kkshaders_tests corpus ${KK_TEST_ARGS} --out "${CMAKE_CURRENT_BINARY_DIR}/corpus-out")
 add_test(NAME cache COMMAND kkshaders_tests cache ${KK_TEST_ARGS} --out "${CMAKE_CURRENT_BINARY_DIR}/cache-out")
 add_test(NAME scale COMMAND kkshaders_tests scale ${KK_TEST_ARGS})
+add_test(NAME pack-stamp COMMAND kkshaders_tests pack-stamp)
+add_test(NAME pack-build COMMAND kkshaders_tests pack-build ${KK_TEST_ARGS} --out "${CMAKE_CURRENT_BINARY_DIR}/pack-out")
 # The tool's database commands on a synthetic database and shader storage file.
 set(KK_FIX "${CMAKE_CURRENT_BINARY_DIR}/fixtures")
 add_test(NAME fixtures COMMAND kkshaders_tests make-fixtures "${KK_FIX}")

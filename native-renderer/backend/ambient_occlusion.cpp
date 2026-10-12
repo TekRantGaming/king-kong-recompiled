@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "backend/log.h"
+#include "backend/renderer.h"
 #include "backend/shaders.h"
 
 namespace nr {
@@ -94,7 +95,7 @@ nvrhi::GraphicsPipelineHandle AmbientOcclusion::MakePipeline(const nvrhi::Shader
   pd.renderState.depthStencilState.depthTestEnable = false;
   pd.renderState.depthStencilState.depthWriteEnable = false;
   pd.renderState.rasterState.cullMode = nvrhi::RasterCullMode::None;
-  return device_->createGraphicsPipeline(pd, fb->getFramebufferInfo());
+  return CreateGraphicsPipeline(device_, pd, fb->getFramebufferInfo());
 }
 
 AmbientOcclusion::Image AmbientOcclusion::MakeImage(uint32_t width, uint32_t height, nvrhi::Format format,

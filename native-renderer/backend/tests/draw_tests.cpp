@@ -3,6 +3,9 @@
 // the records that reach the renderer's interface (DrawSink).
 
 #include <algorithm>
+#include <condition_variable>
+#include <functional>
+#include <mutex>
 #include <fstream>
 #include <set>
 #include <sstream>
@@ -11,6 +14,8 @@
 
 #include "backend/api_binding.h"
 #include "backend/draw_state.h"
+#include "backend/guest_device.h"
+#include "backend/render_thread.h"
 #include "backend/primitive.h"
 #include "backend/tests/check.h"
 #include "backend/tests/fake_guest.h"
@@ -476,4 +481,75 @@ TEST(GuestObjectDecoders) {
   CHECK_EQ(CpuToPhysical(0x40001000), 0x00001000u);
 }
 
+// ----------------------------------------------------------- render thread ---
+
+// --native_render_thread: the render thread sees each call's device and objects as they were at the call,
+// even when the game changed them before the call ran; data outside the copies reads live memory.
+TEST(RenderThreadRunsCallsOnTheirCopies) {
+  FakeGuestMemory m(1 << 20);
+  const uint32_t device = m.AllocHeap(dev::kSize);
+  const uint32_t surface = m.AllocHeap(64);
+  const uint32_t other = m.AllocHeap(16);
+  m.WriteFloat(device + dev::kVsConstants, 1.0f);
+  m.Write32(surface + 48, 1280);
+  m.Write32(other, 7);
+
+  struct Seen {
+    float constant;
+    uint32_t pitch, other;
+  };
+  std::mutex gate_mutex;
+  std::condition_variable gate_cv;
+  bool open = false;
+  std::vector<Seen> seen;
+  class Inner final : public DrawSink {
+   public:
+    Inner(const GuestMemory& memory, std::function<void(Seen)> note, std::function<void()> wait)
+        : view_(memory), note_(std::move(note)), wait_(std::move(wait)) {}
+    void OnClear(const ClearCall&) override {}
+    void OnResolve(const ResolveCall&) override {}
+    void OnPresent(uint32_t, uint32_t, uint32_t) override {}
+    void OnDraw(const DrawCall& d) override {
+      wait_();
+      note_({LoadBEFloat(view_.Virtual(d.device) + dev::kVsConstants), LoadBE32(view_.Virtual(d.render_targets[0]) + 48),
+             LoadBE32(view_.Virtual(other_))});
+    }
+    SnapshotGuestMemory view_;
+    std::function<void(Seen)> note_;
+    std::function<void()> wait_;
+    uint32_t other_ = 0;
+  } inner(m, [&](Seen s) { seen.push_back(s); },
+          [&] {
+            std::unique_lock lock(gate_mutex);
+            gate_cv.wait(lock, [&] { return open; });
+          });
+  inner.other_ = other;
+  ThreadedSink sink(inner, m);
+  DrawCall call;
+  call.device = device;
+  call.render_targets[0] = surface;
+  sink.OnDraw(call);
+  CHECK_EQ(sink.Ticket(), 1u);
+  // The game moves on before the render thread runs the draw.
+  m.WriteFloat(device + dev::kVsConstants, 2.0f);
+  m.Write32(surface + 48, 640);
+  m.Write32(other, 9);
+  sink.OnDraw(call);
+  {
+    std::lock_guard lock(gate_mutex);
+    open = true;
+  }
+  gate_cv.notify_all();
+  sink.WaitDone(sink.Ticket());
+  CHECK_EQ(seen.size(), size_t(2));
+  if (seen.size() == 2) {
+    CHECK_EQ(seen[0].constant, 1.0f);
+    CHECK_EQ(seen[0].pitch, 1280u);
+    CHECK_EQ(seen[0].other, 9u);  // not copied: live memory, as the GPU reads data
+    CHECK_EQ(seen[1].constant, 2.0f);
+    CHECK_EQ(seen[1].pitch, 640u);
+  }
+  CHECK_EQ(sink.stats().commands, 2u);
+  CHECK_EQ(sink.stats().device_copies, 2u);
+}
 NR_TEST_MAIN()

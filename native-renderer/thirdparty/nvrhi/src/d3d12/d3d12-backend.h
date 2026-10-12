@@ -221,6 +221,8 @@ namespace nvrhi::d3d12
 
         // The cache does not own the RS objects, so store weak references
         std::unordered_map<size_t, RootSignature*> rootsigCache;
+        // KK native renderer: pipelines are made on several threads (see thirdparty/NOTES.md).
+        std::recursive_mutex rootsigCacheMutex;
 
         explicit DeviceResources(const Context& context, const DeviceDesc& desc);
 

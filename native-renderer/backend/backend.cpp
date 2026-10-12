@@ -21,6 +21,10 @@
 #if NR_GAME_RENDERER
 #include "backend/game_renderer.h"
 #include "backend/shader_library.h"
+#else
+namespace nr {
+class ShaderLibrary {};  // never made without the game renderer; Backend's unique_ptr needs a type
+}  // namespace nr
 #endif
 
 REXCVAR_DECLARE(int32_t, native_dump_frame);
@@ -54,6 +58,10 @@ struct FrameRecord {
 };
 std::mutex g_frames_mutex;
 std::vector<FrameRecord> g_worst_frames;
+// --native_stutter_stats: the counter after the last Present, for the overlay.
+std::mutex g_stutter_mutex;
+bool g_stutter_on = false, g_stutter_valid = false;
+StutterSnapshot g_stutter;
 std::chrono::steady_clock::time_point g_last_present;
 uint64_t g_last_calls_us = 0, g_frame_draws = 0;
 struct CallTimer {
@@ -160,6 +168,13 @@ class LockedSink final : public DrawSink {
       last_wait_ms_ = s.pipeline_wait_ms;
       last_texture_ms_ = s.texture_ms;
       last_draws_ = s.draws;
+      std::lock_guard lock(g_stutter_mutex);
+      if (g_stutter_on) {
+        const GameRenderer::StutterStats st = g->stutter();
+        g_stutter = {st.frames,        st.stutter_frames,   st.frames_waited, st.frames_skipped,
+                     st.draws_skipped, st.worst_wait_frame, st.wait_ms,       st.worst_wait_ms};
+        g_stutter_valid = true;
+      }
     }
 #endif
     g_last_present = now;
@@ -271,13 +286,26 @@ class LogCallback final : public nvrhi::IMessageCallback {
 
 }  // namespace
 
+void InstallRuntimeLog() { SetLogSink(LogToRuntime); }
+
+bool ReadStutterSnapshot(StutterSnapshot* out) {
+  std::lock_guard lock(g_stutter_mutex);
+  if (!g_stutter_on || !g_stutter_valid) return false;
+  if (out) *out = g_stutter;
+  return true;
+}
+
+// Command lists recorded on several threads at once (the frame's, the presenter's): not "immediate", a
+// DX11 notion that NVRHI's validation layer enforces for every API (two open at once is an error there).
+nvrhi::CommandListParameters NonImmediateList() { return nvrhi::CommandListParameters().setEnableImmediateExecution(false); }
+
 nvrhi::IMessageCallback* GetMessageCallback() {
   static LogCallback callback;
   return &callback;
 }
 
-// Submits closed command lists in order on a thread of its own. At most two wait (the renderer
-// keeps three frame lists in turn, so the one it opens next has been submitted).
+// Submits closed command lists in order on a thread of its own. At most three wait (the renderer
+// keeps four frame lists in turn, so the one it opens next has been submitted).
 class Backend::Submitter {
  public:
   explicit Submitter(HostDevice& host) : host_(host), thread_([this] { Run(); }) {}
@@ -291,7 +319,7 @@ class Backend::Submitter {
   }
   void Enqueue(nvrhi::ICommandList* list) {
     std::unique_lock lock(mutex_);
-    done_cv_.wait(lock, [&] { return pending_.size() + busy_ < 2; });
+    done_cv_.wait(lock, [&] { return pending_.size() + busy_ < 3; });
     pending_.emplace_back(list);
     cv_.notify_one();
   }
@@ -382,13 +410,16 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
   SetLogSink(LogToRuntime);
   RenderScale scale;
   float shadow_scale = 0.0f;
+  bool shaders_aware = false;
 #if NR_GAME_RENDERER
   if (game.enabled) {
-    scale = ParseRenderScale(game.render_scale, width, height);
+    const RenderScaleSetup setup = ResolveRenderScale(game.render_scale, game.shadow_scale, game.debug, width, height);
+    scale = setup.scale;
+    shadow_scale = setup.shadow_scale;
+    shaders_aware = setup.shaders_aware;
     if (!scale.valid) {
       REXGPU_ERROR("rexgpu-native: render scale '{}' not understood (a number, or WxH): using 1", game.render_scale);
     }
-    if (game.shadow_scale > 0.0f) shadow_scale = std::clamp(game.shadow_scale, kMinRenderScale, kMaxRenderScale);
     if (!scale.unit() || shadow_scale > 0.0f) {
       REXLOG_INFO("rexgpu-native: render scale {:.4g} x {:.4g}, shadow maps {:.4g} (frame image {}x{})", scale.x, scale.y,
                   shadow_scale > 0.0f ? shadow_scale : scale.x, ScaledSize(width, scale.x), ScaledSize(height, scale.y));
@@ -406,13 +437,13 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
   if (game.enabled) {
     shaders_ = std::make_unique<ShaderLibrary>(host_->device(), guest_memory_);
     // --native_debug bit 16: the plain pixel shaders at a scale too (to tell the aware translation's part).
-    shaders_->SetRenderScaleAware(!(game.debug & 16) && (!scale.unit() || (shadow_scale > 0.0f && shadow_scale != 1.0f)));
+    shaders_->SetRenderScaleAware(shaders_aware);
     shaders_->Initialize(game.shader_pack, game.dxc);
     kknr::GuestMemory physical;
     physical.base = memory_->TranslatePhysical(0);
     physical.size = 0x20000000;
     physical.origin = 0;
-    auto renderer = std::make_unique<GameRenderer>(host_->device(), guest_memory_, physical, shaders_.get());
+    auto renderer = std::make_unique<GameRenderer>(host_->device(), snapshot_memory_, physical, shaders_.get());
     renderer->options().render_scale_x = scale.x;
     renderer->options().render_scale_y = scale.y;
     renderer->options().shadow_scale = shadow_scale;
@@ -444,6 +475,12 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
       }
       invalidation_handle_ = memory_->RegisterPhysicalMemoryInvalidationCallback(InvalidationThunk, renderer.get());
       renderer_->EnableGame(std::move(renderer));
+      stutter_stats_ = game.stutter_stats;
+      {
+        std::lock_guard lock(g_stutter_mutex);
+        g_stutter_on = game.stutter_stats;
+        g_stutter_valid = false;
+      }
       REXLOG_INFO("rexgpu-native: game renderer ready");
     } else {
       REXGPU_ERROR("rexgpu-native: game renderer initialisation failed; placeholder pipeline instead");
@@ -452,6 +489,7 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
   }
 #else
   (void)game;
+  (void)shaders_aware;
 #endif
   renderer_->set_submit([this](nvrhi::ICommandList* cl) {
     if (submitter_) {
@@ -468,7 +506,21 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
 #endif
     sink_ = std::move(sink);
   }
-  draws_ = std::make_unique<DrawTracker>(guest_memory_, sink_.get());
+  DrawSink* sink = sink_.get();
+  if (game.render_thread) {
+    threaded_ = std::make_unique<ThreadedSink>(*sink_, guest_memory_);
+#if NR_GAME_RENDERER
+    // The library patches a shader's microcode again for the next declaration: hashed at once.
+    if (GameRenderer* g = renderer_->game()) {
+      threaded_->on_patched = [g](uint32_t shader, uint32_t microcode, uint32_t declaration) {
+        g->VertexShaderPatched(shader, microcode, declaration);
+      };
+    }
+#endif
+    sink = threaded_.get();
+    REXLOG_INFO("rexgpu-native: render thread on");
+  }
+  draws_ = std::make_unique<DrawTracker>(guest_memory_, sink);
   draws_->set_find_wvp(renderer_->game() == nullptr);
   REXGPU_INFO("rexgpu-native: NVRHI renderer ready ({}x{})", width, height);
   return true;
@@ -481,6 +533,44 @@ bool Backend::SetPipelineCache(const std::string& path) {
   (void)path;
 #endif
   return false;
+}
+
+bool Backend::SetDriverPipelineCache(const std::string& path) {
+#if NR_GAME_RENDERER
+  if (renderer_ && renderer_->game() && host_ && host_->pipeline_cache()) {
+    renderer_->game()->SetDriverPipelineCache(host_->pipeline_cache(), path);
+    return true;
+  }
+#else
+  (void)path;
+#endif
+  return false;
+}
+
+bool Backend::LoadPipelineList(const std::string& path) {
+#if NR_GAME_RENDERER
+  if (renderer_ && renderer_->game()) return renderer_->game()->LoadPipelineList(path);
+#else
+  (void)path;
+#endif
+  return false;
+}
+
+bool Backend::OpenShaderPack(const std::string& path) {
+#if NR_GAME_RENDERER
+  if (shaders_ && !shaders_->pack_open()) return shaders_->OpenPack(path);
+#else
+  (void)path;
+#endif
+  return false;
+}
+
+bool Backend::has_shader_pack() const {
+#if NR_GAME_RENDERER
+  return shaders_ && shaders_->pack_open();
+#else
+  return false;
+#endif
 }
 
 void Backend::set_async_present(bool on) {
@@ -502,7 +592,27 @@ void Backend::set_async_submit(bool on) {
 
 Backend::~Backend() { Shutdown(); }
 
+void Backend::LogStutter(const char* when) {
+#if NR_GAME_RENDERER
+  if (!stutter_stats_ || !renderer_ || !renderer_->game()) return;
+  const GameRenderer::StutterStats s = renderer_->game()->stutter();
+  REXLOG_INFO(
+      "rexgpu-native: pipeline stutter {}: {} of {} frames ({} waited for pipelines, {:.0f} ms in all; {} skipped "
+      "{} draws whose pipelines were not ready); worst wait {:.1f} ms (frame {})",
+      when, s.stutter_frames, s.frames, s.frames_waited, s.wait_ms, s.frames_skipped, s.draws_skipped,
+      s.worst_wait_ms, s.worst_wait_frame);
+#else
+  (void)when;
+#endif
+}
+
 void Backend::Shutdown() {
+  threaded_.reset();  // runs what is queued
+  LogStutter("at the end");
+  {
+    std::lock_guard lock(g_stutter_mutex);
+    g_stutter_on = g_stutter_valid = false;
+  }
   present_thread_.reset();
   submitter_.reset();  // submits what waits
   if (invalidation_handle_) {
@@ -575,6 +685,14 @@ void Backend::PresentNow(rex::ui::Presenter* presenter, uint32_t frontbuffer_wid
           g_swap_refresh_us.load() / 1000);
     }
 #endif
+    if (threaded_) {
+      const ThreadedSink::Stats t = threaded_->stats();
+      REXLOG_INFO(
+          "rexgpu-native: render thread: {} calls ({} device copies), at most {} waiting; game thread {} ms "
+          "copying, {} ms waiting for room; ring skimmer waited {} times, {} ms",
+          t.commands, t.device_copies, t.max_backlog, t.enqueue_us / 1000, t.backpressure_us / 1000, t.fence_waits,
+          t.fence_wait_us / 1000);
+    }
     {
       std::lock_guard frames_lock(g_frames_mutex);
       std::string text;
@@ -586,6 +704,7 @@ void Backend::PresentNow(rex::ui::Presenter* presenter, uint32_t frontbuffer_wid
       g_worst_frames.clear();
       REXLOG_INFO("rexgpu-native: slowest frames:{}", text);
     }
+    LogStutter("so far");
   }
   (void)frontbuffer_width;
   (void)frontbuffer_height;
@@ -609,7 +728,7 @@ void Backend::PresentNow(rex::ui::Presenter* presenter, uint32_t frontbuffer_wid
     presenter->RefreshGuestOutput(
         width, height, display_width, display_height,
         [&](rex::ui::Presenter::GuestOutputRefreshContext& context) -> bool {
-          nvrhi::CommandListHandle cl = host_->device()->createCommandList();
+          nvrhi::CommandListHandle cl = host_->device()->createCommandList(NonImmediateList());
           cl->open();
           const bool ok = host_->CopyToGuestOutput(context, cl, image, width, height);
           cl->close();
@@ -622,7 +741,7 @@ void Backend::PresentNow(rex::ui::Presenter* presenter, uint32_t frontbuffer_wid
   presenter->RefreshGuestOutput(
       width, height, display_width, display_height,
       [&](rex::ui::Presenter::GuestOutputRefreshContext& context) -> bool {
-        nvrhi::CommandListHandle cl = host_->device()->createCommandList();
+        nvrhi::CommandListHandle cl = host_->device()->createCommandList(NonImmediateList());
         cl->open();
         nvrhi::ITexture* source = renderer_->presented_image();
         if (!game_frame) {

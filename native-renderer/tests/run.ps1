@@ -28,6 +28,8 @@ param(
   [string]$LockFile = 'F:\KK-native-renderer\game.lock',
   [string]$LockName = 'tests/run.ps1',
   [int]$WaitMinutes = 0,
+  # Seconds between two checks while waiting for the game (another runner may be using it).
+  [int]$WaitPollSeconds = 300,
   # Minutes to wait after each launch before the next one, so others sharing the game get a turn.
   [double]$PauseMinutes = 0,
   [string]$Label = '',
@@ -118,8 +120,8 @@ function Wait-GameFree {
     if (-not $busy -and -not $held) { return $true }
     if ((Get-Date) -ge $deadline) { return $false }
     if ($busy) { $why = "the game is running (pid $($busy.Id -join ','))" } else { $why = "the lock file says '$lockText'" }
-    Write-Output ("{0:HH:mm} {1}; checking again in 5 minutes" -f (Get-Date), $why)
-    Start-Sleep -Seconds 300
+    Write-Output ("{0:HH:mm} {1}; checking again in {2} s" -f (Get-Date), $why, $WaitPollSeconds)
+    Start-Sleep -Seconds $WaitPollSeconds
   }
 }
 

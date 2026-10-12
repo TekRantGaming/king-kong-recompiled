@@ -17,6 +17,9 @@ states, render targets and resolves. On Windows with Vulkan **all 13 golden scen
 | `backend/renderer.*`, `shaders.*`, `shaders/` | the NVRHI renderer: frame images, the milestone pictures, the placeholder pipeline; the built-in blit and clear shaders | NVRHI |
 | `backend/game_renderer.*`, `game_resources.cpp`, `game_passes.cpp` | Phase 2: the game's draws with their own shaders, textures and states; render targets, resolves, clears, Present | NVRHI, `kknr_resources`, `kkshaders` |
 | `backend/shader_library.*` | the game's shader objects as NVRHI shaders (the pack, else translated and compiled with DXC) | `kkshaders` |
+| `backend/pipeline_cache.*` | pipeline records, the player's pipeline file, shipped lists and their merging | nothing |
+| `backend/driver_pipeline_cache.h`, `vk_pipeline_cache.*` | the driver's pipeline cache kept in a file (Vulkan) | Vulkan-Headers |
+| `backend/pipeline_prewarm.*` | the game's pipelines made on a device of their own before the game (the launcher's prewarm) | NVRHI, `kkshaders` |
 | `backend/guest_device.h` | the D3D device struct's register images, shadows and fields the game renderer reads | nothing |
 | `cmake/kk_libs.cmake` | the resources and shader libraries built into the plugin | the SDK (fmt, xxHash, dxcapi.h) |
 | `backend/vulkan_dispatch.*` | the vulkan.hpp dispatcher NVRHI's static Vulkan backend needs | Vulkan-Headers |
@@ -24,7 +27,9 @@ states, render targets and resolves. On Windows with Vulkan **all 13 golden scen
 | `hooks/hook_table.*` | the 39 hooked entry points, their argument mapping, the nesting rule | nothing |
 | `hooks/trace_replay.*` | replays `KK_DEV_D3D_TRACE` logs through the hook table | nothing |
 | `hooks/kk_native_hooks.cpp` | the game-side `REX_HOOK_RAW` wrappers (linked into king_kong) | SDK, the game's code |
-| `plugin/` | `rexgpu-native`: `IGraphicsSystem`, ring skimmer, vblank, exports | SDK |
+| `hooks/kk_native_ui.*` | the game-side calls of the launcher's prewarm and the overlay's stutter line (linked into king_kong) | the plugin's exports |
+| `plugin/` | `rexgpu-native`: `IGraphicsSystem`, ring skimmer, vblank, exports (`native_api.h`, `native_prewarm.h`, `native_stutter.h`), the settings from the cvars (`plugin_settings.*`), the launcher's prewarm | SDK |
+| `tools/nr_pipelines.cpp` | merges the pipeline files of several runs into the shipped list | `backend/pipeline_cache.*` |
 | `sdk-patches/` | SDK changes the plugin needs (apply after `tools/rexglue-patches`) | |
 | `backend/tests/` | tests and the standalone test host | |
 
@@ -119,9 +124,10 @@ always what the GPU would have been sent. At every draw the game renderer reads 
 
 - **Shaders.** `ShaderLibrary` registers every shader when it is created (hooks on `sub_82111CA0` /
   `sub_82111D90`, run after the original so the object is known): the container's microcode hash is looked up
-  in the pack (`kkshaders-spirv.pack` or `kkshaders-dxil.pack` beside the game, or `--native_shader_pack`);
-  shaders missing from it (the D3D library's own two) are translated and compiled with DXC
-  (`dxcompiler.dll` beside the game, or `--native_dxc`). A shader object the hooks did not see is parsed from
+  in the pack (`--native_shader_pack`, else `kkshaders-spirv.pack` or `kkshaders-dxil.pack` in
+  `<cache root>/native-shaders`, which the launcher builds from the player's game files, else beside the game;
+  `shaders.md`, "The pack on the player's machine"); shaders missing from it (the D3D library's own two) are
+  translated and compiled with DXC (`dxcompiler.dll` beside the game, or `--native_dxc`). A shader object the hooks did not see is parsed from
   the object (container copy + microcode). The game creates all 6,585 shaders at boot: 4,073 distinct ones
   come from the pack, 2 are compiled.
 - **Constants.** Vertex and pixel float constants (+1920, +6016) are byte-swapped into two volatile constant
@@ -185,8 +191,11 @@ fetch, resolve with its destination, of frame N), `--native_debug` (bits: 1 gree
 image under the back buffer, 4 no gamma ramp, 8 the most invalidated pages every 300 frames). The stats line every 300 swaps counts draws, skips, pipelines,
 uploads, resolves, aliases and the time spent creating pipelines and uploading textures.
 
-For a run: `kkshaders-spirv.pack` (and `kkshaders-dxil.pack` for D3D12) from `kkshaders db-build ... --split`
-beside `king_kong.exe`, `dxcompiler.dll` and `dxil.dll` from the DXC release beside it too (neither in git).
+For a run: the launcher builds the pack into `<cache root>/native-shaders` (with `--gpu_plugin=native`), or
+`kkshaders pack-build` does (`shaders.md`); a developer's `kkshaders db-build ... --split` pack beside
+`king_kong.exe` is still found after the cache. `dxcompiler.dll` beside it comes from the build
+(`KK_DXC_DIR` or `NR_DXC_RUNTIME`, `plugin/CMakeLists.txt`); `dxil.dll` is no longer needed. Neither the pack nor
+DXC is in git, and no pack may ship.
 `tests/run.ps1` takes `-ExtraArgs` for extra game arguments.
 
 ### Render scale (session E)
@@ -488,7 +497,7 @@ tables in `analysis\phase2\perfA_table.txt`, `perfG_table.txt`.
 110: its command processor waits for the presenter the way the native renderer did before the fourth option.
 Unlimited on native means the game runs faster than the presenter shows frames; the presenter takes the newest.)
 
-Where the time went, and the options that fix it (all off by default, to keep today's behaviour; turn all four
+Where the time went, and the options that fix it (off by default in Phase 2b; on by default since Phase 2c, see "Defaults (Phase 2c)"; turn all four
 on for the numbers above):
 
 | Option | What it fixes | Venture, unlimited |
@@ -514,7 +523,7 @@ frame rate (`runs\native-fast-full2`).
 | Setting (cvar) | With `--gpu_plugin=native` |
 |---|---|
 | Frame rate cap (`kk_frame_rate`) | works since d4bd455: the native vblank ticks at 1000 Hz when the port turns `vsync` off, like the SDK's graphics system; 30, 60, 120 and unlimited measured below |
-| Render quality / resolution (`kk_render_quality`, `resolution_scale`, `draw_resolution_scale_x/_y`) | not followed by default: the native renderer draws at `--native_render_scale` (default 1). `--native_render_scale=auto` (new) takes the scale the Xenos plugin would draw at, which the presets set. Not the default yet, to keep today's behaviour |
+| Render quality / resolution (`kk_render_quality`, `resolution_scale`, `draw_resolution_scale_x/_y`) | followed: `--native_render_scale=auto`, the default since Phase 2c, takes the scale the Xenos plugin would draw at, which the presets set (the Original look: 1). `--native_render_scale=1` is the old default |
 | Ambient occlusion (`ao_mode`, `ao_strength`) | works: read at every resolve; the same picture as the Xenos plugin's ("Ambient occlusion") |
 | Upscalers (`present_effect`: FSR 1, NIS, bilinear) | work: the presenter's (`rex/ui/flags.h`), which paints the native renderer's frame image like the Xenos plugin's. Not checked in captures: the game's captures are the frame before the presenter |
 | Anti-aliasing (`swap_post_effect`, FXAA) | **not applied**: FXAA is the Xenos command processor's own swap pass (`rex/graphics/command_processor.h`, `SwapPostEffect`), not the presenter's. The native renderer would need its own FXAA pass over the frame image before `CopyToGuestOutput` (to do) |
@@ -528,51 +537,211 @@ work and the four new chapters): 15 of 17 pass with the loading scene's new tole
 pause, loading, the three V-Rex scenes, Venture, both Kong scenes, chap20, chap33; draw lists title and menus
 1.000, V-Rex 0.994, Venture 0.989, Kong 0.985); chap04 and chap12 fail on their camera offset (below).
 
+### The render thread (Phase 2c)
+
+**The chap04 / chap12 offset was the game's own timing, not a readback.** Runs `runs\p2c-*`, dumps and
+snapshots in `analysis\phase2c`:
+
+- Not resolves: the Xenos plugin does not write resolves to guest memory either (the SDK's
+  `readback_resolve` defaults to none); guest memory dumps at 126 s show every resolve destination of the frame
+  as zeros under both plugins. Resolve writeback would therefore have made native differ from the Xenos plugin.
+- Not occlusion queries or memexport: the game sends no EVENT_WRITE_ZPD, MEM_WRITE or REG_TO_MEM packets (the
+  ring skimmer's statistics now count packets by opcode); the Xenos plugin with `--occlusion_query_enable=false`
+  or `--readback_memexport=false` still matches the golden frames exactly. The CPU reads no viz-query status
+  register (the recompiled code's only GPU register reads are vblank, viewport size, RB_BC_CONTROL and a hang
+  report).
+- Not the floating-point state: the hooks restore MXCSR around every handler and log a change
+  (`hook_table.h`, `CallHandler`, kept); no handler ever changed it.
+- Not the frame rate: the Xenos plugin at `--kk_frame_rate=60`, with the chapter start moved by 0.5 s, or with
+  synchronous shader compilation gives the golden picture.
+- What it is: Jack lands 0.152 units higher. Static-data snapshots (`KK_DEV_SNAP_AT`) show his height at
+  0x82D64254 settling to -7.6450 under the Xenos plugin in every run and to -7.4931 under native in every run,
+  with any option, the pipeline cache, without watches or pipeline waits. His first position after the spawn
+  already differs in z (-174.4717 against -174.4783): he lands beside a step and that decides the side. The
+  camera follows him: the picture moves up by one pixel (chap12) or half a pixel (chap04).
+- What decides it (`--native_debug` bits kept for this: 256 no write watches, 512 no draws, 1024 no clears,
+  2048 no resolves, 8192 a 10 µs spin per draw instead of drawing, bits 16-18 end each draw at a stage):
+  draws that stop before the pipeline lookup give the Xenos value, draws that reach it or do the full work give
+  the native one, `--native_draws=false` a third (-7.6754). A steady cost per draw (the spin) does not move it;
+  the game thread's stalls in the chapter's first frames do (pipeline waits, texture and buffer uploads, the
+  queue waits of Present), all of which the Xenos plugin does on its command processor thread.
+
+**The render thread** (`--native_render_thread`, off by default; `backend/render_thread.{h,cpp}`). The hooks
+keep the draw-state tracker on the game's thread; `ThreadedSink` sits between it and the renderer:
+
+- At each clear, draw, resolve and Present it copies the D3D device struct (20,608 bytes) and the small objects
+  the call names (render target and depth surfaces, the vertex declaration, the 16 streams' vertex buffer
+  objects, a resolve's destination texture, the back and front buffers) and queues the call. A call shares the
+  previous call's device copy when the parts the renderer reads are unchanged (rare: the constants change at
+  almost every draw); copies hold only those parts and come from a pool. The game may run one frame (at most
+  8,000 calls) ahead; two frames made unlimited frame rates more uneven.
+- The render thread runs the calls through the renderer as before. Its guest object reads go through
+  `SnapshotGuestMemory` (the call's copies first); vertex, index and texture data are read from guest memory
+  when the call runs, as the Xenos plugin's command processor reads them.
+- That is safe because the ring skimmer now waits for the render thread before it writes anything the CPU can
+  see as the GPU's progress (a scratch-register fence, EVENT_WRITE_SHD, MEM_WRITE, REG_TO_MEM, COND_WRITE, the
+  extent and sample-count events, an interrupt, a swap): it waits until the calls queued before that ring
+  kick have run (the kick's ticket, taken at the CP_RB_WPTR write). The game reuses fenced memory (dynamic
+  buffers, Lock of a busy resource) only after such a fence, so a queued draw still reads the data it was given;
+  CPU writes outside that discipline reach the renderer through the write watches, as before.
+- The library's vertex shader patch is hashed at once on the calling thread (the frame log's vertex shader
+  hash; the library patches the microcode again for the next declaration). Shader creation stays on its thread.
+- Pipelines, one mechanism with the merged Phase 2c pipeline work ("Phase 2c: the pipelines before the first
+  frame" below): every pipeline of the game renderer is made by `GameRenderer::CreatePipeline` (the driver
+  cache's shared lock, then `CreateGraphicsPipeline`), on the pipeline workers for draws, the player's pipeline
+  file and the shipped list alike, on Vulkan and now on D3D12 too (the vendored NVRHI locks its D3D12 root
+  signature cache, `thirdparty/NOTES.md`). The render thread only looks pipelines up and waits within the
+  frame's budget; with the render thread off the game's thread does. The stutter counter counts the render
+  thread's waits and skips.
+- Statistics every 300 swaps: `rexgpu-native: render thread: N calls (device copies), at most M waiting; game
+  thread ms copying, ms waiting for room; ring skimmer waited`. In the 17-scene run about 1 µs per call on the
+  game's thread (V-Rex: 4.2 million calls, 5.0 s in 190 s).
+
+Results (Vulkan, frame logs on):
+
+| Run | Result |
+|---|---|
+| chap12, render thread only (`runs\p2c-probe-rt1`) | Jack -7.6450 as on Xenos; pass, outside 0.0000, MAE 0.033 (was a fail at 2.3) |
+| 17 scenes, render thread + the four speed options (`runs\p2c-rt-fast-full`) | 15/17: chap04 pass 0.0020 / 1.09, chap12 pass 0.0000 / 0.03, draw lists 0.988 / 0.989; Venture 2/5 (two lightning frames), the loading screen's frozen fade frame a step later |
+| V-Rex + Venture, render thread only (`runs\p2c-rt-only-vv`) | 6/6, loading MAE 0.011, Venture 5/5 |
+| V-Rex + Venture, render thread + four options, again (`runs\p2c-rt-fast-vv2`) | 6/6, loading MAE 0.011 |
+| 17 scenes, render thread + four options, again (`runs\p2c-rt-fast-full2`) | **17/17**; chap04 0.0019 / 1.07, chap12 0.0000 / 0.89 (later frames 0.03) |
+| 17 scenes, final build: one frame ahead, partial copies, three frames in the submitter (`runs\p2c-rt-fast-full3`) | **17/17**; chap04 0.0015 / 0.83 (draw list 0.984), chap12 0.0000 / 0.028 (0.995), loading 0.011, Kong 0.991 |
+
+The two misses of the first full run were a lightning flash in two of Venture's five frames and the loading
+screen's sweep one step further (both timing; neither came back in the next three runs).
+
+**Frame rate** (Vulkan, the measurement of "Frame rate (Phase 2b)": `--kk_original_look_keep=kk_frame_rate
+--kk_frame_rate=N`, the port's 10 s `Frame times` windows after `KK dev: gameplay reached` without its first
+window, V-Rex's last minute; average FPS / mean of the windows' 1% lows / lowest window's 1% low). Final
+build, runs `runs\perfC-final-*`, table in `analysis\phase2c\perfC_final_vulkan_table.txt`:
+
+| Cap | V-Rex: four options | V-Rex: + render thread | Venture: four | Venture: + RT | Kong: four | Kong: + RT |
+|---|---|---|---|---|---|---|
+| 60 | 60.0 / 59.8 / 59.4 | 60.0 / 59.9 / 59.8 | 60.0 / 59.5 / 59.4 | 60.0 / 59.8 / 59.8 | 60.0 / 56.5 | 60.0 / 59.9 |
+| 120 | 120.0 / 109.9 / 94.6 | 120.0 / 117.2 / 114.0 | 120.0 / 112.9 / 106.3 | 120.0 / 117.7 / 115.8 | 119.8 / 95.5 | 120.0 / 113.3 |
+| unlimited | 164.2 / 115.5 / 108.4 | 216.2 / 98.4 / 80.7 | 225.6 / 92.4 / 77.3 | 236.7 / 130.3 / 127.4 | 199.5 / 17.8 | 215.2 / 19.0 |
+
+(Kong's single window holds the chapter load; its 1% low is the load on every configuration.) With a cap the
+render thread is better everywhere: the 1% lows come within 1 to 6 FPS of the cap. Unlimited, it is 3 to
+32% faster on average and Venture's 1% low is much higher; V-Rex's 1% low is lower (98 against 116 on
+average over the windows). There the frame rate is the GPU queue's: the submission thread waits for the
+queue 85% of the time, which the presenter's refreshes share (92 s of 210 s), and the render thread's slowest
+frames (9 ms) are its waits for the submitter. The first measurement of the four options here
+(`runs\perfC-four-r0`: V-Rex 155 / 84) was before the submitter kept three frames instead of two; that
+change alone raised V-Rex's unlimited 1% low to 110-120 (`runs\perfC-four3-r0`).
+
+**D3D12** (`--native_backend=d3d12`, `kkshaders-dxil.pack`):
+
+- **Crashes, fixed.** With the asynchronous submit and present threads, D3D12 runs at a 120 FPS cap or
+  unlimited crashed or lost the device in six of eight game runs (heap corruption, access violations, "NVRHI:
+  Device Removed!" after a 3 s hitch; `runs\perfC-d3d12-*`). NVRHI's D3D12 queue is not thread safe
+  (`executeCommandList` and `runGarbageCollection` share its list of command lists in flight) and the Vulkan
+  host already held the queue's lock there; the D3D12 host now holds one too (`d3d12_host.cpp`). After it: no
+  crash in 25 D3D12 game runs.
+- **Pipelines.** D3D12 pipelines were made on the draw thread (NVRHI's D3D12 root signature cache has no lock),
+  which with the render thread stalled the guest GPU's fences at a chapter start. The vendored NVRHI now locks
+  that cache (`thirdparty/NOTES.md`) and the workers make D3D12 pipelines as on Vulkan; the pipeline cache's
+  prewarm and the shipped list work on D3D12 too.
+- **Scenes** (render thread + the four options): 15 of 17 before the fixes (`runs\p2c-d3d12-rt-fast-full`:
+  chap04 two pixels off, chap12's draw list 0.979), then 15 of 16 with every other scene passing
+  (`runs\p2c-d3d12b-rt-fast-full`; chap20's launch opened the launcher instead of the game, which the port does when Shift is held at start, and someone was using the PC). With the root
+  signature lock chap12 passes (outside 0.0000, MAE 0.028, draw list 0.989, `runs\p2c-d3d12c-chap`); chap04
+  still lands Jack off by a pixel (MAE 2.1; 4.4 with the render thread alone, `runs\p2c-d3d12-rtonly-chap04`):
+  the spawn still sees D3D12's timing (see "Open problems").
+- **With the new defaults** (below; `runs\p2c-defaults-d3d12-full`): 16 of 17, chap04 the miss (MAE 3.9).
+- **Frame rate** (as for Vulkan; `analysis\phase2c\perfC_defaults_table.txt`). The new defaults against the four
+  options alone measured before the D3D12 fixes' last step (`perfC-d3d12b-four-*`):
+
+| Cap | V-Rex: four | V-Rex: defaults | Venture: four | Venture: defaults | Kong: four | Kong: defaults |
+|---|---|---|---|---|---|---|
+| 60 | 60.0 / 57.1 / 45.1 | 60.0 / 59.7 / 59.4 | (no window) | 60.0 / 59.8 / 59.7 | 60.0 / 58.7 | 60.0 / 59.9 |
+| 120 | 120.0 / 110.4 / 101.3 | 120.0 / 118.5 / 117.5 | 119.9 / 109.7 / 94.5 | 120.0 / 118.2 / 117.3 | 120.0 / 94.3 | 120.0 / 119.0 |
+| unlimited | 46.9 / 11.0 / 4.2 | 235.0 / 107.6 / 74.4 | 207.4 / 98.5 / 93.2 | 237.5 / 144.5 / 141.5 | 186.1 / 13.7 | 198.3 / 15.9 |
+
+  The unlimited V-Rex run of the four options alone slowed from 243 to 17 FPS over its last minutes (each
+  submission took about 5 ms on D3D12 against 0.04 ms on Vulkan; the game thread was outside the renderer
+  in its slow frames). It did not happen again in the later D3D12 runs; the process's memory stayed flat in them
+  (`analysis\phase2c\memsamples.txt`). Seen once, not explained.
+
+**The merged pipeline work in the game** (Vulkan, render thread + four options, `F:\KK-native-renderer\pipelines`):
+
+- A shipped list: one recording run of V-Rex and Kong to the Rescue (title and menus on the way) into an empty
+  folder (`runs\p2c-pl-rec1`: 564 pipelines), `nr_pipelines merge -o <game folder>\kkpipelines.list` (built in the
+  standalone build, `F:\KK-native-renderer\nr-standalone`).
+- A fresh cache folder with the list (`runs\p2c-pl-fresh-list`): `pipeline list ...: 564 descriptions, 562
+  queued` when the renderer is ready, 0.7 s before the first frame; the 566 pipelines (1.0 s of creation on the
+  workers) were all made within the first 10 s, during the title. Stutter counter: one frame waited 2 ms (frame
+  160, the title), **no skipped draw in V-Rex or Kong to the Rescue on their first visit**; 7 of 7 golden scenes
+  pass. The same without the list (`runs\p2c-pl-fresh-nolist`): V-Rex 61 frames waited (256 ms) and 4 frames
+  skipped 398 draws; Kong 13 waited (125 ms) and 3 skipped 269 draws; 7 of 7 pass.
+- The driver's cache file, Kong to the Rescue twice in a new folder (`runs\p2c-vk1a`, `-vk1b`; NVIDIA's own disk
+  cache left on: turning it off is a system setting): the second start loaded 5,654 KB, its prewarm made the
+  first run's 249 pipelines in 18 ms, 85 ms of pipeline creation in all against 416 ms, 5 frames waited and none
+  skipped against 23 and 4 (339 draws), and the save menu opened 8.4 s after the start against 10.2 s.
+- The launcher's prewarm was not tried in the game (it needs the launcher's Play button pressed by hand).
+
+### Defaults (Phase 2c)
+
+On by default since this phase (`plugin_main.cpp`); each is still an option and `=false` (`=1` for the render
+scale) gives the old behaviour:
+
+| Option | Why it is safe |
+|---|---|
+| `--native_render_thread` | fixes chap12's Jack (above; chap04 still varies, see Open problems); 17/17 golden scenes in two full runs with the four options (`p2c-rt-fast-full2`, `-full3`); at a 60 or 120 cap the best 1% lows measured (within 1 to 6 FPS of the cap); unlimited 3 to 32% faster on average |
+| the four speed options | Vulkan: 17/17 with them (above, and Phase 2b's 13/13); D3D12: needed the submission lock above, after it no crash |
+| `--native_render_scale=auto` | the scale the Xenos plugin draws at; the Original look (the golden set) gives 1, so the tests are unchanged; the presets' 2x was checked against the Xenos plugin's 2x in Phase 2b ("Render scale in the game") |
+| `--native_pipeline_list` | nothing without `kkpipelines.list` beside the game; with it no skipped draw on a first visit (above) |
+| `--native_vk_pipeline_cache` | Vulkan only (D3D12 logs that it is not used); a file of another driver is rebuilt; the second start's pipelines in 18 ms (above) |
+
+Left off: `--native_launcher_prewarm` (not tried in the game), `--native_stutter_stats` (a diagnostic).
+
+With the new defaults (the harness still adds `--native_pipeline_cache=false`): Vulkan 14/17 in the first full
+run (`runs\p2c-defaults-vk-full`: chap04, and Kong to the Rescue's two scenes because the scripted chapter
+select landed on another chapter, a missed press); D3D12 16/17 (chap04). Unlimited on Vulkan
+(`perfC-defaults-vk-r0`): V-Rex 224.1 / 113.6 / 103.2, Venture 235.1 / 150.4 / 143.8, Kong 231.9 / 21.0, all
+at least the four options' (`perfC-four3-r0`: V-Rex 162.5 / 115.7 / 109.8).
+
+Validation (Khronos layer from the SDK, loaded through `VK_ADD_LAYER_PATH`, plus `--native_validation`; title and
+chap12; `analysis\phase2c\validation`): the old defaults and the new give the same messages. Khronos: three
+(`VUID-vkCmdCopyImage-aspect-06663` and the two `oldLayout-01213`), all the presenter's guest output image,
+which the SDK makes without TRANSFER_DST usage while `CopyToGuestOutput` copies into it (to fix: draw into it, it
+has COLOR_ATTACHMENT usage). NVRHI: the shadow pass's 880x832 colour target with the 880x720 depth target
+(attachment sizes differ). Before this phase NVRHI's layer stopped the game at once ("two immediate command lists
+open"): the renderer's lists are now not "immediate".
+
+### The shader pack merged (Phase 2c, branch `nr-pack`)
+
+`nr-pack` (built on the player's machine by the launcher, into `<cache root>/native-shaders`) merged into
+`nr-integration`. The pack is opened in `InitializeShaderStorage`, before the pipeline list starts its workers,
+so the shipped list's pipelines are made from the pack's blobs (and in `Setup` when the cache root came first).
+The "auto" render scale has one rule, `AutoRenderScale()` in `plugin_settings.cpp`, used by the game settings
+and by `shader_pack_service.cpp` (which variants the pack holds).
+
+End to end with a fresh cache root (`runs\p2c-e2e-fresh1`, `KK_AUTOPLAY=1`, `--kk_launcher=true`): the launcher
+built the pack (4794 shaders on 16 threads in 30.9 s, 143 MB), the game logged "shader pack from the user's
+cache", the second start found the pack current, and the scenes passed (save menu, main menu, chapter select,
+chap12; 4/4).
+
 ### Open problems (Phase 2)
 
-- **chap04 and chap12 cameras** sit half a pixel and one pixel higher than on the Xenos plugin, the same in
-  every run; the draw order changes with it (sorted by distance). Phase 2c (WIP, runs `runs\p2c-*`, dumps
-  and notes in `analysis\phase2c`) found that it is not a readback:
-  - **Not resolves**: the Xenos plugin does not write resolves to guest memory either (the SDK's
-    `readback_resolve` defaults to none); guest memory dumps at 126 s show every resolve destination of the
-    frame as zeros under both plugins.
-  - **Not occlusion queries or memexport**: the game sends no EVENT_WRITE_ZPD, MEM_WRITE or REG_TO_MEM packets
-    (the ring skimmer now logs packets by opcode); the Xenos plugin with `--occlusion_query_enable=false` or
-    `--readback_memexport=false` still matches the golden frames exactly. The CPU reads no viz-query status
-    register (the only MMIO reads in the recompiled code are vblank, viewport size, RB_BC_CONTROL and a hang
-    report).
-  - **Not the floating-point state**: the hooks now restore MXCSR around every handler and log a change
-    (`hook_table.h`, `CallHandler`); no handler ever changed it.
-  - **Not the frame rate**: Xenos at `--kk_frame_rate=60`, with the chapter start moved by 0.5 s, or with
-    synchronous shader compilation gives the golden picture.
-  - **What it is**: Jack lands 0.152 units higher. Static-data snapshots (`KK_DEV_SNAP_AT`) of the spawn
-    show his height at 0x82D64254 (copied there by sub_82796730; his object at 0x40E734E4 in these runs)
-    settling to -7.6450 under Xenos (every run) and -7.4931 under native (every run, with any option, the
-    pipeline cache, no watches, no pipeline waits). His first position after the spawn already differs in z
-    (-174.4717 against -174.4783): he lands next to a step and the 0.007 decides which side.
-  - **What decides it** (`--native_debug` bits added for the hunt: 256 no write watches, 512 no draws,
-    1024 no clears, 2048 no resolves, 8192 a 10 us spin per draw instead, bits 16-18 end each draw at a
-    stage): draws that stop before the pipeline lookup (stage 7, stage 1, 512, the spin, prewarmed cache with
-    stage 7) give the Xenos value; draws that reach the pipeline lookup with waits (stage 2) or do the full
-    work without waits give the native one; `--native_draws=false` gives a third value (-7.6754). So the
-    game thread's stalls in the first frames of the chapter (pipeline waits, texture and buffer uploads, the
-    Present's queue waits, all on the game's render thread, where the Xenos plugin does that work on its
-    command processor thread) change the spawn frames' timing and Jack's landing. A steady per-draw cost
-    does not.
-  - **Next**: move the per-draw work off the game thread (a renderer thread fed by the hooks, with the device
-    state the draw needs copied at the call, like the Xenos plugin's command processor), or find which spawn
-    frame's timing the landing reads (dt at 0x82C636E0, written by sub_8272CA20 from the kernel tick count) and
-    keep the render thread from stalling then. Per-frame snapshots: `runs\p2c-probe-fx` (Xenos) and `-fn`
-    (native).
-- **Defaults.** The four frame-rate options and `--native_render_scale=auto` are off by default (today's
-  behaviour); turning them on is the next decision. The 13 golden scenes pass with all four on, except the
-  loading screen's fade frame before its new tolerance.
+- **chap04 and chap12 cameras**: chap12 solved by the render thread (`--native_render_thread`, "The render
+  thread (Phase 2c)" above; it passed in every run since, on Vulkan and D3D12). **chap04 is not settled**: with
+  the render thread Jack's landing there varies from run to run, the picture is the golden one or 0.5, 1 or 2
+  pixels off, while the Xenos plugin repeats itself (`runs\p2c-c04-xenos-1`, `-2`: MAE 0.30 and 0.34). Same
+  build and options, chap04 alone (`runs\p2c-c04-*`): with the fence gate 3 of 3 runs had the golden picture
+  (two of them missed the draw list limit by 0.001), without it 2 of 3; with the render thread and the four
+  options it passed in 7 of 15 Vulkan runs in all, and in none of 5 on D3D12. So something at the spawn still
+  depends on the threads' timing in a way the Xenos plugin's does not; the per-frame snapshots (`KK_DEV_SNAP_AT`, `analysis\phase2c`) are the
+  way in. The scene's limits were not loosened.
+- **Defaults**: decided and done, "Defaults (Phase 2c)" above.
 - **FXAA** matches the Xenos plugin's in kind but changes fewer pixels on small text.
 
 - **Cold pipeline caches.** Pipelines are made on four worker threads (Vulkan) and draws wait up to 30 ms a
   frame for them, then skip; the pipeline cache (on by default) makes the descriptions of earlier runs at
-  start. A truly cold driver cache was not measured again (see "Pipeline cache"). On D3D12 pipelines are
-  still made on the draw thread (NVRHI's D3D12 backend caches root signatures without a lock).
+  start. A truly cold driver cache was not measured (NVIDIA's own cache cannot be turned off from here). The
+  shipped list and the driver cache file are on by default (above); a release needs a `kkpipelines.list`
+  made from runs of every chapter. The launcher's prewarm is still off and untried in the game.
 - **Write watches.** Venture's gameplay still has about 10,000 invalidations a second and its movie about 360
   a frame (texture pages; textures are never unwatched whole, see Phase 2b above). The movie planes could
   skip the watches (their Lock / Unlock can be hooked).
@@ -709,8 +878,9 @@ Without the SDK on the prefix path the plugin is skipped and the libraries and G
 |---|---|
 | `nr_draw_tests` | the hook table (sorted, complete, matches `kk_native_hooks.cpp`), log parsing, the per-draw sequence from `d3d-api-map.md` replayed as a trace and every field of the resulting records, constants copied at call time, every render / sampler state setter, nesting, an inactive or absent plugin, dropped draws, primitive expansion, the decoders |
 | `nr_render_tests` | the test host: its own Vulkan 1.3 device on lavapipe, NVRHI on it (plus NVRHI's and Khronos' validation, which must stay silent). M1: clear colour read back on every pixel; the per-frame colour. M2: the triangle's centroid, vertex colours (orientation), outside pixels, coverage. M3: the recorded frame through hook table, NrApi, tracker and renderer: what reached NVRHI (pipeline, framebuffer, viewport, index buffer, draw arguments, push constants) and the pixels (triangle placed by c0..c3 with the translation, the render-to-texture draw skipped on frame 2); the viewport; the transpose option |
-| `nr_plugin_tests` | with the SDK: the runtime's `LoadGpuPlugin` loads `librexgpu-native*.so`, `nr_get_api` is found as the hooks find it and is inactive before setup; `d3d12` is refused; NVRHI on the SDK's own `VulkanProvider` (headless, lavapipe) renders M1, M2 and the M3 frame correctly. Run under the Khronos layer; fails on any validation error, so it passes only with the SDK patch |
+| `nr_plugin_tests` | with the SDK: the runtime's `LoadGpuPlugin` loads `librexgpu-native*.so`, `nr_get_api` is found as the hooks find it and is inactive before setup; `d3d12` is refused; NVRHI on the SDK's own `VulkanProvider` (headless, lavapipe) renders M1, M2 and the M3 frame correctly. Phase 2c: the driver's pipeline cache on that provider (saved, then loaded by the next device), the launcher prewarm's exports (off unless asked for, a run on the provider started through `kk_native_ui.cpp`) and `nr_stutter_stats`. Run under the Khronos layer; fails on any validation error, so it passes only with the SDK patch |
 | `nr_spirv_val` | the checked-in SPIR-V validates for Vulkan 1.2 |
+| `nr_pipeline_cache_tests` | pipeline records and keys, the player's file (round trip, torn tail, other versions), shipped lists read only and written whole, the merger, and the `nr_pipelines` tool run on files it writes |
 | `nr_game_tests` | the game renderer without the game (needs `NR_GAME_RENDERER`): a 20,608-byte device struct in synthetic guest memory, shader objects and containers from the shader tests' microcode assembler and container writer (`shaders/tests/xenos_asm`, `container_writer`), textures, vertex and index buffers laid out as `d3d-structs.md` says. A helper plays the D3D library: each setter writes the register images and D3D fields the real one writes, then calls the hook (hook table, NrApi, tracker, Renderer, GameRenderer; shader creation to the ShaderLibrary, DXC at run time). Checked by reading pixels back from lavapipe: clears (whole target, rectangles, the viewport), vertex colours and orientation (D3DCOLOR, +y up), indexed draws (16 / 32-bit, base vertex, start index), point / quad / fan / strip, stream offsets, vertex and pixel constants per draw, blend (add, alpha, reverse subtract), depth (less, always without writes, greater, depth-only clear, test off), cull (front, back, both faces' windings), colour mask, MRT with a per-target mask, render targets keyed by EDRAM base / pitch / format (shared by two surface objects, a new one per base, format and pitch, depth apart, re-created taller), resolves into k_8_8_8_8 endian-none, A8R8G8B8 (8in32, R and B exchanged) and k_8 textures sampled back, resolve rectangle and destination point, resolve colour and depth clears, a shader parsed from its object without the create hook, a tiled guest texture uploaded, sampled, rewritten and re-uploaded after `InvalidateRange`. Every test checks that the Khronos and NVRHI layers stayed silent |
 
 `NR_TEST_IMAGES=<dir>` makes `nr_render_tests` and `nr_game_tests` write the read-back images as PPM files.
@@ -728,7 +898,9 @@ SwiftShader built from source with `MAX_BOUND_DESCRIPTOR_SETS = 8` (`src/Vulkan/
 `cmake -DREACTOR_BACKEND=Subzero -DSWIFTSHADER_BUILD_TESTS=OFF ... && ninja vk_swiftshader`, about 25 minutes on
 three cores) runs the whole game suite: 27 tests, 0 failed checks, with `NR_TEST_SYNC_PIPELINES=1`. It has no
 Khronos validation layer, so the "validation stayed silent" half of the checks did not run there; lavapipe with
-the layer remains the reference run.
+the layer remains the reference run. The Phase 2c container had working apt mirrors again: lavapipe (Mesa 25.2.8) and the
+layer from Ubuntu's packages, and clang-20 from Ubuntu's own `noble-updates` for the SDK's source build
+(apt.llvm.org was refused there).
 
 The test device (`backend/tests/vk_test_device.cpp`) enables what the SDK's device enables for the plugin:
 timeline semaphores, synchronization2 and dynamic rendering, the descriptor indexing features
@@ -942,8 +1114,8 @@ the in-place patched object memory (already logged under `--native_dump_frame`).
 
 Options: `--native_pipeline_cache` (on by default since Phase 2b), `--native_pipeline_cache_dir=<dir>` (default
 `<cache root>/native-pipelines/<TITLE8>.pipelines`, set through `InitializeShaderStorage`: the game calls it,
-`555307D3.pipelines` under `--cache_root`), `--native_pipeline_wait` (off), `--native_pipeline_wait_budget_ms`
-(30).
+`555307D3.pipelines` under `--cache_root`; with the folder option the file is `game.pipelines`), `--native_pipeline_wait`
+(off), `--native_pipeline_wait_budget_ms` (30). Phase 2c adds four more, all off by default (below).
 
 Measured on Kong to the Rescue (`rescue` run, Vulkan, Phase 2b): without the cache the chapter start has 317
 draws skipped while their pipelines were made (139 drawn after waiting within the budget, 185 ms waited in all,
@@ -963,15 +1135,26 @@ interpolators: 8,929 translations of 6,828 microcode and input pairs), and the s
 shader per microcode, so the prewarm's pick became the draw's shader as well. V-Rex then drew its fog and rain
 lighting with the wrong translation: a bright haze over the left of the picture, at scale 1 once the cache
 had records (MAE 90 against 3.4 with `--native_pipeline_cache=false`) and at every render scale. Records now
-carry both translations' input hashes (`vs_input`, `ps_input`; 144 bytes, version 2, older files are
-ignored), the library keys shaders by microcode and translation inputs, and the prewarm asks the pack for
-exactly that translation.
+carry both translations' input hashes (`vs_input`, `ps_input`), the library keys shaders by microcode and
+translation inputs, and the prewarm asks the pack for exactly that translation.
+
+**Record version 3 (Phase 2c).** Version 2 left the input hashes out of the pipeline key (`PipelineKey`), so the
+plain and the render scale aware translation of one pixel shader had the same key. A file used at two render
+scales kept only the first run's record; at the other scale the prewarm made that record (the plain shader
+with the 1:1 pipeline layout, or the aware shader in a layout without its b3 buffer) under the key the draw
+then looked up, so the draw could get the other scale's pipeline. Decided: the key takes every field of the
+record, the translations' input hashes too, and a record has `kRecordScaled` when its renderer draws at a render
+scale (the scaled pipeline layout with b3). A run prewarms only the records of its own kind
+(`stats().prewarm_other_kind` counts the others; the face flip of `--native_flip_front_face` is part of the kind).
+Version 2 files are not trusted and are started afresh once (the shipped list below covers a fresh start).
+Test: `PipelineCache_EachRenderScaleHasItsOwnRecords`.
 
 The test harness turns the cache off for native runs (`docs/testing.md`): with every pipeline made in
 advance, Kong to the Rescue's chapter loads faster and its scripted animation is ahead of the golden frames
 (0/5 frames twice, 5/5 with the cache off).
-- Every pipeline description is appended once to the file as a 128-byte `PipelineRecord` (16-byte header: magic,
-  version 1, record size, byte-order marker). A torn tail is repaired on open; a version mismatch starts a new file.
+- Every pipeline description is appended once to the file as a 144-byte `PipelineRecord` (16-byte header: magic
+  `KGPC`, version 3, record size, byte-order marker). A torn tail is repaired on open; another version starts a new
+  file.
 - At start all records are queued on the pipeline worker threads. Shaders come from the pack by hash, or the
   record waits until the game creates the shader (retried at the end of each frame).
 - Without `pipeline_wait` a draw whose pipeline is not ready waits within the frame's budget
@@ -983,3 +1166,190 @@ advance, Kong to the Rescue's chapter loads faster and its scripted animation is
   12.9); the workers make a pipeline in about 4 ms (1351 ms for 341 at the chapter start), so the budget lets
   most new pipelines draw in their first frame and caps a burst at one slower frame.
 - Prewarm needs Vulkan with async pipelines; the D3D12 backend is not supported for it.
+
+### Phase 2c: the pipelines before the first frame (cloud session, branch `cloud-p2c-pipelines`)
+
+Four options, each off by default, so a run without them is today's run: `--native_pipeline_list` (a shipped
+list), `--native_vk_pipeline_cache` (the driver's pipeline cache in a file), `--native_launcher_prewarm` (the
+launcher makes the pipelines), `--native_stutter_stats` (the stutter counter in the log and the overlay). With
+the game's cache root known (`InitializeShaderStorage`, before the game's main thread starts) the plugin starts
+them in one place, `NativeGraphicsSystem::StartPipelines`, in this order: the driver's pipeline cache is read
+(nothing may create a pipeline meanwhile), the player's pipeline file is opened and queued, the shipped list is
+queued. A description named by both files is made once.
+
+#### Pipeline lists
+
+A shipped pipeline list is a pipeline file (the format above) made from the files of several runs, put beside the
+game as `kkpipelines.list`, so a fresh install makes every pipeline at start instead of learning them over its
+first sessions.
+
+- `nr_pipelines merge -o <out> <file>...` (`tools/nr_pipelines.cpp`, built in the standalone build; the merging is
+  `PipelineListMerger` in `backend/pipeline_cache.*`): every pipeline once (by its key), in the order first seen,
+  so the first input's pipelines are made first. Decided: records of runs with `--native_flip_front_face` (a
+  debugging aid) are left out unless `--keep-debug`; nothing is written when any input is absent, damaged or of
+  another version (a list for a release is made from good files or not at all); an incomplete last record is
+  left out and reported. The output may be one of the inputs (adding a run to a list). `nr_pipelines info <file>`
+  says what a file holds (pipelines at 1:1 and at a render scale, shader translations).
+- `--native_pipeline_list` reads `kkpipelines.list` beside the game (or `--native_pipeline_list_file`) at start,
+  read only (`ReadPipelineList`, `GameRenderer::LoadPipelineList`), and queues its descriptions like the player's
+  file: the render scale's own kind only, those whose shaders are not in the pack wait for the game to create
+  them. Decided: the player's file still records everything the run draws, also what the list holds (it is the
+  player's history, and the input of the next merge). A list from runs at several render scales holds both
+  kinds; each run makes its own. Without `--native_pipeline_cache` the list still loads (it needs no cache root).
+- Tests: `PipelineList_*` (a fresh install draws its first frame with every pipeline made and the list
+  unchanged; with the player's file each pipeline is queued once; an absent or version 2 list is refused),
+  `PipelineListMerger_*`, `PipelinesTool_MergeAndInfo` (runs the tool), `PipelineList_ReadLeavesTheFileAlone`.
+
+#### The driver's pipeline cache
+
+`--native_vk_pipeline_cache` (Vulkan) keeps the driver's compiled pipelines, a `VkPipelineCache`, in
+`<cache root>/native-pipelines/<TITLE8>.vkcache` (or `game.vkcache` in `--native_pipeline_cache_dir`) and loads it at
+start, so the prewarm and the draws find compiled code instead of compiling. NVIDIA's driver keeps its own disk
+cache as well (the Phase 2b measurements above), so the gain is largest where that cache is cold or absent: a
+cleared or full driver cache, or drivers without one.
+
+- NVRHI made an empty `VkPipelineCache` of its own and offered no way to fill or read it:
+  `nvrhi::vulkan::DeviceDesc::pipelineCache` (vendored change, `thirdparty/NOTES.md`) gives it ours, which the
+  device uses and does not destroy. `backend/vk_pipeline_cache.*` (`VulkanPipelineCache`) makes it before NVRHI's
+  device (`vulkan_host.cpp`), reads a file into it (`vkCreatePipelineCache` with the data, then
+  `vkMergePipelineCaches` into the live cache) and saves it (`vkGetPipelineCacheData`, a temporary file renamed
+  over the old one). `backend/driver_pipeline_cache.h` is the API-free interface the game renderer uses.
+- The file: a 72-byte header of ours (magic `KVPC`, version, vendor ID, device ID, driver version,
+  `pipelineCacheUUID`, `driverUUID` from `VkPhysicalDeviceIDProperties`, data size, an FNV-1a hash of the data),
+  then the driver's data, which starts with Vulkan's own header (`VkPipelineCacheHeaderVersionOne`: vendor ID,
+  device ID, `pipelineCacheUUID`). The file is used only when both headers match the device: the same vendor
+  and device, driver version, driver UUID and pipeline cache UUID. Decided: the driver version and driver UUID
+  are checked too, although Vulkan only promises the pipeline cache UUID, because a driver update that keeps the
+  UUID and changes the compiler would otherwise feed it stale data.
+- When the driver changed (or the file is damaged, or the driver refuses the data): the log says what changed
+  (`driver pipeline cache ...: driver changed (made with driver version X, now Y)`), the cache starts empty, the
+  prewarm of the player's file and the shipped list rebuilds it on the workers in the background while the
+  game runs, and the first time the workers run out of work the new cache is saved over the old file. A first
+  run (no file) is saved the same way. Without a prewarm source (both files off) the cache fills as the game
+  draws.
+- Saves: from the worker that empties the queue (it stays counted, so `WaitForPrewarm` includes the save), when
+  16 pipelines (`Options::driver_cache_save_every`) were made since the last save or 30 s passed
+  (`driver_cache_save_seconds`), and when the renderer is destroyed (the end of the game, the end of the launcher's
+  prewarm). Never on the render thread. Decided against saving after every pipeline: NVIDIA's data for a few
+  thousand pipelines is tens of megabytes.
+- Pipeline creation holds a shared lock (`GameRenderer::CreatePipeline`), reading the file an exclusive one;
+  `SetDriverPipelineCache` must come before the first draw and before the prewarm starts (it does: shader storage
+  is initialised before the game's main thread runs). The built-in passes outside the game renderer (AO, the
+  placeholder) create pipelines only while frames are drawn.
+- D3D12 has no such cache here (its equivalent is `ID3D12PipelineLibrary`; not done): the option logs that it is
+  not used.
+- On lavapipe the cache's data is Vulkan's 32-byte header only (Mesa's CPU driver keeps no compiled pipelines in
+  it), so the tests prove the file handling, the checks, the hand-over between devices and the rebuild, not a
+  speed-up. Tests: `VkPipelineCache_*` in `nr_game_tests` (each part of the identity, damage, two runs on two
+  devices, another driver's file rebuilt and saved by the prewarm, a damaged file replaced, the save threshold),
+  `VkPipelineCacheOnTheSdkVulkanProvider` in `nr_plugin_tests` (on the SDK's own provider).
+
+#### Prewarm from the launcher
+
+The launcher calls the plugin when it opens (`nr_prewarm_start`, `plugin/native_prewarm.h`; the game's side is
+`hooks/kk_native_ui.cpp`, compiled into `king_kong` with `KK_NATIVE_RENDERER`), so the game's pipelines are made
+while the player is still choosing. With `--native_launcher_prewarm` off (the default), `--gpu_plugin` other than
+`native`, `--native_backend=d3d12`, `--native_game=false` or `--native_async_pipelines=false` the call does nothing.
+
+- A pipeline belongs to the device that made it, and the game's device does not exist yet (the runtime makes the
+  graphics system after the launcher), so the prewarm runs on a device of its own: the SDK's `VulkanProvider`,
+  headless, made as the game's start makes it (the same GPU and features), with a game renderer and no game
+  (`backend/pipeline_prewarm.*`, `PipelinePrewarm`), fed the player's pipeline file and the shipped list read only.
+  Its pipelines go with its device. What the game keeps is what the driver keeps: its own disk cache (NVIDIA's and
+  most others), and with `--native_vk_pipeline_cache` the cache file, which the prewarm saves when it stops and
+  the game's device reads at its start. Decided this over handing the launcher's device to the game: the runtime
+  makes the provider, presenter and graphics system after the launcher, and the pipeline layouts depend on the
+  render scale the launcher can still change.
+- Settings: read from the cvars on the launcher's UI thread when it opens (after the launcher applied the Original
+  look), never on the prewarm's thread; the same functions the game's start uses (`plugin_settings.cpp`,
+  `ResolveRenderScale`), so the pipelines are the game's. Limits, decided and left: a setting changed in the
+  launcher after it opened (`--native_render_scale=auto` follows the render quality preset, which the launcher
+  applies at Play) makes the prewarm's pipelines of the other kind, which the game does not use (no harm; the
+  game's own prewarm makes its kind); on a machine with two GPUs a headless provider could pick another one
+  than the game's (the driver cache file's header check then rebuilds it).
+- Shaders come from the pack only: descriptions whose shaders the game compiles with DXC (the D3D library's own
+  two) are left to the game.
+- The game's start (`SetupGuestGpu`) stops the prewarm before making its own device: the workers finish the
+  pipeline in hand, the driver's cache is saved, the device is destroyed. The launcher stops it on Quit and on a
+  restart (`nr_prewarm_stop`). Once a process; the plugin never frees it at exit (a static destructor joining a
+  thread inside the driver at exit could hang). `nr_prewarm_status` gives its state and counts (for a progress
+  display, not used by the launcher yet).
+- Log: `launcher prewarm started: N descriptions, M to make`, then `launcher prewarm done` or `stopped: X of M
+  pipelines made, Y left to the game, T s`.
+- Tests: `LauncherPrewarm_*` in `nr_game_tests` (the files read and left as they were, the pipeline made once, the
+  game's device loading the driver cache the prewarm saved and drawing at once; a stop before the end),
+  `LauncherPrewarmEntryPoints` in `nr_plugin_tests` (the exports found as the launcher finds them, off unless asked
+  for, started through `kk_native_ui.cpp` with the game's cache root and title, on the SDK's provider).
+
+#### Stutter counter
+
+`GameRenderer::stutter()` counts, at each frame's end: frames in which a game draw waited for its pipeline (on a
+worker within the budget, with `--native_pipeline_wait`, or made on the draw thread when pipelines are not
+asynchronous), frames in which a draw was skipped because its pipeline was not ready (and those draws), the time
+waited in all and the worst frame's wait (with its frame number). A frame that waited and then skipped counts in
+both; `stutter_frames` counts it once. The built-in passes (clears, blits, AO) are not counted. Counted always;
+shown only with `--native_stutter_stats`:
+
+- the log: `rexgpu-native: pipeline stutter so far: S of F frames (W waited for pipelines, T ms in all; K skipped D
+  draws whose pipelines were not ready); worst wait X ms (frame N)` every 300 swaps with the other statistics,
+  and `pipeline stutter at the end` when the game closes;
+- the overlay: a line `Pipeline stutter: S frames (W waited, K skipped), worst X ms` under the frame counter
+  (`kk_show_fps`, F2), from `nr_stutter_stats` (`plugin/native_stutter.h`), which reads a snapshot the backend takes
+  after each Present (the overlay never reaches into the renderer).
+
+Tests: `Stutter_*` (a skip, a wait with its time, a pipeline made by the draw, nothing after a full prewarm).
+
+#### Checked here, and what the Windows side runs
+
+Linux, lavapipe (Mesa 25.2.8) with the Khronos layer, the SDK built from source with every patch (clang-20 from
+Ubuntu's own `noble-updates`; apt.llvm.org was refused): `nr_game_tests` 60 tests, `nr_pipeline_cache_tests` 12,
+`nr_plugin_tests` 5, `nr_render_tests`, `nr_ao_tests`, `nr_draw_tests`, `nr_frame_log_tests`, `nr_spirv_val` pass, the
+layer silent. The build without the game renderer (no `NR_DXC_DIR`) builds and passes again (two stubs it lacked on
+`nr-integration`). The kk side cannot be built here: `kk/src/overlay.cpp` and `kk/src/king_kong_app.h` were compiled
+against the SDK headers with `KK_NATIVE_RENDERER` on and off (a stub for the recompiled image config), and
+`kk_native_ui.cpp` compiles in `nr_kk_hooks_check`.
+
+On Windows (`kk-dev-vulkan`, from a Visual Studio x64 prompt):
+
+1. Build: `kk\build.bat kk-dev-vulkan`, and the standalone tests on the RTX 4070 Ti with the command in "Tests on
+   Windows" above, then `ctest --test-dir <dir> --output-on-failure` (expect `nr_game_tests` 60 and
+   `nr_pipeline_cache_tests` 12 passing; the `VkPipelineCache_*` tests print the driver's data sizes, which on
+   NVIDIA should be far above lavapipe's 32 bytes).
+2. Defaults unchanged: `tests\run.ps1 -Plugin native -Exe kk\out\build\kk-dev-vulkan\king_kong.exe` gives the
+   result of `runs\native-final-default` (15 of 17).
+3. A shipped list: record two or three runs, each into a folder of its own, for example
+   `tests\run.ps1 -Plugin native -Exe kk\out\build\kk-dev-vulkan\king_kong.exe -Scenes all -NoCompare -ExtraArgs
+   "--native_pipeline_cache=true","--native_pipeline_cache_dir=F:\KK-native-renderer\pipelines\run1"` (and `run2`
+   with `--native_render_scale=2` added; `-ExtraArgs` replaces the scene file's `--native_pipeline_cache=false`),
+   then `<test build>\nr_pipelines.exe merge -o kk\out\build\kk-dev-vulkan\kkpipelines.list
+   F:\KK-native-renderer\pipelines\run1\game.pipelines F:\KK-native-renderer\pipelines\run2\game.pipelines` and
+   `nr_pipelines.exe info` on the result.
+4. A fresh install with the list: `tests\run.ps1 -Plugin native -Exe ... -Scenes kong_cutscene,kong -NoCompare`
+   (with every pipeline made early Kong's timeline moves ahead of the golden frames, as with the cache in Phase 2b:
+   the log is the check here, not the score) with an empty pipeline folder,
+   `-ExtraArgs "--native_pipeline_cache=true","--native_pipeline_cache_dir=F:\KK-native-renderer\pipelines\empty1",
+   "--native_pipeline_list=true","--native_stutter_stats=true"`, against the same without `--native_pipeline_list=true`
+   (and another empty folder). Expected: the log's `pipeline list ...: N descriptions, N queued`, and the last
+   `pipeline stutter so far` line (every 300 swaps; `at the end` too when the game closes by itself) with few or
+   no skipped frames where the run without the list has the Phase 2b numbers (hundreds of skipped draws at the
+   chapter start).
+5. The driver's pipeline cache: with NVIDIA's own cache off (NVIDIA Control Panel, Manage 3D settings, Shader
+   Cache Size: Disabled, so the difference shows), run `-Scenes kong_cutscene,kong -NoCompare` twice with
+   `-ExtraArgs "--native_vk_pipeline_cache=true","--native_pipeline_cache=true",
+   "--native_pipeline_cache_dir=F:\KK-native-renderer\pipelines\vk1","--native_stutter_stats=true"`. Expected: the
+   first log has `driver pipeline cache ...: no file yet, made by this run` and `saved: N KB`, the second
+   `loaded (N KB)`, and its statistics line's `ms in pipeline creation` far lower than the first's. After a
+   driver update the log says `driver changed (...)` and a `saved` line follows once the workers are done. Put
+   the shader cache setting back afterwards.
+6. The launcher: `king_kong.exe --gpu_plugin=native --kk_launcher=true --native_launcher_prewarm=true
+   --native_vk_pipeline_cache=true --native_stutter_stats=true --kk_show_fps=true` (the player's recorded file under
+   the cache root, or the list beside the game with `--native_pipeline_list=true`), wait in the launcher until the
+   log has `launcher prewarm done`, press Play: the game's log has `driver pipeline cache ...: loaded` and lower
+   pipeline creation times than a run that pressed Play at once (`launcher prewarm stopped`). Also Quit from the launcher while it runs (no hang, `stopped` in the
+   log) and the restart path (a setting that restarts the game). With the defaults no `launcher prewarm` line
+   appears.
+7. The overlay: in the game F2 shows the frame counter with the `Pipeline stutter: ...` line under it when
+   `--native_stutter_stats=true`, nothing more without it.
+8. D3D12 (`--native_backend=d3d12` with all four on, and the D3D12-only `kk-dev` build): the list, the driver
+   cache and the launcher prewarm log that they need Vulkan and change nothing; the stutter counter works there
+   too (pipelines are made on the draw thread on D3D12, so every new pipeline is a waited frame).

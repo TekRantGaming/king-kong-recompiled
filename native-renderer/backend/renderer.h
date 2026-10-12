@@ -25,6 +25,10 @@ namespace nr {
 
 class GameRenderer;
 
+// device->createGraphicsPipeline: every pipeline of the renderer is made through it (renderer.cpp).
+nvrhi::GraphicsPipelineHandle CreateGraphicsPipeline(nvrhi::IDevice* device, const nvrhi::GraphicsPipelineDesc& desc,
+                                                     const nvrhi::FramebufferInfo& framebuffer);
+
 // The placeholder pipeline's push constants (shaders/placeholder.hlsl).
 struct PlaceholderConstants {
   float wvp[16];  // row-major, rows = guest c0..c3
@@ -177,9 +181,9 @@ class Renderer final : public DrawSink {
 
   std::unique_ptr<GameRenderer> game_;
   nvrhi::CommandListHandle frame_command_list_;
-  // The frame command lists, used in turn (Backend's asynchronous submission keeps at most two
+  // The frame command lists, used in turn (Backend's asynchronous submission keeps at most three
   // waiting, so the one opened next has been submitted).
-  std::array<nvrhi::CommandListHandle, 3> frame_lists_;
+  std::array<nvrhi::CommandListHandle, 4> frame_lists_;
   uint32_t frame_list_index_ = 0;
   bool frame_open_ = false;
   uint32_t main_surface_ = 0;  // render target 0 at the last Present

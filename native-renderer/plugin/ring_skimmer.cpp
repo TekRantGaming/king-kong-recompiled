@@ -71,7 +71,9 @@ void RingSkimmer::EnableReadPointerWriteBack(uint32_t ptr, uint32_t /*block_size
   read_ptr_writeback_ptr_ = ptr;
 }
 
-void RingSkimmer::UpdateWritePointer(uint32_t value) {
+void RingSkimmer::UpdateWritePointer(uint32_t value, uint64_t ticket) {
+  // The ticket first: the worker reads the pointer, then a ticket at least as new as the kick's.
+  if (ticket) write_ticket_.store(ticket, std::memory_order_release);
   write_ptr_index_ = value;
   write_ptr_event_->Set();
 }
@@ -98,6 +100,8 @@ void RingSkimmer::WorkerMain() {
       read_ptr_index_ = write_ptr_index;
       continue;
     }
+    batch_ticket_ = write_ticket_.load(std::memory_order_acquire);
+    batch_waited_ = false;
     const auto busy_start = std::chrono::steady_clock::now();
     read_ptr_index_ = ExecutePrimaryBuffer(read_ptr_index_, write_ptr_index);
     const auto busy_end = std::chrono::steady_clock::now();
@@ -216,6 +220,20 @@ bool RingSkimmer::ExecutePacketType3(RingBuffer* reader, uint32_t packet) {
                  opcode, count, data[0], data[1], data[2], data[3], data[4], data[5]);
   }
   ++opcode_counts_[opcode & 0x7F];
+  switch (opcode) {
+    case PM4_INTERRUPT:
+    case PM4_XE_SWAP:
+    case PM4_REG_TO_MEM:
+    case PM4_MEM_WRITE:
+    case PM4_COND_WRITE:
+    case PM4_EVENT_WRITE_SHD:
+    case PM4_EVENT_WRITE_EXT:
+    case PM4_EVENT_WRITE_ZPD:
+      WaitForRenderer();
+      break;
+    default:
+      break;
+  }
 
   switch (opcode) {
     case PM4_INTERRUPT: {
@@ -549,9 +567,18 @@ bool RingSkimmer::ExecuteSetConstant(RingBuffer* reader, uint32_t count) {
   return true;
 }
 
+void RingSkimmer::WaitForRenderer() {
+  if (batch_waited_ || !batch_ticket_) return;
+  batch_waited_ = true;
+  system_->WaitForRenderer(batch_ticket_);
+}
+
 void RingSkimmer::WriteRegister(uint32_t index, uint32_t value) {
   if (index >= NativeGraphicsSystem::kRegisterCount) {
     return;
+  }
+  if (index >= rex::graphics::XE_GPU_REG_SCRATCH_REG0 && index <= rex::graphics::XE_GPU_REG_SCRATCH_REG7) {
+    WaitForRenderer();  // the library's fences
   }
   uint32_t* regs = system_->registers();
   const_cast<volatile uint32_t&>(regs[index]) = value;

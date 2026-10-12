@@ -1,5 +1,7 @@
 #include "backend/renderer.h"
 
+#include <mutex>
+
 #include <chrono>
 
 #include <algorithm>
@@ -10,6 +12,7 @@
 #include "backend/game_renderer.h"
 #else
 namespace nr {
+
 // Without the game renderer: never created, never called.
 class GameRenderer {
  public:
@@ -17,6 +20,7 @@ class GameRenderer {
   template <typename... A> void Clear(A&&...) {}
   template <typename... A> void Resolve(A&&...) {}
   template <typename... A> bool Present(A&&...) { return false; }
+  template <typename... A> void VertexShaderPatched(A&&...) {}
   void EndFrame() {}
 };
 }  // namespace nr
@@ -24,6 +28,15 @@ class GameRenderer {
 #include "backend/shaders.h"
 
 namespace nr {
+
+// Every pipeline of the renderer is made here. On D3D12 NVRHI's root signature cache had no lock, so this made
+// one pipeline at a time; the vendored NVRHI now locks the cache (thirdparty/NOTES.md, Phase 2c) and the
+// workers make D3D12 pipelines in parallel as on Vulkan.
+nvrhi::GraphicsPipelineHandle CreateGraphicsPipeline(nvrhi::IDevice* device, const nvrhi::GraphicsPipelineDesc& desc,
+                                                     const nvrhi::FramebufferInfo& framebuffer) {
+  return device->createGraphicsPipeline(desc, framebuffer);
+}
+
 
 Renderer::Renderer(nvrhi::IDevice* device) : device_(device) {}
 
@@ -131,7 +144,7 @@ bool Renderer::Initialize(uint32_t width, uint32_t height) {
   if (!placeholder_pipeline_) return false;
 
   for (auto& list : frame_lists_) {
-    list = device_->createCommandList();
+    list = device_->createCommandList(nvrhi::CommandListParameters().setEnableImmediateExecution(false));
     if (!list) return false;
   }
   frame_command_list_ = frame_lists_[0];
@@ -173,7 +186,7 @@ nvrhi::IGraphicsPipeline* Renderer::PlaceholderPipeline(const RenderStates& stat
   desc.renderState.depthStencilState.depthFunc = nvrhi::ComparisonFunc(func + 1);
   nvrhi::IFramebuffer* fb = FramebufferFor(frames_[0]);
   if (!fb) return nullptr;
-  nvrhi::GraphicsPipelineHandle pipeline = device_->createGraphicsPipeline(desc, fb->getFramebufferInfo());
+  nvrhi::GraphicsPipelineHandle pipeline = CreateGraphicsPipeline(device_, desc, fb->getFramebufferInfo());
   if (!pipeline) return nullptr;
   placeholder_pipelines_[key] = pipeline;
   return pipeline;

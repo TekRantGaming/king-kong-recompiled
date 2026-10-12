@@ -2,6 +2,8 @@
 // of a frame to the D3D12Presenter's guest output resource.
 
 #include <array>
+#include <chrono>
+#include <mutex>
 #include <utility>
 
 #include <nvrhi/d3d12.h>
@@ -47,10 +49,29 @@ class D3D12Host final : public HostDevice {
   nvrhi::GraphicsAPI api() const override { return nvrhi::GraphicsAPI::D3D12; }
 
   void ExecuteCommandList(nvrhi::ICommandList* command_list) override {
-    // ID3D12CommandQueue is thread safe; the presenter submits to the same
-    // queue without a lock.
+    // ID3D12CommandQueue is thread safe, NVRHI's queue is not: executeCommandList records the list as in
+    // flight and runGarbageCollection retires finished ones from the same list. The submission thread
+    // (--native_async_submit) and the present thread (--native_async_present) both submit, so one at a
+    // time (without the lock the device was removed within a minute at an unlimited frame rate).
+    using clock = std::chrono::steady_clock;
+    const auto t0 = clock::now();
+    std::lock_guard lock(execute_mutex_);
+    const auto t1 = clock::now();
     device_->executeCommandList(command_list);
+    const auto t2 = clock::now();
     device_->runGarbageCollection();
+    const auto t3 = clock::now();
+    auto us = [](clock::time_point a, clock::time_point b) {
+      return uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(b - a).count());
+    };
+    times_.wait_us += us(t0, t1);
+    times_.execute_us += us(t1, t2);
+    times_.garbage_us += us(t2, t3);
+    ++times_.count;
+  }
+  SubmitTimes submit_times() const override {
+    std::lock_guard lock(execute_mutex_);
+    return times_;
   }
 
   void WaitForIdle() override { device_->waitForIdle(); }
@@ -131,6 +152,8 @@ class D3D12Host final : public HostDevice {
   }
 
   rex::ui::d3d12::D3D12Provider& provider_;
+  mutable std::mutex execute_mutex_;
+  SubmitTimes times_;
   nvrhi::DeviceHandle device_;
   std::array<Wrapped, 4> wrapped_;
   size_t next_slot_ = 0;

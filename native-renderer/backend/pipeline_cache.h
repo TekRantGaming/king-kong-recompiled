@@ -15,6 +15,10 @@
 // The file is the header below, then records of sizeof(PipelineRecord) bytes, appended as
 // they are first seen (nothing is rewritten). A file of another version, record size or
 // byte order is ignored and started afresh.
+//
+// The same format is the shipped pipeline list (docs/backend.md, "Pipeline lists"): the files of
+// several runs merged into one by the nr_pipelines tool, read beside the game at start and never
+// written there.
 #pragma once
 
 #include <cstdint>
@@ -41,7 +45,7 @@ struct PipelineRecord {
   uint32_t clip_control = 0;   // PA_CL_CLIP_CNTL
   uint32_t poly_scale = 0;     // PA_SU_POLY_OFFSET_FRONT_SCALE, float bits (0 unless poly offset is on)
   uint32_t poly_offset = 0;    // PA_SU_POLY_OFFSET_FRONT_OFFSET, float bits
-  uint32_t flags = 0;          // bit 0: front face flipped (--native_flip_front_face)
+  uint32_t flags = 0;          // kRecordFlipFrontFace, kRecordScaled
   uint32_t reserved[2] = {};
   // The translations' input hashes (kkshaders::translationInputHash): the same microcode has
   // several translations in a pack (render scale aware or not, other interpolators), and the
@@ -53,11 +57,62 @@ struct PipelineRecord {
 };
 static_assert(sizeof(PipelineRecord) == 144, "PipelineRecord layout changed: bump kPipelineCacheVersion");
 
-constexpr uint32_t kPipelineCacheMagic = 0x4350474Bu;  // 'KGPC'
-constexpr uint32_t kPipelineCacheVersion = 2;
+// PipelineRecord::flags.
+constexpr uint32_t kRecordFlipFrontFace = 1u << 0;  // --native_flip_front_face (a debugging aid)
+// Drawn by a renderer at a render scale: the pipeline layout has the scale constants (b3) and the
+// pixel shader is the render scale aware translation. A run prewarms only the records of its own
+// kind; the other kind's pipelines would never be drawn there (and the aware shader does not fit
+// the 1:1 layout).
+constexpr uint32_t kRecordScaled = 1u << 1;
 
-// The pipeline key: a hash of the record's contents (stable between runs and machines).
+constexpr uint32_t kPipelineCacheMagic = 0x4350474Bu;  // 'KGPC'
+// 3: kRecordScaled, and the key includes the translations' input hashes. A version 2 file could
+// mix the records of runs at different render scales that the key could not tell apart, so it is
+// started afresh.
+constexpr uint32_t kPipelineCacheVersion = 3;
+
+// The pipeline key: a hash of the record's contents (stable between runs and machines). Every
+// field takes part, the translations' input hashes too: the same microcode drawn with its 1:1
+// and its render scale aware translation are two pipelines.
 uint64_t PipelineKey(const PipelineRecord& record);
+
+// Reads the records of a pipeline file of this version without changing it (a shipped list, or
+// the user's file read by another process). Whole records only, in file order, duplicates kept.
+// False when the file is absent, unreadable or of another version; `note` says why (empty when
+// the file does not exist). `torn_bytes`: bytes of an incomplete last record that were left out.
+bool ReadPipelineList(const std::string& path, std::vector<PipelineRecord>& records, std::string* note = nullptr,
+                      size_t* torn_bytes = nullptr);
+// Writes a whole pipeline file (the header and the records) through a temporary file renamed over
+// `path`, so a reader never sees half of it. False on an I/O error (`error` says what).
+bool WritePipelineList(const std::string& path, const std::vector<PipelineRecord>& records,
+                       std::string* error = nullptr);
+
+// Merges pipeline files into one list (the nr_pipelines tool): every record once, in the order first
+// seen, so the first input's pipelines are made first at start.
+class PipelineListMerger {
+ public:
+  struct Input {
+    std::string path;
+    bool read = false;       // a pipeline file of this version
+    std::string note;        // why it was not read ("absent" when it does not exist)
+    size_t records = 0;      // whole records in it
+    size_t added = 0;        // new to the list
+    size_t duplicates = 0;   // already in the list
+    size_t debug = 0;        // drawn with --native_flip_front_face (a debugging aid): left out
+    size_t torn_bytes = 0;   // an incomplete last record, left out
+  };
+  // keep_debug: also keep the records of runs with flipped faces.
+  explicit PipelineListMerger(bool keep_debug = false) : keep_debug_(keep_debug) {}
+  Input Add(const std::string& path);
+  // Adds records that are not files (tests).
+  size_t AddRecords(const std::vector<PipelineRecord>& records);
+  const std::vector<PipelineRecord>& records() const { return records_; }
+
+ private:
+  bool keep_debug_;
+  std::vector<PipelineRecord> records_;
+  std::unordered_set<uint64_t> keys_;
+};
 
 class PipelineCacheFile {
  public:

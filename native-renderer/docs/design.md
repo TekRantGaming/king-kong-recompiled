@@ -109,7 +109,8 @@ original and our hooks read what they need from it.
   the Unlock). Guest texture formats (tiled, big-endian, DXT / 8888 / 10:10:10 / depth) are converted on
   upload; the Xenos plugin's texture code and `XenonTexture.DLL` document them.
 - Shaders: at CreateVertexShader / CreatePixelShader the container is translated to HLSL (XenosRecomp, MIT),
-  compiled with DXC to DXIL and SPIR-V, cached on disk by hash. Vertex declarations become input layouts.
+  compiled with DXC to DXIL and SPIR-V, cached on disk by hash. (Since: the launcher builds the whole set into a
+  pack on the player's machine from their own files; no translated shader ships, `shaders.md`.) Vertex declarations become input layouts.
 - Draws: DrawIndexedVertices / DrawVertices bind the current state (pipeline keyed by shaders, declaration,
   blend, depth / stencil, render targets) and issue the draw. Constants go into a per-draw constant buffer
   from the device's shadows.

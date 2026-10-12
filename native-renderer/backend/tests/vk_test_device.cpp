@@ -7,6 +7,7 @@
 #include <nvrhi/vulkan.h>
 #include <vulkan/vulkan.hpp>
 
+#include "backend/vk_pipeline_cache.h"
 #include "backend/vulkan_dispatch.h"
 
 namespace nr::test {
@@ -44,6 +45,7 @@ MessageCallback g_message_callback;
 
 struct VulkanTestDevice::Impl {
   vk::detail::DynamicLoader loader;
+  PFN_vkGetInstanceProcAddr gipa = nullptr;
   vk::Instance instance;
   vk::DebugUtilsMessengerEXT messenger;
   vk::PhysicalDevice physical_device;
@@ -53,10 +55,10 @@ struct VulkanTestDevice::Impl {
   std::vector<std::string> instance_extensions, device_extensions;
 };
 
-std::unique_ptr<VulkanTestDevice> VulkanTestDevice::Create(bool validation) {
+std::unique_ptr<VulkanTestDevice> VulkanTestDevice::Create(bool validation, bool driver_pipeline_cache) {
   std::unique_ptr<VulkanTestDevice> d(new VulkanTestDevice());
   try {
-    if (!d->Init(validation)) return nullptr;
+    if (!d->Init(validation, driver_pipeline_cache)) return nullptr;
   } catch (const std::exception& e) {
     std::fprintf(stderr, "Vulkan test device: %s\n", e.what());
     return nullptr;
@@ -64,9 +66,10 @@ std::unique_ptr<VulkanTestDevice> VulkanTestDevice::Create(bool validation) {
   return d;
 }
 
-bool VulkanTestDevice::Init(bool validation) {
+bool VulkanTestDevice::Init(bool validation, bool driver_pipeline_cache) {
   impl_ = std::make_unique<Impl>();
   auto gipa = impl_->loader.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
+  impl_->gipa = gipa;
   if (!gipa) {
     std::fprintf(stderr, "Vulkan test device: no Vulkan loader (libvulkan.so.1)\n");
     return false;
@@ -212,6 +215,11 @@ bool VulkanTestDevice::Init(bool validation) {
   desc.numInstanceExtensions = instance_ext_ptrs.size();
   desc.deviceExtensions = device_ext_ptrs.data();
   desc.numDeviceExtensions = device_ext_ptrs.size();
+  if (driver_pipeline_cache) {
+    pipeline_cache_ = VulkanPipelineCache::Create(impl_->physical_device, impl_->device);
+    if (!pipeline_cache_) return false;
+    desc.pipelineCache = pipeline_cache_->handle();
+  }
   nvrhi_device_ = nvrhi::vulkan::createDevice(desc);
   if (!nvrhi_device_) return false;
   if (validation) {
@@ -226,11 +234,16 @@ VulkanTestDevice::~VulkanTestDevice() {
     nvrhi_device_->runGarbageCollection();
   }
   nvrhi_device_ = nullptr;
+  pipeline_cache_.reset();  // NVRHI's device only borrowed it
   if (impl_) {
     if (impl_->device) impl_->device.destroy();
     if (impl_->messenger) impl_->instance.destroyDebugUtilsMessengerEXT(impl_->messenger);
     if (impl_->instance) impl_->instance.destroy();
   }
+}
+
+void VulkanTestDevice::MakeCurrent() {
+  if (impl_ && impl_->gipa) InitVulkanDispatch(impl_->gipa, impl_->instance, impl_->device);
 }
 
 int VulkanTestDevice::errors() const { return g_vulkan_errors + g_nvrhi_errors; }

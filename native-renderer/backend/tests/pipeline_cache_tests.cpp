@@ -1,9 +1,14 @@
 // The pipeline cache file: records, keys, the header check and recovery. No GPU, no game data.
 
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
+#if !defined(_WIN32)
+#include <sys/wait.h>
+#endif
 
 #include "backend/pipeline_cache.h"
 #include "backend/tests/check.h"
@@ -44,6 +49,24 @@ PipelineRecord Sample(uint64_t vs = 0x1111, uint64_t ps = 0x2222) {
   return r;
 }
 
+// Runs the nr_pipelines tool; its exit code.
+int RunTool(const std::string& args) {
+  std::string command = std::string("\"") + NR_PIPELINES_TOOL + "\" " + args + " > \"" +
+                        TempPath("tool_output.txt") + "\"";
+#if defined(_WIN32)
+  // cmd /c drops the first and the last quote of a line that starts with one: one more pair.
+  command = "\"" + command + "\"";
+#endif
+  const int status = std::system(command.c_str());
+#if defined(_WIN32)
+  return status;
+#else
+  return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+#endif
+}
+
+std::string Quoted(const std::string& path) { return "\"" + path + "\""; }
+
 }  // namespace
 
 TEST(PipelineKey_ChangesWithEveryField) {
@@ -71,6 +94,99 @@ TEST(PipelineKey_ChangesWithEveryField) {
   changed([](PipelineRecord& r) { r.poly_scale = 0x3F800000; }, "poly_scale");
   changed([](PipelineRecord& r) { r.poly_offset = 0x3F800000; }, "poly_offset");
   changed([](PipelineRecord& r) { r.flags = 1; }, "flags");
+  changed([](PipelineRecord& r) { r.flags = kRecordScaled; }, "flags (scaled)");
+  // The same microcode with another translation (render scale aware, other interpolators) is
+  // another pipeline: version 2 keys ignored these, and a file with both kinds lost one of them.
+  changed([](PipelineRecord& r) { r.vs_input = 0x77; }, "vs_input");
+  changed([](PipelineRecord& r) { r.ps_input = 0x88; }, "ps_input");
+}
+
+TEST(PipelineCacheFile_TwoTranslationsOfOneShaderAreTwoRecords) {
+  const std::string path = TempPath("translations");
+  PipelineRecord plain = Sample();
+  plain.ps_input = 0x1000;
+  PipelineRecord aware = plain;
+  aware.ps_input = 0x2000;
+  aware.flags = kRecordScaled;
+  {
+    PipelineCacheFile file;
+    CHECK(file.Open(path));
+    CHECK(file.Append(plain));
+    CHECK(file.Append(aware));
+  }
+  PipelineCacheFile file;
+  CHECK(file.Open(path));
+  CHECK_EQ(file.loaded().size(), size_t(2));
+  std::remove(path.c_str());
+}
+
+TEST(PipelineCacheFile_Version2IsStartedAgain) {
+  // Version 2 records could hold both render scales under one key: such a file is not trusted.
+  const std::string path = TempPath("version2");
+  {
+    std::ofstream out(path, std::ios::binary);
+    const uint32_t header[4] = {kPipelineCacheMagic, 2, sizeof(PipelineRecord), 0x01020304u};
+    out.write(reinterpret_cast<const char*>(header), sizeof(header));
+    PipelineRecord r = Sample();
+    out.write(reinterpret_cast<const char*>(&r), sizeof(r));
+  }
+  std::vector<PipelineRecord> records;
+  std::string note;
+  CHECK(!ReadPipelineList(path, records, &note));
+  CHECK(records.empty());
+  CHECK(!note.empty());
+  PipelineCacheFile file;
+  CHECK(file.Open(path));
+  CHECK(file.loaded().empty());
+  CHECK(!file.note().empty());
+  std::remove(path.c_str());
+}
+
+TEST(PipelineList_ReadLeavesTheFileAlone) {
+  const std::string path = TempPath("read_only");
+  {
+    PipelineCacheFile file;
+    CHECK(file.Open(path));
+    CHECK(file.Append(Sample(1)));
+    CHECK(file.Append(Sample(2)));
+  }
+  const uintmax_t torn = 16 + 2 * sizeof(PipelineRecord) + 40;
+  std::filesystem::resize_file(path, torn);
+  std::vector<PipelineRecord> records;
+  std::string note;
+  size_t torn_bytes = 0;
+  CHECK(ReadPipelineList(path, records, &note, &torn_bytes));
+  CHECK(note.empty());
+  CHECK_EQ(records.size(), size_t(2));
+  CHECK_EQ(torn_bytes, size_t(40));
+  CHECK_EQ(std::filesystem::file_size(path), torn);  // not repaired: a reader never writes
+  // Absent: false, and no note (nothing was wrong).
+  std::vector<PipelineRecord> none;
+  CHECK(!ReadPipelineList(path + ".absent", none, &note));
+  CHECK(note.empty());
+  std::remove(path.c_str());
+}
+
+TEST(PipelineList_WriteThenRead) {
+  const std::string path = TempPath("write");
+  std::vector<PipelineRecord> records = {Sample(1), Sample(2), Sample(1)};  // written as given
+  std::string error;
+  CHECK(WritePipelineList(path, records, &error));
+  CHECK(error.empty());
+  CHECK(!std::filesystem::exists(path + ".tmp"));
+  CHECK_EQ(std::filesystem::file_size(path), uintmax_t(16 + 3 * sizeof(PipelineRecord)));
+  std::vector<PipelineRecord> back;
+  CHECK(ReadPipelineList(path, back));
+  CHECK(back == records);
+  // The file is also a valid cache file.
+  PipelineCacheFile file;
+  CHECK(file.Open(path));
+  CHECK_EQ(file.loaded().size(), size_t(2));
+  file.Close();
+  // An empty list is a header alone.
+  CHECK(WritePipelineList(path, {}, &error));
+  CHECK_EQ(std::filesystem::file_size(path), uintmax_t(16));
+  std::remove(path.c_str());
 }
 
 TEST(PipelineCacheFile_RoundTripAndDeduplication) {
@@ -179,6 +295,74 @@ TEST(PipelineCacheFile_ATornLastRecordIsDropped) {
   CHECK(again.Open(path));
   CHECK_EQ(again.loaded().size(), size_t(3));
   std::remove(path.c_str());
+}
+
+TEST(PipelineListMerger_EveryPipelineOnceInTheOrderFirstSeen) {
+  const std::string a = TempPath("merge_a"), b = TempPath("merge_b");
+  PipelineRecord flipped = Sample(9);
+  flipped.flags = kRecordFlipFrontFace;
+  PipelineRecord scaled = Sample(2);
+  scaled.flags = kRecordScaled;
+  scaled.ps_input = 0x55;
+  CHECK(WritePipelineList(a, {Sample(1), Sample(2), Sample(1)}));
+  CHECK(WritePipelineList(b, {Sample(3), Sample(2), flipped, scaled}));
+  PipelineListMerger merger;
+  const PipelineListMerger::Input ia = merger.Add(a);
+  CHECK(ia.read);
+  CHECK_EQ(ia.records, size_t(3));
+  CHECK_EQ(ia.added, size_t(2));
+  CHECK_EQ(ia.duplicates, size_t(1));
+  const PipelineListMerger::Input ib = merger.Add(b);
+  CHECK(ib.read);
+  CHECK_EQ(ib.added, size_t(2));  // Sample(3) and the scaled one
+  CHECK_EQ(ib.duplicates, size_t(1));
+  CHECK_EQ(ib.debug, size_t(1));
+  const std::vector<PipelineRecord> want = {Sample(1), Sample(2), Sample(3), scaled};
+  CHECK(merger.records() == want);
+
+  PipelineListMerger keep(true);
+  keep.Add(a);
+  keep.Add(b);
+  CHECK_EQ(keep.records().size(), size_t(5));
+
+  const PipelineListMerger::Input absent = merger.Add(a + ".absent");
+  CHECK(!absent.read);
+  CHECK(absent.note == "absent");
+  std::remove(a.c_str());
+  std::remove(b.c_str());
+}
+
+TEST(PipelinesTool_MergeAndInfo) {
+  const std::string a = TempPath("tool_a"), b = TempPath("tool_b"), out = TempPath("tool_out.list");
+  CHECK(WritePipelineList(a, {Sample(1), Sample(2)}));
+  CHECK(WritePipelineList(b, {Sample(2), Sample(3)}));
+  CHECK_EQ(RunTool("merge -o " + Quoted(out) + " " + Quoted(a) + " " + Quoted(b)), 0);
+  std::vector<PipelineRecord> merged;
+  CHECK(ReadPipelineList(out, merged));
+  const std::vector<PipelineRecord> want = {Sample(1), Sample(2), Sample(3)};
+  CHECK(merged == want);
+  CHECK_EQ(RunTool("info " + Quoted(out)), 0);
+  // The output may be one of the inputs (adding a run to a list).
+  CHECK(WritePipelineList(b, {Sample(4)}));
+  CHECK_EQ(RunTool("merge -o " + Quoted(out) + " " + Quoted(out) + " " + Quoted(b)), 0);
+  merged.clear();
+  CHECK(ReadPipelineList(out, merged));
+  CHECK_EQ(merged.size(), size_t(4));
+  // An input that is not there, or of another version: nothing is written.
+  std::remove(out.c_str());
+  CHECK_EQ(RunTool("merge -o " + Quoted(out) + " " + Quoted(a) + " " + Quoted(a + ".absent")), 2);
+  CHECK(!std::filesystem::exists(out));
+  {
+    std::ofstream old(b, std::ios::binary | std::ios::trunc);
+    const uint32_t header[4] = {kPipelineCacheMagic, 2, sizeof(PipelineRecord), 0x01020304u};
+    old.write(reinterpret_cast<const char*>(header), sizeof(header));
+  }
+  CHECK_EQ(RunTool("merge -o " + Quoted(out) + " " + Quoted(a) + " " + Quoted(b)), 2);
+  CHECK(!std::filesystem::exists(out));
+  CHECK_EQ(RunTool("merge " + Quoted(a)), 1);  // no output named
+  CHECK_EQ(RunTool("info " + Quoted(b)), 2);
+  std::remove(a.c_str());
+  std::remove(b.c_str());
 }
 
 NR_TEST_MAIN()
