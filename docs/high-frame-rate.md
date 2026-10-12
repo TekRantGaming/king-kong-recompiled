@@ -116,6 +116,27 @@ of generators with drag (all 0.95 per step here):
 | 4 ms frames (250 FPS), fix off | 0.35, 0.16, 0.32, 0.16, 0.35 (mean 0.27) |
 | 4 ms frames (250 FPS), fix on | 1.23, 0.96, 1.39, 1.00, 1.42 (mean 1.20) |
 
+### Step counts, worked out
+
+The game's own step logic (float32, the millisecond frame times the tick count gives) against the fixes'
+targets, per second of game time. Without the fixes the counts rise with the frame rate; with them each is the
+30 FPS figure at every rate (the fixes use `pow` on the exact frame time):
+
+| FPS | Particle drag | Decay per 0.016 s | Follow steps | `k_ETAT_grab` growth |
+|---|---|---|---|---|
+| 30 | 40 | 90 | 310 | 70 |
+| 60 | 60 | 100 | 340 | 100 |
+| 110 | 110 | 110 | 330 | 110 |
+| 144 | 144 | 144 | 424 | 144 |
+| 240 | 240 | 240 | 480 | 240 |
+| 1000 | 1000 | 1000 | 1000 | 1000 |
+
+For example a particle with drag 0.95 keeps 36% of its speed after 0.5 s at 30 FPS, 6% at 110 FPS and 0.2% at
+250 FPS without the fix, 36% at all of them with it.
+
+Millisecond frame times (`precise_dt`): the frame time's worst error against the real one is 2% at 30 FPS, 4% at
+60, 10% at 110, 14% at 144, 20% at 240; at 1400 FPS the game runs 1.4x real time, at 2000 FPS 2x.
+
 ### Kong to the Rescue (chapter 27), fixes acting
 
 With `KK_DEV_WANDER` at 110 FPS: the 0.016 s floor fix acted on 70 to 112 script calls a second while Kong's
