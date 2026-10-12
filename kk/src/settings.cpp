@@ -421,6 +421,10 @@ const std::vector<std::pair<const char*, const char*>>& OriginalLookSettings() {
       {"anisotropic_override", "-1"},  {"ao_mode", "0"},          {"ao_strength", "1"},
       {"kk_motion_blur", "true"},      {"kk_fog", "true"},        {"kk_big_blur", "true"},
       {"kk_frame_rate", "30"},         {"kk_fov", "69"},
+#if defined(KK_NATIVE_RENDERER)
+      // The native renderer's lighting options (native-renderer/docs/lighting.md): the game's own.
+      {"native_shadow_quality", "original"}, {"native_water_reflections", "original"}, {"native_volumetrics", "off"},
+#endif
   };
   return settings;
 }
