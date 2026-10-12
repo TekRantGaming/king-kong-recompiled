@@ -6,14 +6,7 @@
 //   host_ms (host time since the previous frame), raw_dt (the game's frame time
 //   before its time scale, 0x82C4EDBC), dt (0x82C636E0, what the game steps
 //   with), game_ms (the game's millisecond clock, 0x82CCAE1C), then the guest
-//   floats named in KK_DEV_DT_ADDRS="82D64254,...".
-//
-// KK_DEV_OBJ_AT="40,60,119" (seconds after the save menu opens, real time): at the first frame
-// past each, objects_<t>.csv gets the world's active objects: index, address, identity flags (+0),
-// position (global matrix translation) and first axis. Layout from the high frame rate work
-// (dev_sample.cpp on nr-hfr): the universe 0x828E836C, +12 the current world; the world's active
-// table runs from +304 to +292, 8 bytes an entry, the object first; an object's +12 points to its
-// matrices, the global one first (axes, then the translation at +48).
+//   floats named in KK_DEV_DT_ADDRS="82D64254,..." (Jack's height first).
 //
 // sub_8272CA20 sets the frame time once a frame from the kernel tick count in
 // whole milliseconds (docs/high-frame-rate.md on branch nr-hfr), so two runs
@@ -81,43 +74,7 @@ const Window& Settings() {
   return w;
 }
 
-bool Valid(uint32_t a) { return a >= 0x40000000 && a < 0xA0000000 && (a & 3) == 0; }
-
-void DumpObjects(const uint8_t* base) {
-  static std::vector<double> times = [] {
-    std::vector<double> t;
-    if (const char* v = std::getenv("KK_DEV_OBJ_AT"); v && *v) {
-      std::stringstream all(v);
-      for (std::string x; std::getline(all, x, ',');) t.push_back(std::stod(x));
-    }
-    return t;
-  }();
-  if (times.empty()) return;
-  const double now = DevSecondsSinceMenu();
-  if (now < 0 || now < times.front()) return;
-  const double at = times.front();
-  times.erase(times.begin());
-  const uint32_t world = Load32(base, 0x828E836C + 12);
-  const uint32_t end = Valid(world) ? Load32(base, world + 292) : 0, start = Valid(world) ? Load32(base, world + 304) : 0;
-  REXLOG_INFO("KK dev objects at {:.1f} s: world {:08X}, active table {:08X}..{:08X}", at, world, start, end);
-  if (!Valid(world) || !Valid(start) || !Valid(end) || end < start || end - start > 8 * 20000) return;
-  FILE* f = std::fopen(("objects_" + std::to_string(int(at * 10)) + ".csv").c_str(), "w");
-  if (!f) return;
-  std::fprintf(f, "t,i,obj,flags,x,y,z,ax,ay,az\n");
-  int i = 0;
-  for (uint32_t e = start; e + 8 <= end; e += 8, ++i) {
-    const uint32_t obj = Load32(base, e);
-    if (!Valid(obj)) continue;
-    const uint32_t m = Load32(base, obj + 12);
-    if (!Valid(m)) continue;
-    std::fprintf(f, "%.4f,%d,%08X,%08X,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f\n", now, i, obj, Load32(base, obj), LoadF(base, m + 48),
-                 LoadF(base, m + 52), LoadF(base, m + 56), LoadF(base, m + 0), LoadF(base, m + 4), LoadF(base, m + 8));
-  }
-  std::fclose(f);
-}
-
 void LogFrame(const uint8_t* base) {
-  DumpObjects(base);
   if (g_game_seconds >= 0) {
     g_game_seconds += LoadF(base, kRawFrameTime);
   } else if (DevSecondsSinceMenu() >= 0) {
