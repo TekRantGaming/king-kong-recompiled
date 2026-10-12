@@ -240,7 +240,14 @@ int RenderScaleFor(std::string_view preset, int output_height) {
 }
 
 void ApplyRenderPreset(int output_height) {
-  const int scale = RenderScaleFor(REXCVAR_GET(kk_render_quality), output_height);
+  // A temporal upscaler (the native renderer's native_upscaler, Display > Upscaling) takes the picture
+  // at the screen's size, in 720p steps (Native), and draws fewer pixels itself.
+  std::string quality = REXCVAR_GET(kk_render_quality);
+  if (rex::cvar::GetFlagByName("gpu_plugin") == "native") {
+    const std::string temporal = rex::cvar::GetFlagByName("native_upscaler");
+    if (!temporal.empty() && temporal != "off") quality = "native";
+  }
+  const int scale = RenderScaleFor(quality, output_height);
   if (scale <= 0) return;  // custom: the player's resolution_scale is used as is
   // The runtime only honours resolution_scale when it differs from its default,
   // so a preset drives the per-axis scales instead (read directly). They are set
@@ -251,7 +258,7 @@ void ApplyRenderPreset(int output_height) {
     SetCvarDefault(axis, std::to_string(scale));
     rex::cvar::ResetToDefault(axis);
   }
-  REXLOG_INFO("KK: render preset {} at {}p output -> {}x ({}p)", REXCVAR_GET(kk_render_quality),
+  REXLOG_INFO("KK: render preset {} at {}p output -> {}x ({}p)", quality,
               output_height, scale, scale * 720);
 }
 
@@ -465,6 +472,9 @@ const std::vector<std::pair<const char*, const char*>>& OriginalLookSettings() {
       {"anisotropic_override", "-1"},  {"ao_mode", "0"},          {"ao_strength", "1"},
       {"kk_motion_blur", "true"},      {"kk_fog", "true"},        {"kk_big_blur", "true"},
       {"kk_frame_rate", "30"},         {"kk_fov", "69"},
+#if defined(KK_NATIVE_RENDERER)
+      {"native_upscaler", "off"},  // the native renderer's temporal upscalers (Display > Upscaling)
+#endif
   };
   return settings;
 }

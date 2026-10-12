@@ -45,6 +45,7 @@
 #include "plugin/launcher_prewarm.h"
 #include "plugin/plugin_settings.h"
 #include "plugin/ring_skimmer.h"
+#include "plugin/upscaler_query.h"
 #if NR_GAME_RENDERER
 #include "plugin/shader_pack_service.h"
 #endif
@@ -146,6 +147,8 @@ NativeGraphicsSystem::~NativeGraphicsSystem() {
 }
 
 bool NativeGraphicsSystem::CreateProvider(bool with_presentation) {
+  // The launcher's upscaler question (its Direct3D 12 device and the SDKs it loaded) is over first.
+  WaitUpscalerQuery();
   switch (api_) {
 #if NR_HAS_D3D12
     case HostApi::kD3D12:

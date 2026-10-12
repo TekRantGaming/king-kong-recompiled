@@ -359,9 +359,11 @@ void GameRenderer::UpscaleRecordMotion(const DrawCall& call, const dev::DeviceVi
     const uint32_t object = d.u32(dev::kStreamBuffer + 8 * stream);
     VertexBufferInfo info;
     if (!object || !DecodeVertexBuffer(memory_.Virtual(object), info)) continue;
-    // A vertex buffer the game rewrites every frame (particles): its old vertices are gone, no motion.
+    // A vertex buffer the game rewrites (particles, and in places streamed world geometry): its old
+    // vertices are gone, so no object motion, but its constants still vote for the camera (V-Rex's world
+    // sits in such buffers: without its votes the camera had no motion there at all).
     if (const kknr::BufferCache::Entry* e = vertex_buffers_.Find(info.physical, info.size_bytes, 0)) {
-      if (auto* h = static_cast<const HostBuffer*>(e->host); h && h->dynamic) return;
+      if (auto* h = static_cast<const HostBuffer*>(e->host); h && h->dynamic) m.camera_only = true;
     }
     if (stream == 0) {
       m.key.vertex_buffer = info.physical;
@@ -403,6 +405,7 @@ void GameRenderer::UpscaleRecordMotion(const DrawCall& call, const dev::DeviceVi
     }
   }
   ++u.stats.motion_draws;
+  if (m.camera_only) ++u.stats.motion_rewritten;
   u.motion_draws.push_back(std::move(m));
 }
 
@@ -472,13 +475,15 @@ void GameRenderer::UpscaleLogStats() {
   const UpscaleFrameTracker::Stats& ts = u.tracker.stats();
   Logf(LogLevel::kInfo,
        "rexgpu-native: upscaler %s, last 600 frames: %llu upscaled (point: post shader %llu, corner %llu, clearing "
-       "copy %llu, Present %llu in all), %llu resets; motion draws %llu, matched %llu, drawn %llu, waiting %llu; "
+       "copy %llu, Present %llu in all), %llu resets (%llu camera cuts); motion draws %llu (%llu on rewritten vertex buffers), matched %llu, drawn %llu, waiting %llu; "
        "camera %llu frames; no depth %llu; scene copies redone %llu; targets carried %llu; failures %llu; motion "
        "variants %llu made, %llu failed, %.0f ms",
        u.name.c_str(), static_cast<unsigned long long>(s.frames - l.frames),
        static_cast<unsigned long long>(ts.by_trigger[1]), static_cast<unsigned long long>(ts.by_trigger[2]),
        static_cast<unsigned long long>(ts.by_trigger[3]), static_cast<unsigned long long>(ts.by_trigger[4]),
-       static_cast<unsigned long long>(s.resets - l.resets), static_cast<unsigned long long>(s.motion_draws - l.motion_draws),
+       static_cast<unsigned long long>(s.resets - l.resets),
+       static_cast<unsigned long long>(s.cuts - l.cuts), static_cast<unsigned long long>(s.motion_draws - l.motion_draws),
+       static_cast<unsigned long long>(s.motion_rewritten - l.motion_rewritten),
        static_cast<unsigned long long>(s.motion_matched - l.motion_matched),
        static_cast<unsigned long long>(s.motion_drawn - l.motion_drawn),
        static_cast<unsigned long long>(s.motion_waiting - l.motion_waiting),
@@ -611,6 +616,7 @@ void GameRenderer::UpscaleMotionPass(nvrhi::ICommandList* cl, HostTarget* depth_
   const bool vulkan = device_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN;
   const nvrhi::TextureDesc& md = u.motion->getDesc();
   for (const GameUpscale::MotionDraw& m : u.motion_draws) {
+    if (m.camera_only) continue;
     const VsConstants* prev = u.history.FindPrevious(m.key, m.ordinal, m.constants, u.history.CountThisFrame(m.key));
     if (!prev) continue;
     nvrhi::IShader* mvs = shaders_->MotionVariant(*m.vs);
@@ -753,18 +759,64 @@ void GameRenderer::RunUpscale(nvrhi::ICommandList* cl, UpscaleFrameTracker::Trig
                           depth->texture->getDesc().height == cd.height;
   if (!have_depth) ++u.stats.no_depth;
   // The camera: the draws that met again vote.
-  uint32_t matched = 0;
+  uint32_t matched = 0, changed = 0, objects = 0, objects_matched = 0;
   for (const GameUpscale::MotionDraw& m : u.motion_draws) {
+    if (!m.camera_only) ++objects;
     const VsConstants* prev = u.history.FindPrevious(m.key, m.ordinal, m.constants, u.history.CountThisFrame(m.key));
     if (!prev) continue;
     ++matched;
+    if (!m.camera_only) ++objects_matched;
+    if (std::memcmp(prev->data(), m.constants.data(), sizeof(float) * 1024) != 0) {
+      ++changed;
+      if ((u.config.debug & 128) && changed <= 3) {
+        // Which registers changed (debugging the camera vote).
+        std::string regs;
+        for (int r = 0; r < 256 && regs.size() < 200; ++r)
+          if (std::memcmp(&(*prev)[size_t(r) * 4], &m.constants[size_t(r) * 4], sizeof(float) * 4) != 0)
+            regs += " c" + std::to_string(r);
+        const float* c = m.wvp_register >= 0 ? &m.constants[size_t(m.wvp_register) * 4] : nullptr;
+        Logf(LogLevel::kInfo,
+             "rexgpu-native: upscaler debug: frame %llu draw vs %016llX wvp c%d [%.4f %.4f %.4f %.4f / %.4f %.4f %.4f "
+             "%.4f / %.4f %.4f %.4f %.4f / %.4f %.4f %.4f %.4f] changed:%s",
+             static_cast<unsigned long long>(u.frame), static_cast<unsigned long long>(m.key.vs_hash), m.wvp_register,
+             c ? c[0] : 0, c ? c[1] : 0, c ? c[2] : 0, c ? c[3] : 0, c ? c[4] : 0, c ? c[5] : 0, c ? c[6] : 0,
+             c ? c[7] : 0, c ? c[8] : 0, c ? c[9] : 0, c ? c[10] : 0, c ? c[11] : 0, c ? c[12] : 0, c ? c[13] : 0,
+             c ? c[14] : 0, c ? c[15] : 0, regs.c_str());
+      }
+    }
     if (m.wvp_register >= 0 && m.wvp_register <= 252)
       u.vote.Offer(&m.constants[size_t(m.wvp_register) * 4], &(*prev)[size_t(m.wvp_register) * 4]);
   }
   u.stats.motion_matched += matched;
   Mat4 reprojection;
   const bool camera = u.screen_valid && u.vote.Result(reprojection);
+  if (u.config.debug & 128) {
+    uint32_t votes = 0, offers = 0;
+    Mat4 r{};
+    u.vote.Result(r, &votes, &offers);
+    Logf(LogLevel::kInfo,
+         "rexgpu-native: upscaler debug: frame %llu vote %u of %u, screen %d (%.1f %.1f %.1f %.1f), R [%.5f %.5f %.5f "
+         "%.5f / %.5f %.5f %.5f %.5f / %.5f %.5f %.5f %.5f / %.5f %.5f %.5f %.5f]",
+         static_cast<unsigned long long>(u.frame), votes, offers, int(u.screen_valid), u.screen.x_scale,
+         u.screen.x_offset, u.screen.y_scale, u.screen.y_offset, r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8],
+         r[9], r[10], r[11], r[12], r[13], r[14], r[15]);
+  }
   if (camera) ++u.stats.camera_frames;
+  // A camera cut: the camera's reprojection moves the middle of the screen by more than an eighth of
+  // its width or height in one frame (a turn of 250 degrees a second at 30 FPS), near and far alike.
+  // The history is then of another shot: the upscaler starts again.
+  bool cut = false;
+  if (camera) {
+    double shift = INFINITY;
+    for (const double z : {0.5, 0.999}) {
+      const double cur[4] = {0.0, 0.0, z, 1.0};
+      double prev[4];
+      Mat4Transform(reprojection, cur, prev);
+      if (prev[3] > 1e-6) shift = std::min(shift, std::hypot(prev[0] / prev[3], prev[1] / prev[3]));
+    }
+    cut = shift > 0.25;
+    if (cut) ++u.stats.cuts;
+  }
   if (have_depth) {
     UpscaleParams p;
     for (int r = 0; r < 4; ++r)
@@ -800,7 +852,7 @@ void GameRenderer::RunUpscale(nvrhi::ICommandList* cl, UpscaleFrameTracker::Trig
   // 4. The upscaler.
   const bool reset = u.last_upscaled_frame == UINT64_MAX || u.last_upscaled_frame + 1 != u.frame ||
                      u.last_output.width != out_size.width || u.last_output.height != out_size.height ||
-                     (u.motion_draws.size() >= 20 && matched * 4 < u.motion_draws.size());
+                     (objects >= 20 && objects_matched * 4 < objects) || cut;
   if (reset) ++u.stats.resets;
   bool done = false;
   if (u.upscaler) {
@@ -832,6 +884,55 @@ void GameRenderer::RunUpscale(nvrhi::ICommandList* cl, UpscaleFrameTracker::Trig
   stretch.p0[2] = float(render.width) / float(cd.width);
   stretch.p0[3] = float(render.height) / float(cd.height);
   if (!done) UpscalePass(cl, u.stretch_ps, &stretch, sizeof(stretch), color->texture, nullptr, u.output, nullptr, nullptr, out_rect, 5);
+  // Debugging: the motion vectors read back (every 150 frames, mapped 4 frames later).
+  if (u.config.debug & 512) {
+    if (u.probe && u.frame >= u.probe_frame + 4) {
+      size_t pitch = 0;
+      const auto* data = static_cast<const uint8_t*>(
+          device_->mapStagingTexture(u.probe, nvrhi::TextureSlice(), nvrhi::CpuAccessMode::Read, &pitch));
+      if (data) {
+        auto half = [](uint16_t h) {
+          const uint32_t e = (h >> 10) & 31, m = h & 1023;
+          const float v = e == 0 ? std::ldexp(float(m), -24) : e == 31 ? 65504.0f : std::ldexp(float(m | 1024), int(e) - 25);
+          return (h & 0x8000) ? -v : v;
+        };
+        uint64_t nonzero = 0, total = 0;
+        float maxv = 0.0f;
+        double sx = 0, sy = 0;
+        for (uint32_t y = 0; y < render.height; ++y) {
+          const auto* row = reinterpret_cast<const uint16_t*>(data + y * pitch);
+          for (uint32_t x = 0; x < render.width; ++x) {
+            const float mx = half(row[x * 2]), my = half(row[x * 2 + 1]);
+            ++total;
+            if (mx != 0.0f || my != 0.0f) ++nonzero;
+            maxv = std::max(maxv, std::max(std::fabs(mx), std::fabs(my)));
+            sx += mx;
+            sy += my;
+          }
+        }
+        device_->unmapStagingTexture(u.probe);
+        Logf(LogLevel::kInfo,
+             "rexgpu-native: upscaler debug: motion of frame %llu: %llu of %llu pixels move, largest %.3f px, mean "
+             "%.4f %.4f",
+             static_cast<unsigned long long>(u.probe_frame), static_cast<unsigned long long>(nonzero),
+             static_cast<unsigned long long>(total), maxv, total ? sx / double(total) : 0.0,
+             total ? sy / double(total) : 0.0);
+      }
+      u.probe = nullptr;
+    }
+    if (!u.probe && u.frame % 150 == 0) {
+      nvrhi::TextureDesc sd = u.motion->getDesc();
+      sd.isRenderTarget = false;
+      sd.initialState = nvrhi::ResourceStates::CopyDest;
+      sd.keepInitialState = false;
+      sd.debugName = "Upscaler motion probe";
+      u.probe = device_->createStagingTexture(sd, nvrhi::CpuAccessMode::Read);
+      if (u.probe) {
+        cl->copyTexture(u.probe, nvrhi::TextureSlice(), u.motion, nvrhi::TextureSlice());
+        u.probe_frame = u.frame;
+      }
+    }
+  }
   // Debugging views over the output.
   if (u.config.debug & 1) {
     UpscalePass(cl, u.show_motion_ps, &stretch, sizeof(stretch), u.motion, nullptr, u.output, nullptr, nullptr, out_rect, 6);
@@ -875,11 +976,11 @@ void GameRenderer::RunUpscale(nvrhi::ICommandList* cl, UpscaleFrameTracker::Trig
   u.last_output = out_size;
   if (u.config.debug & 16) {
     Logf(LogLevel::kInfo,
-         "rexgpu-native: upscaled frame %llu at %s: %ux%u to %ux%u, jitter %.3f %.3f, %zu motion draws (%u matched), "
-         "camera %d, depth %d, reactive %d, reset %d, %s",
+         "rexgpu-native: upscaled frame %llu at %s: %ux%u to %ux%u, jitter %.3f %.3f, %zu motion draws (%u matched, %u with "
+         "other constants than last frame), camera %d (translation %.5f %.5f), depth %d, reactive %d, reset %d, %s",
          static_cast<unsigned long long>(u.frame), UpscaleFrameTracker::TriggerName(trigger), render.width,
          render.height, out_size.width, out_size.height, u.jitter.x, u.jitter.y, u.motion_draws.size(), matched,
-         int(camera), int(have_depth), int(u.snapshot_taken), int(reset), done ? u.name.c_str() : "bilinear");
+         changed, int(camera), camera ? reprojection[3] : 0.0, camera ? reprojection[7] : 0.0, int(have_depth), int(u.snapshot_taken), int(reset), done ? u.name.c_str() : "bilinear");
   }
 }
 

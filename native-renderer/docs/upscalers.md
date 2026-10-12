@@ -23,7 +23,7 @@ All are read at start (init only).
 | `native_upscaler_sharpness` | `-1` | 0 to 1: FSR's RCAS after the upscale (DLSS and XeSS have none); negative: off |
 | `native_upscaler_mip_bias` | `auto` | texture LOD bias of the scene's draws: `auto` = log2(input / output), as the SDKs recommend, or a number |
 | `native_upscaler_reactive` | `1.0` | strength of the reactive mask (0: none) |
-| `native_upscaler_debug` | `0` | bits: 1 show the motion vectors, 2 the reactive mask, 4 camera motion only, 8 no jitter, 16 a log line per frame (and NGX's log), 32 show the depth, 64 no mip bias |
+| `native_upscaler_debug` | `0` | bits: 1 show the motion vectors, 2 the reactive mask, 4 camera motion only, 8 no jitter, 16 a log line per frame (and NGX's log), 32 show the depth, 64 no mip bias, 128 log the camera vote and which constants changed, 512 read the motion vectors back every 150 frames and log how many pixels move and how far |
 | `native_upscaler_gpu_time` | `false` | time the upscaler's GPU work (the renderer's passes and the SDK's) and log the averages every 600 frames |
 | `native_upscaler_rules` | empty | a file of upscale point rules: `post ps=<hash>` starts the post chain, `scene ps=<hash>` never does |
 
@@ -44,6 +44,41 @@ each SDK reports it for that output size).
 Each upscaler checks at start whether it can run (its DLL beside the game, the vendor, what the SDK
 itself says about this GPU and driver) and `CreateUpscaler` falls back: FSR 4, DLSS and XeSS to FSR 3.1,
 FSR 3.1 to the plain stretch. `QueryUpscalerSupport` gives the same answers for a settings menu.
+
+## The launcher's menu
+
+**Display** > **Upscaling** > **Upscaler** lists, after Off, AMD FSR 1 and NVIDIA NIS (the presenter's
+spatial upscalers, `present_effect`), the temporal ones this PC runs: NVIDIA DLSS, AMD FSR 4, AMD FSR 3.1,
+Intel XeSS (`native_upscaler`), only with the native renderer. DLSS is named in text only: no NVIDIA logo
+or artwork (see "What a release ships"). No frame generation anywhere.
+
+- **Which are offered.** When the launcher opens it asks the plugin (`nr_upscaler_query`,
+  `plugin/native_upscaler_query.h`; `nr::kk::QueryUpscalers`, `hooks/kk_native_ui.h`). The plugin makes a
+  Direct3D 12 device of its own on the high-performance adapter, on a thread, and runs
+  `QueryUpscalerSupport` on it: each SDK says whether it runs on this graphics card and driver (DLSS: NGX's
+  `SuperSampling.Available`; FSR 4: AMD's library's versions; XeSS: its context; FSR 3.1: its DLL). When
+  the game draws with Vulkan (the default), FSR 4 is left out (no Vulkan in AMD's FSR SDK), and DLSS and
+  XeSS stay only with an SDK that takes the device requests (`sdk-patches/0003`). Until the answer is in
+  the row says it is checking. A Vulkan device is not used for the question: vulkan.hpp's dispatcher is one
+  for the process, and the launcher's prewarm may have a device of its own. So on Vulkan the answer is the
+  same card and driver's on Direct3D 12; the game still checks for itself when it starts and falls back to
+  FSR 3.1 (the log says why). The game's start (`NativeGraphicsSystem::CreateProvider`) and the launcher's
+  restart and Quit wait for the thread. An upscaler chosen on another PC that this one cannot run stays
+  listed as "(not on this PC)".
+- **What a choice sets.** A temporal upscaler sets `present_effect` to `bilinear` (no FSR 1 on top),
+  `native_upscaler` to its value and `kk_render_quality` to `native`: the upscaler's output is the screen's
+  size in the game's 720p steps (`ApplyRenderPreset` uses Native whenever a temporal upscaler is on with
+  the native renderer), and the upscaler draws fewer pixels itself. **Upscaler mode** then sets
+  `native_upscaler_quality`: Native AA (DLAA with DLSS), Quality, Balanced, Performance, Ultra Performance,
+  with the input and output sizes shown. Render quality and Internal resolution are hidden meanwhile. FSR 1
+  and NIS keep their rows as before.
+- **Restart.** `native_upscaler` is one of the launcher's restart settings: on Vulkan the device must be
+  made with DLSS's and XeSS's extensions, and it exists before the launcher opens. Play restarts the game
+  when it changed.
+- **Defaults.** Off: `native_upscaler` defaults to `off`; the graphics presets set FSR 1 or NIS and turn a
+  temporal upscaler off (a preset is matched only with none on); the **Original** look sets
+  `native_upscaler` off with its other settings (`OriginalLookSettings`), and the row is disabled there.
+  Test runs that want an upscaler over the Original look add `--kk_original_look_keep=native_upscaler`.
 
 ## How a frame goes
 

@@ -3,6 +3,27 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v2.0.0-beta.3
+
+**Beta 3**: the third test build of the next big update, from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/PET2xU5FJq). Your saves and settings are kept, and you can switch back to stable at any time. Windows only for now.
+
+### What's new
+- **DLSS, FSR 3.1, FSR 4 and XeSS upscaling.** With the native renderer, **Display** > **Upscaling** > **Upscaler** now also offers NVIDIA DLSS, AMD FSR 3.1, AMD FSR 4 and Intel XeSS, next to FSR 1 and NIS. They draw fewer pixels and rebuild a sharp picture at your screen's resolution from several frames, smoothing jagged edges too. Only the ones your graphics card supports are listed: DLSS on NVIDIA RTX cards, FSR 4 on AMD Radeon RX 7000 and 9000 cards with Direct3D 12, XeSS and FSR 3.1 on almost any card. **Upscaler mode** picks how many pixels the game draws: **Native AA** (DLAA with DLSS), **Quality**, **Balanced**, **Performance** or **Ultra Performance**.
+- They are off unless you pick one, and the **Original** look keeps them off. Changing to or from one restarts the game when you press **Play**. There is no frame generation.
+
+### Known issues
+- FSR 4 is untested on the graphics cards that run it (we have none here); on other cards it isn't offered.
+- The Vulkan renderer (the default) can't run FSR 4, only Direct3D 12 can.
+- Coming in a later beta: screen-space global illumination, sharper shadows, reflections on water and volumetric light shafts.
+- In a few chapters the camera starts a pixel or two higher than on the console, because of how loading is timed.
+- With motion blur on, its trail is shorter at high frame rates.
+
+### Full changelog
+- `native_upscaler` (`off`, `dlss`, `fsr3`, `fsr4`, `xess`) and `native_upscaler_quality`, set by the launcher. The renderer jitters the scene, makes motion vectors (the camera's from the depth, each moving object's from its own vertex shader run with this and last frame's constants) and a reactive mask for water, fur, smoke and particles, and runs the upscaler before the game's post effects and HUD where it can find them, at the end of the frame otherwise.
+- The SDKs are loaded from beside the game: `nvngx_dlss.dll` (DLSS 310.9.1), `amd_fidelityfx_vk.dll` and `amd_fidelityfx_dx12.dll` (FSR 3.1.4), `amd_fidelityfx_loader_dx12.dll` and `amd_fidelityfx_upscaler_dx12.dll` (FSR 4.1.1), `libxess.dll` (XeSS 2.0.2). Their notices are in `THIRD-PARTY-NOTICES.txt`.
+- The launcher asks the plugin which upscalers run on this PC (`nr_upscaler_query`, on a Direct3D 12 device of its own, in the background). A chosen upscaler that can't run falls back to FSR 3.1, and the log says why.
+- On Vulkan, the device is made with the extensions DLSS and XeSS need (`native-renderer/sdk-patches/0003`, which the beta's SDK build needs).
+
 ## v2.0.0-beta.2 (12 October 2026)
 
 **Beta 2**: the second test build of the next big update, from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/PET2xU5FJq). Your saves and settings are kept, and you can switch back to stable at any time. Windows only for now.

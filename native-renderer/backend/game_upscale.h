@@ -63,6 +63,9 @@ struct GameUpscale {
     uint32_t topology = 0, mode_control = 0, clip_control = 0, poly_scale = 0, poly_offset = 0;
     bool flip_front = false;
     bool indexed = false;
+    // Its vertex buffer is one the game rewrites (particles, streamed geometry): last frame's vertices
+    // are gone, so it only votes for the camera and keeps the camera's motion.
+    bool camera_only = false;
     nvrhi::IndexBufferBinding index;
     nvrhi::DrawArguments args;
     nvrhi::Viewport viewport;
@@ -95,17 +98,22 @@ struct GameUpscale {
   std::unordered_map<uint64_t, nvrhi::FramebufferHandle> framebuffers;
   // --native_upscaler_gpu_time: everything at the upscale point, and the upscaler's own work.
   std::unique_ptr<AoGpuTimer> timer, sdk_timer;
+  // Debugging (native_upscaler_debug 512): the motion texture read back now and then.
+  nvrhi::StagingTextureHandle probe;
+  uint64_t probe_frame = 0;
   bool running = false;  // RunUpscale is making the output generation's scene targets
 
   struct Stats {
     uint64_t frames = 0;          // frames upscaled
     uint64_t motion_draws = 0;    // draws recorded for the motion pass
+    uint64_t motion_rewritten = 0;  // of them, on vertex buffers the game rewrites (camera vote only)
     uint64_t motion_matched = 0;  // with last frame's constants
     uint64_t motion_drawn = 0;    // replayed (variant and pipeline ready)
     uint64_t motion_waiting = 0;  // variant or pipeline not ready yet
     uint64_t camera_frames = 0;   // frames with a camera reprojection
     uint64_t no_depth = 0;        // frames whose scene depth was gone at the point
     uint64_t resets = 0;
+    uint64_t cuts = 0;            // of them, camera cuts (the reprojection jumps)
     uint64_t scene_copies = 0;    // copies done again from the upscaled picture
     uint64_t migrations = 0;      // targets carried to the output size
     uint64_t failures = 0;        // the upscaler failed (the bilinear stretch instead)

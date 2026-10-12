@@ -11,6 +11,7 @@ set(NR_PLUGIN_SOURCES
     native_graphics_system.cpp
     plugin_settings.cpp
     launcher_prewarm.cpp
+    upscaler_query.cpp
     ring_skimmer.cpp
     ${NR_ROOT}/backend/backend.cpp
 )

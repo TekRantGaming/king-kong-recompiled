@@ -18,6 +18,7 @@
 #include "plugin/native_graphics_system.h"
 #include "plugin/native_prewarm.h"
 #include "plugin/native_stutter.h"
+#include "plugin/upscaler_query.h"
 
 REXCVAR_DEFINE_STRING(native_backend, "auto", "Native renderer",
                       "Host API for the native renderer: auto, d3d12 or vulkan")
@@ -281,7 +282,8 @@ REXCVAR_DEFINE_DOUBLE(native_upscaler_reactive, 1.0, "Native renderer",
 
 REXCVAR_DEFINE_INT32(native_upscaler_debug, 0, "Native renderer",
                      "Upscaler debugging bits: 1 show the motion vectors, 2 the reactive mask, 4 camera motion only, "
-                     "8 no jitter, 16 a log line per frame, 32 show the depth, 64 no mip bias")
+                     "8 no jitter, 16 a log line per frame, 32 show the depth, 64 no mip bias, 128 log the camera vote "
+                     "and the constants that changed, 512 read the motion vectors back every 150 frames and log them")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_BOOL(native_upscaler_gpu_time, false, "Native renderer",
@@ -366,6 +368,11 @@ extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_prewarm_status(NrPrewarmStatus* sta
 }
 
 extern "C" REX_GPU_PLUGIN_EXPORT void nr_prewarm_stop(void) { nr::StopLauncherPrewarm(); }
+
+// The launcher's upscaler menu (native_upscaler_query.h).
+extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_upscaler_query(NrUpscalerSupport* out) { return nr::UpscalerQuery(out); }
+
+extern "C" REX_GPU_PLUGIN_EXPORT void nr_upscaler_query_wait(void) { nr::WaitUpscalerQuery(); }
 
 // The pipeline stutter counter for the overlay (native_stutter.h).
 extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_stutter_stats(NrStutterStats* stats) {
