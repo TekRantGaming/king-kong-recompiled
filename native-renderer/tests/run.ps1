@@ -79,6 +79,16 @@ if (-not (Get-ChildItem -Path $exeDir -Filter "rexgpu-$Plugin*.dll" -ErrorAction
   Write-Output "no rexgpu-$Plugin.dll beside $Exe"
   exit 4
 }
+if ($Plugin -eq 'native') {
+  # Without a shader pack and DXC every draw is dropped and every frame is black (docs/testing.md, "Use").
+  $hasPack = (Get-ChildItem -Path $exeDir -Filter 'kkshaders*.pack' -ErrorAction SilentlyContinue) -or
+             (Test-Path (Join-Path $CacheRoot 'native-shaders'))
+  $hasDxc = Test-Path (Join-Path $exeDir 'dxcompiler.dll')
+  if (-not $hasPack -and -not $hasDxc) {
+    Write-Output "no shader pack (beside $Exe or in $CacheRoot\native-shaders) and no dxcompiler.dll beside the game"
+    exit 4
+  }
+}
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 if ($Golden) { $root = $GoldenRoot } elseif ($Out) { $root = $Out } else { $root = Join-Path $RunsRoot "$Plugin-$stamp" }
 New-Item -ItemType Directory -Force $root | Out-Null

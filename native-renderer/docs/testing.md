@@ -35,6 +35,14 @@ It needs the `kk-dev` build (`kk\build.bat kk-dev`). The report is `report\repor
 (`F:\KK-native-renderer\runs\<plugin>-<time>\`); exit code 0 pass, 1 fail, 2 frames missing, 3 the game was
 already running, 4 setup error. A full run takes about 8 minutes (six launches; golden capture about 10).
 
+Native runs use the `kk-dev-vulkan` build, which needs shaders: the shader pack the launcher builds into
+`<cache root>\native-shaders` (the runner's cache root, `F:\KK-native-renderer\cache`, has none: the runner
+skips the launcher), else a developer's pack beside `king_kong.exe` (`kkshaders-spirv.pack`), and
+`dxcompiler.dll` beside it for shaders the pack lacks (from the build with `KK_DXC_DIR`, or copied). Without
+either every draw is dropped and the frames are black (the log says "is not in the pack and DXC is missing"):
+the first native tour run (`runs\tour-native2`) was lost that way. The tour runs below used the pack and DXC
+copied from the native renderer's own build folder (`wt\04-backend\kk\out\build\kk-dev-vulkan`).
+
 Before every launch the runner checks for a `king_kong` process and never starts a second copy or stops one it
 did not start (`-WaitMinutes` re-checks every 5 minutes); a lock file saying `hold` or `user` counts as busy too.
 While it runs, `F:\KK-native-renderer\game.lock` names it (`-LockName`); afterwards the file says `free`. The
