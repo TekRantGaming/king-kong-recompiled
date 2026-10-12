@@ -17,6 +17,7 @@
 #include "kkshaders/cache.h"
 #include "kkshaders/compiler.h"
 #include "kkshaders/container.h"
+#include "kkshaders/lighting.h"
 #include "kkshaders/translator.h"
 
 #ifdef _WIN32
@@ -102,6 +103,12 @@ bool moveInto(const fs::path& from, const fs::path& to, std::string* error) {
     return false;
 }
 
+uint64_t lightingStampHash() {
+    const std::string& text = lightingText();
+    const uint64_t h = XXH3_64bits(text.data(), text.size());
+    return h ? h : 1;
+}
+
 }  // namespace
 
 const char* packBackendName(PackBackend backend) { return backend == PackBackend::Dxil ? "dxil" : "spirv"; }
@@ -118,6 +125,7 @@ std::string PackStamp::toText() const {
     s << "dxc " << dxc << "\n";
     s << "database " << hex16(database) << "\n";
     s << "scaled " << (scaled ? 1 : 0) << "\n";
+    if (lighting) s << "lighting " << hex16(lighting) << "\n";
     s << "shaders " << shaders << "\n";
     return s.str();
 }
@@ -153,6 +161,8 @@ bool PackStamp::parse(const std::string& text, PackStamp& out) {
             if (value != "0" && value != "1") return false;
             s.scaled = value == "1";
             haveScaled = true;
+        } else if (key == "lighting") {
+            if (!parseHex(value, s.lighting)) return false;
         } else if (key == "shaders") {
             s.shaders = uint32_t(std::strtoul(value.c_str(), nullptr, 10));
         }
@@ -181,6 +191,8 @@ PackCheck comparePackStamp(const PackStamp* found, const PackStamp& wanted) {
         c.reason = "the game's shader database changed (" + hex16(found->database) + ", now " + hex16(wanted.database) + ")";
     else if (wanted.scaled && !found->scaled)
         c.reason = "without the render scale aware pixel shaders";
+    else if (wanted.lighting && found->lighting != wanted.lighting)
+        c.reason = found->lighting ? "with an older version of the lighting options' water shaders" : "without the lighting options' water shaders";
     else {
         c.state = PackState::Current;
         c.reason = "current";
@@ -217,6 +229,7 @@ bool wantedPackStamp(const PackBuildOptions& options, PackStamp& out, std::strin
     out.dxc = dxcIdentity();
     out.database = XXH3_64bits(bytes.data(), bytes.size());
     out.scaled = options.scaled;
+    out.lighting = options.lighting ? lightingStampHash() : 0;
     return true;
 }
 
@@ -259,6 +272,7 @@ PackBuildResult buildPack(const PackBuildOptions& options, PackBuildProgress* pr
     r.stamp.dxc = dxcIdentity();
     r.stamp.database = XXH3_64bits(bytes.data(), bytes.size());
     r.stamp.scaled = options.scaled;
+    r.stamp.lighting = options.lighting ? lightingStampHash() : 0;
     if (!force) {
         PackStamp found;
         const bool have = readPackStamp(r.pack, found);
@@ -289,6 +303,19 @@ PackBuildResult buildPack(const PackBuildOptions& options, PackBuildProgress* pr
             continue;
         }
         if (seen.insert({parsed.info.ucodeHash, translationInputHash(parsed.info)}).second) jobs.push_back(parsed.info);
+        // The lighting options' water shaders with their reflection hook (both scales when scaled).
+        if (options.lighting && parsed.info.kind == ShaderKind::Pixel) {
+            const WaterReflectionHook hook = waterReflectionHookFor(parsed.info.ucodeHash);
+            if (hook.enabled()) {
+                ShaderInfo hooked = parsed.info;
+                hooked.waterReflection = hook;
+                if (seen.insert({hooked.ucodeHash, translationInputHash(hooked)}).second) jobs.push_back(hooked);
+                if (options.scaled) {
+                    hooked.renderScaleAware = true;
+                    if (seen.insert({hooked.ucodeHash, translationInputHash(hooked)}).second) jobs.push_back(hooked);
+                }
+            }
+        }
         if (options.scaled && parsed.info.kind == ShaderKind::Pixel) {
             ShaderInfo aware = std::move(parsed.info);
             aware.renderScaleAware = true;

@@ -424,6 +424,15 @@ void ShaderRecompiler::recompile(const TextureFetchInstruction& instr, uint32_t 
         println("SamplerState kts = kk_{}SamplerState({});", stage, samplerBinding);
         indent();
         out += "float4 kt = float4(0.0, 0.0, 0.0, 0.0);\n";
+        // The water reflection hook: this fetch's texel becomes the reflection at the traced hit; the
+        // coordinate the game fetched at goes along (its ripples).
+        const bool waterFetch = isPixelShader && instr.opcode == FetchOpcode::TextureFetch &&
+            instr.constIndex < 32 && (input->waterReflection.fetchMask & (1u << instr.constIndex)) != 0;
+        if (waterFetch)
+        {
+            indent();
+            out += "float2 klUv = float2(0.0, 0.0);\n";
+        }
 
         // The sample call for one texture object and coordinate type.
         auto sampleCall = [&](std::string_view object, std::string_view coord, uint32_t gradComponents)
@@ -484,6 +493,11 @@ void ShaderRecompiler::recompile(const TextureFetchInstruction& instr, uint32_t 
                 case FetchOpcode::TextureFetch:
                     indent();
                     println("kt = {};", sampleCall(object, coord, components));
+                    if (waterFetch && components == 2)
+                    {
+                        indent();
+                        println("klUv = {};", coord);
+                    }
                     break;
                 case FetchOpcode::GetTextureComputedLod:
                     indent();
@@ -657,7 +671,14 @@ void ShaderRecompiler::recompile(const TextureFetchInstruction& instr, uint32_t 
         // Ambient-only AO: the ambient term is what this fetch constant's texture gives.
         const bool aoFetch = isPixelShader && instr.opcode == FetchOpcode::TextureFetch &&
             input->ambientOcclusion.kind == RecompilerAmbientTerm::Kind::Fetch && input->ambientOcclusion.index == instr.constIndex;
-        emitFetchResult(instr.dstRegister, instr.dstRegisterAm, instr.dstSwizzle, aoFetch ? "(kt * kkAoMul)" : "kt");
+        std::string fetchValue = aoFetch ? "(kt * kkAoMul)" : "kt";
+        if (waterFetch)
+        {
+            // Once, whatever components the result goes to.
+            indent();
+            println("kt = kl_WaterReflection(kt, klSsr, klUv, {});", dim == TextureDimension::TextureCube ? "false" : "true");
+        }
+        emitFetchResult(instr.dstRegister, instr.dstRegisterAm, instr.dstSwizzle, fetchValue);
         --indentation;
         indent();
         out += "}\n";
@@ -1593,6 +1614,13 @@ bool ShaderRecompiler::recompile(const RecompilerInput& in, std::string_view inc
                "\tif (kk_AoTexture.x == 0u || kk_AoParams.x <= 0.0 || any(p < int2(0, 0)) || any(p >= int2(kk_AoParams.zw)))\n"
                "\t\treturn 1.0;\n\treturn kk_Tex2D[kk_AoTexture.x].Load(int3(p, 0)).x;\n}\n\n";
     }
+    const bool water = isPixelShader && in.waterReflection.enabled();
+    if (water)
+    {
+        // The lighting options' constants (b5) and the hook's functions.
+        out += in.waterReflection.text;
+        out += '\n';
+    }
     if (!in.floatLiterals.empty())
     {
         println("float4 kkConstRel(int index)\n{{\n\tfloat4 v = kk_{}Const(index);", isPixelShader ? "PS" : "VS");
@@ -1679,6 +1707,11 @@ bool ShaderRecompiler::recompile(const RecompilerInput& in, std::string_view inc
             println("\t{} = float4({} * float2(select(iFace, 1.0, -1.0), 1.0), 0.0, 0.0);",
                 reg(uint32_t(in.paramGenRegister), false),
                 in.renderScaleAware ? "(iPos.xy * kk_RenderScale.zw - 0.5)" : "(iPos.xy - 0.5)");
+        // The water reflection hook: the ray is traced here, where control flow is still uniform (it
+        // takes the surface's normal from screen derivatives).
+        if (water)
+            println("\tKLSsr klSsr = kl_WaterTrace(iPos, {});",
+                in.waterReflection.normalMap.empty() ? std::string("float2(0.0, 0.0)") : in.waterReflection.normalMap);
     }
     else
     {
@@ -1706,6 +1739,9 @@ bool ShaderRecompiler::recompile(const RecompilerInput& in, std::string_view inc
             if (ambient && in.ambientOcclusion.kind == RecompilerAmbientTerm::Kind::Output && in.ambientOcclusion.index < 4 &&
                 (pixelOutputs & (1u << in.ambientOcclusion.index)))
                 e.println("{0}oC{1} = oC{1} * kkAoMul;", tabs, in.ambientOcclusion.index);
+            // The water reflection hook on the colour output (a shader without a reflection of its own).
+            if (water && in.waterReflection.output && (pixelOutputs & PIXEL_SHADER_OUTPUT_COLOR0))
+                e.println("{}oC0 = kl_OceanReflection(oC0, klSsr);", tabs);
             if (pixelOutputs & PIXEL_SHADER_OUTPUT_COLOR0)
                 e.println("{}kk_AlphaTest(oC0.w);", tabs);
             if (pixelOutputs & PIXEL_SHADER_OUTPUT_DEPTH)

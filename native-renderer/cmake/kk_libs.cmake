@@ -75,6 +75,15 @@ if(NR_GAME_RENDERER)
         "// Generated from hlsl/kk_common.hlsli.\nnamespace kkshaders {\nextern const char kPreludeText[] = {${_nr_prelude_bytes}0x00};\n}\n")
     configure_file("${CMAKE_CURRENT_BINARY_DIR}/kkshaders_prelude.cpp.new"
         "${CMAKE_CURRENT_BINARY_DIR}/kkshaders_prelude.cpp" COPYONLY)
+    # The lighting options' hook text (hlsl/kk_lighting.hlsli, docs/lighting.md), the same way.
+    set(_nr_lighting "${NR_ROOT}/shaders/hlsl/kk_lighting.hlsli")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_nr_lighting}")
+    file(READ "${_nr_lighting}" _nr_lighting_hex HEX)
+    string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," _nr_lighting_bytes "${_nr_lighting_hex}")
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/kkshaders_lighting.cpp.new"
+        "// Generated from hlsl/kk_lighting.hlsli.\nnamespace kkshaders {\nextern const char kLightingText[] = {${_nr_lighting_bytes}0x00};\n}\n")
+    configure_file("${CMAKE_CURRENT_BINARY_DIR}/kkshaders_lighting.cpp.new"
+        "${CMAKE_CURRENT_BINARY_DIR}/kkshaders_lighting.cpp" COPYONLY)
 
     add_library(kkshaders STATIC
         ${NR_ROOT}/shaders/src/container.cpp
@@ -84,7 +93,9 @@ if(NR_GAME_RENDERER)
         ${NR_ROOT}/shaders/src/vertex_patch.cpp
         ${NR_ROOT}/shaders/src/pack_builder.cpp
         ${NR_ROOT}/shaders/src/ambient.cpp
-        "${CMAKE_CURRENT_BINARY_DIR}/kkshaders_prelude.cpp")
+        ${NR_ROOT}/shaders/src/lighting.cpp
+        "${CMAKE_CURRENT_BINARY_DIR}/kkshaders_prelude.cpp"
+        "${CMAKE_CURRENT_BINARY_DIR}/kkshaders_lighting.cpp")
     target_include_directories(kkshaders PUBLIC ${NR_ROOT}/shaders/include PRIVATE "${_nr_dxc_include}")
     target_link_libraries(kkshaders PUBLIC nr_xenosrecomp ${CMAKE_DL_LIBS})
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")

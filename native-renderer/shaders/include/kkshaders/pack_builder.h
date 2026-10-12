@@ -33,6 +33,9 @@ struct PackStamp {
     std::string dxc;            // dxcIdentity()
     uint64_t database = 0;      // XXH3-64 of xeshaders.bin
     bool scaled = false;        // render scale aware pixel variants included
+    // The lighting options' hooked water shaders included: the hash of their hook's text
+    // (kkshaders/lighting.h), 0 without them. Absent from older stamps (0).
+    uint64_t lighting = 0;
     uint32_t shaders = 0;       // entries in the pack (information only, not compared)
 
     std::string toText() const;
@@ -55,6 +58,7 @@ struct PackBuildOptions {
     std::filesystem::path folder;    // where the pack goes (<cache root>/native-shaders)
     PackBackend backend = PackBackend::Spirv;
     bool scaled = false;             // also the render scale aware pixel shaders
+    bool lighting = false;           // also the lighting options' hooked water shaders (docs/lighting.md)
     unsigned threads = 0;            // 0: one per hardware thread
     bool lowPriority = false;        // worker threads below normal priority (a background build)
     std::string dxc;                 // DXC's folder or library for loadDxc (empty: default search)

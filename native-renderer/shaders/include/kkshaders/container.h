@@ -43,6 +43,7 @@
 #include <vector>
 
 #include "kkshaders/ambient.h"
+#include "kkshaders/lighting.h"
 
 namespace kkshaders {
 
@@ -126,6 +127,9 @@ struct ShaderInfo {
     // Pixel shaders only: the ambient-only AO's term (kkshaders/ambient.h, docs/ao.md). Part of the
     // input hash only when set.
     AmbientTerm ambientOcclusion;
+    // Pixel shaders only: the lighting options' water reflection hook (kkshaders/lighting.h,
+    // docs/lighting.md). Part of the input hash only when set.
+    WaterReflectionHook waterReflection;
 };
 
 struct ParseResult {
