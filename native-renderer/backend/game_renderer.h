@@ -170,6 +170,8 @@ class GameRenderer {
     uint64_t alias_failures = 0;
     double pipeline_ms = 0;         // time spent creating pipelines
     double texture_ms = 0;          // time spent converting and uploading textures
+    double buffer_ms = 0;           // vertex and index buffers: finding, creating and uploading
+    double target_ms = 0;           // render targets and framebuffers: finding and creating
   };
 
   GameRenderer(nvrhi::IDevice* device, const GuestMemory& memory, kknr::GuestMemory physical,

@@ -53,7 +53,8 @@ std::atomic<uint64_t> g_swap_flush_us, g_swap_refresh_us;
 // The slowest frames since the last statistics line (the game thread's interval between two
 // Presents) and where their time went, for finding stutters.
 struct FrameRecord {
-  uint32_t interval_us = 0, renderer_us = 0, present_us = 0, pipeline_wait_us = 0, texture_us = 0;
+  uint32_t interval_us = 0, renderer_us = 0, present_us = 0, pipeline_wait_us = 0, texture_us = 0, buffer_us = 0,
+           target_us = 0;
   uint32_t draws = 0;
 };
 std::mutex g_frames_mutex;
@@ -164,6 +165,10 @@ class LockedSink final : public DrawSink {
       const GameRenderer::Stats& s = g->stats();
       r.pipeline_wait_us = uint32_t((s.pipeline_wait_ms - last_wait_ms_) * 1000.0);
       r.texture_us = uint32_t((s.texture_ms - last_texture_ms_) * 1000.0);
+      r.buffer_us = uint32_t((s.buffer_ms - last_buffer_ms_) * 1000.0);
+      r.target_us = uint32_t((s.target_ms - last_target_ms_) * 1000.0);
+      last_buffer_ms_ = s.buffer_ms;
+      last_target_ms_ = s.target_ms;
       r.draws = uint32_t(s.draws - last_draws_);
       last_wait_ms_ = s.pipeline_wait_ms;
       last_texture_ms_ = s.texture_ms;
@@ -190,7 +195,7 @@ class LockedSink final : public DrawSink {
   std::function<const GameRenderer*()> renderer_game_;
 
  private:
-  double last_wait_ms_ = 0, last_texture_ms_ = 0;
+  double last_wait_ms_ = 0, last_texture_ms_ = 0, last_buffer_ms_ = 0, last_target_ms_ = 0;
   uint64_t last_draws_ = 0;
 
  private:
@@ -709,9 +714,11 @@ void Backend::PresentNow(rex::ui::Presenter* presenter, uint32_t frontbuffer_wid
       std::lock_guard frames_lock(g_frames_mutex);
       std::string text;
       for (const FrameRecord& f : g_worst_frames) {
-        text += fmt::format(" [{:.1f} ms: renderer {:.1f}, present {:.1f}, pipeline waits {:.1f}, textures {:.1f}, {} draws]",
-                            f.interval_us / 1000.0, f.renderer_us / 1000.0, f.present_us / 1000.0,
-                            f.pipeline_wait_us / 1000.0, f.texture_us / 1000.0, f.draws);
+        text += fmt::format(
+            " [{:.1f} ms: renderer {:.1f}, present {:.1f}, pipeline waits {:.1f}, textures {:.1f}, buffers {:.1f}, "
+            "targets {:.1f}, {} draws]",
+            f.interval_us / 1000.0, f.renderer_us / 1000.0, f.present_us / 1000.0, f.pipeline_wait_us / 1000.0,
+            f.texture_us / 1000.0, f.buffer_us / 1000.0, f.target_us / 1000.0, f.draws);
       }
       g_worst_frames.clear();
       REXLOG_INFO("rexgpu-native: slowest frames:{}", text);

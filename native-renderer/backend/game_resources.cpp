@@ -25,6 +25,14 @@ uint64_t TargetKey(bool depth, uint32_t base, uint32_t pitch, uint32_t format) {
          (base & 0xFFF);
 }
 
+// Adds the scope's time to a stats counter (milliseconds).
+struct MsTimer {
+  explicit MsTimer(double& total) : total(total) {}
+  ~MsTimer() { total += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(); }
+  double& total;
+  std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+};
+
 }  // namespace
 
 // ---------------------------------------------------------------- targets
@@ -55,6 +63,7 @@ GameRenderer::Scale GameRenderer::ScaleFor(bool depth, uint32_t pitch, uint32_t 
 
 GameRenderer::HostTarget* GameRenderer::GetTarget(bool depth, uint32_t edram_base, uint32_t pitch,
                                                   uint32_t format, uint32_t height) {
+  MsTimer timer(stats_.target_ms);
   const uint64_t key = TargetKey(depth, edram_base, pitch, format);
   auto& slot = targets_[key];
   if (slot && slot->height >= height) {
@@ -128,6 +137,7 @@ uint64_t GameRenderer::FormatSignature(const std::array<HostTarget*, 4>& colors,
 
 nvrhi::IFramebuffer* GameRenderer::GetFramebuffer(const std::array<HostTarget*, 4>& colors,
                                                   HostTarget* depth) {
+  MsTimer timer(stats_.target_ms);
   uint64_t key = 0xFB;
   for (const HostTarget* c : colors) key = Mix64(key, reinterpret_cast<uintptr_t>(c ? c->texture.Get() : nullptr));
   key = Mix64(key, reinterpret_cast<uintptr_t>(depth ? depth->texture.Get() : nullptr));
@@ -444,6 +454,7 @@ uint32_t GameRenderer::BindSampler(const uint32_t words[6], const kkshaders::Sam
 GameRenderer::HostBuffer* GameRenderer::BindVertexBuffer(nvrhi::ICommandList* cl, uint32_t physical,
                                                          uint32_t bytes, uint32_t used_begin, uint32_t used_end) {
   if (!bytes) return nullptr;
+  MsTimer timer(stats_.buffer_ms);
   const uint8_t* data = physical_.At(physical, bytes);
   if (!data) return nullptr;
   if (options_.dynamic_vertex_buffers) {
@@ -514,6 +525,7 @@ GameRenderer::HostBuffer* GameRenderer::BindVertexBuffer(nvrhi::ICommandList* cl
 GameRenderer::HostBuffer* GameRenderer::BindIndexBuffer(nvrhi::ICommandList* cl, uint32_t physical,
                                                         uint32_t bytes, bool index32) {
   if (!bytes) return nullptr;
+  MsTimer timer(stats_.buffer_ms);
   const uint8_t* data = physical_.At(physical, bytes);
   if (!data) return nullptr;
   kknr::BufferCache::BindResult r =
