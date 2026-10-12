@@ -112,10 +112,14 @@ uint64_t translationInputHash(const ShaderInfo& info) {
     }
     w.u32(info.readsPixelPosition ? 1u + info.pixelPositionRegister : 0u);
     if (info.renderScaleAware && info.kind == ShaderKind::Pixel) w.str("render-scale-aware/1");
+    if (info.ambientOcclusion.enabled() && info.kind == ShaderKind::Pixel)
+        w.str("ambient-occlusion/1 " + formatAmbientTerm(info.ambientOcclusion));
     return XXH3_64bits(w.bytes.data(), w.bytes.size());
 }
 
-TranslateResult translate(const ShaderInfo& info) {
+TranslateResult translate(const ShaderInfo& info) { return translate(info, TranslateOptions{}); }
+
+TranslateResult translate(const ShaderInfo& info, const TranslateOptions& options) {
     TranslateResult result;
 
     RecompilerInput in;
@@ -178,6 +182,15 @@ TranslateResult translate(const ShaderInfo& info) {
     }
 
     in.renderScaleAware = info.renderScaleAware && info.kind == ShaderKind::Pixel;
+    in.annotateAddresses = options.annotateAddresses;
+    if (info.ambientOcclusion.enabled() && info.kind == ShaderKind::Pixel) {
+        const AmbientTerm& t = info.ambientOcclusion;
+        in.ambientOcclusion.kind = RecompilerAmbientTerm::Kind(uint8_t(t.kind));
+        in.ambientOcclusion.index = t.index;
+        in.ambientOcclusion.usage = ::DeclUsage(uint32_t(t.usage));
+        in.ambientOcclusion.address = t.address;
+        in.ambientOcclusion.mask = t.mask;
+    }
 
     ShaderRecompiler recompiler;
     std::string header = "// Translated by kkshaders (XenosRecomp core) from Xbox 360 microcode.\n";

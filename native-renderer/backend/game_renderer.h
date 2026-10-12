@@ -35,6 +35,8 @@
 #include <nvrhi/nvrhi.h>
 
 #include "backend/ambient_occlusion.h"
+#include "backend/ao_config.h"
+#include "backend/scene_ao.h"
 #include "backend/draw_sink.h"
 #include "backend/driver_pipeline_cache.h"
 #include "backend/frame_log.h"
@@ -116,6 +118,10 @@ class GameRenderer {
     // ao_mode / ao_strength applies at once. Unset (or mode 0): off, and nothing
     // of it runs.
     std::function<AoSettings()> ao_settings;
+    // The rest of the AO's settings (ao_config.h, docs/ao.md): method, moment, GTAO quality and
+    // radius, classifier rules, the ambient-only shader list. The default is the AO above as it
+    // always was. Set before Initialize.
+    AoConfig ao;
     // Log every draw of this game frame (-1 none).
     int32_t dump_frame = -1;
     // Debugging aids (bits): 1 the game's clears are green, 2 the frame image
@@ -257,6 +263,11 @@ class GameRenderer {
   // declaration (what the GPU runs and the Xenos log hashes), for the frame log.
   void VertexShaderPatched(uint32_t shader, uint32_t microcode, uint32_t declaration);
   uint64_t PatchedVertexShaderHash(const GameShader& vs, uint32_t declaration, const dev::DeviceView& d);
+
+  // The ambient-only AO's shader list (null unless --native_ao_apply=ambient), for the shader library.
+  std::shared_ptr<const kkshaders::AmbientTable> ao_ambient_table() const;
+  // The GTAO method's state (null with the legacy method; tests and logging).
+  const SceneAo* scene_ao() const { return scene_ao_.get(); }
 
   // The host render targets made so far (tests and debugging).
   struct TargetInfo {
@@ -527,6 +538,31 @@ class GameRenderer {
 
   // Ambient occlusion (null until Initialize, and when its shaders are missing).
   std::unique_ptr<AmbientOcclusion> ao_;
+
+  // ---- ambient occlusion, method gtao (game_ao.cpp, docs/ao.md). The hooks are called from
+  // Initialize, Draw, Clear, Resolve and Present; scene_ao_ is null with the legacy method.
+  void AoLayoutBindings(nvrhi::BindingLayoutDesc& set0) const;  // b4 for the ambient-only shaders
+  bool AoSetBindings(nvrhi::BindingSetDesc& set0);
+  void AoInitialize();
+  AoSettings AoSettingsFor(uint64_t frame);
+  void AoDrawHook(nvrhi::ICommandList* cl, const DrawCall& call, const dev::DeviceView& d,
+                  const std::array<HostTarget*, 4>& colors, HostTarget* depth, const PipelineRecord& record,
+                  const GameShader& vs, const GameShader* ps);
+  void AoWriteAmbientConstants(nvrhi::ICommandList* cl, bool reads);
+  nvrhi::ITexture* AoResolveHook(nvrhi::ICommandList* cl, const AoResolve& r, const AoSettings& s,
+                                 const ResolveCall& call, const HostTarget* source);
+  void AoClearHook(const ClearCall& call, const HostTarget* depth);
+  void AoPresentHook(nvrhi::ICommandList* cl);
+  std::unique_ptr<SceneAo> scene_ao_;
+  nvrhi::BufferHandle ao_constants_;  // b4 (ambient-only)
+  std::array<uint32_t, 8> ao_constants_last_ = {};
+  bool ao_constants_valid_ = false;
+  nvrhi::ICommandList* ao_constants_list_ = nullptr;
+  uint64_t ao_constants_frame_ = 0;
+  uint32_t ao_slot_ = 0;  // the occlusion's slot in the 2D table
+  nvrhi::ITexture* ao_slot_texture_ = nullptr;
+  uint64_t ao_settings_frame_ = UINT64_MAX;
+  AoSettings ao_settings_;
 
   kknr::TextureCache textures_;
   // GPU-written (resolved) textures by base address, for other fetch

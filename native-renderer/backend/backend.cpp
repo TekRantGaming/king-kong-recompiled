@@ -448,7 +448,9 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
     renderer->options().render_scale_y = scale.y;
     renderer->options().shadow_scale = shadow_scale;
     renderer->options().guest_frame_width = width;
+    renderer->options().ao = game.ao;  // before Initialize: the ambient-only AO adds a binding
     if (renderer->Initialize()) {
+      shaders_->SetAmbientOcclusion(renderer->ao_ambient_table());
       renderer->options().element_endian = game.element_endian;
       renderer->options().flip_front_face = game.flip_front_face;
       renderer->options().texture_tail_mips = game.texture_tail_mips;

@@ -1,7 +1,9 @@
 // kkshaders: the shader translator's command-line tool.
 //
 //   kkshaders info <container> [--raw-vs | --raw-ps]
-//   kkshaders translate <container> [-o out.hlsl] [--raw-vs | --raw-ps]
+//   kkshaders translate <container> [-o out.hlsl] [--raw-vs | --raw-ps] [--addresses] [--ambient "<term>"]
+//                      --addresses: each instruction's address as a comment (an ambient term's place);
+//                      --ambient: translated with that ambient-only AO term (kkshaders/ambient.h)
 //   kkshaders compile <container> --dxc <dir> [--out <dir>] [--spirv-val <exe>] [--raw-vs | --raw-ps]
 //   kkshaders db-check <xeshaders.bin>
 //   kkshaders db-build <xeshaders.bin> --dxc <dir> [--out <dir>] [--spirv-val <exe>] [--jobs N] [--limit N] [--both] [--image <image.bin>]
@@ -11,6 +13,12 @@
 //   kkshaders scale-report <xeshaders.bin>
 //   kkshaders xsh <file.xsh> [<file.xsh> ...] --dxc <dir> [--out <dir>] [--spirv-val <exe>] [--jobs N] [--database <xeshaders.bin>]
 //   kkshaders pack-lookup <pack> [<hash> ...]
+//   kkshaders ao-list <xeshaders.bin> [--family <name>] [--term "<term>"] [--list <file>] [-o <file>] [--sources <dir>]
+//                      the ambient-only AO's shader list (docs/ao.md): without --term, each pixel family's
+//                      constants, inputs and samplers (with --family, each shader's); with --family and --term,
+//                      a hash line for every shader of the family (a constant may be named, "constant
+//                      g_vAmbientColor", and is found in each shader's own table); --list expands the family
+//                      lines of a list file; --sources writes the database's HLSL sources to a folder
 //
 // --raw-vs / --raw-ps read the file as bare big-endian microcode (no container).
 // Everything written under --out is derived from the game's files: keep it out of git.
@@ -55,7 +63,8 @@ struct Args {
 };
 
 Args parseArgs(int argc, char** argv, int first) {
-    static const std::set<std::string> withValue = {"-o", "--out", "--dxc", "--spirv-val", "--jobs", "--limit", "--database", "--image"};
+    static const std::set<std::string> withValue = {"-o", "--out", "--dxc", "--spirv-val", "--jobs", "--limit", "--database", "--image",
+                                                    "--ambient", "--family", "--term", "--list", "--sources"};
     Args a;
     for (int i = first; i < argc; i++) {
         std::string s = argv[i];
@@ -223,7 +232,16 @@ int cmdTranslate(const Args& a) {
         std::fprintf(stderr, "%s\n", p.error.c_str());
         return 1;
     }
-    TranslateResult t = translate(p.info);
+    if (!a.get("--ambient").empty()) {
+        std::string why;
+        if (p.info.kind != ShaderKind::Pixel || !parseAmbientTerm(a.get("--ambient"), p.info.ambientOcclusion, &why)) {
+            std::fprintf(stderr, "--ambient: %s\n", p.info.kind != ShaderKind::Pixel ? "pixel shaders only" : why.c_str());
+            return 2;
+        }
+    }
+    TranslateOptions options;
+    options.annotateAddresses = a.has("--addresses");
+    TranslateResult t = translate(p.info, options);
     if (!t.ok) {
         std::fprintf(stderr, "translation failed: %s\n", t.error.c_str());
         return 1;
@@ -967,12 +985,135 @@ int cmdScaleReport(const Args& a) {
     return 0;
 }
 
+// The ambient-only AO's shader list (docs/ao.md, "What the Windows side has to determine").
+int cmdAoList(const Args& a) {
+    if (a.positional.empty()) return 2;
+    Database db;
+    std::string error;
+    if (!db.load(a.positional[0], &error)) {
+        std::fprintf(stderr, "%s\n", error.c_str());
+        return 1;
+    }
+    // --sources: the database's HLSL sources as files, to read how each family adds its ambient light.
+    if (const std::string dir = a.get("--sources"); !dir.empty()) {
+        for (const auto& src : db.sources()) writeFile(fs::path(dir) / src.name, src.text.data(), src.text.size());
+        std::fprintf(stderr, "%zu HLSL sources written to %s\n", db.sources().size(), dir.c_str());
+    }
+    struct Shader {
+        uint64_t hash = 0;
+        ShaderInfo info;
+    };
+    std::map<std::string, std::vector<Shader>> families;
+    std::set<uint64_t> seen;
+    for (const auto& e : db.entries()) {
+        if (e.kind != 2) continue;
+        ParseResult p = db.parse(e);
+        if (!p.ok || !seen.insert(p.info.ucodeHash).second) continue;
+        families[db.familyName(ShaderKind::Pixel, Database::familyIndex(e.pixelKey))].push_back({p.info.ucodeHash, p.info});
+    }
+    // The term for one shader: a constant may be named, then found in the shader's own table.
+    auto termFor = [](const std::string& text, const ShaderInfo& info, AmbientTerm& out, std::string* why) {
+        std::istringstream words(text);
+        std::string kind, name, rest;
+        words >> kind >> name;
+        std::getline(words, rest);
+        if (kind == "constant" && !name.empty() && name[0] != 'c') {
+            for (const auto& c : info.constants) {
+                if (c.registerSet == RegisterSet::Float4 && c.name == name)
+                    return parseAmbientTerm("constant c" + std::to_string(c.registerIndex) + rest, out, why);
+            }
+            if (why) *why = "no constant " + name;
+            return false;
+        }
+        return parseAmbientTerm(text, out, why);
+    };
+    std::string text;
+    auto line = [&](uint64_t hash, const std::string& family, const AmbientTerm& t) {
+        text += hex16(hash) + " " + formatAmbientTerm(t) + "   # " + family + "\n";
+    };
+    auto expand = [&](const std::string& family, const std::string& termText) {
+        auto it = families.find(family);
+        if (it == families.end()) {
+            std::fprintf(stderr, "no pixel family %s\n", family.c_str());
+            return false;
+        }
+        int written = 0, skipped = 0;
+        for (const Shader& sh : it->second) {
+            AmbientTerm t;
+            std::string why;
+            if (termFor(termText, sh.info, t, &why)) {
+                line(sh.hash, family, t);
+                written++;
+            } else {
+                skipped++;
+            }
+        }
+        std::fprintf(stderr, "%s: %d shaders listed, %d without that term\n", family.c_str(), written, skipped);
+        return true;
+    };
+    const std::string family = a.get("--family"), term = a.get("--term"), list = a.get("--list");
+    if (!list.empty()) {
+        std::ifstream f(list);
+        std::stringstream all;
+        all << f.rdbuf();
+        std::vector<std::string> errors;
+        // Family lines keep their term's text (a named constant is resolved per shader).
+        std::istringstream lines(all.str());
+        for (std::string l; std::getline(lines, l);) {
+            std::string bare = l.substr(0, l.find('#'));
+            std::istringstream w(bare);
+            std::string first, name, rest;
+            if (!(w >> first)) continue;
+            if (first != "family") {
+                text += l + "\n";
+                continue;
+            }
+            w >> name;
+            std::getline(w, rest);
+            if (!expand(name, rest)) return 1;
+        }
+    } else if (!family.empty() && !term.empty()) {
+        if (!expand(family, term)) return 1;
+    } else {
+        // What the lighting shaders have, to choose a term: per family (or per shader of one family) the
+        // float constants by name and register, the interpolated inputs, the samplers.
+        for (const auto& [name, shaders] : families) {
+            if (!family.empty() && name != family) continue;
+            std::map<std::string, int> constants, inputs, samplers;
+            for (const Shader& sh : shaders) {
+                std::string mine;
+                for (const auto& c : sh.info.constants) {
+                    static const char* kSets[] = {"b", "i", "c", "s"};  // bool, int4, float4, sampler
+                    const char* set = kSets[uint32_t(c.registerSet) & 3];
+                    const std::string k = c.name + " " + set + std::to_string(c.registerIndex);
+                    if (c.registerSet == RegisterSet::Float4) constants[k]++;
+                    if (c.registerSet == RegisterSet::Sampler) samplers[k]++;
+                    mine += " " + k;
+                }
+                for (const auto& i : sh.info.interpolators) {
+                    const char* u = i.usage == DeclUsage::Color ? "color" : (i.usage == DeclUsage::TexCoord ? "texcoord" : "other");
+                    inputs[std::string(u) + std::to_string(i.usageIndex)]++;
+                }
+                if (!family.empty()) text += hex16(sh.hash) + "  #" + mine + "\n";
+            }
+            text += "# " + name + ": " + std::to_string(shaders.size()) + " pixel shaders\n";
+            for (const auto& [k, n] : constants) text += "#   constant " + k + " x " + std::to_string(n) + "\n";
+            for (const auto& [k, n] : inputs) text += "#   input " + k + " x " + std::to_string(n) + "\n";
+            for (const auto& [k, n] : samplers) text += "#   sampler " + k + " x " + std::to_string(n) + "\n";
+        }
+    }
+    const std::string out = a.get("-o");
+    if (out.empty()) std::fwrite(text.data(), 1, text.size(), stdout);
+    else writeFile(out, text.data(), text.size());
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     if (argc < 2) {
         std::fprintf(stderr,
-                     "usage: kkshaders info|translate|compile|db-check|vfetch-check|db-build|db-structure|scale-report|xsh|pack-lookup ...\n"
+                     "usage: kkshaders info|translate|compile|db-check|vfetch-check|db-build|db-structure|scale-report|xsh|pack-lookup|ao-list ...\n"
                      "(see the comment at the top of tool/main.cpp)\n");
         return 2;
     }
@@ -988,6 +1129,7 @@ int main(int argc, char** argv) {
     if (command == "scale-report") return cmdScaleReport(a);
     if (command == "xsh") return cmdXsh(a);
     if (command == "pack-lookup") return cmdPackLookup(a);
+    if (command == "ao-list") return cmdAoList(a);
     std::fprintf(stderr, "unknown command %s\n", command.c_str());
     return 2;
 }

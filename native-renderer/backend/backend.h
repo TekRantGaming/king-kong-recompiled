@@ -21,6 +21,7 @@
 #include <string>
 
 #include "backend/ambient_occlusion.h"
+#include "backend/ao_config.h"
 #include "backend/draw_state.h"
 #include "backend/guest_memory.h"
 #include "backend/host_device.h"
@@ -91,6 +92,9 @@ struct GameSettings {
   // Ambient occlusion settings, read at every resolve (null: off). The plugin reads ao_mode and
   // ao_strength, the Xenos plugin's cvars.
   std::function<AoSettings()> ao_settings;
+  // The rest of the AO's settings (docs/ao.md): --native_ao_method, _apply, _quality, _radius, and
+  // the rules and shader list files. The default is today's AO.
+  AoConfig ao;
 };
 
 class Backend {

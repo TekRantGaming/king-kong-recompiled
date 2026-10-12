@@ -50,6 +50,20 @@ struct RecompilerInterpolator
     uint32_t reg = 0;
 };
 
+// Ambient-only ambient occlusion (kkshaders AmbientTerm, docs/ao.md): one term of a pixel shader
+// that is multiplied by the occlusion of the pixel (an R32F texture of the bindless 2D table,
+// named by the KKAmbientOcclusion buffer, b4).
+struct RecompilerAmbientTerm
+{
+    enum class Kind : uint8_t { None, Output, Constant, Interpolator, Fetch, Register };
+    Kind kind = Kind::None;
+    uint32_t index = 0;           // Output: colour target; Constant: c<index>; Fetch: texture fetch
+                                  // constant; Register: r<index>; Interpolator: the usage index
+    DeclUsage usage = DeclUsage::Color;  // Interpolator: TEXCOORD or COLOR
+    uint32_t address = 0;         // Register: multiplied after the instruction at this address
+    uint32_t mask = 0x7;          // components multiplied (bit 0 x / red ... bit 3 w / alpha)
+};
+
 struct RecompilerInput
 {
     bool isPixelShader = false;
@@ -73,6 +87,12 @@ struct RecompilerInput
     // read with GetDimensions are brought back to guest units through the KKScaleConstants
     // buffer (b3). Off: the output is byte for byte what it was before this existed.
     bool renderScaleAware = false;
+    // Pixel shaders: the ambient term multiplied by the occlusion. None: the output is byte for byte
+    // what it was before this existed.
+    RecompilerAmbientTerm ambientOcclusion;
+    // Debugging (the kkshaders tool): a comment with each instruction's address, which names the
+    // place of an ambient term of kind Register. Never set for shaders that are built.
+    bool annotateAddresses = false;
 };
 
 // What the backend binds for a shader (see kkshaders abi.h).

@@ -62,6 +62,10 @@ class ShaderLibrary {
   // Pixel shaders are translated render scale aware (the scaled variants of a pack). Set before
   // any shader is created.
   void SetRenderScaleAware(bool aware) { scale_aware_ = aware; }
+  // Ambient-only AO (docs/ao.md): pixel shaders on this list are translated with their ambient term
+  // multiplied by the occlusion (they are not in the pack: DXC compiles them). Set before any shader
+  // is created; null: none.
+  void SetAmbientOcclusion(std::shared_ptr<const kkshaders::AmbientTable> table) { ambient_ = std::move(table); }
 
   // A shader was created: kind 0 vertex, 1 pixel.
   void OnCreated(uint32_t kind, uint32_t container, uint32_t object);
@@ -93,6 +97,12 @@ class ShaderLibrary {
   std::unique_ptr<kkshaders::Compiler> compiler_;
   bool dxc_ok_ = false;
   bool scale_aware_ = false;
+  std::shared_ptr<const kkshaders::AmbientTable> ambient_;
+  // The ambient-only term of a pixel shader, if it is on the list.
+  void ApplyAmbient(kkshaders::ShaderInfo& info) const {
+    if (!ambient_ || info.kind != kkshaders::ShaderKind::Pixel) return;
+    if (const kkshaders::AmbientTerm* t = ambient_->find(info.ucodeHash)) info.ambientOcclusion = *t;
+  }
 
   mutable std::mutex mutex_;
   // Object address -> shader (addresses are reused after a release; a new

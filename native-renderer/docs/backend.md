@@ -21,6 +21,7 @@ states, render targets and resolves. On Windows with Vulkan **all 13 golden scen
 | `backend/driver_pipeline_cache.h`, `vk_pipeline_cache.*` | the driver's pipeline cache kept in a file (Vulkan) | Vulkan-Headers |
 | `backend/pipeline_prewarm.*` | the game's pipelines made on a device of their own before the game (the launcher's prewarm) | NVRHI, `kkshaders` |
 | `backend/guest_device.h` | the D3D device struct's register images, shadows and fields the game renderer reads | nothing |
+| `backend/ao_classifier.*`, `ao_camera.*`, `ao_config.*`, `gtao.*`, `scene_ao.*`, `game_ao.cpp` | Phase 3: the GTAO ambient occlusion at the end of the opaque pass (`ao.md`) | NVRHI, `kkshaders` |
 | `cmake/kk_libs.cmake` | the resources and shader libraries built into the plugin | the SDK (fmt, xxHash, dxcapi.h) |
 | `backend/vulkan_dispatch.*` | the vulkan.hpp dispatcher NVRHI's static Vulkan backend needs | Vulkan-Headers |
 | `backend/host_device.h`, `vulkan_host.cpp`, `d3d12_host.cpp`, `backend.*` | NVRHI on the SDK provider's device, frame hand-over to the presenter | SDK |
@@ -650,6 +651,10 @@ change alone raised V-Rex's unlimited 1% low to 110-120 (`runs\perfC-four3-r0`).
 
 
 ## Ambient occlusion (session F)
+
+Phase 3 adds a second method, XeGTAO worked out at the end of the opaque pass so water, smoke, particles and fog
+draw over it unaffected, and an ambient-only mode inside the lighting shaders: `ao.md`. The defaults keep the AO
+described here.
 
 The native renderer has the same screen-space AO as the Xenos plugin (patches 0004 to 0007 in
 `tools/rexglue-patches`). Code: `backend/ambient_occlusion.{h,cpp}`, shaders:

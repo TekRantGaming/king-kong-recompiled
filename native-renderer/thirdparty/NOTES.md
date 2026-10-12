@@ -7,6 +7,7 @@ Vendored copies (exported with `git archive`, no `.git` data), each with its own
 | `nvrhi/` | https://github.com/NVIDIA-RTX/NVRHI | 6b96fb03e07539f08327aea76c56d55f1de9d906 (2026-10-05) | MIT (`nvrhi/LICENSE.txt`; `ThirdPartyLicenses.txt` for what it bundles) |
 | `DirectX-Headers/` | https://github.com/microsoft/DirectX-Headers | v1.717.0-preview, d873b344dc540898868697245f100c2a67fe68d9 (2025-05-28): only `include/directx/*.h`, `include/dxguids`, `include/wsl`, `src/dxguids.cpp` | MIT (`DirectX-Headers/LICENSE`) |
 | `XenosRecomp/` | https://github.com/hedge-dev/XenosRecomp | 990d03b28a27b50277ee5d8d942e1c5f873869d1 (2025-08-03) | MIT (`XenosRecomp/LICENSE.md`) |
+| `XeGTAO/` | https://github.com/GameTechDev/XeGTAO | a5b1686c7ea37788eeb3576b5be47f7c03db532c (2024-04-22), XeGTAO 1.30: only `LICENSE` and `Source/Rendering/Shaders/XeGTAO.h`, `XeGTAO.hlsli`, `vaGTAO.hlsl` (the sample's entry points, kept for reference, not compiled) | MIT (`XeGTAO/LICENSE`) |
 
 Not vendored:
 
@@ -67,3 +68,16 @@ Changes we make to vendored code are kept as small as possible and listed here:
   `Device::getRootSignature` and `RootSignature::~RootSignature`, so D3D12 pipelines can be made on several
   threads (the game renderer's pipeline workers) as on Vulkan. Before it, the renderer made D3D12 pipelines on the
   draw thread.
+- `XenosRecomp/XenosRecomp/shader_recompiler.{h,cpp}` (Phase 3, ambient-only AO, `docs/ao.md`):
+  `RecompilerInput::ambientOcclusion` (kind None: byte-identical output, checked on the 1,557 corpus
+  translations). Set, a pixel shader declares the `KKAmbientOcclusion` buffer (b4) and `kk_AmbientOcclusion`,
+  reads the occlusion once (`kkAoMul`) and multiplies one term by it: its colour output, every direct read of a
+  constant, an interpolated input, the result of one fetch constant's texture fetches, or a register after one
+  instruction. `RecompilerInput::annotateAddresses` (the tool's `translate --addresses` only) writes each
+  instruction's address as a comment.
+- `XeGTAO/` (Phase 3, ambient occlusion, `docs/ao.md`): not changed. `backend/shaders/gtao.hlsl` includes
+  `XeGTAO.hlsli` as it is and adapts it from outside: `XE_GTAO_USE_HALF_FLOAT_PRECISION 0` and `XE_GTAO_FP32_DEPTHS`
+  (32-bit depth everywhere), `VA_SATURATE` defined as `saturate`, and `unorm` defined away before the include, so
+  the edges image is a plain `float` image (R32_FLOAT) on both APIs. R32 formats are the ones every Vulkan device
+  can store to without `shaderStorageImageExtendedFormats`. The C++ side uses only `XeGTAO.h`'s `GTAOConstants`
+  struct for the constant buffer layout.

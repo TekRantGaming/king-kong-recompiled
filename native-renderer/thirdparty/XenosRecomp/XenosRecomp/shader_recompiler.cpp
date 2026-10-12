@@ -180,9 +180,13 @@ std::string ShaderRecompiler::floatConstant(uint32_t index, bool addressed, bool
             return fmt::format("kkConstRel({} + {})", index, a0Relative ? "a0" : "aL");
         return fmt::format("kk_{}Const({} + {})", stage, index, a0Relative ? "a0" : "aL");
     }
-    if (input->floatLiterals.count(index))
-        return fmt::format("kkLiteral{}", index);
-    return fmt::format("kk_{}[{}]", isPixelShader ? "PC" : "VC", index);
+    std::string direct = input->floatLiterals.count(index) ? fmt::format("kkLiteral{}", index)
+                                                            : fmt::format("kk_{}[{}]", isPixelShader ? "PC" : "VC", index);
+    // Ambient-only AO: the ambient term is this constant (direct reads; relative ones are not).
+    if (isPixelShader && input->ambientOcclusion.kind == RecompilerAmbientTerm::Kind::Constant &&
+        input->ambientOcclusion.index == index)
+        return fmt::format("({} * kkAoMul)", direct);
+    return direct;
 }
 
 // A float comparison as HLSL. Not-equal is unordered on Xenos (true for NaN, as the SDK's
@@ -650,7 +654,10 @@ void ShaderRecompiler::recompile(const TextureFetchInstruction& instr, uint32_t 
         }
         }
 
-        emitFetchResult(instr.dstRegister, instr.dstRegisterAm, instr.dstSwizzle, "kt");
+        // Ambient-only AO: the ambient term is what this fetch constant's texture gives.
+        const bool aoFetch = isPixelShader && instr.opcode == FetchOpcode::TextureFetch &&
+            input->ambientOcclusion.kind == RecompilerAmbientTerm::Kind::Fetch && input->ambientOcclusion.index == instr.constIndex;
+        emitFetchResult(instr.dstRegister, instr.dstRegisterAm, instr.dstSwizzle, aoFetch ? "(kt * kkAoMul)" : "kt");
         --indentation;
         indent();
         out += "}\n";
@@ -1425,6 +1432,11 @@ void ShaderRecompiler::emitInstructions(uint32_t address, uint32_t count, uint32
             uint32_t dwords[3];
         };
         std::memcpy(dwords, &input->ucode[(address + i) * 3], sizeof(dwords));
+        if (input->annotateAddresses)
+        {
+            indent();
+            println("// @{} {}", address + i, (sequence & 1) ? "fetch" : "alu");
+        }
         if (sequence & 1)
         {
             if (vfetch.opcode == FetchOpcode::VertexFetch)
@@ -1435,6 +1447,13 @@ void ShaderRecompiler::emitInstructions(uint32_t address, uint32_t count, uint32
         else
         {
             recompile(alu);
+        }
+        // Ambient-only AO: the ambient term is this register as this instruction leaves it.
+        if (isPixelShader && input->ambientOcclusion.kind == RecompilerAmbientTerm::Kind::Register &&
+            input->ambientOcclusion.address == address + i)
+        {
+            indent();
+            println("{0} = {0} * kkAoMul;", reg(input->ambientOcclusion.index, false));
         }
         // An instruction that sets p0 ends the run sharing one predicate test.
         if (predicateChanged)
@@ -1564,6 +1583,16 @@ bool ShaderRecompiler::recompile(const RecompilerInput& in, std::string_view inc
         out += "cbuffer KKScaleConstants : register(b3, space0)\n{\n\tfloat4 kk_RenderScale;\n\tfloat4 kk_TexInvScale[32];\n};\n\n";
         out += "uint2 kk_GuestSize(uint2 hostSize, uint slot)\n{\n\treturn uint2(float2(hostSize) * kk_TexInvScale[slot].xy + 0.5);\n}\n\n";
     }
+    const bool ambient = isPixelShader && in.ambientOcclusion.kind != RecompilerAmbientTerm::Kind::None;
+    if (ambient)
+    {
+        // b4: x = the occlusion's descriptor index in kk_Tex2D (0: none), yz = where its picture
+        // starts in the target (host pixels); params x = 1 to apply it, zw = the picture's size.
+        out += "cbuffer KKAmbientOcclusion : register(b4, space0)\n{\n\tuint4 kk_AoTexture;\n\tfloat4 kk_AoParams;\n};\n\n";
+        out += "float kk_AmbientOcclusion(float4 pos)\n{\n\tint2 p = int2(pos.xy) - int2(kk_AoTexture.yz);\n"
+               "\tif (kk_AoTexture.x == 0u || kk_AoParams.x <= 0.0 || any(p < int2(0, 0)) || any(p >= int2(kk_AoParams.zw)))\n"
+               "\t\treturn 1.0;\n\treturn kk_Tex2D[kk_AoTexture.x].Load(int3(p, 0)).x;\n}\n\n";
+    }
     if (!in.floatLiterals.empty())
     {
         println("float4 kkConstRel(int index)\n{{\n\tfloat4 v = kk_{}Const(index);", isPixelShader ? "PS" : "VS");
@@ -1607,6 +1636,13 @@ bool ShaderRecompiler::recompile(const RecompilerInput& in, std::string_view inc
     out += "\tint a0 = 0;\n\tint aL = 0;\n\tint kkRawAL = 0;\n\tbool p0 = false;\n\tfloat ps = 0.0;\n";
     out += "\tuint vfIndex = 0;\n\tuint vfBinding = 0;\n\tuint vfStride = 0;\n\tfloat kkTexLod = 0.0;\n\tfloat3 kkGradH = 0.0;\n\tfloat3 kkGradV = 0.0;\n";
     out += "\tfloat4 oMemExport = 0.0;\n";
+    if (ambient)
+    {
+        const uint32_t m = in.ambientOcclusion.mask;
+        out += "\tfloat kkAo = kk_AmbientOcclusion(iPos);\n";
+        println("\tfloat4 kkAoMul = float4({}, {}, {}, {});", (m & 1) ? "kkAo" : "1.0", (m & 2) ? "kkAo" : "1.0",
+            (m & 4) ? "kkAo" : "1.0", (m & 8) ? "kkAo" : "1.0");
+    }
 
     if (isPixelShader)
     {
@@ -1614,10 +1650,16 @@ bool ShaderRecompiler::recompile(const RecompilerInput& in, std::string_view inc
             if (pixelOutputs & (1u << i))
                 println("\toC{} = 0.0;", i);
         out += "\tfloat4 oDepthV = float4(iPos.z, 0.0, 0.0, 0.0);\n";
+        // Ambient-only AO of kind Interpolator: that semantic's value arrives multiplied.
+        auto aoInterpolator = [&](DeclUsage usage, uint32_t usageIndex)
+            {
+                const auto& t = in.ambientOcclusion;
+                return ambient && t.kind == RecompilerAmbientTerm::Kind::Interpolator && t.usage == usage && t.index == usageIndex;
+            };
         if (in.rawInterpolators)
         {
             for (uint32_t i = 0; i < 16; i++)
-                println("\t{} = {};", reg(i, false), slotName(false, i));
+                println("\t{} = {}{};", reg(i, false), slotName(false, i), aoInterpolator(DeclUsage::TexCoord, i) ? " * kkAoMul" : "");
         }
         else
         {
@@ -1629,7 +1671,8 @@ bool ShaderRecompiler::recompile(const RecompilerInput& in, std::string_view inc
                     fail(fmt::format("unsupported interpolator semantic {}{}", usageName(interp.usage), interp.usageIndex));
                     return false;
                 }
-                println("\t{} = {};", reg(interp.reg, false), slotName(false, uint32_t(slot)));
+                println("\t{} = {}{};", reg(interp.reg, false), slotName(false, uint32_t(slot)),
+                    aoInterpolator(interp.usage, interp.usageIndex) ? " * kkAoMul" : "");
             }
         }
         if (in.paramGenRegister >= 0)
@@ -1658,6 +1701,11 @@ bool ShaderRecompiler::recompile(const RecompilerInput& in, std::string_view inc
         std::string tabs(indentation, '\t');
         if (isPixelShader)
         {
+            // Ambient-only AO of kind Output: the colour written to that target (before the alpha
+            // test, which the default mask leaves alone).
+            if (ambient && in.ambientOcclusion.kind == RecompilerAmbientTerm::Kind::Output && in.ambientOcclusion.index < 4 &&
+                (pixelOutputs & (1u << in.ambientOcclusion.index)))
+                e.println("{0}oC{1} = oC{1} * kkAoMul;", tabs, in.ambientOcclusion.index);
             if (pixelOutputs & PIXEL_SHADER_OUTPUT_COLOR0)
                 e.println("{}kk_AlphaTest(oC0.w);", tabs);
             if (pixelOutputs & PIXEL_SHADER_OUTPUT_DEPTH)

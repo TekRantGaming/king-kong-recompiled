@@ -42,6 +42,8 @@
 #include <string>
 #include <vector>
 
+#include "kkshaders/ambient.h"
+
 namespace kkshaders {
 
 enum class ShaderKind : uint8_t { Vertex = 0, Pixel = 1 };
@@ -121,6 +123,9 @@ struct ShaderInfo {
     // Pixel shaders only: translate for a render scale other than 1 (see translator.h). Part of
     // the input hash only when set, so every hash of a 1:1 shader is what it always was.
     bool renderScaleAware = false;
+    // Pixel shaders only: the ambient-only AO's term (kkshaders/ambient.h, docs/ao.md). Part of the
+    // input hash only when set.
+    AmbientTerm ambientOcclusion;
 };
 
 struct ParseResult {
