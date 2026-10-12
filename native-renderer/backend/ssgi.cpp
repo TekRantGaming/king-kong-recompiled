@@ -128,7 +128,7 @@ bool Ssgi::Initialize() {
   bd.byteSize = sizeof(Constants);
   bd.isConstantBuffer = true;
   bd.isVolatile = true;
-  bd.maxVersions = 256;
+  bd.maxVersions = 1024;  // up to six writes a frame (the blur passes write their step)
   bd.debugName = "GI constants";
   constants_ = device_->createBuffer(bd);
   ready_ = composite_layout_ && point_clamp_ && linear_clamp_ && constants_;

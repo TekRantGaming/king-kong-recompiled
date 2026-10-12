@@ -48,6 +48,9 @@ if(NR_HAS_VULKAN)
     add_test(NAME nr_gtao_tests
              COMMAND ${Python3_EXECUTABLE} -I "${CMAKE_CURRENT_SOURCE_DIR}/check_validation.py"
                      $<TARGET_FILE:nr_gtao_tests>)
+    # The screen-space GI's GPU time per level (docs/gi.md, "Cost"): a bench, not a test.
+    add_executable(nr_ssgi_bench ssgi_bench.cpp vk_test_device.cpp readback.cpp)
+    target_link_libraries(nr_ssgi_bench PRIVATE nr_renderer nr_hooks ${CMAKE_DL_LIBS})
     # Prefer lavapipe when several Vulkan drivers are installed.
     set(_lvp "/usr/share/vulkan/icd.d/lvp_icd.json")
     if(EXISTS "${_lvp}")

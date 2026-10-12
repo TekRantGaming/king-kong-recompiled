@@ -10,6 +10,7 @@ settings show the same moment of the same chapter (the game's own frames, KK_DEV
 
   python -I gigen.py            write gi_tour.json beside this file
   python -I gigen.py --check    print the chapters with their start times and the launch's length
+  python -I gigen.py --short    write gi_short.json: Skull Island, V-Rex and The Cave only (the beta's sheets)
 
 Run it with tests/run.ps1 -ScenesFile native-renderer/tests/gi_tour.json -Scenes gi -NoCompare.
 """
@@ -54,10 +55,11 @@ def fmt(t: float) -> str:
     return f"{round(t, 1):.1f}".rstrip("0").rstrip(".")
 
 
-def build():
+def build(order=None):
     presses = [(12.0, "A"), (18.0, "A"), (24.0, "A")]
     t, cursor, scenes = FIRST_SELECT, 0, []
-    for n, idx in enumerate(ORDER):
+    order = order or ORDER
+    for n, idx in enumerate(order):
         slug, moment, what, why = CHAPTERS[idx]
         moves = idx - cursor
         button = "RIGHT" if moves > 0 else "LEFT"
@@ -82,7 +84,7 @@ def build():
             "golden_times": [],
             "thresholds": {"mae": None, "ssim": None, "tile_mae": None, "bad": None, "min_pass": 0.6},
         })
-        if n == len(ORDER) - 1:
+        if n == len(order) - 1:
             end = start + stay
             break
         q = start + stay
@@ -97,9 +99,12 @@ def build():
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--check", action="store_true")
-    p.add_argument("--out", default=str(HERE / "gi_tour.json"))
+    p.add_argument("--short", action="store_true")
+    p.add_argument("--out", default="")
     a = p.parse_args(argv)
-    script, scenes, end = build()
+    if not a.out:
+        a.out = str(HERE / ("gi_short.json" if a.short else "gi_tour.json"))
+    script, scenes, end = build([1, 8, 23] if a.short else None)
     if a.check:
         for s in scenes:
             print(f"{s['name']:24s} start {s['chapter_start']:6.1f}  shots {s['times']}")

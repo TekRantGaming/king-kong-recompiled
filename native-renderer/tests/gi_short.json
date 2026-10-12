@@ -1,0 +1,121 @@
+{
+ "version": 1,
+ "about": "The global illumination's chapters (written by tests/gigen.py, do not edit by hand). Times are seconds after the save menu opens. See docs/gi.md.",
+ "defaults": {
+  "args": [
+   "--kk_launcher=false",
+   "--kk_frame_rate=30",
+   "--kk_cheats=true",
+   "--kk_cheat_chapters=true",
+   "--fullscreen=false",
+   "--window_width=1280",
+   "--window_height=720",
+   "--kk_original_look=true",
+   "--log_max_file_size_mb=500"
+  ],
+  "plugin_args": {
+   "native": [
+    "--native_pipeline_cache=false",
+    "--native_pipeline_list=false",
+    "--native_vk_pipeline_cache=false"
+   ]
+  },
+  "env": {
+   "KK_DEV_AUTOSKIP": "1"
+  },
+  "clock_offset": {
+   "menu": 7.7,
+   "boot": 1.0
+  },
+  "startup_allowance": 60,
+  "thresholds": {
+   "mae": 1.0,
+   "ssim": 0.99,
+   "tile_mae": 2.0,
+   "bad": 0.0002,
+   "bad_level": 40,
+   "env_tol": 16,
+   "env_radius": 2,
+   "env_anim_level": 16,
+   "env_bad": 0.002,
+   "env_tile": 1.5,
+   "drawlog": 0.98,
+   "min_pass": 1.0,
+   "env_flash_level": null
+  }
+ },
+ "runs": {
+  "gi": {
+   "from": "menu",
+   "script": "12:A,18:A,24:A,30:RIGHT,32.6:A,36.6:SKIP,38.6:SKIP,40.6:SKIP,42.6:SKIP,44.6:SKIP,46.6:SKIP,48.6:SKIP,50.6:SKIP,52.6:SKIP,54.6:SKIP,56.6:SKIP,58.6:SKIP,60.6:SKIP,62.6:SKIP,64.6:START,66.1:UP,66.6:UP,67.1:UP,67.6:UP,68.1:UP,68.6:UP,69.1:UP,70.1:A,72.1:A,77.6:RIGHT,78.2:RIGHT,78.8:RIGHT,79.4:RIGHT,80:RIGHT,80.6:RIGHT,81.2:RIGHT,83.8:A,87.8:SKIP,89.8:SKIP,91.8:SKIP,93.8:SKIP,95.8:SKIP,97.8:SKIP,99.8:SKIP,101.8:SKIP,103.8:SKIP,105.8:SKIP,107.8:SKIP,109.8:SKIP,111.8:SKIP,113.8:SKIP,115.8:SKIP,117.8:SKIP,119.8:SKIP,121.8:SKIP,123.8:SKIP,127.8:START,129.3:UP,129.8:UP,130.3:UP,130.8:UP,131.3:UP,131.8:UP,132.3:UP,133.3:A,135.3:A,140.8:RIGHT,141.4:RIGHT,142:RIGHT,142.6:RIGHT,143.2:RIGHT,143.8:RIGHT,144.4:RIGHT,145:RIGHT,145.6:RIGHT,146.2:RIGHT,146.8:RIGHT,147.4:RIGHT,148:RIGHT,148.6:RIGHT,149.2:RIGHT,151.8:A,155.8:SKIP,157.8:SKIP,159.8:SKIP,161.8:SKIP,163.8:SKIP,165.8:SKIP,167.8:SKIP,169.8:SKIP,171.8:SKIP,173.8:SKIP,175.8:SKIP,177.8:SKIP,179.8:SKIP,181.8:SKIP,183.8:SKIP",
+   "env": {
+    "KK_DEV_FREEZE_SKIP": "10"
+   }
+  }
+ },
+ "scenes": [
+  {
+   "name": "gi01_skull_island",
+   "run": "gi",
+   "chapter": 1,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 1: Ann's face leaning over Jack on the beach, the opening that waits for the player (faces, sand, jungle)",
+   "chapter_start": 32.6,
+   "times": [
+    60.6,
+    61.1,
+    61.6
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "gi08_vrex",
+   "run": "gi",
+   "chapter": 8,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 8: Jack in the rain under the cave roof, random lightning (rain, rock, grass, the legacy AO's home scene)",
+   "chapter_start": 83.8,
+   "times": [
+    123.8,
+    124.3,
+    124.8
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "gi23_the_cave",
+   "run": "gi",
+   "chapter": 23,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 23: a dark wooden scaffold over a pool, figures behind it (a cave)",
+   "chapter_start": 151.8,
+   "times": [
+    181.8,
+    182.3,
+    182.8
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  }
+ ]
+}
