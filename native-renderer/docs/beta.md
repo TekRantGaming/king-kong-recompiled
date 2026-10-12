@@ -98,14 +98,14 @@ the runtime then prepares again as they play: not useful, and not easy to make s
 Also fixed on the way: B while a Home side panel (Steam, Discord) had the focus opened the Quit pop-up (the global
 Back ran first); it now goes back to the menu, as the footer said.
 
-### 3. Display > Window mode, Resolution and Refresh rate (Beta 1.1)
+### 3. Display > Window mode, Resolution and Refresh rate (Beta 2)
 
 **Window mode** is Windowed (`fullscreen` off), Borderless (`fullscreen` on, `kk_fullscreen_mode` `desktop`: a
 window at the desktop's resolution, as v1.9.11's fullscreen) or Fullscreen (`kk_fullscreen_mode` a mode). Each shows
 its own size rows: Windowed the Window size, Fullscreen **Resolution** (the monitor's sizes) and **Refresh rate**
 (that size's rates, highest first), Borderless none. Choosing Fullscreen starts at the desktop's own mode
 (`rex::ui::GetDesktopDisplayMode`). The launcher itself stays borderless in Fullscreen; the screen changes when the
-game starts. Since Beta 1.1 the Display page also has **Frame rate** (from Gameplay) with VSync, and **Upscaling**
+game starts. Since Beta 2 the Display page also has **Frame rate** (from Gameplay) with VSync, and **Upscaling**
 (Upscaler, Upscaler mode or Render quality, Internal resolution: from Graphics); the Reset page lists moved with
 them. The list is the display's fullscreen modes (the Monitor setting's display, in SDL's order as the SDK
 uses it, or the window's for Default), from 1280 x 720 up, each size once; a rate a hair under a whole one (59.94,
@@ -135,7 +135,7 @@ covers the screen into exclusive fullscreen by themselves (the stable version pr
 SDK patch 0016 enables the extension (with `VK_KHR_get_surface_capabilities2` on the instance) and creates the
 swapchain with `VK_FULL_SCREEN_EXCLUSIVE_DISALLOWED_EXT`; `--vulkan_allow_fullscreen_exclusive` turns it back.
 
-### 4. Beta 1.1: Discord status, GTAO only, no Supersampling
+### 4. Beta 2: Discord status, GTAO only, no Supersampling
 
 - **Discord status** (About > Launcher, `kk_discord_status`, on): Rich Presence through the Discord app's local
   connection (`kk/src/discord_presence.*`, the named pipe `discord-ipc-N`; a Unix socket on Linux), no Discord SDK.
@@ -157,10 +157,10 @@ swapchain with `VK_FULL_SCREEN_EXCLUSIVE_DISALLOWED_EXT`; `--vulkan_allow_fullsc
 | Setting | Values (default first) | Where | Notes |
 |---|---|---|---|
 | `kk_renderer` | `native`, `classic` | `settings.cpp`, Graphics > Advanced > Renderer | at start `ApplyRendererChoice` (`launcher.cpp`, called from `OnPreSetup`) sets **gpu_plugin's default** to `native` or `xenos` (always `xenos` when `rexgpu-native` isn't there). So `gpu_plugin` itself is never written to the settings file; a `gpu_plugin` from the command line or the settings file still wins (the Renderer row says so, and is disabled for the command line). Choosing a renderer in the launcher takes a settings-file `gpu_plugin` out. |
-| `kk_fullscreen_mode` | `desktop`, `WIDTHxHEIGHT@HZ` | `settings.cpp`, Display > Resolution and Refresh rate | set on the game's window when it starts (Beta 1.1) |
-| `kk_discord_status` | `true`, `false` | `settings.cpp`, About > Discord status | Beta 1.1 |
+| `kk_fullscreen_mode` | `desktop`, `WIDTHxHEIGHT@HZ` | `settings.cpp`, Display > Resolution and Refresh rate | set on the game's window when it starts (Beta 2) |
+| `kk_discord_status` | `true`, `false` | `settings.cpp`, About > Discord status | Beta 2 |
 | `kk_original_look` | (existing) | Graphics > Look | the label Modern is now Remastered |
-| `native_ao_method`, `native_ao_apply`, `native_ao_quality` | (the plugin's) | no row since Beta 1.1 | the port's defaults are `gtao`, `opaque`, `auto` (`ApplyPortDefaults`); the plugin's stay `legacy`, `resolve`, `auto` for the golden-scene harness |
+| `native_ao_method`, `native_ao_apply`, `native_ao_quality` | (the plugin's) | no row since Beta 2 | the port's defaults are `gtao`, `opaque`, `auto` (`ApplyPortDefaults`); the plugin's stay `legacy`, `resolve`, `auto` for the golden-scene harness |
 
 Reset page (Graphics) also resets `kk_renderer` and the three `native_ao_*`; Reset page (Display) `kk_fullscreen_mode`.
 

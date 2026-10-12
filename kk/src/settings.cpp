@@ -214,7 +214,7 @@ void SetMapping(Pad physical, Pad target) {
 const std::array<RenderPreset, 5>& RenderPresets() {
   // Ratios follow the usual upscaler naming (output / render); the game renders
   // at integer multiples of its native 720p, so the nearest multiple is used.
-  // (Supersample, 0.5, went in Beta 1.1: Display > Resolution picks the size.)
+  // (Supersample, 0.5, went in Beta 2: Display > Resolution picks the size.)
   static const std::array<RenderPreset, 5> kPresets = {{
       {"native", "Native", 1.0},
       {"quality", "Quality", 1.5},
@@ -350,11 +350,11 @@ void ApplyFixedSettings() {
   // mouse-to-right-stick part is kept at its lowest, where it never gets past
   // the camera's deadzone (kk_mouse_sensitivity is the setting now).
   rex::cvar::SetFlagByName("mnk_sensitivity", "0.010000");
-  // Supersampling is no longer offered (Beta 1.1: Display > Resolution picks the size the game is
+  // Supersampling is no longer offered (Beta 2: Display > Resolution picks the size the game is
   // shown at): a settings file that chose it gets Native.
   if (rex::cvar::GetFlagByName("kk_render_quality") == "supersample")
     rex::cvar::SetFlagByName("kk_render_quality", "native");
-  // The ambient occlusion method is no longer a setting (Beta 1.1: always GTAO, ApplyPortDefaults):
+  // The ambient occlusion method is no longer a setting (Beta 2: always GTAO, ApplyPortDefaults):
   // Beta 1's AO method choice in a settings file goes.
   for (const char* name : {"native_ao_method", "native_ao_apply"})
     for (const auto& e : rex::cvar::GetRegistry())

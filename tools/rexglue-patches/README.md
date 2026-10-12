@@ -95,7 +95,7 @@ whose pipeline is still a placeholder or missing.
 
 `rex::ui::GetFullscreenDisplayModes` lists a display's fullscreen modes, `rex::ui::GetDesktopDisplayMode` gives its desktop mode, and `rex::ui::SetFullscreenDisplayMode`
 sets the mode SDL uses whenever the window is fullscreen (none: borderless at the desktop's resolution, the
-default). The launcher's Display > Resolution (Beta 1.1) uses them: the port can't call SDL for this itself, as SDL
+default). The launcher's Display > Resolution (Beta 2) uses them: the port can't call SDL for this itself, as SDL
 is linked into both `rexruntime.dll` and `king_kong.exe` and the port's copy sees neither the SDK's window nor the
 displays. Numbered 0015 because 0013 and 0014 are taken on the Linux branch (`nr-linux`).
 

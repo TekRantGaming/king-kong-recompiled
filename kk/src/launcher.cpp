@@ -372,7 +372,7 @@ void ApplyRemastered() {
   SetInt("ao_mode", 1);
   SetInt("ao_strength", 1);
   SetInt("kk_frame_rate", 60);  // the Original look keeps the console's 30
-  SetRenderer(true);  // with the native renderer's GTAO, the only method since Beta 1.1 (ApplyPortDefaults)
+  SetRenderer(true);  // with the native renderer's GTAO, the only method since Beta 2 (ApplyPortDefaults)
 }
 
 // The Remastered settings first: the Original look keeps the settings it replaces and puts them back
@@ -2160,7 +2160,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
       "Set by the Original Xbox 360 look. Switch Look to Remastered on the Graphics page to change it.";
 
   // ------------------------------------------------------------ Display ---
-  // Display > Frame rate (Beta 1.1: from the Gameplay page).
+  // Display > Frame rate (Beta 2: from the Gameplay page).
   Item FrameRateItem() {
     std::vector<Option> opts;
     for (int f : kFrameRateChoices)
@@ -2179,7 +2179,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
     return std::move(Disable(it, GetBool("kk_original_look"), kSetByOriginal));
   }
 
-  // Display > Upscaling (Beta 1.1: from the Graphics page): the upscaler and how many pixels the game
+  // Display > Upscaling (Beta 2: from the Graphics page): the upscaler and how many pixels the game
   // draws for the screen, which the Resolution above decides.
   void UpscalingItems(std::vector<Item>& items) {
     const auto [out_w, out_h] = cb_.output_size ? cb_.output_size() : std::pair<int, int>{1280, 720};

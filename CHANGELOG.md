@@ -5,7 +5,7 @@ version's notes the first time you start it.
 
 ## v2.0.0-beta.2 (12 October 2026)
 
-**Beta 1.1**: a small update to Beta 1, from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/PET2xU5FJq). Your saves and settings are kept, and you can switch back to stable at any time. Windows only for now.
+**Beta 2**: the second test build of the next big update, from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/PET2xU5FJq). Your saves and settings are kept, and you can switch back to stable at any time. Windows only for now.
 
 ### What's new
 - **Windowed, Borderless or Fullscreen.** **Display** > **Window mode** has three choices now. **Borderless** fills the screen with a window at your desktop's resolution, so Alt+Tab is instant. **Fullscreen** switches your screen to the **Resolution** and **Refresh rate** you pick while the game runs. The render quality follows the resolution you pick.
@@ -14,7 +14,7 @@ version's notes the first time you start it.
 - **Discord status.** While Discord is running on your PC, your profile shows that you're playing King Kong, in the launcher or in the game, and for how long. **Discord status** on the **About** page switches it off.
 - **GTAO is now the ambient occlusion.** With the native renderer, ambient occlusion is always the new GTAO, so the **AO method** choice is gone (if you picked Classic in Beta 1, you now get GTAO). **AO strength** is now **Light** (recommended), **Medium** or **Strong**: how dark the shading gets and how far it spreads.
 - **Supersampling is gone.** Pick a **Resolution** instead. If you had it on, the game now draws at **Native**.
-- The shaders are prepared again the first time you start Beta 1.1, as after every update.
+- The shaders are prepared again the first time you start Beta 2, as after every update.
 
 ### Known issues
 - Coming in a later beta: DLSS, FSR 3 and 4, and XeSS upscaling, screen-space global illumination, sharper shadows, reflections on water and volumetric light shafts.
