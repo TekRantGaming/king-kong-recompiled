@@ -741,9 +741,9 @@ the pipeline cache off):
 
 Tools (dev builds): `KK_DEV_DT_LOG="from,to"` writes the game's frame time (`0x82C636E0`, set once a frame by
 `sub_8272CA20` from the tick count in whole milliseconds and clamped to 63 ms) frame by frame to
-`frame_times.csv`; `KK_DEV_PAD_LOG=1` logs each change of the scripted pad; `KK_DEV_OBJ_AT` writes the world's
-active objects at chosen times; the render thread logs every game frame over 50 ms with where its time went
-("long game frame"). Runs: `runs\p2c-dt-*`; scripts in the session's scratchpad (`dtlag.py`, `dtshape.py`,
+`frame_times.csv` (it hooks `sub_8272CA20`, which nr-hfr's `hfr_frame_time.cpp` hooks too: merging nr-hfr needs
+one hook that calls both); `KK_DEV_PAD_LOG=1` logs each change of the scripted pad; the render thread logs every
+game frame over 50 ms with where its time went ("long game frame"). Runs: `runs\p2c-dt-*`; scripts in the session's scratchpad (`dtlag.py`, `dtshape.py`,
 `dtseq.py`).
 
 What the first frames of chap04 look like (frame 0 = the stall after the chapter select's A press):
@@ -776,8 +776,8 @@ So the press timing is not the whole cause: with the presses at the same game mo
 elsewhere, run to run. What remains different is the stall itself (how many frames and how long each), and the
 game's own threads, which the render thread's CPU use may change. The difference is the camera (every edge in the
 picture shifts by about a pixel, mostly vertically); the chapter tour sees the same in tour04, tour18, tour24 and
-tour25. Next: `KK_DEV_OBJ_AT` (the world's objects at chosen times, Xenos against native) to find the first
-object that differs and when.
+tour25. Next: nr-hfr's `KK_DEV_SAMPLE` (every active object's position frame by frame, matched between runs by
+file key) on Xenos and native, to find the first object that differs and when.
 
 ### The presenter hand-over without a copy (Phase 2c)
 
