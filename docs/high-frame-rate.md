@@ -126,7 +126,9 @@ second, loops are animation restarts):
 | `418D0540` | action 260, restarted 90 times (via 0) and never looping | 260, 56 restarts, 18 loops | 260, 34 restarts, 29 loops |
 
 The fix's dev trace counted 83 corrected syncs a second at 110 FPS (one a frame while the boat is rowed). The
-last rower (`418D0540`) is restarted by its script at a different rate at 110 FPS; see "Left to do".
+last rower (`418D0540`) is restarted by its script (through action 0) every 1.2 s or so; how often varies from run
+to run at the same frame rate (83 and 90 restarts at 30 FPS, 34 and 86 at 110 FPS with the fixes), so it is not
+frame-rate dependent.
 
 ### Particle drag (fix verified)
 
@@ -187,8 +189,37 @@ frame), so their effect is not compared run against run.
 3. The sampler and the compare tool over game time, for positions, animation clocks and AI states, and the
    fixes' own dev traces (`KK_DEV_HFR_TRACE`) for what they act on.
 
-## Fixed
+## Summary
 
-- Camera shake (v1.9.10, `kk/src/camera_shake.cpp`): `CM_Sfx` (`sub_8245EC90`) and `SCC_SFX`
-  (`sub_82553F20`) multiplied the shake's fall-off rate by a constant once a frame, so above 30 FPS a strong
-  shake never ended (#39). The rate now falls by `mult ^ (dt * 30)`.
+### Fixed (kk_hfr_fixes; each one off at 30 FPS; `KK_DEV_HFR_OFF=<name>` turns one off in dev builds)
+
+| Fix | File | Verified |
+|---|---|---|
+| `rowing`: the lifeboat crew's start-rowing hand-over | `hfr_rowing.cpp` | In game at 110 FPS: the three affected rowers play the rowing loop like at 30 FPS (table above) |
+| `particles`: particle drag per second | `hfr_particles.cpp` | In game at 110 FPS and with 4 ms frames: particle speeds match 30 FPS (table above) |
+| `precise_dt`: frame time from the high resolution clock | `hfr_frame_time.cpp` | In game at 110 FPS: frame times continuous (268 values instead of 30); game time = real time |
+| `dt_floor`: Kong's grab and finisher scripts and the BC path script | `hfr_dt_floor.cpp` | Acts in Kong to the Rescue (70 to 112 calls a second at 110 FPS); the effect follows from the code (time step = frame time instead of 0.016 s) |
+| `step_decay`: decays and growth per 0.016 or 1/60 s step | `hfr_step_decay.cpp` | Acts during V-Rex hits in Kong to the Rescue; per-second rates worked out above |
+| `follow`: follow smoothing in 1/300 s steps | `hfr_follow.cpp` | Runs on four objects in the Venture opening; per-second rates worked out above |
+| Camera shake (v1.9.10, before this work) | `camera_shake.cpp` | #39 |
+
+At 30 FPS every fix calls the game's own code unchanged (`hfr::Active()` is false), so the console behaviour and
+the golden frames stay the same.
+
+### Found and left
+
+- Motion blur strength (only with motion blur on): needs a look on screen to choose the formula (above).
+- Menu background drift (`IntMIG_Background`): 0.999 a frame, too small to see.
+- Follow smoothing has no visible target identified yet (a renderer modifier on four objects in the Venture
+  opening, probably the boat lights); fixed by the code, not checked on screen.
+- The aim-assist object test in `CM_Cam` (`sub_8270AF70`) ran only at 60 FPS in one pair of profiles; no visible
+  effect found.
+- Scenes not measured by script: Kong's climbing chapters, the raft and rapids, the biplane fight on the Empire
+  State Building, the V-Rex walk (needs a player). The static scans cover their scripts; the families above are
+  the ones found there.
+- AI fights (Kong to the Rescue) diverge between any two runs at any frame rate, because the random number
+  generator is drawn per frame; whether any fight decision is made per frame rather than per second could only be
+  told from many runs.
+- The bot's push in the opening's camera tutorial passed the "look at the boat" step in 1 of 5 runs at 110 FPS and
+  3 of 3 at 30; the step's checks use the frame time, so this looks like the push's timing, but a player at a
+  high frame rate who gets stuck there would be the sign of a problem (`KK_DEV_VENTURE_PASS` passes it in tests).
