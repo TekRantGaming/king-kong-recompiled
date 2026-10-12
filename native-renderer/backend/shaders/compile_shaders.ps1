@@ -76,7 +76,7 @@ foreach ($spec in @("gtao_prepare_cs:cs:cs_prepare", "gtao_prefilter_cs:cs:cs_pr
 # Screen-space GI (ssgi.hlsl, docs/gi.md): one blob per entry point.
 $ssgi = Join-Path $here "ssgi.hlsl"
 foreach ($spec in @("ssgi_radiance_cs:cs:cs_radiance", "ssgi_radiance_down_cs:cs:cs_radiance_down",
-                    "ssgi_gather_cs:cs:cs_gather", "ssgi_denoise_cs:cs:cs_denoise", "ssgi_vs:vs:vs_main",
+                    "ssgi_gather_cs:cs:cs_gather", "ssgi_denoise_cs:cs:cs_denoise", "ssgi_temporal_cs:cs:cs_temporal", "ssgi_vs:vs:vs_main",
                     "ssgi_composite_ps:ps:ps_composite")) {
     $base, $stage, $entry = $spec.Split(":")
     & $Dxc -nologo -T "${stage}_6_0" -E $entry -O3 -Fh (Join-Path $out "${base}_dxil.h") -Vn "k_${base}_dxil" $ssgi

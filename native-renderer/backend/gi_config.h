@@ -34,6 +34,9 @@ struct GiConfig {
   // --native_gi_debug: 0 the picture; 1 the bounce light alone (the gathered light, before the
   // surface colour); 2 the light the composite adds (+) or takes away (-) on grey; 3 the visibility.
   int debug = 0;
+  // --native_gi_temporal: blend in last frame's light where the camera saw the same surface (its
+  // reprojection voted from the scene's draws); the noise then changes every frame.
+  bool temporal = true;
   // --native_gi_gpu_time: the GI passes' GPU time, logged every 600 frames (ao_timer.h).
   bool gpu_time = false;
 

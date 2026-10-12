@@ -26,6 +26,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -197,7 +198,9 @@ struct Camera {
   float px = 0, py = 0, a = 0, b = 0;
   V3 r, u, f;
   float rows[16] = {};
-  Camera() {
+  Camera() { Setup(); }
+  // Again after moving the eye.
+  void Setup() {
     f = Normalize(target - eye);
     r = Normalize(Cross({0, 1, 0}, f));
     u = Cross(f, r);
@@ -558,9 +561,14 @@ struct Fixture {
     Reg(dev::kRbColorMask, color_mask);
     Call(0x82111E68, {device, decl});
     SetShaders(vs, ps);
-    SetStream(NewVertexBuffer(Bytes(m)), 16);
+    // One vertex buffer per mesh, kept across frames (as the game's static meshes are).
+    const std::vector<uint8_t> bytes = Bytes(m);
+    uint32_t& vb = vertex_buffers[bytes];
+    if (!vb) vb = NewVertexBuffer(bytes);
+    SetStream(vb, 16);
     Call(0x821154C8, {device, 4, 0, uint32_t(m.size())});
   }
+  std::map<std::vector<uint8_t>, uint32_t> vertex_buffers;
 
   // The frame: the depth pre-pass, the opaque colour pass (the lighting shader with the ambient
   // light in its c0), then (optionally) the blended quad.
@@ -628,6 +636,14 @@ float MaxDifference(const Pixels& a, const Pixels& b) {
   for (size_t i = 0; i < a.rgba.size() && i < b.rgba.size(); ++i)
     if (i % 4 != 3) worst = std::max(worst, std::fabs(a.rgba[i] - b.rgba[i]));
   return a.rgba.size() == b.rgba.size() ? worst : 1.0f;
+}
+
+float MeanDifference(const Pixels& a, const Pixels& b) {
+  double sum = 0;
+  size_t n = 0;
+  for (size_t i = 0; i < a.rgba.size() && i < b.rgba.size(); ++i)
+    if (i % 4 != 3) sum += std::fabs(a.rgba[i] - b.rgba[i]), ++n;
+  return n ? float(sum / double(n)) : 1.0f;
 }
 
 constexpr float kTol = 2.5f / 255.0f;
@@ -786,6 +802,63 @@ TEST(GameGi_RenderScaleTwoMatchesOne) {
     CHECK(mae < 0.012);
     CHECK(std::fabs(near2 - near1) < 0.03f);
   }
+}
+
+TEST(GameGi_TemporalStaticCameraSettles) {
+  // Eight frames from the same camera: from the second on the history is used (the camera's vote
+  // finds no motion), and the light settles where a frame without temporal accumulation puts it.
+  Options t, plain;
+  t.mode = plain.mode = 0;
+  t.gi = plain.gi = Gi(GiLevel::kMedium);
+  plain.gi.temporal = false;
+  Fixture a(t), b(plain);
+  if (!a.Init() || !b.Init()) return;
+  Fixture::Frame fr;
+  fr.quad = false;
+  Pixels last;
+  for (int i = 0; i < 8; ++i) last = a.Render(fr, "temporal_static_" + std::to_string(i));
+  const Pixels single = b.Render(fr, "temporal_static_single");
+  const Rgb n1 = Colour(last, a.cam, kNearFloor), n0 = Colour(single, b.cam, kNearFloor);
+  const float mae = MeanDifference(last, single);
+  std::printf("  after 8 frames: floor by the wall %.3f %.3f %.3f, one frame without history %.3f %.3f %.3f, mean "
+              "difference %.4f\n", n1.r, n1.g, n1.b, n0.r, n0.g, n0.b, mae);
+  const SceneGi* gi = a.game->scene_gi();
+  CHECK(gi != nullptr);
+  if (gi) CHECK_EQ(gi->stats().history_frames, uint64_t(7));
+  CHECK(std::fabs(n1.r - n0.r) < 0.02f);
+  CHECK(mae < 0.003f);
+}
+
+TEST(GameGi_TemporalMovingCameraFollows) {
+  // The camera moves sideways and forwards a little every frame: the history is reprojected (the
+  // vote finds the camera), and the last frame's light sits where a fresh frame from that camera
+  // puts it (no trail where the wall's red was).
+  Options t, plain;
+  t.mode = plain.mode = 0;
+  t.gi = plain.gi = Gi(GiLevel::kMedium);
+  plain.gi.temporal = false;
+  Fixture a(t), b(plain);
+  if (!a.Init() || !b.Init()) return;
+  Fixture::Frame fr;
+  fr.quad = false;
+  Pixels last;
+  for (int i = 0; i < 8; ++i) {
+    a.cam.eye = {0.4f - 0.06f * float(i), 1.5f, -1.0f + 0.05f * float(i)};
+    a.cam.Setup();
+    last = a.Render(fr, "temporal_moving_" + std::to_string(i));
+  }
+  b.cam = a.cam;
+  const Pixels fresh = b.Render(fr, "temporal_moving_fresh");
+  const Rgb n1 = Colour(last, a.cam, kNearFloor), n0 = Colour(fresh, b.cam, kNearFloor);
+  const Rgb f1 = Colour(last, a.cam, kFarFloor), f0 = Colour(fresh, b.cam, kFarFloor);
+  const float mae = MeanDifference(last, fresh);
+  std::printf("  moving camera: floor by the wall %.3f %.3f %.3f against a fresh frame %.3f %.3f %.3f; far floor "
+              "%+.4f; mean difference %.4f\n", n1.r, n1.g, n1.b, n0.r, n0.g, n0.b, f1.r - f0.r, mae);
+  const SceneGi* gi = a.game->scene_gi();
+  if (gi) CHECK_EQ(gi->stats().history_frames, uint64_t(7));
+  CHECK(std::fabs(n1.r - n0.r) < 0.02f);
+  CHECK(std::fabs(f1.r - f0.r) < kTol);
+  CHECK(mae < 0.004f);
 }
 
 TEST(GameGi_OffChangesNothing) {

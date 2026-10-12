@@ -18,7 +18,9 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 #include <nvrhi/nvrhi.h>
@@ -30,6 +32,7 @@
 #include "backend/gtao.h"
 #include "backend/scene_ao.h"
 #include "backend/ssgi.h"
+#include "backend/upscale_motion.h"
 
 namespace nr {
 
@@ -45,7 +48,9 @@ class SceneGi {
   // A draw as the ambient occlusion describes it (scene_ao.h). Before it is recorded: classify,
   // follow, and at the end of the opaque pass add the bounce light into `cl`, before the draw.
   // ao_on: the ambient occlusion setting is on this frame (the GI then adds light only).
-  void OnDraw(nvrhi::ICommandList* cl, const SceneAo::Draw& d, bool ao_on);
+  // motion_key: the draw's identity across frames (its shaders, buffers and range; 0: none), for the
+  // camera's reprojection of the temporal accumulation.
+  void OnDraw(nvrhi::ICommandList* cl, const SceneAo::Draw& d, bool ao_on, uint64_t motion_key = 0);
   // The flat ambient light a lighting shader of the scene was drawn with (rgb, the game's units).
   void NoteAmbient(uint64_t frame, const float rgb[3]);
   // A clear of a depth target (Clear with Z, or a resolve's depth clear).
@@ -63,6 +68,7 @@ class SceneGi {
     uint64_t no_camera = 0;        // a moment came without a camera
     uint64_t no_depth = 0;         // or without this frame's depth
     uint64_t ambient_frames = 0;   // frames whose ambient light was read from their draws
+    uint64_t history_frames = 0;   // moments that blended in last frame's light (the camera was found)
   };
   const Stats& stats() const { return stats_; }
   // What the last OnDraw did (--native_dump_frame).
@@ -73,6 +79,9 @@ class SceneGi {
 
  private:
   void NewFrame(uint64_t frame);
+  // The camera's reprojection from last frame (temporal accumulation): the scene draws met again vote.
+  void NoteCamera(uint64_t key, const float rows[16]);
+  bool Reprojection(float out[16]);
   bool Apply(nvrhi::ICommandList* cl, bool ao_on);
 
   nvrhi::IDevice* device_;
@@ -97,6 +106,12 @@ class SceneGi {
   float ambient_last_[3] = {0.25f, 0.25f, 0.25f};
   float ambient_used_[3] = {0.25f, 0.25f, 0.25f};
   bool warned_camera_ = false;
+  // Each scene draw's world-view-projection rows by its identity, this frame and last frame (in draw
+  // order for draws with the same identity).
+  std::unordered_map<uint64_t, std::vector<std::array<float, 16>>> rows_now_, rows_before_;
+  size_t rows_count_ = 0;
+  CameraReprojectionVote vote_;
+  bool applied_before_ = false;  // last frame had the bounce light (its history is this frame's)
 };
 
 }  // namespace nr

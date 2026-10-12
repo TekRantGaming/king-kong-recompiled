@@ -19,6 +19,8 @@
 #include "backend/shaders/generated/ssgi_radiance_cs_spirv.h"
 #include "backend/shaders/generated/ssgi_radiance_down_cs_dxil.h"
 #include "backend/shaders/generated/ssgi_radiance_down_cs_spirv.h"
+#include "backend/shaders/generated/ssgi_temporal_cs_dxil.h"
+#include "backend/shaders/generated/ssgi_temporal_cs_spirv.h"
 #include "backend/shaders/generated/ssgi_vs_dxil.h"
 #include "backend/shaders/generated/ssgi_vs_spirv.h"
 
@@ -33,14 +35,17 @@ struct Ssgi::Constants {
   float gather[4] = {};   // slices, steps, largest radius on the screen (working pixels), intensity
   float ambient[4] = {};  // rgb ambient, w the albedo limit
   float mode[4] = {};     // occlusion, debug, radiance mips, denoise step
-  float extra[4] = {};    // x: the AO's occlusion bound
+  float extra[4] = {};    // x: the AO's occlusion bound, y: noise index, z: history, w: the new light's weight
+  float reproject[16] = {};
+  float screen_xy[4] = {};
+  float screen_z[4] = {};
 };
 
 namespace {
 
 static_assert(sizeof(XeGTAO::GTAOConstants) == 96, "GTAOConstants is 6 float4");
 
-enum BlobId { kRadiance, kRadianceDown, kGather, kDenoise, kVs, kComposite };
+enum BlobId { kRadiance, kRadianceDown, kGather, kDenoise, kTemporal, kVs, kComposite };
 
 struct Blob {
   const void* data = nullptr;
@@ -56,6 +61,7 @@ Blob GetBlob(nvrhi::GraphicsAPI api, int id) {
     case kRadianceDown: return NR_SSGI_BLOB(ssgi_radiance_down_cs);
     case kGather: return NR_SSGI_BLOB(ssgi_gather_cs);
     case kDenoise: return NR_SSGI_BLOB(ssgi_denoise_cs);
+    case kTemporal: return NR_SSGI_BLOB(ssgi_temporal_cs);
     case kVs: return NR_SSGI_BLOB(ssgi_vs);
     case kComposite: return NR_SSGI_BLOB(ssgi_composite_ps);
     default: return {};
@@ -108,6 +114,8 @@ bool Ssgi::Initialize() {
                {cb, I::Texture_SRV(0), I::Texture_SRV(1), I::Texture_SRV(2), I::Texture_SRV(3), I::Sampler(0), I::Sampler(1),
                 I::Texture_UAV(0)}) &&
       MakePass(denoise_, kDenoise, "cs_denoise",
+               {cb, I::Texture_SRV(0), I::Texture_SRV(1), I::Texture_SRV(2), I::Texture_SRV(3), I::Texture_UAV(0)}) &&
+      MakePass(temporal_, kTemporal, "cs_temporal",
                {cb, I::Texture_SRV(0), I::Texture_SRV(1), I::Texture_SRV(2), I::Texture_SRV(3), I::Texture_UAV(0)});
   vs_ = MakeShader(device_, kVs, nvrhi::ShaderType::Vertex, "vs_main");
   composite_ps_ = MakeShader(device_, kComposite, nvrhi::ShaderType::Pixel, "ps_composite");
@@ -167,10 +175,23 @@ bool Ssgi::EnsureImages(const Gtao& gtao) {
     td.debugName = name;
     return device_->createTexture(td);
   };
+  history_valid_ = false;
   radiance_ = make(kRadianceMips, "GI radiance");
   gi_a_ = make(1, "GI term a");
   gi_b_ = make(1, "GI term b");
-  if (!radiance_ || !gi_a_ || !gi_b_ || !gtao.view_depth() || !gtao.normals() || !gtao.raw_depth()) {
+  history_ = make(1, "GI history");
+  {
+    nvrhi::TextureDesc td;
+    td.width = std::max(pw, 1u);
+    td.height = std::max(ph, 1u);
+    td.format = nvrhi::Format::R32_FLOAT;
+    td.initialState = nvrhi::ResourceStates::ShaderResource;
+    td.keepInitialState = true;
+    td.debugName = "GI history depth";
+    history_depth_ = device_->createTexture(td);
+  }
+  if (!radiance_ || !gi_a_ || !gi_b_ || !history_ || !history_depth_ || !gtao.view_depth() || !gtao.normals() ||
+      !gtao.raw_depth()) {
     gi_a_ = nullptr;
     return false;
   }
@@ -194,6 +215,8 @@ bool Ssgi::EnsureImages(const Gtao& gtao) {
                      S::Texture_SRV(2, normals), S::Texture_SRV(3, raw), S::Texture_UAV(0, gi_b_)}),
       Set(denoise_, {cb, S::Texture_SRV(0, gi_b_), S::Texture_SRV(1, depth, nvrhi::Format::UNKNOWN, mip(0)),
                      S::Texture_SRV(2, normals), S::Texture_SRV(3, raw), S::Texture_UAV(0, gi_a_)}),
+      Set(temporal_, {cb, S::Texture_SRV(0, gi_a_), S::Texture_SRV(1, history_), S::Texture_SRV(2, history_depth_),
+                      S::Texture_SRV(3, raw), S::Texture_UAV(0, gi_b_)}),
   };
   for (const nvrhi::BindingSetHandle& s : fixed_sets_) {
     if (!s) {
@@ -232,6 +255,12 @@ void Ssgi::FillConstants(Constants& k, const Gtao& gtao, const SsgiSettings& s, 
   k.mode[2] = float(kRadianceMips);
   k.mode[3] = denoise_step;
   k.extra[0] = 0.0f;
+  k.extra[1] = s.temporal ? float(s.frame % 64u) : 0.0f;
+  k.extra[2] = s.temporal && s.history && history_valid_ ? 1.0f : 0.0f;
+  k.extra[3] = std::clamp(s.new_weight, 0.02f, 1.0f);
+  std::memcpy(k.reproject, s.reproject, sizeof(k.reproject));
+  std::memcpy(k.screen_xy, s.screen_xy, sizeof(k.screen_xy));
+  std::memcpy(k.screen_z, s.screen_z, sizeof(k.screen_z));
 }
 
 bool Ssgi::Compute(nvrhi::ICommandList* cl, const Gtao& gtao, nvrhi::ITexture* color, const SsgiSettings& s) {
@@ -255,13 +284,27 @@ bool Ssgi::Compute(nvrhi::ICommandList* cl, const Gtao& gtao, nvrhi::ITexture* c
   Dispatch(cl, radiance_down_, fixed_sets_[0], (pw / 2 + 7) / 8, (ph / 2 + 7) / 8);
   Dispatch(cl, radiance_down_, fixed_sets_[1], (pw / 4 + 7) / 8, (ph / 4 + 7) / 8);
   Dispatch(cl, gather_, fixed_sets_[2], (pw + 7) / 8, (ph + 7) / 8);
+  // Temporal accumulation: a into b with the history, b kept as the next frame's history and this
+  // frame's view depth with it; the blur then starts from b.
+  bool from_b = false;
+  if (s.temporal) {
+    Dispatch(cl, temporal_, fixed_sets_[5], (pw + 7) / 8, (ph + 7) / 8);
+    const nvrhi::TextureSlice all;
+    cl->copyTexture(history_, all, gi_b_, all);
+    cl->copyTexture(history_depth_, all, gtao.view_depth(), nvrhi::TextureSlice().setMipLevel(0));
+    history_valid_ = true;
+    from_b = true;
+  } else {
+    history_valid_ = false;
+  }
   // The blur: a to b, b to a, ... with steps 1, 2, 4 (the result ends where the last pass wrote).
-  nvrhi::ITexture* last = gi_a_;
+  nvrhi::ITexture* last = from_b ? gi_b_.Get() : gi_a_.Get();
   for (uint32_t i = 0; i < s.level.denoise; ++i) {
     FillConstants(k, gtao, s, float(1u << i));
     cl->writeBuffer(constants_, &k, sizeof(k));
-    Dispatch(cl, denoise_, fixed_sets_[3 + (i & 1)], (pw + 7) / 8, (ph + 7) / 8);
-    last = (i & 1) ? gi_a_.Get() : gi_b_.Get();
+    const bool a_to_b = ((i & 1) == 0) != from_b;
+    Dispatch(cl, denoise_, fixed_sets_[a_to_b ? 3 : 4], (pw + 7) / 8, (ph + 7) / 8);
+    last = a_to_b ? gi_b_.Get() : gi_a_.Get();
   }
   result_ = last;
   ++stats_.computed;

@@ -38,7 +38,24 @@ void GameRenderer::GiDrawHook(nvrhi::ICommandList* cl, const DrawCall& call, con
     scene_gi_->NoteAmbient(call.frame, rgb);
   }
   const SceneAo::Draw a = AoDescribeDraw(call, d, colors, depth, record, vs, ps);
-  scene_gi_->OnDraw(cl, a, GiAoOn(call.frame));
+  // The draw's identity across frames (temporal accumulation: the camera's vote), as the upscalers'
+  // motion matching keys it: its vertex shader, its streams, its index buffer and range.
+  uint64_t key = 0;
+  if (options_.gi.temporal) {
+    const uint64_t parts[] = {vs.ucode_hash,
+                              d.u32(dev::kStreamBuffer),
+                              d.u32(dev::kStreamBuffer + 8),
+                              d.u32(dev::kStreamOffset),
+                              call.indexed ? call.index_buffer : 0u,
+                              call.start,
+                              call.count,
+                              uint64_t(uint32_t(call.base_vertex)),
+                              uint64_t(call.primitive)};
+    key = 1469598103934665603ull;
+    for (uint64_t v : parts) key = (key ^ v) * 1099511628211ull + (key >> 29);
+    if (!key) key = 1;
+  }
+  scene_gi_->OnDraw(cl, a, GiAoOn(call.frame), key);
   if (scene_gi_->last_applied() && (Dump(call.frame) || (options_.ao.dump_every && call.frame % options_.ao.dump_every == 0))) {
     const float* ambient = scene_gi_->ambient();
     Logf(LogLevel::kInfo, "rexgpu-native:   GI: bounce light added before draw %u of frame %llu (ambient %.3f %.3f %.3f)",

@@ -283,6 +283,11 @@ REXCVAR_DEFINE_INT32(native_gi_debug, 0, "Native renderer",
                      "visibility")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_BOOL(native_gi_temporal, true, "Native renderer",
+                    "Global illumination: blend in last frame's light where the camera saw the same surface (the "
+                    "camera's motion voted from the scene's draws)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_BOOL(native_gi_gpu_time, false, "Native renderer",
                     "Time the global illumination's GPU passes and log the average every 600 frames")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);

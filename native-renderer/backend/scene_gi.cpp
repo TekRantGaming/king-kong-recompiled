@@ -41,20 +41,55 @@ void SceneGi::NewFrame(uint64_t frame) {
   }
   ambient_sum_[0] = ambient_sum_[1] = ambient_sum_[2] = 0.0;
   ambient_count_ = 0;
+  // The camera: this frame's draws become last frame's (only the frame just before counts).
+  if (frame == frame_ + 1) {
+    rows_before_.swap(rows_now_);
+  } else {
+    rows_before_.clear();
+  }
+  rows_now_.clear();
+  rows_count_ = 0;
+  vote_.BeginFrame(frame);
+  applied_before_ = applied_ && frame == frame_ + 1;
   frame_ = frame;
   applied_ = scene_copied_ = false;
   ++stats_.frames;
   if (stats_.frames % 600 == 0) {
     Logf(LogLevel::kInfo,
          "rexgpu-native: GI last 600 frames: %llu at the opaque pass's end, %llu at Present; %llu with their own ambient "
-         "light (now %.3f %.3f %.3f); %llu moments without a camera, %llu without this frame's depth",
+         "light (now %.3f %.3f %.3f); %llu with last frame's light; %llu moments without a camera, %llu without this "
+         "frame's depth",
          static_cast<unsigned long long>(stats_.applied_opaque - logged_.applied_opaque),
          static_cast<unsigned long long>(stats_.applied_present - logged_.applied_present),
          static_cast<unsigned long long>(stats_.ambient_frames - logged_.ambient_frames), ambient_used_[0],
-         ambient_used_[1], ambient_used_[2], static_cast<unsigned long long>(stats_.no_camera - logged_.no_camera),
+         ambient_used_[1], ambient_used_[2],
+         static_cast<unsigned long long>(stats_.history_frames - logged_.history_frames),
+         static_cast<unsigned long long>(stats_.no_camera - logged_.no_camera),
          static_cast<unsigned long long>(stats_.no_depth - logged_.no_depth));
     logged_ = stats_;
   }
+}
+
+void SceneGi::NoteCamera(uint64_t key, const float rows[16]) {
+  if (rows_count_ >= 4096) return;
+  std::vector<std::array<float, 16>>& now = rows_now_[key];
+  const size_t ordinal = now.size();
+  std::array<float, 16> r;
+  std::copy(rows, rows + 16, r.begin());
+  now.push_back(r);
+  ++rows_count_;
+  // The same draw last frame (the same ordinal among draws with this identity): a vote for the camera.
+  if (auto it = rows_before_.find(key); it != rows_before_.end() && ordinal < it->second.size())
+    vote_.Offer(rows, it->second[ordinal].data());
+}
+
+bool SceneGi::Reprojection(float out[16]) {
+  Mat4 m;
+  uint32_t votes = 0, offers = 0;
+  // At least two draws agreeing, and most of them: else the history is not trusted.
+  if (!vote_.Result(m, &votes, &offers) || votes < 2 || votes * 2 < offers) return false;
+  for (int i = 0; i < 16; ++i) out[i] = float(m[i]);
+  return true;
 }
 
 void SceneGi::NoteAmbient(uint64_t frame, const float rgb[3]) {
@@ -112,6 +147,21 @@ bool SceneGi::Apply(nvrhi::ICommandList* cl, bool ao_on) {
   ss.albedo = config_.albedo;
   ss.occlusion = ao_on ? 0.0f : config_.occlusion;
   ss.debug = config_.debug;
+  // Temporal accumulation: last frame's light where the camera saw the same surface.
+  ss.temporal = config_.temporal;
+  if (ss.temporal) {
+    ss.frame = uint32_t(frame_ % 64);
+    ss.history = applied_before_ && ssgi_->has_history() && Reprojection(ss.reproject);
+    ss.screen_xy[0] = sc.x_scale;
+    ss.screen_xy[1] = sc.x_offset + sc.offset_x();
+    ss.screen_xy[2] = sc.y_scale;
+    ss.screen_xy[3] = sc.y_offset + sc.offset_y();
+    ss.screen_z[0] = sc.z_scale;
+    ss.screen_z[1] = sc.z_offset;
+    ss.screen_z[2] = sc.host_scale_x;
+    ss.screen_z[3] = sc.host_scale_y;
+    if (ss.history) ++stats_.history_frames;
+  }
   // The ambient light: this frame's readings, else the last frame's.
   if (ambient_count_ > 0) {
     for (int i = 0; i < 3; ++i) ambient_used_[i] = float(ambient_sum_[i] / double(ambient_count_));
@@ -138,7 +188,7 @@ bool SceneGi::Apply(nvrhi::ICommandList* cl, bool ao_on) {
   return true;
 }
 
-void SceneGi::OnDraw(nvrhi::ICommandList* cl, const SceneAo::Draw& d, bool ao_on) {
+void SceneGi::OnDraw(nvrhi::ICommandList* cl, const SceneAo::Draw& d, bool ao_on, uint64_t motion_key) {
   last_applied_ = false;
   if (!ssgi_) return;
   if (d.frame != frame_) NewFrame(d.frame);
@@ -148,6 +198,12 @@ void SceneGi::OnDraw(nvrhi::ICommandList* cl, const SceneAo::Draw& d, bool ao_on
     float rows[16];
     AoProjection p;
     if (FindAoPerspectiveRegister(d.vs_constants, rows) >= 0 && ExtractAoProjection(rows, p)) camera_.Offer(frame_, p, d.screen);
+  }
+  // The camera's motion since last frame, from the scene's draws before the moment.
+  if (config_.temporal && motion_key && !applied_ && (cls == AoDrawClass::kOpaque || cls == AoDrawClass::kDepthOnly) &&
+      d.frame_size && d.depth.key && d.vs_constants) {
+    float rows[16];
+    if (FindAoPerspectiveRegister(d.vs_constants, rows) >= 0) NoteCamera(motion_key, rows);
   }
   AoFrameTracker::Draw td;
   td.frame = d.frame;

@@ -64,6 +64,7 @@ REXCVAR_DECLARE(double, native_gi_albedo);
 REXCVAR_DECLARE(double, native_gi_occlusion);
 REXCVAR_DECLARE(int32_t, native_gi_debug);
 REXCVAR_DECLARE(bool, native_gi_gpu_time);
+REXCVAR_DECLARE(bool, native_gi_temporal);
 REXCVAR_DECLARE(std::string, native_upscaler);
 REXCVAR_DECLARE(std::string, native_upscaler_quality);
 REXCVAR_DECLARE(std::string, native_upscaler_point);
@@ -165,6 +166,7 @@ void ReadGiConfig(GiConfig& gi) {
   gi.occlusion = float(std::clamp(REXCVAR_GET(native_gi_occlusion), 0.0, 1.0));
   gi.debug = std::clamp(REXCVAR_GET(native_gi_debug), 0, 3);
   gi.gpu_time = REXCVAR_GET(native_gi_gpu_time);
+  gi.temporal = REXCVAR_GET(native_gi_temporal);
 }
 
 // --native_upscaler* (docs/upscalers.md): a value it cannot read is logged and its default kept.

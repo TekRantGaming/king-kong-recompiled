@@ -28,6 +28,15 @@ struct SsgiSettings {
   float occlusion = 1.0f;        // how much of the hidden ambient light is taken away (0: none)
   float ambient[3] = {0.25f, 0.25f, 0.25f};  // the frame's flat ambient light (the game's g_vAmbientColor)
   int debug = 0;                 // GiConfig::debug
+  // Temporal accumulation (docs/gi.md, "Temporal accumulation"): on when `temporal` is set; the history
+  // is used when `history` is set too (the camera's reprojection was found and last frame had the GI).
+  bool temporal = false;
+  bool history = false;
+  uint32_t frame = 0;            // the noise changes with it (0 to 63)
+  float new_weight = 0.15f;      // the new light's weight in the history
+  float reproject[16] = {};      // this frame's NDC to last frame's clip space (rows)
+  float screen_xy[4] = {};       // guest pixel = ndc * scale + offset: x_scale, x_offset, y_scale, y_offset
+  float screen_z[4] = {};        // z_scale, z_offset, host pixels per guest pixel x and y
 };
 
 class Ssgi {
@@ -53,6 +62,10 @@ class Ssgi {
   const Stats& stats() const { return stats_; }
   // The working result (rgb the bounce light, a the visibility; tests).
   nvrhi::ITexture* result() const { return result_; }
+  // A history from the last Compute with temporal accumulation, for the images the next one uses
+  // (false after the images were made anew).
+  bool has_history() const { return history_valid_; }
+  void DropHistory() { history_valid_ = false; }
 
   static constexpr uint32_t kRadianceMips = 3;
 
@@ -74,7 +87,7 @@ class Ssgi {
   nvrhi::IDevice* device_;
   bool ready_ = false;
   Stats stats_;
-  Pass radiance_pass_, radiance_down_, gather_, denoise_;
+  Pass radiance_pass_, radiance_down_, gather_, denoise_, temporal_;
   nvrhi::ShaderHandle vs_, composite_ps_;
   nvrhi::BindingLayoutHandle composite_layout_;
   nvrhi::SamplerHandle point_clamp_, linear_clamp_;
@@ -84,7 +97,8 @@ class Ssgi {
   uint32_t padded_w_ = 0, padded_h_ = 0;
   const Gtao* images_of_ = nullptr;
   nvrhi::ITexture* gtao_depth_ = nullptr;  // the Gtao images the sets bind (remade when they change)
-  nvrhi::TextureHandle radiance_, gi_a_, gi_b_, copy_;
+  nvrhi::TextureHandle radiance_, gi_a_, gi_b_, copy_, history_, history_depth_;
+  bool history_valid_ = false;
   nvrhi::ITexture* result_ = nullptr;
   std::vector<nvrhi::BindingSetHandle> fixed_sets_;
   std::map<std::tuple<int, nvrhi::ITexture*, nvrhi::ITexture*>, nvrhi::BindingSetHandle> sets_;

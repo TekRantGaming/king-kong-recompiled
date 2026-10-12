@@ -42,7 +42,14 @@ cbuffer SsgiConstants : register(b0)
     float4 kk_Gather;   // x: slices, y: steps per side, z: largest radius on the screen (working pixels), w: intensity
     float4 kk_Ambient;  // rgb: the frame's flat ambient light (g_vAmbientColor), w: the largest albedo assumed
     float4 kk_Mode;     // x: occlusion of the ambient (0 to 1), y: debug view, z: radiance mips, w: denoise step (working pixels)
-    float4 kk_Extra;    // x: 1 when the occlusion of the AO (t2) is to be multiplied in, yzw: unused
+    float4 kk_Extra;    // x: 1 when the occlusion of the AO (t2) is to be multiplied in, y: noise index
+                        // (the frame, with temporal accumulation; 0 without), z: 1 with a history, w: the
+                        // new light's weight in the history
+    // cs_temporal: this frame's clip space to last frame's (rows), and the viewport: guest pixel =
+    // ndc * scale + offset (offsets with the window and half-pixel ones), host = guest * host scale.
+    float4 kk_Reproject[4];
+    float4 kk_ScreenXY;  // x_scale, x_offset, y_scale, y_offset
+    float4 kk_ScreenZ;   // z_scale, z_offset, host scale x, host scale y
 };
 
 #include "../../thirdparty/XeGTAO/XeGTAO.hlsli"
@@ -87,8 +94,9 @@ float3 LoadNormalAt(Texture2D<uint> map, int2 pos)
 float2 Noise(uint2 pixCoord)
 {
     // XeGTAO's Hilbert curve driving R2 (vaGTAO.hlsl), with a different start so the GI's pattern
-    // is not the AO's. The same every frame: without temporal accumulation it must not crawl.
-    uint index = HilbertIndex(pixCoord.x, pixCoord.y) + 17u;
+    // is not the AO's. The same every frame without temporal accumulation (it must not crawl); with
+    // it, another per frame (XeGTAO's temporal offset) so the history averages them.
+    uint index = HilbertIndex(pixCoord.x, pixCoord.y) + 17u + 288u * (uint(kk_Extra.y) % 64u);
     return frac(0.5 + float(index) * float2(0.75487766624669276005, 0.5698402909980532659114));
 }
 
@@ -262,6 +270,88 @@ void cs_gather(uint2 pix : SV_DispatchThreadID)
     // Fade in over small radii on the screen (a few pixels give no reliable slices).
     float fadeIn = saturate((radiusPx - 2.0) / 6.0);
     g_outGi[pix] = float4(light * inv * fadeIn, 1.0 - saturate(hidden * inv) * fadeIn);
+}
+
+// ------------------------------------------------------------------ temporal
+
+Texture2D<float4> g_srcHistory : register(t1);       // last frame's accumulated light (working size)
+Texture2D<float> g_srcHistoryDepth : register(t2);   // last frame's view-space depth (working size)
+
+// This frame's gathered light (t0) blended into last frame's at the place the camera saw this
+// pixel's surface then, when that place held the same surface (its depth there is the one this
+// point had then) and lies on the picture; the history clamped to the light around the pixel now
+// (what moved or changed does not linger).
+[numthreads(8, 8, 1)]
+void cs_temporal(uint2 pix : SV_DispatchThreadID)
+{
+    if (any(pix >= kk_Working.zw))
+        return;
+    float4 current = g_srcGi.Load(int3(pix, 0));
+    float stored = g_srcRawDepth.Load(int3(pix, 0)).x;
+    if (kk_Extra.z < 0.5 || any(pix >= kk_Working.xy) || stored >= kk_Params.y)
+    {
+        g_outGi[pix] = current;
+        return;
+    }
+    // This pixel's point in this frame's NDC, then in last frame's.
+    float step = kk_Params.x;
+    float2 host = float2(kk_Source.xy) + float2(pix) * step + 0.5;  // working pixel i is host pixel origin + step * i
+    float2 guest = host / kk_ScreenZ.zw;
+    float4 ndc = float4((guest.x - kk_ScreenXY.y) / kk_ScreenXY.x, (guest.y - kk_ScreenXY.w) / kk_ScreenXY.z,
+                        (stored - kk_ScreenZ.y) / kk_ScreenZ.x, 1.0);
+    float4 prev = float4(dot(kk_Reproject[0], ndc), dot(kk_Reproject[1], ndc), dot(kk_Reproject[2], ndc),
+                         dot(kk_Reproject[3], ndc));
+    if (abs(prev.w) <= 1e-9)
+    {
+        g_outGi[pix] = current;
+        return;
+    }
+    float3 pn = prev.xyz / prev.w;
+    float2 pguest = float2(pn.x * kk_ScreenXY.x + kk_ScreenXY.y, pn.y * kk_ScreenXY.z + kk_ScreenXY.w);
+    float2 pw = (pguest * kk_ScreenZ.zw - 0.5 - float2(kk_Source.xy)) / step;  // working pixels (centres at .0)
+    if (any(pw < -0.5) || any(pw > float2(kk_Working.xy) - 0.5))
+    {
+        g_outGi[pix] = current;
+        return;
+    }
+    // The history's four texels, each kept only where its depth was this point's depth then (the
+    // reprojection is known up to a factor, so the point's depth then comes from its NDC z).
+    float prevZ = XeGTAO_ScreenSpaceToViewSpaceDepth(pn.z * kk_ScreenZ.x + kk_ScreenZ.y, g_GTAOConsts);
+    int2 base = int2(floor(pw));
+    float2 t = pw - float2(base);
+    int2 last = int2(kk_Working.xy) - 1;
+    float4 history = 0.0;
+    float weight = 0.0;
+    [unroll]
+    for (int j = 0; j < 4; ++j)
+    {
+        int2 o = int2(j & 1, j >> 1);
+        int2 c = clamp(base + o, int2(0, 0), last);
+        float bilinear = (o.x ? t.x : 1.0 - t.x) * (o.y ? t.y : 1.0 - t.y);
+        float hz = g_srcHistoryDepth.Load(int3(c, 0)).x;
+        float same = abs(hz - prevZ) <= 0.05 * prevZ ? 1.0 : 0.0;
+        history += g_srcHistory.Load(int3(c, 0)) * bilinear * same;
+        weight += bilinear * same;
+    }
+    if (weight < 0.25)
+    {
+        g_outGi[pix] = current;  // a surface the camera did not see last frame
+        return;
+    }
+    history /= weight;
+    // The light around the pixel now (3x3), widened by half its range: the history may not leave it.
+    float4 lo = current, hi = current;
+    [unroll]
+    for (int k = 0; k < 9; ++k)
+    {
+        int2 q = clamp(int2(pix) + int2(k % 3 - 1, k / 3 - 1), int2(0, 0), last);
+        float4 v = g_srcGi.Load(int3(q, 0));
+        lo = min(lo, v);
+        hi = max(hi, v);
+    }
+    float4 pad = (hi - lo) * 0.5;
+    history = clamp(history, lo - pad, hi + pad);
+    g_outGi[pix] = lerp(history, current, kk_Extra.w);
 }
 
 // ------------------------------------------------------------------- denoise
