@@ -15,7 +15,9 @@
   ],
   "plugin_args": {
    "native": [
-    "--native_pipeline_cache=false"
+    "--native_pipeline_cache=false",
+    "--native_pipeline_list=false",
+    "--native_vk_pipeline_cache=false"
    ]
   },
   "env": {
