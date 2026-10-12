@@ -31,6 +31,8 @@ double DevSecondsSinceMenu();
 
 namespace {
 
+double g_game_seconds = -1;  // the game's clock (the sum of its frame times) since the save menu opened
+
 constexpr uint32_t kFrameTime = 0x82C636E0;
 constexpr uint32_t kRawFrameTime = 0x82C4EDBC;
 constexpr uint32_t kGameMs = 0x82CCAE1C;
@@ -73,6 +75,11 @@ const Window& Settings() {
 }
 
 void LogFrame(const uint8_t* base) {
+  if (g_game_seconds >= 0) {
+    g_game_seconds += LoadF(base, kRawFrameTime);
+  } else if (DevSecondsSinceMenu() >= 0) {
+    g_game_seconds = 0;
+  }
   using Clock = std::chrono::steady_clock;
   static Clock::time_point last{};
   static FILE* f = nullptr;
@@ -110,6 +117,11 @@ void LogFrame(const uint8_t* base) {
 }
 
 }  // namespace
+
+// The game's own clock since the save menu opened: the sum of its frame times (each at most 63 ms, so a
+// stall puts it behind real time by however long the stall was). -1 before the menu.
+double DevGameSecondsSinceMenu() { return g_game_seconds; }
+
 }  // namespace kk
 
 REX_EXTERN(__imp__sub_8272CA20);

@@ -27,6 +27,8 @@
 //   KK_DEV_DUMP_AT     write all guest memory to files, to compare runs offline
 //   KK_DEV_WATCH       hardware watchpoints: which function touched an address (dev_watch.cpp)
 //   KK_DEV_PROF_AT     per-function call counts (kk-prof preset, dev_prof.cpp)
+//   KK_DEV_CLOCK       the script and the menu-timed shots on the game's clock (MenuSeconds)
+//   KK_DEV_DT_LOG      the game's frame times, frame by frame (dev_frame_log.cpp)
 // Findings so far: the engine's heap layout differs between runs, so a value
 // found at one address must be reached through code (a hook) next time.
 
@@ -66,6 +68,7 @@
 namespace kk {
 extern bool (*g_dev_pad_input)(uint32_t user, uint8_t* state);
 void DevWatchTick(double seconds_since_menu);
+double DevGameSecondsSinceMenu();  // dev_frame_log.cpp
 #if defined(KK_DEV_PROFILE)
 void DevProfTick(double seconds_since_menu);
 #else
@@ -155,6 +158,30 @@ bool g_wander_calm = false;  // KK_DEV_WANDER=2
 int64_t NowMs() {
   static const auto start = Clock::now();
   return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - start).count();
+}
+
+// KK_DEV_CLOCK=game:0.771: the script's presses and the menu-timed shots follow the game's own clock
+// instead of real time once a stall has put it behind (by more than half the given lag): then the time
+// is the game's clock plus that lag. The game counts at most 63 ms a frame, so how long a loading stall
+// takes, and how it splits into frames, moves real time against the game; a script on real time then
+// presses at another moment of the game on every renderer and PC. The lag is the one of the run the
+// golden frames came from (its frame_times.csv, KK_DEV_DT_LOG), so that run sees the same times.
+double MenuSeconds(int64_t now) {
+  static const double lag = [] {
+    const char* v = std::getenv("KK_DEV_CLOCK");
+    if (!v || std::strncmp(v, "game", 4) != 0) return -1.0;
+    return v[4] == ':' ? std::atof(v + 5) : 0.0;
+  }();
+  const double real = (now - g_menu_ms.load()) / 1000.0;
+  if (lag < 0) return real;
+  static bool on_game_clock = false;
+  const double game = DevGameSecondsSinceMenu();
+  if (game < 0) return real;
+  if (!on_game_clock && real - game > lag / 2) {
+    on_game_clock = true;
+    REXLOG_INFO("KK dev: the script follows the game's clock from {:.3f} s (it is {:.3f} s behind)", real, real - game);
+  }
+  return on_game_clock ? game + lag : real;
 }
 
 template <typename T>
@@ -472,13 +499,14 @@ bool AutoskipPad(uint32_t user, uint8_t* state) {
   const int64_t now = NowMs();
   if (g_done) {
     static const int64_t done_ms = now;
-    TakeShots((now - (ShotsFromMenu() ? g_menu_ms.load() : done_ms)) / 1000.0);
-    FindAtTimes((now - g_menu_ms.load()) / 1000.0);
-    SnapAtTimes((now - g_menu_ms.load()) / 1000.0);
-    DevWatchTick((now - g_menu_ms.load()) / 1000.0);
-    DevProfTick((now - g_menu_ms.load()) / 1000.0);
-    HeapDiffAtTimes((now - g_menu_ms.load()) / 1000.0);
-    DumpAtTimes((now - g_menu_ms.load()) / 1000.0);
+    const double since_menu = MenuSeconds(now);
+    TakeShots(ShotsFromMenu() ? since_menu : (now - done_ms) / 1000.0);
+    FindAtTimes(since_menu);
+    SnapAtTimes(since_menu);
+    DevWatchTick(since_menu);
+    DevProfTick(since_menu);
+    HeapDiffAtTimes(since_menu);
+    DumpAtTimes(since_menu);
     return g_wander && WanderPad(state, now);
   }
   uint16_t buttons = 0;
@@ -491,7 +519,8 @@ bool AutoskipPad(uint32_t user, uint8_t* state) {
     }
     if (now % 3000 < kHold * 1000) buttons = kStart;  // intro videos
   } else {
-    const double t = (now - menu) / 1000.0;
+    (void)menu;
+    const double t = MenuSeconds(now);
     if (ShotsFromMenu()) TakeShots(t);
     FindAtTimes(t);
     SnapAtTimes(t);
