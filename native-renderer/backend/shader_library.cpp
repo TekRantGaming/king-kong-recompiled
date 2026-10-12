@@ -87,7 +87,9 @@ std::shared_ptr<GameShader> ShaderLibrary::Build(const kkshaders::ShaderInfo& in
            KindName(info.kind), static_cast<unsigned long long>(info.ucodeHash));
       return nullptr;
     }
-    kkshaders::BuildResult built = kkshaders::buildShader(info, *compiler_, false);
+    // Only the blob this device uses (the other one would double the compile time).
+    const uint32_t target = device_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN ? kkshaders::kBuildSpirv : kkshaders::kBuildDxil;
+    kkshaders::BuildResult built = kkshaders::buildShader(info, *compiler_, false, target);
     if (!built.ok) {
       failed_[key] = true;
       ++stats_.failed;
