@@ -34,6 +34,14 @@ set(KINGKONG_SOURCES
     src/io_fix.cpp
     src/loading_fix.cpp
     src/camera_shake.cpp
+    src/hfr.cpp
+    src/hfr_particles.cpp
+    src/hfr_dt_floor.cpp
+    src/hfr_step_decay.cpp
+    src/hfr_follow.cpp
+    src/hfr_frame_time.cpp
+    src/hfr_rowing.cpp
+    src/hfr_splash.cpp
     src/online.cpp
     src/mouse_look.cpp
     src/language.cpp
@@ -60,7 +68,7 @@ option(KK_DEV_TOOLS "Build developer test aids such as KK_DEV_AUTOSKIP" OFF)
 # --gpu_plugin=native. Off: the game is built exactly as before.
 option(KK_NATIVE_RENDERER "Build the native renderer plugin and its D3D hooks" OFF)
 if(KK_DEV_TOOLS)
-    list(APPEND KINGKONG_SOURCES src/dev_tools.cpp src/dev_watch.cpp src/dev_ae.cpp src/dev_sound_trace.cpp src/dev_load_trace.cpp src/dev_frame_log.cpp)
+    list(APPEND KINGKONG_SOURCES src/dev_tools.cpp src/dev_watch.cpp src/dev_ae.cpp src/dev_sound_trace.cpp src/dev_load_trace.cpp src/dev_frame_log.cpp src/dev_sample.cpp src/dev_venture.cpp)
     # dev_d3d_trace.cpp hooks the same Direct3D functions as the native renderer's hooks.
     if(NOT KK_NATIVE_RENDERER)
         list(APPEND KINGKONG_SOURCES src/dev_d3d_trace.cpp)

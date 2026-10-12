@@ -35,6 +35,9 @@ REXCVAR_DEFINE_STRING(kk_last_version, "", "KK",
                       "Last port version the launcher has shown (it shows What's new once after an update)");
 REXCVAR_DEFINE_INT32(kk_frame_rate, 30, "KK/Video",
                      "Frame-rate cap: 30, 60, 90, 120, 144, 165, 240, or 0 for unlimited");
+REXCVAR_DEFINE_BOOL(kk_hfr_fixes, true, "KK/Video",
+                    "Above 30 FPS, fix the game systems that assume 30 steps a second (docs/high-frame-rate.md); "
+                    "no effect at 30 FPS");
 REXCVAR_DEFINE_STRING(kk_render_quality, "quality", "KK/Video",
                       "Render resolution relative to the output: native, quality, balanced, performance, "
                       "ultra_performance, supersample, or custom (use resolution_scale)");

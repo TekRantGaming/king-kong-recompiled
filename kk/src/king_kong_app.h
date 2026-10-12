@@ -35,6 +35,7 @@
 #include "frame_stats.h"
 #include "glyphs.h"
 #include "guest.h"
+#include "hfr.h"
 
 namespace kk {
 void InstallFpeGuard();  // fpe_guard.cpp
@@ -188,6 +189,7 @@ class KingKongApp : public rex::ReXApp {
       });
     });
     kk::StartButtonPrompts(runtime()->memory());
+    kk::hfr::Setup(runtime()->memory());
     ScheduleWelcomeAchievement();
 
     // Debug aid: set KK_DUMP_IMAGE=<file> to write the decrypted guest image

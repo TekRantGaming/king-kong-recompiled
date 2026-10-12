@@ -8,8 +8,9 @@
 //   with), game_ms (the game's millisecond clock, 0x82CCAE1C), then the guest
 //   floats named in KK_DEV_DT_ADDRS="82D64254,..." (Jack's height first).
 //
-// sub_8272CA20 sets the frame time once a frame from the kernel tick count in
-// whole milliseconds (docs/high-frame-rate.md on branch nr-hfr), so two runs
+// sub_8272CA20 (hooked in hfr_frame_time.cpp, which calls DevFrameLogTick after it) sets the frame time
+// once a frame from the kernel tick count in
+// whole milliseconds (docs/high-frame-rate.md), so two runs
 // step the game alike only if their frames fall alike on millisecond ticks.
 
 #if defined(KK_DEV_TOOLS)
@@ -28,6 +29,7 @@
 
 namespace kk {
 double DevSecondsSinceMenu();
+void DevFrameLogTick(const uint8_t* base);
 
 namespace {
 
@@ -124,10 +126,7 @@ double DevGameSecondsSinceMenu() { return g_game_seconds; }
 
 }  // namespace kk
 
-REX_EXTERN(__imp__sub_8272CA20);
-REX_HOOK_RAW(sub_8272CA20) {
-  __imp__sub_8272CA20(ctx, base);
-  kk::LogFrame(base);
-}
+// Called by the one hook on sub_8272CA20 (hfr_frame_time.cpp), after the frame time is set.
+void kk::DevFrameLogTick(const uint8_t* base) { kk::LogFrame(base); }
 
 #endif  // KK_DEV_TOOLS

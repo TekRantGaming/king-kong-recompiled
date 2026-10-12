@@ -628,7 +628,7 @@ const bool g_installed = [] {
 }  // namespace
 
 // Seconds since the save menu opened (the clock KK_DEV_SCRIPT and KK_DEV_SHOTS_FROM=menu use), or -1
-// before it has. For other dev aids (dev_frame_log.cpp).
+// before it has. For other dev aids (dev_frame_log.cpp, dev_sample.cpp).
 double DevSecondsSinceMenu() {
   const int64_t menu = g_menu_ms;
   return menu < 0 ? -1.0 : (ScriptNowMs() - menu) / 1000.0;
