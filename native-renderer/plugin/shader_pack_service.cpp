@@ -141,20 +141,23 @@ struct NrShaderPackJob {
   std::thread thread;
   std::mutex mutex;
   bool finished = false;
+  bool force = false;
   kkshaders::PackBuildResult result;
 };
 
 namespace {
 
-NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t threads, int low_priority) {
+NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t threads, int low_priority, int force) {
   auto* job = new NrShaderPackJob;
+  job->force = force != 0;
   job->options = nr::PackOptionsForSettings(nr::FromUtf8(cache_dir), nr::FromUtf8(game_dir));
   job->options.threads = threads;
   job->options.lowPriority = low_priority != 0;
-  REXLOG_INFO("rexgpu-native: shader pack: checking {} ({}{})", nr::ToUtf8(kkshaders::packPath(job->options)),
-              kkshaders::packBackendName(job->options.backend), job->options.scaled ? ", render scale variants" : "");
+  REXLOG_INFO("rexgpu-native: shader pack: {} {} ({}{})", job->force ? "rebuilding (asked for)" : "checking",
+              nr::ToUtf8(kkshaders::packPath(job->options)), kkshaders::packBackendName(job->options.backend),
+              job->options.scaled ? ", render scale variants" : "");
   job->thread = std::thread([job] {
-    kkshaders::PackBuildResult r = kkshaders::buildPack(job->options, &job->progress);
+    kkshaders::PackBuildResult r = kkshaders::buildPack(job->options, &job->progress, job->force);
     if (r.upToDate) {
       REXLOG_INFO("rexgpu-native: shader pack is current ({} shaders)", r.stamp.shaders);
     } else if (r.ok) {
