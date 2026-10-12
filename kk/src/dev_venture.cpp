@@ -122,13 +122,14 @@ REX_HOOK_RAW(sub_8271BA18) {
   const uint32_t tracks = ctx.r3.u32, state = ctx.r4.u32;
   const uint32_t obj = Load32(base, 0x82CCBF88);  // -16504: the object being animated
   const uint32_t main_track = Load32(base, 0x82CCBF94) ? Load32(base, Load32(base, 0x82CCBF94)) : 0;  // [[-16492]]
-  const bool trace = want && obj == want && tracks == main_track;
+  const bool trace = want && obj == want && FrameTime(base) != 0.0f && Load16(base, tracks + 16) <= 3;
   const uint16_t i0 = trace ? Load16(base, state + 8) : 0;
   const float t0 = trace ? LoadF(base, state) : 0.0f;
   const float step = FrameTime(base);
   __imp__sub_8271BA18(ctx, base);
   if (!trace) return;
-  REXLOG_INFO("KK dev keys: key {}->{} of {} t {:.5f}->{:.5f} step {:.5f} ret {} action {}", i0, Load16(base, state + 8),
-              Load16(base, tracks + 16), t0, LoadF(base, state), step, int32_t(ctx.r3.u32), CurrentAction(base, obj));
+  REXLOG_INFO("KK dev keys: track {:08X}{} key {}->{} of {} t {:.5f}->{:.5f} step {:.5f} ret {} action {}", tracks,
+              tracks == main_track ? " (main)" : "", i0, Load16(base, state + 8), Load16(base, tracks + 16), t0,
+              LoadF(base, state), step, int32_t(ctx.r3.u32), CurrentAction(base, obj));
 }
 #endif
