@@ -13,12 +13,12 @@
 //   kkshaders scale-report <xeshaders.bin>
 //   kkshaders xsh <file.xsh> [<file.xsh> ...] --dxc <dir> [--out <dir>] [--spirv-val <exe>] [--jobs N] [--database <xeshaders.bin>]
 //   kkshaders pack-lookup <pack> [<hash> ...]
-//   kkshaders ao-list <xeshaders.bin> [--family <name>] [--term "<term>"] [--list <file>] [-o <file>]
+//   kkshaders ao-list <xeshaders.bin> [--family <name>] [--term "<term>"] [--list <file>] [-o <file>] [--sources <dir>]
 //                      the ambient-only AO's shader list (docs/ao.md): without --term, each pixel family's
 //                      constants, inputs and samplers (with --family, each shader's); with --family and --term,
 //                      a hash line for every shader of the family (a constant may be named, "constant
 //                      g_vAmbientColor", and is found in each shader's own table); --list expands the family
-//                      lines of a list file
+//                      lines of a list file; --sources writes the database's HLSL sources to a folder
 //
 // --raw-vs / --raw-ps read the file as bare big-endian microcode (no container).
 // Everything written under --out is derived from the game's files: keep it out of git.
@@ -64,7 +64,7 @@ struct Args {
 
 Args parseArgs(int argc, char** argv, int first) {
     static const std::set<std::string> withValue = {"-o", "--out", "--dxc", "--spirv-val", "--jobs", "--limit", "--database", "--image",
-                                                    "--ambient", "--family", "--term", "--list"};
+                                                    "--ambient", "--family", "--term", "--list", "--sources"};
     Args a;
     for (int i = first; i < argc; i++) {
         std::string s = argv[i];
@@ -993,6 +993,11 @@ int cmdAoList(const Args& a) {
     if (!db.load(a.positional[0], &error)) {
         std::fprintf(stderr, "%s\n", error.c_str());
         return 1;
+    }
+    // --sources: the database's HLSL sources as files, to read how each family adds its ambient light.
+    if (const std::string dir = a.get("--sources"); !dir.empty()) {
+        for (const auto& src : db.sources()) writeFile(fs::path(dir) / src.name, src.text.data(), src.text.size());
+        std::fprintf(stderr, "%zu HLSL sources written to %s\n", db.sources().size(), dir.c_str());
     }
     struct Shader {
         uint64_t hash = 0;

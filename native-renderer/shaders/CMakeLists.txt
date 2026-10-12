@@ -136,7 +136,7 @@ add_test(NAME tool-xsh COMMAND kkshaders_tool xsh "${KK_FIX}/fixture.xsh" --out 
 add_test(NAME tool-pack-lookup COMMAND kkshaders_tool pack-lookup "${KK_FIX}/db-out/kkshaders.pack")
 add_test(NAME tool-ao-list COMMAND kkshaders_tool ao-list "${KK_FIX}/xeshaders.bin")
 add_test(NAME tool-ao-list-family COMMAND kkshaders_tool ao-list "${KK_FIX}/xeshaders.bin" --family psFixture
-         --term "constant g_Constants rgb" -o "${KK_FIX}/ao-list.txt")
+         --term "constant g_Constants rgb" -o "${KK_FIX}/ao-list.txt" --sources "${KK_FIX}/ao-sources")
 set_tests_properties(tool-ao-list tool-ao-list-family PROPERTIES DEPENDS fixtures)
 set_tests_properties(tool-vfetch-check tool-db-check tool-db-build tool-db-structure tool-scale-report tool-xsh PROPERTIES DEPENDS fixtures)
 set_tests_properties(tool-pack-lookup PROPERTIES DEPENDS tool-db-build)
