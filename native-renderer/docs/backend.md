@@ -831,6 +831,31 @@ with `--native_render_scale=2`, merged into the same list with `nr_pipelines`), 
 pipelines on first use, and the driver's cache (`--native_vk_pipeline_cache`) has them from the second start.
 
 
+### After the nr-ao and hfr merges (Phase 2c)
+
+nr-ao (GTAO, the classifier, the AO options; `native_ao_method` stays `legacy`) and hfr (`kk_hfr_fixes`; nothing
+changes at exactly 30 FPS) are merged. `sub_8272CA20` has one hook (`kk/src/hfr_frame_time.cpp`: the precise
+frame time, then `KK_DEV_DT_LOG`'s `DevFrameLogTick`). Standalone tests 9/9 (with `nr_gtao_tests` and
+`nr_game_ao_tests`). In the game (`runs\p2c-merged-*`, `p2c-list6416-*`):
+
+- 17/17 golden scenes on Vulkan (`p2c-merged-full-vk`; chap04 passed this time). D3D12 not run yet.
+- The shipped list is now the tour's 1:1 and scale 2 recordings merged (`analysis\tour\pipelines\
+  tour-all-scaled.list`, 6416 pipelines; game-derived, never in git). A fresh cache root at scale 1 queued
+  3207 (3202 of the other scale left out), at auto = 2 (`draw_resolution_scale_x/y=2`, 2560x1440) 3195 (3214
+  left out); both made them before the menu (the driver's cache file saved 37.8 and 38.7 MB within a second
+  of the list). V-Rex on a first visit: 5 frames waited 8 ms in all at scale 1, 4 frames 6 ms at scale 2, no
+  draw skipped; scale 1 passed 5/5.
+- 60 FPS (`--kk_frame_rate=60`): V-Rex 60.0 average, 1% lows 59.6 to 59.8; Venture 60.0 / 59.6 to 59.7 after its
+  load. Unlimited: V-Rex 217 to 220 / 108 to 110; Venture 236 to 237 / 114 to 128. No crash, no error.
+- The slowest frames line now has buffer uploads and render targets as well (`buffers`, `targets`), for the
+  chapter-load stall (below).
+
+Next (not done): the 17 scenes on D3D12 after the merges; chap04 with nr-hfr's `KK_DEV_SAMPLE` on Xenos and
+native (the scene file is ready: the session's `scenes_sample.json`, `KK_DEV_SAMPLE=36,124,0.05`), compared with
+`tools/hfr_compare.py`; the chapter-load stall: the fence gate off (`--native_render_thread_fences=false`) on
+chap04 as the bound for "not holding fences while loading", and what D3D12's first stall frame spends its
+other 150 ms on (the new timers).
+
 ### Open problems (Phase 2)
 
 - **chap04 and chap12 cameras**: chap12 solved by the render thread (`--native_render_thread`, "The render
