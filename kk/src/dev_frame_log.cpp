@@ -98,9 +98,9 @@ void DumpObjects(const uint8_t* base) {
   const double at = times.front();
   times.erase(times.begin());
   const uint32_t world = Load32(base, 0x828E836C + 12);
-  if (!Valid(world)) return;
-  const uint32_t end = Load32(base, world + 292), start = Load32(base, world + 304);
-  if (!Valid(start) || !Valid(end) || end < start || end - start > 8 * 20000) return;
+  const uint32_t end = Valid(world) ? Load32(base, world + 292) : 0, start = Valid(world) ? Load32(base, world + 304) : 0;
+  REXLOG_INFO("KK dev objects at {:.1f} s: world {:08X}, active table {:08X}..{:08X}", at, world, start, end);
+  if (!Valid(world) || !Valid(start) || !Valid(end) || end < start || end - start > 8 * 20000) return;
   FILE* f = std::fopen(("objects_" + std::to_string(int(at * 10)) + ".csv").c_str(), "w");
   if (!f) return;
   std::fprintf(f, "t,i,obj,flags,x,y,z,ax,ay,az\n");
