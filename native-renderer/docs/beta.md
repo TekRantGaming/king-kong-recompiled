@@ -56,6 +56,29 @@ slower until this finishes, because preparing the shaders uses its processor." (
 the setup's shader step, the recompile pop-up, the "Preparing shaders" wait pop-up, and a short faint line under the
 SHADERS progress bar on Home ("Your PC may run slower until this finishes.").
 
+### The shader screen, at setup and after every update
+
+The native renderer's shaders are prepared on a screen of their own in Home's look (`DrawShaderScreen` in
+`launcher.cpp`): the stills (blurred, as behind the settings), the game's logo above, the launcher music, and a
+centred panel like the pop-ups: a caption (PC PORT . SETUP or UPDATE), the title, a line on why ("The game's shaders
+are translated for your graphics card from your copy of the game, once, so effects never stutter the first time they
+appear."), the slower-PC line, the progress bar with "N of M shaders" and the percentage, and **Continue in the
+background** (A, Enter or a click; the footer shows it). After that the build goes on behind Home (SHADERS status) and
+Play waits for it. When the build ends on the screen, the screen closes by itself.
+
+- **At setup** it replaces the old zero-asset step (by then the game is installed and the artwork taken): title
+  "Preparing the shaders"; it is followed by the look step.
+- **After every update** the first start of a version the launcher has not run before (`kk_last_version` differs from
+  `KK_VERSION` on an installation that has run before: an update, a beta-to-beta update, a channel switch; the same
+  test as What's new) **forces a full rebuild** of the pack (the Home recompile's forced build), whatever the stamp says,
+  and shows the screen titled "Updated to vX: preparing the shaders". Not on a fresh install (the setup builds the
+  pack), not when nothing changed, not in `KK_AUTOPLAY` test runs. What's new opens over it.
+
+Checked: `runs\1012-162005-after-update` (a settings file from v1.9.10: `shader pack: rebuilding (asked for)`, the
+screen with What's new over it, Continue in the background, Play waited, built in 40.5 s, the game started from it,
+`kk_last_version` now 1.9.11) and `runs\1012-162109-setup-shaders` (`setup:4`, Continue, the look step, Remastered,
+the game started). Dev token `updated` acts as the first start after an update.
+
 ### 2. Recompile shaders on Home
 
 The SHADERS column of Home's status row (the native renderer's pack, shown when it is the renderer) is a button:

@@ -541,9 +541,19 @@ class Launcher final : public rex::ui::ImGuiDialog {
     LoadArt();
     // Installed before the launcher took its art from the game files: take it now.
     if (files_ok_ && !art::HasLauncherArt(ArtDir())) StartArtExtraction(false);
-    // The native renderer's shaders (native_shaders.h): checked each time the launcher opens,
-    // built in the background from the game files when missing or stale.
-    if (files_ok_) native_pack_.Start(CacheDir(), paths_.game_dir);
+    // The native renderer's shaders (native_shaders.h): checked each time the launcher opens, built
+    // in the background from the game files when missing or stale, and built again in full after
+    // every update (a version this launcher hasn't run: an update, a beta, a channel switch), shown by
+    // the after-update screen (DrawShaderScreen). Not on a fresh install: its setup builds them.
+    if (files_ok_) {
+      const bool updated = UpdatedSinceLastRun();
+      native_pack_.Start(CacheDir(), paths_.game_dir, updated);
+      if (updated && NativeShaderPack::Wanted()) {
+        update_shaders_ = true;
+        REXLOG_INFO("KK: first start of v{} (last v{}): the native renderer's shaders are built again", KK_VERSION,
+                    Get("kk_last_version"));
+      }
+    }
     toast_ = std::make_unique<AchievementToast>(drawer, immediate_, paths_.game_dir, paths_.user_dir);
     CleanUpAfterUpdate();
     online::Start();
@@ -650,7 +660,9 @@ class Launcher final : public rex::ui::ImGuiDialog {
       ui_sounds_ = std::make_unique<LauncherSounds>(paths_.game_dir);
 
     DrawBackdrop(dl);
-    if (InSetup()) {
+    if (ShaderScreen()) {
+      DrawShaderScreen(dl);
+    } else if (InSetup()) {
       DrawSetup(dl);
     } else {
       if (!modal_.open) HandleGlobalInput();
@@ -831,7 +843,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
     home_mix_ = ui::Approach(home_mix_ * 100.0f, home ? 100.0f : 0.0f, 9.0f) / 100.0f;
     slide_clock_ += std::min(ImGui::GetIO().DeltaTime, 0.1f);
     const ImVec2 p1(o_.x + w_, o_.y + h_);
-    if (!slides_.empty() && !InSetup()) {
+    if (!slides_.empty() && !PlainSetup()) {
       const int n = int(slides_.size());
       const int cur = int(slide_clock_ / kSlideTime) % n, next = (cur + 1) % n;
       const float into = float(std::fmod(slide_clock_, double(kSlideTime)));
@@ -876,7 +888,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
     }
     auto lerp = [](float a, float b, float t) { return a + (b - a) * t; };
     const float hm = home_mix_;
-    dl->AddRectFilled(o_, p1, ui::WithAlpha(color::kBase, InSetup() ? 0.1f : lerp(0.80f, 0.16f, hm)));
+    dl->AddRectFilled(o_, p1, ui::WithAlpha(color::kBase, PlainSetup() ? 0.1f : lerp(0.80f, 0.16f, hm)));
     // Darker on the left for the menu and the list, and at the top and bottom
     // for the tabs and prompts.
     const ImU32 c0 = ui::WithAlpha(color::kBase, lerp(0.30f, 0.88f, hm)), c1 = ui::WithAlpha(color::kBase, 0.0f);
@@ -979,6 +991,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
       if (modal_.cancel >= 0) p.push_back({Action::kBack, "Back"});
       return p;
     }
+    if (ShaderScreen()) return {{Action::kAccept, "Continue in the background"}};
     if (InSetup()) {
       switch (SetupStage()) {
         case 0:
@@ -1469,7 +1482,129 @@ class Launcher final : public rex::ui::ImGuiDialog {
 #if defined(KK_DEV_TOOLS)
     if (dev_setup_ >= 0) return true;
 #endif
-    return !files_ok_ || installing_ || setup_art_ || setup_shaders_ || setup_style_ || installing_update_;
+    return !files_ok_ || installing_ || setup_art_ || setup_shaders_ || setup_style_ || installing_update_ ||
+           update_shaders_;
+  }
+
+  // A version this launcher has not run before, on an installation that has run one (What's new uses
+  // the same test; a fresh install has no settings file). Not in test runs (KK_AUTOPLAY), which
+  // don't record the version either.
+  bool UpdatedSinceLastRun() const {
+    if (std::getenv("KK_AUTOPLAY")) return false;
+    const std::string last = Get("kk_last_version");
+    std::error_code ec;
+    return last != KK_VERSION && (!last.empty() || std::filesystem::exists(paths_.config_path, ec));
+  }
+
+  // The native renderer's shaders being prepared, as a screen of its own: the setup's step (after the
+  // artwork, before the look) and after every update.
+  bool ShaderScreen() const {
+    if (installing_update_ || installing_ || setup_art_) return false;
+#if defined(KK_DEV_TOOLS)
+    if (dev_setup_ >= 0) return dev_setup_ == 4;
+#endif
+    return setup_shaders_ || update_shaders_;
+  }
+  // The setup's step and the plain setup screens draw the night sky; the shader screen the stills.
+  bool PlainSetup() const { return InSetup() && !ShaderScreen(); }
+
+  // Home's look (the stills, blurred; the game's logo; the music), with a centred panel: what is
+  // happening and why, the PC being slower meanwhile, the progress, and Continue in the background
+  // (A, Enter or a click). The build goes on behind Home after that, and Play waits for it.
+  void DrawShaderScreen(ImDrawList* dl) {
+    const float s = S();
+    const ui::Fonts f = ui::GetFonts();
+    bool after_update = !setup_shaders_;
+    float fraction = native_pack_.Fraction();
+    uint32_t done = native_pack_.Done(), total = native_pack_.Total();
+#if defined(KK_DEV_TOOLS)
+    if (dev_setup_ == 4) {
+      after_update = false;
+      if (!native_pack_.Busy()) total = 4794, done = 2157, fraction = 0.45f;  // screenshots
+    }
+#endif
+    const std::string caption = Upper(T("PC port")) + "  " KK_DOT "  " + Upper(T(after_update ? "Update" : "Setup"));
+    const std::string title =
+        after_update ? F("Updated to v{0}: preparing the shaders", {KK_VERSION}) : T(std::string("Preparing the shaders"));
+    const std::string why = T(
+        "The game's shaders are translated for your graphics card from your copy of the game, once, so effects "
+        "never stutter the first time they appear.");
+    const std::string slow = T(KK_SLOW_PC);
+    const std::string button = T("Continue in the background");
+    const float pw = std::min(760 * s, w_ - Margin() * 2), pad = 34 * s, r = 12 * s, wrap = pw - pad * 2;
+    const float why_h = ui::TextSize(f.text, 16 * s, why, wrap).y, slow_h = ui::TextSize(f.text, 14.5f * s, slow, wrap).y;
+    const float bh = 48 * s;
+    const float ph = pad + 16 * s + 14 * s + 36 * s + 18 * s + why_h + 10 * s + slow_h + 30 * s + 3 * s + 14 * s +
+                     20 * s + 30 * s + bh + pad;
+    float lw = 0, lh = 0;
+    if (logo_) {
+      lh = std::clamp(h_ - ph - 150 * s, 0.0f, 150 * s);
+      lw = lh * logo_aspect_;
+    }
+    const float total_h = (lh > 40 * s ? lh + 30 * s : 0) + ph;
+    float y = o_.y + std::max(40 * s, (h_ - 70 * s - total_h) * 0.5f);
+    const float cx = o_.x + w_ * 0.5f, x0 = cx - pw * 0.5f, x1 = cx + pw * 0.5f;
+    if (lh > 40 * s) {
+      dl->AddImage(ui::Tex(logo_), ImVec2(cx - lw * 0.5f, y), ImVec2(cx + lw * 0.5f, y + lh));
+      y += lh + 30 * s;
+    }
+    // The panel, like the pop-ups': dark, a hairline, a brass line on top.
+    const ImVec2 p0(x0, y), p1(x1, y + ph);
+    dl->AddRectFilled(ImVec2(p0.x, p0.y + 6 * s), ImVec2(p1.x, p1.y + 6 * s), IM_COL32(0, 0, 0, 60), r);
+    dl->AddRectFilled(p0, p1, ui::WithAlpha(IM_COL32(14, 16, 20, 255), 0.86f), r);
+    dl->AddRect(p0, p1, ui::WithAlpha(color::kText, 0.10f), r, 0, 1.0f * s);
+    dl->AddRectFilled(ImVec2(p0.x + r, p0.y), ImVec2(p1.x - r, p0.y + 2 * s), color::kAccent);
+    float ty = y + pad;
+    const float tx = x0 + pad;
+    ui::DrawTracked(dl, f.display, 12 * s, ImVec2(tx, ty), color::kAccent, caption, 2.6f * s);
+    ty += 16 * s + 14 * s;
+    dl->AddText(f.display, 30 * s, ImVec2(tx, ty), color::kText, title.c_str());
+    ty += 36 * s + 18 * s;
+    dl->AddText(f.text, 16 * s, ImVec2(tx, ty), color::kTextDim, why.c_str(), nullptr, wrap);
+    ty += why_h + 10 * s;
+    dl->AddText(f.text, 14.5f * s, ImVec2(tx, ty), color::kTextFaint, slow.c_str(), nullptr, wrap);
+    ty += slow_h + 30 * s;
+    // The progress.
+    const float by = std::round(ty);
+    dl->AddRectFilled(ImVec2(tx, by), ImVec2(tx + wrap, by + 3 * s), ui::WithAlpha(color::kText, 0.12f));
+    if (fraction >= 0) {
+      dl->AddRectFilled(ImVec2(tx, by), ImVec2(tx + wrap * std::clamp(fraction, 0.0f, 1.0f), by + 3 * s), color::kAccent);
+    } else {
+      const float t = float(std::fmod(ImGui::GetTime() * 0.6, 1.0));
+      const float a0 = tx + wrap * std::max(0.0f, t * 1.3f - 0.3f), a1 = tx + wrap * std::min(1.0f, t * 1.3f);
+      dl->AddRectFilled(ImVec2(a0, by), ImVec2(a1, by + 3 * s), color::kAccent);
+    }
+    ty += 3 * s + 14 * s;
+    const std::string left = total > 0 ? F("{0} of {1} shaders", {std::to_string(done), std::to_string(total)})
+                                       : T(std::string("Checking"));
+    const std::string right = fraction >= 0 ? std::to_string(int(fraction * 100)) + "%" : "";
+    dl->AddText(f.text, 15 * s, ImVec2(tx, ty), color::kText, left.c_str());
+    dl->AddText(f.text, 15 * s, ImVec2(tx + wrap - ui::TextSize(f.text, 15 * s, right).x, ty), color::kTextDim,
+                right.c_str());
+    ty += 20 * s + 30 * s;
+    // Continue in the background: the panel's one button, with the focus.
+    const float bw = std::max(300 * s, ui::TextSize(f.semibold, 16 * s, button).x + 60 * s);
+    const ImVec2 b0(x1 - pad - bw, ty), b1(x1 - pad, ty + bh);
+    const bool hovered = !modal_.open && ImGui::IsMouseHoveringRect(b0, b1, false);
+    dl->AddRectFilled(b0, b1, hovered ? IM_COL32_WHITE : color::kFocus, 4 * s);
+    const ImVec2 ts = ui::TextSize(f.semibold, 16 * s, button);
+    dl->AddText(f.semibold, 16 * s, ImVec2(b0.x + (bw - ts.x) * 0.5f, b0.y + (bh - ts.y) * 0.5f), color::kOnFocus,
+                button.c_str());
+    if (!modal_.open && (input_.Pressed(Action::kAccept) || (hovered && ImGui::IsMouseClicked(0)))) {
+      input_.Consume(Action::kAccept);
+      ContinueShadersInBackground();
+    }
+  }
+
+  void ContinueShadersInBackground() {
+    ui::Cue(ui::Sound::kSelect);
+    setup_shaders_ = false;  // the setup goes on to the look step
+    update_shaders_ = false;
+#if defined(KK_DEV_TOOLS)
+    if (dev_setup_ == 4) dev_setup_ = 5;
+#endif
+    page_ = kHome;
+    home_focus_ = 0;
   }
 
   // 0: asking for the disc image, 1: installing, 2: taking the artwork,
@@ -1493,14 +1628,11 @@ class Launcher final : public rex::ui::ImGuiDialog {
       copy_total = float(progress_.bytes_total.load());
     }
     float art_fraction = art_progress_.fraction.load();
-    float shader_fraction = native_pack_.Fraction();
-    uint32_t shaders_done = native_pack_.Done(), shaders_total = native_pack_.Total();
 #if defined(KK_DEV_TOOLS)
     if (dev_setup_ >= 0) {  // screenshots of each stage
       copy_total = 6.3e9f;
       copied = copy_total * 0.37f;
       art_fraction = 0.6f;
-      if (!native_pack_.Busy()) shaders_total = 4794, shaders_done = 2157, shader_fraction = 0.45f;
     }
 #endif
 
@@ -1599,21 +1731,6 @@ class Launcher final : public rex::ui::ImGuiDialog {
       body("Taking the game's logo and stills from the movie from your copy of the game.");
       bar(art_fraction);
       y += 30 * s;
-    } else if (stage == 4) {
-      heading("Preparing the shaders");
-      body("Translating the game's shaders for the native renderer, from your copy of the game. This is done once, "
-           "and again only when the port or the game's files change. " KK_SLOW_PC);
-      bar(shader_fraction);
-      caption_pair(shaders_total > 0 ? F("{0} of {1} shaders", {std::to_string(shaders_done), std::to_string(shaders_total)})
-                                     : T(std::string("Checking")),
-                   shader_fraction >= 0 ? std::to_string(int(shader_fraction * 100)) + "%" : "");
-      // The build goes on behind the Home screen (its status line), and Play waits for it.
-      entries.push_back({"Continue in the background", true, [this] {
-                           setup_shaders_ = false;
-#if defined(KK_DEV_TOOLS)
-                           if (dev_setup_ == 4) dev_setup_ = 5;
-#endif
-                         }});
     } else if (stage == 5) {
       heading("Choose a look");
       body("Pick how King Kong looks. You can change it at any time with Look on the Graphics page.");
@@ -3628,6 +3745,11 @@ class Launcher final : public rex::ui::ImGuiDialog {
       setup_shaders_ = false;
       if (!setup_style_) Status(InstalledMessage());  // else once the look is chosen
     }
+    if (update_shaders_ && !native_pack_.Busy()) {
+      update_shaders_ = false;
+      Status(native_pack_.Ok() ? F("Updated to v{0}. The shaders are ready.", {KK_VERSION})
+                               : T(std::string("The shaders were not prepared: the game compiles them as it starts.")));
+    }
     if (!waiting_for_native_) return;
     if (!native_pack_.Busy()) {
       waiting_for_native_ = false;
@@ -3698,7 +3820,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
   // layout positions: "move:X:Y", "click:X:Y", "down:X:Y", "up", "wheel:N".
   // "setup:5" is the look step; "reset-beta" does to the settings what switching to
   // stable does (and saves them); "whats-new" opens What's new as after 1.9.11; "update-test"
-  // logs the update choice cases (RunUpdatePickTests).
+  // logs the update choice cases (RunUpdatePickTests); "updated" acts as the first start after an
+  // update (the full shader rebuild and its screen); "setup:4" shows the setup's shader screen.
   void DevInput() {
     ImGuiIO& io = ImGui::GetIO();
     static bool release = false;
@@ -3738,6 +3861,11 @@ class Launcher final : public rex::ui::ImGuiDialog {
     if (t == "reset-beta") {  // what switching to stable does to the settings (FinishChannelSwitch)
       ResetBetaOnlySettings();
       SaveSettings(paths_.config_path);
+      return;
+    }
+    if (t == "updated") {  // as on the first start after an update: the full rebuild and its screen
+      update_shaders_ = true;
+      if (!native_pack_.Busy()) native_pack_.Start(CacheDir(), paths_.game_dir, true);
       return;
     }
     if (t == "update-test") {  // PickUpdate's cases (update.h), logged
@@ -3814,6 +3942,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
   bool waiting_for_pack_ = false;  // Play was pressed during the download
   NativeShaderPack native_pack_;      // the native renderer's shaders (native_shaders.h)
   bool setup_shaders_ = false;        // being prepared as the install's last step
+  bool update_shaders_ = false;       // built again in full after an update (DrawShaderScreen)
   bool waiting_for_native_ = false;   // Play was pressed: they are checked (and built) first
   bool native_modal_ = false;         // the pop-up of that wait is open
   bool native_pack_checked_ = false;  // checked for this Play: StartGame goes on
