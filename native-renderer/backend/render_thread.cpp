@@ -11,9 +11,8 @@ namespace {
 
 thread_local const GuestSnapshot* t_snapshot = nullptr;
 
-// How far the game may run ahead of the render thread: one frame (two made unlimited frame rates
-// more uneven), or this many calls.
-constexpr uint32_t kMaxQueuedPresents = 1;
+// How far the game may run ahead of the render thread: max_queued_presents frames (by default one: two
+// made unlimited frame rates more uneven), or this many calls.
 constexpr size_t kMaxQueuedCommands = 8000;
 
 // The parts of the device the renderer reads (guest_device.h): fetch, float, bool and loop constants;
@@ -179,7 +178,7 @@ void ThreadedSink::Enqueue(Command&& command, std::chrono::steady_clock::time_po
   std::unique_lock lock(mutex_);
   const auto copied = std::chrono::steady_clock::now();
   room_cv_.wait(lock, [&] {
-    return stop_ || (queue_.size() < kMaxQueuedCommands && (!present || queued_presents_ < kMaxQueuedPresents));
+    return stop_ || (queue_.size() < kMaxQueuedCommands && (!present || queued_presents_ < max_queued_presents));
   });
   stats_.backpressure_us += Micros(copied);
   queue_.push_back(std::move(command));

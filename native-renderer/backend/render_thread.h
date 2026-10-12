@@ -116,6 +116,8 @@ class ThreadedSink final : public DrawSink {
   };
   std::function<void(const LongFrame&)> on_long_frame;
   uint64_t long_frame_us = 50000;
+  // Frames the game may queue before its Present waits for the render thread (set before the first call).
+  uint32_t max_queued_presents = 1;
 
   // Calls queued so far (a ticket), and a wait until the render thread has run that many.
   uint64_t Ticket() const { return queued_.load(std::memory_order_acquire); }

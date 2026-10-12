@@ -147,6 +147,11 @@ REXCVAR_DEFINE_BOOL(native_render_thread_fences, true, "Native renderer",
                     "thread; for testing)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_INT32(native_render_thread_presents, 1, "Native renderer",
+                     "With native_render_thread: how many frames the game may queue ahead of the render thread "
+                     "before its Present waits (1 to 4)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_BOOL(native_async_present, true, "Native renderer",
                     "Hand each frame to the presenter from a thread of its own, so the guest GPU's command "
                     "stream (and the game waiting on it) does not wait for the presenter")
