@@ -2026,6 +2026,16 @@ class Launcher final : public rex::ui::ImGuiDialog {
         items.push_back(std::move(Disable(st, original, kSetByOriginal)));
       }
     }
+    if (FindFlag("native_gi") && rex::cvar::GetFlagByName("gpu_plugin") == "native") {
+      // Global illumination lives in the native renderer (native_gi, native-renderer/docs/gi.md). A build
+      // without it has no such setting and ignores the line in the settings file.
+      Item it = CvarChoice("Global illumination",
+                           "Light bouncing off sunlit surfaces into the shade beside them: sunlit rock tints the "
+                           "shadow next to it, the jungle's green reaches the people in it. Medium costs about 1 ms a "
+                           "frame at 1440p.",
+                           "native_gi", {{"Off", "off"}, {"Low", "low"}, {"Medium", "medium"}, {"High", "high"}});
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
 
     items.push_back(Section("Effects"));
     {
@@ -2670,7 +2680,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
       case kGraphics:
         return {"kk_original_look", "kk_modern_settings", "present_effect", "kk_render_quality", "resolution_scale",
                 "draw_resolution_scale_x", "draw_resolution_scale_y", "swap_post_effect", "anisotropic_override",
-                "kk_motion_blur", "kk_big_blur", "kk_fog", "ao_mode", "ao_strength"};
+                "kk_motion_blur", "kk_big_blur", "kk_fog", "ao_mode", "ao_strength", "native_gi"};
       case kGameplay:
         return {"kk_frame_rate", "kk_fov", "kk_camera_shake", "kk_camera_shake_strength", "kk_show_fps",
                 "kk_skip_intros", "user_language"};

@@ -420,7 +420,7 @@ const std::vector<std::pair<const char*, const char*>>& OriginalLookSettings() {
       {"kk_render_quality", "custom"}, {"resolution_scale", "1"}, {"swap_post_effect", "none"},
       {"anisotropic_override", "-1"},  {"ao_mode", "0"},          {"ao_strength", "1"},
       {"kk_motion_blur", "true"},      {"kk_fog", "true"},        {"kk_big_blur", "true"},
-      {"kk_frame_rate", "30"},         {"kk_fov", "69"},
+      {"kk_frame_rate", "30"},         {"kk_fov", "69"},           {"native_gi", "off"},
   };
   return settings;
 }
