@@ -679,7 +679,7 @@ change alone raised V-Rex's unlimited 1% low to 110-120 (`runs\perfC-four3-r0`).
   cache left on: turning it off is a system setting): the second start loaded 5,654 KB, its prewarm made the
   first run's 249 pipelines in 18 ms, 85 ms of pipeline creation in all against 416 ms, 5 frames waited and none
   skipped against 23 and 4 (339 draws), and the save menu opened 8.4 s after the start against 10.2 s.
-- The launcher's prewarm was not tried in the game (it needs the launcher's Play button pressed by hand).
+- The launcher's prewarm: tried later with `KK_AUTOPLAY=<seconds>` ("The launcher prewarm in the game" below).
 
 ### Defaults (Phase 2c)
 
@@ -694,7 +694,8 @@ scale) gives the old behaviour:
 | `--native_pipeline_list` | nothing without `kkpipelines.list` beside the game; with it no skipped draw on a first visit (above) |
 | `--native_vk_pipeline_cache` | Vulkan only (D3D12 logs that it is not used); a file of another driver is rebuilt; the second start's pipelines in 18 ms (above) |
 
-Left off: `--native_launcher_prewarm` (not tried in the game), `--native_stutter_stats` (a diagnostic).
+Left off: `--native_launcher_prewarm` (tried in the game since, "The launcher prewarm in the game" below),
+`--native_stutter_stats` (a diagnostic).
 
 With the new defaults (the harness still adds `--native_pipeline_cache=false`): Vulkan 14/17 in the first full
 run (`runs\p2c-defaults-vk-full`: chap04, and Kong to the Rescue's two scenes because the scripted chapter
@@ -736,17 +737,110 @@ the pipeline cache off):
   other run). Draws skipped for a pipeline not ready: none in nine of the ten starts and 8 in V-Rex's (its
   loading), against 9 to 394 in most starts with the list off.
 
+### chap04's timing measured frame by frame (Phase 2c)
+
+Tools (dev builds): `KK_DEV_DT_LOG="from,to"` writes the game's frame time (`0x82C636E0`, set once a frame by
+`sub_8272CA20` from the tick count in whole milliseconds and clamped to 63 ms) frame by frame to
+`frame_times.csv`; `KK_DEV_PAD_LOG=1` logs each change of the scripted pad; `KK_DEV_OBJ_AT` writes the world's
+active objects at chosen times; the render thread logs every game frame over 50 ms with where its time went
+("long game frame"). Runs: `runs\p2c-dt-*`; scripts in the session's scratchpad (`dtlag.py`, `dtshape.py`,
+`dtseq.py`).
+
+What the first frames of chap04 look like (frame 0 = the stall after the chapter select's A press):
+
+| Run | Stall frames, host ms / the game's ms | Game time behind real time after it |
+|---|---|---|
+| Xenos (four runs) | 720/63, 6/6, 187/63, 86/63, 6/6, 30/30 (to within 5 ms) | 770, 772, 775, 795 ms |
+| Native Vulkan | 754/63, 9/11, 226/63, 46/44, ... (varies) | 755 to 828 ms |
+| Native D3D12 | 764/63, 9/9, 419/63, 7/7, ... | 970 to 1023 ms |
+
+Everything else is the same on both plugins: about 33.3 ms a frame, the game's frame time 32 to 35 ms from the
+millisecond rounding (that pattern differs from run to run on Xenos as much as on native, and Xenos still gives
+the same picture). The stall is the chapter select starting the load: frame A (about 0.72 s) is the game's own
+work, and the next frames wait for the GPU. On native the render thread does the new chapter's first frames
+(pipelines, about 180 ms of texture uploads on D3D12): the game's thread waited 211 ms for room in the queue and
+then 338 ms of fence waits in one D3D12 run. Each stall frame counts at most 63 ms on the game's clock, so the
+renderer's share of the stall moves the whole chapter against real time; the test script presses (START at
+54.4 s and so on) and the shots (120 s) come on real time.
+
+Tried, chap04 on the native renderer (all fail, MAE 2 to 5):
+- the shipped pipeline list on (`p2c-dt-b-*-list`): the Vulkan lag 786 and 827 ms, D3D12 971 to 978 ms;
+- three frames queued ahead (`--native_render_thread_presents=3`, new, default 1): Vulkan 779 ms, D3D12 996 ms;
+- the script on the game's own clock (`KK_DEV_CLOCK=game:0.771`, new: once a loading stall has put the game
+  behind, presses and shots follow the game's clock plus the golden run's lag): every run then presses at the
+  same game moment (18674 to 18712 ms after the stall; Xenos 18665 to 18699), Xenos still matches the golden
+  (MAE 0.04, four runs), native Vulkan failed twice (4.3, 4.4) and passed once (0.80), D3D12 failed twice (2.4,
+  2.3).
+
+So the press timing is not the whole cause: with the presses at the same game moment native still ends up
+elsewhere, run to run. What remains different is the stall itself (how many frames and how long each), and the
+game's own threads, which the render thread's CPU use may change. The difference is the camera (every edge in the
+picture shifts by about a pixel, mostly vertically); the chapter tour sees the same in tour04, tour18, tour24 and
+tour25. Next: `KK_DEV_OBJ_AT` (the world's objects at chosen times, Xenos against native) to find the first
+object that differs and when.
+
+### The presenter hand-over without a copy (Phase 2c)
+
+The SDK's Vulkan presenter makes its guest output image without TRANSFER_DST usage, so the copy into it broke the
+rules (`VUID-vkCmdCopyImage-aspect-06663`, `VUID-VkImageMemoryBarrier-oldLayout-01213` and its `Barrier2` form).
+The Vulkan host now draws the frame into it as a colour attachment (`backend/output_blit.cpp`, the blit shader at
+1:1, layouts set by hand around the draw); D3D12 keeps its copy (no usage rule there). `--native_debug` bit
+1048576 brings the copy back for comparison. The picture is the same (`runs\p2c-blit-check`: title, menus,
+chap12 pass; chap12's first frame against the copy's: mean difference 0.012). Khronos layer, chap12
+(`analysis\phase2c\validation\blit*.txt`): the three presenter errors are gone. One message remains, once a run:
+`VUID-vkCmdBeginRendering-pRenderingInfo-09592`, a game renderer image used as a colour attachment while the
+layer knows it as SHADER_READ_ONLY; it comes with the old copy too (`blit3-copy`), so it is not the hand-over.
+It is a new texture's first use: NVRHI marks a texture's state as initialised only when its first command list is
+submitted, and with the render thread and the submitter a second list can be recorded before that (to find).
+
+### The launcher prewarm in the game (Phase 2c)
+
+`runs\p2c-pw-*`, a fresh cache root per case, the launcher open (`KK_AUTOPLAY=45`), the 3214-pipeline list:
+
+| Case | Launcher prewarm | The game's pipeline creation (all workers) | Stutter (V-Rex, first visit) |
+|---|---|---|---|
+| First start, empty cache root, off (`p2c-pw-off-vrex-1`) | - | 3989 ms | 4 frames waited, 6 ms in all |
+| First start, empty cache root, on (`p2c-pw-on-vrex-1`) | 3207 made in 1.6 s while the launcher was open | 624 ms | 4 frames, 6 ms |
+| Second start, off / on (`p2c-pw-*-kong-1`) | - / 0.4 s | 638 / 569 ms | 1 frame, 0 ms |
+| Pack there, no driver cache (a new driver), off / on (`p2c-pw-pack*-vrex-1`) | - / 1.3 s | 3994 / 592 ms | 4 frames 5 ms / 5 frames 8 ms |
+
+All scenes passed (V-Rex 5/5, Kong 2/2 in every case). The pipeline creation is spread over the workers (about
+a second of wall time before the first frame without the prewarm); the time to the save menu is the
+launcher's (held open 30 to 45 s here) and says nothing.
+
+Left off by default: it saves under a second of pipeline creation, once, on a start whose driver cache is empty
+(the first start, or after a driver update); the shipped list and the driver's cache already leave no stutter. On a
+player's first start the user's pack is not built yet when the launcher opens, so the prewarm would translate and
+compile its shaders with DXC alongside the pack build (in a developer build it found the pack beside the game).
+
+### The tour's pipeline list as the shipped list (Phase 2c)
+
+The chapter tour recorded the game's pipelines in all 42 chapters (`analysis\tour\pipelines\tour-all.list`, 3214
+pipelines, render scale 1; game-derived, never in git). As `kkpipelines.list` beside the game: a fresh cache root
+queues 3207 of them before the first frame (7 wait for shaders made later) and makes them all in about a second
+(this PC's driver keeps its own disk cache as well); the second start loads the driver's cache (37.9 MB) and has
+them in 170 ms. V-Rex on a first visit: 4 frames waited 6 ms in all, no draw skipped.
+
+Render scale: a run at a scale other than 1 (`--native_render_scale=auto` on a display above 720p) uses the
+render scale aware pixel shaders, other translations with other input hashes (`translationInputHash` adds
+"render-scale-aware/1"), so it prewarms only records made at a scale other than 1 (`kRecordScaled`; "0 of another
+render scale" counts the others). One list recorded at any scale other than 1 covers every such scale (the
+scale is a shader constant, b3). Until the tour is recorded at scale 2 as well (`run.ps1 -Tour -RecordPipelines`
+with `--native_render_scale=2`, merged into the same list with `nr_pipelines`), a scaled player makes those
+pipelines on first use, and the driver's cache (`--native_vk_pipeline_cache`) has them from the second start.
+
+
 ### Open problems (Phase 2)
 
 - **chap04 and chap12 cameras**: chap12 solved by the render thread (`--native_render_thread`, "The render
-  thread (Phase 2c)" above; it passed in every run since, on Vulkan and D3D12). **chap04 is not settled**: with
-  the render thread Jack's landing there varies from run to run, the picture is the golden one or 0.5, 1 or 2
-  pixels off, while the Xenos plugin repeats itself (`runs\p2c-c04-xenos-1`, `-2`: MAE 0.30 and 0.34). Same
-  build and options, chap04 alone (`runs\p2c-c04-*`): with the fence gate 3 of 3 runs had the golden picture
-  (two of them missed the draw list limit by 0.001), without it 2 of 3; with the render thread and the four
-  options it passed in 7 of 15 Vulkan runs in all, and in none of 5 on D3D12. So something at the spawn still
-  depends on the threads' timing in a way the Xenos plugin's does not; the per-frame snapshots (`KK_DEV_SNAP_AT`, `analysis\phase2c`) are the
-  way in. The scene's limits were not loosened.
+  thread (Phase 2c)" above; it passed in every run since, on Vulkan and D3D12). **chap04 is not settled**:
+  measured frame by frame in "chap04's timing measured frame by frame" above. The renderer's share of the
+  loading stall moves the chapter against the script's real time, but with the script on the game's own
+  clock native still ends up with the camera about a pixel off in most runs, so something else differs too
+  (the stall's frames, or the game's own threads). The tour's tour04, tour18, tour24 and tour25 are the same
+  kind. The scene's limits were not loosened.
+- **One Khronos message left** (`VUID-vkCmdBeginRendering-pRenderingInfo-09592`, once a run): a game renderer
+  texture's first use, see "The presenter hand-over without a copy" above.
 - **Defaults**: decided and done, "Defaults (Phase 2c)" above.
 - **FXAA** matches the Xenos plugin's in kind but changes fewer pixels on small text.
 
@@ -754,7 +848,8 @@ the pipeline cache off):
   frame for them, then skip; the pipeline cache (on by default) makes the descriptions of earlier runs at
   start. A truly cold driver cache was not measured (NVIDIA's own cache cannot be turned off from here). The
   shipped list and the driver cache file are on by default (above); a release needs a `kkpipelines.list`
-  made from runs of every chapter. The launcher's prewarm is still off and untried in the game.
+  made from runs of every chapter (the tour's list, 3214 pipelines, render scale 1; the scaled variants are
+  still to record). The launcher's prewarm stays off ("The launcher prewarm in the game").
 - **Write watches.** Venture's gameplay still has about 10,000 invalidations a second and its movie about 360
   a frame (texture pages; textures are never unwatched whole, see Phase 2b above). The movie planes could
   skip the watches (their Lock / Unlock can be hooked).
