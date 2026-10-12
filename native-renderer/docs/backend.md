@@ -119,9 +119,10 @@ always what the GPU would have been sent. At every draw the game renderer reads 
 
 - **Shaders.** `ShaderLibrary` registers every shader when it is created (hooks on `sub_82111CA0` /
   `sub_82111D90`, run after the original so the object is known): the container's microcode hash is looked up
-  in the pack (`kkshaders-spirv.pack` or `kkshaders-dxil.pack` beside the game, or `--native_shader_pack`);
-  shaders missing from it (the D3D library's own two) are translated and compiled with DXC
-  (`dxcompiler.dll` beside the game, or `--native_dxc`). A shader object the hooks did not see is parsed from
+  in the pack (`--native_shader_pack`, else `kkshaders-spirv.pack` or `kkshaders-dxil.pack` in
+  `<cache root>/native-shaders`, which the launcher builds from the player's game files, else beside the game;
+  `shaders.md`, "The pack on the player's machine"); shaders missing from it (the D3D library's own two) are
+  translated and compiled with DXC (`dxcompiler.dll` beside the game, or `--native_dxc`). A shader object the hooks did not see is parsed from
   the object (container copy + microcode). The game creates all 6,585 shaders at boot: 4,073 distinct ones
   come from the pack, 2 are compiled.
 - **Constants.** Vertex and pixel float constants (+1920, +6016) are byte-swapped into two volatile constant
@@ -185,8 +186,11 @@ fetch, resolve with its destination, of frame N), `--native_debug` (bits: 1 gree
 image under the back buffer, 4 no gamma ramp, 8 the most invalidated pages every 300 frames). The stats line every 300 swaps counts draws, skips, pipelines,
 uploads, resolves, aliases and the time spent creating pipelines and uploading textures.
 
-For a run: `kkshaders-spirv.pack` (and `kkshaders-dxil.pack` for D3D12) from `kkshaders db-build ... --split`
-beside `king_kong.exe`, `dxcompiler.dll` and `dxil.dll` from the DXC release beside it too (neither in git).
+For a run: the launcher builds the pack into `<cache root>/native-shaders` (with `--gpu_plugin=native`), or
+`kkshaders pack-build` does (`shaders.md`); a developer's `kkshaders db-build ... --split` pack beside
+`king_kong.exe` is still found after the cache. `dxcompiler.dll` beside it comes from the build
+(`KK_DXC_DIR` or `NR_DXC_RUNTIME`, `plugin/CMakeLists.txt`); `dxil.dll` is no longer needed. Neither the pack nor
+DXC is in git, and no pack may ship.
 `tests/run.ps1` takes `-ExtraArgs` for extra game arguments.
 
 ### Render scale (session E)
