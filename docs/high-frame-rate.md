@@ -45,6 +45,10 @@ assumes one call per 1/30 s is frame-rate dependent; one that uses the frame tim
 | `KK_DEV_SAMPLE_DUMP` | Raw bytes of every active object and what it points to, to find fields |
 | `tools/hfr_compare.py` | Compares two sample logs on the level's own clock: position differences, event track speed and restarts, AI function changes |
 | `kk-prof` build, `KK_DEV_PROF_AT` | Calls per function in time windows; the same windows at 30 and 60 FPS show which functions run per frame and which run per event, and events whose rate changes with the frame rate |
+| `KK_DEV_HFR_TRACE` | Each fix logs once a second what it acted on (`KK dev hfr <name>: n`); the particle fix also logs generator updates, distinct generators and particle speeds |
+| `KK_DEV_HFR_OFF=<name,...>` or `all` | Turns fixes off one by one in dev builds, to measure with and without |
+| `KK_DEV_GFX_TRACE` | Once a second, the effects added to the world effect list (`sub_827F9978`) per caller and effect type |
+| `KK_DEV_FORCE_DT=<seconds>` | Every frame counts as that long (small steps such as 0.004 s on a PC that cannot reach 250 FPS) |
 
 Objects are matched between runs by their file key (the BIG key of the loaded object, found by reversing the
 loader's key -> index -> address tables at `0x82C4ED94` and `0x82C4EDC0`), which is stable between runs even
@@ -67,6 +71,7 @@ These were found by scanning the recompiled code for how the frame time is used 
 | Camera shake | `CM_Sfx` `sub_8245EC90`, `SCC_SFX` `sub_82553F20` | Fall-off multiplied once a frame: a strong shake never ends | fixed in v1.9.10 (`camera_shake.cpp`) |
 | Particle drag | `sub_82862460` (every particle generator: rain splashes, sparks, spray, smoke) | Drag (`+48`) applied once per 1/60 s sub-step plus once a frame: 40 times a second on the console, 60 at 60 FPS, 120 at 120, hundreds unlimited. Particles stop short and drop straight | fixed (`hfr_particles.cpp`) |
 | Footstep splashes in water | `sub_825845E0` from `H_callback_after_blend` `sub_826BB350` (both feet, bones 60 and 80, of a character standing in water) | Each call with the foot down starts a new splash effect (a particle effect of type 9), once a frame per foot: 30 a second on the console, 110 at 110 FPS. In the V-Rex chapter (rain, wet ground) this tripled the particle effects alive at once at 110 FPS (table below) | fixed (`hfr_splash.cpp`: each foot splashes on a 1/30 s grid of game time) |
+| Water ripples | `GST_MM_exec_riple` `sub_82520A50` from `GST_MM_go` `sub_82521040` (an object moving in water) | Starts a ripple effect (type 9) at a random point near the object each call that finds water there. Its timer compares with a last-ripple time (`+332`) that no GST_MM script writes, so it runs once a frame: 21 a second at 30 FPS in the V-Rex chapter, 64 at 110 | fixed (`hfr_splash.cpp`, "ripple": each object ripples on a 1/30 s grid of game time) |
 | 0.016 s floor | `k_ETAT_grab` `sub_825CA350`, `k_ETAT_grab_mashing` `sub_8259D998`, `k_ETAT_finished` `sub_825B3288`, `k_ETAT_cine` `sub_825B62E0`, `KT_ETAT_Finish` `sub_824876F0`, `KBC_ETAT_KK_Finished` `sub_8252B1D0`, `BC_exec_MOVE_beziers` `sub_8263E1B8` | The frame time is clamped to 0.016 .. 0.048 s before use, so above 62.5 FPS these run fast (1.9x at 120 FPS, 3.8x at 240): Kong's grabs, button mashing and finishers, the BC creature's path moves | fixed (`hfr_dt_floor.cpp`) |
 | Decay per 0.016 s | inlined in `BC_TAG_On` `sub_8263C930`, `KBC_TAG_On` `sub_82512FA8`, `KBC_ETAT_Fight_BB_Poursuit` `sub_8252E1E8`, `k_ETAT_grab_ANN` `sub_8259F698`, `CM_Kong_Mode_Swing_Horiz` `sub_826245B8`, `k_ETAT_grab` (five more); helper `sub_8261AD78` | `f = k; while (t > 0.016) { t -= 0.016; f *= k; }`: one factor a frame plus one per extra step, 90 a second on the console, 120 at 120 FPS, 240 at 240. Knock-back slides and Kong's swing camera stop sooner. `k_ETAT_grab` also grows a vector by 1.005 per 1/60 s in whole steps rounded up (70 a second on the console, 110 at 110 FPS) | fixed (`hfr_step_decay.cpp`; the velocity is corrected after the call when the game's step was the only change to it) |
 | Follow smoothing in 1/300 s steps | `sub_828271E8` (from `sub_82827B10`, a render-time modifier; runs on four objects in the Venture opening, two in Kong to the Rescue) | `ceil(dt * 300)` steps a frame: 310 a second at 30 FPS, 340 at 60, 360 at 120, 432 at 144, 480 at 240, 1000 at 1000 FPS. Follows its target faster at high rates | fixed (`hfr_follow.cpp`) |
@@ -149,7 +154,8 @@ of generators with drag (all 0.95 per step here):
 | 4 ms frames (250 FPS), fix off | 0.35, 0.16, 0.32, 0.16, 0.35 (mean 0.27) |
 | 4 ms frames (250 FPS), fix on | 1.23, 0.96, 1.39, 1.00, 1.42 (mean 1.20) |
 
-The V-Rex chapter's rain (generators with drag 0.99, 20 000 to 600 000 particles counted a second):
+The V-Rex chapter's rain and water effects (generators with drag 0.99, 20 000 to 600 000 particles counted a
+second):
 
 | Run | Mean particle speed (1 s samples, steady part) |
 |---|---|
@@ -158,17 +164,18 @@ The V-Rex chapter's rain (generators with drag 0.99, 20 000 to 600 000 particles
 | 110 FPS, fix on | 1.23 to 1.32 (mean about 1.28) |
 
 The same V-Rex runs, particle effects alive at once (generator updates a second times the frame time) and
-particles alive at once, over the seconds with effects (about 100 a run):
+particles alive at once, over the seconds with effects (about 100 a run), and the effects started a second by
+the two water effects (`KK_DEV_GFX_TRACE`, per second in which they ran):
 
-| Run | Effects alive: mean (10th, 50th, 90th percentile) | Particles alive: mean (50th percentile) |
-|---|---|---|
-| 30 FPS | 34 (13, 28, 63) | 754 (592) |
-| 110 FPS, all fixes but `splash` | 103 (36, 90, 182) | 2 356 (1 931) |
-| 110 FPS, all fixes | 57 (27, 55, 85) | 911 (834) |
+| Run | Effects alive: mean (10th, 50th, 90th percentile) | Particles alive: mean (50th percentile) | Footstep splashes a second | Ripples a second |
+|---|---|---|---|---|
+| 30 FPS (two runs) | 34 (13, 28, 63) and 34 (13, 28, 61) | 754 (592) and 746 (571) | 25.6 | 20.7 |
+| 110 FPS, all fixes but `splash` and `ripple` | 103 (36, 90, 182) | 2 356 (1 931) | | |
+| 110 FPS, all fixes but `ripple` | 57 (27, 55, 85) and 57 (26, 55, 86) | 911 (834) and 910 (878) | 22.5 | 64.2 |
+| 110 FPS, all fixes | 33 (12, 29, 60) | 720 (655) | 24.5 | 19.2 |
 
-With the `splash` fix the footstep splashes ran at 60 a second (two feet at 30) and up to 123 (two characters),
-and about 150 calls a second were skipped. The particles alive are within 1.2 times the 30 FPS figure; the effects
-alive are still about 1.7 times as many in the quiet seconds (see "Found and left").
+The rain itself (`sgo_gener` and `sgo_move`, about 6 drop splashes a second) is the same at both rates. With both
+fixes about 140 footstep splash calls and 70 ripple calls a second were skipped at 110 FPS.
 
 ### Step counts, worked out
 
@@ -228,7 +235,7 @@ frame), so their effect is not compared run against run.
 | `dt_floor`: Kong's grab and finisher scripts and the BC path script | `hfr_dt_floor.cpp` | Acts in Kong to the Rescue (70 to 112 calls a second at 110 FPS); the effect follows from the code (time step = frame time instead of 0.016 s) |
 | `step_decay`: decays and growth per 0.016 or 1/60 s step | `hfr_step_decay.cpp` | Acts during V-Rex hits in Kong to the Rescue; per-second rates worked out above |
 | `follow`: follow smoothing in 1/300 s steps | `hfr_follow.cpp` | Runs on four objects in the Venture opening; per-second rates worked out above |
-| `splash`: footstep splashes in water | `hfr_splash.cpp` | In game at 110 FPS (V-Rex chapter): particles alive 911 on average against 754 at 30 FPS and 2 356 without it (table above) |
+| `splash` and `ripple`: footstep splashes and ripples in water | `hfr_splash.cpp` | In game at 110 FPS (V-Rex chapter): effects started a second and particles alive as at 30 FPS (720 alive on average against 746 and 754 at 30 FPS, 2 356 without the fixes; table above) |
 | Camera shake (v1.9.10, before this work) | `camera_shake.cpp` | #39 |
 
 At 30 FPS every fix calls the game's own code unchanged (`hfr::Active()` is false), so the console behaviour and
@@ -240,16 +247,6 @@ place than in any golden frame (the sweep runs on the loading thread; the captur
 
 ### Found and left
 
-- **Particle effects in the V-Rex chapter, the rest.** The extra effects at 110 FPS (about three times as many
-  alive as at 30 FPS) came mostly from the footstep splashes, now fixed (`splash`). In the quiet seconds about
-  1.7 times as many effects are still alive (27 against 13 at the 10th percentile), with few particles each
-  (the particles alive are within 1.2 times). The other effect creators that ran in the V-Rex call profile are
-  time based or create once: the rain scripts `sgo_gener` `sub_824388D8` and `sgo_move` `sub_824381E8` (drops
-  fall with the frame time, splash where they land), the water ripples `GST_MM_exec_riple` `sub_82520A50` (a
-  timer), `ode_check_trigger` `sub_826F0418` (once a trigger) and `H_exec_GFX_Weapon` `sub_82691090` (one
-  effect kept in a slot). So the rest may be run-to-run difference (the AI moves differently each run) or an
-  effect created elsewhere; a trace of effect creation (`sub_827F9978` and its type, per caller) at 30 and 110
-  FPS would tell.
 - Motion blur strength (only with motion blur on): needs a look on screen to choose the formula (above).
 - Menu background drift (`IntMIG_Background`): 0.999 a frame, too small to see.
 - Follow smoothing has no visible target identified yet (a renderer modifier on four objects in the Venture
