@@ -26,6 +26,7 @@
 #include "backend/ao_camera.h"
 #include "backend/ao_classifier.h"
 #include "backend/ao_config.h"
+#include "backend/ao_timer.h"
 #include "backend/gtao.h"
 #include "kkshaders/ambient.h"
 
@@ -37,6 +38,8 @@ class SceneAo {
   ~SceneAo();
   bool Initialize();
   const AoConfig& config() const { return config_; }
+  // --native_ao_gpu_time: times every piece of GTAO work (null: not timed).
+  void SetTimer(AoGpuTimer* timer) { timer_ = timer; }
   // The ambient-only list (null unless apply=ambient).
   std::shared_ptr<const kkshaders::AmbientTable> ambient_table() const { return ambient_; }
 
@@ -119,11 +122,16 @@ class SceneAo {
   // the frame's depth, else from the depth resolve's copy. False when there is nothing to work from.
   bool Compute(nvrhi::ICommandList* cl, const AoSettings& s, nvrhi::ITexture* depth_override = nullptr);
   GtaoSettings Settings(const AoSettings& s) const;
+  // The scene's colour target times the occlusion (timed).
+  bool ApplyToTarget(nvrhi::ICommandList* cl, const AoSettings& s);
   // A resolve of the whole picture: the legacy rule (at least 1280 x 720 from the top left), or one
   // from the top left that covers the camera's picture.
   bool FullScreen(const Resolve& r) const;
 
   nvrhi::IDevice* device_;
+  AoGpuTimer* timer_ = nullptr;
+  void TimeBegin(nvrhi::ICommandList* cl) { if (timer_) timer_->Begin(cl); }
+  void TimeEnd(nvrhi::ICommandList* cl) { if (timer_) timer_->End(cl); }
   AoConfig config_;
   AoRuleTable rules_;
   std::shared_ptr<const kkshaders::AmbientTable> ambient_;

@@ -1,0 +1,83 @@
+// --native_ao_gpu_time (docs/ao.md, "Cost"): the GPU time of the ambient occlusion's passes,
+// with NVRHI timer queries around each piece of AO work (the legacy passes at the scene copy;
+// GTAO's compute passes, its depth copy and its apply passes). Results are read back a few
+// frames later, never waited for, and logged as an average every 600 frames with AO work.
+// Render thread only.
+#pragma once
+
+#include <cstdint>
+#include <deque>
+#include <vector>
+
+#include <nvrhi/nvrhi.h>
+
+#include "backend/log.h"
+
+namespace nr {
+
+class AoGpuTimer {
+ public:
+  AoGpuTimer(nvrhi::IDevice* device, const char* what) : device_(device), what_(what) {}
+
+  // Around one piece of AO work in a command list (Begin and End in the same list).
+  void Begin(nvrhi::ICommandList* cl) {
+    if (open_) return;
+    nvrhi::TimerQueryHandle q;
+    if (!free_.empty()) {
+      q = free_.back();
+      free_.pop_back();
+    } else if (pending_.size() < 256) {
+      q = device_->createTimerQuery();
+    }
+    if (!q) return;
+    cl->beginTimerQuery(q);
+    open_ = q;
+  }
+  void End(nvrhi::ICommandList* cl) {
+    if (!open_) return;
+    cl->endTimerQuery(open_);
+    pending_.push_back({open_, frame_});
+    open_ = nullptr;
+  }
+
+  // Once a frame (at Present): reads the finished queries; logs every 600 frames that had AO work.
+  void FrameEnd() {
+    while (!pending_.empty() && device_->pollTimerQuery(pending_.front().query)) {
+      Pending p = pending_.front();
+      pending_.pop_front();
+      total_s_ += double(device_->getTimerQueryTime(p.query));
+      device_->resetTimerQuery(p.query);
+      free_.push_back(p.query);
+      if (p.frame != last_frame_counted_) {
+        last_frame_counted_ = p.frame;
+        ++frames_;
+      }
+      ++pieces_;
+    }
+    ++frame_;
+    if (frames_ >= 600) {
+      Logf(LogLevel::kInfo, "rexgpu-native: AO GPU time (%s): %.3f ms a frame on average over %llu frames (%llu timed passes)",
+           what_, 1000.0 * total_s_ / double(frames_), static_cast<unsigned long long>(frames_),
+           static_cast<unsigned long long>(pieces_));
+      total_s_ = 0.0;
+      frames_ = pieces_ = 0;
+    }
+  }
+
+ private:
+  struct Pending {
+    nvrhi::TimerQueryHandle query;
+    uint64_t frame = 0;
+  };
+  nvrhi::IDevice* device_;
+  const char* what_;
+  nvrhi::TimerQueryHandle open_;
+  std::deque<Pending> pending_;
+  std::vector<nvrhi::TimerQueryHandle> free_;
+  uint64_t frame_ = 0;
+  uint64_t last_frame_counted_ = UINT64_MAX;
+  double total_s_ = 0.0;
+  uint64_t frames_ = 0, pieces_ = 0;
+};
+
+}  // namespace nr

@@ -36,6 +36,7 @@
 
 #include "backend/ambient_occlusion.h"
 #include "backend/ao_config.h"
+#include "backend/ao_timer.h"
 #include "backend/scene_ao.h"
 #include "backend/draw_sink.h"
 #include "backend/driver_pipeline_cache.h"
@@ -554,6 +555,7 @@ class GameRenderer {
   void AoClearHook(const ClearCall& call, const HostTarget* depth);
   void AoPresentHook(nvrhi::ICommandList* cl);
   std::unique_ptr<SceneAo> scene_ao_;
+  std::unique_ptr<AoGpuTimer> ao_timer_;  // --native_ao_gpu_time
   nvrhi::BufferHandle ao_constants_;  // b4 (ambient-only)
   std::array<uint32_t, 8> ao_constants_last_ = {};
   bool ao_constants_valid_ = false;

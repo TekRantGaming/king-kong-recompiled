@@ -265,12 +265,14 @@ void Gtao::FillConstants(Constants& k, const GtaoInput& in, const GtaoSettings& 
   g.NDCToViewMul = {m.mul[0], m.mul[1]};
   g.NDCToViewAdd = {m.add[0], m.add[1]};
   g.NDCToViewMul_x_PixelSize = {m.mul[0] / float(pw), m.mul[1] / float(ph)};
-  const float radius = s.radius > 0.0f ? s.radius : RadiusInNearPlanes(s.strength) * in.projection.near_plane();
+  const float radius = s.radius > 0.0f
+                           ? s.radius
+                           : RadiusInNearPlanes(s.strength) * in.projection.near_plane() * std::max(s.radius_scale, 0.01f);
   g.EffectRadius = radius;
-  g.EffectFalloffRange = XE_GTAO_DEFAULT_FALLOFF_RANGE;
+  g.EffectFalloffRange = s.falloff > 0.0f ? std::min(s.falloff, 1.0f) : XE_GTAO_DEFAULT_FALLOFF_RANGE;
   g.RadiusMultiplier = XE_GTAO_DEFAULT_RADIUS_MULTIPLIER;
   g.Padding0 = 0;
-  g.FinalValuePower = FinalPower(s.strength);
+  g.FinalValuePower = s.power > 0.0f ? s.power : FinalPower(s.strength);
   g.DenoiseBlurBeta = 1.2f;  // XeGTAO's value with denoising on
   g.SampleDistributionPower = XE_GTAO_DEFAULT_SAMPLE_DISTRIBUTION_POWER;
   g.ThinOccluderCompensation = XE_GTAO_DEFAULT_THIN_OCCLUDER_COMPENSATION;

@@ -47,12 +47,15 @@ bool GameRenderer::AoSetBindings(nvrhi::BindingSetDesc& set0) {
 }
 
 void GameRenderer::AoInitialize() {
+  if (options_.ao.gpu_time) ao_timer_ = std::make_unique<AoGpuTimer>(device_, options_.ao.gtao() ? "gtao" : "legacy");
   if (!options_.ao.gtao()) return;
   scene_ao_ = std::make_unique<SceneAo>(device_, options_.ao);
   if (!scene_ao_->Initialize()) {
     Logf(LogLevel::kWarning, "rexgpu-native: AO: the GTAO method is unavailable, AO is off");
     scene_ao_.reset();
+    return;
   }
+  scene_ao_->SetTimer(ao_timer_.get());
 }
 
 std::shared_ptr<const kkshaders::AmbientTable> GameRenderer::ao_ambient_table() const {
@@ -122,16 +125,20 @@ void GameRenderer::AoDrawHook(nvrhi::ICommandList* cl, const DrawCall& call, con
   }
   const bool reads = scene_ao_->OnDraw(cl, a, s);
   if (ao_constants_) AoWriteAmbientConstants(cl, reads);
-  if (Dump(call.frame) && s.mode > 0) {
+  const bool dump = Dump(call.frame) || (options_.ao.dump_every && call.frame % options_.ao.dump_every == 0);
+  if (dump && s.mode > 0) {
     // --native_dump_frame: the classifier's view of the draw (docs/ao.md, the Windows checklist).
     const SceneAo::LastDraw& l = scene_ao_->last_draw();
     Logf(LogLevel::kInfo,
-         "rexgpu-native:   AO draw %u: %s%s%s%s%s%s%s (colour %d depth test %d write %d blend %08X alpha test %d, ps %016llX)",
-         call.index_in_frame, AoDrawClassName(l.cls), l.events.in_scene ? ", scene" : "",
+         "rexgpu-native:   AO draw %u of frame %llu: %s%s%s%s%s%s%s (colour %d depth test %d write %d blend %08X alpha "
+         "test %d, prim %u, vs %016llX ps %016llX, rt %llX ds %llX)",
+         call.index_in_frame, static_cast<unsigned long long>(call.frame), AoDrawClassName(l.cls), l.events.in_scene ? ", scene" : "",
          l.events.depth_complete ? ", depth pre-pass ended before it" : "",
          l.events.opaque_complete ? ", opaque pass ended before it" : "", l.computed ? ", occlusion worked out" : "",
          l.applied ? ", occlusion applied" : "", reads ? ", reads the occlusion" : "", int(st.color), int(st.depth_test),
-         int(st.depth_write), st.blend_control, int(st.alpha_test), static_cast<unsigned long long>(st.ps_hash));
+         int(st.depth_write), st.blend_control, int(st.alpha_test), st.primitive, static_cast<unsigned long long>(st.vs_hash),
+         static_cast<unsigned long long>(st.ps_hash), static_cast<unsigned long long>(a.color.key),
+         static_cast<unsigned long long>(a.depth.key));
   }
 }
 
@@ -165,7 +172,13 @@ void GameRenderer::AoWriteAmbientConstants(nvrhi::ICommandList* cl, bool reads) 
 
 nvrhi::ITexture* GameRenderer::AoResolveHook(nvrhi::ICommandList* cl, const AoResolve& r, const AoSettings& s,
                                              const ResolveCall& call, const HostTarget* source) {
-  if (!scene_ao_) return ao_ ? ao_->OnResolve(cl, r, s) : nullptr;  // the legacy method
+  if (!scene_ao_) {  // the legacy method
+    if (!ao_) return nullptr;
+    if (ao_timer_) ao_timer_->Begin(cl);
+    nvrhi::ITexture* scene = ao_->OnResolve(cl, r, s);
+    if (ao_timer_) ao_timer_->End(cl);
+    return scene;
+  }
   SceneAo::Resolve sr;
   sr.facts = r;
   sr.source = {source->key, source->texture, source->scale_x, source->scale_y};
@@ -188,6 +201,9 @@ void GameRenderer::AoClearHook(const ClearCall& call, const HostTarget* depth) {
   if (call.depth && depth && AoSettingsFor(call.frame).mode > 0) scene_ao_->OnDepthClear(call.frame, depth->key);
 }
 
-void GameRenderer::AoPresentHook(nvrhi::ICommandList* cl) { scene_ao_->OnPresent(cl, AoSettingsFor(ao_settings_frame_)); }
+void GameRenderer::AoPresentHook(nvrhi::ICommandList* cl) {
+  if (scene_ao_) scene_ao_->OnPresent(cl, AoSettingsFor(ao_settings_frame_));
+  if (ao_timer_) ao_timer_->FrameEnd();
+}
 
 }  // namespace nr

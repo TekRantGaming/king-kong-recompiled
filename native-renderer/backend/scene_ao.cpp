@@ -28,9 +28,13 @@ bool SceneAo::Initialize() {
     Logf(LogLevel::kInfo, "rexgpu-native: AO ambient-only: %zu lighting shaders listed", table->byHash.size());
     ambient_ = table;
   }
-  Logf(LogLevel::kInfo, "rexgpu-native: AO method gtao, apply %s, quality %s, radius %s, %zu classifier rules (%zu from a file)",
+  Logf(LogLevel::kInfo,
+       "rexgpu-native: AO method gtao, apply %s, quality %s, radius %s (scale %.2f), falloff %.3f, power %s, %zu "
+       "classifier rules (%zu from a file)",
        AoApplyName(config_.apply), AoQualityName(config_.quality),
-       config_.radius > 0.0f ? std::to_string(config_.radius).c_str() : "from the camera", rules_.rules().size(),
+       config_.radius > 0.0f ? std::to_string(config_.radius).c_str() : "from the camera", config_.radius_scale,
+       config_.falloff > 0.0f ? config_.falloff : 0.615f,
+       config_.power > 0.0f ? std::to_string(config_.power).c_str() : "from the strength", rules_.rules().size(),
        config_.rules.size());
   return true;
 }
@@ -41,6 +45,9 @@ GtaoSettings SceneAo::Settings(const AoSettings& s) const {
   g.strength = s.strength;
   g.half = config_.quality == AoQuality::kHalf;
   g.radius = config_.radius;
+  g.radius_scale = config_.radius_scale;
+  g.falloff = config_.falloff;
+  g.power = config_.power;
   return g;
 }
 
@@ -103,7 +110,10 @@ bool SceneAo::Compute(nvrhi::ICommandList* cl, const AoSettings& s, nvrhi::IText
   in.height = uint32_t(y1 - y0);
   in.projection = p;
   in.screen = sc;
-  if (!gtao_->Compute(cl, in, Settings(s))) return false;
+  TimeBegin(cl);
+  const bool ok = gtao_->Compute(cl, in, Settings(s)) != nullptr;
+  TimeEnd(cl);
+  if (!ok) return false;
   computed_ = true;
   ++stats_.computed;
   return true;
@@ -147,7 +157,7 @@ bool SceneAo::OnDraw(nvrhi::ICommandList* cl, const Draw& d, const AoSettings& s
     if (ambient_did) {
       applied_ = true;
       ++stats_.ambient_frames;
-    } else if (scene_color_.texture && Compute(cl, s) && gtao_->ApplyToTarget(cl, scene_color_.texture, s.mode)) {
+    } else if (scene_color_.texture && Compute(cl, s) && ApplyToTarget(cl, s)) {
       applied_ = true;
       if (stats_.applied_opaque++ == 0)
         Logf(LogLevel::kInfo, "rexgpu-native: AO: first occlusion at the end of the opaque pass (frame %llu, %u opaque draws)",
@@ -161,6 +171,13 @@ bool SceneAo::OnDraw(nvrhi::ICommandList* cl, const Draw& d, const AoSettings& s
   last_.computed = stats_.computed != computed_before;
   last_.applied = applied_ && !applied_before;
   return reads;
+}
+
+bool SceneAo::ApplyToTarget(nvrhi::ICommandList* cl, const AoSettings& s) {
+  TimeBegin(cl);
+  const bool ok = gtao_->ApplyToTarget(cl, scene_color_.texture, s.mode);
+  TimeEnd(cl);
+  return ok;
 }
 
 bool SceneAo::FullScreen(const Resolve& r) const {
@@ -197,7 +214,9 @@ nvrhi::ITexture* SceneAo::OnResolve(nvrhi::ICommandList* cl, const Resolve& r, c
   if (f.from_depth) {
     // The scene's depth is complete: keep a copy (the game may clear it right after).
     if (FullScreen(r) && f.format_ok && f.source && !applied_) {
+      TimeBegin(cl);
       depth_copy_ = gtao_->CopyDepth(cl, f.source);
+      TimeEnd(cl);
       depth_copied_ = depth_copy_ != nullptr;
       scene_dest_set_ = false;
     }
@@ -213,7 +232,9 @@ nvrhi::ITexture* SceneAo::OnResolve(nvrhi::ICommandList* cl, const Resolve& r, c
         Compute(cl, s, depth_copied_ ? depth_copy_ : nullptr)) {
       const AoFog fog = fog_frame_ == frame_ ? fog_ : AoFog{};
       nvrhi::ITexture* fog_depth = depth_copied_ ? depth_copy_ : scene_depth_.texture;
+      TimeBegin(cl);
       result = fog_depth ? gtao_->ApplyToCopy(cl, f.source, fog_depth, fog, s.mode) : nullptr;
+      TimeEnd(cl);
       if (result) {
         scene_dest_ = f.dest_key;
         scene_dest_set_ = applied_ = resolve_applied_ = true;
@@ -232,7 +253,7 @@ void SceneAo::OnPresent(nvrhi::ICommandList* cl, const AoSettings& s) {
   if (config_.apply == AoApply::kAmbient && ambient_ready_ && ambient_drawn_ && s.mode < 2) return;
   // The scene still holds the frame (no transparent draw ended its opaque pass, no copy was taken).
   if (scene_resolved_ || tracker_.phase() < AoFrameTracker::Phase::kOpaquePass || !scene_color_.texture) return;
-  if (Compute(cl, s) && gtao_->ApplyToTarget(cl, scene_color_.texture, s.mode)) {
+  if (Compute(cl, s) && ApplyToTarget(cl, s)) {
     applied_ = true;
     ++stats_.applied_present;
   }

@@ -48,6 +48,11 @@ REXCVAR_DECLARE(std::string, native_ao_quality);
 REXCVAR_DECLARE(double, native_ao_radius);
 REXCVAR_DECLARE(std::string, native_ao_rules);
 REXCVAR_DECLARE(std::string, native_ao_shaders);
+REXCVAR_DECLARE(double, native_ao_radius_scale);
+REXCVAR_DECLARE(double, native_ao_falloff);
+REXCVAR_DECLARE(double, native_ao_power);
+REXCVAR_DECLARE(int32_t, native_ao_dump_every);
+REXCVAR_DECLARE(bool, native_ao_gpu_time);
 
 namespace nr {
 
@@ -94,6 +99,11 @@ void ReadAoConfig(AoConfig& ao) {
   if (!ParseAoQuality(REXCVAR_GET(native_ao_quality), ao.quality))
     REXGPU_WARN("rexgpu-native: native_ao_quality '{}' is not full or half", REXCVAR_GET(native_ao_quality));
   ao.radius = float(std::max(0.0, REXCVAR_GET(native_ao_radius)));
+  ao.radius_scale = float(std::clamp(REXCVAR_GET(native_ao_radius_scale), 0.01, 100.0));
+  ao.falloff = float(std::clamp(REXCVAR_GET(native_ao_falloff), 0.0, 1.0));
+  ao.power = float(std::max(0.0, REXCVAR_GET(native_ao_power)));
+  ao.dump_every = uint32_t(std::max(0, REXCVAR_GET(native_ao_dump_every)));
+  ao.gpu_time = REXCVAR_GET(native_ao_gpu_time);
   if (const std::string path = REXCVAR_GET(native_ao_rules); !path.empty()) {
     std::vector<std::string> errors;
     ao.rules = ParseAoRules(ReadTextFile(path), &errors);

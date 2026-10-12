@@ -31,6 +31,9 @@ struct GtaoSettings {
   int strength = 1;      // ao_strength 1 to 3
   bool half = false;     // --native_ao_quality=half
   float radius = 0.0f;   // world units; 0: the legacy radius for the strength times the near plane
+  float radius_scale = 1.0f;  // times the radius from the camera
+  float falloff = 0.0f;       // XeGTAO's falloff range (0: its default)
+  float power = 0.0f;         // XeGTAO's final power (0: FinalPower(strength))
 };
 
 struct GtaoInput {
