@@ -13,7 +13,6 @@ version's notes the first time you start it.
 - **Original or Remastered.** The last step of setup asks how you'd like the game to look: **Original**, the Xbox 360 as it was (720p, 30 FPS, the console's look), or **Remastered**, sharper and at your screen's resolution with soft ambient occlusion, set up for your graphics card. **Look** on the **Graphics** page changes it at any time.
 - **New ambient occlusion.** With the native renderer, **AO method** on the **Graphics** page picks the new **GTAO**: sharper soft shadows in corners and creases that never darken water, smoke, fire, Kong's fur or the sky, and that now work in the chapters where the old one did nothing. **Classic** is the old one.
 - **Higher frame rates done properly.** Things that were tied to the console's 30 FPS now run at the right speed at any frame rate: the lifeboat crew's rowing, particles, Kong's grabs, button mashing and finishers, knock-backs, and the splashes and ripples in water. At 30 FPS nothing changes.
-- **Choose your fullscreen resolution.** **Resolution** on the **Display** page picks any of your monitor's modes for fullscreen, or **Desktop** as before.
 
 ### Known issues
 - Coming in a later beta: DLSS, FSR 3 and 4, and XeSS upscaling, screen-space global illumination, sharper shadows, reflections on water and volumetric light shafts.
