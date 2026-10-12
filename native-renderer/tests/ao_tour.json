@@ -1,0 +1,245 @@
+{
+ "version": 1,
+ "about": "The ambient occlusion's chapters (written by tests/aogen.py, do not edit by hand). Times are seconds after the save menu opens. See docs/ao.md.",
+ "defaults": {
+  "args": [
+   "--kk_launcher=false",
+   "--kk_frame_rate=30",
+   "--kk_cheats=true",
+   "--kk_cheat_chapters=true",
+   "--fullscreen=false",
+   "--window_width=1280",
+   "--window_height=720",
+   "--kk_original_look=true",
+   "--log_max_file_size_mb=500"
+  ],
+  "plugin_args": {
+   "native": [
+    "--native_pipeline_cache=false"
+   ]
+  },
+  "env": {
+   "KK_DEV_AUTOSKIP": "1"
+  },
+  "clock_offset": {
+   "menu": 7.7,
+   "boot": 1.0
+  },
+  "startup_allowance": 60,
+  "thresholds": {
+   "mae": 1.0,
+   "ssim": 0.99,
+   "tile_mae": 2.0,
+   "bad": 0.0002,
+   "bad_level": 40,
+   "env_tol": 16,
+   "env_radius": 2,
+   "env_anim_level": 16,
+   "env_bad": 0.002,
+   "env_tile": 1.5,
+   "drawlog": 0.98,
+   "min_pass": 1.0,
+   "env_flash_level": null
+  }
+ },
+ "runs": {
+  "ao": {
+   "from": "menu",
+   "script": "12:A,18:A,24:A,30:RIGHT,30.6:RIGHT,31.2:RIGHT,31.8:RIGHT,34.4:A,38.4:SKIP,40.4:SKIP,42.4:SKIP,44.4:SKIP,46.4:SKIP,48.4:SKIP,50.4:SKIP,52.4:SKIP,54.4:SKIP,56.4:SKIP,58.4:SKIP,60.4:SKIP,62.4:SKIP,64.4:SKIP,66.4:SKIP,68.4:START,69.9:UP,70.4:UP,70.9:UP,71.4:UP,71.9:UP,72.4:UP,72.9:UP,73.9:A,75.9:A,81.4:RIGHT,82:RIGHT,82.6:RIGHT,83.2:RIGHT,85.8:A,89.8:SKIP,91.8:SKIP,93.8:SKIP,95.8:SKIP,97.8:SKIP,99.8:SKIP,101.8:SKIP,103.8:SKIP,105.8:SKIP,107.8:SKIP,109.8:SKIP,111.8:SKIP,113.8:SKIP,115.8:SKIP,117.8:SKIP,119.8:SKIP,121.8:SKIP,123.8:SKIP,125.8:SKIP,129.8:START,131.3:UP,131.8:UP,132.3:UP,132.8:UP,133.3:UP,133.8:UP,134.3:UP,135.3:A,137.3:A,142.8:RIGHT,143.4:RIGHT,146:A,150:SKIP,152:SKIP,154:SKIP,156:SKIP,158:SKIP,160:SKIP,162:START,163.5:UP,164:UP,164.5:UP,165:UP,165.5:UP,166:UP,166.5:UP,167.5:A,169.5:A,175:RIGHT,175.6:RIGHT,178.2:A,182.2:SKIP,184.2:SKIP,186.2:SKIP,188.2:SKIP,190.2:SKIP,192.2:SKIP,194.2:SKIP,196.2:SKIP,198.2:SKIP,200.2:SKIP,202.2:SKIP,204.2:SKIP,206.2:SKIP,208.2:SKIP,210.2:SKIP,212.2:START,213.7:UP,214.2:UP,214.7:UP,215.2:UP,215.7:UP,216.2:UP,216.7:UP,217.7:A,219.7:A,225.2:RIGHT,225.8:RIGHT,226.4:RIGHT,227:RIGHT,227.6:RIGHT,228.2:RIGHT,228.8:RIGHT,229.4:RIGHT,230:RIGHT,230.6:RIGHT,231.2:RIGHT,231.8:RIGHT,232.4:RIGHT,233:RIGHT,235.6:A,239.6:SKIP,241.6:SKIP,243.6:SKIP,245.6:SKIP,247.6:SKIP,249.6:SKIP,251.6:SKIP,253.6:SKIP,255.6:SKIP,257.6:SKIP,259.6:SKIP,261.6:SKIP,263.6:SKIP,265.6:SKIP,267.6:SKIP,269.6:START,271.1:UP,271.6:UP,272.1:UP,272.6:UP,273.1:UP,273.6:UP,274.1:UP,275.1:A,277.1:A,282.6:RIGHT,285.2:A,289.2:SKIP,291.2:SKIP,293.2:SKIP,295.2:SKIP,297.2:SKIP,299.2:SKIP,301.2:SKIP,302.2:START,303.7:UP,304.2:UP,304.7:UP,305.2:UP,305.7:UP,306.2:UP,306.7:UP,307.7:A,309.7:A,315.2:RIGHT,315.8:RIGHT,316.4:RIGHT,317:RIGHT,317.6:RIGHT,318.2:RIGHT,320.8:A,324.8:SKIP,326.8:SKIP,328.8:SKIP,330.8:SKIP,332.8:SKIP,334.8:SKIP,336.8:SKIP,338.8:SKIP,340.8:SKIP,342.8:SKIP,344.8:SKIP,346.8:SKIP,348.8:SKIP,350.8:SKIP,352.8:SKIP,354.8:START,356.3:UP,356.8:UP,357.3:UP,357.8:UP,358.3:UP,358.8:UP,359.3:UP,360.3:A,362.3:A,367.8:RIGHT,368.4:RIGHT,369:RIGHT,369.6:RIGHT,372.2:A,376.2:SKIP,378.2:SKIP,380.2:SKIP,382.2:SKIP,384.2:SKIP,386.2:SKIP,388.2:SKIP,390.2:SKIP,392.2:SKIP,394.2:SKIP,396.2:SKIP,398.2:SKIP,400.2:SKIP,402.2:SKIP,404.2:SKIP,406.2:START,407.7:UP,408.2:UP,408.7:UP,409.2:UP,409.7:UP,410.2:UP,410.7:UP,411.7:A,413.7:A,419.2:LEFT,419.8:LEFT,420.4:LEFT,421:LEFT,421.6:LEFT,422.2:LEFT,422.8:LEFT,423.4:LEFT,424:LEFT,424.6:LEFT,425.2:LEFT,425.8:LEFT,426.4:LEFT,427:LEFT,427.6:LEFT,428.2:LEFT,428.8:LEFT,429.4:LEFT,430:LEFT,430.6:LEFT,431.2:LEFT,431.8:LEFT,432.4:LEFT,433:LEFT,433.6:LEFT,434.2:LEFT,434.8:LEFT,435.4:LEFT,436:LEFT,436.6:LEFT,437.2:LEFT,437.8:LEFT,438.4:LEFT,439:LEFT,439.6:LEFT,440.2:LEFT,440.8:LEFT,443.4:A,447.4:SKIP,449.4:SKIP,451.4:SKIP,453.4:SKIP,455.4:SKIP,457.4:SKIP,459.4:SKIP,461.4:SKIP,463.4:SKIP,465.4:SKIP,467.4:SKIP,469.4:SKIP,471.4:SKIP,473.4:SKIP,475.4:SKIP,477.4:SKIP,479.4:SKIP,481.4:SKIP,483.4:SKIP",
+   "env": {
+    "KK_DEV_FREEZE_SKIP": "10"
+   }
+  }
+ },
+ "scenes": [
+  {
+   "name": "ao04_the_wall",
+   "run": "ao",
+   "chapter": 4,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 4: a jungle clearing at dusk, a spiked wooden gate against the sky (sky, foliage, distant terrain)",
+   "chapter_start": 34.4,
+   "times": [
+    64.4,
+    64.9,
+    65.4
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "ao08_vrex",
+   "run": "ao",
+   "chapter": 8,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 8: Jack in the rain under the cave roof, random lightning (rain, rock, grass, the legacy AO's home scene)",
+   "chapter_start": 85.8,
+   "times": [
+    125.8,
+    126.3,
+    126.8
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "ao10_kong",
+   "run": "ao",
+   "chapter": 10,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 10: Kong crouching on a ledge by a ruined wall (Kong's fur, ruins)",
+   "chapter_start": 146.0,
+   "times": [
+    158.0,
+    158.5,
+    159.0
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "ao12_millipedes",
+   "run": "ao",
+   "chapter": 12,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 12: a dark jungle path towards a lit gate in a wall of vines (mist, foliage)",
+   "chapter_start": 178.2,
+   "times": [
+    208.2,
+    208.7,
+    209.2
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "ao26_call_kong",
+   "run": "ao",
+   "chapter": 26,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 26: a dark hall with a lattice of beams over pale water (water under beams)",
+   "chapter_start": 235.6,
+   "times": [
+    265.6,
+    266.1,
+    266.6
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "ao27_kong_rescue",
+   "run": "ao",
+   "chapter": 27,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 27: Jack with a spear behind the rocks, a V-Rex, fires and rain (fire, smoke, rain, characters)",
+   "chapter_start": 285.2,
+   "times": [
+    298.2,
+    298.7,
+    299.2
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "ao33_chased_by_kong",
+   "run": "ao",
+   "chapter": 33,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 33: a cave with a water channel, dark green rock (water channel)",
+   "chapter_start": 320.8,
+   "times": [
+    350.8,
+    351.3,
+    351.8
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "ao37_kong_struck",
+   "run": "ao",
+   "chapter": 37,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 37: the Venture at anchor in the bay, seen from the rocks of the shore at dusk (sea, distant terrain, sky)",
+   "chapter_start": 372.2,
+   "times": [
+    402.2,
+    402.7,
+    403.2
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "ao00_venture",
+   "run": "ao",
+   "chapter": 0,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 0: the hull of the rocking ship with VENTURE painted on it, rain (sea spray, rain, the ship)",
+   "chapter_start": 443.4,
+   "times": [
+    532.4,
+    532.9,
+    533.4
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  }
+ ]
+}
