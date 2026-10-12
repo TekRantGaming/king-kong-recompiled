@@ -78,14 +78,24 @@ uint16_t CurrentAction(const uint8_t* base, uint32_t obj) {
 }
 }  // namespace
 
+static uint32_t g_outer_lr = 0;  // the script that called the AI's set-action helper sub_823F80A8
+
+REX_EXTERN(__imp__sub_823F80A8);
+REX_HOOK_RAW(sub_823F80A8) {
+  const uint32_t saved = g_outer_lr;
+  g_outer_lr = uint32_t(ctx.lr);
+  __imp__sub_823F80A8(ctx, base);
+  g_outer_lr = saved;
+}
+
 REX_EXTERN(__imp__sub_82850100);
 REX_HOOK_RAW(sub_82850100) {
   if (ActionTrace()) {
     const uint32_t obj = ctx.r3.u32, req = ctx.r4.u32;
     const uint16_t cur = CurrentAction(base, obj);
     if ((req & 0x1FFFFFFF) != cur)
-      REXLOG_INFO("KK dev action: obj {:08X} {} -> {} (flags {:X}) from {:08X} dt {:.4f}", obj, cur, req & 0x1FFFFFFF,
-                  req >> 29, uint32_t(ctx.lr), kk::hfr::FrameTime(base));
+      REXLOG_INFO("KK dev action: obj {:08X} {} -> {} (flags {:X}) from {:08X} via {:08X} dt {:.4f}", obj, cur,
+                  req & 0x1FFFFFFF, req >> 29, uint32_t(ctx.lr), g_outer_lr, kk::hfr::FrameTime(base));
   }
   __imp__sub_82850100(ctx, base);
 }
