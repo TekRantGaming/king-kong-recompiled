@@ -1,4 +1,5 @@
 #include "changelog.h"
+#include "update.h"
 
 #include <cstdlib>
 #include <sstream>
@@ -8,14 +9,10 @@ namespace kk {
 extern const char* const kChangelogText;  // generated from CHANGELOG.md by the build
 
 int CompareVersions(const std::string& a, const std::string& b) {
-  std::stringstream sa(a), sb(b);
-  for (int i = 0; i < 4; ++i) {
-    std::string pa, pb;
-    std::getline(sa, pa, '.');
-    std::getline(sb, pb, '.');
-    const int x = std::atoi(pa.c_str()), y = std::atoi(pb.c_str());
-    if (x != y) return x < y ? -1 : 1;
-  }
+  // The updater's order (update.h): "2.0.0-beta.1" comes after 1.9.11 and before 2.0.0-beta.2 and 2.0.0.
+  // Splitting on '.' alone read it as 2.0.0.1, after 2.0.0.
+  if (IsNewerVersion(a, b)) return 1;
+  if (IsNewerVersion(b, a)) return -1;
   return 0;
 }
 

@@ -28,8 +28,12 @@ enum class GpuVendor { kUnknown, kNvidia, kAmd, kIntel };
 struct GpuInfo {
   GpuVendor vendor = GpuVendor::kUnknown;
   std::string name;
+  uint64_t dedicated_memory = 0;  // bytes of its own video memory (0: unknown, or integrated)
 };
 GpuInfo DetectGpu();
+
+// Running on a Steam Deck (SteamOS sets SteamDeck=1; else the board's name).
+bool IsSteamDeck();
 
 struct MonitorInfo {
   std::string name;

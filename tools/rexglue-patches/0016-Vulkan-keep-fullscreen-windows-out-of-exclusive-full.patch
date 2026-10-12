@@ -1,0 +1,120 @@
+From f8fd240539426789cc7568df7626470c1600e7e5 Mon Sep 17 00:00:00 2001
+From: TekRantGaming <craigferels896@gmail.com>
+Date: Mon, 12 Oct 2026 17:36:26 +0100
+Subject: [PATCH 16/16] Vulkan: keep fullscreen windows out of exclusive
+ fullscreen on Windows
+
+Without VK_EXT_full_screen_exclusive the driver decides, and drivers may
+take a borderless window covering the whole screen into exclusive
+fullscreen by themselves; Alt+Tab then does not leave the game properly
+(reported on the King Kong port's native renderer beta). With the
+extension (and VK_KHR_get_surface_capabilities2 on the instance) the
+swapchain is created with VK_FULL_SCREEN_EXCLUSIVE_DISALLOWED_EXT, as a
+DXGI window behaves. vulkan_allow_fullscreen_exclusive (off) gives the
+driver its say back.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ include/rex/ui/vulkan/device.h     |  2 ++
+ include/rex/ui/vulkan/instance.h   |  1 +
+ src/ui/vulkan/vulkan_device.cpp    |  7 +++++++
+ src/ui/vulkan/vulkan_instance.cpp  |  3 +++
+ src/ui/vulkan/vulkan_presenter.cpp | 18 ++++++++++++++++++
+ 5 files changed, 31 insertions(+)
+
+diff --git a/include/rex/ui/vulkan/device.h b/include/rex/ui/vulkan/device.h
+index 46b31d5..94db006 100644
+--- a/include/rex/ui/vulkan/device.h
++++ b/include/rex/ui/vulkan/device.h
+@@ -230,6 +230,8 @@ class VulkanDevice {
+     bool ext_1_3_KHR_maintenance4 = false;  // #414
+     // Has optional features not implied by this being true.
+     bool ext_1_3_KHR_dynamic_rendering = false;  // #55
++    // Windows: the presenter keeps fullscreen windows out of exclusive fullscreen.
++    bool ext_EXT_full_screen_exclusive = false;  // #256
+   };
+ 
+   const Extensions& extensions() const { return extensions_; }
+diff --git a/include/rex/ui/vulkan/instance.h b/include/rex/ui/vulkan/instance.h
+index 4edde2b..e3cf2ec 100644
+--- a/include/rex/ui/vulkan/instance.h
++++ b/include/rex/ui/vulkan/instance.h
+@@ -108,6 +108,7 @@ class VulkanInstance {
+ #endif
+     bool ext_1_1_KHR_get_physical_device_properties2 = false;  // #60
+     bool ext_EXT_debug_utils = false;                          // #129
++    bool ext_KHR_get_surface_capabilities2 = false;            // #120
+     bool ext_KHR_portability_enumeration = false;              // #395
+   };
+ 
+diff --git a/src/ui/vulkan/vulkan_device.cpp b/src/ui/vulkan/vulkan_device.cpp
+index 1255e14..eb0019b 100644
+--- a/src/ui/vulkan/vulkan_device.cpp
++++ b/src/ui/vulkan/vulkan_device.cpp
+@@ -201,6 +201,13 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
+   if (with_swapchain) {
+     // #2.
+     XE_UI_VULKAN_STRUCT_EXTENSION(KHR_swapchain)
++#ifdef VK_USE_PLATFORM_WIN32_KHR
++    if (get_physical_device_properties2_supported &&
++        vulkan_instance->extensions().ext_KHR_get_surface_capabilities2) {
++      // #256.
++      XE_UI_VULKAN_STRUCT_EXTENSION(EXT_full_screen_exclusive)
++    }
++#endif
+   }
+ 
+   bool ext_1_2_KHR_sampler_mirror_clamp_to_edge = false;
+diff --git a/src/ui/vulkan/vulkan_instance.cpp b/src/ui/vulkan/vulkan_instance.cpp
+index 914b311..9c94e92 100644
+--- a/src/ui/vulkan/vulkan_instance.cpp
++++ b/src/ui/vulkan/vulkan_instance.cpp
+@@ -140,6 +140,9 @@ std::unique_ptr<VulkanInstance> VulkanInstance::Create(const bool with_surface,
+   if (with_surface) {
+     // #1.
+     requested_extensions.emplace("VK_KHR_surface", &vulkan_instance->extensions_.ext_KHR_surface);
++    // #120. Needed by VK_EXT_full_screen_exclusive (the device's).
++    requested_extensions.emplace("VK_KHR_get_surface_capabilities2",
++                                 &vulkan_instance->extensions_.ext_KHR_get_surface_capabilities2);
+ #ifdef VK_USE_PLATFORM_XCB_KHR
+     // #6.
+     requested_extensions.emplace("VK_KHR_xcb_surface",
+diff --git a/src/ui/vulkan/vulkan_presenter.cpp b/src/ui/vulkan/vulkan_presenter.cpp
+index f547734..0468505 100644
+--- a/src/ui/vulkan/vulkan_presenter.cpp
++++ b/src/ui/vulkan/vulkan_presenter.cpp
+@@ -58,6 +58,10 @@ REXCVAR_DEFINE_BOOL(vulkan_allow_present_mode_mailbox, true, "UI/Vulkan",
+ REXCVAR_DEFINE_BOOL(vulkan_allow_present_mode_fifo_relaxed, true, "UI/Vulkan",
+                     "Allow FIFO relaxed present mode");
+ 
++REXCVAR_DEFINE_BOOL(vulkan_allow_fullscreen_exclusive, false, "UI/Vulkan",
++                    "Windows: let the graphics driver take a window that covers the screen into exclusive "
++                    "fullscreen by itself (Alt+Tab may then not leave it properly)");
++
+ namespace rex {
+ namespace ui {
+ namespace vulkan {
+@@ -1405,6 +1409,20 @@ VkSwapchainKHR VulkanPresenter::PaintContext::CreateSwapchainForVulkanSurface(
+   }
+   swapchain_create_info.clipped = VK_TRUE;
+   swapchain_create_info.oldSwapchain = old_swapchain;
++#ifdef VK_USE_PLATFORM_WIN32_KHR
++  // A borderless fullscreen window stays a window, as with DXGI: otherwise drivers may take a window
++  // covering the whole screen into exclusive fullscreen by themselves, and Alt+Tab then doesn't get out
++  // of it properly. A display mode the window sets (SDL's exclusive fullscreen) is unaffected: the
++  // display itself changes mode.
++  VkSurfaceFullScreenExclusiveInfoEXT full_screen_exclusive_info = {
++      VK_STRUCTURE_TYPE_SURFACE_FULL_SCREEN_EXCLUSIVE_INFO_EXT};
++  if (vulkan_device->extensions().ext_EXT_full_screen_exclusive &&
++      !REXCVAR_GET(vulkan_allow_fullscreen_exclusive)) {
++    full_screen_exclusive_info.fullScreenExclusive = VK_FULL_SCREEN_EXCLUSIVE_DISALLOWED_EXT;
++    full_screen_exclusive_info.pNext = const_cast<void*>(swapchain_create_info.pNext);
++    swapchain_create_info.pNext = &full_screen_exclusive_info;
++  }
++#endif
+   VkSwapchainKHR swapchain;
+   if (dfn.vkCreateSwapchainKHR(device, &swapchain_create_info, nullptr, &swapchain) != VK_SUCCESS) {
+     REXLOG_ERROR("VulkanPresenter: Failed to create a swapchain");
+-- 
+2.55.0.windows.5
+

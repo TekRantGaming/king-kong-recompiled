@@ -3,6 +3,56 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v2.0.0-beta.2 (12 October 2026)
+
+**Beta 2**: the second test build of the next big update, from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/PET2xU5FJq). Your saves and settings are kept, and you can switch back to stable at any time. Windows only for now.
+
+### What's new
+- **Windowed, Borderless or Fullscreen.** **Display** > **Window mode** has three choices now. **Borderless** fills the screen with a window at your desktop's resolution, so Alt+Tab is instant. **Fullscreen** switches your screen to the **Resolution** and **Refresh rate** you pick while the game runs. The render quality follows the resolution you pick.
+- **A fix for Alt+Tab not getting out of the game properly in fullscreen.** With some graphics drivers, Beta 1's fullscreen window was taken over as exclusive fullscreen. It should now stay a normal borderless window, as in the stable version. Thanks to GPUnity for the report.
+- **Frame rate and upscaling are on the Display page now**, next to the resolution settings. **Graphics** keeps the look, the preset, anti-aliasing, texture filtering, ambient occlusion and the effects.
+- **Discord status.** While Discord is running on your PC, your profile shows that you're playing King Kong, in the launcher or in the game, and for how long. **Discord status** on the **About** page switches it off.
+- **GTAO is now the ambient occlusion.** With the native renderer, ambient occlusion is always the new GTAO, so the **AO method** choice is gone (if you picked Classic in Beta 1, you now get GTAO). **AO strength** is now **Light** (recommended), **Medium** or **Strong**: how dark the shading gets and how far it spreads.
+- **Supersampling is gone.** Pick a **Resolution** instead. If you had it on, the game now draws at **Native**.
+- The shaders are prepared again the first time you start Beta 2, as after every update.
+
+### Known issues
+- Coming in a later beta: DLSS, FSR 3 and 4, and XeSS upscaling, screen-space global illumination, sharper shadows, reflections on water and volumetric light shafts.
+- In a few chapters the camera starts a pixel or two higher than on the console, because of how loading is timed.
+- With motion blur on, its trail is shorter at high frame rates.
+
+### Full changelog
+- Window mode: `fullscreen` off is Windowed; on, `kk_fullscreen_mode` `desktop` is Borderless and `WIDTHxHEIGHT@HZ` is Fullscreen, set as the game window's fullscreen mode when the game starts through the SDK (`rex::ui::GetFullscreenDisplayModes`, `GetDesktopDisplayMode` and `SetFullscreenDisplayMode`, SDK patch 0015). A mode the display doesn't have falls back to the closest one, or to Borderless.
+- Vulkan swapchains on Windows are created with `VK_EXT_full_screen_exclusive` set to disallowed (SDK patch 0016), so the driver can't make a window that covers the screen exclusive by itself; `vulkan_allow_fullscreen_exclusive` gives it its say back.
+- Discord status: Rich Presence through the Discord app's local connection (`discord-ipc-N`), without the Discord SDK; `kk_discord_status`, on by default. While Discord isn't running it tries again every 20 seconds.
+- `native_ao_method` `gtao` and `native_ao_apply` `opaque` are the defaults; Beta 1's AO method in a settings file is reset.
+- `kk_render_quality` `supersample` is no longer offered; a settings file with it gets `native`.
+
+## v2.0.0-beta.1 (12 October 2026)
+
+**This is a beta**: an early test build of the next big update, from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/PET2xU5FJq). Your saves and settings are kept, and you can switch back to stable at any time. Windows only for now: on Linux, keep using the stable version through Proton.
+
+### What's new
+- **A renderer of our own.** The game is now drawn by a new native renderer on Vulkan, instead of an imitation of the Xbox 360's graphics chip. It draws the game the same way the console did, runs much faster, and draws at higher resolutions for real instead of upscaling a 720p picture. **Graphics** > **Advanced** > **Renderer** switches back to the **Classic** renderer to compare.
+- **Shaders prepared from your own game files.** At the end of setup, and again after every update, the launcher prepares the game's shaders from your own disc files, which takes about a minute, so effects don't stutter the first time they appear. Your PC may run slower while it works. The **SHADERS** status on Home shows how it's going; select it to prepare them again if something looks wrong.
+- **Original or Remastered.** The last step of setup asks how you'd like the game to look: **Original**, the Xbox 360 as it was (720p, 30 FPS, the console's look), or **Remastered**, sharper and at your screen's resolution with soft ambient occlusion and 60 FPS, set up for your graphics card. **Look** on the **Graphics** page changes it at any time.
+- **New ambient occlusion.** With the native renderer, **AO method** on the **Graphics** page picks the new **GTAO**: sharper soft shadows in corners and creases that never darken water, smoke, fire, Kong's fur or the sky, and that now work in the chapters where the old one did nothing. **Classic** is the old one.
+- **Higher frame rates done properly.** Things that were tied to the console's 30 FPS now run at the right speed at any frame rate: the lifeboat crew's rowing, particles, Kong's grabs, button mashing and finishers, knock-backs, and the splashes and ripples in water. At 30 FPS nothing changes.
+
+### Known issues
+- Coming in a later beta: DLSS, FSR 3 and 4, and XeSS upscaling, screen-space global illumination, sharper shadows, reflections on water and volumetric light shafts.
+- In a few chapters the camera starts a pixel or two higher than on the console, because of how loading is timed.
+- With motion blur on, its trail is shorter at high frame rates.
+
+### Full changelog
+- `rexgpu-native`: a GPU plugin that hooks the game's Direct3D calls and draws with its own Vulkan (or Direct3D 12) renderer through NVRHI, on its own render thread, with the game's shaders translated from Xbox 360 microcode (XenosRecomp-based) and its textures converted on upload. `kk_renderer` (`native` or `classic`) picks it; switching back to the stable channel resets it and every other beta-only setting first.
+- The shader pack is built by the launcher from the player's `Shaders/xeshaders.bin` into the user's cache (`native-shaders`), with a stamp so it is rebuilt exactly when needed; no translated shader ships. `dxcompiler.dll` (DirectX Shader Compiler, LLVM Release License) is included for that.
+- `kkpipelines.list` lists the game's pipelines across all chapters, made in the background before the game starts; the driver's pipeline cache is kept between runs.
+- GTAO: Intel's XeGTAO (MIT), applied before the game's fog pass so transparent effects are drawn over it.
+- High frame rate fixes (`kk_hfr_fixes`, on): the rowing crew's animation time, particle drag, a precise frame clock, scripts that clamped the frame time to 0.016 s, per-step decays, follow smoothing, footstep splashes and water ripples.
+- What's new orders beta versions like the updater does.
+- Beta players only get beta updates, plus the final stable release of their beta (a stable with the same or higher version numbers); a stable hotfix of an older version is not offered to them.
+
 ## v1.9.11 (11 October 2026)
 
 ### What's new

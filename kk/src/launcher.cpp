@@ -6,9 +6,11 @@
 #include "launcher_ui.h"
 #include "shader_pack.h"
 #include "native_shaders.h"
+#include "display_modes.h"
 #include "steam_shortcut.h"
 #include "update.h"
 #include "glyphs.h"
+#include "discord_presence.h"
 #include "online.h"
 
 #include <algorithm>
@@ -83,6 +85,8 @@ constexpr const char* kOnlineAbout =
 #define KK_TIMES "\xC3\x97"
 #define KK_DOT "\xC2\xB7"
 #define KK_DEG "\xC2\xB0"
+// Said wherever the native renderer's shaders are being prepared.
+#define KK_SLOW_PC "Your PC may run slower until this finishes, because preparing the shaders uses its processor."
 
 // ---------------------------------------------------------- cvar helpers ---
 // Every change bumps g_changes; the launcher saves the settings shortly after.
@@ -219,7 +223,8 @@ constexpr std::pair<int, const char*> kLanguages[] = {
 
 // Settings that the presenter/window read before the launcher runs; changing
 // them needs a relaunch to take effect.
-constexpr const char* kRestartCvars[] = {"present_effect", "window_width", "window_height", "monitor"};
+// gpu_plugin: the renderer (Graphics > Renderer) is loaded before the launcher opens.
+constexpr const char* kRestartCvars[] = {"present_effect", "window_width", "window_height", "monitor", "gpu_plugin"};
 
 enum Page { kHome, kDisplay, kGraphics, kGameplay, kControls, kCheatsPage, kAchievements, kAbout, kPageCount };
 constexpr const char* kPageNames[kPageCount] = {"Home",     "Display", "Graphics",     "Gameplay",
@@ -310,7 +315,10 @@ void SetOriginalLook(bool on) {
     for (const auto& [name, value] : OriginalLookSettings()) Set(name, value);
   } else {
     const std::string saved = Get("kk_modern_settings");
-    if (saved.empty()) ApplyGraphicsPreset(1);  // Medium
+    if (saved.empty()) {  // nothing put aside (the look step wasn't used): Medium at 60 FPS
+      ApplyGraphicsPreset(1);
+      SetInt("kk_frame_rate", 60);
+    }
     std::stringstream in(saved);
     for (std::string item; std::getline(in, item, ';');) {
       const size_t eq = item.find('=');
@@ -319,6 +327,75 @@ void SetOriginalLook(bool on) {
     Set("kk_modern_settings", "");
   }
   SetBool("kk_original_look", on);
+}
+
+// ------------------------------------------------------------- renderer ---
+// Graphics > Renderer: kk_renderer, which gpu_plugin follows (ApplyRendererChoice). A gpu_plugin in
+// the settings file (an earlier test build's) is taken out so that the choice holds.
+bool UsingNativeRenderer() { return Get("gpu_plugin") == "native"; }
+
+void SetRenderer(bool native) {
+  Set("kk_renderer", native ? "native" : "classic");
+  if (const auto* flag = FindFlag("gpu_plugin"); flag && flag->source != rex::cvar::Source::kDefault &&
+                                                 flag->source != rex::cvar::Source::kCommandLine &&
+                                                 flag->source != rex::cvar::Source::kEnvironment)
+    Reset("gpu_plugin");
+  ApplyRendererChoice();
+}
+
+// ------------------------------------------------------- graphics style ---
+// The setup's last step: Original (the Original look) or Remastered (the Modern look, named
+// Remastered on the Graphics page, with a preset for this graphics card and the native renderer's
+// GTAO ambient occlusion). Both keep the native renderer. native-renderer/docs/beta.md.
+int RemasteredPresetIndex() {
+  static const int index = [] {
+    auto find = [](std::string_view label) {
+      for (int i = 0; i < kGraphicsPresetCount; ++i)
+        if (kGraphicsPresets[i].label == label) return i;
+      return 1;
+    };
+    if (IsSteamDeck()) return find("Steam Deck");
+    const GpuInfo gpu = DetectGpu();
+    constexpr uint64_t kGiB = uint64_t(1) << 30;
+    // Integrated graphics (Intel, or little memory of its own): Medium draws fewer pixels.
+    if (gpu.vendor == GpuVendor::kIntel || (gpu.dedicated_memory && gpu.dedicated_memory < 3 * kGiB))
+      return find("Medium");
+    if (gpu.dedicated_memory >= 8 * kGiB) return find("Ultra");
+    return find("High");  // other dedicated cards, and any card it can't tell (Linux)
+  }();
+  return index;
+}
+
+void ApplyRemastered() {
+  SetOriginalLook(false);
+  ApplyGraphicsPreset(RemasteredPresetIndex());
+  SetInt("ao_mode", 1);
+  SetInt("ao_strength", 1);
+  SetInt("kk_frame_rate", 60);  // the Original look keeps the console's 30
+  SetRenderer(true);  // with the native renderer's GTAO, the only method since Beta 2 (ApplyPortDefaults)
+}
+
+// The Remastered settings first: the Original look keeps the settings it replaces and puts them back
+// when Look is switched to Remastered on the Graphics page, which then gives exactly Remastered.
+void ApplyOriginal() {
+  ApplyRemastered();
+  SetOriginalLook(true);
+}
+
+// Settings only this beta has (the native renderer's, the renderer choice, the fullscreen
+// resolution): put back to their defaults before switching to stable, which has none of them.
+// gpu_plugin is never saved by the beta (ApplyRendererChoice), but one from an earlier test build's
+// settings file goes too. Saves, the stable settings and everything else stay.
+void ResetBetaOnlySettings() {
+  for (auto& e : rex::cvar::GetRegistry()) {
+    if (e.type == rex::cvar::FlagType::Command) continue;
+    if (e.source == rex::cvar::Source::kCommandLine || e.source == rex::cvar::Source::kEnvironment) continue;
+    const bool beta = e.name.rfind("native_", 0) == 0 || e.category == "Native renderer" || e.name == "kk_renderer" ||
+                      e.name == "kk_fullscreen_mode" || e.name == "gpu_plugin";
+    if (beta && e.getter() != e.default_value) REXLOG_INFO("KK: switching to stable: {} back to its default", e.name);
+    if (beta) rex::cvar::ResetToDefault(e.name);
+  }
+  ++g_changes;
 }
 
 // ----------------------------------------------------------- backdrop ---
@@ -401,9 +478,9 @@ void MakeBackdrops(const art::Image& src, art::Image* sharp, art::Image* soft) {
   *soft = std::move(blurred);
 }
 
-// A small, blurred copy of a backdrop, for behind the settings.
-art::Image SoftCopy(const art::Image& src) {
-  constexpr int kStep = 4;
+// A copy `step` times smaller (each pixel the average of step x step).
+art::Image Shrink(const art::Image& src, int step) {
+  const int kStep = step;
   art::Image out;
   out.width = src.width / kStep;
   out.height = src.height / kStep;
@@ -421,7 +498,13 @@ art::Image SoftCopy(const art::Image& src) {
       for (int c = 0; c < 3; ++c) d[c] = uint8_t(sum[c] / (kStep * kStep));
       d[3] = 255;
     }
-  Blur(out.rgba, out.width, out.height, std::max(2, out.width / 100), 3);
+  return out;
+}
+
+// A small, blurred copy of a backdrop, for behind the settings.
+art::Image SoftCopy(const art::Image& src) {
+  art::Image out = Shrink(src, 4);
+  if (out) Blur(out.rgba, out.width, out.height, std::max(2, out.width / 100), 3);
   return out;
 }
 
@@ -454,12 +537,23 @@ class Launcher final : public rex::ui::ImGuiDialog {
     LoadArt();
     // Installed before the launcher took its art from the game files: take it now.
     if (files_ok_ && !art::HasLauncherArt(ArtDir())) StartArtExtraction(false);
-    // The native renderer's shaders (native_shaders.h): checked each time the launcher opens,
-    // built in the background from the game files when missing or stale.
-    if (files_ok_) native_pack_.Start(CacheDir(), paths_.game_dir);
+    // The native renderer's shaders (native_shaders.h): checked each time the launcher opens, built
+    // in the background from the game files when missing or stale, and built again in full after
+    // every update (a version this launcher hasn't run: an update, a beta, a channel switch), shown by
+    // the after-update screen (DrawShaderScreen). Not on a fresh install: its setup builds them.
+    if (files_ok_) {
+      const bool updated = UpdatedSinceLastRun();
+      native_pack_.Start(CacheDir(), paths_.game_dir, updated);
+      if (updated && NativeShaderPack::Wanted()) {
+        update_shaders_ = true;
+        REXLOG_INFO("KK: first start of v{} (last v{}): the native renderer's shaders are built again", KK_VERSION,
+                    Get("kk_last_version"));
+      }
+    }
     toast_ = std::make_unique<AchievementToast>(drawer, immediate_, paths_.game_dir, paths_.user_dir);
     CleanUpAfterUpdate();
     online::Start();
+    discord::Start();
     const bool testing = std::getenv("KK_AUTOPLAY") != nullptr;
     if (GetBool("kk_check_updates") && !testing) StartUpdateCheck(false);
     StartSteamCheck();
@@ -563,7 +657,9 @@ class Launcher final : public rex::ui::ImGuiDialog {
       ui_sounds_ = std::make_unique<LauncherSounds>(paths_.game_dir);
 
     DrawBackdrop(dl);
-    if (InSetup()) {
+    if (ShaderScreen()) {
+      DrawShaderScreen(dl);
+    } else if (InSetup()) {
       DrawSetup(dl);
     } else {
       if (!modal_.open) HandleGlobalInput();
@@ -598,6 +694,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
   void LoadArt() {
     slides_.clear();
     logo_ = nullptr;
+    still_low_ = nullptr;
     if (art::HasLauncherArt(ArtDir())) {
       const art::LauncherArt a = art::LoadLauncherArt(ArtDir());
       if (a.logo) {
@@ -650,6 +747,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
 
   void AddSlide(const art::Image& sharp, const art::Image& soft) {
     if (!sharp) return;
+    if (slides_.empty()) still_low_ = MakeTexture(Shrink(sharp, 3));  // the setup's Original card
     slides_.push_back({MakeTexture(sharp), MakeTexture(soft ? soft : sharp), float(sharp.width) / float(sharp.height)});
   }
 
@@ -677,15 +775,16 @@ class Launcher final : public rex::ui::ImGuiDialog {
     }
     if (setup_art_) {
       setup_art_ = false;
-      // With the native renderer, the setup's last step: its shaders from the new game files.
+      // With the native renderer, the shaders from the new game files; then, last, the look.
       if (NativeShaderPack::Wanted()) {
         native_pack_.Start(CacheDir(), paths_.game_dir);
         setup_shaders_ = true;
       }
+      setup_style_ = true;
+      style_focus_ = 1;
       page_ = kHome;
       home_focus_ = 0;
       home_mix_ = 0;  // the art fades in
-      Status("Installed. Your copy of King Kong is ready to play.");
     }
   }
 
@@ -741,7 +840,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
     home_mix_ = ui::Approach(home_mix_ * 100.0f, home ? 100.0f : 0.0f, 9.0f) / 100.0f;
     slide_clock_ += std::min(ImGui::GetIO().DeltaTime, 0.1f);
     const ImVec2 p1(o_.x + w_, o_.y + h_);
-    if (!slides_.empty() && !InSetup()) {
+    if (!slides_.empty() && !PlainSetup()) {
       const int n = int(slides_.size());
       const int cur = int(slide_clock_ / kSlideTime) % n, next = (cur + 1) % n;
       const float into = float(std::fmod(slide_clock_, double(kSlideTime)));
@@ -786,7 +885,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
     }
     auto lerp = [](float a, float b, float t) { return a + (b - a) * t; };
     const float hm = home_mix_;
-    dl->AddRectFilled(o_, p1, ui::WithAlpha(color::kBase, InSetup() ? 0.1f : lerp(0.80f, 0.16f, hm)));
+    dl->AddRectFilled(o_, p1, ui::WithAlpha(color::kBase, PlainSetup() ? 0.1f : lerp(0.80f, 0.16f, hm)));
     // Darker on the left for the menu and the list, and at the top and bottom
     // for the tabs and prompts.
     const ImU32 c0 = ui::WithAlpha(color::kBase, lerp(0.30f, 0.88f, hm)), c1 = ui::WithAlpha(color::kBase, 0.0f);
@@ -889,6 +988,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
       if (modal_.cancel >= 0) p.push_back({Action::kBack, "Back"});
       return p;
     }
+    if (ShaderScreen()) return {{Action::kAccept, "Continue in the background"}};
     if (InSetup()) {
       switch (SetupStage()) {
         case 0:
@@ -896,10 +996,12 @@ class Launcher final : public rex::ui::ImGuiDialog {
           if (menu_value_) return {{Action::kLeft, "Change"}, {Action::kAccept, "Select"}, {Action::kBack, "Quit"}};
           return {{Action::kAccept, "Select"}, {Action::kBack, "Quit"}};
         case 1: return {{Action::kBack, "Cancel"}};
+        case 5: return {{Action::kLeft, "Change"}, {Action::kAccept, "Select"}};
         default: return {};
       }
     }
     if (page_ == kHome) {
+      if (status_focus_) return {{Action::kAccept, "Recompile shaders"}, {Action::kBack, "Back"}};
       if (side_focus_ < 0 && menu_value_) p.push_back({Action::kLeft, "Change"});
       p.push_back({Action::kAccept, side_focus_ >= 0 ? SidePanelVerb(true) : "Select"});
       p.push_back({Action::kBack, side_focus_ >= 0 ? "Back" : "Quit"});
@@ -954,6 +1056,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
       ui::Cue(ui::Sound::kBack);
       if (sub_ != kNoSubPage) sub_ = kNoSubPage;
       else if (page_ != kHome) GoTo(kHome);
+      else if (status_focus_ || side_focus_ >= 0) status_focus_ = false, side_focus_ = -1;  // back to the menu
       else OpenQuit();
     }
   }
@@ -996,7 +1099,15 @@ class Launcher final : public rex::ui::ImGuiDialog {
     focus = std::clamp(focus, 0, n - 1);
     const int focus_before = focus;
     menu_value_ = bool(entries[size_t(focus)].change);
-    const bool active = !modal_.open && side_focus_ < 0;
+    const bool active = !modal_.open && side_focus_ < 0 && !status_focus_;
+    // Home: down from the last entry (or up from the first) moves to the shaders' status below.
+    if (active && menu_to_status_ && n > 1 &&
+        ((focus == n - 1 && input_.Pressed(Action::kDown)) || (focus == 0 && input_.Pressed(Action::kUp)))) {
+      input_.Consume(Action::kDown);
+      input_.Consume(Action::kUp);
+      status_focus_ = true;
+      ui::Cue(ui::Sound::kMove);
+    }
     if (active && n > 1) {
       if (input_.Pressed(Action::kUp)) focus = (focus + n - 1) % n;
       if (input_.Pressed(Action::kDown)) focus = (focus + 1) % n;
@@ -1027,7 +1138,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
           chosen = i;
         }
       }
-      const bool on = i == focus && side_focus_ < 0;
+      const bool on = i == focus && side_focus_ < 0 && !status_focus_;
       home_offset_[size_t(i)] = ui::Approach(home_offset_[size_t(i)], on ? 22 * s : 0.0f, 18.0f);
       const float off = home_offset_[size_t(i)];
       const float k = off / (22 * s);
@@ -1299,8 +1410,65 @@ class Launcher final : public rex::ui::ImGuiDialog {
     const float room = o_.y + h_ - 150 * s - y;
     const float item_h = std::clamp(room / float(std::max<size_t>(entries.size(), 1)), 28 * s, 42 * s);
     DrawSidePanels(dl, a, true, entries, home_focus_, o_.y + h_ - 120 * s);
+    if (side_focus_ >= 0) status_focus_ = false;
+    HomeStatusInput(int(entries.size()));
+    menu_to_status_ = ShaderStatusSelectable();
     if (const int i = DrawMenu(dl, entries, home_focus_, x, y, a, item_h); i >= 0) entries[size_t(i)].action();
+    menu_to_status_ = false;  // only Home's menu
     DrawHomeStatus(dl, x, o_.y + h_ - 120 * s, a);
+  }
+
+  // The SHADERS status on Home (the native renderer's pack) can be selected to build it again.
+  bool ShaderStatusSelectable() const { return files_ok_ && !installing_ && NativeShaderPack::Wanted(); }
+
+  // Controller, keyboard and mouse on the shaders' status: Up goes back to the menu's last entry and
+  // Down to its first (the menu wraps through it), A, Enter or a click asks to recompile, B goes back
+  // (HandleGlobalInput). Its place is last frame's (status_rect_).
+  void HomeStatusInput(int entries) {
+    if (!ShaderStatusSelectable()) {
+      status_focus_ = false;
+      return;
+    }
+    if (modal_.open || side_focus_ >= 0) return;
+    const bool hovered = status_rect_[1].x > status_rect_[0].x &&
+                         ImGui::IsMouseHoveringRect(status_rect_[0], status_rect_[1], false);
+    if (input_.mouse_moved()) status_focus_ = hovered;
+    if (hovered && ImGui::IsMouseClicked(0)) {
+      status_focus_ = true;
+      OpenRecompileShaders();
+      return;
+    }
+    if (!status_focus_) return;
+    if (input_.Pressed(Action::kUp) || input_.Pressed(Action::kDown)) {
+      home_focus_ = input_.Pressed(Action::kUp) ? std::max(0, entries - 1) : 0;
+      input_.Consume(Action::kUp);
+      input_.Consume(Action::kDown);
+      status_focus_ = false;
+      ui::Cue(ui::Sound::kMove);
+    } else if (input_.Pressed(Action::kAccept)) {
+      input_.Consume(Action::kAccept);
+      OpenRecompileShaders();
+    }
+  }
+
+  // "Recompile shaders": the native renderer's pack built again (force), with the status line's
+  // progress bar; Play waits for it as for any build.
+  void OpenRecompileShaders() {
+    if (native_pack_.Busy()) {
+      ui::Cue(ui::Sound::kDeny);
+      Status("The shaders are being prepared right now.");
+      return;
+    }
+    ui::Cue(ui::Sound::kSelect);
+    OpenModal("Recompile shaders",
+              "Recompile your shaders? This takes about a minute. " KK_SLOW_PC, {"Yes", "No"}, 1,
+              [this](int i) {
+                if (i != 0) return;
+                if (native_pack_.Busy()) return;
+                native_pack_.Start(CacheDir(), paths_.game_dir, true);
+                REXLOG_INFO("KK: recompiling the native renderer's shaders (asked for on Home)");
+                Status("Recompiling the shaders. Play waits for them.");
+              });
   }
 
   // ------------------------------------------------------------- setup ---
@@ -1311,16 +1479,138 @@ class Launcher final : public rex::ui::ImGuiDialog {
 #if defined(KK_DEV_TOOLS)
     if (dev_setup_ >= 0) return true;
 #endif
-    return !files_ok_ || installing_ || setup_art_ || setup_shaders_ || installing_update_;
+    return !files_ok_ || installing_ || setup_art_ || setup_shaders_ || setup_style_ || installing_update_ ||
+           update_shaders_;
+  }
+
+  // A version this launcher has not run before, on an installation that has run one (What's new uses
+  // the same test; a fresh install has no settings file). Not in test runs (KK_AUTOPLAY), which
+  // don't record the version either.
+  bool UpdatedSinceLastRun() const {
+    if (std::getenv("KK_AUTOPLAY")) return false;
+    const std::string last = Get("kk_last_version");
+    std::error_code ec;
+    return last != KK_VERSION && (!last.empty() || std::filesystem::exists(paths_.config_path, ec));
+  }
+
+  // The native renderer's shaders being prepared, as a screen of its own: the setup's step (after the
+  // artwork, before the look) and after every update.
+  bool ShaderScreen() const {
+    if (installing_update_ || installing_ || setup_art_) return false;
+#if defined(KK_DEV_TOOLS)
+    if (dev_setup_ >= 0) return dev_setup_ == 4;
+#endif
+    return setup_shaders_ || update_shaders_;
+  }
+  // The setup's step and the plain setup screens draw the night sky; the shader screen the stills.
+  bool PlainSetup() const { return InSetup() && !ShaderScreen(); }
+
+  // Home's look (the stills, blurred; the game's logo; the music), with a centred panel: what is
+  // happening and why, the PC being slower meanwhile, the progress, and Continue in the background
+  // (A, Enter or a click). The build goes on behind Home after that, and Play waits for it.
+  void DrawShaderScreen(ImDrawList* dl) {
+    const float s = S();
+    const ui::Fonts f = ui::GetFonts();
+    bool after_update = !setup_shaders_;
+    float fraction = native_pack_.Fraction();
+    uint32_t done = native_pack_.Done(), total = native_pack_.Total();
+#if defined(KK_DEV_TOOLS)
+    if (dev_setup_ == 4) {
+      after_update = false;
+      if (!native_pack_.Busy()) total = 4794, done = 2157, fraction = 0.45f;  // screenshots
+    }
+#endif
+    const std::string caption = Upper(T("PC port")) + "  " KK_DOT "  " + Upper(T(after_update ? "Update" : "Setup"));
+    const std::string title =
+        after_update ? F("Updated to v{0}: preparing the shaders", {KK_VERSION}) : T(std::string("Preparing the shaders"));
+    const std::string why = T(
+        "The game's shaders are translated for your graphics card from your copy of the game, once, so effects "
+        "never stutter the first time they appear.");
+    const std::string slow = T(KK_SLOW_PC);
+    const std::string button = T("Continue in the background");
+    const float pw = std::min(760 * s, w_ - Margin() * 2), pad = 34 * s, r = 12 * s, wrap = pw - pad * 2;
+    const float why_h = ui::TextSize(f.text, 16 * s, why, wrap).y, slow_h = ui::TextSize(f.text, 14.5f * s, slow, wrap).y;
+    const float bh = 48 * s;
+    const float ph = pad + 16 * s + 14 * s + 36 * s + 18 * s + why_h + 10 * s + slow_h + 30 * s + 3 * s + 14 * s +
+                     20 * s + 30 * s + bh + pad;
+    float lw = 0, lh = 0;
+    if (logo_) {
+      lh = std::clamp(h_ - ph - 150 * s, 0.0f, 150 * s);
+      lw = lh * logo_aspect_;
+    }
+    const float total_h = (lh > 40 * s ? lh + 30 * s : 0) + ph;
+    float y = o_.y + std::max(40 * s, (h_ - 70 * s - total_h) * 0.5f);
+    const float cx = o_.x + w_ * 0.5f, x0 = cx - pw * 0.5f, x1 = cx + pw * 0.5f;
+    if (lh > 40 * s) {
+      dl->AddImage(ui::Tex(logo_), ImVec2(cx - lw * 0.5f, y), ImVec2(cx + lw * 0.5f, y + lh));
+      y += lh + 30 * s;
+    }
+    // The panel, like the pop-ups': dark, a hairline, a brass line on top.
+    const ImVec2 p0(x0, y), p1(x1, y + ph);
+    dl->AddRectFilled(ImVec2(p0.x, p0.y + 6 * s), ImVec2(p1.x, p1.y + 6 * s), IM_COL32(0, 0, 0, 60), r);
+    dl->AddRectFilled(p0, p1, ui::WithAlpha(IM_COL32(14, 16, 20, 255), 0.86f), r);
+    dl->AddRect(p0, p1, ui::WithAlpha(color::kText, 0.10f), r, 0, 1.0f * s);
+    dl->AddRectFilled(ImVec2(p0.x + r, p0.y), ImVec2(p1.x - r, p0.y + 2 * s), color::kAccent);
+    float ty = y + pad;
+    const float tx = x0 + pad;
+    ui::DrawTracked(dl, f.display, 12 * s, ImVec2(tx, ty), color::kAccent, caption, 2.6f * s);
+    ty += 16 * s + 14 * s;
+    dl->AddText(f.display, 30 * s, ImVec2(tx, ty), color::kText, title.c_str());
+    ty += 36 * s + 18 * s;
+    dl->AddText(f.text, 16 * s, ImVec2(tx, ty), color::kTextDim, why.c_str(), nullptr, wrap);
+    ty += why_h + 10 * s;
+    dl->AddText(f.text, 14.5f * s, ImVec2(tx, ty), color::kTextFaint, slow.c_str(), nullptr, wrap);
+    ty += slow_h + 30 * s;
+    // The progress.
+    const float by = std::round(ty);
+    dl->AddRectFilled(ImVec2(tx, by), ImVec2(tx + wrap, by + 3 * s), ui::WithAlpha(color::kText, 0.12f));
+    if (fraction >= 0) {
+      dl->AddRectFilled(ImVec2(tx, by), ImVec2(tx + wrap * std::clamp(fraction, 0.0f, 1.0f), by + 3 * s), color::kAccent);
+    } else {
+      const float t = float(std::fmod(ImGui::GetTime() * 0.6, 1.0));
+      const float a0 = tx + wrap * std::max(0.0f, t * 1.3f - 0.3f), a1 = tx + wrap * std::min(1.0f, t * 1.3f);
+      dl->AddRectFilled(ImVec2(a0, by), ImVec2(a1, by + 3 * s), color::kAccent);
+    }
+    ty += 3 * s + 14 * s;
+    const std::string left = total > 0 ? F("{0} of {1} shaders", {std::to_string(done), std::to_string(total)})
+                                       : T(std::string("Checking"));
+    const std::string right = fraction >= 0 ? std::to_string(int(fraction * 100)) + "%" : "";
+    dl->AddText(f.text, 15 * s, ImVec2(tx, ty), color::kText, left.c_str());
+    dl->AddText(f.text, 15 * s, ImVec2(tx + wrap - ui::TextSize(f.text, 15 * s, right).x, ty), color::kTextDim,
+                right.c_str());
+    ty += 20 * s + 30 * s;
+    // Continue in the background: the panel's one button, with the focus.
+    const float bw = std::max(300 * s, ui::TextSize(f.semibold, 16 * s, button).x + 60 * s);
+    const ImVec2 b0(x1 - pad - bw, ty), b1(x1 - pad, ty + bh);
+    const bool hovered = !modal_.open && ImGui::IsMouseHoveringRect(b0, b1, false);
+    dl->AddRectFilled(b0, b1, hovered ? IM_COL32_WHITE : color::kFocus, 4 * s);
+    const ImVec2 ts = ui::TextSize(f.semibold, 16 * s, button);
+    dl->AddText(f.semibold, 16 * s, ImVec2(b0.x + (bw - ts.x) * 0.5f, b0.y + (bh - ts.y) * 0.5f), color::kOnFocus,
+                button.c_str());
+    if (!modal_.open && (input_.Pressed(Action::kAccept) || (hovered && ImGui::IsMouseClicked(0)))) {
+      input_.Consume(Action::kAccept);
+      ContinueShadersInBackground();
+    }
+  }
+
+  void ContinueShadersInBackground() {
+    ui::Cue(ui::Sound::kSelect);
+    setup_shaders_ = false;  // the setup goes on to the look step
+    update_shaders_ = false;
+#if defined(KK_DEV_TOOLS)
+    if (dev_setup_ == 4) dev_setup_ = 5;
+#endif
+    page_ = kHome;
+    home_focus_ = 0;
   }
 
   // 0: asking for the disc image, 1: installing, 2: taking the artwork,
-  // 3: updating the port, 4: preparing the native renderer's shaders.
+  // 3: updating the port, 4: preparing the native renderer's shaders, 5: the look.
   int SetupStage() const {
 #if defined(KK_DEV_TOOLS)
     if (dev_setup_ >= 0) return dev_setup_;
 #endif
-    return installing_update_ ? 3 : installing_ ? 1 : setup_art_ ? 2 : setup_shaders_ ? 4 : 0;
+    return installing_update_ ? 3 : installing_ ? 1 : setup_art_ ? 2 : setup_shaders_ ? 4 : setup_style_ ? 5 : 0;
   }
 
   void DrawSetup(ImDrawList* dl) {
@@ -1335,14 +1625,11 @@ class Launcher final : public rex::ui::ImGuiDialog {
       copy_total = float(progress_.bytes_total.load());
     }
     float art_fraction = art_progress_.fraction.load();
-    float shader_fraction = native_pack_.Fraction();
-    uint32_t shaders_done = native_pack_.Done(), shaders_total = native_pack_.Total();
 #if defined(KK_DEV_TOOLS)
     if (dev_setup_ >= 0) {  // screenshots of each stage
       copy_total = 6.3e9f;
       copied = copy_total * 0.37f;
       art_fraction = 0.6f;
-      if (!native_pack_.Busy()) shaders_total = 4794, shaders_done = 2157, shader_fraction = 0.45f;
     }
 #endif
 
@@ -1357,7 +1644,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
     // The steps (of the first install).
     static const char* const kSteps[] = {"Your copy", "Install", "Play"};
     if (stage != 3) {
-    const int step = stage == 0 ? 0 : 1;
+    const int step = stage == 0 ? 0 : stage == 5 ? 2 : 1;
     float sx = x;
     for (int i = 0; i < 3; ++i) {
       const ImU32 num = i < step ? color::kTextDim : i == step ? color::kAccent : color::kTextFaint;
@@ -1441,16 +1728,10 @@ class Launcher final : public rex::ui::ImGuiDialog {
       body("Taking the game's logo and stills from the movie from your copy of the game.");
       bar(art_fraction);
       y += 30 * s;
-    } else if (stage == 4) {
-      heading("Preparing the shaders");
-      body("Translating the game's shaders for the native renderer, from your copy of the game. This is done once, "
-           "and again only when the port or the game's files change.");
-      bar(shader_fraction);
-      caption_pair(shaders_total > 0 ? F("{0} of {1} shaders", {std::to_string(shaders_done), std::to_string(shaders_total)})
-                                     : T(std::string("Checking")),
-                   shader_fraction >= 0 ? std::to_string(int(shader_fraction * 100)) + "%" : "");
-      // The build goes on behind the Home screen (its status line), and Play waits for it.
-      entries.push_back({"Continue in the background", true, [this] { setup_shaders_ = false; }});
+    } else if (stage == 5) {
+      heading("Choose a look");
+      body("Pick how King Kong looks. You can change it at any time with Look on the Graphics page.");
+      DrawStyleCards(dl, y);
     } else {
       float got = 0, size = 0;
       std::string version;
@@ -1488,6 +1769,121 @@ class Launcher final : public rex::ui::ImGuiDialog {
   }
 
   static ImU32 WithAlphaText(float a) { return ui::WithAlpha(color::kText, a); }
+
+  // The setup's last step: two cards, Original and Remastered, side by side under the heading.
+  // Left and Right (or Up and Down) move between them, A or Enter or a click picks one.
+  void DrawStyleCards(ImDrawList* dl, float top) {
+    const float s = S();
+    const ui::Fonts f = ui::GetFonts();
+    const float x0 = o_.x + Margin(), right = o_.x + w_ - Margin();
+    const float gap = 28 * s, pad = 18 * s, r = 10 * s;
+    const float cw = std::min((right - x0 - gap) * 0.5f, 520 * s);
+    const float bottom = o_.y + h_ - 92 * s;  // above the prompts
+    static const GpuInfo gpu = DetectGpu();
+    const std::string preset = T(std::string(kGraphicsPresets[RemasteredPresetIndex()].label));
+    struct Card {
+      const char* caption;
+      const char* title;
+      const char* text;
+      std::string fact;
+      rex::ui::ImmediateTexture* still;
+    };
+    const Card cards[2] = {
+        {"Original", "The Xbox 360 as it was",
+         "The console's own picture: 720p at 30 FPS, its anti-aliasing and texture filtering, the 69" KK_DEG " field "
+         "of view, motion blur, screen blur and distance fog. No ambient occlusion.",
+         T("720p  " KK_DOT "  30 FPS  " KK_DOT "  Xbox 360 settings"), still_low_},
+        {"Remastered", "Sharper, with soft shadows",
+         "Drawn for your screen's resolution with sharper textures, and the new GTAO ambient occlusion: soft "
+         "shading in corners, in creases and under rocks, grass and people.",
+         F("{0} preset for your {1}  " KK_DOT "  60 FPS  " KK_DOT "  GTAO", {preset, gpu.name.empty() ? T(std::string("graphics card")) : gpu.name}),
+         slides_.empty() ? nullptr : slides_[0].sharp},
+    };
+    // The text under each still, measured; the stills take what's left (cropped to fit).
+    const float wrap = cw - pad * 2;
+    float text_h = 0;
+    for (const Card& c : cards)
+      text_h = std::max(text_h, 22 * s + 36 * s + ui::TextSize(f.text, 14.5f * s, T(std::string(c.text)), wrap).y + 10 * s +
+                                    ui::TextSize(f.text, 12.5f * s, c.fact, wrap).y);
+    const float still_h = std::clamp(bottom - top - text_h - pad * 2, 60 * s, cw * 9.0f / 16.0f);
+    const float ch = still_h + pad + text_h + pad;
+
+    auto choose = [this](int i) {
+      ui::Cue(ui::Sound::kSelect);
+      if (i == 0) ApplyOriginal();
+      else ApplyRemastered();
+      REXLOG_INFO("KK: setup: look {}", i == 0 ? "Original" : "Remastered");
+      setup_style_ = false;
+#if defined(KK_DEV_TOOLS)
+      dev_setup_ = -1;
+#endif
+      Status(InstalledMessage());
+    };
+    const int before = style_focus_;
+    int chosen = -1;
+    if (!modal_.open) {
+      if (input_.Pressed(Action::kLeft) || input_.Pressed(Action::kUp)) style_focus_ = 0;
+      if (input_.Pressed(Action::kRight) || input_.Pressed(Action::kDown)) style_focus_ = 1;
+      if (input_.Pressed(Action::kAccept)) chosen = style_focus_;
+    }
+    int hovered = -1;
+    for (int i = 0; i < 2; ++i) {
+      const float cx = x0 + float(i) * (cw + gap);
+      if (!modal_.open && ImGui::IsMouseHoveringRect(ImVec2(cx, top), ImVec2(cx + cw, top + ch), false)) hovered = i;
+    }
+    if (hovered >= 0 && input_.mouse_moved()) style_focus_ = hovered;
+    if (hovered >= 0 && ImGui::IsMouseClicked(0)) chosen = style_focus_ = hovered;
+    if (style_focus_ != before) ui::Cue(ui::Sound::kMove);
+
+    for (int i = 0; i < 2; ++i) {
+      const Card& c = cards[i];
+      const float cx = x0 + float(i) * (cw + gap);
+      const bool focused = style_focus_ == i, on = focused || hovered == i;
+      const ImVec2 p0(cx, top), p1(cx + cw, top + ch);
+      dl->AddRectFilled(ImVec2(p0.x, p0.y + 5 * s), ImVec2(p1.x, p1.y + 5 * s), IM_COL32(0, 0, 0, 40), r);
+      dl->AddRectFilled(p0, p1, ui::WithAlpha(on ? IM_COL32(30, 33, 40, 255) : IM_COL32(16, 18, 22, 255), on ? 0.80f : 0.62f), r);
+      // The still, cropped to the room it has.
+      const ImVec2 s0(p0.x, p0.y), s1(p1.x, p0.y + still_h);
+      if (c.still) {
+        const float want = cw / still_h, aspect = 16.0f / 9.0f;
+        float v0 = 0, v1 = 1;
+        if (want > aspect) {
+          const float v = aspect / want;
+          v0 = (1 - v) * 0.5f;
+          v1 = v0 + v;
+        }
+        dl->AddImageRounded(ui::Tex(c.still), s0, s1, ImVec2(0, v0), ImVec2(1, v1),
+                            ui::WithAlpha(IM_COL32_WHITE, on ? 1.0f : 0.78f), r, ImDrawFlags_RoundCornersTop);
+      } else {
+        dl->AddRectFilledMultiColor(s0, s1, IM_COL32(22, 28, 36, 255), IM_COL32(26, 33, 42, 255), color::kBase,
+                                    color::kBase);
+      }
+      dl->AddRect(p0, p1, ui::WithAlpha(color::kText, on ? 0.30f : 0.09f), r, 0, 1.0f * s);
+      if (focused)  // the focus ring, as on the other focused things
+        dl->AddRect(ImVec2(p0.x - 3 * s, p0.y - 3 * s), ImVec2(p1.x + 3 * s, p1.y + 3 * s),
+                    ui::WithAlpha(color::kFocus, 0.85f), r + 3 * s, 0, 2.0f * s);
+      float ty = s1.y + pad;
+      ui::DrawTracked(dl, f.display, 12 * s, ImVec2(cx + pad, ty), color::kAccent, Upper(T(c.caption)), 2.6f * s);
+      ty += 22 * s;
+      dl->AddText(f.display, 24 * s, ImVec2(cx + pad, ty), color::kText, T(c.title));
+      ty += 36 * s;
+      const std::string text = T(std::string(c.text));
+      dl->AddText(f.text, 14.5f * s, ImVec2(cx + pad, ty), on ? color::kText : color::kTextDim, text.c_str(), nullptr, wrap);
+      ty += ui::TextSize(f.text, 14.5f * s, text, wrap).y + 10 * s;
+      dl->AddText(f.text, 12.5f * s, ImVec2(cx + pad, ty), color::kTextFaint, c.fact.c_str(), nullptr, wrap);
+    }
+    if (chosen >= 0) {
+      input_.Consume(Action::kAccept);
+      choose(chosen);
+    }
+  }
+
+  // The status line once the setup is over.
+  const char* InstalledMessage() {
+    return NativeShaderPack::Wanted() && native_pack_.Finished() && !native_pack_.Ok()
+               ? "Installed. The shaders were not prepared: the game compiles them as it starts."
+               : "Installed. Your copy of King Kong is ready to play.";
+  }
 
   // The setup screen's right side: which disc works, and Online players.
   void DrawSetupCards(ImDrawList* dl) {
@@ -1589,6 +1985,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
       float progress;  // < 0: none
     };
     Column cols[3];
+    const bool selectable = ShaderStatusSelectable();
     if (installing_) {
       const double total = std::max<double>(1.0, double(progress_.bytes_total.load()));
       const float p = float(double(progress_.bytes_done.load()) / total);
@@ -1607,7 +2004,25 @@ class Launcher final : public rex::ui::ImGuiDialog {
     else
       cols[2] = {Upper(T("Version")), "v" KK_VERSION, color::kText, -1};
     float cx = x;
-    for (const Column& c : cols) {
+    for (int i = 0; i < 3; ++i) {
+      const Column& c = cols[i];
+      const float col_w = std::max(210 * s, ui::TextSize(f.text, 15.5f * s, c.value).x + 48 * s);
+      if (i == 1 && selectable) {
+        // The shaders' status is a button (Recompile shaders): a tile when it has the focus or the mouse.
+        const ImVec2 p0(cx - 12 * s, y - 9 * s), p1(cx + col_w - 22 * s, y + 67 * s);
+        status_rect_[0] = p0;
+        status_rect_[1] = p1;
+        const bool hovered = !modal_.open && ImGui::IsMouseHoveringRect(p0, p1, false);
+        if (status_focus_ || hovered) {
+          dl->AddRectFilled(p0, p1, ui::WithAlpha(IM_COL32(30, 33, 40, 255), 0.6f * alpha), 10 * s);
+          dl->AddRect(p0, p1, ui::WithAlpha(color::kText, 0.22f * alpha), 10 * s, 0, 1.0f * s);
+        }
+        if (status_focus_)
+          dl->AddRect(ImVec2(p0.x - 3 * s, p0.y - 3 * s), ImVec2(p1.x + 3 * s, p1.y + 3 * s),
+                      ui::WithAlpha(color::kFocus, 0.85f * alpha), 13 * s, 0, 2.0f * s);
+      } else if (i == 1) {
+        status_rect_[0] = status_rect_[1] = ImVec2(0, 0);
+      }
       ui::DrawTracked(dl, f.display, 12 * s, ImVec2(cx, y), ui::WithAlpha(color::kTextFaint, alpha), c.caption, 2.2f * s);
       dl->AddText(f.text, 15.5f * s, ImVec2(cx, y + 20 * s), ui::WithAlpha(c.color, alpha), c.value.c_str());
       if (c.progress >= 0) {
@@ -1615,8 +2030,12 @@ class Launcher final : public rex::ui::ImGuiDialog {
         dl->AddRectFilled(ImVec2(cx, by), ImVec2(cx + bw, by + 2 * s), ui::WithAlpha(color::kText, 0.12f * alpha));
         dl->AddRectFilled(ImVec2(cx, by), ImVec2(cx + bw * std::clamp(c.progress, 0.0f, 1.0f), by + 2 * s),
                           ui::WithAlpha(color::kAccent, alpha));
+        // The native renderer's shaders being prepared: the PC is busier until it's done.
+        if (i == 1 && NativeShaderPack::Wanted())
+          dl->AddText(f.text, 11.5f * s, ImVec2(cx, by + 6 * s), ui::WithAlpha(color::kTextFaint, alpha),
+                      T("Your PC may run slower until this finishes."));
       }
-      cx += std::max(210 * s, ui::TextSize(f.text, 15.5f * s, c.value).x + 48 * s);
+      cx += col_w;
     }
   }
 
@@ -1738,29 +2157,152 @@ class Launcher final : public rex::ui::ImGuiDialog {
   }
 
   static constexpr const char* kSetByOriginal =
-      "Set by the Original Xbox 360 look. Switch Look to Modern on the Graphics page to change it.";
+      "Set by the Original Xbox 360 look. Switch Look to Remastered on the Graphics page to change it.";
 
   // ------------------------------------------------------------ Display ---
+  // Display > Frame rate (Beta 2: from the Gameplay page).
+  Item FrameRateItem() {
+    std::vector<Option> opts;
+    for (int f : kFrameRateChoices)
+      opts.push_back({f <= 0 ? "Unlimited" : f == 30 ? "30 FPS (Xbox 360)" : std::to_string(f) + " FPS",
+                      std::to_string(f)});
+    const std::string cur = Get("kk_frame_rate");
+    bool listed = false;
+    for (const auto& o : opts) listed = listed || o.value == cur;
+    if (!listed && !cur.empty()) opts.push_back({F("{0} FPS (settings file)", {cur}), cur});
+    Item it = CvarChoice("Frame rate",
+                         "How many pictures the game draws a second (your screen's refresh rate is separate). 30 "
+                         "matches the Xbox 360 and keeps every animation right. Higher is smoother, but some "
+                         "character animations are not right above 30 yet. For the smoothest motion, pick a rate "
+                         "that divides your screen's evenly, such as 60 on a 120 Hz screen.",
+                         "kk_frame_rate", opts);
+    return std::move(Disable(it, GetBool("kk_original_look"), kSetByOriginal));
+  }
+
+  // Display > Upscaling (Beta 2: from the Graphics page): the upscaler and how many pixels the game
+  // draws for the screen, which the Resolution above decides.
+  void UpscalingItems(std::vector<Item>& items) {
+    const auto [out_w, out_h] = cb_.output_size ? cb_.output_size() : std::pair<int, int>{1280, 720};
+    const bool original = GetBool("kk_original_look");
+    const char* draws = GetBool("fullscreen") ? "Draws {0} for your {1} screen." : "Draws {0} for your {1} window.";
+    items.push_back(Section("Upscaling"));
+    {
+      // NIS is in the D3D12 presenter only (the Vulkan one, used on Linux, would give FSR).
+      std::vector<Option> opts = {{"Off", "bilinear"}, {"AMD FSR 1", "fsr"}};
+#if defined(_WIN32)
+      opts.push_back({"NVIDIA NIS", "nis"});
+      const char* which = "AMD FSR 1 and NVIDIA Image Scaling (NIS) both work";
+#else
+      const char* which = "AMD FSR 1 works";
+#endif
+      Item it = CvarChoice("Upscaler",
+                           std::string("Scales the picture up to your screen and sharpens it, for a clearer image "
+                                       "when the game draws fewer pixels than your screen has. ") +
+                               which + " on any graphics card. Off uses plain smooth scaling.",
+                           "present_effect", opts);
+      std::vector<std::string> values;
+      for (const auto& o : opts) values.push_back(o.value);
+      it.on_choice = [values](int i) {
+        Set("present_effect", values[size_t(i)]);
+        // The upscaler modes are Native to Performance; others start at Native.
+        if (i != 0 && UpscalerMode() < 0) Set("kk_render_quality", "native");
+      };
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
+    if (Get("present_effect") != "bilinear") {
+      Item it;
+      it.type = ItemType::kChoice;
+      it.label = "Upscaler mode";
+      it.description =
+          "How many pixels the game draws before the upscaler scales them to your screen. Native draws at your "
+          "screen's size and only sharpens; Quality, Balanced and Performance draw fewer for more speed. The game "
+          "draws in steps of its original 720p, so some modes can be the same at your screen size.";
+      it.options.assign(std::begin(kUpscalerModeNames), std::end(kUpscalerModeNames));
+      const int mode = UpscalerMode();
+      it.index = mode;
+      if (mode >= 0) {
+        const int scale = RenderScaleFor(kUpscalerModes[mode], out_h);
+        it.facts.push_back(F(draws, {Size(1280 * scale, 720 * scale), Size(out_w, out_h)}));
+        std::string same;
+        for (int m = 0; m < 4; ++m) {
+          if (m == mode || RenderScaleFor(kUpscalerModes[m], out_h) != scale) continue;
+          same += same.empty() ? T(std::string(kUpscalerModeNames[m]))
+                               : " " + T(std::string("and")) + " " + T(std::string(kUpscalerModeNames[m]));
+        }
+        if (!same.empty()) it.facts.push_back(F("Same as {0} here.", {same}));
+      } else {
+        it.value_text = "Custom";
+        it.facts.push_back("Now set to another render quality. Pick a mode to use one of these.");
+      }
+      it.on_choice = [](int i) { Set("kk_render_quality", kUpscalerModes[i]); };
+      it.on_default = [] { Reset("kk_render_quality"); };
+      if (const auto* flag = FindFlag("kk_render_quality"))
+        for (int m = 0; m < 4; ++m)
+          if (flag->default_value == kUpscalerModes[m]) it.default_text = kUpscalerModeNames[m];
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    } else {
+      Item it;
+      it.type = ItemType::kChoice;
+      it.label = "Render quality";
+      it.description =
+          "How sharply the game is drawn compared with your screen. Native matches it; Quality, Balanced and the "
+          "Performance modes draw fewer pixels and scale up (an upscaler makes that sharper). The game renders in "
+          "steps of its original 720p.";
+      const std::string cur = Get("kk_render_quality");
+      std::vector<std::string> values;
+      it.index = -1;
+      for (const auto& p : RenderPresets()) {
+        const int scale = RenderScaleFor(p.id, out_h);
+        if (cur == p.id) {
+          it.index = int(values.size());
+          it.facts.push_back(F(draws, {Size(1280 * scale, 720 * scale), Size(out_w, out_h)}));
+        }
+        it.options.push_back(p.label);
+        values.push_back(p.id);
+      }
+      it.options.push_back("Custom");
+      values.push_back("custom");
+      if (cur == "custom") it.index = int(values.size()) - 1;
+      it.value_text = cur;
+      it.on_choice = [values](int i) { Set("kk_render_quality", values[size_t(i)]); };
+      it.on_default = [] { Reset("kk_render_quality"); };
+      if (const auto* flag = FindFlag("kk_render_quality"))
+        for (const auto& p : RenderPresets())
+          if (flag->default_value == p.id) it.default_text = p.label;
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
+    if (Get("kk_render_quality") == "custom") {
+      Item it = CvarChoice("Internal resolution", "Draw the game at an exact multiple of its native 1280 " KK_TIMES " 720.",
+                           "resolution_scale",
+                           {{"1" KK_TIMES "  " KK_DOT "  1280 " KK_TIMES " 720", "1"},
+                            {"2" KK_TIMES "  " KK_DOT "  2560 " KK_TIMES " 1440", "2"},
+                            {"3" KK_TIMES "  " KK_DOT "  3840 " KK_TIMES " 2160", "3"},
+                            {"4" KK_TIMES "  " KK_DOT "  5120 " KK_TIMES " 2880", "4"},
+                            {"5" KK_TIMES "  " KK_DOT "  6400 " KK_TIMES " 3600", "5"},
+                            {"6" KK_TIMES "  " KK_DOT "  7680 " KK_TIMES " 4320", "6"}});
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
+  }
+
   std::vector<Item> DisplayItems() {
     std::vector<Item> items;
     items.push_back(Section("Window"));
-    {
-      Item it = CvarToggle("Window mode", "Fullscreen uses a borderless window at your desktop resolution.",
-                           "fullscreen", "Windowed", "Fullscreen");
-      it.on_choice = [this](int i) { SetFullscreen(i == 1); };
-      it.on_default = [this] {
-        Reset("fullscreen");
-        if (cb_.set_fullscreen) cb_.set_fullscreen(GetBool("fullscreen"));
-      };
-      items.push_back(std::move(it));
+    items.push_back(WindowModeItem());
+    // Each mode's own size: the window's, or the screen's in exclusive fullscreen (Borderless has none).
+    if (!GetBool("fullscreen")) items.push_back(WindowSizeItem());
+    if (ExclusiveFullscreen()) {
+      items.push_back(ResolutionItem());
+      items.push_back(RefreshRateItem());
     }
-    items.push_back(WindowSizeItem());
     items.push_back(MonitorItem());
-    items.push_back(Section("Picture"));
+    items.push_back(Section("Frame rate"));
+    items.push_back(FrameRateItem());
     items.push_back(CvarToggle("VSync",
                                "On waits for the display for tear-free frames. Off has the lowest latency and lets "
                                "G-Sync and FreeSync displays run freely.",
                                "d3d12_allow_variable_refresh_rate_and_tearing", "Off", "On", /*invert=*/true));
+    UpscalingItems(items);
+    items.push_back(Section("Picture"));
     items.push_back(CvarChoice("Aspect ratio",
                                "The game is 16:9. Letterbox keeps its shape on other screens; Stretch fills them.",
                                "present_letterbox", {{"Letterbox 16:9", "true"}, {"Stretch", "false"}}));
@@ -1819,7 +2361,146 @@ class Launcher final : public rex::ui::ImGuiDialog {
       Reset("window_width");
       Reset("window_height");
     };
-    Disable(it, GetBool("fullscreen"), "Only used in windowed mode.");
+    return it;
+  }
+
+  // Fullscreen resolution (display_modes.h): Desktop, or one of the monitor's sizes, with its refresh
+  // rate on a row of its own (RefreshRateItem). Both are kept in kk_fullscreen_mode ("2560x1440@144").
+  void LoadDisplayModes() {
+    const int monitor = GetInt("monitor", 0);
+    if (display_modes_monitor_ == monitor) return;
+    display_modes_monitor_ = monitor;
+    display_modes_.clear();
+    const std::vector<DisplayMode> all = cb_.display_modes ? cb_.display_modes(monitor) : std::vector<DisplayMode>{};
+    auto whole = [](float hz) { return std::fabs(hz - std::round(hz)) < 0.05f; };
+    for (const DisplayMode& m : all) {
+      if (m.width < 1280 || m.height < 720) continue;  // below the game's own 720p
+      // 59.94 or 119.88 only when the display doesn't also have 60 or 120 at that size.
+      const bool twin = !whole(m.refresh) && std::any_of(all.begin(), all.end(), [&](const DisplayMode& o) {
+        return o.width == m.width && o.height == m.height && whole(o.refresh) &&
+               std::fabs(o.refresh - std::round(m.refresh)) < 0.05f;
+      });
+      if (!twin) display_modes_.push_back(m);  // SDL's order: largest first, then the highest rate
+    }
+  }
+
+  // The refresh rates the display has at a size, highest first.
+  std::vector<float> RatesAt(int width, int height) const {
+    std::vector<float> rates;
+    for (const DisplayMode& m : display_modes_)
+      if (m.width == width && m.height == height) rates.push_back(m.refresh);
+    return rates;
+  }
+
+  // Window mode: Windowed (fullscreen off), Borderless (fullscreen, kk_fullscreen_mode "desktop": a
+  // window filling the screen at the desktop's resolution) or Fullscreen (kk_fullscreen_mode a mode:
+  // exclusive, the screen switched to it while the game runs; the launcher itself stays borderless).
+  static bool ExclusiveFullscreen() {
+    return GetBool("fullscreen") && ParseDisplayMode(Get("kk_fullscreen_mode")).has_value();
+  }
+
+  // The desktop's own mode, as listed (a 59.94 that the list shows as 60 becomes 60), for Fullscreen
+  // until a Resolution is picked.
+  std::string DesktopModeValue() {
+    LoadDisplayModes();
+    DisplayMode desktop = cb_.desktop_mode ? cb_.desktop_mode(GetInt("monitor", 0)) : DisplayMode{};
+    for (const DisplayMode& m : display_modes_)
+      if (m.width == desktop.width && m.height == desktop.height && std::fabs(m.refresh - desktop.refresh) < 0.1f)
+        desktop.refresh = m.refresh;
+    if (desktop.width <= 0 && !display_modes_.empty()) desktop = display_modes_.front();
+    return desktop.width > 0 ? desktop.Value() : "desktop";
+  }
+
+  Item WindowModeItem() {
+    Item it;
+    it.type = ItemType::kChoice;
+    it.label = "Window mode";
+    it.description =
+        "Windowed plays in a window. Borderless fills the screen with a window at your desktop's resolution, so "
+        "Alt+Tab and other windows switch instantly. Fullscreen changes your screen to the Resolution and Refresh "
+        "rate you pick below while the game runs.";
+    it.options = {"Windowed", "Borderless", "Fullscreen"};
+    it.index = !GetBool("fullscreen") ? 0 : ExclusiveFullscreen() ? 2 : 1;
+    it.default_text = "Windowed";
+    it.on_choice = [this](int i) {
+      if (i == 1) Set("kk_fullscreen_mode", "desktop");
+      if (i == 2 && !ParseDisplayMode(Get("kk_fullscreen_mode"))) Set("kk_fullscreen_mode", DesktopModeValue());
+      SetFullscreen(i != 0);
+    };
+    it.on_default = [this] {
+      Reset("kk_fullscreen_mode");
+      Reset("fullscreen");
+      if (cb_.set_fullscreen) cb_.set_fullscreen(GetBool("fullscreen"));
+    };
+    if (it.index == 2) it.facts.push_back("The launcher stays borderless; the screen changes when the game starts.");
+    return it;
+  }
+
+  // Fullscreen only: the screen's size while the game runs.
+  Item ResolutionItem() {
+    LoadDisplayModes();
+    const auto cur = ParseDisplayMode(Get("kk_fullscreen_mode"));
+    Item it;
+    it.type = ItemType::kChoice;
+    it.label = "Resolution";
+    it.description =
+        "The size your screen switches to while the game runs, at the Refresh rate below. The render quality "
+        "follows it. Applies when the game starts.";
+    std::vector<std::pair<int, int>> sizes;
+    for (const DisplayMode& m : display_modes_) {
+      if (!sizes.empty() && sizes.back() == std::pair<int, int>{m.width, m.height}) continue;
+      sizes.emplace_back(m.width, m.height);
+      it.options.push_back(Size(m.width, m.height));
+    }
+    it.index = -1;
+    for (size_t i = 0; i < sizes.size(); ++i)
+      if (sizes[i] == std::pair<int, int>{cur->width, cur->height}) it.index = int(i);
+    if (it.index < 0) {  // a size this display doesn't have (another monitor's, or the settings file's)
+      it.index = int(sizes.size());
+      sizes.emplace_back(cur->width, cur->height);
+      it.options.push_back(F("{0} (not on this display)", {Size(cur->width, cur->height)}));
+    }
+    it.facts.push_back(F("The game will be shown at {0}.", {Size(cur->width, cur->height)}));
+    const auto desktop = ParseDisplayMode(DesktopModeValue());
+    if (desktop) it.default_text = Size(desktop->width, desktop->height);
+    it.on_choice = [this, sizes, cur](int i) {
+      const auto [w, h] = sizes[size_t(i)];
+      const std::vector<float> rates = RatesAt(w, h);
+      // The rate chosen before when this size has it, else this size's highest.
+      float rate = rates.empty() ? (cur ? cur->refresh : 0.0f) : rates.front();
+      for (const float r : rates)
+        if (cur && std::fabs(r - cur->refresh) < 0.01f) rate = r;
+      Set("kk_fullscreen_mode", DisplayMode{w, h, rate}.Value());
+    };
+    it.on_default = [this] { Set("kk_fullscreen_mode", DesktopModeValue()); };
+    return it;
+  }
+
+  // Fullscreen only: the display's rates at the Resolution's size.
+  Item RefreshRateItem() {
+    const auto cur = ParseDisplayMode(Get("kk_fullscreen_mode"));
+    Item it;
+    it.type = ItemType::kChoice;
+    it.label = "Refresh rate";
+    it.description =
+        "How many times a second your screen refreshes at the Resolution above: your screen's setting. How many "
+        "pictures the game draws a second is the Frame rate, below. Applies when the game starts.";
+    std::vector<float> rates = RatesAt(cur->width, cur->height);
+    if (rates.empty()) rates.push_back(cur->refresh);
+    it.index = -1;
+    for (size_t i = 0; i < rates.size(); ++i) {
+      const DisplayMode m{cur->width, cur->height, rates[i]};
+      it.options.push_back(m.RateLabel());
+      if (std::fabs(rates[i] - cur->refresh) < 0.01f) it.index = int(i);
+    }
+    it.value_text = cur->RateLabel();
+    it.default_text = DisplayMode{cur->width, cur->height, rates.front()}.RateLabel();
+    it.on_choice = [w = cur->width, h = cur->height, rates](int i) {
+      Set("kk_fullscreen_mode", DisplayMode{w, h, rates[size_t(i)]}.Value());
+    };
+    it.on_default = [w = cur->width, h = cur->height, top = rates.front()] {
+      Set("kk_fullscreen_mode", DisplayMode{w, h, top}.Value());
+    };
     return it;
   }
 
@@ -1838,18 +2519,18 @@ class Launcher final : public rex::ui::ImGuiDialog {
 
   // ----------------------------------------------------------- Graphics ---
   std::vector<Item> GraphicsItems() {
-    const auto [out_w, out_h] = cb_.output_size ? cb_.output_size() : std::pair<int, int>{1280, 720};
     const bool original = GetBool("kk_original_look");
-    const char* draws = GetBool("fullscreen") ? "Draws {0} for your {1} screen." : "Draws {0} for your {1} window.";
     std::vector<Item> items;
     items.push_back(Section("Look"));
     {
       Item it = CvarChoice("Look",
                            "Original is the Xbox 360 version as it was: 720p at 30 FPS, the console's own "
                            "anti-aliasing and texture filtering, its 69" KK_DEG " field of view, motion blur, screen "
-                           "blur and distance fog, and no ambient occlusion. Modern gives you the presets and every "
-                           "setting on this page.",
-                           "kk_original_look", {{"Original Xbox 360", "true"}, {"Modern", "false"}});
+                           "blur and distance fog, and no ambient occlusion. Remastered gives you the presets, every "
+                           "setting on this page and the frame rate and upscaling on the Display page; chosen at "
+                           "setup, it starts with the preset for your graphics card, 60 FPS and the new GTAO ambient "
+                           "occlusion.",
+                           "kk_original_look", {{"Original Xbox 360", "true"}, {"Remastered", "false"}});
       it.on_choice = [](int i) { SetOriginalLook(i == 0); };
       it.on_default = [] { SetOriginalLook(false); };
       items.push_back(std::move(it));
@@ -1859,8 +2540,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
       it.type = ItemType::kChoice;
       it.label = "Preset";
       it.description =
-          "Quick settings for the upscaler, render quality, anti-aliasing, texture filtering and ambient occlusion. "
-          "Change any of them yourself and it shows Custom.";
+          "Quick settings for anti-aliasing, texture filtering and ambient occlusion here, and the upscaler and "
+          "render quality on the Display page. Change any of them yourself and it shows Custom.";
       for (const auto& p : kGraphicsPresets) it.options.push_back(p.label);
       it.options.push_back("Custom");
       const int match = MatchGraphicsPreset();
@@ -1871,130 +2552,6 @@ class Launcher final : public rex::ui::ImGuiDialog {
       };
       it.on_default = [] { ApplyGraphicsPreset(1); };
       it.default_text = "Medium";
-      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
-    }
-
-    items.push_back(Section("Resolution"));
-    {
-      // NIS is in the D3D12 presenter only (the Vulkan one, used on Linux, would give FSR).
-      std::vector<Option> opts = {{"Off", "bilinear"}, {"AMD FSR 1", "fsr"}};
-#if defined(_WIN32)
-      opts.push_back({"NVIDIA NIS", "nis"});
-      const char* which = "AMD FSR 1 and NVIDIA Image Scaling (NIS) both work";
-#else
-      const char* which = "AMD FSR 1 works";
-#endif
-      Item it = CvarChoice("Upscaler",
-                           std::string("Scales the picture up to your screen and sharpens it, for a clearer image "
-                                       "when the game draws fewer pixels than your screen has. ") +
-                               which + " on any graphics card. Off uses plain smooth scaling.",
-                           "present_effect", opts);
-      std::vector<std::string> values;
-      for (const auto& o : opts) values.push_back(o.value);
-      it.on_choice = [values](int i) {
-        Set("present_effect", values[size_t(i)]);
-        // The upscaler modes are Native to Performance; others start at Native
-        // (Supersampling stays on).
-        if (i != 0 && UpscalerMode() < 0 && Get("kk_render_quality") != "supersample")
-          Set("kk_render_quality", "native");
-      };
-      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
-    }
-    const bool supersampling = Get("kk_render_quality") == "supersample";
-    const char* const kSupersamplingOn = "Supersampling is on: switch it off to choose this.";
-    if (Get("present_effect") != "bilinear") {
-      Item it;
-      it.type = ItemType::kChoice;
-      it.label = "Upscaler mode";
-      it.description =
-          "How many pixels the game draws before the upscaler scales them to your screen. Native draws at your "
-          "screen's size and only sharpens; Quality, Balanced and Performance draw fewer for more speed. The game "
-          "draws in steps of its original 720p, so some modes can be the same at your screen size.";
-      it.options.assign(std::begin(kUpscalerModeNames), std::end(kUpscalerModeNames));
-      const int mode = UpscalerMode();
-      it.index = mode;
-      if (mode >= 0) {
-        const int scale = RenderScaleFor(kUpscalerModes[mode], out_h);
-        it.facts.push_back(F(draws, {Size(1280 * scale, 720 * scale), Size(out_w, out_h)}));
-        std::string same;
-        for (int m = 0; m < 4; ++m) {
-          if (m == mode || RenderScaleFor(kUpscalerModes[m], out_h) != scale) continue;
-          same += same.empty() ? T(std::string(kUpscalerModeNames[m]))
-                               : " " + T(std::string("and")) + " " + T(std::string(kUpscalerModeNames[m]));
-        }
-        if (!same.empty()) it.facts.push_back(F("Same as {0} here.", {same}));
-      } else {
-        it.value_text = "Custom";
-        it.facts.push_back("Now set to another render quality. Pick a mode to use one of these.");
-      }
-      it.on_choice = [](int i) { Set("kk_render_quality", kUpscalerModes[i]); };
-      it.on_default = [] { Reset("kk_render_quality"); };
-      if (const auto* flag = FindFlag("kk_render_quality"))
-        for (int m = 0; m < 4; ++m)
-          if (flag->default_value == kUpscalerModes[m]) it.default_text = kUpscalerModeNames[m];
-      if (supersampling) it.facts.clear();
-      Disable(it, supersampling, kSupersamplingOn);
-      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
-    } else {
-      Item it;
-      it.type = ItemType::kChoice;
-      it.label = "Render quality";
-      it.description =
-          "How sharply the game is drawn compared with your screen. Native matches it; Quality, Balanced and the "
-          "Performance modes draw fewer pixels and scale up (an upscaler makes that sharper); Supersample draws more "
-          "for the cleanest edges. The game renders in steps of its original 720p.";
-      const std::string cur = Get("kk_render_quality");
-      std::vector<std::string> values;
-      it.index = -1;
-      for (const auto& p : RenderPresets()) {
-        if (std::string_view(p.id) == "supersample") continue;  // its own setting, below
-        const int scale = RenderScaleFor(p.id, out_h);
-        if (cur == p.id) {
-          it.index = int(values.size());
-          it.facts.push_back(F(draws, {Size(1280 * scale, 720 * scale), Size(out_w, out_h)}));
-        }
-        it.options.push_back(p.label);
-        values.push_back(p.id);
-      }
-      it.options.push_back("Custom");
-      values.push_back("custom");
-      if (cur == "custom") it.index = int(values.size()) - 1;
-      it.value_text = supersampling ? "Supersampling" : cur;
-      it.on_choice = [values](int i) { Set("kk_render_quality", values[size_t(i)]); };
-      it.on_default = [] { Reset("kk_render_quality"); };
-      if (const auto* flag = FindFlag("kk_render_quality"))
-        for (const auto& p : RenderPresets())
-          if (flag->default_value == p.id) it.default_text = p.label;
-      Disable(it, supersampling, kSupersamplingOn);
-      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
-    }
-    {
-      Item it;
-      it.type = ItemType::kChoice;
-      it.label = "Supersampling";
-      it.description =
-          "Draws the game at more pixels than your screen has, then shrinks the picture down, for the cleanest "
-          "edges and the most detail. Very demanding: for powerful graphics cards.";
-      it.options = {"Off", "On"};
-      it.index = supersampling ? 1 : 0;
-      it.default_text = "Off";
-      if (supersampling) {
-        const int scale = RenderScaleFor("supersample", out_h);
-        it.facts.push_back(F(draws, {Size(1280 * scale, 720 * scale), Size(out_w, out_h)}));
-      }
-      it.on_choice = [](int i) { Set("kk_render_quality", i == 1 ? "supersample" : "native"); };
-      it.on_default = [] { Set("kk_render_quality", "native"); };
-      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
-    }
-    if (Get("kk_render_quality") == "custom") {
-      Item it = CvarChoice("Internal resolution", "Draw the game at an exact multiple of its native 1280 " KK_TIMES " 720.",
-                           "resolution_scale",
-                           {{"1" KK_TIMES "  " KK_DOT "  1280 " KK_TIMES " 720", "1"},
-                            {"2" KK_TIMES "  " KK_DOT "  2560 " KK_TIMES " 1440", "2"},
-                            {"3" KK_TIMES "  " KK_DOT "  3840 " KK_TIMES " 2160", "3"},
-                            {"4" KK_TIMES "  " KK_DOT "  5120 " KK_TIMES " 2880", "4"},
-                            {"5" KK_TIMES "  " KK_DOT "  6400 " KK_TIMES " 3600", "5"},
-                            {"6" KK_TIMES "  " KK_DOT "  7680 " KK_TIMES " 4320", "6"}});
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
 
@@ -2014,15 +2571,28 @@ class Launcher final : public rex::ui::ImGuiDialog {
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
     {
-      // Ambient occlusion lives in the GPU plugin (ao_mode, ao_strength).
+      // Ambient occlusion lives in the GPU plugin (ao_mode, ao_strength). On the native renderer it is
+      // GTAO (ApplyPortDefaults), worked out from the scene's depth at the end of the opaque pass, so
+      // water, smoke, fire, fur and the sky drawn after it are never darkened (native-renderer/docs/ao.md).
+      const bool native = NativeRendererAvailable() && UsingNativeRenderer();
       Item it = CvarChoice("Ambient occlusion",
-                           "Soft shading where surfaces meet: in corners and creases, and on the ground under rocks, "
-                           "grass and people. Costs about 1 ms a frame at 4K. Not available with Intel graphics yet.",
+                           native ? "Soft shading where surfaces meet: in corners and creases, and on the ground under "
+                                    "rocks, grass and people (GTAO). Water, smoke, fire and the sky are never darkened. "
+                                    "Costs about 1 to 2 ms a frame at 4K."
+                                  : "Soft shading where surfaces meet: in corners and creases, and on the ground under "
+                                    "rocks, grass and people. Costs about 1 ms a frame at 4K. Not available with Intel "
+                                    "graphics on the Classic renderer.",
                            "ao_mode", {{"Off", "0"}, {"On", "1"}});
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
       if (GetInt("ao_mode", 0) != 0) {
-        Item st = CvarChoice("AO strength", "How dark the shading gets. 1 is recommended.", "ao_strength",
-                             {{"1 (recommended)", "1"}, {"2", "2"}, {"3", "3"}});
+        // GTAO: the shading's darkness (XeGTAO's final power 1.6, 2.2, 3.0) and how far it reaches from
+        // each crease (6, 8, 12 near-plane distances). Light darkens about as much as the Classic
+        // renderer's AO on the whole, with a crisper footprint (docs/ao.md, "In the game").
+        Item st = CvarChoice("AO strength",
+                             native ? "How dark the shading gets and how far it spreads from each corner. Light is "
+                                      "recommended: Medium and Strong darken grass and rock more."
+                                    : "How dark the shading gets. Light is recommended.",
+                             "ao_strength", {{"Light (recommended)", "1"}, {"Medium", "2"}, {"Strong", "3"}});
         items.push_back(std::move(Disable(st, original, kSetByOriginal)));
       }
     }
@@ -2052,6 +2622,30 @@ class Launcher final : public rex::ui::ImGuiDialog {
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
 
+    // Advanced: the Classic renderer stays for comparison (gpu_plugin xenos), as the stable version draws.
+    if (NativeRendererAvailable()) {
+      items.push_back(Section("Advanced"));
+      Item it;
+      it.type = ItemType::kChoice;
+      it.label = "Renderer";
+      it.description =
+          "Native draws the game with its own shaders, translated for your graphics card: faster, sharper at high "
+          "resolutions, with the new ambient occlusion. Classic emulates the Xbox 360's graphics chip, as the stable "
+          "version does; it's here to compare the two. The launcher restarts the game to change it.";
+      it.options = {"Native (beta)", "Classic (emulated GPU)"};
+      it.index = UsingNativeRenderer() ? 0 : Get("gpu_plugin") == "xenos" ? 1 : -1;
+      it.value_text = Get("gpu_plugin");
+      it.default_text = "Native (beta)";
+      it.on_choice = [](int i) { SetRenderer(i == 0); };
+      it.on_default = [] { SetRenderer(true); };
+      if (UsingNativeRenderer() != (Get("kk_renderer") != "classic"))
+        it.facts.push_back("Set by gpu_plugin in the settings file or on the command line.");
+      const auto* flag = FindFlag("gpu_plugin");
+      Disable(it, flag && (flag->source == rex::cvar::Source::kCommandLine || flag->source == rex::cvar::Source::kEnvironment),
+              "Set on the command line (--gpu_plugin).");
+      items.push_back(std::move(it));
+    }
+
     return items;
   }
 
@@ -2060,21 +2654,6 @@ class Launcher final : public rex::ui::ImGuiDialog {
     const bool original = GetBool("kk_original_look");
     std::vector<Item> items;
     items.push_back(Section("Game"));
-    {
-      std::vector<Option> opts;
-      for (int f : kFrameRateChoices)
-        opts.push_back({f <= 0 ? "Unlimited" : f == 30 ? "30 FPS (Xbox 360)" : std::to_string(f) + " FPS",
-                        std::to_string(f)});
-      const std::string cur = Get("kk_frame_rate");
-      bool listed = false;
-      for (const auto& o : opts) listed = listed || o.value == cur;
-      if (!listed && !cur.empty()) opts.push_back({F("{0} FPS (settings file)", {cur}), cur});
-      Item it = CvarChoice("Frame rate",
-                           "30 matches the Xbox 360 and keeps every animation right. Higher is smoother, but some "
-                           "character animations are not right above 30 yet.",
-                           "kk_frame_rate", opts);
-      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
-    }
     {
       Item it = CvarSlider("Field of view",
                            "How wide the camera sees. 69" KK_DEG " is the original for Jack; Kong, cutscene and other "
@@ -2598,6 +3177,22 @@ class Launcher final : public rex::ui::ImGuiDialog {
         it.facts.push_back(F("Players online: {0}", {std::to_string(c.online)}));
       items.push_back(std::move(it));
     }
+    if (discord::Available()) {
+      Item it = CvarToggle("Discord status",
+                           "Shows on your Discord profile that you're playing King Kong, in the launcher or in the "
+                           "game, and for how long, while the Discord app is running on this PC. It only talks to "
+                           "the Discord app; nothing is sent anywhere else.",
+                           "kk_discord_status");
+      it.on_choice = [](int i) {
+        SetBool("kk_discord_status", i == 1);
+        discord::Wake();
+      };
+      it.on_default = [] {
+        Reset("kk_discord_status");
+        discord::Wake();
+      };
+      items.push_back(std::move(it));
+    }
     {
       Item it = ActionItem("Change version",
                            "Stable is the tested version of the port. Beta gets test builds of upcoming features "
@@ -2665,14 +3260,15 @@ class Launcher final : public rex::ui::ImGuiDialog {
   static std::vector<std::string> PageSettings(Page page) {
     switch (page) {
       case kDisplay:
-        return {"fullscreen", "window_width", "window_height", "monitor",
-                "d3d12_allow_variable_refresh_rate_and_tearing", "present_letterbox"};
+        return {"fullscreen", "kk_fullscreen_mode", "window_width", "window_height", "monitor", "kk_frame_rate",
+                "d3d12_allow_variable_refresh_rate_and_tearing", "present_effect", "kk_render_quality",
+                "resolution_scale", "draw_resolution_scale_x", "draw_resolution_scale_y", "present_letterbox"};
       case kGraphics:
-        return {"kk_original_look", "kk_modern_settings", "present_effect", "kk_render_quality", "resolution_scale",
-                "draw_resolution_scale_x", "draw_resolution_scale_y", "swap_post_effect", "anisotropic_override",
-                "kk_motion_blur", "kk_big_blur", "kk_fog", "ao_mode", "ao_strength"};
+        return {"kk_original_look", "kk_modern_settings", "swap_post_effect", "anisotropic_override",
+                "kk_motion_blur", "kk_big_blur", "kk_fog", "ao_mode", "ao_strength", "native_ao_method",
+                "native_ao_apply", "native_ao_quality", "kk_renderer"};
       case kGameplay:
-        return {"kk_frame_rate", "kk_fov", "kk_camera_shake", "kk_camera_shake_strength", "kk_show_fps",
+        return {"kk_fov", "kk_camera_shake", "kk_camera_shake_strength", "kk_show_fps",
                 "kk_skip_intros", "user_language"};
       case kControls:
         return {"mnk_mode", "kk_button_prompts", "kk_camera_sensitivity", "kk_camera_modern", "kk_mouse_sensitivity",
@@ -2706,6 +3302,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
       rex::cvar::ResetToDefault(e.name);
     }
     ++g_changes;
+    if (page == kGraphics) ApplyRendererChoice();  // gpu_plugin follows kk_renderer
     if (page == kDisplay && cb_.set_fullscreen) cb_.set_fullscreen(GetBool("fullscreen"));
     Status(F("{0} settings are back to their defaults.", {T(std::string(kPageNames[page]))}));
   }
@@ -2717,6 +3314,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
       rex::cvar::ResetToDefault(e.name);
     }
     ++g_changes;
+    ApplyRendererChoice();
     if (cb_.set_fullscreen) cb_.set_fullscreen(GetBool("fullscreen"));
     Status("Every setting is back to its default.");
   }
@@ -2839,8 +3437,9 @@ class Launcher final : public rex::ui::ImGuiDialog {
     if (Get("kk_update_channel") == "beta") {
       OpenModal("Switch back to stable?",
                 "This installs the newest stable version of the port and restarts the launcher. If your beta is "
-                "newer than it, this goes back a version.\n\nYour installed game, saves and settings stay as they "
-                "are.",
+                "newer than it, this goes back a version.\n\nStable has no native renderer, so the beta's own "
+                "settings (the renderer, its ambient occlusion method and the fullscreen resolution) go back to "
+                "their defaults. Your installed game, saves and other settings stay as they are.",
                 {"Switch to stable", "Cancel"}, 1, [this](int i) {
                   if (i == 0) StartChannelSwitch("stable");
                 });
@@ -2882,6 +3481,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
       return;
     }
     Set("kk_update_channel", channel);
+    // Stable has no native renderer: it must find only settings it knows (ResetBetaOnlySettings).
+    if (channel == "stable" && update_->found) ResetBetaOnlySettings();
     SaveSettings(paths_.config_path);
     if (update_->found) {
       BeginUpdateInstall(*update_->found);
@@ -3153,7 +3754,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
   void Play() {
     if (!CanPlay()) return;
     const int fps = GetInt("kk_frame_rate", 30);
-    if (fps > 0 && fps <= 30) return StartGame();
+    if (fps > 0 && fps <= 60) return StartGame();  // 60: Remastered's rate, no warning each time
     OpenFrameRateWarning();
   }
 
@@ -3240,8 +3841,12 @@ class Launcher final : public rex::ui::ImGuiDialog {
   void TickNativeShaders() {
     if (setup_shaders_ && !native_pack_.Busy()) {
       setup_shaders_ = false;
-      Status(native_pack_.Ok() ? "Installed. Your copy of King Kong is ready to play."
-                               : "Installed. The shaders were not prepared: the game compiles them as it starts.");
+      if (!setup_style_) Status(InstalledMessage());  // else once the look is chosen
+    }
+    if (update_shaders_ && !native_pack_.Busy()) {
+      update_shaders_ = false;
+      Status(native_pack_.Ok() ? F("Updated to v{0}. The shaders are ready.", {KK_VERSION})
+                               : T(std::string("The shaders were not prepared: the game compiles them as it starts.")));
     }
     if (!waiting_for_native_) return;
     if (!native_pack_.Busy()) {
@@ -3253,7 +3858,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
     } else if (!native_modal_ && !modal_.open && ImGui::GetTime() - native_wait_since_ > 0.5) {
       native_modal_ = true;
       OpenModal("Preparing shaders",
-                "The native renderer's shaders are still being prepared from your copy of the game. The game starts "
+                "The native renderer's shaders are still being prepared from your copy of the game. " KK_SLOW_PC " The game starts "
                 "as soon as they're done.",
                 {"Back"}, 0, [this](int) { waiting_for_native_ = native_modal_ = false; });
       modal_.progress = [this] { return native_pack_.Fraction(); };
@@ -3311,6 +3916,10 @@ class Launcher final : public rex::ui::ImGuiDialog {
   // default), logging "KK dev: input <step>"; "shot:<name>" logs
   // "KK dev: shot <name>" and waits for a capture. The mouse, at 1280 x 720
   // layout positions: "move:X:Y", "click:X:Y", "down:X:Y", "up", "wheel:N".
+  // "setup:5" is the look step; "reset-beta" does to the settings what switching to
+  // stable does (and saves them); "whats-new" opens What's new as after 1.9.11; "update-test"
+  // logs the update choice cases (RunUpdatePickTests); "updated" acts as the first start after an
+  // update (the full shader rebuild and its screen); "setup:4" shows the setup's shader screen.
   void DevInput() {
     ImGuiIO& io = ImGui::GetIO();
     static bool release = false;
@@ -3346,6 +3955,24 @@ class Launcher final : public rex::ui::ImGuiDialog {
     if (t.rfind("setup:", 0) == 0) {  // show a setup stage: 0 your copy, 1 install, 2 artwork; -1 back
       dev_setup_ = std::atoi(t.c_str() + 6);
       return;
+    }
+    if (t == "reset-beta") {  // what switching to stable does to the settings (FinishChannelSwitch)
+      ResetBetaOnlySettings();
+      SaveSettings(paths_.config_path);
+      return;
+    }
+    if (t == "updated") {  // as on the first start after an update: the full rebuild and its screen
+      update_shaders_ = true;
+      if (!native_pack_.Busy()) native_pack_.Start(CacheDir(), paths_.game_dir, true);
+      return;
+    }
+    if (t == "update-test") {  // PickUpdate's cases (update.h), logged
+      RunUpdatePickTests();
+      return;
+    }
+    if (t == "whats-new") {  // the What's new pop-up as after an update from the version before
+      whats_new_from_ = "1.9.11";
+      return OpenWhatsNew();
     }
     if (t.rfind("move:", 0) == 0) return at_point(t.substr(5));
     if (t.rfind("click:", 0) == 0 || t.rfind("down:", 0) == 0) {
@@ -3389,6 +4016,9 @@ class Launcher final : public rex::ui::ImGuiDialog {
   bool online_asked_ = false;  // MaybeAskOnline has looked this session
   bool menu_value_ = false;    // the menu's focused entry has a value (Left and Right change it)
   int side_focus_ = -1;      // the side panel (Home, setup) with the focus, or -1
+  bool status_focus_ = false;   // Home: the shaders' status has the focus (Recompile shaders)
+  bool menu_to_status_ = false; // Home's menu moves down to it (DrawMenu)
+  ImVec2 status_rect_[2] = {};  // where it was drawn last frame
   double side_since_ = -1;   // when the side panels were first drawn (their fade-in)
   std::unique_ptr<rex::ui::ImmediateTexture> discord_icon_, steam_icon_;
   std::vector<float> home_offset_;
@@ -3410,6 +4040,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
   bool waiting_for_pack_ = false;  // Play was pressed during the download
   NativeShaderPack native_pack_;      // the native renderer's shaders (native_shaders.h)
   bool setup_shaders_ = false;        // being prepared as the install's last step
+  bool update_shaders_ = false;       // built again in full after an update (DrawShaderScreen)
   bool waiting_for_native_ = false;   // Play was pressed: they are checked (and built) first
   bool native_modal_ = false;         // the pop-up of that wait is open
   bool native_pack_checked_ = false;  // checked for this Play: StartGame goes on
@@ -3425,6 +4056,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
   double preview_at_ = 0;
   std::string capturing_;
   std::vector<MonitorInfo> monitors_;
+  std::vector<DisplayMode> display_modes_;  // the Resolution choices, for display_modes_monitor_
+  int display_modes_monitor_ = -1;
 
   std::vector<std::unique_ptr<rex::ui::ImmediateTexture>> textures_;
   struct Slide {
@@ -3440,6 +4073,9 @@ class Launcher final : public rex::ui::ImGuiDialog {
   art::ArtProgress art_progress_;
   std::thread art_thread_;
   bool setup_art_ = false;  // the art is being taken as the install's last step
+  bool setup_style_ = false;  // the setup's last step: Original or Remastered (DrawStyleCards)
+  int style_focus_ = 1;       // the card with the focus (Remastered first)
+  rex::ui::ImmediateTexture* still_low_ = nullptr;  // the first still, smaller (the Original card)
   int setup_focus_ = 0;
 #if defined(KK_DEV_TOOLS)
   int dev_setup_ = -1;  // KK_DEV_LAUNCHER_SETUP: show a setup stage (screenshots)
@@ -3489,13 +4125,25 @@ bool PreloadGpuPluginNamed(const char* name) {
 
 }  // namespace
 
+namespace {
+bool g_native_renderer = false;  // PreloadGpuPlugin loaded rexgpu-native
+}  // namespace
+
 void PreloadGpuPlugin() {
   if (!PreloadGpuPluginNamed("xenos"))
     REXLOG_WARN("KK: GPU plugin not found for preload; graphics settings unavailable in launcher");
   // The native renderer (--gpu_plugin=native), when it was built
   // (KK_NATIVE_RENDERER): its cvars (native_test, native_draws, ...) must exist
   // before the command line and the config are read, like the Xenos plugin's.
-  PreloadGpuPluginNamed("native");
+  g_native_renderer = PreloadGpuPluginNamed("native");
+}
+
+bool NativeRendererAvailable() { return g_native_renderer; }
+
+std::string ApplyRendererChoice() {
+  const bool native = g_native_renderer && rex::cvar::GetFlagByName("kk_renderer") != "classic";
+  SetCvarDefault("gpu_plugin", native ? "native" : "xenos");
+  return rex::cvar::GetFlagByName("gpu_plugin");
 }
 
 void ShowLauncher(rex::ui::ImGuiDrawer* drawer, rex::ui::ImmediateDrawer* immediate, LauncherPaths paths,

@@ -7,8 +7,11 @@
 #include <filesystem>
 #include <functional>
 #include <utility>
+#include <vector>
 
 #include <rex/ui/imgui_dialog.h>
+
+#include "display_modes.h"
 
 namespace rex::ui {
 class ImmediateDrawer;
@@ -24,6 +27,8 @@ struct LauncherCallbacks {
   std::function<double()> dpi_scale;         // window DPI / 96
   std::function<std::pair<int, int>()> screen_size;  // monitor size in physical pixels
   std::function<std::pair<int, int>()> output_size;  // size the game will be shown at
+  std::function<std::vector<DisplayMode>(int)> display_modes;  // a monitor's fullscreen modes (display_modes.h)
+  std::function<DisplayMode(int)> desktop_mode;                // a monitor's mode on the desktop
 };
 
 struct LauncherPaths {
@@ -38,6 +43,15 @@ bool GameFilesPresent(const std::filesystem::path& game_dir);
 // Loads the GPU plugin early so its cvars (resolution scale, FXAA, ...) are
 // registered before the config is read and can be edited by the launcher.
 void PreloadGpuPlugin();
+
+// The native renderer's plugin was found and loaded by PreloadGpuPlugin.
+bool NativeRendererAvailable();
+
+// Points gpu_plugin at the renderer kk_renderer picks: native, or xenos for classic (and whenever the
+// native renderer is not there). It is set as gpu_plugin's default, so it is never written to the
+// settings file and a version without the native renderer never reads it; a gpu_plugin from the
+// command line or the settings file wins. Returns the plugin the game will load.
+std::string ApplyRendererChoice();
 
 // Creates the launcher dialog; it deletes itself when closed.
 void ShowLauncher(rex::ui::ImGuiDrawer* drawer, rex::ui::ImmediateDrawer* immediate,

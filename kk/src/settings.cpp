@@ -5,6 +5,7 @@
 #include <cmath>
 #include <fstream>
 #include <iterator>
+#include <string_view>
 #include <utility>
 
 #include <rex/logging.h>
@@ -20,6 +21,12 @@ REXCVAR_DEFINE_BOOL(kk_check_updates, true, "KK", "Check GitHub for a newer vers
 REXCVAR_DEFINE_BOOL(kk_online_count, true, "KK",
                     "Show how many people are playing, with an anonymous check-in every 5 minutes (see online.h)");
 REXCVAR_DEFINE_BOOL(kk_online_asked, false, "KK", "Internal: the launcher has asked about the online player count");
+REXCVAR_DEFINE_BOOL(kk_discord_status, true, "KK",
+                    "Show on your Discord profile that you're playing, while the Discord app runs on this PC "
+                    "(discord_presence.h)");
+REXCVAR_DEFINE_STRING(kk_discord_app_id, "", "KK/Debug",
+                      "Discord application ID for the Discord status (empty: the port's own; testing)")
+    .debug_only();
 REXCVAR_DEFINE_STRING(kk_install_id, "", "KK",
                       "Internal: the random ID the online player count checks in with (deleted when it's off)");
 REXCVAR_DEFINE_STRING(kk_update_channel, "stable", "KK",
@@ -40,7 +47,7 @@ REXCVAR_DEFINE_BOOL(kk_hfr_fixes, true, "KK/Video",
                     "no effect at 30 FPS");
 REXCVAR_DEFINE_STRING(kk_render_quality, "quality", "KK/Video",
                       "Render resolution relative to the output: native, quality, balanced, performance, "
-                      "ultra_performance, supersample, or custom (use resolution_scale)");
+                      "ultra_performance, or custom (use resolution_scale)");
 REXCVAR_DEFINE_STRING(kk_button_prompts, "auto", "KK/Controls",
                       "Button pictures shown in the game: auto (matches your controller), xbox360, xbox_series, ps5, "
                       "ps2, steam_deck or keyboard")
@@ -92,6 +99,14 @@ REXCVAR_DEFINE_BOOL(kk_big_blur, false, "KK/Graphics",
                     "The game's full-screen blur in some levels (Necropolis, Brontosaurus), sized for 720p");
 REXCVAR_DEFINE_BOOL(kk_original_look, false, "KK/Graphics",
                     "Play with the Xbox 360's own settings (launcher: Graphics > Look)");
+REXCVAR_DEFINE_STRING(kk_renderer, "native", "KK/Graphics",
+                      "Which renderer draws the game: native (the native renderer) or classic (the emulated Xbox "
+                      "360 GPU, rexgpu-xenos). Sets gpu_plugin at start; a gpu_plugin given on the command line or "
+                      "in the settings file wins. Builds without the native renderer always use classic")
+    .allowed({"native", "classic"});
+REXCVAR_DEFINE_STRING(kk_fullscreen_mode, "desktop", "KK/Video",
+                      "Fullscreen resolution: desktop (a borderless window at the desktop's resolution) or a display "
+                      "mode WIDTHxHEIGHT@HZ, e.g. 2560x1440@144 (exclusive fullscreen at that mode)");
 REXCVAR_DEFINE_STRING(kk_modern_settings, "", "KK/Graphics",
                       "Internal: the Modern settings to put back when leaving the Original look");
 REXCVAR_DEFINE_INT32(kk_fov, 69, "KK/Gameplay",
@@ -197,11 +212,11 @@ void SetMapping(Pad physical, Pad target) {
                            target == Pad::kNone ? "none" : GetPadInfo(target).id);
 }
 
-const std::array<RenderPreset, 6>& RenderPresets() {
+const std::array<RenderPreset, 5>& RenderPresets() {
   // Ratios follow the usual upscaler naming (output / render); the game renders
   // at integer multiples of its native 720p, so the nearest multiple is used.
-  static const std::array<RenderPreset, 6> kPresets = {{
-      {"supersample", "Supersample", 0.5},
+  // (Supersample, 0.5, went in Beta 2: Display > Resolution picks the size.)
+  static const std::array<RenderPreset, 5> kPresets = {{
       {"native", "Native", 1.0},
       {"quality", "Quality", 1.5},
       {"balanced", "Balanced", 1.7},
@@ -336,6 +351,30 @@ void ApplyFixedSettings() {
   // mouse-to-right-stick part is kept at its lowest, where it never gets past
   // the camera's deadzone (kk_mouse_sensitivity is the setting now).
   rex::cvar::SetFlagByName("mnk_sensitivity", "0.010000");
+  // A beta follows the beta channel unless a channel was chosen: one unzipped by hand, rather than
+  // switched to with Change version, would otherwise look for stable versions only and never be
+  // offered the next beta (Beta 1 copies installed by hand). Set, not made the default, so the
+  // settings file keeps it.
+  if (std::string_view(KK_VERSION).find("-beta") != std::string_view::npos)
+    for (const auto& e : rex::cvar::GetRegistry())
+      if (e.name == "kk_update_channel" && e.source == rex::cvar::Source::kDefault) {
+        rex::cvar::SetFlagByName("kk_update_channel", "beta");
+        REXLOG_INFO("KK: a beta with no update channel chosen: on the beta channel");
+        break;
+      }
+  // Supersampling is no longer offered (Beta 2: Display > Resolution picks the size the game is
+  // shown at): a settings file that chose it gets Native.
+  if (rex::cvar::GetFlagByName("kk_render_quality") == "supersample")
+    rex::cvar::SetFlagByName("kk_render_quality", "native");
+  // The ambient occlusion method is no longer a setting (Beta 2: always GTAO, ApplyPortDefaults):
+  // Beta 1's AO method choice in a settings file goes.
+  for (const char* name : {"native_ao_method", "native_ao_apply"})
+    for (const auto& e : rex::cvar::GetRegistry())
+      if (e.name == name && e.source == rex::cvar::Source::kConfig) {
+        REXLOG_INFO("KK: {} {} from the settings file: back to the default", name, rex::cvar::GetFlagByName(name));
+        rex::cvar::ResetToDefault(name);
+        break;
+      }
 }
 
 std::string DefaultUpscaler() {
@@ -400,6 +439,11 @@ void ApplyPortDefaults() {
   // An upscaler at Quality (kk_render_quality): NIS on an NVIDIA card, FSR 1
   // on any other. The player's own choice in the settings file still wins.
   SetCvarDefault("present_effect", DefaultUpscaler());
+  // Ambient occlusion on the native renderer: GTAO at the end of the opaque pass, so water, smoke,
+  // fire, fur and the sky are never darkened (native-renderer/docs/ao.md). The plugin's own defaults
+  // stay the legacy method for its tests; the Classic renderer keeps its own AO.
+  SetCvarDefault("native_ao_method", "gtao");
+  SetCvarDefault("native_ao_apply", "opaque");
   // Shader preparing: Balanced. New pipelines are created on background
   // threads, many at once, and a frame may wait up to async_shader_wait_ms in
   // total for them (a setting added to this port's build of the GPU plugin),

@@ -32,6 +32,8 @@
 
 #include "art.h"
 #include "crash_dump.h"
+#include "discord_presence.h"
+#include "display_modes.h"
 #include "frame_stats.h"
 #include "glyphs.h"
 #include "guest.h"
@@ -101,17 +103,23 @@ class KingKongApp : public rex::ReXApp {
     const bool show = !files_ok || kk::IsShiftHeld() || (REXCVAR_GET(kk_launcher) && !skip_once);
     if (!show) {
       kk::EnforceOriginalLook();
+      kk::ApplyFullscreenMode(window());
       kk::ApplyRenderPreset(OutputSize().second);
       kk::online::SetPlaying(true);
       kk::online::Start();
+      kk::discord::SetPlaying(true);
+      kk::discord::Start();
       return defaults;
     }
 
     kk::LauncherCallbacks cb;
     cb.play = [this, resume, defaults] {
       app_context().CallInUIThreadDeferred([this, resume, defaults] {
+        // The Resolution (Display page) before the render quality, which follows it.
+        kk::ApplyFullscreenMode(window());
         kk::ApplyRenderPreset(OutputSize().second);
         kk::online::SetPlaying(true);
+        kk::discord::SetPlaying(true);
         resume(defaults);
       });
     };
@@ -136,6 +144,8 @@ class KingKongApp : public rex::ReXApp {
     };
     cb.screen_size = [] { return kk::PrimaryScreenSize(); };
     cb.output_size = [this] { return OutputSize(); };
+    cb.display_modes = [this](int monitor) { return kk::ListDisplayModes(monitor, window()); };
+    cb.desktop_mode = [this](int monitor) { return kk::DesktopDisplayMode(monitor, window()); };
     kk::ShowLauncher(imgui_drawer(), immediate_drawer(),
                       {defaults.game_data_root, defaults.user_data_root, defaults.config_path},
                       std::move(cb));
@@ -155,7 +165,10 @@ class KingKongApp : public rex::ReXApp {
       const std::string root = rex::cvar::GetFlagByName("cache_root");
       kk::RepairShaderStorage(root.empty() ? user_data_root_ / "cache" : std::filesystem::path(root));
     }
+    // The renderer: kk_renderer (Graphics > Renderer) unless gpu_plugin was given (launcher.h).
+    if (!config.graphics) config.gpu_plugin = kk::ApplyRendererChoice();
     if (!config.graphics && config.gpu_plugin.empty()) config.gpu_plugin = "xenos";
+    REXLOG_INFO("KK: renderer {} (kk_renderer {})", config.gpu_plugin, rex::cvar::GetFlagByName("kk_renderer"));
     if (!config.audio_factory)
       config.audio_factory = REX_AUDIO_BACKEND(rex::audio::sdl::SDLAudioSystem);
   }
@@ -216,9 +229,14 @@ class KingKongApp : public rex::ReXApp {
   }
 
  private:
-  // Size the game is shown at: the monitor in fullscreen, else the window.
+  // Size the game is shown at: in fullscreen the Resolution picked on the Display page, or the
+  // monitor's; else the window.
   std::pair<int, int> OutputSize() const {
-    if (REXCVAR_QUERY(bool, fullscreen) || !window()) return kk::PrimaryScreenSize();
+    if (REXCVAR_QUERY(bool, fullscreen) || !window()) {
+      if (REXCVAR_QUERY(bool, fullscreen))
+        if (const auto mode = kk::FullscreenModeSize()) return *mode;
+      return kk::PrimaryScreenSize();
+    }
     return {int(window()->GetActualPhysicalWidth()), int(window()->GetActualPhysicalHeight())};
   }
 

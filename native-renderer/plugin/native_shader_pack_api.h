@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define NR_SHADER_PACK_API_VERSION 1
+#define NR_SHADER_PACK_API_VERSION 2  // 2: start takes force
 
 typedef struct NrShaderPackJob NrShaderPackJob;
 
@@ -41,8 +41,10 @@ typedef struct NrShaderPackApi {
   // plugin's cvars: native_backend, native_render_scale, native_shadow_scale, native_dxc) is in
   // <cache_dir>/native-shaders and current, building it from <game_dir>/Shaders/xeshaders.bin
   // if not, on a thread of its own. threads 0: one per hardware thread. low_priority: the
-  // workers run below normal priority (the launcher stays smooth). Never null.
-  NrShaderPackJob* (*start)(const char* cache_dir, const char* game_dir, uint32_t threads, int low_priority);
+  // workers run below normal priority (the launcher stays smooth). force: build it even when it is
+  // current (the launcher's "recompile shaders"). Never null.
+  NrShaderPackJob* (*start)(const char* cache_dir, const char* game_dir, uint32_t threads, int low_priority,
+                            int force);
   void (*poll)(NrShaderPackJob* job, NrShaderPackProgress* out);
   // Asks the build to stop soon; nothing is written.
   void (*cancel)(NrShaderPackJob* job);

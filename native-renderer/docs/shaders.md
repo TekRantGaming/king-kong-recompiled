@@ -444,6 +444,9 @@ before. `kk/CMakeLists.txt` adds `src/native_shaders.cpp`. The changes in `kk/sr
    if none runs, and returns; `TickNativeShaders` (called from `Tick`) calls `StartGame` again when it is done.
    If it takes more than half a second (there is something to build) a pop-up "Preparing shaders" with the
    progress and "Back" opens. It also ends the setup step and sets the status message.
+6. **Recompile** (branch `beta-launcher`, `beta.md`): the SHADERS column is selectable on Home and asks "Recompile
+   your shaders?"; Yes starts a forced build (`start(..., force)`, interface version 2), which Play waits for as
+   above. The setup's shader step is now followed by the look step (`beta.md`).
 
 New English strings (no translations yet; `T()` shows English): "Shaders", "Checking", "Preparing {0}%",
 "Ready", "Not prepared", "Not prepared (see the log)", "Preparing the shaders", the setup sentence, "{0} of {1}
