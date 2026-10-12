@@ -180,7 +180,9 @@
     "bad": null,
     "min_pass": 0.6,
     "env_tol": 32,
-    "env_flash_level": 6
+    "env_flash_level": 6,
+    "env_bad": 0.033,
+    "env_tile": 28.0
    }
   },
   {
@@ -532,7 +534,9 @@
     "bad": null,
     "min_pass": 0.6,
     "env_tol": 32,
-    "env_flash_level": 6
+    "env_flash_level": 6,
+    "env_bad": 0.0055,
+    "env_tile": 3.2
    }
   },
   {
@@ -622,7 +626,9 @@
     "bad": null,
     "min_pass": 0.6,
     "env_tol": 32,
-    "env_flash_level": 6
+    "env_flash_level": 6,
+    "env_bad": 0.027,
+    "env_tile": 11.4
    }
   },
   {
@@ -844,7 +850,9 @@
     "min_pass": 0.6,
     "env_tol": 32,
     "env_flash_level": 6,
-    "env_radius": 4
+    "env_radius": 4,
+    "env_bad": 0.071,
+    "env_tile": 20.2
    }
   },
   {
@@ -1067,7 +1075,9 @@
     "min_pass": 0.6,
     "env_tol": 32,
     "env_flash_level": 6,
-    "env_radius": 4
+    "env_radius": 4,
+    "env_bad": 0.3,
+    "env_tile": 250.0
    }
   },
   {
@@ -1111,7 +1121,9 @@
     "bad": null,
     "min_pass": 0.6,
     "env_tol": 32,
-    "env_flash_level": 6
+    "env_flash_level": 6,
+    "env_bad": 0.022,
+    "env_tile": 13.0
    }
   },
   {

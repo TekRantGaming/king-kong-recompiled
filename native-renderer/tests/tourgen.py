@@ -84,6 +84,19 @@ def still(t: float, what: str, kind: str = "gameplay", **more) -> dict:
 # showed anywhere near, and let two of five frames miss.
 MOVING = {"env_radius": 4, "min_pass": 0.6}
 
+# Limits widened from the Xenos self-check (runs	our-xenos-check3, compare.py calibrate: worst value x2)
+# where a second Xenos run did not repeat the golden frames: idle animations that are not in step between runs
+# (Ann in Necropolis, Kong and the debris in Kong, the fog in The Canyon, Jimmy in To Save Ann), the raft in the
+# rapids, and Kong's fight in The Skull Islanders, which is at another moment in every run (a gross check only).
+SELF_CHECK_LIMITS = {
+    2: {"env_bad": 0.033, "env_tile": 28.0},
+    10: {"env_bad": 0.0055, "env_tile": 3.2},
+    11: {"env_bad": 0.027, "env_tile": 11.4},
+    16: {"env_bad": 0.071, "env_tile": 20.2},
+    21: {"env_bad": 0.30, "env_tile": 250.0},
+    22: {"env_bad": 0.022, "env_tile": 13.0},
+}
+
 MOMENTS: dict[int, dict] = {
     0: still(89.0, "the hull of the rocking ship with VENTURE painted on it and the Right stick to aim hint, "
              "after about 60 s of black (the same moment as the venture scene)",
@@ -268,6 +281,7 @@ def make_tour() -> dict:
                 run_def["frame_log"] = {"scene": scene_name(idx), "at": round(start + at, 1), "frames": 2}
             th = dict(TOUR_THRESHOLDS)
             th.update(m.get("thresholds", {}))
+            th.update(SELF_CHECK_LIMITS.get(idx, {}))
             scene = {
                 "name": scene_name(idx),
                 "run": run,
