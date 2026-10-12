@@ -723,6 +723,19 @@ built the pack (4794 shaders on 16 threads in 30.9 s, 143 MB), the game logged "
 cache", the second start found the pack current, and the scenes passed (save menu, main menu, chapter select,
 chap12; 4/4).
 
+The 17 scenes on the merged build with the new defaults (the harness turns the shipped list, the driver cache and
+the pipeline cache off):
+
+- Vulkan: 17/17 (`runs\p2c-final-defaults-vk`, chap04 among them).
+- D3D12: 12/17 in the first run (`runs\p2c-final-defaults-d3d12`). The failures were the loading screen's
+  sweeping picture a little further on, lightning in vrex_110 and Venture (Venture's draw list 0.968 against
+  0.97), Kong's fires, and chap04. The rerun of those scenes (`runs\p2c-final-d3d12-rerun`) passed all but
+  chap04, so it was timing from run to run, not the merge.
+- D3D12 with the shipped list on, as a player gets it (`runs\p2c-final-d3d12-list`): 15/17, chap04 and
+  chapter_select (the smoke and fire behind the menu at another moment in two of three frames; it passed in every
+  other run). Draws skipped for a pipeline not ready: none in nine of the ten starts and 8 in V-Rex's (its
+  loading), against 9 to 394 in most starts with the list off.
+
 ### Open problems (Phase 2)
 
 - **chap04 and chap12 cameras**: chap12 solved by the render thread (`--native_render_thread`, "The render
