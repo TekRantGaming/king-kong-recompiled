@@ -29,8 +29,11 @@ It needs the `kk-dev` build (`kk\build.bat kk-dev`). The report is `report\repor
 already running, 4 setup error. A full run takes about 8 minutes (six launches; golden capture about 10).
 
 Before every launch the runner checks for a `king_kong` process and never starts a second copy or stops one it
-did not start (`-WaitMinutes` re-checks every 5 minutes). While it runs, `F:\KK-native-renderer\game.lock` names
-it; afterwards the file says `free`. It closes the game window when the shots are in (so the shader cache is
+did not start (`-WaitMinutes` re-checks every 5 minutes, `-WaitPollSeconds` sets how often). It also waits until
+`F:\KK-native-renderer\game.lock` says `free` and takes fair turns: it writes the time it asked into
+`F:\KK-native-renderer\game.wait\<name>.txt` (`-WaitName`, by default from `-LockName`), launches only when no
+other file there holds an earlier time (files saying `done` do not count) and writes `done` once its game has
+started. While it runs, `game.lock` names it; afterwards the file says `free`. It closes the game window when the shots are in (so the shader cache is
 written) and stops the process if it has not exited 15 s later. Each run gets a private copy of the test save
 (`F:\KK-native-renderer\userdata`, profile `B13EBABEBABEBABE`), so runs never change it.
 

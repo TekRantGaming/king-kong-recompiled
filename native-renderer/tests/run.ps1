@@ -25,6 +25,9 @@ param(
   [string]$CacheRoot = 'F:\KK-native-renderer\cache',
   [string]$LockFile = 'F:\KK-native-renderer\game.lock',
   [string]$LockName = 'tests/run.ps1',
+  # Fair turns (game.wait\README.txt): this runner's file there holds the time it asked for the game.
+  [string]$WaitDir = 'F:\KK-native-renderer\game.wait',
+  [string]$WaitName = '',
   [int]$WaitMinutes = 0,
   # Seconds between two checks while waiting for the game (another runner may be using it).
   [int]$WaitPollSeconds = 300,
@@ -57,6 +60,7 @@ $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 if ($Golden) { $root = $GoldenRoot } elseif ($Out) { $root = $Out } else { $root = Join-Path $RunsRoot "$Plugin-$stamp" }
 New-Item -ItemType Directory -Force $root | Out-Null
 if (-not $Label) { $Label = "$Plugin $stamp" }
+if (-not $WaitName) { $WaitName = ($LockName -replace '[^A-Za-z0-9_-]', '_') }
 
 function Invoke-Py([string[]]$PyArgs) {
   if ($ScenesFile) { $PyArgs = @('--scenes-file', $ScenesFile) + $PyArgs }
@@ -85,14 +89,39 @@ if ($Golden -and -not $Force) {
 
 function Wait-GameFree {
   # At most one copy of the game may run on this PC: never start a second one, never stop someone else's.
+  # Launch only when no game runs, game.lock says "free" and no one in game.wait asked earlier.
   $deadline = (Get-Date).AddMinutes($WaitMinutes)
+  $mine = $null
+  if ($WaitName -and (Test-Path $WaitDir)) {
+    $mine = Join-Path $WaitDir "$WaitName.txt"
+    $asked = Get-Date -Format 's'
+    Set-Content -Path $mine -Value $asked -Encoding ascii
+  }
   while ($true) {
+    $why = $null
     $busy = Get-Process king_kong -ErrorAction SilentlyContinue
-    if (-not $busy) { return $true }
-    if ((Get-Date) -ge $deadline) { return $false }
-    Write-Output ("{0:HH:mm} the game is running (pid {1}); checking again in {2} s" -f (Get-Date), ($busy.Id -join ','), $WaitPollSeconds)
+    if ($busy) { $why = "the game is running (pid $($busy.Id -join ','))" }
+    if (-not $why -and (Test-Path $LockFile)) {
+      $lock = ((Get-Content -Path $LockFile -Raw) -as [string]).Trim()
+      if ($lock -and $lock -ne 'free') { $why = "game.lock says '$lock'" }
+    }
+    if (-not $why -and $mine) {
+      $before = @(Get-ChildItem -Path $WaitDir -Filter '*.txt' | Where-Object { $_.Name -ne 'README.txt' -and $_.FullName -ne $mine } |
+        Where-Object { $t = ((Get-Content -Path $_.FullName -Raw) -as [string]).Trim(); $t -and $t -ne 'done' -and $t -lt $asked })
+      if ($before.Count) { $why = "waiting for the turn of $(($before | ForEach-Object { $_.BaseName }) -join ',')" }
+    }
+    if (-not $why) { return $true }
+    if ((Get-Date) -ge $deadline) {
+      if ($mine) { Set-Content -Path $mine -Value 'done' -Encoding ascii }
+      return $false
+    }
+    Write-Output ("{0:HH:mm} {1}; checking again in {2} s" -f (Get-Date), $why, $WaitPollSeconds)
     Start-Sleep -Seconds $WaitPollSeconds
   }
+}
+
+function Set-TurnDone {
+  if ($WaitName -and (Test-Path $WaitDir)) { Set-Content -Path (Join-Path $WaitDir "$WaitName.txt") -Value 'done' -Encoding ascii }
 }
 
 function Set-Lock([string]$Text) {
@@ -142,6 +171,7 @@ foreach ($run in $plan.runs) {
     Write-Output ("{0:HH:mm:ss} run {1}: scenes {2}, {3} shots, up to {4} s" -f (Get-Date), $run.name,
       ($run.scenes -join ','), $run.expected.Count, $run.limit_s)
     $proc = Start-Process -FilePath $Exe -ArgumentList $gameArgs -WorkingDirectory $runDir -PassThru
+    Set-TurnDone
     while ($true) {
       Start-Sleep -Seconds 1
       if ($proc.HasExited) { Write-Output "  the game exited by itself (code $($proc.ExitCode))"; break }
