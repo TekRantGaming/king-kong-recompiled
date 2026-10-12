@@ -125,6 +125,11 @@ second, loops are animation restarts):
 | `418D0474` (lead) | action 262, 0.987, 26 loops | 262, 0.998, 26 | 262, 1.005, 26 |
 | `418D0540` | action 260, restarted 90 times (via 0) and never looping | 260, 56 restarts, 18 loops | 260, 34 restarts, 29 loops |
 
+At 60 FPS without the fix the hand-over happened in the measured run (action 275 for 1.02 s, as at 30 FPS: 1.03 s;
+110 FPS with the fix: 1.02 s), but there it hangs on luck: the tick count makes a third of the frames 16 ms, a
+step of 0.96 frames that does not cross the last frame, and the next sync then wraps the rower to frame 0, so
+some loops are missed (which fits the reports of skips at 60 FPS too).
+
 The fix's dev trace counted 83 corrected syncs a second at 110 FPS (one a frame while the boat is rowed). The
 last rower (`418D0540`) is restarted by its script (through action 0) every 1.2 s or so; how often varies from run
 to run at the same frame rate (83 and 90 restarts at 30 FPS, 34 and 86 at 110 FPS with the fixes), so it is not
