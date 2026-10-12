@@ -371,9 +371,9 @@ void NativeGraphicsSystem::InitializeShaderStorage(const std::filesystem::path& 
     std::string where;
     const std::string pack = FindShaderPackForRun(cache_root, api_ == HostApi::kVulkan, &where);
     if (!pack.empty() && backend_->OpenShaderPack(pack)) {
-      REXGPU_INFO("rexgpu-native: shader pack from {}: {}", where, pack);
+      REXLOG_INFO("rexgpu-native: shader pack from {}: {}", where, pack);
     } else {
-      REXGPU_WARN("rexgpu-native: no shader pack{} (the launcher builds it into {}): shaders are compiled with "
+      REXLOG_WARN("rexgpu-native: no shader pack{} (the launcher builds it into {}): shaders are compiled with "
                   "DXC on first use",
                   pack.empty() ? "" : " that opens", (cache_root / kkshaders::kPackFolderName).string());
     }
