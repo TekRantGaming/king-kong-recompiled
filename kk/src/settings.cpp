@@ -92,6 +92,14 @@ REXCVAR_DEFINE_BOOL(kk_big_blur, false, "KK/Graphics",
                     "The game's full-screen blur in some levels (Necropolis, Brontosaurus), sized for 720p");
 REXCVAR_DEFINE_BOOL(kk_original_look, false, "KK/Graphics",
                     "Play with the Xbox 360's own settings (launcher: Graphics > Look)");
+REXCVAR_DEFINE_STRING(kk_renderer, "native", "KK/Graphics",
+                      "Which renderer draws the game: native (the native renderer) or classic (the emulated Xbox "
+                      "360 GPU, rexgpu-xenos). Sets gpu_plugin at start; a gpu_plugin given on the command line or "
+                      "in the settings file wins. Builds without the native renderer always use classic")
+    .allowed({"native", "classic"});
+REXCVAR_DEFINE_STRING(kk_fullscreen_mode, "desktop", "KK/Video",
+                      "Fullscreen resolution: desktop (a borderless window at the desktop's resolution) or a display "
+                      "mode WIDTHxHEIGHT@HZ, e.g. 2560x1440@144 (exclusive fullscreen at that mode)");
 REXCVAR_DEFINE_STRING(kk_modern_settings, "", "KK/Graphics",
                       "Internal: the Modern settings to put back when leaving the Original look");
 REXCVAR_DEFINE_INT32(kk_fov, 69, "KK/Gameplay",

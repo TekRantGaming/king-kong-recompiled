@@ -54,6 +54,8 @@ REXCVAR_DECLARE(bool, kk_fog);
 REXCVAR_DECLARE(bool, kk_big_blur);
 REXCVAR_DECLARE(bool, kk_original_look);
 REXCVAR_DECLARE(std::string, kk_modern_settings);
+REXCVAR_DECLARE(std::string, kk_renderer);
+REXCVAR_DECLARE(std::string, kk_fullscreen_mode);
 REXCVAR_DECLARE(bool, kk_cheats);
 REXCVAR_DECLARE(int32_t, kk_hitch_report_ms);
 

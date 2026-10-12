@@ -27,6 +27,7 @@ set(KINGKONG_SOURCES
     src/game_sound.cpp
     src/steam_shortcut.cpp
     src/platform.cpp
+    src/display_modes.cpp
     src/iso.cpp
     src/art.cpp
     src/overlay.cpp

@@ -1,6 +1,7 @@
 #include "platform.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <thread>
 #include <string>
@@ -89,10 +90,22 @@ GpuInfo DetectGpu() {
     char name[256] = {};
     WideCharToMultiByte(CP_UTF8, 0, d.Description, -1, name, sizeof(name) - 1, nullptr, nullptr);
     info.name = name;
+    info.dedicated_memory = uint64_t(d.DedicatedVideoMemory);
   }
   adapter->Release();
 #endif
   return info;
+}
+
+bool IsSteamDeck() {
+  if (const char* v = std::getenv("SteamDeck"); v && std::string(v) == "1") return true;
+#if !defined(_WIN32)
+  std::ifstream board("/sys/devices/virtual/dmi/id/board_name");
+  std::string name;
+  std::getline(board, name);
+  if (name == "Jupiter" || name == "Galileo") return true;  // the LCD and OLED models
+#endif
+  return false;
 }
 
 std::pair<int, int> PrimaryScreenSize() {
