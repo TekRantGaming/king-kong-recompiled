@@ -103,19 +103,95 @@ bool IsNewerVersion(const std::string& a, const std::string& b) {
   return pre_a > pre_b;
 }
 
+std::optional<UpdateInfo> PickUpdate(const std::string& channel, bool switching, const std::string& current,
+                                     const std::optional<UpdateInfo>& stable, const std::optional<UpdateInfo>& beta) {
+  auto differs = [&](const UpdateInfo& u) {
+    return IsNewerVersion(u.version, current) || IsNewerVersion(current, u.version);
+  };
+  if (channel != "beta") {
+    if (!stable) return std::nullopt;
+    if (switching ? differs(*stable) : IsNewerVersion(stable->version, current)) return stable;
+    return std::nullopt;
+  }
+  if (switching) {  // Change version to beta: the newest beta
+    if (beta && differs(*beta)) return beta;
+    return std::nullopt;
+  }
+  std::optional<UpdateInfo> pick;
+  if (beta && IsNewerVersion(beta->version, current)) pick = beta;
+  if (stable && IsNewerVersion(stable->version, current)) {
+    // Only the beta's own final release (or later): its numbers are at least the running build's.
+    const auto s = VersionParts(stable->version), c = VersionParts(current);
+    bool at_least = true;
+    for (size_t i = 0; i < std::max(s.size(), c.size()); ++i) {
+      const int x = i < s.size() ? s[i] : 0, y = i < c.size() ? c[i] : 0;
+      if (x != y) {
+        at_least = x > y;
+        break;
+      }
+    }
+    if (at_least && (!pick || IsNewerVersion(stable->version, pick->version))) pick = stable;
+  }
+  return pick;
+}
+
+#if defined(KK_DEV_TOOLS)
+bool RunUpdatePickTests() {
+  auto release = [](const char* v) { return std::optional<UpdateInfo>(UpdateInfo{v, "", ""}); };
+  const std::optional<UpdateInfo> none;
+  struct Case {
+    const char* name;
+    const char* channel;
+    bool switching;
+    const char* current;
+    std::optional<UpdateInfo> stable, beta;
+    const char* expect;  // "" for no update
+  };
+  const Case cases[] = {
+      {"beta on 2.0.0-beta.1 sees beta.2", "beta", false, "2.0.0-beta.1", release("1.9.11"), release("2.0.0-beta.2"),
+       "2.0.0-beta.2"},
+      {"beta ignores stable 1.9.12", "beta", false, "2.0.0-beta.1", release("1.9.12"), release("2.0.0-beta.1"), ""},
+      {"beta ignores stable 1.9.12 with no beta", "beta", false, "2.0.0-beta.1", release("1.9.12"), none, ""},
+      {"beta takes stable 2.0.0", "beta", false, "2.0.0-beta.3", release("2.0.0"), release("2.0.0-beta.3"), "2.0.0"},
+      {"beta takes stable 2.0.0 over beta.2", "beta", false, "2.0.0-beta.1", release("2.0.0"), release("2.0.0-beta.2"),
+       "2.0.0"},
+      {"beta takes stable 2.1.0", "beta", false, "2.0.0-beta.3", release("2.1.0"), none, "2.1.0"},
+      {"beta repo empty: no update", "beta", false, "2.0.0-beta.1", release("1.9.11"), none, ""},
+      {"beta repo unreachable, stable too: no update", "beta", false, "2.0.0-beta.1", none, none, ""},
+      {"stable ignores betas", "stable", false, "1.9.11", release("1.9.11"), release("2.0.0-beta.2"), ""},
+      {"stable sees 1.9.12", "stable", false, "1.9.11", release("1.9.12"), release("2.0.0-beta.2"), "1.9.12"},
+      {"switch to stable from a beta", "stable", true, "2.0.0-beta.1", release("1.9.11"), release("2.0.0-beta.1"),
+       "1.9.11"},
+      {"switch to beta from stable", "beta", true, "1.9.11", release("1.9.11"), release("2.0.0-beta.1"),
+       "2.0.0-beta.1"},
+      {"switch to beta, no beta", "beta", true, "1.9.11", release("1.9.11"), none, ""},
+  };
+  bool all = true;
+  for (const Case& c : cases) {
+    const auto got = PickUpdate(c.channel, c.switching, c.current, c.stable, c.beta);
+    const std::string v = got ? got->version : "";
+    const bool ok = v == c.expect;
+    all = all && ok;
+    REXLOG_INFO("KK dev: update pick {}: {} ({})", c.name, ok ? "ok" : "FAILED", v.empty() ? "no update" : "v" + v);
+  }
+  REXLOG_INFO("KK dev: update pick tests {}", all ? "all ok" : "FAILED");
+  return all;
+}
+#endif
+
 void CheckForUpdate(UpdateStatus& status, const std::string& channel, bool switching) {
   status.busy = true;
-  UpdateInfo info;
-  if (!LatestRelease(kReleasesApi, info)) {
+  // Stable is read on both channels (a beta's final release is a stable one); beta only on beta.
+  std::optional<UpdateInfo> stable, beta;
+  if (UpdateInfo s; LatestRelease(kReleasesApi, s)) stable = s;
+  if (channel == "beta")
+    if (UpdateInfo b; LatestRelease(kBetaReleasesApi, b)) beta = b;
+  // Neither answered: say so. (A beta repo without releases, with stable answering, is "no update".)
+  if (!stable && !beta) {
     status.message = "Could not check for updates.";
     status.failed = true;
     status.busy = false;
     return;
-  }
-  if (channel == "beta") {
-    // No beta repo or release yet: beta players get the stable build.
-    UpdateInfo beta;
-    if (LatestRelease(kBetaReleasesApi, beta) && IsNewerVersion(beta.version, info.version)) info = beta;
   }
   std::string current = KK_VERSION;
 #if defined(KK_DEV_TOOLS)
@@ -123,11 +199,13 @@ void CheckForUpdate(UpdateStatus& status, const std::string& channel, bool switc
   // updating to the latest release.
   if (const char* v = std::getenv("KK_DEV_UPDATE_FROM"); v && *v) current = v;
 #endif
-  const bool differs = IsNewerVersion(info.version, current) || IsNewerVersion(current, info.version);
-  if (switching ? differs : IsNewerVersion(info.version, current)) {
-    status.found = info;
-    REXLOG_INFO("KK: {} {}: v{} (this is v{})", channel, switching ? "version" : "update available", info.version,
+  if (const auto info = PickUpdate(channel, switching, current, stable, beta)) {
+    status.found = *info;
+    REXLOG_INFO("KK: {} {}: v{} (this is v{})", channel, switching ? "version" : "update available", info->version,
                 current);
+  } else {
+    REXLOG_INFO("KK: {}: no update (stable v{}, beta {}; this is v{})", channel, stable ? stable->version : "?",
+                beta ? "v" + beta->version : std::string(channel == "beta" ? "none" : "not asked"), current);
   }
   status.done = true;
   status.busy = false;
