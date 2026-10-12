@@ -347,8 +347,8 @@ void GameRenderer::LightingDrawHook(nvrhi::ICommandList* cl, const DrawCall& cal
   LightingWriteConstants(cl);
 }
 
-void GameRenderer::LightingPresentHook() {
-  if (scene_lighting_) scene_lighting_->OnPresent();
+void GameRenderer::LightingPresentHook(nvrhi::ICommandList* cl) {
+  if (scene_lighting_) scene_lighting_->OnPresent(cl);
 }
 
 }  // namespace nr

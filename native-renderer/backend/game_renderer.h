@@ -604,7 +604,7 @@ class GameRenderer {
   };
   LightingState lighting_;
   std::unique_ptr<SceneLighting> scene_lighting_;  // null unless an option needs per-frame work
-  void LightingPresentHook();
+  void LightingPresentHook(nvrhi::ICommandList* cl);
   nvrhi::BufferHandle ao_constants_;  // b4 (ambient-only)
   std::array<uint32_t, 8> ao_constants_last_ = {};
   bool ao_constants_valid_ = false;

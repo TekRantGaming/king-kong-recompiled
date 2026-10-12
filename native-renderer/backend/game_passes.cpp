@@ -438,7 +438,7 @@ bool GameRenderer::Present(nvrhi::ICommandList* cl, uint32_t device, nvrhi::ITex
   dev::DeviceView d(device ? memory_.Virtual(device) : nullptr);
   if (!d.valid()) return false;
   if (scene_ao_ || ao_timer_) AoPresentHook(cl);  // AO hook (game_ao.cpp): a scene the moments above missed
-  if (scene_lighting_) LightingPresentHook();  // Lighting hook (game_lighting.cpp)
+  if (scene_lighting_) LightingPresentHook(cl);  // Lighting hook (game_lighting.cpp)
   if (frame_log_ && frame_log_->enabled()) LogSwap(d);
   const uint32_t back_buffer = d.u32(dev::kBackBuffer);
   const uint8_t* object = back_buffer ? memory_.Virtual(back_buffer) : nullptr;

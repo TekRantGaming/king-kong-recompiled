@@ -66,7 +66,7 @@ class SceneLighting {
   // The game drew its own light shafts this frame (pslightshaft's render mode).
   void NoteShafts(uint64_t frame);
   // At Present.
-  void OnPresent();
+  void OnPresent(nvrhi::ICommandList* cl);
 
   // What the water shaders read this frame (valid: made for this frame).
   struct SsrView {
