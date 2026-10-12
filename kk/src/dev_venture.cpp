@@ -48,3 +48,61 @@ REX_HOOK_RAW(sub_82432CD8) {
 }
 
 #endif
+
+#if defined(KK_DEV_TOOLS)
+// KK_DEV_ACTION_TRACE=1: every request to change an object's animation action
+// (sub_82850100(obj, action | flags, ...), the engine's action set) that
+// differs from the current one, with the caller, and every animation event
+// key that calls into the scripts (sub_82702518(key)) for the object being
+// animated, to see what moves the rowers from one action to the next.
+namespace {
+bool ActionTrace() {
+  static const bool on = std::getenv("KK_DEV_ACTION_TRACE") != nullptr;
+  return on;
+}
+uint16_t CurrentAction(const uint8_t* base, uint32_t obj) {
+  using namespace kk::hfr;
+  const uint32_t b = obj ? Load32(base, obj + 20) : 0;
+  const uint32_t anim = b ? Load32(base, b) : 0;
+  return anim ? Load16(base, anim + 156) : 0xFFFF;
+}
+}  // namespace
+
+REX_EXTERN(__imp__sub_82850100);
+REX_HOOK_RAW(sub_82850100) {
+  if (ActionTrace()) {
+    const uint32_t obj = ctx.r3.u32, req = ctx.r4.u32;
+    const uint16_t cur = CurrentAction(base, obj);
+    if ((req & 0x1FFFFFFF) != cur)
+      REXLOG_INFO("KK dev action: obj {:08X} {} -> {} (flags {:X}) from {:08X} dt {:.4f}", obj, cur, req & 0x1FFFFFFF,
+                  req >> 29, uint32_t(ctx.lr), kk::hfr::FrameTime(base));
+  }
+  __imp__sub_82850100(ctx, base);
+}
+
+REX_EXTERN(__imp__sub_823F8AF0);
+REX_EXTERN(__imp__sub_82702518);
+REX_HOOK_RAW(sub_82702518) {
+  if (ActionTrace()) {
+    using namespace kk::hfr;
+    const uint32_t key = ctx.r3.u32;
+    const uint32_t obj = Load32(base, 0x82CCBF8C);  // the object being animated (-16500)
+    int32_t frame = -1;
+    if (obj) {
+      const uint32_t b = Load32(base, obj + 20), anim = b ? Load32(base, b) : 0, layer = anim ? Load32(base, anim + 132) : 0;
+      if (layer && Load32(base, layer + 4)) {
+        PPCContext saved = ctx;
+        ctx.r3.u64 = obj;
+        ctx.r4.u64 = 0;
+        __imp__sub_823F8AF0(ctx, base);
+        frame = int32_t(ctx.r3.u32);
+        ctx = saved;
+      }
+    }
+    REXLOG_INFO("KK dev action: event key {:08X} [{:04X} {:04X} {:08X}] obj {:08X} action {} frame {} dt {:.4f}", key,
+                Load16(base, key), Load16(base, key + 2), Load32(base, key + 4), obj, CurrentAction(base, obj), frame,
+                FrameTime(base));
+  }
+  __imp__sub_82702518(ctx, base);
+}
+#endif
