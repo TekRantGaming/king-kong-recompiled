@@ -225,6 +225,16 @@ place than in any golden frame (the sweep runs on the loading thread; the captur
 
 ### Found and left
 
+- **Rain density in the V-Rex chapter.** Per second, the particle trace saw 1 400 to 1 900 generator updates
+  of 80 to 105 different generators at 30 FPS (about 50 generators updated a frame, 40 000 particles a second),
+  and 14 000 to 22 000 updates of 200 to 290 generators at 110 FPS (about 155 a frame, 400 000 to 600 000
+  particles a second). Each generator holds about the same number of particles at both rates, so about three
+  times as many rain particles are alive at once at 110 FPS: the rain looks denser. The active world objects
+  stay the same (128), so these are render-side effect instances, created about three a frame (lifetime
+  about half a second) rather than per second. Who creates them is not found yet (the call profile points at
+  the render pass `sub_828732E8` -> `sub_827FA2B0` -> `sub_82863018`; the spawner inside a generator,
+  `sub_82862B10`, is time based). Next step: hook the generator update with a per-generator first-seen time
+  to find the creating call, then spawn per second.
 - Motion blur strength (only with motion blur on): needs a look on screen to choose the formula (above).
 - Menu background drift (`IntMIG_Background`): 0.999 a frame, too small to see.
 - Follow smoothing has no visible target identified yet (a renderer modifier on four objects in the Venture
