@@ -62,6 +62,10 @@ std::vector<DisplayMode> ListDisplayModes(int monitor, const rex::ui::Window* wi
   return out;  // SDL's order: largest first, then the highest refresh rate
 }
 
+DisplayMode DesktopDisplayMode(int monitor, const rex::ui::Window* window) {
+  return FromSdk(rex::ui::GetDesktopDisplayMode(monitor, window));
+}
+
 std::optional<std::pair<int, int>> FullscreenModeSize() {
   if (const auto m = ParseDisplayMode(rex::cvar::GetFlagByName("kk_fullscreen_mode")))
     return std::pair<int, int>{m->width, m->height};

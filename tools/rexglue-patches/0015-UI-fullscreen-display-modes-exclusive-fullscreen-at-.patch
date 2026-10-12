@@ -1,7 +1,7 @@
-From e616a360124d86441e9490aebcf28114a9158c53 Mon Sep 17 00:00:00 2001
+From aa92cef757722ea4337bfb683b4bd64c4dc5fce8 Mon Sep 17 00:00:00 2001
 From: TekRantGaming <craigferels896@gmail.com>
 Date: Mon, 12 Oct 2026 17:15:31 +0100
-Subject: [PATCH] UI: fullscreen display modes (exclusive fullscreen at a
+Subject: [PATCH 15/16] UI: fullscreen display modes (exclusive fullscreen at a
  chosen resolution)
 
 rex::ui::GetFullscreenDisplayModes lists a display's modes and
@@ -12,18 +12,18 @@ SDK's window nor the displays.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
- include/rex/ui/display_mode.h | 40 +++++++++++++++
+ include/rex/ui/display_mode.h | 44 ++++++++++++++++
  include/rex/ui/window_sdl.h   |  1 +
- src/ui/window_sdl.cpp         | 92 +++++++++++++++++++++++++++++++++++
- 3 files changed, 133 insertions(+)
+ src/ui/window_sdl.cpp         | 97 +++++++++++++++++++++++++++++++++++
+ 3 files changed, 142 insertions(+)
  create mode 100644 include/rex/ui/display_mode.h
 
 diff --git a/include/rex/ui/display_mode.h b/include/rex/ui/display_mode.h
 new file mode 100644
-index 0000000..8fe1a5f
+index 0000000..19b56fd
 --- /dev/null
 +++ b/include/rex/ui/display_mode.h
-@@ -0,0 +1,40 @@
+@@ -0,0 +1,44 @@
 +/**
 + * @file        ui/display_mode.h
 + * @brief       Fullscreen display modes (exclusive fullscreen at a chosen resolution)
@@ -55,6 +55,10 @@ index 0000000..8fe1a5f
 +// `window` is on (the primary display without a window). Call on the UI thread.
 +std::vector<DisplayMode> GetFullscreenDisplayModes(int monitor, const Window* window);
 +
++// The display's mode on the desktop (width 0 when unknown). `monitor` as for GetFullscreenDisplayModes.
++// Call on the UI thread.
++DisplayMode GetDesktopDisplayMode(int monitor, const Window* window);
++
 +// Sets the mode `window` uses whenever it is fullscreen. With a size, the closest mode the display
 +// has to width x height at refresh_rate (0: any), as exclusive fullscreen; with width 0, borderless
 +// at the desktop's resolution (the default). Applies at once when the window is fullscreen. Returns
@@ -77,7 +81,7 @@ index 71e7473..7a45ab7 100644
    bool WarpMouseToCenter(int32_t& x_out, int32_t& y_out) override;
  
 diff --git a/src/ui/window_sdl.cpp b/src/ui/window_sdl.cpp
-index 2251429..2fb0f9f 100644
+index 2251429..408492e 100644
 --- a/src/ui/window_sdl.cpp
 +++ b/src/ui/window_sdl.cpp
 @@ -13,6 +13,8 @@
@@ -89,7 +93,7 @@ index 2251429..2fb0f9f 100644
  #include <algorithm>
  #include <cmath>
  #include <cstring>
-@@ -588,4 +590,94 @@ void WindowSDL::HandleMouseEvent(SDL_Event& event) {
+@@ -588,4 +590,99 @@ void WindowSDL::HandleMouseEvent(SDL_Event& event) {
    }
  }
  
@@ -149,6 +153,11 @@ index 2251429..2fb0f9f 100644
 +  }
 +  SDL_free(modes);
 +  return out;
++}
++
++DisplayMode GetDesktopDisplayMode(int monitor, const Window* window) {
++  const SDL_DisplayMode* mode = SDL_GetDesktopDisplayMode(DisplayFor(monitor, SdlWindowOf(window)));
++  return mode ? ToPixels(*mode) : DisplayMode{};
 +}
 +
 +bool SetFullscreenDisplayMode(Window* window, int monitor, int width, int height, float refresh_rate,

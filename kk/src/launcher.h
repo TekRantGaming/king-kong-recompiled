@@ -28,6 +28,7 @@ struct LauncherCallbacks {
   std::function<std::pair<int, int>()> screen_size;  // monitor size in physical pixels
   std::function<std::pair<int, int>()> output_size;  // size the game will be shown at
   std::function<std::vector<DisplayMode>(int)> display_modes;  // a monitor's fullscreen modes (display_modes.h)
+  std::function<DisplayMode(int)> desktop_mode;                // a monitor's mode on the desktop
 };
 
 struct LauncherPaths {

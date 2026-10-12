@@ -37,6 +37,9 @@ std::optional<DisplayMode> ParseDisplayMode(const std::string& value);
 // UI thread.
 std::vector<DisplayMode> ListDisplayModes(int monitor, const rex::ui::Window* window);
 
+// The display's mode on the desktop (width 0 when unknown); `monitor` as above. UI thread.
+DisplayMode DesktopDisplayMode(int monitor, const rex::ui::Window* window);
+
 // The size the game is shown at in fullscreen when kk_fullscreen_mode is a mode (nullopt for desktop).
 std::optional<std::pair<int, int>> FullscreenModeSize();
 

@@ -8,7 +8,9 @@ version's notes the first time you start it.
 **Beta 1.1**: a small update to Beta 1, from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/PET2xU5FJq). Your saves and settings are kept, and you can switch back to stable at any time. Windows only for now.
 
 ### What's new
-- **Choose your fullscreen resolution.** **Display** > **Resolution** lists your monitor's resolutions and refresh rates. Pick one and the game runs in exclusive fullscreen at that size; **Desktop**, the default, keeps the borderless window at your desktop's resolution. The render quality follows the resolution you pick.
+- **Windowed, Borderless or Fullscreen.** **Display** > **Window mode** has three choices now. **Borderless** fills the screen with a window at your desktop's resolution, so Alt+Tab is instant. **Fullscreen** switches your screen to the **Resolution** and **Refresh rate** you pick while the game runs. The render quality follows the resolution you pick.
+- **Fixed: Alt+Tab not getting out of the game properly in fullscreen.** With some graphics drivers, Beta 1's fullscreen window was taken over as exclusive fullscreen. It now stays a normal borderless window, as in the stable version. Thanks to GPUnity for the report.
+- **Frame rate and upscaling are on the Display page now**, next to the resolution settings. **Graphics** keeps the look, the preset, anti-aliasing, texture filtering, ambient occlusion and the effects.
 - **Discord status.** While Discord is running on your PC, your profile shows that you're playing King Kong, in the launcher or in the game, and for how long. **Discord status** on the **About** page switches it off.
 - **GTAO is now the ambient occlusion.** With the native renderer, ambient occlusion is always the new GTAO, so the **AO method** choice is gone (if you picked Classic in Beta 1, you now get GTAO). **AO strength** is now **Light** (recommended), **Medium** or **Strong**: how dark the shading gets and how far it spreads.
 - **Supersampling is gone.** Pick a **Resolution** instead. If you had it on, the game now draws at **Native**.
@@ -20,7 +22,8 @@ version's notes the first time you start it.
 - With motion blur on, its trail is shorter at high frame rates.
 
 ### Full changelog
-- Fullscreen resolution: `kk_fullscreen_mode` (`desktop`, or `WIDTHxHEIGHT@HZ`) sets the game window's fullscreen mode when the game starts, through the SDK (`rex::ui::GetFullscreenDisplayModes` and `SetFullscreenDisplayMode`, SDK patch 0015). A mode the display doesn't have falls back to the closest one, or to Desktop.
+- Window mode: `fullscreen` off is Windowed; on, `kk_fullscreen_mode` `desktop` is Borderless and `WIDTHxHEIGHT@HZ` is Fullscreen, set as the game window's fullscreen mode when the game starts through the SDK (`rex::ui::GetFullscreenDisplayModes`, `GetDesktopDisplayMode` and `SetFullscreenDisplayMode`, SDK patch 0015). A mode the display doesn't have falls back to the closest one, or to Borderless.
+- Vulkan swapchains on Windows are created with `VK_EXT_full_screen_exclusive` set to disallowed (SDK patch 0016), so the driver can't make a window that covers the screen exclusive by itself; `vulkan_allow_fullscreen_exclusive` gives it its say back.
 - Discord status: Rich Presence through the Discord app's local connection (`discord-ipc-N`), without the Discord SDK; `kk_discord_status`, on by default. While Discord isn't running it tries again every 20 seconds.
 - `native_ao_method` `gtao` and `native_ao_apply` `opaque` are the defaults; Beta 1's AO method in a settings file is reset.
 - `kk_render_quality` `supersample` is no longer offered; a settings file with it gets `native`.

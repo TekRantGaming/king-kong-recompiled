@@ -145,6 +145,7 @@ class KingKongApp : public rex::ReXApp {
     cb.screen_size = [] { return kk::PrimaryScreenSize(); };
     cb.output_size = [this] { return OutputSize(); };
     cb.display_modes = [this](int monitor) { return kk::ListDisplayModes(monitor, window()); };
+    cb.desktop_mode = [this](int monitor) { return kk::DesktopDisplayMode(monitor, window()); };
     kk::ShowLauncher(imgui_drawer(), immediate_drawer(),
                       {defaults.game_data_root, defaults.user_data_root, defaults.config_path},
                       std::move(cb));

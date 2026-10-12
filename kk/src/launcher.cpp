@@ -2160,247 +2160,32 @@ class Launcher final : public rex::ui::ImGuiDialog {
       "Set by the Original Xbox 360 look. Switch Look to Remastered on the Graphics page to change it.";
 
   // ------------------------------------------------------------ Display ---
-  std::vector<Item> DisplayItems() {
-    std::vector<Item> items;
-    items.push_back(Section("Window"));
-    {
-      Item it = CvarToggle("Window mode",
-                           "Fullscreen fills the screen: at your desktop resolution, or at the Resolution you pick "
-                           "below.",
-                           "fullscreen", "Windowed", "Fullscreen");
-      it.on_choice = [this](int i) { SetFullscreen(i == 1); };
-      it.on_default = [this] {
-        Reset("fullscreen");
-        if (cb_.set_fullscreen) cb_.set_fullscreen(GetBool("fullscreen"));
-      };
-      items.push_back(std::move(it));
-    }
-    items.push_back(ResolutionItem());
-    if (ParseDisplayMode(Get("kk_fullscreen_mode"))) items.push_back(RefreshRateItem());
-    items.push_back(WindowSizeItem());
-    items.push_back(MonitorItem());
-    items.push_back(Section("Picture"));
-    items.push_back(CvarToggle("VSync",
-                               "On waits for the display for tear-free frames. Off has the lowest latency and lets "
-                               "G-Sync and FreeSync displays run freely.",
-                               "d3d12_allow_variable_refresh_rate_and_tearing", "Off", "On", /*invert=*/true));
-    items.push_back(CvarChoice("Aspect ratio",
-                               "The game is 16:9. Letterbox keeps its shape on other screens; Stretch fills them.",
-                               "present_letterbox", {{"Letterbox 16:9", "true"}, {"Stretch", "false"}}));
-    return items;
+  // Display > Frame rate (Beta 1.1: from the Gameplay page).
+  Item FrameRateItem() {
+    std::vector<Option> opts;
+    for (int f : kFrameRateChoices)
+      opts.push_back({f <= 0 ? "Unlimited" : f == 30 ? "30 FPS (Xbox 360)" : std::to_string(f) + " FPS",
+                      std::to_string(f)});
+    const std::string cur = Get("kk_frame_rate");
+    bool listed = false;
+    for (const auto& o : opts) listed = listed || o.value == cur;
+    if (!listed && !cur.empty()) opts.push_back({F("{0} FPS (settings file)", {cur}), cur});
+    Item it = CvarChoice("Frame rate",
+                         "How many pictures the game draws a second (your screen's refresh rate is separate). 30 "
+                         "matches the Xbox 360 and keeps every animation right. Higher is smoother, but some "
+                         "character animations are not right above 30 yet. For the smoothest motion, pick a rate "
+                         "that divides your screen's evenly, such as 60 on a 120 Hz screen.",
+                         "kk_frame_rate", opts);
+    return std::move(Disable(it, GetBool("kk_original_look"), kSetByOriginal));
   }
 
-  // Keyboard & mouse shows the keys in the game's hints and turns the camera
-  // with the mouse; back on Controller, the controller's prompts come back.
-  static void SetInputMode(bool keyboard) {
-    SetBool("mnk_mode", keyboard);
-    const std::string prompts = Get("kk_button_prompts");
-    if (keyboard) {
-      if (prompts != "keyboard") Set("kk_pad_prompts", prompts);
-      Set("kk_button_prompts", "keyboard");
-      SetBool("mnk_mouse", true);
-    } else if (prompts == "keyboard") {
-      Set("kk_button_prompts", Get("kk_pad_prompts"));
-    }
-  }
-
-  void SetFullscreen(bool on) {
-    SetBool("fullscreen", on);
-    if (cb_.set_fullscreen) cb_.set_fullscreen(on);
-  }
-
-  Item WindowSizeItem() {
-    // window_width/height are in logical pixels (96 DPI); offer real pixel sizes
-    // that fit on the screen and convert with the window's DPI scale.
-    const double scale = cb_.dpi_scale ? cb_.dpi_scale() : 1.0;
-    auto to_physical = [&](int logical) { return int(logical * scale + 0.5); };
-    const int w = to_physical(GetInt("window_width")), h = to_physical(GetInt("window_height"));
-    static const std::pair<int, int> kSizes[] = {{0, 0},       {1280, 720},  {1600, 900},
-                                                 {1920, 1080}, {2560, 1440}, {3200, 1800}};
-    const auto [screen_w, screen_h] = cb_.screen_size ? cb_.screen_size() : std::pair<int, int>{1 << 16, 1 << 16};
-    auto close_to = [](int a, int b) { return std::abs(a - b) <= 2; };
-    Item it;
-    it.type = ItemType::kChoice;
-    it.label = "Window size";
-    it.description = "The window's size in windowed mode. Applies when the game starts.";
-    it.index = -1;
-    it.value_text = Size(w, h);
-    it.default_text = "Default";
-    std::vector<std::pair<int, int>> sizes;
-    for (auto [sw, sh] : kSizes) {
-      if (sw >= screen_w || sh >= screen_h) continue;  // must fit with its frame
-      if (close_to(sw, w) && close_to(sh, h)) it.index = int(sizes.size());
-      it.options.push_back(sw == 0 ? std::string("Default") : Size(sw, sh));
-      sizes.emplace_back(sw, sh);
-    }
-    it.on_choice = [sizes, scale](int i) {
-      const auto [sw, sh] = sizes[size_t(i)];
-      SetInt("window_width", int(sw / scale + 0.5));
-      SetInt("window_height", int(sh / scale + 0.5));
-    };
-    it.on_default = [] {
-      Reset("window_width");
-      Reset("window_height");
-    };
-    Disable(it, GetBool("fullscreen"), "Only used in windowed mode.");
-    return it;
-  }
-
-  // Fullscreen resolution (display_modes.h): Desktop, or one of the monitor's sizes, with its refresh
-  // rate on a row of its own (RefreshRateItem). Both are kept in kk_fullscreen_mode ("2560x1440@144").
-  void LoadDisplayModes() {
-    const int monitor = GetInt("monitor", 0);
-    if (display_modes_monitor_ == monitor) return;
-    display_modes_monitor_ = monitor;
-    display_modes_.clear();
-    const std::vector<DisplayMode> all = cb_.display_modes ? cb_.display_modes(monitor) : std::vector<DisplayMode>{};
-    auto whole = [](float hz) { return std::fabs(hz - std::round(hz)) < 0.05f; };
-    for (const DisplayMode& m : all) {
-      if (m.width < 1280 || m.height < 720) continue;  // below the game's own 720p
-      // 59.94 or 119.88 only when the display doesn't also have 60 or 120 at that size.
-      const bool twin = !whole(m.refresh) && std::any_of(all.begin(), all.end(), [&](const DisplayMode& o) {
-        return o.width == m.width && o.height == m.height && whole(o.refresh) &&
-               std::fabs(o.refresh - std::round(m.refresh)) < 0.05f;
-      });
-      if (!twin) display_modes_.push_back(m);  // SDL's order: largest first, then the highest rate
-    }
-  }
-
-  // The refresh rates the display has at a size, highest first.
-  std::vector<float> RatesAt(int width, int height) const {
-    std::vector<float> rates;
-    for (const DisplayMode& m : display_modes_)
-      if (m.width == width && m.height == height) rates.push_back(m.refresh);
-    return rates;
-  }
-
-  Item ResolutionItem() {
-    LoadDisplayModes();
-    const std::string cur_value = Get("kk_fullscreen_mode");
-    const auto cur = ParseDisplayMode(cur_value);
-    Item it;
-    it.type = ItemType::kChoice;
-    it.label = "Resolution";
-    it.description =
-        "Desktop keeps your desktop's resolution in a borderless window, and switches instantly. A resolution from "
-        "the list changes your screen to that size while the game runs (exclusive fullscreen), at the Refresh rate "
-        "below. The render quality follows it. Applies when the game starts.";
-    it.options = {"Desktop"};
-    std::vector<std::pair<int, int>> sizes = {{0, 0}};
-    for (const DisplayMode& m : display_modes_) {
-      if (sizes.back() == std::pair<int, int>{m.width, m.height}) continue;
-      sizes.emplace_back(m.width, m.height);
-      it.options.push_back(Size(m.width, m.height));
-    }
-    it.index = 0;
-    if (cur) {
-      it.index = -1;
-      for (size_t i = 1; i < sizes.size(); ++i)
-        if (sizes[i] == std::pair<int, int>{cur->width, cur->height}) it.index = int(i);
-      if (it.index < 0) {  // a size this display doesn't have (another monitor's, or the settings file's)
-        it.index = int(sizes.size());
-        sizes.emplace_back(cur->width, cur->height);
-        it.options.push_back(F("{0} (not on this display)", {Size(cur->width, cur->height)}));
-      }
-      if (GetBool("fullscreen")) it.facts.push_back(F("The game will be shown at {0}.", {Size(cur->width, cur->height)}));
-    }
-    it.default_text = "Desktop";
-    it.on_choice = [this, sizes, cur](int i) {
-      if (i <= 0) return Set("kk_fullscreen_mode", "desktop");
-      const auto [w, h] = sizes[size_t(i)];
-      const std::vector<float> rates = RatesAt(w, h);
-      // The rate chosen before when this size has it, else this size's highest.
-      float rate = rates.empty() ? (cur ? cur->refresh : 0.0f) : rates.front();
-      for (const float r : rates)
-        if (cur && std::fabs(r - cur->refresh) < 0.01f) rate = r;
-      Set("kk_fullscreen_mode", DisplayMode{w, h, rate}.Value());
-    };
-    it.on_default = [] { Reset("kk_fullscreen_mode"); };
-    Disable(it, !GetBool("fullscreen"), "Only used in fullscreen.");
-    return it;
-  }
-
-  // Only with a Resolution chosen: the display's rates at that size.
-  Item RefreshRateItem() {
-    const auto cur = ParseDisplayMode(Get("kk_fullscreen_mode"));
-    Item it;
-    it.type = ItemType::kChoice;
-    it.label = "Refresh rate";
-    it.description = "How many times a second your screen refreshes at the Resolution above. Applies when the game "
-                     "starts.";
-    std::vector<float> rates = RatesAt(cur->width, cur->height);
-    if (rates.empty()) rates.push_back(cur->refresh);
-    it.index = -1;
-    for (size_t i = 0; i < rates.size(); ++i) {
-      const DisplayMode m{cur->width, cur->height, rates[i]};
-      it.options.push_back(m.RateLabel());
-      if (std::fabs(rates[i] - cur->refresh) < 0.01f) it.index = int(i);
-    }
-    it.value_text = cur->RateLabel();
-    it.default_text = DisplayMode{cur->width, cur->height, rates.front()}.RateLabel();
-    it.on_choice = [w = cur->width, h = cur->height, rates](int i) {
-      Set("kk_fullscreen_mode", DisplayMode{w, h, rates[size_t(i)]}.Value());
-    };
-    it.on_default = [w = cur->width, h = cur->height, top = rates.front()] {
-      Set("kk_fullscreen_mode", DisplayMode{w, h, top}.Value());
-    };
-    Disable(it, !GetBool("fullscreen"), "Only used in fullscreen.");
-    return it;
-  }
-
-  Item MonitorItem() {
-    if (monitors_.empty()) monitors_ = ListMonitors();
-    std::vector<Option> opts = {{"Default", "0"}};
-    for (size_t i = 0; i < monitors_.size(); ++i) {
-      const auto& m = monitors_[i];
-      opts.push_back({F("Display {0}", {std::to_string(i + 1)}) + (m.primary ? " " + T(std::string("(main)")) : "") +
-                          "  " KK_DOT "  " + Size(m.width, m.height),
-                      std::to_string(i + 1)});
-    }
-    return CvarChoice("Monitor", "Which display the game opens on. Applies when the game starts.", "monitor",
-                      std::move(opts));
-  }
-
-  // ----------------------------------------------------------- Graphics ---
-  std::vector<Item> GraphicsItems() {
+  // Display > Upscaling (Beta 1.1: from the Graphics page): the upscaler and how many pixels the game
+  // draws for the screen, which the Resolution above decides.
+  void UpscalingItems(std::vector<Item>& items) {
     const auto [out_w, out_h] = cb_.output_size ? cb_.output_size() : std::pair<int, int>{1280, 720};
     const bool original = GetBool("kk_original_look");
     const char* draws = GetBool("fullscreen") ? "Draws {0} for your {1} screen." : "Draws {0} for your {1} window.";
-    std::vector<Item> items;
-    items.push_back(Section("Look"));
-    {
-      Item it = CvarChoice("Look",
-                           "Original is the Xbox 360 version as it was: 720p at 30 FPS, the console's own "
-                           "anti-aliasing and texture filtering, its 69" KK_DEG " field of view, motion blur, screen "
-                           "blur and distance fog, and no ambient occlusion. Remastered gives you the presets and "
-                           "every setting on this page; chosen at setup, it starts with the preset for your graphics "
-                           "card and the new GTAO ambient occlusion.",
-                           "kk_original_look", {{"Original Xbox 360", "true"}, {"Remastered", "false"}});
-      it.on_choice = [](int i) { SetOriginalLook(i == 0); };
-      it.on_default = [] { SetOriginalLook(false); };
-      items.push_back(std::move(it));
-    }
-    {
-      Item it;
-      it.type = ItemType::kChoice;
-      it.label = "Preset";
-      it.description =
-          "Quick settings for the upscaler, render quality, anti-aliasing, texture filtering and ambient occlusion. "
-          "Change any of them yourself and it shows Custom.";
-      for (const auto& p : kGraphicsPresets) it.options.push_back(p.label);
-      it.options.push_back("Custom");
-      const int match = MatchGraphicsPreset();
-      it.index = original ? -1 : match < 0 ? kGraphicsPresetCount : match;
-      it.value_text = "Xbox 360";  // the Original look's own settings
-      it.on_choice = [](int i) {
-        if (i < kGraphicsPresetCount) ApplyGraphicsPreset(i);
-      };
-      it.on_default = [] { ApplyGraphicsPreset(1); };
-      it.default_text = "Medium";
-      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
-    }
-
-    items.push_back(Section("Resolution"));
+    items.push_back(Section("Upscaling"));
     {
       // NIS is in the D3D12 presenter only (the Vulkan one, used on Linux, would give FSR).
       std::vector<Option> opts = {{"Off", "bilinear"}, {"AMD FSR 1", "fsr"}};
@@ -2495,6 +2280,278 @@ class Launcher final : public rex::ui::ImGuiDialog {
                             {"4" KK_TIMES "  " KK_DOT "  5120 " KK_TIMES " 2880", "4"},
                             {"5" KK_TIMES "  " KK_DOT "  6400 " KK_TIMES " 3600", "5"},
                             {"6" KK_TIMES "  " KK_DOT "  7680 " KK_TIMES " 4320", "6"}});
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
+  }
+
+  std::vector<Item> DisplayItems() {
+    std::vector<Item> items;
+    items.push_back(Section("Window"));
+    items.push_back(WindowModeItem());
+    // Each mode's own size: the window's, or the screen's in exclusive fullscreen (Borderless has none).
+    if (!GetBool("fullscreen")) items.push_back(WindowSizeItem());
+    if (ExclusiveFullscreen()) {
+      items.push_back(ResolutionItem());
+      items.push_back(RefreshRateItem());
+    }
+    items.push_back(MonitorItem());
+    items.push_back(Section("Frame rate"));
+    items.push_back(FrameRateItem());
+    items.push_back(CvarToggle("VSync",
+                               "On waits for the display for tear-free frames. Off has the lowest latency and lets "
+                               "G-Sync and FreeSync displays run freely.",
+                               "d3d12_allow_variable_refresh_rate_and_tearing", "Off", "On", /*invert=*/true));
+    UpscalingItems(items);
+    items.push_back(Section("Picture"));
+    items.push_back(CvarChoice("Aspect ratio",
+                               "The game is 16:9. Letterbox keeps its shape on other screens; Stretch fills them.",
+                               "present_letterbox", {{"Letterbox 16:9", "true"}, {"Stretch", "false"}}));
+    return items;
+  }
+
+  // Keyboard & mouse shows the keys in the game's hints and turns the camera
+  // with the mouse; back on Controller, the controller's prompts come back.
+  static void SetInputMode(bool keyboard) {
+    SetBool("mnk_mode", keyboard);
+    const std::string prompts = Get("kk_button_prompts");
+    if (keyboard) {
+      if (prompts != "keyboard") Set("kk_pad_prompts", prompts);
+      Set("kk_button_prompts", "keyboard");
+      SetBool("mnk_mouse", true);
+    } else if (prompts == "keyboard") {
+      Set("kk_button_prompts", Get("kk_pad_prompts"));
+    }
+  }
+
+  void SetFullscreen(bool on) {
+    SetBool("fullscreen", on);
+    if (cb_.set_fullscreen) cb_.set_fullscreen(on);
+  }
+
+  Item WindowSizeItem() {
+    // window_width/height are in logical pixels (96 DPI); offer real pixel sizes
+    // that fit on the screen and convert with the window's DPI scale.
+    const double scale = cb_.dpi_scale ? cb_.dpi_scale() : 1.0;
+    auto to_physical = [&](int logical) { return int(logical * scale + 0.5); };
+    const int w = to_physical(GetInt("window_width")), h = to_physical(GetInt("window_height"));
+    static const std::pair<int, int> kSizes[] = {{0, 0},       {1280, 720},  {1600, 900},
+                                                 {1920, 1080}, {2560, 1440}, {3200, 1800}};
+    const auto [screen_w, screen_h] = cb_.screen_size ? cb_.screen_size() : std::pair<int, int>{1 << 16, 1 << 16};
+    auto close_to = [](int a, int b) { return std::abs(a - b) <= 2; };
+    Item it;
+    it.type = ItemType::kChoice;
+    it.label = "Window size";
+    it.description = "The window's size in windowed mode. Applies when the game starts.";
+    it.index = -1;
+    it.value_text = Size(w, h);
+    it.default_text = "Default";
+    std::vector<std::pair<int, int>> sizes;
+    for (auto [sw, sh] : kSizes) {
+      if (sw >= screen_w || sh >= screen_h) continue;  // must fit with its frame
+      if (close_to(sw, w) && close_to(sh, h)) it.index = int(sizes.size());
+      it.options.push_back(sw == 0 ? std::string("Default") : Size(sw, sh));
+      sizes.emplace_back(sw, sh);
+    }
+    it.on_choice = [sizes, scale](int i) {
+      const auto [sw, sh] = sizes[size_t(i)];
+      SetInt("window_width", int(sw / scale + 0.5));
+      SetInt("window_height", int(sh / scale + 0.5));
+    };
+    it.on_default = [] {
+      Reset("window_width");
+      Reset("window_height");
+    };
+    return it;
+  }
+
+  // Fullscreen resolution (display_modes.h): Desktop, or one of the monitor's sizes, with its refresh
+  // rate on a row of its own (RefreshRateItem). Both are kept in kk_fullscreen_mode ("2560x1440@144").
+  void LoadDisplayModes() {
+    const int monitor = GetInt("monitor", 0);
+    if (display_modes_monitor_ == monitor) return;
+    display_modes_monitor_ = monitor;
+    display_modes_.clear();
+    const std::vector<DisplayMode> all = cb_.display_modes ? cb_.display_modes(monitor) : std::vector<DisplayMode>{};
+    auto whole = [](float hz) { return std::fabs(hz - std::round(hz)) < 0.05f; };
+    for (const DisplayMode& m : all) {
+      if (m.width < 1280 || m.height < 720) continue;  // below the game's own 720p
+      // 59.94 or 119.88 only when the display doesn't also have 60 or 120 at that size.
+      const bool twin = !whole(m.refresh) && std::any_of(all.begin(), all.end(), [&](const DisplayMode& o) {
+        return o.width == m.width && o.height == m.height && whole(o.refresh) &&
+               std::fabs(o.refresh - std::round(m.refresh)) < 0.05f;
+      });
+      if (!twin) display_modes_.push_back(m);  // SDL's order: largest first, then the highest rate
+    }
+  }
+
+  // The refresh rates the display has at a size, highest first.
+  std::vector<float> RatesAt(int width, int height) const {
+    std::vector<float> rates;
+    for (const DisplayMode& m : display_modes_)
+      if (m.width == width && m.height == height) rates.push_back(m.refresh);
+    return rates;
+  }
+
+  // Window mode: Windowed (fullscreen off), Borderless (fullscreen, kk_fullscreen_mode "desktop": a
+  // window filling the screen at the desktop's resolution) or Fullscreen (kk_fullscreen_mode a mode:
+  // exclusive, the screen switched to it while the game runs; the launcher itself stays borderless).
+  static bool ExclusiveFullscreen() {
+    return GetBool("fullscreen") && ParseDisplayMode(Get("kk_fullscreen_mode")).has_value();
+  }
+
+  // The desktop's own mode, as listed (a 59.94 that the list shows as 60 becomes 60), for Fullscreen
+  // until a Resolution is picked.
+  std::string DesktopModeValue() {
+    LoadDisplayModes();
+    DisplayMode desktop = cb_.desktop_mode ? cb_.desktop_mode(GetInt("monitor", 0)) : DisplayMode{};
+    for (const DisplayMode& m : display_modes_)
+      if (m.width == desktop.width && m.height == desktop.height && std::fabs(m.refresh - desktop.refresh) < 0.1f)
+        desktop.refresh = m.refresh;
+    if (desktop.width <= 0 && !display_modes_.empty()) desktop = display_modes_.front();
+    return desktop.width > 0 ? desktop.Value() : "desktop";
+  }
+
+  Item WindowModeItem() {
+    Item it;
+    it.type = ItemType::kChoice;
+    it.label = "Window mode";
+    it.description =
+        "Windowed plays in a window. Borderless fills the screen with a window at your desktop's resolution, so "
+        "Alt+Tab and other windows switch instantly. Fullscreen changes your screen to the Resolution and Refresh "
+        "rate you pick below while the game runs.";
+    it.options = {"Windowed", "Borderless", "Fullscreen"};
+    it.index = !GetBool("fullscreen") ? 0 : ExclusiveFullscreen() ? 2 : 1;
+    it.default_text = "Windowed";
+    it.on_choice = [this](int i) {
+      if (i == 1) Set("kk_fullscreen_mode", "desktop");
+      if (i == 2 && !ParseDisplayMode(Get("kk_fullscreen_mode"))) Set("kk_fullscreen_mode", DesktopModeValue());
+      SetFullscreen(i != 0);
+    };
+    it.on_default = [this] {
+      Reset("kk_fullscreen_mode");
+      Reset("fullscreen");
+      if (cb_.set_fullscreen) cb_.set_fullscreen(GetBool("fullscreen"));
+    };
+    if (it.index == 2) it.facts.push_back("The launcher stays borderless; the screen changes when the game starts.");
+    return it;
+  }
+
+  // Fullscreen only: the screen's size while the game runs.
+  Item ResolutionItem() {
+    LoadDisplayModes();
+    const auto cur = ParseDisplayMode(Get("kk_fullscreen_mode"));
+    Item it;
+    it.type = ItemType::kChoice;
+    it.label = "Resolution";
+    it.description =
+        "The size your screen switches to while the game runs, at the Refresh rate below. The render quality "
+        "follows it. Applies when the game starts.";
+    std::vector<std::pair<int, int>> sizes;
+    for (const DisplayMode& m : display_modes_) {
+      if (!sizes.empty() && sizes.back() == std::pair<int, int>{m.width, m.height}) continue;
+      sizes.emplace_back(m.width, m.height);
+      it.options.push_back(Size(m.width, m.height));
+    }
+    it.index = -1;
+    for (size_t i = 0; i < sizes.size(); ++i)
+      if (sizes[i] == std::pair<int, int>{cur->width, cur->height}) it.index = int(i);
+    if (it.index < 0) {  // a size this display doesn't have (another monitor's, or the settings file's)
+      it.index = int(sizes.size());
+      sizes.emplace_back(cur->width, cur->height);
+      it.options.push_back(F("{0} (not on this display)", {Size(cur->width, cur->height)}));
+    }
+    it.facts.push_back(F("The game will be shown at {0}.", {Size(cur->width, cur->height)}));
+    const auto desktop = ParseDisplayMode(DesktopModeValue());
+    if (desktop) it.default_text = Size(desktop->width, desktop->height);
+    it.on_choice = [this, sizes, cur](int i) {
+      const auto [w, h] = sizes[size_t(i)];
+      const std::vector<float> rates = RatesAt(w, h);
+      // The rate chosen before when this size has it, else this size's highest.
+      float rate = rates.empty() ? (cur ? cur->refresh : 0.0f) : rates.front();
+      for (const float r : rates)
+        if (cur && std::fabs(r - cur->refresh) < 0.01f) rate = r;
+      Set("kk_fullscreen_mode", DisplayMode{w, h, rate}.Value());
+    };
+    it.on_default = [this] { Set("kk_fullscreen_mode", DesktopModeValue()); };
+    return it;
+  }
+
+  // Fullscreen only: the display's rates at the Resolution's size.
+  Item RefreshRateItem() {
+    const auto cur = ParseDisplayMode(Get("kk_fullscreen_mode"));
+    Item it;
+    it.type = ItemType::kChoice;
+    it.label = "Refresh rate";
+    it.description =
+        "How many times a second your screen refreshes at the Resolution above: your screen's setting. How many "
+        "pictures the game draws a second is the Frame rate, below. Applies when the game starts.";
+    std::vector<float> rates = RatesAt(cur->width, cur->height);
+    if (rates.empty()) rates.push_back(cur->refresh);
+    it.index = -1;
+    for (size_t i = 0; i < rates.size(); ++i) {
+      const DisplayMode m{cur->width, cur->height, rates[i]};
+      it.options.push_back(m.RateLabel());
+      if (std::fabs(rates[i] - cur->refresh) < 0.01f) it.index = int(i);
+    }
+    it.value_text = cur->RateLabel();
+    it.default_text = DisplayMode{cur->width, cur->height, rates.front()}.RateLabel();
+    it.on_choice = [w = cur->width, h = cur->height, rates](int i) {
+      Set("kk_fullscreen_mode", DisplayMode{w, h, rates[size_t(i)]}.Value());
+    };
+    it.on_default = [w = cur->width, h = cur->height, top = rates.front()] {
+      Set("kk_fullscreen_mode", DisplayMode{w, h, top}.Value());
+    };
+    return it;
+  }
+
+  Item MonitorItem() {
+    if (monitors_.empty()) monitors_ = ListMonitors();
+    std::vector<Option> opts = {{"Default", "0"}};
+    for (size_t i = 0; i < monitors_.size(); ++i) {
+      const auto& m = monitors_[i];
+      opts.push_back({F("Display {0}", {std::to_string(i + 1)}) + (m.primary ? " " + T(std::string("(main)")) : "") +
+                          "  " KK_DOT "  " + Size(m.width, m.height),
+                      std::to_string(i + 1)});
+    }
+    return CvarChoice("Monitor", "Which display the game opens on. Applies when the game starts.", "monitor",
+                      std::move(opts));
+  }
+
+  // ----------------------------------------------------------- Graphics ---
+  std::vector<Item> GraphicsItems() {
+    const bool original = GetBool("kk_original_look");
+    std::vector<Item> items;
+    items.push_back(Section("Look"));
+    {
+      Item it = CvarChoice("Look",
+                           "Original is the Xbox 360 version as it was: 720p at 30 FPS, the console's own "
+                           "anti-aliasing and texture filtering, its 69" KK_DEG " field of view, motion blur, screen "
+                           "blur and distance fog, and no ambient occlusion. Remastered gives you the presets, every "
+                           "setting on this page and the frame rate and upscaling on the Display page; chosen at "
+                           "setup, it starts with the preset for your graphics card, 60 FPS and the new GTAO ambient "
+                           "occlusion.",
+                           "kk_original_look", {{"Original Xbox 360", "true"}, {"Remastered", "false"}});
+      it.on_choice = [](int i) { SetOriginalLook(i == 0); };
+      it.on_default = [] { SetOriginalLook(false); };
+      items.push_back(std::move(it));
+    }
+    {
+      Item it;
+      it.type = ItemType::kChoice;
+      it.label = "Preset";
+      it.description =
+          "Quick settings for anti-aliasing, texture filtering and ambient occlusion here, and the upscaler and "
+          "render quality on the Display page. Change any of them yourself and it shows Custom.";
+      for (const auto& p : kGraphicsPresets) it.options.push_back(p.label);
+      it.options.push_back("Custom");
+      const int match = MatchGraphicsPreset();
+      it.index = original ? -1 : match < 0 ? kGraphicsPresetCount : match;
+      it.value_text = "Xbox 360";  // the Original look's own settings
+      it.on_choice = [](int i) {
+        if (i < kGraphicsPresetCount) ApplyGraphicsPreset(i);
+      };
+      it.on_default = [] { ApplyGraphicsPreset(1); };
+      it.default_text = "Medium";
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
 
@@ -2597,21 +2654,6 @@ class Launcher final : public rex::ui::ImGuiDialog {
     const bool original = GetBool("kk_original_look");
     std::vector<Item> items;
     items.push_back(Section("Game"));
-    {
-      std::vector<Option> opts;
-      for (int f : kFrameRateChoices)
-        opts.push_back({f <= 0 ? "Unlimited" : f == 30 ? "30 FPS (Xbox 360)" : std::to_string(f) + " FPS",
-                        std::to_string(f)});
-      const std::string cur = Get("kk_frame_rate");
-      bool listed = false;
-      for (const auto& o : opts) listed = listed || o.value == cur;
-      if (!listed && !cur.empty()) opts.push_back({F("{0} FPS (settings file)", {cur}), cur});
-      Item it = CvarChoice("Frame rate",
-                           "30 matches the Xbox 360 and keeps every animation right. Higher is smoother, but some "
-                           "character animations are not right above 30 yet.",
-                           "kk_frame_rate", opts);
-      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
-    }
     {
       Item it = CvarSlider("Field of view",
                            "How wide the camera sees. 69" KK_DEG " is the original for Jack; Kong, cutscene and other "
@@ -3218,15 +3260,15 @@ class Launcher final : public rex::ui::ImGuiDialog {
   static std::vector<std::string> PageSettings(Page page) {
     switch (page) {
       case kDisplay:
-        return {"fullscreen", "kk_fullscreen_mode", "window_width", "window_height", "monitor",
-                "d3d12_allow_variable_refresh_rate_and_tearing", "present_letterbox"};
+        return {"fullscreen", "kk_fullscreen_mode", "window_width", "window_height", "monitor", "kk_frame_rate",
+                "d3d12_allow_variable_refresh_rate_and_tearing", "present_effect", "kk_render_quality",
+                "resolution_scale", "draw_resolution_scale_x", "draw_resolution_scale_y", "present_letterbox"};
       case kGraphics:
-        return {"kk_original_look", "kk_modern_settings", "present_effect", "kk_render_quality", "resolution_scale",
-                "draw_resolution_scale_x", "draw_resolution_scale_y", "swap_post_effect", "anisotropic_override",
+        return {"kk_original_look", "kk_modern_settings", "swap_post_effect", "anisotropic_override",
                 "kk_motion_blur", "kk_big_blur", "kk_fog", "ao_mode", "ao_strength", "native_ao_method",
                 "native_ao_apply", "native_ao_quality", "kk_renderer"};
       case kGameplay:
-        return {"kk_frame_rate", "kk_fov", "kk_camera_shake", "kk_camera_shake_strength", "kk_show_fps",
+        return {"kk_fov", "kk_camera_shake", "kk_camera_shake_strength", "kk_show_fps",
                 "kk_skip_intros", "user_language"};
       case kControls:
         return {"mnk_mode", "kk_button_prompts", "kk_camera_sensitivity", "kk_camera_modern", "kk_mouse_sensitivity",
