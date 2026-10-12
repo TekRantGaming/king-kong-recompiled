@@ -523,6 +523,10 @@ bool AutoskipPad(uint32_t user, uint8_t* state) {
       }
     }
   }
+  if (static uint16_t last_buttons = 0; buttons != last_buttons) {
+    last_buttons = buttons;
+    if (std::getenv("KK_DEV_PAD_LOG")) REXLOG_INFO("KK dev pad: {:.3f} s buttons {:04X}", (now - g_menu_ms.load()) / 1000.0, buttons);
+  }
   std::memset(state, 0, 16);
   StoreBE<uint32_t>(state, uint32_t(now / 50));  // changes whenever the buttons might
   StoreBE<uint16_t>(state + 4, buttons);
@@ -562,4 +566,12 @@ const bool g_installed = [] {
 }();
 
 }  // namespace
+
+// Seconds since the save menu opened (the clock KK_DEV_SCRIPT and KK_DEV_SHOTS_FROM=menu use), or -1
+// before it has. For other dev aids (dev_frame_log.cpp).
+double DevSecondsSinceMenu() {
+  const int64_t menu = g_menu_ms;
+  return menu < 0 ? -1.0 : (NowMs() - menu) / 1000.0;
+}
+
 }  // namespace kk
