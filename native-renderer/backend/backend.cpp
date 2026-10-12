@@ -517,6 +517,15 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
       };
     }
 #endif
+    // Long game frames in the log, with where the time went (the game's clock takes at most 63 ms a
+    // frame, so a long frame moves the game against real time).
+    threaded_->on_long_frame = [](const ThreadedSink::LongFrame& f) {
+      REXLOG_INFO(
+          "rexgpu-native: long game frame {:.1f} ms: {} calls ({:.1f} ms copying, {:.1f} ms waiting for room, {} "
+          "waiting at its end); ring skimmer waited {} times, {:.1f} ms",
+          f.frame_us / 1000.0, f.calls, f.copy_us / 1000.0, f.room_us / 1000.0, f.backlog, f.fence_waits,
+          f.fence_wait_us / 1000.0);
+    };
     sink = threaded_.get();
     REXLOG_INFO("rexgpu-native: render thread on");
   }

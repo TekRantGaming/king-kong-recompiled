@@ -188,8 +188,26 @@ void ThreadedSink::Enqueue(Command&& command, std::chrono::steady_clock::time_po
   ++stats_.commands;
   queued_.fetch_add(1, std::memory_order_release);
   stats_.enqueue_us += uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(copied - start).count());
+  LongFrame lf;
+  bool report = false;
+  if (present) {
+    const auto now = std::chrono::steady_clock::now();
+    if (last_present_.time_since_epoch().count() != 0) {
+      lf.frame_us = uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(now - last_present_).count());
+      report = on_long_frame && lf.frame_us > long_frame_us;
+      lf.copy_us = stats_.enqueue_us - frame_start_stats_.enqueue_us;
+      lf.room_us = stats_.backpressure_us - frame_start_stats_.backpressure_us;
+      lf.fence_waits = stats_.fence_waits - frame_start_stats_.fence_waits;
+      lf.fence_wait_us = stats_.fence_wait_us - frame_start_stats_.fence_wait_us;
+      lf.calls = stats_.commands - frame_start_stats_.commands;
+      lf.backlog = queue_.size();
+    }
+    last_present_ = now;
+    frame_start_stats_ = stats_;
+  }
   lock.unlock();
   work_cv_.notify_one();
+  if (report) on_long_frame(lf);
 }
 
 void ThreadedSink::WaitDone(uint64_t ticket) {

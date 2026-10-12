@@ -103,6 +103,20 @@ class ThreadedSink final : public DrawSink {
   }
   std::function<void(uint32_t shader, uint32_t microcode, uint32_t declaration)> on_patched;
 
+  // A game frame (Present to Present on the calling thread) longer than long_frame_us: where its
+  // time went, for the log. Runs on the calling thread.
+  struct LongFrame {
+    uint64_t frame_us = 0;
+    uint64_t copy_us = 0;          // the game's thread copying calls
+    uint64_t room_us = 0;          // the game's thread waiting for room in the queue
+    uint64_t fence_waits = 0;      // the ring skimmer waiting for the render thread
+    uint64_t fence_wait_us = 0;
+    uint64_t calls = 0;            // calls queued in the frame
+    uint64_t backlog = 0;          // calls waiting when it ended
+  };
+  std::function<void(const LongFrame&)> on_long_frame;
+  uint64_t long_frame_us = 50000;
+
   // Calls queued so far (a ticket), and a wait until the render thread has run that many.
   uint64_t Ticket() const { return queued_.load(std::memory_order_acquire); }
   void WaitDone(uint64_t ticket);
@@ -147,6 +161,8 @@ class ThreadedSink final : public DrawSink {
   uint64_t done_ = 0;
   bool stop_ = false;
   Stats stats_;
+  Stats frame_start_stats_;  // at the last Present
+  std::chrono::steady_clock::time_point last_present_{};
   std::thread thread_;
 };
 
