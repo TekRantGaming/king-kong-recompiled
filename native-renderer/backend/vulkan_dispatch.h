@@ -11,4 +11,9 @@ namespace nr {
 void InitVulkanDispatch(PFN_vkGetInstanceProcAddr get_instance_proc_addr, VkInstance instance,
                         VkDevice device);
 
+// The loader's entry points the dispatcher was initialised with (null before InitVulkanDispatch), for
+// libraries that take them (the upscalers' SDKs).
+PFN_vkGetInstanceProcAddr VulkanGetInstanceProcAddr();
+PFN_vkGetDeviceProcAddr VulkanGetDeviceProcAddr();
+
 }  // namespace nr

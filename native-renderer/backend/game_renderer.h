@@ -42,6 +42,7 @@
 #include "backend/draw_sink.h"
 #include "backend/driver_pipeline_cache.h"
 #include "backend/frame_log.h"
+#include "backend/game_upscale.h"
 #include "backend/pipeline_cache.h"
 #include "backend/guest_device.h"
 #include "backend/guest_memory.h"
@@ -113,6 +114,11 @@ class GameRenderer {
     // The guest frame's width (the back buffer's pitch): a k_32_FLOAT target of any other pitch
     // is a shadow map.
     uint32_t guest_frame_width = 1280;
+    uint32_t guest_frame_height = 720;
+    // Temporal upscalers (docs/upscalers.md, game_upscale.cpp): off by default. When on, the scene is
+    // drawn at the upscaler's input size (the render scale divided by the mode's ratio), jittered, and
+    // upscaled to the render scale before the post effects and the HUD. Set before Initialize.
+    UpscaleConfig upscale;
     // Debugging: show the texture a resolve wrote at this guest address instead of the frame (0 off).
     uint32_t show_texture = 0;
     // Ambient occlusion (docs/backend.md, "Ambient occlusion"): the settings,
@@ -187,8 +193,11 @@ class GameRenderer {
   // Any target or texture at a scale other than 1 (the pixel shaders must be render scale aware).
   bool scaled() const {
     return options_.render_scale_x != 1.0f || options_.render_scale_y != 1.0f ||
-           (options_.shadow_scale > 0.0f && options_.shadow_scale != 1.0f);
+           (options_.shadow_scale > 0.0f && options_.shadow_scale != 1.0f) ||
+           (upscale_ && (upscale_->in_x != 1.0f || upscale_->in_y != 1.0f));
   }
+  // The temporal upscaler's state (null when off; tests and logging).
+  const GameUpscale* upscale() const { return upscale_.get(); }
   const Stats& stats() const { return stats_; }
 
   // Pipeline stutter (docs/backend.md, "Stutter counter"): frames in which a draw waited for its
@@ -313,21 +322,33 @@ class GameRenderer {
     float scale_x = 1.0f, scale_y = 1.0f;
     bool depth = false;
     uint64_t key = 0;
+    // Upscalers: the output generation (the targets after the upscale point, at the output size; the
+    // key has kOutputGeneration), the renderer frame the target was last used in, and the frame its
+    // contents were last carried over from the other generation.
+    bool output_gen = false;
+    uint64_t used_frame = UINT64_MAX, migrated_frame = UINT64_MAX;
   };
+  static constexpr uint64_t kOutputGeneration = 1ull << 62;
+  // A target's key (the input generation's; the output generation's has kOutputGeneration as well).
+  static uint64_t TargetKeyOf(bool depth, uint32_t edram_base, uint32_t pitch, uint32_t format);
   struct Scale {
     float x = 1.0f, y = 1.0f;
   };
-  // The scale of the targets with this pitch (shadow maps have their own).
-  Scale ScaleFor(bool depth, uint32_t pitch, uint32_t format);
+  // The scale of the targets with this pitch (shadow maps have their own) in a generation (upscalers:
+  // the input generation is the upscaler's input size).
+  Scale ScaleFor(bool depth, uint32_t pitch, uint32_t format, bool output_gen = true);
   static int32_t ScaleCoord(int32_t v, float s) { return s == 1.0f ? v : int32_t(std::lround(double(v) * s)); }
   static nvrhi::Rect ScaleRect(const nvrhi::Rect& r, float sx, float sy) {
     return nvrhi::Rect(ScaleCoord(r.minX, sx), ScaleCoord(r.maxX, sx), ScaleCoord(r.minY, sy),
                        ScaleCoord(r.maxY, sy));
   }
   std::unordered_set<uint32_t> shadow_pitches_;
+  // generation: -1 the current one (upscalers: the input generation before the upscale point, the
+  // output one after it and in frames without a scene), 0 input, 1 output. Without an upscaler there
+  // is one generation.
   HostTarget* GetTarget(bool depth, uint32_t edram_base, uint32_t pitch, uint32_t format,
-                        uint32_t height);
-  HostTarget* FindTarget(bool depth, uint32_t edram_base, uint32_t pitch, uint32_t format);
+                        uint32_t height, int generation = -1);
+  HostTarget* FindTarget(bool depth, uint32_t edram_base, uint32_t pitch, uint32_t format, int generation = -1);
   static nvrhi::Format ColorTargetFormat(uint32_t format);
   kknr::TextureOptions TextureOptions() const {
     kknr::TextureOptions o;
@@ -355,7 +376,20 @@ class GameRenderer {
     // (other format or size): the converted copy and the write it holds.
     const HostTexture* alias_source = nullptr;
     uint64_t alias_serial = 0;
+    // Upscalers: the same resolved texture at the other scale (the scene copy is resolved at the
+    // input size before the upscale point and at the output size after it, every frame), kept so the
+    // two are not made again each time. Owned; released with this one.
+    HostTexture* twin = nullptr;
   };
+  // The host texture a resolve writes for this plan at this scale: the entry's, its twin swapped in,
+  // or a new one (the old one becoming the twin when only the scale differs).
+  HostTexture* ResolveDestTexture(kknr::TextureCache::Entry& entry, const kknr::HostTexturePlan& plan, bool drawable,
+                                  float scale_x, float scale_y);
+  // The copy part of a resolve (Resolve, and the upscale point's copies again): source rectangle in
+  // guest pixels, into the texture of `fetch`. True when copied.
+  bool ResolveCopy(nvrhi::ICommandList* cl, HostTarget* source, bool from_depth, uint32_t format, int32_t sx,
+                   int32_t sy, int32_t w, int32_t h, const kknr::TextureFetch& fetch, int32_t dx, int32_t dy,
+                   uint32_t level, uint32_t slice);
   // The texture at a resolved texture's address seen through another fetch
   // constant (the light shafts read the depth resolve's k_24_8 memory as
   // k_8_8_8_8): a converted copy of the resolve's texture.
@@ -383,7 +417,8 @@ class GameRenderer {
   std::deque<std::pair<uint64_t, nvrhi::ResourceHandle>> retired_resources_;  // (frame, resource)
   uint32_t TextureView(HostTexture* host, const kknr::TextureFetch& fetch,
                        kkshaders::TextureDimension dimension, bool base_map);
-  uint32_t BindSampler(const uint32_t words[6], const kkshaders::SamplerBinding& binding);
+  // extra_lod_bias: added to the fetch constant's (the upscalers' mip bias for the scene's draws).
+  uint32_t BindSampler(const uint32_t words[6], const kkshaders::SamplerBinding& binding, float extra_lod_bias = 0.0f);
   struct HostBuffer {
     nvrhi::BufferHandle buffer;
     uint32_t slot = 0;  // kBuffers descriptor (vertex data)
@@ -412,8 +447,11 @@ class GameRenderer {
                                         nvrhi::IFramebuffer* framebuffer, uint64_t key, bool async = false) {
     return GetPipeline(desc, framebuffer->getFramebufferInfo(), key, async);
   }
+  // optional: an extra pass's pipeline (the upscalers' motion pass): made on the workers like a draw's,
+  // but never waited for and never counted as stutter.
   nvrhi::IGraphicsPipeline* GetPipeline(const nvrhi::GraphicsPipelineDesc& desc,
-                                        const nvrhi::FramebufferInfo& framebuffer, uint64_t key, bool async = false);
+                                        const nvrhi::FramebufferInfo& framebuffer, uint64_t key, bool async = false,
+                                        bool optional = false);
   void BuildPipelineDesc(const PipelineRecord& record, nvrhi::IShader* vs, nvrhi::IShader* ps,
                          nvrhi::GraphicsPipelineDesc& desc, nvrhi::FramebufferInfo& framebuffer) const;
   bool IsPending(uint64_t key);
@@ -598,6 +636,46 @@ class GameRenderer {
   kknr::BufferCache vertex_buffers_;
   kknr::BufferCache index_buffers_;
   std::unordered_map<uint64_t, std::pair<nvrhi::SamplerHandle, uint32_t>> samplers_;
+
+  // ---- temporal upscalers (game_upscale.cpp, docs/upscalers.md). upscale_ is null when off; the
+  // hooks are called from Initialize, Draw, Clear, Resolve, Present and EndFrame.
+  std::unique_ptr<GameUpscale> upscale_;
+  nvrhi::ICommandList* current_cl_ = nullptr;  // the call's command list (target migration in GetTarget)
+  bool UpscaleSetup();          // before the layouts: the upscaler and the input scale
+  bool UpscaleInitialize();     // after them: the passes
+  bool OutputGeneration() const;  // which generation the current phase draws into
+  void UpscaleNewFrame(uint64_t frame);  // the per-frame state, at the frame's first call
+  struct UpscaleDraw {
+    bool jitter = false, motion = false, scene_phase = false;
+  };
+  // Before a draw takes its targets: classify it, take the upscale point if it is due (recorded into
+  // `cl` before the draw) and say whether it is jittered and replayed by the motion pass.
+  UpscaleDraw UpscaleBeginDraw(nvrhi::ICommandList* cl, const DrawCall& call, const dev::DeviceView& d, uint32_t pitch,
+                               uint32_t height, uint64_t color_key, uint64_t depth_key, bool writes_color,
+                               const GameShader& vs, const GameShader* ps);
+  // A draw for the motion pass (the draw's full state once it is ready to be drawn).
+  void UpscaleRecordMotion(const DrawCall& call, const dev::DeviceView& d, const std::shared_ptr<const GameShader>& vs,
+                           const kkshaders::DrawConstants& dc, const PipelineRecord& record,
+                           const nvrhi::GraphicsState& gs, const nvrhi::DrawArguments& args, bool indexed);
+  void UpscaleBeginClear(nvrhi::ICommandList* cl, const ClearCall& call, uint64_t color_key, uint64_t depth_key,
+                         bool covers_target);
+  void UpscaleBeginResolve(nvrhi::ICommandList* cl, const ResolveCall& call, uint64_t source_key, bool clears_color);
+  void UpscaleAfterResolve(const ResolveCall& call, const HostTarget* source, bool from_depth, uint32_t format,
+                           int32_t sx, int32_t sy, int32_t w, int32_t h, const kknr::TextureFetch* fetch, bool copied);
+  // At Present: the upscale point if the frame has a scene and did not reach it; a frame without a
+  // scene drawn at the input size is carried to the output size.
+  void UpscaleBeginPresent(nvrhi::ICommandList* cl);
+  void UpscaleEndFrame();
+  void RunUpscale(nvrhi::ICommandList* cl, UpscaleFrameTracker::Trigger trigger);
+  // A target of the output generation first used after the upscale point whose input twin holds
+  // this frame's picture: that picture, stretched (colour) or point-sampled (depth).
+  void MigrateTarget(nvrhi::ICommandList* cl, HostTarget* target);
+  // The upscalers' full-screen passes (upscale.hlsl), into `color` (and `depth`) over `rect`.
+  bool UpscalePass(nvrhi::ICommandList* cl, nvrhi::IShader* ps, const void* params, uint32_t params_size,
+                   nvrhi::ITexture* source0, nvrhi::ITexture* source1, nvrhi::ITexture* color0,
+                   nvrhi::ITexture* color1, nvrhi::ITexture* depth, const nvrhi::Rect& rect, uint64_t key);
+  void UpscaleMotionPass(nvrhi::ICommandList* cl, HostTarget* depth_target);
+  void UpscaleLogStats();
   std::function<void(uint32_t, uint32_t)> watch_;
   // The ranges watched now (start -> end, overlapping ones merged), for OnGuestWrite.
   std::mutex watched_mutex_;

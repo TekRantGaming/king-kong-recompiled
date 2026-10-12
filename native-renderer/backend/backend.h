@@ -28,6 +28,7 @@
 #include "backend/host_device.h"
 #include "backend/render_thread.h"
 #include "backend/renderer.h"
+#include "backend/upscale_config.h"
 
 namespace rex::memory {
 class Memory;
@@ -99,6 +100,8 @@ struct GameSettings {
   AoConfig ao;
   // Screen-space global illumination (docs/gi.md): --native_gi and the rest. Off by default.
   GiConfig gi;
+  // Temporal upscalers (docs/upscalers.md): --native_upscaler and its settings. Off by default.
+  UpscaleConfig upscale;
 };
 
 class Backend {

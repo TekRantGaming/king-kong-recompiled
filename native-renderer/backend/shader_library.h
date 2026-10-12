@@ -14,11 +14,14 @@
 // thread.
 #pragma once
 
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
+#include <vector>
 
 #include <nvrhi/nvrhi.h>
 
@@ -88,6 +91,19 @@ class ShaderLibrary {
   Stats stats() const;
   bool pack_open() const { return pack_open_; }
 
+  // Upscalers (docs/upscalers.md): the motion variant of a vertex shader (its body run with this
+  // frame's and last frame's constants, kkshaders::makeMotionVertexShader), translated and compiled
+  // with DXC on a thread of its own the first time it is asked for. Null until it is ready, and when it
+  // cannot be made (no DXC, a shader parsed without its container). Never waits.
+  nvrhi::IShader* MotionVariant(const GameShader& vs);
+  // Blocks until every motion variant asked for so far is made or failed (tests).
+  void WaitForMotionVariants();
+  struct MotionStats {
+    uint64_t requested = 0, made = 0, failed = 0;
+    double compile_ms = 0;
+  };
+  MotionStats motion_stats() const;
+
  private:
   std::shared_ptr<GameShader> Build(const kkshaders::ShaderInfo& info);
   // The common tail: the host shader from a compiled blob, registered under (kind, hash).
@@ -119,6 +135,20 @@ class ShaderLibrary {
   std::unordered_map<uint64_t, bool> failed_;
   uint32_t next_id_ = 1;
   Stats stats_;
+
+  // Motion variants: key -> shader (null while it is made or when it failed), the queue, the thread.
+  void MotionWorker();
+  struct MotionEntry {
+    nvrhi::ShaderHandle handle;
+    bool done = false;
+  };
+  mutable std::mutex motion_mutex_;
+  std::condition_variable motion_cv_;
+  std::unordered_map<uint64_t, MotionEntry> motion_;
+  std::vector<std::pair<uint64_t, std::shared_ptr<const kkshaders::ShaderInfo>>> motion_queue_;
+  std::thread motion_thread_;
+  bool motion_stop_ = false;
+  MotionStats motion_stats_;
 };
 
 }  // namespace nr

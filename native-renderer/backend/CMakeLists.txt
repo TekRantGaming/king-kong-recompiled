@@ -20,6 +20,11 @@ add_library(nr_draw STATIC
     ao_config.cpp
     # Screen-space GI (docs/gi.md): the settings.
     gi_config.cpp
+    # Temporal upscalers (docs/upscalers.md): settings, jitter, motion matching, the upscale point.
+    upscale_config.cpp
+    upscale_jitter.cpp
+    upscale_motion.cpp
+    upscale_frame.cpp
 )
 target_include_directories(nr_draw PUBLIC "${NR_ROOT}")
 target_compile_features(nr_draw PUBLIC cxx_std_20)
@@ -44,14 +49,21 @@ if(NR_GAME_RENDERER)
         game_passes.cpp
         game_frame_log.cpp
         game_ao.cpp
+        game_upscale.cpp
         scene_ao.cpp
         game_gi.cpp
         scene_gi.cpp
         shader_library.cpp
         pipeline_prewarm.cpp
+        # Temporal upscalers (docs/upscalers.md): the choice, and each SDK (loaded at run time).
+        upscaler.cpp
+        upscaler_ffx.cpp
+        upscaler_dlss.cpp
+        upscaler_xess.cpp
     )
     target_link_libraries(nr_renderer PUBLIC kknr_resources kkshaders)
     target_compile_definitions(nr_renderer PUBLIC NR_GAME_RENDERER=1)
+    include("${NR_ROOT}/cmake/upscalers.cmake")
 else()
     target_compile_definitions(nr_renderer PUBLIC NR_GAME_RENDERER=0)
 endif()

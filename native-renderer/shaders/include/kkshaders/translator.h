@@ -80,6 +80,19 @@ struct TranslateOptions {
 };
 TranslateResult translate(const ShaderInfo& info, const TranslateOptions& options);
 
+// Motion vectors for the temporal upscalers (docs/upscalers.md): a translated vertex shader turned into
+// its motion variant. The body runs twice, once as it is and once with every float constant read from
+// last frame's constants (KKMotionConstants at b5 space 0, abi.h MotionConstants); the variant outputs
+// the position (SV_Position, for the rasteriser and the depth test), both clip positions
+// (KKMOTION0: this frame's, KKMOTION1: last frame's, before Vulkan's y inversion) and the clip
+// distances. Its other outputs are dropped. Works on the HLSL text translate() produced.
+struct MotionShader {
+    bool ok = false;
+    std::string error;
+    std::string hlsl;
+};
+MotionShader makeMotionVertexShader(const std::string& translated);
+
 // Bindings to / from bytes (cache entries).
 std::vector<uint8_t> serializeBindings(const ShaderBindings& bindings);
 bool deserializeBindings(const uint8_t* data, size_t size, ShaderBindings& out);

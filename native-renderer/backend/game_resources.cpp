@@ -37,6 +37,10 @@ struct MsTimer {
 
 // ---------------------------------------------------------------- targets
 
+uint64_t GameRenderer::TargetKeyOf(bool depth, uint32_t edram_base, uint32_t pitch, uint32_t format) {
+  return TargetKey(depth, edram_base, pitch, format);
+}
+
 nvrhi::Format GameRenderer::ColorTargetFormat(uint32_t format) {
   // xenos::ColorRenderTargetFormat -> host (docs/formats.md, render targets;
   // the 16-bit fixed formats as floats: their -32..32 range does not fit a
@@ -46,28 +50,41 @@ nvrhi::Format GameRenderer::ColorTargetFormat(uint32_t format) {
 }
 
 GameRenderer::HostTarget* GameRenderer::FindTarget(bool depth, uint32_t edram_base, uint32_t pitch,
-                                                   uint32_t format) {
-  auto it = targets_.find(TargetKey(depth, edram_base, pitch, format));
+                                                   uint32_t format, int generation) {
+  const bool out = upscale_ && (generation < 0 ? OutputGeneration() : generation == 1);
+  auto it = targets_.find(TargetKey(depth, edram_base, pitch, format) | (out ? kOutputGeneration : 0));
   return it == targets_.end() ? nullptr : it->second.get();
 }
 
-GameRenderer::Scale GameRenderer::ScaleFor(bool depth, uint32_t pitch, uint32_t format) {
+GameRenderer::Scale GameRenderer::ScaleFor(bool depth, uint32_t pitch, uint32_t format, bool output_gen) {
   // Shadow maps: k_32_FLOAT colour targets that are not the frame's size, and the depth
   // buffers of that pitch (every attachment of a draw has one size).
   if (!depth && format == 14 && pitch != options_.guest_frame_width) shadow_pitches_.insert(pitch);
   if (options_.shadow_scale > 0.0f && shadow_pitches_.count(pitch)) return {options_.shadow_scale, options_.shadow_scale};
   // --native_debug bit 32: only the frame-wide targets scale (to find a pass that breaks).
   if ((options_.debug & 32) && pitch != options_.guest_frame_width) return {1.0f, 1.0f};
+  // Upscalers: the scene's targets are the input size before the upscale point; shadow maps keep the
+  // output's scale (their resolution is not the upscaler's to recover).
+  if (upscale_ && !output_gen && !shadow_pitches_.count(pitch)) return {upscale_->in_x, upscale_->in_y};
   return {options_.render_scale_x, options_.render_scale_y};
 }
 
 GameRenderer::HostTarget* GameRenderer::GetTarget(bool depth, uint32_t edram_base, uint32_t pitch,
-                                                  uint32_t format, uint32_t height) {
+                                                  uint32_t format, uint32_t height, int generation) {
   MsTimer timer(stats_.target_ms);
-  const uint64_t key = TargetKey(depth, edram_base, pitch, format);
+  const bool out = upscale_ && (generation < 0 ? OutputGeneration() : generation == 1);
+  const uint64_t key = TargetKey(depth, edram_base, pitch, format) | (out ? kOutputGeneration : 0);
   auto& slot = targets_[key];
   if (slot && slot->height >= height) {
-    if (slot->scale_x == ScaleFor(depth, pitch, format).x) return slot.get();
+    if (slot->scale_x == ScaleFor(depth, pitch, format, !upscale_ || out).x) {
+      if (upscale_) {
+        // A target of the output generation first used after the upscale point gets its input
+        // twin's picture of this frame (MigrateTarget does nothing otherwise).
+        if (out && current_cl_ && upscale_->upscaled) MigrateTarget(current_cl_, slot.get());
+        slot->used_frame = frame_;
+      }
+      return slot.get();
+    }
   }
   // New, or taller than before (the old contents are lost; this happens once
   // per placement as the game's surfaces are first seen).
@@ -76,7 +93,8 @@ GameRenderer::HostTarget* GameRenderer::GetTarget(bool depth, uint32_t edram_bas
   t->depth = depth;
   t->width = pitch;
   t->height = std::max(height, slot ? slot->height : 0u);
-  const Scale scale = ScaleFor(depth, pitch, format);
+  const Scale scale = ScaleFor(depth, pitch, format, !upscale_ || out);
+  t->output_gen = out;
   t->scale_x = scale.x;
   t->scale_y = scale.y;
   t->host_width = uint32_t(std::max(ScaleCoord(int32_t(t->width), scale.x), 1));
@@ -104,8 +122,16 @@ GameRenderer::HostTarget* GameRenderer::GetTarget(bool depth, uint32_t edram_bas
     framebuffers_.clear();
     blit_sets_.erase(slot->texture.Get());
     RetireResource(slot->texture);
+    if (upscale_) {
+      upscale_->framebuffers.clear();
+      upscale_->pass_sets.clear();
+    }
   }
   slot = std::move(t);
+  if (upscale_) {
+    slot->used_frame = frame_;
+    if (out && current_cl_ && upscale_->upscaled) MigrateTarget(current_cl_, slot.get());
+  }
   return slot.get();
 }
 
@@ -194,8 +220,49 @@ GameRenderer::HostTexture* GameRenderer::CreateHostTexture(const kknr::HostTextu
   return host.release();
 }
 
+GameRenderer::HostTexture* GameRenderer::ResolveDestTexture(kknr::TextureCache::Entry& entry,
+                                                            const kknr::HostTexturePlan& plan, bool drawable,
+                                                            float scale_x, float scale_y) {
+  if (!drawable) scale_x = scale_y = 1.0f;
+  auto fits = [&](const HostTexture* h) {
+    return h && h->render_target && h->plan.format == plan.format && h->plan.width == plan.width &&
+           h->plan.height == plan.height && h->plan.levels == plan.levels && h->plan.layers == plan.layers &&
+           h->plan.dimension == plan.dimension;
+  };
+  auto* host = static_cast<HostTexture*>(entry.host);
+  if (fits(host) && host->scale_x == scale_x && host->scale_y == scale_y) return host;
+  if (upscale_ && fits(host)) {
+    // Only the scale differs (the scene copy before and after the upscale point): swap in the twin of
+    // the other scale, or make it and keep this one as the twin.
+    HostTexture* twin = host->twin;
+    if (fits(twin) && twin->scale_x == scale_x && twin->scale_y == scale_y) {
+      host->twin = nullptr;
+      twin->twin = host;
+      entry.host = twin;
+      return twin;
+    }
+    if (twin) ReleaseHostTexture(twin);
+    host->twin = nullptr;
+    HostTexture* made = CreateHostTexture(plan, drawable, scale_x, scale_y);
+    if (made) {
+      made->twin = host;
+      entry.host = made;
+    }
+    return made;
+  }
+  ReleaseHostTexture(host);
+  host = CreateHostTexture(plan, drawable, scale_x, scale_y);
+  entry.host = host;
+  return host;
+}
+
 void GameRenderer::ReleaseHostTexture(HostTexture* host) {
   if (!host) return;
+  if (host->twin) {
+    HostTexture* twin = host->twin;
+    host->twin = nullptr;
+    ReleaseHostTexture(twin);
+  }
   for (const auto& [view, index] : host->views) {
     const uint32_t slot = index & 0x7FFFFFFF;
     const uint32_t dim = (view >> 12) & 3;
@@ -405,7 +472,7 @@ GameRenderer::HostTexture* GameRenderer::AliasTexture(nvrhi::ICommandList* cl, k
 
 // ---------------------------------------------------------------- samplers
 
-uint32_t GameRenderer::BindSampler(const uint32_t words[6], const kkshaders::SamplerBinding& b) {
+uint32_t GameRenderer::BindSampler(const uint32_t words[6], const kkshaders::SamplerBinding& b, float extra_lod_bias) {
   const kknr::TextureFetch f = kknr::TextureFetch::FromWords(words);
   const uint32_t mag = b.magFilter == 3 ? f.MagFilter() : b.magFilter;
   const uint32_t min = b.minFilter == 3 ? f.MinFilter() : b.minFilter;
@@ -415,7 +482,10 @@ uint32_t GameRenderer::BindSampler(const uint32_t words[6], const kkshaders::Sam
   const uint32_t key = f.ClampX() | f.ClampY() << 3 | f.ClampZ() << 6 | (mag & 3) << 9 | (min & 3) << 11 |
                        (mip & 3) << 13 | (aniso & 7) << 15 | (f.BorderColor() & 3) << 18 |
                        (uint32_t(f.LodBiasFixed()) & 0x3FF) << 20;
-  auto it = samplers_.find(key);
+  // The upscalers' bias, in 1/32 steps (as the fetch constant's), above the 32 bits of the rest.
+  const int32_t extra = int32_t(std::lround(extra_lod_bias * 32.0f));
+  const uint64_t key64 = uint64_t(key) | (uint64_t(uint16_t(int16_t(extra))) << 32);
+  auto it = samplers_.find(key64);
   if (it != samplers_.end()) return it->second.second;
   auto address = [](uint32_t clamp) {
     switch (clamp) {
@@ -437,7 +507,7 @@ uint32_t GameRenderer::BindSampler(const uint32_t words[6], const kkshaders::Sam
   sd.minFilter = (min & 1) != 0;
   sd.mipFilter = (mip & 3) == 1;
   if (aniso >= 2 && aniso <= 5 && sd.minFilter) sd.maxAnisotropy = float(1u << (aniso - 1));
-  sd.mipBias = float(f.LodBiasFixed()) / 32.0f;
+  sd.mipBias = float(f.LodBiasFixed()) / 32.0f + float(extra) / 32.0f;
   sd.borderColor = f.BorderColor() == 1 ? nvrhi::Color(1.0f) : nvrhi::Color(0.0f);
   nvrhi::SamplerHandle sampler = device_->createSampler(sd);
   uint32_t slot = 0;
@@ -445,7 +515,7 @@ uint32_t GameRenderer::BindSampler(const uint32_t words[6], const kkshaders::Sam
     slot = AllocateSlot(kSamplers);
     if (slot) WriteSlot(kSamplers, nvrhi::BindingSetItem::Sampler(slot, sampler));
   }
-  samplers_[key] = {sampler, slot};
+  samplers_[key64] = {sampler, slot};
   return slot;
 }
 

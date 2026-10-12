@@ -89,3 +89,14 @@ if(NR_PLUGIN_COPY_BESIDE AND NR_GAME_RENDERER)
                         "without it the launcher cannot build the shader pack and the game renderer has no shaders")
     endif()
 endif()
+# The upscalers' runtime files (cmake/upscalers.cmake, docs/upscalers.md "What a release ships"): beside
+# the game, at the top level (the launcher's updater installs nothing in subfolders but glyphs/ and
+# launcher_art/).
+get_property(_nr_up_runtime GLOBAL PROPERTY NR_UPSCALER_RUNTIME_FILES)
+if(NR_PLUGIN_COPY_BESIDE AND _nr_up_runtime)
+    foreach(_f IN LISTS _nr_up_runtime)
+        get_filename_component(_name "${_f}" NAME)
+        add_custom_command(TARGET rexgpu-native POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_f}" $<TARGET_FILE_DIR:${NR_PLUGIN_COPY_BESIDE}>/${_name})
+    endforeach()
+endif()

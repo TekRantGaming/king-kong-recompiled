@@ -5,11 +5,36 @@
 # The headers are checked in so the build needs no shader compiler.
 #
 # Usage: compile_shaders.ps1 -Dxc <path\dxc.exe>
-param([Parameter(Mandatory = $true)][string]$Dxc)
+#        compile_shaders.ps1 -Dxc <path\dxc.exe> -Only upscale   (one group: base, ao, gtao, upscale)
+param([Parameter(Mandatory = $true)][string]$Dxc, [string]$Only = "")
 $ErrorActionPreference = "Stop"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $out = Join-Path $here "generated"
 New-Item -ItemType Directory -Force $out | Out-Null
+function Compile-Entries([string]$src, [string[]]$specs, [bool]$shift = $true) {
+    # $shift: NVRHI's default Vulkan binding offsets; without: the translated shaders' mapping (the
+    # register is the binding), for a pixel shader drawn with a game vertex shader.
+    $shifts = if ($shift) { @("-fvk-t-shift", "0", "0", "-fvk-s-shift", "128", "0", "-fvk-b-shift", "256", "0", "-fvk-u-shift", "384", "0") } else { @() }
+    foreach ($spec in $specs) {
+        $base, $stage, $entry = $spec.Split(":")
+        & $Dxc -nologo -T "${stage}_6_0" -E $entry -O3 -Fh (Join-Path $out "${base}_dxil.h") -Vn "k_${base}_dxil" $src
+        if ($LASTEXITCODE -ne 0) { throw "dxc (DXIL) failed on $src $entry" }
+        & $Dxc -nologo -T "${stage}_6_0" -E $entry -O3 -spirv "-fspv-target-env=vulkan1.2" @shifts `
+            -Fh (Join-Path $out "${base}_spirv.h") -Vn "k_${base}_spirv" $src
+        if ($LASTEXITCODE -ne 0) { throw "dxc (SPIR-V) failed on $src $entry" }
+    }
+}
+# Temporal upscalers (upscale.hlsl, docs/upscalers.md): one blob per entry point. The object motion
+# pixel shader runs with the translated vertex shaders' motion variants: their binding mapping.
+if ($Only -eq "" -or $Only -eq "upscale") {
+    $up = Join-Path $here "upscale.hlsl"
+    Compile-Entries $up @("up_vs:vs:vs_main", "up_camera_ps:ps:ps_camera_motion", "up_reactive_ps:ps:ps_reactive",
+        "up_depth_ps:ps:ps_depth_upsample", "up_stretch_ps:ps:ps_stretch", "up_show_motion_ps:ps:ps_show_motion")
+    Compile-Entries $up @("up_object_ps:ps:ps_object_motion") $false
+}
+if ($Only -ne "" -and $Only -ne "base") {
+    if ($Only -eq "upscale") { Write-Host "Shaders written to $out"; exit 0 }
+}
 foreach ($name in @("triangle", "placeholder", "blit", "clear")) {
     $src = Join-Path $here "$name.hlsl"
     foreach ($stage in @("vs", "ps")) {

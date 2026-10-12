@@ -20,4 +20,8 @@ void InitVulkanDispatch(PFN_vkGetInstanceProcAddr get_instance_proc_addr, VkInst
   }
 }
 
+PFN_vkGetInstanceProcAddr VulkanGetInstanceProcAddr() { return VULKAN_HPP_DEFAULT_DISPATCHER.vkGetInstanceProcAddr; }
+
+PFN_vkGetDeviceProcAddr VulkanGetDeviceProcAddr() { return VULKAN_HPP_DEFAULT_DISPATCHER.vkGetDeviceProcAddr; }
+
 }  // namespace nr
