@@ -11,6 +11,9 @@
 // opened, buttons joined by '+', optional "/hold seconds" (default 0.12).
 // Buttons: A B X Y START BACK UP DOWN LEFT RIGHT LB RB LT RT LS RS.
 //
+// KK_DEV_FREEZE_SKIP=<seconds> (with KK_DEV_AUTOSKIP): a freeze longer than that (no pad read) does not
+// count on the script clock (see SkipFreezes).
+//
 // KK_DEV_WANDER=1 (with KK_DEV_AUTOSKIP): after that, keeps walking forward
 // while slowly turning the camera, jumping now and then, so a test run moves
 // through the level and loads new areas, effects and shaders.
@@ -182,6 +185,33 @@ double MenuSeconds(int64_t now) {
     REXLOG_INFO("KK dev: the script follows the game's clock from {:.3f} s (it is {:.3f} s behind)", real, real - game);
   }
   return on_game_clock ? game + lag : real;
+}
+
+// KK_DEV_FREEZE_SKIP=<seconds>[,<until>]: when the game reads no pad for longer than <seconds> (a freeze),
+// the script and shot clock leave the freeze out, so the presses after it still meet the screens they were
+// written for. With <until>, only before that many seconds after the save menu opened (the menus): some loads
+// read no pad for a minute (Venture's opening), and those must stay on the clock. Off by default.
+std::atomic<int64_t> g_skipped_ms{0};
+int64_t ScriptNowMs() { return NowMs() - g_skipped_ms.load(); }
+void SkipFreezes(int64_t raw) {
+  static const int64_t limit_ms = [] {
+    const char* v = std::getenv("KK_DEV_FREEZE_SKIP");
+    return v && *v ? int64_t(std::atof(v) * 1000.0) : int64_t(0);
+  }();
+  static const int64_t until_ms = [] {
+    const char* v = std::getenv("KK_DEV_FREEZE_SKIP");
+    const char* comma = v ? std::strchr(v, ',') : nullptr;
+    return comma ? int64_t(std::atof(comma + 1) * 1000.0) : int64_t(-1);
+  }();
+  static int64_t last = -1;
+  const int64_t menu = g_menu_ms.load();
+  const bool in_window = until_ms < 0 || menu < 0 || (last - g_skipped_ms.load()) - menu < until_ms;
+  if (limit_ms > 0 && last >= 0 && raw - last > limit_ms && in_window) {
+    g_skipped_ms += raw - last - 33;  // count the freeze as one frame
+    REXLOG_WARN("KK dev: no pad read for {} ms; the script clock leaves it out ({} ms in all)", raw - last,
+                g_skipped_ms.load());
+  }
+  last = raw;
 }
 
 template <typename T>
@@ -496,7 +526,8 @@ bool AutoskipPad(uint32_t user, uint8_t* state) {
     return u && *u ? uint32_t(std::atoi(u)) : 0u;
   }();
   if (user != pad_user) return false;
-  const int64_t now = NowMs();
+  SkipFreezes(NowMs());
+  const int64_t now = ScriptNowMs();
   if (g_done) {
     static const int64_t done_ms = now;
     const double since_menu = MenuSeconds(now);
@@ -590,7 +621,7 @@ const bool g_installed = [] {
   const char* w = std::getenv("KK_DEV_WANDER");
   g_wander = w && *w && *w != '0';
   g_wander_calm = w && *w == '2';
-  OnSaveMenuShown([] { g_menu_ms = NowMs(); });
+  OnSaveMenuShown([] { g_menu_ms = ScriptNowMs(); });
   return true;
 }();
 
@@ -600,7 +631,7 @@ const bool g_installed = [] {
 // before it has. For other dev aids (dev_frame_log.cpp).
 double DevSecondsSinceMenu() {
   const int64_t menu = g_menu_ms;
-  return menu < 0 ? -1.0 : (NowMs() - menu) / 1000.0;
+  return menu < 0 ? -1.0 : (ScriptNowMs() - menu) / 1000.0;
 }
 
 }  // namespace kk

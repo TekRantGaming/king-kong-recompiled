@@ -7,6 +7,8 @@
   tests\run.ps1 -Plugin native -Scenes all          # capture with rexgpu-native, compare, write the report
   tests\run.ps1 -Plugin xenos -Golden -Force        # (re)capture the golden set with today's renderer
   tests\run.ps1 -Plugin xenos -Scenes title,pause   # a few scenes only (scene or run names)
+  tests\run.ps1 -Plugin native -Tour                # the chapter tour (tests/tour.json): all 42 chapters
+  tests\run.ps1 -Tour -RecordPipelines              # the tour on the native plugin, recording every pipeline
 
   Exit codes: 0 pass, 1 fail, 2 missing frames, 3 the game was busy, 4 setup error. See docs/testing.md.
 #>
@@ -25,12 +27,14 @@ param(
   [string]$CacheRoot = 'F:\KK-native-renderer\cache',
   [string]$LockFile = 'F:\KK-native-renderer\game.lock',
   [string]$LockName = 'tests/run.ps1',
-  # Fair turns: the name of this runner's file in -QueueDir (empty: no queue). See game.wait\README.txt.
-  [string]$QueueName = '',
-  [string]$QueueDir = 'F:\KK-native-renderer\game.wait',
   [int]$WaitMinutes = 0,
   # Seconds between two checks while waiting for the game (another runner may be using it).
   [int]$WaitPollSeconds = 300,
+  # Minutes to wait after each launch before the next one, so others sharing the game get a turn.
+  [double]$PauseMinutes = 0,
+  # Fair turns: the name of this runner's file in -QueueDir (empty: no queue). See game.wait\README.txt.
+  [string]$QueueName = '',
+  [string]$QueueDir = 'F:\KK-native-renderer\game.wait',
   [string]$Label = '',
   [string]$Python = 'python',
   [switch]$NoCompare,
@@ -38,14 +42,33 @@ param(
   # Extra game arguments for every launch (for example --native_dump_frame=200).
   [string[]]$ExtraArgs = @(),
   # Another scene file than tests/scenes.json (probes for new scenes).
-  [string]$ScenesFile = ''
+  [string]$ScenesFile = '',
+  # The chapter tour: tests/tour.json (every chapter-select entry, several chapters per launch).
+  [switch]$Tour,
+  # Native plugin with its pipeline cache recording into a fresh file per launch; the files are collected in
+  # <run folder>\pipelines\<run>.pipelines (a prewarm list for every chapter played).
+  [switch]$RecordPipelines
 )
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $compare = Join-Path $PSScriptRoot 'compare.py'
 # -Scenes title,pause arrives as an array from PowerShell and as one "title,pause" string from cmd or bash.
 $SceneList = ($Scenes -join ',')
-if (-not $Exe) { $Exe = Join-Path $repo 'kk\out\build\kk-dev\king_kong.exe' }
+if ($Tour -and -not $ScenesFile) { $ScenesFile = Join-Path $PSScriptRoot 'tour.json' }
+if ($RecordPipelines) {
+  if ($PSBoundParameters.ContainsKey('Plugin') -and $Plugin -ne 'native') {
+    Write-Output '-RecordPipelines needs the native plugin'; exit 4
+  }
+  $Plugin = 'native'
+  if ($Golden) { Write-Output '-RecordPipelines and -Golden do not go together'; exit 4 }
+}
+if (-not $Exe) {
+  # kk-dev has the Xenos plugin only; the native plugin comes with the kk-dev-vulkan build.
+  $Exe = Join-Path $repo 'kk\out\build\kk-dev\king_kong.exe'
+  $vk = Join-Path $repo 'kk\out\build\kk-dev-vulkan\king_kong.exe'
+  if (-not (Get-ChildItem -Path (Split-Path $Exe) -Filter "rexgpu-$Plugin*.dll" -ErrorAction SilentlyContinue) -and
+      (Get-ChildItem -Path (Split-Path $vk) -Filter "rexgpu-$Plugin*.dll" -ErrorAction SilentlyContinue)) { $Exe = $vk }
+}
 if (-not $GameData) { $GameData = Join-Path $repo 'kk\assets' }
 foreach ($p in @($Exe, $GameData, $UserData)) {
   if (-not (Test-Path $p)) { Write-Output "not found: $p"; exit 4 }
@@ -55,6 +78,16 @@ $exeDir = Split-Path $Exe
 if (-not (Get-ChildItem -Path $exeDir -Filter "rexgpu-$Plugin*.dll" -ErrorAction SilentlyContinue)) {
   Write-Output "no rexgpu-$Plugin.dll beside $Exe"
   exit 4
+}
+if ($Plugin -eq 'native') {
+  # Without a shader pack and DXC every draw is dropped and every frame is black (docs/testing.md, "Use").
+  $hasPack = (Get-ChildItem -Path $exeDir -Filter 'kkshaders*.pack' -ErrorAction SilentlyContinue) -or
+             (Test-Path (Join-Path $CacheRoot 'native-shaders'))
+  $hasDxc = Test-Path (Join-Path $exeDir 'dxcompiler.dll')
+  if (-not $hasPack -and -not $hasDxc) {
+    Write-Output "no shader pack (beside $Exe or in $CacheRoot\native-shaders) and no dxcompiler.dll beside the game"
+    exit 4
+  }
 }
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 if ($Golden) { $root = $GoldenRoot } elseif ($Out) { $root = $Out } else { $root = Join-Path $RunsRoot "$Plugin-$stamp" }
@@ -88,40 +121,50 @@ if ($Golden -and -not $Force) {
 
 function Wait-GameFree {
   # At most one copy of the game may run on this PC: never start a second one, never stop someone else's.
-  # With -QueueName (fair turns, game.wait\README.txt): also only when game.lock says "free" and no one in
-  # game.wait asked earlier.
+  # A lock file saying "hold" or "user" (someone is about to use the game, or playing it) counts as busy too.
+  # Fair turns (game.wait\README.txt): the runner writes when it started waiting into game.wait\<QueueName>.txt
+  # and launches only when the lock says "free" and no other waiting file there holds an earlier time.
   $deadline = (Get-Date).AddMinutes($WaitMinutes)
-  $mine = $null
+  $queueFile = $null
   if ($QueueName -and (Test-Path $QueueDir)) {
-    $mine = Join-Path $QueueDir "$QueueName.txt"
-    $asked = Get-Date -Format 's'
-    Set-Content -Path $mine -Value $asked -Encoding ascii
+    $queueFile = Join-Path $QueueDir "$QueueName.txt"
+    $myTime = Get-Date -Format 'yyyy-MM-ddTHH:mm:ss'
+    Set-Content -Path $queueFile -Value $myTime -Encoding ascii
   }
   while ($true) {
-    $why = $null
     $busy = Get-Process king_kong -ErrorAction SilentlyContinue
-    if ($busy) { $why = "the game is running (pid $($busy.Id -join ','))" }
-    if (-not $why -and (Test-Path $LockFile)) {
-      $lock = ((Get-Content -Path $LockFile -Raw) -as [string]).Trim()
-      if ($lock -match '^(hold|user)' -or ($mine -and $lock -and $lock -ne 'free')) { $why = "game.lock says '$lock'" }
+    $held = $false
+    $lockText = ''
+    if (Test-Path $LockFile) {
+      $lockText = [string](Get-Content -Path $LockFile -TotalCount 1 -ErrorAction SilentlyContinue)
+      $held = $lockText -match '^\s*(hold|user)'
+      if ($queueFile -and $lockText.Trim() -ne 'free') { $held = $true }
     }
-    if (-not $why -and $mine) {
-      $before = @(Get-ChildItem -Path $QueueDir -Filter '*.txt' | Where-Object { $_.Name -ne 'README.txt' -and $_.FullName -ne $mine } |
-        Where-Object { $t = ((Get-Content -Path $_.FullName -Raw) -as [string]).Trim(); $t -and $t -ne 'done' -and $t -lt $asked })
-      if ($before.Count) { $why = "waiting for the turn of $(($before | ForEach-Object { $_.BaseName }) -join ',')" }
+    $ahead = @()
+    if ($queueFile) {
+      foreach ($f in Get-ChildItem -Path $QueueDir -Filter '*.txt' -ErrorAction SilentlyContinue) {
+        if ($f.FullName -eq $queueFile -or $f.Name -eq 'README.txt') { continue }
+        $t = ([string](Get-Content -Path $f.FullName -TotalCount 1 -ErrorAction SilentlyContinue)).Trim()
+        if ($t -match '^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$' -and $t -lt $myTime) { $ahead += $f.BaseName }
+      }
     }
-    if (-not $why) { return $true }
+    if (-not $busy -and -not $held -and $ahead.Count -eq 0) { return $true }
     if ((Get-Date) -ge $deadline) {
-      if ($mine) { Set-Content -Path $mine -Value 'done' -Encoding ascii }
+      if ($queueFile) { Set-Content -Path $queueFile -Value 'done' -Encoding ascii }
       return $false
     }
+    if ($busy) { $why = "the game is running (pid $($busy.Id -join ','))" }
+    elseif ($held) { $why = "the lock file says '$lockText'" }
+    else { $why = "waiting behind $($ahead -join ', ')" }
     Write-Output ("{0:HH:mm} {1}; checking again in {2} s" -f (Get-Date), $why, $WaitPollSeconds)
     Start-Sleep -Seconds $WaitPollSeconds
   }
 }
 
 function Set-QueueDone {
-  if ($QueueName -and (Test-Path $QueueDir)) { Set-Content -Path (Join-Path $QueueDir "$QueueName.txt") -Value 'done' -Encoding ascii }
+  if ($QueueName -and (Test-Path $QueueDir)) {
+    Set-Content -Path (Join-Path $QueueDir "$QueueName.txt") -Value 'done' -Encoding ascii
+  }
 }
 
 function Set-Lock([string]$Text) {
@@ -131,7 +174,14 @@ function Set-Lock([string]$Text) {
 function Format-Arg([string]$a) { if ($a -match '\s') { '"' + $a + '"' } else { $a } }
 
 $status = 0
+$launches = 0
 foreach ($run in $plan.runs) {
+  if ($launches -gt 0 -and $PauseMinutes -gt 0) {
+    # Leave the game to others between launches (the PC's game is shared).
+    Write-Output ("{0:HH:mm} pausing {1} minutes before the next launch" -f (Get-Date), $PauseMinutes)
+    Start-Sleep -Seconds ([int]($PauseMinutes * 60))
+  }
+  $launches++
   $runDir = Join-Path $root ("_runs\{0}-{1}" -f $run.name, (Get-Date -Format 'yyyyMMdd-HHmmss'))
   New-Item -ItemType Directory -Force $runDir | Out-Null
   if (-not (Wait-GameFree)) {
@@ -153,16 +203,24 @@ foreach ($run in $plan.runs) {
     [Environment]::SetEnvironmentVariable($kv.Name, [string]$kv.Value, 'Process')
     if (-not $saved.ContainsKey($kv.Name)) { $saved[$kv.Name] = $null }
   }
-  # The game's window is shown without taking the focus (someone may be using the PC meanwhile).
-  foreach ($name in 'SDL_WINDOW_ACTIVATE_WHEN_SHOWN', 'SDL_WINDOW_ACTIVATE_WHEN_RAISED') {
+  # SDL3 hints: show the game window without taking the focus (someone may be using the PC meanwhile). The
+  # captures are the game's own frames, so a window behind others is captured the same.
+  foreach ($name in @('SDL_WINDOW_ACTIVATE_WHEN_SHOWN', 'SDL_WINDOW_ACTIVATE_WHEN_RAISED')) {
     if (-not $saved.ContainsKey($name)) { $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
     [Environment]::SetEnvironmentVariable($name, '0', 'Process')
   }
   # -ExtraArgs replace the scene file's arguments of the same name (the game keeps the first of two).
-  $extraNames = @($ExtraArgs | ForEach-Object { ($_ -split '=', 2)[0] })
+  $launchExtra = @($ExtraArgs)
+  $pipeDir = Join-Path $runDir 'pipelines'
+  if ($RecordPipelines) {
+    # A fresh, empty cache file per launch: nothing is prewarmed, so the timeline stays that of a cold run.
+    New-Item -ItemType Directory -Force $pipeDir | Out-Null
+    $launchExtra += @('--native_pipeline_cache=true', "--native_pipeline_cache_dir=$pipeDir")
+  }
+  $extraNames = @($launchExtra | ForEach-Object { ($_ -split '=', 2)[0] })
   $runArgs = @($run.args | Where-Object { $extraNames -notcontains (($_ -split '=', 2)[0]) })
   $gameArgs = @("--game_data_root=$GameData", "--user_data_root=$saveCopy", "--cache_root=$CacheRoot",
-    "--log_file=$(Join-Path $runDir 'game.log')") + $runArgs + @($ExtraArgs) | ForEach-Object { Format-Arg $_ }
+    "--log_file=$(Join-Path $runDir 'game.log')") + $runArgs + $launchExtra | ForEach-Object { Format-Arg $_ }
   $log = Join-Path $runDir 'game.log'
   $proc = $null
   $started = Get-Date
@@ -200,7 +258,28 @@ foreach ($run in $plan.runs) {
   $r = Invoke-Py $collect
   Write-Output ("  {0:N0} s; {1}" -f ((Get-Date) - $started).TotalSeconds, $r.out)
   if ($r.code -ne 0) { $status = 2 }
+  if ($RecordPipelines) {
+    # The plugin names the file game.pipelines when the folder comes from --native_pipeline_cache_dir.
+    $file = Get-ChildItem -Path $pipeDir -Filter '*.pipelines' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($file) {
+      $collected = Join-Path $root 'pipelines'
+      New-Item -ItemType Directory -Force $collected | Out-Null
+      $dest = Join-Path $collected "$($run.name).pipelines"
+      Copy-Item -LiteralPath $file.FullName -Destination $dest -Force
+      $bytes = [IO.File]::ReadAllBytes($file.FullName)
+      $records = 0
+      if ($bytes.Length -ge 16) {
+        $size = [BitConverter]::ToUInt32($bytes, 8)  # header: magic, version, record size, byte order
+        if ($size -gt 0) { $records = [math]::Floor(($bytes.Length - 16) / $size) }
+      }
+      Write-Output ("  pipelines: {0} records -> {1}" -f $records, $dest)
+    } else {
+      Write-Output "  pipelines: no file in $pipeDir"
+      $status = 2
+    }
+  }
 }
+if ($RecordPipelines) { Write-Output "pipeline descriptions of every launch: $(Join-Path $root 'pipelines')" }
 
 if ($Golden) {
   Write-Output "golden set written to $root"
