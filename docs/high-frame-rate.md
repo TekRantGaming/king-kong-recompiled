@@ -115,6 +115,19 @@ rowers play actions 255, 256 and 262), and Ann's scene follows. A dev trace of t
 sometimes left the view before 0.1 s had passed (1 of 4 runs got through at 110 FPS, 2 of 2 at 30), which is
 the push's timing, not a frame-rate fault: the view check and its timer use the frame time.
 
+The rowing section (55 s from the lead rower's first stroke; animation speed is animation seconds per game
+second, loops are animation restarts):
+
+| Rower | 30 FPS | 110 FPS, no fix | 110 FPS, fix |
+|---|---|---|---|
+| `421329F0`, `42132958`, `42134460` | action 256, speed 0.997, 25 loops | action 275 (start rowing) the whole time, 50 loops | action 256, speed 1.001, 25 loops |
+| `418D044C`, `41F31E30`, `421326A0` | action 255, 0.990, 25 loops | 255, 1.005, 25 | 255, 0.998, 25 |
+| `418D0474` (lead) | action 262, 0.987, 26 loops | 262, 0.998, 26 | 262, 1.005, 26 |
+| `418D0540` | action 260, restarted 90 times (via 0) and never looping | 260, 56 restarts, 18 loops | 260, 34 restarts, 29 loops |
+
+The fix's dev trace counted 83 corrected syncs a second at 110 FPS (one a frame while the boat is rowed). The
+last rower (`418D0540`) is restarted by its script at a different rate at 110 FPS; see "Left to do".
+
 ### Particle drag (fix verified)
 
 Kong to the Rescue (chapter 27), fires and embers; `KK_DEV_HFR_TRACE` logs the mean speed of all live particles
