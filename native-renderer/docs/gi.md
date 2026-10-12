@@ -5,6 +5,19 @@ Status, 12 October 2026: branch `beta-ssgi` (from `beta` = `nr-integration` 1ba7
 (`--native_gi=off`); the launcher's Graphics page has the row "Global illumination: Off / Low / Medium / High"
 next to Ambient occlusion. Ray-traced GI is for later; this is screen space only.
 
+## Where it stands (paused 12 October 2026, 16:35)
+
+Done: the composite GI (spatial and temporal), its settings, the launcher row, the tests (`nr_game_gi_tests` 8,
+all 13 standalone tests pass), the bench, one probe launch through the GI tour at Medium, scale 1 (GPU times
+above; no "off" launch to compare with yet).
+
+Next, when the game is free again (the user's reduced bar for the beta): the short tour
+(`tests/gi_short.json`: Skull Island, V-Rex, The Cave) at scale 1 with off, Low, Medium, High
+(`analysis\ssgi	ools\sheets_batch.ps1`, which also runs the `vrex` golden scene with GI off), then the sheet
+(`analysis\ssgi	ools\gisheets.py`) and the intensity / radius tuning it shows. The first try of that batch
+(16:34) ended after 6 s with the game exiting by itself (code -1, nothing in its log); it was not retried
+before the pause.
+
 ## Why
 
 King Kong (2005) lights nearly all its world with one shader family, `psgeneric` (`ao.md`, "The lighting
