@@ -159,6 +159,10 @@ targets, per second of game time. Without the fixes the counts rise with the fra
 For example a particle with drag 0.95 keeps 36% of its speed after 0.5 s at 30 FPS, 6% at 110 FPS and 0.2% at
 250 FPS without the fix, 36% at all of them with it.
 
+Measured at 110 FPS (rowing runs, 11 200 frames each): without the fix the frame time takes 30 distinct values
+(whole milliseconds, standard deviation 0.99 ms around 9.06 ms); with it 268 values, standard deviation 0.77 ms,
+the rest being the frame pacing itself.
+
 Millisecond frame times (`precise_dt`): the frame time's worst error against the real one is 2% at 30 FPS, 4% at
 60, 10% at 110, 14% at 144, 20% at 240; at 1400 FPS the game runs 1.4x real time, at 2000 FPS 2x.
 
