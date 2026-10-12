@@ -82,3 +82,12 @@ Changes we make to vendored code are kept as small as possible and listed here:
   the edges image is a plain `float` image (R32_FLOAT) on both APIs. R32 formats are the ones every Vulkan device
   can store to without `shaderStorageImageExtendedFormats`. The C++ side uses only `XeGTAO.h`'s `GTAOConstants`
   struct for the constant buffer layout.
+
+## SDKs used but not vendored
+
+The temporal upscalers' SDKs whose licences do not allow their files in this repository (docs/upscalers.md):
+the build finds them under `tools/upscaler-sdks/` (git-ignored) and copies their runtime files beside the game.
+
+| SDK | Upstream | Version | What the build uses | Licence |
+|---|---|---|---|---|
+| NVIDIA DLSS SDK | https://github.com/NVIDIA/DLSS | v310.9.1 (`tools/upscaler-sdks/dlss`) | `include/` (NGX headers), `lib/Windows_x86_64/x64/nvsdk_ngx_d.lib` (the NGX loader, linked into rexgpu-native.dll), `lib/Windows_x86_64/rel/nvngx_dlss.dll` (beside the game) | NVIDIA RTX SDKs License (the SDK's `LICENSE.txt`): object code only, attribution with the NVIDIA marks in the credits and about box, NVIDIA to be notified before a commercial release |

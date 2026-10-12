@@ -176,6 +176,13 @@ void ReadUpscaleConfig(UpscaleConfig& u) {
 
 }  // namespace
 
+UpscaleConfig ReadUpscalerChoice() {
+  UpscaleConfig u;
+  ParseUpscalerKind(REXCVAR_GET(native_upscaler), u.kind);
+  ParseUpscaleQuality(REXCVAR_GET(native_upscaler_quality), u.quality);
+  return u;
+}
+
 GameSettings ReadGameSettings(bool vulkan) {
   GameSettings game;
   game.enabled = REXCVAR_GET(native_game);

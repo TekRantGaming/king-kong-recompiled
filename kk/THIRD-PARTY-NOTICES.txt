@@ -1947,3 +1947,23 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+
+------------------------------------------------------------------------------
+NVIDIA DLSS SDK 310.9.1: DLSS Super Resolution and DLAA (the native renderer)
+nvngx_dlss.dll beside the game (NVIDIA's binary, unmodified), and the NGX
+loader library (nvsdk_ngx_d.lib) linked into rexgpu-native.dll
+https://github.com/NVIDIA/DLSS
+------------------------------------------------------------------------------
+
+Copyright (c) NVIDIA Corporation. All rights reserved.
+
+This software uses the NVIDIA DLSS SDK, distributed in object code form under
+the NVIDIA RTX SDKs License (the SDK's LICENSE.txt). NVIDIA, the NVIDIA logo,
+GeForce RTX and NVIDIA DLSS are trademarks and/or registered trademarks of
+NVIDIA Corporation in the U.S. and other countries. This application is not
+sponsored or endorsed by NVIDIA.
+
+The SDK portions are provided "AS IS" without warranty of any kind; NVIDIA
+and its suppliers disclaim all warranties to the extent permitted by law.
+They may be used only as part of this application, not on their own, and may
+not be reverse engineered, decompiled or disassembled.

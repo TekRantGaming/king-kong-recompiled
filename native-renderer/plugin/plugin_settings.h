@@ -20,6 +20,9 @@ std::string FindShaderPack(bool vulkan);
 std::string AutoRenderScale();
 // The game renderer's settings from the cvars (and the port's settings the Xenos plugin defines).
 GameSettings ReadGameSettings(bool vulkan);
+// --native_upscaler and --native_upscaler_quality alone, quietly (ReadGameSettings warns about values it
+// cannot read): what the Vulkan instance and device must be prepared for before the game starts.
+UpscaleConfig ReadUpscalerChoice();
 
 // Where the pipeline files are: the folder of native_pipeline_cache_dir (files named game.*), else
 // <cache root>/native-pipelines (files named after the title, 555307D3.*).

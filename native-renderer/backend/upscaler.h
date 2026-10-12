@@ -70,6 +70,9 @@ UpscalerSupport QueryUpscalerSupport(nvrhi::IDevice* device);
 std::unique_ptr<Upscaler> CreateUpscaler(nvrhi::IDevice* device, const UpscaleConfig& config, UpscalerKind* chosen,
                                          std::string* why);
 
+// The PCI vendor of the device's GPU (0 unknown).
+uint32_t UpscalerDeviceVendor(nvrhi::IDevice* device);
+
 // The folder of the game's executable (where the SDKs' DLLs are), with a trailing separator.
 std::wstring UpscalerDllFolder();
 

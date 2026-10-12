@@ -55,6 +55,7 @@ if(NR_GAME_RENDERER)
         upscaler_ffx.cpp
         upscaler_dlss.cpp
         upscaler_xess.cpp
+        upscaler_vulkan.cpp
     )
     target_link_libraries(nr_renderer PUBLIC kknr_resources kkshaders)
     target_compile_definitions(nr_renderer PUBLIC NR_GAME_RENDERER=1)

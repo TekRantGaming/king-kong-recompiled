@@ -58,7 +58,7 @@ namespace {
 
 VulkanTestDevice* Device() {
   static std::unique_ptr<VulkanTestDevice> device = [] {
-    auto d = VulkanTestDevice::Create(true);
+    auto d = VulkanTestDevice::Create(true, false, /*upscaler_needs=*/true);
     if (d) {
       std::printf("  device: %s, Khronos validation %s\n", d->device_name().c_str(),
                   d->khronos_validation() ? "on" : "not installed");
@@ -885,9 +885,10 @@ namespace {
 
 // A real upscaler on the test device: a still scene drawn for `frames` jittered frames, the last output
 // against the native picture at the output size (no upscaler), and the plain stretch of the same input.
-void CheckRealUpscaler(UpscalerKind kind, const char* name, int frames = 24) {
+void CheckRealUpscaler(UpscalerKind kind, const char* name, int frames = 24, char dlss_preset = 0) {
   Options o;
   o.config.kind = kind;
+  o.config.dlss_preset = dlss_preset;
   o.config.quality = UpscaleQuality::kPerformance;  // 2x: what the upscaler has to recover shows
   o.scale = 2.0f;
   Options stretch_o = o;
@@ -924,5 +925,7 @@ void CheckRealUpscaler(UpscalerKind kind, const char* name, int frames = 24) {
 }  // namespace
 
 TEST(GameUpscale_Fsr3) { CheckRealUpscaler(UpscalerKind::kFsr3, "fsr3"); }
+TEST(GameUpscale_Dlss) { CheckRealUpscaler(UpscalerKind::kDlss, "dlss"); }
+TEST(GameUpscale_DlssPresetM) { CheckRealUpscaler(UpscalerKind::kDlss, "dlss_m", 24, 'M'); }
 
 NR_TEST_MAIN()

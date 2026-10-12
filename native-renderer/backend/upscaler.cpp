@@ -39,9 +39,7 @@ std::wstring UpscalerDllFolder() {
 #endif
 }
 
-namespace {
-
-uint32_t DeviceVendor(nvrhi::IDevice* device) {
+uint32_t UpscalerDeviceVendor(nvrhi::IDevice* device) {
   if (!device) return 0;
 #if NR_HAS_VULKAN
   if (device->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN) {
@@ -77,6 +75,8 @@ uint32_t DeviceVendor(nvrhi::IDevice* device) {
   return 0;
 }
 
+namespace {
+
 const char* VendorName(uint32_t v) {
   switch (v) {
     case 0x10DE: return "NVIDIA";
@@ -90,7 +90,7 @@ const char* VendorName(uint32_t v) {
 
 UpscalerSupport QueryUpscalerSupport(nvrhi::IDevice* device) {
   UpscalerSupport s;
-  s.vendor = DeviceVendor(device);
+  s.vendor = UpscalerDeviceVendor(device);
   UpscaleConfig probe;
   probe.quality = UpscaleQuality::kQuality;
   std::string why;
@@ -116,7 +116,7 @@ std::unique_ptr<Upscaler> CreateUpscaler(nvrhi::IDevice* device, const UpscaleCo
     reasons += std::string(reasons.empty() ? "" : "; ") + name + " unavailable: " + w;
   };
   std::vector<UpscalerKind> order;
-  const uint32_t vendor = DeviceVendor(device);
+  const uint32_t vendor = UpscalerDeviceVendor(device);
   switch (config.kind) {
     case UpscalerKind::kAuto:
       if (vendor == 0x10DE) order = {UpscalerKind::kDlss, UpscalerKind::kFsr3};
