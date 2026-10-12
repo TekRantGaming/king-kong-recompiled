@@ -373,9 +373,11 @@ void ApplyRemastered() {
   SetRenderer(true);
 }
 
+// The Remastered settings first: the Original look keeps the settings it replaces and puts them back
+// when Look is switched to Remastered on the Graphics page, which then gives exactly Remastered.
 void ApplyOriginal() {
+  ApplyRemastered();
   SetOriginalLook(true);
-  SetRenderer(true);
 }
 
 // Settings only this beta has (the native renderer's, the renderer choice, the fullscreen

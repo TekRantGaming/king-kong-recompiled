@@ -97,6 +97,10 @@ std::vector<DisplayMode> ListDisplayModes(int monitor) {
     if (!seen && m.width >= 640 && m.height >= 480) out.push_back(m);
   }
   SDL_free(modes);
+  std::string list;
+  for (const DisplayMode& m : out) list += (list.empty() ? "" : ", ") + m.Value();
+  REXLOG_INFO("KK: display {} ({}): {} fullscreen modes: {}", monitor, SDL_GetDisplayName(display) ? SDL_GetDisplayName(display) : "?",
+              out.size(), list);
   return out;  // SDL's order: largest first, then the highest refresh rate
 }
 
