@@ -480,13 +480,31 @@ golden frames measured with a scratch script):
 | `tour25_in_the_mud` | camera two pixels off vertically; streaks of falling water in front of the left pillar where the golden frames have none | dy -2 (2.6 to 0.9) |
 | `tour24_venatosaurus` | no whole-pixel shift, but fine texture-scale differences over the whole picture and the sailors a little apart: a sub-pixel camera offset like chap04's half pixel, or the sailors' timing | none (2.5) |
 | `tour41_credits` | 2 of 5 frames pass: the scrolling credit lines are a frame or two out of step with every golden frame (the text's edges outside the range); the picture itself matches | none |
-| `tour00_venture` | not captured (the freeze-skip bug above, harness side); the 17-scene `venture` scene passes on native | - |
+| `tour00_venture` | not captured in this run (the freeze-skip bug above, harness side); passes 4 of 5 in the second native run below | - |
+
+**Second native run**: the `-RecordPipelines` run (`runs	our-native-record3`, 12 October 08:09-09:41, the
+same build and options with the pipeline cache recording into an empty file per launch, so nothing is
+prewarmed) compared the same way: **37 of 42 pass**. Venture passes there (4 of 5). The same four fail again
+(`tour04_the_wall` dy 1, draw list 0.983; `tour18_swamps`; `tour24_venatosaurus`; `tour25_in_the_mud`), the
+credits pass, and `tour31_lair_fight` fails (1 of 5: the snake fight a little out of step, MAE 14.8). So the
+four camera scenes are the native renderer's open failures; the credits and the lair fight are timing that
+comes and goes.
 
 The common thread of the first four is the one found for chap04 and chap12 in Phase 2c (backend.md, "Open
 problems"): the player's character lands or settles a little differently when the render thread's timing
 differs in the chapter's first frames, and the camera follows him. With the render thread chap12 now matches,
 but these chapters (and chap04) still do not; they are where to look next. No scene shows missing objects,
 wrong colours or black frames: every failure is position or timing.
+
+**Pipelines of every chapter** (`-RecordPipelines`, same run): one file per launch, collected in
+`runs	our-native-record3\pipelines	our<A-D>.pipelines` (1529, 1398, 1018 and 989 records) and merged with
+`nr_pipelines merge` (standalone build, `F:\KK-native-renderer
+r-standalone	ools`) into
+`F:\KK-native-renderernalysis	our\pipelines	our-all.list`: **3214 pipelines** (all at 1:1, 21 without a
+pixel shader; 1268 vertex and 605 pixel shader translations). Launch B added 846 new ones to A's, C 421, D 418,
+so later chapters still bring new pipelines. The list is game data and stays out of git. Not in it: the title
+and menus are in every launch, but the render scales other than 1 and the launcher's prewarm are not (one run
+per scale would add them).
 
 Scenes that passed with noticeably higher numbers than the Xenos run (worth a look, not failures):
 `tour06_kongs_tracks` and `tour08_vrex` (3 and 4 of 5 frames: lightning), `tour27_kong_rescue` (3 of 5, the
