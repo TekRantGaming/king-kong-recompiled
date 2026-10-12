@@ -103,6 +103,17 @@ but each system steps as it would at 250 FPS). Raw logs, samples and captures ar
   a few callers; the camera's aim-assist object test `sub_8270AF70` ran 41 times a second at 60 and never at 30,
   in a scene without stick input (not explained yet).
 
+### Venture opening, camera tutorial and rowing section
+
+Chapter entry 0 stops on the VENTURE hull with "Right stick to aim" until the player pushes the right stick up
+or down (`Chaloupe_CineD1` `sub_82432CD8` takes that push as the vertical sighting choice and sets the pitch
+inversion at `G[19884]`), and then needs the boat's target in view for 0.1 s (`TrigTest_PivotInScreen`
+`sub_82466F60`, a timer of frame times); the lifeboat is then lowered and rowed to the island (about 75 s; the
+rowers play actions 255, 256 and 262), and Ann's scene follows. A dev trace of the tutorial
+(`KK_DEV_VENTURE_TRACE`) shows the same steps at 30 and 110 FPS; with the bot's long stick pushes the target
+sometimes left the view before 0.1 s had passed (1 of 4 runs got through at 110 FPS, 2 of 2 at 30), which is
+the push's timing, not a frame-rate fault: the view check and its timer use the frame time.
+
 ### Particle drag (fix verified)
 
 Kong to the Rescue (chapter 27), fires and embers; `KK_DEV_HFR_TRACE` logs the mean speed of all live particles
