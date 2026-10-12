@@ -769,7 +769,7 @@ Tried, chap04 on the native renderer (all fail, MAE 2 to 5):
 - the script on the game's own clock (`KK_DEV_CLOCK=game:0.771`, new: once a loading stall has put the game
   behind, presses and shots follow the game's clock plus the golden run's lag): every run then presses at the
   same game moment (18674 to 18712 ms after the stall; Xenos 18665 to 18699), Xenos still matches the golden
-  (MAE 0.04, four runs), native Vulkan failed twice (4.3, 4.4) and passed once (0.80), D3D12 failed twice (2.4,
+  (MAE 0.04, four runs), native Vulkan passed once (0.80) and failed four times (4.2 to 5.3), D3D12 failed twice (2.4,
   2.3).
 
 So the press timing is not the whole cause: with the presses at the same game moment native still ends up
