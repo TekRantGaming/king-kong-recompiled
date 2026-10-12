@@ -245,9 +245,12 @@ nvrhi::ITexture* SceneAo::OnResolve(nvrhi::ICommandList* cl, const Resolve& r, c
     // Not while the frame waits for its fog pass: the game copies its half-drawn scene for the
     // light shafts before it (Call Kong, Kong to the Rescue, Chased by Kong), and the fallback would
     // put the occlusion into that copy and leave none for the fog pass's moment.
+    // (Kong to the Rescue copies it right after the depth pre-pass, before the first lit draw.) A copy
+    // before the opaque pass began is never the scene copy.
+    const AoFrameTracker::Phase phase = tracker_.phase();
     const bool want = config_.apply == AoApply::kResolve ||
-                      ((!applied_ || resolve_applied_) && !(tracker_.expects_end() &&
-                                                            tracker_.phase() == AoFrameTracker::Phase::kOpaquePass));
+                      ((!applied_ || resolve_applied_) && phase >= AoFrameTracker::Phase::kOpaquePass &&
+                       !(tracker_.expects_end() && phase < AoFrameTracker::Phase::kAfterOpaque));
     if (eligible && want && (depth_copied_ || tracker_.depth_valid()) &&
         Compute(cl, s, depth_copied_ ? depth_copy_ : nullptr)) {
       const AoFog fog = fog_frame_ == frame_ ? fog_ : AoFog{};
