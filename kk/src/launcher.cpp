@@ -84,6 +84,8 @@ constexpr const char* kOnlineAbout =
 #define KK_TIMES "\xC3\x97"
 #define KK_DOT "\xC2\xB7"
 #define KK_DEG "\xC2\xB0"
+// Said wherever the native renderer's shaders are being prepared.
+#define KK_SLOW_PC "Your PC may run slower until this finishes, because preparing the shaders uses its processor."
 
 // ---------------------------------------------------------- cvar helpers ---
 // Every change bumps g_changes; the launcher saves the settings shortly after.
@@ -312,7 +314,10 @@ void SetOriginalLook(bool on) {
     for (const auto& [name, value] : OriginalLookSettings()) Set(name, value);
   } else {
     const std::string saved = Get("kk_modern_settings");
-    if (saved.empty()) ApplyGraphicsPreset(1);  // Medium
+    if (saved.empty()) {  // nothing put aside (the look step wasn't used): Medium at 60 FPS
+      ApplyGraphicsPreset(1);
+      SetInt("kk_frame_rate", 60);
+    }
     std::stringstream in(saved);
     for (std::string item; std::getline(in, item, ';');) {
       const size_t eq = item.find('=');
@@ -365,6 +370,7 @@ void ApplyRemastered() {
   ApplyGraphicsPreset(RemasteredPresetIndex());
   SetInt("ao_mode", 1);
   SetInt("ao_strength", 1);
+  SetInt("kk_frame_rate", 60);  // the Original look keeps the console's 30
   if (NativeRendererAvailable()) {  // GTAO, applied at the end of the opaque pass (docs/ao.md)
     Set("native_ao_method", "gtao");
     Set("native_ao_apply", "opaque");
@@ -1444,7 +1450,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
       return;
     }
     ui::Cue(ui::Sound::kSelect);
-    OpenModal("Recompile shaders", "Recompile your shaders? This takes about a minute.", {"Yes", "No"}, 1,
+    OpenModal("Recompile shaders",
+              "Recompile your shaders? This takes about a minute. " KK_SLOW_PC, {"Yes", "No"}, 1,
               [this](int i) {
                 if (i != 0) return;
                 if (native_pack_.Busy()) return;
@@ -1595,7 +1602,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
     } else if (stage == 4) {
       heading("Preparing the shaders");
       body("Translating the game's shaders for the native renderer, from your copy of the game. This is done once, "
-           "and again only when the port or the game's files change.");
+           "and again only when the port or the game's files change. " KK_SLOW_PC);
       bar(shader_fraction);
       caption_pair(shaders_total > 0 ? F("{0} of {1} shaders", {std::to_string(shaders_done), std::to_string(shaders_total)})
                                      : T(std::string("Checking")),
@@ -1675,7 +1682,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
         {"Remastered", "Sharper, with soft shadows",
          "Drawn for your screen's resolution with sharper textures, and the new GTAO ambient occlusion: soft "
          "shading in corners, in creases and under rocks, grass and people.",
-         F("{0} preset for your {1}  " KK_DOT "  GTAO", {preset, gpu.name.empty() ? T(std::string("graphics card")) : gpu.name}),
+         F("{0} preset for your {1}  " KK_DOT "  60 FPS  " KK_DOT "  GTAO", {preset, gpu.name.empty() ? T(std::string("graphics card")) : gpu.name}),
          slides_.empty() ? nullptr : slides_[0].sharp},
     };
     // The text under each still, measured; the stills take what's left (cropped to fit).
@@ -1888,7 +1895,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
       const float col_w = std::max(210 * s, ui::TextSize(f.text, 15.5f * s, c.value).x + 48 * s);
       if (i == 1 && selectable) {
         // The shaders' status is a button (Recompile shaders): a tile when it has the focus or the mouse.
-        const ImVec2 p0(cx - 12 * s, y - 9 * s), p1(cx + col_w - 22 * s, y + 57 * s);
+        const ImVec2 p0(cx - 12 * s, y - 9 * s), p1(cx + col_w - 22 * s, y + 67 * s);
         status_rect_[0] = p0;
         status_rect_[1] = p1;
         const bool hovered = !modal_.open && ImGui::IsMouseHoveringRect(p0, p1, false);
@@ -1909,6 +1916,10 @@ class Launcher final : public rex::ui::ImGuiDialog {
         dl->AddRectFilled(ImVec2(cx, by), ImVec2(cx + bw, by + 2 * s), ui::WithAlpha(color::kText, 0.12f * alpha));
         dl->AddRectFilled(ImVec2(cx, by), ImVec2(cx + bw * std::clamp(c.progress, 0.0f, 1.0f), by + 2 * s),
                           ui::WithAlpha(color::kAccent, alpha));
+        // The native renderer's shaders being prepared: the PC is busier until it's done.
+        if (i == 1 && NativeShaderPack::Wanted())
+          dl->AddText(f.text, 11.5f * s, ImVec2(cx, by + 6 * s), ui::WithAlpha(color::kTextFaint, alpha),
+                      T("Your PC may run slower until this finishes."));
       }
       cx += col_w;
     }
@@ -3528,7 +3539,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
   void Play() {
     if (!CanPlay()) return;
     const int fps = GetInt("kk_frame_rate", 30);
-    if (fps > 0 && fps <= 30) return StartGame();
+    if (fps > 0 && fps <= 60) return StartGame();  // 60: Remastered's rate, no warning each time
     OpenFrameRateWarning();
   }
 
@@ -3627,7 +3638,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
     } else if (!native_modal_ && !modal_.open && ImGui::GetTime() - native_wait_since_ > 0.5) {
       native_modal_ = true;
       OpenModal("Preparing shaders",
-                "The native renderer's shaders are still being prepared from your copy of the game. The game starts "
+                "The native renderer's shaders are still being prepared from your copy of the game. " KK_SLOW_PC " The game starts "
                 "as soon as they're done.",
                 {"Back"}, 0, [this](int) { waiting_for_native_ = native_modal_ = false; });
       modal_.progress = [this] { return native_pack_.Fraction(); };
@@ -3686,7 +3697,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
   // "KK dev: shot <name>" and waits for a capture. The mouse, at 1280 x 720
   // layout positions: "move:X:Y", "click:X:Y", "down:X:Y", "up", "wheel:N".
   // "setup:5" is the look step; "reset-beta" does to the settings what switching to
-  // stable does (and saves them); "whats-new" opens What's new as after 1.9.11.
+  // stable does (and saves them); "whats-new" opens What's new as after 1.9.11; "update-test"
+  // logs the update choice cases (RunUpdatePickTests).
   void DevInput() {
     ImGuiIO& io = ImGui::GetIO();
     static bool release = false;
@@ -3726,6 +3738,10 @@ class Launcher final : public rex::ui::ImGuiDialog {
     if (t == "reset-beta") {  // what switching to stable does to the settings (FinishChannelSwitch)
       ResetBetaOnlySettings();
       SaveSettings(paths_.config_path);
+      return;
+    }
+    if (t == "update-test") {  // PickUpdate's cases (update.h), logged
+      RunUpdatePickTests();
       return;
     }
     if (t == "whats-new") {  // the What's new pop-up as after an update from the version before
