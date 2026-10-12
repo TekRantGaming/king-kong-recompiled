@@ -108,6 +108,8 @@ class NativeGraphicsSystem final : public rex::system::IGraphicsSystem {
   // folder under the cache root is known (InitializeShaderStorage), or at once when no file of
   // ours needs it.
   void StartPipelines();
+  void OpenShaderPackFor(const std::filesystem::path& cache_root);
+  std::filesystem::path shader_cache_root_;  // from InitializeShaderStorage
   PipelinePlace pipeline_place_;  // <cache root>/native-pipelines, or native_pipeline_cache_dir
   bool pipelines_started_ = false;
   std::unique_ptr<RingSkimmer> skimmer_;

@@ -13,9 +13,11 @@ namespace nr {
 
 // The folder of the running executable (the game's).
 std::filesystem::path ExecutableFolder();
-// native_shader_pack, else kkshaders-spirv.pack (Vulkan) or kkshaders-dxil.pack, else kkshaders.pack
-// beside the game; empty when there is none.
+// native_shader_pack (the user's cache and the game's folder come later: FindShaderPackForRun).
 std::string FindShaderPack(bool vulkan);
+// native_render_scale=auto's scale, "WxH": the port's draw resolution scale (one rule for the run, the
+// launcher's prewarm and the shader pack build).
+std::string AutoRenderScale();
 // The game renderer's settings from the cvars (and the port's settings the Xenos plugin defines).
 GameSettings ReadGameSettings(bool vulkan);
 

@@ -17,6 +17,10 @@ set(NR_PLUGIN_SOURCES
 if(NR_HAS_D3D12)
     list(APPEND NR_PLUGIN_SOURCES ${NR_ROOT}/backend/d3d12_host.cpp)
 endif()
+if(NR_GAME_RENDERER)
+    # The shader pack on the player's machine: the launcher's build, the run's lookup.
+    list(APPEND NR_PLUGIN_SOURCES shader_pack_service.cpp)
+endif()
 if(NR_HAS_VULKAN)
     list(APPEND NR_PLUGIN_SOURCES ${NR_ROOT}/backend/vulkan_host.cpp)
 endif()
@@ -51,4 +55,37 @@ if(NR_PLUGIN_COPY_BESIDE)
     add_custom_command(TARGET rexgpu-native POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:rexgpu-native>
                 $<TARGET_FILE_DIR:${NR_PLUGIN_COPY_BESIDE}>)
+endif()
+# DXC comes with the port: the plugin builds the player's shader pack with it and compiles shaders
+# missing from the pack (docs/shaders.md, "DXC with the port"). Only the compiler library is
+# needed (it signs DXIL itself from DXC 1.8.2505 on; dxil.dll / libdxil.so are not shipped).
+# NR_DXC_RUNTIME names the library; else it is looked for in NR_DXC_DIR and in $ENV{KK_DXC_DIR}
+# (a DXC release folder). Copied beside the game with the plugin.
+if(WIN32)
+    set(_nr_dxc_lib dxcompiler.dll)
+else()
+    set(_nr_dxc_lib libdxcompiler.so)
+endif()
+set(NR_DXC_RUNTIME "" CACHE FILEPATH "DXC's compiler library (dxcompiler.dll / libdxcompiler.so) to put beside the game")
+if(NOT NR_DXC_RUNTIME)
+    foreach(_dir IN ITEMS "${NR_DXC_DIR}" "$ENV{KK_DXC_DIR}")
+        if(_dir)
+            foreach(_sub IN ITEMS "" "bin/x64" "bin" "lib")
+                if(NOT NR_DXC_RUNTIME AND EXISTS "${_dir}/${_sub}/${_nr_dxc_lib}")
+                    set(NR_DXC_RUNTIME "${_dir}/${_sub}/${_nr_dxc_lib}")
+                endif()
+            endforeach()
+        endif()
+    endforeach()
+endif()
+if(NR_PLUGIN_COPY_BESIDE AND NR_GAME_RENDERER)
+    if(NR_DXC_RUNTIME AND EXISTS "${NR_DXC_RUNTIME}")
+        message(STATUS "native-renderer: ${NR_DXC_RUNTIME} goes beside the game")
+        add_custom_command(TARGET rexgpu-native POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${NR_DXC_RUNTIME}"
+                    $<TARGET_FILE_DIR:${NR_PLUGIN_COPY_BESIDE}>/${_nr_dxc_lib})
+    else()
+        message(WARNING "native-renderer: no ${_nr_dxc_lib} to put beside the game (set NR_DXC_RUNTIME or KK_DXC_DIR): "
+                        "without it the launcher cannot build the shader pack and the game renderer has no shaders")
+    endif()
 endif()

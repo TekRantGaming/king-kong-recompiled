@@ -56,14 +56,25 @@ std::filesystem::path ExecutableFolder() {
 }
 
 std::string FindShaderPack(bool vulkan) {
-  std::string wanted = REXCVAR_GET(native_shader_pack);
-  if (!wanted.empty()) return wanted;
-  const std::filesystem::path folder = ExecutableFolder();
-  for (const char* name : {vulkan ? "kkshaders-spirv.pack" : "kkshaders-dxil.pack", "kkshaders.pack"}) {
-    std::error_code ec;
-    if (std::filesystem::exists(folder / name, ec)) return (folder / name).string();
-  }
-  return {};
+  // Only --native_shader_pack here: the user's cache and the folder beside the game are looked at once the
+  // cache root is known (shader_pack_service.h, FindShaderPackForRun), the user's cache first.
+  (void)vulkan;
+  return REXCVAR_GET(native_shader_pack);
+}
+
+std::string AutoRenderScale() {
+  // The scale the Xenos plugin would draw at (the runtime's rule, as kk/src/settings.cpp logs it):
+  // resolution_scale when the player set it and the axis was left alone, else the axis, whose
+  // default the launcher's render quality preset sets.
+  auto axis = [](const char* name) {
+    std::string v = rex::cvar::HasNonDefaultValue("resolution_scale") && !rex::cvar::HasNonDefaultValue(name)
+                        ? rex::cvar::GetFlagByName("resolution_scale")
+                        : rex::cvar::GetFlagByName(name);
+    const int n = std::atoi(v.c_str());
+    return n >= 1 && n <= 8 ? n : 1;
+  };
+  const int x = axis("draw_resolution_scale_x"), y = axis("draw_resolution_scale_y");
+  return std::to_string(1280 * x) + "x" + std::to_string(720 * y);
 }
 
 GameSettings ReadGameSettings(bool vulkan) {
@@ -94,19 +105,8 @@ GameSettings ReadGameSettings(bool vulkan) {
   if (const char* frame_log = std::getenv("REX_DEV_FRAME_LOG")) game.frame_log = frame_log;
   game.render_scale = REXCVAR_GET(native_render_scale);
   if (game.render_scale == "auto") {
-    // The scale the Xenos plugin would draw at (the runtime's rule, as kk/src/settings.cpp logs it):
-    // resolution_scale when the player set it and the axis was left alone, else the axis, whose
-    // default the launcher's render quality preset sets.
-    auto axis = [](const char* name) {
-      std::string v = rex::cvar::HasNonDefaultValue("resolution_scale") && !rex::cvar::HasNonDefaultValue(name)
-                          ? rex::cvar::GetFlagByName("resolution_scale")
-                          : rex::cvar::GetFlagByName(name);
-      const int n = std::atoi(v.c_str());
-      return n >= 1 && n <= 8 ? n : 1;
-    };
-    const int x = axis("draw_resolution_scale_x"), y = axis("draw_resolution_scale_y");
-    game.render_scale = std::to_string(1280 * x) + "x" + std::to_string(720 * y);
-    REXGPU_INFO("rexgpu-native: render scale auto: {}x{} (the draw resolution scale)", x, y);
+    game.render_scale = AutoRenderScale();
+    REXGPU_INFO("rexgpu-native: render scale auto: {} (the draw resolution scale)", game.render_scale);
   }
   game.shadow_scale = float(REXCVAR_GET(native_shadow_scale));
   game.stutter_stats = REXCVAR_GET(native_stutter_stats);

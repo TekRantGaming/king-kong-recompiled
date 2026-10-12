@@ -110,6 +110,11 @@ class Backend {
   // (GameRenderer::SetDriverPipelineCache): before SetPipelineCache and LoadPipelineList. False when
   // there is none or no game renderer.
   bool SetDriverPipelineCache(const std::string& path);
+  // The shader pack when it is found after Initialize (the plugin learns the cache root later,
+  // before the game creates its first shader). False without a game renderer, when a pack is
+  // already open, or when this one does not open (logged).
+  bool OpenShaderPack(const std::string& path);
+  bool has_shader_pack() const;
   void set_test_picture(TestPicture picture) { test_picture_ = picture; }
   Renderer& renderer() { return *renderer_; }
   DrawTracker* draws() { return draws_.get(); }

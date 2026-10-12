@@ -21,6 +21,9 @@
 #include "backend/render_scale.h"
 #include "plugin/plugin_settings.h"
 #if NR_GAME_RENDERER
+#include "plugin/shader_pack_service.h"
+#endif
+#if NR_GAME_RENDERER
 #include "backend/pipeline_prewarm.h"
 #endif
 
@@ -45,7 +48,7 @@ struct Plan {
   std::string driver_cache_path;       // empty: --native_vk_pipeline_cache is off
 };
 
-Plan MakePlan(const PipelinePlace& place) {
+Plan MakePlan(const PipelinePlace& place, const std::filesystem::path& cache_root) {
   Plan plan;
   const GameSettings game = ReadGameSettings(true);
   rex::system::X_VIDEO_MODE mode;
@@ -55,6 +58,12 @@ Plan MakePlan(const PipelinePlace& place) {
                          std::max<uint32_t>(1, mode.display_height));
   PipelinePrewarm::Settings& s = plan.settings;
   s.shader_pack = game.shader_pack;
+#if NR_GAME_RENDERER
+  // The pack the game will open: the user's cache (the launcher builds it there), else beside the game.
+  if (s.shader_pack.empty()) s.shader_pack = FindShaderPackForRun(cache_root, true, nullptr);
+#else
+  (void)cache_root;
+#endif
   s.dxc = game.dxc;
   s.render_scale_x = scale.scale.x;
   s.render_scale_y = scale.scale.y;
@@ -201,7 +210,7 @@ uint32_t StartLauncherPrewarm(const std::filesystem::path& cache_root, uint32_t 
   }
   g_started = true;
   InstallRuntimeLog();
-  g_prewarm = new LauncherPrewarm(MakePlan(PipelinePlaceUnder(cache_root, title_id)));
+  g_prewarm = new LauncherPrewarm(MakePlan(PipelinePlaceUnder(cache_root, title_id), cache_root));
   return NR_PREWARM_RUNNING;
 }
 

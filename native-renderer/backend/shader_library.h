@@ -59,6 +59,8 @@ class ShaderLibrary {
   // library (empty: the default search). Both optional: without the pack
   // every shader is compiled, without DXC only the pack's shaders exist.
   void Initialize(const std::string& pack, const std::string& dxc);
+  // Opens the pack later (before the game creates shaders): false if it does not open (logged).
+  bool OpenPack(const std::string& pack);
   // Pixel shaders are translated render scale aware (the scaled variants of a pack). Set before
   // any shader is created.
   void SetRenderScaleAware(bool aware) { scale_aware_ = aware; }

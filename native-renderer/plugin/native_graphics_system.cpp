@@ -43,8 +43,13 @@
 #include "plugin/launcher_prewarm.h"
 #include "plugin/plugin_settings.h"
 #include "plugin/ring_skimmer.h"
+#if NR_GAME_RENDERER
+#include "plugin/shader_pack_service.h"
+#endif
 
 REXCVAR_DECLARE(bool, native_draws);
+REXCVAR_DECLARE(bool, native_game);
+REXCVAR_DECLARE(std::string, native_shader_pack);
 REXCVAR_DECLARE(bool, native_log_packets);
 REXCVAR_DECLARE(std::string, native_test);
 REXCVAR_DECLARE(bool, native_wvp_transpose);
@@ -209,6 +214,7 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
     // --native_pipeline_cache_dir wins; otherwise the cache root arrives in InitializeShaderStorage
     // (after this point when the SDK's app runs the game; a place it brought earlier is kept). A
     // shipped list alone needs no folder: it starts now.
+    OpenShaderPackFor(shader_cache_root_);  // when the cache root came first
     if (pipeline_place_.empty()) pipeline_place_ = PipelinePlaceFromCvar();
     if (!pipeline_place_.empty() || !PipelineFilesNeedCacheRoot()) StartPipelines();
   }
@@ -274,9 +280,34 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
 void NativeGraphicsSystem::InitializeShaderStorage(const std::filesystem::path& cache_root, uint32_t title_id,
                                                    bool blocking) {
   (void)blocking;
+  shader_cache_root_ = cache_root;
+  if (backend_) OpenShaderPackFor(cache_root);
   if (pipelines_started_ || !pipeline_place_.empty()) return;
   pipeline_place_ = PipelinePlaceUnder(cache_root, title_id);
   if (backend_) StartPipelines();
+}
+
+// The shader pack (unless --native_shader_pack named one): the user's cache, where the launcher builds it
+// from the player's game files, else beside the game, else every shader is compiled with DXC when the game
+// creates it. Before the pipelines start, so their prewarm finds the pack's shaders.
+void NativeGraphicsSystem::OpenShaderPackFor(const std::filesystem::path& cache_root) {
+#if NR_GAME_RENDERER
+  if (!backend_ || cache_root.empty() || !REXCVAR_GET(native_game) || backend_->has_shader_pack() ||
+      !REXCVAR_GET(native_shader_pack).empty()) {
+    return;
+  }
+  std::string where;
+  const std::string pack = FindShaderPackForRun(cache_root, api_ == HostApi::kVulkan, &where);
+  if (!pack.empty() && backend_->OpenShaderPack(pack)) {
+    REXLOG_INFO("rexgpu-native: shader pack from {}: {}", where, pack);
+  } else {
+    REXLOG_WARN("rexgpu-native: no shader pack{} (the launcher builds it into {}): shaders are compiled with "
+                "DXC on first use",
+                pack.empty() ? "" : " that opens", (cache_root / kkshaders::kPackFolderName).string());
+  }
+#else
+  (void)cache_root;
+#endif
 }
 
 // In this order: the driver's pipeline cache (read while nothing creates a pipeline), the player's

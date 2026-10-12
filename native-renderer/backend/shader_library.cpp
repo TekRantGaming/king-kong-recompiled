@@ -29,16 +29,21 @@ ShaderLibrary::ShaderLibrary(nvrhi::IDevice* device, const GuestMemory& memory)
 
 ShaderLibrary::~ShaderLibrary() = default;
 
-void ShaderLibrary::Initialize(const std::string& pack, const std::string& dxc) {
-  if (!pack.empty()) {
-    std::string error;
-    pack_open_ = pack_.open(pack, &error);
-    if (pack_open_) {
-      Logf(LogLevel::kInfo, "rexgpu-native: shader pack %s (%zu shaders)", pack.c_str(), pack_.size());
-    } else {
-      Logf(LogLevel::kWarning, "rexgpu-native: no shader pack: %s", error.c_str());
-    }
+bool ShaderLibrary::OpenPack(const std::string& pack) {
+  std::lock_guard lock(mutex_);
+  if (pack_open_) return false;
+  std::string error;
+  pack_open_ = pack_.open(pack, &error);
+  if (pack_open_) {
+    Logf(LogLevel::kInfo, "rexgpu-native: shader pack %s (%zu shaders)", pack.c_str(), pack_.size());
+  } else {
+    Logf(LogLevel::kWarning, "rexgpu-native: no shader pack: %s", error.c_str());
   }
+  return pack_open_;
+}
+
+void ShaderLibrary::Initialize(const std::string& pack, const std::string& dxc) {
+  if (!pack.empty()) OpenPack(pack);
   std::string error;
   if (kkshaders::loadDxc(dxc, &error)) {
     compiler_ = std::make_unique<kkshaders::Compiler>();
@@ -82,7 +87,9 @@ std::shared_ptr<GameShader> ShaderLibrary::Build(const kkshaders::ShaderInfo& in
            KindName(info.kind), static_cast<unsigned long long>(info.ucodeHash));
       return nullptr;
     }
-    kkshaders::BuildResult built = kkshaders::buildShader(info, *compiler_, false);
+    // Only the blob this device uses (the other one would double the compile time).
+    const uint32_t target = device_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN ? kkshaders::kBuildSpirv : kkshaders::kBuildDxil;
+    kkshaders::BuildResult built = kkshaders::buildShader(info, *compiler_, false, target);
     if (!built.ok) {
       failed_[key] = true;
       ++stats_.failed;

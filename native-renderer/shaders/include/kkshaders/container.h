@@ -157,6 +157,8 @@ struct DatabaseEntry {
 class Database {
 public:
     bool load(const std::string& path, std::string* error = nullptr);
+    // The file's bytes, already read (the pack builder reads them itself to hash them too).
+    bool loadBytes(std::vector<uint8_t> data, std::string* error = nullptr);
     const std::vector<DatabaseEntry>& entries() const { return entries_; }
     const std::vector<DatabaseSource>& sources() const { return sources_; }
     // The container the game creates the shader from (vertex: A, skipping the prefix).

@@ -11,6 +11,8 @@
 //   kkshaders scale-report <xeshaders.bin>
 //   kkshaders xsh <file.xsh> [<file.xsh> ...] --dxc <dir> [--out <dir>] [--spirv-val <exe>] [--jobs N] [--database <xeshaders.bin>]
 //   kkshaders pack-lookup <pack> [<hash> ...]
+//   kkshaders pack-build <xeshaders.bin> --out <folder> [--backend spirv|dxil] [--scaled] [--jobs N] [--dxc <dir>]
+//                        [--force] [--low-priority] [--check]   (the player's pack, as the launcher builds it)
 //
 // --raw-vs / --raw-ps read the file as bare big-endian microcode (no container).
 // Everything written under --out is derived from the game's files: keep it out of git.
@@ -34,6 +36,7 @@
 #include "kkshaders/cache.h"
 #include "kkshaders/compiler.h"
 #include "kkshaders/container.h"
+#include "kkshaders/pack_builder.h"
 #include "kkshaders/translator.h"
 #include "kkshaders/vertex_patch.h"
 
@@ -55,7 +58,7 @@ struct Args {
 };
 
 Args parseArgs(int argc, char** argv, int first) {
-    static const std::set<std::string> withValue = {"-o", "--out", "--dxc", "--spirv-val", "--jobs", "--limit", "--database", "--image"};
+    static const std::set<std::string> withValue = {"-o", "--out", "--dxc", "--spirv-val", "--jobs", "--limit", "--database", "--image", "--backend"};
     Args a;
     for (int i = first; i < argc; i++) {
         std::string s = argv[i];
@@ -883,6 +886,49 @@ int cmdXsh(const Args& a) {
     return runJobs(jobs, a, a.get("--out", "kkshaders-xsh-out"), "shader cache records");
 }
 
+// pack-build: what the launcher does on the player's machine (kkshaders/pack_builder.h): one
+// backend's pack from xeshaders.bin into a folder, with its stamp, unless it is already current.
+int cmdPackBuild(const Args& a) {
+    if (a.positional.empty()) return 2;
+    PackBuildOptions o;
+    o.database = a.positional[0];
+    o.folder = a.get("--out", "kkshaders-pack");
+    o.backend = a.get("--backend", "spirv") == "dxil" ? PackBackend::Dxil : PackBackend::Spirv;
+    o.scaled = a.has("--scaled");
+    o.threads = unsigned(std::stoul(a.get("--jobs", "0")));
+    o.lowPriority = a.has("--low-priority");
+    o.dxc = a.get("--dxc");
+    if (a.has("--check")) {
+        PackCheck c = checkPack(o);
+        std::printf("%s: %s\n", packPath(o).string().c_str(),
+                    c.state == PackState::Current ? "current" : c.state == PackState::Missing ? "missing" : "stale");
+        std::printf("  %s\n", c.reason.c_str());
+        return c.state == PackState::Current ? 0 : 1;
+    }
+    PackBuildProgress progress;
+    std::atomic<bool> stop{false};
+    std::thread reporter([&] {
+        uint32_t last = 0;
+        while (!stop) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            const uint32_t d = progress.done, t = progress.total;
+            if (t && d / 500 != last / 500) std::printf("  %u / %u\n", d, t), std::fflush(stdout);
+            last = d;
+        }
+    });
+    PackBuildResult r = buildPack(o, &progress, a.has("--force"));
+    stop = true;
+    reporter.join();
+    if (r.upToDate) std::printf("%s is current: nothing to build\n", r.pack.string().c_str());
+    else if (r.ok)
+        std::printf("%s: %u shaders compiled (%u failed, %u entries not parsed) on %u threads in %.1f s, %llu bytes\n",
+                    r.pack.string().c_str(), r.compiled, r.failed, r.parseFailures, r.threads, r.seconds,
+                    static_cast<unsigned long long>(r.bytes));
+    if (!r.error.empty()) std::printf("%s%s\n", r.ok ? "note: " : "error: ", r.error.c_str());
+    if (r.ok) std::fwrite(r.stamp.toText().data(), 1, r.stamp.toText().size(), stdout);
+    return r.ok ? 0 : 1;
+}
+
 int cmdPackLookup(const Args& a) {
     if (a.positional.empty()) return 2;
     ShaderPack pack;
@@ -972,7 +1018,7 @@ int cmdScaleReport(const Args& a) {
 int main(int argc, char** argv) {
     if (argc < 2) {
         std::fprintf(stderr,
-                     "usage: kkshaders info|translate|compile|db-check|vfetch-check|db-build|db-structure|scale-report|xsh|pack-lookup ...\n"
+                     "usage: kkshaders info|translate|compile|db-check|vfetch-check|db-build|db-structure|scale-report|xsh|pack-lookup|pack-build ...\n"
                      "(see the comment at the top of tool/main.cpp)\n");
         return 2;
     }
@@ -988,6 +1034,7 @@ int main(int argc, char** argv) {
     if (command == "scale-report") return cmdScaleReport(a);
     if (command == "xsh") return cmdXsh(a);
     if (command == "pack-lookup") return cmdPackLookup(a);
+    if (command == "pack-build") return cmdPackBuild(a);
     std::fprintf(stderr, "unknown command %s\n", command.c_str());
     return 2;
 }

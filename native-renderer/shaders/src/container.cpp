@@ -273,11 +273,26 @@ bool Database::load(const std::string& path, std::string* error) {
     std::fseek(f, 0, SEEK_END);
     long size = std::ftell(f);
     std::fseek(f, 0, SEEK_SET);
-    data_.resize(size_t(size));
-    size_t got = std::fread(data_.data(), 1, data_.size(), f);
+    std::vector<uint8_t> data(size > 0 ? size_t(size) : 0);
+    size_t got = std::fread(data.data(), 1, data.size(), f);
     std::fclose(f);
-    if (got != data_.size() || data_.size() < 24 || be32(data_.data()) != 0x32424453u) {
-        if (error) *error = path + " is not the game's shader database (SDB2)";
+    if (got != data.size()) {
+        if (error) *error = "cannot read " + path;
+        return false;
+    }
+    if (!loadBytes(std::move(data), error)) {
+        if (error) *error = path + ": " + *error;
+        return false;
+    }
+    return true;
+}
+
+bool Database::loadBytes(std::vector<uint8_t> data, std::string* error) {
+    data_ = std::move(data);
+    entries_.clear();
+    sources_.clear();
+    if (data_.size() < 24 || be32(data_.data()) != 0x32424453u) {
+        if (error) *error = "not the game's shader database (SDB2)";
         return false;
     }
     uint32_t sourceCount = be32(data_.data() + 8);

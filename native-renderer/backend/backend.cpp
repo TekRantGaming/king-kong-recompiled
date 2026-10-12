@@ -556,6 +556,23 @@ bool Backend::LoadPipelineList(const std::string& path) {
   return false;
 }
 
+bool Backend::OpenShaderPack(const std::string& path) {
+#if NR_GAME_RENDERER
+  if (shaders_ && !shaders_->pack_open()) return shaders_->OpenPack(path);
+#else
+  (void)path;
+#endif
+  return false;
+}
+
+bool Backend::has_shader_pack() const {
+#if NR_GAME_RENDERER
+  return shaders_ && shaders_->pack_open();
+#else
+  return false;
+#endif
+}
+
 void Backend::set_async_present(bool on) {
   if (on && !present_thread_) present_thread_ = std::make_unique<PresentThread>(*this);
 }
