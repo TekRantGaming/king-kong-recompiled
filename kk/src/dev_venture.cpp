@@ -25,8 +25,11 @@ REX_HOOK_RAW(sub_82432CD8) {
   const uint32_t ai = Load32(base, 0x82CCBF64);
   const uint32_t v = ai ? Load32(base, ai + 64) : 0;
   auto gates = [&] {
-    return v ? fmt::format("12={} 592={} 596={} 600={} 660={}", Load32(base, v + 12), Load32(base, v + 592),
-                           Load32(base, v + 596), Load32(base, v + 600), Load32(base, v + 660))
+    return v ? fmt::format("12={} 592={} 596={} 600={} 660={} cb={:08X} [{:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}]",
+                           Load32(base, v + 12), Load32(base, v + 592), Load32(base, v + 596), Load32(base, v + 600),
+                           Load32(base, v + 660), Load32(base, v + 280), Load32(base, v + 348), Load32(base, v + 352),
+                           Load32(base, v + 356), Load32(base, v + 360), Load32(base, v + 364), Load32(base, v + 368),
+                           Load32(base, v + 372), Load32(base, v + 376))
              : std::string("no vars");
   };
   const std::string before = gates();
