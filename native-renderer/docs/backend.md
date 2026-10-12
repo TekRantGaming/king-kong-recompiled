@@ -688,7 +688,7 @@ scale) gives the old behaviour:
 
 | Option | Why it is safe |
 |---|---|
-| `--native_render_thread` | fixes chap04 / chap12's Jack (above); 17/17 golden scenes in two full runs with the four options (`p2c-rt-fast-full2`, `-full3`); at a 60 or 120 cap the best 1% lows measured (within 1 to 6 FPS of the cap); unlimited 3 to 32% faster on average |
+| `--native_render_thread` | fixes chap12's Jack (above; chap04 still varies, see Open problems); 17/17 golden scenes in two full runs with the four options (`p2c-rt-fast-full2`, `-full3`); at a 60 or 120 cap the best 1% lows measured (within 1 to 6 FPS of the cap); unlimited 3 to 32% faster on average |
 | the four speed options | Vulkan: 17/17 with them (above, and Phase 2b's 13/13); D3D12: needed the submission lock above, after it no crash |
 | `--native_render_scale=auto` | the scale the Xenos plugin draws at; the Original look (the golden set) gives 1, so the tests are unchanged; the presets' 2x was checked against the Xenos plugin's 2x in Phase 2b ("Render scale in the game") |
 | `--native_pipeline_list` | nothing without `kkpipelines.list` beside the game; with it no skipped draw on a first visit (above) |
@@ -710,10 +710,30 @@ has COLOR_ATTACHMENT usage). NVRHI: the shadow pass's 880x832 colour target with
 (attachment sizes differ). Before this phase NVRHI's layer stopped the game at once ("two immediate command lists
 open"): the renderer's lists are now not "immediate".
 
+### The shader pack merged (Phase 2c, branch `nr-pack`)
+
+`nr-pack` (built on the player's machine by the launcher, into `<cache root>/native-shaders`) merged into
+`nr-integration`. The pack is opened in `InitializeShaderStorage`, before the pipeline list starts its workers,
+so the shipped list's pipelines are made from the pack's blobs (and in `Setup` when the cache root came first).
+The "auto" render scale has one rule, `AutoRenderScale()` in `plugin_settings.cpp`, used by the game settings
+and by `shader_pack_service.cpp` (which variants the pack holds).
+
+End to end with a fresh cache root (`runs\p2c-e2e-fresh1`, `KK_AUTOPLAY=1`, `--kk_launcher=true`): the launcher
+built the pack (4794 shaders on 16 threads in 30.9 s, 143 MB), the game logged "shader pack from the user's
+cache", the second start found the pack current, and the scenes passed (save menu, main menu, chapter select,
+chap12; 4/4).
+
 ### Open problems (Phase 2)
 
-- **chap04 and chap12 cameras**: solved by the render thread (`--native_render_thread`, "The render thread
-  (Phase 2c)" above).
+- **chap04 and chap12 cameras**: chap12 solved by the render thread (`--native_render_thread`, "The render
+  thread (Phase 2c)" above; it passed in every run since, on Vulkan and D3D12). **chap04 is not settled**: with
+  the render thread Jack's landing there varies from run to run, the picture is the golden one or 0.5, 1 or 2
+  pixels off, while the Xenos plugin repeats itself (`runs\p2c-c04-xenos-1`, `-2`: MAE 0.30 and 0.34). Same
+  build and options, chap04 alone (`runs\p2c-c04-*`): with the fence gate 3 of 3 runs had the golden picture
+  (two of them missed the draw list limit by 0.001), without it 2 of 3; with the render thread and the four
+  options it passed in 7 of 15 Vulkan runs in all, and in none of 5 on D3D12. So something at the spawn still
+  depends on the threads' timing in a way the Xenos plugin's does not; the per-frame snapshots (`KK_DEV_SNAP_AT`, `analysis\phase2c`) are the
+  way in. The scene's limits were not loosened.
 - **Defaults**: decided and done, "Defaults (Phase 2c)" above.
 - **FXAA** matches the Xenos plugin's in kind but changes fewer pixels on small text.
 
