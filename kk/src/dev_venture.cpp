@@ -14,10 +14,20 @@
 
 #include "hfr.h"
 
+// KK_DEV_VENTURE_PASS=1: once the vertical sighting choice is made, count the
+// "look at the boat" step as done (as if the target had been in view for
+// 0.1 s), so scripted runs reach the rowing whatever the stick did to the
+// camera.
 REX_EXTERN(__imp__sub_82432CD8);
 REX_HOOK_RAW(sub_82432CD8) {
   using namespace kk::hfr;
   static const bool on = std::getenv("KK_DEV_VENTURE_TRACE") != nullptr;
+  static const bool pass = std::getenv("KK_DEV_VENTURE_PASS") != nullptr;
+  if (pass) {
+    const uint32_t ai = Load32(base, 0x82CCBF64);
+    const uint32_t v = ai ? Load32(base, ai + 64) : 0;
+    if (v && Load32(base, v + 660) == 1 && Load32(base, v + 596) == 0) Store32(base, v + 596, 1);
+  }
   if (!on) {
     __imp__sub_82432CD8(ctx, base);
     return;
