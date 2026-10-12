@@ -881,4 +881,48 @@ TEST(GameUpscale_PointBeforeThePostPass) {
   CHECK(sky[0] > 0.9f && sky[2] > 0.9f && sky[1] < 0.1f);  // the quad, drawn where the depth was clear
 }
 
+namespace {
+
+// A real upscaler on the test device: a still scene drawn for `frames` jittered frames, the last output
+// against the native picture at the output size (no upscaler), and the plain stretch of the same input.
+void CheckRealUpscaler(UpscalerKind kind, const char* name, int frames = 24) {
+  Options o;
+  o.config.kind = kind;
+  o.config.quality = UpscaleQuality::kPerformance;  // 2x: what the upscaler has to recover shows
+  o.scale = 2.0f;
+  Options stretch_o = o;
+  stretch_o.config.kind = UpscalerKind::kBilinear;
+  stretch_o.config.debug = 8;  // no jitter: the plain stretch of the input
+  Options ref_o;
+  ref_o.upscale = false;
+  ref_o.scale = 2.0f;
+  Fixture f(o), s(stretch_o), r(ref_o);
+  if (!f.Init() || !s.Init() || !r.Init()) return;
+  const GameUpscale* u = f.game->upscale();
+  if (!u || u->kind != kind) {
+    std::printf("  %s is not available on this device (%s): skipped\n", name, u ? u->name.c_str() : "no upscaler");
+    return;
+  }
+  Fixture::Frame still;
+  still.particle = false;  // a camera-facing quad would move nothing, but keep the picture plain
+  Pixels out;
+  for (int i = 0; i < frames; ++i) out = f.Render(still, std::string(name) + "_" + std::to_string(i));
+  const Pixels stretched = [&] {
+    Pixels p;
+    for (int i = 0; i < 3; ++i) p = s.Render(still, std::string(name) + "_stretch");
+    return p;
+  }();
+  Pixels native;
+  for (int i = 0; i < 2; ++i) native = r.Render(still, std::string(name) + "_native");
+  const double up = MeanDifference(out, native), plain = MeanDifference(stretched, native);
+  std::printf("  %s (%s): mean difference to native %.4f, the plain stretch %.4f; failures %llu\n", name,
+              u->name.c_str(), up, plain, static_cast<unsigned long long>(u->stats.failures));
+  CHECK_EQ(u->stats.failures, uint64_t(0));
+  CHECK(up < plain);
+}
+
+}  // namespace
+
+TEST(GameUpscale_Fsr3) { CheckRealUpscaler(UpscalerKind::kFsr3, "fsr3"); }
+
 NR_TEST_MAIN()

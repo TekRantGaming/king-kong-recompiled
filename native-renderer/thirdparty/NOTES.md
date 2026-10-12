@@ -8,6 +8,7 @@ Vendored copies (exported with `git archive`, no `.git` data), each with its own
 | `DirectX-Headers/` | https://github.com/microsoft/DirectX-Headers | v1.717.0-preview, d873b344dc540898868697245f100c2a67fe68d9 (2025-05-28): only `include/directx/*.h`, `include/dxguids`, `include/wsl`, `src/dxguids.cpp` | MIT (`DirectX-Headers/LICENSE`) |
 | `XenosRecomp/` | https://github.com/hedge-dev/XenosRecomp | 990d03b28a27b50277ee5d8d942e1c5f873869d1 (2025-08-03) | MIT (`XenosRecomp/LICENSE.md`) |
 | `XeGTAO/` | https://github.com/GameTechDev/XeGTAO | a5b1686c7ea37788eeb3576b5be47f7c03db532c (2024-04-22), XeGTAO 1.30: only `LICENSE` and `Source/Rendering/Shaders/XeGTAO.h`, `XeGTAO.hlsli`, `vaGTAO.hlsl` (the sample's entry points, kept for reference, not compiled) | MIT (`XeGTAO/LICENSE`) |
+| `FidelityFX-API/` | https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK | v1.1.4 (2025-05-08), FSR 3.1.4: only the FidelityFX API headers `ffx-api/include/ffx_api/` (`ffx_api.h`, `ffx_api_types.h`, `ffx_upscale.h`, `ffx_api_loader.h`, `vk/ffx_api_vk.h`, `dx12/ffx_api_dx12.h`) and `sdk/LICENSE.txt`. The AMD-signed DLLs are not in git: the build copies them beside the game from the SDK (`cmake/upscalers.cmake`, docs/upscalers.md) | MIT (`FidelityFX-API/LICENSE.txt`) |
 
 Not vendored:
 

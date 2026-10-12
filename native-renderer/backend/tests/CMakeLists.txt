@@ -128,6 +128,13 @@ if(NR_HAS_VULKAN AND NR_GAME_RENDERER)
              COMMAND ${Python3_EXECUTABLE} -I "${CMAKE_CURRENT_SOURCE_DIR}/check_validation.py"
                      $<TARGET_FILE:nr_game_upscale_tests>)
     set_tests_properties(nr_game_upscale_tests PROPERTIES ENVIRONMENT "${_env}")
+    # The upscalers' DLLs beside the test (the renderer loads them from the executable's folder).
+    get_property(_nr_up_runtime GLOBAL PROPERTY NR_UPSCALER_RUNTIME_FILES)
+    foreach(_f IN LISTS _nr_up_runtime)
+        get_filename_component(_name "${_f}" NAME)
+        add_custom_command(TARGET nr_game_upscale_tests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_f}" $<TARGET_FILE_DIR:nr_game_upscale_tests>/${_name})
+    endforeach()
 endif()
 
 # The motion variant of the translated vertex shaders, on the translator's generated corpus
