@@ -244,6 +244,7 @@ this branch, compared with `native-renderer/tests/compare.py images` and each sc
 frames pixel-identical, V-Rex gameplay at 110 s 3 of 5, 140 s 5 of 5, 170 s 4 of 5 (rain and lightning; the
 scenes need 3), loading screen 0 of 3: the frames show the loading screen with its picture swept to a different
 place than in any golden frame (the sweep runs on the loading thread; the capture came at another moment).
+The golden run came before the `splash` and `ripple` fixes; at 30 FPS they too call the game's code unchanged.
 
 ### Found and left
 
@@ -262,3 +263,12 @@ place than in any golden frame (the sweep runs on the loading thread; the captur
 - The bot's push in the opening's camera tutorial passed the "look at the boat" step in 1 of 5 runs at 110 FPS and
   3 of 3 at 30; the step's checks use the frame time, so this looks like the push's timing, but a player at a
   high frame rate who gets stuck there would be the sign of a problem (`KK_DEV_VENTURE_PASS` passes it in tests).
+
+### Needs a player
+
+- The Venture opening at 120 FPS or unlimited: the lifeboat crew should row from the start like at 30 FPS. If it
+  looks right, the launcher's warning about rowing above 30 FPS (`kk/src/launcher.cpp`) and the known issue in
+  `README.md` can go; they are unchanged on this branch.
+- With motion blur on: whether the trail looks shorter at high frame rates (decides the formula above).
+- The chapters no script reached (the list above), especially Kong's fights, climbing and the raft, at 60 and
+  120 FPS and unlimited, against 30 FPS. `kk_hfr_fixes=false` turns every fix off for a side-by-side check.
