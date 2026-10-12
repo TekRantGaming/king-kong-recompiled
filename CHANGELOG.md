@@ -10,7 +10,7 @@ version's notes the first time you start it.
 ### What's new
 - **A renderer of our own.** The game is now drawn by a new native renderer on Vulkan, instead of an imitation of the Xbox 360's graphics chip. It draws the game the same way the console did, runs much faster, and draws at higher resolutions for real instead of upscaling a 720p picture. **Graphics** > **Advanced** > **Renderer** switches back to the **Classic** renderer to compare.
 - **Shaders prepared once, from your own game files.** At the end of setup (or the first time you start this version) the launcher prepares the game's shaders from your own disc files, which takes about a minute, so effects don't stutter the first time they appear. The **SHADERS** status on Home shows how it's going; select it to prepare them again if something looks wrong.
-- **Original or Remastered.** The last step of setup asks how you'd like the game to look: **Original**, the Xbox 360 as it was (720p, 30 FPS, the console's look), or **Remastered**, sharper and at your screen's resolution with soft ambient occlusion, set up for your graphics card. **Look** on the **Graphics** page changes it at any time.
+- **Original or Remastered.** The last step of setup asks how you'd like the game to look: **Original**, the Xbox 360 as it was (720p, 30 FPS, the console's look), or **Remastered**, sharper and at your screen's resolution with soft ambient occlusion and 60 FPS, set up for your graphics card. **Look** on the **Graphics** page changes it at any time.
 - **New ambient occlusion.** With the native renderer, **AO method** on the **Graphics** page picks the new **GTAO**: sharper soft shadows in corners and creases that never darken water, smoke, fire, Kong's fur or the sky, and that now work in the chapters where the old one did nothing. **Classic** is the old one.
 - **Higher frame rates done properly.** Things that were tied to the console's 30 FPS now run at the right speed at any frame rate: the lifeboat crew's rowing, particles, Kong's grabs, button mashing and finishers, knock-backs, and the splashes and ripples in water. At 30 FPS nothing changes.
 
@@ -26,6 +26,7 @@ version's notes the first time you start it.
 - GTAO: Intel's XeGTAO (MIT), applied before the game's fog pass so transparent effects are drawn over it.
 - High frame rate fixes (`kk_hfr_fixes`, on): the rowing crew's animation time, particle drag, a precise frame clock, scripts that clamped the frame time to 0.016 s, per-step decays, follow smoothing, footstep splashes and water ripples.
 - What's new orders beta versions like the updater does.
+- Beta players only get beta updates, plus the final stable release of their beta (a stable with the same or higher version numbers); a stable hotfix of an older version is not offered to them.
 
 ## v1.9.11 (11 October 2026)
 
