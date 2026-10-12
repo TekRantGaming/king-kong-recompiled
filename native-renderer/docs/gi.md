@@ -133,6 +133,28 @@ of every radius; the flat ambient constant stands for the sky).
 Half resolution is of the scene target at the render scale (at scale 2, 1280 x 720 working pixels), which is
 also the path for slower GPUs (the Steam Deck class): at 1280 x 800 Low works on 640 x 400 pixels.
 
+## Cost
+
+`nr_ssgi_bench` (gtao_tests' ray-cast room at any size, a colour image, temporal accumulation on, the GPU's
+timer queries over 60 frames; RTX 4070 Ti, Vulkan, the GPU at full clocks). Total of `Gtao::Prepare`,
+`Ssgi::Compute` (radiance, gather, temporal, blur) and `Ssgi::Composite` (the copy and the composite):
+
+| Level (resolution) | 1280 x 720 (scale 1) | 2560 x 1440 (scale 2) |
+|---|---|---|
+| Low (half) | 0.16 ms | 0.64 ms |
+| Medium (half) | 0.22 ms | 0.87 ms |
+| High (half: at scale 2 by auto) | 0.28 ms | 1.09 ms |
+| High (full: up to scale 1.5 by auto) | 0.99 ms | 4.0 ms |
+
+So Medium at 1440p is under 1 ms (the target was 2 ms); High is full resolution only up to a render scale of 1.5
+(at 1080p output that is 1920 x 1080 working pixels, about 2.2 ms). The Steam Deck class at 1280 x 800 with Low
+works on 640 x 400 pixels (0.16 ms here; several times that on the Deck's GPU).
+
+In the game (`--native_gi_gpu_time`, the 600-frame averages; the frame rate capped at 30, so the GPU runs at low
+clocks and every pass looks slower, as the AO's numbers in `ao.md` do): Medium at scale 1, the first probe
+through the GI tour (`runs\ssgi-s1-medium-probe`), 0.60 to 1.37 ms, mostly 0.7 to 1.1 ms (GTAO at the opaque
+moment measured 0.46 to 1.01 ms the same way).
+
 ## Settings
 
 | Setting | Values (default first) | What it does |

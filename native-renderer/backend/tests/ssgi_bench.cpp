@@ -235,6 +235,17 @@ int main(int argc, char** argv) {
       ss.level = p;
       ss.radius = p.radius;
       ss.thickness = 0.25f * p.radius;
+      // Temporal accumulation as in the game (a still camera: the identity reprojection).
+      ss.temporal = true;
+      ss.history = true;
+      for (int i = 0; i < 4; ++i) ss.reproject[i * 5] = 1.0f;
+      ss.screen_xy[0] = screen.x_scale;
+      ss.screen_xy[1] = screen.x_offset + screen.offset_x();
+      ss.screen_xy[2] = screen.y_scale;
+      ss.screen_xy[3] = screen.y_offset + screen.offset_y();
+      ss.screen_z[0] = 1.0f;
+      ss.screen_z[2] = screen.host_scale_x;
+      ss.screen_z[3] = screen.host_scale_y;
       nvrhi::TimerQueryHandle tq[3] = {dev->createTimerQuery(), dev->createTimerQuery(), dev->createTimerQuery()};
       double sum[3] = {};
       const int frames = 60;
@@ -245,6 +256,7 @@ int main(int argc, char** argv) {
         gtao.Prepare(cl, in, gs);
         cl->endTimerQuery(tq[0]);
         cl->beginTimerQuery(tq[1]);
+        ss.frame = uint32_t(f);
         ssgi.Compute(cl, gtao, color, ss);
         cl->endTimerQuery(tq[1]);
         cl->beginTimerQuery(tq[2]);
