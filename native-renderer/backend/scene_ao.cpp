@@ -175,7 +175,11 @@ bool SceneAo::OnDraw(nvrhi::ICommandList* cl, const Draw& d, const AoSettings& s
     }
   }
   // Only the opaque scene reads it: a listed shader drawn blended (water, smoke) keeps its ambient.
-  const bool reads = apply == AoApply::kAmbient && ambient_ready_ && e.in_scene && cls == AoDrawClass::kOpaque;
+  // And only draws that do not write depth: their surfaces are in the pre-pass's depth the occlusion
+  // was worked out from (the game draws foliage, characters and some walls with depth writes after
+  // its pre-pass; the occlusion there would be that of whatever is behind them).
+  const bool reads = apply == AoApply::kAmbient && ambient_ready_ && e.in_scene && cls == AoDrawClass::kOpaque &&
+                     !d.state.depth_write;
   if (reads && d.state.ps_hash && IsAmbientShader(d.state.ps_hash)) ambient_drawn_ = true;
   last_.cls = cls;
   last_.events = e;
