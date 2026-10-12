@@ -18,6 +18,11 @@ add_library(nr_draw STATIC
     ao_classifier.cpp
     ao_camera.cpp
     ao_config.cpp
+    # Temporal upscalers (docs/upscalers.md): settings, jitter, motion matching, the upscale point.
+    upscale_config.cpp
+    upscale_jitter.cpp
+    upscale_motion.cpp
+    upscale_frame.cpp
 )
 target_include_directories(nr_draw PUBLIC "${NR_ROOT}")
 target_compile_features(nr_draw PUBLIC cxx_std_20)

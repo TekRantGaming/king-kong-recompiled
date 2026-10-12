@@ -27,6 +27,10 @@ add_executable(nr_ao_rules_tests ao_rules_tests.cpp)
 target_link_libraries(nr_ao_rules_tests PRIVATE nr_draw)
 add_test(NAME nr_ao_rules_tests COMMAND nr_ao_rules_tests)
 
+add_executable(nr_upscale_tests upscale_tests.cpp)
+target_link_libraries(nr_upscale_tests PRIVATE nr_draw)
+add_test(NAME nr_upscale_tests COMMAND nr_upscale_tests)
+
 add_executable(nr_trace_replay trace_replay_main.cpp)
 target_link_libraries(nr_trace_replay PRIVATE nr_draw nr_hooks)
 
@@ -114,4 +118,16 @@ if(NR_HAS_VULKAN AND NR_GAME_RENDERER)
              COMMAND ${Python3_EXECUTABLE} -I "${CMAKE_CURRENT_SOURCE_DIR}/check_validation.py"
                      $<TARGET_FILE:nr_game_ao_tests>)
     set_tests_properties(nr_game_ao_tests PROPERTIES ENVIRONMENT "${_env}")
+endif()
+
+# The motion variant of the translated vertex shaders, on the translator's generated corpus
+# (docs/upscalers.md).
+if(NR_GAME_RENDERER)
+    add_executable(nr_motion_shader_tests motion_shader_tests.cpp
+        "${NR_ROOT}/shaders/tests/xenos_asm.cpp" "${NR_ROOT}/shaders/tests/container_writer.cpp"
+        "${NR_ROOT}/shaders/tests/corpus.cpp")
+    target_include_directories(nr_motion_shader_tests PRIVATE "${NR_ROOT}/shaders/tests" "${NR_ROOT}")
+    target_link_libraries(nr_motion_shader_tests PRIVATE kkshaders)
+    target_compile_definitions(nr_motion_shader_tests PRIVATE NR_TEST_DXC_DIR="${NR_DXC_DIR}")
+    add_test(NAME nr_motion_shader_tests COMMAND nr_motion_shader_tests)
 endif()
