@@ -10,6 +10,7 @@
 #include "steam_shortcut.h"
 #include "update.h"
 #include "glyphs.h"
+#include "discord_presence.h"
 #include "online.h"
 
 #include <algorithm>
@@ -371,12 +372,7 @@ void ApplyRemastered() {
   SetInt("ao_mode", 1);
   SetInt("ao_strength", 1);
   SetInt("kk_frame_rate", 60);  // the Original look keeps the console's 30
-  if (NativeRendererAvailable()) {  // GTAO, applied at the end of the opaque pass (docs/ao.md)
-    Set("native_ao_method", "gtao");
-    Set("native_ao_apply", "opaque");
-    Set("native_ao_quality", "auto");
-  }
-  SetRenderer(true);
+  SetRenderer(true);  // with the native renderer's GTAO, the only method since Beta 1.1 (ApplyPortDefaults)
 }
 
 // The Remastered settings first: the Original look keeps the settings it replaces and puts them back
@@ -557,6 +553,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
     toast_ = std::make_unique<AchievementToast>(drawer, immediate_, paths_.game_dir, paths_.user_dir);
     CleanUpAfterUpdate();
     online::Start();
+    discord::Start();
     const bool testing = std::getenv("KK_AUTOPLAY") != nullptr;
     if (GetBool("kk_check_updates") && !testing) StartUpdateCheck(false);
     StartSteamCheck();
@@ -2168,10 +2165,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
     items.push_back(Section("Window"));
     {
       Item it = CvarToggle("Window mode",
-                           kFullscreenResolution
-                               ? "Fullscreen fills the screen: at your desktop resolution, or at the Resolution you "
-                                 "pick below."
-                               : "Fullscreen uses a borderless window at your desktop resolution.",
+                           "Fullscreen fills the screen: at your desktop resolution, or at the Resolution you pick "
+                           "below.",
                            "fullscreen", "Windowed", "Fullscreen");
       it.on_choice = [this](int i) { SetFullscreen(i == 1); };
       it.on_default = [this] {
@@ -2180,7 +2175,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
       };
       items.push_back(std::move(it));
     }
-    if (kFullscreenResolution) items.push_back(ResolutionItem());
+    items.push_back(ResolutionItem());
+    if (ParseDisplayMode(Get("kk_fullscreen_mode"))) items.push_back(RefreshRateItem());
     items.push_back(WindowSizeItem());
     items.push_back(MonitorItem());
     items.push_back(Section("Picture"));
@@ -2250,28 +2246,104 @@ class Launcher final : public rex::ui::ImGuiDialog {
     return it;
   }
 
-  // Fullscreen resolution (display_modes.h): Desktop, or one of the monitor's display modes.
-  Item ResolutionItem() {
+  // Fullscreen resolution (display_modes.h): Desktop, or one of the monitor's sizes, with its refresh
+  // rate on a row of its own (RefreshRateItem). Both are kept in kk_fullscreen_mode ("2560x1440@144").
+  void LoadDisplayModes() {
     const int monitor = GetInt("monitor", 0);
-    if (display_modes_monitor_ != monitor) {
-      display_modes_ = ListDisplayModes(monitor);
-      display_modes_monitor_ = monitor;
+    if (display_modes_monitor_ == monitor) return;
+    display_modes_monitor_ = monitor;
+    display_modes_.clear();
+    const std::vector<DisplayMode> all = cb_.display_modes ? cb_.display_modes(monitor) : std::vector<DisplayMode>{};
+    auto whole = [](float hz) { return std::fabs(hz - std::round(hz)) < 0.05f; };
+    for (const DisplayMode& m : all) {
+      if (m.width < 1280 || m.height < 720) continue;  // below the game's own 720p
+      // 59.94 or 119.88 only when the display doesn't also have 60 or 120 at that size.
+      const bool twin = !whole(m.refresh) && std::any_of(all.begin(), all.end(), [&](const DisplayMode& o) {
+        return o.width == m.width && o.height == m.height && whole(o.refresh) &&
+               std::fabs(o.refresh - std::round(m.refresh)) < 0.05f;
+      });
+      if (!twin) display_modes_.push_back(m);  // SDL's order: largest first, then the highest rate
     }
-    std::vector<Option> opts = {{"Desktop", "desktop"}};
-    for (const DisplayMode& m : display_modes_) opts.push_back({m.Label(), m.Value()});
-    const std::string cur = Get("kk_fullscreen_mode");
-    bool listed = false;
-    for (const auto& o : opts) listed = listed || o.value == cur;
-    if (!listed)  // a mode this display doesn't have (another monitor's, or the settings file's)
-      if (const auto m = ParseDisplayMode(cur)) opts.push_back({F("{0} (not on this display)", {m->Label()}), cur});
-    Item it = CvarChoice("Resolution",
-                         "Desktop keeps your desktop's resolution in a borderless window, and switches instantly. "
-                         "A resolution from the list changes your screen to that size and refresh rate while the "
-                         "game runs (exclusive fullscreen). The render quality follows it. Applies when the game "
-                         "starts.",
-                         "kk_fullscreen_mode", opts);
-    if (const auto m = ParseDisplayMode(cur); m && GetBool("fullscreen"))
-      it.facts.push_back(F("The game will be shown at {0}.", {Size(m->width, m->height)}));
+  }
+
+  // The refresh rates the display has at a size, highest first.
+  std::vector<float> RatesAt(int width, int height) const {
+    std::vector<float> rates;
+    for (const DisplayMode& m : display_modes_)
+      if (m.width == width && m.height == height) rates.push_back(m.refresh);
+    return rates;
+  }
+
+  Item ResolutionItem() {
+    LoadDisplayModes();
+    const std::string cur_value = Get("kk_fullscreen_mode");
+    const auto cur = ParseDisplayMode(cur_value);
+    Item it;
+    it.type = ItemType::kChoice;
+    it.label = "Resolution";
+    it.description =
+        "Desktop keeps your desktop's resolution in a borderless window, and switches instantly. A resolution from "
+        "the list changes your screen to that size while the game runs (exclusive fullscreen), at the Refresh rate "
+        "below. The render quality follows it. Applies when the game starts.";
+    it.options = {"Desktop"};
+    std::vector<std::pair<int, int>> sizes = {{0, 0}};
+    for (const DisplayMode& m : display_modes_) {
+      if (sizes.back() == std::pair<int, int>{m.width, m.height}) continue;
+      sizes.emplace_back(m.width, m.height);
+      it.options.push_back(Size(m.width, m.height));
+    }
+    it.index = 0;
+    if (cur) {
+      it.index = -1;
+      for (size_t i = 1; i < sizes.size(); ++i)
+        if (sizes[i] == std::pair<int, int>{cur->width, cur->height}) it.index = int(i);
+      if (it.index < 0) {  // a size this display doesn't have (another monitor's, or the settings file's)
+        it.index = int(sizes.size());
+        sizes.emplace_back(cur->width, cur->height);
+        it.options.push_back(F("{0} (not on this display)", {Size(cur->width, cur->height)}));
+      }
+      if (GetBool("fullscreen")) it.facts.push_back(F("The game will be shown at {0}.", {Size(cur->width, cur->height)}));
+    }
+    it.default_text = "Desktop";
+    it.on_choice = [this, sizes, cur](int i) {
+      if (i <= 0) return Set("kk_fullscreen_mode", "desktop");
+      const auto [w, h] = sizes[size_t(i)];
+      const std::vector<float> rates = RatesAt(w, h);
+      // The rate chosen before when this size has it, else this size's highest.
+      float rate = rates.empty() ? (cur ? cur->refresh : 0.0f) : rates.front();
+      for (const float r : rates)
+        if (cur && std::fabs(r - cur->refresh) < 0.01f) rate = r;
+      Set("kk_fullscreen_mode", DisplayMode{w, h, rate}.Value());
+    };
+    it.on_default = [] { Reset("kk_fullscreen_mode"); };
+    Disable(it, !GetBool("fullscreen"), "Only used in fullscreen.");
+    return it;
+  }
+
+  // Only with a Resolution chosen: the display's rates at that size.
+  Item RefreshRateItem() {
+    const auto cur = ParseDisplayMode(Get("kk_fullscreen_mode"));
+    Item it;
+    it.type = ItemType::kChoice;
+    it.label = "Refresh rate";
+    it.description = "How many times a second your screen refreshes at the Resolution above. Applies when the game "
+                     "starts.";
+    std::vector<float> rates = RatesAt(cur->width, cur->height);
+    if (rates.empty()) rates.push_back(cur->refresh);
+    it.index = -1;
+    for (size_t i = 0; i < rates.size(); ++i) {
+      const DisplayMode m{cur->width, cur->height, rates[i]};
+      it.options.push_back(m.RateLabel());
+      if (std::fabs(rates[i] - cur->refresh) < 0.01f) it.index = int(i);
+    }
+    it.value_text = cur->RateLabel();
+    it.default_text = DisplayMode{cur->width, cur->height, rates.front()}.RateLabel();
+    it.on_choice = [w = cur->width, h = cur->height, rates](int i) {
+      Set("kk_fullscreen_mode", DisplayMode{w, h, rates[size_t(i)]}.Value());
+    };
+    it.on_default = [w = cur->width, h = cur->height, top = rates.front()] {
+      Set("kk_fullscreen_mode", DisplayMode{w, h, top}.Value());
+    };
     Disable(it, !GetBool("fullscreen"), "Only used in fullscreen.");
     return it;
   }
@@ -2347,15 +2419,11 @@ class Launcher final : public rex::ui::ImGuiDialog {
       for (const auto& o : opts) values.push_back(o.value);
       it.on_choice = [values](int i) {
         Set("present_effect", values[size_t(i)]);
-        // The upscaler modes are Native to Performance; others start at Native
-        // (Supersampling stays on).
-        if (i != 0 && UpscalerMode() < 0 && Get("kk_render_quality") != "supersample")
-          Set("kk_render_quality", "native");
+        // The upscaler modes are Native to Performance; others start at Native.
+        if (i != 0 && UpscalerMode() < 0) Set("kk_render_quality", "native");
       };
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
-    const bool supersampling = Get("kk_render_quality") == "supersample";
-    const char* const kSupersamplingOn = "Supersampling is on: switch it off to choose this.";
     if (Get("present_effect") != "bilinear") {
       Item it;
       it.type = ItemType::kChoice;
@@ -2386,8 +2454,6 @@ class Launcher final : public rex::ui::ImGuiDialog {
       if (const auto* flag = FindFlag("kk_render_quality"))
         for (int m = 0; m < 4; ++m)
           if (flag->default_value == kUpscalerModes[m]) it.default_text = kUpscalerModeNames[m];
-      if (supersampling) it.facts.clear();
-      Disable(it, supersampling, kSupersamplingOn);
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     } else {
       Item it;
@@ -2395,13 +2461,12 @@ class Launcher final : public rex::ui::ImGuiDialog {
       it.label = "Render quality";
       it.description =
           "How sharply the game is drawn compared with your screen. Native matches it; Quality, Balanced and the "
-          "Performance modes draw fewer pixels and scale up (an upscaler makes that sharper); Supersample draws more "
-          "for the cleanest edges. The game renders in steps of its original 720p.";
+          "Performance modes draw fewer pixels and scale up (an upscaler makes that sharper). The game renders in "
+          "steps of its original 720p.";
       const std::string cur = Get("kk_render_quality");
       std::vector<std::string> values;
       it.index = -1;
       for (const auto& p : RenderPresets()) {
-        if (std::string_view(p.id) == "supersample") continue;  // its own setting, below
         const int scale = RenderScaleFor(p.id, out_h);
         if (cur == p.id) {
           it.index = int(values.size());
@@ -2413,31 +2478,12 @@ class Launcher final : public rex::ui::ImGuiDialog {
       it.options.push_back("Custom");
       values.push_back("custom");
       if (cur == "custom") it.index = int(values.size()) - 1;
-      it.value_text = supersampling ? "Supersampling" : cur;
+      it.value_text = cur;
       it.on_choice = [values](int i) { Set("kk_render_quality", values[size_t(i)]); };
       it.on_default = [] { Reset("kk_render_quality"); };
       if (const auto* flag = FindFlag("kk_render_quality"))
         for (const auto& p : RenderPresets())
           if (flag->default_value == p.id) it.default_text = p.label;
-      Disable(it, supersampling, kSupersamplingOn);
-      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
-    }
-    {
-      Item it;
-      it.type = ItemType::kChoice;
-      it.label = "Supersampling";
-      it.description =
-          "Draws the game at more pixels than your screen has, then shrinks the picture down, for the cleanest "
-          "edges and the most detail. Very demanding: for powerful graphics cards.";
-      it.options = {"Off", "On"};
-      it.index = supersampling ? 1 : 0;
-      it.default_text = "Off";
-      if (supersampling) {
-        const int scale = RenderScaleFor("supersample", out_h);
-        it.facts.push_back(F(draws, {Size(1280 * scale, 720 * scale), Size(out_w, out_h)}));
-      }
-      it.on_choice = [](int i) { Set("kk_render_quality", i == 1 ? "supersample" : "native"); };
-      it.on_default = [] { Set("kk_render_quality", "native"); };
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
     if (Get("kk_render_quality") == "custom") {
@@ -2468,35 +2514,29 @@ class Launcher final : public rex::ui::ImGuiDialog {
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
     {
-      // Ambient occlusion lives in the GPU plugin (ao_mode, ao_strength).
+      // Ambient occlusion lives in the GPU plugin (ao_mode, ao_strength). On the native renderer it is
+      // GTAO (ApplyPortDefaults), worked out from the scene's depth at the end of the opaque pass, so
+      // water, smoke, fire, fur and the sky drawn after it are never darkened (native-renderer/docs/ao.md).
+      const bool native = NativeRendererAvailable() && UsingNativeRenderer();
       Item it = CvarChoice("Ambient occlusion",
-                           "Soft shading where surfaces meet: in corners and creases, and on the ground under rocks, "
-                           "grass and people. Costs about 1 ms a frame at 4K. Not available with Intel graphics yet.",
+                           native ? "Soft shading where surfaces meet: in corners and creases, and on the ground under "
+                                    "rocks, grass and people (GTAO). Water, smoke, fire and the sky are never darkened. "
+                                    "Costs about 1 to 2 ms a frame at 4K."
+                                  : "Soft shading where surfaces meet: in corners and creases, and on the ground under "
+                                    "rocks, grass and people. Costs about 1 ms a frame at 4K. Not available with Intel "
+                                    "graphics on the Classic renderer.",
                            "ao_mode", {{"Off", "0"}, {"On", "1"}});
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
       if (GetInt("ao_mode", 0) != 0) {
-        Item st = CvarChoice("AO strength", "How dark the shading gets. 1 is recommended.", "ao_strength",
-                             {{"1 (recommended)", "1"}, {"2", "2"}, {"3", "3"}});
+        // GTAO: the shading's darkness (XeGTAO's final power 1.6, 2.2, 3.0) and how far it reaches from
+        // each crease (6, 8, 12 near-plane distances). Light darkens about as much as the Classic
+        // renderer's AO on the whole, with a crisper footprint (docs/ao.md, "In the game").
+        Item st = CvarChoice("AO strength",
+                             native ? "How dark the shading gets and how far it spreads from each corner. Light is "
+                                      "recommended: Medium and Strong darken grass and rock more."
+                                    : "How dark the shading gets. Light is recommended.",
+                             "ao_strength", {{"Light (recommended)", "1"}, {"Medium", "2"}, {"Strong", "3"}});
         items.push_back(std::move(Disable(st, original, kSetByOriginal)));
-        if (NativeRendererAvailable() && UsingNativeRenderer()) {
-          // The native renderer's two methods (native-renderer/docs/ao.md). GTAO is applied at the end of
-          // the opaque pass, so whatever is drawn after it (water, smoke, fire, the sky) is never darkened.
-          Item am = CvarChoice("AO method",
-                               "GTAO works the shading out from the scene's depth before water, smoke, fire, fur "
-                               "and the sky are drawn, so they are never darkened, and it works in every chapter. "
-                               "Classic is the occlusion of the Classic renderer. Applies when the game starts.",
-                               "native_ao_method", {{"GTAO (new)", "gtao"}, {"Classic", "legacy"}});
-          am.on_choice = [](int i) {
-            Set("native_ao_method", i == 0 ? "gtao" : "legacy");
-            if (i == 0) Set("native_ao_apply", "opaque");
-            else Reset("native_ao_apply");  // the classic method always applies at the resolve
-          };
-          am.on_default = [] {
-            Reset("native_ao_method");
-            Reset("native_ao_apply");
-          };
-          items.push_back(std::move(Disable(am, original, kSetByOriginal)));
-        }
       }
     }
 
@@ -3093,6 +3133,22 @@ class Launcher final : public rex::ui::ImGuiDialog {
       it.on_default = [this] { SetOnlineCount(false); };
       if (const online::Counts c = online::Get(); c.known)
         it.facts.push_back(F("Players online: {0}", {std::to_string(c.online)}));
+      items.push_back(std::move(it));
+    }
+    if (discord::Available()) {
+      Item it = CvarToggle("Discord status",
+                           "Shows on your Discord profile that you're playing King Kong, in the launcher or in the "
+                           "game, and for how long, while the Discord app is running on this PC. It only talks to "
+                           "the Discord app; nothing is sent anywhere else.",
+                           "kk_discord_status");
+      it.on_choice = [](int i) {
+        SetBool("kk_discord_status", i == 1);
+        discord::Wake();
+      };
+      it.on_default = [] {
+        Reset("kk_discord_status");
+        discord::Wake();
+      };
       items.push_back(std::move(it));
     }
     {

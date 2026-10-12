@@ -32,6 +32,7 @@
 
 #include "art.h"
 #include "crash_dump.h"
+#include "discord_presence.h"
 #include "display_modes.h"
 #include "frame_stats.h"
 #include "glyphs.h"
@@ -102,10 +103,12 @@ class KingKongApp : public rex::ReXApp {
     const bool show = !files_ok || kk::IsShiftHeld() || (REXCVAR_GET(kk_launcher) && !skip_once);
     if (!show) {
       kk::EnforceOriginalLook();
-      if (kk::kFullscreenResolution) kk::ApplyFullscreenMode(window() ? window()->GetNativeWindowHandle() : nullptr);
+      kk::ApplyFullscreenMode(window());
       kk::ApplyRenderPreset(OutputSize().second);
       kk::online::SetPlaying(true);
       kk::online::Start();
+      kk::discord::SetPlaying(true);
+      kk::discord::Start();
       return defaults;
     }
 
@@ -113,9 +116,10 @@ class KingKongApp : public rex::ReXApp {
     cb.play = [this, resume, defaults] {
       app_context().CallInUIThreadDeferred([this, resume, defaults] {
         // The Resolution (Display page) before the render quality, which follows it.
-        if (kk::kFullscreenResolution) kk::ApplyFullscreenMode(window() ? window()->GetNativeWindowHandle() : nullptr);
+        kk::ApplyFullscreenMode(window());
         kk::ApplyRenderPreset(OutputSize().second);
         kk::online::SetPlaying(true);
+        kk::discord::SetPlaying(true);
         resume(defaults);
       });
     };
@@ -140,6 +144,7 @@ class KingKongApp : public rex::ReXApp {
     };
     cb.screen_size = [] { return kk::PrimaryScreenSize(); };
     cb.output_size = [this] { return OutputSize(); };
+    cb.display_modes = [this](int monitor) { return kk::ListDisplayModes(monitor, window()); };
     kk::ShowLauncher(imgui_drawer(), immediate_drawer(),
                       {defaults.game_data_root, defaults.user_data_root, defaults.config_path},
                       std::move(cb));
@@ -227,7 +232,7 @@ class KingKongApp : public rex::ReXApp {
   // monitor's; else the window.
   std::pair<int, int> OutputSize() const {
     if (REXCVAR_QUERY(bool, fullscreen) || !window()) {
-      if (kk::kFullscreenResolution && REXCVAR_QUERY(bool, fullscreen))
+      if (REXCVAR_QUERY(bool, fullscreen))
         if (const auto mode = kk::FullscreenModeSize()) return *mode;
       return kk::PrimaryScreenSize();
     }

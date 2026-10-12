@@ -98,46 +98,59 @@ the runtime then prepares again as they play: not useful, and not easy to make s
 Also fixed on the way: B while a Home side panel (Steam, Discord) had the focus opened the Quit pop-up (the global
 Back ran first); it now goes back to the menu, as the footer said.
 
-### 3. Display > Resolution (NOT READY: off in the first beta)
+### 3. Display > Resolution and Refresh rate (Beta 1.1)
 
-**Off** (`kFullscreenResolution = false` in `kk/src/display_modes.h`): the row is not shown and nothing below runs;
-fullscreen stays the borderless desktop fullscreen of v1.9.11. Found in the game run: SDL is linked statically into
-both `rexruntime.dll` (the SDK, which owns the window) and `king_kong.exe`, so the port's SDL copy sees neither the
-game's window ("KK: fullscreen mode: the game's window was not found") nor the displays (its video subsystem is not
-initialised: the mode list was empty, the row showed only Desktop). To finish it: an SDK addition (for example
-`Window::SetFullscreenMode(width, height, refresh)` and a mode list in `WindowSDL`, as a patch in
-`tools/rexglue-patches` built into `sdk-vulkan`), then switch the constant on. The rest of this section is the design,
-written and kept in the code:
+Under Window mode: **Resolution**, "Desktop" (the default: a borderless window at the desktop's resolution, as in
+v1.9.11) or one of the monitor's sizes, and, with a size chosen, **Refresh rate** (that size's rates, highest first).
+Both are kept in `kk_fullscreen_mode` (`desktop` or `WIDTHxHEIGHT@HZ`) and disabled in windowed mode ("Only used in
+fullscreen."). The list is the display's fullscreen modes (the Monitor setting's display, in SDL's order as the SDK
+uses it, or the window's for Default), from 1280 x 720 up, each size once; a rate a hair under a whole one (59.94,
+119.88) is left out when the whole one is there. On this PC's monitor SDL reports 307 modes: 22 sizes and up to 9
+rates each in the rows. A saved size the display doesn't have stays listed as "(not on this display)".
 
-New row under Window mode: **Resolution**, "Desktop" (the default, today's behaviour: a borderless window at the
-desktop's resolution) or one of the monitor's display modes, "2560 x 1440 . 144 Hz" (SDL3
-`SDL_GetFullscreenDisplayModes` of the display the game opens on: the Monitor setting in SDL's order as the SDK uses
-it, or the window's display for Default; duplicates of other pixel formats left out). Shown always, disabled in
-windowed mode ("Only used in fullscreen."); in fullscreen its description panel says "The game will be shown at
-W x H". A mode saved for another monitor stays listed as "(not on this display)".
-
-How it was meant to work without an SDK change (it can't, see above): the SDK's `WindowSDL` goes fullscreen with `SDL_SetWindowFullscreen` and never sets a
-display mode, which is SDL3's borderless desktop fullscreen. SDL keeps a fullscreen mode per window and uses it every
-time that window is fullscreen, so `kk::ApplyFullscreenMode` (`kk/src/display_modes.*`) finds the game's SDL window
-(`SDL_GetWindows`, matched by its HWND) and calls `SDL_SetWindowFullscreenMode` with the closest mode the display has
-(`SDL_GetClosestFullscreenDisplayMode`), or `nullptr` for Desktop. It runs on the UI thread when Play is pressed (and
-when the launcher is skipped), before the render quality is applied; the launcher itself stays borderless. Every later
+How: SDL is linked into both `rexruntime.dll` (the SDK, which owns the window) and `king_kong.exe`, so the port's SDL
+copy sees neither the game's window nor the displays (Beta 1 found this and shipped without the row). SDK patch 0015
+(`tools/rexglue-patches`) adds `rex::ui::GetFullscreenDisplayModes` and `rex::ui::SetFullscreenDisplayMode`, which
+use the SDK's SDL: SDL keeps a fullscreen mode per window and uses it every time the window is fullscreen, so
+`kk::ApplyFullscreenMode` (`kk/src/display_modes.*`) sets it on the UI thread when Play is pressed (and when the
+launcher is skipped), before the render quality is applied; the launcher itself stays borderless. Every later
 fullscreen switch of the SDK's (the fullscreen setting) uses the mode. A mode the display doesn't have falls back to
 the closest, and a failure to Desktop, logged as `KK: fullscreen mode ...`.
 
-The render scale follows it: `OutputSize()` (`king_kong_app.h`) returns the chosen mode's size in fullscreen, so
+The render scale follows it: `OutputSize()` (`king_kong_app.h`) returns the chosen size in fullscreen, so
 `ApplyRenderPreset` sets the draw resolution scale for it and `--native_render_scale=auto` takes that scale
 (`AutoRenderScale`). The Graphics page's "Draws ... for your ... screen" shows the chosen size too. The native
 shader pack is unaffected (with `auto` it always carries the render scale variants).
+
+Checked: the mode list and both rows in the launcher (windowed, `runs11-launcher-*`). Not checked on this PC: the
+exclusive switch itself, which would change the monitor's mode under the user; the user tests it.
+
+### 4. Beta 1.1: Discord status, GTAO only, no Supersampling
+
+- **Discord status** (About > Launcher, `kk_discord_status`, on): Rich Presence through the Discord app's local
+  connection (`kk/src/discord_presence.*`, the named pipe `discord-ipc-N`; a Unix socket on Linux), no Discord SDK.
+  Shows "In the launcher" or "In the game", the time since, "PC port v<version>", and buttons to the website and the
+  Discord server. Tries again every 20 seconds while Discord isn't running; switched off, the activity is cleared.
+  The row is shown only when the port has a Discord application ID (`kApplicationId`; `--kk_discord_app_id` for
+  testing). Checked against this PC's Discord with an invalid ID: the handshake, and Discord's refusal, logged.
+- **GTAO only.** `native_ao_method` `gtao` and `native_ao_apply` `opaque` are the port's defaults
+  (`ApplyPortDefaults`; the plugin's own defaults stay `legacy`/`resolve` for its tests). The AO method row is gone;
+  a settings file's `native_ao_method`/`native_ao_apply` (Beta 1's choice) is reset at start (`ApplyFixedSettings`).
+  Remastered no longer writes them. **AO strength** is now Light (1, recommended), Medium (2) and Strong (3): with GTAO
+  it sets XeGTAO's final power (1.6, 2.2, 3.0) and the radius (6, 8, 12 near-plane distances), see `ao.md`. The
+  Classic renderer keeps its own AO and the Intel note.
+- **Supersampling** (`kk_render_quality` `supersample`) is gone: the row, the preset and the disabling it did. A
+  settings file with it gets `native` (`ApplyFixedSettings`). Custom's Internal resolution stays.
 
 ## Settings
 
 | Setting | Values (default first) | Where | Notes |
 |---|---|---|---|
 | `kk_renderer` | `native`, `classic` | `settings.cpp`, Graphics > Advanced > Renderer | at start `ApplyRendererChoice` (`launcher.cpp`, called from `OnPreSetup`) sets **gpu_plugin's default** to `native` or `xenos` (always `xenos` when `rexgpu-native` isn't there). So `gpu_plugin` itself is never written to the settings file; a `gpu_plugin` from the command line or the settings file still wins (the Renderer row says so, and is disabled for the command line). Choosing a renderer in the launcher takes a settings-file `gpu_plugin` out. |
-| `kk_fullscreen_mode` | `desktop`, `WIDTHxHEIGHT@HZ` | `settings.cpp`, Display > Resolution | not read while the Resolution feature is off |
+| `kk_fullscreen_mode` | `desktop`, `WIDTHxHEIGHT@HZ` | `settings.cpp`, Display > Resolution and Refresh rate | set on the game's window when it starts (Beta 1.1) |
+| `kk_discord_status` | `true`, `false` | `settings.cpp`, About > Discord status | Beta 1.1 |
 | `kk_original_look` | (existing) | Graphics > Look | the label Modern is now Remastered |
-| `native_ao_method`, `native_ao_apply`, `native_ao_quality` | (the plugin's) | written by Remastered and AO method | defaults unchanged (`legacy`, `resolve`, `auto`): the golden-scene harness sees no change |
+| `native_ao_method`, `native_ao_apply`, `native_ao_quality` | (the plugin's) | no row since Beta 1.1 | the port's defaults are `gtao`, `opaque`, `auto` (`ApplyPortDefaults`); the plugin's stay `legacy`, `resolve`, `auto` for the golden-scene harness |
 
 Reset page (Graphics) also resets `kk_renderer` and the three `native_ao_*`; Reset page (Display) `kk_fullscreen_mode`.
 
@@ -219,7 +232,8 @@ uns`):
 - The GPU tiers use dedicated video memory from DXGI (Windows); on Linux every card but the Deck gets High.
 - GTAO on Intel graphics is not checked (the Remastered preset turns it on there too, with Medium).
 - `launcher_text_table.inc` has no translations of the new strings.
-- Display > Resolution is off (above).
+- Display > Resolution's exclusive switch is not checked on this PC (above).
+- Discord status needs the port's Discord application ID in `discord_presence.cpp`.
 - The look step's Original card shows a smaller copy of the same still; the difference is slight.
 - The Monitor row lists monitors in Windows' order (`EnumDisplayMonitors`) while the SDK and the Resolution row use
   SDL's order; with several monitors these can differ (as before this work).

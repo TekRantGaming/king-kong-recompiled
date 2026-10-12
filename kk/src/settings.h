@@ -24,6 +24,8 @@ REXCVAR_DECLARE(std::string, kk_button_prompts);
 REXCVAR_DECLARE(bool, kk_check_updates);
 REXCVAR_DECLARE(std::string, kk_update_channel);
 REXCVAR_DECLARE(bool, kk_online_count);
+REXCVAR_DECLARE(bool, kk_discord_status);
+REXCVAR_DECLARE(std::string, kk_discord_app_id);
 REXCVAR_DECLARE(bool, kk_online_asked);
 REXCVAR_DECLARE(std::string, kk_install_id);
 REXCVAR_DECLARE(bool, kk_show_fps);
@@ -100,7 +102,7 @@ struct RenderPreset {
   const char* label;
   double ratio;  // output size / render size
 };
-const std::array<RenderPreset, 6>& RenderPresets();
+const std::array<RenderPreset, 5>& RenderPresets();
 // resolution_scale (1-8) a preset gives for an output height; 0 for "custom".
 int RenderScaleFor(std::string_view preset, int output_height);
 // Applies kk_render_quality for the given output height (call before the GPU starts).

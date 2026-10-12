@@ -1,0 +1,189 @@
+From e616a360124d86441e9490aebcf28114a9158c53 Mon Sep 17 00:00:00 2001
+From: TekRantGaming <craigferels896@gmail.com>
+Date: Mon, 12 Oct 2026 17:15:31 +0100
+Subject: [PATCH] UI: fullscreen display modes (exclusive fullscreen at a
+ chosen resolution)
+
+rex::ui::GetFullscreenDisplayModes lists a display's modes and
+rex::ui::SetFullscreenDisplayMode sets the mode SDL uses whenever the window
+is fullscreen (none: borderless at the desktop's resolution, the default).
+A host linking SDL itself cannot do this: its SDL copy sees neither the
+SDK's window nor the displays.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ include/rex/ui/display_mode.h | 40 +++++++++++++++
+ include/rex/ui/window_sdl.h   |  1 +
+ src/ui/window_sdl.cpp         | 92 +++++++++++++++++++++++++++++++++++
+ 3 files changed, 133 insertions(+)
+ create mode 100644 include/rex/ui/display_mode.h
+
+diff --git a/include/rex/ui/display_mode.h b/include/rex/ui/display_mode.h
+new file mode 100644
+index 0000000..8fe1a5f
+--- /dev/null
++++ b/include/rex/ui/display_mode.h
+@@ -0,0 +1,40 @@
++/**
++ * @file        ui/display_mode.h
++ * @brief       Fullscreen display modes (exclusive fullscreen at a chosen resolution)
++ *
++ * @copyright   Copyright (c) 2026 Tom Clay <tomc@tctechstuff.com>
++ *              All rights reserved.
++ *
++ * @license     BSD 3-Clause License
++ *              See LICENSE file in the project root for full license text.
++ */
++
++#pragma once
++
++#include <vector>
++
++namespace rex::ui {
++
++class Window;
++
++// A display mode, in pixels.
++struct DisplayMode {
++  int width = 0;
++  int height = 0;
++  float refresh_rate = 0.0f;  // Hz (0: unknown)
++};
++
++// The fullscreen display modes of a display, largest first (then the highest refresh rate), each
++// size and rate once. `monitor` is 1-based in the order the monitor cvar uses; 0 is the display
++// `window` is on (the primary display without a window). Call on the UI thread.
++std::vector<DisplayMode> GetFullscreenDisplayModes(int monitor, const Window* window);
++
++// Sets the mode `window` uses whenever it is fullscreen. With a size, the closest mode the display
++// has to width x height at refresh_rate (0: any), as exclusive fullscreen; with width 0, borderless
++// at the desktop's resolution (the default). Applies at once when the window is fullscreen. Returns
++// false when the mode could not be set (the window then stays borderless); `chosen` gets the mode
++// that was set. `monitor` as for GetFullscreenDisplayModes. Call on the UI thread.
++bool SetFullscreenDisplayMode(Window* window, int monitor, int width, int height, float refresh_rate,
++                              DisplayMode* chosen = nullptr);
++
++}  // namespace rex::ui
+diff --git a/include/rex/ui/window_sdl.h b/include/rex/ui/window_sdl.h
+index 71e7473..7a45ab7 100644
+--- a/include/rex/ui/window_sdl.h
++++ b/include/rex/ui/window_sdl.h
+@@ -32,6 +32,7 @@ class WindowSDL final : public Window {
+   ~WindowSDL() override;
+ 
+   void* GetNativeWindowHandle() const override;
++  SDL_Window* sdl_window() const { return sdl_window_; }  // null while the window is closed
+   bool SetRelativeMouseMode(bool enable) override;
+   bool WarpMouseToCenter(int32_t& x_out, int32_t& y_out) override;
+ 
+diff --git a/src/ui/window_sdl.cpp b/src/ui/window_sdl.cpp
+index 2251429..2fb0f9f 100644
+--- a/src/ui/window_sdl.cpp
++++ b/src/ui/window_sdl.cpp
+@@ -13,6 +13,8 @@
+ 
+ #include <rex/ui/window_sdl.h>
+ 
++#include <rex/ui/display_mode.h>
++
+ #include <algorithm>
+ #include <cmath>
+ #include <cstring>
+@@ -588,4 +590,94 @@ void WindowSDL::HandleMouseEvent(SDL_Event& event) {
+   }
+ }
+ 
++// ------------------------------------------------------- display modes ---
++// SDL keeps a fullscreen mode per window and uses it every time the window is fullscreen: none (the
++// default, borderless at the desktop's resolution) or a display mode (exclusive fullscreen).
++
++namespace {
++
++SDL_Window* SdlWindowOf(const Window* window) {
++  const auto* sdl = dynamic_cast<const WindowSDL*>(window);
++  return sdl ? sdl->sdl_window() : nullptr;
++}
++
++// `monitor` as the monitor cvar (1-based, SDL's order); 0 or out of range: the window's display.
++SDL_DisplayID DisplayFor(int monitor, SDL_Window* window) {
++  SDL_DisplayID id = 0;
++  if (monitor > 0) {
++    int count = 0;
++    if (SDL_DisplayID* ids = SDL_GetDisplays(&count)) {
++      if (monitor <= count) {
++        id = ids[monitor - 1];
++      }
++      SDL_free(ids);
++    }
++  }
++  if (!id && window) {
++    id = SDL_GetDisplayForWindow(window);
++  }
++  return id ? id : SDL_GetPrimaryDisplay();
++}
++
++// SDL's sizes are in points where the display's density is above 1 (macOS); the modes here are pixels.
++DisplayMode ToPixels(const SDL_DisplayMode& m) {
++  const float density = m.pixel_density > 0.0f ? m.pixel_density : 1.0f;
++  return {int(std::lround(m.w * density)), int(std::lround(m.h * density)), m.refresh_rate};
++}
++
++}  // namespace
++
++std::vector<DisplayMode> GetFullscreenDisplayModes(int monitor, const Window* window) {
++  std::vector<DisplayMode> out;
++  int count = 0;
++  SDL_DisplayMode** modes = SDL_GetFullscreenDisplayModes(DisplayFor(monitor, SdlWindowOf(window)), &count);
++  if (!modes) {
++    return out;
++  }
++  for (int i = 0; i < count; ++i) {
++    const DisplayMode m = ToPixels(*modes[i]);
++    // SDL lists a size and rate again for each pixel format.
++    const bool seen = std::any_of(out.begin(), out.end(), [&](const DisplayMode& o) {
++      return o.width == m.width && o.height == m.height && std::fabs(o.refresh_rate - m.refresh_rate) < 0.01f;
++    });
++    if (!seen) {
++      out.push_back(m);
++    }
++  }
++  SDL_free(modes);
++  return out;
++}
++
++bool SetFullscreenDisplayMode(Window* window, int monitor, int width, int height, float refresh_rate,
++                              DisplayMode* chosen) {
++  SDL_Window* sdl_window = SdlWindowOf(window);
++  if (!sdl_window) {
++    REXLOG_WARN("Fullscreen mode: the window is not open");
++    return false;
++  }
++  if (width <= 0 || height <= 0) {
++    SDL_SetWindowFullscreenMode(sdl_window, nullptr);
++    return true;
++  }
++  const SDL_DisplayID display = DisplayFor(monitor, sdl_window);
++  const SDL_DisplayMode* desktop = SDL_GetDesktopDisplayMode(display);
++  const float density = desktop && desktop->pixel_density > 0.0f ? desktop->pixel_density : 1.0f;
++  SDL_DisplayMode mode{};
++  if (!SDL_GetClosestFullscreenDisplayMode(display, int(std::lround(width / density)),
++                                           int(std::lround(height / density)), refresh_rate, true, &mode)) {
++    REXLOG_WARN("Fullscreen mode {}x{}: the display has no such mode ({})", width, height, SDL_GetError());
++    SDL_SetWindowFullscreenMode(sdl_window, nullptr);
++    return false;
++  }
++  if (!SDL_SetWindowFullscreenMode(sdl_window, &mode)) {
++    REXLOG_WARN("Fullscreen mode {}x{}: {}", width, height, SDL_GetError());
++    SDL_SetWindowFullscreenMode(sdl_window, nullptr);
++    return false;
++  }
++  if (chosen) {
++    *chosen = ToPixels(mode);
++  }
++  return true;
++}
++
+ }  // namespace rex::ui
+-- 
+2.55.0.windows.5
+

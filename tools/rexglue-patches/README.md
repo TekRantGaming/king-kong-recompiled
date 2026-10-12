@@ -91,13 +91,21 @@ its name was only removed on a clean shutdown: a crash or a kill left all of it 
 `REX_DEV_FRAME_LOG` (see 0003) for the Vulkan backend too, with each draw's depth function and a note for draws
 whose pipeline is still a placeholder or missing.
 
+## 0015: fullscreen display modes
+
+`rex::ui::GetFullscreenDisplayModes` lists a display's fullscreen modes and `rex::ui::SetFullscreenDisplayMode`
+sets the mode SDL uses whenever the window is fullscreen (none: borderless at the desktop's resolution, the
+default). The launcher's Display > Resolution (Beta 1.1) uses them: the port can't call SDL for this itself, as SDL
+is linked into both `rexruntime.dll` and `king_kong.exe` and the port's copy sees neither the SDK's window nor the
+displays. Numbered 0015 because 0013 and 0014 are taken on the Linux branch (`nr-linux`).
+
 ## Building
 
 ```
 git clone https://github.com/rexglue/rexglue-sdk.git
 cd rexglue-sdk
 git checkout f5337cdc
-git am <this folder>/*.patch   # 0001-0008, then 0010-0012
+git am <this folder>/*.patch   # 0001-0008, 0010-0012, then 0015
 cmake --preset win-amd64
 cmake --build out/build/win-amd64 --config Release --target install --parallel
 ```

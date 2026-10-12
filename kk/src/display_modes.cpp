@@ -1,14 +1,12 @@
 #include "display_modes.h"
 
-#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 
-#include <SDL3/SDL.h>
-
 #include <rex/cvar.h>
 #include <rex/logging.h>
+#include <rex/ui/display_mode.h>
 
 namespace kk {
 
@@ -22,44 +20,9 @@ std::string Hz(float refresh) {
   return buf;
 }
 
-DisplayMode FromSdl(const SDL_DisplayMode& m) {
-  const float density = m.pixel_density > 0 ? m.pixel_density : 1.0f;
-  return {int(std::lround(m.w * density)), int(std::lround(m.h * density)), m.refresh_rate};
-}
+DisplayMode FromSdk(const rex::ui::DisplayMode& m) { return {m.width, m.height, m.refresh_rate}; }
 
-SDL_DisplayID DisplayFor(int monitor, SDL_Window* window) {
-  SDL_DisplayID id = 0;
-  if (monitor > 0) {
-    int count = 0;
-    if (SDL_DisplayID* ids = SDL_GetDisplays(&count)) {
-      if (monitor <= count) id = ids[monitor - 1];
-      SDL_free(ids);
-    }
-  }
-  if (!id && window) id = SDL_GetDisplayForWindow(window);
-  if (!id) id = SDL_GetPrimaryDisplay();
-  return id;
-}
-
-SDL_Window* GameWindow(void* native_window) {
-  int count = 0;
-  SDL_Window** windows = SDL_GetWindows(&count);
-  if (!windows) return nullptr;
-  SDL_Window* found = count > 0 ? windows[0] : nullptr;
-#if defined(_WIN32)
-  for (int i = 0; native_window && i < count; ++i) {
-    if (SDL_GetPointerProperty(SDL_GetWindowProperties(windows[i]), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr) ==
-        native_window) {
-      found = windows[i];
-      break;
-    }
-  }
-#else
-  (void)native_window;
-#endif
-  SDL_free(windows);
-  return found;
-}
+int Monitor() { return std::atoi(rex::cvar::GetFlagByName("monitor").c_str()); }
 
 }  // namespace
 
@@ -70,6 +33,8 @@ std::string DisplayMode::Value() const {
 std::string DisplayMode::Label() const {
   return std::to_string(width) + " \xC3\x97 " + std::to_string(height) + "  \xC2\xB7  " + Hz(refresh) + " Hz";
 }
+
+std::string DisplayMode::RateLabel() const { return Hz(refresh) + " Hz"; }
 
 std::optional<DisplayMode> ParseDisplayMode(const std::string& value) {
   DisplayMode m;
@@ -82,25 +47,18 @@ std::optional<DisplayMode> ParseDisplayMode(const std::string& value) {
   return m;
 }
 
-std::vector<DisplayMode> ListDisplayModes(int monitor) {
+std::vector<DisplayMode> ListDisplayModes(int monitor, const rex::ui::Window* window) {
   std::vector<DisplayMode> out;
-  const SDL_DisplayID display = DisplayFor(monitor, GameWindow(nullptr));
-  int count = 0;
-  SDL_DisplayMode** modes = SDL_GetFullscreenDisplayModes(display, &count);
-  if (!modes) return out;
-  for (int i = 0; i < count; ++i) {
-    const DisplayMode m = FromSdl(*modes[i]);
-    // SDL lists the same size and rate again for other pixel formats.
-    const bool seen = std::any_of(out.begin(), out.end(), [&](const DisplayMode& o) {
-      return o.width == m.width && o.height == m.height && o.Value() == m.Value();
-    });
-    if (!seen && m.width >= 640 && m.height >= 480) out.push_back(m);
+  for (const rex::ui::DisplayMode& m : rex::ui::GetFullscreenDisplayModes(monitor, window)) {
+    const DisplayMode mode = FromSdk(m);
+    // Two rates that print the same (59.94 and 59.95) are one choice.
+    bool seen = false;
+    for (const DisplayMode& o : out) seen = seen || o.Value() == mode.Value();
+    if (!seen && mode.width >= 640 && mode.height >= 480) out.push_back(mode);
   }
-  SDL_free(modes);
   std::string list;
   for (const DisplayMode& m : out) list += (list.empty() ? "" : ", ") + m.Value();
-  REXLOG_INFO("KK: display {} ({}): {} fullscreen modes: {}", monitor, SDL_GetDisplayName(display) ? SDL_GetDisplayName(display) : "?",
-              out.size(), list);
+  REXLOG_INFO("KK: display {}: {} fullscreen modes: {}", monitor, out.size(), list);
   return out;  // SDL's order: largest first, then the highest refresh rate
 }
 
@@ -110,37 +68,24 @@ std::optional<std::pair<int, int>> FullscreenModeSize() {
   return std::nullopt;
 }
 
-void ApplyFullscreenMode(void* native_window) {
-  SDL_Window* window = GameWindow(native_window);
+void ApplyFullscreenMode(rex::ui::Window* window) {
   if (!window) {
-    REXLOG_WARN("KK: fullscreen mode: the game's window was not found");
+    REXLOG_WARN("KK: fullscreen mode: no window");
     return;
   }
   const std::string value = rex::cvar::GetFlagByName("kk_fullscreen_mode");
   const auto want = ParseDisplayMode(value);
   if (!want) {
-    SDL_SetWindowFullscreenMode(window, nullptr);  // borderless at the desktop's resolution
+    rex::ui::SetFullscreenDisplayMode(window, 0, 0, 0, 0.0f);  // borderless at the desktop's resolution
     REXLOG_INFO("KK: fullscreen mode: desktop (borderless)");
     return;
   }
-  const SDL_DisplayID display = DisplayFor(std::atoi(rex::cvar::GetFlagByName("monitor").c_str()), window);
-  SDL_DisplayMode mode{};
-  // Sizes are in SDL's units: pixels on Windows and X11 (density 1), points where the density is higher.
-  const SDL_DisplayMode* desktop = SDL_GetDesktopDisplayMode(display);
-  const float density = desktop && desktop->pixel_density > 0 ? desktop->pixel_density : 1.0f;
-  if (!SDL_GetClosestFullscreenDisplayMode(display, int(std::lround(want->width / density)),
-                                           int(std::lround(want->height / density)), want->refresh, true, &mode)) {
-    SDL_SetWindowFullscreenMode(window, nullptr);
-    REXLOG_WARN("KK: fullscreen mode {}: the display has no such mode ({}); desktop instead", value, SDL_GetError());
+  rex::ui::DisplayMode chosen;
+  if (!rex::ui::SetFullscreenDisplayMode(window, Monitor(), want->width, want->height, want->refresh, &chosen)) {
+    REXLOG_WARN("KK: fullscreen mode {}: not available; desktop instead", value);
     return;
   }
-  if (!SDL_SetWindowFullscreenMode(window, &mode)) {
-    REXLOG_WARN("KK: fullscreen mode {}: {}; desktop instead", value, SDL_GetError());
-    SDL_SetWindowFullscreenMode(window, nullptr);
-    return;
-  }
-  REXLOG_INFO("KK: fullscreen mode {} (exclusive; asked for {}){}", FromSdl(mode).Value(), value,
-              (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) ? "" : ", used when the window goes fullscreen");
+  REXLOG_INFO("KK: fullscreen mode {} (exclusive; asked for {})", FromSdk(chosen).Value(), value);
 }
 
 }  // namespace kk

@@ -7,8 +7,11 @@
 #include <filesystem>
 #include <functional>
 #include <utility>
+#include <vector>
 
 #include <rex/ui/imgui_dialog.h>
+
+#include "display_modes.h"
 
 namespace rex::ui {
 class ImmediateDrawer;
@@ -24,6 +27,7 @@ struct LauncherCallbacks {
   std::function<double()> dpi_scale;         // window DPI / 96
   std::function<std::pair<int, int>()> screen_size;  // monitor size in physical pixels
   std::function<std::pair<int, int>()> output_size;  // size the game will be shown at
+  std::function<std::vector<DisplayMode>(int)> display_modes;  // a monitor's fullscreen modes (display_modes.h)
 };
 
 struct LauncherPaths {

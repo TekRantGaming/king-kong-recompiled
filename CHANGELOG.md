@@ -3,6 +3,28 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v2.0.0-beta.2 (12 October 2026)
+
+**Beta 1.1**: a small update to Beta 1, from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/PET2xU5FJq). Your saves and settings are kept, and you can switch back to stable at any time. Windows only for now.
+
+### What's new
+- **Choose your fullscreen resolution.** **Display** > **Resolution** lists your monitor's resolutions and refresh rates. Pick one and the game runs in exclusive fullscreen at that size; **Desktop**, the default, keeps the borderless window at your desktop's resolution. The render quality follows the resolution you pick.
+- **Discord status.** While Discord is running on your PC, your profile shows that you're playing King Kong, in the launcher or in the game, and for how long. **Discord status** on the **About** page switches it off.
+- **GTAO is now the ambient occlusion.** With the native renderer, ambient occlusion is always the new GTAO, so the **AO method** choice is gone (if you picked Classic in Beta 1, you now get GTAO). **AO strength** is now **Light** (recommended), **Medium** or **Strong**: how dark the shading gets and how far it spreads.
+- **Supersampling is gone.** Pick a **Resolution** instead. If you had it on, the game now draws at **Native**.
+- The shaders are prepared again the first time you start Beta 1.1, as after every update.
+
+### Known issues
+- Coming in a later beta: DLSS, FSR 3 and 4, and XeSS upscaling, screen-space global illumination, sharper shadows, reflections on water and volumetric light shafts.
+- In a few chapters the camera starts a pixel or two higher than on the console, because of how loading is timed.
+- With motion blur on, its trail is shorter at high frame rates.
+
+### Full changelog
+- Fullscreen resolution: `kk_fullscreen_mode` (`desktop`, or `WIDTHxHEIGHT@HZ`) sets the game window's fullscreen mode when the game starts, through the SDK (`rex::ui::GetFullscreenDisplayModes` and `SetFullscreenDisplayMode`, SDK patch 0015). A mode the display doesn't have falls back to the closest one, or to Desktop.
+- Discord status: Rich Presence through the Discord app's local connection (`discord-ipc-N`), without the Discord SDK; `kk_discord_status`, on by default. While Discord isn't running it tries again every 20 seconds.
+- `native_ao_method` `gtao` and `native_ao_apply` `opaque` are the defaults; Beta 1's AO method in a settings file is reset.
+- `kk_render_quality` `supersample` is no longer offered; a settings file with it gets `native`.
+
 ## v2.0.0-beta.1 (12 October 2026)
 
 **This is a beta**: an early test build of the next big update, from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/PET2xU5FJq). Your saves and settings are kept, and you can switch back to stable at any time. Windows only for now: on Linux, keep using the stable version through Proton.
