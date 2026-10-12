@@ -114,6 +114,15 @@ bool SceneAo::Compute(nvrhi::ICommandList* cl, const AoSettings& s, nvrhi::IText
   const bool ok = gtao_->Compute(cl, in, Settings(s)) != nullptr;
   TimeEnd(cl);
   if (!ok) return false;
+  if (stats_.computed == 0 || (stats_.computed % 1800) == 0) {
+    // The camera and the radius it gives (docs/ao.md, "Strength and radius").
+    const GtaoSettings g = Settings(s);
+    const float radius = g.radius > 0.0f ? g.radius
+                                         : Gtao::RadiusInNearPlanes(s.strength) * p.near_plane() * std::max(g.radius_scale, 0.01f);
+    Logf(LogLevel::kInfo,
+         "rexgpu-native: AO camera: near %.4f, far %.1f, px %.3f py %.3f; radius %.4f world units (strength %d), picture %ux%u at %d,%d",
+         p.near_plane(), p.far_plane(), p.px, p.py, radius, s.strength, in.width, in.height, in.x, in.y);
+  }
   computed_ = true;
   ++stats_.computed;
   return true;
