@@ -32,6 +32,9 @@ param(
   [int]$WaitPollSeconds = 300,
   # Minutes to wait after each launch before the next one, so others sharing the game get a turn.
   [double]$PauseMinutes = 0,
+  # Fair turns: the name of this runner's file in -QueueDir (empty: no queue). See game.wait\README.txt.
+  [string]$QueueName = '',
+  [string]$QueueDir = 'F:\KK-native-renderer\game.wait',
   [string]$Label = '',
   [string]$Python = 'python',
   [switch]$NoCompare,
@@ -109,19 +112,48 @@ if ($Golden -and -not $Force) {
 function Wait-GameFree {
   # At most one copy of the game may run on this PC: never start a second one, never stop someone else's.
   # A lock file saying "hold" or "user" (someone is about to use the game, or playing it) counts as busy too.
+  # Fair turns (game.wait\README.txt): the runner writes when it started waiting into game.wait\<QueueName>.txt
+  # and launches only when the lock says "free" and no other waiting file there holds an earlier time.
   $deadline = (Get-Date).AddMinutes($WaitMinutes)
+  $queueFile = $null
+  if ($QueueName -and (Test-Path $QueueDir)) {
+    $queueFile = Join-Path $QueueDir "$QueueName.txt"
+    $myTime = Get-Date -Format 'yyyy-MM-ddTHH:mm:ss'
+    Set-Content -Path $queueFile -Value $myTime -Encoding ascii
+  }
   while ($true) {
     $busy = Get-Process king_kong -ErrorAction SilentlyContinue
     $held = $false
+    $lockText = ''
     if (Test-Path $LockFile) {
       $lockText = [string](Get-Content -Path $LockFile -TotalCount 1 -ErrorAction SilentlyContinue)
       $held = $lockText -match '^\s*(hold|user)'
+      if ($queueFile -and $lockText.Trim() -ne 'free') { $held = $true }
     }
-    if (-not $busy -and -not $held) { return $true }
-    if ((Get-Date) -ge $deadline) { return $false }
-    if ($busy) { $why = "the game is running (pid $($busy.Id -join ','))" } else { $why = "the lock file says '$lockText'" }
+    $ahead = @()
+    if ($queueFile) {
+      foreach ($f in Get-ChildItem -Path $QueueDir -Filter '*.txt' -ErrorAction SilentlyContinue) {
+        if ($f.FullName -eq $queueFile -or $f.Name -eq 'README.txt') { continue }
+        $t = ([string](Get-Content -Path $f.FullName -TotalCount 1 -ErrorAction SilentlyContinue)).Trim()
+        if ($t -match '^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$' -and $t -lt $myTime) { $ahead += $f.BaseName }
+      }
+    }
+    if (-not $busy -and -not $held -and $ahead.Count -eq 0) { return $true }
+    if ((Get-Date) -ge $deadline) {
+      if ($queueFile) { Set-Content -Path $queueFile -Value 'done' -Encoding ascii }
+      return $false
+    }
+    if ($busy) { $why = "the game is running (pid $($busy.Id -join ','))" }
+    elseif ($held) { $why = "the lock file says '$lockText'" }
+    else { $why = "waiting behind $($ahead -join ', ')" }
     Write-Output ("{0:HH:mm} {1}; checking again in {2} s" -f (Get-Date), $why, $WaitPollSeconds)
     Start-Sleep -Seconds $WaitPollSeconds
+  }
+}
+
+function Set-QueueDone {
+  if ($QueueName -and (Test-Path $QueueDir)) {
+    Set-Content -Path (Join-Path $QueueDir "$QueueName.txt") -Value 'done' -Encoding ascii
   }
 }
 
@@ -187,6 +219,7 @@ foreach ($run in $plan.runs) {
     Write-Output ("{0:HH:mm:ss} run {1}: scenes {2}, {3} shots, up to {4} s" -f (Get-Date), $run.name,
       ($run.scenes -join ','), $run.expected.Count, $run.limit_s)
     $proc = Start-Process -FilePath $Exe -ArgumentList $gameArgs -WorkingDirectory $runDir -PassThru
+    Set-QueueDone
     while ($true) {
       Start-Sleep -Seconds 1
       if ($proc.HasExited) { Write-Output "  the game exited by itself (code $($proc.ExitCode))"; break }
