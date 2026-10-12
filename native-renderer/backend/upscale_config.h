@@ -61,6 +61,11 @@ struct UpscaleConfig {
   // (no per-object vectors), 8 no jitter, 16 a log line per upscaled frame, 32 the depth the upscaler
   // gets, 64 no mip bias.
   uint32_t debug = 0;
+  // GPU timer queries around the work at the upscale point and around the upscaler's own work,
+  // logged every 600 frames (--native_upscaler_gpu_time).
+  bool gpu_time = false;
+  // A rule file (UpscaleRules: "post ps=<hash>", "scene ps=<hash>"), read at start.
+  std::string rules_file;
 
   bool enabled() const { return kind != UpscalerKind::kOff; }
 };

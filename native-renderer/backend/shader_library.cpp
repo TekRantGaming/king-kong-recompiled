@@ -1,5 +1,6 @@
 #include "backend/shader_library.h"
 
+#include <chrono>
 #include <cstring>
 #include <vector>
 
@@ -27,7 +28,110 @@ const char* KindName(kkshaders::ShaderKind kind) {
 ShaderLibrary::ShaderLibrary(nvrhi::IDevice* device, const GuestMemory& memory)
     : device_(device), memory_(memory) {}
 
-ShaderLibrary::~ShaderLibrary() = default;
+ShaderLibrary::~ShaderLibrary() {
+  {
+    std::lock_guard lock(motion_mutex_);
+    motion_stop_ = true;
+  }
+  motion_cv_.notify_all();
+  if (motion_thread_.joinable()) motion_thread_.join();
+}
+
+nvrhi::IShader* ShaderLibrary::MotionVariant(const GameShader& vs) {
+  if (vs.kind != kkshaders::ShaderKind::Vertex) return nullptr;
+  const uint64_t key = HashKey(vs.kind, vs.ucode_hash, vs.input_hash) ^ 0x4D4F54494F4E0001ull;
+  std::lock_guard lock(motion_mutex_);
+  if (auto it = motion_.find(key); it != motion_.end()) return it->second.handle.Get();
+  MotionEntry& e = motion_[key];
+  ++motion_stats_.requested;
+  if (!vs.source || !dxc_ok_) {
+    e.done = true;
+    ++motion_stats_.failed;
+    return nullptr;
+  }
+  motion_queue_.emplace_back(key, vs.source);
+  if (!motion_thread_.joinable()) motion_thread_ = std::thread([this] { MotionWorker(); });
+  motion_cv_.notify_one();
+  return nullptr;
+}
+
+void ShaderLibrary::WaitForMotionVariants() {
+  for (;;) {
+    {
+      std::lock_guard lock(motion_mutex_);
+      bool all = motion_queue_.empty();
+      for (const auto& [key, e] : motion_) all = all && e.done;
+      if (all) return;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+}
+
+ShaderLibrary::MotionStats ShaderLibrary::motion_stats() const {
+  std::lock_guard lock(motion_mutex_);
+  return motion_stats_;
+}
+
+void ShaderLibrary::MotionWorker() {
+  // DXC objects belong to one thread: this thread's own compiler.
+  kkshaders::Compiler compiler;
+  const kkshaders::CompileTarget target = device_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN
+                                              ? kkshaders::CompileTarget::Spirv
+                                              : kkshaders::CompileTarget::Dxil;
+  for (;;) {
+    std::pair<uint64_t, std::shared_ptr<const kkshaders::ShaderInfo>> job;
+    {
+      std::unique_lock lock(motion_mutex_);
+      motion_cv_.wait(lock, [&] { return motion_stop_ || !motion_queue_.empty(); });
+      if (motion_stop_) return;
+      job = std::move(motion_queue_.front());
+      motion_queue_.erase(motion_queue_.begin());
+    }
+    const auto start = std::chrono::steady_clock::now();
+    nvrhi::ShaderHandle handle;
+    std::string error;
+    kkshaders::TranslateResult t = kkshaders::translate(*job.second);
+    if (!t.ok) {
+      error = "translation: " + t.error;
+    } else {
+      kkshaders::MotionShader m = kkshaders::makeMotionVertexShader(t.hlsl);
+      if (!m.ok) {
+        error = "variant: " + m.error;
+      } else if (!compiler.ok()) {
+        error = "no compiler";
+      } else {
+        kkshaders::CompileOutput o = compiler.compile(m.hlsl, kkshaders::ShaderKind::Vertex, target);
+        if (!o.ok || o.blob.empty()) {
+          error = "DXC: " + o.messages.substr(0, 300);
+        } else {
+          nvrhi::ShaderDesc desc;
+          desc.shaderType = nvrhi::ShaderType::Vertex;
+          desc.entryName = "main";
+          char name[48];
+          std::snprintf(name, sizeof(name), "motion %016llX", static_cast<unsigned long long>(job.second->ucodeHash));
+          desc.debugName = name;
+          handle = device_->createShader(desc, o.blob.data(), o.blob.size());
+          if (!handle) error = "createShader";
+        }
+      }
+    }
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    std::lock_guard lock(motion_mutex_);
+    MotionEntry& e = motion_[job.first];
+    e.handle = handle;
+    e.done = true;
+    motion_stats_.compile_ms += ms;
+    if (handle) {
+      ++motion_stats_.made;
+    } else {
+      ++motion_stats_.failed;
+      if (motion_stats_.failed < 20) {
+        Logf(LogLevel::kWarning, "rexgpu-native: the motion variant of vertex shader %016llX was not made (%s)",
+             static_cast<unsigned long long>(job.second->ucodeHash), error.c_str());
+      }
+    }
+  }
+}
 
 bool ShaderLibrary::OpenPack(const std::string& pack) {
   std::lock_guard lock(mutex_);

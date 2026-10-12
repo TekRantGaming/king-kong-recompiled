@@ -190,6 +190,8 @@ void GameRenderer::set_watch(std::function<void(uint32_t, uint32_t)> watch) {
 
 bool GameRenderer::Initialize() {
   const nvrhi::GraphicsAPI api = device_->getGraphicsAPI();
+  // Upscalers (game_upscale.cpp): the upscaler and its input scale first (scaled() depends on it).
+  if (options_.upscale.enabled() && !UpscaleSetup()) upscale_.reset();
 
   // Set 0: the three constant buffers at b0-b2 (binding = register on Vulkan).
   nvrhi::BindingLayoutDesc constants;
@@ -364,6 +366,11 @@ bool GameRenderer::Initialize() {
   ao_ = std::make_unique<AmbientOcclusion>(device_);
   if (!ao_->Initialize()) ao_.reset();
   AoInitialize();  // AO hook (game_ao.cpp): the GTAO method
+  // Upscalers: their passes. Without them the renderer runs as without an upscaler (logged).
+  if (upscale_ && !UpscaleInitialize()) {
+    Logf(LogLevel::kWarning, "rexgpu-native: upscaler: the passes could not be made; no upscaler");
+    upscale_.reset();
+  }
   return true;
 }
 
@@ -512,6 +519,7 @@ void GameRenderer::EndFrame() {
   frame_waited_ = false;
   frame_stutter_wait_ms_ = 0;
   frame_skips_ = 0;
+  if (upscale_) UpscaleEndFrame();
   ++frame_;
   index_ring_used_ = 0;
   for (DescriptorTable& t : tables_) {
@@ -586,11 +594,33 @@ bool GameRenderer::IsPending(uint64_t key) {
 
 nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelineDesc& desc,
                                                     const nvrhi::FramebufferInfo& framebuffer, uint64_t key,
-                                                    bool async) {
+                                                    bool async, bool optional) {
   auto it = pipelines_.find(key);
   if (it != pipelines_.end()) return it->second;
-  const bool for_draws = async;
+  // optional (the upscalers' motion pass): made on the workers, never waited for, not counted as a draw
+  // that waited or was skipped.
+  const bool for_draws = async && !optional;
   async = async && options_.async_pipelines;
+  if (async && optional) {
+    std::unique_lock lock(pipeline_mutex_);
+    for (auto& [k, p] : pipelines_done_) {
+      pipelines_[k] = p;
+      pipelines_pending_.erase(k);
+      if (p) {
+        ++stats_.pipelines;
+        ++stats_.draw_pipelines;
+      }
+    }
+    pipelines_done_.clear();
+    if (auto found = pipelines_.find(key); found != pipelines_.end()) return found->second;
+    if (!pipelines_pending_.count(key)) {
+      EnsureWorkers();
+      pipelines_pending_[key] = true;
+      pipeline_jobs_.push_back({key, desc, framebuffer});
+      pipeline_cv_.notify_one();
+    }
+    return nullptr;
+  }
   if (async) {
     // Finished pipelines (the draws' and the prewarm's) join the map.
     auto drain = [&] {
@@ -1109,6 +1139,21 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     if (HostTarget* t = FindTarget(true, want_depth.base, pitch, want_depth.format))
       height = std::max(height, t->height);
   }
+  current_cl_ = cl;
+  // Upscalers (game_upscale.cpp): the upscale point may come before this draw (it changes which
+  // targets the draw gets), and the draw may be jittered and replayed by the motion pass.
+  UpscaleDraw up;
+  if (upscale_) {
+    bool writes_color = false;
+    const uint32_t mask_all = d.u32(dev::kRbColorMask);
+    for (uint32_t i = 0; i < 4; ++i) {
+      if (want_color[i].used && ((mask_all >> (4 * i)) & 0xF) && ps && (ps->bindings.pixelOutputs & (1u << i)))
+        writes_color = true;
+    }
+    const uint64_t color_key = want_color[0].used ? TargetKeyOf(false, want_color[0].base, pitch, want_color[0].format) : 0;
+    const uint64_t depth_key = want_depth.used ? TargetKeyOf(true, want_depth.base, pitch, want_depth.format) : 0;
+    up = UpscaleBeginDraw(cl, call, d, pitch, height, color_key, depth_key, writes_color, *vs, ps.get());
+  }
   std::array<HostTarget*, 4> colors{};
   HostTarget* depth = nullptr;
   for (uint32_t i = 0; i < 4; ++i) {
@@ -1229,16 +1274,18 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   };
   bind_textures(*vs);
   if (ps) bind_textures(*ps);
+  // Upscalers: the scene's textures sharper by the input / output ratio (the SDKs' mip bias).
+  const float lod_bias = up.jitter && upscale_ ? upscale_->mip_bias : 0.0f;
   for (size_t i = 0; i < vs->bindings.samplers.size() && i < 32; ++i) {
     uint32_t words[6];
     d.fetch_constant(vs->bindings.samplers[i].slot & 31, words);
-    dc.vertexSamplers[i] = BindSampler(words, vs->bindings.samplers[i]);
+    dc.vertexSamplers[i] = BindSampler(words, vs->bindings.samplers[i], lod_bias);
   }
   if (ps) {
     for (size_t i = 0; i < ps->bindings.samplers.size() && i < 32; ++i) {
       uint32_t words[6];
       d.fetch_constant(ps->bindings.samplers[i].slot & 31, words);
-      dc.pixelSamplers[i] = BindSampler(words, ps->bindings.samplers[i]);
+      dc.pixelSamplers[i] = BindSampler(words, ps->bindings.samplers[i], lod_bias);
     }
   }
 
@@ -1331,6 +1378,14 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   for (uint32_t c = 0; c < 3; ++c) {
     dc.ndcScale[c] = vp.ndc_scale[c];
     dc.ndcOffset[c] = vp.ndc_offset[c];
+  }
+  if (up.jitter && upscale_) {
+    // Upscalers: the picture moved by this frame's jitter (input pixels over the target's host size).
+    float jx = 0, jy = 0;
+    JitterNdcOffset(upscale_->jitter, uint32_t(vp.viewport.width()), uint32_t(vp.viewport.height()),
+                    device_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN, jx, jy);
+    dc.ndcOffset[0] += jx;
+    dc.ndcOffset[1] += jy;
   }
   const uint32_t color_control = d.u32(dev::kRbColorControl);
   if (color_control & 8) {
@@ -1447,6 +1502,8 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   if (!args.vertexCount) return;
 
   if (stop_at == 5) return;
+  // Upscalers: a draw of the scene's depth, replayed by the motion pass at the upscale point.
+  if (up.motion) UpscaleRecordMotion(call, d, vs, dc, record, gs, args, indexed_draw);
   cl->setGraphicsState(gs);
   if (indexed_draw) {
     cl->drawIndexed(args);

@@ -27,6 +27,7 @@
 #include "backend/host_device.h"
 #include "backend/render_thread.h"
 #include "backend/renderer.h"
+#include "backend/upscale_config.h"
 
 namespace rex::memory {
 class Memory;
@@ -96,6 +97,8 @@ struct GameSettings {
   // The rest of the AO's settings (docs/ao.md): --native_ao_method, _apply, _quality, _radius, and
   // the rules and shader list files. The default is today's AO.
   AoConfig ao;
+  // Temporal upscalers (docs/upscalers.md): --native_upscaler and its settings. Off by default.
+  UpscaleConfig upscale;
 };
 
 class Backend {

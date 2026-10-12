@@ -66,7 +66,7 @@ static_assert(sizeof(ScaleConstants) == 16 + 32 * 16, "ScaleConstants must match
 // b5 space 0, last frame's vertex constants and the motion pass's parameters.
 struct alignas(16) MotionConstants {
     float previous[256][4];  // last frame's c0-c255 of the same draw
-    float params[4];         // x, y: half the target's host size; z: +1 (D3D12) or -1 (Vulkan) for y; w: unused
+    float params[4];         // x, y: half the target's host size; z: the sign of y (D3D12 -1, Vulkan +1); w: unused
 };
 static_assert(sizeof(MotionConstants) == 257 * 16, "MotionConstants must match KKMotionConstants");
 constexpr uint32_t kMotionConstantsRegister = 5;

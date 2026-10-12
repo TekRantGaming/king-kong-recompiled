@@ -99,6 +99,10 @@ class UpscaleFrameTracker {
   bool OnResolve(const Resolve& r, Trigger* trigger = nullptr);
   // At Present: whether the frame still has to be upscaled (a scene and no point yet). Ends the frame.
   bool OnPresent(uint64_t frame);
+  // The frame's first call of any kind: the phase is the new frame's from here.
+  void OnFrame(uint64_t frame) {
+    if (frame != frame_) NewFrame(frame);
+  }
 
   Phase phase() const { return phase_; }
   uint64_t frame() const { return frame_; }
