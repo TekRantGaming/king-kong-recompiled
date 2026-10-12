@@ -482,7 +482,7 @@ golden frames measured with a scratch script):
 | `tour41_credits` | 2 of 5 frames pass: the scrolling credit lines are a frame or two out of step with every golden frame (the text's edges outside the range); the picture itself matches | none |
 | `tour00_venture` | not captured in this run (the freeze-skip bug above, harness side); passes 4 of 5 in the second native run below | - |
 
-**Second native run**: the `-RecordPipelines` run (`runs	our-native-record3`, 12 October 08:09-09:41, the
+**Second native run**: the `-RecordPipelines` run (`runs\tour-native-record3`, 12 October 08:09-09:41, the
 same build and options with the pipeline cache recording into an empty file per launch, so nothing is
 prewarmed) compared the same way: **37 of 42 pass**. Venture passes there (4 of 5). The same four fail again
 (`tour04_the_wall` dy 1, draw list 0.983; `tour18_swamps`; `tour24_venatosaurus`; `tour25_in_the_mud`), the
@@ -497,10 +497,10 @@ but these chapters (and chap04) still do not; they are where to look next. No sc
 wrong colours or black frames: every failure is position or timing.
 
 **Pipelines of every chapter** (`-RecordPipelines`, same run): one file per launch, collected in
-`runs	our-native-record3\pipelines	our<A-D>.pipelines` (1529, 1398, 1018 and 989 records) and merged with
+`runs\tour-native-record3\pipelines\tour<A-D>.pipelines` (1529, 1398, 1018 and 989 records) and merged with
 `nr_pipelines merge` (standalone build, `F:\KK-native-renderer
-r-standalone	ools`) into
-`F:\KK-native-renderernalysis	our\pipelines	our-all.list`: **3214 pipelines** (all at 1:1, 21 without a
+r-standalone\tools`) into
+`F:\KK-native-renderer\analysis\tour\pipelines\tour-all.list`: **3214 pipelines** (all at 1:1, 21 without a
 pixel shader; 1268 vertex and 605 pixel shader translations). Launch B added 846 new ones to A's, C 421, D 418,
 so later chapters still bring new pipelines. The list is game data and stays out of git. Not in it: the title
 and menus are in every launch, but the render scales other than 1 and the launcher's prewarm are not (one run
