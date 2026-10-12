@@ -2040,8 +2040,10 @@ class Launcher final : public rex::ui::ImGuiDialog {
     items.push_back(Section("Window"));
     {
       Item it = CvarToggle("Window mode",
-                           "Fullscreen fills the screen: at your desktop resolution, or at the Resolution you pick "
-                           "below.",
+                           kFullscreenResolution
+                               ? "Fullscreen fills the screen: at your desktop resolution, or at the Resolution you "
+                                 "pick below."
+                               : "Fullscreen uses a borderless window at your desktop resolution.",
                            "fullscreen", "Windowed", "Fullscreen");
       it.on_choice = [this](int i) { SetFullscreen(i == 1); };
       it.on_default = [this] {
@@ -2050,7 +2052,7 @@ class Launcher final : public rex::ui::ImGuiDialog {
       };
       items.push_back(std::move(it));
     }
-    items.push_back(ResolutionItem());
+    if (kFullscreenResolution) items.push_back(ResolutionItem());
     items.push_back(WindowSizeItem());
     items.push_back(MonitorItem());
     items.push_back(Section("Picture"));
@@ -3683,6 +3685,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
   // default), logging "KK dev: input <step>"; "shot:<name>" logs
   // "KK dev: shot <name>" and waits for a capture. The mouse, at 1280 x 720
   // layout positions: "move:X:Y", "click:X:Y", "down:X:Y", "up", "wheel:N".
+  // "setup:5" is the look step; "reset-beta" does to the settings what switching to
+  // stable does (and saves them); "whats-new" opens What's new as after 1.9.11.
   void DevInput() {
     ImGuiIO& io = ImGui::GetIO();
     static bool release = false;
@@ -3718,6 +3722,15 @@ class Launcher final : public rex::ui::ImGuiDialog {
     if (t.rfind("setup:", 0) == 0) {  // show a setup stage: 0 your copy, 1 install, 2 artwork; -1 back
       dev_setup_ = std::atoi(t.c_str() + 6);
       return;
+    }
+    if (t == "reset-beta") {  // what switching to stable does to the settings (FinishChannelSwitch)
+      ResetBetaOnlySettings();
+      SaveSettings(paths_.config_path);
+      return;
+    }
+    if (t == "whats-new") {  // the What's new pop-up as after an update from the version before
+      whats_new_from_ = "1.9.11";
+      return OpenWhatsNew();
     }
     if (t.rfind("move:", 0) == 0) return at_point(t.substr(5));
     if (t.rfind("click:", 0) == 0 || t.rfind("down:", 0) == 0) {

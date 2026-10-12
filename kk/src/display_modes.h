@@ -16,6 +16,13 @@
 
 namespace kk {
 
+// NOT READY, off for the first beta (native-renderer/docs/beta.md, "3. Display > Resolution"). SDL is
+// linked statically into both rexruntime.dll and king_kong.exe, so the port's SDL copy sees neither the
+// SDK's window nor (its video never initialised) the displays: the list is empty and the mode can't be
+// set. It needs a small SDK addition (the window setting its own fullscreen mode). While this is
+// false the Display page has no Resolution row and nothing here runs.
+constexpr bool kFullscreenResolution = false;
+
 struct DisplayMode {
   int width = 0, height = 0;  // pixels
   float refresh = 0;          // Hz (0: unknown)

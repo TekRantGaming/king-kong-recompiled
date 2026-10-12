@@ -102,7 +102,7 @@ class KingKongApp : public rex::ReXApp {
     const bool show = !files_ok || kk::IsShiftHeld() || (REXCVAR_GET(kk_launcher) && !skip_once);
     if (!show) {
       kk::EnforceOriginalLook();
-      kk::ApplyFullscreenMode(window() ? window()->GetNativeWindowHandle() : nullptr);
+      if (kk::kFullscreenResolution) kk::ApplyFullscreenMode(window() ? window()->GetNativeWindowHandle() : nullptr);
       kk::ApplyRenderPreset(OutputSize().second);
       kk::online::SetPlaying(true);
       kk::online::Start();
@@ -113,7 +113,7 @@ class KingKongApp : public rex::ReXApp {
     cb.play = [this, resume, defaults] {
       app_context().CallInUIThreadDeferred([this, resume, defaults] {
         // The Resolution (Display page) before the render quality, which follows it.
-        kk::ApplyFullscreenMode(window() ? window()->GetNativeWindowHandle() : nullptr);
+        if (kk::kFullscreenResolution) kk::ApplyFullscreenMode(window() ? window()->GetNativeWindowHandle() : nullptr);
         kk::ApplyRenderPreset(OutputSize().second);
         kk::online::SetPlaying(true);
         resume(defaults);
@@ -227,7 +227,7 @@ class KingKongApp : public rex::ReXApp {
   // monitor's; else the window.
   std::pair<int, int> OutputSize() const {
     if (REXCVAR_QUERY(bool, fullscreen) || !window()) {
-      if (REXCVAR_QUERY(bool, fullscreen))
+      if (kk::kFullscreenResolution && REXCVAR_QUERY(bool, fullscreen))
         if (const auto mode = kk::FullscreenModeSize()) return *mode;
       return kk::PrimaryScreenSize();
     }
