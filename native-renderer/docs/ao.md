@@ -1,8 +1,10 @@
 # Ambient occlusion: GTAO at the right moment of the frame (Phase 3)
 
-Status, 11 October 2026 (cloud session, branch `cloud-p3-ao`, from `nr-integration`). Built and tested on Linux
-with lavapipe and the Khronos validation layer; not yet run in the game. The defaults leave today's AO exactly as
-it is: everything below is switched on by `--native_ao_method=gtao`.
+Status, 12 October 2026: built by a cloud session on Linux (branch `cloud-p3-ao`), merged on Windows into `nr-ao`
+(from `nr-integration` with the render thread) and run in the game: see "In the game (Windows)" below for what the
+game's frames showed, what changed because of it (the fog pass ends the opaque pass; rules for the game's shaders),
+the lighting shaders, the comparison sheets, the costs and the recommendation. The defaults still leave today's AO
+exactly as it is: everything below is switched on by `--native_ao_method=gtao`.
 
 ## Why
 
@@ -53,14 +55,17 @@ term), `backend.*` and the plugin (the settings).
 
 `SceneAo` follows each frame through the draws the game renderer records:
 
-- **apply=opaque.** At the end of the scene's opaque pass, just before its first transparent or effect draw, XeGTAO
+- **apply=opaque.** At the end of the scene's opaque pass (in King Kong: just before its fog pass, the `end` draw
+  below; in a frame without one, before the first transparent or effect draw), XeGTAO
   runs on the scene's depth and the scene's colour target is multiplied by the occlusion in place (a full-screen
   triangle with a multiplicative blend, `dst * src`, alpha untouched, nothing read back). The water, glass, smoke,
   particles and the fog pass then draw over it unaffected. Fog is an effect draw (no depth test), so distant fogged
   surfaces are not darkened through the fog either, without the legacy AO's fog arithmetic.
 - **apply=ambient.** At the end of the scene's depth pre-pass (the first opaque draw after the depth-only draws)
   the occlusion is worked out once; the listed lighting pixel shaders read it at their pixel and multiply their
-  ambient term. If the frame has no pre-pass, no listed shader drew in the scene, or ao_mode is 2, the frame falls
+  ambient term. Only opaque draws without depth writes read it (their surfaces are the ones in the pre-pass's
+  depth; a listed shader drawn blended, or an opaque draw that writes depth after the pre-pass, keeps its whole
+  ambient). If the frame has no pre-pass, no listed shader drew in the scene, or ao_mode is 2, the frame falls
   back to the opaque moment.
 - **apply=resolve.** Today's moment, with XeGTAO instead of the legacy occlusion: the full-screen depth resolve is
   copied (the game may clear the depth right after), the next full-screen colour resolve of the frame (the scene
@@ -69,7 +74,9 @@ term), `backend.*` and the plugin (the settings).
   target is not changed.
 - **Fallbacks.** When the rules do not cut a frame (no transparent or effect draw after the opaque pass), the scene
   copy gets it as in resolve mode; when there is no scene copy either and the scene target still holds the scene at
-  Present, it goes in there. A frame never gets it twice.
+  Present, it goes in there. A frame never gets it twice. A full-screen copy before the opaque pass began, or
+  before the `end` draw in a frame that waits for one, is never taken for the scene copy (the game copies its
+  half-drawn scene for its light shafts there).
 
 The depth used: the scene's depth target while it holds this frame's depth (written by the frame's draws, not
 cleared since: the tracker watches clears and resolve clears), else the depth resolve's copy of this frame, else
@@ -80,11 +87,19 @@ nothing (the frame has no AO, counted in the statistics).
 Each draw's state, as the game renderer already has it for its pipeline (`AoDrawState`): writes colour (a target
 with a write mask that the pixel shader outputs to), depth test, depth write, the blend of the first colour target
 written (`RB_BLENDCONTROL`), alpha test, primitive, vertex and pixel shader microcode hashes. A small rule table
-gives it a class: `depth` (the pre-pass), `opaque`, `transparent`, `effect`, `ignore`. First match wins.
+gives it a class: `depth` (the pre-pass), `opaque`, `transparent`, `effect`, `end` (the draw that ends the opaque
+pass), `ignore`. First match wins.
 
-The built-in table (`kDefaultAoRules` in `ao_classifier.cpp`):
+The built-in table (`kDefaultAoRules` in `ao_classifier.cpp`) starts with King Kong's rules, found in its frames
+("The classifier in the game" below), then the general ones:
 
 ```
+end          ps=1B65AC7429B67FE9      # the AfterEffects fog pass (two shaders)
+end          ps=9F699E763A41FE07
+ignore       ps=<psreflection x4>     # the water reflection, drawn into the scene's target first
+ignore       ps=<pslightshaft x12>    # light shaft masks before the lit pass, shafts at the end
+ignore       ps=<psrain x3>           # rain masks and drops
+transparent  ps=<pswater x26>         # water (unblended, after the fog), psocean, psheatshimmer x4, psfur
 depth        color=no depth_write=yes
 ignore       color=no
 effect       depth_test=no
@@ -118,8 +133,11 @@ transparent ps=1122334455667788 blend=off        # an opaque-looking water surfa
 The tracker (`AoFrameTracker`) then follows the frame's main scene target. A draw counts only at the frame's size
 (the guest frame's pitch: shadow maps, the 640x360 and 320x180 post targets are left out) with a depth target. The
 first depth-only draw starts the pre-pass; the first opaque draw with a colour and a depth target names the scene's
-targets and ends the pre-pass; the first transparent or effect draw into those targets after it ends the opaque pass.
-Draws into other targets in between (a reflection, a shadow map) change nothing. Each moment happens once a frame.
+targets and ends the pre-pass; the first transparent or effect draw into those targets after it ends the opaque pass,
+unless the previous frame had an `end` draw in its scene: then only the `end` draw ends it, and the transparent and
+effect draws before it (decals and second passes the game interleaves with its opaque draws) do not. A frame
+without its `end` draw goes back to the first blended draw on the next frame. Draws into other targets in between
+(a reflection, a shadow map) change nothing. Each moment happens once a frame.
 
 ### The camera
 
@@ -215,6 +233,12 @@ appears). If the mode is adopted, `kkshaders db-build` should learn to read the 
 | `--native_ao_radius` | 0, any number | GTAO's radius in world units; 0 from the camera |
 | `--native_ao_rules` | a file | classifier rules before the built-in ones |
 | `--native_ao_shaders` | a file | the ambient-only lighting shader list |
+| `--native_ao_radius_scale` | 1, any number | the radius from the camera times this (tuning) |
+| `--native_ao_falloff` | 0, 0 to 1 | XeGTAO's falloff range (0: its 0.615) |
+| `--native_ao_power` | 0, any number | XeGTAO's final power (0: from ao_strength, 1.6 / 2.2 / 3.0) |
+| `--native_ao_fade` | 0, any number | the occlusion fades out linearly to this many near-plane distances (0: none; the legacy method's is 2000) |
+| `--native_ao_dump_every` | 0, N | every N frames, the `AO draw` lines of every draw (as `--native_dump_frame` for one frame) |
+| `--native_ao_gpu_time` | false, true | GPU timer queries around the AO passes (either method), the average logged every 600 frames |
 
 All `--native_ao_*` settings are read at start. ao_mode and ao_strength can change at any time, as today. With the
 defaults the GTAO code is never created: the game renderer's layouts, pipelines and draws are the ones it always had
@@ -282,7 +306,195 @@ one version.
   what the translator can see; the tool resolves the game's constant names per shader.
 - Each moment happens once a frame, on the first scene found at the frame's size with a depth target.
 
+## In the game (Windows, 12 October 2026)
+
+Branch `nr-ao` (the cloud branch merged into `nr-integration` 6298d58), `kk-dev-vulkan`, RTX 4070 Ti, Vulkan unless
+said. Analysis files (dumps, the database's HLSL sources, shader lists, sheets) are in
+`F:\KK-native-renderer\analysis\ao\` (game data: never in git); runs in `F:\KK-native-renderer\runs\ao-*`.
+
+### The merge and the render thread
+
+Three conflicts (`backend/CMakeLists.txt`, `thirdparty/NOTES.md`, `plugin/native_graphics_system.cpp`). The AO
+settings are now read in `plugin/plugin_settings.cpp` (`ReadGameSettings`), so the game and the launcher's prewarm see
+the same values. With the render thread on (the default now) every AO hook runs inside the game renderer's Clear,
+Draw, Resolve and Present, which `ThreadedSink` calls on the render thread with the call's copy of the device: the
+registers the hooks read (vertex and pixel constants, RB_COLORCONTROL, RB_SURFACE_INFO, RB_DEPTH_INFO, the viewport
+and VTE registers, PA_SU_VTX_CNTL, PA_SC_WINDOW_OFFSET) all lie in the copied ranges (`kReadRanges`), and the GTAO
+passes are recorded into the render thread's command lists. Nothing of it runs on the game's thread. The ambient-only
+shaders are translated where every shader is (the library has its own lock). The launcher's pipeline prewarm does
+not know the ambient-only layout (b4): with apply=ambient the prewarmed pipelines are not the game's (only a slower
+first minute, not wrong).
+
+### Tests on Windows
+
+- The standalone build (`backend.md`, "Tests on Windows") with the Khronos validation layer of the official LunarG
+  SDK (signed installer, its files in `F:\KK-native-renderer\downloads\vulkan-sdk-latest\sdk`, used through
+  `VK_ADD_LAYER_PATH`, nothing installed system-wide): all 9 test programs pass with the layer on and silent:
+  `nr_draw_tests` 15, `nr_frame_log_tests` 8, `nr_pipeline_cache_tests` 12, `nr_ao_rules_tests` 13 (11 plus 2 for the
+  game's rules), `nr_render_tests` 6, `nr_ao_tests` 12, `nr_gtao_tests` 8, `nr_game_tests` 60, `nr_game_ao_tests` 8
+  (creases 0.65 to 0.73, open floor 1.000; water 0.0019 and particle 0.0016 off their colours at the opaque moment
+  against 0.098 at the legacy moment; ambient-only against the opaque moment 0.0049).
+- `native-renderer/shaders` (`ctest`, 18 tests, the new `ambient` test included: 822 pixel shaders, 3,282 hooked
+  translations): all pass. Its CMake found no Vulkan there, so the GPU differential test was not built.
+- `compile_shaders.ps1 -Dxc` with DXC v1.9.2609: the SPIR-V of every older shader came out byte for byte the same;
+  the `gtao_*` headers are now from that DXC too (they were the Linux 1.8 release's).
+
+### What the game's frames look like
+
+`--native_ao_dump_every=300` (new) logs the classifier's view of every draw every 10 seconds; one launch through the
+AO chapters (`tests/aogen.py`, `tests/ao_tour.json`) gives dumps of all of them (`analysis\ao\structure_s1*.txt`,
+`dump_s1_opaque*.txt`, made by `analysis\ao\tools\structure.py` and `dumps.py`). Every gameplay frame has the same
+shape:
+
+| Part | Draws | Into |
+|---|---|---|
+| water reflection (V-Rex) | `psreflection`, opaque with depth writes, then an effect | the scene's target, first |
+| shadow map | `psshadow` | its own target (832 wide) |
+| depth pre-pass | depth only, 50 to 310 draws | the scene |
+| more opaque with depth writes | `psgeneric` 5B4F894B06E0F459 (baked vertex light, Chased by Kong's cave walls: 163 draws) | the scene |
+| light shaft and rain masks | `pslightshaft`, `psrain` without a depth test, then a full-screen copy of the target | the scene's target |
+| screen-space shadow | `psshadowquad`, `pscompositeshadow`, `psblurshadow` | the shadow mask (2800000) |
+| lit opaque pass | `psgeneric` without depth writes (equal test against the pre-pass), **with blended decals and second passes interleaved** (The Wall: 2; Kong: 20 alternating with their base pass) | the scene |
+| opaque with depth writes | foliage and objects not in the pre-pass (The Wall: 357) | the scene |
+| **the fog pass** | AfterEffects fog, `1B65AC7429B67FE9` or `9F699E763A41FE07`, no depth test | the scene |
+| after it | a few opaque objects (V-Rex's B73C01BC with additive glows, the Venture's hull), water (`pswater`, unblended), Kong's fur (`psfur`, blended with depth writes), sprites and smoke (`pssprite`), rain, heat shimmer, light shafts, the post effects (`psaftereffects`) | the scene |
+
+So the cloud session's rule (the first blended draw ends the opaque pass) cut The Wall at draw 890 of 1,518 with
+about 560 opaque draws still to come, took V-Rex's reflection for the scene (its moment came at draw 61, before the
+shadow map), and ended Call Kong and Chased by Kong at the light shaft masks. The game's own end of the opaque world
+is its fog pass. Changes (commit "the game's fog pass ends the opaque pass"):
+
+- a class `end` and a tracker that waits for it once the previous frame had one (above);
+- King Kong's rules in `kDefaultAoRules`: the two fog shaders end the pass; `psreflection`, `pslightshaft` and
+  `psrain` are ignored; `pswater`, `psocean`, `psheatshimmer` and `psfur` are transparent (hashes from
+  `kkshaders ao-list --family`);
+- the scene-copy fallback no longer takes the light shafts' copy of the half-drawn scene (it did in Call Kong, Kong to
+  the Rescue and Chased by Kong, and left the real moment without occlusion).
+
+After them every dumped frame of the nine chapters and the menus' 3D backdrop has its moment at the fog draw, the
+occlusion worked out and applied there; the statistics lines count no moment without a camera and at most one or two
+frames a minute without depth (chapter loads). The interleaved decals are darkened with the surface they lie on (they
+are part of it); the opaque objects drawn after the fog pass get none (a handful per frame).
+
+The camera: near plane 0.05 (world units, metres by the look of Jack), far 139,830 to 209,716, horizontal fields
+of view from px 1.46 to 2.74 (the log's `AO camera` lines); the radius at strength 1 is 0.3 units. With
+`--ao_mode=2` the occlusion sits on the geometry (`analysis\ao\view\m2\*.png`, `contact_m2.png`): rock creases, the
+gate's posts, grass clumps, Kong on his ledge; the sky, the water, the fur, the rain and the fire are drawn over it in
+colour, which is the point.
+
+### The lighting shaders and their ambient term
+
+From the database's sources (`kkshaders ao-list --sources`, `analysis\ao\sources\`; `psgeneric.hlsl`,
+`vsgeneric.hlsl`, `vslighting.hlsl`): nearly all the world is `psgeneric` (1,945 shaders). Its light is
+
+- per-pixel lighting: the lights' diffuse and specular from the vertex shader's light vectors, plus
+  `(g_vAmbientColor + rim light) * base map`, then `out += out * RLI * 10` (RLI, "radiosity light info", is baked
+  per-vertex light in COLOR1, scaled by `g_vMixed3`);
+- vertex lighting with shadows: `shadow * COLOR0 (the lights) + COLOR1 (RLI) + g_vAmbientColor`, times the base map;
+- vertex lighting without shadows, or "use colour": everything baked into COLOR0 by the vertex shader (RLI, the
+  lights and `g_vAmbientColor` added there), times the base map;
+- fog (`g_fFogColor`) is mixed in after the lighting, in the pixel shader.
+
+So the physically right term is the ambient constant `g_vAmbientColor` (1,444 of the 1,945 shaders read it; in each
+it sits in another register, which `ao-list` resolves per shader), and for the shaders with no lighting constants at
+all (29, such as 5B4F894B06E0F459, C98ECF242796CB51, 994B9DC3FAE68D5F) the whole interpolated colour is baked light:
+`interpolator color0`. `psfur` reads `g_vAmbientColor` too. The list (`analysis\ao\ao-shaders-v2.txt`, made with
+`kkshaders ao-list xeshaders.bin --family psgeneric --term "constant g_vAmbientColor"`, the same for `psfur`, plus
+the 29 colour-only shaders with `interpolator color0`) covers every opaque scene draw of the dumped frames except the
+reflection, water, ocean, heat shimmer and post effects, as it should (`tools\coverage.py`). The RLI multiplier scales
+the direct light as well, so it is not a term of its own.
+
+In the game the ambient-only mode works as designed (every frame counted "ambient-only", the listed shaders read the
+occlusion: 45 to 265 draws a frame), with two limits found there: only the lit draws without depth writes read it
+(their surfaces are the pre-pass's), so foliage, characters and the walls drawn with depth writes after the pre-pass
+get no occlusion at all (Chased by Kong: 45 of 410 opaque draws read it); and the hooked shaders are not in the pack,
+so DXC compiles hundreds of them at each chapter's first sight (about 27,000 draws skipped waiting for pipelines in the
+first chapter of the run, and the run's timeline slipped enough that Venture's shots came after the time limit).
+
+### The comparison sheets
+
+One launch per setting through the same nine chapters (`tests/ao_tour.json`: The Wall, V-Rex, Kong, Millipedes,
+Call Kong, Kong to the Rescue, Chased by Kong, Kong Struck Down, Venture; three shots each, the game's own captures),
+ao_strength 1, the Original look otherwise (`--kk_original_look_keep=ao_mode,ao_strength`). In
+`F:\KK-native-renderer\analysis\ao\sheets\` (see its `README.txt`):
+
+| Sheet | What |
+|---|---|
+| `s1\<chapter>.png`, `s2\<chapter>.png` | off, legacy, gtao + opaque, gtao + ambient side by side at render scale 1 and 2 (scale 2 shown at 1280x720); under each, where it is darker than off (black unchanged, white 25% darker or more, red brighter). Of the three shots, the one whose brightness differs least between the runs (lightning) |
+| `crops_s1.png`, `crops_s2.png` (and `_bright`, 2.2x brighter) | the places that matter, enlarged: the gate against the sky (The Wall), grass in the rain (V-Rex), Kong, the gate in the mist (Millipedes), the beams over water (Call Kong), the fire and its smoke (Kong to the Rescue), the water channel (Chased by Kong), the bay with the sea, the ship and the sky (Kong Struck Down), the hull in the rain (Venture) |
+| `occlusion_only\<chapter>.png` | ao_mode 2: the legacy occlusion and GTAO's at scale 1, GTAO's at scale 2 (half resolution). Whatever is drawn after the moment is in colour on top |
+
+Caveats: the runs are separate launches, so animated things (rain, lightning, fire, the V-Rex, water, clouds) are not
+the same frame in each, and the darker-than-off row shows them as noise; it is relative, so very dark pixels show
+small changes as large. Read it on the static parts. The ambient-only runs miss Venture (the hooked shaders' DXC
+compiles slipped the launch past its time limit); the scale 1 occlusion-only GTAO run predates the last fallback fix,
+so its Kong to the Rescue has no occlusion (the scale 2 one has).
+
+What they show:
+
+- **Where the occlusion goes.** GTAO's is sharp and sits on the geometry at both scales: the creases of the rock, the
+  gate's posts and their feet, the stone blocks of Chased by Kong's cave, under the beams, around and in the grass
+  clumps, Kong's ruins. The legacy occlusion is a soft, low-resolution blur of the same places, with speckle on flat
+  rock and none at all in Kong to the Rescue, Chased by Kong and Call Kong (the full-screen depth resolve it waits
+  for never comes there).
+- **Water, smoke, fire, particles, fog, the sky, the HUD.** At the opaque moment (the fog pass) none of them is in
+  the picture yet: in the occlusion-only sheets the sky, the sea and the water channel, Kong's fur, the fire and its
+  black smoke, the rain, the light shafts, the Venture's hull and the "Right stick to aim" hint are all drawn in
+  colour over the grey, untouched. The legacy method darkens its whole scene copy, so the water and whatever lies in
+  front of a crease are darkened with it.
+- **Strength.** At strength 1 GTAO darkens about as much as the legacy method on the whole (a few percent of the
+  picture's brightness; more in creases, less on open ground), with a much crisper footprint. I kept the cloud
+  session's mapping (radius 6, 8, 12 near-plane distances = 0.3, 0.4, 0.6 units; power 1.6, 2.2, 3.0): it looks right
+  on the gate, the rock and the ruins, and grass is already as dark as it should be. `--native_ao_radius_scale`,
+  `--native_ao_power`, `--native_ao_falloff` and `--native_ao_fade` are there to try other values without a rebuild.
+- **gtao + ambient.** Where it applies it is the most natural (the direct light keeps its strength, the fog is mixed
+  in after it), but in this game it misses too much: foliage, characters and the walls drawn with depth writes after
+  the pre-pass have no occlusion, and the first sight of each chapter stalls on DXC.
+
+### Cost
+
+GPU time of the AO passes (`--native_ao_gpu_time`, the averages of the 600-frame windows over the whole launch; the
+game was capped at 30 FPS, so the frame rate does not show it), RTX 4070 Ti, Vulkan:
+
+| Method | Scale 1 (1280x720) | Scale 2 (2560x1440) |
+|---|---|---|
+| legacy (half resolution, at the scene copy) | 0.23 ms (0.17 to 0.29) | 0.90 ms (0.63 to 1.09) |
+| gtao + opaque, full resolution | 0.70 ms (0.46 to 1.01) | 2.09 ms (1.38 to 2.97) |
+| gtao + ambient, full resolution | 0.69 ms (0.52 to 0.98) | 2.04 ms (1.37 to 2.84) |
+| gtao, half resolution | | 0.92 ms (0.57 to 1.52) |
+
+The menus' and loading screens' windows are the high ends (the GPU clocks down when there is little to do). So
+`--native_ao_quality` now defaults to `auto`: full resolution up to a render scale of 1.5, half above it (the
+same number of pixels as full at scale 1, and at scale 2 half-resolution GTAO is still sharper than the legacy
+occlusion, see `occlusion_only`).
+
+### With AO off, and on D3D12
+
+- **The golden scenes with the defaults** (legacy method, ao_mode 0 by the Original look; `tests/run.ps1` one run
+  group per launch, `runs\ao-golden-defaults`): 15 of 17 at first; `video` failed 1/3 on its logo fade timing (the
+  first two shots came mid-fade) and passed 3/3 when run again (`runs\ao-golden-defaults-logos2`), so 16 of 17.
+  `chap04` fails 0/5 as it does on `nr-integration` with the same defaults (`runs\p2c-defaults-vk-full`, its known
+  camera offset, investigated elsewhere); `kong_cutscene` and `kong`, which failed there, pass here (timing). With
+  the defaults the GTAO code is not even created (only `ReadGameSettings` reads its settings), so this is the
+  expected result.
+- **D3D12** (`--native_backend=d3d12`, gtao + opaque, scale 1, `runs\ao-s1-gtao-opaque-d3d12`, sheets in
+  `sheets\d3d12`): every frame at the fog moment as on Vulkan, the occlusion in the same places, 0.66 ms (0.49 to
+  1.05). The ambient-only mode was not run on D3D12.
+
+### Recommendation
+
+Switch to `--native_ao_method=gtao --native_ao_apply=opaque` (with `--native_ao_quality=auto`), keeping ao_strength's
+mapping, once the user has looked at the sheets; keep `legacy` selectable for a while. It fixes what was wrong (water,
+smoke, fire, fur, rain, the sky and the HUD are never darkened, because the occlusion is in the picture before any of
+them is drawn), it works in the chapters where the legacy AO did nothing (Kong to the Rescue, Chased by Kong, Call
+Kong), and it is sharper. It costs about half a millisecond more than the legacy AO at scale 1 and about the same at
+scale 2 with `auto`. The ambient-only mode is not ready to be a default: in this game it leaves foliage, characters
+and many walls without occlusion, and needs its hooked shaders in the shader packs first.
+
 ## The Windows checklist
+
+Done on 12 October 2026 (results in "In the game" above): steps 1 to 9; step 10 is the user's decision after the
+sheets. Step 3 used `--native_ao_dump_every` through the AO chapters instead of single `--native_dump_frame` runs.
 
 What only the game can settle, in the order to do it. Runs as in `testing.md` (`tests/run.ps1`) and `backend.md`;
 keep `--kk_original_look_keep=ao_mode,ao_strength` on every run that sets ao_mode (the Original look forces it to 0).
@@ -353,15 +565,24 @@ keep `--kk_original_look_keep=ao_mode,ao_strength` on every run that sets ao_mod
 
 ## Known limits and open questions
 
-- Not run in the game yet: the rules, the camera vote and the moments are designed from `d3d-api-map.md`,
-  `backend.md` and the legacy AO's detection, and tested on synthetic frames that follow the game's pattern.
+- Checked in nine chapters and the menus (above), not in all 42; the chapter tour (`tour.json` on the tour branch)
+  with `--native_ao_dump_every=300` and `tools\dumps.py` would check the rest the same way.
 - The tracker takes the first frame-size scene it sees; a frame-size pass into another target before the scene
-  (a reflection) would be taken for it (step 4 checks this; a rule can `ignore` its shaders).
+  (a reflection) would be taken for it (the game's water reflection has an `ignore` rule now).
+- The opaque objects the game draws after its fog pass (a handful a frame, the Venture's hull among them) get no
+  occlusion, and the decals it interleaves with its opaque draws are darkened with their surface.
+- A frame that loses its fog pass (a cut, a menu over the scene) waits for it in vain and has no occlusion; the next
+  frame goes back to the first blended draw.
+- The opaque moment multiplies the colour the game's shaders wrote, which for distantly fogged surfaces includes the
+  per-object fog of `psgeneric` (`g_fFogColor`); the occlusion is small that far away (its radius is in world units),
+  and `--native_ao_fade` can fade it out as the legacy method does.
 - Each moment happens once a frame: a second scene pass in the same frame gets no occlusion.
 - A world matrix that is not rigid with a uniform scale gives a wrong projection; the vote keeps the majority.
 - Relative reads of a constant term are not multiplied.
-- Listed (ambient-only) shaders are compiled at first use; packs do not hold them yet.
+- Listed (ambient-only) shaders are compiled at first use; packs do not hold them yet (in the game: tens of thousands
+  of draws skipped while waiting for them at the first chapter, and a run's timeline slipped by a minute). The
+  launcher's pipeline prewarm does not know the ambient-only layout either.
+- Ambient-only: only the lit draws without depth writes read the occlusion (above).
 - XeGTAO repeats the picture's edge for samples off the picture: the occlusion is a little darker in the corners of a
   flat surface that faces the camera (0.94 at worst in the test, 1.00 sixteen pixels in).
-- D3D12 is built (DXIL headers) but not run: NVRHI's D3D12 backend, the root signature with b4 and the compute passes
-  need a Windows run with `--native_backend=d3d12`.
+- D3D12: gtao + opaque runs (above); the ambient-only mode (b4 in the root signature) was not run on D3D12.
