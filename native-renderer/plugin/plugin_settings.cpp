@@ -55,6 +55,15 @@ REXCVAR_DECLARE(double, native_ao_power);
 REXCVAR_DECLARE(double, native_ao_fade);
 REXCVAR_DECLARE(int32_t, native_ao_dump_every);
 REXCVAR_DECLARE(bool, native_ao_gpu_time);
+REXCVAR_DECLARE(std::string, native_gi);
+REXCVAR_DECLARE(double, native_gi_intensity);
+REXCVAR_DECLARE(std::string, native_gi_quality);
+REXCVAR_DECLARE(double, native_gi_radius);
+REXCVAR_DECLARE(double, native_gi_thickness);
+REXCVAR_DECLARE(double, native_gi_albedo);
+REXCVAR_DECLARE(double, native_gi_occlusion);
+REXCVAR_DECLARE(int32_t, native_gi_debug);
+REXCVAR_DECLARE(bool, native_gi_gpu_time);
 
 namespace nr {
 
@@ -133,6 +142,21 @@ void ReadAoConfig(AoConfig& ao) {
                 AoApplyName(ao.apply));
 }
 
+// --native_gi_* (docs/gi.md): a value it cannot read is logged and its default kept.
+void ReadGiConfig(GiConfig& gi) {
+  if (!ParseGiLevel(REXCVAR_GET(native_gi), gi.level))
+    REXGPU_WARN("rexgpu-native: native_gi '{}' is not off, low, medium or high", REXCVAR_GET(native_gi));
+  if (!ParseGiQuality(REXCVAR_GET(native_gi_quality), gi.quality))
+    REXGPU_WARN("rexgpu-native: native_gi_quality '{}' is not auto, half or full", REXCVAR_GET(native_gi_quality));
+  gi.intensity = float(std::clamp(REXCVAR_GET(native_gi_intensity), 0.0, 8.0));
+  gi.radius = float(std::clamp(REXCVAR_GET(native_gi_radius), 0.0, 100.0));
+  gi.thickness = float(std::clamp(REXCVAR_GET(native_gi_thickness), 0.0, 100.0));
+  gi.albedo = float(std::clamp(REXCVAR_GET(native_gi_albedo), 0.05, 1.0));
+  gi.occlusion = float(std::clamp(REXCVAR_GET(native_gi_occlusion), 0.0, 1.0));
+  gi.debug = std::clamp(REXCVAR_GET(native_gi_debug), 0, 3);
+  gi.gpu_time = REXCVAR_GET(native_gi_gpu_time);
+}
+
 }  // namespace
 
 GameSettings ReadGameSettings(bool vulkan) {
@@ -181,6 +205,7 @@ GameSettings ReadGameSettings(bool vulkan) {
     return s;
   };
   ReadAoConfig(game.ao);
+  ReadGiConfig(game.gi);
   return game;
 }
 

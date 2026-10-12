@@ -18,6 +18,8 @@ add_library(nr_draw STATIC
     ao_classifier.cpp
     ao_camera.cpp
     ao_config.cpp
+    # Screen-space GI (docs/gi.md): the settings.
+    gi_config.cpp
 )
 target_include_directories(nr_draw PUBLIC "${NR_ROOT}")
 target_compile_features(nr_draw PUBLIC cxx_std_20)
@@ -26,6 +28,7 @@ add_library(nr_renderer STATIC
     renderer.cpp
     ambient_occlusion.cpp
     gtao.cpp
+    ssgi.cpp
     shaders.cpp
     output_blit.cpp
     log.cpp
@@ -42,6 +45,8 @@ if(NR_GAME_RENDERER)
         game_frame_log.cpp
         game_ao.cpp
         scene_ao.cpp
+        game_gi.cpp
+        scene_gi.cpp
         shader_library.cpp
         pipeline_prewarm.cpp
     )

@@ -48,4 +48,17 @@ foreach ($spec in @("gtao_prepare_cs:cs:cs_prepare", "gtao_prefilter_cs:cs:cs_pr
         -Fh (Join-Path $out "${base}_spirv.h") -Vn "k_${base}_spirv" $gtao
     if ($LASTEXITCODE -ne 0) { throw "dxc (SPIR-V) failed on $gtao $entry" }
 }
+# Screen-space GI (ssgi.hlsl, docs/gi.md): one blob per entry point.
+$ssgi = Join-Path $here "ssgi.hlsl"
+foreach ($spec in @("ssgi_radiance_cs:cs:cs_radiance", "ssgi_radiance_down_cs:cs:cs_radiance_down",
+                    "ssgi_gather_cs:cs:cs_gather", "ssgi_denoise_cs:cs:cs_denoise", "ssgi_vs:vs:vs_main",
+                    "ssgi_composite_ps:ps:ps_composite")) {
+    $base, $stage, $entry = $spec.Split(":")
+    & $Dxc -nologo -T "${stage}_6_0" -E $entry -O3 -Fh (Join-Path $out "${base}_dxil.h") -Vn "k_${base}_dxil" $ssgi
+    if ($LASTEXITCODE -ne 0) { throw "dxc (DXIL) failed on $ssgi $entry" }
+    & $Dxc -nologo -T "${stage}_6_0" -E $entry -O3 -spirv "-fspv-target-env=vulkan1.2" `
+        -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-b-shift 256 0 -fvk-u-shift 384 0 `
+        -Fh (Join-Path $out "${base}_spirv.h") -Vn "k_${base}_spirv" $ssgi
+    if ($LASTEXITCODE -ne 0) { throw "dxc (SPIR-V) failed on $ssgi $entry" }
+}
 Write-Host "Shaders written to $out"

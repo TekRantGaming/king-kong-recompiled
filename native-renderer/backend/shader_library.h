@@ -37,6 +37,10 @@ struct GameShader {
   kkshaders::ShaderBindings bindings;
   nvrhi::ShaderHandle handle;
   bool from_pack = false;
+  // Pixel shaders: the float constant register of the lighting shaders' flat ambient light
+  // (g_vAmbientColor, from the container's constant table; -1 none). The screen-space GI reads
+  // the frame's ambient light from it (docs/gi.md).
+  int16_t ambient_constant = -1;
   // Vertex shaders: the parsed container (microcode and fetch table), for rebuilding the
   // library's patched microcode (kkshaders/vertex_patch.h; the frame log's vs hash).
   std::shared_ptr<const kkshaders::ShaderInfo> source;

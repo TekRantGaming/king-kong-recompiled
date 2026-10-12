@@ -18,6 +18,15 @@ uint64_t HashKey(kkshaders::ShaderKind kind, uint64_t ucode_hash, uint64_t input
   return h;
 }
 
+// The register of g_vAmbientColor in a pixel shader's constant table (-1: none).
+int16_t AmbientConstant(const kkshaders::ShaderInfo& info) {
+  if (info.kind != kkshaders::ShaderKind::Pixel) return -1;
+  for (const kkshaders::ConstantInfo& c : info.constants)
+    if (c.registerSet == kkshaders::RegisterSet::Float4 && c.name == "g_vAmbientColor" && c.registerIndex < 256)
+      return int16_t(c.registerIndex);
+  return -1;
+}
+
 const char* KindName(kkshaders::ShaderKind kind) {
   return kind == kkshaders::ShaderKind::Vertex ? "vertex" : "pixel";
 }
@@ -68,6 +77,12 @@ std::shared_ptr<GameShader> ShaderLibrary::Build(const kkshaders::ShaderInfo& in
       copy->source = std::make_shared<const kkshaders::ShaderInfo>(info);
       it->second = copy;
     }
+    // Made from the pack alone: a copy that knows its ambient constant.
+    if (const int16_t ambient = AmbientConstant(info); ambient != it->second->ambient_constant) {
+      auto copy = std::make_shared<GameShader>(*it->second);
+      copy->ambient_constant = ambient;
+      it->second = copy;
+    }
     return it->second;
   }
   if (failed_.count(key)) return nullptr;
@@ -107,6 +122,7 @@ std::shared_ptr<GameShader> ShaderLibrary::Build(const kkshaders::ShaderInfo& in
 
   std::shared_ptr<GameShader> shader = Finish(info.kind, info.ucodeHash, input_hash, std::move(compiled), from_pack);
   if (shader && info.kind == kkshaders::ShaderKind::Vertex) shader->source = std::make_shared<const kkshaders::ShaderInfo>(info);
+  if (shader) shader->ambient_constant = AmbientConstant(info);
   return shader;
 }
 

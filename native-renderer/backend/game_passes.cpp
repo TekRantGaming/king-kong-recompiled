@@ -209,6 +209,7 @@ void GameRenderer::Clear(nvrhi::ICommandList* cl, const ClearCall& call) {
     }
   }
   if (scene_ao_) AoClearHook(call, depth);  // AO hook (game_ao.cpp): the scene's depth is cleared
+  if (scene_gi_) GiClearHook(call, depth);  // GI hook (game_gi.cpp)
   // The rectangles, or the viewport (the device's, after its clamp).
   std::vector<nvrhi::Rect> rects;
   for (uint32_t r = 0; r < call.rect_count; ++r)
@@ -320,6 +321,7 @@ void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
     }
   }
 
+  if (scene_gi_) GiResolveHook(call, source, from_depth);  // GI hook (game_gi.cpp): scene copies, depth clears
   const uint8_t* dest_object = call.dest_texture ? memory_.Virtual(call.dest_texture) : nullptr;
   bool copied = false;
   if (dest_object && w > 0 && h > 0) {
@@ -438,6 +440,7 @@ bool GameRenderer::Present(nvrhi::ICommandList* cl, uint32_t device, nvrhi::ITex
   dev::DeviceView d(device ? memory_.Virtual(device) : nullptr);
   if (!d.valid()) return false;
   if (scene_ao_ || ao_timer_) AoPresentHook(cl);  // AO hook (game_ao.cpp): a scene the moments above missed
+  if (scene_gi_) GiPresentHook(cl);  // GI hook (game_gi.cpp): the same for the bounce light
   if (frame_log_ && frame_log_->enabled()) LogSwap(d);
   const uint32_t back_buffer = d.u32(dev::kBackBuffer);
   const uint8_t* object = back_buffer ? memory_.Virtual(back_buffer) : nullptr;
