@@ -18,6 +18,7 @@ states, render targets and resolves. On Windows with Vulkan **all 13 golden scen
 | `backend/game_renderer.*`, `game_resources.cpp`, `game_passes.cpp` | Phase 2: the game's draws with their own shaders, textures and states; render targets, resolves, clears, Present | NVRHI, `kknr_resources`, `kkshaders` |
 | `backend/shader_library.*` | the game's shader objects as NVRHI shaders (the pack, else translated and compiled with DXC) | `kkshaders` |
 | `backend/guest_device.h` | the D3D device struct's register images, shadows and fields the game renderer reads | nothing |
+| `backend/ao_classifier.*`, `ao_camera.*`, `ao_config.*`, `gtao.*`, `scene_ao.*`, `game_ao.cpp` | Phase 3: the GTAO ambient occlusion at the end of the opaque pass (`ao.md`) | NVRHI, `kkshaders` |
 | `cmake/kk_libs.cmake` | the resources and shader libraries built into the plugin | the SDK (fmt, xxHash, dxcapi.h) |
 | `backend/vulkan_dispatch.*` | the vulkan.hpp dispatcher NVRHI's static Vulkan backend needs | Vulkan-Headers |
 | `backend/host_device.h`, `vulkan_host.cpp`, `d3d12_host.cpp`, `backend.*` | NVRHI on the SDK provider's device, frame hand-over to the presenter | SDK |
@@ -587,6 +588,10 @@ pause, loading, the three V-Rex scenes, Venture, both Kong scenes, chap20, chap3
 
 
 ## Ambient occlusion (session F)
+
+Phase 3 adds a second method, XeGTAO worked out at the end of the opaque pass so water, smoke, particles and fog
+draw over it unaffected, and an ambient-only mode inside the lighting shaders: `ao.md`. The defaults keep the AO
+described here.
 
 The native renderer has the same screen-space AO as the Xenos plugin (patches 0004 to 0007 in
 `tools/rexglue-patches`). Code: `backend/ambient_occlusion.{h,cpp}`, shaders:
