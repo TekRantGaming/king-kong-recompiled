@@ -58,6 +58,22 @@ class Gtao {
   // Works the occlusion out. Returns the R32F image of in.width x in.height (1 = none; left in the
   // ShaderResource state, so the bindless tables can sample it), or null when the input cannot be used.
   nvrhi::ITexture* Compute(nvrhi::ICommandList* cl, const GtaoInput& in, const GtaoSettings& s);
+  // Only the first three passes: the stored depth into the working image, view-space depth with its
+  // four smaller mips, and the normals rebuilt from it (what the screen-space GI works from, ssgi.h).
+  // False when the input cannot be used. Compute runs this first.
+  bool Prepare(nvrhi::ICommandList* cl, const GtaoInput& in, const GtaoSettings& s);
+  // The working images of the last Prepare (padded_width x padded_height; pixel i is host pixel
+  // origin + step * i): the stored depth (R32F), view-space depth (R32F, XE_GTAO_DEPTH_MIP_LEVELS
+  // mips) and the normals (R32_UINT, XeGTAO's R11G11B10 packing).
+  nvrhi::ITexture* raw_depth() const { return raw_.Get(); }
+  nvrhi::ITexture* view_depth() const { return depth_mips_.Get(); }
+  nvrhi::ITexture* normals() const { return normal_map_.Get(); }
+  uint32_t padded_width() const { return padded_w_; }
+  uint32_t padded_height() const { return padded_h_; }
+  uint32_t step() const { return step_; }
+  // The constants of the last Prepare (shaders/gtao.hlsl's GTAOConstantBuffer: XeGTAO's
+  // GTAOConstants first, then the picture and the working size).
+  const std::vector<uint8_t>& constants_bytes() const { return constants_bytes_; }
   // The last result and where it lies in its target (host pixels).
   nvrhi::ITexture* occlusion() const { return output_.Get(); }
   int32_t origin_x() const { return origin_x_; }
@@ -119,7 +135,7 @@ class Gtao {
   std::vector<uint8_t> constants_bytes_;  // the last Compute's constants (the apply passes reuse them)
 
   // Working images (padded_w_ x padded_h_) and the result (out_w_ x out_h_).
-  uint32_t padded_w_ = 0, padded_h_ = 0, out_w_ = 0, out_h_ = 0;
+  uint32_t padded_w_ = 0, padded_h_ = 0, out_w_ = 0, out_h_ = 0, step_ = 1;
   int32_t origin_x_ = 0, origin_y_ = 0;
   nvrhi::TextureHandle raw_, depth_mips_, normal_map_, term_a_, term_b_, edges_, output_;
   nvrhi::TextureHandle depth_copy_, scratch_;
