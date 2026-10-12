@@ -16,6 +16,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <unordered_set>
 
 #include <rex/hook.h>
 #include <rex/logging.h>
@@ -48,6 +49,8 @@ REX_HOOK_RAW(sub_82862460) {
     static int calls = 0, damped = 0;
     static double speed_sum = 0, vz_sum = 0;
     static int particles = 0;
+    static std::unordered_set<uint32_t> distinct;
+    distinct.insert(ctx.r3.u32);
     ++calls;
     if (drag > 0.0f && drag < 1.0f) {
       ++damped, lo = std::min(lo, drag), hi = std::max(hi, drag);
@@ -61,10 +64,11 @@ REX_HOOK_RAW(sub_82862460) {
     }
     if (std::chrono::steady_clock::now() - start >= std::chrono::seconds(1)) {
       REXLOG_INFO(
-          "KK dev hfr particles: {} generator updates, {} with drag {:.3f}..{:.3f}, dt {:.4f}, steps {}, {} particles "
-          "mean speed {:.3f} mean vz {:.3f}",
-          calls, damped, lo, hi, dt, DragSteps(dt), particles, particles ? speed_sum / particles : 0.0,
-          particles ? vz_sum / particles : 0.0);
+          "KK dev hfr particles: {} generator updates of {} generators, {} with drag {:.3f}..{:.3f}, dt {:.4f}, "
+          "steps {}, {} particles mean speed {:.3f} mean vz {:.3f}",
+          calls, distinct.size(), damped, lo, hi, dt, DragSteps(dt), particles,
+          particles ? speed_sum / particles : 0.0, particles ? vz_sum / particles : 0.0);
+      distinct.clear();
       start = std::chrono::steady_clock::now(), lo = 1, hi = 0, calls = damped = 0;
       speed_sum = vz_sum = 0, particles = 0;
     }
