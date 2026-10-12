@@ -28,6 +28,7 @@ enum class AoDrawClass : uint8_t {
   kOpaque,       // the scene's opaque surfaces
   kTransparent,  // blended surfaces drawn over them: water, glass, particles, smoke
   kEffect,       // screen passes and other draws without a depth test: fog, post effects
+  kEnd,          // the draw that ends the opaque pass when a frame has one (the game's fog pass)
 };
 const char* AoDrawClassName(AoDrawClass c);
 
@@ -72,7 +73,7 @@ struct AoRule {
 extern const char kDefaultAoRules[];
 
 // Rule lines: "<class> [key=value]...", '#' starts a comment. Classes: depth, opaque,
-// transparent, effect, ignore. Keys: color, depth_test, depth_write, alpha_test (yes / no),
+// transparent, effect, end, ignore. Keys: color, depth_test, depth_write, alpha_test (yes / no),
 // blend (off, on, alpha, additive, multiply, other), prim (a comma list of point, line,
 // linestrip, list, fan, strip, rect, quad), vs and ps (a 64-bit microcode hash in hex). A
 // line that cannot be read is skipped and described in `errors`.
@@ -125,6 +126,10 @@ class AoFrameTracker {
   bool depth_valid() const { return depth_valid_; }
   uint32_t depth_only_draws() const { return depth_only_draws_; }
   uint32_t opaque_draws() const { return opaque_draws_; }
+  // The previous frame had an `end` draw in its scene: this frame's opaque pass ends at its `end`
+  // draw only, and the transparent and effect draws before it (decals and second passes the game
+  // interleaves with its opaque draws) do not end it.
+  bool expects_end() const { return expect_end_; }
 
  private:
   void NewFrame(uint64_t frame);
@@ -133,6 +138,7 @@ class AoFrameTracker {
   Phase phase_ = Phase::kNone;
   uint64_t scene_color_ = 0, scene_depth_ = 0, prepass_depth_ = 0;
   bool depth_valid_ = false;
+  bool expect_end_ = false, saw_end_ = false;
   uint32_t depth_only_draws_ = 0, opaque_draws_ = 0;
 };
 

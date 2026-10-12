@@ -195,6 +195,58 @@ TEST(AoTracker_PhasesOfAFrame) {
   CHECK(e.opaque_complete);
 }
 
+TEST(AoRules_TheGamesRules) {
+  // The built-in rules for King Kong's frames (docs/ao.md, "The classifier in the game").
+  const AoRuleTable table;
+  CHECK(table.Classify(State(true, false, false, kAlphaBlend, 0x1B65AC7429B67FE9)) == AoDrawClass::kEnd);  // fog
+  CHECK(table.Classify(State(true, false, false, kAlphaBlend, 0x9F699E763A41FE07)) == AoDrawClass::kEnd);
+  CHECK(table.Classify(State(true, true, true, kOpaqueBlend, 0x115AA5F3FE8AB69A)) == AoDrawClass::kIgnore);  // reflection
+  CHECK(table.Classify(State(true, false, false, kOpaqueBlend, 0x16C954AF5D9DEBD0)) == AoDrawClass::kIgnore);  // shaft mask
+  CHECK(table.Classify(State(true, true, true, kOpaqueBlend, 0xAC2239A7CA9EDF1C)) == AoDrawClass::kTransparent);  // water
+  CHECK(table.Classify(State(true, true, true, kAlphaBlend, 0x2556ECFEAC993F0B)) == AoDrawClass::kTransparent);  // fur
+  std::vector<std::string> errors;
+  ParseAoRules(kDefaultAoRules, &errors);
+  CHECK_EQ(errors.size(), size_t(0));
+  CHECK(ParseAoRules("end ps=1234\n").size() == 1);
+}
+
+TEST(AoTracker_TheFogPassEndsTheOpaquePass) {
+  // The game interleaves decals with its opaque draws and draws its fog pass at the end of them.
+  AoFrameTracker t;
+  using C = AoDrawClass;
+  // The first frame knows of no end draw: the first blended draw ends the opaque pass.
+  t.OnDraw(Draw(1, C::kDepthOnly, kSceneColor, kSceneDepth, true));
+  t.OnDraw(Draw(1, C::kOpaque, kSceneColor, kSceneDepth));
+  CHECK(!t.expects_end());
+  auto e = t.OnDraw(Draw(1, C::kTransparent, kSceneColor, kSceneDepth));
+  CHECK(e.opaque_complete);
+  e = t.OnDraw(Draw(1, C::kEnd, kSceneColor, 0));
+  CHECK(e.in_scene && !e.opaque_complete);
+  // The next frame waits for it: the decal does not end the pass, the fog does.
+  t.OnDraw(Draw(2, C::kDepthOnly, kSceneColor, kSceneDepth, true));
+  t.OnDraw(Draw(2, C::kOpaque, kSceneColor, kSceneDepth));
+  CHECK(t.expects_end());
+  e = t.OnDraw(Draw(2, C::kTransparent, kSceneColor, kSceneDepth));
+  CHECK(e.in_scene && !e.opaque_complete);
+  e = t.OnDraw(Draw(2, C::kEffect, kSceneColor, kSceneDepth));
+  CHECK(!e.opaque_complete);
+  e = t.OnDraw(Draw(2, C::kOpaque, kSceneColor, kSceneDepth, true));
+  CHECK(!e.opaque_complete);
+  CHECK_EQ(t.opaque_draws(), 2u);
+  e = t.OnDraw(Draw(2, C::kEnd, kSceneColor, 0));
+  CHECK(e.opaque_complete);
+  CHECK(t.phase() == AoFrameTracker::Phase::kAfterOpaque);
+  // A frame without a fog pass (the pass never ends there; the scene copy or Present takes the
+  // occlusion), then the one after it goes back to the first blended draw.
+  t.OnDraw(Draw(3, C::kOpaque, kSceneColor, kSceneDepth, true));
+  e = t.OnDraw(Draw(3, C::kTransparent, kSceneColor, kSceneDepth));
+  CHECK(!e.opaque_complete);
+  t.OnDraw(Draw(4, C::kOpaque, kSceneColor, kSceneDepth, true));
+  CHECK(!t.expects_end());
+  e = t.OnDraw(Draw(4, C::kTransparent, kSceneColor, kSceneDepth));
+  CHECK(e.opaque_complete);
+}
+
 TEST(AoTracker_DepthValidity) {
   AoFrameTracker t;
   using C = AoDrawClass;

@@ -174,7 +174,8 @@ bool SceneAo::OnDraw(nvrhi::ICommandList* cl, const Draw& d, const AoSettings& s
              static_cast<unsigned long long>(frame_), tracker_.opaque_draws());
     }
   }
-  const bool reads = apply == AoApply::kAmbient && ambient_ready_ && e.in_scene;
+  // Only the opaque scene reads it: a listed shader drawn blended (water, smoke) keeps its ambient.
+  const bool reads = apply == AoApply::kAmbient && ambient_ready_ && e.in_scene && cls == AoDrawClass::kOpaque;
   if (reads && d.state.ps_hash && IsAmbientShader(d.state.ps_hash)) ambient_drawn_ = true;
   last_.cls = cls;
   last_.events = e;
