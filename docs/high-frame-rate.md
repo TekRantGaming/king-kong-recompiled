@@ -217,7 +217,11 @@ frame), so their effect is not compared run against run.
 | Camera shake (v1.9.10, before this work) | `camera_shake.cpp` | #39 |
 
 At 30 FPS every fix calls the game's own code unchanged (`hfr::Active()` is false), so the console behaviour and
-the golden frames stay the same.
+the golden frames stay the same. Checked with the golden V-Rex run (Original look, 30 FPS, `kk-dev` build of
+this branch, compared with `native-renderer/tests/compare.py images` and each scene's thresholds): pause 3 of 3
+frames pixel-identical, V-Rex gameplay at 110 s 3 of 5, 140 s 5 of 5, 170 s 4 of 5 (rain and lightning; the
+scenes need 3), loading screen 0 of 3: the frames show the loading screen with its picture swept to a different
+place than in any golden frame (the sweep runs on the loading thread; the capture came at another moment).
 
 ### Found and left
 
