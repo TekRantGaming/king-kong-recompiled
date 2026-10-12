@@ -148,6 +148,14 @@ of generators with drag (all 0.95 per step here):
 | 4 ms frames (250 FPS), fix off | 0.35, 0.16, 0.32, 0.16, 0.35 (mean 0.27) |
 | 4 ms frames (250 FPS), fix on | 1.23, 0.96, 1.39, 1.00, 1.42 (mean 1.20) |
 
+The V-Rex chapter's rain (generators with drag 0.99, 20 000 to 600 000 particles counted a second):
+
+| Run | Mean particle speed (1 s samples, steady part) |
+|---|---|
+| 30 FPS | 1.24 to 1.34 (mean about 1.30) |
+| 110 FPS, fix off | 0.99 to 1.07 (mean about 1.03) |
+| 110 FPS, fix on | 1.23 to 1.32 (mean about 1.28) |
+
 ### Step counts, worked out
 
 The game's own step logic (float32, the millisecond frame times the tick count gives) against the fixes'
