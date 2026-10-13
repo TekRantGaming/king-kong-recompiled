@@ -1894,6 +1894,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   void ReloadArt() {
     for (auto& texture : textures_) KeepTextureAlive(std::move(texture));
     textures_.clear();
+    chapter_pictures_.clear();
+    chapter_aspects_.clear();
     title_icon_ = glow_ = nullptr;
     glyphs_.Reload();
     LoadArt();
@@ -2931,28 +2933,59 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     focused_ = st.focus >= 0 && st.focus < int(focused_items_.size()) ? &focused_items_[size_t(st.focus)] : nullptr;
   }
 
-  // The chapter's card (its picture when the game files have one; until then its number), its name,
-  // its best score and the save it starts with.
+  rex::ui::ImmediateTexture* ChapterPicture(const std::filesystem::path& path, float* aspect) {
+    if (path.empty()) return nullptr;
+    auto it = chapter_pictures_.find(path);
+    if (it == chapter_pictures_.end()) {
+      const art::Image img = art::LoadImage(path);
+      it = chapter_pictures_.emplace(path, MakeTexture(img)).first;
+      if (img) chapter_aspects_[path] = float(img.width) / float(img.height);
+    }
+    if (it->second && aspect) *aspect = chapter_aspects_[path];
+    return it->second;
+  }
+
+  // The chapter's card (the game's picture of it when the game files have one, its number over it), its
+  // name, its best score and the save it starts with.
   void DrawChapterPanel(ImDrawList* dl, int entry, ImVec2 p0, ImVec2 p1) {
     if (entry < 0) return;
     const float s = S();
     const ui::Fonts f = ui::GetFonts();
     const float w = p1.x - p0.x;
-    const float ph = std::min(w * 9.0f / 16.0f, (p1.y - p0.y) * 0.46f), pw = ph * 16.0f / 9.0f;
+    std::filesystem::path picture_path;
+    for (const play::ChapterInfo& c : play::Chapters())
+      if (c.entry == entry) picture_path = c.picture;
+    float aspect = 16.0f / 9.0f;
+    rex::ui::ImmediateTexture* picture = ChapterPicture(picture_path, &aspect);
+    const float max_h = (p1.y - p0.y) * 0.46f;
+    float pw = std::min(w, max_h * aspect), ph = pw / aspect;
+    if (!picture) {
+      ph = std::min(w * 9.0f / 16.0f, max_h);
+      pw = ph * 16.0f / 9.0f;
+    }
     const ImVec2 c0 = p0, c1(p0.x + pw, p0.y + ph);
     dl->AddRectFilled(c0, c1, ui::WithAlpha(color::kPanel, 0.82f));
-    dl->AddRectFilledMultiColor(c0, c1, ui::WithAlpha(color::kAccent, 0.10f), ui::WithAlpha(color::kAccent, 0.02f),
-                                ui::WithAlpha(color::kBase, 0.0f), ui::WithAlpha(color::kAccent, 0.05f));
+    if (picture) {
+      dl->AddImage(ui::Tex(picture), c0, c1);
+      // A shade at the bottom for the number.
+      dl->AddRectFilledMultiColor(ImVec2(c0.x, c0.y + ph * 0.45f), c1, ui::WithAlpha(color::kBase, 0.0f),
+                                  ui::WithAlpha(color::kBase, 0.0f), ui::WithAlpha(color::kBase, 0.75f),
+                                  ui::WithAlpha(color::kBase, 0.75f));
+    } else {
+      dl->AddRectFilledMultiColor(c0, c1, ui::WithAlpha(color::kAccent, 0.10f), ui::WithAlpha(color::kAccent, 0.02f),
+                                  ui::WithAlpha(color::kBase, 0.0f), ui::WithAlpha(color::kAccent, 0.05f));
+    }
     dl->AddRect(c0, c1, ui::WithAlpha(color::kText, 0.10f));
     dl->AddRectFilled(c0, ImVec2(c0.x + 3 * s, c1.y), color::kAccent);
     char num[8];
     std::snprintf(num, sizeof(num), "%02d", entry + 1);
-    const float ns = ph * 0.42f, nw = ui::TrackedWidth(f.display, ns, num, 2 * s);
-    ui::DrawTracked(dl, f.display, ns, ImVec2(c0.x + 26 * s, c1.y - ns - 18 * s), ui::WithAlpha(color::kText, 0.9f), num,
+    const float ns = picture ? std::min(ph * 0.30f, 56 * s) : ph * 0.42f, nw = ui::TrackedWidth(f.display, ns, num, 2 * s);
+    const float nb = picture ? 12 * s : 18 * s;
+    ui::DrawTracked(dl, f.display, ns, ImVec2(c0.x + 26 * s, c1.y - ns - nb), ui::WithAlpha(color::kText, 0.9f), num,
                     2 * s);
     const std::string of = Upper(F("of {0}", {std::to_string(play::kChapterCount)}));
-    ui::DrawTracked(dl, f.display, 13 * s, ImVec2(c0.x + 38 * s + nw, c1.y - 13 * s - 26 * s), color::kTextDim, of,
-                    2.2f * s);
+    ui::DrawTracked(dl, f.display, 13 * s, ImVec2(c0.x + 38 * s + nw, c1.y - 13 * s - nb - 8 * s),
+                    picture ? ui::WithAlpha(color::kText, 0.75f) : color::kTextDim, of, 2.2f * s);
 
     float y = c1.y + 22 * s;
     const std::string name = T(ChapterName(entry));
@@ -4861,6 +4894,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   int dev_setup_ = -1;  // KK_DEV_LAUNCHER_SETUP: show a setup stage (screenshots)
 #endif
   rex::ui::ImmediateTexture* title_icon_ = nullptr;
+  // The chapter select's pictures by file (nullptr: none or unreadable), made when first shown.
+  std::map<std::filesystem::path, rex::ui::ImmediateTexture*> chapter_pictures_;
+  std::map<std::filesystem::path, float> chapter_aspects_;
   std::vector<Achievement> achievements_;
   bool have_achievement_names_ = false;
   std::unique_ptr<AchievementToast> toast_;
