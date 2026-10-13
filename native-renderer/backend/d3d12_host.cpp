@@ -15,6 +15,7 @@
 #include <rex/ui/d3d12/d3d12_provider.h>
 
 #include "backend/host_device.h"
+#include "backend/d3d12_requirements.h"
 
 REXCVAR_DECLARE(bool, native_validation);
 
@@ -34,13 +35,32 @@ class D3D12Host final : public HostDevice {
   }
 
   bool Initialize() {
+    const auto requirements = CheckD3D12Requirements(
+        [this](D3D12_FEATURE feature, void* data, UINT size) {
+          return provider_.GetDevice()->CheckFeatureSupport(feature, data, size);
+        },
+        [](const char* missing) { REXGPU_ERROR("rexgpu-native: D3D12 requirement missing: {}", missing); });
+    REXLOG_INFO("rexgpu-native: D3D12 requirements: resource binding tier {}, shader model {}.{}, "
+                "required formats {}/{}: {}", requirements.binding_tier,
+                requirements.shader_model >> 4, requirements.shader_model & 15,
+                requirements.formats_supported, requirements.formats_checked,
+                requirements.supported ? "supported" : "unsupported");
+    if (!requirements.supported) {
+      REXGPU_ERROR("rexgpu-native: native D3D12 unavailable; choose Vulkan in Graphics > Advanced > "
+                   "Graphics API, or use the Xenos renderer (--gpu_plugin=xenos)");
+      return false;
+    }
     if (REXCVAR_GET(native_validation) &&
         SUCCEEDED(provider_.GetDevice()->QueryInterface(IID_PPV_ARGS(&debug_queue_)))) {
       if (FAILED(debug_queue_->RegisterMessageCallback(DebugMessage, D3D12_MESSAGE_CALLBACK_FLAG_NONE,
                                                        nullptr, &debug_cookie_))) {
+        REXGPU_WARN("rexgpu-native: D3D12 debug callback unavailable; NVRHI validation remains enabled");
         debug_queue_->Release();
         debug_queue_ = nullptr;
       }
+    } else if (REXCVAR_GET(native_validation)) {
+      REXGPU_WARN("rexgpu-native: D3D12 info queue unavailable; enable the SDK D3D12 debug layer "
+                  "(--d3d12_debug=true); NVRHI validation remains enabled");
     }
     nvrhi::d3d12::DeviceDesc desc;
     desc.errorCB = GetMessageCallback();

@@ -7,6 +7,16 @@
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
+add_executable(nr_fallback_resources_tests fallback_resources_tests.cpp)
+target_include_directories(nr_fallback_resources_tests PRIVATE "${NR_ROOT}" "${NR_ROOT}/thirdparty/nvrhi/include")
+add_test(NAME nr_fallback_resources_tests COMMAND nr_fallback_resources_tests)
+
+if(WIN32)
+    add_executable(nr_d3d12_requirements_tests d3d12_requirements_tests.cpp)
+    target_include_directories(nr_d3d12_requirements_tests PRIVATE "${NR_ROOT}")
+    add_test(NAME nr_d3d12_requirements_tests COMMAND nr_d3d12_requirements_tests)
+endif()
+
 add_executable(nr_draw_tests draw_tests.cpp)
 target_link_libraries(nr_draw_tests PRIVATE nr_draw nr_hooks)
 target_compile_definitions(nr_draw_tests PRIVATE NR_SOURCE_DIR="${NR_ROOT}")
