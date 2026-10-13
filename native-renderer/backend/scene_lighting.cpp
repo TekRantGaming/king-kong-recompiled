@@ -349,6 +349,12 @@ void SceneLighting::OnDraw(nvrhi::ICommandList* cl, const Draw& d) {
   }
 }
 
+void SceneLighting::BeforeDraw(nvrhi::ICommandList* cl, uint64_t frame, LightFamily family) {
+  const bool water = family == LightFamily::kWater || family == LightFamily::kOcean;
+  const int run = family == LightFamily::kShadowQuad ? 0 : (water ? 1 : -1);
+  if (frame != frame_ || run != timing_) EndTimedDraws(cl);
+}
+
 void SceneLighting::EndTimedDraws(nvrhi::ICommandList* cl) {
   if (timing_ >= 0) {
     timers_[timing_]->End(cl);

@@ -19,6 +19,7 @@
 
 #include "backend/ao_camera.h"
 #include "backend/gtao.h"
+#include "backend/scene_lighting.h"
 #include "backend/tests/check.h"
 #include "backend/tests/vk_test_device.h"
 
@@ -682,6 +683,35 @@ TEST(Gtao_RefusesWhatItCannotUse) {
   cl->close();
   Device()->Execute(cl);
   Device()->WaitIdle();
+}
+
+TEST(Lighting_TimersGroupContiguousDraws) {
+  if (!Device()) return;
+  ErrorsChecked errors;
+  LightingConfig config;
+  config.gpu_time = true;
+  SceneLighting lighting(Device()->device(), config);
+  CHECK(lighting.Initialize());
+  auto cl = Device()->device()->createCommandList();
+  for (uint64_t frame = 0; frame < 4; ++frame) {
+    cl->open();
+    SceneLighting::Draw draw;
+    draw.frame = frame;
+    // A per-draw query exhausts the Vulkan device's pool before this frame submits.
+    // The game can split a water surface into many consecutive draws, as in The Cave.
+    for (LightFamily family : {LightFamily::kShadowQuad, LightFamily::kWater}) {
+      draw.family = family;
+      for (int i = 0; i < 1024; ++i) {
+        lighting.BeforeDraw(cl, frame, family);
+        lighting.OnDraw(cl, draw);
+      }
+    }
+    lighting.EndTimedDraws(cl);  // before Present's other scene effects
+    lighting.OnPresent(cl);
+    cl->close();
+    Device()->Execute(cl);
+    Device()->WaitIdle();
+  }
 }
 
 NR_TEST_MAIN()

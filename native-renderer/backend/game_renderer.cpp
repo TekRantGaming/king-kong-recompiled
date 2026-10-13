@@ -1167,6 +1167,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   std::shared_ptr<const GameShader> vs = shaders_->Get(kkshaders::ShaderKind::Vertex, call.vertex_shader);
   std::shared_ptr<const GameShader> ps;
   if (call.pixel_shader) ps = shaders_->Get(kkshaders::ShaderKind::Pixel, call.pixel_shader);
+  if (scene_lighting_) scene_lighting_->BeforeDraw(cl, call.frame, LightFamilyOf(ps ? ps->ucode_hash : 0));
   if (!vs || (call.pixel_shader && !ps)) {
     ++stats_.skipped_shader;
     if (dump) {
@@ -1328,7 +1329,6 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   record.flags = RecordFlags();
   const uint64_t key = PipelineKey(record);
   NoteRecord(record, key);
-  if (scene_lighting_) scene_lighting_->EndTimedDraws(cl);
   // AO hook (game_ao.cpp): classify the draw; at the end of the opaque pass the occlusion goes into
   // the scene before this draw.
   if (scene_ao_ || ao_constants_) AoDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
@@ -1686,7 +1686,6 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   } else {
     cl->draw(args);
   }
-  if (scene_lighting_) scene_lighting_->EndTimedDraws(cl);
   ++stats_.draws;
   if (dump) {
     for (size_t b = 0; b < vs->bindings.vertexBindings.size() && b < 16; ++b) {
