@@ -1,0 +1,78 @@
+From 5f4fa22cd9c4741c8966f51b655802a28fd9c387 Mon Sep 17 00:00:00 2001
+From: TekRantGaming <craigferels896@gmail.com>
+Date: Tue, 13 Oct 2026 06:42:55 +0100
+Subject: [PATCH] UI: the displays in the monitor cvar's order
+
+rex::ui::GetDisplays lists every display (name, desktop mode, primary) in the
+order the monitor cvar counts them, so a host's monitor list matches the
+display the SDK opens the window on and the fullscreen modes it lists.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ include/rex/ui/display_mode.h | 11 +++++++++++
+ src/ui/window_sdl.cpp         | 20 ++++++++++++++++++++
+ 2 files changed, 31 insertions(+)
+
+diff --git a/include/rex/ui/display_mode.h b/include/rex/ui/display_mode.h
+index 19b56fd..2f060aa 100644
+--- a/include/rex/ui/display_mode.h
++++ b/include/rex/ui/display_mode.h
+@@ -11,6 +11,7 @@
+ 
+ #pragma once
+ 
++#include <string>
+ #include <vector>
+ 
+ namespace rex::ui {
+@@ -24,6 +25,16 @@ struct DisplayMode {
+   float refresh_rate = 0.0f;  // Hz (0: unknown)
+ };
+ 
++// A display: its name, its mode on the desktop and whether it's the primary one.
++struct DisplayInfo {
++  std::string name;
++  DisplayMode desktop;
++  bool primary = false;
++};
++
++// Every display, in the order the monitor cvar counts them (monitor = index + 1). Call on the UI thread.
++std::vector<DisplayInfo> GetDisplays();
++
+ // The fullscreen display modes of a display, largest first (then the highest refresh rate), each
+ // size and rate once. `monitor` is 1-based in the order the monitor cvar uses; 0 is the display
+ // `window` is on (the primary display without a window). Call on the UI thread.
+diff --git a/src/ui/window_sdl.cpp b/src/ui/window_sdl.cpp
+index 408492e..f18b1f4 100644
+--- a/src/ui/window_sdl.cpp
++++ b/src/ui/window_sdl.cpp
+@@ -648,6 +648,26 @@ std::vector<DisplayMode> GetFullscreenDisplayModes(int monitor, const Window* wi
+   return out;
+ }
+ 
++std::vector<DisplayInfo> GetDisplays() {
++  std::vector<DisplayInfo> out;
++  int count = 0;
++  if (SDL_DisplayID* ids = SDL_GetDisplays(&count)) {
++    const SDL_DisplayID primary = SDL_GetPrimaryDisplay();
++    for (int i = 0; i < count; ++i) {
++      DisplayInfo d;
++      const char* name = SDL_GetDisplayName(ids[i]);
++      d.name = name ? name : "";
++      if (const SDL_DisplayMode* mode = SDL_GetDesktopDisplayMode(ids[i])) {
++        d.desktop = ToPixels(*mode);
++      }
++      d.primary = ids[i] == primary;
++      out.push_back(std::move(d));
++    }
++    SDL_free(ids);
++  }
++  return out;
++}
++
+ DisplayMode GetDesktopDisplayMode(int monitor, const Window* window) {
+   const SDL_DisplayMode* mode = SDL_GetDesktopDisplayMode(DisplayFor(monitor, SdlWindowOf(window)));
+   return mode ? ToPixels(*mode) : DisplayMode{};
+-- 
+2.55.0.windows.5
+

@@ -106,13 +106,17 @@ and creates its swapchain with `VK_FULL_SCREEN_EXCLUSIVE_DISALLOWED_EXT`, so the
 window covering the screen into exclusive fullscreen by itself, which broke Alt+Tab in the native renderer's Beta 1.
 `vulkan_allow_fullscreen_exclusive` (off) turns it back.
 
+## 0017: the displays in the monitor order
+
+`rex::ui::GetDisplays` lists every display (name, desktop mode, primary) in the order the `monitor` cvar counts them, so the launcher's Monitor row names the display the game opens on and whose modes Resolution lists (Windows' own order can differ with several monitors).
+
 ## Building
 
 ```
 git clone https://github.com/rexglue/rexglue-sdk.git
 cd rexglue-sdk
 git checkout f5337cdc
-git am <this folder>/*.patch   # 0001-0008, 0010-0012, then 0015-0016
+git am <this folder>/*.patch   # 0001-0008, 0010-0012, then 0015-0017
 cmake --preset win-amd64
 cmake --build out/build/win-amd64 --config Release --target install --parallel
 ```

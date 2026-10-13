@@ -1147,6 +1147,8 @@ class SettingsPages {
   }
 
   Item MonitorItem() {
+    // In the SDK's order (review finding 1: Windows' own order can differ with several monitors).
+    if (monitors_.empty()) monitors_ = ListDisplays();
     if (monitors_.empty()) monitors_ = ListMonitors();
     std::vector<Option> opts = {{"Default", "0"}};
     for (size_t i = 0; i < monitors_.size(); ++i) {
@@ -3998,6 +4000,14 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     items.push_back(Section("Files"));
     items.push_back(ActionItem("Open save folder", "Your saves, achievements and caches.", "",
                                [this] { OpenInExplorer(paths_.user_dir); }));
+    items.push_back(ActionItem("Open save backups",
+                               "Copies of your saves, made each time you start playing from the Play menu and before a "
+                               "save is deleted or overwritten. The newest 20 are kept.",
+                               "", [this] {
+                                 std::error_code ec;
+                                 std::filesystem::create_directories(paths_.user_dir / "save-backups", ec);
+                                 OpenInExplorer(paths_.user_dir / "save-backups");
+                               }));
     {
       Item it = ActionItem("Open game folder", "Where the game is installed.", "", [this] { OpenInExplorer(paths_.game_dir); });
       it.facts.push_back(paths_.game_dir.string());

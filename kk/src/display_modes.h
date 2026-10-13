@@ -15,6 +15,8 @@
 #include <utility>
 #include <vector>
 
+#include "platform.h"
+
 namespace rex::ui {
 class Window;
 }
@@ -39,6 +41,10 @@ std::vector<DisplayMode> ListDisplayModes(int monitor, const rex::ui::Window* wi
 
 // The display's mode on the desktop (width 0 when unknown); `monitor` as above. UI thread.
 DisplayMode DesktopDisplayMode(int monitor, const rex::ui::Window* window);
+
+// Every display, in the order the monitor setting counts them (the SDK's; monitor = index + 1), so the Monitor
+// row names the display the game opens on and whose modes Resolution lists. UI thread.
+std::vector<MonitorInfo> ListDisplays();
 
 // The size the game is shown at in fullscreen when kk_fullscreen_mode is a mode (nullopt for desktop).
 std::optional<std::pair<int, int>> FullscreenModeSize();
