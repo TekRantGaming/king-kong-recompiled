@@ -142,6 +142,9 @@ void MigrateSettings(const std::filesystem::path& config_path);
 // Settings the player can't change (shader preparing is always Balanced).
 void ApplyFixedSettings();
 
+// Derive Vulkan's allowed present modes from VSync before the presenter is created.
+void ApplyVSyncSettings();
+
 // Forces the ReXGlue settings the port depends on (see settings.cpp).
 void ApplyRuntimeOverrides();
 
