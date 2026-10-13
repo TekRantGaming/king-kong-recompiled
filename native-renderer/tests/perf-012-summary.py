@@ -61,6 +61,7 @@ def summary(root):
                   shared_mb=max((float(v['shared_bytes'] or 0)/2**20 for v in memory),default=None),
                   gpu_ms=mean(gpu[-5:]), ao_ms=mean(ao[-5:]), upscale_ms=mean(upscale[-5:]),
                   volatile_errors=sum('maxVersions' in v and 'insufficient' in v for v in logs),
+                  query_errors=sum('Insufficient query pool space' in v for v in logs),
                   shots=len(list(root.glob('shot_*.bmp'))))
     if len(steady_cpu) > 1:
         result['game_cpu_ms']=(steady_cpu[-1][1]-steady_cpu[0][1])/(steady_cpu[-1][0]-steady_cpu[0][0])
@@ -83,6 +84,7 @@ def summary(root):
         for i,name in enumerate(['draws','clears','resolves','upload_bytes','texture_ms','buffer_ms'],1):
             result[name]=mean([v[i] for v in recent])
         result['pipelines']=int(recent[-1][7])
+        result['drawless']=result['draws']==0
     recent=perf[-10:]
     if recent:
         for i,name in enumerate(['scale_writes','scale_identical','vertex_binds','vertex_repeated','descriptor_updates','graphics_states','pipeline_changes'],1):

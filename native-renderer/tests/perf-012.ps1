@@ -1,9 +1,41 @@
 param([string]$Label='baseline', [int]$Chapter=8, [string]$Backend='vulkan',
  [switch]$Classic, [string]$Scale='1920x1080', [int]$Cores=0,
- [switch]$Gtao, [string]$Upscaler='off', [switch]$Fire, [switch]$PassTimers, [switch]$Validation)
+ [switch]$Gtao, [string]$Upscaler='off', [switch]$Fire, [switch]$PassTimers, [switch]$Validation,
+ [string]$NativeDll='')
 $ErrorActionPreference='Stop'
 $workspace=(Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $lockPath='F:\KK-native-renderer\runs\codex-game.lock'
+$coreMask=0L
+if ($Cores -gt 0) {
+ Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class Task012CoreMask {
+ [DllImport("kernel32.dll", SetLastError=true)]
+ static extern bool GetLogicalProcessorInformationEx(int relationship, IntPtr data, ref uint bytes);
+ public static long Select(int cores) {
+  uint bytes=0;
+  GetLogicalProcessorInformationEx(0,IntPtr.Zero,ref bytes);
+  IntPtr data=Marshal.AllocHGlobal((int)bytes);
+  try {
+   if (!GetLogicalProcessorInformationEx(0,data,ref bytes)) throw new System.ComponentModel.Win32Exception();
+   int offset=0, selected=0; long mask=0;
+   while (offset<bytes) {
+    int size=Marshal.ReadInt32(data,offset+4);
+    if (size<=0) throw new InvalidOperationException("Invalid CPU topology record");
+    if (Marshal.ReadInt32(data,offset)==0 && Marshal.ReadInt16(data,offset+30)==1 && Marshal.ReadInt16(data,offset+40)==0) {
+     mask |= Marshal.ReadInt64(data,offset+32);
+     if (++selected==cores) return mask;
+    }
+    offset += size;
+   }
+   throw new InvalidOperationException("Requested core count is unavailable in processor group 0");
+  } finally { Marshal.FreeHGlobal(data); }
+ }
+}
+'@
+ $coreMask=[Task012CoreMask]::Select($Cores)
+}
 function Wait-Free {
  if (!(Test-Path -LiteralPath $lockPath)) { Set-Content -LiteralPath $lockPath 'free' }
  while ((Get-Content -LiteralPath $lockPath -Raw).Trim() -ne 'free') { Start-Sleep -Seconds 30 }
@@ -16,6 +48,7 @@ $run="F:\KK-native-renderer\runs\task012-$Label-ch$Chapter-$(Get-Date -Format yy
 New-Item -ItemType Directory -Path $run | Out-Null
 $build=Join-Path $workspace 'kk/out/build/kk-dev-vulkan'
 Get-ChildItem -LiteralPath $build -File | Where-Object { $_.Extension -in '.exe','.dll' } | Copy-Item -Destination $run
+if ($NativeDll) { Copy-Item -LiteralPath $NativeDll -Destination "$run\rexgpu-native.dll" -Force }
 Copy-Item -LiteralPath "$build\glyphs" -Destination $run -Recurse
 Get-ChildItem 'F:\KK-native-renderer\wt\beta-upscalers\kk\out\build\kk-dev-vulkan\kkshaders-*.pack' | Copy-Item -Destination $run
 Copy-Item 'F:\KK-native-renderer\downloads\dxc-v1.9.2609\dxc\bin\x64\dxcompiler.dll' $run
@@ -43,13 +76,14 @@ if ($Classic) { $args+='--kk_renderer=classic'; $args+="--draw_resolution_scale_
 if ($Gtao) { $args+='--ao_mode=1','--ao_strength=2','--native_ao_method=gtao' } else { $args+='--ao_mode=0' }
 if ($Fire) { $args+='--kk_cheat_ammo=true','--kk_cheat_machine_gun=true' }
 if ($Validation) { $args+='--native_validation=true' }
-@{label=$Label;chapter=$Chapter;backend=$Backend;classic=[bool]$Classic;scale=$Scale;cores=$Cores;args=$args} | ConvertTo-Json | Set-Content "$run\test.json"
+@{label=$Label;chapter=$Chapter;backend=$Backend;classic=[bool]$Classic;scale=$Scale;cores=$Cores;
+ affinity_mask=$coreMask.ToString('X'); native_dll=$NativeDll; dll_sha256=(Get-FileHash "$run\rexgpu-native.dll").Hash; args=$args} | ConvertTo-Json | Set-Content "$run\test.json"
 Wait-Free
 Set-Content -LiteralPath $lockPath "task012 $(Get-Date -Format o)"
 $game=$null
 try {
  $game=Start-Process -FilePath "$run\king_kong.exe" -ArgumentList $args -WorkingDirectory $run -WindowStyle Hidden -PassThru
- if ($Cores -gt 0) { $game.ProcessorAffinity=[IntPtr]((1L -shl ($Cores*2))-1) }
+ if ($Cores -gt 0) { $game.ProcessorAffinity=[IntPtr]$coreMask }
  Write-Output "RUN $run PID $($game.Id)"
  'seconds,private_bytes,working_set,cpu_seconds' | Set-Content "$run\process.csv"
  'seconds,dedicated_bytes,shared_bytes' | Set-Content "$run\gpu-memory.csv"
