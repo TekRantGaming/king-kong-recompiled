@@ -1,5 +1,6 @@
 param([string]$Label = 'before', [int[]]$Entries = @(2,3,4,5,6,7,8),
       [string]$Build = '', [string[]]$ExtraArgs = @(), [int]$Seconds = 60, [switch]$Hands)
+. (Join-Path $PSScriptRoot "run-storage.ps1")
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path "$PSScriptRoot\..\..").Path
 if (!$Build) { $Build = "$root\kk\out\build\kk-dev-vulkan" }
@@ -11,11 +12,8 @@ foreach ($entry in $Entries) {
     Start-Sleep -Seconds 30
   }
   $run = "F:\KK-native-renderer\runs\task016-$Label-e$entry-$(Get-Date -Format yyyyMMdd-HHmmss)"
-  New-Item -ItemType Directory -Path "$run\glyphs","$run\cache\native-shaders" -Force | Out-Null
-  Get-ChildItem $Build -File | Where-Object { $_.Extension -in '.exe','.dll' } | Copy-Item -Destination $run
-  Copy-Item "$root\kk\glyphs\*" "$run\glyphs" -Recurse
-  Copy-Item 'F:\KK-native-renderer\cache\native-shaders\kkshaders-spirv.pack' "$run\cache\native-shaders"
-  Copy-Item 'F:\KK-native-renderer\downloads\dxc-v1.9.2609\dxc\bin\x64\dxcompiler.dll' $run
+  New-Item -ItemType Directory -Path "$run\cache" -Force | Out-Null
+  Initialize-RunBuild -Build $build -Run $run -ShaderPacks @('F:\KK-native-renderer\cache\native-shaders\kkshaders-spirv.pack') -Dxc 'F:\KK-native-renderer\downloads\dxc-v1.9.2609\dxc\bin\x64\dxcompiler.dll' -Glyphs "$root\kk\glyphs"
   & robocopy 'F:\KK-native-renderer\userdata' "$run\userdata" /E /NFL /NDL /NJH /NJS /NP | Out-Null
   if ($LASTEXITCODE -ge 8) { throw 'Private user data copy failed' }
   $env:SDL_WINDOW_ACTIVATE_WHEN_SHOWN = '0'
@@ -78,5 +76,7 @@ foreach ($entry in $Entries) {
       $guard.Dispose()
     }
   }
+  Assert-RunBuildUnchanged $run
+  Complete-RunCaptures $run
   Write-Output "Finished $run"
 }

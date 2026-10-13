@@ -1,4 +1,5 @@
 param([int[]]$Entries = @(3), [int[]]$AoModes = @(1), [string]$Label = 'before', [int]$Seconds = 100, [string[]]$ExtraArgs = @())
+. (Join-Path $PSScriptRoot "run-storage.ps1")
 $ErrorActionPreference = 'Stop'
 $root = 'F:\KK-native-renderer\wt\codex-white'
 $build = "$root\kk\out\build\kk-dev-vulkan"
@@ -6,10 +7,7 @@ $lockPath = 'F:\KK-native-renderer\runs\codex-game.lock'
 foreach ($entry in $Entries) { foreach ($aoMode in $AoModes) {
   $run = 'F:\KK-native-renderer\runs\task015-' + $Label + '-e' + $entry + '-ao' + $aoMode + '-' + (Get-Date -Format 'yyyyMMdd-HHmmss')
   New-Item -ItemType Directory -Path $run | Out-Null
-  Get-ChildItem -LiteralPath $build -File | Where-Object {$_.Extension -in '.exe','.dll'} | Copy-Item -Destination $run
-  Copy-Item -LiteralPath "$root\kk\glyphs" -Destination "$run\glyphs" -Recurse
-  Copy-Item -LiteralPath 'F:\KK-native-renderer\wt\04-backend\kk\out\build\kk-dev-vulkan\kkshaders-spirv.pack' -Destination $run
-  Copy-Item -LiteralPath 'F:\KK-native-renderer\wt\04-backend\kk\out\build\kk-dev-vulkan\dxcompiler.dll' -Destination $run
+  Initialize-RunBuild -Build $build -Run $run -ShaderPacks @('F:\KK-native-renderer\wt\04-backend\kk\out\build\kk-dev-vulkan\kkshaders-spirv.pack') -Dxc 'F:\KK-native-renderer\wt\04-backend\kk\out\build\kk-dev-vulkan\dxcompiler.dll' -Glyphs "$root\kk\glyphs"
   robocopy 'F:\KK-native-renderer\userdata' "$run\userdata" /E /NFL /NDL /NJH /NJS | Out-Null
   if ($LASTEXITCODE -ge 8) {throw 'userdata copy failed'}
   while ($true) {
@@ -55,7 +53,9 @@ foreach ($entry in $Entries) { foreach ($aoMode in $AoModes) {
     if ($proc -and !$proc.HasExited) { [void]$proc.CloseMainWindow(); if (!$proc.WaitForExit(15000)) {Stop-Process -Id $proc.Id -Force; $proc.WaitForExit()} }
     Set-Content -LiteralPath $lockPath -Value 'free'
   }
-  $shots = @(Get-ChildItem -LiteralPath $run -Filter 'shot_*.bmp').Count
+  Assert-RunBuildUnchanged $run
+  Complete-RunCaptures $run
+  $shots = @(Get-ChildItem -LiteralPath $run -File | Where-Object { $_.Name -match '^shot_.*\.(png|bmp)$' }).Count
   $placeholders = @(Select-String -LiteralPath "$run\run.log" -Pattern 'texture placeholder real draw').Count
   Write-Output ("finished $run shots=$shots placeholders=$placeholders exit=$($proc.ExitCode)")
 }}
