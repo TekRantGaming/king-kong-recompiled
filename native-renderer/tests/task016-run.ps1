@@ -4,6 +4,7 @@ $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path "$PSScriptRoot\..\..").Path
 if (!$Build) { $Build = "$root\kk\out\build\kk-dev-vulkan" }
 $lock = 'F:\KK-native-renderer\runs\codex-game.lock'
+if (!(Test-Path $lock)) { Set-Content $lock 'free' -Encoding ascii }
 foreach ($entry in $Entries) {
   while ((Test-Path $lock) -and (Get-Content $lock -Raw).Trim() -ne 'free') {
     Write-Output "Waiting for shared game lock: $(Get-Content $lock -Raw)"
@@ -37,13 +38,31 @@ foreach ($entry in $Entries) {
   $args = @($args | Where-Object { $names -notcontains ($_ -split '=',2)[0] }) + $ExtraArgs
   if ($Hands) { $args += @('--kk_cheats=true','--kk_cheat_shotgun=true','--kk_cheat_ammo=true','--kk_toggle_aim=false') }
   $proc = $null
+  $guard = $null
   try {
     # Setup may take long enough for another task to claim the lock. Check again immediately before launch.
     while ((Test-Path $lock) -and (Get-Content $lock -Raw).Trim() -ne 'free') {
       Write-Output "Waiting for shared game lock after setup: $(Get-Content $lock -Raw)"
       Start-Sleep -Seconds 30
     }
-    Set-Content $lock "task016 $(Get-Date -Format o)" -Encoding ascii
+    # Allow readers, but keep a write handle while our game runs: another runner's
+    # delayed cleanup must not write 'free' over an active game's ownership.
+    while (!$guard) {
+      try {
+        $candidate = [IO.File]::Open($lock, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::Read)
+        $reader = New-Object IO.StreamReader($candidate, [Text.Encoding]::ASCII, $false, 1024, $true)
+        $value = $reader.ReadToEnd().Trim()
+        $reader.Dispose()
+        $oursRunning = @(Get-CimInstance Win32_Process -Filter "Name='king_kong.exe'" | Where-Object {
+          $_.ExecutablePath -like 'F:\KK-native-renderer\runs\*' -or $_.ExecutablePath -like 'F:\KK-native-renderer\wt\*'
+        })
+        if ($value -eq 'free' -and !$oursRunning.Count) { $guard = $candidate }
+        else { $candidate.Dispose() }
+      } catch { if ($candidate) { $candidate.Dispose() }; Write-Output "Waiting to claim game lock: $($_.Exception.Message)" }
+      if (!$guard) { Start-Sleep -Seconds 30 }
+    }
+    $bytes = [Text.Encoding]::ASCII.GetBytes("task016 $(Get-Date -Format o)`r`n")
+    $guard.SetLength(0); $guard.Position = 0; $guard.Write($bytes, 0, $bytes.Length); $guard.Flush()
     $proc = Start-Process "$run\king_kong.exe" -WorkingDirectory $run -ArgumentList $args -WindowStyle Hidden -PassThru
     Write-Output "Started $run PID $($proc.Id)"
     $end = (Get-Date).AddSeconds($Seconds)
@@ -53,7 +72,11 @@ foreach ($entry in $Entries) {
       [void]$proc.CloseMainWindow()
       if (!$proc.WaitForExit(10000)) { Stop-Process -Id $proc.Id -Force; $proc.WaitForExit() }
     }
-    Set-Content $lock 'free' -Encoding ascii
+    if ($guard) {
+      $bytes = [Text.Encoding]::ASCII.GetBytes("free`r`n")
+      $guard.SetLength(0); $guard.Position = 0; $guard.Write($bytes, 0, $bytes.Length); $guard.Flush()
+      $guard.Dispose()
+    }
   }
   Write-Output "Finished $run"
 }
