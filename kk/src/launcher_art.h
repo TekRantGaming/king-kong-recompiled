@@ -1,6 +1,8 @@
 // The launcher's official artwork, taken from the player's own copy of the
 // game when it's installed (nothing is shipped with the port):
 //  - the game's logo, from the front end's textures in KKTextures.bf
+//  - the chapter select's names (five languages) and pictures, from the start
+//    menu's texts in KKMaps.bf and its textures in KKTextures.bf
 //  - backdrops: stills from the movie trailer and the intro on the disc
 //    (Video/Trailer.wmv, Video/Intro.wmv), decoded with Windows' own
 //    Media Foundation (Windows only; elsewhere the launcher keeps using its
@@ -9,6 +11,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -37,6 +40,13 @@ bool ExtractLauncherArt(const std::filesystem::path& game_dir, const std::filesy
                         ArtProgress& progress);
 
 LauncherArt LoadLauncherArt(const std::filesystem::path& dir);
+
+// The chapter select's names and pictures, extracted with the rest (by the chapter's text index, the third
+// column of the game's chapter table, 0 to kChapterNames - 1): the names file has one UTF-8 name a line;
+// lang is "en", "de", "es", "fr" or "it". A picture is missing for a chapter the game shows none for.
+constexpr uint32_t kChapterNames = 42;
+std::filesystem::path ChapterNamesPath(const std::filesystem::path& dir, const char* lang);
+std::filesystem::path ChapterPicturePath(const std::filesystem::path& dir, int text_index);
 
 // A 32-bit BMP with its alpha channel (art::LoadImage reads it back).
 bool SaveImage(const Image& image, const std::filesystem::path& path);

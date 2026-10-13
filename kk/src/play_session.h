@@ -67,11 +67,14 @@ struct StartRequest {
 void SetStartRequest(const StartRequest& request);
 StartRequest GetStartRequest();
 
-// Chapter-select entries: the name shown (translated where the game has it) and, when the game files have
-// one, a picture for the launcher (decoded RGBA, empty when none).
+// Chapter-select entries: the name shown (the game's own, in the launcher's language, once the launcher has
+// extracted it from the player's game files; "Chapter N" until then) and, when the game files have one, a
+// picture for the launcher (a BMP in the launcher's art cache, art::LoadImage reads it; empty when none).
 struct ChapterInfo {
   int entry = 0;
+  int text_index = 0;  // the game's chapter table, third column: the name's text id 0x4902DD68 + text_index
   std::string name;
+  std::filesystem::path picture;
   int level_key = 0, start_point = 0;
 };
 const std::vector<ChapterInfo>& Chapters();

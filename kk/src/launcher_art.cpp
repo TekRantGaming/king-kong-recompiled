@@ -47,8 +47,9 @@ namespace kk::art {
 namespace {
 
 // Bumped when what's extracted changes, so it's extracted again (3: colour
-// bars taken from Proton's videos dropped).
-constexpr const char* kArtVersion = "3";
+// bars taken from Proton's videos dropped; 4: the chapter select's names and
+// pictures).
+constexpr const char* kArtVersion = "4";
 
 // ------------------------------------------------------------------- LZO ---
 // LZO1X decompression with bounds checks (as lzo1x_decompress_safe). Returns
@@ -125,30 +126,46 @@ bool Lzo1xDecompress(const uint8_t* in, size_t in_len, uint8_t* out, size_t out_
 }
 
 // -------------------------------------------------------------- bigfile ---
-// KKTextures.bf is a Jade engine "BIG" file: a table of (offset, key) entries
-// at 0x44, one per pack of textures. A pack is a run of chunks, each a 12-byte
+// KKTextures.bf and KKMaps.bf are Jade engine "BIG" files. Their file table is
+// a chain of tables from 0x2C on, each a 24-byte header (entries, folders, the
+// entries' offset, the next table's entries' offset or -1, first and last
+// index) and its (offset, key) entries (KKMaps.bf has two). An entry (a pack of
+// textures, a level's data or its texts) is a run of chunks, each a 12-byte
 // header (u32, decompressed size, stored size) and LZO1X data (or raw when the
-// two sizes match); the first header's first u32 is the pack's size.
+// two sizes match); the first header's first u32 is the entry's size.
 uint32_t LE32(const uint8_t* p) { return uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24; }
 uint32_t BE32(const uint8_t* p) { return uint32_t(p[3]) | uint32_t(p[2]) << 8 | uint32_t(p[1]) << 16 | uint32_t(p[0]) << 24; }
+
+uint64_t FindBigEntry(std::ifstream& f, uint64_t file_size, uint32_t key) {
+  uint64_t header = 0x2C;
+  for (int table = 0; table < 64 && header + 24 <= file_size; ++table) {
+    uint8_t h[24];
+    f.seekg(std::streamoff(header));
+    if (!f.read(reinterpret_cast<char*>(h), sizeof(h))) break;
+    const uint32_t count = LE32(h), start = LE32(h + 8), next = LE32(h + 12);
+    if (count > (1u << 20) || start + uint64_t(count) * 8 > file_size) break;
+    std::vector<uint8_t> entries(size_t(count) * 8);
+    f.seekg(std::streamoff(start));
+    if (!f.read(reinterpret_cast<char*>(entries.data()), std::streamsize(entries.size()))) break;
+    for (uint32_t i = 0; i < count; ++i)
+      if (LE32(&entries[i * 8 + 4]) == key) return LE32(&entries[i * 8]);
+    if (next == 0xFFFFFFFFu || next < 24) break;
+    header = next - 24;
+  }
+  return 0;
+}
 
 bool ReadPack(const std::filesystem::path& bigfile, uint32_t key, std::vector<uint8_t>& out, std::string& why) {
   std::ifstream f(bigfile, std::ios::binary);
   if (!f) return why = "can't open " + bigfile.filename().string(), false;
   f.seekg(0, std::ios::end);
   const uint64_t file_size = uint64_t(f.tellg());
-  uint8_t header[0x44];
+  uint8_t magic[4];
   f.seekg(0);
-  if (!f.read(reinterpret_cast<char*>(header), sizeof(header)) || std::memcmp(header, "BIG", 4) != 0)
+  if (!f.read(reinterpret_cast<char*>(magic), sizeof(magic)) || std::memcmp(magic, "BIG", 4) != 0)
     return why = "not a Jade BIG file", false;
-  const uint32_t count = LE32(header + 8);
-  if (count == 0 || count > 65536) return why = "unexpected BIG file table", false;
-  std::vector<uint8_t> table(size_t(count) * 8);
-  if (!f.read(reinterpret_cast<char*>(table.data()), std::streamsize(table.size()))) return why = "short BIG table", false;
-  uint64_t offset = 0;
-  for (uint32_t i = 0; i < count; ++i)
-    if (LE32(&table[i * 8 + 4]) == key) offset = LE32(&table[i * 8]);
-  if (!offset || offset + 12 > file_size) return why = "front-end textures not found", false;
+  const uint64_t offset = FindBigEntry(f, file_size, key);
+  if (!offset || offset + 12 > file_size) return why = "entry not found in " + bigfile.filename().string(), false;
   uint8_t h[12];
   f.seekg(std::streamoff(offset));
   if (!f.read(reinterpret_cast<char*>(h), 4)) return why = "short pack", false;
@@ -223,64 +240,71 @@ uint32_t Fnv1a(const uint8_t* p, size_t n) {
   return h;
 }
 
+// A DXT5 texture as the GPU reads it (tiled, 16-bit big-endian words, upside
+// down), the right way up.
+Image DecodeDxt5(const uint8_t* data, uint32_t w, uint32_t h) {
+  const uint32_t blocks_x = w / 4, blocks_y = h / 4;
+  Image img;
+  img.width = int(w);
+  img.height = int(h);
+  img.rgba.resize(size_t(w) * h * 4);
+  for (uint32_t by = 0; by < blocks_y; ++by)
+    for (uint32_t bx = 0; bx < blocks_x; ++bx) {
+      uint8_t b[16];
+      const uint8_t* src = data + TiledOffset(bx, by, blocks_x, 4);
+      for (int k = 0; k < 16; k += 2) {  // 16-bit big-endian words
+        b[k] = src[k + 1];
+        b[k + 1] = src[k];
+      }
+      // Alpha: two ends and 3-bit indices.
+      uint8_t alpha[8] = {b[0], b[1]};
+      if (b[0] > b[1])
+        for (int k = 1; k < 7; ++k) alpha[k + 1] = uint8_t(((7 - k) * b[0] + k * b[1]) / 7);
+      else {
+        for (int k = 1; k < 5; ++k) alpha[k + 1] = uint8_t(((5 - k) * b[0] + k * b[1]) / 5);
+        alpha[6] = 0;
+        alpha[7] = 255;
+      }
+      uint64_t abits = 0;
+      for (int k = 0; k < 6; ++k) abits |= uint64_t(b[2 + k]) << (8 * k);
+      // Colour: two 5:6:5 ends and 2-bit indices (always four colours in DXT5).
+      const uint16_t c0 = uint16_t(b[8] | b[9] << 8), c1 = uint16_t(b[10] | b[11] << 8);
+      const uint32_t cbits = uint32_t(b[12]) | uint32_t(b[13]) << 8 | uint32_t(b[14]) << 16 | uint32_t(b[15]) << 24;
+      int pal[4][3];
+      for (int e = 0; e < 2; ++e) {
+        const uint16_t c = e ? c1 : c0;
+        pal[e][0] = ((c >> 11) & 31) * 255 / 31;
+        pal[e][1] = ((c >> 5) & 63) * 255 / 63;
+        pal[e][2] = (c & 31) * 255 / 31;
+      }
+      for (int ch = 0; ch < 3; ++ch) {
+        pal[2][ch] = (2 * pal[0][ch] + pal[1][ch]) / 3;
+        pal[3][ch] = (pal[0][ch] + 2 * pal[1][ch]) / 3;
+      }
+      for (int py = 0; py < 4; ++py)
+        for (int px = 0; px < 4; ++px) {
+          const int k = py * 4 + px;
+          const int* c = pal[(cbits >> (2 * k)) & 3];
+          const uint32_t y = by * 4 + py, x = bx * 4 + px;
+          uint8_t* d = &img.rgba[(size_t(h - 1 - y) * w + x) * 4];  // the right way up
+          d[0] = uint8_t(c[0]);
+          d[1] = uint8_t(c[1]);
+          d[2] = uint8_t(c[2]);
+          d[3] = alpha[(abits >> (3 * k)) & 7];
+        }
+    }
+  return img;
+}
+
 Image FindButtonSheet(const std::vector<uint8_t>& pack) {
   static const uint8_t kMagic[4] = {0x34, 0x12, 0xD0, 0xCA};
-  constexpr uint32_t kW = 256, kH = 128, kBlocksX = kW / 4, kBlocksY = kH / 4, kSize = kBlocksX * kBlocksY * 16;
+  constexpr uint32_t kW = 256, kH = 128, kSize = (kW / 4) * (kH / 4) * 16;
   for (size_t i = 12; i + 0x20 + kSize <= pack.size(); ++i) {
     if (std::memcmp(&pack[i], "D2KK", 4) != 0 || std::memcmp(&pack[i - 12], kMagic, 4) != 0) continue;
     if (BE32(&pack[i + 4]) != kW || BE32(&pack[i + 8]) != kH || (BE32(&pack[i + 12]) & 0x3F) != 20) continue;
     const uint8_t* data = &pack[i + 0x20];
     if (Fnv1a(data, kSize) != kButtonSheetHash) continue;
-    Image img;
-    img.width = int(kW);
-    img.height = int(kH);
-    img.rgba.resize(size_t(kW) * kH * 4);
-    for (uint32_t by = 0; by < kBlocksY; ++by)
-      for (uint32_t bx = 0; bx < kBlocksX; ++bx) {
-        uint8_t b[16];
-        const uint8_t* src = data + TiledOffset(bx, by, kBlocksX, 4);
-        for (int k = 0; k < 16; k += 2) {  // 16-bit big-endian words
-          b[k] = src[k + 1];
-          b[k + 1] = src[k];
-        }
-        // Alpha: two ends and 3-bit indices.
-        uint8_t alpha[8] = {b[0], b[1]};
-        if (b[0] > b[1])
-          for (int k = 1; k < 7; ++k) alpha[k + 1] = uint8_t(((7 - k) * b[0] + k * b[1]) / 7);
-        else {
-          for (int k = 1; k < 5; ++k) alpha[k + 1] = uint8_t(((5 - k) * b[0] + k * b[1]) / 5);
-          alpha[6] = 0;
-          alpha[7] = 255;
-        }
-        uint64_t abits = 0;
-        for (int k = 0; k < 6; ++k) abits |= uint64_t(b[2 + k]) << (8 * k);
-        // Colour: two 5:6:5 ends and 2-bit indices (always four colours in DXT5).
-        const uint16_t c0 = uint16_t(b[8] | b[9] << 8), c1 = uint16_t(b[10] | b[11] << 8);
-        const uint32_t cbits = uint32_t(b[12]) | uint32_t(b[13]) << 8 | uint32_t(b[14]) << 16 | uint32_t(b[15]) << 24;
-        int pal[4][3];
-        for (int e = 0; e < 2; ++e) {
-          const uint16_t c = e ? c1 : c0;
-          pal[e][0] = ((c >> 11) & 31) * 255 / 31;
-          pal[e][1] = ((c >> 5) & 63) * 255 / 63;
-          pal[e][2] = (c & 31) * 255 / 31;
-        }
-        for (int ch = 0; ch < 3; ++ch) {
-          pal[2][ch] = (2 * pal[0][ch] + pal[1][ch]) / 3;
-          pal[3][ch] = (pal[0][ch] + 2 * pal[1][ch]) / 3;
-        }
-        for (int py = 0; py < 4; ++py)
-          for (int px = 0; px < 4; ++px) {
-            const int k = py * 4 + px;
-            const int* c = pal[(cbits >> (2 * k)) & 3];
-            const uint32_t y = by * 4 + py, x = bx * 4 + px;
-            uint8_t* d = &img.rgba[(size_t(kH - 1 - y) * kW + x) * 4];  // the right way up
-            d[0] = uint8_t(c[0]);
-            d[1] = uint8_t(c[1]);
-            d[2] = uint8_t(c[2]);
-            d[3] = alpha[(abits >> (3 * k)) & 7];
-          }
-      }
-    return img;
+    return DecodeDxt5(data, kW, kH);
   }
   return {};
 }
@@ -519,7 +543,138 @@ std::filesystem::path BackdropPath(const std::filesystem::path& dir, size_t i) {
   return dir / ("backdrop" + std::to_string(i + 1) + ".bmp");
 }
 
+// ------------------------------------------------------- the chapters ---
+// The chapter select's names are a text file of the start menu (_main_menu,
+// key 0x3D00C45A): group 0x4902DD54, ids 0x4902DD68 + n (n = 0 to 41, the text
+// index of the game's chapter table). Each language's texts of a level are a
+// KKMaps.bf entry of their own, key 0xFD000000 | language << 19 | the level's
+// low bits. In it, a text file is its size, its entry count, 24-byte entries
+// (id, -1, string offset, ...) and the strings (Windows-1252, NUL-ended).
+constexpr uint32_t kChapterTextId = 0x4902DD68;
+struct TextLanguage {
+  const char* code;  // as ChapterNamesPath takes it
+  uint32_t jade;     // the game's language number
+};
+constexpr TextLanguage kTextLanguages[] = {{"en", 2}, {"de", 6}, {"es", 8}, {"fr", 1}, {"it", 7}};
+
+std::string Cp1252ToUtf8(const std::string& in) {
+  static constexpr uint16_t k80[32] = {0x20AC, 0,      0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
+                                       0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0,      0x017D, 0,
+                                       0,      0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+                                       0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0,      0x017E, 0x0178};
+  std::string out;
+  for (const unsigned char ch : in) {
+    uint32_t c = ch;
+    if (c >= 0x80 && c < 0xA0) c = k80[c - 0x80] ? k80[c - 0x80] : '?';
+    if (c < 0x80) {
+      out += char(c);
+    } else if (c < 0x800) {
+      out += char(0xC0 | (c >> 6));
+      out += char(0x80 | (c & 0x3F));
+    } else {
+      out += char(0xE0 | (c >> 12));
+      out += char(0x80 | ((c >> 6) & 0x3F));
+      out += char(0x80 | (c & 0x3F));
+    }
+  }
+  return out;
+}
+
+// The chapter names (by text index) from one language's texts of the start menu; empty when not found.
+std::vector<std::string> FindChapterNames(const std::vector<uint8_t>& texts) {
+  const uint8_t id[8] = {0x68, 0xDD, 0x02, 0x49, 0xFF, 0xFF, 0xFF, 0xFF};  // the first entry: id, -1
+  for (auto it = std::search(texts.begin(), texts.end(), id, id + 8); it != texts.end();
+       it = std::search(it + 1, texts.end(), id, id + 8)) {
+    const size_t table = size_t(it - texts.begin());
+    if (table < 8) continue;
+    const uint32_t size = LE32(&texts[table - 8]), count = LE32(&texts[table - 4]);
+    const size_t end = table - 4 + size_t(size);
+    if (count < kChapterNames || count > 4096 || end > texts.size() || table + size_t(count) * 24 > end) continue;
+    const size_t strings = table + size_t(count) * 24;
+    std::vector<std::string> names(kChapterNames);
+    int found = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+      const uint8_t* e = &texts[table + size_t(i) * 24];
+      const uint32_t n = LE32(e) - kChapterTextId, at = LE32(e + 8);
+      if (n >= kChapterNames || strings + at >= end) continue;
+      const char* s = reinterpret_cast<const char*>(&texts[strings + at]);
+      const std::string name(s, strnlen(s, end - strings - at));
+      if (name.empty() || !names[n].empty()) continue;
+      names[n] = Cp1252ToUtf8(name);
+      ++found;
+    }
+    if (found == int(kChapterNames)) return names;
+  }
+  return {};
+}
+
+// The chapter select's pictures: 256 x 128 DXT5 textures of the front end's
+// pack (the film frames' contents, rows 18 to 109; the rest is black), in the
+// pack's order: a "?" (a chapter not reached), the Xbox 360 buttons, then
+// the chapters' pictures and the Extras'. The picture each text index shows
+// (an index into that list, -1 none), as the game's chapter select shows them.
+constexpr int kChapterPicture[kChapterNames] = {
+    2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
+    23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, -1, -1, -1, -1};
+constexpr int kPictureTop = 18, kPictureRows = 92;
+
+std::vector<const uint8_t*> FindChapterPictures(const std::vector<uint8_t>& pack) {
+  static const uint8_t kMagic[4] = {0x34, 0x12, 0xD0, 0xCA};
+  constexpr size_t kSize = (256 / 4) * (128 / 4) * 16;
+  std::vector<const uint8_t*> out;
+  for (size_t i = 12; i + 0x20 + kSize <= pack.size(); ++i) {
+    if (std::memcmp(&pack[i], "D2KK", 4) != 0 || std::memcmp(&pack[i - 12], kMagic, 4) != 0) continue;
+    if (BE32(&pack[i + 4]) != 256 || BE32(&pack[i + 8]) != 128 || (BE32(&pack[i + 12]) & 0x3F) != 20) continue;
+    out.push_back(&pack[i + 0x20]);
+    i += 0x20 + kSize - 1;
+  }
+  return out;
+}
+
+// Writes the names (every language) and the pictures; the number of files written.
+int ExtractChapterArt(const std::filesystem::path& game_dir, const std::filesystem::path& dir,
+                      const std::vector<uint8_t>& front_end_pack) {
+  int saved = 0;
+  std::error_code ec;
+  std::filesystem::create_directories(dir / "chapters", ec);
+  for (const TextLanguage& lang : kTextLanguages) {
+    std::vector<uint8_t> texts;
+    std::string why;
+    const uint32_t key = 0xFD000000u | lang.jade << 19 | (kFrontEndPack & 0x7FFFF);
+    const std::vector<std::string> names =
+        ReadPack(game_dir / "KKMaps.bf", key, texts, why) ? FindChapterNames(texts) : std::vector<std::string>{};
+    if (names.empty()) {
+      REXLOG_WARN("KK: launcher art: no chapter names ({}) {}", lang.code, why);
+      continue;
+    }
+    std::ofstream f(ChapterNamesPath(dir, lang.code), std::ios::binary | std::ios::trunc);
+    for (const std::string& name : names) f << name << "\n";
+    if (f) ++saved;
+  }
+  const std::vector<const uint8_t*> pictures = FindChapterPictures(front_end_pack);
+  if (pictures.size() != 56) {
+    REXLOG_WARN("KK: launcher art: {} chapter pictures in the front end's textures, not 56: none used", pictures.size());
+    return saved;
+  }
+  for (int n = 0; n < int(kChapterNames); ++n) {
+    if (kChapterPicture[n] < 0) continue;
+    const Image full = DecodeDxt5(pictures[size_t(kChapterPicture[n])], 256, 128);
+    Image img = Cut(full, 0, kPictureTop, full.width, kPictureTop + kPictureRows);
+    for (size_t i = 3; i < img.rgba.size(); i += 4) img.rgba[i] = 255;
+    if (SaveImage(Upscale(img, 2), ChapterPicturePath(dir, n))) ++saved;
+  }
+  return saved;
+}
+
 }  // namespace
+
+std::filesystem::path ChapterNamesPath(const std::filesystem::path& dir, const char* lang) {
+  return dir / "chapters" / (std::string("names_") + lang + ".txt");
+}
+
+std::filesystem::path ChapterPicturePath(const std::filesystem::path& dir, int text_index) {
+  return dir / "chapters" / ("chapter" + std::to_string(text_index) + ".bmp");
+}
 
 std::filesystem::path LauncherArtDir(const std::filesystem::path& user_data_root) {
   return CacheDir(user_data_root) / "art";
@@ -588,6 +743,8 @@ bool ExtractLauncherArt(const std::filesystem::path& game_dir, const std::filesy
       } else {
         REXLOG_WARN("KK: launcher art: the Xbox 360 button pictures weren't in the front end's textures");
       }
+      // The chapter select's names and pictures.
+      REXLOG_INFO("KK: launcher art: {} chapter files from the game files", ExtractChapterArt(game_dir, dir, pack));
     }
     if (!why.empty()) REXLOG_WARN("KK: launcher art: logo: {}", why);
   }

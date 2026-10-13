@@ -31,6 +31,7 @@
 #include <cstring>
 #include <ctime>
 #include <fstream>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <string>
@@ -59,6 +60,8 @@ extern char** environ;
 #include <rex/logging.h>
 
 #include "guest.h"
+#include "launcher_art.h"
+#include "launcher_text.h"
 #include "play_internal.h"
 #include "settings.h"
 
@@ -280,25 +283,59 @@ StartRequest ParseRequest(const std::string& text) {
 // ============================================================================================== saves ===
 
 const std::vector<ChapterInfo>& Chapters() {
-  // The chapter select's table (filled by uni_init at G+0x5008 / G+0x50D4; checked against the game's
-  // own table when a session starts, see CheckChapterTable). Names: placeholders until the game's are found.
-  static const std::vector<ChapterInfo> chapters = [] {
-    static constexpr int kKeys[kChapterCount] = {100,  101,  201,  203,  204,  301,  302,  303,  305,  306,  304,
-                                                 401,  402,  403,  404,  501,  502,  504,  702,  705,  901,  1002,
-                                                 1101, 1200, 1201, 703,  1401, 1402, 1501, 1701, 1702, 1703, 1801,
-                                                 1803, 1804, 1805, 1901, 1902, 2001, 2003, 2004, 7};
-    std::vector<ChapterInfo> out;
-    for (int i = 0; i < kChapterCount; ++i) {
-      ChapterInfo c;
-      c.entry = i;
-      c.name = fmt::format("Chapter {}", i + 1);
-      c.level_key = kKeys[i];
-      c.start_point = i == 0 || i == 41 ? 0 : i == 40 ? 49 : 1;
-      out.push_back(std::move(c));
+  // The chapter select's table (filled by uni_init at G+0x5008 / G+0x50D4 / G+0x51A0; checked against the
+  // game's own table when a session starts, see CheckChapterTable). Names and pictures: the game's, from the
+  // launcher's art cache (launcher_art.cpp extracts them from the player's game files), in the launcher's
+  // language; "Chapter N" and no picture until then. Looked for again when the language changes and, while
+  // missing, every 2 s (the extraction runs on a worker thread).
+  static constexpr int kKeys[kChapterCount] = {100,  101,  201,  203,  204,  301,  302,  303,  305,  306,  304,
+                                               401,  402,  403,  404,  501,  502,  504,  702,  705,  901,  1002,
+                                               1101, 1200, 1201, 703,  1401, 1402, 1501, 1701, 1702, 1703, 1801,
+                                               1803, 1804, 1805, 1901, 1902, 2001, 2003, 2004, 7};
+  static constexpr int kText[kChapterCount] = {17, 0,  1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12,
+                                               13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 38, 24, 25, 26,
+                                               27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 39, 40, 41};
+  // Built again only when something changed (the language, or the names arrived); earlier lists are kept
+  // so a reference another thread holds stays good.
+  static std::mutex mutex;
+  static std::vector<std::unique_ptr<std::vector<ChapterInfo>>> lists;
+  static int loaded_lang = -1;
+  static bool have_names = false;
+  static std::chrono::steady_clock::time_point checked{};
+  std::lock_guard lock(mutex);
+  const int lang = int(text::Current());
+  const auto now = std::chrono::steady_clock::now();
+  if (!lists.empty() && lang == loaded_lang && (have_names || now - checked < std::chrono::seconds(2)))
+    return *lists.back();
+  checked = now;
+  static constexpr const char* kCodes[] = {"en", "de", "es", "fr", "it"};  // text::Lang's order
+  const auto dir = art::LauncherArtDir(g_user_dir);
+  std::vector<std::string> names;
+  if (!g_user_dir.empty() && art::HasLauncherArt(dir)) {
+    std::ifstream f(art::ChapterNamesPath(dir, kCodes[lang >= 0 && lang < 5 ? lang : 0]), std::ios::binary);
+    for (std::string line; std::getline(f, line);) names.push_back(line);
+    if (names.size() != art::kChapterNames) names.clear();
+  }
+  if (!lists.empty() && lang == loaded_lang && names.empty()) return *lists.back();  // still nothing new
+  std::vector<ChapterInfo> out;
+  for (int i = 0; i < kChapterCount; ++i) {
+    ChapterInfo c;
+    c.entry = i;
+    c.text_index = kText[i];
+    c.name = names.empty() || names[size_t(kText[i])].empty() ? fmt::format("Chapter {}", i + 1) : names[size_t(kText[i])];
+    if (!names.empty()) {
+      std::error_code ec;
+      const auto picture = art::ChapterPicturePath(dir, kText[i]);
+      if (std::filesystem::exists(picture, ec)) c.picture = picture;
     }
-    return out;
-  }();
-  return chapters;
+    c.level_key = kKeys[i];
+    c.start_point = i == 0 || i == 41 ? 0 : i == 40 ? 49 : 1;
+    out.push_back(std::move(c));
+  }
+  lists.push_back(std::make_unique<std::vector<ChapterInfo>>(std::move(out)));
+  loaded_lang = lang;
+  have_names = !names.empty();
+  return *lists.back();
 }
 
 std::vector<SaveSlot> ListSaves(const std::filesystem::path& user_dir) {
