@@ -114,6 +114,9 @@ uint64_t translationInputHash(const ShaderInfo& info) {
     if (info.renderScaleAware && info.kind == ShaderKind::Pixel) w.str("render-scale-aware/1");
     if (info.ambientOcclusion.enabled() && info.kind == ShaderKind::Pixel)
         w.str("ambient-occlusion/1 " + formatAmbientTerm(info.ambientOcclusion));
+    // The water reflection hook with its text: a change of the hook rebuilds the hooked shaders.
+    if (info.waterReflection.enabled() && info.kind == ShaderKind::Pixel)
+        w.str("water-reflection/1 " + formatWaterReflectionHook(info.waterReflection) + "\n" + lightingText());
     return XXH3_64bits(w.bytes.data(), w.bytes.size());
 }
 
@@ -190,6 +193,15 @@ TranslateResult translate(const ShaderInfo& info, const TranslateOptions& option
         in.ambientOcclusion.usage = ::DeclUsage(uint32_t(t.usage));
         in.ambientOcclusion.address = t.address;
         in.ambientOcclusion.mask = t.mask;
+    }
+    if (info.waterReflection.enabled() && info.kind == ShaderKind::Pixel) {
+        const WaterReflectionHook& h = info.waterReflection;
+        in.waterReflection.fetchMask = h.fetchMask;
+        in.waterReflection.output = h.output;
+        // pswater: the normal map is g_TextureSampler[3] at TEXCOORD1.zw (pswater.hlsl, SampleNormalMap).
+        if (h.normalMap)
+            in.waterReflection.normalMap = "(kk_Tex2D[kk_TexIndex(3)].Sample(kk_Sampler[kl_SsrSampler.z], iT1.zw).xy - 0.5) * 2.0";
+        in.waterReflection.text = lightingText();
     }
 
     ShaderRecompiler recompiler;

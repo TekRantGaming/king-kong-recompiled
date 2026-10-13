@@ -560,6 +560,8 @@ const std::vector<std::pair<const char*, const char*>>& OriginalLookSettings() {
 #if defined(KK_NATIVE_RENDERER)
       {"native_gi", "off"},
       {"native_upscaler", "off"},  // the native renderer's temporal upscalers (Display > Upscaling)
+      // The native renderer's lighting options (native-renderer/docs/lighting.md): the game's own.
+      {"native_shadow_quality", "original"}, {"native_water_reflections", "original"}, {"native_volumetrics", "off"},
 #endif
   };
   return settings;

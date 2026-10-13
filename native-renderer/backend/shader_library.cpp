@@ -173,7 +173,10 @@ void ShaderLibrary::Initialize(const std::string& pack, const std::string& dxc) 
 
 std::shared_ptr<GameShader> ShaderLibrary::Build(const kkshaders::ShaderInfo& info) {
   // Called with mutex_ held.
-  const uint64_t input_hash = kkshaders::translationInputHash(info);
+  const uint64_t translation_hash = kkshaders::translationInputHash(info);
+  // A replacement (the lighting options) keeps the translation's bindings under an input hash of its own.
+  const Replacement* replacement = FindReplacement(info);
+  const uint64_t input_hash = replacement ? translation_hash ^ replacement->tag : translation_hash;
   // Derive aliases from this container, never from the microcode hash alone: distinct
   // interpolator/fetch translations of the same shader must remain distinct.
   if (info.kind == kkshaders::ShaderKind::Pixel) {
@@ -205,9 +208,9 @@ std::shared_ptr<GameShader> ShaderLibrary::Build(const kkshaders::ShaderInfo& in
   kkshaders::CompiledShader compiled;
   bool from_pack = false;
   if (pack_open_) {
-    from_pack = pack_.find(info.ucodeHash, input_hash, compiled);
+    from_pack = pack_.find(info.ucodeHash, translation_hash, compiled);
     // The ucode-only fallback answers with the 1:1 translation: wrong for an aware shader.
-    if (!from_pack && !info.renderScaleAware && !info.ambientOcclusion.enabled())
+    if (!from_pack && !info.renderScaleAware && !info.ambientOcclusion.enabled() && !info.waterReflection.enabled())
       from_pack = pack_.find(info.ucodeHash, 0, compiled);
   }
   if (!from_pack) {
@@ -233,6 +236,14 @@ std::shared_ptr<GameShader> ShaderLibrary::Build(const kkshaders::ShaderInfo& in
     ++stats_.compiled;
   } else {
     ++stats_.from_pack;
+  }
+  if (replacement) {
+    // The renderer's own shader for this device's API, with the translation's bindings.
+    const auto* bytes = static_cast<const uint8_t*>(replacement->data);
+    std::vector<uint8_t>& blob = device_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN ? compiled.spirv : compiled.dxil;
+    blob.assign(bytes, bytes + replacement->size);
+    Logf(LogLevel::kInfo, "rexgpu-native: pixel shader %016llX replaced (lighting options)",
+         static_cast<unsigned long long>(info.ucodeHash));
   }
 
   std::shared_ptr<GameShader> shader = Finish(info.kind, info.ucodeHash, input_hash, std::move(compiled), from_pack);
@@ -316,6 +327,7 @@ void ShaderLibrary::OnCreated(uint32_t kind, uint32_t container, uint32_t object
   ++stats_.created;
   if (parsed.ok) parsed.info.renderScaleAware = scale_aware_ && parsed.info.kind == kkshaders::ShaderKind::Pixel;
   if (parsed.ok) ApplyAmbient(parsed.info);
+  if (parsed.ok) ApplyLighting(parsed.info);
   if (!parsed.ok || parsed.info.kind != want) {
     ++stats_.failed;
     by_object_[object] = nullptr;
@@ -355,6 +367,7 @@ std::shared_ptr<GameShader> ShaderLibrary::FromObject(kkshaders::ShaderKind kind
   if (!parsed.ok || parsed.info.kind != kind) return nullptr;
   parsed.info.renderScaleAware = scale_aware_ && kind == kkshaders::ShaderKind::Pixel;
   ApplyAmbient(parsed.info);
+  ApplyLighting(parsed.info);
   ++stats_.from_object;
   return Build(parsed.info);
 }

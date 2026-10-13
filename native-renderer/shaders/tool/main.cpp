@@ -13,14 +13,15 @@
 //   kkshaders scale-report <xeshaders.bin>
 //   kkshaders xsh <file.xsh> [<file.xsh> ...] --dxc <dir> [--out <dir>] [--spirv-val <exe>] [--jobs N] [--database <xeshaders.bin>]
 //   kkshaders pack-lookup <pack> [<hash> ...]
-//   kkshaders pack-build <xeshaders.bin> --out <folder> [--backend spirv|dxil] [--scaled] [--jobs N] [--dxc <dir>]
+//   kkshaders pack-build <xeshaders.bin> --out <folder> [--backend spirv|dxil] [--scaled] [--lighting] [--jobs N] [--dxc <dir>]
 //                        [--force] [--low-priority] [--check]   (the player's pack, as the launcher builds it)
 //   kkshaders ao-list <xeshaders.bin> [--family <name>] [--term "<term>"] [--list <file>] [-o <file>] [--sources <dir>]
 //                      the ambient-only AO's shader list (docs/ao.md): without --term, each pixel family's
 //                      constants, inputs and samplers (with --family, each shader's); with --family and --term,
 //                      a hash line for every shader of the family (a constant may be named, "constant
 //                      g_vAmbientColor", and is found in each shader's own table); --list expands the family
-//                      lines of a list file; --sources writes the database's HLSL sources to a folder
+//                      lines of a list file; --sources writes the database's HLSL sources to a folder;
+//                      --family with --translate <dir> writes each shader's translation (with addresses) there
 //
 // --raw-vs / --raw-ps read the file as bare big-endian microcode (no container).
 // Everything written under --out is derived from the game's files: keep it out of git.
@@ -67,7 +68,8 @@ struct Args {
 
 Args parseArgs(int argc, char** argv, int first) {
     static const std::set<std::string> withValue = {"-o", "--out", "--dxc", "--spirv-val", "--jobs", "--limit", "--database", "--image",
-                                                    "--backend", "--ambient", "--family", "--term", "--list", "--sources"};
+                                                    "--backend", "--ambient", "--family", "--term", "--list", "--sources",
+                                                    "--translate"};
     Args a;
     for (int i = first; i < argc; i++) {
         std::string s = argv[i];
@@ -913,6 +915,7 @@ int cmdPackBuild(const Args& a) {
     o.folder = a.get("--out", "kkshaders-pack");
     o.backend = a.get("--backend", "spirv") == "dxil" ? PackBackend::Dxil : PackBackend::Spirv;
     o.scaled = a.has("--scaled");
+    o.lighting = a.has("--lighting");  // the lighting options' hooked water shaders too
     o.threads = unsigned(std::stoul(a.get("--jobs", "0")));
     o.lowPriority = a.has("--low-priority");
     o.dxc = a.get("--dxc");
@@ -1141,6 +1144,13 @@ int cmdAoList(const Args& a) {
                     inputs[std::string(u) + std::to_string(i.usageIndex)]++;
                 }
                 if (!family.empty()) text += hex16(sh.hash) + "  #" + mine + "\n";
+                // --translate <dir>: each shader of the family translated, with instruction addresses.
+                if (const std::string dir = a.get("--translate"); !family.empty() && !dir.empty()) {
+                    TranslateOptions options;
+                    options.annotateAddresses = true;
+                    TranslateResult t = translate(sh.info, options);
+                    if (t.ok) writeFile(fs::path(dir) / (hex16(sh.hash) + ".hlsl"), t.hlsl.data(), t.hlsl.size());
+                }
             }
             text += "# " + name + ": " + std::to_string(shaders.size()) + " pixel shaders\n";
             for (const auto& [k, n] : constants) text += "#   constant " + k + " x " + std::to_string(n) + "\n";

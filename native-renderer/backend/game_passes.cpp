@@ -486,6 +486,7 @@ bool GameRenderer::Present(nvrhi::ICommandList* cl, uint32_t device, nvrhi::ITex
   if (!d.valid()) return false;
   if (scene_ao_ || ao_timer_) AoPresentHook(cl);  // AO hook (game_ao.cpp): a scene the moments above missed
   if (scene_gi_) GiPresentHook(cl);  // GI hook (game_gi.cpp): the same for the bounce light
+  if (scene_lighting_) LightingPresentHook(cl);  // Lighting hook (game_lighting.cpp)
   current_cl_ = cl;
   // Upscalers (game_upscale.cpp): a scene that did not reach its upscale point is upscaled now; a frame
   // drawn at the input size without a scene is carried to the output size.

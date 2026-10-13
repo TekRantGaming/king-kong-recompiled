@@ -17,6 +17,8 @@
 
 #include <nvrhi/nvrhi.h>
 
+#include "backend/lighting_config.h"
+
 namespace nr {
 
 class DriverPipelineCache;
@@ -32,6 +34,8 @@ class PipelinePrewarm {
     float shadow_scale = 0.0f;
     bool shaders_aware = false;
     bool flip_front_face = false;
+    // The lighting options (docs/lighting.md): they add b5 to the game's layout and change shaders.
+    LightingConfig lighting;
     // Pipeline files to make, read only, in this order (the player's cache file, the shipped list).
     std::vector<std::string> lists;
     // The driver's pipeline cache of the prewarm's device and its file (null: none): read at Start,

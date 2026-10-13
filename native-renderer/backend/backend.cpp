@@ -470,6 +470,7 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
     // An upscaler other than native AA draws the scene at another size than the output: aware shaders.
     const bool upscale_scaled = game.upscale.enabled() && game.upscale.quality != UpscaleQuality::kNative && !(game.debug & 16);
     shaders_->SetRenderScaleAware(shaders_aware || upscale_scaled);
+    shaders_->SetWaterReflections(game.lighting.water_on());  // docs/lighting.md
     shaders_->Initialize(game.shader_pack, game.dxc);
     kknr::GuestMemory physical;
     physical.base = memory_->TranslatePhysical(0);
@@ -494,8 +495,10 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
     // Temporal upscalers (docs/upscalers.md): before Initialize (the input size changes the layouts).
     renderer->options().upscale = game.upscale;
     renderer->options().fxaa = game.fxaa;
+    renderer->options().lighting = game.lighting;  // before Initialize too (docs/lighting.md)
     if (renderer->Initialize()) {
       shaders_->SetAmbientOcclusion(renderer->ao_ambient_table());
+      shaders_->SetReplacements(renderer->LightingReplacements());  // docs/lighting.md
       renderer->options().element_endian = game.element_endian;
       renderer->options().flip_front_face = game.flip_front_face;
       renderer->options().texture_tail_mips = game.texture_tail_mips;

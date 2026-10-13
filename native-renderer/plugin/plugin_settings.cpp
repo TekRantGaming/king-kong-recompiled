@@ -75,6 +75,14 @@ REXCVAR_DECLARE(double, native_upscaler_reactive);
 REXCVAR_DECLARE(int32_t, native_upscaler_debug);
 REXCVAR_DECLARE(bool, native_upscaler_gpu_time);
 REXCVAR_DECLARE(std::string, native_upscaler_rules);
+REXCVAR_DECLARE(std::string, native_shadow_quality);
+REXCVAR_DECLARE(std::string, native_water_reflections);
+REXCVAR_DECLARE(std::string, native_volumetrics);
+REXCVAR_DECLARE(double, native_shadow_softness);
+REXCVAR_DECLARE(double, native_ssr_strength);
+REXCVAR_DECLARE(double, native_volumetric_strength);
+REXCVAR_DECLARE(int32_t, native_lighting_census);
+REXCVAR_DECLARE(bool, native_lighting_gpu_time);
 
 namespace nr {
 
@@ -200,6 +208,22 @@ void ReadUpscaleConfig(UpscaleConfig& u) {
   u.rules_file = REXCVAR_GET(native_upscaler_rules);
 }
 
+// --native_shadow_quality and the other lighting options (docs/lighting.md): a value it cannot read is
+// logged and its default (the game's own) kept.
+void ReadLightingConfig(LightingConfig& l) {
+  if (!ParseShadowQuality(REXCVAR_GET(native_shadow_quality), l.shadows))
+    REXGPU_WARN("rexgpu-native: native_shadow_quality '{}' is not original, high or ultra", REXCVAR_GET(native_shadow_quality));
+  if (!ParseWaterReflections(REXCVAR_GET(native_water_reflections), l.water))
+    REXGPU_WARN("rexgpu-native: native_water_reflections '{}' is not original or ssr", REXCVAR_GET(native_water_reflections));
+  if (!ParseVolumetrics(REXCVAR_GET(native_volumetrics), l.volumetrics))
+    REXGPU_WARN("rexgpu-native: native_volumetrics '{}' is not off, low or high", REXCVAR_GET(native_volumetrics));
+  l.shadow_softness = float(std::clamp(REXCVAR_GET(native_shadow_softness), 0.1, 10.0));
+  l.ssr_strength = float(std::clamp(REXCVAR_GET(native_ssr_strength), 0.0, 4.0));
+  l.volumetric_strength = float(std::clamp(REXCVAR_GET(native_volumetric_strength), 0.0, 10.0));
+  l.census_every = uint32_t(std::max(0, REXCVAR_GET(native_lighting_census)));
+  l.gpu_time = REXCVAR_GET(native_lighting_gpu_time);
+}
+
 }  // namespace
 
 UpscaleConfig ReadUpscalerChoice() {
@@ -207,6 +231,16 @@ UpscaleConfig ReadUpscalerChoice() {
   ParseUpscalerKind(REXCVAR_GET(native_upscaler), u.kind);
   ParseUpscaleQuality(REXCVAR_GET(native_upscaler_quality), u.quality);
   return u;
+}
+
+float EffectiveShadowScale() {
+  const float set = float(REXCVAR_GET(native_shadow_scale));
+  ShadowQuality q = ShadowQuality::kOriginal;
+  ParseShadowQuality(REXCVAR_GET(native_shadow_quality), q);
+  // The soft shadows draw their mask finer than the frame, so they need the render scale aware shaders:
+  // a shadow scale of exactly 1 (which would leave them out) gives way to the quality's.
+  if (set > 0.0f && !(q != ShadowQuality::kOriginal && set == 1.0f)) return set;
+  return ShadowScaleForQuality(q);
 }
 
 GameSettings ReadGameSettings(bool vulkan) {
@@ -241,7 +275,8 @@ GameSettings ReadGameSettings(bool vulkan) {
     game.render_scale = AutoRenderScale();
     REXGPU_INFO("rexgpu-native: render scale auto: {} (the draw resolution scale)", game.render_scale);
   }
-  game.shadow_scale = float(REXCVAR_GET(native_shadow_scale));
+  // --native_shadow_scale, else what --native_shadow_quality asks for (docs/lighting.md).
+  game.shadow_scale = EffectiveShadowScale();
   game.stutter_stats = REXCVAR_GET(native_stutter_stats);
   // Ambient occlusion: the Xenos plugin's own settings (ao_mode 0 off, 1 on, 2 AO only; ao_strength
   // 1 to 3), looked up by name at every use. They are defined by rexgpu-xenos, which the launcher
@@ -258,6 +293,7 @@ GameSettings ReadGameSettings(bool vulkan) {
   ReadAoConfig(game.ao);
   ReadGiConfig(game.gi);
   ReadUpscaleConfig(game.upscale);
+  ReadLightingConfig(game.lighting);
   return game;
 }
 

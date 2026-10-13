@@ -12,6 +12,8 @@
 #include "backend/ao_classifier.h"
 #include "backend/ao_config.h"
 #include "backend/guest_memory.h"
+#include "backend/lighting_config.h"
+#include "backend/lighting_shaders.h"
 #include "backend/tests/check.h"
 
 using namespace nr;
@@ -486,4 +488,42 @@ TEST(AoCamera_ViewMappingRebuildsViewSpace) {
   }
 }
 
+// The lighting options (docs/lighting.md): names, defaults, the shadow scale a quality asks for, and the
+// game's shaders they act on.
+TEST(Lighting_SettingsAndShaders) {
+  LightingConfig c;
+  CHECK(!c.any() && !c.active());  // the defaults run nothing
+  ShadowQuality q;
+  CHECK(ParseShadowQuality("original", q) && q == ShadowQuality::kOriginal);
+  CHECK(ParseShadowQuality("high", q) && q == ShadowQuality::kHigh);
+  CHECK(ParseShadowQuality("ultra", q) && q == ShadowQuality::kUltra);
+  CHECK(!ParseShadowQuality("max", q));
+  CHECK_EQ(ShadowScaleForQuality(ShadowQuality::kOriginal), 0.0f);
+  CHECK_EQ(ShadowScaleForQuality(ShadowQuality::kHigh), 2.0f);
+  CHECK_EQ(ShadowScaleForQuality(ShadowQuality::kUltra), 4.0f);
+  WaterReflections w;
+  CHECK(ParseWaterReflections("ssr", w) && w == WaterReflections::kSsr);
+  CHECK(!ParseWaterReflections("rt", w));
+  Volumetrics v;
+  CHECK(ParseVolumetrics("off", v) && v == Volumetrics::kOff);
+  CHECK(ParseVolumetrics("high", v) && v == Volumetrics::kHigh);
+  CHECK(!ParseVolumetrics("on", v));
+  for (ShadowQuality s : {ShadowQuality::kOriginal, ShadowQuality::kHigh, ShadowQuality::kUltra})
+    CHECK(ParseShadowQuality(ShadowQualityName(s), q) && q == s);
+  c.census_every = 300;
+  CHECK(!c.any() && c.active());
+  c.volumetrics = Volumetrics::kLow;
+  CHECK(c.any() && c.volumetrics_on());
+  // The game's shaders.
+  CHECK(LightFamilyOf(0x9A0FBB044BB1BD85ull) == LightFamily::kShadowQuad);
+  CHECK_EQ(ShadowQuadLayoutOf(0x9A0FBB044BB1BD85ull).lights, 3u);
+  CHECK_EQ(ShadowQuadLayoutOf(0x9F5E02F361E2A8A0ull).shadow_params, 5u);
+  CHECK_EQ(ShadowQuadLayoutOf(0x6DC2B9F3C32C2394ull).shadow_color, 10u);
+  CHECK(LightFamilyOf(0x1B65AC7429B67FE9ull) == LightFamily::kFog);
+  CHECK(LightShaftModeOf(0x16C954AF5D9DEBD0ull) == LightShaftMode::kApply);
+  CHECK(LightShaftModeOf(0xCA12F7AA224EF5C2ull) == LightShaftMode::kRender);
+  CHECK(WaterLayoutOf(0xC28D09A8A208AD93ull).dynamic_reflection && WaterLayoutOf(0xC28D09A8A208AD93ull).environment);
+  CHECK(WaterLayoutOf(0xAC2239A7CA9EDF1Cull).water && !WaterLayoutOf(0xAC2239A7CA9EDF1Cull).dynamic_reflection);
+  CHECK(LightFamilyOf(0x0123456789ABCDEFull) == LightFamily::kNone);
+}
 NR_TEST_MAIN()

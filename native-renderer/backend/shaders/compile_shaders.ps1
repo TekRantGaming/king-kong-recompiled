@@ -87,4 +87,46 @@ foreach ($spec in @("ssgi_radiance_cs:cs:cs_radiance", "ssgi_radiance_down_cs:cs
         -Fh (Join-Path $out "${base}_spirv.h") -Vn "k_${base}_spirv" $ssgi
     if ($LASTEXITCODE -ne 0) { throw "dxc (SPIR-V) failed on $ssgi $entry" }
 }
+
+# The lighting options (docs/lighting.md). The soft shadows replace the game's psshadowquad, so they are
+# built like the game's translated shaders (kkshaders' compiler.cpp flags: HLSL 2021, -Gis, the DX layout,
+# no binding shifts) with the translator's prelude: one blob per variant of it (lights, constant
+# registers) and per quality (PCF or PCSS). Recompile when shaders/hlsl/kk_common.hlsli changes.
+$shadow = Join-Path $here "lighting_shadow.hlsl"
+foreach ($spec in @("1:5:4", "2:8:10", "3:12:15")) {
+    $lights, $params, $color = $spec.Split(":")
+    foreach ($q in @("pcf:0", "pcss:1")) {
+        $qname, $pcss = $q.Split(":")
+        $base = "lighting_shadow_${lights}_${qname}"
+        $defs = @("-D", "KL_LIGHTS=$lights", "-D", "KL_PARAMS=$params", "-D", "KL_COLOR=$color", "-D", "KL_PCSS=$pcss")
+        & $Dxc -nologo -T ps_6_0 -E main -HV 2021 -O3 -Gis -Qstrip_debug @defs -Fh (Join-Path $out "${base}_dxil.h") -Vn "k_${base}_dxil" $shadow
+        if ($LASTEXITCODE -ne 0) { throw "dxc (DXIL) failed on $shadow $base" }
+        & $Dxc -nologo -T ps_6_0 -E main -HV 2021 -O3 -Gis -Qstrip_debug @defs -spirv "-fspv-target-env=vulkan1.2" `
+            -fvk-use-dx-layout -Fh (Join-Path $out "${base}_spirv.h") -Vn "k_${base}_spirv" $shadow
+        if ($LASTEXITCODE -ne 0) { throw "dxc (SPIR-V) failed on $shadow $base" }
+    }
+}
+# The water reflections' preparation (lighting_ssr.hlsl): renderer compute passes, the usual flags.
+$ssr = Join-Path $here "lighting_ssr.hlsl"
+foreach ($spec in @("lighting_ssr_depth_cs:cs:cs_depth", "lighting_ssr_depth_down_cs:cs:cs_depth_down",
+                    "lighting_ssr_color_cs:cs:cs_color", "lighting_ssr_color_down_cs:cs:cs_color_down")) {
+    $base, $stage, $entry = $spec.Split(":")
+    & $Dxc -nologo -T "${stage}_6_0" -E $entry -O3 -Fh (Join-Path $out "${base}_dxil.h") -Vn "k_${base}_dxil" $ssr
+    if ($LASTEXITCODE -ne 0) { throw "dxc (DXIL) failed on $ssr $entry" }
+    & $Dxc -nologo -T "${stage}_6_0" -E $entry -O3 -spirv "-fspv-target-env=vulkan1.2" `
+        -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-b-shift 256 0 -fvk-u-shift 384 0 `
+        -Fh (Join-Path $out "${base}_spirv.h") -Vn "k_${base}_spirv" $ssr
+    if ($LASTEXITCODE -ne 0) { throw "dxc (SPIR-V) failed on $ssr $entry" }
+}
+# The volumetric light (lighting_volumetric.hlsl): a renderer pass, the usual flags.
+$vol = Join-Path $here "lighting_volumetric.hlsl"
+foreach ($spec in @("lighting_volumetric_vs:vs:vs_main", "lighting_volumetric_ps:ps:ps_volumetric")) {
+    $base, $stage, $entry = $spec.Split(":")
+    & $Dxc -nologo -T "${stage}_6_0" -E $entry -O3 -Fh (Join-Path $out "${base}_dxil.h") -Vn "k_${base}_dxil" $vol
+    if ($LASTEXITCODE -ne 0) { throw "dxc (DXIL) failed on $vol $entry" }
+    & $Dxc -nologo -T "${stage}_6_0" -E $entry -O3 -spirv "-fspv-target-env=vulkan1.2" `
+        -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-b-shift 256 0 -fvk-u-shift 384 0 `
+        -Fh (Join-Path $out "${base}_spirv.h") -Vn "k_${base}_spirv" $vol
+    if ($LASTEXITCODE -ne 0) { throw "dxc (SPIR-V) failed on $vol $entry" }
+}
 Write-Host "Shaders written to $out"

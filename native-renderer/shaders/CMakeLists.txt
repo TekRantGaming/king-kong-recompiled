@@ -75,6 +75,14 @@ string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," KK_PRELUDE_BYTES "${KK_PRELUD
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/prelude.cpp.new"
     "// Generated from hlsl/kk_common.hlsli.\nnamespace kkshaders {\nextern const char kPreludeText[] = {${KK_PRELUDE_BYTES}0x00};\n}\n")
 configure_file("${CMAKE_CURRENT_BINARY_DIR}/prelude.cpp.new" "${CMAKE_CURRENT_BINARY_DIR}/prelude.cpp" COPYONLY)
+# The lighting options' hook text (hlsl/kk_lighting.hlsli, docs/lighting.md), embedded the same way.
+set(KK_LIGHTING_HLSL "${CMAKE_CURRENT_SOURCE_DIR}/hlsl/kk_lighting.hlsli")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${KK_LIGHTING_HLSL}")
+file(READ "${KK_LIGHTING_HLSL}" KK_LIGHTING_HEX HEX)
+string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," KK_LIGHTING_BYTES "${KK_LIGHTING_HEX}")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/lighting_text.cpp.new"
+    "// Generated from hlsl/kk_lighting.hlsli.\nnamespace kkshaders {\nextern const char kLightingText[] = {${KK_LIGHTING_BYTES}0x00};\n}\n")
+configure_file("${CMAKE_CURRENT_BINARY_DIR}/lighting_text.cpp.new" "${CMAKE_CURRENT_BINARY_DIR}/lighting_text.cpp" COPYONLY)
 
 add_library(kkshaders STATIC
     src/container.cpp
@@ -85,7 +93,9 @@ add_library(kkshaders STATIC
     src/cache.cpp
     src/vertex_patch.cpp
     src/pack_builder.cpp
-    "${CMAKE_CURRENT_BINARY_DIR}/prelude.cpp")
+    src/lighting.cpp
+    "${CMAKE_CURRENT_BINARY_DIR}/prelude.cpp"
+    "${CMAKE_CURRENT_BINARY_DIR}/lighting_text.cpp")
 target_include_directories(kkshaders PUBLIC include PRIVATE "${KK_DXC_INCLUDE}")
 target_link_libraries(kkshaders PUBLIC kkshaders_deps PRIVATE xenosrecomp_core ${CMAKE_DL_LIBS})
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
@@ -128,6 +138,11 @@ add_executable(kkshaders_ambient_tests tests/xenos_asm.cpp tests/container_write
 target_include_directories(kkshaders_ambient_tests PRIVATE tests)
 target_link_libraries(kkshaders_ambient_tests PRIVATE kkshaders xenosrecomp_core Threads::Threads)
 add_test(NAME ambient COMMAND kkshaders_ambient_tests --dxc "${KKSHADERS_DXC_DIR}")
+# The lighting options' water reflection hook (docs/lighting.md).
+add_executable(kkshaders_lighting_tests tests/xenos_asm.cpp tests/container_writer.cpp tests/corpus.cpp tests/lighting_tests.cpp)
+target_include_directories(kkshaders_lighting_tests PRIVATE tests)
+target_link_libraries(kkshaders_lighting_tests PRIVATE kkshaders xenosrecomp_core Threads::Threads)
+add_test(NAME lighting COMMAND kkshaders_lighting_tests --dxc "${KKSHADERS_DXC_DIR}")
 # The tool's database commands on a synthetic database and shader storage file.
 set(KK_FIX "${CMAKE_CURRENT_BINARY_DIR}/fixtures")
 add_test(NAME fixtures COMMAND kkshaders_tests make-fixtures "${KK_FIX}")

@@ -18,6 +18,9 @@ std::string FindShaderPack(bool vulkan);
 // native_render_scale=auto's scale, "WxH": the port's draw resolution scale (one rule for the run, the
 // launcher's prewarm and the shader pack build).
 std::string AutoRenderScale();
+// The shadow maps' scale: native_shadow_scale when set, else the one native_shadow_quality asks for
+// (0: like the render scale). The run, the launcher's prewarm and the shader pack take it from here.
+float EffectiveShadowScale();
 // The game renderer's settings from the cvars (and the port's settings the Xenos plugin defines).
 GameSettings ReadGameSettings(bool vulkan);
 // --native_upscaler and --native_upscaler_quality alone, quietly (ReadGameSettings warns about values it

@@ -39,6 +39,7 @@
 #include "backend/ao_timer.h"
 #include "backend/scene_ao.h"
 #include "backend/scene_gi.h"
+#include "backend/scene_lighting.h"
 #include "backend/draw_sink.h"
 #include "backend/driver_pipeline_cache.h"
 #include "backend/frame_log.h"
@@ -46,6 +47,7 @@
 #include "backend/pipeline_cache.h"
 #include "backend/guest_device.h"
 #include "backend/guest_memory.h"
+#include "backend/lighting_config.h"
 #include "backend/shader_library.h"
 #include "kknr/guest_texture.h"
 #include "kknr/buffers.h"
@@ -132,6 +134,9 @@ class GameRenderer {
     // Screen-space global illumination (gi_config.h, docs/gi.md). Off by default: nothing of it is
     // created. Set before Initialize.
     GiConfig gi;
+    // The lighting options (docs/lighting.md): shadows, water reflections, volumetric light shafts.
+    // All original by default. Set before Initialize.
+    LightingConfig lighting;
     // Log every draw of this game frame (-1 none).
     int32_t dump_frame = -1;
     // Debugging aids (bits): 1 the game's clears are green, 2 the frame image
@@ -289,6 +294,8 @@ class GameRenderer {
 
   // The ambient-only AO's shader list (null unless --native_ao_apply=ambient), for the shader library.
   std::shared_ptr<const kkshaders::AmbientTable> ao_ambient_table() const;
+  // The lighting options' replacement pixel shaders (game_lighting.cpp), for the shader library.
+  std::unordered_map<uint64_t, ShaderLibrary::Replacement> LightingReplacements() const;
   // The GTAO method's state (null with the legacy method; tests and logging).
   const SceneAo* scene_ao() const { return scene_ao_.get(); }
   // The screen-space GI's state (null when it is off; tests and logging).
@@ -568,7 +575,7 @@ class GameRenderer {
   static constexpr uint32_t kBlitBytesToDepth = 4;  // 8:8:8:8 colour holding those bytes back to depth
   static constexpr uint32_t kBlitTexelBytesToDepth = 8;  // the same from a texture's X, Y, Z, W bytes
   bool Dump(uint32_t frame) const {
-    return options_.dump_frame >= 0 && uint32_t(options_.dump_frame) == frame;
+    return (options_.dump_frame >= 0 && uint32_t(options_.dump_frame) == frame) || LightingCensusFrame(frame);
   }
 
   nvrhi::IDevice* device_;
@@ -621,6 +628,46 @@ class GameRenderer {
   void AoPresentHook(nvrhi::ICommandList* cl);
   std::unique_ptr<SceneAo> scene_ao_;
   std::unique_ptr<AoGpuTimer> ao_timer_;  // --native_ao_gpu_time
+
+  // ---- lighting options (game_lighting.cpp, docs/lighting.md). Called from Draw, Resolve and Present
+  // when an option is on or the census runs (options_.lighting.active()).
+  bool LightingCensusFrame(uint64_t frame) const;
+  void LightingCensusDraw(const DrawCall& call, const dev::DeviceView& d, const std::array<HostTarget*, 4>& colors,
+                          HostTarget* depth, const PipelineRecord& record, const GameShader& vs, const GameShader* ps);
+  void LightingDrawHook(nvrhi::ICommandList* cl, const DrawCall& call, const dev::DeviceView& d,
+                        const std::array<HostTarget*, 4>& colors, HostTarget* depth, const PipelineRecord& record,
+                        const GameShader& vs, const GameShader* ps);
+  void LightingLayoutBindings(nvrhi::BindingLayoutDesc& set0) const;  // b5 when an option is on
+  bool LightingSetBindings(nvrhi::BindingSetDesc& set0);
+  void LightingInitialize();
+  void LightingWriteConstants(nvrhi::ICommandList* cl);
+  // The shadow maps' scale (host texels per guest texel).
+  float LightingShadowScale() const;
+  // The soft shadows: the pitch of the target the game's screen-space shadow (psshadowquad) draws into
+  // (640 wide, 640x480 used, for a 1280x720 frame) gets kLightingMaskScale times the render scale.
+  void LightingNoteShadowMask(const GameShader& ps, uint32_t pitch);
+  // The texture a resolve made that fetch constant `slot` reads (null for anything else).
+  nvrhi::ITexture* LightingResolvedTexture(const dev::DeviceView& d, uint32_t slot);
+  static constexpr float kLightingMaskScale = 2.0f;
+  std::unordered_set<uint32_t> lighting_mask_pitches_;
+  nvrhi::BufferHandle lighting_constants_;  // b5 (kkshaders/lighting.h)
+  struct LightingState {
+    // Shadows: PCSS's penumbra width per unit of light-space depth, the receiver plane bias's limit.
+    float penumbra_scale = 300.0f;
+    float slope_limit = 0.01f;
+    std::array<uint8_t, 160> constants_last = {};
+    bool constants_valid = false;
+    nvrhi::ICommandList* constants_list = nullptr;
+    uint64_t constants_frame = 0;
+    // Water reflections: the scene's colour and depth pyramid and a linear sampler in the bindless tables.
+    nvrhi::SamplerHandle sampler, wrap_sampler;
+    uint32_t sampler_slot = 0, wrap_sampler_slot = 0, color_slot = 0, depth_slot = 0;
+    nvrhi::ITexture* color_slot_texture = nullptr;
+    nvrhi::ITexture* depth_slot_texture = nullptr;
+  };
+  LightingState lighting_;
+  std::unique_ptr<SceneLighting> scene_lighting_;  // null unless an option needs per-frame work
+  void LightingPresentHook(nvrhi::ICommandList* cl);
   nvrhi::BufferHandle ao_constants_;  // b4 (ambient-only)
   std::array<uint32_t, 8> ao_constants_last_ = {};
   bool ao_constants_valid_ = false;

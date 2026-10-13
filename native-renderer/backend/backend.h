@@ -26,6 +26,7 @@
 #include "backend/draw_state.h"
 #include "backend/guest_memory.h"
 #include "backend/host_device.h"
+#include "backend/lighting_config.h"
 #include "backend/render_thread.h"
 #include "backend/renderer.h"
 #include "backend/upscale_config.h"
@@ -102,6 +103,9 @@ struct GameSettings {
   GiConfig gi;
   // Temporal upscalers (docs/upscalers.md): --native_upscaler and its settings. Off by default.
   UpscaleConfig upscale;
+  // The lighting options (docs/lighting.md): --native_shadow_quality, --native_water_reflections,
+  // --native_volumetrics and their tuning. All original by default.
+  LightingConfig lighting;
 };
 
 class Backend {

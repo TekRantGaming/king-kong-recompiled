@@ -26,6 +26,7 @@ bool PipelinePrewarm::Start(const Settings& settings) {
   memory_ = std::make_unique<NoGuestMemory>();
   shaders_ = std::make_unique<ShaderLibrary>(device_, *memory_);
   shaders_->SetRenderScaleAware(settings.shaders_aware);
+  shaders_->SetWaterReflections(settings.lighting.water_on());
   shaders_->Initialize(settings.shader_pack, settings.dxc);
   auto renderer = std::make_unique<GameRenderer>(device_, *memory_, kknr::GuestMemory{}, shaders_.get());
   GameRenderer::Options& o = renderer->options();
@@ -33,12 +34,16 @@ bool PipelinePrewarm::Start(const Settings& settings) {
   o.render_scale_y = settings.render_scale_y;
   o.shadow_scale = settings.shadow_scale;
   o.flip_front_face = settings.flip_front_face;
+  o.lighting = settings.lighting;
+  o.lighting.census_every = 0;
+  o.lighting.gpu_time = false;
   o.async_pipelines = true;  // the prewarm is the workers
   if (!renderer->Initialize()) {
     renderer.reset();
     shaders_.reset();
     return false;
   }
+  shaders_->SetReplacements(renderer->LightingReplacements());
   renderer_ = std::move(renderer);
   // The driver's cache first: nothing may create a pipeline while its file is read.
   if (settings.driver_cache) renderer_->SetDriverPipelineCache(settings.driver_cache, settings.driver_cache_path);

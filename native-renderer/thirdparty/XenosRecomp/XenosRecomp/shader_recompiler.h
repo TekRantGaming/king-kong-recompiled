@@ -64,6 +64,18 @@ struct RecompilerAmbientTerm
     uint32_t mask = 0x7;          // components multiplied (bit 0 x / red ... bit 3 w / alpha)
 };
 
+// The lighting options' water reflection hook (kkshaders/lighting.h, docs/lighting.md): the reflected
+// ray is traced at the top of main (kl_WaterTrace in `text`), and the listed fetches' texels, or the
+// colour output, get the scene at its hit.
+struct RecompilerWaterReflection
+{
+    uint32_t fetchMask = 0;   // texture fetch constants (bit n) whose texel is replaced
+    bool output = false;      // the colour output gets the reflection by fresnel
+    std::string normalMap;    // HLSL for the normal map's tangent-space xy at the pixel; empty: none
+    std::string text;         // the hook's declarations and functions
+    bool enabled() const { return fetchMask != 0 || output; }
+};
+
 struct RecompilerInput
 {
     bool isPixelShader = false;
@@ -90,6 +102,9 @@ struct RecompilerInput
     // Pixel shaders: the ambient term multiplied by the occlusion. None: the output is byte for byte
     // what it was before this existed.
     RecompilerAmbientTerm ambientOcclusion;
+    // Pixel shaders: the water reflection hook. Disabled: the output is byte for byte what it was before
+    // this existed.
+    RecompilerWaterReflection waterReflection;
     // Debugging (the kkshaders tool): a comment with each instruction's address, which names the
     // place of an ambient term of kind Register. Never set for shaders that are built.
     bool annotateAddresses = false;

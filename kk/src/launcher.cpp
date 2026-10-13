@@ -745,6 +745,35 @@ class SettingsPages {
   static constexpr const char* kSetByOriginal =
       "Set by the Original Xbox 360 look. Switch Look to Remastered on the Graphics page to change it.";
 
+  // The native renderer's lighting options (native-renderer/docs/lighting.md): rows on the Graphics
+  // page while the native renderer draws the game. Its own cvars (native_*), which the stable version
+  // does not have.
+  static void LightingItems(std::vector<Item>& items, bool original) {
+    if (!NativeShaderPack::Wanted()) return;
+    {
+      Item it = CvarChoice("Shadows",
+                           "Original keeps the game's blocky shadows. High draws them at twice the detail with soft "
+                           "edges; Ultra at four times, with edges that get softer the farther a shadow falls from "
+                           "what casts it.",
+                           "native_shadow_quality", {{"Original", "original"}, {"High", "high"}, {"Ultra", "ultra"}});
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
+    {
+      Item it = CvarChoice("Water reflections",
+                           "Screen space reflects what is on screen in the water (rocks, trees, the ship), and keeps the "
+                           "game's own reflection where nothing is found.",
+                           "native_water_reflections", {{"Original", "original"}, {"Screen space", "ssr"}});
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
+    {
+      Item it = CvarChoice("Light shafts",
+                           "Volumetric lights the game's mist and fog from the sun: shadows cut shafts of light through "
+                           "it. Only where the game has fog, so clear scenes stay clear. High is finer.",
+                           "native_volumetrics", {{"Original", "off"}, {"Volumetric low", "low"}, {"Volumetric high", "high"}});
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
+  }
+
   // ------------------------------------------------------------ Display ---
   // Display > Frame rate (Beta 2: from the Gameplay page).
   Item FrameRateItem() {
@@ -1296,6 +1325,7 @@ class SettingsPages {
                            "native_gi", {{"Off", "off"}, {"Low", "low"}, {"Medium", "medium"}, {"High", "high"}});
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
+    LightingItems(items, original);
 
     items.push_back(Section("Effects"));
     {
@@ -4176,7 +4206,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       case kGraphics:
         return {"kk_original_look", "kk_modern_settings", "swap_post_effect", "anisotropic_override",
                 "kk_motion_blur", "kk_big_blur", "kk_fog", "ao_mode", "ao_strength", "native_ao_method",
-                "native_ao_apply", "native_ao_quality", "native_ao_samples", "kk_renderer", "native_gi"};
+                "native_ao_apply", "native_ao_quality", "native_ao_samples", "kk_renderer", "native_gi", "native_shadow_quality", "native_water_reflections", "native_volumetrics"};
       case kGameplay:
         return {"kk_fov", "kk_camera_shake", "kk_camera_shake_strength", "kk_show_fps",
                 "kk_skip_intros", "user_language"};

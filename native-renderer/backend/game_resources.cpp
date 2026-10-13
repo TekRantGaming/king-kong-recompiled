@@ -61,6 +61,9 @@ GameRenderer::Scale GameRenderer::ScaleFor(bool depth, uint32_t pitch, uint32_t 
   // buffers of that pitch (every attachment of a draw has one size).
   if (!depth && format == 14 && pitch != options_.guest_frame_width) shadow_pitches_.insert(pitch);
   if (options_.shadow_scale > 0.0f && shadow_pitches_.count(pitch)) return {options_.shadow_scale, options_.shadow_scale};
+  // The soft shadows (docs/lighting.md): the screen-space shadow mask's targets, finer than the frame.
+  if (!lighting_mask_pitches_.empty() && lighting_mask_pitches_.count(pitch))
+    return {options_.render_scale_x * kLightingMaskScale, options_.render_scale_y * kLightingMaskScale};
   // --native_debug bit 32: only the frame-wide targets scale (to find a pass that breaks).
   if ((options_.debug & 32) && pitch != options_.guest_frame_width) return {1.0f, 1.0f};
   // Upscalers: the scene's targets are the input size before the upscale point; shadow maps keep the
