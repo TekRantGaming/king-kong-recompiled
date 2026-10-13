@@ -99,6 +99,8 @@ struct VertexElement {
 // The declaration object (from the census, brief 01 to confirm): element count at +8, elements from +36,
 // ending with D3DDECL_END (stream 0xFF).
 std::vector<VertexElement> DecodeVertexDeclaration(const uint8_t* guest_object, size_t max_bytes = 4096);
+// Replaces the contents while retaining capacity; null input clears the result.
+void DecodeVertexDeclaration(const uint8_t* guest_object, std::vector<VertexElement>& out, size_t max_bytes = 4096);
 
 // Host input format for an element (nvrhi::Format names). R32_UINT with needs_unpack means the shader must
 // unpack the bits itself (formats with no host equivalent).
@@ -141,5 +143,7 @@ void ConvertVertices(const uint8_t* guest, uint8_t* host, uint32_t vertex_count,
                      const std::vector<VertexSwapRange>& plan);
 // Index data: count indices (16- or 32-bit) to host order.
 void ConvertIndices(const uint8_t* guest, void* host, uint32_t count, bool index32);
+// Reusable upload storage, padded to four bytes with zeroes even after shrinking.
+void ConvertIndexBuffer(const uint8_t* guest, std::vector<uint8_t>& out, uint32_t bytes, bool index32);
 
 }  // namespace kknr

@@ -57,9 +57,11 @@ void GameRenderer::SetFrameLog(const FrameLogConfig& config, FrameLog::Emit emit
 
 uint64_t GameRenderer::PatchedVertexShaderHash(const GameShader& vs, uint32_t declaration, const dev::DeviceView& d) {
   if (!vs.source) return vs.ucode_hash;
-  std::vector<kkshaders::DeclElement> elements;
+  auto& elements = scratch_patch_declaration_;
+  elements.clear();
   if (const uint8_t* decl = declaration ? memory_.Virtual(declaration) : nullptr) {
-    for (const kknr::VertexElement& e : kknr::DecodeVertexDeclaration(decl)) {
+    kknr::DecodeVertexDeclaration(decl, scratch_declaration_);
+    for (const kknr::VertexElement& e : scratch_declaration_) {
       if (e.stream >= 16 || e.type.Unused()) continue;
       kkshaders::DeclElement out;
       out.stream = uint8_t(e.stream);

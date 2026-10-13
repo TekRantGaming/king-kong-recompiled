@@ -58,6 +58,13 @@ uint32_t VertexFormatBytes(VertexFormat format) {
 
 std::vector<VertexElement> DecodeVertexDeclaration(const uint8_t* object, size_t max_bytes) {
   std::vector<VertexElement> elements;
+  DecodeVertexDeclaration(object, elements, max_bytes);
+  return elements;
+}
+
+void DecodeVertexDeclaration(const uint8_t* object, std::vector<VertexElement>& elements, size_t max_bytes) {
+  elements.clear();
+  if (!object || max_bytes < 12) return;
   const uint32_t count = LoadBE32(object + 8);
   for (uint32_t i = 0; i < count && 36 + 12 * (i + 1) <= max_bytes && i < 64; ++i) {
     const uint8_t* e = object + 36 + 12 * i;
@@ -73,7 +80,6 @@ std::vector<VertexElement> DecodeVertexDeclaration(const uint8_t* object, size_t
     if (el.type.Unused()) break;
     elements.push_back(el);
   }
-  return elements;
 }
 
 HostVertexElementFormat GetHostVertexFormat(DeclType type) {
@@ -185,6 +191,11 @@ void ConvertIndices(const uint8_t* guest, void* host, uint32_t count, bool index
     CopySwapIndices32(guest, host, count);
   else
     CopySwapIndices16(guest, host, count);
+}
+
+void ConvertIndexBuffer(const uint8_t* guest, std::vector<uint8_t>& out, uint32_t bytes, bool index32) {
+  out.assign((size_t(bytes) + 3) & ~size_t(3), 0);
+  ConvertIndices(guest, out.data(), bytes / (index32 ? 4 : 2), index32);
 }
 
 }  // namespace kknr

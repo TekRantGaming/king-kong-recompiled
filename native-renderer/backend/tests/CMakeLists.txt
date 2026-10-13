@@ -169,3 +169,13 @@ if(NR_GAME_RENDERER)
     target_compile_definitions(nr_motion_shader_tests PRIVATE NR_TEST_DXC_DIR="${NR_DXC_DIR}")
     add_test(NAME nr_motion_shader_tests COMMAND nr_motion_shader_tests)
 endif()
+
+# CPU hot-path output and process-affinity regression tests, no GPU or game.
+add_executable(nr_cpu_paths_tests cpu_paths_tests.cpp
+    "${NR_ROOT}/backend/primitive.cpp"
+    "${NR_ROOT}/resources/src/buffers.cpp"
+    "${NR_ROOT}/resources/src/endian.cpp"
+    "${NR_ROOT}/resources/src/xenos.cpp"
+    "${NR_ROOT}/resources/src/tiling.cpp")
+target_include_directories(nr_cpu_paths_tests PRIVATE "${NR_ROOT}" "${NR_ROOT}/resources/include")
+add_test(NAME nr_cpu_paths_tests COMMAND nr_cpu_paths_tests)

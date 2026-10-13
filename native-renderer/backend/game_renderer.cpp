@@ -1375,11 +1375,12 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   }
 
   // Vertex fetch: each binding's declaration element, from its stream.
-  std::vector<kknr::VertexElement> elements;
+  auto& elements = scratch_declaration_;
+  elements.clear();
   struct StreamBind { uint32_t physical = 0, bytes = 0, begin = 0, end = 0; HostBuffer* host = nullptr; };
   std::array<StreamBind, 16> stream_binds = {};
   if (const uint8_t* decl = call.vertex_declaration ? memory_.Virtual(call.vertex_declaration) : nullptr)
-    elements = kknr::DecodeVertexDeclaration(decl);
+    kknr::DecodeVertexDeclaration(decl, elements);
   for (size_t b = 0; b < vs->bindings.vertexBindings.size() && b < 16; ++b) {
     const kkshaders::VertexBinding& vb = vs->bindings.vertexBindings[b];
     uint32_t stream = 0;

@@ -47,6 +47,8 @@
 #include "backend/guest_memory.h"
 #include "backend/shader_library.h"
 #include "kknr/guest_texture.h"
+#include "kknr/buffers.h"
+#include "kkshaders/vertex_patch.h"
 #include "kknr/texture_cache.h"
 #include "kknr/texture_convert.h"
 #include "kkshaders/abi.h"
@@ -678,6 +680,10 @@ class GameRenderer {
   static constexpr uint64_t kIndexRingBytes = 8ull << 20;
   bool patterns_uploaded_ = false;
   std::vector<uint32_t> scratch_indices_;
+  // Renderer thread only, consumed synchronously before reuse.
+  std::vector<kknr::VertexElement> scratch_declaration_;
+  std::vector<kkshaders::DeclElement> scratch_patch_declaration_;
+  std::vector<uint8_t> scratch_index_upload_;
 
   // Built-in passes.
   nvrhi::ShaderHandle blit_vs_, blit_ps_, clear_vs_, clear_ps_;
