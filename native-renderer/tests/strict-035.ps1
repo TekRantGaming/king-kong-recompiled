@@ -16,6 +16,7 @@ $build="$workspace\kk\out\build\kk-dev-vulkan"
 Get-ChildItem -LiteralPath $build -File | Where-Object { $_.Extension -in '.exe','.dll' } | Copy-Item -Destination $run
 Copy-Item -LiteralPath "$build\glyphs" -Destination $run -Recurse
 Copy-Item -LiteralPath 'F:\KK-native-renderer\cache\native-shaders\kkshaders-spirv.pack' -Destination $run
+Copy-Item -LiteralPath 'F:\KK-native-renderer\runs\task025-20261013\sanity-d3d12-ch8-210057\kkshaders-dxil.pack' -Destination $run
 Copy-Item -LiteralPath 'F:\KK-native-renderer\downloads\dxc-v1.9.2609\dxc\bin\x64\dxcompiler.dll' -Destination $run
 robocopy F:\KK-native-renderer\userdata "$run\userdata" /E /NFL /NDL /NJH /NJS | Out-Null
 if ($LASTEXITCODE -ge 8) { throw 'User data copy failed.' }
