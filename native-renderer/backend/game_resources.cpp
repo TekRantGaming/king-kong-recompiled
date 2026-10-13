@@ -116,6 +116,7 @@ GameRenderer::HostTarget* GameRenderer::GetTarget(bool depth, uint32_t edram_bas
                 edram_base, pitch, format);
   desc.debugName = name;
   t->texture = device_->createTexture(desc);
+  ++frame_resource_creations_;
   if (!t->texture) return nullptr;
   if (slot) {
     // Framebuffers holding the old texture are dropped with it.

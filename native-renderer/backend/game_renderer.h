@@ -703,6 +703,12 @@ class GameRenderer {
   void NoteFrameWait(double ms);
   bool frame_waited_ = false;
   double frame_stutter_wait_ms_ = 0;
+  // Opt-in task diagnostics, written only when KK_DEV_DLSS_LOG names a file.
+  FILE* frame_trace_ = nullptr;
+  bool frame_trace_checked_ = false;
+  std::chrono::steady_clock::time_point frame_trace_last_{};
+  double frame_motion_ms_ = 0, frame_sdk_ms_ = 0, frame_target_ms_last_ = 0;
+  uint64_t frame_resource_creations_ = 0;
   uint64_t frame_skips_ = 0;
   mutable std::mutex stutter_mutex_;
   StutterStats stutter_;

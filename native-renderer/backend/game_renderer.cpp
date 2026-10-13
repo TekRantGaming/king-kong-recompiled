@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <cstdlib>
 
 #include "backend/guest_layout.h"
 #include "backend/log.h"
@@ -120,6 +121,7 @@ GameRenderer::GameRenderer(nvrhi::IDevice* device, const GuestMemory& memory,
 }
 
 GameRenderer::~GameRenderer() {
+  if (frame_trace_) std::fclose(frame_trace_);
   if (!pipeline_threads_.empty()) {
     {
       std::lock_guard lock(pipeline_mutex_);
@@ -517,6 +519,27 @@ GameRenderer::StutterStats GameRenderer::stutter() const {
 }
 
 void GameRenderer::EndFrame() {
+  if (!frame_trace_checked_) {
+    frame_trace_checked_ = true;
+    if (const char* path = std::getenv("KK_DEV_DLSS_LOG"); path && *path) {
+      frame_trace_ = std::fopen(path, "w");
+      if (frame_trace_) std::fprintf(frame_trace_, "frame,wall_s,interval_ms,pipeline_wait_ms,motion_cpu_ms,sdk_cpu_ms,target_cpu_ms,resource_creations,skipped_draws\n");
+    }
+  }
+  if (frame_trace_) {
+    const auto now = std::chrono::steady_clock::now();
+    const double interval = frame_trace_last_ == std::chrono::steady_clock::time_point{} ? 0 :
+        std::chrono::duration<double, std::milli>(now - frame_trace_last_).count();
+    std::fprintf(frame_trace_, "%llu,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%llu,%llu\n",
+        static_cast<unsigned long long>(frame_), std::chrono::duration<double>(now.time_since_epoch()).count(),
+        interval, frame_stutter_wait_ms_, frame_motion_ms_, frame_sdk_ms_, stats_.target_ms - frame_target_ms_last_,
+        static_cast<unsigned long long>(frame_resource_creations_), static_cast<unsigned long long>(frame_skips_));
+    frame_trace_last_ = now;
+    if (frame_ % 300 == 0) std::fflush(frame_trace_);
+  }
+  frame_motion_ms_ = frame_sdk_ms_ = 0;
+  frame_resource_creations_ = 0;
+  frame_target_ms_last_ = stats_.target_ms;
   {
     std::lock_guard lock(stutter_mutex_);
     ++stutter_.frames;

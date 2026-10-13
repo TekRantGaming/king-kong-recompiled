@@ -212,6 +212,10 @@ bool GameRenderer::UpscaleInitialize() {
   if (u.config.gpu_time) {
     u.timer = std::make_unique<AoGpuTimer>(device_, "everything at the upscale point", "upscaler GPU time");
     u.sdk_timer = std::make_unique<AoGpuTimer>(device_, u.name.c_str(), "upscaler GPU time");
+    u.motion_timer = std::make_unique<AoGpuTimer>(device_, "motion replay", "upscaler GPU time");
+    u.timer->EnableTrace(".upscale-gpu.csv");
+    u.sdk_timer->EnableTrace(".sdk-gpu.csv");
+    u.motion_timer->EnableTrace(".motion-gpu.csv");
   }
   return true;
 }
@@ -469,6 +473,7 @@ void GameRenderer::UpscaleBeginPresent(nvrhi::ICommandList* cl) {
   }
   if (u.timer) u.timer->FrameEnd();
   if (u.sdk_timer) u.sdk_timer->FrameEnd();
+  if (u.motion_timer) u.motion_timer->FrameEnd();
 }
 
 void GameRenderer::UpscaleEndFrame() {
@@ -728,6 +733,7 @@ void GameRenderer::RunUpscale(nvrhi::ICommandList* cl, UpscaleFrameTracker::Trig
     d.keepInitialState = true;
     d.debugName = name;
     t = device_->createTexture(d);
+    ++frame_resource_creations_;
     u.framebuffers.clear();
     u.pass_sets.clear();
   };
@@ -760,6 +766,7 @@ void GameRenderer::RunUpscale(nvrhi::ICommandList* cl, UpscaleFrameTracker::Trig
     d.keepInitialState = true;
     d.debugName = "Upscaler output";
     u.output = device_->createTexture(d);
+    ++frame_resource_creations_;
     u.framebuffers.clear();
     u.pass_sets.clear();
   }
@@ -846,7 +853,13 @@ void GameRenderer::RunUpscale(nvrhi::ICommandList* cl, UpscaleFrameTracker::Trig
     p.p2[2] = camera ? 1.0f : 0.0f;
     UpscalePass(cl, u.camera_ps, &p, sizeof(p), depth->texture, nullptr, u.motion, u.depth, nullptr, input_rect, 1);
     // 2. Each object's own motion where it is what the depth shows.
-    if (!(u.config.debug & 4)) UpscaleMotionPass(cl, depth);
+    if (!(u.config.debug & 4)) {
+      const auto start = std::chrono::steady_clock::now();
+      if (u.motion_timer) u.motion_timer->Begin(cl);
+      UpscaleMotionPass(cl, depth);
+      if (u.motion_timer) u.motion_timer->End(cl);
+      frame_motion_ms_ += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    }
   } else {
     cl->clearTextureFloat(u.motion, nvrhi::AllSubresources, nvrhi::Color(0.0f));
     cl->clearTextureFloat(u.depth, nvrhi::AllSubresources, nvrhi::Color(1.0f));
@@ -884,7 +897,9 @@ void GameRenderer::RunUpscale(nvrhi::ICommandList* cl, UpscaleFrameTracker::Trig
     in.camera_far = u.camera_far;
     in.camera_fov_y = u.camera_fov_y;
     if (u.sdk_timer) u.sdk_timer->Begin(cl);
+    const auto sdk_start = std::chrono::steady_clock::now();
     done = u.upscaler->Evaluate(cl, in);
+    frame_sdk_ms_ += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - sdk_start).count();
     if (u.sdk_timer) u.sdk_timer->End(cl);
     if (!done && u.stats.failures++ < 10)
       Logf(LogLevel::kWarning, "rexgpu-native: upscaler %s failed this frame: a bilinear stretch instead", u.name.c_str());

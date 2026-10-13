@@ -98,6 +98,7 @@ struct GameUpscale {
   std::unordered_map<uint64_t, nvrhi::FramebufferHandle> framebuffers;
   // --native_upscaler_gpu_time: everything at the upscale point, and the upscaler's own work.
   std::unique_ptr<AoGpuTimer> timer, sdk_timer;
+  std::unique_ptr<AoGpuTimer> motion_timer;
   // Debugging (native_upscaler_debug 512): the motion texture read back now and then.
   nvrhi::StagingTextureHandle probe;
   uint64_t probe_frame = 0;
