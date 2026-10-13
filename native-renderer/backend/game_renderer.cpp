@@ -1504,6 +1504,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   if (stop_at == 5) return;
   // Upscalers: a draw of the scene's depth, replayed by the motion pass at the upscale point.
   if (up.motion) UpscaleRecordMotion(call, d, vs, dc, record, gs, args, indexed_draw);
+  if (scene_ao_) AoRecordMotionHook(call, d, *vs);
   cl->setGraphicsState(gs);
   if (indexed_draw) {
     cl->drawIndexed(args);

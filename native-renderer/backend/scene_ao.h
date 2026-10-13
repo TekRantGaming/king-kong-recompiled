@@ -57,12 +57,13 @@ class SceneAo {
     bool frame_size = false;               // the targets have the frame's pitch
     const uint8_t* vs_constants = nullptr;  // the device's vertex constants (big-endian, 256 x 16 bytes)
     AoScreen screen;                        // the draw's viewport, with its target's render scale
-    MotionDrawKey motion_key;
   };
   // Before a draw is recorded: classify, follow, and at the moments above work the occlusion out and
   // apply it (into `cl`, before the draw). True when the draw goes to the scene after the ambient-only
   // occlusion is there (its pixel shaders may read it: ambient_view()).
   bool OnDraw(nvrhi::ICommandList* cl, const Draw& d, const AoSettings& s);
+  // After the renderer prepared the draw's buffers, as in the SDK motion recorder.
+  void RecordMotion(uint64_t frame, const MotionDrawKey& key, const uint8_t* constants, const AoSettings& s);
   // The game's fog pass (the AfterEffects fog shaders' c0..c3), for the resolve moment.
   void NoteFog(const float constants[16], uint64_t frame);
   // A clear of a depth target (Clear with Z, or a resolve's depth clear).
@@ -142,6 +143,7 @@ class SceneAo {
   AoCameraFinder camera_;
   MotionHistory motion_history_;
   CameraReprojectionVote motion_vote_;
+  uint32_t motion_matches_ = 0;
   Stats stats_;
 
   uint64_t frame_ = UINT64_MAX;

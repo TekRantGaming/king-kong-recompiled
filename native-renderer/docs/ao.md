@@ -186,6 +186,8 @@ a multiple of 16 (no pass writes outside its images; the padding repeats the pic
    change resets accumulation. These camera vectors do not include per-object motion; depth rejection and clamping
    bound trails on hands and animated objects. Four extra R32F images cost about 14 MB at 1280x720 and are allocated
    only for local accumulation.
+   Draws are recorded after buffer preparation, alongside the SDK motion recorder. Rewritten streams match by
+   shader/count/order/closest constants rather than changing ring-buffer addresses, as the SDK camera vote does.
 
 With an active temporal SDK (DLSS, FSR or XeSS), AO remains at the opaque point before upscaling and does not use a
 second local history. Its noise rotates over 64 patterns for the SDK to smooth. Local accumulation rotates the same

@@ -76,6 +76,7 @@ void SceneAo::NewFrame(uint64_t frame) {
   depth_source_ = "none";
   motion_history_.BeginFrame(frame);
   motion_vote_.BeginFrame(frame);
+  motion_matches_ = 0;
   computed_ = applied_ = ambient_ready_ = ambient_drawn_ = scene_resolved_ = false;
   depth_copied_ = scene_dest_set_ = resolve_applied_ = false;
   overlay_drawn_ = false;
@@ -154,9 +155,10 @@ bool SceneAo::Compute(nvrhi::ICommandList* cl, const AoSettings& s, nvrhi::IText
     return false;
   }
   if (config_.dump_every && frame_ % config_.dump_every == 0) {
-    Logf(LogLevel::kInfo, "rexgpu-native: AO denoise frame %llu: samples=%d temporal=%s camera_votes=%u/%u history_frames=%llu",
+    Logf(LogLevel::kInfo, "rexgpu-native: AO denoise frame %llu: samples=%d temporal=%s camera_votes=%u/%u history_frames=%llu records=%zu previous=%zu matched=%u",
          static_cast<unsigned long long>(frame_), s.sample_quality, s.temporal_upscaler ? "upscaler" : "local",
-         votes, offers, static_cast<unsigned long long>(gtao_->stats().history_frames));
+         votes, offers, static_cast<unsigned long long>(gtao_->stats().history_frames),
+         motion_history_.current_draws(), motion_history_.previous_draws(), motion_matches_);
   }
   if (stats_.computed == 0 || (stats_.computed % 1800) == 0) {
     // The camera and the radius it gives (docs/ao.md, "Strength and radius").
@@ -198,21 +200,6 @@ bool SceneAo::OnDraw(nvrhi::ICommandList* cl, const Draw& d, const AoSettings& s
   // draw executes. A water draw must not turn cleared depth into valid scene depth yet.
   const bool depth_before_draw = tracker_.frame() == d.frame && tracker_.depth_valid();
   const AoFrameTracker::Events e = tracker_.OnDraw(td);
-  // Reuse the upscalers' draw matching and camera-motion vote. Local AO history is depth
-  // validated and clamped, so moving hands and newly exposed surfaces reject old shading.
-  if (!s.temporal_upscaler && e.in_scene && d.vs_constants &&
-      (cls == AoDrawClass::kDepthOnly || cls == AoDrawClass::kOpaque) &&
-      motion_history_.current_draws() < 256) {
-    float rows[16];
-    const int reg = FindAoPerspectiveRegister(d.vs_constants, rows);
-    if (reg >= 0) {
-      VsConstants constants;
-      for (size_t i = 0; i < constants.size(); ++i) constants[i] = LoadBEFloat(d.vs_constants + i * 4);
-      const uint32_t ordinal = motion_history_.Record(d.motion_key, constants);
-      if (const VsConstants* prev = motion_history_.FindPrevious(d.motion_key, ordinal, constants))
-        motion_vote_.Offer(rows, prev->data() + reg * 4);
-    }
-  }
   if (e.in_scene) {
     if (d.color.key && d.color.key == tracker_.scene_color()) scene_color_ = d.color;
     if (d.depth.key && d.depth.key == tracker_.scene_depth()) scene_depth_ = d.depth;
@@ -253,6 +240,22 @@ bool SceneAo::OnDraw(nvrhi::ICommandList* cl, const Draw& d, const AoSettings& s
   last_.computed = stats_.computed != computed_before;
   last_.applied = applied_ && !applied_before;
   return reads;
+}
+
+void SceneAo::RecordMotion(uint64_t frame, const MotionDrawKey& key, const uint8_t* be, const AoSettings& s) {
+  if (frame != frame_ || s.mode <= 0 || s.temporal_upscaler || !be || !last_.events.in_scene ||
+      (last_.cls != AoDrawClass::kDepthOnly && last_.cls != AoDrawClass::kOpaque) ||
+      motion_history_.current_draws() >= 256) return;
+  float rows[16];
+  const int reg = FindAoPerspectiveRegister(be, rows);
+  if (reg < 0) return;
+  VsConstants constants;
+  for (size_t i = 0; i < constants.size(); ++i) constants[i] = LoadBEFloat(be + i * 4);
+  const uint32_t ordinal = motion_history_.Record(key, constants);
+  if (const VsConstants* prev = motion_history_.FindPrevious(key, ordinal, constants)) {
+    ++motion_matches_;
+    motion_vote_.Offer(rows, prev->data() + reg * 4);
+  }
 }
 
 bool SceneAo::ApplyToTarget(nvrhi::ICommandList* cl, const AoSettings& s) {
