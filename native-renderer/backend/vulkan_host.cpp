@@ -28,9 +28,12 @@
 #include <rex/ui/vulkan/provider.h>
 
 #include "backend/host_device.h"
+#include "backend/cpu_profile.h"
+#include "backend/dev_gpu_stats.h"
 #include "backend/output_blit.h"
 #include "backend/vk_pipeline_cache.h"
 #include "backend/vulkan_dispatch.h"
+#include "backend/vulkan_requirements.h"
 
 REXCVAR_DECLARE(bool, native_validation);
 REXCVAR_DECLARE(bool, native_vk_pipeline_cache);
@@ -53,12 +56,29 @@ class VulkanHost final : public HostDevice {
     if (!HasRequiredFeatures(*vulkan_device)) {
       return false;
     }
+    VkPhysicalDeviceDescriptorIndexingProperties indexing{};
+    indexing.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES;
+    VkPhysicalDeviceProperties2 properties{};
+    properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    properties.pNext = &indexing;
+    const auto get_properties = vulkan_instance->functions().vkGetPhysicalDeviceProperties2;
+    if (!get_properties) {
+      REXGPU_ERROR("rexgpu-native: cannot verify descriptor limits. Choose Native D3D12 or Classic.");
+      return false;
+    }
+    get_properties(vulkan_device->physical_device(), &properties);
+    if (!CheckNativeBindlessLimits(properties.properties.limits.maxBoundDescriptorSets, indexing,
+          [](const char* name, unsigned available, unsigned needed) {
+            REXGPU_ERROR("rexgpu-native: descriptor limit {} is {}, requires {}. Choose Native D3D12 or Classic.",
+                         name, available, needed);
+          })) return false;
     queue_family_ = vulkan_device->queue_family_graphics_compute();
     // The SDK loads the Vulkan loader itself; NVRHI's calls go through
     // vulkan.hpp's dispatcher, filled from the same loader.
     InitVulkanDispatch(vulkan_instance->functions().vkGetInstanceProcAddr,
                        vulkan_instance->instance(), vulkan_device->device());
     nvrhi::vulkan::DeviceDesc desc;
+    if (REXCVAR_GET(native_debug) & 524288) desc.maxTimerQueries = 2048;
     desc.errorCB = GetMessageCallback();
     desc.instance = vulkan_instance->instance();
     desc.physicalDevice = vulkan_device->physical_device();
@@ -80,6 +100,7 @@ class VulkanHost final : public HostDevice {
       }
     }
     device_ = nvrhi::vulkan::createDevice(desc);
+    g_dev_gpu_stats_enabled.store((REXCVAR_GET(native_debug) & 32768) != 0, std::memory_order_relaxed);
     if (!device_) {
       return false;
     }
@@ -94,13 +115,29 @@ class VulkanHost final : public HostDevice {
   nvrhi::GraphicsAPI api() const override { return nvrhi::GraphicsAPI::VULKAN; }
 
   void ExecuteCommandList(nvrhi::ICommandList* command_list) override {
+    ExecuteFrameCommandList(command_list, nullptr);
+  }
+  void WaitFrame(nvrhi::IEventQuery* completion) override {
+    // Waiting on a timeline semaphore does not access VkQueue. Avoid the SDK's
+    // queue lock here: its presenter may hold that lock while waiting for display.
+    // NVRHI's completion bookkeeping still needs serialization with submission/GC.
+    std::lock_guard lock(execute_mutex_);
+    device_->waitEventQuery(completion);
+  }
+  void ExecuteFrameCommandList(nvrhi::ICommandList* command_list, nvrhi::IEventQuery* completion) override {
     // Host access to a VkQueue must be externally synchronised: hold the SDK's
     // queue lock (recursive) while NVRHI submits.
     using clock = std::chrono::steady_clock;
+    const uint64_t cpu_start = (REXCVAR_GET(native_debug) & 32768) ? CurrentThreadCpuMicroseconds() : 0;
     const auto t0 = clock::now();
     auto acquisition = provider_.vulkan_device()->AcquireQueue(queue_family_, 0);
+    std::lock_guard execute_lock(execute_mutex_);
     const auto t1 = clock::now();
     device_->executeCommandList(command_list);
+    if (completion) {
+      device_->resetEventQuery(completion);
+      device_->setEventQuery(completion, nvrhi::CommandQueue::Graphics);
+    }
     const auto t2 = clock::now();
     device_->runGarbageCollection();
     const auto t3 = clock::now();
@@ -111,6 +148,7 @@ class VulkanHost final : public HostDevice {
     times_.wait_us += us(t0, t1);
     times_.execute_us += us(t1, t2);
     times_.garbage_us += us(t2, t3);
+    if (cpu_start) times_.cpu_us += CurrentThreadCpuMicroseconds() - cpu_start;
     ++times_.count;
   }
   SubmitTimes submit_times() const override {
@@ -121,6 +159,7 @@ class VulkanHost final : public HostDevice {
 
   void WaitForIdle() override {
     auto acquisition = provider_.vulkan_device()->AcquireQueue(queue_family_, 0);
+    std::lock_guard execute_lock(execute_mutex_);
     device_->waitForIdle();
   }
 
@@ -209,10 +248,20 @@ class VulkanHost final : public HostDevice {
       ok = false;
     }
 #else
-    REXGPU_WARN(
-        "rexgpu-native: this SDK does not enable timelineSemaphore and synchronization2 "
-        "(apply native-renderer/sdk-patches/0001); NVRHI uses both, expect validation errors");
+    REXGPU_ERROR("rexgpu-native: SDK synchronization features cannot be verified; apply sdk-patches/0001");
+    ok = false;
 #endif
+// Validate what was actually enabled on this shared SDK device before creating
+// any bindless layouts, instead of relying on a late driver error or missing draws.
+#if defined(REX_UI_VULKAN_DEVICE_HAS_DESCRIPTOR_INDEXING)
+    if (!CheckNativeBindlessFeatures(props, [](const char* name) {
+          REXGPU_ERROR("rexgpu-native: Native Vulkan requires enabled feature {}", name);
+        })) ok = false;
+#else
+    REXGPU_ERROR("rexgpu-native: SDK bindless features cannot be verified; apply sdk-patches/0002");
+    ok = false;
+#endif
+    if (!ok) REXGPU_ERROR("rexgpu-native: Native Vulkan unsupported on this device. Choose Native D3D12 or Classic in the launcher.");
     return ok;
   }
 
@@ -256,6 +305,7 @@ class VulkanHost final : public HostDevice {
 
   rex::ui::vulkan::VulkanProvider& provider_;
   mutable std::mutex times_mutex_;
+  std::mutex execute_mutex_;
   SubmitTimes times_;
   uint32_t queue_family_ = 0;
   // Before device_: destroyed after it (NVRHI's device only borrows the cache).

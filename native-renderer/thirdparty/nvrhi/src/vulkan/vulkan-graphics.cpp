@@ -21,6 +21,7 @@
 */
 
 #include "vulkan-backend.h"
+#include "../../../../backend/dev_gpu_stats.h"
 #include <nvrhi/common/misc.h>
 
 namespace nvrhi::vulkan
@@ -548,6 +549,7 @@ namespace nvrhi::vulkan
         if (m_CurrentGraphicsState.pipeline != state.pipeline)
         {
             m_CurrentCmdBuf->cmdBuf.bindPipeline(vk::PipelineBindPoint::eGraphics, pso->pipeline);
+            nr::CountGpuCommand(nr::DevGpuCounter::Pipeline);
 
             m_CurrentCmdBuf->referencedResources.push_back(state.pipeline);
             updatePipeline = true;
@@ -582,6 +584,7 @@ namespace nvrhi::vulkan
             }
 
             m_CurrentCmdBuf->cmdBuf.setViewport(0, uint32_t(viewports.size()), viewports.data());
+            nr::CountGpuCommand(nr::DevGpuCounter::Viewport);
         }
 
         if (!state.viewport.scissorRects.empty() && arraysAreDifferent(state.viewport.scissorRects, m_CurrentGraphicsState.viewport.scissorRects))
@@ -594,16 +597,19 @@ namespace nvrhi::vulkan
             }
 
             m_CurrentCmdBuf->cmdBuf.setScissor(0, uint32_t(scissors.size()), scissors.data());
+            nr::CountGpuCommand(nr::DevGpuCounter::Scissor);
         }
 
         if (pso->desc.renderState.depthStencilState.dynamicStencilRef && (updatePipeline || m_CurrentGraphicsState.dynamicStencilRefValue != state.dynamicStencilRefValue))
         {
             m_CurrentCmdBuf->cmdBuf.setStencilReference(vk::StencilFaceFlagBits::eFrontAndBack, state.dynamicStencilRefValue);
+            nr::CountGpuCommand(nr::DevGpuCounter::Stencil);
         }
 
         if (pso->usesBlendConstants && (updatePipeline || m_CurrentGraphicsState.blendConstantColor != state.blendConstantColor))
         {
             m_CurrentCmdBuf->cmdBuf.setBlendConstants(&state.blendConstantColor.r);
+            nr::CountGpuCommand(nr::DevGpuCounter::Blend);
         }
 
         if (state.indexBuffer.buffer && m_CurrentGraphicsState.indexBuffer != state.indexBuffer)

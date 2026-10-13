@@ -28,10 +28,17 @@ class HostDevice {
   // Submits a closed command list (serialised against the SDK's own use of
   // the queue where that matters).
   virtual void ExecuteCommandList(nvrhi::ICommandList* command_list) = 0;
+  virtual void ExecuteFrameCommandList(nvrhi::ICommandList* command_list, nvrhi::IEventQuery* completion) {
+    ExecuteCommandList(command_list);
+    device()->resetEventQuery(completion);
+    device()->setEventQuery(completion, nvrhi::CommandQueue::Graphics);
+  }
+  virtual void WaitFrame(nvrhi::IEventQuery* completion) { device()->waitEventQuery(completion); }
   virtual void WaitForIdle() = 0;
   // Microseconds spent in ExecuteCommandList: waiting for the queue, submitting, collecting garbage.
   struct SubmitTimes {
     uint64_t wait_us = 0, execute_us = 0, garbage_us = 0, count = 0;
+    uint64_t cpu_us = 0;
   };
   virtual SubmitTimes submit_times() const { return {}; }
   // The cache the device creates every pipeline with, when the host keeps one in a file

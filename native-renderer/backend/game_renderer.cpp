@@ -414,6 +414,7 @@ void GameRenderer::RetireSlot(Table table, uint32_t slot) {
 
 void GameRenderer::WriteSlot(Table table, const nvrhi::BindingSetItem& item) {
   device_->writeDescriptorTable(tables_[table].table, item);
+  ++stats_.descriptor_updates;
 }
 
 std::pair<uint32_t, uint32_t> GameRenderer::OnGuestWrite(uint32_t physical, uint32_t bytes) {
@@ -547,6 +548,35 @@ void GameRenderer::EndFrame() {
   }
   while (!retired_resources_.empty() && retired_resources_.front().first + 8 < frame_) retired_resources_.pop_front();
   if (frame_ % 300 == 0) {
+    if (options_.debug & 32768) {
+      size_t slots = 0;
+      for (const DescriptorTable& t : tables_) slots += t.next - 1 - t.free.size() - t.retired.size();
+      Logf(LogLevel::kInfo,
+           "rexgpu-native: residency frame %llu: textures %zu, vertex buffers %zu, index buffers %zu, "
+           "descriptor slots %zu, core binding sets %zu, retired resources %zu; per frame: %.1f draws, "
+           "%.1f clears, %.1f resolves, %.1f guest upload bytes, %.3f ms textures, %.3f ms buffers; pipelines %llu",
+           static_cast<unsigned long long>(frame_), textures_.size(), vertex_buffers_.size(), index_buffers_.size(),
+           slots, blit_sets_.size() + bool(constants_set_) + bool(clear_set_), retired_resources_.size(),
+           double(stats_.draws - debug_previous_.draws) / 300,
+           double(stats_.clears - debug_previous_.clears) / 300,
+           double(stats_.resolves - debug_previous_.resolves) / 300,
+           double(stats_.upload_bytes - debug_previous_.upload_bytes) / 300,
+           (stats_.texture_ms - debug_previous_.texture_ms) / 300,
+           (stats_.buffer_ms - debug_previous_.buffer_ms) / 300,
+           static_cast<unsigned long long>(stats_.pipelines));
+      Logf(LogLevel::kInfo,
+           "rexgpu-native: perf frame %llu: scale writes %llu, identical %llu; vertex binds %llu, repeated %llu; "
+           "descriptor updates %llu, graphics states %llu, game pipeline transitions %llu (300 frames)",
+           static_cast<unsigned long long>(frame_),
+           static_cast<unsigned long long>(stats_.scale_uploads - debug_previous_.scale_uploads),
+           static_cast<unsigned long long>(stats_.scale_identical - debug_previous_.scale_identical),
+           static_cast<unsigned long long>(stats_.vertex_binds - debug_previous_.vertex_binds),
+           static_cast<unsigned long long>(stats_.vertex_repeated - debug_previous_.vertex_repeated),
+           static_cast<unsigned long long>(stats_.descriptor_updates - debug_previous_.descriptor_updates),
+           static_cast<unsigned long long>(stats_.graphics_states - debug_previous_.graphics_states),
+           static_cast<unsigned long long>(stats_.pipeline_changes - debug_previous_.pipeline_changes));
+      debug_previous_ = stats_;
+    }
     if (options_.debug & 8) LogInvalidationHistogram();
     textures_.Trim(frame_, 1800);
     vertex_buffers_.Trim(frame_, 1800);
@@ -1344,6 +1374,8 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
 
   // Vertex fetch: each binding's declaration element, from its stream.
   std::vector<kknr::VertexElement> elements;
+  struct StreamBind { uint32_t physical = 0, bytes = 0, begin = 0, end = 0; HostBuffer* host = nullptr; };
+  std::array<StreamBind, 16> stream_binds = {};
   if (const uint8_t* decl = call.vertex_declaration ? memory_.Virtual(call.vertex_declaration) : nullptr)
     elements = kknr::DecodeVertexDeclaration(decl);
   for (size_t b = 0; b < vs->bindings.vertexBindings.size() && b < 16; ++b) {
@@ -1374,7 +1406,18 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
       used_begin = uint32_t(std::min<uint64_t>(uint64_t(offset) + uint64_t(first_vertex) * stride, info.size_bytes));
       used_end = uint32_t(std::min<uint64_t>(uint64_t(offset) + uint64_t(last_vertex) * stride, info.size_bytes));
     }
-    HostBuffer* host = BindVertexBuffer(cl, info.physical, info.size_bytes, used_begin, used_end);
+    // Fetches of position, normal and UV often share one stream and range.
+    // Reuse only inside this draw: dynamic data may change before the next draw.
+    StreamBind& previous = stream_binds[stream];
+    const bool repeated = previous.host && previous.physical == info.physical &&
+        previous.bytes == info.size_bytes && previous.begin == used_begin && previous.end == used_end;
+    HostBuffer* host = repeated ? previous.host :
+        BindVertexBuffer(cl, info.physical, info.size_bytes, used_begin, used_end);
+    if (options_.debug & 32768) {
+      ++stats_.vertex_binds;
+      if (repeated) ++stats_.vertex_repeated;
+    }
+    previous = {info.physical, info.size_bytes, used_begin, used_end, host};
     if (!host) continue;
     if (vb.raw) {
       dc.vertexFetch[b][0] = host->slot;
@@ -1434,6 +1477,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     std::memcpy(last_raw.data(), raw, last_raw.size());
     for (uint32_t i = 0; i < 1024; ++i) last[i] = LoadBEFloat(raw + i * 4);
     cl->writeBuffer(buffer, last.data(), sizeof(last));
+    stats_.upload_bytes += sizeof(last);
   };
   upload(dev::kVsConstants, last_vs_raw_, last_vs_, vs_constants_);
   upload(dev::kPsConstants, last_ps_raw_, last_ps_, ps_constants_);
@@ -1441,12 +1485,22 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   constants_list_ = cl;
   constants_frame_ = frame_;
   cl->writeBuffer(draw_constants_, &dc, sizeof(dc));
+  stats_.upload_bytes += sizeof(dc);
   if (scaled()) {
     sc.renderScale[0] = size_from->scale_x;
     sc.renderScale[1] = size_from->scale_y;
     sc.renderScale[2] = 1.0f / size_from->scale_x;
     sc.renderScale[3] = 1.0f / size_from->scale_y;
-    cl->writeBuffer(scale_constants_, &sc, sizeof(sc));
+    // Like VS/PS constants, a volatile scale buffer needs one write per list
+    // and a new version only when its complete contents change between draws.
+    if (new_list || std::memcmp(&sc, &last_scale_, sizeof(sc)) != 0) {
+      cl->writeBuffer(scale_constants_, &sc, sizeof(sc));
+      stats_.upload_bytes += sizeof(sc);
+      ++stats_.scale_uploads;
+      last_scale_ = sc;
+    } else {
+      ++stats_.scale_identical;
+    }
   }
 
   // State and draw.
@@ -1493,6 +1547,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
       const uint64_t bytes = scratch_indices_.size() * 4;
       if (!bytes || index_ring_used_ + bytes > kIndexRingBytes) return;
       cl->writeBuffer(index_ring_, scratch_indices_.data(), bytes, index_ring_used_);
+      stats_.upload_bytes += bytes;
       gs.indexBuffer = nvrhi::IndexBufferBinding()
                            .setBuffer(index_ring_)
                            .setFormat(nvrhi::Format::R32_UINT)
@@ -1514,6 +1569,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
       for (uint32_t i = 1; i < kPatternVertices; ++i) fans.insert(fans.end(), {0u, i, i + 1});
       cl->writeBuffer(quad_indices_, quads.data(), quads.size() * 4);
       cl->writeBuffer(fan_indices_, fans.data(), std::min(fans.size(), size_t(kPatternVertices) * 3) * 4);
+      stats_.upload_bytes += (quads.size() + std::min(fans.size(), size_t(kPatternVertices) * 3)) * 4;
       patterns_uploaded_ = true;
     }
     if (call.count > kPatternVertices) return;
@@ -1546,6 +1602,9 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   // Upscalers: a draw of the scene's depth, replayed by the motion pass at the upscale point.
   if (up.motion) UpscaleRecordMotion(call, d, vs, dc, record, gs, args, indexed_draw);
   cl->setGraphicsState(gs);
+  ++stats_.graphics_states;
+  if (debug_last_pipeline_ != pipeline) ++stats_.pipeline_changes;
+  debug_last_pipeline_ = pipeline;
   if (indexed_draw) {
     cl->drawIndexed(args);
   } else {

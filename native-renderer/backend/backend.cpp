@@ -9,12 +9,14 @@
 #include <thread>
 #include <deque>
 #include <condition_variable>
+#include <unordered_map>
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/system/xmemory.h>
 
 #include "backend/api_binding.h"
+#include "backend/cpu_profile.h"
 #include "backend/frame_log.h"
 #include "backend/log.h"
 #include "backend/render_scale.h"
@@ -28,6 +30,7 @@ class ShaderLibrary {};  // never made without the game renderer; Backend's uniq
 #endif
 
 REXCVAR_DECLARE(int32_t, native_dump_frame);
+REXCVAR_DECLARE(int32_t, native_debug);
 
 namespace nr {
 
@@ -49,6 +52,7 @@ std::atomic<uint64_t> g_watch_calls;
 // The swap's own time (the ring skimmer's thread): waiting for the frame's submission, and the
 // presenter's refresh of its guest output.
 std::atomic<uint64_t> g_swap_flush_us, g_swap_refresh_us;
+std::atomic<uint64_t> g_swap_refresh_cpu_us;
 
 // The slowest frames since the last statistics line (the game thread's interval between two
 // Presents) and where their time went, for finding stutters.
@@ -322,11 +326,23 @@ class Backend::Submitter {
     cv_.notify_all();
     thread_.join();
   }
-  void Enqueue(nvrhi::ICommandList* list) {
+  void Enqueue(nvrhi::ICommandList* list, nvrhi::IEventQuery* completion) {
     std::unique_lock lock(mutex_);
     done_cv_.wait(lock, [&] { return pending_.size() + busy_ < 3; });
-    pending_.emplace_back(list);
+    const uint64_t ticket = ++queued_;
+    query_tickets_[completion] = ticket;
+    pending_.push_back({list, completion, ticket});
     cv_.notify_one();
+  }
+  // Before recycling one frame's image/query, only its own submission must
+  // have assigned the query. Flushing newer frames serializes recording with
+  // their presenter queue-lock waits even when this older frame is complete.
+  void WaitSubmitted(nvrhi::IEventQuery* completion) {
+    std::unique_lock lock(mutex_);
+    auto found = query_tickets_.find(completion);
+    if (found == query_tickets_.end()) return;
+    const uint64_t wanted = found->second;
+    done_cv_.wait(lock, [&] { return submitted_ >= wanted; });
   }
   // Waits until everything enqueued so far was submitted.
   void Flush() {
@@ -340,21 +356,30 @@ class Backend::Submitter {
     for (;;) {
       cv_.wait(lock, [&] { return stop_ || !pending_.empty(); });
       if (pending_.empty()) return;  // stopping, and nothing left
-      nvrhi::CommandListHandle list = std::move(pending_.front());
+      auto frame = std::move(pending_.front());
       pending_.pop_front();
       busy_ = 1;
       lock.unlock();
-      host_.ExecuteCommandList(list);
-      list = nullptr;
+      const uint64_t ticket = frame.ticket;
+      host_.ExecuteFrameCommandList(frame.list, frame.completion);
+      frame = {};
       lock.lock();
       busy_ = 0;
+      submitted_ = ticket;
       done_cv_.notify_all();
     }
   }
   HostDevice& host_;
   std::mutex mutex_;
   std::condition_variable cv_, done_cv_;
-  std::deque<nvrhi::CommandListHandle> pending_;
+  struct Frame {
+    nvrhi::CommandListHandle list;
+    nvrhi::EventQueryHandle completion;
+    uint64_t ticket = 0;
+  };
+  std::deque<Frame> pending_;
+  std::unordered_map<nvrhi::IEventQuery*, uint64_t> query_tickets_;
+  uint64_t queued_ = 0, submitted_ = 0;
   uint32_t busy_ = 0;
   bool stop_ = false;
   std::thread thread_;
@@ -504,8 +529,9 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
       }
       REXLOG_INFO("rexgpu-native: game renderer ready");
     } else {
-      REXGPU_ERROR("rexgpu-native: game renderer initialisation failed; placeholder pipeline instead");
+      REXGPU_ERROR("rexgpu-native: game renderer initialisation failed. Choose Classic or another native API in the launcher.");
       shaders_.reset();
+      return false;
     }
   }
 #else
@@ -514,11 +540,15 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
 #endif
   renderer_->set_submit([this](nvrhi::ICommandList* cl) {
     if (submitter_) {
-      submitter_->Enqueue(cl);
+      submitter_->Enqueue(cl, renderer_->completion_query());
     } else {
-      host_->ExecuteCommandList(cl);
+      host_->ExecuteFrameCommandList(cl, renderer_->completion_query());
     }
     ++submitted_frames_;
+  });
+  renderer_->set_frame_wait([this](nvrhi::IEventQuery* completion) {
+    if (submitter_) submitter_->WaitSubmitted(completion);
+    host_->WaitFrame(completion);
   });
   {
     auto sink = std::make_unique<LockedSink>(*renderer_, mutex_, guest_memory_, shaders_.get());
@@ -681,6 +711,10 @@ void Backend::PresentNow(rex::ui::Presenter* presenter, uint32_t frontbuffer_wid
     // In the core category: the app keeps only warnings of the gpu one.
     const DrawTracker::Stats& d = draws_->stats();
     const Renderer::Stats& r = renderer_->stats();
+    REXLOG_INFO("rexgpu-native: GPU frame reuse wait {} ms over {} frames", r.gpu_reuse_wait_us / 1000,
+                r.frames_submitted);
+    REXLOG_INFO("rexgpu-native: host CPU over {} frames: {} us submission, {} us presenter refresh",
+                r.frames_submitted, host_->submit_times().cpu_us, g_swap_refresh_cpu_us.load());
     REXLOG_INFO(
         "rexgpu-native: swap {}: hooks saw {} draws ({} indexed, {} dropped), {} clears, {} "
         "resolves, {} presents; renderer drew {}, skipped {} (other target) {} (primitive) {} "
@@ -752,7 +786,9 @@ void Backend::PresentNow(rex::ui::Presenter* presenter, uint32_t frontbuffer_wid
     const auto t1 = std::chrono::steady_clock::now();
     struct RefreshTimer {
       std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+      uint64_t cpu_start = (REXCVAR_GET(native_debug) & 32768) ? CurrentThreadCpuMicroseconds() : 0;
       ~RefreshTimer() {
+        if (cpu_start) g_swap_refresh_cpu_us += CurrentThreadCpuMicroseconds() - cpu_start;
         g_swap_refresh_us += uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
                                           std::chrono::steady_clock::now() - start).count());
       }

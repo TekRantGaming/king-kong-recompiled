@@ -309,7 +309,8 @@ REXCVAR_DEFINE_BOOL(native_texture_tail_mips, false, "Native renderer",
 
 REXCVAR_DEFINE_INT32(native_debug, 0, "Native renderer",
                      "Debugging aids (bits): 1 the game's clears are green, 2 the frame image is "
-                     "magenta under the back buffer")
+                       "magenta under the back buffer, 32768 residency/upload/frame GPU counters, "
+                       "524288 GPU pass batches (every fourth frame)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_STRING(native_show_texture, "", "Native renderer",

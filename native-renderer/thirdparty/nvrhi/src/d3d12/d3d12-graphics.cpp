@@ -21,6 +21,7 @@
 */
 
 #include "d3d12-backend.h"
+#include "../../../../backend/dev_gpu_stats.h"
 
 #include <nvrhi/common/misc.h>
 #include <sstream>
@@ -340,11 +341,13 @@ namespace nvrhi::d3d12
         if (pso->desc.renderState.depthStencilState.stencilEnable && (updatePipeline || updateStencilRef))
         {
             m_ActiveCommandList->commandList->OMSetStencilRef(effectiveStencilRefValue);
+            nr::CountGpuCommand(nr::DevGpuCounter::Stencil);
         }
 
         if (pso->requiresBlendFactor && updateBlendFactor)
         {
             m_ActiveCommandList->commandList->OMSetBlendFactor(&state.blendConstantColor.r);
+            nr::CountGpuCommand(nr::DevGpuCounter::Blend);
         }
 
         if (updateFramebuffer)
@@ -477,11 +480,13 @@ namespace nvrhi::d3d12
             if (vpState.numViewports)
             {
                 m_ActiveCommandList->commandList->RSSetViewports(vpState.numViewports, vpState.viewports);
+                nr::CountGpuCommand(nr::DevGpuCounter::Viewport);
             }
 
             if (vpState.numScissorRects)
             {
                 m_ActiveCommandList->commandList->RSSetScissorRects(vpState.numScissorRects, vpState.scissorRects);
+                nr::CountGpuCommand(nr::DevGpuCounter::Scissor);
             }
         }
 
@@ -537,6 +542,7 @@ namespace nvrhi::d3d12
             if (currentGpuVA != parameter.address)
             {
                 m_ActiveCommandList->commandList->SetGraphicsRootConstantBufferView(parameter.bindingPoint, currentGpuVA);
+                nr::CountGpuCommand(nr::DevGpuCounter::ConstantBinding);
 
                 parameter.address = currentGpuVA;
             }
@@ -555,6 +561,7 @@ namespace nvrhi::d3d12
         }
 
         m_ActiveCommandList->commandList->SetPipelineState(pso->pipelineState);
+        nr::CountGpuCommand(nr::DevGpuCounter::Pipeline);
 
         m_ActiveCommandList->commandList->IASetPrimitiveTopology(convertPrimitiveType(pipelineDesc.primType, pipelineDesc.patchControlPoints));
     }

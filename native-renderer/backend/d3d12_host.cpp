@@ -14,8 +14,11 @@
 #include <rex/ui/d3d12/d3d12_provider.h>
 
 #include "backend/host_device.h"
+#include "backend/cpu_profile.h"
+#include "backend/dev_gpu_stats.h"
 
 REXCVAR_DECLARE(bool, native_validation);
+REXCVAR_DECLARE(int32_t, native_debug);
 
 namespace nr {
 
@@ -27,6 +30,7 @@ class D3D12Host final : public HostDevice {
 
   bool Initialize() {
     nvrhi::d3d12::DeviceDesc desc;
+    if (REXCVAR_GET(native_debug) & 524288) desc.maxTimerQueries = 2048;
     desc.errorCB = GetMessageCallback();
     desc.pDevice = provider_.GetDevice();
     desc.pGraphicsCommandQueue = provider_.GetDirectQueue();
@@ -36,6 +40,7 @@ class D3D12Host final : public HostDevice {
     desc.shaderResourceViewHeapSize = 65536;
     desc.samplerHeapSize = 2048;
     device_ = nvrhi::d3d12::createDevice(desc);
+    g_dev_gpu_stats_enabled.store((REXCVAR_GET(native_debug) & 32768) != 0, std::memory_order_relaxed);
     if (!device_) {
       return false;
     }
@@ -49,15 +54,27 @@ class D3D12Host final : public HostDevice {
   nvrhi::GraphicsAPI api() const override { return nvrhi::GraphicsAPI::D3D12; }
 
   void ExecuteCommandList(nvrhi::ICommandList* command_list) override {
+    ExecuteFrameCommandList(command_list, nullptr);
+  }
+  void WaitFrame(nvrhi::IEventQuery* completion) override {
+    std::lock_guard lock(execute_mutex_);
+    device_->waitEventQuery(completion);
+  }
+  void ExecuteFrameCommandList(nvrhi::ICommandList* command_list, nvrhi::IEventQuery* completion) override {
     // ID3D12CommandQueue is thread safe, NVRHI's queue is not: executeCommandList records the list as in
     // flight and runGarbageCollection retires finished ones from the same list. The submission thread
     // (--native_async_submit) and the present thread (--native_async_present) both submit, so one at a
     // time (without the lock the device was removed within a minute at an unlimited frame rate).
     using clock = std::chrono::steady_clock;
+    const uint64_t cpu_start = (REXCVAR_GET(native_debug) & 32768) ? CurrentThreadCpuMicroseconds() : 0;
     const auto t0 = clock::now();
     std::lock_guard lock(execute_mutex_);
     const auto t1 = clock::now();
     device_->executeCommandList(command_list);
+    if (completion) {
+      device_->resetEventQuery(completion);
+      device_->setEventQuery(completion, nvrhi::CommandQueue::Graphics);
+    }
     const auto t2 = clock::now();
     device_->runGarbageCollection();
     const auto t3 = clock::now();
@@ -67,6 +84,7 @@ class D3D12Host final : public HostDevice {
     times_.wait_us += us(t0, t1);
     times_.execute_us += us(t1, t2);
     times_.garbage_us += us(t2, t3);
+    if (cpu_start) times_.cpu_us += CurrentThreadCpuMicroseconds() - cpu_start;
     ++times_.count;
   }
   SubmitTimes submit_times() const override {

@@ -161,6 +161,10 @@ class GameRenderer {
     uint64_t texture_uploads = 0;
     uint64_t texture_failures = 0;
     uint64_t buffer_uploads = 0;
+    uint64_t upload_bytes = 0;       // guest textures, vertices, indices and draw constants (not auxiliary passes)
+    uint64_t scale_uploads = 0, scale_identical = 0;
+    uint64_t vertex_binds = 0, vertex_repeated = 0;
+    uint64_t descriptor_updates = 0, graphics_states = 0, pipeline_changes = 0;
     uint64_t clears = 0;
     uint64_t resolves = 0;
     uint64_t resolve_failures = 0;
@@ -562,6 +566,9 @@ class GameRenderer {
   Options options_;
   Stats stats_;
   uint64_t frame_ = 0;
+  Stats debug_previous_;
+  kkshaders::ScaleConstants last_scale_ = {};
+  nvrhi::IGraphicsPipeline* debug_last_pipeline_ = nullptr;
 
   std::array<DescriptorTable, kTableCount> tables_;
   nvrhi::BindingLayoutHandle constants_layout_;

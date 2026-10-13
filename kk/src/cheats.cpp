@@ -37,6 +37,7 @@
 #include <bit>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -213,6 +214,36 @@ void WatchChanges(uint8_t* base) {
   REXLOG_INFO("KK: cheats changed in play. Before: {}. After: {}", before, State(base, g, p));
 }
 
+#if defined(KK_DEV_TOOLS)
+// Sustained-firing tests outlast the 999-bullet loadout. Only this opt-in dev aid
+// replenishes it, and logs consumption so a held trigger is not mistaken for firing.
+void DevGunfire(uint8_t* base) {
+  static const bool enabled = [] {
+    const char* value = std::getenv("KK_DEV_GUNFIRE");
+    return value && *value == '1';
+  }();
+  if (!enabled || !REXCVAR_GET(kk_cheats) || !Chosen("ammo") || !Chosen("machine_gun")) return;
+  const uint32_t g = Load32(base, kGamePtr);
+  if (!g || Load32(base, g + kWeapon) != 2) return;
+  const uint32_t ammo = Load32(base, g + kAmmo[1]);
+  static uint32_t previous = 0;
+  static uint64_t consumed = 0;
+  if (previous > ammo && previous - ammo < 100) consumed += previous - ammo;
+  previous = ammo;
+  if (ammo < 300) {
+    Store32(base, g + kAmmo[1], 999);
+    previous = 999;
+    REXLOG_INFO("KK dev gunfire: replenished machine-gun ammo {} to 999, {} consumed", ammo, consumed);
+  }
+  static auto last = std::chrono::steady_clock::time_point{};
+  const auto now = std::chrono::steady_clock::now();
+  if (now - last >= std::chrono::seconds(10)) {
+    last = now;
+    REXLOG_INFO("KK dev gunfire: machine-gun ammo {}, {} consumed", ammo, consumed);
+  }
+}
+#endif
+
 }  // namespace
 }  // namespace kk
 
@@ -250,4 +281,7 @@ REX_HOOK_RAW(sub_8272C320) {
   __imp__sub_8272C320(ctx, base);
   if (REXCVAR_GET(kk_cheats)) kk::WatchLoadout(base);
   kk::WatchChanges(base);
+#if defined(KK_DEV_TOOLS)
+  kk::DevGunfire(base);
+#endif
 }
