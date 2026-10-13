@@ -45,6 +45,7 @@ Renderer::~Renderer() { Shutdown(); }
 void Renderer::EnableGame(std::unique_ptr<GameRenderer> game) { game_ = std::move(game); }
 
 void Renderer::Shutdown() {
+  debug_gpu_timer_.reset();
   game_.reset();
   frame_command_list_ = nullptr;
   frame_open_ = false;
@@ -230,6 +231,12 @@ void Renderer::RecordTestTriangle(nvrhi::ICommandList* command_list, nvrhi::ITex
 nvrhi::ICommandList* Renderer::FrameCommandList() {
   if (!frame_open_) {
     frame_command_list_->open();
+#if NR_GAME_RENDERER
+    if (game_ && (game_->options().debug & 32768)) {
+      if (!debug_gpu_timer_) debug_gpu_timer_ = std::make_unique<AoGpuTimer>(device_, "whole frame", "frame GPU time");
+      debug_gpu_timer_->Begin(frame_command_list_);
+    }
+#endif
     frame_open_ = true;
     // A defined depth at the start of every frame (the game's own depth clear
     // comes later, if at all).
@@ -431,6 +438,7 @@ void Renderer::OnPresent(uint32_t frame, uint32_t render_target0, uint32_t devic
   const auto t1 = clock::now();
   stats_.present_copy_us += us(t0, t1);
   if (!frame_open_) return;
+  if (debug_gpu_timer_) debug_gpu_timer_->End(frame_command_list_);
   frame_command_list_->close();
   frame_open_ = false;
   const auto t2 = clock::now();
@@ -443,6 +451,7 @@ void Renderer::OnPresent(uint32_t frame, uint32_t render_target0, uint32_t devic
   recording_ ^= 1;
   if (observer_) observer_->OnFrameSubmitted(frame, frames_[presented_]);
   if (game_) game_->EndFrame();
+  if (debug_gpu_timer_) debug_gpu_timer_->FrameEnd();
   const auto t4 = clock::now();
   stats_.present_close_us += us(t1, t2);
   stats_.present_submit_us += us(t2, t3);

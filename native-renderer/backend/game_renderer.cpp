@@ -530,6 +530,24 @@ void GameRenderer::EndFrame() {
   }
   while (!retired_resources_.empty() && retired_resources_.front().first + 8 < frame_) retired_resources_.pop_front();
   if (frame_ % 300 == 0) {
+    if (options_.debug & 32768) {
+      size_t slots = 0;
+      for (const DescriptorTable& t : tables_) slots += t.next - 1 - t.free.size() - t.retired.size();
+      Logf(LogLevel::kInfo,
+           "rexgpu-native: residency frame %llu: textures %zu, vertex buffers %zu, index buffers %zu, "
+           "descriptor slots %zu, core binding sets %zu, retired resources %zu; per frame: %.1f draws, "
+           "%.1f clears, %.1f resolves, %.1f guest upload bytes, %.3f ms textures, %.3f ms buffers; pipelines %llu",
+           static_cast<unsigned long long>(frame_), textures_.size(), vertex_buffers_.size(), index_buffers_.size(),
+           slots, blit_sets_.size() + bool(constants_set_) + bool(clear_set_), retired_resources_.size(),
+           double(stats_.draws - debug_previous_.draws) / 300,
+           double(stats_.clears - debug_previous_.clears) / 300,
+           double(stats_.resolves - debug_previous_.resolves) / 300,
+           double(stats_.upload_bytes - debug_previous_.upload_bytes) / 300,
+           (stats_.texture_ms - debug_previous_.texture_ms) / 300,
+           (stats_.buffer_ms - debug_previous_.buffer_ms) / 300,
+           static_cast<unsigned long long>(stats_.pipelines));
+      debug_previous_ = stats_;
+    }
     if (options_.debug & 8) LogInvalidationHistogram();
     textures_.Trim(frame_, 1800);
     vertex_buffers_.Trim(frame_, 1800);
@@ -1405,6 +1423,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     std::memcpy(last_raw.data(), raw, last_raw.size());
     for (uint32_t i = 0; i < 1024; ++i) last[i] = LoadBEFloat(raw + i * 4);
     cl->writeBuffer(buffer, last.data(), sizeof(last));
+    stats_.upload_bytes += sizeof(last);
   };
   upload(dev::kVsConstants, last_vs_raw_, last_vs_, vs_constants_);
   upload(dev::kPsConstants, last_ps_raw_, last_ps_, ps_constants_);
@@ -1412,12 +1431,14 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   constants_list_ = cl;
   constants_frame_ = frame_;
   cl->writeBuffer(draw_constants_, &dc, sizeof(dc));
+  stats_.upload_bytes += sizeof(dc);
   if (scaled()) {
     sc.renderScale[0] = size_from->scale_x;
     sc.renderScale[1] = size_from->scale_y;
     sc.renderScale[2] = 1.0f / size_from->scale_x;
     sc.renderScale[3] = 1.0f / size_from->scale_y;
     cl->writeBuffer(scale_constants_, &sc, sizeof(sc));
+    stats_.upload_bytes += sizeof(sc);
   }
 
   // State and draw.
@@ -1464,6 +1485,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
       const uint64_t bytes = scratch_indices_.size() * 4;
       if (!bytes || index_ring_used_ + bytes > kIndexRingBytes) return;
       cl->writeBuffer(index_ring_, scratch_indices_.data(), bytes, index_ring_used_);
+      stats_.upload_bytes += bytes;
       gs.indexBuffer = nvrhi::IndexBufferBinding()
                            .setBuffer(index_ring_)
                            .setFormat(nvrhi::Format::R32_UINT)
@@ -1485,6 +1507,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
       for (uint32_t i = 1; i < kPatternVertices; ++i) fans.insert(fans.end(), {0u, i, i + 1});
       cl->writeBuffer(quad_indices_, quads.data(), quads.size() * 4);
       cl->writeBuffer(fan_indices_, fans.data(), std::min(fans.size(), size_t(kPatternVertices) * 3) * 4);
+      stats_.upload_bytes += (quads.size() + std::min(fans.size(), size_t(kPatternVertices) * 3)) * 4;
       patterns_uploaded_ = true;
     }
     if (call.count > kPatternVertices) return;

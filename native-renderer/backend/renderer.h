@@ -20,6 +20,7 @@
 #include <nvrhi/nvrhi.h>
 
 #include "backend/draw_sink.h"
+#include "backend/ao_timer.h"
 
 namespace nr {
 
@@ -186,6 +187,7 @@ class Renderer final : public DrawSink {
   std::array<nvrhi::CommandListHandle, 4> frame_lists_;
   uint32_t frame_list_index_ = 0;
   bool frame_open_ = false;
+  std::unique_ptr<AoGpuTimer> debug_gpu_timer_;
   uint32_t main_surface_ = 0;  // render target 0 at the last Present
   std::vector<uint32_t> scratch_indices_;
 };

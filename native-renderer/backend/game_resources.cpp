@@ -314,6 +314,7 @@ GameRenderer::HostTexture* GameRenderer::UploadTexture(nvrhi::ICommandList* cl,
   host->alias_source = nullptr;
   textures_.OnUploaded(entry, physical_);
   ++stats_.texture_uploads;
+  stats_.upload_bytes += data.bytes.size();
   return host;
 }
 
@@ -545,6 +546,7 @@ GameRenderer::HostBuffer* GameRenderer::BindVertexBuffer(nvrhi::ICommandList* cl
           }
           cl->writeBuffer(host->buffer, src, end - begin, begin);
           stats_.dynamic_vertex_bytes += end - begin;
+          stats_.upload_bytes += end - begin;
         }
         cl->setBufferState(host->buffer, nvrhi::ResourceStates::ShaderResource);
         return host;
@@ -585,6 +587,7 @@ GameRenderer::HostBuffer* GameRenderer::BindVertexBuffer(nvrhi::ICommandList* cl
       host->last_upload_frame = frame_;
     }
     cl->writeBuffer(host->buffer, data, (uint64_t(bytes) + 3) & ~uint64_t(3));
+    stats_.upload_bytes += (uint64_t(bytes) + 3) & ~uint64_t(3);
     if (!host->dynamic) vertex_buffers_.OnUploaded(*r.entry, physical_);
     ++stats_.buffer_uploads;
   }
@@ -621,6 +624,7 @@ GameRenderer::HostBuffer* GameRenderer::BindIndexBuffer(nvrhi::ICommandList* cl,
     std::vector<uint8_t> converted((size_t(bytes) + 3) & ~size_t(3), 0);
     kknr::ConvertIndices(data, converted.data(), count, index32);
     cl->writeBuffer(host->buffer, converted.data(), converted.size());
+    stats_.upload_bytes += converted.size();
     index_buffers_.OnUploaded(*r.entry, physical_);
     ++stats_.buffer_uploads;
   }
