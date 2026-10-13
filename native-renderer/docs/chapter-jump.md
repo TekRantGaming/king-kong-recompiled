@@ -237,7 +237,9 @@ bonus" at the chapter end.
 - **Continue level 0 deletes the save.** The first save-loading jumps lost the continue point (the universe
   re-init resets it, and the chapter-select copies held the wrong data), so the game's save job deleted the slot
   instead of writing it. Runs `...-033825-jumpsave8-orig`, `...-034016-jumpsave8-signin`, `...-034204-jumpsave8-c`,
-  `...-035141-jumpsave8-game3`: the save folder is gone.
+  `...-035141-jumpsave8-game3`, `...-035338-jumpsave8-guard`: the save folder is gone. Every one of these (and
+  the overwritten one below) was a private copy of `F:\KK-native-renderer\userdata`, which was never written (its
+  `KKProfile.dat` still dates from 5 October, MD5 `00187eb90731a7a5f9972fa03541faf9`).
 - **Wrong command.** `0x20000060` is save, not load: sent to load, it wrote an empty save over the slot
   (`...-034941-jumpsave8-game2`).
 - **Wrong restart-copy addresses.** The first proof of concept copied the chapter-select copies to `0x82C58490`
@@ -333,9 +335,9 @@ game's page script runs, even for one frame, its page is drawn.
 - **Sound** while paused was not measured (the tests capture no audio); the game's own pause sound plays, and
   the pause itself is the game's, so its sound handling should be unchanged.
 - **Input while our menu is up:** proven for the pad (the game sees an empty pad; the confirmation pages only get
-  the presses the port gives them). Keyboard and mouse reach the game as a pad through the port's own mapping, so
-  the same filter covers them; the mouse look (`mouse_look.cpp`) writes the stick separately and would need the
-  same check.
+  the presses the port gives them). Keyboard and mouse were not tested: whatever of them reaches the game through
+  the port's XInput hook is covered by the same filter; anything fed in elsewhere (see `mouse_look.cpp`) would
+  need the same check.
 - **Cutscenes and loading screens:** there Start skips (the movie player and the cutscene code read it) and
   `IntMIG_Page_Main` never opens, so the stand-in stays out of the way; in the tests Start pressed during the
   restart's opening did not open the pause.
