@@ -104,7 +104,6 @@ class KingKongApp : public rex::ReXApp {
     config_path_ = defaults.config_path;
     kk::MigrateSettings(defaults.config_path);
     kk::ApplyFixedSettings();
-    kk::startup::Configure(defaults.user_data_root);
     // The launcher's Play menu: the saves live under the user data, a start request may be given
     // (--kk_start), and the game goes back to the launcher by restarting (play_session.cpp).
     kk::play::SetUserDir(defaults.user_data_root);
@@ -187,6 +186,9 @@ class KingKongApp : public rex::ReXApp {
   void OnConfigureFonts(ImFontAtlas* atlas) override { kk::LoadUiFont(atlas); }
 
   void OnPreSetup(rex::RuntimeConfig& config) override {
+    // SetupPresentation precedes OnFinalizePaths in the SDK. Arm before either provider or game GPU setup.
+    user_data_root_ = user_data_root();
+    kk::startup::Configure(user_data_root_);
     kk::ApplyVSyncSettings();
     {  // before the runtime reads the shader cache: drop records a finished-early write damaged
       const std::string root = rex::cvar::GetFlagByName("cache_root");
