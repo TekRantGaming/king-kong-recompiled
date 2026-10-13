@@ -287,5 +287,6 @@ in `runs\menus-game-data`), run folders `F:\KK-native-renderer\runs\menus-game-1
 | Story run: Quit game (to the desktop): the game's quit save, then the program exits | `055614-story-save3` | exits, no launcher |
 | The game's Options pages: Audio, Video, Controls open and close, the port's menu comes back | `061637-ch8-game-options` (`shot_*`) | yes |
 | Native renderer (with the shader pack): backdrop capture, the real pause menu, Resume, Start again | `062000-native-ch8-pause2` (`printwindow_200`) | yes (without a shader pack the native renderer did not reach the title in 2 minutes: `061748-native-ch8-pause`) |
+| A Kong chapter (entry 10, level 304, playing as Kong): pause, Resume, Start again | `062250-kong-entry10` (`printwindow_170`) | yes |
 | Keyboard and mouse in the real pause menu | `062155-input-kbm` | not testable under the test rules: posted key and mouse messages to the unfocused window reach neither SDL nor ImGui, and focusing the window is not allowed; the game side blocks the game's keyboard (same path as the pad) and mouse look while the menu is open |
 | Return to main menu (chapter run) | `053106-realpause-ch8-quit`, `060043-final-ch8-return-to-menu` (`printwindow_400_<launcher pid>`) | launcher's Play menu |
