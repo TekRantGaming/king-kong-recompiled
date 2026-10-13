@@ -178,11 +178,14 @@ skipped.
 
 ### Back to the launcher
 
-In a session started by a request, the game's request for its start menu (level 3) is cancelled and the program
-restarts into the launcher once no save is being written: `--kk_launcher_open=chapters` when a chapter-select run
-reached its end (after the Score pages and the save question), `--kk_launcher_open=play` after Quit game. The
-restart drops `--kk_skip_launcher`, `--kk_start` and `--kk_launcher_open` from the command line and closes the
-window the way the close button does. Story runs go on to the next chapter as the game does.
+In a session started by a request the game's menus never come back: its request for the start menu (level 3,
+what Quit game asks for) is cancelled, and when the start menu's pages open anyway (a chapter-select run's end:
+`uni_go` loads level 3 itself, shows the Score pages and the save question there, then opens the chapter select)
+they are not run. Then, once no save is being written, the program restarts into the launcher
+(`--kk_launcher_open=chapters` after a chapter-select run's end, `--kk_launcher_open=play` after "Return to main
+menu" or anything else), or exits after "Quit game" (to the desktop). The restart drops `--kk_skip_launcher`,
+`--kk_start` and `--kk_launcher_open` from the command line, and the program closes as its close button does.
+Story runs go on to the next chapter as the game does.
 
 ### The pause takeover
 
@@ -195,8 +198,10 @@ goes to the pause menu (`kk::PauseMenuPad`), and mouse look is switched off (the
 The game's pause items (found in `IntMIG_Page_Main`'s list, `0x824BA630`): chapter-select runs have Options (2),
 Quit game (3), Start again (8), Resume (4), Score (0); story runs with a save have **Save (1)**, Change storage
 device (1000), Options (2), Quit game (3), Resume (4). (chapter-jump.md had Score as 7 and Options as 5: 7 is an
-extra item shown with profile flag `0x40`, not identified.) `PauseAction::kSave` was added to the contract for the
-story runs' Save; Change storage device has no meaning on PC. Score and Save show the game's own pages (drawn and
+extra item shown with profile flag `0x40`, not identified.) Contract additions (agreed with the coordinator):
+`PauseAction::kSave` for the story runs' Save, and `PauseAction::kQuitToDesktop` next to `kQuitToLauncher`: the
+pause menu has "Return to main menu" (the game's Quit game, then the launcher's Play menu) and "Quit game" (the
+game's Quit game, then the program exits), both confirmed first. Change storage device has no meaning on PC. Score and Save show the game's own pages (drawn and
 read by the game; the port's menu comes back when they close). Start again restarts the chapter without a level
 load (its opening cutscene again).
 

@@ -605,3 +605,25 @@ void CreatePauseStandIn(rex::ui::ImGuiDrawer* drawer) {
 }  // namespace kk
 
 #endif
+
+// The save menu page (IntMIG_Page_Memcard): in play it shows the game's save pages (Save, and the save that
+// Quit game makes in a story run). They are the game's: shown and answered by the player, the port's menu
+// steps aside (and comes back if the pause page does).
+REX_EXTERN(__imp__sub_824CB738);
+REX_HOOK_RAW(sub_824CB738) {
+  using namespace kk::play;
+  KK_PAGE_TRACE("IntMIG_Page_Memcard");
+  if (TakeoverOn() && InPlay(base) && (g_pending >= 0 || g_game_page)) {
+    const int64_t now = NowMs();
+    if (!g_game_page) {
+      REXLOG_INFO("KK pause: the game's save page is up ({}); the port's menu steps aside", ActionName(g_pending));
+      g_game_page = true;
+      g_game_page_since = now;
+      g_pending = -1;
+      g_phase = kIdle;
+      g_confirm_frames = 0;
+    }
+    g_game_page_seen_ms = now;
+  }
+  __imp__sub_824CB738(ctx, base);
+}
