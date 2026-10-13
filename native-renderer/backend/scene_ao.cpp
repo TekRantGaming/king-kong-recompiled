@@ -146,7 +146,8 @@ bool SceneAo::Compute(nvrhi::ICommandList* cl, const AoSettings& s, nvrhi::IText
 bool SceneAo::OnDraw(nvrhi::ICommandList* cl, const Draw& d, const AoSettings& s) {
   if (s.mode <= 0 || !gtao_) return false;
   if (d.frame != frame_) NewFrame(d.frame);
-  const AoDrawClass cls = rules_.Classify(d.state);
+  const AoRule* matched = nullptr;
+  const AoDrawClass cls = rules_.Classify(d.state, &matched);
   const uint64_t computed_before = stats_.computed;
   const bool applied_before = applied_;
   // The camera, from the frame's first scene draws with a depth test.
@@ -163,6 +164,7 @@ bool SceneAo::OnDraw(nvrhi::ICommandList* cl, const Draw& d, const AoSettings& s
   td.depth_key = d.depth.key;
   td.frame_size = d.frame_size;
   td.writes_depth = d.state.depth_write && d.depth.key;
+  td.terminal_transparent = matched && matched->ps_hash && cls == AoDrawClass::kTransparent;
   const AoFrameTracker::Events e = tracker_.OnDraw(td);
   if (e.in_scene) {
     if (d.color.key && d.color.key == tracker_.scene_color()) scene_color_ = d.color;

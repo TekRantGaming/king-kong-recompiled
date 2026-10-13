@@ -107,6 +107,10 @@ class AoFrameTracker {
     uint64_t depth_key = 0;   // the depth target (0: none)
     bool frame_size = false;  // the targets have the frame's width (the scene, not a shadow map or a post pass)
     bool writes_depth = false;
+    // Shader-specific transparent rules name overlays (water, fur, heat shimmer), not the
+    // generic blended decals interleaved with opaque draws. They are a safe end even if
+    // the previous frame's fog shader is absent this frame.
+    bool terminal_transparent = false;
   };
   struct Events {
     bool in_scene = false;         // the draw goes to the scene's colour or depth target

@@ -710,6 +710,35 @@ TEST(GameAo_TransparentDrawsAreNotDarkened) {
   CHECK(std::fabs(Grey(frame, cam, kWallCrease) - Grey(scene, cam, kWallCrease)) < kTol);
 }
 
+TEST(GameAo_MissingEndAppliesBeforeWaterNotAtTheLateCopy) {
+  Options o;
+  o.ao = GtaoConfig(AoApply::kOpaque);
+  Fixture hashes(o);
+  if (!hashes.Init()) return;
+  char rules[128];
+  std::snprintf(rules, sizeof(rules), "end ps=%016llX\ntransparent ps=%016llX\n",
+                static_cast<unsigned long long>(hashes.Hash(false, hashes.ps_particle)),
+                static_cast<unsigned long long>(hashes.Hash(false, hashes.ps_water)));
+  o.ao.rules = ParseAoRules(rules);
+  Fixture f(o), reference(o);
+  if (!f.Init() || !reference.Init()) return;
+  f.Render({}, "end_present");
+  Fixture::Frame fr;
+  fr.particle = false;  // This frame lacks the end shader seen in the previous frame.
+  fr.scene_copy = f.NewTexture(kknr::TextureFormat::k_8_8_8_8, kW, kH);
+  const Pixels got = f.Render(fr, "missing_end_water");
+  fr.scene_copy = 0;
+  const Pixels want = reference.Render(fr, "missing_end_reference");
+  CHECK(MaxDifference(got, want) < kTol);
+  const SceneAo* ao = f.game->scene_ao();
+  CHECK(ao != nullptr);
+  if (ao) {
+    CHECK_EQ(ao->stats().applied_opaque, uint64_t(2));
+    CHECK_EQ(ao->stats().applied_resolve, uint64_t(0));
+    CHECK_EQ(ao->stats().applied_present, uint64_t(0));
+  }
+}
+
 TEST(GameAo_AmbientOnlyInsideTheLightingShader) {
   // The colour pass's pixel shader on the list, its interpolated colour as the ambient term: the
   // occlusion is multiplied inside the shader (after the depth pre-pass), the same picture as the
