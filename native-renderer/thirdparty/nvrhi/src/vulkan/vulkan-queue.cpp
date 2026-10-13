@@ -160,6 +160,12 @@ namespace nvrhi::vulkan
             }
 
             commandBuffer->submissionID = submissionID;
+            for (const auto& timer : commandBuffer->timerQueries)
+            {
+                TimerQuery* query = checked_cast<TimerQuery*>(timer.Get());
+                query->completionSemaphore = trackingSemaphore;
+                query->submissionID.store(submissionID, std::memory_order_release);
+            }
             lifetimeTracker->push(commandBuffer);
 
             for (const auto& buffer : commandBuffer->referencedStagingBuffers)
@@ -349,6 +355,7 @@ namespace nvrhi::vulkan
             if (cmd->submissionID <= lastFinishedID)
             {
                 cmd->referencedResources.clear();
+                cmd->timerQueries.clear();
                 cmd->referencedStagingBuffers.clear();
                 cmd->submissionID = 0;
                 releasedCmdBufs.push_back(cmd);

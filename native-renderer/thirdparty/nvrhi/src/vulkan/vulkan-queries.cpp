@@ -124,6 +124,7 @@ namespace nvrhi::vulkan
         assert(m_CurrentCmdBuf);
 
         query->resolved = false;
+        query->submissionID.store(0, std::memory_order_relaxed);
 
         m_CurrentCmdBuf->cmdBuf.resetQueryPool(m_Device->getTimerQueryPool(), query->beginQueryIndex, 2);
         m_CurrentCmdBuf->cmdBuf.writeTimestamp(vk::PipelineStageFlagBits::eBottomOfPipe, m_Device->getTimerQueryPool(), query->beginQueryIndex);
@@ -143,6 +144,7 @@ namespace nvrhi::vulkan
 
         m_CurrentCmdBuf->cmdBuf.writeTimestamp(vk::PipelineStageFlagBits::eBottomOfPipe, m_Device->getTimerQueryPool(), query->endQueryIndex);
         query->started = true;
+        m_CurrentCmdBuf->timerQueries.push_back(query);
     }
 
     bool Device::pollTimerQuery(ITimerQuery* _query)
@@ -153,6 +155,13 @@ namespace nvrhi::vulkan
         {
             return false;
         }
+
+        // The reset and timestamps may still be in an unsubmitted command list. Even a
+        // non-waiting getQueryPoolResults is invalid until the reset has executed.
+        const uint64_t submissionID = query->submissionID.load(std::memory_order_acquire);
+        if (submissionID == 0 ||
+            m_Context.device.getSemaphoreCounterValue(query->completionSemaphore) < submissionID)
+            return false;
 
         if (query->resolved)
         {

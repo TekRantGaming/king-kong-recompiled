@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "backend/api_binding.h"
+#include "backend/ao_timer.h"
 #include "backend/draw_state.h"
 #include "backend/renderer.h"
 #include "backend/tests/check.h"
@@ -367,6 +368,44 @@ TEST(Milestone3_MainPassFilterSkipsOverlays) {
   hooks::ReplayTrace(log, &binding.api);
   CHECK_EQ(f.renderer->stats().draws_recorded, uint64_t(0));
   CHECK_EQ(f.renderer->stats().draws_skipped_overlay, uint64_t(2));
+}
+
+TEST(GpuTimer_DefersTimestampReadsUntilSubmittedResetCompletes) {
+  auto* gpu = Device();
+  CHECK(gpu != nullptr);
+  if (!gpu) return;
+  auto* device = gpu->device();
+  const int before = gpu->errors();
+  AoGpuTimer timer(device, "test");
+  // FrameEnd is also called while the AO/upscale command list is still recording.
+  // The first timestamp query has never been reset on the GPU at that point.
+  for (int frame = 0; frame < 4; ++frame) {
+    auto cl = device->createCommandList();
+    cl->open();
+    timer.Begin(cl);
+    timer.End(cl);
+    timer.FrameEnd();
+    cl->close();
+    gpu->Execute(cl);
+    gpu->WaitIdle();
+  }
+  timer.FrameEnd();
+  auto query = device->createTimerQuery();
+  CHECK(query != nullptr);
+  if (query) for (int reuse = 0; reuse < 2; ++reuse) {
+    auto cl = device->createCommandList();
+    cl->open();
+    cl->beginTimerQuery(query);
+    cl->endTimerQuery(query);
+    cl->close();
+    CHECK(!device->pollTimerQuery(query));
+    gpu->Execute(cl);
+    gpu->WaitIdle();
+    CHECK(device->pollTimerQuery(query));
+    CHECK(device->getTimerQueryTime(query) >= 0.0f);
+    device->resetTimerQuery(query);
+  }
+  CHECK_EQ(gpu->errors(), before);
 }
 
 NR_TEST_MAIN()

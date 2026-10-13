@@ -20,6 +20,12 @@ if(WIN32)
     add_test(NAME nr_d3d12_requirements_tests COMMAND nr_d3d12_requirements_tests)
 endif()
 
+if(NR_HAS_D3D12)
+    add_executable(nr_bindless_sampler_tests bindless_sampler_tests.cpp)
+    target_link_libraries(nr_bindless_sampler_tests PRIVATE nvrhi nvrhi_d3d12 d3d12)
+    add_test(NAME nr_bindless_sampler_tests COMMAND nr_bindless_sampler_tests)
+endif()
+
 add_executable(nr_draw_tests draw_tests.cpp)
 target_link_libraries(nr_draw_tests PRIVATE nr_draw nr_hooks)
 target_compile_definitions(nr_draw_tests PRIVATE NR_SOURCE_DIR="${NR_ROOT}")

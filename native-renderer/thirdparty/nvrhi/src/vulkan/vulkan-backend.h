@@ -29,6 +29,7 @@
 #include "../common/versioning.h"
 #include <mutex>
 #include <list>
+#include <atomic>
 
 #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
 #include <vulkan/vulkan.hpp>
@@ -201,6 +202,7 @@ namespace nvrhi::vulkan
         vk::CommandPool cmdPool = vk::CommandPool();
 
         std::vector<RefCountPtr<IResource>> referencedResources; // to keep them alive
+        std::vector<TimerQueryHandle> timerQueries;
         std::vector<RefCountPtr<Buffer>> referencedStagingBuffers; // to allow synchronous mapBuffer
 
         uint64_t recordingID = 0;
@@ -715,6 +717,9 @@ namespace nvrhi::vulkan
         bool started = false;
         bool resolved = false;
         float time = 0.f;
+        // Published by Queue::submit, after associating this query with its submission.
+        vk::Semaphore completionSemaphore;
+        std::atomic<uint64_t> submissionID{0};
 
         explicit TimerQuery(utils::BitSetAllocator& allocator)
             : m_QueryAllocator(allocator)

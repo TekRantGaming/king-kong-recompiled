@@ -26,6 +26,12 @@ Not vendored:
 
 Changes we make to vendored code are kept as small as possible and listed here:
 
+- `nvrhi/src/vulkan/vulkan-backend.h`, `vulkan-queries.cpp`, `vulkan-queue.cpp` (task 025): timer queries
+  retain their handles in the recorded command buffer and publish the actual submission's timeline semaphore
+  and value. Polling returns false until that submission completes, before calling `getQueryPoolResults`.
+  This prevents VUID-09401 when asynchronous submission has not executed a new query's reset yet. The
+  render test polls before submission, checks completed results and reuses queries under Khronos validation.
+
 - `XenosRecomp/XenosRecomp/shader_recompiler.cpp`, `shader_recompiler.h`, `pch.h`: reworked for King Kong
   by the shader translator (stream 02): the container reading moved to `native-renderer/shaders`
   (`RecompilerInput`), bindless resources, vertex pulling from guest memory, the full constant and
@@ -39,9 +45,10 @@ Changes we make to vendored code are kept as small as possible and listed here:
   immutable bindless layout ("Bindless samplers are not implemented"), so the game renderer's sampler table
   (set 5) failed to initialise whenever NVRHI validation was on. The Vulkan backend makes such a table like any
   other descriptor array and the game renderer's tests draw through it under the Khronos layer, so the check now
-  lets it through on Vulkan. It still refuses it on D3D12, where it is right to: that backend binds an immutable
-  table from the CBV/SRV/UAV heap (`DescriptorTable::isSamplerTable()` is true only for `MutableSampler`
-  layouts), which cannot hold samplers.
+  lets it through on Vulkan. Task 025 also permits sampler-only immutable tables on D3D12, matching the
+  sampler-heap support below. Mixed sampler/resource layouts remain rejected on D3D12 because a single table
+  cannot span the sampler and CBV/SRV/UAV heaps. A Windows regression test creates and fills the 1,024-slot
+  sampler table through validation and checks mixed-layout rejection.
 - `XenosRecomp/XenosRecomp/shader_recompiler.cpp` (Phase 2, differential tests; translator version 4): cube
   fetches apply the instruction's offsets and unnormalized coordinates; the vector half's a0 / p0 changes
   take effect before the scalar half reads its operands and a scalar write replaces them; aL is clamped to
