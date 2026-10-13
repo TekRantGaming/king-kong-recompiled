@@ -28,6 +28,12 @@ class HostDevice {
   // Submits a closed command list (serialised against the SDK's own use of
   // the queue where that matters).
   virtual void ExecuteCommandList(nvrhi::ICommandList* command_list) = 0;
+  virtual void ExecuteFrameCommandList(nvrhi::ICommandList* command_list, nvrhi::IEventQuery* completion) {
+    ExecuteCommandList(command_list);
+    device()->resetEventQuery(completion);
+    device()->setEventQuery(completion, nvrhi::CommandQueue::Graphics);
+  }
+  virtual void WaitFrame(nvrhi::IEventQuery* completion) { device()->waitEventQuery(completion); }
   virtual void WaitForIdle() = 0;
   // Microseconds spent in ExecuteCommandList: waiting for the queue, submitting, collecting garbage.
   struct SubmitTimes {

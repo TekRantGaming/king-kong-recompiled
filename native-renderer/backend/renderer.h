@@ -90,6 +90,7 @@ class Renderer final : public DrawSink {
     // The game's Present, in microseconds: the back buffer's copy into the frame image, the
     // command list's close, its submission (including the wait for the queue), the frame's end.
     uint64_t present_copy_us = 0, present_close_us = 0, present_submit_us = 0, present_end_us = 0;
+    uint64_t gpu_reuse_wait_us = 0;
   };
 
   explicit Renderer(nvrhi::IDevice* device);
@@ -106,6 +107,8 @@ class Renderer final : public DrawSink {
   void set_observer(SubmitObserver* observer) { observer_ = observer; }
   // Receives the closed frame command list at Present; must execute it.
   void set_submit(std::function<void(nvrhi::ICommandList*)> submit) { submit_ = std::move(submit); }
+  void set_frame_wait(std::function<void(nvrhi::IEventQuery*)> wait) { frame_wait_ = std::move(wait); }
+  nvrhi::IEventQuery* completion_query() const { return frame_queries_[recording_]; }
 
   uint32_t width() const { return width_; }
   uint32_t height() const { return height_; }
@@ -155,9 +158,11 @@ class Renderer final : public DrawSink {
   Stats stats_;
   SubmitObserver* observer_ = nullptr;
   std::function<void(nvrhi::ICommandList*)> submit_;
+  std::function<void(nvrhi::IEventQuery*)> frame_wait_;
 
   uint32_t width_ = 0, height_ = 0;
   std::array<nvrhi::TextureHandle, 2> frames_;
+  std::array<nvrhi::EventQueryHandle, 2> frame_queries_;
   int recording_ = 0;
   int presented_ = -1;
   std::unordered_map<nvrhi::ITexture*, nvrhi::FramebufferHandle> framebuffers_;
@@ -182,8 +187,8 @@ class Renderer final : public DrawSink {
 
   std::unique_ptr<GameRenderer> game_;
   nvrhi::CommandListHandle frame_command_list_;
-  // The frame command lists, used in turn (Backend's asynchronous submission keeps at most three
-  // waiting, so the one opened next has been submitted).
+  // Four lists allow asynchronous submission. Frame image completion queries additionally
+  // bound GPU work to two frames before any image or its volatile versions are reused.
   std::array<nvrhi::CommandListHandle, 4> frame_lists_;
   uint32_t frame_list_index_ = 0;
   bool frame_open_ = false;

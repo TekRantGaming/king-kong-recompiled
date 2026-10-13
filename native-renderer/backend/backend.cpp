@@ -322,10 +322,10 @@ class Backend::Submitter {
     cv_.notify_all();
     thread_.join();
   }
-  void Enqueue(nvrhi::ICommandList* list) {
+  void Enqueue(nvrhi::ICommandList* list, nvrhi::IEventQuery* completion) {
     std::unique_lock lock(mutex_);
     done_cv_.wait(lock, [&] { return pending_.size() + busy_ < 3; });
-    pending_.emplace_back(list);
+    pending_.emplace_back(list, completion);
     cv_.notify_one();
   }
   // Waits until everything enqueued so far was submitted.
@@ -340,12 +340,12 @@ class Backend::Submitter {
     for (;;) {
       cv_.wait(lock, [&] { return stop_ || !pending_.empty(); });
       if (pending_.empty()) return;  // stopping, and nothing left
-      nvrhi::CommandListHandle list = std::move(pending_.front());
+      auto frame = std::move(pending_.front());
       pending_.pop_front();
       busy_ = 1;
       lock.unlock();
-      host_.ExecuteCommandList(list);
-      list = nullptr;
+      host_.ExecuteFrameCommandList(frame.first, frame.second);
+      frame = {};
       lock.lock();
       busy_ = 0;
       done_cv_.notify_all();
@@ -354,7 +354,7 @@ class Backend::Submitter {
   HostDevice& host_;
   std::mutex mutex_;
   std::condition_variable cv_, done_cv_;
-  std::deque<nvrhi::CommandListHandle> pending_;
+  std::deque<std::pair<nvrhi::CommandListHandle, nvrhi::EventQueryHandle>> pending_;
   uint32_t busy_ = 0;
   bool stop_ = false;
   std::thread thread_;
@@ -514,11 +514,15 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
 #endif
   renderer_->set_submit([this](nvrhi::ICommandList* cl) {
     if (submitter_) {
-      submitter_->Enqueue(cl);
+      submitter_->Enqueue(cl, renderer_->completion_query());
     } else {
-      host_->ExecuteCommandList(cl);
+      host_->ExecuteFrameCommandList(cl, renderer_->completion_query());
     }
     ++submitted_frames_;
+  });
+  renderer_->set_frame_wait([this](nvrhi::IEventQuery* completion) {
+    if (submitter_) submitter_->Flush();
+    host_->WaitFrame(completion);
   });
   {
     auto sink = std::make_unique<LockedSink>(*renderer_, mutex_, guest_memory_, shaders_.get());
@@ -681,6 +685,8 @@ void Backend::PresentNow(rex::ui::Presenter* presenter, uint32_t frontbuffer_wid
     // In the core category: the app keeps only warnings of the gpu one.
     const DrawTracker::Stats& d = draws_->stats();
     const Renderer::Stats& r = renderer_->stats();
+    REXLOG_INFO("rexgpu-native: GPU frame reuse wait {} ms over {} frames", r.gpu_reuse_wait_us / 1000,
+                r.frames_submitted);
     REXLOG_INFO(
         "rexgpu-native: swap {}: hooks saw {} draws ({} indexed, {} dropped), {} clears, {} "
         "resolves, {} presents; renderer drew {}, skipped {} (other target) {} (primitive) {} "

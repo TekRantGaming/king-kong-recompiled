@@ -59,6 +59,7 @@ void Renderer::Shutdown() {
   vertex_ring_ = nullptr;
   index_ring_ = nullptr;
   frames_ = {};
+  frame_queries_ = {};
   triangle_vs_ = triangle_ps_ = placeholder_vs_ = placeholder_ps_ = nullptr;
 }
 
@@ -80,6 +81,8 @@ bool Renderer::Initialize(uint32_t width, uint32_t height) {
     desc.debugName = i == 0 ? "Native frame 0" : "Native frame 1";
     frames_[i] = device_->createTexture(desc);
     if (!frames_[i]) return false;
+    frame_queries_[i] = device_->createEventQuery();
+    if (!frame_queries_[i]) return false;
   }
 
   auto make_shader = [&](ShaderId id, nvrhi::ShaderType type) -> nvrhi::ShaderHandle {
@@ -230,6 +233,14 @@ void Renderer::RecordTestTriangle(nvrhi::ICommandList* command_list, nvrhi::ITex
 
 nvrhi::ICommandList* Renderer::FrameCommandList() {
   if (!frame_open_) {
+    // Submission alone does not retire volatile constant versions or upload pages.
+    // Wait for the older frame before reusing its image, bounding GPU work to two frames.
+    if (frame_wait_ && stats_.frames_submitted >= frame_queries_.size()) {
+      const auto start = std::chrono::steady_clock::now();
+      frame_wait_(frame_queries_[recording_]);
+      stats_.gpu_reuse_wait_us += uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now() - start).count());
+    }
     frame_command_list_->open();
 #if NR_GAME_RENDERER
     if (game_ && (game_->options().debug & 32768)) {

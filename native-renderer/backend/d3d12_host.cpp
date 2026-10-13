@@ -49,6 +49,13 @@ class D3D12Host final : public HostDevice {
   nvrhi::GraphicsAPI api() const override { return nvrhi::GraphicsAPI::D3D12; }
 
   void ExecuteCommandList(nvrhi::ICommandList* command_list) override {
+    ExecuteFrameCommandList(command_list, nullptr);
+  }
+  void WaitFrame(nvrhi::IEventQuery* completion) override {
+    std::lock_guard lock(execute_mutex_);
+    device_->waitEventQuery(completion);
+  }
+  void ExecuteFrameCommandList(nvrhi::ICommandList* command_list, nvrhi::IEventQuery* completion) override {
     // ID3D12CommandQueue is thread safe, NVRHI's queue is not: executeCommandList records the list as in
     // flight and runGarbageCollection retires finished ones from the same list. The submission thread
     // (--native_async_submit) and the present thread (--native_async_present) both submit, so one at a
@@ -58,6 +65,10 @@ class D3D12Host final : public HostDevice {
     std::lock_guard lock(execute_mutex_);
     const auto t1 = clock::now();
     device_->executeCommandList(command_list);
+    if (completion) {
+      device_->resetEventQuery(completion);
+      device_->setEventQuery(completion, nvrhi::CommandQueue::Graphics);
+    }
     const auto t2 = clock::now();
     device_->runGarbageCollection();
     const auto t3 = clock::now();

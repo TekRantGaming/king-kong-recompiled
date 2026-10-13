@@ -94,13 +94,28 @@ class VulkanHost final : public HostDevice {
   nvrhi::GraphicsAPI api() const override { return nvrhi::GraphicsAPI::VULKAN; }
 
   void ExecuteCommandList(nvrhi::ICommandList* command_list) override {
+    ExecuteFrameCommandList(command_list, nullptr);
+  }
+  void WaitFrame(nvrhi::IEventQuery* completion) override {
+    // Waiting on a timeline semaphore does not access VkQueue. Avoid the SDK's
+    // queue lock here: its presenter may hold that lock while waiting for display.
+    // NVRHI's completion bookkeeping still needs serialization with submission/GC.
+    std::lock_guard lock(execute_mutex_);
+    device_->waitEventQuery(completion);
+  }
+  void ExecuteFrameCommandList(nvrhi::ICommandList* command_list, nvrhi::IEventQuery* completion) override {
     // Host access to a VkQueue must be externally synchronised: hold the SDK's
     // queue lock (recursive) while NVRHI submits.
     using clock = std::chrono::steady_clock;
     const auto t0 = clock::now();
     auto acquisition = provider_.vulkan_device()->AcquireQueue(queue_family_, 0);
+    std::lock_guard execute_lock(execute_mutex_);
     const auto t1 = clock::now();
     device_->executeCommandList(command_list);
+    if (completion) {
+      device_->resetEventQuery(completion);
+      device_->setEventQuery(completion, nvrhi::CommandQueue::Graphics);
+    }
     const auto t2 = clock::now();
     device_->runGarbageCollection();
     const auto t3 = clock::now();
@@ -121,6 +136,7 @@ class VulkanHost final : public HostDevice {
 
   void WaitForIdle() override {
     auto acquisition = provider_.vulkan_device()->AcquireQueue(queue_family_, 0);
+    std::lock_guard execute_lock(execute_mutex_);
     device_->waitForIdle();
   }
 
@@ -256,6 +272,7 @@ class VulkanHost final : public HostDevice {
 
   rex::ui::vulkan::VulkanProvider& provider_;
   mutable std::mutex times_mutex_;
+  std::mutex execute_mutex_;
   SubmitTimes times_;
   uint32_t queue_family_ = 0;
   // Before device_: destroyed after it (NVRHI's device only borrows the cache).
