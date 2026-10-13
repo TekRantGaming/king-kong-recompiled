@@ -1888,6 +1888,14 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     DevInput();
 #endif
     Tick();
+    const std::string recovery = startup::Message();
+    if (!recovery_shown_ && !recovery.empty() && !modal_.open) {
+      recovery_shown_ = true;
+      OpenModal("Renderer startup recovery", recovery,
+                {"Continue with safe renderer", "Try native again"}, 0, [this](int i) {
+                  if (i == 1 && startup::TryNativeAgain()) ++g_changes;
+                });
+    }
     if (files_ok_ && !music_) music_ = std::make_unique<LauncherMusic>(paths_.game_dir);
     if (music_) {
       const float v = GetBool("kk_launcher_music") ? GetInt("kk_launcher_music_volume", 50) / 100.0f : 0.0f;
@@ -1915,20 +1923,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
     ui::DrawModal(dl, modal_, o_, ImVec2(o_.x + w_, o_.y + h_), m_, input_);
     DrawBottomBar(dl);  // over a pop-up's shade: its prompts stay clear
-    const std::string recovery = startup::Message();
-    if (!recovery_shown_ && !recovery.empty()) {
-      recovery_shown_ = true;
-      ImGui::OpenPopup("Renderer startup recovery");
-    }
-    ImGui::SetNextWindowSize(ImVec2(560 * s, 0), ImGuiCond_Appearing);
-    if (ImGui::BeginPopupModal("Renderer startup recovery", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-      ImGui::TextWrapped("%s", recovery.c_str());
-      ImGui::Spacing();
-      if (ImGui::Button("Continue with safe renderer")) ImGui::CloseCurrentPopup();
-      ImGui::SameLine();
-      if (ImGui::Button("Try native again") && startup::TryNativeAgain()) ImGui::CloseCurrentPopup();
-      ImGui::EndPopup();
-    }
     ImGui::End();
     (void)io;
   }

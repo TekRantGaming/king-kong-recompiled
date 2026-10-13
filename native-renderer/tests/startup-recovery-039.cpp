@@ -35,6 +35,8 @@ int main(int argc, char** argv) {
     Check(remembered.Load() && remembered.selected == "classic" && remembered.preferred == preferred,
           "remember fallback and preference");
     Check(remembered.Retry() && remembered.selected == preferred && remembered.reason.empty(), "try native again");
+    RecoveryState retry(dir);
+    Check(retry.Load() && retry.retry_requested && retry.selected == preferred, "retry survives immediate launcher close");
     Check(remembered.Marker(preferred) && remembered.Marker() && !remembered.RecoverCrash(),
           "chapter or clean close clears marker");
     Check(remembered.Advance("failed initialisation"), "known init failure advances immediately");

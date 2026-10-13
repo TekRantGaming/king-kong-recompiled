@@ -59,7 +59,7 @@ int Failure(const char* why) {
   std::_Exit(kRetryExit);
 }
 void Apply() {
-  if (!state || state->reason.empty()) return;
+  if (!state || (state->reason.empty() && !state->retry_requested)) return;
   rex::cvar::SetFlagByName("kk_renderer", state->selected == "classic" ? "classic" : "native");
   rex::cvar::SetFlagByName("gpu_plugin", state->selected == "classic" ? "xenos" : "native");
   if (RecoveryState::Native(state->selected)) rex::cvar::SetFlagByName("native_backend", state->selected);
@@ -125,7 +125,8 @@ void Configure(const std::filesystem::path& root) {
 std::string ApplyChoice(const std::string& plugin) {
   std::lock_guard lock(mutex);
   Apply();
-  return state && !state->reason.empty() ? (state->selected == "classic" ? "xenos" : "native") : plugin;
+  return state && (!state->reason.empty() || state->retry_requested)
+      ? (state->selected == "classic" ? "xenos" : "native") : plugin;
 }
 
 void Begin(const std::string& plugin) {
@@ -160,7 +161,8 @@ void ChapterReached() {
   std::lock_guard lock(mutex);
   if (!armed || !state) return;
   if (!state->Marker()) { REXLOG_ERROR("KK recovery: could not clear chapter marker"); return; }
-  if (state->crashes == 1 && state->selected == state->preferred) state->reason.clear();
+  if (state->selected == state->preferred) state->reason.clear();
+  state->retry_requested = false;
   state->crashes = 0;
   state->Save();
   armed = false;

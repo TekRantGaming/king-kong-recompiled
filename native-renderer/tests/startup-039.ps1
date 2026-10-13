@@ -32,7 +32,7 @@ if ($LauncherInput) { $env:KK_DEV_LAUNCHER_INPUT=$LauncherInput }
 $args=@('--fullscreen=false','--window_width=1280','--window_height=720','--kk_fullscreen_mode=desktop',
   '--kk_start=chapter:0:8',"--kk_launcher=$($Launcher.IsPresent.ToString().ToLower())",'--kk_cheats=true',
   "--user_data_root=$run\userdata","--game_data_root=$($workspace.Replace('\','/'))/kk/assets",
-  "--log_file=$run\run.log","--cache_root=$run\cache","--config=$run\king_kong.toml",
+  "--log_file=$run\run.log","--cache_root=$run\cache",
   '--kk_original_look=true','--kk_original_look_keep=kk_frame_rate,native_render_scale,native_upscaler,ao_mode',
   '--kk_frame_rate=30','--native_render_scale=1280x720','--native_upscaler=off','--ao_mode=0',
   '--kk_online_count=false','--kk_discord_status=false','--kk_check_updates=false','--native_launcher_prewarm=false',

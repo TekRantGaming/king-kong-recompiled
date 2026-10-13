@@ -10,6 +10,7 @@ struct RecoveryState {
   std::filesystem::path directory;
   std::string preferred = "vulkan", selected, reason;
   int crashes = 0;
+  bool retry_requested = false;
 
   explicit RecoveryState(const std::filesystem::path& root) : directory(root / "renderer-recovery") {}
   static bool Native(const std::string& api) { return api == "vulkan" || api == "d3d12"; }
@@ -22,6 +23,7 @@ struct RecoveryState {
     std::getline(in, r);
     if (!Native(p) || (!Native(s) && s != "classic") || c < 0 || c > 1) return false;
     preferred = p; selected = s; crashes = c; reason = r;
+    in >> retry_requested;
     return true;
   }
   bool Save() const {
@@ -29,7 +31,7 @@ struct RecoveryState {
     std::filesystem::create_directories(directory, ec);
     if (ec) return false;
     std::ofstream out(directory / "fallback.state", std::ios::trunc);
-    out << preferred << '\n' << selected << '\n' << crashes << '\n' << reason << '\n';
+    out << preferred << '\n' << selected << '\n' << crashes << '\n' << reason << '\n' << retry_requested << '\n';
     out.flush();
     return bool(out);
   }
@@ -47,6 +49,7 @@ struct RecoveryState {
     const std::string failed = selected;
     selected = selected == preferred ? (preferred == "vulkan" ? "d3d12" : "vulkan") : "classic";
     crashes = 0;
+    retry_requested = false;
     reason = failed + " " + why + ". Using " + selected + " for safe startup.";
     return Save() && Marker();
   }
@@ -61,6 +64,7 @@ struct RecoveryState {
   }
   bool Retry() {
     selected = preferred; crashes = 0; reason.clear();
+    retry_requested = true;
     return Save() && Marker();
   }
 };
