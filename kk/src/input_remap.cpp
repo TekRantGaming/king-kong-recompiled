@@ -140,6 +140,9 @@ namespace kk {
 // Set by developer builds (dev_tools.cpp) to feed in pad input; returns true
 // when it filled in the state.
 bool (*g_dev_pad_input)(uint32_t user, uint8_t* state) = nullptr;
+// Developer builds (dev_pause.cpp): sees, and may change, each pad state the
+// game reads, after everything else.
+void (*g_dev_pad_filter)(uint32_t user, uint8_t* state) = nullptr;
 }  // namespace kk
 
 REX_EXTERN(__imp__sub_821074E8);
@@ -149,10 +152,12 @@ REX_HOOK_RAW(sub_821074E8) {
   __imp__sub_821074E8(ctx, base);
   if (kk::g_dev_pad_input && state_ptr && kk::g_dev_pad_input(user, base + state_ptr)) {
     ctx.r3.u64 = 0;  // ERROR_SUCCESS: a pad is connected
+    if (kk::g_dev_pad_filter) kk::g_dev_pad_filter(user, base + state_ptr);
     return;
   }
   if (ctx.r3.u32 == 0 && state_ptr) {  // ERROR_SUCCESS
     Remap(user, base + state_ptr);
+    if (kk::g_dev_pad_filter) kk::g_dev_pad_filter(user, base + state_ptr);
   } else {
     g_aim[user & 3] = {};  // no pad: let go of a toggled aim
   }
