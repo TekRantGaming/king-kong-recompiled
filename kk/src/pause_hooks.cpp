@@ -310,6 +310,12 @@ REX_HOOK_RAW(sub_824B44E8) {
     g_pending = -1;
     g_phase = kIdle;
   }
+  // The game's own pages (Score, Save, Options) can end in play rather than back on the pause page
+  // (Save resumes the game once it has saved).
+  if (v && !Load32(base, v + 0x1C) && g_game_page && NowMs() - g_game_page_since.load() > 500) {
+    REXLOG_INFO("KK pause: play goes on after the game's own page");
+    g_game_page = false;
+  }
   if (v && !before && Load32(base, v + 0x1C) && InPlay(base) && TakeoverOn()) {
     g_pause_started_ms = NowMs();
     REXLOG_INFO("KK pause: the game paused; the port's pause menu takes over");
