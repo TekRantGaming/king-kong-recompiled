@@ -107,6 +107,10 @@ class AoFrameTracker {
     uint64_t depth_key = 0;   // the depth target (0: none)
     bool frame_size = false;  // the targets have the frame's width (the scene, not a shadow map or a post pass)
     bool writes_depth = false;
+    // Shader-specific transparent rules name overlays (water, fur, heat shimmer), not the
+    // generic blended decals interleaved with opaque draws. They are a safe end even if
+    // the previous frame's fog shader is absent this frame.
+    bool terminal_transparent = false;
   };
   struct Events {
     bool in_scene = false;         // the draw goes to the scene's colour or depth target
@@ -126,9 +130,8 @@ class AoFrameTracker {
   bool depth_valid() const { return depth_valid_; }
   uint32_t depth_only_draws() const { return depth_only_draws_; }
   uint32_t opaque_draws() const { return opaque_draws_; }
-  // The previous frame had an `end` draw in its scene: this frame's opaque pass ends at its `end`
-  // draw only, and the transparent and effect draws before it (decals and second passes the game
-  // interleaves with its opaque draws) do not end it.
+  // The previous frame had a reliable end (fog or a known overlay) in its scene: generic
+  // transparent/effect draws before that boundary (decals and second passes) do not end it.
   bool expects_end() const { return expect_end_; }
 
  private:

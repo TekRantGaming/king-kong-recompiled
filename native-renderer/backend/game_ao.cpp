@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "backend/game_renderer.h"
+#include "backend/game_upscale.h"
 #include "backend/log.h"
 #include "kknr/render_targets.h"
 
@@ -66,6 +67,8 @@ AoSettings GameRenderer::AoSettingsFor(uint64_t frame) {
   // Read once a frame (the launcher's ao_mode and ao_strength may change between frames).
   if (frame != ao_settings_frame_) {
     ao_settings_ = options_.ao_settings ? options_.ao_settings() : AoSettings{};
+    // Resolve mode shades a scratch copy, while the SDK reads the original scene target.
+    ao_settings_.temporal_upscaler = upscale_ && upscale_->upscaler != nullptr && options_.ao.apply != AoApply::kResolve;
     ao_settings_frame_ = frame;
   }
   return ao_settings_;
@@ -142,6 +145,41 @@ void GameRenderer::AoDrawHook(nvrhi::ICommandList* cl, const DrawCall& call, con
   }
 }
 
+void GameRenderer::AoRecordMotionHook(const DrawCall& call, const dev::DeviceView& d, const GameShader& vs) {
+  if (!scene_ao_) return;
+  const AoSettings s = AoSettingsFor(call.frame);
+  const auto& last = scene_ao_->last_draw();
+  if (s.mode <= 0 || s.temporal_upscaler || !last.events.in_scene ||
+      (last.cls != AoDrawClass::kDepthOnly && last.cls != AoDrawClass::kOpaque)) return;
+  MotionDrawKey key;
+  key.vs_hash = vs.ucode_hash;
+  bool rewritten = false;
+  for (uint32_t stream = 0; stream < 2; ++stream) {
+    const uint32_t object = d.u32(dev::kStreamBuffer + 8 * stream);
+    VertexBufferInfo info;
+    if (!object || !DecodeVertexBuffer(memory_.Virtual(object), info)) continue;
+    if (const auto* entry = vertex_buffers_.Find(info.physical, info.size_bytes, 0)) {
+      if (const auto* buffer = static_cast<const HostBuffer*>(entry->host); buffer && buffer->dynamic) rewritten = true;
+    }
+    if (stream == 0) {
+      key.vertex_buffer = info.physical;
+      key.vertex_offset = d.u32(dev::kStreamOffset);
+    } else key.vertex_buffer2 = info.physical;
+  }
+  key.index_buffer = call.indexed ? call.index_info.physical : 0;
+  key.start = call.start;
+  key.count = call.count;
+  key.base_vertex = call.base_vertex;
+  key.primitive = uint32_t(call.primitive);
+  if (rewritten) {
+    // Identical to the SDK camera vote: streamed geometry moves through a ring of
+    // buffers. Match its shader/count/order/closest constants, not its new address.
+    key.vertex_buffer = key.vertex_offset = key.vertex_buffer2 = key.index_buffer = 0;
+    key.start = 0;
+    key.base_vertex = 0;
+  }
+  scene_ao_->RecordMotion(call.frame, key, d.at(dev::kVsConstants), s);
+}
 void GameRenderer::AoWriteAmbientConstants(nvrhi::ICommandList* cl, bool reads) {
   const SceneAo::AmbientView v = scene_ao_ ? scene_ao_->ambient_view() : SceneAo::AmbientView{};
   AmbientConstants k = {};

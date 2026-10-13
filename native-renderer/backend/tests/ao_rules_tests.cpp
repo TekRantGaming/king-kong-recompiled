@@ -248,6 +248,33 @@ TEST(AoTracker_TheFogPassEndsTheOpaquePass) {
   CHECK(e.opaque_complete);
 }
 
+TEST(AoTracker_MissingFogStillEndsBeforeKnownOverlays) {
+  using C = AoDrawClass;
+  AoFrameTracker t;
+  t.OnDraw(Draw(1, C::kOpaque, kSceneColor, kSceneDepth, true));
+  t.OnDraw(Draw(1, C::kEnd, kSceneColor, 0));
+  t.OnDraw(Draw(2, C::kOpaque, kSceneColor, kSceneDepth, true));
+  CHECK(t.expects_end());
+  // A decal and a shadow-target water draw must not cut the scene.
+  CHECK(!t.OnDraw(Draw(2, C::kTransparent, kSceneColor, kSceneDepth)).opaque_complete);
+  auto overlay = Draw(2, C::kTransparent, kShadowColor, kShadowDepth);
+  overlay.terminal_transparent = true;
+  CHECK(!t.OnDraw(overlay).opaque_complete);
+  t.OnDraw(Draw(2, C::kOpaque, kSceneColor, kSceneDepth, true));
+  overlay.color_key = kSceneColor;
+  overlay.depth_key = kSceneDepth;
+  CHECK(t.OnDraw(overlay).opaque_complete);
+  CHECK(t.depth_valid());
+  CHECK(!t.OnDraw(overlay).opaque_complete);
+  // The missing fog must not make the next frame fall back to its first decal.
+  t.OnDraw(Draw(3, C::kOpaque, kSceneColor, kSceneDepth, true));
+  CHECK(t.expects_end());
+  CHECK(!t.OnDraw(Draw(3, C::kTransparent, kSceneColor, kSceneDepth)).opaque_complete);
+  overlay.frame = 3;
+  CHECK(t.OnDraw(overlay).opaque_complete);
+  CHECK(!t.OnDraw(Draw(3, C::kEnd, kSceneColor, 0)).opaque_complete);
+}
+
 TEST(AoTracker_DepthValidity) {
   AoFrameTracker t;
   using C = AoDrawClass;

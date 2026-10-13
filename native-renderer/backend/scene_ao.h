@@ -62,6 +62,8 @@ class SceneAo {
   // apply it (into `cl`, before the draw). True when the draw goes to the scene after the ambient-only
   // occlusion is there (its pixel shaders may read it: ambient_view()).
   bool OnDraw(nvrhi::ICommandList* cl, const Draw& d, const AoSettings& s);
+  // After the renderer prepared the draw's buffers, as in the SDK motion recorder.
+  void RecordMotion(uint64_t frame, const MotionDrawKey& key, const uint8_t* constants, const AoSettings& s);
   // The game's fog pass (the AfterEffects fog shaders' c0..c3), for the resolve moment.
   void NoteFog(const float constants[16], uint64_t frame);
   // A clear of a depth target (Clear with Z, or a resolve's depth clear).
@@ -120,7 +122,8 @@ class SceneAo {
   void NewFrame(uint64_t frame);
   // Works the occlusion out for this frame (once) from the scene's depth target if it still holds
   // the frame's depth, else from the depth resolve's copy. False when there is nothing to work from.
-  bool Compute(nvrhi::ICommandList* cl, const AoSettings& s, nvrhi::ITexture* depth_override = nullptr);
+  bool Compute(nvrhi::ICommandList* cl, const AoSettings& s, nvrhi::ITexture* depth_override = nullptr,
+               bool scene_depth_available = true);
   GtaoSettings Settings(const AoSettings& s) const;
   // The scene's colour target times the occlusion (timed).
   bool ApplyToTarget(nvrhi::ICommandList* cl, const AoSettings& s);
@@ -138,6 +141,9 @@ class SceneAo {
   std::unique_ptr<Gtao> gtao_;
   AoFrameTracker tracker_;
   AoCameraFinder camera_;
+  MotionHistory motion_history_;
+  CameraReprojectionVote motion_vote_;
+  uint32_t motion_matches_ = 0;
   Stats stats_;
 
   uint64_t frame_ = UINT64_MAX;
@@ -152,10 +158,13 @@ class SceneAo {
   uint32_t scene_dest_ = 0;                // the resolve moment: the scene copy's destination
   bool scene_dest_set_ = false;
   bool resolve_applied_ = false;           // a scene copy got it this frame
+  bool overlay_drawn_ = false;            // a late whole-target apply would shade overlays
   AoFog fog_;
   uint64_t fog_frame_ = UINT64_MAX;
   AmbientView ambient_view_;
   bool warned_camera_ = false;
+  const char* failure_reason_ = "no apply point";
+  const char* depth_source_ = "none";
   LastDraw last_;
   Stats logged_;  // the statistics at the last periodic log line
 };

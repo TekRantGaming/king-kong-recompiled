@@ -2,6 +2,12 @@
 // passes it (the key; {0}, {1}... are filled in), then German, Spanish,
 // French and Italian.
 constexpr Entry kEntries[] = {
+    {"AO quality", "AO-Qualität", "Calidad de AO", "Qualité de l'occlusion ambiante", "Qualità AO"},
+    {"More samples reduce grain on hands and flat surfaces. Medium keeps the previous sample count. High costs more GPU time.",
+     "Mehr Abtastungen reduzieren das Rauschen auf Händen und ebenen Flächen. Mittel behält die bisherige Anzahl bei. Hoch benötigt mehr GPU-Zeit.",
+     "Más muestras reducen el grano en las manos y las superficies planas. Medio mantiene la cantidad anterior. Alto requiere más tiempo de GPU.",
+     "Davantage d'échantillons réduisent le grain sur les mains et les surfaces planes. Moyen conserve le nombre précédent. Élevé demande plus de temps GPU.",
+     "Più campioni riducono la grana sulle mani e sulle superfici piane. Medio mantiene il numero precedente. Alto richiede più tempo GPU."},
     {"Graphics API", "Grafik-API", "API gráfica", "API graphique", "API grafica"},
     {"Auto", "Auto", "Auto", "Auto", "Auto"},
     {"Vulkan", "Vulkan", "Vulkan", "Vulkan", "Vulkan"},

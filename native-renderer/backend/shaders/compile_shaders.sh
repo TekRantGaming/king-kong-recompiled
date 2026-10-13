@@ -39,7 +39,8 @@ done
 src="$here/gtao.hlsl"
 for spec in gtao_prepare_cs:cs:cs_prepare gtao_prefilter_cs:cs:cs_prefilter gtao_normals_cs:cs:cs_normals \
             gtao_main_cs:cs:cs_main gtao_denoise_cs:cs:cs_denoise gtao_denoise_last_cs:cs:cs_denoise_last \
-            gtao_output_cs:cs:cs_output gtao_vs:vs:vs_main gtao_apply_ps:ps:ps_apply \
+            gtao_main_low_cs:cs:cs_main_low gtao_main_high_cs:cs:cs_main_high \
+            gtao_output_cs:cs:cs_output gtao_temporal_cs:cs:cs_temporal gtao_vs:vs:vs_main gtao_apply_ps:ps:ps_apply \
             gtao_apply_resolve_ps:ps:ps_apply_resolve; do
   base=${spec%%:*}; rest=${spec#*:}; stage=${rest%%:*}; entry=${rest#*:}
   "$DXC" -nologo -T "${stage}_6_0" -E "$entry" -O3 -Fh "$out/${base}_dxil.h" -Vn "k_${base}_dxil" "$src"

@@ -226,6 +226,7 @@ GameSettings ReadGameSettings(bool vulkan) {
     AoSettings s;
     s.mode = std::clamp(std::atoi(rex::cvar::GetFlagByName("ao_mode").c_str()), 0, 2);
     s.strength = std::clamp(std::atoi(rex::cvar::GetFlagByName("ao_strength").c_str()), 1, 3);
+    s.sample_quality = std::clamp(std::atoi(rex::cvar::GetFlagByName("native_ao_samples").c_str()), 1, 3);
     return s;
   };
   ReadAoConfig(game.ao);

@@ -604,6 +604,7 @@ class GameRenderer {
                   const std::array<HostTarget*, 4>& colors, HostTarget* depth, const PipelineRecord& record,
                   const GameShader& vs, const GameShader* ps);
   void AoWriteAmbientConstants(nvrhi::ICommandList* cl, bool reads);
+  void AoRecordMotionHook(const DrawCall& call, const dev::DeviceView& d, const GameShader& vs);
   nvrhi::ITexture* AoResolveHook(nvrhi::ICommandList* cl, const AoResolve& r, const AoSettings& s,
                                  const ResolveCall& call, const HostTarget* source);
   void AoClearHook(const ClearCall& call, const HostTarget* depth);

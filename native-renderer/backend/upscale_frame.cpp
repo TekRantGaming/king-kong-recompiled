@@ -100,7 +100,8 @@ UpscaleFrameTracker::DrawResult UpscaleFrameTracker::OnDraw(const Draw& d) {
   if (d.frame != frame_) NewFrame(d.frame);
   DrawResult r;
   const AoRuleTable& table = classifier_ ? *classifier_ : default_classifier_;
-  r.cls = table.Classify(d.state);
+  const AoRule* matched = nullptr;
+  r.cls = table.Classify(d.state, &matched);
   AoFrameTracker::Draw td;
   td.frame = d.frame;
   td.cls = r.cls;
@@ -108,6 +109,7 @@ UpscaleFrameTracker::DrawResult UpscaleFrameTracker::OnDraw(const Draw& d) {
   td.depth_key = d.depth_key;
   td.frame_size = d.frame_size;
   td.writes_depth = d.state.depth_write;
+  td.terminal_transparent = matched && matched->ps_hash && r.cls == AoDrawClass::kTransparent;
   // After the upscale point the targets are the output generation: the scene tracker is done.
   AoFrameTracker::Events e;
   if (phase_ == Phase::kScene || phase_ == Phase::k2D) e = tracker_.OnDraw(td);

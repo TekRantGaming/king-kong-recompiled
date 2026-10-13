@@ -209,6 +209,10 @@ REXCVAR_DEFINE_STRING(native_ao_quality, "auto", "Native renderer",
                       "or auto (full up to a render scale of 1.5, half above)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_INT32(native_ao_samples, 2, "Native renderer",
+                     "GTAO sample quality: 1 low (2 slices x 2 steps), 2 medium (3 x 3, the previous setting), "
+                     "3 high (9 x 3). Applied live, independently of native_ao_quality's resolution");
+
 REXCVAR_DEFINE_DOUBLE(native_ao_radius, 0.0, "Native renderer",
                       "The gtao method's occlusion radius in the game's world units; 0: from the camera (the "
                       "legacy method's radius for the strength, in near-plane distances)")

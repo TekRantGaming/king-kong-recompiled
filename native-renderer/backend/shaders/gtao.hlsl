@@ -42,6 +42,10 @@ cbuffer GTAOConstantBuffer : register(b0)
     float4 kk_FogPar;   // x near over distance, y density, z inverse distance
     float4 kk_FogCol;   // rgb fog colour
     float4 kk_Fade;     // x: view depth (world units) at which the occlusion has faded out linearly, 0: no fade
+    float4 kk_Reprojection[4];
+    float4 kk_Viewport;
+    float4 kk_DepthScale;
+    float4 kk_Temporal; // history weight, previous depth unpack mul/add, sample quality
 };
 
 #include "../../thirdparty/XeGTAO/XeGTAO.hlsli"
@@ -93,7 +97,7 @@ lpfloat3 LoadNormal(int2 pos)
 
 lpfloat2 SpatioTemporalNoise(uint2 pixCoord, uint temporalIndex)
 {
-    // Hilbert curve driving R2; no temporal accumulation here, so temporalIndex is 0.
+    // Hilbert curve driving R2; rotate only when a local history or a temporal SDK can smooth it.
     uint index = HilbertIndex(pixCoord.x, pixCoord.y);
     index += 288 * (temporalIndex % 64);
     return lpfloat2(frac(0.5 + index * float2(0.75487766624669276005, 0.5698402909980532659114)));
@@ -127,7 +131,24 @@ void cs_normals(uint2 pixCoord : SV_DispatchThreadID)
 [numthreads(XE_GTAO_NUMTHREADS_X, XE_GTAO_NUMTHREADS_Y, 1)]
 void cs_main(uint2 pixCoord : SV_DispatchThreadID)
 {
-    XeGTAO_MainPass(pixCoord, 3, 3, SpatioTemporalNoise(pixCoord, g_GTAOConsts.NoiseIndex), LoadNormal(pixCoord),
+    const lpfloat2 noise = SpatioTemporalNoise(pixCoord, g_GTAOConsts.NoiseIndex);
+    const lpfloat3 normal = LoadNormal(pixCoord);
+    XeGTAO_MainPass(pixCoord, 3, 3, noise, normal,
+        g_GTAOConsts, g_srcWorkingDepth, g_samplerPointClamp, g_outWorkingAOTerm, g_outWorkingEdges);
+}
+
+// Separate kernels keep Low/Medium from inheriting High's register and code footprint.
+[numthreads(XE_GTAO_NUMTHREADS_X, XE_GTAO_NUMTHREADS_Y, 1)]
+void cs_main_low(uint2 pixCoord : SV_DispatchThreadID)
+{
+    XeGTAO_MainPass(pixCoord, 2, 2, SpatioTemporalNoise(pixCoord, g_GTAOConsts.NoiseIndex), LoadNormal(pixCoord),
+        g_GTAOConsts, g_srcWorkingDepth, g_samplerPointClamp, g_outWorkingAOTerm, g_outWorkingEdges);
+}
+
+[numthreads(XE_GTAO_NUMTHREADS_X, XE_GTAO_NUMTHREADS_Y, 1)]
+void cs_main_high(uint2 pixCoord : SV_DispatchThreadID)
+{
+    XeGTAO_MainPass(pixCoord, 9, 3, SpatioTemporalNoise(pixCoord, g_GTAOConsts.NoiseIndex), LoadNormal(pixCoord),
         g_GTAOConsts, g_srcWorkingDepth, g_samplerPointClamp, g_outWorkingAOTerm, g_outWorkingEdges);
 }
 
@@ -148,6 +169,73 @@ void cs_denoise_last(uint2 dispatchThreadID : SV_DispatchThreadID)
 float ViewDepth(float stored)
 {
     return XeGTAO_ScreenSpaceToViewSpaceDepth(stored, g_GTAOConsts);
+}
+
+// Local temporal denoise without an upscaler. The same camera reprojection vote used by
+// the SDK motion pass maps depth into the previous picture. Reject disocclusions and
+// clamp to this frame's neighbourhood to bound trails on hands and animated geometry.
+Texture2D<float> g_srcSpatialAO : register(t0);
+Texture2D<float> g_srcTemporalSceneDepth : register(t1);
+Texture2D<float> g_srcHistoryAO : register(t2);
+Texture2D<float> g_srcHistoryDepth : register(t3);
+RWTexture2D<float> g_outTemporalAO : register(u0);
+RWTexture2D<float> g_outTemporalDepth : register(u1);
+
+[numthreads(8, 8, 1)]
+void cs_temporal(uint2 id : SV_DispatchThreadID)
+{
+    if (any(int2(id) >= kk_Source.zw)) return;
+    const int2 pixel = int2(id);
+    const float stored = g_srcTemporalSceneDepth.Load(int3(kk_Source.xy + pixel, 0));
+    const float current = g_srcSpatialAO.Load(int3(pixel, 0));
+    g_outTemporalDepth[id] = stored;
+    float result = current;
+    if (kk_Temporal.x > 0 && stored < kk_Params.y)
+    {
+        const float2 guest = (float2(kk_Source.xy + pixel) + 0.5) / kk_DepthScale.zw;
+        const float4 clip = float4((guest - kk_Viewport.yw) / kk_Viewport.xz,
+            (stored - kk_DepthScale.y) / kk_DepthScale.x, 1);
+        const float4 prev = float4(dot(kk_Reprojection[0], clip), dot(kk_Reprojection[1], clip),
+            dot(kk_Reprojection[2], clip), dot(kk_Reprojection[3], clip));
+        const float2 prevPixel = (prev.xy / max(prev.w, 1e-6) * kk_Viewport.xz + kk_Viewport.yw) * kk_DepthScale.zw
+            - float2(kk_Source.xy) - 0.5;
+        // Large camera jumps are cuts. There is no history outside the previous picture.
+        if (prev.w > 1e-6 && all(prevPixel >= 0) && all(prevPixel <= float2(kk_Source.zw - 1)) &&
+            all(abs(prevPixel - float2(pixel)) < float2(kk_Source.zw) * 0.25))
+        {
+            const float expected = prev.z / prev.w * kk_DepthScale.x + kk_DepthScale.y;
+            const float expectedZ = kk_Temporal.y / (kk_Temporal.z - expected);
+            float sum = 0, weight = 0;
+            const int2 base = int2(floor(prevPixel));
+            const float2 f = frac(prevPixel);
+            [unroll] for (int j = 0; j < 4; ++j)
+            {
+                const int2 o = int2(j & 1, j >> 1);
+                const int2 q = min(base + o, kk_Source.zw - 1);
+                const float depth = g_srcHistoryDepth.Load(int3(q, 0));
+                const float z = kk_Temporal.y / (kk_Temporal.z - depth);
+                const float w = (o.x ? f.x : 1-f.x) * (o.y ? f.y : 1-f.y);
+                if (expectedZ > 0 && z > 0 && abs(z - expectedZ) < max(0.002, expectedZ * 0.01))
+                {
+                    sum += g_srcHistoryAO.Load(int3(q, 0)) * w;
+                    weight += w;
+                }
+            }
+            if (weight > 0.5)
+            {
+                float lo = current, hi = current;
+                [unroll] for (int y = -1; y <= 1; ++y)
+                    [unroll] for (int x = -1; x <= 1; ++x)
+                    {
+                        const int2 q = clamp(pixel + int2(x,y), int2(0,0), kk_Source.zw - 1);
+                        const float value = g_srcSpatialAO.Load(int3(q, 0));
+                        lo = min(lo, value); hi = max(hi, value);
+                    }
+                result = lerp(current, clamp(sum / weight, lo, hi), kk_Temporal.x);
+            }
+        }
+    }
+    g_outTemporalAO[id] = saturate(result);
 }
 
 [numthreads(8, 8, 1)]
