@@ -115,6 +115,7 @@ std::atomic<int> g_phase{kIdle};
 std::atomic<int64_t> g_confirm_seen_ms{0};
 int g_confirm_frames = 0;
 int g_try_row = 0;
+int g_find_rounds = 0;  // rounds of the row search that found no list yet
 int g_force_button = -1;  // the game's button query answers "pressed" for this one only (99: none)
 
 std::atomic<uint16_t> g_raw_buttons{0};
@@ -249,9 +250,17 @@ void FilterPad(uint32_t user, uint8_t* state) {
   const bool menu = PauseMenuOpen();
   // The port's menu reads the pad the game read (pause_menu.cpp); keyboard and mouse reach it through
   // ImGui, so the mouse is let go (no mouse look) while it is open.
+  // Buttons already held as the menu opens (the Start that paused) reach it only once let go.
+  static bool was_menu = false;
+  static uint16_t held_at_open = 0;
+  if (user == 0) {
+    if (menu && !was_menu) held_at_open = buttons;
+    held_at_open &= buttons;
+    was_menu = menu;
+  }
   if (user == 0 && menu) {
     auto s16 = [&](int at) { return int16_t(uint16_t(state[at] << 8 | state[at + 1])); };
-    kk::PauseMenuPad(buttons, s16(8), s16(10), state[6], state[7]);
+    kk::PauseMenuPad(uint16_t(buttons & ~held_at_open), s16(8), s16(10), state[6], state[7]);
   }
   static bool look_off = false;
   if (menu != look_off) {
@@ -387,11 +396,16 @@ REX_HOOK_RAW(sub_824BA560) {
     REXLOG_INFO("KK pause: row {} of the game's pause page is item {}", g_try_row, id);
     if (id == want) {
       g_phase = kPress;
+      g_find_rounds = 0;
     } else if (++g_try_row > 8) {
-      REXLOG_WARN("KK pause: the game's pause page has no item {}", want);
+      // Right after it opens the page has no list yet (every row -1): try again for up to 2 s.
       g_try_row = 0;
-      g_pending = -1;
-      g_phase = kIdle;
+      if (id != -1 || ++g_find_rounds > 7) {
+        REXLOG_WARN("KK pause: the game's pause page has no item {}", want);
+        g_pending = -1;
+        g_phase = kIdle;
+        g_find_rounds = 0;
+      }
     }
     return;
   }
@@ -411,7 +425,6 @@ REX_HOOK_RAW(sub_824BA560) {
       g_closing_until = now + 1000;
       break;
     case PauseAction::kScore:
-    case PauseAction::kSave:
     case PauseAction(kOptionsAction):
       g_game_page = true;
       g_game_page_seen_ms = now;
@@ -434,7 +447,7 @@ REX_HOOK_RAW(sub_824BC1B0) {
   const int pending = g_pending;
   if (!TakeoverOn() || !InPlay(base) || g_phase != kConfirm ||
       (pending != int(PauseAction::kStartAgain) && pending != int(PauseAction::kQuitToLauncher) &&
-       pending != int(PauseAction::kQuitToDesktop))) {
+       pending != int(PauseAction::kQuitToDesktop) && pending != int(PauseAction::kSave))) {
     __imp__sub_824BC1B0(ctx, base);
     return;
   }
