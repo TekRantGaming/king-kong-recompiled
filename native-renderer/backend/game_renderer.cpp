@@ -374,6 +374,23 @@ bool GameRenderer::Initialize() {
   return true;
 }
 
+void GameRenderer::UploadDummies(nvrhi::ICommandList* cl) {
+  if (dummies_uploaded_) return;
+  // Creation sets the resource's shape and state, not its contents. Upload on the first frame's
+  // list so a failed guest bind or an optional pass input cannot read undefined texels.
+  const uint32_t zero = 0;
+  for (nvrhi::ITexture* texture : {dummy_2d_.Get(), dummy_3d_.Get(), dummy_cube_.Get(), dummy_array_.Get()}) {
+    for (uint32_t layer = 0; layer < texture->getDesc().arraySize; ++layer)
+      cl->writeTexture(texture, layer, 0, &zero, sizeof(zero), sizeof(zero));
+    cl->setTextureState(texture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
+  }
+  const uint32_t zeros[64] = {};
+  cl->writeBuffer(dummy_buffer_, zeros, sizeof(zeros));
+  cl->setBufferState(dummy_buffer_, nvrhi::ResourceStates::ShaderResource);
+  dummies_uploaded_ = true;
+  Logf(LogLevel::kInfo, "rexgpu-native: fallback zero uploads recorded before first frame (4 textures, 9 subresources, 256-byte buffer)");
+}
+
 // ---------------------------------------------------------------- tables
 
 uint32_t GameRenderer::AllocateSlot(Table table) {
@@ -1254,6 +1271,13 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   if (ps)
     for (const auto& sb : ps->bindings.samplers) note_base_map(sb);
   kkshaders::ScaleConstants sc = {};
+  struct PlaceholderUse {
+    uint32_t slot, dimension;
+    bool vertex;
+    kknr::TextureKey key;
+    std::string reason;
+  };
+  std::vector<PlaceholderUse> placeholder_uses;
   for (auto& v : sc.texInvScale) v[0] = v[1] = v[2] = v[3] = 1.0f;
   auto bind_textures = [&](const GameShader& shader) {
     for (const kkshaders::TextureUse& t : shader.bindings.textures) {
@@ -1261,6 +1285,11 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
       d.fetch_constant(t.slot & 31, words);
       dc.textureIndex[t.slot & 31] =
           BindTexture(cl, words, t.dimension, (base_map_slots >> (t.slot & 31)) & 1);
+      if (!dc.textureIndex[t.slot & 31]) {
+        placeholder_uses.push_back({t.slot, uint32_t(t.dimension), &shader == vs.get(),
+                                   kknr::MakeTextureKey(kknr::TextureFetch::FromWords(words)),
+                                   texture_bind_failure_});
+      }
       if (scaled()) {
         sc.texInvScale[t.slot & 31][0] = 1.0f / bound_scale_x_;
         sc.texInvScale[t.slot & 31][1] = 1.0f / bound_scale_y_;
@@ -1502,6 +1531,18 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   if (!args.vertexCount) return;
 
   if (stop_at == 5) return;
+  for (const auto& use : placeholder_uses) {
+    // Both shader stages share the slot's final draw constant. A later bind may have succeeded.
+    if (dc.textureIndex[use.slot & 31]) continue;
+    const auto& w = use.key.words;
+    Logf(LogLevel::kWarning,
+         "rexgpu-native: texture placeholder real draw frame %llu draw %u %s slot %u dim %u "
+         "vs %016llX ps %016llX key %08X %08X %08X %08X %08X %08X reason %s",
+         static_cast<unsigned long long>(frame_), call.index_in_frame, use.vertex ? "vs" : "ps",
+         use.slot, use.dimension, static_cast<unsigned long long>(vs->ucode_hash),
+         static_cast<unsigned long long>(ps ? ps->ucode_hash : 0),
+         w[0], w[1], w[2], w[3], w[4], w[5], use.reason.c_str());
+  }
   // Upscalers: a draw of the scene's depth, replayed by the motion pass at the upscale point.
   if (up.motion) UpscaleRecordMotion(call, d, vs, dc, record, gs, args, indexed_draw);
   cl->setGraphicsState(gs);

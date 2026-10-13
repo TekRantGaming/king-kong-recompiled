@@ -289,6 +289,7 @@ GameRenderer::HostTexture* GameRenderer::UploadTexture(nvrhi::ICommandList* cl,
   kknr::HostTextureData data;
   std::string why;
   if (!kknr::ConvertTexture(fetch, physical_, data, &why, TextureOptions())) {
+    texture_bind_failure_ = "conversion: " + why;
     ++stats_.texture_failures;
     if (stats_.texture_failures < 50) {
       Logf(LogLevel::kWarning, "rexgpu-native: texture %08X %08X %08X not converted: %s", fetch.words[0],
@@ -304,7 +305,10 @@ GameRenderer::HostTexture* GameRenderer::UploadTexture(nvrhi::ICommandList* cl,
     ReleaseHostTexture(host);
     host = CreateHostTexture(p, false);
     entry.host = host;
-    if (!host) return nullptr;
+    if (!host) {
+      texture_bind_failure_ = "host texture creation failed";
+      return nullptr;
+    }
   }
   for (const kknr::HostSubresource& sub : data.subresources) {
     cl->writeTexture(host->texture, sub.layer, sub.level, data.bytes.data() + sub.offset, sub.row_pitch,
@@ -339,7 +343,10 @@ uint32_t GameRenderer::TextureView(HostTexture* host, const kknr::TextureFetch& 
   uint32_t flag = 0;
   switch (dimension) {
     case kkshaders::TextureDimension::Cube:
-      if (!cube) return 0;
+      if (!cube) {
+        texture_bind_failure_ = "cube view of non-cube texture";
+        return 0;
+      }
       table = kTexCube;
       view_dim = nvrhi::TextureDimension::TextureCube;
       break;
@@ -352,11 +359,15 @@ uint32_t GameRenderer::TextureView(HostTexture* host, const kknr::TextureFetch& 
         view_dim = nvrhi::TextureDimension::Texture2DArray;
         flag = 0x80000000u;
       } else {
+        texture_bind_failure_ = "3D view of non-volume/non-array texture";
         return 0;
       }
       break;
     default:
-      if (cube || volume) return 0;
+      if (cube || volume) {
+        texture_bind_failure_ = "2D view of cube/volume texture";
+        return 0;
+      }
       if (array) {
         table = kTex2DArray;
         view_dim = nvrhi::TextureDimension::Texture2DArray;
@@ -368,7 +379,10 @@ uint32_t GameRenderer::TextureView(HostTexture* host, const kknr::TextureFetch& 
       break;
   }
   const uint32_t slot = AllocateSlot(table);
-  if (!slot) return 0;
+  if (!slot) {
+    texture_bind_failure_ = "texture descriptor table full";
+    return 0;
+  }
   nvrhi::TextureSubresourceSet subresources(lo, hi - lo + 1, 0, nvrhi::TextureSubresourceSet::AllArraySlices);
   WriteSlot(table, nvrhi::BindingSetItem::Texture_SRV(slot, host->texture, nvrhi::Format::UNKNOWN, subresources,
                                                       view_dim, kknr::ToNvrhiMapping(plan.view_swizzle)));
@@ -380,11 +394,18 @@ uint32_t GameRenderer::TextureView(HostTexture* host, const kknr::TextureFetch& 
 uint32_t GameRenderer::BindTexture(nvrhi::ICommandList* cl, const uint32_t words[6],
                                    kkshaders::TextureDimension dimension, bool base_map) {
   const kknr::TextureFetch fetch = kknr::TextureFetch::FromWords(words);
+  texture_bind_failure_.clear();
   bound_scale_x_ = bound_scale_y_ = 1.0f;
-  if (fetch.Type() != 2) return 0;
+  if (fetch.Type() != 2) {
+    texture_bind_failure_ = "unset/non-texture fetch constant";
+    return 0;
+  }
   textures_.options = TextureOptions();  // ranges are computed with it when an entry is made
   kknr::TextureCache::BindResult r = textures_.Bind(fetch, physical_, frame_);
-  if (!r.entry) return 0;
+  if (!r.entry) {
+    texture_bind_failure_ = "cache bind returned no entry";
+    return 0;
+  }
   auto* host = static_cast<HostTexture*>(r.entry->host);
   if (!r.entry->gpu_written) {
     auto it = resolved_by_base_.find(fetch.BaseAddress());

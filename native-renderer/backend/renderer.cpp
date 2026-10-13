@@ -231,6 +231,7 @@ nvrhi::ICommandList* Renderer::FrameCommandList() {
   if (!frame_open_) {
     frame_command_list_->open();
     frame_open_ = true;
+    if (game_) game_->UploadDummies(frame_command_list_);
     // A defined depth at the start of every frame (the game's own depth clear
     // comes later, if at all).
     if (nvrhi::ITexture* depth = game_ ? nullptr : DepthFor(frames_[recording_])) {
