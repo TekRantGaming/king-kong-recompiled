@@ -39,6 +39,25 @@ uint64_t PipelineKey(const PipelineRecord& r) {
   return h;
 }
 
+PipelineRecord MotionPipelineRecord(const PipelineRecord& draw, uint32_t motion_format) {
+  PipelineRecord r;
+  r.vs_hash = draw.vs_hash;
+  r.vs_input = draw.vs_input;
+  r.topology = draw.topology;
+  r.color_count = 1;
+  r.color_format[0] = motion_format;
+  r.color_control[0] = 0x00010001;  // ONE, ZERO
+  r.color_mask[0] = 3;
+  r.depth_format = draw.depth_format;
+  r.depth_control = 2u | (2u << 4);  // EQUAL, read only
+  r.mode_control = draw.mode_control;
+  r.clip_control = draw.clip_control;
+  r.poly_scale = draw.poly_scale;
+  r.poly_offset = draw.poly_offset;
+  r.flags = (draw.flags & kRecordFlipFrontFace) | kRecordMotion;
+  return r;
+}
+
 bool ReadPipelineList(const std::string& path, std::vector<PipelineRecord>& records, std::string* note,
                       size_t* torn_bytes) {
   if (note) note->clear();

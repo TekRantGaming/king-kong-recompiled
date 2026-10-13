@@ -396,12 +396,11 @@ void GameRenderer::UpscaleRecordMotion(const DrawCall& call, const dev::DeviceVi
   float rows[16];
   m.wvp_register = FindAoPerspectiveRegister(d.at(dev::kVsConstants), rows);
   m.dc = dc;
-  m.topology = record.topology;
-  m.mode_control = record.mode_control;
-  m.clip_control = record.clip_control;
-  m.poly_scale = record.poly_scale;
-  m.poly_offset = record.poly_offset;
-  m.flip_front = (record.flags & kRecordFlipFrontFace) != 0;
+  m.pipeline = MotionPipelineRecord(record, uint32_t(nvrhi::Format::RG16_FLOAT));
+  NoteRecord(m.pipeline, PipelineKey(m.pipeline));
+  // Ask before this draw can be matched with a previous frame. Pipelines from a shipped list
+  // are queued earlier still, when the game creates their vertex shader containers.
+  shaders_->MotionVariant(*vs);
   m.indexed = indexed;
   m.index = gs.indexBuffer;
   m.args = args;
@@ -641,21 +640,9 @@ void GameRenderer::UpscaleMotionPass(nvrhi::ICommandList* cl, HostTarget* depth_
       ++u.stats.motion_waiting;
       continue;
     }
-    PipelineRecord r;
-    r.vs_hash = m.vs->ucode_hash;
-    r.topology = m.topology;
-    r.color_count = 1;
-    r.color_format[0] = uint32_t(nvrhi::Format::RG16_FLOAT);
-    r.color_control[0] = 0x00010001;  // ONE, ZERO: no blending
-    r.color_mask[0] = 0x3;            // red and green
+    PipelineRecord r = m.pipeline;
     r.depth_format = uint32_t(depth_target->format);
-    r.depth_control = 2u | (2u << 4);  // z_enable, no write, EQUAL
-    r.mode_control = m.mode_control;
-    r.clip_control = m.clip_control;
-    r.poly_scale = m.poly_scale;
-    r.poly_offset = m.poly_offset;
-    r.flags = m.flip_front ? kRecordFlipFrontFace : 0;
-    const uint64_t key = Mix64(Mix64(PipelineKey(r), reinterpret_cast<uintptr_t>(mvs)), 0x4D4F54494F4Eull);
+    const uint64_t key = PipelineKey(r);
     nvrhi::IGraphicsPipeline* pipeline = nullptr;
     if (auto known = pipelines_.find(key); known != pipelines_.end()) {
       pipeline = known->second;

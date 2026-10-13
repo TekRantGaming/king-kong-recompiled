@@ -790,9 +790,19 @@ bool GameRenderer::QueuePrewarm(const PipelineRecord& record) {
   std::shared_ptr<const GameShader> ps =
       record.ps_hash ? shaders_->GetByHash(pk, record.ps_hash, record.ps_input) : nullptr;
   if (!vs || (record.ps_hash && !ps)) return false;
+  const bool motion = (record.flags & kRecordMotion) != 0;
+  nvrhi::IShader* vertex = vs->handle;
+  if (motion) {
+    // A pack entry has no fetch table. Wait for its real container before asking for a variant;
+    // otherwise MotionVariant would permanently remember an unavailable source as a failure.
+    if (!upscale_ || !vs->source) return false;
+    vertex = shaders_->MotionVariant(*vs);
+    if (!vertex) return false;
+  }
   nvrhi::GraphicsPipelineDesc desc;
   nvrhi::FramebufferInfo framebuffer;
-  BuildPipelineDesc(record, vs->handle, ps ? ps->handle.Get() : nullptr, desc, framebuffer);
+  BuildPipelineDesc(record, vertex, motion ? upscale_->object_ps.Get() : (ps ? ps->handle.Get() : nullptr), desc, framebuffer);
+  if (motion && !desc.bindingLayouts.empty()) desc.bindingLayouts[0] = upscale_->motion_layout;
   const uint64_t key = PipelineKey(record);
   std::lock_guard lock(pipeline_mutex_);
   if (pipelines_pending_.count(key)) return true;
@@ -813,7 +823,9 @@ void GameRenderer::QueueOrDefer(const PipelineRecord& record) {
   // shipped list) names it first.
   if (!prewarm_seen_.insert(PipelineKey(record)).second) return;
   // Another run's kind of pipeline (render scale, flipped faces) is never drawn here: not made.
-  if (record.flags != RecordFlags()) {
+  const bool motion = (record.flags & kRecordMotion) != 0;
+  const uint32_t wanted = motion ? ((RecordFlags() & kRecordFlipFrontFace) | kRecordMotion) : RecordFlags();
+  if (record.flags != wanted || (motion && !upscale_)) {
     ++stats_.prewarm_other_kind;
     return;
   }
@@ -833,7 +845,11 @@ bool GameRenderer::SetPipelineCache(const std::string& path) {
   }
   const bool can_prewarm = options_.async_pipelines;
   if (can_prewarm) {
-    for (const PipelineRecord& record : cache_file_.loaded()) QueueOrDefer(record);
+    for (const PipelineRecord& record : cache_file_.loaded()) {
+      QueueOrDefer(record);
+      if (upscale_ && !(record.flags & kRecordMotion) && record.depth_format && (record.depth_control & 6) == 6)
+        QueueOrDefer(MotionPipelineRecord(record, uint32_t(nvrhi::Format::RG16_FLOAT)));
+    }
     deferred_shader_count_ = shaders_->created_count();
   }
   Logf(LogLevel::kInfo, "rexgpu-native: pipeline cache %s: %zu descriptions, %llu queued, %llu waiting for their shaders%s",
@@ -856,7 +872,11 @@ bool GameRenderer::LoadPipelineList(const std::string& path) {
                  other = stats_.prewarm_other_kind;
   const bool can_prewarm = options_.async_pipelines;
   if (can_prewarm) {
-    for (const PipelineRecord& record : records) QueueOrDefer(record);
+    for (const PipelineRecord& record : records) {
+      QueueOrDefer(record);
+      if (upscale_ && !(record.flags & kRecordMotion) && record.depth_format && (record.depth_control & 6) == 6)
+        QueueOrDefer(MotionPipelineRecord(record, uint32_t(nvrhi::Format::RG16_FLOAT)));
+    }
     deferred_shader_count_ = shaders_->created_count();
   }
   stats_.list_records += records.size();
@@ -874,8 +894,11 @@ void GameRenderer::RetryDeferred() {
   std::lock_guard lock(cache_mutex_);
   if (deferred_.empty()) return;
   const uint64_t created = shaders_->created_count();
-  if (created == deferred_shader_count_) return;  // no new shader since the last try
+  const auto motion = shaders_->motion_stats();
+  const uint64_t completed = motion.made + motion.failed;
+  if (created == deferred_shader_count_ && completed == deferred_motion_count_) return;
   deferred_shader_count_ = created;
+  deferred_motion_count_ = completed;
   std::vector<PipelineRecord> still;
   for (const PipelineRecord& record : deferred_) {
     if (!QueuePrewarm(record)) still.push_back(record);

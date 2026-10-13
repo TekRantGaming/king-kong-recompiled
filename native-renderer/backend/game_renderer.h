@@ -703,6 +703,7 @@ class GameRenderer {
   void NoteFrameWait(double ms);
   bool frame_waited_ = false;
   double frame_stutter_wait_ms_ = 0;
+  uint64_t deferred_motion_count_ = 0;
   // Opt-in task diagnostics, written only when KK_DEV_DLSS_LOG names a file.
   FILE* frame_trace_ = nullptr;
   bool frame_trace_checked_ = false;
