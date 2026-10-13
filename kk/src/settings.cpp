@@ -17,6 +17,12 @@ REXCVAR_DEFINE_BOOL(kk_launcher, true, "KK",
                     "Show the launcher before starting the game (hold Shift at start to force it)");
 REXCVAR_DEFINE_BOOL(kk_skip_launcher, false, "KK",
                     "Internal: skip the launcher once (used when it relaunches the game)");
+REXCVAR_DEFINE_STRING(kk_start, "", "KK",
+                      "Internal: what the game starts with, from the launcher's Play menu (continue:<slot>, "
+                      "new:<slot>[:<name>], chapter:<slot>:<entry>[:<name>]); never saved");
+REXCVAR_DEFINE_STRING(kk_launcher_page, "", "KK",
+                      "Internal: open the launcher on this page (play: the Play menu, after the game has gone "
+                      "back to the launcher); never saved");
 REXCVAR_DEFINE_BOOL(kk_check_updates, true, "KK", "Check GitHub for a newer version when the launcher opens");
 REXCVAR_DEFINE_BOOL(kk_online_count, true, "KK",
                     "Show how many people are playing, with an anonymous check-in every 5 minutes (see online.h)");
@@ -82,7 +88,6 @@ REXCVAR_DEFINE_INT32(kk_hitch_report_ms, 0, "KK/Debug",
                      "Write logs/hitch-*.txt (where every thread was) when a frame takes longer than this (0 = off)");
 REXCVAR_DEFINE_BOOL(kk_cheats, false, "KK/Cheats", "Switch on the cheats chosen below when the game starts");
 #define KK_CHEAT_CVAR(id, label) REXCVAR_DEFINE_BOOL(kk_cheat_##id, false, "KK/Cheats", label)
-KK_CHEAT_CVAR(chapters, "All chapters (KKst0ry)");
 KK_CHEAT_CVAR(bonus, "All bonus content (KKmuseum)");
 KK_CHEAT_CVAR(healing, "Fast healing for Jack (8wonder)");
 KK_CHEAT_CVAR(one_hit, "One-hit kills with bullets (GrosBras)");

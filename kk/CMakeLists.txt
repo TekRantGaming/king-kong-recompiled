@@ -61,6 +61,8 @@ set(KINGKONG_SOURCES
     src/native_shaders.cpp
     src/http.cpp
     src/update.cpp
+    src/play_session.cpp
+    src/pause_hooks.cpp
 )
 
 # Developer-only test aids (never in release builds): -DKK_DEV_TOOLS=ON.

@@ -12,8 +12,7 @@ struct CheatInfo {
   const char* code;   // the game's own code for it, shown for reference
 };
 
-constexpr std::array<CheatInfo, 10> kCheats = {{
-    {"chapters", "All chapters", "KKst0ry"},
+constexpr std::array<CheatInfo, 9> kCheats = {{
     {"bonus", "All bonus content", "KKmuseum"},
     {"healing", "Fast healing (Jack)", "8wonder"},
     {"one_hit", "One-hit kills (bullets)", "GrosBras"},

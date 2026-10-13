@@ -18,6 +18,8 @@
 
 REXCVAR_DECLARE(bool, kk_launcher);
 REXCVAR_DECLARE(bool, kk_skip_launcher);
+REXCVAR_DECLARE(std::string, kk_start);
+REXCVAR_DECLARE(std::string, kk_launcher_page);
 REXCVAR_DECLARE(int32_t, kk_frame_rate);
 REXCVAR_DECLARE(std::string, kk_render_quality);
 REXCVAR_DECLARE(std::string, kk_button_prompts);

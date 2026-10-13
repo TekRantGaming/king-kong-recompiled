@@ -49,6 +49,7 @@ void InstallFpeGuard();  // fpe_guard.cpp
 #include "launcher.h"
 #include "overlay.h"
 #include "platform.h"
+#include "play_internal.h"
 #include "settings.h"
 #include "toast.h"
 #if defined(KK_NATIVE_RENDERER)
@@ -97,10 +98,19 @@ class KingKongApp : public rex::ReXApp {
     user_data_root_ = defaults.user_data_root;
     kk::MigrateSettings(defaults.config_path);
     kk::ApplyFixedSettings();
+    // The launcher's Play menu: the saves live under the user data, a start request may be given
+    // (--kk_start), and the game goes back to the launcher by restarting (play_session.cpp).
+    kk::play::SetUserDir(defaults.user_data_root);
+    kk::play::LoadStartRequestFromSettings();
+    kk::play::SetQuitHandler([this] {
+      app_context().CallInUIThreadDeferred([this] { app_context().QuitFromUIThread(); });
+    });
     const bool skip_once = REXCVAR_GET(kk_skip_launcher);
     rex::cvar::ResetToDefault("kk_skip_launcher");  // never persist it
     const bool files_ok = kk::GameFilesPresent(defaults.game_data_root);
-    const bool show = !files_ok || kk::IsShiftHeld() || (REXCVAR_GET(kk_launcher) && !skip_once);
+    // --kk_launcher_page (back from the game): the launcher shows even when it is switched off.
+    const bool show = !files_ok || kk::IsShiftHeld() || (REXCVAR_GET(kk_launcher) && !skip_once) ||
+                      (!skip_once && !REXCVAR_GET(kk_launcher_page).empty());
     if (!show) {
       kk::EnforceOriginalLook();
       kk::ApplyFullscreenMode(window());
@@ -127,7 +137,9 @@ class KingKongApp : public rex::ReXApp {
 #if defined(KK_NATIVE_RENDERER)
       nr::kk::StopLauncherPrewarm();  // its device goes before this process does
 #endif
-      kk::RelaunchSelf(L"--kk_skip_launcher=true");
+      // The start request chosen on the Play menu goes with it (kk::play::SetStartRequest).
+      const std::wstring start = kk::play::StartRequestArg();
+      kk::play::RelaunchWith(L"--kk_skip_launcher=true" + (start.empty() ? std::wstring() : L" " + start));
       app_context().CallInUIThreadDeferred([this] { app_context().QuitFromUIThread(); });
     };
     cb.quit = [this] {
@@ -192,6 +204,20 @@ class KingKongApp : public rex::ReXApp {
       kk::art::WriteAchievementCache(achievements().ListAchievements(),
                                       kk::art::AchievementCachePath(user_data_root_));
     ScheduleTitleCapture();
+    kk::play::SetFrameGrabber([this](int& width, int& height, std::vector<uint8_t>& rgba) {
+      rex::ui::RawImage image;
+      auto* gfx = runtime() ? runtime()->graphics_system() : nullptr;
+      auto* presenter = gfx ? gfx->presenter() : nullptr;  // CaptureGuestOutput: callable from any thread
+      if (!presenter || !presenter->CaptureGuestOutput(image) || !image.width || !image.height) return false;
+      width = int(image.width), height = int(image.height);
+      rgba.resize(size_t(width) * size_t(height) * 4);
+      for (int y = 0; y < height; ++y) {
+        const uint8_t* src = image.data.data() + size_t(y) * image.stride;
+        uint8_t* dst = rgba.data() + size_t(y) * size_t(width) * 4;
+        for (int x = 0; x < width; ++x, src += 4, dst += 4) dst[0] = src[0], dst[1] = src[1], dst[2] = src[2], dst[3] = 255;
+      }
+      return true;
+    });
     kk::art::SetFrameCapturer([this](const std::filesystem::path& path) {
       app_context().CallInUIThread([this, path] {
         rex::ui::RawImage image;
@@ -217,6 +243,8 @@ class KingKongApp : public rex::ReXApp {
 
   void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {
     SetGuestFrameStats(kk::GetGuestFrameStats);  // F3 overlay "Guest: N FPS"
+    // The port's pause menu: the last frame of play behind it (pause_hooks.cpp), under every other dialog.
+    kk::play::CreatePauseBackdrop(drawer, immediate_drawer());
     kk::CreateFpsOverlay(drawer);
   }
 

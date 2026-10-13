@@ -12,6 +12,7 @@
 #include <rex/logging.h>
 #include <rex/system/flags.h>
 
+#include "play_session.h"
 #include "settings.h"
 
 REX_EXTERN(__imp__sub_8272EED8);
@@ -21,7 +22,8 @@ constexpr uint32_t kLogoFlags = 0x828E3860;
 }  // namespace
 
 REX_HOOK_RAW(sub_8272EED8) {
-  if (REXCVAR_GET(kk_skip_intros)) {
+  // A start request from the launcher's Play menu never shows the logos either (play_session.cpp).
+  if (REXCVAR_GET(kk_skip_intros) || kk::play::GetStartRequest().kind != kk::play::StartKind::kNone) {
     bool any = false;
     for (uint32_t off : {4u, 8u, 12u}) {
       uint32_t v;
