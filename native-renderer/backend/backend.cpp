@@ -9,6 +9,7 @@
 #include <thread>
 #include <deque>
 #include <condition_variable>
+#include <unordered_map>
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
@@ -328,8 +329,20 @@ class Backend::Submitter {
   void Enqueue(nvrhi::ICommandList* list, nvrhi::IEventQuery* completion) {
     std::unique_lock lock(mutex_);
     done_cv_.wait(lock, [&] { return pending_.size() + busy_ < 3; });
-    pending_.emplace_back(list, completion);
+    const uint64_t ticket = ++queued_;
+    query_tickets_[completion] = ticket;
+    pending_.push_back({list, completion, ticket});
     cv_.notify_one();
+  }
+  // Before recycling one frame's image/query, only its own submission must
+  // have assigned the query. Flushing newer frames serializes recording with
+  // their presenter queue-lock waits even when this older frame is complete.
+  void WaitSubmitted(nvrhi::IEventQuery* completion) {
+    std::unique_lock lock(mutex_);
+    auto found = query_tickets_.find(completion);
+    if (found == query_tickets_.end()) return;
+    const uint64_t wanted = found->second;
+    done_cv_.wait(lock, [&] { return submitted_ >= wanted; });
   }
   // Waits until everything enqueued so far was submitted.
   void Flush() {
@@ -347,17 +360,26 @@ class Backend::Submitter {
       pending_.pop_front();
       busy_ = 1;
       lock.unlock();
-      host_.ExecuteFrameCommandList(frame.first, frame.second);
+      const uint64_t ticket = frame.ticket;
+      host_.ExecuteFrameCommandList(frame.list, frame.completion);
       frame = {};
       lock.lock();
       busy_ = 0;
+      submitted_ = ticket;
       done_cv_.notify_all();
     }
   }
   HostDevice& host_;
   std::mutex mutex_;
   std::condition_variable cv_, done_cv_;
-  std::deque<std::pair<nvrhi::CommandListHandle, nvrhi::EventQueryHandle>> pending_;
+  struct Frame {
+    nvrhi::CommandListHandle list;
+    nvrhi::EventQueryHandle completion;
+    uint64_t ticket = 0;
+  };
+  std::deque<Frame> pending_;
+  std::unordered_map<nvrhi::IEventQuery*, uint64_t> query_tickets_;
+  uint64_t queued_ = 0, submitted_ = 0;
   uint32_t busy_ = 0;
   bool stop_ = false;
   std::thread thread_;
@@ -525,7 +547,7 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
     ++submitted_frames_;
   });
   renderer_->set_frame_wait([this](nvrhi::IEventQuery* completion) {
-    if (submitter_) submitter_->Flush();
+    if (submitter_) submitter_->WaitSubmitted(completion);
     host_->WaitFrame(completion);
   });
   {
