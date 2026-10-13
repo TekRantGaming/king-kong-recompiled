@@ -14,6 +14,7 @@
 #include <rex/ui/d3d12/d3d12_provider.h>
 
 #include "backend/host_device.h"
+#include "backend/cpu_profile.h"
 
 REXCVAR_DECLARE(bool, native_validation);
 
@@ -61,6 +62,7 @@ class D3D12Host final : public HostDevice {
     // (--native_async_submit) and the present thread (--native_async_present) both submit, so one at a
     // time (without the lock the device was removed within a minute at an unlimited frame rate).
     using clock = std::chrono::steady_clock;
+    const uint64_t cpu_start = CurrentThreadCpuMicroseconds();
     const auto t0 = clock::now();
     std::lock_guard lock(execute_mutex_);
     const auto t1 = clock::now();
@@ -78,6 +80,7 @@ class D3D12Host final : public HostDevice {
     times_.wait_us += us(t0, t1);
     times_.execute_us += us(t1, t2);
     times_.garbage_us += us(t2, t3);
+    times_.cpu_us += CurrentThreadCpuMicroseconds() - cpu_start;
     ++times_.count;
   }
   SubmitTimes submit_times() const override {

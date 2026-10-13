@@ -38,6 +38,7 @@ class HostDevice {
   // Microseconds spent in ExecuteCommandList: waiting for the queue, submitting, collecting garbage.
   struct SubmitTimes {
     uint64_t wait_us = 0, execute_us = 0, garbage_us = 0, count = 0;
+    uint64_t cpu_us = 0;
   };
   virtual SubmitTimes submit_times() const { return {}; }
   // The cache the device creates every pipeline with, when the host keeps one in a file

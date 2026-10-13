@@ -26,6 +26,7 @@ def summary(root):
             if m: samples.append(float(m[2]))
     frames = []
     steady_frames = []
+    steady_cpu = []
     path = root/'frame_times.csv'
     if path.exists():
         with path.open() as f:
@@ -34,6 +35,7 @@ def summary(root):
                     frames.append(float(row['host_ms']))
                     if 80 <= float(row['t']) <= 120:
                         steady_frames.append(float(row['host_ms']))
+                        if 'cpu_ms' in row: steady_cpu.append((int(row['frame']), float(row['cpu_ms'])))
     processes = list(csv.DictReader((root/'process.csv').open()))
     memory_path = root/'gpu-memory.csv'
     memory = list(csv.DictReader(memory_path.open())) if memory_path.exists() else []
@@ -60,6 +62,22 @@ def summary(root):
                   gpu_ms=mean(gpu[-5:]), ao_ms=mean(ao[-5:]), upscale_ms=mean(upscale[-5:]),
                   volatile_errors=sum('maxVersions' in v and 'insufficient' in v for v in logs),
                   shots=len(list(root.glob('shot_*.bmp'))))
+    if len(steady_cpu) > 1:
+        result['game_cpu_ms']=(steady_cpu[-1][1]-steady_cpu[0][1])/(steady_cpu[-1][0]-steady_cpu[0][0])
+    render_cpu=[]
+    host_cpu=[]
+    result['gpu_passes']={}
+    for line in logs:
+        m=re.search(r'render CPU frame (\d+): (\d+) us',line)
+        if m: render_cpu.append(tuple(map(int,m.groups())))
+        m=re.search(r'host CPU over (\d+) frames: (\d+) us submission, (\d+) us presenter refresh',line)
+        if m: host_cpu.append(tuple(map(int,m.groups())))
+        m=re.search(r'pass GPU time \((.*?)\): ([\d.]+) ms',line)
+        if m: result['gpu_passes'].setdefault(m[1],[]).append(float(m[2]))
+    for dest,names in [(render_cpu,['render_cpu_ms']),(host_cpu,['submit_cpu_ms','present_cpu_ms'])]:
+        if len(dest)>10:
+            a,b=dest[-11],dest[-1]
+            for i,name in enumerate(names,1): result[name]=(b[i]-a[i])/(b[0]-a[0])/1000
     recent=residency[-10:]
     if recent:
         for i,name in enumerate(['draws','clears','resolves','upload_bytes','texture_ms','buffer_ms'],1):

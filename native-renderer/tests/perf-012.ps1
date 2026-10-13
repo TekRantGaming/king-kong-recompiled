@@ -1,6 +1,6 @@
 param([string]$Label='baseline', [int]$Chapter=8, [string]$Backend='vulkan',
  [switch]$Classic, [string]$Scale='1920x1080', [int]$Cores=0,
- [switch]$Gtao, [string]$Upscaler='off', [switch]$Fire)
+ [switch]$Gtao, [string]$Upscaler='off', [switch]$Fire, [switch]$PassTimers, [switch]$Validation)
 $ErrorActionPreference='Stop'
 $workspace=(Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $lockPath='F:\KK-native-renderer\runs\codex-game.lock'
@@ -32,15 +32,17 @@ $env:KK_DEV_SHOTS_FROM='menu'
 $env:KK_DEV_SHOTS_DIR=$run
 if ($Fire) { $env:KK_DEV_SCRIPT='4:LT/117,5:RT/116,10:RSDOWN/0.4,65:RSRIGHT/0.5'; $env:KK_DEV_GUNFIRE='1' }
 $keep='kk_frame_rate,render_scale,native_render_scale,native_upscaler,ao_mode,ao_strength'
+$debug=if ($PassTimers) {98304} else {32768}
 $args=@('--fullscreen=false','--window_width=1280','--window_height=720','--kk_fullscreen_mode=desktop',
  "--kk_start=chapter:0:$Chapter",'--kk_launcher=false','--kk_cheats=true',
  "--user_data_root=$run\userdata","--game_data_root=$($workspace.Replace('\','/'))/kk/assets","--log_file=$run\run.log",
  "--cache_root=$run\cache",'--kk_original_look=true',"--kk_original_look_keep=$keep",'--kk_frame_rate=0',
- '--native_debug=32768','--native_stutter_stats=true',"--native_backend=$Backend",
+ "--native_debug=$debug",'--native_stutter_stats=true',"--native_backend=$Backend",
  "--native_render_scale=$Scale", "--native_upscaler=$Upscaler",'--native_upscaler_gpu_time=true','--native_ao_gpu_time=true')
 if ($Classic) { $args+='--kk_renderer=classic'; $args+="--draw_resolution_scale_x=$(if($Scale -eq '1920x1080'){1}else{2})"; $args+="--draw_resolution_scale_y=$(if($Scale -eq '1920x1080'){1}else{2})" }
 if ($Gtao) { $args+='--ao_mode=1','--ao_strength=2','--native_ao_method=gtao' } else { $args+='--ao_mode=0' }
 if ($Fire) { $args+='--kk_cheat_ammo=true','--kk_cheat_machine_gun=true' }
+if ($Validation) { $args+='--native_validation=true' }
 @{label=$Label;chapter=$Chapter;backend=$Backend;classic=[bool]$Classic;scale=$Scale;cores=$Cores;args=$args} | ConvertTo-Json | Set-Content "$run\test.json"
 Wait-Free
 Set-Content -LiteralPath $lockPath "task012 $(Get-Date -Format o)"

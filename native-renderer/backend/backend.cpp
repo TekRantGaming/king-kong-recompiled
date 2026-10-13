@@ -15,6 +15,7 @@
 #include <rex/system/xmemory.h>
 
 #include "backend/api_binding.h"
+#include "backend/cpu_profile.h"
 #include "backend/frame_log.h"
 #include "backend/log.h"
 #include "backend/render_scale.h"
@@ -49,6 +50,7 @@ std::atomic<uint64_t> g_watch_calls;
 // The swap's own time (the ring skimmer's thread): waiting for the frame's submission, and the
 // presenter's refresh of its guest output.
 std::atomic<uint64_t> g_swap_flush_us, g_swap_refresh_us;
+std::atomic<uint64_t> g_swap_refresh_cpu_us;
 
 // The slowest frames since the last statistics line (the game thread's interval between two
 // Presents) and where their time went, for finding stutters.
@@ -687,6 +689,8 @@ void Backend::PresentNow(rex::ui::Presenter* presenter, uint32_t frontbuffer_wid
     const Renderer::Stats& r = renderer_->stats();
     REXLOG_INFO("rexgpu-native: GPU frame reuse wait {} ms over {} frames", r.gpu_reuse_wait_us / 1000,
                 r.frames_submitted);
+    REXLOG_INFO("rexgpu-native: host CPU over {} frames: {} us submission, {} us presenter refresh",
+                r.frames_submitted, host_->submit_times().cpu_us, g_swap_refresh_cpu_us.load());
     REXLOG_INFO(
         "rexgpu-native: swap {}: hooks saw {} draws ({} indexed, {} dropped), {} clears, {} "
         "resolves, {} presents; renderer drew {}, skipped {} (other target) {} (primitive) {} "
@@ -758,7 +762,9 @@ void Backend::PresentNow(rex::ui::Presenter* presenter, uint32_t frontbuffer_wid
     const auto t1 = std::chrono::steady_clock::now();
     struct RefreshTimer {
       std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+      uint64_t cpu_start = CurrentThreadCpuMicroseconds();
       ~RefreshTimer() {
+        g_swap_refresh_cpu_us += CurrentThreadCpuMicroseconds() - cpu_start;
         g_swap_refresh_us += uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
                                           std::chrono::steady_clock::now() - start).count());
       }

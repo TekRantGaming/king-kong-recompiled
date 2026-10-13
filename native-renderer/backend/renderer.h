@@ -14,6 +14,7 @@
 #include <functional>
 #include <memory>
 #include <span>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -193,6 +194,15 @@ class Renderer final : public DrawSink {
   uint32_t frame_list_index_ = 0;
   bool frame_open_ = false;
   std::unique_ptr<AoGpuTimer> debug_gpu_timer_;
+  struct TimedPass {
+    std::string name;
+    AoGpuTimer timer;
+    TimedPass(nvrhi::IDevice* device, std::string label)
+        : name(std::move(label)), timer(device, name.c_str(), "pass GPU time") {}
+  };
+  std::unordered_map<uint64_t, std::unique_ptr<TimedPass>> debug_pass_timers_;
+  TimedPass* debug_open_pass_ = nullptr;
+  void DebugGpuPass(nvrhi::ICommandList* cl, uint64_t key, const char* label);
   uint32_t main_surface_ = 0;  // render target 0 at the last Present
   std::vector<uint32_t> scratch_indices_;
 };

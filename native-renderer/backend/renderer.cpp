@@ -1,4 +1,5 @@
 #include "backend/renderer.h"
+#include "backend/cpu_profile.h"
 
 #include <mutex>
 
@@ -46,6 +47,8 @@ void Renderer::EnableGame(std::unique_ptr<GameRenderer> game) { game_ = std::mov
 
 void Renderer::Shutdown() {
   debug_gpu_timer_.reset();
+  debug_open_pass_ = nullptr;
+  debug_pass_timers_.clear();
   game_.reset();
   frame_command_list_ = nullptr;
   frame_open_ = false;
@@ -296,9 +299,27 @@ nvrhi::Color Renderer::TestClearColor(uint32_t frame) {
   return nvrhi::Color(wave(t), wave(t + 1.0f / 3.0f), wave(t + 2.0f / 3.0f), 1.0f);
 }
 
+void Renderer::DebugGpuPass(nvrhi::ICommandList* cl, uint64_t key, const char* label) {
+  // Sample every fourth frame to bound query usage and perturbation. Batches of
+  // draws sharing a target are one measured pass, including their guest uploads.
+  if (!game_ || !(game_->options().debug & 65536) || stats_.frames_submitted % 4 != 0) return;
+  auto it = debug_pass_timers_.find(key);
+  if (it == debug_pass_timers_.end()) {
+    if (debug_pass_timers_.size() >= 64) return;
+    it = debug_pass_timers_.emplace(key, std::make_unique<TimedPass>(device_, label)).first;
+  }
+  TimedPass* pass = it->second.get();
+  if (pass == debug_open_pass_) return;
+  if (debug_open_pass_) debug_open_pass_->timer.End(cl);
+  debug_open_pass_ = pass;
+  pass->timer.Begin(cl);
+}
+
 void Renderer::OnClear(const ClearCall& call) {
   if (game_) {
-    game_->Clear(FrameCommandList(), call);
+    auto* cl = FrameCommandList();
+    if (game_->options().debug & 65536) DebugGpuPass(cl, UINT64_MAX, "clears");
+    game_->Clear(cl, call);
     return;
   }
   if (!(call.color || call.depth) || !OnMainSurface(call.render_target0)) return;
@@ -323,7 +344,14 @@ void Renderer::OnClear(const ClearCall& call) {
 
 void Renderer::OnDraw(const DrawCall& call) {
   if (game_) {
-    game_->Draw(FrameCommandList(), call);
+    auto* cl = FrameCommandList();
+    if ((game_->options().debug & 65536) && stats_.frames_submitted % 4 == 0) {
+      char label[96];
+      std::snprintf(label, sizeof(label), "draw RT0 %08X depth %08X (uploads included)",
+                    call.render_targets[0], call.depth_stencil);
+      DebugGpuPass(cl, uint64_t(call.render_targets[0]) << 32 | call.depth_stencil, label);
+    }
+    game_->Draw(cl, call);
     return;
   }
   if (!OnMainSurface(call.render_targets[0])) {
@@ -426,7 +454,11 @@ void Renderer::OnDraw(const DrawCall& call) {
 
 void Renderer::OnResolve(const ResolveCall& call) {
   // The placeholder does not model render-to-texture.
-  if (game_) game_->Resolve(FrameCommandList(), call);
+  if (game_) {
+    auto* cl = FrameCommandList();
+    if (game_->options().debug & 65536) DebugGpuPass(cl, UINT64_MAX - 1, "resolves and scene-copy work");
+    game_->Resolve(cl, call);
+  }
 }
 
 void Renderer::OnVertexShaderPatched(uint32_t shader, uint32_t microcode, uint32_t declaration) {
@@ -444,11 +476,15 @@ void Renderer::OnPresent(uint32_t frame, uint32_t render_target0, uint32_t devic
   const auto t0 = clock::now();
   if (game_) {
     // The game's back buffer into the frame image.
-    game_->Present(FrameCommandList(), device, frames_[recording_]);
+    auto* cl = FrameCommandList();
+    if (game_->options().debug & 65536) DebugGpuPass(cl, UINT64_MAX - 2, "game Present copy");
+    game_->Present(cl, device, frames_[recording_]);
   }
   const auto t1 = clock::now();
   stats_.present_copy_us += us(t0, t1);
   if (!frame_open_) return;
+  if (debug_open_pass_) debug_open_pass_->timer.End(frame_command_list_);
+  debug_open_pass_ = nullptr;
   if (debug_gpu_timer_) debug_gpu_timer_->End(frame_command_list_);
   frame_command_list_->close();
   frame_open_ = false;
@@ -458,11 +494,17 @@ void Renderer::OnPresent(uint32_t frame, uint32_t render_target0, uint32_t devic
   frame_command_list_ = frame_lists_[frame_list_index_];
   const auto t3 = clock::now();
   ++stats_.frames_submitted;
+  if (game_ && (game_->options().debug & 32768) && stats_.frames_submitted % 300 == 0) {
+    Logf(LogLevel::kInfo, "rexgpu-native: render CPU frame %llu: %llu us execution (cumulative)",
+         static_cast<unsigned long long>(stats_.frames_submitted),
+         static_cast<unsigned long long>(CurrentThreadCpuMicroseconds()));
+  }
   presented_ = recording_;
   recording_ ^= 1;
   if (observer_) observer_->OnFrameSubmitted(frame, frames_[presented_]);
   if (game_) game_->EndFrame();
   if (debug_gpu_timer_) debug_gpu_timer_->FrameEnd();
+  for (auto& [key, pass] : debug_pass_timers_) pass->timer.FrameEnd();
   const auto t4 = clock::now();
   stats_.present_close_us += us(t1, t2);
   stats_.present_submit_us += us(t2, t3);

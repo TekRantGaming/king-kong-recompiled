@@ -28,6 +28,7 @@
 #include <rex/ui/vulkan/provider.h>
 
 #include "backend/host_device.h"
+#include "backend/cpu_profile.h"
 #include "backend/output_blit.h"
 #include "backend/vk_pipeline_cache.h"
 #include "backend/vulkan_dispatch.h"
@@ -107,6 +108,7 @@ class VulkanHost final : public HostDevice {
     // Host access to a VkQueue must be externally synchronised: hold the SDK's
     // queue lock (recursive) while NVRHI submits.
     using clock = std::chrono::steady_clock;
+    const uint64_t cpu_start = CurrentThreadCpuMicroseconds();
     const auto t0 = clock::now();
     auto acquisition = provider_.vulkan_device()->AcquireQueue(queue_family_, 0);
     std::lock_guard execute_lock(execute_mutex_);
@@ -126,6 +128,7 @@ class VulkanHost final : public HostDevice {
     times_.wait_us += us(t0, t1);
     times_.execute_us += us(t1, t2);
     times_.garbage_us += us(t2, t3);
+    times_.cpu_us += CurrentThreadCpuMicroseconds() - cpu_start;
     ++times_.count;
   }
   SubmitTimes submit_times() const override {

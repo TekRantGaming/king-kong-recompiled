@@ -23,6 +23,12 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 #include <rex/hook.h>
 #include <rex/logging.h>
@@ -107,12 +113,21 @@ void LogFrame(const uint8_t* base) {
       over = true;
       return;
     }
-    std::fprintf(f, "frame,t,host_ms,raw_dt,dt,game_ms");
+    std::fprintf(f, "frame,t,host_ms,raw_dt,dt,game_ms,cpu_ms");
     for (uint32_t a : w.addrs) std::fprintf(f, ",%08X", a);
     std::fprintf(f, "\n");
   }
-  std::fprintf(f, "%llu,%.4f,%.3f,%.6f,%.6f,%u", (unsigned long long)frame++, t, host_ms, LoadF(base, kRawFrameTime),
-               LoadF(base, kFrameTime), Load32(base, kGameMs));
+  double cpu_ms = 0;
+#if defined(_WIN32)
+  FILETIME created{}, exited{}, kernel{}, user{};
+  if (GetThreadTimes(GetCurrentThread(), &created, &exited, &kernel, &user)) {
+    const uint64_t ticks = ((uint64_t(kernel.dwHighDateTime) << 32) | kernel.dwLowDateTime) +
+                           ((uint64_t(user.dwHighDateTime) << 32) | user.dwLowDateTime);
+    cpu_ms = double(ticks) / 10000.0;
+  }
+#endif
+  std::fprintf(f, "%llu,%.4f,%.3f,%.6f,%.6f,%u,%.4f", (unsigned long long)frame++, t, host_ms, LoadF(base, kRawFrameTime),
+               LoadF(base, kFrameTime), Load32(base, kGameMs), cpu_ms);
   for (uint32_t a : w.addrs) std::fprintf(f, ",%.6f", LoadF(base, a));
   std::fprintf(f, "\n");
   if (frame % 30 == 0) std::fflush(f);
