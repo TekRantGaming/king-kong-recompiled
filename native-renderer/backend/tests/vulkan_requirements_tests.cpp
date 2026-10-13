@@ -15,6 +15,17 @@ struct Features {
   bool runtimeDescriptorArray = true;
 };
 
+struct Limits {
+  unsigned maxPerStageDescriptorUpdateAfterBindSampledImages = nr::kNativeSampledImageSlots;
+  unsigned maxPerStageDescriptorUpdateAfterBindStorageBuffers = nr::kNativeStorageBufferSlots;
+  unsigned maxPerStageDescriptorUpdateAfterBindSamplers = nr::kNativeSamplerSlots;
+  unsigned maxDescriptorSetUpdateAfterBindSampledImages = nr::kNativeSampledImageSlots;
+  unsigned maxDescriptorSetUpdateAfterBindStorageBuffers = nr::kNativeStorageBufferSlots;
+  unsigned maxDescriptorSetUpdateAfterBindSamplers = nr::kNativeSamplerSlots;
+  unsigned maxPerStageUpdateAfterBindResources = nr::kNativeSampledImageSlots + nr::kNativeStorageBufferSlots + nr::kNativeSamplerSlots + 5;
+  unsigned maxUpdateAfterBindDescriptorsInAllPools = nr::kNativeSampledImageSlots + nr::kNativeStorageBufferSlots + nr::kNativeSamplerSlots;
+};
+
 int main() {
   Features p;
   std::vector<std::string> missing;
@@ -36,5 +47,23 @@ int main() {
   missing.clear();
   Features unavailable{false,false,false,false,false,false,false,false,false};
   if (nr::CheckNativeBindlessFeatures(unavailable, report) || missing.size() != 9) return 3;
-  std::puts("Native Vulkan requirements: 11 cases passed");
+  Limits limits;
+  auto limit_report = [&](const char* name, unsigned, unsigned) { missing.emplace_back(name); };
+  missing.clear();
+  if (!nr::CheckNativeBindlessLimits(7, limits, limit_report) || !missing.empty()) return 4;
+  unsigned Limits::* limit_members[] = {
+    &Limits::maxPerStageDescriptorUpdateAfterBindSampledImages, &Limits::maxPerStageDescriptorUpdateAfterBindStorageBuffers,
+    &Limits::maxPerStageDescriptorUpdateAfterBindSamplers, &Limits::maxDescriptorSetUpdateAfterBindSampledImages,
+    &Limits::maxDescriptorSetUpdateAfterBindStorageBuffers, &Limits::maxDescriptorSetUpdateAfterBindSamplers,
+    &Limits::maxPerStageUpdateAfterBindResources, &Limits::maxUpdateAfterBindDescriptorsInAllPools
+  };
+  for (auto member : limit_members) {
+    Limits too_small = limits;
+    --(too_small.*member);
+    missing.clear();
+    if (nr::CheckNativeBindlessLimits(7, too_small, limit_report) || missing.size() != 1) return 5;
+  }
+  missing.clear();
+  if (nr::CheckNativeBindlessLimits(6, limits, limit_report) || missing.size() != 1) return 6;
+  std::puts("Native Vulkan requirements: 21 cases passed");
 }

@@ -55,6 +55,22 @@ class VulkanHost final : public HostDevice {
     if (!HasRequiredFeatures(*vulkan_device)) {
       return false;
     }
+    VkPhysicalDeviceDescriptorIndexingProperties indexing{};
+    indexing.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_PROPERTIES;
+    VkPhysicalDeviceProperties2 properties{};
+    properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    properties.pNext = &indexing;
+    const auto get_properties = vulkan_instance->functions().vkGetPhysicalDeviceProperties2;
+    if (!get_properties) {
+      REXGPU_ERROR("rexgpu-native: cannot verify descriptor limits. Choose Native D3D12 or Classic.");
+      return false;
+    }
+    get_properties(vulkan_device->physical_device(), &properties);
+    if (!CheckNativeBindlessLimits(properties.properties.limits.maxBoundDescriptorSets, indexing,
+          [](const char* name, unsigned available, unsigned needed) {
+            REXGPU_ERROR("rexgpu-native: descriptor limit {} is {}, requires {}. Choose Native D3D12 or Classic.",
+                         name, available, needed);
+          })) return false;
     queue_family_ = vulkan_device->queue_family_graphics_compute();
     // The SDK loads the Vulkan loader itself; NVRHI's calls go through
     // vulkan.hpp's dispatcher, filled from the same loader.
