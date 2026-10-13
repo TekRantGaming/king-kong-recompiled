@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "backend/game_renderer.h"
+#include "backend/game_upscale.h"
 #include "backend/log.h"
 #include "kknr/render_targets.h"
 
@@ -66,6 +67,7 @@ AoSettings GameRenderer::AoSettingsFor(uint64_t frame) {
   // Read once a frame (the launcher's ao_mode and ao_strength may change between frames).
   if (frame != ao_settings_frame_) {
     ao_settings_ = options_.ao_settings ? options_.ao_settings() : AoSettings{};
+    ao_settings_.temporal_upscaler = upscale_ && upscale_->upscaler != nullptr;
     ao_settings_frame_ = frame;
   }
   return ao_settings_;
@@ -104,6 +106,15 @@ void GameRenderer::AoDrawHook(nvrhi::ICommandList* cl, const DrawCall& call, con
   if (depth) a.depth = {depth->key, depth->texture, depth->scale_x, depth->scale_y};
   a.frame_size = size_from && size_from->width == options_.guest_frame_width;
   a.vs_constants = d.at(dev::kVsConstants);
+  a.motion_key.vs_hash = vs.ucode_hash;
+  a.motion_key.vertex_buffer = d.u32(dev::kStreamBuffer);
+  a.motion_key.vertex_buffer2 = d.u32(dev::kStreamBuffer + 8);
+  a.motion_key.vertex_offset = d.u32(dev::kStreamOffset);
+  a.motion_key.index_buffer = call.indexed ? call.index_info.physical : 0;
+  a.motion_key.start = call.start;
+  a.motion_key.count = call.count;
+  a.motion_key.base_vertex = call.base_vertex;
+  a.motion_key.primitive = uint32_t(call.primitive);
   // The viewport transform as ComputeViewport reads it.
   const uint32_t vte = d.u32(dev::kPaClVteCntl), mode = d.u32(dev::kPaSuScModeCntl);
   AoScreen& sc = a.screen;

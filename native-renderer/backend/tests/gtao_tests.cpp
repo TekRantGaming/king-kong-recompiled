@@ -558,6 +558,79 @@ TEST(Gtao_DepthTargetsAndTheirCopy) {
   CHECK_EQ(gtao.stats().depth_copies, uint64_t(1));
 }
 
+TEST(Gtao_TemporalReducesNoiseRejectsDepthAndResets) {
+  if (!Device()) return;
+  ErrorsChecked errors;
+  auto* gpu = Device();
+  Camera cam;
+  cam.Setup(float(kGw) / kGh);
+  GtaoInput in;
+  in.width = kGw; in.height = kGh;
+  in.screen = Screen(kGw, kGh, 1);
+  float rows[16]; cam.Rows(rows);
+  CHECK(ExtractAoProjection(rows, in.projection));
+  auto z = RayCast(cam, in.screen, kGw, kGh);
+  auto depth = DepthTexture(gpu->device(), z, kGw, kGh);
+  in.depth = depth;
+  in.reprojection_valid = true;
+  Gtao temporal(gpu->device()), spatial(gpu->device());
+  CHECK(temporal.Initialize() && spatial.Initialize());
+  GtaoSettings local, raw;
+  local.temporal = true;
+  raw.temporal_upscaler = true;  // same rotating noise, without a history here
+  auto compute = [&](Gtao& gtao, const GtaoSettings& settings) {
+    auto cl = gpu->device()->createCommandList();
+    cl->open();
+    auto* result = gtao.Compute(cl, in, settings);
+    CHECK(result != nullptr);
+    cl->close(); gpu->Execute(cl); gpu->WaitIdle();
+    return ReadR32(gpu->device(), result);
+  };
+  auto delta = [&](const Image& a, const Image& b) {
+    double sum = 0;
+    for (size_t i = 0; i < a.v.size(); ++i) if (z[i] < 1) sum += std::fabs(a.v[i] - b.v[i]);
+    return sum / a.v.size();
+  };
+  double noisy = 0, smooth = 0;
+  Image previous_local, previous_raw;
+  for (uint64_t f = 1; f <= 24; ++f) {
+    in.frame = f;
+    Image a = compute(temporal, local), b = compute(spatial, raw);
+    if (f > 8) { smooth += delta(a, previous_local); noisy += delta(b, previous_raw); }
+    previous_local = a; previous_raw = b;
+  }
+  std::printf("  rotating spatial MAE %.6f, temporal MAE %.6f\n", noisy / 16, smooth / 16);
+  CHECK(smooth < noisy * 0.6);
+  CHECK_EQ(temporal.stats().history_frames, uint64_t(23));
+  // Skipped frames and a live sample change must start fresh, rather than mix old AO.
+  in.frame = 30;
+  Image a = compute(temporal, local), b = compute(spatial, raw);
+  CHECK(delta(a,b) < 1e-6);
+  for (int quality : {1,3,2}) {
+    ++in.frame;
+    local.sample_quality = raw.sample_quality = quality;
+    a = compute(temporal, local); b = compute(spatial, raw);
+    CHECK(delta(a,b) < 1e-6);
+    for (size_t i = 0; i < a.v.size(); ++i) {
+      CHECK(std::isfinite(a.v[i]) && a.v[i] >= 0 && a.v[i] <= 1);
+      if (z[i] == 1) CHECK(a.v[i] == 1);
+    }
+  }
+  // A new surface far in front of the previous scene rejects the old depth.
+  z.assign(z.size(), 0.5f);
+  depth = DepthTexture(gpu->device(), z, kGw, kGh);
+  in.depth = depth; ++in.frame;
+  a = compute(temporal, local); b = compute(spatial, raw);
+  CHECK(delta(a,b) < 1e-6);
+  // An off-screen reprojection is also wholly rejected.
+  in.reprojection[3] = 4;
+  ++in.frame;
+  a = compute(temporal, local); b = compute(spatial, raw);
+  CHECK(delta(a,b) < 1e-6);
+  Save(previous_raw, "temporal_before");
+  Save(previous_local, "temporal_after");
+}
+
 TEST(Gtao_RefusesWhatItCannotUse) {
   if (!Device()) return;
   ErrorsChecked errors;

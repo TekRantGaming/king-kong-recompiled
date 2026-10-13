@@ -1,5 +1,5 @@
 param([string]$Label = 'before', [int[]]$Entries = @(2,3,4,5,6,7,8),
-      [string]$Build = '', [string[]]$ExtraArgs = @(), [int]$Seconds = 60)
+      [string]$Build = '', [string[]]$ExtraArgs = @(), [int]$Seconds = 60, [switch]$Hands)
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path "$PSScriptRoot\..\..").Path
 if (!$Build) { $Build = "$root\kk\out\build\kk-dev-vulkan" }
@@ -23,7 +23,8 @@ foreach ($entry in $Entries) {
   $env:KK_DEV_SHOTS_FROM = 'menu'
   $env:KK_DEV_SHOTS_DIR = $run
   $env:KK_DEV_SCRIPT = '0:SKIP/8,10:RSRIGHT/3,16:RSLEFT/6,24:RSRIGHT/3,30:RSDOWN/1,34:RSUP/1,45:A/0.1'
-  $env:KK_DEV_SHOTS = '9,12,15,18,21,24,27,30,33,36,39,39.034,39.068,39.102,39.136,42,45'
+  if ($Hands) { $env:KK_DEV_SCRIPT = '0:SKIP/8,10:LB/0.2,12:LT/34,16:RSRIGHT/1,20:RSLEFT/1,30:RSDOWN/0.2,34:RSUP/0.2,45:A/0.1' }
+  $env:KK_DEV_SHOTS = '9,12,15,18,21,24,27,30,33,36,39,39.1,39.2,39.3,39.4,42,45'
   $env:KK_DEV_FREEZE_SKIP = '3'
   $args = @('--fullscreen=false','--window_width=1280','--window_height=720','--kk_fullscreen_mode=desktop',
     '--kk_launcher=false',"--kk_start=chapter:0:$entry",'--kk_renderer=native','--native_backend=vulkan',

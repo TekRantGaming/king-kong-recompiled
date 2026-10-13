@@ -1278,6 +1278,12 @@ class SettingsPages {
                              native ? std::vector<Option>{{"Light", "1"}, {"Medium", "2"}, {"Strong (recommended)", "3"}}
                                     : std::vector<Option>{{"Light (recommended)", "1"}, {"Medium", "2"}, {"Strong", "3"}});
         items.push_back(std::move(Disable(st, original, kSetByOriginal)));
+        if (native) {
+          Item quality = CvarChoice("AO quality",
+              "More samples reduce grain on hands and flat surfaces. Medium keeps the previous sample count. High costs more GPU time.",
+              "native_ao_samples", {{"Low", "1"}, {"Medium", "2"}, {"High", "3"}});
+          items.push_back(std::move(Disable(quality, original, kSetByOriginal)));
+        }
       }
     }
 
@@ -4160,7 +4166,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       case kGraphics:
         return {"kk_original_look", "kk_modern_settings", "swap_post_effect", "anisotropic_override",
                 "kk_motion_blur", "kk_big_blur", "kk_fog", "ao_mode", "ao_strength", "native_ao_method",
-                "native_ao_apply", "native_ao_quality", "kk_renderer"};
+                "native_ao_apply", "native_ao_quality", "native_ao_samples", "kk_renderer"};
       case kGameplay:
         return {"kk_fov", "kk_camera_shake", "kk_camera_shake_strength", "kk_show_fps",
                 "kk_skip_intros", "user_language"};

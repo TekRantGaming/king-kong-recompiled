@@ -57,6 +57,7 @@ class SceneAo {
     bool frame_size = false;               // the targets have the frame's pitch
     const uint8_t* vs_constants = nullptr;  // the device's vertex constants (big-endian, 256 x 16 bytes)
     AoScreen screen;                        // the draw's viewport, with its target's render scale
+    MotionDrawKey motion_key;
   };
   // Before a draw is recorded: classify, follow, and at the moments above work the occlusion out and
   // apply it (into `cl`, before the draw). True when the draw goes to the scene after the ambient-only
@@ -138,6 +139,8 @@ class SceneAo {
   std::unique_ptr<Gtao> gtao_;
   AoFrameTracker tracker_;
   AoCameraFinder camera_;
+  MotionHistory motion_history_;
+  CameraReprojectionVote motion_vote_;
   Stats stats_;
 
   uint64_t frame_ = UINT64_MAX;
@@ -156,6 +159,7 @@ class SceneAo {
   uint64_t fog_frame_ = UINT64_MAX;
   AmbientView ambient_view_;
   bool warned_camera_ = false;
+  const char* failure_reason_ = "no apply point";
   LastDraw last_;
   Stats logged_;  // the statistics at the last periodic log line
 };

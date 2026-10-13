@@ -167,12 +167,26 @@ a multiple of 16 (no pass writes outside its images; the padding repeats the pic
 1. `cs_prepare`: the picture's stored depth into the working image (at half resolution every second pixel).
 2. `cs_prefilter`: `XeGTAO_PrefilterDepths16x16`, view-space depth and its four smaller mips.
 3. `cs_normals`: `XeGTAO_ComputeViewspaceNormal`, normals rebuilt from the depth.
-4. `cs_main`: `XeGTAO_MainPass`, 3 slices of 3 steps per pixel (XeGTAO's "high"), no temporal noise (the renderer
-   has no temporal accumulation, so the noise is the same every frame and the picture does not shimmer).
+4. `cs_main`: `XeGTAO_MainPass`, selectable sample quality (`native_ao_samples`): Low = 2 slices of 2 steps,
+   Medium = 3 slices of 3 steps (the previous setting), High = 9 slices of 3 steps. Resolution remains independently
+   controlled by `native_ao_quality=auto/full/half`.
 5. `cs_denoise`, `cs_denoise_last`: two of XeGTAO's edge-aware denoise passes (its "medium"; without TAA one is too
    noisy).
 6. `cs_output`: one R32F image over the picture (1 = no occlusion), at half resolution upsampled with weights from
    the depth; stored depth at the far plane (the cleared sky) gets exactly 1.
+7. Without a temporal upscaler, `cs_temporal` reprojects the previous AO with the upscalers' `MotionHistory` and
+   `CameraReprojectionVote` machinery (up to 256 scene draws). It rejects previous depths differing by more than
+   1% (minimum 0.002 world units), out-of-picture samples and jumps over a quarter of the picture. Accepted history
+   is clamped to the current 3x3 AO neighbourhood, then blended at 80% history. A frame gap, viewport or AO-setting
+   change resets accumulation. These camera vectors do not include per-object motion; depth rejection and clamping
+   bound trails on hands and animated objects. Four extra R32F images cost about 14 MB at 1280x720 and are allocated
+   only for local accumulation.
+
+With an active temporal SDK (DLSS, FSR or XeSS), AO remains at the opaque point before upscaling and does not use a
+second local history. Its noise rotates over 64 patterns for the SDK to smooth. Local accumulation rotates the same
+patterns only when the camera has at least three matching votes and a majority; otherwise it keeps fixed noise and
+the existing two spatial denoise passes. `native_ao_gpu_time` includes the local filter and its history copies.
+The launcher's Graphics page places AO quality next to AO strength and applies its sample count live.
 
 Formats are R32_FLOAT and R32_UINT only: every Vulkan device can store to them without the
 `shaderStorageImageExtendedFormats` feature (XeGTAO's own R8 images would need it). Memory at 1280x720: about 27 MB
@@ -571,8 +585,11 @@ keep `--kk_original_look_keep=ao_mode,ao_strength` on every run that sets ao_mod
   (a reflection) would be taken for it (the game's water reflection has an `ignore` rule now).
 - The opaque objects the game draws after its fog pass (a handful a frame, the Venture's hull among them) get no
   occlusion, and the decals it interleaves with its opaque draws are darkened with their surface.
-- A frame that loses its fog pass (a cut, a menu over the scene) waits for it in vain and has no occlusion; the next
-  frame goes back to the first blended draw.
+- A frame that loses its fog pass can now end before a shader-specific transparent draw (water, ocean, heat shimmer
+  or fur), even when the previous frame's fog was present. Generic blended decals still wait. A missing-fog frame
+  with only unknown transparent shaders can still miss the early moment; no late transparent darkening is introduced
+  to conceal that gap. Enable `native_ao_dump_every` to log each frame's apply-point/computed/applied state and reason,
+  with detailed draws at the requested interval and denoise/camera-history diagnostics at that interval.
 - The opaque moment multiplies the colour the game's shaders wrote, which for distantly fogged surfaces includes the
   per-object fog of `psgeneric` (`g_fFogColor`); the occlusion is small that far away (its radius is in world units),
   and `--native_ao_fade` can fade it out as the legacy method does.

@@ -23,6 +23,7 @@
 
 #include "backend/ambient_occlusion.h"
 #include "backend/ao_camera.h"
+#include "backend/upscale_motion.h"
 
 namespace nr {
 
@@ -30,6 +31,9 @@ struct GtaoSettings {
   int mode = 1;          // ao_mode: 1 on, 2 the occlusion only
   int strength = 1;      // ao_strength 1 to 3
   bool half = false;     // --native_ao_quality=half
+  int sample_quality = 2;
+  bool temporal = false;  // local accumulation, when there is no temporal upscaler
+  bool temporal_upscaler = false;
   float radius = 0.0f;   // world units; 0: the legacy radius for the strength times the near plane
   float radius_scale = 1.0f;  // times the radius from the camera
   float falloff = 0.0f;       // XeGTAO's falloff range (0: its default)
@@ -44,6 +48,9 @@ struct GtaoInput {
   uint32_t width = 0, height = 0;
   AoProjection projection;
   AoScreen screen;
+  uint64_t frame = UINT64_MAX;
+  Mat4 reprojection = Mat4Identity();
+  bool reprojection_valid = false;
 };
 
 class Gtao {
@@ -86,6 +93,7 @@ class Gtao {
     uint64_t applied = 0;       // ApplyToTarget
     uint64_t copies = 0;        // ApplyToCopy
     uint64_t depth_copies = 0;  // CopyDepth
+    uint64_t history_frames = 0;  // frames eligible for local depth-validated history
   };
   const Stats& stats() const { return stats_; }
 
@@ -99,7 +107,7 @@ class Gtao {
   bool MakePass(Pass& pass, int id, const char* entry, const std::vector<nvrhi::BindingLayoutItem>& items);
   nvrhi::TextureHandle MakeImage(uint32_t width, uint32_t height, nvrhi::Format format, uint32_t mips, bool uav,
                                  bool render_target, const char* name);
-  bool EnsureImages(uint32_t padded_w, uint32_t padded_h, uint32_t out_w, uint32_t out_h);
+  bool EnsureImages(uint32_t padded_w, uint32_t padded_h, uint32_t out_w, uint32_t out_h, bool temporal);
   void Dispatch(nvrhi::ICommandList* cl, Pass& pass, nvrhi::IBindingSet* set, uint32_t x, uint32_t y);
   nvrhi::BindingSetHandle Set(Pass& pass, const std::vector<nvrhi::BindingSetItem>& items);
   nvrhi::IFramebuffer* Framebuffer(nvrhi::ITexture* color);
@@ -111,7 +119,7 @@ class Gtao {
   bool ready_ = false;
   Stats stats_;
 
-  Pass prepare_, prefilter_, normals_, main_, denoise_, denoise_last_, output_pass_;
+  Pass prepare_, prefilter_, normals_, main_, denoise_, denoise_last_, output_pass_, temporal_;
   nvrhi::ShaderHandle vs_, apply_ps_, apply_resolve_ps_;
   nvrhi::BindingLayoutHandle apply_layout_, apply_resolve_layout_;
   nvrhi::SamplerHandle point_clamp_;
@@ -122,6 +130,12 @@ class Gtao {
   uint32_t padded_w_ = 0, padded_h_ = 0, out_w_ = 0, out_h_ = 0;
   int32_t origin_x_ = 0, origin_y_ = 0;
   nvrhi::TextureHandle raw_, depth_mips_, normal_map_, term_a_, term_b_, edges_, output_;
+  nvrhi::TextureHandle spatial_, temporal_depth_, history_ao_, history_depth_;
+  uint64_t history_frame_ = UINT64_MAX;
+  GtaoSettings history_settings_;
+  AoScreen history_screen_;
+  AoProjection history_projection_;
+  int32_t history_x_ = 0, history_y_ = 0;
   nvrhi::TextureHandle depth_copy_, scratch_;
   // Binding sets of the passes over the working images (remade with them), and sets keyed by
   // the textures they bind for the passes whose inputs vary.

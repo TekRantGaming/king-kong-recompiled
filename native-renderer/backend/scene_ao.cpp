@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "backend/log.h"
+#include "backend/guest_memory.h"
 
 namespace nr {
 
@@ -43,6 +44,9 @@ GtaoSettings SceneAo::Settings(const AoSettings& s) const {
   GtaoSettings g;
   g.mode = s.mode;
   g.strength = s.strength;
+  g.sample_quality = s.sample_quality;
+  g.temporal_upscaler = s.temporal_upscaler;
+  g.temporal = !s.temporal_upscaler;
   g.half = config_.quality == AoQuality::kHalf;
   g.radius = config_.radius;
   g.radius_scale = config_.radius_scale;
@@ -59,13 +63,16 @@ void SceneAo::NewFrame(uint64_t frame) {
         tracker_.phase() < AoFrameTracker::Phase::kOpaquePass ? "no opaque scene" :
         tracker_.expects_end() && tracker_.phase() == AoFrameTracker::Phase::kOpaquePass ? "waiting for missing fog/end" :
         !tracker_.depth_valid() && !depth_copied_ ? "depth cleared/no depth copy" :
-        scene_resolved_ ? "scene already resolved" : "camera/compute/apply unavailable";
+        scene_resolved_ ? "scene already resolved" : failure_reason_;
     Logf(LogLevel::kInfo, "rexgpu-native: AO frame %llu: apply_point=%d computed=%d applied=%d reason=%s phase=%u expects_end=%d depth=%d copied=%d resolved=%d opaque=%u",
          static_cast<unsigned long long>(frame_), int(tracker_.phase() == AoFrameTracker::Phase::kAfterOpaque),
          int(computed_), int(applied_ || ambient), reason, unsigned(tracker_.phase()), int(tracker_.expects_end()),
          int(tracker_.depth_valid()), int(depth_copied_), int(scene_resolved_), tracker_.opaque_draws());
   }
   frame_ = frame;
+  failure_reason_ = "no apply point";
+  motion_history_.BeginFrame(frame);
+  motion_vote_.BeginFrame(frame);
   computed_ = applied_ = ambient_ready_ = ambient_drawn_ = scene_resolved_ = false;
   depth_copied_ = scene_dest_set_ = resolve_applied_ = false;
   ambient_view_ = {};
@@ -91,6 +98,7 @@ bool SceneAo::Compute(nvrhi::ICommandList* cl, const AoSettings& s, nvrhi::IText
   AoProjection p;
   AoScreen sc;
   if (!camera_.Get(frame_, p, sc)) {
+    failure_reason_ = "no camera";
     ++stats_.no_camera;
     if (!warned_camera_) {
       Logf(LogLevel::kWarning, "rexgpu-native: AO: no camera found among the scene's draws yet (no perspective matrix in "
@@ -104,6 +112,7 @@ bool SceneAo::Compute(nvrhi::ICommandList* cl, const AoSettings& s, nvrhi::IText
   if (!depth && tracker_.depth_valid() && scene_depth_.texture) depth = scene_depth_.texture;
   if (!depth && depth_copied_) depth = depth_copy_;
   if (!depth) {
+    failure_reason_ = "no current depth";
     ++stats_.no_depth;
     return false;
   }
@@ -114,7 +123,10 @@ bool SceneAo::Compute(nvrhi::ICommandList* cl, const AoSettings& s, nvrhi::IText
   const int32_t y0 = std::max(0, int32_t(std::lround(sc.top() * sc.host_scale_y)));
   const int32_t x1 = std::min(int32_t(dd.width), int32_t(std::lround((sc.left() + sc.width()) * sc.host_scale_x)));
   const int32_t y1 = std::min(int32_t(dd.height), int32_t(std::lround((sc.top() + sc.height()) * sc.host_scale_y)));
-  if (x1 - x0 < 2 || y1 - y0 < 2) return false;
+  if (x1 - x0 < 2 || y1 - y0 < 2) {
+    failure_reason_ = "empty camera viewport";
+    return false;
+  }
   GtaoInput in;
   in.depth = depth;
   in.x = x0;
@@ -123,12 +135,23 @@ bool SceneAo::Compute(nvrhi::ICommandList* cl, const AoSettings& s, nvrhi::IText
   in.height = uint32_t(y1 - y0);
   in.projection = p;
   in.screen = sc;
+  in.frame = frame_;
+  uint32_t votes = 0, offers = 0;
+  in.reprojection_valid = motion_vote_.Result(in.reprojection, &votes, &offers) && votes >= 3 && votes * 2 >= offers;
   TimeBegin(cl);
   GtaoSettings gs = Settings(s);
   if (config_.quality == AoQuality::kAuto) gs.half = sc.host_scale_x > 1.5f || sc.host_scale_y > 1.5f;
   const bool ok = gtao_->Compute(cl, in, gs) != nullptr;
   TimeEnd(cl);
-  if (!ok) return false;
+  if (!ok) {
+    failure_reason_ = "GTAO compute failed";
+    return false;
+  }
+  if (config_.dump_every && frame_ % config_.dump_every == 0) {
+    Logf(LogLevel::kInfo, "rexgpu-native: AO denoise frame %llu: samples=%d temporal=%s camera_votes=%u/%u history_frames=%llu",
+         static_cast<unsigned long long>(frame_), s.sample_quality, s.temporal_upscaler ? "upscaler" : "local",
+         votes, offers, static_cast<unsigned long long>(gtao_->stats().history_frames));
+  }
   if (stats_.computed == 0 || (stats_.computed % 1800) == 0) {
     // The camera and the radius it gives (docs/ao.md, "Strength and radius").
     const GtaoSettings g = Settings(s);
@@ -166,6 +189,21 @@ bool SceneAo::OnDraw(nvrhi::ICommandList* cl, const Draw& d, const AoSettings& s
   td.writes_depth = d.state.depth_write && d.depth.key;
   td.terminal_transparent = matched && matched->ps_hash && cls == AoDrawClass::kTransparent;
   const AoFrameTracker::Events e = tracker_.OnDraw(td);
+  // Reuse the upscalers' draw matching and camera-motion vote. Local AO history is depth
+  // validated and clamped, so moving hands and newly exposed surfaces reject old shading.
+  if (!s.temporal_upscaler && e.in_scene && d.vs_constants &&
+      (cls == AoDrawClass::kDepthOnly || cls == AoDrawClass::kOpaque) &&
+      motion_history_.current_draws() < 256) {
+    float rows[16];
+    const int reg = FindAoPerspectiveRegister(d.vs_constants, rows);
+    if (reg >= 0) {
+      VsConstants constants;
+      for (size_t i = 0; i < constants.size(); ++i) constants[i] = LoadBEFloat(d.vs_constants + i * 4);
+      const uint32_t ordinal = motion_history_.Record(d.motion_key, constants);
+      if (const VsConstants* prev = motion_history_.FindPrevious(d.motion_key, ordinal, constants))
+        motion_vote_.Offer(rows, prev->data() + reg * 4);
+    }
+  }
   if (e.in_scene) {
     if (d.color.key && d.color.key == tracker_.scene_color()) scene_color_ = d.color;
     if (d.depth.key && d.depth.key == tracker_.scene_depth()) scene_depth_ = d.depth;
@@ -207,6 +245,7 @@ bool SceneAo::OnDraw(nvrhi::ICommandList* cl, const Draw& d, const AoSettings& s
 bool SceneAo::ApplyToTarget(nvrhi::ICommandList* cl, const AoSettings& s) {
   TimeBegin(cl);
   const bool ok = gtao_->ApplyToTarget(cl, scene_color_.texture, s.mode);
+  if (!ok) failure_reason_ = "target apply failed";
   TimeEnd(cl);
   return ok;
 }

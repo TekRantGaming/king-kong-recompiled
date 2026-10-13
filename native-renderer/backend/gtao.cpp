@@ -25,6 +25,8 @@
 #include "backend/shaders/generated/gtao_normals_cs_spirv.h"
 #include "backend/shaders/generated/gtao_output_cs_dxil.h"
 #include "backend/shaders/generated/gtao_output_cs_spirv.h"
+#include "backend/shaders/generated/gtao_temporal_cs_dxil.h"
+#include "backend/shaders/generated/gtao_temporal_cs_spirv.h"
 #include "backend/shaders/generated/gtao_prefilter_cs_dxil.h"
 #include "backend/shaders/generated/gtao_prefilter_cs_spirv.h"
 #include "backend/shaders/generated/gtao_prepare_cs_dxil.h"
@@ -44,6 +46,10 @@ struct Gtao::Constants {
   float fog_par[4] = {};
   float fog_col[4] = {};
   float fade[4] = {};          // x: view depth (world units) where the occlusion has faded out, 0: no fade
+  float reprojection[16] = {};
+  float viewport[4] = {};  // x scale/offset, y scale/offset (guest pixels)
+  float depth_scale[4] = {};  // depth scale/offset, host scale xy
+  float temporal[4] = {};  // history weight, previous depth unpack mul/add, sample quality
 };
 
 namespace {
@@ -58,6 +64,7 @@ enum BlobId {
   kDenoise,
   kDenoiseLast,
   kOutput,
+  kTemporal,
   kVs,
   kApply,
   kApplyResolve,
@@ -80,6 +87,7 @@ Blob GetBlob(nvrhi::GraphicsAPI api, int id) {
     case kDenoise: return NR_GTAO_BLOB(gtao_denoise_cs);
     case kDenoiseLast: return NR_GTAO_BLOB(gtao_denoise_last_cs);
     case kOutput: return NR_GTAO_BLOB(gtao_output_cs);
+    case kTemporal: return NR_GTAO_BLOB(gtao_temporal_cs);
     case kVs: return NR_GTAO_BLOB(gtao_vs);
     case kApply: return NR_GTAO_BLOB(gtao_apply_ps);
     case kApplyResolve: return NR_GTAO_BLOB(gtao_apply_resolve_ps);
@@ -100,7 +108,7 @@ nvrhi::ShaderHandle MakeShader(nvrhi::IDevice* device, int id, nvrhi::ShaderType
 uint32_t RoundUp16(uint32_t v) { return (std::max(v, 1u) + 15) / 16 * 16; }
 
 // Sets keyed in sets_ by the pass and the textures that vary.
-enum SetKind { kSetPrepare, kSetOutput, kSetApply, kSetApplyResolve, kSetCopyDepth };
+enum SetKind { kSetPrepare, kSetOutput, kSetApply, kSetApplyResolve, kSetCopyDepth, kSetTemporal };
 
 }  // namespace
 
@@ -151,7 +159,10 @@ bool Gtao::Initialize() {
             MakePass(denoise_last_, kDenoiseLast, "cs_denoise_last",
                      {cb, I::Texture_SRV(0), I::Texture_SRV(1), I::Texture_UAV(0), I::Sampler(0)}) &&
             MakePass(output_pass_, kOutput, "cs_output",
-                     {cb, I::Texture_SRV(0), I::Texture_SRV(1), I::Texture_SRV(2), I::Texture_UAV(0)});
+                     {cb, I::Texture_SRV(0), I::Texture_SRV(1), I::Texture_SRV(2), I::Texture_UAV(0)}) &&
+            MakePass(temporal_, kTemporal, "cs_temporal",
+                     {cb, I::Texture_SRV(0), I::Texture_SRV(1), I::Texture_SRV(2), I::Texture_SRV(3),
+                      I::Texture_UAV(0), I::Texture_UAV(1)});
   vs_ = MakeShader(device_, kVs, nvrhi::ShaderType::Vertex, "vs_main");
   apply_ps_ = MakeShader(device_, kApply, nvrhi::ShaderType::Pixel, "ps_apply");
   apply_resolve_ps_ = MakeShader(device_, kApplyResolve, nvrhi::ShaderType::Pixel, "ps_apply_resolve");
@@ -194,8 +205,9 @@ nvrhi::TextureHandle Gtao::MakeImage(uint32_t width, uint32_t height, nvrhi::For
   return device_->createTexture(td);
 }
 
-bool Gtao::EnsureImages(uint32_t pw, uint32_t ph, uint32_t ow, uint32_t oh) {
-  if (pw == padded_w_ && ph == padded_h_ && ow == out_w_ && oh == out_h_ && output_) return true;
+bool Gtao::EnsureImages(uint32_t pw, uint32_t ph, uint32_t ow, uint32_t oh, bool temporal) {
+  if (pw == padded_w_ && ph == padded_h_ && ow == out_w_ && oh == out_h_ && output_ &&
+      (!temporal || (spatial_ && temporal_depth_ && history_ao_ && history_depth_))) return true;
   padded_w_ = padded_h_ = out_w_ = out_h_ = 0;
   fixed_sets_.clear();
   sets_.clear();
@@ -206,7 +218,13 @@ bool Gtao::EnsureImages(uint32_t pw, uint32_t ph, uint32_t ow, uint32_t oh) {
   term_b_ = MakeImage(pw, ph, nvrhi::Format::R32_UINT, 1, true, false, "GTAO term b");
   edges_ = MakeImage(pw, ph, nvrhi::Format::R32_FLOAT, 1, true, false, "GTAO edges");
   output_ = MakeImage(ow, oh, nvrhi::Format::R32_FLOAT, 1, true, false, "GTAO occlusion");
-  if (!raw_ || !depth_mips_ || !normal_map_ || !term_a_ || !term_b_ || !edges_ || !output_) {
+  spatial_ = temporal ? MakeImage(ow, oh, nvrhi::Format::R32_FLOAT, 1, true, false, "GTAO spatial result") : nullptr;
+  temporal_depth_ = temporal ? MakeImage(ow, oh, nvrhi::Format::R32_FLOAT, 1, true, false, "GTAO temporal depth") : nullptr;
+  history_ao_ = temporal ? MakeImage(ow, oh, nvrhi::Format::R32_FLOAT, 1, true, false, "GTAO history") : nullptr;
+  history_depth_ = temporal ? MakeImage(ow, oh, nvrhi::Format::R32_FLOAT, 1, true, false, "GTAO history depth") : nullptr;
+  history_frame_ = UINT64_MAX;
+  if (!raw_ || !depth_mips_ || !normal_map_ || !term_a_ || !term_b_ || !edges_ || !output_ ||
+      (temporal && (!spatial_ || !temporal_depth_ || !history_ao_ || !history_depth_))) {
     output_ = nullptr;
     return false;
   }
@@ -278,7 +296,8 @@ void Gtao::FillConstants(Constants& k, const GtaoInput& in, const GtaoSettings& 
   g.SampleDistributionPower = XE_GTAO_DEFAULT_SAMPLE_DISTRIBUTION_POWER;
   g.ThinOccluderCompensation = XE_GTAO_DEFAULT_THIN_OCCLUDER_COMPENSATION;
   g.DepthMIPSamplingOffset = XE_GTAO_DEFAULT_DEPTH_MIP_SAMPLING_OFFSET;
-  g.NoiseIndex = 0;  // no temporal accumulation: the same noise every frame
+  g.NoiseIndex = (s.temporal_upscaler || (s.temporal && in.reprojection_valid)) && in.frame != UINT64_MAX
+      ? uint32_t(in.frame % 64) : 0;
   k.source[0] = in.x;
   k.source[1] = in.y;
   k.source[2] = int32_t(in.width);
@@ -293,6 +312,16 @@ void Gtao::FillConstants(Constants& k, const GtaoInput& in, const GtaoSettings& 
   k.params[1] = zs > 0.0f ? zo + zs * (1.0f - 1e-6f) : 2.0f;
   k.params[2] = float(s.mode);
   k.fade[0] = s.fade > 0.0f ? s.fade * in.projection.near_plane() : 0.0f;
+  for (size_t i = 0; i < 16; ++i) k.reprojection[i] = float(in.reprojection[i]);
+  k.viewport[0] = in.screen.x_scale;
+  k.viewport[1] = in.screen.x_offset + in.screen.offset_x();
+  k.viewport[2] = in.screen.y_scale;
+  k.viewport[3] = in.screen.y_offset + in.screen.offset_y();
+  k.depth_scale[0] = in.screen.z_scale;
+  k.depth_scale[1] = in.screen.z_offset;
+  k.depth_scale[2] = in.screen.host_scale_x;
+  k.depth_scale[3] = in.screen.host_scale_y;
+  k.temporal[3] = float(std::clamp(s.sample_quality, 1, 3));
 }
 
 nvrhi::ITexture* Gtao::Compute(nvrhi::ICommandList* cl, const GtaoInput& in, const GtaoSettings& s) {
@@ -302,11 +331,34 @@ nvrhi::ITexture* Gtao::Compute(nvrhi::ICommandList* cl, const GtaoInput& in, con
     return nullptr;
   const uint32_t step = s.half ? 2 : 1;
   const uint32_t pw = RoundUp16((in.width + step - 1) / step), ph = RoundUp16((in.height + step - 1) / step);
-  if (!EnsureImages(pw, ph, in.width, in.height)) return nullptr;
+  if (!EnsureImages(pw, ph, in.width, in.height, s.temporal)) return nullptr;
   origin_x_ = in.x;
   origin_y_ = in.y;
   Constants k;
   FillConstants(k, in, s, pw, ph, step);
+  // A contiguous frame with the same AO and viewport can reuse history. Cuts and unmatched
+  // cameras fall back to this frame's spatial result, without animating unsupported noise.
+  const bool same = history_settings_.mode == s.mode && history_settings_.strength == s.strength &&
+      history_settings_.half == s.half && history_settings_.sample_quality == s.sample_quality &&
+      history_settings_.radius == s.radius && history_settings_.radius_scale == s.radius_scale &&
+      history_settings_.falloff == s.falloff && history_settings_.power == s.power && history_settings_.fade == s.fade &&
+      history_x_ == in.x && history_y_ == in.y &&
+      history_screen_.x_scale == in.screen.x_scale && history_screen_.y_scale == in.screen.y_scale &&
+      history_screen_.x_offset == in.screen.x_offset && history_screen_.y_offset == in.screen.y_offset &&
+      history_screen_.host_scale_x == in.screen.host_scale_x && history_screen_.host_scale_y == in.screen.host_scale_y &&
+      history_screen_.z_scale == in.screen.z_scale && history_screen_.z_offset == in.screen.z_offset &&
+      history_screen_.window_x == in.screen.window_x && history_screen_.window_y == in.screen.window_y &&
+      history_screen_.half_pixel == in.screen.half_pixel;
+  if (s.temporal && in.reprojection_valid && history_frame_ != UINT64_MAX &&
+      in.frame != UINT64_MAX && in.frame == history_frame_ + 1 && same) {
+    k.temporal[0] = 0.8f;
+    ++stats_.history_frames;
+  }
+  if (history_frame_ != UINT64_MAX) {
+    const AoViewMapping prev = ComputeAoViewMapping(history_projection_, history_screen_, in.x, in.y, pw, ph, step);
+    k.temporal[1] = prev.depth_mul;
+    k.temporal[2] = prev.depth_add;
+  }
   constants_bytes_.assign(reinterpret_cast<const uint8_t*>(&k), reinterpret_cast<const uint8_t*>(&k) + sizeof(k));
   cl->writeBuffer(constants_, &k, sizeof(k));
 
@@ -315,11 +367,11 @@ nvrhi::ITexture* Gtao::Compute(nvrhi::ICommandList* cl, const GtaoInput& in, con
   const auto cb = S::ConstantBuffer(0, constants_);
   nvrhi::BindingSetHandle& prepare = sets_[{kSetPrepare, in.depth, nullptr}];
   if (!prepare) prepare = Set(prepare_, {cb, S::Texture_SRV(0, in.depth), S::Texture_UAV(0, raw_)});
-  nvrhi::BindingSetHandle& output = sets_[{kSetOutput, in.depth, nullptr}];
+  nvrhi::BindingSetHandle& output = sets_[{kSetOutput, in.depth, s.temporal ? spatial_.Get() : output_.Get()}];
   if (!output) {
     output = Set(output_pass_, {cb, S::Texture_SRV(0, term_a_), S::Texture_SRV(1, in.depth),
                                 S::Texture_SRV(2, depth_mips_, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(0, 1, 0, 1)),
-                                S::Texture_UAV(0, output_)});
+                                S::Texture_UAV(0, s.temporal ? spatial_ : output_)});
   }
   if (!prepare || !output) return nullptr;
 
@@ -330,6 +382,29 @@ nvrhi::ITexture* Gtao::Compute(nvrhi::ICommandList* cl, const GtaoInput& in, con
   Dispatch(cl, denoise_, fixed_sets_[3], pw / (XE_GTAO_NUMTHREADS_X * 2), ph / XE_GTAO_NUMTHREADS_Y);
   Dispatch(cl, denoise_last_, fixed_sets_[4], pw / (XE_GTAO_NUMTHREADS_X * 2), ph / XE_GTAO_NUMTHREADS_Y);
   Dispatch(cl, output_pass_, output, (in.width + 7) / 8, (in.height + 7) / 8);
+  if (s.temporal) {
+    // Define the initial history even on APIs that do not zero newly allocated textures.
+    if (history_frame_ == UINT64_MAX) {
+      cl->clearTextureFloat(history_ao_, nvrhi::AllSubresources, nvrhi::Color(1.0f));
+      cl->clearTextureFloat(history_depth_, nvrhi::AllSubresources, nvrhi::Color(1.0f));
+    }
+    nvrhi::BindingSetHandle& temporal = sets_[{kSetTemporal, in.depth, nullptr}];
+    if (!temporal) temporal = Set(temporal_, {cb, S::Texture_SRV(0, spatial_), S::Texture_SRV(1, in.depth),
+        S::Texture_SRV(2, history_ao_), S::Texture_SRV(3, history_depth_), S::Texture_UAV(0, output_),
+        S::Texture_UAV(1, temporal_depth_)});
+    if (!temporal) return nullptr;
+    Dispatch(cl, temporal_, temporal, (in.width + 7) / 8, (in.height + 7) / 8);
+    cl->copyTexture(history_ao_, nvrhi::TextureSlice(), output_, nvrhi::TextureSlice());
+    cl->copyTexture(history_depth_, nvrhi::TextureSlice(), temporal_depth_, nvrhi::TextureSlice());
+    history_frame_ = in.frame;
+    history_settings_ = s;
+    history_screen_ = in.screen;
+    history_projection_ = in.projection;
+    history_x_ = in.x;
+    history_y_ = in.y;
+  } else {
+    history_frame_ = UINT64_MAX;
+  }
   // Read next through binding sets (the apply passes) or the bindless tables (ambient-only), which
   // NVRHI does not track: leave it a shader resource.
   cl->setTextureState(output_, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
