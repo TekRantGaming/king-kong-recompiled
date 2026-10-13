@@ -8,6 +8,7 @@
 
 #include "backend/guest_layout.h"
 #include "backend/log.h"
+#include "backend/pipeline_workers.h"
 #include "backend/renderer.h"
 #include "backend/shaders.h"
 #include "kknr/buffers.h"
@@ -750,7 +751,8 @@ nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelin
 void GameRenderer::EnsureWorkers() {
   // With pipeline_mutex_ held. A few workers: drivers compile pipelines in parallel.
   if (!pipeline_threads_.empty()) return;
-  const unsigned n = std::clamp(std::thread::hardware_concurrency() / 4, 1u, 4u);
+  const unsigned n = ProcessPipelineWorkerCount();
+  Logf(LogLevel::kInfo, "rexgpu-native: pipeline compiler workers %u (process affinity)", n);
   for (unsigned i = 0; i < n; ++i) pipeline_threads_.emplace_back([this] { PipelineWorker(); });
 }
 
