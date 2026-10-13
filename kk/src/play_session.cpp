@@ -66,6 +66,7 @@ namespace kk {
 #if defined(KK_DEV_TOOLS)
 void DevStartScriptClock();                                         // dev_tools.cpp
 void DevUniGoTick(uint8_t* base, uint32_t g, bool request, bool started);  // dev_chapter_jump.cpp
+void DevDumpTexts(const uint8_t* base, const char* name);                   // dev_chapter_jump.cpp
 #endif
 }  // namespace kk
 
@@ -125,7 +126,8 @@ std::atomic<bool> g_session{false};   // a start request was carried out
 std::atomic<bool> g_starting{false};  // a start request is waiting for the title screen
 std::atomic<bool> g_leaving{false};   // going back to the launcher
 std::atomic<bool> g_cover{false};
-std::atomic<int> g_save_jobs{0};      // save jobs (sub_82722620) running now
+std::atomic<int> g_save_jobs{0};
+std::atomic<bool> g_chapter_session{false};  // the session is a chapter-select run      // save jobs (sub_82722620) running now
 
 std::string Upper(std::string s) {
   for (char& c : s) c = char(std::toupper(static_cast<unsigned char>(c)));
@@ -769,6 +771,7 @@ void CarryOut(PPCContext& ctx, uint8_t* base, uint32_t g) {
   StartRequest r = GetStartRequest();
   g_starting = false;
   g_session = true;
+  g_chapter_session = r.kind == StartKind::kChapter;
   CheckChapterTable(base, g);
   if (!BackupSaves(g_user_dir, fmt::format("before play ({})", KindName(r.kind))))
     REXLOG_ERROR("KK play: the saves could not be backed up before play");
@@ -823,9 +826,12 @@ bool OnGameMenuPage(const char* page) {
   if (!g_leaving) {
     // A chapter-select run that has ended (its Score pages and save question are over) goes back to
     // Chapter select; anything else to the Play menu.
-    const uint32_t g = kk::g_guest_base ? Load32(kk::g_guest_base, kGamePtr) : 0;
-    const bool chapter_run = g && Load32(kk::g_guest_base, g + 0x5668) == 1 && !LeftByQuit();
+    const bool chapter_run = g_chapter_session && !LeftByQuit();
     REXLOG_INFO("KK play: the game opened its menu page {}", page);
+#if defined(KK_DEV_TOOLS)
+    // The start menu's texts (the chapter names, if they are text) with KK_DEV_TEXT_DUMP.
+    if (std::getenv("KK_DEV_TEXT_DUMP") && kk::g_guest_base) kk::DevDumpTexts(kk::g_guest_base, "texts-menu.txt");
+#endif
     ReturnToLauncher(chapter_run ? "the chapter-select run is over" : "the game left play",
                      chapter_run ? "chapters" : "play");
   }
@@ -925,7 +931,7 @@ REX_HOOK_RAW(sub_8253DB80) {
     if (g_session && Load32(base, g + 4) != 0 && Load32(base, g + 8) == kStartMenuLevel) {
       Store32(base, g + 4, 0);
       // A chapter-select run that has reached its end goes back to Chapter select; Quit game to the Play menu.
-      const bool chapter_end = Load32(base, g + 0x5668) == 1 && !LeftByQuit();
+      const bool chapter_end = g_chapter_session && !LeftByQuit();
       ReturnToLauncher(chapter_end ? "the chapter-select run is over" : "the game left play",
                        chapter_end ? "chapters" : "play");
     }
@@ -955,7 +961,12 @@ REX_HOOK_RAW(sub_8253DB80) {
       done = true;
       if (!idle) REXLOG_WARN("KK play: a save is still being written after 10 s; leaving anyway");
       const std::wstring page(g_leave_page.begin(), g_leave_page.end());
-      if (RelaunchWith(L"--kk_launcher_open=" + page) && g_quit) g_quit();
+      if (QuitToDesktop()) {
+        REXLOG_INFO("KK play: Quit game: the program exits");
+        if (g_quit) g_quit();
+      } else if (RelaunchWith(L"--kk_launcher_open=" + page) && g_quit) {
+        g_quit();
+      }
     }
   }
 #if defined(KK_DEV_TOOLS)

@@ -108,7 +108,8 @@ std::atomic<bool> g_has_slot{false};               // a chapter-select run: Star
 std::atomic<bool> g_can_save{false};               // a story run with a save slot: Save exists
 std::atomic<int64_t> g_game_page_since{0};         // when Score or Save opened the game's own pages
 std::atomic<int64_t> g_closing_until{0};
-std::atomic<bool> g_left_by_quit{false};           // the page's last frames after Resume: not the menu
+std::atomic<bool> g_left_by_quit{false};
+std::atomic<bool> g_quit_to_desktop{false};           // the page's last frames after Resume: not the menu
 std::atomic<int> g_pending{-1};                    // PauseAction being carried out, -1 none
 std::atomic<int> g_phase{kIdle};
 std::atomic<int64_t> g_confirm_seen_ms{0};
@@ -120,8 +121,8 @@ std::atomic<uint16_t> g_raw_buttons{0};
 uint16_t g_hidden_mask = 0;  // buttons held as the menu closed: hidden from the game until let go
 bool g_was_open = false;
 
-// Not in the contract (yet): the game's own Options pages, for developer tests (KK_DEV_PAUSE_ACTIONS "options").
-constexpr int kOptionsAction = 5;
+// Not in the contract: the game's own Options pages, for developer tests (KK_DEV_PAUSE_ACTIONS "options").
+constexpr int kOptionsAction = 6;
 
 bool MenuUp() { return NowMs() - g_main_seen_ms.load() < kPageGoneMs; }
 
@@ -132,12 +133,14 @@ int ItemId(int action) {
     case PauseAction::kScore: return 0;
     case PauseAction::kQuitToLauncher: return 3;
     case PauseAction::kSave: return 1;
+    case PauseAction::kQuitToDesktop: return 3;
   }
   return action == kOptionsAction ? 2 : 4;
 }
 const char* ActionName(int action) {
-  static const char* const kNames[] = {"Resume", "Start again", "Score", "Quit game", "Save", "Options"};
-  return action >= 0 && action < 6 ? kNames[action] : "none";
+  static const char* const kNames[] = {"Resume", "Start again", "Score", "Return to main menu", "Save",
+                                       "Quit game", "Options"};
+  return action >= 0 && action < 7 ? kNames[action] : "none";
 }
 
 }  // namespace
@@ -154,7 +157,10 @@ bool PauseActionAvailable(PauseAction action) {
 }
 
 void RunPauseAction(PauseAction action) {
-  g_left_by_quit = action == PauseAction::kQuitToLauncher;
+  if (action == PauseAction::kQuitToLauncher || action == PauseAction::kQuitToDesktop) {
+    g_left_by_quit = true;
+    g_quit_to_desktop = action == PauseAction::kQuitToDesktop;
+  }
   if (!PauseActionAvailable(action)) {
     REXLOG_WARN("KK pause: {} is not available now", ActionName(int(action)));
     return;
@@ -271,6 +277,7 @@ void FilterPad(uint32_t user, uint8_t* state) {
 }
 
 bool LeftByQuit() { return g_left_by_quit; }
+bool QuitToDesktop() { return g_quit_to_desktop; }
 
 void ResetPause() {
   g_pending = -1;
@@ -420,7 +427,8 @@ REX_HOOK_RAW(sub_824BC1B0) {
   KK_PAGE_TRACE("IntMIG_Page_MessageYesNo");
   const int pending = g_pending;
   if (!TakeoverOn() || !InPlay(base) || g_phase != kConfirm ||
-      (pending != int(PauseAction::kStartAgain) && pending != int(PauseAction::kQuitToLauncher))) {
+      (pending != int(PauseAction::kStartAgain) && pending != int(PauseAction::kQuitToLauncher) &&
+       pending != int(PauseAction::kQuitToDesktop))) {
     __imp__sub_824BC1B0(ctx, base);
     return;
   }
@@ -568,6 +576,7 @@ const bool g_steps_thread = [] {
       else if (w == "again") a = PauseAction::kStartAgain;
       else if (w == "score") a = PauseAction::kScore;
       else if (w == "quit") a = PauseAction::kQuitToLauncher;
+      else if (w == "desktop") a = PauseAction::kQuitToDesktop;
       else if (w == "save") a = PauseAction::kSave;
       else if (w == "options") a = PauseAction(kOptionsAction);
       else known = false;

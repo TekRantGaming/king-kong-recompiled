@@ -68,6 +68,8 @@ void ResetPause();
 // True when the last thing done in the pause menu was Quit game (the start menu request that follows
 // goes back to the Play menu rather than Chapter select).
 bool LeftByQuit();
+// ... and it was "Quit game" (to the desktop): the program exits instead of restarting into the launcher.
+bool QuitToDesktop();
 
 }  // namespace kk::play
 

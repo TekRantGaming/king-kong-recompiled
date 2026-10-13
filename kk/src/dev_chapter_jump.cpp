@@ -132,6 +132,36 @@ std::atomic<int> g_load_slot_result{0};  // IntMIG_init has run: the start menu'
 }  // namespace kk::jump
 
 namespace kk {
+// The game's loaded text files (the text manager at 0x828E89B8: +8 count, +12 files; a file: +4 count,
+// +8 entries of 32 bytes (+0 id, +12 offset), +12 strings, +20 key): every string, to `name` in KK_DEV_SHOTS_DIR.
+void DevDumpTexts(const uint8_t* base, const char* name) {
+  using namespace kk::jump;
+  const char* dir = std::getenv("KK_DEV_SHOTS_DIR");
+    const std::string path = (std::filesystem::path(dir && *dir ? dir : ".") / name).string();
+    if (FILE* f = std::fopen(path.c_str(), "wb")) {
+      const uint32_t mgr = 0x828E89B8, files = Load32(base, mgr + 12);
+      const int count = int(Load32(base, mgr + 8));
+      for (int i = 0; i < count && i < 4096 && files; ++i) {
+        const uint32_t file = Load32(base, files + 4 * uint32_t(i));
+        if (!file) continue;
+        const uint32_t n = Load32(base, file + 4), entries = Load32(base, file + 8), strings = Load32(base, file + 12);
+        std::fprintf(f, "file %d key %08X entries %u\n", i, Load32(base, file + 20), n);
+        for (uint32_t e = 0; e < n && e < 20000 && entries && strings; ++e) {
+          const uint32_t id = Load32(base, entries + e * 32), off = Load32(base, entries + e * 32 + 12);
+          std::string text;
+          for (uint32_t c = 0; c < 400; ++c) {
+            const uint8_t ch = base[strings + off + c];
+            if (!ch) break;
+            text += ch == '\n' || ch == '\r' ? ' ' : char(ch);
+          }
+          std::fprintf(f, "%08X %08X %s\n", Load32(base, file + 20), id, text.c_str());
+        }
+      }
+      std::fclose(f);
+      REXLOG_INFO("KK dev jump: wrote the game's texts to {}", path);
+    }
+}
+
 // Called by play_session.cpp's uni_go hook after each call: `request` = a level change was asked for
 // this frame, `started` = the start request's level has loaded.
 void DevUniGoTick(uint8_t* base, uint32_t g, bool request, bool started) {
@@ -181,35 +211,11 @@ void DevUniGoTick(uint8_t* base, uint32_t g, bool request, bool started) {
     }
   }
   // KK_DEV_TEXT_DUMP=<seconds>: that long after the start request's level loaded, write every string of
-  // the game's loaded text files (the text manager at 0x828E89B8: +8 count, +12 files; a file: +4 count,
-  // +8 entries of 32 bytes (+0 id, +12 offset), +12 strings, +20 key) to texts.txt in KK_DEV_SHOTS_DIR.
+  // the game's loaded text files to texts.txt in KK_DEV_SHOTS_DIR (DevDumpTexts).
   if (static bool texts = false; !texts && std::getenv("KK_DEV_TEXT_DUMP") &&
                                  since > std::chrono::duration<double>(std::atof(std::getenv("KK_DEV_TEXT_DUMP")))) {
     texts = true;
-    const char* dir = std::getenv("KK_DEV_SHOTS_DIR");
-    const std::string path = (std::filesystem::path(dir && *dir ? dir : ".") / "texts.txt").string();
-    if (FILE* f = std::fopen(path.c_str(), "wb")) {
-      const uint32_t mgr = 0x828E89B8, files = Load32(base, mgr + 12);
-      const int count = int(Load32(base, mgr + 8));
-      for (int i = 0; i < count && i < 4096 && files; ++i) {
-        const uint32_t file = Load32(base, files + 4 * uint32_t(i));
-        if (!file) continue;
-        const uint32_t n = Load32(base, file + 4), entries = Load32(base, file + 8), strings = Load32(base, file + 12);
-        std::fprintf(f, "file %d key %08X entries %u\n", i, Load32(base, file + 20), n);
-        for (uint32_t e = 0; e < n && e < 20000 && entries && strings; ++e) {
-          const uint32_t id = Load32(base, entries + e * 32), off = Load32(base, entries + e * 32 + 12);
-          std::string text;
-          for (uint32_t c = 0; c < 400; ++c) {
-            const uint8_t ch = base[strings + off + c];
-            if (!ch) break;
-            text += ch == '\n' || ch == '\r' ? ' ' : char(ch);
-          }
-          std::fprintf(f, "%08X %08X %s\n", Load32(base, file + 20), id, text.c_str());
-        }
-      }
-      std::fclose(f);
-      REXLOG_INFO("KK dev jump: wrote the game's texts to {}", path);
-    }
+    DevDumpTexts(base, "texts.txt");
   }
   // KK_DEV_START_END=<seconds>: that long after the start request's level loaded, ask for the next
   // chapter's level, as reaching the chapter's end does (uni_go then handles it as the end of a

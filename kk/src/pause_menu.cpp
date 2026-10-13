@@ -199,10 +199,19 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
     // The game's own Options page; until its contents are known, the port's settings.
     e.push_back({"Options", [this] { OpenSettings(InGameSettings::kGameplay); }});
     e.push_back({"Settings", [this] { OpenSettings(InGameSettings::kDisplay); }});
+    // Story runs: the game's own Save (its save pages show, then this menu comes back).
+    if (play::PauseActionAvailable(play::PauseAction::kSave))
+      e.push_back({"Save", [] { play::RunPauseAction(play::PauseAction::kSave); }});
+    // The launcher is the game's main menu now: two ways out, both through the game's quit (and its saving).
     if (play::PauseActionAvailable(play::PauseAction::kQuitToLauncher))
-      e.push_back({"Quit game", [this] {
-                     Confirm("Quit game", "Leave the game and go back to the launcher?", "Quit",
+      e.push_back({"Return to main menu", [this] {
+                     Confirm("Return to main menu", "Leave the game and go back to the main menu?", "Leave",
                              [] { play::RunPauseAction(play::PauseAction::kQuitToLauncher); });
+                   }});
+    if (play::PauseActionAvailable(play::PauseAction::kQuitToDesktop))
+      e.push_back({"Quit game", [this] {
+                     Confirm("Quit game", "Leave the game and close it?", "Quit",
+                             [] { play::RunPauseAction(play::PauseAction::kQuitToDesktop); });
                    }});
     return e;
   }
