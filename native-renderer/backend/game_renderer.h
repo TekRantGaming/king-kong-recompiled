@@ -397,6 +397,8 @@ class GameRenderer {
                                  float scale_y = 1.0f);
   // The scale of the texture BindTexture bound last (1 when none).
   float bound_scale_x_ = 1.0f, bound_scale_y_ = 1.0f;
+  // Set by a failed bind, copied by Draw and logged only if the draw is submitted.
+  std::string texture_bind_failure_;
   void ReleaseHostTexture(HostTexture* host);
   // Textures and buffers the caches let go of, kept for as many frames as a retired descriptor
   // slot. The frames still on the GPU may sample them through the bindless tables, and the open

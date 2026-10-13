@@ -1254,6 +1254,13 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   if (ps)
     for (const auto& sb : ps->bindings.samplers) note_base_map(sb);
   kkshaders::ScaleConstants sc = {};
+  struct PlaceholderUse {
+    uint32_t slot, dimension;
+    bool vertex;
+    kknr::TextureKey key;
+    std::string reason;
+  };
+  std::vector<PlaceholderUse> placeholder_uses;
   for (auto& v : sc.texInvScale) v[0] = v[1] = v[2] = v[3] = 1.0f;
   auto bind_textures = [&](const GameShader& shader) {
     for (const kkshaders::TextureUse& t : shader.bindings.textures) {
@@ -1261,6 +1268,11 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
       d.fetch_constant(t.slot & 31, words);
       dc.textureIndex[t.slot & 31] =
           BindTexture(cl, words, t.dimension, (base_map_slots >> (t.slot & 31)) & 1);
+      if (!dc.textureIndex[t.slot & 31]) {
+        placeholder_uses.push_back({t.slot, uint32_t(t.dimension), &shader == vs.get(),
+                                   kknr::MakeTextureKey(kknr::TextureFetch::FromWords(words)),
+                                   texture_bind_failure_});
+      }
       if (scaled()) {
         sc.texInvScale[t.slot & 31][0] = 1.0f / bound_scale_x_;
         sc.texInvScale[t.slot & 31][1] = 1.0f / bound_scale_y_;
@@ -1502,6 +1514,16 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   if (!args.vertexCount) return;
 
   if (stop_at == 5) return;
+  for (const auto& use : placeholder_uses) {
+    const auto& w = use.key.words;
+    Logf(LogLevel::kWarning,
+         "rexgpu-native: texture placeholder real draw frame %llu draw %u %s slot %u dim %u "
+         "vs %016llX ps %016llX key %08X %08X %08X %08X %08X %08X reason %s",
+         static_cast<unsigned long long>(frame_), call.index_in_frame, use.vertex ? "vs" : "ps",
+         use.slot, use.dimension, static_cast<unsigned long long>(vs->ucode_hash),
+         static_cast<unsigned long long>(ps ? ps->ucode_hash : 0),
+         w[0], w[1], w[2], w[3], w[4], w[5], use.reason.c_str());
+  }
   // Upscalers: a draw of the scene's depth, replayed by the motion pass at the upscale point.
   if (up.motion) UpscaleRecordMotion(call, d, vs, dc, record, gs, args, indexed_draw);
   cl->setGraphicsState(gs);
