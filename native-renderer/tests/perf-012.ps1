@@ -50,10 +50,17 @@ try {
  if ($Cores -gt 0) { $game.ProcessorAffinity=[IntPtr]((1L -shl ($Cores*2))-1) }
  Write-Output "RUN $run PID $($game.Id)"
  'seconds,private_bytes,working_set,cpu_seconds' | Set-Content "$run\process.csv"
+ 'seconds,dedicated_bytes,shared_bytes' | Set-Content "$run\gpu-memory.csv"
+ $memoryAt=0
  $clock=[Diagnostics.Stopwatch]::StartNew()
  while (!$game.HasExited -and $clock.Elapsed.TotalSeconds -lt 240) {
   $game.Refresh()
   "$($clock.Elapsed.TotalSeconds),$($game.PrivateMemorySize64),$($game.WorkingSet64),$($game.TotalProcessorTime.TotalSeconds)" | Add-Content "$run\process.csv"
+  if ($clock.Elapsed.TotalSeconds -ge $memoryAt) {
+   $memoryAt=$clock.Elapsed.TotalSeconds+10
+   $gpu=Get-CimInstance -ClassName Win32_PerfFormattedData_GPUPerformanceCounters_GPUProcessMemory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "pid_$($game.Id)_*" }
+   "$($clock.Elapsed.TotalSeconds),$(($gpu | Measure-Object DedicatedUsage -Sum).Sum),$(($gpu | Measure-Object SharedUsage -Sum).Sum)" | Add-Content "$run\gpu-memory.csv"
+  }
   if (Test-Path "$run\shot_1200.bmp") { break }
   Start-Sleep -Seconds 2
  }
