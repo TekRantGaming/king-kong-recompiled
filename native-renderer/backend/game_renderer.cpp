@@ -374,6 +374,23 @@ bool GameRenderer::Initialize() {
   return true;
 }
 
+void GameRenderer::UploadDummies(nvrhi::ICommandList* cl) {
+  if (dummies_uploaded_) return;
+  // Creation sets the resource's shape and state, not its contents. Upload on the first frame's
+  // list so a failed guest bind or an optional pass input cannot read undefined texels.
+  const uint32_t zero = 0;
+  for (nvrhi::ITexture* texture : {dummy_2d_.Get(), dummy_3d_.Get(), dummy_cube_.Get(), dummy_array_.Get()}) {
+    for (uint32_t layer = 0; layer < texture->getDesc().arraySize; ++layer)
+      cl->writeTexture(texture, layer, 0, &zero, sizeof(zero), sizeof(zero));
+    cl->setTextureState(texture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
+  }
+  const uint32_t zeros[64] = {};
+  cl->writeBuffer(dummy_buffer_, zeros, sizeof(zeros));
+  cl->setBufferState(dummy_buffer_, nvrhi::ResourceStates::ShaderResource);
+  dummies_uploaded_ = true;
+  Logf(LogLevel::kInfo, "rexgpu-native: fallback zero uploads recorded before first frame (4 textures, 9 subresources, 256-byte buffer)");
+}
+
 // ---------------------------------------------------------------- tables
 
 uint32_t GameRenderer::AllocateSlot(Table table) {
@@ -1515,6 +1532,8 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
 
   if (stop_at == 5) return;
   for (const auto& use : placeholder_uses) {
+    // Both shader stages share the slot's final draw constant. A later bind may have succeeded.
+    if (dc.textureIndex[use.slot & 31]) continue;
     const auto& w = use.key.words;
     Logf(LogLevel::kWarning,
          "rexgpu-native: texture placeholder real draw frame %llu draw %u %s slot %u dim %u "
