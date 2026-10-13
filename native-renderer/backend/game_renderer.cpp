@@ -1377,14 +1377,18 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
       used_begin = uint32_t(std::min<uint64_t>(uint64_t(offset) + uint64_t(first_vertex) * stride, info.size_bytes));
       used_end = uint32_t(std::min<uint64_t>(uint64_t(offset) + uint64_t(last_vertex) * stride, info.size_bytes));
     }
-    HostBuffer* host = BindVertexBuffer(cl, info.physical, info.size_bytes, used_begin, used_end);
+    // Fetches of position, normal and UV often share one stream and range.
+    // Reuse only inside this draw: dynamic data may change before the next draw.
+    StreamBind& previous = stream_binds[stream];
+    const bool repeated = previous.host && previous.physical == info.physical &&
+        previous.bytes == info.size_bytes && previous.begin == used_begin && previous.end == used_end;
+    HostBuffer* host = repeated ? previous.host :
+        BindVertexBuffer(cl, info.physical, info.size_bytes, used_begin, used_end);
     if (options_.debug & 32768) {
       ++stats_.vertex_binds;
-      StreamBind& previous = stream_binds[stream];
-      if (previous.host && previous.physical == info.physical && previous.bytes == info.size_bytes &&
-          previous.begin == used_begin && previous.end == used_end) ++stats_.vertex_repeated;
-      previous = {info.physical, info.size_bytes, used_begin, used_end, host};
+      if (repeated) ++stats_.vertex_repeated;
     }
+    previous = {info.physical, info.size_bytes, used_begin, used_end, host};
     if (!host) continue;
     if (vb.raw) {
       dc.vertexFetch[b][0] = host->slot;
