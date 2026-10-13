@@ -23,7 +23,7 @@ All are read at start (init only).
 | `native_upscaler_sharpness` | `-1` | 0 to 1: FSR's RCAS after the upscale (DLSS and XeSS have none); negative: off |
 | `native_upscaler_mip_bias` | `auto` | texture LOD bias of the scene's draws: `auto` = log2(input / output), as the SDKs recommend, or a number |
 | `native_upscaler_reactive` | `1.0` | strength of the reactive mask (0: none) |
-| `native_upscaler_debug` | `0` | bits: 1 show the motion vectors, 2 the reactive mask, 4 camera motion only, 8 no jitter, 16 a log line per frame (and NGX's log), 32 show the depth, 64 no mip bias, 128 log the camera vote and which constants changed, 512 read the motion vectors back every 150 frames and log how many pixels move and how far |
+| `native_upscaler_debug` | `0` | bits: 1 show the motion vectors, 2 the reactive mask, 4 camera motion only, 8 no jitter, 16 a log line per frame (and NGX's log), 32 show the depth, 64 no mip bias, 128 log the camera vote and which constants changed, 512 read the motion vectors back every 150 frames and log how many pixels move and how far, 1024 draws on rewritten vertex buffers get the camera's motion only (as before Beta 3) |
 | `native_upscaler_gpu_time` | `false` | time the upscaler's GPU work (the renderer's passes and the SDK's) and log the averages every 600 frames |
 | `native_upscaler_rules` | empty | a file of upscale point rules: `post ps=<hash>` starts the post chain, `scene ps=<hash>` never does |
 

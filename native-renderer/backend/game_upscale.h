@@ -63,8 +63,8 @@ struct GameUpscale {
     uint32_t topology = 0, mode_control = 0, clip_control = 0, poly_scale = 0, poly_offset = 0;
     bool flip_front = false;
     bool indexed = false;
-    // Its vertex buffer is one the game rewrites (particles, streamed geometry): last frame's vertices
-    // are gone, so it only votes for the camera and keeps the camera's motion.
+    // Its vertex buffer is one the game rewrites and moves (streamed geometry, the V-Rex dinosaur):
+    // matched by shader and size alone (native_upscaler_debug 1024: camera motion only, not replayed).
     bool camera_only = false;
     nvrhi::IndexBufferBinding index;
     nvrhi::DrawArguments args;

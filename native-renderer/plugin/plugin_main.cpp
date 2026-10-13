@@ -283,7 +283,8 @@ REXCVAR_DEFINE_DOUBLE(native_upscaler_reactive, 1.0, "Native renderer",
 REXCVAR_DEFINE_INT32(native_upscaler_debug, 0, "Native renderer",
                      "Upscaler debugging bits: 1 show the motion vectors, 2 the reactive mask, 4 camera motion only, "
                      "8 no jitter, 16 a log line per frame, 32 show the depth, 64 no mip bias, 128 log the camera vote "
-                     "and the constants that changed, 512 read the motion vectors back every 150 frames and log them")
+                     "and the constants that changed, 512 read the motion vectors back every 150 frames and log them, "
+                     "1024 draws on rewritten vertex buffers get the camera's motion only")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_BOOL(native_upscaler_gpu_time, false, "Native renderer",

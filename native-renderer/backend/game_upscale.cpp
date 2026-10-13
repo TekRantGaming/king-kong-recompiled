@@ -359,9 +359,10 @@ void GameRenderer::UpscaleRecordMotion(const DrawCall& call, const dev::DeviceVi
     const uint32_t object = d.u32(dev::kStreamBuffer + 8 * stream);
     VertexBufferInfo info;
     if (!object || !DecodeVertexBuffer(memory_.Virtual(object), info)) continue;
-    // A vertex buffer the game rewrites (particles, and in places streamed world geometry): its old
-    // vertices are gone, so no object motion, but its constants still vote for the camera (V-Rex's world
-    // sits in such buffers: without its votes the camera had no motion there at all).
+    // A vertex buffer the game rewrites (V-Rex's world, the V-Rex dinosaur): it moves in memory, so the
+    // draw is matched by its shader and size (below). It is replayed with last frame's constants like any
+    // other (the dinosaur's scales smeared under FSR 3.1 and XeSS without it) and votes for the camera
+    // (V-Rex's world had no camera motion at all without it).
     if (const kknr::BufferCache::Entry* e = vertex_buffers_.Find(info.physical, info.size_bytes, 0)) {
       if (auto* h = static_cast<const HostBuffer*>(e->host); h && h->dynamic) m.camera_only = true;
     }
@@ -627,7 +628,7 @@ void GameRenderer::UpscaleMotionPass(nvrhi::ICommandList* cl, HostTarget* depth_
   const bool vulkan = device_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN;
   const nvrhi::TextureDesc& md = u.motion->getDesc();
   for (const GameUpscale::MotionDraw& m : u.motion_draws) {
-    if (m.camera_only) continue;
+    if (m.camera_only && (u.config.debug & 1024)) continue;  // debugging: their camera motion only
     const VsConstants* prev = u.history.FindPrevious(m.key, m.ordinal, m.constants, u.history.CountThisFrame(m.key));
     if (!prev) continue;
     nvrhi::IShader* mvs = shaders_->MotionVariant(*m.vs);
