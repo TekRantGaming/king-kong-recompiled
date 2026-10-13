@@ -232,9 +232,16 @@ class KingKongApp : public rex::ReXApp {
   // Size the game is shown at: in fullscreen the Resolution picked on the Display page, or the
   // monitor's; else the window.
   std::pair<int, int> OutputSize() const {
-    if (REXCVAR_QUERY(bool, fullscreen) || !window()) {
-      if (REXCVAR_QUERY(bool, fullscreen))
-        if (const auto mode = kk::FullscreenModeSize()) return *mode;
+    if (REXCVAR_QUERY(bool, fullscreen)) {
+      if (const auto mode = kk::FullscreenModeSize(); mode && mode->first > 0 && mode->second > 0) return *mode;
+      if (!kk::ParseDisplayMode(REXCVAR_GET(kk_fullscreen_mode))) {
+        const int monitor = std::atoi(rex::cvar::GetFlagByName("monitor").c_str());
+        const kk::DisplayMode desktop = kk::DesktopDisplayMode(monitor, window());
+        if (desktop.width > 0 && desktop.height > 0) return {desktop.width, desktop.height};
+      }
+      return kk::PrimaryScreenSize();
+    }
+    if (!window()) {
       return kk::PrimaryScreenSize();
     }
     return {int(window()->GetActualPhysicalWidth()), int(window()->GetActualPhysicalHeight())};

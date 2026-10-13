@@ -954,6 +954,11 @@ class Launcher final : public rex::ui::ImGuiDialog {
   std::string PromptSet() const { return input_.device() == ui::Device::kKeyboard ? "keyboard" : PadSet(); }
 
   void GoTo(Page page) {
+    if (page == kDisplay && page_ != kDisplay) {
+      monitors_.clear();
+      display_modes_monitor_ = -1;
+      LoadDisplayModes();
+    }
     if (page != page_) sub_ = kNoSubPage;
     side_focus_ = -1;
     page_ = page;
