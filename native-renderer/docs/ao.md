@@ -81,6 +81,8 @@ term), `backend.*` and the plugin (the settings).
 The depth used: the scene's depth target while it holds this frame's depth (written by the frame's draws, not
 cleared since: the tracker watches clears and resolve clears), else the depth resolve's copy of this frame, else
 nothing (the frame has no AO, counted in the statistics).
+At a draw boundary, validity is taken before the upcoming draw: a water draw which will write depth cannot make
+cleared depth valid before AO is computed. The per-frame diagnostic also records which depth source was used.
 
 ### The draw classifier
 

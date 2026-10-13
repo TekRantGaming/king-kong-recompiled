@@ -121,7 +121,8 @@ class SceneAo {
   void NewFrame(uint64_t frame);
   // Works the occlusion out for this frame (once) from the scene's depth target if it still holds
   // the frame's depth, else from the depth resolve's copy. False when there is nothing to work from.
-  bool Compute(nvrhi::ICommandList* cl, const AoSettings& s, nvrhi::ITexture* depth_override = nullptr);
+  bool Compute(nvrhi::ICommandList* cl, const AoSettings& s, nvrhi::ITexture* depth_override = nullptr,
+               bool scene_depth_available = true);
   GtaoSettings Settings(const AoSettings& s) const;
   // The scene's colour target times the occlusion (timed).
   bool ApplyToTarget(nvrhi::ICommandList* cl, const AoSettings& s);
@@ -160,6 +161,7 @@ class SceneAo {
   AmbientView ambient_view_;
   bool warned_camera_ = false;
   const char* failure_reason_ = "no apply point";
+  const char* depth_source_ = "none";
   LastDraw last_;
   Stats logged_;  // the statistics at the last periodic log line
 };

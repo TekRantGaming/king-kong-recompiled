@@ -64,13 +64,14 @@ void SceneAo::NewFrame(uint64_t frame) {
         tracker_.expects_end() && tracker_.phase() == AoFrameTracker::Phase::kOpaquePass ? "waiting for missing fog/end" :
         !tracker_.depth_valid() && !depth_copied_ ? "depth cleared/no depth copy" :
         scene_resolved_ ? "scene already resolved" : failure_reason_;
-    Logf(LogLevel::kInfo, "rexgpu-native: AO frame %llu: apply_point=%d computed=%d applied=%d reason=%s phase=%u expects_end=%d depth=%d copied=%d resolved=%d opaque=%u",
+    Logf(LogLevel::kInfo, "rexgpu-native: AO frame %llu: apply_point=%d computed=%d applied=%d reason=%s phase=%u expects_end=%d depth=%d copied=%d resolved=%d opaque=%u depth_source=%s",
          static_cast<unsigned long long>(frame_), int(tracker_.phase() == AoFrameTracker::Phase::kAfterOpaque),
          int(computed_), int(applied_ || ambient), reason, unsigned(tracker_.phase()), int(tracker_.expects_end()),
-         int(tracker_.depth_valid()), int(depth_copied_), int(scene_resolved_), tracker_.opaque_draws());
+         int(tracker_.depth_valid()), int(depth_copied_), int(scene_resolved_), tracker_.opaque_draws(), depth_source_);
   }
   frame_ = frame;
   failure_reason_ = "no apply point";
+  depth_source_ = "none";
   motion_history_.BeginFrame(frame);
   motion_vote_.BeginFrame(frame);
   computed_ = applied_ = ambient_ready_ = ambient_drawn_ = scene_resolved_ = false;
@@ -93,7 +94,8 @@ void SceneAo::NewFrame(uint64_t frame) {
   }
 }
 
-bool SceneAo::Compute(nvrhi::ICommandList* cl, const AoSettings& s, nvrhi::ITexture* depth_override) {
+bool SceneAo::Compute(nvrhi::ICommandList* cl, const AoSettings& s, nvrhi::ITexture* depth_override,
+                      bool scene_depth_available) {
   if (computed_) return true;
   AoProjection p;
   AoScreen sc;
@@ -109,13 +111,14 @@ bool SceneAo::Compute(nvrhi::ICommandList* cl, const AoSettings& s, nvrhi::IText
   }
   // The scene's depth target while it holds this frame's depth, else the depth resolve's copy.
   nvrhi::ITexture* depth = depth_override;
-  if (!depth && tracker_.depth_valid() && scene_depth_.texture) depth = scene_depth_.texture;
+  if (!depth && scene_depth_available && tracker_.depth_valid() && scene_depth_.texture) depth = scene_depth_.texture;
   if (!depth && depth_copied_) depth = depth_copy_;
   if (!depth) {
     failure_reason_ = "no current depth";
     ++stats_.no_depth;
     return false;
   }
+  depth_source_ = depth == depth_copy_ ? "resolve copy" : "scene target";
   // The picture: the camera's viewport, in host pixels of its target (rounded as every scaled
   // rectangle is), within the depth texture.
   const nvrhi::TextureDesc& dd = depth->getDesc();
@@ -188,6 +191,9 @@ bool SceneAo::OnDraw(nvrhi::ICommandList* cl, const Draw& d, const AoSettings& s
   td.frame_size = d.frame_size;
   td.writes_depth = d.state.depth_write && d.depth.key;
   td.terminal_transparent = matched && matched->ps_hash && cls == AoDrawClass::kTransparent;
+  // The tracker records the upcoming draw's depth write, but AO is computed before that
+  // draw executes. A water draw must not turn cleared depth into valid scene depth yet.
+  const bool depth_before_draw = tracker_.frame() == d.frame && tracker_.depth_valid();
   const AoFrameTracker::Events e = tracker_.OnDraw(td);
   // Reuse the upscalers' draw matching and camera-motion vote. Local AO history is depth
   // validated and clamped, so moving hands and newly exposed surfaces reject old shading.
@@ -210,7 +216,7 @@ bool SceneAo::OnDraw(nvrhi::ICommandList* cl, const Draw& d, const AoSettings& s
   }
   const AoApply apply = config_.apply;
   // Ambient-only: worked out once the depth pre-pass is done, before the first lit draw.
-  if (apply == AoApply::kAmbient && e.depth_complete && s.mode < 2 && Compute(cl, s)) {
+  if (apply == AoApply::kAmbient && e.depth_complete && s.mode < 2 && Compute(cl, s, nullptr, depth_before_draw)) {
     ambient_ready_ = true;
     ambient_view_ = {gtao_->occlusion(), gtao_->origin_x(), gtao_->origin_y(), gtao_->width(), gtao_->height()};
   }
@@ -221,7 +227,7 @@ bool SceneAo::OnDraw(nvrhi::ICommandList* cl, const Draw& d, const AoSettings& s
     if (ambient_did) {
       applied_ = true;
       ++stats_.ambient_frames;
-    } else if (scene_color_.texture && Compute(cl, s) && ApplyToTarget(cl, s)) {
+    } else if (scene_color_.texture && Compute(cl, s, nullptr, depth_before_draw) && ApplyToTarget(cl, s)) {
       applied_ = true;
       if (stats_.applied_opaque++ == 0)
         Logf(LogLevel::kInfo, "rexgpu-native: AO: first occlusion at the end of the opaque pass (frame %llu, %u opaque draws)",

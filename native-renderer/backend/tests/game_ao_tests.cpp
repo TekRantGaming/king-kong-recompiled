@@ -572,6 +572,7 @@ struct Fixture {
   // into it at the end (the legacy moment).
   struct Frame {
     bool prepass = true, water = true, particle = true;
+    bool clear_prepass_depth = false, water_writes_depth = false;
     uint32_t scene_copy = 0, depth_copy = 0;
   };
   void DrawFrame(const Frame& fr) {
@@ -583,10 +584,11 @@ struct Fixture {
     const Mesh scene = SceneMesh();
     if (fr.prepass) DrawMesh(scene, ps_lit, kBlendOpaque, kDepthPrepass, 0);
     if (fr.depth_copy) Resolve(0x4, fr.depth_copy);  // the depth, as the game resolves it
+    if (fr.clear_prepass_depth) Clear(kClearZ, 0, 1.0f);
     DrawMesh(scene, ps_lit, kBlendOpaque, fr.prepass ? kDepthColour : kDepthPrepass);
     if (fr.water) {
       SetConstants(false, 0, kWater, 1);
-      DrawMesh(WaterMesh(), ps_water, kBlendAlpha, kDepthColour);
+      DrawMesh(WaterMesh(), ps_water, kBlendAlpha, fr.water_writes_depth ? kDepthPrepass : kDepthColour);
     }
     if (fr.particle) {
       SetConstants(false, 1, kParticle, 1);
@@ -736,6 +738,36 @@ TEST(GameAo_MissingEndAppliesBeforeWaterNotAtTheLateCopy) {
     CHECK_EQ(ao->stats().applied_opaque, uint64_t(2));
     CHECK_EQ(ao->stats().applied_resolve, uint64_t(0));
     CHECK_EQ(ao->stats().applied_present, uint64_t(0));
+  }
+}
+
+TEST(GameAo_UpcomingWaterDepthWriteCannotHideResolvedDepth) {
+  Options o;
+  o.ao = GtaoConfig(AoApply::kOpaque);
+  Fixture hashes(o);
+  if (!hashes.Init()) return;
+  char rules[128];
+  std::snprintf(rules, sizeof(rules), "end ps=%016llX\ntransparent ps=%016llX\n",
+                static_cast<unsigned long long>(hashes.Hash(false, hashes.ps_particle)),
+                static_cast<unsigned long long>(hashes.Hash(false, hashes.ps_water)));
+  o.ao.rules = ParseAoRules(rules);
+  Fixture a(o), b(o);
+  if (!a.Init() || !b.Init()) return;
+  Fixture::Frame fr;
+  fr.particle = false;
+  fr.depth_copy = a.NewTexture(kknr::TextureFormat::k_24_8, kW, kH);
+  fr.clear_prepass_depth = fr.water_writes_depth = true;
+  const Pixels copied = a.Render(fr, "resolved_depth_before_water");
+  fr.depth_copy = 0;
+  fr.clear_prepass_depth = false;
+  const Pixels live = b.Render(fr, "live_depth_before_water");
+  CHECK(MaxDifference(copied, live) < kTol);
+  CHECK(Grey(copied, a.cam, kWallCrease) < 0.5f);
+  const SceneAo* ao = a.game->scene_ao();
+  CHECK(ao != nullptr);
+  if (ao) {
+    CHECK_EQ(ao->stats().applied_opaque, uint64_t(1));
+    CHECK_EQ(ao->stats().no_depth, uint64_t(0));
   }
 }
 
