@@ -548,8 +548,15 @@ void GameRenderer::EndFrame() {
     }
   }
   while (!retired_resources_.empty() && retired_resources_.front().first + 8 < frame_) retired_resources_.pop_front();
+  stats_.edram_framebuffers = framebuffers_.size();
   if (frame_ % 300 == 0) {
     if (options_.debug & 32768) {
+      Logf(LogLevel::kInfo,
+           "rexgpu-native: EDRAM cache: %llu targets, %llu target allocation bytes, %llu framebuffers "
+           "(framebuffers share target storage; excludes retired resources and upscaler auxiliary caches)",
+           static_cast<unsigned long long>(stats_.edram_targets),
+           static_cast<unsigned long long>(stats_.edram_target_bytes),
+           static_cast<unsigned long long>(stats_.edram_framebuffers));
       size_t slots = 0;
       for (const DescriptorTable& t : tables_) slots += t.next - 1 - t.free.size() - t.retired.size();
       Logf(LogLevel::kInfo,

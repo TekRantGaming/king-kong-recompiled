@@ -192,5 +192,3 @@ bool ReferenceTriangleList(const PrimitiveInput& in, std::vector<uint32_t>& out)
       return false;
   }
 }
-
-

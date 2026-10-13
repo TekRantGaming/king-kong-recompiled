@@ -158,6 +158,8 @@ class GameRenderer {
     uint64_t list_records = 0;       // descriptions read from shipped pipeline lists
     int32_t driver_cache_load = -1;  // DriverPipelineCache::Load of the driver's cache file, -1 none
     uint64_t driver_cache_saves = 0;
+    uint64_t edram_targets = 0, edram_framebuffers = 0;  // retained cache entries
+    uint64_t edram_target_bytes = 0;  // driver memory requirements, excludes retired textures
     uint64_t driver_cache_bytes = 0;  // the driver's data at the last save
     uint64_t skipped_device = 0;     // no device struct
     uint64_t texture_uploads = 0;
@@ -315,6 +317,7 @@ class GameRenderer {
   // ---- render targets: one host texture per EDRAM placement
   struct HostTarget {
     nvrhi::TextureHandle texture;
+    uint64_t allocation_bytes = 0;
     nvrhi::Format format = nvrhi::Format::UNKNOWN;
     uint32_t width = 0, height = 0;  // in guest pixels (the pitch and the rows drawn so far)
     uint32_t host_width = 0, host_height = 0;  // the texture's: the guest's times the scale

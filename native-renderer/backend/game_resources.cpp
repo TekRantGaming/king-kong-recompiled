@@ -117,6 +117,9 @@ GameRenderer::HostTarget* GameRenderer::GetTarget(bool depth, uint32_t edram_bas
   desc.debugName = name;
   t->texture = device_->createTexture(desc);
   if (!t->texture) return nullptr;
+  t->allocation_bytes = device_->getTextureMemoryRequirements(t->texture).size;
+  stats_.edram_target_bytes += t->allocation_bytes;
+  if (slot) stats_.edram_target_bytes -= slot->allocation_bytes;
   if (slot) {
     // Framebuffers holding the old texture are dropped with it.
     framebuffers_.clear();
@@ -127,6 +130,7 @@ GameRenderer::HostTarget* GameRenderer::GetTarget(bool depth, uint32_t edram_bas
       upscale_->pass_sets.clear();
     }
   }
+  if (!slot) ++stats_.edram_targets;
   slot = std::move(t);
   if (upscale_) {
     slot->used_frame = frame_;
