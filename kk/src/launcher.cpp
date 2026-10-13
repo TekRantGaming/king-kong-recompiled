@@ -3918,6 +3918,22 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                                "The official Discord server: news, upcoming features, early builds, and a place to "
                                "tell us what you think.",
                                "Join", [] { OpenUrl(kDiscordUrl); }));
+    {
+      // The upscalers' credits. NVIDIA's DLSS SDK licence (supplement 7.1 b) asks for the SDK to be credited in
+      // the about box; its marks (logos) need NVIDIA's written approval first (7.2 c), so it is text only until
+      // then (native-renderer/docs/upscalers.md). The project is not endorsed by NVIDIA, AMD or Intel.
+      Item it;
+      it.type = ItemType::kInfo;
+      it.label = "Upscaler credits";
+      it.description =
+          "The native renderer's temporal upscalers use NVIDIA DLSS (the NVIDIA DLSS SDK), AMD FidelityFX Super "
+          "Resolution (FSR 3.1 and FSR 4, the AMD FidelityFX SDK) and Intel XeSS (the Intel XeSS SDK). NVIDIA, "
+          "GeForce RTX, RTX and DLSS are trademarks and/or registered trademarks of NVIDIA Corporation in the U.S. "
+          "and other countries. AMD, FidelityFX and FSR are trademarks of Advanced Micro Devices, Inc. Intel and "
+          "XeSS are trademarks of Intel Corporation. This project is not sponsored or endorsed by NVIDIA, AMD or "
+          "Intel. Their licences are in THIRD-PARTY-NOTICES.txt beside the game.";
+      items.push_back(std::move(it));
+    }
 
     items.push_back(Section("Launcher"));
     items.push_back(CvarToggle("Show this launcher",
