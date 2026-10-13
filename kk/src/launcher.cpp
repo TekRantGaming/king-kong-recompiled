@@ -1,4 +1,7 @@
 #include "launcher.h"
+#include "ingame_settings.h"
+#include "pause_menu.h"
+#include "play_session.h"
 #include "launcher_art.h"
 #include "launcher_music.h"
 #include "launcher_sounds.h"
@@ -25,6 +28,7 @@
 #include <cstring>
 #include <map>
 #include <memory>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -584,15 +588,1094 @@ struct SteamState {
 constexpr const char* kSteamPhases[] = {"Downloading the artwork from SteamGridDB", "Waiting for Steam to close",
                                         "Adding King Kong to your library", "Opening Steam again"};
 
-class Launcher final : public rex::ui::ImGuiDialog {
+// The settings pages (Display, Graphics, Gameplay, Controls, Cheats): their rows, built by the
+// launcher and, in game, by the pause menu (InGameSettings below, ingame_settings.h), which leaves
+// out the rows that need a restart. The launcher is one of these.
+class SettingsPages {
+ protected:
+  SettingsPages(rex::ui::ImmediateDrawer* immediate, LauncherCallbacks callbacks, bool in_game)
+      : cb_(std::move(callbacks)),
+        input_(/*own_gamepads=*/!in_game),
+        glyphs_(immediate, rex::filesystem::GetExecutableFolder() / "glyphs"),
+        in_game_(in_game) {}
+
+  // The button pictures the Button prompts setting picks, as in the game.
+  std::string PadSet() const {
+    const std::string p = Get("kk_button_prompts");
+    if (p == "auto") return input_.pad_style().empty() ? DetectedPadPrompts() : input_.pad_style();
+    if (p == "xbox360" || p == "xbox_series" || p == "ps5" || p == "ps2" || p == "steam_deck" || p == "keyboard")
+      return p;
+    return input_.pad_device() == ui::Device::kPlayStation ? "ps5" : "xbox_series";
+  }
+  // The prompts' pictures: keys while the keyboard and mouse are in use.
+  std::string PromptSet() const { return input_.device() == ui::Device::kKeyboard ? "keyboard" : PadSet(); }
+
+  void Status(std::string text) {
+    status_ = std::move(text);
+    status_time_ = ImGui::GetTime();
+  }
+
+  // Item builders.
+  static Item Section(const std::string& label) {
+    Item it;
+    it.type = ItemType::kSection;
+    it.label = label;  // translated and upper-cased as it's drawn
+    return it;
+  }
+
+  // A choice bound to a cvar's values; values the cvar refuses in this build
+  // are left out.
+  static Item CvarChoice(std::string label, std::string desc, std::string cvar, std::vector<Option> options) {
+    if (const auto* flag = FindFlag(cvar); flag && !flag->constraints.allowed_values.empty()) {
+      const auto& allowed = flag->constraints.allowed_values;
+      std::erase_if(options, [&](const Option& o) {
+        return std::find(allowed.begin(), allowed.end(), o.value) == allowed.end();
+      });
+    }
+    Item it;
+    it.type = ItemType::kChoice;
+    it.label = std::move(label);
+    it.description = std::move(desc);
+    const std::string cur = Get(cvar.c_str());
+    it.index = -1;
+    it.value_text = cur;
+    std::vector<std::string> values;
+    for (size_t i = 0; i < options.size(); ++i) {
+      it.options.push_back(options[i].label);
+      values.push_back(options[i].value);
+      if (options[i].value == cur) it.index = int(i);
+    }
+    it.on_choice = [cvar, values](int i) { Set(cvar.c_str(), values[size_t(i)]); };
+    it.on_default = [cvar] { Reset(cvar.c_str()); };
+    if (const auto* flag = FindFlag(cvar))
+      for (const Option& o : options)
+        if (o.value == flag->default_value) it.default_text = o.label;
+    return it;
+  }
+
+  static Item CvarToggle(std::string label, std::string desc, std::string cvar, const char* off = "Off",
+                         const char* on = "On", bool invert = false) {
+    return CvarChoice(std::move(label), std::move(desc), std::move(cvar),
+                      {{off, invert ? "true" : "false"}, {on, invert ? "false" : "true"}});
+  }
+
+  static Item CvarSlider(std::string label, std::string desc, std::string cvar, float lo, float hi, float step,
+                         std::function<std::string(float)> format) {
+    Item it;
+    it.type = ItemType::kSlider;
+    it.label = std::move(label);
+    it.description = std::move(desc);
+    it.lo = lo;
+    it.hi = hi;
+    it.step = step;
+    it.value = std::clamp(GetFloat(cvar.c_str(), lo), lo, hi);
+    it.value_text = format(it.value);
+    const bool integral = step >= 1.0f;
+    it.on_value = [cvar, integral](float v) {
+      Set(cvar.c_str(), integral ? std::to_string(int(std::lround(v))) : std::to_string(v));
+    };
+    it.on_default = [cvar] { Reset(cvar.c_str()); };
+    if (const auto* flag = FindFlag(cvar)) {
+      try {
+        it.default_text = format(std::stof(flag->default_value));
+      } catch (...) {
+      }
+    }
+    return it;
+  }
+
+  static Item ActionItem(std::string label, std::string desc, std::string value, std::function<void()> fn) {
+    Item it;
+    it.type = ItemType::kAction;
+    it.label = std::move(label);
+    it.description = std::move(desc);
+    it.value_text = std::move(value);
+    it.on_activate = std::move(fn);
+    return it;
+  }
+
+  static Item& Disable(Item& it, bool disabled, std::string note) {
+    if (disabled) {
+      it.disabled = true;
+      it.disabled_note = std::move(note);
+    }
+    return it;
+  }
+
+  static constexpr const char* kSetByOriginal =
+      "Set by the Original Xbox 360 look. Switch Look to Remastered on the Graphics page to change it.";
+
+  // ------------------------------------------------------------ Display ---
+  // Display > Frame rate (Beta 2: from the Gameplay page).
+  Item FrameRateItem() {
+    std::vector<Option> opts;
+    for (int f : kFrameRateChoices)
+      opts.push_back({f <= 0 ? "Unlimited" : f == 30 ? "30 FPS (Xbox 360)" : std::to_string(f) + " FPS",
+                      std::to_string(f)});
+    const std::string cur = Get("kk_frame_rate");
+    bool listed = false;
+    for (const auto& o : opts) listed = listed || o.value == cur;
+    if (!listed && !cur.empty()) opts.push_back({F("{0} FPS (settings file)", {cur}), cur});
+    Item it = CvarChoice("Frame rate",
+                         "How many pictures the game draws a second (your screen's refresh rate is separate). 30 "
+                         "matches the Xbox 360 and keeps every animation right. Higher is smoother, but some "
+                         "character animations are not right above 30 yet. For the smoothest motion, pick a rate "
+                         "that divides your screen's evenly, such as 60 on a 120 Hz screen.",
+                         "kk_frame_rate", opts);
+    return std::move(Disable(it, GetBool("kk_original_look"), kSetByOriginal));
+  }
+
+  // Display > Upscaling (Beta 2: from the Graphics page): the upscaler and how many pixels the game
+  // draws for the screen, which the Resolution above decides.
+  void UpscalingItems(std::vector<Item>& items) {
+    const auto [out_w, out_h] = cb_.output_size ? cb_.output_size() : std::pair<int, int>{1280, 720};
+    const bool original = GetBool("kk_original_look");
+    const char* draws = GetBool("fullscreen") ? "Draws {0} for your {1} screen." : "Draws {0} for your {1} window.";
+    items.push_back(Section("Upscaling"));
+    const std::string temporal = CurrentTemporalUpscaler();
+    {
+      // Each choice: its name, present_effect (the spatial upscalers, in the presenter) and
+      // native_upscaler (the temporal ones, in the native renderer; docs/upscalers.md).
+      struct Choice {
+        std::string label, present, temporal;
+      };
+      // NIS is in the D3D12 presenter only (the Vulkan one, used on Linux, would give FSR).
+      std::vector<Choice> choices = {{"Off", "bilinear", "off"}, {"AMD FSR 1", "fsr", "off"}};
+#if defined(_WIN32)
+      choices.push_back({"NVIDIA NIS", "nis", "off"});
+      const char* which = "AMD FSR 1 and NVIDIA Image Scaling (NIS) work on any graphics card.";
+#else
+      const char* which = "AMD FSR 1 works on any graphics card.";
+#endif
+      const OfferedUpscalers offered = OfferedTemporalUpscalers();
+      bool any_temporal = false;
+      for (const TemporalUpscaler& t : kTemporalUpscalers) {
+        if (offered.Has(t.value)) {
+          choices.push_back({t.label, "bilinear", t.value});
+          any_temporal = true;
+        } else if (temporal == t.value) {  // chosen before, not offered here (it falls back to FSR 3.1)
+          choices.push_back({F("{0} (not on this PC)", {T(std::string(t.label))}), "bilinear", t.value});
+        }
+      }
+      if (!temporal.empty()) {
+        bool listed = false;
+        for (const Choice& c : choices) listed = listed || c.temporal == temporal;
+        if (!listed) choices.push_back({F("{0} (settings file)", {temporal}), "bilinear", temporal});
+      }
+      Item it;
+      it.type = ItemType::kChoice;
+      it.label = "Upscaler";
+      std::string desc =
+          std::string("Scales the picture up to your screen and sharpens it, for a clearer image when the game draws "
+                      "fewer pixels than your screen has. ") +
+          which + " Off uses plain smooth scaling.";
+      if (any_temporal || !temporal.empty())
+        desc += " DLSS, FSR 4, FSR 3.1 and XeSS rebuild a sharp picture from several frames and smooth jagged edges "
+                "too; only those your graphics card supports are listed. Choosing one of them restarts the game "
+                "when you press Play.";
+      it.description = desc;
+      it.index = -1;
+      const std::string present = Get("present_effect");
+      for (size_t i = 0; i < choices.size(); ++i) {
+        it.options.push_back(choices[i].label);
+        const bool match = temporal.empty() ? choices[i].temporal == "off" && choices[i].present == present
+                                            : choices[i].temporal == temporal;
+        if (match && it.index < 0) it.index = int(i);
+      }
+      if (it.index < 0) it.value_text = present;
+      if (UsingNativeRenderer() && !offered.known && HasTemporalSetting())
+        it.facts.push_back("Checking which other upscalers your graphics card runs...");
+      it.on_choice = [choices](int i) {
+        const Choice& c = choices[size_t(i)];
+        Set("present_effect", c.present);
+        SetTemporalUpscaler(c.temporal.c_str());
+        if (c.temporal != "off") {
+          // The temporal upscalers take the picture at your screen's size (Native) and draw fewer
+          // pixels themselves (their mode).
+          Set("kk_render_quality", "native");
+        } else if (i != 0 && UpscalerMode() < 0) {
+          // The upscaler modes are Native to Performance; others start at Native.
+          Set("kk_render_quality", "native");
+        }
+      };
+      it.on_default = [] {
+        Reset("present_effect");
+        if (HasTemporalSetting()) Reset("native_upscaler");
+      };
+      if (const auto* flag = FindFlag("present_effect"))
+        for (const Choice& c : choices)
+          if (c.temporal == "off" && c.present == flag->default_value) it.default_text = c.label;
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
+    if (!temporal.empty()) {
+      // The temporal upscaler's mode: it draws the game at the output size divided by the mode's ratio
+      // and rebuilds the output size (the screen's, in 720p steps: Render quality Native).
+      Item it;
+      it.type = ItemType::kChoice;
+      it.label = "Upscaler mode";
+      it.description =
+          "How many pixels the game draws before the upscaler rebuilds the picture at your screen's size. Native AA "
+          "draws every pixel and only smooths the edges (DLAA with DLSS); Quality, Balanced, Performance and Ultra "
+          "Performance draw fewer for more speed.";
+      const std::string cur = Get("native_upscaler_quality");
+      it.index = -1;
+      const int scale = RenderScaleFor("native", out_h);
+      const int ow = 1280 * scale, oh = 720 * scale;
+      for (size_t m = 0; m < std::size(kTemporalModes); ++m) {
+        it.options.push_back(kTemporalModes[m].label);
+        if (cur == kTemporalModes[m].value) {
+          it.index = int(m);
+          const double r = kTemporalModes[m].ratio;
+          it.facts.push_back(F(draws, {Size(int(std::lround(ow / r)), int(std::lround(oh / r))), Size(out_w, out_h)}));
+          if (ow != out_w || oh != out_h)
+            it.facts.push_back(F("The upscaler's picture is {0}, scaled to fit.", {Size(ow, oh)}));
+        }
+      }
+      if (it.index < 0) it.value_text = cur;
+      it.on_choice = [](int i) { Set("native_upscaler_quality", kTemporalModes[i].value); };
+      it.on_default = [] { Reset("native_upscaler_quality"); };
+      if (const auto* flag = FindFlag("native_upscaler_quality"))
+        for (const TemporalMode& m : kTemporalModes)
+          if (flag->default_value == m.value) it.default_text = m.label;
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+      return;  // the render quality is Native with these (no Internal resolution either)
+    }
+    if (Get("present_effect") != "bilinear") {
+      Item it;
+      it.type = ItemType::kChoice;
+      it.label = "Upscaler mode";
+      it.description =
+          "How many pixels the game draws before the upscaler scales them to your screen. Native draws at your "
+          "screen's size and only sharpens; Quality, Balanced and Performance draw fewer for more speed. The game "
+          "draws in steps of its original 720p, so some modes can be the same at your screen size.";
+      it.options.assign(std::begin(kUpscalerModeNames), std::end(kUpscalerModeNames));
+      const int mode = UpscalerMode();
+      it.index = mode;
+      if (mode >= 0) {
+        const int scale = RenderScaleFor(kUpscalerModes[mode], out_h);
+        it.facts.push_back(F(draws, {Size(1280 * scale, 720 * scale), Size(out_w, out_h)}));
+        std::string same;
+        for (int m = 0; m < 4; ++m) {
+          if (m == mode || RenderScaleFor(kUpscalerModes[m], out_h) != scale) continue;
+          same += same.empty() ? T(std::string(kUpscalerModeNames[m]))
+                               : " " + T(std::string("and")) + " " + T(std::string(kUpscalerModeNames[m]));
+        }
+        if (!same.empty()) it.facts.push_back(F("Same as {0} here.", {same}));
+      } else {
+        it.value_text = "Custom";
+        it.facts.push_back("Now set to another render quality. Pick a mode to use one of these.");
+      }
+      it.on_choice = [](int i) { Set("kk_render_quality", kUpscalerModes[i]); };
+      it.on_default = [] { Reset("kk_render_quality"); };
+      if (const auto* flag = FindFlag("kk_render_quality"))
+        for (int m = 0; m < 4; ++m)
+          if (flag->default_value == kUpscalerModes[m]) it.default_text = kUpscalerModeNames[m];
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    } else {
+      Item it;
+      it.type = ItemType::kChoice;
+      it.label = "Render quality";
+      it.description =
+          "How sharply the game is drawn compared with your screen. Native matches it; Quality, Balanced and the "
+          "Performance modes draw fewer pixels and scale up (an upscaler makes that sharper). The game renders in "
+          "steps of its original 720p.";
+      const std::string cur = Get("kk_render_quality");
+      std::vector<std::string> values;
+      it.index = -1;
+      for (const auto& p : RenderPresets()) {
+        const int scale = RenderScaleFor(p.id, out_h);
+        if (cur == p.id) {
+          it.index = int(values.size());
+          it.facts.push_back(F(draws, {Size(1280 * scale, 720 * scale), Size(out_w, out_h)}));
+        }
+        it.options.push_back(p.label);
+        values.push_back(p.id);
+      }
+      it.options.push_back("Custom");
+      values.push_back("custom");
+      if (cur == "custom") it.index = int(values.size()) - 1;
+      it.value_text = cur;
+      it.on_choice = [values](int i) { Set("kk_render_quality", values[size_t(i)]); };
+      it.on_default = [] { Reset("kk_render_quality"); };
+      if (const auto* flag = FindFlag("kk_render_quality"))
+        for (const auto& p : RenderPresets())
+          if (flag->default_value == p.id) it.default_text = p.label;
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
+    if (Get("kk_render_quality") == "custom") {
+      Item it = CvarChoice("Internal resolution", "Draw the game at an exact multiple of its native 1280 " KK_TIMES " 720.",
+                           "resolution_scale",
+                           {{"1" KK_TIMES "  " KK_DOT "  1280 " KK_TIMES " 720", "1"},
+                            {"2" KK_TIMES "  " KK_DOT "  2560 " KK_TIMES " 1440", "2"},
+                            {"3" KK_TIMES "  " KK_DOT "  3840 " KK_TIMES " 2160", "3"},
+                            {"4" KK_TIMES "  " KK_DOT "  5120 " KK_TIMES " 2880", "4"},
+                            {"5" KK_TIMES "  " KK_DOT "  6400 " KK_TIMES " 3600", "5"},
+                            {"6" KK_TIMES "  " KK_DOT "  7680 " KK_TIMES " 4320", "6"}});
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
+  }
+
+  std::vector<Item> DisplayItems() {
+    std::vector<Item> items;
+    items.push_back(Section("Window"));
+    items.push_back(WindowModeItem());
+    // Each mode's own size: the window's, or the screen's in exclusive fullscreen (Borderless has none).
+    if (!GetBool("fullscreen")) items.push_back(WindowSizeItem());
+    if (ExclusiveFullscreen()) {
+      items.push_back(ResolutionItem());
+      items.push_back(RefreshRateItem());
+    }
+    items.push_back(MonitorItem());
+    items.push_back(Section("Frame rate"));
+    items.push_back(FrameRateItem());
+    items.push_back(CvarToggle("VSync",
+                               "On waits for the display for tear-free frames. Off has the lowest latency and lets "
+                               "G-Sync and FreeSync displays run freely.",
+                               "d3d12_allow_variable_refresh_rate_and_tearing", "Off", "On", /*invert=*/true));
+    UpscalingItems(items);
+    items.push_back(Section("Picture"));
+    items.push_back(CvarChoice("Aspect ratio",
+                               "The game is 16:9. Letterbox keeps its shape on other screens; Stretch fills them.",
+                               "present_letterbox", {{"Letterbox 16:9", "true"}, {"Stretch", "false"}}));
+    return items;
+  }
+
+  // Keyboard & mouse shows the keys in the game's hints and turns the camera
+  // with the mouse; back on Controller, the controller's prompts come back.
+  static void SetInputMode(bool keyboard) {
+    SetBool("mnk_mode", keyboard);
+    const std::string prompts = Get("kk_button_prompts");
+    if (keyboard) {
+      if (prompts != "keyboard") Set("kk_pad_prompts", prompts);
+      Set("kk_button_prompts", "keyboard");
+      SetBool("mnk_mouse", true);
+    } else if (prompts == "keyboard") {
+      Set("kk_button_prompts", Get("kk_pad_prompts"));
+    }
+  }
+
+  void SetFullscreen(bool on) {
+    SetBool("fullscreen", on);
+    if (cb_.set_fullscreen) cb_.set_fullscreen(on);
+  }
+
+  Item WindowSizeItem() {
+    // window_width/height are in logical pixels (96 DPI); offer real pixel sizes
+    // that fit on the screen and convert with the window's DPI scale.
+    const double scale = cb_.dpi_scale ? cb_.dpi_scale() : 1.0;
+    auto to_physical = [&](int logical) { return int(logical * scale + 0.5); };
+    const int w = to_physical(GetInt("window_width")), h = to_physical(GetInt("window_height"));
+    static const std::pair<int, int> kSizes[] = {{0, 0},       {1280, 720},  {1600, 900},
+                                                 {1920, 1080}, {2560, 1440}, {3200, 1800}};
+    const auto [screen_w, screen_h] = cb_.screen_size ? cb_.screen_size() : std::pair<int, int>{1 << 16, 1 << 16};
+    auto close_to = [](int a, int b) { return std::abs(a - b) <= 2; };
+    Item it;
+    it.type = ItemType::kChoice;
+    it.label = "Window size";
+    it.description = "The window's size in windowed mode. Applies when the game starts.";
+    it.index = -1;
+    it.value_text = Size(w, h);
+    it.default_text = "Default";
+    std::vector<std::pair<int, int>> sizes;
+    for (auto [sw, sh] : kSizes) {
+      if (sw >= screen_w || sh >= screen_h) continue;  // must fit with its frame
+      if (close_to(sw, w) && close_to(sh, h)) it.index = int(sizes.size());
+      it.options.push_back(sw == 0 ? std::string("Default") : Size(sw, sh));
+      sizes.emplace_back(sw, sh);
+    }
+    it.on_choice = [sizes, scale](int i) {
+      const auto [sw, sh] = sizes[size_t(i)];
+      SetInt("window_width", int(sw / scale + 0.5));
+      SetInt("window_height", int(sh / scale + 0.5));
+    };
+    it.on_default = [] {
+      Reset("window_width");
+      Reset("window_height");
+    };
+    return it;
+  }
+
+  // Fullscreen resolution (display_modes.h): Desktop, or one of the monitor's sizes, with its refresh
+  // rate on a row of its own (RefreshRateItem). Both are kept in kk_fullscreen_mode ("2560x1440@144").
+  void LoadDisplayModes() {
+    const int monitor = GetInt("monitor", 0);
+    if (display_modes_monitor_ == monitor) return;
+    display_modes_monitor_ = monitor;
+    display_modes_.clear();
+    const std::vector<DisplayMode> all = cb_.display_modes ? cb_.display_modes(monitor) : std::vector<DisplayMode>{};
+    auto whole = [](float hz) { return std::fabs(hz - std::round(hz)) < 0.05f; };
+    for (const DisplayMode& m : all) {
+      if (m.width < 1280 || m.height < 720) continue;  // below the game's own 720p
+      // 59.94 or 119.88 only when the display doesn't also have 60 or 120 at that size.
+      const bool twin = !whole(m.refresh) && std::any_of(all.begin(), all.end(), [&](const DisplayMode& o) {
+        return o.width == m.width && o.height == m.height && whole(o.refresh) &&
+               std::fabs(o.refresh - std::round(m.refresh)) < 0.05f;
+      });
+      if (!twin) display_modes_.push_back(m);  // SDL's order: largest first, then the highest rate
+    }
+  }
+
+  // The refresh rates the display has at a size, highest first.
+  std::vector<float> RatesAt(int width, int height) const {
+    std::vector<float> rates;
+    for (const DisplayMode& m : display_modes_)
+      if (m.width == width && m.height == height) rates.push_back(m.refresh);
+    return rates;
+  }
+
+  // Window mode: Windowed (fullscreen off), Borderless (fullscreen, kk_fullscreen_mode "desktop": a
+  // window filling the screen at the desktop's resolution) or Fullscreen (kk_fullscreen_mode a mode:
+  // exclusive, the screen switched to it while the game runs; the launcher itself stays borderless).
+  static bool ExclusiveFullscreen() {
+    return GetBool("fullscreen") && ParseDisplayMode(Get("kk_fullscreen_mode")).has_value();
+  }
+
+  // The desktop's own mode, as listed (a 59.94 that the list shows as 60 becomes 60), for Fullscreen
+  // until a Resolution is picked.
+  std::string DesktopModeValue() {
+    LoadDisplayModes();
+    DisplayMode desktop = cb_.desktop_mode ? cb_.desktop_mode(GetInt("monitor", 0)) : DisplayMode{};
+    for (const DisplayMode& m : display_modes_)
+      if (m.width == desktop.width && m.height == desktop.height && std::fabs(m.refresh - desktop.refresh) < 0.1f)
+        desktop.refresh = m.refresh;
+    if (desktop.width <= 0 && !display_modes_.empty()) desktop = display_modes_.front();
+    return desktop.width > 0 ? desktop.Value() : "desktop";
+  }
+
+  Item WindowModeItem() {
+    Item it;
+    it.type = ItemType::kChoice;
+    it.label = "Window mode";
+    it.description =
+        "Windowed plays in a window. Borderless fills the screen with a window at your desktop's resolution, so "
+        "Alt+Tab and other windows switch instantly. Fullscreen changes your screen to the Resolution and Refresh "
+        "rate you pick below while the game runs.";
+    it.options = {"Windowed", "Borderless", "Fullscreen"};
+    it.index = !GetBool("fullscreen") ? 0 : ExclusiveFullscreen() ? 2 : 1;
+    it.default_text = "Windowed";
+    it.on_choice = [this](int i) {
+      if (i == 1) Set("kk_fullscreen_mode", "desktop");
+      if (i == 2 && !ParseDisplayMode(Get("kk_fullscreen_mode"))) Set("kk_fullscreen_mode", DesktopModeValue());
+      SetFullscreen(i != 0);
+    };
+    it.on_default = [this] {
+      Reset("kk_fullscreen_mode");
+      Reset("fullscreen");
+      if (cb_.set_fullscreen) cb_.set_fullscreen(GetBool("fullscreen"));
+    };
+    if (it.index == 2) it.facts.push_back("The launcher stays borderless; the screen changes when the game starts.");
+    return it;
+  }
+
+  // Fullscreen only: the screen's size while the game runs.
+  Item ResolutionItem() {
+    LoadDisplayModes();
+    const auto cur = ParseDisplayMode(Get("kk_fullscreen_mode"));
+    Item it;
+    it.type = ItemType::kChoice;
+    it.label = "Resolution";
+    it.description =
+        "The size your screen switches to while the game runs, at the Refresh rate below. The render quality "
+        "follows it. Applies when the game starts.";
+    std::vector<std::pair<int, int>> sizes;
+    for (const DisplayMode& m : display_modes_) {
+      if (!sizes.empty() && sizes.back() == std::pair<int, int>{m.width, m.height}) continue;
+      sizes.emplace_back(m.width, m.height);
+      it.options.push_back(Size(m.width, m.height));
+    }
+    it.index = -1;
+    for (size_t i = 0; i < sizes.size(); ++i)
+      if (sizes[i] == std::pair<int, int>{cur->width, cur->height}) it.index = int(i);
+    if (it.index < 0) {  // a size this display doesn't have (another monitor's, or the settings file's)
+      it.index = int(sizes.size());
+      sizes.emplace_back(cur->width, cur->height);
+      it.options.push_back(F("{0} (not on this display)", {Size(cur->width, cur->height)}));
+    }
+    it.facts.push_back(F("The game will be shown at {0}.", {Size(cur->width, cur->height)}));
+    const auto desktop = ParseDisplayMode(DesktopModeValue());
+    if (desktop) it.default_text = Size(desktop->width, desktop->height);
+    it.on_choice = [this, sizes, cur](int i) {
+      const auto [w, h] = sizes[size_t(i)];
+      const std::vector<float> rates = RatesAt(w, h);
+      // The rate chosen before when this size has it, else this size's highest.
+      float rate = rates.empty() ? (cur ? cur->refresh : 0.0f) : rates.front();
+      for (const float r : rates)
+        if (cur && std::fabs(r - cur->refresh) < 0.01f) rate = r;
+      Set("kk_fullscreen_mode", DisplayMode{w, h, rate}.Value());
+    };
+    it.on_default = [this] { Set("kk_fullscreen_mode", DesktopModeValue()); };
+    return it;
+  }
+
+  // Fullscreen only: the display's rates at the Resolution's size.
+  Item RefreshRateItem() {
+    const auto cur = ParseDisplayMode(Get("kk_fullscreen_mode"));
+    Item it;
+    it.type = ItemType::kChoice;
+    it.label = "Refresh rate";
+    it.description =
+        "How many times a second your screen refreshes at the Resolution above: your screen's setting. How many "
+        "pictures the game draws a second is the Frame rate, below. Applies when the game starts.";
+    std::vector<float> rates = RatesAt(cur->width, cur->height);
+    if (rates.empty()) rates.push_back(cur->refresh);
+    it.index = -1;
+    for (size_t i = 0; i < rates.size(); ++i) {
+      const DisplayMode m{cur->width, cur->height, rates[i]};
+      it.options.push_back(m.RateLabel());
+      if (std::fabs(rates[i] - cur->refresh) < 0.01f) it.index = int(i);
+    }
+    it.value_text = cur->RateLabel();
+    it.default_text = DisplayMode{cur->width, cur->height, rates.front()}.RateLabel();
+    it.on_choice = [w = cur->width, h = cur->height, rates](int i) {
+      Set("kk_fullscreen_mode", DisplayMode{w, h, rates[size_t(i)]}.Value());
+    };
+    it.on_default = [w = cur->width, h = cur->height, top = rates.front()] {
+      Set("kk_fullscreen_mode", DisplayMode{w, h, top}.Value());
+    };
+    return it;
+  }
+
+  Item MonitorItem() {
+    if (monitors_.empty()) monitors_ = ListMonitors();
+    std::vector<Option> opts = {{"Default", "0"}};
+    for (size_t i = 0; i < monitors_.size(); ++i) {
+      const auto& m = monitors_[i];
+      opts.push_back({F("Display {0}", {std::to_string(i + 1)}) + (m.primary ? " " + T(std::string("(main)")) : "") +
+                          "  " KK_DOT "  " + Size(m.width, m.height),
+                      std::to_string(i + 1)});
+    }
+    return CvarChoice("Monitor", "Which display the game opens on. Applies when the game starts.", "monitor",
+                      std::move(opts));
+  }
+
+  // ----------------------------------------------------------- Graphics ---
+  std::vector<Item> GraphicsItems() {
+    const bool original = GetBool("kk_original_look");
+    std::vector<Item> items;
+    items.push_back(Section("Look"));
+    {
+      Item it = CvarChoice("Look",
+                           "Original is the Xbox 360 version as it was: 720p at 30 FPS, the console's own "
+                           "anti-aliasing and texture filtering, its 69" KK_DEG " field of view, motion blur, screen "
+                           "blur and distance fog, and no ambient occlusion. Remastered gives you the presets, every "
+                           "setting on this page and the frame rate and upscaling on the Display page; chosen at "
+                           "setup, it starts with the preset for your graphics card, 60 FPS and the new GTAO ambient "
+                           "occlusion.",
+                           "kk_original_look", {{"Original Xbox 360", "true"}, {"Remastered", "false"}});
+      it.on_choice = [](int i) { SetOriginalLook(i == 0); };
+      it.on_default = [] { SetOriginalLook(false); };
+      items.push_back(std::move(it));
+    }
+    {
+      Item it;
+      it.type = ItemType::kChoice;
+      it.label = "Preset";
+      it.description =
+          "Quick settings for anti-aliasing, texture filtering and ambient occlusion here, and the upscaler and "
+          "render quality on the Display page. Change any of them yourself and it shows Custom.";
+      for (const auto& p : kGraphicsPresets) it.options.push_back(p.label);
+      it.options.push_back("Custom");
+      const int match = MatchGraphicsPreset();
+      it.index = original ? -1 : match < 0 ? kGraphicsPresetCount : match;
+      it.value_text = "Xbox 360";  // the Original look's own settings
+      it.on_choice = [](int i) {
+        if (i < kGraphicsPresetCount) ApplyGraphicsPreset(i);
+      };
+      it.on_default = [] { ApplyGraphicsPreset(1); };
+      it.default_text = "Medium";
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
+
+    items.push_back(Section("Image"));
+    {
+      Item it = CvarChoice("Anti-aliasing", "Smooths jagged edges after the frame is drawn.", "swap_post_effect",
+                           {{"Off", "none"}, {"FXAA", "fxaa"}});
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
+    // 2x MSAA is not offered as a choice: it is how the Xbox 360 drew those
+    // surfaces (native_2x_msaa, on by default), and the shader pack is built with it.
+    {
+      Item it = CvarChoice("Texture filtering", "Keeps the ground and distant textures sharp at steep angles.",
+                           "anisotropic_override",
+                           {{"Game", "-1"}, {"Off", "0"}, {"2" KK_TIMES, "2"}, {"4" KK_TIMES, "3"}, {"8" KK_TIMES, "4"},
+                            {"16" KK_TIMES, "5"}});
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
+    {
+      // Ambient occlusion lives in the GPU plugin (ao_mode, ao_strength). On the native renderer it is
+      // GTAO (ApplyPortDefaults), worked out from the scene's depth at the end of the opaque pass, so
+      // water, smoke, fire, fur and the sky drawn after it are never darkened (native-renderer/docs/ao.md).
+      const bool native = NativeRendererAvailable() && UsingNativeRenderer();
+      Item it = CvarChoice("Ambient occlusion",
+                           native ? "Soft shading where surfaces meet: in corners and creases, and on the ground under "
+                                    "rocks, grass and people (GTAO). Water, smoke, fire and the sky are never darkened. "
+                                    "Costs about 1 to 2 ms a frame at 4K."
+                                  : "Soft shading where surfaces meet: in corners and creases, and on the ground under "
+                                    "rocks, grass and people. Costs about 1 ms a frame at 4K. Not available with Intel "
+                                    "graphics on the Classic renderer.",
+                           "ao_mode", {{"Off", "0"}, {"On", "1"}});
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+      if (GetInt("ao_mode", 0) != 0) {
+        // GTAO: the shading's darkness (XeGTAO's final power 1.6, 2.2, 3.0) and how far it reaches from
+        // each crease (6, 8, 12 near-plane distances). Light darkens about as much as the Classic
+        // renderer's AO on the whole, with a crisper footprint (docs/ao.md, "In the game").
+        Item st = CvarChoice("AO strength",
+                             native ? "How dark the shading gets and how far it spreads from each corner. Light is "
+                                      "recommended: Medium and Strong darken grass and rock more."
+                                    : "How dark the shading gets. Light is recommended.",
+                             "ao_strength", {{"Light (recommended)", "1"}, {"Medium", "2"}, {"Strong", "3"}});
+        items.push_back(std::move(Disable(st, original, kSetByOriginal)));
+      }
+    }
+
+    items.push_back(Section("Effects"));
+    {
+      Item it = CvarToggle("Motion blur",
+                           "The trail the game blends over fast moments, mostly in Kong's sequences and some "
+                           "transitions.",
+                           "kk_motion_blur");
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
+    {
+      Item it = CvarToggle("Screen blur",
+                           "Some levels (Necropolis, Brontosaurus) blur the whole picture slightly. The blur is sized "
+                           "for the Xbox 360's 720p, so on a sharper screen it makes those levels look low resolution. "
+                           "Off keeps them sharp.",
+                           "kk_big_blur");
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
+    {
+      Item it = CvarToggle("Distance fog",
+                           "The haze over far-away scenery. Off shows distant scenery clearly, but the fog is part of "
+                           "Skull Island's look and also hides the edges of each area, so some empty or unfinished "
+                           "backdrops can show.",
+                           "kk_fog");
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
+
+    // Advanced: the Classic renderer stays for comparison (gpu_plugin xenos), as the stable version draws.
+    if (NativeRendererAvailable()) {
+      items.push_back(Section("Advanced"));
+      Item it;
+      it.type = ItemType::kChoice;
+      it.label = "Renderer";
+      it.description =
+          "Native draws the game with its own shaders, translated for your graphics card: faster, sharper at high "
+          "resolutions, with the new ambient occlusion. Classic emulates the Xbox 360's graphics chip, as the stable "
+          "version does; it's here to compare the two. The launcher restarts the game to change it.";
+      it.options = {"Native (beta)", "Classic (emulated GPU)"};
+      it.index = UsingNativeRenderer() ? 0 : Get("gpu_plugin") == "xenos" ? 1 : -1;
+      it.value_text = Get("gpu_plugin");
+      it.default_text = "Native (beta)";
+      it.on_choice = [](int i) { SetRenderer(i == 0); };
+      it.on_default = [] { SetRenderer(true); };
+      if (UsingNativeRenderer() != (Get("kk_renderer") != "classic"))
+        it.facts.push_back("Set by gpu_plugin in the settings file or on the command line.");
+      const auto* flag = FindFlag("gpu_plugin");
+      Disable(it, flag && (flag->source == rex::cvar::Source::kCommandLine || flag->source == rex::cvar::Source::kEnvironment),
+              "Set on the command line (--gpu_plugin).");
+      items.push_back(std::move(it));
+    }
+
+    return items;
+  }
+
+  // ----------------------------------------------------------- Gameplay ---
+  std::vector<Item> GameplayItems() {
+    const bool original = GetBool("kk_original_look");
+    std::vector<Item> items;
+    items.push_back(Section("Game"));
+    {
+      Item it = CvarSlider("Field of view",
+                           "How wide the camera sees. 69" KK_DEG " is the original for Jack; Kong, cutscene and other "
+                           "cameras widen by the same amount. Jack's gun keeps its usual size.",
+                           "kk_fov", 69, 110, 1, [](float v) {
+                             const int d = int(std::lround(v));
+                             return d <= 69 ? F("{0}\xC2\xB0 (original)", {std::to_string(d)}) : std::to_string(d) + KK_DEG;
+                           });
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
+    items.push_back(CvarChoice("Language", "The game's language, where the game includes it.", "user_language",
+                               {{"English", "1"},
+                                {"Deutsch", "3"},
+                                {"Espa\xC3\xB1ol", "5"},
+                                {"Fran\xC3\xA7" "ais", "4"},
+                                {"Italiano", "6"}}));
+    items.push_back(CvarToggle("Camera shake",
+                               "The camera shaking from the V-Rex's footsteps, explosions and Kong's blows.",
+                               "kk_camera_shake"));
+    {
+      Item it = CvarSlider("Camera shake strength",
+                           "How hard the camera shakes. 100% is the Xbox 360's; lower it if the shaking bothers you.",
+                           "kk_camera_shake_strength", 10, 200, 5,
+                           [](float v) { return std::to_string(int(std::lround(v))) + "%"; });
+      items.push_back(
+          std::move(Disable(it, !GetBool("kk_camera_shake"), "Switch Camera shake on to set its strength.")));
+    }
+    items.push_back(Section("Extras"));
+    items.push_back(CvarToggle("Frame counter", "Shows the game's frame rate in the corner. F2 toggles it while playing.",
+                               "kk_show_fps", "Hidden", "Shown"));
+    items.push_back(CvarToggle("Startup logos",
+                               "The Ubisoft, Universal and WingNut movies before the title screen. Story movies "
+                               "still play.",
+                               "kk_skip_intros", "Play", "Skip"));
+    return items;
+  }
+
+  // ----------------------------------------------------------- Controls ---
+  std::vector<Item> ControlsItems() {
+    std::vector<Item> items;
+    const auto percent = [](float v) { return std::to_string(int(std::lround(v))) + "%"; };
+    items.push_back(Section("Controller"));
+    {
+      Item it = CvarToggle("Input",
+                           "Controllers work automatically. Keyboard & mouse plays with a keyboard and mouse instead: "
+                           "the game's hints show the keys and the mouse turns the camera. The keys are under "
+                           "Keyboard bindings.",
+                           "mnk_mode", "Controller", "Keyboard & mouse");
+      it.on_choice = [](int i) { SetInputMode(i == 1); };
+      it.on_default = [] { SetInputMode(false); };
+      items.push_back(std::move(it));
+    }
+    {
+      Item it = CvarChoice("Button prompts",
+                           "Which controller's buttons the game and this launcher show in menus and hints. Automatic "
+                           "matches the controller you're using.",
+                           "kk_button_prompts",
+                               {{"Automatic", "auto"},
+                                {"Xbox 360", "xbox360"},
+                                {"Xbox Series", "xbox_series"},
+                                {"PlayStation 5", "ps5"},
+                                {"PlayStation 2", "ps2"},
+                                {"Steam Deck", "steam_deck"},
+                                {"Keyboard", "keyboard"}});
+      if (Get("kk_button_prompts") == "auto") {
+        static const std::pair<const char*, const char*> kStyles[] = {
+            {"xbox360", "Xbox 360"}, {"xbox_series", "Xbox Series"}, {"ps5", "PlayStation 5"},
+            {"ps2", "PlayStation 2"}, {"steam_deck", "Steam Deck"}};
+        const std::string now = PadSet();
+        for (const auto& [id, label] : kStyles)
+          if (now == id) it.facts.push_back(F("Now showing {0}.", {T(std::string(label))}));
+      }
+      items.push_back(std::move(it));
+    }
+    items.push_back(CvarSlider("Camera sensitivity", "How fast the right stick turns the camera and moves your aim.",
+                               "kk_camera_sensitivity", 25, 300, 5, percent));
+    items.push_back(CvarToggle("Camera response",
+                               "Modern turns the camera the same way in every direction, so circles and diagonals feel "
+                               "even. Original is the Xbox 360's own: small pushes up and down turn much more slowly "
+                               "than small pushes sideways.",
+                               "kk_camera_modern", "Original", "Modern"));
+    items.push_back(CvarToggle("Camera horizontal",
+                               "Which way the camera turns when you push the right stick left or right.",
+                               "kk_invert_rs_x", "Normal", "Inverted"));
+    items.push_back(CvarToggle("Camera vertical", "Which way the right stick moves the camera up and down.",
+                               "kk_invert_rs_y", "Normal", "Inverted"));
+    {
+      Item it;
+      it.type = ItemType::kChoice;
+      it.label = "Left stick";
+      it.description = "Invert the left stick's axes.";
+      it.options = {"Normal", "Invert X", "Invert Y", "Both"};
+      const bool x = GetBool("kk_invert_ls_x"), y = GetBool("kk_invert_ls_y");
+      it.index = x && y ? 3 : x ? 1 : y ? 2 : 0;
+      it.on_choice = [](int i) {
+        SetBool("kk_invert_ls_x", i == 1 || i == 3);
+        SetBool("kk_invert_ls_y", i == 2 || i == 3);
+      };
+      it.on_default = [] {
+        Reset("kk_invert_ls_x");
+        Reset("kk_invert_ls_y");
+      };
+      it.default_text = "Normal";
+      items.push_back(std::move(it));
+    }
+    items.push_back(CvarSlider("Stick deadzone", "Ignores small stick movements. Raise it if the camera or cursor drifts.",
+                               "kk_deadzone", 0, 40, 1, percent));
+    items.push_back(CvarToggle("Aim",
+                               "Hold: keep the left trigger held to raise the gun, as on the console. Toggle: press "
+                               "it once to raise the gun and again to lower it. Pausing lowers it.",
+                               "kk_toggle_aim", "Hold", "Toggle"));
+    items.push_back(CvarToggle("Vibration", "Controller rumble.", "kk_vibration"));
+    {
+      Item it = CvarSlider("Vibration strength",
+                           "How strong the rumble is. Above 100% it is stronger than on the Xbox 360, up to the "
+                           "controller's full strength.",
+                           "kk_vibration_strength", 10, 200, 5,
+                           percent);
+      items.push_back(std::move(Disable(it, !GetBool("kk_vibration"), "Switch Vibration on to set its strength.")));
+    }
+
+    const bool mnk = GetBool("mnk_mode");
+    const char* mnk_note = "Used when Input is Keyboard & mouse.";
+    items.push_back(Section("Keyboard & mouse"));
+    {
+      Item it = CvarSlider("Mouse sensitivity",
+                           "How far the camera turns as you move the mouse. It turns the same however fast you move "
+                           "it, as in other first-person games.",
+                           "kk_mouse_sensitivity", 0.1f, 5.0f, 0.05f, [](float v) {
+                             char buf[32];
+                             std::snprintf(buf, sizeof(buf), "%.2f" KK_TIMES, v);
+                             return std::string(buf);
+                           });
+      items.push_back(std::move(Disable(it, !mnk, mnk_note)));
+    }
+    {
+      Item it = CvarToggle("Mouse camera",
+                           "Turn the camera with the mouse. Off, it turns with the keys bound to the right stick.",
+                           "mnk_mouse");
+      items.push_back(std::move(Disable(it, !mnk, mnk_note)));
+    }
+    {
+      Item it = CvarToggle("Mouse vertical", "Which way moving the mouse up and down moves the camera.",
+                           "kk_mouse_invert_y", "Normal", "Inverted");
+      items.push_back(std::move(Disable(it, !mnk || !GetBool("mnk_mouse"), mnk_note)));
+    }
+
+    items.push_back(Section("Mapping"));
+    {
+      Item it;
+      it.type = ItemType::kLink;
+      it.label = "Button remapping";
+      it.description = "Choose what each controller button does in the game.";
+      it.on_activate = [this] { sub_ = kRemapPage; };
+      items.push_back(std::move(it));
+    }
+    {
+      Item it;
+      it.type = ItemType::kLink;
+      it.label = "Keyboard bindings";
+      it.description = "The keys that stand in for each controller button when Input is Keyboard & mouse.";
+      it.on_activate = [this] { sub_ = kKeysPage; };
+      items.push_back(std::move(it));
+    }
+    return items;
+  }
+
+  // The picture for a controller button on remapping rows.
+  rex::ui::ImmediateTexture* PadGlyph(Pad pad, float* aspect) {
+    static const char* const kNames[] = {"dpad_up", "dpad",  "dpad",        "dpad",        "start", "back",
+                                         "stick_click", "stick_click", "lb", "rb", "a", "b", "x", "y", "lt", "rt"};
+    const size_t i = size_t(pad);
+    if (i >= std::size(kNames)) return nullptr;
+    const std::string set = PadSet();
+    if (auto* t = glyphs_.Named(set, kNames[i], aspect)) return t;
+    return glyphs_.Named("xbox_series", kNames[i], aspect);
+  }
+
+  std::vector<Item> RemapItems() {
+    std::vector<Item> items;
+    items.push_back(Section(T("Controls") + std::string("  " KK_DOT "  ") + T("Button remapping")));
+    items.push_back(ActionItem("Reset to defaults", "Every button back to doing what it does on the Xbox 360.", "",
+                               [this] {
+                                 for (size_t i = 0; i < kPadCount; ++i) SetMapping(Pad(i), Pad(i));
+                                 ++g_changes;
+                                 Status("Buttons reset to the defaults.");
+                               }));
+    for (size_t i = 0; i < kPadCount; ++i) {
+      const Pad physical = static_cast<Pad>(i);
+      const Pad target = GetMapping(physical);
+      Item it;
+      it.type = ItemType::kChoice;
+      it.label = GetPadInfo(physical).label;
+      it.description = F("What pressing {0} does in the game.", {T(std::string(GetPadInfo(physical).label))});
+      it.icon = PadGlyph(physical, &it.icon_aspect);
+      it.options.push_back("Nothing");
+      for (size_t j = 0; j < kPadCount; ++j) it.options.push_back(GetPadInfo(static_cast<Pad>(j)).label);
+      it.index = target == Pad::kNone ? 0 : int(target) + 1;
+      if (target != physical) it.value_color = color::kAccent;  // changed from the default
+      it.on_choice = [physical](int k) {
+        SetMapping(physical, k == 0 ? Pad::kNone : static_cast<Pad>(k - 1));
+        ++g_changes;
+      };
+      it.on_default = [physical] {
+        SetMapping(physical, physical);
+        ++g_changes;
+      };
+      it.default_text = GetPadInfo(physical).label;
+      items.push_back(std::move(it));
+    }
+    return items;
+  }
+
+  std::vector<Item> KeyItems() {
+    std::vector<const rex::cvar::FlagEntry*> binds;
+    for (auto& e : rex::cvar::GetRegistry())
+      if (e.category == "Input/Keybinds/Controller") binds.push_back(&e);
+    std::vector<Item> items;
+    items.push_back(Section(T("Controls") + std::string("  " KK_DOT "  ") + T("Keyboard bindings")));
+    items.push_back(ActionItem("Reset to defaults", "Every key back to its default.", "", [this, binds] {
+      for (auto* e : binds) Reset(e->name.c_str());
+      Status("Keys reset to the defaults.");
+    }));
+    auto pretty = [](std::string keys) {  // "Semicolon,Space" -> "Semicolon, Space"
+      for (size_t at = 0; (at = keys.find(',', at)) != std::string::npos; at += 2) keys.insert(at + 1, " ");
+      return keys;
+    };
+    // What each button does in the game (the Xbox 360 manual), so the keys make sense.
+    static const std::map<std::string, const char*> kActions = {
+        {"keybind_a", "In play: Jack calls his companion; Kong hits. In menus: select."},
+        {"keybind_b", "In play: Jack checks his reserve bullets; Kong jumps, dodges and climbs. In menus: back."},
+        {"keybind_x", "In play: Kong grabs and throws, and picks up and puts down Ann."},
+        {"keybind_y", "In play: Jack drops his spear; Kong pushes back, bites and goes into fury mode."},
+        {"keybind_left_trigger", "In play: Jack takes aim (raises his gun)."},
+        {"keybind_right_trigger", "In play: Jack shoots, takes, uses and repels."},
+        {"keybind_left_shoulder", "Not used in play."},
+        {"keybind_right_shoulder", "In play: Jack reloads."},
+        {"keybind_lstick_up", "Moves Jack and Kong."},
+        {"keybind_lstick_down", "Moves Jack and Kong."},
+        {"keybind_lstick_left", "Moves Jack and Kong."},
+        {"keybind_lstick_right", "Moves Jack and Kong."},
+        {"keybind_lstick_press", "In play: Jack crouches."},
+        {"keybind_rstick_up", "Turns the camera when Mouse camera is off."},
+        {"keybind_rstick_down", "Turns the camera when Mouse camera is off."},
+        {"keybind_rstick_left", "Turns the camera when Mouse camera is off."},
+        {"keybind_rstick_right", "Turns the camera when Mouse camera is off."},
+        {"keybind_rstick_press", "In play: Jack zooms in."},
+        {"keybind_dpad_up", "Moves around the game's menus."},
+        {"keybind_dpad_down", "Moves around the game's menus."},
+        {"keybind_dpad_left", "Moves around the game's menus."},
+        {"keybind_dpad_right", "Moves around the game's menus."},
+        {"keybind_start", "Opens the pause menu."},
+        {"keybind_back", "Not used in play."},
+        {"keybind_guide", "Not used in play."},
+    };
+    for (auto* e : binds) {
+      const std::string value = pretty(e->getter());
+      std::string desc = T("Select, then press the key or mouse button to use. Esc cancels.");
+      if (auto a = kActions.find(e->name); a != kActions.end()) desc = std::string(T(a->second)) + " " + desc;
+      Item it = ActionItem(e->description, desc,
+                           value.empty() ? "None" : value, [this, name = e->name, label = e->description] {
+                             capturing_ = name;
+                             ui::Modal m;
+                             m.open = true;
+                             m.title = "Press a key or mouse button";
+                             m.body = F("For {0}. Esc cancels.", {T(label)});
+                             m.buttons = {"Cancel"};
+                             m.cancel = 0;
+                             m.on_button = [this](int) { capturing_.clear(); };
+                             modal_ = std::move(m);
+                           });
+      it.value_color = color::kText;
+      it.on_default = [name = e->name] { Reset(name.c_str()); };
+      it.default_text = e->default_value.empty() ? "None" : pretty(e->default_value);
+      items.push_back(std::move(it));
+    }
+    return items;
+  }
+
+  // Waits for a key while a binding is being captured.
+  void CaptureKey() {
+    if (capturing_.empty()) return;
+    if (!modal_.open) {  // closed with the controller
+      capturing_.clear();
+      return;
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+      capturing_.clear();
+      modal_.open = false;
+      input_.ConsumeAll();
+      return;
+    }
+    // A mouse button, unless it's a click on the pop-up's own button (Cancel).
+    static constexpr std::pair<ImGuiMouseButton, const char*> kMouse[] = {
+        {ImGuiMouseButton_Left, "LMB"}, {ImGuiMouseButton_Right, "RMB"}, {ImGuiMouseButton_Middle, "MMB"}};
+    const ImVec2 mouse = ImGui::GetIO().MousePos;
+    bool on_button = false;
+    for (const auto& [a, b] : modal_.button_rects)
+      on_button = on_button || (mouse.x >= a.x && mouse.y >= a.y && mouse.x < b.x && mouse.y < b.y);
+    for (const auto& [button, name] : kMouse) {
+      if (ImGui::GetFrameCount() <= modal_.shown_frame + 1 || !ImGui::IsMouseClicked(button)) continue;
+      if (button == ImGuiMouseButton_Left && on_button) continue;
+      Set(capturing_.c_str(), name);
+      capturing_.clear();
+      modal_.open = false;
+      input_.ConsumeAll();
+      return;
+    }
+    for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; ++k) {
+      const auto key = static_cast<ImGuiKey>(k);
+      if (key == ImGuiKey_Escape || !ImGui::IsKeyPressed(key, false)) continue;
+      const int vk = ImGuiKeyToVk(key);
+      if (!vk) continue;
+      const std::string name = rex::ui::VirtualKeyToString(static_cast<rex::ui::VirtualKey>(vk));
+      if (!name.empty()) Set(capturing_.c_str(), name);
+      capturing_.clear();
+      modal_.open = false;
+      input_.ConsumeAll();
+      return;
+    }
+  }
+
+  // ------------------------------------------------------------- Cheats ---
+  std::vector<Item> CheatItems() {
+    std::vector<Item> items;
+    items.push_back(Section("Cheats"));
+    items.push_back(CvarToggle("Cheats",
+                               "Switches on the cheats you pick below as soon as the game reaches its main menu, the "
+                               "same as typing their codes on the game's Cheat screen. They last until you quit the "
+                               "game.",
+                               "kk_cheats"));
+    const bool on = GetBool("kk_cheats");
+    items.push_back(Section("Cheat list"));
+    for (const auto& cheat : kCheats) {
+      // Every chapter is open in the Play menu's Chapter select (docs/menus.md): no "All chapters".
+      if (std::string_view(cheat.id) == "chapters") continue;
+      Item it = CvarToggle(cheat.label, "One of the game's own cheats.", std::string("kk_cheat_") + cheat.id);
+      it.facts.push_back(F("Code: {0}", {cheat.code}));
+      items.push_back(std::move(Disable(it, !on, "Switch Cheats on to use it.")));
+    }
+    return items;
+  }
+
+  // In game: the rows that change while the game runs. Left out (they need a restart, or only make
+  // sense before the game starts): the window, resolution, refresh rate and monitor, the frame rate
+  // cap and VSync, the upscaler and render quality, the look and preset, the renderer, the language
+  // and the startup logos. Sections left empty go too.
+  static std::vector<Item> LiveOnly(std::vector<Item> items) {
+    static const std::set<std::string> kRestartOnly = {
+        "Window mode", "Window size", "Resolution", "Refresh rate", "Monitor", "Frame rate", "VSync",
+        "Upscaler", "Upscaler mode", "Render quality", "Internal resolution", "Look", "Preset", "Renderer",
+        "Language", "Startup logos"};
+    std::vector<Item> out;
+    for (Item& it : items) {
+      if (it.type != ItemType::kSection && kRestartOnly.count(it.label)) continue;
+      if (it.disabled_note == kSetByOriginal) it.disabled_note = kSetByOriginalInGame;
+      out.push_back(std::move(it));
+    }
+    std::vector<Item> kept;
+    for (size_t i = 0; i < out.size(); ++i) {
+      const bool empty_section = out[i].type == ItemType::kSection &&
+                                 (i + 1 == out.size() || out[i + 1].type == ItemType::kSection);
+      if (!empty_section) kept.push_back(std::move(out[i]));
+    }
+    return kept;
+  }
+  static constexpr const char* kSetByOriginalInGame =
+      "Set by the Original Xbox 360 look. Change Look in the launcher to set it.";
+
+  LauncherCallbacks cb_;
+  ui::Input input_;
+  ui::Glyphs glyphs_;
+  ui::Modal modal_;
+  SubPage sub_ = kNoSubPage;
+  std::string status_;
+  double status_time_ = -100;
+  std::string capturing_;
+  std::vector<MonitorInfo> monitors_;
+  std::vector<DisplayMode> display_modes_;  // the Resolution choices, for display_modes_monitor_
+  int display_modes_monitor_ = -1;
+  const bool in_game_;  // drawn by the pause menu
+};
+
+class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
  public:
   Launcher(rex::ui::ImGuiDrawer* drawer, rex::ui::ImmediateDrawer* immediate, LauncherPaths paths,
            LauncherCallbacks callbacks)
       : ImGuiDialog(drawer),
+        SettingsPages(immediate, std::move(callbacks), /*in_game=*/false),
         immediate_(immediate),
-        paths_(std::move(paths)),
-        cb_(std::move(callbacks)),
-        glyphs_(immediate, rex::filesystem::GetExecutableFolder() / "glyphs") {
+        paths_(std::move(paths)) {
     glyphs_.AddSet("xbox360", art::LauncherArtDir(paths_.user_dir) / "glyphs" / "xbox360");
     for (const char* name : kRestartCvars) restart_baseline_.push_back(Get(name));
     files_ok_ = GameFilesPresent(paths_.game_dir);
@@ -1008,16 +2091,6 @@ class Launcher final : public rex::ui::ImGuiDialog {
     }
   }
 
-  // The button pictures the Button prompts setting picks, as in the game.
-  std::string PadSet() const {
-    const std::string p = Get("kk_button_prompts");
-    if (p == "auto") return input_.pad_style().empty() ? DetectedPadPrompts() : input_.pad_style();
-    if (p == "xbox360" || p == "xbox_series" || p == "ps5" || p == "ps2" || p == "steam_deck" || p == "keyboard")
-      return p;
-    return input_.pad_device() == ui::Device::kPlayStation ? "ps5" : "xbox_series";
-  }
-  // The prompts' pictures: keys while the keyboard and mouse are in use.
-  std::string PromptSet() const { return input_.device() == ui::Device::kKeyboard ? "keyboard" : PadSet(); }
 
   void GoTo(Page page) {
     if (page == kDisplay && page_ != kDisplay) {
@@ -1097,11 +2170,6 @@ class Launcher final : public rex::ui::ImGuiDialog {
     if (CanPlay()) p.push_back({Action::kPlay, "Play"});
     p.push_back({Action::kBack, "Back"});
     return p;
-  }
-
-  void Status(std::string text) {
-    status_ = std::move(text);
-    status_time_ = ImGui::GetTime();
   }
 
   // ------------------------------------------------------- global input ---
@@ -2140,1017 +3208,6 @@ class Launcher final : public rex::ui::ImGuiDialog {
     focused_ = st.focus >= 0 && st.focus < int(focused_items_.size()) ? &focused_items_[size_t(st.focus)] : nullptr;
   }
 
-  // Item builders.
-  static Item Section(const std::string& label) {
-    Item it;
-    it.type = ItemType::kSection;
-    it.label = label;  // translated and upper-cased as it's drawn
-    return it;
-  }
-
-  // A choice bound to a cvar's values; values the cvar refuses in this build
-  // are left out.
-  static Item CvarChoice(std::string label, std::string desc, std::string cvar, std::vector<Option> options) {
-    if (const auto* flag = FindFlag(cvar); flag && !flag->constraints.allowed_values.empty()) {
-      const auto& allowed = flag->constraints.allowed_values;
-      std::erase_if(options, [&](const Option& o) {
-        return std::find(allowed.begin(), allowed.end(), o.value) == allowed.end();
-      });
-    }
-    Item it;
-    it.type = ItemType::kChoice;
-    it.label = std::move(label);
-    it.description = std::move(desc);
-    const std::string cur = Get(cvar.c_str());
-    it.index = -1;
-    it.value_text = cur;
-    std::vector<std::string> values;
-    for (size_t i = 0; i < options.size(); ++i) {
-      it.options.push_back(options[i].label);
-      values.push_back(options[i].value);
-      if (options[i].value == cur) it.index = int(i);
-    }
-    it.on_choice = [cvar, values](int i) { Set(cvar.c_str(), values[size_t(i)]); };
-    it.on_default = [cvar] { Reset(cvar.c_str()); };
-    if (const auto* flag = FindFlag(cvar))
-      for (const Option& o : options)
-        if (o.value == flag->default_value) it.default_text = o.label;
-    return it;
-  }
-
-  static Item CvarToggle(std::string label, std::string desc, std::string cvar, const char* off = "Off",
-                         const char* on = "On", bool invert = false) {
-    return CvarChoice(std::move(label), std::move(desc), std::move(cvar),
-                      {{off, invert ? "true" : "false"}, {on, invert ? "false" : "true"}});
-  }
-
-  static Item CvarSlider(std::string label, std::string desc, std::string cvar, float lo, float hi, float step,
-                         std::function<std::string(float)> format) {
-    Item it;
-    it.type = ItemType::kSlider;
-    it.label = std::move(label);
-    it.description = std::move(desc);
-    it.lo = lo;
-    it.hi = hi;
-    it.step = step;
-    it.value = std::clamp(GetFloat(cvar.c_str(), lo), lo, hi);
-    it.value_text = format(it.value);
-    const bool integral = step >= 1.0f;
-    it.on_value = [cvar, integral](float v) {
-      Set(cvar.c_str(), integral ? std::to_string(int(std::lround(v))) : std::to_string(v));
-    };
-    it.on_default = [cvar] { Reset(cvar.c_str()); };
-    if (const auto* flag = FindFlag(cvar)) {
-      try {
-        it.default_text = format(std::stof(flag->default_value));
-      } catch (...) {
-      }
-    }
-    return it;
-  }
-
-  static Item ActionItem(std::string label, std::string desc, std::string value, std::function<void()> fn) {
-    Item it;
-    it.type = ItemType::kAction;
-    it.label = std::move(label);
-    it.description = std::move(desc);
-    it.value_text = std::move(value);
-    it.on_activate = std::move(fn);
-    return it;
-  }
-
-  static Item& Disable(Item& it, bool disabled, std::string note) {
-    if (disabled) {
-      it.disabled = true;
-      it.disabled_note = std::move(note);
-    }
-    return it;
-  }
-
-  static constexpr const char* kSetByOriginal =
-      "Set by the Original Xbox 360 look. Switch Look to Remastered on the Graphics page to change it.";
-
-  // ------------------------------------------------------------ Display ---
-  // Display > Frame rate (Beta 2: from the Gameplay page).
-  Item FrameRateItem() {
-    std::vector<Option> opts;
-    for (int f : kFrameRateChoices)
-      opts.push_back({f <= 0 ? "Unlimited" : f == 30 ? "30 FPS (Xbox 360)" : std::to_string(f) + " FPS",
-                      std::to_string(f)});
-    const std::string cur = Get("kk_frame_rate");
-    bool listed = false;
-    for (const auto& o : opts) listed = listed || o.value == cur;
-    if (!listed && !cur.empty()) opts.push_back({F("{0} FPS (settings file)", {cur}), cur});
-    Item it = CvarChoice("Frame rate",
-                         "How many pictures the game draws a second (your screen's refresh rate is separate). 30 "
-                         "matches the Xbox 360 and keeps every animation right. Higher is smoother, but some "
-                         "character animations are not right above 30 yet. For the smoothest motion, pick a rate "
-                         "that divides your screen's evenly, such as 60 on a 120 Hz screen.",
-                         "kk_frame_rate", opts);
-    return std::move(Disable(it, GetBool("kk_original_look"), kSetByOriginal));
-  }
-
-  // Display > Upscaling (Beta 2: from the Graphics page): the upscaler and how many pixels the game
-  // draws for the screen, which the Resolution above decides.
-  void UpscalingItems(std::vector<Item>& items) {
-    const auto [out_w, out_h] = cb_.output_size ? cb_.output_size() : std::pair<int, int>{1280, 720};
-    const bool original = GetBool("kk_original_look");
-    const char* draws = GetBool("fullscreen") ? "Draws {0} for your {1} screen." : "Draws {0} for your {1} window.";
-    items.push_back(Section("Upscaling"));
-    const std::string temporal = CurrentTemporalUpscaler();
-    {
-      // Each choice: its name, present_effect (the spatial upscalers, in the presenter) and
-      // native_upscaler (the temporal ones, in the native renderer; docs/upscalers.md).
-      struct Choice {
-        std::string label, present, temporal;
-      };
-      // NIS is in the D3D12 presenter only (the Vulkan one, used on Linux, would give FSR).
-      std::vector<Choice> choices = {{"Off", "bilinear", "off"}, {"AMD FSR 1", "fsr", "off"}};
-#if defined(_WIN32)
-      choices.push_back({"NVIDIA NIS", "nis", "off"});
-      const char* which = "AMD FSR 1 and NVIDIA Image Scaling (NIS) work on any graphics card.";
-#else
-      const char* which = "AMD FSR 1 works on any graphics card.";
-#endif
-      const OfferedUpscalers offered = OfferedTemporalUpscalers();
-      bool any_temporal = false;
-      for (const TemporalUpscaler& t : kTemporalUpscalers) {
-        if (offered.Has(t.value)) {
-          choices.push_back({t.label, "bilinear", t.value});
-          any_temporal = true;
-        } else if (temporal == t.value) {  // chosen before, not offered here (it falls back to FSR 3.1)
-          choices.push_back({F("{0} (not on this PC)", {T(std::string(t.label))}), "bilinear", t.value});
-        }
-      }
-      if (!temporal.empty()) {
-        bool listed = false;
-        for (const Choice& c : choices) listed = listed || c.temporal == temporal;
-        if (!listed) choices.push_back({F("{0} (settings file)", {temporal}), "bilinear", temporal});
-      }
-      Item it;
-      it.type = ItemType::kChoice;
-      it.label = "Upscaler";
-      std::string desc =
-          std::string("Scales the picture up to your screen and sharpens it, for a clearer image when the game draws "
-                      "fewer pixels than your screen has. ") +
-          which + " Off uses plain smooth scaling.";
-      if (any_temporal || !temporal.empty())
-        desc += " DLSS, FSR 4, FSR 3.1 and XeSS rebuild a sharp picture from several frames and smooth jagged edges "
-                "too; only those your graphics card supports are listed. Choosing one of them restarts the game "
-                "when you press Play.";
-      it.description = desc;
-      it.index = -1;
-      const std::string present = Get("present_effect");
-      for (size_t i = 0; i < choices.size(); ++i) {
-        it.options.push_back(choices[i].label);
-        const bool match = temporal.empty() ? choices[i].temporal == "off" && choices[i].present == present
-                                            : choices[i].temporal == temporal;
-        if (match && it.index < 0) it.index = int(i);
-      }
-      if (it.index < 0) it.value_text = present;
-      if (UsingNativeRenderer() && !offered.known && HasTemporalSetting())
-        it.facts.push_back("Checking which other upscalers your graphics card runs...");
-      it.on_choice = [choices](int i) {
-        const Choice& c = choices[size_t(i)];
-        Set("present_effect", c.present);
-        SetTemporalUpscaler(c.temporal.c_str());
-        if (c.temporal != "off") {
-          // The temporal upscalers take the picture at your screen's size (Native) and draw fewer
-          // pixels themselves (their mode).
-          Set("kk_render_quality", "native");
-        } else if (i != 0 && UpscalerMode() < 0) {
-          // The upscaler modes are Native to Performance; others start at Native.
-          Set("kk_render_quality", "native");
-        }
-      };
-      it.on_default = [] {
-        Reset("present_effect");
-        if (HasTemporalSetting()) Reset("native_upscaler");
-      };
-      if (const auto* flag = FindFlag("present_effect"))
-        for (const Choice& c : choices)
-          if (c.temporal == "off" && c.present == flag->default_value) it.default_text = c.label;
-      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
-    }
-    if (!temporal.empty()) {
-      // The temporal upscaler's mode: it draws the game at the output size divided by the mode's ratio
-      // and rebuilds the output size (the screen's, in 720p steps: Render quality Native).
-      Item it;
-      it.type = ItemType::kChoice;
-      it.label = "Upscaler mode";
-      it.description =
-          "How many pixels the game draws before the upscaler rebuilds the picture at your screen's size. Native AA "
-          "draws every pixel and only smooths the edges (DLAA with DLSS); Quality, Balanced, Performance and Ultra "
-          "Performance draw fewer for more speed.";
-      const std::string cur = Get("native_upscaler_quality");
-      it.index = -1;
-      const int scale = RenderScaleFor("native", out_h);
-      const int ow = 1280 * scale, oh = 720 * scale;
-      for (size_t m = 0; m < std::size(kTemporalModes); ++m) {
-        it.options.push_back(kTemporalModes[m].label);
-        if (cur == kTemporalModes[m].value) {
-          it.index = int(m);
-          const double r = kTemporalModes[m].ratio;
-          it.facts.push_back(F(draws, {Size(int(std::lround(ow / r)), int(std::lround(oh / r))), Size(out_w, out_h)}));
-          if (ow != out_w || oh != out_h)
-            it.facts.push_back(F("The upscaler's picture is {0}, scaled to fit.", {Size(ow, oh)}));
-        }
-      }
-      if (it.index < 0) it.value_text = cur;
-      it.on_choice = [](int i) { Set("native_upscaler_quality", kTemporalModes[i].value); };
-      it.on_default = [] { Reset("native_upscaler_quality"); };
-      if (const auto* flag = FindFlag("native_upscaler_quality"))
-        for (const TemporalMode& m : kTemporalModes)
-          if (flag->default_value == m.value) it.default_text = m.label;
-      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
-      return;  // the render quality is Native with these (no Internal resolution either)
-    }
-    if (Get("present_effect") != "bilinear") {
-      Item it;
-      it.type = ItemType::kChoice;
-      it.label = "Upscaler mode";
-      it.description =
-          "How many pixels the game draws before the upscaler scales them to your screen. Native draws at your "
-          "screen's size and only sharpens; Quality, Balanced and Performance draw fewer for more speed. The game "
-          "draws in steps of its original 720p, so some modes can be the same at your screen size.";
-      it.options.assign(std::begin(kUpscalerModeNames), std::end(kUpscalerModeNames));
-      const int mode = UpscalerMode();
-      it.index = mode;
-      if (mode >= 0) {
-        const int scale = RenderScaleFor(kUpscalerModes[mode], out_h);
-        it.facts.push_back(F(draws, {Size(1280 * scale, 720 * scale), Size(out_w, out_h)}));
-        std::string same;
-        for (int m = 0; m < 4; ++m) {
-          if (m == mode || RenderScaleFor(kUpscalerModes[m], out_h) != scale) continue;
-          same += same.empty() ? T(std::string(kUpscalerModeNames[m]))
-                               : " " + T(std::string("and")) + " " + T(std::string(kUpscalerModeNames[m]));
-        }
-        if (!same.empty()) it.facts.push_back(F("Same as {0} here.", {same}));
-      } else {
-        it.value_text = "Custom";
-        it.facts.push_back("Now set to another render quality. Pick a mode to use one of these.");
-      }
-      it.on_choice = [](int i) { Set("kk_render_quality", kUpscalerModes[i]); };
-      it.on_default = [] { Reset("kk_render_quality"); };
-      if (const auto* flag = FindFlag("kk_render_quality"))
-        for (int m = 0; m < 4; ++m)
-          if (flag->default_value == kUpscalerModes[m]) it.default_text = kUpscalerModeNames[m];
-      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
-    } else {
-      Item it;
-      it.type = ItemType::kChoice;
-      it.label = "Render quality";
-      it.description =
-          "How sharply the game is drawn compared with your screen. Native matches it; Quality, Balanced and the "
-          "Performance modes draw fewer pixels and scale up (an upscaler makes that sharper). The game renders in "
-          "steps of its original 720p.";
-      const std::string cur = Get("kk_render_quality");
-      std::vector<std::string> values;
-      it.index = -1;
-      for (const auto& p : RenderPresets()) {
-        const int scale = RenderScaleFor(p.id, out_h);
-        if (cur == p.id) {
-          it.index = int(values.size());
-          it.facts.push_back(F(draws, {Size(1280 * scale, 720 * scale), Size(out_w, out_h)}));
-        }
-        it.options.push_back(p.label);
-        values.push_back(p.id);
-      }
-      it.options.push_back("Custom");
-      values.push_back("custom");
-      if (cur == "custom") it.index = int(values.size()) - 1;
-      it.value_text = cur;
-      it.on_choice = [values](int i) { Set("kk_render_quality", values[size_t(i)]); };
-      it.on_default = [] { Reset("kk_render_quality"); };
-      if (const auto* flag = FindFlag("kk_render_quality"))
-        for (const auto& p : RenderPresets())
-          if (flag->default_value == p.id) it.default_text = p.label;
-      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
-    }
-    if (Get("kk_render_quality") == "custom") {
-      Item it = CvarChoice("Internal resolution", "Draw the game at an exact multiple of its native 1280 " KK_TIMES " 720.",
-                           "resolution_scale",
-                           {{"1" KK_TIMES "  " KK_DOT "  1280 " KK_TIMES " 720", "1"},
-                            {"2" KK_TIMES "  " KK_DOT "  2560 " KK_TIMES " 1440", "2"},
-                            {"3" KK_TIMES "  " KK_DOT "  3840 " KK_TIMES " 2160", "3"},
-                            {"4" KK_TIMES "  " KK_DOT "  5120 " KK_TIMES " 2880", "4"},
-                            {"5" KK_TIMES "  " KK_DOT "  6400 " KK_TIMES " 3600", "5"},
-                            {"6" KK_TIMES "  " KK_DOT "  7680 " KK_TIMES " 4320", "6"}});
-      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
-    }
-  }
-
-  std::vector<Item> DisplayItems() {
-    std::vector<Item> items;
-    items.push_back(Section("Window"));
-    items.push_back(WindowModeItem());
-    // Each mode's own size: the window's, or the screen's in exclusive fullscreen (Borderless has none).
-    if (!GetBool("fullscreen")) items.push_back(WindowSizeItem());
-    if (ExclusiveFullscreen()) {
-      items.push_back(ResolutionItem());
-      items.push_back(RefreshRateItem());
-    }
-    items.push_back(MonitorItem());
-    items.push_back(Section("Frame rate"));
-    items.push_back(FrameRateItem());
-    items.push_back(CvarToggle("VSync",
-                               "On waits for the display for tear-free frames. Off has the lowest latency and lets "
-                               "G-Sync and FreeSync displays run freely.",
-                               "d3d12_allow_variable_refresh_rate_and_tearing", "Off", "On", /*invert=*/true));
-    UpscalingItems(items);
-    items.push_back(Section("Picture"));
-    items.push_back(CvarChoice("Aspect ratio",
-                               "The game is 16:9. Letterbox keeps its shape on other screens; Stretch fills them.",
-                               "present_letterbox", {{"Letterbox 16:9", "true"}, {"Stretch", "false"}}));
-    return items;
-  }
-
-  // Keyboard & mouse shows the keys in the game's hints and turns the camera
-  // with the mouse; back on Controller, the controller's prompts come back.
-  static void SetInputMode(bool keyboard) {
-    SetBool("mnk_mode", keyboard);
-    const std::string prompts = Get("kk_button_prompts");
-    if (keyboard) {
-      if (prompts != "keyboard") Set("kk_pad_prompts", prompts);
-      Set("kk_button_prompts", "keyboard");
-      SetBool("mnk_mouse", true);
-    } else if (prompts == "keyboard") {
-      Set("kk_button_prompts", Get("kk_pad_prompts"));
-    }
-  }
-
-  void SetFullscreen(bool on) {
-    SetBool("fullscreen", on);
-    if (cb_.set_fullscreen) cb_.set_fullscreen(on);
-  }
-
-  Item WindowSizeItem() {
-    // window_width/height are in logical pixels (96 DPI); offer real pixel sizes
-    // that fit on the screen and convert with the window's DPI scale.
-    const double scale = cb_.dpi_scale ? cb_.dpi_scale() : 1.0;
-    auto to_physical = [&](int logical) { return int(logical * scale + 0.5); };
-    const int w = to_physical(GetInt("window_width")), h = to_physical(GetInt("window_height"));
-    static const std::pair<int, int> kSizes[] = {{0, 0},       {1280, 720},  {1600, 900},
-                                                 {1920, 1080}, {2560, 1440}, {3200, 1800}};
-    const auto [screen_w, screen_h] = cb_.screen_size ? cb_.screen_size() : std::pair<int, int>{1 << 16, 1 << 16};
-    auto close_to = [](int a, int b) { return std::abs(a - b) <= 2; };
-    Item it;
-    it.type = ItemType::kChoice;
-    it.label = "Window size";
-    it.description = "The window's size in windowed mode. Applies when the game starts.";
-    it.index = -1;
-    it.value_text = Size(w, h);
-    it.default_text = "Default";
-    std::vector<std::pair<int, int>> sizes;
-    for (auto [sw, sh] : kSizes) {
-      if (sw >= screen_w || sh >= screen_h) continue;  // must fit with its frame
-      if (close_to(sw, w) && close_to(sh, h)) it.index = int(sizes.size());
-      it.options.push_back(sw == 0 ? std::string("Default") : Size(sw, sh));
-      sizes.emplace_back(sw, sh);
-    }
-    it.on_choice = [sizes, scale](int i) {
-      const auto [sw, sh] = sizes[size_t(i)];
-      SetInt("window_width", int(sw / scale + 0.5));
-      SetInt("window_height", int(sh / scale + 0.5));
-    };
-    it.on_default = [] {
-      Reset("window_width");
-      Reset("window_height");
-    };
-    return it;
-  }
-
-  // Fullscreen resolution (display_modes.h): Desktop, or one of the monitor's sizes, with its refresh
-  // rate on a row of its own (RefreshRateItem). Both are kept in kk_fullscreen_mode ("2560x1440@144").
-  void LoadDisplayModes() {
-    const int monitor = GetInt("monitor", 0);
-    if (display_modes_monitor_ == monitor) return;
-    display_modes_monitor_ = monitor;
-    display_modes_.clear();
-    const std::vector<DisplayMode> all = cb_.display_modes ? cb_.display_modes(monitor) : std::vector<DisplayMode>{};
-    auto whole = [](float hz) { return std::fabs(hz - std::round(hz)) < 0.05f; };
-    for (const DisplayMode& m : all) {
-      if (m.width < 1280 || m.height < 720) continue;  // below the game's own 720p
-      // 59.94 or 119.88 only when the display doesn't also have 60 or 120 at that size.
-      const bool twin = !whole(m.refresh) && std::any_of(all.begin(), all.end(), [&](const DisplayMode& o) {
-        return o.width == m.width && o.height == m.height && whole(o.refresh) &&
-               std::fabs(o.refresh - std::round(m.refresh)) < 0.05f;
-      });
-      if (!twin) display_modes_.push_back(m);  // SDL's order: largest first, then the highest rate
-    }
-  }
-
-  // The refresh rates the display has at a size, highest first.
-  std::vector<float> RatesAt(int width, int height) const {
-    std::vector<float> rates;
-    for (const DisplayMode& m : display_modes_)
-      if (m.width == width && m.height == height) rates.push_back(m.refresh);
-    return rates;
-  }
-
-  // Window mode: Windowed (fullscreen off), Borderless (fullscreen, kk_fullscreen_mode "desktop": a
-  // window filling the screen at the desktop's resolution) or Fullscreen (kk_fullscreen_mode a mode:
-  // exclusive, the screen switched to it while the game runs; the launcher itself stays borderless).
-  static bool ExclusiveFullscreen() {
-    return GetBool("fullscreen") && ParseDisplayMode(Get("kk_fullscreen_mode")).has_value();
-  }
-
-  // The desktop's own mode, as listed (a 59.94 that the list shows as 60 becomes 60), for Fullscreen
-  // until a Resolution is picked.
-  std::string DesktopModeValue() {
-    LoadDisplayModes();
-    DisplayMode desktop = cb_.desktop_mode ? cb_.desktop_mode(GetInt("monitor", 0)) : DisplayMode{};
-    for (const DisplayMode& m : display_modes_)
-      if (m.width == desktop.width && m.height == desktop.height && std::fabs(m.refresh - desktop.refresh) < 0.1f)
-        desktop.refresh = m.refresh;
-    if (desktop.width <= 0 && !display_modes_.empty()) desktop = display_modes_.front();
-    return desktop.width > 0 ? desktop.Value() : "desktop";
-  }
-
-  Item WindowModeItem() {
-    Item it;
-    it.type = ItemType::kChoice;
-    it.label = "Window mode";
-    it.description =
-        "Windowed plays in a window. Borderless fills the screen with a window at your desktop's resolution, so "
-        "Alt+Tab and other windows switch instantly. Fullscreen changes your screen to the Resolution and Refresh "
-        "rate you pick below while the game runs.";
-    it.options = {"Windowed", "Borderless", "Fullscreen"};
-    it.index = !GetBool("fullscreen") ? 0 : ExclusiveFullscreen() ? 2 : 1;
-    it.default_text = "Windowed";
-    it.on_choice = [this](int i) {
-      if (i == 1) Set("kk_fullscreen_mode", "desktop");
-      if (i == 2 && !ParseDisplayMode(Get("kk_fullscreen_mode"))) Set("kk_fullscreen_mode", DesktopModeValue());
-      SetFullscreen(i != 0);
-    };
-    it.on_default = [this] {
-      Reset("kk_fullscreen_mode");
-      Reset("fullscreen");
-      if (cb_.set_fullscreen) cb_.set_fullscreen(GetBool("fullscreen"));
-    };
-    if (it.index == 2) it.facts.push_back("The launcher stays borderless; the screen changes when the game starts.");
-    return it;
-  }
-
-  // Fullscreen only: the screen's size while the game runs.
-  Item ResolutionItem() {
-    LoadDisplayModes();
-    const auto cur = ParseDisplayMode(Get("kk_fullscreen_mode"));
-    Item it;
-    it.type = ItemType::kChoice;
-    it.label = "Resolution";
-    it.description =
-        "The size your screen switches to while the game runs, at the Refresh rate below. The render quality "
-        "follows it. Applies when the game starts.";
-    std::vector<std::pair<int, int>> sizes;
-    for (const DisplayMode& m : display_modes_) {
-      if (!sizes.empty() && sizes.back() == std::pair<int, int>{m.width, m.height}) continue;
-      sizes.emplace_back(m.width, m.height);
-      it.options.push_back(Size(m.width, m.height));
-    }
-    it.index = -1;
-    for (size_t i = 0; i < sizes.size(); ++i)
-      if (sizes[i] == std::pair<int, int>{cur->width, cur->height}) it.index = int(i);
-    if (it.index < 0) {  // a size this display doesn't have (another monitor's, or the settings file's)
-      it.index = int(sizes.size());
-      sizes.emplace_back(cur->width, cur->height);
-      it.options.push_back(F("{0} (not on this display)", {Size(cur->width, cur->height)}));
-    }
-    it.facts.push_back(F("The game will be shown at {0}.", {Size(cur->width, cur->height)}));
-    const auto desktop = ParseDisplayMode(DesktopModeValue());
-    if (desktop) it.default_text = Size(desktop->width, desktop->height);
-    it.on_choice = [this, sizes, cur](int i) {
-      const auto [w, h] = sizes[size_t(i)];
-      const std::vector<float> rates = RatesAt(w, h);
-      // The rate chosen before when this size has it, else this size's highest.
-      float rate = rates.empty() ? (cur ? cur->refresh : 0.0f) : rates.front();
-      for (const float r : rates)
-        if (cur && std::fabs(r - cur->refresh) < 0.01f) rate = r;
-      Set("kk_fullscreen_mode", DisplayMode{w, h, rate}.Value());
-    };
-    it.on_default = [this] { Set("kk_fullscreen_mode", DesktopModeValue()); };
-    return it;
-  }
-
-  // Fullscreen only: the display's rates at the Resolution's size.
-  Item RefreshRateItem() {
-    const auto cur = ParseDisplayMode(Get("kk_fullscreen_mode"));
-    Item it;
-    it.type = ItemType::kChoice;
-    it.label = "Refresh rate";
-    it.description =
-        "How many times a second your screen refreshes at the Resolution above: your screen's setting. How many "
-        "pictures the game draws a second is the Frame rate, below. Applies when the game starts.";
-    std::vector<float> rates = RatesAt(cur->width, cur->height);
-    if (rates.empty()) rates.push_back(cur->refresh);
-    it.index = -1;
-    for (size_t i = 0; i < rates.size(); ++i) {
-      const DisplayMode m{cur->width, cur->height, rates[i]};
-      it.options.push_back(m.RateLabel());
-      if (std::fabs(rates[i] - cur->refresh) < 0.01f) it.index = int(i);
-    }
-    it.value_text = cur->RateLabel();
-    it.default_text = DisplayMode{cur->width, cur->height, rates.front()}.RateLabel();
-    it.on_choice = [w = cur->width, h = cur->height, rates](int i) {
-      Set("kk_fullscreen_mode", DisplayMode{w, h, rates[size_t(i)]}.Value());
-    };
-    it.on_default = [w = cur->width, h = cur->height, top = rates.front()] {
-      Set("kk_fullscreen_mode", DisplayMode{w, h, top}.Value());
-    };
-    return it;
-  }
-
-  Item MonitorItem() {
-    if (monitors_.empty()) monitors_ = ListMonitors();
-    std::vector<Option> opts = {{"Default", "0"}};
-    for (size_t i = 0; i < monitors_.size(); ++i) {
-      const auto& m = monitors_[i];
-      opts.push_back({F("Display {0}", {std::to_string(i + 1)}) + (m.primary ? " " + T(std::string("(main)")) : "") +
-                          "  " KK_DOT "  " + Size(m.width, m.height),
-                      std::to_string(i + 1)});
-    }
-    return CvarChoice("Monitor", "Which display the game opens on. Applies when the game starts.", "monitor",
-                      std::move(opts));
-  }
-
-  // ----------------------------------------------------------- Graphics ---
-  std::vector<Item> GraphicsItems() {
-    const bool original = GetBool("kk_original_look");
-    std::vector<Item> items;
-    items.push_back(Section("Look"));
-    {
-      Item it = CvarChoice("Look",
-                           "Original is the Xbox 360 version as it was: 720p at 30 FPS, the console's own "
-                           "anti-aliasing and texture filtering, its 69" KK_DEG " field of view, motion blur, screen "
-                           "blur and distance fog, and no ambient occlusion. Remastered gives you the presets, every "
-                           "setting on this page and the frame rate and upscaling on the Display page; chosen at "
-                           "setup, it starts with the preset for your graphics card, 60 FPS and the new GTAO ambient "
-                           "occlusion.",
-                           "kk_original_look", {{"Original Xbox 360", "true"}, {"Remastered", "false"}});
-      it.on_choice = [](int i) { SetOriginalLook(i == 0); };
-      it.on_default = [] { SetOriginalLook(false); };
-      items.push_back(std::move(it));
-    }
-    {
-      Item it;
-      it.type = ItemType::kChoice;
-      it.label = "Preset";
-      it.description =
-          "Quick settings for anti-aliasing, texture filtering and ambient occlusion here, and the upscaler and "
-          "render quality on the Display page. Change any of them yourself and it shows Custom.";
-      for (const auto& p : kGraphicsPresets) it.options.push_back(p.label);
-      it.options.push_back("Custom");
-      const int match = MatchGraphicsPreset();
-      it.index = original ? -1 : match < 0 ? kGraphicsPresetCount : match;
-      it.value_text = "Xbox 360";  // the Original look's own settings
-      it.on_choice = [](int i) {
-        if (i < kGraphicsPresetCount) ApplyGraphicsPreset(i);
-      };
-      it.on_default = [] { ApplyGraphicsPreset(1); };
-      it.default_text = "Medium";
-      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
-    }
-
-    items.push_back(Section("Image"));
-    {
-      Item it = CvarChoice("Anti-aliasing", "Smooths jagged edges after the frame is drawn.", "swap_post_effect",
-                           {{"Off", "none"}, {"FXAA", "fxaa"}});
-      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
-    }
-    // 2x MSAA is not offered as a choice: it is how the Xbox 360 drew those
-    // surfaces (native_2x_msaa, on by default), and the shader pack is built with it.
-    {
-      Item it = CvarChoice("Texture filtering", "Keeps the ground and distant textures sharp at steep angles.",
-                           "anisotropic_override",
-                           {{"Game", "-1"}, {"Off", "0"}, {"2" KK_TIMES, "2"}, {"4" KK_TIMES, "3"}, {"8" KK_TIMES, "4"},
-                            {"16" KK_TIMES, "5"}});
-      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
-    }
-    {
-      // Ambient occlusion lives in the GPU plugin (ao_mode, ao_strength). On the native renderer it is
-      // GTAO (ApplyPortDefaults), worked out from the scene's depth at the end of the opaque pass, so
-      // water, smoke, fire, fur and the sky drawn after it are never darkened (native-renderer/docs/ao.md).
-      const bool native = NativeRendererAvailable() && UsingNativeRenderer();
-      Item it = CvarChoice("Ambient occlusion",
-                           native ? "Soft shading where surfaces meet: in corners and creases, and on the ground under "
-                                    "rocks, grass and people (GTAO). Water, smoke, fire and the sky are never darkened. "
-                                    "Costs about 1 to 2 ms a frame at 4K."
-                                  : "Soft shading where surfaces meet: in corners and creases, and on the ground under "
-                                    "rocks, grass and people. Costs about 1 ms a frame at 4K. Not available with Intel "
-                                    "graphics on the Classic renderer.",
-                           "ao_mode", {{"Off", "0"}, {"On", "1"}});
-      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
-      if (GetInt("ao_mode", 0) != 0) {
-        // GTAO: the shading's darkness (XeGTAO's final power 1.6, 2.2, 3.0) and how far it reaches from
-        // each crease (6, 8, 12 near-plane distances). Light darkens about as much as the Classic
-        // renderer's AO on the whole, with a crisper footprint (docs/ao.md, "In the game").
-        Item st = CvarChoice("AO strength",
-                             native ? "How dark the shading gets and how far it spreads from each corner. Light is "
-                                      "recommended: Medium and Strong darken grass and rock more."
-                                    : "How dark the shading gets. Light is recommended.",
-                             "ao_strength", {{"Light (recommended)", "1"}, {"Medium", "2"}, {"Strong", "3"}});
-        items.push_back(std::move(Disable(st, original, kSetByOriginal)));
-      }
-    }
-
-    items.push_back(Section("Effects"));
-    {
-      Item it = CvarToggle("Motion blur",
-                           "The trail the game blends over fast moments, mostly in Kong's sequences and some "
-                           "transitions.",
-                           "kk_motion_blur");
-      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
-    }
-    {
-      Item it = CvarToggle("Screen blur",
-                           "Some levels (Necropolis, Brontosaurus) blur the whole picture slightly. The blur is sized "
-                           "for the Xbox 360's 720p, so on a sharper screen it makes those levels look low resolution. "
-                           "Off keeps them sharp.",
-                           "kk_big_blur");
-      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
-    }
-    {
-      Item it = CvarToggle("Distance fog",
-                           "The haze over far-away scenery. Off shows distant scenery clearly, but the fog is part of "
-                           "Skull Island's look and also hides the edges of each area, so some empty or unfinished "
-                           "backdrops can show.",
-                           "kk_fog");
-      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
-    }
-
-    // Advanced: the Classic renderer stays for comparison (gpu_plugin xenos), as the stable version draws.
-    if (NativeRendererAvailable()) {
-      items.push_back(Section("Advanced"));
-      Item it;
-      it.type = ItemType::kChoice;
-      it.label = "Renderer";
-      it.description =
-          "Native draws the game with its own shaders, translated for your graphics card: faster, sharper at high "
-          "resolutions, with the new ambient occlusion. Classic emulates the Xbox 360's graphics chip, as the stable "
-          "version does; it's here to compare the two. The launcher restarts the game to change it.";
-      it.options = {"Native (beta)", "Classic (emulated GPU)"};
-      it.index = UsingNativeRenderer() ? 0 : Get("gpu_plugin") == "xenos" ? 1 : -1;
-      it.value_text = Get("gpu_plugin");
-      it.default_text = "Native (beta)";
-      it.on_choice = [](int i) { SetRenderer(i == 0); };
-      it.on_default = [] { SetRenderer(true); };
-      if (UsingNativeRenderer() != (Get("kk_renderer") != "classic"))
-        it.facts.push_back("Set by gpu_plugin in the settings file or on the command line.");
-      const auto* flag = FindFlag("gpu_plugin");
-      Disable(it, flag && (flag->source == rex::cvar::Source::kCommandLine || flag->source == rex::cvar::Source::kEnvironment),
-              "Set on the command line (--gpu_plugin).");
-      items.push_back(std::move(it));
-    }
-
-    return items;
-  }
-
-  // ----------------------------------------------------------- Gameplay ---
-  std::vector<Item> GameplayItems() {
-    const bool original = GetBool("kk_original_look");
-    std::vector<Item> items;
-    items.push_back(Section("Game"));
-    {
-      Item it = CvarSlider("Field of view",
-                           "How wide the camera sees. 69" KK_DEG " is the original for Jack; Kong, cutscene and other "
-                           "cameras widen by the same amount. Jack's gun keeps its usual size.",
-                           "kk_fov", 69, 110, 1, [](float v) {
-                             const int d = int(std::lround(v));
-                             return d <= 69 ? F("{0}\xC2\xB0 (original)", {std::to_string(d)}) : std::to_string(d) + KK_DEG;
-                           });
-      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
-    }
-    items.push_back(CvarChoice("Language", "The game's language, where the game includes it.", "user_language",
-                               {{"English", "1"},
-                                {"Deutsch", "3"},
-                                {"Espa\xC3\xB1ol", "5"},
-                                {"Fran\xC3\xA7" "ais", "4"},
-                                {"Italiano", "6"}}));
-    items.push_back(CvarToggle("Camera shake",
-                               "The camera shaking from the V-Rex's footsteps, explosions and Kong's blows.",
-                               "kk_camera_shake"));
-    {
-      Item it = CvarSlider("Camera shake strength",
-                           "How hard the camera shakes. 100% is the Xbox 360's; lower it if the shaking bothers you.",
-                           "kk_camera_shake_strength", 10, 200, 5,
-                           [](float v) { return std::to_string(int(std::lround(v))) + "%"; });
-      items.push_back(
-          std::move(Disable(it, !GetBool("kk_camera_shake"), "Switch Camera shake on to set its strength.")));
-    }
-    items.push_back(Section("Extras"));
-    items.push_back(CvarToggle("Frame counter", "Shows the game's frame rate in the corner. F2 toggles it while playing.",
-                               "kk_show_fps", "Hidden", "Shown"));
-    items.push_back(CvarToggle("Startup logos",
-                               "The Ubisoft, Universal and WingNut movies before the title screen. Story movies "
-                               "still play.",
-                               "kk_skip_intros", "Play", "Skip"));
-    return items;
-  }
-
-  // ----------------------------------------------------------- Controls ---
-  std::vector<Item> ControlsItems() {
-    std::vector<Item> items;
-    const auto percent = [](float v) { return std::to_string(int(std::lround(v))) + "%"; };
-    items.push_back(Section("Controller"));
-    {
-      Item it = CvarToggle("Input",
-                           "Controllers work automatically. Keyboard & mouse plays with a keyboard and mouse instead: "
-                           "the game's hints show the keys and the mouse turns the camera. The keys are under "
-                           "Keyboard bindings.",
-                           "mnk_mode", "Controller", "Keyboard & mouse");
-      it.on_choice = [](int i) { SetInputMode(i == 1); };
-      it.on_default = [] { SetInputMode(false); };
-      items.push_back(std::move(it));
-    }
-    {
-      Item it = CvarChoice("Button prompts",
-                           "Which controller's buttons the game and this launcher show in menus and hints. Automatic "
-                           "matches the controller you're using.",
-                           "kk_button_prompts",
-                               {{"Automatic", "auto"},
-                                {"Xbox 360", "xbox360"},
-                                {"Xbox Series", "xbox_series"},
-                                {"PlayStation 5", "ps5"},
-                                {"PlayStation 2", "ps2"},
-                                {"Steam Deck", "steam_deck"},
-                                {"Keyboard", "keyboard"}});
-      if (Get("kk_button_prompts") == "auto") {
-        static const std::pair<const char*, const char*> kStyles[] = {
-            {"xbox360", "Xbox 360"}, {"xbox_series", "Xbox Series"}, {"ps5", "PlayStation 5"},
-            {"ps2", "PlayStation 2"}, {"steam_deck", "Steam Deck"}};
-        const std::string now = PadSet();
-        for (const auto& [id, label] : kStyles)
-          if (now == id) it.facts.push_back(F("Now showing {0}.", {T(std::string(label))}));
-      }
-      items.push_back(std::move(it));
-    }
-    items.push_back(CvarSlider("Camera sensitivity", "How fast the right stick turns the camera and moves your aim.",
-                               "kk_camera_sensitivity", 25, 300, 5, percent));
-    items.push_back(CvarToggle("Camera response",
-                               "Modern turns the camera the same way in every direction, so circles and diagonals feel "
-                               "even. Original is the Xbox 360's own: small pushes up and down turn much more slowly "
-                               "than small pushes sideways.",
-                               "kk_camera_modern", "Original", "Modern"));
-    items.push_back(CvarToggle("Camera horizontal",
-                               "Which way the camera turns when you push the right stick left or right.",
-                               "kk_invert_rs_x", "Normal", "Inverted"));
-    items.push_back(CvarToggle("Camera vertical", "Which way the right stick moves the camera up and down.",
-                               "kk_invert_rs_y", "Normal", "Inverted"));
-    {
-      Item it;
-      it.type = ItemType::kChoice;
-      it.label = "Left stick";
-      it.description = "Invert the left stick's axes.";
-      it.options = {"Normal", "Invert X", "Invert Y", "Both"};
-      const bool x = GetBool("kk_invert_ls_x"), y = GetBool("kk_invert_ls_y");
-      it.index = x && y ? 3 : x ? 1 : y ? 2 : 0;
-      it.on_choice = [](int i) {
-        SetBool("kk_invert_ls_x", i == 1 || i == 3);
-        SetBool("kk_invert_ls_y", i == 2 || i == 3);
-      };
-      it.on_default = [] {
-        Reset("kk_invert_ls_x");
-        Reset("kk_invert_ls_y");
-      };
-      it.default_text = "Normal";
-      items.push_back(std::move(it));
-    }
-    items.push_back(CvarSlider("Stick deadzone", "Ignores small stick movements. Raise it if the camera or cursor drifts.",
-                               "kk_deadzone", 0, 40, 1, percent));
-    items.push_back(CvarToggle("Aim",
-                               "Hold: keep the left trigger held to raise the gun, as on the console. Toggle: press "
-                               "it once to raise the gun and again to lower it. Pausing lowers it.",
-                               "kk_toggle_aim", "Hold", "Toggle"));
-    items.push_back(CvarToggle("Vibration", "Controller rumble.", "kk_vibration"));
-    {
-      Item it = CvarSlider("Vibration strength",
-                           "How strong the rumble is. Above 100% it is stronger than on the Xbox 360, up to the "
-                           "controller's full strength.",
-                           "kk_vibration_strength", 10, 200, 5,
-                           percent);
-      items.push_back(std::move(Disable(it, !GetBool("kk_vibration"), "Switch Vibration on to set its strength.")));
-    }
-
-    const bool mnk = GetBool("mnk_mode");
-    const char* mnk_note = "Used when Input is Keyboard & mouse.";
-    items.push_back(Section("Keyboard & mouse"));
-    {
-      Item it = CvarSlider("Mouse sensitivity",
-                           "How far the camera turns as you move the mouse. It turns the same however fast you move "
-                           "it, as in other first-person games.",
-                           "kk_mouse_sensitivity", 0.1f, 5.0f, 0.05f, [](float v) {
-                             char buf[32];
-                             std::snprintf(buf, sizeof(buf), "%.2f" KK_TIMES, v);
-                             return std::string(buf);
-                           });
-      items.push_back(std::move(Disable(it, !mnk, mnk_note)));
-    }
-    {
-      Item it = CvarToggle("Mouse camera",
-                           "Turn the camera with the mouse. Off, it turns with the keys bound to the right stick.",
-                           "mnk_mouse");
-      items.push_back(std::move(Disable(it, !mnk, mnk_note)));
-    }
-    {
-      Item it = CvarToggle("Mouse vertical", "Which way moving the mouse up and down moves the camera.",
-                           "kk_mouse_invert_y", "Normal", "Inverted");
-      items.push_back(std::move(Disable(it, !mnk || !GetBool("mnk_mouse"), mnk_note)));
-    }
-
-    items.push_back(Section("Mapping"));
-    {
-      Item it;
-      it.type = ItemType::kLink;
-      it.label = "Button remapping";
-      it.description = "Choose what each controller button does in the game.";
-      it.on_activate = [this] { sub_ = kRemapPage; };
-      items.push_back(std::move(it));
-    }
-    {
-      Item it;
-      it.type = ItemType::kLink;
-      it.label = "Keyboard bindings";
-      it.description = "The keys that stand in for each controller button when Input is Keyboard & mouse.";
-      it.on_activate = [this] { sub_ = kKeysPage; };
-      items.push_back(std::move(it));
-    }
-    return items;
-  }
-
-  // The picture for a controller button on remapping rows.
-  rex::ui::ImmediateTexture* PadGlyph(Pad pad, float* aspect) {
-    static const char* const kNames[] = {"dpad_up", "dpad",  "dpad",        "dpad",        "start", "back",
-                                         "stick_click", "stick_click", "lb", "rb", "a", "b", "x", "y", "lt", "rt"};
-    const size_t i = size_t(pad);
-    if (i >= std::size(kNames)) return nullptr;
-    const std::string set = PadSet();
-    if (auto* t = glyphs_.Named(set, kNames[i], aspect)) return t;
-    return glyphs_.Named("xbox_series", kNames[i], aspect);
-  }
-
-  std::vector<Item> RemapItems() {
-    std::vector<Item> items;
-    items.push_back(Section(T("Controls") + std::string("  " KK_DOT "  ") + T("Button remapping")));
-    items.push_back(ActionItem("Reset to defaults", "Every button back to doing what it does on the Xbox 360.", "",
-                               [this] {
-                                 for (size_t i = 0; i < kPadCount; ++i) SetMapping(Pad(i), Pad(i));
-                                 ++g_changes;
-                                 Status("Buttons reset to the defaults.");
-                               }));
-    for (size_t i = 0; i < kPadCount; ++i) {
-      const Pad physical = static_cast<Pad>(i);
-      const Pad target = GetMapping(physical);
-      Item it;
-      it.type = ItemType::kChoice;
-      it.label = GetPadInfo(physical).label;
-      it.description = F("What pressing {0} does in the game.", {T(std::string(GetPadInfo(physical).label))});
-      it.icon = PadGlyph(physical, &it.icon_aspect);
-      it.options.push_back("Nothing");
-      for (size_t j = 0; j < kPadCount; ++j) it.options.push_back(GetPadInfo(static_cast<Pad>(j)).label);
-      it.index = target == Pad::kNone ? 0 : int(target) + 1;
-      if (target != physical) it.value_color = color::kAccent;  // changed from the default
-      it.on_choice = [physical](int k) {
-        SetMapping(physical, k == 0 ? Pad::kNone : static_cast<Pad>(k - 1));
-        ++g_changes;
-      };
-      it.on_default = [physical] {
-        SetMapping(physical, physical);
-        ++g_changes;
-      };
-      it.default_text = GetPadInfo(physical).label;
-      items.push_back(std::move(it));
-    }
-    return items;
-  }
-
-  std::vector<Item> KeyItems() {
-    std::vector<const rex::cvar::FlagEntry*> binds;
-    for (auto& e : rex::cvar::GetRegistry())
-      if (e.category == "Input/Keybinds/Controller") binds.push_back(&e);
-    std::vector<Item> items;
-    items.push_back(Section(T("Controls") + std::string("  " KK_DOT "  ") + T("Keyboard bindings")));
-    items.push_back(ActionItem("Reset to defaults", "Every key back to its default.", "", [this, binds] {
-      for (auto* e : binds) Reset(e->name.c_str());
-      Status("Keys reset to the defaults.");
-    }));
-    auto pretty = [](std::string keys) {  // "Semicolon,Space" -> "Semicolon, Space"
-      for (size_t at = 0; (at = keys.find(',', at)) != std::string::npos; at += 2) keys.insert(at + 1, " ");
-      return keys;
-    };
-    // What each button does in the game (the Xbox 360 manual), so the keys make sense.
-    static const std::map<std::string, const char*> kActions = {
-        {"keybind_a", "In play: Jack calls his companion; Kong hits. In menus: select."},
-        {"keybind_b", "In play: Jack checks his reserve bullets; Kong jumps, dodges and climbs. In menus: back."},
-        {"keybind_x", "In play: Kong grabs and throws, and picks up and puts down Ann."},
-        {"keybind_y", "In play: Jack drops his spear; Kong pushes back, bites and goes into fury mode."},
-        {"keybind_left_trigger", "In play: Jack takes aim (raises his gun)."},
-        {"keybind_right_trigger", "In play: Jack shoots, takes, uses and repels."},
-        {"keybind_left_shoulder", "Not used in play."},
-        {"keybind_right_shoulder", "In play: Jack reloads."},
-        {"keybind_lstick_up", "Moves Jack and Kong."},
-        {"keybind_lstick_down", "Moves Jack and Kong."},
-        {"keybind_lstick_left", "Moves Jack and Kong."},
-        {"keybind_lstick_right", "Moves Jack and Kong."},
-        {"keybind_lstick_press", "In play: Jack crouches."},
-        {"keybind_rstick_up", "Turns the camera when Mouse camera is off."},
-        {"keybind_rstick_down", "Turns the camera when Mouse camera is off."},
-        {"keybind_rstick_left", "Turns the camera when Mouse camera is off."},
-        {"keybind_rstick_right", "Turns the camera when Mouse camera is off."},
-        {"keybind_rstick_press", "In play: Jack zooms in."},
-        {"keybind_dpad_up", "Moves around the game's menus."},
-        {"keybind_dpad_down", "Moves around the game's menus."},
-        {"keybind_dpad_left", "Moves around the game's menus."},
-        {"keybind_dpad_right", "Moves around the game's menus."},
-        {"keybind_start", "Opens the pause menu."},
-        {"keybind_back", "Not used in play."},
-        {"keybind_guide", "Not used in play."},
-    };
-    for (auto* e : binds) {
-      const std::string value = pretty(e->getter());
-      std::string desc = T("Select, then press the key or mouse button to use. Esc cancels.");
-      if (auto a = kActions.find(e->name); a != kActions.end()) desc = std::string(T(a->second)) + " " + desc;
-      Item it = ActionItem(e->description, desc,
-                           value.empty() ? "None" : value, [this, name = e->name, label = e->description] {
-                             capturing_ = name;
-                             ui::Modal m;
-                             m.open = true;
-                             m.title = "Press a key or mouse button";
-                             m.body = F("For {0}. Esc cancels.", {T(label)});
-                             m.buttons = {"Cancel"};
-                             m.cancel = 0;
-                             m.on_button = [this](int) { capturing_.clear(); };
-                             modal_ = std::move(m);
-                           });
-      it.value_color = color::kText;
-      it.on_default = [name = e->name] { Reset(name.c_str()); };
-      it.default_text = e->default_value.empty() ? "None" : pretty(e->default_value);
-      items.push_back(std::move(it));
-    }
-    return items;
-  }
-
-  // Waits for a key while a binding is being captured.
-  void CaptureKey() {
-    if (capturing_.empty()) return;
-    if (!modal_.open) {  // closed with the controller
-      capturing_.clear();
-      return;
-    }
-    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
-      capturing_.clear();
-      modal_.open = false;
-      input_.ConsumeAll();
-      return;
-    }
-    // A mouse button, unless it's a click on the pop-up's own button (Cancel).
-    static constexpr std::pair<ImGuiMouseButton, const char*> kMouse[] = {
-        {ImGuiMouseButton_Left, "LMB"}, {ImGuiMouseButton_Right, "RMB"}, {ImGuiMouseButton_Middle, "MMB"}};
-    const ImVec2 mouse = ImGui::GetIO().MousePos;
-    bool on_button = false;
-    for (const auto& [a, b] : modal_.button_rects)
-      on_button = on_button || (mouse.x >= a.x && mouse.y >= a.y && mouse.x < b.x && mouse.y < b.y);
-    for (const auto& [button, name] : kMouse) {
-      if (ImGui::GetFrameCount() <= modal_.shown_frame + 1 || !ImGui::IsMouseClicked(button)) continue;
-      if (button == ImGuiMouseButton_Left && on_button) continue;
-      Set(capturing_.c_str(), name);
-      capturing_.clear();
-      modal_.open = false;
-      input_.ConsumeAll();
-      return;
-    }
-    for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; ++k) {
-      const auto key = static_cast<ImGuiKey>(k);
-      if (key == ImGuiKey_Escape || !ImGui::IsKeyPressed(key, false)) continue;
-      const int vk = ImGuiKeyToVk(key);
-      if (!vk) continue;
-      const std::string name = rex::ui::VirtualKeyToString(static_cast<rex::ui::VirtualKey>(vk));
-      if (!name.empty()) Set(capturing_.c_str(), name);
-      capturing_.clear();
-      modal_.open = false;
-      input_.ConsumeAll();
-      return;
-    }
-  }
-
-  // ------------------------------------------------------------- Cheats ---
-  std::vector<Item> CheatItems() {
-    std::vector<Item> items;
-    items.push_back(Section("Cheats"));
-    items.push_back(CvarToggle("Cheats",
-                               "Switches on the cheats you pick below as soon as the game reaches its main menu, the "
-                               "same as typing their codes on the game's Cheat screen. They last until you quit the "
-                               "game.",
-                               "kk_cheats"));
-    const bool on = GetBool("kk_cheats");
-    items.push_back(Section("Cheat list"));
-    for (const auto& cheat : kCheats) {
-      Item it = CvarToggle(cheat.label, "One of the game's own cheats.", std::string("kk_cheat_") + cheat.id);
-      it.facts.push_back(F("Code: {0}", {cheat.code}));
-      items.push_back(std::move(Disable(it, !on, "Switch Cheats on to use it.")));
-    }
-    return items;
-  }
-
   // ------------------------------------------------------- Achievements ---
   std::vector<Item> AchievementItems() {
     std::vector<Item> items;
@@ -3949,6 +4006,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
       needs_restart = true;
     }
     auto action = needs_restart ? cb_.restart_and_play : cb_.play;
+    // The pause menu for the game about to start (the app makes it too when the launcher is skipped).
+    if (!needs_restart) CreatePauseMenu(imgui_drawer(), immediate_, paths_.config_path, paths_.user_dir, paths_.game_dir);
     input_.Release();  // the game opens the controllers itself
     Close();  // deletes this dialog after the current draw
     if (action) action();
@@ -4159,15 +4218,10 @@ class Launcher final : public rex::ui::ImGuiDialog {
 
   rex::ui::ImmediateDrawer* immediate_;
   LauncherPaths paths_;
-  LauncherCallbacks cb_;
-  ui::Input input_;
-  ui::Glyphs glyphs_;
   ui::Metrics m_;
-  ui::Modal modal_;
   ImVec2 o_{0, 0};
   float w_ = 1280, h_ = 720;
   Page page_ = kHome;
-  SubPage sub_ = kNoSubPage;
   std::map<int, ui::ListState> lists_;
   std::vector<Item> focused_items_;
   const Item* focused_ = nullptr;
@@ -4209,15 +4263,10 @@ class Launcher final : public rex::ui::ImGuiDialog {
 #if !defined(_WIN32)
   std::chrono::steady_clock::time_point next_frame_{};
 #endif
-  std::string status_;
-  double status_time_ = -100, saved_time_ = -100;
+  double saved_time_ = -100;
   int seen_changes_ = 0, saved_changes_ = 0;
   double changed_time_ = 0;
   double preview_at_ = 0;
-  std::string capturing_;
-  std::vector<MonitorInfo> monitors_;
-  std::vector<DisplayMode> display_modes_;  // the Resolution choices, for display_modes_monitor_
-  int display_modes_monitor_ = -1;
 
   std::vector<std::unique_ptr<rex::ui::ImmediateTexture>> textures_;
   struct Slide {
@@ -4257,7 +4306,74 @@ class Launcher final : public rex::ui::ImGuiDialog {
   std::string install_result_;
 };
 
+// The pause menu's Settings (ingame_settings.h): the launcher's pages, live rows only.
+class InGameSettingsImpl final : public InGameSettings, private SettingsPages {
+ public:
+  InGameSettingsImpl(rex::ui::ImmediateDrawer* immediate, std::filesystem::path config_path,
+                     const std::filesystem::path& user_dir)
+      : SettingsPages(immediate, LauncherCallbacks{}, /*in_game=*/true), config_path_(std::move(config_path)) {
+    glyphs_.AddSet("xbox360", art::LauncherArtDir(user_dir) / "glyphs" / "xbox360");
+    seen_changes_ = saved_changes_ = g_changes;
+  }
+  ~InGameSettingsImpl() override { SaveNow(); }
+
+  std::vector<Item> Items(Page page) override {
+    std::vector<Item> items;
+    switch (page) {
+      case kDisplay: items = DisplayItems(); break;
+      case kGraphics: items = GraphicsItems(); break;
+      case kGameplay: items = GameplayItems(); break;
+      case kControls:
+        items = sub_ == kRemapPage ? RemapItems() : sub_ == kKeysPage ? KeyItems() : ControlsItems();
+        break;
+      case kCheats: items = CheatItems(); break;
+      default: break;
+    }
+    return LiveOnly(std::move(items));
+  }
+  int SubPage() const override { return int(sub_); }
+  void LeaveSubPage() override { sub_ = kNoSubPage; }
+  void Tick() override {
+    CaptureKey();
+    const double now = ImGui::GetTime();
+    if (g_changes != seen_changes_) {
+      seen_changes_ = g_changes;
+      changed_time_ = now;
+    }
+    if (seen_changes_ != saved_changes_ && now - changed_time_ > 0.8 && !ImGui::IsMouseDown(0)) SaveNow();
+  }
+  void SaveNow() override {
+    if (saved_changes_ == g_changes) return;
+    SaveSettings(config_path_);
+    saved_changes_ = seen_changes_ = g_changes;
+  }
+  bool Capturing() const override { return !capturing_.empty(); }
+  std::string StatusLine() const override {
+    return !status_.empty() && ImGui::GetTime() - status_time_ < 6.0 ? status_ : std::string();
+  }
+  ui::Input& input() override { return input_; }
+  ui::Glyphs& glyphs() override { return glyphs_; }
+  ui::Modal& modal() override { return modal_; }
+  std::string PromptSet() const override { return SettingsPages::PromptSet(); }
+
+ private:
+  std::filesystem::path config_path_;
+  int seen_changes_ = 0, saved_changes_ = 0;
+  double changed_time_ = 0;
+};
+
 }  // namespace
+
+const char* InGameSettings::PageName(Page page) {
+  static const char* const kNames[kPageCount] = {"Display", "Graphics", "Gameplay", "Controls", "Cheats"};
+  return page >= 0 && page < kPageCount ? kNames[page] : "";
+}
+
+std::unique_ptr<InGameSettings> CreateInGameSettings(rex::ui::ImmediateDrawer* immediate,
+                                                     std::filesystem::path config_path,
+                                                     std::filesystem::path user_dir) {
+  return std::make_unique<InGameSettingsImpl>(immediate, std::move(config_path), user_dir);
+}
 
 bool GameFilesPresent(const std::filesystem::path& game_dir) {
   std::error_code ec;

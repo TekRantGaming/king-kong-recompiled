@@ -61,7 +61,13 @@ set(KINGKONG_SOURCES
     src/native_shaders.cpp
     src/http.cpp
     src/update.cpp
+    src/pause_menu.cpp
 )
+# The game side of the launcher's Play menu and the pause menu (play_session.h) is play_session.cpp;
+# until it is there, a stand-in with made-up saves lets the UI side build (play_session_stub.cpp).
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/play_session.cpp")
+    list(APPEND KINGKONG_SOURCES src/play_session_stub.cpp)
+endif()
 
 # Developer-only test aids (never in release builds): -DKK_DEV_TOOLS=ON.
 option(KK_DEV_TOOLS "Build developer test aids such as KK_DEV_AUTOSKIP" OFF)
