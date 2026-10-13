@@ -21,6 +21,7 @@
 */
 
 #include "vulkan-backend.h"
+#include "../../../../backend/dev_gpu_stats.h"
 #include <nvrhi/common/misc.h>
 
 namespace nvrhi::vulkan
@@ -125,6 +126,7 @@ namespace nvrhi::vulkan
         if (m_CurrentComputeState.pipeline != state.pipeline)
         {
             m_CurrentCmdBuf->cmdBuf.bindPipeline(vk::PipelineBindPoint::eCompute, pso->pipeline);
+            nr::CountGpuCommand(nr::DevGpuCounter::Pipeline);
 
             m_CurrentCmdBuf->referencedResources.push_back(state.pipeline);
         }

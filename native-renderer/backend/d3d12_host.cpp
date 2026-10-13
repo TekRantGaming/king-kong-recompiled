@@ -15,6 +15,7 @@
 
 #include "backend/host_device.h"
 #include "backend/cpu_profile.h"
+#include "backend/dev_gpu_stats.h"
 
 REXCVAR_DECLARE(bool, native_validation);
 REXCVAR_DECLARE(int32_t, native_debug);
@@ -39,6 +40,7 @@ class D3D12Host final : public HostDevice {
     desc.shaderResourceViewHeapSize = 65536;
     desc.samplerHeapSize = 2048;
     device_ = nvrhi::d3d12::createDevice(desc);
+    g_dev_gpu_stats_enabled.store((REXCVAR_GET(native_debug) & 32768) != 0, std::memory_order_relaxed);
     if (!device_) {
       return false;
     }

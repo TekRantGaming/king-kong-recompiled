@@ -202,6 +202,7 @@ class Renderer final : public DrawSink {
   };
   std::unordered_map<uint64_t, std::unique_ptr<TimedPass>> debug_pass_timers_;
   TimedPass* debug_open_pass_ = nullptr;
+  std::array<uint64_t, 6> debug_gpu_api_previous_ = {};
   void DebugGpuPass(nvrhi::ICommandList* cl, uint64_t key, const char* label);
   uint32_t main_surface_ = 0;  // render target 0 at the last Present
   std::vector<uint32_t> scratch_indices_;

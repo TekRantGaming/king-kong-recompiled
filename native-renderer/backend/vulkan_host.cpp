@@ -29,6 +29,7 @@
 
 #include "backend/host_device.h"
 #include "backend/cpu_profile.h"
+#include "backend/dev_gpu_stats.h"
 #include "backend/output_blit.h"
 #include "backend/vk_pipeline_cache.h"
 #include "backend/vulkan_dispatch.h"
@@ -99,6 +100,7 @@ class VulkanHost final : public HostDevice {
       }
     }
     device_ = nvrhi::vulkan::createDevice(desc);
+    g_dev_gpu_stats_enabled.store((REXCVAR_GET(native_debug) & 32768) != 0, std::memory_order_relaxed);
     if (!device_) {
       return false;
     }

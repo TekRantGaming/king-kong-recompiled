@@ -1,5 +1,6 @@
 #include "backend/renderer.h"
 #include "backend/cpu_profile.h"
+#include "backend/dev_gpu_stats.h"
 
 #include <mutex>
 
@@ -499,6 +500,18 @@ void Renderer::OnPresent(uint32_t frame, uint32_t render_target0, uint32_t devic
   const auto t3 = clock::now();
   ++stats_.frames_submitted;
   if (game_ && (game_->options().debug & 32768) && stats_.frames_submitted % 300 == 0) {
+    const auto counters = GpuCommandStats();
+    Logf(LogLevel::kInfo,
+         "rexgpu-native: emitted frame %llu (300 frames): %llu pipeline binds, %llu viewports, %llu scissors, "
+         "%llu blends, %llu stencil refs, %llu root CBV updates",
+         static_cast<unsigned long long>(stats_.frames_submitted),
+         static_cast<unsigned long long>(counters[0] - debug_gpu_api_previous_[0]),
+         static_cast<unsigned long long>(counters[1] - debug_gpu_api_previous_[1]),
+         static_cast<unsigned long long>(counters[2] - debug_gpu_api_previous_[2]),
+         static_cast<unsigned long long>(counters[3] - debug_gpu_api_previous_[3]),
+         static_cast<unsigned long long>(counters[4] - debug_gpu_api_previous_[4]),
+         static_cast<unsigned long long>(counters[5] - debug_gpu_api_previous_[5]));
+    debug_gpu_api_previous_ = counters;
     Logf(LogLevel::kInfo, "rexgpu-native: render CPU frame %llu: %llu us execution (cumulative)",
          static_cast<unsigned long long>(stats_.frames_submitted),
          static_cast<unsigned long long>(CurrentThreadCpuMicroseconds()));

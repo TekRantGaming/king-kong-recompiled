@@ -21,6 +21,7 @@
 */
 
 #include "d3d12-backend.h"
+#include "../../../../backend/dev_gpu_stats.h"
 
 #include <nvrhi/common/misc.h>
 #include <sstream>
@@ -124,6 +125,7 @@ namespace nvrhi::d3d12
         if (updatePipeline)
         {
             m_ActiveCommandList->commandList->SetPipelineState(pso->pipelineState);
+            nr::CountGpuCommand(nr::DevGpuCounter::Pipeline);
             
             m_Instance->referencedResources.push_back(pso);
         }
