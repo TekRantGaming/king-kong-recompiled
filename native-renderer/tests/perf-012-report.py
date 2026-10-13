@@ -31,6 +31,7 @@ def status(r):
     if r.get('query_errors'): return 'invalid: query pool'
     if r.get('drawless'): return 'invalid: no geometry'
     if r.get('shots') != 2: return 'incomplete'
+    if r['label']=='validation-final-vulkan': return 'complete; attachment validation warning'
     return 'complete'
 
 def api(r): return 'Classic' if r['classic'] else r['backend']
@@ -120,7 +121,7 @@ report.append('''\nTarget addresses identify the actual grouped passes in that p
 - Submission overlap: the first completion implementation flushed newer frame submissions when recycling an older image. Venture exposed the regression: 4.18 ms before, 9.09 ms after that blanket flush, with approximately unchanged GPU cost. The matching-query submission ticket preserves the two-frame GPU bound while waiting only for the old frame's query to have been assigned. The final Venture repeat measured 6.493 ms median with zero errors; GPU mean varied from 3.163 to 5.194 ms, so this is not an isolated FPS gain. The unbounded initial Venture result remains faster, and the remaining queue/completion cost needs further profiling. Repeated measurements are identified as `ticket-*` above; do not substitute intermediate measurements for the final DLL.
 - Diagnostics: reuse task 009 counters/helper, add thread CPU execution, WDDM memory, state/transition/descriptor counters and bounded GPU pass queries. CPU probes are off outside the explicit debug bit; game CSV probes require the dev build and log window. Pass timing needed 2,048 queries. Two early pass-profile attempts used an already occupied draw-stop bit and are discarded; bit 524288 is the corrected flag. The known-good 32768-only baseline/cache runs were unaffected.
 
-Visual review: the game's own V-Rex 100-second captures before and after scale reuse show the expected scene without obvious missing objects or large colour changes. Rain/animation/settling differ, and thumbnail review is not a pixel-perfect rendering proof. Original captures are retained. No game images, packs or logs were committed.
+Visual review: the game's own V-Rex 100-second captures before and after scale reuse show the expected scene without obvious missing objects or large colour changes. The final 4K firing captures at 100 and 120 seconds show muzzle flashes and intact scene geometry; the helper consumed 1,100 rounds. Final Vulkan host median/GPU mean were 11.777/11.784 ms, with zero exhaustion or device removal, about 2,087 MiB private / 260 MiB shared GPU memory. Final D3D12 firing completed with zero errors, about 1,877 MiB private / 170 MiB shared GPU memory, versus the failed control's approximately 17,427 / 14,148 MiB. Rain/animation/settling differ, and thumbnail review is not a pixel-perfect rendering proof. Original captures and review panels in `F:\\KK-native-renderer\\moved-aside\\task012-review-20261013` are retained. No game images, packs or logs were committed.
 
 ## Hardware risks and recommendations not implemented
 
@@ -141,6 +142,8 @@ Exclusive presentation review: kk/src/display_modes.cpp selects a display mode t
 ## Validation and retained evidence
 
 `kk/build.bat kk-dev-vulkan` passed after the changes. `native-renderer/tests/check-requirements-012.bat` passed 21 cases. Runtime checks, captures, error counts and limitations are listed above. All fixes are separate local commits with before/after evidence; the report does not imply Claude has reviewed or accepted them.
+
+The final `--native_validation=true` V-Rex run completed two captures with zero volatile/query exhaustion and zero device removal. This option enables NVRHI validation, not a guarantee that Khronos Vulkan validation layers are active. One NVRHI error remains: the startup EDRAM colour attachment is 1760x1664 while depth is 1760x1440. No other NVRHI GPU error or VUID line appeared in the retained logs. This is not a clean validation pass; attachment-size/lifetime correctness needs a dedicated follow-up before broad hardware certification. Its timing is diagnostic, not a performance comparison.
 
 Every measurement below links to its preserved run directory, including `test.json`, `frame_times.csv`, `process.csv`, `gpu-memory.csv`, the rotating native logs and the game's BMPs. Exact command arguments, DLL SHA256 and affinity mask are in metadata. Reproduce summaries with the absolute Python 3.12 executable, `-I`, and `native-renderer/tests/perf-012-summary.py`.
 ''')
