@@ -26,6 +26,12 @@ Not vendored:
 
 Changes we make to vendored code are kept as small as possible and listed here:
 
+- `nvrhi/src/vulkan/vulkan-backend.h`, `vulkan-queries.cpp`, `vulkan-queue.cpp` (task 025): timer queries
+  retain their handles in the recorded command buffer and publish the actual submission's timeline semaphore
+  and value. Polling returns false until that submission completes, before calling `getQueryPoolResults`.
+  This prevents VUID-09401 when asynchronous submission has not executed a new query's reset yet. The
+  render test polls before submission, checks completed results and reuses queries under Khronos validation.
+
 - `XenosRecomp/XenosRecomp/shader_recompiler.cpp`, `shader_recompiler.h`, `pch.h`: reworked for King Kong
   by the shader translator (stream 02): the container reading moved to `native-renderer/shaders`
   (`RecompilerInput`), bindless resources, vertex pulling from guest memory, the full constant and
