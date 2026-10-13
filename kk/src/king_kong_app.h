@@ -32,6 +32,7 @@
 
 #include "art.h"
 #include "crash_dump.h"
+#include "diagnostics.h"
 #include "discord_presence.h"
 #include "display_modes.h"
 #include "frame_stats.h"
@@ -98,6 +99,13 @@ class KingKongApp : public rex::ReXApp {
       const rex::PathConfig& defaults, std::function<void(rex::PathConfig)> resume) override {
     user_data_root_ = defaults.user_data_root;
     config_path_ = defaults.config_path;
+    kk::InitDiagnostics();
+    {
+      const std::filesystem::path log = REXCVAR_GET(log_file);
+      kk::InstallCrashDumps(log.has_parent_path() ? log.parent_path()
+                                                  : rex::filesystem::GetExecutableFolder() / "logs",
+                            user_data_root_);
+    }
     kk::MigrateSettings(defaults.config_path);
     kk::ApplyFixedSettings();
     // The launcher's Play menu: the saves live under the user data, a start request may be given
@@ -202,7 +210,7 @@ class KingKongApp : public rex::ReXApp {
     {
       const std::filesystem::path log = REXCVAR_GET(log_file);
       kk::InstallCrashDumps(log.has_parent_path() ? log.parent_path()
-                                                  : rex::filesystem::GetExecutableFolder() / "logs");
+                                                  : rex::filesystem::GetExecutableFolder() / "logs", user_data_root_);
     }
     kk::ApplyRuntimeOverrides();
     UseOneControllerSlot();

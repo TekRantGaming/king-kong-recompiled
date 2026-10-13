@@ -1,5 +1,5 @@
-// Crash reports: if the game crashes outright, write logs/crash-<time>.dmp (a
-// minidump for debugging) and logs/crash-<time>.txt (what happened, in short)
+// Crash reports: write user_root/crashes/crash-<time>.dmp (a
+// minidump for debugging) and crash-<time>.txt (redacted diagnostics)
 // so players have something to attach to a bug report. Windows only.
 //
 // Hang reports: a watchdog thread notices when the game has drawn no frame for
@@ -8,6 +8,7 @@
 // recovers, the log says how long it stalled.
 
 #include "crash_dump.h"
+#include "diagnostics.h"
 
 #if defined(_WIN32)
 
@@ -37,7 +38,8 @@
 namespace kk {
 namespace {
 
-wchar_t g_dir[MAX_PATH];  // logs folder, prepared up front (no allocation while crashing)
+wchar_t g_dir[MAX_PATH];  // hang/hitch folder, prepared up front
+wchar_t g_crash_dir[MAX_PATH];
 LPTOP_LEVEL_EXCEPTION_FILTER g_previous = nullptr;
 volatile LONG g_crashing = 0;
 
@@ -45,8 +47,9 @@ volatile LONG g_crashing = 0;
 void ReportBase(const wchar_t* kind, wchar_t (&base)[MAX_PATH + 64]) {
   SYSTEMTIME t;
   GetLocalTime(&t);
-  swprintf(base, MAX_PATH + 64, L"%ls\\%ls-%04u%02u%02u-%02u%02u%02u", g_dir, kind, t.wYear, t.wMonth, t.wDay,
-           t.wHour, t.wMinute, t.wSecond);
+  const wchar_t* dir = wcscmp(kind, L"crash") == 0 ? g_crash_dir : g_dir;
+  swprintf(base, MAX_PATH + 64, L"%ls\\%ls-%04u%02u%02u-%02u%02u%02u-%03u-%lu", dir, kind, t.wYear, t.wMonth, t.wDay,
+           t.wHour, t.wMinute, t.wSecond, t.wMilliseconds, GetCurrentProcessId());
 }
 
 void WriteMiniDump(const wchar_t* base, EXCEPTION_POINTERS* info) {
@@ -56,7 +59,7 @@ void WriteMiniDump(const wchar_t* base, EXCEPTION_POINTERS* info) {
   if (file == INVALID_HANDLE_VALUE) return;
   MINIDUMP_EXCEPTION_INFORMATION mei{GetCurrentThreadId(), info, FALSE};
   MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), file,
-                    MINIDUMP_TYPE(MiniDumpWithThreadInfo | MiniDumpWithIndirectlyReferencedMemory),
+                    MINIDUMP_TYPE(MiniDumpNormal | MiniDumpWithThreadInfo),
                     info ? &mei : nullptr, nullptr, nullptr);
   CloseHandle(file);
 }
@@ -77,25 +80,18 @@ void DescribeAddress(const void* address, wchar_t* out, size_t out_size) {
 }
 
 LONG WINAPI OnCrash(EXCEPTION_POINTERS* info) {
-  if (InterlockedExchange(&g_crashing, 1) == 0 && g_dir[0]) {
+  if (InterlockedExchange(&g_crashing, 1) == 0 && g_crash_dir[0]) {
     wchar_t base[MAX_PATH + 64];
     ReportBase(L"crash", base);
     WriteMiniDump(base, info);
     wchar_t path[MAX_PATH + 80];
     swprintf(path, MAX_PATH + 80, L"%ls.txt", base);
-    if (FILE* f = _wfopen(path, L"w")) {
+    if (FILE* f = _wfopen(path, L"wb")) {
       const auto* rec = info->ExceptionRecord;
-      HMODULE module = nullptr;
-      wchar_t name[MAX_PATH] = L"?";
-      if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                             static_cast<LPCWSTR>(rec->ExceptionAddress), &module))
-        GetModuleFileNameW(module, name, MAX_PATH);
-      std::fwprintf(f, L"King Kong crashed.\nException 0x%08X at %p (%ls + 0x%llX)\nThread %lu\n"
-                       L"Please attach this file, the .dmp file next to it and logs\\king_kong.log to a bug report.\n",
-                    rec->ExceptionCode, rec->ExceptionAddress, name,
-                    static_cast<unsigned long long>(static_cast<const char*>(rec->ExceptionAddress) -
-                                                    reinterpret_cast<const char*>(module)),
-                    GetCurrentThreadId());
+      // Addresses suffice for symbolication; never include a module's full path.
+      std::fprintf(f, "King Kong crashed.\nException 0x%08X at %p\nThread %lu\n\n",
+                   rec->ExceptionCode, rec->ExceptionAddress, GetCurrentThreadId());
+      WriteCrashDiagnostics(f);
       std::fclose(f);
     }
   }
@@ -211,11 +207,23 @@ void WriteHangReport(ULONGLONG stalled_ms) {
 
 void WatchForHangs() {
   ULONGLONG previous_tick = GetTickCount64();
+  ULONGLONG diagnostics_tick = previous_tick;
   ULONGLONG reported_at = 0;  // g_last_frame value the current report is about
   ULONGLONG hitch_at = 0;     // ... and the current hitch report
+#if defined(KK_DEV_TOOLS)
+  // Wall time from the first guest frame, so the crash test lasts two minutes
+  // of rendering and does not depend on menu input or compiler null-write UB.
+  ULONGLONG test_started = 0;
+  const char* crash_after = std::getenv("KK_DEV_CRASH_AFTER");
+  const double test_seconds = crash_after ? std::atof(crash_after) : 0;
+#endif
   for (;;) {
     Sleep(100);
     const ULONGLONG now = GetTickCount64();
+    if (now - diagnostics_tick >= 1000) {
+      try { RefreshDiagnostics(); } catch (...) { /* Retain the last complete snapshot. */ }
+      diagnostics_tick = now;
+    }
     const ULONGLONG last = g_last_frame.load(std::memory_order_relaxed);
     if (now - previous_tick > 5000) {
       // This thread did not run for a while: the PC slept or the process was
@@ -227,6 +235,13 @@ void WatchForHangs() {
     }
     previous_tick = now;
     if (!last) continue;  // no frame yet (launcher, startup)
+#if defined(KK_DEV_TOOLS)
+    if (!test_started) test_started = now;
+    if (test_seconds > 0 && now - test_started >= test_seconds * 1000) {
+      REXLOG_ERROR("KK dev: forced crash after {} seconds; test path C:\\Users\\PrivacyProbe\\private.txt", test_seconds);
+      RaiseException(0xE0430001, EXCEPTION_NONCONTINUABLE, 0, nullptr);
+    }
+#endif
     const int32_t hitch_ms = REXCVAR_GET(kk_hitch_report_ms);
     if (hitch_ms > 0 && last != hitch_at && now - last >= ULONGLONG(hitch_ms)) {
       hitch_at = last;
@@ -248,10 +263,24 @@ void WatchForHangs() {
 
 void NoteGuestFrame() { g_last_frame.store(GetTickCount64(), std::memory_order_relaxed); }
 
-void InstallCrashDumps(const std::filesystem::path& logs_dir) {
+void InstallCrashDumps(const std::filesystem::path& logs_dir, const std::filesystem::path& user_root) {
+  static bool installed = false;
+  if (installed) {
+    // Runtime setup may have installed a newer handler since path finalization.
+    auto previous = SetUnhandledExceptionFilter(OnCrash);
+    if (previous != OnCrash) g_previous = previous;
+    return;
+  }
+  installed = true;
+  SetErrorMode(GetErrorMode() | SEM_NOGPFAULTERRORBOX);
   std::error_code ec;
   std::filesystem::create_directories(logs_dir, ec);
   wcsncpy_s(g_dir, logs_dir.wstring().c_str(), _TRUNCATE);
+  const auto crash_dir = user_root / "crashes";
+  std::filesystem::create_directories(crash_dir, ec);
+  if (!ec && crash_dir.wstring().size() < MAX_PATH)
+    wcsncpy_s(g_crash_dir, crash_dir.wstring().c_str(), _TRUNCATE);
+  else REXLOG_WARN("KK: could not prepare local crash folder (error {})", ec.value());
   g_previous = SetUnhandledExceptionFilter(OnCrash);
   std::thread(WatchForHangs).detach();
 }
@@ -262,7 +291,7 @@ void InstallCrashDumps(const std::filesystem::path& logs_dir) {
 
 namespace kk {
 void NoteGuestFrame() {}
-void InstallCrashDumps(const std::filesystem::path&) {}
+void InstallCrashDumps(const std::filesystem::path&, const std::filesystem::path&) {}
 }  // namespace kk
 
 #endif
