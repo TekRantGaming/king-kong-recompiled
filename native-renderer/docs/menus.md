@@ -205,8 +205,15 @@ game's Quit game, then the program exits), both confirmed first. Change storage 
 read by the game; the port's menu comes back when they close). Start again restarts the chapter without a level
 load (its opening cutscene again).
 
-The game's **Options** item opens `IntMIG_Page_OptStart` with the pages Audio (`_Audio`), Video (`_Video`),
-Controls (`_Control`) and Language (`_Langue`); see the table below.
+The game's **Options** item (run `...-055907-ch8-live-options-end`, frames `shot_200`, `shot_250`) opens
+`IntMIG_Page_OptStart`: **Audio**, **Video**, **Controls** (Language is not offered in play). Audio holds
+Subtitles (on / off) and four volume bars, Master, Voices, Music and Effects, then "Accept the changes". These
+are the game's own values, kept in the save: the port has no setting for any of them. Video and Controls were
+not opened in the test (the developer pad cannot move through these pages); from the page names they hold the
+game's brightness / screen values and its control options (vibration, inversion), which the port's Display
+and Controls settings already cover. Suggestion for menus-ui: keep the pause menu's Options entry for the
+game's Audio page values; either open the game's own Options pages (the game draws and reads them, as Score:
+the game side can offer it as a pause action) or add port settings for subtitles and the four volumes.
 
 ### Settings in the pause menu: live or restart
 
@@ -234,3 +241,37 @@ pause menu's Settings; the others stay launcher-only (the user's decision).
 
 The game's own Options pages hold audio volumes and other values kept in the save; see "The game's Options"
 below.
+
+### Chapter names (found, not committed)
+
+The chapter select's names are a text file of the start menu's level, key `0x4902DD54`, loaded only while the
+start menu (level 3) is up: ids `0x4902DD68 + n`, n = 0 to 41 ("Skull Island", ..., "Credits"; 0x4902DD99 and on
+are the Extras). The entry's n is the third column of the chapter table (`G + (0x1468 + entry) * 4`, also the
+fourth): entry 0 has 17 ("The venture"), entry 8 has 7 ("V-Rex"), entry 27 has 26 ("Kong to the rescue"). Text
+lookup in the game: `sub_826FEC90(file key, id, out)` then `sub_826FEE20(out)` returns the string; the text manager
+is at `0x828E89B8` (+8 count, +12 files; a file: +4 count, +8 entries of 32 bytes with +0 id and +12 offset, +12
+strings, +20 key); `KK_DEV_TEXT_DUMP` writes all loaded texts (`texts-menu.txt` when the start menu's pages
+open). The text is in the game's language. `Chapters()` still returns placeholders: the names are game text
+(not committed); a runtime reader of the player's files (the BIG container holding that text file) or a cache
+written whenever the game has the file loaded is the way to get them.
+
+### Tests (game side)
+
+All windowed, xenos plugin, private copies of `F:\KK-native-renderer\userdata` (or of saves made by these runs,
+in `runs\menus-game-data`), run folders `F:\KK-native-renderer\runs\menus-game-1013-<time>-<name>`:
+
+| What | Run | Result |
+|---|---|---|
+| Chapter start, port pause menu over the frozen frame (stand-in) | `052129-ch8-pause2` (`printwindow_140`) | menu over the last frame of play |
+| Screen black during the start (no logos, title or menus) | `052819-ch8-score-again-quit` (`printwindow_15`, `_30`) | black until the chapter loads |
+| Score (the game's page), back, Start again (restarts, opening cutscene) | `052819-ch8-score-again-quit` (`shot_110`, `shot_210`) | as the game's own items |
+| The real pause menu (pause_menu.cpp) and its Settings over gameplay | `053106-realpause-ch8-quit` (`printwindow_280`) | drawn, pad reaches it |
+| New game in an empty slot: save created and written (named "Tester") | `054652-newgame-slot2d` | `KKProfileSlot2.sav` written, continue 100 / -1 |
+| Saves: list, backup (and no duplicate backup), delete (moved aside) | `054855-saves-test2` (`saves_test.txt` in `runs\menus-game-data\userdata-savestest`) | as specified |
+| Chapter on an empty slot, chapter end: Score pages, save question, saving, then the launcher | `054914-ch27-emptyslot3-end`, `055102-ch27-end-to-launcher` (`printwindow_450_<launcher pid>`) | slot 3 created and saved with the chapter's score, never deleted; the launcher opens |
+| Chapter end goes back to Chapter select | `055907-ch8-live-options-end` (log: `--kk_launcher_open=chapters`) | yes |
+| Live settings: FOV, fog, button prompts (PS5 sheet applied in play), cheats switched on in play (machine gun 500 rounds) | `055907-ch8-live-options-end` (log, `shot_50`/`_80`/`_110`, `shot_200` shows PS5 prompts) | applied at once |
+| The game's Options pages | `055907-ch8-live-options-end` (`shot_200`, `shot_250`) | Audio, Video, Controls |
+| Story run (continue point V-Rex): Save from the pause | `055758-story-save4-return` (`shot_110`: "Save successful") | file written |
+| Story run: Quit game (to the desktop): the game's quit save, then the program exits | `055614-story-save3` | exits, no launcher |
+| Return to main menu (chapter run) | `053106-realpause-ch8-quit`, `060043-final-ch8-return-to-menu` (`printwindow_400_<launcher pid>`) | launcher's Play menu |

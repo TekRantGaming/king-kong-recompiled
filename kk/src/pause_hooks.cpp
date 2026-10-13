@@ -640,3 +640,19 @@ REX_HOOK_RAW(sub_824CB738) {
   }
   __imp__sub_824CB738(ctx, base);
 }
+
+// The game's Options pages (IntMIG_Page_OptStart and its Audio, Video, Controls and Language pages): the
+// game's own pages, shown and read by the game while they are up.
+#define KK_GAME_PAGE_HOOK(addr, name)                                   \
+  REX_EXTERN(__imp__sub_##addr);                                        \
+  REX_HOOK_RAW(sub_##addr) {                                            \
+    using namespace kk::play;                                           \
+    KK_PAGE_TRACE(name);                                                \
+    if (g_game_page) g_game_page_seen_ms = NowMs();                     \
+    __imp__sub_##addr(ctx, base);                                       \
+  }
+KK_GAME_PAGE_HOOK(824C0F60, "IntMIG_Page_OptStart")
+KK_GAME_PAGE_HOOK(824CD320, "IntMIG_Page_OptStart_Audio")
+KK_GAME_PAGE_HOOK(824CE4A0, "IntMIG_Page_OptStart_Video")
+KK_GAME_PAGE_HOOK(824CF400, "IntMIG_Page_OptStart_Control")
+KK_GAME_PAGE_HOOK(824D2F20, "IntMIG_Page_OptStart_Langue")
