@@ -349,12 +349,15 @@ void SceneLighting::OnDraw(nvrhi::ICommandList* cl, const Draw& d) {
   }
 }
 
-void SceneLighting::OnPresent(nvrhi::ICommandList* cl) {
-  // A run of timed draws ends with the frame (Begin and End in one command list).
+void SceneLighting::EndTimedDraws(nvrhi::ICommandList* cl) {
   if (timing_ >= 0) {
     timers_[timing_]->End(cl);
     timing_ = -1;
   }
+}
+
+void SceneLighting::OnPresent(nvrhi::ICommandList* cl) {
+  EndTimedDraws(cl);
   for (auto& t : timers_)
     if (t) t->FrameEnd();
 }

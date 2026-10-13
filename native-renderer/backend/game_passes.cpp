@@ -484,6 +484,7 @@ bool GameRenderer::Present(nvrhi::ICommandList* cl, uint32_t device, nvrhi::ITex
   EnsureFallbackResources(cl);
   dev::DeviceView d(device ? memory_.Virtual(device) : nullptr);
   if (!d.valid()) return false;
+  if (scene_lighting_) scene_lighting_->EndTimedDraws(cl);
   if (scene_ao_ || ao_timer_) AoPresentHook(cl);  // AO hook (game_ao.cpp): a scene the moments above missed
   if (scene_gi_) GiPresentHook(cl);  // GI hook (game_gi.cpp): the same for the bounce light
   if (scene_lighting_) LightingPresentHook(cl);  // Lighting hook (game_lighting.cpp)

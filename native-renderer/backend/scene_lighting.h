@@ -50,6 +50,9 @@ class SceneLighting {
   };
   // Before a draw is recorded (into `cl`, before the draw).
   void OnDraw(nvrhi::ICommandList* cl, const Draw& d);
+  // End the draw's lighting timer before any later AO/GI/upscaler work is recorded.
+  // Also called before the next draw/Present in case a draw was skipped after OnDraw.
+  void EndTimedDraws(nvrhi::ICommandList* cl);
 
   // What the volumetric light needs from the game's own passes this frame (before their OnDraw).
   struct ShadowQuad {
@@ -141,7 +144,7 @@ class SceneLighting {
   bool vol_pending_ = false;  // the fog pass was drawn: the next draw starts with the volumetric light
 
   std::unique_ptr<AoGpuTimer> timers_[3];
-  // Timing a run of the game's own draws (the screen-space shadow, the water): open while they last.
+  // Timing the current shadow/water draw, including its lighting preparation.
   int timing_ = -1;
 };
 

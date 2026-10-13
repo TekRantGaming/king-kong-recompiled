@@ -1328,6 +1328,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   record.flags = RecordFlags();
   const uint64_t key = PipelineKey(record);
   NoteRecord(record, key);
+  if (scene_lighting_) scene_lighting_->EndTimedDraws(cl);
   // AO hook (game_ao.cpp): classify the draw; at the end of the opaque pass the occlusion goes into
   // the scene before this draw.
   if (scene_ao_ || ao_constants_) AoDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
@@ -1685,6 +1686,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   } else {
     cl->draw(args);
   }
+  if (scene_lighting_) scene_lighting_->EndTimedDraws(cl);
   ++stats_.draws;
   if (dump) {
     for (size_t b = 0; b < vs->bindings.vertexBindings.size() && b < 16; ++b) {
