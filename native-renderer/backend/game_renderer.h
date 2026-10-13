@@ -563,7 +563,7 @@ class GameRenderer {
   Stats stats_;
   uint64_t frame_ = 0;
   Stats debug_previous_;
-  kkshaders::ScaleConstants debug_last_scale_ = {};
+  kkshaders::ScaleConstants last_scale_ = {};
   nvrhi::IGraphicsPipeline* debug_last_pipeline_ = nullptr;
 
   std::array<DescriptorTable, kTableCount> tables_;

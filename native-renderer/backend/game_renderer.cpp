@@ -1462,11 +1462,16 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     sc.renderScale[1] = size_from->scale_y;
     sc.renderScale[2] = 1.0f / size_from->scale_x;
     sc.renderScale[3] = 1.0f / size_from->scale_y;
-    cl->writeBuffer(scale_constants_, &sc, sizeof(sc));
-    stats_.upload_bytes += sizeof(sc);
-    ++stats_.scale_uploads;
-    if (!new_list && std::memcmp(&sc, &debug_last_scale_, sizeof(sc)) == 0) ++stats_.scale_identical;
-    debug_last_scale_ = sc;
+    // Like VS/PS constants, a volatile scale buffer needs one write per list
+    // and a new version only when its complete contents change between draws.
+    if (new_list || std::memcmp(&sc, &last_scale_, sizeof(sc)) != 0) {
+      cl->writeBuffer(scale_constants_, &sc, sizeof(sc));
+      stats_.upload_bytes += sizeof(sc);
+      ++stats_.scale_uploads;
+      last_scale_ = sc;
+    } else {
+      ++stats_.scale_identical;
+    }
   }
 
   // State and draw.
