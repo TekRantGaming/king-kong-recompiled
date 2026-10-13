@@ -17,6 +17,7 @@
 #include "backend/cpu_profile.h"
 
 REXCVAR_DECLARE(bool, native_validation);
+REXCVAR_DECLARE(int32_t, native_debug);
 
 namespace nr {
 
@@ -28,6 +29,7 @@ class D3D12Host final : public HostDevice {
 
   bool Initialize() {
     nvrhi::d3d12::DeviceDesc desc;
+    if (REXCVAR_GET(native_debug) & 65536) desc.maxTimerQueries = 2048;
     desc.errorCB = GetMessageCallback();
     desc.pDevice = provider_.GetDevice();
     desc.pGraphicsCommandQueue = provider_.GetDirectQueue();

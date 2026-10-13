@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <cstdio>
 
 #include "backend/primitive.h"
 #if NR_GAME_RENDERER
@@ -23,10 +24,13 @@ class GameRenderer {
   template <typename... A> bool Present(A&&...) { return false; }
   template <typename... A> void VertexShaderPatched(A&&...) {}
   void EndFrame() {}
+  struct Options { uint32_t debug = 0; };
+  const Options& options() const { static const Options options; return options; }
 };
 }  // namespace nr
 #endif
 #include "backend/shaders.h"
+#include "backend/log.h"
 
 namespace nr {
 
