@@ -37,7 +37,6 @@
 #include <bit>
 #include <chrono>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -122,14 +121,6 @@ void ApplyCheats(uint8_t* base) {
     count += chosen;
     return chosen;
   };
-#if defined(KK_DEV_TOOLS)
-  // The golden-frame harness navigates the original chapter-select page.
-  // Keep its unlock out of the player's cheats and release builds.
-  if (const char* chapters = std::getenv("KK_DEV_CHAPTERS"); chapters && std::strcmp(chapters, "1") == 0) {
-    SetFlags(base, p, 0x80);
-    ++count;
-  }
-#endif
   if (on("bonus")) SetFlags(base, p, 0x100);
   if (on("healing")) SetFlags(base, g, kCheatsUsed | 0x200);
   if (on("one_hit")) SetFlags(base, g, kCheatsUsed | 0x2);
