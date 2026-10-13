@@ -9,7 +9,7 @@ version's notes the first time you start it.
 
 ### What's new
 - **DLSS, FSR 3.1, FSR 4 and XeSS upscaling.** With the native renderer, **Display** > **Upscaling** > **Upscaler** now also offers NVIDIA DLSS, AMD FSR 3.1, AMD FSR 4 and Intel XeSS, next to FSR 1 and NIS. They draw fewer pixels and rebuild a sharp picture at your screen's resolution from several frames, smoothing jagged edges too. Only the ones your graphics card supports are listed: DLSS on NVIDIA RTX cards, FSR 4 on AMD Radeon RX 7000 and 9000 cards with Direct3D 12, XeSS and FSR 3.1 on almost any card. **Upscaler mode** picks how many pixels the game draws: **Native AA** (DLAA with DLSS), **Quality**, **Balanced**, **Performance** or **Ultra Performance**.
-- They are off unless you pick one, and the **Original** look keeps them off. Choosing one restarts the game when you press **Play**. There is no frame generation.
+- **The best one for your graphics card is now the default**, at **Quality**: DLSS (its newest model) on NVIDIA cards that support it, FSR 4 on AMD cards that run it, otherwise FSR 3.1, XeSS on Intel cards, FSR 3.1 on any other card that runs it, and FSR 1 where none of them runs. The graphics presets and the setup's **Remastered** use it too (**Low** at **Performance**). If you picked an upscaler yourself (FSR 1, NIS or Off), you keep it; if you never did, you get the new default. The **Original** look keeps them off. Choosing one restarts the game when you press **Play**. There is no frame generation.
 
 ### Known issues
 - FSR 4 is untested on the graphics cards that run it (we have none here); on other cards it isn't offered.
@@ -19,9 +19,10 @@ version's notes the first time you start it.
 - With motion blur on, its trail is shorter at high frame rates.
 
 ### Full changelog
-- `native_upscaler` (`off`, `dlss`, `fsr3`, `fsr4`, `xess`) and `native_upscaler_quality`, set by the launcher. The renderer jitters the scene, makes motion vectors (the camera's from the depth, each moving object's from its own vertex shader run with this and last frame's constants) and a reactive mask for water, fur, smoke and particles, and runs the upscaler before the game's post effects and HUD where it can find them, at the end of the frame otherwise.
+- `native_upscaler` (`off`, `dlss`, `fsr3`, `fsr4`, `xess`) and `native_upscaler_quality`, set by the launcher. Their defaults follow `kk_upscalers_offered`, the launcher's answer kept in the settings (until it has asked once, the card's vendor decides; the plugin's own default is `auto`, so the game's Vulkan device has the extensions for the vendor's upscaler from the first start). A settings file from an earlier version with `present_effect` in it (a choice made on the Upscaler row) gets `native_upscaler` `off`. NIS is a choice only now, no longer NVIDIA cards' default.
+- `native_upscaler_dlss_preset` `latest` (the default): DLSS 4.5's preset M, and L for Ultra Performance. The renderer jitters the scene, makes motion vectors (the camera's from the depth, each moving object's from its own vertex shader run with this and last frame's constants) and a reactive mask for water, fur, smoke and particles, and runs the upscaler before the game's post effects and HUD where it can find them, at the end of the frame otherwise.
 - The SDKs are loaded from beside the game: `nvngx_dlss.dll` (DLSS 310.9.1), `amd_fidelityfx_vk.dll` and `amd_fidelityfx_dx12.dll` (FSR 3.1.4), `amd_fidelityfx_loader_dx12.dll` and `amd_fidelityfx_upscaler_dx12.dll` (FSR 4.1.1), `libxess.dll` (XeSS 2.0.2). Their notices are in `THIRD-PARTY-NOTICES.txt`.
-- The launcher asks the plugin which upscalers run on this PC (`nr_upscaler_query`, on a Direct3D 12 device of its own, in the background). A chosen upscaler that can't run falls back to FSR 3.1, and the log says why.
+- The launcher asks the plugin which upscalers run on this PC (`nr_upscaler_query`, on a Direct3D 12 device of its own, at feature level 11_0 or higher, in the background; each SDK's own check decides). A chosen upscaler that can't run falls back to FSR 3.1, and the log says why.
 - On Vulkan, the device is made with the extensions DLSS and XeSS need (`native-renderer/sdk-patches/0003`, which the beta's SDK build needs).
 
 ## v2.0.0-beta.2 (12 October 2026)

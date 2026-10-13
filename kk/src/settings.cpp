@@ -109,6 +109,9 @@ REXCVAR_DEFINE_STRING(kk_renderer, "native", "KK/Graphics",
 REXCVAR_DEFINE_STRING(kk_fullscreen_mode, "desktop", "KK/Video",
                       "Fullscreen resolution: desktop (a borderless window at the desktop's resolution) or a display "
                       "mode WIDTHxHEIGHT@HZ, e.g. 2560x1440@144 (exclusive fullscreen at that mode)");
+REXCVAR_DEFINE_STRING(kk_upscalers_offered, "", "KK/Graphics",
+                      "Internal: the temporal upscalers this PC runs, as the launcher last found ('none' or "
+                      "'dlss,fsr3,xess'); empty until it has asked (the default upscaler follows it)");
 REXCVAR_DEFINE_STRING(kk_modern_settings, "", "KK/Graphics",
                       "Internal: the Modern settings to put back when leaving the Original look");
 REXCVAR_DEFINE_INT32(kk_fov, 69, "KK/Gameplay",
@@ -337,15 +340,94 @@ void MigrateSettings(const std::filesystem::path& config_path) {
   rex::cvar::SetFlagByName("kk_settings_version", std::to_string(kVersion));
 }
 
+namespace {
+
+// FSR 1 where the presenter has it (NIS is a choice only, since Beta 3).
+std::string SpatialDefault() {
+  for (const auto& e : rex::cvar::GetRegistry()) {
+    if (e.name != "present_effect") continue;
+    const auto& allowed = e.constraints.allowed_values;
+    return std::find(allowed.begin(), allowed.end(), "fsr") != allowed.end() ? "fsr" : "bilinear";
+  }
+  return "bilinear";
+}
+
+const rex::cvar::FlagEntry* Flag(std::string_view name) {
+  for (const auto& e : rex::cvar::GetRegistry())
+    if (e.name == name) return &e;
+  return nullptr;
+}
+
+// The best temporal upscaler for this card among those offered ("off": none).
+std::string BestTemporalUpscaler() {
+  const GpuInfo& gpu = Gpu();
+  const std::string offered = REXCVAR_GET(kk_upscalers_offered);
+  if (offered.empty()) {
+#if defined(_WIN32)
+    // Not asked yet: by the vendor. FSR 4 waits for the answer (it needs Direct3D 12 and a recent card).
+    switch (gpu.vendor) {
+      case GpuVendor::kNvidia: return "dlss";
+      case GpuVendor::kIntel: return "xess";
+      default: return "fsr3";
+    }
+#else
+    return "off";  // the temporal upscalers are Windows only for now
+#endif
+  }
+  auto has = [&](const char* v) { return ("," + offered + ",").find("," + std::string(v) + ",") != std::string::npos; };
+  if (gpu.vendor == GpuVendor::kNvidia && has("dlss")) return "dlss";
+  if (gpu.vendor == GpuVendor::kAmd && has("fsr4")) return "fsr4";
+  if (gpu.vendor == GpuVendor::kIntel && has("xess")) return "xess";
+  if (has("fsr3")) return "fsr3";
+  return "off";
+}
+
+bool NativeRendererInUse() { return rex::cvar::GetFlagByName("gpu_plugin") == "native"; }
+
+}  // namespace
+
+std::string DefaultTemporalUpscaler() {
+  if (!Flag("native_upscaler") || !NativeRendererInUse()) return "off";
+  return BestTemporalUpscaler();
+}
+
+std::string DefaultUpscaler() { return DefaultTemporalUpscaler() != "off" ? "bilinear" : SpatialDefault(); }
+
+void ApplyUpscalerDefaults() {
+  const std::string temporal = DefaultTemporalUpscaler();
+  SetCvarDefault("native_upscaler", temporal);
+  SetCvarDefault("present_effect", temporal != "off" ? "bilinear" : SpatialDefault());
+}
+
+void SetOfferedUpscalers(const std::string& offered) {
+  if (offered != REXCVAR_GET(kk_upscalers_offered)) {
+    REXLOG_INFO("KK: temporal upscalers this PC runs: {}", offered);
+    rex::cvar::SetFlagByName("kk_upscalers_offered", offered);
+  }
+  ApplyUpscalerDefaults();
+}
+
 void ApplyFixedSettings() {
+  // Beta 3's default is a temporal upscaler where one runs (ApplyUpscalerDefaults). A settings file from
+  // before that chose an upscaler on the Upscaler row (present_effect is in it only when the player
+  // picked one: FSR 1, NIS or Off) keeps that choice: no temporal upscaler on top.
+  if (const auto* present = Flag("present_effect"), *temporal = Flag("native_upscaler");
+      present && temporal && present->source == rex::cvar::Source::kConfig &&
+      temporal->source == rex::cvar::Source::kDefault) {
+    REXLOG_INFO("KK: present_effect {} chosen in the settings file: no temporal upscaler by default",
+                rex::cvar::GetFlagByName("present_effect"));
+    rex::cvar::SetFlagByName("native_upscaler", "off");
+  }
   {
     const GpuInfo& gpu = Gpu();
-    REXLOG_INFO("KK: graphics card: {} ({}); default upscaler {}", gpu.name.empty() ? "not found" : gpu.name,
+    REXLOG_INFO("KK: graphics card: {} ({}); default upscaler {} / {} (offered: {})",
+                gpu.name.empty() ? "not found" : gpu.name,
                 gpu.vendor == GpuVendor::kNvidia ? "NVIDIA"
                 : gpu.vendor == GpuVendor::kAmd  ? "AMD"
                 : gpu.vendor == GpuVendor::kIntel ? "Intel"
                                                   : "unknown",
-                DefaultUpscaler());
+                BestTemporalUpscaler(), SpatialDefault(),
+                REXCVAR_GET(kk_upscalers_offered).empty() ? "not asked yet" : REXCVAR_GET(kk_upscalers_offered));
   }
   // FXAA Extreme is no longer offered: a settings file that chose it gets FXAA.
   if (rex::cvar::GetFlagByName("swap_post_effect") == "fxaa_extreme")
@@ -386,21 +468,6 @@ void ApplyFixedSettings() {
       }
 }
 
-std::string DefaultUpscaler() {
-  static const std::string upscaler = [] {
-    auto has = [](const char* value) {
-      for (const auto& e : rex::cvar::GetRegistry()) {
-        if (e.name != "present_effect") continue;
-        const auto& allowed = e.constraints.allowed_values;
-        return std::find(allowed.begin(), allowed.end(), value) != allowed.end();
-      }
-      return false;
-    };
-    const GpuInfo& gpu = Gpu();
-    return std::string(gpu.vendor == GpuVendor::kNvidia && has("nis") ? "nis" : has("fsr") ? "fsr" : "bilinear");
-  }();
-  return upscaler;
-}
 
 void SetCvarDefault(std::string_view name, std::string_view value) {
   for (auto& e : rex::cvar::GetRegistry()) {
@@ -445,9 +512,10 @@ void ApplyPortDefaults() {
   SetCvarDefault("d3d12_allow_variable_refresh_rate_and_tearing", "true");
   SetCvarDefault("swap_post_effect", "fxaa");
   SetCvarDefault("anisotropic_override", "3");
-  // An upscaler at Quality (kk_render_quality): NIS on an NVIDIA card, FSR 1
-  // on any other. The player's own choice in the settings file still wins.
-  SetCvarDefault("present_effect", DefaultUpscaler());
+  // An upscaler at Quality (kk_render_quality): FSR 1 until the settings are read and the renderer is
+  // known (ApplyUpscalerDefaults then picks the temporal one where it runs). The player's own choice in
+  // the settings file still wins.
+  SetCvarDefault("present_effect", SpatialDefault());
   // Ambient occlusion on the native renderer: GTAO at the end of the opaque pass, so water, smoke,
   // fire, fur and the sky are never darkened (native-renderer/docs/ao.md). The plugin's own defaults
   // stay the legacy method for its tests; the Classic renderer keeps its own AO.

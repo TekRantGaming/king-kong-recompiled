@@ -264,7 +264,7 @@ class DlssUpscaler final : public Upscaler {
     std::string n = "DLSS";
     if (!version_.empty()) n += " " + version_;
     n += std::string(" ") + ModeName(config_.quality);
-    if (config_.dlss_preset) n += std::string(" preset ") + config_.dlss_preset;
+    if (const char preset = DlssPresetFor(config_.dlss_preset, config_.quality)) n += std::string(" preset ") + preset;
     n += vulkan_ ? " (Vulkan)" : " (D3D12)";
     return n;
   }
@@ -318,9 +318,9 @@ class DlssUpscaler final : public Upscaler {
 
   bool Create(nvrhi::ICommandList* cl, UpscalerSize render, UpscalerSize output) {
     Release();
-    if (config_.dlss_preset) {
+    if (const char letter = DlssPresetFor(config_.dlss_preset, config_.quality)) {
       // The letter's enum value: A is 1, J 10, K 11, L 12, M 13.
-      const unsigned preset = unsigned(config_.dlss_preset - 'A' + 1);
+      const unsigned preset = unsigned(letter - 'A' + 1);
       for (const char* key : {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality,
                               NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Balanced,
                               NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance,

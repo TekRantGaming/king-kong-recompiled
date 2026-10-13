@@ -44,9 +44,10 @@ struct UpscaleConfig {
   UpscalerKind kind = UpscalerKind::kOff;
   UpscaleQuality quality = UpscaleQuality::kQuality;
   UpscalePoint point = UpscalePoint::kPost;
-  // DLSS's render preset: 0 the driver's default, else the letter (J and K: DLSS 4's transformer
-  // model; L and M: DLSS 4.5's second-generation transformer). Other letters are refused by NGX and
-  // fall back to its default.
+  // DLSS's render preset: 0 the driver's default, kDlssPresetLatest the newest model the DLL has
+  // (DLSS 4.5: M, and L for ultra performance, as NVIDIA recommends), else the letter (J and K: DLSS 4's
+  // transformer model; L and M: DLSS 4.5's second-generation transformer). Other letters are refused by
+  // NGX and fall back to its default.
   char dlss_preset = 0;
   // Sharpening after the upscale, 0 to 1 (FSR's RCAS; DLSS 3.1+ and XeSS have none). Negative: off.
   float sharpness = -1.0f;
@@ -70,7 +71,12 @@ struct UpscaleConfig {
   bool enabled() const { return kind != UpscalerKind::kOff; }
 };
 
-// "--native_upscaler_dlss_preset": "default" (or empty) or one letter. False when not understood.
+// native_upscaler_dlss_preset "latest" (the default): the newest model, chosen per mode (DlssPresetFor).
+constexpr char kDlssPresetLatest = '*';
+// The preset letter for a mode (0: the DLL's default): kDlssPresetLatest gives M, or L for ultra performance.
+char DlssPresetFor(char preset, UpscaleQuality quality);
+
+// "--native_upscaler_dlss_preset": "default" (or empty), "latest" or one letter. False when not understood.
 bool ParseDlssPreset(const std::string& text, char& out);
 
 // The input size for an output size and a ratio, as the SDKs round it (to the nearest pixel, at

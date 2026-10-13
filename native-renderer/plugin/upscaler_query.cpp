@@ -82,9 +82,19 @@ void Run(bool vulkan) {
          ++i) {
       DXGI_ADAPTER_DESC1 desc{};
       adapter->GetDesc1(&desc);
-      const bool ok = !(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) &&
-                      SUCCEEDED(D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_12_0, __uuidof(ID3D12Device),
-                                                  reinterpret_cast<void**>(&device)));
+      // The lowest feature level any of the SDKs could run at: each SDK's own support check (below)
+      // decides what runs on the device, not the level (a card at 11_0 or 11_1 can still run FSR 3.1
+      // and XeSS).
+      bool ok = false;
+      if (!(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) {
+        for (const D3D_FEATURE_LEVEL level :
+             {D3D_FEATURE_LEVEL_12_1, D3D_FEATURE_LEVEL_12_0, D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0}) {
+          if (SUCCEEDED(D3D12CreateDevice(adapter, level, __uuidof(ID3D12Device), reinterpret_cast<void**>(&device)))) {
+            ok = true;
+            break;
+          }
+        }
+      }
       if (ok) {
         for (const wchar_t* p = desc.Description; *p; ++p) adapter_name += *p < 128 ? char(*p) : '?';
       }

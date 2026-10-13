@@ -78,10 +78,19 @@ float DefaultUpscaleRatio(UpscaleQuality q) {
   return 1.0f;
 }
 
+char DlssPresetFor(char preset, UpscaleQuality quality) {
+  if (preset != kDlssPresetLatest) return preset;
+  return quality == UpscaleQuality::kUltraPerformance ? 'L' : 'M';
+}
+
 bool ParseDlssPreset(const std::string& text, char& out) {
   const std::string s = Lower(text);
   if (s.empty() || s == "default" || s == "0") {
     out = 0;
+    return true;
+  }
+  if (s == "latest") {
+    out = kDlssPresetLatest;
     return true;
   }
   if (s.size() == 1 && s[0] >= 'a' && s[0] <= 'z') {
@@ -102,7 +111,7 @@ std::string DescribeUpscaleConfig(const UpscaleConfig& c) {
   std::snprintf(buf, sizeof(buf), "%s, %s, at %s%s%s, sharpness %s, mip bias %s, reactive %.2f, debug %u",
                 UpscalerKindName(c.kind), UpscaleQualityName(c.quality),
                 c.point == UpscalePoint::kPost ? "the post effects" : "Present",
-                c.dlss_preset ? ", DLSS preset " : "", c.dlss_preset ? std::string(1, c.dlss_preset).c_str() : "",
+                c.dlss_preset ? ", DLSS preset " : "", c.dlss_preset == kDlssPresetLatest ? "latest" : c.dlss_preset ? std::string(1, c.dlss_preset).c_str() : "",
                 c.sharpness >= 0.0f ? std::to_string(c.sharpness).c_str() : "off",
                 c.mip_bias_auto ? "auto" : std::to_string(c.mip_bias).c_str(), c.reactive, c.debug);
   return buf;

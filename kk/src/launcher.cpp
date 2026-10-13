@@ -267,7 +267,8 @@ struct Option {
 // Display > Upscaling beside FSR 1 and NIS: only with the native renderer, and only those this PC's
 // graphics card runs with the graphics API the game uses (asked once, in the background:
 // nr::kk::QueryUpscalers). DLSS is named in text only: no NVIDIA logos or artwork (their use needs
-// NVIDIA's approval). No frame generation. Off by default; the Original look keeps them off.
+// NVIDIA's approval). No frame generation. The default is the best one the card runs (settings.h,
+// ApplyUpscalerDefaults); the Original look keeps them off.
 struct TemporalUpscaler {
   const char* label;
   const char* value;  // native_upscaler
@@ -322,21 +323,23 @@ OfferedUpscalers OfferedTemporalUpscalers() {
 // Graphics presets set the upscaler, render quality, anti-aliasing, texture
 // filtering and ambient occlusion (motion blur and fog are left to taste).
 // The preset shown is the one the settings match; anything else is Custom.
-// Medium is the default settings (FSR 1 at Quality).
+// Medium is the default settings (the default upscaler at Quality).
 struct GraphicsPreset {
   const char* label;
-  const char* upscaler;   // present_effect ("auto": this graphics card's, DefaultUpscaler)
-  const char* quality;    // kk_render_quality
+  const char* temporal;   // native_upscaler_quality, with the default upscaler a temporal one (Quality: the
+                          // user's default, Performance for Low); the upscaler itself is always the default
+                          // one (settings.h, ApplyUpscalerDefaults: DLSS, FSR 4, FSR 3.1, XeSS or FSR 1)
+  const char* quality;    // kk_render_quality (with FSR 1)
   const char* aa;         // swap_post_effect
   const char* filtering;  // anisotropic_override: 2 = 2x, 3 = 4x, 4 = 8x, 5 = 16x
   bool ao;                // ao_mode 1 at strength 1
 };
 constexpr GraphicsPreset kGraphicsPresets[] = {
-    {"Low", "auto", "performance", "fxaa", "2", false},
-    {"Medium", "auto", "quality", "fxaa", "3", false},
-    {"High", "auto", "native", "fxaa", "4", true},
-    {"Ultra", "auto", "native", "fxaa", "5", true},
-    {"Steam Deck", "auto", "native", "fxaa", "2", false},
+    {"Low", "performance", "performance", "fxaa", "2", false},
+    {"Medium", "quality", "quality", "fxaa", "3", false},
+    {"High", "quality", "native", "fxaa", "4", true},
+    {"Ultra", "quality", "native", "fxaa", "5", true},
+    {"Steam Deck", "quality", "native", "fxaa", "2", false},
 };
 constexpr int kGraphicsPresetCount = int(std::size(kGraphicsPresets));
 
@@ -350,8 +353,29 @@ int UpscalerMode() {
   return -1;
 }
 
-std::string PresetUpscaler(const GraphicsPreset& p) {
-  return std::string_view(p.upscaler) == "auto" ? DefaultUpscaler() : p.upscaler;
+// Whether the game's Vulkan device, made for the temporal upscaler `before`, lacks what `after` needs
+// (native-renderer/plugin/native_graphics_system.cpp, PrepareVulkanForUpscalers).
+bool UpscalerNeedsNewDevice(const std::string& before, const std::string& after) {
+  auto needs = [](const std::string& v, bool vendor_dlss, bool vendor_xess) {
+    return std::pair{v == "dlss" || (v == "auto" && vendor_dlss), v == "xess" || (v == "auto" && vendor_xess)};
+  };
+  const GpuVendor vendor = DetectGpu().vendor;
+  const auto has = needs(before, vendor == GpuVendor::kNvidia, vendor == GpuVendor::kIntel);
+  const auto want = needs(after, false, false);
+  return (want.first && !has.first) || (want.second && !has.second);
+}
+
+// A setting at its default (a missing one counts as at its default).
+bool AtDefault(const char* name) {
+  const auto* flag = FindFlag(name);
+  return !flag || Get(name) == flag->default_value;
+}
+
+// The preset's upscaler: the default one (present_effect and native_upscaler at their defaults), and with a
+// temporal one, the preset's mode.
+bool PresetUpscalerMatches(const GraphicsPreset& p) {
+  if (!AtDefault("present_effect") || !AtDefault("native_upscaler")) return false;
+  return CurrentTemporalUpscaler().empty() || Get("native_upscaler_quality") == p.temporal;
 }
 
 // The AO strength the presets, Remastered and a new install use: Strong (3) for the native renderer's GTAO
@@ -362,8 +386,7 @@ int MatchGraphicsPreset() {
   for (int i = 0; i < kGraphicsPresetCount; ++i) {
     const GraphicsPreset& p = kGraphicsPresets[i];
     const bool ao = GetInt("ao_mode", 0) != 0;
-    if (Get("present_effect") == PresetUpscaler(p) && CurrentTemporalUpscaler().empty() &&
-        Get("kk_render_quality") == p.quality &&
+    if (PresetUpscalerMatches(p) && Get("kk_render_quality") == p.quality &&
         Get("swap_post_effect") == p.aa && Get("anisotropic_override") == p.filtering && ao == p.ao &&
         (!ao || GetInt("ao_strength", 1) == DefaultAoStrength()))
       return i;
@@ -373,8 +396,12 @@ int MatchGraphicsPreset() {
 
 void ApplyGraphicsPreset(int index) {
   const GraphicsPreset& p = kGraphicsPresets[index];
-  Set("present_effect", PresetUpscaler(p));
-  SetTemporalUpscaler("off");  // the presets use FSR 1 or NIS
+  // The default upscaler (the best temporal one this PC runs, else FSR 1) and the preset's mode for it.
+  Reset("present_effect");
+  if (HasTemporalSetting()) {
+    Reset("native_upscaler");
+    Set("native_upscaler_quality", p.temporal);
+  }
   Set("kk_render_quality", p.quality);
   Set("swap_post_effect", p.aa);
   Set("anisotropic_override", p.filtering);
@@ -782,8 +809,9 @@ class SettingsPages {
           which + " Off uses plain smooth scaling.";
       if (any_temporal || !temporal.empty())
         desc += " DLSS, FSR 4, FSR 3.1 and XeSS rebuild a sharp picture from several frames and smooth jagged edges "
-                "too; only those your graphics card supports are listed. Choosing one of them restarts the game "
-                "when you press Play.";
+                "too; only those your graphics card supports are listed. The default is the best one it runs: DLSS "
+                "on NVIDIA cards, FSR 4 or FSR 3.1 on AMD cards, XeSS on Intel cards, FSR 3.1 on others, and FSR 1 "
+                "where none of them runs. Choosing one of them restarts the game when you press Play.";
       it.description = desc;
       it.index = -1;
       const std::string present = Get("present_effect");
@@ -813,9 +841,17 @@ class SettingsPages {
         Reset("present_effect");
         if (HasTemporalSetting()) Reset("native_upscaler");
       };
-      if (const auto* flag = FindFlag("present_effect"))
-        for (const Choice& c : choices)
-          if (c.temporal == "off" && c.present == flag->default_value) it.default_text = c.label;
+      {
+        // The default: the best temporal upscaler this PC runs, else FSR 1 (settings.h, ApplyUpscalerDefaults).
+        const auto* tflag = FindFlag("native_upscaler");
+        const std::string tdefault = tflag && UsingNativeRenderer() ? tflag->default_value : std::string("off");
+        const auto* pflag = FindFlag("present_effect");
+        for (const Choice& c : choices) {
+          if (tdefault != "off" ? c.temporal == tdefault
+                                : c.temporal == "off" && pflag && c.present == pflag->default_value)
+            it.default_text = c.label;
+        }
+      }
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
     if (!temporal.empty()) {
@@ -1695,6 +1731,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     home_focus_ = 0;
     EnforceOriginalLook();
     // Which temporal upscalers this PC runs (Display > Upscaling): asked now, in the background.
+    ApplyRendererChoice();      // the renderer decided, the default upscaler follows it
     OfferedTemporalUpscalers();
     LoadArt();
     // Installed before the launcher took its art from the game files: take it now.
@@ -4595,8 +4632,12 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     bool needs_restart = false;
     for (size_t i = 0; i < std::size(kRestartCvars); ++i) {
       if (Get(kRestartCvars[i]) == restart_baseline_[i]) continue;
-      // A temporal upscaler switched off needs no new device (only one switched on needs its extensions).
-      if (std::string_view(kRestartCvars[i]) == "native_upscaler" && Get("native_upscaler") == "off") continue;
+      // native_upscaler: only an upscaler whose Vulkan extensions the device was not made with needs a new
+      // device (DLSS's or XeSS's; FSR needs none, and "auto", the plugin's own default before the settings
+      // are applied, asks for the card's vendor's).
+      if (std::string_view(kRestartCvars[i]) == "native_upscaler" &&
+          !UpscalerNeedsNewDevice(restart_baseline_[i], Get("native_upscaler")))
+        continue;
       needs_restart = true;
     }
     auto action = needs_restart ? cb_.restart_and_play : cb_.play;
@@ -4631,6 +4672,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       OpenWhatsNew();
     }
     TickNativeShaders();
+    TickUpscalerQuery();
     if (waiting_for_pack_ && !pack_.busy) {
       waiting_for_pack_ = false;
       modal_.open = false;
@@ -4648,6 +4690,27 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       if (SaveSettings(paths_.config_path)) saved_time_ = now;
       saved_changes_ = seen_changes_;
     }
+  }
+
+  // The temporal upscalers this PC runs (asked when the launcher opened): once the answer is in, it is
+  // kept in the settings (kk_upscalers_offered) and the default upscaler follows it (SetOfferedUpscalers).
+  void TickUpscalerQuery() {
+#if defined(KK_NATIVE_RENDERER)
+    if (upscaler_answer_taken_ || !HasTemporalSetting() || !UsingNativeRenderer()) return;
+    const nr::kk::UpscalerChoices c = nr::kk::QueryUpscalers();
+    if (c.state != 2 && c.state != 3) return;  // still asking, or not possible here
+    upscaler_answer_taken_ = true;
+    std::string offered;
+    for (const auto& [on, name] : {std::pair{c.dlss, "dlss"}, std::pair{c.fsr4, "fsr4"}, std::pair{c.fsr3, "fsr3"},
+                                   std::pair{c.xess, "xess"}})
+      if (on) offered += (offered.empty() ? "" : ",") + std::string(name);
+    if (offered.empty()) offered = "none";
+    const std::string before = Get("native_upscaler");
+    SetOfferedUpscalers(offered);
+    if (Get("native_upscaler") != before)
+      REXLOG_INFO("KK: default upscaler now {} (was {})", Get("native_upscaler"), before);
+    ++g_changes;  // kk_upscalers_offered is saved with the settings
+#endif
   }
 
   // The native renderer's shaders: the end of the setup step, and Play waiting for them (the
@@ -4832,6 +4895,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   std::string new_name_, name_before_;  // New game's name ("" the game's own)
   bool editing_name_ = false;
   bool online_asked_ = false;  // MaybeAskOnline has looked this session
+  bool upscaler_answer_taken_ = false;  // TickUpscalerQuery has the plugin's answer
   bool menu_value_ = false;    // the menu's focused entry has a value (Left and Right change it)
   int side_focus_ = -1;      // the side panel (Home, setup) with the focus, or -1
   bool status_focus_ = false;   // Home: the shaders' status has the focus (Recompile shaders)
@@ -5029,6 +5093,9 @@ std::string ApplyRendererChoice() {
   // GTAO's default strength is Strong; the Classic renderer's AO keeps Light (DefaultAoStrength). A strength
   // the player chose stays (SetCvarDefault only changes values still at their default).
   SetCvarDefault("ao_strength", native ? "3" : "1");
+  // The default upscaler follows the renderer: the best temporal one with the native renderer, FSR 1 with
+  // the Classic renderer (settings.h, ApplyUpscalerDefaults).
+  ApplyUpscalerDefaults();
   return rex::cvar::GetFlagByName("gpu_plugin");
 }
 
