@@ -53,6 +53,7 @@ void InstallFpeGuard();  // fpe_guard.cpp
 #include "play_internal.h"
 #include "settings.h"
 #include "toast.h"
+#include "startup_recovery.h"
 #if defined(KK_NATIVE_RENDERER)
 #include "hooks/kk_native_ui.h"  // the native renderer's launcher prewarm
 #endif
@@ -63,9 +64,12 @@ class KingKongApp : public rex::ReXApp {
 
   static std::unique_ptr<rex::ui::WindowedApp> Create(
       rex::ui::WindowedAppContext& ctx) {
+    kk::startup::MonitorStartup();
     return std::unique_ptr<KingKongApp>(new KingKongApp(ctx, "king_kong",
         PPCImageConfig));
   }
+
+  ~KingKongApp() override { kk::startup::CleanExit(); }
 
  protected:
   void OnConfigurePaths(rex::PathConfig& paths) override {
@@ -100,6 +104,7 @@ class KingKongApp : public rex::ReXApp {
     config_path_ = defaults.config_path;
     kk::MigrateSettings(defaults.config_path);
     kk::ApplyFixedSettings();
+    kk::startup::Configure(defaults.user_data_root);
     // The launcher's Play menu: the saves live under the user data, a start request may be given
     // (--kk_start), and the game goes back to the launcher by restarting (play_session.cpp).
     kk::play::SetUserDir(defaults.user_data_root);
@@ -190,6 +195,10 @@ class KingKongApp : public rex::ReXApp {
     // The renderer: kk_renderer (Graphics > Renderer) unless gpu_plugin was given (launcher.h).
     if (!config.graphics) config.gpu_plugin = kk::ApplyRendererChoice();
     if (!config.graphics && config.gpu_plugin.empty()) config.gpu_plugin = "xenos";
+    if (!config.graphics) {
+      config.gpu_plugin = kk::startup::ApplyChoice(config.gpu_plugin);
+      kk::startup::Begin(config.gpu_plugin);
+    }
     REXLOG_INFO("KK: renderer {} (kk_renderer {})", config.gpu_plugin, rex::cvar::GetFlagByName("kk_renderer"));
     if (!config.audio_factory)
       config.audio_factory = REX_AUDIO_BACKEND(rex::audio::sdl::SDLAudioSystem);

@@ -13,6 +13,7 @@ include(generated/rexglue.cmake)
 # Sources
 set(KINGKONG_SOURCES
     src/main.cpp
+    src/startup_recovery.cpp
     src/fpe_guard.cpp
     src/frame_stats.cpp
     src/sampler.cpp
@@ -98,6 +99,9 @@ if(KK_NATIVE_RENDERER)
     # plugin/CMakeLists.txt copies rexgpu-native beside this target after each plugin build.
     set(NR_PLUGIN_COPY_BESIDE king_kong)
     add_subdirectory(../native-renderer native-renderer)
+    if(KK_DEV_TOOLS)
+        target_compile_definitions(rexgpu-native PRIVATE KK_DEV_TOOLS=1)
+    endif()
     target_sources(king_kong PRIVATE ../native-renderer/hooks/kk_native_hooks.cpp
                                      ../native-renderer/hooks/kk_native_ui.cpp)
     target_link_libraries(king_kong PRIVATE nr_hooks)

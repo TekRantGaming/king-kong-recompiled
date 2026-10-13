@@ -1,4 +1,5 @@
 #include "launcher.h"
+#include "startup_recovery.h"
 #include "ingame_settings.h"
 #include "pause_menu.h"
 #include "play_session.h"
@@ -1914,6 +1915,20 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
     ui::DrawModal(dl, modal_, o_, ImVec2(o_.x + w_, o_.y + h_), m_, input_);
     DrawBottomBar(dl);  // over a pop-up's shade: its prompts stay clear
+    const std::string recovery = startup::Message();
+    if (!recovery_shown_ && !recovery.empty()) {
+      recovery_shown_ = true;
+      ImGui::OpenPopup("Renderer startup recovery");
+    }
+    ImGui::SetNextWindowSize(ImVec2(560 * s, 0), ImGuiCond_Appearing);
+    if (ImGui::BeginPopupModal("Renderer startup recovery", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+      ImGui::TextWrapped("%s", recovery.c_str());
+      ImGui::Spacing();
+      if (ImGui::Button("Continue with safe renderer")) ImGui::CloseCurrentPopup();
+      ImGui::SameLine();
+      if (ImGui::Button("Try native again") && startup::TryNativeAgain()) ImGui::CloseCurrentPopup();
+      ImGui::EndPopup();
+    }
     ImGui::End();
     (void)io;
   }
@@ -4942,6 +4957,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   ImVec2 o_{0, 0};
   float w_ = 1280, h_ = 720;
   Page page_ = kHome;
+  bool recovery_shown_ = false;
   std::map<int, ui::ListState> lists_;
   std::vector<Item> focused_items_;
   const Item* focused_ = nullptr;
@@ -5158,7 +5174,7 @@ std::string ApplyRendererChoice() {
   // The default upscaler follows the renderer: the best temporal one with the native renderer, FSR 1 with
   // the Classic renderer (settings.h, ApplyUpscalerDefaults).
   ApplyUpscalerDefaults();
-  return rex::cvar::GetFlagByName("gpu_plugin");
+  return startup::ApplyChoice(rex::cvar::GetFlagByName("gpu_plugin"));
 }
 
 void ShowLauncher(rex::ui::ImGuiDrawer* drawer, rex::ui::ImmediateDrawer* immediate, LauncherPaths paths,
