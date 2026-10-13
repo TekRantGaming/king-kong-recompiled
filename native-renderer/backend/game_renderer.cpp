@@ -12,6 +12,7 @@
 #include "backend/pipeline_workers.h"
 #include "backend/renderer.h"
 #include "backend/shaders.h"
+#include "backend/fallback_resources.h"
 #include "kknr/buffers.h"
 #include "kknr/nvrhi_format.h"
 
@@ -397,6 +398,13 @@ void GameRenderer::UploadDummies(nvrhi::ICommandList* cl) {
 }
 
 // ---------------------------------------------------------------- tables
+
+void GameRenderer::EnsureFallbackResources(nvrhi::ICommandList* cl) {
+  if (dummies_uploaded_) return;
+  UploadFallbackResources(cl, dummy_2d_.Get(), dummy_3d_.Get(), dummy_cube_.Get(),
+                          dummy_array_.Get(), dummy_buffer_.Get(), gamma_ramp_.Get());
+  dummies_uploaded_ = true;
+}
 
 uint32_t GameRenderer::AllocateSlot(Table table) {
   DescriptorTable& t = tables_[table];
@@ -1161,6 +1169,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     return;
   }
   ProcessInvalidations();
+  EnsureFallbackResources(cl);
 
   std::shared_ptr<const GameShader> vs = shaders_->Get(kkshaders::ShaderKind::Vertex, call.vertex_shader);
   std::shared_ptr<const GameShader> ps;

@@ -586,6 +586,7 @@ class GameRenderer {
   nvrhi::SamplerHandle dummy_sampler_;
   nvrhi::BufferHandle dummy_buffer_;
   bool dummies_uploaded_ = false;
+  void EnsureFallbackResources(nvrhi::ICommandList* cl);
 
   std::unordered_map<uint64_t, std::unique_ptr<HostTarget>> targets_;
   std::unordered_map<uint64_t, nvrhi::FramebufferHandle> framebuffers_;

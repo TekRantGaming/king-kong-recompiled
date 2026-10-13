@@ -6,6 +6,7 @@
 #include <mutex>
 #include <utility>
 
+#include <d3d12sdklayers.h>
 #include <nvrhi/d3d12.h>
 #include <nvrhi/validation.h>
 #include <rex/cvar.h>
@@ -16,6 +17,7 @@
 #include "backend/host_device.h"
 #include "backend/cpu_profile.h"
 #include "backend/dev_gpu_stats.h"
+#include "backend/d3d12_requirements.h"
 
 REXCVAR_DECLARE(bool, native_validation);
 REXCVAR_DECLARE(int32_t, native_debug);
@@ -28,7 +30,41 @@ class D3D12Host final : public HostDevice {
  public:
   explicit D3D12Host(rex::ui::d3d12::D3D12Provider& provider) : provider_(provider) {}
 
+  ~D3D12Host() override {
+    if (debug_queue_) {
+      debug_queue_->UnregisterMessageCallback(debug_cookie_);
+      debug_queue_->Release();
+    }
+  }
+
   bool Initialize() {
+    const auto requirements = CheckD3D12Requirements(
+        [this](D3D12_FEATURE feature, void* data, UINT size) {
+          return provider_.GetDevice()->CheckFeatureSupport(feature, data, size);
+        },
+        [](const char* missing) { REXGPU_ERROR("rexgpu-native: D3D12 requirement missing: {}", missing); });
+    REXLOG_INFO("rexgpu-native: D3D12 requirements: resource binding tier {}, shader model {}.{}, "
+                "required formats {}/{}: {}", requirements.binding_tier,
+                requirements.shader_model >> 4, requirements.shader_model & 15,
+                requirements.formats_supported, requirements.formats_checked,
+                requirements.supported ? "supported" : "unsupported");
+    if (!requirements.supported) {
+      REXGPU_ERROR("rexgpu-native: native D3D12 unavailable; choose Vulkan in Graphics > Advanced > "
+                   "Graphics API, or use the Xenos renderer (--gpu_plugin=xenos)");
+      return false;
+    }
+    if (REXCVAR_GET(native_validation) &&
+        SUCCEEDED(provider_.GetDevice()->QueryInterface(IID_PPV_ARGS(&debug_queue_)))) {
+      if (FAILED(debug_queue_->RegisterMessageCallback(DebugMessage, D3D12_MESSAGE_CALLBACK_FLAG_NONE,
+                                                       nullptr, &debug_cookie_))) {
+        REXGPU_WARN("rexgpu-native: D3D12 debug callback unavailable; NVRHI validation remains enabled");
+        debug_queue_->Release();
+        debug_queue_ = nullptr;
+      }
+    } else if (REXCVAR_GET(native_validation)) {
+      REXGPU_WARN("rexgpu-native: D3D12 info queue unavailable; enable the SDK D3D12 debug layer "
+                  "(--d3d12_debug=true); NVRHI validation remains enabled");
+    }
     nvrhi::d3d12::DeviceDesc desc;
     if (REXCVAR_GET(native_debug) & 524288) desc.maxTimerQueries = 2048;
     desc.errorCB = GetMessageCallback();
@@ -92,7 +128,10 @@ class D3D12Host final : public HostDevice {
     return times_;
   }
 
-  void WaitForIdle() override { device_->waitForIdle(); }
+  void WaitForIdle() override {
+    std::lock_guard lock(execute_mutex_);
+    device_->waitForIdle();
+  }
 
   bool CopyToGuestOutput(rex::ui::Presenter::GuestOutputRefreshContext& context,
                          nvrhi::ICommandList* command_list, nvrhi::ITexture* source,
@@ -121,6 +160,14 @@ class D3D12Host final : public HostDevice {
   }
 
  private:
+  static void CALLBACK DebugMessage(D3D12_MESSAGE_CATEGORY, D3D12_MESSAGE_SEVERITY severity,
+                                   D3D12_MESSAGE_ID id, LPCSTR description, void*) {
+    if (severity <= D3D12_MESSAGE_SEVERITY_ERROR)
+      REXGPU_ERROR("D3D12 validation {}: {}", uint32_t(id), description);
+    else if (severity == D3D12_MESSAGE_SEVERITY_WARNING)
+      REXLOG_WARN("D3D12 validation {}: {}", uint32_t(id), description);
+  }
+
   struct Wrapped {
     ID3D12Resource* resource = nullptr;
     uint32_t width = 0;
@@ -172,6 +219,8 @@ class D3D12Host final : public HostDevice {
   rex::ui::d3d12::D3D12Provider& provider_;
   mutable std::mutex execute_mutex_;
   SubmitTimes times_;
+  ID3D12InfoQueue1* debug_queue_ = nullptr;
+  DWORD debug_cookie_ = 0;
   nvrhi::DeviceHandle device_;
   std::array<Wrapped, 4> wrapped_;
   size_t next_slot_ = 0;
