@@ -1,4 +1,4 @@
-﻿// NVRHI on the SDK's D3D12Provider device and direct queue, and the hand-over
+// NVRHI on the SDK's D3D12Provider device and direct queue, and the hand-over
 // of a frame to the D3D12Presenter's guest output resource.
 
 #include <array>
@@ -90,7 +90,10 @@ class D3D12Host final : public HostDevice {
     return times_;
   }
 
-  void WaitForIdle() override { device_->waitForIdle(); }
+  void WaitForIdle() override {
+    std::lock_guard lock(execute_mutex_);
+    device_->waitForIdle();
+  }
 
   bool CopyToGuestOutput(rex::ui::Presenter::GuestOutputRefreshContext& context,
                          nvrhi::ICommandList* command_list, nvrhi::ITexture* source,
