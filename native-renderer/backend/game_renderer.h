@@ -468,6 +468,7 @@ class GameRenderer {
   // QueuePrewarm, or into deferred_ when its shaders are not there yet; a record of another kind of
   // run is left out (cache_mutex_ held).
   void QueueOrDefer(const PipelineRecord& record);
+  void QueueRecordVariants(const PipelineRecord& record);
   // PipelineRecord::flags for this renderer's draws.
   uint32_t RecordFlags() const;
   void RetryDeferred();
@@ -666,6 +667,8 @@ class GameRenderer {
                    nvrhi::ITexture* source0, nvrhi::ITexture* source1, nvrhi::ITexture* color0,
                    nvrhi::ITexture* color1, nvrhi::ITexture* depth, const nvrhi::Rect& rect, uint64_t key,
                    nvrhi::ColorMask mask = nvrhi::ColorMask::All);
+  nvrhi::IGraphicsPipeline* UpscalePipeline(nvrhi::IShader* ps, const nvrhi::FramebufferInfo& info,
+                                          nvrhi::ColorMask mask);
   void UpscaleMotionPass(nvrhi::ICommandList* cl, HostTarget* depth_target);
   void UpscaleLogStats();
   std::function<void(uint32_t, uint32_t)> watch_;
@@ -712,6 +715,13 @@ class GameRenderer {
   void NoteFrameWait(double ms);
   bool frame_waited_ = false;
   double frame_stutter_wait_ms_ = 0;
+  uint64_t deferred_motion_count_ = 0;
+  // Opt-in task diagnostics, written only when KK_DEV_DLSS_LOG names a file.
+  FILE* frame_trace_ = nullptr;
+  bool frame_trace_checked_ = false;
+  std::chrono::steady_clock::time_point frame_trace_last_{};
+  double frame_motion_ms_ = 0, frame_sdk_ms_ = 0, frame_target_ms_last_ = 0;
+  uint64_t frame_resource_creations_ = 0;
   uint64_t frame_skips_ = 0;
   mutable std::mutex stutter_mutex_;
   StutterStats stutter_;

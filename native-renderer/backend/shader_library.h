@@ -67,6 +67,7 @@ class ShaderLibrary {
   // Pixel shaders are translated render scale aware (the scaled variants of a pack). Set before
   // any shader is created.
   void SetRenderScaleAware(bool aware) { scale_aware_ = aware; }
+  void SetMotionPrewarm(bool enabled) { motion_prewarm_ = enabled; }
   // Ambient-only AO (docs/ao.md): pixel shaders on this list are translated with their ambient term
   // multiplied by the occlusion (they are not in the pack: DXC compiles them). Set before any shader
   // is created; null: none.
@@ -79,6 +80,9 @@ class ShaderLibrary {
   // (a shader that DXC would translate waits for the game to create it). For the pipeline
   // prewarm, which knows shaders only by hash.
   std::shared_ptr<const GameShader> GetByHash(kkshaders::ShaderKind kind, uint64_t ucode_hash, uint64_t input_hash);
+  // A list's exact translation, adapted to this run after its container was registered.
+  std::shared_ptr<const GameShader> GetForPrewarm(kkshaders::ShaderKind kind, uint64_t ucode_hash,
+                                               uint64_t input_hash, bool exact_kind);
   // Number of shader objects registered so far (changes when the game creates one).
   uint64_t created_count() const;
   // The shader for a bound object (null when it cannot be made).
@@ -115,6 +119,7 @@ class ShaderLibrary {
   std::unique_ptr<kkshaders::Compiler> compiler_;
   bool dxc_ok_ = false;
   bool scale_aware_ = false;
+  bool motion_prewarm_ = false;
   std::shared_ptr<const kkshaders::AmbientTable> ambient_;
   // The ambient-only term of a pixel shader, if it is on the list.
   void ApplyAmbient(kkshaders::ShaderInfo& info) const {
@@ -128,6 +133,7 @@ class ShaderLibrary {
   std::unordered_map<uint32_t, std::shared_ptr<GameShader>> by_object_;
   // (microcode hash, kind) -> shader: one host shader per distinct microcode.
   std::unordered_map<uint64_t, std::shared_ptr<GameShader>> by_hash_;
+  std::unordered_map<uint64_t, uint64_t> prewarm_inputs_;
   std::unordered_map<uint64_t, bool> failed_;
   uint32_t next_id_ = 1;
   Stats stats_;

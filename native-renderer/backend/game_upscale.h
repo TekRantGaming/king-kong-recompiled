@@ -18,6 +18,7 @@
 #include "backend/upscale_jitter.h"
 #include "backend/upscale_motion.h"
 #include "backend/upscaler.h"
+#include "backend/pipeline_cache.h"
 #include "kknr/guest_texture.h"
 #include "kkshaders/abi.h"
 
@@ -60,8 +61,7 @@ struct GameUpscale {
     VsConstants constants{};
     int wvp_register = -1;
     kkshaders::DrawConstants dc{};
-    uint32_t topology = 0, mode_control = 0, clip_control = 0, poly_scale = 0, poly_offset = 0;
-    bool flip_front = false;
+    PipelineRecord pipeline;
     bool indexed = false;
     // Its vertex buffer is one the game rewrites and moves (streamed geometry, the V-Rex dinosaur):
     // matched by shader and size alone (native_upscaler_debug 1024: camera motion only, not replayed).
@@ -98,6 +98,7 @@ struct GameUpscale {
   std::unordered_map<uint64_t, nvrhi::FramebufferHandle> framebuffers;
   // --native_upscaler_gpu_time: everything at the upscale point, and the upscaler's own work.
   std::unique_ptr<AoGpuTimer> timer, sdk_timer;
+  std::unique_ptr<AoGpuTimer> motion_timer;
   // Debugging (native_upscaler_debug 512): the motion texture read back now and then.
   nvrhi::StagingTextureHandle probe;
   uint64_t probe_frame = 0;

@@ -209,9 +209,32 @@ bool GameRenderer::UpscaleInitialize() {
   sd.setAllFilters(true).setAllAddressModes(nvrhi::SamplerAddressMode::Clamp);
   u.linear_clamp = device_->createSampler(sd);
   if (!u.motion_set || !u.linear_clamp) return false;
+  // These formats are independent of resolution and SDK choice. Compile the same
+  // descriptions UpscalePass uses before any frame reaches an upscale point.
+  nvrhi::FramebufferInfo info;
+  info.colorFormats = {nvrhi::Format::RG16_FLOAT, nvrhi::Format::R32_FLOAT};
+  if (!UpscalePipeline(u.camera_ps, info, nvrhi::ColorMask::All)) return false;
+  info.colorFormats = {nvrhi::Format::R8_UNORM};
+  if (!UpscalePipeline(u.reactive_ps, info, nvrhi::ColorMask::All)) return false;
+  info.colorFormats = {};
+  info.depthFormat = nvrhi::Format::D32S8;
+  if (!UpscalePipeline(u.depth_ps, info, nvrhi::ColorMask::All)) return false;
+  info.depthFormat = nvrhi::Format::UNKNOWN;
+  for (uint32_t f = 0; f < 16; ++f) {
+    const auto format = ColorTargetFormat(f);
+    if (format == nvrhi::Format::UNKNOWN) continue;
+    info.colorFormats = {format};
+    if (!UpscalePipeline(u.stretch_ps, info, nvrhi::ColorMask::All) ||
+        !UpscalePipeline(u.stretch_ps, info, nvrhi::ColorMask::Alpha) ||
+        !UpscalePipeline(u.show_motion_ps, info, nvrhi::ColorMask::All)) return false;
+  }
   if (u.config.gpu_time) {
     u.timer = std::make_unique<AoGpuTimer>(device_, "everything at the upscale point", "upscaler GPU time");
     u.sdk_timer = std::make_unique<AoGpuTimer>(device_, u.name.c_str(), "upscaler GPU time");
+    u.motion_timer = std::make_unique<AoGpuTimer>(device_, "motion replay", "upscaler GPU time");
+    u.timer->EnableTrace(".upscale-gpu.csv");
+    u.sdk_timer->EnableTrace(".sdk-gpu.csv");
+    u.motion_timer->EnableTrace(".motion-gpu.csv");
   }
   return true;
 }
@@ -392,12 +415,15 @@ void GameRenderer::UpscaleRecordMotion(const DrawCall& call, const dev::DeviceVi
   float rows[16];
   m.wvp_register = FindAoPerspectiveRegister(d.at(dev::kVsConstants), rows);
   m.dc = dc;
-  m.topology = record.topology;
-  m.mode_control = record.mode_control;
-  m.clip_control = record.clip_control;
-  m.poly_scale = record.poly_scale;
-  m.poly_offset = record.poly_offset;
-  m.flip_front = (record.flags & kRecordFlipFrontFace) != 0;
+  m.pipeline = MotionPipelineRecord(record, uint32_t(nvrhi::Format::RG16_FLOAT));
+  NoteRecord(m.pipeline, PipelineKey(m.pipeline));
+  // Ask before this draw can be matched with a previous frame. Pipelines from a shipped list
+  // are queued earlier still, when the game creates their vertex shader containers.
+  shaders_->MotionVariant(*vs);
+  {
+    std::lock_guard lock(cache_mutex_);
+    QueueOrDefer(m.pipeline);
+  }
   m.indexed = indexed;
   m.index = gs.indexBuffer;
   m.args = args;
@@ -469,6 +495,7 @@ void GameRenderer::UpscaleBeginPresent(nvrhi::ICommandList* cl) {
   }
   if (u.timer) u.timer->FrameEnd();
   if (u.sdk_timer) u.sdk_timer->FrameEnd();
+  if (u.motion_timer) u.motion_timer->FrameEnd();
 }
 
 void GameRenderer::UpscaleEndFrame() {
@@ -508,7 +535,7 @@ void GameRenderer::UpscaleLogStats() {
 
 bool GameRenderer::UpscalePass(nvrhi::ICommandList* cl, nvrhi::IShader* ps, const void* params, uint32_t params_size,
                                nvrhi::ITexture* source0, nvrhi::ITexture* source1, nvrhi::ITexture* color0,
-                               nvrhi::ITexture* color1, nvrhi::ITexture* depth, const nvrhi::Rect& rect, uint64_t key,
+                               nvrhi::ITexture* color1, nvrhi::ITexture* depth, const nvrhi::Rect& rect, uint64_t /*key*/,
                                nvrhi::ColorMask mask) {
   GameUpscale& u = *upscale_;
   if (rect.maxX <= rect.minX || rect.maxY <= rect.minY) return false;
@@ -528,24 +555,7 @@ bool GameRenderer::UpscalePass(nvrhi::ICommandList* cl, nvrhi::IShader* ps, cons
     u.framebuffers[fb_key] = h;
     fb = h;
   }
-  nvrhi::GraphicsPipelineDesc pd;
-  pd.primType = nvrhi::PrimitiveType::TriangleList;
-  pd.VS = u.vs_fullscreen;
-  pd.PS = ps;
-  pd.bindingLayouts = {u.pass_layout};
-  pd.renderState.depthStencilState.depthTestEnable = depth != nullptr;
-  pd.renderState.depthStencilState.depthWriteEnable = depth != nullptr;
-  pd.renderState.depthStencilState.depthFunc = nvrhi::ComparisonFunc::Always;
-  pd.renderState.depthStencilState.stencilEnable = false;
-  pd.renderState.rasterState.cullMode = nvrhi::RasterCullMode::None;
-  pd.renderState.rasterState.scissorEnable = true;
-  pd.renderState.rasterState.depthClipEnable = false;
-  for (auto& target : pd.renderState.blendState.targets) target.colorWriteMask = mask;
-  // The pass's pipeline: its pixel shader and the attachments' formats.
-  uint64_t pipe_key = Mix64(Mix64(Mix64(0x0BCA1E00ull, key), reinterpret_cast<uintptr_t>(ps)), uint64_t(mask));
-  for (nvrhi::Format f : fb->getFramebufferInfo().colorFormats) pipe_key = Mix64(pipe_key, uint64_t(f) + 1);
-  pipe_key = Mix64(pipe_key, uint64_t(fb->getFramebufferInfo().depthFormat) + 0x100);
-  nvrhi::IGraphicsPipeline* pipeline = GetPipeline(pd, fb, pipe_key);
+  nvrhi::IGraphicsPipeline* pipeline = UpscalePipeline(ps, fb->getFramebufferInfo(), mask);
   if (!pipeline) return false;
   nvrhi::ITexture* s0 = source0 ? source0 : dummy_2d_.Get();
   nvrhi::ITexture* s1 = source1 ? source1 : dummy_2d_.Get();
@@ -578,6 +588,30 @@ bool GameRenderer::UpscalePass(nvrhi::ICommandList* cl, nvrhi::IShader* ps, cons
   args.vertexCount = 3;
   cl->draw(args);
   return true;
+}
+
+nvrhi::IGraphicsPipeline* GameRenderer::UpscalePipeline(nvrhi::IShader* ps,
+                                                       const nvrhi::FramebufferInfo& info,
+                                                       nvrhi::ColorMask mask) {
+  GameUpscale& u = *upscale_;
+  nvrhi::GraphicsPipelineDesc pd;
+  pd.primType = nvrhi::PrimitiveType::TriangleList;
+  pd.VS = u.vs_fullscreen;
+  pd.PS = ps;
+  pd.bindingLayouts = {u.pass_layout};
+  pd.renderState.depthStencilState.depthTestEnable = info.depthFormat != nvrhi::Format::UNKNOWN;
+  pd.renderState.depthStencilState.depthWriteEnable = info.depthFormat != nvrhi::Format::UNKNOWN;
+  pd.renderState.depthStencilState.depthFunc = nvrhi::ComparisonFunc::Always;
+  pd.renderState.depthStencilState.stencilEnable = false;
+  pd.renderState.rasterState.cullMode = nvrhi::RasterCullMode::None;
+  pd.renderState.rasterState.scissorEnable = true;
+  pd.renderState.rasterState.depthClipEnable = false;
+  for (auto& target : pd.renderState.blendState.targets) target.colorWriteMask = mask;
+  // The pass's pipeline: its pixel shader and the attachments' formats.
+  uint64_t pipe_key = Mix64(Mix64(0x0BCA1E00ull, reinterpret_cast<uintptr_t>(ps)), uint64_t(mask));
+  for (nvrhi::Format f : info.colorFormats) pipe_key = Mix64(pipe_key, uint64_t(f) + 1);
+  pipe_key = Mix64(pipe_key, uint64_t(info.depthFormat) + 0x100);
+  return GetPipeline(pd, info, pipe_key);
 }
 
 void GameRenderer::MigrateTarget(nvrhi::ICommandList* cl, HostTarget* target) {
@@ -636,21 +670,9 @@ void GameRenderer::UpscaleMotionPass(nvrhi::ICommandList* cl, HostTarget* depth_
       ++u.stats.motion_waiting;
       continue;
     }
-    PipelineRecord r;
-    r.vs_hash = m.vs->ucode_hash;
-    r.topology = m.topology;
-    r.color_count = 1;
-    r.color_format[0] = uint32_t(nvrhi::Format::RG16_FLOAT);
-    r.color_control[0] = 0x00010001;  // ONE, ZERO: no blending
-    r.color_mask[0] = 0x3;            // red and green
+    PipelineRecord r = m.pipeline;
     r.depth_format = uint32_t(depth_target->format);
-    r.depth_control = 2u | (2u << 4);  // z_enable, no write, EQUAL
-    r.mode_control = m.mode_control;
-    r.clip_control = m.clip_control;
-    r.poly_scale = m.poly_scale;
-    r.poly_offset = m.poly_offset;
-    r.flags = m.flip_front ? kRecordFlipFrontFace : 0;
-    const uint64_t key = Mix64(Mix64(PipelineKey(r), reinterpret_cast<uintptr_t>(mvs)), 0x4D4F54494F4Eull);
+    const uint64_t key = PipelineKey(r);
     nvrhi::IGraphicsPipeline* pipeline = nullptr;
     if (auto known = pipelines_.find(key); known != pipelines_.end()) {
       pipeline = known->second;
@@ -728,6 +750,7 @@ void GameRenderer::RunUpscale(nvrhi::ICommandList* cl, UpscaleFrameTracker::Trig
     d.keepInitialState = true;
     d.debugName = name;
     t = device_->createTexture(d);
+    ++frame_resource_creations_;
     u.framebuffers.clear();
     u.pass_sets.clear();
   };
@@ -760,6 +783,7 @@ void GameRenderer::RunUpscale(nvrhi::ICommandList* cl, UpscaleFrameTracker::Trig
     d.keepInitialState = true;
     d.debugName = "Upscaler output";
     u.output = device_->createTexture(d);
+    ++frame_resource_creations_;
     u.framebuffers.clear();
     u.pass_sets.clear();
   }
@@ -846,7 +870,13 @@ void GameRenderer::RunUpscale(nvrhi::ICommandList* cl, UpscaleFrameTracker::Trig
     p.p2[2] = camera ? 1.0f : 0.0f;
     UpscalePass(cl, u.camera_ps, &p, sizeof(p), depth->texture, nullptr, u.motion, u.depth, nullptr, input_rect, 1);
     // 2. Each object's own motion where it is what the depth shows.
-    if (!(u.config.debug & 4)) UpscaleMotionPass(cl, depth);
+    if (!(u.config.debug & 4)) {
+      const auto start = std::chrono::steady_clock::now();
+      if (u.motion_timer) u.motion_timer->Begin(cl);
+      UpscaleMotionPass(cl, depth);
+      if (u.motion_timer) u.motion_timer->End(cl);
+      frame_motion_ms_ += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    }
   } else {
     cl->clearTextureFloat(u.motion, nvrhi::AllSubresources, nvrhi::Color(0.0f));
     cl->clearTextureFloat(u.depth, nvrhi::AllSubresources, nvrhi::Color(1.0f));
@@ -884,7 +914,9 @@ void GameRenderer::RunUpscale(nvrhi::ICommandList* cl, UpscaleFrameTracker::Trig
     in.camera_far = u.camera_far;
     in.camera_fov_y = u.camera_fov_y;
     if (u.sdk_timer) u.sdk_timer->Begin(cl);
+    const auto sdk_start = std::chrono::steady_clock::now();
     done = u.upscaler->Evaluate(cl, in);
+    frame_sdk_ms_ += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - sdk_start).count();
     if (u.sdk_timer) u.sdk_timer->End(cl);
     if (!done && u.stats.failures++ < 10)
       Logf(LogLevel::kWarning, "rexgpu-native: upscaler %s failed this frame: a bilinear stretch instead", u.name.c_str());

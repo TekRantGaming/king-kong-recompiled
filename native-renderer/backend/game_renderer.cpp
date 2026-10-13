@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <cstdlib>
 
 #include "backend/guest_layout.h"
 #include "backend/log.h"
@@ -121,6 +122,7 @@ GameRenderer::GameRenderer(nvrhi::IDevice* device, const GuestMemory& memory,
 }
 
 GameRenderer::~GameRenderer() {
+  if (frame_trace_) std::fclose(frame_trace_);
   if (!pipeline_threads_.empty()) {
     {
       std::lock_guard lock(pipeline_mutex_);
@@ -193,6 +195,7 @@ bool GameRenderer::Initialize() {
   const nvrhi::GraphicsAPI api = device_->getGraphicsAPI();
   // Upscalers (game_upscale.cpp): the upscaler and its input scale first (scaled() depends on it).
   if (options_.upscale.enabled() && !UpscaleSetup()) upscale_.reset();
+  shaders_->SetMotionPrewarm(bool(upscale_));
 
   // Set 0: the three constant buffers at b0-b2 (binding = register on Vulkan).
   nvrhi::BindingLayoutDesc constants;
@@ -371,6 +374,7 @@ bool GameRenderer::Initialize() {
   if (upscale_ && !UpscaleInitialize()) {
     Logf(LogLevel::kWarning, "rexgpu-native: upscaler: the passes could not be made; no upscaler");
     upscale_.reset();
+    shaders_->SetMotionPrewarm(false);
   }
   return true;
 }
@@ -518,6 +522,27 @@ GameRenderer::StutterStats GameRenderer::stutter() const {
 }
 
 void GameRenderer::EndFrame() {
+  if (!frame_trace_checked_) {
+    frame_trace_checked_ = true;
+    if (const char* path = std::getenv("KK_DEV_DLSS_LOG"); path && *path) {
+      frame_trace_ = std::fopen(path, "w");
+      if (frame_trace_) std::fprintf(frame_trace_, "frame,wall_s,interval_ms,pipeline_wait_ms,motion_cpu_ms,sdk_cpu_ms,target_cpu_ms,resource_creations,skipped_draws\n");
+    }
+  }
+  if (frame_trace_) {
+    const auto now = std::chrono::steady_clock::now();
+    const double interval = frame_trace_last_ == std::chrono::steady_clock::time_point{} ? 0 :
+        std::chrono::duration<double, std::milli>(now - frame_trace_last_).count();
+    std::fprintf(frame_trace_, "%llu,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%llu,%llu\n",
+        static_cast<unsigned long long>(frame_), std::chrono::duration<double>(now.time_since_epoch()).count(),
+        interval, frame_stutter_wait_ms_, frame_motion_ms_, frame_sdk_ms_, stats_.target_ms - frame_target_ms_last_,
+        static_cast<unsigned long long>(frame_resource_creations_), static_cast<unsigned long long>(frame_skips_));
+    frame_trace_last_ = now;
+    if (frame_ % 300 == 0) std::fflush(frame_trace_);
+  }
+  frame_motion_ms_ = frame_sdk_ms_ = 0;
+  frame_resource_creations_ = 0;
+  frame_target_ms_last_ = stats_.target_ms;
   {
     std::lock_guard lock(stutter_mutex_);
     ++stutter_.frames;
@@ -655,7 +680,7 @@ nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelin
   // optional (the upscalers' motion pass): made on the workers, never waited for, not counted as a draw
   // that waited or was skipped.
   const bool for_draws = async && !optional;
-  async = async && options_.async_pipelines;
+  async = async && (optional || options_.async_pipelines);
   if (async && optional) {
     std::unique_lock lock(pipeline_mutex_);
     for (auto& [k, p] : pipelines_done_) {
@@ -771,17 +796,32 @@ void GameRenderer::NoteRecord(const PipelineRecord& record, uint64_t key) {
 }
 
 bool GameRenderer::QueuePrewarm(const PipelineRecord& record) {
+  PipelineRecord adapted = record;
+  if (!(record.flags & kRecordMotion))
+    adapted.flags = (record.flags & ~kRecordScaled) | (RecordFlags() & kRecordScaled);
   const kkshaders::ShaderKind vk = kkshaders::ShaderKind::Vertex, pk = kkshaders::ShaderKind::Pixel;
   std::shared_ptr<const GameShader> vs = shaders_->GetByHash(vk, record.vs_hash, record.vs_input);
   std::shared_ptr<const GameShader> ps =
-      record.ps_hash ? shaders_->GetByHash(pk, record.ps_hash, record.ps_input) : nullptr;
+      record.ps_hash ? shaders_->GetForPrewarm(pk, record.ps_hash, record.ps_input,
+                                              record.flags == adapted.flags) : nullptr;
   if (!vs || (record.ps_hash && !ps)) return false;
+  if (ps) adapted.ps_input = ps->input_hash;
+  const bool motion = (record.flags & kRecordMotion) != 0;
+  nvrhi::IShader* vertex = vs->handle;
+  if (motion) {
+    // A pack entry has no fetch table. Wait for its real container before asking for a variant;
+    // otherwise MotionVariant would permanently remember an unavailable source as a failure.
+    if (!upscale_ || !vs->source) return false;
+    vertex = shaders_->MotionVariant(*vs);
+    if (!vertex) return false;
+  }
   nvrhi::GraphicsPipelineDesc desc;
   nvrhi::FramebufferInfo framebuffer;
-  BuildPipelineDesc(record, vs->handle, ps ? ps->handle.Get() : nullptr, desc, framebuffer);
-  const uint64_t key = PipelineKey(record);
+  BuildPipelineDesc(adapted, vertex, motion ? upscale_->object_ps.Get() : (ps ? ps->handle.Get() : nullptr), desc, framebuffer);
+  if (motion && !desc.bindingLayouts.empty()) desc.bindingLayouts[0] = upscale_->motion_layout;
+  const uint64_t key = PipelineKey(adapted);
   std::lock_guard lock(pipeline_mutex_);
-  if (pipelines_pending_.count(key)) return true;
+  if (pipelines_.count(key) || pipelines_pending_.count(key)) return true;
   EnsureWorkers();
   pipelines_pending_[key] = true;
   pipeline_jobs_.push_back({key, std::move(desc), framebuffer});
@@ -794,12 +834,20 @@ uint32_t GameRenderer::RecordFlags() const {
   return (options_.flip_front_face ? kRecordFlipFrontFace : 0u) | (scaled() ? kRecordScaled : 0u);
 }
 
+void GameRenderer::QueueRecordVariants(const PipelineRecord& record) {
+  QueueOrDefer(record);
+  if (upscale_ && !(record.flags & kRecordMotion) && record.depth_format && (record.depth_control & 6) == 6)
+    QueueOrDefer(MotionPipelineRecord(record, uint32_t(nvrhi::Format::RG16_FLOAT)));
+}
+
 void GameRenderer::QueueOrDefer(const PipelineRecord& record) {
   // With cache_mutex_ held. Each description once, from whichever source (the cache file, the
   // shipped list) names it first.
   if (!prewarm_seen_.insert(PipelineKey(record)).second) return;
-  // Another run's kind of pipeline (render scale, flipped faces) is never drawn here: not made.
-  if (record.flags != RecordFlags()) {
+  // Scale variants are adapted by QueuePrewarm; flipped faces and unknown flags stay isolated.
+  const bool motion = (record.flags & kRecordMotion) != 0;
+  const uint32_t wanted = motion ? ((RecordFlags() & kRecordFlipFrontFace) | kRecordMotion) : RecordFlags();
+  if ((record.flags & ~kRecordScaled) != (wanted & ~kRecordScaled) || (motion && !upscale_)) {
     ++stats_.prewarm_other_kind;
     return;
   }
@@ -819,7 +867,9 @@ bool GameRenderer::SetPipelineCache(const std::string& path) {
   }
   const bool can_prewarm = options_.async_pipelines;
   if (can_prewarm) {
-    for (const PipelineRecord& record : cache_file_.loaded()) QueueOrDefer(record);
+    for (const PipelineRecord& record : cache_file_.loaded()) {
+      QueueRecordVariants(record);
+    }
     deferred_shader_count_ = shaders_->created_count();
   }
   Logf(LogLevel::kInfo, "rexgpu-native: pipeline cache %s: %zu descriptions, %llu queued, %llu waiting for their shaders%s",
@@ -842,7 +892,9 @@ bool GameRenderer::LoadPipelineList(const std::string& path) {
                  other = stats_.prewarm_other_kind;
   const bool can_prewarm = options_.async_pipelines;
   if (can_prewarm) {
-    for (const PipelineRecord& record : records) QueueOrDefer(record);
+    for (const PipelineRecord& record : records) {
+      QueueRecordVariants(record);
+    }
     deferred_shader_count_ = shaders_->created_count();
   }
   stats_.list_records += records.size();
@@ -860,8 +912,11 @@ void GameRenderer::RetryDeferred() {
   std::lock_guard lock(cache_mutex_);
   if (deferred_.empty()) return;
   const uint64_t created = shaders_->created_count();
-  if (created == deferred_shader_count_) return;  // no new shader since the last try
+  const auto motion = shaders_->motion_stats();
+  const uint64_t completed = motion.made + motion.failed;
+  if (created == deferred_shader_count_ && completed == deferred_motion_count_) return;
   deferred_shader_count_ = created;
+  deferred_motion_count_ = completed;
   std::vector<PipelineRecord> still;
   for (const PipelineRecord& record : deferred_) {
     if (!QueuePrewarm(record)) still.push_back(record);

@@ -6,6 +6,9 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <string>
 #include <deque>
 #include <vector>
 
@@ -20,6 +23,13 @@ class AoGpuTimer {
   // label: the log line's start (the upscalers time their work with it too).
   AoGpuTimer(nvrhi::IDevice* device, const char* what, const char* label = "AO GPU time")
       : device_(device), what_(what), label_(label) {}
+  ~AoGpuTimer() { if (trace_) std::fclose(trace_); }
+  void EnableTrace(const char* suffix) {
+    if (const char* path = std::getenv("KK_DEV_DLSS_LOG"); path && *path) {
+      trace_ = std::fopen((std::string(path) + suffix).c_str(), "w");
+      if (trace_) std::fprintf(trace_, "frame,gpu_ms\n");
+    }
+  }
 
   // Around one piece of AO work in a command list (Begin and End in the same list).
   void Begin(nvrhi::ICommandList* cl) {
@@ -47,7 +57,9 @@ class AoGpuTimer {
     while (!pending_.empty() && device_->pollTimerQuery(pending_.front().query)) {
       Pending p = pending_.front();
       pending_.pop_front();
-      total_s_ += double(device_->getTimerQueryTime(p.query));
+      const double seconds = double(device_->getTimerQueryTime(p.query));
+      total_s_ += seconds;
+      if (trace_) std::fprintf(trace_, "%llu,%.6f\n", static_cast<unsigned long long>(p.frame), 1000 * seconds);
       device_->resetTimerQuery(p.query);
       free_.push_back(p.query);
       if (p.frame != last_frame_counted_) {
@@ -57,6 +69,7 @@ class AoGpuTimer {
       ++pieces_;
     }
     ++frame_;
+    if (trace_ && frame_ % 300 == 0) std::fflush(trace_);
     if (frames_ >= 600) {
       Logf(LogLevel::kInfo, "rexgpu-native: %s (%s): %.3f ms a frame on average over %llu frames (%llu timed passes)",
            label_, what_, 1000.0 * total_s_ / double(frames_), static_cast<unsigned long long>(frames_),
@@ -72,6 +85,7 @@ class AoGpuTimer {
     uint64_t frame = 0;
   };
   nvrhi::IDevice* device_;
+  FILE* trace_ = nullptr;
   const char* what_;
   const char* label_;
   nvrhi::TimerQueryHandle open_;

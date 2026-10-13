@@ -116,6 +116,7 @@ GameRenderer::HostTarget* GameRenderer::GetTarget(bool depth, uint32_t edram_bas
                 edram_base, pitch, format);
   desc.debugName = name;
   t->texture = device_->createTexture(desc);
+  ++frame_resource_creations_;
   if (!t->texture) return nullptr;
   t->allocation_bytes = device_->getTextureMemoryRequirements(t->texture).size;
   stats_.edram_target_bytes += t->allocation_bytes;

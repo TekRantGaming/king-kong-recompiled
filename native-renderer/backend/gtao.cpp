@@ -11,6 +11,8 @@
 #include "thirdparty/XeGTAO/XeGTAO.h"
 
 #include "backend/log.h"
+#include "kknr/nvrhi_format.h"
+#include "kknr/resolve.h"
 #include "backend/shaders/generated/gtao_apply_ps_dxil.h"
 #include "backend/shaders/generated/gtao_apply_ps_spirv.h"
 #include "backend/shaders/generated/gtao_apply_resolve_ps_dxil.h"
@@ -176,6 +178,18 @@ bool Gtao::Initialize() {
   bd.debugName = "GTAO constants";
   constants_ = device_->createBuffer(bd);
   ready_ = apply_layout_ && apply_resolve_layout_ && point_clamp_ && constants_;
+  if (ready_) {
+    // Compute pipelines already exist above. The three apply states only depend
+    // on the target format, so make them before the first scene uses GTAO.
+    for (uint32_t f = 0; f < 16; ++f) {
+      const auto format = kknr::ToNvrhi(kknr::EdramColorHostFormat(f));
+      if (format == nvrhi::Format::UNKNOWN) continue;
+      nvrhi::FramebufferInfo info;
+      info.colorFormats = {format};
+      ready_ = GraphicsPipeline(false, 1, info) && GraphicsPipeline(false, 2, info) &&
+               GraphicsPipeline(true, 1, info) && ready_;
+    }
+  }
   return ready_;
 }
 
@@ -349,8 +363,7 @@ nvrhi::IFramebuffer* Gtao::Framebuffer(nvrhi::ITexture* color) {
   return fb;
 }
 
-nvrhi::IGraphicsPipeline* Gtao::GraphicsPipeline(bool resolve, int mode, nvrhi::IFramebuffer* fb) {
-  const nvrhi::FramebufferInfoEx& info = fb->getFramebufferInfo();
+nvrhi::IGraphicsPipeline* Gtao::GraphicsPipeline(bool resolve, int mode, const nvrhi::FramebufferInfo& info) {
   const uint32_t format = info.colorFormats.empty() ? 0 : uint32_t(info.colorFormats[0]);
   nvrhi::GraphicsPipelineHandle& p = pipelines_[{resolve, resolve ? 0 : (mode >= 2 ? 2 : 1), format}];
   if (p) return p;
@@ -389,7 +402,7 @@ bool Gtao::ApplyToTarget(nvrhi::ICommandList* cl, nvrhi::ITexture* color, int mo
   const int32_t y1 = std::min(origin_y_ + int32_t(out_h_), int32_t(cd.height));
   if (x1 <= x0 || y1 <= y0) return false;
   nvrhi::IFramebuffer* fb = Framebuffer(color);
-  nvrhi::IGraphicsPipeline* pipeline = fb ? GraphicsPipeline(false, mode, fb) : nullptr;
+  nvrhi::IGraphicsPipeline* pipeline = fb ? GraphicsPipeline(false, mode, fb->getFramebufferInfo()) : nullptr;
   if (!pipeline) return false;
   Constants k;
   std::memcpy(&k, constants_bytes_.data(), sizeof(k));
@@ -428,7 +441,7 @@ nvrhi::ITexture* Gtao::ApplyToCopy(nvrhi::ICommandList* cl, nvrhi::ITexture* col
     if (!scratch_) return nullptr;
   }
   nvrhi::IFramebuffer* fb = Framebuffer(scratch_);
-  nvrhi::IGraphicsPipeline* pipeline = fb ? GraphicsPipeline(true, mode, fb) : nullptr;
+  nvrhi::IGraphicsPipeline* pipeline = fb ? GraphicsPipeline(true, mode, fb->getFramebufferInfo()) : nullptr;
   if (!pipeline) return nullptr;
   Constants k;
   std::memcpy(&k, constants_bytes_.data(), sizeof(k));

@@ -64,6 +64,10 @@ constexpr uint32_t kRecordFlipFrontFace = 1u << 0;  // --native_flip_front_face 
 // kind; the other kind's pipelines would never be drawn there (and the aware shader does not fit
 // the 1:1 layout).
 constexpr uint32_t kRecordScaled = 1u << 1;
+// Object motion replay: the vertex shader is its motion variant, the pixel shader and set 0
+// are the upscaler's built-ins. This layout does not use the game's scale constants.
+constexpr uint32_t kRecordMotion = 1u << 2;
+PipelineRecord MotionPipelineRecord(const PipelineRecord& draw, uint32_t motion_format);
 
 constexpr uint32_t kPipelineCacheMagic = 0x4350474Bu;  // 'KGPC'
 // 3: kRecordScaled, and the key includes the translations' input hashes. A version 2 file could

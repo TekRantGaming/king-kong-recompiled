@@ -115,7 +115,7 @@ void LogFrame(const uint8_t* base) {
     }
     std::fprintf(f, "frame,t,host_ms,raw_dt,dt,game_ms,cpu_ms");
     for (uint32_t a : w.addrs) std::fprintf(f, ",%08X", a);
-    std::fprintf(f, "\n");
+    std::fprintf(f, ",wall_s\n");
   }
   double cpu_ms = 0;
 #if defined(_WIN32)
@@ -129,7 +129,7 @@ void LogFrame(const uint8_t* base) {
   std::fprintf(f, "%llu,%.4f,%.3f,%.6f,%.6f,%u,%.4f", (unsigned long long)frame++, t, host_ms, LoadF(base, kRawFrameTime),
                LoadF(base, kFrameTime), Load32(base, kGameMs), cpu_ms);
   for (uint32_t a : w.addrs) std::fprintf(f, ",%.6f", LoadF(base, a));
-  std::fprintf(f, "\n");
+  std::fprintf(f, ",%.6f\n", std::chrono::duration<double>(now.time_since_epoch()).count());
   if (frame % 30 == 0) std::fflush(f);
 }
 
