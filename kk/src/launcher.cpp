@@ -354,6 +354,10 @@ std::string PresetUpscaler(const GraphicsPreset& p) {
   return std::string_view(p.upscaler) == "auto" ? DefaultUpscaler() : p.upscaler;
 }
 
+// The AO strength the presets, Remastered and a new install use: Strong (3) for the native renderer's GTAO
+// (the user's choice, Beta 3), Light (1) for the Classic renderer's own AO.
+int DefaultAoStrength() { return rex::cvar::GetFlagByName("gpu_plugin") == "native" ? 3 : 1; }
+
 int MatchGraphicsPreset() {
   for (int i = 0; i < kGraphicsPresetCount; ++i) {
     const GraphicsPreset& p = kGraphicsPresets[i];
@@ -361,7 +365,7 @@ int MatchGraphicsPreset() {
     if (Get("present_effect") == PresetUpscaler(p) && CurrentTemporalUpscaler().empty() &&
         Get("kk_render_quality") == p.quality &&
         Get("swap_post_effect") == p.aa && Get("anisotropic_override") == p.filtering && ao == p.ao &&
-        (!ao || GetInt("ao_strength", 1) == 1))
+        (!ao || GetInt("ao_strength", 1) == DefaultAoStrength()))
       return i;
   }
   return -1;
@@ -375,7 +379,7 @@ void ApplyGraphicsPreset(int index) {
   Set("swap_post_effect", p.aa);
   Set("anisotropic_override", p.filtering);
   SetInt("ao_mode", p.ao ? 1 : 0);
-  if (p.ao) SetInt("ao_strength", 1);
+  if (p.ao) SetInt("ao_strength", DefaultAoStrength());
 }
 
 // The Original look: the Xbox 360's own settings (OriginalLookSettings).
@@ -445,7 +449,7 @@ void ApplyRemastered() {
   SetOriginalLook(false);
   ApplyGraphicsPreset(RemasteredPresetIndex());
   SetInt("ao_mode", 1);
-  SetInt("ao_strength", 1);
+  SetInt("ao_strength", 3);  // Strong: GTAO's default (the native renderer is chosen just below)
   SetInt("kk_frame_rate", 60);  // the Original look keeps the console's 30
   SetRenderer(true);  // with the native renderer's GTAO, the only method since Beta 2 (ApplyPortDefaults)
 }
@@ -1227,10 +1231,12 @@ class SettingsPages {
         // each crease (6, 8, 12 near-plane distances). Light darkens about as much as the Classic
         // renderer's AO on the whole, with a crisper footprint (docs/ao.md, "In the game").
         Item st = CvarChoice("AO strength",
-                             native ? "How dark the shading gets and how far it spreads from each corner. Light is "
-                                      "recommended: Medium and Strong darken grass and rock more."
+                             native ? "How dark the shading gets and how far it spreads from each corner. Strong is "
+                                      "recommended; Light and Medium are subtler."
                                     : "How dark the shading gets. Light is recommended.",
-                             "ao_strength", {{"Light (recommended)", "1"}, {"Medium", "2"}, {"Strong", "3"}});
+                             "ao_strength",
+                             native ? std::vector<Option>{{"Light", "1"}, {"Medium", "2"}, {"Strong (recommended)", "3"}}
+                                    : std::vector<Option>{{"Light (recommended)", "1"}, {"Medium", "2"}, {"Strong", "3"}});
         items.push_back(std::move(Disable(st, original, kSetByOriginal)));
       }
     }
@@ -4984,6 +4990,9 @@ bool NativeRendererAvailable() { return g_native_renderer; }
 std::string ApplyRendererChoice() {
   const bool native = g_native_renderer && rex::cvar::GetFlagByName("kk_renderer") != "classic";
   SetCvarDefault("gpu_plugin", native ? "native" : "xenos");
+  // GTAO's default strength is Strong; the Classic renderer's AO keeps Light (DefaultAoStrength). A strength
+  // the player chose stays (SetCvarDefault only changes values still at their default).
+  SetCvarDefault("ao_strength", native ? "3" : "1");
   return rex::cvar::GetFlagByName("gpu_plugin");
 }
 
