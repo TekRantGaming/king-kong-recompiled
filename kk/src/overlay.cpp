@@ -87,8 +87,15 @@ class FpsOverlay final : public rex::ui::ImGuiDialog {
 
 }  // namespace
 
+#if defined(KK_DEV_TOOLS)
+void CreateDevPauseOverlay(rex::ui::ImGuiDrawer* drawer);  // dev_pause.cpp
+#endif
+
 void CreateFpsOverlay(rex::ui::ImGuiDrawer* drawer) {
   new FpsOverlay(drawer);  // lives for the rest of the session
+#if defined(KK_DEV_TOOLS)
+  CreateDevPauseOverlay(drawer);
+#endif
   rex::ui::RegisterBind("bind_kk_fps", "F2", "Toggle frame counter", [] {
     rex::cvar::SetFlagByName("kk_show_fps", REXCVAR_GET(kk_show_fps) ? "false" : "true");
   });
