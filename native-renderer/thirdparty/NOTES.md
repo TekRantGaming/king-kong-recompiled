@@ -39,9 +39,10 @@ Changes we make to vendored code are kept as small as possible and listed here:
   immutable bindless layout ("Bindless samplers are not implemented"), so the game renderer's sampler table
   (set 5) failed to initialise whenever NVRHI validation was on. The Vulkan backend makes such a table like any
   other descriptor array and the game renderer's tests draw through it under the Khronos layer, so the check now
-  lets it through on Vulkan. It still refuses it on D3D12, where it is right to: that backend binds an immutable
-  table from the CBV/SRV/UAV heap (`DescriptorTable::isSamplerTable()` is true only for `MutableSampler`
-  layouts), which cannot hold samplers.
+  lets it through on Vulkan. Task 025 also permits sampler-only immutable tables on D3D12, matching the
+  sampler-heap support below. Mixed sampler/resource layouts remain rejected on D3D12 because a single table
+  cannot span the sampler and CBV/SRV/UAV heaps. A Windows regression test creates and fills the 1,024-slot
+  sampler table through validation and checks mixed-layout rejection.
 - `XenosRecomp/XenosRecomp/shader_recompiler.cpp` (Phase 2, differential tests; translator version 4): cube
   fetches apply the instruction's offsets and unnormalized coordinates; the vector half's a0 / p0 changes
   take effect before the scalar half reads its operands and a scalar write replaces them; aL is clamped to

@@ -26,6 +26,7 @@
 #include <nvrhi/common/misc.h>
 
 #include <sstream>
+#include <algorithm>
 
 namespace nvrhi::validation
 {
@@ -1483,9 +1484,12 @@ namespace nvrhi::validation
                 anyErrors = true;
                 break;
             case ResourceType::Sampler:
-                // KK: the Vulkan backend makes a sampler descriptor array like any other type. The D3D12
-                // backend binds an immutable table from the CBV/SRV/UAV heap, which cannot hold samplers.
-                if (m_Device->getGraphicsAPI() == GraphicsAPI::VULKAN)
+                // KK: Vulkan supports sampler arrays. Our D3D12 backend also selects the sampler
+                // heap for immutable tables containing only samplers; mixed tables cannot use it.
+                if (m_Device->getGraphicsAPI() == GraphicsAPI::VULKAN ||
+                    (m_Device->getGraphicsAPI() == GraphicsAPI::D3D12 &&
+                     std::all_of(desc.registerSpaces.begin(), desc.registerSpaces.end(),
+                         [](const BindingLayoutItem& binding) { return binding.type == ResourceType::Sampler; })))
                     continue;
                 errorStream << "Bindless samplers are not implemented (slot " << item.slot << ")" << std::endl;
                 anyErrors = true;
