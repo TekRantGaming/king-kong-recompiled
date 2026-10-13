@@ -140,8 +140,9 @@ foreach ($item in $sourceHashes) {
   if (!(Test-Path -LiteralPath $item.path) -or (Get-FileHash -LiteralPath $item.path).Hash -ne $item.hash) { $unchanged=$false }
 }
 @{outcome=$outcome;source_data_unchanged=$unchanged;pids=@($known.Keys);seconds=$clock.Elapsed.TotalSeconds;
-  state=(Get-Content "$run\userdata\renderer-recovery\fallback.state" -ErrorAction SilentlyContinue);
-  marker=(Get-Content "$run\userdata\renderer-recovery\startup.marker" -Raw -ErrorAction SilentlyContinue)} |
+  state=[string[]]@(Get-Content "$run\userdata\renderer-recovery\fallback.state" -ErrorAction SilentlyContinue);
+  marker=[string](Get-Content "$run\userdata\renderer-recovery\startup.marker" -Raw -ErrorAction SilentlyContinue);
+  marker_bytes=(Get-Item "$run\userdata\renderer-recovery\startup.marker" -ErrorAction SilentlyContinue).Length} |
   ConvertTo-Json -Depth 4 | Set-Content "$run\result.json"
 Write-Output "DONE $outcome source-data-unchanged=$unchanged $run"
 if ($outcome -eq 'timeout' -or !$unchanged) { exit 1 }
