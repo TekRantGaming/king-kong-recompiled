@@ -131,19 +131,25 @@ void cs_normals(uint2 pixCoord : SV_DispatchThreadID)
 [numthreads(XE_GTAO_NUMTHREADS_X, XE_GTAO_NUMTHREADS_Y, 1)]
 void cs_main(uint2 pixCoord : SV_DispatchThreadID)
 {
-    const uint quality = uint(kk_Temporal.w);
     const lpfloat2 noise = SpatioTemporalNoise(pixCoord, g_GTAOConsts.NoiseIndex);
     const lpfloat3 normal = LoadNormal(pixCoord);
-    // XeGTAO unrolls its sampling loops, so each count must be a compile-time literal.
-    if (quality == 1)
-        XeGTAO_MainPass(pixCoord, 2, 2, noise, normal,
-            g_GTAOConsts, g_srcWorkingDepth, g_samplerPointClamp, g_outWorkingAOTerm, g_outWorkingEdges);
-    else if (quality == 3)
-        XeGTAO_MainPass(pixCoord, 9, 3, noise, normal,
-            g_GTAOConsts, g_srcWorkingDepth, g_samplerPointClamp, g_outWorkingAOTerm, g_outWorkingEdges);
-    else
-        XeGTAO_MainPass(pixCoord, 3, 3, noise, normal,
-            g_GTAOConsts, g_srcWorkingDepth, g_samplerPointClamp, g_outWorkingAOTerm, g_outWorkingEdges);
+    XeGTAO_MainPass(pixCoord, 3, 3, noise, normal,
+        g_GTAOConsts, g_srcWorkingDepth, g_samplerPointClamp, g_outWorkingAOTerm, g_outWorkingEdges);
+}
+
+// Separate kernels keep Low/Medium from inheriting High's register and code footprint.
+[numthreads(XE_GTAO_NUMTHREADS_X, XE_GTAO_NUMTHREADS_Y, 1)]
+void cs_main_low(uint2 pixCoord : SV_DispatchThreadID)
+{
+    XeGTAO_MainPass(pixCoord, 2, 2, SpatioTemporalNoise(pixCoord, g_GTAOConsts.NoiseIndex), LoadNormal(pixCoord),
+        g_GTAOConsts, g_srcWorkingDepth, g_samplerPointClamp, g_outWorkingAOTerm, g_outWorkingEdges);
+}
+
+[numthreads(XE_GTAO_NUMTHREADS_X, XE_GTAO_NUMTHREADS_Y, 1)]
+void cs_main_high(uint2 pixCoord : SV_DispatchThreadID)
+{
+    XeGTAO_MainPass(pixCoord, 9, 3, SpatioTemporalNoise(pixCoord, g_GTAOConsts.NoiseIndex), LoadNormal(pixCoord),
+        g_GTAOConsts, g_srcWorkingDepth, g_samplerPointClamp, g_outWorkingAOTerm, g_outWorkingEdges);
 }
 
 [numthreads(XE_GTAO_NUMTHREADS_X, XE_GTAO_NUMTHREADS_Y, 1)]

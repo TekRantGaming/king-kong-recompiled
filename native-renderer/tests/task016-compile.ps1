@@ -2,6 +2,7 @@ $ErrorActionPreference = 'Stop'
 $dxc = 'F:\KK-native-renderer\downloads\dxc-v1.9.2609\dxc\bin\x64\dxc.exe'
 $folder = (Resolve-Path "$PSScriptRoot\..\backend\shaders").Path
 foreach ($spec in @('prepare:cs:cs_prepare','prefilter:cs:cs_prefilter','normals:cs:cs_normals','main:cs:cs_main',
+    'main_low:cs:cs_main_low','main_high:cs:cs_main_high',
     'denoise:cs:cs_denoise','denoise_last:cs:cs_denoise_last','output:cs:cs_output','temporal:cs:cs_temporal',
     'vs:vs:vs_main','apply:ps:ps_apply','apply_resolve:ps:ps_apply_resolve')) {
   $name,$stage,$entry = $spec.Split(':')

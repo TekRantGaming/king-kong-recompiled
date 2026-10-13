@@ -119,7 +119,7 @@ class Gtao {
   bool ready_ = false;
   Stats stats_;
 
-  Pass prepare_, prefilter_, normals_, main_, denoise_, denoise_last_, output_pass_, temporal_;
+  Pass prepare_, prefilter_, normals_, main_, main_low_, main_high_, denoise_, denoise_last_, output_pass_, temporal_;
   nvrhi::ShaderHandle vs_, apply_ps_, apply_resolve_ps_;
   nvrhi::BindingLayoutHandle apply_layout_, apply_resolve_layout_;
   nvrhi::SamplerHandle point_clamp_;

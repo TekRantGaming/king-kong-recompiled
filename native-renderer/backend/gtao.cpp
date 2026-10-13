@@ -21,6 +21,10 @@
 #include "backend/shaders/generated/gtao_denoise_last_cs_spirv.h"
 #include "backend/shaders/generated/gtao_main_cs_dxil.h"
 #include "backend/shaders/generated/gtao_main_cs_spirv.h"
+#include "backend/shaders/generated/gtao_main_low_cs_dxil.h"
+#include "backend/shaders/generated/gtao_main_low_cs_spirv.h"
+#include "backend/shaders/generated/gtao_main_high_cs_dxil.h"
+#include "backend/shaders/generated/gtao_main_high_cs_spirv.h"
 #include "backend/shaders/generated/gtao_normals_cs_dxil.h"
 #include "backend/shaders/generated/gtao_normals_cs_spirv.h"
 #include "backend/shaders/generated/gtao_output_cs_dxil.h"
@@ -61,6 +65,8 @@ enum BlobId {
   kPrefilter,
   kNormals,
   kMain,
+  kMainLow,
+  kMainHigh,
   kDenoise,
   kDenoiseLast,
   kOutput,
@@ -84,6 +90,8 @@ Blob GetBlob(nvrhi::GraphicsAPI api, int id) {
     case kPrefilter: return NR_GTAO_BLOB(gtao_prefilter_cs);
     case kNormals: return NR_GTAO_BLOB(gtao_normals_cs);
     case kMain: return NR_GTAO_BLOB(gtao_main_cs);
+    case kMainLow: return NR_GTAO_BLOB(gtao_main_low_cs);
+    case kMainHigh: return NR_GTAO_BLOB(gtao_main_high_cs);
     case kDenoise: return NR_GTAO_BLOB(gtao_denoise_cs);
     case kDenoiseLast: return NR_GTAO_BLOB(gtao_denoise_last_cs);
     case kOutput: return NR_GTAO_BLOB(gtao_output_cs);
@@ -170,6 +178,16 @@ bool Gtao::Initialize() {
     Logf(LogLevel::kWarning, "rexgpu-native: GTAO: its shaders could not be created, the GTAO method is unavailable");
     return false;
   }
+  auto variant = [&](Pass& pass, int id, const char* entry) {
+    pass.shader = MakeShader(device_, id, nvrhi::ShaderType::Compute, entry);
+    pass.layout = main_.layout;
+    nvrhi::ComputePipelineDesc pd;
+    pd.CS = pass.shader;
+    pd.bindingLayouts = {pass.layout};
+    if (pass.shader) pass.pipeline = device_->createComputePipeline(pd);
+    return pass.pipeline != nullptr;
+  };
+  if (!variant(main_low_, kMainLow, "cs_main_low") || !variant(main_high_, kMainHigh, "cs_main_high")) return false;
   nvrhi::BindingLayoutDesc al;
   al.visibility = nvrhi::ShaderType::All;
   al.bindings = {cb, I::Texture_SRV(1)};
@@ -378,7 +396,8 @@ nvrhi::ITexture* Gtao::Compute(nvrhi::ICommandList* cl, const GtaoInput& in, con
   Dispatch(cl, prepare_, prepare, pw / 8, ph / 8);
   Dispatch(cl, prefilter_, fixed_sets_[0], pw / 16, ph / 16);
   Dispatch(cl, normals_, fixed_sets_[1], pw / XE_GTAO_NUMTHREADS_X, ph / XE_GTAO_NUMTHREADS_Y);
-  Dispatch(cl, main_, fixed_sets_[2], pw / XE_GTAO_NUMTHREADS_X, ph / XE_GTAO_NUMTHREADS_Y);
+  Pass& main = s.sample_quality == 1 ? main_low_ : s.sample_quality == 3 ? main_high_ : main_;
+  Dispatch(cl, main, fixed_sets_[2], pw / XE_GTAO_NUMTHREADS_X, ph / XE_GTAO_NUMTHREADS_Y);
   Dispatch(cl, denoise_, fixed_sets_[3], pw / (XE_GTAO_NUMTHREADS_X * 2), ph / XE_GTAO_NUMTHREADS_Y);
   Dispatch(cl, denoise_last_, fixed_sets_[4], pw / (XE_GTAO_NUMTHREADS_X * 2), ph / XE_GTAO_NUMTHREADS_Y);
   Dispatch(cl, output_pass_, output, (in.width + 7) / 8, (in.height + 7) / 8);
