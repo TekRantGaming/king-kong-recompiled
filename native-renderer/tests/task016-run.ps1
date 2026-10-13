@@ -33,8 +33,14 @@ foreach ($entry in $Entries) {
     "--game_data_root=$root/kk/assets","--user_data_root=$run/userdata","--cache_root=$run/cache","--log_file=$run/run.log")
   $names = @($ExtraArgs | ForEach-Object { ($_ -split '=',2)[0] })
   $args = @($args | Where-Object { $names -notcontains ($_ -split '=',2)[0] }) + $ExtraArgs
+  if ($Hands) { $args += @('--kk_cheats=true','--kk_cheat_shotgun=true','--kk_cheat_ammo=true','--kk_toggle_aim=false') }
   $proc = $null
   try {
+    # Setup may take long enough for another task to claim the lock. Check again immediately before launch.
+    while ((Test-Path $lock) -and (Get-Content $lock -Raw).Trim() -ne 'free') {
+      Write-Output "Waiting for shared game lock after setup: $(Get-Content $lock -Raw)"
+      Start-Sleep -Seconds 30
+    }
     Set-Content $lock "task016 $(Get-Date -Format o)" -Encoding ascii
     $proc = Start-Process "$run\king_kong.exe" -WorkingDirectory $run -ArgumentList $args -WindowStyle Hidden -PassThru
     Write-Output "Started $run PID $($proc.Id)"

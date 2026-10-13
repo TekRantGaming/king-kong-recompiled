@@ -67,7 +67,8 @@ AoSettings GameRenderer::AoSettingsFor(uint64_t frame) {
   // Read once a frame (the launcher's ao_mode and ao_strength may change between frames).
   if (frame != ao_settings_frame_) {
     ao_settings_ = options_.ao_settings ? options_.ao_settings() : AoSettings{};
-    ao_settings_.temporal_upscaler = upscale_ && upscale_->upscaler != nullptr;
+    // Resolve mode shades a scratch copy, while the SDK reads the original scene target.
+    ao_settings_.temporal_upscaler = upscale_ && upscale_->upscaler != nullptr && options_.ao.apply != AoApply::kResolve;
     ao_settings_frame_ = frame;
   }
   return ao_settings_;
