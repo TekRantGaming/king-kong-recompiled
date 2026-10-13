@@ -125,6 +125,8 @@ def summary(root):
 
 if __name__=='__main__':
     for arg in sys.argv[1:]:
-        for root in sorted(Path(arg).glob('task012-*')):
+        base=Path(arg)
+        folders=[base] if (base/'test.json').exists() else sorted(base.glob('task012-*'))
+        for root in folders:
             if (root/'test.json').exists() and (root/'process.csv').exists():
                 print(json.dumps(summary(root)))
