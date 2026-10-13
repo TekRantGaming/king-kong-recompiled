@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <map>
 
 #include <rex/hook.h>
 #include <rex/logging.h>
@@ -30,6 +31,28 @@ bool Tracing() {
 KK_TRACE_HOOK(825FC978)
 KK_TRACE_HOOK(823FC940)
 KK_TRACE_HOOK(82730078)
+
+// The profile's four faders reach the game's sound engine on buses 9..12.
+// Task 032: prove the real engine consumes changes made by the new pages.
+REX_EXTERN(__imp__sub_82753978);
+REX_HOOK_RAW(sub_82753978) {
+  if (std::getenv("KK_DEV_AUDIO_TRACE") && ctx.r3.u32 >= 9 && ctx.r3.u32 <= 12)
+    REXLOG_INFO("KK audio engine: bus {} gain {}", ctx.r3.u32, ctx.f1.f64);
+  __imp__sub_82753978(ctx, base);
+}
+
+REX_EXTERN(__imp__sub_826037A0);
+REX_HOOK_RAW(sub_826037A0) {
+  if (ctx.lr == 0x824CDC0C && std::getenv("KK_DEV_AUDIO_TRACE")) {
+    static std::map<uint32_t, double> shown;
+    const auto it = shown.find(ctx.r3.u32);
+    if (it == shown.end() || it->second != ctx.f1.f64) {
+      shown[ctx.r3.u32] = ctx.f1.f64;
+      REXLOG_INFO("KK audio old page: volume bar {} value {}", ctx.r3.u32, ctx.f1.f64);
+    }
+  }
+  __imp__sub_826037A0(ctx, base);
+}
 
 // sub_8275DDA8(0, slot) plays a loaded sound: slot tables at 0x82C15070 + 248,
 // 32 bytes each; the first word is the sound's key in SoundHeaders.db.

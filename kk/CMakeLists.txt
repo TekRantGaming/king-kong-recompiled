@@ -62,6 +62,7 @@ set(KINGKONG_SOURCES
     src/http.cpp
     src/update.cpp
     src/play_session.cpp
+    src/profile_options.cpp
     src/pause_hooks.cpp
     src/pause_menu.cpp
 )

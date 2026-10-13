@@ -19,7 +19,7 @@ namespace kk {
 
 class InGameSettings {
  public:
-  enum Page { kDisplay, kGraphics, kGameplay, kControls, kCheats, kPageCount };
+  enum Page { kDisplay, kGraphics, kGameplay, kControls, kCheats, kAudio, kSubtitles, kPageCount };
   static const char* PageName(Page page);  // English, translated as drawn
 
   virtual ~InGameSettings() = default;
@@ -33,6 +33,8 @@ class InGameSettings {
   virtual void Tick() = 0;
   // Saves now if anything changed (the menu closing).
   virtual void SaveNow() = 0;
+  virtual bool CanResetPage(Page page) const = 0;
+  virtual void ResetPage(Page page) = 0;
   // A key binding is being captured (its pop-up is open; keys aren't actions).
   virtual bool Capturing() const = 0;
   // The line under the list ("Buttons reset to the defaults."), empty when there is none.

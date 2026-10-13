@@ -243,9 +243,9 @@ constexpr const char* kRestartCvars[] = {"present_effect", "window_width", "wind
                                          "native_upscaler", "native_backend",
                                          "d3d12_allow_variable_refresh_rate_and_tearing"};
 
-enum Page { kHome, kDisplay, kGraphics, kGameplay, kControls, kCheatsPage, kAchievements, kAbout, kPageCount };
+enum Page { kHome, kDisplay, kGraphics, kGameplay, kControls, kCheatsPage, kAudio, kSubtitles, kAchievements, kAbout, kPageCount };
 constexpr const char* kPageNames[kPageCount] = {"Home",     "Display", "Graphics",     "Gameplay",
-                                                "Controls", "Cheats",  "Achievements", "About"};
+                                                "Controls", "Cheats", "Audio", "Subtitles", "Achievements", "About"};
 // Sub-pages of Controls.
 enum SubPage { kNoSubPage, kRemapPage, kKeysPage };
 // Play on Home: the Play menu and its pages (docs/menus.md).
@@ -628,16 +628,17 @@ struct SteamState {
 constexpr const char* kSteamPhases[] = {"Downloading the artwork from SteamGridDB", "Waiting for Steam to close",
                                         "Adding King Kong to your library", "Opening Steam again"};
 
-// The settings pages (Display, Graphics, Gameplay, Controls, Cheats): their rows, built by the
+// The settings pages (including the game's profile Audio and Subtitles): their rows, built by the
 // launcher and, in game, by the pause menu (InGameSettings below, ingame_settings.h), which leaves
 // out the rows that need a restart. The launcher is one of these.
 class SettingsPages {
  protected:
-  SettingsPages(rex::ui::ImmediateDrawer* immediate, LauncherCallbacks callbacks, bool in_game)
+  SettingsPages(rex::ui::ImmediateDrawer* immediate, LauncherCallbacks callbacks, bool in_game,
+                std::filesystem::path user_dir)
       : cb_(std::move(callbacks)),
         input_(/*own_gamepads=*/!in_game),
         glyphs_(immediate, rex::filesystem::GetExecutableFolder() / "glyphs"),
-        in_game_(in_game) {}
+        in_game_(in_game), profile_user_dir_(std::move(user_dir)) {}
 
   // The button pictures the Button prompts setting picks, as in the game.
   std::string PadSet() const {
@@ -740,6 +741,98 @@ class SettingsPages {
       it.disabled_note = std::move(note);
     }
     return it;
+  }
+
+  int ProfileSlot() {
+    if (in_game_) return -1;
+    const auto saves = play::ListSaves(profile_user_dir_);
+    if (profile_slot_ < 0 || !saves[size_t(profile_slot_)].exists)
+      profile_slot_ = play::MostRecentSave(saves);
+    return profile_slot_;
+  }
+
+  void ChangeProfileOption(play::ProfileOption option, float value) {
+    const int slot = ProfileSlot();
+    if (!in_game_ && slot < 0) return;
+    if (!play::SetProfileOption(profile_user_dir_, slot, option, value))
+      Status("The setting could not be saved. Your save was left unchanged.");
+  }
+
+  void ResetProfilePage(bool subtitles) {
+    if (subtitles) {
+      const auto profile = play::ReadProfileOptions(profile_user_dir_, ProfileSlot());
+      ChangeProfileOption(play::ProfileOption::kSubtitles, float(profile.subtitle_default));
+    }
+    else
+      for (int i = 0; i < 4; ++i) ChangeProfileOption(play::ProfileOption(i), 100);
+  }
+
+  std::vector<Item> ProfileItems(bool subtitles) {
+    std::vector<Item> items;
+    const int slot = ProfileSlot();
+    const auto profile = (!in_game_ && slot < 0) ? play::ProfileOptions{} :
+                         play::ReadProfileOptions(profile_user_dir_, slot);
+    if (!profile.error.empty()) Status(profile.error);
+    if (!in_game_) {
+      Item save;
+      save.type = ItemType::kChoice;
+      save.label = "Save";
+      save.description = "These settings belong to this game save. Each save keeps its own audio and subtitles.";
+      std::vector<int> slots;
+      for (const auto& s : play::ListSaves(profile_user_dir_)) {
+        if (!s.exists) continue;
+        if (s.index == slot) save.index = int(slots.size());
+        slots.push_back(s.index);
+        save.options.push_back(F("Slot {0}", {std::to_string(s.index + 1)}) + ": " + s.name);
+      }
+      save.disabled = slots.empty();
+      save.disabled_note = "Start a game to create a save, then change its settings here or in the pause menu.";
+      save.on_choice = [this, slots](int i) { profile_slot_ = slots[size_t(i)]; };
+      items.push_back(std::move(save));
+    }
+    items.push_back(Section(subtitles ? "Subtitles" : "Game audio"));
+    if (subtitles) {
+      Item it;
+      it.type = ItemType::kChoice;
+      it.label = "Subtitles";
+      it.description = "Show the game's dialogue subtitles. Applies during play and is kept in this save.";
+      it.options = {"Off", "On"};
+      it.index = profile.subtitles ? 1 : 0;
+      it.default_text = profile.subtitle_default ? "On" : "Off";
+      it.on_choice = [this](int i) { ChangeProfileOption(play::ProfileOption::kSubtitles, float(i)); };
+      it.on_default = [this] { ResetProfilePage(true); };
+      Disable(it, !profile.available, "No game profile is available yet.");
+      items.push_back(std::move(it));
+    } else {
+      const char* labels[] = {"Master volume", "Voices volume", "Music volume", "Effects volume"};
+      const char* descriptions[] = {"How loud all game audio is.", "How loud the characters' voices are.",
+                                    "How loud the game's music is.", "How loud the game's sound effects are."};
+      const float values[] = {profile.master, profile.voices, profile.music, profile.effects};
+      for (int i = 0; i < 4; ++i) {
+        Item it;
+        it.type = ItemType::kSlider;
+        it.label = labels[i];
+        it.description = std::string(descriptions[i]) + " Applies during play and is kept in this save.";
+        it.lo = 0; it.hi = 100; it.step = 1;
+        it.value = values[i];
+        it.value_text = std::to_string(int(std::lround(values[i]))) + "%";
+        it.default_text = "100%";
+        it.on_value = [this, i](float v) { ChangeProfileOption(play::ProfileOption(i), v); };
+        it.on_default = [this, i] { ChangeProfileOption(play::ProfileOption(i), 100); };
+        Disable(it, !profile.available, "No game profile is available yet.");
+        items.push_back(std::move(it));
+      }
+    }
+    items.push_back(ActionItem("Reset page", "Put these settings back to their defaults.", "", [this, subtitles] {
+      ui::Modal m;
+      m.open = true; m.title = "Reset page";
+      m.body = "Put these settings back to their defaults?";
+      m.buttons = {"Reset", "Cancel"}; m.cancel = m.focus = 1; m.width = 560;
+      m.on_button = [this, subtitles](int i) { if (i == 0) ResetProfilePage(subtitles); };
+      modal_ = std::move(m);
+    }));
+    Disable(items.back(), !profile.available, "No game profile is available yet.");
+    return items;
   }
 
   static constexpr const char* kSetByOriginal =
@@ -1747,6 +1840,8 @@ class SettingsPages {
   std::vector<DisplayMode> display_modes_;  // the Resolution choices, for display_modes_monitor_
   int display_modes_monitor_ = -1;
   const bool in_game_;  // drawn by the pause menu
+  std::filesystem::path profile_user_dir_;
+  int profile_slot_ = -1;
 };
 
 class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
@@ -1754,7 +1849,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   Launcher(rex::ui::ImGuiDrawer* drawer, rex::ui::ImmediateDrawer* immediate, LauncherPaths paths,
            LauncherCallbacks callbacks)
       : ImGuiDialog(drawer),
-        SettingsPages(immediate, std::move(callbacks), /*in_game=*/false),
+        SettingsPages(immediate, std::move(callbacks), /*in_game=*/false, paths.user_dir),
         immediate_(immediate),
         paths_(std::move(paths)) {
     glyphs_.AddSet("xbox360", art::LauncherArtDir(paths_.user_dir) / "glyphs" / "xbox360");
@@ -2150,7 +2245,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     for (const char* n : kPageNames) names.push_back(Upper(T(n)));
     float ux = 0, uw = 0;
     const int clicked = ui::DrawTabs(dl, glyphs_, PromptSet(), names, page_, ImVec2(o_.x + Margin(), o_.y + 44 * s),
-                                     m_, !modal_.open, &ux, &uw);
+                                     m_, !modal_.open, &ux, &uw, w_ - Margin() * 2);
     if (clicked >= 0 && clicked != int(page_)) {
       ui::Cue(ui::Sound::kTab);
       GoTo(Page(clicked));
@@ -3849,6 +3944,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       case kDisplay: items = DisplayItems(); break;
       case kGraphics: items = GraphicsItems(); break;
       case kGameplay: items = GameplayItems(); break;
+      case kAudio: items = ProfileItems(false); break;
+      case kSubtitles: items = ProfileItems(true); break;
       case kControls:
         items = sub_ == kRemapPage ? RemapItems() : sub_ == kKeysPage ? KeyItems() : ControlsItems();
         break;
@@ -4170,6 +4267,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       case kGameplay:
         return {"kk_fov", "kk_camera_shake", "kk_camera_shake_strength", "kk_show_fps",
                 "kk_skip_intros", "user_language"};
+      case kAudio:
+      case kSubtitles:
+        return {"#profile"};
       case kControls:
         return {"mnk_mode", "kk_button_prompts", "kk_camera_sensitivity", "kk_camera_modern", "kk_mouse_sensitivity",
                 "mnk_mouse", "kk_mouse_invert_y", "kk_invert_rs_x", "kk_invert_rs_y", "kk_invert_ls_x", "kk_invert_ls_y",
@@ -4187,6 +4287,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   // Puts one page's settings back to their defaults; the other pages keep theirs.
   void ResetPage(Page page) {
+    if (page == kAudio || page == kSubtitles) {
+      ResetProfilePage(page == kSubtitles);
+      return;
+    }
     const auto names = PageSettings(page);
     auto on_page = [&](const rex::cvar::FlagEntry& e) {
       for (const auto& n : names) {
@@ -4213,6 +4317,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       if (e.source == rex::cvar::Source::kCommandLine || e.source == rex::cvar::Source::kEnvironment) continue;
       rex::cvar::ResetToDefault(e.name);
     }
+    ResetProfilePage(false);
+    ResetProfilePage(true);
     ++g_changes;
     ApplyRendererChoice();
     if (cb_.set_fullscreen) cb_.set_fullscreen(GetBool("fullscreen"));
@@ -5044,7 +5150,7 @@ class InGameSettingsImpl final : public InGameSettings, private SettingsPages {
  public:
   InGameSettingsImpl(rex::ui::ImmediateDrawer* immediate, std::filesystem::path config_path,
                      const std::filesystem::path& user_dir)
-      : SettingsPages(immediate, LauncherCallbacks{}, /*in_game=*/true), config_path_(std::move(config_path)) {
+      : SettingsPages(immediate, LauncherCallbacks{}, /*in_game=*/true, user_dir), config_path_(std::move(config_path)) {
     glyphs_.AddSet("xbox360", art::LauncherArtDir(user_dir) / "glyphs" / "xbox360");
     seen_changes_ = saved_changes_ = g_changes;
   }
@@ -5056,6 +5162,8 @@ class InGameSettingsImpl final : public InGameSettings, private SettingsPages {
       case kDisplay: items = DisplayItems(); break;
       case kGraphics: items = GraphicsItems(); break;
       case kGameplay: items = GameplayItems(); break;
+      case kAudio: items = ProfileItems(false); break;
+      case kSubtitles: items = ProfileItems(true); break;
       case kControls:
         items = sub_ == kRemapPage ? RemapItems() : sub_ == kKeysPage ? KeyItems() : ControlsItems();
         break;
@@ -5065,6 +5173,8 @@ class InGameSettingsImpl final : public InGameSettings, private SettingsPages {
     return LiveOnly(std::move(items));
   }
   int SubPage() const override { return int(sub_); }
+  bool CanResetPage(Page page) const override { return page == kAudio || page == kSubtitles; }
+  void ResetPage(Page page) override { ResetProfilePage(page == kSubtitles); }
   void LeaveSubPage() override { sub_ = kNoSubPage; }
   void Tick() override {
     CaptureKey();
@@ -5098,7 +5208,7 @@ class InGameSettingsImpl final : public InGameSettings, private SettingsPages {
 }  // namespace
 
 const char* InGameSettings::PageName(Page page) {
-  static const char* const kNames[kPageCount] = {"Display", "Graphics", "Gameplay", "Controls", "Cheats"};
+  static const char* const kNames[kPageCount] = {"Display", "Graphics", "Gameplay", "Controls", "Cheats", "Audio", "Subtitles"};
   return page >= 0 && page < kPageCount ? kNames[page] : "";
 }
 

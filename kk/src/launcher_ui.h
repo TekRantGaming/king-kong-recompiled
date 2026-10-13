@@ -256,7 +256,7 @@ Action DrawPrompts(ImDrawList* dl, Glyphs& glyphs, const std::string& set, const
 // Tabs across the top with the previous/next pictures either side. Returns a
 // clicked tab (or -1).
 int DrawTabs(ImDrawList* dl, Glyphs& glyphs, const std::string& set, const std::vector<std::string>& names, int current,
-             ImVec2 pos, const Metrics& m, bool clickable, float* underline_x, float* underline_w);
+             ImVec2 pos, const Metrics& m, bool clickable, float* underline_x, float* underline_w, float max_width = 0);
 
 // ----------------------------------------------------------------- pop-up ---
 struct Modal {

@@ -322,7 +322,8 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
       names.push_back(text::Upper(T(InGameSettings::PageName(InGameSettings::Page(p)))));
     float ux = 0, uw = 0;
     const int clicked = ui::DrawTabs(dl, settings_->glyphs(), settings_->PromptSet(), names, int(page_),
-                                     ImVec2(o_.x + Margin(), o_.y + 44 * s), m_, active, &ux, &uw);
+                                     ImVec2(o_.x + Margin(), o_.y + 44 * s), m_, active, &ux, &uw,
+                                     w_ - Margin() * 2 - 120 * s);
     if (clicked >= 0 && clicked != int(page_)) {
       ui::Cue(ui::Sound::kTab);
       page_ = InGameSettings::Page(clicked);
@@ -357,6 +358,12 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
       if (settings_->SubPage() != 0) settings_->LeaveSubPage();
       else view_ = View::kList;
     }
+    if (active && in.Pressed(Action::kResetPage) && settings_->CanResetPage(page_)) {
+      in.Consume(Action::kResetPage);
+      const auto page = page_;
+      Confirm("Reset page", "Put these settings back to their defaults?", "Reset",
+              [this, page] { settings_->ResetPage(page); });
+    }
     if (active && in.Pressed(Action::kPlay)) {  // Start resumes from anywhere in the menu
       in.ConsumeAll();
       ui::Cue(ui::Sound::kBack);
@@ -385,6 +392,7 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
       if (focused_.on_default && !focused_.disabled) p.push_back({Action::kDefault, "Default"});
     }
     p.push_back({Action::kPlay, "Resume"});
+    if (settings_->CanResetPage(page_)) p.push_back({Action::kResetPage, "Reset page"});
     p.push_back({Action::kBack, "Back"});
     return p;
   }
