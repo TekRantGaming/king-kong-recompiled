@@ -125,9 +125,10 @@ REXCVAR_DEFINE_STRING(native_pipeline_list_file, "", "Native renderer",
                       "the game")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-REXCVAR_DEFINE_BOOL(native_pipeline_wait, false, "Native renderer",
+REXCVAR_DEFINE_BOOL(native_pipeline_wait, true, "Native renderer",
                     "A draw whose pipeline is still being created waits for it (true) instead of being "
-                    "skipped for a frame or two (false, the Xenos plugin's choice). Only with "
+                    "skipped for a frame or two (false). Waiting prevents first-use surfaces from flashing or vanishing. "
+                    "Only with "
                     "native_async_pipelines")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 

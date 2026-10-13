@@ -81,15 +81,12 @@ class GameRenderer {
     // The port's swap_post_effect, which the Xenos plugin applies in its swap: 0 none, 1 "fxaa",
     // 2 "fxaa_extreme" (more edge search steps). Applied to the frame image at Present.
     uint32_t fxaa = 0;
-    // Create the game's pipelines on a worker thread; a draw whose pipeline
-    // is not ready yet is skipped (a missing object for a frame or two the
-    // first time a state combination appears) instead of stalling the render
-    // thread for the driver's compile. Vulkan only (NVRHI's D3D12 backend
-    // caches root signatures without a lock).
+    // Create the game's pipelines on worker threads. pipeline_wait controls whether
+    // a draw waits for its pending pipeline or may be skipped after the frame budget.
     bool async_pipelines = true;
-    // A draw whose pipeline is still being made: false skips the draw (the Xenos plugin can do
-    // the same), true waits for the worker to finish it. Only with async_pipelines.
-    bool pipeline_wait = false;
+    // Wait for a pending draw pipeline by default so first-use surfaces do not flash or vanish.
+    // False opts into skipping draws after the frame budget. Only with async_pipelines.
+    bool pipeline_wait = true;
     // Without pipeline_wait: the time a frame may spend waiting for pipelines being made before
     // its draws are skipped (milliseconds, all draws of the frame together; 0 skips at once).
     // The workers usually finish a pipeline in a few milliseconds, so most new pipelines are
