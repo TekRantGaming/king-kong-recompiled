@@ -60,9 +60,11 @@ void SceneAo::NewFrame(uint64_t frame) {
   if (config_.dump_every && frame_ != UINT64_MAX) {
     const bool ambient = ambient_ready_ && ambient_drawn_;
     const char* reason = applied_ || ambient ? "applied" :
+        std::strcmp(failure_reason_, "no apply point") != 0 ? failure_reason_ :
         tracker_.phase() < AoFrameTracker::Phase::kOpaquePass ? "no opaque scene" :
         tracker_.expects_end() && tracker_.phase() == AoFrameTracker::Phase::kOpaquePass ? "waiting for missing fog/end" :
         !tracker_.depth_valid() && !depth_copied_ ? "depth cleared/no depth copy" :
+        overlay_drawn_ ? "overlay prevents a safe late apply" :
         scene_resolved_ ? "scene already resolved" : failure_reason_;
     Logf(LogLevel::kInfo, "rexgpu-native: AO frame %llu: apply_point=%d computed=%d applied=%d reason=%s phase=%u expects_end=%d depth=%d copied=%d resolved=%d opaque=%u depth_source=%s",
          static_cast<unsigned long long>(frame_), int(tracker_.phase() == AoFrameTracker::Phase::kAfterOpaque),
@@ -76,6 +78,7 @@ void SceneAo::NewFrame(uint64_t frame) {
   motion_vote_.BeginFrame(frame);
   computed_ = applied_ = ambient_ready_ = ambient_drawn_ = scene_resolved_ = false;
   depth_copied_ = scene_dest_set_ = resolve_applied_ = false;
+  overlay_drawn_ = false;
   ambient_view_ = {};
   ++stats_.frames;
   // Every 600 frames with AO on: where the occlusion went (the Windows checklist reads this).
@@ -240,6 +243,10 @@ bool SceneAo::OnDraw(nvrhi::ICommandList* cl, const Draw& d, const AoSettings& s
   // its pre-pass; the occlusion there would be that of whatever is behind them).
   const bool reads = apply == AoApply::kAmbient && ambient_ready_ && e.in_scene && cls == AoDrawClass::kOpaque &&
                      !d.state.depth_write;
+  if (d.state.color && d.color.key == tracker_.scene_color() &&
+      tracker_.phase() >= AoFrameTracker::Phase::kOpaquePass &&
+      (cls == AoDrawClass::kTransparent || cls == AoDrawClass::kEffect || cls == AoDrawClass::kEnd || cls == AoDrawClass::kIgnore))
+    overlay_drawn_ = true;
   if (reads && d.state.ps_hash && IsAmbientShader(d.state.ps_hash)) ambient_drawn_ = true;
   last_.cls = cls;
   last_.events = e;
@@ -310,7 +317,7 @@ nvrhi::ITexture* SceneAo::OnResolve(nvrhi::ICommandList* cl, const Resolve& r, c
     // before the opaque pass began is never the scene copy.
     const AoFrameTracker::Phase phase = tracker_.phase();
     const bool want = config_.apply == AoApply::kResolve ||
-                      ((!applied_ || resolve_applied_) && phase >= AoFrameTracker::Phase::kOpaquePass &&
+                      ((!applied_ || resolve_applied_) && !overlay_drawn_ && phase >= AoFrameTracker::Phase::kOpaquePass &&
                        !(tracker_.expects_end() && phase < AoFrameTracker::Phase::kAfterOpaque));
     if (eligible && want && (depth_copied_ || tracker_.depth_valid()) &&
         Compute(cl, s, depth_copied_ ? depth_copy_ : nullptr)) {
@@ -336,7 +343,7 @@ void SceneAo::OnPresent(nvrhi::ICommandList* cl, const AoSettings& s) {
   if (s.mode <= 0 || !gtao_ || applied_ || config_.apply == AoApply::kResolve) return;
   if (config_.apply == AoApply::kAmbient && ambient_ready_ && ambient_drawn_ && s.mode < 2) return;
   // The scene still holds the frame (no transparent draw ended its opaque pass, no copy was taken).
-  if (scene_resolved_ || tracker_.phase() < AoFrameTracker::Phase::kOpaquePass || !scene_color_.texture) return;
+  if (scene_resolved_ || overlay_drawn_ || tracker_.phase() != AoFrameTracker::Phase::kOpaquePass || !scene_color_.texture) return;
   if (Compute(cl, s) && ApplyToTarget(cl, s)) {
     applied_ = true;
     ++stats_.applied_present;

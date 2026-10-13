@@ -771,6 +771,32 @@ TEST(GameAo_UpcomingWaterDepthWriteCannotHideResolvedDepth) {
   }
 }
 
+TEST(GameAo_FailedEarlyMomentNeverDarkensWaterAtALateFallback) {
+  for (bool copy : {false, true}) {
+    Options on, off;
+    on.ao = off.ao = GtaoConfig(AoApply::kOpaque);
+    on.mode = 2; off.mode = 0;
+    Fixture a(on), b(off);
+    if (!a.Init() || !b.Init()) return;
+    Fixture::Frame fr;
+    fr.particle = false;
+    fr.clear_prepass_depth = fr.water_writes_depth = true;
+    if (copy) fr.scene_copy = a.NewTexture(kknr::TextureFormat::k_8_8_8_8, kW, kH);
+    const Pixels got = a.Render(fr, "failed_early_water");
+    fr.scene_copy = 0;
+    const Pixels plain = b.Render(fr, "failed_early_water_off");
+    CHECK(MaxDifference(got, plain) < kTol);
+    const SceneAo* ao = a.game->scene_ao();
+    CHECK(ao != nullptr);
+    if (ao) {
+      CHECK_EQ(ao->stats().no_depth, uint64_t(1));
+      CHECK_EQ(ao->stats().computed, uint64_t(0));
+      CHECK_EQ(ao->stats().applied_resolve, uint64_t(0));
+      CHECK_EQ(ao->stats().applied_present, uint64_t(0));
+    }
+  }
+}
+
 TEST(GameAo_AmbientOnlyInsideTheLightingShader) {
   // The colour pass's pixel shader on the list, its interpolated colour as the ambient term: the
   // occlusion is multiplied inside the shader (after the depth pre-pass), the same picture as the

@@ -83,6 +83,9 @@ cleared since: the tracker watches clears and resolve clears), else the depth re
 nothing (the frame has no AO, counted in the statistics).
 At a draw boundary, validity is taken before the upcoming draw: a water draw which will write depth cannot make
 cleared depth valid before AO is computed. The per-frame diagnostic also records which depth source was used.
+If that early computation fails, opaque/ambient mode cannot retry by darkening a later copy or Present after
+overlays were drawn. It reports the missed moment instead; the explicit `apply=resolve` mode retains its late-copy
+semantics.
 
 ### The draw classifier
 

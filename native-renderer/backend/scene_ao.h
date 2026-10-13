@@ -156,6 +156,7 @@ class SceneAo {
   uint32_t scene_dest_ = 0;                // the resolve moment: the scene copy's destination
   bool scene_dest_set_ = false;
   bool resolve_applied_ = false;           // a scene copy got it this frame
+  bool overlay_drawn_ = false;            // a late whole-target apply would shade overlays
   AoFog fog_;
   uint64_t fog_frame_ = UINT64_MAX;
   AmbientView ambient_view_;
