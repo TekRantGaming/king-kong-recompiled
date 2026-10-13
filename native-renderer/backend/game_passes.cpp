@@ -114,6 +114,18 @@ void GameRenderer::ClearRect(nvrhi::ICommandList* cl, HostTarget* color, HostTar
   if (!color) clear_color = false;
   if (!depth) clear_depth = clear_stencil = false;
   if (!clear_color && !clear_depth && !clear_stencil) return;
+  // Clear() obtains each EDRAM placement at its own retained size. A partial
+  // startup clear can therefore pair a taller colour surface with a shorter
+  // depth surface. Clears have no dependency between those attachments: issue
+  // each with its own viewport/scissor instead of binding an invalid framebuffer
+  // or growing a target (which would discard its previous contents).
+  if (color && depth && (color->host_width != depth->host_width ||
+                         color->host_height != depth->host_height ||
+                         color->scale_x != depth->scale_x || color->scale_y != depth->scale_y)) {
+    ClearRect(cl, color, nullptr, rect_in, rgba, clear_color, false, false, z, stencil);
+    ClearRect(cl, nullptr, depth, rect_in, rgba, false, clear_depth, clear_stencil, z, stencil);
+    return;
+  }
   const HostTarget* size_from = color ? color : depth;
   nvrhi::Rect rect = rect_in;
   rect.minX = std::clamp(rect.minX, 0, int(size_from->width));
