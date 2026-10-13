@@ -7,6 +7,7 @@ $workspace=(Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $lockPath='F:\KK-native-renderer\runs\codex-game.lock'
 $coreMask=0L
 if ($Cores -gt 0) {
+ if (-not ('Task012CoreMask' -as [type])) {
  Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -34,6 +35,7 @@ public static class Task012CoreMask {
  }
 }
 '@
+ }
  $coreMask=[Task012CoreMask]::Select($Cores)
 }
 function Wait-Free {

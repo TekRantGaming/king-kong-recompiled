@@ -39,7 +39,7 @@ def summary(root):
     processes = list(csv.DictReader((root/'process.csv').open()))
     memory_path = root/'gpu-memory.csv'
     memory = list(csv.DictReader(memory_path.open())) if memory_path.exists() else []
-    residency, perf, gpu, ao, upscale = [], [], [], [], []
+    residency, perf, gpu, ao, upscale, upscale_sdk = [], [], [], [], [], []
     for line in logs:
         m = re.search(r'residency frame (\d+):.*per frame: ([\d.]+) draws, ([\d.]+) clears, ([\d.]+) resolves, ([\d.]+) guest upload bytes, ([\d.]+) ms textures, ([\d.]+) ms buffers; pipelines (\d+)', line)
         if m: residency.append([float(v) for v in m.groups()])
@@ -48,7 +48,11 @@ def summary(root):
         for label, dest in [('frame GPU time',gpu),('AO GPU time',ao),('upscaler GPU time',upscale)]:
             if label in line:
                 m = re.search(r': ([\d.]+) ms a frame on average', line)
-                if m: dest.append(float(m[1]))
+                if m:
+                    if label == 'upscaler GPU time' and 'everything at the upscale point' not in line:
+                        upscale_sdk.append(float(m[1]))
+                    else:
+                        dest.append(float(m[1]))
     result = dict(path=str(root), **{k:v for k,v in config.items() if k!='args'})
     result.update(frame_samples=len(frames), host_p50=percentile(frames,.5), host_p95=percentile(frames,.95),
                   host_p99=percentile(frames,.99), fps_ms_last30=mean(samples[-30:]),
@@ -60,8 +64,10 @@ def summary(root):
                   dedicated_mb=max((float(v['dedicated_bytes'] or 0)/2**20 for v in memory),default=None),
                   shared_mb=max((float(v['shared_bytes'] or 0)/2**20 for v in memory),default=None),
                   gpu_ms=mean(gpu[-5:]), ao_ms=mean(ao[-5:]), upscale_ms=mean(upscale[-5:]),
+                  upscale_sdk_ms=mean(upscale_sdk[-5:]),
                   volatile_errors=sum('maxVersions' in v and 'insufficient' in v for v in logs),
                   query_errors=sum('Insufficient query pool space' in v for v in logs),
+                  device_removed=sum('Device Removed!' in v for v in logs),
                   shots=len(list(root.glob('shot_*.bmp'))))
     if len(steady_cpu) > 1:
         result['game_cpu_ms']=(steady_cpu[-1][1]-steady_cpu[0][1])/(steady_cpu[-1][0]-steady_cpu[0][0])
@@ -89,11 +95,32 @@ def summary(root):
     if recent:
         for i,name in enumerate(['scale_writes','scale_identical','vertex_binds','vertex_repeated','descriptor_updates','graphics_states','pipeline_changes'],1):
             result[name]=mean([v[i]/300 for v in recent])
+    emitted=[]
+    for line in logs:
+        m=re.search(r'emitted frame (\d+) \(300 frames\): (\d+) pipeline binds, (\d+) viewports, (\d+) scissors, (\d+) blends, (\d+) stencil refs, (\d+) root CBV updates',line)
+        if m: emitted.append(list(map(int,m.groups())))
+    if emitted:
+        for i,name in enumerate(['actual_pipeline_binds','emitted_viewports','emitted_scissors','emitted_blends','emitted_stencil','emitted_root_cbv'],1):
+            result[name]=mean([v[i]/300 for v in emitted[-10:]])
     result['last_native_summary']=[v for v in logs if 'game renderer:' in v][-1:]
     result['last_submit_summary']=[v for v in logs if 'hooks saw' in v][-1:]
     result['last_thread_summary']=[v for v in logs if 'render thread:' in v][-1:]
     result['last_reuse_wait']=[v for v in logs if 'GPU frame reuse wait' in v][-1:]
     result['last_stutter']=[v for v in logs if 'pipeline stutter so far:' in v][-1:]
+    gun=[]
+    for line in logs:
+        m=re.search(r'KK dev gunfire:.*? (\d+) consumed',line)
+        if m: gun.append(int(m[1]))
+    result['ammo_consumed']=max(gun,default=0)
+    if result['last_submit_summary']:
+        m=re.search(r'(\d+) frames; presents: (\d+) ms copy, (\d+) ms close, (\d+) ms submit, (\d+) ms frame end; submissions: (\d+) \((\d+) ms waiting for the queue, (\d+) ms submitting, (\d+) ms collecting\)',result['last_submit_summary'][0])
+        if m:
+            values=list(map(int,m.groups()))
+            for i,name in enumerate(['present_copy_wall_ms','present_close_wall_ms','present_enqueue_wall_ms','frame_end_wall_ms'],1):
+                result[name]=values[i]/values[0]
+            result['host_queue_wait_ms']=values[6]/values[0]
+            result['host_submit_wall_ms']=values[7]/values[0]
+            result['host_collect_wall_ms']=values[8]/values[0]
     return result
 
 if __name__=='__main__':
