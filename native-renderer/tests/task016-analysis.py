@@ -85,5 +85,8 @@ if (old / 'game_ao_missing_end_water.ppm').exists():
 if (synthetic / 'gtao_temporal_before.ppm').exists():
     sheet('temporal-regression.png', [[('Rotating samples, spatial only', synthetic / 'gtao_temporal_before.ppm'),
           ('Same samples, local temporal', synthetic / 'gtao_temporal_after.ppm')]], size=(768,432))
+if (old / 'game_ao_resolved_depth_before_water.ppm').exists():
+    sheet('cleared-depth-regression.png', [[('Synthetic cleared depth: before fix', old / 'game_ao_resolved_depth_before_water.ppm'),
+          ('Synthetic cleared depth: after fix', synthetic / 'game_ao_resolved_depth_before_water.ppm')]], size=(768,432))
 (OUT / 'metrics.json').write_text(json.dumps(metrics, indent=2))
 print(json.dumps(metrics, indent=2))
