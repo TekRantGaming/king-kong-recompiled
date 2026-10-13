@@ -110,7 +110,7 @@ run can log one window only. Selecting a run name (`-Scenes rescue`) selects all
 
 Times from the save menu (`KK_DEV_SHOTS_FROM=menu`) follow the script's clock; the boot scenes count from the
 first time the game reads the pad (`from: boot`, nothing pressed). Shot times are multiples of 0.1 s
-(`shot_<tenths>.bmp`). Each scene also has `golden_times`: a denser burst around the test times, captured for the
+(`shot_<tenths>.png` on Windows). Each scene also has `golden_times`: a denser burst around the test times, captured for the
 golden set only.
 
 Scripts (seconds after the save menu opens): `12:A` picks the save, `18:A` confirms "Load successful", `24:A`
@@ -168,7 +168,7 @@ has every number.
 
 Shots may be BMP (the game's own 32-bit top-down files, or any plain 24 / 32-bit BMP) or PNG (any kind; alpha
 is dropped). A scene folder may hold `shot_<tenths>.png` in place of `.bmp`, for example frames converted on
-another machine; when both exist the BMP is used.
+another machine; when both exist the PNG is used.
 
 To compare frames outside the scene layout (two screenshots, or two folders):
 
@@ -529,3 +529,33 @@ fight as in the `kong` scene), `tour31_lair_fight` (MAE 6.2 against 3.8).
 The same compare tool works on frames from a Linux run (the BMPs and the game log are the same). A runner for the
 ROG Ally over SSH would copy the build, run the game with the same environment, and copy `shot_*.bmp` and the log
 back (the main project's `ally_*.sh` scripts show the pattern); then `compare.py collect` and `compare`.
+
+### Disk use in test runs
+
+Windows dev shots (`KK_DEV_SHOTS`, including fine timing and wall-clock shots) are lossless PNGs.
+The UI thread takes the guest readback; one bounded worker encodes RGB and writes it. The final PNG name is
+published only after encoding is complete. Capture timestamps are logged before encoding so golden frame-log
+alignment does not depend on encoder latency. A full queue is reported as a capture error rather than blocking
+frames. Native `native_dump_frame` and `native_ao_dump_every` currently write diagnostic log lines, not image files.
+
+`tests/run-storage.ps1` stages executable, DLL and shader-pack bytes once per SHA256 build identity under
+`runs/.build-staging/<hash>`, then hard-links them into each run. The hash includes artifact names and content
+hashes, including external shader packs, DXC and an optional native DLL override. Linking failures fall back to
+private copies. Staged files and run links are read-only; the post-run check verifies both content and attributes.
+Never overwrite a linked artifact, clear its read-only bit, or launch the updater/launcher in such a run.
+Use a new build hash when artifacts change. Keep userdata, logs, glyphs and all writable caches private.
+
+All test runners finalize old-build BMP captures after the process exits, before collection or summaries.
+Conversion verifies RGB pixels exactly, writes PNG, and moves the BMP originals into
+`F:/KK-native-renderer/moved-aside/task029-legacy-captures`. This preserves the no-deletion rule, so legacy
+conversion reduces run-folder size but retains the original storage elsewhere. New Windows builds produce
+PNG directly and incur no archived BMP cost. No existing runs are automatically migrated or deleted.
+Readers and contact sheets accept PNG and legacy BMP, preferring PNG if both exist.
+
+Run synthetic storage tests with `powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/test_run_storage.ps1`.
+Run `test_compare.py` and `test_finalize_captures.py` with the absolute Python executable and `-I`.
+`tests/test_capture_png.bat` builds a standalone encoder test and verifies exact pixels without launching the game.
+`tests/task029-smoke.ps1` performs one short, lock-protected smoke run and writes `disk-results.json`.
+Its before number is the same workload with full artifact copies and 32-bit BMPs; its after number excludes
+hard-linked artifact bytes already owned by staging. Explorer folder totals count linked bytes again and are
+not incremental disk use. Staging consumes one full copy per build hash, separately from each run.
