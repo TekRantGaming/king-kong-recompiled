@@ -104,7 +104,8 @@ REX_HOOK_RAW(sub_826FA3B0) {
 // (the button query sub_8272B7E8 answers for it), and the Yes of the
 // confirmation page (IntMIG_Page_MessageYesNo, sub_824BC1B0) the same way:
 // the game's own code does the rest. Item ids in the pause page: 6 Resume,
-// 8 Start again, 3 Quit game, 5 Options, 7 Score.
+// 8 Start again, 3 Quit game, 4 Resume (as B), 5 Options, 7 Score
+// (6 is not in the pause list).
 namespace kk {
 extern void (*g_dev_pad_filter)(uint32_t user, uint8_t* state);
 }
@@ -124,6 +125,9 @@ enum class Action { kNone, kResume, kRestart, kQuit };
 std::atomic<int64_t> g_main_seen_ms{-100000};  // when the pause page last ran in play
 std::atomic<bool> g_has_restart{false};        // a save is loaded: the game offers Start again
 std::atomic<int> g_sel{0};
+std::atomic<int64_t> g_opened_ms{0};
+std::atomic<int64_t> g_confirm_seen_ms{0};
+std::atomic<int> g_confirm_frames{0};
 std::atomic<int> g_pending{0};                 // Action
 int g_force_button = -1;                       // the game's button query answers "pressed" for this one
 int g_try_index = 0, g_phase = 0;
@@ -156,6 +160,11 @@ void PadFilter(uint32_t user, uint8_t* state) {
   if (user != 0 || !OursUp()) return;
   const uint16_t buttons = uint16_t(state[4] << 8 | state[5]);
   static uint16_t last = 0;
+  static int64_t opened = 0;
+  if (opened != g_opened_ms.load()) {  // the list just opened: buttons still held (START) do not count
+    opened = g_opened_ms.load();
+    last = buttons;
+  }
   const uint16_t pressed = buttons & ~last;
   last = buttons;
   const auto items = Items();
@@ -180,7 +189,14 @@ void PadFilter(uint32_t user, uint8_t* state) {
   std::memset(state + 4, 0, 12);  // the game sees no buttons, triggers or sticks
 }
 
-int WantedId(int action) { return action == int(Action::kResume) ? 6 : action == int(Action::kRestart) ? 8 : 3; }
+// The confirmation page has acted when it starts its leaving transition
+// (its variable +0xD8 set, as every page does when it switches).
+bool ConfirmDone(const uint8_t* base) {
+  const uint32_t ai = Load32(base, 0x82CCBF64), v = ai ? Load32(base, ai + 0x40) : 0;
+  return v && Load32(base, v + 0xD8) != 0;
+}
+
+int WantedId(int action) { return action == int(Action::kResume) ? 4 : action == int(Action::kRestart) ? 8 : 3; }
 
 class PauseOverlay final : public rex::ui::ImGuiDialog {
  public:
@@ -196,7 +212,9 @@ class PauseOverlay final : public rex::ui::ImGuiDialog {
     const auto items = Items();
     const float s = ImGui::GetFontSize() / 18.0f;
     ImDrawList* dl = ImGui::GetForegroundDrawList();
-    dl->AddRectFilled(ImVec2(0, 0), io.DisplaySize, IM_COL32(5, 8, 18, 170));
+    // Opaque: the game's menu system still draws its pause page (from the page's
+    // display objects) even when the page script is not run.
+    dl->AddRectFilled(ImVec2(0, 0), io.DisplaySize, IM_COL32(5, 8, 18, 255));
     const ImVec2 c(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
     const float row = 44 * s, w = 360 * s, h = row * float(items.size()) + 90 * s;
     const ImVec2 p0(c.x - w / 2, c.y - h / 2), p1(c.x + w / 2, c.y + h / 2);
@@ -251,11 +269,20 @@ REX_HOOK_RAW(sub_824BA560) {
     g_sel = 0;
     g_pending = int(Action::kNone);
     g_phase = 0;
-    REXLOG_INFO("KK dev pause: the game paused; its page is hidden");
+    g_opened_ms = NowMs();
+    REXLOG_INFO("KK dev pause: the game paused; its page script is not run");
   }
   g_main_seen_ms = NowMs();
   g_has_restart = int32_t(Load32(base, g + 0x4E10)) != -1;
   const int pending = g_pending;
+  if (g_phase == 2 && g_confirm_frames > 0 && NowMs() - g_confirm_seen_ms.load() > 300) {
+    REXLOG_INFO("KK dev pause: the confirmation page is gone after {} frames ({})", int(g_confirm_frames),
+                ActionName(pending));
+    g_confirm_frames = 0;
+    g_pending = int(Action::kNone);
+    g_phase = 0;
+    return;
+  }
   if (pending == int(Action::kNone) || g_phase == 2) return;  // hidden: the game's page does not run
   // Find the row of the wanted item (the page keeps the selected item's id
   // at v+0x44), then run the page once more with A pressed.
@@ -301,21 +328,17 @@ REX_HOOK_RAW(sub_824BC1B0) {
     return;
   }
   g_main_seen_ms = NowMs();
+  g_confirm_seen_ms = NowMs();
+  // The page takes input only after its opening delay: answer A (its default,
+  // Yes) every frame it runs from the third on. The pause page's hook ends
+  // this once the confirmation page has stopped running.
   static int frames = 0;
-  if (++frames < 3) {  // let it set itself up first (hidden: no A yet)
-    g_force_button = 99;
-    __imp__sub_824BC1B0(ctx, base);
-    g_force_button = -1;
-    return;
-  }
-  frames = 0;
-  g_force_button = 0;  // A on its default (Yes)
+  if (g_confirm_frames == 0) frames = 0;
+  g_confirm_frames = ++frames;
+  g_force_button = frames < 3 ? 99 : 0;
   __imp__sub_824BC1B0(ctx, base);
   g_force_button = -1;
-  REXLOG_INFO("KK dev pause: answered Yes on the game's confirmation page ({})", ActionName(pending));
-  g_pending = int(Action::kNone);
-  g_phase = 0;
-  g_main_seen_ms = -100000;
+  if (frames == 3) REXLOG_INFO("KK dev pause: answering Yes on the game's confirmation page ({})", ActionName(pending));
 }
 
 #endif

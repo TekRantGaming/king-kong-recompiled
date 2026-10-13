@@ -267,3 +267,96 @@ save (both happened in the tests). Until this is a feature the port should back 
 Achievements were not watched. A missing or short save file is refused by the file loader (it checks for
 `0x8040` bytes); a corrupt one was not tested. The player is registered as pad 1; another pad or a second player
 was not tested.
+
+## Replacing the pause menu
+
+### How the game pauses (traced, run `chapter-jump-1013-040815-pause-trace`)
+
+The menus, in play as well, are the `IntMIG_*` page scripts (`KK_DEV_PAGE_TRACE=1` logs which one runs). In play,
+`IntMIG_wait` (`sub_824B44E8`) runs every frame; on Start (from `0x824B4D3C`) it plays sound `0x10`, sets its
+variable `+0x1C = 1`, notes the game clock (`*(0x82CCC028) = *(0x82CCAE1C)`) and opens the pause page,
+**`IntMIG_Page_Main` (`sub_824BA560`)** (the same page script is the start menu's Play / Options / Extras page).
+While a menu is up, `IntMIG_loop` sets `0x828D1780 = 2`, which the game's pad readers (`sub_8272B3F8`,
+`sub_8272BDB8`, `sub_8272C610`) check: that is how play stops reading the pad. The world stands still while the
+page is up; leaving it (`sub_825E66D0`) clears `+0x1C` and adds the paused time to `0x82CCC02C`.
+
+The pause page builds its list every frame (ids; the selected row is `+0x3C`, the selected id `+0x44`) and
+handles A through the button query `sub_8272B7E8(button)` (pressed this frame, 0 = A). Items (code):
+
+| Id | Item | What A does |
+|---|---|---|
+| 4 | Resume | `+0x24 = 1` (the page then closes; B does the same), sound `0xB` |
+| 8 | Start again | `+0x408 = <code>`, opens `IntMIG_Page_MessageYesNo` (`sub_824BC1B0`); its Yes restarts the chapter |
+| 3 | Quit game | `+0x408 = 0`, opens the Yes/No page; its Yes opens `IntMIG_Page_load`, which loads the start menu (level 3) |
+| 5 | Options | opens the page at `*(0x82CC97C4)` (the options pages `IntMIG_Page_OptStart*`) |
+| 7 | Score | opens the page at `*(0x82CC9798)` |
+| 6 | (not in the pause list) | `sub_825E66D0()`, `*(0x82CCAA80) = 1`, `G+0x4900 &= 0xF0000000`, `*(0x82CCBFD4) = 30` |
+
+Start again and Score are only in the list when a save slot is chosen (`G+0x4E10 != -1`). Resume is the default
+row. B also resumes.
+
+### The stand-in (`KK_DEV_PAUSE_OVERLAY=1`, `kk/src/dev_pause.cpp`)
+
+The game still pauses its own way (Start, `IntMIG_wait`, the pause sound, the frozen world). Then, while the
+pause page is up in play:
+
+- the port does not run the page (it draws nothing and reads nothing);
+- a pad filter (`g_dev_pad_filter`, called at the end of the port's XInput hook in `input_remap.cpp`) reads
+  UP / DOWN / A / B / START for the port's list and hands the game an empty pad;
+- an ImGui dialog (created next to the frame counter in `overlay.cpp`) draws "Paused (port)" with Resume, Start
+  again (when a save is loaded) and Quit game;
+- choosing an item runs the game's own page for one frame with that item's row selected and A answered by the
+  button query hook, and then the Yes of the game's confirmation page the same way. The game's code does the rest.
+
+### Test (proven, run `chapter-jump-1013-043219-pause-overlay3`)
+
+V-Rex with the test save loaded from its file (so the game offers Start again), xenos plugin. Frames: the game's
+own output (`shot_*.bmp`, which never contains the port's ImGui layer) and `printwindow_*.png` (PrintWindow of the
+game's own window, which does).
+
+| Step | Evidence |
+|---|---|
+| Start: the game pauses, its page script does not run, the game's frame is black (no "Game paused" page) | `shot_115.bmp`; log "the game paused; its page script is not run" |
+| Our list is drawn: "Paused (port)", Resume, Start again, Quit game | `printwindow_135.png` |
+| Resume: the game's page item 4 with A, play goes on | log "ran the game's pause page with item 4 (row 3) and A pressed", then `IntMIG_wait` runs; `shot_160.bmp` (play) |
+| Start again: item 8, then Yes on the game's confirmation page; the chapter restarts from its opening | log; `shot_230.bmp` (black while it reloads), `shot_270.bmp` (the opening again) |
+| Quit game: item 3, then Yes; the game loads the start menu and opens the chapter select on V-Rex, as its own Quit does | log: `IntMIG_Page_load`, then `IntMIG_Page_Map`; `shot_570.bmp` to `shot_740.bmp` |
+
+Two earlier runs (`...-042621-pause-overlay`, `...-042942-pause-overlay-quit`, `...-043059-pause-overlay-quit2`)
+found what the final version fixes: the Start press that opens the pause must not count as a press on our list;
+Resume is item 4, not 6; the confirmation page takes A only after its opening delay, and the pause page keeps
+running under it (so the port has to answer Yes itself until the confirmation page is gone); and whenever the
+game's page script runs, even for one frame, its page is drawn.
+
+### Notes for later (code reading, not tested)
+
+- **Sound** while paused was not measured (the tests capture no audio); the game's own pause sound plays, and
+  the pause itself is the game's, so its sound handling should be unchanged.
+- **Input while our menu is up:** proven for the pad (the game sees an empty pad; the confirmation pages only get
+  the presses the port gives them). Keyboard and mouse reach the game as a pad through the port's own mapping, so
+  the same filter covers them; the mouse look (`mouse_look.cpp`) writes the stick separately and would need the
+  same check.
+- **Cutscenes and loading screens:** there Start skips (the movie player and the cutscene code read it) and
+  `IntMIG_Page_Main` never opens, so the stand-in stays out of the way; in the tests Start pressed during the
+  restart's opening did not open the pause.
+- **Kong chapters, Venture's opening, the Score page:** not tested with the stand-in.
+- **Options:** the pause page's Options (item 5) opens the game's option pages (audio, video, controls,
+  language: `IntMIG_Page_OptStart*`), whose values are kept in the save. Launcher settings, by where the port reads
+  them: read every frame or every pad read (likely live while paused): camera response and sensitivity, dead
+  zone, stick inversion, toggle aim, vibration and its strength, button remapping (`kk_map_*`), mouse sensitivity
+  and inversion, field of view, fog, motion blur, the full-screen blur, camera shake, button prompts, the frame
+  counter, achievement toasts. Read once at start (next start): render quality and scale, original look, frame
+  rate cap, window and video mode, upscaler, language. The ambient occlusion switch already changes live (F8 in
+  developer builds).
+- **What the game's pause shows that ours would need:** only the five items; no objectives or hints were seen on
+  it (the hints are drawn in play, not on the pause page).
+
+### Risks
+
+- The game still believes its own page is up; anything that page does every frame besides drawing and input
+  (none seen) would not happen while the port's list is up.
+- The port answers the game's confirmation for the player; if a future version shows other confirmation pages
+  (the save prompts), each needs its own handling.
+- The ImGui layer is drawn by the runtime's UI over the presented frame; it was tested on the xenos plugin only,
+  not with the native renderer.
+- Achievements were not watched during these tests.
