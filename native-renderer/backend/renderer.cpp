@@ -306,7 +306,7 @@ nvrhi::Color Renderer::TestClearColor(uint32_t frame) {
 void Renderer::DebugGpuPass(nvrhi::ICommandList* cl, uint64_t key, const char* label) {
   // Sample every fourth frame to bound query usage and perturbation. Batches of
   // draws sharing a target are one measured pass, including their guest uploads.
-  if (!game_ || !(game_->options().debug & 65536) || stats_.frames_submitted % 4 != 0) return;
+  if (!game_ || !(game_->options().debug & 524288) || stats_.frames_submitted % 4 != 0) return;
   auto it = debug_pass_timers_.find(key);
   if (it == debug_pass_timers_.end()) {
     if (debug_pass_timers_.size() >= 64) return;
@@ -322,7 +322,7 @@ void Renderer::DebugGpuPass(nvrhi::ICommandList* cl, uint64_t key, const char* l
 void Renderer::OnClear(const ClearCall& call) {
   if (game_) {
     auto* cl = FrameCommandList();
-    if (game_->options().debug & 65536) DebugGpuPass(cl, UINT64_MAX, "clears");
+    if (game_->options().debug & 524288) DebugGpuPass(cl, UINT64_MAX, "clears");
     game_->Clear(cl, call);
     return;
   }
@@ -349,7 +349,7 @@ void Renderer::OnClear(const ClearCall& call) {
 void Renderer::OnDraw(const DrawCall& call) {
   if (game_) {
     auto* cl = FrameCommandList();
-    if ((game_->options().debug & 65536) && stats_.frames_submitted % 4 == 0) {
+    if ((game_->options().debug & 524288) && stats_.frames_submitted % 4 == 0) {
       char label[96];
       std::snprintf(label, sizeof(label), "draw RT0 %08X depth %08X (uploads included)",
                     call.render_targets[0], call.depth_stencil);
@@ -460,7 +460,7 @@ void Renderer::OnResolve(const ResolveCall& call) {
   // The placeholder does not model render-to-texture.
   if (game_) {
     auto* cl = FrameCommandList();
-    if (game_->options().debug & 65536) DebugGpuPass(cl, UINT64_MAX - 1, "resolves and scene-copy work");
+    if (game_->options().debug & 524288) DebugGpuPass(cl, UINT64_MAX - 1, "resolves and scene-copy work");
     game_->Resolve(cl, call);
   }
 }
@@ -481,7 +481,7 @@ void Renderer::OnPresent(uint32_t frame, uint32_t render_target0, uint32_t devic
   if (game_) {
     // The game's back buffer into the frame image.
     auto* cl = FrameCommandList();
-    if (game_->options().debug & 65536) DebugGpuPass(cl, UINT64_MAX - 2, "game Present copy");
+    if (game_->options().debug & 524288) DebugGpuPass(cl, UINT64_MAX - 2, "game Present copy");
     game_->Present(cl, device, frames_[recording_]);
   }
   const auto t1 = clock::now();

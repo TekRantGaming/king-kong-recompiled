@@ -29,7 +29,7 @@ class D3D12Host final : public HostDevice {
 
   bool Initialize() {
     nvrhi::d3d12::DeviceDesc desc;
-    if (REXCVAR_GET(native_debug) & 65536) desc.maxTimerQueries = 2048;
+    if (REXCVAR_GET(native_debug) & 524288) desc.maxTimerQueries = 2048;
     desc.errorCB = GetMessageCallback();
     desc.pDevice = provider_.GetDevice();
     desc.pGraphicsCommandQueue = provider_.GetDirectQueue();

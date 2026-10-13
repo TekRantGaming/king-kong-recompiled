@@ -32,7 +32,7 @@ $env:KK_DEV_SHOTS_FROM='menu'
 $env:KK_DEV_SHOTS_DIR=$run
 if ($Fire) { $env:KK_DEV_SCRIPT='4:LT/117,5:RT/116,10:RSDOWN/0.4,65:RSRIGHT/0.5'; $env:KK_DEV_GUNFIRE='1' }
 $keep='kk_frame_rate,render_scale,native_render_scale,native_upscaler,ao_mode,ao_strength'
-$debug=if ($PassTimers) {98304} else {32768}
+$debug=if ($PassTimers) {557056} else {32768}
 $args=@('--fullscreen=false','--window_width=1280','--window_height=720','--kk_fullscreen_mode=desktop',
  "--kk_start=chapter:0:$Chapter",'--kk_launcher=false','--kk_cheats=true',
  "--user_data_root=$run\userdata","--game_data_root=$($workspace.Replace('\','/'))/kk/assets","--log_file=$run\run.log",
@@ -71,4 +71,3 @@ try {
  Set-Content -LiteralPath $lockPath 'free'
 }
 Write-Output "DONE $run"
-

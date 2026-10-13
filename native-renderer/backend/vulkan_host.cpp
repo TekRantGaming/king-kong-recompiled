@@ -60,7 +60,7 @@ class VulkanHost final : public HostDevice {
     InitVulkanDispatch(vulkan_instance->functions().vkGetInstanceProcAddr,
                        vulkan_instance->instance(), vulkan_device->device());
     nvrhi::vulkan::DeviceDesc desc;
-    if (REXCVAR_GET(native_debug) & 65536) desc.maxTimerQueries = 2048;
+    if (REXCVAR_GET(native_debug) & 524288) desc.maxTimerQueries = 2048;
     desc.errorCB = GetMessageCallback();
     desc.instance = vulkan_instance->instance();
     desc.physicalDevice = vulkan_device->physical_device();
