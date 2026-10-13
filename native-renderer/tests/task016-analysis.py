@@ -3,7 +3,7 @@ from pathlib import Path
 import json
 import re
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 
 RUNS = Path(r'F:\KK-native-renderer\runs')
 OUT = Path(r'F:\KK-native-renderer\analysis\ao\b4')
@@ -60,6 +60,16 @@ for entry in range(2, 9):
         sheet(f'jungle-e{entry}.png', rows)
         sheet(f'jungle-crops-e{entry}.png', rows, crop=(200, 180, 840, 540), size=(640, 360))
 
+for entry in (2,8):
+    before = latest(f'task016-before-dlss-e{entry}-*')
+    after = latest(f'task016-after-dlss-e{entry}-*')
+    if before and after:
+        rows = [[(f'DLAA entry {entry}, {t/10:g}s, before', before / f'shot_{t}.bmp'),
+                 (f'DLAA entry {entry}, {t/10:g}s, after', after / f'shot_{t}.bmp')]
+                for t in (90,180,270,390)]
+        sheet(f'jungle-dlss-e{entry}.png', rows)
+        sheet(f'jungle-dlss-crops-e{entry}.png', rows, crop=(200,180,840,540), size=(640,360))
+
 hands = [(label, latest(f'task016-{label}-e8-*'))
          for label in ('before-hands', 'low-hands', 'medium-hands', 'high-hands', 'dlss-hands', 'fsr-hands', 'xess-hands')]
 hands = [(label, run) for label, run in hands if run and shot(run,39).exists()]
@@ -67,7 +77,12 @@ if hands:
     sheet('hands-full.png', [[(label, shot(run,39)) for label, run in hands]], size=(640,360))
     sheet('hands-crops.png', [[(label, shot(run,39)) for label, run in hands]],
           crop=(650,360,1200,700), size=(550,340))
+    sheet('ao-surface-crops.png', [[(label, shot(run,39)) for label, run in hands]],
+          crop=(220,210,280,300), size=(320,360))
     for label, run in hands:
+        patch = Image.open(shot(run,39)).convert('L').crop((220,210,280,300))
+        residual = np.asarray(patch, dtype=float) - np.asarray(patch.filter(ImageFilter.GaussianBlur(2)), dtype=float)
+        metrics[run.name]['wall_highpass_std_0_255'] = float(residual.std())
         times = (39,39.034,39.068,39.102,39.136) if (run / 'shot_ms_39000.bmp').exists() else (39,39.1,39.2,39.3,39.4)
         frames = [np.asarray(Image.open(shot(run,t)).convert('RGB'), dtype=float)[360:700,650:1200]
                   for t in times if shot(run,t).exists()]
