@@ -18,6 +18,8 @@ add_library(nr_draw STATIC
     ao_classifier.cpp
     ao_camera.cpp
     ao_config.cpp
+    # Screen-space GI (docs/gi.md): the settings.
+    gi_config.cpp
     # Temporal upscalers (docs/upscalers.md): settings, jitter, motion matching, the upscale point.
     upscale_config.cpp
     upscale_jitter.cpp
@@ -31,6 +33,7 @@ add_library(nr_renderer STATIC
     renderer.cpp
     ambient_occlusion.cpp
     gtao.cpp
+    ssgi.cpp
     shaders.cpp
     output_blit.cpp
     log.cpp
@@ -48,6 +51,8 @@ if(NR_GAME_RENDERER)
         game_ao.cpp
         game_upscale.cpp
         scene_ao.cpp
+        game_gi.cpp
+        scene_gi.cpp
         shader_library.cpp
         pipeline_prewarm.cpp
         # Temporal upscalers (docs/upscalers.md): the choice, and each SDK (loaded at run time).

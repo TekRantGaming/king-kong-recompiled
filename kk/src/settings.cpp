@@ -558,6 +558,7 @@ const std::vector<std::pair<const char*, const char*>>& OriginalLookSettings() {
       {"kk_motion_blur", "true"},      {"kk_fog", "true"},        {"kk_big_blur", "true"},
       {"kk_frame_rate", "30"},         {"kk_fov", "69"},
 #if defined(KK_NATIVE_RENDERER)
+      {"native_gi", "off"},
       {"native_upscaler", "off"},  // the native renderer's temporal upscalers (Display > Upscaling)
 #endif
   };

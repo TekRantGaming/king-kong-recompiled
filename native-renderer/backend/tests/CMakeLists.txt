@@ -68,6 +68,9 @@ if(NR_HAS_VULKAN)
     add_test(NAME nr_gtao_tests
              COMMAND ${Python3_EXECUTABLE} -I "${CMAKE_CURRENT_SOURCE_DIR}/check_validation.py"
                      $<TARGET_FILE:nr_gtao_tests>)
+    # The screen-space GI's GPU time per level (docs/gi.md, "Cost"): a bench, not a test.
+    add_executable(nr_ssgi_bench ssgi_bench.cpp vk_test_device.cpp readback.cpp)
+    target_link_libraries(nr_ssgi_bench PRIVATE nr_renderer nr_hooks ${CMAKE_DL_LIBS})
     # Prefer lavapipe when several Vulkan drivers are installed.
     set(_lvp "/usr/share/vulkan/icd.d/lvp_icd.json")
     if(EXISTS "${_lvp}")
@@ -134,6 +137,16 @@ if(NR_HAS_VULKAN AND NR_GAME_RENDERER)
              COMMAND ${Python3_EXECUTABLE} -I "${CMAKE_CURRENT_SOURCE_DIR}/check_validation.py"
                      $<TARGET_FILE:nr_game_ao_tests>)
     set_tests_properties(nr_game_ao_tests PROPERTIES ENVIRONMENT "${_env}")
+    # The screen-space GI through the game renderer (docs/gi.md).
+    add_executable(nr_game_gi_tests game_gi_tests.cpp vk_test_device.cpp readback.cpp
+        "${NR_ROOT}/shaders/tests/xenos_asm.cpp" "${NR_ROOT}/shaders/tests/container_writer.cpp")
+    target_include_directories(nr_game_gi_tests PRIVATE "${NR_ROOT}/shaders/tests")
+    target_link_libraries(nr_game_gi_tests PRIVATE nr_renderer nr_hooks ${CMAKE_DL_LIBS})
+    target_compile_definitions(nr_game_gi_tests PRIVATE NR_TEST_DXC_DIR="${NR_DXC_DIR}")
+    add_test(NAME nr_game_gi_tests
+             COMMAND ${Python3_EXECUTABLE} -I "${CMAKE_CURRENT_SOURCE_DIR}/check_validation.py"
+                     $<TARGET_FILE:nr_game_gi_tests>)
+    set_tests_properties(nr_game_gi_tests PROPERTIES ENVIRONMENT "${_env}")
     # The temporal upscalers' frame plumbing through the game renderer (docs/upscalers.md).
     add_executable(nr_game_upscale_tests game_upscale_tests.cpp vk_test_device.cpp readback.cpp
         "${NR_ROOT}/shaders/tests/xenos_asm.cpp" "${NR_ROOT}/shaders/tests/container_writer.cpp")

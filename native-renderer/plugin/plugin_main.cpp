@@ -250,6 +250,54 @@ REXCVAR_DEFINE_BOOL(native_ao_gpu_time, false, "Native renderer",
                     "Time the ambient occlusion's GPU passes and log the average every 600 frames")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+// Screen-space global illumination (docs/gi.md). Off by default; the launcher's Graphics page sets
+// native_gi ("Global illumination").
+REXCVAR_DEFINE_STRING(native_gi, "off", "Native renderer",
+                      "Screen-space global illumination (one bounce of light from the surfaces on the screen, "
+                      "added at the end of the opaque pass): off, low, medium or high")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_DOUBLE(native_gi_intensity, 1.0, "Native renderer",
+                      "The global illumination's bounce light times this (1: one physical bounce)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_STRING(native_gi_quality, "auto", "Native renderer",
+                      "The global illumination's working resolution: auto (low and medium half, high full up to a "
+                      "render scale of 1.5), half or full")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_DOUBLE(native_gi_radius, 0.0, "Native renderer",
+                      "How far the global illumination gathers light from, in world units (0: the level's)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_DOUBLE(native_gi_thickness, 0.0, "Native renderer",
+                      "How deep the global illumination takes a surface on the screen to be, in world units (0: a "
+                      "quarter of the radius)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_DOUBLE(native_gi_albedo, 0.6, "Native renderer",
+                      "The brightest surface colour the global illumination's composite assumes (0.05 to 1)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_DOUBLE(native_gi_occlusion, 1.0, "Native renderer",
+                      "With ambient occlusion off: how much of the flat ambient light the global illumination "
+                      "takes away where surfaces hide the sky (0 to 1)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_INT32(native_gi_debug, 0, "Native renderer",
+                     "Global illumination debug view: 0 off, 1 the bounce light alone, 2 the change on grey, 3 the "
+                     "visibility")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_BOOL(native_gi_temporal, true, "Native renderer",
+                    "Global illumination: blend in last frame's light where the camera saw the same surface (the "
+                    "camera's motion voted from the scene's draws)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_BOOL(native_gi_gpu_time, false, "Native renderer",
+                    "Time the global illumination's GPU passes and log the average every 600 frames")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 // Temporal upscalers (docs/upscalers.md). Off by default: nothing of them runs.
 REXCVAR_DEFINE_STRING(native_upscaler, "auto", "Native renderer",
                       "Temporal upscaler: off, auto (DLSS on NVIDIA RTX, FSR 4 on supported AMD, XeSS on Intel, "

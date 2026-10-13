@@ -371,6 +371,7 @@ bool GameRenderer::Initialize() {
   ao_ = std::make_unique<AmbientOcclusion>(device_);
   if (!ao_->Initialize()) ao_.reset();
   AoInitialize();  // AO hook (game_ao.cpp): the GTAO method
+  GiInitialize();  // GI hook (game_gi.cpp): the screen-space GI
   // Upscalers: their passes. Without them the renderer runs as without an upscaler (logged).
   if (upscale_ && !UpscaleInitialize()) {
     Logf(LogLevel::kWarning, "rexgpu-native: upscaler: the passes could not be made; no upscaler");
@@ -1325,6 +1326,8 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   // AO hook (game_ao.cpp): classify the draw; at the end of the opaque pass the occlusion goes into
   // the scene before this draw.
   if (scene_ao_ || ao_constants_) AoDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
+  // GI hook (game_gi.cpp): at the end of the opaque pass the bounce light goes in (after the AO's occlusion).
+  if (scene_gi_) GiDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
   if (frame_log_ && frame_log_->enabled()) LogDraw(call, d, *vs, ps.get());
   if (dump) DumpVertexShaderHashes(call, d, *vs);
   if (stop_at == 7) return;

@@ -365,16 +365,17 @@ void Gtao::FillConstants(Constants& k, const GtaoInput& in, const GtaoSettings& 
   k.temporal[3] = float(std::clamp(s.sample_quality, 1, 3));
 }
 
-nvrhi::ITexture* Gtao::Compute(nvrhi::ICommandList* cl, const GtaoInput& in, const GtaoSettings& s) {
-  if (!ready_ || !in.depth || in.width < 2 || in.height < 2 || !in.projection.valid()) return nullptr;
+bool Gtao::Prepare(nvrhi::ICommandList* cl, const GtaoInput& in, const GtaoSettings& s) {
+  if (!ready_ || !in.depth || in.width < 2 || in.height < 2 || !in.projection.valid()) return false;
   const nvrhi::TextureDesc& dd = in.depth->getDesc();
   if (in.x < 0 || in.y < 0 || uint32_t(in.x) + in.width > dd.width || uint32_t(in.y) + in.height > dd.height)
-    return nullptr;
+    return false;
   const uint32_t step = s.half ? 2 : 1;
   const uint32_t pw = RoundUp16((in.width + step - 1) / step), ph = RoundUp16((in.height + step - 1) / step);
-  if (!EnsureImages(pw, ph, in.width, in.height, s.temporal)) return nullptr;
+  if (!EnsureImages(pw, ph, in.width, in.height, s.temporal)) return false;
   origin_x_ = in.x;
   origin_y_ = in.y;
+  step_ = step;
   Constants k;
   FillConstants(k, in, s, pw, ph, step);
   // A contiguous frame with the same AO and viewport can reuse history. Cuts and unmatched
@@ -408,17 +409,26 @@ nvrhi::ITexture* Gtao::Compute(nvrhi::ICommandList* cl, const GtaoInput& in, con
   const auto cb = S::ConstantBuffer(0, constants_);
   nvrhi::BindingSetHandle& prepare = sets_[{kSetPrepare, in.depth, nullptr}];
   if (!prepare) prepare = Set(prepare_, {cb, S::Texture_SRV(0, in.depth), S::Texture_UAV(0, raw_)});
+  if (!prepare) return false;
+  Dispatch(cl, prepare_, prepare, pw / 8, ph / 8);
+  Dispatch(cl, prefilter_, fixed_sets_[0], pw / 16, ph / 16);
+  Dispatch(cl, normals_, fixed_sets_[1], pw / XE_GTAO_NUMTHREADS_X, ph / XE_GTAO_NUMTHREADS_Y);
+  return true;
+}
+
+nvrhi::ITexture* Gtao::Compute(nvrhi::ICommandList* cl, const GtaoInput& in, const GtaoSettings& s) {
+  if (!Prepare(cl, in, s)) return nullptr;
+  const uint32_t pw = padded_w_, ph = padded_h_;
+  using S = nvrhi::BindingSetItem;
+  const auto cb = S::ConstantBuffer(0, constants_);
   nvrhi::BindingSetHandle& output = sets_[{kSetOutput, in.depth, s.temporal ? spatial_.Get() : output_.Get()}];
   if (!output) {
     output = Set(output_pass_, {cb, S::Texture_SRV(0, term_a_), S::Texture_SRV(1, in.depth),
                                 S::Texture_SRV(2, depth_mips_, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(0, 1, 0, 1)),
                                 S::Texture_UAV(0, s.temporal ? spatial_ : output_)});
   }
-  if (!prepare || !output) return nullptr;
+  if (!output) return nullptr;
 
-  Dispatch(cl, prepare_, prepare, pw / 8, ph / 8);
-  Dispatch(cl, prefilter_, fixed_sets_[0], pw / 16, ph / 16);
-  Dispatch(cl, normals_, fixed_sets_[1], pw / XE_GTAO_NUMTHREADS_X, ph / XE_GTAO_NUMTHREADS_Y);
   Pass& main = s.sample_quality == 1 ? main_low_ : s.sample_quality == 3 ? main_high_ : main_;
   Dispatch(cl, main, fixed_sets_[2], pw / XE_GTAO_NUMTHREADS_X, ph / XE_GTAO_NUMTHREADS_Y);
   Dispatch(cl, denoise_, fixed_sets_[3], pw / (XE_GTAO_NUMTHREADS_X * 2), ph / XE_GTAO_NUMTHREADS_Y);

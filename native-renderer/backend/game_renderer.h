@@ -38,6 +38,7 @@
 #include "backend/ao_config.h"
 #include "backend/ao_timer.h"
 #include "backend/scene_ao.h"
+#include "backend/scene_gi.h"
 #include "backend/draw_sink.h"
 #include "backend/driver_pipeline_cache.h"
 #include "backend/frame_log.h"
@@ -128,6 +129,9 @@ class GameRenderer {
     // radius, classifier rules, the ambient-only shader list. The default is the AO above as it
     // always was. Set before Initialize.
     AoConfig ao;
+    // Screen-space global illumination (gi_config.h, docs/gi.md). Off by default: nothing of it is
+    // created. Set before Initialize.
+    GiConfig gi;
     // Log every draw of this game frame (-1 none).
     int32_t dump_frame = -1;
     // Debugging aids (bits): 1 the game's clears are green, 2 the frame image
@@ -287,6 +291,8 @@ class GameRenderer {
   std::shared_ptr<const kkshaders::AmbientTable> ao_ambient_table() const;
   // The GTAO method's state (null with the legacy method; tests and logging).
   const SceneAo* scene_ao() const { return scene_ao_.get(); }
+  // The screen-space GI's state (null when it is off; tests and logging).
+  const SceneGi* scene_gi() const { return scene_gi_.get(); }
 
   // The host render targets made so far (tests and debugging).
   struct TargetInfo {
@@ -601,6 +607,9 @@ class GameRenderer {
   bool AoSetBindings(nvrhi::BindingSetDesc& set0);
   void AoInitialize();
   AoSettings AoSettingsFor(uint64_t frame);
+  SceneAo::Draw AoDescribeDraw(const DrawCall& call, const dev::DeviceView& d, const std::array<HostTarget*, 4>& colors,
+                               HostTarget* depth, const PipelineRecord& record, const GameShader& vs,
+                               const GameShader* ps) const;
   void AoDrawHook(nvrhi::ICommandList* cl, const DrawCall& call, const dev::DeviceView& d,
                   const std::array<HostTarget*, 4>& colors, HostTarget* depth, const PipelineRecord& record,
                   const GameShader& vs, const GameShader* ps);
@@ -621,6 +630,19 @@ class GameRenderer {
   nvrhi::ITexture* ao_slot_texture_ = nullptr;
   uint64_t ao_settings_frame_ = UINT64_MAX;
   AoSettings ao_settings_;
+
+  // ---- screen-space global illumination (game_gi.cpp, docs/gi.md). The hooks are called from
+  // Initialize, Draw, Clear, Resolve and Present; scene_gi_ is null when it is off.
+  void GiInitialize();
+  void GiDrawHook(nvrhi::ICommandList* cl, const DrawCall& call, const dev::DeviceView& d,
+                  const std::array<HostTarget*, 4>& colors, HostTarget* depth, const PipelineRecord& record,
+                  const GameShader& vs, const GameShader* ps);
+  void GiClearHook(const ClearCall& call, const HostTarget* depth);
+  void GiResolveHook(const ResolveCall& call, const HostTarget* source, bool from_depth);
+  void GiPresentHook(nvrhi::ICommandList* cl);
+  bool GiAoOn(uint64_t frame);
+  std::unique_ptr<SceneGi> scene_gi_;
+  std::unique_ptr<AoGpuTimer> gi_timer_;  // --native_gi_gpu_time
 
   kknr::TextureCache textures_;
   // GPU-written (resolved) textures by base address, for other fetch

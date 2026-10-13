@@ -1,0 +1,310 @@
+{
+ "version": 1,
+ "about": "The global illumination's chapters (written by tests/gigen.py, do not edit by hand). Times are seconds after the save menu opens. See docs/gi.md.",
+ "defaults": {
+  "args": [
+   "--kk_launcher=false",
+   "--kk_frame_rate=30",
+   "--kk_cheats=true",
+   "--kk_cheat_chapters=true",
+   "--fullscreen=false",
+   "--window_width=1280",
+   "--window_height=720",
+   "--kk_original_look=true",
+   "--log_max_file_size_mb=500"
+  ],
+  "plugin_args": {
+   "native": [
+    "--native_pipeline_cache=false",
+    "--native_pipeline_list=false",
+    "--native_vk_pipeline_cache=false"
+   ]
+  },
+  "env": {
+   "KK_DEV_AUTOSKIP": "1"
+  },
+  "clock_offset": {
+   "menu": 7.7,
+   "boot": 1.0
+  },
+  "startup_allowance": 60,
+  "thresholds": {
+   "mae": 1.0,
+   "ssim": 0.99,
+   "tile_mae": 2.0,
+   "bad": 0.0002,
+   "bad_level": 40,
+   "env_tol": 16,
+   "env_radius": 2,
+   "env_anim_level": 16,
+   "env_bad": 0.002,
+   "env_tile": 1.5,
+   "drawlog": 0.98,
+   "min_pass": 1.0,
+   "env_flash_level": null
+  }
+ },
+ "runs": {
+  "gi": {
+   "from": "menu",
+   "script": "12:A,18:A,24:A,30:RIGHT,32.6:A,36.6:SKIP,38.6:SKIP,40.6:SKIP,42.6:SKIP,44.6:SKIP,46.6:SKIP,48.6:SKIP,50.6:SKIP,52.6:SKIP,54.6:SKIP,56.6:SKIP,58.6:SKIP,60.6:SKIP,62.6:SKIP,64.6:START,66.1:UP,66.6:UP,67.1:UP,67.6:UP,68.1:UP,68.6:UP,69.1:UP,70.1:A,72.1:A,77.6:RIGHT,78.2:RIGHT,78.8:RIGHT,81.4:A,85.4:SKIP,87.4:SKIP,89.4:SKIP,91.4:SKIP,93.4:SKIP,95.4:SKIP,97.4:SKIP,99.4:SKIP,101.4:SKIP,103.4:SKIP,105.4:SKIP,107.4:SKIP,109.4:SKIP,111.4:SKIP,113.4:SKIP,115.4:START,116.9:UP,117.4:UP,117.9:UP,118.4:UP,118.9:UP,119.4:UP,119.9:UP,120.9:A,122.9:A,128.4:RIGHT,129:RIGHT,129.6:RIGHT,130.2:RIGHT,132.8:A,136.8:SKIP,138.8:SKIP,140.8:SKIP,142.8:SKIP,144.8:SKIP,146.8:SKIP,148.8:SKIP,150.8:SKIP,152.8:SKIP,154.8:SKIP,156.8:SKIP,158.8:SKIP,160.8:SKIP,162.8:SKIP,164.8:SKIP,166.8:SKIP,168.8:SKIP,170.8:SKIP,172.8:SKIP,176.8:START,178.3:UP,178.8:UP,179.3:UP,179.8:UP,180.3:UP,180.8:UP,181.3:UP,182.3:A,184.3:A,189.8:RIGHT,190.4:RIGHT,193:A,197:SKIP,199:SKIP,201:SKIP,203:SKIP,205:SKIP,207:SKIP,209:START,210.5:UP,211:UP,211.5:UP,212:UP,212.5:UP,213:UP,213.5:UP,214.5:A,216.5:A,222:RIGHT,222.6:RIGHT,225.2:A,229.2:SKIP,231.2:SKIP,233.2:SKIP,235.2:SKIP,237.2:SKIP,239.2:SKIP,241.2:SKIP,243.2:SKIP,245.2:SKIP,247.2:SKIP,249.2:SKIP,251.2:SKIP,253.2:SKIP,255.2:SKIP,257.2:SKIP,259.2:START,260.7:UP,261.2:UP,261.7:UP,262.2:UP,262.7:UP,263.2:UP,263.7:UP,264.7:A,266.7:A,272.2:RIGHT,272.8:RIGHT,273.4:RIGHT,274:RIGHT,274.6:RIGHT,275.2:RIGHT,275.8:RIGHT,276.4:RIGHT,277:RIGHT,277.6:RIGHT,278.2:RIGHT,280.8:A,284.8:SKIP,286.8:SKIP,288.8:SKIP,290.8:SKIP,292.8:SKIP,294.8:SKIP,296.8:SKIP,298.8:SKIP,300.8:SKIP,302.8:SKIP,304.8:SKIP,306.8:SKIP,308.8:SKIP,310.8:SKIP,312.8:SKIP,314.8:START,316.3:UP,316.8:UP,317.3:UP,317.8:UP,318.3:UP,318.8:UP,319.3:UP,320.3:A,322.3:A,327.8:RIGHT,328.4:RIGHT,329:RIGHT,331.6:A,335.6:SKIP,337.6:SKIP,339.6:SKIP,341.6:SKIP,343.6:SKIP,345.6:SKIP,347.6:SKIP,349.6:SKIP,351.6:SKIP,353.6:SKIP,355.6:SKIP,357.6:SKIP,359.6:SKIP,361.6:SKIP,363.6:SKIP,365.6:START,367.1:UP,367.6:UP,368.1:UP,368.6:UP,369.1:UP,369.6:UP,370.1:UP,371.1:A,373.1:A,378.6:RIGHT,381.2:A,385.2:SKIP,387.2:SKIP,389.2:SKIP,391.2:SKIP,393.2:SKIP,395.2:SKIP,397.2:SKIP,398.2:START,399.7:UP,400.2:UP,400.7:UP,401.2:UP,401.7:UP,402.2:UP,402.7:UP,403.7:A,405.7:A,411.2:RIGHT,411.8:RIGHT,414.4:A,418.4:SKIP,420.4:SKIP,422.4:SKIP,424.4:SKIP,426.4:SKIP,428.4:SKIP,430.4:SKIP,432.4:SKIP,434.4:SKIP,436.4:SKIP,438.4:SKIP,440.4:SKIP,442.4:SKIP,444.4:SKIP,446.4:SKIP,448.4:START,449.9:UP,450.4:UP,450.9:UP,451.4:UP,451.9:UP,452.4:UP,452.9:UP,453.9:A,455.9:A,461.4:RIGHT,462:RIGHT,462.6:RIGHT,463.2:RIGHT,465.8:A,469.8:SKIP,471.8:SKIP,473.8:SKIP,475.8:SKIP,477.8:SKIP,479.8:SKIP,481.8:SKIP,483.8:SKIP,485.8:SKIP,487.8:SKIP,489.8:SKIP,491.8:SKIP,493.8:SKIP,495.8:SKIP,497.8:SKIP,499.8:START,501.3:UP,501.8:UP,502.3:UP,502.8:UP,503.3:UP,503.8:UP,504.3:UP,505.3:A,507.3:A,512.8:RIGHT,513.4:RIGHT,514:RIGHT,514.6:RIGHT,517.2:A,521.2:SKIP,523.2:SKIP,525.2:SKIP,527.2:SKIP,529.2:SKIP,531.2:SKIP,533.2:SKIP,535.2:SKIP,537.2:SKIP,539.2:SKIP,541.2:SKIP,543.2:SKIP,545.2:SKIP,547.2:SKIP,549.2:SKIP,551.2:START,552.7:UP,553.2:UP,553.7:UP,554.2:UP,554.7:UP,555.2:UP,555.7:UP,556.7:A,558.7:A,564.2:LEFT,564.8:LEFT,565.4:LEFT,566:LEFT,566.6:LEFT,567.2:LEFT,567.8:LEFT,568.4:LEFT,569:LEFT,569.6:LEFT,570.2:LEFT,570.8:LEFT,571.4:LEFT,572:LEFT,572.6:LEFT,573.2:LEFT,573.8:LEFT,574.4:LEFT,575:LEFT,575.6:LEFT,576.2:LEFT,576.8:LEFT,577.4:LEFT,578:LEFT,578.6:LEFT,579.2:LEFT,579.8:LEFT,580.4:LEFT,581:LEFT,581.6:LEFT,582.2:LEFT,582.8:LEFT,583.4:LEFT,584:LEFT,584.6:LEFT,585.2:LEFT,585.8:LEFT,588.4:A,592.4:SKIP,594.4:SKIP,596.4:SKIP,598.4:SKIP,600.4:SKIP,602.4:SKIP,604.4:SKIP,606.4:SKIP,608.4:SKIP,610.4:SKIP,612.4:SKIP,614.4:SKIP,616.4:SKIP,618.4:SKIP,620.4:SKIP,622.4:SKIP,624.4:SKIP,626.4:SKIP,628.4:SKIP",
+   "env": {
+    "KK_DEV_FREEZE_SKIP": "10"
+   }
+  }
+ },
+ "scenes": [
+  {
+   "name": "gi01_skull_island",
+   "run": "gi",
+   "chapter": 1,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 1: Ann's face leaning over Jack on the beach, the opening that waits for the player (faces, sand, jungle)",
+   "chapter_start": 32.6,
+   "times": [
+    60.6,
+    61.1,
+    61.6
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "gi04_the_wall",
+   "run": "gi",
+   "chapter": 4,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 4: a jungle clearing at dusk, a spiked wooden gate against the sky (sky, foliage, distant terrain)",
+   "chapter_start": 81.4,
+   "times": [
+    111.4,
+    111.9,
+    112.4
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "gi08_vrex",
+   "run": "gi",
+   "chapter": 8,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 8: Jack in the rain under the cave roof, random lightning (rain, rock, grass, the legacy AO's home scene)",
+   "chapter_start": 132.8,
+   "times": [
+    172.8,
+    173.3,
+    173.8
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "gi10_kong",
+   "run": "gi",
+   "chapter": 10,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 10: Kong crouching on a ledge by a ruined wall (Kong's fur, ruins)",
+   "chapter_start": 193.0,
+   "times": [
+    205.0,
+    205.5,
+    206.0
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "gi12_millipedes",
+   "run": "gi",
+   "chapter": 12,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 12: a dark jungle path towards a lit gate in a wall of vines (mist, foliage)",
+   "chapter_start": 225.2,
+   "times": [
+    255.2,
+    255.7,
+    256.2
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "gi23_the_cave",
+   "run": "gi",
+   "chapter": 23,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 23: a dark wooden scaffold over a pool, figures behind it (a cave)",
+   "chapter_start": 280.8,
+   "times": [
+    310.8,
+    311.3,
+    311.8
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "gi26_call_kong",
+   "run": "gi",
+   "chapter": 26,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 26: a dark hall with a lattice of beams over pale water (water under beams)",
+   "chapter_start": 331.6,
+   "times": [
+    361.6,
+    362.1,
+    362.6
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "gi27_kong_rescue",
+   "run": "gi",
+   "chapter": 27,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 27: Jack with a spear behind the rocks, a V-Rex, fires and rain (fire, smoke, rain, characters)",
+   "chapter_start": 381.2,
+   "times": [
+    394.2,
+    394.7,
+    395.2
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "gi29_to_the_lair",
+   "run": "gi",
+   "chapter": 29,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 29: a great tree's roots in green mist (the jungle's green)",
+   "chapter_start": 414.4,
+   "times": [
+    444.4,
+    444.9,
+    445.4
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "gi33_chased_by_kong",
+   "run": "gi",
+   "chapter": 33,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 33: a cave with a water channel, dark green rock (water channel)",
+   "chapter_start": 465.8,
+   "times": [
+    495.8,
+    496.3,
+    496.8
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "gi37_kong_struck",
+   "run": "gi",
+   "chapter": 37,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 37: the Venture at anchor in the bay, seen from the rocks of the shore at dusk (sea, distant terrain, sky)",
+   "chapter_start": 517.2,
+   "times": [
+    547.2,
+    547.7,
+    548.2
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  },
+  {
+   "name": "gi00_venture",
+   "run": "gi",
+   "chapter": 0,
+   "kind": "gameplay",
+   "description": "Chapter-select entry 0: the hull of the rocking ship with VENTURE painted on it, rain (sea spray, rain, the ship)",
+   "chapter_start": 588.4,
+   "times": [
+    677.4,
+    677.9,
+    678.4
+   ],
+   "golden_times": [],
+   "thresholds": {
+    "mae": null,
+    "ssim": null,
+    "tile_mae": null,
+    "bad": null,
+    "min_pass": 0.6
+   }
+  }
+ ]
+}

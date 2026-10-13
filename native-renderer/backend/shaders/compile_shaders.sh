@@ -48,4 +48,11 @@ for spec in gtao_prepare_cs:cs:cs_prepare gtao_prefilter_cs:cs:cs_prefilter gtao
     -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-b-shift 256 0 -fvk-u-shift 384 0 \
     -Fh "$out/${base}_spirv.h" -Vn "k_${base}_spirv" "$src"
 done
+# Screen-space GI (ssgi.hlsl, docs/gi.md): one blob per entry point.
+src="$here/ssgi.hlsl"
+for spec in ssgi_radiance_cs:cs:cs_radiance ssgi_radiance_down_cs:cs:cs_radiance_down ssgi_gather_cs:cs:cs_gather             ssgi_denoise_cs:cs:cs_denoise ssgi_temporal_cs:cs:cs_temporal ssgi_vs:vs:vs_main ssgi_composite_ps:ps:ps_composite; do
+  base=${spec%%:*}; rest=${spec#*:}; stage=${rest%%:*}; entry=${rest#*:}
+  "$DXC" -nologo -T "${stage}_6_0" -E "$entry" -O3 -Fh "$out/${base}_dxil.h" -Vn "k_${base}_dxil" "$src"
+  "$DXC" -nologo -T "${stage}_6_0" -E "$entry" -O3 -spirv -fspv-target-env=vulkan1.2     -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-b-shift 256 0 -fvk-u-shift 384 0     -Fh "$out/${base}_spirv.h" -Vn "k_${base}_spirv" "$src"
+done
 echo "Shaders written to $out"

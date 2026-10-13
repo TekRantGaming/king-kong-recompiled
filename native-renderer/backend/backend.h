@@ -22,6 +22,7 @@
 
 #include "backend/ambient_occlusion.h"
 #include "backend/ao_config.h"
+#include "backend/gi_config.h"
 #include "backend/draw_state.h"
 #include "backend/guest_memory.h"
 #include "backend/host_device.h"
@@ -97,6 +98,8 @@ struct GameSettings {
   // The rest of the AO's settings (docs/ao.md): --native_ao_method, _apply, _quality, _radius, and
   // the rules and shader list files. The default is today's AO.
   AoConfig ao;
+  // Screen-space global illumination (docs/gi.md): --native_gi and the rest. Off by default.
+  GiConfig gi;
   // Temporal upscalers (docs/upscalers.md): --native_upscaler and its settings. Off by default.
   UpscaleConfig upscale;
 };

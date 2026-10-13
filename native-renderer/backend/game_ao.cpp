@@ -74,19 +74,10 @@ AoSettings GameRenderer::AoSettingsFor(uint64_t frame) {
   return ao_settings_;
 }
 
-void GameRenderer::AoDrawHook(nvrhi::ICommandList* cl, const DrawCall& call, const dev::DeviceView& d,
-                              const std::array<HostTarget*, 4>& colors, HostTarget* depth, const PipelineRecord& record,
-                              const GameShader& vs, const GameShader* ps) {
-  if (!scene_ao_) {
-    AoWriteAmbientConstants(cl, false);  // b4 is bound all the same (the GTAO method did not start)
-    return;
-  }
-  const AoSettings s = AoSettingsFor(call.frame);
-  if (ps && (ps->ucode_hash == kFogShaderA || ps->ucode_hash == kFogShaderB) && s.mode > 0) {
-    float fog[16];
-    for (uint32_t i = 0; i < 16; ++i) fog[i] = LoadBEFloat(d.at(dev::kPsConstants + i * 4));
-    scene_ao_->NoteFog(fog, call.frame);
-  }
+// A draw as the classifier and the camera finder see it (the GI's hooks use it too, game_gi.cpp).
+SceneAo::Draw GameRenderer::AoDescribeDraw(const DrawCall& call, const dev::DeviceView& d,
+                                           const std::array<HostTarget*, 4>& colors, HostTarget* depth,
+                                           const PipelineRecord& record, const GameShader& vs, const GameShader* ps) const {
   SceneAo::Draw a;
   a.frame = call.frame;
   AoDrawState& st = a.state;
@@ -126,6 +117,24 @@ void GameRenderer::AoDrawHook(nvrhi::ICommandList* cl, const DrawCall& call, con
     sc.host_scale_x = size_from->scale_x;
     sc.host_scale_y = size_from->scale_y;
   }
+  return a;
+}
+
+void GameRenderer::AoDrawHook(nvrhi::ICommandList* cl, const DrawCall& call, const dev::DeviceView& d,
+                              const std::array<HostTarget*, 4>& colors, HostTarget* depth, const PipelineRecord& record,
+                              const GameShader& vs, const GameShader* ps) {
+  if (!scene_ao_) {
+    AoWriteAmbientConstants(cl, false);  // b4 is bound all the same (the GTAO method did not start)
+    return;
+  }
+  const AoSettings s = AoSettingsFor(call.frame);
+  if (ps && (ps->ucode_hash == kFogShaderA || ps->ucode_hash == kFogShaderB) && s.mode > 0) {
+    float fog[16];
+    for (uint32_t i = 0; i < 16; ++i) fog[i] = LoadBEFloat(d.at(dev::kPsConstants + i * 4));
+    scene_ao_->NoteFog(fog, call.frame);
+  }
+  SceneAo::Draw a = AoDescribeDraw(call, d, colors, depth, record, vs, ps);
+  const AoDrawState& st = a.state;
   const bool reads = scene_ao_->OnDraw(cl, a, s);
   if (ao_constants_) AoWriteAmbientConstants(cl, reads);
   const bool dump = Dump(call.frame) || (options_.ao.dump_every && call.frame % options_.ao.dump_every == 0);
