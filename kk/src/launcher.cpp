@@ -4593,7 +4593,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     TickSteam();
     CaptureKey();
     TickNameEditor();
-    if (open_whats_new_ && !modal_.open) {
+    // What's new waits until the shaders an update rebuilds are done: building them loads every processor
+    // core, and the launcher answers slowly meanwhile.
+    if (open_whats_new_ && !modal_.open && !update_shaders_ && !native_pack_.Busy()) {
       open_whats_new_ = false;
       OpenWhatsNew();
     }
