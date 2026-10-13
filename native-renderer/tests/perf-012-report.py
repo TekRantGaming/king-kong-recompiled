@@ -1,7 +1,9 @@
 """Render the task report from preserved test metadata and counters."""
 import json
 import runpy
+import re
 import statistics
+import subprocess
 import sys
 from pathlib import Path
 
@@ -96,11 +98,12 @@ report.append(table(['Case','Chapter','Draws','Graphics-state calls','Game pipel
    n(r.get('buffer_ms'),3),r.get('pipelines','n/a'),n(r.get('private_mb'),0)+'/'+n(r.get('working_mb'),0)) for r in work]))
 report.append('''\nUpload bytes cover guest textures, vertices, indices and draw constants, not every auxiliary-pass allocation. Texture/buffer counts and late descriptor updates show steady cache reuse; residency counts are not byte-accurate VRAM accounting. WDDM dedicated/shared process usage and private/working-set bytes are different measures and are not interchangeable or additive unique-RAM estimates.
 
-## GPU pass groups
+## Emitted commands
 ''')
 report.append(table(['Case','NVRHI pipeline binds','Viewport commands','Scissor commands','Blend commands','Stencil commands','D3D graphics CBV updates'],
  [(r['label'],n(r.get('actual_pipeline_binds'),1),n(r.get('emitted_viewports'),1),n(r.get('emitted_scissors'),1),
    n(r.get('emitted_blends'),1),n(r.get('emitted_stencil'),1),n(r.get('emitted_root_cbv'),1)) for r in work if 'actual_pipeline_binds' in r]))
+report.append('## GPU pass groups')
 pass_rows=[]
 for r in basic+[v for v in rows if v['label'] in ('scale-before3-vk-1440','scale-after-vk-1440')]:
     for name,values in r.get('gpu_passes',{}).items():
@@ -114,7 +117,7 @@ report.append('''\nTarget addresses identify the actual grouped passes in that p
 - Repeated vertex streams: a cache scoped to one draw reuses only identical physical address, size and used byte range. V-Rex guest uploads fell from 11,765,732 to 9,725,689 bytes/frame, buffer handling from 0.712 to 0.467 ms, about 2,233 repeated binds/frame avoided. Host median stayed approximately 9.2 ms. Data rewritten between draws is still uploaded.
 - Scale constants: compare all 528 bytes, while forcing the first write in every command list/frame, just as VS/PS constants already do. Writes fell from 905.057 to 41.747/frame, uploads from 9,721,315 to 9,261,065 bytes/frame, render CPU from 4.927 to 4.792 ms. Host median was 9.175 versus 9.169 ms. The detailed GPU sample varied upward, 4.153 to 5.211 ms, so no GPU speed improvement is claimed for this change. Later regular profiles are in the tables above.
 - Unsupported Vulkan devices: validate nine enabled bindless features plus actual descriptor set/per-stage/pool limits before table creation. Fixed tables require seven sets, 18,944 sampled-image descriptors, 16,384 storage-buffer descriptors and 1,024 samplers. Missing features/limits log their names and actual requirements with a Native D3D12/Classic recommendation. Unverifiable old SDK feature sets are rejected. A requested game renderer that cannot initialize now fails rather than displaying the placeholder. Twenty-one feature/boundary tests pass; this GPU also starts through the guards.
-- Submission overlap: the first completion implementation flushed newer frame submissions when recycling an older image. Venture exposed the regression: 4.18 ms before, 9.09 ms after that blanket flush, with approximately unchanged GPU cost. The matching-query submission ticket preserves the two-frame GPU bound while waiting only for the old frame's query to have been assigned. Its repeated measurements are identified as `ticket-*` above; do not substitute intermediate measurements for the final DLL.
+- Submission overlap: the first completion implementation flushed newer frame submissions when recycling an older image. Venture exposed the regression: 4.18 ms before, 9.09 ms after that blanket flush, with approximately unchanged GPU cost. The matching-query submission ticket preserves the two-frame GPU bound while waiting only for the old frame's query to have been assigned. The final Venture repeat measured 6.493 ms median with zero errors; GPU mean varied from 3.163 to 5.194 ms, so this is not an isolated FPS gain. The unbounded initial Venture result remains faster, and the remaining queue/completion cost needs further profiling. Repeated measurements are identified as `ticket-*` above; do not substitute intermediate measurements for the final DLL.
 - Diagnostics: reuse task 009 counters/helper, add thread CPU execution, WDDM memory, state/transition/descriptor counters and bounded GPU pass queries. CPU probes are off outside the explicit debug bit; game CSV probes require the dev build and log window. Pass timing needed 2,048 queries. Two early pass-profile attempts used an already occupied draw-stop bit and are discarded; bit 524288 is the corrected flag. The known-good 32768-only baseline/cache runs were unaffected.
 
 Visual review: the game's own V-Rex 100-second captures before and after scale reuse show the expected scene without obvious missing objects or large colour changes. Rain/animation/settling differ, and thumbnail review is not a pixel-perfect rendering proof. Original captures are retained. No game images, packs or logs were committed.
@@ -141,6 +144,21 @@ Exclusive presentation review: kk/src/display_modes.cpp selects a display mode t
 
 Every measurement below links to its preserved run directory, including `test.json`, `frame_times.csv`, `process.csv`, `gpu-memory.csv`, the rotating native logs and the game's BMPs. Exact command arguments, DLL SHA256 and affinity mask are in metadata. Reproduce summaries with the absolute Python 3.12 executable, `-I`, and `native-renderer/tests/perf-012-summary.py`.
 ''')
+report.append('## Pipeline stalls and queue waits')
+stall_rows=[]
+for r in work:
+    stutter=' '.join(r.get('last_stutter',[]))
+    match=re.search(r'(\d+) of (\d+) frames .*?, (\d+) ms in all;.*?worst wait ([\d.]+) ms',stutter)
+    reuse=re.search(r'GPU frame reuse wait (\d+) ms over (\d+) frames',' '.join(r.get('last_reuse_wait',[])))
+    stall_rows.append((r['label'],r['chapter'],match[1]+'/'+match[2] if match else 'n/a',
+                       match[3] if match else 'n/a',match[4] if match else 'n/a',
+                       n(r.get('host_queue_wait_ms')),n(int(reuse[1])/int(reuse[2])) if reuse and int(reuse[2]) else 'n/a'))
+report.append(table(['Case','Chapter','Pipeline-wait frames / all','Total pipeline wait ms','Worst pipeline wait ms','Queue wait ms/frame','GPU reuse wait ms/frame'],stall_rows))
+report.append('These are cumulative process counters, including startup, unlike the late steady-state CPU/GPU means. Queue waits are wall time, not CPU execution, and can overlap other threads. The low host CPU execution alongside queue/reuse wall waits explains why those waits deserve further presentation-path profiling.')
+report.append('## Local commits')
+commits=subprocess.check_output(['git','log','beta4..HEAD','--format=%h %s'],text=True).strip().splitlines()
+report.append('\n'.join('- `'+line.split(' ',1)[0]+'`: '+line.split(' ',1)[1] for line in commits))
+report.append('## Run directories')
 for r in rows:
     report.append(f"- `{Path(r['path']).name}`: `{r['path']}`. {status(r)}.")
 text='\n\n'.join(report)+'\n'
