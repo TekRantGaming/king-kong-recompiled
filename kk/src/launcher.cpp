@@ -239,7 +239,7 @@ constexpr std::pair<int, const char*> kLanguages[] = {
 // native_upscaler: on Vulkan, DLSS and XeSS need the device made with their extensions (the native
 // renderer asks for them when it makes the device, before the launcher opens).
 constexpr const char* kRestartCvars[] = {"present_effect", "window_width", "window_height", "monitor", "gpu_plugin",
-                                         "native_upscaler"};
+                                         "native_upscaler", "native_backend"};
 
 enum Page { kHome, kDisplay, kGraphics, kGameplay, kControls, kCheatsPage, kAchievements, kAbout, kPageCount };
 constexpr const char* kPageNames[kPageCount] = {"Home",     "Display", "Graphics",     "Gameplay",
@@ -1326,6 +1326,28 @@ class SettingsPages {
       Disable(it, flag && (flag->source == rex::cvar::Source::kCommandLine || flag->source == rex::cvar::Source::kEnvironment),
               "Set on the command line (--gpu_plugin).");
       items.push_back(std::move(it));
+      if (UsingNativeRenderer() && FindFlag("native_backend")) {
+        Item api;
+        api.type = ItemType::kChoice;
+        api.label = "Graphics API";
+        api.description =
+            "How the native renderer talks to your graphics card. Auto keeps the usual choice. DirectX 12 is "
+            "needed for AMD FSR 4. Changes apply when the game starts: press Play to restart with your choice.";
+        api.options = {"Auto", "Vulkan", "DirectX 12"};
+        const std::string backend = Get("native_backend");
+        api.index = backend == "auto" ? 0 : backend == "vulkan" ? 1 : backend == "d3d12" ? 2 : -1;
+        api.value_text = backend;
+        api.default_text = "Auto";
+        api.on_choice = [](int i) {
+          Set("native_backend", i == 0 ? "auto" : i == 1 ? "vulkan" : "d3d12");
+          ApplyUpscalerDefaults();
+        };
+        api.on_default = [] {
+          Reset("native_backend");
+          ApplyUpscalerDefaults();
+        };
+        items.push_back(std::move(api));
+      }
     }
 
     return items;
@@ -1687,7 +1709,7 @@ class SettingsPages {
     static const std::set<std::string> kRestartOnly = {
         "Window mode", "Window size", "Resolution", "Refresh rate", "Monitor", "Frame rate", "VSync",
         "Upscaler", "Upscaler mode", "Render quality", "Internal resolution", "Look", "Preset", "Renderer",
-        "Language", "Startup logos"};
+        "Graphics API", "Language", "Startup logos"};
     std::vector<Item> out;
     for (Item& it : items) {
       if (it.type != ItemType::kSection && kRestartOnly.count(it.label)) continue;
@@ -4724,10 +4746,13 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // kept in the settings (kk_upscalers_offered) and the default upscaler follows it (SetOfferedUpscalers).
   void TickUpscalerQuery() {
 #if defined(KK_NATIVE_RENDERER)
-    if (upscaler_answer_taken_ || !HasTemporalSetting() || !UsingNativeRenderer()) return;
+    if (!HasTemporalSetting() || !UsingNativeRenderer()) return;
+    const std::string backend = Get("native_backend");
+    if (upscaler_answer_taken_ && upscaler_answer_backend_ == backend) return;
     const nr::kk::UpscalerChoices c = nr::kk::QueryUpscalers();
     if (c.state != 2 && c.state != 3) return;  // still asking, or not possible here
     upscaler_answer_taken_ = true;
+    upscaler_answer_backend_ = backend;
     std::string offered;
     for (const auto& [on, name] : {std::pair{c.dlss, "dlss"}, std::pair{c.fsr4, "fsr4"}, std::pair{c.fsr3, "fsr3"},
                                    std::pair{c.xess, "xess"}})
@@ -4923,6 +4948,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   std::string new_name_, name_before_;  // New game's name ("" the game's own)
   bool editing_name_ = false;
   bool online_asked_ = false;  // MaybeAskOnline has looked this session
+  std::string upscaler_answer_backend_;
   bool upscaler_answer_taken_ = false;  // TickUpscalerQuery has the plugin's answer
   bool menu_value_ = false;    // the menu's focused entry has a value (Left and Right change it)
   int side_focus_ = -1;      // the side panel (Home, setup) with the focus, or -1

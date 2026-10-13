@@ -9,7 +9,9 @@
 // (NR_UPSCALER_QUERY_RUNNING); later calls return the state, and once it is NR_UPSCALER_QUERY_DONE
 // fill `out`. The answer comes from QueryUpscalerSupport (backend/upscaler.h) on a Direct3D 12 device
 // of the query's own on the same graphics card: each SDK says whether it runs on this card and driver.
-// When the game draws with Vulkan, FSR 4 is left out (AMD's FSR 4 has no Vulkan); DLSS and XeSS run on
+// The SDK answer is cached; each call filters it for the current native_backend so changing the API
+// in the launcher immediately changes the choices. With Vulkan, FSR 4 is left out (AMD's FSR 4 has
+// no Vulkan); DLSS and XeSS run on
 // Vulkan through the SDK's device requests (sdk-patches/0003), else they are left out too.
 // nr_upscaler_query_wait returns once the thread is done (the game's start and the launcher's restart
 // call it before they make devices of their own).

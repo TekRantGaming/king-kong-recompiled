@@ -2,6 +2,11 @@
 // passes it (the key; {0}, {1}... are filled in), then German, Spanish,
 // French and Italian.
 constexpr Entry kEntries[] = {
+    {"Graphics API", "Grafik-API", "API gráfica", "API graphique", "API grafica"},
+    {"Auto", "Auto", "Auto", "Auto", "Auto"},
+    {"Vulkan", "Vulkan", "Vulkan", "Vulkan", "Vulkan"},
+    {"DirectX 12", "DirectX 12", "DirectX 12", "DirectX 12", "DirectX 12"},
+    {"How the native renderer talks to your graphics card. Auto keeps the usual choice. DirectX 12 is needed for AMD FSR 4. Changes apply when the game starts: press Play to restart with your choice.", "Wie der native Renderer mit deiner Grafikkarte kommuniziert. Auto behält die übliche Auswahl bei. DirectX 12 wird für AMD FSR 4 benötigt. Änderungen gelten beim Spielstart: Drücke Spielen, um mit deiner Auswahl neu zu starten.", "Cómo se comunica el renderizador nativo con tu tarjeta gráfica. Auto mantiene la selección habitual. AMD FSR 4 necesita DirectX 12. Los cambios se aplican al iniciar el juego: pulsa Jugar para reiniciar con tu selección.", "Comment le moteur de rendu natif communique avec votre carte graphique. Auto conserve le choix habituel. DirectX 12 est nécessaire pour AMD FSR 4. Les changements prennent effet au démarrage du jeu : appuyez sur Jouer pour redémarrer avec votre choix.", "Come il renderer nativo comunica con la scheda grafica. Auto mantiene la scelta abituale. DirectX 12 è necessario per AMD FSR 4. Le modifiche si applicano all'avvio del gioco: premi Gioca per riavviare con la tua scelta."},
     {"Paused", "Pausiert", "En pausa", "En pause", "In pausa"},
     {"Resume", "Fortsetzen", "Reanudar", "Reprendre", "Riprendi"},
     {"Score", "Punktzahl", "Puntuación", "Score", "Punteggio"},

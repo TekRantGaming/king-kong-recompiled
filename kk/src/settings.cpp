@@ -376,7 +376,8 @@ std::string BestTemporalUpscaler() {
   }
   auto has = [&](const char* v) { return ("," + offered + ",").find("," + std::string(v) + ",") != std::string::npos; };
   if (gpu.vendor == GpuVendor::kNvidia && has("dlss")) return "dlss";
-  if (gpu.vendor == GpuVendor::kAmd && has("fsr4")) return "fsr4";
+  if (gpu.vendor == GpuVendor::kAmd && rex::cvar::GetFlagByName("native_backend") == "d3d12" && has("fsr4"))
+    return "fsr4";
   if (gpu.vendor == GpuVendor::kIntel && has("xess")) return "xess";
   if (has("fsr3")) return "fsr3";
   return "off";

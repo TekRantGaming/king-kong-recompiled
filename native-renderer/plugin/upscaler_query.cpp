@@ -66,10 +66,10 @@ void Finish(uint32_t state, const NrUpscalerSupport& result) {
 
 // The question itself, on its own thread: a Direct3D 12 device on the high-performance adapter (the
 // one the game draws with), each SDK asked whether it runs on it, everything destroyed again.
-void Run(bool vulkan) {
+void Run() {
   NrUpscalerSupport out = {};
   out.size = sizeof(out);
-  out.vulkan = vulkan ? 1 : 0;
+  out.vulkan = 0;
   IDXGIFactory6* factory = nullptr;
   ID3D12Device* device = nullptr;
   ID3D12CommandQueue* queue = nullptr;
@@ -139,19 +139,9 @@ void Run(bool vulkan) {
   out.dlss = s.dlss;
   out.xess = s.xess;
   std::string notes = s.notes;
-  auto note = [&](const char* text) { notes += std::string(notes.empty() ? "" : "; ") + text; };
-  if (vulkan) {
-    if (out.fsr4) note("FSR 4: needs Direct3D 12 (the game draws with Vulkan)");
-    out.fsr4 = 0;
-#if !(defined(REX_UI_VULKAN_HAS_INSTANCE_REQUESTS) && defined(REX_UI_VULKAN_HAS_DEVICE_REQUESTS))
-    // The SDK cannot make its Vulkan device with what DLSS and XeSS ask for (sdk-patches/0003).
-    if (out.dlss || out.xess) note("DLSS, XeSS: this build's SDK cannot enable their Vulkan extensions");
-    out.dlss = out.xess = 0;
-#endif
-  }
   std::snprintf(out.notes, sizeof(out.notes), "%s", notes.c_str());
   REXLOG_INFO("rexgpu-native: upscalers this PC offers ({}, {}): FSR 3.1 {}, FSR 4 {}, DLSS {}, XeSS {}{}{}",
-              adapter_name, vulkan ? "Vulkan" : "Direct3D 12", out.fsr3 ? "yes" : "no", out.fsr4 ? "yes" : "no",
+              adapter_name, "Direct3D 12", out.fsr3 ? "yes" : "no", out.fsr4 ? "yes" : "no",
               out.dlss ? "yes" : "no", out.xess ? "yes" : "no", notes.empty() ? "" : "; ", notes);
   Finish(NR_UPSCALER_QUERY_DONE, out);
 }
@@ -165,13 +155,8 @@ uint32_t UpscalerQuery(NrUpscalerSupport* out) {
   if (!g_started) {
     g_started = true;
 #if NR_GAME_RENDERER && NR_HAS_D3D12
-#if NR_HAS_VULKAN
-    const bool vulkan = REXCVAR_GET(native_backend) != "d3d12";
-#else
-    const bool vulkan = false;
-#endif
     g_state = NR_UPSCALER_QUERY_RUNNING;
-    g_thread = new std::thread([vulkan] { Run(vulkan); });
+    g_thread = new std::thread([] { Run(); });
 #else
     REXLOG_INFO("rexgpu-native: upscaler query: this build has no temporal upscalers to offer");
     g_state = NR_UPSCALER_QUERY_OFF;
@@ -180,6 +165,22 @@ uint32_t UpscalerQuery(NrUpscalerSupport* out) {
   if (out && out->size >= sizeof(NrUpscalerSupport)) {
     if (g_state == NR_UPSCALER_QUERY_DONE) {
       *out = g_result;
+      // Keep the SDK answer for both APIs: the player can change the API in the launcher.
+#if NR_HAS_VULKAN
+      out->vulkan = REXCVAR_GET(native_backend) != "d3d12";
+      if (out->vulkan) {
+        out->fsr4 = 0;  // AMD FSR 4 has no Vulkan backend.
+        std::string notes = out->notes;
+        if (g_result.fsr4)
+          notes += std::string(notes.empty() ? "" : "; ") + "FSR 4: needs Direct3D 12 (Vulkan selected)";
+#if !(defined(REX_UI_VULKAN_HAS_INSTANCE_REQUESTS) && defined(REX_UI_VULKAN_HAS_DEVICE_REQUESTS))
+        out->dlss = out->xess = 0;
+        if (g_result.dlss || g_result.xess)
+          notes += std::string(notes.empty() ? "" : "; ") + "DLSS, XeSS: this build cannot enable their Vulkan extensions";
+#endif
+        std::snprintf(out->notes, sizeof(out->notes), "%s", notes.c_str());
+      }
+#endif
     } else {
       *out = {};
       out->size = sizeof(NrUpscalerSupport);
