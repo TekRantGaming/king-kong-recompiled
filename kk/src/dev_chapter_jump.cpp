@@ -195,19 +195,16 @@ void DevUniGoTick(uint8_t* base, uint32_t g, bool request, bool started) {
         const uint32_t file = Load32(base, files + 4 * uint32_t(i));
         if (!file) continue;
         const uint32_t n = Load32(base, file + 4), entries = Load32(base, file + 8), strings = Load32(base, file + 12);
-        std::fprintf(f, "file %d key %08X entries %u
-", i, Load32(base, file + 20), n);
+        std::fprintf(f, "file %d key %08X entries %u\n", i, Load32(base, file + 20), n);
         for (uint32_t e = 0; e < n && e < 20000 && entries && strings; ++e) {
           const uint32_t id = Load32(base, entries + e * 32), off = Load32(base, entries + e * 32 + 12);
           std::string text;
           for (uint32_t c = 0; c < 400; ++c) {
             const uint8_t ch = base[strings + off + c];
             if (!ch) break;
-            text += ch == '
-' || ch == '' ? ' ' : char(ch);
+            text += ch == '\n' || ch == '\r' ? ' ' : char(ch);
           }
-          std::fprintf(f, "%08X %08X %s
-", Load32(base, file + 20), id, text.c_str());
+          std::fprintf(f, "%08X %08X %s\n", Load32(base, file + 20), id, text.c_str());
         }
       }
       std::fclose(f);

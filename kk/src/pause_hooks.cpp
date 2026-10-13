@@ -99,9 +99,11 @@ enum Phase { kIdle, kFindRow, kPress, kConfirm };
 
 std::atomic<int64_t> g_pause_started_ms{-100000};  // IntMIG_wait opened the pause page
 std::atomic<int64_t> g_main_seen_ms{-100000};      // the pause page last ran (we did not run its script)
-std::atomic<int64_t> g_score_seen_ms{-100000};     // the game's score page last ran
-std::atomic<bool> g_score_up{false};               // the Score item's page is showing (the game's)
+std::atomic<int64_t> g_game_page_seen_ms{-100000};     // a game page (Score, Save) last ran
+std::atomic<bool> g_game_page{false};               // the Score or Save item's pages are showing (the game's)
 std::atomic<bool> g_has_slot{false};               // a chapter-select run: Start again and Score exist
+std::atomic<bool> g_can_save{false};               // a story run with a save slot: Save exists
+std::atomic<int64_t> g_game_page_since{0};         // when Score or Save opened the game's own pages
 std::atomic<int64_t> g_closing_until{0};           // the page's last frames after Resume: not the menu
 std::atomic<int> g_pending{-1};                    // PauseAction being carried out, -1 none
 std::atomic<int> g_phase{kIdle};
@@ -122,23 +124,25 @@ int ItemId(int action) {
     case PauseAction::kStartAgain: return 8;
     case PauseAction::kScore: return 0;
     case PauseAction::kQuitToLauncher: return 3;
+    case PauseAction::kSave: return 1;
   }
   return 4;
 }
 const char* ActionName(int action) {
-  static const char* const kNames[] = {"Resume", "Start again", "Score", "Quit game"};
-  return action >= 0 && action < 4 ? kNames[action] : "none";
+  static const char* const kNames[] = {"Resume", "Start again", "Score", "Quit game", "Save"};
+  return action >= 0 && action < 5 ? kNames[action] : "none";
 }
 
 }  // namespace
 
 bool PauseMenuOpen() {
-  return TakeoverOn() && MenuUp() && !g_score_up && !CoverScreen();
+  return TakeoverOn() && MenuUp() && !g_game_page && !CoverScreen();
 }
 
 bool PauseActionAvailable(PauseAction action) {
   if (!PauseMenuOpen() || g_pending >= 0) return false;
   if (action == PauseAction::kStartAgain || action == PauseAction::kScore) return g_has_slot;
+  if (action == PauseAction::kSave) return g_can_save;
   return true;
 }
 
@@ -189,7 +193,7 @@ class PauseBackdrop final : public rex::ui::ImGuiDialog {
 
  protected:
   void OnDraw(ImGuiIO& io) override {
-    const bool show = TakeoverOn() && !g_score_up && (MenuUp() || g_pending >= 0) && !CoverScreen();
+    const bool show = TakeoverOn() && !g_game_page && (MenuUp() || g_pending >= 0) && !CoverScreen();
     if (!show) {
       if (texture_ && !MenuUp()) texture_.reset();  // the pause is over: let the memory go
       return;
@@ -249,7 +253,7 @@ void FilterPad(uint32_t user, uint8_t* state) {
 void ResetPause() {
   g_pending = -1;
   g_phase = kIdle;
-  g_score_up = false;
+  g_game_page = false;
   g_main_seen_ms = -100000;
   g_pause_started_ms = -100000;
 }
@@ -297,20 +301,22 @@ REX_HOOK_RAW(sub_824BA560) {
   }
   const int64_t now = NowMs();
   if (now < g_closing_until.load()) return;  // the page is closing after Resume (its script is not run)
-  if (now - g_main_seen_ms.load() > 1000 && !g_score_up) {
+  if (now - g_main_seen_ms.load() > 1000 && !g_game_page) {
     g_pending = -1;
     g_phase = kIdle;
     REXLOG_INFO("KK pause: the port's pause menu is open (the game's page is not run)");
   }
   g_main_seen_ms = now;
   const uint32_t g = Load32(base, kGamePtr);
-  g_has_slot = int32_t(Load32(base, g + 0x4E10)) != -1 && Load32(base, g + 0x5668) != 0;
+  const bool slot = int32_t(Load32(base, g + 0x4E10)) != -1, chapter_run = Load32(base, g + 0x5668) != 0;
+  g_has_slot = slot && chapter_run;
+  g_can_save = slot && !chapter_run && Load32(base, g + 0x5674) == 0;
   // Back from the game's score page (it has not run for a while).
-  if (g_score_up && now - g_score_seen_ms.load() > kPageGoneMs) {
-    g_score_up = false;
+  if (g_game_page && now - g_game_page_seen_ms.load() > kPageGoneMs) {
+    g_game_page = false;
     REXLOG_INFO("KK pause: back from the score page");
   }
-  if (g_score_up) return;
+  if (g_game_page) return;
   const int pending = g_pending;
   if (g_phase == kConfirm) {
     // The game's confirmation page runs on top (and this page under it) until it acts.
@@ -360,8 +366,10 @@ REX_HOOK_RAW(sub_824BA560) {
       g_closing_until = now + 1000;
       break;
     case PauseAction::kScore:
-      g_score_up = true;
-      g_score_seen_ms = now;
+    case PauseAction::kSave:
+      g_game_page = true;
+      g_game_page_seen_ms = now;
+      g_game_page_since = now;
       g_pending = -1;
       g_phase = kIdle;
       break;
@@ -400,7 +408,7 @@ REX_EXTERN(__imp__sub_824D1958);
 REX_HOOK_RAW(sub_824D1958) {
   using namespace kk::play;
   KK_PAGE_TRACE("IntMIG_Page_ScoreNew");
-  if (g_score_up) g_score_seen_ms = NowMs();
+  if (g_game_page) g_game_page_seen_ms = NowMs();
   __imp__sub_824D1958(ctx, base);
 }
 

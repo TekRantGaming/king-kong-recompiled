@@ -919,3 +919,45 @@ REX_HOOK_RAW(sub_8253DB80) {
   kk::DevUniGoTick(base, g, request, g_level_loaded);
 #endif
 }
+
+#if defined(KK_DEV_TOOLS)
+// KK_DEV_SAVES_TEST="<user data folder>[;delete=<slot>]": tests the save functions on that folder (a private
+// copy) without the game, logs what they return, writes saves_test.txt there and quits the program.
+namespace kk::play {
+namespace {
+const bool g_saves_test = [] {
+  const char* v = std::getenv("KK_DEV_SAVES_TEST");
+  if (!v || !*v) return false;
+  std::string arg = v;
+  int del = -1;
+  if (const size_t at = arg.find(";delete="); at != std::string::npos) {
+    del = std::atoi(arg.c_str() + at + 8);
+    arg.resize(at);
+  }
+  const std::filesystem::path dir = arg;
+  std::ofstream out(dir / "saves_test.txt");
+  auto list = [&](const char* when) {
+    const auto slots = ListSaves(dir);
+    out << when << ": most recent " << MostRecentSave(slots) << "\n";
+    for (const auto& s : slots)
+      out << fmt::format("  slot {} exists {} name '{}' last {} created {} reached {} continue {} {} (entry {}) score8 {}\n",
+                         s.index, s.exists, s.name, s.last_saved, s.created, s.chapter_reached, s.continue_level,
+                         s.continue_start, s.continue_chapter, s.best_scores[8]);
+  };
+  list("before");
+  out << "backup 1: " << BackupSaves(dir, "test 1") << "\n";
+  out << "backup 2 (unchanged): " << BackupSaves(dir, "test 2") << "\n";
+  if (del >= 0) {
+    out << "delete slot " << del << ": " << DeleteSave(dir, del) << "\n";
+    list("after delete");
+  }
+  out << "chapters: " << Chapters().size() << ", entry 8 '" << Chapters()[8].name << "' level " << Chapters()[8].level_key
+      << "\n";
+  out << "request round trip: " << FormatRequest(ParseRequest("new:2:My%20Save%3A1")) << " name '"
+      << ParseRequest("new:2:My%20Save%3A1").new_name << "'\n";
+  out.close();
+  std::exit(0);
+}();
+}  // namespace
+}  // namespace kk::play
+#endif
