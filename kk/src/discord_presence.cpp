@@ -20,6 +20,7 @@
 #include <windows.h>
 #else
 #include <poll.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -153,9 +154,8 @@ class Connection {
     pollfd p{fd_, POLLIN, 0};
     if (poll(&p, 1, 0) < 0 || (p.revents & (POLLERR | POLLHUP | POLLNVAL))) return SIZE_MAX;
     if (!(p.revents & POLLIN)) return 0;
-    uint8_t header[8];
-    const ssize_t n = recv(fd_, header, sizeof(header), MSG_PEEK | MSG_DONTWAIT);
-    return n <= 0 ? SIZE_MAX : size_t(n);
+    int avail = 0;
+    return ioctl(fd_, FIONREAD, &avail) < 0 ? SIZE_MAX : size_t(avail);
   }
   bool Receive(void* data, size_t size) {
     auto* p = static_cast<uint8_t*>(data);
@@ -194,6 +194,14 @@ class Connection {
     if (!Receive(header, sizeof(header)) || header[1] > (1u << 20)) return Got::kError;
     op = header[0];
     json.assign(header[1], '\0');
+    const auto payload_until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (header[1] > 0) {
+      const size_t payload_available = Available();
+      if (payload_available == SIZE_MAX) return Got::kError;
+      if (payload_available >= header[1]) break;
+      if (std::chrono::steady_clock::now() >= payload_until) return Got::kError;
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
     return header[1] == 0 || Receive(json.data(), json.size()) ? Got::kFrame : Got::kError;
   }
 };

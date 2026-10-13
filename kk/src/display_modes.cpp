@@ -24,6 +24,8 @@ DisplayMode FromSdk(const rex::ui::DisplayMode& m) { return {m.width, m.height, 
 
 int Monitor() { return std::atoi(rex::cvar::GetFlagByName("monitor").c_str()); }
 
+std::optional<std::pair<int, int>> g_applied_size;
+
 }  // namespace
 
 std::string DisplayMode::Value() const {
@@ -67,12 +69,14 @@ DisplayMode DesktopDisplayMode(int monitor, const rex::ui::Window* window) {
 }
 
 std::optional<std::pair<int, int>> FullscreenModeSize() {
+  if (g_applied_size) return g_applied_size;
   if (const auto m = ParseDisplayMode(rex::cvar::GetFlagByName("kk_fullscreen_mode")))
     return std::pair<int, int>{m->width, m->height};
   return std::nullopt;
 }
 
 void ApplyFullscreenMode(rex::ui::Window* window) {
+  g_applied_size.reset();
   if (!window) {
     REXLOG_WARN("KK: fullscreen mode: no window");
     return;
@@ -81,14 +85,19 @@ void ApplyFullscreenMode(rex::ui::Window* window) {
   const auto want = ParseDisplayMode(value);
   if (!want) {
     rex::ui::SetFullscreenDisplayMode(window, 0, 0, 0, 0.0f);  // borderless at the desktop's resolution
+    const DisplayMode desktop = DesktopDisplayMode(Monitor(), window);
+    g_applied_size = std::pair<int, int>{desktop.width, desktop.height};
     REXLOG_INFO("KK: fullscreen mode: desktop (borderless)");
     return;
   }
   rex::ui::DisplayMode chosen;
   if (!rex::ui::SetFullscreenDisplayMode(window, Monitor(), want->width, want->height, want->refresh, &chosen)) {
     REXLOG_WARN("KK: fullscreen mode {}: not available; desktop instead", value);
+    const DisplayMode desktop = DesktopDisplayMode(Monitor(), window);
+    g_applied_size = std::pair<int, int>{desktop.width, desktop.height};
     return;
   }
+  g_applied_size = std::pair<int, int>{chosen.width, chosen.height};
   REXLOG_INFO("KK: fullscreen mode {} (exclusive; asked for {})", FromSdk(chosen).Value(), value);
 }
 
