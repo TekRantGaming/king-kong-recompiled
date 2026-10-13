@@ -14,6 +14,9 @@ struct RecoveryState {
 
   explicit RecoveryState(const std::filesystem::path& root) : directory(root / "renderer-recovery") {}
   static bool Native(const std::string& api) { return api == "vulkan" || api == "d3d12"; }
+  static std::string Name(const std::string& api) {
+    return api == "vulkan" ? "Vulkan" : api == "d3d12" ? "Direct3D 12" : "Classic";
+  }
   bool Load() {
     std::ifstream in(directory / "fallback.state");
     std::string p, s, r;
@@ -50,7 +53,7 @@ struct RecoveryState {
     selected = selected == preferred ? (preferred == "vulkan" ? "d3d12" : "vulkan") : "classic";
     crashes = 0;
     retry_requested = false;
-    reason = failed + " " + why + ". Using " + selected + " for safe startup.";
+    reason = Name(failed) + " " + why + ". Using " + Name(selected) + " for safe startup.";
     return Save() && Marker();
   }
   bool RecoverCrash() {
@@ -59,7 +62,7 @@ struct RecoveryState {
     in >> api;
     if (!Native(api) || api != selected) return false;
     if (++crashes >= 2) return Advance("crashed twice before a chapter was reached");
-    reason = api + " stopped before a chapter was reached. Retrying once before switching API.";
+    reason = Name(api) + " stopped before a chapter was reached. Retrying once before switching API.";
     return Save() && Marker();
   }
   bool Retry() {

@@ -31,6 +31,31 @@ $env:KK_DEV_SHOTS_DIR=$run
 # Suppress the launcher's network update/pack checks without autoplay during this short test.
 $env:KK_AUTOPLAY='100000'
 if ($LauncherInput) { $env:KK_DEV_LAUNCHER_INPUT=$LauncherInput }
+if ($Launcher) {
+  Add-Type -AssemblyName System.Drawing
+  Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class Task039Window {
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L,T,R,B; }
+  [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr dc, uint flags);
+}
+'@
+}
+function Save-OwnWindow($p,$name) {
+  $p.Refresh()
+  if (!$p.MainWindowHandle) { return }
+  $rect=New-Object Task039Window+RECT
+  if (![Task039Window]::GetClientRect($p.MainWindowHandle,[ref]$rect)) { return }
+  $bmp=New-Object System.Drawing.Bitmap ($rect.R-$rect.L),($rect.B-$rect.T)
+  $graphics=[System.Drawing.Graphics]::FromImage($bmp)
+  $dc=$graphics.GetHdc()
+  $ok=[Task039Window]::PrintWindow($p.MainWindowHandle,$dc,3)
+  $graphics.ReleaseHdc($dc); $graphics.Dispose()
+  if ($ok) { $bmp.Save("$run\$name.png",[System.Drawing.Imaging.ImageFormat]::Png) }
+  $bmp.Dispose()
+}
 $args=@('--fullscreen=false','--window_width=1280','--window_height=720','--kk_fullscreen_mode=desktop',
   '--kk_start=chapter:0:8',"--kk_launcher=$($Launcher.IsPresent.ToString().ToLower())",'--kk_cheats=true',
   "--user_data_root=$run\userdata","--game_data_root=$($workspace.Replace('\','/'))/kk/assets",
@@ -73,10 +98,24 @@ try {
   $known[$parent.Id]=$true
   Write-Output "RUN $run monitor PID $($parent.Id)"
   $clock=[Diagnostics.Stopwatch]::StartNew()
+  $captured=@{}
   while (!$parent.HasExited -and $clock.Elapsed.TotalSeconds -lt 240) {
     $children=Get-CimInstance Win32_Process -Filter "Name='king_kong.exe'" | Where-Object { $_.ExecutablePath -eq "$run\king_kong.exe" }
     foreach ($child in $children) {
       if ($known.ContainsKey([int]$child.ParentProcessId)) { $known[[int]$child.ProcessId]=$true }
+    }
+    if ($Launcher) {
+      foreach ($time in @(2,10)) {
+        if ($clock.Elapsed.TotalSeconds -ge $time -and !$captured.ContainsKey($time)) {
+          foreach ($id in @($known.Keys)) {
+            if ($id -eq $parent.Id) { continue }
+            $p=Get-Process -Id $id -ErrorAction SilentlyContinue
+            if ($p -and $p.Path -eq "$run\king_kong.exe" -and $p.MainWindowHandle) {
+              Save-OwnWindow $p "launcher-$($time)s"; $captured[$time]=$true; break
+            }
+          }
+        }
+      }
     }
     if ($Launcher -and $clock.Elapsed.TotalSeconds -ge 120) { $outcome='launcher-120s'; break }
     if (Test-Path -LiteralPath "$run\shot_1200.bmp") { $outcome='chapter-120s'; break }
