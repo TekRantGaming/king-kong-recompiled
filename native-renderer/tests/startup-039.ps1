@@ -28,6 +28,8 @@ $env:KK_DEV_SCRIPT='0:SKIP/120'
 $env:KK_DEV_SHOTS='120'
 $env:KK_DEV_SHOTS_FROM='menu'
 $env:KK_DEV_SHOTS_DIR=$run
+# Suppress the launcher's network update/pack checks without autoplay during this short test.
+$env:KK_AUTOPLAY='100000'
 if ($LauncherInput) { $env:KK_DEV_LAUNCHER_INPUT=$LauncherInput }
 $args=@('--fullscreen=false','--window_width=1280','--window_height=720','--kk_fullscreen_mode=desktop',
   '--kk_start=chapter:0:8',"--kk_launcher=$($Launcher.IsPresent.ToString().ToLower())",'--kk_cheats=true',
