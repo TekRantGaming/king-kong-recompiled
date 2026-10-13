@@ -95,6 +95,10 @@ TEST(Config_ParsesKindsQualitiesPresets) {
   CHECK(ParseDlssPreset("k", p) && p == 'K');
   CHECK(ParseDlssPreset("M", p) && p == 'M');
   CHECK(!ParseDlssPreset("KK", p));
+  CHECK(ParseDlssPreset("latest", p) && p == kDlssPresetLatest);
+  CHECK(DlssPresetFor(kDlssPresetLatest, UpscaleQuality::kQuality) == 'M');
+  CHECK(DlssPresetFor(kDlssPresetLatest, UpscaleQuality::kUltraPerformance) == 'L');
+  CHECK(DlssPresetFor('K', UpscaleQuality::kQuality) == 'K' && DlssPresetFor(0, UpscaleQuality::kQuality) == 0);
   // Input sizes as the SDKs round them.
   CHECK_EQ(UpscaleInputSize(2560, 1.5f), 1707u);
   CHECK_EQ(UpscaleInputSize(1440, 1.5f), 960u);

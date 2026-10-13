@@ -118,9 +118,23 @@ void SetCvarDefault(std::string_view name, std::string_view value);
 // Port defaults that differ from ReXGlue's (call before the config is loaded).
 void ApplyPortDefaults();
 
-// The upscaler for this computer's graphics card (present_effect): NVIDIA
-// Image Scaling on an NVIDIA card, AMD FSR 1 on any other or an unknown one.
+// The default upscaler (Beta 3, docs/upscalers.md "The default"): with the native renderer, the best
+// temporal upscaler this PC runs (native_upscaler): DLSS on an NVIDIA card that supports it, FSR 4 on
+// an AMD card that runs it (Direct3D 12 only), else FSR 3.1, XeSS on an Intel card, FSR 3.1 on any
+// other card that runs it; FSR 1 (present_effect) where none runs and with the Classic renderer. NIS
+// is a choice only. What runs is the launcher's question to the plugin (kk_upscalers_offered, kept in
+// the settings file); before it has answered once, the card's vendor decides (the game falls back to
+// FSR 3.1 itself if the guess cannot run).
+// DefaultUpscaler: present_effect's default ("bilinear" under a temporal upscaler, else "fsr").
 std::string DefaultUpscaler();
+// native_upscaler's default ("off" or the upscaler).
+std::string DefaultTemporalUpscaler();
+// Sets both defaults (SetCvarDefault: values the player chose stay) for the renderer in use. Called
+// once the settings are read, whenever the renderer is decided and when the launcher's question is
+// answered. (A settings file from before Beta 3 that chose FSR 1, NIS or Off keeps it: ApplyFixedSettings.)
+void ApplyUpscalerDefaults();
+// The launcher's answer: "none" or the upscalers offered ("dlss,fsr3,xess"). Applies the defaults.
+void SetOfferedUpscalers(const std::string& offered);
 // Once the settings file is read: brings one from an older version up to date
 // (keeping the defaults it was made with) and saves it; a new install just
 // gets the current defaults.

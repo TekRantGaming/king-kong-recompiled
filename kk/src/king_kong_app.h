@@ -121,6 +121,7 @@ class KingKongApp : public rex::ReXApp {
     if (!show) {
       kk::EnforceOriginalLook();
       kk::ApplyFullscreenMode(window());
+      kk::ApplyRendererChoice();  // the renderer, and with it the default upscaler
       kk::ApplyRenderPreset(OutputSize().second);
       kk::online::SetPlaying(true);
       kk::online::Start();
@@ -134,6 +135,7 @@ class KingKongApp : public rex::ReXApp {
       app_context().CallInUIThreadDeferred([this, resume, defaults] {
         // The Resolution (Display page) before the render quality, which follows it.
         kk::ApplyFullscreenMode(window());
+        kk::ApplyRendererChoice();  // the renderer, and with it the default upscaler
         kk::ApplyRenderPreset(OutputSize().second);
         kk::online::SetPlaying(true);
         kk::discord::SetPlaying(true);

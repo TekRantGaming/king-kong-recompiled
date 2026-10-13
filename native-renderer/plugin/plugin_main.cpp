@@ -246,10 +246,11 @@ REXCVAR_DEFINE_BOOL(native_ao_gpu_time, false, "Native renderer",
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 // Temporal upscalers (docs/upscalers.md). Off by default: nothing of them runs.
-REXCVAR_DEFINE_STRING(native_upscaler, "off", "Native renderer",
+REXCVAR_DEFINE_STRING(native_upscaler, "auto", "Native renderer",
                       "Temporal upscaler: off, auto (DLSS on NVIDIA RTX, FSR 4 on supported AMD, XeSS on Intel, "
                       "FSR 3.1 otherwise), fsr3, fsr4, dlss, xess (bilinear: a plain stretch, for comparisons). "
-                      "The output is native_render_scale's size")
+                      "The output is native_render_scale's size. auto until the game sets its own default (the "
+                      "best one this PC runs) once its settings are read")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_STRING(native_upscaler_quality, "quality", "Native renderer",
@@ -262,8 +263,9 @@ REXCVAR_DEFINE_STRING(native_upscaler_point, "post", "Native renderer",
                       "end of the frame, everything upscaled)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-REXCVAR_DEFINE_STRING(native_upscaler_dlss_preset, "default", "Native renderer",
-                      "DLSS's render preset: default (the driver's), J or K (DLSS 4 transformer), L or M (DLSS 4.5)")
+REXCVAR_DEFINE_STRING(native_upscaler_dlss_preset, "latest", "Native renderer",
+                      "DLSS's render preset: latest (the newest model: DLSS 4.5's M, L for ultra performance), "
+                      "default (the DLL's choice per mode), J or K (DLSS 4 transformer), L or M (DLSS 4.5)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_DOUBLE(native_upscaler_sharpness, -1.0, "Native renderer",

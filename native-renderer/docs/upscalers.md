@@ -2,8 +2,8 @@
 
 The native renderer can render the scene at a lower resolution and have a temporal upscaler rebuild it at
 the output size (or anti-alias it at the same size): NVIDIA DLSS Super Resolution and DLAA, AMD FSR 4 and
-FSR 3.1, Intel XeSS Super Resolution. No frame generation. Off by default: with `--native_upscaler=off`
-nothing below runs and nothing changes.
+FSR 3.1, Intel XeSS Super Resolution. No frame generation. The game's default is the best one the card
+runs ("The default"); with `--native_upscaler=off` nothing below runs and nothing changes.
 
 The code: `backend/upscale_*.{h,cpp}` (settings, jitter, motion matching, the upscale point; no GPU),
 `backend/game_upscale.{h,cpp}` (the frame plumbing in the game renderer), `backend/shaders/upscale.hlsl`
@@ -16,10 +16,10 @@ All are read at start (init only).
 
 | Cvar | Default | Meaning |
 |---|---|---|
-| `native_upscaler` | `off` | `off`, `auto`, `fsr3`, `fsr4`, `dlss`, `xess` (`bilinear`: a plain stretch, for comparisons) |
+| `native_upscaler` | `auto` | `off`, `auto`, `fsr3`, `fsr4`, `dlss`, `xess` (`bilinear`: a plain stretch, for comparisons). The game replaces the default with the best one this PC runs once its settings are read ("The default") |
 | `native_upscaler_quality` | `quality` | `native` (anti-aliasing at the output size: DLAA, FSR native AA, XeSS AA), `quality` (1.5x a side), `balanced` (1.7x), `performance` (2x), `ultra_performance` (3x) |
 | `native_upscaler_point` | `post` | `post`: before the game's post effects and HUD; `present`: at the end of the frame (everything upscaled, HUD included) |
-| `native_upscaler_dlss_preset` | `default` | DLSS render preset: `default` (the DLL's choice per mode), `J` or `K` (DLSS 4, transformer), `L` or `M` (DLSS 4.5) |
+| `native_upscaler_dlss_preset` | `latest` | DLSS render preset: `latest` (the newest model: DLSS 4.5's `M`, `L` for ultra performance, as NVIDIA recommends), `default` (the DLL's choice per mode: `K` for DLAA, quality and balanced), `J` or `K` (DLSS 4, transformer), `L` or `M` (DLSS 4.5) |
 | `native_upscaler_sharpness` | `-1` | 0 to 1: FSR's RCAS after the upscale (DLSS and XeSS have none); negative: off |
 | `native_upscaler_mip_bias` | `auto` | texture LOD bias of the scene's draws: `auto` = log2(input / output), as the SDKs recommend, or a number |
 | `native_upscaler_reactive` | `1.0` | strength of the reactive mask (0: none) |
@@ -75,10 +75,57 @@ or artwork (see "What a release ships"). No frame generation anywhere.
 - **Restart.** `native_upscaler` is one of the launcher's restart settings: on Vulkan the device must be
   made with DLSS's and XeSS's extensions, and it exists before the launcher opens. Play restarts the game
   when it changed to an upscaler (switching one off needs no restart).
-- **Defaults.** Off: `native_upscaler` defaults to `off`; the graphics presets set FSR 1 or NIS and turn a
-  temporal upscaler off (a preset is matched only with none on); the **Original** look sets
-  `native_upscaler` off with its other settings (`OriginalLookSettings`), and the row is disabled there.
+- **Defaults.** See "The default" below. The **Original** look sets `native_upscaler` off with its other
+  settings (`OriginalLookSettings`), and the row is disabled there.
   Test runs that want an upscaler over the Original look add `--kk_original_look_keep=native_upscaler`.
+
+## The default (Beta 3)
+
+The user's rule: the best upscaler for the card, at Quality.
+
+| Card | Default |
+|---|---|
+| NVIDIA that runs DLSS (RTX) | DLSS, its newest model (`native_upscaler_dlss_preset` `latest`: DLSS 4.5's M) |
+| AMD | FSR 4 where it runs (RDNA 3 or 4 on Direct3D 12; never on Vulkan), else FSR 3.1 |
+| Intel | XeSS where it runs, else FSR 3.1 |
+| Any card whose vendor's upscaler does not run, but FSR 3.1 does (an NVIDIA GTX) | FSR 3.1 |
+| None of them runs, or the Classic renderer | FSR 1 (`present_effect` `fsr`); NIS is a choice only |
+
+How (kk/src/settings.cpp, `ApplyUpscalerDefaults`):
+
+- **What runs** is the launcher's question to the plugin (`nr_upscaler_query`, above). Its answer is kept
+  in the settings as `kk_upscalers_offered` ("dlss,fsr3,xess", or "none"), so a start without the
+  launcher (a restart, `--kk_launcher=false`) knows it too. Before the first answer the card's vendor
+  decides (NVIDIA: DLSS, Intel: XeSS, others: FSR 3.1; if the guess cannot run, the game falls back to
+  FSR 3.1 itself and the launcher's answer corrects the default).
+- **Defaults, not values.** The best upscaler is `native_upscaler`'s default and `present_effect`'s default
+  becomes `bilinear` under it (SetCvarDefault: a value the player chose stays). The settings file only keeps
+  values that differ from their defaults, so a player who never chose follows the default as it changes
+  (a new card, a new version), and a choice made on the Upscaler row is kept: FSR 1, NIS or Off save
+  `present_effect` and `native_upscaler` `off`; another temporal upscaler saves `native_upscaler`.
+- **Earlier versions.** A settings file has `present_effect` only when the player picked an upscaler on
+  that row (before Beta 3 the default was NIS on NVIDIA, FSR 1 elsewhere, and defaults are not saved). On
+  the first start (ApplyFixedSettings) such a file gets `native_upscaler` `off`: they keep their FSR 1, NIS
+  or Off. A player who never chose gets the new default. One case cannot be told apart: a player who
+  picked the old default itself (NIS on NVIDIA, FSR 1 elsewhere) left nothing in the file, so they get the
+  new default too.
+- **When.** At every start once the settings are read and the renderer is decided (`ApplyRendererChoice`,
+  which the launcher, Play and a start without the launcher all go through), and when the launcher's
+  question is answered (`TickUpscalerQuery`). The plugin's own default is `auto`, so the Vulkan device,
+  which exists before the settings are applied, is made with the extensions of the card's vendor's
+  upscaler (DLSS on NVIDIA, XeSS on Intel): the default needs no restart. Play restarts the game only for
+  an upscaler whose extensions the device lacks (`UpscalerNeedsNewDevice`: XeSS chosen on an NVIDIA card).
+- **Mode.** `native_upscaler_quality` defaults to Quality, as asked: in the game runs (above) Quality looked
+  close to native 2560x1440 with all three, Performance was visibly softer with FSR 3.1 and XeSS. The
+  graphics presets keep the default upscaler and set its mode: **Low** Performance (Low is about speed),
+  **Medium**, **High**, **Ultra** and **Steam Deck** Quality. A preset is recognised (`MatchGraphicsPreset`)
+  when the upscaler is the default one and, with a temporal upscaler, its mode is the preset's. The
+  setup's **Remastered** applies the card's preset, so it gets the default too.
+
+Tested on this PC (RTX 4070 Ti, Vulkan): a fresh settings file shows NVIDIA DLSS at Quality on Display >
+Upscaling ("Default: NVIDIA DLSS"), the preset reads Medium, and the game runs "DLSS 310.9.1 Quality preset
+M (Vulkan)" with no restart; a Beta 2 file with `present_effect = "fsr"` keeps AMD FSR 1 (the game runs no
+temporal upscaler) and saves `native_upscaler = "off"`. Captures: `analysis\upscalers\launcher-b3`.
 
 ## How a frame goes
 
@@ -378,8 +425,8 @@ DLSS, FSR 3.1 and XeSS, Quality and Performance, crops at 2x) and the numbers ar
 - DLSS is named in text only. Using NVIDIA's logos or "NVIDIA DLSS" artwork (splash screen, About, credits),
   as the DLSS licence's supplement asks, needs a sample sent to NVIDIA two weeks before use, and NVIDIA should
   be notified of the release (https://developer.nvidia.com/sw-notification).
-- The default stays FSR 1 or NIS (the presets); whether a temporal upscaler should become a preset's choice
-  (for example DLSS Quality on RTX cards for High and Ultra) is open.
+- Decided (13 October 2026): the default is the best temporal upscaler for the card, at Quality ("The
+  default").
 - Releasing Beta 3 with the upscalers needs the beta's SDK built with `sdk-patches/0003` (the upscaler build
   here uses `sdk-vulkan-upscalers`, which has it and 0015/0016; Beta 2's `sdk-vulkan` does not).
 
