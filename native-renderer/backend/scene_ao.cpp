@@ -53,6 +53,18 @@ GtaoSettings SceneAo::Settings(const AoSettings& s) const {
 }
 
 void SceneAo::NewFrame(uint64_t frame) {
+  if (config_.dump_every && frame_ != UINT64_MAX) {
+    const bool ambient = ambient_ready_ && ambient_drawn_;
+    const char* reason = applied_ || ambient ? "applied" :
+        tracker_.phase() < AoFrameTracker::Phase::kOpaquePass ? "no opaque scene" :
+        tracker_.expects_end() && tracker_.phase() == AoFrameTracker::Phase::kOpaquePass ? "waiting for missing fog/end" :
+        !tracker_.depth_valid() && !depth_copied_ ? "depth cleared/no depth copy" :
+        scene_resolved_ ? "scene already resolved" : "camera/compute/apply unavailable";
+    Logf(LogLevel::kInfo, "rexgpu-native: AO frame %llu: apply_point=%d computed=%d applied=%d reason=%s phase=%u expects_end=%d depth=%d copied=%d resolved=%d opaque=%u",
+         static_cast<unsigned long long>(frame_), int(tracker_.phase() == AoFrameTracker::Phase::kAfterOpaque),
+         int(computed_), int(applied_ || ambient), reason, unsigned(tracker_.phase()), int(tracker_.expects_end()),
+         int(tracker_.depth_valid()), int(depth_copied_), int(scene_resolved_), tracker_.opaque_draws());
+  }
   frame_ = frame;
   computed_ = applied_ = ambient_ready_ = ambient_drawn_ = scene_resolved_ = false;
   depth_copied_ = scene_dest_set_ = resolve_applied_ = false;
