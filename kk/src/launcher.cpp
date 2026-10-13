@@ -238,8 +238,10 @@ constexpr std::pair<int, const char*> kLanguages[] = {
 // gpu_plugin: the renderer (Graphics > Renderer) is loaded before the launcher opens.
 // native_upscaler: on Vulkan, DLSS and XeSS need the device made with their extensions (the native
 // renderer asks for them when it makes the device, before the launcher opens).
+// VSync: Vulkan chooses its present mode when the swapchain is created.
 constexpr const char* kRestartCvars[] = {"present_effect", "window_width", "window_height", "monitor", "gpu_plugin",
-                                         "native_upscaler", "native_backend"};
+                                         "native_upscaler", "native_backend",
+                                         "d3d12_allow_variable_refresh_rate_and_tearing"};
 
 enum Page { kHome, kDisplay, kGraphics, kGameplay, kControls, kCheatsPage, kAchievements, kAbout, kPageCount };
 constexpr const char* kPageNames[kPageCount] = {"Home",     "Display", "Graphics",     "Gameplay",

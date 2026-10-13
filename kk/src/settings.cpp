@@ -408,6 +408,20 @@ void SetOfferedUpscalers(const std::string& offered) {
   ApplyUpscalerDefaults();
 }
 
+void ApplyVSyncSettings() {
+  // The launcher's VSync setting is shared by both presenters. Derive Vulkan's
+  // allowed modes as defaults so they are never saved as independent settings.
+  // With VSync on, FIFO is the only allowed mode; off keeps the SDK's choices.
+  const std::string tearing = rex::cvar::GetFlagByName("d3d12_allow_variable_refresh_rate_and_tearing");
+  for (const char* name : {"vulkan_allow_present_mode_immediate", "vulkan_allow_present_mode_mailbox",
+                         "vulkan_allow_present_mode_fifo_relaxed"}) {
+    SetCvarDefault(name, tearing);
+    rex::cvar::ResetToDefault(name);
+  }
+  REXLOG_INFO("KK: VSync {} (D3D12 tearing {}; Vulkan immediate/mailbox/fifo_relaxed {})",
+              tearing == "true" ? "off" : "on", tearing, tearing);
+}
+
 void ApplyFixedSettings() {
   // Beta 3's default is a temporal upscaler where one runs (ApplyUpscalerDefaults). A settings file from
   // before that chose an upscaler on the Upscaler row (present_effect is in it only when the player

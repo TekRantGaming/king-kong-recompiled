@@ -182,6 +182,7 @@ class KingKongApp : public rex::ReXApp {
   void OnConfigureFonts(ImFontAtlas* atlas) override { kk::LoadUiFont(atlas); }
 
   void OnPreSetup(rex::RuntimeConfig& config) override {
+    kk::ApplyVSyncSettings();
     {  // before the runtime reads the shader cache: drop records a finished-early write damaged
       const std::string root = rex::cvar::GetFlagByName("cache_root");
       kk::RepairShaderStorage(root.empty() ? user_data_root_ / "cache" : std::filesystem::path(root));
