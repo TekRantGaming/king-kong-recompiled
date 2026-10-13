@@ -74,7 +74,7 @@ or artwork (see "What a release ships"). No frame generation anywhere.
   and NIS keep their rows as before.
 - **Restart.** `native_upscaler` is one of the launcher's restart settings: on Vulkan the device must be
   made with DLSS's and XeSS's extensions, and it exists before the launcher opens. Play restarts the game
-  when it changed.
+  when it changed to an upscaler (switching one off needs no restart).
 - **Defaults.** Off: `native_upscaler` defaults to `off`; the graphics presets set FSR 1 or NIS and turn a
   temporal upscaler off (a preset is matched only with none on); the **Original** look sets
   `native_upscaler` off with its other settings (`OriginalLookSettings`), and the row is disabled there.
@@ -311,31 +311,81 @@ ultra performance), which is why performance costs more than quality. The render
 and object motion, the reactive mask, the depth carried over) come on top; `native_upscaler_gpu_time` logs
 both in the game.
 
+### In the game
+
+`native_upscaler_gpu_time` in Kong to the Rescue (2560x1440 output, RTX 4070 Ti, Vulkan), ms a frame, the
+SDK's own work and, in brackets, everything at the upscale point (the renderer's motion, reactive mask and
+depth passes on top). At the 30 FPS cap the GPU idles between frames and runs at low clocks, so the same
+work takes three to five times as long; the 120 FPS cap is the fairer measure.
+
+| | FSR 3.1 | DLSS 310.9.1 | XeSS 2.0.2 |
+|---|---|---|---|
+| Quality, 120 FPS cap, in play | 0.5 to 0.6 (0.7 to 0.8) | 0.9 to 1.1 (1.1 to 1.3) | 1.0 to 1.2 (1.1 to 1.4) |
+| Quality, 120 FPS cap, the cutscene | 1.0 (1.3) | 2.0 to 2.2 (2.4 to 2.5) | 2.1 to 2.2 (2.4 to 2.6) |
+| Performance, 120 FPS cap, in play | 0.45 to 0.6 (0.6 to 0.8) | 1.2 (1.3) | 0.9 to 1.2 (1.1 to 1.4) |
+| Quality, 30 FPS cap | 3.0 to 3.5 (3.6 to 4.4) | 4.3 to 5.2 (5.0 to 6.0) | 4.8 to 5.3 (5.1 to 6.1) |
+
+## Results in the game (13 October 2026)
+
+Runs of `analysis\upscalers\runs\upscaler_scenes.json` (V-Rex: Jack under the cave roof in the rain;
+Kong to the Rescue: the cutscene with Kong and the V-Rex, then play with fires and rain) at render scale 2
+(2560x1440 output), Vulkan, through the fair queue, windowed. Comparison sheets (native 2560x1440 against
+DLSS, FSR 3.1 and XeSS, Quality and Performance, crops at 2x) and the numbers are in
+`F:\KK-native-renderer\analysis\upscalers\sheets` (not in the repository: they are the game's pictures).
+
+- Upscaler off: the golden `vrex_140` still passes (unchanged frames).
+- DLSS, FSR 3.1 and XeSS run on both APIs; FSR 4 on D3D12 falls back to FSR 3.1 here with its reason ("FSR 4
+  does not run on this GPU (the AMD library offers FSR 3.1.5, 2.3.4)").
+- Rain, fur, fire and smoke: the reactive mask marks them (debug view checked); no smearing of rain streaks
+  or the fires was seen at Quality or Performance. Kong's fur stays sharp with all three.
+- Found and fixed in the game runs:
+  - FSR 3.1 and XeSS left the output's alpha empty; V-Rex's post chain (mist, glow) reads the scene's alpha
+    and washed the picture out (three times as bright). The input's alpha is now stretched into the output.
+  - V-Rex streams its world into vertex buffers that move every frame: no draw matched its last-frame self,
+    so V-Rex had no camera motion. Draws on rewritten buffers are now matched by shader and size and vote
+    for the camera; all of them match.
+  - The V-Rex dinosaur is drawn from such buffers too: with the camera's motion only, its scales smeared
+    under FSR 3.1 and XeSS in the cutscene. They are now replayed in the object pass and stay sharp.
+  - A camera cut (the camera's reprojection moves the middle of the screen by more than an eighth of it in
+    one frame) resets the history. No such cut happened in the scenes run (the cutscene's camera moves
+    smoothly), so this one is checked by its log counter only.
+- The upscale point: in V-Rex the post chain is found (the corner downsamples and the AfterEffects
+  shaders), so the post effects and the HUD are drawn at the output size; in Kong to the Rescue's frames
+  there is no AfterEffects pass, and the point is Present (the few full-screen effects are upscaled with the
+  scene, which looks right).
+
 ## Open problems
 
-- FSR 4 is untested on hardware that runs it (an RDNA 3 or 4 GPU on D3D12).
+- FSR 4 is untested on hardware that runs it (an RDNA 3 or 4 GPU on D3D12); on Vulkan it is never offered.
+- The launcher asks which upscalers run on a Direct3D 12 device even when the game uses Vulkan (a Vulkan
+  device in the launcher would share vulkan.hpp's one dispatcher with the prewarm's). Same card and driver,
+  so the answer should hold; if not, the game falls back to FSR 3.1 and says why in the log.
+- The motion vector view (`native_upscaler_debug` 1) shows a flat grey in the game's captures although the
+  motion texture holds the right values (bit 512 reads it back: up to 5 pixels in the cutscene). The view is
+  a debugging aid only; the reactive mask and depth views work.
+- Draws on rewritten vertex buffers are matched by shader and size, which can pair the wrong draws when many
+  alike change order between frames; the camera vote outvotes such pairs, and the object pass then gives a
+  wrong motion for that object for a frame.
+- Particles that do not write depth get the camera's motion; the reactive mask carries them.
 - The stencil is not carried over the upscale point (only depth); a draw after the point that tests the
   stencil the scene wrote would see it cleared. None found in the frames logged so far.
-- Particles and other per-frame vertex buffers have camera motion only; the reactive mask carries them.
-- Objects first seen this frame and draws whose key changes every frame (vertex buffers reallocated) get
-  camera motion only.
 - The legacy and resolve-moment AO cannot run with an upscaler (GTAO replaces them).
-- The launcher has no upscaler choice yet: the setting is the cvar (`QueryUpscalerSupport` is there for a
-  menu that offers only what this GPU runs).
+- The comparison shots of each run are a few frames apart from the native ones (the game's timing differs a
+  little run to run), so the sheets compare look, not pixels.
 
-## Status (12 October 2026, paused)
+## Decisions for the maintainers
+
+- DLSS is named in text only. Using NVIDIA's logos or "NVIDIA DLSS" artwork (splash screen, About, credits),
+  as the DLSS licence's supplement asks, needs a sample sent to NVIDIA two weeks before use, and NVIDIA should
+  be notified of the release (https://developer.nvidia.com/sw-notification).
+- The default stays FSR 1 or NIS (the presets); whether a temporal upscaler should become a preset's choice
+  (for example DLSS Quality on RTX cards for High and Ultra) is open.
+- Releasing Beta 3 with the upscalers needs the beta's SDK built with `sdk-patches/0003` (the upscaler build
+  here uses `sdk-vulkan-upscalers`, which has it and 0015/0016; Beta 2's `sdk-vulkan` does not).
+
+## Status (13 October 2026)
 
 Done: the foundation, FSR 3.1, DLSS, XeSS and FSR 4 in the renderer and the plugin, the SDK patch, the
-notices, the offline tests above on this PC's RTX 4070 Ti (both APIs) and the SDKs' GPU cost.
-
-Not done yet (paused when the PC was needed; nothing of it has run in the game):
-
-- The game runs, through the fair queue: `--native_upscaler=off` against the golden `vrex_140`; at
-  `--native_render_scale=2`, quality mode, V-Rex and Kong to the Rescue for native 2x, DLSS, FSR 3.1 and XeSS
-  (one comparison sheet each in `F:\KK-native-renderer\analysis\upscalers\`, with the in-game GPU time from
-  `--native_upscaler_gpu_time`); the motion vectors over Kong to the Rescue (`--native_upscaler_debug=1`) for
-  the camera, the characters, Kong's fur and the particles; a D3D12 start with DLSS and with FSR 4 (its
-  fallback). The scene file is `analysis\upscalers\runs\upscaler_scenes.json`; the build folder has the shader
-  packs and DXC beside `king_kong.exe`.
-- The launcher's upscaler menu on the Graphics page, offering only what `QueryUpscalerSupport` says this GPU
-  runs, DLSS named in text only.
+notices, the offline tests on this PC's RTX 4070 Ti (both APIs), the game runs and comparison sheets above,
+the fixes they found, and the launcher's menu (Display > Upscaling). Merged with Beta 2 (`beta` at 71d0ac5);
+the upscaler SDK (`sdk-src-upscalers`) has the tools/rexglue-patches 0015 and 0016 as well.

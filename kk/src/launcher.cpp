@@ -2291,8 +2291,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
           which + " Off uses plain smooth scaling.";
       if (any_temporal || !temporal.empty())
         desc += " DLSS, FSR 4, FSR 3.1 and XeSS rebuild a sharp picture from several frames and smooth jagged edges "
-                "too; only those your graphics card supports are listed. Changing to or from one of them restarts "
-                "the game when you press Play.";
+                "too; only those your graphics card supports are listed. Choosing one of them restarts the game "
+                "when you press Play.";
       it.description = desc;
       it.index = -1;
       const std::string present = Get("present_effect");
@@ -3937,8 +3937,12 @@ class Launcher final : public rex::ui::ImGuiDialog {
     played_ = true;
     SaveSettings(paths_.config_path);
     bool needs_restart = false;
-    for (size_t i = 0; i < std::size(kRestartCvars); ++i)
-      if (Get(kRestartCvars[i]) != restart_baseline_[i]) needs_restart = true;
+    for (size_t i = 0; i < std::size(kRestartCvars); ++i) {
+      if (Get(kRestartCvars[i]) == restart_baseline_[i]) continue;
+      // A temporal upscaler switched off needs no new device (only one switched on needs its extensions).
+      if (std::string_view(kRestartCvars[i]) == "native_upscaler" && Get("native_upscaler") == "off") continue;
+      needs_restart = true;
+    }
     auto action = needs_restart ? cb_.restart_and_play : cb_.play;
     input_.Release();  // the game opens the controllers itself
     Close();  // deletes this dialog after the current draw

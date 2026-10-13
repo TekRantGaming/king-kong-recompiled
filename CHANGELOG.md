@@ -9,7 +9,7 @@ version's notes the first time you start it.
 
 ### What's new
 - **DLSS, FSR 3.1, FSR 4 and XeSS upscaling.** With the native renderer, **Display** > **Upscaling** > **Upscaler** now also offers NVIDIA DLSS, AMD FSR 3.1, AMD FSR 4 and Intel XeSS, next to FSR 1 and NIS. They draw fewer pixels and rebuild a sharp picture at your screen's resolution from several frames, smoothing jagged edges too. Only the ones your graphics card supports are listed: DLSS on NVIDIA RTX cards, FSR 4 on AMD Radeon RX 7000 and 9000 cards with Direct3D 12, XeSS and FSR 3.1 on almost any card. **Upscaler mode** picks how many pixels the game draws: **Native AA** (DLAA with DLSS), **Quality**, **Balanced**, **Performance** or **Ultra Performance**.
-- They are off unless you pick one, and the **Original** look keeps them off. Changing to or from one restarts the game when you press **Play**. There is no frame generation.
+- They are off unless you pick one, and the **Original** look keeps them off. Choosing one restarts the game when you press **Play**. There is no frame generation.
 
 ### Known issues
 - FSR 4 is untested on the graphics cards that run it (we have none here); on other cards it isn't offered.
