@@ -117,6 +117,9 @@ GameRenderer::HostTarget* GameRenderer::GetTarget(bool depth, uint32_t edram_bas
   desc.debugName = name;
   t->texture = device_->createTexture(desc);
   if (!t->texture) return nullptr;
+  t->allocation_bytes = device_->getTextureMemoryRequirements(t->texture).size;
+  stats_.edram_target_bytes += t->allocation_bytes;
+  if (slot) stats_.edram_target_bytes -= slot->allocation_bytes;
   if (slot) {
     // Framebuffers holding the old texture are dropped with it.
     framebuffers_.clear();
@@ -127,6 +130,7 @@ GameRenderer::HostTarget* GameRenderer::GetTarget(bool depth, uint32_t edram_bas
       upscale_->pass_sets.clear();
     }
   }
+  if (!slot) ++stats_.edram_targets;
   slot = std::move(t);
   if (upscale_) {
     slot->used_frame = frame_;
@@ -640,10 +644,8 @@ GameRenderer::HostBuffer* GameRenderer::BindIndexBuffer(nvrhi::ICommandList* cl,
   }
   if (!host->buffer) return nullptr;
   if (r.action != kknr::BindAction::kUseExisting) {
-    const uint32_t size = index32 ? 4 : 2;
-    const uint32_t count = bytes / size;
-    std::vector<uint8_t> converted((size_t(bytes) + 3) & ~size_t(3), 0);
-    kknr::ConvertIndices(data, converted.data(), count, index32);
+    auto& converted = scratch_index_upload_;
+    kknr::ConvertIndexBuffer(data, converted, bytes, index32);
     cl->writeBuffer(host->buffer, converted.data(), converted.size());
     stats_.upload_bytes += converted.size();
     index_buffers_.OnUploaded(*r.entry, physical_);

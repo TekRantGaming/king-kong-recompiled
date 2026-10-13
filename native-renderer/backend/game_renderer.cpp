@@ -8,6 +8,7 @@
 
 #include "backend/guest_layout.h"
 #include "backend/log.h"
+#include "backend/pipeline_workers.h"
 #include "backend/renderer.h"
 #include "backend/shaders.h"
 #include "kknr/buffers.h"
@@ -547,8 +548,15 @@ void GameRenderer::EndFrame() {
     }
   }
   while (!retired_resources_.empty() && retired_resources_.front().first + 8 < frame_) retired_resources_.pop_front();
+  stats_.edram_framebuffers = framebuffers_.size();
   if (frame_ % 300 == 0) {
     if (options_.debug & 32768) {
+      Logf(LogLevel::kInfo,
+           "rexgpu-native: EDRAM cache: %llu targets, %llu target allocation bytes, %llu framebuffers "
+           "(framebuffers share target storage; excludes retired resources and upscaler auxiliary caches)",
+           static_cast<unsigned long long>(stats_.edram_targets),
+           static_cast<unsigned long long>(stats_.edram_target_bytes),
+           static_cast<unsigned long long>(stats_.edram_framebuffers));
       size_t slots = 0;
       for (const DescriptorTable& t : tables_) slots += t.next - 1 - t.free.size() - t.retired.size();
       Logf(LogLevel::kInfo,
@@ -750,7 +758,8 @@ nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelin
 void GameRenderer::EnsureWorkers() {
   // With pipeline_mutex_ held. A few workers: drivers compile pipelines in parallel.
   if (!pipeline_threads_.empty()) return;
-  const unsigned n = std::clamp(std::thread::hardware_concurrency() / 4, 1u, 4u);
+  const unsigned n = ProcessPipelineWorkerCount();
+  Logf(LogLevel::kInfo, "rexgpu-native: pipeline compiler workers %u (process affinity)", n);
   for (unsigned i = 0; i < n; ++i) pipeline_threads_.emplace_back([this] { PipelineWorker(); });
 }
 
@@ -1373,11 +1382,12 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   }
 
   // Vertex fetch: each binding's declaration element, from its stream.
-  std::vector<kknr::VertexElement> elements;
+  auto& elements = scratch_declaration_;
+  elements.clear();
   struct StreamBind { uint32_t physical = 0, bytes = 0, begin = 0, end = 0; HostBuffer* host = nullptr; };
   std::array<StreamBind, 16> stream_binds = {};
   if (const uint8_t* decl = call.vertex_declaration ? memory_.Virtual(call.vertex_declaration) : nullptr)
-    elements = kknr::DecodeVertexDeclaration(decl);
+    kknr::DecodeVertexDeclaration(decl, elements);
   for (size_t b = 0; b < vs->bindings.vertexBindings.size() && b < 16; ++b) {
     const kkshaders::VertexBinding& vb = vs->bindings.vertexBindings[b];
     uint32_t stream = 0;
