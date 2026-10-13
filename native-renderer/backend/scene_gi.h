@@ -50,7 +50,8 @@ class SceneGi {
   // ao_on: the ambient occlusion setting is on this frame (the GI then adds light only).
   // motion_key: the draw's identity across frames (its shaders, buffers and range; 0: none), for the
   // camera's reprojection of the temporal accumulation.
-  void OnDraw(nvrhi::ICommandList* cl, const SceneAo::Draw& d, bool ao_on, uint64_t motion_key = 0);
+  void OnDraw(nvrhi::ICommandList* cl, const SceneAo::Draw& d, bool ao_on, uint64_t motion_key = 0,
+              float jitter_x = 0.0f, float jitter_y = 0.0f);
   // The flat ambient light a lighting shader of the scene was drawn with (rgb, the game's units).
   void NoteAmbient(uint64_t frame, const float rgb[3]);
   // A clear of a depth target (Clear with Z, or a resolve's depth clear).

@@ -1335,6 +1335,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   if (scene_gi_) GiDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
   // Lighting hook (game_lighting.cpp): the lighting options' moments and the census.
   if (options_.lighting.active()) LightingDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
+  if (up.snapshot) UpscaleTakeSnapshot(cl);
   if (frame_log_ && frame_log_->enabled()) LogDraw(call, d, *vs, ps.get());
   if (dump) DumpVertexShaderHashes(call, d, *vs);
   if (stop_at == 7) return;

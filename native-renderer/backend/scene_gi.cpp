@@ -188,7 +188,8 @@ bool SceneGi::Apply(nvrhi::ICommandList* cl, bool ao_on) {
   return true;
 }
 
-void SceneGi::OnDraw(nvrhi::ICommandList* cl, const SceneAo::Draw& d, bool ao_on, uint64_t motion_key) {
+void SceneGi::OnDraw(nvrhi::ICommandList* cl, const SceneAo::Draw& d, bool ao_on, uint64_t motion_key,
+                     float jitter_x, float jitter_y) {
   last_applied_ = false;
   if (!ssgi_) return;
   if (d.frame != frame_) NewFrame(d.frame);
@@ -203,7 +204,15 @@ void SceneGi::OnDraw(nvrhi::ICommandList* cl, const SceneAo::Draw& d, bool ao_on
   if (config_.temporal && motion_key && !applied_ && (cls == AoDrawClass::kOpaque || cls == AoDrawClass::kDepthOnly) &&
       d.frame_size && d.depth.key && d.vs_constants) {
     float rows[16];
-    if (FindAoPerspectiveRegister(d.vs_constants, rows) >= 0) NoteCamera(motion_key, rows);
+    if (FindAoPerspectiveRegister(d.vs_constants, rows) >= 0) {
+      // The history contains jittered pixels. Vote with the clip transform that actually
+      // rendered them, including the upscaler's input-pixel offset, so a still camera
+      // reprojects between alternating jitter positions instead of smearing the light.
+      const float sx = d.screen.x_scale * d.screen.host_scale_x;
+      const float sy = d.screen.y_scale * d.screen.host_scale_y;
+      if (sx != 0.0f && sy != 0.0f) ApplyGiJitter(rows, jitter_x / sx, jitter_y / sy);
+      NoteCamera(motion_key, rows);
+    }
   }
   AoFrameTracker::Draw td;
   td.frame = d.frame;

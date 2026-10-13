@@ -708,7 +708,9 @@ class GameRenderer {
   bool UpscaleInitialize();     // after them: the passes
   bool OutputGeneration() const;  // which generation the current phase draws into
   void UpscaleNewFrame(uint64_t frame);  // the per-frame state, at the frame's first call
+  void UpscaleTakeSnapshot(nvrhi::ICommandList* cl);
   struct UpscaleDraw {
+    bool snapshot = false;
     bool jitter = false, motion = false, scene_phase = false;
   };
   // Before a draw takes its targets: classify it, take the upscale point if it is due (recorded into

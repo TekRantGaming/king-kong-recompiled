@@ -1650,6 +1650,34 @@ TEST(PipelineCache_PrewarmFromThePackBeforeTheGameCreatesAnything) {
   CHECK_EQ(f.game->stats().cache_recorded, uint64_t(0));  // known already
 }
 
+TEST(ShaderLibrary_LightingReplacementPrewarmsFromBaseAndTaggedLists) {
+  const std::string pack = MakePack("lighting_replacement");
+  Fixture f;
+  if (!f.Init()) return;
+  f.shaders->Initialize(pack, NR_TEST_DXC_DIR);
+  const auto parsed = kkshaders::parseContainer(PixelShaderInterpolator());
+  CHECK(parsed.ok);
+  kkshaders::Compiler compiler;
+  const auto built = kkshaders::buildShader(parsed.info, compiler, false);
+  CHECK(built.ok);
+  if (!built.ok) return;
+  const uint64_t input = kkshaders::translationInputHash(parsed.info);
+  constexpr uint64_t tag = 0x4C69676850434621ull;
+  f.shaders->SetReplacements({{parsed.info.ucodeHash,
+      {built.shader.spirv.data(), built.shader.spirv.size(), tag}}});
+  // The shipped base list has no replacement tag. A later cache does.
+  const auto base = f.shaders->GetForPrewarm(kkshaders::ShaderKind::Pixel, parsed.info.ucodeHash, input, true);
+  CHECK(base && base->input_hash == (input ^ tag));
+  const auto cached = f.shaders->GetForPrewarm(kkshaders::ShaderKind::Pixel, parsed.info.ucodeHash, input ^ tag, true);
+  CHECK(cached == base);
+  // Creation of the real container must reuse that same replacement, so the first draw
+  // finds the prewarmed pipeline rather than a pipeline of the original translation.
+  const uint32_t object = f.CreateShader(false, PixelShaderInterpolator());
+  const auto actual = f.shaders->Get(kkshaders::ShaderKind::Pixel, object);
+  CHECK(actual && actual->input_hash == (input ^ tag));
+  CHECK(actual && base && actual->handle == base->handle);
+}
+
 TEST(PipelineCache_PrewarmWaitsForShadersTheGameCreates) {
   const std::string path = CachePath("prewarm_late");
   RecordTheScene(path);

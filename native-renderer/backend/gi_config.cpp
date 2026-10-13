@@ -4,6 +4,13 @@
 
 namespace nr {
 
+void ApplyGiJitter(float rows[16], float ndc_x, float ndc_y) {
+  for (int i = 0; i < 4; ++i) {
+    rows[i] += ndc_x * rows[12 + i];
+    rows[4 + i] += ndc_y * rows[12 + i];
+  }
+}
+
 GiLevelParams GiParamsFor(GiLevel level) {
   GiLevelParams p;
   switch (level) {

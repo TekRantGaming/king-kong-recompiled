@@ -316,6 +316,9 @@ constexpr uint32_t kClearTarget0 = 0x1, kClearZ = 0x10, kClearStencil = 0x20;
 struct Options {
   bool upscale = true;
   UpscaleConfig config;
+  GiConfig gi;
+  AoConfig ao;
+  LightingConfig lighting;
   float scale = 1.0f;  // the render scale (the output's)
   Options() {
     config.kind = UpscalerKind::kBilinear;
@@ -361,12 +364,18 @@ struct Fixture {
     g->options().guest_frame_width = kW;
     g->options().guest_frame_height = kH;
     if (opt.upscale) g->options().upscale = opt.config;
+    g->options().gi = opt.gi;
+    g->options().ao = opt.ao;
+    g->options().lighting = opt.lighting;
+    if (opt.ao.method == AoMethod::kGtao) g->options().ao_settings = [] { return AoSettings{}; };
     if (!g->Initialize()) {
       Fail(__FILE__, __LINE__, "GameRenderer::Initialize failed");
       return false;
     }
     // The shaders know whether they are scale aware only after the renderer decided its input size.
     shaders->SetRenderScaleAware(g->scaled());
+    shaders->SetAmbientOcclusion(g->ao_ambient_table());
+    shaders->SetReplacements(g->LightingReplacements());
     shaders->Initialize("", NR_TEST_DXC_DIR);
     g->options().async_pipelines = false;
     game = g.get();
@@ -837,6 +846,53 @@ TEST(GameUpscale_ReactiveMaskMarksWhatCameAfterTheOpaquePass) {
   CHECK(particle > 0.2f);
   CHECK(floor < 0.01f);
   CHECK(wall < 0.01f);
+}
+
+TEST(GameUpscale_GiAndGtaoStayBeforeTheReactiveMask) {
+  for (UpscaleQuality quality : {UpscaleQuality::kNative, UpscaleQuality::kQuality}) {
+    Options o;
+    o.config.quality = quality;
+    o.config.debug = 8;  // deterministic viewport for readback checks
+    o.gi.level = GiLevel::kMedium;
+    o.ao.method = AoMethod::kGtao;
+    o.ao.apply = AoApply::kOpaque;
+    o.lighting.water = WaterReflections::kSsr;
+    o.lighting.volumetrics = Volumetrics::kHigh;
+    Fixture f(o);
+    if (!f.Init()) return;
+    f.Render({}, "gi_reactive_0");
+    f.Render({}, "gi_reactive_1");
+    const GameUpscale* u = f.game->upscale();
+    const SceneGi* gi = f.game->scene_gi();
+    CHECK(gi && gi->stats().applied_opaque == 2);
+    CHECK(gi && gi->stats().history_frames == 1);
+    CHECK(u && u->snapshot_taken && u->stats.failures == 0);
+    if (!u || !u->reactive) return;
+    const Pixels mask = f.gpu->ReadBack(u->reactive);
+    auto at = [&](V3 p) {
+      float x, y;
+      f.cam.ToPixel(p, x, y);
+      return mask.at(uint32_t(x * u->in_x), uint32_t(y * u->in_y))[0];
+    };
+    CHECK(at({1.2f, 0.0f, 0.6f}) < 0.01f);
+    CHECK(at({2.5f, 1.2f, 4.0f}) < 0.01f);
+    CHECK(at({2.0f, 0.2f, 3.6f}) > 0.2f);
+    CHECK(at(kParticleCentre) > 0.2f);
+  }
+}
+
+TEST(GameUpscale_GiHistoryFollowsAlternatingJitter) {
+  Options o;
+  o.config.quality = UpscaleQuality::kQuality;
+  o.gi.level = GiLevel::kMedium;
+  Fixture f(o);
+  if (!f.Init()) return;
+  for (int i = 0; i < 4; ++i) f.Render({}, "gi_jitter_" + std::to_string(i));
+  const SceneGi* gi = f.game->scene_gi();
+  const GameUpscale* u = f.game->upscale();
+  CHECK(gi && gi->stats().applied_opaque == 4);
+  CHECK(gi && gi->stats().history_frames == 3);
+  CHECK(u && u->stats.failures == 0);
 }
 
 TEST(GameUpscale_PointBeforeThePostPass) {

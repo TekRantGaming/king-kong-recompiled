@@ -12,6 +12,7 @@
 #include "backend/ao_classifier.h"
 #include "backend/ao_config.h"
 #include "backend/guest_memory.h"
+#include "backend/gi_config.h"
 #include "backend/lighting_config.h"
 #include "backend/lighting_shaders.h"
 #include "backend/tests/check.h"
@@ -526,4 +527,72 @@ TEST(Lighting_SettingsAndShaders) {
   CHECK(WaterLayoutOf(0xAC2239A7CA9EDF1Cull).water && !WaterLayoutOf(0xAC2239A7CA9EDF1Cull).dynamic_reflection);
   CHECK(LightFamilyOf(0x0123456789ABCDEFull) == LightFamily::kNone);
 }
+
+TEST(Gi_SettingsAndLevels) {
+  CHECK(!GiConfig{}.enabled());
+  GiLevel level = GiLevel::kHigh;
+  CHECK(!ParseGiLevel("invalid", level) && level == GiLevel::kHigh);
+  for (GiLevel l : {GiLevel::kOff, GiLevel::kLow, GiLevel::kMedium, GiLevel::kHigh}) {
+    CHECK(ParseGiLevel(GiLevelName(l), level) && level == l);
+    const GiLevelParams p = GiParamsFor(l);
+    if (l == GiLevel::kOff) {
+      CHECK_EQ(p.slices, 0u);
+      CHECK_EQ(p.steps, 0u);
+      CHECK_EQ(p.radius, 0.0f);
+    } else {
+      CHECK(p.slices >= 2 && p.steps >= 4 && p.denoise >= 2 && p.radius > 0);
+      CHECK(p.half == (l != GiLevel::kHigh));
+    }
+  }
+  GiQuality quality = GiQuality::kFull;
+  CHECK(!ParseGiQuality("invalid", quality) && quality == GiQuality::kFull);
+  for (GiQuality q : {GiQuality::kAuto, GiQuality::kHalf, GiQuality::kFull})
+    CHECK(ParseGiQuality(GiQualityName(q), quality) && quality == q);
+  CHECK(ParseGiLevel("0", level) && level == GiLevel::kOff);
+  CHECK(ParseGiLevel("3", level) && level == GiLevel::kHigh);
+}
+
+TEST(Gi_JitterMovesClipPixelsWithoutChangingDepth) {
+  float rows[16] = {2,0,0,0, 0,3,0,0, 0,0,1.01f,-0.1f, 0,0,1,0};
+  const float before[16] = {2,0,0,0, 0,3,0,0, 0,0,1.01f,-0.1f, 0,0,1,0};
+  const float point[4] = {1,2,4,1};
+  const float sx = 64.0f * 0.5f, sy = -36.0f * 0.5f;
+  ApplyGiJitter(rows, 0.25f / sx, -0.5f / sy);
+  float clip[4] = {}, original[4] = {};
+  for (int i = 0; i < 4; ++i)
+    for (int j = 0; j < 4; ++j) {
+      clip[i] += rows[4*i+j] * point[j];
+      original[i] += before[4*i+j] * point[j];
+    }
+  CHECK_NEAR((clip[0]/clip[3] - original[0]/original[3])*sx, 0.25f, 1e-5);
+  CHECK_NEAR((clip[1]/clip[3] - original[1]/original[3])*sy, -0.5f, 1e-5);
+  CHECK_EQ(clip[2], original[2]);
+  CHECK_EQ(clip[3], original[3]);
+}
+
+TEST(Lighting_EffectsAreIndependent) {
+  LightingConfig c;
+  c.shadows = ShadowQuality::kHigh;
+  CHECK(c.active() && c.shadows_on() && !c.water_on() && !c.volumetrics_on());
+  c = {};
+  c.water = WaterReflections::kSsr;
+  CHECK(c.active() && !c.shadows_on() && c.water_on() && !c.volumetrics_on());
+  c = {};
+  c.volumetrics = Volumetrics::kHigh;
+  CHECK(c.active() && !c.shadows_on() && !c.water_on() && c.volumetrics_on());
+  c = {};
+  c.gpu_time = true;
+  CHECK(c.active() && !c.any());
+  ShadowQuality shadow = ShadowQuality::kUltra;
+  WaterReflections water = WaterReflections::kSsr;
+  Volumetrics vol = Volumetrics::kHigh;
+  CHECK(!ParseShadowQuality("invalid", shadow) && shadow == ShadowQuality::kUltra);
+  CHECK(!ParseWaterReflections("invalid", water) && water == WaterReflections::kSsr);
+  CHECK(!ParseVolumetrics("invalid", vol) && vol == Volumetrics::kHigh);
+  for (WaterReflections w : {WaterReflections::kOriginal, WaterReflections::kSsr})
+    CHECK(ParseWaterReflections(WaterReflectionsName(w), water) && water == w);
+  for (Volumetrics v : {Volumetrics::kOff, Volumetrics::kLow, Volumetrics::kHigh})
+    CHECK(ParseVolumetrics(VolumetricsName(v), vol) && vol == v);
+}
+
 NR_TEST_MAIN()

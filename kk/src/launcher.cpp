@@ -240,7 +240,8 @@ constexpr std::pair<int, const char*> kLanguages[] = {
 // renderer asks for them when it makes the device, before the launcher opens).
 // VSync: Vulkan chooses its present mode when the swapchain is created.
 constexpr const char* kRestartCvars[] = {"present_effect", "window_width", "window_height", "monitor", "gpu_plugin",
-                                         "native_upscaler", "native_backend",
+                                         "native_upscaler", "native_backend", "native_gi", "native_shadow_quality",
+                                         "native_water_reflections", "native_volumetrics",
                                          "d3d12_allow_variable_refresh_rate_and_tearing"};
 
 enum Page { kHome, kDisplay, kGraphics, kGameplay, kControls, kCheatsPage, kAchievements, kAbout, kPageCount };
@@ -1757,7 +1758,8 @@ class SettingsPages {
     static const std::set<std::string> kRestartOnly = {
         "Window mode", "Window size", "Resolution", "Refresh rate", "Monitor", "Frame rate", "VSync",
         "Upscaler", "Upscaler mode", "Render quality", "Internal resolution", "Look", "Preset", "Renderer",
-        "Graphics API", "Language", "Startup logos"};
+        "Graphics API", "Language", "Startup logos", "Global illumination", "Shadows",
+        "Water reflections", "Light shafts"};
     std::vector<Item> out;
     for (Item& it : items) {
       if (it.type != ItemType::kSection && kRestartOnly.count(it.label)) continue;

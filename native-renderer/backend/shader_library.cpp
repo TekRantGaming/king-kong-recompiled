@@ -182,6 +182,7 @@ std::shared_ptr<GameShader> ShaderLibrary::Build(const kkshaders::ShaderInfo& in
   if (info.kind == kkshaders::ShaderKind::Pixel) {
     auto baseline = info;
     baseline.ambientOcclusion = {};
+    baseline.waterReflection = {};
     for (bool aware : {false, true}) {
       baseline.renderScaleAware = aware;
       prewarm_inputs_[HashKey(info.kind, info.ucodeHash, kkshaders::translationInputHash(baseline))] = input_hash;
@@ -309,9 +310,32 @@ std::shared_ptr<const GameShader> ShaderLibrary::GetForPrewarm(kkshaders::Shader
     std::lock_guard lock(mutex_);
     if (auto it = prewarm_inputs_.find(HashKey(kind, hash, input)); it != prewarm_inputs_.end()) {
       input = it->second;
-    } else if (kind == kkshaders::ShaderKind::Pixel && (!exact_kind || ambient_)) {
+    } else if (kind == kkshaders::ShaderKind::Pixel &&
+               (!exact_kind || ambient_ ||
+                (water_reflections_ && kkshaders::waterReflectionHookFor(hash).enabled()))) {
       // A base list cannot tell us the desired input hash until its container is known.
       return nullptr;
+    } else if (kind == kkshaders::ShaderKind::Pixel) {
+      auto replacement = replacements_.find(hash);
+      if (replacement != replacements_.end()) {
+        // A base list names the packed translation, while a lighting cache names the
+        // replacement. Preserve that translation's bindings in either case.
+        const Replacement& r = replacement->second;
+        kkshaders::CompiledShader compiled;
+        uint64_t replaced_input = input ^ r.tag;
+        if (!pack_open_ || !input) return nullptr;
+        if (!pack_.find(hash, input, compiled)) {
+          replaced_input = input;
+          if (!pack_.find(hash, input ^ r.tag, compiled)) return nullptr;
+        }
+        const uint64_t key = HashKey(kind, hash, replaced_input);
+        if (auto known = by_hash_.find(key); known != by_hash_.end()) return known->second;
+        const auto* bytes = static_cast<const uint8_t*>(r.data);
+        auto& blob = device_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN ? compiled.spirv : compiled.dxil;
+        blob.assign(bytes, bytes + r.size);
+        ++stats_.from_pack;
+        return Finish(kind, hash, replaced_input, std::move(compiled), true);
+      }
     }
   }
   return GetByHash(kind, hash, input);

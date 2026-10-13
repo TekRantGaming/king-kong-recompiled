@@ -52,6 +52,9 @@ struct GiLevelParams {
   float radius = 0.0f;        // world units
 };
 GiLevelParams GiParamsFor(GiLevel level);
+// Add NDC jitter to a row-major clip transform, retaining its depth and homogeneous w.
+// The GI camera vote then maps the actual jittered pixels between frames.
+void ApplyGiJitter(float rows[16], float ndc_x, float ndc_y);
 
 bool ParseGiLevel(const std::string& text, GiLevel& out);
 bool ParseGiQuality(const std::string& text, GiQuality& out);

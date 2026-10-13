@@ -311,31 +311,9 @@ GameRenderer::UpscaleDraw GameRenderer::UpscaleBeginDraw(nvrhi::ICommandList* cl
   } else if (u.snapshot_due && r.in_scene && r.cls != AoDrawClass::kEnd) {
     take = true;
   }
-  if (take && !u.upscaled && !u.snapshot_taken) {
-    u.snapshot_due = false;
-    auto it = targets_.find(u.tracker.scene_color());
-    if (it != targets_.end() && it->second && u.config.reactive > 0.0f) {
-      HostTarget* scene = it->second.get();
-      const nvrhi::TextureDesc& sd = scene->texture->getDesc();
-      if (!u.snapshot || u.snapshot->getDesc().width != sd.width || u.snapshot->getDesc().height != sd.height ||
-          u.snapshot->getDesc().format != sd.format) {
-        nvrhi::TextureDesc td2;
-        td2.width = sd.width;
-        td2.height = sd.height;
-        td2.format = sd.format;
-        td2.initialState = nvrhi::ResourceStates::ShaderResource;
-        td2.keepInitialState = true;
-        td2.debugName = "Upscaler opaque picture";
-        if (u.snapshot) RetireResource(u.snapshot);
-        u.snapshot = device_->createTexture(td2);
-        u.pass_sets.clear();
-      }
-      if (u.snapshot) {
-        cl->copyTexture(u.snapshot, nvrhi::TextureSlice(), scene->texture, nvrhi::TextureSlice());
-        u.snapshot_taken = true;
-      }
-    }
-  }
+  // A post draw needs its reference before RunUpscale; scene draws take it after the
+  // AO, GI and volumetric hooks, so opaque lighting is not marked as reactive.
+  if (take && r.upscale_before) UpscaleTakeSnapshot(cl);
   if (r.upscale_before) RunUpscale(cl, r.trigger);
   // A draw into the scene: the copies of it made so far are not the final picture.
   if (r.in_scene && r.phase == UpscaleFrameTracker::Phase::kScene) u.scene_copies.clear();
@@ -364,10 +342,40 @@ GameRenderer::UpscaleDraw GameRenderer::UpscaleBeginDraw(nvrhi::ICommandList* cl
     u.screen_valid = s.x_scale != 0.0f && s.y_scale != 0.0f;
   }
   UpscaleDraw out;
+  out.snapshot = take && !r.upscale_before;
   out.jitter = r.jitter;
   out.motion = r.motion;  // recorded for the camera's vote even when the object pass is off (debug 4)
   out.scene_phase = r.phase == UpscaleFrameTracker::Phase::kScene;
   return out;
+}
+
+void GameRenderer::UpscaleTakeSnapshot(nvrhi::ICommandList* cl) {
+  GameUpscale& u = *upscale_;
+  if (!u.upscaled && !u.snapshot_taken) {
+    u.snapshot_due = false;
+    auto it = targets_.find(u.tracker.scene_color());
+    if (it != targets_.end() && it->second && u.config.reactive > 0.0f) {
+      HostTarget* scene = it->second.get();
+      const nvrhi::TextureDesc& sd = scene->texture->getDesc();
+      if (!u.snapshot || u.snapshot->getDesc().width != sd.width || u.snapshot->getDesc().height != sd.height ||
+          u.snapshot->getDesc().format != sd.format) {
+        nvrhi::TextureDesc td2;
+        td2.width = sd.width;
+        td2.height = sd.height;
+        td2.format = sd.format;
+        td2.initialState = nvrhi::ResourceStates::ShaderResource;
+        td2.keepInitialState = true;
+        td2.debugName = "Upscaler opaque picture";
+        if (u.snapshot) RetireResource(u.snapshot);
+        u.snapshot = device_->createTexture(td2);
+        u.pass_sets.clear();
+      }
+      if (u.snapshot) {
+        cl->copyTexture(u.snapshot, nvrhi::TextureSlice(), scene->texture, nvrhi::TextureSlice());
+        u.snapshot_taken = true;
+      }
+    }
+  }
 }
 
 void GameRenderer::UpscaleRecordMotion(const DrawCall& call, const dev::DeviceView& d,

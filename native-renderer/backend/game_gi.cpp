@@ -55,7 +55,8 @@ void GameRenderer::GiDrawHook(nvrhi::ICommandList* cl, const DrawCall& call, con
     for (uint64_t v : parts) key = (key ^ v) * 1099511628211ull + (key >> 29);
     if (!key) key = 1;
   }
-  scene_gi_->OnDraw(cl, a, GiAoOn(call.frame), key);
+  const Jitter jitter = upscale_ && !upscale_->upscaled ? upscale_->jitter : Jitter{};
+  scene_gi_->OnDraw(cl, a, GiAoOn(call.frame), key, jitter.x, jitter.y);
   if (scene_gi_->last_applied() && (Dump(call.frame) || (options_.ao.dump_every && call.frame % options_.ao.dump_every == 0))) {
     const float* ambient = scene_gi_->ambient();
     Logf(LogLevel::kInfo, "rexgpu-native:   GI: bounce light added before draw %u of frame %llu (ambient %.3f %.3f %.3f)",
