@@ -194,6 +194,7 @@ bool GameRenderer::Initialize() {
   const nvrhi::GraphicsAPI api = device_->getGraphicsAPI();
   // Upscalers (game_upscale.cpp): the upscaler and its input scale first (scaled() depends on it).
   if (options_.upscale.enabled() && !UpscaleSetup()) upscale_.reset();
+  shaders_->SetMotionPrewarm(bool(upscale_));
 
   // Set 0: the three constant buffers at b0-b2 (binding = register on Vulkan).
   nvrhi::BindingLayoutDesc constants;
@@ -372,6 +373,7 @@ bool GameRenderer::Initialize() {
   if (upscale_ && !UpscaleInitialize()) {
     Logf(LogLevel::kWarning, "rexgpu-native: upscaler: the passes could not be made; no upscaler");
     upscale_.reset();
+    shaders_->SetMotionPrewarm(false);
   }
   return true;
 }
@@ -670,7 +672,7 @@ nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelin
   // optional (the upscalers' motion pass): made on the workers, never waited for, not counted as a draw
   // that waited or was skipped.
   const bool for_draws = async && !optional;
-  async = async && options_.async_pipelines;
+  async = async && (optional || options_.async_pipelines);
   if (async && optional) {
     std::unique_lock lock(pipeline_mutex_);
     for (auto& [k, p] : pipelines_done_) {
@@ -785,11 +787,16 @@ void GameRenderer::NoteRecord(const PipelineRecord& record, uint64_t key) {
 }
 
 bool GameRenderer::QueuePrewarm(const PipelineRecord& record) {
+  PipelineRecord adapted = record;
+  if (!(record.flags & kRecordMotion))
+    adapted.flags = (record.flags & ~kRecordScaled) | (RecordFlags() & kRecordScaled);
   const kkshaders::ShaderKind vk = kkshaders::ShaderKind::Vertex, pk = kkshaders::ShaderKind::Pixel;
   std::shared_ptr<const GameShader> vs = shaders_->GetByHash(vk, record.vs_hash, record.vs_input);
   std::shared_ptr<const GameShader> ps =
-      record.ps_hash ? shaders_->GetByHash(pk, record.ps_hash, record.ps_input) : nullptr;
+      record.ps_hash ? shaders_->GetForPrewarm(pk, record.ps_hash, record.ps_input,
+                                              record.flags == adapted.flags) : nullptr;
   if (!vs || (record.ps_hash && !ps)) return false;
+  if (ps) adapted.ps_input = ps->input_hash;
   const bool motion = (record.flags & kRecordMotion) != 0;
   nvrhi::IShader* vertex = vs->handle;
   if (motion) {
@@ -801,11 +808,11 @@ bool GameRenderer::QueuePrewarm(const PipelineRecord& record) {
   }
   nvrhi::GraphicsPipelineDesc desc;
   nvrhi::FramebufferInfo framebuffer;
-  BuildPipelineDesc(record, vertex, motion ? upscale_->object_ps.Get() : (ps ? ps->handle.Get() : nullptr), desc, framebuffer);
+  BuildPipelineDesc(adapted, vertex, motion ? upscale_->object_ps.Get() : (ps ? ps->handle.Get() : nullptr), desc, framebuffer);
   if (motion && !desc.bindingLayouts.empty()) desc.bindingLayouts[0] = upscale_->motion_layout;
-  const uint64_t key = PipelineKey(record);
+  const uint64_t key = PipelineKey(adapted);
   std::lock_guard lock(pipeline_mutex_);
-  if (pipelines_pending_.count(key)) return true;
+  if (pipelines_.count(key) || pipelines_pending_.count(key)) return true;
   EnsureWorkers();
   pipelines_pending_[key] = true;
   pipeline_jobs_.push_back({key, std::move(desc), framebuffer});
@@ -818,14 +825,20 @@ uint32_t GameRenderer::RecordFlags() const {
   return (options_.flip_front_face ? kRecordFlipFrontFace : 0u) | (scaled() ? kRecordScaled : 0u);
 }
 
+void GameRenderer::QueueRecordVariants(const PipelineRecord& record) {
+  QueueOrDefer(record);
+  if (upscale_ && !(record.flags & kRecordMotion) && record.depth_format && (record.depth_control & 6) == 6)
+    QueueOrDefer(MotionPipelineRecord(record, uint32_t(nvrhi::Format::RG16_FLOAT)));
+}
+
 void GameRenderer::QueueOrDefer(const PipelineRecord& record) {
   // With cache_mutex_ held. Each description once, from whichever source (the cache file, the
   // shipped list) names it first.
   if (!prewarm_seen_.insert(PipelineKey(record)).second) return;
-  // Another run's kind of pipeline (render scale, flipped faces) is never drawn here: not made.
+  // Scale variants are adapted by QueuePrewarm; flipped faces and unknown flags stay isolated.
   const bool motion = (record.flags & kRecordMotion) != 0;
   const uint32_t wanted = motion ? ((RecordFlags() & kRecordFlipFrontFace) | kRecordMotion) : RecordFlags();
-  if (record.flags != wanted || (motion && !upscale_)) {
+  if ((record.flags & ~kRecordScaled) != (wanted & ~kRecordScaled) || (motion && !upscale_)) {
     ++stats_.prewarm_other_kind;
     return;
   }
@@ -846,9 +859,7 @@ bool GameRenderer::SetPipelineCache(const std::string& path) {
   const bool can_prewarm = options_.async_pipelines;
   if (can_prewarm) {
     for (const PipelineRecord& record : cache_file_.loaded()) {
-      QueueOrDefer(record);
-      if (upscale_ && !(record.flags & kRecordMotion) && record.depth_format && (record.depth_control & 6) == 6)
-        QueueOrDefer(MotionPipelineRecord(record, uint32_t(nvrhi::Format::RG16_FLOAT)));
+      QueueRecordVariants(record);
     }
     deferred_shader_count_ = shaders_->created_count();
   }
@@ -873,9 +884,7 @@ bool GameRenderer::LoadPipelineList(const std::string& path) {
   const bool can_prewarm = options_.async_pipelines;
   if (can_prewarm) {
     for (const PipelineRecord& record : records) {
-      QueueOrDefer(record);
-      if (upscale_ && !(record.flags & kRecordMotion) && record.depth_format && (record.depth_control & 6) == 6)
-        QueueOrDefer(MotionPipelineRecord(record, uint32_t(nvrhi::Format::RG16_FLOAT)));
+      QueueRecordVariants(record);
     }
     deferred_shader_count_ = shaders_->created_count();
   }

@@ -39,6 +39,7 @@ ShaderLibrary::~ShaderLibrary() {
 
 nvrhi::IShader* ShaderLibrary::MotionVariant(const GameShader& vs) {
   if (vs.kind != kkshaders::ShaderKind::Vertex) return nullptr;
+  if (!vs.source) return nullptr;  // a pack-only entry may acquire its container later
   const uint64_t key = HashKey(vs.kind, vs.ucode_hash, vs.input_hash) ^ 0x4D4F54494F4E0001ull;
   std::lock_guard lock(motion_mutex_);
   if (auto it = motion_.find(key); it != motion_.end()) return it->second.handle.Get();
@@ -164,6 +165,16 @@ void ShaderLibrary::Initialize(const std::string& pack, const std::string& dxc) 
 std::shared_ptr<GameShader> ShaderLibrary::Build(const kkshaders::ShaderInfo& info) {
   // Called with mutex_ held.
   const uint64_t input_hash = kkshaders::translationInputHash(info);
+  // Derive aliases from this container, never from the microcode hash alone: distinct
+  // interpolator/fetch translations of the same shader must remain distinct.
+  if (info.kind == kkshaders::ShaderKind::Pixel) {
+    auto baseline = info;
+    baseline.ambientOcclusion = {};
+    for (bool aware : {false, true}) {
+      baseline.renderScaleAware = aware;
+      prewarm_inputs_[HashKey(info.kind, info.ucodeHash, kkshaders::translationInputHash(baseline))] = input_hash;
+    }
+  }
   const uint64_t key = HashKey(info.kind, info.ucodeHash, input_hash);
   if (auto it = by_hash_.find(key); it != by_hash_.end()) {
     // Made from the pack alone (GetByHash): a copy that also has the container's fetch table.
@@ -262,7 +273,21 @@ std::shared_ptr<const GameShader> ShaderLibrary::GetByHash(kkshaders::ShaderKind
 
 uint64_t ShaderLibrary::created_count() const {
   std::lock_guard lock(mutex_);
-  return stats_.created;
+  return stats_.created + stats_.from_object;
+}
+
+std::shared_ptr<const GameShader> ShaderLibrary::GetForPrewarm(kkshaders::ShaderKind kind, uint64_t hash,
+                                                             uint64_t input, bool exact_kind) {
+  {
+    std::lock_guard lock(mutex_);
+    if (auto it = prewarm_inputs_.find(HashKey(kind, hash, input)); it != prewarm_inputs_.end()) {
+      input = it->second;
+    } else if (kind == kkshaders::ShaderKind::Pixel && (!exact_kind || ambient_)) {
+      // A base list cannot tell us the desired input hash until its container is known.
+      return nullptr;
+    }
+  }
+  return GetByHash(kind, hash, input);
 }
 
 void ShaderLibrary::OnCreated(uint32_t kind, uint32_t container, uint32_t object) {
@@ -285,6 +310,7 @@ void ShaderLibrary::OnCreated(uint32_t kind, uint32_t container, uint32_t object
   std::shared_ptr<GameShader> shader = Build(parsed.info);
   if (shader) {
     by_object_[object] = shader;
+    if (motion_prewarm_ && want == kkshaders::ShaderKind::Vertex) MotionVariant(*shader);
   } else {
     by_object_[object] = nullptr;
   }

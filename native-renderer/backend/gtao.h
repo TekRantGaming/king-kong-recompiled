@@ -103,7 +103,7 @@ class Gtao {
   void Dispatch(nvrhi::ICommandList* cl, Pass& pass, nvrhi::IBindingSet* set, uint32_t x, uint32_t y);
   nvrhi::BindingSetHandle Set(Pass& pass, const std::vector<nvrhi::BindingSetItem>& items);
   nvrhi::IFramebuffer* Framebuffer(nvrhi::ITexture* color);
-  nvrhi::IGraphicsPipeline* GraphicsPipeline(bool resolve, int mode, nvrhi::IFramebuffer* fb);
+  nvrhi::IGraphicsPipeline* GraphicsPipeline(bool resolve, int mode, const nvrhi::FramebufferInfo& info);
   void FillConstants(Constants& k, const GtaoInput& in, const GtaoSettings& s, uint32_t padded_w,
                      uint32_t padded_h, uint32_t step) const;
 

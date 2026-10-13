@@ -463,6 +463,7 @@ class GameRenderer {
   // QueuePrewarm, or into deferred_ when its shaders are not there yet; a record of another kind of
   // run is left out (cache_mutex_ held).
   void QueueOrDefer(const PipelineRecord& record);
+  void QueueRecordVariants(const PipelineRecord& record);
   // PipelineRecord::flags for this renderer's draws.
   uint32_t RecordFlags() const;
   void RetryDeferred();
@@ -661,6 +662,8 @@ class GameRenderer {
                    nvrhi::ITexture* source0, nvrhi::ITexture* source1, nvrhi::ITexture* color0,
                    nvrhi::ITexture* color1, nvrhi::ITexture* depth, const nvrhi::Rect& rect, uint64_t key,
                    nvrhi::ColorMask mask = nvrhi::ColorMask::All);
+  nvrhi::IGraphicsPipeline* UpscalePipeline(nvrhi::IShader* ps, const nvrhi::FramebufferInfo& info,
+                                          nvrhi::ColorMask mask);
   void UpscaleMotionPass(nvrhi::ICommandList* cl, HostTarget* depth_target);
   void UpscaleLogStats();
   std::function<void(uint32_t, uint32_t)> watch_;
