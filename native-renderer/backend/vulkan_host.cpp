@@ -32,6 +32,7 @@
 #include "backend/output_blit.h"
 #include "backend/vk_pipeline_cache.h"
 #include "backend/vulkan_dispatch.h"
+#include "backend/vulkan_requirements.h"
 
 REXCVAR_DECLARE(bool, native_validation);
 REXCVAR_DECLARE(bool, native_vk_pipeline_cache);
@@ -229,10 +230,20 @@ class VulkanHost final : public HostDevice {
       ok = false;
     }
 #else
-    REXGPU_WARN(
-        "rexgpu-native: this SDK does not enable timelineSemaphore and synchronization2 "
-        "(apply native-renderer/sdk-patches/0001); NVRHI uses both, expect validation errors");
+    REXGPU_ERROR("rexgpu-native: SDK synchronization features cannot be verified; apply sdk-patches/0001");
+    ok = false;
 #endif
+// Validate what was actually enabled on this shared SDK device before creating
+// any bindless layouts, instead of relying on a late driver error or missing draws.
+#if defined(REX_UI_VULKAN_DEVICE_HAS_DESCRIPTOR_INDEXING)
+    if (!CheckNativeBindlessFeatures(props, [](const char* name) {
+          REXGPU_ERROR("rexgpu-native: Native Vulkan requires enabled feature {}", name);
+        })) ok = false;
+#else
+    REXGPU_ERROR("rexgpu-native: SDK bindless features cannot be verified; apply sdk-patches/0002");
+    ok = false;
+#endif
+    if (!ok) REXGPU_ERROR("rexgpu-native: Native Vulkan unsupported on this device. Choose Native D3D12 or Classic in the launcher.");
     return ok;
   }
 

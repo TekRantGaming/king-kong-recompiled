@@ -6,6 +6,9 @@
 #   nr_trace_replay  replays a KK_DEV_D3D_TRACE log (a tool for real traces)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
+add_executable(nr_vulkan_requirements_tests vulkan_requirements_tests.cpp)
+target_include_directories(nr_vulkan_requirements_tests PRIVATE "${NR_ROOT}")
+add_test(NAME nr_vulkan_requirements_tests COMMAND nr_vulkan_requirements_tests)
 
 add_executable(nr_draw_tests draw_tests.cpp)
 target_link_libraries(nr_draw_tests PRIVATE nr_draw nr_hooks)
