@@ -1619,9 +1619,9 @@ class SettingsPages {
     std::vector<Item> items;
     items.push_back(Section("Cheats"));
     items.push_back(CvarToggle("Cheats",
-                               "Switches on the cheats you pick below as soon as the game reaches its main menu, the "
-                               "same as typing their codes on the game's Cheat screen. They last until you quit the "
-                               "game.",
+                               "Switches on the cheats you pick below when a chapter starts, the same as typing their "
+                               "codes on the game's Cheat screen. Changes made while playing apply at once. They "
+                               "last until you quit the game.",
                                "kk_cheats"));
     const bool on = GetBool("kk_cheats");
     items.push_back(Section("Cheat list"));

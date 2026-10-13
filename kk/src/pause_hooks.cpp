@@ -117,13 +117,12 @@ int g_confirm_frames = 0;
 int g_try_row = 0;
 int g_find_rounds = 0;  // rounds of the row search that found no list yet
 int g_force_button = -1;  // the game's button query answers "pressed" for this one only (99: none)
+std::atomic<int> g_dev_opt_row{-1}, g_dev_opt_back{0};  // developer Options page presses
 
 std::atomic<uint16_t> g_raw_buttons{0};
 uint16_t g_hidden_mask = 0;  // buttons held as the menu closed: hidden from the game until let go
 bool g_was_open = false;
 
-// Not in the contract: the game's own Options pages, for developer tests (KK_DEV_PAUSE_ACTIONS "options").
-constexpr int kOptionsAction = 6;
 
 bool MenuUp() { return NowMs() - g_main_seen_ms.load() < kPageGoneMs; }
 
@@ -136,7 +135,7 @@ int ItemId(int action) {
     case PauseAction::kSave: return 1;
     case PauseAction::kQuitToDesktop: return 3;
   }
-  return action == kOptionsAction ? 2 : 4;
+  return action == int(PauseAction::kGameOptions) ? 2 : 4;
 }
 const char* ActionName(int action) {
   static const char* const kNames[] = {"Resume", "Start again", "Score", "Return to main menu", "Save",
@@ -425,7 +424,7 @@ REX_HOOK_RAW(sub_824BA560) {
       g_closing_until = now + 1000;
       break;
     case PauseAction::kScore:
-    case PauseAction(kOptionsAction):
+    case PauseAction::kGameOptions:
       g_game_page = true;
       g_game_page_seen_ms = now;
       g_game_page_since = now;
@@ -579,6 +578,16 @@ const bool g_steps_thread = [] {
       const double t = kk::DevSecondsSinceMenu();
       if (t < 0 || t < steps[next].at) continue;
       const std::string& w = steps[next].what;
+      if (w.rfind("optpick=", 0) == 0) {
+        g_dev_opt_row = std::atoi(w.c_str() + 8);
+        ++next;
+        continue;
+      }
+      if (w == "optback") {
+        g_dev_opt_back = 1;
+        ++next;
+        continue;
+      }
       // "set=<cvar>=<value>": change a setting as the pause menu's Settings would (live settings tests).
       if (w.rfind("set=", 0) == 0) {
         const size_t eq = w.find('=', 4);
@@ -597,7 +606,7 @@ const bool g_steps_thread = [] {
       else if (w == "quit") a = PauseAction::kQuitToLauncher;
       else if (w == "desktop") a = PauseAction::kQuitToDesktop;
       else if (w == "save") a = PauseAction::kSave;
-      else if (w == "options") a = PauseAction(kOptionsAction);
+      else if (w == "options") a = PauseAction::kGameOptions;
       else known = false;
       REXLOG_INFO("KK dev pause step {:.1f} s: {} (menu open {}, available {})", t, w, PauseMenuOpen(),
                   known && PauseActionAvailable(a));
@@ -643,13 +652,35 @@ REX_HOOK_RAW(sub_824CB738) {
 
 // The game's Options pages (IntMIG_Page_OptStart and its Audio, Video, Controls and Language pages): the
 // game's own pages, shown and read by the game while they are up.
+#if defined(KK_DEV_TOOLS)
+namespace kk::play {
+// KK_DEV_PAUSE_ACTIONS "optpick=<row>" / "optback": on the next run of an Options page, select that row and
+// press A, or press B (the developer pad cannot move through these pages).
+void DevOptionsPage(uint8_t* base) {
+  const int row = g_dev_opt_row.exchange(-1);
+  if (row >= 0) {
+    if (const uint32_t v = PageVars(base)) Store32(base, v + 0x3C, uint32_t(row));
+    g_force_button = 0;
+    REXLOG_INFO("KK dev pause: Options page row {} and A", row);
+  } else if (g_dev_opt_back.exchange(0)) {
+    g_force_button = 3;
+    REXLOG_INFO("KK dev pause: Options page B");
+  }
+}
+}  // namespace kk::play
+#define KK_DEV_OPTIONS_PAGE() kk::play::DevOptionsPage(base)
+#else
+#define KK_DEV_OPTIONS_PAGE() ((void)0)
+#endif
 #define KK_GAME_PAGE_HOOK(addr, name)                                   \
   REX_EXTERN(__imp__sub_##addr);                                        \
   REX_HOOK_RAW(sub_##addr) {                                            \
     using namespace kk::play;                                           \
     KK_PAGE_TRACE(name);                                                \
     if (g_game_page) g_game_page_seen_ms = NowMs();                     \
+    KK_DEV_OPTIONS_PAGE();                                              \
     __imp__sub_##addr(ctx, base);                                       \
+    g_force_button = -1;                                                \
   }
 KK_GAME_PAGE_HOOK(824C0F60, "IntMIG_Page_OptStart")
 KK_GAME_PAGE_HOOK(824CD320, "IntMIG_Page_OptStart_Audio")

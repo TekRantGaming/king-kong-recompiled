@@ -196,8 +196,9 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
                    }});
     if (play::PauseActionAvailable(play::PauseAction::kScore))
       e.push_back({"Score", [] { play::RunPauseAction(play::PauseAction::kScore); }});
-    // The game's own Options page; until its contents are known, the port's settings.
-    e.push_back({"Options", [this] { OpenSettings(InGameSettings::kGameplay); }});
+    // The game's own Options pages (Audio: subtitles and volumes; Video; Controls), drawn by the game.
+    if (play::PauseActionAvailable(play::PauseAction::kGameOptions))
+      e.push_back({"Options", [] { play::RunPauseAction(play::PauseAction::kGameOptions); }});
     e.push_back({"Settings", [this] { OpenSettings(InGameSettings::kDisplay); }});
     // Story runs: the game's own Save (its save pages show, then this menu comes back).
     if (play::PauseActionAvailable(play::PauseAction::kSave))
