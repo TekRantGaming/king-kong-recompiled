@@ -119,10 +119,10 @@ float Approach(float v, float target, float rate) {
 // Controller buttons the launcher uses, in buttons_down_.
 enum PadButton { kPadA, kPadB, kPadX, kPadY, kPadLB, kPadRB, kPadStart, kPadBack };
 
-Input::Input() {
+Input::Input(bool own_gamepads) {
   // The program's own SDL (the game's input runs in the runtime's): only
   // while the launcher is open. Gamepads already connected arrive as events.
-  sdl_ready_ = SDL_InitSubSystem(SDL_INIT_GAMEPAD);
+  sdl_ready_ = own_gamepads && SDL_InitSubSystem(SDL_INIT_GAMEPAD);
   pad_held_at_.fill(-1e9);
   key_pressed_at_.fill(-1e9);
 }
@@ -166,8 +166,11 @@ void Input::Inject(Action a, Device d) {
   if (d != Device::kKeyboard) pad_style_ = d == Device::kPlayStation ? "ps5" : "xbox360";
 }
 
+void Input::FeedPad(uint16_t xinput_buttons, int16_t lx, int16_t ly, uint8_t lt, uint8_t rt) {
+  fed_ = {xinput_buttons, lx, ly, lt, rt, ImGui::GetTime()};
+}
+
 void Input::UpdateGamepads(double now) {
-  if (!sdl_ready_) return;
   SDL_Event e;
 #if defined(_WIN32)
   // The program's own SDL (the runtime DLL has its own): everything queued is ours.
@@ -176,12 +179,12 @@ void Input::UpdateGamepads(double now) {
   // Elsewhere the program and the runtime share one SDL, whose queue also holds
   // the window's events (its paint requests, keys and the mouse): take only the
   // controllers' and leave the rest for the window.
-  SDL_PumpEvents();
+  if (sdl_ready_) SDL_PumpEvents();
   auto next = [&e] {
     return SDL_PeepEvents(&e, 1, SDL_GETEVENT, SDL_EVENT_JOYSTICK_AXIS_MOTION, SDL_EVENT_FINGER_DOWN - 1) > 0;
   };
 #endif
-  while (next()) {
+  while (sdl_ready_ && next()) {
     if (e.type == SDL_EVENT_GAMEPAD_ADDED) {
       if (SDL_Gamepad* g = SDL_OpenGamepad(e.gdevice.which)) pads_.push_back(g);
     } else if (e.type == SDL_EVENT_GAMEPAD_REMOVED) {
@@ -234,6 +237,27 @@ void Input::UpdateGamepads(double now) {
       pad_device_ = device_ = ps ? Device::kPlayStation : Device::kXbox;
       pad_style_ = PadPromptsFor(type, SDL_GetGamepadName(g));
     }
+  }
+  // In game: the pad the game read (FeedPad), XInput's layout.
+  if (now - fed_.at < 0.25) {
+    const uint16_t b = fed_.buttons;
+    const float lx = fed_.lx / 32767.0f, ly = -fed_.ly / 32767.0f;  // XInput's up is positive
+    auto past = [](float v, bool was) { return v > (was ? 0.35f : 0.55f); };
+    const bool pad_dir[6] = {(b & 0x0001) || past(-ly, dir_[0].held), (b & 0x0002) || past(ly, dir_[1].held),
+                             (b & 0x0004) || past(-lx, dir_[2].held), (b & 0x0008) || past(lx, dir_[3].held),
+                             fed_.lt > 128, fed_.rt > 128};
+    const bool pad_down[8] = {bool(b & 0x1000), bool(b & 0x2000), bool(b & 0x4000), bool(b & 0x8000),
+                              bool(b & 0x0100), bool(b & 0x0200), bool(b & 0x0010), bool(b & 0x0020)};
+    bool any = false;
+    for (int i = 0; i < 6; ++i) {
+      dir[i] = dir[i] || pad_dir[i];
+      any = any || pad_dir[i];
+    }
+    for (int i = 0; i < 8; ++i) {
+      down[size_t(i)] = down[size_t(i)] || pad_down[i];
+      any = any || (pad_down[i] && !buttons_down_[size_t(i)]);
+    }
+    if (any) device_ = pad_device_;
   }
   // A press the keyboard just reported (typed by Steam for this controller) already counted.
   auto press = [&](Action a) {

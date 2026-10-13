@@ -83,7 +83,11 @@ const std::vector<ChapterInfo>& Chapters();
 bool PauseMenuOpen();
 
 // What the pause menu's items do, carried out the game's own way (its page code, its confirmations).
-enum class PauseAction { kResume, kStartAgain, kScore, kQuitToLauncher };
+// kQuitToLauncher ("Return to main menu"): the game's Quit game (its save behaviour), then the program
+// restarts into the launcher's Play menu. kQuitToDesktop ("Quit game"): the same, then the program exits.
+// kSave: the game's "Save" (story runs only; see menus.md). kGameOptions: the game's own Options pages
+// (Audio, Video, Controls), drawn and read by the game; the pause menu comes back when they close.
+enum class PauseAction { kResume, kStartAgain, kScore, kQuitToLauncher, kSave, kQuitToDesktop, kGameOptions };
 void RunPauseAction(PauseAction action);
 // Whether an item is available right now (e.g. Start again and Score need a save loaded).
 bool PauseActionAvailable(PauseAction action);

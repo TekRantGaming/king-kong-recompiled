@@ -13,6 +13,7 @@
 
 #include "frame_stats.h"
 #include "platform.h"
+#include "play_internal.h"
 #include "settings.h"
 #if defined(KK_NATIVE_RENDERER)
 #include "hooks/kk_native_ui.h"  // the native renderer's pipeline stutter line
@@ -45,6 +46,10 @@ class FpsOverlay final : public rex::ui::ImGuiDialog {
 
  protected:
   void OnDraw(ImGuiIO& io) override {
+    // Black while the launcher's start request is carried out (the title and the game's menus never
+    // show) and on the way back to the launcher.
+    if (play::CoverScreen())
+      ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), io.DisplaySize, IM_COL32(0, 0, 0, 255));
 #if defined(KK_DEV_TOOLS)
     if (!g_note.empty() && std::chrono::steady_clock::now() < g_note_until) {
       const float s = ImGui::GetFontSize() / 18.0f;
@@ -88,13 +93,13 @@ class FpsOverlay final : public rex::ui::ImGuiDialog {
 }  // namespace
 
 #if defined(KK_DEV_TOOLS)
-void CreateDevPauseOverlay(rex::ui::ImGuiDrawer* drawer);  // dev_pause.cpp
+void CreatePauseStandIn(rex::ui::ImGuiDrawer* drawer);  // pause_hooks.cpp (KK_DEV_PAUSE_STANDIN)
 #endif
 
 void CreateFpsOverlay(rex::ui::ImGuiDrawer* drawer) {
   new FpsOverlay(drawer);  // lives for the rest of the session
 #if defined(KK_DEV_TOOLS)
-  CreateDevPauseOverlay(drawer);
+  CreatePauseStandIn(drawer);
 #endif
   rex::ui::RegisterBind("bind_kk_fps", "F2", "Toggle frame counter", [] {
     rex::cvar::SetFlagByName("kk_show_fps", REXCVAR_GET(kk_show_fps) ? "false" : "true");

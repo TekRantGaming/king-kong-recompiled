@@ -75,3 +75,218 @@ captures and game frames: Continue, New game, Load game (load and delete) and ev
 from the launcher with no game menu ever shown; the pause menu opens in play, every item works the game's way,
 Settings change live; Quit returns to the launcher; saves made this way load and keep working; saves are backed
 up before every change and none is ever deleted by the game.
+
+## UI (menus-ui, branch `beta3-ui`)
+
+Files: `launcher.cpp` (Play menu and its pages, `SettingsPages`, `InGameSettings`), `launcher_ui.*` (`ui::Input`
+can be fed the game's pad), `ingame_settings.h`, `pause_menu.*`, and `play_session_stub.cpp` (built only while
+`play_session.cpp` does not exist; made-up saves with `KK_DEV_FAKE_SAVES=1`, the pause "opening" after
+`KK_DEV_PAUSE_MENU=<s>` seconds, `KK_DEV_PAUSE_NOSAVE=1`; it never touches a file). Captures (windowed,
+PrintWindow of the test window): `F:\KK-native-renderer\runs\menus-ui-1013-*`.
+
+### The launcher
+
+- **Play** on Home (and Start / P on any page) opens the **Play menu**: Home's look (clear stills, the logo, the
+  large entries), the header `PLAY` instead of the tabs. Continue (only with a save: the one saved last), New
+  game, Load game (greyed with no save), Chapter select, Back. The status row shows what the focused entry does:
+  Continue its save, chapter (continue point) and when it was saved; New game the free slots; Chapter select the
+  save it uses. B goes back to Home.
+- **Load game** (`PLAY - LOAD GAME`, the settings pages' layout): the five slots as tall rows (name, slot,
+  chapter, when; total of best scores at the right; empty slots dim). The description lists chapter reached,
+  continue point, last saved, started and the score total. A continues the save, Y opens Chapter select with
+  it, X deletes it (pop-up, Cancel focused; `play::DeleteSave`, which backs up first).
+- **New game**: Name (typed with the keyboard in a pop-up, 15 ASCII characters, empty = the game's own name),
+  then the slots, empty ones first (focus on the first empty slot). An empty slot starts at once; a used one asks
+  "Overwrite <name>?" (Cancel focused).
+- **Chapter select**: all 42 entries, every one open, in groups of seven, each with its best score in the save it
+  starts with (header right: `SAVE: <name>`; Y changes the save when there are several). The right side shows a
+  card with the chapter's number (the place for its picture), its name, best score and which save it starts
+  with (with none: "a new one is made in slot N first").
+- Every choice calls `play::SetStartRequest` and then Play as before (the frame-rate warning, the shader wait, the
+  restart for the renderer or a temporal upscaler).
+- `--kk_launcher_open=play|chapters` (never saved) opens the launcher on the Play menu or Chapter select: for the
+  game side when it goes back to the launcher.
+- The Cheats page no longer has "All chapters".
+
+### The pause menu
+
+`CreatePauseMenu` (`pause_menu.h`) makes one ImGui dialog for the session (the launcher makes it at Play; the app
+should also make it when the launcher is skipped). While `play::PauseMenuOpen()` it draws over the dimmed frame:
+the game's logo, `PAUSED`, and Resume, Start again and Score (when `PauseActionAvailable`), Options, Settings, Quit
+game. Start again and Quit game ask first (Cancel focused); B, Esc or Start resume. Options shows the port's
+settings (Gameplay) until the game's own Options page is known.
+
+**Settings**: tabs Display, Graphics, Gameplay, Controls (with Button remapping and Keyboard bindings), Cheats,
+the launcher's own rows (`SettingsPages`, shared code) with the rows that need a restart left out (`LiveOnly`:
+window mode and size, resolution, refresh rate, monitor, frame rate, VSync, upscaler and its mode, render quality,
+internal resolution, look, preset, renderer, language, startup logos). Changes are saved like in the launcher.
+Controls: the game gives the menu the pad it read (`PauseMenuPad`); keyboard and mouse come through ImGui.
+
+## Game side (menus-game, branch `beta3-game`)
+
+Files: `play_session.cpp` (the contract's saves, chapters and start request; routing back to the launcher; save
+guards), `pause_hooks.cpp` (the pause takeover, the frozen frame behind the menu, the developer stand-in),
+`play_internal.h` (what they share with the app), and changes in `king_kong_app.h`, `input_remap.cpp`,
+`overlay.cpp`, `intros.cpp`, `cheats.*`, `settings.*`, `glyphs.*`, `dev_chapter_jump.cpp`, `dev_pause.cpp`. The
+research code is gone from the dev files (they keep the traces only). Evidence: run folders
+`F:\KK-native-renderer\runs\menus-game-1013-*` (the game's own frames `shot_*.bmp`, PrintWindow captures of the
+test window `printwindow_<tenths of s>_<pid>.png`, `game.log`).
+
+### Saves (`ListSaves`, `MostRecentSave`, `BackupSaves`, `DeleteSave`)
+
+- The saves are `<user data>\<profile>\555307D3\00000001\KKProfileSlot<n>.sav\KKProfile.dat` (the runtime's
+  profile folder `B13EBABEBABEBABE`, else any 16-digit profile folder that has the game's saves). A slot exists
+  when its file is `0x8040` bytes with a continue level other than 0 (what the game itself treats as empty).
+  Header fields as in chapter-jump.md; best scores exist for entries 0 to 39 only (the header has 40), entries
+  40 and 41 report 0.
+- `BackupSaves` copies the whole `555307D3` folder (saves and their XContent headers) to
+  `<user data>\save-backups\<yyyyMMdd-HHmmss>\<profile>\555307D3\...` with a `reason.txt`; when nothing changed
+  since the newest backup it keeps that one instead of making another; it keeps the newest 20.
+- `DeleteSave` backs up first, then moves the slot's folder and header file to
+  `save-backups\deleted-<time>-slot<n>\` (out of the game's sight, never erased).
+- Every start request backs up the saves before the game can write (`before play (<kind>)`).
+- Save guards: the save routine (`sub_8266AD80`) never runs with continue level 0 (it gets the slot's own
+  continue point back: the save system's header, else the file, else the new-game start); the save job
+  (`sub_82722620`, the one that calls `XamContentDelete` for level 0) gets the file's continue point put back in
+  its header first. So the game never deletes a save.
+
+### The start request
+
+`--kk_start=<request>` (or `play::SetStartRequest` in the same process; `KK_DEV_START` in developer builds):
+`continue:<slot>`, `new:<slot>[:<name>]`, `chapter:<slot>:<entry>[:<name>]` (names percent-encoded; never
+saved). `restart_and_play` passes it on. It is carried out on the title screen, 5 frames after the title's level
+(2) has loaded (a fallback starts it 3 s after the chapter table is filled), in one frame; the screen is black
+from the start until the chosen level is loading (`CoverScreen`, the ImGui layer), and the logo movies are
+skipped.
+
+- **Continue**: the slot's file into the save system and the universe (as chapter-jump.md proved), then its
+  continue point with `G+0x5668 = 0`, as the main menu's Play does (100 / -1 becomes 100 / 0 and `G+0x1C = 1`,
+  the new-game start, as the load page does). Continue with no slot takes the most recent save; with no save at
+  all it becomes New game.
+- **New game**: what the save menu's "Create new" does (`IntMIG_Page_Memcard` at `0x824CB7C4`): the slot's header
+  cleared and named (the name given, ASCII, 31 characters; empty gives "Player <n>"; the game types its names
+  letter by letter with `sub_82413040`, so there is no default of its own), `sub_82413978(slot, 2, 0, 100, -1,
+  0)`, the universe re-init, `sub_825EAB98` (with the script globals pointed at the universe for the call: on the
+  title screen they are still 0, and the call crashed without), the save data snapshot, continue point 100 / -1
+  and the slot; then the save job (`0x20000060`) writes it before the level load, and the story starts as
+  Continue does. A used slot is overwritten after the backup.
+- **Chapter**: the slot's save (or a new one in an empty slot), then what the chapter select's A does (the
+  snapshot, the restart copies, the re-init, the slot and continue point again from the header, `G+0x5668 = 1`,
+  `G+0x5670`), then the load page's request.
+- The launcher's cheats are applied once the chapter's level is up (`play::ApplyCheatsNow`), since the start
+  menu where they used to be applied never shows.
+
+### Back to the launcher
+
+In a session started by a request the game's menus never come back: its request for the start menu (level 3,
+what Quit game asks for) is cancelled, and when the start menu's pages open anyway (a chapter-select run's end:
+`uni_go` loads level 3 itself, shows the Score pages and the save question there, then opens the chapter select)
+they are not run. Then, once no save is being written, the program restarts into the launcher
+(`--kk_launcher_open=chapters` after a chapter-select run's end, `--kk_launcher_open=play` after "Return to main
+menu" or anything else), or exits after "Quit game" (to the desktop). The restart drops `--kk_skip_launcher`,
+`--kk_start` and `--kk_launcher_open` from the command line, and the program closes as its close button does.
+Story runs go on to the next chapter as the game does.
+
+### The pause takeover
+
+As described at the top of `pause_hooks.cpp`. The game's own pause draws a black screen; the last frame of play
+is captured as the pause starts (`CaptureGuestOutput`, about 20 ms at 2560x1440) and drawn under every dialog
+while the port's menu is open (`CreatePauseBackdrop`), so the pause menu sits over the frozen frame. While it is
+open the game reads an empty pad (buttons still held when it closes stay hidden until let go), the pad it read
+goes to the pause menu (`kk::PauseMenuPad`), and mouse look is switched off (the runtime lets the cursor go).
+
+The game's pause items (found in `IntMIG_Page_Main`'s list, `0x824BA630`): chapter-select runs have Options (2),
+Quit game (3), Start again (8), Resume (4), Score (0); story runs with a save have **Save (1)**, Change storage
+device (1000), Options (2), Quit game (3), Resume (4). (chapter-jump.md had Score as 7 and Options as 5: 7 is an
+extra item shown with profile flag `0x40`, not identified.) Contract additions (agreed with the coordinator):
+`PauseAction::kSave` for the story runs' Save, and `PauseAction::kQuitToDesktop` next to `kQuitToLauncher`: the
+pause menu has "Return to main menu" (the game's Quit game, then the launcher's Play menu) and "Quit game" (the
+game's Quit game, then the program exits), both confirmed first. Change storage device has no meaning on PC. Score and Save show the game's own pages (drawn and
+read by the game; the port's menu comes back when they close). Start again restarts the chapter without a level
+load (its opening cutscene again).
+
+The game's **Options** item opens `IntMIG_Page_OptStart`: **Audio**, **Video**, **Controls** (Language is not
+offered in play). Contract action `PauseAction::kGameOptions` (agreed with the coordinator) opens them from the
+port's pause menu (its Options entry): the game draws and reads them, and the port's menu comes back when they
+are left. Tested: run `...-061637-ch8-game-options` opened each page and went back (developer presses
+`optpick=<row>` / `optback`), frames `shot_*`:
+
+| Page | Rows |
+|---|---|
+| Audio | Subtitles (on / off), Master, Voices, Music, Effects (volume bars), Accept the changes |
+| Video | Display mode (Locked), Special mode (Locked), Accept the changes |
+| Controls | Vibration, Aiming axis (Normal / inverted), Aiming visor, Inventory, Accept the changes |
+
+These values are the game's own, kept in the save. **Next** (a later step, decided by the user): launcher-style
+settings for subtitles and the four volumes in the port's Settings, so the game's pages are no longer needed.
+Vibration and the aiming axis overlap the port's Controls settings (the port's apply on top of the game's).
+
+### Settings in the pause menu: live or restart
+
+From where each setting is read (code), and the ones a test changed in play (run given). Live rows can stay in the
+pause menu's Settings; the others stay launcher-only (the user's decision).
+
+| Setting (cvar) | In play | Where it is read |
+|---|---|---|
+| Camera response, sensitivity (`kk_camera_modern`, `kk_camera_sensitivity`) | live | every camera turn (`input_remap.cpp`) |
+| Dead zone, stick inversion, toggle aim (`kk_deadzone`, `kk_invert_*`, `kk_toggle_aim`) | live | every pad read |
+| Button remapping (`kk_map_*`) | live | every pad read |
+| Vibration and its strength (`kk_vibration`, `kk_vibration_strength`) | live | every rumble the game sends |
+| Mouse sensitivity and inversion (`kk_mouse_sensitivity`, `kk_mouse_invert_y`) | live | every mouse turn |
+| Input mode (`mnk_mode`), keyboard bindings (`keybind_*`) | live | the runtime's keyboard driver checks them at every read |
+| Field of view (`kk_fov`) | live | every camera set-up (`fov.cpp`) |
+| Fog, motion blur, full-screen blur (`kk_fog`, `kk_motion_blur`, `kk_big_blur`) | live | every draw of the effect |
+| Camera shake and its strength | live | every shake |
+| Button prompts (`kk_button_prompts`) | live (new) | the prompt thread now follows the setting (and puts the game's own sheet back for Xbox 360) |
+| Cheats (`kk_cheats`, `kk_cheat_*`) | live (new) | applied when the chapter's level is up; changes in play apply at once: flag cheats switched off are cleared again (only the ones the port set), weapons and ammo given stay until the next chapter or checkpoint |
+| Aspect ratio (`present_letterbox`) | live | the presenter, every paint |
+| Ambient occlusion (`ao_mode`, `ao_strength`) | live | native renderer every frame; F8 / F9 already change it |
+| Frame counter, achievement pop-ups and sound | live | every frame / every unlock |
+| Anti-aliasing (`swap_post_effect`), texture filtering (`anisotropic_override`) | restart | read once when the renderer starts (both renderers: `plugin_settings.cpp` `ReadGameSettings`, the Xenos plugin's graphics system) |
+| Render quality and scale, resolution, window mode, monitor, refresh rate, VSync, frame rate cap, upscaler, renderer, language, Original look, startup logos | restart | launcher-only (decided) |
+
+The game's own Options pages hold audio volumes and other values kept in the save; see "The game's Options"
+below.
+
+### Chapter names (found, not read yet)
+
+The chapter select's names are a text file of the start menu's level, key `0x4902DD54`, loaded only while the
+start menu (level 3) is up: ids `0x4902DD68 + n`, n = 0 to 41 ("Skull Island", ..., "Credits"; `0x4902DD99` and
+on are the Extras). The entry's n is the third column of the chapter table (`G + (0x1468 + entry) * 4`, also the
+fourth): entry 0 has 17 ("The venture"), entry 8 has 7 ("V-Rex"), entry 27 has 26 ("Kong to the rescue"). In the
+game: `sub_826FEC90(file key, id, out)` then `sub_826FEE20(out)` returns the string; the text manager is at
+`0x828E89B8` (+8 count, +12 files; a file: +4 count, +8 entries of 32 bytes with +0 id and +12 offset, +12
+strings, +20 key); `KK_DEV_TEXT_DUMP` writes the loaded texts (`texts-menu.txt` when the start menu's pages open).
+
+A reader of the player's files was tried and stopped (the coordinator's time limit): the text file is not an entry
+of `KKMaps.bf`'s table (no `0x4902....` keys there; the table holds level containers keyed `0x02007...`), so it sits
+inside a level container (the start menu's), LZO-packed like the rest; the raw file only holds the internal
+level names ("14B Kong to the rescue"). A full scan of the table's entries with `launcher_art.cpp`'s pack reader
+found nothing (its chunk format does not fit these entries). What is left: find the start menu's container key
+(the level-3 load reads it: a file trace at that load names it), unpack it, and find the text file in it by the
+ids above. `Chapters()` still returns "Chapter N". The scan code is in `moved-aside\menus-game\`.
+
+### Tests (game side)
+
+All windowed, xenos plugin, private copies of `F:\KK-native-renderer\userdata` (or of saves made by these runs,
+in `runs\menus-game-data`), run folders `F:\KK-native-renderer\runs\menus-game-1013-<time>-<name>`:
+
+| What | Run | Result |
+|---|---|---|
+| Chapter start, port pause menu over the frozen frame (stand-in) | `052129-ch8-pause2` (`printwindow_140`) | menu over the last frame of play |
+| Screen black during the start (no logos, title or menus) | `052819-ch8-score-again-quit` (`printwindow_15`, `_30`) | black until the chapter loads |
+| Score (the game's page), back, Start again (restarts, opening cutscene) | `052819-ch8-score-again-quit` (`shot_110`, `shot_210`) | as the game's own items |
+| The real pause menu (pause_menu.cpp) and its Settings over gameplay | `053106-realpause-ch8-quit` (`printwindow_280`) | drawn, pad reaches it |
+| New game in an empty slot: save created and written (named "Tester") | `054652-newgame-slot2d` | `KKProfileSlot2.sav` written, continue 100 / -1 |
+| Saves: list, backup (and no duplicate backup), delete (moved aside) | `054855-saves-test2` (`saves_test.txt` in `runs\menus-game-data\userdata-savestest`) | as specified |
+| Chapter on an empty slot, chapter end: Score pages, save question, saving, then the launcher | `054914-ch27-emptyslot3-end`, `055102-ch27-end-to-launcher` (`printwindow_450_<launcher pid>`) | slot 3 created and saved with the chapter's score, never deleted; the launcher opens |
+| Chapter end goes back to Chapter select | `055907-ch8-live-options-end` (log: `--kk_launcher_open=chapters`) | yes |
+| Live settings: FOV, fog, button prompts (PS5 sheet applied in play), cheats switched on in play (machine gun 500 rounds) | `055907-ch8-live-options-end` (log, `shot_50`/`_80`/`_110`, `shot_200` shows PS5 prompts) | applied at once |
+| The game's Options pages | `055907-ch8-live-options-end` (`shot_200`, `shot_250`) | Audio, Video, Controls |
+| Story run (continue point V-Rex): Save from the pause | `055758-story-save4-return` (`shot_110`: "Save successful") | file written |
+| Story run: Quit game (to the desktop): the game's quit save, then the program exits | `055614-story-save3` | exits, no launcher |
+| The game's Options pages: Audio, Video, Controls open and close, the port's menu comes back | `061637-ch8-game-options` (`shot_*`) | yes |
+| Native renderer (with the shader pack): backdrop capture, the real pause menu, Resume, Start again | `062000-native-ch8-pause2` (`printwindow_200`) | yes (without a shader pack the native renderer did not reach the title in 2 minutes: `061748-native-ch8-pause`) |
+| A Kong chapter (entry 10, level 304, playing as Kong): pause, Resume, Start again | `062250-kong-entry10` (`printwindow_170`) | yes |
+| Keyboard and mouse in the real pause menu | `062155-input-kbm` | not testable under the test rules: posted key and mouse messages to the unfocused window reach neither SDL nor ImGui, and focusing the window is not allowed; the game side blocks the game's keyboard (same path as the pad) and mouse look while the menu is open |
+| Return to main menu (chapter run) | `053106-realpause-ch8-quit`, `060043-final-ch8-return-to-menu` (`printwindow_400_<launcher pid>`) | launcher's Play menu |

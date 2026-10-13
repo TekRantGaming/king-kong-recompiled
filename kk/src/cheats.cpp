@@ -13,12 +13,17 @@
 //   KKtigun     G weapon (+13128) = 1, ammo[0] >= 80, G.flags |= 0x10000000
 //   KKcapone    weapon 2, ammo[1] >= 500       KKsh0tgun  weapon 3, ammo[2] >= 50
 //   KKsn1per    weapon 4, ammo[3] >= 50
-//   KKmuseum    P.flags (+3056) toggles 0x100   KKst0ry    P.flags toggles 0x80
+//   KKmuseum    P.flags (+3056) toggles 0x100
+// (KKst0ry, all chapters, is not offered: the launcher's chapter select opens every chapter.)
 // (The names come from the AI function table at 0x828C9000: function, name,
 // key per entry.) The port makes the same changes, setting rather than
 // toggling, once the start menu page (IntMIG_Page_StartMain, sub_824BB670)
 // runs (on each visit): by then the profile is loaded, and it is where the
-// codes are entered.
+// codes are entered. A start from the launcher's Play menu never shows that
+// page: play_session.cpp applies them once the chapter's level is up
+// (play::ApplyCheatsNow). Changes made in the pause menu apply at once
+// (WatchChanges): a flag cheat switched off is cleared again; weapons and ammo
+// given stay until the next chapter or checkpoint.
 //
 // Starting a chapter (or a checkpoint) empties G's weapon and ammo, then gives
 // the chapter's own loadout (V-Rex: the machine gun with 30 rounds), which
@@ -41,6 +46,7 @@
 #include <rex/hook.h>
 #include <rex/logging.h>
 
+#include "play_internal.h"
 #include "settings.h"
 
 namespace kk {
@@ -115,7 +121,6 @@ void ApplyCheats(uint8_t* base) {
     count += chosen;
     return chosen;
   };
-  if (on("chapters")) SetFlags(base, p, 0x80);
   if (on("bonus")) SetFlags(base, p, 0x100);
   if (on("healing")) SetFlags(base, g, kCheatsUsed | 0x200);
   if (on("one_hit")) SetFlags(base, g, kCheatsUsed | 0x2);
@@ -151,19 +156,91 @@ void WatchLoadout(uint8_t* base) {
                 State(base, g, p));
 }
 
+// The cheats chosen now, as bits (kCheats order), to see changes made in the pause menu.
+uint32_t ChosenBits() {
+  uint32_t bits = REXCVAR_GET(kk_cheats) ? 1u << 31 : 0;
+  for (size_t i = 0; i < kCheats.size(); ++i)
+    if (Chosen(kCheats[i].id)) bits |= 1u << i;
+  return bits;
+}
+uint32_t g_applied_bits = 0;
+
+// Settings changed while playing (the pause menu): switch on what was added, and clear the flag cheats
+// that were switched off (weapons and ammo already given stay until the next loadout).
+void WatchChanges(uint8_t* base) {
+  if (!g_applied) return;
+  const uint32_t bits = ChosenBits();
+  if (bits == g_applied_bits) return;
+  const uint32_t g = Load32(base, kGamePtr), p = Load32(base, kProfilePtr);
+  if (!g || !p) return;
+  const std::string before = State(base, g, p);
+  const bool all_on = REXCVAR_GET(kk_cheats);
+  auto clear = [&](uint32_t obj, uint32_t bit) { Store32(base, obj + kFlags, Load32(base, obj + kFlags) & ~bit); };
+  struct Flag {
+    const char* id;
+    bool profile;
+    uint32_t bit;
+  };
+  static constexpr Flag kFlagCheats[] = {
+      {"bonus", true, 0x100}, {"healing", false, 0x200}, {"one_hit", false, 0x2}, {"spears", false, 0x2000}};
+  auto was_on = [&](const char* id) {
+    for (size_t i = 0; i < kCheats.size(); ++i)
+      if (std::string(kCheats[i].id) == id) return (g_applied_bits & (1u << 31)) && (g_applied_bits & (1u << i));
+    return false;
+  };
+  for (const Flag& f : kFlagCheats) {
+    const bool want = all_on && Chosen(f.id);
+    const uint32_t obj = f.profile ? p : g;
+    if (want) SetFlags(base, obj, f.profile ? f.bit : (kCheatsUsed | f.bit));
+    else if (was_on(f.id)) clear(obj, f.bit);  // only what the port switched on
+  }
+  if (all_on) {
+    // Weapons and ammo newly chosen: given now.
+    for (size_t i = 0; i < kCheats.size(); ++i) {
+      if (!(bits & (1u << i)) || (g_applied_bits & (1u << 31) && g_applied_bits & (1u << i))) continue;
+      const std::string id = kCheats[i].id;
+      if (id == "revolver") GiveWeapon(base, g, 1, 80);
+      else if (id == "machine_gun") GiveWeapon(base, g, 2, 500);
+      else if (id == "shotgun") GiveWeapon(base, g, 3, 50);
+      else if (id == "sniper") GiveWeapon(base, g, 4, 50);
+      else if (id == "ammo") {
+        for (uint32_t a : kAmmo) Store32(base, g + a, 999);
+        SetFlags(base, g, kCheatsUsed);
+      }
+    }
+  }
+  g_applied_bits = bits;
+  REXLOG_INFO("KK: cheats changed in play. Before: {}. After: {}", before, State(base, g, p));
+}
+
 }  // namespace
 }  // namespace kk
+
+namespace kk::play {
+bool ApplyCheatsNow(uint8_t* base) {
+  const uint32_t g = Load32(base, kGamePtr), p = Load32(base, kProfilePtr);
+  if (!g || !p) return false;
+  if (REXCVAR_GET(kk_cheats)) kk::ApplyCheats(base);
+  kk::g_applied = true;
+  kk::g_applied_bits = kk::ChosenBits();
+  return true;
+}
+}  // namespace kk::play
 
 // IntMIG_Page_StartMain: the start menu page, run every frame while it shows.
 // Applied again each time the menu comes back (after quitting a level or
 // loading another save), as typing the codes again would.
 REX_EXTERN(__imp__sub_824BB670);
 REX_HOOK_RAW(sub_824BB670) {
+  if (kk::play::OnGameMenuPage("IntMIG_Page_StartMain")) return;  // never shown after a launcher start
   static auto last = std::chrono::steady_clock::time_point{};
   const auto now = std::chrono::steady_clock::now();
   if (now - last > std::chrono::seconds(2)) kk::g_applied = false;  // a new visit to the menu
   last = now;
-  if (!kk::g_applied && REXCVAR_GET(kk_cheats)) kk::ApplyCheats(base);
+  if (!kk::g_applied && REXCVAR_GET(kk_cheats)) {
+    kk::ApplyCheats(base);
+    kk::g_applied_bits = kk::ChosenBits();
+  }
   __imp__sub_824BB670(ctx, base);
 }
 
@@ -172,4 +249,5 @@ REX_EXTERN(__imp__sub_8272C320);
 REX_HOOK_RAW(sub_8272C320) {
   __imp__sub_8272C320(ctx, base);
   if (REXCVAR_GET(kk_cheats)) kk::WatchLoadout(base);
+  kk::WatchChanges(base);
 }

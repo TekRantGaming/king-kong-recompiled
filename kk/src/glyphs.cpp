@@ -411,37 +411,71 @@ std::string ButtonPromptStyle() {
   return style == "auto" ? DetectedPadPrompts() : style;
 }
 
+// Writes a sheet over one copy of it in physical memory, then touches each page through the game's views
+// so the GPU's cache reloads it (in this order it can only ever reload the finished sheet).
+void WriteSheet(rex::memory::Memory* memory, uint8_t* physical_membase, uint32_t at, const std::vector<uint8_t>& sheet) {
+  std::memcpy(physical_membase + at, sheet.data(), kSheetBytes);
+  for (const uint32_t view : kPhysicalViews) {
+    for (uint32_t page = 0; page < kSheetBytes; page += 0x1000) {
+      volatile uint8_t* p = memory->TranslateVirtual<volatile uint8_t*>(view + at + page);
+      *p = *p;
+    }
+  }
+}
+
 void StartButtonPrompts(rex::memory::Memory* memory) {
   uint8_t* physical_membase = memory->physical_membase();
-  const std::string style = ButtonPromptStyle();
-  REXLOG_INFO("KK: button prompts: {} ({})", style, REXCVAR_GET(kk_button_prompts));
-  if (style.empty() || style == "xbox360" || g_running.exchange(true)) return;
-  std::thread([memory, physical_membase, style] {
-    std::vector<uint8_t> sheet;
-    // The game keeps more than one copy (and loads it again later), so look
-    // for originals every second.
+  const std::string first = ButtonPromptStyle();
+  REXLOG_INFO("KK: button prompts: {} ({})", first, REXCVAR_GET(kk_button_prompts));
+  if (g_running.exchange(true)) return;
+  // The style can change while playing (the pause menu's settings): the thread follows kk_button_prompts,
+  // redrawing the copies it has written (and putting the game's own sheet back for xbox360).
+  std::thread([memory, physical_membase, first] {
+    std::string style = first, setting = REXCVAR_GET(kk_button_prompts);
+    std::vector<uint8_t> original, sheet;  // the game's own sheet; the one written now
+    std::vector<uint32_t> written;         // where the port's sheet is
     while (true) {
+      const std::string now_setting = REXCVAR_GET(kk_button_prompts);
+      if (now_setting != setting) {
+        setting = now_setting;
+        const std::string next = setting == "auto" ? DetectedPadPrompts() : setting;
+        if (next != style && !next.empty()) {
+          REXLOG_INFO("KK: button prompts now {}", next);
+          style = next;
+          std::vector<uint8_t> next_sheet;
+          if (!original.empty()) next_sheet = style == "xbox360" ? original : BuildSheet(original.data(), style);
+          // Redraw the copies written before, where they are still the port's sheet (the game may have
+          // used that memory for something else since).
+          std::vector<uint32_t> still;
+          for (const uint32_t at : written) {
+            if (sheet.empty() || next_sheet.empty() ||
+                Fnv1a(physical_membase + at, kSheetBytes) != Fnv1a(sheet.data(), kSheetBytes))
+              continue;
+            WriteSheet(memory, physical_membase, at, next_sheet);
+            if (style != "xbox360") still.push_back(at);
+          }
+          written = std::move(still);
+          sheet = style == "xbox360" ? std::vector<uint8_t>() : std::move(next_sheet);
+        }
+      }
+      if (style.empty() || style == "xbox360") {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        continue;
+      }
+      // The game keeps more than one copy (and loads it again later), so look for originals every second.
       const auto scan_start = std::chrono::steady_clock::now();
       const auto originals = FindOriginals(memory, physical_membase);
       const auto scan_ms =
           std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - scan_start).count();
       if (scan_ms > 50) REXLOG_INFO("KK: button prompt scan took {} ms", scan_ms);
       for (const uint32_t at : originals) {
+        if (original.empty()) original.assign(physical_membase + at, physical_membase + at + kSheetBytes);
         if (sheet.empty()) {
           sheet = BuildSheet(physical_membase + at, style);
-          if (sheet.empty()) return;
+          if (sheet.empty()) break;
         }
-        // Put the whole sheet in place first (this path isn't watched), then
-        // rewrite one byte per page through the game's views of the memory: the
-        // GPU's cache watches those, and each write makes it reload the page.
-        // In this order it can only ever reload the finished sheet.
-        std::memcpy(physical_membase + at, sheet.data(), kSheetBytes);
-        for (const uint32_t view : kPhysicalViews) {
-          for (uint32_t page = 0; page < kSheetBytes; page += 0x1000) {
-            volatile uint8_t* p = memory->TranslateVirtual<volatile uint8_t*>(view + at + page);
-            *p = *p;
-          }
-        }
+        WriteSheet(memory, physical_membase, at, sheet);
+        if (std::find(written.begin(), written.end(), at) == written.end()) written.push_back(at);
         REXLOG_INFO("KK: {} button prompts applied at physical {:08X}", style, at);
       }
       std::this_thread::sleep_for(std::chrono::seconds(1));

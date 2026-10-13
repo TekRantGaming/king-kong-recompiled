@@ -85,8 +85,13 @@ enum class Device { kKeyboard, kXbox, kPlayStation };
 // prompt pictures.
 class Input {
  public:
-  Input();
+  // `own_gamepads`: open the controllers with the program's own SDL (the launcher, before the game
+  // takes them). In game (the pause menu) the game owns them and FeedPad passes on what it read.
+  explicit Input(bool own_gamepads = true);
   ~Input();
+  // In game: the controller as the game read it (XInput buttons, left stick and triggers). A state
+  // older than a quarter of a second counts as released.
+  void FeedPad(uint16_t xinput_buttons, int16_t lx, int16_t ly, uint8_t lt, uint8_t rt);
   void Update();  // once a frame, before anything reads it
   // Lets go of the controllers (before the game's own input starts).
   void Release();
@@ -128,6 +133,12 @@ class Input {
   ImVec2 last_mouse_{-1, -1};
   bool sdl_ready_ = false;
   std::vector<void*> pads_;  // SDL_Gamepad*
+  struct FedPad {
+    uint16_t buttons = 0;
+    int16_t lx = 0, ly = 0;
+    uint8_t lt = 0, rt = 0;
+    double at = -1e9;
+  } fed_;
   std::array<bool, 8> buttons_down_{};
   // When each action was last held on a controller / pressed on the keyboard:
   // Steam's desktop controller layout also types keys for the controller's

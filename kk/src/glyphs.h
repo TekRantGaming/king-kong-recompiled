@@ -10,7 +10,7 @@ class Memory;
 namespace kk {
 
 // Replaces the game's Xbox 360 button prompts with the style picked in
-// kk_button_prompts (does nothing for "xbox360").
+// kk_button_prompts, and follows changes to it while the game runs.
 void StartButtonPrompts(rex::memory::Memory* memory);
 
 // The prompt style for a kind of controller (an SDL_GamepadType and the
