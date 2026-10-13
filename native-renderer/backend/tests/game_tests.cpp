@@ -1475,6 +1475,7 @@ TEST(FrameLog_DrawWhosePipelineIsNotReady) {
   if (!t.Init("0,2")) return;
   Fixture& f = t.f;
   f.game->options().async_pipelines = true;
+  f.game->options().pipeline_wait = false;
   f.game->options().pipeline_wait_budget_ms = 0;
   const uint32_t rt = f.BindMainSurface();
   auto p = f.MakeColorPipeline();
@@ -1700,7 +1701,7 @@ TEST(PipelineCache_RecordsOfShadersThatNeverComeStayHarmless) {
 
 TEST(PipelineCache_EachRenderScaleHasItsOwnRecords) {
   // One file used at scale 1 and at scale 2: each run records its own pipeline (another pixel
-  // shader translation and pipeline layout) and prewarms only the records of its own kind.
+  // shader translation and pipeline layout). Prewarming adapts records to the current scale.
   const std::string path = CachePath("two_scales");
   RecordTheScene(path);  // scale 1
   {
@@ -1709,9 +1710,9 @@ TEST(PipelineCache_EachRenderScaleHasItsOwnRecords) {
     f.game->options().async_pipelines = true;
     f.game->options().pipeline_wait = true;
     CHECK(f.game->SetPipelineCache(path));
-    CHECK_EQ(f.game->stats().prewarm_other_kind, uint64_t(1));
+    CHECK_EQ(f.game->stats().prewarm_other_kind, uint64_t(0));
     CHECK_EQ(f.game->stats().prewarm_queued, uint64_t(0));
-    CHECK_EQ(f.game->stats().prewarm_deferred, uint64_t(0));
+    CHECK_EQ(f.game->stats().prewarm_deferred, uint64_t(1));
     const uint32_t rt = f.BindMainSurface();
     auto p = f.MakeColorPipeline();
     DrawQuadrantFrame(f, rt, p);
@@ -1731,8 +1732,16 @@ TEST(PipelineCache_EachRenderScaleHasItsOwnRecords) {
   if (!f.Init()) return;
   f.game->options().async_pipelines = true;
   CHECK(f.game->SetPipelineCache(path));
-  CHECK_EQ(f.game->stats().prewarm_other_kind, uint64_t(1));
-  CHECK_EQ(f.game->stats().prewarm_deferred, uint64_t(1));  // its own, waiting for the game's shaders
+  CHECK_EQ(f.game->stats().prewarm_other_kind, uint64_t(0));
+  CHECK_EQ(f.game->stats().prewarm_deferred, uint64_t(2));  // both await real shader translations
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  f.Present(rt);
+  f.game->WaitForPrewarm();
+  CHECK_EQ(f.game->stats().prewarm_queued, uint64_t(1));  // adapted aliases deduplicate
+  Pixels px = DrawQuadrantFrame(f, rt, p);
+  f.CheckQuadrantColors(px, __LINE__);
+  CHECK_EQ(f.game->stats().skipped_pending, uint64_t(0));
 }
 
 // The shipped list of a fresh install: the cache file of a recording run merged (as the
@@ -2139,6 +2148,7 @@ TEST(Stutter_ASkippedDrawIsAStutterFrame) {
   Fixture f;
   if (!f.Init()) return;
   f.game->options().async_pipelines = true;
+  f.game->options().pipeline_wait = false;
   f.game->options().pipeline_wait_budget_ms = 0;  // skip at once
   const uint32_t rt = f.BindMainSurface();
   auto p = f.MakeColorPipeline();
@@ -2211,6 +2221,7 @@ TEST(PipelineWait_TheDrawWaitsInsteadOfBeingSkipped) {
     Fixture f;
     if (!f.Init()) return;
     f.game->options().async_pipelines = true;
+    f.game->options().pipeline_wait = false;
     f.game->options().pipeline_wait_budget_ms = 0;
     const uint32_t rt = f.BindMainSurface();
     auto p = f.MakeColorPipeline();
@@ -2241,6 +2252,7 @@ TEST(PipelineWait_TheFrameBudgetDrawsANewPipelineInItsFirstFrame) {
   Fixture f;
   if (!f.Init()) return;
   f.game->options().async_pipelines = true;
+  f.game->options().pipeline_wait = false;
   f.game->options().pipeline_wait_budget_ms = 5000;
   const uint32_t rt = f.BindMainSurface();
   auto p = f.MakeColorPipeline();
