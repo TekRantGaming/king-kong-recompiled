@@ -47,9 +47,12 @@ volatile LONG g_crashing = 0;
 void ReportBase(const wchar_t* kind, wchar_t (&base)[MAX_PATH + 64]) {
   SYSTEMTIME t;
   GetLocalTime(&t);
-  const wchar_t* dir = wcscmp(kind, L"crash") == 0 ? g_crash_dir : g_dir;
-  swprintf(base, MAX_PATH + 64, L"%ls\\%ls-%04u%02u%02u-%02u%02u%02u-%03u-%lu", dir, kind, t.wYear, t.wMonth, t.wDay,
-           t.wHour, t.wMinute, t.wSecond, t.wMilliseconds, GetCurrentProcessId());
+  if (wcscmp(kind, L"crash") == 0)
+    swprintf(base, MAX_PATH + 64, L"%ls\\%ls-%04u%02u%02u-%02u%02u%02u-%03u-%lu", g_crash_dir, kind, t.wYear, t.wMonth,
+             t.wDay, t.wHour, t.wMinute, t.wSecond, t.wMilliseconds, GetCurrentProcessId());
+  else
+    swprintf(base, MAX_PATH + 64, L"%ls\\%ls-%04u%02u%02u-%02u%02u%02u", g_dir, kind, t.wYear, t.wMonth, t.wDay,
+             t.wHour, t.wMinute, t.wSecond);
 }
 
 void WriteMiniDump(const wchar_t* base, EXCEPTION_POINTERS* info) {
@@ -59,7 +62,7 @@ void WriteMiniDump(const wchar_t* base, EXCEPTION_POINTERS* info) {
   if (file == INVALID_HANDLE_VALUE) return;
   MINIDUMP_EXCEPTION_INFORMATION mei{GetCurrentThreadId(), info, FALSE};
   MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), file,
-                    MINIDUMP_TYPE(MiniDumpNormal | MiniDumpWithThreadInfo),
+                    MINIDUMP_TYPE(MiniDumpWithThreadInfo | (info ? MiniDumpNormal : MiniDumpWithIndirectlyReferencedMemory)),
                     info ? &mei : nullptr, nullptr, nullptr);
   CloseHandle(file);
 }
