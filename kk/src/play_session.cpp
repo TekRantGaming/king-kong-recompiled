@@ -102,10 +102,11 @@ constexpr int kScoreEntries = 40;  // the header holds best scores for the first
 // The game's addresses (chapter-jump.md).
 constexpr uint32_t kAiPtr = 0x82CCBF64;           // the running AI instance; +0x40 its variables
 constexpr uint32_t kGamePtr = 0x82CC97C0;         // the universe variables G once a level is up
+constexpr uint32_t kProfilePtr = 0x82CC8D24;      // the same block, as the profile P
 constexpr uint32_t kMemcard = 0x82C63950;         // the save system M
 constexpr uint32_t kSaveHeaders = kMemcard + 0x4C, kSaveData = kMemcard + 0x550, kSaveSlot = kMemcard + 0x54C;
-constexpr uint32_t kSaveStatus = 0x82C8E7D0;      // the save system's job state, 0x10000000 when idle
-constexpr uint32_t kSaveIdle = 0x10000000;
+constexpr uint32_t kSaveQueue = 0x82C8E7CC;       // the save system's job queue: +0xC a job is waiting
+constexpr uint32_t kSaveStatus = kSaveQueue + 4;  // the last job's result
 constexpr uint32_t kActivePad = 0x82C63704;       // the pad that pressed Start on the title
 constexpr uint32_t kStorageDevice = 0x828E3898;   // the storage device the selector chose
 constexpr uint32_t kUniverseScript = 0x828E838C;  // the universe's script instance
@@ -124,6 +125,7 @@ std::atomic<bool> g_session{false};   // a start request was carried out
 std::atomic<bool> g_starting{false};  // a start request is waiting for the title screen
 std::atomic<bool> g_leaving{false};   // going back to the launcher
 std::atomic<bool> g_cover{false};
+std::atomic<int> g_save_jobs{0};      // save jobs (sub_82722620) running now
 
 std::string Upper(std::string s) {
   for (char& c : s) c = char(std::toupper(static_cast<unsigned char>(c)));
@@ -627,9 +629,10 @@ bool LoadSaveFromFile(PPCContext& ctx, uint8_t* base, uint32_t g, int slot) {
 // Sends the save job for `slot` (what the save menu's "Create new" sends) once the save system is idle.
 void TrySendPendingSave(PPCContext& ctx, uint8_t* base) {
   if (g_pending_save_slot < 0) return;
-  if (Load32(base, kSaveStatus) != kSaveIdle) {
+  if (Load32(base, kSaveQueue + 0xC) != 0 || g_save_jobs > 0) {
     if (NowMs() - g_pending_save_since > 20000) {
-      REXLOG_WARN("KK play: the save system stayed busy for 20 s; the new save is written at the game's first save");
+      REXLOG_WARN("KK play: the save system stayed busy for 20 s (status {:08X}); the new save is written at the "
+                  "game's first save", Load32(base, kSaveStatus));
       g_pending_save_slot = -1;
     }
     return;
@@ -677,8 +680,15 @@ void CreateNewSave(PPCContext& ctx, uint8_t* base, uint32_t g, int slot, const s
   ctx.r3.u64 = Load32(base, kUniverseScript);
   __imp__sub_8271D698(ctx, base);
   ctx = saved;
+  // sub_825EAB98 reads the universe through the script globals (G and P), which are only set once the
+  // start menu has run: point them at the universe for the call, as they are there.
+  const uint32_t old_g = Load32(base, kGamePtr), old_p = Load32(base, kProfilePtr);
+  if (!old_g) Store32(base, kGamePtr, g);
+  if (!old_p) Store32(base, kProfilePtr, g);
   __imp__sub_825EAB98(ctx, base);
   ctx = saved;
+  Store32(base, kGamePtr, old_g);
+  Store32(base, kProfilePtr, old_p);
   __imp__sub_82413190(ctx, base);  // the universe's saved variables into the save data
   ctx = saved;
   Store32(base, g + 0x4FFC, uint32_t(-1));
@@ -855,7 +865,9 @@ REX_HOOK_RAW(sub_82722620) {
                   int32_t(BE32(data.data() + 0x2C)));
     }
   }
+  ++g_save_jobs;
   __imp__sub_82722620(ctx, base);
+  --g_save_jobs;
 }
 
 // uni_go (sub_8253DB80): the universe's script function that performs a requested level change, every
@@ -883,6 +895,7 @@ REX_HOOK_RAW(sub_8253DB80) {
       if (table && (g_title_frames > 5 || g_table_frames > 90)) {
         if (g_title_frames <= 5) REXLOG_WARN("KK play: no title level request seen; starting anyway");
         CarryOut(ctx, base, g);
+        TrySendPendingSave(ctx, base);  // before the load (a story start's load plays the Intro movie)
       }
     }
     // In a session the launcher started, the start menu (level 3) means: back to the launcher.
@@ -912,10 +925,12 @@ REX_HOOK_RAW(sub_8253DB80) {
   // Going back to the launcher: once the save system is idle (a save in progress is written).
   if (g_leaving) {
     static bool done = false;
-    const bool idle = Load32(base, kSaveStatus) == kSaveIdle;
-    if (!done && (idle || NowMs() - g_leave_since > 10000)) {
+    // No save job writing (the job runs on the save system's worker thread) and none waiting to be sent.
+    const bool idle = g_save_jobs == 0 && g_pending_save_slot < 0;
+    const int64_t waited = NowMs() - g_leave_since;
+    if (!done && ((idle && waited > 500) || waited > 10000)) {
       done = true;
-      if (!idle) REXLOG_WARN("KK play: the save system is still busy after 10 s; leaving anyway");
+      if (!idle) REXLOG_WARN("KK play: a save is still being written after 10 s; leaving anyway");
       const std::wstring page(g_leave_page.begin(), g_leave_page.end());
       if (RelaunchWith(L"--kk_launcher_open=" + page) && g_quit) g_quit();
     }
@@ -926,7 +941,7 @@ REX_HOOK_RAW(sub_8253DB80) {
 }
 
 #if defined(KK_DEV_TOOLS)
-// KK_DEV_SAVES_TEST="<user data folder>[;delete=<slot>]": tests the save functions on that folder (a private
+// KK_DEV_SAVES_TEST="<user data folder>[|delete=<slot>]": tests the save functions on that folder (a private
 // copy) without the game, logs what they return, writes saves_test.txt there and quits the program.
 namespace kk::play {
 namespace {
@@ -935,7 +950,7 @@ const bool g_saves_test = [] {
   if (!v || !*v) return false;
   std::string arg = v;
   int del = -1;
-  if (const size_t at = arg.find(";delete="); at != std::string::npos) {
+  if (const size_t at = arg.find("|delete="); at != std::string::npos) {
     del = std::atoi(arg.c_str() + at + 8);
     arg.resize(at);
   }

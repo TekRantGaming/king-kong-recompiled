@@ -120,6 +120,9 @@ std::atomic<uint16_t> g_raw_buttons{0};
 uint16_t g_hidden_mask = 0;  // buttons held as the menu closed: hidden from the game until let go
 bool g_was_open = false;
 
+// Not in the contract (yet): the game's own Options pages, for developer tests (KK_DEV_PAUSE_ACTIONS "options").
+constexpr int kOptionsAction = 5;
+
 bool MenuUp() { return NowMs() - g_main_seen_ms.load() < kPageGoneMs; }
 
 int ItemId(int action) {
@@ -130,11 +133,11 @@ int ItemId(int action) {
     case PauseAction::kQuitToLauncher: return 3;
     case PauseAction::kSave: return 1;
   }
-  return 4;
+  return action == kOptionsAction ? 2 : 4;
 }
 const char* ActionName(int action) {
-  static const char* const kNames[] = {"Resume", "Start again", "Score", "Quit game", "Save"};
-  return action >= 0 && action < 5 ? kNames[action] : "none";
+  static const char* const kNames[] = {"Resume", "Start again", "Score", "Quit game", "Save", "Options"};
+  return action >= 0 && action < 6 ? kNames[action] : "none";
 }
 
 }  // namespace
@@ -339,10 +342,11 @@ REX_HOOK_RAW(sub_824BA560) {
   const bool slot = int32_t(Load32(base, g + 0x4E10)) != -1, chapter_run = Load32(base, g + 0x5668) != 0;
   g_has_slot = slot && chapter_run;
   g_can_save = slot && !chapter_run && Load32(base, g + 0x5674) == 0;
-  // Back from the game's score page (it has not run for a while).
-  if (g_game_page && now - g_game_page_seen_ms.load() > kPageGoneMs) {
+  // Back from the game's own pages (Score, Save, Options): while they show, this page is not run; it runs
+  // again when they close (after its own last frames right after the press).
+  if (g_game_page && now - g_game_page_seen_ms.load() > kPageGoneMs && now - g_game_page_since.load() > 500) {
     g_game_page = false;
-    REXLOG_INFO("KK pause: back from the score page");
+    REXLOG_INFO("KK pause: back from the game's own page");
   }
   if (g_game_page) return;
   const int pending = g_pending;
@@ -395,6 +399,7 @@ REX_HOOK_RAW(sub_824BA560) {
       break;
     case PauseAction::kScore:
     case PauseAction::kSave:
+    case PauseAction(kOptionsAction):
       g_game_page = true;
       g_game_page_seen_ms = now;
       g_game_page_since = now;
@@ -444,6 +449,8 @@ REX_HOOK_RAW(sub_824D1958) {
 #if defined(KK_DEV_TOOLS)
 
 #include <sstream>
+
+#include <rex/cvar.h>
 
 namespace kk {
 double DevSecondsSinceMenu();  // dev_tools.cpp: the script clock, -1 before it starts
@@ -545,12 +552,24 @@ const bool g_steps_thread = [] {
       const double t = kk::DevSecondsSinceMenu();
       if (t < 0 || t < steps[next].at) continue;
       const std::string& w = steps[next].what;
+      // "set=<cvar>=<value>": change a setting as the pause menu's Settings would (live settings tests).
+      if (w.rfind("set=", 0) == 0) {
+        const size_t eq = w.find('=', 4);
+        if (eq != std::string::npos) {
+          rex::cvar::SetFlagByName(w.substr(4, eq - 4), w.substr(eq + 1));
+          REXLOG_INFO("KK dev pause step {:.1f} s: {} = {}", t, w.substr(4, eq - 4), w.substr(eq + 1));
+        }
+        ++next;
+        continue;
+      }
       PauseAction a = PauseAction::kResume;
       bool known = true;
       if (w == "resume") a = PauseAction::kResume;
       else if (w == "again") a = PauseAction::kStartAgain;
       else if (w == "score") a = PauseAction::kScore;
       else if (w == "quit") a = PauseAction::kQuitToLauncher;
+      else if (w == "save") a = PauseAction::kSave;
+      else if (w == "options") a = PauseAction(kOptionsAction);
       else known = false;
       REXLOG_INFO("KK dev pause step {:.1f} s: {} (menu open {}, available {})", t, w, PauseMenuOpen(),
                   known && PauseActionAvailable(a));

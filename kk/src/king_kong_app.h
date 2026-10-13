@@ -105,7 +105,12 @@ class KingKongApp : public rex::ReXApp {
     kk::play::SetUserDir(defaults.user_data_root);
     kk::play::LoadStartRequestFromSettings();
     kk::play::SetQuitHandler([this] {
-      app_context().CallInUIThreadDeferred([this] { app_context().QuitFromUIThread(); });
+      // As closing the window does (the runtime shuts the game down); quitting the app context directly
+      // while the game runs hung.
+      app_context().CallInUIThreadDeferred([this] {
+        if (window()) window()->RequestClose();
+        else app_context().QuitFromUIThread();
+      });
     });
     const bool skip_once = REXCVAR_GET(kk_skip_launcher);
     rex::cvar::ResetToDefault("kk_skip_launcher");  // never persist it

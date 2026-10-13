@@ -121,3 +121,84 @@ the launcher's own rows (`SettingsPages`, shared code) with the rows that need a
 window mode and size, resolution, refresh rate, monitor, frame rate, VSync, upscaler and its mode, render quality,
 internal resolution, look, preset, renderer, language, startup logos). Changes are saved like in the launcher.
 Controls: the game gives the menu the pad it read (`PauseMenuPad`); keyboard and mouse come through ImGui.
+
+## Game side (menus-game, branch `beta3-game`)
+
+Files: `play_session.cpp` (the contract's saves, chapters and start request; routing back to the launcher; save
+guards), `pause_hooks.cpp` (the pause takeover, the frozen frame behind the menu, the developer stand-in),
+`play_internal.h` (what they share with the app), and changes in `king_kong_app.h`, `input_remap.cpp`,
+`overlay.cpp`, `intros.cpp`, `cheats.*`, `settings.*`, `glyphs.*`, `dev_chapter_jump.cpp`, `dev_pause.cpp`. The
+research code is gone from the dev files (they keep the traces only). Evidence: run folders
+`F:\KK-native-renderer\runs\menus-game-1013-*` (the game's own frames `shot_*.bmp`, PrintWindow captures of the
+test window `printwindow_<tenths of s>_<pid>.png`, `game.log`).
+
+### Saves (`ListSaves`, `MostRecentSave`, `BackupSaves`, `DeleteSave`)
+
+- The saves are `<user data>\<profile>\555307D3\00000001\KKProfileSlot<n>.sav\KKProfile.dat` (the runtime's
+  profile folder `B13EBABEBABEBABE`, else any 16-digit profile folder that has the game's saves). A slot exists
+  when its file is `0x8040` bytes with a continue level other than 0 (what the game itself treats as empty).
+  Header fields as in chapter-jump.md; best scores exist for entries 0 to 39 only (the header has 40), entries
+  40 and 41 report 0.
+- `BackupSaves` copies the whole `555307D3` folder (saves and their XContent headers) to
+  `<user data>\save-backups\<yyyyMMdd-HHmmss>\<profile>\555307D3\...` with a `reason.txt`; when nothing changed
+  since the newest backup it keeps that one instead of making another; it keeps the newest 20.
+- `DeleteSave` backs up first, then moves the slot's folder and header file to
+  `save-backups\deleted-<time>-slot<n>\` (out of the game's sight, never erased).
+- Every start request backs up the saves before the game can write (`before play (<kind>)`).
+- Save guards: the save routine (`sub_8266AD80`) never runs with continue level 0 (it gets the slot's own
+  continue point back: the save system's header, else the file, else the new-game start); the save job
+  (`sub_82722620`, the one that calls `XamContentDelete` for level 0) gets the file's continue point put back in
+  its header first. So the game never deletes a save.
+
+### The start request
+
+`--kk_start=<request>` (or `play::SetStartRequest` in the same process; `KK_DEV_START` in developer builds):
+`continue:<slot>`, `new:<slot>[:<name>]`, `chapter:<slot>:<entry>[:<name>]` (names percent-encoded; never
+saved). `restart_and_play` passes it on. It is carried out on the title screen, 5 frames after the title's level
+(2) has loaded (a fallback starts it 3 s after the chapter table is filled), in one frame; the screen is black
+from the start until the chosen level is loading (`CoverScreen`, the ImGui layer), and the logo movies are
+skipped.
+
+- **Continue**: the slot's file into the save system and the universe (as chapter-jump.md proved), then its
+  continue point with `G+0x5668 = 0`, as the main menu's Play does (100 / -1 becomes 100 / 0 and `G+0x1C = 1`,
+  the new-game start, as the load page does). Continue with no slot takes the most recent save; with no save at
+  all it becomes New game.
+- **New game**: what the save menu's "Create new" does (`IntMIG_Page_Memcard` at `0x824CB7C4`): the slot's header
+  cleared and named (the name given, ASCII, 31 characters; empty gives "Player <n>"; the game types its names
+  letter by letter with `sub_82413040`, so there is no default of its own), `sub_82413978(slot, 2, 0, 100, -1,
+  0)`, the universe re-init, `sub_825EAB98` (with the script globals pointed at the universe for the call: on the
+  title screen they are still 0, and the call crashed without), the save data snapshot, continue point 100 / -1
+  and the slot; then the save job (`0x20000060`) writes it before the level load, and the story starts as
+  Continue does. A used slot is overwritten after the backup.
+- **Chapter**: the slot's save (or a new one in an empty slot), then what the chapter select's A does (the
+  snapshot, the restart copies, the re-init, the slot and continue point again from the header, `G+0x5668 = 1`,
+  `G+0x5670`), then the load page's request.
+- The launcher's cheats are applied once the chapter's level is up (`play::ApplyCheatsNow`), since the start
+  menu where they used to be applied never shows.
+
+### Back to the launcher
+
+In a session started by a request, the game's request for its start menu (level 3) is cancelled and the program
+restarts into the launcher once no save is being written: `--kk_launcher_open=chapters` when a chapter-select run
+reached its end (after the Score pages and the save question), `--kk_launcher_open=play` after Quit game. The
+restart drops `--kk_skip_launcher`, `--kk_start` and `--kk_launcher_open` from the command line and closes the
+window the way the close button does. Story runs go on to the next chapter as the game does.
+
+### The pause takeover
+
+As described at the top of `pause_hooks.cpp`. The game's own pause draws a black screen; the last frame of play
+is captured as the pause starts (`CaptureGuestOutput`, about 20 ms at 2560x1440) and drawn under every dialog
+while the port's menu is open (`CreatePauseBackdrop`), so the pause menu sits over the frozen frame. While it is
+open the game reads an empty pad (buttons still held when it closes stay hidden until let go), the pad it read
+goes to the pause menu (`kk::PauseMenuPad`), and mouse look is switched off (the runtime lets the cursor go).
+
+The game's pause items (found in `IntMIG_Page_Main`'s list, `0x824BA630`): chapter-select runs have Options (2),
+Quit game (3), Start again (8), Resume (4), Score (0); story runs with a save have **Save (1)**, Change storage
+device (1000), Options (2), Quit game (3), Resume (4). (chapter-jump.md had Score as 7 and Options as 5: 7 is an
+extra item shown with profile flag `0x40`, not identified.) `PauseAction::kSave` was added to the contract for the
+story runs' Save; Change storage device has no meaning on PC. Score and Save show the game's own pages (drawn and
+read by the game; the port's menu comes back when they close). Start again restarts the chapter without a level
+load (its opening cutscene again).
+
+The game's **Options** item opens `IntMIG_Page_OptStart` with the pages Audio (`_Audio`), Video (`_Video`),
+Controls (`_Control`) and Language (`_Langue`); see the table below.
