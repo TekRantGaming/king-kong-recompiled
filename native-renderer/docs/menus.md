@@ -205,15 +205,21 @@ game's Quit game, then the program exits), both confirmed first. Change storage 
 read by the game; the port's menu comes back when they close). Start again restarts the chapter without a level
 load (its opening cutscene again).
 
-The game's **Options** item (run `...-055907-ch8-live-options-end`, frames `shot_200`, `shot_250`) opens
-`IntMIG_Page_OptStart`: **Audio**, **Video**, **Controls** (Language is not offered in play). Audio holds
-Subtitles (on / off) and four volume bars, Master, Voices, Music and Effects, then "Accept the changes". These
-are the game's own values, kept in the save: the port has no setting for any of them. Video and Controls were
-not opened in the test (the developer pad cannot move through these pages); from the page names they hold the
-game's brightness / screen values and its control options (vibration, inversion), which the port's Display
-and Controls settings already cover. Suggestion for menus-ui: keep the pause menu's Options entry for the
-game's Audio page values; either open the game's own Options pages (the game draws and reads them, as Score:
-the game side can offer it as a pause action) or add port settings for subtitles and the four volumes.
+The game's **Options** item opens `IntMIG_Page_OptStart`: **Audio**, **Video**, **Controls** (Language is not
+offered in play). Contract action `PauseAction::kGameOptions` (agreed with the coordinator) opens them from the
+port's pause menu (its Options entry): the game draws and reads them, and the port's menu comes back when they
+are left. Tested: run `...-061637-ch8-game-options` opened each page and went back (developer presses
+`optpick=<row>` / `optback`), frames `shot_*`:
+
+| Page | Rows |
+|---|---|
+| Audio | Subtitles (on / off), Master, Voices, Music, Effects (volume bars), Accept the changes |
+| Video | Display mode (Locked), Special mode (Locked), Accept the changes |
+| Controls | Vibration, Aiming axis (Normal / inverted), Aiming visor, Inventory, Accept the changes |
+
+These values are the game's own, kept in the save. **Next** (a later step, decided by the user): launcher-style
+settings for subtitles and the four volumes in the port's Settings, so the game's pages are no longer needed.
+Vibration and the aiming axis overlap the port's Controls settings (the port's apply on top of the game's).
 
 ### Settings in the pause menu: live or restart
 
