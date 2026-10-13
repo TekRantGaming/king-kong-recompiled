@@ -232,6 +232,7 @@ bool ApplyCheatsNow(uint8_t* base) {
 // loading another save), as typing the codes again would.
 REX_EXTERN(__imp__sub_824BB670);
 REX_HOOK_RAW(sub_824BB670) {
+  if (kk::play::OnGameMenuPage("IntMIG_Page_StartMain")) return;  // never shown after a launcher start
   static auto last = std::chrono::steady_clock::time_point{};
   const auto now = std::chrono::steady_clock::now();
   if (now - last > std::chrono::seconds(2)) kk::g_applied = false;  // a new visit to the menu

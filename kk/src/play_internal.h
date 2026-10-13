@@ -58,6 +58,11 @@ bool ApplyCheatsNow(uint8_t* base);
 // The session the launcher started (a start request was carried out).
 bool SessionActive();
 
+// One of the game's menu pages (the chapter select, the start menu) is about to run. In a session the
+// launcher started, that means play is over (a chapter-select run ends on the start menu's level, after
+// its Score pages and save question): back to the launcher instead. True when the page must not run.
+bool OnGameMenuPage(const char* page);
+
 // pause_hooks.cpp, for play_session.cpp: forget the pause state (a new level).
 void ResetPause();
 // True when the last thing done in the pause menu was Quit game (the start menu request that follows

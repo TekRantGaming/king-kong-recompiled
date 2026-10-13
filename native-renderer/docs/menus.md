@@ -202,3 +202,30 @@ load (its opening cutscene again).
 
 The game's **Options** item opens `IntMIG_Page_OptStart` with the pages Audio (`_Audio`), Video (`_Video`),
 Controls (`_Control`) and Language (`_Langue`); see the table below.
+
+### Settings in the pause menu: live or restart
+
+From where each setting is read (code), and the ones a test changed in play (run given). Live rows can stay in the
+pause menu's Settings; the others stay launcher-only (the user's decision).
+
+| Setting (cvar) | In play | Where it is read |
+|---|---|---|
+| Camera response, sensitivity (`kk_camera_modern`, `kk_camera_sensitivity`) | live | every camera turn (`input_remap.cpp`) |
+| Dead zone, stick inversion, toggle aim (`kk_deadzone`, `kk_invert_*`, `kk_toggle_aim`) | live | every pad read |
+| Button remapping (`kk_map_*`) | live | every pad read |
+| Vibration and its strength (`kk_vibration`, `kk_vibration_strength`) | live | every rumble the game sends |
+| Mouse sensitivity and inversion (`kk_mouse_sensitivity`, `kk_mouse_invert_y`) | live | every mouse turn |
+| Input mode (`mnk_mode`), keyboard bindings (`keybind_*`) | live | the runtime's keyboard driver checks them at every read |
+| Field of view (`kk_fov`) | live | every camera set-up (`fov.cpp`) |
+| Fog, motion blur, full-screen blur (`kk_fog`, `kk_motion_blur`, `kk_big_blur`) | live | every draw of the effect |
+| Camera shake and its strength | live | every shake |
+| Button prompts (`kk_button_prompts`) | live (new) | the prompt thread now follows the setting (and puts the game's own sheet back for Xbox 360) |
+| Cheats (`kk_cheats`, `kk_cheat_*`) | live (new) | applied when the chapter's level is up; changes in play apply at once: flag cheats switched off are cleared again (only the ones the port set), weapons and ammo given stay until the next chapter or checkpoint |
+| Aspect ratio (`present_letterbox`) | live | the presenter, every paint |
+| Ambient occlusion (`ao_mode`, `ao_strength`) | live | native renderer every frame; F8 / F9 already change it |
+| Frame counter, achievement pop-ups and sound | live | every frame / every unlock |
+| Anti-aliasing (`swap_post_effect`), texture filtering (`anisotropic_override`) | restart | read once when the renderer starts (both renderers: `plugin_settings.cpp` `ReadGameSettings`, the Xenos plugin's graphics system) |
+| Render quality and scale, resolution, window mode, monitor, refresh rate, VSync, frame rate cap, upscaler, renderer, language, Original look, startup logos | restart | launcher-only (decided) |
+
+The game's own Options pages hold audio volumes and other values kept in the save; see "The game's Options"
+below.

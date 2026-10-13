@@ -218,7 +218,11 @@ void DevUniGoTick(uint8_t* base, uint32_t g, bool request, bool started) {
                                  Load32(base, g + 4) == 0 &&
                                  since > std::chrono::duration<double>(std::atof(std::getenv("KK_DEV_START_END")))) {
     ended = true;
-    const int next = int(Load32(base, g + 0x5670)) + 1;  // the chapter-select run's entry + 1
+    // The entry after the one being played (a story run: the entry of the current level).
+    int next = int(Load32(base, g + 0x5670)) + 1;
+    if (Load32(base, g + 0x5668) == 0)
+      for (int i = 0; i < 41; ++i)
+        if (Load32(base, g + (0x1402 + uint32_t(i)) * 4) == Load32(base, g + 8)) next = i + 1;
     Store32(base, g + 8, Load32(base, g + (0x1402 + next) * 4));
     Store32(base, g + 0xC, Load32(base, g + (0x1435 + next) * 4));
     Store32(base, g + 4, 1);

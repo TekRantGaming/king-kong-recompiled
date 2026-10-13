@@ -817,6 +817,29 @@ int g_title_frames = -1, g_table_frames = 0;
 }  // namespace
 }  // namespace kk::play
 
+namespace kk::play {
+bool OnGameMenuPage(const char* page) {
+  if (!g_session) return false;
+  if (!g_leaving) {
+    // A chapter-select run that has ended (its Score pages and save question are over) goes back to
+    // Chapter select; anything else to the Play menu.
+    const uint32_t g = kk::g_guest_base ? Load32(kk::g_guest_base, kGamePtr) : 0;
+    const bool chapter_run = g && Load32(kk::g_guest_base, g + 0x5668) == 1 && !LeftByQuit();
+    REXLOG_INFO("KK play: the game opened its menu page {}", page);
+    ReturnToLauncher(chapter_run ? "the chapter-select run is over" : "the game left play",
+                     chapter_run ? "chapters" : "play");
+  }
+  return true;
+}
+}  // namespace kk::play
+
+// The chapter select page (IntMIG_Page_Map): never shown after a launcher start.
+REX_EXTERN(__imp__sub_824BD150);
+REX_HOOK_RAW(sub_824BD150) {
+  if (kk::play::OnGameMenuPage("IntMIG_Page_Map")) return;
+  __imp__sub_824BD150(ctx, base);
+}
+
 // The save routine (sub_8266AD80, mode in r3): builds the header from the universe's continue point
 // G+0x4FF8 / +0x4FFC and opens the save pages. A continue level of 0 would make the save job delete the
 // save: put back the slot's own continue point (from the save system's header, else its file), or the
