@@ -25,7 +25,10 @@ class VulkanTestDevice {
   // validation layer. Errors from either are counted (and printed).
   // driver_pipeline_cache: NVRHI's device creates its pipelines through a VulkanPipelineCache of
   // ours (the plugin's --native_vk_pipeline_cache), pipeline_cache().
-  static std::unique_ptr<VulkanTestDevice> Create(bool validation = true, bool driver_pipeline_cache = false);
+  // upscaler_needs: the instance and device also get what DLSS and XeSS ask for (upscaler_vulkan.h), as
+  // the plugin's device does with an upscaler on.
+  static std::unique_ptr<VulkanTestDevice> Create(bool validation = true, bool driver_pipeline_cache = false,
+                                                  bool upscaler_needs = false);
   ~VulkanTestDevice();
 
   nvrhi::IDevice* device() const { return nvrhi_device_; }
@@ -46,7 +49,7 @@ class VulkanTestDevice {
 
  private:
   VulkanTestDevice() = default;
-  bool Init(bool validation, bool driver_pipeline_cache);
+  bool Init(bool validation, bool driver_pipeline_cache, bool upscaler_needs);
 
   struct Impl;
   std::unique_ptr<Impl> impl_;

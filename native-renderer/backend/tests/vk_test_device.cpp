@@ -1,5 +1,6 @@
 #include "backend/tests/vk_test_device.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -7,6 +8,7 @@
 #include <nvrhi/vulkan.h>
 #include <vulkan/vulkan.hpp>
 
+#include "backend/upscaler_vulkan.h"
 #include "backend/vk_pipeline_cache.h"
 #include "backend/vulkan_dispatch.h"
 
@@ -55,10 +57,11 @@ struct VulkanTestDevice::Impl {
   std::vector<std::string> instance_extensions, device_extensions;
 };
 
-std::unique_ptr<VulkanTestDevice> VulkanTestDevice::Create(bool validation, bool driver_pipeline_cache) {
+std::unique_ptr<VulkanTestDevice> VulkanTestDevice::Create(bool validation, bool driver_pipeline_cache,
+                                                           bool upscaler_needs) {
   std::unique_ptr<VulkanTestDevice> d(new VulkanTestDevice());
   try {
-    if (!d->Init(validation, driver_pipeline_cache)) return nullptr;
+    if (!d->Init(validation, driver_pipeline_cache, upscaler_needs)) return nullptr;
   } catch (const std::exception& e) {
     std::fprintf(stderr, "Vulkan test device: %s\n", e.what());
     return nullptr;
@@ -66,7 +69,7 @@ std::unique_ptr<VulkanTestDevice> VulkanTestDevice::Create(bool validation, bool
   return d;
 }
 
-bool VulkanTestDevice::Init(bool validation, bool driver_pipeline_cache) {
+bool VulkanTestDevice::Init(bool validation, bool driver_pipeline_cache, bool upscaler_needs) {
   impl_ = std::make_unique<Impl>();
   auto gipa = impl_->loader.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
   impl_->gipa = gipa;
@@ -91,6 +94,20 @@ bool VulkanTestDevice::Init(bool validation, bool driver_pipeline_cache) {
     if (std::strcmp(e.extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0) debug_utils = true;
   }
   if (debug_utils) extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+  // What the upscalers ask for, when the implementation has it.
+  std::vector<std::string> upscaler_instance_extensions;
+  if (upscaler_needs) {
+    const auto available = vk::enumerateInstanceExtensionProperties();
+    for (const std::string& name : UpscalerVulkanInstanceExtensions(true, true)) {
+      for (const auto& e : available) {
+        if (name == e.extensionName.data() && name != VK_EXT_DEBUG_UTILS_EXTENSION_NAME) {
+          upscaler_instance_extensions.push_back(name);
+          break;
+        }
+      }
+    }
+  }
+  for (const std::string& name : upscaler_instance_extensions) extensions.push_back(name.c_str());
 
   vk::ApplicationInfo app("nr_render_tests", 1, "kk-native-renderer", 1, VK_API_VERSION_1_3);
   vk::InstanceCreateInfo ici({}, &app, layers, extensions);
@@ -194,9 +211,77 @@ bool VulkanTestDevice::Init(bool validation, bool driver_pipeline_cache) {
   features12.descriptorBindingPartiallyBound = s12.descriptorBindingPartiallyBound;
   features12.descriptorBindingVariableDescriptorCount = s12.descriptorBindingVariableDescriptorCount;
   features12.runtimeDescriptorArray = s12.runtimeDescriptorArray;
+  // What the upscalers ask for: the extensions the device has, the features it supports (merged into
+  // the structures above, or chained on).
+  std::vector<std::string> upscaler_device_extensions;
+  std::vector<std::vector<uint8_t>> upscaler_features;
+  if (upscaler_needs) {
+    const UpscalerVulkanNeeds needs = UpscalerVulkanDeviceNeeds(true, true, impl_->instance, chosen, gipa);
+    const auto available = chosen.enumerateDeviceExtensionProperties();
+    for (const std::string& name : needs.extensions) {
+      for (const auto& e : available) {
+        if (name == e.extensionName.data()) {
+          upscaler_device_extensions.push_back(name);
+          break;
+        }
+      }
+    }
+    const size_t header = sizeof(VkBaseOutStructure);
+    auto merge = [](uint8_t* enabled, const uint8_t* have, const uint8_t* requested, size_t count) {
+      for (size_t i = 0; i < count; ++i) {
+        VkBool32 r, h;
+        std::memcpy(&r, requested + i * 4, 4);
+        std::memcpy(&h, have + i * 4, 4);
+        if (r && h) std::memcpy(enabled + i * 4, &r, 4);
+      }
+    };
+    const auto& s13 = supported.get<vk::PhysicalDeviceVulkan13Features>();
+    auto get_features2 =
+        reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(gipa(impl_->instance, "vkGetPhysicalDeviceFeatures2"));
+    void* chain_end = &features13;
+    for (const auto& request : needs.features) {
+      if (request.size() <= header) continue;
+      VkStructureType type;
+      std::memcpy(&type, request.data(), sizeof(type));
+      const size_t count = (request.size() - header) / 4;
+      if (type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2) {
+        merge(reinterpret_cast<uint8_t*>(&features2.features), reinterpret_cast<const uint8_t*>(&s10),
+              request.data() + header, std::min(count, sizeof(VkPhysicalDeviceFeatures) / 4));
+      } else if (type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES) {
+        merge(reinterpret_cast<uint8_t*>(&features12) + header, reinterpret_cast<const uint8_t*>(&s12) + header,
+              request.data() + header, std::min(count, (sizeof(VkPhysicalDeviceVulkan12Features) - header) / 4));
+      } else if (type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES) {
+        merge(reinterpret_cast<uint8_t*>(&features13) + header, reinterpret_cast<const uint8_t*>(&s13) + header,
+              request.data() + header, std::min(count, (sizeof(VkPhysicalDeviceVulkan13Features) - header) / 4));
+      } else if (get_features2) {
+        std::vector<uint8_t> have(request.size() + 512, 0);
+        std::memcpy(have.data(), &type, sizeof(type));
+        VkPhysicalDeviceFeatures2 query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+        query.pNext = have.data();
+        get_features2(chosen, &query);
+        std::vector<uint8_t>& added = upscaler_features.emplace_back(request.size(), 0);
+        std::memcpy(added.data(), &type, sizeof(type));
+        merge(added.data() + header, have.data() + header, request.data() + header, count);
+        reinterpret_cast<VkBaseOutStructure*>(chain_end)->pNext = reinterpret_cast<VkBaseOutStructure*>(added.data());
+        chain_end = added.data();
+      }
+    }
+    std::printf("  upscaler needs: %zu instance extensions, %zu of %zu device extensions, %zu feature structures\n",
+                upscaler_instance_extensions.size(), upscaler_device_extensions.size(), needs.extensions.size(),
+                needs.features.size());
+    for (const auto& e : upscaler_instance_extensions) std::printf("    instance: %s\n", e.c_str());
+    for (const auto& e : needs.extensions) std::printf("    device: %s\n", e.c_str());
+    for (const auto& f : needs.features) {
+      VkStructureType type;
+      std::memcpy(&type, f.data(), sizeof(type));
+      std::printf("    features: structure type %d (%zu bytes)\n", int(type), f.size());
+    }
+  }
+  std::vector<const char*> device_extension_names;
+  for (const std::string& name : upscaler_device_extensions) device_extension_names.push_back(name.c_str());
   float priority = 1.0f;
   vk::DeviceQueueCreateInfo qci({}, impl_->queue_family, 1, &priority);
-  vk::DeviceCreateInfo dci({}, qci, {}, {});
+  vk::DeviceCreateInfo dci({}, qci, {}, device_extension_names);
   dci.pNext = &features2;
   impl_->device = chosen.createDevice(dci);
   InitVulkanDispatch(gipa, impl_->instance, impl_->device);

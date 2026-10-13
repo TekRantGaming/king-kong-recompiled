@@ -442,7 +442,9 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
   if (game.enabled) {
     shaders_ = std::make_unique<ShaderLibrary>(host_->device(), guest_memory_);
     // --native_debug bit 16: the plain pixel shaders at a scale too (to tell the aware translation's part).
-    shaders_->SetRenderScaleAware(shaders_aware);
+    // An upscaler other than native AA draws the scene at another size than the output: aware shaders.
+    const bool upscale_scaled = game.upscale.enabled() && game.upscale.quality != UpscaleQuality::kNative && !(game.debug & 16);
+    shaders_->SetRenderScaleAware(shaders_aware || upscale_scaled);
     shaders_->Initialize(game.shader_pack, game.dxc);
     kknr::GuestMemory physical;
     physical.base = memory_->TranslatePhysical(0);
@@ -453,7 +455,19 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
     renderer->options().render_scale_y = scale.y;
     renderer->options().shadow_scale = shadow_scale;
     renderer->options().guest_frame_width = width;
+    renderer->options().guest_frame_height = height;
     renderer->options().ao = game.ao;  // before Initialize: the ambient-only AO adds a binding
+    if (game.upscale.enabled() && (game.ao.method == AoMethod::kLegacy || game.ao.apply == AoApply::kResolve)) {
+      // The legacy AO (and GTAO at the resolve moment) darkens the scene copy the post effects read, after
+      // the upscaler took its input: with an upscaler the occlusion goes into the scene at the end of its
+      // opaque pass instead (docs/upscalers.md, "Ambient occlusion").
+      renderer->options().ao.method = AoMethod::kGtao;
+      renderer->options().ao.apply = AoApply::kOpaque;
+      REXLOG_INFO("rexgpu-native: upscaler on: ambient occlusion by GTAO at the end of the opaque pass");
+    }
+    // Temporal upscalers (docs/upscalers.md): before Initialize (the input size changes the layouts).
+    renderer->options().upscale = game.upscale;
+    renderer->options().fxaa = game.fxaa;
     if (renderer->Initialize()) {
       shaders_->SetAmbientOcclusion(renderer->ao_ambient_table());
       renderer->options().element_endian = game.element_endian;

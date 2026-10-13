@@ -33,6 +33,8 @@
 #include <windows.h>
 #endif
 #if NR_HAS_VULKAN
+#include <rex/ui/vulkan/device.h>
+#include <rex/ui/vulkan/instance.h>
 #include <rex/ui/vulkan/provider.h>
 #endif
 
@@ -43,8 +45,12 @@
 #include "plugin/launcher_prewarm.h"
 #include "plugin/plugin_settings.h"
 #include "plugin/ring_skimmer.h"
+#include "plugin/upscaler_query.h"
 #if NR_GAME_RENDERER
 #include "plugin/shader_pack_service.h"
+#endif
+#if NR_GAME_RENDERER && NR_HAS_VULKAN
+#include "backend/upscaler_vulkan.h"
 #endif
 
 REXCVAR_DECLARE(bool, native_draws);
@@ -66,6 +72,36 @@ REXCVAR_DECLARE(bool, native_render_thread_fences);
 
 namespace nr {
 
+namespace {
+
+// DLSS and XeSS work on the game's Vulkan device: its instance and device are made with what they ask
+// for (docs/upscalers.md, "Vulkan"; the SDK's sdk-patches/0003). Nothing is asked for with
+// --native_upscaler=off, nor when the SDK cannot take requests.
+void PrepareVulkanForUpscalers() {
+#if NR_GAME_RENDERER && NR_HAS_VULKAN && defined(REX_UI_VULKAN_HAS_INSTANCE_REQUESTS) && \
+    defined(REX_UI_VULKAN_HAS_DEVICE_REQUESTS)
+  const UpscaleConfig config = ReadUpscalerChoice();
+  bool dlss = false, xess = false;
+  UpscalerVulkanWants(config, 0, &dlss, &xess);
+  if (!dlss && !xess) return;
+  std::vector<std::string> instance_extensions = UpscalerVulkanInstanceExtensions(dlss, xess);
+  rex::ui::vulkan::SetVulkanInstanceExtensionRequests(instance_extensions);
+  rex::ui::vulkan::SetVulkanDeviceRequestCallback([config](VkInstance instance, VkPhysicalDevice physical) {
+    rex::ui::vulkan::VulkanDeviceRequests requests;
+    bool want_dlss = false, want_xess = false;
+    UpscalerVulkanWants(config, UpscalerVulkanVendor(instance, physical, nullptr), &want_dlss, &want_xess);
+    UpscalerVulkanNeeds needs = UpscalerVulkanDeviceNeeds(want_dlss, want_xess, instance, physical, nullptr);
+    REXGPU_INFO("rexgpu-native: the upscalers ask the Vulkan device for {} extensions and {} feature structures",
+                needs.extensions.size(), needs.features.size());
+    requests.extensions = std::move(needs.extensions);
+    requests.features = std::move(needs.features);
+    return requests;
+  });
+  REXGPU_INFO("rexgpu-native: the upscalers ask the Vulkan instance for {} extensions", instance_extensions.size());
+#endif
+}
+
+}  // namespace
 
 NativeGraphicsSystem* NativeGraphicsSystem::instance_ = nullptr;
 
@@ -111,6 +147,8 @@ NativeGraphicsSystem::~NativeGraphicsSystem() {
 }
 
 bool NativeGraphicsSystem::CreateProvider(bool with_presentation) {
+  // The launcher's upscaler question (its Direct3D 12 device and the SDKs it loaded) is over first.
+  WaitUpscalerQuery();
   switch (api_) {
 #if NR_HAS_D3D12
     case HostApi::kD3D12:
@@ -121,6 +159,7 @@ bool NativeGraphicsSystem::CreateProvider(bool with_presentation) {
 #endif
 #if NR_HAS_VULKAN
     case HostApi::kVulkan:
+      PrepareVulkanForUpscalers();
       provider_ = rex::ui::vulkan::VulkanProvider::Create(true, with_presentation);
       break;
 #endif

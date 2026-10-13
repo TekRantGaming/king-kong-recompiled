@@ -18,6 +18,7 @@
 #include "plugin/native_graphics_system.h"
 #include "plugin/native_prewarm.h"
 #include "plugin/native_stutter.h"
+#include "plugin/upscaler_query.h"
 
 REXCVAR_DEFINE_STRING(native_backend, "auto", "Native renderer",
                       "Host API for the native renderer: auto, d3d12 or vulkan")
@@ -244,6 +245,56 @@ REXCVAR_DEFINE_BOOL(native_ao_gpu_time, false, "Native renderer",
                     "Time the ambient occlusion's GPU passes and log the average every 600 frames")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+// Temporal upscalers (docs/upscalers.md). Off by default: nothing of them runs.
+REXCVAR_DEFINE_STRING(native_upscaler, "off", "Native renderer",
+                      "Temporal upscaler: off, auto (DLSS on NVIDIA RTX, FSR 4 on supported AMD, XeSS on Intel, "
+                      "FSR 3.1 otherwise), fsr3, fsr4, dlss, xess (bilinear: a plain stretch, for comparisons). "
+                      "The output is native_render_scale's size")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_STRING(native_upscaler_quality, "quality", "Native renderer",
+                      "The upscaler's mode: native (anti-aliasing at the output resolution: DLAA, FSR native AA, "
+                      "XeSS native AA), quality, balanced, performance, ultra_performance")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_STRING(native_upscaler_point, "post", "Native renderer",
+                      "Where the upscaler runs: post (before the game's post effects and HUD) or present (at the "
+                      "end of the frame, everything upscaled)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_STRING(native_upscaler_dlss_preset, "default", "Native renderer",
+                      "DLSS's render preset: default (the driver's), J or K (DLSS 4 transformer), L or M (DLSS 4.5)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_DOUBLE(native_upscaler_sharpness, -1.0, "Native renderer",
+                      "Sharpening after the upscale, 0 to 1 (FSR's RCAS; DLSS and XeSS have none); negative: off")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_STRING(native_upscaler_mip_bias, "auto", "Native renderer",
+                      "The texture LOD bias of the scene's draws: auto (log2 of input over output, as the SDKs "
+                      "recommend) or a number")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_DOUBLE(native_upscaler_reactive, 1.0, "Native renderer",
+                      "Strength of the reactive mask (what changed after the opaque pass: water, fur, smoke, rain, "
+                      "particles), 0 to 1; 0: no mask")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_INT32(native_upscaler_debug, 0, "Native renderer",
+                     "Upscaler debugging bits: 1 show the motion vectors, 2 the reactive mask, 4 camera motion only, "
+                     "8 no jitter, 16 a log line per frame, 32 show the depth, 64 no mip bias, 128 log the camera vote "
+                     "and the constants that changed, 512 read the motion vectors back every 150 frames and log them, "
+                     "1024 draws on rewritten vertex buffers get the camera's motion only")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_BOOL(native_upscaler_gpu_time, false, "Native renderer",
+                    "Time the upscaler's GPU work and log the average every 600 frames")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_STRING(native_upscaler_rules, "", "Native renderer",
+                      "A file of upscale point rules: 'post ps=<hash>' starts the post chain, 'scene ps=<hash>' never")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_BOOL(native_flip_front_face, false, "Native renderer",
                     "Swap the front face of every draw (a debugging aid for culling)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
@@ -318,6 +369,11 @@ extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_prewarm_status(NrPrewarmStatus* sta
 }
 
 extern "C" REX_GPU_PLUGIN_EXPORT void nr_prewarm_stop(void) { nr::StopLauncherPrewarm(); }
+
+// The launcher's upscaler menu (native_upscaler_query.h).
+extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_upscaler_query(NrUpscalerSupport* out) { return nr::UpscalerQuery(out); }
+
+extern "C" REX_GPU_PLUGIN_EXPORT void nr_upscaler_query_wait(void) { nr::WaitUpscalerQuery(); }
 
 // The pipeline stutter counter for the overlay (native_stutter.h).
 extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_stutter_stats(NrStutterStats* stats) {

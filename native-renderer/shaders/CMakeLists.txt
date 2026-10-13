@@ -79,6 +79,7 @@ configure_file("${CMAKE_CURRENT_BINARY_DIR}/prelude.cpp.new" "${CMAKE_CURRENT_BI
 add_library(kkshaders STATIC
     src/container.cpp
     src/ambient.cpp
+    src/motion.cpp
     src/translator.cpp
     src/compiler.cpp
     src/cache.cpp

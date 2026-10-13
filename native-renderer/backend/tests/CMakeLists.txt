@@ -27,6 +27,10 @@ add_executable(nr_ao_rules_tests ao_rules_tests.cpp)
 target_link_libraries(nr_ao_rules_tests PRIVATE nr_draw)
 add_test(NAME nr_ao_rules_tests COMMAND nr_ao_rules_tests)
 
+add_executable(nr_upscale_tests upscale_tests.cpp)
+target_link_libraries(nr_upscale_tests PRIVATE nr_draw)
+add_test(NAME nr_upscale_tests COMMAND nr_upscale_tests)
+
 add_executable(nr_trace_replay trace_replay_main.cpp)
 target_link_libraries(nr_trace_replay PRIVATE nr_draw nr_hooks)
 
@@ -114,4 +118,51 @@ if(NR_HAS_VULKAN AND NR_GAME_RENDERER)
              COMMAND ${Python3_EXECUTABLE} -I "${CMAKE_CURRENT_SOURCE_DIR}/check_validation.py"
                      $<TARGET_FILE:nr_game_ao_tests>)
     set_tests_properties(nr_game_ao_tests PROPERTIES ENVIRONMENT "${_env}")
+    # The temporal upscalers' frame plumbing through the game renderer (docs/upscalers.md).
+    add_executable(nr_game_upscale_tests game_upscale_tests.cpp vk_test_device.cpp readback.cpp
+        "${NR_ROOT}/shaders/tests/xenos_asm.cpp" "${NR_ROOT}/shaders/tests/container_writer.cpp")
+    target_include_directories(nr_game_upscale_tests PRIVATE "${NR_ROOT}/shaders/tests")
+    target_link_libraries(nr_game_upscale_tests PRIVATE nr_renderer nr_hooks ${CMAKE_DL_LIBS})
+    target_compile_definitions(nr_game_upscale_tests PRIVATE NR_TEST_DXC_DIR="${NR_DXC_DIR}")
+    add_test(NAME nr_game_upscale_tests
+             COMMAND ${Python3_EXECUTABLE} -I "${CMAKE_CURRENT_SOURCE_DIR}/check_validation.py"
+                     $<TARGET_FILE:nr_game_upscale_tests>)
+    set_tests_properties(nr_game_upscale_tests PROPERTIES ENVIRONMENT "${_env}")
+    # The upscalers' DLLs beside the test (the renderer loads them from the executable's folder).
+    get_property(_nr_up_runtime GLOBAL PROPERTY NR_UPSCALER_RUNTIME_FILES)
+    foreach(_f IN LISTS _nr_up_runtime)
+        get_filename_component(_name "${_f}" NAME)
+        add_custom_command(TARGET nr_game_upscale_tests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_f}" $<TARGET_FILE_DIR:nr_game_upscale_tests>/${_name})
+    endforeach()
+endif()
+
+# The upscalers' SDKs alone on Direct3D 12 and Vulkan, without the game renderer (docs/upscalers.md,
+# "Tests"): devices of their own on the first hardware adapter; skipped without one.
+if(WIN32 AND NR_HAS_D3D12 AND NR_GAME_RENDERER)
+    set(_nr_sdk_test_sources upscaler_sdk_tests.cpp readback.cpp)
+    if(NR_HAS_VULKAN)
+        list(APPEND _nr_sdk_test_sources vk_test_device.cpp)
+    endif()
+    add_executable(nr_upscaler_sdk_tests ${_nr_sdk_test_sources})
+    target_link_libraries(nr_upscaler_sdk_tests PRIVATE nr_renderer d3d12 dxgi ${CMAKE_DL_LIBS})
+    add_test(NAME nr_upscaler_sdk_tests COMMAND nr_upscaler_sdk_tests)
+    get_property(_nr_up_runtime GLOBAL PROPERTY NR_UPSCALER_RUNTIME_FILES)
+    foreach(_f IN LISTS _nr_up_runtime)
+        get_filename_component(_name "${_f}" NAME)
+        add_custom_command(TARGET nr_upscaler_sdk_tests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_f}" $<TARGET_FILE_DIR:nr_upscaler_sdk_tests>/${_name})
+    endforeach()
+endif()
+
+# The motion variant of the translated vertex shaders, on the translator's generated corpus
+# (docs/upscalers.md).
+if(NR_GAME_RENDERER)
+    add_executable(nr_motion_shader_tests motion_shader_tests.cpp
+        "${NR_ROOT}/shaders/tests/xenos_asm.cpp" "${NR_ROOT}/shaders/tests/container_writer.cpp"
+        "${NR_ROOT}/shaders/tests/corpus.cpp")
+    target_include_directories(nr_motion_shader_tests PRIVATE "${NR_ROOT}/shaders/tests" "${NR_ROOT}")
+    target_link_libraries(nr_motion_shader_tests PRIVATE kkshaders)
+    target_compile_definitions(nr_motion_shader_tests PRIVATE NR_TEST_DXC_DIR="${NR_DXC_DIR}")
+    add_test(NAME nr_motion_shader_tests COMMAND nr_motion_shader_tests)
 endif()

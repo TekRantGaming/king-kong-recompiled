@@ -185,6 +185,30 @@ void GameRenderer::Clear(nvrhi::ICommandList* cl, const ClearCall& call) {
   ProcessInvalidations();
   const uint32_t pitch = d.u32(dev::kRbSurfaceInfo) & 0x3FFF;
   if (!pitch) return;
+  current_cl_ = cl;
+  if (upscale_) {
+    // Upscalers (game_upscale.cpp): a clear of part of the scene's target is an upscale point.
+    uint64_t color_key = 0, depth_key = 0;
+    if ((call.flags & 1) && d.u32(dev::kRenderTargets)) {
+      const uint32_t info = d.u32(dev::kRbColorInfo);
+      color_key = TargetKeyOf(false, info & 0xFFF, pitch, (info >> 16) & 0xF);
+    }
+    if ((call.depth || call.stencil) && call.depth_stencil) {
+      const uint32_t info = d.u32(dev::kRbDepthInfo);
+      depth_key = TargetKeyOf(true, info & 0xFFF, pitch, (info >> 16) & 1);
+    }
+    bool covers = true;
+    for (uint32_t r = 0; r < call.rect_count; ++r) {
+      if (call.rects[r][0] > 0 || call.rects[r][1] > 0 || call.rects[r][2] < int32_t(pitch) ||
+          call.rects[r][3] < int32_t(options_.guest_frame_height))
+        covers = false;
+    }
+    if (!call.rect_count) {
+      const int32_t vw = int32_t(d.u32(dev::kViewport + 8)), vh = int32_t(d.u32(dev::kViewport + 12));
+      covers = vw >= int32_t(pitch) && vh >= int32_t(options_.guest_frame_height);
+    }
+    UpscaleBeginClear(cl, call, color_key, depth_key, covers);
+  }
   uint32_t height = 0;
   HostTarget* colors[4] = {};
   for (uint32_t i = 0; i < 4; ++i) {
@@ -243,6 +267,75 @@ void GameRenderer::Clear(nvrhi::ICommandList* cl, const ClearCall& call) {
 
 // ---------------------------------------------------------------- resolve
 
+bool GameRenderer::ResolveCopy(nvrhi::ICommandList* cl, HostTarget* source, bool from_depth, uint32_t format, int32_t sx,
+                               int32_t sy, int32_t w, int32_t h, const kknr::TextureFetch& fetch, int32_t dx,
+                               int32_t dy, uint32_t level, uint32_t slice) {
+  kknr::HostTexturePlan plan;
+  if (fetch.Type() != 2 || !kknr::PlanHostTexture(fetch, plan, nullptr, TextureOptions())) return false;
+  // The source's scale: the resolved texture gets it, and every rectangle below is in host pixels.
+  const float tsx = source->scale_x, tsy = source->scale_y;
+  kknr::TextureCache::Entry& entry = textures_.MarkGpuWritten(fetch, frame_);
+  const bool drawable = kknr::GetHostFormatInfo(plan.format).block_size == 1;
+  HostTexture* host = ResolveDestTexture(entry, plan, drawable, tsx, tsy);
+  if (!host) return false;
+  bool copied = false;
+  const int32_t dw = int32_t(std::max(plan.width >> level, 1u)), dh = int32_t(std::max(plan.height >> level, 1u));
+  const int32_t cw = std::min(w, dw - dx), ch = std::min(h, dh - dy);
+  // Copy or blit, and the blit's channels: kknr::PlanResolveConversion
+  // (docs/formats.md, "Resolves"); its CPU reference is tested
+  // against ConvertTexture of what the 360 writes to memory.
+  const kknr::ResolveConversion conv =
+      kknr::PlanResolveConversion(kknr::ResolveSource{from_depth, format}, fetch, TextureOptions());
+  // Host pixels. The size is the same on both sides (the origins round on their own).
+  const nvrhi::TextureDesc& hd = host->texture->getDesc();
+  const int32_t hdw = int32_t(std::max(hd.width >> level, 1u)), hdh = int32_t(std::max(hd.height >> level, 1u));
+  const int32_t hsx = ScaleCoord(sx, tsx), hsy = ScaleCoord(sy, tsy);
+  const int32_t hdx = ScaleCoord(dx, host->scale_x), hdy = ScaleCoord(dy, host->scale_y);
+  const int32_t hcw = std::min({ScaleCoord(cw, tsx), hdw - hdx, int32_t(source->host_width) - hsx});
+  const int32_t hch = std::min({ScaleCoord(ch, tsy), hdh - hdy, int32_t(source->host_height) - hsy});
+  if (cw > 0 && ch > 0 && hcw > 0 && hch > 0 && slice < plan.layers && level < plan.levels) {
+    const bool bytes_to_depth =
+        !from_depth && format == 0 && host->format == nvrhi::Format::R32_FLOAT &&
+        (fetch.Format() == kknr::TextureFormat::k_24_8 || fetch.Format() == kknr::TextureFormat::k_24_8_FLOAT);
+    host->depth = from_depth;
+    if (bytes_to_depth && host->render_target) {
+      // A colour target holding a depth buffer's bytes (the light shafts
+      // copy the depth, seen as 8:8:8:8, into a smaller target) resolved
+      // into a depth texture: the 360 copies the 32-bit word, with R and
+      // B exchanged, and the texture reads its top 24 bits.
+      const uint32_t identity[4] = {0, 1, 2, 3};
+      copied = Blit(cl, source->texture, hsx, hsy, hcw, hch, host->texture, level, slice, hdx, hdy, identity,
+                    kBlitBytesToDepth);
+      if (copied) host->depth = true;
+    } else if (conv.method == kknr::ResolveMethod::kUnsupported || conv.scale != 1.0f) {
+      // scale != 1: the blit has no scale (16-bit fixed targets into
+      // 16-bit textures; the game has none).
+      if (stats_.resolve_failures < 20) {
+        Logf(LogLevel::kWarning, "rexgpu-native: resolve %s format %u -> %08X %08X: %s",
+             from_depth ? "depth" : "colour", format, fetch.words[0], fetch.words[1],
+             conv.method == kknr::ResolveMethod::kUnsupported ? conv.why : "needs a scaled blit");
+      }
+    } else if (conv.method == kknr::ResolveMethod::kCopy && host->format == source->format) {
+      nvrhi::TextureSlice src_slice, dst_slice;
+      src_slice.setOrigin(uint32_t(hsx), uint32_t(hsy)).setSize(uint32_t(hcw), uint32_t(hch), 1);
+      dst_slice.setOrigin(uint32_t(hdx), uint32_t(hdy)).setSize(uint32_t(hcw), uint32_t(hch), 1)
+          .setMipLevel(level)
+          .setArraySlice(slice);
+      cl->copyTexture(host->texture, dst_slice, source->texture, src_slice);
+      copied = true;
+    } else if (host->render_target) {
+      const uint32_t channels[4] = {conv.channels[0], conv.channels[1], conv.channels[2], conv.channels[3]};
+      copied = Blit(cl, source->texture, hsx, hsy, hcw, hch, host->texture, level, slice, hdx, hdy, channels);
+    }
+    cl->setTextureState(host->texture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
+    if (copied) {
+      host->serial = ++resolve_serial_;
+      resolved_by_base_[fetch.BaseAddress()] = &entry;
+    }
+  }
+  return copied;
+}
+
 void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
   if (options_.debug & 2048) return;  // debugging: no resolves
   dev::DeviceView d(call.device ? memory_.Virtual(call.device) : nullptr);
@@ -263,6 +356,9 @@ void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
   const uint32_t info = from_depth ? d.u32(dev::kRbDepthInfo)
                                    : d.u32(index == 0 ? dev::kRbColorInfo : dev::kRbColor1Info + 4 * (index - 1));
   const uint32_t base = info & 0xFFF, format = from_depth ? (info >> 16) & 1 : (info >> 16) & 0xF;
+  current_cl_ = cl;
+  // Upscalers (game_upscale.cpp): a copy that clears the scene's target is an upscale point.
+  if (upscale_) UpscaleBeginResolve(cl, call, TargetKeyOf(from_depth, base, pitch, format), !from_depth && flags.ClearRenderTarget());
   HostTarget* source = FindTarget(from_depth, base, pitch, format);
   if (!source) {
     // Never drawn: the 360 would copy whatever EDRAM held. Make it (cleared).
@@ -322,83 +418,17 @@ void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
 
   const uint8_t* dest_object = call.dest_texture ? memory_.Virtual(call.dest_texture) : nullptr;
   bool copied = false;
+  kknr::TextureFetch dest_fetch;
   if (dest_object && w > 0 && h > 0) {
-    const kknr::TextureFetch fetch = FetchFromObject(dest_object);
-    kknr::HostTexturePlan plan;
-    if (fetch.Type() == 2 && kknr::PlanHostTexture(fetch, plan, nullptr, TextureOptions())) {
-      kknr::TextureCache::Entry& entry = textures_.MarkGpuWritten(fetch, frame_);
-      auto* host = static_cast<HostTexture*>(entry.host);
-      const bool drawable = kknr::GetHostFormatInfo(plan.format).block_size == 1;
-      if (!host || !host->render_target || host->plan.format != plan.format || host->plan.width != plan.width ||
-          host->plan.height != plan.height || host->plan.levels != plan.levels || host->plan.layers != plan.layers ||
-          host->plan.dimension != plan.dimension || host->scale_x != (drawable ? tsx : 1.0f) ||
-          host->scale_y != (drawable ? tsy : 1.0f)) {
-        ReleaseHostTexture(host);
-        host = CreateHostTexture(plan, drawable, tsx, tsy);
-        entry.host = host;
-      }
-      if (host) {
-        const int32_t dx = call.has_point ? call.point[0] : 0, dy = call.has_point ? call.point[1] : 0;
-        const uint32_t level = call.dest_level, slice = call.dest_slice;
-        const int32_t dw = int32_t(std::max(plan.width >> level, 1u)), dh = int32_t(std::max(plan.height >> level, 1u));
-        const int32_t cw = std::min(w, dw - dx), ch = std::min(h, dh - dy);
-        // Copy or blit, and the blit's channels: kknr::PlanResolveConversion
-        // (docs/formats.md, "Resolves"); its CPU reference is tested
-        // against ConvertTexture of what the 360 writes to memory.
-        const kknr::ResolveConversion conv =
-            kknr::PlanResolveConversion(kknr::ResolveSource{from_depth, format}, fetch, TextureOptions());
-        // Host pixels. The size is the same on both sides (the origins round on their own).
-        const nvrhi::TextureDesc& hd = host->texture->getDesc();
-        const int32_t hdw = int32_t(std::max(hd.width >> level, 1u)), hdh = int32_t(std::max(hd.height >> level, 1u));
-        const int32_t hsx = ScaleCoord(sx, tsx), hsy = ScaleCoord(sy, tsy);
-        const int32_t hdx = ScaleCoord(dx, host->scale_x), hdy = ScaleCoord(dy, host->scale_y);
-        const int32_t hcw = std::min({ScaleCoord(cw, tsx), hdw - hdx, int32_t(source->host_width) - hsx});
-        const int32_t hch = std::min({ScaleCoord(ch, tsy), hdh - hdy, int32_t(source->host_height) - hsy});
-        if (cw > 0 && ch > 0 && hcw > 0 && hch > 0 && slice < plan.layers && level < plan.levels) {
-          const bool bytes_to_depth =
-              !from_depth && format == 0 && host->format == nvrhi::Format::R32_FLOAT &&
-              (fetch.Format() == kknr::TextureFormat::k_24_8 || fetch.Format() == kknr::TextureFormat::k_24_8_FLOAT);
-          host->depth = from_depth;
-          if (bytes_to_depth && host->render_target) {
-            // A colour target holding a depth buffer's bytes (the light shafts
-            // copy the depth, seen as 8:8:8:8, into a smaller target) resolved
-            // into a depth texture: the 360 copies the 32-bit word, with R and
-            // B exchanged, and the texture reads its top 24 bits.
-            const uint32_t identity[4] = {0, 1, 2, 3};
-            copied = Blit(cl, source->texture, hsx, hsy, hcw, hch, host->texture, level, slice, hdx, hdy, identity,
-                          kBlitBytesToDepth);
-            if (copied) host->depth = true;
-          } else if (conv.method == kknr::ResolveMethod::kUnsupported || conv.scale != 1.0f) {
-            // scale != 1: the blit has no scale (16-bit fixed targets into
-            // 16-bit textures; the game has none).
-            if (stats_.resolve_failures < 20) {
-              Logf(LogLevel::kWarning, "rexgpu-native: resolve %s format %u -> %08X %08X: %s",
-                   from_depth ? "depth" : "colour", format, fetch.words[0], fetch.words[1],
-                   conv.method == kknr::ResolveMethod::kUnsupported ? conv.why : "needs a scaled blit");
-            }
-          } else if (conv.method == kknr::ResolveMethod::kCopy && host->format == source->format) {
-            nvrhi::TextureSlice src_slice, dst_slice;
-            src_slice.setOrigin(uint32_t(hsx), uint32_t(hsy)).setSize(uint32_t(hcw), uint32_t(hch), 1);
-            dst_slice.setOrigin(uint32_t(hdx), uint32_t(hdy)).setSize(uint32_t(hcw), uint32_t(hch), 1)
-                .setMipLevel(level)
-                .setArraySlice(slice);
-            cl->copyTexture(host->texture, dst_slice, source->texture, src_slice);
-            copied = true;
-          } else if (host->render_target) {
-            const uint32_t channels[4] = {conv.channels[0], conv.channels[1], conv.channels[2], conv.channels[3]};
-            copied = Blit(cl, source->texture, hsx, hsy, hcw, hch, host->texture, level, slice, hdx, hdy, channels);
-          }
-          cl->setTextureState(host->texture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
-          if (copied) {
-            host->serial = ++resolve_serial_;
-            resolved_by_base_[fetch.BaseAddress()] = &entry;
-          }
-        }
-      }
-    }
+    dest_fetch = FetchFromObject(dest_object);
+    const int32_t dx = call.has_point ? call.point[0] : 0, dy = call.has_point ? call.point[1] : 0;
+    copied = ResolveCopy(cl, source, from_depth, format, sx, sy, w, h, dest_fetch, dx, dy, call.dest_level,
+                         call.dest_slice);
   }
   if (!copied && dest_object) ++stats_.resolve_failures;
   if (ao_original) source->texture = ao_original;  // the clears below are the game's own target's
+  // Upscalers (game_upscale.cpp): a copy of the whole scene is done again from the upscaled picture.
+  if (upscale_) UpscaleAfterResolve(call, source, from_depth, format, sx, sy, w, h, dest_object ? &dest_fetch : nullptr, copied);
 
   // The resolve's clears, over the source rectangle.
   if (flags.ClearRenderTarget() || flags.ClearDepthStencil()) {
@@ -419,6 +449,7 @@ void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
                                       std::max(ds.height, existing ? existing->height : 0u));
         const float zero[4] = {0, 0, 0, 0};
         if (depth) ClearRect(cl, nullptr, depth, rect, zero, false, true, true, call.clear_z, 0);
+        if (depth && upscale_) upscale_->tracker.OnDepthCleared(call.frame, depth->key & ~kOutputGeneration);
       }
     }
   }
@@ -438,13 +469,20 @@ bool GameRenderer::Present(nvrhi::ICommandList* cl, uint32_t device, nvrhi::ITex
   dev::DeviceView d(device ? memory_.Virtual(device) : nullptr);
   if (!d.valid()) return false;
   if (scene_ao_ || ao_timer_) AoPresentHook(cl);  // AO hook (game_ao.cpp): a scene the moments above missed
+  current_cl_ = cl;
+  // Upscalers (game_upscale.cpp): a scene that did not reach its upscale point is upscaled now; a frame
+  // drawn at the input size without a scene is carried to the output size.
+  if (upscale_) UpscaleBeginPresent(cl);
   if (frame_log_ && frame_log_->enabled()) LogSwap(d);
   const uint32_t back_buffer = d.u32(dev::kBackBuffer);
   const uint8_t* object = back_buffer ? memory_.Virtual(back_buffer) : nullptr;
   dev::SurfaceInfo s;
   if (!object || !dev::DecodeSurface(object, false, s)) return false;
   const uint32_t pitch = s.pitch ? s.pitch : s.width;
-  HostTarget* source = FindTarget(false, s.edram_base, pitch, s.format);
+  // Upscalers: the output generation's target (made, and given the input twin's picture, when this
+  // frame drew only at the input size).
+  HostTarget* source = upscale_ ? GetTarget(false, s.edram_base, pitch, s.format, s.height)
+                                : FindTarget(false, s.edram_base, pitch, s.format);
   if (!source) {
     ++stats_.presents_missing;
     if (stats_.presents_missing < 10) {

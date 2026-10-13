@@ -1,0 +1,300 @@
+From 3541d16454a7d2c8a5c8565eaa73cea8070298a6 Mon Sep 17 00:00:00 2001
+From: TekRantGaming <craigferels896@gmail.com>
+Date: Mon, 12 Oct 2026 16:01:57 +0100
+Subject: [PATCH] Vulkan: let libraries ask for instance and device extensions
+ and features
+
+Libraries created on the provider's device (the native renderer's temporal
+upscalers: DLSS and XeSS) need Vulkan extensions and features the SDK does
+not enable for itself, such as VK_NVX_binary_import or
+VK_EXT_mutable_descriptor_type. SetVulkanInstanceExtensionRequests names
+instance extensions to enable when supported, and
+SetVulkanDeviceRequestCallback is asked, once the physical device is chosen,
+for device extensions and feature structures; requested features are
+enabled only where the device supports them. Nothing changes when neither
+is set. instance.h and device.h define REX_UI_VULKAN_HAS_INSTANCE_REQUESTS
+and REX_UI_VULKAN_HAS_DEVICE_REQUESTS.
+---
+ include/rex/ui/vulkan/device.h    |  17 ++++
+ include/rex/ui/vulkan/instance.h  |   8 ++
+ src/ui/vulkan/vulkan_device.cpp   | 126 ++++++++++++++++++++++++++++++
+ src/ui/vulkan/vulkan_instance.cpp |  27 +++++++
+ 4 files changed, 178 insertions(+)
+
+diff --git a/include/rex/ui/vulkan/device.h b/include/rex/ui/vulkan/device.h
+index 46b31d5..9ab18cb 100644
+--- a/include/rex/ui/vulkan/device.h
++++ b/include/rex/ui/vulkan/device.h
+@@ -10,8 +10,11 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include <cstdint>
++#include <functional>
+ #include <memory>
+ #include <mutex>
++#include <string>
+ #include <vector>
+ 
+ #include <rex/ui/vulkan/instance.h>
+@@ -28,6 +31,20 @@ namespace vulkan {
+ // when supported, for the same libraries.
+ #define REX_UI_VULKAN_DEVICE_HAS_DESCRIPTOR_INDEXING 1
+ 
++// What libraries created on the device ask for beyond the SDK's own needs (the native renderer's
++// temporal upscalers: DLSS and XeSS need extensions such as VK_NVX_binary_import or
++// VK_EXT_mutable_descriptor_type, and features such as shaderFloat16): device extensions, enabled
++// when supported, and Vulkan feature structures (each a copy of a Vk*Features structure, sType first,
++// pNext ignored; VkPhysicalDeviceFeatures2 for the core ones) whose VK_TRUE members are enabled when
++// supported. The callback is called once the physical device is chosen, before the device is created.
++#define REX_UI_VULKAN_HAS_DEVICE_REQUESTS 1
++struct VulkanDeviceRequests {
++  std::vector<std::string> extensions;
++  std::vector<std::vector<uint8_t>> features;
++};
++using VulkanDeviceRequestCallback = std::function<VulkanDeviceRequests(VkInstance, VkPhysicalDevice)>;
++void SetVulkanDeviceRequestCallback(VulkanDeviceRequestCallback callback);
++
+ class VulkanDevice {
+  public:
+   static std::unique_ptr<VulkanDevice> CreateIfSupported(const VulkanInstance* vulkan_instance,
+diff --git a/include/rex/ui/vulkan/instance.h b/include/rex/ui/vulkan/instance.h
+index 4edde2b..2ac19b4 100644
+--- a/include/rex/ui/vulkan/instance.h
++++ b/include/rex/ui/vulkan/instance.h
+@@ -11,6 +11,7 @@
+  */
+ 
+ #include <memory>
++#include <string>
+ #include <vector>
+ 
+ #include <rex/platform.h>
+@@ -22,6 +23,13 @@ namespace rex {
+ namespace ui {
+ namespace vulkan {
+ 
++// Instance extensions that libraries created on this instance's devices ask for (the native
++// renderer's temporal upscalers: DLSS, XeSS), enabled when the implementation supports them. Set
++// before VulkanInstance::Create; any thread.
++#define REX_UI_VULKAN_HAS_INSTANCE_REQUESTS 1
++void SetVulkanInstanceExtensionRequests(std::vector<std::string> names);
++std::vector<std::string> GetVulkanInstanceExtensionRequests();
++
+ class VulkanInstance {
+  public:
+   static std::unique_ptr<VulkanInstance> Create(bool with_surface, bool try_enable_validation);
+diff --git a/src/ui/vulkan/vulkan_device.cpp b/src/ui/vulkan/vulkan_device.cpp
+index 1255e14..7703faf 100644
+--- a/src/ui/vulkan/vulkan_device.cpp
++++ b/src/ui/vulkan/vulkan_device.cpp
+@@ -10,7 +10,9 @@
+  */
+ 
+ #include <algorithm>
++#include <cstddef>
+ #include <cstring>
++#include <deque>
+ #include <string>
+ #include <unordered_map>
+ #include <vector>
+@@ -59,6 +61,16 @@ struct VulkanFeatures {
+   }
+ };
+ 
++namespace {
++std::mutex g_device_requests_mutex;
++VulkanDeviceRequestCallback g_device_request_callback;
++}  // namespace
++
++void SetVulkanDeviceRequestCallback(VulkanDeviceRequestCallback callback) {
++  std::lock_guard lock(g_device_requests_mutex);
++  g_device_request_callback = std::move(callback);
++}
++
+ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
+     const VulkanInstance* const vulkan_instance, const VkPhysicalDevice physical_device,
+     const bool with_gpu_emulation, const bool with_swapchain) {
+@@ -248,6 +260,29 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
+ #undef XE_UI_VULKAN_STRUCT_PROMOTED_EXTENSION
+ #undef XE_UI_VULKAN_LOCAL_PROMOTED_EXTENSION
+ 
++  // What libraries created on this device ask for beyond the SDK's own needs
++  // (SetVulkanDeviceRequestCallback): their extensions, enabled when supported,
++  // and their features, merged further down.
++  VulkanDeviceRequests extra_requests;
++  {
++    VulkanDeviceRequestCallback callback;
++    {
++      std::lock_guard lock(g_device_requests_mutex);
++      callback = g_device_request_callback;
++    }
++    if (callback) {
++      extra_requests = callback(vulkan_instance->instance(), physical_device);
++    }
++  }
++  std::deque<bool> extra_extensions_enabled;
++  for (const std::string& name : extra_requests.extensions) {
++    if (name.empty() || requested_extensions.count(name)) {
++      continue;
++    }
++    extra_extensions_enabled.push_back(false);
++    requested_extensions.emplace(name, &extra_extensions_enabled.back());
++  }
++
+   std::vector<const char*> enabled_extensions;
+   {
+     uint32_t supported_extension_count = 0;
+@@ -754,6 +789,97 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateIfSupported(
+ #undef XE_UI_VULKAN_ENUM_PROPERTY_2
+ #undef XE_UI_VULKAN_FEATURE_2
+ 
++  // The features libraries asked for (SetVulkanDeviceRequestCallback): each
++  // VK_TRUE member of a requested structure is enabled when the device supports
++  // it. The members of a feature structure are VkBool32s after its sType and
++  // pNext; the core features go into the SDK's own structures, others into the
++  // SDK's structure of that type if it has one, else a structure of their own
++  // added to the chain.
++  std::deque<std::vector<uint8_t>> extra_feature_structures;
++  uint32_t extra_features_enabled = 0;
++  if (!extra_requests.features.empty() && get_physical_device_properties2_supported) {
++    const size_t header = sizeof(VkBaseOutStructure);
++    const auto merge = [&](uint8_t* enabled, const uint8_t* supported, const uint8_t* requested,
++                           size_t count) {
++      for (size_t i = 0; i < count; ++i) {
++        VkBool32 r, s;
++        std::memcpy(&r, requested + i * sizeof(VkBool32), sizeof(VkBool32));
++        std::memcpy(&s, supported + i * sizeof(VkBool32), sizeof(VkBool32));
++        VkBool32 e;
++        std::memcpy(&e, enabled + i * sizeof(VkBool32), sizeof(VkBool32));
++        if (r && s && !e) {
++          e = VK_TRUE;
++          std::memcpy(enabled + i * sizeof(VkBool32), &e, sizeof(VkBool32));
++          ++extra_features_enabled;
++        }
++      }
++    };
++    for (const std::vector<uint8_t>& request : extra_requests.features) {
++      if (request.size() <= header) {
++        continue;
++      }
++      VkStructureType s_type;
++      std::memcpy(&s_type, request.data(), sizeof(s_type));
++      const size_t count = (request.size() - header) / sizeof(VkBool32);
++      if (s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2) {
++        merge(reinterpret_cast<uint8_t*>(&enabled_features),
++              reinterpret_cast<const uint8_t*>(&supported_features), request.data() + header,
++              std::min(count, sizeof(VkPhysicalDeviceFeatures) / sizeof(VkBool32)));
++        continue;
++      }
++      if (s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES) {
++        if (properties.apiVersion >= VK_MAKE_API_VERSION(0, 1, 2, 0)) {
++          merge(reinterpret_cast<uint8_t*>(&features_1_2.enabled) + header,
++                reinterpret_cast<const uint8_t*>(&features_1_2.supported) + header,
++                request.data() + header,
++                std::min(count, (sizeof(VkPhysicalDeviceVulkan12Features) - header) / sizeof(VkBool32)));
++        }
++        continue;
++      }
++      if (s_type == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES) {
++        if (properties.apiVersion >= VK_MAKE_API_VERSION(0, 1, 3, 0)) {
++          merge(reinterpret_cast<uint8_t*>(&features_1_3.enabled) + header,
++                reinterpret_cast<const uint8_t*>(&features_1_3.supported) + header,
++                request.data() + header,
++                std::min(count, (sizeof(VkPhysicalDeviceVulkan13Features) - header) / sizeof(VkBool32)));
++        }
++        continue;
++      }
++      // Another structure: what the device supports of it.
++      // (Room beyond the requester's size: the driver fills the structure it knows.)
++      std::vector<uint8_t> supported(request.size() + 512, 0);
++      std::memcpy(supported.data(), &s_type, sizeof(s_type));
++      VkPhysicalDeviceFeatures2 query = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
++      query.pNext = supported.data();
++      ifn.vkGetPhysicalDeviceFeatures2(physical_device, &query);
++      // The SDK's own structure of that type, if it has one in the chain.
++      uint8_t* existing = nullptr;
++      for (auto* p = static_cast<VkBaseOutStructure*>(const_cast<void*>(device_create_info.pNext)); p;
++           p = p->pNext) {
++        if (p->sType == s_type) {
++          existing = reinterpret_cast<uint8_t*>(p);
++          break;
++        }
++      }
++      if (existing) {
++        merge(existing + header, supported.data() + header, request.data() + header, count);
++        continue;
++      }
++      std::vector<uint8_t>& added = extra_feature_structures.emplace_back(request.size(), 0);
++      std::memcpy(added.data(), &s_type, sizeof(s_type));
++      merge(added.data() + header, supported.data() + header, request.data() + header, count);
++      auto* base = reinterpret_cast<VkBaseOutStructure*>(added.data());
++      base->pNext = static_cast<VkBaseOutStructure*>(const_cast<void*>(device_create_info.pNext));
++      device_create_info.pNext = base;
++    }
++  }
++  if (!extra_requests.extensions.empty() || !extra_requests.features.empty()) {
++    REXLOG_INFO(
++        "Vulkan device: libraries asked for {} extensions and {} feature structures; {} of those "
++        "features enabled",
++        extra_requests.extensions.size(), extra_requests.features.size(), extra_features_enabled);
++  }
++
+   // Create the device.
+ 
+   const VkResult device_create_result =
+diff --git a/src/ui/vulkan/vulkan_instance.cpp b/src/ui/vulkan/vulkan_instance.cpp
+index 914b311..34e71bc 100644
+--- a/src/ui/vulkan/vulkan_instance.cpp
++++ b/src/ui/vulkan/vulkan_instance.cpp
+@@ -9,6 +9,8 @@
+  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
+  */
+ 
++#include <deque>
++#include <mutex>
+ #include <sstream>
+ #include <string>
+ #include <unordered_map>
+@@ -31,6 +33,21 @@ namespace rex {
+ namespace ui {
+ namespace vulkan {
+ 
++namespace {
++std::mutex g_instance_requests_mutex;
++std::vector<std::string> g_instance_requests;
++}  // namespace
++
++void SetVulkanInstanceExtensionRequests(std::vector<std::string> names) {
++  std::lock_guard lock(g_instance_requests_mutex);
++  g_instance_requests = std::move(names);
++}
++
++std::vector<std::string> GetVulkanInstanceExtensionRequests() {
++  std::lock_guard lock(g_instance_requests_mutex);
++  return g_instance_requests;
++}
++
+ std::unique_ptr<VulkanInstance> VulkanInstance::Create(const bool with_surface,
+                                                        const bool try_enable_validation) {
+   std::unique_ptr<VulkanInstance> vulkan_instance(new VulkanInstance());
+@@ -166,6 +183,16 @@ std::unique_ptr<VulkanInstance> VulkanInstance::Create(const bool with_surface,
+                                  &vulkan_instance->extensions_.ext_EXT_metal_surface);
+ #endif
+   }
++  // Extensions libraries created on this instance's devices ask for
++  // (SetVulkanInstanceExtensionRequests): enabled when supported.
++  std::deque<bool> extra_extensions_enabled;
++  for (const std::string& name : GetVulkanInstanceExtensionRequests()) {
++    if (name.empty() || requested_extensions.count(name)) {
++      continue;
++    }
++    extra_extensions_enabled.push_back(false);
++    requested_extensions.emplace(name, &extra_extensions_enabled.back());
++  }
+ 
+   std::vector<const char*> enabled_extensions;
+ 
+-- 
+2.55.0.windows.5
+

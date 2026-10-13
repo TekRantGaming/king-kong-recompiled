@@ -12,6 +12,8 @@
 # --- Downloaded / build output ---
 /tools/rexglue/
 /tools/rexglue-vulkan/
+# The upscalers' SDKs (NVIDIA's and Intel's may not be redistributed as source; docs/upscalers.md)
+/tools/upscaler-sdks/
 /kk/out/
 /screenshots/
 /KingKong/

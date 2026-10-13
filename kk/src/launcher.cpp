@@ -12,6 +12,9 @@
 #include "glyphs.h"
 #include "discord_presence.h"
 #include "online.h"
+#if defined(KK_NATIVE_RENDERER)
+#include "hooks/kk_native_ui.h"  // the temporal upscalers this PC runs
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -224,7 +227,10 @@ constexpr std::pair<int, const char*> kLanguages[] = {
 // Settings that the presenter/window read before the launcher runs; changing
 // them needs a relaunch to take effect.
 // gpu_plugin: the renderer (Graphics > Renderer) is loaded before the launcher opens.
-constexpr const char* kRestartCvars[] = {"present_effect", "window_width", "window_height", "monitor", "gpu_plugin"};
+// native_upscaler: on Vulkan, DLSS and XeSS need the device made with their extensions (the native
+// renderer asks for them when it makes the device, before the launcher opens).
+constexpr const char* kRestartCvars[] = {"present_effect", "window_width", "window_height", "monitor", "gpu_plugin",
+                                         "native_upscaler"};
 
 enum Page { kHome, kDisplay, kGraphics, kGameplay, kControls, kCheatsPage, kAchievements, kAbout, kPageCount };
 constexpr const char* kPageNames[kPageCount] = {"Home",     "Display", "Graphics",     "Gameplay",
@@ -244,6 +250,62 @@ struct Option {
   std::string label;
   std::string value;
 };
+
+// --------------------------------------------------- temporal upscalers ---
+// The native renderer's temporal upscalers (native_upscaler; native-renderer/docs/upscalers.md), on
+// Display > Upscaling beside FSR 1 and NIS: only with the native renderer, and only those this PC's
+// graphics card runs with the graphics API the game uses (asked once, in the background:
+// nr::kk::QueryUpscalers). DLSS is named in text only: no NVIDIA logos or artwork (their use needs
+// NVIDIA's approval). No frame generation. Off by default; the Original look keeps them off.
+struct TemporalUpscaler {
+  const char* label;
+  const char* value;  // native_upscaler
+};
+constexpr TemporalUpscaler kTemporalUpscalers[] = {
+    {"NVIDIA DLSS", "dlss"}, {"AMD FSR 4", "fsr4"}, {"AMD FSR 3.1", "fsr3"}, {"Intel XeSS", "xess"}};
+// Their modes (native_upscaler_quality) and how many times fewer pixels a side each draws.
+struct TemporalMode {
+  const char* label;
+  const char* value;
+  double ratio;
+};
+constexpr TemporalMode kTemporalModes[] = {{"Native AA", "native", 1.0},
+                                           {"Quality", "quality", 1.5},
+                                           {"Balanced", "balanced", 1.7},
+                                           {"Performance", "performance", 2.0},
+                                           {"Ultra Performance", "ultra_performance", 3.0}};
+
+bool UsingNativeRenderer();
+bool HasTemporalSetting() { return FindFlag("native_upscaler") != nullptr; }
+// The temporal upscaler in use ("" for none: off, or not the native renderer).
+std::string CurrentTemporalUpscaler() {
+  if (!HasTemporalSetting() || !UsingNativeRenderer()) return {};
+  const std::string v = Get("native_upscaler");
+  return v == "off" || v.empty() ? std::string() : v;
+}
+void SetTemporalUpscaler(const char* value) {
+  if (HasTemporalSetting()) Set("native_upscaler", value);
+}
+// Which of them this PC runs (none until the answer is in).
+struct OfferedUpscalers {
+  bool known = false, fsr3 = false, fsr4 = false, dlss = false, xess = false;
+  bool Has(std::string_view v) const {
+    return (v == "fsr3" && fsr3) || (v == "fsr4" && fsr4) || (v == "dlss" && dlss) || (v == "xess" && xess);
+  }
+};
+OfferedUpscalers OfferedTemporalUpscalers() {
+  OfferedUpscalers o;
+#if defined(KK_NATIVE_RENDERER)
+  if (!HasTemporalSetting() || !UsingNativeRenderer()) return o;
+  const nr::kk::UpscalerChoices c = nr::kk::QueryUpscalers();
+  o.known = c.state == 2;
+  o.fsr3 = c.fsr3;
+  o.fsr4 = c.fsr4;
+  o.dlss = c.dlss;
+  o.xess = c.xess;
+#endif
+  return o;
+}
 
 // ------------------------------------------------------------ presets ---
 // Graphics presets set the upscaler, render quality, anti-aliasing, texture
@@ -285,7 +347,8 @@ int MatchGraphicsPreset() {
   for (int i = 0; i < kGraphicsPresetCount; ++i) {
     const GraphicsPreset& p = kGraphicsPresets[i];
     const bool ao = GetInt("ao_mode", 0) != 0;
-    if (Get("present_effect") == PresetUpscaler(p) && Get("kk_render_quality") == p.quality &&
+    if (Get("present_effect") == PresetUpscaler(p) && CurrentTemporalUpscaler().empty() &&
+        Get("kk_render_quality") == p.quality &&
         Get("swap_post_effect") == p.aa && Get("anisotropic_override") == p.filtering && ao == p.ao &&
         (!ao || GetInt("ao_strength", 1) == 1))
       return i;
@@ -296,6 +359,7 @@ int MatchGraphicsPreset() {
 void ApplyGraphicsPreset(int index) {
   const GraphicsPreset& p = kGraphicsPresets[index];
   Set("present_effect", PresetUpscaler(p));
+  SetTemporalUpscaler("off");  // the presets use FSR 1 or NIS
   Set("kk_render_quality", p.quality);
   Set("swap_post_effect", p.aa);
   Set("anisotropic_override", p.filtering);
@@ -534,6 +598,8 @@ class Launcher final : public rex::ui::ImGuiDialog {
     files_ok_ = GameFilesPresent(paths_.game_dir);
     home_focus_ = 0;
     EnforceOriginalLook();
+    // Which temporal upscalers this PC runs (Display > Upscaling): asked now, in the background.
+    OfferedTemporalUpscalers();
     LoadArt();
     // Installed before the launcher took its art from the game files: take it now.
     if (files_ok_ && !art::HasLauncherArt(ArtDir())) StartArtExtraction(false);
@@ -2191,28 +2257,113 @@ class Launcher final : public rex::ui::ImGuiDialog {
     const bool original = GetBool("kk_original_look");
     const char* draws = GetBool("fullscreen") ? "Draws {0} for your {1} screen." : "Draws {0} for your {1} window.";
     items.push_back(Section("Upscaling"));
+    const std::string temporal = CurrentTemporalUpscaler();
     {
-      // NIS is in the D3D12 presenter only (the Vulkan one, used on Linux, would give FSR).
-      std::vector<Option> opts = {{"Off", "bilinear"}, {"AMD FSR 1", "fsr"}};
-#if defined(_WIN32)
-      opts.push_back({"NVIDIA NIS", "nis"});
-      const char* which = "AMD FSR 1 and NVIDIA Image Scaling (NIS) both work";
-#else
-      const char* which = "AMD FSR 1 works";
-#endif
-      Item it = CvarChoice("Upscaler",
-                           std::string("Scales the picture up to your screen and sharpens it, for a clearer image "
-                                       "when the game draws fewer pixels than your screen has. ") +
-                               which + " on any graphics card. Off uses plain smooth scaling.",
-                           "present_effect", opts);
-      std::vector<std::string> values;
-      for (const auto& o : opts) values.push_back(o.value);
-      it.on_choice = [values](int i) {
-        Set("present_effect", values[size_t(i)]);
-        // The upscaler modes are Native to Performance; others start at Native.
-        if (i != 0 && UpscalerMode() < 0) Set("kk_render_quality", "native");
+      // Each choice: its name, present_effect (the spatial upscalers, in the presenter) and
+      // native_upscaler (the temporal ones, in the native renderer; docs/upscalers.md).
+      struct Choice {
+        std::string label, present, temporal;
       };
+      // NIS is in the D3D12 presenter only (the Vulkan one, used on Linux, would give FSR).
+      std::vector<Choice> choices = {{"Off", "bilinear", "off"}, {"AMD FSR 1", "fsr", "off"}};
+#if defined(_WIN32)
+      choices.push_back({"NVIDIA NIS", "nis", "off"});
+      const char* which = "AMD FSR 1 and NVIDIA Image Scaling (NIS) work on any graphics card.";
+#else
+      const char* which = "AMD FSR 1 works on any graphics card.";
+#endif
+      const OfferedUpscalers offered = OfferedTemporalUpscalers();
+      bool any_temporal = false;
+      for (const TemporalUpscaler& t : kTemporalUpscalers) {
+        if (offered.Has(t.value)) {
+          choices.push_back({t.label, "bilinear", t.value});
+          any_temporal = true;
+        } else if (temporal == t.value) {  // chosen before, not offered here (it falls back to FSR 3.1)
+          choices.push_back({F("{0} (not on this PC)", {T(std::string(t.label))}), "bilinear", t.value});
+        }
+      }
+      if (!temporal.empty()) {
+        bool listed = false;
+        for (const Choice& c : choices) listed = listed || c.temporal == temporal;
+        if (!listed) choices.push_back({F("{0} (settings file)", {temporal}), "bilinear", temporal});
+      }
+      Item it;
+      it.type = ItemType::kChoice;
+      it.label = "Upscaler";
+      std::string desc =
+          std::string("Scales the picture up to your screen and sharpens it, for a clearer image when the game draws "
+                      "fewer pixels than your screen has. ") +
+          which + " Off uses plain smooth scaling.";
+      if (any_temporal || !temporal.empty())
+        desc += " DLSS, FSR 4, FSR 3.1 and XeSS rebuild a sharp picture from several frames and smooth jagged edges "
+                "too; only those your graphics card supports are listed. Choosing one of them restarts the game "
+                "when you press Play.";
+      it.description = desc;
+      it.index = -1;
+      const std::string present = Get("present_effect");
+      for (size_t i = 0; i < choices.size(); ++i) {
+        it.options.push_back(choices[i].label);
+        const bool match = temporal.empty() ? choices[i].temporal == "off" && choices[i].present == present
+                                            : choices[i].temporal == temporal;
+        if (match && it.index < 0) it.index = int(i);
+      }
+      if (it.index < 0) it.value_text = present;
+      if (UsingNativeRenderer() && !offered.known && HasTemporalSetting())
+        it.facts.push_back("Checking which other upscalers your graphics card runs...");
+      it.on_choice = [choices](int i) {
+        const Choice& c = choices[size_t(i)];
+        Set("present_effect", c.present);
+        SetTemporalUpscaler(c.temporal.c_str());
+        if (c.temporal != "off") {
+          // The temporal upscalers take the picture at your screen's size (Native) and draw fewer
+          // pixels themselves (their mode).
+          Set("kk_render_quality", "native");
+        } else if (i != 0 && UpscalerMode() < 0) {
+          // The upscaler modes are Native to Performance; others start at Native.
+          Set("kk_render_quality", "native");
+        }
+      };
+      it.on_default = [] {
+        Reset("present_effect");
+        if (HasTemporalSetting()) Reset("native_upscaler");
+      };
+      if (const auto* flag = FindFlag("present_effect"))
+        for (const Choice& c : choices)
+          if (c.temporal == "off" && c.present == flag->default_value) it.default_text = c.label;
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
+    if (!temporal.empty()) {
+      // The temporal upscaler's mode: it draws the game at the output size divided by the mode's ratio
+      // and rebuilds the output size (the screen's, in 720p steps: Render quality Native).
+      Item it;
+      it.type = ItemType::kChoice;
+      it.label = "Upscaler mode";
+      it.description =
+          "How many pixels the game draws before the upscaler rebuilds the picture at your screen's size. Native AA "
+          "draws every pixel and only smooths the edges (DLAA with DLSS); Quality, Balanced, Performance and Ultra "
+          "Performance draw fewer for more speed.";
+      const std::string cur = Get("native_upscaler_quality");
+      it.index = -1;
+      const int scale = RenderScaleFor("native", out_h);
+      const int ow = 1280 * scale, oh = 720 * scale;
+      for (size_t m = 0; m < std::size(kTemporalModes); ++m) {
+        it.options.push_back(kTemporalModes[m].label);
+        if (cur == kTemporalModes[m].value) {
+          it.index = int(m);
+          const double r = kTemporalModes[m].ratio;
+          it.facts.push_back(F(draws, {Size(int(std::lround(ow / r)), int(std::lround(oh / r))), Size(out_w, out_h)}));
+          if (ow != out_w || oh != out_h)
+            it.facts.push_back(F("The upscaler's picture is {0}, scaled to fit.", {Size(ow, oh)}));
+        }
+      }
+      if (it.index < 0) it.value_text = cur;
+      it.on_choice = [](int i) { Set("native_upscaler_quality", kTemporalModes[i].value); };
+      it.on_default = [] { Reset("native_upscaler_quality"); };
+      if (const auto* flag = FindFlag("native_upscaler_quality"))
+        for (const TemporalMode& m : kTemporalModes)
+          if (flag->default_value == m.value) it.default_text = m.label;
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+      return;  // the render quality is Native with these (no Internal resolution either)
     }
     if (Get("present_effect") != "bilinear") {
       Item it;
@@ -3791,8 +3942,12 @@ class Launcher final : public rex::ui::ImGuiDialog {
     played_ = true;
     SaveSettings(paths_.config_path);
     bool needs_restart = false;
-    for (size_t i = 0; i < std::size(kRestartCvars); ++i)
-      if (Get(kRestartCvars[i]) != restart_baseline_[i]) needs_restart = true;
+    for (size_t i = 0; i < std::size(kRestartCvars); ++i) {
+      if (Get(kRestartCvars[i]) == restart_baseline_[i]) continue;
+      // A temporal upscaler switched off needs no new device (only one switched on needs its extensions).
+      if (std::string_view(kRestartCvars[i]) == "native_upscaler" && Get("native_upscaler") == "off") continue;
+      needs_restart = true;
+    }
     auto action = needs_restart ? cb_.restart_and_play : cb_.play;
     input_.Release();  // the game opens the controllers itself
     Close();  // deletes this dialog after the current draw

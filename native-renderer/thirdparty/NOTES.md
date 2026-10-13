@@ -8,6 +8,8 @@ Vendored copies (exported with `git archive`, no `.git` data), each with its own
 | `DirectX-Headers/` | https://github.com/microsoft/DirectX-Headers | v1.717.0-preview, d873b344dc540898868697245f100c2a67fe68d9 (2025-05-28): only `include/directx/*.h`, `include/dxguids`, `include/wsl`, `src/dxguids.cpp` | MIT (`DirectX-Headers/LICENSE`) |
 | `XenosRecomp/` | https://github.com/hedge-dev/XenosRecomp | 990d03b28a27b50277ee5d8d942e1c5f873869d1 (2025-08-03) | MIT (`XenosRecomp/LICENSE.md`) |
 | `XeGTAO/` | https://github.com/GameTechDev/XeGTAO | a5b1686c7ea37788eeb3576b5be47f7c03db532c (2024-04-22), XeGTAO 1.30: only `LICENSE` and `Source/Rendering/Shaders/XeGTAO.h`, `XeGTAO.hlsli`, `vaGTAO.hlsl` (the sample's entry points, kept for reference, not compiled) | MIT (`XeGTAO/LICENSE`) |
+| `FidelityFX-API/` | https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK | v1.1.4 (2025-05-08), FSR 3.1.4: only the FidelityFX API headers `ffx-api/include/ffx_api/` (`ffx_api.h`, `ffx_api_types.h`, `ffx_upscale.h`, `ffx_api_loader.h`, `vk/ffx_api_vk.h`, `dx12/ffx_api_dx12.h`) and `sdk/LICENSE.txt`. The AMD-signed DLLs are not in git: the build copies them beside the game from the SDK (`cmake/upscalers.cmake`, docs/upscalers.md) | MIT (`FidelityFX-API/LICENSE.txt`) |
+| `FSR-SDK-API/` | https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK | AMD FSR SDK v2.3.0 (60f4ea8), FSR 4.1.1: only the API headers `Kits/FidelityFX/api/include/` (`ffx_api.h`, `ffx_api_types.h`, `ffx_api_loader.h`, `dx12/ffx_api_dx12.h`) and `Kits/FidelityFX/upscalers/include/ffx_upscale.h` in the same layout, and `docs/license.md` (as `LICENSE.md`). Used by `backend/upscaler_fsr4.cpp` alone (they differ from the 1.1.4 headers). The AMD-signed DLLs (`amd_fidelityfx_loader_dx12.dll`, `amd_fidelityfx_upscaler_dx12.dll`) are not in git: the build copies them beside the game | MIT for these files (`FSR-SDK-API/LICENSE.md` lists them) |
 
 Not vendored:
 
@@ -81,3 +83,13 @@ Changes we make to vendored code are kept as small as possible and listed here:
   the edges image is a plain `float` image (R32_FLOAT) on both APIs. R32 formats are the ones every Vulkan device
   can store to without `shaderStorageImageExtendedFormats`. The C++ side uses only `XeGTAO.h`'s `GTAOConstants`
   struct for the constant buffer layout.
+
+## SDKs used but not vendored
+
+The temporal upscalers' SDKs whose licences do not allow their files in this repository (docs/upscalers.md):
+the build finds them under `tools/upscaler-sdks/` (git-ignored) and copies their runtime files beside the game.
+
+| SDK | Upstream | Version | What the build uses | Licence |
+|---|---|---|---|---|
+| NVIDIA DLSS SDK | https://github.com/NVIDIA/DLSS | v310.9.1 (`tools/upscaler-sdks/dlss`) | `include/` (NGX headers), `lib/Windows_x86_64/x64/nvsdk_ngx_d.lib` (the NGX loader, linked into rexgpu-native.dll), `lib/Windows_x86_64/rel/nvngx_dlss.dll` (beside the game) | NVIDIA RTX SDKs License (the SDK's `LICENSE.txt`): object code only, attribution with the NVIDIA marks in the credits and about box, NVIDIA to be notified before a commercial release |
+| Intel XeSS SDK | https://github.com/intel/xess | v3.0.2 (`tools/upscaler-sdks/xess`; XeSS Super Resolution 2.0.2) | `inc/xess/` (headers, for the types only: the functions are looked up in the DLL), `bin/libxess.dll` (beside the game, loaded at run time) | Intel Simplified Software License (the SDK's `LICENSE.txt`): binary redistribution without modification, with the notice and terms reproduced (kk/THIRD-PARTY-NOTICES.txt, with the SDK's third-party-programs.txt) |

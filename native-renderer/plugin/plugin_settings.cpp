@@ -55,6 +55,16 @@ REXCVAR_DECLARE(double, native_ao_power);
 REXCVAR_DECLARE(double, native_ao_fade);
 REXCVAR_DECLARE(int32_t, native_ao_dump_every);
 REXCVAR_DECLARE(bool, native_ao_gpu_time);
+REXCVAR_DECLARE(std::string, native_upscaler);
+REXCVAR_DECLARE(std::string, native_upscaler_quality);
+REXCVAR_DECLARE(std::string, native_upscaler_point);
+REXCVAR_DECLARE(std::string, native_upscaler_dlss_preset);
+REXCVAR_DECLARE(double, native_upscaler_sharpness);
+REXCVAR_DECLARE(std::string, native_upscaler_mip_bias);
+REXCVAR_DECLARE(double, native_upscaler_reactive);
+REXCVAR_DECLARE(int32_t, native_upscaler_debug);
+REXCVAR_DECLARE(bool, native_upscaler_gpu_time);
+REXCVAR_DECLARE(std::string, native_upscaler_rules);
 
 namespace nr {
 
@@ -133,7 +143,45 @@ void ReadAoConfig(AoConfig& ao) {
                 AoApplyName(ao.apply));
 }
 
+// --native_upscaler* (docs/upscalers.md): a value it cannot read is logged and its default kept.
+void ReadUpscaleConfig(UpscaleConfig& u) {
+  if (!ParseUpscalerKind(REXCVAR_GET(native_upscaler), u.kind))
+    REXGPU_WARN("rexgpu-native: native_upscaler '{}' is not off, auto, fsr3, fsr4, dlss or xess", REXCVAR_GET(native_upscaler));
+  if (!ParseUpscaleQuality(REXCVAR_GET(native_upscaler_quality), u.quality))
+    REXGPU_WARN("rexgpu-native: native_upscaler_quality '{}' is not native, quality, balanced, performance or "
+                "ultra_performance", REXCVAR_GET(native_upscaler_quality));
+  const std::string point = REXCVAR_GET(native_upscaler_point);
+  if (point == "present") u.point = UpscalePoint::kPresent;
+  else if (point != "post") REXGPU_WARN("rexgpu-native: native_upscaler_point '{}' is not post or present", point);
+  if (!ParseDlssPreset(REXCVAR_GET(native_upscaler_dlss_preset), u.dlss_preset))
+    REXGPU_WARN("rexgpu-native: native_upscaler_dlss_preset '{}' is not default or a letter",
+                REXCVAR_GET(native_upscaler_dlss_preset));
+  u.sharpness = float(std::min(1.0, REXCVAR_GET(native_upscaler_sharpness)));
+  const std::string bias = REXCVAR_GET(native_upscaler_mip_bias);
+  if (!bias.empty() && bias != "auto") {
+    char* end = nullptr;
+    const double v = std::strtod(bias.c_str(), &end);
+    if (end && *end == 0) {
+      u.mip_bias_auto = false;
+      u.mip_bias = float(std::clamp(v, -4.0, 4.0));
+    } else {
+      REXGPU_WARN("rexgpu-native: native_upscaler_mip_bias '{}' is not auto or a number", bias);
+    }
+  }
+  u.reactive = float(std::clamp(REXCVAR_GET(native_upscaler_reactive), 0.0, 1.0));
+  u.debug = uint32_t(REXCVAR_GET(native_upscaler_debug));
+  u.gpu_time = REXCVAR_GET(native_upscaler_gpu_time);
+  u.rules_file = REXCVAR_GET(native_upscaler_rules);
+}
+
 }  // namespace
+
+UpscaleConfig ReadUpscalerChoice() {
+  UpscaleConfig u;
+  ParseUpscalerKind(REXCVAR_GET(native_upscaler), u.kind);
+  ParseUpscaleQuality(REXCVAR_GET(native_upscaler_quality), u.quality);
+  return u;
+}
 
 GameSettings ReadGameSettings(bool vulkan) {
   GameSettings game;
@@ -181,6 +229,7 @@ GameSettings ReadGameSettings(bool vulkan) {
     return s;
   };
   ReadAoConfig(game.ao);
+  ReadUpscaleConfig(game.upscale);
   return game;
 }
 

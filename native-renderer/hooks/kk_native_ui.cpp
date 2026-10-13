@@ -16,6 +16,7 @@
 
 #include "plugin/native_prewarm.h"
 #include "plugin/native_stutter.h"
+#include "plugin/native_upscaler_query.h"
 
 namespace nr::kk {
 
@@ -60,6 +61,25 @@ void StartLauncherPrewarm(const std::filesystem::path& cache_root) {
 void StopLauncherPrewarm() {
   using Stop = void (*)();
   if (auto stop = reinterpret_cast<Stop>(FindExport("nr_prewarm_stop"))) stop();
+  // The upscaler question's device and SDKs go before this process does too.
+  if (auto wait = reinterpret_cast<Stop>(FindExport("nr_upscaler_query_wait"))) wait();
+}
+
+UpscalerChoices QueryUpscalers() {
+  using Query = uint32_t (*)(NrUpscalerSupport*);
+  static const Query query = reinterpret_cast<Query>(FindExport("nr_upscaler_query"));
+  UpscalerChoices c;
+  if (!query) return c;
+  NrUpscalerSupport s = {};
+  s.size = sizeof(s);
+  c.state = int(query(&s));
+  if (c.state == NR_UPSCALER_QUERY_DONE) {
+    c.fsr3 = s.fsr3 != 0;
+    c.fsr4 = s.fsr4 != 0;
+    c.dlss = s.dlss != 0;
+    c.xess = s.xess != 0;
+  }
+  return c;
 }
 
 std::string StutterLine() {
