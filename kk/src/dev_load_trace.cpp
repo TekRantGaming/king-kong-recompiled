@@ -39,7 +39,7 @@ void Log(const char* what, const char* when, PPCContext& ctx, uint8_t* base) {
     if (Tracing()) Log(name, "out", ctx, base);     \
   }
 
-KK_LOAD_HOOK(8253DB80, "load (8253DB80)")
+// sub_8253DB80 (uni_go, the level load) is hooked in dev_chapter_jump.cpp (KK_DEV_JUMP_TRACE).
 KK_LOAD_HOOK(8278E660, "start loading screen")
 KK_LOAD_HOOK(8278D368, "stop loading screen")
 KK_LOAD_HOOK(8278D270, "request release")

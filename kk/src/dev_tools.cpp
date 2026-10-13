@@ -627,6 +627,13 @@ const bool g_installed = [] {
 
 }  // namespace
 
+// A chapter jump (dev_chapter_jump.cpp, KK_DEV_JUMP) never opens the save menu: it starts the clock
+// KK_DEV_SCRIPT and KK_DEV_SHOTS_FROM=menu use when the chapter's level has loaded instead.
+void DevStartScriptClock() {
+  int64_t unset = -1;
+  if (g_menu_ms.compare_exchange_strong(unset, ScriptNowMs())) REXLOG_INFO("KK dev: script clock started (chapter jump)");
+}
+
 // Seconds since the save menu opened (the clock KK_DEV_SCRIPT and KK_DEV_SHOTS_FROM=menu use), or -1
 // before it has. For other dev aids (dev_frame_log.cpp, dev_sample.cpp).
 double DevSecondsSinceMenu() {
