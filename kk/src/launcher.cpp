@@ -26,6 +26,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <map>
 #include <memory>
 #include <set>
@@ -68,6 +69,10 @@
 #include "settings.h"
 #include "iso.h"
 #include "toast.h"
+
+REXCVAR_DEFINE_STRING(kk_launcher_open, "", "KK",
+                      "Internal: the screen the launcher opens on, set by the game when it goes back to the "
+                      "launcher: play (the Play menu) or chapters (Chapter select). Never saved.");
 
 namespace kk {
 namespace {
@@ -241,6 +246,8 @@ constexpr const char* kPageNames[kPageCount] = {"Home",     "Display", "Graphics
                                                 "Controls", "Cheats",  "Achievements", "About"};
 // Sub-pages of Controls.
 enum SubPage { kNoSubPage, kRemapPage, kKeysPage };
+// Play on Home: the Play menu and its pages (docs/menus.md).
+enum class PlayView { kNone, kMenu, kLoad, kNew, kChapters };
 
 struct Achievement {
   uint32_t id = 0;
@@ -1729,6 +1736,14 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       Set("kk_last_version", KK_VERSION);
       SaveSettings(paths_.config_path);
     }
+    // Back from the game (Quit game, the end of a chapter-select run): straight to the Play menu
+    // or Chapter select.
+    const std::string open_on = Get("kk_launcher_open");
+    rex::cvar::ResetToDefault("kk_launcher_open");  // never saved
+    if (files_ok_ && (open_on == "play" || open_on == "chapters")) {
+      OpenPlayMenu();
+      if (open_on == "chapters") OpenPlayView(PlayView::kChapters);
+    }
     saved_changes_ = seen_changes_ = g_changes;
   }
 
@@ -1786,7 +1801,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     m_.tall_h = 74 * s;
     m_.section_h = 52 * s;
 
-    input_.set_keyboard_enabled(capturing_.empty());  // keys go to the binding being set
+    input_.set_keyboard_enabled(capturing_.empty() && !editing_name_);  // keys go to the binding or the name
     input_.Update();
     if (pending_click_ != Action::kCount) {
       input_.Inject(pending_click_, ui::Device::kKeyboard);
@@ -1812,9 +1827,15 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       DrawSetup(dl);
     } else {
       if (!modal_.open) HandleGlobalInput();
-      DrawTopBar(dl);
-      if (page_ == kHome) DrawHome(dl);
-      else DrawSettings(dl);
+      if (play_ != PlayView::kNone) {
+        DrawPlayHeader(dl);
+        if (play_ == PlayView::kMenu) DrawPlayMenu(dl);
+        else DrawPlayPage(dl);
+      } else {
+        DrawTopBar(dl);
+        if (page_ == kHome) DrawHome(dl);
+        else DrawSettings(dl);
+      }
     }
     ui::DrawModal(dl, modal_, o_, ImVec2(o_.x + w_, o_.y + h_), m_, input_);
     DrawBottomBar(dl);  // over a pop-up's shade: its prompts stay clear
@@ -1985,7 +2006,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   void DrawBackdrop(ImDrawList* dl) {
     const float s = S();
-    const bool home = page_ == kHome && !InSetup();
+    const bool home = page_ == kHome && !InSetup() && (play_ == PlayView::kNone || play_ == PlayView::kMenu);
     home_mix_ = ui::Approach(home_mix_ * 100.0f, home ? 100.0f : 0.0f, 9.0f) / 100.0f;
     slide_clock_ += std::min(ImGui::GetIO().DeltaTime, 0.1f);
     const ImVec2 p1(o_.x + w_, o_.y + h_);
@@ -2100,6 +2121,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
     if (page != page_) sub_ = kNoSubPage;
     side_focus_ = -1;
+    play_ = PlayView::kNone;
     page_ = page;
   }
 
@@ -2144,6 +2166,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         default: return {};
       }
     }
+    if (play_ != PlayView::kNone) return PlayPrompts();
     if (page_ == kHome) {
       if (status_focus_) return {{Action::kAccept, "Recompile shaders"}, {Action::kBack, "Back"}};
       if (side_focus_ < 0 && menu_value_) p.push_back({Action::kLeft, "Change"});
@@ -2175,6 +2198,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // ------------------------------------------------------- global input ---
   void HandleGlobalInput() {
     ui::Input& in = input_;
+    if (play_ != PlayView::kNone) return HandlePlayInput();
     if (in.Pressed(Action::kPrevTab) || in.Pressed(Action::kNextTab)) {
       const int dir = in.Pressed(Action::kNextTab) ? 1 : -1;
       ui::Cue(ui::Sound::kTab);
@@ -2182,9 +2206,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       in.Consume(Action::kPrevTab);
       in.Consume(Action::kNextTab);
     }
-    if (in.Pressed(Action::kPlay)) {
+    if (in.Pressed(Action::kPlay)) {  // Start (P): the Play menu, from any page
       in.Consume(Action::kPlay);
-      if (CanPlay()) Play();
+      if (CanPlay()) OpenPlayMenu();
     }
     if (in.Pressed(Action::kResetPage) && page_ != kHome && sub_ == kNoSubPage && !PageSettings(page_).empty()) {
       in.Consume(Action::kResetPage);
@@ -2207,11 +2231,12 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     std::function<void()> action;
     std::string value;                // shown after the label (left/right change it)
     std::function<void(int)> change;  // -1 / +1
+    bool starts_game = false;         // starts the game at once (no select sound: it would be cut off)
   };
 
   std::vector<HomeEntry> HomeEntries() {
     std::vector<HomeEntry> e;
-    e.push_back({"Play", CanPlay(), [this] { Play(); }});
+    e.push_back({"Play", CanPlay(), [this] { OpenPlayMenu(); }});
     if (installing_) e.push_back({"Cancel install", true, [this] { progress_.cancel = true; }});
     else e.push_back({files_ok_ ? "Reinstall game" : "Install game", true, [this] { StartInstall(); }});
     if (update_ && update_->found && !installing_update_)
@@ -2315,7 +2340,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       chosen = -1;
     }
     // Play starts the game at once, and its sound would be cut off.
-    if (chosen >= 0 && entries[size_t(chosen)].label != "Play") ui::Cue(ui::Sound::kSelect);
+    if (chosen >= 0 && !entries[size_t(chosen)].starts_game) ui::Cue(ui::Sound::kSelect);
     return chosen;
   }
 
@@ -2514,15 +2539,536 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
   }
 
-  void DrawHome(ImDrawList* dl) {
+  // ------------------------------------------------------------------- Play ---
+  // Play on Home opens the Play menu (docs/menus.md): Continue (the save played last), New game,
+  // Load game and Chapter select. Every choice tells the game what to start with
+  // (play::SetStartRequest, play_session.h) and starts it as Play always did; the game then shows
+  // none of its own menus.
+  static constexpr size_t kNameMax = 15;  // a save's name (the game's own are short: "A")
+
+  void OpenPlayMenu() {
+    if (!CanPlay()) {
+      ui::Cue(ui::Sound::kDeny);
+      return;
+    }
+    GoTo(kHome);
+    status_focus_ = false;
+    ReadSaves();
+    play_ = PlayView::kMenu;
+    play_focus_ = 0;
+  }
+
+  void OpenPlayView(PlayView view) {
+    ReadSaves();
+    play_ = view;
+    ui::ListState& st = play_lists_[int(view)];
+    st = {};
+    // New game: the focus on the first slot (the empty ones are listed first).
+    if (view == PlayView::kNew) st.focus = 3;
+  }
+
+  void ReadSaves() {
+    saves_ = play::ListSaves(paths_.user_dir);
+    saves_.resize(play::kSlotCount);
+    for (int i = 0; i < play::kSlotCount; ++i) saves_[size_t(i)].index = i;
+    if (!SlotUsed(chapter_slot_)) chapter_slot_ = -1;
+  }
+  bool SlotUsed(int i) const { return i >= 0 && i < int(saves_.size()) && saves_[size_t(i)].exists; }
+  int UsedSlots() const {
+    int n = 0;
+    for (const auto& sv : saves_) n += sv.exists ? 1 : 0;
+    return n;
+  }
+  int FirstEmptySlot() const {
+    for (int i = 0; i < play::kSlotCount; ++i)
+      if (!SlotUsed(i)) return i;
+    return -1;
+  }
+  // Chapter select's save: the one picked on Load game, else the one played last (-1: none yet).
+  int ChapterSlot() const { return chapter_slot_ >= 0 ? chapter_slot_ : play::MostRecentSave(saves_); }
+
+  void PlayWith(const play::StartRequest& request) {
+    if (!CanPlay()) {
+      ui::Cue(ui::Sound::kDeny);
+      return;
+    }
+    play::SetStartRequest(request);
+    REXLOG_INFO("KK: Play menu: start kind {} slot {} chapter {}", int(request.kind), request.slot, request.chapter);
+    Play();
+  }
+
+  void StartChapter(int entry) {
+    int slot = ChapterSlot();
+    if (slot < 0) slot = std::max(0, FirstEmptySlot());  // no save yet: the game makes one here first
+    PlayWith({play::StartKind::kChapter, slot, entry, ""});
+  }
+
+  static std::string ChapterName(int entry) {
+    for (const play::ChapterInfo& c : play::Chapters())
+      if (c.entry == entry && !c.name.empty()) return c.name;
+    return entry >= 0 ? F("Chapter {0}", {std::to_string(entry + 1)}) : std::string();
+  }
+  static std::string SaveName(const play::SaveSlot& sv) {
+    return sv.name.empty() ? F("Slot {0}", {std::to_string(sv.index + 1)}) : sv.name;
+  }
+  static int ContinueChapter(const play::SaveSlot& sv) {
+    return sv.continue_chapter >= 0 ? sv.continue_chapter : sv.chapter_reached;
+  }
+  static int64_t TotalScore(const play::SaveSlot& sv) {
+    int64_t total = 0;
+    for (const int v : sv.best_scores) total += std::max(0, v);
+    return total;
+  }
+  static int BestScore(const play::SaveSlot* sv, int entry) {
+    return sv && entry >= 0 && entry < int(sv->best_scores.size()) ? std::max(0, sv->best_scores[size_t(entry)]) : 0;
+  }
+  // "13 Oct 2026", or "Today, 14:02" and "Yesterday, 09:10" when `recent`.
+  static std::string When(int64_t unix_time, bool recent = true) {
+    if (unix_time <= 0) return T("Unknown");
+    static const char* const kMonths[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                          "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+    auto local = [](int64_t t) {
+      std::tm tm{};
+      const std::time_t tt = std::time_t(t);
+#if defined(_WIN32)
+      localtime_s(&tm, &tt);
+#else
+      localtime_r(&tt, &tm);
+#endif
+      return tm;
+    };
+    const std::tm tm = local(unix_time);
+    const std::tm now = local(int64_t(std::time(nullptr)));
+    char clock[16];
+    std::snprintf(clock, sizeof(clock), "%02d:%02d", tm.tm_hour, tm.tm_min);
+    const int days_ago = (now.tm_year - tm.tm_year) * 366 + (now.tm_yday - tm.tm_yday);
+    if (recent && days_ago == 0) return F("Today, {0}", {clock});
+    if (recent && days_ago == 1) return F("Yesterday, {0}", {clock});
+    return std::to_string(tm.tm_mday) + " " + T(kMonths[std::clamp(tm.tm_mon, 0, 11)]) + " " +
+           std::to_string(tm.tm_year + 1900);
+  }
+
+  // The Play menu: Home's look (the clear stills, the logo, the large entries), with what the
+  // focused entry does in the status row.
+  std::vector<HomeEntry> PlayEntries() {
+    std::vector<HomeEntry> e;
+    const int recent = play::MostRecentSave(saves_);
+    if (recent >= 0)
+      e.push_back({"Continue", CanPlay(),
+                   [this, recent] { PlayWith({play::StartKind::kContinue, recent, -1, ""}); }, "", nullptr, true});
+    e.push_back({"New game", CanPlay(), [this] { OpenPlayView(PlayView::kNew); }});
+    e.push_back({"Load game", UsedSlots() > 0, [this] { OpenPlayView(PlayView::kLoad); }});
+    e.push_back({"Chapter select", CanPlay(), [this] { OpenPlayView(PlayView::kChapters); }});
+    e.push_back({"Back", true, [this] { play_ = PlayView::kNone; }});
+    return e;
+  }
+
+  void DrawPlayMenu(ImDrawList* dl) {
+    const float s = S();
+    const float x = o_.x + Margin(), a = home_mix_;
+    std::vector<HomeEntry> entries = PlayEntries();
+    const float y = DrawLogo(dl, x, entries.size(), a);
+    const float room = o_.y + h_ - 150 * s - y;
+    const float item_h = std::clamp(room / float(std::max<size_t>(entries.size(), 1)), 28 * s, 42 * s);
+    if (const int i = DrawMenu(dl, entries, play_focus_, x, y, a, item_h); i >= 0) {
+      entries[size_t(i)].action();
+      if (play_ != PlayView::kMenu) return;
+    }
+    // What the focused entry does, in the status row's columns.
+    std::vector<std::pair<std::string, std::string>> cols;
+    const std::string label = entries[size_t(std::clamp(play_focus_, 0, int(entries.size()) - 1))].label;
+    const int recent = play::MostRecentSave(saves_);
+    if (label == "Continue" && recent >= 0) {
+      const play::SaveSlot& sv = saves_[size_t(recent)];
+      cols = {{"Save", SaveName(sv)}, {"Chapter", T(ChapterName(ContinueChapter(sv)))}, {"Last saved", When(sv.last_saved)}};
+    } else if (label == "New game") {
+      cols = {{"New game", T("The story from the beginning.")},
+              {"Free slots", F("{0} of {1}", {std::to_string(play::kSlotCount - UsedSlots()),
+                                               std::to_string(play::kSlotCount)})}};
+    } else if (label == "Load game") {
+      cols = {{"Saves", UsedSlots() ? F("{0} of {1} slots used", {std::to_string(UsedSlots()),
+                                                                  std::to_string(play::kSlotCount)})
+                                    : T("No saves yet.")}};
+    } else if (label == "Chapter select") {
+      const int slot = ChapterSlot();
+      cols = {{"Chapters", F("All {0} open", {std::to_string(play::kChapterCount)})},
+              {"Save", slot >= 0 ? SaveName(saves_[size_t(slot)]) : T("A new one is made")}};
+    }
+    DrawInfoColumns(dl, x, o_.y + h_ - 120 * s, a, cols);
+  }
+
+  // Captions and values in columns, as Home's status row.
+  void DrawInfoColumns(ImDrawList* dl, float x, float y, float alpha,
+                       const std::vector<std::pair<std::string, std::string>>& cols) {
     const float s = S();
     const ui::Fonts f = ui::GetFonts();
-    const float x = o_.x + Margin();
-    const float a = home_mix_;  // fades in with the clear backdrop
-    const std::vector<HomeEntry> entries = HomeEntries();
-    // The title and the menu stay clear of the status row: with more entries
-    // they move up, then the logo gets smaller.
-    const float bottom = o_.y + h_ - 150 * s - 42 * s * float(entries.size());
+    float cx = x;
+    for (const auto& [caption, value] : cols) {
+      const float col_w = std::max(210 * s, ui::TextSize(f.text, 15.5f * s, value).x + 48 * s);
+      ui::DrawTracked(dl, f.display, 12 * s, ImVec2(cx, y), ui::WithAlpha(color::kTextFaint, alpha), Upper(T(caption)),
+                      2.2f * s);
+      dl->AddText(f.text, 15.5f * s, ImVec2(cx, y + 20 * s), ui::WithAlpha(color::kText, alpha), value.c_str());
+      cx += col_w;
+    }
+  }
+
+  static const char* PlayViewName(PlayView view) {
+    switch (view) {
+      case PlayView::kLoad: return "Load game";
+      case PlayView::kNew: return "New game";
+      case PlayView::kChapters: return "Chapter select";
+      default: return "";
+    }
+  }
+
+  // Instead of the tabs: PLAY, then the page's name, with the brass underline under the last (a
+  // click on PLAY goes back to the menu); on Chapter select the save it starts with at the right.
+  void DrawPlayHeader(ImDrawList* dl) {
+    const float s = S();
+    const ui::Fonts f = ui::GetFonts();
+    const float fs = 15 * s, tr = 1.6f * s, cy = o_.y + 44 * s;
+    float x = o_.x + Margin();
+    const std::string play = Upper(T("Play"));
+    const float pw = ui::TrackedWidth(f.display, fs, play, tr);
+    const bool sub = play_ != PlayView::kMenu;
+    const bool hot = sub && !modal_.open &&
+                     ImGui::IsMouseHoveringRect(ImVec2(x - 10 * s, cy - 22 * s), ImVec2(x + pw + 10 * s, cy + 22 * s), false);
+    if (hot && ImGui::IsMouseClicked(0)) {
+      ui::Cue(ui::Sound::kBack);
+      play_ = PlayView::kMenu;
+    }
+    ui::DrawTracked(dl, f.display, fs, ImVec2(x, cy - fs * 0.5f),
+                    sub ? (hot ? color::kText : color::kTextDim) : color::kText, play, tr);
+    float ux = x, uw = pw;
+    if (sub) {
+      x += pw + 14 * s;
+      dl->AddRectFilled(ImVec2(x, cy - 1 * s), ImVec2(x + 8 * s, cy + 1 * s), color::kTextFaint);
+      x += 8 * s + 14 * s;
+      const std::string name = Upper(T(PlayViewName(play_)));
+      ui::DrawTracked(dl, f.display, fs, ImVec2(x, cy - fs * 0.5f), color::kText, name, tr);
+      ux = x;
+      uw = ui::TrackedWidth(f.display, fs, name, tr);
+    }
+    if (tab_x_ < 0) tab_x_ = ux, tab_w_ = uw;
+    tab_x_ = ui::Approach(tab_x_, ux, 22.0f);
+    tab_w_ = ui::Approach(tab_w_, uw, 22.0f);
+    const float ly = std::round(o_.y + 74 * s);
+    dl->AddLine(ImVec2(o_.x + Margin(), ly), ImVec2(o_.x + w_ - Margin(), ly), color::kHairline, 1.0f);
+    dl->AddRectFilled(ImVec2(tab_x_, ly - 2 * s), ImVec2(tab_x_ + tab_w_, ly), color::kAccent);
+    if (play_ == PlayView::kChapters) {
+      const int slot = ChapterSlot();
+      const std::string right = Upper(slot >= 0 ? F("Save: {0}", {SaveName(saves_[size_t(slot)])}) : T("No save yet"));
+      const float rs = 13 * s, rt = 2.2f * s, rw = ui::TrackedWidth(f.display, rs, right, rt);
+      ui::DrawTracked(dl, f.display, rs, ImVec2(o_.x + w_ - Margin() - rw, cy - rs * 0.5f), color::kTextDim, right, rt);
+    }
+  }
+
+  // A slot's row (Load game, New game): its name, then the slot, the chapter and when it was saved.
+  Item SlotItem(const play::SaveSlot& sv) {
+    Item it;
+    it.tall = true;
+    it.type = ItemType::kAction;
+    const std::string slot = F("Slot {0}", {std::to_string(sv.index + 1)});
+    if (!sv.exists) {
+      it.label = slot;
+      it.subtitle = "Empty";
+      return it;
+    }
+    it.label = SaveName(sv);
+    it.subtitle = slot + "  " KK_DOT "  " + T(ChapterName(ContinueChapter(sv))) + "  " KK_DOT "  " + When(sv.last_saved);
+    it.facts.push_back(F("Chapter reached: {0}", {T(ChapterName(sv.chapter_reached))}));
+    it.facts.push_back(F("Continues at: {0}", {T(ChapterName(ContinueChapter(sv)))}));
+    it.facts.push_back(F("Last saved: {0}", {When(sv.last_saved)}));
+    if (sv.created > 0) it.facts.push_back(F("Started: {0}", {When(sv.created, false)}));
+    it.facts.push_back(F("Total of best scores: {0}", {std::to_string(TotalScore(sv))}));
+    return it;
+  }
+
+  std::vector<Item> LoadItems() {
+    std::vector<Item> items;
+    row_data_.clear();
+    items.push_back(Section("Saves"));
+    row_data_.push_back(-1);
+    for (const play::SaveSlot& sv : saves_) {
+      Item it = SlotItem(sv);
+      if (sv.exists) {
+        it.description = "Continue this save where you left it.";
+        it.value_text = std::to_string(TotalScore(sv));
+        const int slot = sv.index;
+        it.on_activate = [this, slot] { PlayWith({play::StartKind::kContinue, slot, -1, ""}); };
+      } else {
+        it.type = ItemType::kInfo;
+        it.disabled = true;
+        it.description = "No save in this slot. New game can start one here.";
+      }
+      items.push_back(std::move(it));
+      row_data_.push_back(sv.exists ? sv.index : -1);
+    }
+    return items;
+  }
+
+  std::vector<Item> NewGameItems() {
+    std::vector<Item> items;
+    row_data_.clear();
+    items.push_back(Section("Name"));
+    row_data_.push_back(-1);
+    {
+      Item it = ActionItem("Name",
+                           "The new save's name, typed with the keyboard. Left empty, the game names it as it "
+                           "always does.",
+                           new_name_.empty() ? "The game's" : new_name_, [this] { OpenNameEditor(); });
+      it.value_color = color::kText;
+      items.push_back(std::move(it));
+      row_data_.push_back(-1);
+    }
+    items.push_back(Section("Slot"));
+    row_data_.push_back(-1);
+    for (const bool used : {false, true}) {  // the empty slots first
+      for (const play::SaveSlot& sv : saves_) {
+        if (sv.exists != used) continue;
+        Item it = SlotItem(sv);
+        const int slot = sv.index;
+        if (!used) {
+          it.description = "Starts the story from the beginning in this slot.";
+          it.on_activate = [this, slot] { PlayWith({play::StartKind::kNewGame, slot, -1, new_name_}); };
+        } else {
+          it.description = "Starts a new game in place of this save. Your saves are backed up first.";
+          it.value_text = "Overwrite";
+          it.value_color = color::kWarn;
+          it.on_activate = [this, slot] { ConfirmOverwrite(slot); };
+        }
+        items.push_back(std::move(it));
+        row_data_.push_back(slot);
+      }
+    }
+    return items;
+  }
+
+  // Chapter select: every entry open, in groups, with its best score in the save it starts with.
+  std::vector<Item> ChapterItems() {
+    std::vector<Item> items;
+    row_data_.clear();
+    const int slot = ChapterSlot();
+    const play::SaveSlot* sv = SlotUsed(slot) ? &saves_[size_t(slot)] : nullptr;
+    const auto& chapters = play::Chapters();
+    constexpr size_t kGroup = 7;
+    for (size_t i = 0; i < chapters.size(); ++i) {
+      const int entry = chapters[i].entry;
+      if (i % kGroup == 0) {
+        const size_t last = std::min(chapters.size(), i + kGroup);
+        items.push_back(Section(F("Chapters {0} to {1}", {std::to_string(i + 1), std::to_string(last)})));
+        row_data_.push_back(-1);
+      }
+      Item it;
+      it.type = ItemType::kAction;
+      it.label = ChapterName(entry);
+      const int best = BestScore(sv, entry);
+      if (best > 0) it.value_text = std::to_string(best);
+      it.on_activate = [this, entry] { StartChapter(entry); };
+      items.push_back(std::move(it));
+      row_data_.push_back(entry);
+    }
+    return items;
+  }
+
+  // Load game, New game and Chapter select: the settings pages' layout (list and description).
+  void DrawPlayPage(ImDrawList* dl) {
+    const float s = S();
+    std::vector<Item> items = play_ == PlayView::kLoad  ? LoadItems()
+                              : play_ == PlayView::kNew ? NewGameItems()
+                                                        : ChapterItems();
+    ui::ListState& st = play_lists_[int(play_)];
+    // The page's own buttons, on the focused row (last frame's): on Load game X deletes and Y opens
+    // Chapter select with that save; on Chapter select Y changes the save.
+    const int row = st.focus >= 0 && st.focus < int(row_data_.size()) ? row_data_[size_t(st.focus)] : -1;
+    if (!modal_.open && play_ == PlayView::kLoad && SlotUsed(row)) {
+      if (input_.Pressed(Action::kDefault)) {
+        input_.Consume(Action::kDefault);
+        ui::Cue(ui::Sound::kSelect);
+        ConfirmDelete(row);
+      } else if (input_.Pressed(Action::kResetPage)) {
+        input_.Consume(Action::kResetPage);
+        ui::Cue(ui::Sound::kSelect);
+        chapter_slot_ = row;
+        OpenPlayView(PlayView::kChapters);
+        return;
+      }
+    }
+    if (!modal_.open && play_ == PlayView::kChapters && input_.Pressed(Action::kResetPage)) {
+      input_.Consume(Action::kResetPage);
+      if (UsedSlots() > 1) {
+        ui::Cue(ui::Sound::kChange);
+        const int from = std::max(0, ChapterSlot());
+        for (int k = 1; k <= play::kSlotCount; ++k) {
+          const int next = (from + k) % play::kSlotCount;
+          if (SlotUsed(next)) {
+            chapter_slot_ = next;
+            break;
+          }
+        }
+      } else {
+        ui::Cue(ui::Sound::kDeny);
+      }
+    }
+    const float top = o_.y + 104 * s, bottom = o_.y + h_ - 96 * s;
+    const float x0 = o_.x + Margin(), avail = w_ - Margin() * 2, list_w = std::round(avail * 0.56f);
+    const Item* focused = ui::DrawList(dl, items, st, ImVec2(x0, top), ImVec2(x0 + list_w, bottom), m_, input_,
+                                       !modal_.open);
+    const ImVec2 d0(x0 + list_w + 76 * s, top + 18 * s), d1(o_.x + w_ - Margin(), bottom);
+    if (play_ == PlayView::kChapters) {
+      const int entry = st.focus >= 0 && st.focus < int(row_data_.size()) ? row_data_[size_t(st.focus)] : -1;
+      DrawChapterPanel(dl, focused ? entry : -1, d0, d1);
+    } else {
+      ui::DrawDescription(dl, focused, d0, d1, m_);
+    }
+    focused_items_ = std::move(items);
+    focused_ = st.focus >= 0 && st.focus < int(focused_items_.size()) ? &focused_items_[size_t(st.focus)] : nullptr;
+  }
+
+  // The chapter's card (its picture when the game files have one; until then its number), its name,
+  // its best score and the save it starts with.
+  void DrawChapterPanel(ImDrawList* dl, int entry, ImVec2 p0, ImVec2 p1) {
+    if (entry < 0) return;
+    const float s = S();
+    const ui::Fonts f = ui::GetFonts();
+    const float w = p1.x - p0.x;
+    const float ph = std::min(w * 9.0f / 16.0f, (p1.y - p0.y) * 0.46f), pw = ph * 16.0f / 9.0f;
+    const ImVec2 c0 = p0, c1(p0.x + pw, p0.y + ph);
+    dl->AddRectFilled(c0, c1, ui::WithAlpha(color::kPanel, 0.82f));
+    dl->AddRectFilledMultiColor(c0, c1, ui::WithAlpha(color::kAccent, 0.10f), ui::WithAlpha(color::kAccent, 0.02f),
+                                ui::WithAlpha(color::kBase, 0.0f), ui::WithAlpha(color::kAccent, 0.05f));
+    dl->AddRect(c0, c1, ui::WithAlpha(color::kText, 0.10f));
+    dl->AddRectFilled(c0, ImVec2(c0.x + 3 * s, c1.y), color::kAccent);
+    char num[8];
+    std::snprintf(num, sizeof(num), "%02d", entry + 1);
+    const float ns = ph * 0.42f, nw = ui::TrackedWidth(f.display, ns, num, 2 * s);
+    ui::DrawTracked(dl, f.display, ns, ImVec2(c0.x + 26 * s, c1.y - ns - 18 * s), ui::WithAlpha(color::kText, 0.9f), num,
+                    2 * s);
+    const std::string of = Upper(F("of {0}", {std::to_string(play::kChapterCount)}));
+    ui::DrawTracked(dl, f.display, 13 * s, ImVec2(c0.x + 38 * s + nw, c1.y - 13 * s - 26 * s), color::kTextDim, of,
+                    2.2f * s);
+
+    float y = c1.y + 22 * s;
+    const std::string name = T(ChapterName(entry));
+    dl->AddText(f.display, 25 * s, ImVec2(p0.x, y), color::kText, name.c_str(), nullptr, w);
+    y += ui::TextSize(f.display, 25 * s, name, w).y + 12 * s;
+    const int slot = ChapterSlot();
+    const play::SaveSlot* sv = SlotUsed(slot) ? &saves_[size_t(slot)] : nullptr;
+    const int best = BestScore(sv, entry);
+    const float bs = 15.5f * s;
+    const std::string score = best > 0 ? F("Best score: {0}", {std::to_string(best)}) : T("No score yet.");
+    dl->AddText(f.text, bs, ImVec2(p0.x, y), best > 0 ? color::kText : color::kTextDim, score.c_str(), nullptr, w);
+    y += ui::TextSize(f.text, bs, score, w).y + 10 * s;
+    const std::string with =
+        sv ? F("Starts with the save {0}.", {SaveName(*sv)})
+           : F("No save yet: a new one is made in slot {0} first.", {std::to_string(std::max(0, FirstEmptySlot()) + 1)});
+    dl->AddText(f.text, bs, ImVec2(p0.x, y), color::kTextDim, with.c_str(), nullptr, w);
+  }
+
+  void ConfirmDelete(int slot) {
+    const std::string name = SaveName(saves_[size_t(slot)]);
+    OpenModal(F("Delete {0}?", {name}),
+              "A copy of your saves is kept in the save-backups folder first. Then this save is deleted.",
+              {"Delete", "Cancel"}, 1,
+              [this, slot, name](int i) {
+                if (i != 0) return;
+                if (play::DeleteSave(paths_.user_dir, slot))
+                  Status(F("{0} is deleted. A copy is in save-backups.", {name}));
+                else
+                  Status("Could not delete the save. Nothing was changed.");
+                ReadSaves();
+                if (UsedSlots() == 0) play_ = PlayView::kMenu;
+              },
+              1);
+  }
+
+  void ConfirmOverwrite(int slot) {
+    const std::string name = SaveName(saves_[size_t(slot)]);
+    OpenModal(F("Overwrite {0}?", {name}),
+              "Your saves are backed up first. Then a new game starts in this slot, in place of this save.",
+              {"Overwrite", "Cancel"}, 1,
+              [this, slot](int i) {
+                if (i == 0) PlayWith({play::StartKind::kNewGame, slot, -1, new_name_});
+              },
+              1);
+  }
+
+  // New game's name: typed with the keyboard while its pop-up is open (TickNameEditor).
+  void OpenNameEditor() {
+    name_before_ = new_name_;
+    editing_name_ = true;
+    OpenModal("Name", "Type a name for the new save. Enter keeps it, Esc cancels.", {"Done", "The game's"}, 0,
+              [this](int i) {
+                if (i == 1) new_name_.clear();
+                editing_name_ = false;
+              });
+    modal_.live = [this] {
+      const bool blink = std::fmod(ImGui::GetTime(), 1.0) < 0.55;
+      return std::string(T("Name:")) + " " + new_name_ + (blink ? "_" : "");
+    };
+  }
+
+  void TickNameEditor() {
+    if (!editing_name_) return;
+    if (!modal_.open) {
+      editing_name_ = false;
+      return;
+    }
+    const ImGuiIO& io = ImGui::GetIO();
+    for (const ImWchar c : io.InputQueueCharacters)
+      if (c >= 32 && c < 127 && new_name_.size() < kNameMax && !(c == ' ' && new_name_.empty())) new_name_ += char(c);
+    if (ImGui::IsKeyPressed(ImGuiKey_Backspace, true) && !new_name_.empty()) new_name_.pop_back();
+    const bool cancel = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+    if (cancel || ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)) {
+      if (cancel) new_name_ = name_before_;
+      while (!new_name_.empty() && new_name_.back() == ' ') new_name_.pop_back();
+      modal_.open = false;
+      editing_name_ = false;
+      input_.ConsumeAll();
+      ui::Cue(cancel ? ui::Sound::kBack : ui::Sound::kSelect);
+    }
+  }
+
+  std::vector<ui::Prompt> PlayPrompts() const {
+    switch (play_) {
+      case PlayView::kLoad: {
+        std::vector<ui::Prompt> p;
+        if (focused_ && focused_->on_activate) {
+          p.push_back({Action::kAccept, "Continue"});
+          p.push_back({Action::kResetPage, "Chapter select"});
+          p.push_back({Action::kDefault, "Delete"});
+        }
+        p.push_back({Action::kBack, "Back"});
+        return p;
+      }
+      case PlayView::kChapters: {
+        std::vector<ui::Prompt> p = {{Action::kAccept, "Play"}};
+        if (UsedSlots() > 1) p.push_back({Action::kResetPage, "Change save"});
+        p.push_back({Action::kBack, "Back"});
+        return p;
+      }
+      default:
+        return {{Action::kAccept, "Select"}, {Action::kBack, "Back"}};
+    }
+  }
+
+  void HandlePlayInput() {
+    ui::Input& in = input_;
+    for (const Action a : {Action::kPrevTab, Action::kNextTab, Action::kPlay}) in.Consume(a);
+    if (in.Pressed(Action::kBack)) {
+      in.Consume(Action::kBack);
+      ui::Cue(ui::Sound::kBack);
+      play_ = play_ == PlayView::kMenu ? PlayView::kNone : PlayView::kMenu;
+    }
+  }
+
+  // Home's logo (or the title in letters), placed so the menu below stays clear of the status row;
+  // returns where the menu starts.
+  float DrawLogo(ImDrawList* dl, float x, size_t entries, float a) {
+    const float s = S();
+    const ui::Fonts f = ui::GetFonts();
+    // With more entries the title and the menu move up, then the logo gets smaller.
+    const float bottom = o_.y + h_ - 150 * s - 42 * s * float(entries);
     float y = o_.y + std::max(100 * s, h_ * 0.14f);
     if (logo_) {
       // The game's own logo.
@@ -2544,6 +3090,15 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                       "THE OFFICIAL GAME OF THE MOVIE", 5.2f * s);
       y += 66 * s;
     }
+    return y;
+  }
+
+  void DrawHome(ImDrawList* dl) {
+    const float s = S();
+    const float x = o_.x + Margin();
+    const float a = home_mix_;  // fades in with the clear backdrop
+    const std::vector<HomeEntry> entries = HomeEntries();
+    const float y = DrawLogo(dl, x, entries.size(), a);
     // In a small window (the scale stops shrinking at 0.7) the entries close
     // up rather than run into the status row.
     const float room = o_.y + h_ - 150 * s - y;
@@ -4031,6 +4586,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     MaybeAskOnline();
     TickSteam();
     CaptureKey();
+    TickNameEditor();
     if (open_whats_new_ && !modal_.open) {
       open_whats_new_ = false;
       OpenWhatsNew();
@@ -4136,7 +4692,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // "KK dev: shot <name>" and waits for a capture. The mouse, at 1280 x 720
   // layout positions: "move:X:Y", "click:X:Y", "down:X:Y", "up", "wheel:N".
   // "setup:5" is the look step; "reset-beta" does to the settings what switching to
-  // stable does (and saves them); "whats-new" opens What's new as after 1.9.11; "update-test"
+  // stable does (and saves them); "type:<text>" types text (New game's name); "whats-new" opens What's new as after 1.9.11; "update-test"
   // logs the update choice cases (RunUpdatePickTests); "updated" acts as the first start after an
   // update (the full shader rebuild and its screen); "setup:4" shows the setup's shader screen.
   void DevInput() {
@@ -4193,6 +4749,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       whats_new_from_ = "1.9.11";
       return OpenWhatsNew();
     }
+    if (t.rfind("type:", 0) == 0) return io.AddInputCharactersUTF8(t.substr(5).c_str());  // typed text
     if (t.rfind("move:", 0) == 0) return at_point(t.substr(5));
     if (t.rfind("click:", 0) == 0 || t.rfind("down:", 0) == 0) {
       at_point(t.substr(t.find(':') + 1));
@@ -4227,6 +4784,14 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   const Item* focused_ = nullptr;
   Action pending_click_ = Action::kCount;
   int home_focus_ = 0;
+  PlayView play_ = PlayView::kNone;      // the Play menu and its pages, over Home
+  int play_focus_ = 0;
+  std::map<int, ui::ListState> play_lists_;
+  std::vector<play::SaveSlot> saves_;    // read as the Play menu opens and after a delete
+  int chapter_slot_ = -1;               // the save Chapter select starts with (Load game's Y); -1 the last played
+  std::vector<int> row_data_;           // the Play pages' rows: the slot or chapter entry each stands for
+  std::string new_name_, name_before_;  // New game's name ("" the game's own)
+  bool editing_name_ = false;
   bool online_asked_ = false;  // MaybeAskOnline has looked this session
   bool menu_value_ = false;    // the menu's focused entry has a value (Left and Right change it)
   int side_focus_ = -1;      // the side panel (Home, setup) with the focus, or -1

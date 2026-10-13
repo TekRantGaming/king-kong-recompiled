@@ -75,3 +75,49 @@ captures and game frames: Continue, New game, Load game (load and delete) and ev
 from the launcher with no game menu ever shown; the pause menu opens in play, every item works the game's way,
 Settings change live; Quit returns to the launcher; saves made this way load and keep working; saves are backed
 up before every change and none is ever deleted by the game.
+
+## UI (menus-ui, branch `beta3-ui`)
+
+Files: `launcher.cpp` (Play menu and its pages, `SettingsPages`, `InGameSettings`), `launcher_ui.*` (`ui::Input`
+can be fed the game's pad), `ingame_settings.h`, `pause_menu.*`, and `play_session_stub.cpp` (built only while
+`play_session.cpp` does not exist; made-up saves with `KK_DEV_FAKE_SAVES=1`, the pause "opening" after
+`KK_DEV_PAUSE_MENU=<s>` seconds, `KK_DEV_PAUSE_NOSAVE=1`; it never touches a file). Captures (windowed,
+PrintWindow of the test window): `F:\KK-native-renderer\runs\menus-ui-1013-*`.
+
+### The launcher
+
+- **Play** on Home (and Start / P on any page) opens the **Play menu**: Home's look (clear stills, the logo, the
+  large entries), the header `PLAY` instead of the tabs. Continue (only with a save: the one saved last), New
+  game, Load game (greyed with no save), Chapter select, Back. The status row shows what the focused entry does:
+  Continue its save, chapter (continue point) and when it was saved; New game the free slots; Chapter select the
+  save it uses. B goes back to Home.
+- **Load game** (`PLAY - LOAD GAME`, the settings pages' layout): the five slots as tall rows (name, slot,
+  chapter, when; total of best scores at the right; empty slots dim). The description lists chapter reached,
+  continue point, last saved, started and the score total. A continues the save, Y opens Chapter select with
+  it, X deletes it (pop-up, Cancel focused; `play::DeleteSave`, which backs up first).
+- **New game**: Name (typed with the keyboard in a pop-up, 15 ASCII characters, empty = the game's own name),
+  then the slots, empty ones first (focus on the first empty slot). An empty slot starts at once; a used one asks
+  "Overwrite <name>?" (Cancel focused).
+- **Chapter select**: all 42 entries, every one open, in groups of seven, each with its best score in the save it
+  starts with (header right: `SAVE: <name>`; Y changes the save when there are several). The right side shows a
+  card with the chapter's number (the place for its picture), its name, best score and which save it starts
+  with (with none: "a new one is made in slot N first").
+- Every choice calls `play::SetStartRequest` and then Play as before (the frame-rate warning, the shader wait, the
+  restart for the renderer or a temporal upscaler).
+- `--kk_launcher_open=play|chapters` (never saved) opens the launcher on the Play menu or Chapter select: for the
+  game side when it goes back to the launcher.
+- The Cheats page no longer has "All chapters".
+
+### The pause menu
+
+`CreatePauseMenu` (`pause_menu.h`) makes one ImGui dialog for the session (the launcher makes it at Play; the app
+should also make it when the launcher is skipped). While `play::PauseMenuOpen()` it draws over the dimmed frame:
+the game's logo, `PAUSED`, and Resume, Start again and Score (when `PauseActionAvailable`), Options, Settings, Quit
+game. Start again and Quit game ask first (Cancel focused); B, Esc or Start resume. Options shows the port's
+settings (Gameplay) until the game's own Options page is known.
+
+**Settings**: tabs Display, Graphics, Gameplay, Controls (with Button remapping and Keyboard bindings), Cheats,
+the launcher's own rows (`SettingsPages`, shared code) with the rows that need a restart left out (`LiveOnly`:
+window mode and size, resolution, refresh rate, monitor, frame rate, VSync, upscaler and its mode, render quality,
+internal resolution, look, preset, renderer, language, startup logos). Changes are saved like in the launcher.
+Controls: the game gives the menu the pad it read (`PauseMenuPad`); keyboard and mouse come through ImGui.

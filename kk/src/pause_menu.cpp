@@ -178,7 +178,7 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
     const float t = std::clamp(float(ImGui::GetTime() - open_time_) / 0.18f, 0.0f, 1.0f);
     shade_ = ui::Approach(shade_ * 100.0f, view_ == View::kSettings ? 100.0f : 0.0f, 12.0f) / 100.0f;
     const ImVec2 p1(o_.x + w_, o_.y + h_);
-    dl->AddRectFilled(o_, p1, ui::WithAlpha(color::kBase, t * (0.55f + 0.32f * shade_)));
+    dl->AddRectFilled(o_, p1, ui::WithAlpha(color::kBase, t * (0.55f + 0.38f * shade_)));
     const ImU32 c0 = ui::WithAlpha(color::kBase, t * 0.75f), c1 = ui::WithAlpha(color::kBase, 0.0f);
     dl->AddRectFilledMultiColor(o_, ImVec2(o_.x + w_ * 0.62f, p1.y), c0, c1, c1, c0);
     const ImU32 b0 = ui::WithAlpha(color::kBase, t * 0.7f);
@@ -241,16 +241,18 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
 
     const float x = o_.x + Margin();
     const float item_h = 46 * s, fs = 26 * s, tr = 3 * s;
-    float y = o_.y + h_ * 0.5f - (item_h * float(n)) * 0.5f;
-    // The game's logo and the caption above the menu.
+    // The game's logo, the caption and the entries, as one block in the middle of the left side.
+    const float lw = logo_ ? std::min(300 * s, w_ * 0.26f) : 0.0f, lh = logo_ ? lw / logo_aspect_ : 0.0f;
+    const float logo_gap = logo_ ? 40 * s : 0.0f, caption_h = 44 * s;
+    const float block = lh + logo_gap + caption_h + item_h * float(n);
+    float y = o_.y + std::max(40 * s, (h_ - block) * 0.5f);
     if (logo_) {
-      const float lw = std::min(300 * s, w_ * 0.26f), lh = lw / logo_aspect_;
-      const float ly = std::max(o_.y + 40 * s, y - lh - 74 * s);
-      dl->AddImage(ui::Tex(logo_.get()), ImVec2(x - 8 * s, ly), ImVec2(x - 8 * s + lw, ly + lh));
+      dl->AddImage(ui::Tex(logo_.get()), ImVec2(x - 8 * s, y), ImVec2(x - 8 * s + lw, y + lh));
+      y += lh + logo_gap;
     }
-    ui::DrawTracked(dl, f.display, 15 * s, ImVec2(x + 2 * s, y - 40 * s), color::kAccent, text::Upper(T("Paused")),
-                    5 * s);
-    dl->AddRectFilled(ImVec2(x + 2 * s, y - 16 * s), ImVec2(x + 42 * s, y - 14 * s), ui::WithAlpha(color::kAccent, 0.6f));
+    ui::DrawTracked(dl, f.display, 15 * s, ImVec2(x + 2 * s, y), color::kAccent, text::Upper(T("Paused")), 5 * s);
+    dl->AddRectFilled(ImVec2(x + 2 * s, y + 24 * s), ImVec2(x + 42 * s, y + 26 * s), ui::WithAlpha(color::kAccent, 0.6f));
+    y += caption_h;
 
     if (active && n > 1) {
       if (in.Pressed(Action::kUp)) focus_ = (focus_ + n - 1) % n;
