@@ -1,5 +1,7 @@
 #include "display_modes.h"
 
+#include "platform.h"
+
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -66,6 +68,13 @@ std::vector<DisplayMode> ListDisplayModes(int monitor, const rex::ui::Window* wi
 
 DisplayMode DesktopDisplayMode(int monitor, const rex::ui::Window* window) {
   return FromSdk(rex::ui::GetDesktopDisplayMode(monitor, window));
+}
+
+std::vector<MonitorInfo> ListDisplays() {
+  std::vector<MonitorInfo> out;
+  for (const rex::ui::DisplayInfo& d : rex::ui::GetDisplays())
+    out.push_back({d.name, d.desktop.width, d.desktop.height, d.primary});
+  return out;
 }
 
 std::optional<std::pair<int, int>> FullscreenModeSize() {

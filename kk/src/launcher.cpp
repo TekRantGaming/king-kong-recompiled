@@ -1183,6 +1183,8 @@ class SettingsPages {
   }
 
   Item MonitorItem() {
+    // In the SDK's order (review finding 1: Windows' own order can differ with several monitors).
+    if (monitors_.empty()) monitors_ = ListDisplays();
     if (monitors_.empty()) monitors_ = ListMonitors();
     std::vector<Option> opts = {{"Default", "0"}};
     for (size_t i = 0; i < monitors_.size(); ++i) {
@@ -3986,6 +3988,22 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                                "The official Discord server: news, upcoming features, early builds, and a place to "
                                "tell us what you think.",
                                "Join", [] { OpenUrl(kDiscordUrl); }));
+    {
+      // The upscalers' credits. NVIDIA's DLSS SDK licence (supplement 7.1 b) asks for the SDK to be credited in
+      // the about box; its marks (logos) need NVIDIA's written approval first (7.2 c), so it is text only until
+      // then (native-renderer/docs/upscalers.md). The project is not endorsed by NVIDIA, AMD or Intel.
+      Item it;
+      it.type = ItemType::kInfo;
+      it.label = "Upscaler credits";
+      it.description =
+          "The native renderer's temporal upscalers use NVIDIA DLSS (the NVIDIA DLSS SDK), AMD FidelityFX Super "
+          "Resolution (FSR 3.1 and FSR 4, the AMD FidelityFX SDK) and Intel XeSS (the Intel XeSS SDK). NVIDIA, "
+          "GeForce RTX, RTX and DLSS are trademarks and/or registered trademarks of NVIDIA Corporation in the U.S. "
+          "and other countries. AMD, FidelityFX and FSR are trademarks of Advanced Micro Devices, Inc. Intel and "
+          "XeSS are trademarks of Intel Corporation. This project is not sponsored or endorsed by NVIDIA, AMD or "
+          "Intel. Their licences are in THIRD-PARTY-NOTICES.txt beside the game.";
+      items.push_back(std::move(it));
+    }
 
     items.push_back(Section("Launcher"));
     items.push_back(CvarToggle("Show this launcher",
@@ -4068,6 +4086,14 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     items.push_back(Section("Files"));
     items.push_back(ActionItem("Open save folder", "Your saves, achievements and caches.", "",
                                [this] { OpenInExplorer(paths_.user_dir); }));
+    items.push_back(ActionItem("Open save backups",
+                               "Copies of your saves, made each time you start playing from the Play menu and before a "
+                               "save is deleted or overwritten. The newest 20 are kept.",
+                               "", [this] {
+                                 std::error_code ec;
+                                 std::filesystem::create_directories(paths_.user_dir / "save-backups", ec);
+                                 OpenInExplorer(paths_.user_dir / "save-backups");
+                               }));
     {
       Item it = ActionItem("Open game folder", "Where the game is installed.", "", [this] { OpenInExplorer(paths_.game_dir); });
       it.facts.push_back(paths_.game_dir.string());
@@ -4667,7 +4693,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     TickSteam();
     CaptureKey();
     TickNameEditor();
-    if (open_whats_new_ && !modal_.open) {
+    // What's new waits until the shaders an update rebuilds are done: building them loads every processor
+    // core, and the launcher answers slowly meanwhile.
+    if (open_whats_new_ && !modal_.open && !update_shaders_ && !native_pack_.Busy()) {
       open_whats_new_ = false;
       OpenWhatsNew();
     }
