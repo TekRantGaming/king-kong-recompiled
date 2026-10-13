@@ -243,7 +243,8 @@ appears). If the mode is adopted, `kkshaders db-build` should learn to read the 
 | `ao_strength` | 1, 2, 3 | the launcher's: legacy tuning sets, or GTAO's final power and default radius |
 | `--native_ao_method` | `legacy`, `gtao` | which occlusion. legacy is today's, unchanged |
 | `--native_ao_apply` | `resolve`, `opaque`, `ambient` | when the GTAO occlusion reaches the picture (above). The legacy method always uses resolve (a warning is logged for another value) |
-| `--native_ao_quality` | `full`, `half` | GTAO's working resolution (of the scene target at the render scale) |
+| `--native_ao_quality` | `auto`, `full`, `half` | GTAO's working resolution (of the scene target at the render scale) |
+| `--native_ao_samples` | 1, 2, 3 | GTAO sample quality: Low, Medium (previous 3x3 samples), High; live |
 | `--native_ao_radius` | 0, any number | GTAO's radius in world units; 0 from the camera |
 | `--native_ao_rules` | a file | classifier rules before the built-in ones |
 | `--native_ao_shaders` | a file | the ambient-only lighting shader list |
@@ -254,7 +255,8 @@ appears). If the mode is adopted, `kkshaders db-build` should learn to read the 
 | `--native_ao_dump_every` | 0, N | every N frames, the `AO draw` lines of every draw (as `--native_dump_frame` for one frame) |
 | `--native_ao_gpu_time` | false, true | GPU timer queries around the AO passes (either method), the average logged every 600 frames |
 
-All `--native_ao_*` settings are read at start. ao_mode and ao_strength can change at any time, as today. With the
+All `--native_ao_*` settings except `native_ao_samples` are read at start. Samples, ao_mode and ao_strength can change
+at any time. With the
 defaults the GTAO code is never created: the game renderer's layouts, pipelines and draws are the ones it always had
 (the test `GameAo_OffChangesNothing` and the whole existing suite).
 
@@ -310,7 +312,8 @@ one version.
 - XeGTAO is vendored unchanged and adapted from outside (defines before the include), so an update is a copy.
 - Compute passes (XeGTAO's own shape), R32 formats only (portable storage), a working image padded to 16 (no
   out-of-bounds writes, which Vulkan does not discard without robustness features).
-- No temporal noise: the renderer has no TAA, and a fixed pattern does not shimmer; two denoise passes.
+- Two spatial denoise passes, then a depth-validated local temporal filter or the active temporal upscaler's history.
+  Without a matching camera or a temporal SDK the sampling pattern stays fixed.
 - The opaque moment multiplies the target in place with a blend instead of copying it: no extra image, no read of the
   target.
 - The camera comes from the matrix the game already gives its shaders, voted per frame; no game code is read.

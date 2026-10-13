@@ -15,6 +15,11 @@ def latest(pattern):
     return paths[-1] if paths else None
 
 
+def shot(run, seconds):
+    fine = run / f'shot_ms_{round(seconds*1000)}.bmp'
+    return fine if fine.exists() else run / f'shot_{int(seconds*10)}.bmp'
+
+
 def sheet(name, rows, crop=None, size=(640, 360)):
     canvas = Image.new('RGB', (len(rows[0]) * size[0], len(rows) * (size[1] + 32)), (25, 25, 25))
     draw = ImageDraw.Draw(canvas)
@@ -57,19 +62,20 @@ for entry in range(2, 9):
 
 hands = [(label, latest(f'task016-{label}-e8-*'))
          for label in ('before-hands', 'low-hands', 'medium-hands', 'high-hands', 'dlss-hands', 'fsr-hands', 'xess-hands')]
-hands = [(label, run) for label, run in hands if run and (run / 'shot_390.bmp').exists()]
+hands = [(label, run) for label, run in hands if run and shot(run,39).exists()]
 if hands:
-    sheet('hands-full.png', [[(label, run / 'shot_390.bmp') for label, run in hands]], size=(640,360))
-    sheet('hands-crops.png', [[(label, run / 'shot_390.bmp') for label, run in hands]],
+    sheet('hands-full.png', [[(label, shot(run,39)) for label, run in hands]], size=(640,360))
+    sheet('hands-crops.png', [[(label, shot(run,39)) for label, run in hands]],
           crop=(650,360,1200,700), size=(550,340))
     for label, run in hands:
-        frames = [np.asarray(Image.open(run / f'shot_{t}.bmp').convert('RGB'), dtype=float)[360:700,650:1200]
-                  for t in (390,391,392,393,394) if (run / f'shot_{t}.bmp').exists()]
+        times = (39,39.034,39.068,39.102,39.136) if (run / 'shot_ms_39000.bmp').exists() else (39,39.1,39.2,39.3,39.4)
+        frames = [np.asarray(Image.open(shot(run,t)).convert('RGB'), dtype=float)[360:700,650:1200]
+                  for t in times if shot(run,t).exists()]
         if len(frames) > 1:
             metrics[run.name]['hands_crop_mae_0_255'] = float(np.mean([np.abs(b-a).mean() for a,b in zip(frames,frames[1:])]))
             metrics[run.name]['hands_crop_frames'] = len(frames)
-            sheet(f'hands-sequence-{label}.png', [[(f'{label}, {t/10:g}s', run / f'shot_{t}.bmp')
-                  for t in (390,391,392,393,394)]], crop=(650,360,1200,700), size=(550,340))
+            sheet(f'hands-sequence-{label}.png', [[(f'{label}, {t:g}s', shot(run,t))
+                  for t in times]], crop=(650,360,1200,700), size=(550,340))
 
 synthetic = OUT / 'synthetic'
 old = OUT / 'synthetic-before'

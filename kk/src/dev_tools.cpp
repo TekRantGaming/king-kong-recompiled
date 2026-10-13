@@ -287,7 +287,13 @@ void TakeShots(double t) {
       continue;
     }
     const char* dir = std::getenv("KK_DEV_SHOTS_DIR");
-    art::CaptureFrame(std::filesystem::path(dir && *dir ? dir : ".") / ("shot_" + std::to_string(int(*it * 10)) + ".bmp"));
+    // AO noise measurements need adjacent frames: the usual tenth-second filenames
+    // overwrite captures less than 100 ms apart. Keep existing test names by default.
+    const char* fine = std::getenv("KK_DEV_SHOTS_FINE");
+    const bool milliseconds = fine && *fine == '1';
+    const std::string name = milliseconds ? "shot_ms_" + std::to_string(int(*it * 1000 + 0.5))
+                                          : "shot_" + std::to_string(int(*it * 10));
+    art::CaptureFrame(std::filesystem::path(dir && *dir ? dir : ".") / (name + ".bmp"));
     it = times.erase(it);
   }
 }
