@@ -248,18 +248,23 @@ pause menu's Settings; the others stay launcher-only (the user's decision).
 The game's own Options pages hold audio volumes and other values kept in the save; see "The game's Options"
 below.
 
-### Chapter names (found, not committed)
+### Chapter names (found, not read yet)
 
 The chapter select's names are a text file of the start menu's level, key `0x4902DD54`, loaded only while the
-start menu (level 3) is up: ids `0x4902DD68 + n`, n = 0 to 41 ("Skull Island", ..., "Credits"; 0x4902DD99 and on
-are the Extras). The entry's n is the third column of the chapter table (`G + (0x1468 + entry) * 4`, also the
-fourth): entry 0 has 17 ("The venture"), entry 8 has 7 ("V-Rex"), entry 27 has 26 ("Kong to the rescue"). Text
-lookup in the game: `sub_826FEC90(file key, id, out)` then `sub_826FEE20(out)` returns the string; the text manager
-is at `0x828E89B8` (+8 count, +12 files; a file: +4 count, +8 entries of 32 bytes with +0 id and +12 offset, +12
-strings, +20 key); `KK_DEV_TEXT_DUMP` writes all loaded texts (`texts-menu.txt` when the start menu's pages
-open). The text is in the game's language. `Chapters()` still returns placeholders: the names are game text
-(not committed); a runtime reader of the player's files (the BIG container holding that text file) or a cache
-written whenever the game has the file loaded is the way to get them.
+start menu (level 3) is up: ids `0x4902DD68 + n`, n = 0 to 41 ("Skull Island", ..., "Credits"; `0x4902DD99` and
+on are the Extras). The entry's n is the third column of the chapter table (`G + (0x1468 + entry) * 4`, also the
+fourth): entry 0 has 17 ("The venture"), entry 8 has 7 ("V-Rex"), entry 27 has 26 ("Kong to the rescue"). In the
+game: `sub_826FEC90(file key, id, out)` then `sub_826FEE20(out)` returns the string; the text manager is at
+`0x828E89B8` (+8 count, +12 files; a file: +4 count, +8 entries of 32 bytes with +0 id and +12 offset, +12
+strings, +20 key); `KK_DEV_TEXT_DUMP` writes the loaded texts (`texts-menu.txt` when the start menu's pages open).
+
+A reader of the player's files was tried and stopped (the coordinator's time limit): the text file is not an entry
+of `KKMaps.bf`'s table (no `0x4902....` keys there; the table holds level containers keyed `0x02007...`), so it sits
+inside a level container (the start menu's), LZO-packed like the rest; the raw file only holds the internal
+level names ("14B Kong to the rescue"). A full scan of the table's entries with `launcher_art.cpp`'s pack reader
+found nothing (its chunk format does not fit these entries). What is left: find the start menu's container key
+(the level-3 load reads it: a file trace at that load names it), unpack it, and find the text file in it by the
+ids above. `Chapters()` still returns "Chapter N". The scan code is in `moved-aside\menus-game\`.
 
 ### Tests (game side)
 
@@ -280,4 +285,7 @@ in `runs\menus-game-data`), run folders `F:\KK-native-renderer\runs\menus-game-1
 | The game's Options pages | `055907-ch8-live-options-end` (`shot_200`, `shot_250`) | Audio, Video, Controls |
 | Story run (continue point V-Rex): Save from the pause | `055758-story-save4-return` (`shot_110`: "Save successful") | file written |
 | Story run: Quit game (to the desktop): the game's quit save, then the program exits | `055614-story-save3` | exits, no launcher |
+| The game's Options pages: Audio, Video, Controls open and close, the port's menu comes back | `061637-ch8-game-options` (`shot_*`) | yes |
+| Native renderer (with the shader pack): backdrop capture, the real pause menu, Resume, Start again | `062000-native-ch8-pause2` (`printwindow_200`) | yes (without a shader pack the native renderer did not reach the title in 2 minutes: `061748-native-ch8-pause`) |
+| Keyboard and mouse in the real pause menu | `062155-input-kbm` | not testable under the test rules: posted key and mouse messages to the unfocused window reach neither SDL nor ImGui, and focusing the window is not allowed; the game side blocks the game's keyboard (same path as the pad) and mouse look while the menu is open |
 | Return to main menu (chapter run) | `053106-realpause-ch8-quit`, `060043-final-ch8-return-to-menu` (`printwindow_400_<launcher pid>`) | launcher's Play menu |
