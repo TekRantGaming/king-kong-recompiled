@@ -6,7 +6,6 @@
    "--kk_launcher=false",
    "--kk_frame_rate=30",
    "--kk_cheats=true",
-   "--kk_cheat_chapters=true",
    "--fullscreen=false",
    "--window_width=1280",
    "--window_height=720",
@@ -21,7 +20,9 @@
    ]
   },
   "env": {
-   "KK_DEV_AUTOSKIP": "1"
+   "KK_DEV_AUTOSKIP": "1",
+   "KK_DEV_CHAPTERS": "1",
+   "KK_DEV_GAME_PAUSE": "1"
   },
   "clock_offset": {
    "menu": 7.7,

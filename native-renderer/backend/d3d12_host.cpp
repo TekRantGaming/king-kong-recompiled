@@ -1,4 +1,4 @@
-// NVRHI on the SDK's D3D12Provider device and direct queue, and the hand-over
+﻿// NVRHI on the SDK's D3D12Provider device and direct queue, and the hand-over
 // of a frame to the D3D12Presenter's guest output resource.
 
 #include <array>
@@ -6,6 +6,7 @@
 #include <mutex>
 #include <utility>
 
+#include <d3d12sdklayers.h>
 #include <nvrhi/d3d12.h>
 #include <nvrhi/validation.h>
 #include <rex/cvar.h>
@@ -25,7 +26,22 @@ class D3D12Host final : public HostDevice {
  public:
   explicit D3D12Host(rex::ui::d3d12::D3D12Provider& provider) : provider_(provider) {}
 
+  ~D3D12Host() override {
+    if (debug_queue_) {
+      debug_queue_->UnregisterMessageCallback(debug_cookie_);
+      debug_queue_->Release();
+    }
+  }
+
   bool Initialize() {
+    if (REXCVAR_GET(native_validation) &&
+        SUCCEEDED(provider_.GetDevice()->QueryInterface(IID_PPV_ARGS(&debug_queue_)))) {
+      if (FAILED(debug_queue_->RegisterMessageCallback(DebugMessage, D3D12_MESSAGE_CALLBACK_FLAG_NONE,
+                                                       nullptr, &debug_cookie_))) {
+        debug_queue_->Release();
+        debug_queue_ = nullptr;
+      }
+    }
     nvrhi::d3d12::DeviceDesc desc;
     desc.errorCB = GetMessageCallback();
     desc.pDevice = provider_.GetDevice();
@@ -103,6 +119,14 @@ class D3D12Host final : public HostDevice {
   }
 
  private:
+  static void CALLBACK DebugMessage(D3D12_MESSAGE_CATEGORY, D3D12_MESSAGE_SEVERITY severity,
+                                   D3D12_MESSAGE_ID id, LPCSTR description, void*) {
+    if (severity <= D3D12_MESSAGE_SEVERITY_ERROR)
+      REXGPU_ERROR("D3D12 validation {}: {}", uint32_t(id), description);
+    else if (severity == D3D12_MESSAGE_SEVERITY_WARNING)
+      REXLOG_WARN("D3D12 validation {}: {}", uint32_t(id), description);
+  }
+
   struct Wrapped {
     ID3D12Resource* resource = nullptr;
     uint32_t width = 0;
@@ -154,6 +178,8 @@ class D3D12Host final : public HostDevice {
   rex::ui::d3d12::D3D12Provider& provider_;
   mutable std::mutex execute_mutex_;
   SubmitTimes times_;
+  ID3D12InfoQueue1* debug_queue_ = nullptr;
+  DWORD debug_cookie_ = 0;
   nvrhi::DeviceHandle device_;
   std::array<Wrapped, 4> wrapped_;
   size_t next_slot_ = 0;
@@ -170,3 +196,4 @@ std::unique_ptr<HostDevice> CreateD3D12HostDevice(rex::ui::GraphicsProvider& pro
 }
 
 }  // namespace nr
+

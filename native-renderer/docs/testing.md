@@ -65,11 +65,16 @@ offset). The golden set captured on 10 October 2026 (Xenos plugin, D3D12, `kk-de
 
 ## Settings every run uses
 
-`--kk_launcher=false --kk_frame_rate=30 --kk_cheats=true --kk_cheat_chapters=true --fullscreen=false
+`--kk_launcher=false --kk_frame_rate=30 --kk_cheats=true --fullscreen=false
 --window_width=1280 --window_height=720 --kk_original_look=true`, with `KK_DEV_AUTOSKIP=1` and the scene's
 `KK_DEV_SCRIPT`, `KK_DEV_SHOTS`, `KK_DEV_SHOTS_FROM` and `REX_DEV_FRAME_LOG`. Every other `KK_*` and `REX_DEV_*`
 variable of the calling shell is cleared for the launch, and `SDL_WINDOW_ACTIVATE_WHEN_SHOWN=0` /
 `SDL_WINDOW_ACTIVATE_WHEN_RAISED=0` are set so the game's window does not take the focus from whoever uses the PC.
+
+The developer builds also use `KK_DEV_CHAPTERS=1` to unlock the original chapter-select page and
+`KK_DEV_GAME_PAUSE=1` to keep the original pause menu used by the golden frames and tour scripts. The player's
+chapter cheat was removed when chapter selection moved to the launcher; without the developer unlock, the
+old scripts start Venture instead of their chosen chapter. These switches do not apply to release builds.
 
 Native runs add `--native_pipeline_cache=false`, and since Phase 2c `--native_pipeline_list=false` and
 `--native_vk_pipeline_cache=false` (`plugin_args` in `scenes.json`; the other new defaults stay on): with the cache, a run makes every
