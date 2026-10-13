@@ -15,9 +15,14 @@ def latest(pattern):
     return paths[-1] if paths else None
 
 
+def capture_path(path):
+    png = path.with_suffix('.png')
+    return png if png.exists() else path
+
+
 def shot(run, seconds):
-    fine = run / f'shot_ms_{round(seconds*1000)}.bmp'
-    return fine if fine.exists() else run / f'shot_{int(seconds*10)}.bmp'
+    fine = capture_path(run / f'shot_ms_{round(seconds*1000)}.bmp')
+    return fine if fine.exists() else capture_path(run / f'shot_{int(seconds*10)}.bmp')
 
 
 def sheet(name, rows, crop=None, size=(640, 360)):
@@ -54,8 +59,8 @@ for entry in range(2, 9):
     before = latest(f'task016-before-e{entry}-*')
     after = latest(f'task016-after-e{entry}-*')
     if before and after:
-        rows = [[(f'Entry {entry}, {t/10:g}s, before', before / f'shot_{t}.bmp'),
-                 (f'Entry {entry}, {t/10:g}s, after', after / f'shot_{t}.bmp')]
+        rows = [[(f'Entry {entry}, {t/10:g}s, before', capture_path(before / f'shot_{t}.bmp')),
+                 (f'Entry {entry}, {t/10:g}s, after', capture_path(after / f'shot_{t}.bmp'))]
                 for t in (90, 180, 270, 390)]
         sheet(f'jungle-e{entry}.png', rows)
         sheet(f'jungle-crops-e{entry}.png', rows, crop=(200, 180, 840, 540), size=(640, 360))
@@ -64,8 +69,8 @@ for entry in (2,8):
     before = latest(f'task016-before-dlss-e{entry}-*')
     after = latest(f'task016-after-dlss-e{entry}-*')
     if before and after:
-        rows = [[(f'DLAA entry {entry}, {t/10:g}s, before', before / f'shot_{t}.bmp'),
-                 (f'DLAA entry {entry}, {t/10:g}s, after', after / f'shot_{t}.bmp')]
+        rows = [[(f'DLAA entry {entry}, {t/10:g}s, before', capture_path(before / f'shot_{t}.bmp')),
+                 (f'DLAA entry {entry}, {t/10:g}s, after', capture_path(after / f'shot_{t}.bmp'))]
                 for t in (90,180,270,390)]
         sheet(f'jungle-dlss-e{entry}.png', rows)
         sheet(f'jungle-dlss-crops-e{entry}.png', rows, crop=(200,180,840,540), size=(640,360))
@@ -83,7 +88,7 @@ if hands:
         patch = Image.open(shot(run,39)).convert('L').crop((220,210,280,300))
         residual = np.asarray(patch, dtype=float) - np.asarray(patch.filter(ImageFilter.GaussianBlur(2)), dtype=float)
         metrics[run.name]['wall_highpass_std_0_255'] = float(residual.std())
-        times = (39,39.034,39.068,39.102,39.136) if (run / 'shot_ms_39000.bmp').exists() else (39,39.1,39.2,39.3,39.4)
+        times = (39,39.034,39.068,39.102,39.136) if capture_path(run / 'shot_ms_39000.bmp').exists() else (39,39.1,39.2,39.3,39.4)
         frames = [np.asarray(Image.open(shot(run,t)).convert('RGB'), dtype=float)[360:700,650:1200]
                   for t in times if shot(run,t).exists()]
         if len(frames) > 1:

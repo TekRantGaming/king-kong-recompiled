@@ -153,12 +153,12 @@ class ImageLoading(unittest.TestCase):
         with self.assertRaises(C.ImageError):
             C.load_image(p)
 
-    def test_find_shot_prefers_bmp_then_png(self):
+    def test_find_shot_prefers_png_then_bmp(self):
         self.assertIsNone(C.find_shot(self.dir, 8.0))
         Image.fromarray(self.img).save(self.dir / "shot_80.png")
         self.assertEqual(C.find_shot(self.dir, 8.0).name, "shot_80.png")
         write_game_bmp(self.dir / "shot_80.bmp", self.img)
-        self.assertEqual(C.find_shot(self.dir, 8.0).name, "shot_80.bmp")
+        self.assertEqual(C.find_shot(self.dir, 8.0).name, "shot_80.png")
 
 
 class FrameScores(unittest.TestCase):
@@ -635,6 +635,38 @@ class CollectAndPlan(unittest.TestCase):
             self.assertEqual(len(frames), 1)
             self.assertEqual(C.frame_stats(frames[0])["draws"], 4)
 
+    def test_collect_png_copies_shots_and_cuts_the_frame_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            scenes = scenes_file(root / "scenes.json")
+            run_dir, out = root / "run", root / "out"
+            run_dir.mkdir()
+            for t in (80, 90, 100, 200):
+                Image.fromarray(background()).save(run_dir / f"shot_{t}.png")
+            log = ["[2026-10-10 04:00:00.000] [info] [kk] [t1] KK: save menu opened"]
+            # shot second 0 is at 04:00:01; each shot is saved 0.05 s after its time
+            for t in (80, 90, 100, 200):
+                s = 1 + t / 10 + 0.05
+                log.append(f"[2026-10-10 04:00:{s:06.3f}] [info] [kk] [t1] KK: captured frame shot_{t}.png ({W}x{H})")
+                log.append(f"[2026-10-10 04:00:{s+1:06.3f}] [info] [kk] [t9] KK: saved frame shot_{t}.png ({W}x{H})")
+            # frame log taken at 04:00:10.5, asked for at 17.2 s on the log's clock
+            log.append("[2026-10-10 04:00:10.500] [warning] [gpu] [t7] Frame log: frame start")
+            for line in frame_lines(SCENE_DRAWS):
+                log.append(f"[2026-10-10 04:00:10.510] [warning] [gpu] [t7] Frame log: {line}")
+            (run_dir / "game.log").write_text("\n".join(sorted(log)) + "\n", encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = C.main(["--scenes-file", str(scenes), "collect", "--run", "r", "--run-dir", str(run_dir),
+                               "--out-root", str(out), "--trigger", "17.2,2"])
+            self.assertEqual(code, 0)
+            self.assertEqual(sorted(p.name for p in (out / "rain").glob("shot_*")),
+                             ["shot_100.png", "shot_80.png", "shot_90.png"])
+            meta = json.loads((out / "rain" / "meta.json").read_text(encoding="utf-8"))
+            self.assertEqual(meta["frame_log"]["scene_time"], 9.45)
+            self.assertEqual(meta["frame_log"]["clock_offset"], 7.75)
+            frames = C.read_framelog(out / "rain" / "framelog.txt")
+            self.assertEqual(len(frames), 1)
+            self.assertEqual(C.frame_stats(frames[0])["draws"], 4)
+
     def test_plan(self):
         with tempfile.TemporaryDirectory() as tmp:
             scenes = scenes_file(Path(tmp) / "scenes.json")
@@ -642,7 +674,7 @@ class CollectAndPlan(unittest.TestCase):
                 self.assertEqual(C.main(["--scenes-file", str(scenes), "plan", "--scenes", "rain", "--golden"]), 0)
             run = json.loads(out.getvalue())["runs"][0]
             self.assertEqual(run["env"]["KK_DEV_SHOTS"], "7,8,9,10,11")
-            self.assertEqual(run["expected"][0], "shot_70.bmp")
+            self.assertEqual(run["expected"][0], "shot_70.png")
             self.assertEqual(run["env"]["REX_DEV_FRAME_LOG"], "16.70,2")
 
     def test_real_scene_list_loads(self):

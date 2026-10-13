@@ -93,8 +93,8 @@ def time_text(t: float) -> str:
 
 
 def shot_name(t: float) -> str:
-    # dev_tools.cpp parses the text with std::stod and names the file "shot_" + int(seconds * 10) + ".bmp".
-    return f"shot_{int(float(time_text(t)) * 10)}.bmp"
+    # dev_tools.cpp parses the text with std::stod and names Windows captures "shot_" + int(seconds * 10) + ".png".
+    return f"shot_{int(float(time_text(t)) * 10)}.png"
 
 
 def thresholds_for(data: dict, scene: dict) -> dict:
@@ -239,12 +239,18 @@ def cmd_collect(a) -> int:
     log_path = run_dir / "game.log"
     messages = list(read_log(log_path)) if log_path.exists() else []
     saved = {}
+    captured = set()
     menu_ts = None
     warnings = []
     for ts, lvl, _cat, msg in messages:
-        m = re.match(r"KK: saved frame (shot_\d+\.bmp) \((\d+)x(\d+)\)", msg)
+        m = re.match(r"KK: (?:captured|saved) frame (shot_\d+\.(?:png|bmp)) \((\d+)x(\d+)\)", msg)
         if m:
-            saved[m.group(1)] = (ts, int(m.group(2)), int(m.group(3)))
+            n = Path(m.group(1)).with_suffix(".png").name
+            if n not in captured:
+                saved[m.group(1)] = (ts, int(m.group(2)), int(m.group(3)))
+                saved[n] = saved[m.group(1)]
+            if msg.startswith("KK: captured frame"):
+                captured.add(n)
         elif msg == "KK: save menu opened" and menu_ts is None:
             menu_ts = ts
         elif lvl in ("error", "critical") and "ResolvePath" not in msg:
@@ -334,7 +340,7 @@ def cmd_collect(a) -> int:
 # Images
 
 
-IMAGE_EXTS = (".bmp", ".png")
+IMAGE_EXTS = (".png", ".bmp")
 
 
 def load_image(path: Path) -> np.ndarray:
@@ -405,7 +411,7 @@ def _read_plain_bmp(raw: bytes):
 
 
 def find_shot(folder: Path, t: float):
-    """The shot file for a time: shot_<tenths>.bmp, or the same name as .png (a converted or Linux capture)."""
+    """The shot file for a time: shot_<tenths>.bmp, or the same name as .png (preferred for new captures)."""
     stem = shot_name(t)[:-4]
     for ext in IMAGE_EXTS:
         p = folder / (stem + ext)

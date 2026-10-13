@@ -103,7 +103,7 @@ const bool g_wall_shots = [] {
       while (next < times.size() && t >= times[next]) {
         const char* dir = std::getenv("KK_DEV_SHOTS_DIR");
         kk::art::CaptureFrame(std::filesystem::path(dir && *dir ? dir : ".") /
-                              ("wall_" + std::to_string(int(times[next] * 10)) + ".bmp"));
+                              ("wall_" + std::to_string(int(times[next] * 10)) + art::kDevCaptureExtension));
         ++next;
       }
       if (tick % 10 == 0 && kk::g_guest_base) {

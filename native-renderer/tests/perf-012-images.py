@@ -7,7 +7,8 @@ paths=[Path(v) for v in sys.argv[2:]]
 panel=Image.new('RGB',(640*len(paths),390),'#181818')
 draw=ImageDraw.Draw(panel)
 for i,path in enumerate(paths):
-    with Image.open(path) as image:
+    png = path.with_suffix('.png')
+    with Image.open(png if png.exists() else path) as image:
         frame=image.convert('RGB')
         frame.thumbnail((640,360))
         panel.paste(frame,(i*640,25))

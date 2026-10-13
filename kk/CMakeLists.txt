@@ -30,6 +30,7 @@ set(KINGKONG_SOURCES
     src/display_modes.cpp
     src/iso.cpp
     src/art.cpp
+    src/capture_png.cpp
     src/overlay.cpp
     src/toast.cpp
     src/io_fix.cpp
@@ -106,6 +107,7 @@ if(KK_NATIVE_RENDERER)
     add_dependencies(king_kong rexgpu-native)
 endif()
 if(WIN32)
+    target_link_libraries(king_kong PRIVATE windowscodecs ole32)
     # UTF-8 as the program's code page (src/king_kong.manifest, issue #37).
     target_link_options(king_kong PRIVATE "LINKER:/MANIFEST:EMBED" "LINKER:/MANIFESTUAC:NO"
                         "LINKER:/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/src/king_kong.manifest")

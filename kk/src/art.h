@@ -35,10 +35,18 @@ std::filesystem::path AchievementCachePath(const std::filesystem::path& user_dat
 // Where ReXGlue keeps unlocked achievements for this title.
 std::filesystem::path AchievementUnlockPath(const std::filesystem::path& user_data_root);
 
+#if defined(_WIN32)
+inline constexpr const char* kDevCaptureExtension = ".png";
+#else
+inline constexpr const char* kDevCaptureExtension = ".bmp";
+#endif
+// Takes ownership of a guest readback. Windows encoding and I/O happen on a bounded worker queue.
+bool QueueDevCapture(rex::ui::RawImage image, const std::filesystem::path& path);
+
 bool SaveTitleCapture(const rex::ui::RawImage& image, const std::filesystem::path& path);
 
 // Saves the game's current frame (the guest output only, never the desktop) as
-// a .bmp. The app provides the capturer once the GPU is up; used by dev tools.
+// a PNG on Windows (BMP on other hosts). The app provides the capturer once the GPU is up; used by dev tools.
 void SetFrameCapturer(std::function<void(const std::filesystem::path&)> capturer);
 void CaptureFrame(const std::filesystem::path& path);
 Image LoadImage(const std::filesystem::path& path);  // .bmp (ours) or .png

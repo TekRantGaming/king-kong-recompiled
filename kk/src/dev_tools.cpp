@@ -253,7 +253,7 @@ bool WanderPad(uint8_t* state, int64_t now) {
 }
 
 // KK_DEV_SHOTS="5,20" (with KK_DEV_AUTOSKIP): save the game's frame (guest
-// output only) that many seconds after gameplay is reached, as shot_<s>.bmp in
+// output only) that many seconds after gameplay is reached, as shot_<s>.png on Windows in
 // KK_DEV_SHOTS_DIR (default: the working folder). With KK_DEV_SHOTS_FROM=menu
 // the seconds count from the save menu opening instead (to see menus). With
 // KK_DEV_SHOTS_FROM=boot they count from the start, and nothing is pressed
@@ -293,7 +293,7 @@ void TakeShots(double t) {
     const bool milliseconds = fine && *fine == '1';
     const std::string name = milliseconds ? "shot_ms_" + std::to_string(int(*it * 1000 + 0.5))
                                           : "shot_" + std::to_string(int(*it * 10));
-    art::CaptureFrame(std::filesystem::path(dir && *dir ? dir : ".") / (name + ".bmp"));
+    art::CaptureFrame(std::filesystem::path(dir && *dir ? dir : ".") / (name + art::kDevCaptureExtension));
     it = times.erase(it);
   }
 }

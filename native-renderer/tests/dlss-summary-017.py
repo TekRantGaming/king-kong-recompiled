@@ -76,7 +76,7 @@ def summarize(run):
                   wait_frames=sum(row['pipeline_wait_ms'] > 0 for row in native),
                   skipped_draws=sum(row['skipped_draws'] for row in native),
                   exhaustion_errors=sum('insufficient' in line.lower() and ('maxversions' in line.lower() or 'query pool' in line.lower()) for line in log.splitlines()),
-                  shots=len(list(run.glob('shot_*.bmp'))),
+                  shots=len({p.stem for ext in ('png', 'bmp') for p in run.glob('shot_*.' + ext)}),
                   errors=[line for line in log.splitlines() if 'Device Removed' in line or 'NVRHI: ERROR' in line],
                   upscaler=[line for line in log.splitlines() if 'upscaler DLSS (asked:' in line],
                   list_status=[line for line in log.splitlines() if 'pipeline list ' in line and 'descriptions' in line],
