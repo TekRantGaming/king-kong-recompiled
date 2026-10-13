@@ -38,12 +38,14 @@ public static class Task012CoreMask {
 }
 function Wait-Free {
  if (!(Test-Path -LiteralPath $lockPath)) { Set-Content -LiteralPath $lockPath 'free' }
- while ((Get-Content -LiteralPath $lockPath -Raw).Trim() -ne 'free') { Start-Sleep -Seconds 30 }
- $ours=Get-Process king_kong -ErrorAction SilentlyContinue | Where-Object { $_.Path -like 'F:\KK-native-renderer\runs\*' -or $_.Path -like 'F:\KK-native-renderer\wt\*' }
- if ($ours) { throw 'Another project game is running.' }
+ while ($true) {
+  try { $state=(Get-Content -LiteralPath $lockPath -Raw -ErrorAction Stop).Trim() } catch { $state='busy' }
+  $ours=Get-Process king_kong -ErrorAction SilentlyContinue | Where-Object { $_.Path -like 'F:\KK-native-renderer\runs\*' -or $_.Path -like 'F:\KK-native-renderer\wt\*' }
+  if ($state -eq 'free' -and !$ours) { break }
+  Start-Sleep -Seconds 30
+ }
  if (!(Get-Process kkbg2 -ErrorAction SilentlyContinue)) { throw 'kkbg2 is required.' }
 }
-Wait-Free
 $run="F:\KK-native-renderer\runs\task012-$Label-ch$Chapter-$(Get-Date -Format yyyyMMdd-HHmmss)"
 New-Item -ItemType Directory -Path $run | Out-Null
 $build=Join-Path $workspace 'kk/out/build/kk-dev-vulkan'
@@ -63,7 +65,7 @@ $env:KK_DEV_SCRIPT='0:SKIP/120'
 $env:KK_DEV_SHOTS='100,120'
 $env:KK_DEV_SHOTS_FROM='menu'
 $env:KK_DEV_SHOTS_DIR=$run
-if ($Fire) { $env:KK_DEV_SCRIPT='4:LT/117,5:RT/116,10:RSDOWN/0.4,65:RSRIGHT/0.5'; $env:KK_DEV_GUNFIRE='1' }
+if ($Fire) { $env:KK_DEV_SCRIPT='4:LT+RSDOWN/117,10:RT/110,65:RSRIGHT/0.5'; $env:KK_DEV_GUNFIRE='1' }
 $keep='kk_frame_rate,render_scale,native_render_scale,native_upscaler,ao_mode,ao_strength'
 $debug=if ($PassTimers) {557056} else {32768}
 $args=@('--fullscreen=false','--window_width=1280','--window_height=720','--kk_fullscreen_mode=desktop',
@@ -74,7 +76,7 @@ $args=@('--fullscreen=false','--window_width=1280','--window_height=720','--kk_f
  "--native_render_scale=$Scale", "--native_upscaler=$Upscaler",'--native_upscaler_gpu_time=true','--native_ao_gpu_time=true')
 if ($Classic) { $args+='--kk_renderer=classic'; $args+="--draw_resolution_scale_x=$(if($Scale -eq '1920x1080'){1}else{2})"; $args+="--draw_resolution_scale_y=$(if($Scale -eq '1920x1080'){1}else{2})" }
 if ($Gtao) { $args+='--ao_mode=1','--ao_strength=2','--native_ao_method=gtao' } else { $args+='--ao_mode=0' }
-if ($Fire) { $args+='--kk_cheat_ammo=true','--kk_cheat_machine_gun=true' }
+if ($Fire) { $args+='--kk_cheat_ammo=true','--kk_cheat_machine_gun=true','--mnk_mode=false','--kk_camera_sensitivity=400' }
 if ($Validation) { $args+='--native_validation=true' }
 @{label=$Label;chapter=$Chapter;backend=$Backend;classic=[bool]$Classic;scale=$Scale;cores=$Cores;
  affinity_mask=$coreMask.ToString('X'); native_dll=$NativeDll; dll_sha256=(Get-FileHash "$run\rexgpu-native.dll").Hash; args=$args} | ConvertTo-Json | Set-Content "$run\test.json"
