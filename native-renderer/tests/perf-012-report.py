@@ -101,8 +101,8 @@ report.append('''\nUpload bytes cover guest textures, vertices, indices and draw
 
 ## Emitted commands
 ''')
-report.append(table(['Case','NVRHI pipeline binds','Viewport commands','Scissor commands','Blend commands','Stencil commands','D3D graphics CBV updates'],
- [(r['label'],n(r.get('actual_pipeline_binds'),1),n(r.get('emitted_viewports'),1),n(r.get('emitted_scissors'),1),
+report.append(table(['Case','Chapter','NVRHI pipeline binds','Viewport commands','Scissor commands','Blend commands','Stencil commands','D3D graphics CBV updates'],
+ [(r['label'],r['chapter'],n(r.get('actual_pipeline_binds'),1),n(r.get('emitted_viewports'),1),n(r.get('emitted_scissors'),1),
    n(r.get('emitted_blends'),1),n(r.get('emitted_stencil'),1),n(r.get('emitted_root_cbv'),1)) for r in work if 'actual_pipeline_binds' in r]))
 report.append('## GPU pass groups')
 pass_rows=[]
