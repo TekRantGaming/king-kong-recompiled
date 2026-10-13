@@ -29,6 +29,7 @@ class ShaderLibrary {};  // never made without the game renderer; Backend's uniq
 #endif
 
 REXCVAR_DECLARE(int32_t, native_dump_frame);
+REXCVAR_DECLARE(int32_t, native_debug);
 
 namespace nr {
 
@@ -763,9 +764,9 @@ void Backend::PresentNow(rex::ui::Presenter* presenter, uint32_t frontbuffer_wid
     const auto t1 = std::chrono::steady_clock::now();
     struct RefreshTimer {
       std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
-      uint64_t cpu_start = CurrentThreadCpuMicroseconds();
+      uint64_t cpu_start = (REXCVAR_GET(native_debug) & 32768) ? CurrentThreadCpuMicroseconds() : 0;
       ~RefreshTimer() {
-        g_swap_refresh_cpu_us += CurrentThreadCpuMicroseconds() - cpu_start;
+        if (cpu_start) g_swap_refresh_cpu_us += CurrentThreadCpuMicroseconds() - cpu_start;
         g_swap_refresh_us += uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
                                           std::chrono::steady_clock::now() - start).count());
       }
