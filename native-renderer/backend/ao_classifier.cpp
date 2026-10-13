@@ -344,9 +344,11 @@ AoFrameTracker::Events AoFrameTracker::OnDraw(const Draw& d) {
   e.in_scene = d.color_key ? d.color_key == scene_color_ : d.depth_key == scene_depth_;
   if (!e.in_scene) return e;
   if (d.writes_depth && d.depth_key == scene_depth_) depth_valid_ = true;
-  if (d.cls == AoDrawClass::kEnd) saw_end_ = true;
+  const bool reliable_end = d.cls == AoDrawClass::kEnd ||
+      (d.cls == AoDrawClass::kTransparent && d.terminal_transparent);
+  if (reliable_end) saw_end_ = true;
   if (phase_ == Phase::kOpaquePass) {
-    if (d.cls == AoDrawClass::kEnd || (d.cls == AoDrawClass::kTransparent && d.terminal_transparent) ||
+    if (reliable_end ||
         (!expect_end_ && (d.cls == AoDrawClass::kTransparent || d.cls == AoDrawClass::kEffect))) {
       e.opaque_complete = true;
       phase_ = Phase::kAfterOpaque;

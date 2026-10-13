@@ -266,7 +266,13 @@ TEST(AoTracker_MissingFogStillEndsBeforeKnownOverlays) {
   CHECK(t.OnDraw(overlay).opaque_complete);
   CHECK(t.depth_valid());
   CHECK(!t.OnDraw(overlay).opaque_complete);
-  CHECK(!t.OnDraw(Draw(2, C::kEnd, kSceneColor, 0)).opaque_complete);
+  // The missing fog must not make the next frame fall back to its first decal.
+  t.OnDraw(Draw(3, C::kOpaque, kSceneColor, kSceneDepth, true));
+  CHECK(t.expects_end());
+  CHECK(!t.OnDraw(Draw(3, C::kTransparent, kSceneColor, kSceneDepth)).opaque_complete);
+  overlay.frame = 3;
+  CHECK(t.OnDraw(overlay).opaque_complete);
+  CHECK(!t.OnDraw(Draw(3, C::kEnd, kSceneColor, 0)).opaque_complete);
 }
 
 TEST(AoTracker_DepthValidity) {

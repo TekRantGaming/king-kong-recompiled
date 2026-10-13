@@ -130,9 +130,8 @@ class AoFrameTracker {
   bool depth_valid() const { return depth_valid_; }
   uint32_t depth_only_draws() const { return depth_only_draws_; }
   uint32_t opaque_draws() const { return opaque_draws_; }
-  // The previous frame had an `end` draw in its scene: this frame's opaque pass ends at its `end`
-  // draw only, and the transparent and effect draws before it (decals and second passes the game
-  // interleaves with its opaque draws) do not end it.
+  // The previous frame had a reliable end (fog or a known overlay) in its scene: generic
+  // transparent/effect draws before that boundary (decals and second passes) do not end it.
   bool expects_end() const { return expect_end_; }
 
  private:
