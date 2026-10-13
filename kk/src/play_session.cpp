@@ -438,7 +438,7 @@ void LoadStartRequestFromSettings() {
 }
 
 bool RelaunchWith(const std::wstring& extra) {
-  static constexpr const wchar_t* kDropped[] = {L"--kk_skip_launcher", L"--kk_start", L"--kk_launcher_page"};
+  static constexpr const wchar_t* kDropped[] = {L"--kk_skip_launcher", L"--kk_start", L"--kk_launcher_open"};
   auto dropped = [](const std::wstring& arg) {
     for (const wchar_t* d : kDropped) {
       const std::wstring p(d);
@@ -531,12 +531,13 @@ bool RelaunchWith(const std::wstring& extra) {
 
 namespace {
 std::atomic<int64_t> g_leave_since{0};
-std::string g_leave_why;
+std::string g_leave_why, g_leave_page = "play";
 }  // namespace
 
-void ReturnToLauncher(const char* why) {
+void ReturnToLauncher(const char* why, const char* page) {
   if (g_leaving.exchange(true)) return;
   g_leave_why = why;
+  g_leave_page = page;
   g_leave_since = NowMs();
   g_cover = true;
   REXLOG_INFO("KK play: back to the launcher ({})", why);
@@ -887,7 +888,10 @@ REX_HOOK_RAW(sub_8253DB80) {
     // In a session the launcher started, the start menu (level 3) means: back to the launcher.
     if (g_session && Load32(base, g + 4) != 0 && Load32(base, g + 8) == kStartMenuLevel) {
       Store32(base, g + 4, 0);
-      ReturnToLauncher(Load32(base, g + 0x5668) == 1 ? "the chapter-select run is over" : "the game left play");
+      // A chapter-select run that has reached its end goes back to Chapter select; Quit game to the Play menu.
+      const bool chapter_end = Load32(base, g + 0x5668) == 1 && !LeftByQuit();
+      ReturnToLauncher(chapter_end ? "the chapter-select run is over" : "the game left play",
+                       chapter_end ? "chapters" : "play");
     }
   }
   const bool request = g && Load32(base, g + 4) != 0;
@@ -912,7 +916,8 @@ REX_HOOK_RAW(sub_8253DB80) {
     if (!done && (idle || NowMs() - g_leave_since > 10000)) {
       done = true;
       if (!idle) REXLOG_WARN("KK play: the save system is still busy after 10 s; leaving anyway");
-      if (RelaunchWith(L"--kk_launcher_page=play") && g_quit) g_quit();
+      const std::wstring page(g_leave_page.begin(), g_leave_page.end());
+      if (RelaunchWith(L"--kk_launcher_open=" + page) && g_quit) g_quit();
     }
   }
 #if defined(KK_DEV_TOOLS)

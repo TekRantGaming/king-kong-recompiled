@@ -28,11 +28,12 @@ std::wstring StartRequestArg();
 void LoadStartRequestFromSettings();
 
 // Starts this program again with the port's session arguments replaced by `extra` (each "--name=value"):
-// --kk_skip_launcher, --kk_start and --kk_launcher_page are never passed on twice.
+// --kk_skip_launcher, --kk_start and --kk_launcher_open are never passed on twice.
 bool RelaunchWith(const std::wstring& extra);
 
-// Restarts into the launcher's Play menu (--kk_launcher_page=play) and quits this process.
-void ReturnToLauncher(const char* why);
+// Restarts into the launcher (--kk_launcher_open=<page>: play, the Play menu, or chapters, Chapter
+// select) and quits this process.
+void ReturnToLauncher(const char* why, const char* page);
 
 // ---- what the game side tells the rest of the port ----
 
@@ -59,6 +60,9 @@ bool SessionActive();
 
 // pause_hooks.cpp, for play_session.cpp: forget the pause state (a new level).
 void ResetPause();
+// True when the last thing done in the pause menu was Quit game (the start menu request that follows
+// goes back to the Play menu rather than Chapter select).
+bool LeftByQuit();
 
 }  // namespace kk::play
 

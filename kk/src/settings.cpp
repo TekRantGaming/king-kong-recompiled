@@ -20,9 +20,6 @@ REXCVAR_DEFINE_BOOL(kk_skip_launcher, false, "KK",
 REXCVAR_DEFINE_STRING(kk_start, "", "KK",
                       "Internal: what the game starts with, from the launcher's Play menu (continue:<slot>, "
                       "new:<slot>[:<name>], chapter:<slot>:<entry>[:<name>]); never saved");
-REXCVAR_DEFINE_STRING(kk_launcher_page, "", "KK",
-                      "Internal: open the launcher on this page (play: the Play menu, after the game has gone "
-                      "back to the launcher); never saved");
 REXCVAR_DEFINE_BOOL(kk_check_updates, true, "KK", "Check GitHub for a newer version when the launcher opens");
 REXCVAR_DEFINE_BOOL(kk_online_count, true, "KK",
                     "Show how many people are playing, with an anonymous check-in every 5 minutes (see online.h)");

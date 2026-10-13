@@ -45,6 +45,9 @@
 #include <rex/ui/imgui_dialog.h>
 #include <rex/ui/immediate_drawer.h>
 
+#include <rex/input/mnk/mnk_input_driver.h>
+
+#include "pause_menu.h"
 #include "play_internal.h"
 
 #if defined(KK_DEV_TOOLS)
@@ -104,7 +107,8 @@ std::atomic<bool> g_game_page{false};               // the Score or Save item's 
 std::atomic<bool> g_has_slot{false};               // a chapter-select run: Start again and Score exist
 std::atomic<bool> g_can_save{false};               // a story run with a save slot: Save exists
 std::atomic<int64_t> g_game_page_since{0};         // when Score or Save opened the game's own pages
-std::atomic<int64_t> g_closing_until{0};           // the page's last frames after Resume: not the menu
+std::atomic<int64_t> g_closing_until{0};
+std::atomic<bool> g_left_by_quit{false};           // the page's last frames after Resume: not the menu
 std::atomic<int> g_pending{-1};                    // PauseAction being carried out, -1 none
 std::atomic<int> g_phase{kIdle};
 std::atomic<int64_t> g_confirm_seen_ms{0};
@@ -147,6 +151,7 @@ bool PauseActionAvailable(PauseAction action) {
 }
 
 void RunPauseAction(PauseAction action) {
+  g_left_by_quit = action == PauseAction::kQuitToLauncher;
   if (!PauseActionAvailable(action)) {
     REXLOG_WARN("KK pause: {} is not available now", ActionName(int(action)));
     return;
@@ -232,7 +237,19 @@ void CreatePauseBackdrop(rex::ui::ImGuiDrawer* drawer, rex::ui::ImmediateDrawer*
 void FilterPad(uint32_t user, uint8_t* state) {
   const uint16_t buttons = uint16_t(state[4] << 8 | state[5]);
   if (user == 0) g_raw_buttons = buttons;
-  const bool open = PauseMenuOpen() || g_pending >= 0 || CoverScreen();
+  const bool menu = PauseMenuOpen();
+  // The port's menu reads the pad the game read (pause_menu.cpp); keyboard and mouse reach it through
+  // ImGui, so the mouse is let go (no mouse look) while it is open.
+  if (user == 0 && menu) {
+    auto s16 = [&](int at) { return int16_t(uint16_t(state[at] << 8 | state[at + 1])); };
+    kk::PauseMenuPad(buttons, s16(8), s16(10), state[6], state[7]);
+  }
+  static bool look_off = false;
+  if (menu != look_off) {
+    look_off = menu;
+    rex::input::mnk::SetMouseLookActive(!menu);
+  }
+  const bool open = menu || CoverScreen() || (g_pending >= 0 && MenuUp());
   if (open) {
     g_was_open = true;
     g_hidden_mask = 0xFFFF;
@@ -249,6 +266,8 @@ void FilterPad(uint32_t user, uint8_t* state) {
     state[4] = uint8_t(shown >> 8), state[5] = uint8_t(shown);
   }
 }
+
+bool LeftByQuit() { return g_left_by_quit; }
 
 void ResetPause() {
   g_pending = -1;
@@ -272,6 +291,15 @@ REX_HOOK_RAW(sub_824B44E8) {
   const uint32_t v = PageVars(base);
   const uint32_t before = v ? Load32(base, v + 0x1C) : 0;
   __imp__sub_824B44E8(ctx, base);
+  // Play goes on: whatever the port's menu was doing is over (Start again restarts the chapter without
+  // a level load; its confirmation page does not come back to the pause page).
+  if (v && !Load32(base, v + 0x1C) && g_phase == kConfirm && g_confirm_frames > 0 &&
+      NowMs() - g_confirm_seen_ms.load() > kPageGoneMs) {
+    REXLOG_INFO("KK pause: play goes on after the confirmation page ({})", ActionName(g_pending));
+    g_confirm_frames = 0;
+    g_pending = -1;
+    g_phase = kIdle;
+  }
   if (v && !before && Load32(base, v + 0x1C) && InPlay(base) && TakeoverOn()) {
     g_pause_started_ms = NowMs();
     REXLOG_INFO("KK pause: the game paused; the port's pause menu takes over");

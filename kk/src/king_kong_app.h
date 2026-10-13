@@ -49,6 +49,7 @@ void InstallFpeGuard();  // fpe_guard.cpp
 #include "launcher.h"
 #include "overlay.h"
 #include "platform.h"
+#include "pause_menu.h"
 #include "play_internal.h"
 #include "settings.h"
 #include "toast.h"
@@ -96,6 +97,7 @@ class KingKongApp : public rex::ReXApp {
   std::optional<rex::PathConfig> OnFinalizePaths(
       const rex::PathConfig& defaults, std::function<void(rex::PathConfig)> resume) override {
     user_data_root_ = defaults.user_data_root;
+    config_path_ = defaults.config_path;
     kk::MigrateSettings(defaults.config_path);
     kk::ApplyFixedSettings();
     // The launcher's Play menu: the saves live under the user data, a start request may be given
@@ -108,9 +110,9 @@ class KingKongApp : public rex::ReXApp {
     const bool skip_once = REXCVAR_GET(kk_skip_launcher);
     rex::cvar::ResetToDefault("kk_skip_launcher");  // never persist it
     const bool files_ok = kk::GameFilesPresent(defaults.game_data_root);
-    // --kk_launcher_page (back from the game): the launcher shows even when it is switched off.
+    // --kk_launcher_open (back from the game, launcher.cpp): the launcher shows even when it is switched off.
     const bool show = !files_ok || kk::IsShiftHeld() || (REXCVAR_GET(kk_launcher) && !skip_once) ||
-                      (!skip_once && !REXCVAR_GET(kk_launcher_page).empty());
+                      (!skip_once && !rex::cvar::GetFlagByName("kk_launcher_open").empty());
     if (!show) {
       kk::EnforceOriginalLook();
       kk::ApplyFullscreenMode(window());
@@ -245,6 +247,8 @@ class KingKongApp : public rex::ReXApp {
     SetGuestFrameStats(kk::GetGuestFrameStats);  // F3 overlay "Guest: N FPS"
     // The port's pause menu: the last frame of play behind it (pause_hooks.cpp), under every other dialog.
     kk::play::CreatePauseBackdrop(drawer, immediate_drawer());
+    // The port's pause menu (pause_menu.cpp; the launcher's Play makes it too, later calls do nothing).
+    kk::CreatePauseMenu(drawer, immediate_drawer(), config_path_, user_data_root_, game_data_root());
     kk::CreateFpsOverlay(drawer);
   }
 
@@ -360,6 +364,6 @@ class KingKongApp : public rex::ReXApp {
     });
   }
 
-  std::filesystem::path user_data_root_;
+  std::filesystem::path user_data_root_, config_path_;
   kk::AchievementToast* toast_ = nullptr;  // owned by ReXApp
 };
