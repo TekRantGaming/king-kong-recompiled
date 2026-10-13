@@ -190,7 +190,8 @@ a multiple of 16 (no pass writes outside its images; the padding repeats the pic
    shader/count/order/closest constants rather than changing ring-buffer addresses, as the SDK camera vote does.
 
 With an active temporal SDK (DLSS, FSR or XeSS), AO remains at the opaque point before upscaling and does not use a
-second local history. Its noise rotates over 64 patterns for the SDK to smooth. Local accumulation rotates the same
+second local history. A live switch to the SDK releases local history images and their binding sets; switching back
+starts with fresh local history. Its noise rotates over 64 patterns for the SDK to smooth. Local accumulation rotates the same
 patterns only when the camera has at least three matching votes and a majority; otherwise it keeps fixed noise and
 the existing two spatial denoise passes. `native_ao_gpu_time` includes the local filter and its history copies.
 The launcher's Graphics page places AO quality next to AO strength and applies its sample count live.

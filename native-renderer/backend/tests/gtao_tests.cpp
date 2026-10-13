@@ -616,6 +616,31 @@ TEST(Gtao_TemporalReducesNoiseRejectsDepthAndResets) {
       if (z[i] == 1) CHECK(a.v[i] == 1);
     }
   }
+  // Delegating denoise to an SDK must return the spatial result and discard local
+  // history. Switching back starts fresh even with a contiguous frame number.
+  ++in.frame;
+  a = compute(temporal, raw); b = compute(spatial, raw);
+  CHECK(delta(a,b) < 1e-6);
+  const uint64_t history_frames = temporal.stats().history_frames;
+  ++in.frame;
+  a = compute(temporal, local); b = compute(spatial, raw);
+  CHECK(delta(a,b) < 1e-6);
+  CHECK_EQ(temporal.stats().history_frames, history_frames);
+  // A viewport offset change invalidates the previous picture's mapping.
+  ++in.frame;
+  in.screen.window_x += 1;
+  a = compute(temporal, local); b = compute(spatial, raw);
+  CHECK(delta(a,b) < 1e-6);
+  CHECK_EQ(temporal.stats().history_frames, history_frames);
+  // An unmatched camera uses fixed spatial noise rather than rotating samples
+  // without a usable reprojection.
+  ++in.frame;
+  in.reprojection_valid = false;
+  GtaoSettings fixed;
+  a = compute(temporal, local); b = compute(spatial, fixed);
+  CHECK(delta(a,b) < 1e-6);
+  CHECK_EQ(temporal.stats().history_frames, history_frames);
+  in.reprojection_valid = true;
   // A new surface far in front of the previous scene rejects the old depth.
   z.assign(z.size(), 0.5f);
   depth = DepthTexture(gpu->device(), z, kGw, kGh);

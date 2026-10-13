@@ -225,7 +225,16 @@ nvrhi::TextureHandle Gtao::MakeImage(uint32_t width, uint32_t height, nvrhi::For
 
 bool Gtao::EnsureImages(uint32_t pw, uint32_t ph, uint32_t ow, uint32_t oh, bool temporal) {
   if (pw == padded_w_ && ph == padded_h_ && ow == out_w_ && oh == out_h_ && output_ &&
-      (!temporal || (spatial_ && temporal_depth_ && history_ao_ && history_depth_))) return true;
+      (!temporal || (spatial_ && temporal_depth_ && history_ao_ && history_depth_))) {
+    if (!temporal && spatial_) {
+      // A live switch to an SDK delegates history to it. Drop both the local images
+      // and the binding sets retaining them, while keeping the spatial working images.
+      sets_.clear();
+      spatial_ = temporal_depth_ = history_ao_ = history_depth_ = nullptr;
+      history_frame_ = UINT64_MAX;
+    }
+    return true;
+  }
   padded_w_ = padded_h_ = out_w_ = out_h_ = 0;
   fixed_sets_.clear();
   sets_.clear();
