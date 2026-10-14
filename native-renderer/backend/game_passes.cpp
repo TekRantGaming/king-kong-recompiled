@@ -58,6 +58,7 @@ bool GameRenderer::Blit(nvrhi::ICommandList* cl, nvrhi::ITexture* source, int32_
   nvrhi::FramebufferDesc fd;
   fd.addColorAttachment(nvrhi::FramebufferAttachment().setTexture(dest).setMipLevel(dest_level).setArraySlice(dest_slice));
   uint64_t fb_key = Mix64(Mix64(0xB117, reinterpret_cast<uintptr_t>(dest)), (uint64_t(dest_level) << 32) | dest_slice);
+  framebuffer_used_[fb_key] = frame_;
   nvrhi::IFramebuffer* fb = nullptr;
   if (auto it = framebuffers_.find(fb_key); it != framebuffers_.end()) {
     fb = it->second;
@@ -138,6 +139,16 @@ void GameRenderer::ClearRect(nvrhi::ICommandList* cl, HostTarget* color, HostTar
   const bool whole = rect.minX == 0 && rect.minY == 0 && rect.maxX == int(size_from->width) &&
                      rect.maxY == int(size_from->height);
   if (whole) {
+    if (clear_color) {
+      color->clear_only = true;
+      color->saved_color = nvrhi::Color(rgba[0], rgba[1], rgba[2], rgba[3]);
+    }
+    if (clear_depth || clear_stencil) {
+      // A one-aspect clear cannot describe the other aspect's contents.
+      depth->clear_only = clear_depth && clear_stencil;
+      depth->saved_depth = std::clamp(z, 0.0f, 1.0f);
+      depth->saved_stencil = uint8_t(stencil);
+    }
     if (clear_color)
       cl->clearTextureFloat(color->texture, nvrhi::AllSubresources, nvrhi::Color(rgba[0], rgba[1], rgba[2], rgba[3]));
     if (clear_depth || clear_stencil)

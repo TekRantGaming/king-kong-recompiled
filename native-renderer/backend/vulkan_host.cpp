@@ -132,6 +132,30 @@ class VulkanHost final : public HostDevice {
   nvrhi::IDevice* device() override { return device_; }
   nvrhi::GraphicsAPI api() const override { return nvrhi::GraphicsAPI::VULKAN; }
 
+  MemoryBudget QueryMemoryBudget() override {
+    const auto* d = provider_.vulkan_device();
+    if (!d->extensions().ext_EXT_memory_budget) return {};
+    const auto fn = provider_.vulkan_instance()->functions().vkGetPhysicalDeviceMemoryProperties2;
+    if (!fn) return {};
+    VkPhysicalDeviceMemoryBudgetPropertiesEXT budget{};
+    budget.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
+    VkPhysicalDeviceMemoryProperties2 properties{};
+    properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
+    properties.pNext = &budget;
+    fn(d->physical_device(), &properties);
+    // Test each local heap separately: spare capacity on one heap must not
+    // hide pressure on another. Includes UMA's local, host-visible heap.
+    MemoryBudget tightest;
+    for (uint32_t i = 0; i < properties.memoryProperties.memoryHeapCount; ++i) {
+      if (!(properties.memoryProperties.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) ||
+          !budget.heapBudget[i]) continue;
+      MemoryBudget m{budget.heapBudget[i], budget.heapUsage[i], true};
+      if (!tightest.valid || double(m.usage) / m.budget > double(tightest.usage) / tightest.budget)
+        tightest = m;
+    }
+    return tightest;
+  }
+
   void ExecuteCommandList(nvrhi::ICommandList* command_list) override {
     ExecuteFrameCommandList(command_list, nullptr);
   }

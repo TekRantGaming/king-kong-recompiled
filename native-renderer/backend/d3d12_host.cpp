@@ -8,6 +8,7 @@
 #include <vector>
 
 #include <d3d12sdklayers.h>
+#include <dxgi1_4.h>
 #include <nvrhi/d3d12.h>
 #include <nvrhi/validation.h>
 #include <rex/cvar.h>
@@ -33,6 +34,7 @@ class D3D12Host final : public HostDevice {
 
   ~D3D12Host() override {
     if (frame_fence_) frame_fence_->Release();
+    if (budget_adapter_) budget_adapter_->Release();
     if (debug_queue_) {
       debug_queue_->UnregisterMessageCallback(debug_cookie_);
       debug_queue_->Release();
@@ -40,6 +42,11 @@ class D3D12Host final : public HostDevice {
   }
 
   bool Initialize() {
+    IDXGIFactory4* factory = nullptr;
+    if (SUCCEEDED(provider_.GetDXGIFactory()->QueryInterface(IID_PPV_ARGS(&factory)))) {
+      factory->EnumAdapterByLuid(provider_.GetDevice()->GetAdapterLuid(), IID_PPV_ARGS(&budget_adapter_));
+      factory->Release();
+    }
     const auto requirements = CheckD3D12Requirements(
         [this](D3D12_FEATURE feature, void* data, UINT size) {
           return provider_.GetDevice()->CheckFeatureSupport(feature, data, size);
@@ -95,6 +102,13 @@ class D3D12Host final : public HostDevice {
 
   nvrhi::IDevice* device() override { return device_; }
   nvrhi::GraphicsAPI api() const override { return nvrhi::GraphicsAPI::D3D12; }
+
+  MemoryBudget QueryMemoryBudget() override {
+    DXGI_QUERY_VIDEO_MEMORY_INFO info{};
+    if (!budget_adapter_ || FAILED(budget_adapter_->QueryVideoMemoryInfo(
+        0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info)) || !info.Budget) return {};
+    return {info.Budget, info.CurrentUsage, true};
+  }
 
   void ExecuteCommandList(nvrhi::ICommandList* command_list) override {
     ExecuteFrameCommandList(command_list, nullptr);
@@ -204,6 +218,7 @@ class D3D12Host final : public HostDevice {
     frame_values_.emplace_back(completion, value);
   }
 
+  IDXGIAdapter3* budget_adapter_ = nullptr;
   static void CALLBACK DebugMessage(D3D12_MESSAGE_CATEGORY, D3D12_MESSAGE_SEVERITY severity,
                                    D3D12_MESSAGE_ID id, LPCSTR description, void*) {
     if (severity <= D3D12_MESSAGE_SEVERITY_ERROR)

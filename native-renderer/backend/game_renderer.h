@@ -42,6 +42,7 @@
 #include "backend/scene_ao.h"
 #include "backend/scene_gi.h"
 #include "backend/scene_lighting.h"
+#include "backend/memory_budget.h"
 #include "backend/draw_sink.h"
 #include "backend/driver_pipeline_cache.h"
 #include "backend/frame_log.h"
@@ -157,6 +158,7 @@ class GameRenderer {
     // time, 128 no widening of a written range, 8 log the pages CPU writes
     // invalidate most (every 300 frames).
     uint32_t debug = 0;
+    std::function<MemoryBudget()> memory_budget;
   };
 
   struct Stats {
@@ -350,6 +352,12 @@ class GameRenderer {
   struct HostTarget {
     nvrhi::TextureHandle texture;
     uint64_t allocation_bytes = 0;
+    // Only a whole colour clear or a whole depth AND stencil clear can be
+    // represented without GPU storage. Any attachment use invalidates this.
+    bool clear_only = false;
+    nvrhi::Color saved_color;
+    float saved_depth = 1.0f;
+    uint8_t saved_stencil = 0;
     nvrhi::Format format = nvrhi::Format::UNKNOWN;
     uint32_t width = 0, height = 0;  // in guest pixels (the pitch and the rows drawn so far)
     uint32_t host_width = 0, host_height = 0;  // the texture's: the guest's times the scale
@@ -383,6 +391,13 @@ class GameRenderer {
   HostTarget* GetTarget(bool depth, uint32_t edram_base, uint32_t pitch, uint32_t format,
                         uint32_t height, int generation = -1);
   HostTarget* FindTarget(bool depth, uint32_t edram_base, uint32_t pitch, uint32_t format, int generation = -1);
+  bool RestoreTarget(HostTarget& target);
+  void CheckMemoryBudget();
+  void TrimClearTargets();
+  std::chrono::steady_clock::time_point memory_sample_{};
+  uint32_t memory_pressure_samples_ = 0;
+  bool memory_half_ao_ = false;
+  uint64_t memory_evictions_ = 0, memory_restores_ = 0;
   static nvrhi::Format ColorTargetFormat(uint32_t format);
   kknr::TextureOptions TextureOptions() const {
     kknr::TextureOptions o;
@@ -628,6 +643,7 @@ class GameRenderer {
 
   std::unordered_map<uint64_t, std::unique_ptr<HostTarget>> targets_;
   std::unordered_map<uint64_t, nvrhi::FramebufferHandle> framebuffers_;
+  std::unordered_map<uint64_t, uint64_t> framebuffer_used_;
   std::unordered_map<uint64_t, nvrhi::GraphicsPipelineHandle> pipelines_;
 
   // Ambient occlusion (null until Initialize, and when its shaders are missing).

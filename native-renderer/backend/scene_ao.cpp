@@ -148,6 +148,7 @@ bool SceneAo::Compute(nvrhi::ICommandList* cl, const AoSettings& s, nvrhi::IText
   TimeBegin(cl);
   GtaoSettings gs = Settings(s);
   if (config_.quality == AoQuality::kAuto) gs.half = sc.host_scale_x > 1.5f || sc.host_scale_y > 1.5f;
+  if (memory_pressure_) gs.half = true;
   const bool ok = gtao_->Compute(cl, in, gs) != nullptr;
   TimeEnd(cl);
   if (!ok) {

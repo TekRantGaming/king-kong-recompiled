@@ -118,6 +118,7 @@ class SceneAo {
   const AoRuleTable& rules() const { return rules_; }
   const AoFrameTracker& tracker() const { return tracker_; }
   const Gtao* gtao() const { return gtao_.get(); }
+  void SetMemoryPressure(bool pressure) { memory_pressure_ = pressure; }
 
  private:
   void NewFrame(uint64_t frame);
@@ -137,6 +138,7 @@ class SceneAo {
   void TimeBegin(nvrhi::ICommandList* cl) { if (timer_) timer_->Begin(cl); }
   void TimeEnd(nvrhi::ICommandList* cl) { if (timer_) timer_->End(cl); }
   AoConfig config_;
+  bool memory_pressure_ = false;
   AoRuleTable rules_;
   std::shared_ptr<const kkshaders::AmbientTable> ambient_;
   std::unique_ptr<Gtao> gtao_;
