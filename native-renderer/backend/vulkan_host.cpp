@@ -190,7 +190,9 @@ class VulkanHost final : public HostDevice {
     barrier.subresourceRange.layerCount = 1;
     bool written = vulkan_context.image_ever_written_previously();
     barrier.srcAccessMask = written ? VulkanPresenter::kGuestOutputInternalAccessMask : 0;
-    barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    // OutputBlit uses LOAD even for its full-screen overwrite. Synchronize
+    // that attachment read as well as the fragment output writes.
+    barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     barrier.oldLayout =
         written ? VulkanPresenter::kGuestOutputInternalLayout : VK_IMAGE_LAYOUT_UNDEFINED;
     barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
