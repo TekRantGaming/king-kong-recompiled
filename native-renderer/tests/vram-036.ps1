@@ -9,6 +9,7 @@ $lockPath='F:\KK-native-renderer\runs\codex-game.lock'
 $build="$workspace\kk\out\build\kk-dev-vulkan"
 function Acquire-Game {
   while ($true) {
+    $pollSeconds=30
     # Atomically check and claim the common lock while holding its file handle.
     $file=$null
     try {
@@ -18,6 +19,13 @@ function Acquire-Game {
       $state=[Text.Encoding]::UTF8.GetString($bytes).Trim([char]0xFEFF).Trim()
       if ($state.StartsWith('user')) { throw 'USER_PAUSE: no game launches permitted' }
       $games=@(Get-Process king_kong -ErrorAction SilentlyContinue)
+      foreach ($existingGame in $games) {
+        $existingPath=$existingGame.Path
+        if (!$existingPath -or ($existingPath -notlike 'F:\KK-native-renderer\runs\*' -and
+                              $existingPath -notlike 'F:\KK-native-renderer\wt\*')) {
+          $pollSeconds=60
+        }
+      }
       if (($state -eq 'free' -or !$state) -and $games.Count -eq 0) {
         if (!(Get-Process kkbg2 -ErrorAction SilentlyContinue)) { throw 'kkbg2 is required' }
         $claim=[Text.Encoding]::UTF8.GetBytes("task036 $(Get-Date -Format o)")
@@ -28,7 +36,7 @@ function Acquire-Game {
       # Another runner owns the handle or the game lock. Poll per GAME-RULES.
     } finally { if ($file) { $file.Dispose() } }
     Write-Output "WAIT $(Get-Date -Format o) game lock busy"
-    Start-Sleep -Seconds 30
+    Start-Sleep -Seconds $pollSeconds
   }
 }
 foreach ($budget in $Budgets) {
