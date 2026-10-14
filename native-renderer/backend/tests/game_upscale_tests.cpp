@@ -1087,6 +1087,22 @@ namespace {
 struct BenchResult { double median_us = 0, p90_us = 0; uint32_t draws = 0; };
 BenchResult BenchFrames(Fixture& f, uint32_t repeats, int frames) {
   const uint64_t draws_before = f.game->stats().draws;
+  // Exercise the warm placeholder-warning path without real game shaders or data.
+  if (std::getenv("NR_BENCH_MISSING_TEXTURE")) {
+    TFetch t;
+    t.dst = t.src = 0;
+    t.srcSwizzle = fetchSrcSwizzle("xy");
+    t.slot = 0;
+    t.dim = Dim::D2;
+    Program p;
+    p.exec({Op{t.encode(), true}});
+    p.alloc(2, 0);
+    p.exec({Export(0, 0)}, true);
+    auto spec = PixelSpec();
+    spec.ucode = p.assemble();
+    spec.constants.push_back({"g_Texture", 3, 0, 1, 4, 12, 1, 1, 1});
+    f.ps_lit = f.CreateShader(false, ctest::writeContainer(spec));
+  }
   const Mesh world = WorldMesh(), box = BoxMesh(), water = WaterMesh();
   float box_rows[16];
   f.cam.Moved(V3{0.1f, 0, 0}, box_rows);
