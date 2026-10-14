@@ -165,7 +165,7 @@ bool NativeShaderPack::Working() { return Busy() && impl_->worked; }
 std::string NativeShaderPack::StepText() {
   if (!Working() || impl_->last.steps <= 0 || impl_->last.step <= 0) return {};
   const std::string backend = impl_->last.backend;
-  const std::string api = backend == "spirv" ? "Vulkan" : backend == "dxil" ? "Direct3D 12" : backend;
+  const std::string api = backend == "spirv" ? "Vulkan" : backend == "dxil" ? "DirectX 12" : backend;
   const std::string what = impl_->last.step_kind == 0 ? F("Compiling the {0} shaders", {api})
                                                       : F("Preparing the {0} pipelines", {api});
   return F("Step {0} of {1}: {2}", {std::to_string(std::min(impl_->last.step, impl_->last.steps)),
