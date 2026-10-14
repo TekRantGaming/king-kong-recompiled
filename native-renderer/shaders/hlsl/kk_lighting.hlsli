@@ -25,6 +25,13 @@ cbuffer KKLighting : register(b5, space0)
     float4 kl_SsrMisc;       // x edge fade, y roughness from the normal map, z normal map tilt, w F0 (ocean)
 };
 
+// Test hosts can bind the same algorithm without the game's bindless tables.
+#ifndef KL_DEPTH_TEXTURE
+#define KL_DEPTH_TEXTURE kk_Tex2D[kl_SsrTextures.y]
+#define KL_COLOR_TEXTURE kk_Tex2D[kl_SsrTextures.x]
+#define KL_LINEAR_SAMPLER kk_Sampler[kl_SsrSampler.x]
+#endif
+
 struct KLSsr
 {
     float2 pixelUv;    // the pixel in the picture (0-1)
@@ -94,7 +101,7 @@ KLSsr kl_WaterTrace(float4 pos, float2 normalMap)
     }
     float k0 = 1.0 / p.z, k1 = 1.0 / p1.z;
     float2 inv = 1.0 / select(abs(d) > 1e-6, d, 1e-6);
-    Texture2D<float4> pyramid = kk_Tex2D[kl_SsrTextures.y];
+    Texture2D<float4> pyramid = KL_DEPTH_TEXTURE;
     int maxLevel = int(kl_SsrTextures.z) - 1;
     float eps = 0.02 / span;
     float t = 1.0 / span;  // a texel away from the start
@@ -162,7 +169,7 @@ float4 kl_WaterReflection(float4 game, KLSsr s, float2 gameUv, bool planar)
     float2 uv = s.uv;
     if (planar)
         uv += clamp(gameUv - s.pixelUv, -0.05, 0.05);
-    float3 c = kk_Tex2D[kl_SsrTextures.x].SampleLevel(kk_Sampler[kl_SsrSampler.x], saturate(uv), s.lod).rgb;
+    float3 c = KL_COLOR_TEXTURE.SampleLevel(KL_LINEAR_SAMPLER, saturate(uv), s.lod).rgb;
     float4 o = game;
     o.rgb = lerp(game.rgb, c, a);
     if (planar)
@@ -176,7 +183,7 @@ float4 kl_OceanReflection(float4 color, KLSsr s)
     float a = s.confidence * s.fresnel * kl_SsrParams.x;
     if (!(a > 0.0))
         return color;
-    float3 c = kk_Tex2D[kl_SsrTextures.x].SampleLevel(kk_Sampler[kl_SsrSampler.x], saturate(s.uv), s.lod).rgb;
+    float3 c = KL_COLOR_TEXTURE.SampleLevel(KL_LINEAR_SAMPLER, saturate(s.uv), s.lod).rgb;
     return float4(lerp(color.rgb, c, a), color.a);
 }
 
