@@ -67,6 +67,7 @@ set(KINGKONG_SOURCES
     src/update.cpp
     src/play_session.cpp
     src/profile_options.cpp
+    src/profile_save_file.cpp
     src/pause_hooks.cpp
     src/pause_menu.cpp
 )
@@ -167,8 +168,8 @@ if(KK_DEV_TOOLS)
     rexglue_apply_target_settings(kk-hardware-tests)
     enable_testing()
     add_test(NAME hardware-recommendation COMMAND kk-hardware-tests)
-    # Launcher logic without a game or window: the shader job's progress bar.
-    add_executable(kk-launcher-tests tests/launcher_logic_tests.cpp)
+    # Launcher logic without a game or window: the shader job's progress bar, the options in every save.
+    add_executable(kk-launcher-tests tests/launcher_logic_tests.cpp src/profile_save_file.cpp)
     target_include_directories(kk-launcher-tests PRIVATE src)
     rexglue_apply_target_settings(kk-launcher-tests)
     add_test(NAME launcher-logic COMMAND kk-launcher-tests)

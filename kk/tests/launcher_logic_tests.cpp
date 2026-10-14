@@ -1,10 +1,18 @@
 // Console checks of launcher logic that needs no game, window or device: the shader job's single
-// progress bar (shader_progress.h).
+// progress bar (shader_progress.h), and the audio and subtitle options written to every save
+// (profile_save_file.h), on made-up saves in a temporary folder.
+#include "profile_save_file.h"
 #include "shader_progress.h"
 
+#include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
+#include <iterator>
+#include <string>
+#include <vector>
 
 namespace {
 int checks = 0;
@@ -114,10 +122,119 @@ void ShaderProgressChecks() {
   bar.Reset();
   Check(bar.Shown() == 0.0f, "a new job starts at 0");
 }
+namespace fs = std::filesystem;
+namespace sf = kk::play::save_file;
+
+std::vector<uint8_t> MadeUpSave(uint32_t seed, float volume, uint32_t subtitles) {
+  std::vector<uint8_t> b(sf::kSaveSize);
+  for (size_t i = 0; i < b.size(); ++i) b[i] = uint8_t((i * 131 + seed) & 0xFF);
+  sf::WriteWord(b.data() + 0x28, 0x1234);  // a continue level: a used slot
+  sf::WriteWord(b.data() + 0xA68, 4);
+  for (int i = 0; i < 4; ++i) sf::WriteWord(b.data() + sf::kFileFields[i], std::bit_cast<uint32_t>(volume));
+  sf::WriteWord(b.data() + sf::kFileFields[4], subtitles);
+  return b;
+}
+void WriteFile(const fs::path& path, const std::vector<uint8_t>& bytes) {
+  fs::create_directories(path.parent_path());
+  std::ofstream(path, std::ios::binary).write(reinterpret_cast<const char*>(bytes.data()), std::streamsize(bytes.size()));
+}
+std::vector<uint8_t> ReadFile(const fs::path& path) {
+  std::ifstream in(path, std::ios::binary);
+  return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+}
+size_t CountFiles(const fs::path& dir, const std::string& prefix) {
+  size_t n = 0;
+  std::error_code ec;
+  for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec))
+    if (it->path().filename().string().starts_with(prefix)) ++n;
+  return n;
+}
+float Volume(const std::vector<uint8_t>& b, int option) {
+  return std::bit_cast<float>(sf::ReadWord(b.data() + sf::kFileFields[option]));
+}
+// Only the option words differ from `before`.
+bool OnlyOptionsChanged(const std::vector<uint8_t>& before, const std::vector<uint8_t>& after) {
+  if (before.size() != after.size()) return false;
+  for (size_t i = 0; i < before.size(); ++i) {
+    bool option = false;
+    for (uint32_t f : sf::kFileFields) option |= i >= f && i < f + 4;
+    if (!option && before[i] != after[i]) return false;
+  }
+  return true;
+}
+
+void AllSavesChecks() {
+  const fs::path root = fs::temp_directory_path() /
+      ("kk-launcher-tests-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  auto slot_file = [&root](int slot) { return root / ("slot" + std::to_string(slot + 1)) / "KKProfile.dat"; };
+  const fs::path backups = root / "audio-option-backups";
+  // Slots 1 and 2: saves. 3: none. 4: the game's empty header. 5: a save with an option out of range.
+  const auto save1 = MadeUpSave(1, 1.0f, 0), save2 = MadeUpSave(2, 0.8f, 1);
+  auto empty = MadeUpSave(4, 1.0f, 0);
+  sf::WriteWord(empty.data() + 0x28, 0);
+  auto broken = MadeUpSave(5, 1.0f, 0);
+  sf::WriteWord(broken.data() + sf::kFileFields[4], 7);
+  WriteFile(slot_file(0), save1);
+  WriteFile(slot_file(1), save2);
+  WriteFile(slot_file(3), empty);
+  WriteFile(slot_file(4), broken);
+
+  sf::Values values{};
+  sf::Changed changed{};
+  values[2] = 50;  // music
+  changed[2] = true;
+  values[4] = 1;  // subtitles on
+  changed[4] = true;
+  auto r = sf::WriteOptionsToSaves(slot_file, 5, backups, values, changed, -1);
+  Check(r.written == 2, "both saves take the change");
+  Check(r.failed == 1, "the save with an option out of range is refused");
+  const auto after1 = ReadFile(slot_file(0)), after2 = ReadFile(slot_file(1));
+  Check(Near(Volume(after1, 2), 0.5f) && Near(Volume(after2, 2), 0.5f), "music is 50% in both saves");
+  Check(sf::ReadWord(after1.data() + sf::kFileFields[4]) == 1 && sf::ReadWord(after2.data() + sf::kFileFields[4]) == 1,
+        "subtitles are on in both saves");
+  Check(Near(Volume(after1, 0), 1.0f) && Near(Volume(after2, 0), 0.8f), "an option not changed keeps each save's value");
+  Check(OnlyOptionsChanged(save1, after1) && OnlyOptionsChanged(save2, after2), "no other byte of a save changes");
+  Check(!fs::exists(slot_file(2)), "an empty slot gets no save");
+  Check(ReadFile(slot_file(3)) == empty, "the game's empty header is left alone");
+  Check(ReadFile(slot_file(4)) == broken, "a refused save is left unchanged");
+  Check(CountFiles(backups, "slot1-") == 1 && CountFiles(backups, "slot2-") == 1, "each changed save is backed up");
+  Check(CountFiles(backups, "slot4-") == 0 && CountFiles(backups, "slot5-") == 0, "unchanged saves get no backup");
+  {
+    std::error_code ec;
+    for (fs::directory_iterator it(backups, ec), end; !ec && it != end; it.increment(ec)) {
+      const auto name = it->path().filename().string();
+      if (name.starts_with("slot1-")) Check(ReadFile(it->path()) == save1, "slot 1's backup is the save before");
+      if (name.starts_with("slot2-")) Check(ReadFile(it->path()) == save2, "slot 2's backup is the save before");
+    }
+  }
+  Check(CountFiles(slot_file(0).parent_path(), "KKProfile.audio-pending-") == 0, "no temporary file is left behind");
+
+  // The game being played writes its own save (the game thread): skipped here.
+  values[2] = 25;
+  r = sf::WriteOptionsToSaves(slot_file, 5, backups, values, changed, 1);
+  Check(r.written == 1 && Near(Volume(ReadFile(slot_file(0)), 2), 0.25f), "the other saves take the change");
+  Check(ReadFile(slot_file(1)) == after2, "the game's own save is skipped");
+
+  // The same value again makes no new backup; many changes keep only the newest three per save.
+  r = sf::WriteOptionsToSaves(slot_file, 5, backups, values, changed, 1);
+  Check(r.written == 1 && CountFiles(backups, "slot1-") == 2, "an unchanged value makes no new backup");
+  for (int v = 10; v <= 40; v += 10) {
+    values[2] = float(v);
+    sf::WriteOptionsToSaves(slot_file, 5, backups, values, changed, -1);
+  }
+  Check(CountFiles(backups, "slot1-") == 3 && CountFiles(backups, "slot2-") == 3, "the newest three backups are kept");
+  Check(Near(Volume(ReadFile(slot_file(0)), 2), 0.4f) && Near(Volume(ReadFile(slot_file(1)), 2), 0.4f),
+        "the last value is in every save");
+  Check(sf::OptionsValid(ReadFile(slot_file(0)).data(), sf::kFileFields), "the saves stay valid");
+
+  std::error_code ec;
+  fs::remove_all(root, ec);
+}
 }  // namespace
 
 int main() {
   ShaderProgressChecks();
+  AllSavesChecks();
   std::cout << checks << " launcher checks passed\n";
   return 0;
 }

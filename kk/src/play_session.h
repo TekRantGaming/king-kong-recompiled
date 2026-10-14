@@ -9,6 +9,7 @@
 // the jump, the pause takeover) and the UI side (launcher.cpp, pause_menu.cpp: what the player sees).
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -95,8 +96,8 @@ void RunPauseAction(PauseAction action);
 // Whether an item is available right now (e.g. Start again and Score need a save loaded).
 bool PauseActionAvailable(PauseAction action);
 
-// Audio and subtitles are options in each game save, not port cvars. A negative slot
-// reads/queues changes to the active game profile on the game thread.
+// Audio and subtitles are options in each game save, not port cvars. The launcher and the pause
+// menu set them in every save at once. A negative slot reads the active game profile (in play).
 enum class ProfileOption { kMaster, kVoices, kMusic, kEffects, kSubtitles, kCount };
 struct ProfileOptions {
   bool available = false;
@@ -106,6 +107,14 @@ struct ProfileOptions {
   std::string error;
 };
 ProfileOptions ReadProfileOptions(const std::filesystem::path& user_dir, int slot);
-bool SetProfileOption(const std::filesystem::path& user_dir, int slot, ProfileOption option, float value);
+// Options to change (volumes in percent, subtitles 0 or 1), by ProfileOption.
+struct ProfileChange {
+  std::array<float, size_t(ProfileOption::kCount)> values{};
+  std::array<bool, size_t(ProfileOption::kCount)> set{};
+};
+// Applies the change to every save: in play, the game's own save and the running game through the
+// game thread; every other slot's save file directly (backed up, then replaced in one step). False
+// when a save could not be written (it is left unchanged).
+bool SetProfileOptionsInAllSaves(const std::filesystem::path& user_dir, const ProfileChange& change);
 
 }  // namespace kk::play
