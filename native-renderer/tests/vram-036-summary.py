@@ -34,6 +34,7 @@ for run in sorted(ROOT.glob("task036-*-*-*-20*")):
     intervals = []
     transition_intervals = []
     scale_intervals = []
+    scale_rows = []
     half_frame = next((s["frame"] for s in ordered if s["half_ao"]), None)
     trace = run / "render_frames.csv"
     if trace.exists() and trace.stat().st_size:
@@ -63,8 +64,9 @@ for run in sorted(ROOT.glob("task036-*-*-*-20*")):
                     continue
                 first = int(staged[1]) if staged else frame
                 scale_windows.append((first - 2, frame + 4))
-            scale_intervals = [float(r["interval_ms"]) for r in rows
-                               if any(first <= int(r["frame"]) <= last for first, last in scale_windows)]
+            scale_rows = [r for r in rows
+                          if any(first <= int(r["frame"]) <= last for first, last in scale_windows)]
+            scale_intervals = [float(r["interval_ms"]) for r in scale_rows]
     def percentile(values, p):
         if not values:
             return ""
@@ -92,6 +94,8 @@ for run in sorted(ROOT.glob("task036-*-*-*-20*")):
         "half_ao_frame": half_frame if half_frame is not None else "",
         "ao_transition_worst_ms": round(max(transition_intervals), 3) if transition_intervals else "",
         "scale_transition_worst_ms": round(max(scale_intervals), 3) if scale_intervals else "",
+        "scale_pipeline_wait_max_ms": max((float(r["pipeline_wait_ms"]) for r in scale_rows), default=""),
+        "scale_resource_creations_max": max((int(r["resource_creations"]) for r in scale_rows), default=""),
         "scale_commit_cpu_max_ms": max((float(v) for v in re.findall(r"contents migrated at frame \d+ \(([\d.]+) ms CPU\)", logs)), default=""),
         "tour_transition_requested": "asking for the next chapter's level (entry 9)" in logs,
         "captures": len(list(run.glob("shot*.bmp"))),
