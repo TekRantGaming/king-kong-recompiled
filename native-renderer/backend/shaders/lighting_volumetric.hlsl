@@ -114,15 +114,18 @@ groupshared float4 gs_sum[256];
 void cs_centroid(uint2 tid : SV_GroupThreadID)
 {
     uint index = tid.y * 16 + tid.x;
-    uint2 size = uint2(g_Rays.xy);
+    // A coarse grid locates the source; scanning every 4K mask texel in a
+    // single workgroup serializes hundreds of thousands of texture reads.
+    uint2 size = min(uint2(g_Rays.xy), uint2(64, 64));
     float4 acc = 0.0;
     for (uint y = tid.y; y < size.y; y += 16)
     {
         for (uint x = tid.x; x < size.x; x += 16)
         {
-            float w = t_rays.Load(int3(x, y, 0)).a;
+            uint2 q = min(uint2((float2(x, y) + 0.5) / float2(size) * g_Rays.xy), uint2(g_Rays.xy) - 1);
+            float w = t_rays.Load(int3(q, 0)).a;
             w *= w;
-            acc += float4((float2(x, y) + 0.5) / g_Rays.xy * w, w, 0.0);
+            acc += float4((float2(x, y) + 0.5) / float2(size) * w, w, 0.0);
         }
     }
     gs_sum[index] = acc;
@@ -137,7 +140,7 @@ void cs_centroid(uint2 tid : SV_GroupThreadID)
     {
         float4 t = gs_sum[0];
         float2 centre = t.z > 1e-8 ? t.xy / t.z : float2(0.5, 0.0);
-        u_out[uint2(0, 0)] = float4(centre, t.z / max(g_Rays.x * g_Rays.y, 1.0), 0.0);
+        u_out[uint2(0, 0)] = float4(centre, t.z / max(float(size.x * size.y), 1.0), 0.0);
     }
 }
 
@@ -187,7 +190,7 @@ float4 ps_volumetric(float4 pos : SV_Position) : SV_Target0
     bool sunKnown = dot(g_Sun.xyz, g_Sun.xyz) > 0.5;
     float3 add = 0.0;
 
-    // 2. The god rays from the bright sky: more in the fogged distance, less on what is near.
+    // The god rays from the bright sky: more in the fogged distance, less on what is near.
     float3 rays = t_rays.SampleLevel(s_linear, uv, 0.0).rgb;
     float facing = 1.0;
     if (sunKnown)
