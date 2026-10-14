@@ -11,8 +11,6 @@
 #include "thirdparty/XeGTAO/XeGTAO.h"
 
 #include "backend/log.h"
-#include "kknr/nvrhi_format.h"
-#include "kknr/resolve.h"
 #include "backend/shaders/generated/gtao_apply_ps_dxil.h"
 #include "backend/shaders/generated/gtao_apply_ps_spirv.h"
 #include "backend/shaders/generated/gtao_apply_resolve_ps_dxil.h"
@@ -210,9 +208,11 @@ bool Gtao::Initialize() {
   if (ready_) {
     // Compute pipelines already exist above. The three apply states only depend
     // on the target format, so make them before the first scene uses GTAO.
-    for (uint32_t f = 0; f < 16; ++f) {
-      const auto format = kknr::ToNvrhi(kknr::EdramColorHostFormat(f));
-      if (format == nvrhi::Format::UNKNOWN) continue;
+    // EDRAM uses these six distinct host colour formats. Keep this built-in
+    // pass independent of the optional game resources library.
+    for (const auto format : {nvrhi::Format::RGBA8_UNORM, nvrhi::Format::R10G10B10A2_UNORM,
+                              nvrhi::Format::RGBA16_FLOAT, nvrhi::Format::RG16_FLOAT,
+                              nvrhi::Format::R32_FLOAT, nvrhi::Format::RG32_FLOAT}) {
       nvrhi::FramebufferInfo info;
       info.colorFormats = {format};
       ready_ = GraphicsPipeline(false, 1, info) && GraphicsPipeline(false, 2, info) &&

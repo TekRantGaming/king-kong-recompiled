@@ -4208,7 +4208,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       case kGraphics:
         return {"kk_original_look", "kk_modern_settings", "swap_post_effect", "anisotropic_override",
                 "kk_motion_blur", "kk_big_blur", "kk_fog", "ao_mode", "ao_strength", "native_ao_method",
-                "native_ao_apply", "native_ao_quality", "native_ao_samples", "kk_renderer", "native_gi", "native_shadow_quality", "native_water_reflections", "native_volumetrics"};
+                "native_ao_apply", "native_ao_quality", "native_ao_samples", "native_backend", "kk_renderer", "native_gi", "native_shadow_quality", "native_water_reflections", "native_volumetrics"};
       case kGameplay:
         return {"kk_fov", "kk_camera_shake", "kk_camera_shake_strength", "kk_show_fps",
                 "kk_skip_intros", "user_language"};

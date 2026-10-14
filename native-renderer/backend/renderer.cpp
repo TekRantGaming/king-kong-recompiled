@@ -24,6 +24,7 @@ class GameRenderer {
   template <typename... A> void Resolve(A&&...) {}
   template <typename... A> bool Present(A&&...) { return false; }
   template <typename... A> void VertexShaderPatched(A&&...) {}
+  void UploadDummies(nvrhi::ICommandList*) {}
   void EndFrame() {}
   struct Options { uint32_t debug = 0; };
   const Options& options() const { static const Options options; return options; }
