@@ -43,6 +43,7 @@ std::mutex g_mutex;
 Clock::time_point g_window_start = Clock::now();
 uint64_t g_window_frames = 0;
 double g_window_swap_ms = 0;  // time spent inside the swap call this window
+double g_window_worst_ms = 0, g_worst_ms = 0;  // the longest frame of this window, of the last one
 rex::ui::FrameStats g_stats;
 
 struct Deferred {
@@ -104,6 +105,7 @@ void OnGuestSwap() {
   if (last_swap != Clock::time_point{}) {
     const double frame_ms = std::chrono::duration<double, std::milli>(now - last_swap).count();
     if (frame_ms >= 50.0) REXLOG_INFO("Hitch: {:.0f} ms frame", frame_ms);
+    g_window_worst_ms = std::max(g_window_worst_ms, frame_ms);
     RecordFrameTime(frame_ms);
   }
   last_swap = now;
@@ -112,6 +114,8 @@ void OnGuestSwap() {
     g_stats.fps = g_window_frames / elapsed;
     g_stats.frame_time_ms = elapsed * 1000.0 / g_window_frames;
     g_stats.frame_count = total;
+    g_worst_ms = g_window_worst_ms;
+    g_window_worst_ms = 0;
     REXLOG_INFO("Guest FPS: {:.1f} ({:.2f} ms/frame, {:.2f} ms in swap)",
                 g_stats.fps, g_stats.frame_time_ms, g_window_swap_ms / g_window_frames);
     g_window_start = now;
@@ -131,6 +135,11 @@ void AddSwapTime(double ms) {
 rex::ui::FrameStats GetGuestFrameStats() {
   std::lock_guard lock(g_mutex);
   return g_stats;
+}
+
+double GuestWorstFrameMs() {
+  std::lock_guard lock(g_mutex);
+  return g_worst_ms;
 }
 
 void RunAfterFirstFrame(double seconds, std::function<void()> fn) {

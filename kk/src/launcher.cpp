@@ -1698,6 +1698,19 @@ class SettingsPages {
       items.push_back(std::move(Disable(it, !mnk || !GetBool("mnk_mouse"), mnk_note)));
     }
 
+#if defined(KK_NATIVE_RENDERER)
+    // The graphics panel (debug_overlay.cpp): its keys work in play with either input.
+    items.push_back(Section("Keys while playing"));
+    {
+      Item it;
+      it.type = ItemType::kInfo;
+      it.label = "Graphics panel";
+      it.value_text = "F8";
+      it.description = "F8 opens a panel over the game for trying graphics settings while you play. Hold F7 to see your saved settings for comparison. F6 saves a screenshot and its settings in the screenshots folder. Changes are temporary until you choose Save as my settings.";
+      items.push_back(std::move(it));
+    }
+#endif
+
     items.push_back(Section("Mapping"));
     {
       Item it;
@@ -4239,9 +4252,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   std::vector<Item> AboutItems() {
     std::vector<Item> items;
     items.push_back(Section("King Kong PC port"));
-#if defined(KK_NATIVE_RENDERER)
-    items.push_back(Section("F6: graphics effects. Changes are temporary until saved."));
-#endif
     items.push_back(ActionItem("Copy diagnostics",
         "Copies version, hardware, settings, fallbacks and recent errors. Names and paths are redacted. Nothing is uploaded.",
         "Copy", [this] {
@@ -4274,6 +4284,16 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       it.on_activate = [this] { OpenVersionHistory(); };
       items.push_back(std::move(it));
     }
+#if defined(KK_NATIVE_RENDERER)
+    {
+      Item it;
+      it.type = ItemType::kInfo;
+      it.label = "Graphics panel";
+      it.value_text = "F8";
+      it.description = "Press F8 while playing to try graphics settings live, and hold F7 to compare with your saved settings. Nothing changes for good until you save. Copy settings and F6 screenshots make it easy to share what you find.";
+      items.push_back(std::move(it));
+    }
+#endif
     items.push_back(ActionItem("Project page", "The port's GitHub page: releases, issues and the source code.",
                                "GitHub", [] { OpenUrl(kProjectUrl); }));
     items.push_back(ActionItem("Discord",

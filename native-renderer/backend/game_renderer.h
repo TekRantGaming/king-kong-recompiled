@@ -733,6 +733,7 @@ class GameRenderer {
   LightingConfig lighting_initial_;
   bool gi_user_gpu_time_ = false;  // --native_gi_gpu_time: the timers log (else the panel's only)
   uint32_t fxaa_wanted_ = 0;
+  uint32_t vendor_ = 0;  // the GPU's PCI vendor (the panel's upscaler list)
   uint64_t live_changes_ = 0;
   double live_last_change_ms_ = 0;
 

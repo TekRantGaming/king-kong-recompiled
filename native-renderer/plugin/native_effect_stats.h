@@ -11,6 +11,7 @@ typedef struct NrEffectStats {
   uint32_t output_width, output_height;  // the render scale's (the upscaler's output)
   uint32_t upscaler_kind;                // what runs (nr::UpscalerKind; 0 off)
   uint32_t api;                          // 1 Vulkan, 2 Direct3D 12
+  uint32_t vendor;                       // the GPU's PCI vendor (0x10DE NVIDIA, 0x1002 AMD, 0x8086 Intel)
   float mip_bias;                        // the upscaler's texture LOD bias for the scene's draws
   uint32_t sampler_slots, targets, retired;  // cache sizes (the robustness test watches them)
   uint64_t frame;

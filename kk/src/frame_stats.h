@@ -8,6 +8,8 @@ namespace kk {
 
 // Measured guest (game) frame rate, updated once per second.
 rex::ui::FrameStats GetGuestFrameStats();
+// The longest guest frame of the last one-second window (ms; the graphics panel's readout).
+double GuestWorstFrameMs();
 
 // Runs `fn` once, on the game thread, `seconds` after the first guest frame
 // (several may be scheduled).

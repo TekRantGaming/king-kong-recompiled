@@ -205,7 +205,8 @@ bool GameRenderer::Initialize() {
   fxaa_wanted_ = options_.fxaa;
   // Upscalers (game_upscale.cpp): the upscaler and its input scale first (scaled() depends on it).
   if (options_.upscale.enabled() && !UpscaleSetup()) upscale_.reset();
-  if (options_.effect_settings && UpscalerDeviceVendor(device_) == 0x10DE) {
+  if (options_.effect_settings) vendor_ = UpscalerDeviceVendor(device_);
+  if (options_.effect_settings && vendor_ == 0x10DE) {
     // NVIDIA: NGX's start (seconds) on a worker now, so a live switch to DLSS is quick (game_effects.cpp).
     UpscaleConfig probe;
     probe.kind = UpscalerKind::kDlss;

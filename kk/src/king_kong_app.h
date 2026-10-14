@@ -302,7 +302,7 @@ class KingKongApp : public rex::ReXApp {
     kk::CreatePauseMenu(drawer, immediate_drawer(), config_path_, user_data_root_, game_data_root());
     kk::CreateFpsOverlay(drawer);
 #if defined(KK_NATIVE_RENDERER)
-    kk::CreateDebugOverlay(drawer, window(), config_path_);
+    kk::CreateDebugOverlay(drawer, window(), config_path_, user_data_root_);
 #endif
   }
 

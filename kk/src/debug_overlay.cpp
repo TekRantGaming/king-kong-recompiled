@@ -1,322 +1,1105 @@
+// The graphics panel (F8): a translucent panel over the running game for trying graphics settings while
+// playing. Changes apply at once and are temporary: "Save as my settings" writes them to the settings file
+// the launcher uses, "Reset to my settings" puts the saved ones back, and every other save of the port
+// (the launcher, the pause menu) keeps writing the saved values while a trial is on (settings.h,
+// SetTemporarySettingBaseline).
+//
+// Keys, in play only (the launcher, the pause menu and the black start screen keep theirs):
+//   F8          the panel on and off (the mouse goes to the panel while it is open; other keys reach the game)
+//   F7 (held)   the saved settings while held, the trial ones again when let go: an A/B comparison
+//   F6          a capture of the game's picture (PNG, without the panel) and a text file of the settings, in
+//               <user data>/screenshots
+// The SDK binds F7 to its achievements list: in play the panel takes F7; elsewhere the SDK still has it.
+//
+// Every setting is a cvar the launcher also writes (the native renderer reads its live ones once a frame,
+// native-renderer/backend/effect_settings.h). Those that only apply at the next start are shown with a
+// "needs restart" mark and cannot be changed here.
+
 #include "debug_overlay.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
+#include <cstdio>
 #include <cstdlib>
+#include <ctime>
+#include <fstream>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <string>
 #include <string_view>
-#include <rex/logging.h>
+#include <vector>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 #include <imgui.h>
 #include <rex/cvar.h>
+#include <rex/logging.h>
 #include <rex/ui/imgui_dialog.h>
-#include <rex/ui/keybinds.h>
+#include <rex/ui/imgui_drawer.h>
 #include <rex/ui/ui_event.h>
+#include <rex/ui/virtual_key.h>
 #include <rex/ui/window.h>
 #include <rex/ui/window_listener.h>
+
+#include "art.h"
+#include "diagnostics.h"
 #include "frame_stats.h"
 #include "launcher_ui.h"
 #include "play_internal.h"
 #include "settings.h"
 #if defined(KK_DEV_TOOLS)
-#include "art.h"
-namespace kk { double DevSecondsSinceMenu(); }
+namespace kk {
+double DevSecondsSinceMenu();
+}
 #endif
 #if defined(KK_NATIVE_RENDERER)
 #include "hooks/kk_native_ui.h"
 #endif
 
+REXCVAR_DEFINE_DOUBLE(kk_graphics_panel_opacity, 0.82, "KK/Graphics panel",
+                      "The graphics panel's (F8) background opacity, 0.3 to 1");
+REXCVAR_DEFINE_BOOL(kk_graphics_panel_compact, false, "KK/Graphics panel",
+                    "The graphics panel (F8) shows only the frame rate and the A/B hint");
+
 namespace kk {
 namespace {
-std::atomic<bool> open{false};
-std::mutex saved_mutex;
-std::map<std::string, std::string, std::less<>> saved;
-std::filesystem::path settings_path;
+
+// ------------------------------------------------------------------ settings ---
+
+enum class Kind { kChoice, kToggle, kSlider, kSliderInt, kUpscaler, kSharpness, kMipBias, kRestart };
+// When a row is shown (the upscaler's own rows only with one that uses them).
+enum class Show { kAlways, kTemporal, kDlss, kFsr, kAo, kGi, kShadows, kWater, kShafts };
+
+struct Option {
+  const char* label;
+  const char* value;
+};
+
+struct Setting {
+  const char* section;
+  const char* label;
+  const char* cvar;
+  Kind kind;
+  std::vector<Option> options;  // choices; a toggle's {off, on}
+  float min = 0, max = 1;
+  const char* format = "%.2f";
+  bool native = true;  // the native renderer's (hidden on the Classic renderer)
+  Show show = Show::kAlways;
+  const char* help = "";
+};
+
+const std::vector<Setting>& Settings() {
+  static const std::vector<Setting> settings = {
+      // Upscaling.
+      {"Upscaling", "Upscaler", "native_upscaler", Kind::kUpscaler, {}, 0, 1, "", true, Show::kAlways,
+       "Temporal upscalers rebuild a sharp picture from several frames. Only those this PC runs are listed."},
+      {"Upscaling", "Mode", "native_upscaler_quality", Kind::kChoice,
+       {{"Native AA", "native"}, {"Quality", "quality"}, {"Balanced", "balanced"}, {"Performance", "performance"},
+        {"Ultra Performance", "ultra_performance"}},
+       0, 1, "", true, Show::kTemporal, "How many pixels the game draws before the upscaler rebuilds the picture."},
+      {"Upscaling", "DLSS model", "native_upscaler_dlss_preset", Kind::kChoice,
+       {{"Latest (M, L for Ultra Performance)", "latest"}, {"Driver default", "default"}, {"J", "j"}, {"K", "k"},
+        {"L", "l"}, {"M", "m"}},
+       0, 1, "", true, Show::kDlss, "The DLSS preset: J and K are DLSS 4's transformer model, L and M DLSS 4.5's."},
+      {"Upscaling", "Sharpening", "native_upscaler_sharpness", Kind::kSharpness, {}, 0, 1, "%.2f", true, Show::kFsr,
+       "AMD FSR's sharpening after the upscale (DLSS and XeSS have none)."},
+      {"Upscaling", "Mip bias", "native_upscaler_mip_bias", Kind::kMipBias, {}, -2, 1, "%.2f", true, Show::kTemporal,
+       "Texture sharpness of the scene. Auto is what the upscalers recommend for the mode."},
+      {"Upscaling", "Reactive mask", "native_upscaler_reactive", Kind::kSlider, {}, 0, 1, "%.2f", true,
+       Show::kTemporal, "How strongly water, smoke, fur and particles favour the current frame (less ghosting)."},
+      {"Upscaling", "Render quality", "kk_render_quality", Kind::kRestart, {}, 0, 1, "", false},
+      {"Upscaling", "Spatial upscaler", "present_effect", Kind::kRestart, {}, 0, 1, "", false},
+      // Image.
+      {"Image", "Anti-aliasing (FXAA)", "swap_post_effect", Kind::kChoice, {{"Off", "none"}, {"FXAA", "fxaa"}}, 0, 1,
+       "", true, Show::kAlways, "Off while a temporal upscaler runs (it anti-aliases itself)."},
+      {"Image", "Texture filtering", "anisotropic_override", Kind::kChoice,
+       {{"Game", "-1"}, {"Off", "0"}, {"2x", "2"}, {"4x", "3"}, {"8x", "4"}, {"16x", "5"}}},
+      // Ambient occlusion.
+      {"Ambient occlusion", "Ambient occlusion", "ao_mode", Kind::kChoice,
+       {{"Off", "0"}, {"On", "1"}, {"AO only (test view)", "2"}}, 0, 1, "", false},
+      {"Ambient occlusion", "Strength", "ao_strength", Kind::kChoice,
+       {{"Light", "1"}, {"Medium", "2"}, {"Strong", "3"}}, 0, 1, "", false, Show::kAo},
+      {"Ambient occlusion", "Quality", "native_ao_samples", Kind::kChoice,
+       {{"Low", "1"}, {"Medium", "2"}, {"High", "3"}}, 0, 1, "", true, Show::kAo},
+      {"Ambient occlusion", "Resolution", "native_ao_quality", Kind::kChoice,
+       {{"Auto", "auto"}, {"Half", "half"}, {"Full", "full"}}, 0, 1, "", true, Show::kAo},
+      {"Ambient occlusion", "Noise smoothing", "native_ao_temporal", Kind::kToggle, {{"Off", "false"}, {"On", "true"}},
+       0, 1, "", true, Show::kAo, "Blends the shading over frames (grain on hands and weapons)."},
+      // Global illumination.
+      {"Global illumination", "Global illumination", "native_gi", Kind::kChoice,
+       {{"Off", "off"}, {"Low", "low"}, {"Medium", "medium"}, {"High", "high"}}},
+      {"Global illumination", "Intensity", "native_gi_intensity", Kind::kSlider, {}, 0, 4, "%.2f", true, Show::kGi},
+      {"Global illumination", "Resolution", "native_gi_quality", Kind::kChoice,
+       {{"Auto", "auto"}, {"Half", "half"}, {"Full", "full"}}, 0, 1, "", true, Show::kGi},
+      // Lighting.
+      {"Lighting", "Shadows", "native_shadow_quality", Kind::kChoice,
+       {{"Original", "original"}, {"High", "high"}, {"Ultra", "ultra"}}},
+      {"Lighting", "Shadow softness", "native_shadow_softness", Kind::kSlider, {}, 0.25f, 4, "%.2f", true, Show::kShadows},
+      {"Lighting", "Water reflections", "native_water_reflections", Kind::kChoice,
+       {{"Original", "original"}, {"Screen space", "ssr"}}},
+      {"Lighting", "Reflection strength", "native_ssr_strength", Kind::kSlider, {}, 0, 1, "%.2f", true, Show::kWater},
+      {"Lighting", "Light shafts", "native_volumetrics", Kind::kChoice,
+       {{"Original", "off"}, {"Volumetric low", "low"}, {"Volumetric high", "high"}}},
+      {"Lighting", "Light shaft strength", "native_volumetric_strength", Kind::kSlider, {}, 0, 4, "%.2f", true,
+       Show::kShafts},
+      // The game's own effects.
+      {"Effects", "Motion blur", "kk_motion_blur", Kind::kToggle, {{"Off", "false"}, {"On", "true"}}, 0, 1, "", false},
+      {"Effects", "Screen blur", "kk_big_blur", Kind::kToggle, {{"Off", "false"}, {"On", "true"}}, 0, 1, "", false},
+      {"Effects", "Distance fog", "kk_fog", Kind::kToggle, {{"Off", "false"}, {"On", "true"}}, 0, 1, "", false},
+      {"Effects", "Field of view", "kk_fov", Kind::kSliderInt, {}, 69, 110, "%d", false},
+      // Only at the next start.
+      {"Needs restart", "Look", "kk_original_look", Kind::kRestart, {}, 0, 1, "", false},
+      {"Needs restart", "Graphics API", "native_backend", Kind::kRestart, {}, 0, 1, "", true},
+      {"Needs restart", "Renderer", "gpu_plugin", Kind::kRestart, {}, 0, 1, "", false},
+  };
+  return settings;
+}
+
 std::string Get(const char* name) { return rex::cvar::GetFlagByName(name); }
+bool Exists(const char* name) { return rex::cvar::GetFlagInfo(name) != nullptr; }
+bool NativeRenderer() { return Get("gpu_plugin") == "native"; }
+
+struct UpscalerChoice {
+  const char* label;
+  const char* value;
+};
+constexpr UpscalerChoice kUpscalers[] = {
+    {"Off", "off"}, {"NVIDIA DLSS", "dlss"}, {"AMD FSR 4", "fsr4"}, {"AMD FSR 3.1", "fsr3"}, {"Intel XeSS", "xess"}};
+
+#if defined(KK_NATIVE_RENDERER)
+NrEffectStats Stats() { return nr::kk::EffectTimes(); }
+#endif
+
+// The temporal upscalers this PC runs: the launcher's answer (it asked the SDKs), else by the GPU's vendor.
+std::vector<UpscalerChoice> OfferedUpscalers() {
+  std::vector<UpscalerChoice> out = {kUpscalers[0]};
+#if defined(KK_NATIVE_RENDERER)
+  const NrEffectStats s = Stats();
+  const bool d3d12 = s.size && s.api == 2;
+  const nr::kk::UpscalerChoices c = nr::kk::PeekUpscalers();
+  const bool known = c.state == 2;
+  const uint32_t vendor = s.size ? s.vendor : 0;
+  if (known ? c.dlss : vendor == 0x10DE) out.push_back(kUpscalers[1]);
+  if (d3d12 && (known ? c.fsr4 : false)) out.push_back(kUpscalers[2]);
+  if (known ? c.fsr3 : true) out.push_back(kUpscalers[3]);
+  if (known ? c.xess : true) out.push_back(kUpscalers[4]);
+#endif
+  return out;
+}
+
+const char* UpscalerName(const std::string& value) {
+  if (value == "auto") return "Auto";
+  for (const auto& u : kUpscalers)
+    if (value == u.value) return u.label;
+  return nullptr;
+}
+
+std::string Number(double v, const char* format = "%.2f") {
+  char buf[32];
+  std::snprintf(buf, sizeof(buf), format, v);
+  return buf;
+}
+
+// The value's label for the text dumps and the restart rows.
+std::string ValueText(const Setting& s) {
+  const std::string v = Get(s.cvar);
+  if (s.kind == Kind::kUpscaler) {
+    const char* n = UpscalerName(v);
+    return n ? n : v;
+  }
+  if (s.kind == Kind::kSharpness) return std::atof(v.c_str()) < 0 ? "Off" : Number(std::atof(v.c_str()));
+  if (s.kind == Kind::kSlider) return Number(std::atof(v.c_str()), s.format);
+  for (const Option& o : s.options)
+    if (v == o.value) return o.label;
+  if (s.kind == Kind::kRestart) {
+    if (std::string_view(s.cvar) == "kk_original_look") return v == "true" ? "Original Xbox 360" : "Remastered";
+    if (std::string_view(s.cvar) == "present_effect") {
+      if (v == "bilinear") return "Off";
+      if (v == "fsr") return "AMD FSR 1";
+      if (v == "nis") return "NVIDIA NIS";
+    }
+  }
+  return v;
+}
+
+// ------------------------------------------------------------- trial state ---
+
+std::atomic<bool> g_open{false};
+std::mutex g_mutex;  // the UI thread changes; the save thread (none today) may read
+std::map<std::string, std::string, std::less<>> g_saved;  // a changed setting's saved value
+std::map<std::string, std::string, std::less<>> g_ab_trial;  // while F7 is held: the trial values
+bool g_ab = false;
+std::filesystem::path g_settings_path;
+
 void Change(const char* name, const std::string& value) {
+  if (g_ab) return;  // the saved settings are showing
   {
-    std::lock_guard lock(saved_mutex);
-    const auto [entry, inserted] = saved.try_emplace(name, Get(name));
+    std::lock_guard lock(g_mutex);
+    const auto [entry, inserted] = g_saved.try_emplace(name, Get(name));
     if (inserted) SetTemporarySettingBaseline(name, entry->second);
   }
   if (rex::cvar::SetFlagByName(name, value)) SetTemporarySettingTrialValue(name, Get(name));
 }
-void Reset() {
-  std::lock_guard lock(saved_mutex);
-  for (const auto& [name, value] : saved) {
-    rex::cvar::SetFlagByName(name, value);
-    SetTemporarySettingTrialValue(name, value);
+
+// The settings that differ from the saved ones now.
+std::vector<std::string> Changed() {
+  std::lock_guard lock(g_mutex);
+  std::vector<std::string> out;
+  for (const auto& [name, saved] : g_saved) {
+    const auto it = g_ab_trial.find(name);
+    const std::string trial = g_ab && it != g_ab_trial.end() ? it->second : Get(name.c_str());
+    if (trial != saved) out.push_back(name);
   }
-  saved.clear();
-}
-void Check(const char* label, const char* name, const char* on = "true", const char* off = "false") {
-  bool value = Get(name) == on;
-  if (ImGui::Checkbox(label, &value)) Change(name, value ? on : off);
-}
-void Choice(const char* label, const char* name, const char* labels, const char* const* values, int count) {
-  int selected = 0;
-  const auto current = Get(name);
-  for (int i = 0; i < count; ++i) if (current == values[i]) selected = i;
-  if (ImGui::Combo(label, &selected, labels)) Change(name, values[selected]);
-}
-void Strength(const char* label, const char* name, float maximum) {
-  float value = float(std::atof(Get(name).c_str()));
-  if (ImGui::SliderFloat(label, &value, 0, maximum, "%.2f")) Change(name, std::to_string(value));
+  return out;
 }
 
-class DebugOverlay final : public rex::ui::ImGuiDialog, public rex::ui::WindowInputListener {
- public:
-  DebugOverlay(rex::ui::ImGuiDrawer* drawer, rex::ui::Window* window, std::filesystem::path config)
-      : ImGuiDialog(drawer), window_(window), config_(std::move(config)) {
-    // Above the SDK input driver: explicitly feed ImGui, consume panel mouse events only.
-    window_->AddInputListener(this, 1200);
-    rex::ui::RegisterBind("bind_kk_graphics_debug", "F6", "Toggle graphics debug overlay", [] {
-      if (play::SessionActive() && !play::CoverScreen() && !play::PauseMenuOpen()) open.store(!open.load());
-    });
+void EndAb();
+
+void Reset() {
+  EndAb();
+  std::lock_guard lock(g_mutex);
+  for (const auto& [name, value] : g_saved) rex::cvar::SetFlagByName(name, value);
+  g_saved.clear();
+  ClearTemporarySettingBaselines();
+}
+
+bool SaveAsMine() {
+  EndAb();
+  if (!SaveSettings(g_settings_path, true)) return false;
+  std::lock_guard lock(g_mutex);
+  g_saved.clear();
+  ClearTemporarySettingBaselines();
+  return true;
+}
+
+// F7 held: the saved values, the trial ones put aside.
+void StartAb() {
+  std::lock_guard lock(g_mutex);
+  if (g_ab) return;
+  g_ab = true;
+  g_ab_trial.clear();
+  for (const auto& [name, saved] : g_saved) {
+    const std::string trial = Get(name.c_str());
+    if (trial == saved) continue;
+    g_ab_trial[name] = trial;
+    rex::cvar::SetFlagByName(name, saved);
   }
-  ~DebugOverlay() override {
-    window_->RemoveInputListener(this);
-    rex::ui::UnregisterBind("bind_kk_graphics_debug");
+  REXLOG_INFO("KK graphics panel: A/B: saved settings ({} differ)", g_ab_trial.size());
+}
+
+void EndAb() {
+  std::lock_guard lock(g_mutex);
+  if (!g_ab) return;
+  g_ab = false;
+  for (const auto& [name, trial] : g_ab_trial) {
+    rex::cvar::SetFlagByName(name, trial);
+    SetTemporarySettingTrialValue(name, trial);
+  }
+  g_ab_trial.clear();
+  REXLOG_INFO("KK graphics panel: A/B: trial settings again");
+}
+
+bool Visible(const Setting& s) {
+  if (!Exists(s.cvar)) return false;
+  if (s.native && !NativeRenderer()) return false;
+  const std::string up = Get("native_upscaler");
+  const bool temporal = NativeRenderer() && up != "off" && !up.empty();
+  switch (s.show) {
+    case Show::kAlways: return true;
+    case Show::kTemporal: return temporal;
+    case Show::kDlss: return temporal && (up == "dlss" || up == "auto");
+    case Show::kFsr: return temporal && (up == "fsr3" || up == "fsr4" || up == "auto");
+    case Show::kAo: return Get("ao_mode") != "0";
+    case Show::kGi: return Get("native_gi") != "off";
+    case Show::kShadows: return Get("native_shadow_quality") != "original";
+    case Show::kWater: return Get("native_water_reflections") == "ssr";
+    case Show::kShafts: return Get("native_volumetrics") != "off";
+  }
+  return true;
+}
+
+// ---------------------------------------------------------------- the text ---
+
+std::string Readout() {
+  std::string out;
+  const auto frame = GetGuestFrameStats();
+  out += "Frame rate: " + Number(frame.fps, "%.1f") + " FPS, " + Number(frame.frame_time_ms, "%.2f") +
+         " ms a frame, longest " + Number(GuestWorstFrameMs(), "%.0f") + " ms in the last second\n";
+#if defined(KK_NATIVE_RENDERER)
+  const NrEffectStats s = Stats();
+  if (NativeRenderer() && s.size && s.frame) {
+    out += std::string("Renderer: Native, ") + (s.api == 1 ? "Vulkan" : "DirectX 12") + "\n";
+    out += std::string("Upscaler: ") + s.upscaler;
+    if (std::string_view(s.upscaler) != "off")
+      out += ", draws " + std::to_string(s.input_width) + "x" + std::to_string(s.input_height) + " for " +
+             std::to_string(s.output_width) + "x" + std::to_string(s.output_height) + ", mip bias " +
+             Number(s.mip_bias);
+    else
+      out += ", draws " + std::to_string(s.output_width) + "x" + std::to_string(s.output_height);
+    out += "\n";
+    std::string gpu;
+    auto add = [&](const char* name, double ms) {
+      if (ms >= 0) gpu += std::string(gpu.empty() ? "" : ", ") + name + " " + Number(ms) + " ms";
+    };
+    add("ambient occlusion", s.ao_ms);
+    add("GI", s.gi_ms);
+    add("shadows", s.shadows_ms);
+    add("water", s.water_ms);
+    add("light shafts", s.volumetric_ms);
+    add("upscaler", s.upscaler_ms);
+    out += "GPU time a frame: " + (gpu.empty() ? std::string("no effect timed") : gpu) + "\n";
+  } else {
+    out += "Renderer: " + std::string(NativeRenderer() ? "Native" : "Classic (emulated GPU)") + "\n";
+  }
+#endif
+  return out;
+}
+
+std::string SettingsText() {
+  std::string out = "King Kong PC port graphics settings (F8 panel)\nVersion: " KK_VERSION "\n";
+  out += DiagnosticsHardware();
+  out += Readout();
+  const auto changed = Changed();
+  out += "Settings (* changed in the panel, not saved):\n";
+  for (const Setting& s : Settings()) {
+    if (!Exists(s.cvar) || (s.native && !NativeRenderer())) continue;
+    const bool star = std::find(changed.begin(), changed.end(), s.cvar) != changed.end();
+    std::string value = ValueText(s);
+    if (s.kind == Kind::kMipBias && value == "auto") value = "Auto";
+    out += std::string("  ") + s.section + " / " + s.label + ": " + value + (star ? " *" : "") +
+           (s.kind == Kind::kRestart ? " (needs restart)" : "") + "\n";
+  }
+  return RedactDiagnostics(out);
+}
+
+// ---------------------------------------------------------------- the panel ---
+
+class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowInputListener {
+ public:
+  GraphicsPanel(rex::ui::ImGuiDrawer* drawer, rex::ui::Window* window, std::filesystem::path user_root)
+      : ImGuiDialog(drawer), window_(window), user_root_(std::move(user_root)) {
+    // Above the SDK's input (the ImGui drawer, the keyboard and mouse driver, the mouse look): the
+    // panel's keys and, while it is open, the mouse.
+    window_->AddInputListener(this, 1200);
+  }
+  ~GraphicsPanel() override { window_->RemoveInputListener(this); }
+
+  void OnKeyDown(rex::ui::KeyEvent& e) override {
+    if (!InPlay()) return;
+    switch (e.virtual_key()) {
+      case rex::ui::VirtualKey::kF8:
+        if (!e.prev_state()) Toggle();
+        e.set_handled(true);
+        break;
+      case rex::ui::VirtualKey::kF7:
+        if (!e.prev_state()) StartAb();
+        e.set_handled(true);
+        break;
+      case rex::ui::VirtualKey::kF6:
+        if (!e.prev_state()) Capture();
+        e.set_handled(true);
+        break;
+      default:
+        break;
+    }
+  }
+  void OnKeyUp(rex::ui::KeyEvent& e) override {
+    if (e.virtual_key() == rex::ui::VirtualKey::kF7 && (g_ab || InPlay())) {
+      EndAb();
+      e.set_handled(true);
+    } else if ((e.virtual_key() == rex::ui::VirtualKey::kF8 || e.virtual_key() == rex::ui::VirtualKey::kF6) && InPlay()) {
+      e.set_handled(true);
+    }
   }
   void OnMouseDown(rex::ui::MouseEvent& e) override {
-    if (!DebugOverlayOpen()) return;
+    if (!Interactive()) return;
     held_[int(e.button())] = true;
     static_cast<rex::ui::WindowInputListener*>(imgui_drawer())->OnMouseDown(e);
     e.set_handled(true);
   }
   void OnMouseUp(rex::ui::MouseEvent& e) override {
-    if (!held_[int(e.button())]) return;  // release a button pressed in the game normally
+    if (!held_[int(e.button())]) return;  // a button pressed in the game is let go in the game
     held_[int(e.button())] = false;
     static_cast<rex::ui::WindowInputListener*>(imgui_drawer())->OnMouseUp(e);
     e.set_handled(true);
   }
   void OnMouseMove(rex::ui::MouseEvent& e) override {
-    if (!DebugOverlayOpen()) return;
+    if (!Interactive()) return;
     static_cast<rex::ui::WindowInputListener*>(imgui_drawer())->OnMouseMove(e);
     e.set_handled(true);
   }
   void OnMouseWheel(rex::ui::MouseEvent& e) override {
-    if (!DebugOverlayOpen()) return;
+    if (!Interactive()) return;
     static_cast<rex::ui::WindowInputListener*>(imgui_drawer())->OnMouseWheel(e);
     e.set_handled(true);
   }
+
  protected:
   void OnDraw(ImGuiIO& io) override {
-    if (config_.empty()) {
-      std::lock_guard lock(saved_mutex);
-      config_ = settings_path;
-    }
 #if defined(KK_DEV_TOOLS)
-    TestEffects();
+    TestTick();
 #endif
-    if (!play::SessionActive() || play::CoverScreen() || play::PauseMenuOpen()) open.store(false);
-    if (!DebugOverlayOpen()) {
-      if (was_open_) {
-        window_->SetCursorVisibility(cursor_before_);
-        if (!nav_no_capture_before_) io.ConfigFlags &= ~ImGuiConfigFlags_NavNoCaptureKeyboard;
-        was_open_ = false;
-      }
+    // A held F7 whose release went to another window (focus lost) ends the comparison.
+    const bool focus = window_->HasFocus();
+    if (had_focus_ && !focus) EndAb();
+    had_focus_ = focus;
+    if (!InPlay()) {
+      EndAb();
+      if (g_open.load()) SetOpen(false);
+    }
+    UpdateCursor(io);
+    if (!g_open.load()) return;
+    if (REXCVAR_GET(kk_graphics_panel_compact)) {
+      DrawCompact(io);
+    } else {
+      DrawPanel(io);
+    }
+  }
+
+ private:
+  static bool InPlay() { return play::SessionActive() && !play::CoverScreen() && !play::PauseMenuOpen(); }
+  static bool Interactive() { return g_open.load() && !REXCVAR_GET(kk_graphics_panel_compact); }
+
+  void Toggle() {
+    // Compact readout: F8 brings the full panel; the full panel: F8 closes it.
+    if (g_open.load() && REXCVAR_GET(kk_graphics_panel_compact)) {
+      rex::cvar::SetFlagByName("kk_graphics_panel_compact", "false");
       return;
     }
-    if (!was_open_) {
-      cursor_before_ = window_->GetCursorVisibility();
-      nav_no_capture_before_ = (io.ConfigFlags & ImGuiConfigFlags_NavNoCaptureKeyboard) != 0;
-      was_open_ = true;
+    SetOpen(!g_open.load());
+  }
+  void SetOpen(bool open) {
+    g_open.store(open);
+    REXLOG_INFO("KK graphics panel: {}", open ? "open" : "closed");
+  }
+
+  void UpdateCursor(ImGuiIO& io) {
+    const bool want = Interactive();
+    if (want == cursor_shown_) {
+      if (want) window_->SetCursorVisibility(rex::ui::Window::CursorVisibility::kVisible);
+      return;
     }
-    window_->SetCursorVisibility(rex::ui::Window::CursorVisibility::kVisible);
-    io.ConfigFlags |= ImGuiConfigFlags_NavNoCaptureKeyboard;
-    ImGui::SetNextWindowPos(ImVec2(24, 48), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(490, 610), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowBgAlpha(0.78f);
+    cursor_shown_ = want;
+    if (want) {
+      cursor_before_ = window_->GetCursorVisibility();
+      nav_before_ = (io.ConfigFlags & ImGuiConfigFlags_NavNoCaptureKeyboard) != 0;
+      io.ConfigFlags |= ImGuiConfigFlags_NavNoCaptureKeyboard;
+      window_->SetCursorVisibility(rex::ui::Window::CursorVisibility::kVisible);
+    } else {
+      window_->SetCursorVisibility(cursor_before_);
+      if (!nav_before_) io.ConfigFlags &= ~ImGuiConfigFlags_NavNoCaptureKeyboard;
+      for (auto& [button, down] : held_) down = false;
+    }
+  }
+
+  void Capture() {
+    std::error_code ec;
+    const auto dir = user_root_ / "screenshots";
+    std::filesystem::create_directories(dir, ec);
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t t = std::chrono::system_clock::to_time_t(now);
+    std::tm tm{};
+#if defined(_WIN32)
+    localtime_s(&tm, &t);
+#else
+    localtime_r(&t, &tm);
+#endif
+    char name[64];
+    const int ms = int(std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count() % 1000);
+    std::snprintf(name, sizeof(name), "kk-%04d%02d%02d-%02d%02d%02d-%03d", tm.tm_year + 1900, tm.tm_mon + 1,
+                  tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec, ms);
+    const auto png = dir / (std::string(name) + art::kDevCaptureExtension);
+    art::CaptureFrame(png);
+    std::string text = SettingsText();
+    if (g_ab) text += "Captured while F7 showed the saved settings.\n";
+    std::ofstream(dir / (std::string(name) + ".txt"), std::ios::binary | std::ios::trunc) << text;
+    last_capture_ = png;
+    Status("Saved " + std::string(name) + art::kDevCaptureExtension + " and its settings in screenshots.");
+    REXLOG_INFO("KK graphics panel: capture {}", name);
+  }
+
+  void Status(std::string text) {
+    status_ = std::move(text);
+    status_until_ = std::chrono::steady_clock::now() + std::chrono::seconds(6);
+  }
+
+  void PushStyle(float alpha) {
+    ImGui::SetNextWindowBgAlpha(alpha);
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ui::color::kBase);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0));
     ImGui::PushStyleColor(ImGuiCol_Text, ui::color::kText);
+    ImGui::PushStyleColor(ImGuiCol_TextDisabled, ui::color::kTextFaint);
     ImGui::PushStyleColor(ImGuiCol_CheckMark, ui::color::kAccent);
     ImGui::PushStyleColor(ImGuiCol_SliderGrab, ui::color::kAccent);
+    ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, ui::color::kFocus);
+    ImGui::PushStyleColor(ImGuiCol_TitleBg, ui::color::kBase);
     ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ui::color::kBase);
     ImGui::PushStyleColor(ImGuiCol_Border, ui::color::kHairline);
     ImGui::PushStyleColor(ImGuiCol_Separator, ui::color::kHairline);
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, ui::color::kPanel);
-    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(48, 42, 32, 230));
-    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, IM_COL32(65, 53, 35, 230));
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(32, 30, 26, 220));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(52, 45, 34, 230));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, IM_COL32(70, 57, 37, 230));
     ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(48, 42, 32, 230));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(65, 53, 35, 230));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(91, 71, 43, 230));
-    ImGui::PushStyleColor(ImGuiCol_Header, IM_COL32(48, 42, 32, 230));
-    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, IM_COL32(65, 53, 35, 230));
-    ImGui::PushStyleColor(ImGuiCol_HeaderActive, IM_COL32(91, 71, 43, 230));
-    ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, ui::color::kAccent);
-    bool visible = true;
-    if (ImGui::Begin("Graphics effects (F6)", &visible, ImGuiWindowFlags_NoSavedSettings)) {
-      ImGui::TextWrapped("Changes apply while you play. Save only when you want to keep them.");
-#if defined(KK_NATIVE_RENDERER)
-      const bool native = Get("kk_renderer") == "native";
-      ImGui::BeginDisabled(!native);
-      Check("Ambient occlusion", "ao_mode", "1", "0");
-      static const char* samples[] = {"1", "2", "3"};
-      Choice("AO quality", "native_ao_samples", "Low\0Medium\0High\0", samples, 3);
-      static const char* resolution[] = {"auto", "half", "full"};
-      Choice("AO resolution", "native_ao_quality", "Auto\0Half\0Full\0", resolution, 3);
-      int strength = std::atoi(Get("ao_strength").c_str());
-      if (ImGui::SliderInt("AO strength", &strength, 1, 3)) Change("ao_strength", std::to_string(strength));
-      Check("AO noise smoothing", "native_ao_temporal");
-      ImGui::Separator();
-      static const char* gi[] = {"off", "low", "medium", "high"};
-      Choice("Global illumination", "native_gi", "Off\0Low\0Medium\0High\0", gi, 4);
-      Strength("GI intensity", "native_gi_intensity", 4);
-      static const char* shadow[] = {"original", "high", "ultra"};
-      Choice("Sharper shadows", "native_shadow_quality", "Original\0High\0Ultra\0", shadow, 3);
-      Check("Water reflections (SSR)", "native_water_reflections", "ssr", "original");
-      Strength("Reflection strength", "native_ssr_strength", 4);
-      static const char* shafts[] = {"off", "low", "high"};
-      Choice("Volumetric light shafts", "native_volumetrics", "Off\0Low\0High\0", shafts, 3);
-      Strength("Light shaft strength", "native_volumetric_strength", 4);
-      ImGui::EndDisabled();
-      if (!native) ImGui::TextWrapped("These effects require the native renderer.");
-      ImGui::Separator();
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(72, 59, 38, 240));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(96, 75, 45, 240));
+    ImGui::PushStyleColor(ImGuiCol_Header, IM_COL32(40, 36, 30, 220));
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, IM_COL32(64, 54, 38, 230));
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive, IM_COL32(90, 72, 44, 230));
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, IM_COL32(14, 16, 20, 245));
+  }
+  static void PopStyle() { ImGui::PopStyleColor(21); }
+
+  void DrawCompact(ImGuiIO& io) {
+    const float s = ImGui::GetFontSize() / 18.0f;
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 16 * s, 16 * s), ImGuiCond_Always, ImVec2(1, 0));
+    PushStyle(float(std::clamp(REXCVAR_GET(kk_graphics_panel_opacity), 0.3, 1.0)));
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                                   ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoSavedSettings |
+                                   ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
+    if (ImGui::Begin("##kk_graphics_compact", nullptr, flags)) {
       const auto frame = GetGuestFrameStats();
-      ImGui::Text("%.1f FPS   %.2f ms", frame.fps, frame.frame_time_ms);
-      const auto times = nr::kk::EffectTimes();
-      auto timing = [](const char* label, double ms, bool enabled) {
-        if (!enabled) return;
-        if (ms < 0) ImGui::Text("%s: waiting for GPU sample", label);
-        else ImGui::Text("%s: %.3f ms GPU", label, ms);
-      };
-      timing("AO", times.ao_ms, Get("ao_mode") != "0");
-      timing("GI", times.gi_ms, Get("native_gi") != "off");
-      timing("Shadows", times.shadows_ms, Get("native_shadow_quality") != "original");
-      timing("Water", times.water_ms, Get("native_water_reflections") == "ssr");
-      timing("Light shafts", times.volumetric_ms, Get("native_volumetrics") != "off");
-      if (times.preparing) ImGui::TextUnformatted("Preparing effects...");
-#else
-      ImGui::TextUnformatted("These effects require a native renderer build.");
-#endif
-      if (ImGui::Button("Reset to my settings")) { Reset(); status_ = "Restored your settings."; }
-      ImGui::SameLine();
-      if (ImGui::Button("Save as my settings")) {
-        SaveAsSettings();
+      ImGui::Text("%.0f FPS  %.1f ms  (longest %.0f ms)", frame.fps, frame.frame_time_ms, GuestWorstFrameMs());
+      if (g_ab) {
+        ImGui::TextColored(ImColor(ui::color::kAccent), "Your saved settings (F7)");
+      } else {
+        const size_t n = Changed().size();
+        if (n) ImGui::TextColored(ImColor(ui::color::kWarn), "%zu change%s not saved", n, n == 1 ? "" : "s");
+        ImGui::TextDisabled("Hold F7: saved settings   F8: panel");
       }
-      if (!status_.empty()) ImGui::TextWrapped("%s", status_.c_str());
     }
     ImGui::End();
-    ImGui::PopStyleColor(17);
-    if (!visible) open.store(false);
-    // Keep all keyboard keys available to the running game.
-    io.WantCaptureKeyboard = false;
+    PopStyle();
   }
- private:
-  void SaveAsSettings() {
-    if (SaveSettings(config_, true)) {
-      std::lock_guard lock(saved_mutex);
-      saved.clear();
-      ClearTemporarySettingBaselines();
-      status_ = "Settings saved.";
-    } else status_ = "Could not save settings.";
-  }
-#if defined(KK_DEV_TOOLS)
-  void TestEffects() {
-    const char* folder = std::getenv("KK_DEV_EFFECT_TEST");
-    if (!folder || !*folder || !play::SessionActive() || play::CoverScreen()) return;
-    const double now = DevSecondsSinceMenu();
-    if (now < 5 || test_done_) return;
-    struct Step { const char* name; const char* value; };
-    static const Step steps[] = {{"ao_mode", "1"}, {"native_ao_samples", "1"}, {"native_ao_samples", "2"},
-      {"native_ao_samples", "3"}, {"native_ao_quality", "half"}, {"native_ao_quality", "full"},
-      {"ao_strength", "3"}, {"native_ao_temporal", "false"}, {"native_ao_temporal", "true"},
-      {"native_gi", "low"}, {"native_gi", "medium"}, {"native_gi", "high"}, {"native_gi_intensity", "2"},
-      {"native_shadow_quality", "high"}, {"native_shadow_quality", "ultra"}, {"native_shadow_quality", "original"},
-      {"native_water_reflections", "ssr"}, {"native_ssr_strength", "2"}, {"native_water_reflections", "original"},
-      {"native_volumetrics", "low"}, {"native_volumetrics", "high"}, {"native_volumetric_strength", "2"},
-      {"native_volumetrics", "off"}, {"ao_mode", "0"}};
-    if (test_next_ == 0) {
-      open.store(true);
-      SaveSettings(config_);
-      test_next_ = now;
+
+  void DrawPanel(ImGuiIO& io) {
+    const float s = ImGui::GetFontSize() / 18.0f;
+    const float margin = 24 * s;
+    ImGui::SetNextWindowPos(ImVec2(margin, margin), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSize(ImVec2(std::min(560 * s, io.DisplaySize.x - 2 * margin), io.DisplaySize.y - 2 * margin),
+                             ImGuiCond_Appearing);
+    PushStyle(float(std::clamp(REXCVAR_GET(kk_graphics_panel_opacity), 0.3, 1.0)));
+    bool visible = true;
+    if (ImGui::Begin("Graphics (F8)###kk_graphics_panel", &visible,
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse)) {
+      DrawHeader();
+      const float footer = ImGui::GetFrameHeightWithSpacing() * 3.2f + ImGui::GetTextLineHeightWithSpacing() * 1.2f;
+      if (ImGui::BeginChild("##settings", ImVec2(0, -footer))) DrawSettings();
+      ImGui::EndChild();
+      DrawFooter();
     }
-    if (now < test_next_) return;
-    const auto capture = [&](const char* suffix) {
-      art::CaptureFrame(std::filesystem::path(folder) / ("effect-" + std::to_string(test_step_) + "-" + suffix + ".png"));
-    };
-    if (test_step_ < int(std::size(steps))) {
-      if (!test_after_) {
-        capture("before");
-        const auto& step = steps[test_step_];
-        Change(step.name, step.value);
-        REXLOG_INFO("KK effect test: step {} {}={} at {:.3f} tick {:.6f}", test_step_, step.name, step.value, now,
-          std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count());
-        test_after_ = true;
-        test_next_ = now + 2;
-      } else {
+    ImGui::End();
+    PopStyle();
+    if (!visible) SetOpen(false);
+  }
+
+  void DrawHeader() {
+    const auto frame = GetGuestFrameStats();
+    ImGui::Text("%.1f FPS   %.2f ms   longest %.0f ms", frame.fps, frame.frame_time_ms, GuestWorstFrameMs());
 #if defined(KK_NATIVE_RENDERER)
-        if (nr::kk::EffectTimes().preparing) { test_next_ = now + 0.25; return; }
-#endif
-        capture("after");
-        // An unrelated menu save must preserve every trial's saved value.
-        if (std::string_view(steps[test_step_].name) == "native_gi" && std::string_view(steps[test_step_].value) == "high")
-          SaveSettings(config_);
-        ++test_step_;
-        test_after_ = false;
-        test_next_ = now + 1;
+    const NrEffectStats st = Stats();
+    if (NativeRenderer() && st.size && st.frame) {
+      if (std::string_view(st.upscaler) != "off") {
+        ImGui::TextWrapped("%s: draws %ux%u for %ux%u", st.upscaler, st.input_width, st.input_height, st.output_width,
+                           st.output_height);
+      } else {
+        ImGui::Text("No temporal upscaler: draws %ux%u", st.output_width, st.output_height);
       }
-    } else if (test_step_ == int(std::size(steps))) {
+      std::string gpu;
+      auto add = [&](const char* name, double ms) {
+        if (ms >= 0) gpu += std::string(gpu.empty() ? "" : "   ") + name + " " + Number(ms) + " ms";
+      };
+      add("AO", st.ao_ms);
+      add("GI", st.gi_ms);
+      add("Shadows", st.shadows_ms);
+      add("Water", st.water_ms);
+      add("Shafts", st.volumetric_ms);
+      add("Upscaler", st.upscaler_ms);
+      if (!gpu.empty()) ImGui::TextColored(ImColor(ui::color::kTextDim), "GPU: %s", gpu.c_str());
+      if (st.preparing) {
+        std::string what;
+        if (st.preparing & 4) what += " upscaler";
+        if (st.preparing & 1) what += " GI";
+        if (st.preparing & 2) what += " lighting";
+        if (st.preparing & 8) what += " shaders";
+        ImGui::TextColored(ImColor(ui::color::kWarn), "Preparing:%s (the game keeps drawing meanwhile)", what.c_str());
+      }
+    } else if (!NativeRenderer()) {
+      ImGui::TextWrapped("Classic renderer: only the ambient occlusion and the game's own effects apply here.");
+    }
+#endif
+    if (g_ab) {
+      ImGui::TextColored(ImColor(ui::color::kAccent), "Showing your saved settings while F7 is held.");
+    } else {
+      const size_t n = Changed().size();
+      if (n) {
+        ImGui::TextColored(ImColor(ui::color::kWarn), "%zu change%s not saved (temporary until you save).", n,
+                           n == 1 ? "" : "s");
+      } else {
+        ImGui::TextColored(ImColor(ui::color::kTextDim), "Changes apply at once and stay until the game closes.");
+      }
+      ImGui::TextColored(ImColor(ui::color::kTextFaint), "Hold F7 to compare with your saved settings. F6 captures.");
+    }
+    ImGui::Separator();
+  }
+
+  void DrawSettings() {
+    const char* section = nullptr;
+    bool section_open = false;
+    column_ = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x * 0.42f;
+    ImGui::BeginDisabled(g_ab);
+    for (const Setting& st : Settings()) {
+      if (!Visible(st)) continue;
+      if (!section || std::string_view(section) != st.section) {
+        section = st.section;
+        ImGui::Spacing();
+        section_open = ImGui::CollapsingHeader(st.section, std::string_view(st.section) == "Needs restart"
+                                                               ? ImGuiTreeNodeFlags_None
+                                                               : ImGuiTreeNodeFlags_DefaultOpen);
+      }
+      if (section_open) DrawSetting(st);
+    }
+    ImGui::EndDisabled();
+  }
+
+  void Label(const Setting& st) {
+    const bool changed = [&] {
+      std::lock_guard lock(g_mutex);
+      const auto it = g_saved.find(st.cvar);
+      return it != g_saved.end() && it->second != Get(st.cvar);
+    }();
+    ImGui::AlignTextToFramePadding();
+    if (changed) ImGui::TextColored(ImColor(ui::color::kAccent), "%s *", st.label);
+    else ImGui::TextUnformatted(st.label);
+    if (st.help[0] && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", st.help);
+    ImGui::SameLine(column_);
+    ImGui::SetNextItemWidth(-1);
+  }
+
+  void Combo(const Setting& st, const std::vector<Option>& options) {
+    const std::string cur = Get(st.cvar);
+    std::string preview = cur;
+    for (const Option& o : options)
+      if (cur == o.value) preview = o.label;
+    if (ImGui::BeginCombo((std::string("##") + st.cvar).c_str(), preview.c_str())) {
+      for (const Option& o : options) {
+        if (ImGui::Selectable(o.label, cur == o.value) && cur != o.value) Change(st.cvar, o.value);
+      }
+      ImGui::EndCombo();
+    }
+  }
+
+  void DrawSetting(const Setting& st) {
+    ImGui::PushID(st.cvar);
+    Label(st);
+    const std::string id = std::string("##") + st.cvar;
+    const ImGuiSliderFlags slider = ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput;
+    switch (st.kind) {
+      case Kind::kChoice:
+        Combo(st, st.options);
+        break;
+      case Kind::kToggle: {
+        bool on = Get(st.cvar) == st.options[1].value;
+        if (ImGui::Checkbox(id.c_str(), &on)) Change(st.cvar, on ? st.options[1].value : st.options[0].value);
+        break;
+      }
+      case Kind::kSlider: {
+        float v = float(std::atof(Get(st.cvar).c_str()));
+        if (ImGui::SliderFloat(id.c_str(), &v, st.min, st.max, st.format, slider)) Change(st.cvar, Number(v, "%.3f"));
+        break;
+      }
+      case Kind::kSliderInt: {
+        int v = std::atoi(Get(st.cvar).c_str());
+        if (ImGui::SliderInt(id.c_str(), &v, int(st.min), int(st.max), st.format, slider))
+          Change(st.cvar, std::to_string(v));
+        break;
+      }
+      case Kind::kUpscaler: {
+        std::vector<Option> options;
+        for (const auto& u : OfferedUpscalers()) options.push_back({u.label, u.value});
+        const std::string cur = Get(st.cvar);
+        bool listed = false;
+        for (const Option& o : options) listed = listed || cur == o.value;
+        if (!listed) options.push_back({cur == "auto" ? "Auto" : cur.c_str(), cur.c_str()});
+        // Each choice's label points into kUpscalers or `cur` (alive for this call).
+        Combo(st, options);
+        break;
+      }
+      case Kind::kSharpness: {
+        float v = float(std::atof(Get(st.cvar).c_str()));
+        bool on = v >= 0;
+        if (ImGui::Checkbox("##on", &on)) Change(st.cvar, on ? "0.5" : "-1");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-1);
+        ImGui::BeginDisabled(!on);
+        float shown = std::max(v, 0.0f);
+        if (ImGui::SliderFloat(id.c_str(), &shown, 0, 1, "%.2f", slider)) Change(st.cvar, Number(shown, "%.3f"));
+        ImGui::EndDisabled();
+        break;
+      }
+      case Kind::kMipBias: {
+        const std::string cur = Get(st.cvar);
+        bool automatic = cur == "auto" || cur.empty();
+        if (ImGui::Checkbox("Auto##auto", &automatic)) Change(st.cvar, automatic ? "auto" : "0");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-1);
+        ImGui::BeginDisabled(automatic);
+        // A step of 0.05, applied when the slider is let go (each value makes the scene's samplers again).
+        if (!automatic && !dragging_bias_) bias_ = float(std::atof(cur.c_str()));
+        ImGui::SliderFloat(id.c_str(), &bias_, st.min, st.max, "%.2f", slider);
+        dragging_bias_ = ImGui::IsItemActive();
+        if (ImGui::IsItemDeactivatedAfterEdit()) Change(st.cvar, Number(std::round(bias_ * 20.0f) / 20.0f, "%.2f"));
+        ImGui::EndDisabled();
+        break;
+      }
+      case Kind::kRestart:
+        ImGui::TextDisabled("%s  (needs restart: change it in the launcher)", ValueText(st).c_str());
+        break;
+    }
+    ImGui::PopID();
+  }
+
+  void DrawFooter() {
+    ImGui::Separator();
+    ImGui::BeginDisabled(g_ab);
+    if (ImGui::Button("Reset to my settings")) {
       Reset();
-      SaveSettings(config_);
-      ++test_step_;
-      test_next_ = now + 2;
-    } else if (test_step_ <= int(std::size(steps)) + 50) {
-      if (test_after_) {
-        capture("after");
-        test_after_ = false;
-        ++test_step_;
+      Status("Your saved settings are back.");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Save as my settings")) {
+      Status(SaveAsMine() ? "Saved: these are now your settings, in the launcher too." : "Could not save the settings.");
+    }
+    ImGui::EndDisabled();
+    if (ImGui::Button("Copy settings")) {
+      ImGui::SetClipboardText(SettingsText().c_str());
+      Status("Copied the settings, frame rate and GPU times (names and paths left out).");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Capture (F6)")) Capture();
+    ImGui::SameLine();
+    if (ImGui::Button("Compact")) rex::cvar::SetFlagByName("kk_graphics_panel_compact", "true");
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Opacity");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(-1);
+    float opacity = float(REXCVAR_GET(kk_graphics_panel_opacity));
+    if (ImGui::SliderFloat("##opacity", &opacity, 0.3f, 1.0f, "%.2f",
+                           ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoInput))
+      rex::cvar::SetFlagByName("kk_graphics_panel_opacity", Number(opacity, "%.2f"));
+    if (!status_.empty() && std::chrono::steady_clock::now() < status_until_)
+      ImGui::TextColored(ImColor(ui::color::kGood), "%s", status_.c_str());
+  }
+
+#if defined(KK_DEV_TOOLS)
+  // ------------------------------------------------------- the robustness test ---
+  // KK_DEV_PANEL_TEST=<folder>: in play, every live setting is toggled KK_DEV_PANEL_TOGGLES times (100)
+  // every KK_DEV_PANEL_INTERVAL seconds (0.1), with a capture before and after each; then the upscalers
+  // round and round, the A/B key, the capture key, Reset and Save. Results in the log ("KK panel test").
+  struct TestStep {
+    std::string cvar;
+    std::vector<std::string> values;  // cycled; the last is the "after" picture's
+    std::string upscaler;             // the upscaler to run under (its own rows), empty: as it is
+  };
+  std::vector<TestStep> TestPlan() {
+    std::vector<TestStep> plan;
+    const char* only = std::getenv("KK_DEV_PANEL_ONLY");
+    std::vector<std::string> upscalers;
+    for (const auto& u : OfferedUpscalers()) upscalers.push_back(u.value);
+    if (const char* list = std::getenv("KK_DEV_PANEL_UPSCALERS"); list && *list) {
+      upscalers.clear();
+      std::string l = list;
+      for (size_t a = 0; a <= l.size();) {
+        const size_t b = std::min(l.find(',', a), l.size());
+        if (b > a) upscalers.push_back(l.substr(a, b - a));
+        a = b + 1;
+      }
+    }
+    const std::string main_up = std::getenv("KK_DEV_PANEL_UPSCALER") ? std::getenv("KK_DEV_PANEL_UPSCALER") : "";
+    for (const Setting& st : Settings()) {
+      if (st.kind == Kind::kRestart || !Exists(st.cvar) || (st.native && !NativeRenderer())) continue;
+      if (only && *only && std::string(only).find(st.cvar) == std::string::npos) continue;
+      TestStep step;
+      step.cvar = st.cvar;
+      switch (st.kind) {
+        case Kind::kChoice:
+        case Kind::kToggle:
+          for (const Option& o : st.options) step.values.push_back(o.value);
+          break;
+        case Kind::kSlider:
+          step.values = {Number(st.min, "%.3f"), Number(st.max, "%.3f"), Number((st.min + st.max) / 2, "%.3f")};
+          break;
+        case Kind::kSliderInt:
+          step.values = {std::to_string(int(st.min)), std::to_string(int(st.max)), "90"};
+          break;
+        case Kind::kUpscaler:
+          step.values = upscalers;
+          if (!main_up.empty()) step.values.push_back(main_up);
+          break;
+        case Kind::kSharpness:
+          step.values = {"-1", "0", "1", "0.5"};
+          break;
+        case Kind::kMipBias:
+          step.values = {"auto", "-1", "0.5", "-0.5"};
+          break;
+        case Kind::kRestart:
+          break;
+      }
+      if (st.show == Show::kTemporal || st.show == Show::kFsr || st.show == Show::kDlss) {
+        step.upscaler = st.show == Show::kFsr ? "fsr3" : st.show == Show::kDlss ? "dlss" : main_up;
+        if (step.upscaler.empty()) step.upscaler = "fsr3";
+      }
+      // An effect's own sliders are tried with the effect on.
+      if (st.show == Show::kAo || st.show == Show::kGi || st.show == Show::kShadows || st.show == Show::kWater ||
+          st.show == Show::kShafts) {
+        TestStep on;
+        on.cvar = st.show == Show::kAo ? "ao_mode" : st.show == Show::kGi ? "native_gi" :
+                  st.show == Show::kShadows ? "native_shadow_quality" : st.show == Show::kWater ?
+                  "native_water_reflections" : "native_volumetrics";
+        on.values = {st.show == Show::kAo ? "1" : st.show == Show::kGi ? "high" : st.show == Show::kShadows ? "ultra" :
+                     st.show == Show::kWater ? "ssr" : "high"};
+        step.upscaler = "";
+        plan.push_back({"#enable " + on.cvar, on.values, ""});
+      }
+      plan.push_back(step);
+    }
+    return plan;
+  }
+
+  void TestCapture(const std::string& name) {
+    art::CaptureFrame(test_dir_ / (name + art::kDevCaptureExtension));
+  }
+
+  void TestTick() {
+    if (test_state_ < 0) {
+      const char* dir = std::getenv("KK_DEV_PANEL_TEST");
+      if (!dir || !*dir) {
+        test_state_ = 1000;
+        return;
+      }
+      test_dir_ = dir;
+      test_state_ = 0;
+    }
+    if (test_state_ >= 1000 || !InPlay()) return;
+    const double now = DevSecondsSinceMenu();
+    const double start = std::getenv("KK_DEV_PANEL_START") ? std::atof(std::getenv("KK_DEV_PANEL_START")) : 8.0;
+    if (now < start || now < test_next_) return;
+    const int toggles = std::getenv("KK_DEV_PANEL_TOGGLES") ? std::atoi(std::getenv("KK_DEV_PANEL_TOGGLES")) : 100;
+    const double interval = std::getenv("KK_DEV_PANEL_INTERVAL") ? std::atof(std::getenv("KK_DEV_PANEL_INTERVAL")) : 0.1;
+    auto log = [&](const std::string& text) { REXLOG_INFO("KK panel test: {} at {:.3f}", text, now); };
+    auto check = [&](bool ok, const std::string& what) {
+      ++(ok ? test_pass_ : test_fail_);
+      log(std::string(ok ? "PASS " : "FAIL ") + what);
+    };
+    switch (test_state_) {
+      case 0: {
+        std::ifstream f(g_settings_path, std::ios::binary);
+        test_config_ = std::string((std::istreambuf_iterator<char>(f)), {});
+        SetOpen(true);
+        plan_ = TestPlan();
+        log("start: " + std::to_string(plan_.size()) + " steps, " + std::to_string(toggles) + " toggles each, every " +
+            Number(interval, "%.3f") + " s");
+        test_state_ = 1;
+        test_next_ = now + 3;
+        return;
+      }
+      case 1: {  // a step: its upscaler, then the "before" capture
+        if (step_ >= plan_.size()) {
+          test_state_ = 10;
+          return;
+        }
+        const TestStep& st = plan_[step_];
+        if (st.cvar.rfind("#enable ", 0) == 0) {
+          Change(st.cvar.substr(8).c_str(), st.values[0]);
+          log("enable " + st.cvar.substr(8) + "=" + st.values[0]);
+          ++step_;
+          test_next_ = now + 2;
+          return;
+        }
+        if (!st.upscaler.empty() && Get("native_upscaler") != st.upscaler) Change("native_upscaler", st.upscaler);
+        test_state_ = 2;
+        test_next_ = now + 1.5;
+        return;
+      }
+      case 2:
+        TestCapture(std::to_string(step_) + "-" + plan_[step_].cvar + "-before");
+        toggle_ = 0;
+        test_state_ = 3;
+        test_next_ = now + 0.5;
+        log("step " + std::to_string(step_) + " " + plan_[step_].cvar);
+        return;
+      case 3: {  // the toggles
+        const TestStep& st = plan_[step_];
+        if (toggle_ < toggles) {
+          const std::string& v = st.values[size_t(toggle_) % st.values.size()];
+          Change(st.cvar.c_str(), v);
+          ++toggle_;
+          test_next_ = now + interval;
+          if (toggle_ % 25 == 0) log(st.cvar + " toggle " + std::to_string(toggle_) + " = " + v);
+          return;
+        }
+        Change(st.cvar.c_str(), st.values.back());
+        test_state_ = 4;
+        test_next_ = now + 2;
+        return;
+      }
+      case 4: {
+        const TestStep& st = plan_[step_];
+        const std::string got = Get(st.cvar.c_str());
+        char* end = nullptr;
+        const double a = std::strtod(got.c_str(), &end);
+        const bool numeric = end && *end == 0 && !got.empty();
+        const bool same = got == st.values.back() ||
+                          (numeric && std::fabs(a - std::atof(st.values.back().c_str())) < 1e-3);
+        check(same, st.cvar + " holds its last value " + st.values.back());
+        TestCapture(std::to_string(step_) + "-" + st.cvar + "-after");
+        test_state_ = 5;
         test_next_ = now + 0.5;
         return;
       }
-      capture("before");
-      const bool enabled = (test_step_ - int(std::size(steps))) % 2 == 0;
-      Change("ao_mode", enabled ? "1" : "0");
-      Change("native_ao_samples", enabled ? "3" : "1");
-      Change("native_ao_temporal", enabled ? "true" : "false");
-      Change("native_gi", enabled ? "high" : "off");
-      Change("native_shadow_quality", enabled ? "ultra" : "original");
-      Change("native_water_reflections", enabled ? "ssr" : "original");
-      Change("native_volumetrics", enabled ? "high" : "off");
-      REXLOG_INFO("KK effect test: stress toggle {} at {:.3f}", test_step_ - int(std::size(steps)), now);
-      test_after_ = true;
-      test_next_ = now + 0.5;
-    } else {
-      Reset();
-      Change("native_gi_intensity", "1.25");
-      SaveAsSettings();
-      Change("native_gi_intensity", "2.5");
-      SaveSettings(config_);
-      Reset();
-      SaveSettings(config_);
-      open.store(false);
-      test_done_ = true;
-      REXLOG_INFO("KK effect test: done at {:.3f}", now);
+      case 5:
+        Reset();
+        ++step_;
+        test_state_ = 1;
+        test_next_ = now + 1;
+        return;
+      case 10: {  // A/B: trial settings, hold, let go
+        test_orig_ = {{"native_gi", Get("native_gi")}, {"native_shadow_quality", Get("native_shadow_quality")},
+                      {"ao_mode", Get("ao_mode")}};
+        Change("native_gi", "high");
+        Change("native_shadow_quality", "ultra");
+        Change("ao_mode", Get("ao_mode") == "1" ? "0" : "1");
+        test_ab_ = {{"native_gi", Get("native_gi")}, {"native_shadow_quality", Get("native_shadow_quality")},
+                    {"ao_mode", Get("ao_mode")}};
+        test_state_ = 11;
+        test_next_ = now + 3;
+        return;
+      }
+      case 11:
+        TestCapture("ab-trial");
+        StartAb();
+        test_state_ = 12;
+        test_next_ = now + 3;
+        return;
+      case 12: {
+        bool saved = true;
+        {
+          std::lock_guard lock(g_mutex);
+          for (const auto& [name, value] : g_saved) saved = saved && Get(name.c_str()) == value;
+        }
+        check(saved, "A/B: F7 held shows every saved value");
+        TestCapture("ab-saved");
+        EndAb();
+        test_state_ = 13;
+        test_next_ = now + 3;
+        return;
+      }
+      case 13: {
+        bool trial = true;
+        for (const auto& [name, value] : test_ab_) trial = trial && Get(name.c_str()) == value;
+        check(trial, "A/B: letting go of F7 brings the trial values back");
+        TestCapture("ab-trial-again");
+        // An ordinary save during a trial keeps the saved values in the file.
+        SaveSettings(g_settings_path);
+        std::ifstream f(g_settings_path, std::ios::binary);
+        const std::string text((std::istreambuf_iterator<char>(f)), {});
+        check(text.find("native_shadow_quality = \"ultra\"") == std::string::npos,
+              "an ordinary save during a trial does not write it");
+        Capture();
+        test_state_ = 14;
+        test_next_ = now + 3;
+        return;
+      }
+      case 14: {
+        std::error_code ec;
+        const bool png = std::filesystem::exists(last_capture_, ec);
+        auto txt = last_capture_;
+        txt.replace_extension(".txt");
+        std::ifstream f(txt, std::ios::binary);
+        const std::string text((std::istreambuf_iterator<char>(f)), {});
+        check(png, "the capture key wrote " + last_capture_.filename().string());
+        check(text.find("Global illumination / Global illumination: High *") != std::string::npos,
+              "the capture's text lists the trial settings");
+        Reset();
+        bool back = true;
+        for (const auto& [name, value] : test_orig_) back = back && Get(name.c_str()) == value;
+        check(back && Changed().empty(), "Reset puts the saved settings back");
+        Change("native_gi", "medium");
+        check(SaveAsMine(), "Save as my settings");
+        std::ifstream g(g_settings_path, std::ios::binary);
+        const std::string saved((std::istreambuf_iterator<char>(g)), {});
+        check(saved.find("native_gi = \"medium\"") != std::string::npos, "Save as my settings writes the panel's values");
+        check(Changed().empty(), "after saving nothing is temporary");
+        // The run's own settings file again.
+        std::ofstream(g_settings_path, std::ios::binary | std::ios::trunc) << test_config_;
+        test_state_ = 15;
+        test_next_ = now + 1;
+        return;
+      }
+      case 15:
+        rex::cvar::SetFlagByName("kk_graphics_panel_compact", "true");
+        test_state_ = 16;
+        test_next_ = now + 2;
+        return;
+      case 16:
+        rex::cvar::SetFlagByName("kk_graphics_panel_compact", "false");
+        SetOpen(false);
+        // A trial left on for the key test that follows (F8, F7 held, F6 from outside).
+        Change("native_gi", "high");
+        Change("native_shadow_quality", "ultra");
+        log("done: " + std::to_string(test_pass_) + " passed, " + std::to_string(test_fail_) + " failed");
+        test_state_ = 1000;
+        return;
+      default:
+        return;
     }
   }
-  int test_step_ = 0;
+  int test_state_ = -1;
   double test_next_ = 0;
-  bool test_after_ = false, test_done_ = false;
+  std::filesystem::path test_dir_;
+  std::string test_config_;
+  std::vector<TestStep> plan_;
+  size_t step_ = 0;
+  int toggle_ = 0;
+  int test_pass_ = 0, test_fail_ = 0;
+  std::vector<std::pair<std::string, std::string>> test_ab_, test_orig_;
 #endif
+
   rex::ui::Window* window_;
-  std::filesystem::path config_;
+  std::filesystem::path user_root_;
+  std::filesystem::path last_capture_;
   rex::ui::Window::CursorVisibility cursor_before_ = rex::ui::Window::CursorVisibility::kVisible;
-  bool was_open_ = false, nav_no_capture_before_ = false;
+  bool cursor_shown_ = false, nav_before_ = false, had_focus_ = false;
   std::map<int, bool> held_;
   std::string status_;
+  std::chrono::steady_clock::time_point status_until_{};
+  float bias_ = 0, column_ = 0;
+  bool dragging_bias_ = false;
 };
-}
-bool DebugOverlayOpen() { return open.load(std::memory_order_relaxed); }
-void SetDebugOverlayConfigPath(const std::filesystem::path& config) {
-  std::lock_guard lock(saved_mutex);
-  settings_path = config;
-}
-void CreateDebugOverlay(rex::ui::ImGuiDrawer* drawer, rex::ui::Window* window, const std::filesystem::path& config) {
+
+}  // namespace
+
+bool DebugOverlayOpen() { return g_open.load(std::memory_order_relaxed) && !REXCVAR_GET(kk_graphics_panel_compact); }
+
+void SetDebugOverlayConfigPath(const std::filesystem::path& config) { g_settings_path = config; }
+
+void CreateDebugOverlay(rex::ui::ImGuiDrawer* drawer, rex::ui::Window* window, const std::filesystem::path& config,
+                        const std::filesystem::path& user_root) {
   static bool created = false;
   if (created || !window) return;
   created = true;
-  new DebugOverlay(drawer, window, config);
+  if (!config.empty()) g_settings_path = config;
+  new GraphicsPanel(drawer, window, user_root);  // lives for the rest of the session
 }
+
 }  // namespace kk

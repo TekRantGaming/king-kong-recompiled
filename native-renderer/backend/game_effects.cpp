@@ -358,6 +358,7 @@ void GameRenderer::PublishEffectTimes() {
     std::snprintf(s.upscaler, sizeof(s.upscaler), "off");
   }
   s.api = device_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN ? 1u : 2u;
+  s.vendor = vendor_;
   s.frame = frame_;
   s.live_changes = live_changes_;
   s.last_change_ms = live_last_change_ms_;

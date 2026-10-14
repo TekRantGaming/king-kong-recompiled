@@ -32,9 +32,13 @@ struct UpscalerChoices {
   bool fsr3 = false, fsr4 = false, dlss = false, xess = false;
 };
 UpscalerChoices QueryUpscalers();
+// The same answer without asking the question (the graphics panel, while the game's device exists): state 0
+// when the launcher did not ask it in this process.
+UpscalerChoices PeekUpscalers();
 // The overlay's line under the frame counter; empty when --native_stutter_stats is off or the native
 // renderer is not drawing.
 std::string StutterLine();
+// The graphics panel's readout (plugin/native_effect_stats.h): size 0 when the native renderer is not drawing.
 NrEffectStats EffectTimes();
 
 }  // namespace nr::kk

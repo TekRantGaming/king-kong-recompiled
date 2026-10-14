@@ -498,6 +498,11 @@ extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_upscaler_query(NrUpscalerSupport* o
 
 extern "C" REX_GPU_PLUGIN_EXPORT void nr_upscaler_query_wait(void) { nr::WaitUpscalerQuery(); }
 
+// The graphics panel's view of the same answer: never starts the question (the game's device exists).
+extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_upscaler_query_peek(NrUpscalerSupport* out) {
+  return nr::UpscalerQueryPeek(out);
+}
+
 // The pipeline stutter counter for the overlay (native_stutter.h).
 extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_stutter_stats(NrStutterStats* stats) {
   nr::StutterSnapshot s;
