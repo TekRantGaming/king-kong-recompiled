@@ -35,6 +35,7 @@ class LauncherMusic {
   bool audio_ready_ = false;
   size_t next_ = 0;  // next sample to queue (loops)
   float gain_ = 0;
+  bool paused_ = false;  // faded out: the device is paused
 };
 
 }  // namespace kk

@@ -71,7 +71,14 @@ void LauncherMusic::Update(float volume, float dt) {
   const float step = dt / 1.5f;
   gain_ = volume > gain_ ? std::min(volume, gain_ + step) : std::max(volume, gain_ - step);
   SDL_SetAudioStreamGain(stream_, gain_);
-  Feed();
+  // Faded out (switched off, or a shader build): the device pauses, and carries on where it was.
+  const bool silent = gain_ <= 0 && volume <= 0;
+  if (silent != paused_) {
+    paused_ = silent;
+    if (silent) SDL_PauseAudioStreamDevice(stream_);
+    else SDL_ResumeAudioStreamDevice(stream_);
+  }
+  if (!paused_) Feed();
 }
 
 }  // namespace kk

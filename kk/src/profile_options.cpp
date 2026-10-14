@@ -1,30 +1,19 @@
 #include "play_session.h"
 #include "play_internal.h"
+#include "profile_save_file.h"
 
 #include <algorithm>
 #include <array>
 #include <bit>
-#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
-#include <fstream>
 #include <mutex>
 #include <vector>
 
 #include <rex/hook.h>
 #include <rex/cvar.h>
 #include <rex/logging.h>
-
-#if defined(_WIN32)
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#endif
 
 REX_EXTERN(__imp__sub_82413298);
 #if defined(KK_DEV_TOOLS)
@@ -36,35 +25,19 @@ namespace kk { double DevSecondsSinceMenu(); }
 namespace kk::play {
 namespace {
 constexpr uint32_t kFields[] = {18712, 18704, 18700, 18708, 19856};
-// Filled from the universe's saved-variable descriptors, verified by KK_DEV_AUDIO_TRACE.
-constexpr uint32_t kFileFields[] = {0xA78, 0xA70, 0xA6C, 0xA74, 0x1154};
-constexpr size_t kSaveSize = 0x8040;
+// Their places in the save file (profile_save_file.h): filled from the universe's saved-variable
+// descriptors, verified by KK_DEV_AUDIO_TRACE.
+using save_file::kFileFields;
+using save_file::kSaveSize;
+using save_file::ReadSave;
+using save_file::ReadWord;
+using save_file::WriteWord;
 std::mutex g_options_mutex;
 ProfileOptions g_live_options;
 std::string g_error;
 int g_live_slot = -1;
 std::array<float, 5> g_pending{};
 std::array<bool, 5> g_dirty{};
-
-uint32_t ReadWord(const uint8_t* p) {
-  uint32_t v;
-  std::memcpy(&v, p, 4);
-  return std::byteswap(v);
-}
-void WriteWord(uint8_t* p, uint32_t v) {
-  v = std::byteswap(v);
-  std::memcpy(p, &v, 4);
-}
-
-std::vector<uint8_t> ReadSave(const std::filesystem::path& path) {
-  std::ifstream in(path, std::ios::binary | std::ios::ate);
-  if (!in || in.tellg() != std::streampos(kSaveSize)) return {};
-  std::vector<uint8_t> bytes(kSaveSize);
-  in.seekg(0);
-  if (!in.read(reinterpret_cast<char*>(bytes.data()), bytes.size()) || ReadWord(bytes.data() + 0x28) == 0 ||
-      ReadWord(bytes.data() + 0xA68) != 4) return {};
-  return bytes;
-}
 
 ProfileOptions Decode(const uint8_t* bytes, const uint32_t* fields, bool percent) {
   ProfileOptions out;
@@ -84,79 +57,9 @@ ProfileOptions Decode(const uint8_t* bytes, const uint32_t* fields, bool percent
   return out;
 }
 
-// Keeps the newest kBackupsPerSlot backups of a slot; older ones are removed.
-constexpr size_t kBackupsPerSlot = 3;
-void PruneBackups(const std::filesystem::path& backup_dir, int slot) {
-  const std::string prefix = "slot" + std::to_string(slot + 1) + "-";
-  std::vector<std::pair<std::filesystem::file_time_type, std::filesystem::path>> backups;
-  std::error_code ec;
-  for (std::filesystem::directory_iterator it(backup_dir, ec), end; !ec && it != end; it.increment(ec)) {
-    const auto name = it->path().filename().string();
-    if (!name.starts_with(prefix) || it->path().extension() != ".dat") continue;
-    std::error_code time_ec;
-    backups.emplace_back(std::filesystem::last_write_time(it->path(), time_ec), it->path());
-  }
-  if (backups.size() <= kBackupsPerSlot) return;
-  std::sort(backups.begin(), backups.end());
-  for (size_t i = 0; i + kBackupsPerSlot < backups.size(); ++i) {
-    std::error_code remove_ec;
-    std::filesystem::remove(backups[i].second, remove_ec);
-  }
-}
-
-// Keep the original file as a backup and replace only after the entire new file is
-// written. No header, progress, timestamp or unrelated option bytes are changed.
 bool WriteOptions(const std::filesystem::path& root, int slot, const std::array<float, 5>& values,
                   const std::array<bool, 5>& dirty) {
-  const auto path = ProfileFilePath(root, slot);
-  auto bytes = ReadSave(path);
-  if (bytes.empty() || !Decode(bytes.data(), kFileFields, true).available) return false;
-  bool changed = false;
-  for (int i = 0; i < 5; ++i) {
-    if (!dirty[i]) continue;
-    const uint32_t bits = i == 4 ? uint32_t(values[i] != 0) : std::bit_cast<uint32_t>(values[i] / 100.0f);
-    changed |= ReadWord(bytes.data() + kFileFields[i]) != bits;
-    WriteWord(bytes.data() + kFileFields[i], bits);
-  }
-  if (!changed) return true;
-  static uint64_t serial = 0;
-  const auto stamp = std::to_string(std::chrono::system_clock::now().time_since_epoch().count()) + "-" + std::to_string(++serial);
-  const auto backup_dir = root / "audio-option-backups";
-  const auto pending = path.parent_path() / ("KKProfile.audio-pending-" + stamp);
-  const auto backup = backup_dir / ("slot" + std::to_string(slot + 1) + "-" + stamp + ".dat");
-  std::error_code ec;
-  std::filesystem::create_directories(backup_dir, ec);
-  if (ec) return false;
-  {
-    std::ofstream out(pending, std::ios::binary);
-    if (!out || !out.write(reinterpret_cast<const char*>(bytes.data()), bytes.size())) return false;
-    out.flush();
-    if (!out) return false;
-  }
-  auto discard_pending = [&pending] {
-    std::error_code ignored;
-    std::filesystem::remove(pending, ignored);
-  };
-  if (ReadSave(pending) != bytes) { discard_pending(); return false; }
-  // The save stays in place throughout: copy it to the backup, then replace it in one step.
-  std::filesystem::copy_file(path, backup, std::filesystem::copy_options::overwrite_existing, ec);
-  if (ec) { discard_pending(); return false; }
-#if defined(_WIN32)
-  if (!MoveFileExW(pending.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-    REXLOG_ERROR("KK audio: replacing the profile failed (error {}); the save is unchanged", GetLastError());
-    discard_pending();
-    return false;
-  }
-#else
-  std::filesystem::rename(pending, path, ec);  // atomic replacement on POSIX
-  if (ec) {
-    REXLOG_ERROR("KK audio: replacing the profile failed: {}; the save is unchanged", ec.message());
-    discard_pending();
-    return false;
-  }
-#endif
-  PruneBackups(backup_dir, slot);
-  return true;
+  return save_file::WriteOptions(ProfileFilePath(root, slot), root / "audio-option-backups", slot, values, dirty);
 }
 
 // Guard the hard-coded disk layout against a different game image or script data.
@@ -199,20 +102,29 @@ ProfileOptions ReadProfileOptions(const std::filesystem::path& root, int slot) {
   return Decode(data.data(), kFileFields, true);
 }
 
-bool SetProfileOption(const std::filesystem::path& root, int slot, ProfileOption option, float value) {
-  const int i = int(option);
-  if (i < 0 || i >= 5 || !std::isfinite(value)) return false;
-  value = i == 4 ? float(value != 0) : std::clamp(value, 0.0f, 100.0f);
-  std::lock_guard lock(g_options_mutex);
-  if (slot >= 0) {
-    std::array<float, 5> values{};
-    std::array<bool, 5> dirty{};
-    values[i] = value; dirty[i] = true;
-    return WriteOptions(root, slot, values, dirty);
+bool SetProfileOptionsInAllSaves(const std::filesystem::path& root, const ProfileChange& change) {
+  save_file::Values values{};
+  save_file::Changed changed{};
+  for (size_t i = 0; i < values.size(); ++i) {
+    if (!change.set[i] || !std::isfinite(change.values[i])) continue;
+    values[i] = i == 4 ? float(change.values[i] != 0) : std::clamp(change.values[i], 0.0f, 100.0f);
+    changed[i] = true;
   }
-  if (!g_live_options.available || g_live_slot < 0) return false;
-  g_pending[i] = value; g_dirty[i] = true;
-  return true;
+  if (std::none_of(changed.begin(), changed.end(), [](bool b) { return b; })) return true;
+  std::lock_guard lock(g_options_mutex);
+  // In play: the game's own save through the game thread (ServiceProfileOptions), which also
+  // applies the values to the running game.
+  int live = -1;
+  if (g_live_options.available && g_live_slot >= 0 && g_live_slot < kSlotCount) {
+    live = g_live_slot;
+    for (size_t i = 0; i < values.size(); ++i)
+      if (changed[i]) g_pending[i] = values[i], g_dirty[i] = true;
+  }
+  const auto r = save_file::WriteOptionsToSaves([&root](int slot) { return ProfileFilePath(root, slot); }, kSlotCount,
+                                                root / "audio-option-backups", values, changed, live);
+  if (r.failed) REXLOG_ERROR("KK audio: {} save(s) could not take the new options and were left unchanged", r.failed);
+  else REXLOG_INFO("KK audio: options written to {} save(s){}", r.written, live >= 0 ? " and the game being played" : "");
+  return r.failed == 0;
 }
 
 void ServiceProfileOptions(PPCContext& ctx, uint8_t* base) {

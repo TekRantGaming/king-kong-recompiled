@@ -245,9 +245,9 @@ constexpr const char* kRestartCvars[] = {"present_effect", "window_width", "wind
                                          "native_upscaler", "native_backend",
                                          "d3d12_allow_variable_refresh_rate_and_tearing"};
 
-enum Page { kHome, kDisplay, kGraphics, kGameplay, kControls, kCheatsPage, kAudio, kSubtitles, kAchievements, kAbout, kPageCount };
-constexpr const char* kPageNames[kPageCount] = {"Home",     "Display", "Graphics",     "Gameplay",
-                                                "Controls", "Cheats", "Audio", "Subtitles", "Achievements", "About"};
+enum Page { kHome, kDisplay, kGraphics, kGameplay, kControls, kCheatsPage, kAudio, kAchievements, kAbout, kPageCount };
+constexpr const char* kPageNames[kPageCount] = {"Home",   "Display", "Graphics",     "Gameplay", "Controls",
+                                                "Cheats", "Audio",   "Achievements", "About"};
 // Sub-pages of Controls.
 enum SubPage { kNoSubPage, kRemapPage, kKeysPage };
 // Play on Home: the Play menu and its pages (docs/menus.md).
@@ -615,7 +615,7 @@ struct SteamState {
 constexpr const char* kSteamPhases[] = {"Downloading the artwork from SteamGridDB", "Waiting for Steam to close",
                                         "Adding King Kong to your library", "Opening Steam again"};
 
-// The settings pages (including the game's profile Audio and Subtitles): their rows, built by the
+// The settings pages (including the game's own audio and subtitle options, kept in its saves): their rows, built by the
 // launcher and, in game, by the pause menu (InGameSettings below, ingame_settings.h), which leaves
 // out the rows that need a restart. The launcher is one of these.
 class SettingsPages {
@@ -730,8 +730,10 @@ class SettingsPages {
     return it;
   }
 
-  // The saves and the shown slot's options are read at most twice a second (the pages are built every
-  // frame), and again at once after a write or a slot change.
+  // The game's audio and subtitle options live in each save (profile_options.cpp); the launcher and
+  // the pause menu set them in every save at once. They show the game being played (in the pause
+  // menu) or else the most recently played save, read at most twice a second (the pages are built
+  // every frame) and again at once after a write.
   static constexpr double kProfileReadInterval = 0.5;
   // A change is written once the value has settled (a slider is dragged through many steps).
   static constexpr double kProfileWriteDelay = 0.4;
@@ -745,24 +747,22 @@ class SettingsPages {
     return profile_saves_;
   }
 
-  int ProfileSlot() {
-    if (in_game_) return -1;
-    const auto& saves = ProfileSaves();
-    if (profile_slot_ < 0 || size_t(profile_slot_) >= saves.size() || !saves[size_t(profile_slot_)].exists)
-      profile_slot_ = play::MostRecentSave(saves);
-    return profile_slot_;
-  }
-
-  // The slot's options as shown: the cached read with the changes still waiting to be written on top.
-  play::ProfileOptions ShownProfileOptions(int slot) {
+  // The options as shown: the cached read with the changes still waiting to be written on top.
+  // Not available when there is no save yet (or, in play, no game profile).
+  play::ProfileOptions ShownProfileOptions() {
     const double now = ImGui::GetTime();
-    if (profile_read_slot_ != slot || profile_read_at_ < 0 || now - profile_read_at_ >= kProfileReadInterval) {
-      profile_read_ = play::ReadProfileOptions(profile_user_dir_, slot);
-      profile_read_slot_ = slot;
+    if (profile_read_at_ < 0 || now - profile_read_at_ >= kProfileReadInterval) {
+      play::ProfileOptions read;
+      if (in_game_) read = play::ReadProfileOptions(profile_user_dir_, -1);
+      if (!read.available) {
+        const int slot = play::MostRecentSave(ProfileSaves());
+        if (slot >= 0) read = play::ReadProfileOptions(profile_user_dir_, slot);
+      }
+      profile_read_ = std::move(read);
       profile_read_at_ = now;
     }
     play::ProfileOptions shown = profile_read_;
-    if (shown.available && profile_pending_slot_ == slot) {
+    if (shown.available) {
       float* volumes[] = {&shown.master, &shown.voices, &shown.music, &shown.effects};
       for (int i = 0; i < 4; ++i)
         if (profile_dirty_[size_t(i)]) *volumes[i] = profile_values_[size_t(i)];
@@ -772,106 +772,94 @@ class SettingsPages {
   }
 
   void ChangeProfileOption(play::ProfileOption option, float value) {
-    const int slot = ProfileSlot();
-    if (!in_game_ && slot < 0) return;
-    if (profile_pending_slot_ != slot) FlushProfileOptions();
-    profile_pending_slot_ = slot;
+    if (!ShownProfileOptions().available) return;
     profile_values_[size_t(option)] = value;
     profile_dirty_[size_t(option)] = true;
     profile_changed_at_ = ImGui::GetTime();
   }
 
-  // Writes the waiting changes: `now` when leaving, otherwise once they have settled.
+  // Writes the waiting changes to every save: `now` when leaving, otherwise once they have settled.
   void FlushProfileOptions(bool now = true) {
     if (std::none_of(profile_dirty_.begin(), profile_dirty_.end(), [](bool b) { return b; })) return;
     if (!now && ImGui::GetTime() - profile_changed_at_ < kProfileWriteDelay) return;
-    bool ok = true;
-    for (size_t i = 0; i < profile_dirty_.size(); ++i) {
-      if (!profile_dirty_[i]) continue;
-      ok &= play::SetProfileOption(profile_user_dir_, profile_pending_slot_, play::ProfileOption(i), profile_values_[i]);
-      profile_dirty_[i] = false;
-    }
+    play::ProfileChange change;
+    change.values = profile_values_;
+    change.set = profile_dirty_;
+    profile_dirty_.fill(false);
+    const bool ok = play::SetProfileOptionsInAllSaves(profile_user_dir_, change);
     profile_read_at_ = profile_saves_at_ = -1;  // read again
-    if (!ok) Status("The setting could not be saved. Your save was left unchanged.");
+    if (!ok) Status("The setting could not be saved in every save. Those saves were left unchanged.");
   }
 
-  void ResetProfilePage(bool subtitles) {
-    if (subtitles) {
-      const auto profile = ShownProfileOptions(ProfileSlot());
-      ChangeProfileOption(play::ProfileOption::kSubtitles, float(profile.subtitle_default));
-    }
-    else
-      for (int i = 0; i < 4; ++i) ChangeProfileOption(play::ProfileOption(i), 100);
+  void ResetAudio() {
+    for (int i = 0; i < 4; ++i) ChangeProfileOption(play::ProfileOption(i), 100);
+  }
+  void ResetSubtitles() {
+    profile_read_at_ = -1;  // its default follows the language, which may have just been reset
+    const auto profile = ShownProfileOptions();
+    if (profile.available) ChangeProfileOption(play::ProfileOption::kSubtitles, float(profile.subtitle_default));
   }
 
-  std::vector<Item> ProfileItems(bool subtitles) {
-    std::vector<Item> items;
-    const int slot = ProfileSlot();
+  // Why the options can't be changed now.
+  const char* ProfileUnavailableNote() const {
+    return in_game_ ? "No game profile is available yet."
+                    : "Start a game to create a save, then change its settings here or in the pause menu.";
+  }
+
+  // Gameplay's Subtitles row.
+  Item SubtitlesItem() {
     FlushProfileOptions(false);
-    const auto profile = (!in_game_ && slot < 0) ? play::ProfileOptions{} : ShownProfileOptions(slot);
+    const auto profile = ShownProfileOptions();
     if (!profile.error.empty()) Status(profile.error);
-    if (!in_game_) {
-      Item save;
-      save.type = ItemType::kChoice;
-      save.label = "Save";
-      save.description = "These settings belong to this game save. Each save keeps its own audio and subtitles.";
-      std::vector<int> slots;
-      for (const auto& s : ProfileSaves()) {
-        if (!s.exists) continue;
-        if (s.index == slot) save.index = int(slots.size());
-        slots.push_back(s.index);
-        save.options.push_back(F("Slot {0}", {std::to_string(s.index + 1)}) + ": " + s.name);
-      }
-      save.disabled = slots.empty();
-      save.disabled_note = "Start a game to create a save, then change its settings here or in the pause menu.";
-      save.on_choice = [this, slots](int i) {
-        FlushProfileOptions();
-        profile_slot_ = slots[size_t(i)];
-      };
-      items.push_back(std::move(save));
-    }
-    items.push_back(Section(subtitles ? "Subtitles" : "Game audio"));
-    if (subtitles) {
+    Item it;
+    it.type = ItemType::kChoice;
+    it.label = "Subtitles";
+    it.description = "Show the game's dialogue subtitles. Applies during play and to every save.";
+    it.options = {"Off", "On"};
+    it.index = profile.subtitles ? 1 : 0;
+    it.default_text = profile.subtitle_default ? "On" : "Off";
+    it.on_choice = [this](int i) { ChangeProfileOption(play::ProfileOption::kSubtitles, float(i)); };
+    it.on_default = [this] { ResetSubtitles(); };
+    Disable(it, !profile.available, ProfileUnavailableNote());
+    return it;
+  }
+
+  // The Audio page: the game's four volumes.
+  std::vector<Item> AudioItems() {
+    std::vector<Item> items;
+    FlushProfileOptions(false);
+    const auto profile = ShownProfileOptions();
+    if (!profile.error.empty()) Status(profile.error);
+    items.push_back(Section("Game audio"));
+    const char* labels[] = {"Master volume", "Voices volume", "Music volume", "Effects volume"};
+    const char* descriptions[] = {"How loud all game audio is. Applies during play and to every save.",
+                                  "How loud the characters' voices are. Applies during play and to every save.",
+                                  "How loud the game's music is. Applies during play and to every save.",
+                                  "How loud the game's sound effects are. Applies during play and to every save."};
+    const float values[] = {profile.master, profile.voices, profile.music, profile.effects};
+    for (int i = 0; i < 4; ++i) {
       Item it;
-      it.type = ItemType::kChoice;
-      it.label = "Subtitles";
-      it.description = "Show the game's dialogue subtitles. Applies during play and is kept in this save.";
-      it.options = {"Off", "On"};
-      it.index = profile.subtitles ? 1 : 0;
-      it.default_text = profile.subtitle_default ? "On" : "Off";
-      it.on_choice = [this](int i) { ChangeProfileOption(play::ProfileOption::kSubtitles, float(i)); };
-      it.on_default = [this] { ResetProfilePage(true); };
-      Disable(it, !profile.available, "No game profile is available yet.");
+      it.type = ItemType::kSlider;
+      it.label = labels[i];
+      it.description = descriptions[i];
+      it.lo = 0; it.hi = 100; it.step = 1;
+      it.value = values[i];
+      it.value_text = std::to_string(int(std::lround(values[i]))) + "%";
+      it.default_text = "100%";
+      it.on_value = [this, i](float v) { ChangeProfileOption(play::ProfileOption(i), v); };
+      it.on_default = [this, i] { ChangeProfileOption(play::ProfileOption(i), 100); };
+      Disable(it, !profile.available, ProfileUnavailableNote());
       items.push_back(std::move(it));
-    } else {
-      const char* labels[] = {"Master volume", "Voices volume", "Music volume", "Effects volume"};
-      const char* descriptions[] = {"How loud all game audio is.", "How loud the characters' voices are.",
-                                    "How loud the game's music is.", "How loud the game's sound effects are."};
-      const float values[] = {profile.master, profile.voices, profile.music, profile.effects};
-      for (int i = 0; i < 4; ++i) {
-        Item it;
-        it.type = ItemType::kSlider;
-        it.label = labels[i];
-        it.description = std::string(descriptions[i]) + " Applies during play and is kept in this save.";
-        it.lo = 0; it.hi = 100; it.step = 1;
-        it.value = values[i];
-        it.value_text = std::to_string(int(std::lround(values[i]))) + "%";
-        it.default_text = "100%";
-        it.on_value = [this, i](float v) { ChangeProfileOption(play::ProfileOption(i), v); };
-        it.on_default = [this, i] { ChangeProfileOption(play::ProfileOption(i), 100); };
-        Disable(it, !profile.available, "No game profile is available yet.");
-        items.push_back(std::move(it));
-      }
     }
-    items.push_back(ActionItem("Reset page", "Put these settings back to their defaults.", "", [this, subtitles] {
+    items.push_back(ActionItem("Reset page", "Put these settings back to their defaults.", "", [this] {
       ui::Modal m;
       m.open = true; m.title = "Reset page";
       m.body = "Put these settings back to their defaults?";
       m.buttons = {"Reset", "Cancel"}; m.cancel = m.focus = 1; m.width = 560;
-      m.on_button = [this, subtitles](int i) { if (i == 0) ResetProfilePage(subtitles); };
+      m.on_button = [this](int i) { if (i == 0) ResetAudio(); };
       modal_ = std::move(m);
     }));
-    Disable(items.back(), !profile.available, "No game profile is available yet.");
+    Disable(items.back(), !profile.available, ProfileUnavailableNote());
     return items;
   }
 
@@ -1572,6 +1560,7 @@ class SettingsPages {
                                 {"Espa\xC3\xB1ol", "5"},
                                 {"Fran\xC3\xA7" "ais", "4"},
                                 {"Italiano", "6"}}));
+    items.push_back(SubtitlesItem());
     items.push_back(CvarToggle("Camera shake",
                                "The camera shaking from the V-Rex's footsteps, explosions and Kong's blows.",
                                "kk_camera_shake"));
@@ -1951,14 +1940,11 @@ class SettingsPages {
   int display_modes_monitor_ = -1;
   const bool in_game_;  // drawn by the pause menu
   std::filesystem::path profile_user_dir_;
-  int profile_slot_ = -1;
   std::vector<play::SaveSlot> profile_saves_;
   double profile_saves_at_ = -1;
   play::ProfileOptions profile_read_;
-  int profile_read_slot_ = -2;
   double profile_read_at_ = -1;
-  // Changes waiting to be written (FlushProfileOptions).
-  int profile_pending_slot_ = -2;
+  // Changes waiting to be written to every save (FlushProfileOptions).
   std::array<float, 5> profile_values_{};
   std::array<bool, 5> profile_dirty_{};
   double profile_changed_at_ = 0;
@@ -2148,7 +2134,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
     if (files_ok_ && !music_) music_ = std::make_unique<LauncherMusic>(paths_.game_dir);
     if (music_) {
-      const float v = GetBool("kk_launcher_music") ? GetInt("kk_launcher_music_volume", 50) / 100.0f : 0.0f;
+      // Silent while the native renderer's shaders are built (setup, after an update, before Play): the
+      // build takes nearly every hardware thread and the music would stutter. It fades back in after.
+      const bool on = GetBool("kk_launcher_music") && !native_pack_.Working();
+      const float v = on ? GetInt("kk_launcher_music_volume", 50) / 100.0f : 0.0f;
       music_->Update(v * v, io.DeltaTime);  // a gentler curve than linear
     }
     if (files_ok_ && GetBool("kk_launcher_sounds") && !ui_sounds_)
@@ -3578,12 +3567,16 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     const float s = S();
     const ui::Fonts f = ui::GetFonts();
     bool after_update = !setup_shaders_;
+    // One bar for the whole job (every API's shaders and pipelines), with the step under it.
     float fraction = native_pack_.Fraction();
-    uint32_t done = native_pack_.Done(), total = native_pack_.Total();
+    std::string step = native_pack_.StepText();
 #if defined(KK_DEV_TOOLS)
     if (dev_setup_ == 4) {
       after_update = false;
-      if (!native_pack_.Busy()) total = 4794, done = 2157, fraction = 0.45f;  // screenshots
+      if (!native_pack_.Busy()) {  // screenshots
+        fraction = 0.45f;
+        step = F("Step {0} of {1}: {2}", {"2", "4", F("Preparing the {0} pipelines", {"Vulkan"})});
+      }
     }
 #endif
     const std::string caption = Upper(T("PC port")) + "  " KK_DOT "  " + Upper(T(after_update ? "Update" : "Setup"));
@@ -3638,10 +3631,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       dl->AddRectFilled(ImVec2(a0, by), ImVec2(a1, by + 3 * s), color::kAccent);
     }
     ty += 3 * s + 14 * s;
-    const std::string left = total > 0 ? F("{0} of {1} shaders", {std::to_string(done), std::to_string(total)})
-                                       : T(std::string("Checking"));
+    const std::string left = fraction >= 0 && !step.empty() ? step : T(std::string("Checking"));
     const std::string right = fraction >= 0 ? std::to_string(int(fraction * 100)) + "%" : "";
-    dl->AddText(f.text, 15 * s, ImVec2(tx, ty), color::kText, left.c_str());
+    dl->AddText(f.text, 15 * s, ImVec2(tx, ty), color::kTextDim, left.c_str());
     dl->AddText(f.text, 15 * s, ImVec2(tx + wrap - ui::TextSize(f.text, 15 * s, right).x, ty), color::kTextDim,
                 right.c_str());
     ty += 20 * s + 30 * s;
@@ -4112,8 +4104,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       case kDisplay: items = DisplayItems(); break;
       case kGraphics: items = GraphicsItems(); break;
       case kGameplay: items = GameplayItems(); break;
-      case kAudio: items = ProfileItems(false); break;
-      case kSubtitles: items = ProfileItems(true); break;
+      case kAudio: items = AudioItems(); break;
       case kControls:
         items = sub_ == kRemapPage ? RemapItems() : sub_ == kKeysPage ? KeyItems() : ControlsItems();
         break;
@@ -4458,7 +4449,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         return {"kk_fov", "kk_camera_shake", "kk_camera_shake_strength", "kk_show_fps",
                 "kk_skip_intros", "user_language"};
       case kAudio:
-      case kSubtitles:
         return {"#profile"};
       case kControls:
         return {"mnk_mode", "kk_button_prompts", "kk_camera_sensitivity", "kk_camera_modern", "kk_mouse_sensitivity",
@@ -4477,8 +4467,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   // Puts one page's settings back to their defaults; the other pages keep theirs.
   void ResetPage(Page page) {
-    if (page == kAudio || page == kSubtitles) {
-      ResetProfilePage(page == kSubtitles);
+    if (page == kAudio) {
+      ResetAudio();
       return;
     }
     if (page == kGraphics) startup::ManualChoice();  // resets the renderer and API by hand
@@ -4497,6 +4487,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       rex::cvar::ResetToDefault(e.name);
     }
     ++g_changes;
+    // Gameplay's Subtitles is the game's own option, in every save (its default follows the language).
+    if (page == kGameplay) ResetSubtitles();
     if (page == kGraphics) ApplyRendererChoice();  // gpu_plugin follows kk_renderer
     if (page == kDisplay && cb_.set_fullscreen) cb_.set_fullscreen(GetBool("fullscreen"));
     Status(F("{0} settings are back to their defaults.", {T(std::string(kPageNames[page]))}));
@@ -4509,8 +4501,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       if (e.source == rex::cvar::Source::kCommandLine || e.source == rex::cvar::Source::kEnvironment) continue;
       rex::cvar::ResetToDefault(e.name);
     }
-    ResetProfilePage(false);
-    ResetProfilePage(true);
+    ResetAudio();  // the game's own options, in every save
+    ResetSubtitles();
     ++g_changes;
     ApplyRendererChoice();
     if (cb_.set_fullscreen) cb_.set_fullscreen(GetBool("fullscreen"));
@@ -5372,8 +5364,7 @@ class InGameSettingsImpl final : public InGameSettings, private SettingsPages {
       case kDisplay: items = DisplayItems(); break;
       case kGraphics: items = GraphicsItems(); break;
       case kGameplay: items = GameplayItems(); break;
-      case kAudio: items = ProfileItems(false); break;
-      case kSubtitles: items = ProfileItems(true); break;
+      case kAudio: items = AudioItems(); break;
       case kControls:
         items = sub_ == kRemapPage ? RemapItems() : sub_ == kKeysPage ? KeyItems() : ControlsItems();
         break;
@@ -5383,8 +5374,10 @@ class InGameSettingsImpl final : public InGameSettings, private SettingsPages {
     return LiveOnly(std::move(items));
   }
   int SubPage() const override { return int(sub_); }
-  bool CanResetPage(Page page) const override { return page == kAudio || page == kSubtitles; }
-  void ResetPage(Page page) override { ResetProfilePage(page == kSubtitles); }
+  bool CanResetPage(Page page) const override { return page == kAudio; }
+  void ResetPage(Page page) override {
+    if (page == kAudio) ResetAudio();
+  }
   void LeaveSubPage() override { sub_ = kNoSubPage; }
   void Tick() override {
     CaptureKey();
@@ -5419,7 +5412,7 @@ class InGameSettingsImpl final : public InGameSettings, private SettingsPages {
 }  // namespace
 
 const char* InGameSettings::PageName(Page page) {
-  static const char* const kNames[kPageCount] = {"Display", "Graphics", "Gameplay", "Controls", "Cheats", "Audio", "Subtitles"};
+  static const char* const kNames[kPageCount] = {"Display", "Graphics", "Gameplay", "Controls", "Cheats", "Audio"};
   return page >= 0 && page < kPageCount ? kNames[page] : "";
 }
 
