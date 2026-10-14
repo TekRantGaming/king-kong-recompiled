@@ -54,7 +54,9 @@ GameRenderer::HostTarget* GameRenderer::FindTarget(bool depth, uint32_t edram_ba
   const bool out = upscale_ && (generation < 0 ? OutputGeneration() : generation == 1);
   auto it = targets_.find(TargetKey(depth, edram_base, pitch, format) | (out ? kOutputGeneration : 0));
   if (it == targets_.end() || !it->second || !RestoreTarget(*it->second)) return nullptr;
-  it->second->used_frame = frame_;
+  // Upscaler generations use used_frame to mean GetTarget actually selected
+  // the attachment, not a FindTarget probe for height or a stale resolve.
+  if (!upscale_) it->second->used_frame = frame_;
   return it->second.get();
 }
 
@@ -108,7 +110,7 @@ GameRenderer::HostTarget* GameRenderer::GetTarget(bool depth, uint32_t edram_bas
   if (slot && slot->height >= height) {
     if (slot->scale_x == ScaleFor(depth, pitch, format, !upscale_ || out).x) {
       if (!RestoreTarget(*slot)) return nullptr;
-      slot->used_frame = frame_;
+      if (!upscale_) slot->used_frame = frame_;
       if (upscale_) {
         // A target of the output generation first used after the upscale point gets its input
         // twin's picture of this frame (MigrateTarget does nothing otherwise).
