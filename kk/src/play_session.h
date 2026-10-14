@@ -95,4 +95,17 @@ void RunPauseAction(PauseAction action);
 // Whether an item is available right now (e.g. Start again and Score need a save loaded).
 bool PauseActionAvailable(PauseAction action);
 
+// Audio and subtitles are options in each game save, not port cvars. A negative slot
+// reads/queues changes to the active game profile on the game thread.
+enum class ProfileOption { kMaster, kVoices, kMusic, kEffects, kSubtitles, kCount };
+struct ProfileOptions {
+  bool available = false;
+  float master = 100, voices = 100, music = 100, effects = 100;
+  bool subtitles = false;
+  bool subtitle_default = false;
+  std::string error;
+};
+ProfileOptions ReadProfileOptions(const std::filesystem::path& user_dir, int slot);
+bool SetProfileOption(const std::filesystem::path& user_dir, int slot, ProfileOption option, float value);
+
 }  // namespace kk::play

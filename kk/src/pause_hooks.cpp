@@ -346,6 +346,7 @@ REX_EXTERN(__imp__sub_824BA560);
 REX_HOOK_RAW(sub_824BA560) {
   using namespace kk::play;
   KK_PAGE_TRACE("IntMIG_Page_Main");
+  ServiceProfileOptions(ctx, base);
   const uint32_t v = PageVars(base);
   if (!TakeoverOn() || !InPlay(base) || !v) {
     __imp__sub_824BA560(ctx, base);

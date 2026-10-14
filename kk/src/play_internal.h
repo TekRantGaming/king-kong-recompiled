@@ -11,7 +11,13 @@
 
 #include "play_session.h"
 
+struct PPCContext;
+
 namespace kk::play {
+// Consume UI requests and publish a profile snapshot, only on the game thread.
+void ServiceProfileOptions(PPCContext& ctx, uint8_t* base);
+bool ProfileSaveBusy(const uint8_t* base);
+std::filesystem::path ProfileFilePath(const std::filesystem::path& user_dir, int slot);
 
 // ---- set up by the app (king_kong_app.h) ----
 

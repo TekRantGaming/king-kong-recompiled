@@ -454,8 +454,14 @@ StartRequest GetStartRequest() {
 
 void SetUserDir(const std::filesystem::path& user_dir) { g_user_dir = user_dir; }
 const std::filesystem::path& UserDir() { return g_user_dir; }
+std::filesystem::path ProfileFilePath(const std::filesystem::path& user_dir, int slot) {
+  return slot >= 0 && slot < kSlotCount ? SlotFile(user_dir, slot) : std::filesystem::path{};
+}
 void SetQuitHandler(std::function<void()> quit) { g_quit = std::move(quit); }
 bool SessionActive() { return g_session; }
+bool ProfileSaveBusy(const uint8_t* base) {
+  return g_save_jobs != 0 || Load32(base, kSaveQueue + 0xC) != 0;
+}
 
 std::wstring StartRequestArg() {
   const std::string s = FormatRequest(GetStartRequest());
@@ -976,6 +982,32 @@ REX_HOOK_RAW(sub_8253DB80) {
   const bool request = g && Load32(base, g + 4) != 0;
   if (request && g_jump_requested) REXLOG_INFO("KK play: uni_go loads level {}", int32_t(Load32(base, g + 8)));
   __imp__sub_8253DB80(ctx, base);
+  ServiceProfileOptions(ctx, base);
+#if defined(KK_DEV_TOOLS)
+  if (g && std::getenv("KK_DEV_AUDIO_TRACE")) {
+    static bool traced = false;
+    const uint32_t script = Load32(base, 0x828E838C);
+    const uint32_t object = script ? Load32(base, script) : 0;
+    const uint32_t desc = object ? Load32(base, object) : 0;
+    if (!traced && desc) {
+      traced = true;
+      uint32_t offset = 0x100;
+      const uint32_t table = Load32(base, desc + 8), count = Load32(base, desc + 12);
+      for (uint32_t i = 0; i < count; ++i) {
+        const uint32_t d = table + i * 16, variable = Load32(base, d), shape = Load32(base, d + 8);
+        const uint32_t type = (uint32_t(base[d + 12]) << 8) | base[d + 13];
+        const uint32_t flags = (uint32_t(base[d + 14]) << 8) | base[d + 15];
+        const uint32_t size = (uint32_t(base[0x828CEFF0 + type * 8 + 2]) << 8) |
+                             base[0x828CEFF0 + type * 8 + 3];
+        const uint32_t bytes = ((shape >> 30) * 4) + (shape & 0x3FFFFFFF) * size;
+        if (variable >= 18680 && variable <= 19860)
+          REXLOG_INFO("KK audio descriptor: G+{:X} file+{:X} bytes {} flags {:X} value {:08X}",
+                      variable, offset, bytes, flags, Load32(base, g + variable));
+        if (flags & 0x10) offset += bytes;
+      }
+    }
+  }
+#endif
   if (request && g_jump_requested && !g_level_loaded) {
     g_level_loaded = true;
     g_level_loaded_ms = NowMs();
