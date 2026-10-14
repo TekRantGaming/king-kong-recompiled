@@ -8,6 +8,8 @@
 // This console test links the real settings implementation and cvar registry,
 // with OS detection replaced by controlled profiles. No game/device is started.
 REXCVAR_DEFINE_STRING(native_upscaler, "off", "Test", "Test");
+REXCVAR_DEFINE_STRING(native_backend, "auto", "Test", "Test");
+REXCVAR_DEFINE_STRING(gpu_plugin, "native", "Test", "Test");
 REXCVAR_DEFINE_STRING(native_upscaler_quality, "quality", "Test", "Test");
 REXCVAR_DEFINE_STRING(native_ao_quality, "auto", "Test", "Test");
 REXCVAR_DEFINE_INT32(native_ao_samples, 2, "Test", "Test");
@@ -94,11 +96,16 @@ int main() {
   std::filesystem::create_directories(dir);
   const auto config = dir / "king_kong.toml";
   fake = {{GpuVendor::kNvidia, "RTX 4070 Ti", 12 * GiB}, 8, 32 * GiB, 3840, 2160, 120, false};
+  Check(rex::cvar::SetFlagByName("gpu_plugin", "native"), "test native renderer selected");
   InitializeHardwareRecommendation(config, 3840, 2160);
   Equals("kk_hardware_tier", "high");
   Equals("native_ao_samples", "3");
   Equals("native_ao_quality", "auto");
   Equals("kk_frame_rate", "30");
+  Equals("native_backend", "auto");
+  Equals("native_upscaler", "dlss");
+  SetOfferedUpscalers("fsr3");
+  Equals("native_upscaler", "fsr3");
   Check(SaveSettings(config), "save first-launch marker");
   fake.gpu.dedicated_memory = 2 * GiB;
   InitializeHardwareRecommendation(config, 3840, 2160);
@@ -116,6 +123,7 @@ int main() {
   rex::cvar::SetFlagByName("native_upscaler_quality", "balanced");
   rex::cvar::SetFlagByName("native_upscaler", "off");
   rex::cvar::SetFlagByName("kk_frame_rate", "144");
+  rex::cvar::SetFlagByName("native_backend", "d3d12");
   Check(SaveSettings(config), "save explicit choices");
   rex::cvar::ResetAllToDefaults();
   rex::cvar::LoadConfig(config);
@@ -126,6 +134,7 @@ int main() {
   Equals("native_upscaler_quality", "balanced");
   Equals("native_upscaler", "off");
   Equals("kk_frame_rate", "144");
+  Equals("native_backend", "d3d12");
   for (auto source : {rex::cvar::Source::kConfig, rex::cvar::Source::kEnvironment,
                      rex::cvar::Source::kCommandLine, rex::cvar::Source::kRuntime}) {
     for (auto& e : rex::cvar::GetRegistry()) if (e.name == "native_ao_samples") { e.setter("2"); e.source = source; }

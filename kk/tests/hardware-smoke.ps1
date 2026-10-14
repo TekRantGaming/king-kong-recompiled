@@ -41,6 +41,7 @@ Get-ChildItem Env: | Where-Object { $_.Name -like 'KK_DEV_*' -or $_.Name -like '
     ForEach-Object { [Environment]::SetEnvironmentVariable($_.Name, $null, 'Process') }
 $env:SDL_WINDOW_ACTIVATE_WHEN_SHOWN = '0'
 $env:SDL_WINDOW_ACTIVATE_WHEN_RAISED = '0'
+$env:KK_DEV_AUTOSKIP = '1' # also enables the developer frame-capture tick
 $env:KK_DEV_SCRIPT = '0:SKIP/120'
 $env:KK_DEV_SHOTS = '100,120'
 $env:KK_DEV_SHOTS_FROM = 'menu'
@@ -60,6 +61,9 @@ try {
   $timer = [Diagnostics.Stopwatch]::StartNew()
   while (!$game.HasExited -and $timer.Elapsed.TotalSeconds -lt 240) {
     if (Test-Path -LiteralPath "$run\shot_1200.bmp") { break }
+    # Stop at two minutes of the loaded chapter even if capturing is unavailable.
+    $loaded = Select-String -LiteralPath "$run\run.log" -Pattern '^\[([^]]+)\].*script clock started \(chapter jump\)' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($loaded -and ((Get-Date) - [datetime]::Parse($loaded.Matches[0].Groups[1].Value)).TotalSeconds -ge 120) { break }
     Start-Sleep -Seconds 2
   }
   Write-Output "END $($timer.Elapsed.TotalSeconds) seconds; exited=$($game.HasExited); 120-second-frame=$(Test-Path -LiteralPath "$run\shot_1200.bmp")"
