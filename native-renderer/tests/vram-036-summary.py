@@ -100,6 +100,7 @@ for run in sorted(ROOT.glob("task036-*-*-*-20*")):
         "scale_resource_creations_max": max((int(r["resource_creations"]) for r in scale_rows), default=""),
         "scale_commit_cpu_max_ms": max((float(v) for v in re.findall(r"contents migrated at frame \d+ \(([\d.]+) ms CPU\)", logs)), default=""),
         "tour_transition_requested": "asking for the next chapter's level (entry 9)" in logs,
+        "tour_transition_handled": bool(re.search(r"GST_MM_Init out:.*\bmap 306\b", logs)),
         "captures": len(list(run.glob("shot*.bmp"))),
         "error_lines": sum(bool(re.search(r"\b(error|fatal|VUID-|device removed|device lost|exhausted)\b", line, re.I))
                            for line in logs.splitlines()),

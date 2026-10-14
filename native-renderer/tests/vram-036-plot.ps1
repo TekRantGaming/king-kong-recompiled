@@ -3,7 +3,8 @@ Add-Type -AssemblyName System.Windows.Forms.DataVisualization
 $root='F:\KK-native-renderer\runs\task036-analysis'
 $curves=Import-Csv "$root\curves.csv"
 $summary=Import-Csv "$root\summary.csv" | Where-Object {
-  [int]$_.samples -ge 110 -and [int]$_.captures -eq 2 -and $_.tour_kind -ne 'legacy-menu'
+  [int]$_.samples -ge 110 -and [int]$_.captures -eq 2 -and $_.tour_kind -ne 'legacy-menu' -and
+  ($_.case -ne 'tour' -or $_.tour_transition_handled -eq 'True')
 }
 $groups=$summary | Group-Object budget_gib,case,simulated_pressure,gtao,pressure_delay_s,tour_kind,backend
 foreach ($group in $groups) {
