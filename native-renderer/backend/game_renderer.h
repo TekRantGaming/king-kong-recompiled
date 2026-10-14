@@ -586,6 +586,8 @@ class GameRenderer {
   Options options_;
   Stats stats_;
   uint64_t frame_ = 0;
+  // Texture placeholder warnings already logged, one per (vs, ps, stage and slot, reason); bounded.
+  std::unordered_set<uint64_t> placeholder_warned_;
   Stats debug_previous_;
   kkshaders::ScaleConstants last_scale_ = {};
   nvrhi::IGraphicsPipeline* debug_last_pipeline_ = nullptr;

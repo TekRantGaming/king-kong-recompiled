@@ -1674,6 +1674,20 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   for (const auto& use : placeholder_uses) {
     // Both shader stages share the slot's final draw constant. A later bind may have succeeded.
     if (dc.textureIndex[use.slot & 31]) continue;
+    // Once per distinct (vs, ps, stage and slot, reason): the same draw repeats every frame.
+    constexpr size_t kPlaceholderWarningLimit = 256;
+    if (placeholder_warned_.size() > kPlaceholderWarningLimit) continue;
+    uint64_t warn_key = 1469598103934665603ull;
+    auto mix = [&warn_key](uint64_t v) { warn_key = (warn_key ^ v) * 1099511628211ull; };
+    mix(vs->ucode_hash);
+    mix(ps ? ps->ucode_hash : 0);
+    mix((uint64_t(use.vertex) << 32) | use.slot);
+    for (char c : use.reason) mix(uint8_t(c));
+    if (!placeholder_warned_.insert(warn_key).second) continue;
+    if (placeholder_warned_.size() > kPlaceholderWarningLimit) {
+      Logf(LogLevel::kWarning, "rexgpu-native: texture placeholder warnings limit reached; further ones are not logged");
+      continue;
+    }
     const auto& w = use.key.words;
     Logf(LogLevel::kWarning,
          "rexgpu-native: texture placeholder real draw frame %llu draw %u %s slot %u dim %u "
