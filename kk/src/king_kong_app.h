@@ -111,6 +111,7 @@ class KingKongApp : public rex::ReXApp {
       const rex::PathConfig& defaults, std::function<void(rex::PathConfig)> resume) override {
     user_data_root_ = defaults.user_data_root;
     config_path_ = defaults.config_path;
+<<<<<<< HEAD
     kk::InitDiagnostics();
     {
       const std::filesystem::path log = REXCVAR_GET(log_file);
@@ -118,6 +119,11 @@ class KingKongApp : public rex::ReXApp {
                                                   : rex::filesystem::GetExecutableFolder() / "logs",
                             user_data_root_);
     }
+=======
+    kk::ApplyRendererChoice();
+    const auto recommendation_output = OutputSize();
+    kk::InitializeHardwareRecommendation(defaults.config_path, recommendation_output.first, recommendation_output.second);
+>>>>>>> codex-hw-auto
     kk::MigrateSettings(defaults.config_path);
     kk::ApplyFixedSettings();
     // The launcher's Play menu: the saves live under the user data, a start request may be given
@@ -140,6 +146,9 @@ class KingKongApp : public rex::ReXApp {
     const bool show = kk::startup::NeedsNotice() || !files_ok || kk::IsShiftHeld() || (REXCVAR_GET(kk_launcher) && !skip_once) ||
                       (!skip_once && !rex::cvar::GetFlagByName("kk_launcher_open").empty());
     if (!show) {
+      std::error_code recommendation_ec;
+      if (!std::filesystem::exists(defaults.config_path, recommendation_ec) && !recommendation_ec &&
+          !rex::cvar::GetFlagByName("kk_hardware_tier").empty()) kk::SaveSettings(defaults.config_path);
       kk::EnforceOriginalLook();
       kk::ApplyFullscreenMode(window());
       kk::ApplyRendererChoice();  // the renderer, and with it the default upscaler

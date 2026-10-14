@@ -117,6 +117,10 @@ void SetCvarDefault(std::string_view name, std::string_view value);
 
 // Port defaults that differ from ReXGlue's (call before the config is loaded).
 void ApplyPortDefaults();
+// First launch selects and persists a hardware tier. Existing installs are left alone.
+void InitializeHardwareRecommendation(const std::filesystem::path& config_path, int width, int height);
+// Recommended refreshes defaults only; explicit player settings always win.
+void ApplyHardwareRecommendation(bool detect, int width, int height);
 
 // The default upscaler (Beta 3, docs/upscalers.md "The default"): with the native renderer, the best
 // temporal upscaler this PC runs (native_upscaler): DLSS on an NVIDIA card that supports it, FSR 4 on

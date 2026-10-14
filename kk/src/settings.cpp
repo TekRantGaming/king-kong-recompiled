@@ -12,6 +12,7 @@
 #include <rex/string.h>
 
 #include "platform.h"
+#include "hardware_recommendation.h"
 
 REXCVAR_DEFINE_BOOL(kk_launcher, true, "KK",
                     "Show the launcher before starting the game (hold Shift at start to force it)");
@@ -41,6 +42,9 @@ REXCVAR_DEFINE_BOOL(kk_launcher_sounds, true, "KK", "The game's menu sounds when
 REXCVAR_DEFINE_INT32(kk_launcher_sounds_volume, 50, "KK", "The launcher's interface sound volume, 0-100").range(0, 100);
 REXCVAR_DEFINE_INT32(kk_settings_version, 0, "KK",
                      "Internal: which defaults the settings file was written with (see MigrateSettings)");
+REXCVAR_DEFINE_STRING(kk_hardware_tier, "", "KK",
+                      "Internal: first-launch hardware recommendation; empty for existing installs")
+    .allowed({"", "low", "mid", "high"});
 REXCVAR_DEFINE_STRING(kk_last_version, "", "KK",
                       "Last port version the launcher has shown (it shows What's new once after an update)");
 REXCVAR_DEFINE_INT32(kk_frame_rate, 30, "KK/Video",
@@ -248,6 +252,7 @@ void ApplyRenderPreset(int output_height) {
   // A temporal upscaler (the native renderer's native_upscaler, Display > Upscaling) takes the picture
   // at the screen's size, in 720p steps (Native), and draws fewer pixels itself.
   std::string quality = REXCVAR_GET(kk_render_quality);
+  if (quality == "custom") return; // retain explicitly supplied render scales
   if (rex::cvar::GetFlagByName("gpu_plugin") == "native") {
     const std::string temporal = rex::cvar::GetFlagByName("native_upscaler");
     if (!temporal.empty() && temporal != "off") quality = "native";
@@ -278,7 +283,11 @@ bool SaveSettings(const std::filesystem::path& path) {
     // Set by the port at every start (ApplyRuntimeOverrides).
     if (e.name == "video_mode_width" || e.name == "video_mode_height") continue;
     const std::string value = e.getter();
-    if (value == e.default_value) continue;
+    const bool hardware_setting = e.name == "kk_render_quality" || e.name == "native_upscaler_quality" ||
+        e.name == "native_ao_quality" || e.name == "native_ao_samples" || e.name == "ao_mode" || e.name == "native_upscaler" ||
+        e.name == "present_effect" || e.name == "resolution_scale" || e.name == "draw_resolution_scale_x" ||
+        e.name == "draw_resolution_scale_y";
+    if (value == e.default_value && !(hardware_setting && e.source != rex::cvar::Source::kDefault)) continue;
     out += e.name + " = ";
     if (e.type == rex::cvar::FlagType::String) {
       out += '"';
@@ -365,22 +374,14 @@ std::string BestTemporalUpscaler() {
   if (offered.empty()) {
 #if defined(_WIN32)
     // Not asked yet: by the vendor. FSR 4 waits for the answer (it needs Direct3D 12 and a recent card).
-    switch (gpu.vendor) {
-      case GpuVendor::kNvidia: return "dlss";
-      case GpuVendor::kIntel: return "xess";
-      default: return "fsr3";
-    }
+    return RecommendedUpscaler(gpu.vendor, {}, false);
 #else
     return "off";  // the temporal upscalers are Windows only for now
 #endif
   }
   auto has = [&](const char* v) { return ("," + offered + ",").find("," + std::string(v) + ",") != std::string::npos; };
-  if (gpu.vendor == GpuVendor::kNvidia && has("dlss")) return "dlss";
-  if (gpu.vendor == GpuVendor::kAmd && rex::cvar::GetFlagByName("native_backend") == "d3d12" && has("fsr4"))
-    return "fsr4";
-  if (gpu.vendor == GpuVendor::kIntel && has("xess")) return "xess";
-  if (has("fsr3")) return "fsr3";
-  return "off";
+  return RecommendedUpscaler(gpu.vendor, {true, has("dlss"), has("fsr3"), has("fsr4"), has("xess")},
+                            rex::cvar::GetFlagByName("native_backend") == "d3d12");
 }
 
 bool NativeRendererInUse() { return rex::cvar::GetFlagByName("gpu_plugin") == "native"; }
@@ -398,6 +399,51 @@ void ApplyUpscalerDefaults() {
   const std::string temporal = DefaultTemporalUpscaler();
   SetCvarDefault("native_upscaler", temporal);
   SetCvarDefault("present_effect", temporal != "off" ? "bilinear" : SpatialDefault());
+}
+
+void ApplyHardwareRecommendation(bool detect, int width, int height) {
+#if !defined(_WIN32)
+  return; // Windows first; Linux work is on hold.
+#endif
+  if (detect) {
+    const HardwareProfile h = DetectHardware();
+    const auto& tier = kHardwareTiers[HardwareTierIndex(h)];
+    rex::cvar::SetFlagByName("kk_hardware_tier", tier.id);
+    REXLOG_INFO("KK: hardware recommendation {}: GPU {} ({} MiB), {} physical cores, {} MiB RAM, display {}x{}@{}",
+                tier.id, h.gpu.name, h.gpu.dedicated_memory >> 20, h.physical_cores,
+                h.system_memory >> 20, h.width, h.height, h.refresh_hz);
+  }
+  const std::string selected = REXCVAR_GET(kk_hardware_tier);
+  const auto tier = std::find_if(kHardwareTiers.begin(), kHardwareTiers.end(),
+                               [&](const auto& t) { return selected == t.id; });
+  if (tier == kHardwareTiers.end()) return;
+  auto explicit_setting = [](const char* name) {
+    const auto* f = Flag(name);
+    return f && f->source != rex::cvar::Source::kDefault;
+  };
+  const bool original = REXCVAR_GET(kk_original_look);
+  const bool custom = explicit_setting("resolution_scale") || explicit_setting("draw_resolution_scale_x") ||
+                      explicit_setting("draw_resolution_scale_y");
+  if (custom && !original && !explicit_setting("kk_render_quality")) SetCvarDefault("kk_render_quality", "custom");
+  const char* quality = RecommendedRenderQuality(*tier, width, height);
+  for (const char* name : {"kk_render_quality", "native_upscaler_quality"}) {
+    if (!PreserveHardwareSetting(explicit_setting(name), custom, original)) SetCvarDefault(name, quality);
+  }
+  if (!original) {
+    SetCvarDefault("native_ao_quality", tier->ao_quality);
+    SetCvarDefault("native_ao_samples", std::to_string(tier->ao_samples));
+    SetCvarDefault("ao_mode", tier->ao_enabled ? "1" : "0");
+    ApplyUpscalerDefaults(); // asynchronous support query refines this using the existing fallback policy
+  }
+  REXLOG_INFO("KK: recommendation {} at {}x{}: render {}, AO {} / {} samples; explicit settings retained",
+              selected, width, height, quality, tier->ao_quality, tier->ao_samples);
+}
+
+void InitializeHardwareRecommendation(const std::filesystem::path& config_path, int width, int height) {
+  std::error_code ec;
+  const bool exists = std::filesystem::exists(config_path, ec);
+  // A pre-existing config, including one predating this feature, never gets a new tier automatically.
+  ApplyHardwareRecommendation(!exists && !ec && REXCVAR_GET(kk_hardware_tier).empty(), width, height);
 }
 
 void SetOfferedUpscalers(const std::string& offered) {

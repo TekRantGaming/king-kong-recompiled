@@ -1,4 +1,5 @@
 #include "platform.h"
+#include "hardware_recommendation.h"
 
 #include <chrono>
 #include <cstdlib>
@@ -95,6 +96,36 @@ GpuInfo DetectGpu() {
   adapter->Release();
 #endif
   return info;
+}
+
+HardwareProfile DetectHardware() {
+  HardwareProfile h;
+  h.gpu = DetectGpu();
+  h.steam_deck = IsSteamDeck();
+#if defined(_WIN32)
+  MEMORYSTATUSEX memory{sizeof(memory)};
+  if (GlobalMemoryStatusEx(&memory)) h.system_memory = memory.ullTotalPhys;
+  DWORD bytes = 0;
+  GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &bytes);
+  std::vector<unsigned char> topology(bytes);
+  if (bytes && GetLogicalProcessorInformationEx(RelationProcessorCore,
+      reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(topology.data()), &bytes)) {
+    for (DWORD offset = 0; offset < bytes;) {
+      const auto* core = reinterpret_cast<const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(topology.data() + offset);
+      if (!core->Size || core->Size > bytes - offset) break;
+      if (core->Relationship == RelationProcessorCore) ++h.physical_cores;
+      offset += core->Size;
+    }
+  }
+  DEVMODEW mode{};
+  mode.dmSize = sizeof(mode);
+  if (EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &mode)) {
+    h.width = int(mode.dmPelsWidth);
+    h.height = int(mode.dmPelsHeight);
+    h.refresh_hz = int(mode.dmDisplayFrequency);
+  }
+#endif
+  return h;
 }
 
 bool IsSteamDeck() {
