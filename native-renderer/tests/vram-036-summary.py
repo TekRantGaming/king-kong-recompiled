@@ -63,7 +63,9 @@ for run in sorted(ROOT.glob("task036-*-*-*-20*")):
                 else:
                     continue
                 first = int(staged[1]) if staged else frame
-                scale_windows.append((first - 2, frame + 4))
+                # Include the eight-frame retirement queue draining as well as
+                # staging and copying, so delayed frees cannot escape timing.
+                scale_windows.append((first - 2, frame + 12))
             scale_rows = [r for r in rows
                           if any(first <= int(r["frame"]) <= last for first, last in scale_windows)]
             scale_intervals = [float(r["interval_ms"]) for r in scale_rows]
