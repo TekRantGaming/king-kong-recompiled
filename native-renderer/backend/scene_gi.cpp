@@ -101,7 +101,7 @@ void SceneGi::NoteAmbient(uint64_t frame, const float rgb[3]) {
   ++ambient_count_;
 }
 
-bool SceneGi::Apply(nvrhi::ICommandList* cl, bool ao_on) {
+bool SceneGi::Apply(nvrhi::ICommandList* cl, bool ao_on, bool depth_before_draw) {
   AoProjection p;
   AoScreen sc;
   if (!camera_.Get(frame_, p, sc)) {
@@ -113,7 +113,7 @@ bool SceneGi::Apply(nvrhi::ICommandList* cl, bool ao_on) {
     }
     return false;
   }
-  if (!tracker_.depth_valid() || !scene_depth_.texture || !scene_color_.texture) {
+  if (!depth_before_draw || !tracker_.depth_valid() || !scene_depth_.texture || !scene_color_.texture) {
     ++stats_.no_depth;
     return false;
   }
@@ -221,12 +221,14 @@ void SceneGi::OnDraw(nvrhi::ICommandList* cl, const SceneAo::Draw& d, bool ao_on
   td.depth_key = d.depth.key;
   td.frame_size = d.frame_size;
   td.writes_depth = d.state.depth_write && d.depth.key;
+  // OnDraw records a future write; this hook computes before that draw executes.
+  const bool depth_before_draw = tracker_.frame() == d.frame && tracker_.depth_valid();
   const AoFrameTracker::Events e = tracker_.OnDraw(td);
   if (e.in_scene) {
     if (d.color.key && d.color.key == tracker_.scene_color()) scene_color_ = d.color;
     if (d.depth.key && d.depth.key == tracker_.scene_depth()) scene_depth_ = d.depth;
   }
-  if (e.opaque_complete && !applied_ && Apply(cl, ao_on)) {
+  if (e.opaque_complete && !applied_ && Apply(cl, ao_on, depth_before_draw)) {
     applied_ = last_applied_ = true;
     if (stats_.applied_opaque++ == 0)
       Logf(LogLevel::kInfo, "rexgpu-native: GI: first bounce light at the end of the opaque pass (frame %llu, %u opaque draws)",

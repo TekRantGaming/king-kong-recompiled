@@ -574,6 +574,7 @@ struct Fixture {
   // light in its c0), then (optionally) the blended quad.
   struct Frame {
     bool prepass = true, quad = true;
+    bool clear_scene_depth = false, quad_writes_depth = false;
   };
   void DrawFrame(const Frame& fr) {
     SetRenderTarget(0, rt);
@@ -585,9 +586,10 @@ struct Fixture {
     SetConstants(false, 0, kAmbient, 1);
     if (fr.prepass) DrawMesh(scene, ps_lit, kBlendOpaque, kDepthPrepass, 0);
     DrawMesh(scene, ps_lit, kBlendOpaque, fr.prepass ? kDepthColour : kDepthPrepass);
+    if (fr.clear_scene_depth) Clear(kClearZ, 0, 1.0f);
     if (fr.quad) {
       SetConstants(false, 1, kQuad, 1);
-      DrawMesh(QuadMesh(), ps_quad, kBlendAlpha, kDepthColour);
+      DrawMesh(QuadMesh(), ps_quad, kBlendAlpha, fr.quad_writes_depth ? kDepthPrepass : kDepthColour);
     }
     Reg(dev::kRbBlendControl0, kBlendOpaque);
     Reg(dev::kRbColorMask, 0xFFFF);
@@ -877,6 +879,23 @@ TEST(GameGi_OffChangesNothing) {
   const Pixels got = f.Render({}, "off");
   CHECK_EQ(MaxDifference(got, want), 0.0f);
   CHECK(f.game->scene_gi() == nullptr);
+}
+
+TEST(GameGi_UpcomingWaterDepthWriteCannotValidateClearedDepth) {
+  Options on;
+  on.mode = 0;
+  on.gi = Gi(GiLevel::kMedium);
+  Fixture f(on);
+  if (!f.Init()) return;
+  Fixture::Frame fr;
+  fr.clear_scene_depth = fr.quad_writes_depth = true;
+  f.Render(fr, "cleared_depth_before_water");
+  const SceneGi* gi = f.game->scene_gi();
+  CHECK(gi != nullptr);
+  if (gi) {
+    CHECK_EQ(gi->stats().no_depth, uint64_t(1));
+    CHECK_EQ(gi->stats().applied_opaque, uint64_t(0));
+  }
 }
 
 NR_TEST_MAIN()

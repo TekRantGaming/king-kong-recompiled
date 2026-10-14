@@ -50,6 +50,7 @@ class SceneLighting {
   };
   // Before a draw is recorded (into `cl`, before the draw).
   void OnDraw(nvrhi::ICommandList* cl, const Draw& d);
+  void OnDepthClear(uint64_t frame, uint64_t depth_key);
   // Close a lighting span on a family/frame boundary before the next draw's scene effects.
   void BeforeDraw(nvrhi::ICommandList* cl, uint64_t frame, LightFamily family);
   // End the final lighting span before Present's AO/GI/upscaler work.

@@ -809,4 +809,30 @@ TEST(Lighting_SsrBindingFailureStopsPreparationAndRecovers) {
   }
 }
 
+TEST(Lighting_SsrUpcomingWaterWriteCannotValidateDepth) {
+  if (!Device()) return;
+  ErrorsChecked errors;
+  for (bool clear : {false, true}) {
+    LightingConfig config;
+    config.water = WaterReflections::kSsr;
+    SceneLighting lighting(Device()->device(), config);
+    CHECK(lighting.Initialize());
+    LightingScene scene(Device()->device());
+    auto cl = Device()->device()->createCommandList();
+    cl->open();
+    cl->clearTextureFloat(scene.color, nvrhi::AllSubresources, nvrhi::Color(0.2f));
+    // The first scene draw may itself write depth, but has not executed yet.
+    scene.draw.state.depth_write = clear;
+    scene.Opaque(lighting, cl, 0);
+    if (clear) lighting.OnDepthClear(0, scene.draw.depth.key);
+    scene.draw.state.depth_write = true;
+    scene.Water(lighting, cl);
+    CHECK(!lighting.ssr().valid);
+    CHECK_EQ(lighting.stats().ssr_no_scene, uint64_t(1));
+    CHECK_EQ(lighting.stats().ssr_prepared, uint64_t(0));
+    lighting.OnPresent(cl);
+    cl->close(); Device()->Execute(cl); Device()->WaitIdle();
+  }
+}
+
 NR_TEST_MAIN()

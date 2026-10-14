@@ -304,6 +304,8 @@ void SceneLighting::OnDraw(nvrhi::ICommandList* cl, const Draw& d) {
   td.depth_key = d.depth.key;
   td.frame_size = d.frame_size;
   td.writes_depth = d.state.depth_write && d.depth.key;
+  // Reflections are prepared before the upcoming draw writes its depth.
+  const bool depth_before_draw = tracker_.frame() == d.frame && tracker_.depth_valid();
   const AoFrameTracker::Events e = tracker_.OnDraw(td);
   if (e.in_scene) {
     if (d.color.key && d.color.key == tracker_.scene_color()) scene_color_ = d.color;
@@ -341,7 +343,7 @@ void SceneLighting::OnDraw(nvrhi::ICommandList* cl, const Draw& d) {
   if (hooked) hooked_water_frame_ = frame_;
   if (water && config_.water_on() && !ssr_tried_ && hooked_water_frame_ + 1 >= frame_) {
     ssr_tried_ = true;
-    if (!e.in_scene || !scene_color_.texture || !scene_depth_.texture || !tracker_.depth_valid()) {
+    if (!e.in_scene || !scene_color_.texture || !scene_depth_.texture || !depth_before_draw || !tracker_.depth_valid()) {
       ++stats_.ssr_no_scene;
     } else if (PrepareSsr(cl)) {
       ++stats_.ssr_prepared;
@@ -353,6 +355,11 @@ void SceneLighting::BeforeDraw(nvrhi::ICommandList* cl, uint64_t frame, LightFam
   const bool water = family == LightFamily::kWater || family == LightFamily::kOcean;
   const int run = family == LightFamily::kShadowQuad ? 0 : (water ? 1 : -1);
   if (frame != frame_ || run != timing_) EndTimedDraws(cl);
+}
+
+void SceneLighting::OnDepthClear(uint64_t frame, uint64_t depth_key) {
+  if (frame != frame_) NewFrame(frame);
+  tracker_.OnDepthCleared(frame, depth_key);
 }
 
 void SceneLighting::EndTimedDraws(nvrhi::ICommandList* cl) {

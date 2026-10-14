@@ -247,6 +247,7 @@ void GameRenderer::Clear(nvrhi::ICommandList* cl, const ClearCall& call) {
   }
   if (scene_ao_) AoClearHook(call, depth);  // AO hook (game_ao.cpp): the scene's depth is cleared
   if (scene_gi_) GiClearHook(call, depth);  // GI hook (game_gi.cpp)
+  if (scene_lighting_ && call.depth && depth) scene_lighting_->OnDepthClear(call.frame, depth->key);
   // The rectangles, or the viewport (the device's, after its clamp).
   std::vector<nvrhi::Rect> rects;
   for (uint32_t r = 0; r < call.rect_count; ++r)
@@ -465,6 +466,7 @@ void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
         const float zero[4] = {0, 0, 0, 0};
         if (depth) ClearRect(cl, nullptr, depth, rect, zero, false, true, true, call.clear_z, 0);
         if (depth && upscale_) upscale_->tracker.OnDepthCleared(call.frame, depth->key & ~kOutputGeneration);
+        if (depth && scene_lighting_) scene_lighting_->OnDepthClear(call.frame, depth->key);
       }
     }
   }

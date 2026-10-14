@@ -83,7 +83,7 @@ class SceneGi {
   // The camera's reprojection from last frame (temporal accumulation): the scene draws met again vote.
   void NoteCamera(uint64_t key, const float rows[16]);
   bool Reprojection(float out[16]);
-  bool Apply(nvrhi::ICommandList* cl, bool ao_on);
+  bool Apply(nvrhi::ICommandList* cl, bool ao_on, bool depth_before_draw = true);
 
   nvrhi::IDevice* device_;
   GiConfig config_;
