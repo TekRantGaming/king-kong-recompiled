@@ -557,12 +557,21 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
     ImGui::PushStyleColor(ImGuiCol_HeaderHovered, IM_COL32(64, 54, 38, 230));
     ImGui::PushStyleColor(ImGuiCol_HeaderActive, IM_COL32(90, 72, 44, 230));
     ImGui::PushStyleColor(ImGuiCol_PopupBg, IM_COL32(14, 16, 20, 245));
+    ImGui::PushStyleColor(ImGuiCol_ScrollbarBg, IM_COL32(0, 0, 0, 60));
+    ImGui::PushStyleColor(ImGuiCol_ScrollbarGrab, IM_COL32(90, 78, 58, 220));
+    ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabHovered, IM_COL32(130, 106, 70, 230));
+    ImGui::PushStyleColor(ImGuiCol_ScrollbarGrabActive, ui::color::kAccent);
+    ImGui::PushStyleColor(ImGuiCol_ResizeGrip, IM_COL32(90, 78, 58, 120));
+    ImGui::PushStyleColor(ImGuiCol_ResizeGripHovered, IM_COL32(130, 106, 70, 200));
+    ImGui::PushStyleColor(ImGuiCol_ResizeGripActive, ui::color::kAccent);
   }
-  static void PopStyle() { ImGui::PopStyleColor(21); }
+  static void PopStyle() { ImGui::PopStyleColor(28); }
 
   void DrawCompact(ImGuiIO& io) {
     const float s = ImGui::GetFontSize() / 18.0f;
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 16 * s, 16 * s), ImGuiCond_Always, ImVec2(1, 0));
+    // Under the frame counter (F2) when it shows.
+    const float top = (rex::cvar::GetFlagByName("kk_show_fps") == "true" ? 64 : 16) * s;
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 16 * s, top), ImGuiCond_Always, ImVec2(1, 0));
     PushStyle(float(std::clamp(REXCVAR_GET(kk_graphics_panel_opacity), 0.3, 1.0)));
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                                    ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoSavedSettings |
@@ -1059,13 +1068,20 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
         test_state_ = 16;
         test_next_ = now + 3;
         return;
-      case 16:
+      case 16: {
+        std::string saved_gi;
+        {
+          std::lock_guard lock(g_mutex);
+          saved_gi = g_saved.count("native_gi") ? g_saved["native_gi"] : "";
+        }
         Key(rex::ui::VirtualKey::kF7, true);
-        check(g_ab && test_key_handled_ && Get("native_gi") == test_orig_[0].second, "F7 held shows the saved settings");
+        check(g_ab && test_key_handled_ && !saved_gi.empty() && Get("native_gi") == saved_gi,
+              "F7 held shows the saved settings");
         log("show f7");
         test_state_ = 17;
         test_next_ = now + 3;
         return;
+      }
       case 17: {
         Key(rex::ui::VirtualKey::kF7, false);
         check(!g_ab && Get("native_gi") == "high", "letting go of F7 brings the trial back");

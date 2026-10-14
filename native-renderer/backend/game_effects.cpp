@@ -131,11 +131,21 @@ void GameRenderer::UpdateUpscaler(UpscaleConfig want) {
       InstallUpscaler(want, nullptr);
     } else if (!upscale_build_.valid()) {
       // The SDK (its DLL, NGX's start) on a worker; the game draws with what it has meanwhile.
-      upscale_build_ = std::async(std::launch::async, [device = device_, want] {
+      const uint32_t gw = options_.guest_frame_width, gh = options_.guest_frame_height;
+      const float sx = options_.render_scale_x, sy = options_.render_scale_y;
+      upscale_build_ = std::async(std::launch::async, [device = device_, want, gw, gh, sx, sy] {
         const auto start = std::chrono::steady_clock::now();
         PreparedUpscaler p;
         p.config = want;
         p.upscaler = CreateUpscaler(device, want, &p.chosen, &p.why);
+        if (p.upscaler) {
+          // The SDK's context too, for the sizes UpscaleSetup will give it (the frame's).
+          const UpscalerSize out{RoundSize(gw, sx), RoundSize(gh, sy)};
+          UpscalerSize in = p.upscaler->InputSize(out);
+          in.width = std::clamp(in.width, 1u, out.width);
+          in.height = std::clamp(in.height, 1u, out.height);
+          p.upscaler->Prepare(in, out);
+        }
         p.ms = MsSince(start);
         return p;
       });

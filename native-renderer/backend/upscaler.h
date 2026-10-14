@@ -52,6 +52,10 @@ class Upscaler {
   // Records the upscale into `cl` (an NVRHI command list, recording). The SDK's context is made on the
   // first call and again when the sizes change. False when it failed (logged).
   virtual bool Evaluate(nvrhi::ICommandList* cl, const UpscalerInputs& in) = 0;
+  // Makes the SDK's context for these sizes now, where the SDK can without a command list (FSR 3.1 and 4,
+  // XeSS), so a live change does it on a worker instead of in the first Evaluate (FSR's Direct3D 12
+  // context takes about half a second). Evaluate makes it again if the sizes turn out different.
+  virtual void Prepare(UpscalerSize render, UpscalerSize output) { (void)render; (void)output; }
   // The SDK's GPU memory, when it says (bytes; 0 unknown).
   virtual uint64_t GpuMemory() const { return 0; }
 };

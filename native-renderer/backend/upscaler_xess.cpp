@@ -202,6 +202,11 @@ class XessUpscaler final : public Upscaler {
     return {UpscaleInputSize(output.width, ratio), UpscaleInputSize(output.height, ratio)};
   }
 
+  void Prepare(UpscalerSize render, UpscalerSize output) override {
+    (void)render;
+    if (output.width != output_.width || output.height != output_.height) Init(output);
+  }
+
   bool Evaluate(nvrhi::ICommandList* cl, const UpscalerInputs& in) override {
     if (!in.color || !in.depth || !in.motion || !in.output) return false;
     if (in.output_size.width != output_.width || in.output_size.height != output_.height) {

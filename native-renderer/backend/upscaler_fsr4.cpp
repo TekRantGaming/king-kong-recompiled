@@ -106,6 +106,12 @@ class Fsr4Upscaler final : public Upscaler {
     return {UpscaleInputSize(output.width, ratio), UpscaleInputSize(output.height, ratio)};
   }
 
+  void Prepare(UpscalerSize render, UpscalerSize output) override {
+    if (!context_ || render.width != max_render_.width || render.height != max_render_.height ||
+        output.width != max_output_.width || output.height != max_output_.height)
+      Create(render, output);
+  }
+
   bool Evaluate(nvrhi::ICommandList* cl, const UpscalerInputs& in) override {
     if (!in.color || !in.depth || !in.motion || !in.output) return false;
     const nvrhi::TextureDesc& cd = in.color->getDesc();
