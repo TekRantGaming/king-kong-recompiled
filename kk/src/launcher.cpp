@@ -727,24 +727,74 @@ class SettingsPages {
     return it;
   }
 
+  // The saves and the shown slot's options are read at most twice a second (the pages are built every
+  // frame), and again at once after a write or a slot change.
+  static constexpr double kProfileReadInterval = 0.5;
+  // A change is written once the value has settled (a slider is dragged through many steps).
+  static constexpr double kProfileWriteDelay = 0.4;
+
+  const std::vector<play::SaveSlot>& ProfileSaves() {
+    const double now = ImGui::GetTime();
+    if (profile_saves_at_ < 0 || now - profile_saves_at_ >= kProfileReadInterval) {
+      profile_saves_ = play::ListSaves(profile_user_dir_);
+      profile_saves_at_ = now;
+    }
+    return profile_saves_;
+  }
+
   int ProfileSlot() {
     if (in_game_) return -1;
-    const auto saves = play::ListSaves(profile_user_dir_);
-    if (profile_slot_ < 0 || !saves[size_t(profile_slot_)].exists)
+    const auto& saves = ProfileSaves();
+    if (profile_slot_ < 0 || size_t(profile_slot_) >= saves.size() || !saves[size_t(profile_slot_)].exists)
       profile_slot_ = play::MostRecentSave(saves);
     return profile_slot_;
+  }
+
+  // The slot's options as shown: the cached read with the changes still waiting to be written on top.
+  play::ProfileOptions ShownProfileOptions(int slot) {
+    const double now = ImGui::GetTime();
+    if (profile_read_slot_ != slot || profile_read_at_ < 0 || now - profile_read_at_ >= kProfileReadInterval) {
+      profile_read_ = play::ReadProfileOptions(profile_user_dir_, slot);
+      profile_read_slot_ = slot;
+      profile_read_at_ = now;
+    }
+    play::ProfileOptions shown = profile_read_;
+    if (shown.available && profile_pending_slot_ == slot) {
+      float* volumes[] = {&shown.master, &shown.voices, &shown.music, &shown.effects};
+      for (int i = 0; i < 4; ++i)
+        if (profile_dirty_[size_t(i)]) *volumes[i] = profile_values_[size_t(i)];
+      if (profile_dirty_[4]) shown.subtitles = profile_values_[4] != 0;
+    }
+    return shown;
   }
 
   void ChangeProfileOption(play::ProfileOption option, float value) {
     const int slot = ProfileSlot();
     if (!in_game_ && slot < 0) return;
-    if (!play::SetProfileOption(profile_user_dir_, slot, option, value))
-      Status("The setting could not be saved. Your save was left unchanged.");
+    if (profile_pending_slot_ != slot) FlushProfileOptions();
+    profile_pending_slot_ = slot;
+    profile_values_[size_t(option)] = value;
+    profile_dirty_[size_t(option)] = true;
+    profile_changed_at_ = ImGui::GetTime();
+  }
+
+  // Writes the waiting changes: `now` when leaving, otherwise once they have settled.
+  void FlushProfileOptions(bool now = true) {
+    if (std::none_of(profile_dirty_.begin(), profile_dirty_.end(), [](bool b) { return b; })) return;
+    if (!now && ImGui::GetTime() - profile_changed_at_ < kProfileWriteDelay) return;
+    bool ok = true;
+    for (size_t i = 0; i < profile_dirty_.size(); ++i) {
+      if (!profile_dirty_[i]) continue;
+      ok &= play::SetProfileOption(profile_user_dir_, profile_pending_slot_, play::ProfileOption(i), profile_values_[i]);
+      profile_dirty_[i] = false;
+    }
+    profile_read_at_ = profile_saves_at_ = -1;  // read again
+    if (!ok) Status("The setting could not be saved. Your save was left unchanged.");
   }
 
   void ResetProfilePage(bool subtitles) {
     if (subtitles) {
-      const auto profile = play::ReadProfileOptions(profile_user_dir_, ProfileSlot());
+      const auto profile = ShownProfileOptions(ProfileSlot());
       ChangeProfileOption(play::ProfileOption::kSubtitles, float(profile.subtitle_default));
     }
     else
@@ -754,8 +804,8 @@ class SettingsPages {
   std::vector<Item> ProfileItems(bool subtitles) {
     std::vector<Item> items;
     const int slot = ProfileSlot();
-    const auto profile = (!in_game_ && slot < 0) ? play::ProfileOptions{} :
-                         play::ReadProfileOptions(profile_user_dir_, slot);
+    FlushProfileOptions(false);
+    const auto profile = (!in_game_ && slot < 0) ? play::ProfileOptions{} : ShownProfileOptions(slot);
     if (!profile.error.empty()) Status(profile.error);
     if (!in_game_) {
       Item save;
@@ -763,7 +813,7 @@ class SettingsPages {
       save.label = "Save";
       save.description = "These settings belong to this game save. Each save keeps its own audio and subtitles.";
       std::vector<int> slots;
-      for (const auto& s : play::ListSaves(profile_user_dir_)) {
+      for (const auto& s : ProfileSaves()) {
         if (!s.exists) continue;
         if (s.index == slot) save.index = int(slots.size());
         slots.push_back(s.index);
@@ -771,7 +821,10 @@ class SettingsPages {
       }
       save.disabled = slots.empty();
       save.disabled_note = "Start a game to create a save, then change its settings here or in the pause menu.";
-      save.on_choice = [this, slots](int i) { profile_slot_ = slots[size_t(i)]; };
+      save.on_choice = [this, slots](int i) {
+        FlushProfileOptions();
+        profile_slot_ = slots[size_t(i)];
+      };
       items.push_back(std::move(save));
     }
     items.push_back(Section(subtitles ? "Subtitles" : "Game audio"));
@@ -1882,6 +1935,16 @@ class SettingsPages {
   const bool in_game_;  // drawn by the pause menu
   std::filesystem::path profile_user_dir_;
   int profile_slot_ = -1;
+  std::vector<play::SaveSlot> profile_saves_;
+  double profile_saves_at_ = -1;
+  play::ProfileOptions profile_read_;
+  int profile_read_slot_ = -2;
+  double profile_read_at_ = -1;
+  // Changes waiting to be written (FlushProfileOptions).
+  int profile_pending_slot_ = -2;
+  std::array<float, 5> profile_values_{};
+  std::array<bool, 5> profile_dirty_{};
+  double profile_changed_at_ = 0;
 };
 
 class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
@@ -1966,6 +2029,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   }
 
   ~Launcher() override {
+    FlushProfileOptions();
     ui::SetSoundHandler(nullptr);
     if (install_thread_.joinable()) {
       progress_.cancel = true;
@@ -4895,6 +4959,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         continue;
       needs_restart = true;
     }
+    FlushProfileOptions();
     auto action = needs_restart ? cb_.restart_and_play : cb_.play;
     // The pause menu for the game about to start (the app makes it too when the launcher is skipped).
     if (!needs_restart) CreatePauseMenu(imgui_drawer(), immediate_, paths_.config_path, paths_.user_dir, paths_.game_dir);
@@ -4914,6 +4979,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // themselves, and saving settings a moment after they change.
   void Tick() {
     const double now = ImGui::GetTime();
+    FlushProfileOptions(false);
     FinishInstallIfDone();
     FinishArtIfDone();
     RefreshPack();
@@ -5260,7 +5326,10 @@ class InGameSettingsImpl final : public InGameSettings, private SettingsPages {
     glyphs_.AddSet("xbox360", art::LauncherArtDir(user_dir) / "glyphs" / "xbox360");
     seen_changes_ = saved_changes_ = g_changes;
   }
-  ~InGameSettingsImpl() override { SaveNow(); }
+  ~InGameSettingsImpl() override {
+    FlushProfileOptions();
+    SaveNow();
+  }
 
   std::vector<Item> Items(Page page) override {
     std::vector<Item> items;
@@ -5284,6 +5353,7 @@ class InGameSettingsImpl final : public InGameSettings, private SettingsPages {
   void LeaveSubPage() override { sub_ = kNoSubPage; }
   void Tick() override {
     CaptureKey();
+    FlushProfileOptions(false);
     const double now = ImGui::GetTime();
     if (g_changes != seen_changes_) {
       seen_changes_ = g_changes;
