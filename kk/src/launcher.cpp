@@ -1815,8 +1815,16 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // every update (a version this launcher hasn't run: an update, a beta, a channel switch), shown by
     // the after-update screen (DrawShaderScreen). Not on a fresh install: its setup builds them.
     if (files_ok_) {
+      std::error_code config_ec;
+      const bool first_start = Get("kk_last_version").empty() &&
+                               !std::filesystem::exists(paths_.config_path, config_ec);
       const bool updated = UpdatedSinceLastRun();
       native_pack_.Start(CacheDir(), paths_.game_dir, updated);
+      if (first_start && NativeShaderPack::Wanted()) {
+        // Existing game files with fresh user settings still need the setup's one shader screen.
+        setup_shaders_ = true;
+        REXLOG_INFO("KK: first start: preparing both native shader packs on the setup screen");
+      }
       if (updated && NativeShaderPack::Wanted()) {
         update_shaders_ = true;
         REXLOG_INFO("KK: first start of v{} (last v{}): the native renderer's shaders are built again", KK_VERSION,
