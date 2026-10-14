@@ -1,7 +1,7 @@
 param([string]$Label='init-all', [ValidateSet('','init','crash','device-lost')][string]$Failure='init',
   [ValidateSet('vulkan','d3d12')][string]$Preferred='vulkan',
   [ValidateSet('all','vulkan','d3d12')][string]$FailApi='all',
-  [string]$ReuseData='', [switch]$Launcher, [string]$LauncherInput='',
+  [string]$ReuseData='', [switch]$Launcher, [switch]$DisableLauncherSetting, [string]$LauncherInput='',
   [string]$DxilPack='F:\KK-native-renderer\runs\task025-20261013\sanity-d3d12-ch8-210057\kkshaders-dxil.pack')
 $ErrorActionPreference='Stop'
 $workspace=(Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
@@ -62,12 +62,13 @@ function Save-OwnWindow($p,$name) {
   $bmp.Dispose()
 }
 $args=@('--fullscreen=false','--window_width=1280','--window_height=720','--kk_fullscreen_mode=desktop',
-  '--kk_start=chapter:0:8',"--kk_launcher=$($Launcher.IsPresent.ToString().ToLower())",'--kk_cheats=true',
+  '--kk_start=chapter:0:8',"--kk_launcher=$(($Launcher.IsPresent -and !$DisableLauncherSetting).ToString().ToLower())",'--kk_cheats=true',
   "--user_data_root=$run\userdata","--game_data_root=$($workspace.Replace('\','/'))/kk/assets",
   "--log_file=$run\run.log","--cache_root=$run\cache",
   '--kk_original_look=true','--kk_original_look_keep=kk_frame_rate,native_render_scale,native_upscaler,ao_mode',
   '--kk_frame_rate=30','--native_render_scale=1280x720','--native_upscaler=off','--ao_mode=0',
   '--kk_online_count=false','--kk_discord_status=false','--kk_check_updates=false','--native_launcher_prewarm=false',
+  "--kk_dev_startup_skip_notice=$((!$Launcher.IsPresent).ToString().ToLower())",
   "--native_backend=$Preferred","--kk_dev_startup_failure=$Failure","--kk_dev_startup_api=$FailApi")
 @{label=$Label;failure=$Failure;preferred=$Preferred;fail_api=$FailApi;reuse_data=$ReuseData;args=$args;
   dxil_pack_source=$DxilPack;dxil_sha256=(Get-FileHash "$run\kkshaders-dxil.pack").Hash;

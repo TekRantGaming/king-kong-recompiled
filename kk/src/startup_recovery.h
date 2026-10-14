@@ -10,5 +10,6 @@ void Begin(const std::string& plugin);
 void ChapterReached();
 void CleanExit();
 std::string Message();
+bool NeedsNotice();
 bool TryNativeAgain();
 }  // namespace kk::startup

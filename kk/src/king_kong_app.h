@@ -129,7 +129,7 @@ class KingKongApp : public rex::ReXApp {
     rex::cvar::ResetToDefault("kk_skip_launcher");  // never persist it
     const bool files_ok = kk::GameFilesPresent(defaults.game_data_root);
     // --kk_launcher_open (back from the game, launcher.cpp): the launcher shows even when it is switched off.
-    const bool show = !files_ok || kk::IsShiftHeld() || (REXCVAR_GET(kk_launcher) && !skip_once) ||
+    const bool show = kk::startup::NeedsNotice() || !files_ok || kk::IsShiftHeld() || (REXCVAR_GET(kk_launcher) && !skip_once) ||
                       (!skip_once && !rex::cvar::GetFlagByName("kk_launcher_open").empty());
     if (!show) {
       kk::EnforceOriginalLook();

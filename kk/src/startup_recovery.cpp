@@ -25,6 +25,8 @@
 
 REXCVAR_DEFINE_BOOL(kk_startup_child, false, "KK/Internal", "Internal startup monitor child").debug_only();
 #if defined(KK_DEV_TOOLS)
+REXCVAR_DEFINE_BOOL(kk_dev_startup_skip_notice, false, "KK/Debug",
+    "Skip the recovery launcher during isolated gameplay tests").debug_only();
 REXCVAR_DEFINE_STRING(kk_dev_startup_failure, "", "KK/Debug",
     "Force native startup failure: init, crash or device-lost").allowed({"", "init", "crash", "device-lost"}).debug_only();
 REXCVAR_DEFINE_STRING(kk_dev_startup_api, "all", "KK/Debug",
@@ -204,6 +206,13 @@ void CleanExit() {
   Signal('C');
 }
 std::string Message() { std::lock_guard lock(mutex); return state ? state->reason : ""; }
+bool NeedsNotice() {
+#if defined(KK_DEV_TOOLS)
+  if (REXCVAR_GET(kk_dev_startup_skip_notice)) return false;
+#endif
+  std::lock_guard lock(mutex);
+  return state && !state->reason.empty() && state->selected != state->preferred;
+}
 bool TryNativeAgain() {
   std::lock_guard lock(mutex);
   if (!state || !state->Retry()) return false;
