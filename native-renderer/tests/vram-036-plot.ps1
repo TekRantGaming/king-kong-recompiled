@@ -2,7 +2,9 @@ $ErrorActionPreference='Stop'
 Add-Type -AssemblyName System.Windows.Forms.DataVisualization
 $root='F:\KK-native-renderer\runs\task036-analysis'
 $curves=Import-Csv "$root\curves.csv"
-$summary=Import-Csv "$root\summary.csv" | Where-Object { [int]$_.samples -gt 0 -and $_.tour_kind -ne 'legacy-menu' }
+$summary=Import-Csv "$root\summary.csv" | Where-Object {
+  [int]$_.samples -ge 110 -and [int]$_.captures -eq 2 -and $_.tour_kind -ne 'legacy-menu'
+}
 $groups=$summary | Group-Object budget_gib,case,simulated_pressure,gtao,pressure_delay_s,tour_kind,backend
 foreach ($group in $groups) {
   $chart=New-Object System.Windows.Forms.DataVisualization.Charting.Chart
@@ -16,7 +18,12 @@ foreach ($group in $groups) {
     $chart.Legends.Add((New-Object System.Windows.Forms.DataVisualization.Charting.Legend))
     $first=$group.Group[0]
     $null=$chart.Titles.Add("Task 036: $($first.backend), $($first.budget_gib) GiB cap, $($first.case), synthetic pressure=$($first.simulated_pressure), GTAO=$($first.gtao)")
-    foreach ($row in $group.Group) {
+    # Interrupted tests have fewer than two captures. Repeated completed cases
+    # use the latest run of each control, with exact DLL hashes in summary.csv.
+    $selected=$group.Group | Group-Object control | ForEach-Object {
+      $_.Group | Sort-Object run -Descending | Select-Object -First 1
+    }
+    foreach ($row in $selected) {
       $series=New-Object System.Windows.Forms.DataVisualization.Charting.Series $row.run
       $series.LegendText=$row.control
       $series.ChartType='Line'; $series.BorderWidth=2
