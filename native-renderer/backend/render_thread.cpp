@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 
+#include "backend/cpu_profile.h"
 #include "backend/guest_device.h"
 
 namespace nr {
@@ -159,6 +160,12 @@ void ThreadedSink::OnResolve(const ResolveCall& call) {
 
 void ThreadedSink::OnPresent(uint32_t frame, uint32_t render_target0, uint32_t device) {
   const auto start = std::chrono::steady_clock::now();
+  // The calling (game) thread's CPU time, for the frame timing summary (one query a frame).
+  const uint64_t game_cpu_us = CurrentThreadCpuMicroseconds();
+  {
+    std::lock_guard lock(mutex_);
+    stats_.game_cpu_us = game_cpu_us;
+  }
   Command c;
   c.kind = Kind::kPresent;
   c.present_frame = frame;
@@ -190,6 +197,7 @@ void ThreadedSink::Enqueue(Command&& command, std::chrono::steady_clock::time_po
   LongFrame lf;
   bool report = false;
   if (present) {
+    ++stats_.presents;
     const auto now = std::chrono::steady_clock::now();
     if (last_present_.time_since_epoch().count() != 0) {
       lf.frame_us = uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(now - last_present_).count());
@@ -228,7 +236,12 @@ ThreadedSink::Stats ThreadedSink::stats() const {
 void ThreadedSink::Run() {
   std::unique_lock lock(mutex_);
   for (;;) {
-    work_cv_.wait(lock, [&] { return stop_ || !queue_.empty(); });
+    if (queue_.empty() && !stop_) {
+      // Nothing queued: the render thread waits for the game (the summary's idle time).
+      const auto idle = std::chrono::steady_clock::now();
+      work_cv_.wait(lock, [&] { return stop_ || !queue_.empty(); });
+      stats_.render_idle_us += Micros(idle);
+    }
     if (queue_.empty()) return;  // stopping, and nothing left
     Command c = std::move(queue_.front());
     queue_.pop_front();

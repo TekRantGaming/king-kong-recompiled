@@ -880,3 +880,58 @@ TEST(Lighting_FogLastCompletesVolumetricsAtPresentOnce) {
 }
 
 NR_TEST_MAIN()
+
+// GPU cost of the GTAO compute (NR_BENCH=1 only; not a check): the scene at 1280x720 guest pixels drawn at
+// render scale 2 (2560x1440, DLSS Quality at 4K), full and half resolution, each sample quality,
+// timed with GPU timestamps over 60 runs (the median).
+TEST(Bench_GtaoGpuTime) {
+  if (!std::getenv("NR_BENCH") || !Device()) return;
+  VulkanTestDevice* gpu = Device();
+  nvrhi::IDevice* device = gpu->device();
+  Camera cam;
+  cam.Setup(1280.0f / 720.0f);
+  const float scale = 2.0f;
+  const AoScreen screen = Screen(1280.0f, 720.0f, scale);
+  const uint32_t w = 2560, h = 1440;
+  const std::vector<float> z = RayCast(cam, screen, w, h);
+  nvrhi::TextureHandle depth = DepthTexture(device, z, w, h);
+  float rows[16];
+  cam.Rows(rows);
+  for (bool half : {true, false}) {
+    for (int quality : {1, 2, 3}) {
+      for (bool temporal : {false, true}) {
+        Gtao gtao(device);
+        CHECK(gtao.Initialize());
+        GtaoInput in;
+        in.depth = depth;
+        in.width = w;
+        in.height = h;
+        in.screen = screen;
+        in.reprojection_valid = true;
+        CHECK(ExtractAoProjection(rows, in.projection));
+        GtaoSettings s;
+        s.half = half;
+        s.sample_quality = quality;
+        s.temporal = temporal;              // local history (no temporal upscaler)
+        s.temporal_upscaler = !temporal;    // an SDK upscaler smooths the rotating noise
+        std::vector<double> ms;
+        for (int i = 0; i < 70; ++i) {
+          in.frame = uint64_t(i + 1);
+          nvrhi::TimerQueryHandle q = device->createTimerQuery();
+          nvrhi::CommandListHandle cl = device->createCommandList();
+          cl->open();
+          cl->beginTimerQuery(q);
+          CHECK(gtao.Compute(cl, in, s) != nullptr);
+          cl->endTimerQuery(q);
+          cl->close();
+          gpu->Execute(cl);
+          gpu->WaitIdle();
+          if (i >= 10) ms.push_back(1000.0 * device->getTimerQueryTime(q));
+        }
+        std::sort(ms.begin(), ms.end());
+        std::printf("  BENCH GTAO 2560x1440 %s, samples %d (%s): median %.3f ms GPU\n", half ? "half" : "full", quality,
+                    temporal ? "local temporal" : "SDK upscaler", ms[ms.size() / 2]);
+      }
+    }
+  }
+}

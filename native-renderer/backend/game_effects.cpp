@@ -333,6 +333,19 @@ void GameRenderer::UpdateLighting(const LightingConfig& want, float shadow_scale
 
 // ---------------------------------------------------------------- the panel's readout
 
+GameRenderer::EffectGpuWindow GameRenderer::TakeEffectGpuWindow() {
+  EffectGpuWindow w;
+  if (ao_timer_) w.ao = ao_timer_->TakeWindow();
+  if (gi_timer_) w.gi = gi_timer_->TakeWindow();
+  if (upscale_ && upscale_->timer) w.upscaler = upscale_->timer->TakeWindow();
+  if (scene_lighting_) {
+    AoGpuTimer::Window* out[3] = {&w.shadows, &w.water, &w.volumetrics};
+    for (int i = 0; i < 3; ++i)
+      if (AoGpuTimer* t = scene_lighting_->timer(i)) *out[i] = t->TakeWindow();
+  }
+  return w;
+}
+
 void GameRenderer::PublishEffectTimes() {
   if (!options_.effect_settings) return;
   NrEffectStats s{};

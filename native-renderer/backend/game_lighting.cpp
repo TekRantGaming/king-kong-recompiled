@@ -229,6 +229,11 @@ std::unordered_map<uint64_t, ShaderLibrary::Replacement> GameRenderer::LightingR
 void GameRenderer::LightingWriteConstants(nvrhi::ICommandList* cl) {
   if (!lighting_constants_) return;
   const LightingConfig& l = options_.lighting;
+  // Live settings change only at frame boundaries. With every lighting effect
+  // off, no draw can change these constants, but b5 still needs one volatile
+  // version in each command list that binds it.
+  if (!l.any() && lighting_.constants_valid && lighting_.constants_list == cl &&
+      lighting_.constants_frame == frame_) return;
   kkshaders::LightingConstants k = {};
   // Shadows (lighting_shadow.hlsl). Radii in guest shadow-map texels (832 per side), so the footprint
   // is the same at every shadow-map resolution and only the sampling gets finer.
@@ -292,7 +297,7 @@ void GameRenderer::LightingWriteConstants(nvrhi::ICommandList* cl) {
 }
 
 std::shared_ptr<const GameShader> GameRenderer::LiveLightingShader(const GameShader& base) {
-  if (!options_.effect_settings) return nullptr;
+  if (!options_.effect_settings || (!options_.lighting.shadows_on() && !options_.lighting.water_on())) return nullptr;
   const auto family = LightFamilyOf(base.ucode_hash);
   if (family == LightFamily::kShadowQuad && options_.lighting.shadows_on()) {
     const auto layout = ShadowQuadLayoutOf(base.ucode_hash);

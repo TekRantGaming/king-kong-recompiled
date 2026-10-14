@@ -482,11 +482,15 @@ void GameRenderer::UpscaleRecordMotion(const DrawCall& call, const dev::DeviceVi
   m.wvp_register = FindAoPerspectiveRegister(d.at(dev::kVsConstants), rows);
   m.dc = dc;
   m.pipeline = MotionPipelineRecord(record, uint32_t(nvrhi::Format::RG16_FLOAT));
-  NoteRecord(m.pipeline, PipelineKey(m.pipeline));
+  const uint64_t motion_key = PipelineKey(m.pipeline);
+  NoteRecord(m.pipeline, motion_key);
   // Ask before this draw can be matched with a previous frame. Pipelines from a shipped list
   // are queued earlier still, when the game creates their vertex shader containers.
-  shaders_->MotionVariant(*vs);
-  {
+  // Once per description, rather than taking the motion and cache locks for
+  // every depth draw in every frame. Deferred jobs retain their existing retry
+  // path (RetryDeferred); motion replay still checks readiness without waiting.
+  if (u.motion_prewarm_seen.insert(motion_key).second) {
+    shaders_->MotionVariant(*vs);
     std::lock_guard lock(cache_mutex_);
     QueueOrDefer(m.pipeline);
   }

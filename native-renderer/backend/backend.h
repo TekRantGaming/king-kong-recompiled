@@ -18,6 +18,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <chrono>
 #include <string>
 
 #include "backend/ambient_occlusion.h"
@@ -83,6 +84,9 @@ struct GameSettings {
   bool dynamic_vertex_buffers = false;
   bool render_thread = false;  // --native_render_thread (render_thread.h)
   uint32_t render_thread_presents = 1;  // frames the game may queue ahead of it
+  // --native_frame_wait=open: the two-frame GPU bound waits before a frame is recorded (as in the first
+  // Beta 4 candidate) instead of just before it is submitted (Renderer::Options::frame_wait_at_open).
+  bool frame_wait_at_open = false;
   int32_t anisotropic_override = -1;
   uint32_t fxaa = 0;
   double pipeline_wait_budget_ms = 30.0;
@@ -173,6 +177,16 @@ class Backend {
   uint32_t swaps_ = 0;
   bool stutter_stats_ = false;  // GameSettings::stutter_stats
   void LogStutter(const char* when);
+  // A light "frame timing" line every 600 presenter refreshes (release builds too): the frames'
+  // pace, the game and render threads' CPU and waits, and the GPU time of the frame and its pass
+  // groups. Called with mutex_ held. The counters at the last line:
+  void LogFrameTiming();
+  struct TimingMark {
+    std::chrono::steady_clock::time_point at{};
+    uint64_t frames = 0, game_cpu_us = 0, game_room_us = 0, game_presents = 0, render_cpu_us = 0, render_idle_us = 0,
+             reuse_wait_us = 0, submit_us = 0, refresh_us = 0;
+    double pipeline_wait_ms = 0;
+  } timing_mark_;
   // --native_present_unlocked: the presenter's refresh of a game frame runs outside mutex_.
   bool unlocked_present_ = false;
   // --native_async_submit: the frames' command lists are submitted by a thread of their own, so

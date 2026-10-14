@@ -36,6 +36,7 @@ REXCVAR_DECLARE(double, native_pipeline_wait_budget_ms);
 REXCVAR_DECLARE(bool, native_dynamic_vertex_buffers);
 REXCVAR_DECLARE(bool, native_render_thread);
 REXCVAR_DECLARE(int32_t, native_render_thread_presents);
+REXCVAR_DECLARE(std::string, native_frame_wait);
 REXCVAR_DECLARE(std::string, native_render_scale);
 REXCVAR_DECLARE(double, native_shadow_scale);
 REXCVAR_DECLARE(bool, native_pipeline_cache);
@@ -260,6 +261,7 @@ GameSettings ReadGameSettings(bool vulkan) {
   game.dynamic_vertex_buffers = REXCVAR_GET(native_dynamic_vertex_buffers);
   game.render_thread = REXCVAR_GET(native_render_thread);
   game.render_thread_presents = uint32_t(std::clamp<int32_t>(REXCVAR_GET(native_render_thread_presents), 1, 4));
+  game.frame_wait_at_open = REXCVAR_GET(native_frame_wait) == "open";
   {
     // The launcher's texture filtering (defined by the runtime / Xenos plugin; absent: the game's own).
     const std::string aniso = rex::cvar::GetFlagByName("anisotropic_override");

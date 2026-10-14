@@ -5,6 +5,7 @@
 // Render thread only.
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -57,6 +58,17 @@ class AoGpuTimer {
   double milliseconds() const { return recent_ms_ >= 0.0 && frame_ <= last_work_frame_ + 60 ? recent_ms_ : -1.0; }
   // No log line every 600 frames (timers kept for the graphics panel only).
   void set_quiet(bool quiet) { quiet_ = quiet; }
+  // The frame timing summary's window (backend.cpp): the GPU time of the frames whose work was read
+  // back since the last call, their number and the longest. Render thread (or its lock) only.
+  struct Window {
+    double sum_ms = 0.0, max_ms = 0.0;
+    uint64_t frames = 0;
+  };
+  Window TakeWindow() {
+    const Window w = window_;
+    window_ = {};
+    return w;
+  }
 
   // Once a frame (at Present): reads the finished queries; logs every 600 frames that had AO work.
   void FrameEnd() {
@@ -69,7 +81,12 @@ class AoGpuTimer {
       device_->resetTimerQuery(p.query);
       free_.push_back(p.query);
       if (p.frame != last_frame_counted_) {
-        if (last_frame_counted_ != UINT64_MAX) Average(frame_ms_);
+        if (last_frame_counted_ != UINT64_MAX) {
+          Average(frame_ms_);
+          window_.sum_ms += frame_ms_;
+          window_.max_ms = std::max(window_.max_ms, frame_ms_);
+          ++window_.frames;
+        }
         last_frame_counted_ = p.frame;
         frame_ms_ = 0.0;
         ++frames_;
@@ -107,6 +124,7 @@ class AoGpuTimer {
   double frame_ms_ = 0.0, recent_ms_ = -1.0;
   uint64_t last_work_frame_ = 0;
   bool quiet_ = false;
+  Window window_;
   void Average(double ms) { recent_ms_ = recent_ms_ < 0.0 ? ms : recent_ms_ * 0.9 + ms * 0.1; }
   uint64_t frames_ = 0, pieces_ = 0;
 };

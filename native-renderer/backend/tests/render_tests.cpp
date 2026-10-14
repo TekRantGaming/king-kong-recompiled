@@ -409,3 +409,58 @@ TEST(GpuTimer_DefersTimestampReadsUntilSubmittedResetCompletes) {
 }
 
 NR_TEST_MAIN()
+
+// The two-frame GPU bound (the gunfire fix): frame N waits for frame N-2's completion query. By
+// default the wait comes after frame N is recorded, just before its submission; with
+// frame_wait_at_open (--native_frame_wait=open) before its first command. Either way frame N is never
+// submitted before N-2 has completed, and each frame's whole GPU time is timed (the frame timing
+// summary's window).
+TEST(FrameWait_BoundsTheGpuAtSubmissionOrAtOpen) {
+  for (bool at_open : {false, true}) {
+    Fixture f;
+    if (!f.Init()) return;
+    nvrhi::IDevice* device = f.gpu->device();
+    f.renderer->options().frame_wait_at_open = at_open;
+    std::vector<std::string> log;
+    std::vector<nvrhi::IEventQuery*> submitted;
+    f.renderer->set_submit([&](nvrhi::ICommandList* cl) {
+      f.gpu->Execute(cl);
+      nvrhi::IEventQuery* q = f.renderer->completion_query();
+      device->resetEventQuery(q);
+      device->setEventQuery(q, nvrhi::CommandQueue::Graphics);
+      submitted.push_back(q);
+      log.push_back("submit");
+    });
+    f.renderer->set_frame_wait([&](nvrhi::IEventQuery* q) {
+      // The query waited for is the one frame N-2 set.
+      CHECK(submitted.size() >= 2 && q == submitted[submitted.size() - 2]);
+      device->waitEventQuery(q);
+      CHECK(device->pollEventQuery(q));
+      log.push_back("wait");
+    });
+    for (uint32_t frame = 0; frame < 6; ++frame) {
+      ClearCall c;
+      c.frame = frame;
+      c.color = true;
+      c.rgba[3] = 1.0f;
+      log.push_back("record");
+      f.renderer->OnClear(c);
+      log.push_back("recorded");
+      f.renderer->OnPresent(frame, 0, 0);
+    }
+    f.gpu->WaitIdle();
+    std::string got;
+    for (const auto& s : log) got += s + " ";
+    const std::string first = "record recorded submit record recorded submit ";
+    std::string want = first;
+    for (int i = 2; i < 6; ++i) want += at_open ? "record wait recorded submit " : "record recorded wait submit ";
+    if (got != want) Fail(__FILE__, __LINE__, "order: " + got);
+    CHECK_EQ(f.renderer->stats().frames_submitted, uint64_t(6));
+    CHECK_EQ(f.renderer->TakeFrameIntervals().size(), size_t(5));
+    // Every frame's GPU time is read back without waiting: frames 0 to 3 had completed (the waits)
+    // before frame 5's end read them.
+    const AoGpuTimer::Window w = f.renderer->TakeFrameGpuWindow();
+    CHECK(w.frames >= 2);
+    CHECK(w.sum_ms >= 0.0 && w.max_ms >= 0.0);
+  }
+}

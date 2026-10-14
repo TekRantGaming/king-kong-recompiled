@@ -1076,3 +1076,153 @@ TEST(GameUpscale_DlssPresetM) { CheckRealUpscaler(UpscalerKind::kDlss, "dlss_m",
 TEST(GameUpscale_Xess) { CheckRealUpscaler(UpscalerKind::kXess, "xess"); }
 
 NR_TEST_MAIN()
+
+// ---------------------------------------------------------------- CPU cost per draw (NR_BENCH=1)
+#define NR_BENCH_LIVE  // this tree has the live settings (effect_settings.h)
+// Not a check: frames of ~800 draws (depth pre-pass, colour pass, alternating shaders and blend) through
+// the hooks, the tracker and the whole renderer, timed on this thread (the render thread's work, the
+// submission included, the GPU's not). Skipped unless NR_BENCH is set. Prints the median and p90 per
+// frame and per draw for each configuration, to compare builds and settings (native_debug off).
+namespace {
+struct BenchResult { double median_us = 0, p90_us = 0; uint32_t draws = 0; };
+BenchResult BenchFrames(Fixture& f, uint32_t repeats, int frames) {
+  const uint64_t draws_before = f.game->stats().draws;
+  // Exercise the warm placeholder-warning path without real game shaders or data.
+  if (std::getenv("NR_BENCH_MISSING_TEXTURE")) {
+    TFetch t;
+    t.dst = t.src = 0;
+    t.srcSwizzle = fetchSrcSwizzle("xy");
+    t.slot = 0;
+    t.dim = Dim::D2;
+    Program p;
+    p.exec({Op{t.encode(), true}});
+    p.alloc(2, 0);
+    p.exec({Export(0, 0)}, true);
+    auto spec = PixelSpec();
+    spec.ucode = p.assemble();
+    spec.constants.push_back({"g_Texture", 3, 0, 1, 4, 12, 1, 1, 1});
+    f.ps_lit = f.CreateShader(false, ctest::writeContainer(spec));
+  }
+  const Mesh world = WorldMesh(), box = BoxMesh(), water = WaterMesh();
+  float box_rows[16];
+  f.cam.Moved(V3{0.1f, 0, 0}, box_rows);
+  // Constants written once; each draw sets them as the game does (the hook copies them).
+  auto block = [&](const float* values, uint32_t count) {
+    const uint32_t data = f.mem.AllocHeap(count * 16);
+    for (uint32_t i = 0; i < count * 4; ++i) f.mem.WriteFloat(data + i * 4, values[i]);
+    return data;
+  };
+  const uint32_t cam_data = block(f.cam.rows, 4), box_data = block(box_rows, 4), water_data = block(kWater, 1);
+  auto set_vs = [&](uint32_t data, const float* rows) {
+    for (uint32_t i = 0; i < 16; ++i) f.RegF(dev::kVsConstants + 4 * i, rows[i]);
+    f.Call(0x82110300, {f.device, 0, data, 4});
+  };
+  auto draw = [&](const char* name, const Mesh& m, uint32_t ps, uint32_t blend, uint32_t depth, uint32_t mask) {
+    f.Reg(dev::kRbBlendControl0, blend);
+    f.Reg(dev::kRbDepthControl, depth);
+    f.Reg(dev::kRbColorMask, mask);
+    f.Call(0x82111E68, {f.device, f.decl});
+    f.SetShaders(f.vs, ps);
+    auto it = f.vbs.find(name);
+    if (it == f.vbs.end()) it = f.vbs.emplace(name, f.NewVertexBuffer(Bytes(m))).first;
+    f.SetStream(it->second, 16);
+    f.Call(0x821154C8, {f.device, 4, 0, uint32_t(m.size())});
+  };
+  std::vector<double> times;
+  uint32_t draws = 0;
+  for (int i = 0; i < frames; ++i) {
+    const auto start = std::chrono::steady_clock::now();
+    draws = 0;
+    f.SetRenderTarget(0, f.rt);
+    f.SetDepthStencil(f.ds);
+    f.SetViewport(0, 0, kW, kH);
+    f.Clear(kClearTarget0 | kClearZ | kClearStencil, kSky, 1.0f);
+    for (uint32_t r = 0; r < repeats; ++r) {
+      set_vs(cam_data, f.cam.rows);
+      draw("world", world, f.ps_lit, kBlendOpaque, kDepthPrepass, 0);
+      set_vs(box_data, box_rows);
+      draw("box", box, f.ps_lit, kBlendOpaque, kDepthPrepass, 0);
+      draws += 2;
+    }
+    for (uint32_t r = 0; r < repeats; ++r) {
+      set_vs(cam_data, f.cam.rows);
+      draw("world", world, f.ps_lit, kBlendOpaque, kDepthColour, 0xFFFF);
+      set_vs(box_data, box_rows);
+      draw("box", box, f.ps_lit, kBlendOpaque, kDepthColour, 0xFFFF);
+      draws += 2;
+    }
+    set_vs(cam_data, f.cam.rows);
+    f.SetConstants(false, 0, kWater, 1);
+    (void)water_data;
+    draw("water", water, f.ps_water, kBlendAlpha, kDepthColour, 0xFFFF);
+    ++draws;
+    f.Reg(dev::kRbBlendControl0, kBlendOpaque);
+    f.Reg(dev::kRbColorMask, 0xFFFF);
+    f.Reg(dev::kBackBuffer, f.rt);
+    f.Call(0x821147B8, {f.device});
+    const auto end = std::chrono::steady_clock::now();
+    f.gpu->WaitIdle();
+    if (i >= frames / 4) times.push_back(std::chrono::duration<double, std::micro>(end - start).count());
+  }
+  std::sort(times.begin(), times.end());
+  BenchResult res;
+  res.median_us = times[times.size() / 2];
+  res.p90_us = times[times.size() * 9 / 10];
+  res.draws = draws;
+  CHECK_EQ(f.game->stats().draws - draws_before, uint64_t(frames) * draws);
+  if (const GameUpscale* u = f.game->upscale())
+    std::printf("  BENCH motion preparation: %zu descriptions for %llu recorded depth draws\n",
+                u->motion_prewarm_seen.size(), static_cast<unsigned long long>(u->stats.motion_draws));
+  return res;
+}
+void BenchPrint(const char* name, const BenchResult& r) {
+  std::printf("  BENCH %-34s %5u draws: median %8.1f us/frame (%.3f us/draw), p90 %8.1f us\n", name, r.draws,
+              r.median_us, r.median_us / r.draws, r.p90_us);
+  std::fflush(stdout);
+}
+}  // namespace
+
+TEST(Bench_CpuPerDraw) {
+  if (!std::getenv("NR_BENCH")) return;
+  const uint32_t repeats = 200;
+  const int frames = 400;
+  struct Case { const char* name; bool upscale; UpscalerKind kind; bool live; bool gtao; };
+  std::vector<Case> cases = {
+      {"no upscaler", false, UpscalerKind::kOff, false, false},
+      {"dlss quality", true, UpscalerKind::kDlss, false, false},
+#ifdef NR_BENCH_LIVE
+      {"no upscaler + live settings", false, UpscalerKind::kOff, true, false},
+      {"dlss quality + live settings", true, UpscalerKind::kDlss, true, false},
+      {"dlss quality + live + gtao", true, UpscalerKind::kDlss, true, true},
+#endif
+  };
+  for (const Case& c : cases) {
+    if (const char* only = std::getenv("NR_BENCH_CASE"); only && std::strcmp(only, c.name) != 0) continue;
+    Options o;
+    o.upscale = c.upscale;
+    o.config.kind = c.kind;
+    o.config.quality = UpscaleQuality::kQuality;
+    o.scale = 2.0f;
+#ifdef NR_BENCH_LIVE
+    if (c.live) {
+      // The graphics panel's settings with every new effect off (the shipping default).
+      EffectSettings s;
+      s.upscale = o.config;
+      if (!c.upscale) s.upscale.kind = UpscalerKind::kOff;
+      o.live = [s] { return s; };
+    }
+    if (c.gtao) o.ao.method = AoMethod::kGtao;
+#endif
+    Fixture f(o);
+    if (!f.Init()) return;
+#ifdef NR_BENCH_LIVE
+    if (c.gtao) f.game->options().ao_settings = [] {
+      AoSettings s;
+      s.mode = 1;
+      s.strength = 2;
+      return s;
+    };
+#endif
+    BenchPrint(c.name, BenchFrames(f, repeats, frames));
+  }
+}

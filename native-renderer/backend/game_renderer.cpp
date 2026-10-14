@@ -1428,11 +1428,13 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     for (const auto& sb : ps->bindings.samplers) note_base_map(sb);
   kkshaders::ScaleConstants sc = {};
   struct PlaceholderUse {
+    uint64_t warning_key;
     uint32_t slot, dimension;
     bool vertex;
     kknr::TextureKey key;
     std::string reason;
   };
+  constexpr size_t kPlaceholderWarningLimit = 256;
   std::vector<PlaceholderUse> placeholder_uses;
   for (auto& v : sc.texInvScale) v[0] = v[1] = v[2] = v[3] = 1.0f;
   auto bind_textures = [&](const GameShader& shader) {
@@ -1441,10 +1443,20 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
       d.fetch_constant(t.slot & 31, words);
       dc.textureIndex[t.slot & 31] =
           BindTexture(cl, words, t.dimension, (base_map_slots >> (t.slot & 31)) & 1);
-      if (!dc.textureIndex[t.slot & 31]) {
-        placeholder_uses.push_back({t.slot, uint32_t(t.dimension), &shader == vs.get(),
-                                   kknr::MakeTextureKey(kknr::TextureFetch::FromWords(words)),
-                                   texture_bind_failure_});
+      if (!dc.textureIndex[t.slot & 31] && placeholder_warned_.size() <= kPlaceholderWarningLimit) {
+        uint64_t warn_key = 1469598103934665603ull;
+        auto mix = [&warn_key](uint64_t v) { warn_key = (warn_key ^ v) * 1099511628211ull; };
+        mix(vs->ucode_hash);
+        mix(ps ? ps->ucode_hash : 0);
+        mix((uint64_t(&shader == vs.get()) << 32) | t.slot);
+        for (char c : texture_bind_failure_) mix(uint8_t(c));
+        // Known warnings need neither a vector allocation nor a reason-string
+        // copy on every draw. New warnings are still emitted only after the
+        // final binding is known and this real draw is actually going to run.
+        if (!placeholder_warned_.contains(warn_key))
+          placeholder_uses.push_back({warn_key, t.slot, uint32_t(t.dimension), &shader == vs.get(),
+                                     kknr::MakeTextureKey(kknr::TextureFetch::FromWords(words)),
+                                     texture_bind_failure_});
       }
       if (scaled()) {
         sc.texInvScale[t.slot & 31][0] = 1.0f / bound_scale_x_;
@@ -1718,15 +1730,8 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     // Both shader stages share the slot's final draw constant. A later bind may have succeeded.
     if (dc.textureIndex[use.slot & 31]) continue;
     // Once per distinct (vs, ps, stage and slot, reason): the same draw repeats every frame.
-    constexpr size_t kPlaceholderWarningLimit = 256;
     if (placeholder_warned_.size() > kPlaceholderWarningLimit) continue;
-    uint64_t warn_key = 1469598103934665603ull;
-    auto mix = [&warn_key](uint64_t v) { warn_key = (warn_key ^ v) * 1099511628211ull; };
-    mix(vs->ucode_hash);
-    mix(ps ? ps->ucode_hash : 0);
-    mix((uint64_t(use.vertex) << 32) | use.slot);
-    for (char c : use.reason) mix(uint8_t(c));
-    if (!placeholder_warned_.insert(warn_key).second) continue;
+    if (!placeholder_warned_.insert(use.warning_key).second) continue;
     if (placeholder_warned_.size() > kPlaceholderWarningLimit) {
       Logf(LogLevel::kWarning, "rexgpu-native: texture placeholder warnings limit reached; further ones are not logged");
       continue;
