@@ -1,5 +1,6 @@
 param([ValidateSet('vulkan','d3d12')][string]$Backend='vulkan', [int]$Chapter=8,
- [ValidateSet('chapter','audio','launcher','notice')][string]$Mode='chapter', [switch]$DebugLayer)
+ [ValidateSet('chapter','audio','launcher','notice')][string]$Mode='chapter', [switch]$DebugLayer,
+ [string]$SaveAt='')
 $ErrorActionPreference='Stop'
 $workspace=(Resolve-Path "$PSScriptRoot/../..").Path
 $lock='F:\KK-native-renderer\runs\codex-game.lock'
@@ -43,6 +44,7 @@ if($Mode -eq 'audio') {
  $arguments=@($arguments | Where-Object { $_ -notmatch '^--native_validation=|^--native_upscaler=' })
  $arguments+='--native_validation=false','--native_upscaler=off'
  $env:KK_DEV_PAGE_TRACE='1'; $env:KK_DEV_AUDIO_TRACE='1'
+ $env:KK_DEV_AUDIO_SAVE_AT=$SaveAt; $env:KK_DEV_SAVE_TRACE='1'
  $env:KK_DEV_SCRIPT='0:SKIP/10,12:START/0.12,78:START/0.12'
  $env:KK_DEV_PAUSE_INPUT='pad:down,pad:down,pad:down,pad:down,pad:a,pad:rb,pad:rb,pad:rb,pad:rb,pad:rb,shot:audio-edit,pad:left,pad:down,pad:left,pad:down,pad:left,pad:down,pad:left,pad:rb,pad:right,shot:subtitles-edit,pad:start'
  $env:KK_DEV_PAUSE_ACTIONS='80:options,84:optpick=0'
