@@ -98,7 +98,9 @@ void MonitorStartup() {
       std::ifstream lock_file(lock_path);
       std::string owner;
       std::getline(lock_file, owner);
-      if (owner.rfind("task039 ", 0) != 0) { result = 3; break; }
+      const char* test_owner = std::getenv("KK_TEST_STARTUP_OWNER");
+      const std::string prefix = std::string(test_owner ? test_owner : "task039") + " ";
+      if (owner.rfind(prefix, 0) != 0) { result = 3; break; }
       // Never launch a recovery child while another copy of the game is running.
       // This also covers copies whose executable path is inaccessible.
       bool other_game = false;

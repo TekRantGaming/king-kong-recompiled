@@ -2,6 +2,7 @@ param([string]$Label='init-all', [ValidateSet('','init','crash','device-lost')][
   [ValidateSet('vulkan','d3d12')][string]$Preferred='vulkan',
   [ValidateSet('all','vulkan','d3d12')][string]$FailApi='all',
   [string]$ReuseData='', [switch]$Launcher, [switch]$DisableLauncherSetting, [string]$LauncherInput='',
+  [string]$TaskName='task039',
   [string]$DxilPack='F:\KK-native-renderer\runs\task025-20261013\sanity-d3d12-ch8-210057\kkshaders-dxil.pack')
 $ErrorActionPreference='Stop'
 $workspace=(Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
@@ -33,6 +34,7 @@ $env:KK_DEV_SHOTS_DIR=$run
 # Suppress the launcher's network update/pack checks without autoplay during this short test.
 $env:KK_AUTOPLAY='100000'
 $env:KK_TEST_STARTUP_LOCK=$lockPath
+$env:KK_TEST_STARTUP_OWNER=$TaskName
 if ($LauncherInput) { $env:KK_DEV_LAUNCHER_INPUT=$LauncherInput }
 if ($Launcher) {
   Add-Type -AssemblyName System.Drawing
@@ -83,7 +85,9 @@ while ($true) {
   }
   if ($userGame) { Write-Output 'WAIT user game'; Start-Sleep -Seconds 60; continue }
   $ours=Get-Process king_kong -ErrorAction SilentlyContinue | Where-Object { $_.Path -like 'F:\KK-native-renderer\runs\*' -or $_.Path -like 'F:\KK-native-renderer\wt\*' }
-  if ($lock -eq 'free' -and !$ours) {
+  $priority='F:\KK-native-renderer\runs\codex-game.priority'
+  $priority_ok=!(Test-Path -LiteralPath $priority) -or (Get-Content -LiteralPath $priority -Raw).StartsWith($TaskName)
+  if ($lock -eq 'free' -and !$ours -and $priority_ok) {
     # Read and claim atomically with respect to cooperating writers.
     try {
       $file=[IO.File]::Open($lockPath,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
@@ -91,7 +95,7 @@ while ($true) {
       $current=$reader.ReadToEnd().Trim(); $reader.Dispose()
       if ($current -eq 'free') {
         $file.Position=0; $file.SetLength(0)
-        $bytes=[Text.Encoding]::UTF8.GetBytes("task039 $(Get-Date -Format o)")
+        $bytes=[Text.Encoding]::UTF8.GetBytes("$TaskName $(Get-Date -Format o)")
         $file.Write($bytes,0,$bytes.Length); $file.Flush(); $file.Dispose(); break
       }
       $file.Dispose()
@@ -105,7 +109,7 @@ $known=@{}
 $outcome='timeout'
 try {
   if (!(Get-Process kkbg2 -ErrorAction SilentlyContinue)) { throw 'kkbg2 must be running.' }
-  if (!(Get-Content -LiteralPath $lockPath -Raw).Trim().StartsWith('task039 ')) { throw 'The test lock changed before launch.' }
+  if (!(Get-Content -LiteralPath $lockPath -Raw).Trim().StartsWith("$TaskName ")) { throw 'The test lock changed before launch.' }
   if (Get-Process king_kong -ErrorAction SilentlyContinue) { throw 'Another game appeared before launch.' }
   $parent=Start-Process -FilePath "$run\king_kong.exe" -ArgumentList $args -WorkingDirectory $run -WindowStyle Hidden -PassThru
   $known[$parent.Id]=$true
@@ -119,7 +123,7 @@ try {
       if ($known.ContainsKey([int]$child.ParentProcessId)) { $known[[int]$child.ProcessId]=$true }
     }
     if ($Launcher) {
-      foreach ($time in @(2,10)) {
+      foreach ($time in @(2,10,60,110)) {
         if ($clock.Elapsed.TotalSeconds -ge $time -and !$captured.ContainsKey($time)) {
           foreach ($id in @($known.Keys)) {
             if ($id -eq $parent.Id) { continue }
@@ -132,7 +136,7 @@ try {
       }
     }
     if ($Launcher -and $clock.Elapsed.TotalSeconds -ge 120) { $outcome='launcher-120s'; break }
-    if (Test-Path -LiteralPath "$run\shot_1200.bmp") { $outcome='chapter-120s'; break }
+    if ((Test-Path -LiteralPath "$run\shot_1200.png") -or (Test-Path -LiteralPath "$run\shot_1200.bmp")) { $outcome='chapter-120s'; break }
     Start-Sleep -Seconds 2
   }
   if ($parent.HasExited) { $outcome="exited-$($parent.ExitCode)" }
@@ -163,7 +167,7 @@ try {
       if (!$p.WaitForExit(10000)) { Stop-Process -Id $id; $p.WaitForExit() }
     }
   }
-  if ((Get-Content -LiteralPath $lockPath -Raw).Trim().StartsWith('task039 ')) {
+  if ((Get-Content -LiteralPath $lockPath -Raw).Trim().StartsWith("$TaskName ")) {
     Set-Content -LiteralPath $lockPath 'free'
   }
 }

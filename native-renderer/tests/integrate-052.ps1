@@ -27,7 +27,7 @@ $env:SDL_WINDOW_ACTIVATE_WHEN_SHOWN='0'; $env:SDL_WINDOW_ACTIVATE_WHEN_RAISED='0
 $env:KK_DEV_AUTOSKIP='1'; $env:KK_DEV_SCRIPT='0:SKIP/120'
 $env:KK_DEV_SHOTS='30,120'; $env:KK_DEV_SHOTS_FROM='menu'; $env:KK_DEV_SHOTS_DIR=$run
 $env:KK_AUTOPLAY='100000'
-$arguments=@('--fullscreen=false','--window_width=1280','--window_height=720','--kk_fullscreen_mode=desktop',
+$arguments=@('--kk_startup_child=true','--fullscreen=false','--window_width=1280','--window_height=720','--kk_fullscreen_mode=desktop',
  "--user_data_root=$run\userdata","--game_data_root=$($workspace.Replace('\','/'))/kk/assets",
  "--log_file=$run\run.log","--cache_root=$run\cache",'--kk_frame_rate=30',
  '--kk_renderer=native',"--native_backend=$Backend",'--native_render_scale=1280x720',
@@ -43,7 +43,9 @@ if($Mode -eq 'audio') {
  $arguments=@($arguments | Where-Object { $_ -notmatch '^--native_validation=|^--native_upscaler=' })
  $arguments+='--native_validation=false','--native_upscaler=off'
  $env:KK_DEV_PAGE_TRACE='1'; $env:KK_DEV_AUDIO_TRACE='1'
- $env:KK_DEV_PAUSE_ACTIONS='78:open,80:options,84:optpick=0'
+ $env:KK_DEV_SCRIPT='0:SKIP/10,12:START/0.12,78:START/0.12'
+ $env:KK_DEV_PAUSE_INPUT='pad:down,pad:down,pad:down,pad:down,pad:a,pad:rb,pad:rb,pad:rb,pad:rb,pad:rb,shot:audio-edit,pad:left,pad:down,pad:left,pad:down,pad:left,pad:down,pad:left,pad:rb,pad:right,shot:subtitles-edit,pad:start'
+ $env:KK_DEV_PAUSE_ACTIONS='80:options,84:optpick=0'
 }
 if($Mode -eq 'launcher') {
  $env:KK_DEV_DIAGNOSTICS='1'

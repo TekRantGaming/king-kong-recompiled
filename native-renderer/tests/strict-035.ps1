@@ -41,7 +41,7 @@ if ($Backend -eq 'vulkan') {
  $env:VK_LAYER_SETTINGS_PATH=$run
 }
 $api=if ($Backend -eq 'warp') {'d3d12'} else {'vulkan'}
-$args=@('--fullscreen=false','--window_width=1280','--window_height=720','--kk_fullscreen_mode=desktop',
+$args=@('--kk_startup_child=true','--fullscreen=false','--window_width=1280','--window_height=720','--kk_fullscreen_mode=desktop',
  "--kk_start=chapter:0:$Chapter",'--kk_launcher=false','--kk_cheats=true',
  "--user_data_root=$run\userdata","--game_data_root=$($workspace.Replace('\','/'))/kk/assets","--log_file=$run\run.log",
  "--cache_root=$run\cache",'--kk_original_look=true',
@@ -73,12 +73,12 @@ try {
  Write-Output "RUN $run PID $($game.Id)"
  $timer=[Diagnostics.Stopwatch]::StartNew()
  while (!$game.HasExited -and $timer.Elapsed.TotalSeconds -lt 240) {
-  if (Test-Path "$run\shot_1200.bmp") { break }
+  if ((Test-Path "$run\shot_1200.png") -or (Test-Path "$run\shot_1200.bmp")) { break }
   Start-Sleep -Seconds 2
  }
 } finally {
  if ($game -and !$game.HasExited) { $null=$game.CloseMainWindow(); if (!$game.WaitForExit(15000)) { Stop-Process -Id $game.Id; $game.WaitForExit() } }
- @{seconds=$timer.Elapsed.TotalSeconds;exit_code=$game.ExitCode;capture120=(Test-Path "$run\shot_1200.bmp")} | ConvertTo-Json | Set-Content "$run\result.json"
+ @{seconds=$timer.Elapsed.TotalSeconds;exit_code=$game.ExitCode;capture120=((Test-Path "$run\shot_1200.png") -or (Test-Path "$run\shot_1200.bmp"))} | ConvertTo-Json | Set-Content "$run\result.json"
  Set-Content -LiteralPath $lockPath 'free'
 }
 Write-Output "DONE $run"
