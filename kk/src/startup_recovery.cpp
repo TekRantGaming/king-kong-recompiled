@@ -86,6 +86,16 @@ void MonitorStartup() {
   _putenv_s("KK_STARTUP_PIPE", pipe.c_str());
   DWORD result = 0;
   for (int attempt = 0; attempt < 6; ++attempt) {
+#if defined(KK_DEV_TOOLS)
+    // A test reserves the shared lock for this whole recovery run. Recheck before every child launch,
+    // including automatic retries, so a user takeover cannot start another test window.
+    if (const char* lock_path = std::getenv("KK_TEST_STARTUP_LOCK")) {
+      std::ifstream lock_file(lock_path);
+      std::string owner;
+      std::getline(lock_file, owner);
+      if (owner.rfind("task039 ", 0) != 0) { result = 3; break; }
+    }
+#endif
     std::wstring cmd = GetCommandLineW();
     cmd += L" --kk_startup_child=true";
     STARTUPINFOW si{sizeof(si)};

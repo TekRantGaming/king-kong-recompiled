@@ -30,6 +30,7 @@ $env:KK_DEV_SHOTS_FROM='menu'
 $env:KK_DEV_SHOTS_DIR=$run
 # Suppress the launcher's network update/pack checks without autoplay during this short test.
 $env:KK_AUTOPLAY='100000'
+$env:KK_TEST_STARTUP_LOCK=$lockPath
 if ($LauncherInput) { $env:KK_DEV_LAUNCHER_INPUT=$LauncherInput }
 if ($Launcher) {
   Add-Type -AssemblyName System.Drawing
@@ -94,6 +95,7 @@ $known=@{}
 $outcome='timeout'
 try {
   if (!(Get-Process kkbg2 -ErrorAction SilentlyContinue)) { throw 'kkbg2 must be running.' }
+  if (!(Get-Content -LiteralPath $lockPath -Raw).Trim().StartsWith('task039 ')) { throw 'The test lock changed before launch.' }
   $parent=Start-Process -FilePath "$run\king_kong.exe" -ArgumentList $args -WorkingDirectory $run -WindowStyle Hidden -PassThru
   $known[$parent.Id]=$true
   Write-Output "RUN $run monitor PID $($parent.Id)"
@@ -133,7 +135,9 @@ try {
     }
   }
   if ($parent -and !$parent.HasExited -and !$parent.WaitForExit(5000)) { Stop-Process -Id $parent.Id; $parent.WaitForExit() }
-  Set-Content -LiteralPath $lockPath 'free'
+  if ((Get-Content -LiteralPath $lockPath -Raw).Trim().StartsWith('task039 ')) {
+    Set-Content -LiteralPath $lockPath 'free'
+  }
 }
 $unchanged=$true
 foreach ($item in $sourceHashes) {
