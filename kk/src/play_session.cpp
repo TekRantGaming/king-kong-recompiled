@@ -64,7 +64,6 @@ extern char** environ;
 #include "launcher_text.h"
 #include "play_internal.h"
 #include "settings.h"
-#include "startup_recovery.h"
 
 namespace kk {
 #if defined(KK_DEV_TOOLS)
@@ -982,7 +981,6 @@ REX_HOOK_RAW(sub_8253DB80) {
     }
   }
   const bool request = g && Load32(base, g + 4) != 0;
-  const uint32_t startup_level = request ? Load32(base, g + 8) : 0;
   if (request && g_jump_requested) REXLOG_INFO("KK play: uni_go loads level {}", int32_t(Load32(base, g + 8)));
   __imp__sub_8253DB80(ctx, base);
   ServiceProfileOptions(ctx, base);
@@ -1011,8 +1009,6 @@ REX_HOOK_RAW(sub_8253DB80) {
     }
   }
 #endif
-  // uni_go has completed loading a real chapter. Also covers starts through the original game menu.
-  if (request && (startup_level >= kNewGameLevel || startup_level == 7)) kk::startup::ChapterReached();
   if (request && g_jump_requested && !g_level_loaded) {
     g_level_loaded = true;
     g_level_loaded_ms = NowMs();

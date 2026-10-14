@@ -446,6 +446,7 @@ void SetOriginalLook(bool on) {
 bool UsingNativeRenderer() { return Get("gpu_plugin") == "native"; }
 
 void SetRenderer(bool native) {
+  startup::ManualChoice();  // the player's choice wins over a startup fallback
   Set("kk_renderer", native ? "native" : "classic");
   if (const auto* flag = FindFlag("gpu_plugin"); flag && flag->source != rex::cvar::Source::kDefault &&
                                                  flag->source != rex::cvar::Source::kCommandLine &&
@@ -1476,10 +1477,12 @@ class SettingsPages {
         api.value_text = backend;
         api.default_text = "Auto";
         api.on_choice = [](int i) {
+          startup::ManualChoice();  // the player's choice wins over a startup fallback
           Set("native_backend", i == 0 ? "auto" : i == 1 ? "vulkan" : "d3d12");
           ApplyUpscalerDefaults();
         };
         api.on_default = [] {
+          startup::ManualChoice();
           Reset("native_backend");
           ApplyUpscalerDefaults();
         };
@@ -2044,9 +2047,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     DevInput();
 #endif
     Tick();
-    const std::string recovery = startup::Message();
-    if (!recovery_shown_ && !recovery.empty() && !modal_.open) {
+    // A fallback the player has not been told about: shown once, then the launcher no longer opens for it.
+    if (!recovery_shown_ && !modal_.open && startup::NeedsNotice()) {
       recovery_shown_ = true;
+      const std::string recovery = startup::Message();
+      startup::NoticeShown();
       OpenModal("Renderer startup recovery", recovery,
                 {"Continue with safe renderer", "Try native again"}, 0, [this](int i) {
                   if (i == 1 && startup::TryNativeAgain()) ++g_changes;
@@ -4377,6 +4382,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       ResetProfilePage(page == kSubtitles);
       return;
     }
+    if (page == kGraphics) startup::ManualChoice();  // resets the renderer and API by hand
     const auto names = PageSettings(page);
     auto on_page = [&](const rex::cvar::FlagEntry& e) {
       for (const auto& n : names) {
@@ -4398,6 +4404,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   }
 
   void ResetAllSettings() {
+    startup::ManualChoice();
     for (auto& e : rex::cvar::GetRegistry()) {
       if (e.type == rex::cvar::FlagType::Command) continue;
       if (e.source == rex::cvar::Source::kCommandLine || e.source == rex::cvar::Source::kEnvironment) continue;

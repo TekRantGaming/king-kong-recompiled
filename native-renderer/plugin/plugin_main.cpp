@@ -452,6 +452,10 @@ extern "C" REX_GPU_PLUGIN_EXPORT void nr_set_startup_failure_handler(nr::Startup
   nr::startup_failure_handler.store(handler, std::memory_order_release);
 }
 
+extern "C" REX_GPU_PLUGIN_EXPORT void nr_set_startup_presented_handler(nr::StartupPresentedHandler handler) {
+  nr::startup_presented_handler.store(handler, std::memory_order_release);
+}
+
 extern "C" REX_GPU_PLUGIN_EXPORT const NrApi* nr_get_api(void) {
   return nr::NativeGraphicsSystem::GetApi();
 }

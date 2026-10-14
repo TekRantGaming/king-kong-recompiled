@@ -139,6 +139,8 @@ class Backend {
   void Present(rex::ui::Presenter* presenter, uint32_t frontbuffer_width,
                uint32_t frontbuffer_height, uint32_t display_width, uint32_t display_height);
   void set_async_present(bool on);
+  // Game frames the presenter has been given (not test pictures); any thread.
+  uint64_t presented_game_frames() const { return presented_game_frames_.load(std::memory_order_relaxed); }
 
   // --native_render_thread: the calls queued so far, and a wait until the render thread has run
   // them (0 and nothing without it).
@@ -165,6 +167,7 @@ class Backend {
   std::mutex mutex_;
   uint64_t submitted_frames_ = 0;
   uint64_t shown_frames_ = 0;
+  std::atomic<uint64_t> presented_game_frames_{0};
   uint32_t swaps_ = 0;
   bool stutter_stats_ = false;  // GameSettings::stutter_stats
   void LogStutter(const char* when);

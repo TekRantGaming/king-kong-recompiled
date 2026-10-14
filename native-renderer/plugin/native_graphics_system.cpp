@@ -412,7 +412,7 @@ void NativeGraphicsSystem::OnHostGpuLoss(bool /*is_responsible*/) {
   if (gpu_loss_reported_.test_and_set(std::memory_order_relaxed)) {
     return;
   }
-  ReportStartupFailure("lost its graphics device before a chapter was reached");
+  ReportStartupFailure("lost its graphics device during startup");
   rex::FatalError("Graphics device lost (native renderer)");
 }
 
@@ -528,6 +528,11 @@ void NativeGraphicsSystem::OnSwap(uint32_t /*frontbuffer_ptr*/, uint32_t width, 
   rex::kernel::xboxkrnl::VdQueryVideoMode(&mode);
   backend_->Present(presenter_.get(), width, height, std::max<uint32_t>(1, mode.display_width),
                     std::max<uint32_t>(1, mode.display_height));
+  // With --native_async_present the frame is shown after Present returns: a later swap sees it.
+  if (!startup_presented_ && backend_->presented_game_frames()) {
+    startup_presented_ = true;
+    ReportStartupPresented();
+  }
 }
 
 // ------------------------------------------------------------ the C API ---

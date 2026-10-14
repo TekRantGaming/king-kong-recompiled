@@ -136,12 +136,9 @@ class KingKongApp : public rex::ReXApp {
         else app_context().QuitFromUIThread();
       });
     });
-    const bool skip_once = REXCVAR_GET(kk_skip_launcher);
+    // Decided once, in OnPreSetup (startup recovery arms only a process that runs the game).
+    const bool show = show_launcher_ ? *show_launcher_ : LauncherWillShow(defaults.game_data_root);
     rex::cvar::ResetToDefault("kk_skip_launcher");  // never persist it
-    const bool files_ok = kk::GameFilesPresent(defaults.game_data_root);
-    // --kk_launcher_open (back from the game, launcher.cpp): the launcher shows even when it is switched off.
-    const bool show = kk::startup::NeedsNotice() || !files_ok || kk::IsShiftHeld() || (REXCVAR_GET(kk_launcher) && !skip_once) ||
-                      (!skip_once && !rex::cvar::GetFlagByName("kk_launcher_open").empty());
     if (!show) {
       std::error_code recommendation_ec;
       if (!std::filesystem::exists(defaults.config_path, recommendation_ec) && !recommendation_ec &&
@@ -166,6 +163,8 @@ class KingKongApp : public rex::ReXApp {
         kk::ApplyRenderPreset(OutputSize().second);
         kk::online::SetPlaying(true);
         kk::discord::SetPlaying(true);
+        // The game starts in this process: startup recovery watches it from here.
+        kk::startup::Begin(gpu_plugin_, true);
         resume(defaults);
       });
     };
@@ -223,7 +222,9 @@ class KingKongApp : public rex::ReXApp {
     if (!config.graphics && config.gpu_plugin.empty()) config.gpu_plugin = "xenos";
     if (!config.graphics) {
       config.gpu_plugin = kk::startup::ApplyChoice(config.gpu_plugin);
-      kk::startup::Begin(config.gpu_plugin);
+      gpu_plugin_ = config.gpu_plugin;
+      show_launcher_ = LauncherWillShow(game_data_root());
+      kk::startup::Begin(config.gpu_plugin, !*show_launcher_);
     }
     REXLOG_INFO("KK: renderer {} (kk_renderer {})", config.gpu_plugin, rex::cvar::GetFlagByName("kk_renderer"));
     if (!config.audio_factory)
@@ -413,5 +414,16 @@ class KingKongApp : public rex::ReXApp {
   }
 
   std::filesystem::path user_data_root_, config_path_;
+  std::string gpu_plugin_;
+  std::optional<bool> show_launcher_;
+
+  // Whether this start shows the launcher before the game. --kk_launcher_open (back from the game,
+  // launcher.cpp): the launcher shows even when it is switched off.
+  static bool LauncherWillShow(const std::filesystem::path& game_data_root) {
+    const bool skip_once = REXCVAR_GET(kk_skip_launcher);
+    return kk::startup::NeedsNotice() || !kk::GameFilesPresent(game_data_root) || kk::IsShiftHeld() ||
+           (REXCVAR_GET(kk_launcher) && !skip_once) ||
+           (!skip_once && !rex::cvar::GetFlagByName("kk_launcher_open").empty());
+  }
   kk::AchievementToast* toast_ = nullptr;  // owned by ReXApp
 };
