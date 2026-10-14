@@ -1,6 +1,6 @@
 param([string]$Case='trace', [string]$SourceUser='F:\KK-native-renderer\userdata', [int]$Seconds=40,
       [string]$InputSteps='', [string]$PauseActions='', [string]$Shots='10,20,30', [int]$Chapter=8,
-      [string]$SaveAt='')
+      [string]$SaveAt='', [string]$PadScript='0:SKIP/120')
 $ErrorActionPreference='Stop'
 $workspace='F:\KK-native-renderer\wt\codex-audio'
 $lock='F:\KK-native-renderer\runs\codex-game.lock'
@@ -17,7 +17,7 @@ Copy-Item -Path 'F:\KK-native-renderer\runs\task026-20261013-211423\cache\native
 robocopy $SourceUser "$run\userdata" /E /NFL /NDL /NJH /NJS /NP | Out-Null
 if($LASTEXITCODE -ge 8) { throw 'Private user data copy failed' }
 $env:SDL_WINDOW_ACTIVATE_WHEN_SHOWN='0'; $env:SDL_WINDOW_ACTIVATE_WHEN_RAISED='0'
-$env:KK_DEV_AUTOSKIP='1'; $env:KK_DEV_SCRIPT='0:SKIP/120'
+$env:KK_DEV_AUTOSKIP='1'; $env:KK_DEV_SCRIPT=$PadScript
 $env:KK_DEV_AUDIO_TRACE='1'; $env:KK_DEV_SHOTS_DIR=$run
 $env:KK_DEV_SHOTS=$Shots; $env:KK_DEV_SHOTS_FROM='menu'
 $env:KK_DEV_PAUSE_INPUT=$null; $env:KK_DEV_LAUNCHER_INPUT=$null
