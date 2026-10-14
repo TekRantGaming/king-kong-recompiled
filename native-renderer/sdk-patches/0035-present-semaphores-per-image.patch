@@ -1,0 +1,65 @@
+--- a/include/rex/ui/vulkan/presenter.h
++++ b/include/rex/ui/vulkan/presenter.h
+@@ -333,11 +333,12 @@
+     };
+ 
+     struct SwapchainFramebuffer {
+-      SwapchainFramebuffer(VkImageView image_view, VkFramebuffer framebuffer)
+-          : image_view(image_view), framebuffer(framebuffer) {}
++      SwapchainFramebuffer(VkImageView image_view, VkFramebuffer framebuffer, VkSemaphore present_semaphore)
++          : image_view(image_view), framebuffer(framebuffer), present_semaphore(present_semaphore) {}
+ 
+       VkImageView image_view;
+       VkFramebuffer framebuffer;
++      VkSemaphore present_semaphore;
+     };
+ 
+     explicit PaintContext(const VulkanDevice* const vulkan_device)
+--- a/src/ui/vulkan/vulkan_presenter.cpp
++++ b/src/ui/vulkan/vulkan_presenter.cpp
+@@ -1037,7 +1037,16 @@
+       paint_context_.DestroySwapchainAndVulkanSurface();
+       return SurfacePaintConnectResult::kFailure;
+     }
+-    paint_context_.swapchain_framebuffers.emplace_back(image_view, framebuffer);
++    VkSemaphoreCreateInfo semaphore_info{};
++    semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
++    VkSemaphore present_semaphore;
++    if (dfn.vkCreateSemaphore(device, &semaphore_info, nullptr, &present_semaphore) != VK_SUCCESS) {
++      dfn.vkDestroyFramebuffer(device, framebuffer, nullptr);
++      dfn.vkDestroyImageView(device, image_view, nullptr);
++      paint_context_.DestroySwapchainAndVulkanSurface();
++      return SurfacePaintConnectResult::kFailure;
++    }
++    paint_context_.swapchain_framebuffers.emplace_back(image_view, framebuffer, present_semaphore);
+   }
+ 
+   is_vsync_implicit_out = paint_context_.swapchain_is_fifo;
+@@ -1449,7 +1458,16 @@
+   }
+   const VulkanDevice::Functions& dfn = vulkan_device->functions();
+   const VkDevice device = vulkan_device->device();
++  // Drain presentation waits before destroying their per-image semaphores.
++  if (!swapchain_framebuffers.empty()) {
++    auto queue = vulkan_device->AcquireQueue(present_queue_family, 0);
++    const auto* instance = vulkan_device->vulkan_instance();
++    auto wait_idle = reinterpret_cast<PFN_vkQueueWaitIdle>(instance->functions().vkGetInstanceProcAddr(
++        instance->instance(), "vkQueueWaitIdle"));
++    if (wait_idle) wait_idle(queue.queue());
++  }
+   for (const SwapchainFramebuffer& framebuffer : swapchain_framebuffers) {
++    dfn.vkDestroySemaphore(device, framebuffer.present_semaphore, nullptr);
+     dfn.vkDestroyFramebuffer(device, framebuffer.framebuffer, nullptr);
+     dfn.vkDestroyImageView(device, framebuffer.image_view, nullptr);
+   }
+@@ -2198,7 +2216,9 @@
+     paint_context_.ui_setup_command_buffer_current_index = SIZE_MAX;
+   }
+   command_buffers[command_buffer_count++] = draw_command_buffer;
+-  VkSemaphore present_semaphore = paint_submission.present_semaphore();
++  // Reacquiring this image proves its previous presentation wait has finished.
++  // A graphics submission fence alone cannot prove that for a different image.
++  VkSemaphore present_semaphore = paint_context_.swapchain_framebuffers[swapchain_image_index].present_semaphore;
+   VkSubmitInfo submit_info;
+   submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+   submit_info.pNext = nullptr;

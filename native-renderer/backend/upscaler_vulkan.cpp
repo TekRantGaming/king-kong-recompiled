@@ -80,6 +80,17 @@ UpscalerVulkanNeeds UpscalerVulkanDeviceNeeds(bool dlss, bool xess, VkInstance i
                                              PFN_vkGetInstanceProcAddr gipa) {
   UpscalerVulkanNeeds out;
   if (!instance || !physical) return out;
+  // FSR queries physical-device FP16 support and selects 16-bit shader
+  // permutations. Request these optional features for every enabled upscaler,
+  // including the FSR fallback; the SDK enables only supported requests.
+  VkPhysicalDeviceFeatures2 core{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+  core.features.shaderInt16 = VK_TRUE;
+  const auto* core_bytes = reinterpret_cast<const uint8_t*>(&core);
+  out.features.emplace_back(core_bytes, core_bytes + sizeof(core));
+  VkPhysicalDeviceVulkan12Features half{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+  half.shaderFloat16 = VK_TRUE;
+  const auto* half_bytes = reinterpret_cast<const uint8_t*>(&half);
+  out.features.emplace_back(half_bytes, half_bytes + sizeof(half));
   (void)gipa;
   if (dlss) out.Add(DlssVulkanDeviceNeeds(instance, physical));
   if (xess) out.Add(XessVulkanDeviceNeeds(instance, physical));

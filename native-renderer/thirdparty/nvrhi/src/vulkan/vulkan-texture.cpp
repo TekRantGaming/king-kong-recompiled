@@ -630,6 +630,11 @@ namespace nvrhi::vulkan
             .setBaseMipLevel(subresources.baseMipLevel)
             .setLevelCount(subresources.numMipLevels);
         
+        // CopyDest may already be the tracked state after an earlier clear or
+        // copy. Same-layout transfer writes still require a memory dependency.
+        const vk::MemoryBarrier clearBarrier(vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eTransferWrite);
+        m_CurrentCmdBuf->cmdBuf.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+            vk::PipelineStageFlagBits::eTransfer, {}, 1, &clearBarrier, 0, nullptr, 0, nullptr);
         m_CurrentCmdBuf->cmdBuf.clearColorImage(texture->image,
             vk::ImageLayout::eTransferDstOptimal,
             &clearValue,
@@ -681,6 +686,9 @@ namespace nvrhi::vulkan
             .setLevelCount(subresources.numMipLevels);
 
         auto clearValue = vk::ClearDepthStencilValue(depth, uint32_t(stencil));
+        const vk::MemoryBarrier clearBarrier(vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eTransferWrite);
+        m_CurrentCmdBuf->cmdBuf.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+            vk::PipelineStageFlagBits::eTransfer, {}, 1, &clearBarrier, 0, nullptr, 0, nullptr);
         m_CurrentCmdBuf->cmdBuf.clearDepthStencilImage(texture->image,
             vk::ImageLayout::eTransferDstOptimal,
             &clearValue,
