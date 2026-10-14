@@ -1046,17 +1046,55 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
         test_next_ = now + 1;
         return;
       }
+      // The keys, through this listener as the window hands them over (the test window never has the
+      // keyboard focus, so the OS sends it no keys): a trial on, then F8, F7 held, F6, compact.
       case 15:
-        rex::cvar::SetFlagByName("kk_graphics_panel_compact", "true");
-        test_state_ = 16;
-        test_next_ = now + 2;
-        return;
-      case 16:
-        rex::cvar::SetFlagByName("kk_graphics_panel_compact", "false");
         SetOpen(false);
-        // A trial left on for the key test that follows (F8, F7 held, F6 from outside).
         Change("native_gi", "high");
         Change("native_shadow_quality", "ultra");
+        Key(rex::ui::VirtualKey::kF8, true);
+        Key(rex::ui::VirtualKey::kF8, false);
+        check(g_open.load() && test_key_handled_, "F8 opens the panel (the key is the panel's)");
+        log("show panel");  // the harness takes a picture of the window
+        test_state_ = 16;
+        test_next_ = now + 3;
+        return;
+      case 16:
+        Key(rex::ui::VirtualKey::kF7, true);
+        check(g_ab && test_key_handled_ && Get("native_gi") == test_orig_[0].second, "F7 held shows the saved settings");
+        log("show f7");
+        test_state_ = 17;
+        test_next_ = now + 3;
+        return;
+      case 17: {
+        Key(rex::ui::VirtualKey::kF7, false);
+        check(!g_ab && Get("native_gi") == "high", "letting go of F7 brings the trial back");
+        const auto before = last_capture_;
+        Key(rex::ui::VirtualKey::kF6, true);
+        Key(rex::ui::VirtualKey::kF6, false);
+        check(last_capture_ != before && test_key_handled_, "F6 captures");
+        Key(rex::ui::VirtualKey::kA, true);
+        check(!test_key_handled_, "other keys reach the game");
+        Key(rex::ui::VirtualKey::kA, false);
+        rex::cvar::SetFlagByName("kk_graphics_panel_compact", "true");
+        log("show compact");
+        test_state_ = 18;
+        test_next_ = now + 3;
+        return;
+      }
+      case 18:
+        Key(rex::ui::VirtualKey::kF8, true);
+        Key(rex::ui::VirtualKey::kF8, false);
+        check(g_open.load() && !REXCVAR_GET(kk_graphics_panel_compact), "F8 from the compact readout opens the panel");
+        Key(rex::ui::VirtualKey::kF8, true);
+        Key(rex::ui::VirtualKey::kF8, false);
+        check(!g_open.load(), "F8 again closes it");
+        Reset();
+        log("show closed");
+        test_state_ = 19;
+        test_next_ = now + 3;
+        return;
+      case 19:
         log("done: " + std::to_string(test_pass_) + " passed, " + std::to_string(test_fail_) + " failed");
         test_state_ = 1000;
         return;
@@ -1064,6 +1102,13 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
         return;
     }
   }
+  void Key(rex::ui::VirtualKey key, bool down) {
+    rex::ui::KeyEvent e(window_, key, 1, !down, false, false, false, false);
+    if (down) OnKeyDown(e);
+    else OnKeyUp(e);
+    test_key_handled_ = e.is_handled();
+  }
+  bool test_key_handled_ = false;
   int test_state_ = -1;
   double test_next_ = 0;
   std::filesystem::path test_dir_;
