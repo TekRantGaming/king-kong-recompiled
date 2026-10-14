@@ -145,6 +145,15 @@ bool SceneLighting::Initialize() {
       config_.volumetrics = Volumetrics::kOff;
     }
   }
+  if (config_.volumetrics_on()) {
+    for (const auto format : {nvrhi::Format::RGBA8_UNORM, nvrhi::Format::R10G10B10A2_UNORM,
+                              nvrhi::Format::RGBA16_FLOAT, nvrhi::Format::RG16_FLOAT,
+                              nvrhi::Format::R32_FLOAT, nvrhi::Format::RG32_FLOAT}) {
+      nvrhi::FramebufferInfo info;
+      info.colorFormats = {format};
+      if (!VolumetricPipeline(info)) return false;
+    }
+  }
   return true;
 }
 
@@ -181,31 +190,8 @@ bool SceneLighting::RunVolumetric(nvrhi::ICommandList* cl) {
     fb = device_->createFramebuffer(fd);
     if (!fb) return false;
   }
-  const nvrhi::FramebufferInfoEx& info = fb->getFramebufferInfo();
-  const uint32_t format = info.colorFormats.empty() ? 0 : uint32_t(info.colorFormats[0]);
-  nvrhi::GraphicsPipelineHandle& pipeline = vol_pipelines_[format];
-  if (!pipeline) {
-    nvrhi::GraphicsPipelineDesc pd;
-    pd.primType = nvrhi::PrimitiveType::TriangleList;
-    pd.VS = vol_vs_;
-    pd.PS = vol_ps_;
-    pd.bindingLayouts = {vol_layout_};
-    pd.renderState.depthStencilState.depthTestEnable = false;
-    pd.renderState.depthStencilState.depthWriteEnable = false;
-    pd.renderState.rasterState.cullMode = nvrhi::RasterCullMode::None;
-    nvrhi::BlendState::RenderTarget& t = pd.renderState.blendState.targets[0];
-    // destination - source: the fog that lies in shadow taken away again; the alpha is the game's.
-    t.colorWriteMask = nvrhi::ColorMask::Red | nvrhi::ColorMask::Green | nvrhi::ColorMask::Blue;
-    t.blendEnable = true;
-    t.srcBlend = nvrhi::BlendFactor::One;
-    t.destBlend = nvrhi::BlendFactor::One;
-    t.blendOp = nvrhi::BlendOp::ReverseSubtract;
-    t.srcBlendAlpha = nvrhi::BlendFactor::Zero;
-    t.destBlendAlpha = nvrhi::BlendFactor::One;
-    t.blendOpAlpha = nvrhi::BlendOp::Add;
-    pipeline = device_->createGraphicsPipeline(pd, info);
-    if (!pipeline) return false;
-  }
+  nvrhi::IGraphicsPipeline* pipeline = VolumetricPipeline(fb->getFramebufferInfo());
+  if (!pipeline) return false;
   const nvrhi::TextureDesc& dd = shadow_quad_.depth->getDesc();
   const nvrhi::TextureDesc& cd = color->getDesc();
   const uint32_t w = std::min(dd.width, cd.width), h = std::min(dd.height, cd.height);
@@ -511,6 +497,34 @@ bool SceneLighting::PrepareSsr(nvrhi::ICommandList* cl) {
     Logf(LogLevel::kInfo, "rexgpu-native: lighting: first water reflections (frame %llu): picture %ux%u at %d,%d, near %.4f far %.1f",
          static_cast<unsigned long long>(frame_), w, h, x0, y0, p.near_plane(), p.far_plane());
   return true;
+}
+
+nvrhi::IGraphicsPipeline* SceneLighting::VolumetricPipeline(const nvrhi::FramebufferInfo& info) {
+  const uint32_t format = info.colorFormats.empty() ? 0 : uint32_t(info.colorFormats[0]);
+  nvrhi::GraphicsPipelineHandle& pipeline = vol_pipelines_[format];
+  if (!pipeline) {
+    nvrhi::GraphicsPipelineDesc pd;
+    pd.primType = nvrhi::PrimitiveType::TriangleList;
+    pd.VS = vol_vs_;
+    pd.PS = vol_ps_;
+    pd.bindingLayouts = {vol_layout_};
+    pd.renderState.depthStencilState.depthTestEnable = false;
+    pd.renderState.depthStencilState.depthWriteEnable = false;
+    pd.renderState.rasterState.cullMode = nvrhi::RasterCullMode::None;
+    nvrhi::BlendState::RenderTarget& t = pd.renderState.blendState.targets[0];
+    // destination - source: the fog that lies in shadow taken away again; the alpha is the game's.
+    t.colorWriteMask = nvrhi::ColorMask::Red | nvrhi::ColorMask::Green | nvrhi::ColorMask::Blue;
+    t.blendEnable = true;
+    t.srcBlend = nvrhi::BlendFactor::One;
+    t.destBlend = nvrhi::BlendFactor::One;
+    t.blendOp = nvrhi::BlendOp::ReverseSubtract;
+    t.srcBlendAlpha = nvrhi::BlendFactor::Zero;
+    t.destBlendAlpha = nvrhi::BlendFactor::One;
+    t.blendOpAlpha = nvrhi::BlendOp::Add;
+    pipeline = device_->createGraphicsPipeline(pd, info);
+
+  }
+  return pipeline;
 }
 
 }  // namespace nr

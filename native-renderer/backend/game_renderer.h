@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <future>
 #include <memory>
 #include <map>
 #include <mutex>
@@ -48,6 +49,7 @@
 #include "backend/guest_device.h"
 #include "backend/guest_memory.h"
 #include "backend/lighting_config.h"
+#include "backend/effect_settings.h"
 #include "backend/shader_library.h"
 #include "kknr/guest_texture.h"
 #include "kknr/buffers.h"
@@ -132,11 +134,12 @@ class GameRenderer {
     // always was. Set before Initialize.
     AoConfig ao;
     // Screen-space global illumination (gi_config.h, docs/gi.md). Off by default: nothing of it is
-    // created. Set before Initialize.
+    // created. Initial value before Initialize; effect_settings changes it at frame boundaries.
     GiConfig gi;
     // The lighting options (docs/lighting.md): shadows, water reflections, volumetric light shafts.
-    // All original by default. Set before Initialize.
+    // All original by default. Initial value before Initialize; effect_settings changes it live.
     LightingConfig lighting;
+    std::function<EffectSettings()> effect_settings;
     // Log every draw of this game frame (-1 none).
     int32_t dump_frame = -1;
     // Debugging aids (bits): 1 the game's clears are green, 2 the frame image
@@ -204,7 +207,7 @@ class GameRenderer {
   Options& options() { return options_; }
   // Any target or texture at a scale other than 1 (the pixel shaders must be render scale aware).
   bool scaled() const {
-    return options_.render_scale_x != 1.0f || options_.render_scale_y != 1.0f ||
+    return bool(options_.effect_settings) || options_.render_scale_x != 1.0f || options_.render_scale_y != 1.0f ||
            (options_.shadow_scale > 0.0f && options_.shadow_scale != 1.0f) ||
            (upscale_ && (upscale_->in_x != 1.0f || upscale_->in_y != 1.0f));
   }
@@ -671,6 +674,7 @@ class GameRenderer {
   LightingState lighting_;
   std::unique_ptr<SceneLighting> scene_lighting_;  // null unless an option needs per-frame work
   void LightingPresentHook(nvrhi::ICommandList* cl);
+  std::shared_ptr<const GameShader> LiveLightingShader(const GameShader& base);
   nvrhi::BufferHandle ao_constants_;  // b4 (ambient-only)
   std::array<uint32_t, 8> ao_constants_last_ = {};
   bool ao_constants_valid_ = false;
@@ -693,6 +697,49 @@ class GameRenderer {
   bool GiAoOn(uint64_t frame);
   std::unique_ptr<SceneGi> scene_gi_;
   std::unique_ptr<AoGpuTimer> gi_timer_;  // --native_gi_gpu_time
+  // ---- live settings (game_effects.cpp, effect_settings.h): applied at a frame's first call.
+  struct PreparedUpscaler {
+    UpscaleConfig config;
+    std::unique_ptr<Upscaler> upscaler;  // null: the SDK did not start (the bilinear stretch instead)
+    UpscalerKind chosen = UpscalerKind::kOff;
+    std::string why;
+    double ms = 0;
+  };
+  void UpdateEffects();
+  void UpdateUpscaler(UpscaleConfig want);
+  void InstallUpscaler(const UpscaleConfig& want, PreparedUpscaler* prepared);
+  void UpdateGi(const GiConfig& want);
+  void UpdateLighting(const LightingConfig& want, float shadow_scale);
+  void PurgeOutputGeneration();
+  void FlushSamplers();
+  void PublishEffectTimes();
+  uint64_t effects_frame_ = UINT64_MAX;
+  std::future<std::unique_ptr<SceneGi>> gi_build_;
+  std::future<std::unique_ptr<SceneLighting>> lighting_build_;
+  std::future<PreparedUpscaler> upscale_build_;
+  // NVIDIA: NGX started once on a worker and kept (a DLSS upscaler that never evaluates holds no feature).
+  std::future<std::unique_ptr<Upscaler>> dlss_warm_;
+  std::unique_ptr<Upscaler> dlss_keepalive_;
+  bool gi_build_failed_ = false, lighting_build_failed_ = false;
+  // Turned off: kept for a while (an A/B switch back is instant), then retired.
+  std::unique_ptr<SceneGi> gi_parked_;
+  std::unique_ptr<SceneLighting> lighting_parked_;
+  uint64_t gi_parked_frame_ = 0, lighting_parked_frame_ = 0;
+  std::deque<std::pair<uint64_t, std::unique_ptr<SceneGi>>> retired_gi_;
+  std::deque<std::pair<uint64_t, std::unique_ptr<SceneLighting>>> retired_lighting_;
+  std::deque<std::pair<uint64_t, std::unique_ptr<GameUpscale>>> retired_upscale_;
+  std::deque<std::pair<uint64_t, std::unique_ptr<Upscaler>>> retired_upscalers_;
+  UpscaleConfig upscale_initial_, upscale_requested_;  // at the start; the one in use (or off)
+  LightingConfig lighting_initial_;
+  bool gi_user_gpu_time_ = false;  // --native_gi_gpu_time: the timers log (else the panel's only)
+  uint32_t fxaa_wanted_ = 0;
+  uint32_t vendor_ = 0;  // the GPU's PCI vendor (the panel's upscaler list)
+  uint64_t live_changes_ = 0;
+  // This frame's draws with the lighting options' shader variants (the panel shows they are applied).
+  struct LiveDraws {
+    uint32_t shadows = 0, water = 0, shadows_waiting = 0, water_waiting = 0;
+  } live_draws_;
+  double live_last_change_ms_ = 0;
 
   kknr::TextureCache textures_;
   // GPU-written (resolved) textures by base address, for other fetch
@@ -707,8 +754,21 @@ class GameRenderer {
   // hooks are called from Initialize, Draw, Clear, Resolve, Present and EndFrame.
   std::unique_ptr<GameUpscale> upscale_;
   nvrhi::ICommandList* current_cl_ = nullptr;  // the call's command list (target migration in GetTarget)
-  bool UpscaleSetup();          // before the layouts: the upscaler and the input scale
+  // Before the layouts: the upscaler and the input scale (a live change brings one made on a worker).
+  bool UpscaleSetup(PreparedUpscaler* prepared = nullptr);
   bool UpscaleInitialize();     // after them: the passes
+  void UpscaleInitializeTimers();
+  static float UpscaleMipBiasFor(const GameUpscale& u);
+  // The upscalers' passes, made once and kept when the upscaler is made again (their pipelines are
+  // keyed by these shaders).
+  struct UpscalePasses {
+    nvrhi::ShaderHandle vs_fullscreen, camera_ps, object_ps, reactive_ps, depth_ps, stretch_ps, show_motion_ps;
+    nvrhi::BindingLayoutHandle pass_layout, motion_layout;
+    nvrhi::BindingSetHandle motion_set;
+    nvrhi::BufferHandle motion_vs_constants, motion_draw_constants, motion_constants;
+    nvrhi::SamplerHandle linear_clamp;
+  };
+  UpscalePasses upscale_passes_;
   bool OutputGeneration() const;  // which generation the current phase draws into
   void UpscaleNewFrame(uint64_t frame);  // the per-frame state, at the frame's first call
   void UpscaleTakeSnapshot(nvrhi::ICommandList* cl);

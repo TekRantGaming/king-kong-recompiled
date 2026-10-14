@@ -11,6 +11,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -51,6 +52,10 @@ class Upscaler {
   // Records the upscale into `cl` (an NVRHI command list, recording). The SDK's context is made on the
   // first call and again when the sizes change. False when it failed (logged).
   virtual bool Evaluate(nvrhi::ICommandList* cl, const UpscalerInputs& in) = 0;
+  // Makes the SDK's context for these sizes now, where the SDK can without a command list (FSR 3.1 and 4,
+  // XeSS), so a live change does it on a worker instead of in the first Evaluate (FSR's Direct3D 12
+  // context takes about half a second). Evaluate makes it again if the sizes turn out different.
+  virtual void Prepare(UpscalerSize render, UpscalerSize output) { (void)render; (void)output; }
   // The SDK's GPU memory, when it says (bytes; 0 unknown).
   virtual uint64_t GpuMemory() const { return 0; }
 };
@@ -72,6 +77,19 @@ std::unique_ptr<Upscaler> CreateUpscaler(nvrhi::IDevice* device, const UpscaleCo
 
 // The PCI vendor of the device's GPU (0 unknown).
 uint32_t UpscalerDeviceVendor(nvrhi::IDevice* device);
+
+// The SDKs wait for the GPU before they make or destroy a context. The game's device has other threads
+// submitting (the submission and present threads), and a Vulkan queue must not be used by two threads at
+// once, so the host gives its own locked wait for its device (Backend::Initialize); any other device
+// (the launcher's question, tests) waits directly. Null `wait` removes the hook.
+void SetUpscalerIdleWait(nvrhi::IDevice* device, std::function<void()> wait);
+void UpscalerWaitForIdle(nvrhi::IDevice* device);
+// Runs `fn` with the GPU idle and no other thread using the queue (the host's queue lock held): for an SDK's
+// context set-up, which may use the queue itself (XeSS uploads its network). The host gives it for its
+// device; other devices wait for idle and run it.
+using UpscalerExclusive = std::function<void(const std::function<void()>& fn)>;
+void SetUpscalerExclusive(nvrhi::IDevice* device, UpscalerExclusive run);
+void UpscalerRunExclusive(nvrhi::IDevice* device, const std::function<void()>& fn);
 
 // The folder of the game's executable (where the SDKs' DLLs are), with a trailing separator.
 std::wstring UpscalerDllFolder();

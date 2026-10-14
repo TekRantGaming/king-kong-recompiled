@@ -1,4 +1,6 @@
 #include "settings.h"
+#include <map>
+#include <mutex>
 
 #include <algorithm>
 #include <cctype>
@@ -272,22 +274,49 @@ void ApplyRenderPreset(int output_height) {
               output_height, scale, scale * 720);
 }
 
-bool SaveSettings(const std::filesystem::path& path) {
+namespace {
+std::mutex temporary_mutex;
+struct TemporarySetting {
+  std::string saved, trial;
+  rex::cvar::Source source;
+};
+std::map<std::string, TemporarySetting, std::less<>> temporary_baselines;
+}
+void SetTemporarySettingBaseline(const std::string& name, const std::string& value) {
+  std::lock_guard lock(temporary_mutex);
+  auto it = temporary_baselines.find(name);
+  if (it == temporary_baselines.end() || it->second.saved != value)
+    temporary_baselines[name] = TemporarySetting{value, value, rex::cvar::GetFlagSource(name)};
+}
+void SetTemporarySettingTrialValue(const std::string& name, const std::string& value) {
+  std::lock_guard lock(temporary_mutex);
+  if (auto it = temporary_baselines.find(name); it != temporary_baselines.end()) it->second.trial = value;
+}
+void ClearTemporarySettingBaselines() {
+  std::lock_guard lock(temporary_mutex);
+  temporary_baselines.clear();
+}
+bool SaveSettings(const std::filesystem::path& path, bool include_temporary) {
+  std::lock_guard lock(temporary_mutex);
   // Like rex::cvar::SaveConfig, but values that came from the command line or
   // environment (e.g. --game_data_root, --log_file) are one-off overrides and
   // are not written back.
   std::string out = "# King Kong settings (edited by the launcher)\n";
   for (const auto& e : rex::cvar::GetRegistry()) {
     if (e.type == rex::cvar::FlagType::Command || e.is_debug_only) continue;
-    if (e.source == rex::cvar::Source::kCommandLine || e.source == rex::cvar::Source::kEnvironment) continue;
+    const auto baseline = temporary_baselines.find(e.name);
+    const std::string live = e.getter();
+    const bool protect = !include_temporary && baseline != temporary_baselines.end() && live == baseline->second.trial;
+    const auto source = protect ? baseline->second.source : e.source;
+    if (source == rex::cvar::Source::kCommandLine || source == rex::cvar::Source::kEnvironment) continue;
     // Set by the port at every start (ApplyRuntimeOverrides).
     if (e.name == "video_mode_width" || e.name == "video_mode_height") continue;
-    const std::string value = e.getter();
+    const std::string value = protect ? baseline->second.saved : live;
     const bool hardware_setting = e.name == "kk_render_quality" || e.name == "native_upscaler_quality" ||
         e.name == "native_ao_quality" || e.name == "native_ao_samples" || e.name == "ao_mode" || e.name == "native_upscaler" ||
         e.name == "present_effect" || e.name == "resolution_scale" || e.name == "draw_resolution_scale_x" ||
         e.name == "draw_resolution_scale_y";
-    if (value == e.default_value && !(hardware_setting && e.source != rex::cvar::Source::kDefault)) continue;
+    if (value == e.default_value && !(hardware_setting && source != rex::cvar::Source::kDefault)) continue;
     out += e.name + " = ";
     if (e.type == rex::cvar::FlagType::String) {
       out += '"';

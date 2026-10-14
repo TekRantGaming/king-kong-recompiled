@@ -83,6 +83,7 @@ class Ssgi {
   nvrhi::BindingSetHandle Set(Pass& pass, const std::vector<nvrhi::BindingSetItem>& items);
   nvrhi::IFramebuffer* Framebuffer(nvrhi::ITexture* color);
   nvrhi::IGraphicsPipeline* GraphicsPipeline(nvrhi::IFramebuffer* fb);
+  nvrhi::IGraphicsPipeline* GraphicsPipeline(const nvrhi::FramebufferInfo& info);
 
   nvrhi::IDevice* device_;
   bool ready_ = false;

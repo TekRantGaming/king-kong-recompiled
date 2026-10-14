@@ -52,6 +52,12 @@ class AoGpuTimer {
     open_ = nullptr;
   }
 
+  // The graphics panel's readout: the recent GPU time a frame (a moving average over about 20
+  // frames with this work), negative when no work was timed in the last 60 frames.
+  double milliseconds() const { return recent_ms_ >= 0.0 && frame_ <= last_work_frame_ + 60 ? recent_ms_ : -1.0; }
+  // No log line every 600 frames (timers kept for the graphics panel only).
+  void set_quiet(bool quiet) { quiet_ = quiet; }
+
   // Once a frame (at Present): reads the finished queries; logs every 600 frames that had AO work.
   void FrameEnd() {
     while (!pending_.empty() && device_->pollTimerQuery(pending_.front().query)) {
@@ -63,15 +69,19 @@ class AoGpuTimer {
       device_->resetTimerQuery(p.query);
       free_.push_back(p.query);
       if (p.frame != last_frame_counted_) {
+        if (last_frame_counted_ != UINT64_MAX) Average(frame_ms_);
         last_frame_counted_ = p.frame;
+        frame_ms_ = 0.0;
         ++frames_;
       }
+      frame_ms_ += 1000.0 * seconds;
+      last_work_frame_ = frame_;
       ++pieces_;
     }
     ++frame_;
     if (trace_ && frame_ % 300 == 0) std::fflush(trace_);
     if (frames_ >= 600) {
-      Logf(LogLevel::kInfo, "rexgpu-native: %s (%s): %.3f ms a frame on average over %llu frames (%llu timed passes)",
+      if (!quiet_) Logf(LogLevel::kInfo, "rexgpu-native: %s (%s): %.3f ms a frame on average over %llu frames (%llu timed passes)",
            label_, what_, 1000.0 * total_s_ / double(frames_), static_cast<unsigned long long>(frames_),
            static_cast<unsigned long long>(pieces_));
       total_s_ = 0.0;
@@ -94,6 +104,10 @@ class AoGpuTimer {
   uint64_t frame_ = 0;
   uint64_t last_frame_counted_ = UINT64_MAX;
   double total_s_ = 0.0;
+  double frame_ms_ = 0.0, recent_ms_ = -1.0;
+  uint64_t last_work_frame_ = 0;
+  bool quiet_ = false;
+  void Average(double ms) { recent_ms_ = recent_ms_ < 0.0 ? ms : recent_ms_ * 0.9 + ms * 0.1; }
   uint64_t frames_ = 0, pieces_ = 0;
 };
 

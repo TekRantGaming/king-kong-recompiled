@@ -26,6 +26,7 @@
 // (resume, again, score, quit, open = press Start), for tests.
 
 #include <algorithm>
+#include "debug_overlay.h"
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -262,9 +263,10 @@ void FilterPad(uint32_t user, uint8_t* state) {
     kk::PauseMenuPad(uint16_t(buttons & ~held_at_open), s16(8), s16(10), state[6], state[7]);
   }
   static bool look_off = false;
-  if (menu != look_off) {
-    look_off = menu;
-    rex::input::mnk::SetMouseLookActive(!menu);
+  const bool mouse_ui = menu || kk::DebugOverlayOpen();
+  if (mouse_ui != look_off) {
+    look_off = mouse_ui;
+    rex::input::mnk::SetMouseLookActive(!mouse_ui);
   }
   const bool open = menu || CoverScreen() || (g_pending >= 0 && MenuUp());
   if (open) {

@@ -23,6 +23,7 @@
 #if NR_GAME_RENDERER
 #include "backend/game_renderer.h"
 #include "backend/shader_library.h"
+#include "backend/upscaler.h"
 #else
 namespace nr {
 class ShaderLibrary {};  // never made without the game renderer; Backend's unique_ptr needs a type
@@ -468,9 +469,18 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
     shaders_ = std::make_unique<ShaderLibrary>(host_->device(), guest_memory_);
     // --native_debug bit 16: the plain pixel shaders at a scale too (to tell the aware translation's part).
     // An upscaler other than native AA draws the scene at another size than the output: aware shaders.
+    // With live settings (the graphics panel) an upscaler, its mode or the shadows can change while the
+    // game runs: the aware translations from the start (the pack holds them; at a scale of 1 they draw
+    // the same picture), and the water's reflection shaders are made when the option is turned on.
     const bool upscale_scaled = game.upscale.enabled() && game.upscale.quality != UpscaleQuality::kNative && !(game.debug & 16);
-    shaders_->SetRenderScaleAware(shaders_aware || upscale_scaled);
-    shaders_->SetWaterReflections(game.lighting.water_on());  // docs/lighting.md
+    const bool live = bool(game.effect_settings);
+    shaders_->SetRenderScaleAware(shaders_aware || upscale_scaled || (live && !(game.debug & 16)));
+    shaders_->SetWaterReflections(!live && game.lighting.water_on());
+    // The upscalers' waits for the GPU take the host's queue lock (upscaler.h).
+    nvrhi::IDevice* device = host_->device();
+    HostDevice* host = host_.get();
+    SetUpscalerIdleWait(device, [host] { host->WaitForIdle(); });
+    SetUpscalerExclusive(device, [host](const std::function<void()>& fn) { host->RunExclusive(fn); });
     shaders_->Initialize(game.shader_pack, game.dxc);
     kknr::GuestMemory physical;
     physical.base = memory_->TranslatePhysical(0);
@@ -496,9 +506,10 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
     renderer->options().upscale = game.upscale;
     renderer->options().fxaa = game.fxaa;
     renderer->options().lighting = game.lighting;  // before Initialize too (docs/lighting.md)
+    renderer->options().effect_settings = game.effect_settings;
     if (renderer->Initialize()) {
       shaders_->SetAmbientOcclusion(renderer->ao_ambient_table());
-      shaders_->SetReplacements(renderer->LightingReplacements());  // docs/lighting.md
+      if (!game.effect_settings) shaders_->SetReplacements(renderer->LightingReplacements());
       renderer->options().element_endian = game.element_endian;
       renderer->options().flip_front_face = game.flip_front_face;
       renderer->options().texture_tail_mips = game.texture_tail_mips;
@@ -680,6 +691,10 @@ void Backend::Shutdown() {
   }
   present_thread_.reset();
   submitter_.reset();  // submits what waits
+#if NR_GAME_RENDERER
+  if (host_) SetUpscalerIdleWait(host_->device(), nullptr);
+  if (host_) SetUpscalerExclusive(host_->device(), nullptr);
+#endif
   if (invalidation_handle_) {
     memory_->UnregisterPhysicalMemoryInvalidationCallback(invalidation_handle_);
     invalidation_handle_ = nullptr;

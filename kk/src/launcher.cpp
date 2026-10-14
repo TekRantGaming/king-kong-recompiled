@@ -242,8 +242,7 @@ constexpr std::pair<int, const char*> kLanguages[] = {
 // renderer asks for them when it makes the device, before the launcher opens).
 // VSync: Vulkan chooses its present mode when the swapchain is created.
 constexpr const char* kRestartCvars[] = {"present_effect", "window_width", "window_height", "monitor", "gpu_plugin",
-                                         "native_upscaler", "native_backend", "native_gi", "native_shadow_quality",
-                                         "native_water_reflections", "native_volumetrics",
+                                         "native_upscaler", "native_backend",
                                          "d3d12_allow_variable_refresh_rate_and_tearing"};
 
 enum Page { kHome, kDisplay, kGraphics, kGameplay, kControls, kCheatsPage, kAudio, kSubtitles, kAchievements, kAbout, kPageCount };
@@ -1704,6 +1703,19 @@ class SettingsPages {
       items.push_back(std::move(Disable(it, !mnk || !GetBool("mnk_mouse"), mnk_note)));
     }
 
+#if defined(KK_NATIVE_RENDERER)
+    // The graphics panel (debug_overlay.cpp): its keys work in play with either input.
+    items.push_back(Section("Keys while playing"));
+    {
+      Item it;
+      it.type = ItemType::kInfo;
+      it.label = "Graphics panel";
+      it.value_text = "F8";
+      it.description = "F8 opens a panel over the game for trying graphics settings while you play. Hold F7 to see your saved settings for comparison. F6 saves a screenshot and its settings in the screenshots folder. Changes are temporary until you choose Save as my settings.";
+      items.push_back(std::move(it));
+    }
+#endif
+
     items.push_back(Section("Mapping"));
     {
       Item it;
@@ -1908,8 +1920,7 @@ class SettingsPages {
     static const std::set<std::string> kRestartOnly = {
         "Window mode", "Window size", "Resolution", "Refresh rate", "Monitor", "Frame rate", "VSync",
         "Upscaler", "Upscaler mode", "Render quality", "Internal resolution", "Look", "Preset", "Renderer",
-        "Graphics API", "Language", "Startup logos", "Global illumination", "Shadows",
-        "Water reflections", "Light shafts"};
+          "Graphics API", "Language", "Startup logos"};
     std::vector<Item> out;
     for (Item& it : items) {
       if (it.type != ItemType::kSection && kRestartOnly.count(it.label)) continue;
@@ -4278,6 +4289,16 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       it.on_activate = [this] { OpenVersionHistory(); };
       items.push_back(std::move(it));
     }
+#if defined(KK_NATIVE_RENDERER)
+    {
+      Item it;
+      it.type = ItemType::kInfo;
+      it.label = "Graphics panel";
+      it.value_text = "F8";
+      it.description = "Press F8 while playing to try graphics settings live, and hold F7 to compare with your saved settings. Nothing changes for good until you save. Copy settings and F6 screenshots make it easy to share what you find.";
+      items.push_back(std::move(it));
+    }
+#endif
     items.push_back(ActionItem("Project page", "The port's GitHub page: releases, issues and the source code.",
                                "GitHub", [] { OpenUrl(kProjectUrl); }));
     items.push_back(ActionItem("Discord",

@@ -11,7 +11,11 @@ Original look keeps all three at the game's. Raster and screen-space techniques 
 | `--native_water_reflections` | `original`, `ssr` | Water reflections: Original / Screen space |
 | `--native_volumetrics` | `off`, `low`, `high` | Light shafts: Original / Volumetric low / Volumetric high |
 
-All are read once at start (init-only, like every `--native_*` setting). Tuning without a rebuild:
+All apply while the game runs (the graphics panel, F8, and the in-game settings pages): the passes' pipelines
+are made on a worker when an option is first turned on, the shadows' and the water's shader variants are made
+on a worker too (the water's come from the pack when it has them), and until they are ready a draw uses the
+game's own shader. Turned off, the passes are kept for 300 frames (an A/B switch back is instant). Tuning
+without a rebuild, live too:
 `--native_shadow_softness` (the PCF and PCSS kernels' size, 1), `--native_ssr_strength` (0 to 1 of the game's
 reflection the hits replace, 1), `--native_volumetric_strength` (1). Tools: `--native_lighting_census=N` (every N
 frames, every draw of the frame with its family, targets and their host sizes, state, the textures its pixel shader
@@ -170,7 +174,8 @@ Paused on 12 October 2026, 16:35, at the coordinator's request (the PC is needed
   tests (kkshaders_lighting_tests 0 failed, the 20 translator tests, 
 r_ao_rules_tests 14 with the new
   Lighting_SettingsAndShaders). kkshaders pack-build --scaled --lighting builds all 6853 shaders.
-- One launch so far (uns\lighting-s1-high, lsmoke: Skull Island, V-Rex, Ann). **The options did not apply**:
+- One launch so far (
+uns\lighting-s1-high, lsmoke: Skull Island, V-Rex, Ann). **The options did not apply**:
   the harness runs with --kk_original_look=true, and the Original look now sets the three options to the game's
   values (as intended for players). Test runs must add
   --kk_original_look_keep=native_shadow_quality,native_water_reflections,native_volumetrics. So that run measured

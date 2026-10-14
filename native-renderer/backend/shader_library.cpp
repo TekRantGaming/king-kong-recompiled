@@ -38,6 +38,7 @@ ShaderLibrary::ShaderLibrary(nvrhi::IDevice* device, const GuestMemory& memory)
     : device_(device), memory_(memory) {}
 
 ShaderLibrary::~ShaderLibrary() {
+  for (auto& [key, entry] : lighting_variants_) if (entry.build.valid()) entry.build.wait();
   {
     std::lock_guard lock(motion_mutex_);
     motion_stop_ = true;
@@ -209,7 +210,7 @@ std::shared_ptr<GameShader> ShaderLibrary::Build(const kkshaders::ShaderInfo& in
   const uint64_t key = HashKey(info.kind, info.ucodeHash, input_hash);
   if (auto it = by_hash_.find(key); it != by_hash_.end()) {
     // Made from the pack alone (GetByHash): a copy that also has the container's fetch table.
-    if (info.kind == kkshaders::ShaderKind::Vertex && !it->second->source) {
+    if (!it->second->source) {
       auto copy = std::make_shared<GameShader>(*it->second);
       copy->source = std::make_shared<const kkshaders::ShaderInfo>(info);
       it->second = copy;
@@ -266,7 +267,7 @@ std::shared_ptr<GameShader> ShaderLibrary::Build(const kkshaders::ShaderInfo& in
   }
 
   std::shared_ptr<GameShader> shader = Finish(info.kind, info.ucodeHash, input_hash, std::move(compiled), from_pack);
-  if (shader && info.kind == kkshaders::ShaderKind::Vertex) shader->source = std::make_shared<const kkshaders::ShaderInfo>(info);
+  if (shader) shader->source = std::make_shared<const kkshaders::ShaderInfo>(info);
   if (shader) shader->ambient_constant = AmbientConstant(info);
   return shader;
 }
@@ -441,6 +442,96 @@ std::shared_ptr<const GameShader> ShaderLibrary::Get(kkshaders::ShaderKind kind,
 ShaderLibrary::Stats ShaderLibrary::stats() const {
   std::lock_guard lock(mutex_);
   return stats_;
+}
+
+bool ShaderLibrary::lighting_variants_pending() {
+  std::lock_guard lock(lighting_mutex_);
+  for (auto& [key, entry] : lighting_variants_)
+    if (entry.build.valid()) return true;
+  return false;
+}
+
+std::shared_ptr<const GameShader> ShaderLibrary::LightingVariant(const GameShader& base, Replacement replacement, bool water) {
+  if ((!replacement.data && !water) || (water && !base.source)) return nullptr;
+  const uint64_t tag = water ? 0x5353524C49564501ull : replacement.tag;
+  const uint64_t key = HashKey(base.kind, base.ucode_hash, base.input_hash ^ tag);
+  std::lock_guard lock(lighting_mutex_);
+  auto it = lighting_variants_.find(key);
+  if (it == lighting_variants_.end() && water) {
+    // The pack has the hooked water shaders (built with the lighting translations): no compile.
+    auto info = *base.source;
+    info.waterReflection = kkshaders::waterReflectionHookFor(info.ucodeHash);
+    kkshaders::CompiledShader compiled;
+    bool found = false;
+    if (info.waterReflection.enabled()) {
+      std::lock_guard library_lock(mutex_);
+      found = pack_open_ && pack_.find(info.ucodeHash, kkshaders::translationInputHash(info), compiled);
+    }
+    const auto& blob = device_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN ? compiled.spirv : compiled.dxil;
+    if (found && !blob.empty()) {
+      auto shader = std::make_shared<GameShader>(base);
+      shader->input_hash ^= tag;
+      shader->source = std::make_shared<const kkshaders::ShaderInfo>(info);
+      shader->bindings = std::move(compiled.bindings);
+      nvrhi::ShaderDesc desc;
+      desc.shaderType = nvrhi::ShaderType::Pixel;
+      desc.entryName = "main";
+      desc.debugName = "Live water pixel shader";
+      shader->handle = device_->createShader(desc, blob.data(), blob.size());
+      if (shader->handle) {
+        std::lock_guard library_lock(mutex_);
+        shader->id = next_id_++;
+        lighting_variants_[key].shader = shader;
+        return shader;
+      }
+    }
+  }
+  if (it == lighting_variants_.end()) {
+    auto& entry = lighting_variants_[key];
+    entry.build = std::async(std::launch::async, [device = device_, base, replacement, water, tag] {
+      auto shader = std::make_shared<GameShader>(base);
+      shader->input_hash ^= tag;
+      std::vector<uint8_t> compiled_blob;
+      const void* data = replacement.data;
+      size_t size = replacement.size;
+      if (water) {
+        auto info = *base.source;
+        info.waterReflection = kkshaders::waterReflectionHookFor(info.ucodeHash);
+        if (!info.waterReflection.enabled()) return std::shared_ptr<GameShader>{};
+        kkshaders::Compiler compiler;
+        const bool spirv = device->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN;
+        auto built = kkshaders::buildShader(info, compiler, false, spirv ? kkshaders::kBuildSpirv : kkshaders::kBuildDxil);
+        if (!built.ok) {
+          Logf(LogLevel::kWarning, "rexgpu-native: live water shader failed: %s", built.error.substr(0, 400).c_str());
+          return std::shared_ptr<GameShader>{};
+        }
+        shader->source = std::make_shared<const kkshaders::ShaderInfo>(info);
+        shader->bindings = std::move(built.shader.bindings);
+        compiled_blob = spirv ? std::move(built.shader.spirv) : std::move(built.shader.dxil);
+        data = compiled_blob.data();
+        size = compiled_blob.size();
+      }
+      nvrhi::ShaderDesc desc;
+      desc.shaderType = nvrhi::ShaderType::Pixel;
+      desc.entryName = "main";
+      desc.debugName = "Live lighting pixel shader";
+      shader->handle = device->createShader(desc, data, size);
+      if (shader->handle) Logf(LogLevel::kInfo, "rexgpu-native: live %s shader ready %016llX variant %016llX",
+                               water ? "water" : "shadow", static_cast<unsigned long long>(base.ucode_hash),
+                               static_cast<unsigned long long>(shader->input_hash));
+      return shader->handle ? shader : std::shared_ptr<GameShader>{};
+    });
+    return nullptr;
+  }
+  auto& entry = it->second;
+  if (entry.build.valid() && entry.build.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+    entry.shader = entry.build.get();
+    if (entry.shader) {
+      std::lock_guard library_lock(mutex_);
+      entry.shader->id = next_id_++;
+    }
+  }
+  return entry.shader;
 }
 
 }  // namespace nr

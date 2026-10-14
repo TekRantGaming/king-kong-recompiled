@@ -27,6 +27,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -321,6 +322,7 @@ struct Options {
   int strength = 1;  // ao_strength
   bool settings = true;  // false: no ao_settings at all (the plugin without the Xenos plugin's cvars)
   float scale = 1.0f;
+  std::function<EffectSettings()> live;  // live settings (effect_settings.h), read at each frame's first call
 };
 
 struct Fixture {
@@ -348,7 +350,7 @@ struct Fixture {
     }
     errors_before = gpu->errors();
     shaders = std::make_unique<ShaderLibrary>(gpu->device(), mem);
-    shaders->SetRenderScaleAware(opt.scale != 1.0f);
+    shaders->SetRenderScaleAware(opt.scale != 1.0f || bool(opt.live));
     shaders->Initialize("", NR_TEST_DXC_DIR);
     renderer = std::make_unique<Renderer>(gpu->device());
     if (!renderer->Initialize(ScaledSize(kW, opt.scale), ScaledSize(kH, opt.scale))) {
@@ -362,6 +364,7 @@ struct Fixture {
     g->options().guest_frame_width = kW;
     g->options().ao = opt.ao;  // before Initialize, as the backend does
     g->options().gi = opt.gi;
+    g->options().effect_settings = opt.live;
     if (!g->Initialize()) {
       Fail(__FILE__, __LINE__, "GameRenderer::Initialize failed");
       return false;
@@ -879,6 +882,49 @@ TEST(GameGi_OffChangesNothing) {
   const Pixels got = f.Render({}, "off");
   CHECK_EQ(MaxDifference(got, want), 0.0f);
   CHECK(f.game->scene_gi() == nullptr);
+}
+
+TEST(GameGi_LiveOnOffAndIntensity) {
+  // The graphics panel turns GI on and off and changes its intensity while the game runs: on, the picture
+  // is the one a renderer started with GI draws (once its passes, made on a worker, are in); off again, the
+  // one without; a higher intensity bleeds more red.
+  auto settings = std::make_shared<EffectSettings>();
+  settings->gi = Gi(GiLevel::kOff);
+  Options live, on, off;
+  live.mode = on.mode = off.mode = 0;
+  live.live = [settings] { return *settings; };
+  on.gi = Gi(GiLevel::kMedium);
+  Fixture f(live), a(on), b(off);
+  if (!f.Init() || !a.Init() || !b.Init()) return;
+  Fixture::Frame plain;
+  plain.quad = false;
+  const Pixels with = a.Render(plain, "live_ref_on"), without = b.Render(plain, "live_ref_off");
+  Pixels p = f.Render(plain, "live_off");
+  CHECK(MaxDifference(p, without) <= kTol);
+  const Camera& cam = f.cam;
+  for (int round = 0; round < 3; ++round) {
+    settings->gi = Gi(GiLevel::kMedium);
+    int frames = 0;
+    for (; frames < 400 && !f.game->scene_gi(); ++frames) p = f.Render(plain, "live_on");
+    for (int i = 0; i < 2; ++i) p = f.Render(plain, "live_on");
+    const float d_on = MaxDifference(p, with);
+    const Rgb n1 = Colour(p, cam, kNearFloor), n0 = Colour(without, cam, kNearFloor);
+    std::printf("  round %d: GI on after %d frames: red bleed %+.3f, largest difference to GI from the start %.4f\n",
+                round, frames, n1.r - n0.r, d_on);
+    CHECK(f.game->scene_gi() != nullptr);
+    CHECK(n1.r - n0.r > 0.02f);
+    CHECK(d_on <= 0.02f);  // the temporal GI history of a live start differs by a few levels at most
+    settings->gi.intensity = 3.0f;
+    for (int i = 0; i < 3; ++i) p = f.Render(plain, "live_bright");
+    const Rgb n3 = Colour(p, cam, kNearFloor);
+    std::printf("    intensity 3: red bleed %+.3f\n", n3.r - n0.r);
+    CHECK(n3.r - n0.r > 1.5f * (n1.r - n0.r));
+    settings->gi = Gi(GiLevel::kOff);
+    for (int i = 0; i < 2; ++i) p = f.Render(plain, "live_off_again");
+    const float d_off = MaxDifference(p, without);
+    std::printf("    off again: largest difference to a renderer without GI %.4f\n", d_off);
+    CHECK(d_off <= kTol);
+  }
 }
 
 TEST(GameGi_UpcomingWaterDepthWriteCannotValidateClearedDepth) {

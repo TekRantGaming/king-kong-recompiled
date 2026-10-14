@@ -191,6 +191,7 @@ void GameRenderer::ClearRect(nvrhi::ICommandList* cl, HostTarget* color, HostTar
 // ---------------------------------------------------------------- clear
 
 void GameRenderer::Clear(nvrhi::ICommandList* cl, const ClearCall& call) {
+  UpdateEffects();
   if (options_.debug & 1024) return;  // debugging: no clears
   dev::DeviceView d(call.device ? memory_.Virtual(call.device) : nullptr);
   if (!d.valid() || !(call.color || call.depth || call.stencil)) return;
@@ -352,6 +353,7 @@ bool GameRenderer::ResolveCopy(nvrhi::ICommandList* cl, HostTarget* source, bool
 }
 
 void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
+  UpdateEffects();
   if (options_.debug & 2048) return;  // debugging: no resolves
   dev::DeviceView d(call.device ? memory_.Virtual(call.device) : nullptr);
   if (!d.valid()) return;

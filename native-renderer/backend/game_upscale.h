@@ -35,6 +35,7 @@ struct GameUpscale {
   float out_x = 1, out_y = 1;              // the output's (the render scale)
   uint32_t jitter_phases = 8;
   float mip_bias = 0;
+  float ratio = 1;                         // output / input, the larger axis (the automatic mip bias)
 
   UpscaleRules rules;
   AoRuleTable classifier;

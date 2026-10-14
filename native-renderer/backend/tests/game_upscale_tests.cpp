@@ -19,11 +19,13 @@
 // NR_TEST_IMAGES=<dir> writes the frames there as PPM files.
 
 #include <algorithm>
+#include <chrono>
 #include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -320,6 +322,8 @@ struct Options {
   AoConfig ao;
   LightingConfig lighting;
   float scale = 1.0f;  // the render scale (the output's)
+  // Live settings (effect_settings.h): read by the renderer at each frame's first call.
+  std::function<EffectSettings()> live;
   Options() {
     config.kind = UpscalerKind::kBilinear;
     config.quality = UpscaleQuality::kNative;
@@ -368,6 +372,7 @@ struct Fixture {
     g->options().ao = opt.ao;
     g->options().lighting = opt.lighting;
     if (opt.ao.method == AoMethod::kGtao) g->options().ao_settings = [] { return AoSettings{}; };
+    g->options().effect_settings = opt.live;
     if (!g->Initialize()) {
       Fail(__FILE__, __LINE__, "GameRenderer::Initialize failed");
       return false;
@@ -979,6 +984,91 @@ void CheckRealUpscaler(UpscalerKind kind, const char* name, int frames = 24, cha
 }
 
 }  // namespace
+
+// The graphics panel's live changes (game_effects.cpp): the upscaler made again between frames, its mode,
+// DLSS preset, sharpness, mip bias and reactive mask, FXAA and the texture filtering, round and round.
+// Every frame has a picture, the SDKs never fail, the validation layers stay silent, the caches do not
+// grow, and back at "off" the frame is the one a renderer that never had an upscaler draws.
+bool off_or(const GameUpscale* u, UpscalerKind kind) { return kind == UpscalerKind::kOff ? u == nullptr : u && u->config.kind == kind; }
+
+TEST(GameUpscale_LiveSwitching) {
+  struct State {
+    EffectSettings s;
+  };
+  auto state = std::make_shared<State>();
+  state->s.upscale.kind = UpscalerKind::kOff;
+  state->s.upscale.quality = UpscaleQuality::kQuality;
+  Options o;
+  o.upscale = false;
+  o.scale = 2.0f;
+  o.live = [state] { return state->s; };
+  Options ref_o;
+  ref_o.upscale = false;
+  ref_o.scale = 2.0f;
+  Fixture f(o), r(ref_o);
+  if (!f.Init() || !r.Init()) return;
+  Fixture::Frame still;
+  still.particle = false;
+  Pixels reference;
+  for (int i = 0; i < 3; ++i) reference = r.Render(still, "live_reference");
+  struct Step {
+    UpscalerKind kind;
+    UpscaleQuality quality;
+    char preset;
+    float sharpness;
+    const char* bias;
+  };
+  const Step steps[] = {
+      {UpscalerKind::kBilinear, UpscaleQuality::kQuality, 0, -1.0f, "auto"},
+      {UpscalerKind::kFsr3, UpscaleQuality::kPerformance, 0, 0.5f, "auto"},
+      {UpscalerKind::kDlss, UpscaleQuality::kQuality, kDlssPresetLatest, -1.0f, "auto"},
+      {UpscalerKind::kDlss, UpscaleQuality::kQuality, 'K', -1.0f, "-1"},
+      {UpscalerKind::kXess, UpscaleQuality::kBalanced, 0, -1.0f, "auto"},
+      {UpscalerKind::kOff, UpscaleQuality::kQuality, 0, -1.0f, "auto"},
+      {UpscalerKind::kFsr3, UpscaleQuality::kNative, 0, 0.0f, "0.5"},
+      {UpscalerKind::kDlss, UpscaleQuality::kUltraPerformance, 'L', -1.0f, "auto"},
+      {UpscalerKind::kOff, UpscaleQuality::kQuality, 0, -1.0f, "auto"},
+  };
+  uint64_t frames = 0;
+  for (int round = 0; round < 3; ++round) {
+    for (const Step& st : steps) {
+      state->s.upscale.kind = st.kind;
+      state->s.upscale.quality = st.quality;
+      state->s.upscale.dlss_preset = st.preset;
+      state->s.upscale.sharpness = st.sharpness;
+      state->s.upscale.mip_bias_auto = std::string(st.bias) == "auto";
+      state->s.upscale.mip_bias = state->s.upscale.mip_bias_auto ? 0.0f : float(std::atof(st.bias));
+      state->s.upscale.reactive = round == 1 ? 0.0f : 1.0f;
+      state->s.fxaa = round == 2 ? 1u : 0u;
+      state->s.anisotropic_override = round == 1 ? 5 : -1;
+      // The SDK is made on a worker: frames go on meanwhile (each with a picture).
+      // NGX's first start takes seconds (made on a worker; the frames go on).
+      Pixels p;
+      int waited = 0;
+      const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+      for (; std::chrono::steady_clock::now() < until; ++waited) {
+        p = f.Render(still, "live");
+        ++frames;
+        CHECK(!p.rgba.empty());
+        const GameUpscale* u = f.game->upscale();
+        const bool off = st.kind == UpscalerKind::kOff;
+        if (off ? u == nullptr : (u && u->config.kind == st.kind && u->config.quality == st.quality)) break;
+      }
+      for (int i = 0; i < 3; ++i) p = f.Render(still, "live");
+      const GameUpscale* u = f.game->upscale();
+      std::printf("  round %d: %s %s: %s after %d frames\n", round, UpscalerKindName(st.kind), UpscaleQualityName(st.quality),
+                  u ? u->name.c_str() : "off", waited);
+      CHECK(off_or(u, st.kind));
+      if (u) CHECK_EQ(u->stats.failures, uint64_t(0));
+      if (st.kind == UpscalerKind::kOff && round != 2) {
+        const float d = MaxDifference(p, reference);
+        std::printf("    back to off: largest difference to a renderer without an upscaler %.4f\n", d);
+        CHECK(d <= kTol);
+      }
+    }
+  }
+  std::printf("  %llu frames\n", static_cast<unsigned long long>(frames));
+}
 
 TEST(GameUpscale_Fsr3) { CheckRealUpscaler(UpscalerKind::kFsr3, "fsr3"); }
 TEST(GameUpscale_Dlss) { CheckRealUpscaler(UpscalerKind::kDlss, "dlss"); }

@@ -108,7 +108,7 @@ class Fsr3Upscaler final : public Upscaler {
   }
   ~Fsr3Upscaler() override {
     if (context_) {
-      device_->waitForIdle();
+      UpscalerWaitForIdle(device_);
       fn_.DestroyContext(&context_, nullptr);
     }
   }
@@ -124,6 +124,12 @@ class Fsr3Upscaler final : public Upscaler {
     // FSR's documented ratios (1, 1.5, 1.7, 2, 3), rounded as its own query rounds them.
     const float ratio = DefaultUpscaleRatio(config_.quality);
     return {UpscaleInputSize(output.width, ratio), UpscaleInputSize(output.height, ratio)};
+  }
+
+  void Prepare(UpscalerSize render, UpscalerSize output) override {
+    if (!context_ || render.width != max_render_.width || render.height != max_render_.height ||
+        output.width != max_output_.width || output.height != max_output_.height)
+      Create(render, output);
   }
 
   bool Evaluate(nvrhi::ICommandList* cl, const UpscalerInputs& in) override {
@@ -205,7 +211,7 @@ class Fsr3Upscaler final : public Upscaler {
 
   bool Create(UpscalerSize render, UpscalerSize output) {
     if (context_) {
-      device_->waitForIdle();
+      UpscalerWaitForIdle(device_);
       fn_.DestroyContext(&context_, nullptr);
       context_ = nullptr;
     }

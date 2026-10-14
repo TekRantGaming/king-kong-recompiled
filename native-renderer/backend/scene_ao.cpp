@@ -45,8 +45,8 @@ GtaoSettings SceneAo::Settings(const AoSettings& s) const {
   g.mode = s.mode;
   g.strength = s.strength;
   g.sample_quality = s.sample_quality;
-  g.temporal_upscaler = s.temporal_upscaler;
-  g.temporal = !s.temporal_upscaler;
+  g.temporal_upscaler = s.temporal_upscaler && s.temporal_denoise;
+  g.temporal = s.temporal_denoise && !s.temporal_upscaler;
   g.half = config_.quality == AoQuality::kHalf;
   g.radius = config_.radius;
   g.radius_scale = config_.radius_scale;

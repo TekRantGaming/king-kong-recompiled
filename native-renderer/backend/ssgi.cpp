@@ -140,6 +140,15 @@ bool Ssgi::Initialize() {
   bd.debugName = "GI constants";
   constants_ = device_->createBuffer(bd);
   ready_ = composite_layout_ && point_clamp_ && linear_clamp_ && constants_;
+  if (ready_) {
+    for (const auto format : {nvrhi::Format::RGBA8_UNORM, nvrhi::Format::R10G10B10A2_UNORM,
+                              nvrhi::Format::RGBA16_FLOAT, nvrhi::Format::RG16_FLOAT,
+                              nvrhi::Format::R32_FLOAT, nvrhi::Format::RG32_FLOAT}) {
+      nvrhi::FramebufferInfo info;
+      info.colorFormats = {format};
+      ready_ = GraphicsPipeline(info) && ready_;
+    }
+  }
   return ready_;
 }
 
@@ -323,7 +332,9 @@ nvrhi::IFramebuffer* Ssgi::Framebuffer(nvrhi::ITexture* color) {
 }
 
 nvrhi::IGraphicsPipeline* Ssgi::GraphicsPipeline(nvrhi::IFramebuffer* fb) {
-  const nvrhi::FramebufferInfoEx& info = fb->getFramebufferInfo();
+  return GraphicsPipeline(fb->getFramebufferInfo());
+}
+nvrhi::IGraphicsPipeline* Ssgi::GraphicsPipeline(const nvrhi::FramebufferInfo& info) {
   const uint32_t format = info.colorFormats.empty() ? 0 : uint32_t(info.colorFormats[0]);
   nvrhi::GraphicsPipelineHandle& p = pipelines_[format];
   if (p) return p;

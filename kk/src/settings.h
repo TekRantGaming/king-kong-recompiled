@@ -110,7 +110,11 @@ int RenderScaleFor(std::string_view preset, int output_height);
 void ApplyRenderPreset(int output_height);
 
 // Writes the current settings (skipping command-line/env overrides) to `path`.
-bool SaveSettings(const std::filesystem::path& path);
+bool SaveSettings(const std::filesystem::path& path, bool include_temporary = false);
+// Temporary overlay trials are excluded from every ordinary settings save.
+void SetTemporarySettingBaseline(const std::string& name, const std::string& value);
+void SetTemporarySettingTrialValue(const std::string& name, const std::string& value);
+void ClearTemporarySettingBaselines();
 
 // Changes a cvar's default; values from the config file or command line still win.
 void SetCvarDefault(std::string_view name, std::string_view value);

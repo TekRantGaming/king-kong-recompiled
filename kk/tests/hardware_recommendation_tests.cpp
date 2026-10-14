@@ -156,5 +156,44 @@ int main() {
   std::ofstream(config) << "kk_frame_rate = 30\n";
   InitializeHardwareRecommendation(config, 1920, 1080);
   Equals("kk_hardware_tier", ""); // existing installations are untouched
+  // Live graphics trials must survive an unrelated save without becoming persistent.
+  rex::cvar::ResetAllToDefaults();
+  rex::cvar::SetFlagByName("native_ao_samples", "2");
+  SetTemporarySettingBaseline("native_ao_samples", "2");
+  rex::cvar::SetFlagByName("native_ao_samples", "3");
+  SetTemporarySettingTrialValue("native_ao_samples", "3");
+  Check(SaveSettings(config), "save while graphics trial is active");
+  std::ifstream trial_file(config);
+  const std::string trial_text((std::istreambuf_iterator<char>(trial_file)), {});
+  Check(trial_text.find("native_ao_samples = 2") != std::string::npos, "unrelated save keeps saved AO quality");
+  Check(trial_text.find("native_ao_samples = 3") == std::string::npos, "trial AO quality never written");
+  Check(!SaveSettings(dir / "missing-dir" / "settings.toml", true), "failed explicit save retains trial protection");
+  Check(SaveSettings(config), "ordinary save still protects trial after failure");
+  Check(SaveSettings(config, true), "explicitly save graphics trial");
+  std::ifstream committed_file(config);
+  const std::string committed_text((std::istreambuf_iterator<char>(committed_file)), {});
+  Check(committed_text.find("native_ao_samples = 3") != std::string::npos, "explicit save writes trial AO quality");
+  ClearTemporarySettingBaselines();
+  rex::cvar::ResetAllToDefaults();
+  Check(rex::cvar::SetFlagFromCommandLine("native_ao_samples", "1"), "set command-line AO quality");
+  SetTemporarySettingBaseline("native_ao_samples", "1");
+  rex::cvar::SetFlagByName("native_ao_samples", "3");
+  SetTemporarySettingTrialValue("native_ao_samples", "3");
+  Check(SaveSettings(config), "save during command-line AO trial");
+  std::ifstream override_file(config);
+  const std::string override_text((std::istreambuf_iterator<char>(override_file)), {});
+  Check(override_text.find("native_ao_samples =") == std::string::npos, "command-line baseline remains excluded");
+  ClearTemporarySettingBaselines();
+  rex::cvar::SetFlagByName("native_ao_samples", "1");
+  SetTemporarySettingBaseline("native_ao_samples", "1");
+  rex::cvar::SetFlagByName("native_ao_samples", "2");
+  SetTemporarySettingBaseline("native_ao_samples", "2"); // new saved choice after resetting a previous trial
+  rex::cvar::SetFlagByName("native_ao_samples", "3");
+  SetTemporarySettingTrialValue("native_ao_samples", "3");
+  Check(SaveSettings(config), "save after recapturing a changed baseline");
+  std::ifstream recaptured_file(config);
+  const std::string recaptured_text((std::istreambuf_iterator<char>(recaptured_file)), {});
+  Check(recaptured_text.find("native_ao_samples = 2") != std::string::npos, "new saved baseline replaces an older trial baseline");
+  ClearTemporarySettingBaselines();
   std::cout << "PASS: " << checks << " hardware/settings checks; evidence " << dir.string() << '\n';
 }

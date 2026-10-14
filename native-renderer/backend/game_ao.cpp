@@ -48,7 +48,10 @@ bool GameRenderer::AoSetBindings(nvrhi::BindingSetDesc& set0) {
 }
 
 void GameRenderer::AoInitialize() {
-  if (options_.ao.gpu_time) ao_timer_ = std::make_unique<AoGpuTimer>(device_, options_.ao.gtao() ? "gtao" : "legacy");
+  if (options_.ao.gpu_time || options_.effect_settings) {
+    ao_timer_ = std::make_unique<AoGpuTimer>(device_, options_.ao.gtao() ? "gtao" : "legacy");
+    ao_timer_->set_quiet(!options_.ao.gpu_time);  // else for the graphics panel only
+  }
   if (!options_.ao.gtao()) return;
   scene_ao_ = std::make_unique<SceneAo>(device_, options_.ao);
   if (!scene_ao_->Initialize()) {

@@ -33,6 +33,7 @@ set(KINGKONG_SOURCES
     src/art.cpp
     src/capture_png.cpp
     src/overlay.cpp
+    src/debug_overlay.cpp
     src/toast.cpp
     src/io_fix.cpp
     src/loading_fix.cpp

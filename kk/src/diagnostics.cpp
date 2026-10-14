@@ -266,6 +266,11 @@ void InitDiagnostics() {
   });
 }
 
+std::string DiagnosticsHardware() {
+  std::lock_guard lock(g_mutex);
+  return RedactDiagnostics(g_hardware);
+}
+
 std::string DiagnosticsReport() {
   RefreshDiagnostics();
   std::lock_guard lock(g_mutex);

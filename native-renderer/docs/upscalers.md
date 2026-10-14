@@ -72,9 +72,9 @@ or artwork (see "What a release ships"). No frame generation anywhere.
   `native_upscaler_quality`: Native AA (DLAA with DLSS), Quality, Balanced, Performance, Ultra Performance,
   with the input and output sizes shown. Render quality and Internal resolution are hidden meanwhile. FSR 1
   and NIS keep their rows as before.
-- **Restart.** `native_upscaler` is one of the launcher's restart settings: on Vulkan the device must be
-  made with DLSS's and XeSS's extensions, and it exists before the launcher opens. Play restarts the game
-  when it changed to an upscaler (switching one off needs no restart).
+- **Restart.** `native_upscaler` is still one of the launcher's restart settings (its rows set
+  `present_effect` and `kk_render_quality` too, which apply at the start). In the game the upscaler is live
+  (below, "Live changes").
 - **Defaults.** See "The default" below. The **Original** look sets `native_upscaler` off with its other
   settings (`OriginalLookSettings`), and the row is disabled there.
   Test runs that want an upscaler over the Original look add `--kk_original_look_keep=native_upscaler`.
@@ -436,3 +436,28 @@ Done: the foundation, FSR 3.1, DLSS, XeSS and FSR 4 in the renderer and the plug
 notices, the offline tests on this PC's RTX 4070 Ti (both APIs), the game runs and comparison sheets above,
 the fixes they found, and the launcher's menu (Display > Upscaling). Merged with Beta 2 (`beta` at 71d0ac5);
 the upscaler SDK (`sdk-src-upscalers`) has the tools/rexglue-patches 0015 and 0016 as well.
+
+## Live changes (the graphics panel, F8)
+
+`native_upscaler`, `native_upscaler_quality`, `native_upscaler_dlss_preset`, `native_upscaler_sharpness`,
+`native_upscaler_mip_bias` and `native_upscaler_reactive` apply while the game runs (`game_effects.cpp`,
+`effect_settings.h`). Each frame's first clear, draw or resolve reads them:
+
+- A new kind, mode or DLSS preset makes the upscaler again. The SDK object (its DLL, NGX) is made on a worker
+  while the game keeps drawing with the old one, then swapped in at a frame boundary; the old `GameUpscale` is
+  destroyed 8 frames later. Off and the bilinear stretch need no worker. The upscaler's own passes (shaders,
+  layouts, constant buffers) are made once and kept, so their pipelines are made once.
+- NGX takes seconds to start: on NVIDIA it is started on a worker when the renderer starts and kept (a DLSS
+  upscaler that never evaluates, so no feature and no memory), so a switch to DLSS is quick.
+- Sharpness, the reactive mask and the mip bias apply to the next frame. A change of the mip bias or of the
+  texture filtering empties the sampler cache (each sampler holds a slot of the table).
+- The SDKs wait for the GPU before they make or destroy contexts; another thread submits meanwhile, so the wait
+  goes through the host's queue lock (`SetUpscalerIdleWait`).
+- On Vulkan the device always asks for DLSS's (NVIDIA) and XeSS's extensions and features where supported,
+  whichever upscaler the settings name, so every upscaler can be switched to.
+- With live settings the pixel shaders are the render-scale-aware translations from the start (the pack holds
+  them), so the layouts and pipelines never change with the upscaler.
+
+`nr_game_upscale_tests GameUpscale_LiveSwitching` switches off, bilinear, FSR 3.1, DLSS (two presets),
+XeSS and the modes round and round and checks that the picture at off equals a renderer that never had an
+upscaler.

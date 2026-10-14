@@ -75,9 +75,10 @@ void StopLauncherPrewarm() {
   if (auto wait = reinterpret_cast<Stop>(FindExport("nr_upscaler_query_wait"))) wait();
 }
 
-UpscalerChoices QueryUpscalers() {
+namespace {
+UpscalerChoices AskUpscalers(const char* entry) {
   using Query = uint32_t (*)(NrUpscalerSupport*);
-  static const Query query = reinterpret_cast<Query>(FindExport("nr_upscaler_query"));
+  const Query query = reinterpret_cast<Query>(FindExport(entry));
   UpscalerChoices c;
   if (!query) return c;
   NrUpscalerSupport s = {};
@@ -91,6 +92,10 @@ UpscalerChoices QueryUpscalers() {
   }
   return c;
 }
+}  // namespace
+
+UpscalerChoices QueryUpscalers() { return AskUpscalers("nr_upscaler_query"); }
+UpscalerChoices PeekUpscalers() { return AskUpscalers("nr_upscaler_query_peek"); }
 
 std::string StutterLine() {
   using Stats = uint32_t (*)(NrStutterStats*);
@@ -103,6 +108,14 @@ std::string StutterLine() {
                 static_cast<unsigned long long>(s.stutter_frames), static_cast<unsigned long long>(s.frames_waited),
                 static_cast<unsigned long long>(s.frames_skipped), s.worst_wait_ms);
   return text;
+}
+NrEffectStats EffectTimes() {
+  using Read = uint32_t (*)(NrEffectStats*);
+  static const auto read = reinterpret_cast<Read>(FindExport("nr_effect_stats"));
+  NrEffectStats stats{};
+  stats.size = sizeof(NrEffectStats);
+  if (!read || !read(&stats)) stats.size = 0;
+  return stats;
 }
 
 }  // namespace nr::kk

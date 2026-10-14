@@ -150,9 +150,13 @@ void Run() {
 
 }  // namespace
 
-uint32_t UpscalerQuery(NrUpscalerSupport* out) {
+uint32_t UpscalerQuery(NrUpscalerSupport* out) { return UpscalerQueryAnswer(out, true); }
+
+uint32_t UpscalerQueryPeek(NrUpscalerSupport* out) { return UpscalerQueryAnswer(out, false); }
+
+uint32_t UpscalerQueryAnswer(NrUpscalerSupport* out, bool start) {
   std::lock_guard lock(g_mutex);
-  if (!g_started) {
+  if (!g_started && start) {
     g_started = true;
 #if NR_GAME_RENDERER && NR_HAS_D3D12
     g_state = NR_UPSCALER_QUERY_RUNNING;

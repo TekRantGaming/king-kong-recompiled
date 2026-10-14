@@ -43,6 +43,7 @@ class SceneGi {
   ~SceneGi();
   bool Initialize();
   const GiConfig& config() const { return config_; }
+  void SetConfig(const GiConfig& config) { config_ = config; }
   void SetTimer(AoGpuTimer* timer) { timer_ = timer; }
 
   // A draw as the ambient occlusion describes it (scene_ao.h). Before it is recorded: classify,
