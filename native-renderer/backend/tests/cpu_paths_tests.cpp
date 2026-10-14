@@ -1,5 +1,6 @@
 #include <array>
 #include <cstring>
+#include <deque>
 #include "backend/pipeline_workers.h"
 #include "backend/primitive.h"
 #include "backend/guest_memory.h"
@@ -8,16 +9,31 @@
 
 using namespace nr;
 
+TEST(DemandPipelineJumpsPrewarmBacklogWithoutDuplicateWork) {
+  struct Job { uint64_t key; bool urgent = false; };
+  std::deque<Job> jobs;
+  for (uint64_t i = 0; i < 6416; ++i) jobs.push_back({i});
+  CHECK(PromotePipelineJob(jobs, 6415));
+  CHECK_EQ(jobs.front().key, uint64_t(6415));
+  CHECK(jobs.front().urgent);
+  CHECK_EQ(jobs.size(), size_t(6416));
+  for (uint64_t i = 0; i < 6415; ++i) CHECK_EQ(jobs[size_t(i + 1)].key, i);
+  jobs.pop_front();  // the demanded job is now active
+  CHECK(!PromotePipelineJob(jobs, 6415));
+  CHECK_EQ(jobs.size(), size_t(6415));
+}
+
 TEST(WorkerBudgets) {
   CHECK_EQ(PipelineWorkerCount(0, 0), 1u);
   CHECK_EQ(PipelineWorkerCount(1, 1), 1u);
-  CHECK_EQ(PipelineWorkerCount(4, 4), 1u);
-  CHECK_EQ(PipelineWorkerCount(6, 6), 1u);
+  CHECK_EQ(PipelineWorkerCount(4, 4), 2u);
+  CHECK_EQ(PipelineWorkerCount(6, 6), 4u);
   CHECK_EQ(PipelineWorkerCount(8, 4), 2u);
-  CHECK_EQ(PipelineWorkerCount(12, 6), 3u);
-  CHECK_EQ(PipelineWorkerCount(16, 8), 4u);
+  CHECK_EQ(PipelineWorkerCount(12, 6), 4u);
+  CHECK_EQ(PipelineWorkerCount(16, 8), 6u);
   CHECK_EQ(PipelineWorkerCount(16, 2), 1u);
-  CHECK_EQ(PipelineWorkerCount(128, 64), 4u);
+  CHECK_EQ(PipelineWorkerCount(128, 64), 62u);
+  CHECK_EQ(PipelineWorkerCount(4, 8), 2u);
 }
 
 #ifdef _WIN32

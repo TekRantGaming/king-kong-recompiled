@@ -628,7 +628,12 @@ void GameRenderer::PipelineWorker() {
     PipelineJob job;
     {
       std::unique_lock lock(pipeline_mutex_);
-      pipeline_cv_.wait(lock, [&] { return pipeline_stop_ || !pipeline_jobs_.empty(); });
+      pipeline_cv_.wait(lock, [&] {
+        // Reserve one compiler for demand work while prewarm has a backlog.
+        const unsigned background = std::max(1u, unsigned(pipeline_threads_.size()) - 1);
+        return pipeline_stop_ || (!pipeline_jobs_.empty() &&
+            (pipeline_jobs_.front().urgent || unsigned(pipelines_active_) < background));
+      });
       if (pipeline_stop_) return;
       job = std::move(pipeline_jobs_.front());
       pipeline_jobs_.pop_front();
@@ -649,6 +654,7 @@ void GameRenderer::PipelineWorker() {
       if (!idle) --pipelines_active_;
     }
     pipeline_done_cv_.notify_all();
+    pipeline_cv_.notify_all();
     if (idle) {
       MaybeSaveDriverCache();
       {
@@ -656,6 +662,7 @@ void GameRenderer::PipelineWorker() {
         --pipelines_active_;
       }
       pipeline_done_cv_.notify_all();
+      pipeline_cv_.notify_all();
     }
   }
 }
@@ -722,8 +729,11 @@ nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelin
     if (!pipelines_pending_.count(key)) {
       EnsureWorkers();
       pipelines_pending_[key] = true;
-      pipeline_jobs_.push_back({key, desc, framebuffer});
-      pipeline_cv_.notify_one();
+      pipeline_jobs_.push_front({key, desc, framebuffer, true});
+      pipeline_cv_.notify_all();
+    } else {
+      // Promote an unstarted prewarm job too. An already active job needs no duplicate.
+      if (PromotePipelineJob(pipeline_jobs_, key)) pipeline_cv_.notify_all();
     }
     if (options_.pipeline_wait) {
       // Wait for the worker that has this pipeline (the draw's own job, or the prewarm's).

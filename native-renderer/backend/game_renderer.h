@@ -490,6 +490,7 @@ class GameRenderer {
     uint64_t key = 0;
     nvrhi::GraphicsPipelineDesc desc;
     nvrhi::FramebufferInfo framebuffer;
+    bool urgent = false;
   };
   std::vector<std::thread> pipeline_threads_;
   std::condition_variable pipeline_done_cv_;

@@ -14,11 +14,22 @@
 
 namespace nr {
 
+// Called with the queue mutex held. Active work is absent from the queue and is never duplicated.
+template <class Queue>
+bool PromotePipelineJob(Queue& jobs, uint64_t key) {
+  auto queued = std::find_if(jobs.begin(), jobs.end(),
+                            [key](const auto& job) { return job.key == key; });
+  if (queued == jobs.end()) return false;
+  queued->urgent = true;
+  std::rotate(jobs.begin(), queued, std::next(queued));
+  return true;
+}
+
 inline unsigned PipelineWorkerCount(unsigned logical, unsigned cores) {
-  // Keep the existing modest parallelism, and reserve a physical core for
-  // game work whenever the topology is available. One worker is the minimum.
-  const unsigned budget = cores == 0 ? 4 : (cores > 1 ? cores - 1 : 1);
-  return std::min(std::clamp(logical / 4, 1u, 4u), budget);
+  // Leave two physical cores for game/render work. Respect restricted affinity,
+  // including processes allowed only one SMT sibling of each core.
+  const unsigned available = cores ? std::min(logical, cores) : logical / 2;
+  return available > 2 ? available - 2 : 1;
 }
 
 inline unsigned ProcessPipelineWorkerCount() {
