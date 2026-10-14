@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <future>
 #include <memory>
 #include <map>
 #include <mutex>
@@ -48,6 +49,7 @@
 #include "backend/guest_device.h"
 #include "backend/guest_memory.h"
 #include "backend/lighting_config.h"
+#include "backend/effect_settings.h"
 #include "backend/shader_library.h"
 #include "kknr/guest_texture.h"
 #include "kknr/buffers.h"
@@ -132,11 +134,12 @@ class GameRenderer {
     // always was. Set before Initialize.
     AoConfig ao;
     // Screen-space global illumination (gi_config.h, docs/gi.md). Off by default: nothing of it is
-    // created. Set before Initialize.
+    // created. Initial value before Initialize; effect_settings changes it at frame boundaries.
     GiConfig gi;
     // The lighting options (docs/lighting.md): shadows, water reflections, volumetric light shafts.
-    // All original by default. Set before Initialize.
+    // All original by default. Initial value before Initialize; effect_settings changes it live.
     LightingConfig lighting;
+    std::function<EffectSettings()> effect_settings;
     // Log every draw of this game frame (-1 none).
     int32_t dump_frame = -1;
     // Debugging aids (bits): 1 the game's clears are green, 2 the frame image
@@ -204,7 +207,7 @@ class GameRenderer {
   Options& options() { return options_; }
   // Any target or texture at a scale other than 1 (the pixel shaders must be render scale aware).
   bool scaled() const {
-    return options_.render_scale_x != 1.0f || options_.render_scale_y != 1.0f ||
+    return bool(options_.effect_settings) || options_.render_scale_x != 1.0f || options_.render_scale_y != 1.0f ||
            (options_.shadow_scale > 0.0f && options_.shadow_scale != 1.0f) ||
            (upscale_ && (upscale_->in_x != 1.0f || upscale_->in_y != 1.0f));
   }
@@ -669,6 +672,7 @@ class GameRenderer {
   LightingState lighting_;
   std::unique_ptr<SceneLighting> scene_lighting_;  // null unless an option needs per-frame work
   void LightingPresentHook(nvrhi::ICommandList* cl);
+  std::shared_ptr<const GameShader> LiveLightingShader(const GameShader& base);
   nvrhi::BufferHandle ao_constants_;  // b4 (ambient-only)
   std::array<uint32_t, 8> ao_constants_last_ = {};
   bool ao_constants_valid_ = false;
@@ -691,6 +695,14 @@ class GameRenderer {
   bool GiAoOn(uint64_t frame);
   std::unique_ptr<SceneGi> scene_gi_;
   std::unique_ptr<AoGpuTimer> gi_timer_;  // --native_gi_gpu_time
+  void UpdateEffects();
+  void PublishEffectTimes();
+  uint64_t effects_frame_ = UINT64_MAX;
+  std::future<std::unique_ptr<SceneGi>> gi_build_;
+  std::future<std::unique_ptr<SceneLighting>> lighting_build_;
+  bool gi_build_failed_ = false, lighting_build_failed_ = false;
+  std::deque<std::pair<uint64_t, std::unique_ptr<SceneGi>>> retired_gi_;
+  std::deque<std::pair<uint64_t, std::unique_ptr<SceneLighting>>> retired_lighting_;
 
   kknr::TextureCache textures_;
   // GPU-written (resolved) textures by base address, for other fetch

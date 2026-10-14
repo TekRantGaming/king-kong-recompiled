@@ -11,6 +11,7 @@
 namespace nr {
 
 void GameRenderer::GiInitialize() {
+  if (options_.effect_settings) return;  // live runs prepare the requested effect on a worker
   if (!options_.gi.enabled()) return;
   if (options_.gi.gpu_time) gi_timer_ = std::make_unique<AoGpuTimer>(device_, "gi");
   scene_gi_ = std::make_unique<SceneGi>(device_, options_.gi, options_.ao.rules);

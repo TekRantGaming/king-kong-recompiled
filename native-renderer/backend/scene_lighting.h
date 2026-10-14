@@ -13,6 +13,7 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 #include <map>
 #include <memory>
 #include <vector>
@@ -32,6 +33,20 @@ class SceneLighting {
   SceneLighting(nvrhi::IDevice* device, const LightingConfig& config);
   ~SceneLighting();
   bool Initialize();
+  void SetConfig(const LightingConfig& config) {
+    config_ = config;
+    if (!depth_pass_.pipeline) config_.water = WaterReflections::kOriginal;
+    if (!vol_vs_ || !vol_ps_) config_.volumetrics = Volumetrics::kOff;
+    if (!config_.volumetrics_on()) { vol_framebuffers_.clear(); vol_pending_ = false; }
+  }
+  // The renderer retires these images and their bindless slots before dropping the last reference.
+  std::array<nvrhi::TextureHandle, 2> ReleaseSsrImages() {
+    std::array<nvrhi::TextureHandle, 2> images = {ssr_color_, ssr_depth_};
+    ssr_color_ = ssr_depth_ = nullptr;
+    ssr_w_ = ssr_h_ = 0;
+    ssr_ = {};
+    return images;
+  }
 
   struct Target {
     uint64_t key = 0;  // 0: none
@@ -132,6 +147,7 @@ class SceneLighting {
 
   // Volumetric light.
   bool RunVolumetric(nvrhi::ICommandList* cl);
+  nvrhi::IGraphicsPipeline* VolumetricPipeline(const nvrhi::FramebufferInfo& info);
   nvrhi::ShaderHandle vol_vs_, vol_ps_;
   nvrhi::BindingLayoutHandle vol_layout_;
   nvrhi::BufferHandle vol_constants_;

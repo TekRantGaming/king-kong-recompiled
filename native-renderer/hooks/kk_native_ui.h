@@ -11,6 +11,7 @@ void SetStartupFailureHandler(int (*handler)(const char*));
 
 #include <filesystem>
 #include <string>
+#include "plugin/native_effect_stats.h"
 
 namespace nr::kk {
 
@@ -32,5 +33,6 @@ UpscalerChoices QueryUpscalers();
 // The overlay's line under the frame counter; empty when --native_stutter_stats is off or the native
 // renderer is not drawing.
 std::string StutterLine();
+NrEffectStats EffectTimes();
 
 }  // namespace nr::kk

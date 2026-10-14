@@ -128,11 +128,11 @@ void GameRenderer::LightingCensusDraw(const DrawCall& call, const dev::DeviceVie
 }
 
 void GameRenderer::LightingLayoutBindings(nvrhi::BindingLayoutDesc& set0) const {
-  if (options_.lighting.any()) set0.bindings.push_back(nvrhi::BindingLayoutItem::VolatileConstantBuffer(5));
+  if (options_.effect_settings || options_.lighting.any()) set0.bindings.push_back(nvrhi::BindingLayoutItem::VolatileConstantBuffer(5));
 }
 
 bool GameRenderer::LightingSetBindings(nvrhi::BindingSetDesc& set0) {
-  if (!options_.lighting.any()) return true;
+  if (!options_.effect_settings && !options_.lighting.any()) return true;
   nvrhi::BufferDesc d;
   d.byteSize = sizeof(kkshaders::LightingConstants);
   d.isConstantBuffer = true;
@@ -168,12 +168,12 @@ float GameRenderer::LightingShadowScale() const {
 
 void GameRenderer::LightingInitialize() {
   const LightingConfig& l = options_.lighting;
-  if (!l.active()) return;
-  if (l.water_on() || l.volumetrics_on() || l.gpu_time) {
+  if (!l.active() && !options_.effect_settings) return;
+  if (!options_.effect_settings && (l.water_on() || l.volumetrics_on() || l.gpu_time)) {
     scene_lighting_ = std::make_unique<SceneLighting>(device_, l);
     if (!scene_lighting_->Initialize()) scene_lighting_.reset();
   }
-  if (l.water_on()) {
+  if (l.water_on() || options_.effect_settings) {
     nvrhi::SamplerDesc sd;
     sd.setAllFilters(true).setAllAddressModes(nvrhi::SamplerAddressMode::Clamp);
     lighting_.sampler = device_->createSampler(sd);
@@ -271,6 +271,20 @@ void GameRenderer::LightingWriteConstants(nvrhi::ICommandList* cl) {
   lighting_.constants_valid = true;
   lighting_.constants_list = cl;
   lighting_.constants_frame = frame_;
+}
+
+std::shared_ptr<const GameShader> GameRenderer::LiveLightingShader(const GameShader& base) {
+  if (!options_.effect_settings) return nullptr;
+  const auto family = LightFamilyOf(base.ucode_hash);
+  if (family == LightFamily::kShadowQuad && options_.lighting.shadows_on()) {
+    const auto layout = ShadowQuadLayoutOf(base.ucode_hash);
+    const auto replacement = ShadowReplacement(device_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN,
+                                               layout.lights, options_.lighting.shadows == ShadowQuality::kUltra);
+    return shaders_->LightingVariant(base, replacement, false);
+  }
+  if ((family == LightFamily::kWater || family == LightFamily::kOcean) && options_.lighting.water_on())
+    return shaders_->LightingVariant(base, {}, true);
+  return nullptr;
 }
 
 void GameRenderer::LightingDrawHook(nvrhi::ICommandList* cl, const DrawCall& call, const dev::DeviceView& d,

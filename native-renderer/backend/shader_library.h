@@ -15,6 +15,7 @@
 #pragma once
 
 #include <condition_variable>
+#include <future>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -89,6 +90,8 @@ class ShaderLibrary {
   // The lighting options' water reflections: the game's water shaders are translated with the reflection hook
   // (kkshaders/lighting.h; the pack holds them when it was built for the setting). Set before any shader is created.
   void SetWaterReflections(bool on) { water_reflections_ = on; }
+  // Live lighting variants. Returns null while a worker prepares the shader; the original stays usable.
+  std::shared_ptr<const GameShader> LightingVariant(const GameShader& base, Replacement replacement, bool water);
 
   // A shader was created: kind 0 vertex, 1 pixel.
   void OnCreated(uint32_t kind, uint32_t container, uint32_t object);
@@ -178,6 +181,12 @@ class ShaderLibrary {
   std::thread motion_thread_;
   bool motion_stop_ = false;
   MotionStats motion_stats_;
+  struct LightingEntry {
+    std::future<std::shared_ptr<GameShader>> build;
+    std::shared_ptr<GameShader> shader;
+  };
+  std::mutex lighting_mutex_;
+  std::unordered_map<uint64_t, LightingEntry> lighting_variants_;
 };
 
 }  // namespace nr

@@ -23,6 +23,7 @@
 #include "backend/ambient_occlusion.h"
 #include "backend/ao_config.h"
 #include "backend/gi_config.h"
+#include "backend/effect_settings.h"
 #include "backend/draw_state.h"
 #include "backend/guest_memory.h"
 #include "backend/host_device.h"
@@ -106,6 +107,7 @@ struct GameSettings {
   // The lighting options (docs/lighting.md): --native_shadow_quality, --native_water_reflections,
   // --native_volumetrics and their tuning. All original by default.
   LightingConfig lighting;
+  std::function<EffectSettings()> effect_settings;
 };
 
 class Backend {

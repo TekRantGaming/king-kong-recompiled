@@ -242,8 +242,7 @@ constexpr std::pair<int, const char*> kLanguages[] = {
 // renderer asks for them when it makes the device, before the launcher opens).
 // VSync: Vulkan chooses its present mode when the swapchain is created.
 constexpr const char* kRestartCvars[] = {"present_effect", "window_width", "window_height", "monitor", "gpu_plugin",
-                                         "native_upscaler", "native_backend", "native_gi", "native_shadow_quality",
-                                         "native_water_reflections", "native_volumetrics",
+                                         "native_upscaler", "native_backend",
                                          "d3d12_allow_variable_refresh_rate_and_tearing"};
 
 enum Page { kHome, kDisplay, kGraphics, kGameplay, kControls, kCheatsPage, kAudio, kSubtitles, kAchievements, kAbout, kPageCount };
@@ -1846,8 +1845,7 @@ class SettingsPages {
     static const std::set<std::string> kRestartOnly = {
         "Window mode", "Window size", "Resolution", "Refresh rate", "Monitor", "Frame rate", "VSync",
         "Upscaler", "Upscaler mode", "Render quality", "Internal resolution", "Look", "Preset", "Renderer",
-        "Graphics API", "Language", "Startup logos", "Global illumination", "Shadows",
-        "Water reflections", "Light shafts"};
+          "Graphics API", "Language", "Startup logos"};
     std::vector<Item> out;
     for (Item& it : items) {
       if (it.type != ItemType::kSection && kRestartOnly.count(it.label)) continue;
@@ -4163,6 +4161,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   std::vector<Item> AboutItems() {
     std::vector<Item> items;
     items.push_back(Section("King Kong PC port"));
+#if defined(KK_NATIVE_RENDERER)
+    items.push_back(Section("F6: graphics effects. Changes are temporary until saved."));
+#endif
     items.push_back(ActionItem("Copy diagnostics",
         "Copies version, hardware, settings, fallbacks and recent errors. Names and paths are redacted. Nothing is uploaded.",
         "Copy", [this] {

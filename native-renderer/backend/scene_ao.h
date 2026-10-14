@@ -34,6 +34,7 @@ namespace nr {
 
 class SceneAo {
  public:
+  void SetQuality(AoQuality quality) { config_.quality = quality; }
   SceneAo(nvrhi::IDevice* device, const AoConfig& config);
   ~SceneAo();
   bool Initialize();

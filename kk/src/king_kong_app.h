@@ -45,6 +45,7 @@ void InstallFpeGuard();  // fpe_guard.cpp
 }
 #include "menu_hook.h"
 #include "mouse_look.h"
+#include "debug_overlay.h"
 #include "online.h"
 #include "shader_pack.h"
 #include "launcher.h"
@@ -111,6 +112,7 @@ class KingKongApp : public rex::ReXApp {
       const rex::PathConfig& defaults, std::function<void(rex::PathConfig)> resume) override {
     user_data_root_ = defaults.user_data_root;
     config_path_ = defaults.config_path;
+    kk::SetDebugOverlayConfigPath(defaults.config_path);
     kk::InitDiagnostics();
     {
       const std::filesystem::path log = REXCVAR_GET(log_file);
@@ -298,6 +300,9 @@ class KingKongApp : public rex::ReXApp {
     // The port's pause menu (pause_menu.cpp; the launcher's Play makes it too, later calls do nothing).
     kk::CreatePauseMenu(drawer, immediate_drawer(), config_path_, user_data_root_, game_data_root());
     kk::CreateFpsOverlay(drawer);
+#if defined(KK_NATIVE_RENDERER)
+    kk::CreateDebugOverlay(drawer, window(), config_path_);
+#endif
   }
 
   // Xbox 360-style toast with a chime for the game's achievements.

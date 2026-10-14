@@ -45,6 +45,7 @@ struct AoSettings {
   int strength = 1;  // ao_strength: 1 to 3 (1 is recommended)
   int sample_quality = 2;  // native_ao_samples: 1 low, 2 medium (3x3), 3 high
   bool temporal_upscaler = false;  // the scene goes through an active temporal SDK
+  bool temporal_denoise = true;
   // tan(half the horizontal field of view); the Xenos plugin's default (it
   // takes the same value from REX_DEV_AO_PARAMS when set).
   float tan_half_fov_x = 0.684f;

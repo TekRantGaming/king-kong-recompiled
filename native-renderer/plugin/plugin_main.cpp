@@ -19,6 +19,7 @@
 #include "plugin/native_graphics_system.h"
 #include "plugin/native_prewarm.h"
 #include "plugin/native_stutter.h"
+#include "plugin/native_effect_stats.h"
 #include "plugin/upscaler_query.h"
 
 REXCVAR_DEFINE_STRING(native_backend, "auto", "Native renderer",
@@ -208,8 +209,9 @@ REXCVAR_DEFINE_STRING(native_ao_apply, "resolve", "Native renderer",
 REXCVAR_DEFINE_STRING(native_ao_quality, "auto", "Native renderer",
                       "The gtao method's resolution: full or half (of the scene target, at the render scale), "
                       "or auto (full up to a render scale of 1.5, half above)")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
+REXCVAR_DEFINE_BOOL(native_ao_temporal, true, "Native renderer", "GTAO local temporal noise smoothing (when no temporal upscaler is active)");
 REXCVAR_DEFINE_INT32(native_ao_samples, 2, "Native renderer",
                      "GTAO sample quality: 1 low (2 slices x 2 steps), 2 medium (3 x 3, the previous setting), "
                      "3 high (9 x 3). Applied live, independently of native_ao_quality's resolution");
@@ -256,11 +258,11 @@ REXCVAR_DEFINE_BOOL(native_ao_gpu_time, false, "Native renderer",
 REXCVAR_DEFINE_STRING(native_gi, "off", "Native renderer",
                       "Screen-space global illumination (one bounce of light from the surfaces on the screen, "
                       "added at the end of the opaque pass): off, low, medium or high")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 REXCVAR_DEFINE_DOUBLE(native_gi_intensity, 1.0, "Native renderer",
                       "The global illumination's bounce light times this (1: one physical bounce)")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 REXCVAR_DEFINE_STRING(native_gi_quality, "auto", "Native renderer",
                       "The global illumination's working resolution: auto (low and medium half, high full up to a "
@@ -358,17 +360,17 @@ REXCVAR_DEFINE_STRING(native_shadow_quality, "original", "Native renderer",
                       "the resolution, soft edges from a wide rotated filter) or ultra (four times the resolution, "
                       "edges that soften with the distance to what casts the shadow). native_shadow_scale, when "
                       "set, still sets the shadow maps' resolution")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 REXCVAR_DEFINE_STRING(native_water_reflections, "original", "Native renderer",
                       "Water reflections: original (the game's planar reflection and environment colour) or ssr "
                       "(screen-space reflections of the scene, the game's own where a ray finds nothing)")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 REXCVAR_DEFINE_STRING(native_volumetrics, "off", "Native renderer",
                       "Light shafts: off (the game's own), low or high (volumetric light from the sun's shadow map "
                       "added where the game has light shafts or fog)")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 REXCVAR_DEFINE_DOUBLE(native_shadow_softness, 1.0, "Native renderer",
                       "The soft shadows' filter size times this (tuning, docs/lighting.md)")
@@ -376,11 +378,11 @@ REXCVAR_DEFINE_DOUBLE(native_shadow_softness, 1.0, "Native renderer",
 
 REXCVAR_DEFINE_DOUBLE(native_ssr_strength, 1.0, "Native renderer",
                       "The water's screen-space reflections' strength times this (tuning, docs/lighting.md)")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 REXCVAR_DEFINE_DOUBLE(native_volumetric_strength, 1.0, "Native renderer",
                       "The volumetric light's strength times this (tuning, docs/lighting.md)")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 REXCVAR_DEFINE_INT32(native_lighting_census, 0, "Native renderer",
                      "Every this many frames, log the frame's draws with the lighting passes' targets, textures "
@@ -471,6 +473,13 @@ extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_prewarm_status(NrPrewarmStatus* sta
 }
 
 extern "C" REX_GPU_PLUGIN_EXPORT void nr_prewarm_stop(void) { nr::StopLauncherPrewarm(); }
+extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_effect_stats(NrEffectStats* stats) {
+#if NR_GAME_RENDERER
+  return nr::ReadEffectStats(stats) ? 1u : 0u;
+#else
+  return 0;
+#endif
+}
 
 // The launcher's upscaler menu (native_upscaler_query.h).
 extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_upscaler_query(NrUpscalerSupport* out) { return nr::UpscalerQuery(out); }

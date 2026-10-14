@@ -99,5 +99,12 @@ std::string StutterLine() {
                 static_cast<unsigned long long>(s.frames_skipped), s.worst_wait_ms);
   return text;
 }
+NrEffectStats EffectTimes() {
+  using Read = uint32_t (*)(NrEffectStats*);
+  static const auto read = reinterpret_cast<Read>(FindExport("nr_effect_stats"));
+  NrEffectStats stats = {sizeof(NrEffectStats), 0, -1, -1, -1, -1, -1};
+  if (read) read(&stats);
+  return stats;
+}
 
 }  // namespace nr::kk

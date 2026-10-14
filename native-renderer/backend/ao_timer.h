@@ -53,6 +53,7 @@ class AoGpuTimer {
   }
 
   // Once a frame (at Present): reads the finished queries; logs every 600 frames that had AO work.
+  double milliseconds() const { return frames_ ? 1000.0 * total_s_ / double(frames_) : last_ms_; }
   void FrameEnd() {
     while (!pending_.empty() && device_->pollTimerQuery(pending_.front().query)) {
       Pending p = pending_.front();
@@ -71,6 +72,7 @@ class AoGpuTimer {
     ++frame_;
     if (trace_ && frame_ % 300 == 0) std::fflush(trace_);
     if (frames_ >= 600) {
+      last_ms_ = 1000.0 * total_s_ / double(frames_);
       Logf(LogLevel::kInfo, "rexgpu-native: %s (%s): %.3f ms a frame on average over %llu frames (%llu timed passes)",
            label_, what_, 1000.0 * total_s_ / double(frames_), static_cast<unsigned long long>(frames_),
            static_cast<unsigned long long>(pieces_));
@@ -94,6 +96,7 @@ class AoGpuTimer {
   uint64_t frame_ = 0;
   uint64_t last_frame_counted_ = UINT64_MAX;
   double total_s_ = 0.0;
+  double last_ms_ = -1.0;
   uint64_t frames_ = 0, pieces_ = 0;
 };
 

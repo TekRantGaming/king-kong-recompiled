@@ -123,6 +123,8 @@ GameRenderer::GameRenderer(nvrhi::IDevice* device, const GuestMemory& memory,
 }
 
 GameRenderer::~GameRenderer() {
+  if (gi_build_.valid()) gi_build_.wait();
+  if (lighting_build_.valid()) lighting_build_.wait();
   if (frame_trace_) std::fclose(frame_trace_);
   if (!pipeline_threads_.empty()) {
     {
@@ -523,6 +525,7 @@ GameRenderer::StutterStats GameRenderer::stutter() const {
 }
 
 void GameRenderer::EndFrame() {
+  PublishEffectTimes();
   if (!frame_trace_checked_) {
     frame_trace_checked_ = true;
     if (const char* path = std::getenv("KK_DEV_DLSS_LOG"); path && *path) {
@@ -1156,6 +1159,7 @@ void GameRenderer::BuildPipelineDesc(const PipelineRecord& r, nvrhi::IShader* vs
 }
 
 void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
+  UpdateEffects();
   if (options_.debug & 512) return;  // debugging: no draws
   if (options_.debug & 8192) {       // debugging: no draws, but 10 us of the game thread's time each
     const auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(10);
@@ -1364,6 +1368,23 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     if (!pending) ++stats_.skipped_pipeline;
     if (frame_log_ && frame_log_->active()) NoteDrawNotDrawn(pending);
     return;
+  }
+
+  // Prepare the variant without waiting. Until its pipeline is ready this real draw uses
+  // its original shader and pipeline, so a live change cannot hide surfaces.
+  if (ps) {
+    if (auto variant = LiveLightingShader(*ps)) {
+      auto variant_record = record;
+      variant_record.ps_input = variant->input_hash;
+      const uint64_t variant_key = PipelineKey(variant_record);
+      nvrhi::GraphicsPipelineDesc pd;
+      nvrhi::FramebufferInfo info;
+      BuildPipelineDesc(variant_record, vs->handle, variant->handle, pd, info);
+      if (auto* prepared = GetPipeline(pd, info, variant_key, true, true)) {
+        pipeline = prepared;
+        ps = std::move(variant);
+      }
+    }
   }
 
   if (stop_at == 2) return;

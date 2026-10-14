@@ -57,6 +57,7 @@ if(NR_GAME_RENDERER)
         scene_lighting.cpp
         scene_ao.cpp
         game_gi.cpp
+        game_effects.cpp
         scene_gi.cpp
         shader_library.cpp
         pipeline_prewarm.cpp

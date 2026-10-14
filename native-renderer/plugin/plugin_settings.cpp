@@ -288,12 +288,38 @@ GameSettings ReadGameSettings(bool vulkan) {
     s.mode = std::clamp(std::atoi(rex::cvar::GetFlagByName("ao_mode").c_str()), 0, 2);
     s.strength = std::clamp(std::atoi(rex::cvar::GetFlagByName("ao_strength").c_str()), 1, 3);
     s.sample_quality = std::clamp(std::atoi(rex::cvar::GetFlagByName("native_ao_samples").c_str()), 1, 3);
+    s.temporal_denoise = rex::cvar::GetFlagByName("native_ao_temporal") != "false";
     return s;
   };
   ReadAoConfig(game.ao);
   ReadGiConfig(game.gi);
   ReadUpscaleConfig(game.upscale);
   ReadLightingConfig(game.lighting);
+  game.effect_settings = [gi = game.gi, lighting = game.lighting, quality = game.ao.quality,
+                          shadow_override = float(REXCVAR_GET(native_shadow_scale))]() mutable {
+    EffectSettings s;
+    // Runtime getters take the registry lock. Direct REXCVAR_GET string references can race
+    // a UI setter now that these flags are hot reloadable.
+    auto get = [](const char* name) { return rex::cvar::GetFlagByName(name); };
+    auto number = [&](const char* name) { return std::atof(get(name).c_str()); };
+    ParseAoQuality(get("native_ao_quality"), quality);
+    s.ao_quality = quality;
+    ParseGiLevel(get("native_gi"), gi.level);
+    gi.intensity = float(std::clamp(number("native_gi_intensity"), 0.0, 10.0));
+    ParseShadowQuality(get("native_shadow_quality"), lighting.shadows);
+    ParseWaterReflections(get("native_water_reflections"), lighting.water);
+    ParseVolumetrics(get("native_volumetrics"), lighting.volumetrics);
+    lighting.ssr_strength = float(std::clamp(number("native_ssr_strength"), 0.0, 4.0));
+    lighting.volumetric_strength = float(std::clamp(number("native_volumetric_strength"), 0.0, 10.0));
+    // Timers are always available to the beta overlay; they never wait for GPU results.
+    gi.gpu_time = lighting.gpu_time = true;
+    s.gi = gi;
+    s.lighting = lighting;
+    s.shadow_scale = shadow_override > 0 && !(lighting.shadows_on() && shadow_override == 1)
+                         ? shadow_override : ShadowScaleForQuality(lighting.shadows);
+    return s;
+  };
+  game.ao.gpu_time = true;
   return game;
 }
 
