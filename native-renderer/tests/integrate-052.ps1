@@ -49,7 +49,7 @@ if($Mode -eq 'audio') {
 }
 if($Mode -eq 'launcher') {
  $env:KK_DEV_DIAGNOSTICS='1'
- $env:KK_DEV_LAUNCHER_INPUT='pad:rb,pad:rb,pad:down,pad:a,shot:recommended,pad:rb,pad:rb,pad:rb,pad:rb,shot:audio,pad:rb,shot:subtitles,pad:rb,pad:rb,shot:about'
+ $env:KK_DEV_LAUNCHER_INPUT='pad:rb,pad:rb,pad:down,pad:down,pad:a,shot:recommended,pad:rb,pad:rb,pad:rb,pad:rb,shot:audio,pad:rb,shot:subtitles,pad:rb,pad:rb,shot:about'
 }
 if($Mode -eq 'notice') {
  New-Item -ItemType Directory -Path "$run\userdata\renderer-recovery" -Force | Out-Null
