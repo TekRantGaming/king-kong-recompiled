@@ -47,19 +47,21 @@ foreach ($budget in $Budgets) {
     $env:KK_DEV_VRAM_CONTROL=if ($control -eq 'before') {'0'} else {'1'}
     $env:KK_DEV_DT_LOG='0,240'; $env:KK_DEV_DLSS_LOG="$run\render_frames.csv"
     $env:KK_DEV_SHOTS_DIR=$run
+    $env:KK_DEV_AUTOSKIP='1'
     $args=@('--fullscreen=false','--window_width=1280','--window_height=720','--kk_fullscreen_mode=desktop',
       "--user_data_root=$run\userdata","--cache_root=$run\cache",
       "--game_data_root=$($workspace.Replace('\','/'))/kk/assets","--log_file=$run\run.log",
       '--kk_launcher=false','--gpu_plugin=native','--native_backend=vulkan',"--native_render_scale=$Scale",
       '--native_upscaler=off','--kk_frame_rate=30','--native_debug=32768','--native_stutter_stats=true',
       '--native_validation=true','--kk_check_updates=false','--kk_online_count=false','--kk_discord_status=false')
+    $args+='--log_max_file_size_mb=500'
     if ($case -eq 'tour') {
       # Two-minute slice of the existing long tour B, same menu clock and input.
       $tour=Get-Content "$PSScriptRoot\tour.json" -Raw | ConvertFrom-Json
       $env:KK_DEV_SCRIPT=($tour.runs.tourB.script.Split(',') | Where-Object { [double]($_.Split(':')[0]) -le 120 }) -join ','
       $env:KK_DEV_SHOTS_FROM='menu'; $env:KK_DEV_SHOTS='60,119'
       $env:KK_DEV_FREEZE_SKIP='10,29'
-      $args+='--kk_cheats=true','--kk_cheat_chapters=true','--kk_start=menu:0'
+      $args+='--kk_cheats=true','--kk_cheat_chapters=true','--kk_start='
       $limit=135
     } elseif ($case -match '^ch(0|8|27)$') {
       $chapter=[int]$Matches[1]
