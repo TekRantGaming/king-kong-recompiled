@@ -2,23 +2,15 @@
 // right after the game's fog pass.
 //
 // The game's fog pass adds its fog colour by a fog amount that grows with the distance (psaftereffects,
-// g_vFogParams), as if all the air in front of a surface were lit the same. Two things are added to it:
+// g_vFogParams), as if all the air in front of a surface were lit the same. The screen-space shaft pass adds to it:
 //
-//  1. Light through the shadow map (when the frame has the game's screen-space shadow): each pixel's
-//     view ray is marched through the part of it the fog covers and each step is tested against the
-//     shadow map the game's screen-space shadow uses (psshadowquad's first light, in its own view space:
-//     g_mCamToLightMatrix applied to (x d, y d, d, 1), the bias of g_vShadowParams). Air in the light
-//     scatters more towards the eye the closer the eye looks towards the sun (Henyey-Greenstein, g 0.6),
-//     so lit fog gets brighter, most of all against the sun; air in shadow loses a share of the fog's
-//     light. Lit shafts between shadowed air, in the fog's own colour.
-//  2. God rays from the bright sky (screen space): the sky and the fully fogged distance, where they are
+//  God rays from the bright sky (screen space): the sky and the fully fogged distance, where they are
 //     bright, are blurred along lines towards the centre of the bright sky (the brightness-weighted
 //     centroid, found on the GPU), so the light streams past the silhouettes in front of it (foliage,
 //     rocks, Kong) into the air. Weaker when the shadow map's sun is behind the camera.
 //
-// Both scale with the game's fog: no fog, nothing (a clear scene stays clear); denser fog, more light.
-// The colour target is copied first and written whole (light is added; a shadowed ray takes away at
-// most its share of the fog the game added, never more).
+// The rays scale with the game's fog: no fog, nothing (a clear scene stays clear); denser fog, more light.
+// The colour target is copied first and written whole. Light is only added.
 //
 //   cs_mask        the bright sky and fogged distance at a quarter of the resolution (rgb), its weight (a)
 //   cs_centroid    one group: the mask's brightness-weighted centroid into a 1x1 image
@@ -156,15 +148,15 @@ void cs_radial(uint2 id : SV_DispatchThreadID)
 {
     if (any(id >= uint2(g_Rays.xy)))
         return;
-    float4 centroid = t_centroid.Load(int3(0, 0, 0));
-    if (!(centroid.z > 1e-7))
+    float4 centreData = t_centroid.Load(int3(0, 0, 0));
+    if (!(centreData.z > 1e-7))
     {
         u_out[id] = 0.0;
         return;
     }
     float2 uv = (float2(id) + 0.5) / g_Rays.xy;
     uint samples = uint(g_Camera.w);
-    float2 stepUv = (centroid.xy - uv) / float(samples);
+    float2 stepUv = (centreData.xy - uv) / float(samples);
     float jitter = Noise(float2(id));
     float3 acc = 0.0;
     float weight = 1.0;
@@ -195,40 +187,6 @@ float4 ps_volumetric(float4 pos : SV_Position) : SV_Target0
     bool sunKnown = dot(g_Sun.xyz, g_Sun.xyz) > 0.5;
     float3 add = 0.0;
 
-    // 1. The shadow map: the share of the fogged part of the ray in the light.
-    if (g_FogNorm.z > 0.5)
-    {
-        float zStart = g_FogParams.x / max(g_FogParams.z, 1e-9);
-        float zFull = (1.0 / max(g_FogParams.y, 1e-6) + g_FogParams.x) / max(g_FogParams.z, 1e-9);
-        float zEnd = min(zSurface, zFull);
-        if (zEnd > zStart)
-        {
-            uint steps = uint(g_Shadow.y);
-            float jitter = Noise(pos.xy);
-            float lit = 0.0;
-            [loop] for (uint i = 0; i < steps; i++)
-            {
-                float z = lerp(zStart, zEnd, (float(i) + jitter) / float(steps));
-                // Back to the stored depth of that view depth, and into the light's shadow map as the game does.
-                float ds = (1.0 / z + g_FogNorm.y) / g_FogNorm.x;
-                float4 v = float4(ndc * ds, ds, 1.0);
-                float4 l = float4(dot(v, g_Light[0]), dot(v, g_Light[1]), dot(v, g_Light[2]), dot(v, g_Light[3]));
-                float invW = 1.0 / l.w;
-                float2 suv = float2(0.5 * (l.x * invW + 1.0), 1.0 - 0.5 * (l.y * invW + 1.0));
-                float zl = min(l.z * invW - g_Shadow.x, 1.0);
-                bool inside = all(suv > 0.0) && all(suv < 1.0) && l.w > 0.0;
-                float blocker = t_shadow.SampleLevel(s_point, saturate(suv), 0.0).x;
-                lit += (!inside || blocker >= zl) ? 1.0 : 0.0;
-            }
-            lit /= float(steps);
-            // Lit air scatters the sun towards the eye: a little more than the game's even fog to the
-            // side, much more against the sun (the phase function, capped); air in shadow loses a share.
-            float phase = sunKnown ? min(Phase(dot(view, g_Sun.xyz), g_Sun.w), 6.0) : 1.0;
-            float gain = 0.3 + 0.45 * max(phase - 1.0, 0.0);
-            add += g_FogColor.rgb * fog * g_Shadow.w * (lit * gain - (1.0 - lit) * g_Shadow.z);
-        }
-    }
-
     // 2. The god rays from the bright sky: more in the fogged distance, less on what is near.
     float3 rays = t_rays.SampleLevel(s_linear, uv, 0.0).rgb;
     float facing = 1.0;
@@ -236,7 +194,8 @@ float4 ps_volumetric(float4 pos : SV_Position) : SV_Target0
         facing = 0.25 + 0.75 * saturate(g_Sun.z + 0.3);  // the sun behind the camera: faint rays
     // On the sky itself only a little (the sky keeps its look; the rays are in the air before things).
     float onSky = stored >= g_FogParams.w ? 0.3 : 1.0;
-    add += rays * g_Camera.z * facing * onSky * (0.35 + 0.65 * fog);
+    add += rays * g_Camera.z * facing * onSky * fog;
 
-    return float4(max(colour.rgb + add, 0.0), colour.a);
+    // Use remaining headroom to retain bright detail; this pass never subtracts light.
+    return float4(colour.rgb + max(add, 0.0) * saturate(1.0 - colour.rgb), colour.a);
 }

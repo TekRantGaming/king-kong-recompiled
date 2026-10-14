@@ -357,7 +357,7 @@ bool SceneLighting::Volumetric(nvrhi::ICommandList* cl, const VolumetricInput& i
   k.camera[1] = in.py > 0.0f ? in.py : 1.0f;
   // The god rays scale with the fog: the game's fog amount 30 units away (denser fog, more light).
   const float fog30 = std::clamp(std::clamp(30.0f * fog.params[3] - fog.params[0], 0.0f, 1.0f) * fog.params[2], 0.0f, 1.0f);
-  k.camera[2] = strength * kGodRayExposure * std::min(1.0f, 0.25f + 1.25f * fog30);
+  k.camera[2] = strength * kGodRayExposure * fog30;
   k.camera[3] = high ? 64.0f : 32.0f;
   k.rays[0] = float(qw);
   k.rays[1] = float(qh);
@@ -496,7 +496,7 @@ void SceneLighting::OnDraw(nvrhi::ICommandList* cl, const Draw& d) {
   // Only when the frame before drew a water shader with the reflection hook: the game's water masks
   // (pswater's mask shader, psocean's depth-only pass) come first and write the water's depth, so the
   // scene is taken before them, and frames with masks only (Ann, The Cave) do not pay for it.
-  const bool hooked = kkshaders::waterReflectionHookFor(d.state.ps_hash).fetchMask != 0;
+  const bool hooked = kkshaders::waterReflectionHookFor(d.state.ps_hash).enabled();
   if (hooked) hooked_water_frame_ = frame_;
   if (water && config_.water_on() && !ssr_tried_ && hooked_water_frame_ + 1 >= frame_) {
     ssr_tried_ = true;
@@ -682,8 +682,7 @@ nvrhi::IGraphicsPipeline* SceneLighting::VolumetricPipeline(const nvrhi::Framebu
     pd.renderState.depthStencilState.depthTestEnable = false;
     pd.renderState.depthStencilState.depthWriteEnable = false;
     pd.renderState.rasterState.cullMode = nvrhi::RasterCullMode::None;
-    // The composite writes the colour whole from its copy (light added, a shadowed ray's share taken
-    // away); the alpha is the game's.
+    // Add shaft light to the scene copy; preserve the game's alpha.
     pd.renderState.blendState.targets[0].colorWriteMask =
         nvrhi::ColorMask::Red | nvrhi::ColorMask::Green | nvrhi::ColorMask::Blue;
     pipeline = device_->createGraphicsPipeline(pd, info);
