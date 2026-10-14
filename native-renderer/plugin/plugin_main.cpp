@@ -95,6 +95,11 @@ REXCVAR_DEFINE_STRING(native_pipeline_cache_dir, "", "Native renderer",
                       "<cache root>/native-pipelines")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_STRING(native_failed_backends, "", "Native renderer",
+                      "Set by the game's startup recovery: the graphics APIs (vulkan, d3d12, comma separated) that "
+                      "failed to start on this PC. Setup does not prepare shaders or pipelines for them")
+    .debug_only();
+
 REXCVAR_DEFINE_BOOL(native_vk_pipeline_cache, true, "Native renderer",
                     "Vulkan: keep the driver's compiled pipelines (a VkPipelineCache) in a file under the cache "
                     "root (<cache root>/native-pipelines/<title>.vkcache, or native_pipeline_cache_dir) and load it "
@@ -452,6 +457,10 @@ extern "C" REX_GPU_PLUGIN_EXPORT rex::system::IGraphicsSystem* rex_gpu_create(
 
 extern "C" REX_GPU_PLUGIN_EXPORT void nr_set_startup_failure_handler(nr::StartupFailureHandler handler) {
   nr::startup_failure_handler.store(handler, std::memory_order_release);
+}
+
+extern "C" REX_GPU_PLUGIN_EXPORT void nr_set_startup_presented_handler(nr::StartupPresentedHandler handler) {
+  nr::startup_presented_handler.store(handler, std::memory_order_release);
 }
 
 extern "C" REX_GPU_PLUGIN_EXPORT const NrApi* nr_get_api(void) {

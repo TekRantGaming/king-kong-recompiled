@@ -16,6 +16,16 @@
 #include <rex/cvar.h>
 #include <rex/logging.h>
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 REX_EXTERN(__imp__sub_82413298);
 #if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_82413190);
@@ -74,6 +84,26 @@ ProfileOptions Decode(const uint8_t* bytes, const uint32_t* fields, bool percent
   return out;
 }
 
+// Keeps the newest kBackupsPerSlot backups of a slot; older ones are removed.
+constexpr size_t kBackupsPerSlot = 3;
+void PruneBackups(const std::filesystem::path& backup_dir, int slot) {
+  const std::string prefix = "slot" + std::to_string(slot + 1) + "-";
+  std::vector<std::pair<std::filesystem::file_time_type, std::filesystem::path>> backups;
+  std::error_code ec;
+  for (std::filesystem::directory_iterator it(backup_dir, ec), end; !ec && it != end; it.increment(ec)) {
+    const auto name = it->path().filename().string();
+    if (!name.starts_with(prefix) || it->path().extension() != ".dat") continue;
+    std::error_code time_ec;
+    backups.emplace_back(std::filesystem::last_write_time(it->path(), time_ec), it->path());
+  }
+  if (backups.size() <= kBackupsPerSlot) return;
+  std::sort(backups.begin(), backups.end());
+  for (size_t i = 0; i + kBackupsPerSlot < backups.size(); ++i) {
+    std::error_code remove_ec;
+    std::filesystem::remove(backups[i].second, remove_ec);
+  }
+}
+
 // Keep the original file as a backup and replace only after the entire new file is
 // written. No header, progress, timestamp or unrelated option bytes are changed.
 bool WriteOptions(const std::filesystem::path& root, int slot, const std::array<float, 5>& values,
@@ -103,16 +133,29 @@ bool WriteOptions(const std::filesystem::path& root, int slot, const std::array<
     out.flush();
     if (!out) return false;
   }
-  if (ReadSave(pending) != bytes) return false;
-  std::filesystem::rename(path, backup, ec);
-  if (ec) return false;
-  std::filesystem::rename(pending, path, ec);
-  if (ec) {
-    std::error_code rollback;
-    std::filesystem::rename(backup, path, rollback);
-    REXLOG_ERROR("KK audio: replacing the profile failed: {}; rollback {}", ec.message(), rollback.message());
+  auto discard_pending = [&pending] {
+    std::error_code ignored;
+    std::filesystem::remove(pending, ignored);
+  };
+  if (ReadSave(pending) != bytes) { discard_pending(); return false; }
+  // The save stays in place throughout: copy it to the backup, then replace it in one step.
+  std::filesystem::copy_file(path, backup, std::filesystem::copy_options::overwrite_existing, ec);
+  if (ec) { discard_pending(); return false; }
+#if defined(_WIN32)
+  if (!MoveFileExW(pending.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    REXLOG_ERROR("KK audio: replacing the profile failed (error {}); the save is unchanged", GetLastError());
+    discard_pending();
     return false;
   }
+#else
+  std::filesystem::rename(pending, path, ec);  // atomic replacement on POSIX
+  if (ec) {
+    REXLOG_ERROR("KK audio: replacing the profile failed: {}; the save is unchanged", ec.message());
+    discard_pending();
+    return false;
+  }
+#endif
+  PruneBackups(backup_dir, slot);
   return true;
 }
 

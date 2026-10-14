@@ -123,6 +123,7 @@ class NativeGraphicsSystem final : public rex::system::IGraphicsSystem {
   std::atomic<uint32_t> counter_{0};
   std::unique_ptr<std::array<uint32_t, kRegisterCount>> registers_;
   std::atomic_flag gpu_loss_reported_ = ATOMIC_FLAG_INIT;
+  bool startup_presented_ = false;  // OnSwap reported the first shown game frame
 
   static NativeGraphicsSystem* instance_;
 };

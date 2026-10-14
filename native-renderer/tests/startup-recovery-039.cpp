@@ -41,6 +41,15 @@ int main(int argc, char** argv) {
           "chapter or clean close clears marker");
     Check(remembered.Advance("failed initialisation"), "known init failure advances immediately");
     Check(remembered.selected == (preferred == "vulkan" ? "d3d12" : "vulkan"), "symmetric init chain");
+    Check(!remembered.notice_shown, "new fallback needs a notice");
+    remembered.notice_shown = true;
+    Check(remembered.Save(), "notice shown saved");
+    RecoveryState noticed(dir);
+    Check(noticed.Load() && noticed.notice_shown && !noticed.reason.empty(), "notice shown once survives");
+    Check(noticed.Clear() && noticed.reason.empty() && !noticed.retry_requested && !noticed.notice_shown,
+          "manual choice clears fallback");
+    RecoveryState cleared(dir);
+    Check(!cleared.Load(), "manual choice removes the state file");
     std::string save;
     { std::ifstream in(dir / "saves" / "sentinel"); std::getline(in, save); }
     Check(save == "save must survive", "save unchanged");

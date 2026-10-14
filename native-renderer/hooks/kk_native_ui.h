@@ -7,6 +7,8 @@
 
 namespace nr::kk {
 void SetStartupFailureHandler(int (*handler)(const char*));
+// Called once, when the game's first frame has been shown.
+void SetStartupPresentedHandler(void (*handler)());
 }
 
 #include <filesystem>

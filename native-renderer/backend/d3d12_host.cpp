@@ -5,6 +5,7 @@
 #include <chrono>
 #include <mutex>
 #include <utility>
+#include <vector>
 
 #include <d3d12sdklayers.h>
 #include <nvrhi/d3d12.h>
@@ -31,6 +32,7 @@ class D3D12Host final : public HostDevice {
   explicit D3D12Host(rex::ui::d3d12::D3D12Provider& provider) : provider_(provider) {}
 
   ~D3D12Host() override {
+    if (frame_fence_) frame_fence_->Release();
     if (debug_queue_) {
       debug_queue_->UnregisterMessageCallback(debug_cookie_);
       debug_queue_->Release();
@@ -83,6 +85,11 @@ class D3D12Host final : public HostDevice {
     if (REXCVAR_GET(native_validation)) {
       device_ = nvrhi::validation::createValidationLayer(device_);
     }
+    // Our own fence for WaitFrame, so the wait does not need NVRHI (and execute_mutex_).
+    if (FAILED(provider_.GetDevice()->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&frame_fence_)))) {
+      frame_fence_ = nullptr;
+      REXGPU_WARN("rexgpu-native: unable to create the frame fence; frame waits hold the submit lock");
+    }
     return true;
   }
 
@@ -93,8 +100,23 @@ class D3D12Host final : public HostDevice {
     ExecuteFrameCommandList(command_list, nullptr);
   }
   void WaitFrame(nvrhi::IEventQuery* completion) override {
-    std::lock_guard lock(execute_mutex_);
-    device_->waitEventQuery(completion);
+    if (!frame_fence_) {
+      std::lock_guard lock(execute_mutex_);
+      device_->waitEventQuery(completion);
+      return;
+    }
+    // Only the lookup holds execute_mutex_. The wait itself is on our private fence, so the
+    // submission thread can keep feeding the GPU while the renderer waits for an older frame.
+    uint64_t value = 0;
+    {
+      std::lock_guard lock(execute_mutex_);
+      for (const auto& entry : frame_values_) {
+        if (entry.first == completion) value = entry.second;
+      }
+    }
+    if (value == 0 || frame_fence_->GetCompletedValue() >= value) return;
+    // A null event blocks this thread until the fence reaches the value.
+    frame_fence_->SetEventOnCompletion(value, nullptr);
   }
   void ExecuteFrameCommandList(nvrhi::ICommandList* command_list, nvrhi::IEventQuery* completion) override {
     // ID3D12CommandQueue is thread safe, NVRHI's queue is not: executeCommandList records the list as in
@@ -110,6 +132,10 @@ class D3D12Host final : public HostDevice {
     if (completion) {
       device_->resetEventQuery(completion);
       device_->setEventQuery(completion, nvrhi::CommandQueue::Graphics);
+      if (frame_fence_ && SUCCEEDED(provider_.GetDirectQueue()->Signal(frame_fence_, frame_fence_value_ + 1))) {
+        ++frame_fence_value_;
+        RecordFrameValue(completion, frame_fence_value_);
+      }
     }
     const auto t2 = clock::now();
     device_->runGarbageCollection();
@@ -160,6 +186,19 @@ class D3D12Host final : public HostDevice {
   }
 
  private:
+  // Caller holds execute_mutex_. The renderer reuses a handful of completion queries.
+  void RecordFrameValue(nvrhi::IEventQuery* completion, uint64_t value) {
+    for (auto& entry : frame_values_) {
+      if (entry.first == completion) {
+        entry.second = value;
+        return;
+      }
+    }
+    // Queries recreated with the renderer leave old entries behind; keep the list short.
+    if (frame_values_.size() >= 16) frame_values_.erase(frame_values_.begin());
+    frame_values_.emplace_back(completion, value);
+  }
+
   static void CALLBACK DebugMessage(D3D12_MESSAGE_CATEGORY, D3D12_MESSAGE_SEVERITY severity,
                                    D3D12_MESSAGE_ID id, LPCSTR description, void*) {
     if (severity <= D3D12_MESSAGE_SEVERITY_ERROR)
@@ -222,6 +261,9 @@ class D3D12Host final : public HostDevice {
   ID3D12InfoQueue1* debug_queue_ = nullptr;
   DWORD debug_cookie_ = 0;
   nvrhi::DeviceHandle device_;
+  ID3D12Fence* frame_fence_ = nullptr;
+  uint64_t frame_fence_value_ = 0;
+  std::vector<std::pair<nvrhi::IEventQuery*, uint64_t>> frame_values_;
   std::array<Wrapped, 4> wrapped_;
   size_t next_slot_ = 0;
 };

@@ -63,6 +63,11 @@ void SetStartupFailureHandler(int (*handler)(const char*)) {
   if (auto set = reinterpret_cast<Set>(FindExport("nr_set_startup_failure_handler"))) set(handler);
 }
 
+void SetStartupPresentedHandler(void (*handler)()) {
+  using Set = void (*)(void (*)());
+  if (auto set = reinterpret_cast<Set>(FindExport("nr_set_startup_presented_handler"))) set(handler);
+}
+
 void StopLauncherPrewarm() {
   using Stop = void (*)();
   if (auto stop = reinterpret_cast<Stop>(FindExport("nr_prewarm_stop"))) stop();

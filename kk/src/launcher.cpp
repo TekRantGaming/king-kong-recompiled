@@ -445,6 +445,7 @@ void SetOriginalLook(bool on) {
 bool UsingNativeRenderer() { return Get("gpu_plugin") == "native"; }
 
 void SetRenderer(bool native) {
+  startup::ManualChoice();  // the player's choice wins over a startup fallback
   Set("kk_renderer", native ? "native" : "classic");
   if (const auto* flag = FindFlag("gpu_plugin"); flag && flag->source != rex::cvar::Source::kDefault &&
                                                  flag->source != rex::cvar::Source::kCommandLine &&
@@ -725,24 +726,74 @@ class SettingsPages {
     return it;
   }
 
+  // The saves and the shown slot's options are read at most twice a second (the pages are built every
+  // frame), and again at once after a write or a slot change.
+  static constexpr double kProfileReadInterval = 0.5;
+  // A change is written once the value has settled (a slider is dragged through many steps).
+  static constexpr double kProfileWriteDelay = 0.4;
+
+  const std::vector<play::SaveSlot>& ProfileSaves() {
+    const double now = ImGui::GetTime();
+    if (profile_saves_at_ < 0 || now - profile_saves_at_ >= kProfileReadInterval) {
+      profile_saves_ = play::ListSaves(profile_user_dir_);
+      profile_saves_at_ = now;
+    }
+    return profile_saves_;
+  }
+
   int ProfileSlot() {
     if (in_game_) return -1;
-    const auto saves = play::ListSaves(profile_user_dir_);
-    if (profile_slot_ < 0 || !saves[size_t(profile_slot_)].exists)
+    const auto& saves = ProfileSaves();
+    if (profile_slot_ < 0 || size_t(profile_slot_) >= saves.size() || !saves[size_t(profile_slot_)].exists)
       profile_slot_ = play::MostRecentSave(saves);
     return profile_slot_;
+  }
+
+  // The slot's options as shown: the cached read with the changes still waiting to be written on top.
+  play::ProfileOptions ShownProfileOptions(int slot) {
+    const double now = ImGui::GetTime();
+    if (profile_read_slot_ != slot || profile_read_at_ < 0 || now - profile_read_at_ >= kProfileReadInterval) {
+      profile_read_ = play::ReadProfileOptions(profile_user_dir_, slot);
+      profile_read_slot_ = slot;
+      profile_read_at_ = now;
+    }
+    play::ProfileOptions shown = profile_read_;
+    if (shown.available && profile_pending_slot_ == slot) {
+      float* volumes[] = {&shown.master, &shown.voices, &shown.music, &shown.effects};
+      for (int i = 0; i < 4; ++i)
+        if (profile_dirty_[size_t(i)]) *volumes[i] = profile_values_[size_t(i)];
+      if (profile_dirty_[4]) shown.subtitles = profile_values_[4] != 0;
+    }
+    return shown;
   }
 
   void ChangeProfileOption(play::ProfileOption option, float value) {
     const int slot = ProfileSlot();
     if (!in_game_ && slot < 0) return;
-    if (!play::SetProfileOption(profile_user_dir_, slot, option, value))
-      Status("The setting could not be saved. Your save was left unchanged.");
+    if (profile_pending_slot_ != slot) FlushProfileOptions();
+    profile_pending_slot_ = slot;
+    profile_values_[size_t(option)] = value;
+    profile_dirty_[size_t(option)] = true;
+    profile_changed_at_ = ImGui::GetTime();
+  }
+
+  // Writes the waiting changes: `now` when leaving, otherwise once they have settled.
+  void FlushProfileOptions(bool now = true) {
+    if (std::none_of(profile_dirty_.begin(), profile_dirty_.end(), [](bool b) { return b; })) return;
+    if (!now && ImGui::GetTime() - profile_changed_at_ < kProfileWriteDelay) return;
+    bool ok = true;
+    for (size_t i = 0; i < profile_dirty_.size(); ++i) {
+      if (!profile_dirty_[i]) continue;
+      ok &= play::SetProfileOption(profile_user_dir_, profile_pending_slot_, play::ProfileOption(i), profile_values_[i]);
+      profile_dirty_[i] = false;
+    }
+    profile_read_at_ = profile_saves_at_ = -1;  // read again
+    if (!ok) Status("The setting could not be saved. Your save was left unchanged.");
   }
 
   void ResetProfilePage(bool subtitles) {
     if (subtitles) {
-      const auto profile = play::ReadProfileOptions(profile_user_dir_, ProfileSlot());
+      const auto profile = ShownProfileOptions(ProfileSlot());
       ChangeProfileOption(play::ProfileOption::kSubtitles, float(profile.subtitle_default));
     }
     else
@@ -752,8 +803,8 @@ class SettingsPages {
   std::vector<Item> ProfileItems(bool subtitles) {
     std::vector<Item> items;
     const int slot = ProfileSlot();
-    const auto profile = (!in_game_ && slot < 0) ? play::ProfileOptions{} :
-                         play::ReadProfileOptions(profile_user_dir_, slot);
+    FlushProfileOptions(false);
+    const auto profile = (!in_game_ && slot < 0) ? play::ProfileOptions{} : ShownProfileOptions(slot);
     if (!profile.error.empty()) Status(profile.error);
     if (!in_game_) {
       Item save;
@@ -761,7 +812,7 @@ class SettingsPages {
       save.label = "Save";
       save.description = "These settings belong to this game save. Each save keeps its own audio and subtitles.";
       std::vector<int> slots;
-      for (const auto& s : play::ListSaves(profile_user_dir_)) {
+      for (const auto& s : ProfileSaves()) {
         if (!s.exists) continue;
         if (s.index == slot) save.index = int(slots.size());
         slots.push_back(s.index);
@@ -769,7 +820,10 @@ class SettingsPages {
       }
       save.disabled = slots.empty();
       save.disabled_note = "Start a game to create a save, then change its settings here or in the pause menu.";
-      save.on_choice = [this, slots](int i) { profile_slot_ = slots[size_t(i)]; };
+      save.on_choice = [this, slots](int i) {
+        FlushProfileOptions();
+        profile_slot_ = slots[size_t(i)];
+      };
       items.push_back(std::move(save));
     }
     items.push_back(Section(subtitles ? "Subtitles" : "Game audio"));
@@ -1345,7 +1399,8 @@ class SettingsPages {
       it.label = "Recommended";
       it.description = "Detect your hardware and recommend render resolution, upscaling and ambient occlusion. "
                        "Settings you changed are kept. The frame-rate cap, graphics API and lighting effects are kept.";
-      it.value_text = Get("kk_hardware_tier");
+      const std::string tier = Get("kk_hardware_tier");
+      it.value_text = tier == "low" ? "Low" : tier == "mid" ? "Medium" : tier == "high" ? "High" : tier;
       it.on_activate = [this] {
         const auto output = cb_.output_size ? cb_.output_size() : PrimaryScreenSize();
         ApplyHardwareRecommendation(true, output.first, output.second);
@@ -1475,10 +1530,12 @@ class SettingsPages {
         api.value_text = backend;
         api.default_text = "Auto";
         api.on_choice = [](int i) {
+          startup::ManualChoice();  // the player's choice wins over a startup fallback
           Set("native_backend", i == 0 ? "auto" : i == 1 ? "vulkan" : "d3d12");
           ApplyUpscalerDefaults();
         };
         api.on_default = [] {
+          startup::ManualChoice();
           Reset("native_backend");
           ApplyUpscalerDefaults();
         };
@@ -1877,6 +1934,16 @@ class SettingsPages {
   const bool in_game_;  // drawn by the pause menu
   std::filesystem::path profile_user_dir_;
   int profile_slot_ = -1;
+  std::vector<play::SaveSlot> profile_saves_;
+  double profile_saves_at_ = -1;
+  play::ProfileOptions profile_read_;
+  int profile_read_slot_ = -2;
+  double profile_read_at_ = -1;
+  // Changes waiting to be written (FlushProfileOptions).
+  int profile_pending_slot_ = -2;
+  std::array<float, 5> profile_values_{};
+  std::array<bool, 5> profile_dirty_{};
+  double profile_changed_at_ = 0;
 };
 
 class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
@@ -1961,6 +2028,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   }
 
   ~Launcher() override {
+    FlushProfileOptions();
     ui::SetSoundHandler(nullptr);
     if (install_thread_.joinable()) {
       progress_.cancel = true;
@@ -2042,9 +2110,19 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     DevInput();
 #endif
     Tick();
-    const std::string recovery = startup::Message();
-    if (!recovery_shown_ && !recovery.empty() && !modal_.open) {
+    // A fallback the player has not been told about: shown once, then the launcher no longer opens for it.
+    if (!recovery_shown_ && !modal_.open && startup::NeedsNotice()) {
       recovery_shown_ = true;
+      std::string failed, selected;
+      startup::NoticeApis(failed, selected);
+      const std::string recovery =
+          (selected == "Classic"
+               ? F("{0} did not start correctly on this PC, so the game now uses the Classic renderer. You can "
+                   "keep it or try {0} again.", {failed})
+               : F("{0} did not start correctly on this PC, so the game now uses {1}. You can keep it or try {0} "
+                   "again.", {failed, selected})) +
+          "\n\n" + F("Details: {0}", {startup::Message()});
+      startup::NoticeShown();
       OpenModal("Renderer startup recovery", recovery,
                 {"Continue with safe renderer", "Try native again"}, 0, [this](int i) {
                   if (i == 1 && startup::TryNativeAgain()) ++g_changes;
@@ -4378,6 +4456,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       ResetProfilePage(page == kSubtitles);
       return;
     }
+    if (page == kGraphics) startup::ManualChoice();  // resets the renderer and API by hand
     const auto names = PageSettings(page);
     auto on_page = [&](const rex::cvar::FlagEntry& e) {
       for (const auto& n : names) {
@@ -4399,6 +4478,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   }
 
   void ResetAllSettings() {
+    startup::ManualChoice();
     for (auto& e : rex::cvar::GetRegistry()) {
       if (e.type == rex::cvar::FlagType::Command) continue;
       if (e.source == rex::cvar::Source::kCommandLine || e.source == rex::cvar::Source::kEnvironment) continue;
@@ -4889,6 +4969,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         continue;
       needs_restart = true;
     }
+    FlushProfileOptions();
     auto action = needs_restart ? cb_.restart_and_play : cb_.play;
     // The pause menu for the game about to start (the app makes it too when the launcher is skipped).
     if (!needs_restart) CreatePauseMenu(imgui_drawer(), immediate_, paths_.config_path, paths_.user_dir, paths_.game_dir);
@@ -4908,6 +4989,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // themselves, and saving settings a moment after they change.
   void Tick() {
     const double now = ImGui::GetTime();
+    FlushProfileOptions(false);
     FinishInstallIfDone();
     FinishArtIfDone();
     RefreshPack();
@@ -5254,7 +5336,10 @@ class InGameSettingsImpl final : public InGameSettings, private SettingsPages {
     glyphs_.AddSet("xbox360", art::LauncherArtDir(user_dir) / "glyphs" / "xbox360");
     seen_changes_ = saved_changes_ = g_changes;
   }
-  ~InGameSettingsImpl() override { SaveNow(); }
+  ~InGameSettingsImpl() override {
+    FlushProfileOptions();
+    SaveNow();
+  }
 
   std::vector<Item> Items(Page page) override {
     std::vector<Item> items;
@@ -5278,6 +5363,7 @@ class InGameSettingsImpl final : public InGameSettings, private SettingsPages {
   void LeaveSubPage() override { sub_ = kNoSubPage; }
   void Tick() override {
     CaptureKey();
+    FlushProfileOptions(false);
     const double now = ImGui::GetTime();
     if (g_changes != seen_changes_) {
       seen_changes_ = g_changes;

@@ -3,7 +3,10 @@
 #include "launcher.h"
 #include <cstdlib>
 #include <memory>
+#include <chrono>
 #include <mutex>
+#include <string_view>
+#include <thread>
 #include <rex/cvar.h>
 #include <rex/logging.h>
 #if defined(KK_NATIVE_RENDERER)
@@ -37,8 +40,20 @@ namespace kk::startup {
 namespace {
 std::mutex mutex;
 std::unique_ptr<RecoveryState> state;
+// Armed: this process runs the game and has not shown its first frame yet. A failure, a device loss
+// or a crash (the marker) then switches the API.
 bool armed = false;
+// The launcher's process before the game: only a renderer that cannot start at all switches the API
+// (the launcher could not open otherwise). A device loss or crash there never does.
+bool init_only = false;
+unsigned arm_generation = 0;
+// Startup ends at the first shown game frame, or after this long when no frame came.
+constexpr unsigned kArmSeconds = 120;
 constexpr unsigned kRetryExit = 0x4B4B0039;
+// The player's own settings before Apply replaced them with the fallback's, put back when the player
+// then chooses a renderer or API by hand.
+bool overridden = false;
+std::string original_renderer, original_plugin, original_backend;
 
 void Signal(char value) {
 #if defined(_WIN32)
@@ -50,24 +65,61 @@ void Signal(char value) {
 #endif
 }
 
+bool IsDeviceLoss(const char* why) { return why && std::string_view(why).find("lost") != std::string_view::npos; }
+
 int Failure(const char* why) {
   std::lock_guard lock(mutex);
-  if (!armed || !state) return 0;  // Device loss after gameplay retains the existing fatal path.
+  // Device loss after startup, or in the launcher, retains the existing fatal path.
+  if (!state || !(armed || (init_only && !IsDeviceLoss(why)))) return 0;
   if (!state->Advance(why)) {
     REXLOG_ERROR("KK recovery: could not persist startup fallback");
     return 0;
   }
   armed = false;
+  init_only = false;
   REXLOG_ERROR("KK recovery: {}", state->reason);
   Signal('F');
   // A fresh process is essential after a failed or lost device. The monitor waits for this one to exit.
   std::_Exit(kRetryExit);
 }
+// Mutex held. Tells the native renderer which APIs failed here, so its setup does not prepare them
+// (--native_failed_backends; nothing happens without the plugin).
+void PublishFailed() {
+  std::string failed;
+  if (state && !state->reason.empty() && state->selected != state->preferred) {
+    failed = state->preferred;
+    if (state->selected == "classic") failed = "vulkan,d3d12";
+  }
+  rex::cvar::SetFlagByName("native_failed_backends", failed);
+}
 void Apply() {
   if (!state || (state->reason.empty() && !state->retry_requested)) return;
+  if (!overridden) {
+    overridden = true;
+    original_renderer = rex::cvar::GetFlagByName("kk_renderer");
+    original_plugin = rex::cvar::GetFlagByName("gpu_plugin");
+    original_backend = rex::cvar::GetFlagByName("native_backend");
+  }
   rex::cvar::SetFlagByName("kk_renderer", state->selected == "classic" ? "classic" : "native");
   rex::cvar::SetFlagByName("gpu_plugin", state->selected == "classic" ? "xenos" : "native");
   if (RecoveryState::Native(state->selected)) rex::cvar::SetFlagByName("native_backend", state->selected);
+}
+// Mutex held. Startup is over: the marker goes and a fallback that reached the game is kept.
+void Disarm(const char* why) {
+  if (!armed || !state) return;
+  if (!state->Marker()) { REXLOG_ERROR("KK recovery: could not clear startup marker"); return; }
+  if (state->selected == state->preferred) state->reason.clear();
+  state->retry_requested = false;
+  state->crashes = 0;
+  state->Save();
+  armed = false;
+  ++arm_generation;
+  Signal('G');
+  REXLOG_INFO("KK recovery: startup finished ({}), startup marker cleared", why);
+}
+void FirstFramePresented() {
+  std::lock_guard lock(mutex);
+  Disarm("first game frame shown");
 }
 }  // namespace
 
@@ -148,8 +200,10 @@ void Configure(const std::filesystem::path& root) {
   state = std::make_unique<RecoveryState>(root);
   if (state->Load()) state->RecoverCrash();
   Apply();
+  PublishFailed();
 #if defined(KK_NATIVE_RENDERER)
   nr::kk::SetStartupFailureHandler(Failure);
+  nr::kk::SetStartupPresentedHandler(FirstFramePresented);
 #endif
 }
 
@@ -160,10 +214,17 @@ std::string ApplyChoice(const std::string& plugin) {
       ? (state->selected == "classic" ? "xenos" : "native") : plugin;
 }
 
-void Begin(const std::string& plugin) {
+void Begin(const std::string& plugin, bool game) {
   {
     std::lock_guard lock(mutex);
-    if (!state || plugin != "native") return;
+    if (!state || plugin != "native" || armed) return;
+    if (!game) {
+      // The launcher shows first: nothing is written and a crash is not counted.
+      init_only = true;
+      REXLOG_INFO("KK recovery: launcher process, only a renderer that cannot start switches the API");
+      return;
+    }
+    init_only = false;
     const std::string wanted = rex::cvar::GetFlagByName("native_backend");
     const std::string api = wanted == "d3d12" ? "d3d12" : "vulkan";
     if (state->reason.empty()) { state->preferred = api; state->selected = api; }
@@ -172,10 +233,17 @@ void Begin(const std::string& plugin) {
       return;
     }
     armed = true;
+    const unsigned generation = ++arm_generation;
     Signal('B');
     REXLOG_INFO("KK recovery: startup armed for {}", api);
     std::ofstream journal(state->directory / "attempts.log", std::ios::app);
     journal << api << " crashes=" << state->crashes << " reason=" << state->reason << '\n';
+    // Startup also ends after a time limit, in case no frame is reported.
+    std::thread([generation] {
+      std::this_thread::sleep_for(std::chrono::seconds(kArmSeconds));
+      std::lock_guard lock(mutex);
+      if (generation == arm_generation) Disarm("time limit reached");
+    }).detach();
   }
 #if defined(KK_DEV_TOOLS)
   const auto mode = REXCVAR_GET(kk_dev_startup_failure);
@@ -188,39 +256,54 @@ void Begin(const std::string& plugin) {
 #endif
 }
 
-void ChapterReached() {
-  std::lock_guard lock(mutex);
-  if (!armed || !state) return;
-  if (!state->Marker()) { REXLOG_ERROR("KK recovery: could not clear chapter marker"); return; }
-  if (state->selected == state->preferred) state->reason.clear();
-  state->retry_requested = false;
-  state->crashes = 0;
-  state->Save();
-  armed = false;
-  Signal('G');
-  REXLOG_INFO("KK recovery: chapter reached, startup marker cleared");
-}
-
 void CleanExit() {
   std::lock_guard lock(mutex);
   if (armed && state) { state->Marker(); state->crashes = 0; state->Save(); }
   armed = false;
+  init_only = false;
+  ++arm_generation;
   Signal('C');
 }
 std::string Message() { std::lock_guard lock(mutex); return state ? state->reason : ""; }
+void NoticeApis(std::string& failed, std::string& selected) {
+  std::lock_guard lock(mutex);
+  failed = state ? RecoveryState::Name(state->preferred) : "";
+  selected = state ? RecoveryState::Name(state->selected) : "";
+}
 bool NeedsNotice() {
 #if defined(KK_DEV_TOOLS)
   if (REXCVAR_GET(kk_dev_startup_skip_notice)) return false;
 #endif
   std::lock_guard lock(mutex);
-  return state && !state->reason.empty() && state->selected != state->preferred;
+  return state && !state->reason.empty() && state->selected != state->preferred && !state->notice_shown;
+}
+void NoticeShown() {
+  std::lock_guard lock(mutex);
+  if (!state || state->notice_shown) return;
+  state->notice_shown = true;
+  state->Save();
 }
 bool TryNativeAgain() {
   std::lock_guard lock(mutex);
   if (!state || !state->Retry()) return false;
+  PublishFailed();
   rex::cvar::SetFlagByName("kk_renderer", "native");
   rex::cvar::SetFlagByName("gpu_plugin", "native");
   rex::cvar::SetFlagByName("native_backend", state->preferred);
   return true;
+}
+void ManualChoice() {
+  std::lock_guard lock(mutex);
+  if (!state || (state->reason.empty() && !state->retry_requested && !overridden)) return;
+  // The player's own values come back first; the choice being made is set after this.
+  if (overridden) {
+    rex::cvar::SetFlagByName("kk_renderer", original_renderer);
+    rex::cvar::SetFlagByName("gpu_plugin", original_plugin);
+    rex::cvar::SetFlagByName("native_backend", original_backend);
+    overridden = false;
+  }
+  if (!state->Clear()) REXLOG_ERROR("KK recovery: could not clear the startup fallback");
+  PublishFailed();
+  REXLOG_INFO("KK recovery: renderer chosen by hand, startup fallback cleared");
 }
 }  // namespace kk::startup

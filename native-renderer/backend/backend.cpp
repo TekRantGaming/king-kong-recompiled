@@ -809,6 +809,7 @@ void Backend::PresentNow(rex::ui::Presenter* presenter, uint32_t frontbuffer_wid
           host_->ExecuteCommandList(cl);
           return ok;
         });
+    presented_game_frames_.fetch_add(1, std::memory_order_relaxed);
     return;
   }
   if (submitter_) submitter_->Flush();
@@ -831,6 +832,7 @@ void Backend::PresentNow(rex::ui::Presenter* presenter, uint32_t frontbuffer_wid
         host_->ExecuteCommandList(cl);
         return ok;
       });
+  if (game_frame) presented_game_frames_.fetch_add(1, std::memory_order_relaxed);
 }
 
 }  // namespace nr
