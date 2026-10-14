@@ -9,14 +9,14 @@
 namespace nr {
 
 // --native_shadow_quality: original (the game's 832x832 shadow maps, one hard comparison per pixel),
-// high (shadow maps at twice the resolution, a wide rotated PCF kernel), ultra (four times the
+// high (shadow maps at twice the resolution, a wide rotated PCF kernel), ultra (the same
 // resolution, PCSS: the penumbra widens with the distance to the blocker).
 enum class ShadowQuality : uint8_t { kOriginal, kHigh, kUltra };
 // --native_water_reflections: original (the game's planar reflection and environment colour) or ssr
 // (screen-space reflections from the scene at the fog pass, falling back to the game's).
 enum class WaterReflections : uint8_t { kOriginal, kSsr };
 // --native_volumetrics: off (the game's light shaft sprites only), low or high (screen-space
-// scattering from the sun's shadow map added where the game has shafts or fog).
+// shafts from bright sky regions, added in proportion to the game's fog).
 enum class Volumetrics : uint8_t { kOff, kLow, kHigh };
 
 struct LightingConfig {

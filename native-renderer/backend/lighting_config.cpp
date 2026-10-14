@@ -7,7 +7,7 @@ namespace nr {
 float ShadowScaleForQuality(ShadowQuality q) {
   switch (q) {
     case ShadowQuality::kHigh: return 2.0f;
-    case ShadowQuality::kUltra: return 4.0f;
+    case ShadowQuality::kUltra: return 2.0f;
     default: return 0.0f;
   }
 }

@@ -31,8 +31,8 @@
 #endif
 
 #define KL_PCF_TAPS 16
-#define KL_SEARCH_TAPS 16
-#define KL_PCSS_TAPS 24
+#define KL_SEARCH_TAPS 8
+#define KL_PCSS_TAPS 12
 
 // Interleaved gradient noise (Jimenez 2014): a per-pixel angle that turns the disc, so neighbouring
 // pixels sample different offsets and the game's blur of the mask (psblurshadow) averages them.
