@@ -1,7 +1,8 @@
 param([string]$Label='init-all', [ValidateSet('','init','crash','device-lost')][string]$Failure='init',
   [ValidateSet('vulkan','d3d12')][string]$Preferred='vulkan',
   [ValidateSet('all','vulkan','d3d12')][string]$FailApi='all',
-  [string]$ReuseData='', [switch]$Launcher, [string]$LauncherInput='')
+  [string]$ReuseData='', [switch]$Launcher, [string]$LauncherInput='',
+  [string]$DxilPack='F:\KK-native-renderer\runs\task025-20261013\sanity-d3d12-ch8-210057\kkshaders-dxil.pack')
 $ErrorActionPreference='Stop'
 $workspace=(Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $lockPath='F:\KK-native-renderer\runs\codex-game.lock'
@@ -11,6 +12,7 @@ $build=Join-Path $workspace 'kk/out/build/kk-dev-vulkan'
 Get-ChildItem -LiteralPath $build -File | Where-Object { $_.Extension -in '.exe','.dll' } | Copy-Item -Destination $run
 Copy-Item -LiteralPath "$build\glyphs" -Destination $run -Recurse
 Copy-Item -LiteralPath 'F:\KK-native-renderer\cache\native-shaders\kkshaders-spirv.pack' -Destination $run
+Copy-Item -LiteralPath $DxilPack -Destination "$run\kkshaders-dxil.pack"
 Copy-Item -LiteralPath 'F:\KK-native-renderer\downloads\dxc-v1.9.2609\dxc\bin\x64\dxcompiler.dll' -Destination $run
 $data=if ($ReuseData) { $ReuseData } else { 'F:\KK-native-renderer\userdata' }
 robocopy $data "$run\userdata" /E /NFL /NDL /NJH /NJS | Out-Null
@@ -66,6 +68,7 @@ $args=@('--fullscreen=false','--window_width=1280','--window_height=720','--kk_f
   '--kk_online_count=false','--kk_discord_status=false','--kk_check_updates=false','--native_launcher_prewarm=false',
   "--native_backend=$Preferred","--kk_dev_startup_failure=$Failure","--kk_dev_startup_api=$FailApi")
 @{label=$Label;failure=$Failure;preferred=$Preferred;fail_api=$FailApi;reuse_data=$ReuseData;args=$args;
+  dxil_pack_source=$DxilPack;dxil_sha256=(Get-FileHash "$run\kkshaders-dxil.pack").Hash;
   exe_sha256=(Get-FileHash "$run\king_kong.exe").Hash;dll_sha256=(Get-FileHash "$run\rexgpu-native.dll").Hash} |
   ConvertTo-Json -Depth 4 | Set-Content "$run\test.json"
 if (!(Test-Path -LiteralPath $lockPath)) { Set-Content -LiteralPath $lockPath 'free' }
@@ -102,6 +105,7 @@ try {
   $clock=[Diagnostics.Stopwatch]::StartNew()
   $captured=@{}
   while (!$parent.HasExited -and $clock.Elapsed.TotalSeconds -lt 240) {
+    if ((Get-Content -LiteralPath $lockPath -Raw).Trim().StartsWith('user')) { $outcome='user-pause'; break }
     $children=Get-CimInstance Win32_Process -Filter "Name='king_kong.exe'" | Where-Object { $_.ExecutablePath -eq "$run\king_kong.exe" }
     foreach ($child in $children) {
       if ($known.ContainsKey([int]$child.ParentProcessId)) { $known[[int]$child.ProcessId]=$true }
@@ -125,6 +129,8 @@ try {
   }
   if ($parent.HasExited) { $outcome="exited-$($parent.ExitCode)" }
 } finally {
+  # Stop the monitor first. Closing a stalled child must not look like a crash that it should retry.
+  if ($parent -and !$parent.HasExited) { Stop-Process -Id $parent.Id; $parent.WaitForExit() }
   # The monitor has no window; close only its recorded children, then its own PID if necessary.
   foreach ($id in @($known.Keys)) {
     if ($parent -and $id -eq $parent.Id) { continue }
@@ -134,7 +140,6 @@ try {
       if (!$p.WaitForExit(10000)) { Stop-Process -Id $id; $p.WaitForExit() }
     }
   }
-  if ($parent -and !$parent.HasExited -and !$parent.WaitForExit(5000)) { Stop-Process -Id $parent.Id; $parent.WaitForExit() }
   if ((Get-Content -LiteralPath $lockPath -Raw).Trim().StartsWith('task039 ')) {
     Set-Content -LiteralPath $lockPath 'free'
   }
@@ -149,4 +154,5 @@ foreach ($item in $sourceHashes) {
   marker_bytes=(Get-Item "$run\userdata\renderer-recovery\startup.marker" -ErrorAction SilentlyContinue).Length} |
   ConvertTo-Json -Depth 4 | Set-Content "$run\result.json"
 Write-Output "DONE $outcome source-data-unchanged=$unchanged $run"
-if ($outcome -eq 'timeout' -or !$unchanged) { exit 1 }
+if ($outcome -eq 'user-pause' -or $outcome -eq 'exited-3') { exit 3 }
+if ($outcome -notin @('chapter-120s','launcher-120s') -or !$unchanged) { exit 1 }
