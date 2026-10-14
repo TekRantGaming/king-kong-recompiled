@@ -17,7 +17,7 @@ struct RecoveryState {
   explicit RecoveryState(const std::filesystem::path& root) : directory(root / "renderer-recovery") {}
   static bool Native(const std::string& api) { return api == "vulkan" || api == "d3d12"; }
   static std::string Name(const std::string& api) {
-    return api == "vulkan" ? "Vulkan" : api == "d3d12" ? "Direct3D 12" : "Classic";
+    return api == "vulkan" ? "Vulkan" : api == "d3d12" ? "DirectX 12" : "Classic";
   }
   bool Load() {
     std::ifstream in(directory / "fallback.state");
