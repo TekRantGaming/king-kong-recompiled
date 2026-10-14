@@ -204,7 +204,9 @@ void GameRenderer::ApplyMemoryScale(nvrhi::ICommandList* cl) {
     auto& t = *targets_.at(r.key);
     if (!r.texture) continue;
     bool copied = true;
-    if (t.clear_only) {
+    // AO can write outside GetFramebuffer, leaving an old clear hint behind.
+    // Its targets must migrate the actual image, exactly as for eviction.
+    if (t.clear_only && !scene_ao_) {
       if (t.depth) cl->clearDepthStencilTexture(r.texture, nvrhi::AllSubresources, true, t.saved_depth, true, t.saved_stencil);
       else cl->clearTextureFloat(r.texture, nvrhi::AllSubresources, t.saved_color);
     } else {

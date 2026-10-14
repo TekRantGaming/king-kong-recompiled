@@ -12,6 +12,18 @@
 
 namespace nr {
 struct MemoryMigrationTestAccess {
+  static void SimulateUntrackedWriter(GameRenderer& g) {
+    // Model a whole-clear hint followed by external GPU writes: the pattern
+    // already in the images is newer than these intentionally stale hints.
+    // A SceneAo owner is sufficient; running its shading is outside this test.
+    g.scene_ao_ = std::make_unique<SceneAo>(g.device_, AoConfig{});
+    auto* color = g.FindTarget(false, 0, 16, 0);
+    auto* depth = g.FindTarget(true, 0, 16, 0);
+    color->clear_only = depth->clear_only = true;
+    color->saved_color = nvrhi::Color(0.f);
+    depth->saved_depth = 1.f; depth->saved_stencil = 0;
+  }
+  static void StopUntrackedWriter(GameRenderer& g) { g.scene_ao_.reset(); }
   static void Seed(GameRenderer& g, nvrhi::ICommandList* cl) {
     auto* color = g.GetTarget(false, 0, 16, 0, 16);
     auto* depth = g.GetTarget(true, 0, 16, 0, 16);
@@ -120,6 +132,7 @@ int RunMemoryMigration(Host& host, const char* validation, bool native_validatio
   Check(game.Initialize());
   auto seed = device->createCommandList(); seed->open(); game.UploadDummies(seed);
   MemoryMigrationTestAccess::Seed(game, seed); seed->close(); host->Execute(seed); host->WaitIdle();
+  MemoryMigrationTestAccess::SimulateUntrackedWriter(game);
   game.WaitForPrewarm();
   auto migration = device->createCommandList(); migration->open();
   Check(MemoryMigrationTestAccess::CancelReplacedSource(game, migration));
@@ -144,6 +157,7 @@ int RunMemoryMigration(Host& host, const char* validation, bool native_validatio
     Check(std::abs(color.at(x, y)[2] - float(v) / 255) < 1e-6f);
   }
   auto clear = device->createCommandList(); clear->open();
+  MemoryMigrationTestAccess::StopUntrackedWriter(game);
   MemoryMigrationTestAccess::EvictClear(game, clear); clear->close(); host->Execute(clear);
   auto restore = device->createCommandList(); restore->open();
   MemoryMigrationTestAccess::Restore(game, restore); restore->close(); host->Execute(restore);
