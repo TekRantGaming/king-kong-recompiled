@@ -289,12 +289,18 @@ class DlssUpscaler final : public Upscaler {
     if (in.reactive) cl->setTextureState(in.reactive, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
     cl->setTextureState(in.output, nvrhi::AllSubresources, nvrhi::ResourceStates::UnorderedAccess);
     cl->commitBarriers();
+#if NR_HAS_VULKAN
+      if (vulkan_) SynchronizeVulkanSdk(cl);
+#endif
     bool ok = true;
     if (!feature_ || in.render.width != render_.width || in.render.height != render_.height ||
         in.output_size.width != output_.width || in.output_size.height != output_.height) {
       ok = Create(cl, in.render, in.output_size);
     }
     if (ok) ok = vulkan_ ? EvaluateVulkan(cl, in) : EvaluateD3D12(cl, in);
+#if NR_HAS_VULKAN
+      if (vulkan_) SynchronizeVulkanSdk(cl);
+#endif
     cl->clearState();
     return ok;
   }
@@ -306,6 +312,21 @@ class DlssUpscaler final : public Upscaler {
   }
 
  private:
+#if NR_HAS_VULKAN
+    void SynchronizeVulkanSdk(nvrhi::ICommandList* cl) const {
+      // NGX can clear GENERAL-layout images with transfer commands. NVRHI's
+      // UnorderedAccess state covers shader writes only, so synchronize all SDK
+      // accesses at entry and exit, including clears and layout transitions.
+      auto device = static_cast<VkDevice>(device_->getNativeObject(nvrhi::ObjectTypes::VK_Device).pointer);
+      auto cb = static_cast<VkCommandBuffer>(cl->getNativeObject(nvrhi::ObjectTypes::VK_CommandBuffer).pointer);
+      auto barrier = reinterpret_cast<PFN_vkCmdPipelineBarrier>(VulkanGetDeviceProcAddr()(device, "vkCmdPipelineBarrier"));
+      VkMemoryBarrier memory{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+      memory.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+      memory.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+      barrier(cb, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+              0, 1, &memory, 0, nullptr, 0, nullptr);
+    }
+#endif
   void Release() {
     if (!feature_) return;
     device_->waitForIdle();
