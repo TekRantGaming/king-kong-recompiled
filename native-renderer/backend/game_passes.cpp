@@ -52,15 +52,18 @@ kknr::TextureFetch FetchFromObject(const uint8_t* object) {
 bool GameRenderer::Blit(nvrhi::ICommandList* cl, nvrhi::ITexture* source, int32_t sx, int32_t sy, int32_t w,
                         int32_t h, nvrhi::ITexture* dest, uint32_t dest_level, uint32_t dest_slice,
                         int32_t dx, int32_t dy, const uint32_t channels[4], uint32_t blit_flags,
-                        uint32_t blit_arg, int32_t dest_width, int32_t dest_height) {
+                        uint32_t blit_arg, int32_t dest_width, int32_t dest_height,
+                        nvrhi::IFramebuffer* prepared_framebuffer, nvrhi::IBindingSet* prepared_set) {
   if (w <= 0 || h <= 0) return false;
   EnsureFallbackResources(cl);
   nvrhi::FramebufferDesc fd;
   fd.addColorAttachment(nvrhi::FramebufferAttachment().setTexture(dest).setMipLevel(dest_level).setArraySlice(dest_slice));
   uint64_t fb_key = Mix64(Mix64(0xB117, reinterpret_cast<uintptr_t>(dest)), (uint64_t(dest_level) << 32) | dest_slice);
-  framebuffer_used_[fb_key] = frame_;
-  nvrhi::IFramebuffer* fb = nullptr;
-  if (auto it = framebuffers_.find(fb_key); it != framebuffers_.end()) {
+  if (!prepared_framebuffer) framebuffer_used_[fb_key] = frame_;
+  nvrhi::IFramebuffer* fb = prepared_framebuffer;
+  if (fb) {
+    // Budget migration prepared its views on an earlier frame.
+  } else if (auto it = framebuffers_.find(fb_key); it != framebuffers_.end()) {
     fb = it->second;
   } else {
     nvrhi::FramebufferHandle h2 = device_->createFramebuffer(fd);
@@ -81,8 +84,10 @@ bool GameRenderer::Blit(nvrhi::ICommandList* cl, nvrhi::ITexture* source, int32_
   pd.renderState.rasterState.scissorEnable = true;
   nvrhi::IGraphicsPipeline* pipeline = GetPipeline(pd, fb, pipe_key);
   if (!pipeline) return false;
-  nvrhi::IBindingSet* set = nullptr;
-  if (auto it = blit_sets_.find(source); it != blit_sets_.end()) {
+  nvrhi::IBindingSet* set = prepared_set;
+  if (set) {
+    // The source version is checked again before committing the migration.
+  } else if (auto it = blit_sets_.find(source); it != blit_sets_.end()) {
     set = it->second;
   } else {
     nvrhi::BindingSetDesc bs;

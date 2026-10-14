@@ -415,7 +415,7 @@ void GameRenderer::UploadDummies(nvrhi::ICommandList* cl) {
   // Frame start and first-use paths share one initialization flag and must upload
   // the same contents, including the identity gamma ramp and committed barriers.
   EnsureFallbackResources(cl);
-  if (pending_memory_scale_ > 0.0f) ApplyMemoryScale(cl);
+  if (pending_memory_scale_ > 0.0f || !memory_staged_.empty()) ApplyMemoryScale(cl);
 }
 
 // ---------------------------------------------------------------- tables

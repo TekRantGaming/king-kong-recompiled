@@ -398,7 +398,8 @@ class GameRenderer {
   void TrimClearTargets();
   bool InitializeMemoryMigration();
   void ApplyMemoryScale(nvrhi::ICommandList* cl);
-  bool MigrateMemoryDepth(nvrhi::ICommandList* cl, nvrhi::ITexture* from, nvrhi::ITexture* to);
+  bool MigrateMemoryDepth(nvrhi::ICommandList* cl, nvrhi::ITexture* from, nvrhi::ITexture* to,
+                         nvrhi::IFramebuffer* framebuffer, nvrhi::IBindingSet* set);
   nvrhi::IGraphicsPipeline* MemoryColorPipeline(nvrhi::Format format);
   bool memory_scale_aware_ = false, memory_migration_ready_ = false;
   float memory_floor_x_ = 1.0f, memory_floor_y_ = 1.0f;
@@ -407,6 +408,19 @@ class GameRenderer {
   nvrhi::ShaderHandle memory_depth_ps_;
   nvrhi::BindingLayoutHandle memory_depth_layout_;
   std::array<nvrhi::GraphicsPipelineHandle, 9> memory_depth_pipelines_;
+  struct MemoryReplacement {
+    uint64_t key = 0;
+    nvrhi::TextureHandle source, texture;
+    nvrhi::FramebufferHandle framebuffer;
+    nvrhi::BindingSetHandle bindings;
+    Scale scale;
+    uint32_t width = 0, height = 0, old_width = 0, old_height = 0;
+    uint64_t bytes = 0;
+  };
+  std::vector<MemoryReplacement> memory_staged_;
+  std::array<float, 3> memory_staged_options_{};
+  size_t memory_staged_index_ = 0, memory_staged_target_count_ = 0;
+  uint64_t memory_staged_first_frame_ = 0;
   std::chrono::steady_clock::time_point memory_sample_{};
   std::chrono::steady_clock::time_point memory_start_{};
   uint32_t memory_pressure_samples_ = 0;
@@ -621,7 +635,8 @@ class GameRenderer {
   bool Blit(nvrhi::ICommandList* cl, nvrhi::ITexture* source, int32_t sx, int32_t sy, int32_t w,
             int32_t h, nvrhi::ITexture* dest, uint32_t dest_level, uint32_t dest_slice, int32_t dx,
             int32_t dy, const uint32_t channels[4], uint32_t blit_flags = 0, uint32_t blit_arg = 0,
-            int32_t dest_width = 0, int32_t dest_height = 0);
+            int32_t dest_width = 0, int32_t dest_height = 0,
+            nvrhi::IFramebuffer* prepared_framebuffer = nullptr, nvrhi::IBindingSet* prepared_set = nullptr);
   static constexpr uint32_t kBlitGammaRamp = 1;   // r, g, b through the display gamma ramp
   static constexpr uint32_t kBlitFxaa = 16;       // FXAA (blit_arg: edge search steps)
   static constexpr uint32_t kBlitDepthBytes = 2;  // a depth value as the D24S8 word's bytes

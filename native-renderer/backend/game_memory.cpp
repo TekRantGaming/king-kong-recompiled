@@ -68,15 +68,8 @@ bool GameRenderer::InitializeMemoryMigration() {
   return true;
 }
 
-bool GameRenderer::MigrateMemoryDepth(nvrhi::ICommandList* cl, nvrhi::ITexture* from, nvrhi::ITexture* to) {
-  nvrhi::FramebufferDesc fd;
-  fd.setDepthAttachment(to);
-  auto fb = device_->createFramebuffer(fd);
-  nvrhi::BindingSetDesc bd;
-  bd.bindings = {nvrhi::BindingSetItem::PushConstants(0, 16),
-                 nvrhi::BindingSetItem::Texture_SRV(0, from),
-                 nvrhi::BindingSetItem::Texture_SRV(1, from, nvrhi::Format::X32G8_UINT)};
-  auto set = device_->createBindingSet(bd, memory_depth_layout_);
+bool GameRenderer::MigrateMemoryDepth(nvrhi::ICommandList* cl, nvrhi::ITexture* from, nvrhi::ITexture* to,
+                                      nvrhi::IFramebuffer* fb, nvrhi::IBindingSet* set) {
   if (!fb || !set) return false;
   const auto& a = from->getDesc();
   const auto& b = to->getDesc();
@@ -96,8 +89,6 @@ bool GameRenderer::MigrateMemoryDepth(nvrhi::ICommandList* cl, nvrhi::ITexture* 
     draw.vertexCount = 3;
     cl->draw(draw);
   }
-  RetireResource(fb);
-  RetireResource(set);
   return true;
 }
 
@@ -105,7 +96,7 @@ void GameRenderer::ApplyMemoryScale(nvrhi::ICommandList* cl) {
   const auto started = std::chrono::steady_clock::now();
   const float factor = pending_memory_scale_;
   pending_memory_scale_ = 0;
-  if (!memory_migration_ready_ || upscale_ || factor <= 0 || factor >= 1) return;
+  if (!memory_migration_ready_ || upscale_) { memory_staged_.clear(); return; }
   const auto live = options_.memory_budget ? options_.memory_budget() : MemoryBudget{};
   uint64_t cap = 0;
   if (const char* v = std::getenv("KK_DEV_VRAM_BUDGET_GB")) {
@@ -114,86 +105,147 @@ void GameRenderer::ApplyMemoryScale(nvrhi::ICommandList* cl) {
     else if (std::strcmp(v, "8") == 0) cap = 8ull << 30;
   }
   const auto limit = CapMemoryBudget(live, cap);
-  if (!limit.valid || limit.usage >= limit.budget) return;
-  for (auto& [key, t] : targets_)
-    if (t && t->texture && !t->depth && !MemoryColorPipeline(t->format)) return;
-  const float old_x = options_.render_scale_x, old_y = options_.render_scale_y, old_shadow = options_.shadow_scale;
-  options_.render_scale_x = ReducedMemoryScale(options_.render_scale_x, memory_floor_x_, factor);
-  options_.render_scale_y = ReducedMemoryScale(options_.render_scale_y, memory_floor_y_, factor);
-  if (options_.shadow_scale > 1) options_.shadow_scale = std::max(1.0f, options_.shadow_scale * factor);
-  auto rollback = [&] {
-    options_.render_scale_x = old_x; options_.render_scale_y = old_y; options_.shadow_scale = old_shadow;
-    // A failed colour migration may already have cached its temporary FB.
-    for (auto& [key, fb] : framebuffers_) RetireResource(fb);
-    framebuffers_.clear(); framebuffer_used_.clear();
-  };
-  struct Replacement { HostTarget* target; Scale scale; uint32_t width, height; nvrhi::TextureHandle texture; uint64_t bytes = 0; };
-  std::vector<Replacement> replacements;
-  uint64_t estimate = 0;
-  for (auto& [key, t] : targets_) {
-    if (!t) continue;
-    const auto scale = ScaleFor(t->depth, t->width, uint32_t((key >> 40) & 0xFF));
-    const uint32_t w = uint32_t(std::max(ScaleCoord(int32_t(t->width), scale.x), 1));
-    const uint32_t h = uint32_t(std::max(ScaleCoord(int32_t(t->height), scale.y), 1));
-    if (w == t->host_width && h == t->host_height) continue;
-    replacements.push_back({t.get(), scale, w, h, {}});
-    if (t->texture) estimate += uint64_t(double(t->allocation_bytes) * double(w) * h /
-                                       (double(t->host_width) * t->host_height)) + (64ull << 10);
+  if (!limit.valid || limit.usage >= limit.budget) { memory_staged_.clear(); return; }
+  if (memory_staged_.empty()) {
+    if (factor <= 0 || factor >= 1) return;
+    for (auto& [key, t] : targets_)
+      if (t && t->texture && !t->depth && !MemoryColorPipeline(t->format)) return;
+    const std::array<float, 3> old{options_.render_scale_x, options_.render_scale_y, options_.shadow_scale};
+    float step = factor;
+    bool fits = false;
+    for (unsigned attempt = 0; attempt < 9; ++attempt) {
+      memory_staged_.clear();
+      options_.render_scale_x = ReducedMemoryScale(old[0], memory_floor_x_, step);
+      options_.render_scale_y = ReducedMemoryScale(old[1], memory_floor_y_, step);
+      options_.shadow_scale = old[2] > 1 ? std::max(1.0f, old[2] * step) : old[2];
+      memory_staged_options_ = {options_.render_scale_x, options_.render_scale_y, options_.shadow_scale};
+      uint64_t estimate = 0;
+      for (auto& [key, t] : targets_) {
+        if (!t) continue;
+        MemoryReplacement r;
+        r.key = key; r.source = t->texture; r.old_width = t->host_width; r.old_height = t->host_height;
+        r.scale = ScaleFor(t->depth, t->width, uint32_t((key >> 40) & 0xFF));
+        r.width = uint32_t(std::max(ScaleCoord(int32_t(t->width), r.scale.x), 1));
+        r.height = uint32_t(std::max(ScaleCoord(int32_t(t->height), r.scale.y), 1));
+        if (r.source && (r.width != r.old_width || r.height != r.old_height))
+          estimate += uint64_t(double(t->allocation_bytes) * double(r.width) * r.height /
+                               (double(r.old_width) * r.old_height)) + (64ull << 10);
+        memory_staged_.push_back(std::move(r));
+      }
+      options_.render_scale_x = old[0]; options_.render_scale_y = old[1]; options_.shadow_scale = old[2];
+      if (estimate + (64ull << 20) <= limit.budget - limit.usage) { fits = true; break; }
+      step *= 0.75f;  // A larger reduction may fit when the first step cannot.
+    }
+    if (!fits || memory_staged_.empty()) {
+      memory_staged_.clear();
+      Logf(LogLevel::kWarning, "rexgpu-native: memory scale deferred: temporary migration headroom unavailable");
+      return;
+    }
+    memory_staged_index_ = 0;
+    memory_staged_target_count_ = targets_.size();
+    memory_staged_first_frame_ = frame_;
   }
-  // Use actual driver headroom for the temporary overlap, including in fault
-  // injection runs. Never flush/wait for memory, nor destroy old pictures first.
-  if (estimate + (64ull << 20) > limit.budget - limit.usage) {
-    rollback();
-    Logf(LogLevel::kWarning, "rexgpu-native: memory scale deferred: temporary migration headroom unavailable");
-    return;
+  // No HostTarget pointer survives across frames. Reject a changed cache or
+  // replaced source before using any candidate; new work keeps the old scale.
+  size_t present = 0;
+  for (auto& [key, t] : targets_) present += bool(t);
+  if (targets_.size() != memory_staged_target_count_ || present != memory_staged_.size()) {
+    memory_staged_.clear(); return;
   }
-  for (auto& r : replacements) {
-    auto& t = *r.target;
-    if (!t.texture) continue;  // clear-only metadata stays virtual at its new size
-    auto d = t.texture->getDesc();
-    d.width = r.width; d.height = r.height;
+  for (const auto& r : memory_staged_) {
+    auto it = targets_.find(r.key);
+    if (it == targets_.end() || !it->second || it->second->texture.Get() != r.source.Get() ||
+        it->second->host_width != r.old_width || it->second->host_height != r.old_height) {
+      memory_staged_.clear(); return;
+    }
+  }
+  // At most one texture, framebuffer and binding set are allocated per frame.
+  // Until all candidates are ready, every draw continues using the old targets.
+  while (memory_staged_index_ < memory_staged_.size()) {
+    auto& r = memory_staged_[memory_staged_index_++];
+    if (!r.source || (r.width == r.old_width && r.height == r.old_height)) continue;
+    auto& t = *targets_.at(r.key);
+    auto d = r.source->getDesc(); d.width = r.width; d.height = r.height;
     r.texture = device_->createTexture(d);
-    if (!r.texture) { rollback(); return; }
+    if (!r.texture) { memory_staged_.clear(); return; }
     ++frame_resource_creations_;
     r.bytes = device_->getTextureMemoryRequirements(r.texture).size;
+    nvrhi::FramebufferDesc fd;
+    if (t.depth) fd.setDepthAttachment(r.texture); else fd.addColorAttachment(r.texture);
+    r.framebuffer = device_->createFramebuffer(fd);
+    nvrhi::BindingSetDesc bd;
+    if (t.depth) {
+      bd.bindings = {nvrhi::BindingSetItem::PushConstants(0, 16),
+                     nvrhi::BindingSetItem::Texture_SRV(0, r.source),
+                     nvrhi::BindingSetItem::Texture_SRV(1, r.source, nvrhi::Format::X32G8_UINT)};
+    } else {
+      bd.bindings = {nvrhi::BindingSetItem::PushConstants(0, 48),
+                     nvrhi::BindingSetItem::Texture_SRV(0, r.source, nvrhi::Format::UNKNOWN,
+                                                      nvrhi::TextureSubresourceSet(0, 1, 0, 1)),
+                     nvrhi::BindingSetItem::Texture_SRV(1, gamma_ramp_)};
+    }
+    r.bindings = device_->createBindingSet(bd, t.depth ? memory_depth_layout_ : blit_layout_);
+    if (!r.framebuffer || !r.bindings) { memory_staged_.clear(); return; }
+    return;
+  }
+  const std::array<float, 3> old{options_.render_scale_x, options_.render_scale_y, options_.shadow_scale};
+  options_.render_scale_x = memory_staged_options_[0]; options_.render_scale_y = memory_staged_options_[1];
+  options_.shadow_scale = memory_staged_options_[2];
+  for (const auto& r : memory_staged_) {
+    const auto& t = *targets_.at(r.key);
+    const auto expected = ScaleFor(t.depth, t.width, uint32_t((r.key >> 40) & 0xFF));
+    if (expected.x != r.scale.x || expected.y != r.scale.y) {
+      options_.render_scale_x = old[0]; options_.render_scale_y = old[1]; options_.shadow_scale = old[2];
+      memory_staged_.clear(); return;
+    }
   }
   const uint32_t channels[4] = {0, 1, 2, 3};
-  for (auto& r : replacements) {
-    auto& t = *r.target;
+  for (auto& r : memory_staged_) {
+    auto& t = *targets_.at(r.key);
     if (!r.texture) continue;
+    bool copied = true;
     if (t.clear_only) {
       if (t.depth) cl->clearDepthStencilTexture(r.texture, nvrhi::AllSubresources, true, t.saved_depth, true, t.saved_stencil);
       else cl->clearTextureFloat(r.texture, nvrhi::AllSubresources, t.saved_color);
     } else {
-      const bool copied = t.depth ? MigrateMemoryDepth(cl, t.texture, r.texture) :
+      copied = t.depth ? MigrateMemoryDepth(cl, t.texture, r.texture, r.framebuffer, r.bindings) :
           Blit(cl, t.texture, 0, 0, int32_t(t.host_width), int32_t(t.host_height), r.texture,
-               0, 0, 0, 0, channels, 0, 0, int32_t(r.width), int32_t(r.height));
-      if (!copied) { rollback(); return; }
+               0, 0, 0, 0, channels, 0, 0, int32_t(r.width), int32_t(r.height), r.framebuffer, r.bindings);
+    }
+    if (!copied) {
+      options_.render_scale_x = old[0]; options_.render_scale_y = old[1]; options_.shadow_scale = old[2];
+      for (auto& candidate : memory_staged_) {
+        RetireResource(candidate.texture); RetireResource(candidate.framebuffer); RetireResource(candidate.bindings);
+      }
+      memory_staged_.clear(); return;
     }
   }
-  // Commit only after all migrations are recorded. The same queue orders old
-  // writes, these reads/copies, then this frame's draws into the new targets.
   for (auto& [key, fb] : framebuffers_) RetireResource(fb);
   framebuffers_.clear(); framebuffer_used_.clear();
-  for (auto& r : replacements) {
-    auto& t = *r.target;
-    if (t.texture) {
+  for (auto& r : memory_staged_) {
+    auto& t = *targets_.at(r.key);
+    if (r.texture) {
       if (auto it = blit_sets_.find(t.texture.Get()); it != blit_sets_.end()) {
         RetireResource(it->second); blit_sets_.erase(it);
       }
-      RetireResource(t.texture);
+      RetireResource(t.texture); RetireResource(r.framebuffer); RetireResource(r.bindings);
       stats_.edram_target_bytes -= t.allocation_bytes;
-      t.texture = r.texture;
-      t.allocation_bytes = r.bytes;
-      stats_.edram_target_bytes += r.bytes;
+      t.texture = r.texture; t.allocation_bytes = r.bytes; stats_.edram_target_bytes += r.bytes;
     }
-    t.scale_x = r.scale.x; t.scale_y = r.scale.y;
-    t.host_width = r.width; t.host_height = r.height;
+    t.scale_x = r.scale.x; t.scale_y = r.scale.y; t.host_width = r.width; t.host_height = r.height;
   }
-  if (scene_ao_) scene_ao_->ForgetTargets();
+  memory_staged_.clear();
+  if (scene_ao_) {
+    scene_ao_->ForgetTargets();
+    // Keep old bindless descriptors valid for pending frames, but force a new
+    // slot on the next AO image instead of comparing potentially reused pointers.
+    RetireSlot(kTex2D, ao_slot_); ao_slot_ = 0; ao_slot_texture_ = nullptr;
+    ao_constants_valid_ = false;
+  }
   ++memory_scale_steps_;
-  Logf(LogLevel::kWarning, "rexgpu-native: GPU budget pressure: render scale %.3f x %.3f -> %.3f x %.3f; contents migrated at frame %llu (%.3f ms CPU)",
-       old_x, old_y, options_.render_scale_x, options_.render_scale_y, static_cast<unsigned long long>(frame_),
-       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
+  Logf(LogLevel::kWarning, "rexgpu-native: GPU budget pressure: render scale %.3f x %.3f -> %.3f x %.3f; contents migrated at frame %llu (%.3f ms CPU), staged from frame %llu",
+       old[0], old[1], options_.render_scale_x, options_.render_scale_y, static_cast<unsigned long long>(frame_),
+       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count(),
+       static_cast<unsigned long long>(memory_staged_first_frame_));
 }
 }  // namespace nr

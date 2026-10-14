@@ -120,6 +120,7 @@ class SceneAo {
   const Gtao* gtao() const { return gtao_.get(); }
   void SetMemoryPressure(bool pressure) { memory_pressure_ = pressure; }
   void ForgetTargets() {
+    if (gtao_) gtao_->ForgetTargetViews();
     scene_color_ = {}; scene_depth_ = {}; depth_copy_ = nullptr;
     ambient_view_ = {}; frame_ = UINT64_MAX;
     computed_ = applied_ = ambient_ready_ = ambient_drawn_ = false;

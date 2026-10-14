@@ -29,7 +29,22 @@ struct MemoryMigrationTestAccess {
   }
   static void Scale(GameRenderer& g, nvrhi::ICommandList* cl) {
     g.pending_memory_scale_ = 0.5f;
+    for (unsigned frame = 0; frame < 16 && g.options().render_scale_x != 1; ++frame) {
+      g.ApplyMemoryScale(cl);
+      if (g.options().render_scale_x != 1) g.EndFrame();
+    }
+  }
+  static bool CancelReplacedSource(GameRenderer& g, nvrhi::ICommandList* cl) {
+    g.pending_memory_scale_ = 0.5f;
     g.ApplyMemoryScale(cl);
+    if (g.options().render_scale_x != 2 || g.memory_staged_.empty()) return false;
+    auto* color = g.FindTarget(false, 0, 16, 0);
+    auto replacement = g.device_->createTexture(color->texture->getDesc());
+    if (!replacement) return false;
+    cl->copyTexture(replacement, nvrhi::TextureSlice(), color->texture, nvrhi::TextureSlice());
+    g.RetireResource(color->texture); color->texture = replacement;
+    g.ApplyMemoryScale(cl);
+    return g.memory_staged_.empty() && g.options().render_scale_x == 2;
   }
   static nvrhi::ITexture* Texture(GameRenderer& g, bool depth) {
     auto* t = g.FindTarget(depth, 0, 16, 0);
@@ -102,6 +117,7 @@ int main() {
   MemoryMigrationTestAccess::Seed(game, seed); seed->close(); host->Execute(seed); host->WaitIdle();
   game.WaitForPrewarm();
   auto migration = device->createCommandList(); migration->open();
+  Check(MemoryMigrationTestAccess::CancelReplacedSource(game, migration));
   MemoryMigrationTestAccess::Scale(game, migration);
   Check(game.options().render_scale_x == 1);
   // Stress command-list ownership: remove the explicit retirement references
