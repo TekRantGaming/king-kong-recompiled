@@ -5,6 +5,16 @@ Status, 12 October 2026: branch `beta-ssgi` (from `beta` = `nr-integration` 1ba7
 (`--native_gi=off`); the launcher's Graphics page has the row "Global illumination: Off / Low / Medium / High"
 next to Ambient occlusion. Ray-traced GI is for later; this is screen space only.
 
+## Task 062 verification (15 October 2026)
+
+The inherited linear-light, wider-radius rework is retained. GI stays off by default. With GI enabled,
+`native_gi_occlusion` now defaults to 0: bounce only, with contact darkening left to the AO setting.
+An explicit occlusion override is still available for experiments. The synthetic dark-yard test checks
+that no pixel loses luminance with the defaults (including AO off). Medium raises the near floor's red
+from 0.047 to 0.224 and leaves the sky and distant floor unchanged. This is synthetic evidence only;
+the coordinator must check the chapter appearance. The rework notes below describe its earlier 0.5
+occlusion default, superseded here.
+
 ## Beta 4 rework (14 October 2026, branch `claude-effects`)
 
 The owner's test at 4K (DLSS Quality) found the GI invisible even at intensity 4, and in dark scenes slightly

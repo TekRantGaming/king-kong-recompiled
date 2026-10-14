@@ -1,5 +1,31 @@
 # Lighting: softer shadows, reflections on water, volumetric light (beta)
 
+## Task 062 disposition (15 October 2026)
+
+All three options are hidden from the launcher Graphics page and F8 panel for Beta 4. Their code and
+explicit cvars remain for the coordinator's run; their defaults remain Original/Off. The historical
+design and measurements below are superseded as follows:
+
+- Ultra uses 2x maps, like High, and 8 blocker-search plus 12 filtering taps (previously 4x and 16+24).
+  Its replacement tag changes so cached pipeline identities do not reuse the old variant. The improvement
+  still affects only the game's dynamic shadow passes. Its value in the sparse-shadow chapters is unproven.
+- The census's non-reflective `pswater` variant `805E38F150347CFA` now receives an output reflection hook
+  with its normal map, and output-only hooks trigger SSR preparation. Its alpha/depth mask stays untouched.
+  No generic shader is assumed to be water: the existing census does not establish a safe generic-water
+  identity. Broad chapter coverage is therefore unresolved and the option stays hidden.
+- The inherited quarter-resolution bright-sky mask, centroid and radial gather now compile (the reserved
+  HLSL identifier `centroid` is fixed), with all required DXIL/SPIR-V blobs checked in. The composite adds
+  light only, scales with fog at both source and receiver, and uses remaining colour headroom. It no longer
+  subtracts shadowed fog or performs a full-resolution 16/32-step shadow march. No bright source or no fog
+  produces no change. Because the game's sky can draw after the fog-pass insertion point, synthetic shafts
+  do not prove useful in-game source coverage. Placement must be verified before exposing the option.
+
+`nr_lighting_tests` uses synthetic images and the production reflection HLSL and shaft passes. A water
+plane reflects a bright orange wall (+0.173 peak red, 1056 visibly changed pixels at 192x128). Dense fog
+receives +0.0899 mean red, thin fog +0.00558; clear fog and no bright source are unchanged. No shaft pixel
+darkens, and alpha is unchanged. GPU checks use NVRHI validation; the Khronos validation layer is absent
+on this host. See codex/REPORT-062.md for costs, limits and the coordinator's chapter checks.
+
 Status, 12 October 2026: built on branch `beta-lighting` (from `beta` = nr-integration 1ba7339). Three options of
 the native renderer, each off by default (the game's own picture) until the user has seen the comparisons; the
 Original look keeps all three at the game's. Raster and screen-space techniques only (ray tracing is for later).

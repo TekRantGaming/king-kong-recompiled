@@ -882,11 +882,14 @@ class SettingsPages {
   // page while the native renderer draws the game. Its own cvars (native_*), which the stable version
   // does not have.
   static void LightingItems(std::vector<Item>& items, bool original) {
-    if (!NativeShaderPack::Wanted()) return;
+    // Task 062: keep experimental code available to the coordinator, hide unverified
+    // water coverage, shaft placement and sparse dynamic-shadow gains for Beta 4.
+    constexpr bool ready_for_beta4 = false;
+    if (!ready_for_beta4 || !NativeShaderPack::Wanted()) return;
     {
       Item it = CvarChoice("Shadows",
                            "Original keeps the game's blocky shadows. High draws them at twice the detail with soft "
-                           "edges; Ultra at four times, with edges that get softer the farther a shadow falls from "
+                           "edges; Ultra at twice the detail, with edges that get softer the farther a shadow falls from "
                            "what casts it.",
                            "native_shadow_quality", {{"Original", "original"}, {"High", "high"}, {"Ultra", "ultra"}});
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));

@@ -311,6 +311,8 @@ void EndAb() {
 }
 
 bool Visible(const Setting& s) {
+  // Task 062: the three experimental lighting effects stay hidden for Beta 4.
+  if (std::string_view(s.section) == "Lighting") return false;
   if (!Exists(s.cvar)) return false;
   if (s.native && !NativeRenderer()) return false;
   const std::string up = Get("native_upscaler");
