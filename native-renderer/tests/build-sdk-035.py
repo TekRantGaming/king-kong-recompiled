@@ -133,7 +133,7 @@ if dest == install:
     # would silently discard it. Rebuild only inside the isolated SDK copy.
     ffx = dest / "fidelityfx"
     shutil.copytree(Path(r"F:\KK-native-renderer\downloads\amd-fidelityfx-sdk-v1.1.4\x"), ffx)
-    subprocess.run(["git", "apply", "--ignore-space-change", str(workspace / "native-renderer/sdk-patches/0035-amd-fsr-luma-history-format.patch")], cwd=ffx, check=True)
+    subprocess.run(["git", "apply", "--ignore-space-change", str(workspace / "native-renderer/sdk-patches/0036-amd-fsr-luma-history-format.patch")], cwd=ffx, check=True)
     env = dict(os.environ, VULKAN_SDK=r"F:\KK-native-renderer\downloads\vulkan-sdk-latest\sdk")
     subprocess.run(["cmake", "-S", str(ffx / "ffx-api"), "-B", str(dest / "fidelityfx-build"),
                     "-G", "Visual Studio 17 2022", "-A", "x64", "-DFFX_API_BACKEND=VK_X64"], env=env, check=True)
