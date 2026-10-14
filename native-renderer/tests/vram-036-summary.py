@@ -49,7 +49,9 @@ for run in sorted(ROOT.glob("task036-*-*-*-20*")):
         "run": run.name, "control": meta["control"], "budget_gib": meta["budget_gib"], "case": meta["case"],
         "simulated_pressure": meta.get("pressure", False), "gtao": meta.get("gtao", False),
         "pressure_delay_s": meta.get("pressure_delay_s", 0), "dll_sha256": meta["dll_sha256"],
-        "tour_kind": meta.get("tour_kind", "legacy-menu" if meta["case"] == "tour" else ""),
+        "tour_kind": meta.get("tour_kind", ("story8-9" if "--kk_start=chapter:0:8" in meta["args"]
+                                           else "legacy-menu") if meta["case"] == "tour" else ""),
+        "backend": meta.get("backend", "vulkan"),
         "samples": len(ordered), "pressure_samples": sum(s["pressure"] for s in ordered),
         "usage_start_mib": round(ordered[0]["usage"] / 2**20, 2) if ordered else "",
         "usage_peak_mib": round(max(s["usage"] for s in ordered) / 2**20, 2) if ordered else "",

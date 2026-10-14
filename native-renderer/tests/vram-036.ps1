@@ -1,6 +1,7 @@
 param([int[]]$Budgets=@(4,6,8), [string[]]$Cases=@('ch0','ch8','ch27','tour'),
       [string[]]$Controls=@('before','after'), [string]$Scale='2560x1440',
       [switch]$Pressure, [switch]$Gtao,
+      [ValidateSet('vulkan','d3d12')][string]$Backend='vulkan',
       [string]$PackRoot='F:\KK-native-renderer\runs\task048-after-d3d12-dlss-0-fresh-20261014-072055\cache\native-shaders')
 $ErrorActionPreference='Stop'
 $workspace=(Resolve-Path "$PSScriptRoot/../..").Path
@@ -36,6 +37,7 @@ foreach ($budget in $Budgets) {
     if ($control -notin 'before','after') { throw 'Control must be before or after' }
     $tag=if ($Pressure) { '-pressure' } else { '' }
     if ($Gtao) { $tag+='-gtao' }
+    if ($Backend -ne 'vulkan') { $tag+="-$Backend" }
     $run="F:\KK-native-renderer\runs\task036-$control-$budget-$case$tag-$(Get-Date -Format yyyyMMdd-HHmmss)"
     New-Item -ItemType Directory -Path $run | Out-Null
     Get-ChildItem $build -File | Where-Object Extension -In '.exe','.dll' | Copy-Item -Destination $run
@@ -55,7 +57,7 @@ foreach ($budget in $Budgets) {
     $args=@('--fullscreen=false','--window_width=1280','--window_height=720','--kk_fullscreen_mode=desktop',
       "--user_data_root=$run\userdata","--cache_root=$run\cache",
       "--game_data_root=$($workspace.Replace('\','/'))/kk/assets","--log_file=$run\run.log",
-      '--kk_launcher=false','--gpu_plugin=native','--native_backend=vulkan',"--native_render_scale=$Scale",
+      '--kk_launcher=false','--gpu_plugin=native',"--native_backend=$Backend","--native_render_scale=$Scale",
       '--native_upscaler=off','--kk_frame_rate=30','--native_debug=32768','--native_stutter_stats=true',
       '--native_validation=true','--kk_check_updates=false','--kk_online_count=false','--kk_discord_status=false')
     $args+='--log_max_file_size_mb=500'
@@ -78,6 +80,7 @@ foreach ($budget in $Budgets) {
     @{budget_gib=$budget;case=$case;control=$control;scale=$Scale;pressure=[bool]$Pressure;gtao=[bool]$Gtao;
       pressure_delay_s=$(if ($Pressure) {20} else {0});args=$args;
       tour_kind=$(if ($case -eq 'tour') {'story8-9'} else {''});
+      backend=$Backend;
       script=$env:KK_DEV_SCRIPT;limit=$limit;dll_sha256=(Get-FileHash "$run\rexgpu-native.dll").Hash;
       pack_root=$PackRoot} | ConvertTo-Json -Depth 4 | Set-Content "$run\test.json"
     Acquire-Game
