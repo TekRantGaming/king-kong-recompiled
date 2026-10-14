@@ -52,7 +52,7 @@ kknr::TextureFetch FetchFromObject(const uint8_t* object) {
 bool GameRenderer::Blit(nvrhi::ICommandList* cl, nvrhi::ITexture* source, int32_t sx, int32_t sy, int32_t w,
                         int32_t h, nvrhi::ITexture* dest, uint32_t dest_level, uint32_t dest_slice,
                         int32_t dx, int32_t dy, const uint32_t channels[4], uint32_t blit_flags,
-                        uint32_t blit_arg) {
+                        uint32_t blit_arg, int32_t dest_width, int32_t dest_height) {
   if (w <= 0 || h <= 0) return false;
   EnsureFallbackResources(cl);
   nvrhi::FramebufferDesc fd;
@@ -99,8 +99,9 @@ bool GameRenderer::Blit(nvrhi::ICommandList* cl, nvrhi::ITexture* source, int32_
   gs.pipeline = pipeline;
   gs.framebuffer = fb;
   gs.bindings = {set};
-  gs.viewport.addViewport(nvrhi::Viewport(float(dx), float(dx + w), float(dy), float(dy + h), 0.0f, 1.0f));
-  gs.viewport.addScissorRect(nvrhi::Rect(dx, dx + w, dy, dy + h));
+  const int32_t dw = dest_width > 0 ? dest_width : w, dh = dest_height > 0 ? dest_height : h;
+  gs.viewport.addViewport(nvrhi::Viewport(float(dx), float(dx + dw), float(dy), float(dy + dh), 0.0f, 1.0f));
+  gs.viewport.addScissorRect(nvrhi::Rect(dx, dx + dw, dy, dy + dh));
   cl->setGraphicsState(gs);
   BlitConstants c = {{sx, sy, w, h}, {channels[0], channels[1], channels[2], channels[3]}, {blit_flags, blit_arg, 0, 0}};
   cl->setPushConstants(&c, sizeof(c));
@@ -568,6 +569,8 @@ bool GameRenderer::Present(nvrhi::ICommandList* cl, uint32_t device, nvrhi::ITex
   // The frame image is the scaled size: the whole back buffer 1:1 in host pixels.
   const int32_t fw = int32_t(std::min(uint32_t(ScaleCoord(int32_t(s.width), source->scale_x)), td.width));
   const int32_t fh = int32_t(std::min(uint32_t(ScaleCoord(int32_t(s.height), source->scale_y)), td.height));
+  const int32_t pw = memory_scale_steps_ ? int32_t(td.width) : fw;
+  const int32_t ph = memory_scale_steps_ ? int32_t(td.height) : fh;
   if (options_.fxaa) {
     // FXAA (the port's swap_post_effect): the back buffer through the ramp into a scratch image,
     // then anti-aliased into the frame image.
@@ -584,11 +587,13 @@ bool GameRenderer::Present(nvrhi::ICommandList* cl, uint32_t device, nvrhi::ITex
       fxaa_source_ = device_->createTexture(fd);
     }
     if (fxaa_source_ && Blit(cl, source->texture, 0, 0, fw, fh, fxaa_source_, 0, 0, 0, 0, channels,
-                             use_ramp ? kBlitGammaRamp : 0)) {
-      return Blit(cl, fxaa_source_, 0, 0, fw, fh, target, 0, 0, 0, 0, channels, kBlitFxaa, options_.fxaa == 2 ? 24u : 12u);
+                             use_ramp ? kBlitGammaRamp : 0, 0, pw, ph)) {
+      return Blit(cl, fxaa_source_, 0, 0, pw, ph, target, 0, 0, 0, 0, channels,
+                  kBlitFxaa, options_.fxaa == 2 ? 24u : 12u);
     }
   }
-  return Blit(cl, source->texture, 0, 0, fw, fh, target, 0, 0, 0, 0, channels, use_ramp ? kBlitGammaRamp : 0);
+  return Blit(cl, source->texture, 0, 0, fw, fh, target, 0, 0, 0, 0, channels,
+              use_ramp ? kBlitGammaRamp : 0, 0, pw, ph);
 }
 
 }  // namespace nr

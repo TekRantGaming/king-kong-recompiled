@@ -14,6 +14,7 @@ for run in sorted(ROOT.glob("task036-*-*-*-20*")):
     if not (run / "test.json").exists():
         continue
     meta = json.loads((run / "test.json").read_text(encoding="utf-8-sig"))
+    configured_x = float(meta["scale"].split("x")[0]) / 1280 if "x" in meta["scale"] else float(meta["scale"])
     samples = {}
     texts = []
     for log in sorted(run.glob("run.log*")):
@@ -25,11 +26,21 @@ for run in sorted(ROOT.glob("task036-*-*-*-20*")):
             sample["timestamp"] = datetime.datetime.fromisoformat(match[1]).timestamp()
             samples[sample["frame"]] = sample
     ordered = sorted(samples.values(), key=lambda s: s["frame"])
+    logs = "\n".join(texts)
+    scale_frames = [int(v) for v in re.findall(r"contents migrated at frame (\d+)", logs)]
+    if not scale_frames:
+        prior = 0
+        for sample in ordered:
+            step = sample.get("scale_steps", 0)
+            if step > prior:
+                scale_frames.append(sample["frame"])
+            prior = step
     for sample in ordered:
         sample["seconds"] = round(sample["timestamp"] - ordered[0]["timestamp"], 3)
         curves.append({"run": run.name, **sample})
     intervals = []
     transition_intervals = []
+    scale_intervals = []
     half_frame = next((s["frame"] for s in ordered if s["half_ao"]), None)
     trace = run / "render_frames.csv"
     if trace.exists() and trace.stat().st_size:
@@ -40,11 +51,12 @@ for run in sorted(ROOT.glob("task036-*-*-*-20*")):
             if half_frame is not None:
                 transition_intervals = [float(r["interval_ms"]) for r in rows
                                         if half_frame - 2 <= int(r["frame"]) <= half_frame + 30]
+            scale_intervals = [float(r["interval_ms"]) for r in rows
+                               if any(f - 35 <= int(r["frame"]) <= f + 30 for f in scale_frames)]
     def percentile(values, p):
         if not values:
             return ""
         return round(sorted(values)[min(len(values) - 1, int((len(values) - 1) * p))], 3)
-    logs = "\n".join(texts)
     summary = {
         "run": run.name, "control": meta["control"], "budget_gib": meta["budget_gib"], "case": meta["case"],
         "simulated_pressure": meta.get("pressure", False), "gtao": meta.get("gtao", False),
@@ -60,14 +72,19 @@ for run in sorted(ROOT.glob("task036-*-*-*-20*")):
         "evictions": max((s["evictions"] for s in ordered), default=0),
         "restores": max((s["restores"] for s in ordered), default=0),
         "half_ao": max((s["half_ao"] for s in ordered), default=0),
+        "scale_steps": max((s.get("scale_steps", 0) for s in ordered), default=0),
+        "scale_end_x": ordered[-1].get("scale_x_milli", configured_x * 1000) / 1000 if ordered else "",
+        "target_end_mib": round(ordered[-1]["target_bytes"] / 2**20, 2) if ordered else "",
         "late_frame_samples": len(intervals), "late_p50_ms": percentile(intervals, .5),
         "late_p95_ms": percentile(intervals, .95), "late_p99_ms": percentile(intervals, .99),
         "half_ao_frame": half_frame if half_frame is not None else "",
         "ao_transition_worst_ms": round(max(transition_intervals), 3) if transition_intervals else "",
+        "scale_transition_worst_ms": round(max(scale_intervals), 3) if scale_intervals else "",
         "tour_transition_requested": "asking for the next chapter's level (entry 9)" in logs,
         "captures": len(list(run.glob("shot*.bmp"))),
         "error_lines": sum(bool(re.search(r"\b(error|fatal|VUID-|device removed|device lost|exhausted)\b", line, re.I))
                            for line in logs.splitlines()),
+        "filesystem_error_lines": sum("[error] [fs]" in line for line in logs.splitlines()),
     }
     summaries.append(summary)
 for name, rows in [("curves.csv", curves), ("summary.csv", summaries)]:

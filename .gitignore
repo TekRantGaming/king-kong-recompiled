@@ -28,3 +28,5 @@
 # Player-supplied sounds (not ours to share)
 *.wav
 /dist/
+# Task 036 offscreen GPU test build.
+/out/task036-tests/

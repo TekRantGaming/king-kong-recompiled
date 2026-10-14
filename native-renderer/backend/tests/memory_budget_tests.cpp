@@ -35,5 +35,11 @@ int main() {
   Check(!CanEvictClearTarget(true, false, 1000, 999)); // no unsigned underflow
   Check(!CanEvictClearTarget(true, false, 1000, 1120));
   Check(CanEvictClearTarget(true, false, 1000, 1121));
+  Check(ReducedMemoryScale(2, 1) == 1.5f);
+  Check(ReducedMemoryScale(1.125f, 1) == 1);
+  Check(ReducedMemoryScale(1, 1) == 1);
+  Check(ReducedMemoryScale(0.5f, 0.5f) == 0.5f);
+  Check(ReducedMemoryScale(4, 1) == 3);
+  Check(ReducedMemoryScale(2, 1, 0.5f) == 1);
   std::printf("memory budget: %d cases passed\n", cases);
 }

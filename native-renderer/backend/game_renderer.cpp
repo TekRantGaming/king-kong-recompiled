@@ -198,6 +198,12 @@ void GameRenderer::set_watch(std::function<void(uint32_t, uint32_t)> watch) {
 }
 
 bool GameRenderer::Initialize() {
+  // Keep the scale-aware shader ABI at the native-resolution floor too. It
+  // was selected before shader creation for these initially scaled runs.
+  memory_floor_x_ = std::min(options_.render_scale_x, 1.0f);
+  memory_floor_y_ = std::min(options_.render_scale_y, 1.0f);
+  memory_scale_aware_ = !(options_.debug & 16) &&
+                       std::max({options_.render_scale_x, options_.render_scale_y, options_.shadow_scale}) > 1.0f;
   const nvrhi::GraphicsAPI api = device_->getGraphicsAPI();
   // Live settings (game_effects.cpp): what the start asked for, which the changes are compared with.
   upscale_initial_ = upscale_requested_ = options_.upscale;
@@ -401,6 +407,7 @@ bool GameRenderer::Initialize() {
     shaders_->SetMotionPrewarm(false);
   }
   LightingInitialize();  // Lighting hook (game_lighting.cpp)
+  if (memory_scale_aware_ && !upscale_) memory_migration_ready_ = InitializeMemoryMigration();
   return true;
 }
 
@@ -408,6 +415,7 @@ void GameRenderer::UploadDummies(nvrhi::ICommandList* cl) {
   // Frame start and first-use paths share one initialization flag and must upload
   // the same contents, including the identity gamma ramp and committed barriers.
   EnsureFallbackResources(cl);
+  if (pending_memory_scale_ > 0.0f) ApplyMemoryScale(cl);
 }
 
 // ---------------------------------------------------------------- tables
@@ -615,20 +623,27 @@ void GameRenderer::CheckMemoryBudget() {
     if (++memory_pressure_samples_ >= 5 && scene_ao_ && !memory_half_ao_) {
       scene_ao_->SetMemoryPressure(true);
       memory_half_ao_ = true;
-      Logf(LogLevel::kWarning, "rexgpu-native: GPU budget pressure: GTAO reduced to half resolution");
+      Logf(LogLevel::kWarning, "rexgpu-native: GPU budget pressure: GTAO capped at half resolution when enabled");
     }
+    if (memory_pressure_samples_ >= 10 && memory_pressure_samples_ % 5 == 0 &&
+        memory_migration_ready_ && !upscale_ &&
+        (options_.render_scale_x > memory_floor_x_ + 0.001f ||
+         options_.render_scale_y > memory_floor_y_ + 0.001f || options_.shadow_scale > 1.001f))
+      pending_memory_scale_ = 0.75f;
   } else {
     memory_pressure_samples_ = 0;
   }
   Logf(LogLevel::kInfo,
        "rexgpu-native: memory budget frame %llu: usage=%llu budget=%llu effective=%llu pressure=%u "
-       "control=%u targets=%llu target_bytes=%llu framebuffers=%zu retired=%zu evictions=%llu restores=%llu half_ao=%u simulated=%u tested_usage=%llu",
+       "control=%u targets=%llu target_bytes=%llu framebuffers=%zu retired=%zu evictions=%llu restores=%llu half_ao=%u simulated=%u tested_usage=%llu scale_steps=%u scale_x_milli=%u scale_y_milli=%u",
        static_cast<unsigned long long>(frame_), static_cast<unsigned long long>(live.usage),
        static_cast<unsigned long long>(live.budget), static_cast<unsigned long long>(effective.budget),
        unsigned(pressure), unsigned(enabled), static_cast<unsigned long long>(stats_.edram_targets),
        static_cast<unsigned long long>(stats_.edram_target_bytes), framebuffers_.size(), retired_resources_.size(),
        static_cast<unsigned long long>(memory_evictions_), static_cast<unsigned long long>(memory_restores_),
-       unsigned(memory_half_ao_), unsigned(simulated), static_cast<unsigned long long>(tested.usage));
+       unsigned(memory_half_ao_), unsigned(simulated), static_cast<unsigned long long>(tested.usage),
+       memory_scale_steps_, unsigned(std::lround(options_.render_scale_x * 1000)),
+       unsigned(std::lround(options_.render_scale_y * 1000)));
 }
 
 void GameRenderer::EndFrame() {

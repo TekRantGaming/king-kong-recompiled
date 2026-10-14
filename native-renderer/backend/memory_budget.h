@@ -28,4 +28,8 @@ inline bool CanEvictClearTarget(bool clear_only, bool has_external_writer,
   return clear_only && !has_external_writer && used_frame != UINT64_MAX &&
          frame > used_frame && frame - used_frame > 120;
 }
+
+inline float ReducedMemoryScale(float current, float floor, float factor = 0.75f) {
+  return std::max(floor, current * factor);
+}
 }  // namespace nr

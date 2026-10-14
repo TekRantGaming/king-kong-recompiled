@@ -22,6 +22,7 @@ enum class ShaderId {
   kBlitPs,
   kClearVs,
   kClearPs,
+  kMemoryDepthPs,
   // Ambient occlusion (shaders/ambient_occlusion.hlsl, one blob per entry point).
   kAoVs,
   kAoCopyPs,

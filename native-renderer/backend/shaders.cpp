@@ -1,6 +1,8 @@
 #include "backend/shaders.h"
 
 #include <cstdint>
+#include "backend/shaders/generated/memory_depth_ps_dxil.h"
+#include "backend/shaders/generated/memory_depth_ps_spirv.h"
 
 #include "backend/shaders/generated/blit_ps_dxil.h"
 #include "backend/shaders/generated/blit_ps_spirv.h"
@@ -49,6 +51,7 @@ ShaderBytecode GetShaderBytecode(nvrhi::GraphicsAPI api, ShaderId id) {
     case ShaderId::kBlitPs: return NR_BLOB(blit_ps);
     case ShaderId::kClearVs: return NR_BLOB(clear_vs);
     case ShaderId::kClearPs: return NR_BLOB(clear_ps);
+    case ShaderId::kMemoryDepthPs: return NR_BLOB(memory_depth_ps);
     case ShaderId::kAoVs: return NR_BLOB(ao_vs);
     case ShaderId::kAoCopyPs: return NR_BLOB(ao_copy_ps);
     case ShaderId::kAoDepthPs: return NR_BLOB(ao_depth_ps);

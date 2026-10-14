@@ -153,6 +153,7 @@ GameRenderer::HostTarget* GameRenderer::GetTarget(bool depth, uint32_t edram_bas
   ++frame_resource_creations_;
   if (!t->texture) return nullptr;
   t->allocation_bytes = device_->getTextureMemoryRequirements(t->texture).size;
+  if (memory_migration_ready_ && !depth) MemoryColorPipeline(t->format);
   stats_.edram_target_bytes += t->allocation_bytes;
   if (slot) stats_.edram_target_bytes -= slot->allocation_bytes;
   if (slot) {

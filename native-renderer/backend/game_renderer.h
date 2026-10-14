@@ -70,6 +70,7 @@ inline bool TessellationBenchRequested() {
 }
 
 class GameRenderer {
+  friend struct MemoryMigrationTestAccess;
  public:
   struct Options {
     bool tessellation_supported = false;
@@ -218,7 +219,8 @@ class GameRenderer {
   Options& options() { return options_; }
   // Any target or texture at a scale other than 1 (the pixel shaders must be render scale aware).
   bool scaled() const {
-    return bool(options_.effect_settings) || options_.render_scale_x != 1.0f || options_.render_scale_y != 1.0f ||
+    return bool(options_.effect_settings) || memory_scale_aware_ ||
+            options_.render_scale_x != 1.0f || options_.render_scale_y != 1.0f ||
            (options_.shadow_scale > 0.0f && options_.shadow_scale != 1.0f) ||
            (upscale_ && (upscale_->in_x != 1.0f || upscale_->in_y != 1.0f));
   }
@@ -394,6 +396,17 @@ class GameRenderer {
   bool RestoreTarget(HostTarget& target);
   void CheckMemoryBudget();
   void TrimClearTargets();
+  bool InitializeMemoryMigration();
+  void ApplyMemoryScale(nvrhi::ICommandList* cl);
+  bool MigrateMemoryDepth(nvrhi::ICommandList* cl, nvrhi::ITexture* from, nvrhi::ITexture* to);
+  nvrhi::IGraphicsPipeline* MemoryColorPipeline(nvrhi::Format format);
+  bool memory_scale_aware_ = false, memory_migration_ready_ = false;
+  float memory_floor_x_ = 1.0f, memory_floor_y_ = 1.0f;
+  float pending_memory_scale_ = 0.0f;
+  uint32_t memory_scale_steps_ = 0;
+  nvrhi::ShaderHandle memory_depth_ps_;
+  nvrhi::BindingLayoutHandle memory_depth_layout_;
+  std::array<nvrhi::GraphicsPipelineHandle, 9> memory_depth_pipelines_;
   std::chrono::steady_clock::time_point memory_sample_{};
   std::chrono::steady_clock::time_point memory_start_{};
   uint32_t memory_pressure_samples_ = 0;
@@ -607,7 +620,8 @@ class GameRenderer {
                  uint32_t stencil);
   bool Blit(nvrhi::ICommandList* cl, nvrhi::ITexture* source, int32_t sx, int32_t sy, int32_t w,
             int32_t h, nvrhi::ITexture* dest, uint32_t dest_level, uint32_t dest_slice, int32_t dx,
-            int32_t dy, const uint32_t channels[4], uint32_t blit_flags = 0, uint32_t blit_arg = 0);
+            int32_t dy, const uint32_t channels[4], uint32_t blit_flags = 0, uint32_t blit_arg = 0,
+            int32_t dest_width = 0, int32_t dest_height = 0);
   static constexpr uint32_t kBlitGammaRamp = 1;   // r, g, b through the display gamma ramp
   static constexpr uint32_t kBlitFxaa = 16;       // FXAA (blit_arg: edge search steps)
   static constexpr uint32_t kBlitDepthBytes = 2;  // a depth value as the D24S8 word's bytes
