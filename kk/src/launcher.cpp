@@ -245,9 +245,9 @@ constexpr const char* kRestartCvars[] = {"present_effect", "window_width", "wind
                                          "native_upscaler", "native_backend",
                                          "d3d12_allow_variable_refresh_rate_and_tearing"};
 
-enum Page { kHome, kDisplay, kGraphics, kGameplay, kControls, kCheatsPage, kAudio, kSubtitles, kAchievements, kAbout, kPageCount };
-constexpr const char* kPageNames[kPageCount] = {"Home",     "Display", "Graphics",     "Gameplay",
-                                                "Controls", "Cheats", "Audio", "Subtitles", "Achievements", "About"};
+enum Page { kHome, kDisplay, kGraphics, kGameplay, kControls, kCheatsPage, kAudio, kAchievements, kAbout, kPageCount };
+constexpr const char* kPageNames[kPageCount] = {"Home",   "Display", "Graphics",     "Gameplay", "Controls",
+                                                "Cheats", "Audio",   "Achievements", "About"};
 // Sub-pages of Controls.
 enum SubPage { kNoSubPage, kRemapPage, kKeysPage };
 // Play on Home: the Play menu and its pages (docs/menus.md).
@@ -806,7 +806,7 @@ class SettingsPages {
                     : "Start a game to create a save, then change its settings here or in the pause menu.";
   }
 
-  // The Subtitles row.
+  // Gameplay's Subtitles row.
   Item SubtitlesItem() {
     FlushProfileOptions(false);
     const auto profile = ShownProfileOptions();
@@ -823,9 +823,6 @@ class SettingsPages {
     Disable(it, !profile.available, ProfileUnavailableNote());
     return it;
   }
-
-  // The Subtitles page.
-  std::vector<Item> SubtitlesItems() { return {Section("Subtitles"), SubtitlesItem()}; }
 
   // The Audio page: the game's four volumes.
   std::vector<Item> AudioItems() {
@@ -1563,6 +1560,7 @@ class SettingsPages {
                                 {"Espa\xC3\xB1ol", "5"},
                                 {"Fran\xC3\xA7" "ais", "4"},
                                 {"Italiano", "6"}}));
+    items.push_back(SubtitlesItem());
     items.push_back(CvarToggle("Camera shake",
                                "The camera shaking from the V-Rex's footsteps, explosions and Kong's blows.",
                                "kk_camera_shake"));
@@ -4107,7 +4105,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       case kGraphics: items = GraphicsItems(); break;
       case kGameplay: items = GameplayItems(); break;
       case kAudio: items = AudioItems(); break;
-      case kSubtitles: items = SubtitlesItems(); break;
       case kControls:
         items = sub_ == kRemapPage ? RemapItems() : sub_ == kKeysPage ? KeyItems() : ControlsItems();
         break;
@@ -4452,7 +4449,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         return {"kk_fov", "kk_camera_shake", "kk_camera_shake_strength", "kk_show_fps",
                 "kk_skip_intros", "user_language"};
       case kAudio:
-      case kSubtitles:
         return {"#profile"};
       case kControls:
         return {"mnk_mode", "kk_button_prompts", "kk_camera_sensitivity", "kk_camera_modern", "kk_mouse_sensitivity",
@@ -4471,9 +4467,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   // Puts one page's settings back to their defaults; the other pages keep theirs.
   void ResetPage(Page page) {
-    if (page == kAudio || page == kSubtitles) {
-      if (page == kAudio) ResetAudio();
-      else ResetSubtitles();
+    if (page == kAudio) {
+      ResetAudio();
       return;
     }
     if (page == kGraphics) startup::ManualChoice();  // resets the renderer and API by hand
@@ -4492,6 +4487,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       rex::cvar::ResetToDefault(e.name);
     }
     ++g_changes;
+    // Gameplay's Subtitles is the game's own option, in every save (its default follows the language).
+    if (page == kGameplay) ResetSubtitles();
     if (page == kGraphics) ApplyRendererChoice();  // gpu_plugin follows kk_renderer
     if (page == kDisplay && cb_.set_fullscreen) cb_.set_fullscreen(GetBool("fullscreen"));
     Status(F("{0} settings are back to their defaults.", {T(std::string(kPageNames[page]))}));
@@ -5368,7 +5365,6 @@ class InGameSettingsImpl final : public InGameSettings, private SettingsPages {
       case kGraphics: items = GraphicsItems(); break;
       case kGameplay: items = GameplayItems(); break;
       case kAudio: items = AudioItems(); break;
-      case kSubtitles: items = SubtitlesItems(); break;
       case kControls:
         items = sub_ == kRemapPage ? RemapItems() : sub_ == kKeysPage ? KeyItems() : ControlsItems();
         break;
@@ -5378,10 +5374,9 @@ class InGameSettingsImpl final : public InGameSettings, private SettingsPages {
     return LiveOnly(std::move(items));
   }
   int SubPage() const override { return int(sub_); }
-  bool CanResetPage(Page page) const override { return page == kAudio || page == kSubtitles; }
+  bool CanResetPage(Page page) const override { return page == kAudio; }
   void ResetPage(Page page) override {
     if (page == kAudio) ResetAudio();
-    if (page == kSubtitles) ResetSubtitles();
   }
   void LeaveSubPage() override { sub_ = kNoSubPage; }
   void Tick() override {
@@ -5417,7 +5412,7 @@ class InGameSettingsImpl final : public InGameSettings, private SettingsPages {
 }  // namespace
 
 const char* InGameSettings::PageName(Page page) {
-  static const char* const kNames[kPageCount] = {"Display", "Graphics", "Gameplay", "Controls", "Cheats", "Audio", "Subtitles"};
+  static const char* const kNames[kPageCount] = {"Display", "Graphics", "Gameplay", "Controls", "Cheats", "Audio"};
   return page >= 0 && page < kPageCount ? kNames[page] : "";
 }
 
