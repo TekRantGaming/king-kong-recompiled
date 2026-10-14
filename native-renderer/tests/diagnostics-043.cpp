@@ -1,5 +1,6 @@
 // Real diagnostics implementation with only SDK configuration/log transport stubbed.
 #include "diagnostics.h"
+#include "crash_dump.h"
 #include <rex/cvar.h>
 #include <rex/logging.h>
 #include <spdlog/logger.h>
@@ -26,6 +27,9 @@ void Check(bool value, const char* message) {
 }
 int main(int argc, char** argv) {
   try {
+    Check(kk::FrameStallMilliseconds(100000, 100001) == 0, "concurrent frame created a false hang");
+    Check(kk::FrameStallMilliseconds(120000, 100000) == 20000, "real hang duration was lost");
+    Check(kk::FrameStallMilliseconds(100000, 100000) == 0, "fresh frame was stalled");
     Check(argc == 2, "supply private test output directory");
     const std::filesystem::path root = argv[1];
     std::filesystem::create_directories(root);

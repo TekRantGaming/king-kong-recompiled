@@ -246,18 +246,19 @@ void WatchForHangs() {
     }
 #endif
     const int32_t hitch_ms = REXCVAR_GET(kk_hitch_report_ms);
-    if (hitch_ms > 0 && last != hitch_at && now - last >= ULONGLONG(hitch_ms)) {
+    const ULONGLONG stalled_ms = FrameStallMilliseconds(now, last);
+    if (hitch_ms > 0 && last != hitch_at && stalled_ms >= ULONGLONG(hitch_ms)) {
       hitch_at = last;
-      WriteHitchReport(now - last);
+      WriteHitchReport(stalled_ms);
     }
     if (reported_at) {
       if (last != reported_at) {
-        REXLOG_WARN("KK: the game is drawing again after a {} s freeze", (last - reported_at) / 1000);
+        REXLOG_WARN("KK: the game is drawing again after a {} s freeze", FrameStallMilliseconds(last, reported_at) / 1000);
         reported_at = 0;
       }
-    } else if (now - last >= kHangMs) {
+    } else if (stalled_ms >= kHangMs) {
       reported_at = last;
-      WriteHangReport(now - last);
+      WriteHangReport(stalled_ms);
     }
   }
 }
