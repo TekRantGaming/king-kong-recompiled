@@ -220,3 +220,23 @@ add_executable(nr_cpu_paths_tests cpu_paths_tests.cpp
     "${NR_ROOT}/resources/src/tiling.cpp")
 target_include_directories(nr_cpu_paths_tests PRIVATE "${NR_ROOT}" "${NR_ROOT}/resources/include")
 add_test(NAME nr_cpu_paths_tests COMMAND nr_cpu_paths_tests)
+
+# Synthetic lighting scenes, no game process or game-derived assets.
+if(NR_HAS_VULKAN AND NR_GAME_RENDERER)
+    find_program(NR_LIGHTING_DXC dxc HINTS "${NR_DXC_DIR}" REQUIRED)
+    foreach(stage vs ps)
+        set(blob "${CMAKE_CURRENT_BINARY_DIR}/lighting_trace_${stage}.h")
+        add_custom_command(OUTPUT "${blob}"
+            COMMAND "${NR_LIGHTING_DXC}" -T ${stage}_6_0 -E ${stage}_main -HV 2021 -O3
+                -spirv -fspv-target-env=vulkan1.2
+                -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-b-shift 256 0
+                -Fh "${blob}" -Vn lighting_trace_${stage}
+                "${CMAKE_CURRENT_SOURCE_DIR}/lighting_trace.hlsl"
+            DEPENDS lighting_trace.hlsl "${NR_ROOT}/shaders/hlsl/kk_lighting.hlsli")
+        list(APPEND lighting_test_blobs "${blob}")
+    endforeach()
+    add_executable(nr_lighting_tests lighting_tests.cpp vk_test_device.cpp readback.cpp ${lighting_test_blobs})
+    target_include_directories(nr_lighting_tests PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
+    target_link_libraries(nr_lighting_tests PRIVATE nr_renderer ${CMAKE_DL_LIBS})
+    add_test(NAME nr_lighting_tests COMMAND nr_lighting_tests)
+endif()

@@ -39,6 +39,7 @@ struct Ssgi::Constants {
   float reproject[16] = {};
   float screen_xy[4] = {};
   float screen_z[4] = {};
+  float shape[4] = {};    // multi-bounce strength, largest darkening share, gamma
 };
 
 namespace {
@@ -79,6 +80,8 @@ nvrhi::ShaderHandle MakeShader(nvrhi::IDevice* device, int id, nvrhi::ShaderType
 }
 
 enum SetKind { kSetRadiance, kSetComposite };
+// fixed_sets_ (EnsureImages).
+enum FixedSet { kSetGather, kSetDenoiseAB, kSetDenoiseBA, kSetTemporal, kSetDown };
 
 // The part of shaders/gtao.hlsl's constants the GI reuses: XeGTAO's, the picture, the working size,
 // then the step and the sky's stored depth.
@@ -212,11 +215,9 @@ bool Ssgi::EnsureImages(const Gtao& gtao) {
   nvrhi::ITexture* depth = gtao.view_depth();
   nvrhi::ITexture* normals = gtao.normals();
   nvrhi::ITexture* raw = gtao.raw_depth();
+  // fixed_sets_: the gather, the two blur directions, the temporal pass, then one per radiance mip
+  // below the first (kSetDown + mip - 1).
   fixed_sets_ = {
-      Set(radiance_down_, {cb, S::Texture_SRV(0, radiance_, nvrhi::Format::UNKNOWN, mip(0)),
-                           S::Texture_UAV(0, radiance_, nvrhi::Format::UNKNOWN, mip(1))}),
-      Set(radiance_down_, {cb, S::Texture_SRV(0, radiance_, nvrhi::Format::UNKNOWN, mip(1)),
-                           S::Texture_UAV(0, radiance_, nvrhi::Format::UNKNOWN, mip(2))}),
       Set(gather_, {cb, S::Texture_SRV(0, depth, nvrhi::Format::UNKNOWN, all_depth), S::Texture_SRV(1, normals),
                     S::Texture_SRV(2, radiance_, nvrhi::Format::UNKNOWN, all_radiance), S::Texture_SRV(3, raw),
                     S::Sampler(0, point_clamp_), S::Sampler(1, linear_clamp_), S::Texture_UAV(0, gi_a_)}),
@@ -227,13 +228,15 @@ bool Ssgi::EnsureImages(const Gtao& gtao) {
       Set(temporal_, {cb, S::Texture_SRV(0, gi_a_), S::Texture_SRV(1, history_), S::Texture_SRV(2, history_depth_),
                       S::Texture_SRV(3, raw), S::Texture_UAV(0, gi_b_)}),
   };
+  for (uint32_t m = 1; m < kRadianceMips; ++m)
+    fixed_sets_.push_back(Set(radiance_down_, {cb, S::Texture_SRV(0, radiance_, nvrhi::Format::UNKNOWN, mip(m - 1)),
+                                               S::Texture_UAV(0, radiance_, nvrhi::Format::UNKNOWN, mip(m))}));
   for (const nvrhi::BindingSetHandle& s : fixed_sets_) {
     if (!s) {
       gi_a_ = nullptr;
       return false;
     }
   }
-  static_assert(kRadianceMips == 3, "two down passes");
   padded_w_ = pw;
   padded_h_ = ph;
   images_of_ = &gtao;
@@ -252,13 +255,15 @@ void Ssgi::FillConstants(Constants& k, const Gtao& gtao, const SsgiSettings& s, 
   k.params[3] = std::max(s.thickness, 1e-4f);
   k.gather[0] = float(std::max(s.level.slices, 1u));
   k.gather[1] = float(std::max(s.level.steps, 1u));
-  // At most a fifth of the picture's height (working pixels): wider gathers miss in the noise.
-  k.gather[2] = std::max(8.0f, 0.2f * float(k.working[1]));
+  // At most this share of the picture's height (working pixels): the radiance's mips and the
+  // temporal accumulation keep a scene-scale gather smooth.
+  k.gather[2] = std::max(8.0f, kMaxScreenRadius * float(k.working[1]));
   k.gather[3] = s.intensity;
   k.ambient[0] = s.ambient[0];
   k.ambient[1] = s.ambient[1];
   k.ambient[2] = s.ambient[2];
-  k.ambient[3] = std::clamp(s.albedo, 0.05f, 1.0f);
+  // The albedo limit is given as a picture value (gamma); the composite works in linear light.
+  k.ambient[3] = std::pow(std::clamp(s.albedo, 0.05f, 1.0f), kGamma);
   k.mode[0] = std::clamp(s.occlusion, 0.0f, 1.0f);
   k.mode[1] = float(s.debug);
   k.mode[2] = float(kRadianceMips);
@@ -270,6 +275,9 @@ void Ssgi::FillConstants(Constants& k, const Gtao& gtao, const SsgiSettings& s, 
   std::memcpy(k.reproject, s.reproject, sizeof(k.reproject));
   std::memcpy(k.screen_xy, s.screen_xy, sizeof(k.screen_xy));
   std::memcpy(k.screen_z, s.screen_z, sizeof(k.screen_z));
+  k.shape[0] = std::clamp(s.bounces, 0.0f, 1.0f);
+  k.shape[1] = std::clamp(s.darkest, 0.0f, 1.0f);
+  k.shape[2] = kGamma;
 }
 
 bool Ssgi::Compute(nvrhi::ICommandList* cl, const Gtao& gtao, nvrhi::ITexture* color, const SsgiSettings& s) {
@@ -290,14 +298,16 @@ bool Ssgi::Compute(nvrhi::ICommandList* cl, const Gtao& gtao, nvrhi::ITexture* c
   }
   if (!radiance) return false;
   Dispatch(cl, radiance_pass_, radiance, (pw + 7) / 8, (ph + 7) / 8);
-  Dispatch(cl, radiance_down_, fixed_sets_[0], (pw / 2 + 7) / 8, (ph / 2 + 7) / 8);
-  Dispatch(cl, radiance_down_, fixed_sets_[1], (pw / 4 + 7) / 8, (ph / 4 + 7) / 8);
-  Dispatch(cl, gather_, fixed_sets_[2], (pw + 7) / 8, (ph + 7) / 8);
+  for (uint32_t m = 1; m < kRadianceMips; ++m) {
+    const uint32_t mw = std::max(pw >> m, 1u), mh = std::max(ph >> m, 1u);
+    Dispatch(cl, radiance_down_, fixed_sets_[kSetDown + m - 1], (mw + 7) / 8, (mh + 7) / 8);
+  }
+  Dispatch(cl, gather_, fixed_sets_[kSetGather], (pw + 7) / 8, (ph + 7) / 8);
   // Temporal accumulation: a into b with the history, b kept as the next frame's history and this
   // frame's view depth with it; the blur then starts from b.
   bool from_b = false;
   if (s.temporal) {
-    Dispatch(cl, temporal_, fixed_sets_[5], (pw + 7) / 8, (ph + 7) / 8);
+    Dispatch(cl, temporal_, fixed_sets_[kSetTemporal], (pw + 7) / 8, (ph + 7) / 8);
     const nvrhi::TextureSlice all;
     cl->copyTexture(history_, all, gi_b_, all);
     cl->copyTexture(history_depth_, all, gtao.view_depth(), nvrhi::TextureSlice().setMipLevel(0));
@@ -312,7 +322,7 @@ bool Ssgi::Compute(nvrhi::ICommandList* cl, const Gtao& gtao, nvrhi::ITexture* c
     FillConstants(k, gtao, s, float(1u << i));
     cl->writeBuffer(constants_, &k, sizeof(k));
     const bool a_to_b = ((i & 1) == 0) != from_b;
-    Dispatch(cl, denoise_, fixed_sets_[a_to_b ? 3 : 4], (pw + 7) / 8, (ph + 7) / 8);
+    Dispatch(cl, denoise_, fixed_sets_[a_to_b ? kSetDenoiseAB : kSetDenoiseBA], (pw + 7) / 8, (ph + 7) / 8);
     last = a_to_b ? gi_b_.Get() : gi_a_.Get();
   }
   result_ = last;

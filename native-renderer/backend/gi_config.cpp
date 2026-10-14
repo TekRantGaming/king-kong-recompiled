@@ -14,14 +14,16 @@ void ApplyGiJitter(float rows[16], float ndc_x, float ndc_y) {
 GiLevelParams GiParamsFor(GiLevel level) {
   GiLevelParams p;
   switch (level) {
+    // Scene-scale radii (world units, metres): a sunlit wall lights the shade a few metres away, as
+    // it does outdoors. The radiance's mips and the temporal accumulation keep the wide gather smooth.
     case GiLevel::kLow:
-      p = {2, 4, 2, true, 1.5f};
+      p = {2, 6, 2, true, 3.0f};
       break;
     case GiLevel::kMedium:
-      p = {3, 6, 3, true, 2.0f};
+      p = {3, 8, 3, true, 5.0f};
       break;
     case GiLevel::kHigh:
-      p = {4, 8, 3, false, 2.5f};
+      p = {4, 10, 3, false, 8.0f};
       break;
     default:
       break;

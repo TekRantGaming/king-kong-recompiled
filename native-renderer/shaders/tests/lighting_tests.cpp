@@ -77,7 +77,7 @@ std::string withoutHook(std::string hlsl) {
 void testList() {
     size_t n = 0;
     const uint64_t* list = waterReflectionShaders(&n);
-    CHECK(n == 13);
+    CHECK(n == 14);
     int fetch = 0, output = 0, normal = 0;
     for (size_t i = 0; i < n; i++) {
         const WaterReflectionHook h = waterReflectionHookFor(list[i]);
@@ -87,7 +87,7 @@ void testList() {
         if (h.normalMap) normal++;
         CHECK((h.fetchMask & ~0x6u) == 0);  // the planar reflection (1) and the environment cube (2) only
     }
-    CHECK(fetch == 13 && output == 0 && normal == 7);
+    CHECK(fetch == 13 && output == 1 && normal == 8);
     CHECK(!waterReflectionHookFor(0x1B65AC7429B67FE9ull).enabled());  // the fog pass
     CHECK(!waterReflectionHookFor(0xAC2239A7CA9EDF1Cull).enabled());  // pswater's mask: no reflection of its own
     CHECK(!lightingText().empty() && lightingText().find("cbuffer KKLighting : register(b5, space0)") != std::string::npos);

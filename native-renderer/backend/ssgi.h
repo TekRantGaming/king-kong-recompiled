@@ -26,6 +26,8 @@ struct SsgiSettings {
   float thickness = 0.5f;        // world units
   float albedo = 0.6f;           // the largest albedo the composite assumes
   float occlusion = 1.0f;        // how much of the hidden ambient light is taken away (0: none)
+  float bounces = 1.0f;          // multi-bounce strength (0: one bounce)
+  float darkest = 0.35f;         // the largest share of a pixel's light the composite may take away
   float ambient[3] = {0.25f, 0.25f, 0.25f};  // the frame's flat ambient light (the game's g_vAmbientColor)
   int debug = 0;                 // GiConfig::debug
   // Temporal accumulation (docs/gi.md, "Temporal accumulation"): on when `temporal` is set; the history
@@ -67,7 +69,11 @@ class Ssgi {
   bool has_history() const { return history_valid_; }
   void DropHistory() { history_valid_ = false; }
 
-  static constexpr uint32_t kRadianceMips = 3;
+  static constexpr uint32_t kRadianceMips = 5;
+  // The picture's gamma (the game's targets hold display values; the GI works in linear light).
+  static constexpr float kGamma = 2.2f;
+  // The largest gather radius on the screen, as a share of the picture's height.
+  static constexpr float kMaxScreenRadius = 0.45f;
 
  private:
   struct Constants;

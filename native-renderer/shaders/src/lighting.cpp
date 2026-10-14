@@ -21,6 +21,9 @@ struct WaterEntry {
 // (a depth pass of the sea; the census in docs/lighting.md), so its output hook would show nothing.
 constexpr uint32_t kPlanar = 1u << 1, kCube = 1u << 2;
 const WaterEntry kWater[] = {
+    // The census at frame 10800 shows this non-reflective pswater variant drawing the
+    // visible water after its alpha/depth mask. It has normal map 3, but no fetch 1/2.
+    {0x805E38F150347CFAull, {0, true, true}},
     {0x2C85A92BB1A137E8ull, {kPlanar | kCube, false, true}},
     {0x360F0E42457F07F7ull, {kPlanar | kCube, false, false}},
     {0x52E2BA7C879B4217ull, {kPlanar | kCube, false, true}},

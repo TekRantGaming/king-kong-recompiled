@@ -288,14 +288,14 @@ REXCVAR_DEFINE_DOUBLE(native_gi_radius, 0.0, "Native renderer",
 
 REXCVAR_DEFINE_DOUBLE(native_gi_thickness, 0.0, "Native renderer",
                       "How deep the global illumination takes a surface on the screen to be, in world units (0: a "
-                      "quarter of the radius)")
+                      "fifth of the radius, 0.25 to 1)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-REXCVAR_DEFINE_DOUBLE(native_gi_albedo, 0.6, "Native renderer",
+REXCVAR_DEFINE_DOUBLE(native_gi_albedo, 0.75, "Native renderer",
                       "The brightest surface colour the global illumination's composite assumes (0.05 to 1)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-REXCVAR_DEFINE_DOUBLE(native_gi_occlusion, 1.0, "Native renderer",
+REXCVAR_DEFINE_DOUBLE(native_gi_occlusion, 0.0, "Native renderer",
                       "With ambient occlusion off: how much of the flat ambient light the global illumination "
                       "takes away where surfaces hide the sky (0 to 1)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);

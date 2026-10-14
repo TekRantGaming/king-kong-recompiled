@@ -28,6 +28,13 @@
 
 namespace nr {
 
+// The direction to the sun in the camera's view space (x right, y up, z forward), from psshadowquad's
+// first light (rows of g_mCamToLightMatrix, applied to (x d, y d, d, 1) with x, y the NDC and d the stored
+// depth), the fog pass's g_vFogNormalizing (1 / view z = x * d - y) and the camera's projection scales:
+// the direction along which the light's shadow-map position does not change, towards the light. False
+// when it cannot be told (a degenerate matrix).
+bool SunDirectionFromShadow(const float light[16], float norm_x, float norm_y, float px, float py, float out[3]);
+
 class SceneLighting {
  public:
   SceneLighting(nvrhi::IDevice* device, const LightingConfig& config);
@@ -86,6 +93,19 @@ class SceneLighting {
   void NoteFog(uint64_t frame, const Fog& f);
   // The game drew its own light shafts this frame (pslightshaft's render mode).
   void NoteShafts(uint64_t frame);
+  // The volumetric light on a colour target with its depth (RunVolumetric, after the fog pass; the
+  // tests call it directly). shadow: the screen-space shadow's light and map, or none (god rays only).
+  // px, py: the camera's projection scales (0: not known).
+  struct VolumetricInput {
+    nvrhi::ITexture* color = nullptr;
+    nvrhi::ITexture* depth = nullptr;  // the stored depth (a depth target or a resolved depth)
+    const ShadowQuad* shadow = nullptr;
+    Fog fog;
+    float px = 0.0f, py = 0.0f;
+  };
+  bool Volumetric(nvrhi::ICommandList* cl, const VolumetricInput& in);
+  // The god rays' strength at --native_volumetric_strength 1 (times the rays' mean brightness).
+  static constexpr float kGodRayExposure = 0.5f;
   // At Present.
   void OnPresent(nvrhi::ICommandList* cl);
 
@@ -149,10 +169,13 @@ class SceneLighting {
   // Volumetric light.
   bool RunVolumetric(nvrhi::ICommandList* cl);
   nvrhi::IGraphicsPipeline* VolumetricPipeline(const nvrhi::FramebufferInfo& info);
+  bool EnsureVolumetricImages(const nvrhi::TextureDesc& color);
   nvrhi::ShaderHandle vol_vs_, vol_ps_;
   nvrhi::BindingLayoutHandle vol_layout_;
   nvrhi::BufferHandle vol_constants_;
-  nvrhi::SamplerHandle point_clamp_;
+  nvrhi::SamplerHandle point_clamp_, linear_clamp_;
+  Pass mask_pass_, centroid_pass_, radial_pass_;
+  nvrhi::TextureHandle vol_copy_, vol_mask_, vol_rays_, vol_centroid_, vol_no_shadow_;
   std::map<nvrhi::ITexture*, nvrhi::FramebufferHandle> vol_framebuffers_;
   std::map<uint32_t, nvrhi::GraphicsPipelineHandle> vol_pipelines_;  // by colour format
   ShadowQuad shadow_quad_;

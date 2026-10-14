@@ -42,7 +42,7 @@ ShaderLibrary::Replacement ShadowReplacement(bool spirv, uint32_t lights, bool p
   if (lights == 3) r = pcss ? NR_SHADOW(3, pcss) : NR_SHADOW(3, pcf);
 #undef NR_SHADOW
   // A distinct input hash per quality: the replaced shader's pipelines never meet the game's.
-  r.tag = pcss ? UINT64_C(0x4C69676853534350) : UINT64_C(0x4C69676850434621);
+  r.tag = pcss ? UINT64_C(0x4C69676853534351) : UINT64_C(0x4C69676850434621);
   return r;
 }
 
