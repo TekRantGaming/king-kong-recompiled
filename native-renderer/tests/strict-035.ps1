@@ -52,9 +52,16 @@ if ($Backend -eq 'warp') { $args+='--d3d12_adapter=-2','--d3d12_queue_priority=0
 Get-ChildItem -LiteralPath $run -File | Where-Object { $_.Extension -in '.exe','.dll','.pack' } |
  ForEach-Object { [PSCustomObject]@{file=$_.Name;sha256=(Get-FileHash -LiteralPath $_.FullName).Hash} } |
  ConvertTo-Json | Set-Content "$run\artifacts.json"
-while ((Read-Lock) -ne 'free' -or (Get-Process king_kong -ErrorAction SilentlyContinue | Where-Object { $_.Path -like 'F:\KK-native-renderer\runs\*' -or $_.Path -like 'F:\KK-native-renderer\wt\*' })) { Start-Sleep -Seconds 30 }
+while ($true) {
+ $state=Read-Lock
+ $games=@(Get-CimInstance Win32_Process -Filter "name = 'king_kong.exe'")
+ if ($state -eq 'free' -and $games.Count -eq 0) { break }
+ $userGame=@($games | Where-Object { !$_.ExecutablePath -or ($_.ExecutablePath -notlike 'F:\KK-native-renderer\runs\*' -and $_.ExecutablePath -notlike 'F:\KK-native-renderer\wt\*') })
+ Start-Sleep -Seconds $(if ($userGame.Count) {60} else {30})
+}
 if (!(Get-Process kkbg2 -ErrorAction SilentlyContinue)) { throw 'kkbg2 is required.' }
 if ((Read-Lock) -ne 'free') { throw 'Lock changed before launch.' }
+if (Get-CimInstance Win32_Process -Filter "name = 'king_kong.exe'") { throw 'A game started before launch; retry after it closes.' }
 Set-Content -LiteralPath $lockPath "task035 $(Get-Date -Format o)"
 $game=$null
 try {
