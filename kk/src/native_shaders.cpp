@@ -23,6 +23,7 @@
 #include "shader_progress.h"
 
 #include <algorithm>
+#include <thread>
 
 namespace kk {
 
@@ -132,7 +133,10 @@ void NativeShaderPack::Start(const std::filesystem::path& cache_dir, const std::
   impl_->worked = false;
   impl_->bar.Reset();
   impl_->started = true;
-  impl_->job = impl_->api->start(Utf8(cache_dir).c_str(), Utf8(game_dir).c_str(), 0, 1, force ? 1 : 0);
+  // Every hardware thread but one: the launcher's window and its music keep one for themselves.
+  const unsigned hardware = std::max(1u, std::thread::hardware_concurrency());
+  const uint32_t threads = hardware > 1 ? hardware - 1 : 1;
+  impl_->job = impl_->api->start(Utf8(cache_dir).c_str(), Utf8(game_dir).c_str(), threads, 1, force ? 1 : 0);
 }
 
 void NativeShaderPack::Cancel() {

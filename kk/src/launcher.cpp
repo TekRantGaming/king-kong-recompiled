@@ -2148,7 +2148,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
     if (files_ok_ && !music_) music_ = std::make_unique<LauncherMusic>(paths_.game_dir);
     if (music_) {
-      const float v = GetBool("kk_launcher_music") ? GetInt("kk_launcher_music_volume", 50) / 100.0f : 0.0f;
+      // Silent while the native renderer's shaders are built (setup, after an update, before Play): the
+      // build takes nearly every hardware thread and the music would stutter. It fades back in after.
+      const bool on = GetBool("kk_launcher_music") && !native_pack_.Working();
+      const float v = on ? GetInt("kk_launcher_music_volume", 50) / 100.0f : 0.0f;
       music_->Update(v * v, io.DeltaTime);  // a gentler curve than linear
     }
     if (files_ok_ && GetBool("kk_launcher_sounds") && !ui_sounds_)

@@ -26,7 +26,8 @@ class NativeShaderPack {
   static bool Wanted();
 
   // Checks the pack for the current settings and builds it if it is missing or stale, on a
-  // thread of the plugin's (low priority, every hardware thread). Does nothing while one runs.
+  // thread of the plugin's (low priority, every hardware thread but one: the launcher and its
+  // music keep one for themselves). Does nothing while one runs.
   // force: build it even when it is current (Home's "recompile shaders").
   void Start(const std::filesystem::path& cache_dir, const std::filesystem::path& game_dir, bool force = false);
   void Cancel();
