@@ -1400,7 +1400,8 @@ class SettingsPages {
       it.label = "Recommended";
       it.description = "Detect your hardware and recommend render resolution, upscaling and ambient occlusion. "
                        "Settings you changed are kept. The frame-rate cap, graphics API and lighting effects are kept.";
-      it.value_text = Get("kk_hardware_tier");
+      const std::string tier = Get("kk_hardware_tier");
+      it.value_text = tier == "low" ? "Low" : tier == "mid" ? "Medium" : tier == "high" ? "High" : tier;
       it.on_activate = [this] {
         const auto output = cb_.output_size ? cb_.output_size() : PrimaryScreenSize();
         ApplyHardwareRecommendation(true, output.first, output.second);
@@ -2114,7 +2115,15 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // A fallback the player has not been told about: shown once, then the launcher no longer opens for it.
     if (!recovery_shown_ && !modal_.open && startup::NeedsNotice()) {
       recovery_shown_ = true;
-      const std::string recovery = startup::Message();
+      std::string failed, selected;
+      startup::NoticeApis(failed, selected);
+      const std::string recovery =
+          (selected == "Classic"
+               ? F("{0} did not start correctly on this PC, so the game now uses the Classic renderer. You can "
+                   "keep it or try {0} again.", {failed})
+               : F("{0} did not start correctly on this PC, so the game now uses {1}. You can keep it or try {0} "
+                   "again.", {failed, selected})) +
+          "\n\n" + F("Details: {0}", {startup::Message()});
       startup::NoticeShown();
       OpenModal("Renderer startup recovery", recovery,
                 {"Continue with safe renderer", "Try native again"}, 0, [this](int i) {

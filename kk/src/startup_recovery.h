@@ -13,6 +13,9 @@ std::string ApplyChoice(const std::string& plugin);
 void Begin(const std::string& plugin, bool game);
 void CleanExit();
 std::string Message();
+// The API that failed and the renderer used instead, as shown to the player ("Vulkan", "DirectX 12",
+// "Classic").
+void NoticeApis(std::string& failed, std::string& selected);
 // A fallback the player has not been told about yet: the launcher opens to show it once.
 bool NeedsNotice();
 // The launcher showed the notice.

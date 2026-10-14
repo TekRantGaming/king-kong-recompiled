@@ -265,6 +265,11 @@ void CleanExit() {
   Signal('C');
 }
 std::string Message() { std::lock_guard lock(mutex); return state ? state->reason : ""; }
+void NoticeApis(std::string& failed, std::string& selected) {
+  std::lock_guard lock(mutex);
+  failed = state ? RecoveryState::Name(state->preferred) : "";
+  selected = state ? RecoveryState::Name(state->selected) : "";
+}
 bool NeedsNotice() {
 #if defined(KK_DEV_TOOLS)
   if (REXCVAR_GET(kk_dev_startup_skip_notice)) return false;
