@@ -214,6 +214,13 @@ class GameRenderer {
   // The temporal upscaler's state (null when off; tests and logging).
   const GameUpscale* upscale() const { return upscale_.get(); }
   const Stats& stats() const { return stats_; }
+  // The frame timing summary (backend.cpp): the GPU time of each pass group since the last call, from
+  // the timers that already run (AO and the upscale point with the graphics panel's live settings, GI
+  // and the lighting options while they are on). frames == 0: not timed in the window.
+  struct EffectGpuWindow {
+    AoGpuTimer::Window ao, gi, upscaler, shadows, water, volumetrics;
+  };
+  EffectGpuWindow TakeEffectGpuWindow();
 
   // Pipeline stutter (docs/backend.md, "Stutter counter"): frames in which a draw waited for its
   // pipeline (on a worker within the budget or with pipeline_wait, or made on the draw thread) or

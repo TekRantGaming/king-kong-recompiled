@@ -10,12 +10,14 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <nvrhi/nvrhi.h>
@@ -92,7 +94,17 @@ class Renderer final : public DrawSink {
     // command list's close, its submission (including the wait for the queue), the frame's end.
     uint64_t present_copy_us = 0, present_close_us = 0, present_submit_us = 0, present_end_us = 0;
     uint64_t gpu_reuse_wait_us = 0;
+    // The render thread's CPU execution time, sampled at each Present (frame timing summary).
+    uint64_t render_cpu_us = 0;
   };
+
+  // The frame timing summary's window (backend.cpp): the intervals between the frames' Presents on
+  // the thread that records them (microseconds), and the whole frame's GPU time (the frame command
+  // list: the scene, AO, upscaler and post passes; not the presenter's copy).
+  std::vector<uint32_t> TakeFrameIntervals() { return std::exchange(frame_intervals_, {}); }
+  AoGpuTimer::Window TakeFrameGpuWindow() {
+    return frame_gpu_timer_ ? frame_gpu_timer_->TakeWindow() : AoGpuTimer::Window{};
+  }
 
   explicit Renderer(nvrhi::IDevice* device);
   ~Renderer() override;
@@ -193,7 +205,12 @@ class Renderer final : public DrawSink {
   std::array<nvrhi::CommandListHandle, 4> frame_lists_;
   uint32_t frame_list_index_ = 0;
   bool frame_open_ = false;
-  std::unique_ptr<AoGpuTimer> debug_gpu_timer_;
+  void WaitForFrameImage();
+  // The whole frame's GPU time (always on: one timestamp pair a frame; logged by itself only with
+  // --native_debug bit 32768).
+  std::unique_ptr<AoGpuTimer> frame_gpu_timer_;
+  std::vector<uint32_t> frame_intervals_;
+  std::chrono::steady_clock::time_point last_present_time_{};
   struct TimedPass {
     std::string name;
     AoGpuTimer timer;

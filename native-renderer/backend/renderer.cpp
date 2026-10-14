@@ -52,7 +52,7 @@ Renderer::~Renderer() { Shutdown(); }
 void Renderer::EnableGame(std::unique_ptr<GameRenderer> game) { game_ = std::move(game); }
 
 void Renderer::Shutdown() {
-  debug_gpu_timer_.reset();
+  frame_gpu_timer_.reset();
   debug_open_pass_ = nullptr;
   debug_pass_timers_.clear();
   game_.reset();
@@ -240,23 +240,30 @@ void Renderer::RecordTestTriangle(nvrhi::ICommandList* command_list, nvrhi::ITex
   command_list->draw(args);
 }
 
+void Renderer::WaitForFrameImage() {
+  // Submission alone does not retire volatile constant versions or upload pages.
+  // Wait for the older frame before reusing its image, bounding GPU work to two frames.
+  if (frame_wait_ && stats_.frames_submitted >= frame_queries_.size()) {
+    const auto start = std::chrono::steady_clock::now();
+    frame_wait_(frame_queries_[recording_]);
+    stats_.gpu_reuse_wait_us += uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - start).count());
+  }
+}
+
 nvrhi::ICommandList* Renderer::FrameCommandList() {
   if (!frame_open_) {
-    // Submission alone does not retire volatile constant versions or upload pages.
-    // Wait for the older frame before reusing its image, bounding GPU work to two frames.
-    if (frame_wait_ && stats_.frames_submitted >= frame_queries_.size()) {
-      const auto start = std::chrono::steady_clock::now();
-      frame_wait_(frame_queries_[recording_]);
-      stats_.gpu_reuse_wait_us += uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
-          std::chrono::steady_clock::now() - start).count());
-    }
+    WaitForFrameImage();
     frame_command_list_->open();
+    if (!frame_gpu_timer_) {
+      frame_gpu_timer_ = std::make_unique<AoGpuTimer>(device_, "whole frame", "frame GPU time");
 #if NR_GAME_RENDERER
-    if (game_ && (game_->options().debug & 32768)) {
-      if (!debug_gpu_timer_) debug_gpu_timer_ = std::make_unique<AoGpuTimer>(device_, "whole frame", "frame GPU time");
-      debug_gpu_timer_->Begin(frame_command_list_);
-    }
+      frame_gpu_timer_->set_quiet(!(game_ && (game_->options().debug & 32768)));
+#else
+      frame_gpu_timer_->set_quiet(true);
 #endif
+    }
+    frame_gpu_timer_->Begin(frame_command_list_);
     frame_open_ = true;
     if (game_) game_->UploadDummies(frame_command_list_);
     // A defined depth at the start of every frame (the game's own depth clear
@@ -492,7 +499,7 @@ void Renderer::OnPresent(uint32_t frame, uint32_t render_target0, uint32_t devic
   if (!frame_open_) return;
   if (debug_open_pass_) debug_open_pass_->timer.End(frame_command_list_);
   debug_open_pass_ = nullptr;
-  if (debug_gpu_timer_) debug_gpu_timer_->End(frame_command_list_);
+  if (frame_gpu_timer_) frame_gpu_timer_->End(frame_command_list_);
   frame_command_list_->close();
   frame_open_ = false;
   const auto t2 = clock::now();
@@ -522,7 +529,12 @@ void Renderer::OnPresent(uint32_t frame, uint32_t render_target0, uint32_t devic
   recording_ ^= 1;
   if (observer_) observer_->OnFrameSubmitted(frame, frames_[presented_]);
   if (game_) game_->EndFrame();
-  if (debug_gpu_timer_) debug_gpu_timer_->FrameEnd();
+  if (frame_gpu_timer_) frame_gpu_timer_->FrameEnd();
+  // The frame timing summary: this thread's CPU time and the interval between Presents.
+  stats_.render_cpu_us = CurrentThreadCpuMicroseconds();
+  if (last_present_time_.time_since_epoch().count() != 0 && frame_intervals_.size() < 8192)
+    frame_intervals_.push_back(uint32_t(std::min<uint64_t>(us(last_present_time_, t3), UINT32_MAX)));
+  last_present_time_ = t3;
   for (auto& [key, pass] : debug_pass_timers_) pass->timer.FrameEnd();
   const auto t4 = clock::now();
   stats_.present_close_us += us(t1, t2);

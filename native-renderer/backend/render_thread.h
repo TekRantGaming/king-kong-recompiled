@@ -81,6 +81,11 @@ class ThreadedSink final : public DrawSink {
     uint64_t fence_waits = 0;        // WaitDone calls that had to wait
     uint64_t fence_wait_us = 0;      // the ring skimmer waiting for the render thread
     uint64_t max_backlog = 0;        // commands
+    // The frame timing summary (backend.cpp): Presents queued, the calling (game) thread's CPU
+    // execution time sampled at each, and the render thread waiting for calls (nothing to do).
+    uint64_t presents = 0;
+    uint64_t game_cpu_us = 0;
+    uint64_t render_idle_us = 0;
   };
 
   // `inner` runs the calls on the render thread; `memory` is live guest memory, read on the game's

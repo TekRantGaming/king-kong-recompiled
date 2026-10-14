@@ -708,6 +708,71 @@ void Backend::Shutdown() {
   host_.reset();
 }
 
+void Backend::LogFrameTiming() {
+  if (!renderer_) return;
+  // Each value is per rendered frame of the window (sums of the window divided by its frames).
+  const auto now = std::chrono::steady_clock::now();
+  const Renderer::Stats& r = renderer_->stats();
+  TimingMark m;
+  m.at = now;
+  m.frames = r.frames_submitted;
+  m.render_cpu_us = r.render_cpu_us;
+  m.reuse_wait_us = r.gpu_reuse_wait_us;
+  m.submit_us = r.present_submit_us;
+  m.refresh_us = g_swap_refresh_us.load();
+  if (threaded_) {
+    const ThreadedSink::Stats t = threaded_->stats();
+    m.game_cpu_us = t.game_cpu_us;
+    m.game_room_us = t.backpressure_us;
+    m.game_presents = t.presents;
+    m.render_idle_us = t.render_idle_us;
+  }
+#if NR_GAME_RENDERER
+  GameRenderer* g = renderer_->game();
+  if (g) m.pipeline_wait_ms = g->stats().pipeline_wait_ms;
+#endif
+  const TimingMark p = timing_mark_;
+  timing_mark_ = m;
+  std::vector<uint32_t> intervals = renderer_->TakeFrameIntervals();
+  const AoGpuTimer::Window frame_gpu = renderer_->TakeFrameGpuWindow();
+#if NR_GAME_RENDERER
+  const GameRenderer::EffectGpuWindow passes = g ? g->TakeEffectGpuWindow() : GameRenderer::EffectGpuWindow{};
+#endif
+  const uint64_t frames = m.frames - p.frames;
+  if (p.at.time_since_epoch().count() == 0 || frames == 0) return;  // the first mark starts the window
+  const double seconds = std::chrono::duration<double>(now - p.at).count();
+  std::sort(intervals.begin(), intervals.end());
+  auto pct = [&](double q) {
+    return intervals.empty() ? 0.0 : intervals[std::min(intervals.size() - 1, size_t(q * double(intervals.size())))] / 1000.0;
+  };
+  const double n = double(frames);
+  auto per = [&](uint64_t now_us, uint64_t then_us) { return double(now_us - then_us) / 1000.0 / n; };
+  const uint64_t game_frames = m.game_presents - p.game_presents;
+  auto gpu = [](const AoGpuTimer::Window& w) {
+    return w.frames ? fmt::format("{:.2f}", w.sum_ms / double(w.frames)) : std::string("-");
+  };
+  std::string groups;
+#if NR_GAME_RENDERER
+  groups = fmt::format("; GPU passes ms: AO {}, GI {}, upscaler {}, shadows {}, water {}, volumetrics {}", gpu(passes.ao),
+                       gpu(passes.gi), gpu(passes.upscaler), gpu(passes.shadows), gpu(passes.water),
+                       gpu(passes.volumetrics));
+#endif
+  REXLOG_INFO(
+      "rexgpu-native: frame timing ({} frames, {:.1f} s, {:.1f} FPS): frame p50 {:.2f} p95 {:.2f} p99 {:.2f} max {:.2f} "
+      "ms; game thread CPU {} ms, waits for the render thread {} ms; render thread CPU {:.2f} ms, idle {} ms, GPU "
+      "frame wait {:.2f} ms, pipeline waits {:.2f} ms, submit {:.2f} ms; presenter refresh {:.2f} ms; GPU frame {} ms "
+      "(max {:.2f}){}",
+      frames, seconds, n / seconds, pct(0.5), pct(0.95), pct(0.99), pct(1.0),
+      threaded_ && game_frames ? fmt::format("{:.2f}", double(m.game_cpu_us - p.game_cpu_us) / 1000.0 / double(game_frames))
+                               : std::string("-"),
+      threaded_ && game_frames ? fmt::format("{:.2f}", double(m.game_room_us - p.game_room_us) / 1000.0 / double(game_frames))
+                               : std::string("-"),
+      per(m.render_cpu_us, p.render_cpu_us),
+      threaded_ ? fmt::format("{:.2f}", per(m.render_idle_us, p.render_idle_us)) : std::string("-"),
+      per(m.reuse_wait_us, p.reuse_wait_us), (m.pipeline_wait_ms - p.pipeline_wait_ms) / n, per(m.submit_us, p.submit_us),
+      per(m.refresh_us, p.refresh_us), gpu(frame_gpu), frame_gpu.max_ms, groups);
+}
+
 void Backend::PresentNow(rex::ui::Presenter* presenter, uint32_t frontbuffer_width,
                          uint32_t frontbuffer_height, uint32_t display_width,
                          uint32_t display_height) {
@@ -726,6 +791,7 @@ void Backend::PresentNow(rex::ui::Presenter* presenter, uint32_t frontbuffer_wid
   shown_frames_ = submitted_frames_;
   const uint32_t width = renderer_->width(), height = renderer_->height();
   const uint32_t swap = swaps_++;
+  if (swap % 600 == 0) LogFrameTiming();
   if (swap % 300 == 0 && draws_) {
     // In the core category: the app keeps only warnings of the gpu one.
     const DrawTracker::Stats& d = draws_->stats();

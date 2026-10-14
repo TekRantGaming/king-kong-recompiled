@@ -18,6 +18,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <chrono>
 #include <string>
 
 #include "backend/ambient_occlusion.h"
@@ -173,6 +174,16 @@ class Backend {
   uint32_t swaps_ = 0;
   bool stutter_stats_ = false;  // GameSettings::stutter_stats
   void LogStutter(const char* when);
+  // A light "frame timing" line every 600 presenter refreshes (release builds too): the frames'
+  // pace, the game and render threads' CPU and waits, and the GPU time of the frame and its pass
+  // groups. Called with mutex_ held. The counters at the last line:
+  void LogFrameTiming();
+  struct TimingMark {
+    std::chrono::steady_clock::time_point at{};
+    uint64_t frames = 0, game_cpu_us = 0, game_room_us = 0, game_presents = 0, render_cpu_us = 0, render_idle_us = 0,
+             reuse_wait_us = 0, submit_us = 0, refresh_us = 0;
+    double pipeline_wait_ms = 0;
+  } timing_mark_;
   // --native_present_unlocked: the presenter's refresh of a game frame runs outside mutex_.
   bool unlocked_present_ = false;
   // --native_async_submit: the frames' command lists are submitted by a thread of their own, so
