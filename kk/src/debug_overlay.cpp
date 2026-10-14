@@ -1180,10 +1180,13 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
         test_next_ = now + 3;
         return;
       }
+      // Each value: once on and back (anything it makes is ready and kept), then three trials of the step's own
+      // value, the value and its own value again, 0.8 s apart: the scene (rain, lightning, the idle camera)
+      // changes little in that time, and the median of the three trials drops a lightning flash.
       case 101:
         step_base_ = Get(plan_[step_].cvar.c_str());
         value_ = 0;
-        Burst(std::to_string(step_) + "-" + plan_[step_].cvar + "-B0", 103, now);
+        test_state_ = 103;
         return;
       case 103: {
         const TestStep& st = plan_[step_];
@@ -1194,36 +1197,54 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
           Reset();
           ++step_;
           test_state_ = 100;
-          test_next_ = now + 2;
+          test_next_ = now + 1.5;
           return;
         }
         verify_value_ = values[value_];
         Change(st.cvar.c_str(), verify_value_);
-        test_state_ = 104;
-        test_next_ = now + 3.5;
-        return;
-      }
-      case 104: {
-        // Between two captures of the step's own value (B<n>, B<n+1>): what the scene changes by itself.
-        const TestStep& st = plan_[step_];
-        const std::string name = std::to_string(step_) + "-" + st.cvar + "-V" + std::to_string(value_) + "-" + verify_value_;
-#if defined(KK_NATIVE_RENDERER)
-        const NrEffectStats es = Stats();
-        log("verify " + name + " base=" + step_base_ + " upscaler=" + es.upscaler + " applied=" + AppliedText(es, nullptr) +
-            " gpu ao=" + Number(es.ao_ms) + " gi=" + Number(es.gi_ms) + " shadows=" + Number(es.shadows_ms) +
-            " water=" + Number(es.water_ms) + " shafts=" + Number(es.volumetric_ms) + " up=" + Number(es.upscaler_ms));
-#endif
-        Burst(name, 106, now);
-        return;
-      }
-      case 106:
-        Change(plan_[step_].cvar.c_str(), step_base_);
-        test_state_ = 107;
+        trial_ = 0;
+        test_state_ = 120;
         test_next_ = now + 2.5;
         return;
-      case 107:
-        ++value_;
-        Burst(std::to_string(step_) + "-" + plan_[step_].cvar + "-B" + std::to_string(value_), 103, now);
+      }
+      case 120:
+        Change(plan_[step_].cvar.c_str(), step_base_);
+        test_state_ = 121;
+        test_next_ = now + 1.5;
+        return;
+      case 121:
+        TestCapture(TrialName("A"));
+        Change(plan_[step_].cvar.c_str(), verify_value_);
+        test_state_ = 122;
+        test_next_ = now + 0.8;
+        return;
+      case 122: {
+        TestCapture(TrialName("V"));
+#if defined(KK_NATIVE_RENDERER)
+        if (trial_ == 0) {
+          const NrEffectStats es = Stats();
+          log("verify " + std::to_string(step_) + "-" + plan_[step_].cvar + "-V" + std::to_string(value_) + "-" +
+              verify_value_ + " base=" + step_base_ + " upscaler=" + es.upscaler + " applied=" + AppliedText(es, nullptr) +
+              " gpu ao=" + Number(es.ao_ms) + " gi=" + Number(es.gi_ms) + " shadows=" + Number(es.shadows_ms) +
+              " water=" + Number(es.water_ms) + " shafts=" + Number(es.volumetric_ms) + " up=" + Number(es.upscaler_ms) +
+              " shadow_draws=" + std::to_string(es.shadow_draws) + " water_draws=" + std::to_string(es.water_draws));
+        }
+#endif
+        Change(plan_[step_].cvar.c_str(), step_base_);
+        test_state_ = 123;
+        test_next_ = now + 0.8;
+        return;
+      }
+      case 123:
+        TestCapture(TrialName("B"));
+        if (++trial_ < 3) {
+          test_state_ = 121;
+          test_next_ = now + 0.3;
+        } else {
+          ++value_;
+          test_state_ = 103;
+          test_next_ = now + 0.5;
+        }
         return;
       case 110:  // a burst of three captures (rain and particles differ in each; their median is the scene)
         TestCapture(burst_name_ + "-" + std::to_string(burst_count_));
@@ -1244,6 +1265,11 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
     else OnKeyUp(e);
     test_key_handled_ = e.is_handled();
   }
+  std::string TrialName(const char* which) const {
+    return std::to_string(step_) + "-" + plan_[step_].cvar + "-V" + std::to_string(value_) + "-" + verify_value_ + "-T" +
+           std::to_string(trial_) + "-" + which;
+  }
+  int trial_ = 0;
   void Burst(const std::string& name, int next, double now) {
     burst_name_ = name;
     burst_count_ = 0;

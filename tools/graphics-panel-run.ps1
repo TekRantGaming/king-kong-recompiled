@@ -3,14 +3,14 @@
 # Summarise a run with tools/graphics-panel-summary.py <run folder>.
 param([ValidateSet('vulkan','d3d12')][string]$Api='vulkan',
       [string]$Upscaler='dlss', [int]$Chapter=8, [int]$Toggles=100, [double]$Interval=0.1,
-      [string]$Only='', [string]$Upscalers='', [int]$MaxSeconds=600, [switch]$Validation, [switch]$Verify)
+      [string]$Only='', [string]$Upscalers='', [int]$MaxSeconds=600, [switch]$Validation, [switch]$Verify, [string[]]$Extra=@(), [string]$Tag='')
 $ErrorActionPreference='Stop'
 $workspace='F:\KK-native-renderer\wt\codex-debugmenu'
 $lock='F:\KK-native-renderer\runs\codex-game.lock'
 $priority='F:\KK-native-renderer\runs\codex-game.priority'
 $me='claude-overlay'
 if((Get-Content -LiteralPath $lock -Raw).Trim().StartsWith('user')) { throw 'USER LOCK: code work only' }
-$run="F:\KK-native-renderer\runs\claude-overlay-$(Get-Date -Format yyyyMMdd-HHmmss)-$Api-$Upscaler$(if($Verify){'-verify'})"
+$run="F:\KK-native-renderer\runs\claude-overlay-$(Get-Date -Format yyyyMMdd-HHmmss)-$Api-$Upscaler$(if($Verify){'-verify'})$Tag"
 New-Item -ItemType Directory -Path "$run\cache\native-shaders" -Force | Out-Null
 $build="$workspace\kk\out\build\kk-dev-vulkan"
 Get-ChildItem -LiteralPath $build -File | Where-Object { $_.Name -eq 'king_kong.exe' -or $_.Extension -eq '.dll' } | Copy-Item -Destination $run
@@ -35,6 +35,7 @@ $launch=@('--fullscreen=false','--window_width=1280','--window_height=720','--kk
  "--config=$run\king_kong.toml",'--native_ao_method=gtao','--native_ao_apply=opaque',
  '--native_stutter_stats=true','--kk_check_updates=false','--kk_online_count=false','--kk_discord_status=false')
 if($Validation) { $launch+='--native_validation=true' }
+$launch+=$Extra
 Add-Type -AssemblyName System.Drawing
 Add-Type @'
 using System;

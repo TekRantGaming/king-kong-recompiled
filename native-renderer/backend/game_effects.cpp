@@ -369,7 +369,7 @@ void GameRenderer::PublishEffectTimes() {
   }
   const bool ao = AoSettingsFor(ao_settings_frame_).mode > 0 && (scene_ao_ || ao_);
   s.applied = (ao ? 1u : 0u) | (scene_gi_ ? 2u : 0u) | (options_.lighting.shadows_on() && live_draws_.shadows ? 4u : 0u) |
-              (options_.lighting.water_on() && scene_lighting_ ? 8u : 0u) |
+              (options_.lighting.water_on() && scene_lighting_ && live_draws_.water ? 8u : 0u) |
               (options_.lighting.volumetrics_on() && scene_lighting_ ? 16u : 0u) | (options_.fxaa ? 32u : 0u) |
               (upscale_ ? 64u : 0u);
   s.anisotropy = options_.anisotropic_override;
