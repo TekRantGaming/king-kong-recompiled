@@ -43,11 +43,15 @@ $args=@('--fullscreen=false','--window_width=1280','--window_height=720','--kk_f
  "--cache_root=$run\cache",'--kk_original_look=true',
  '--kk_original_look_keep=kk_frame_rate,render_scale,native_render_scale,native_upscaler,ao_mode,ao_strength',
  '--kk_frame_rate=30','--native_debug=32768',"--native_backend=$api",'--native_render_scale=1280x720',
- "--native_upscaler=$Upscaler",'--native_validation=true','--native_async_pipelines=false')
+ "--native_upscaler=$Upscaler",'--native_upscaler_quality=quality','--native_upscaler_dlss_preset=latest',
+ '--native_validation=true','--native_async_pipelines=false')
 if ($Gtao) { $args+='--ao_mode=1','--ao_strength=2','--native_ao_method=gtao' } else { $args+='--ao_mode=0' }
 if ($Backend -eq 'warp') { $args+='--d3d12_adapter=-2','--d3d12_queue_priority=0' }
 @{chapter=$Chapter;backend=$Backend;upscaler=$Upscaler;gtao=[bool]$Gtao;args=$args;
  dll_sha256=(Get-FileHash "$run\rexgpu-native.dll").Hash;exe_sha256=(Get-FileHash "$run\king_kong.exe").Hash} | ConvertTo-Json | Set-Content "$run\test.json"
+Get-ChildItem -LiteralPath $run -File | Where-Object { $_.Extension -in '.exe','.dll','.pack' } |
+ ForEach-Object { [PSCustomObject]@{file=$_.Name;sha256=(Get-FileHash -LiteralPath $_.FullName).Hash} } |
+ ConvertTo-Json | Set-Content "$run\artifacts.json"
 while ((Read-Lock) -ne 'free' -or (Get-Process king_kong -ErrorAction SilentlyContinue | Where-Object { $_.Path -like 'F:\KK-native-renderer\runs\*' -or $_.Path -like 'F:\KK-native-renderer\wt\*' })) { Start-Sleep -Seconds 30 }
 if (!(Get-Process kkbg2 -ErrorAction SilentlyContinue)) { throw 'kkbg2 is required.' }
 if ((Read-Lock) -ne 'free') { throw 'Lock changed before launch.' }
