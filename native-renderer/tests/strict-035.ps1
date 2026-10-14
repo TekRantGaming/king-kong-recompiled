@@ -31,7 +31,9 @@ $env:KK_DEV_SHOTS_DIR=$run
 $env:KK_DEV_DT_LOG='0,240'
 if ($Backend -eq 'vulkan') {
  @('khronos_validation.validate_sync = true','khronos_validation.gpuav_enable = true',
-   'khronos_validation.report_flags = info,warn,error','khronos_validation.log_duplicate_limit = 20') | Set-Content "$run\vk_layer_settings.txt"
+   'khronos_validation.report_flags = info,warn,error','khronos_validation.log_duplicate_limit = 20',
+   'khronos_validation.debug_action = VK_DBG_LAYER_ACTION_LOG_MSG',
+   "khronos_validation.log_filename = $run\vulkan-validation.log") | Set-Content "$run\vk_layer_settings.txt"
  $env:VK_LAYER_PATH='F:\KK-native-renderer\downloads\vulkan-sdk-latest\sdk\Bin'
  $env:VK_INSTANCE_LAYERS='VK_LAYER_KHRONOS_validation'
  $env:VK_LAYER_SETTINGS_PATH=$run
@@ -65,7 +67,7 @@ if (Get-CimInstance Win32_Process -Filter "name = 'king_kong.exe'") { throw 'A g
 Set-Content -LiteralPath $lockPath "task035 $(Get-Date -Format o)"
 $game=$null
 try {
- $game=Start-Process -FilePath "$run\king_kong.exe" -ArgumentList $args -WorkingDirectory $run -WindowStyle Hidden -PassThru
+ $game=Start-Process -FilePath "$run\king_kong.exe" -ArgumentList $args -WorkingDirectory $run -WindowStyle Hidden -PassThru -RedirectStandardOutput "$run\stdout.log" -RedirectStandardError "$run\stderr.log"
  Write-Output "RUN $run PID $($game.Id)"
  $timer=[Diagnostics.Stopwatch]::StartNew()
  while (!$game.HasExited -and $timer.Elapsed.TotalSeconds -lt 240) {
