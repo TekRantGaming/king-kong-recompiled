@@ -2,10 +2,13 @@
 #include "backend/shader_library.h"
 #include "backend/tests/fake_guest.h"
 #include "backend/tests/vk_test_device.h"
+#include "backend/tests/memory_d3d12_test_device.h"
 #include "backend/shaders/generated/memory_probe_ps_spirv.h"
+#include "backend/shaders/generated/memory_probe_ps_dxil.h"
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 namespace nr {
 struct MemoryMigrationTestAccess {
@@ -58,7 +61,9 @@ struct MemoryMigrationTestAccess {
     auto out = g.device_->createTexture(d);
     auto fb = g.device_->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(out));
     nvrhi::ShaderDesc sd; sd.shaderType = nvrhi::ShaderType::Pixel; sd.entryName = "ps_probe";
-    auto ps = g.device_->createShader(sd, k_memory_probe_ps_spirv, sizeof(k_memory_probe_ps_spirv));
+    const bool vk = g.device_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN;
+    auto ps = g.device_->createShader(sd, vk ? k_memory_probe_ps_spirv : k_memory_probe_ps_dxil,
+                                    vk ? sizeof(k_memory_probe_ps_spirv) : sizeof(k_memory_probe_ps_dxil));
     nvrhi::GraphicsPipelineDesc pd;
     pd.primType = nvrhi::PrimitiveType::TriangleList; pd.VS = g.blit_vs_; pd.PS = ps;
     pd.bindingLayouts = {g.memory_depth_layout_};
@@ -99,9 +104,9 @@ static void Check(bool ok) {
   if (!ok) { std::fprintf(stderr, "check %u failed\n", checks); std::exit(1); }
   ++checks;
 }
-int main() {
+template<class Host>
+int RunMemoryMigration(Host& host, const char* validation, bool native_validation) {
   using namespace nr;
-  auto host = test::VulkanTestDevice::Create(true);
   if (!host) return 2;
   auto* device = host->device();
   test::FakeGuestMemory guest;
@@ -155,6 +160,17 @@ int main() {
     Check(rz.at(x, y)[0] == 0.25f); Check(rs.at(x, y)[0] == 173.f);
   }
   Check(host->errors() == 0);
-  std::printf("memory migration: %u checks passed on %s; Khronos validation %s\n", checks,
-              host->device_name().c_str(), host->khronos_validation() ? "on" : "unavailable");
+  std::printf("memory migration: %u checks passed on %s; %s validation %s\n", checks,
+              host->device_name().c_str(), validation, native_validation ? "on" : "unavailable (NVRHI on)");
+  return 0;
+}
+int main(int argc, char** argv) {
+#if NR_HAS_D3D12
+  if (argc == 2 && std::strcmp(argv[1], "--d3d12") == 0) {
+    auto host = nr::test::MemoryD3D12TestDevice::Create();
+    return host ? RunMemoryMigration(host, "native D3D12", host->native_validation()) : 2;
+  }
+#endif
+  auto host = nr::test::VulkanTestDevice::Create(true);
+  return host ? RunMemoryMigration(host, "Khronos", host->khronos_validation()) : 2;
 }

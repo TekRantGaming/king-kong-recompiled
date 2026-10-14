@@ -1,3 +1,4 @@
+param([switch]$D3D12)
 $ErrorActionPreference='Stop'
 $lock='F:\KK-native-renderer\runs\codex-game.lock'
 while ($true) {
@@ -20,14 +21,16 @@ try {
   $layer='F:\KK-native-renderer\downloads\vulkan-sdk-latest\sdk\Bin'
   $exe=(Resolve-Path "$PSScriptRoot\..\..\out\task036-tests\backend\tests\nr_memory_migration_tests.exe").Path
   $info=New-Object Diagnostics.ProcessStartInfo $exe
+  if ($D3D12) { $info.Arguments='--d3d12' }
   $info.UseShellExecute=$false; $info.CreateNoWindow=$true; $info.WindowStyle='Hidden'
   $info.RedirectStandardOutput=$true; $info.RedirectStandardError=$true
   if (Test-Path "$layer\VkLayer_khronos_validation.json") { $info.EnvironmentVariables['VK_LAYER_PATH']=$layer }
   $test=New-Object Diagnostics.Process; $test.StartInfo=$info; $null=$test.Start()
   $stdout=$test.StandardOutput.ReadToEndAsync(); $stderr=$test.StandardError.ReadToEndAsync()
   if (!$test.WaitForExit(120000)) { Stop-Process -Id $test.Id; throw 'GPU validation exceeded two minutes' }
-  $stdout.Result | Set-Content 'F:\KK-native-renderer\runs\task036-gpu-test.log'
-  $stderr.Result | Set-Content 'F:\KK-native-renderer\runs\task036-gpu-test-errors.log'
+  $tag=if ($D3D12) { '-d3d12' } else { '' }
+  $stdout.Result | Set-Content "F:\KK-native-renderer\runs\task036-gpu-test$tag.log"
+  $stderr.Result | Set-Content "F:\KK-native-renderer\runs\task036-gpu-test$tag-errors.log"
   if ($test.ExitCode -ne 0) { throw "GPU validation failed: $($test.ExitCode)" }
   Write-Output 'GPU validation passed'
 } finally {

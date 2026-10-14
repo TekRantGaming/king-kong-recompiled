@@ -110,5 +110,7 @@ foreach ($budget in $Budgets) {
       if ((Get-Content $lockPath -Raw).Trim().StartsWith('task036 ')) { Set-Content $lockPath 'free' }
     }
     Write-Output "DONE $run exit=$($game.ExitCode) seconds=$($clock.Elapsed.TotalSeconds)"
+    if ($game.ExitCode -ne 0) { throw "Game failed with exit $($game.ExitCode): $run" }
+    if (!(Test-Path "$run\shot_1200.bmp")) { throw "Two-minute capture missing: $run" }
   } }
 }
