@@ -58,6 +58,11 @@ void StartLauncherPrewarm(const std::filesystem::path& cache_root) {
   start(&request);
 }
 
+void SetStartupFailureHandler(int (*handler)(const char*)) {
+  using Set = void (*)(int (*)(const char*));
+  if (auto set = reinterpret_cast<Set>(FindExport("nr_set_startup_failure_handler"))) set(handler);
+}
+
 void StopLauncherPrewarm() {
   using Stop = void (*)();
   if (auto stop = reinterpret_cast<Stop>(FindExport("nr_prewarm_stop"))) stop();

@@ -64,6 +64,7 @@ extern char** environ;
 #include "launcher_text.h"
 #include "play_internal.h"
 #include "settings.h"
+#include "startup_recovery.h"
 
 namespace kk {
 #if defined(KK_DEV_TOOLS)
@@ -485,7 +486,8 @@ void LoadStartRequestFromSettings() {
 }
 
 bool RelaunchWith(const std::wstring& extra) {
-  static constexpr const wchar_t* kDropped[] = {L"--kk_skip_launcher", L"--kk_start", L"--kk_launcher_open"};
+  static constexpr const wchar_t* kDropped[] = {L"--kk_skip_launcher", L"--kk_start", L"--kk_launcher_open",
+                                               L"--kk_startup_child"};
   auto dropped = [](const std::wstring& arg) {
     for (const wchar_t* d : kDropped) {
       const std::wstring p(d);
@@ -980,8 +982,10 @@ REX_HOOK_RAW(sub_8253DB80) {
     }
   }
   const bool request = g && Load32(base, g + 4) != 0;
+  const uint32_t startup_level = request ? Load32(base, g + 8) : 0;
   if (request && g_jump_requested) REXLOG_INFO("KK play: uni_go loads level {}", int32_t(Load32(base, g + 8)));
   __imp__sub_8253DB80(ctx, base);
+<<<<<<< HEAD
   ServiceProfileOptions(ctx, base);
 #if defined(KK_DEV_TOOLS)
   if (g && std::getenv("KK_DEV_AUDIO_TRACE")) {
@@ -1008,6 +1012,10 @@ REX_HOOK_RAW(sub_8253DB80) {
     }
   }
 #endif
+=======
+  // uni_go has completed loading a real chapter. Also covers starts through the original game menu.
+  if (request && (startup_level >= kNewGameLevel || startup_level == 7)) kk::startup::ChapterReached();
+>>>>>>> codex-hw-fallback
   if (request && g_jump_requested && !g_level_loaded) {
     g_level_loaded = true;
     g_level_loaded_ms = NowMs();

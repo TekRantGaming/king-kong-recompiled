@@ -15,6 +15,7 @@
 #include "backend/backend.h"
 #include "plugin/launcher_prewarm.h"
 #include "plugin/native_api.h"
+#include "plugin/native_startup.h"
 #include "plugin/native_graphics_system.h"
 #include "plugin/native_prewarm.h"
 #include "plugin/native_stutter.h"
@@ -442,8 +443,13 @@ extern "C" REX_GPU_PLUGIN_EXPORT rex::system::IGraphicsSystem* rex_gpu_create(
   auto* system = nr::NativeGraphicsSystem::Create(backend);
   if (!system) {
     REXLOG_ERROR("rexgpu-native: no usable host API for backend '{}'", backend);
+    nr::ReportStartupFailure("could not create a supported graphics API");
   }
   return system;
+}
+
+extern "C" REX_GPU_PLUGIN_EXPORT void nr_set_startup_failure_handler(nr::StartupFailureHandler handler) {
+  nr::startup_failure_handler.store(handler, std::memory_order_release);
 }
 
 extern "C" REX_GPU_PLUGIN_EXPORT const NrApi* nr_get_api(void) {

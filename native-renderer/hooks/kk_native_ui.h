@@ -5,6 +5,10 @@
 // launcher", "Stutter counter").
 #pragma once
 
+namespace nr::kk {
+void SetStartupFailureHandler(int (*handler)(const char*));
+}
+
 #include <filesystem>
 #include <string>
 

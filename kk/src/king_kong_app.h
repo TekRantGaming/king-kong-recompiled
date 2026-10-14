@@ -53,6 +53,7 @@ void InstallFpeGuard();  // fpe_guard.cpp
 #include "play_internal.h"
 #include "settings.h"
 #include "toast.h"
+#include "startup_recovery.h"
 #if defined(KK_NATIVE_RENDERER)
 #include "hooks/kk_native_ui.h"  // the native renderer's launcher prewarm
 #endif
@@ -63,11 +64,22 @@ class KingKongApp : public rex::ReXApp {
 
   static std::unique_ptr<rex::ui::WindowedApp> Create(
       rex::ui::WindowedAppContext& ctx) {
+    kk::startup::MonitorStartup();
     return std::unique_ptr<KingKongApp>(new KingKongApp(ctx, "king_kong",
         PPCImageConfig));
   }
 
+  ~KingKongApp() override { kk::startup::CleanExit(); }
+
  protected:
+  bool OnWindowCloseRequested() override {
+    // The SDK's accepted window close hard-exits without running our destructor.
+    kk::startup::CleanExit();
+    return true;
+  }
+
+  void OnShutdown() override { kk::startup::CleanExit(); }
+
   void OnConfigurePaths(rex::PathConfig& paths) override {
     // Register the GPU plugin's cvars before the config is read so the
     // launcher can edit and save them, and set the port's own defaults.
@@ -108,6 +120,7 @@ class KingKongApp : public rex::ReXApp {
       // As closing the window does (the runtime shuts the game down); quitting the app context directly
       // while the game runs hung.
       app_context().CallInUIThreadDeferred([this] {
+        kk::startup::CleanExit();
         if (window()) window()->RequestClose();
         else app_context().QuitFromUIThread();
       });
@@ -116,7 +129,7 @@ class KingKongApp : public rex::ReXApp {
     rex::cvar::ResetToDefault("kk_skip_launcher");  // never persist it
     const bool files_ok = kk::GameFilesPresent(defaults.game_data_root);
     // --kk_launcher_open (back from the game, launcher.cpp): the launcher shows even when it is switched off.
-    const bool show = !files_ok || kk::IsShiftHeld() || (REXCVAR_GET(kk_launcher) && !skip_once) ||
+    const bool show = kk::startup::NeedsNotice() || !files_ok || kk::IsShiftHeld() || (REXCVAR_GET(kk_launcher) && !skip_once) ||
                       (!skip_once && !rex::cvar::GetFlagByName("kk_launcher_open").empty());
     if (!show) {
       kk::EnforceOriginalLook();
@@ -148,6 +161,7 @@ class KingKongApp : public rex::ReXApp {
 #endif
       // The start request chosen on the Play menu goes with it (kk::play::SetStartRequest).
       const std::wstring start = kk::play::StartRequestArg();
+      kk::startup::CleanExit();
       kk::play::RelaunchWith(L"--kk_skip_launcher=true" + (start.empty() ? std::wstring() : L" " + start));
       app_context().CallInUIThreadDeferred([this] { app_context().QuitFromUIThread(); });
     };
@@ -182,6 +196,9 @@ class KingKongApp : public rex::ReXApp {
   void OnConfigureFonts(ImFontAtlas* atlas) override { kk::LoadUiFont(atlas); }
 
   void OnPreSetup(rex::RuntimeConfig& config) override {
+    // SetupPresentation precedes OnFinalizePaths in the SDK. Arm before either provider or game GPU setup.
+    user_data_root_ = user_data_root();
+    kk::startup::Configure(user_data_root_);
     kk::ApplyVSyncSettings();
     {  // before the runtime reads the shader cache: drop records a finished-early write damaged
       const std::string root = rex::cvar::GetFlagByName("cache_root");
@@ -190,6 +207,10 @@ class KingKongApp : public rex::ReXApp {
     // The renderer: kk_renderer (Graphics > Renderer) unless gpu_plugin was given (launcher.h).
     if (!config.graphics) config.gpu_plugin = kk::ApplyRendererChoice();
     if (!config.graphics && config.gpu_plugin.empty()) config.gpu_plugin = "xenos";
+    if (!config.graphics) {
+      config.gpu_plugin = kk::startup::ApplyChoice(config.gpu_plugin);
+      kk::startup::Begin(config.gpu_plugin);
+    }
     REXLOG_INFO("KK: renderer {} (kk_renderer {})", config.gpu_plugin, rex::cvar::GetFlagByName("kk_renderer"));
     if (!config.audio_factory)
       config.audio_factory = REX_AUDIO_BACKEND(rex::audio::sdl::SDLAudioSystem);

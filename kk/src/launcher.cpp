@@ -1,4 +1,5 @@
 #include "launcher.h"
+#include "startup_recovery.h"
 #include "ingame_settings.h"
 #include "pause_menu.h"
 #include "play_session.h"
@@ -2032,6 +2033,14 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     DevInput();
 #endif
     Tick();
+    const std::string recovery = startup::Message();
+    if (!recovery_shown_ && !recovery.empty() && !modal_.open) {
+      recovery_shown_ = true;
+      OpenModal("Renderer startup recovery", recovery,
+                {"Continue with safe renderer", "Try native again"}, 0, [this](int i) {
+                  if (i == 1 && startup::TryNativeAgain()) ++g_changes;
+                });
+    }
     if (files_ok_ && !music_) music_ = std::make_unique<LauncherMusic>(paths_.game_dir);
     if (music_) {
       const float v = GetBool("kk_launcher_music") ? GetInt("kk_launcher_music_volume", 50) / 100.0f : 0.0f;
@@ -5103,6 +5112,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   ImVec2 o_{0, 0};
   float w_ = 1280, h_ = 720;
   Page page_ = kHome;
+  bool recovery_shown_ = false;
   std::map<int, ui::ListState> lists_;
   std::vector<Item> focused_items_;
   const Item* focused_ = nullptr;
@@ -5323,7 +5333,7 @@ std::string ApplyRendererChoice() {
   // The default upscaler follows the renderer: the best temporal one with the native renderer, FSR 1 with
   // the Classic renderer (settings.h, ApplyUpscalerDefaults).
   ApplyUpscalerDefaults();
-  return rex::cvar::GetFlagByName("gpu_plugin");
+  return startup::ApplyChoice(rex::cvar::GetFlagByName("gpu_plugin"));
 }
 
 void ShowLauncher(rex::ui::ImGuiDrawer* drawer, rex::ui::ImmediateDrawer* immediate, LauncherPaths paths,

@@ -44,6 +44,7 @@
 #include "backend/host_device.h"
 #include "plugin/launcher_prewarm.h"
 #include "plugin/plugin_settings.h"
+#include "plugin/native_startup.h"
 #include "plugin/ring_skimmer.h"
 #include "plugin/upscaler_query.h"
 #if NR_GAME_RENDERER
@@ -176,11 +177,13 @@ X_STATUS NativeGraphicsSystem::SetupPresentation(rex::ui::WindowedAppContext* ap
   if (!provider_) {
     if (!CreateProvider(true)) {
       REXGPU_ERROR("rexgpu-native: unable to create the graphics provider");
+      ReportStartupFailure("could not initialise its graphics provider");
       return X_STATUS_UNSUCCESSFUL;
     }
     provider_supports_presentation_ = true;
   } else if (!provider_supports_presentation_) {
     REXGPU_ERROR("rexgpu-native: SetupPresentation after a headless SetupGuestGpu");
+    ReportStartupFailure("could not initialise graphics presentation");
     return X_STATUS_UNSUCCESSFUL;
   }
 
@@ -197,6 +200,7 @@ X_STATUS NativeGraphicsSystem::SetupPresentation(rex::ui::WindowedAppContext* ap
   }
   if (!presenter_) {
     REXGPU_ERROR("rexgpu-native: unable to create the presenter");
+    ReportStartupFailure("could not initialise its presenter");
     return X_STATUS_UNSUCCESSFUL;
   }
   return X_STATUS_SUCCESS;
@@ -204,6 +208,17 @@ X_STATUS NativeGraphicsSystem::SetupPresentation(rex::ui::WindowedAppContext* ap
 
 X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* function_dispatcher,
                                              rex::system::KernelState* kernel_state) {
+#if defined(KK_DEV_TOOLS)
+  const auto mode = rex::cvar::GetFlagByName("kk_dev_startup_failure");
+  const auto target = rex::cvar::GetFlagByName("kk_dev_startup_api");
+  if (target == "all" || target == (api_ == HostApi::kD3D12 ? "d3d12" : "vulkan")) {
+    if (mode == "init") {
+      ReportStartupFailure("failed native initialisation (developer injection)");
+      return X_STATUS_UNSUCCESSFUL;
+    }
+    if (mode == "device-lost") { OnHostGpuLoss(true); return X_STATUS_UNSUCCESSFUL; }
+  }
+#endif
   // The launcher's prewarm ends here: its device goes (saving the driver's pipeline cache) before
   // the game's is made.
   StopLauncherPrewarm();
@@ -214,6 +229,7 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
   if (!provider_) {
     if (!CreateProvider(false)) {
       REXGPU_ERROR("rexgpu-native: unable to create the headless graphics provider");
+      ReportStartupFailure("could not initialise its headless graphics provider");
       return X_STATUS_UNSUCCESSFUL;
     }
     provider_supports_presentation_ = false;
@@ -237,6 +253,7 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
   }
   if (!host) {
     REXGPU_ERROR("rexgpu-native: unable to create the NVRHI device");
+    ReportStartupFailure("could not initialise its native device");
     return X_STATUS_UNSUCCESSFUL;
   }
   rex::system::X_VIDEO_MODE video_mode;
@@ -246,6 +263,7 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
   if (!backend_->Initialize(std::max<uint32_t>(1, video_mode.display_width),
                             std::max<uint32_t>(1, video_mode.display_height), game)) {
     REXGPU_ERROR("rexgpu-native: backend initialisation failed");
+    ReportStartupFailure("failed native renderer initialisation");
     backend_.reset();
     return X_STATUS_UNSUCCESSFUL;
   }
@@ -394,6 +412,7 @@ void NativeGraphicsSystem::OnHostGpuLoss(bool /*is_responsible*/) {
   if (gpu_loss_reported_.test_and_set(std::memory_order_relaxed)) {
     return;
   }
+  ReportStartupFailure("lost its graphics device before a chapter was reached");
   rex::FatalError("Graphics device lost (native renderer)");
 }
 
