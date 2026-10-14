@@ -43,8 +43,10 @@ public static class Task039Window {
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L,T,R,B; }
   [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
   [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr dc, uint flags);
+  [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
 }
 '@
+  [Task039Window]::SetProcessDPIAware() | Out-Null
 }
 function Save-OwnWindow($p,$name) {
   $p.Refresh()
@@ -171,3 +173,4 @@ foreach ($item in $sourceHashes) {
 Write-Output "DONE $outcome source-data-unchanged=$unchanged $run"
 if ($outcome -eq 'user-pause' -or $outcome -eq 'exited-3') { exit 3 }
 if ($outcome -notin @('chapter-120s','launcher-120s') -or !$unchanged) { exit 1 }
+exit 0
