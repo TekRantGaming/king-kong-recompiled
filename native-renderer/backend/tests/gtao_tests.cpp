@@ -835,4 +835,48 @@ TEST(Lighting_SsrUpcomingWaterWriteCannotValidateDepth) {
   }
 }
 
+TEST(Lighting_FogLastCompletesVolumetricsAtPresentOnce) {
+  if (!Device()) return;
+  ErrorsChecked errors;
+  for (bool shadow : {false, true}) {
+    LightingConfig config;
+    config.volumetrics = Volumetrics::kHigh;
+    config.gpu_time = true;
+    SceneLighting lighting(Device()->device(), config);
+    CHECK(lighting.Initialize());
+    LightingScene scene(Device()->device());
+    auto cl = Device()->device()->createCommandList();
+    cl->open();
+    cl->clearTextureFloat(scene.color, nvrhi::AllSubresources, nvrhi::Color(0.2f));
+    scene.Opaque(lighting, cl, 0);
+    SceneLighting::Fog fog;
+    fog.color[0] = fog.color[1] = fog.color[2] = 0.3f;
+    fog.params[1] = fog.params[2] = fog.params[3] = 0.01f;
+    fog.normalizing[0] = 1;
+    lighting.NoteFog(0, fog);
+    if (shadow) {
+      SceneLighting::ShadowQuad quad;
+      quad.depth = quad.shadow_map = scene.depth;
+      quad.light[0] = quad.light[5] = quad.light[10] = quad.light[15] = 1;
+      lighting.NoteShadowQuad(0, quad);
+    }
+    scene.draw.family = LightFamily::kFog;
+    scene.draw.state.ps_hash = 0x1B65AC7429B67FE9ull;
+    lighting.OnDraw(cl, scene.draw);
+    CHECK_EQ(lighting.stats().volumetric, uint64_t(0));
+    lighting.OnPresent(cl);
+    CHECK_EQ(lighting.stats().volumetric, uint64_t(shadow ? 1 : 0));
+    CHECK_EQ(lighting.stats().volumetric_no_shadow, uint64_t(shadow ? 0 : 1));
+    lighting.OnPresent(cl);  // pending work was consumed, even on failure
+    CHECK_EQ(lighting.stats().volumetric, uint64_t(shadow ? 1 : 0));
+    CHECK_EQ(lighting.stats().volumetric_no_shadow, uint64_t(shadow ? 0 : 1));
+    cl->close(); Device()->Execute(cl); Device()->WaitIdle();
+    cl->open();
+    scene.Opaque(lighting, cl, 1);  // a fog-free frame never reuses the pending pass
+    lighting.OnPresent(cl);
+    CHECK_EQ(lighting.stats().volumetric, uint64_t(shadow ? 1 : 0));
+    cl->close(); Device()->Execute(cl); Device()->WaitIdle();
+  }
+}
+
 NR_TEST_MAIN()

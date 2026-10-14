@@ -371,6 +371,11 @@ void SceneLighting::EndTimedDraws(nvrhi::ICommandList* cl) {
 
 void SceneLighting::OnPresent(nvrhi::ICommandList* cl) {
   EndTimedDraws(cl);
+  // Fog can be the last eligible draw. Finish its deferred work before presentation.
+  if (vol_pending_) {
+    vol_pending_ = false;
+    RunVolumetric(cl);
+  }
   for (auto& t : timers_)
     if (t) t->FrameEnd();
 }
