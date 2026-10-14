@@ -19,7 +19,7 @@ for run in sorted(ROOT.glob("task036-*-*-*-20*")):
     for log in sorted(run.glob("run.log*")):
         text = log.read_text(encoding="utf-8", errors="replace")
         texts.append(text)
-        for match in re.finditer(r"^\[([^\]]+)\].*memory budget frame (\d+): ([^\r\n]+)", text, re.M):
+        for match in re.finditer(r"^\[([^\]]+)\].*memory budget frame (\d+): ([^\r\n]+)\r?\n", text, re.M):
             sample = {key: int(value) for key, value in re.findall(r"(\w+)=(\d+)", match[3])}
             sample["frame"] = int(match[2])
             sample["timestamp"] = datetime.datetime.fromisoformat(match[1]).timestamp()
