@@ -430,7 +430,7 @@ before. `kk/CMakeLists.txt` adds `src/native_shaders.cpp`. The changes in `kk/sr
    `native_modal_`, `native_pack_checked_`, `native_wait_since_`.
 2. Constructor: `if (files_ok_) native_pack_.Start(CacheDir(), paths_.game_dir);` after the art check: every time
    the launcher opens, the pack is checked (a fraction of a second when current) and built in the background
-   when missing or stale (every hardware thread, below normal priority).
+   when missing or stale (every hardware thread but one, below normal priority).
 3. **The setup step**: `FinishArtIfDone`, in the `setup_art_` branch (the install's last step): when `Wanted()`,
    start the build and set `setup_shaders_`. `InSetup()` includes `setup_shaders_`; `SetupStage()` returns 4 for
    it (after 2, the artwork). `DrawSetup` stage 4: heading "Preparing the shaders", one sentence, the progress
@@ -580,7 +580,9 @@ ones it builds in code; see "Open problems" at the top), a few ms each.
 - Version = backend + translator hash + DXC identity + database hash (+ the scaled flag), in a text stamp beside
   the pack, written last.
 - The launcher checks at every start, builds in the background, makes it the install's last setup step, and Play
-  waits for it. Worker threads: one per hardware thread, below normal priority.
+  waits for it. Worker threads: one per hardware thread but one (the launcher's window and music keep it),
+  below normal priority. The launcher's music is silent while a build works. The setup screen shows the whole job
+  (each API's shaders, then its pipelines) as one bar, with "Step N of M" under it (kk/src/shader_progress.h).
 - Ship `dxcompiler` only.
 - A shader missing from the pack is compiled for the device's API only (it was compiled for both).
 
