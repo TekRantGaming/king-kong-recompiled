@@ -12,6 +12,7 @@
 #include <array>
 #include <chrono>
 #include <mutex>
+#include <utility>
 #include <vector>
 
 // First: the SDK fixes the Vulkan macros (beta extensions, platforms) every
@@ -99,10 +100,23 @@ class VulkanHost final : public HostDevice {
         REXGPU_WARN("rexgpu-native: unable to create the Vulkan pipeline cache; pipelines are not kept");
       }
     }
-    device_ = nvrhi::vulkan::createDevice(desc);
+    nvrhi::vulkan::DeviceHandle vulkan_nvrhi = nvrhi::vulkan::createDevice(desc);
+    device_ = vulkan_nvrhi;
     g_dev_gpu_stats_enabled.store((REXCVAR_GET(native_debug) & 32768) != 0, std::memory_order_relaxed);
     if (!device_) {
       return false;
+    }
+    // WaitFrame waits on NVRHI's graphics timeline semaphore directly, outside execute_mutex_.
+    queue_semaphore_ = vulkan_nvrhi->getQueueSemaphore(nvrhi::CommandQueue::Graphics);
+    vk_device_ = vulkan_device->device();
+    if (PFN_vkGetDeviceProcAddr get_device_proc = nr::VulkanGetDeviceProcAddr()) {
+      wait_semaphores_ = reinterpret_cast<PFN_vkWaitSemaphores>(get_device_proc(vk_device_, "vkWaitSemaphores"));
+      if (!wait_semaphores_) {
+        wait_semaphores_ = reinterpret_cast<PFN_vkWaitSemaphores>(get_device_proc(vk_device_, "vkWaitSemaphoresKHR"));
+      }
+    }
+    if (!queue_semaphore_ || !wait_semaphores_) {
+      REXGPU_WARN("rexgpu-native: vkWaitSemaphores unavailable; frame waits hold the submit lock");
     }
     if (REXCVAR_GET(native_validation)) {
       device_ = nvrhi::validation::createValidationLayer(device_);
@@ -120,9 +134,26 @@ class VulkanHost final : public HostDevice {
   void WaitFrame(nvrhi::IEventQuery* completion) override {
     // Waiting on a timeline semaphore does not access VkQueue. Avoid the SDK's
     // queue lock here: its presenter may hold that lock while waiting for display.
-    // NVRHI's completion bookkeeping still needs serialization with submission/GC.
-    std::lock_guard lock(execute_mutex_);
-    device_->waitEventQuery(completion);
+    if (!queue_semaphore_ || !wait_semaphores_) {
+      std::lock_guard lock(execute_mutex_);
+      device_->waitEventQuery(completion);
+      return;
+    }
+    // Only the lookup holds execute_mutex_ (NVRHI's bookkeeping is not touched at all). Holding it
+    // through the wait blocked the submission thread and left the GPU idle between frames.
+    uint64_t value = 0;
+    {
+      std::lock_guard lock(execute_mutex_);
+      for (const auto& entry : frame_values_) {
+        if (entry.first == completion) value = entry.second;
+      }
+    }
+    if (value == 0) return;
+    VkSemaphoreWaitInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+    info.semaphoreCount = 1;
+    info.pSemaphores = &queue_semaphore_;
+    info.pValues = &value;
+    wait_semaphores_(vk_device_, &info, UINT64_MAX);
   }
   void ExecuteFrameCommandList(nvrhi::ICommandList* command_list, nvrhi::IEventQuery* completion) override {
     // Host access to a VkQueue must be externally synchronised: hold the SDK's
@@ -133,10 +164,11 @@ class VulkanHost final : public HostDevice {
     auto acquisition = provider_.vulkan_device()->AcquireQueue(queue_family_, 0);
     std::lock_guard execute_lock(execute_mutex_);
     const auto t1 = clock::now();
-    device_->executeCommandList(command_list);
+    const uint64_t submission = device_->executeCommandList(command_list);
     if (completion) {
       device_->resetEventQuery(completion);
       device_->setEventQuery(completion, nvrhi::CommandQueue::Graphics);
+      if (submission) RecordFrameValue(completion, submission);
     }
     const auto t2 = clock::now();
     device_->runGarbageCollection();
@@ -228,6 +260,19 @@ class VulkanHost final : public HostDevice {
   }
 
  private:
+  // Caller holds execute_mutex_. The renderer reuses a handful of completion queries.
+  void RecordFrameValue(nvrhi::IEventQuery* completion, uint64_t value) {
+    for (auto& entry : frame_values_) {
+      if (entry.first == completion) {
+        entry.second = value;
+        return;
+      }
+    }
+    // Queries recreated with the renderer leave old entries behind; keep the list short.
+    if (frame_values_.size() >= 16) frame_values_.erase(frame_values_.begin());
+    frame_values_.emplace_back(completion, value);
+  }
+
   // NVRHI needs Vulkan 1.3 with dynamicRendering, synchronization2 and
   // timelineSemaphore enabled on the device. The SDK reports what it enabled
   // in its Properties; the last two only with sdk-patches/0001 applied
@@ -313,6 +358,10 @@ class VulkanHost final : public HostDevice {
   // Before device_: destroyed after it (NVRHI's device only borrows the cache).
   std::unique_ptr<VulkanPipelineCache> pipeline_cache_;
   nvrhi::DeviceHandle device_;
+  VkDevice vk_device_ = VK_NULL_HANDLE;
+  VkSemaphore queue_semaphore_ = VK_NULL_HANDLE;
+  PFN_vkWaitSemaphores wait_semaphores_ = nullptr;
+  std::vector<std::pair<nvrhi::IEventQuery*, uint64_t>> frame_values_;
   std::unique_ptr<OutputBlit> output_blit_;
   std::array<Wrapped, 4> wrapped_;
   size_t next_slot_ = 0;
