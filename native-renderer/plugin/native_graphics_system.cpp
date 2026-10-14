@@ -74,7 +74,7 @@ namespace nr {
 
 namespace {
 
-// DLSS and XeSS work on the game's Vulkan device: its instance and device are made with what they ask
+// Upscalers work on the game's Vulkan device: its instance and device are made with what they ask
 // for (docs/upscalers.md, "Vulkan"; the SDK's sdk-patches/0003). Nothing is asked for with
 // --native_upscaler=off, nor when the SDK cannot take requests.
 void PrepareVulkanForUpscalers() {
@@ -83,7 +83,7 @@ void PrepareVulkanForUpscalers() {
   const UpscaleConfig config = ReadUpscalerChoice();
   bool dlss = false, xess = false;
   UpscalerVulkanWants(config, 0, &dlss, &xess);
-  if (!dlss && !xess) return;
+  if (!config.enabled()) return;
   std::vector<std::string> instance_extensions = UpscalerVulkanInstanceExtensions(dlss, xess);
   rex::ui::vulkan::SetVulkanInstanceExtensionRequests(instance_extensions);
   rex::ui::vulkan::SetVulkanDeviceRequestCallback([config](VkInstance instance, VkPhysicalDevice physical) {

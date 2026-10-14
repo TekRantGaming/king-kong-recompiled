@@ -253,7 +253,9 @@ namespace nvrhi::vulkan
             vk::ImageLayout::eDepthStencilAttachmentOptimal },
         { ResourceStates::DepthRead,
             vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-            vk::AccessFlagBits2::eDepthStencilAttachmentRead,
+            // Read-only depth testing still uses STORE in our dynamic rendering
+            // framebuffer. Synchronize that attachment store before transitions.
+            vk::AccessFlagBits2::eDepthStencilAttachmentRead | vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
             vk::ImageLayout::eDepthStencilReadOnlyOptimal },
         { ResourceStates::StreamOut,
             vk::PipelineStageFlagBits2::eTransformFeedbackEXT,
