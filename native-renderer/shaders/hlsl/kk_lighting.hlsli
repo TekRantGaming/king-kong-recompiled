@@ -131,8 +131,11 @@ KLSsr kl_WaterTrace(float4 pos, float2 normalMap)
         if (min(zA, zB) <= zc * (1.0 + kl_SsrParams.z))
         {
             hit = true;
-            float tz = (1.0 / zc - k0) / (k1 - k0);
-            t = clamp(tz, t, tExit);
+            // A ray parallel to the view plane (k1 == k0) or a zero depth has no crossing to solve for:
+            // keep the texel's entry point.
+            float dk = k1 - k0;
+            if (abs(dk) > 1e-6 && zc != 0.0)
+                t = clamp((1.0 / zc - k0) / dk, t, tExit);
             break;
         }
         t = tExit + eps;  // behind a thin object: go on behind it
