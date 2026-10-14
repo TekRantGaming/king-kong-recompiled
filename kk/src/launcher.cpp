@@ -16,6 +16,7 @@
 #include "glyphs.h"
 #include "discord_presence.h"
 #include "online.h"
+#include "diagnostics.h"
 #if defined(KK_NATIVE_RENDERER)
 #include "hooks/kk_native_ui.h"  // the temporal upscalers this PC runs
 #endif
@@ -1997,6 +1998,23 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // after 40 s (60 frames a second), to keep the launcher open as a player might.
     static const char* autoplay = std::getenv("KK_AUTOPLAY");
     static const int autoplay_after = autoplay ? std::max(120, int(std::atof(autoplay) * 60)) : 0;
+#if defined(KK_DEV_TOOLS)
+    // Exercise the same action as the About button without taking focus or
+    // synthesizing desktop input. Restore the previous text clipboard.
+    static bool diagnostics_tested = false;
+    if (!diagnostics_tested && std::getenv("KK_DEV_DIAGNOSTICS")) {
+      diagnostics_tested = true;
+      const char* previous = ImGui::GetClipboardText();
+      const std::string saved = previous ? previous : "";
+      for (const auto& item : AboutItems()) if (item.label == "Copy diagnostics" && item.on_activate) item.on_activate();
+      if (const char* copied = ImGui::GetClipboardText()) {
+        std::ofstream file(paths_.user_dir / "diagnostics-clipboard.txt", std::ios::binary);
+        file << copied;
+      }
+      ImGui::SetClipboardText(saved.c_str());
+      REXLOG_INFO("KK dev: diagnostics clipboard action exercised; saved crash reports {}", HasCrashReports(paths_.user_dir));
+    }
+#endif
     if (autoplay && files_ok_ && ++autoplay_frames_ == autoplay_after) StartGame();
 
     const ImGuiViewport* vp = ImGui::GetMainViewport();
@@ -4153,6 +4171,18 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   std::vector<Item> AboutItems() {
     std::vector<Item> items;
     items.push_back(Section("King Kong PC port"));
+    items.push_back(ActionItem("Copy diagnostics",
+        "Copies version, hardware, settings, fallbacks and recent errors. Names and paths are redacted. Nothing is uploaded.",
+        "Copy", [this] {
+          const auto report = DiagnosticsReport();
+          ImGui::SetClipboardText(report.c_str());
+          Status("Diagnostics copied to the clipboard.");
+        }));
+    if (HasCrashReports(paths_.user_dir)) {
+      items.push_back(ActionItem("Saved crash reports",
+          "A previous crash saved local diagnostics and a minidump. Dumps may contain private process memory. Review before sharing. Nothing is uploaded.",
+          "Open folder", [this] { OpenInExplorer(paths_.user_dir / "crashes"); }));
+    }
     {
       Item it;
       it.type = ItemType::kInfo;
@@ -4893,6 +4923,17 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     TickSteam();
     CaptureKey();
     TickNameEditor();
+    if (offer_crash_reports_ && !modal_.open && !InSetup() && !update_shaders_ && !native_pack_.Busy()) {
+      offer_crash_reports_ = false;
+      if (HasCrashReports(paths_.user_dir)) {
+        REXLOG_INFO("KK: offering saved local crash reports in the launcher");
+        OpenModal("Saved crash reports",
+            "A previous crash saved diagnostics and a minidump locally. Nothing was uploaded. Dumps may contain private process memory; review before sharing.",
+            {"Open folder", "Later"}, 1, [this](int i) {
+              if (i == 0) OpenInExplorer(paths_.user_dir / "crashes");
+            });
+      }
+    }
     // What's new waits until the shaders an update rebuilds are done: building them loads every processor
     // core, and the launcher answers slowly meanwhile.
     if (open_whats_new_ && !modal_.open && !update_shaders_ && !native_pack_.Busy()) {
@@ -5148,6 +5189,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   bool update_manual_ = false, update_prompted_ = false, installing_update_ = false, relaunched_ = false;
   std::string switch_to_;  // the channel Change version is switching to, while it checks
   bool open_whats_new_ = false;
+  bool offer_crash_reports_ = true;
   std::string whats_new_from_;  // version the player had before this one
   ShaderPackStatus pack_;
   std::thread pack_thread_;

@@ -59,6 +59,7 @@ set(KINGKONG_SOURCES
     src/menu_hook.cpp
     src/glyphs.cpp
     src/crash_dump.cpp
+    src/diagnostics.cpp
     src/shader_pack.cpp
     src/native_shaders.cpp
     src/http.cpp
