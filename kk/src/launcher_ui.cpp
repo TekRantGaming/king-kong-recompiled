@@ -489,14 +489,18 @@ int DrawTabs(ImDrawList* dl, Glyphs& glyphs, const std::string& set, const std::
   const Fonts f = GetFonts();
   float fit = 1;
   if (max_width > 0) {
-    float width = 108 * m.s + float(names.empty() ? 0 : names.size() - 1) * 30 * m.s;
+    float width = DrawGlyph(dl, glyphs, Action::kPrevTab, set, 0, 0, 24 * m.s, m, false) +
+                  DrawGlyph(dl, glyphs, Action::kNextTab, set, 0, 0, 24 * m.s, m, false) + 40 * m.s +
+                  float(names.empty() ? 0 : names.size() - 1) * 30 * m.s;
     for (const auto& name : names) width += TrackedWidth(f.display, 15 * m.s, name, 1.6f * m.s);
     fit = std::min(1.0f, max_width / width);
   }
   const float s = m.s * fit, fs = 15 * s, tracking = 1.6f * s, gap = 30 * s, gh = 24 * s;
+  Metrics tab_metrics = m;
+  tab_metrics.s = s;
   float x = pos.x;
   const float cy = pos.y;
-  x += DrawGlyph(dl, glyphs, Action::kPrevTab, set, x, cy, gh, m, true) + 20 * s;
+  x += DrawGlyph(dl, glyphs, Action::kPrevTab, set, x, cy, gh, tab_metrics, true) + 20 * s;
   int clicked = -1;
   for (size_t i = 0; i < names.size(); ++i) {
     const float w = TrackedWidth(f.display, fs, names[i], tracking);
@@ -512,7 +516,7 @@ int DrawTabs(ImDrawList* dl, Glyphs& glyphs, const std::string& set, const std::
     if (hot && ImGui::IsMouseClicked(0)) clicked = int(i);
     x += w + gap;
   }
-  DrawGlyph(dl, glyphs, Action::kNextTab, set, x - gap + 20 * s, cy, gh, m, true);
+  DrawGlyph(dl, glyphs, Action::kNextTab, set, x - gap + 20 * s, cy, gh, tab_metrics, true);
   return clicked;
 }
 

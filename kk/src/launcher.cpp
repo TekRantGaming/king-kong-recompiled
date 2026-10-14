@@ -2241,11 +2241,18 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // ------------------------------------------------------------ top bar ---
   void DrawTopBar(ImDrawList* dl) {
     const float s = S();
+    const online::Counts counts = online::Get();
+    const bool show_counts = counts.known && !InSetup();
+    const ui::Fonts top_fonts = ui::GetFonts();
+    const float caption_width = show_counts
+        ? ui::TrackedWidth(top_fonts.display, 13 * s,
+                           Upper(F("Players online: {0}", {std::to_string(counts.online)})), 2.2f * s) + 16 * s
+        : ui::TrackedWidth(top_fonts.display, 15 * s, "KING KONG", 4 * s);
     std::vector<std::string> names;
     for (const char* n : kPageNames) names.push_back(Upper(T(n)));
     float ux = 0, uw = 0;
     const int clicked = ui::DrawTabs(dl, glyphs_, PromptSet(), names, page_, ImVec2(o_.x + Margin(), o_.y + 44 * s),
-                                     m_, !modal_.open, &ux, &uw, w_ - Margin() * 2);
+                                     m_, !modal_.open, &ux, &uw, w_ - Margin() * 2 - caption_width - 32 * s);
     if (clicked >= 0 && clicked != int(page_)) {
       ui::Cue(ui::Sound::kTab);
       GoTo(Page(clicked));
@@ -2262,8 +2269,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // The game's name at the right, away from Home (which shows it large).
     // The online player count takes its place while it's shown.
     const float right = o_.x + w_ - Margin();
-    const online::Counts counts = online::Get();
-    const bool show_counts = counts.known && !InSetup();
     if (home_mix_ < 0.99f && !show_counts) {
       const ui::Fonts f = ui::GetFonts();
       const std::string name = "KING KONG";
