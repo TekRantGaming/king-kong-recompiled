@@ -15,7 +15,11 @@
 // units of the scene colour (the game's ambient constant is in the same units), and the share
 // of the hemisphere that nothing hides (the visibility).
 //
-//   cs_radiance        the scene colour over the picture into the working image (a block's mean)
+// The game renders in gamma space (8-bit targets holding display values): the light is gathered and
+// added in linear light (the picture's values to the power kk_Shape.z, 2.2) and encoded again at the
+// end, so a sunlit wall lights the shade beside it as much as it physically would.
+//
+//   cs_radiance        the scene colour over the picture into the working image (a block's mean, linear)
 //   cs_radiance_down   its smaller mips (2x2 means), for samples far away
 //   cs_gather          the bounce light (rgb) and the visibility (a) per working pixel
 //   cs_denoise         an edge-aware blur (5x5 a-trous, depth and normal weights), run with steps
@@ -50,6 +54,8 @@ cbuffer SsgiConstants : register(b0)
     float4 kk_Reproject[4];
     float4 kk_ScreenXY;  // x_scale, x_offset, y_scale, y_offset
     float4 kk_ScreenZ;   // z_scale, z_offset, host scale x, host scale y
+    float4 kk_Shape;     // x: multi-bounce strength (0 to 1), y: the largest share of a pixel's light the
+                         // composite may take away, z: the picture's gamma (its values are gamma encoded)
 };
 
 #include "../../thirdparty/XeGTAO/XeGTAO.hlsli"
@@ -105,6 +111,16 @@ float Luma(float3 c)
     return dot(c, float3(0.2126, 0.7152, 0.0722));
 }
 
+float3 ToLinear(float3 c)
+{
+    return pow(max(c, 0.0), kk_Shape.z);
+}
+
+float3 ToGamma(float3 c)
+{
+    return pow(max(c, 0.0), 1.0 / kk_Shape.z);
+}
+
 // ------------------------------------------------------------------ radiance
 
 [numthreads(8, 8, 1)]
@@ -119,7 +135,7 @@ void cs_radiance(uint2 id : SV_DispatchThreadID)
     float3 sum = 0.0;
     for (int j = 0; j < step; ++j)
         for (int i = 0; i < step; ++i)
-            sum += g_srcColor.Load(int3(min(base + int2(i, j), last), 0)).rgb;
+            sum += ToLinear(g_srcColor.Load(int3(min(base + int2(i, j), last), 0)).rgb);
     g_outRadiance[id] = float4(max(sum / float(step * step), 0.0), 1.0);
 }
 
@@ -256,7 +272,10 @@ void cs_gather(uint2 pix : SV_DispatchThreadID)
                 float3 Ns = LoadNormalAt(g_srcNormalmap, int2(sp));
                 float facing = saturate(dot(Ns, -d / dist) * 4.0);
                 float fade = saturate((radius - dist) / (0.3 * radius));
-                float rmip = clamp(log2(offsetLength) - 2.0, 0.0, maxMip);
+                // The radiance's mip: about the spacing of the samples there (t * t * radius, so
+                // 2 t radius / steps apart), so a far sample stands for the surfaces around it.
+                float spacing = 2.0 * sqrt(offsetLength * radiusPx) / float(stepCount);
+                float rmip = clamp(log2(max(spacing * 0.5, 1.0)), 0.0, maxMip);
                 float3 L = g_srcRadiance.SampleLevel(g_samplerLinearClamp, suv, rmip).rgb;
                 sliceLight += L * (float(countbits(fresh)) / 32.0) * facing * fade;
             }
@@ -437,11 +456,17 @@ float4 GiAt(int2 q, float z)
 }
 
 // Into the scene colour target (alpha not written). The game's lighting shaders give a surface
-// colour = albedo * (ambient + direct light). Where the surface is shaded its colour is about
+// colour = albedo * (ambient + direct light), in gamma space; a product stays a product in linear
+// light, so the albedo is estimated there. Where the surface is shaded its colour is about
 // albedo * ambient, so colour / ambient is its albedo; where it is lit its colour is brighter than
 // albedo-limit * ambient, and the light is taken to be its brightness over that limit. So the
 // albedo estimate never exceeds the limit and is exact in the shade, which is where indirect light
-// matters. Then: colour + albedo * (bounce light * intensity - ambient * hidden share * occlusion).
+// matters. The gathered light is one bounce; the surroundings that hide part of the sky send some
+// of what they get back again (more bounces: a geometric series in the albedo and the hidden share,
+// as multi-bounce ambient occlusion does it). Then, in linear light:
+//   colour + albedo * (bounce * intensity * bounces - ambient * hidden share * occlusion),
+// never darker than kk_Shape.y of the pixel's own light (the occlusion is a contact shadow, not a
+// blackout), encoded back to the picture's gamma.
 float4 ps_composite(float4 pos : SV_Position) : SV_Target0
 {
     int2 p = int2(pos.xy);
@@ -452,20 +477,24 @@ float4 ps_composite(float4 pos : SV_Position) : SV_Target0
         return colour;  // outside the picture, or the sky
     float z = XeGTAO_ScreenSpaceToViewSpaceDepth(stored, g_GTAOConsts);
     float4 gi = GiAt(q, z);
-    float3 bounce = gi.rgb * kk_Gather.w;
-    float hiddenShare = 1.0 - gi.a;
-    float3 A = max(kk_Ambient.rgb, 1e-3);
-    float lumaA = Luma(A);
-    float scale = max(1.0, Luma(colour.rgb) / max(kk_Ambient.w * lumaA, 1e-4));
-    float3 albedo = min(colour.rgb / (A * scale), kk_Ambient.w);
+    float hiddenShare = saturate(1.0 - gi.a);
+    float3 lit = ToLinear(colour.rgb);
+    float3 A = max(ToLinear(kk_Ambient.rgb), 1e-5);
+    float limit = kk_Ambient.w;  // linear
+    float scale = max(1.0, Luma(lit) / max(limit * Luma(A), 1e-7));
+    float3 albedo = min(lit / (A * scale), limit);
+    float bounces = 1.0 / max(1.0 - Luma(albedo) * hiddenShare * kk_Shape.x, 0.4);
+    float3 bounce = gi.rgb * kk_Gather.w * bounces;
     float3 delta = albedo * (bounce - A * hiddenShare * kk_Mode.x);
+    delta = max(delta, -kk_Shape.y * lit);
     float ao = kk_Extra.x > 0.5 ? g_srcOcclusion.Load(int3(q, 0)).x : 1.0;
+    float3 result = ToGamma(lit * ao + delta);
     int debugView = int(kk_Mode.y + 0.5);
     if (debugView == 1)
-        return float4(bounce, colour.a);
+        return float4(ToGamma(bounce), colour.a);
     if (debugView == 2)
-        return float4(saturate(0.5 + delta * 2.0), colour.a);
+        return float4(saturate(0.5 + (result - colour.rgb) * 2.0), colour.a);
     if (debugView == 3)
         return float4(gi.aaa, colour.a);
-    return float4(max(colour.rgb * ao + delta, 0.0), colour.a);
+    return float4(result, colour.a);
 }

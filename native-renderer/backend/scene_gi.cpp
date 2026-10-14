@@ -28,7 +28,7 @@ bool SceneGi::Initialize() {
        "%.2f, albedo limit %.2f, occlusion %.2f%s",
        GiLevelName(config_.level), p.slices, p.steps, p.denoise, GiQualityName(config_.quality),
        config_.radius > 0.0f ? config_.radius : p.radius,
-       config_.thickness > 0.0f ? std::to_string(config_.thickness).c_str() : "a quarter of the radius", config_.intensity,
+       config_.thickness > 0.0f ? std::to_string(config_.thickness).c_str() : "a fifth of the radius", config_.intensity,
        config_.albedo, config_.occlusion, config_.debug ? " (debug view)" : "");
   return true;
 }
@@ -144,7 +144,7 @@ bool SceneGi::Apply(nvrhi::ICommandList* cl, bool ao_on, bool depth_before_draw)
   ss.level = level;
   ss.intensity = config_.intensity;
   ss.radius = config_.radius > 0.0f ? config_.radius : level.radius;
-  ss.thickness = config_.thickness > 0.0f ? config_.thickness : 0.25f * ss.radius;
+  ss.thickness = config_.thickness > 0.0f ? config_.thickness : std::clamp(0.2f * ss.radius, 0.25f, 1.0f);
   ss.albedo = config_.albedo;
   ss.occlusion = ao_on ? 0.0f : config_.occlusion;
   ss.debug = config_.debug;

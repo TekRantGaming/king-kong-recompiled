@@ -5,7 +5,30 @@ Status, 12 October 2026: branch `beta-ssgi` (from `beta` = `nr-integration` 1ba7
 (`--native_gi=off`); the launcher's Graphics page has the row "Global illumination: Off / Low / Medium / High"
 next to Ambient occlusion. Ray-traced GI is for later; this is screen space only.
 
-## Where it stands (paused 12 October 2026, 16:35)
+## Beta 4 rework (14 October 2026, branch `claude-effects`)
+
+The owner's test at 4K (DLSS Quality) found the GI invisible even at intensity 4, and in dark scenes slightly
+darker than off (`runs	ask026-20261013-211423`, chapters 8 and 9). The causes, all in the old design below:
+
+- the light was gathered and added in gamma space, where a bounce of a few percent of a sunlit wall is a few
+  levels; the game renders into 8-bit targets holding display values, so the light is now linearised (power
+  2.2) for the gather and the composite and encoded again at the end: the same physical bounce lifts a shaded
+  floor next to a sunlit wall from 0.05 to about 0.22;
+- the radius was 1.5 to 2.5 m and, worse, clamped to a fifth of the picture's height on the screen, so beyond a
+  few metres from the camera the gather reached about a metre; now 3 / 5 / 8 m (Low / Medium / High) and up to
+  0.45 of the picture's height, with five radiance mips (a far sample reads the mean of the surfaces around it)
+  and two more steps per side;
+- the occlusion of the flat ambient light (with the AO off) took away about as much as the bounce added in the
+  shade; it is now half by default (`--native_gi_occlusion` 0.5) and can never take more than 35 % of a
+  pixel's linear light;
+- one bounce only: the composite now adds the light the surroundings send back again (a geometric series in the
+  albedo and the hidden share, as multi-bounce ambient occlusion does it), up to 2.5 times;
+- the albedo limit for lit surfaces is 0.75 (a picture value; 0.53 in linear light) instead of 0.6.
+
+`GameGi_GameLikeDarkSceneBounceIsVisible` checks it on a scene with the game's numbers (ambient 0.08, a shaded
+floor of 0.047, a sunlit orange wall): see "Tests".
+
+## Where it stood (paused 12 October 2026, 16:35)
 
 Done: the composite GI (spatial and temporal), its settings, the launcher row, the tests (`nr_game_gi_tests` 8,
 all 13 standalone tests pass), the bench, one probe launch through the GI tour at Medium, scale 1 (GPU times
@@ -123,9 +146,12 @@ the frame's flat ambient light `A`:
   scene (the mean of the frame; the last frame's when a frame has none);
 - where a surface is in the shade its colour is about albedo x `A`, so colour / `A` is its albedo;
 - where it is lit its colour is brighter than (albedo limit) x `A`, and its light is taken as its brightness over
-  the limit (`--native_gi_albedo`, 0.6): the estimate never exceeds the limit and is exact in the shade, which is
+  the limit (`--native_gi_albedo`, 0.75 as a picture value): the estimate never exceeds the limit and is exact in the shade, which is
   where indirect light matters;
-- out = colour + albedo x (bounce x intensity - `A` x (1 - visibility) x occlusion).
+- in linear light (the picture's values to the power 2.2; the game's targets hold gamma encoded values):
+  out = colour + albedo x (bounce x intensity x bounces - `A` x (1 - visibility) x occlusion), where bounces =
+  1 / (1 - albedo x (1 - visibility)) (at most 2.5) stands for the light the surroundings send back again, and
+  the result is never darker than 65 % of the pixel's own linear light; then encoded back to gamma.
 
 The second term is the "better local occlusion": the flat ambient light taken away where the surroundings hide
 the sky, and replaced by the light those surroundings send. With the ambient occlusion setting on (either
@@ -139,14 +165,24 @@ of every radius; the flat ambient constant stands for the sky).
 
 | Level | Slices x steps per side | Blur passes | Resolution | Radius (world units) |
 |---|---|---|---|---|
-| Low | 2 x 4 | 2 | half | 1.5 |
-| Medium | 3 x 6 | 3 | half | 2.0 |
-| High | 4 x 8 | 3 | full up to a render scale of 1.5, half above | 2.5 |
+| Low | 2 x 6 | 2 | half | 3 |
+| Medium | 3 x 8 | 3 | half | 5 |
+| High | 4 x 10 | 3 | full up to a render scale of 1.5, half above | 8 |
+
+The radius on the screen is at most 0.45 of the picture's height (working pixels); far samples read the
+radiance's mip of about their spacing (five mips).
 
 Half resolution is of the scene target at the render scale (at scale 2, 1280 x 720 working pixels), which is
 also the path for slower GPUs (the Steam Deck class): at 1280 x 800 Low works on 640 x 400 pixels.
 
 ## Cost
+
+After the Beta 4 rework (14 October, the same bench run back to back with the old shaders, the GPU shared with
+the desktop, so slower than the table below): at 3840 x 2160 (scale 3, half resolution) Low 1.85 ms (old
+1.71), Medium 2.45 ms (old 2.24), High (half) 2.97 ms (old 2.69); at 2560 x 1440 Medium 0.97 ms. About 10 % more
+for the wider gather. With DLSS Quality at 4K the GI works on the 2560 x 1440 render: about 1 ms at Medium.
+
+Before the rework:
 
 `nr_ssgi_bench` (gtao_tests' ray-cast room at any size, a colour image, temporal accumulation on, the GPU's
 timer queries over 60 frames; RTX 4070 Ti, Vulkan, the GPU at full clocks). Total of `Gtao::Prepare`,
@@ -176,9 +212,9 @@ moment measured 0.46 to 1.01 ms the same way).
 | `--native_gi_intensity` | 1, 0 to 8 | the bounce light times this |
 | `--native_gi_quality` | `auto`, `half`, `full` | the working resolution (auto: the level's) |
 | `--native_gi_radius` | 0, world units | how far light is gathered from (0: the level's) |
-| `--native_gi_thickness` | 0, world units | how deep a surface on the screen is taken to be (0: a quarter of the radius) |
-| `--native_gi_albedo` | 0.6, 0.05 to 1 | the brightest albedo the composite assumes |
-| `--native_gi_occlusion` | 1, 0 to 1 | with the AO off: how much of the hidden ambient light is taken away |
+| `--native_gi_thickness` | 0, world units | how deep a surface on the screen is taken to be (0: a fifth of the radius, 0.25 to 1) |
+| `--native_gi_albedo` | 0.75, 0.05 to 1 | the brightest albedo the composite assumes (a picture value) |
+| `--native_gi_occlusion` | 0.5, 0 to 1 | with the AO off: how much of the hidden ambient light is taken away |
 | `--native_gi_temporal` | true, false | temporal accumulation (above) |
 | `--native_gi_debug` | 0 to 3 | 1 the bounce light alone, 2 the change on grey (+ brighter, - darker), 3 the visibility |
 | `--native_gi_gpu_time` | false, true | GPU timer queries around the GI's passes, the average logged every 600 frames |
@@ -200,7 +236,8 @@ set to 0.3), then an alpha-blended quad over the floor by the wall. The tests' r
 
 | Test | Checks |
 |---|---|
-| `GameGi_RedWallBleedsOntoTheFloor` | Low, Medium, High: the floor 0.25 units from the wall gains red (0.239 to 0.33-0.35) and almost no green or blue; the floor 1.25 units away and the sky do not change; the ambient light came from the constant |
+| `GameGi_RedWallBleedsOntoTheFloor` | Low, Medium, High: the floor 0.25 units from the wall gains red (0.239 to 0.39-0.41 since the Beta 4 rework, 0.33-0.35 before) and almost no green or blue; the floor 1.25 units away and the sky do not change; the ambient light came from the constant |
+| `GameGi_GameLikeDarkSceneBounceIsVisible` | the game's numbers (ambient 0.08, a shaded floor of 0.047, a sunlit orange wall 4 m wide), each level's defaults: the floor 0.6 m from the wall 0.047 to 0.217 / 0.224 / 0.238 (Low / Medium / High) in the wall's colour, 2 m away 0.071 / 0.094 / 0.107, 7 m away unchanged; the lit wall unchanged, a shaded corner far away -0.002 to -0.004, no pixel darker by more than 0.008, the picture's mean brighter, the sky untouched |
 | `GameGi_TransparentDrawAfterIsUntouched` | the quad is half its colour plus half the lit scene behind it (within 0.002), where painting over the finished picture would move it by 0.03 |
 | `GameGi_WithAoItOnlyAddsLight` | with GTAO at the opaque moment the GI adds red and takes nothing away |
 | `GameGi_VisibilityTakesTheHiddenAmbientAway` | with the AO off, by the wall green and blue get darker (the wall hides the sky) while red rises; the open floor is unchanged; the debug view shows the red bounce |

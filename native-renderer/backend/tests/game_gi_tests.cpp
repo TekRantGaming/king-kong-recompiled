@@ -578,6 +578,8 @@ struct Fixture {
   struct Frame {
     bool prepass = true, quad = true;
     bool clear_scene_depth = false, quad_writes_depth = false;
+    const Mesh* scene = nullptr;     // null: SceneMesh()
+    const float* ambient = nullptr;  // null: kAmbient
   };
   void DrawFrame(const Frame& fr) {
     SetRenderTarget(0, rt);
@@ -585,8 +587,8 @@ struct Fixture {
     SetViewport(0, 0, kW, kH);
     SetConstants(true, 0, cam.rows, 4);
     Clear(kClearTarget0 | kClearZ | kClearStencil, kSky, 1.0f);
-    const Mesh scene = SceneMesh();
-    SetConstants(false, 0, kAmbient, 1);
+    const Mesh scene = fr.scene ? *fr.scene : SceneMesh();
+    SetConstants(false, 0, fr.ambient ? fr.ambient : kAmbient, 1);
     if (fr.prepass) DrawMesh(scene, ps_lit, kBlendOpaque, kDepthPrepass, 0);
     DrawMesh(scene, ps_lit, kBlendOpaque, fr.prepass ? kDepthColour : kDepthPrepass);
     if (fr.clear_scene_depth) Clear(kClearZ, 0, 1.0f);
@@ -776,7 +778,116 @@ TEST(GameGi_VisibilityTakesTheHiddenAmbientAway) {
   const Rgb bn = Colour(bounce, d.cam, kNearFloor), bf = Colour(bounce, d.cam, kFarFloor);
   std::printf("  bounce light: by the wall %.3f %.3f %.3f, far %.3f %.3f %.3f\n", bn.r, bn.g, bn.b, bf.r, bf.g, bf.b);
   CHECK(bn.r > 0.05f && bn.r > 3.0f * bn.g);
-  CHECK(bf.r < kTol);
+  CHECK(bf.r < 0.03f);  // gamma encoded: a trace of light reads larger than it is
+}
+
+// ------------------------------------------------- a scene like the game's ---
+//
+// The game's frames are dark: its flat ambient light (g_vAmbientColor) reads about 0.08 in the
+// chapters measured (docs/gi.md, "In the game"), surfaces in the shade are a few percent of white,
+// and the light comes from the sun on a few surfaces. The yard: a dark floor in the shade, a sunlit
+// orange wall at its end (4 m wide, 3 m high), a shaded dark crate on the floor in front of it and a
+// shaded corner of two dark walls far to the side, seen from 10 m back and 4 m up. No radius given:
+// each level's own.
+constexpr float kYardAmbient[4] = {0.08f, 0.08f, 0.08f, 0.0f};
+constexpr uint32_t kYardFloor = 0xFF0C0C0C;  // albedo 0.6 (gamma) times the ambient 0.08: 0.047
+constexpr uint32_t kYardWall = 0xFFBF5A26;   // sunlit: 0.75 0.35 0.15
+constexpr uint32_t kYardDark = 0xFF080808;   // shaded crate and corner: 0.031
+
+Mesh YardMesh() {
+  Mesh m;
+  Quad(m, {-12, 0, -14}, {12, 0, -14}, {12, 0, 2}, {-12, 0, 2}, kYardFloor);
+  Quad(m, {-2, 0, 2}, {2, 0, 2}, {2, 3, 2}, {-2, 3, 2}, kYardWall);
+  Box(m, {-1.5f, 0, -3.0f}, {-0.5f, 1, -2.0f}, kYardDark);
+  // The shaded corner, far from the sunlit wall: the GI may only darken it a little.
+  Quad(m, {7, 0, -4}, {7, 0, 1}, {7, 2.5f, 1}, {7, 2.5f, -4}, kYardDark);
+  Quad(m, {4, 0, 1}, {7, 0, 1}, {7, 2.5f, 1}, {4, 2.5f, 1}, kYardDark);
+  return m;
+}
+
+void YardCamera(Camera& c) {
+  c.eye = {0.0f, 4.0f, -10.0f};
+  c.target = {0.5f, 0.5f, 2.0f};
+  c.Setup();
+}
+
+float Luminance(const Rgb& c) { return 0.2126f * c.r + 0.7152f * c.g + 0.0722f * c.b; }
+
+// Over the picture's non-sky pixels (the sky keeps its clear colour, kSky): the mean luminance change
+// and the largest darkening of any pixel.
+void FrameChange(const Pixels& with, const Pixels& without, float& mean, float& darkest, float& brightest) {
+  double sum = 0;
+  size_t n = 0;
+  darkest = 0;
+  brightest = 0;
+  for (uint32_t y = 0; y < without.height; ++y)
+    for (uint32_t x = 0; x < without.width; ++x) {
+      const float* a = without.at(x, y);
+      const float* b = with.at(x, y);
+      if (std::fabs(a[0] - 0x40 / 255.0f) < 1e-3f && std::fabs(a[2] - 0x90 / 255.0f) < 1e-3f) continue;  // sky
+      const float la = 0.2126f * a[0] + 0.7152f * a[1] + 0.0722f * a[2];
+      const float lb = 0.2126f * b[0] + 0.7152f * b[1] + 0.0722f * b[2];
+      sum += lb - la;
+      ++n;
+      darkest = std::min(darkest, lb - la);
+      brightest = std::max(brightest, lb - la);
+    }
+  mean = n ? float(sum / double(n)) : 0.0f;
+}
+
+TEST(GameGi_GameLikeDarkSceneBounceIsVisible) {
+  // The default settings of each level (radius, intensity 1, occlusion 0.5) in the dark yard: the
+  // sunlit wall lights the shaded floor in front of it with its own colour, visibly (several times
+  // the floor's own light), less with the distance and not at all 7 m away; the picture as a whole
+  // gets brighter, no pixel loses more than a trace (no black halos, no crushed shadows), the sunlit
+  // wall itself barely changes (no glow), the shaded corner far away only darkens a little, and the
+  // sky is untouched.
+  const Mesh yard = YardMesh();
+  Fixture::Frame fr;
+  fr.quad = false;
+  fr.scene = &yard;
+  fr.ambient = kYardAmbient;
+  const V3 floor_near{0.0f, 0.0f, 1.4f}, floor_mid{0.0f, 0.0f, 0.0f}, floor_far{-3.5f, 0.0f, -5.0f},
+      wall{0.5f, 2.0f, 2.0f}, corner{6.8f, 0.1f, 0.8f};
+  for (GiLevel level : {GiLevel::kLow, GiLevel::kMedium, GiLevel::kHigh}) {
+    Options on, off;
+    on.mode = off.mode = 0;  // ambient occlusion off: the GI's own occlusion at its default
+    on.gi.level = level;
+    Fixture a(on), b(off);
+    if (!a.Init() || !b.Init()) return;
+    YardCamera(a.cam);
+    YardCamera(b.cam);
+    const std::string name = GiLevelName(level);
+    Pixels with, without = b.Render(fr, "yard_off_" + name);
+    for (int i = 0; i < 4; ++i) with = a.Render(fr, "yard_" + name);  // the history settles
+    const Camera& cam = a.cam;
+    const Rgb n1 = Colour(with, cam, floor_near), n0 = Colour(without, cam, floor_near);
+    const Rgb m1 = Colour(with, cam, floor_mid), m0 = Colour(without, cam, floor_mid);
+    const Rgb f1 = Colour(with, cam, floor_far), f0 = Colour(without, cam, floor_far);
+    const Rgb w1 = Colour(with, cam, wall), w0 = Colour(without, cam, wall);
+    const Rgb c1 = Colour(with, cam, corner), c0 = Colour(without, cam, corner);
+    float mean, darkest, brightest;
+    FrameChange(with, without, mean, darkest, brightest);
+    std::printf("  %s: floor 0.6 m from the wall %.3f %.3f %.3f (was %.3f %.3f %.3f); 2 m %.3f (was %.3f); 7 m %+.4f; "
+                "wall %+.3f; corner %+.3f; picture mean %+.4f, darkest pixel %+.3f, brightest %+.3f\n",
+                name.c_str(), n1.r, n1.g, n1.b, n0.r, n0.g, n0.b, Luminance(m1), Luminance(m0),
+                Luminance(f1) - Luminance(f0), Luminance(w1) - Luminance(w0), Luminance(c1) - Luminance(c0), mean,
+                darkest, brightest);
+    // Visible: the floor by the wall at least twice as bright as it was, tinted like the wall.
+    CHECK(Luminance(n1) > 2.0f * Luminance(n0));
+    CHECK(n1.r - n0.r > 0.08f);
+    CHECK(n1.r - n0.r > 1.5f * (n1.b - n0.b));
+    // It falls off: less 2 m away, still there; nothing 7 m away.
+    CHECK(Luminance(m1) - Luminance(m0) > 0.01f);
+    CHECK(Luminance(m1) - Luminance(m0) < Luminance(n1) - Luminance(n0));
+    CHECK(std::fabs(Luminance(f1) - Luminance(f0)) < kTol);
+    // No glow on the lit wall, no crushed shade.
+    CHECK(std::fabs(Luminance(w1) - Luminance(w0)) < 0.03f);
+    CHECK(Luminance(c1) - Luminance(c0) > -0.012f);
+    CHECK(darkest > -0.02f);
+    CHECK(mean > 0.0f);
+    for (int c = 0; c < 3; ++c) CHECK(std::fabs(with.at(2, 2)[c] - without.at(2, 2)[c]) < 1e-6f);
+  }
 }
 
 TEST(GameGi_RenderScaleTwoMatchesOne) {
