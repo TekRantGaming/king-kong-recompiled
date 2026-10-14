@@ -1,5 +1,6 @@
 param([int]$Chapter=8, [ValidateSet('warp','vulkan')][string]$Backend='vulkan',
- [ValidateSet('off','dlss','fsr')][string]$Upscaler='off', [switch]$Gtao, [string]$Label='baseline')
+ [ValidateSet('off','dlss','fsr')][string]$Upscaler='off', [switch]$Gtao, [string]$Label='baseline',
+ [string]$RuntimeDll='')
 $ErrorActionPreference='Stop'
 $workspace=(Resolve-Path "$PSScriptRoot/../..").Path
 $lockPath='F:\KK-native-renderer\runs\codex-game.lock'
@@ -14,6 +15,7 @@ $run="F:\KK-native-renderer\runs\task035-$Label-$Backend-$Upscaler-ch$Chapter-$(
 New-Item -ItemType Directory -Path $run | Out-Null
 $build="$workspace\kk\out\build\kk-dev-vulkan"
 Get-ChildItem -LiteralPath $build -File | Where-Object { $_.Extension -in '.exe','.dll' } | Copy-Item -Destination $run
+if ($RuntimeDll) { Copy-Item -LiteralPath $RuntimeDll -Destination "$run\rexruntime.dll" }
 Copy-Item -LiteralPath "$build\glyphs" -Destination $run -Recurse
 Copy-Item -LiteralPath 'F:\KK-native-renderer\cache\native-shaders\kkshaders-spirv.pack' -Destination $run
 Copy-Item -LiteralPath 'F:\KK-native-renderer\runs\task025-20261013\sanity-d3d12-ch8-210057\kkshaders-dxil.pack' -Destination $run
@@ -31,7 +33,7 @@ $env:KK_DEV_SHOTS_DIR=$run
 $env:KK_DEV_DT_LOG='0,240'
 if ($Backend -eq 'vulkan') {
  @('khronos_validation.validate_sync = true','khronos_validation.gpuav_enable = true',
-   'khronos_validation.report_flags = info,warn,error','khronos_validation.log_duplicate_limit = 20',
+   'khronos_validation.report_flags = info,warn,error','khronos_validation.duplicate_message_limit = 20',
    'khronos_validation.debug_action = VK_DBG_LAYER_ACTION_LOG_MSG',
    "khronos_validation.log_filename = $run\vulkan-validation.log") | Set-Content "$run\vk_layer_settings.txt"
  $env:VK_LAYER_PATH='F:\KK-native-renderer\downloads\vulkan-sdk-latest\sdk\Bin'
