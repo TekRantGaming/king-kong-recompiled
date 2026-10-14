@@ -11,6 +11,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstdlib>
 #include <mutex>
 #include <utility>
 #include <vector>
@@ -146,11 +147,12 @@ class VulkanHost final : public HostDevice {
     // Test each local heap separately: spare capacity on one heap must not
     // hide pressure on another. Includes UMA's local, host-visible heap.
     MemoryBudget tightest;
+    const uint64_t cap = ParseMemoryBudgetCap(std::getenv("KK_DEV_VRAM_BUDGET_GB"));
     for (uint32_t i = 0; i < properties.memoryProperties.memoryHeapCount; ++i) {
       if (!(properties.memoryProperties.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) ||
           !budget.heapBudget[i]) continue;
       MemoryBudget m{budget.heapBudget[i], budget.heapUsage[i], true};
-      if (!tightest.valid || double(m.usage) / m.budget > double(tightest.usage) / tightest.budget)
+      if (TighterMemoryBudget(CapMemoryBudget(m, cap), CapMemoryBudget(tightest, cap)))
         tightest = m;
     }
     return tightest;

@@ -3,6 +3,7 @@
 #pragma once
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 
 namespace nr {
 struct MemoryBudget {
@@ -10,10 +11,28 @@ struct MemoryBudget {
   bool valid = false;
 };
 
+inline uint64_t MemoryBudgetReserve(uint64_t budget) {
+  return std::min<uint64_t>(256ull << 20, budget / 10);
+}
 inline bool MemoryPressure(const MemoryBudget& m) {
   if (!m.valid || !m.budget) return false;
-  const uint64_t reserve = std::min<uint64_t>(256ull << 20, m.budget / 10);
+  const uint64_t reserve = MemoryBudgetReserve(m.budget);
   return m.usage >= m.budget - reserve;
+}
+inline bool TighterMemoryBudget(const MemoryBudget& a, const MemoryBudget& b) {
+  if (!a.valid || !a.budget) return false;
+  if (!b.valid || !b.budget) return true;
+  auto margin = [](const MemoryBudget& m) {
+    return (double(m.budget) - double(m.usage)) / double(std::max<uint64_t>(MemoryBudgetReserve(m.budget), 1));
+  };
+  return margin(a) < margin(b);
+}
+inline uint64_t ParseMemoryBudgetCap(const char* v) {
+  if (!v) return 0;
+  if (std::strcmp(v, "4") == 0) return 4ull << 30;
+  if (std::strcmp(v, "6") == 0) return 6ull << 30;
+  if (std::strcmp(v, "8") == 0) return 8ull << 30;
+  return 0;
 }
 
 // Only a supported live query can activate adaptation. A synthetic cap never

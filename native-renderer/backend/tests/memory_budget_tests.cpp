@@ -41,5 +41,12 @@ int main() {
   Check(ReducedMemoryScale(0.5f, 0.5f) == 0.5f);
   Check(ReducedMemoryScale(4, 1) == 3);
   Check(ReducedMemoryScale(2, 1, 0.5f) == 1);
+  const MemoryBudget large{12 * GiB, 12 * GiB - 600 * MiB, true};
+  const MemoryBudget small{256 * MiB, 236 * MiB, true};
+  Check(!MemoryPressure(large)); Check(MemoryPressure(small));
+  Check(TighterMemoryBudget(small, large)); Check(!TighterMemoryBudget(large, small));
+  Check(TighterMemoryBudget(large, {})); Check(!TighterMemoryBudget({}, large));
+  Check(ParseMemoryBudgetCap("4") == 4 * GiB && ParseMemoryBudgetCap("6") == 6 * GiB && ParseMemoryBudgetCap("8") == 8 * GiB);
+  Check(ParseMemoryBudgetCap("5") == 0 && ParseMemoryBudgetCap(nullptr) == 0);
   std::printf("memory budget: %d cases passed\n", cases);
 }
