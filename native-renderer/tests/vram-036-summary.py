@@ -29,12 +29,17 @@ for run in sorted(ROOT.glob("task036-*-*-*-20*")):
         sample["seconds"] = round(sample["timestamp"] - ordered[0]["timestamp"], 3)
         curves.append({"run": run.name, **sample})
     intervals = []
+    transition_intervals = []
+    half_frame = next((s["frame"] for s in ordered if s["half_ao"]), None)
     trace = run / "render_frames.csv"
     if trace.exists() and trace.stat().st_size:
         rows = list(csv.DictReader(trace.open(encoding="utf-8-sig")))
         if rows:
             end = float(rows[-1]["wall_s"])
             intervals = [float(r["interval_ms"]) for r in rows if float(r["wall_s"]) >= end - 40]
+            if half_frame is not None:
+                transition_intervals = [float(r["interval_ms"]) for r in rows
+                                        if half_frame - 2 <= int(r["frame"]) <= half_frame + 30]
     def percentile(values, p):
         if not values:
             return ""
@@ -43,6 +48,8 @@ for run in sorted(ROOT.glob("task036-*-*-*-20*")):
     summary = {
         "run": run.name, "control": meta["control"], "budget_gib": meta["budget_gib"], "case": meta["case"],
         "simulated_pressure": meta.get("pressure", False), "gtao": meta.get("gtao", False),
+        "pressure_delay_s": meta.get("pressure_delay_s", 0), "dll_sha256": meta["dll_sha256"],
+        "tour_kind": meta.get("tour_kind", "legacy-menu" if meta["case"] == "tour" else ""),
         "samples": len(ordered), "pressure_samples": sum(s["pressure"] for s in ordered),
         "usage_start_mib": round(ordered[0]["usage"] / 2**20, 2) if ordered else "",
         "usage_peak_mib": round(max(s["usage"] for s in ordered) / 2**20, 2) if ordered else "",
@@ -53,6 +60,9 @@ for run in sorted(ROOT.glob("task036-*-*-*-20*")):
         "half_ao": max((s["half_ao"] for s in ordered), default=0),
         "late_frame_samples": len(intervals), "late_p50_ms": percentile(intervals, .5),
         "late_p95_ms": percentile(intervals, .95), "late_p99_ms": percentile(intervals, .99),
+        "half_ao_frame": half_frame if half_frame is not None else "",
+        "ao_transition_worst_ms": round(max(transition_intervals), 3) if transition_intervals else "",
+        "tour_transition_requested": "asking for the next chapter's level (entry 9)" in logs,
         "captures": len(list(run.glob("shot*.bmp"))),
         "error_lines": sum(bool(re.search(r"\b(error|fatal|VUID-|device removed|device lost|exhausted)\b", line, re.I))
                            for line in logs.splitlines()),

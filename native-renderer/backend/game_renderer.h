@@ -395,6 +395,7 @@ class GameRenderer {
   void CheckMemoryBudget();
   void TrimClearTargets();
   std::chrono::steady_clock::time_point memory_sample_{};
+  std::chrono::steady_clock::time_point memory_start_{};
   uint32_t memory_pressure_samples_ = 0;
   bool memory_half_ao_ = false;
   uint64_t memory_evictions_ = 0, memory_restores_ = 0;

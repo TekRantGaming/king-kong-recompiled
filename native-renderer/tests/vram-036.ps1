@@ -62,12 +62,12 @@ foreach ($budget in $Budgets) {
     if ($Gtao) { $args+='--ao_mode=1','--native_ao_method=gtao','--native_ao_quality=full' }
     else { $args+='--ao_mode=0' }
     if ($case -eq 'tour') {
-      # Two-minute slice of the existing long tour B, same menu clock and input.
-      $tour=Get-Content "$PSScriptRoot\tour.json" -Raw | ConvertFrom-Json
-      $env:KK_DEV_SCRIPT=($tour.runs.tourB.script.Split(',') | Where-Object { [double]($_.Split(':')[0]) -le 120 }) -join ','
-      $env:KK_DEV_SHOTS_FROM='menu'; $env:KK_DEV_SHOTS='60,119'
-      $env:KK_DEV_FREEZE_SKIP='10,29'
-      $args+='--kk_cheats=true','--kk_cheat_chapters=true','--kk_start='
+      # Same-process 8 -> 9 slice, using the existing developer end-of-chapter
+      # aid. The old menu tour scripts no longer match the port's new menus.
+      $env:KK_DEV_SCRIPT='0:SKIP/120'
+      $env:KK_DEV_SHOTS_FROM='menu'; $env:KK_DEV_SHOTS='30,120'
+      $env:KK_DEV_START_END='40'; $env:KK_DEV_VRAM_TOUR='1'; $env:KK_DEV_JUMP_TRACE='1'
+      $args+='--kk_start=chapter:0:8'
       $limit=135
     } elseif ($case -match '^ch(0|8|27)$') {
       $chapter=[int]$Matches[1]
@@ -75,7 +75,9 @@ foreach ($budget in $Budgets) {
       $env:KK_DEV_SCRIPT='0:SKIP/120'; $env:KK_DEV_SHOTS='60,120'; $env:KK_DEV_SHOTS_FROM='menu'
       $limit=if ($chapter -eq 0) {190} else {135}
     } else { throw 'Unknown case' }
-    @{budget_gib=$budget;case=$case;control=$control;scale=$Scale;pressure=[bool]$Pressure;gtao=[bool]$Gtao;args=$args;
+    @{budget_gib=$budget;case=$case;control=$control;scale=$Scale;pressure=[bool]$Pressure;gtao=[bool]$Gtao;
+      pressure_delay_s=$(if ($Pressure) {20} else {0});args=$args;
+      tour_kind=$(if ($case -eq 'tour') {'story8-9'} else {''});
       script=$env:KK_DEV_SCRIPT;limit=$limit;dll_sha256=(Get-FileHash "$run\rexgpu-native.dll").Hash;
       pack_root=$PackRoot} | ConvertTo-Json -Depth 4 | Set-Content "$run\test.json"
     Acquire-Game

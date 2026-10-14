@@ -2,8 +2,8 @@ $ErrorActionPreference='Stop'
 Add-Type -AssemblyName System.Windows.Forms.DataVisualization
 $root='F:\KK-native-renderer\runs\task036-analysis'
 $curves=Import-Csv "$root\curves.csv"
-$summary=Import-Csv "$root\summary.csv" | Where-Object { [int]$_.samples -gt 0 }
-$groups=$summary | Group-Object budget_gib,case,simulated_pressure,gtao
+$summary=Import-Csv "$root\summary.csv" | Where-Object { [int]$_.samples -gt 0 -and $_.tour_kind -ne 'legacy-menu' }
+$groups=$summary | Group-Object budget_gib,case,simulated_pressure,gtao,pressure_delay_s,tour_kind
 foreach ($group in $groups) {
   $chart=New-Object System.Windows.Forms.DataVisualization.Charting.Chart
   try {
@@ -26,7 +26,7 @@ foreach ($group in $groups) {
       }
       $chart.Series.Add($series)
     }
-    $name="$($first.budget_gib)-$($first.case)-$($first.simulated_pressure)-$($first.gtao)"
+    $name="$($first.budget_gib)-$($first.case)-$($first.simulated_pressure)-$($first.gtao)-delay$($first.pressure_delay_s)"
     $chart.SaveImage("$root\curve-$name.png",'Png')
   } finally { $chart.Dispose() }
 }

@@ -579,6 +579,7 @@ void GameRenderer::CheckMemoryBudget() {
   if (memory_sample_ != std::chrono::steady_clock::time_point{} &&
       now - memory_sample_ < std::chrono::seconds(1)) return;
   const bool first = memory_sample_ == std::chrono::steady_clock::time_point{};
+  if (first) memory_start_ = now;
   memory_sample_ = now;
   const MemoryBudget live = options_.memory_budget ? options_.memory_budget() : MemoryBudget{};
   if (!live.valid) {
@@ -599,7 +600,10 @@ void GameRenderer::CheckMemoryBudget() {
   // without allocating gigabytes or disturbing other applications. The live
   // values remain separately logged. Requires an explicit synthetic cap.
   const char* force = std::getenv("KK_DEV_VRAM_PRESSURE");
-  const bool simulated = cap && force && std::strcmp(force, "1") == 0;
+  // Let the chapter allocate and use its full-resolution AO first, so the
+  // fault injection exercises a live resize rather than just startup sizing.
+  const bool simulated = cap && force && std::strcmp(force, "1") == 0 &&
+                         now - memory_start_ >= std::chrono::seconds(20);
   if (simulated) tested.usage = std::max(tested.usage, tested.budget);
   const bool pressure = MemoryPressure(tested);
   const char* control = std::getenv("KK_DEV_VRAM_CONTROL");

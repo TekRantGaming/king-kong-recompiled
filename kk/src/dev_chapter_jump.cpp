@@ -229,6 +229,12 @@ void DevUniGoTick(uint8_t* base, uint32_t g, bool request, bool started) {
     if (Load32(base, g + 0x5668) == 0)
       for (int i = 0; i < 41; ++i)
         if (Load32(base, g + (0x1402 + uint32_t(i)) * 4) == Load32(base, g + 8)) next = i + 1;
+    // Task 036: retain one renderer across a short chapter-tour slice. The
+    // production chapter-select session returns to the launcher on completion;
+    // opt into this developer-only story transition for a private test run.
+    // The ordinary end-test keeps its original chapter-select routing.
+    if (const char* tour = std::getenv("KK_DEV_VRAM_TOUR"); tour && std::strcmp(tour, "1") == 0)
+      Store32(base, g + 0x5668, 0);
     Store32(base, g + 8, Load32(base, g + (0x1402 + next) * 4));
     Store32(base, g + 0xC, Load32(base, g + (0x1435 + next) * 4));
     Store32(base, g + 4, 1);
