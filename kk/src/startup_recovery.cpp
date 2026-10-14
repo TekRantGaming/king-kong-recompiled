@@ -82,6 +82,16 @@ int Failure(const char* why) {
   // A fresh process is essential after a failed or lost device. The monitor waits for this one to exit.
   std::_Exit(kRetryExit);
 }
+// Mutex held. Tells the native renderer which APIs failed here, so its setup does not prepare them
+// (--native_failed_backends; nothing happens without the plugin).
+void PublishFailed() {
+  std::string failed;
+  if (state && !state->reason.empty() && state->selected != state->preferred) {
+    failed = state->preferred;
+    if (state->selected == "classic") failed = "vulkan,d3d12";
+  }
+  rex::cvar::SetFlagByName("native_failed_backends", failed);
+}
 void Apply() {
   if (!state || (state->reason.empty() && !state->retry_requested)) return;
   if (!overridden) {
@@ -190,6 +200,7 @@ void Configure(const std::filesystem::path& root) {
   state = std::make_unique<RecoveryState>(root);
   if (state->Load()) state->RecoverCrash();
   Apply();
+  PublishFailed();
 #if defined(KK_NATIVE_RENDERER)
   nr::kk::SetStartupFailureHandler(Failure);
   nr::kk::SetStartupPresentedHandler(FirstFramePresented);
@@ -270,6 +281,7 @@ void NoticeShown() {
 bool TryNativeAgain() {
   std::lock_guard lock(mutex);
   if (!state || !state->Retry()) return false;
+  PublishFailed();
   rex::cvar::SetFlagByName("kk_renderer", "native");
   rex::cvar::SetFlagByName("gpu_plugin", "native");
   rex::cvar::SetFlagByName("native_backend", state->preferred);
@@ -286,6 +298,7 @@ void ManualChoice() {
     overridden = false;
   }
   if (!state->Clear()) REXLOG_ERROR("KK recovery: could not clear the startup fallback");
+  PublishFailed();
   REXLOG_INFO("KK recovery: renderer chosen by hand, startup fallback cleared");
 }
 }  // namespace kk::startup

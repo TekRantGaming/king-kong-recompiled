@@ -47,6 +47,7 @@ REXCVAR_DECLARE(std::string, native_water_reflections);
 REXCVAR_DECLARE(bool, native_pipeline_list);
 REXCVAR_DECLARE(bool, native_pipeline_cache);
 REXCVAR_DECLARE(bool, native_vk_pipeline_cache);
+REXCVAR_DECLARE(std::string, native_failed_backends);
 
 namespace nr {
 
@@ -184,6 +185,7 @@ struct NrShaderPackJob {
   std::string driver_cache_path;
   std::string player_records;
   bool need_driver_cache = false;
+  std::string failed_backends;  // --native_failed_backends when the job started
 };
 
 namespace {
@@ -200,6 +202,7 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
   job->driver_cache_path = place.driver_cache();
   job->player_records = place.records();
   job->need_driver_cache = REXCVAR_GET(native_vk_pipeline_cache);
+  job->failed_backends = REXCVAR_GET(native_failed_backends);
   rex::system::X_VIDEO_MODE mode{};
   rex::kernel::xboxkrnl::VdQueryVideoMode(&mode);
   for (unsigned i = 0; i < 2; ++i) {
@@ -231,6 +234,13 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
 #if !NR_HAS_VULKAN
       if (backend == kkshaders::PackBackend::Spirv) continue;
 #endif
+      // An API startup recovery found failing on this PC: no pack, and no headless device for it.
+      if (job->failed_backends.find(backend == kkshaders::PackBackend::Spirv ? "vulkan" : "d3d12") !=
+          std::string::npos) {
+        REXLOG_INFO("rexgpu-native: {} shader pack skipped (that API failed to start here)",
+                    kkshaders::packBackendName(backend));
+        continue;
+      }
       auto options = job->options;
       options.backend = backend;
       {
@@ -254,8 +264,16 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
       const std::string previous((std::istreambuf_iterator<char>(prepared)), {});
       prepared.close();
       std::error_code marker_error;
+      // A driver cache that could not be written is not asked for again at every start: the attempt
+      // for this plan is remembered beside the pack.
+      auto driver_attempt = r.pack;
+      driver_attempt += ".driver-cache-attempted";
+      std::ifstream attempted_file(driver_attempt, std::ios::binary);
+      const std::string attempted((std::istreambuf_iterator<char>(attempted_file)), {});
+      attempted_file.close();
       const bool driver_ready = !job->need_driver_cache || backend != kkshaders::PackBackend::Spirv ||
-          std::filesystem::is_regular_file(job->driver_cache_path, marker_error);
+          std::filesystem::is_regular_file(job->driver_cache_path, marker_error) ||
+          (previous == expected && attempted == expected);
       if (!r.upToDate || previous != expected || !driver_ready) {
         const auto start = std::chrono::steady_clock::now();
         std::unique_ptr<rex::ui::GraphicsProvider> provider;
@@ -311,6 +329,18 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
           if (completed && !job->progress.cancel) {
             std::ofstream ready(marker, std::ios::binary | std::ios::trunc);
             ready << expected;
+          }
+          // The device goes first: the driver cache is saved with it.
+          host.reset();
+          provider.reset();
+          std::error_code driver_error;
+          if (completed && !job->progress.cancel && job->need_driver_cache &&
+              backend == kkshaders::PackBackend::Spirv &&
+              !std::filesystem::is_regular_file(job->driver_cache_path, driver_error)) {
+            REXLOG_WARN("rexgpu-native: setup could not write the Vulkan driver pipeline cache; not retried "
+                        "until the shaders or settings change");
+            std::ofstream attempt(driver_attempt, std::ios::binary | std::ios::trunc);
+            attempt << expected;
           }
         } else {
           REXLOG_WARN("rexgpu-native: setup {} pipeline prewarm unavailable", kkshaders::packBackendName(backend));
