@@ -78,12 +78,14 @@ foreach ($budget in $Budgets) {
       $env:KK_DEV_SHOTS_FROM='menu'; $env:KK_DEV_SHOTS='30,120'
       $env:KK_DEV_START_END='40'; $env:KK_DEV_VRAM_TOUR='1'; $env:KK_DEV_JUMP_TRACE='1'
       $args+='--kk_start=chapter:0:8'
-      $limit=135
+      $limit=240
     } elseif ($case -match '^ch(0|8|27)$') {
       $chapter=[int]$Matches[1]
       $args+="--kk_start=chapter:0:$chapter"
       $env:KK_DEV_SCRIPT='0:SKIP/120'; $env:KK_DEV_SHOTS='60,120'; $env:KK_DEV_SHOTS_FROM='menu'
-      $limit=if ($chapter -eq 0) {190} else {135}
+      # Capture time is the loaded-level clock. Allow a bounded cold pipeline
+      # startup as well as Venture's intro without shortening the 120s sample.
+      $limit=240
     } else { throw 'Unknown case' }
     @{budget_gib=$budget;case=$case;control=$control;scale=$Scale;pressure=[bool]$Pressure;gtao=[bool]$Gtao;
       pressure_delay_s=$(if ($Pressure) {20} else {0});args=$args;
