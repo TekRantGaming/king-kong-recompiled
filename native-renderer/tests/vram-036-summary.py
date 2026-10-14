@@ -3,7 +3,6 @@ import csv
 import datetime
 import json
 import re
-import statistics
 from pathlib import Path
 
 ROOT = Path(r"F:\KK-native-renderer\runs")
@@ -27,14 +26,8 @@ for run in sorted(ROOT.glob("task036-*-*-*-20*")):
             samples[sample["frame"]] = sample
     ordered = sorted(samples.values(), key=lambda s: s["frame"])
     logs = "\n".join(texts)
-    scale_frames = [int(v) for v in re.findall(r"contents migrated at frame (\d+)", logs)]
-    if not scale_frames:
-        prior = 0
-        for sample in ordered:
-            step = sample.get("scale_steps", 0)
-            if step > prior:
-                scale_frames.append(sample["frame"])
-            prior = step
+    scale_events = list(re.finditer(r"^\[([^\]]+)\].*contents migrated([^\r\n]*)", logs, re.M))
+    scale_windows = []
     for sample in ordered:
         sample["seconds"] = round(sample["timestamp"] - ordered[0]["timestamp"], 3)
         curves.append({"run": run.name, **sample})
@@ -51,8 +44,27 @@ for run in sorted(ROOT.glob("task036-*-*-*-20*")):
             if half_frame is not None:
                 transition_intervals = [float(r["interval_ms"]) for r in rows
                                         if half_frame - 2 <= int(r["frame"]) <= half_frame + 30]
+            by_frame = {int(row["frame"]): row for row in rows}
+            for event in scale_events:
+                exact = re.search(r"at frame (\d+)", event[2])
+                staged = re.search(r"staged from frame (\d+)", event[2])
+                if exact:
+                    frame = int(exact[1])
+                elif ordered:
+                    timestamp = datetime.datetime.fromisoformat(event[1]).timestamp()
+                    nearest = min(ordered, key=lambda s: abs(s["timestamp"] - timestamp))
+                    anchor = by_frame.get(nearest["frame"] - 1)
+                    if anchor is None:
+                        continue
+                    offset = nearest["timestamp"] - float(anchor["wall_s"])
+                    frame = next((int(row["frame"]) for row in rows
+                                  if float(row["wall_s"]) >= timestamp - offset), int(rows[-1]["frame"]))
+                else:
+                    continue
+                first = int(staged[1]) if staged else frame
+                scale_windows.append((first - 2, frame + 4))
             scale_intervals = [float(r["interval_ms"]) for r in rows
-                               if any(f - 35 <= int(r["frame"]) <= f + 30 for f in scale_frames)]
+                               if any(first <= int(r["frame"]) <= last for first, last in scale_windows)]
     def percentile(values, p):
         if not values:
             return ""
@@ -80,6 +92,7 @@ for run in sorted(ROOT.glob("task036-*-*-*-20*")):
         "half_ao_frame": half_frame if half_frame is not None else "",
         "ao_transition_worst_ms": round(max(transition_intervals), 3) if transition_intervals else "",
         "scale_transition_worst_ms": round(max(scale_intervals), 3) if scale_intervals else "",
+        "scale_commit_cpu_max_ms": max((float(v) for v in re.findall(r"contents migrated at frame \d+ \(([\d.]+) ms CPU\)", logs)), default=""),
         "tour_transition_requested": "asking for the next chapter's level (entry 9)" in logs,
         "captures": len(list(run.glob("shot*.bmp"))),
         "error_lines": sum(bool(re.search(r"\b(error|fatal|VUID-|device removed|device lost|exhausted)\b", line, re.I))
