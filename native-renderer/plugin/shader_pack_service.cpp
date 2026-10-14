@@ -93,12 +93,10 @@ kkshaders::PackBuildOptions PackOptionsForSettings(const std::filesystem::path& 
   // "auto" follows the launcher's render quality, which the player can change at any time and which
   // the game only applies when it starts (the launcher still sees the default scale 1 when it checks
   // the pack): with "auto" the pack always carries the render scale variants, so it fits every run.
-  const RenderScale scale = ParseRenderScale(ResolvedRenderScale(), 1280, 720);
-  const float shadow = EffectiveShadowScale();  // native_shadow_quality too (docs/lighting.md)
-  o.scaled = REXCVAR_GET(native_render_scale) == "auto" || (scale.valid && !scale.unit()) ||
-             (shadow > 0.0f && shadow != 1.0f);
+  // Setup and Play use the same complete set, even before the launcher applies settings.
+  o.scaled = true;
   // The lighting options' water reflections: their hooked water shaders (docs/lighting.md).
-  o.lighting = REXCVAR_GET(native_water_reflections) == "ssr";
+  o.lighting = true;
   o.dxc = DxcLocation();
   return o;
 }
@@ -160,7 +158,41 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
               nr::ToUtf8(kkshaders::packPath(job->options)), kkshaders::packBackendName(job->options.backend),
               job->options.scaled ? ", render scale variants" : "");
   job->thread = std::thread([job] {
-    kkshaders::PackBuildResult r = kkshaders::buildPack(job->options, &job->progress, job->force);
+    kkshaders::PackBuildResult r;
+    bool current = true;
+    double seconds = 0;
+    uint32_t compiled = 0;
+    std::string warnings;
+    for (auto backend : {kkshaders::PackBackend::Spirv, kkshaders::PackBackend::Dxil}) {
+#if !NR_HAS_VULKAN
+      if (backend == kkshaders::PackBackend::Spirv) continue;
+#endif
+      auto options = job->options;
+      options.backend = backend;
+      {
+        std::lock_guard lock(job->mutex);
+        job->options.backend = backend;
+      }
+      r = kkshaders::buildPack(options, &job->progress, job->force);
+      current = current && r.upToDate;
+      seconds += r.seconds;
+      compiled += r.compiled;
+      if (!r.error.empty()) warnings += std::string(kkshaders::packBackendName(backend)) + ": " + r.error + "; ";
+      REXLOG_INFO("rexgpu-native: {} shader pack: {} shaders, {:.1f} s, {}",
+                  kkshaders::packBackendName(backend), r.stamp.shaders, r.seconds,
+                  r.ok ? (r.upToDate ? "current" : "built") : r.error);
+      if (!r.ok || job->progress.cancel) break;
+    }
+    r.upToDate = r.ok && current;
+    r.seconds = seconds;
+    r.compiled = compiled;
+    if (job->progress.cancel) {
+      r.ok = r.upToDate = false;
+      r.cancelled = true;
+      r.error = "cancelled";
+    } else if (!warnings.empty()) {
+      r.error = warnings;
+    }
     if (r.upToDate) {
       REXLOG_INFO("rexgpu-native: shader pack is current ({} shaders)", r.stamp.shaders);
     } else if (r.ok) {
@@ -178,6 +210,7 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
 
 void PollJob(NrShaderPackJob* job, NrShaderPackProgress* out) {
   if (!job || !out) return;
+  std::lock_guard lock(job->mutex);
   *out = NrShaderPackProgress{};
   out->phase = job->progress.phase;
   out->done = job->progress.done;
@@ -185,7 +218,6 @@ void PollJob(NrShaderPackJob* job, NrShaderPackProgress* out) {
   out->failed = job->progress.failed;
   nr::Copy(out->backend, sizeof(out->backend), kkshaders::packBackendName(job->options.backend));
   nr::Copy(out->pack, sizeof(out->pack), nr::ToUtf8(kkshaders::packPath(job->options)));
-  std::lock_guard lock(job->mutex);
   if (!job->finished) return;
   const kkshaders::PackBuildResult& r = job->result;
   out->finished = 1;
