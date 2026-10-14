@@ -1,5 +1,6 @@
 param([int[]]$Budgets=@(4,6,8), [string[]]$Cases=@('ch0','ch8','ch27','tour'),
       [string[]]$Controls=@('before','after'), [string]$Scale='2560x1440',
+      [switch]$Pressure, [switch]$Gtao,
       [string]$PackRoot='F:\KK-native-renderer\runs\task048-after-d3d12-dlss-0-fresh-20261014-072055\cache\native-shaders')
 $ErrorActionPreference='Stop'
 $workspace=(Resolve-Path "$PSScriptRoot/../..").Path
@@ -33,7 +34,9 @@ foreach ($budget in $Budgets) {
   if ($budget -notin 4,6,8) { throw 'Budget must be 4, 6 or 8 GiB' }
   foreach ($case in $Cases) { foreach ($control in $Controls) {
     if ($control -notin 'before','after') { throw 'Control must be before or after' }
-    $run="F:\KK-native-renderer\runs\task036-$control-$budget-$case-$(Get-Date -Format yyyyMMdd-HHmmss)"
+    $tag=if ($Pressure) { '-pressure' } else { '' }
+    if ($Gtao) { $tag+='-gtao' }
+    $run="F:\KK-native-renderer\runs\task036-$control-$budget-$case$tag-$(Get-Date -Format yyyyMMdd-HHmmss)"
     New-Item -ItemType Directory -Path $run | Out-Null
     Get-ChildItem $build -File | Where-Object Extension -In '.exe','.dll' | Copy-Item -Destination $run
     Copy-Item "$build\glyphs" $run -Recurse
@@ -45,6 +48,7 @@ foreach ($budget in $Budgets) {
     $env:SDL_WINDOW_ACTIVATE_WHEN_SHOWN='0'; $env:SDL_WINDOW_ACTIVATE_WHEN_RAISED='0'
     $env:KK_DEV_VRAM_BUDGET_GB="$budget"
     $env:KK_DEV_VRAM_CONTROL=if ($control -eq 'before') {'0'} else {'1'}
+    if ($Pressure) { $env:KK_DEV_VRAM_PRESSURE='1' }
     $env:KK_DEV_DT_LOG='0,240'; $env:KK_DEV_DLSS_LOG="$run\render_frames.csv"
     $env:KK_DEV_SHOTS_DIR=$run
     $env:KK_DEV_AUTOSKIP='1'
@@ -55,6 +59,8 @@ foreach ($budget in $Budgets) {
       '--native_upscaler=off','--kk_frame_rate=30','--native_debug=32768','--native_stutter_stats=true',
       '--native_validation=true','--kk_check_updates=false','--kk_online_count=false','--kk_discord_status=false')
     $args+='--log_max_file_size_mb=500'
+    if ($Gtao) { $args+='--ao_mode=1','--native_ao_method=gtao','--native_ao_quality=full' }
+    else { $args+='--ao_mode=0' }
     if ($case -eq 'tour') {
       # Two-minute slice of the existing long tour B, same menu clock and input.
       $tour=Get-Content "$PSScriptRoot\tour.json" -Raw | ConvertFrom-Json
@@ -69,7 +75,7 @@ foreach ($budget in $Budgets) {
       $env:KK_DEV_SCRIPT='0:SKIP/120'; $env:KK_DEV_SHOTS='60,120'; $env:KK_DEV_SHOTS_FROM='menu'
       $limit=if ($chapter -eq 0) {190} else {135}
     } else { throw 'Unknown case' }
-    @{budget_gib=$budget;case=$case;control=$control;scale=$Scale;args=$args;
+    @{budget_gib=$budget;case=$case;control=$control;scale=$Scale;pressure=[bool]$Pressure;gtao=[bool]$Gtao;args=$args;
       script=$env:KK_DEV_SCRIPT;limit=$limit;dll_sha256=(Get-FileHash "$run\rexgpu-native.dll").Hash;
       pack_root=$PackRoot} | ConvertTo-Json -Depth 4 | Set-Content "$run\test.json"
     Acquire-Game

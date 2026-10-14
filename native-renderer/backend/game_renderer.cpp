@@ -594,7 +594,14 @@ void GameRenderer::CheckMemoryBudget() {
     else if (first) Logf(LogLevel::kWarning, "rexgpu-native: KK_DEV_VRAM_BUDGET_GB must be 4, 6 or 8; ignored");
   }
   const MemoryBudget effective = CapMemoryBudget(live, cap);
-  const bool pressure = MemoryPressure(effective);
+  MemoryBudget tested = effective;
+  // Developer fault injection: exercise pressure handling on a large GPU
+  // without allocating gigabytes or disturbing other applications. The live
+  // values remain separately logged. Requires an explicit synthetic cap.
+  const char* force = std::getenv("KK_DEV_VRAM_PRESSURE");
+  const bool simulated = cap && force && std::strcmp(force, "1") == 0;
+  if (simulated) tested.usage = std::max(tested.usage, tested.budget);
+  const bool pressure = MemoryPressure(tested);
   const char* control = std::getenv("KK_DEV_VRAM_CONTROL");
   const bool enabled = !control || std::strcmp(control, "0") != 0;
   if (enabled && pressure) {
@@ -611,13 +618,13 @@ void GameRenderer::CheckMemoryBudget() {
   }
   Logf(LogLevel::kInfo,
        "rexgpu-native: memory budget frame %llu: usage=%llu budget=%llu effective=%llu pressure=%u "
-       "control=%u targets=%llu target_bytes=%llu framebuffers=%zu retired=%zu evictions=%llu restores=%llu half_ao=%u",
+       "control=%u targets=%llu target_bytes=%llu framebuffers=%zu retired=%zu evictions=%llu restores=%llu half_ao=%u simulated=%u tested_usage=%llu",
        static_cast<unsigned long long>(frame_), static_cast<unsigned long long>(live.usage),
        static_cast<unsigned long long>(live.budget), static_cast<unsigned long long>(effective.budget),
        unsigned(pressure), unsigned(enabled), static_cast<unsigned long long>(stats_.edram_targets),
        static_cast<unsigned long long>(stats_.edram_target_bytes), framebuffers_.size(), retired_resources_.size(),
        static_cast<unsigned long long>(memory_evictions_), static_cast<unsigned long long>(memory_restores_),
-       unsigned(memory_half_ao_));
+       unsigned(memory_half_ao_), unsigned(simulated), static_cast<unsigned long long>(tested.usage));
 }
 
 void GameRenderer::EndFrame() {

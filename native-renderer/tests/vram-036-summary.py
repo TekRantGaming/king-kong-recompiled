@@ -1,5 +1,6 @@
 """Summarise preserved task 036 telemetry; never infer results for queued runs."""
 import csv
+import datetime
 import json
 import re
 import statistics
@@ -18,12 +19,14 @@ for run in sorted(ROOT.glob("task036-*-*-*-20*")):
     for log in sorted(run.glob("run.log*")):
         text = log.read_text(encoding="utf-8", errors="replace")
         texts.append(text)
-        for match in re.finditer(r"memory budget frame (\d+): ([^\r\n]+)", text):
-            sample = {key: int(value) for key, value in re.findall(r"(\w+)=(\d+)", match[2])}
-            sample["frame"] = int(match[1])
+        for match in re.finditer(r"^\[([^\]]+)\].*memory budget frame (\d+): ([^\r\n]+)", text, re.M):
+            sample = {key: int(value) for key, value in re.findall(r"(\w+)=(\d+)", match[3])}
+            sample["frame"] = int(match[2])
+            sample["timestamp"] = datetime.datetime.fromisoformat(match[1]).timestamp()
             samples[sample["frame"]] = sample
     ordered = sorted(samples.values(), key=lambda s: s["frame"])
     for sample in ordered:
+        sample["seconds"] = round(sample["timestamp"] - ordered[0]["timestamp"], 3)
         curves.append({"run": run.name, **sample})
     intervals = []
     trace = run / "render_frames.csv"
@@ -39,6 +42,7 @@ for run in sorted(ROOT.glob("task036-*-*-*-20*")):
     logs = "\n".join(texts)
     summary = {
         "run": run.name, "control": meta["control"], "budget_gib": meta["budget_gib"], "case": meta["case"],
+        "simulated_pressure": meta.get("pressure", False), "gtao": meta.get("gtao", False),
         "samples": len(ordered), "pressure_samples": sum(s["pressure"] for s in ordered),
         "usage_start_mib": round(ordered[0]["usage"] / 2**20, 2) if ordered else "",
         "usage_peak_mib": round(max(s["usage"] for s in ordered) / 2**20, 2) if ordered else "",
