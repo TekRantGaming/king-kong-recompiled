@@ -150,6 +150,16 @@ if(NOT DEFINED KK_VERSION)
 endif()
 target_compile_definitions(king_kong PRIVATE KK_VERSION="${KK_VERSION}" KK_VERSION_W=L"${KK_VERSION}")
 
+if(KK_DEV_TOOLS)
+    add_executable(kk-hardware-tests tests/hardware_recommendation_tests.cpp src/settings.cpp)
+    target_include_directories(kk-hardware-tests PRIVATE src)
+    target_compile_definitions(kk-hardware-tests PRIVATE KK_VERSION="${KK_VERSION}")
+    target_link_libraries(kk-hardware-tests PRIVATE rex::runtime)
+    rexglue_apply_target_settings(kk-hardware-tests)
+    enable_testing()
+    add_test(NAME hardware-recommendation COMMAND kk-hardware-tests)
+endif()
+
 # Button prompt pictures (kk_button_prompts) live beside the program.
 add_custom_command(TARGET king_kong POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/glyphs $<TARGET_FILE_DIR:king_kong>/glyphs)

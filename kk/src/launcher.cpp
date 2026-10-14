@@ -423,9 +423,9 @@ void SetOriginalLook(bool on) {
     for (const auto& [name, value] : OriginalLookSettings()) Set(name, value);
   } else {
     const std::string saved = Get("kk_modern_settings");
-    if (saved.empty()) {  // nothing put aside (the look step wasn't used): Medium at 60 FPS
-      ApplyGraphicsPreset(1);
-      SetInt("kk_frame_rate", 60);
+    if (saved.empty()) {  // no saved Modern choices: use the hardware defaults
+      const auto output = PrimaryScreenSize();
+      ApplyHardwareRecommendation(true, output.first, output.second);
     }
     std::stringstream in(saved);
     for (std::string item; std::getline(in, item, ';');) {
@@ -455,31 +455,11 @@ void SetRenderer(bool native) {
 // The setup's last step: Original (the Original look) or Remastered (the Modern look, named
 // Remastered on the Graphics page, with a preset for this graphics card and the native renderer's
 // GTAO ambient occlusion). Both keep the native renderer. native-renderer/docs/beta.md.
-int RemasteredPresetIndex() {
-  static const int index = [] {
-    auto find = [](std::string_view label) {
-      for (int i = 0; i < kGraphicsPresetCount; ++i)
-        if (kGraphicsPresets[i].label == label) return i;
-      return 1;
-    };
-    if (IsSteamDeck()) return find("Steam Deck");
-    const GpuInfo gpu = DetectGpu();
-    constexpr uint64_t kGiB = uint64_t(1) << 30;
-    // Integrated graphics (Intel, or little memory of its own): Medium draws fewer pixels.
-    if (gpu.vendor == GpuVendor::kIntel || (gpu.dedicated_memory && gpu.dedicated_memory < 3 * kGiB))
-      return find("Medium");
-    if (gpu.dedicated_memory >= 8 * kGiB) return find("Ultra");
-    return find("High");  // other dedicated cards, and any card it can't tell (Linux)
-  }();
-  return index;
-}
-
 void ApplyRemastered() {
   SetOriginalLook(false);
-  ApplyGraphicsPreset(RemasteredPresetIndex());
-  SetInt("ao_mode", 1);
-  SetInt("ao_strength", 3);  // Strong: GTAO's default (the native renderer is chosen just below)
-  SetInt("kk_frame_rate", 60);  // the Original look keeps the console's 30
+  const auto output = PrimaryScreenSize();
+  ApplyHardwareRecommendation(true, output.first, output.second);
+  ++g_changes;
   SetRenderer(true);  // with the native renderer's GTAO, the only method since Beta 2 (ApplyPortDefaults)
 }
 
@@ -1210,8 +1190,7 @@ class SettingsPages {
                            "anti-aliasing and texture filtering, its 69" KK_DEG " field of view, motion blur, screen "
                            "blur and distance fog, and no ambient occlusion. Remastered gives you the presets, every "
                            "setting on this page and the frame rate and upscaling on the Display page; chosen at "
-                           "setup, it starts with the preset for your graphics card, 60 FPS and the new GTAO ambient "
-                           "occlusion.",
+                           "setup, it starts with recommended settings for your hardware and a 30 FPS cap.",
                            "kk_original_look", {{"Original Xbox 360", "true"}, {"Remastered", "false"}});
       it.on_choice = [](int i) { SetOriginalLook(i == 0); };
       it.on_default = [] { SetOriginalLook(false); };
@@ -1234,6 +1213,20 @@ class SettingsPages {
       };
       it.on_default = [] { ApplyGraphicsPreset(1); };
       it.default_text = "Medium";
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
+
+    if (!in_game_) {
+      Item it;
+      it.label = "Recommended";
+      it.description = "Detect your hardware and recommend render resolution, upscaling and ambient occlusion. "
+                       "Settings you changed are kept. The frame-rate cap, graphics API and lighting effects are kept.";
+      it.value_text = Get("kk_hardware_tier");
+      it.on_activate = [this] {
+        const auto output = cb_.output_size ? cb_.output_size() : PrimaryScreenSize();
+        ApplyHardwareRecommendation(true, output.first, output.second);
+        ++g_changes;
+      };
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
 
@@ -3582,7 +3575,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     const float cw = std::min((right - x0 - gap) * 0.5f, 520 * s);
     const float bottom = o_.y + h_ - 92 * s;  // above the prompts
     static const GpuInfo gpu = DetectGpu();
-    const std::string preset = T(std::string(kGraphicsPresets[RemasteredPresetIndex()].label));
     struct Card {
       const char* caption;
       const char* title;
@@ -3598,7 +3590,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         {"Remastered", "Sharper, with soft shadows",
          "Drawn for your screen's resolution with sharper textures, and the new GTAO ambient occlusion: soft "
          "shading in corners, in creases and under rocks, grass and people.",
-         F("{0} preset for your {1}  " KK_DOT "  60 FPS  " KK_DOT "  GTAO", {preset, gpu.name.empty() ? T(std::string("graphics card")) : gpu.name}),
+         F("Recommended for your {0}  " KK_DOT "  30 FPS", {gpu.name.empty() ? T(std::string("graphics card")) : gpu.name}),
          slides_.empty() ? nullptr : slides_[0].sharp},
     };
     // The text under each still, measured; the stills take what's left (cropped to fit).
