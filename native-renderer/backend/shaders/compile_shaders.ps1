@@ -118,9 +118,11 @@ foreach ($spec in @("lighting_ssr_depth_cs:cs:cs_depth", "lighting_ssr_depth_dow
         -Fh (Join-Path $out "${base}_spirv.h") -Vn "k_${base}_spirv" $ssr
     if ($LASTEXITCODE -ne 0) { throw "dxc (SPIR-V) failed on $ssr $entry" }
 }
-# The volumetric light (lighting_volumetric.hlsl): a renderer pass, the usual flags.
+# The volumetric light (lighting_volumetric.hlsl): renderer passes, the usual flags.
 $vol = Join-Path $here "lighting_volumetric.hlsl"
-foreach ($spec in @("lighting_volumetric_vs:vs:vs_main", "lighting_volumetric_ps:ps:ps_volumetric")) {
+foreach ($spec in @("lighting_volumetric_vs:vs:vs_main", "lighting_volumetric_ps:ps:ps_volumetric",
+                    "lighting_volumetric_mask_cs:cs:cs_mask", "lighting_volumetric_centroid_cs:cs:cs_centroid",
+                    "lighting_volumetric_radial_cs:cs:cs_radial")) {
     $base, $stage, $entry = $spec.Split(":")
     & $Dxc -nologo -T "${stage}_6_0" -E $entry -O3 -Fh (Join-Path $out "${base}_dxil.h") -Vn "k_${base}_dxil" $vol
     if ($LASTEXITCODE -ne 0) { throw "dxc (DXIL) failed on $vol $entry" }
