@@ -67,13 +67,15 @@ $game=$null
 try {
  while(!$game) {
   $guard=$null
+  $waitSeconds=30
   try {
    $guard=[IO.File]::Open($lock,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::Read)
    $reader=New-Object IO.StreamReader($guard,[Text.Encoding]::UTF8,$true,1024,$true)
    $state=$reader.ReadToEnd().Trim(); $reader.Dispose()
    if($state.StartsWith('user')) { throw 'USER LOCK: code work only' }
    if($state -eq 'free') {
-    $others=@(Get-CimInstance Win32_Process -Filter "Name='king_kong.exe'" | Where-Object { $_.ExecutablePath -like 'F:\KK-native-renderer\runs\*' -or $_.ExecutablePath -like 'F:\KK-native-renderer\wt\*' })
+    $others=@(Get-CimInstance Win32_Process -Filter "Name='king_kong.exe'")
+    if(@($others | Where-Object { !$_.ExecutablePath -or ($_.ExecutablePath -notlike 'F:\KK-native-renderer\runs\*' -and $_.ExecutablePath -notlike 'F:\KK-native-renderer\wt\*') }).Count) { $waitSeconds=60 }
     if(!$others.Count) {
      if(!(Get-Process kkbg2 -ErrorAction SilentlyContinue)) { throw 'kkbg2 required' }
      $bytes=[Text.Encoding]::ASCII.GetBytes("task032 $(Get-Date -Format o)`r`n")
@@ -83,7 +85,7 @@ try {
    }
   } catch [IO.IOException] { }
   finally { if($guard) { $guard.Dispose() } }
-  if(!$game) { Write-Output "Busy: $state; checking in 30 seconds"; Start-Sleep -Seconds 30 }
+  if(!$game) { Write-Output "Busy: $state; checking in $waitSeconds seconds"; Start-Sleep -Seconds $waitSeconds }
  }
  Write-Output "RUN $run PID $($game.Id)"
  $timer=[Diagnostics.Stopwatch]::StartNew()
