@@ -1086,6 +1086,7 @@ NR_TEST_MAIN()
 namespace {
 struct BenchResult { double median_us = 0, p90_us = 0; uint32_t draws = 0; };
 BenchResult BenchFrames(Fixture& f, uint32_t repeats, int frames) {
+  const uint64_t draws_before = f.game->stats().draws;
   const Mesh world = WorldMesh(), box = BoxMesh(), water = WaterMesh();
   float box_rows[16];
   f.cam.Moved(V3{0.1f, 0, 0}, box_rows);
@@ -1152,11 +1153,16 @@ BenchResult BenchFrames(Fixture& f, uint32_t repeats, int frames) {
   res.median_us = times[times.size() / 2];
   res.p90_us = times[times.size() * 9 / 10];
   res.draws = draws;
+  CHECK_EQ(f.game->stats().draws - draws_before, uint64_t(frames) * draws);
+  if (const GameUpscale* u = f.game->upscale())
+    std::printf("  BENCH motion preparation: %zu descriptions for %llu recorded depth draws\n",
+                u->motion_prewarm_seen.size(), static_cast<unsigned long long>(u->stats.motion_draws));
   return res;
 }
 void BenchPrint(const char* name, const BenchResult& r) {
   std::printf("  BENCH %-34s %5u draws: median %8.1f us/frame (%.3f us/draw), p90 %8.1f us\n", name, r.draws,
               r.median_us, r.median_us / r.draws, r.p90_us);
+  std::fflush(stdout);
 }
 }  // namespace
 
@@ -1175,6 +1181,7 @@ TEST(Bench_CpuPerDraw) {
 #endif
   };
   for (const Case& c : cases) {
+    if (const char* only = std::getenv("NR_BENCH_CASE"); only && std::strcmp(only, c.name) != 0) continue;
     Options o;
     o.upscale = c.upscale;
     o.config.kind = c.kind;

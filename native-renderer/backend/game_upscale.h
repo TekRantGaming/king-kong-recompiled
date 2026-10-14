@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <nvrhi/nvrhi.h>
@@ -73,6 +74,9 @@ struct GameUpscale {
     nvrhi::Rect scissor;
   };
   std::vector<MotionDraw> motion_draws;
+  // Render-thread requests, retained across frames. The shared prewarm set still
+  // owns deduplication against lists and cache files under cache_mutex_.
+  std::unordered_set<uint64_t> motion_prewarm_seen;
 
   // A full-frame copy of the scene target made since the scene's last draw: done again from the
   // upscaled picture at the upscale point (the post effects read it).
