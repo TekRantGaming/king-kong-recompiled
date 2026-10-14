@@ -865,16 +865,16 @@ TEST(Lighting_FogLastCompletesVolumetricsAtPresentOnce) {
     lighting.OnDraw(cl, scene.draw);
     CHECK_EQ(lighting.stats().volumetric, uint64_t(0));
     lighting.OnPresent(cl);
-    CHECK_EQ(lighting.stats().volumetric, uint64_t(shadow ? 1 : 0));
+    CHECK_EQ(lighting.stats().volumetric, uint64_t(1));  // sky gather also runs without a shadow map
     CHECK_EQ(lighting.stats().volumetric_no_shadow, uint64_t(shadow ? 0 : 1));
-    lighting.OnPresent(cl);  // pending work was consumed, even on failure
-    CHECK_EQ(lighting.stats().volumetric, uint64_t(shadow ? 1 : 0));
+    lighting.OnPresent(cl);  // pending work was consumed with or without a shadow map
+    CHECK_EQ(lighting.stats().volumetric, uint64_t(1));
     CHECK_EQ(lighting.stats().volumetric_no_shadow, uint64_t(shadow ? 0 : 1));
     cl->close(); Device()->Execute(cl); Device()->WaitIdle();
     cl->open();
     scene.Opaque(lighting, cl, 1);  // a fog-free frame never reuses the pending pass
     lighting.OnPresent(cl);
-    CHECK_EQ(lighting.stats().volumetric, uint64_t(shadow ? 1 : 0));
+    CHECK_EQ(lighting.stats().volumetric, uint64_t(1));
     cl->close(); Device()->Execute(cl); Device()->WaitIdle();
   }
 }
