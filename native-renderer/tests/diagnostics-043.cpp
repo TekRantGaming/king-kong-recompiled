@@ -45,6 +45,9 @@ int main(int argc, char** argv) {
     spdlog::logger log("test", test_sink);
     log.warn("startup fallback to Classic: C:\\Users\\OtherPerson\\shader.pack");
     for (int i = 0; i < 20; ++i) log.error("test error {}: C:/Users/OtherPerson/log.txt", i);
+    // Long lines are cut before redaction: a path starting at the cut must still be redacted.
+    for (size_t pad : {760u, 765u, 768u, 770u, 5000u})
+      log.error("{}C:/Users/OtherPerson/long.txt", std::string(pad, 'x'));
     const auto report = kk::DiagnosticsReport();
     Check(report.find("Version: test043") != std::string::npos, "version missing");
     Check(report.find("kk_update_channel = beta") != std::string::npos, "channel missing");
@@ -53,6 +56,8 @@ int main(int argc, char** argv) {
     Check(report.find("test error 19:") != std::string::npos, "latest error missing");
     Check(report.find("test error 0:") == std::string::npos, "unbounded errors");
     Check(report.find("OtherPerson") == std::string::npos, "report leaked a profile path");
+    Check(report.find("C:/U") == std::string::npos && report.find(std::string(760, 'x')) != std::string::npos,
+          "long line kept or leaked a cut path");
     Check(report.size() < 32768, "report not bounded");
     std::ofstream(root / "diagnostics.txt", std::ios::binary) << report;
     const auto crash = root / "snapshot.txt";

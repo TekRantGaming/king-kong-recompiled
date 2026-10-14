@@ -8,7 +8,6 @@
 #include <deque>
 #include <fstream>
 #include <mutex>
-#include <regex>
 #include <sstream>
 #include <vector>
 #include <rex/cvar.h>
@@ -38,12 +37,31 @@ std::string Lower(std::string s) {
   std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return char(std::tolower(c)); });
   return s;
 }
-void Remember(std::deque<std::string>& lines, std::string line) {
+constexpr size_t kLineSize = 768;
+// Longest text the redaction matches: a path start ("/Users/") or a private name.
+size_t RedactionReach() {
+  size_t reach = 7;
+  for (const auto& name : g_private) reach = std::max(reach, name.size());
+  return reach;
+}
+// Truncates before redacting (log lines can be long), as strongly as redacting the whole line: the
+// window keeps a margin of the longest match, and when the line was cut the margin's output is
+// dropped, so a name or path start cut in half at the window's end never reaches the report.
+std::string RedactLine(std::string line) {
+  const size_t reach = RedactionReach();
+  const bool cut = line.size() > kLineSize + reach;
+  if (cut) line.resize(kLineSize + reach);
   line = RedactDiagnostics(std::move(line));
-  if (line.size() > 768) line.resize(768);
-  if (!lines.empty() && lines.back() == line) return;
+  if (cut) line.resize(line.size() - std::min(reach, line.size()));
+  if (line.size() > kLineSize) line.resize(kLineSize);
+  return line;
+}
+// Returns whether the list changed.
+bool Remember(std::deque<std::string>& lines, const std::string& redacted) {
+  if (!lines.empty() && lines.back() == redacted) return false;
   if (lines.size() == 8) lines.pop_front();
-  lines.push_back(std::move(line));
+  lines.push_back(redacted);
+  return true;
 }
 void Snapshot() { // g_mutex held
   std::ostringstream out;
@@ -79,10 +97,13 @@ void Capture(std::string line, bool error) {
         lower.find("adapter:") != std::string::npos));
   if (!error && !fallback && !selection) return;
   std::lock_guard lock(g_mutex);
-  if (error) Remember(g_errors, line);
-  if (fallback) Remember(g_fallbacks, line);
-  if (selection) Remember(g_selections, line);
-  Snapshot();
+  const std::string redacted = RedactLine(std::move(line));
+  bool changed = false;
+  if (error) changed |= Remember(g_errors, redacted);
+  if (fallback) changed |= Remember(g_fallbacks, redacted);
+  if (selection) changed |= Remember(g_selections, redacted);
+  // A repeated line leaves the report as it was.
+  if (changed) Snapshot();
 }
 class DiagnosticSink final : public spdlog::sinks::base_sink<std::mutex> {
   void sink_it_(const spdlog::details::log_msg& msg) override {
@@ -150,17 +171,46 @@ std::string Hardware() {
 }
 }
 
+namespace {
+// Where an absolute path starts: "X:\", "X:/", "\\", "/home/" or "/Users/".
+bool PathStartsAt(const std::string& text, size_t i) {
+  const size_t left = text.size() - i;
+  const unsigned char c = static_cast<unsigned char>(text[i]);
+  if (left >= 3 && ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) && text[i + 1] == ':' &&
+      (text[i + 2] == '\\' || text[i + 2] == '/'))
+    return true;
+  if (left >= 2 && c == '\\' && text[i + 1] == '\\') return true;
+  return text.compare(i, 6, "/home/") == 0 || text.compare(i, 7, "/Users/") == 0;
+}
+}
+
 std::string RedactDiagnostics(std::string text) {
-  // Drop absolute paths, including profiles that do not belong to this user.
-  static const std::regex paths(R"(([A-Za-z]:[\\/]|\\\\|/home/|/Users/)[^\r\n]*?($|[\r\n]))");
-  text = std::regex_replace(text, paths, "[path redacted]$2");
+  // Drop absolute paths, including profiles that do not belong to this user: from where a path
+  // starts to the end of its line.
+  std::string out;
+  out.reserve(text.size());
+  for (size_t i = 0; i < text.size();) {
+    if (PathStartsAt(text, i)) {
+      out += "[path redacted]";
+      while (i < text.size() && text[i] != '\r' && text[i] != '\n') ++i;
+      continue;
+    }
+    out += text[i++];
+  }
+  text = std::move(out);
   for (const auto& name : g_private) {
     if (name.empty()) continue;
-    size_t at = 0;
-    while ((at = Lower(text).find(Lower(name), at)) != std::string::npos) {
-      text.replace(at, name.size(), "[redacted]");
-      at += 10;
+    const std::string lower_name = Lower(name);
+    const std::string lower = Lower(text);
+    std::string replaced;
+    replaced.reserve(text.size());
+    size_t from = 0;
+    for (size_t at; (at = lower.find(lower_name, from)) != std::string::npos; from = at + name.size()) {
+      replaced.append(text, from, at - from);
+      replaced += "[redacted]";
     }
+    replaced.append(text, from, std::string::npos);
+    text = std::move(replaced);
   }
   return text;
 }
