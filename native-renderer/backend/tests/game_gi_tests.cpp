@@ -836,11 +836,11 @@ void FrameChange(const Pixels& with, const Pixels& without, float& mean, float& 
 }
 
 TEST(GameGi_GameLikeDarkSceneBounceIsVisible) {
-  // The default settings of each level (radius, intensity 1, occlusion 0.5) in the dark yard: the
+  // The default settings of each level (radius, intensity 1, occlusion 0) in the dark yard: the
   // sunlit wall lights the shaded floor in front of it with its own colour, visibly (several times
   // the floor's own light), less with the distance and not at all 7 m away; the picture as a whole
   // gets brighter, no pixel loses more than a trace (no black halos, no crushed shadows), the sunlit
-  // wall itself barely changes (no glow), the shaded corner far away only darkens a little, and the
+  // wall itself barely changes (no glow), the shaded corner never darkens, and the
   // sky is untouched.
   const Mesh yard = YardMesh();
   Fixture::Frame fr;
@@ -884,7 +884,7 @@ TEST(GameGi_GameLikeDarkSceneBounceIsVisible) {
     // No glow on the lit wall, no crushed shade.
     CHECK(std::fabs(Luminance(w1) - Luminance(w0)) < 0.03f);
     CHECK(Luminance(c1) - Luminance(c0) > -0.012f);
-    CHECK(darkest > -0.02f);
+    CHECK(darkest >= -1e-6f);
     CHECK(mean > 0.0f);
     for (int c = 0; c < 3; ++c) CHECK(std::fabs(with.at(2, 2)[c] - without.at(2, 2)[c]) < 1e-6f);
   }

@@ -27,11 +27,9 @@ struct GiConfig {
   // --native_gi_albedo: the brightest surface colour the composite assumes (the albedo estimate
   // never exceeds it), as a value of the picture (gamma); see docs/gi.md, "The composite".
   float albedo = 0.75f;
-  // --native_gi_occlusion: how much of the flat ambient light the gathered visibility takes away
-  // where surfaces hide the sky (0 to 1), when the ambient occlusion setting is off. With AO on,
-  // the AO does that and the GI only adds light. Half by default: a soft contact shadow, while the
-  // bounce light adds more than that wherever lit surfaces are near.
-  float occlusion = 0.5f;
+  // Optional occlusion of the ambient term for experiments. Default GI only adds bounce light;
+  // the separate AO setting owns contact darkening.
+  float occlusion = 0.0f;
   // --native_gi_debug: 0 the picture; 1 the bounce light alone (the gathered light, before the
   // surface colour); 2 the light the composite adds (+) or takes away (-) on grey; 3 the visibility.
   int debug = 0;

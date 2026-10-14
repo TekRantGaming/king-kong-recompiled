@@ -289,7 +289,7 @@ REXCVAR_DEFINE_DOUBLE(native_gi_albedo, 0.75, "Native renderer",
                       "The brightest surface colour the global illumination's composite assumes (0.05 to 1)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-REXCVAR_DEFINE_DOUBLE(native_gi_occlusion, 0.5, "Native renderer",
+REXCVAR_DEFINE_DOUBLE(native_gi_occlusion, 0.0, "Native renderer",
                       "With ambient occlusion off: how much of the flat ambient light the global illumination "
                       "takes away where surfaces hide the sky (0 to 1)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
