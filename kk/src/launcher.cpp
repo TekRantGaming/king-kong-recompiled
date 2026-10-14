@@ -429,6 +429,7 @@ void SetOriginalLook(bool on) {
     if (saved.empty()) {  // no saved Modern choices: use the hardware defaults
       const auto output = PrimaryScreenSize();
       ApplyHardwareRecommendation(true, output.first, output.second);
+      SetInt("kk_frame_rate", 60);  // Remastered plays at 60 FPS (the owner's choice); Original keeps 30
     }
     std::stringstream in(saved);
     for (std::string item; std::getline(in, item, ';');) {
@@ -463,6 +464,9 @@ void ApplyRemastered() {
   SetOriginalLook(false);
   const auto output = PrimaryScreenSize();
   ApplyHardwareRecommendation(true, output.first, output.second);
+  SetInt("ao_mode", 1);
+  SetInt("ao_strength", 3);  // Strong: GTAO's default since Beta 3 (the owner's choice)
+  SetInt("kk_frame_rate", 60);  // Remastered plays at 60 FPS (the owner's choice); Original keeps 30
   ++g_changes;
   SetRenderer(true);  // with the native renderer's GTAO, the only method since Beta 2 (ApplyPortDefaults)
 }
@@ -1369,7 +1373,8 @@ class SettingsPages {
                            "anti-aliasing and texture filtering, its 69" KK_DEG " field of view, motion blur, screen "
                            "blur and distance fog, and no ambient occlusion. Remastered gives you the presets, every "
                            "setting on this page and the frame rate and upscaling on the Display page; chosen at "
-                           "setup, it starts with recommended settings for your hardware and a 30 FPS cap.",
+                           "setup, it starts with the preset for your graphics card, 60 FPS and the new GTAO ambient "
+                           "occlusion.",
                            "kk_original_look", {{"Original Xbox 360", "true"}, {"Remastered", "false"}});
       it.on_choice = [](int i) { SetOriginalLook(i == 0); };
       it.on_default = [] { SetOriginalLook(false); };
@@ -3845,7 +3850,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         {"Remastered", "Sharper, with soft shadows",
          "Drawn for your screen's resolution with sharper textures, and the new GTAO ambient occlusion: soft "
          "shading in corners, in creases and under rocks, grass and people.",
-         F("Recommended for your {0}  " KK_DOT "  30 FPS", {gpu.name.empty() ? T(std::string("graphics card")) : gpu.name}),
+         F("Recommended for your {0}  " KK_DOT "  60 FPS", {gpu.name.empty() ? T(std::string("graphics card")) : gpu.name}),
          slides_.empty() ? nullptr : slides_[0].sharp},
     };
     // The text under each still, measured; the stills take what's left (cropped to fit).
