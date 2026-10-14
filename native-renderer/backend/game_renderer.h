@@ -735,6 +735,10 @@ class GameRenderer {
   uint32_t fxaa_wanted_ = 0;
   uint32_t vendor_ = 0;  // the GPU's PCI vendor (the panel's upscaler list)
   uint64_t live_changes_ = 0;
+  // This frame's draws with the lighting options' shader variants (the panel shows they are applied).
+  struct LiveDraws {
+    uint32_t shadows = 0, water = 0, shadows_waiting = 0, water_waiting = 0;
+  } live_draws_;
   double live_last_change_ms_ = 0;
 
   kknr::TextureCache textures_;

@@ -158,6 +158,11 @@ class D3D12Host final : public HostDevice {
     std::lock_guard lock(execute_mutex_);
     device_->waitForIdle();
   }
+  void RunExclusive(const std::function<void()>& fn) override {
+    std::lock_guard lock(execute_mutex_);
+    device_->waitForIdle();
+    fn();
+  }
 
   bool CopyToGuestOutput(rex::ui::Presenter::GuestOutputRefreshContext& context,
                          nvrhi::ICommandList* command_list, nvrhi::ITexture* source,

@@ -331,6 +331,38 @@ bool Visible(const Setting& s) {
 
 // ---------------------------------------------------------------- the text ---
 
+#if defined(KK_NATIVE_RENDERER)
+// What the renderer applies this frame, and why a setting that is on does not show (the panel's check that
+// a change reached the picture).
+std::string AppliedText(const NrEffectStats& s, std::vector<std::string>* notes) {
+  static const char* const kGi[] = {"off", "low", "medium", "high"};
+  std::string out;
+  auto add = [&](const std::string& t) { out += (out.empty() ? "" : ", ") + t; };
+  if (s.applied & 64) add("upscaler");
+  if (s.applied & 1) add("AO");
+  if (s.applied & 2) add(std::string("GI ") + kGi[std::min<uint32_t>(s.gi_level, 3)]);
+  if (s.applied & 4)
+    add("soft shadows (" + std::to_string(s.shadow_draws) + " draws, maps x" + Number(s.shadow_scale, "%.3g") + ")");
+  if (s.applied & 8) add("water reflections (" + std::to_string(s.water_draws) + " water draws)");
+  if (s.applied & 16) add("light shafts");
+  if (s.applied & 32) add("FXAA");
+  if (s.anisotropy >= 2) add(std::to_string(1 << (s.anisotropy - 1)) + "x filtering");
+  if (notes) {
+    if (Get("native_shadow_quality") != "original" && !(s.applied & 4))
+      notes->push_back(s.shadow_draws_waiting ? "Shadows: their shader is being prepared."
+                                              : "Shadows: nothing in view draws the sun's shadows here.");
+    if (Get("native_water_reflections") == "ssr" && !s.water_draws)
+      notes->push_back(s.water_draws_waiting ? "Water reflections: their shader is being prepared."
+                                             : "Water reflections: no water in view.");
+    if (Get("swap_post_effect") != "none" && (s.applied & 64))
+      notes->push_back("FXAA: off while a temporal upscaler runs (it anti-aliases itself).");
+    if (Get("native_volumetrics") != "off" && !(s.applied & 16)) notes->push_back("Light shafts: being prepared.");
+    if (Get("native_gi") != "off" && !(s.applied & 2)) notes->push_back("GI: being prepared.");
+  }
+  return out.empty() ? "nothing beyond the game's own picture" : out;
+}
+#endif
+
 std::string Readout() {
   std::string out;
   const auto frame = GetGuestFrameStats();
@@ -359,6 +391,9 @@ std::string Readout() {
     add("light shafts", s.volumetric_ms);
     add("upscaler", s.upscaler_ms);
     out += "GPU time a frame: " + (gpu.empty() ? std::string("no effect timed") : gpu) + "\n";
+    std::vector<std::string> notes;
+    out += "Applied: " + AppliedText(s, &notes) + "\n";
+    for (const auto& n : notes) out += "  " + n + "\n";
   } else {
     out += "Renderer: " + std::string(NativeRenderer() ? "Native" : "Classic (emulated GPU)") + "\n";
   }
@@ -635,6 +670,12 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
       add("Shafts", st.volumetric_ms);
       add("Upscaler", st.upscaler_ms);
       if (!gpu.empty()) ImGui::TextColored(ImColor(ui::color::kTextDim), "GPU: %s", gpu.c_str());
+      std::vector<std::string> notes;
+      const std::string applied = AppliedText(st, &notes);
+      ImGui::PushTextWrapPos(0.0f);
+      ImGui::TextColored(ImColor(ui::color::kTextDim), "Applied: %s", applied.c_str());
+      ImGui::PopTextWrapPos();
+      for (const auto& n : notes) ImGui::TextColored(ImColor(ui::color::kWarn), "%s", n.c_str());
       if (st.preparing) {
         std::string what;
         if (st.preparing & 4) what += " upscaler";
@@ -900,9 +941,15 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
       test_state_ = 0;
     }
     if (test_state_ >= 1000 || !InPlay()) return;
-    const double now = DevSecondsSinceMenu();
+    // The game's seconds until the test starts, then the wall clock's (KK_DEV_FORCE_DT can stop the game's).
     const double start = std::getenv("KK_DEV_PANEL_START") ? std::atof(std::getenv("KK_DEV_PANEL_START")) : 8.0;
-    if (now < start || now < test_next_) return;
+    if (test_wall0_ == std::chrono::steady_clock::time_point{}) {
+      if (DevSecondsSinceMenu() < start) return;
+      test_wall0_ = std::chrono::steady_clock::now();
+    }
+    const double now = start + std::chrono::duration<double>(std::chrono::steady_clock::now() - test_wall0_).count();
+    if (now < test_next_) return;
+    const bool verify = std::getenv("KK_DEV_PANEL_VERIFY") != nullptr;
     const int toggles = std::getenv("KK_DEV_PANEL_TOGGLES") ? std::atoi(std::getenv("KK_DEV_PANEL_TOGGLES")) : 100;
     const double interval = std::getenv("KK_DEV_PANEL_INTERVAL") ? std::atof(std::getenv("KK_DEV_PANEL_INTERVAL")) : 0.1;
     auto log = [&](const std::string& text) { REXLOG_INFO("KK panel test: {} at {:.3f}", text, now); };
@@ -917,8 +964,8 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
         SetOpen(true);
         plan_ = TestPlan();
         log("start: " + std::to_string(plan_.size()) + " steps, " + std::to_string(toggles) + " toggles each, every " +
-            Number(interval, "%.3f") + " s");
-        test_state_ = 1;
+            Number(interval, "%.3f") + " s" + (verify ? " (verify: a capture of each value)" : ""));
+        test_state_ = verify ? 100 : 1;
         test_next_ = now + 3;
         return;
       }
@@ -1114,6 +1161,79 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
         log("done: " + std::to_string(test_pass_) + " passed, " + std::to_string(test_fail_) + " failed");
         test_state_ = 1000;
         return;
+      // ---- verify: a capture of each value against two of the step's own value (the noise), in a scene the
+      // game's frozen clock keeps still (KK_DEV_FORCE_DT). tools/graphics-panel-verify.py compares them.
+      case 100: {
+        if (step_ >= plan_.size()) {
+          test_state_ = 19;
+          return;
+        }
+        const TestStep& st = plan_[step_];
+        if (st.cvar.rfind("#enable ", 0) == 0) {
+          Change(st.cvar.substr(8).c_str(), st.values[0]);
+          ++step_;
+          test_next_ = now + 3;
+          return;
+        }
+        if (!st.upscaler.empty() && Get("native_upscaler") != st.upscaler) Change("native_upscaler", st.upscaler);
+        test_state_ = 101;
+        test_next_ = now + 3;
+        return;
+      }
+      case 101:
+        step_base_ = Get(plan_[step_].cvar.c_str());
+        value_ = 0;
+        Burst(std::to_string(step_) + "-" + plan_[step_].cvar + "-B0", 103, now);
+        return;
+      case 103: {
+        const TestStep& st = plan_[step_];
+        std::vector<std::string> values;
+        for (const auto& v : st.values)
+          if (v != step_base_ && std::find(values.begin(), values.end(), v) == values.end()) values.push_back(v);
+        if (value_ >= values.size()) {
+          Reset();
+          ++step_;
+          test_state_ = 100;
+          test_next_ = now + 2;
+          return;
+        }
+        verify_value_ = values[value_];
+        Change(st.cvar.c_str(), verify_value_);
+        test_state_ = 104;
+        test_next_ = now + 3.5;
+        return;
+      }
+      case 104: {
+        // Between two captures of the step's own value (B<n>, B<n+1>): what the scene changes by itself.
+        const TestStep& st = plan_[step_];
+        const std::string name = std::to_string(step_) + "-" + st.cvar + "-V" + std::to_string(value_) + "-" + verify_value_;
+#if defined(KK_NATIVE_RENDERER)
+        const NrEffectStats es = Stats();
+        log("verify " + name + " base=" + step_base_ + " upscaler=" + es.upscaler + " applied=" + AppliedText(es, nullptr) +
+            " gpu ao=" + Number(es.ao_ms) + " gi=" + Number(es.gi_ms) + " shadows=" + Number(es.shadows_ms) +
+            " water=" + Number(es.water_ms) + " shafts=" + Number(es.volumetric_ms) + " up=" + Number(es.upscaler_ms));
+#endif
+        Burst(name, 106, now);
+        return;
+      }
+      case 106:
+        Change(plan_[step_].cvar.c_str(), step_base_);
+        test_state_ = 107;
+        test_next_ = now + 2.5;
+        return;
+      case 107:
+        ++value_;
+        Burst(std::to_string(step_) + "-" + plan_[step_].cvar + "-B" + std::to_string(value_), 103, now);
+        return;
+      case 110:  // a burst of three captures (rain and particles differ in each; their median is the scene)
+        TestCapture(burst_name_ + "-" + std::to_string(burst_count_));
+        if (++burst_count_ >= 3) {
+          test_state_ = burst_next_;
+          test_next_ = now + 0.1;
+        } else {
+          test_next_ = now + 0.35;
+        }
+        return;
       default:
         return;
     }
@@ -1124,7 +1244,19 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
     else OnKeyUp(e);
     test_key_handled_ = e.is_handled();
   }
+  void Burst(const std::string& name, int next, double now) {
+    burst_name_ = name;
+    burst_count_ = 0;
+    burst_next_ = next;
+    test_state_ = 110;
+    test_next_ = now;
+  }
+  std::string burst_name_;
+  int burst_count_ = 0, burst_next_ = 0;
   bool test_key_handled_ = false;
+  std::chrono::steady_clock::time_point test_wall0_{};
+  std::string step_base_, verify_value_;
+  size_t value_ = 0;
   int test_state_ = -1;
   double test_next_ = 0;
   std::filesystem::path test_dir_;

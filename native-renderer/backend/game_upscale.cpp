@@ -968,7 +968,9 @@ void GameRenderer::RunUpscale(nvrhi::ICommandList* cl, UpscaleFrameTracker::Trig
     in.color = color->texture;
     in.depth = u.depth;
     in.motion = u.motion;
-    in.reactive = u.config.reactive > 0.0f ? u.reactive.Get() : nullptr;
+    // Always the mask (cleared to 0 when its strength is 0): XeSS made with its responsive-mask flag needs one
+    // every frame, and the strength can change while the game runs.
+    in.reactive = u.reactive.Get();
     in.output = u.output;
     in.render = render;
     in.output_size = out_size;

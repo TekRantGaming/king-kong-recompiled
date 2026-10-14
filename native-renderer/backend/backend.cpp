@@ -480,6 +480,7 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
     nvrhi::IDevice* device = host_->device();
     HostDevice* host = host_.get();
     SetUpscalerIdleWait(device, [host] { host->WaitForIdle(); });
+    SetUpscalerExclusive(device, [host](const std::function<void()>& fn) { host->RunExclusive(fn); });
     shaders_->Initialize(game.shader_pack, game.dxc);
     kknr::GuestMemory physical;
     physical.base = memory_->TranslatePhysical(0);
@@ -692,6 +693,7 @@ void Backend::Shutdown() {
   submitter_.reset();  // submits what waits
 #if NR_GAME_RENDERER
   if (host_) SetUpscalerIdleWait(host_->device(), nullptr);
+  if (host_) SetUpscalerExclusive(host_->device(), nullptr);
 #endif
   if (invalidation_handle_) {
     memory_->UnregisterPhysicalMemoryInvalidationCallback(invalidation_handle_);

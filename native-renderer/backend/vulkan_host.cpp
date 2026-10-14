@@ -194,6 +194,12 @@ class VulkanHost final : public HostDevice {
     std::lock_guard execute_lock(execute_mutex_);
     device_->waitForIdle();
   }
+  void RunExclusive(const std::function<void()>& fn) override {
+    auto acquisition = provider_.vulkan_device()->AcquireQueue(queue_family_, 0);
+    std::lock_guard execute_lock(execute_mutex_);
+    device_->waitForIdle();
+    fn();
+  }
 
   bool CopyToGuestOutput(rex::ui::Presenter::GuestOutputRefreshContext& context,
                          nvrhi::ICommandList* command_list, nvrhi::ITexture* source,

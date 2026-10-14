@@ -32,7 +32,34 @@ namespace {
 std::mutex g_idle_mutex;
 nvrhi::IDevice* g_idle_device = nullptr;
 std::function<void()> g_idle_wait;
+UpscalerExclusive g_exclusive;
+nvrhi::IDevice* g_exclusive_device = nullptr;
+thread_local bool t_exclusive = false;  // inside UpscalerRunExclusive: the locks are held
 }  // namespace
+
+void SetUpscalerExclusive(nvrhi::IDevice* device, UpscalerExclusive run) {
+  std::lock_guard lock(g_idle_mutex);
+  g_exclusive_device = run ? device : nullptr;
+  g_exclusive = std::move(run);
+}
+
+void UpscalerRunExclusive(nvrhi::IDevice* device, const std::function<void()>& fn) {
+  UpscalerExclusive run;
+  {
+    std::lock_guard lock(g_idle_mutex);
+    if (device && device == g_exclusive_device) run = g_exclusive;
+  }
+  if (run && !t_exclusive) {
+    run([&] {
+      t_exclusive = true;
+      fn();
+      t_exclusive = false;
+    });
+    return;
+  }
+  if (device && !t_exclusive) device->waitForIdle();
+  fn();
+}
 
 void SetUpscalerIdleWait(nvrhi::IDevice* device, std::function<void()> wait) {
   std::lock_guard lock(g_idle_mutex);
@@ -44,7 +71,7 @@ void UpscalerWaitForIdle(nvrhi::IDevice* device) {
   std::function<void()> wait;
   {
     std::lock_guard lock(g_idle_mutex);
-    if (device && device == g_idle_device) wait = g_idle_wait;
+    if (device && device == g_idle_device && !t_exclusive) wait = g_idle_wait;
   }
   if (wait) wait();
   else if (device) device->waitForIdle();

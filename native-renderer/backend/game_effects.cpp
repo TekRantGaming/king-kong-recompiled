@@ -367,6 +367,19 @@ void GameRenderer::PublishEffectTimes() {
     s.input_height = out_h;
     std::snprintf(s.upscaler, sizeof(s.upscaler), "off");
   }
+  const bool ao = AoSettingsFor(ao_settings_frame_).mode > 0 && (scene_ao_ || ao_);
+  s.applied = (ao ? 1u : 0u) | (scene_gi_ ? 2u : 0u) | (options_.lighting.shadows_on() && live_draws_.shadows ? 4u : 0u) |
+              (options_.lighting.water_on() && scene_lighting_ ? 8u : 0u) |
+              (options_.lighting.volumetrics_on() && scene_lighting_ ? 16u : 0u) | (options_.fxaa ? 32u : 0u) |
+              (upscale_ ? 64u : 0u);
+  s.anisotropy = options_.anisotropic_override;
+  s.gi_level = scene_gi_ ? uint32_t(options_.gi.level) : 0u;
+  s.shadow_scale = LightingShadowScale();
+  s.shadow_draws = live_draws_.shadows;
+  s.water_draws = live_draws_.water;
+  s.shadow_draws_waiting = live_draws_.shadows_waiting;
+  s.water_draws_waiting = live_draws_.water_waiting;
+  live_draws_ = {};
   s.api = device_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN ? 1u : 2u;
   s.vendor = vendor_;
   s.frame = frame_;

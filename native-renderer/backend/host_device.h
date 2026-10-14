@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 
 #include <nvrhi/nvrhi.h>
@@ -35,6 +36,11 @@ class HostDevice {
   }
   virtual void WaitFrame(nvrhi::IEventQuery* completion) { device()->waitEventQuery(completion); }
   virtual void WaitForIdle() = 0;
+  // Runs `fn` with the GPU idle and the queue locked against the other threads (an SDK's set-up).
+  virtual void RunExclusive(const std::function<void()>& fn) {
+    WaitForIdle();
+    fn();
+  }
   // Microseconds spent in ExecuteCommandList: waiting for the queue, submitting, collecting garbage.
   struct SubmitTimes {
     uint64_t wait_us = 0, execute_us = 0, garbage_us = 0, count = 0;

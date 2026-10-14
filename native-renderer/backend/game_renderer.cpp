@@ -1398,9 +1398,13 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
       nvrhi::GraphicsPipelineDesc pd;
       nvrhi::FramebufferInfo info;
       BuildPipelineDesc(variant_record, vs->handle, variant->handle, pd, info);
+      const bool water = LightFamilyOf(variant->ucode_hash) != LightFamily::kShadowQuad;
       if (auto* prepared = GetPipeline(pd, info, variant_key, true, true)) {
         pipeline = prepared;
         ps = std::move(variant);
+        ++(water ? live_draws_.water : live_draws_.shadows);
+      } else {
+        ++(water ? live_draws_.water_waiting : live_draws_.shadows_waiting);
       }
     }
   }

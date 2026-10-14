@@ -84,6 +84,12 @@ uint32_t UpscalerDeviceVendor(nvrhi::IDevice* device);
 // (the launcher's question, tests) waits directly. Null `wait` removes the hook.
 void SetUpscalerIdleWait(nvrhi::IDevice* device, std::function<void()> wait);
 void UpscalerWaitForIdle(nvrhi::IDevice* device);
+// Runs `fn` with the GPU idle and no other thread using the queue (the host's queue lock held): for an SDK's
+// context set-up, which may use the queue itself (XeSS uploads its network). The host gives it for its
+// device; other devices wait for idle and run it.
+using UpscalerExclusive = std::function<void(const std::function<void()>& fn)>;
+void SetUpscalerExclusive(nvrhi::IDevice* device, UpscalerExclusive run);
+void UpscalerRunExclusive(nvrhi::IDevice* device, const std::function<void()>& fn);
 
 // The folder of the game's executable (where the SDKs' DLLs are), with a trailing separator.
 std::wstring UpscalerDllFolder();

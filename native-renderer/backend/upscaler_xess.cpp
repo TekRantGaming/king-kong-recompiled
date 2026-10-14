@@ -289,9 +289,10 @@ class XessUpscaler final : public Upscaler {
 #endif
 
   bool Init(UpscalerSize output) {
-    // XeSS's initialisation must not overlap work in flight that uses its resources.
-    UpscalerWaitForIdle(device_);
+    // XeSS's initialisation must not overlap work in flight that uses its resources, and it may use the queue
+    // itself: the GPU idle and the queue the SDK's alone (UpscalerRunExclusive).
     xess_result_t r = XESS_RESULT_ERROR_UNKNOWN;
+    UpscalerRunExclusive(device_, [&] {
 #if NR_HAS_VULKAN
     if (vulkan_) {
       xess_vk_init_params_t p{};
@@ -310,6 +311,7 @@ class XessUpscaler final : public Upscaler {
       r = x_->D3D12Init(ctx_, &p);
     }
 #endif
+    });
     if (r != XESS_RESULT_SUCCESS && r != XESS_RESULT_WARNING_OLD_DRIVER) {
       if (failures_++ < 10) {
         Logf(LogLevel::kWarning, "rexgpu-native: XeSS not initialised (%s) for %ux%u", ResultName(r), output.width,

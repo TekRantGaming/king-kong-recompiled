@@ -3,14 +3,14 @@
 # Summarise a run with tools/graphics-panel-summary.py <run folder>.
 param([ValidateSet('vulkan','d3d12')][string]$Api='vulkan',
       [string]$Upscaler='dlss', [int]$Chapter=8, [int]$Toggles=100, [double]$Interval=0.1,
-      [string]$Only='', [string]$Upscalers='', [int]$MaxSeconds=600, [switch]$Validation)
+      [string]$Only='', [string]$Upscalers='', [int]$MaxSeconds=600, [switch]$Validation, [switch]$Verify)
 $ErrorActionPreference='Stop'
 $workspace='F:\KK-native-renderer\wt\codex-debugmenu'
 $lock='F:\KK-native-renderer\runs\codex-game.lock'
 $priority='F:\KK-native-renderer\runs\codex-game.priority'
 $me='claude-overlay'
 if((Get-Content -LiteralPath $lock -Raw).Trim().StartsWith('user')) { throw 'USER LOCK: code work only' }
-$run="F:\KK-native-renderer\runs\claude-overlay-$(Get-Date -Format yyyyMMdd-HHmmss)-$Api-$Upscaler"
+$run="F:\KK-native-renderer\runs\claude-overlay-$(Get-Date -Format yyyyMMdd-HHmmss)-$Api-$Upscaler$(if($Verify){'-verify'})"
 New-Item -ItemType Directory -Path "$run\cache\native-shaders" -Force | Out-Null
 $build="$workspace\kk\out\build\kk-dev-vulkan"
 Get-ChildItem -LiteralPath $build -File | Where-Object { $_.Name -eq 'king_kong.exe' -or $_.Extension -eq '.dll' } | Copy-Item -Destination $run
@@ -25,6 +25,8 @@ $env:KK_DEV_PANEL_TEST="$run\captures"; New-Item -ItemType Directory -Path "$run
 $env:KK_DEV_PANEL_TOGGLES="$Toggles"; $env:KK_DEV_PANEL_INTERVAL="$Interval"; $env:KK_DEV_PANEL_UPSCALER=$Upscaler
 $env:KK_DEV_PANEL_ONLY=$Only; $env:KK_DEV_PANEL_UPSCALERS=$Upscalers
 $env:KK_DEV_EFFECT_TEST='1'
+# -Verify: three captures of each value of each setting between captures of its own value (no input: a still camera).
+if($Verify) { $env:KK_DEV_PANEL_VERIFY='1' } else { $env:KK_DEV_PANEL_VERIFY=$null; $env:KK_DEV_FORCE_DT=$null; $env:KK_DEV_FORCE_DT_AT=$null }
 $env:KK_DEV_DT_LOG='0,1200'
 $launch=@('--fullscreen=false','--window_width=1280','--window_height=720','--kk_fullscreen_mode=desktop',
  '--kk_renderer=native',"--native_backend=$Api", "--native_upscaler=$Upscaler",'--kk_frame_rate=30',
