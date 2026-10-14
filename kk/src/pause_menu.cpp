@@ -196,9 +196,12 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
                    }});
     if (play::PauseActionAvailable(play::PauseAction::kScore))
       e.push_back({"Score", [] { play::RunPauseAction(play::PauseAction::kScore); }});
-    // The game's own Options pages (Audio: subtitles and volumes; Video; Controls), drawn by the game.
+#if defined(KK_DEV_TOOLS)
+    // Keep the original pages reachable in test builds for profile compatibility checks.
+    // Players use the shared launcher-style Settings pages for audio and subtitles.
     if (play::PauseActionAvailable(play::PauseAction::kGameOptions))
       e.push_back({"Options", [] { play::RunPauseAction(play::PauseAction::kGameOptions); }});
+#endif
     e.push_back({"Settings", [this] { OpenSettings(InGameSettings::kDisplay); }});
     // Story runs: the game's own Save (its save pages show, then this menu comes back).
     if (play::PauseActionAvailable(play::PauseAction::kSave))
