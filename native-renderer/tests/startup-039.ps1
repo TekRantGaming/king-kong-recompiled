@@ -77,6 +77,10 @@ if (!(Test-Path -LiteralPath $lockPath)) { Set-Content -LiteralPath $lockPath 'f
 while ($true) {
   $lock=(Get-Content -LiteralPath $lockPath -Raw).Trim()
   if ($lock.StartsWith('user')) { Write-Output "SKIPPED user lock: $run"; exit 3 }
+  $userGame=Get-Process king_kong -ErrorAction SilentlyContinue | Where-Object {
+    !$_.Path -or ($_.Path -notlike 'F:\KK-native-renderer\runs\*' -and $_.Path -notlike 'F:\KK-native-renderer\wt\*')
+  }
+  if ($userGame) { Write-Output 'WAIT user game'; Start-Sleep -Seconds 60; continue }
   $ours=Get-Process king_kong -ErrorAction SilentlyContinue | Where-Object { $_.Path -like 'F:\KK-native-renderer\runs\*' -or $_.Path -like 'F:\KK-native-renderer\wt\*' }
   if ($lock -eq 'free' -and !$ours) {
     # Read and claim atomically with respect to cooperating writers.
@@ -101,6 +105,7 @@ $outcome='timeout'
 try {
   if (!(Get-Process kkbg2 -ErrorAction SilentlyContinue)) { throw 'kkbg2 must be running.' }
   if (!(Get-Content -LiteralPath $lockPath -Raw).Trim().StartsWith('task039 ')) { throw 'The test lock changed before launch.' }
+  if (Get-Process king_kong -ErrorAction SilentlyContinue) { throw 'Another game appeared before launch.' }
   $parent=Start-Process -FilePath "$run\king_kong.exe" -ArgumentList $args -WorkingDirectory $run -WindowStyle Hidden -PassThru
   $known[$parent.Id]=$true
   Write-Output "RUN $run monitor PID $($parent.Id)"

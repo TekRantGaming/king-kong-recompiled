@@ -18,6 +18,9 @@
 #endif
 #include <windows.h>
 #include <shellapi.h>
+#if defined(KK_DEV_TOOLS)
+#include <tlhelp32.h>
+#endif
 #endif
 
 REXCVAR_DEFINE_BOOL(kk_startup_child, false, "KK/Internal", "Internal startup monitor child").debug_only();
@@ -94,6 +97,20 @@ void MonitorStartup() {
       std::string owner;
       std::getline(lock_file, owner);
       if (owner.rfind("task039 ", 0) != 0) { result = 3; break; }
+      // Never launch a recovery child while another copy of the game is running.
+      // Unknown/inaccessible paths are treated conservatively as a user's game.
+      bool other_game = false;
+      const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+      if (snapshot == INVALID_HANDLE_VALUE) { result = 3; break; }
+      PROCESSENTRY32W entry{};
+      entry.dwSize = sizeof(entry);
+      for (BOOL more = Process32FirstW(snapshot, &entry); more; more = Process32NextW(snapshot, &entry)) {
+        if (_wcsicmp(entry.szExeFile, L"king_kong.exe") != 0 || entry.th32ProcessID == GetCurrentProcessId()) continue;
+        other_game = true;
+        break;
+      }
+      CloseHandle(snapshot);
+      if (other_game) { result = 3; break; }
     }
 #endif
     std::wstring cmd = GetCommandLineW();
