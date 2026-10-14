@@ -68,7 +68,7 @@ def summary(root):
                   volatile_errors=sum('maxVersions' in v and 'insufficient' in v for v in logs),
                   query_errors=sum('Insufficient query pool space' in v for v in logs),
                   device_removed=sum('Device Removed!' in v for v in logs),
-                  shots=len(list(root.glob('shot_*.bmp'))))
+                  shots=len({p.stem for ext in ('png', 'bmp') for p in root.glob('shot_*.' + ext)}))
     if len(steady_cpu) > 1:
         result['game_cpu_ms']=(steady_cpu[-1][1]-steady_cpu[0][1])/(steady_cpu[-1][0]-steady_cpu[0][0])
     render_cpu=[]

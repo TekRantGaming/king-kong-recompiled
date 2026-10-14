@@ -233,8 +233,13 @@ class KingKongApp : public rex::ReXApp {
         rex::ui::RawImage image;
         auto* gfx = runtime() ? runtime()->graphics_system() : nullptr;
         auto* presenter = gfx ? gfx->presenter() : nullptr;
-        if (presenter && presenter->CaptureGuestOutput(image) && kk::art::SaveTitleCapture(image, path))
-          REXLOG_INFO("KK: saved frame {} ({}x{})", path.filename().string(), image.width, image.height);
+        if (presenter && presenter->CaptureGuestOutput(image)) {
+          const auto width = image.width, height = image.height;
+          if (kk::art::QueueDevCapture(std::move(image), path))
+            REXLOG_INFO("KK: captured frame {} ({}x{})", path.filename().string(), width, height);
+          else
+            REXLOG_ERROR("KK: capture queue full or capture failed: {}", path.string());
+        }
       });
     });
     kk::StartButtonPrompts(runtime()->memory());

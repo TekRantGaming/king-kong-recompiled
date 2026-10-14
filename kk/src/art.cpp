@@ -1,8 +1,17 @@
 #include "art.h"
+#include "capture_png.h"
 
 #include <algorithm>
 #include <cstring>
 #include <fstream>
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#include <thread>
+#include <rex/logging.h>
+#if defined(_WIN32)
+#include <objbase.h>
+#endif
 #include <toml++/toml.hpp>
 
 #include <rex/system/achievement_store.h>
@@ -93,6 +102,65 @@ bool SaveTitleCapture(const rex::ui::RawImage& image, const std::filesystem::pat
   std::ofstream f(path, std::ios::binary | std::ios::trunc);
   f.write(out.data(), std::streamsize(out.size()));
   return bool(f);
+}
+
+
+#if defined(_WIN32)
+namespace {
+// Own the readback, encode on one worker, and drain on normal process exit.
+// A bounded queue rejects an overloaded capture request instead of blocking a frame.
+class CaptureWriter {
+ public:
+  CaptureWriter() : worker_([this] { Run(); }) {}
+  ~CaptureWriter() {
+    { std::lock_guard lock(mutex_); stopping_ = true; }
+    ready_.notify_one();
+    worker_.join();
+  }
+  bool Enqueue(rex::ui::RawImage image, std::filesystem::path path) {
+    std::lock_guard lock(mutex_);
+    if (queue_.size() >= 8 || stopping_) return false;
+    queue_.push_back({std::move(image), std::move(path)});
+    ready_.notify_one();
+    return true;
+  }
+ private:
+  struct Job { rex::ui::RawImage image; std::filesystem::path path; };
+  void Run() {
+    const HRESULT com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    for (;;) {
+      Job job;
+      {
+        std::unique_lock lock(mutex_);
+        ready_.wait(lock, [this] { return stopping_ || !queue_.empty(); });
+        if (queue_.empty()) break;
+        job = std::move(queue_.front());
+        queue_.pop_front();
+      }
+      if (SUCCEEDED(com) && detail::SaveCapturePng(job.image, job.path))
+        REXLOG_INFO("KK: saved frame {} ({}x{})", job.path.filename().string(), job.image.width, job.image.height);
+      else
+        REXLOG_ERROR("KK: failed to save PNG {}", job.path.string());
+    }
+    if (SUCCEEDED(com)) CoUninitialize();
+  }
+  std::mutex mutex_;
+  std::condition_variable ready_;
+  std::deque<Job> queue_;
+  bool stopping_ = false;
+  std::thread worker_;
+};
+}  // namespace
+#endif
+
+bool QueueDevCapture(rex::ui::RawImage image, const std::filesystem::path& path) {
+#if defined(_WIN32)
+  static CaptureWriter writer;
+  return writer.Enqueue(std::move(image), path);
+#else
+  // The Windows PC port uses WIC. Preserve the existing BMP path on other hosts.
+  return SaveTitleCapture(image, path);
+#endif
 }
 
 Image LoadImage(const std::filesystem::path& path) {

@@ -1,4 +1,5 @@
 param([string]$Label = 'before-vulkan', [string]$Backend = 'vulkan', [switch]$Classic, [switch]$Original, [switch]$Ground, [switch]$Uncapped, [string[]]$Extra = @())
+. (Join-Path $PSScriptRoot "run-storage.ps1")
 $ErrorActionPreference = 'Stop'
 $workspace = (Resolve-Path (Join-Path  '..\..')).Path
 $lockPath = 'F:\KK-native-renderer\runs\codex-game.lock'
@@ -10,10 +11,7 @@ if (!(Get-Process kkbg2 -ErrorAction SilentlyContinue)) { throw 'kkbg2 must be r
 $run = "F:\KK-native-renderer\runs\task009-$Label-$(Get-Date -Format yyyyMMdd-HHmmss)"
 New-Item -ItemType Directory -Path $run | Out-Null
 $build = "$workspace\kk\out\build\kk-dev-vulkan"
-Get-ChildItem -LiteralPath $build -File | Where-Object { $_.Extension -in '.exe','.dll' } | Copy-Item -Destination $run
-Copy-Item -LiteralPath "$build\glyphs" -Destination $run -Recurse
-Get-ChildItem 'F:\KK-native-renderer\wt\beta-upscalers\kk\out\build\kk-dev-vulkan\kkshaders-*.pack' | Copy-Item -Destination $run
-Copy-Item 'F:\KK-native-renderer\downloads\dxc-v1.9.2609\dxc\bin\x64\dxcompiler.dll' $run
+Initialize-RunBuild -Build $build -Run $run -ShaderPacks @(Get-ChildItem 'F:\KK-native-renderer\wt\beta-upscalers\kk\out\build\kk-dev-vulkan\kkshaders-*.pack' | ForEach-Object FullName) -Dxc 'F:\KK-native-renderer\downloads\dxc-v1.9.2609\dxc\bin\x64\dxcompiler.dll'
 robocopy F:\KK-native-renderer\userdata "$run\userdata" /E /NFL /NDL /NJH /NJS | Out-Null
 if ($LASTEXITCODE -ge 8) { throw 'User data copy failed.' }
 Get-ChildItem Env: | Where-Object { $_.Name -like 'KK_DEV_*' -or $_.Name -like 'REX_DEV_*' } | ForEach-Object { Remove-Item "Env:$($_.Name)" }
@@ -32,7 +30,7 @@ $env:KK_DEV_DT_LOG = '0,212'
 $env:KK_DEV_GUNFIRE = '1'
 $args = @('--fullscreen=false','--window_width=1280','--window_height=720','--kk_fullscreen_mode=desktop',
  '--kk_start=chapter:0:8','--kk_launcher=false','--kk_cheats=true','--kk_cheat_ammo=true','--kk_cheat_machine_gun=true',
- "--user_data_root=$run\userdata",'--game_data_root=F:/KK-native-renderer/wt/codex-perf/kk/assets',"--log_file=$run\run.log",
+ "--user_data_root=$run\userdata","--cache_root=$run\cache",'--game_data_root=F:/KK-native-renderer/wt/codex-perf/kk/assets',"--log_file=$run\run.log",
  '--native_debug=32768',"--native_backend=$Backend")
 if ($Classic) { $args += '--kk_renderer=classic' }
 if ($Original) { $args += '--kk_original_look=true' }
@@ -54,7 +52,7 @@ try {
  while (!$game.HasExited -and $clock.Elapsed.TotalSeconds -lt 285) {
   $game.Refresh()
   "$($clock.Elapsed.TotalSeconds),$($game.PrivateMemorySize64),$($game.WorkingSet64),$($game.TotalProcessorTime.TotalSeconds)" | Add-Content "$run\process.csv"
-  if (Test-Path "$run\shot_2110.bmp") { break }
+  if ((Test-Path "$run\shot_2110.png") -or (Test-Path "$run\shot_2110.bmp")) { break }
   Start-Sleep -Seconds 2
  }
 } finally {
@@ -64,6 +62,8 @@ try {
  }
  Set-Content -LiteralPath $lockPath -Value 'free'
 }
+Assert-RunBuildUnchanged $run
+  Complete-RunCaptures $run
 Write-Output "DONE $run"
 
 

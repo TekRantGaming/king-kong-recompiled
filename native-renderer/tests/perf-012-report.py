@@ -145,7 +145,7 @@ Exclusive presentation review: kk/src/display_modes.cpp selects a display mode t
 
 The final `--native_validation=true` V-Rex run completed two captures with zero volatile/query exhaustion and zero device removal. This option enables NVRHI validation, not a guarantee that Khronos Vulkan validation layers are active. One NVRHI error remains: the startup EDRAM colour attachment is 1760x1664 while depth is 1760x1440. No other NVRHI GPU error or VUID line appeared in the retained logs. This is not a clean validation pass; attachment-size/lifetime correctness needs a dedicated follow-up before broad hardware certification. Its timing is diagnostic, not a performance comparison.
 
-Every measurement below links to its preserved run directory, including `test.json`, `frame_times.csv`, `process.csv`, `gpu-memory.csv`, the rotating native logs and the game's BMPs. Exact command arguments, DLL SHA256 and affinity mask are in metadata. Reproduce summaries with the absolute Python 3.12 executable, `-I`, and `native-renderer/tests/perf-012-summary.py`.
+Every measurement below links to its preserved run directory, including `test.json`, `frame_times.csv`, `process.csv`, `gpu-memory.csv`, the rotating native logs and the game's captures (PNG or legacy BMP). Exact command arguments, DLL SHA256 and affinity mask are in metadata. Reproduce summaries with the absolute Python 3.12 executable, `-I`, and `native-renderer/tests/perf-012-summary.py`.
 ''')
 report.append('## Pipeline stalls and queue waits')
 stall_rows=[]

@@ -2,6 +2,7 @@ param([string]$Label='baseline', [int]$Chapter=8, [string]$Backend='vulkan',
  [switch]$Classic, [string]$Scale='1920x1080', [int]$Cores=0,
  [switch]$Gtao, [string]$Upscaler='off', [switch]$Fire, [switch]$PassTimers, [switch]$Validation,
  [string]$NativeDll='')
+. (Join-Path $PSScriptRoot "run-storage.ps1")
 $ErrorActionPreference='Stop'
 $workspace=(Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $lockPath='F:\KK-native-renderer\runs\codex-game.lock'
@@ -51,11 +52,7 @@ function Wait-Free {
 $run="F:\KK-native-renderer\runs\task012-$Label-ch$Chapter-$(Get-Date -Format yyyyMMdd-HHmmss)"
 New-Item -ItemType Directory -Path $run | Out-Null
 $build=Join-Path $workspace 'kk/out/build/kk-dev-vulkan'
-Get-ChildItem -LiteralPath $build -File | Where-Object { $_.Extension -in '.exe','.dll' } | Copy-Item -Destination $run
-if ($NativeDll) { Copy-Item -LiteralPath $NativeDll -Destination "$run\rexgpu-native.dll" -Force }
-Copy-Item -LiteralPath "$build\glyphs" -Destination $run -Recurse
-Get-ChildItem 'F:\KK-native-renderer\wt\beta-upscalers\kk\out\build\kk-dev-vulkan\kkshaders-*.pack' | Copy-Item -Destination $run
-Copy-Item 'F:\KK-native-renderer\downloads\dxc-v1.9.2609\dxc\bin\x64\dxcompiler.dll' $run
+Initialize-RunBuild -Build $build -Run $run -ShaderPacks @(Get-ChildItem 'F:\KK-native-renderer\wt\beta-upscalers\kk\out\build\kk-dev-vulkan\kkshaders-*.pack' | ForEach-Object FullName) -Dxc 'F:\KK-native-renderer\downloads\dxc-v1.9.2609\dxc\bin\x64\dxcompiler.dll' -NativeDll $NativeDll
 robocopy F:\KK-native-renderer\userdata "$run\userdata" /E /NFL /NDL /NJH /NJS | Out-Null
 if ($LASTEXITCODE -ge 8) { throw 'User data copy failed.' }
 Get-ChildItem Env: | Where-Object { $_.Name -like 'KK_DEV_*' -or $_.Name -like 'REX_DEV_*' } | ForEach-Object { Remove-Item "Env:$($_.Name)" }
@@ -101,11 +98,13 @@ try {
    $gpu=Get-CimInstance -ClassName Win32_PerfFormattedData_GPUPerformanceCounters_GPUProcessMemory -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "pid_$($game.Id)_*" }
    "$($clock.Elapsed.TotalSeconds),$(($gpu | Measure-Object DedicatedUsage -Sum).Sum),$(($gpu | Measure-Object SharedUsage -Sum).Sum)" | Add-Content "$run\gpu-memory.csv"
   }
-  if (Test-Path "$run\shot_1200.bmp") { break }
+  if ((Test-Path "$run\shot_1200.png") -or (Test-Path "$run\shot_1200.bmp")) { break }
   Start-Sleep -Seconds 2
  }
 } finally {
  if ($game -and !$game.HasExited) { $null=$game.CloseMainWindow(); if (!$game.WaitForExit(15000)) { Stop-Process -Id $game.Id; $game.WaitForExit() } }
  Set-Content -LiteralPath $lockPath 'free'
 }
+Assert-RunBuildUnchanged $run
+  Complete-RunCaptures $run
 Write-Output "DONE $run"

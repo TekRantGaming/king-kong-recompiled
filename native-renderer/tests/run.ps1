@@ -25,7 +25,7 @@ param(
   [string]$GameData = '',
   [string]$UserData = 'F:\KK-native-renderer\userdata',
   [string]$CacheRoot = 'F:\KK-native-renderer\cache',
-  [string]$LockFile = 'F:\KK-native-renderer\game.lock',
+  [string]$LockFile = 'F:\KK-native-renderer\runs\codex-game.lock',
   [string]$LockName = 'tests/run.ps1',
   [int]$WaitMinutes = 0,
   # Seconds between two checks while waiting for the game (another runner may be using it).
@@ -36,7 +36,7 @@ param(
   [string]$QueueName = '',
   [string]$QueueDir = 'F:\KK-native-renderer\game.wait',
   [string]$Label = '',
-  [string]$Python = 'python',
+  [string]$Python = 'C:\Users\TekRa\AppData\Local\Programs\Python\Python312\python.exe',
   [switch]$NoCompare,
   [switch]$NoFrameLog,
   # Extra game arguments for every launch (for example --native_dump_frame=200).
@@ -49,6 +49,7 @@ param(
   # <run folder>\pipelines\<run>.pipelines (a prewarm list for every chapter played).
   [switch]$RecordPipelines
 )
+. (Join-Path $PSScriptRoot 'run-storage.ps1')
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $compare = Join-Path $PSScriptRoot 'compare.py'
@@ -137,7 +138,8 @@ function Wait-GameFree {
     $lockText = ''
     if (Test-Path $LockFile) {
       $lockText = [string](Get-Content -Path $LockFile -TotalCount 1 -ErrorAction SilentlyContinue)
-      $held = $lockText -match '^\s*(hold|user)'
+      if ($lockText -match '^\s*user') { Write-Output 'User lock: no game launch permitted'; return $false }
+      $held = $lockText.Trim() -ne 'free'
       if ($queueFile -and $lockText.Trim() -ne 'free') { $held = $true }
     }
     $ahead = @()
@@ -193,6 +195,12 @@ foreach ($run in $plan.runs) {
   & robocopy $UserData $saveCopy /E /NFL /NDL /NJH /NJS /NP | Out-Null
   if ($LASTEXITCODE -ge 8) { Write-Output "robocopy of the test save failed ($LASTEXITCODE)"; exit 4 }
 
+  $cachedPacks = @(Get-ChildItem -Path (Join-Path $CacheRoot 'native-shaders') -Filter '*.pack' -ErrorAction SilentlyContinue | ForEach-Object FullName)
+  Initialize-RunBuild -Build $exeDir -Run $runDir -ShaderPacks $cachedPacks
+  $runExe = Join-Path $runDir ([IO.Path]::GetFileName($Exe))
+  $runCache = Join-Path $runDir 'cache'
+  New-Item -ItemType Directory -Force $runCache | Out-Null
+
   # Environment: clear every KK_ / REX_DEV_ variable inherited from this shell, then set the run's own.
   $saved = @{}
   Get-ChildItem Env: | Where-Object { $_.Name -like 'KK_*' -or $_.Name -like 'REX_DEV_*' } | ForEach-Object {
@@ -211,6 +219,8 @@ foreach ($run in $plan.runs) {
   }
   # -ExtraArgs replace the scene file's arguments of the same name (the game keeps the first of two).
   $launchExtra = @($ExtraArgs)
+  $launchExtra = @($launchExtra | Where-Object { ($_ -split '=',2)[0] -notin '--kk_launcher','--fullscreen','--kk_fullscreen_mode','--window_width','--window_height' })
+  $launchExtra += @('--kk_launcher=false','--fullscreen=false','--kk_fullscreen_mode=desktop','--window_width=1280','--window_height=720')
   $pipeDir = Join-Path $runDir 'pipelines'
   if ($RecordPipelines) {
     # A fresh, empty cache file per launch: nothing is prewarmed, so the timeline stays that of a cold run.
@@ -219,7 +229,7 @@ foreach ($run in $plan.runs) {
   }
   $extraNames = @($launchExtra | ForEach-Object { ($_ -split '=', 2)[0] })
   $runArgs = @($run.args | Where-Object { $extraNames -notcontains (($_ -split '=', 2)[0]) })
-  $gameArgs = @("--game_data_root=$GameData", "--user_data_root=$saveCopy", "--cache_root=$CacheRoot",
+  $gameArgs = @("--game_data_root=$GameData", "--user_data_root=$saveCopy", "--cache_root=$runCache",
     "--log_file=$(Join-Path $runDir 'game.log')") + $runArgs + $launchExtra | ForEach-Object { Format-Arg $_ }
   $log = Join-Path $runDir 'game.log'
   $proc = $null
@@ -228,13 +238,13 @@ foreach ($run in $plan.runs) {
     Set-Lock ("{0} ({1}, run {2}) {3}" -f $LockName, $Plugin, $run.name, (Get-Date -Format s))
     Write-Output ("{0:HH:mm:ss} run {1}: scenes {2}, {3} shots, up to {4} s" -f (Get-Date), $run.name,
       ($run.scenes -join ','), $run.expected.Count, $run.limit_s)
-    $proc = Start-Process -FilePath $Exe -ArgumentList $gameArgs -WorkingDirectory $runDir -PassThru
+    $proc = Start-Process -FilePath $runExe -ArgumentList $gameArgs -WorkingDirectory $runDir -WindowStyle Hidden -PassThru
     Set-QueueDone
     while ($true) {
       Start-Sleep -Seconds 1
       if ($proc.HasExited) { Write-Output "  the game exited by itself (code $($proc.ExitCode))"; break }
       $done = $true
-      foreach ($f in $run.expected) { if (-not (Test-Path (Join-Path $runDir $f))) { $done = $false; break } }
+      foreach ($f in $run.expected) { if (-not (Test-Path (Join-Path $runDir $f)) -and -not (Test-Path (Join-Path $runDir ([IO.Path]::ChangeExtension($f, '.bmp'))))) { $done = $false; break } }
       if ($done -and $run.frame_log_frames -gt 0) {
         $ends = @(Select-String -Path $log -Pattern 'Frame log: frame end' -SimpleMatch -ErrorAction SilentlyContinue)
         if ($ends.Count -lt $run.frame_log_frames) { $done = $false }
@@ -251,6 +261,8 @@ foreach ($run in $plan.runs) {
     Set-Lock 'free'
     foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k], 'Process') }
   }
+  Assert-RunBuildUnchanged $runDir
+  Complete-RunCaptures $runDir -Python $Python
   # --name=value forms: Windows PowerShell drops empty arguments when it calls a program.
   $collect = @('collect', '--run', $run.name, '--run-dir', $runDir, '--out-root', $root, '--scenes', $SceneList,
     "--plugin=$Plugin", "--label=$Label", "--trigger=$($run.env.REX_DEV_FRAME_LOG)")
