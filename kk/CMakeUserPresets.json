@@ -12,7 +12,8 @@
             "name": "user-env-vulkan",
             "hidden": true,
             "cacheVariables": {
-                "CMAKE_PREFIX_PATH": "${sourceDir}/../tools/rexglue-vulkan/win-amd64"
+                "CMAKE_PREFIX_PATH": "${sourceDir}/../tools/rexglue-vulkan/win-amd64",
+                "NR_FFX_SDK_DIR": "${sourceDir}/../tools/rexglue-vulkan/fidelityfx"
             }
         },
         {

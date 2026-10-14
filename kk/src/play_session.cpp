@@ -985,7 +985,6 @@ REX_HOOK_RAW(sub_8253DB80) {
   const uint32_t startup_level = request ? Load32(base, g + 8) : 0;
   if (request && g_jump_requested) REXLOG_INFO("KK play: uni_go loads level {}", int32_t(Load32(base, g + 8)));
   __imp__sub_8253DB80(ctx, base);
-<<<<<<< HEAD
   ServiceProfileOptions(ctx, base);
 #if defined(KK_DEV_TOOLS)
   if (g && std::getenv("KK_DEV_AUDIO_TRACE")) {
@@ -1012,10 +1011,8 @@ REX_HOOK_RAW(sub_8253DB80) {
     }
   }
 #endif
-=======
   // uni_go has completed loading a real chapter. Also covers starts through the original game menu.
   if (request && (startup_level >= kNewGameLevel || startup_level == 7)) kk::startup::ChapterReached();
->>>>>>> codex-hw-fallback
   if (request && g_jump_requested && !g_level_loaded) {
     g_level_loaded = true;
     g_level_loaded_ms = NowMs();

@@ -8,12 +8,18 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import shutil
+import os
 
 sdk = Path(r"F:\KK-native-renderer\sdk-src-upscalers")
 build = sdk / "out/build/win-amd64"
 workspace = Path(__file__).resolve().parents[2]
 dest = Path(sys.argv[1]).resolve()
-assert dest.is_relative_to(Path(r"F:\KK-native-renderer\runs"))
+install = Path(r"F:\KK-native-renderer\sdk-vulkan-upscalers-035")
+assert dest.is_relative_to(Path(r"F:\KK-native-renderer\runs")) or dest == install
+if dest == install:
+    assert not dest.exists(), "Refuse to overwrite an existing isolated SDK"
+    shutil.copytree(Path(r"F:\KK-native-renderer\sdk-vulkan-upscalers"), dest)
 dest.mkdir(parents=True, exist_ok=True)
 
 
@@ -117,3 +123,19 @@ link_cmd = link_cmd.replace("/DEF:src\\system\\CMakeFiles\\rexruntime.dir\\Relea
 (dest / "link-command.txt").write_text(link_cmd)
 subprocess.run(link_cmd, cwd=build, check=True)
 print(dest / "rexruntime.dll")
+if dest == install:
+    for suffix in ["dll", "pdb"]:
+        if (dest / f"rexruntime.{suffix}").exists():
+            shutil.copy2(dest / f"rexruntime.{suffix}", dest / "win-amd64/bin" / f"rexruntime.{suffix}")
+    shutil.copy2(dest / "rexruntime.lib", dest / "win-amd64/lib/rexruntime.lib")
+    shutil.copy2(dest / "include/rex/ui/vulkan/presenter.h", dest / "win-amd64/include/rex/ui/vulkan/presenter.h")
+    # The AMD patch affects compiled GLSL, so copying the original signed DLL
+    # would silently discard it. Rebuild only inside the isolated SDK copy.
+    ffx = dest / "fidelityfx"
+    shutil.copytree(Path(r"F:\KK-native-renderer\downloads\amd-fidelityfx-sdk-v1.1.4\x"), ffx)
+    subprocess.run(["git", "apply", "--ignore-space-change", str(workspace / "native-renderer/sdk-patches/0035-amd-fsr-luma-history-format.patch")], cwd=ffx, check=True)
+    env = dict(os.environ, VULKAN_SDK=r"F:\KK-native-renderer\downloads\vulkan-sdk-latest\sdk")
+    subprocess.run(["cmake", "-S", str(ffx / "ffx-api"), "-B", str(dest / "fidelityfx-build"),
+                    "-G", "Visual Studio 17 2022", "-A", "x64", "-DFFX_API_BACKEND=VK_X64"], env=env, check=True)
+    subprocess.run(["cmake", "--build", str(dest / "fidelityfx-build"), "--config", "Release", "--parallel", "4"], env=env, check=True)
+    shutil.copy2(ffx / "ffx-api/bin/amd_fidelityfx_vk.dll", ffx / "PrebuiltSignedDLL/amd_fidelityfx_vk.dll")
