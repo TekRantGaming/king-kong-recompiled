@@ -131,6 +131,21 @@ try {
 } finally {
   # Stop the monitor first. Closing a stalled child must not look like a crash that it should retry.
   if ($parent -and !$parent.HasExited) { Stop-Process -Id $parent.Id; $parent.WaitForExit() }
+  # Capture children created since the last polling snapshot, and any normal launcher relaunch descendants.
+  $remaining=@(Get-CimInstance Win32_Process -Filter "Name='king_kong.exe'" | Where-Object { $_.ExecutablePath -eq "$run\king_kong.exe" })
+  do {
+    $added=$false
+    foreach ($child in $remaining) {
+      if ($known.ContainsKey([int]$child.ParentProcessId) -and !$known.ContainsKey([int]$child.ProcessId)) {
+        $known[[int]$child.ProcessId]=$true; $added=$true
+      }
+    }
+  } while ($added)
+  foreach ($child in $remaining) {
+    if ($known.ContainsKey([int]$child.ProcessId) -and $child.CommandLine -notlike '*--kk_startup_child=true*') {
+      Stop-Process -Id $child.ProcessId -ErrorAction SilentlyContinue
+    }
+  }
   # The monitor has no window; close only its recorded children, then its own PID if necessary.
   foreach ($id in @($known.Keys)) {
     if ($parent -and $id -eq $parent.Id) { continue }
