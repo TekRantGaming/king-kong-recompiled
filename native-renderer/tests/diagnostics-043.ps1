@@ -45,8 +45,14 @@ if (!(Test-Path -LiteralPath $lockPath)) { Set-Content -LiteralPath $lockPath 'f
 while ($true) {
   $state=(Get-Content -LiteralPath $lockPath -Raw).Trim()
   if ($state.StartsWith('user')) { Write-Output 'USER LOCK: code-only, no game launched'; exit 3 }
-  $ours=Get-Process king_kong -ErrorAction SilentlyContinue | Where-Object { $_.Path -like 'F:\KK-native-renderer\runs\*' -or $_.Path -like 'F:\KK-native-renderer\wt\*' }
-  if ($state -eq 'free' -and !$ours) { break }
+  $games=@(Get-Process king_kong -ErrorAction SilentlyContinue)
+  $userGame=@($games | Where-Object { !$_.Path -or ($_.Path -notlike 'F:\KK-native-renderer\runs\*' -and $_.Path -notlike 'F:\KK-native-renderer\wt\*') })
+  if ($userGame.Count) {
+    Write-Output 'Waiting for the user game to close; leaving it untouched.'
+    Start-Sleep -Seconds 60
+    continue
+  }
+  if ($state -eq 'free' -and !$games.Count) { break }
   Write-Output "Waiting for game lock: $state"
   Start-Sleep -Seconds 30
 }
