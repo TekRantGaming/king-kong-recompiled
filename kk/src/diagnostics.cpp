@@ -167,6 +167,15 @@ std::string RedactDiagnostics(std::string text) {
 
 void RefreshDiagnostics() {
   std::ostringstream out;
+#if defined(_WIN32)
+  DEVMODEW desktop{};
+  desktop.dmSize = sizeof(desktop);
+  out << "Primary desktop mode (Windows, may differ from the selected monitor): ";
+  if (EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &desktop))
+    out << desktop.dmPelsWidth << 'x' << desktop.dmPelsHeight << " @ " << desktop.dmDisplayFrequency
+        << " Hz, " << desktop.dmBitsPerPel << " bits\n";
+  else out << "unavailable\n";
+#endif
   out << "Settings (requested; actual selection/failures appear in the log):\n";
   for (const char* key : {"kk_update_channel", "fullscreen", "kk_fullscreen_mode", "window_width", "window_height",
        "monitor", "kk_render_quality", "native_render_scale", "ao_mode", "ao_strength",

@@ -38,6 +38,7 @@ if ($LauncherRun) {
   $clipboard=[IO.File]::ReadAllText("$LauncherRun\userdata\diagnostics-clipboard.txt")
   Check-PrivateText $clipboard
   Check ($clipboard.Contains('King Kong PC port diagnostics') -and $clipboard.Contains('native_backend = vulkan')) 'Invalid clipboard report'
+  Check ($clipboard.Contains('Primary desktop mode (Windows')) 'Desktop mode missing from clipboard report'
   $log=[IO.File]::ReadAllText("$LauncherRun\run.log")
   Check ($log.Contains('KK dev: diagnostics clipboard action exercised; saved crash reports true')) 'Clipboard action did not run with saved crash'
   Check ($log.Contains('KK: offering saved local crash reports in the launcher')) 'Next-launch crash offer did not run'

@@ -44,6 +44,7 @@ int main(int argc, char** argv) {
     const auto report = kk::DiagnosticsReport();
     Check(report.find("Version: test043") != std::string::npos, "version missing");
     Check(report.find("kk_update_channel = beta") != std::string::npos, "channel missing");
+    Check(report.find("Primary desktop mode (Windows") != std::string::npos, "desktop mode missing");
     Check(report.find("startup fallback to Classic") != std::string::npos, "fallback missing");
     Check(report.find("test error 19:") != std::string::npos, "latest error missing");
     Check(report.find("test error 0:") == std::string::npos, "unbounded errors");
