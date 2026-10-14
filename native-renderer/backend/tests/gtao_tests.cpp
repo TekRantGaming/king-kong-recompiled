@@ -22,6 +22,7 @@
 #include "backend/scene_lighting.h"
 #include "backend/tests/check.h"
 #include "backend/tests/vk_test_device.h"
+#include "backend/tests/test_device_proxy.h"
 
 using namespace nr;
 using namespace nr::test;
@@ -711,6 +712,100 @@ TEST(Lighting_TimersGroupContiguousDraws) {
     cl->close();
     Device()->Execute(cl);
     Device()->WaitIdle();
+  }
+}
+
+namespace {
+
+class FailingBindings final : public nvrhi::TestDeviceProxy {
+ public:
+  using TestDeviceProxy::TestDeviceProxy;
+  unsigned calls = 0, fail_at = 0;
+  nvrhi::BindingSetHandle createBindingSet(const nvrhi::BindingSetDesc& desc,
+                                          nvrhi::IBindingLayout* layout) override {
+    if (++calls == fail_at) return nullptr;
+    return device_->createBindingSet(desc, layout);
+  }
+};
+
+// A scene with a camera and populated depth, followed by a hooked water draw.
+struct LightingScene {
+  nvrhi::TextureHandle depth, color;
+  std::vector<uint8_t> constants = std::vector<uint8_t>(4096);
+  SceneLighting::Draw draw;
+  explicit LightingScene(nvrhi::IDevice* device) {
+    depth = DepthTexture(device, std::vector<float>(64 * 64, 0.995f), 64, 64);
+    nvrhi::TextureDesc td;
+    td.width = td.height = 64;
+    td.format = nvrhi::Format::RGBA16_FLOAT;
+    td.isRenderTarget = true;
+    td.initialState = nvrhi::ResourceStates::RenderTarget;
+    td.keepInitialState = true;
+    color = device->createTexture(td);
+    Camera camera;
+    camera.Setup(1);
+    float rows[16];
+    camera.Rows(rows);
+    for (unsigned i = 0; i < 16; ++i) {
+      uint32_t bits;
+      std::memcpy(&bits, rows + i, 4);
+      for (unsigned j = 0; j < 4; ++j) constants[i * 4 + j] = uint8_t(bits >> (24 - j * 8));
+    }
+    draw.color = {1, color};
+    draw.depth = {2, depth};
+    draw.frame_size = true;
+    draw.vs_constants = constants.data();
+    draw.screen = Screen(64, 64, 1);
+    draw.state.color = draw.state.depth = draw.state.depth_test = draw.state.depth_write = true;
+    draw.state.blend_control = 0x00010001;  // ONE/ZERO, unblended
+    draw.state.primitive = 4;
+  }
+  void Opaque(SceneLighting& lighting, nvrhi::ICommandList* cl, uint64_t frame) {
+    draw.frame = frame;
+    draw.family = LightFamily::kNone;
+    draw.state.ps_hash = 0;
+    lighting.OnDraw(cl, draw);
+  }
+  void Water(SceneLighting& lighting, nvrhi::ICommandList* cl) {
+    draw.family = LightFamily::kWater;
+    draw.state.ps_hash = 0xF22A76FB8F40F38Bull;
+    lighting.OnDraw(cl, draw);
+  }
+};
+
+}  // namespace
+
+TEST(Lighting_SsrBindingFailureStopsPreparationAndRecovers) {
+  if (!Device()) return;
+  ErrorsChecked errors;
+  // Two initial sets, six depth downsample sets, four colour downsample sets.
+  for (unsigned fail : {1u, 2u, 3u, 9u}) {
+    FailingBindings device(Device()->device());
+    LightingConfig config;
+    config.water = WaterReflections::kSsr;
+    SceneLighting lighting(&device, config);
+    CHECK(lighting.Initialize());
+    LightingScene scene(&device);
+    auto cl = device.createCommandList(nvrhi::CommandListParameters{});
+    cl->open();
+    cl->clearTextureFloat(scene.color, nvrhi::AllSubresources, nvrhi::Color(0.2f));
+    scene.Opaque(lighting, cl, 0);
+    device.fail_at = fail;
+    scene.Water(lighting, cl);
+    CHECK_EQ(device.calls, fail);  // no remaining passes attempted
+    CHECK(!lighting.ssr().valid);
+    CHECK_EQ(lighting.stats().ssr_prepared, uint64_t(0));
+    lighting.OnPresent(cl);
+    cl->close(); Device()->Execute(cl); Device()->WaitIdle();
+    device.fail_at = 0;
+    cl->open();
+    scene.Opaque(lighting, cl, 1);
+    scene.Water(lighting, cl);
+    CHECK(lighting.ssr().valid);
+    CHECK_EQ(lighting.stats().ssr_prepared, uint64_t(1));
+    CHECK_EQ(device.calls, fail + 12);
+    lighting.OnPresent(cl);
+    cl->close(); Device()->Execute(cl); Device()->WaitIdle();
   }
 }
 

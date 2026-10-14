@@ -393,15 +393,18 @@ bool SceneLighting::EnsureSsrImages(uint32_t w, uint32_t h) {
   return true;
 }
 
-void SceneLighting::Dispatch(nvrhi::ICommandList* cl, Pass& pass, nvrhi::IBindingSet* set, uint32_t w, uint32_t h) {
+bool SceneLighting::Dispatch(nvrhi::ICommandList* cl, Pass& pass, nvrhi::IBindingSet* set, uint32_t w, uint32_t h) {
+  if (!set) return false;
   nvrhi::ComputeState cs;
   cs.pipeline = pass.pipeline;
   cs.bindings = {set};
   cl->setComputeState(cs);
   cl->dispatch(std::max((w + 7) / 8, 1u), std::max((h + 7) / 8, 1u), 1);
+  return true;
 }
 
 bool SceneLighting::PrepareSsr(nvrhi::ICommandList* cl) {
+  ssr_.valid = false;
   AoProjection p;
   AoScreen sc;
   if (!camera_.Get(frame_, p, sc)) {
@@ -445,14 +448,14 @@ bool SceneLighting::PrepareSsr(nvrhi::ICommandList* cl) {
   // Binding sets are made per frame: the scene's targets can change (a new size, a new chapter), and
   // NVRHI keeps them alive while the GPU uses them.
   write(k);
-  Dispatch(cl, depth_pass_,
+  if (!Dispatch(cl, depth_pass_,
            make_set(depth_pass_, {cb, S::Texture_SRV(0, scene_depth_.texture),
                                   S::Texture_UAV(0, ssr_depth_, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(0, 1, 0, 1))}),
-           w, h);
-  Dispatch(cl, color_pass_,
+           w, h)) return false;
+  if (!Dispatch(cl, color_pass_,
            make_set(color_pass_, {cb, S::Texture_SRV(0, scene_color_.texture),
                                   S::Texture_UAV(0, ssr_color_, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(0, 1, 0, 1))}),
-           w, h);
+           w, h)) return false;
   auto down = [&](Pass& pass, nvrhi::ITexture* image, uint32_t mips) {
     uint32_t sw = w, sh = h;
     for (uint32_t mip = 1; mip < mips; ++mip) {
@@ -464,17 +467,18 @@ bool SceneLighting::PrepareSsr(nvrhi::ICommandList* cl) {
       km.mip_source[0] = int32_t(sw);
       km.mip_source[1] = int32_t(sh);
       write(km);
-      Dispatch(cl, pass,
+      if (!Dispatch(cl, pass,
                make_set(pass, {cb, S::Texture_SRV(1, image, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(mip - 1, 1, 0, 1)),
                                S::Texture_UAV(0, image, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(mip, 1, 0, 1))}),
-               mw, mh);
+               mw, mh)) return false;
       sw = mw;
       sh = mh;
     }
+    return true;
   };
   const uint32_t depth_mips = ssr_depth_->getDesc().mipLevels, color_mips = ssr_color_->getDesc().mipLevels;
-  down(depth_down_pass_, ssr_depth_, depth_mips);
-  down(color_down_pass_, ssr_color_, color_mips);
+  if (!down(depth_down_pass_, ssr_depth_, depth_mips) ||
+      !down(color_down_pass_, ssr_color_, color_mips)) return false;
   // The water's draws sample them through the bindless table.
   cl->setTextureState(ssr_depth_, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
   cl->setTextureState(ssr_color_, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);

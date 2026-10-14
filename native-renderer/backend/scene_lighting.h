@@ -107,7 +107,7 @@ class SceneLighting {
   };
   bool MakePass(Pass& pass, const void* data, size_t size, const char* entry,
                 const std::vector<nvrhi::BindingLayoutItem>& items);
-  void Dispatch(nvrhi::ICommandList* cl, Pass& pass, nvrhi::IBindingSet* set, uint32_t w, uint32_t h);
+  bool Dispatch(nvrhi::ICommandList* cl, Pass& pass, nvrhi::IBindingSet* set, uint32_t w, uint32_t h);
   bool EnsureSsrImages(uint32_t w, uint32_t h);
 
   nvrhi::IDevice* device_;
