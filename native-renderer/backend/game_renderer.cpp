@@ -566,6 +566,9 @@ void GameRenderer::TrimClearTargets() {
   // Upscaler and GTAO keep independent attachment views and can write targets
   // outside GetFramebuffer. Until those writes participate in clear tracking,
   // retain their targets rather than incorrectly restore an old clear.
+  // Drop GTAO's old target views once on entering pressure. No image or
+  // pipeline is rebuilt here, and the next frame classifies its targets anew.
+  if (scene_ao_ && memory_pressure_samples_ == 0) scene_ao_->ForgetTargets();
   if (upscale_ || scene_ao_) return;
   for (auto& [key, t] : targets_) {
     if (!t || !t->texture || !CanEvictClearTarget(t->clear_only, bool(upscale_ || scene_ao_),

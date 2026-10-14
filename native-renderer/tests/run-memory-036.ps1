@@ -18,11 +18,11 @@ while ($true) {
 }
 try {
   $layer='F:\KK-native-renderer\downloads\vulkan-sdk-latest\sdk\Bin'
-  if (Test-Path "$layer\VkLayer_khronos_validation.json") { $env:VK_LAYER_PATH=$layer }
   $exe=(Resolve-Path "$PSScriptRoot\..\..\out\task036-tests\backend\tests\nr_memory_migration_tests.exe").Path
   $info=New-Object Diagnostics.ProcessStartInfo $exe
   $info.UseShellExecute=$false; $info.CreateNoWindow=$true; $info.WindowStyle='Hidden'
   $info.RedirectStandardOutput=$true; $info.RedirectStandardError=$true
+  if (Test-Path "$layer\VkLayer_khronos_validation.json") { $info.EnvironmentVariables['VK_LAYER_PATH']=$layer }
   $test=New-Object Diagnostics.Process; $test.StartInfo=$info; $null=$test.Start()
   $stdout=$test.StandardOutput.ReadToEndAsync(); $stderr=$test.StandardError.ReadToEndAsync()
   if (!$test.WaitForExit(120000)) { Stop-Process -Id $test.Id; throw 'GPU validation exceeded two minutes' }
