@@ -12,9 +12,9 @@
 using namespace nr;
 using namespace nr::test;
 namespace {
-nvrhi::TextureHandle Image(nvrhi::IDevice* d, uint32_t w, uint32_t h, nvrhi::Format f, bool target = false) {
+nvrhi::TextureHandle Image(nvrhi::IDevice* d, uint32_t w, uint32_t h, nvrhi::Format f, bool target = false, uint32_t mips = 1) {
   nvrhi::TextureDesc td;
-  td.width = w; td.height = h; td.format = f; td.isRenderTarget = target;
+  td.width = w; td.height = h; td.format = f; td.isRenderTarget = target; td.mipLevels = mips;
   td.initialState = nvrhi::ResourceStates::ShaderResource; td.keepInitialState = true;
   return d->createTexture(td);
 }
@@ -72,13 +72,30 @@ TEST(Lighting_WaterPlaneReflectsBrightObject) {
   const char* width=std::getenv("NR_WATER_BENCH_WIDTH");
   const uint32_t w=width ? uint32_t(std::atoi(width)) : 192,h=width ? w*9/16 : 128;
   // The pre-water scene has a bright wall at z=6 above the waterline, empty elsewhere.
-  auto depth=Image(d,w,h,nvrhi::Format::RGBA32_FLOAT);
+  uint32_t mipCount=1;
+  for(uint32_t mw=w,mh=h;(mw>1||mh>1)&&mipCount<12;++mipCount){mw=std::max(mw/2,1u);mh=std::max(mh/2,1u);}
+  auto depth=Image(d,w,h,nvrhi::Format::RGBA32_FLOAT,false,mipCount);
   auto color=Image(d,w,h,nvrhi::Format::RGBA8_UNORM);
   auto target=Image(d,w,h,nvrhi::Format::RGBA8_UNORM,true);
   std::vector<float> zs(w*h*4,1000);
   std::vector<uint32_t> rgb(w*h,0xFF000000);
   for(uint32_t y=h/8;y<h/2;y++) for(uint32_t x=w/4;x<3*w/4;x++) {zs[(y*w+x)*4]=6;rgb[y*w+x]=0xFF4080FF;}
-  Upload(d,depth,zs.data(),w*16);Upload(d,color,rgb.data(),w*4);
+  // Use the same nearest-depth hierarchy as production. A single mip at 4K
+  // cannot cross the picture within the production 64-step budget.
+  auto upload=d->createCommandList();upload->open();
+  uint32_t mw=w,mh=h;
+  for(uint32_t mip=0;mip<mipCount;mip++) {
+    upload->writeTexture(depth,0,mip,zs.data(),mw*16);
+    const uint32_t nw=std::max(mw/2,1u),nh=std::max(mh/2,1u);
+    std::vector<float> next(nw*nh*4,1000);
+    for(uint32_t y=0;y<nh;y++)for(uint32_t x=0;x<nw;x++)
+      for(uint32_t j=0;j<((y==nh-1 && (mh&1)) ? 3u : 2u);j++)
+        for(uint32_t i=0;i<((x==nw-1 && (mw&1)) ? 3u : 2u);i++)
+        next[(y*nw+x)*4]=std::min(next[(y*nw+x)*4],zs[(std::min(2*y+j,mh-1)*mw+std::min(2*x+i,mw-1))*4]);
+    zs=std::move(next);mw=nw;mh=nh;
+  }
+  upload->close();d->executeCommandList(upload);d->waitForIdle();
+  Upload(d,color,rgb.data(),w*4);
   nvrhi::ShaderDesc sd;sd.shaderType=nvrhi::ShaderType::Vertex;sd.entryName="vs_main";
   auto vs=d->createShader(sd,lighting_trace_vs,sizeof(lighting_trace_vs));
   sd.shaderType=nvrhi::ShaderType::Pixel;sd.entryName="ps_main";
@@ -98,7 +115,7 @@ TEST(Lighting_WaterPlaneReflectsBrightObject) {
   pd.renderState.depthStencilState.depthTestEnable=false;pd.renderState.depthStencilState.depthWriteEnable=false;
   pd.renderState.rasterState.cullMode=nvrhi::RasterCullMode::None;
   auto pipe=d->createGraphicsPipeline(pd,fb->getFramebufferInfo());
-  kkshaders::LightingConstants k={};k.ssrTextures[2]=1;k.ssrTextures[3]=1;
+  kkshaders::LightingConstants k={};k.ssrTextures[2]=mipCount;k.ssrTextures[3]=1;
   k.ssrRect[2]=w;k.ssrRect[3]=h;k.ssrSampler[1]=1;
   k.ssrDepth[0]=0.05f;k.ssrDepth[1]=1;k.ssrDepth[2]=0.05f;k.ssrDepth[3]=1000;
   k.ssrScreen[0]=2;k.ssrScreen[1]=-2;k.ssrScreen[2]=-1;k.ssrScreen[3]=1;
