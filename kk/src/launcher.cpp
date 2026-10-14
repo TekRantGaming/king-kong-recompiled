@@ -3578,12 +3578,16 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     const float s = S();
     const ui::Fonts f = ui::GetFonts();
     bool after_update = !setup_shaders_;
+    // One bar for the whole job (every API's shaders and pipelines), with the step under it.
     float fraction = native_pack_.Fraction();
-    uint32_t done = native_pack_.Done(), total = native_pack_.Total();
+    std::string step = native_pack_.StepText();
 #if defined(KK_DEV_TOOLS)
     if (dev_setup_ == 4) {
       after_update = false;
-      if (!native_pack_.Busy()) total = 4794, done = 2157, fraction = 0.45f;  // screenshots
+      if (!native_pack_.Busy()) {  // screenshots
+        fraction = 0.45f;
+        step = F("Step {0} of {1}: {2}", {"2", "4", F("Preparing the {0} pipelines", {"Vulkan"})});
+      }
     }
 #endif
     const std::string caption = Upper(T("PC port")) + "  " KK_DOT "  " + Upper(T(after_update ? "Update" : "Setup"));
@@ -3638,10 +3642,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       dl->AddRectFilled(ImVec2(a0, by), ImVec2(a1, by + 3 * s), color::kAccent);
     }
     ty += 3 * s + 14 * s;
-    const std::string left = total > 0 ? F("{0} of {1} shaders", {std::to_string(done), std::to_string(total)})
-                                       : T(std::string("Checking"));
+    const std::string left = fraction >= 0 && !step.empty() ? step : T(std::string("Checking"));
     const std::string right = fraction >= 0 ? std::to_string(int(fraction * 100)) + "%" : "";
-    dl->AddText(f.text, 15 * s, ImVec2(tx, ty), color::kText, left.c_str());
+    dl->AddText(f.text, 15 * s, ImVec2(tx, ty), color::kTextDim, left.c_str());
     dl->AddText(f.text, 15 * s, ImVec2(tx + wrap - ui::TextSize(f.text, 15 * s, right).x, ty), color::kTextDim,
                 right.c_str());
     ty += 20 * s + 30 * s;

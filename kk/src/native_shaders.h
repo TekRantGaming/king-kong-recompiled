@@ -33,9 +33,14 @@ class NativeShaderPack {
   bool Busy();          // started and not finished
   bool Finished();      // the last one finished (Busy() is false)
   bool Ok();            // ... and the pack is current
-  float Fraction();     // 0 to 1 while compiling, -1 before the shaders are counted or when idle
-  uint32_t Done();
-  uint32_t Total();
+  // The whole job as one bar (shader_progress.h): 0 to 1, never going back, once something is being
+  // built; -1 while it is only checking, or when idle.
+  float Fraction();
+  // Something is being compiled or prepared in this job, not only checked (the launcher's music
+  // waits for it).
+  bool Working();
+  // "Step 2 of 4: Preparing the Vulkan pipelines" (translated), "" when nothing is being built.
+  std::string StepText();
   std::string StatusText();  // for the launcher's status line (English, through T())
 
  private:

@@ -167,6 +167,11 @@ if(KK_DEV_TOOLS)
     rexglue_apply_target_settings(kk-hardware-tests)
     enable_testing()
     add_test(NAME hardware-recommendation COMMAND kk-hardware-tests)
+    # Launcher logic without a game or window: the shader job's progress bar.
+    add_executable(kk-launcher-tests tests/launcher_logic_tests.cpp)
+    target_include_directories(kk-launcher-tests PRIVATE src)
+    rexglue_apply_target_settings(kk-launcher-tests)
+    add_test(NAME launcher-logic COMMAND kk-launcher-tests)
 endif()
 
 # Button prompt pictures (kk_button_prompts) live beside the program.

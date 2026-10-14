@@ -20,6 +20,9 @@
 #endif
 
 #include "launcher_text.h"
+#include "shader_progress.h"
+
+#include <algorithm>
 
 namespace kk {
 
@@ -78,10 +81,25 @@ struct NativeShaderPack::Impl {
   NrShaderPackProgress last{};
   bool started = false;
   bool logged = false;
+  bool worked = false;  // this job has built something (not only checked)
+  ShaderProgressBar bar;
 
   void Poll() {
     if (!job) return;
     api->poll(job, &last);
+    if (last.working) worked = true;
+    if (worked && !last.finished) {
+      ShaderJobState s;
+      s.step = last.step;
+      s.steps = last.steps;
+      s.step_kind = last.step_kind;
+      s.phase = last.phase;
+      s.pass = last.pass;
+      s.passes = last.passes;
+      s.done = last.done;
+      s.total = last.total;
+      bar.Update(s);
+    }
     if (last.finished && !logged) {
       logged = true;
       if (last.ok)
@@ -111,6 +129,8 @@ void NativeShaderPack::Start(const std::filesystem::path& cache_dir, const std::
   impl_->api = PluginApi();
   impl_->last = {};
   impl_->logged = false;
+  impl_->worked = false;
+  impl_->bar.Reset();
   impl_->started = true;
   impl_->job = impl_->api->start(Utf8(cache_dir).c_str(), Utf8(game_dir).c_str(), 0, 1, force ? 1 : 0);
 }
@@ -132,19 +152,20 @@ bool NativeShaderPack::Finished() {
 bool NativeShaderPack::Ok() { return Finished() && impl_->last.ok; }
 
 float NativeShaderPack::Fraction() {
-  impl_->Poll();
-  if (!Busy() || impl_->last.total == 0) return -1.0f;
-  return float(impl_->last.done) / float(impl_->last.total);
+  if (!Busy() || !impl_->worked) return -1.0f;
+  return impl_->bar.Shown();
 }
 
-uint32_t NativeShaderPack::Done() {
-  impl_->Poll();
-  return impl_->last.done;
-}
+bool NativeShaderPack::Working() { return Busy() && impl_->worked; }
 
-uint32_t NativeShaderPack::Total() {
-  impl_->Poll();
-  return impl_->last.total;
+std::string NativeShaderPack::StepText() {
+  if (!Working() || impl_->last.steps <= 0 || impl_->last.step <= 0) return {};
+  const std::string backend = impl_->last.backend;
+  const std::string api = backend == "spirv" ? "Vulkan" : backend == "dxil" ? "Direct3D 12" : backend;
+  const std::string what = impl_->last.step_kind == 0 ? F("Compiling the {0} shaders", {api})
+                                                      : F("Preparing the {0} pipelines", {api});
+  return F("Step {0} of {1}: {2}", {std::to_string(std::min(impl_->last.step, impl_->last.steps)),
+                                    std::to_string(impl_->last.steps), what});
 }
 
 std::string NativeShaderPack::StatusText() {
@@ -169,8 +190,8 @@ bool NativeShaderPack::Busy() { return false; }
 bool NativeShaderPack::Finished() { return false; }
 bool NativeShaderPack::Ok() { return false; }
 float NativeShaderPack::Fraction() { return -1.0f; }
-uint32_t NativeShaderPack::Done() { return 0; }
-uint32_t NativeShaderPack::Total() { return 0; }
+bool NativeShaderPack::Working() { return false; }
+std::string NativeShaderPack::StepText() { return {}; }
 std::string NativeShaderPack::StatusText() { return {}; }
 
 #endif

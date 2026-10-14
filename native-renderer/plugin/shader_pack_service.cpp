@@ -2,6 +2,7 @@
 #include "plugin/plugin_settings.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -11,6 +12,7 @@
 #include <sstream>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
@@ -186,6 +188,9 @@ struct NrShaderPackJob {
   std::string player_records;
   bool need_driver_cache = false;
   std::string failed_backends;  // --native_failed_backends when the job started
+  // The steps (NrShaderPackProgress): per API its shaders, then its pipelines in two passes.
+  std::atomic<int> step{0}, steps{0}, step_kind{0}, pass{0};
+  std::atomic<bool> preparing{false};  // the pipelines are being prepared (not only checked)
 };
 
 namespace {
@@ -230,6 +235,7 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
     double seconds = 0;
     uint32_t compiled = 0;
     std::string warnings;
+    std::vector<kkshaders::PackBackend> backends;
     for (auto backend : {kkshaders::PackBackend::Spirv, kkshaders::PackBackend::Dxil}) {
 #if !NR_HAS_VULKAN
       if (backend == kkshaders::PackBackend::Spirv) continue;
@@ -241,6 +247,15 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
                     kkshaders::packBackendName(backend));
         continue;
       }
+      backends.push_back(backend);
+    }
+    job->steps = int(backends.size()) * 2;
+    for (size_t b = 0; b < backends.size(); ++b) {
+      const auto backend = backends[b];
+      job->progress.phase = kkshaders::PackBuildProgress::kStarting;
+      job->step_kind = 0;
+      job->pass = 0;
+      job->step = int(b) * 2 + 1;
       auto options = job->options;
       options.backend = backend;
       {
@@ -256,6 +271,11 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
                   kkshaders::packBackendName(backend), r.stamp.shaders, r.seconds,
                   r.ok ? (r.upToDate ? "current" : "built") : r.error);
       if (!r.ok || job->progress.cancel) break;
+      // The pipelines' step (ends at once when they are ready).
+      job->progress.done = 0;
+      job->progress.total = 0;
+      job->step_kind = 1;
+      job->step = int(b) * 2 + 2;
       auto marker = r.pack;
       marker += ".pipelines-ready";
       const auto& plan = job->prewarm[backend == kkshaders::PackBackend::Spirv ? 0 : 1];
@@ -292,8 +312,12 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
 #endif
         if (host) {
           bool completed = true;
+          job->preparing = true;
           for (bool temporal : {false, true}) {
             if (job->progress.cancel) { completed = false; break; }
+            job->pass = temporal ? 1 : 0;
+            job->progress.done = 0;
+            job->progress.total = 0;
             auto settings = job->prewarm[backend == kkshaders::PackBackend::Spirv ? 0 : 1];
             // Prepare both layouts even when setup currently has no upscaler selected.
             // Pipeline keys depend on the scale-aware layout, not image dimensions.
@@ -326,6 +350,7 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
             }
             }
           host->WaitForIdle();
+          job->preparing = false;
           if (completed && !job->progress.cancel) {
             std::ofstream ready(marker, std::ios::binary | std::ios::trunc);
             ready << expected;
@@ -381,6 +406,16 @@ void PollJob(NrShaderPackJob* job, NrShaderPackProgress* out) {
   out->done = job->progress.done;
   out->total = job->progress.total;
   out->failed = job->progress.failed;
+  out->step = job->step;
+  out->steps = job->steps;
+  out->step_kind = job->step_kind;
+  out->pass = job->pass;
+  out->passes = 2;
+  // Shaders: working once the pack turned out stale (reading the database, compiling, writing).
+  const int phase = job->progress.phase;
+  out->working = job->step_kind == 1 ? int(job->preparing.load())
+                                     : int(phase >= kkshaders::PackBuildProgress::kReading &&
+                                           phase <= kkshaders::PackBuildProgress::kWriting);
   nr::Copy(out->backend, sizeof(out->backend), kkshaders::packBackendName(job->options.backend));
   nr::Copy(out->pack, sizeof(out->pack), nr::ToUtf8(kkshaders::packPath(job->options)));
   if (!job->finished) return;

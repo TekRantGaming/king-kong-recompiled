@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define NR_SHADER_PACK_API_VERSION 2  // 2: start takes force
+#define NR_SHADER_PACK_API_VERSION 3  // 2: start takes force; 3: the job's steps
 
 typedef struct NrShaderPackJob NrShaderPackJob;
 
@@ -31,6 +31,15 @@ typedef struct NrShaderPackProgress {
   char backend[8];    // "spirv" or "dxil"
   char pack[1024];    // the pack's path
   char message[512];  // what happened, for the log (an error, or a summary)
+  // The job's steps, for one progress bar over all of it: per graphics API, its shaders
+  // (step_kind 0: done/total count shaders) and then its pipelines (step_kind 1: done/total count
+  // pipelines, in `passes` passes, `pass` the current one). `backend` is the step's API. A step with
+  // nothing to do ends at once.
+  int step;           // 1-based, 0 before the first one starts
+  int steps;          // how many the job has (2 per graphics API)
+  int step_kind;      // 0 shaders, 1 pipelines
+  int pass, passes;   // pipelines: the current pass (0-based) and how many there are
+  int working;        // 1 while something is being compiled or prepared (not only checked)
 } NrShaderPackProgress;
 
 typedef struct NrShaderPackApi {
