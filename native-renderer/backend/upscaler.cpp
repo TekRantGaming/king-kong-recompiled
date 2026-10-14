@@ -2,6 +2,7 @@
 
 #include "backend/upscaler.h"
 
+#include <mutex>
 #include <vector>
 
 #include "backend/log.h"
@@ -26,6 +27,28 @@
 #endif
 
 namespace nr {
+
+namespace {
+std::mutex g_idle_mutex;
+nvrhi::IDevice* g_idle_device = nullptr;
+std::function<void()> g_idle_wait;
+}  // namespace
+
+void SetUpscalerIdleWait(nvrhi::IDevice* device, std::function<void()> wait) {
+  std::lock_guard lock(g_idle_mutex);
+  g_idle_device = wait ? device : nullptr;
+  g_idle_wait = std::move(wait);
+}
+
+void UpscalerWaitForIdle(nvrhi::IDevice* device) {
+  std::function<void()> wait;
+  {
+    std::lock_guard lock(g_idle_mutex);
+    if (device && device == g_idle_device) wait = g_idle_wait;
+  }
+  if (wait) wait();
+  else if (device) device->waitForIdle();
+}
 
 std::wstring UpscalerDllFolder() {
 #if defined(_WIN32)

@@ -77,7 +77,7 @@ uint32_t RoundSize(uint32_t guest, float scale) {
 
 // ---------------------------------------------------------------- setup
 
-bool GameRenderer::UpscaleSetup() {
+bool GameRenderer::UpscaleSetup(PreparedUpscaler* prepared) {
   auto u = std::make_unique<GameUpscale>();
   u->config = options_.upscale;
   u->out_x = options_.render_scale_x;
@@ -89,7 +89,14 @@ bool GameRenderer::UpscaleSetup() {
     u->name = "bilinear stretch";
   } else {
     UpscalerKind chosen = UpscalerKind::kOff;
-    u->upscaler = CreateUpscaler(device_, u->config, &chosen, &why);
+    if (prepared) {
+      // Made on a worker while the game kept drawing (a live change, game_effects.cpp).
+      u->upscaler = std::move(prepared->upscaler);
+      chosen = prepared->chosen;
+      why = prepared->why;
+    } else {
+      u->upscaler = CreateUpscaler(device_, u->config, &chosen, &why);
+    }
     if (u->upscaler) {
       u->kind = chosen;
       u->name = u->upscaler->Name();
@@ -118,7 +125,8 @@ bool GameRenderer::UpscaleSetup() {
   if (RoundSize(options_.guest_frame_height, u->in_y) != in.height) u->in_y = (float(in.height) + 0.25f) / float(options_.guest_frame_height);
   const float ratio_x = float(out.width) / float(in.width), ratio_y = float(out.height) / float(in.height);
   u->jitter_phases = JitterPhaseCount(ratio_x, ratio_y);
-  u->mip_bias = (u->config.debug & 64) ? 0.0f : (u->config.mip_bias_auto ? UpscaleMipBias(std::max(ratio_x, ratio_y)) : u->config.mip_bias);
+  u->ratio = std::max(ratio_x, ratio_y);
+  u->mip_bias = UpscaleMipBiasFor(*u);
   u->tracker = UpscaleFrameTracker(u->config.point);
   if (!u->config.rules_file.empty()) {
     std::ifstream f(u->config.rules_file, std::ios::binary);
@@ -141,10 +149,36 @@ bool GameRenderer::UpscaleSetup() {
   return true;
 }
 
+float GameRenderer::UpscaleMipBiasFor(const GameUpscale& u) {
+  if (u.config.debug & 64) return 0.0f;
+  return u.config.mip_bias_auto ? UpscaleMipBias(u.ratio) : u.config.mip_bias;
+}
+
 bool GameRenderer::UpscaleInitialize() {
   GameUpscale& u = *upscale_;
   u.tracker.set_rules(&u.rules);
   u.tracker.set_classifier(&u.classifier);
+  if (upscale_passes_.pass_layout) {
+    // Made again for a live change: the passes of the first one (their pipelines are keyed by these
+    // shaders, so they are made once).
+    const UpscalePasses& p = upscale_passes_;
+    u.vs_fullscreen = p.vs_fullscreen;
+    u.camera_ps = p.camera_ps;
+    u.object_ps = p.object_ps;
+    u.reactive_ps = p.reactive_ps;
+    u.depth_ps = p.depth_ps;
+    u.stretch_ps = p.stretch_ps;
+    u.show_motion_ps = p.show_motion_ps;
+    u.pass_layout = p.pass_layout;
+    u.motion_layout = p.motion_layout;
+    u.motion_set = p.motion_set;
+    u.motion_vs_constants = p.motion_vs_constants;
+    u.motion_draw_constants = p.motion_draw_constants;
+    u.motion_constants = p.motion_constants;
+    u.linear_clamp = p.linear_clamp;
+    UpscaleInitializeTimers();
+    return true;
+  }
   const bool spirv = device_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN;
   auto shader = [&](const void* dxil, size_t dxil_size, const void* spv, size_t spv_size, nvrhi::ShaderType type,
                     const char* entry, const char* name) {
@@ -228,6 +262,27 @@ bool GameRenderer::UpscaleInitialize() {
         !UpscalePipeline(u.stretch_ps, info, nvrhi::ColorMask::Alpha) ||
         !UpscalePipeline(u.show_motion_ps, info, nvrhi::ColorMask::All)) return false;
   }
+  UpscalePasses& p = upscale_passes_;
+  p.vs_fullscreen = u.vs_fullscreen;
+  p.camera_ps = u.camera_ps;
+  p.object_ps = u.object_ps;
+  p.reactive_ps = u.reactive_ps;
+  p.depth_ps = u.depth_ps;
+  p.stretch_ps = u.stretch_ps;
+  p.show_motion_ps = u.show_motion_ps;
+  p.pass_layout = u.pass_layout;
+  p.motion_layout = u.motion_layout;
+  p.motion_set = u.motion_set;
+  p.motion_vs_constants = u.motion_vs_constants;
+  p.motion_draw_constants = u.motion_draw_constants;
+  p.motion_constants = u.motion_constants;
+  p.linear_clamp = u.linear_clamp;
+  UpscaleInitializeTimers();
+  return true;
+}
+
+void GameRenderer::UpscaleInitializeTimers() {
+  GameUpscale& u = *upscale_;
   if (u.config.gpu_time) {
     u.timer = std::make_unique<AoGpuTimer>(device_, "everything at the upscale point", "upscaler GPU time");
     u.sdk_timer = std::make_unique<AoGpuTimer>(device_, u.name.c_str(), "upscaler GPU time");
@@ -235,8 +290,11 @@ bool GameRenderer::UpscaleInitialize() {
     u.timer->EnableTrace(".upscale-gpu.csv");
     u.sdk_timer->EnableTrace(".sdk-gpu.csv");
     u.motion_timer->EnableTrace(".motion-gpu.csv");
+  } else if (options_.effect_settings) {
+    // The graphics panel's readout only (no log lines).
+    u.timer = std::make_unique<AoGpuTimer>(device_, "everything at the upscale point", "upscaler GPU time");
+    u.timer->set_quiet(true);
   }
-  return true;
 }
 
 bool GameRenderer::OutputGeneration() const {

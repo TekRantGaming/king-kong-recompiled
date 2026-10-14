@@ -168,8 +168,26 @@ float GameRenderer::LightingShadowScale() const {
 
 void GameRenderer::LightingInitialize() {
   const LightingConfig& l = options_.lighting;
-  if (!l.active() && !options_.effect_settings) return;
-  if (!options_.effect_settings && (l.water_on() || l.volumetrics_on() || l.gpu_time)) {
+  const bool live = bool(options_.effect_settings);
+  if (!l.active() && !live) return;
+  if (live && l.any()) {
+    // Live settings: every pass's pipelines, so the options can change later (game_effects.cpp); the
+    // timers feed the graphics panel (logged only with --native_lighting_gpu_time).
+    LightingConfig all = l;
+    all.water = WaterReflections::kSsr;
+    all.volumetrics = Volumetrics::kHigh;
+    all.gpu_time = true;
+    scene_lighting_ = std::make_unique<SceneLighting>(device_, all);
+    if (!scene_lighting_->Initialize()) {
+      scene_lighting_.reset();
+    } else {
+      for (int i = 0; i < 3; ++i)
+        if (AoGpuTimer* t = scene_lighting_->timer(i)) t->set_quiet(!l.gpu_time);
+      LightingConfig wanted = l;
+      wanted.gpu_time = true;
+      scene_lighting_->SetConfig(wanted);
+    }
+  } else if (!live && (l.water_on() || l.volumetrics_on() || l.gpu_time)) {
     scene_lighting_ = std::make_unique<SceneLighting>(device_, l);
     if (!scene_lighting_->Initialize()) scene_lighting_.reset();
   }

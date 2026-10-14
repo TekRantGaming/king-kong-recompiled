@@ -295,31 +295,52 @@ GameSettings ReadGameSettings(bool vulkan) {
   ReadGiConfig(game.gi);
   ReadUpscaleConfig(game.upscale);
   ReadLightingConfig(game.lighting);
-  game.effect_settings = [gi = game.gi, lighting = game.lighting, quality = game.ao.quality,
+  // The settings the graphics panel (F8) and the in-game pages change while the game runs: read once a
+  // frame by the game renderer (effect_settings.h). The init-only parts (tuning, debugging, rule
+  // files) stay as read above.
+  game.effect_settings = [gi = game.gi, lighting = game.lighting, quality = game.ao.quality, upscale = game.upscale,
                           shadow_override = float(REXCVAR_GET(native_shadow_scale))]() mutable {
     EffectSettings s;
-    // Runtime getters take the registry lock. Direct REXCVAR_GET string references can race
-    // a UI setter now that these flags are hot reloadable.
+    // By name: the registry's lock guards against the UI thread setting a string at the same time.
     auto get = [](const char* name) { return rex::cvar::GetFlagByName(name); };
-    auto number = [&](const char* name) { return std::atof(get(name).c_str()); };
+    auto number = [&](const char* name, double fallback) {
+      const std::string text = get(name);
+      char* end = nullptr;
+      const double v = std::strtod(text.c_str(), &end);
+      return end && end != text.c_str() ? v : fallback;
+    };
     ParseAoQuality(get("native_ao_quality"), quality);
     s.ao_quality = quality;
     ParseGiLevel(get("native_gi"), gi.level);
-    gi.intensity = float(std::clamp(number("native_gi_intensity"), 0.0, 10.0));
+    ParseGiQuality(get("native_gi_quality"), gi.quality);
+    gi.intensity = float(std::clamp(number("native_gi_intensity", 1.0), 0.0, 8.0));
     ParseShadowQuality(get("native_shadow_quality"), lighting.shadows);
     ParseWaterReflections(get("native_water_reflections"), lighting.water);
     ParseVolumetrics(get("native_volumetrics"), lighting.volumetrics);
-    lighting.ssr_strength = float(std::clamp(number("native_ssr_strength"), 0.0, 4.0));
-    lighting.volumetric_strength = float(std::clamp(number("native_volumetric_strength"), 0.0, 10.0));
-    // Timers are always available to the beta overlay; they never wait for GPU results.
-    gi.gpu_time = lighting.gpu_time = true;
+    lighting.shadow_softness = float(std::clamp(number("native_shadow_softness", 1.0), 0.1, 10.0));
+    lighting.ssr_strength = float(std::clamp(number("native_ssr_strength", 1.0), 0.0, 4.0));
+    lighting.volumetric_strength = float(std::clamp(number("native_volumetric_strength", 1.0), 0.0, 10.0));
     s.gi = gi;
     s.lighting = lighting;
     s.shadow_scale = shadow_override > 0 && !(lighting.shadows_on() && shadow_override == 1)
                          ? shadow_override : ShadowScaleForQuality(lighting.shadows);
+    ParseUpscalerKind(get("native_upscaler"), upscale.kind);
+    ParseUpscaleQuality(get("native_upscaler_quality"), upscale.quality);
+    ParseDlssPreset(get("native_upscaler_dlss_preset"), upscale.dlss_preset);
+    upscale.sharpness = float(std::min(1.0, number("native_upscaler_sharpness", -1.0)));
+    const std::string bias = get("native_upscaler_mip_bias");
+    char* end = nullptr;
+    const double bias_value = std::strtod(bias.c_str(), &end);
+    upscale.mip_bias_auto = bias.empty() || bias == "auto" || !end || *end != 0;
+    if (!upscale.mip_bias_auto) upscale.mip_bias = float(std::clamp(bias_value, -4.0, 4.0));
+    upscale.reactive = float(std::clamp(number("native_upscaler_reactive", 1.0), 0.0, 1.0));
+    s.upscale = upscale;
+    const std::string aa = get("swap_post_effect");
+    s.fxaa = aa == "fxaa" ? 1u : (aa == "fxaa_extreme" ? 2u : 0u);
+    const std::string aniso = get("anisotropic_override");
+    s.anisotropic_override = aniso.empty() ? -1 : std::atoi(aniso.c_str());
     return s;
   };
-  game.ao.gpu_time = true;
   return game;
 }
 

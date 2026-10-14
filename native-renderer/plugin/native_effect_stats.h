@@ -1,10 +1,22 @@
 #pragma once
 #include <stdint.h>
-// Existing nonblocking GPU timers, sampled after Present. Negative means no completed sample.
+// The graphics panel's readout (nr_effect_stats): published by the game renderer at the end of each frame.
+// GPU times are the renderer's timer queries (read back later, never waited for), averaged over about 20
+// frames; negative: off, or no sample yet.
 typedef struct NrEffectStats {
   uint32_t size;
-  uint32_t preparing;
-  double ao_ms, gi_ms, shadows_ms, water_ms, volumetric_ms;
+  uint32_t preparing;  // being made on a worker: 1 GI, 2 the lighting passes, 4 an upscaler, 8 shader variants
+  double ao_ms, gi_ms, shadows_ms, water_ms, volumetric_ms, upscaler_ms;
+  uint32_t input_width, input_height;    // the scene's size (the upscaler's input)
+  uint32_t output_width, output_height;  // the render scale's (the upscaler's output)
+  uint32_t upscaler_kind;                // what runs (nr::UpscalerKind; 0 off)
+  uint32_t api;                          // 1 Vulkan, 2 Direct3D 12
+  float mip_bias;                        // the upscaler's texture LOD bias for the scene's draws
+  uint32_t sampler_slots, targets, retired;  // cache sizes (the robustness test watches them)
+  uint64_t frame;
+  uint64_t live_changes;                 // upscalers made again and effects put in while running
+  double last_change_ms;                 // the render thread's time for the last one
+  char upscaler[96];                     // "DLSS 310.9.1 Quality preset M (Vulkan)", "off"
 } NrEffectStats;
 #ifdef __cplusplus
 namespace nr { bool ReadEffectStats(NrEffectStats* out); }

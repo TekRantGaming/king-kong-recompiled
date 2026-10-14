@@ -176,7 +176,7 @@ class XessUpscaler final : public Upscaler {
   }
   ~XessUpscaler() override {
     if (ctx_) {
-      device_->waitForIdle();
+      UpscalerWaitForIdle(device_);
       x_->DestroyContext(ctx_);
     }
   }
@@ -285,7 +285,7 @@ class XessUpscaler final : public Upscaler {
 
   bool Init(UpscalerSize output) {
     // XeSS's initialisation must not overlap work in flight that uses its resources.
-    device_->waitForIdle();
+    UpscalerWaitForIdle(device_);
     xess_result_t r = XESS_RESULT_ERROR_UNKNOWN;
 #if NR_HAS_VULKAN
     if (vulkan_) {

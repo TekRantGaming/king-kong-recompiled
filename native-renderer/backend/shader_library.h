@@ -92,6 +92,8 @@ class ShaderLibrary {
   void SetWaterReflections(bool on) { water_reflections_ = on; }
   // Live lighting variants. Returns null while a worker prepares the shader; the original stays usable.
   std::shared_ptr<const GameShader> LightingVariant(const GameShader& base, Replacement replacement, bool water);
+  // Live lighting variants still being made (the graphics panel's "Preparing").
+  bool lighting_variants_pending();
 
   // A shader was created: kind 0 vertex, 1 pixel.
   void OnCreated(uint32_t kind, uint32_t container, uint32_t object);

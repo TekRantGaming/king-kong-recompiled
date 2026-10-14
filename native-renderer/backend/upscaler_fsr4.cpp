@@ -165,7 +165,7 @@ class Fsr4Upscaler final : public Upscaler {
  private:
   void Destroy() {
     if (!context_) return;
-    device_->waitForIdle();
+    UpscalerWaitForIdle(device_);
     fn_->DestroyContext(&context_, nullptr);
     context_ = nullptr;
   }

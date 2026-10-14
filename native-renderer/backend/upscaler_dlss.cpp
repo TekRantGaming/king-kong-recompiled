@@ -329,7 +329,7 @@ class DlssUpscaler final : public Upscaler {
 #endif
   void Release() {
     if (!feature_) return;
-    device_->waitForIdle();
+    UpscalerWaitForIdle(device_);
 #if NR_HAS_VULKAN
     if (vulkan_) NVSDK_NGX_VULKAN_ReleaseFeature(feature_);
 #endif

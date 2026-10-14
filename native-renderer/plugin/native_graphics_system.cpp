@@ -76,21 +76,24 @@ namespace nr {
 namespace {
 
 // Upscalers work on the game's Vulkan device: its instance and device are made with what they ask
-// for (docs/upscalers.md, "Vulkan"; the SDK's sdk-patches/0003). Nothing is asked for with
-// --native_upscaler=off, nor when the SDK cannot take requests.
+// for (docs/upscalers.md, "Vulkan"; the SDK's sdk-patches/0003). The graphics panel (F8) switches the
+// upscaler while the game runs, so whatever this PC can run is asked for, whichever upscaler the
+// settings name now: DLSS's needs on NVIDIA, XeSS's on any GPU (extensions and features are enabled
+// only where supported). Nothing is asked for when the SDK cannot take requests.
 void PrepareVulkanForUpscalers() {
 #if NR_GAME_RENDERER && NR_HAS_VULKAN && defined(REX_UI_VULKAN_HAS_INSTANCE_REQUESTS) && \
     defined(REX_UI_VULKAN_HAS_DEVICE_REQUESTS)
-  const UpscaleConfig config = ReadUpscalerChoice();
+  UpscaleConfig config = ReadUpscalerChoice();
+  config.kind = UpscalerKind::kAuto;  // any of them may be chosen later
   bool dlss = false, xess = false;
   UpscalerVulkanWants(config, 0, &dlss, &xess);
-  if (!config.enabled()) return;
-  std::vector<std::string> instance_extensions = UpscalerVulkanInstanceExtensions(dlss, xess);
+  std::vector<std::string> instance_extensions = UpscalerVulkanInstanceExtensions(dlss, true);
   rex::ui::vulkan::SetVulkanInstanceExtensionRequests(instance_extensions);
   rex::ui::vulkan::SetVulkanDeviceRequestCallback([config](VkInstance instance, VkPhysicalDevice physical) {
     rex::ui::vulkan::VulkanDeviceRequests requests;
     bool want_dlss = false, want_xess = false;
     UpscalerVulkanWants(config, UpscalerVulkanVendor(instance, physical, nullptr), &want_dlss, &want_xess);
+    want_xess = true;  // XeSS runs on other vendors' GPUs too
     UpscalerVulkanNeeds needs = UpscalerVulkanDeviceNeeds(want_dlss, want_xess, instance, physical, nullptr);
     REXGPU_INFO("rexgpu-native: the upscalers ask the Vulkan device for {} extensions and {} feature structures",
                 needs.extensions.size(), needs.features.size());

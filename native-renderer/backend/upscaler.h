@@ -11,6 +11,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -72,6 +73,13 @@ std::unique_ptr<Upscaler> CreateUpscaler(nvrhi::IDevice* device, const UpscaleCo
 
 // The PCI vendor of the device's GPU (0 unknown).
 uint32_t UpscalerDeviceVendor(nvrhi::IDevice* device);
+
+// The SDKs wait for the GPU before they make or destroy a context. The game's device has other threads
+// submitting (the submission and present threads), and a Vulkan queue must not be used by two threads at
+// once, so the host gives its own locked wait for its device (Backend::Initialize); any other device
+// (the launcher's question, tests) waits directly. Null `wait` removes the hook.
+void SetUpscalerIdleWait(nvrhi::IDevice* device, std::function<void()> wait);
+void UpscalerWaitForIdle(nvrhi::IDevice* device);
 
 // The folder of the game's executable (where the SDKs' DLLs are), with a trailing separator.
 std::wstring UpscalerDllFolder();

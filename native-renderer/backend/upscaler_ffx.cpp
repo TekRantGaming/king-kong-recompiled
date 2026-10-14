@@ -108,7 +108,7 @@ class Fsr3Upscaler final : public Upscaler {
   }
   ~Fsr3Upscaler() override {
     if (context_) {
-      device_->waitForIdle();
+      UpscalerWaitForIdle(device_);
       fn_.DestroyContext(&context_, nullptr);
     }
   }
@@ -205,7 +205,7 @@ class Fsr3Upscaler final : public Upscaler {
 
   bool Create(UpscalerSize render, UpscalerSize output) {
     if (context_) {
-      device_->waitForIdle();
+      UpscalerWaitForIdle(device_);
       fn_.DestroyContext(&context_, nullptr);
       context_ = nullptr;
     }

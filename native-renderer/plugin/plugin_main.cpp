@@ -216,7 +216,9 @@ REXCVAR_DEFINE_STRING(native_ao_quality, "auto", "Native renderer",
                       "or auto (full up to a render scale of 1.5, half above)")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
-REXCVAR_DEFINE_BOOL(native_ao_temporal, true, "Native renderer", "GTAO local temporal noise smoothing (when no temporal upscaler is active)");
+REXCVAR_DEFINE_BOOL(native_ao_temporal, true, "Native renderer",
+                    "GTAO noise smoothing: blend each pixel's occlusion with last frame's (or let the temporal "
+                    "upscaler do it). Off shows the raw, grainier occlusion. Applied live");
 REXCVAR_DEFINE_INT32(native_ao_samples, 2, "Native renderer",
                      "GTAO sample quality: 1 low (2 slices x 2 steps), 2 medium (3 x 3, the previous setting), "
                      "3 high (9 x 3). Applied live, independently of native_ao_quality's resolution");
@@ -272,7 +274,7 @@ REXCVAR_DEFINE_DOUBLE(native_gi_intensity, 1.0, "Native renderer",
 REXCVAR_DEFINE_STRING(native_gi_quality, "auto", "Native renderer",
                       "The global illumination's working resolution: auto (low and medium half, high full up to a "
                       "render scale of 1.5), half or full")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 REXCVAR_DEFINE_DOUBLE(native_gi_radius, 0.0, "Native renderer",
                       "How far the global illumination gathers light from, in world units (0: the level's)")
@@ -311,13 +313,14 @@ REXCVAR_DEFINE_STRING(native_upscaler, "auto", "Native renderer",
                       "Temporal upscaler: off, auto (DLSS on NVIDIA RTX, FSR 4 on supported AMD, XeSS on Intel, "
                       "FSR 3.1 otherwise), fsr3, fsr4, dlss, xess (bilinear: a plain stretch, for comparisons). "
                       "The output is native_render_scale's size. auto until the game sets its own default (the "
-                      "best one this PC runs) once its settings are read")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+                      "best one this PC runs) once its settings are read. Applied live with its mode, DLSS preset, "
+                      "sharpness, mip bias and reactive mask: the upscaler is made again at a frame boundary")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 REXCVAR_DEFINE_STRING(native_upscaler_quality, "quality", "Native renderer",
                       "The upscaler's mode: native (anti-aliasing at the output resolution: DLAA, FSR native AA, "
                       "XeSS native AA), quality, balanced, performance, ultra_performance")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 REXCVAR_DEFINE_STRING(native_upscaler_point, "post", "Native renderer",
                       "Where the upscaler runs: post (before the game's post effects and HUD) or present (at the "
@@ -327,21 +330,21 @@ REXCVAR_DEFINE_STRING(native_upscaler_point, "post", "Native renderer",
 REXCVAR_DEFINE_STRING(native_upscaler_dlss_preset, "latest", "Native renderer",
                       "DLSS's render preset: latest (the newest model: DLSS 4.5's M, L for ultra performance), "
                       "default (the DLL's choice per mode), J or K (DLSS 4 transformer), L or M (DLSS 4.5)")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 REXCVAR_DEFINE_DOUBLE(native_upscaler_sharpness, -1.0, "Native renderer",
                       "Sharpening after the upscale, 0 to 1 (FSR's RCAS; DLSS and XeSS have none); negative: off")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 REXCVAR_DEFINE_STRING(native_upscaler_mip_bias, "auto", "Native renderer",
                       "The texture LOD bias of the scene's draws: auto (log2 of input over output, as the SDKs "
                       "recommend) or a number")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 REXCVAR_DEFINE_DOUBLE(native_upscaler_reactive, 1.0, "Native renderer",
                       "Strength of the reactive mask (what changed after the opaque pass: water, fur, smoke, rain, "
                       "particles), 0 to 1; 0: no mask")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 REXCVAR_DEFINE_INT32(native_upscaler_debug, 0, "Native renderer",
                      "Upscaler debugging bits: 1 show the motion vectors, 2 the reactive mask, 4 camera motion only, "
@@ -379,7 +382,7 @@ REXCVAR_DEFINE_STRING(native_volumetrics, "off", "Native renderer",
 
 REXCVAR_DEFINE_DOUBLE(native_shadow_softness, 1.0, "Native renderer",
                       "The soft shadows' filter size times this (tuning, docs/lighting.md)")
-    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 REXCVAR_DEFINE_DOUBLE(native_ssr_strength, 1.0, "Native renderer",
                       "The water's screen-space reflections' strength times this (tuning, docs/lighting.md)")

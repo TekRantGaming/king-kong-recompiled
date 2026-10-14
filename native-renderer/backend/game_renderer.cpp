@@ -125,6 +125,8 @@ GameRenderer::GameRenderer(nvrhi::IDevice* device, const GuestMemory& memory,
 GameRenderer::~GameRenderer() {
   if (gi_build_.valid()) gi_build_.wait();
   if (lighting_build_.valid()) lighting_build_.wait();
+  if (upscale_build_.valid()) upscale_build_.wait();
+  if (dlss_warm_.valid()) dlss_warm_.wait();
   if (frame_trace_) std::fclose(frame_trace_);
   if (!pipeline_threads_.empty()) {
     {
@@ -196,8 +198,22 @@ void GameRenderer::set_watch(std::function<void(uint32_t, uint32_t)> watch) {
 
 bool GameRenderer::Initialize() {
   const nvrhi::GraphicsAPI api = device_->getGraphicsAPI();
+  // Live settings (game_effects.cpp): what the start asked for, which the changes are compared with.
+  upscale_initial_ = upscale_requested_ = options_.upscale;
+  lighting_initial_ = options_.lighting;
+  gi_user_gpu_time_ = options_.gi.gpu_time;
+  fxaa_wanted_ = options_.fxaa;
   // Upscalers (game_upscale.cpp): the upscaler and its input scale first (scaled() depends on it).
   if (options_.upscale.enabled() && !UpscaleSetup()) upscale_.reset();
+  if (options_.effect_settings && UpscalerDeviceVendor(device_) == 0x10DE) {
+    // NVIDIA: NGX's start (seconds) on a worker now, so a live switch to DLSS is quick (game_effects.cpp).
+    UpscaleConfig probe;
+    probe.kind = UpscalerKind::kDlss;
+    dlss_warm_ = std::async(std::launch::async, [device = device_, probe] {
+      std::string why;
+      return CreateDlssUpscaler(device, probe, &why);
+    });
+  }
   shaders_->SetMotionPrewarm(bool(upscale_));
 
   // Set 0: the three constant buffers at b0-b2 (binding = register on Vulkan).
@@ -1348,7 +1364,8 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   // GI hook (game_gi.cpp): at the end of the opaque pass the bounce light goes in (after the AO's occlusion).
   if (scene_gi_) GiDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
   // Lighting hook (game_lighting.cpp): the lighting options' moments and the census.
-  if (options_.lighting.active()) LightingDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
+  // With live settings b5 is always bound (the layout cannot change): written every draw list.
+  if (options_.lighting.active() || options_.effect_settings) LightingDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
   if (up.snapshot) UpscaleTakeSnapshot(cl);
   if (frame_log_ && frame_log_->enabled()) LogDraw(call, d, *vs, ps.get());
   if (dump) DumpVertexShaderHashes(call, d, *vs);

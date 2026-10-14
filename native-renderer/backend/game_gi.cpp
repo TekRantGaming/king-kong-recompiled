@@ -11,9 +11,11 @@
 namespace nr {
 
 void GameRenderer::GiInitialize() {
-  if (options_.effect_settings) return;  // live runs prepare the requested effect on a worker
-  if (!options_.gi.enabled()) return;
-  if (options_.gi.gpu_time) gi_timer_ = std::make_unique<AoGpuTimer>(device_, "gi");
+  if (!options_.gi.enabled()) return;  // with live settings, made on a worker when turned on (game_effects.cpp)
+  if (options_.gi.gpu_time || options_.effect_settings) {
+    gi_timer_ = std::make_unique<AoGpuTimer>(device_, "gi");
+    gi_timer_->set_quiet(!options_.gi.gpu_time);  // else for the graphics panel only
+  }
   scene_gi_ = std::make_unique<SceneGi>(device_, options_.gi, options_.ao.rules);
   if (!scene_gi_->Initialize()) {
     Logf(LogLevel::kWarning, "rexgpu-native: GI: unavailable (its shaders could not be made), it stays off");

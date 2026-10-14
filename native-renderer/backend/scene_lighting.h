@@ -33,6 +33,7 @@ class SceneLighting {
   SceneLighting(nvrhi::IDevice* device, const LightingConfig& config);
   ~SceneLighting();
   bool Initialize();
+  const LightingConfig& config() const { return config_; }
   void SetConfig(const LightingConfig& config) {
     config_ = config;
     if (!depth_pass_.pipeline) config_.water = WaterReflections::kOriginal;

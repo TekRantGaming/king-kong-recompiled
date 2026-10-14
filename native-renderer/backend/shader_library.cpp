@@ -444,12 +444,48 @@ ShaderLibrary::Stats ShaderLibrary::stats() const {
   return stats_;
 }
 
+bool ShaderLibrary::lighting_variants_pending() {
+  std::lock_guard lock(lighting_mutex_);
+  for (auto& [key, entry] : lighting_variants_)
+    if (entry.build.valid()) return true;
+  return false;
+}
+
 std::shared_ptr<const GameShader> ShaderLibrary::LightingVariant(const GameShader& base, Replacement replacement, bool water) {
   if ((!replacement.data && !water) || (water && !base.source)) return nullptr;
   const uint64_t tag = water ? 0x5353524C49564501ull : replacement.tag;
   const uint64_t key = HashKey(base.kind, base.ucode_hash, base.input_hash ^ tag);
   std::lock_guard lock(lighting_mutex_);
   auto it = lighting_variants_.find(key);
+  if (it == lighting_variants_.end() && water) {
+    // The pack has the hooked water shaders (built with the lighting translations): no compile.
+    auto info = *base.source;
+    info.waterReflection = kkshaders::waterReflectionHookFor(info.ucodeHash);
+    kkshaders::CompiledShader compiled;
+    bool found = false;
+    if (info.waterReflection.enabled()) {
+      std::lock_guard library_lock(mutex_);
+      found = pack_open_ && pack_.find(info.ucodeHash, kkshaders::translationInputHash(info), compiled);
+    }
+    const auto& blob = device_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN ? compiled.spirv : compiled.dxil;
+    if (found && !blob.empty()) {
+      auto shader = std::make_shared<GameShader>(base);
+      shader->input_hash ^= tag;
+      shader->source = std::make_shared<const kkshaders::ShaderInfo>(info);
+      shader->bindings = std::move(compiled.bindings);
+      nvrhi::ShaderDesc desc;
+      desc.shaderType = nvrhi::ShaderType::Pixel;
+      desc.entryName = "main";
+      desc.debugName = "Live water pixel shader";
+      shader->handle = device_->createShader(desc, blob.data(), blob.size());
+      if (shader->handle) {
+        std::lock_guard library_lock(mutex_);
+        shader->id = next_id_++;
+        lighting_variants_[key].shader = shader;
+        return shader;
+      }
+    }
+  }
   if (it == lighting_variants_.end()) {
     auto& entry = lighting_variants_[key];
     entry.build = std::async(std::launch::async, [device = device_, base, replacement, water, tag] {
