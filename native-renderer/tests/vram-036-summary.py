@@ -38,7 +38,12 @@ for run in sorted(ROOT.glob("task036-*-*-*-20*")):
     half_frame = next((s["frame"] for s in ordered if s["half_ao"]), None)
     trace = run / "render_frames.csv"
     if trace.exists() and trace.stat().st_size:
-        rows = list(csv.DictReader(trace.open(encoding="utf-8-sig")))
+        # The runner can still be appending. Parse only newline-terminated
+        # records so a concurrent partial write cannot corrupt the summary.
+        trace_text = trace.read_text(encoding="utf-8-sig")
+        complete_text = trace_text[:trace_text.rfind("\n") + 1]
+        rows = [r for r in csv.DictReader(complete_text.splitlines())
+                if all(value is not None and value != "" for value in r.values())]
         if rows:
             end = float(rows[-1]["wall_s"])
             intervals = [float(r["interval_ms"]) for r in rows if float(r["wall_s"]) >= end - 40]
