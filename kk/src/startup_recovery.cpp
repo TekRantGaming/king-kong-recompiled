@@ -98,7 +98,7 @@ void MonitorStartup() {
       std::getline(lock_file, owner);
       if (owner.rfind("task039 ", 0) != 0) { result = 3; break; }
       // Never launch a recovery child while another copy of the game is running.
-      // Unknown/inaccessible paths are treated conservatively as a user's game.
+      // This also covers copies whose executable path is inaccessible.
       bool other_game = false;
       const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
       if (snapshot == INVALID_HANDLE_VALUE) { result = 3; break; }

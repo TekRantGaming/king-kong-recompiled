@@ -72,6 +72,14 @@ class KingKongApp : public rex::ReXApp {
   ~KingKongApp() override { kk::startup::CleanExit(); }
 
  protected:
+  bool OnWindowCloseRequested() override {
+    // The SDK's accepted window close hard-exits without running our destructor.
+    kk::startup::CleanExit();
+    return true;
+  }
+
+  void OnShutdown() override { kk::startup::CleanExit(); }
+
   void OnConfigurePaths(rex::PathConfig& paths) override {
     // Register the GPU plugin's cvars before the config is read so the
     // launcher can edit and save them, and set the port's own defaults.
@@ -112,6 +120,7 @@ class KingKongApp : public rex::ReXApp {
       // As closing the window does (the runtime shuts the game down); quitting the app context directly
       // while the game runs hung.
       app_context().CallInUIThreadDeferred([this] {
+        kk::startup::CleanExit();
         if (window()) window()->RequestClose();
         else app_context().QuitFromUIThread();
       });
@@ -152,6 +161,7 @@ class KingKongApp : public rex::ReXApp {
 #endif
       // The start request chosen on the Play menu goes with it (kk::play::SetStartRequest).
       const std::wstring start = kk::play::StartRequestArg();
+      kk::startup::CleanExit();
       kk::play::RelaunchWith(L"--kk_skip_launcher=true" + (start.empty() ? std::wstring() : L" " + start));
       app_context().CallInUIThreadDeferred([this] { app_context().QuitFromUIThread(); });
     };
