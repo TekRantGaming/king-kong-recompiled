@@ -161,6 +161,12 @@ REXCVAR_DEFINE_INT32(native_render_thread_presents, 1, "Native renderer",
                      "before its Present waits (1 to 4)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_STRING(native_frame_wait, "submit", "Native renderer",
+                      "Where the renderer keeps the GPU at most two frames behind: submit (wait for frame N-2 "
+                      "just before frame N is submitted, so frame N is recorded meanwhile) or open (wait before "
+                      "frame N is recorded, the first Beta 4 candidate's behaviour)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_BOOL(native_async_present, true, "Native renderer",
                     "Hand each frame to the presenter from a thread of its own, so the guest GPU's command "
                     "stream (and the game waiting on it) does not wait for the presenter")

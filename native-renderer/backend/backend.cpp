@@ -460,6 +460,10 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
   // The frame image is the scaled size: it is what the presenter gets (its upscalers and FXAA
   // work from it).
   renderer_ = std::make_unique<Renderer>(host_->device());
+  renderer_->options().frame_wait_at_open = game.frame_wait_at_open;
+  REXLOG_INFO("rexgpu-native: two-frame GPU bound waits {}",
+              game.frame_wait_at_open ? "before a frame is recorded (native_frame_wait=open)"
+                                      : "before a frame is submitted (native_frame_wait=submit)");
   if (!renderer_->Initialize(ScaledSize(width, scale.x), ScaledSize(height, scale.y))) {
     REXGPU_ERROR("rexgpu-native: renderer initialisation failed ({}x{})", width, height);
     return false;

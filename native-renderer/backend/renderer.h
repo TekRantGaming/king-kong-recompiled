@@ -78,6 +78,10 @@ class Renderer final : public DrawSink {
     // vertex shader expands, which the placeholder cannot) would otherwise
     // cover the frame with flat colour.
     bool only_depth_tested = true;
+    // Where the two-frame GPU completion bound waits (set_frame_wait): false, just before frame N is
+    // submitted (frame N is recorded while the GPU still works on N-2; the GPU never has more than two
+    // frames); true, before frame N's first command is recorded (--native_frame_wait=open, as before).
+    bool frame_wait_at_open = false;
   };
 
   struct Stats {

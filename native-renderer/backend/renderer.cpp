@@ -241,8 +241,10 @@ void Renderer::RecordTestTriangle(nvrhi::ICommandList* command_list, nvrhi::ITex
 }
 
 void Renderer::WaitForFrameImage() {
-  // Submission alone does not retire volatile constant versions or upload pages.
-  // Wait for the older frame before reusing its image, bounding GPU work to two frames.
+  // Submission alone does not retire volatile constant versions or upload pages. Before frame N
+  // reaches the GPU (or, with frame_wait_at_open, before it is recorded), frame N-2, which used
+  // the same image and completion query, must have completed: the GPU never holds more than two
+  // frames, and N-2's resources are free again.
   if (frame_wait_ && stats_.frames_submitted >= frame_queries_.size()) {
     const auto start = std::chrono::steady_clock::now();
     frame_wait_(frame_queries_[recording_]);
@@ -253,7 +255,7 @@ void Renderer::WaitForFrameImage() {
 
 nvrhi::ICommandList* Renderer::FrameCommandList() {
   if (!frame_open_) {
-    WaitForFrameImage();
+    if (options_.frame_wait_at_open) WaitForFrameImage();
     frame_command_list_->open();
     if (!frame_gpu_timer_) {
       frame_gpu_timer_ = std::make_unique<AoGpuTimer>(device_, "whole frame", "frame GPU time");
@@ -503,6 +505,10 @@ void Renderer::OnPresent(uint32_t frame, uint32_t render_target0, uint32_t devic
   frame_command_list_->close();
   frame_open_ = false;
   const auto t2 = clock::now();
+  // The image the Present copy just wrote, and the volatile versions this frame took, belong to
+  // frame N-2 on the GPU until it completes (the GPU runs the lists in order).
+  if (!options_.frame_wait_at_open) WaitForFrameImage();
+  const auto t2w = clock::now();
   if (submit_) submit_(frame_command_list_);
   frame_list_index_ = (frame_list_index_ + 1) % uint32_t(frame_lists_.size());
   frame_command_list_ = frame_lists_[frame_list_index_];
@@ -538,7 +544,7 @@ void Renderer::OnPresent(uint32_t frame, uint32_t render_target0, uint32_t devic
   for (auto& [key, pass] : debug_pass_timers_) pass->timer.FrameEnd();
   const auto t4 = clock::now();
   stats_.present_close_us += us(t1, t2);
-  stats_.present_submit_us += us(t2, t3);
+  stats_.present_submit_us += us(t2w, t3);
   stats_.present_end_us += us(t3, t4);
 }
 

@@ -84,6 +84,9 @@ struct GameSettings {
   bool dynamic_vertex_buffers = false;
   bool render_thread = false;  // --native_render_thread (render_thread.h)
   uint32_t render_thread_presents = 1;  // frames the game may queue ahead of it
+  // --native_frame_wait=open: the two-frame GPU bound waits before a frame is recorded (as in the first
+  // Beta 4 candidate) instead of just before it is submitted (Renderer::Options::frame_wait_at_open).
+  bool frame_wait_at_open = false;
   int32_t anisotropic_override = -1;
   uint32_t fxaa = 0;
   double pipeline_wait_budget_ms = 30.0;
