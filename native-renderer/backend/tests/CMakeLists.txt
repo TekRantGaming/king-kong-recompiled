@@ -7,6 +7,8 @@
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 if(WIN32 AND NR_BUILD_PLUGIN AND NR_GAME_RENDERER)
+    add_executable(nr_guest_frame_sampler guest_frame_sampler.cpp)
+    target_compile_features(nr_guest_frame_sampler PRIVATE cxx_std_23)
     add_executable(nr_shader_pack_service_tests shader_pack_service_tests.cpp)
     target_include_directories(nr_shader_pack_service_tests PRIVATE "${NR_ROOT}")
     target_compile_features(nr_shader_pack_service_tests PRIVATE cxx_std_23)
