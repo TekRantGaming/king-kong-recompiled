@@ -895,6 +895,59 @@ TEST(GameGi_UpcomingWaterDepthWriteCannotValidateClearedDepth) {
   if (gi) {
     CHECK_EQ(gi->stats().no_depth, uint64_t(1));
     CHECK_EQ(gi->stats().applied_opaque, uint64_t(0));
+    CHECK_EQ(gi->stats().applied_present, uint64_t(0));
+  }
+}
+
+TEST(GameGi_MissingFogUsesTerminalWaterBoundary) {
+  Options on;
+  on.mode = 0;
+  on.gi = Gi(GiLevel::kMedium);
+  Fixture hashes(on);
+  if (!hashes.Init()) return;
+  const uint32_t fog_shader = hashes.CreateShader(false, PixelShaderConstant(2));
+  char rules[128];
+  std::snprintf(rules, sizeof(rules), "end ps=%016llX\ntransparent ps=%016llX\n",
+                static_cast<unsigned long long>(hashes.Hash(false, fog_shader)),
+                static_cast<unsigned long long>(hashes.Hash(false, hashes.ps_quad)));
+  // The first frame sees an end marker; the next lacks it but has known water.
+  on.ao.rules = ParseAoRules(rules);
+  Fixture f(on);
+  if (!f.Init()) return;
+  Fixture::Frame fr;
+  fr.quad = false;
+  f.DrawFrame(fr);
+  const uint32_t fog = f.CreateShader(false, PixelShaderConstant(2));
+  f.DrawMesh(QuadMesh(), fog, kBlendAlpha, kDepthColour);
+  f.Present(f.rt, "fog_frame");
+  fr.quad = true;
+  f.Render(fr, "fog_free_water_frame");
+  const SceneGi* gi = f.game->scene_gi();
+  CHECK(gi != nullptr);
+  if (gi) {
+    CHECK_EQ(gi->stats().applied_opaque, uint64_t(2));
+    CHECK_EQ(gi->stats().applied_present, uint64_t(0));
+  }
+}
+
+TEST(GameGi_IgnoredOverlayPreventsPresentFallback) {
+  Options on;
+  on.mode = 0;
+  on.gi = Gi(GiLevel::kMedium);
+  Fixture hashes(on);
+  if (!hashes.Init()) return;
+  char rule[80];
+  std::snprintf(rule, sizeof(rule), "ignore ps=%016llX\n",
+                static_cast<unsigned long long>(hashes.Hash(false, hashes.ps_quad)));
+  on.ao.rules = ParseAoRules(rule);
+  Fixture f(on);
+  if (!f.Init()) return;
+  f.Render({}, "ignored_overlay");
+  const SceneGi* gi = f.game->scene_gi();
+  CHECK(gi != nullptr);
+  if (gi) {
+    CHECK_EQ(gi->stats().applied_opaque, uint64_t(0));
+    CHECK_EQ(gi->stats().applied_present, uint64_t(0));
   }
 }
 

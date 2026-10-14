@@ -53,6 +53,7 @@ void SceneGi::NewFrame(uint64_t frame) {
   applied_before_ = applied_ && frame == frame_ + 1;
   frame_ = frame;
   applied_ = scene_copied_ = false;
+  overlay_drawn_ = false;
   ++stats_.frames;
   if (stats_.frames % 600 == 0) {
     Logf(LogLevel::kInfo,
@@ -193,7 +194,8 @@ void SceneGi::OnDraw(nvrhi::ICommandList* cl, const SceneAo::Draw& d, bool ao_on
   last_applied_ = false;
   if (!ssgi_) return;
   if (d.frame != frame_) NewFrame(d.frame);
-  const AoDrawClass cls = rules_.Classify(d.state);
+  const AoRule* matched = nullptr;
+  const AoDrawClass cls = rules_.Classify(d.state, &matched);
   if ((cls == AoDrawClass::kOpaque || cls == AoDrawClass::kDepthOnly) && d.frame_size && d.depth.key && d.vs_constants &&
       camera_.offers(frame_) < 16) {
     float rows[16];
@@ -221,6 +223,7 @@ void SceneGi::OnDraw(nvrhi::ICommandList* cl, const SceneAo::Draw& d, bool ao_on
   td.depth_key = d.depth.key;
   td.frame_size = d.frame_size;
   td.writes_depth = d.state.depth_write && d.depth.key;
+  td.terminal_transparent = matched && matched->ps_hash && cls == AoDrawClass::kTransparent;
   // OnDraw records a future write; this hook computes before that draw executes.
   const bool depth_before_draw = tracker_.frame() == d.frame && tracker_.depth_valid();
   const AoFrameTracker::Events e = tracker_.OnDraw(td);
@@ -234,6 +237,10 @@ void SceneGi::OnDraw(nvrhi::ICommandList* cl, const SceneAo::Draw& d, bool ao_on
       Logf(LogLevel::kInfo, "rexgpu-native: GI: first bounce light at the end of the opaque pass (frame %llu, %u opaque draws)",
            static_cast<unsigned long long>(frame_), tracker_.opaque_draws());
   }
+  if (d.state.color && d.color.key == tracker_.scene_color() &&
+      tracker_.phase() >= AoFrameTracker::Phase::kOpaquePass &&
+      (cls == AoDrawClass::kTransparent || cls == AoDrawClass::kEffect || cls == AoDrawClass::kEnd || cls == AoDrawClass::kIgnore))
+    overlay_drawn_ = true;
 }
 
 void SceneGi::OnDepthClear(uint64_t frame, uint64_t depth_key) {
@@ -252,7 +259,7 @@ void SceneGi::OnColorCopy(uint64_t frame, uint64_t source_key) {
 void SceneGi::OnPresent(nvrhi::ICommandList* cl, bool ao_on) {
   if (!ssgi_ || applied_) return;
   // The scene still holds the frame (no transparent draw ended its opaque pass, no copy was taken).
-  if (scene_copied_ || tracker_.phase() < AoFrameTracker::Phase::kOpaquePass || !scene_color_.texture) return;
+  if (scene_copied_ || overlay_drawn_ || tracker_.phase() != AoFrameTracker::Phase::kOpaquePass || !scene_color_.texture) return;
   if (Apply(cl, ao_on)) {
     applied_ = true;
     ++stats_.applied_present;

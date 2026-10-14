@@ -98,6 +98,7 @@ class SceneGi {
   uint64_t frame_ = UINT64_MAX;
   bool applied_ = false;
   bool scene_copied_ = false;
+  bool overlay_drawn_ = false;
   bool last_applied_ = false;
   SceneAo::Target scene_color_, scene_depth_;
   // The ambient light: the sum and count of this frame's readings, and the last frame's mean.
