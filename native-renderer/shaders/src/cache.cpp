@@ -161,7 +161,10 @@ ShaderPack::~ShaderPack() { close(); }
 
 bool ShaderPack::write(const std::filesystem::path& path, const std::vector<CompiledShader>& shaders, std::string* error) {
     std::vector<std::pair<Key, size_t>> order;
-    for (size_t i = 0; i < shaders.size(); i++) order.push_back({{shaders[i].ucodeHash, shaders[i].inputHash}, i});
+    for (size_t i = 0; i < shaders.size(); i++) {
+        order.push_back({{shaders[i].ucodeHash, shaders[i].inputHash}, i});
+        for (const auto& [hash, input] : shaders[i].packAliases) order.push_back({{hash, input}, i});
+    }
     std::sort(order.begin(), order.end(), [](const auto& a, const auto& b) {
         return a.first.ucodeHash != b.first.ucodeHash ? a.first.ucodeHash < b.first.ucodeHash : a.first.inputHash < b.first.inputHash;
     });
@@ -175,22 +178,27 @@ bool ShaderPack::write(const std::filesystem::path& path, const std::vector<Comp
     f.write(reinterpret_cast<const char*>(header.data()), std::streamsize(header.size()));
     uint64_t offset = kPackHeaderSize;
     size_t written = 0;
+    std::vector<std::pair<uint64_t, uint32_t>> entries(shaders.size());
     for (size_t k = 0; k < order.size(); k++) {
         if (k > 0 && order[k].first.ucodeHash == order[k - 1].first.ucodeHash && order[k].first.inputHash == order[k - 1].first.inputHash)
             continue;  // duplicate
-        std::vector<uint8_t> entry = encodeEntry(shaders[order[k].second]);
-        while (offset % 16) {
-            f.put(0);
-            offset++;
+        auto& entry = entries[order[k].second];
+        if (!entry.second) {
+            std::vector<uint8_t> bytes = encodeEntry(shaders[order[k].second]);
+            while (offset % 16) {
+                f.put(0);
+                offset++;
+            }
+            entry = {offset, uint32_t(bytes.size())};
+            f.write(reinterpret_cast<const char*>(bytes.data()), std::streamsize(bytes.size()));
+            offset += bytes.size();
         }
-        f.write(reinterpret_cast<const char*>(entry.data()), std::streamsize(entry.size()));
         std::vector<uint8_t> rec(kIndexRecordSize, 0);
         put64(rec, 0, order[k].first.ucodeHash);
         put64(rec, 8, order[k].first.inputHash);
-        put64(rec, 16, offset);
-        put32(rec, 24, uint32_t(entry.size()));
+        put64(rec, 16, entry.first);
+        put32(rec, 24, entry.second);
         index.insert(index.end(), rec.begin(), rec.end());
-        offset += entry.size();
         written++;
     }
     while (offset % 16) {
@@ -299,7 +307,8 @@ bool ShaderPack::find(uint64_t ucodeHash, uint64_t inputHash, CompiledShader& ou
     return false;
 }
 
-BuildResult buildShader(const ShaderInfo& info, Compiler& compiler, bool keepHlsl, uint32_t targets) {
+static BuildResult buildVariant(const ShaderInfo& info, Compiler& compiler, bool keepHlsl, uint32_t targets,
+                               bool motion) {
     BuildResult r;
     TranslateResult t = translate(info);
     if (!t.ok) {
@@ -307,8 +316,17 @@ BuildResult buildShader(const ShaderInfo& info, Compiler& compiler, bool keepHls
         r.error = t.error;
         return r;
     }
+    if (motion) {
+        MotionShader m = makeMotionVertexShader(t.hlsl);
+        if (!m.ok) {
+            r.stage = "motion";
+            r.error = m.error;
+            return r;
+        }
+        t.hlsl = std::move(m.hlsl);
+    }
     r.shader.kind = info.kind;
-    r.shader.ucodeHash = info.ucodeHash;
+    r.shader.ucodeHash = info.ucodeHash ^ (motion ? kMotionPackTag : 0);
     r.shader.inputHash = translationInputHash(info);
     r.shader.bindings = std::move(t.bindings);
     CompileOutput dxil, spirv;
@@ -335,6 +353,14 @@ BuildResult buildShader(const ShaderInfo& info, Compiler& compiler, bool keepHls
     if (keepHlsl) r.shader.hlsl = std::move(t.hlsl);
     r.ok = true;
     return r;
+}
+
+BuildResult buildShader(const ShaderInfo& info, Compiler& compiler, bool keepHlsl, uint32_t targets) {
+    return buildVariant(info, compiler, keepHlsl, targets, false);
+}
+
+BuildResult buildMotionShader(const ShaderInfo& info, Compiler& compiler, uint32_t targets) {
+    return buildVariant(info, compiler, false, targets, true);
 }
 
 bool ShaderProvider::get(const ShaderInfo& info, Compiler& compiler, CompiledShader& out, std::string* error) const {

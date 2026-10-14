@@ -774,11 +774,12 @@ int testPackStamp() {
     s.dxc = "dxcompiler 1.9 commit 5512 01b62ad4";
     s.database = 0xFEDCBA9876543210ull;
     s.scaled = true;
+    s.motion = true;
     s.shaders = 4796;
     PackStamp back;
     CHECK(PackStamp::parse(s.toText(), back));
     CHECK(back.backend == s.backend && back.translator == s.translator && back.dxc == s.dxc && back.database == s.database &&
-          back.scaled == s.scaled && back.shaders == s.shaders);
+          back.scaled == s.scaled && back.motion == s.motion && back.shaders == s.shaders);
     {  // Windows line ends and unknown keys are fine.
         std::string text = s.toText() + "future 7\n", crlf;
         for (char c : text) crlf += c == '\n' ? std::string("\r\n") : std::string(1, c);
@@ -808,6 +809,9 @@ int testPackStamp() {
     CHECK(comparePackStamp(&plain, want).state == PackState::Stale);  // but not the other way
     CHECK(comparePackStamp(&s, want).state == PackState::Current);
     PackStamp other = s;
+    other.motion = false;
+    CHECK(comparePackStamp(&other, want).state == PackState::Stale);
+    other = s;
     other.shaders = 1;  // information only
     CHECK(comparePackStamp(&other, want).state == PackState::Current);
     other = s, other.backend = PackBackend::Spirv;
@@ -904,6 +908,35 @@ int testPackBuild(int argc, char** argv) {
             CompiledShader c;
             CHECK(pack.find(info.ucodeHash, translationInputHash(info), c));
         }
+    }
+    // Prepared motion variants and scale aliases survive reopening, with no runtime compilation.
+    {
+        PackBuildOptions prepared = o;
+        prepared.folder = out / "prepared";
+        prepared.scaled = prepared.motion = true;
+        auto built = buildPack(prepared);
+        CHECK(built.ok && built.failed == 0);
+        CHECK(built.compiled == distinct + size_t(pixel) + size_t(vertex));
+        CHECK(checkPack(prepared).state == PackState::Current);
+        CHECK(buildPack(prepared).upToDate);
+        ShaderPack pack;
+        CHECK(pack.open(built.pack, &error));
+        for (ShaderInfo info : infos) {
+            const uint64_t input = translationInputHash(info);
+            CompiledShader c;
+            if (info.kind == ShaderKind::Vertex) {
+                CHECK(pack.find(info.ucodeHash ^ kMotionPackTag, input, c));
+                CHECK(!c.spirv.empty() && c.dxil.empty());
+            } else {
+                CHECK(pack.find(info.ucodeHash ^ kScaledPackTag, input, c));
+                info.renderScaleAware = true;
+                CHECK(c.inputHash == translationInputHash(info));
+                CHECK(pack.find(info.ucodeHash ^ kUnscaledPackTag, translationInputHash(info), c));
+                CHECK(c.inputHash == input);
+            }
+        }
+        prepared.motion = false;
+        CHECK(checkPack(prepared).state == PackState::Current);
     }
     // The same pack, byte for byte, from one thread (the order of the workers does not matter).
     {

@@ -1549,7 +1549,7 @@ std::string CachePath(const char* name) {
 
 // A pack with the colour scene's shaders (what db-build makes for the whole database), so the
 // library can make them from their hashes alone.
-std::string MakePack(const char* name) {
+std::string MakePack(const char* name, bool prepared = false) {
   const std::string path = CachePath(name) + ".pack";
   std::string error;
   CHECK(kkshaders::loadDxc(NR_TEST_DXC_DIR, &error));
@@ -1561,6 +1561,21 @@ std::string MakePack(const char* name) {
     kkshaders::BuildResult built = kkshaders::buildShader(parsed.info, compiler, false);
     CHECK(built.ok);
     if (built.ok) shaders.push_back(std::move(built.shader));
+    if (prepared && parsed.info.kind == kkshaders::ShaderKind::Vertex) {
+      auto motion = kkshaders::buildMotionShader(parsed.info, compiler);
+      CHECK(motion.ok);
+      if (motion.ok) shaders.push_back(std::move(motion.shader));
+    }
+    if (prepared && parsed.info.kind == kkshaders::ShaderKind::Pixel) {
+      const uint64_t plain = kkshaders::translationInputHash(parsed.info);
+      parsed.info.renderScaleAware = true;
+      auto scaled = kkshaders::buildShader(parsed.info, compiler, false);
+      CHECK(scaled.ok);
+      if (scaled.ok) {
+        scaled.shader.packAliases.emplace_back(parsed.info.ucodeHash ^ kkshaders::kScaledPackTag, plain);
+        shaders.push_back(std::move(scaled.shader));
+      }
+    }
   }
   CHECK(kkshaders::ShaderPack::write(path, shaders, &error));
   return path;
@@ -1648,6 +1663,30 @@ TEST(PipelineCache_PrewarmFromThePackBeforeTheGameCreatesAnything) {
   CHECK_EQ(f.game->stats().pipeline_waits, uint64_t(0));
   CHECK_EQ(f.game->stats().draw_pipelines, uint64_t(1));
   CHECK_EQ(f.game->stats().cache_recorded, uint64_t(0));  // known already
+}
+
+TEST(ShaderLibrary_PreparedVariantsNeedNoGuestContainersOrCompiler) {
+  const std::string pack = MakePack("prepared_variants", true);
+  Fixture f;
+  if (!f.Init()) return;
+  CHECK(f.shaders->OpenPack(pack));
+  const auto vertex = kkshaders::parseContainer(VertexShader(kColor, F_8_8_8_8));
+  const auto pixel = kkshaders::parseContainer(PixelShaderInterpolator());
+  auto vs = f.shaders->GetByHash(kkshaders::ShaderKind::Vertex, vertex.info.ucodeHash,
+                               kkshaders::translationInputHash(vertex.info));
+  CHECK(vs && !vs->source);
+  if (vs) {
+    CHECK(f.shaders->MotionVariant(*vs));
+    CHECK_EQ(f.shaders->motion_stats().compile_ms, 0.0);
+    CHECK_EQ(f.shaders->motion_stats().failed, uint64_t(0));
+  }
+  f.shaders->SetRenderScaleAware(true);
+  auto ps = f.shaders->GetForPrewarm(kkshaders::ShaderKind::Pixel, pixel.info.ucodeHash,
+                                   kkshaders::translationInputHash(pixel.info), false);
+  auto scaled = pixel.info;
+  scaled.renderScaleAware = true;
+  CHECK(ps && ps->input_hash == kkshaders::translationInputHash(scaled));
+  CHECK_EQ(f.shaders->stats().compiled, uint64_t(0));
 }
 
 TEST(ShaderLibrary_LightingReplacementPrewarmsFromBaseAndTaggedLists) {
@@ -2168,6 +2207,37 @@ TEST(LauncherPrewarm_StopsBeforeItIsDone) {
   prewarm.Stop();  // again: nothing
   CHECK(!prewarm.progress().done);  // no renderer any more
   dev->WaitIdle();
+}
+
+TEST(LauncherPrewarm_PreparesScaledAndMotionPipelinesFromPackAlone) {
+  const std::string recorded = CachePath("prepared_motion_record");
+  RecordTheScene(recorded);
+  std::vector<PipelineRecord> records;
+  CHECK(ReadPipelineList(recorded, records));
+  if (records.empty()) return;
+  records[0].depth_format = uint32_t(nvrhi::Format::D32);
+  records[0].depth_control = 6u | (3u << 4);  // depth test/write, LESS_EQUAL
+  const std::string list = CachePath("prepared_motion_list") + ".list";
+  CHECK(WritePipelineList(list, records));
+  const std::string pack = MakePack("prepared_motion", true);
+  auto dev = CachedDevice();
+  if (!dev) return;
+  PipelinePrewarm prewarm(dev->device());
+  PipelinePrewarm::Settings s;
+  s.shader_pack = pack;
+  s.lists = {list};
+  s.upscale.kind = UpscalerKind::kDlss;  // prewarm uses the common motion layout without an SDK context
+  s.upscale.quality = UpscaleQuality::kQuality;
+  s.driver_cache = dev->pipeline_cache();
+  s.driver_cache_path = CachePath("prepared_motion_driver") + ".vkcache";
+  CHECK(prewarm.Start(s));
+  CHECK(prewarm.Wait(60.0));
+  const auto p = prewarm.progress();
+  CHECK_EQ(p.queued, uint64_t(2));  // adapted scaled draw plus object motion replay
+  CHECK_EQ(p.made, uint64_t(2));
+  CHECK_EQ(p.waiting, uint64_t(0));
+  prewarm.Stop();
+  CHECK(std::filesystem::file_size(s.driver_cache_path) > 0);
 }
 
 // ------------------------------------------------- the stutter counter

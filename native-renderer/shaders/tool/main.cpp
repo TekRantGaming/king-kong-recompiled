@@ -13,7 +13,7 @@
 //   kkshaders scale-report <xeshaders.bin>
 //   kkshaders xsh <file.xsh> [<file.xsh> ...] --dxc <dir> [--out <dir>] [--spirv-val <exe>] [--jobs N] [--database <xeshaders.bin>]
 //   kkshaders pack-lookup <pack> [<hash> ...]
-//   kkshaders pack-build <xeshaders.bin> --out <folder> [--backend spirv|dxil] [--scaled] [--lighting] [--jobs N] [--dxc <dir>]
+//   kkshaders pack-build <xeshaders.bin> --out <folder> [--backend spirv|dxil] [--scaled] [--lighting] [--motion] [--jobs N] [--dxc <dir>]
 //                        [--force] [--low-priority] [--check]   (the player's pack, as the launcher builds it)
 //   kkshaders ao-list <xeshaders.bin> [--family <name>] [--term "<term>"] [--list <file>] [-o <file>] [--sources <dir>]
 //                      the ambient-only AO's shader list (docs/ao.md): without --term, each pixel family's
@@ -915,6 +915,7 @@ int cmdPackBuild(const Args& a) {
     o.folder = a.get("--out", "kkshaders-pack");
     o.backend = a.get("--backend", "spirv") == "dxil" ? PackBackend::Dxil : PackBackend::Spirv;
     o.scaled = a.has("--scaled");
+    o.motion = a.has("--motion");
     o.lighting = a.has("--lighting");  // the lighting options' hooked water shaders too
     o.threads = unsigned(std::stoul(a.get("--jobs", "0")));
     o.lowPriority = a.has("--low-priority");

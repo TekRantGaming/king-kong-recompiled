@@ -48,12 +48,30 @@ ShaderLibrary::~ShaderLibrary() {
 
 nvrhi::IShader* ShaderLibrary::MotionVariant(const GameShader& vs) {
   if (vs.kind != kkshaders::ShaderKind::Vertex) return nullptr;
-  if (!vs.source) return nullptr;  // a pack-only entry may acquire its container later
   const uint64_t key = HashKey(vs.kind, vs.ucode_hash, vs.input_hash) ^ 0x4D4F54494F4E0001ull;
   std::lock_guard lock(motion_mutex_);
   if (auto it = motion_.find(key); it != motion_.end()) return it->second.handle.Get();
   MotionEntry& e = motion_[key];
   ++motion_stats_.requested;
+  kkshaders::CompiledShader packed;
+  if (pack_open_ && pack_.find(vs.ucode_hash ^ kkshaders::kMotionPackTag, vs.input_hash, packed)) {
+    const auto& blob = device_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN ? packed.spirv : packed.dxil;
+    nvrhi::ShaderDesc desc;
+    desc.shaderType = nvrhi::ShaderType::Vertex;
+    desc.entryName = "main";
+    desc.debugName = "packed motion vertex";
+    if (!blob.empty()) e.handle = device_->createShader(desc, blob.data(), blob.size());
+    e.done = true;
+    if (e.handle) ++motion_stats_.made;
+    else ++motion_stats_.failed;
+    return e.handle.Get();
+  }
+  if (!vs.source) {
+    // A legacy pack may acquire its real container later; do not cache a failure yet.
+    motion_.erase(key);
+    --motion_stats_.requested;
+    return nullptr;
+  }
   if (!vs.source || !dxc_ok_) {
     e.done = true;
     ++motion_stats_.failed;
@@ -310,6 +328,18 @@ std::shared_ptr<const GameShader> ShaderLibrary::GetForPrewarm(kkshaders::Shader
     std::lock_guard lock(mutex_);
     if (auto it = prewarm_inputs_.find(HashKey(kind, hash, input)); it != prewarm_inputs_.end()) {
       input = it->second;
+    } else if (kind == kkshaders::ShaderKind::Pixel && !ambient_ && !water_reflections_ &&
+               !replacements_.count(hash)) {
+      kkshaders::CompiledShader compiled;
+      if (pack_open_ && pack_.find(hash ^ (scale_aware_ ? kkshaders::kScaledPackTag :
+                                                       kkshaders::kUnscaledPackTag), input, compiled)) {
+        const uint64_t actual = compiled.inputHash;
+        const uint64_t key = HashKey(kind, hash, actual);
+        if (auto known = by_hash_.find(key); known != by_hash_.end()) return known->second;
+        ++stats_.from_pack;
+        return Finish(kind, hash, actual, std::move(compiled), true);
+      }
+      if (!exact_kind) return nullptr;
     } else if (kind == kkshaders::ShaderKind::Pixel &&
                (!exact_kind || ambient_ ||
                 (water_reflections_ && kkshaders::waterReflectionHookFor(hash).enabled()))) {

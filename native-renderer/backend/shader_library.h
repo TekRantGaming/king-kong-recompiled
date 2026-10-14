@@ -109,9 +109,9 @@ class ShaderLibrary {
   bool pack_open() const { return pack_open_; }
 
   // Upscalers (docs/upscalers.md): the motion variant of a vertex shader (its body run with this
-  // frame's and last frame's constants, kkshaders::makeMotionVertexShader), translated and compiled
-  // with DXC on a thread of its own the first time it is asked for. Null until it is ready, and when it
-  // cannot be made (no DXC, a shader parsed without its container). Never waits.
+  // frame's and last frame's constants, kkshaders::makeMotionVertexShader). Prepared packs provide
+  // it immediately, including before guest containers exist. Legacy/missing entries compile on
+  // a thread of their own. Null until ready or when unavailable; never waits on DXC.
   nvrhi::IShader* MotionVariant(const GameShader& vs);
   // Blocks until every motion variant asked for so far is made or failed (tests).
   void WaitForMotionVariants();

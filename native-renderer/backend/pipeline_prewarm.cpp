@@ -25,7 +25,8 @@ bool PipelinePrewarm::Start(const Settings& settings) {
   if (renderer_) return false;
   memory_ = std::make_unique<NoGuestMemory>();
   shaders_ = std::make_unique<ShaderLibrary>(device_, *memory_);
-  shaders_->SetRenderScaleAware(settings.shaders_aware);
+  shaders_->SetRenderScaleAware(settings.shaders_aware ||
+      (settings.upscale.enabled() && settings.upscale.quality != UpscaleQuality::kNative));
   shaders_->SetWaterReflections(settings.lighting.water_on());
   shaders_->Initialize(settings.shader_pack, settings.dxc);
   auto renderer = std::make_unique<GameRenderer>(device_, *memory_, kknr::GuestMemory{}, shaders_.get());
@@ -37,6 +38,10 @@ bool PipelinePrewarm::Start(const Settings& settings) {
   o.lighting = settings.lighting;
   o.lighting.census_every = 0;
   o.lighting.gpu_time = false;
+  o.upscale = settings.upscale;
+  // Only the motion layout/shaders and input scale are needed, not an SDK context.
+  // All temporal upscalers use the same object-motion pipeline layout.
+  if (o.upscale.enabled()) o.upscale.kind = UpscalerKind::kBilinear;
   o.async_pipelines = true;  // the prewarm is the workers
   if (!renderer->Initialize()) {
     renderer.reset();

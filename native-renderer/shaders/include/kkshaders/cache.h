@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "kkshaders/compiler.h"
@@ -22,6 +23,9 @@
 namespace kkshaders {
 
 struct CompiledShader {
+    // Additional pack index keys, pointing at this entry's real translation identity.
+    // Used to adapt pipeline lists between scaled and unscaled layouts before containers exist.
+    std::vector<std::pair<uint64_t, uint64_t>> packAliases;
     ShaderKind kind = ShaderKind::Pixel;
     uint64_t ucodeHash = 0;       // XXH3-64 of the microcode bytes as stored (big-endian)
     uint64_t inputHash = 0;       // translationInputHash()
@@ -78,6 +82,11 @@ struct BuildResult {
 };
 constexpr uint32_t kBuildDxil = 1, kBuildSpirv = 2, kBuildBoth = 3;
 BuildResult buildShader(const ShaderInfo& info, Compiler& compiler, bool keepHlsl, uint32_t targets = kBuildBoth);
+// Separate microcode namespace, so wildcard lookups never return a motion shader.
+constexpr uint64_t kMotionPackTag = 0x4D4F54494F4E0001ull;
+constexpr uint64_t kScaledPackTag = 0x5343414C45440001ull;
+constexpr uint64_t kUnscaledPackTag = 0x5343414C45440002ull;
+BuildResult buildMotionShader(const ShaderInfo& info, Compiler& compiler, uint32_t targets = kBuildBoth);
 
 // What the runtime does at CreateVertexShader / CreatePixelShader: the pack, then the cache,
 // then translate, compile and store in the cache.

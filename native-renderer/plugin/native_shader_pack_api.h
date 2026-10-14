@@ -37,12 +37,13 @@ typedef struct NrShaderPackApi {
   uint32_t version;  // NR_SHADER_PACK_API_VERSION
   uint32_t size;     // sizeof(NrShaderPackApi)
 
-  // Starts making sure the pack the native renderer would use with the current settings (the
-  // plugin's cvars: native_backend, native_render_scale, native_shadow_scale, native_dxc) is in
-  // <cache_dir>/native-shaders and current, building it from <game_dir>/Shaders/xeshaders.bin
+  // Ensures both API packs, including scale, water and motion variants, are current in
+  // <cache_dir>/native-shaders, building them from <game_dir>/Shaders/xeshaders.bin
   // if not, on a thread of its own. threads 0: one per hardware thread. low_priority: the
   // workers run below normal priority (the launcher stays smooth). force: build it even when it is
-  // current (the launcher's "recompile shaders"). Never null.
+  // current (the launcher's "recompile shaders"). Listed pipelines are prepared on headless
+  // devices before finishing, with a readiness stamp so Play checks do not repeat preparation.
+  // Never null.
   NrShaderPackJob* (*start)(const char* cache_dir, const char* game_dir, uint32_t threads, int low_priority,
                             int force);
   void (*poll)(NrShaderPackJob* job, NrShaderPackProgress* out);

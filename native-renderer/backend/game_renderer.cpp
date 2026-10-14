@@ -820,9 +820,8 @@ bool GameRenderer::QueuePrewarm(const PipelineRecord& record) {
   const bool motion = (record.flags & kRecordMotion) != 0;
   nvrhi::IShader* vertex = vs->handle;
   if (motion) {
-    // A pack entry has no fetch table. Wait for its real container before asking for a variant;
-    // otherwise MotionVariant would permanently remember an unavailable source as a failure.
-    if (!upscale_ || !vs->source) return false;
+    // Prepared motion shaders are keyed by the original translation and need no guest container.
+    if (!upscale_) return false;
     vertex = shaders_->MotionVariant(*vs);
     if (!vertex) return false;
   }

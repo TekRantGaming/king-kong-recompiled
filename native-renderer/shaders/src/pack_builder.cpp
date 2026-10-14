@@ -125,6 +125,7 @@ std::string PackStamp::toText() const {
     s << "dxc " << dxc << "\n";
     s << "database " << hex16(database) << "\n";
     s << "scaled " << (scaled ? 1 : 0) << "\n";
+    s << "motion " << (motion ? 1 : 0) << "\n";
     if (lighting) s << "lighting " << hex16(lighting) << "\n";
     s << "shaders " << shaders << "\n";
     return s.str();
@@ -161,6 +162,9 @@ bool PackStamp::parse(const std::string& text, PackStamp& out) {
             if (value != "0" && value != "1") return false;
             s.scaled = value == "1";
             haveScaled = true;
+        } else if (key == "motion") {
+            if (value != "0" && value != "1") return false;
+            s.motion = value == "1";
         } else if (key == "lighting") {
             if (!parseHex(value, s.lighting)) return false;
         } else if (key == "shaders") {
@@ -191,6 +195,8 @@ PackCheck comparePackStamp(const PackStamp* found, const PackStamp& wanted) {
         c.reason = "the game's shader database changed (" + hex16(found->database) + ", now " + hex16(wanted.database) + ")";
     else if (wanted.scaled && !found->scaled)
         c.reason = "without the render scale aware pixel shaders";
+    else if (wanted.motion && !found->motion)
+        c.reason = "without the motion vertex shaders";
     else if (wanted.lighting && found->lighting != wanted.lighting)
         c.reason = found->lighting ? "with an older version of the lighting options' water shaders" : "without the lighting options' water shaders";
     else {
@@ -229,6 +235,7 @@ bool wantedPackStamp(const PackBuildOptions& options, PackStamp& out, std::strin
     out.dxc = dxcIdentity();
     out.database = XXH3_64bits(bytes.data(), bytes.size());
     out.scaled = options.scaled;
+    out.motion = options.motion;
     out.lighting = options.lighting ? lightingStampHash() : 0;
     return true;
 }
@@ -272,6 +279,7 @@ PackBuildResult buildPack(const PackBuildOptions& options, PackBuildProgress* pr
     r.stamp.dxc = dxcIdentity();
     r.stamp.database = XXH3_64bits(bytes.data(), bytes.size());
     r.stamp.scaled = options.scaled;
+    r.stamp.motion = options.motion;
     r.stamp.lighting = options.lighting ? lightingStampHash() : 0;
     if (!force) {
         PackStamp found;
@@ -329,6 +337,8 @@ PackBuildResult buildPack(const PackBuildOptions& options, PackBuildProgress* pr
 
     // Compile, one DXC instance per worker.
     p.total = uint32_t(jobs.size());
+    if (options.motion)
+        for (const auto& job : jobs) if (job.kind == ShaderKind::Vertex) ++p.total;
     p.done = 0;
     p.failed = 0;
     p.phase = PackBuildProgress::kCompiling;
@@ -350,6 +360,15 @@ PackBuildResult buildPack(const PackBuildOptions& options, PackBuildProgress* pr
             if (i >= jobs.size()) break;
             BuildResult b = compiler.ok() ? buildShader(jobs[i], compiler, false, targets) : BuildResult{};
             if (b.ok) {
+                if (options.motion && jobs[i].kind == ShaderKind::Pixel) {
+                    ShaderInfo source = jobs[i];
+                    for (bool scaled : {false, true}) {
+                        source.renderScaleAware = scaled;
+                        b.shader.packAliases.emplace_back(source.ucodeHash ^
+                            (jobs[i].renderScaleAware ? kScaledPackTag : kUnscaledPackTag),
+                            translationInputHash(source));
+                    }
+                }
                 mine.push_back(std::move(b.shader));
             } else {
                 p.failed++;
@@ -361,6 +380,16 @@ PackBuildResult buildPack(const PackBuildOptions& options, PackBuildProgress* pr
                 }
             }
             p.done++;
+            if (options.motion && jobs[i].kind == ShaderKind::Vertex && !p.cancel) {
+                BuildResult m = buildMotionShader(jobs[i], compiler, targets);
+                if (m.ok) mine.push_back(std::move(m.shader));
+                else {
+                    p.failed++;
+                    std::lock_guard<std::mutex> g(lock);
+                    if (firstError.empty()) firstError = "motion: " + m.stage + ": " + m.error.substr(0, 300);
+                }
+                p.done++;
+            }
         }
         std::lock_guard<std::mutex> g(lock);
         for (auto& s : mine) built.push_back(std::move(s));

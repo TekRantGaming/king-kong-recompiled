@@ -6,6 +6,13 @@
 #   nr_trace_replay  replays a KK_DEV_D3D_TRACE log (a tool for real traces)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
+if(WIN32 AND NR_BUILD_PLUGIN AND NR_GAME_RENDERER)
+    add_executable(nr_shader_pack_service_tests shader_pack_service_tests.cpp)
+    target_include_directories(nr_shader_pack_service_tests PRIVATE "${NR_ROOT}")
+    target_compile_features(nr_shader_pack_service_tests PRIVATE cxx_std_23)
+    target_link_libraries(nr_shader_pack_service_tests PRIVATE kkshaders rex::runtime)
+    add_dependencies(nr_shader_pack_service_tests rexgpu-native)
+endif()
 add_executable(nr_vulkan_requirements_tests vulkan_requirements_tests.cpp)
 target_include_directories(nr_vulkan_requirements_tests PRIVATE "${NR_ROOT}")
 add_test(NAME nr_vulkan_requirements_tests COMMAND nr_vulkan_requirements_tests)
