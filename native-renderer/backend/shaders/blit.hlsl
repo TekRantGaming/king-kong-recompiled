@@ -13,7 +13,7 @@ struct BlitConstants {
   int4 src_rect;   // x, y, width, height in source texels
   uint4 channels;  // output channel i = source channel channels[i]: 0-3 r g b a, 4 zero, 5 one
   uint4 flags;     // x: 1 = map r, g, b through the gamma ramp, 2 = depth to D24S8 bytes, 4 = back,
-                   // 16 = FXAA (y: edge search steps)
+                   // 16 = FXAA (y: edge search steps), 32 = CAS (y: level 1..3)
 };
 #ifdef __spirv__
 [[vk::push_constant]]
@@ -22,6 +22,8 @@ ConstantBuffer<BlitConstants> c : register(b0);
 
 Texture2D<float4> source : register(t0);
 Texture2D<float4> ramp : register(t1);
+
+#include "cas.hlsli"
 
 struct VSOut {
   float4 pos : SV_Position;
@@ -142,6 +144,7 @@ float4 Fxaa(int2 p, uint steps) {
 float4 ps_main(VSOut i) : SV_Target0 {
   int2 p = c.src_rect.xy + int2(floor(i.uv * float2(c.src_rect.zw)));
   p = clamp(p, c.src_rect.xy, c.src_rect.xy + c.src_rect.zw - 1);
+  if (c.flags.x & 32u) return Cas(p, c.flags.y);
   if (c.flags.x & 16u) return float4(Fxaa(p, max(c.flags.y, 1u)).rgb, 1.0);
   float4 v = source.Load(int3(p, 0));
   if (c.flags.x & 8u) {

@@ -3303,4 +3303,71 @@ TEST(Preload_ChapterMemoryAndFrameBudgets) {
   CHECK(f.game->stats().preloaded_resources < records.size());
 }
 
+TEST(Cas_ConstantBlackAndWhiteAndMidtoneEdges) {
+  for (uint32_t aa : {0u, 1u}) {
+    Fixture f;
+    if (!f.Init()) return;
+    f.game->options().fxaa = aa;
+    const auto rt = f.BindMainSurface();
+    const auto pipeline = f.MakeColorPipeline();
+    for (uint32_t level : {1u, 2u, 3u}) {
+      f.game->options().sharpness = level;
+      for (uint32_t color : {0xFF000000u, 0xFFFFFFFFu, 0xFF336699u}) {
+        f.Clear(kClearTarget0, color);
+        auto pixels = f.Present(rt);
+        CHECK_COLOR(pixels, 0, 0, FromArgb(color), "CAS constant border");
+        CHECK_COLOR(pixels, 32, 32, FromArgb(color), "CAS constant center");
+      }
+      auto draw = [&] {
+        f.Clear(kClearTarget0, 0xFF666666);
+        f.DrawColored(pipeline, QuadTriangles({0, -1, 1, 1}, 0xFF999999));
+        return f.Present(rt);
+      };
+      f.game->options().sharpness = 0;
+      auto before = draw();
+      f.game->options().sharpness = level;
+      auto after = draw();
+      CHECK(!after.rgba.empty());
+      if (after.rgba.empty() || before.rgba.empty()) continue;
+      size_t left = 0;
+      for (uint32_t x = 1; x < kSize; ++x) {
+        const size_t i = (32 * kSize + x) * 4;
+        if (before.rgba[i] - before.rgba[i - 4] > 0.1f) { left = i - 4; break; }
+      }
+      CHECK(left != 0);
+      if (!left) continue;
+      const size_t right = left + 4;
+      std::printf("CAS aa=%u level=%u left %.6f -> %.6f right %.6f -> %.6f\n", aa, level,
+                  before.rgba[left], after.rgba[left], before.rgba[right], after.rgba[right]);
+      CHECK(after.rgba[left] < before.rgba[left]);
+      CHECK(after.rgba[right] > before.rgba[right]);
+      CHECK_EQ(after.rgba[left + 3], before.rgba[left + 3]);
+      CHECK_COLOR(after, 0, 32, FromArgb(0xFF666666), "CAS far from edge");
+    }
+  }
+}
+
+TEST(Scale_SmallEffectsKeepAspectAndHaveOriginalOption) {
+  Fixture f(3.0f, 2.0f);
+  if (!f.Init()) return;
+  for (bool scaled : {false, true, false}) {
+    f.game->options().effect_buffers = scaled;
+    const auto effect = f.NewSurface(320, 180, 700, 0);
+    f.SetRenderTarget(0, effect);
+    f.SetViewport(0, 0, 320, 180);
+    f.Clear(kClearTarget0, 0xFF336699);
+    const auto rt = f.BindMainSurface();
+    f.Clear(kClearTarget0, 0xFF000000);
+    f.Present(rt);
+    bool found = false;
+    for (const auto& t : f.game->DebugTargets()) {
+      if (t.edram_base != 700) continue;
+      found = true;
+      CHECK_EQ(t.host_width, scaled ? 640u : 320u);
+      CHECK_EQ(t.host_height, scaled ? 360u : 180u);
+    }
+    CHECK(found);
+  }
+}
+
 NR_TEST_MAIN()

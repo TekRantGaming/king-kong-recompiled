@@ -110,6 +110,7 @@ class GameRenderer {
     // 2 "fxaa_extreme" (more edge search steps). Applied to the frame image at Present.
     uint32_t fxaa = 0;
     bool effect_buffers = true;  // identified small post targets follow output; false: guest sizes
+    uint32_t sharpness = 0;  // 0 off, 1/2/3 CAS low/medium/high
     // Create the game's pipelines on worker threads. pipeline_wait controls whether
     // a draw waits for its pending pipeline or may be skipped after the frame budget.
     bool async_pipelines = true;
@@ -523,6 +524,8 @@ class GameRenderer {
   // at its close (a crash in the NVIDIA driver at the start of the Venture chapter).
   void RetireResource(nvrhi::IResource* resource);
   nvrhi::TextureHandle fxaa_source_;  // Options::fxaa: the frame before the anti-aliasing
+  nvrhi::TextureHandle cas_source_;
+  std::unique_ptr<AoGpuTimer> cas_timer_;
   std::deque<std::pair<uint64_t, nvrhi::ResourceHandle>> retired_resources_;  // (frame, resource)
   uint32_t TextureView(HostTexture* host, const kknr::TextureFetch& fetch,
                        kkshaders::TextureDimension dimension, bool base_map);
@@ -702,6 +705,7 @@ class GameRenderer {
             nvrhi::IFramebuffer* prepared_framebuffer = nullptr, nvrhi::IBindingSet* prepared_set = nullptr);
   static constexpr uint32_t kBlitGammaRamp = 1;   // r, g, b through the display gamma ramp
   static constexpr uint32_t kBlitFxaa = 16;       // FXAA (blit_arg: edge search steps)
+  static constexpr uint32_t kBlitCas = 32;        // CAS (blit_arg: low/medium/high 1/2/3)
   static constexpr uint32_t kBlitDepthBytes = 2;  // a depth value as the D24S8 word's bytes
   static constexpr uint32_t kBlitBytesToDepth = 4;  // 8:8:8:8 colour holding those bytes back to depth
   static constexpr uint32_t kBlitTexelBytesToDepth = 8;  // the same from a texture's X, Y, Z, W bytes

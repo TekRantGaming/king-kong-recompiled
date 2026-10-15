@@ -2,6 +2,8 @@
 // passes it (the key; {0}, {1}... are filled in), then German, Spanish,
 // French and Italian.
 constexpr Entry kEntries[] = {
+    {"Sharpness", "Schärfe", "Nitidez", "Netteté", "Nitidezza"},
+    {"Adaptive sharpening. Skipped when the upscaler's own sharpening is active.", "Adaptive Schärfung. Entfällt, wenn die Schärfung des Upscalers aktiv ist.", "Nitidez adaptativa. Se omite si está activa la nitidez del reescalador.", "Netteté adaptative. Désactivée si celle de la mise à l'échelle est active.", "Nitidezza adattiva. Non applicata se è attiva quella dell'upscaler."},
     {"Effect resolution", "Effektauflösung", "Resolución de efectos", "Résolution des effets", "Risoluzione effetti"},
     {"Resolution of bloom, blur and glow buffers.", "Auflösung der Bloom-, Unschärfe- und Leuchteffekte.", "Resolución de los efectos de resplandor y desenfoque.", "Résolution des effets de flou et de lueur.", "Risoluzione degli effetti di sfocatura e bagliore."},
     {"Output", "Ausgabe", "Salida", "Sortie", "Uscita"},

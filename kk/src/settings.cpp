@@ -700,6 +700,7 @@ const std::vector<std::pair<const char*, const char*>>& OriginalLookSettings() {
       {"kk_frame_rate", "30"},         {"kk_fov", "69"},
       {"native_gi", "off"},
       {"native_effect_buffers", "false"},
+      {"native_sharpness", "off"},
       {"native_upscaler", "off"},  // the native renderer's temporal upscalers (Display > Upscaling)
       // The native renderer's lighting options (native-renderer/docs/lighting.md): the game's own.
       {"native_shadow_quality", "original"}, {"native_water_reflections", "original"}, {"native_volumetrics", "off"},

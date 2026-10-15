@@ -16,6 +16,14 @@ motion variant), `backend/upscaler*.cpp` (one file per SDK behind `backend/upsca
 
 ## Settings
 
+The Graphics and F8 Sharpness slider controls `native_sharpness`: `off` (default), `low`, `medium`,
+`high`. This is AMD FidelityFX CAS's sharpen-only FP32 filter, with sharpness parameters 0, 0.5,
+1 for the three enabled levels. It runs at Present after the game's post effects and gamma ramp,
+after FXAA when used, or after the temporal upscaler. It converts LDR sRGB to linear for filtering,
+preserves alpha and clamps edge reads. Off adds no sharpening pass. FSR RCAS, spatial FSR and NIS
+take precedence so CAS does not sharpen their already-sharpened output. DLSS and XeSS expose no
+sharpening here. The adaptation retains AMD's MIT notice in `backend/shaders/cas.hlsli`.
+
 All are read at start (init only).
 
 | Cvar | Default | Meaning |

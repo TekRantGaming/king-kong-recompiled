@@ -92,6 +92,7 @@ void GameRenderer::UpdateEffects() {
   fxaa_wanted_ = s.fxaa;
   options_.fxaa = upscale_ ? 0u : s.fxaa;
   options_.effect_buffers = s.effect_buffers;
+  options_.sharpness = std::min(s.sharpness, 3u);
   if (s.anisotropic_override != options_.anisotropic_override) {
     options_.anisotropic_override = s.anisotropic_override;
     FlushSamplers();

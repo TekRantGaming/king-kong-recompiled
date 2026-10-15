@@ -567,6 +567,7 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
       renderer->options().anisotropic_override = game.anisotropic_override;
       renderer->options().fxaa = game.fxaa;
       renderer->options().effect_buffers = game.effect_buffers;
+      renderer->options().sharpness = game.sharpness;
       renderer->options().pipeline_wait_budget_ms = game.pipeline_wait_budget_ms;
       renderer->SetFrameLog(FrameLogConfig::Parse(game.frame_log.c_str()));
       renderer->options().ao_settings = game.ao_settings;
