@@ -1,6 +1,6 @@
 param([ValidateSet('chapter','golden')][string]$Kind='chapter',
  [ValidateSet('small','minimum')][string]$Tables='minimum', [int]$Chapter=8,
- [string]$SceneRun='vrex', [switch]$Gtao, [string]$Upscaler='off')
+ [string]$SceneRun='vrex', [switch]$Gtao, [string]$Upscaler='off', [switch]$DenseRescue)
 $ErrorActionPreference='Stop'
 $workspace=(Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $lockPath='F:\KK-native-renderer\runs\codex-game.lock'
@@ -42,6 +42,15 @@ if ($Kind -eq 'golden') {
  $sceneArgs=@($scene.args)
  $limit=[double]$scene.limit_s
  $expected=@($scene.expected)
+ if ($DenseRescue) {
+  if ($SceneRun -ne 'rescue') { throw 'DenseRescue requires the rescue golden run.' }
+  # Preserve the standard comparison and additionally capture a declared
+  # window for diagnosing chapter-load/cutscene clock offsets offline.
+  $tenths=@(500..800 | Where-Object { $_ % 5 -eq 0 })
+  $env:KK_DEV_SHOTS=($tenths | ForEach-Object { ([double]$_ / 10).ToString('0.0',[Globalization.CultureInfo]::InvariantCulture) }) -join ','
+  $expected=@($tenths | ForEach-Object { "shot_$_.png" })
+  $limit=140
+ }
 } else {
  $env:KK_DEV_AUTOSKIP='1'
  $env:KK_DEV_SCRIPT='0:SKIP/120'
@@ -67,7 +76,8 @@ $overrides=@('--fullscreen=false','--window_width=1280','--window_height=720','-
 if ($Gtao) { $overrides+=@('--ao_mode=1','--ao_strength=2','--native_ao_method=gtao') }
 $names=@($overrides | ForEach-Object { ($_ -split '=',2)[0] })
 $gameArgs=@($sceneArgs | Where-Object { $names -notcontains (($_ -split '=',2)[0]) }) + $overrides
-@{kind=$Kind;tables=$Tables;chapter=$Chapter;scene_run=$SceneRun;args=$gameArgs;
+@{kind=$Kind;tables=$Tables;chapter=$(if ($Kind -eq 'chapter') {$Chapter} else {$null});scene_run=$SceneRun;args=$gameArgs;
+ shots=$env:KK_DEV_SHOTS;shots_from=$env:KK_DEV_SHOTS_FROM;script=$env:KK_DEV_SCRIPT;dense_rescue=[bool]$DenseRescue;
  dll_sha256=(Get-FileHash "$run\rexgpu-native.dll").Hash;limit_s=$limit;expected=$expected} | ConvertTo-Json -Depth 6 | Set-Content "$root\test.json"
 if (!(Test-Path -LiteralPath $lockPath)) { Set-Content -LiteralPath $lockPath 'free' }
 while ($true) {
