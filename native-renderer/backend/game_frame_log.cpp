@@ -7,6 +7,9 @@
 // and the assumption is written in docs/backend.md, "The frame log".
 #include <algorithm>
 #include <cstring>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 
 #include "backend/game_renderer.h"
 #include "backend/guest_layout.h"
@@ -15,6 +18,7 @@
 #include "kknr/render_targets.h"
 #include "kknr/resolve.h"
 #include "kkshaders/vertex_patch.h"
+#include "kkshaders/translator.h"
 
 namespace nr {
 
@@ -189,6 +193,87 @@ void GameRenderer::LogDraw(const DrawCall& call, const dev::DeviceView& d, const
   frame_log_->Touch();
   FlushPendingDraw();
   if (!frame_log_->active()) return;
+  // Opt-in material census for task 072. Hash canonical texels/blocks, never addresses or
+  // padding. Only the logged frames pay the conversion cost. Files are game-derived.
+  if (const char* directory = std::getenv("REX_DEV_MATERIAL_DUMP")) {
+    if (*directory) {
+      std::error_code ec;
+      const std::filesystem::path root(directory);
+      std::filesystem::create_directories(root, ec);
+      if (!ec) {
+        char name[128];
+        if (vs.source) {
+          std::snprintf(name, sizeof(name), "vs-%016llX.hlsl", (unsigned long long)vs.ucode_hash);
+          const auto file = root / name;
+          if (!std::filesystem::exists(file)) {
+            const auto translated = kkshaders::translate(*vs.source, {.annotateAddresses = true});
+            if (translated.ok) {
+              std::ofstream f(file);
+              for (const auto& binding : vs.source->fetches)
+                f << "// fetch " << binding.address << " " << kkshaders::declUsageName(binding.usage)
+                  << unsigned(binding.usageIndex) << '\n';
+              for (const auto& c : vs.source->constants)
+                f << "// constant " << c.name << " set " << unsigned(c.registerSet)
+                  << " register " << c.registerIndex << " count " << c.registerCount << '\n';
+              f << translated.hlsl;
+            }
+          }
+        }
+        std::string textures;
+        if (ps) for (const auto& t : ps->bindings.textures) {
+          uint32_t words[6];
+          d.fetch_constant(t.slot & 31, words);
+          auto fetch = kknr::TextureFetch::FromWords(words);
+          if (fetch.Type() != 2 || resolved_by_base_.count(fetch.BaseAddress())) continue;
+          kknr::HostTextureData data;
+          if (!kknr::ConvertTexture(fetch, physical_, data, nullptr, TextureOptions())) continue;
+          const auto* sub = data.Find(0, 0);
+          if (!sub || !sub->size) continue;
+          const uint64_t hash = kkshaders::hashBytes(data.bytes.data() + sub->offset, sub->size);
+          std::snprintf(name, sizeof(name), " t%u:%016llX/%ux%u/f%u", t.slot,
+                        (unsigned long long)hash, sub->width, sub->height, unsigned(data.plan.format));
+          textures += name;
+          std::snprintf(name, sizeof(name), "tex-%016llX-%ux%u-f%u.bin", (unsigned long long)hash,
+                        sub->width, sub->height, unsigned(data.plan.format));
+          const auto file = root / name;
+          if (!std::filesystem::exists(file)) {
+            std::ofstream f(file, std::ios::binary);
+            f.write(reinterpret_cast<const char*>(data.bytes.data() + sub->offset), sub->size);
+          }
+        }
+        uint64_t mesh = 0;
+        if (call.indexed && call.index_data && call.stride && call.vertex_data) {
+          const uint32_t index_bytes = call.index_info.index32 ? 4 : 2;
+          if ((uint64_t(call.start) + call.count) * index_bytes <= call.index_info.size_bytes) {
+            mesh = kkshaders::hashBytes(call.index_data + size_t(call.start) * index_bytes,
+                                       size_t(call.count) * index_bytes);
+            for (uint32_t i = 0; i < call.count; ++i) {
+              const auto* p = call.index_data + size_t(call.start + i) * index_bytes;
+              const uint32_t index = index_bytes == 4 ? LoadBE32(p) : LoadBE16(p);
+              const int64_t vertex = int64_t(index) + call.base_vertex;
+              if (index == (index_bytes == 4 ? UINT32_MAX : UINT16_MAX)) continue;
+              if (vertex < 0 || (uint64_t(vertex) + 1) * call.stride > call.vertex_data_size) {
+                mesh = 0;
+                break;
+              }
+              mesh = Mix(mesh, kkshaders::hashBytes(call.vertex_data + size_t(vertex) * call.stride, call.stride));
+            }
+          }
+        }
+        uint64_t skin = 0;
+        if (vs.source) for (const auto& c : vs.source->constants) {
+          if (c.name == "g_amSkinning" && c.registerSet == kkshaders::RegisterSet::Float4 &&
+              uint32_t(c.registerIndex) + c.registerCount <= 256)
+            skin = kkshaders::hashBytes(d.at(dev::kVsConstants + c.registerIndex * 16), c.registerCount * 16);
+        }
+        Logf(LogLevel::kWarning, "rexgpu-native: MATERIAL frame %llu draw %u vs %016llX ps %016llX count %u mesh %016llX skin %016llX pitch %u depth %08X mask %X%s",
+             (unsigned long long)call.frame, call.index_in_frame, (unsigned long long)vs.ucode_hash,
+             (unsigned long long)(ps ? ps->ucode_hash : 0), call.count, (unsigned long long)mesh,
+             (unsigned long long)skin, d.u32(dev::kRbSurfaceInfo) & 0x3FFF,
+             d.u32(dev::kRbDepthControl), d.u32(dev::kRbColorMask), textures.c_str());
+      }
+    }
+  }
   FrameLogDraw out;
   out.ps_hash = ps ? ps->ucode_hash : 0;
   out.vs_hash = PatchedVertexShaderHash(vs, call.vertex_declaration, d);

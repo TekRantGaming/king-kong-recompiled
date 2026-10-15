@@ -268,6 +268,13 @@ REXCVAR_DEFINE_BOOL(native_ao_gpu_time, false, "Native renderer",
 
 // Screen-space global illumination (docs/gi.md). Off by default; the launcher's Graphics page sets
 // native_gi ("Global illumination").
+REXCVAR_DEFINE_BOOL(native_tessellation, false, "Native renderer", "Experimental Ann Phong tessellation for supported material parts")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+REXCVAR_DEFINE_DOUBLE(native_tessellation_smoothness, 0.75, "Native renderer", "Ann tessellation smoothness, 0 to 1")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+REXCVAR_DEFINE_INT32(native_tessellation_detail, 4, "Native renderer", "Ann tessellation detail, 1 to 16")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+
 REXCVAR_DEFINE_STRING(native_gi, "off", "Native renderer",
                       "Screen-space global illumination (one bounce of light from the surfaces on the screen, "
                       "added at the end of the opaque pass): off, low, medium or high")

@@ -775,11 +775,12 @@ int testPackStamp() {
     s.database = 0xFEDCBA9876543210ull;
     s.scaled = true;
     s.motion = true;
+    s.tessellation = 2;
     s.shaders = 4796;
     PackStamp back;
     CHECK(PackStamp::parse(s.toText(), back));
     CHECK(back.backend == s.backend && back.translator == s.translator && back.dxc == s.dxc && back.database == s.database &&
-          back.scaled == s.scaled && back.motion == s.motion && back.shaders == s.shaders);
+          back.scaled == s.scaled && back.motion == s.motion && back.tessellation == s.tessellation && back.shaders == s.shaders);
     {  // Windows line ends and unknown keys are fine.
         std::string text = s.toText() + "future 7\n", crlf;
         for (char c : text) crlf += c == '\n' ? std::string("\r\n") : std::string(1, c);
@@ -809,6 +810,9 @@ int testPackStamp() {
     CHECK(comparePackStamp(&plain, want).state == PackState::Stale);  // but not the other way
     CHECK(comparePackStamp(&s, want).state == PackState::Current);
     PackStamp other = s;
+    other.tessellation = 0;
+    CHECK(comparePackStamp(&other, want).state == PackState::Stale);
+    other = s;
     other.motion = false;
     CHECK(comparePackStamp(&other, want).state == PackState::Stale);
     other = s;

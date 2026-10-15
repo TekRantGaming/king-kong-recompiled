@@ -25,6 +25,7 @@ class HostDevice {
 
   virtual nvrhi::IDevice* device() = 0;
   virtual nvrhi::GraphicsAPI api() const = 0;
+  virtual bool tessellation_supported() const { return api() == nvrhi::GraphicsAPI::D3D12; }
 
   // Submits a closed command list (serialised against the SDK's own use of
   // the queue where that matters).

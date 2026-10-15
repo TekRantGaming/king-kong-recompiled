@@ -35,6 +35,7 @@ class PipelinePrewarm {
     float shadow_scale = 0.0f;
     bool shaders_aware = false;
     bool flip_front_face = false;
+    bool tessellation_supported = false;
     // The lighting options (docs/lighting.md): they add b5 to the game's layout and change shaders.
     LightingConfig lighting;
     UpscaleConfig upscale;

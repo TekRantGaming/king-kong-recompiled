@@ -318,6 +318,7 @@ GameRenderer::HostTexture* GameRenderer::UploadTexture(nvrhi::ICommandList* cl,
       return nullptr;
     }
   }
+  host->material_hash = 0;
   for (const kknr::HostSubresource& sub : data.subresources) {
     cl->writeTexture(host->texture, sub.layer, sub.level, data.bytes.data() + sub.offset, sub.row_pitch,
                      sub.depth_pitch);

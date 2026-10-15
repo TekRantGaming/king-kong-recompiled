@@ -491,6 +491,7 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
     physical.size = 0x20000000;
     physical.origin = 0;
     auto renderer = std::make_unique<GameRenderer>(host_->device(), snapshot_memory_, physical, shaders_.get());
+    renderer->options().tessellation_supported = host_->tessellation_supported();
     renderer->options().render_scale_x = scale.x;
     renderer->options().render_scale_y = scale.y;
     renderer->options().shadow_scale = shadow_scale;

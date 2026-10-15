@@ -6,8 +6,31 @@
 
 #include "backend/guest_layout.h"
 #include "backend/log.h"
+#include "kkshaders/tessellation.h"
 
 namespace nr {
+
+ShaderLibrary::TessStages ShaderLibrary::AnnTessellationStages(uint64_t hash, uint64_t input, bool motion) {
+  if (!pack_open_ || !kkshaders::annTessellationShader(hash)) return {};
+  const uint64_t key = hash ^ input ^ (motion ? 0xC913F731ull : 0);
+  std::lock_guard lock(tess_mutex_);
+  if (auto it=tess_stages_.find(key); it!=tess_stages_.end()) return it->second;
+  TessStages stages;
+  nvrhi::ShaderHandle* handles[]={std::addressof(stages.vs),std::addressof(stages.hs),std::addressof(stages.ds)};
+  const nvrhi::ShaderType types[]={nvrhi::ShaderType::Vertex,nvrhi::ShaderType::Hull,nvrhi::ShaderType::Domain};
+  const char* entries[]={"ktVS","ktHS","ktDS"};
+  for (unsigned i=0;i<3;i++) {
+    kkshaders::CompiledShader packed;
+    if (!pack_.find(hash^kkshaders::tessPackTag(i,motion),input,packed)) return {};
+    const auto& blob = device_->getGraphicsAPI()==nvrhi::GraphicsAPI::VULKAN ? packed.spirv : packed.dxil;
+    if (blob.empty()) return {};
+    nvrhi::ShaderDesc desc; desc.shaderType=types[i]; desc.entryName=entries[i]; desc.debugName="Ann Phong tessellation";
+    *handles[i]=device_->createShader(desc,blob.data(),blob.size());
+    if (!*handles[i]) return {};
+  }
+  tess_stages_[key]=stages;
+  return stages;
+}
 
 namespace {
 

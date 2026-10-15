@@ -50,7 +50,7 @@ struct alignas(16) DrawConstants {
     uint32_t clipPlaneMask;         // planes enabled (bit per plane)
     uint32_t alphaFunc;             // 0 = no alpha test, else D3DCMPFUNC (1 never ... 8 always)
     float alphaRef;                 // 0-1
-    uint32_t reserved;
+    uint32_t reserved;              // Ann tessellation: detail bits 0..7, alpha UNORM16 bits 8..23
 };
 static_assert(sizeof(DrawConstants) == 59 * 16, "DrawConstants must match KKDrawConstants");
 

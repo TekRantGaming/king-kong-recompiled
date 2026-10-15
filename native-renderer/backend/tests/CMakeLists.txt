@@ -66,6 +66,13 @@ add_executable(nr_trace_replay trace_replay_main.cpp)
 target_link_libraries(nr_trace_replay PRIVATE nr_draw nr_hooks)
 
 if(NR_HAS_VULKAN)
+    if(NR_GAME_RENDERER)
+        add_executable(nr_ann_tessellation_tests ann_tessellation_tests.cpp vk_test_device.cpp readback.cpp)
+        target_link_libraries(nr_ann_tessellation_tests PRIVATE nr_renderer ${CMAKE_DL_LIBS})
+        if(NR_HAS_D3D12)
+            target_link_libraries(nr_ann_tessellation_tests PRIVATE d3d12)
+        endif()
+    endif()
     add_executable(nr_render_tests render_tests.cpp vk_test_device.cpp readback.cpp)
     target_link_libraries(nr_render_tests PRIVATE nr_renderer nr_hooks ${CMAKE_DL_LIBS})
     # Under the Khronos layer (the device enables it when installed and counts

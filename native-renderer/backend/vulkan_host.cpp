@@ -47,6 +47,10 @@ namespace {
 class VulkanHost final : public HostDevice {
  public:
   explicit VulkanHost(rex::ui::vulkan::VulkanProvider& provider) : provider_(provider) {}
+  bool tessellation_supported() const override {
+    const auto* d = provider_.vulkan_device();
+    return d && d->properties().tessellationShader;
+  }
 
   bool Initialize() {
     const rex::ui::vulkan::VulkanDevice* vulkan_device = provider_.vulkan_device();

@@ -490,7 +490,7 @@ void GameRenderer::UpscaleRecordMotion(const DrawCall& call, const dev::DeviceVi
   // every depth draw in every frame. Deferred jobs retain their existing retry
   // path (RetryDeferred); motion replay still checks readiness without waiting.
   if (u.motion_prewarm_seen.insert(motion_key).second) {
-    shaders_->MotionVariant(*vs);
+      if (!(m.pipeline.flags & kRecordTessellation)) shaders_->MotionVariant(*vs);
     std::lock_guard lock(cache_mutex_);
     QueueOrDefer(m.pipeline);
   }
@@ -735,7 +735,7 @@ void GameRenderer::UpscaleMotionPass(nvrhi::ICommandList* cl, HostTarget* depth_
     if (m.camera_only && (u.config.debug & 1024)) continue;  // debugging: their camera motion only
     const VsConstants* prev = u.history.FindPrevious(m.key, m.ordinal, m.constants, u.history.CountThisFrame(m.key));
     if (!prev) continue;
-    nvrhi::IShader* mvs = shaders_->MotionVariant(*m.vs);
+    nvrhi::IShader* mvs = (m.pipeline.flags&kRecordTessellation) ? m.vs->handle.Get() : shaders_->MotionVariant(*m.vs);
     if (!mvs) {
       ++u.stats.motion_waiting;
       continue;
@@ -763,6 +763,7 @@ void GameRenderer::UpscaleMotionPass(nvrhi::ICommandList* cl, HostTarget* depth_
     mc.params[1] = 0.5f * float(md.height);
     mc.params[2] = vulkan ? 1.0f : -1.0f;
     mc.params[3] = 0.0f;
+    if (m.pipeline.flags&kRecordTessellation) std::memcpy(&mc.params[3],&tessellation_previous_flags_,sizeof(uint32_t));
     cl->writeBuffer(u.motion_vs_constants, m.constants.data(), sizeof(float) * 1024);
     cl->writeBuffer(u.motion_draw_constants, &m.dc, sizeof(m.dc));
     cl->writeBuffer(u.motion_constants, &mc, sizeof(mc));

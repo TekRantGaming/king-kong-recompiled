@@ -34,6 +34,7 @@ struct PackStamp {
     uint64_t database = 0;      // XXH3-64 of xeshaders.bin
     bool scaled = false;        // render scale aware pixel variants included
     bool motion = false;        // motion vertex variants included
+    uint32_t tessellation = 0;  // Ann hair stage generator revision, 0 for old packs
     // The lighting options' hooked water shaders included: the hash of their hook's text
     // (kkshaders/lighting.h), 0 without them. Absent from older stamps (0).
     uint64_t lighting = 0;

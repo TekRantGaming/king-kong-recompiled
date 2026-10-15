@@ -13,6 +13,9 @@
 namespace nr {
 
 struct EffectSettings {
+  bool tessellation = false;
+  float tessellation_smoothness = 0.75f;
+  uint32_t tessellation_detail = 4;
   AoQuality ao_quality = AoQuality::kAuto;
   GiConfig gi;
   LightingConfig lighting;

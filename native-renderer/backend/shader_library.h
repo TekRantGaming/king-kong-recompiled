@@ -118,6 +118,12 @@ class ShaderLibrary {
   // it immediately, including before guest containers exist. Legacy/missing entries compile on
   // a thread of their own. Null until ready or when unavailable; never waits on DXC.
   nvrhi::IShader* MotionVariant(const GameShader& vs);
+  struct TessStages {
+    nvrhi::ShaderHandle vs, hs, ds;
+    explicit operator bool() const { return vs && hs && ds; }
+  };
+  // Pack only: never invokes DXC during play. Missing stages keep the draw original.
+  TessStages AnnTessellationStages(uint64_t hash, uint64_t input, bool motion);
   // Blocks until every motion variant asked for so far is made or failed (tests).
   void WaitForMotionVariants();
   struct MotionStats {
@@ -182,6 +188,8 @@ class ShaderLibrary {
   std::vector<std::pair<uint64_t, std::shared_ptr<const kkshaders::ShaderInfo>>> motion_queue_;
   std::thread motion_thread_;
   bool motion_stop_ = false;
+  std::mutex tess_mutex_;
+  std::unordered_map<uint64_t,TessStages> tess_stages_;
   MotionStats motion_stats_;
   struct LightingEntry {
     std::future<std::shared_ptr<GameShader>> build;

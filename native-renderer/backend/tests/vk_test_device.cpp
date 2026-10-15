@@ -193,6 +193,7 @@ bool VulkanTestDevice::Init(bool validation, bool driver_pipeline_cache, bool up
   // a blend state per render target, depth clamping (no depth clip), wireframe,
   // anisotropy.
   features2.features.fullDrawIndexUint32 = s10.fullDrawIndexUint32;
+  features2.features.tessellationShader = s10.tessellationShader;
   features2.features.independentBlend = s10.independentBlend;
   features2.features.depthClamp = s10.depthClamp;
   features2.features.fillModeNonSolid = s10.fillModeNonSolid;
