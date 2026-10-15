@@ -363,12 +363,7 @@ bool PresetUpscalerMatches(const GraphicsPreset& p) {
 }
 
 int MatchGraphicsPreset() {
-  for (int i = 0; i < kGraphicsPresetCount; ++i) {
-    const GraphicsPreset& p = kGraphicsPresets[i];
-    if (PresetUpscalerMatches(p) && MatchesGraphicsPresetSettings(p, Get))
-      return i;
-  }
-  return -1;
+  return FindGraphicsPreset(Get, PresetUpscalerMatches);
 }
 
 void ApplyGraphicsPreset(int index) {
@@ -1367,6 +1362,21 @@ class SettingsPages {
     }
 
     items.push_back(Section("Image"));
+    {
+      Item it = CvarChoice("Sharpness", "Adaptive sharpening. Skipped when the upscaler's own sharpening is active.",
+                           "native_sharpness", {{"Off", "off"}, {"Low", "low"}, {"Medium", "medium"}, {"High", "high"}});
+      it.type = ItemType::kSlider;
+      it.lo = 0; it.hi = 3; it.step = 1;
+      it.value = float(std::max(it.index, 0));
+      it.value_text = it.options[size_t(it.value)];
+      it.on_value = [choose = it.on_choice](float v) { choose(std::clamp(int(std::lround(v)), 0, 3)); };
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
+    {
+      Item it = CvarChoice("Effect resolution", "Resolution of bloom, blur and glow buffers.",
+                           "native_effect_buffers", {{"Original", "false"}, {"Output", "true"}});
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
     {
       Item it = CvarChoice("Anti-aliasing", "Smooths jagged edges after the frame is drawn.", "swap_post_effect",
                            {{"Off", "none"}, {"FXAA", "fxaa"}});
@@ -4394,9 +4404,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                 "d3d12_allow_variable_refresh_rate_and_tearing", "present_effect", "kk_render_quality",
                 "resolution_scale", "draw_resolution_scale_x", "draw_resolution_scale_y", "present_letterbox"};
       case kGraphics:
-        return {"kk_original_look", "kk_modern_settings", "swap_post_effect", "anisotropic_override",
+        return {"kk_original_look", "kk_modern_settings", "kk_graphics_preset", "swap_post_effect", "anisotropic_override",
                 "kk_motion_blur", "kk_big_blur", "kk_fog", "ao_mode", "ao_strength", "native_ao_method",
-                "native_ao_apply", "native_ao_quality", "native_ao_samples", "native_backend", "kk_renderer", "native_gi", "native_shadow_quality", "native_water_reflections", "native_volumetrics"};
+                "native_ao_apply", "native_ao_quality", "native_ao_samples", "native_backend", "kk_renderer", "native_gi", "native_shadow_quality", "native_water_reflections", "native_volumetrics", "native_effect_buffers", "native_sharpness"};
       case kGameplay:
         return {"kk_fov", "kk_camera_shake", "kk_camera_shake_strength", "kk_show_fps",
                 "kk_skip_intros", "user_language"};

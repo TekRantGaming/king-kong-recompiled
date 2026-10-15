@@ -113,6 +113,11 @@ cache watches all of it), and `GetLevelSource` read levels 1+ from the base regi
 `HasMipsInBaseTail` holds change. The Windows side should compare a minified one (a distant 16x16 decal or
 icon) against the golden frames with the option on and off: on is expected to match the 360.
 
+Task 121 kept the default off. With the option on, its Windows Original-look V-Rex golden run
+passed 4/5 scenes on Vulkan (loading failed) and 5/5 on D3D12. This is not a paired same-build
+off/on proof of a minified tail texture, so it does not establish that enabling the option is
+correct globally. See [REPORT-121](../../codex/REPORT-121.md) for the captures and limits.
+
 Untiling and tiling share one address walk (`ReadGuestBlocks` / `WriteGuestBlocks` in
 `kknr/guest_texture.h`). `EncodeGuestTexture` is the full inverse of reading (tiling plus the endian swap); the
 round-trip tests push random blocks for 11 formats (1 to 16-byte blocks, 4x4, 2x1, 4x1 and 8x1 blocks) through
@@ -265,6 +270,15 @@ constants are checked against it) drives the swaps:
 - Unused entries are trimmed after a number of frames; the renderer frees their host resources in a callback.
 
 ## Render targets
+
+`native_effect_buffers` keeps the census's 320x180 and 640x360/480 effect targets at a size
+scaled with output resolution (default on). It uses the smaller output axis scale on both axes,
+preserving each target's aspect, and includes the corresponding depth attachments. These targets
+use output scale even while a temporal upscaler is drawing the scene at input scale. The existing
+viewport/scissor, resolve rectangle and `texInvScale` shader paths carry their new sizes through
+sampling, including VPOS and unnormalised texture fetches. Known shadow-map pitches are excluded.
+Graphics and F8 offer Original/output resolution; Original look selects Original. Changes apply
+at a frame boundary and recreate a target only when its size changes.
 
 `kknr/render_targets.h` (tests: `test_render_targets.cpp`):
 

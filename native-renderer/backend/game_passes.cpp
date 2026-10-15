@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "backend/game_renderer.h"
+#include "backend/game_upscale.h"
 #include "backend/guest_layout.h"
 #include "backend/log.h"
 #include "kknr/nvrhi_format.h"
@@ -577,6 +578,38 @@ bool GameRenderer::Present(nvrhi::ICommandList* cl, uint32_t device, nvrhi::ITex
   const int32_t fh = int32_t(std::min(uint32_t(ScaleCoord(int32_t(s.height), source->scale_y)), td.height));
   const int32_t pw = memory_scale_steps_ ? int32_t(td.width) : fw;
   const int32_t ph = memory_scale_steps_ ? int32_t(td.height) : fh;
+  if (cas_timer_) cas_timer_->FrameEnd();
+  // FSR's RCAS already sharpens. Never stack CAS over it. DLSS and XeSS do not expose
+  // sharpening here; spatial FSR/NIS are excluded when reading the settings.
+  const bool own_sharpening = upscale_ &&
+      (upscale_->kind == UpscalerKind::kFsr3 || upscale_->kind == UpscalerKind::kFsr4) &&
+      upscale_->config.sharpness >= 0.0f;
+  nvrhi::ITexture* post_target = target;
+  if (options_.sharpness && !own_sharpening) {
+    if (!cas_source_ || cas_source_->getDesc().width != td.width || cas_source_->getDesc().height != td.height ||
+        cas_source_->getDesc().format != td.format) {
+      nvrhi::TextureDesc cd = td;
+      cd.initialState = nvrhi::ResourceStates::ShaderResource;
+      cd.keepInitialState = true;
+      cd.isRenderTarget = true;
+      cd.debugName = "CAS source after anti-aliasing";
+      if (cas_source_) { blit_sets_.erase(cas_source_.Get()); RetireResource(cas_source_); }
+      cas_source_ = device_->createTexture(cd);
+    }
+    if (cas_source_) post_target = cas_source_;
+  }
+  auto finish = [&](bool ok) {
+    if (!ok || post_target == target) return ok;
+    if (!cas_timer_ && std::getenv("KK_DEV_DLSS_LOG")) {
+      cas_timer_ = std::make_unique<AoGpuTimer>(device_, "CAS", "CAS GPU time");
+      cas_timer_->EnableTrace(".cas.csv");
+    }
+    if (cas_timer_) cas_timer_->Begin(cl);
+    const bool result = Blit(cl, post_target, 0, 0, pw, ph, target, 0, 0, 0, 0, channels,
+                             kBlitCas, options_.sharpness);
+    if (cas_timer_) cas_timer_->End(cl);
+    return result;
+  };
   if (options_.fxaa) {
     // FXAA (the port's swap_post_effect): the back buffer through the ramp into a scratch image,
     // then anti-aliased into the frame image.
@@ -594,12 +627,12 @@ bool GameRenderer::Present(nvrhi::ICommandList* cl, uint32_t device, nvrhi::ITex
     }
     if (fxaa_source_ && Blit(cl, source->texture, 0, 0, fw, fh, fxaa_source_, 0, 0, 0, 0, channels,
                              use_ramp ? kBlitGammaRamp : 0, 0, pw, ph)) {
-      return Blit(cl, fxaa_source_, 0, 0, pw, ph, target, 0, 0, 0, 0, channels,
-                  kBlitFxaa, options_.fxaa == 2 ? 24u : 12u);
+      return finish(Blit(cl, fxaa_source_, 0, 0, pw, ph, post_target, 0, 0, 0, 0, channels,
+                         kBlitFxaa, options_.fxaa == 2 ? 24u : 12u));
     }
   }
-  return Blit(cl, source->texture, 0, 0, fw, fh, target, 0, 0, 0, 0, channels,
-              use_ramp ? kBlitGammaRamp : 0, 0, pw, ph);
+  return finish(Blit(cl, source->texture, 0, 0, fw, fh, post_target, 0, 0, 0, 0, channels,
+                     use_ramp ? kBlitGammaRamp : 0, 0, pw, ph));
 }
 
 }  // namespace nr

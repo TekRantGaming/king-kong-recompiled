@@ -365,8 +365,8 @@ REXCVAR_DEFINE_DOUBLE(native_upscaler_sharpness, -1.0, "Native renderer",
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 REXCVAR_DEFINE_STRING(native_upscaler_mip_bias, "auto", "Native renderer",
-                      "The texture LOD bias of the scene's draws: auto (log2 of input over output, as the SDKs "
-                      "recommend) or a number")
+                      "Material texture LOD bias: auto (log2 of input over output, minus 1 for DLSS/FSR below "
+                      "output size), or a number")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 REXCVAR_DEFINE_DOUBLE(native_upscaler_reactive, 1.0, "Native renderer",
@@ -437,6 +437,12 @@ REXCVAR_DEFINE_BOOL(native_texture_tail_mips, false, "Native renderer",
                     "Small textures whose whole mip chain sits in the base level's packed tail (bound with "
                     "mip address 0): read the smaller levels from that tail. Off: level 0 only, as the SDK")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_BOOL(native_effect_buffers, true, "Native renderer",
+                    "Scale the game's small bloom, blur and glow buffers with output resolution; false keeps their original size");
+
+REXCVAR_DEFINE_STRING(native_sharpness, "off", "Native renderer",
+                      "FidelityFX CAS after native/FXAA/temporal output: off, low, medium, high. Skipped when upscaler sharpening is active");
 
 REXCVAR_DEFINE_INT32(native_debug, 0, "Native renderer",
                      "Debugging aids (bits): 1 the game's clears are green, 2 the frame image is "

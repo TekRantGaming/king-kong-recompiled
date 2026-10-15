@@ -19,6 +19,18 @@ std::string Lower(std::string s) {
 
 }  // namespace
 
+float MaterialMipBias(UpscalerKind kind, float ratio) {
+  if (!std::isfinite(ratio) || ratio <= 1.0f) return 0.0f;
+  const float bias = -std::log2(ratio);
+  switch (kind) {
+    case UpscalerKind::kDlss:
+    case UpscalerKind::kFsr3:
+    case UpscalerKind::kFsr4: return bias - 1.0f;
+    case UpscalerKind::kXess: return bias;
+    default: return bias;  // diagnostic bilinear stretch retains its previous bias
+  }
+}
+
 const char* UpscalerKindName(UpscalerKind k) {
   switch (k) {
     case UpscalerKind::kOff: return "off";

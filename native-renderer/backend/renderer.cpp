@@ -260,6 +260,7 @@ nvrhi::ICommandList* Renderer::FrameCommandList() {
     frame_command_list_->open();
     if (!frame_gpu_timer_) {
       frame_gpu_timer_ = std::make_unique<AoGpuTimer>(device_, "whole frame", "frame GPU time");
+      frame_gpu_timer_->EnableTrace(".frame.csv");
 #if NR_GAME_RENDERER
       frame_gpu_timer_->set_quiet(!(game_ && (game_->options().debug & 32768)));
 #else

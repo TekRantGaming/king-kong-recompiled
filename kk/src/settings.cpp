@@ -118,6 +118,8 @@ REXCVAR_DEFINE_STRING(kk_upscalers_offered, "", "KK/Graphics",
                       "'dlss,fsr3,xess'); empty until it has asked (the default upscaler follows it)");
 REXCVAR_DEFINE_STRING(kk_modern_settings, "", "KK/Graphics",
                       "Internal: the Modern settings to put back when leaving the Original look");
+REXCVAR_DEFINE_STRING(kk_graphics_preset, "", "KK/Graphics",
+                      "Internal: the chosen preset label when presets have identical values");
 REXCVAR_DEFINE_INT32(kk_fov, 69, "KK/Gameplay",
                      "Field of view in degrees for Jack's camera (69 = original); other cameras widen to match");
 REXCVAR_DEFINE_BOOL(kk_skip_intros, true, "KK/Gameplay",
@@ -697,6 +699,8 @@ const std::vector<std::pair<const char*, const char*>>& OriginalLookSettings() {
       {"kk_motion_blur", "true"},      {"kk_fog", "true"},        {"kk_big_blur", "true"},
       {"kk_frame_rate", "30"},         {"kk_fov", "69"},
       {"native_gi", "off"},
+      {"native_effect_buffers", "false"},
+      {"native_sharpness", "off"},
       {"native_upscaler", "off"},  // the native renderer's temporal upscalers (Display > Upscaling)
       // The native renderer's lighting options (native-renderer/docs/lighting.md): the game's own.
       {"native_shadow_quality", "original"}, {"native_water_reflections", "original"}, {"native_volumetrics", "off"},

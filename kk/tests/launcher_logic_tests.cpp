@@ -42,6 +42,21 @@ void GraphicsPresetChecks() {
     settings["anisotropic_override"] = "-1";
     Check(!kk::MatchesGraphicsPresetSettings(p, get, false), "other custom settings do not match");
   }
+  std::map<std::string, std::string> settings;
+  auto get = [&](const char* name) { return settings[name]; };
+  auto set = [&](const char* name, const char* value) { settings[name] = value; };
+  auto match = [&] { return kk::FindGraphicsPreset(get, [](const auto&) { return true; }); };
+  kk::ApplyGraphicsPresetSettings(kk::kGraphicsPresets[2], set);
+  Check(settings["anisotropic_override"] == "5", "High uses 16x");
+  Check(match() == 2, "High selection survives identical Ultra values");
+  kk::ApplyGraphicsPresetSettings(kk::kGraphicsPresets[3], set);
+  Check(settings["anisotropic_override"] == "5", "Ultra uses 16x");
+  Check(match() == 3, "Ultra selection is kept");
+  settings.erase("kk_graphics_preset");
+  Check(match() == 3, "unmarked old Ultra is still recognised");
+  settings["kk_graphics_preset"] = "High";
+  settings["anisotropic_override"] = "4";
+  Check(match() == -1 && settings["anisotropic_override"] == "4", "existing 8x choice remains Custom and is not overwritten");
 }
 
 void ShaderProgressChecks() {

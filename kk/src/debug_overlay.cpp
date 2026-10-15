@@ -99,7 +99,7 @@ bool g_controller_test_consumed = false;
 
 // ------------------------------------------------------------------ settings ---
 
-enum class Kind { kChoice, kToggle, kSlider, kSliderInt, kUpscaler, kSharpness, kMipBias, kRestart };
+enum class Kind { kChoice, kChoiceSlider, kToggle, kSlider, kSliderInt, kUpscaler, kSharpness, kMipBias, kRestart };
 // When a row is shown (the upscaler's own rows only with one that uses them).
 enum class Show { kAlways, kTemporal, kDlss, kFsr, kAo, kGi, kShadows, kWater, kShafts };
 
@@ -143,6 +143,12 @@ const std::vector<Setting>& Settings() {
       {"Upscaling", "Render quality", "kk_render_quality", Kind::kRestart, {}, 0, 1, "", false},
       {"Upscaling", "Spatial upscaler", "present_effect", Kind::kRestart, {}, 0, 1, "", false},
       // Image.
+      {"Image", "Sharpness", "native_sharpness", Kind::kChoiceSlider,
+       {{"Off", "off"}, {"Low", "low"}, {"Medium", "medium"}, {"High", "high"}}, 0, 1, "", true, Show::kAlways,
+       "Adaptive sharpening. Skipped when the upscaler's own sharpening is active."},
+      {"Image", "Effect resolution", "native_effect_buffers", Kind::kChoice,
+       {{"Original", "false"}, {"Output", "true"}}, 0, 1, "", true, Show::kAlways,
+       "Resolution of bloom, blur and glow buffers."},
       {"Image", "Anti-aliasing (FXAA)", "swap_post_effect", Kind::kChoice, {{"Off", "none"}, {"FXAA", "fxaa"}}, 0, 1,
        "", true, Show::kAlways, "Off while a temporal upscaler runs (it anti-aliases itself)."},
       {"Image", "Texture filtering", "anisotropic_override", Kind::kChoice,
@@ -888,6 +894,15 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
       case Kind::kChoice:
         Combo(st, st.options);
         break;
+      case Kind::kChoiceSlider: {
+        int value = 0;
+        for (int i = 0; i < int(st.options.size()); ++i)
+          if (Get(st.cvar) == st.options[i].value) value = i;
+        const auto label = T(st.options[value].label);
+        if (ImGui::SliderInt(id.c_str(), &value, 0, int(st.options.size()) - 1, label, slider))
+          Change(st.cvar, st.options[value].value);
+        break;
+      }
       case Kind::kToggle: {
         bool on = Get(st.cvar) == st.options[1].value;
         if (ImGui::Checkbox(id.c_str(), &on)) Change(st.cvar, on ? st.options[1].value : st.options[0].value);
@@ -1162,6 +1177,7 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
       step.cvar = st.cvar;
       switch (st.kind) {
         case Kind::kChoice:
+        case Kind::kChoiceSlider:
         case Kind::kToggle:
           for (const Option& o : st.options) step.values.push_back(o.value);
           break;
@@ -1210,6 +1226,72 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
   }
 
   void TestTick() {
+    // Task 121: bounded same-camera comparisons; no desktop capture or focus changes.
+    if (const char* dir = std::getenv("KK_DEV_GFX_QUICK"); dir && *dir) {
+      if (!InPlay() || DevSecondsSinceMenu() < 32) return;
+      struct Phase { const char* name; const char* up; const char* bias; const char* effects;
+                     const char* sharp; const char* aniso; const char* aa; const char* rcas; };
+      static const Phase phases[] = {
+        {"baseline", "dlss", "-0.585", "false", "off", "4", "none", "-1"},
+        {"mip-dlss", "dlss", "auto", "false", "off", "4", "none", "-1"},
+        {"effects", "dlss", "-0.585", "true", "off", "4", "none", "-1"},
+        {"cas-low", "dlss", "-0.585", "false", "low", "4", "none", "-1"},
+        {"cas-medium", "dlss", "-0.585", "false", "medium", "4", "none", "-1"},
+        {"cas-high", "dlss", "-0.585", "false", "high", "4", "none", "-1"},
+        {"aniso16", "dlss", "-0.585", "false", "off", "5", "none", "-1"},
+        {"fsr-before", "fsr3", "-0.585", "false", "off", "4", "none", "-1"},
+        {"mip-fsr", "fsr3", "auto", "false", "off", "4", "none", "-1"},
+        {"fsr-rcas", "fsr3", "auto", "false", "off", "4", "none", "0.5"},
+        {"fsr-rcas-cas", "fsr3", "auto", "false", "high", "4", "none", "0.5"},
+        {"xess-before", "xess", "0", "false", "off", "4", "none", "-1"},
+        {"mip-xess", "xess", "auto", "false", "off", "4", "none", "-1"},
+        {"fxaa-before", "off", "auto", "false", "off", "4", "fxaa", "-1"},
+        {"fxaa-cas", "off", "auto", "false", "medium", "4", "fxaa", "-1"},
+      };
+      static auto start = std::chrono::steady_clock::now();
+      static auto last_tick = start;
+      static int phase = -1;
+      static int shots = 0;
+      const auto tick = std::chrono::steady_clock::now();
+      // A cache rebuild or a capture may stall a frame. Give the new value its full warmup
+      // and keep the three shots apart instead of catching them all up after the stall.
+      if (tick - last_tick > std::chrono::milliseconds(250))
+        start += tick - last_tick - std::chrono::milliseconds(17);
+      last_tick = tick;
+      const double elapsed = std::chrono::duration<double>(tick - start).count();
+      const int next = int(elapsed / 6);
+      if (next >= int(std::size(phases))) {
+        if (phase != next) REXLOG_INFO("KK quick wins: done");
+        phase = next;
+        return;
+      }
+      const Phase& p = phases[next];
+      if (next != phase) {
+        phase = next; shots = 0;
+        Change("native_upscaler", p.up);
+        Change("native_upscaler_quality", "quality");
+        Change("native_upscaler_mip_bias", p.bias);
+        Change("native_effect_buffers", p.effects);
+        Change("native_sharpness", p.sharp);
+        Change("anisotropic_override", p.aniso);
+        Change("swap_post_effect", p.aa);
+        Change("native_upscaler_sharpness", p.rcas);
+        REXLOG_INFO("KK quick wins: phase {} {} begin frame {}", next, p.name, Stats().frame);
+      }
+      if (elapsed - next * 6 >= 4.0 + shots * 0.5 && shots < 3) {
+        const std::filesystem::path root(dir);
+        std::filesystem::create_directories(root);
+        const auto stem = std::string(p.name) + "-" + std::to_string(shots++);
+        art::CaptureFrame(root / (stem + art::kDevCaptureExtension));
+        const auto s = Stats();
+        std::ofstream(root / (stem + ".txt")) << SettingsText() << "\nframe=" << s.frame
+            << "\ninput=" << s.input_width << 'x' << s.input_height << "\noutput="
+            << s.output_width << 'x' << s.output_height << "\nbias=" << s.mip_bias
+            << "\nupscaler=" << s.upscaler << "\npreparing=" << s.preparing << '\n';
+        REXLOG_INFO("KK quick wins: capture {} frame {} bias {} upscaler {}", stem, s.frame, s.mip_bias, s.upscaler);
+      }
+      return;
+    }
     // Task 072's one-run Off/4/16 comparison, through the same live changes as
     // the F8 controls. Captures the game's frame only, in a private test folder.
     if (const char* dir=std::getenv("KK_DEV_TESS_BENCH"); dir && *dir) {

@@ -89,6 +89,8 @@ struct GameSettings {
   bool frame_wait_at_open = false;
   int32_t anisotropic_override = -1;
   uint32_t fxaa = 0;
+  bool effect_buffers = true;
+  uint32_t sharpness = 0;
   double pipeline_wait_budget_ms = 30.0;
   std::string frame_log;       // REX_DEV_FRAME_LOG: "<seconds>[,<frames>]", empty = off
   // Render scale (backend/render_scale.h): "1", "1.5", "2", "1920x1080". shadow_scale: 0 like the
