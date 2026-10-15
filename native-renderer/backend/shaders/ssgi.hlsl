@@ -56,6 +56,7 @@ cbuffer SsgiConstants : register(b0)
     float4 kk_ScreenZ;   // z_scale, z_offset, host scale x, host scale y
     float4 kk_Shape;     // x: multi-bounce strength (0 to 1), y: the largest share of a pixel's light the
                          // composite may take away, z: the picture's gamma (its values are gamma encoded)
+    float4 kk_Distance;  // x: max camera distance (0 unlimited), y: fade start
 };
 
 #include "../../thirdparty/XeGTAO/XeGTAO.hlsli"
@@ -120,6 +121,16 @@ float3 ToLinear(float3 c)
 float3 ToGamma(float3 c)
 {
     return pow(max(c, 0.0), 1.0 / kk_Shape.z);
+}
+
+float CameraDistance(float2 workingPixel, float z)
+{
+    float2 uv = (workingPixel + 0.5) * g_GTAOConsts.ViewportPixelSize;
+    return length(XeGTAO_ComputeViewspacePosition(uv, z, g_GTAOConsts));
+}
+bool BeyondDistance(float2 pixel, float z)
+{
+    return kk_Distance.x > 0.0 && CameraDistance(pixel, z) >= kk_Distance.x;
 }
 
 // ------------------------------------------------------------------ radiance
@@ -216,6 +227,11 @@ void cs_gather(uint2 pix : SV_DispatchThreadID)
     float2 uv = (float2(pix) + 0.5) * consts.ViewportPixelSize;
     float z = g_srcViewDepth.Load(int3(pix, 0)).x * 0.99999;
     float3 P = XeGTAO_ComputeViewspacePosition(uv, z, consts);
+    if (kk_Distance.x > 0.0 && length(P) >= kk_Distance.x)
+    {
+        g_outGi[pix] = float4(0.0, 0.0, 0.0, 1.0);
+        return;  // no gather samples for distant receivers
+    }
     float3 V = normalize(-P);
     float3 N = LoadNormalAt(g_srcNormalmap, int2(pix));
 
@@ -342,7 +358,8 @@ void cs_temporal(uint2 pix : SV_DispatchThreadID)
         return;
     float4 current = g_srcGi.Load(int3(pix, 0));
     float stored = g_srcRawDepth.Load(int3(pix, 0)).x;
-    if (kk_Extra.z < 0.5 || any(pix >= kk_Working.xy) || stored >= kk_Params.y)
+    if (kk_Extra.z < 0.5 || any(pix >= kk_Working.xy) || stored >= kk_Params.y ||
+        BeyondDistance(float2(pix), XeGTAO_ScreenSpaceToViewSpaceDepth(stored, g_GTAOConsts)))
     {
         g_outGi[pix] = current;
         return;
@@ -422,6 +439,11 @@ void cs_denoise(uint2 pix : SV_DispatchThreadID)
         return;
     }
     float z = g_srcDenoiseDepth.Load(int3(pix, 0)).x;
+    if (BeyondDistance(float2(pix), z))
+    {
+        g_outGi[pix] = float4(0.0, 0.0, 0.0, 1.0);
+        return;
+    }
     float3 N = LoadNormalAt(g_srcDenoiseNormals, int2(pix));
     int stepPx = int(kk_Mode.w);
     int2 last = int2(kk_Working.xy) - 1;
@@ -515,6 +537,13 @@ float4 ps_composite(float4 pos : SV_Position) : SV_Target0
     if (any(q < 0) || any(q >= kk_Source.zw) || stored >= kk_Params.y)
         return colour;  // outside the picture, or the sky
     float z = XeGTAO_ScreenSpaceToViewSpaceDepth(stored, g_GTAOConsts);
+    float distanceFade = 1.0;
+    if (kk_Distance.x > 0.0)
+    {
+        float distance = CameraDistance(float2(q) / kk_Params.x, z);
+        if (distance >= kk_Distance.x) return colour;
+        distanceFade = 1.0 - smoothstep(kk_Distance.y, kk_Distance.x, distance);
+    }
     float4 gi = GiAt(q, z);
     float hiddenShare = saturate(1.0 - gi.a);
     float3 lit = ToLinear(colour.rgb);
@@ -532,6 +561,10 @@ float4 ps_composite(float4 pos : SV_Position) : SV_Target0
     float3 relative = max(delta, 0.0) / max(lit, 1e-6);
     float largest = max(max(relative.r, relative.g), relative.b);
     delta = min(delta, 0.0) + max(delta, 0.0) * min(1.0, 0.75 / max(largest, 1e-6));
+    // Fade after the receiver bound, so saturated bounce cannot cancel the fade.
+    delta *= distanceFade;
+    bounce *= distanceFade;
+    gi.a = lerp(1.0, gi.a, distanceFade);
     float ao = kk_Extra.x > 0.5 ? g_srcOcclusion.Load(int3(q, 0)).x : 1.0;
     float3 result = ToGamma(lit * ao + delta);
     int debugView = int(kk_Mode.y + 0.5);

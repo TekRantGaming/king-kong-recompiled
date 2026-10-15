@@ -168,6 +168,9 @@ const std::vector<Setting>& Settings() {
       {"Global illumination", "Global illumination", "native_gi", Kind::kChoice,
        {{"Off", "off"}, {"Low", "low"}, {"Medium", "medium"}, {"High", "high"}}},
       {"Global illumination", "Intensity", "native_gi_intensity", Kind::kSlider, {}, 0, 4, "%.2f", true, Show::kGi},
+      {"Global illumination", "GI distance", "native_gi_distance", Kind::kChoice,
+       {{"Near", "near"}, {"Medium", "medium"}, {"Far", "far"}, {"Full", "full"}}, 0, 1, "", true, Show::kGi,
+       "Limits bounced light to nearby surfaces to save GPU time. Near: 16 m, Medium: 32 m, Far: 64 m. Full has no limit. Light fades smoothly over the final quarter of the distance."},
       {"Global illumination", "Resolution", "native_gi_quality", Kind::kChoice,
        {{"Auto", "auto"}, {"Half", "half"}, {"Full", "full"}}, 0, 1, "", true, Show::kGi},
       // Lighting.
@@ -600,7 +603,7 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
       Change(st.cvar, "-1");
     } else {
       const float step = st.kind == Kind::kSliderInt ? 1.0f : 0.05f;
-      value = value < st.min ? st.min : std::clamp(value + direction * step, st.min, st.max);
+      value = value < st.min ? st.min : ui::StepSlider(value, st.min, st.max, step, direction);
       Change(st.cvar, Number(value, st.kind == Kind::kSliderInt ? "%.0f" : "%.2f"));
     }
   }
@@ -666,7 +669,7 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
       const int footer = focus_row_ - int(rows.size());
       if (footer == 5 && direction)
         rex::cvar::SetFlagByName("kk_graphics_panel_opacity",
-                               Number(std::clamp(REXCVAR_GET(kk_graphics_panel_opacity) + direction * 0.05, 0.3, 1.0)));
+                               Number(ui::StepSlider(float(REXCVAR_GET(kk_graphics_panel_opacity)), 0.3f, 1.0f, 0.05f, direction)));
       if (pad_input_.Pressed(Action::kAccept)) FooterAction(footer);
     }
   }
@@ -680,18 +683,12 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
 
   void UpdateCursor(ImGuiIO& io) {
     const bool want = Interactive();
-    if (want == cursor_shown_) {
-      if (want) window_->SetCursorVisibility(rex::ui::Window::CursorVisibility::kVisible);
-      return;
-    }
+    if (want == cursor_shown_) return;
     cursor_shown_ = want;
     if (want) {
-      cursor_before_ = window_->GetCursorVisibility();
       nav_before_ = (io.ConfigFlags & ImGuiConfigFlags_NavNoCaptureKeyboard) != 0;
       io.ConfigFlags |= ImGuiConfigFlags_NavNoCaptureKeyboard;
-      window_->SetCursorVisibility(rex::ui::Window::CursorVisibility::kVisible);
     } else {
-      window_->SetCursorVisibility(cursor_before_);
       if (!nav_before_) io.ConfigFlags &= ~ImGuiConfigFlags_NavNoCaptureKeyboard;
       for (auto& [button, down] : held_) down = false;
     }
@@ -998,8 +995,9 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
   // start: a short controller-only pass through the actual pad wrapper. No OS
   // input or focus is needed. The old full settings stress harness stays opt-in.
   void ControllerTestTick() {
+    const double start = std::getenv("KK_DEV_PANEL_CONTROLLER_START") ? std::atof(std::getenv("KK_DEV_PANEL_CONTROLLER_START")) : 8;
     if (!std::getenv("KK_DEV_PANEL_CONTROLLER") || controller_test_stage_ >= 1000 || !InPlay() ||
-        DevSecondsSinceMenu() < 8) return;
+        DevSecondsSinceMenu() < start) return;
     const auto now = std::chrono::steady_clock::now();
     if (now < controller_test_next_) return;
     int samples;
@@ -1289,6 +1287,45 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
             << s.output_width << 'x' << s.output_height << "\nbias=" << s.mip_bias
             << "\nupscaler=" << s.upscaler << "\npreparing=" << s.preparing << '\n';
         REXLOG_INFO("KK quick wins: capture {} frame {} bias {} upscaler {}", stem, s.frame, s.mip_bias, s.upscaler);
+      }
+      return;
+    }
+    // Task 123: fixed-view GI distance/cost comparisons. Guest frames only;
+    // GPU times are the production timer's recent-frame average, not UI CPU time.
+    if (const char* dir = std::getenv("KK_DEV_GI_DISTANCE_TEST"); dir && *dir) {
+      if (!InPlay() || DevSecondsSinceMenu() < 8) return;
+      static const auto start = std::chrono::steady_clock::now();
+      static int previous = -1;
+      static bool captured = false;
+      static double next_sample = 0;
+      const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
+      const char* levels[] = {"off","low","low","medium","medium","high","high","high","high"};
+      const char* distances[] = {"full","full","near","full","medium","full","far","near","full"};
+      const int phase = int(elapsed / 12);
+      const std::filesystem::path root(dir);
+      if (phase >= 9) {
+        if (previous != 9) REXLOG_INFO("KK GI distance test: done");
+        previous = 9; return;
+      }
+      if (phase != previous) {
+        std::filesystem::create_directories(root);
+        Change("native_gi",levels[phase]); Change("native_gi_distance",distances[phase]);
+        REXLOG_INFO("KK GI distance test: phase {} {} {} at {:.3f}",phase,levels[phase],distances[phase],elapsed);
+        if (previous < 0) std::ofstream(root/"gpu.csv") << "seconds,phase,level,distance,gi_ms,input_width,input_height,output_width,output_height,api,applied\n";
+        captured = false; previous = phase;
+      }
+      if (elapsed >= next_sample) {
+        const auto s = nr::kk::EffectTimes();
+        std::ofstream(root/"gpu.csv",std::ios::app) << elapsed << ',' << phase << ',' << levels[phase] << ',' << distances[phase]
+            << ',' << s.gi_ms << ',' << s.input_width << ',' << s.input_height << ',' << s.output_width << ','
+            << s.output_height << ',' << s.api << ',' << s.applied << '\n';
+        next_sample = elapsed + 0.2;
+      }
+      if (!captured && elapsed-phase*12 >= 8) {
+        const std::string name = std::to_string(phase)+"-"+levels[phase]+"-"+distances[phase];
+        art::CaptureFrame(root/(name+art::kDevCaptureExtension));
+        std::ofstream(root/(name+".txt")) << SettingsText();
+        captured = true;
       }
       return;
     }
@@ -1704,7 +1741,6 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
   rex::ui::Window* window_;
   std::filesystem::path user_root_;
   std::filesystem::path last_capture_;
-  rex::ui::Window::CursorVisibility cursor_before_ = rex::ui::Window::CursorVisibility::kVisible;
   bool cursor_shown_ = false, nav_before_ = false, had_focus_ = false;
   std::map<int, bool> held_;
   std::string status_;

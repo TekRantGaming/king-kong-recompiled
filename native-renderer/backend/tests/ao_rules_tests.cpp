@@ -529,6 +529,14 @@ TEST(Lighting_SettingsAndShaders) {
 }
 
 TEST(Gi_SettingsAndLevels) {
+  GiDistance distance = GiDistance::kFull;
+  CHECK(!ParseGiDistance("invalid", distance) && distance == GiDistance::kFull);
+  for (GiDistance d : {GiDistance::kNear, GiDistance::kMedium, GiDistance::kFar, GiDistance::kFull})
+    CHECK(ParseGiDistance(GiDistanceName(d), distance) && distance == d);
+  CHECK_EQ(GiDistanceMetres(GiDistance::kNear),16.0f);
+  CHECK_EQ(GiDistanceMetres(GiDistance::kMedium),32.0f);
+  CHECK_EQ(GiDistanceMetres(GiDistance::kFar),64.0f);
+  CHECK_EQ(GiDistanceMetres(GiDistance::kFull),0.0f);
   CHECK(!GiConfig{}.enabled());
   GiLevel level = GiLevel::kHigh;
   CHECK(!ParseGiLevel("invalid", level) && level == GiLevel::kHigh);

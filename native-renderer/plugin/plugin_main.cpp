@@ -295,6 +295,11 @@ REXCVAR_DEFINE_STRING(native_gi, "off", "Native renderer",
                       "added at the end of the opaque pass): off, low, medium or high")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
+REXCVAR_DEFINE_STRING(native_gi_distance, "medium", "Native renderer",
+                      "GI camera distance: near (16 m), medium (32 m), far (64 m), full (unlimited); final quarter fades")
+    .allowed({"near", "medium", "far", "full"})
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+
 REXCVAR_DEFINE_DOUBLE(native_gi_intensity, 1.0, "Native renderer",
                       "Global illumination strength (1: normal calibrated bounce, 4: strong)")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);

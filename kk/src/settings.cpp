@@ -315,7 +315,7 @@ bool SaveSettings(const std::filesystem::path& path, bool include_temporary) {
     const bool hardware_setting = e.name == "kk_render_quality" || e.name == "native_upscaler_quality" ||
         e.name == "native_ao_quality" || e.name == "native_ao_samples" || e.name == "ao_mode" || e.name == "native_upscaler" ||
         e.name == "present_effect" || e.name == "resolution_scale" || e.name == "draw_resolution_scale_x" ||
-        e.name == "draw_resolution_scale_y" || e.name == "native_gi";
+        e.name == "draw_resolution_scale_y" || e.name == "native_gi" || e.name == "native_gi_distance";
     if (value == e.default_value && !(hardware_setting && source != rex::cvar::Source::kDefault)) continue;
     out += e.name + " = ";
     if (e.type == rex::cvar::FlagType::String) {
@@ -526,6 +526,8 @@ void ApplyHardwareRecommendation(bool detect, int width, int height) {
   }
   if (!original) {
     SetCvarDefault("native_gi", tier->gi);
+    SetCvarDefault("native_gi_distance", std::string_view(tier->gi) == "low" ? "near" :
+                   std::string_view(tier->gi) == "high" ? "far" : "medium");
     SetCvarDefault("native_ao_quality", tier->ao_quality);
     SetCvarDefault("native_ao_samples", std::to_string(tier->ao_samples));
     SetCvarDefault("ao_mode", tier->ao_enabled ? "1" : "0");

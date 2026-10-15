@@ -21,7 +21,6 @@ using text::T;
 
 namespace {
 
-constexpr double kRepeatDelay = 0.34, kRepeatRate = 0.075;
 // A controller press and a key press of the same action this close together
 // are one press (Steam's desktop layout types keys for the controller).
 constexpr double kSameInput = 0.25;
@@ -137,21 +136,7 @@ void Input::Release() {
 }
 
 bool Input::RepeatHeld(Repeat& r, bool down, double now) {
-  if (!down) {
-    r.held = false;
-    return false;
-  }
-  if (!r.held) {
-    r.held = true;
-    r.since = now;
-    r.next = now + kRepeatDelay;
-    return true;
-  }
-  if (now >= r.next) {
-    r.next = now + kRepeatRate;
-    return true;
-  }
-  return false;
+  return r.Update(down, now);
 }
 
 float Input::HeldFor(Action a) const {
@@ -171,6 +156,24 @@ void Input::FeedPad(uint16_t xinput_buttons, int16_t lx, int16_t ly, uint8_t lt,
 }
 
 void Input::UpdateGamepads(double now) {
+  if (sdl_ready_) {
+    // Enumerate state rather than depending on queued hotplug events, which
+    // may already have been drained by the session's cursor observer.
+    SDL_UpdateGamepads();
+    int count = 0;
+    SDL_JoystickID* ids = SDL_GetGamepads(&count);
+    for (int i = 0; i < count; ++i) {
+      bool open = false;
+      for (void* pad : pads_) open |= SDL_GetGamepadID(static_cast<SDL_Gamepad*>(pad)) == ids[i];
+      if (!open) if (SDL_Gamepad* pad = SDL_OpenGamepad(ids[i])) pads_.push_back(pad);
+    }
+    SDL_free(ids);
+    for (auto it = pads_.begin(); it != pads_.end();) {
+      auto* pad = static_cast<SDL_Gamepad*>(*it);
+      if (SDL_GamepadConnected(pad)) { ++it; continue; }
+      SDL_CloseGamepad(pad); it = pads_.erase(it);
+    }
+  }
   SDL_Event e;
 #if defined(_WIN32)
   // The program's own SDL (the runtime DLL has its own): everything queued is ours.
@@ -184,20 +187,7 @@ void Input::UpdateGamepads(double now) {
     return SDL_PeepEvents(&e, 1, SDL_GETEVENT, SDL_EVENT_JOYSTICK_AXIS_MOTION, SDL_EVENT_FINGER_DOWN - 1) > 0;
   };
 #endif
-  while (sdl_ready_ && next()) {
-    if (e.type == SDL_EVENT_GAMEPAD_ADDED) {
-      if (SDL_Gamepad* g = SDL_OpenGamepad(e.gdevice.which)) pads_.push_back(g);
-    } else if (e.type == SDL_EVENT_GAMEPAD_REMOVED) {
-      for (auto it = pads_.begin(); it != pads_.end(); ++it) {
-        auto* g = static_cast<SDL_Gamepad*>(*it);
-        if (SDL_GetGamepadID(g) == e.gdevice.which) {
-          SDL_CloseGamepad(g);
-          pads_.erase(it);
-          break;
-        }
-      }
-    }
-  }
+  while (sdl_ready_ && next()) {}  // state and hotplug were read above
   std::array<bool, 8> down{};
   bool dir[6] = {};
   for (void* p : pads_) {
@@ -261,7 +251,12 @@ void Input::UpdateGamepads(double now) {
   }
   // A press the keyboard just reported (typed by Steam for this controller) already counted.
   auto press = [&](Action a) {
-    if (now - key_pressed_at_[size_t(a)] >= kSameInput) pressed_[size_t(a)] = true;
+    const size_t i = size_t(a);
+    if (now - key_pressed_at_[i] < kSameInput) {
+      key_pressed_at_[i] = -1e9;  // consume this echo pair, not the next rapid physical press
+    } else {
+      pressed_[i] = true;
+    }
   };
   static constexpr Action kDirActions[6] = {Action::kUp,   Action::kDown,   Action::kLeft,
                                             Action::kRight, Action::kPageUp, Action::kPageDown};
@@ -747,10 +742,7 @@ const Item* DrawList(ImDrawList* dl, std::vector<Item>& items, ListState& st, Im
       if (it.type == ItemType::kChoice && can_change && n > 0) {
         choose(it, it.index < 0 ? (dir > 0 ? 0 : n - 1) : std::clamp(it.index + dir, 0, n - 1));
       } else if (it.type == ItemType::kSlider && can_change) {
-        // Held: faster after a moment.
-        const float held = in.HeldFor(dir > 0 ? Action::kRight : Action::kLeft);
-        const float mult = held > 2.0f ? 10.0f : held > 0.9f ? 4.0f : 1.0f;
-        set_value(it, std::clamp(it.value + dir * it.step * mult, it.lo, it.hi));
+        set_value(it, StepSlider(it.value, it.lo, it.hi, it.step, dir));
       } else if (it.disabled && (it.type == ItemType::kChoice || it.type == ItemType::kSlider)) {
         Cue(Sound::kDeny);
       }

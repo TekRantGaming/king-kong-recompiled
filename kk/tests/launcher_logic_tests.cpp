@@ -4,6 +4,8 @@
 #include "profile_save_file.h"
 #include "shader_progress.h"
 #include "graphics_presets.h"
+#include "cursor_activity.h"
+#include "slider_input.h"
 
 #include <bit>
 #include <chrono>
@@ -29,9 +31,11 @@ bool Near(float a, float b) { return std::fabs(a - b) < 1e-4f; }
 
 void GraphicsPresetChecks() {
   const char* expected[] = {"low", "medium", "high", "high", "low"};
+  const char* distances[] = {"near", "medium", "far", "full", "near"};
   for (int i = 0; i < kk::kGraphicsPresetCount; ++i) {
     const auto& p = kk::kGraphicsPresets[i];
     Check(std::string_view(p.gi) == expected[i], "preset GI mapping");
+    Check(std::string_view(p.gi_distance) == distances[i], "preset GI distance mapping");
     std::map<std::string, std::string> settings;
     auto get = [&](const char* name) { return settings[name]; };
     kk::ApplyGraphicsPresetSettings(p, [&](const char* name, const char* value) { settings[name] = value; });
@@ -267,6 +271,52 @@ void AllSavesChecks() {
 }  // namespace
 
 int main() {
+  // All launcher/pause slider ranges and F8's float/integer/opacity controls.
+  for (auto range : std::vector<std::array<float, 3>>{{0,100,1}, {0,100,5}, {69,110,1}, {0,100,10},
+       {0.05f,10,0.05f}, {0,50,1}, {0,1,0.05f}, {0,4,0.05f}, {0.25f,4,0.05f},
+       {1,16,1}, {-2,1,0.05f}, {0.3f,1,0.05f}, {10,200,5}, {25,300,5}, {0,40,1}, {0.1f,5,0.05f}}) {
+    const auto [lo, hi, step] = range;
+    float v = lo;
+    for (int i = 0; i < 2500 && v < hi; ++i) {
+      const float next = kk::ui::StepSlider(v, lo, hi, step, 1);
+      Check(next > v && next <= hi, "each right press advances and clamps"); v = next;
+    }
+    Check(v == hi, "slider reaches exact maximum");
+    for (int i = 0; i < 2500 && v > lo; ++i) {
+      const float next = kk::ui::StepSlider(v, lo, hi, step, -1);
+      Check(next < v && next >= lo, "each left press advances and clamps"); v = next;
+    }
+    Check(v == lo, "slider reaches exact minimum");
+    Check(kk::ui::StepSlider(lo,lo,hi,step,-1) == lo && kk::ui::StepSlider(hi,lo,hi,step,1) == hi,
+          "slider endpoints stay clamped");
+  }
+  Check(kk::ui::StepSlider(1.000006f,0,100,1,-1) == 0, "save-file percent rounding reaches mute");
+  Check(kk::ui::StepSlider(49.999996f,0,100,1,1) == 51, "rounded percentage advances one displayed step");
+  kk::ui::DirectionRepeat repeat;
+  Check(repeat.Update(true,0) && !repeat.Update(true,0.1) && repeat.Update(true,0.34), "press and initial repeat delay");
+  Check(!repeat.Update(true,0.4) && repeat.Update(true,0.42), "held input repeats");
+  Check(!repeat.Update(false,0.43) && repeat.Update(true,0.44), "quick second press is not lost");
+  for (int fps : {30,60,120,144,240}) {
+    kk::ui::DirectionRepeat clock;
+    int presses = 0;
+    for (int frame=0;frame<=fps*5;++frame) presses += clock.Update(true,double(frame)/fps);
+    Check(presses>=63 && presses<=64, "held repeat rate stays the same across UI frame rates");
+  }
+  kk::CursorActivity cursor;
+  kk::CursorActivity::Pad idle, stick, button;
+  stick.axes[2] = 9; button.buttons = 1;
+  Check(cursor.mouse, "pointer starts visible");
+  cursor.Controller(idle, stick);
+  Check(!cursor.mouse, "right stick hides pointer");
+  cursor.Mouse();
+  cursor.Controller(stick, stick);
+  Check(cursor.mouse, "held controller does not override active mouse");
+  cursor.Controller(stick, idle);
+  Check(cursor.mouse, "controller release does not hide pointer");
+  cursor.Controller(idle, button);
+  Check(!cursor.mouse, "fresh button hides pointer");
+  cursor.Mouse();
+  Check(cursor.mouse, "mouse restores pointer");
   GraphicsPresetChecks();
   ShaderProgressChecks();
   AllSavesChecks();

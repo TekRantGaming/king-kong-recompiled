@@ -720,9 +720,16 @@ class SettingsPages {
     play::ProfileOptions shown = profile_read_;
     if (shown.available) {
       float* volumes[] = {&shown.master, &shown.voices, &shown.music, &shown.effects};
-      for (int i = 0; i < 4; ++i)
-        if (profile_dirty_[size_t(i)]) *volumes[i] = profile_values_[size_t(i)];
-      if (profile_dirty_[4]) shown.subtitles = profile_values_[4] != 0;
+      for (int i = 0; i < 5; ++i) {
+        const float observed = i == 4 ? float(shown.subtitles) : *volumes[i];
+        if (std::abs(observed - profile_values_[i]) < 0.001f || !shown.error.empty()) profile_waiting_[i] = false;
+        // The game thread acknowledges the write later. Do not step from a
+        // stale cached read between submitting the write and that acknowledgement.
+        if (profile_dirty_[i] || profile_waiting_[i]) {
+          if (i == 4) shown.subtitles = profile_values_[i] != 0;
+          else *volumes[i] = profile_values_[i];
+        }
+      }
     }
     return shown;
   }
@@ -743,6 +750,8 @@ class SettingsPages {
     change.set = profile_dirty_;
     profile_dirty_.fill(false);
     const bool ok = play::SetProfileOptionsInAllSaves(profile_user_dir_, change);
+    for (size_t i = 0; i < change.set.size(); ++i)
+      if (change.set[i]) profile_waiting_[i] = ok;
     profile_read_at_ = profile_saves_at_ = -1;  // read again
     if (!ok) Status("The setting could not be saved in every save. Those saves were left unchanged.");
   }
@@ -1432,6 +1441,11 @@ class SettingsPages {
                            "frame at 1440p. On by default, following the graphics preset. Original keeps it off.",
                            "native_gi", {{"Off", "off"}, {"Low", "low"}, {"Medium", "medium"}, {"High", "high"}});
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+      Item distance = CvarChoice("GI distance",
+          "Limits bounced light to nearby surfaces to save GPU time. Near: 16 m, Medium: 32 m, Far: 64 m. Full has no limit. Light fades smoothly over the final quarter of the distance.",
+          "native_gi_distance", {{"Near", "near"}, {"Medium", "medium"}, {"Far", "far"}, {"Full", "full"}});
+      items.push_back(std::move(Disable(distance, original || Get("native_gi") == "off",
+                                       original ? kSetByOriginal : "Switch Global illumination on to set its distance.")));
     }
     LightingItems(items, original);
 
@@ -1903,6 +1917,7 @@ class SettingsPages {
   // Changes waiting to be written to every save (FlushProfileOptions).
   std::array<float, 5> profile_values_{};
   std::array<bool, 5> profile_dirty_{};
+  std::array<bool, 5> profile_waiting_{};
   double profile_changed_at_ = 0;
 };
 
@@ -2061,6 +2076,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
     input_.set_keyboard_enabled(capturing_.empty() && !editing_name_);  // keys go to the binding or the name
     input_.Update();
+    if (ui_sounds_) {
+      const float volume = GetBool("kk_launcher_sounds") ? GetInt("kk_launcher_sounds_volume", 50) / 100.0f : 0.0f;
+      ui_sounds_->SetVolume(volume * volume);
+    }
     if (pending_click_ != Action::kCount) {
       input_.Inject(pending_click_, ui::Device::kKeyboard);
       pending_click_ = Action::kCount;
@@ -4406,7 +4425,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       case kGraphics:
         return {"kk_original_look", "kk_modern_settings", "kk_graphics_preset", "swap_post_effect", "anisotropic_override",
                 "kk_motion_blur", "kk_big_blur", "kk_fog", "ao_mode", "ao_strength", "native_ao_method",
-                "native_ao_apply", "native_ao_quality", "native_ao_samples", "native_backend", "kk_renderer", "native_gi", "native_shadow_quality", "native_water_reflections", "native_volumetrics", "native_effect_buffers", "native_sharpness"};
+                "native_ao_apply", "native_ao_quality", "native_ao_samples", "native_backend", "kk_renderer", "native_gi", "native_gi_distance", "native_shadow_quality", "native_water_reflections", "native_volumetrics", "native_effect_buffers", "native_sharpness"};
       case kGameplay:
         return {"kk_fov", "kk_camera_shake", "kk_camera_shake_strength", "kk_show_fps",
                 "kk_skip_intros", "user_language"};
@@ -5352,6 +5371,7 @@ class InGameSettingsImpl final : public InGameSettings, private SettingsPages {
     if (seen_changes_ != saved_changes_ && now - changed_time_ > 0.8 && !ImGui::IsMouseDown(0)) SaveNow();
   }
   void SaveNow() override {
+    FlushProfileOptions();  // audio changes also belong to a quick press followed by Resume
     if (saved_changes_ == g_changes) return;
     SaveSettings(config_path_);
     saved_changes_ = seen_changes_ = g_changes;

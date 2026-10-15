@@ -12,13 +12,14 @@ struct GraphicsPreset {
   const char* filtering;  // anisotropic_override: 2 = 2x, 3 = 4x, 4 = 8x, 5 = 16x
   bool ao;                // ao_mode 1 at strength 3
   const char* gi;         // native_gi
+  const char* gi_distance; // native_gi_distance
 };
 inline constexpr GraphicsPreset kGraphicsPresets[] = {
-    {"Low", "performance", "performance", "fxaa", "2", false, "low"},
-    {"Medium", "quality", "quality", "fxaa", "3", false, "medium"},
-    {"High", "quality", "native", "fxaa", "5", true, "high"},
-    {"Ultra", "quality", "native", "fxaa", "5", true, "high"},
-    {"Steam Deck", "quality", "native", "fxaa", "2", false, "low"},
+    {"Low", "performance", "performance", "fxaa", "2", false, "low", "near"},
+    {"Medium", "quality", "quality", "fxaa", "3", false, "medium", "medium"},
+    {"High", "quality", "native", "fxaa", "5", true, "high", "far"},
+    {"Ultra", "quality", "native", "fxaa", "5", true, "high", "full"},
+    {"Steam Deck", "quality", "native", "fxaa", "2", false, "low", "near"},
 };
 inline constexpr int kGraphicsPresetCount = int(std::size(kGraphicsPresets));
 
@@ -29,7 +30,8 @@ bool MatchesGraphicsPresetSettings(const GraphicsPreset& p, Get get, bool includ
   const bool ao = get("ao_mode") != "0";
   return get("kk_render_quality") == p.quality && get("swap_post_effect") == p.aa &&
          get("anisotropic_override") == p.filtering && ao == p.ao &&
-         (!ao || get("ao_strength") == "3") && (!include_gi || get("native_gi") == p.gi);
+         (!ao || get("ao_strength") == "3") &&
+         (!include_gi || (get("native_gi") == p.gi && get("native_gi_distance") == p.gi_distance));
 }
 
 // High and Ultra currently share their values. Keep an explicit selection, and recognise
@@ -55,5 +57,6 @@ void ApplyGraphicsPresetSettings(const GraphicsPreset& p, Set set) {
   if (p.ao) set("ao_strength", "3");
   set("native_gi", p.gi);
   set("kk_graphics_preset", p.label);
+  set("native_gi_distance", p.gi_distance);
 }
 }  // namespace kk

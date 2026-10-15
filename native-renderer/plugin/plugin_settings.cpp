@@ -59,6 +59,7 @@ REXCVAR_DECLARE(double, native_ao_fade);
 REXCVAR_DECLARE(int32_t, native_ao_dump_every);
 REXCVAR_DECLARE(bool, native_ao_gpu_time);
 REXCVAR_DECLARE(std::string, native_gi);
+REXCVAR_DECLARE(std::string, native_gi_distance);
 REXCVAR_DECLARE(double, native_gi_intensity);
 REXCVAR_DECLARE(std::string, native_gi_quality);
 REXCVAR_DECLARE(double, native_gi_radius);
@@ -166,6 +167,7 @@ void ReadAoConfig(AoConfig& ao) {
 
 // --native_gi_* (docs/gi.md): a value it cannot read is logged and its default kept.
 void ReadGiConfig(GiConfig& gi) {
+  ParseGiDistance(REXCVAR_GET(native_gi_distance), gi.distance);
   if (!ParseGiLevel(REXCVAR_GET(native_gi), gi.level))
     REXGPU_WARN("rexgpu-native: native_gi '{}' is not off, low, medium or high", REXCVAR_GET(native_gi));
   if (!ParseGiQuality(REXCVAR_GET(native_gi_quality), gi.quality))
@@ -321,6 +323,7 @@ GameSettings ReadGameSettings(bool vulkan) {
     const double tess_detail=number("native_tessellation_detail",4);
     s.tessellation_detail = std::isfinite(tess_detail)?uint32_t(std::clamp(tess_detail,1.0,16.0)):4;
     ParseGiLevel(get("native_gi"), gi.level);
+    ParseGiDistance(get("native_gi_distance"), gi.distance);
     ParseGiQuality(get("native_gi_quality"), gi.quality);
     gi.intensity = float(std::clamp(number("native_gi_intensity", 1.0), 0.0, 8.0));
     ParseShadowQuality(get("native_shadow_quality"), lighting.shadows);

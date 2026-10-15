@@ -144,6 +144,7 @@ bool SceneGi::Apply(nvrhi::ICommandList* cl, bool ao_on, bool depth_before_draw)
   ss.level = level;
   ss.intensity = config_.intensity;
   ss.radius = config_.radius > 0.0f ? config_.radius : level.radius;
+  ss.distance = GiDistanceMetres(config_.distance);
   ss.thickness = config_.thickness > 0.0f ? config_.thickness : std::clamp(0.2f * ss.radius, 0.25f, 1.0f);
   ss.albedo = config_.albedo;
   ss.occlusion = ao_on ? 0.0f : config_.occlusion;

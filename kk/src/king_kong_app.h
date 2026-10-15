@@ -46,6 +46,7 @@ void InstallFpeGuard();  // fpe_guard.cpp
 }
 #include "menu_hook.h"
 #include "mouse_look.h"
+#include "cursor_activity.h"
 #include "debug_overlay.h"
 #include "online.h"
 #include "shader_pack.h"
@@ -346,6 +347,7 @@ class KingKongApp : public rex::ReXApp {
     kk::CreatePauseMenu(drawer, immediate_drawer(), config_path_, user_data_root_, game_data_root());
     kk::CreateFpsOverlay(drawer);
     kk::CreateDebugOverlay(drawer, window(), config_path_, user_data_root_);
+    kk::CreateCursorActivity(drawer, window());
     kk::benchmark::CreateBenchmarkDialog(drawer, [this] {
       kk::startup::CleanExit();
       app_context().CallInUIThreadDeferred([this] { if (window()) window()->RequestClose(); });

@@ -12,10 +12,15 @@ enum class GiLevel : uint8_t { kOff, kLow, kMedium, kHigh };
 // --native_gi_quality: the working resolution. auto: the level's (low and medium half, high full up
 // to a render scale of 1.5 and half above it).
 enum class GiQuality : uint8_t { kAuto, kHalf, kFull };
+enum class GiDistance : uint8_t { kNear, kMedium, kFar, kFull };
+float GiDistanceMetres(GiDistance distance);  // 16 / 32 / 64 / 0 (unlimited)
+bool ParseGiDistance(const std::string& text, GiDistance& out);
+const char* GiDistanceName(GiDistance distance);
 
 struct GiConfig {
   GiLevel level = GiLevel::kOff;
   GiQuality quality = GiQuality::kAuto;
+  GiDistance distance = GiDistance::kFull;
   // --native_gi_intensity: calibrated bounce strength (1: normal, 4: strong).
   float intensity = 1.0f;
   // --native_gi_radius: how far the bounce light is gathered from, in the game's world units

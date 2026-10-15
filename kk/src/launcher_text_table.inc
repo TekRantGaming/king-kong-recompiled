@@ -2843,6 +2843,19 @@ constexpr Entry kEntries[] = {
      "No se pudo iniciar Vulkan ni DirectX 12. Actualiza el controlador gráfico y comprueba los requisitos de GPU en README.md. Para obtener ayuda, usa los enlaces de soporte de README.md e incluye la carpeta logs.",
      "Impossible de démarrer Vulkan ou DirectX 12. Mettez à jour votre pilote graphique et vérifiez les exigences GPU dans README.md. Pour obtenir de l'aide, utilisez les liens de support de README.md et joignez le dossier logs.",
      "Impossibile avviare Vulkan o DirectX 12. Aggiorna il driver grafico e controlla i requisiti della GPU in README.md. Per assistenza, usa i link di supporto in README.md e includi la cartella logs."},
+    {"GI distance", "GI-Distanz", "Distancia de GI", "Distance GI", "Distanza GI"},
+    {"Near", "Nah", "Cerca", "Proche", "Vicino"},
+    {"Far", "Weit", "Lejos", "Loin", "Lontano"},
+    {"Limits bounced light to nearby surfaces to save GPU time. Near: 16 m, Medium: 32 m, Far: 64 m. Full has no limit. Light fades smoothly over the final quarter of the distance.",
+     "Begrenzt indirektes Licht auf nahe Oberflächen, um GPU-Zeit zu sparen. Nah: 16 m, Mittel: 32 m, Weit: 64 m. Voll hat keine Grenze. Das Licht wird im letzten Viertel der Distanz sanft ausgeblendet.",
+     "Limita la luz rebotada a superficies cercanas para ahorrar tiempo de GPU. Cerca: 16 m, Media: 32 m, Lejos: 64 m. Completa no tiene límite. La luz se desvanece suavemente durante el último cuarto de la distancia.",
+     "Limite la lumière indirecte aux surfaces proches pour réduire le temps GPU. Proche : 16 m, Moyenne : 32 m, Loin : 64 m. Complète est sans limite. La lumière disparaît progressivement sur le dernier quart de la distance.",
+     "Limita la luce riflessa alle superfici vicine per ridurre il tempo GPU. Vicino: 16 m, Media: 32 m, Lontano: 64 m. Completa non ha limiti. La luce sfuma gradualmente nell'ultimo quarto della distanza."},
+    {"Switch Global illumination on to set its distance.",
+     "Schalte globale Beleuchtung ein, um ihre Distanz einzustellen.",
+     "Activa la iluminación global para ajustar su distancia.",
+     "Activez l'éclairage global pour régler sa distance.",
+     "Attiva l'illuminazione globale per regolarne la distanza."},
 #include "debug_overlay_text_table.inc"
 #include "benchmark_text_table.inc"
 };
