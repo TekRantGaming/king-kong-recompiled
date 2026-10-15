@@ -39,3 +39,22 @@ in bounded parallel slabs, then joins before the existing upload. This preserves
 first-use readiness and command-list ownership. It does not by itself implement
 cross-frame asynchronous GPU uploads or an upload budget: deferring a required
 upload would also defer its dependent draws. Those parts remain open.
+
+## Retained changes
+
+- `62e5be1`: queue-bound, ordered-drain and wakeup regression coverage, plus a
+  longer NR_BENCH queue fixture. The production queue experiment was reverted:
+  seven alternating million-call runs gave 592 -> 576 ns/call, but the ranges
+  overlap and the small difference is not reliable enough to retain the change.
+- `cab47fa`: reuse byte-identical 944-byte draw constants within a command
+  list/frame. New pixel coverage exercises changed constants and reopened lists;
+  motion's existing invalidation remains. Seven alternating pairs measured the
+  repeated-material fixture at 1590.7 -> 1534.6 us/frame without an upscaler and
+  3062.5 -> 3011.4 us/frame with DLSS. This is 3.53% and 1.67% in synthetic CPU
+  recording work, not a gameplay FPS claim. Ordinary alternating-material
+  controls show no consistent change. Repeated-material uploads fall from
+  320,400 to 800 across 400 frames, with every requested draw retained.
+
+Texture workers show identical hashes and substantial large-texture benchmark
+gains; Linux correctness and final integration are pending before that commit
+is accepted. Game comparisons and final combined CTest are still pending.
