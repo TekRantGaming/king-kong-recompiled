@@ -1,0 +1,19 @@
+diff --git a/src/core/threading_posix.cpp b/src/core/threading_posix.cpp
+index 9ac8d15..b59abb3 100644
+--- a/src/core/threading_posix.cpp
++++ b/src/core/threading_posix.cpp
+@@ -414,8 +414,12 @@ class PosixConditionBase {
+       if (timeout == std::chrono::milliseconds::max()) {
+         std::this_thread::sleep_for(std::chrono::milliseconds(1));
+       } else {
+-        auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - now);
+-        auto sleep_time = std::min(remaining, std::chrono::milliseconds(1));
++        // Sleep the real remaining time (at most 1 ms). Truncating it to whole milliseconds made
++        // every sleep of a 1 ms poll slice 0 ms, so an alertable WaitAny (the audio worker's)
++        // spun a whole CPU core (task 085, ROG Ally).
++        auto remaining = end_time - now;
++        auto sleep_time =
++            std::min<std::chrono::steady_clock::duration>(remaining, std::chrono::milliseconds(1));
+         std::this_thread::sleep_for(sleep_time);
+       }
+     }

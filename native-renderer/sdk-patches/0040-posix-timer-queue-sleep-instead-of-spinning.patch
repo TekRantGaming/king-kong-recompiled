@@ -1,0 +1,75 @@
+diff --git a/src/core/timer_queue.cpp b/src/core/timer_queue.cpp
+index 5cfea05..b734149 100644
+--- a/src/core/timer_queue.cpp
++++ b/src/core/timer_queue.cpp
+@@ -10,7 +10,9 @@
+  */
+ 
+ #include <algorithm>
++#include <condition_variable>
+ #include <forward_list>
++#include <mutex>
+ 
+ #include <disruptorplus/multi_threaded_claim_strategy.hpp>
+ #include <disruptorplus/ring_buffer.hpp>
+@@ -67,9 +69,33 @@ class TimerQueue {
+     while (!stop_token.stop_requested()) {
+       {
+         // Consume new wait items and add them to sorted wait queue
++#if REX_PLATFORM_WIN32
+         dp::sequence_t available = claim_strategy_.wait_until_published(
+             next_sequence, next_sequence - 1,
+             wait_queue_.empty() ? clock::time_point::max() : wait_queue_.front()->due_);
++#else
++        // Sleep until the next timer is due or a new one is queued. The spin wait strategy's
++        // wait yielded in a loop and kept this thread at about a fifth of a CPU core even with
++        // nothing due (task 085, ROG Ally). The ring is only polled (a past timeout) after
++        // QueueTimer woke the thread; an item another producer has not published yet is
++        // picked up at that producer's own wake-up.
++        bool queued;
++        {
++          std::unique_lock<std::mutex> lock(wake_mutex_);
++          const auto woken = [this] { return wake_pending_; };
++          if (wait_queue_.empty()) {
++            wake_cv_.wait(lock, woken);
++          } else {
++            wake_cv_.wait_until(lock, wait_queue_.front()->due_, woken);
++          }
++          queued = wake_pending_;
++          wake_pending_ = false;
++        }
++        dp::sequence_t available =
++            queued ? claim_strategy_.wait_until_published(next_sequence, next_sequence - 1,
++                                                          clock::time_point::min())
++                   : next_sequence - 1;
++#endif
+ 
+         // Check for timeout
+         if (available != next_sequence - 1) {
+@@ -132,6 +158,13 @@ class TimerQueue {
+     auto sequence = claim_strategy_.claim_one();
+     buffer_[sequence] = std::move(wait_item);
+     claim_strategy_.publish(sequence);
++#if !REX_PLATFORM_WIN32
++    {
++      std::lock_guard<std::mutex> lock(wake_mutex_);
++      wake_pending_ = true;
++    }
++    wake_cv_.notify_one();
++#endif
+ 
+     return wait_item_weak;
+   }
+@@ -149,6 +182,12 @@ class TimerQueue {
+   // This is a _sorted_ (ascending due_) list of active timers managed by a
+   // dedicated thread
+   std::forward_list<std::shared_ptr<WaitItem>> wait_queue_;
++#if !REX_PLATFORM_WIN32
++  // Wakes the dispatch thread when a timer is queued (see TimerThreadMain).
++  std::mutex wake_mutex_;
++  std::condition_variable wake_cv_;
++  bool wake_pending_ = false;
++#endif
+   std::jthread dispatch_thread_;
+ };
+ 
