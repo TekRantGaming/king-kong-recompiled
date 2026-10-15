@@ -272,3 +272,75 @@ runs have no sampled build/test/shader-compiler overlap. All six games exit 0;
 no additional game launch is permitted or planned. Offline repeats wait for
 `kkshaders` and other builds/tests as well as the shared slot. Correctness-test
 passes are unaffected by this performance-label correction.
+
+
+## Task 099 final results (supersedes the earlier provisional fixture labels)
+
+Implementation `d31ae06`; background correction `6aa32b4`. All **22 native + 2
+resource Windows CTests pass**, with no exclusions; 70.95 s + 3.59 s. Production
+code has not changed since those checks. No Linux work, shader/quality/default,
+game logic, AI cadence, frame cap, queue/Present allowance, host backend or shared
+SDK changes. Nothing pushed, merged, released, packaged or deployed.
+
+Five NEW alternating fixture pairs on each API have no sampled game/build/test/
+shader-compiler overlap, and no other process consuming over 0.5 CPU-seconds
+between their process inventories. These are the authoritative offline results:
+
+| API | Serial -> batch CPU record ms | Reduction | Serial -> batch completion ms |
+|---|---:|---:|---:|
+| Vulkan | 6.641 -> 3.997 | 39.8% | 7.420 -> 4.757 |
+| DirectX 12 | 9.027 -> 4.509 | 50.0% | 9.728 -> 5.197 |
+
+Same synthetic 16 MiB creation/conversion/staging fixture and correctness checks
+as above. The original five pairs are ALL loaded by `kkshaders`, retained and
+excluded. No gameplay FPS gain is inferred from this fixture.
+
+Exactly **six** task-099 games, all exit 0, all shorter than two minutes. The
+first two profile `0fe206a` with added timing only; the final four compare the
+released Beta 5 native DLL with the candidate using the same Beta 5 executable,
+runtime, private data/cache seed, chapter 8 and settings as task 097. Windowed
+1280x720, both SDL activation hints zero, kkbg2 running, no screenshots or user
+files/caches touched. The six-launch limit is exhausted; no further task-099 game.
+
+| Run | Startup >50 ms | Worst startup ms | Peak Present-room ms | Steady FPS | Steady p99 ms |
+|---|---:|---:|---:|---:|---:|
+| vk-profile | 2 | 175.8 | 99.9 | 205.54 | 9.13 |
+| dx-profile | 2 | 273.3 | 193.3 | 110.61 | 9.22 |
+| vk-before (loaded) | 5 | 239.4 | 139.4 | 170.87 | 9.14 |
+| vk-after (loaded) | 2 | 196.6 | 114.9 | 73.46 | 58.04 |
+| dx-after | 2 | 254.7 | 176.3 | 110.58 | 9.20 |
+| dx-before | 3 | 282.0 | 201.2 | 111.07 | 9.35 |
+
+Both Vulkan comparison startup and steady windows overlap external shader/test
+work, with compilation also observed during the candidate. Their raw timings
+cannot establish an isolated gain or regression. The DirectX pair has no sampled
+build/test/shader-compiler overlap: startup improves in this single pair, while
+steady FPS is effectively unchanged. It is not a repeated or cold-cache result.
+The Beta 5 comparison also includes earlier tasks 091/097; the two profiling
+runs give an unrepeated pre-099 branch reference. All measured windows have zero
+skipped draws/pipeline wait and all run summaries have zero texture failures.
+
+The candidate publishes 97 resources (6 discarded attempts) on Vulkan and 92
+(9 discarded) on DirectX. Joined preparation totals 111.0/112.8 ms over the run;
+first-ten-second wall time is 62.7/59.8 ms, plus 9.9/8.2 ms of caller snapshot
+work and the separately measured watches. Worker stage timers are summed elapsed
+work, not additional render-thread wall time; the old texture/buffer diagnostic
+counters omit prepared work and cannot be used alone to claim CPU savings.
+
+Present room remains as high as 176.3 ms on DirectX. First-use scheduling is
+bounded within a draw and still joins; capture/watch and required existing/
+dynamic updates stay on the renderer. More worker lists can exhaust the existing
+early batch allowance sooner, in which case uploads remain mandatory inline.
+No full-game pixel equality, Vulkan steady gain, elimination of chapter-start
+stalls, cold driver-cache, owner 4K or Linux/Ally certification is claimed.
+The corrected full process audit is retained; the game's per-sample CPU deltas
+were quantized by a PowerShell overload, so absence of a recorded small delta
+does not certify an idle PC. Clean fixture inventories retain unrounded CPU.
+
+Both task-owned priority reservations were moved aside after use, the task's
+shared lock was released, and no task-099 game remains. No more work is scheduled.
+Full coordinator report: `F:\KK-native-renderer\codex\REPORT-099.md`.
+Evidence: `kk/out/task099/bench-clean-summary.json`, `game-final-summary.json`,
+`resource-summary.json`, all raw fixtures/process inventories, run scripts,
+build/CTest logs and `artifact-verification.json`. Candidate SHA-256:
+`614d0013bb2ec00ab1bcf3dfcd0d8844e62edd840d603631f2b84e3d1cc60aec`.
