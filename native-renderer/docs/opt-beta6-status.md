@@ -24,5 +24,18 @@ logic, AI cadence, graphics defaults, interpolation or generation changes.
 
 ## Validation
 
-Baseline standalone tests, offline benchmarks and Windows builds pending. No
-game launched. Measurements and limitations will be recorded here as work lands.
+Baseline standalone native renderer built with Clang 19.1.5, Release, SDK 038:
+**21/21 CTest entries pass** (80.54 s). The initial configure used a relative SDK
+prefix and accidentally found the unrelated default SDK; its plugin link failed.
+The corrected absolute prefix builds successfully. Only corrected-build results
+are used. Baseline binaries are retained in ignored `kk/out/task091/baseline-bin`.
+
+Short preliminary queue timings overlapped another task's compilation and cannot
+support a gain claim. Extended alternating fixtures are ready; measurements wait
+for all builds to finish. No game launched yet.
+
+The first texture-worker design converts owned, swapped guest-memory snapshots
+in bounded parallel slabs, then joins before the existing upload. This preserves
+first-use readiness and command-list ownership. It does not by itself implement
+cross-frame asynchronous GPU uploads or an upload budget: deferring a required
+upload would also defer its dependent draws. Those parts remain open.
