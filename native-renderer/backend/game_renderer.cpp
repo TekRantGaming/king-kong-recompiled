@@ -1655,7 +1655,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     const uint8_t* raw = d.at(base);
     bool changed = false;
     for (uint32_t block = 0; block < 4096; block += 64) {
-      if (std::memcmp(raw + block, last_raw.data() + block, 64) == 0) continue;
+      if (SameBytes64(raw + block, last_raw.data() + block)) continue;
       changed = true;
       std::memcpy(last_raw.data() + block, raw + block, 64);
       for (uint32_t i = block / 4; i < block / 4 + 16; ++i) last[i] = LoadBEFloat(raw + i * 4);

@@ -117,7 +117,7 @@ bool ThreadedSink::CaptureDevice(Command& c, uint32_t device) {
   uint8_t* sent = sent_device_.data();
   for (size_t i = 0; i < blocks.size(); ++i) {
     const DeviceBlock& b = blocks[i];
-    const bool same = !all && (b.size == 64 ? std::memcmp(live + b.offset, sent + b.offset, 64) == 0
+    const bool same = !all && (b.size == 64 ? SameBytes64(live + b.offset, sent + b.offset)
                                             : std::memcmp(live + b.offset, sent + b.offset, b.size) == 0);
     if (same) continue;
     std::memcpy(sent + b.offset, live + b.offset, b.size);
