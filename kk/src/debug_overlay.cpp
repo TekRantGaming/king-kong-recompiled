@@ -1467,7 +1467,7 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
       case 10: {  // A/B: trial settings, hold, let go
         test_orig_ = {{"native_gi", Get("native_gi")}, {"native_shadow_quality", Get("native_shadow_quality")},
                       {"ao_mode", Get("ao_mode")}};
-        Change("native_gi", "high");
+        Change("native_gi", Get("native_gi") == "high" ? "medium" : "high");
         Change("native_shadow_quality", "ultra");
         Change("ao_mode", Get("ao_mode") == "1" ? "0" : "1");
         test_ab_ = {{"native_gi", Get("native_gi")}, {"native_shadow_quality", Get("native_shadow_quality")},
@@ -1519,7 +1519,8 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
         std::ifstream f(txt, std::ios::binary);
         const std::string text((std::istreambuf_iterator<char>(f)), {});
         check(png, "the capture key wrote " + last_capture_.filename().string());
-        check(text.find(std::string(T("Global illumination")) + " / " + T("Global illumination") + ": " + T("High") + " *") != std::string::npos,
+        const char* trial_gi = test_ab_.front().second == "high" ? "High" : "Medium";
+        check(text.find(std::string(T("Global illumination")) + " / " + T("Global illumination") + ": " + T(trial_gi) + " *") != std::string::npos,
               "the capture's text lists the trial settings");
         Reset();
         bool back = true;
