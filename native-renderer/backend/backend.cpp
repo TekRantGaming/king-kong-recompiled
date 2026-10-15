@@ -506,6 +506,7 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
     physical.size = 0x20000000;
     physical.origin = 0;
     auto renderer = std::make_unique<GameRenderer>(host_->device(), snapshot_memory_, physical, shaders_.get());
+    renderer->options().upload_submit = [this](nvrhi::ICommandList* cl) { host_->ExecuteCommandList(cl); };
     renderer->options().tessellation_supported = host_->tessellation_supported();
     renderer->options().render_scale_x = scale.x;
     renderer->options().render_scale_y = scale.y;
@@ -609,9 +610,9 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
     threaded_->on_long_frame = [](const ThreadedSink::LongFrame& f) {
       REXLOG_INFO(
           "rexgpu-native: long game frame {:.1f} ms: {} calls ({:.1f} ms copying, {:.1f} ms waiting for room, {} "
-          "waiting at its end); ring skimmer waited {} times, {:.1f} ms",
+          "waiting at its end); ring skimmer waited {} times, {:.1f} ms; room: commands {:.1f} ms, Present {:.1f} ms",
           f.frame_us / 1000.0, f.calls, f.copy_us / 1000.0, f.room_us / 1000.0, f.backlog, f.fence_waits,
-          f.fence_wait_us / 1000.0);
+          f.fence_wait_us / 1000.0, f.command_room_us / 1000.0, f.present_room_us / 1000.0);
     };
     sink = threaded_.get();
     REXLOG_INFO("rexgpu-native: render thread on");
@@ -863,6 +864,14 @@ void Backend::PresentNow(rex::ui::Presenter* presenter, uint32_t frontbuffer_wid
           "copying, {} ms waiting for room; ring skimmer waited {} times, {} ms",
           t.commands, t.device_copies, t.max_backlog, t.enqueue_us / 1000, t.backpressure_us / 1000, t.fence_waits,
           t.fence_wait_us / 1000);
+      REXLOG_INFO("rexgpu-native: queue room: commands {} us, Present {} us, peak {} bytes",
+                  t.command_room_us, t.present_room_us, t.max_queued_bytes);
+#if NR_GAME_RENDERER
+      if (const GameRenderer* g = renderer_->game()) {
+        REXLOG_INFO("rexgpu-native: early uploads {} bytes in {} batches",
+                    g->stats().early_upload_bytes, g->stats().early_upload_batches);
+      }
+#endif
     }
     {
       std::lock_guard frames_lock(g_frames_mutex);

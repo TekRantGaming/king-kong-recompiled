@@ -7,6 +7,7 @@
 #include "backend/game_renderer.h"
 #include "backend/log.h"
 #include "backend/texture_workers.h"
+#include "backend/upload_batch.h"
 #include "kknr/buffers.h"
 #include "kknr/nvrhi_format.h"
 #include "kknr/resolve.h"
@@ -318,11 +319,13 @@ GameRenderer::HostTexture* GameRenderer::UploadTexture(nvrhi::ICommandList* cl,
   }
   auto* host = static_cast<HostTexture*>(entry.host);
   const kknr::HostTexturePlan& p = data.plan;
+  bool created = false;
   if (!host || host->plan.format != p.format || host->plan.width != p.width || host->plan.height != p.height ||
       host->plan.depth != p.depth || host->plan.layers != p.layers || host->plan.levels != p.levels ||
       host->plan.dimension != p.dimension || host->scale_x != 1.0f || host->scale_y != 1.0f) {
     ReleaseHostTexture(host);
     host = CreateHostTexture(p, false);
+    created = true;
     entry.host = host;
     if (!host) {
       texture_bind_failure_ = "host texture creation failed";
@@ -330,11 +333,18 @@ GameRenderer::HostTexture* GameRenderer::UploadTexture(nvrhi::ICommandList* cl,
     }
   }
   host->material_hash = 0;
+  // Only a new resource can be moved ahead of this frame's earlier draws. The
+  // upload list finishes in ShaderResource; explicitly start the draw list's
+  // local tracking there (the new Vulkan image otherwise starts in Common).
+  nvrhi::ICommandList* upload = created ? EarlyUpload(data.bytes.size()) : nullptr;
+  if (upload) cl->beginTrackingTextureState(host->texture, nvrhi::AllSubresources,
+                                           nvrhi::ResourceStates::ShaderResource);
+  else upload = cl;
   for (const kknr::HostSubresource& sub : data.subresources) {
-    cl->writeTexture(host->texture, sub.layer, sub.level, data.bytes.data() + sub.offset, sub.row_pitch,
+    upload->writeTexture(host->texture, sub.layer, sub.level, data.bytes.data() + sub.offset, sub.row_pitch,
                      sub.depth_pitch);
   }
-  cl->setTextureState(host->texture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
+  upload->setTextureState(host->texture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
   host->alias_source = nullptr;
   textures_.OnUploaded(entry, physical_);
   ++stats_.texture_uploads;
@@ -563,6 +573,19 @@ uint32_t GameRenderer::BindSampler(const uint32_t words[6], const kkshaders::Sam
 
 // ---------------------------------------------------------------- buffers
 
+nvrhi::ICommandList* GameRenderer::EarlyUpload(uint64_t bytes) {
+  if (!options_.upload_submit) return nullptr;
+  if (!upload_batch_) upload_batch_ = std::make_unique<UploadBatch>(device_, options_.upload_submit);
+  return upload_batch_->Begin(bytes);
+}
+
+void GameRenderer::FlushUploads() {
+  if (!upload_batch_) return;
+  upload_batch_->Flush();
+  stats_.early_upload_bytes = upload_batch_->bytes();
+  stats_.early_upload_batches = upload_batch_->batches();
+}
+
 bool GameRenderer::IsDynamicVertexBuffer(uint32_t physical, uint32_t bytes) {
   // The same test as BindVertexBuffer's dynamic path (no hashing, no watch, nothing changes).
   const kknr::BufferCache::Entry* known = bytes ? vertex_buffers_.Find(physical, bytes, 0) : nullptr;
@@ -603,6 +626,7 @@ GameRenderer::HostBuffer* GameRenderer::BindVertexBuffer(nvrhi::ICommandList* cl
   }
   kknr::BufferCache::BindResult r = vertex_buffers_.Bind(physical, bytes, 0, physical_, frame_);
   auto* host = static_cast<HostBuffer*>(r.entry->host);
+  const bool created = !host;
   if (!host) {
     host = new HostBuffer();
     nvrhi::BufferDesc d;
@@ -634,7 +658,10 @@ GameRenderer::HostBuffer* GameRenderer::BindVertexBuffer(nvrhi::ICommandList* cl
     } else {
       host->last_upload_frame = frame_;
     }
-    cl->writeBuffer(host->buffer, data, (uint64_t(bytes) + 3) & ~uint64_t(3));
+    nvrhi::ICommandList* upload = created ? EarlyUpload((uint64_t(bytes) + 3) & ~uint64_t(3)) : nullptr;
+    if (!upload) upload = cl;
+    upload->writeBuffer(host->buffer, data, (uint64_t(bytes) + 3) & ~uint64_t(3));
+    upload->setBufferState(host->buffer, nvrhi::ResourceStates::ShaderResource);
     stats_.upload_bytes += (uint64_t(bytes) + 3) & ~uint64_t(3);
     if (!host->dynamic) vertex_buffers_.OnUploaded(*r.entry, physical_);
     ++stats_.buffer_uploads;
@@ -652,6 +679,7 @@ GameRenderer::HostBuffer* GameRenderer::BindIndexBuffer(nvrhi::ICommandList* cl,
   kknr::BufferCache::BindResult r =
       index_buffers_.Bind(physical, bytes, kknr::IndexConversionId(index32), physical_, frame_);
   auto* host = static_cast<HostBuffer*>(r.entry->host);
+  const bool created = !host;
   if (!host) {
     host = new HostBuffer();
     nvrhi::BufferDesc d;
@@ -669,7 +697,10 @@ GameRenderer::HostBuffer* GameRenderer::BindIndexBuffer(nvrhi::ICommandList* cl,
   if (r.action != kknr::BindAction::kUseExisting) {
     auto& converted = scratch_index_upload_;
     kknr::ConvertIndexBuffer(data, converted, bytes, index32);
-    cl->writeBuffer(host->buffer, converted.data(), converted.size());
+    nvrhi::ICommandList* upload = created ? EarlyUpload(converted.size()) : nullptr;
+    if (!upload) upload = cl;
+    upload->writeBuffer(host->buffer, converted.data(), converted.size());
+    upload->setBufferState(host->buffer, nvrhi::ResourceStates::IndexBuffer);
     stats_.upload_bytes += converted.size();
     index_buffers_.OnUploaded(*r.entry, physical_);
     ++stats_.buffer_uploads;

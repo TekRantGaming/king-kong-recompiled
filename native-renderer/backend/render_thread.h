@@ -83,6 +83,8 @@ class ThreadedSink final : public DrawSink {
     uint64_t device_copies = 0;      // calls whose device differed from the previous call's
     uint64_t enqueue_us = 0;         // the game's thread copying and queueing
     uint64_t backpressure_us = 0;    // the game's thread waiting for room in the queue
+    uint64_t command_room_us = 0, present_room_us = 0;
+    uint64_t max_queued_bytes = 0;   // retained command/snapshot capacities, excluding free commands
     uint64_t fence_waits = 0;        // WaitDone calls that had to wait
     uint64_t fence_wait_us = 0;      // the ring skimmer waiting for the render thread
     uint64_t max_backlog = 0;        // commands
@@ -124,6 +126,7 @@ class ThreadedSink final : public DrawSink {
     uint64_t frame_us = 0;
     uint64_t copy_us = 0;          // the game's thread copying calls
     uint64_t room_us = 0;          // the game's thread waiting for room in the queue
+    uint64_t command_room_us = 0, present_room_us = 0;
     uint64_t fence_waits = 0;      // the ring skimmer waiting for the render thread
     uint64_t fence_wait_us = 0;
     uint64_t calls = 0;            // calls queued in the frame
@@ -154,6 +157,11 @@ class ThreadedSink final : public DrawSink {
     uint32_t device_address = 0;
     std::vector<uint16_t> device_blocks;
     std::vector<uint8_t> device_bytes;
+    size_t StorageBytes() const {
+      return sizeof(Command) + snapshot.bytes.capacity() +
+          snapshot.objects.capacity() * sizeof(GuestSnapshot::Object) +
+          device_blocks.capacity() * sizeof(uint16_t) + device_bytes.capacity();
+    }
   };
   std::unique_ptr<Command> NewCommand(Kind kind);
   // The device's changed blocks into the command; false: no device.
@@ -179,6 +187,7 @@ class ThreadedSink final : public DrawSink {
   std::deque<std::unique_ptr<Command>> queue_;
   std::vector<std::unique_ptr<Command>> free_;  // run commands, for reuse
   uint32_t queued_presents_ = 0;
+  uint64_t queued_bytes_ = 0;
   std::atomic<uint64_t> queued_{0};
   std::atomic<uint64_t> device_copies_{0};
   uint64_t done_ = 0;

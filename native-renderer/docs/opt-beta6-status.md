@@ -146,5 +146,9 @@ Queue instrumentation separates the existing 8,000-command bound from the
 one-Present bound and measures retained queued command/snapshot bytes. Neither
 bound is enlarged. Tests cover both blocked conditions, first-use transfer
 contents and same-frame updates on Vulkan/D3D12, budget exhaustion and reopening.
-Build, offline paired measurements and permitted game comparisons are pending.
-Task 097 game launches so far: zero (maximum six).
+Windows build and all 22 CTest entries pass (69.75 s). Five alternating
+synthetic upload pairs complete in 1.443 -> 1.055 ms on Vulkan and
+1.647 -> 0.983 ms on DirectX 12; CPU recording increases 0.092 / 0.200 ms.
+The queue diagnostic fixture is 527 -> 537 ns/call with overlapping ranges;
+no queue throughput gain is claimed. Chapter comparisons are in progress.
+Task 097 game launches so far: two (maximum six).

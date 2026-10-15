@@ -715,6 +715,12 @@ TEST(RenderThreadWakesRoomAndFenceWaiters) {
     CHECK_EQ(inner.calls, presents ? 2u : 8101u);
     CHECK(inner.ordered);  // includes wrapping the bounded queue's slots
     CHECK_EQ(sink.stats().max_backlog, presents ? 1u : 8000u);
+    const auto stats = sink.stats();
+    CHECK(stats.backpressure_us > 0);
+    CHECK_EQ(stats.backpressure_us, stats.command_room_us + stats.present_room_us);
+    CHECK((presents ? stats.present_room_us : stats.command_room_us) > 0);
+    CHECK_EQ(presents ? stats.command_room_us : stats.present_room_us, 0u);
+    CHECK(stats.max_queued_bytes > 0);
   }
 }
 

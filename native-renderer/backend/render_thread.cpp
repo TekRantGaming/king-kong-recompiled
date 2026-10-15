@@ -203,10 +203,22 @@ void ThreadedSink::Enqueue(std::unique_ptr<Command> command, std::chrono::steady
   const bool present = command->kind == Kind::kPresent;
   std::unique_lock lock(mutex_);
   const auto copied = std::chrono::steady_clock::now();
-  room_cv_.wait(lock, [&] {
-    return stop_ || (queue_.size() < kMaxQueuedCommands && (!present || queued_presents_ < max_queued_presents));
-  });
-  stats_.backpressure_us += Micros(copied);
+  // Attribute each blocked interval to the bound preventing progress. A Present
+  // limit is a frame-latency bound, not a shortage of command storage: a larger
+  // command queue (or measuring it in bytes) cannot remove that wait.
+  while (!stop_) {
+    const bool full = queue_.size() >= kMaxQueuedCommands;
+    const bool present_full = present && queued_presents_ >= max_queued_presents;
+    if (!full && !present_full) break;
+    const auto wait = std::chrono::steady_clock::now();
+    room_cv_.wait(lock, [&] {
+      return stop_ || (full ? queue_.size() < kMaxQueuedCommands : queued_presents_ < max_queued_presents);
+    });
+    const uint64_t elapsed = Micros(wait);
+    stats_.backpressure_us += elapsed;
+    (full ? stats_.command_room_us : stats_.present_room_us) += elapsed;
+  }
+  queued_bytes_ += command->StorageBytes();
   queue_.push_back(std::move(command));
   if (present) ++queued_presents_;
   // The next call's command: one the render thread has run, if any.
@@ -215,6 +227,7 @@ void ThreadedSink::Enqueue(std::unique_ptr<Command> command, std::chrono::steady
     free_.pop_back();
   }
   stats_.max_backlog = std::max<uint64_t>(stats_.max_backlog, queue_.size());
+  stats_.max_queued_bytes = std::max(stats_.max_queued_bytes, queued_bytes_);
   ++stats_.commands;
   queued_.fetch_add(1, std::memory_order_release);
   stats_.enqueue_us += uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(copied - start).count());
@@ -228,6 +241,8 @@ void ThreadedSink::Enqueue(std::unique_ptr<Command> command, std::chrono::steady
       report = on_long_frame && lf.frame_us > long_frame_us;
       lf.copy_us = stats_.enqueue_us - frame_start_stats_.enqueue_us;
       lf.room_us = stats_.backpressure_us - frame_start_stats_.backpressure_us;
+      lf.command_room_us = stats_.command_room_us - frame_start_stats_.command_room_us;
+      lf.present_room_us = stats_.present_room_us - frame_start_stats_.present_room_us;
       lf.fence_waits = stats_.fence_waits - frame_start_stats_.fence_waits;
       lf.fence_wait_us = stats_.fence_wait_us - frame_start_stats_.fence_wait_us;
       lf.calls = stats_.commands - frame_start_stats_.commands;
@@ -269,6 +284,7 @@ void ThreadedSink::Run() {
     if (queue_.empty()) return;  // stopping, and nothing left
     std::unique_ptr<Command> c = std::move(queue_.front());
     queue_.pop_front();
+    queued_bytes_ -= c->StorageBytes();
     lock.unlock();
     room_cv_.notify_all();
     // The device as this call saw it: the copy brought up to date with the call's changes.

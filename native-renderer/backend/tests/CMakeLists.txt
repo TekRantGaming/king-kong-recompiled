@@ -66,6 +66,14 @@ add_executable(nr_trace_replay trace_replay_main.cpp)
 target_link_libraries(nr_trace_replay PRIVATE nr_draw nr_hooks)
 
 if(NR_HAS_VULKAN)
+    add_executable(nr_upload_tests upload_tests.cpp vk_test_device.cpp readback.cpp)
+    target_link_libraries(nr_upload_tests PRIVATE nr_renderer ${CMAKE_DL_LIBS})
+    if(NR_HAS_D3D12)
+        target_link_libraries(nr_upload_tests PRIVATE d3d12)
+    endif()
+    add_test(NAME nr_upload_tests
+             COMMAND ${Python3_EXECUTABLE} -I "${CMAKE_CURRENT_SOURCE_DIR}/check_validation.py"
+                     $<TARGET_FILE:nr_upload_tests>)
     if(NR_GAME_RENDERER)
         add_executable(nr_ann_tessellation_tests ann_tessellation_tests.cpp vk_test_device.cpp readback.cpp)
         target_link_libraries(nr_ann_tessellation_tests PRIVATE nr_renderer ${CMAKE_DL_LIBS})

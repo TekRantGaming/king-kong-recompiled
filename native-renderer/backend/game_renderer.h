@@ -90,6 +90,9 @@ class GameRenderer {
     // vertices it reads instead. Watching them cost a write fault per 4 KB page and frame (340 a
     // frame in Venture: the game writes a 4 MB ring of particle vertices between its draws).
     bool dynamic_vertex_buffers = false;
+    // Synchronous submission to the host's graphics queue, using its queue locks.
+    // Optional for embedders; without it all uploads use the draw list as before.
+    std::function<void(nvrhi::ICommandList*)> upload_submit;
     // The port's anisotropic_override (the launcher's texture filtering): -1 the game's own, else the
     // Xenos AnisoFilter value every sampler uses (0 off, 1 1:1, 2 2:1, 3 4:1, 4 8:1, 5 16:1), as the
     // Xenos plugin applies it.
@@ -187,6 +190,7 @@ class GameRenderer {
     uint64_t texture_failures = 0;
     uint64_t buffer_uploads = 0;
     uint64_t upload_bytes = 0;       // guest textures, vertices, indices and draw constants (not auxiliary passes)
+    uint64_t early_upload_bytes = 0, early_upload_batches = 0;
     uint64_t draw_constant_uploads = 0, draw_constant_identical = 0;
     uint64_t scale_uploads = 0, scale_identical = 0;
     uint64_t vertex_binds = 0, vertex_repeated = 0;
@@ -875,6 +879,9 @@ class GameRenderer {
   std::vector<kknr::VertexElement> scratch_declaration_;
   std::vector<kkshaders::DeclElement> scratch_patch_declaration_;
   std::vector<uint8_t> scratch_index_upload_;
+  std::unique_ptr<class UploadBatch> upload_batch_;
+  nvrhi::ICommandList* EarlyUpload(uint64_t bytes);
+  void FlushUploads();
   // Lazy CPU conversion pool. Every conversion joins before returning, so teardown has no guest/GPU work.
   std::unique_ptr<kknr::TextureConversionWorkers> texture_conversion_workers_;
 

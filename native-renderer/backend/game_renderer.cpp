@@ -1,4 +1,5 @@
 #include "backend/game_renderer.h"
+#include "backend/upload_batch.h"
 #include "kkshaders/tessellation.h"
 
 #include <algorithm>
@@ -543,6 +544,8 @@ GameRenderer::StutterStats GameRenderer::stutter() const {
 }
 
 void GameRenderer::EndFrame() {
+  FlushUploads();
+  if (upload_batch_) upload_batch_->EndFrame();
   if (tessellation_timer_) tessellation_timer_->FrameEnd();
   PublishEffectTimes();
   if (TessellationBenchRequested() && frame_%300==0)
@@ -1199,6 +1202,10 @@ void GameRenderer::BuildPipelineDesc(const PipelineRecord& r, nvrhi::IShader* vs
 }
 
 void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
+  struct UploadGuard {
+    GameRenderer* game;
+    ~UploadGuard() { game->FlushUploads(); }
+  } uploads{this};
   UpdateEffects();
   if (options_.debug & 512) return;  // debugging: no draws
   if (options_.debug & 8192) {       // debugging: no draws, but 10 us of the game thread's time each

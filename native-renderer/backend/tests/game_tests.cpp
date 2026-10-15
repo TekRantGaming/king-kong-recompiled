@@ -353,6 +353,7 @@ struct Fixture {
     renderer->set_submit([this](nvrhi::ICommandList* cl) { gpu->Execute(cl); });
     auto g = std::make_unique<GameRenderer>(
         gpu->device(), mem, kknr::GuestMemory{mem.PhysicalBase(), mem.PhysicalSize(), 0}, shaders.get());
+    g->options().upload_submit = [this](nvrhi::ICommandList* cl) { gpu->Execute(cl); };
     // SwiftShader's JIT is not safe against pipeline creation racing draws: NR_TEST_SYNC_PIPELINES=1.
     if (std::getenv("NR_TEST_SYNC_PIPELINES")) g->options().async_pipelines = false;
     g->options().render_scale_x = scale_x;
@@ -812,6 +813,47 @@ TEST(Draw_IndexedFromADynamicVertexBuffer) {
   }
   CHECK_EQ(f.game->stats().dynamic_vertex_buffers, uint64_t(1));
   CHECK_EQ(f.game->stats().draws, uint64_t(12));
+}
+
+TEST(Draw_EarlyLargeBuffersPreserveSameFrameUpdates) {
+  Fixture f;
+  if (!f.Init()) return;
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  constexpr uint32_t bytes = 64u << 10;
+  uint32_t data = 0;
+  const uint32_t vb = f.mem.NewVertexBuffer(bytes, data);
+  std::vector<ColorVertex> vertices;
+  for (int q = 0; q < 4; ++q) {
+    auto v = QuadTriangles(kQuadrants[q], kQuadrantColors[q]);
+    vertices.insert(vertices.end(), v.begin(), v.end());
+  }
+  auto payload = Bytes(vertices);
+  std::memcpy(f.mem.Writable(data), payload.data(), payload.size());
+  std::vector<uint32_t> indices(bytes / 2, 0);
+  for (uint32_t i = 0; i < 24; ++i) indices[i] = i;
+  const uint32_t ib = f.mem.NewIndexBuffer(indices, false);
+  f.SetDeclaration(p.decl);
+  f.SetShaders(p.vs, p.ps_interp);
+  f.SetStream(0, vb, 0, 16);
+  f.SetIndices(ib);
+  f.Clear(kClearTarget0, 0xFF000000);
+  f.DrawIndexed(4, 0, 0, 12);
+  CHECK_EQ(f.game->stats().early_upload_bytes, uint64_t(bytes) * 2);
+  CHECK_EQ(f.game->stats().early_upload_batches, 1u);
+  // Reuse the same host buffer after earlier draws have been recorded. The
+  // changed last quadrants must not change the first two draws' source data.
+  for (auto& vertex : vertices) vertex.argb = 0xFF3399CC;
+  payload = Bytes(vertices);
+  std::memcpy(f.mem.Writable(data), payload.data(), payload.size());
+  f.game->InvalidateRange(data - FakeGuestMemory::kPhysicalView, bytes);
+  f.DrawIndexed(4, 0, 12, 12);
+  Pixels px = f.Present(rt);
+  Rgb want[4] = {FromArgb(kQuadrantColors[0]), FromArgb(kQuadrantColors[1]),
+                FromArgb(0xFF3399CC), FromArgb(0xFF3399CC)};
+  f.CheckQuadrants(px, want, __LINE__);
+  CHECK_EQ(f.game->stats().buffer_uploads, 3u);
+  CHECK_EQ(f.game->stats().early_upload_bytes, uint64_t(bytes) * 2);
 }
 
 TEST(Draw_ConstantsReachShaders) {
@@ -1392,6 +1434,8 @@ static void CheckTextureUploadSampleAndInvalidate(uint32_t side) {
   check(px, 100, __LINE__);
   CHECK_EQ(f.game->stats().texture_uploads, uint64_t(2));
   CHECK_EQ(f.game->stats().texture_failures, uint64_t(0));
+  CHECK_EQ(f.game->stats().early_upload_bytes, side >= 128 ? uint64_t(side) * side * 4 : 0u);
+  CHECK_EQ(f.game->stats().early_upload_batches, side >= 128 ? 1u : 0u);
 }
 
 TEST(Textures_UploadSampleAndInvalidate) { CheckTextureUploadSampleAndInvalidate(4); }
