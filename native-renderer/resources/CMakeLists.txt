@@ -20,12 +20,15 @@ add_library(kknr_resources STATIC
     src/guest_texture.cpp
     src/endian.cpp
     src/texture_convert.cpp
+    src/texture_workers.cpp
     src/buffers.cpp
     src/texture_cache.cpp
     src/render_targets.cpp
     src/resolve.cpp
 )
 target_include_directories(kknr_resources PUBLIC include)
+find_package(Threads REQUIRED)
+target_link_libraries(kknr_resources PUBLIC Threads::Threads)
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(kknr_resources PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
 endif()
@@ -67,6 +70,7 @@ add_executable(kknr_resources_tests
     tests/test_roundtrip.cpp
     tests/test_tail_mips.cpp
     tests/test_convert.cpp
+    tests/test_convert_workers.cpp
     tests/test_buffers.cpp
     tests/test_cache.cpp
     tests/test_render_targets.cpp

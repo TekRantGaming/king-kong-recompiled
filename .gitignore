@@ -30,3 +30,7 @@
 /dist/
 # Task 036 offscreen GPU test build.
 /out/task036-tests/
+
+# Recorded resource content keys are generated from private game runs.
+kkresources.list
+*.resources-*

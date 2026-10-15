@@ -50,6 +50,7 @@ if(NR_GAME_RENDERER)
         game_renderer.cpp
         game_resources.cpp
         game_memory.cpp
+        game_preload.cpp
         game_passes.cpp
         game_frame_log.cpp
         game_tessellation.cpp

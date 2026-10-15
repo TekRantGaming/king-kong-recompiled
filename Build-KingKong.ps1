@@ -14,7 +14,8 @@ param(
     [string]$OutDir = "$PSScriptRoot\KingKong",
     [switch]$Yes,                         # answer yes to every question
     [switch]$NoShortcut,                  # never add a desktop shortcut
-    [switch]$NoLaunch                     # do not offer to start the game
+    [switch]$NoLaunch,                    # do not offer to start the game
+    [string]$ResourceList = $env:KK_RESOURCE_LIST # optional recorded chapter resource list
 )
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
@@ -105,6 +106,13 @@ if (Get-ChildItem -LiteralPath $OutDir -Filter '*rexgpu-xenos*.dll') {
 }
 Get-ChildItem "$bin\*.exe", "$bin\*.dll" | Where-Object { $_.Name -notlike '*rexgpu-xenos*' } |
   Copy-Item -Destination $OutDir -Force
+# Recorded content keys only, supplied outside Git. Keep beside the executable
+# when the staged KingKong folder is packaged in the Windows zip.
+if ($ResourceList) {
+    Copy-Item -LiteralPath $ResourceList -Destination "$OutDir\kkresources.list" -Force
+} else {
+    Write-Warning 'KK_RESOURCE_LIST not set: no new kkresources.list; chapter resources will be learned in play.'
+}
 # Move (not copy) the 6.3 GB of game files so they aren't stored twice.
 if (Test-Path "$OutDir\game") { Move-Item "$OutDir\game" "$OutDir\game.old" -Force }
 Move-Item "$root\kk\assets" "$OutDir\game"

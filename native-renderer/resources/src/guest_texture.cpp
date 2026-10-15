@@ -41,7 +41,8 @@ BlockExtent GetLevelBlockExtent(const GuestLayout& layout, uint32_t level) {
 // The offsets are BlockOffset's, with the format's block size worked out once per level instead of
 // once per block (task 085: untiling a chapter's textures held up its first frames).
 template <typename Fn>
-static bool WalkLevel(const GuestLayout& layout, uint32_t level, uint32_t layer, LevelSource& src, Fn&& fn) {
+static bool WalkLevel(const GuestLayout& layout, uint32_t level, uint32_t layer, LevelSource& src, Fn&& fn,
+                      uint32_t first_row = 0, uint32_t row_count = UINT32_MAX) {
   if (!GetLevelSource(layout, level, layer, src)) return false;
   const LevelStorage& s = *src.storage;
   const uint32_t bpb = GetFormatInfo(layout.format).BytesPerBlock();
@@ -49,24 +50,53 @@ static bool WalkLevel(const GuestLayout& layout, uint32_t level, uint32_t layer,
   while ((2u << bpb_log2) <= bpb) ++bpb_log2;  // Log2Floor (bpb >= 1)
   const size_t base = src.layer_offset_bytes;
   size_t index = 0;
-  for (uint32_t z = 0; z < src.depth; ++z)
-    for (uint32_t y = 0; y < src.height_blocks; ++y) {
-      const uint32_t gy = y + src.y_blocks, gz = z + src.z;
-      if (!layout.tiled) {
-        const uint32_t row = (gz * s.height_blocks + gy) * s.row_pitch_bytes;
-        for (uint32_t x = 0; x < src.width_blocks; ++x, ++index)
-          fn(base + uint32_t(row + (x + src.x_blocks) * bpb), index);
-      } else if (layout.dimension == Dimension::k3D) {
-        for (uint32_t x = 0; x < src.width_blocks; ++x, ++index)
-          fn(base + uint32_t(TiledOffset3D(int32_t(x + src.x_blocks), int32_t(gy), int32_t(gz), s.pitch_blocks,
-                                           s.height_blocks, bpb_log2)),
-             index);
-      } else {
-        for (uint32_t x = 0; x < src.width_blocks; ++x, ++index)
-          fn(base + uint32_t(TiledOffset2D(int32_t(x + src.x_blocks), int32_t(gy), s.pitch_blocks, bpb_log2)), index);
-      }
+  const uint32_t end_row = uint32_t(std::min(uint64_t(first_row) + row_count,
+                                           uint64_t(src.height_blocks) * src.depth));
+  for (uint32_t flat_row = first_row; flat_row < end_row; ++flat_row) {
+    const uint32_t z = flat_row / src.height_blocks, y = flat_row % src.height_blocks;
+    const uint32_t gy = y + src.y_blocks, gz = z + src.z;
+    if (!layout.tiled) {
+      const uint32_t row = (gz * s.height_blocks + gy) * s.row_pitch_bytes;
+      for (uint32_t x = 0; x < src.width_blocks; ++x, ++index)
+        fn(base + uint32_t(row + (x + src.x_blocks) * bpb), index);
+    } else if (layout.dimension == Dimension::k3D) {
+      for (uint32_t x = 0; x < src.width_blocks; ++x, ++index)
+        fn(base + uint32_t(TiledOffset3D(int32_t(x + src.x_blocks), int32_t(gy), int32_t(gz), s.pitch_blocks,
+                                         s.height_blocks, bpb_log2)),
+           index);
+    } else {
+      for (uint32_t x = 0; x < src.width_blocks; ++x, ++index)
+        fn(base + uint32_t(TiledOffset2D(int32_t(x + src.x_blocks), int32_t(gy), s.pitch_blocks, bpb_log2)), index);
     }
+  }
   return true;
+}
+
+bool ReadGuestBlockRows(const GuestLayout& layout, const GuestRegions& regions, uint32_t level, uint32_t layer,
+                        uint32_t first_row, uint32_t row_count, uint8_t* out) {
+  LevelSource src;
+  if (!GetLevelSource(layout, level, layer, src) ||
+      uint64_t(first_row) + row_count > uint64_t(src.height_blocks) * src.depth) return false;
+  if (!row_count) return true;
+  const uint32_t bpb = GetFormatInfo(layout.format).BytesPerBlock();
+  const uint8_t* region = src.from_mips ? regions.mips : regions.base;
+  const size_t region_size = src.from_mips ? regions.mips_size : regions.base_size;
+  std::memset(out, 0, size_t(row_count) * src.width_blocks * bpb);
+  auto read = [&](auto block_bytes) {
+    constexpr size_t kBytes = decltype(block_bytes)::value;
+    return WalkLevel(layout, level, layer, src, [&](size_t offset, size_t index) {
+      if (region && offset + kBytes <= region_size) std::memcpy(out + index * kBytes, region + offset, kBytes);
+    }, first_row, row_count);
+  };
+  switch (bpb) {
+    case 4: return read(std::integral_constant<size_t, 4>());
+    case 8: return read(std::integral_constant<size_t, 8>());
+    case 16: return read(std::integral_constant<size_t, 16>());
+    default:
+      return WalkLevel(layout, level, layer, src, [&](size_t offset, size_t index) {
+        if (region && offset + bpb <= region_size) std::memcpy(out + index * bpb, region + offset, bpb);
+      }, first_row, row_count);
+  }
 }
 
 bool ReadGuestBlocks(const GuestLayout& layout, const GuestRegions& regions, uint32_t level, uint32_t layer,

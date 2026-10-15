@@ -508,6 +508,7 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
     physical.size = 0x20000000;
     physical.origin = 0;
     auto renderer = std::make_unique<GameRenderer>(host_->device(), snapshot_memory_, physical, shaders_.get());
+    renderer->options().upload_submit = [this](nvrhi::ICommandList* cl) { host_->ExecuteCommandList(cl); };
     renderer->options().tessellation_supported = host_->tessellation_supported();
     renderer->options().table_capacities = host_->table_capacities();
     const auto descriptor_completion = host_->device()->createEventQuery();
@@ -633,9 +634,9 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
     threaded_->on_long_frame = [](const ThreadedSink::LongFrame& f) {
       REXLOG_INFO(
           "rexgpu-native: long game frame {:.1f} ms: {} calls ({:.1f} ms copying, {:.1f} ms waiting for room, {} "
-          "waiting at its end); ring skimmer waited {} times, {:.1f} ms",
+          "waiting at its end); ring skimmer waited {} times, {:.1f} ms; room: commands {:.1f} ms, Present {:.1f} ms",
           f.frame_us / 1000.0, f.calls, f.copy_us / 1000.0, f.room_us / 1000.0, f.backlog, f.fence_waits,
-          f.fence_wait_us / 1000.0);
+          f.fence_wait_us / 1000.0, f.command_room_us / 1000.0, f.present_room_us / 1000.0);
     };
     sink = threaded_.get();
     REXLOG_INFO("rexgpu-native: render thread on");
@@ -670,6 +671,15 @@ bool Backend::SetDriverPipelineCache(const std::string& path) {
 bool Backend::LoadPipelineList(const std::string& path) {
 #if NR_GAME_RENDERER
   if (renderer_ && renderer_->game()) return renderer_->game()->LoadPipelineList(path);
+#else
+  (void)path;
+#endif
+  return false;
+}
+
+bool Backend::LoadResourceList(const std::string& path) {
+#if NR_GAME_RENDERER
+  if (renderer_ && renderer_->game()) return renderer_->game()->LoadResourceList(path);
 #else
   (void)path;
 #endif
@@ -862,7 +872,7 @@ void Backend::PresentNow(rex::ui::Presenter* presenter, uint32_t frontbuffer_wid
       const ShaderLibrary::Stats sh = shaders_->stats();
       REXLOG_INFO(
           "rexgpu-native: game renderer: {} draws, skipped {} (shader) {} (target) {} (primitive) {} "
-          "(pipeline) {} (pipeline not ready) {} (device); {} pipelines ({} drawn after a wait, {:.0f} ms waited); {} texture uploads ({} failed), {} buffer uploads, "
+          "(pipeline) {} (pipeline not ready) {} (device); {} pipelines ({} drawn after a wait, {:.0f} ms waited); {} texture uploads ({} failed), {} buffer uploads, draw constants {} uploads ({} reused), "
           "{} clears, {} resolves ({} failed), {} invalidations; shaders {} created, {} from the pack, "
           "{} compiled, {} failed, {} from objects; {:.0f} ms in pipeline creation, {:.0f} ms in texture uploads, {} aliased ({} failed); "
           "game thread in the renderer: {} ms draws, {} ms clears, {} ms resolves, {} ms presents ({} ms in {} watch calls); "
@@ -871,6 +881,7 @@ void Backend::PresentNow(rex::ui::Presenter* presenter, uint32_t frontbuffer_wid
           s.draws, s.skipped_shader, s.skipped_target, s.skipped_primitive, s.skipped_pipeline,
           s.skipped_pending, s.skipped_device, s.pipelines, s.pipeline_budget_waits + s.pipeline_waits,
           s.pipeline_wait_ms, s.texture_uploads, s.texture_failures, s.buffer_uploads,
+          s.draw_constant_uploads, s.draw_constant_identical,
           s.clears, s.resolves, s.resolve_failures, s.invalidations, sh.created, sh.from_pack,
           sh.compiled, sh.failed, sh.from_object, s.pipeline_ms, s.texture_ms, s.aliases, s.alias_failures,
           g_call_us[0].load() / 1000, g_call_us[1].load() / 1000, g_call_us[2].load() / 1000,
@@ -886,6 +897,14 @@ void Backend::PresentNow(rex::ui::Presenter* presenter, uint32_t frontbuffer_wid
           "copying, {} ms waiting for room; ring skimmer waited {} times, {} ms",
           t.commands, t.device_copies, t.max_backlog, t.enqueue_us / 1000, t.backpressure_us / 1000, t.fence_waits,
           t.fence_wait_us / 1000);
+      REXLOG_INFO("rexgpu-native: queue room: commands {} us, Present {} us, peak {} bytes",
+                  t.command_room_us, t.present_room_us, t.max_queued_bytes);
+#if NR_GAME_RENDERER
+      if (const GameRenderer* g = renderer_->game()) {
+        REXLOG_INFO("rexgpu-native: early uploads {} bytes in {} batches",
+                    g->stats().early_upload_bytes, g->stats().early_upload_batches);
+      }
+#endif
     }
     {
       std::lock_guard frames_lock(g_frames_mutex);

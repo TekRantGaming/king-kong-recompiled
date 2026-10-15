@@ -1,6 +1,7 @@
 #include "kknr/texture_convert.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 
@@ -816,9 +817,97 @@ void ConvertBlocks(Conversion conversion, TextureFormat guest_format, HostFormat
   }
 }
 
+namespace {
+
+struct ConversionSlabs {
+  const GuestLayout& layout;
+  const GuestRegions& regions;
+  HostTextureData& out;
+  const HostSubresource* sub = nullptr;
+  BlockExtent extent;
+  unsigned jobs = 1;
+  std::array<std::vector<uint8_t>, 4> blocks;
+
+  static void Run(void* context, unsigned index) {
+    auto& c = *static_cast<ConversionSlabs*>(context);
+    const uint32_t rows = c.extent.height_blocks * c.extent.depth;
+    uint32_t first = uint32_t(uint64_t(rows) * index / c.jobs);
+    const uint32_t end = uint32_t(uint64_t(rows) * (index + 1) / c.jobs);
+    const auto& guest = GetFormatInfo(c.layout.format);
+    const size_t row_bytes = size_t(c.extent.width_blocks) * guest.BytesPerBlock();
+    auto& blocks = c.blocks[index];
+    blocks.resize(size_t(end - first) * row_bytes);
+    ReadGuestBlockRows(c.layout, c.regions, c.sub->level, c.sub->layer, first, end - first, blocks.data());
+    const uint8_t* source = blocks.data();
+    while (first < end) {
+      const uint32_t z = first / c.extent.height_blocks, y = first % c.extent.height_blocks;
+      const uint32_t count = std::min(end - first, c.extent.height_blocks - y);
+      const uint32_t height = std::min(c.sub->height - y * guest.block_height, count * guest.block_height);
+      const uint32_t host_y = ConversionDecodesBlocks(c.out.plan.conversion) ? y * guest.block_height : y;
+      uint8_t* dst = c.out.bytes.data() + c.sub->offset + size_t(z) * c.sub->depth_pitch +
+                     size_t(host_y) * c.sub->row_pitch;
+      ConvertBlocks(c.out.plan.conversion, c.layout.format, c.out.plan.format, source,
+                    {c.extent.width_blocks, count, 1}, c.sub->width, height, dst,
+                    c.sub->row_pitch, c.sub->depth_pitch);
+      source += size_t(count) * row_bytes;
+      first += count;
+    }
+  }
+};
+
+bool ConvertPreparedTexture(const GuestLayout& layout, const GuestRegions& regions,
+                            const TextureRanges& ranges, HostTextureData& out,
+                            TextureConversionWorkers& workers) {
+  const HostTexturePlan& plan = out.plan;
+  const HostFormatInfo& host = GetHostFormatInfo(plan.format);
+  size_t bytes = 0;
+  for (uint32_t level = plan.min_level; level < plan.levels; ++level) {
+    if (level == 0 && !ranges.base_bytes) continue;
+    if (level > 0 && !ranges.mip_bytes && !layout.mips_in_base_tail) break;
+    for (uint32_t layer = 0; layer < plan.layers; ++layer) {
+      LevelSource source;
+      if (!GetLevelSource(layout, level, layer, source)) continue;
+      HostSubresource sub;
+      sub.level = level;
+      sub.layer = layer;
+      sub.width = std::max(plan.width >> level, 1u);
+      sub.height = std::max(plan.height >> level, 1u);
+      sub.depth = source.depth;
+      sub.row_pitch = DivUp(sub.width, host.block_size) * host.bytes_per_block;
+      sub.depth_pitch = sub.row_pitch * DivUp(sub.height, host.block_size);
+      sub.size = size_t(sub.depth_pitch) * sub.depth;
+      sub.offset = bytes;
+      bytes += sub.size;
+      out.subresources.push_back(sub);
+    }
+  }
+  // No resize or subresource mutation while workers hold pointers into the output.
+  out.bytes.assign(bytes, 0);
+  ConversionSlabs slabs{layout, regions, out};
+  for (const auto& sub : out.subresources) {
+    slabs.sub = &sub;
+    slabs.extent = GetLevelBlockExtent(layout, sub.level);
+    const uint32_t rows = slabs.extent.height_blocks * slabs.extent.depth;
+    const size_t work_bytes = slabs.extent.Count() * GetFormatInfo(layout.format).BytesPerBlock() + sub.size;
+    // Amortise waking workers and allocating scratch. At most four independent slabs are active; tiny
+    // mips stay on this thread. The guest snapshot above and all uploads below remain synchronous.
+    slabs.jobs = std::min({workers.WorkerCount() + 1, rows,
+                          unsigned(std::max<size_t>(1, work_bytes / (128u << 10)))});
+    if (slabs.jobs > 1)
+      workers.Run(slabs.jobs, &slabs, ConversionSlabs::Run);
+    else
+      ConversionSlabs::Run(&slabs, 0);
+  }
+  return !out.subresources.empty();
+}
+
+}  // namespace
+
 bool ConvertTexture(const TextureFetch& fetch, const GuestMemory& memory, HostTextureData& out, std::string* why,
-                    const TextureOptions& options) {
-  out = HostTextureData();
+                    const TextureOptions& options, TextureConversionWorkers* workers) {
+  out.plan = {};
+  out.bytes.clear();
+  out.subresources.clear();
   if (!PlanHostTexture(fetch, out.plan, why, options)) return false;
   const HostTexturePlan& plan = out.plan;
   const GuestLayout layout = ComputeGuestLayout(fetch, options);
@@ -836,6 +925,12 @@ bool ConvertTexture(const TextureFetch& fetch, const GuestMemory& memory, HostTe
   regions.base_size = base.size();
   regions.mips = mips.data();
   regions.mips_size = mips.size();
+
+  if (workers && uint64_t(ranges.base_bytes) + ranges.mip_bytes >= (256u << 10)) {
+    if (ConvertPreparedTexture(layout, regions, ranges, out, *workers)) return true;
+    if (why) *why = "no level could be read";
+    return false;
+  }
 
   std::vector<uint8_t> blocks;
   for (uint32_t level = plan.min_level; level < plan.levels; ++level) {

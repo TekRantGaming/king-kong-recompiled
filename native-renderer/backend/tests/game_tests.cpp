@@ -40,6 +40,7 @@
 #include "backend/render_scale.h"
 #include "backend/renderer.h"
 #include "backend/shader_library.h"
+#include "backend/texture_workers.h"
 #include "backend/tests/check.h"
 #include "backend/tests/descriptor_test_options.h"
 #include "backend/tests/fake_guest.h"
@@ -360,6 +361,7 @@ struct Fixture {
     g->options().table_capacities = table_capacities;
     ConfigureTestDescriptors(g->options(), gpu, &descriptor_drains);
     if (force_table_capacities) g->options().table_capacities = table_capacities;
+    g->options().upload_submit = [this](nvrhi::ICommandList* cl) { gpu->Execute(cl); };
     // SwiftShader's JIT is not safe against pipeline creation racing draws: NR_TEST_SYNC_PIPELINES=1.
     if (std::getenv("NR_TEST_SYNC_PIPELINES")) g->options().async_pipelines = false;
     g->options().render_scale_x = scale_x;
@@ -455,16 +457,16 @@ struct Fixture {
   // EncodeGuestTexture); returns the object.
   uint32_t NewTexture(kknr::TextureFetchDesc desc,
                       const std::function<const uint8_t*(uint32_t, uint32_t)>& blocks = nullptr,
-                      uint32_t* base_cpu = nullptr, uint32_t* base_bytes = nullptr) {
-    // Room for the largest test texture.
-    const uint32_t base = mem.AllocPhysical(256 * 1024);
+                      uint32_t* base_cpu = nullptr, uint32_t* base_bytes = nullptr,
+                      uint32_t allocation_bytes = 256 * 1024) {
+    const uint32_t base = mem.AllocPhysical(allocation_bytes);
     desc.base_address = base - FakeGuestMemory::kPhysicalView;
     const kknr::TextureFetch fetch = kknr::MakeTextureFetch(desc);
     if (blocks) {
       kknr::GuestTextureImage image;
       if (!kknr::EncodeGuestTexture(fetch, blocks, image)) {
         Fail(__FILE__, __LINE__, "EncodeGuestTexture failed");
-      } else if (image.base.size() > 256 * 1024) {
+      } else if (image.base.size() > allocation_bytes) {
         Fail(__FILE__, __LINE__, "texture too large for the test allocation");
       } else {
         std::memcpy(mem.Writable(base), image.base.data(), image.base.size());
@@ -664,7 +666,7 @@ struct Fixture {
     CheckQuadrants(px, want, line);
   }
   // Draws a full-screen quad sampling `texture` (fetch constant 0).
-  void DrawTextured(uint32_t texture) {
+  void DrawTextured(uint32_t texture, bool large_buffer = false) {
     const uint32_t vs = CreateShader(true, VertexShader(kTexcoord, F_32_32_FLOAT));
     const uint32_t ps = CreateShader(false, PixelShaderTexture());
     const uint32_t decl =
@@ -672,7 +674,9 @@ struct Fixture {
     SetDeclaration(decl);
     SetShaders(vs, ps);
     SetTexture(0, texture);
-    SetStream(0, NewVertexBuffer(FullScreenTextured()), 0, 20);
+    auto vertices = FullScreenTextured();
+    if (large_buffer) vertices.resize(64u << 10, 0);
+    SetStream(0, NewVertexBuffer(vertices), 0, 20);
     Draw(4, 0, 6);
   }
 };
@@ -821,6 +825,83 @@ TEST(Draw_IndexedFromADynamicVertexBuffer) {
   CHECK_EQ(f.game->stats().draws, uint64_t(12));
 }
 
+TEST(Draw_EarlyLargeBuffersPreserveSameFrameUpdates) {
+  Fixture f;
+  if (!f.Init()) return;
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  constexpr uint32_t bytes = 64u << 10;
+  uint32_t data = 0;
+  const uint32_t vb = f.mem.NewVertexBuffer(bytes, data);
+  std::vector<ColorVertex> vertices;
+  for (int q = 0; q < 4; ++q) {
+    auto v = QuadTriangles(kQuadrants[q], kQuadrantColors[q]);
+    vertices.insert(vertices.end(), v.begin(), v.end());
+  }
+  auto payload = Bytes(vertices);
+  std::memcpy(f.mem.Writable(data), payload.data(), payload.size());
+  std::vector<uint32_t> indices(bytes / 2, 0);
+  for (uint32_t i = 0; i < 24; ++i) indices[i] = i;
+  const uint32_t ib = f.mem.NewIndexBuffer(indices, false);
+  f.SetDeclaration(p.decl);
+  f.SetShaders(p.vs, p.ps_interp);
+  f.SetStream(0, vb, 0, 16);
+  f.SetIndices(ib);
+  f.Clear(kClearTarget0, 0xFF000000);
+  f.DrawIndexed(4, 0, 0, 12);
+  CHECK_EQ(f.game->stats().early_upload_bytes, uint64_t(bytes) * 2);
+  CHECK(f.game->stats().early_upload_batches >= 1u && f.game->stats().early_upload_batches <= 2u);
+  // Reuse the same host buffer after earlier draws have been recorded. The
+  // changed last quadrants must not change the first two draws' source data.
+  for (auto& vertex : vertices) vertex.argb = 0xFF3399CC;
+  payload = Bytes(vertices);
+  std::memcpy(f.mem.Writable(data), payload.data(), payload.size());
+  f.game->InvalidateRange(data - FakeGuestMemory::kPhysicalView, bytes);
+  f.DrawIndexed(4, 0, 12, 12);
+  Pixels px = f.Present(rt);
+  Rgb want[4] = {FromArgb(kQuadrantColors[0]), FromArgb(kQuadrantColors[1]),
+                FromArgb(0xFF3399CC), FromArgb(0xFF3399CC)};
+  f.CheckQuadrants(px, want, __LINE__);
+  CHECK_EQ(f.game->stats().buffer_uploads, 3u);
+  CHECK_EQ(f.game->stats().early_upload_bytes, uint64_t(bytes) * 2);
+}
+
+TEST(Draw_PreparedSnapshotInvalidationRetriesBeforeFirstUse) {
+  Fixture f;
+  if (!f.Init()) return;
+  const auto rt = f.BindMainSurface();
+  const auto p = f.MakeColorPipeline();
+  constexpr uint32_t bytes = 64u << 10;
+  uint32_t data = 0;
+  const auto vb = f.mem.NewVertexBuffer(bytes, data);
+  auto payload = Bytes(QuadTriangles(kFull, 0xFF39A7D2));
+  std::memcpy(f.mem.Writable(data), payload.data(), payload.size());
+  std::vector<uint32_t> indices(bytes / 2, 0);
+  for (unsigned i = 0; i < 6; ++i) indices[i] = i;
+  const auto ib = f.mem.NewIndexBuffer(indices, false);
+  f.SetDeclaration(p.decl); f.SetShaders(p.vs, p.ps_interp);
+  f.SetStream(0, vb, 0, 16); f.SetIndices(ib);
+  bool invalidated = false;
+  f.game->set_watch([&](uint32_t physical, uint32_t count) {
+    if (!invalidated) {
+      invalidated = true;
+      f.game->InvalidateRange(physical, count);
+    }
+  });
+  f.Clear(kClearTarget0, 0xFF000000);
+  f.DrawIndexed(4, 0, 0, 6);
+  auto px = f.Present(rt);
+  const Rgb want[4] = {FromArgb(0xFF39A7D2), FromArgb(0xFF39A7D2), FromArgb(0xFF39A7D2), FromArgb(0xFF39A7D2)};
+  f.CheckQuadrants(px, want, __LINE__);
+  CHECK(invalidated);
+  // On restricted-affinity machines the worker path is disabled entirely.
+  if (f.game->stats().prepared_discarded) {
+    CHECK_EQ(f.game->stats().prepared_discarded, 2u);
+    CHECK_EQ(f.game->stats().prepared_resources, 0u);
+  }
+  CHECK_EQ(f.game->stats().buffer_uploads, 2u);
+}
+
 TEST(Draw_ConstantsReachShaders) {
   Fixture f;
   if (!f.Init()) return;
@@ -840,6 +921,42 @@ TEST(Draw_ConstantsReachShaders) {
   const Rgb black{0, 0, 0};
   const Rgb want[4] = {black, {1, 0, 0}, black, {0.25, 0.5, 0.75}};
   f.CheckQuadrants(px, want, __LINE__);
+}
+
+// The 944-byte draw constants may remain identical while the draw arguments change. Their
+// alphaRef field near the end must still update, and reopening a list requires a fresh volatile
+// write even when its final constants equal the next frame's first constants.
+TEST(Draw_ReusesIdenticalDrawConstantsAndKeepsAlphaChanges) {
+  Fixture f;
+  if (!f.Init()) return;
+  const uint32_t rt = f.BindMainSurface();
+  const auto p = f.MakeColorPipeline();
+  std::vector<ColorVertex> vertices;
+  for (const Rect& q : kQuadrants) {
+    const auto quad = QuadTriangles(q, 0x80FF0000);
+    vertices.insert(vertices.end(), quad.begin(), quad.end());
+  }
+  f.SetDeclaration(p.decl);
+  f.SetShaders(p.vs, p.ps_interp);
+  f.SetStream(0, f.NewVertexBuffer(Bytes(vertices)), 0, 16);
+  f.Reg(dev::kRbColorControl, 8 | 4);  // alpha test enabled, GREATER
+  for (uint32_t frame = 0; frame < 6; ++frame) {
+    f.Clear(kClearTarget0, 0xFF0000FF);
+    f.RegF(dev::kRbAlphaRef, 0.25f);
+    f.Draw(4, 0, 6);
+    f.Draw(4, 6, 6);  // same constants; a different start vertex
+    f.RegF(dev::kRbAlphaRef, 0.75f);
+    f.Draw(4, 12, 6);
+    f.Draw(4, 18, 6);  // both bottom quads must fail alpha test
+    f.RegF(dev::kRbAlphaRef, 0.25f);
+    f.Draw(4, 6, 6);  // ends with the same constants the next frame starts with
+    const Pixels px = f.Present(rt);
+    const Rgb want[4] = {{1, 0, 0}, {1, 0, 0}, {0, 0, 1}, {0, 0, 1}};
+    f.CheckQuadrants(px, want, __LINE__);
+    CHECK_EQ(f.game->stats().draws, uint64_t(frame + 1) * 5);
+    CHECK_EQ(f.game->stats().draw_constant_uploads, uint64_t(frame + 1) * 3);
+    CHECK_EQ(f.game->stats().draw_constant_identical, uint64_t(frame + 1) * 2);
+  }
 }
 
 // ------------------------------------------------- pipeline state ---
@@ -1304,26 +1421,30 @@ TEST(Shaders_ParsedFromObjectWithoutCreateHook) {
   CHECK_EQ(f.shaders->stats().failed, uint64_t(0));
 }
 
-TEST(Textures_UploadSampleAndInvalidate) {
+static void CheckTextureUploadSampleAndInvalidate(uint32_t side, bool large_buffer = false) {
   Fixture f;
   if (!f.Init()) return;
   const uint32_t rt = f.BindMainSurface();
-  // A tiled 4x4 A8R8G8B8 texture, one colour per texel. Host-order blocks:
+  // A tiled A8R8G8B8 texture, with sixteen colour regions. The 512 case is large enough to use the
+  // lazy CPU conversion workers. Its very first draw must sample the real pixels, then see invalidation.
   // X = blue, Y = green, Z = red, W = alpha (the swizzle reads Z as red).
   auto texel = [](uint32_t i, uint32_t salt) -> std::array<uint8_t, 4> {
     return {uint8_t(i * 16 + salt), uint8_t(255 - i * 12), uint8_t((i * 37 + salt) & 255), 255};
   };
-  std::vector<uint8_t> blocks(4 * 4 * 4);
+  std::vector<uint8_t> blocks(size_t(side) * side * 4);
   auto fill = [&](uint32_t salt) {
-    for (uint32_t i = 0; i < 16; ++i) {
-      auto t = texel(i, salt);
-      std::memcpy(&blocks[i * 4], t.data(), 4);
-    }
+    for (uint32_t y = 0; y < side; ++y)
+      for (uint32_t x = 0; x < side; ++x) {
+        const uint32_t region = (y * 4 / side) * 4 + x * 4 / side;
+        auto t = texel(region, salt);
+        std::memcpy(&blocks[(size_t(y) * side + x) * 4], t.data(), 4);
+      }
   };
   fill(0);
   uint32_t base = 0, bytes = 0;
-  const auto desc = Desc(kknr::TextureFormat::k_8_8_8_8, kknr::Endian::k8in32, kSwizzleZYXW, 4, true);
-  const uint32_t tex = f.NewTexture(desc, [&](uint32_t, uint32_t) { return blocks.data(); }, &base, &bytes);
+  const auto desc = Desc(kknr::TextureFormat::k_8_8_8_8, kknr::Endian::k8in32, kSwizzleZYXW, side, true);
+  const uint32_t tex = f.NewTexture(desc, [&](uint32_t, uint32_t) { return blocks.data(); }, &base, &bytes,
+                                    std::max(256u * 1024, side * side * 4));
   auto check = [&](const Pixels& px, uint32_t salt, int line) {
     for (uint32_t i = 0; i < 16; ++i) {
       auto t = texel(i, salt);
@@ -1332,14 +1453,15 @@ TEST(Textures_UploadSampleAndInvalidate) {
     }
   };
   f.Clear(kClearTarget0, 0xFF000000);
-  f.DrawTextured(tex);
+  f.DrawTextured(tex, large_buffer);
   Pixels px = f.Present(rt, "texture_upload");
   check(px, 0, __LINE__);
   CHECK_EQ(f.game->stats().texture_uploads, uint64_t(1));
 
   // Drawn again unchanged: no upload.
-  f.DrawTextured(tex);
-  f.Present(rt);
+  f.DrawTextured(tex, large_buffer);
+  px = f.Present(rt);
+  check(px, 0, __LINE__);
   CHECK_EQ(f.game->stats().texture_uploads, uint64_t(1));
 
   // The CPU rewrites the texels and the write watch reports it.
@@ -1353,12 +1475,20 @@ TEST(Textures_UploadSampleAndInvalidate) {
                            [&](uint32_t, uint32_t) { return blocks.data(); }, image);
   std::memcpy(f.mem.Writable(base), image.base.data(), image.base.size());
   f.game->InvalidateRange(base - FakeGuestMemory::kPhysicalView, bytes);
-  f.DrawTextured(tex);
+  f.DrawTextured(tex, large_buffer);
   px = f.Present(rt, "texture_reupload");
   check(px, 100, __LINE__);
   CHECK_EQ(f.game->stats().texture_uploads, uint64_t(2));
   CHECK_EQ(f.game->stats().texture_failures, uint64_t(0));
+  CHECK_EQ(f.game->stats().early_upload_bytes, (side >= 128 ? uint64_t(side) * side * 4 : 0u) +
+      (large_buffer ? 3u * (64u << 10) : 0u));
+  if (large_buffer) CHECK(f.game->stats().early_upload_batches >= 3 && f.game->stats().early_upload_batches <= 4);
+  else CHECK_EQ(f.game->stats().early_upload_batches, side >= 128 ? 1u : 0u);
 }
+
+TEST(Textures_UploadSampleAndInvalidate) { CheckTextureUploadSampleAndInvalidate(4); }
+TEST(Textures_WorkerUploadSampleAndInvalidate) { CheckTextureUploadSampleAndInvalidate(512); }
+TEST(Textures_PreparedTextureAndBufferPixels) { CheckTextureUploadSampleAndInvalidate(512, true); }
 
 
 // ------------------------------------------------------------- frame log ---
@@ -2911,6 +3041,266 @@ TEST(Descriptors_PressureMatchesFullTablesExactly) {
                 reduced ? "minimum" : "full", f.descriptor_drains,
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
   }
+}
+
+namespace {
+
+std::string PreloadTestPath(const char* name) {
+  const auto dir = std::filesystem::temp_directory_path() / "nr_resource_preload_tests";
+  std::filesystem::create_directories(dir);
+  return (dir / (std::string(name) + std::to_string(
+      std::chrono::steady_clock::now().time_since_epoch().count()))).string();
+}
+
+void ServicePreload(Fixture& f, bool loading, uint32_t level = 305, uint32_t start = 0) {
+  auto list = f.gpu->device()->createCommandList();
+  list->open();
+  f.game->PreloadResources(list, loading, level, start);
+  list->close();
+  f.gpu->Execute(list);
+}
+
+struct PreloadBuffers {
+  uint32_t vb = 0, ib = 0, data = 0;
+  Fixture::ColorPipeline pipeline;
+  explicit PreloadBuffers(Fixture& f, bool index32) {
+    pipeline = f.MakeColorPipeline();
+    vb = f.mem.NewVertexBuffer(64u << 10, data);
+    const auto payload = Bytes(QuadTriangles(kFull, 0xFF39A7D2));
+    std::memcpy(f.mem.Writable(data), payload.data(), payload.size());
+    std::vector<uint32_t> indices((64u << 10) / (index32 ? 4 : 2));
+    for (uint32_t i = 0; i < 6; ++i) indices[i] = i;
+    ib = f.mem.NewIndexBuffer(indices, index32);
+    f.SetDeclaration(pipeline.decl); f.SetShaders(pipeline.vs, pipeline.ps_interp);
+    f.SetStream(0, vb, 0, 16); f.SetIndices(ib);
+  }
+};
+
+void CheckBufferPreload(bool index32, bool mismatch, bool during_capture, bool after_capture = false,
+                        bool shipped = false, bool local_cache = true, bool stale_local = false,
+                        bool invalid_bundle = false) {
+  const auto path = PreloadTestPath("buffers");
+  {
+    Fixture learn;
+    if (!learn.Init()) return;
+    CHECK(learn.game->SetPipelineCache(path));
+    const auto rt = learn.BindMainSurface();
+    PreloadBuffers scene(learn, index32);
+    ServicePreload(learn, true);
+    ServicePreload(learn, false, 305, ~0u);  // the game clears its request after loading
+    learn.DrawIndexed(4, 0, 0, 6);
+    learn.Present(rt);
+  }  // saves the learned list even when exiting in the ten-second window
+  std::vector<ResourcePreloadRecord> records;
+  CHECK(ResourcePreloadFile::Read(path + ".resources-305-0", records));
+  CHECK_EQ(records.size(), 2u);
+  if (shipped) CHECK(ResourcePreloadBundle::Write(path + ".list", {{305, 0, records}}));
+  Fixture f;
+  if (!f.Init()) return;
+  const auto cache = shipped ? path + "-fresh" : path;
+  CHECK(!shipped || !std::filesystem::exists(cache + ".resources-305-0"));
+  if (stale_local || invalid_bundle) {
+    auto local = records;
+    if (stale_local) {
+      for (auto& r : local) r.hash ^= 1;
+      auto extra = ResourcePreloadRecord::Buffer(0, 65536, false, false);
+      extra.hash = 123;
+      local.push_back(extra);
+    }
+    CHECK(ResourcePreloadFile::Write(cache + ".resources-305-0", local));
+  }
+  if (local_cache) CHECK(f.game->SetPipelineCache(cache));
+  if (shipped) {
+    if (invalid_bundle) {
+      std::ofstream file(path + ".list", std::ios::binary | std::ios::trunc);
+      file << "incompatible";
+    }
+    CHECK_EQ(f.game->LoadResourceList(path + ".list"), !invalid_bundle);
+  }
+  const auto rt = f.BindMainSurface();
+  PreloadBuffers scene(f, index32);
+  auto rewrite = [&](uint32_t color) {
+    const auto payload = Bytes(QuadTriangles(kFull, color));
+    std::memcpy(f.mem.Writable(scene.data), payload.data(), payload.size());
+  };
+  if (mismatch) rewrite(0xFFCC3311);
+  bool wrote = false;
+  if (during_capture) f.game->set_watch([&](uint32_t physical, uint32_t bytes) {
+    if (!wrote) { wrote = true; f.game->InvalidateRange(physical, bytes); }
+  });
+  ServicePreload(f, true, 306);  // a different chapter cannot consume this list
+  CHECK_EQ(f.game->stats().preloaded_resources, 0u);
+  ServicePreload(f, true);
+  const bool workers = TextureWorkerCount() != 0;
+  const uint64_t expected = workers ? (during_capture || mismatch ? 1 : 2) : 0;
+  CHECK_EQ(f.game->stats().preloaded_resources, expected);
+  if (mismatch && workers) CHECK(f.game->stats().preload_hash_misses > 0);
+  if (during_capture && workers) CHECK_EQ(f.game->stats().prepared_discarded, 1u);
+  if (after_capture) {
+    rewrite(0xFFCC3311);
+    f.game->InvalidateRange(scene.data - FakeGuestMemory::kPhysicalView, 64u << 10);
+  }
+  ServicePreload(f, false);
+  f.Clear(kClearTarget0, 0xFF000000);
+  f.DrawIndexed(4, 0, 0, 6);
+  auto px = f.Present(rt);
+  const auto color = FromArgb(mismatch || after_capture ? 0xFFCC3311 : 0xFF39A7D2);
+  const Rgb want[4] = {color, color, color, color};
+  f.CheckQuadrants(px, want, __LINE__);
+  CHECK_EQ(f.game->stats().preload_hits, after_capture && workers ? 1u : expected);
+  // A rewrite after preload (including an earlier draw in this frame) is
+  // mandatory at the original draw-list position.
+  f.DrawIndexed(4, 0, 0, 6);
+  rewrite(0xFF11CC33);
+  f.game->InvalidateRange(scene.data - FakeGuestMemory::kPhysicalView, 64u << 10);
+  f.DrawIndexed(4, 0, 0, 6);
+  px = f.Present(rt);
+  const Rgb changed[4] = {FromArgb(0xFF11CC33), FromArgb(0xFF11CC33),
+                         FromArgb(0xFF11CC33), FromArgb(0xFF11CC33)};
+  f.CheckQuadrants(px, changed, __LINE__);
+  if (stale_local) {
+    ServicePreload(f, true, 307);  // flush this visit's refreshed local hashes
+    std::vector<ResourcePreloadRecord> saved;
+    CHECK(ResourcePreloadFile::Read(cache + ".resources-305-0", saved));
+    CHECK_EQ(saved.size(), 3u);
+    for (const auto& original : records) {
+      CHECK(std::any_of(saved.begin(), saved.end(), [&](const auto& r) {
+        return r.SameResource(original) && r.hash == original.hash;
+      }));
+    }
+    CHECK_EQ(saved.back().hash, 123u);
+  }
+}
+
+}  // namespace
+
+TEST(Preload_LearnedVertexAnd16BitIndexPixels) { CheckBufferPreload(false, false, false); }
+TEST(Preload_LearnedVertexAnd32BitIndexPixels) { CheckBufferPreload(true, false, false); }
+TEST(Preload_ContentMismatchUsesRequiredUpload) { CheckBufferPreload(false, true, false); }
+TEST(Preload_WriteDuringCaptureDiscardsOnlyOverlappingJob) { CheckBufferPreload(false, false, true); }
+TEST(Preload_WriteAfterCaptureBeforeFirstDraw) { CheckBufferPreload(false, false, false, true); }
+TEST(Preload_ShippedFirstVisitVertexAnd16BitIndexPixels) { CheckBufferPreload(false, false, false, false, true); }
+TEST(Preload_ShippedFirstVisitWithoutWritableCache) { CheckBufferPreload(true, false, false, false, true, false); }
+TEST(Preload_ShippedContentMismatchUsesRequiredUpload) { CheckBufferPreload(false, true, false, false, true); }
+TEST(Preload_ShippedWriteAfterCaptureBeforeFirstDraw) { CheckBufferPreload(false, false, false, true, true); }
+TEST(Preload_ShippedVariantRefreshesStaleLocalHash) { CheckBufferPreload(false, false, false, false, true, true, true); }
+TEST(Preload_IncompatibleBundleFallsBackToLocal) { CheckBufferPreload(false, false, false, false, true, true, false, true); }
+
+TEST(Preload_TextureBeforeFirstDrawAndRewrite) {
+  const auto path = PreloadTestPath("texture");
+  for (int pass = 0; pass < 2; ++pass) {
+    Fixture f;
+    if (!f.Init()) return;
+    CHECK(f.game->SetPipelineCache(path));
+    const auto rt = f.BindMainSurface();
+    std::vector<uint8_t> blocks(128 * 128 * 4);
+    for (size_t i = 0; i < blocks.size(); i += 4) {
+      blocks[i] = 0x33; blocks[i + 1] = 0x99; blocks[i + 2] = 0xCC; blocks[i + 3] = 255;
+    }
+    uint32_t base = 0, bytes = 0;
+    const auto desc = Desc(kknr::TextureFormat::k_8_8_8_8, kknr::Endian::k8in32, kSwizzleZYXW, 128, true);
+    const auto tex = f.NewTexture(desc, [&](uint32_t, uint32_t) { return blocks.data(); }, &base, &bytes);
+    ServicePreload(f, true);
+    CHECK_EQ(f.game->stats().preloaded_resources, TextureWorkerCount() ? uint64_t(pass) : 0u);
+    ServicePreload(f, false);
+    f.DrawTextured(tex);
+    auto px = f.Present(rt);
+    CHECK_COLOR(px, 32, 32, (Rgb{0xCC / 255.0, 0x99 / 255.0, 0x33 / 255.0}), "preloaded tiled swizzled texture");
+    CHECK_EQ(f.game->stats().preload_hits, TextureWorkerCount() ? uint64_t(pass) : 0u);
+    CHECK_EQ(f.game->stats().texture_uploads, 1u);
+    // Rewriting all guest texels after replay must be visible on the next draw.
+    std::memset(f.mem.Writable(base), 255, bytes);
+    f.game->InvalidateRange(base - FakeGuestMemory::kPhysicalView, bytes);
+    f.DrawTextured(tex);
+    px = f.Present(rt);
+    CHECK_COLOR(px, 32, 32, (Rgb{1, 1, 1}), "rewritten preloaded texture");
+    CHECK_EQ(f.game->stats().texture_uploads, 2u);
+  }
+}
+
+TEST(Preload_ShippedTextureFirstVisitAndLocalExtension) {
+  const auto source = PreloadTestPath("shipped-texture");
+  const auto cache = source + "-fresh";
+  for (int pass = 0; pass < 2; ++pass) {
+    Fixture f;
+    if (!f.Init()) return;
+    CHECK(f.game->SetPipelineCache(pass ? cache : source));
+    if (pass) CHECK(f.game->LoadResourceList(source + ".list"));
+    const auto rt = f.BindMainSurface();
+    std::vector<uint8_t> blocks(128 * 128 * 4, 255);
+    const auto desc = Desc(kknr::TextureFormat::k_8_8_8_8, kknr::Endian::k8in32, kSwizzleZYXW, 128, true);
+    const auto tex = f.NewTexture(desc, [&](uint32_t, uint32_t) { return blocks.data(); });
+    ServicePreload(f, true);
+    CHECK_EQ(f.game->stats().preloaded_resources, TextureWorkerCount() ? uint64_t(pass) : 0u);
+    ServicePreload(f, false);
+    f.DrawTextured(tex);
+    auto px = f.Present(rt);
+    CHECK_COLOR(px, 32, 32, (Rgb{1, 1, 1}), "shipped first-visit texture");
+    CHECK_EQ(f.game->stats().preload_hits, TextureWorkerCount() ? uint64_t(pass) : 0u);
+    if (!pass) {
+      // Switching chapter saves the learned record before this fixture exits.
+      ServicePreload(f, true, 306);
+      std::vector<ResourcePreloadRecord> records;
+      CHECK(ResourcePreloadFile::Read(source + ".resources-305-0", records));
+      CHECK_EQ(records.size(), 1u);
+      CHECK(ResourcePreloadBundle::Write(source + ".list", {{305, 0, records}}));
+      CHECK(!std::filesystem::exists(cache + ".resources-305-0"));
+      auto extra = ResourcePreloadRecord::Buffer(0, 65536, false, false);
+      extra.hash = 123;  // an earlier local observation absent from this visit
+      CHECK(ResourcePreloadFile::Write(cache + ".resources-305-0", {extra}));
+    }
+  }
+  std::vector<ResourcePreloadRecord> extended;
+  CHECK(ResourcePreloadFile::Read(cache + ".resources-305-0", extended));
+  CHECK_EQ(extended.size(), 2u);  // retain earlier local key and learn the shipped hit
+  CHECK_EQ(extended[0].hash, 123u);
+}
+
+TEST(Preload_FileRejectsTornOversizedAndChangedData) {
+  const auto path = PreloadTestPath("format");
+  std::vector<ResourcePreloadRecord> records{ResourcePreloadRecord::Buffer(4096, 65536, false, false)};
+  records[0].hash = 0x123456789ABCDEF0;
+  CHECK(ResourcePreloadFile::Write(path, records));
+  std::vector<ResourcePreloadRecord> got;
+  CHECK(ResourcePreloadFile::Read(path, got));
+  CHECK_EQ(got.size(), 1u); CHECK_EQ(got[0].hash, records[0].hash);
+  {
+    std::fstream file(path, std::ios::binary | std::ios::in | std::ios::out);
+    file.seekp(30); file.put('X');
+  }
+  CHECK(!ResourcePreloadFile::Read(path, got)); CHECK(got.empty());
+  {
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    file << "torn";
+  }
+  CHECK(!ResourcePreloadFile::Read(path, got)); CHECK(got.empty());
+  records.resize(ResourcePreloadFile::kMaxRecords + 1);
+  CHECK(!ResourcePreloadFile::Write(path, records));
+}
+
+TEST(Preload_ChapterMemoryAndFrameBudgets) {
+  Fixture f;
+  if (!f.Init()) return;
+  const auto path = PreloadTestPath("budget");
+  CHECK(f.game->SetPipelineCache(path));
+  std::vector<ResourcePreloadRecord> records;
+  for (uint32_t i = 0; i < 80; ++i) {
+    auto r = ResourcePreloadRecord::Buffer(0, (1u << 20) + i * 4096, false, false);
+    const kknr::GuestRange ranges[2] = {{0, r.words[1]}, {}};
+    const uint8_t* data[2] = {f.mem.Physical(0), nullptr};
+    r.hash = kknr::HashGuestRanges(ranges, data);
+    records.push_back(r);
+  }
+  CHECK(ResourcePreloadFile::Write(path + ".resources-305-0", records));
+  for (unsigned frame = 0; frame < 8; ++frame) {
+    const auto before = f.game->stats().preload_bytes;
+    ServicePreload(f, true);
+    CHECK(f.game->stats().preload_bytes - before <= (32u << 20));
+    CHECK(f.game->stats().preload_bytes <= (64u << 20));
+    f.game->EndFrame();
+  }
+  if (TextureWorkerCount()) CHECK(f.game->stats().preload_bytes > (60u << 20));
+  CHECK(f.game->stats().preloaded_resources < records.size());
 }
 
 NR_TEST_MAIN()

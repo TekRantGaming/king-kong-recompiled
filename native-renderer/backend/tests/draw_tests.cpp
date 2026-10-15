@@ -627,9 +627,106 @@ TEST(RenderThreadDeviceChangesArriveInOrder) {
   CHECK(calls_that_changed > 0 && calls_that_changed < 300);
 }
 
+// Both kinds of queue backpressure must wake, and more than one fence caller may be waiting.
+// Hold the first command in the renderer so filling the queue and the Present limit are certain.
+TEST(RenderThreadWakesRoomAndFenceWaiters) {
+  FakeGuestMemory memory(1 << 20);
+  class GatedSink final : public DrawSink {
+   public:
+    void OnClear(const ClearCall&) override {}
+    void OnResolve(const ResolveCall&) override {}
+    void OnDraw(const DrawCall& call) override {
+      Gate();
+      ordered &= call.index_in_frame == calls - 1;
+    }
+    void OnPresent(uint32_t frame, uint32_t, uint32_t) override {
+      Gate();
+      ordered &= frame == calls - 1;
+    }
+    void Gate() {
+      std::unique_lock lock(mutex);
+      if (!entered) {
+        entered = true;
+        cv.notify_all();
+        cv.wait(lock, [&] { return open; });
+      }
+      ++calls;
+    }
+    void WaitEntered() {
+      std::unique_lock lock(mutex);
+      CHECK(cv.wait_for(lock, std::chrono::seconds(2), [&] { return entered; }));
+    }
+    void Open() {
+      std::lock_guard lock(mutex);
+      open = true;
+      cv.notify_all();
+    }
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool entered = false, open = false, ordered = true;
+    uint64_t calls = 0;
+  };
+  for (bool presents : {false, true}) {
+    GatedSink inner;
+    ThreadedSink sink(inner, memory);
+    if (presents)
+      sink.OnPresent(0, 0, 0);
+    else
+      sink.OnDraw({});
+    inner.WaitEntered();
+    std::atomic<bool> producer_done{false};
+    std::thread producer([&] {
+      if (presents) {
+        sink.OnPresent(1, 0, 0);
+      } else {
+        // The first command is running; 8,000 can be queued, then the producer must wait.
+        for (uint32_t i = 0; i < 8100; ++i) {
+          DrawCall call;
+          call.index_in_frame = i + 1;
+          sink.OnDraw(call);
+        }
+      }
+      producer_done.store(true, std::memory_order_release);
+    });
+    const uint64_t blocked_ticket = presents ? 1 : 8001;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (sink.Ticket() < blocked_ticket && std::chrono::steady_clock::now() < deadline)
+      std::this_thread::yield();
+    CHECK_EQ(sink.Ticket(), blocked_ticket);
+    CHECK(!producer_done.load(std::memory_order_acquire));
+    std::atomic<uint32_t> started_waiters{0}, finished_waiters{0};
+    std::thread waiters[2];
+    for (uint32_t i = 0; i < 2; ++i) {
+      waiters[i] = std::thread([&, i] {
+        started_waiters.fetch_add(1, std::memory_order_release);
+        sink.WaitDone(i == 0 ? 1 : blocked_ticket);
+        finished_waiters.fetch_add(1, std::memory_order_release);
+      });
+    }
+    while (started_waiters.load(std::memory_order_acquire) < 2) std::this_thread::yield();
+    // Allow the waiters to enter WaitDone while the renderer still cannot complete anything.
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    CHECK_EQ(finished_waiters.load(std::memory_order_acquire), 0u);
+    inner.Open();
+    producer.join();
+    for (std::thread& waiter : waiters) waiter.join();
+    sink.WaitDone(sink.Ticket());
+    CHECK_EQ(finished_waiters.load(std::memory_order_acquire), 2u);
+    CHECK_EQ(inner.calls, presents ? 2u : 8101u);
+    CHECK(inner.ordered);  // includes wrapping the bounded queue's slots
+    CHECK_EQ(sink.stats().max_backlog, presents ? 1u : 8000u);
+    const auto stats = sink.stats();
+    CHECK(stats.backpressure_us > 0);
+    CHECK_EQ(stats.backpressure_us, stats.command_room_us + stats.present_room_us);
+    CHECK((presents ? stats.present_room_us : stats.command_room_us) > 0);
+    CHECK_EQ(presents ? stats.command_room_us : stats.present_room_us, 0u);
+    CHECK(stats.max_queued_bytes > 0);
+  }
+}
+
 // NR_BENCH=1: the game thread's cost of queueing draws for the render thread (copying what each call
 // needs), with a draw's usual change between calls (one 4x4 matrix of vertex shader constants) and
-// sixteen streams' vertex buffer objects. Not a check.
+// four streams' vertex buffer objects. NR_BENCH_QUEUE_CALLS raises the calls/round for longer runs.
 TEST(Bench_RenderThreadQueueing) {
   if (!std::getenv("NR_BENCH")) return;
   FakeGuestMemory m(4 << 20);
@@ -641,16 +738,18 @@ TEST(Bench_RenderThreadQueueing) {
   class Inner final : public DrawSink {
    public:
     void OnClear(const ClearCall&) override {}
-    void OnDraw(const DrawCall&) override {}
+    void OnDraw(const DrawCall&) override { ++draws; }
     void OnResolve(const ResolveCall&) override {}
     void OnPresent(uint32_t, uint32_t, uint32_t) override {}
+    uint64_t draws = 0;
   } inner;
   ThreadedSink sink(inner, m);
   const uint32_t surface = m.AllocHeap(64);
   std::vector<double> per_call;
+  const char* call_count = std::getenv("NR_BENCH_QUEUE_CALLS");
+  const uint32_t calls = call_count ? std::clamp(uint32_t(std::strtoul(call_count, nullptr, 10)), 20000u, 2000000u) : 20000;
   for (int round = 0; round < 7; ++round) {
     const auto start = std::chrono::steady_clock::now();
-    const uint32_t calls = 20000;
     for (uint32_t i = 0; i < calls; ++i) {
       for (uint32_t r = 0; r < 16; ++r) m.WriteFloat(device + dev::kVsConstants + 4 * r, float(i * 16 + r));
       DrawCall call;
@@ -659,10 +758,12 @@ TEST(Bench_RenderThreadQueueing) {
       sink.OnDraw(call);
     }
     sink.WaitDone(sink.Ticket());
+    CHECK_EQ(inner.draws, uint64_t(round + 1) * calls);
     per_call.push_back(std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - start).count() / calls);
   }
   std::sort(per_call.begin(), per_call.end());
-  std::printf("  BENCH render thread queueing: median %.0f ns per draw (calls and the render thread's run)\n", per_call[3]);
+  std::printf("  BENCH render thread queueing: median %.0f ns per draw (%u calls/round, calls and the render thread's run)\n",
+              per_call[3], calls);
 }
 
 TEST(ApiTimingDoesNotGateForwarding) {

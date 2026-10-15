@@ -1138,6 +1138,9 @@ namespace {
 struct BenchResult { double median_us = 0, p90_us = 0; uint32_t draws = 0; };
 BenchResult BenchFrames(Fixture& f, uint32_t repeats, int frames) {
   const uint64_t draws_before = f.game->stats().draws;
+  // Optional homogeneous batches isolate repeated-material overhead. The default keeps the
+  // world/box alternation, which also measures the cost when the draw constants change.
+  const bool repeat_material = std::getenv("NR_BENCH_REPEAT_MATERIAL") != nullptr;
   // Exercise the warm placeholder-warning path without real game shaders or data.
   if (std::getenv("NR_BENCH_MISSING_TEXTURE")) {
     TFetch t;
@@ -1192,14 +1195,16 @@ BenchResult BenchFrames(Fixture& f, uint32_t repeats, int frames) {
       set_vs(cam_data, f.cam.rows);
       draw("world", world, f.ps_lit, kBlendOpaque, kDepthPrepass, 0);
       set_vs(box_data, box_rows);
-      draw("box", box, f.ps_lit, kBlendOpaque, kDepthPrepass, 0);
+      draw(repeat_material ? "world" : "box", repeat_material ? world : box,
+           f.ps_lit, kBlendOpaque, kDepthPrepass, 0);
       draws += 2;
     }
     for (uint32_t r = 0; r < repeats; ++r) {
       set_vs(cam_data, f.cam.rows);
       draw("world", world, f.ps_lit, kBlendOpaque, kDepthColour, 0xFFFF);
       set_vs(box_data, box_rows);
-      draw("box", box, f.ps_lit, kBlendOpaque, kDepthColour, 0xFFFF);
+      draw(repeat_material ? "world" : "box", repeat_material ? world : box,
+           f.ps_lit, kBlendOpaque, kDepthColour, 0xFFFF);
       draws += 2;
     }
     set_vs(cam_data, f.cam.rows);
@@ -1221,6 +1226,9 @@ BenchResult BenchFrames(Fixture& f, uint32_t repeats, int frames) {
   res.p90_us = times[times.size() * 9 / 10];
   res.draws = draws;
   CHECK_EQ(f.game->stats().draws - draws_before, uint64_t(frames) * draws);
+  std::printf("  BENCH draw constants: %llu uploads, %llu identical\n",
+              static_cast<unsigned long long>(f.game->stats().draw_constant_uploads),
+              static_cast<unsigned long long>(f.game->stats().draw_constant_identical));
   if (const GameUpscale* u = f.game->upscale())
     std::printf("  BENCH motion preparation: %zu descriptions for %llu recorded depth draws\n",
                 u->motion_prewarm_seen.size(), static_cast<unsigned long long>(u->stats.motion_draws));

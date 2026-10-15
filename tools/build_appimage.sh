@@ -98,6 +98,13 @@ if [ -n "${KK_PIPELINE_LIST:-}" ]; then
 else
   echo "warning: KK_PIPELINE_LIST not set: no kkpipelines.list, pipelines are compiled in play" >&2
 fi
+# Recorded chapter resource content keys, supplied outside Git just like the pipeline list.
+# The renderer reads the shipped list beside the program, including in a read-only AppImage.
+if [ -n "${KK_RESOURCE_LIST:-}" ]; then
+  cp "$KK_RESOURCE_LIST" "$APPDIR/usr/bin/kkresources.list"
+else
+  echo "warning: KK_RESOURCE_LIST not set: no kkresources.list, chapter resources are learned in play" >&2
+fi
 cp "$ROOT/docs/images/icon.png" "$APPDIR/king_kong.png"
 if [ -n "${KK_DXC_DIR:-}" ]; then
   mkdir -p "$APPDIR/usr/share/licenses/dxc"

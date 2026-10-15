@@ -387,6 +387,7 @@ void NativeGraphicsSystem::StartPipelines() {
     backend_->SetPipelineCache(pipeline_place_.records());
   }
   if (REXCVAR_GET(native_pipeline_list)) backend_->LoadPipelineList(ShippedPipelineList());
+  backend_->LoadResourceList((ExecutableFolder() / "kkresources.list").string());
 }
 
 void NativeGraphicsSystem::Shutdown() {

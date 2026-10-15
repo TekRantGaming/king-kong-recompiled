@@ -1,4 +1,6 @@
 #include "backend/game_renderer.h"
+#include "backend/resource_upload_workers.h"
+#include "backend/upload_batch.h"
 #include "kkshaders/tessellation.h"
 
 #include <algorithm>
@@ -125,6 +127,8 @@ GameRenderer::GameRenderer(nvrhi::IDevice* device, const GuestMemory& memory,
 }
 
 GameRenderer::~GameRenderer() {
+  SaveResourcePreload();
+  if (resource_profile_file_) std::fclose(resource_profile_file_);
   if (gi_build_.valid()) gi_build_.wait();
   if (lighting_build_.valid()) lighting_build_.wait();
   if (upscale_build_.valid()) upscale_build_.wait();
@@ -205,6 +209,14 @@ bool GameRenderer::Initialize() {
   memory_floor_y_ = std::min(options_.render_scale_y, 1.0f);
   memory_scale_aware_ = !(options_.debug & 16) &&
                        std::max({options_.render_scale_x, options_.render_scale_y, options_.shadow_scale}) > 1.0f;
+  if (const char* path = std::getenv("NR_RESOURCE_PROFILE"); path && *path) {
+    resource_profile_file_ = std::fopen(path, "w");
+    if (resource_profile_file_) {
+      std::fprintf(resource_profile_file_, "frame,wall_s,texture_convert_ms,texture_create_ms,texture_stage_ms,buffer_create_ms,buffer_convert_ms,buffer_stage_ms,hash_ms,watch_ms,cache_bind_ms,invalidate_ms,descriptor_ms,submit_ms,snapshot_ms,prepare_wall_ms,prepared_resources,prepared_discarded,prepare_total_ms,preloaded_resources,preload_hits,preload_hash_misses,preload_bytes\n");
+      resource_profile_ = &resource_work_;
+      textures_.profile = vertex_buffers_.profile = index_buffers_.profile = resource_profile_;
+    }
+  }
   const nvrhi::GraphicsAPI api = device_->getGraphicsAPI();
   if (options_.table_capacities != kNativeTableCapacities && options_.upscale.enabled()) {
     // Motion replay retains indices until the upscale point, beyond a possible
@@ -569,6 +581,7 @@ void GameRenderer::RetireSlot(Table table, uint32_t slot) {
 }
 
 void GameRenderer::WriteSlot(Table table, const nvrhi::BindingSetItem& item) {
+  kknr::ResourceWorkTimer timer(resource_profile_, kknr::ResourceWork::Descriptor);
   device_->writeDescriptorTable(tables_[table].table, item);
   ++stats_.descriptor_updates;
 }
@@ -617,10 +630,12 @@ std::pair<uint32_t, uint32_t> GameRenderer::OnGuestWrite(uint32_t physical, uint
 
 void GameRenderer::InvalidateRange(uint32_t physical, uint32_t bytes) {
   std::lock_guard lock(invalidation_mutex_);
+  resource_revision_.fetch_add(1, std::memory_order_release);
   invalidations_.emplace_back(physical, bytes);
 }
 
 void GameRenderer::ProcessInvalidations() {
+  kknr::ResourceWorkTimer timer(resource_profile_, kknr::ResourceWork::Invalidate);
   std::vector<std::pair<uint32_t, uint32_t>> list;
   {
     std::lock_guard lock(invalidation_mutex_);
@@ -782,6 +797,9 @@ void GameRenderer::EndFrame() {
   // clears even if the player disables the effect before pressure next occurs.
   if (scene_gi_ || scene_lighting_)
     for (auto& [key, target] : targets_) if (target) target->clear_only = false;
+  ProfileResources();
+  FlushUploads();
+  if (upload_batch_) upload_batch_->EndFrame();
   if (tessellation_timer_) tessellation_timer_->FrameEnd();
   PublishEffectTimes();
   if (TessellationBenchRequested() && frame_%300==0)
@@ -880,9 +898,11 @@ void GameRenderer::EndFrame() {
       debug_previous_ = stats_;
     }
     if (options_.debug & 8) LogInvalidationHistogram();
-    textures_.Trim(frame_, 1800);
-    vertex_buffers_.Trim(frame_, 1800);
-    index_buffers_.Trim(frame_, 1800);
+    if (!resource_loading_) {
+      textures_.Trim(frame_, 1800);
+      vertex_buffers_.Trim(frame_, 1800);
+      index_buffers_.Trim(frame_, 1800);
+    }
   }
   RetryDeferred();
   stats_.driver_cache_saves = driver_cache_saves_.load(std::memory_order_relaxed);
@@ -1155,6 +1175,7 @@ void GameRenderer::QueueOrDefer(const PipelineRecord& record) {
 
 bool GameRenderer::SetPipelineCache(const std::string& path) {
   std::lock_guard lock(cache_mutex_);
+  resource_cache_base_ = path;
   const bool opened = cache_file_.Open(path);
   cache_recording_.store(opened, std::memory_order_relaxed);
   if (!cache_file_.note().empty()) {
@@ -1448,6 +1469,11 @@ void GameRenderer::BuildPipelineDesc(const PipelineRecord& r, nvrhi::IShader* vs
 }
 
 void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
+  struct UploadGuard {
+    GameRenderer* game;
+    ~UploadGuard() { game->resource_prepare_call_ = nullptr; game->FlushUploads(); }
+  } uploads{this};
+  PollResourcePreload(cl);
   UpdateEffects();
   if (options_.debug & 512) return;  // debugging: no draws
   if (options_.debug & 8192) {       // debugging: no draws, but 10 us of the game thread's time each
@@ -1683,6 +1709,11 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   }
 
   if (stop_at == 2) return;
+  resource_prepare_call_ = &call;
+  resource_prepare_device_ = &d;
+  resource_prepare_vs_ = vs.get();
+  resource_prepare_ps_ = ps.get();
+  resource_prepare_tried_ = false;
   // Draw constants: textures, samplers, vertex fetch, clip planes, viewport,
   // alpha test.
   kkshaders::DrawConstants dc = {};
@@ -1933,8 +1964,16 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     ann_material = true;
     tessellated = (record.flags & kRecordTessellation)!=0;
   }
-  cl->writeBuffer(draw_constants_, &dc, sizeof(dc));
-  stats_.upload_bytes += sizeof(dc);
+  // Reuse the current volatile version only inside the same list/frame, just as for the
+  // VS/PS and scale constants. Compare every byte, including alpha test and tessellation.
+  if (new_list || std::memcmp(&dc, &last_draw_, sizeof(dc)) != 0) {
+    cl->writeBuffer(draw_constants_, &dc, sizeof(dc));
+    stats_.upload_bytes += sizeof(dc);
+    ++stats_.draw_constant_uploads;
+    last_draw_ = dc;
+  } else {
+    ++stats_.draw_constant_identical;
+  }
   if (scaled()) {
     sc.renderScale[0] = size_from->scale_x;
     sc.renderScale[1] = size_from->scale_y;

@@ -48,6 +48,8 @@
 #include "backend/frame_log.h"
 #include "backend/game_upscale.h"
 #include "backend/pipeline_cache.h"
+#include "backend/resource_preload.h"
+#include "backend/resource_preload_bundle.h"
 #include "backend/guest_device.h"
 #include "backend/guest_memory.h"
 #include "backend/lighting_config.h"
@@ -97,6 +99,9 @@ class GameRenderer {
     // vertices it reads instead. Watching them cost a write fault per 4 KB page and frame (340 a
     // frame in Venture: the game writes a 4 MB ring of particle vertices between its draws).
     bool dynamic_vertex_buffers = false;
+    // Synchronous submission to the host's graphics queue, using its queue locks.
+    // Optional for embedders; without it all uploads use the draw list as before.
+    std::function<void(nvrhi::ICommandList*)> upload_submit;
     // The port's anisotropic_override (the launcher's texture filtering): -1 the game's own, else the
     // Xenos AnisoFilter value every sampler uses (0 off, 1 1:1, 2 2:1, 3 4:1, 4 8:1, 5 16:1), as the
     // Xenos plugin applies it.
@@ -195,6 +200,11 @@ class GameRenderer {
     uint64_t texture_failures = 0;
     uint64_t buffer_uploads = 0;
     uint64_t upload_bytes = 0;       // guest textures, vertices, indices and draw constants (not auxiliary passes)
+    uint64_t early_upload_bytes = 0, early_upload_batches = 0;
+    uint64_t prepared_resources = 0, prepared_discarded = 0;
+    uint64_t preloaded_resources = 0, preload_hits = 0, preload_hash_misses = 0, preload_bytes = 0;
+    double resource_prepare_ms = 0;  // render-thread wall time of joined first-use batches
+    uint64_t draw_constant_uploads = 0, draw_constant_identical = 0;
     uint64_t scale_uploads = 0, scale_identical = 0;
     uint64_t vertex_binds = 0, vertex_repeated = 0;
     uint64_t descriptor_updates = 0, graphics_states = 0, pipeline_changes = 0;
@@ -274,6 +284,12 @@ class GameRenderer {
   bool Present(nvrhi::ICommandList* cl, uint32_t device, nvrhi::ITexture* target);
   // After the frame's command list was submitted.
   void EndFrame();
+  // Render-thread loading-screen service. Also callable with an explicit state
+  // by offline fixtures; the normal path reads the title's loading variables.
+  void PreloadResources(nvrhi::ICommandList* cl, bool loading, uint32_t level, uint32_t start);
+  // Versioned chapter hints shipped beside the executable. Read before the first
+  // draw; independent of the writable pipeline/local-learning cache.
+  bool LoadResourceList(const std::string& path);
 
   // The pipeline cache file (pipeline_cache.h): reads the descriptions of earlier runs and
   // starts creating them on the worker threads, then appends each new description the draws
@@ -454,6 +470,7 @@ class GameRenderer {
     kknr::HostTexturePlan plan;
     nvrhi::Format format = nvrhi::Format::UNKNOWN;
     bool render_target = false;  // made by a resolve (usable as a blit target)
+    bool preloaded = false;
     // Resolved from a scaled target: the host texture is the guest's size times this.
     float scale_x = 1.0f, scale_y = 1.0f;
     std::unordered_map<uint32_t, uint32_t> views;  // view key -> descriptor index
@@ -492,7 +509,7 @@ class GameRenderer {
   HostTexture* UploadTexture(nvrhi::ICommandList* cl, kknr::TextureCache::Entry& entry,
                              const kknr::TextureFetch& fetch);
   HostTexture* CreateHostTexture(const kknr::HostTexturePlan& plan, bool render_target, float scale_x = 1.0f,
-                                 float scale_y = 1.0f);
+                                 float scale_y = 1.0f, kknr::ResourceWork* profile = nullptr);
   // The scale of the texture BindTexture bound last (1 when none).
   float bound_scale_x_ = 1.0f, bound_scale_y_ = 1.0f;
   // Set by a failed bind, copied by Draw and logged only if the draw is submitted.
@@ -518,6 +535,7 @@ class GameRenderer {
     uint64_t last_upload_frame = ~0ull;
     uint32_t upload_streak = 0;
     bool dynamic = false;
+    bool preloaded = false;
     kknr::BufferCache::Entry* entry = nullptr;
   };
   std::unordered_set<HostTexture*> descriptor_textures_;
@@ -531,6 +549,36 @@ class GameRenderer {
   HostBuffer* BindIndexBuffer(nvrhi::ICommandList* cl, uint32_t physical, uint32_t bytes,
                               bool index32);
   void ProcessInvalidations();
+  void PrepareResourceUploads(nvrhi::ICommandList* cl, const DrawCall& call,
+                              const dev::DeviceView& device, const GameShader& vs, const GameShader* ps);
+  void PrepareResourceRequests(nvrhi::ICommandList* cl, const std::vector<ResourcePreloadRecord>& requests,
+                               bool preload = false);
+  void PollResourcePreload(nvrhi::ICommandList* cl);
+  void RememberResource(ResourcePreloadRecord record, const kknr::ResidentEntry& entry);
+  void SaveResourcePreload();
+  std::string resource_cache_base_, resource_cache_path_;
+  std::vector<ResourcePreloadRecord> preload_records_, learned_resources_;
+  std::vector<ResourcePreloadChapter> shipped_resources_;  // protected by cache_mutex_
+  std::unordered_set<const kknr::ResidentEntry*> resource_seen_;
+  size_t preload_cursor_ = 0;
+  uint32_t preload_level_ = 0, preload_start_ = 0;
+  bool resource_loading_ = false, resource_learning_ = false, resource_cache_dirty_ = false;
+  uint64_t resource_poll_frame_ = ~0ull, preload_reserved_bytes_ = 0;
+  std::chrono::steady_clock::time_point resource_learn_start_;
+  static constexpr uint64_t kChapterPreloadBytes = 64ull << 20;
+  std::unique_ptr<class ResourceUploadWorkers> resource_upload_workers_;
+  std::atomic<uint64_t> resource_revision_{0};
+  void TryPrepareResourceUploads(nvrhi::ICommandList* cl);
+  const DrawCall* resource_prepare_call_ = nullptr;
+  const dev::DeviceView* resource_prepare_device_ = nullptr;
+  const GameShader* resource_prepare_vs_ = nullptr;
+  const GameShader* resource_prepare_ps_ = nullptr;
+  bool resource_prepare_tried_ = false;
+  std::vector<kknr::VertexElement> scratch_preparation_declaration_;
+  void ProfileResources();
+  kknr::ResourceWork resource_work_;
+  kknr::ResourceWork* resource_profile_ = nullptr;
+  FILE* resource_profile_file_ = nullptr;
   void LogInvalidationHistogram();
   std::unordered_map<uint32_t, uint64_t> invalidation_histogram_;  // --native_debug=8
   uint64_t invalidation_bytes_ = 0;
@@ -939,6 +987,11 @@ class GameRenderer {
   std::vector<kknr::VertexElement> scratch_declaration_;
   std::vector<kkshaders::DeclElement> scratch_patch_declaration_;
   std::vector<uint8_t> scratch_index_upload_;
+  std::unique_ptr<class UploadBatch> upload_batch_;
+  nvrhi::ICommandList* EarlyUpload(uint64_t bytes);
+  void FlushUploads();
+  // Lazy CPU conversion pool. Every conversion joins before returning, so teardown has no guest/GPU work.
+  std::unique_ptr<kknr::TextureConversionWorkers> texture_conversion_workers_;
 
   // Built-in passes.
   nvrhi::ShaderHandle blit_vs_, blit_ps_, clear_vs_, clear_ps_;
@@ -955,6 +1008,7 @@ class GameRenderer {
   // they changed (and once per command list).
   std::array<float, 1024> last_vs_ = {}, last_ps_ = {};
   std::array<uint8_t, 4096> last_vs_raw_ = {}, last_ps_raw_ = {};  // the guest bytes of those
+  kkshaders::DrawConstants last_draw_ = {};
   bool constants_valid_ = false;
   nvrhi::ICommandList* constants_list_ = nullptr;
   uint64_t constants_frame_ = 0;

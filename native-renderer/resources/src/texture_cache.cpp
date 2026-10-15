@@ -45,6 +45,7 @@ void InvalidateIndexed(std::unordered_map<uint32_t, std::vector<E*>>& pages, uin
     for (E* e : it->second)
       for (const GuestRange& r : e->ranges)
         if (r.Overlaps(physical, bytes)) {
+          e->checked_hash_valid = false;
           e->dirty = true;
           e->watched = false;  // the write disarmed the watch
         }
@@ -74,24 +75,37 @@ size_t CountIndexed(const std::unordered_map<uint32_t, std::vector<E*>>& pages, 
   return n;
 }
 
-uint64_t HashResident(const ResidentEntry& e, const GuestMemory& memory) {
-  uint64_t h = 0x9E3779B97F4A7C15ull;
-  for (const GuestRange& r : e.ranges) {
-    if (!r.bytes) continue;
-    const uint8_t* p = memory.At(r.start, r.bytes);
-    h = p ? HashBytes(p, r.bytes, h) : Mix(h ^ r.start);
-  }
-  return h;
+uint64_t HashResident(const ResidentEntry& e, const GuestMemory& memory, ResourceWork* profile) {
+  ResourceWorkTimer timer(profile, ResourceWork::Hash);
+  const uint8_t* data[2] = {memory.At(e.ranges[0].start, e.ranges[0].bytes),
+                            memory.At(e.ranges[1].start, e.ranges[1].bytes)};
+  return HashGuestRanges(e.ranges, data);
 }
 
-void Watch(const std::function<void(uint32_t, uint32_t)>& watch, ResidentEntry& e, bool once = true) {
+void Watch(const std::function<void(uint32_t, uint32_t)>& watch, ResidentEntry& e, bool once, ResourceWork* profile) {
   if (!watch || (once && e.watched)) return;
-  for (const GuestRange& r : e.ranges)
-    if (r.bytes) watch(r.start, r.bytes);
+  ResourceWorkTimer timer(profile, ResourceWork::Watch);
+  const auto& a = e.ranges[0];
+  const auto& b = e.ranges[1];
+  if (a.bytes && b.bytes && uint64_t(a.start) <= uint64_t(b.start) + b.bytes &&
+      uint64_t(b.start) <= uint64_t(a.start) + a.bytes) {
+    const uint32_t first = std::min(a.start, b.start);
+    const uint64_t end = std::max(uint64_t(a.start) + a.bytes, uint64_t(b.start) + b.bytes);
+    watch(first, uint32_t(end - first));
+  } else {
+    for (const GuestRange& r : e.ranges) if (r.bytes) watch(r.start, r.bytes);
+  }
   e.watched = true;
 }
 
 }  // namespace
+
+uint64_t HashGuestRanges(const GuestRange ranges[2], const uint8_t* const data[2]) {
+  uint64_t h = 0x9E3779B97F4A7C15ull;
+  for (unsigned i = 0; i < 2; ++i) if (ranges[i].bytes)
+    h = data[i] ? HashBytes(data[i], ranges[i].bytes, h) : Mix(h ^ ranges[i].start);
+  return h;
+}
 
 uint64_t HashBytes(const void* data, size_t size, uint64_t seed) {
   // Four independent 64-bit lanes over 32-byte chunks, then the tail; fast enough to re-check a texture.
@@ -144,10 +158,11 @@ TextureCache::Entry& TextureCache::Create(const TextureFetch& fetch, const Textu
 void TextureCache::IndexRanges(Entry* e, bool add) { IndexEntryRanges(pages_, e, add); }
 
 uint64_t TextureCache::HashRanges(const ResidentEntry& e, const GuestMemory& memory) const {
-  return HashResident(e, memory);
+  return HashResident(e, memory, profile);
 }
 
 TextureCache::BindResult TextureCache::Bind(const TextureFetch& fetch, const GuestMemory& memory, uint64_t frame) {
+  ResourceWorkTimer timer(profile, ResourceWork::CacheBind);
   const TextureKey key = MakeTextureKey(fetch);
   BindResult result;
   auto it = entries_.find(key);
@@ -163,9 +178,11 @@ TextureCache::BindResult TextureCache::Bind(const TextureFetch& fetch, const Gue
   if (!e.dirty) return result;
   // Written since the last upload: only a real change of content costs an upload.
   const uint64_t hash = HashRanges(e, memory);
+  e.checked_hash = hash;
+  e.checked_hash_valid = true;
   if (hash == e.content_hash && !e.gpu_written) {
     e.dirty = false;
-    Watch(watch_range, e, watch_once);
+    Watch(watch_range, e, watch_once, profile);
     return result;
   }
   result.action = BindAction::kReupload;
@@ -173,11 +190,18 @@ TextureCache::BindResult TextureCache::Bind(const TextureFetch& fetch, const Gue
 }
 
 void TextureCache::OnUploaded(Entry& e, const GuestMemory& memory) {
-  e.content_hash = HashRanges(e, memory);
+  OnUploaded(e, e.checked_hash_valid ? e.checked_hash : HashRanges(e, memory));
+}
+
+void TextureCache::EnsureWatched(Entry& e) { Watch(watch_range, e, watch_once, profile); }
+
+void TextureCache::OnUploaded(Entry& e, uint64_t captured_hash) {
+  e.content_hash = captured_hash;
+  e.checked_hash_valid = false;
   e.dirty = false;
   e.gpu_written = false;
   ++e.uploads;
-  Watch(watch_range, e, watch_once);
+  Watch(watch_range, e, watch_once, profile);
 }
 
 void TextureCache::InvalidateRange(uint32_t physical, uint32_t bytes) { InvalidateIndexed(pages_, physical, bytes); }
@@ -189,11 +213,12 @@ TextureCache::Entry& TextureCache::MarkGpuWritten(const TextureFetch& fetch, uin
   const TextureKey key = MakeTextureKey(fetch);
   auto it = entries_.find(key);
   Entry& e = it == entries_.end() ? Create(fetch, key) : *it->second;
+  e.checked_hash_valid = false;
   e.gpu_written = true;
   e.dirty = false;
   e.content_hash = 0;
   e.last_used_frame = frame;
-  Watch(watch_range, e, watch_once);  // a later CPU write makes guest memory the truth again
+  Watch(watch_range, e, watch_once, profile);  // a later CPU write makes guest memory the truth again
   return e;
 }
 
@@ -215,6 +240,7 @@ size_t TextureCache::Trim(uint64_t frame, uint64_t max_age) {
 
 BufferCache::BindResult BufferCache::Bind(uint32_t physical, uint32_t bytes, uint64_t conversion_id,
                                           const GuestMemory& memory, uint64_t frame) {
+  ResourceWorkTimer timer(profile, ResourceWork::CacheBind);
   const uint64_t key = Mix(uint64_t(physical) << 32 ^ bytes) ^ Mix(conversion_id + 0x51ED27);
   BindResult result;
   auto it = entries_.find(key);
@@ -236,9 +262,11 @@ BufferCache::BindResult BufferCache::Bind(uint32_t physical, uint32_t bytes, uin
   e.last_used_frame = frame;
   result.entry = &e;
   if (!e.dirty) return result;
-  if (HashResident(e, memory) == e.content_hash) {
+  e.checked_hash = HashResident(e, memory, profile);
+  e.checked_hash_valid = true;
+  if (e.checked_hash == e.content_hash) {
     e.dirty = false;
-    Watch(watch_range, e, watch_once);
+    Watch(watch_range, e, watch_once, profile);
     return result;
   }
   result.action = BindAction::kReupload;
@@ -256,10 +284,17 @@ void BufferCache::Touch(uint32_t physical, uint32_t bytes, uint64_t conversion_i
 }
 
 void BufferCache::OnUploaded(Entry& e, const GuestMemory& memory) {
-  e.content_hash = HashResident(e, memory);
+  OnUploaded(e, e.checked_hash_valid ? e.checked_hash : HashResident(e, memory, profile));
+}
+
+void BufferCache::EnsureWatched(Entry& e) { Watch(watch_range, e, watch_once, profile); }
+
+void BufferCache::OnUploaded(Entry& e, uint64_t captured_hash) {
+  e.content_hash = captured_hash;
+  e.checked_hash_valid = false;
   e.dirty = false;
   ++e.uploads;
-  Watch(watch_range, e, watch_once);
+  Watch(watch_range, e, watch_once, profile);
 }
 
 void BufferCache::InvalidateRange(uint32_t physical, uint32_t bytes) { InvalidateIndexed(pages_, physical, bytes); }
