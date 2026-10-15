@@ -42,7 +42,7 @@ ShaderLibrary::Replacement ShadowReplacement(bool spirv, uint32_t lights, bool p
   if (lights == 3) r = pcss ? NR_SHADOW(3, pcss) : NR_SHADOW(3, pcf);
 #undef NR_SHADOW
   // A distinct input hash per quality: the replaced shader's pipelines never meet the game's.
-  r.tag = pcss ? UINT64_C(0x4C69676853534351) : UINT64_C(0x4C69676850434621);
+  r.tag = pcss ? UINT64_C(0x4C69676853534352) : UINT64_C(0x4C69676850434622);
   return r;
 }
 
@@ -170,7 +170,7 @@ void GameRenderer::LightingInitialize() {
   const LightingConfig& l = options_.lighting;
   const bool live = bool(options_.effect_settings);
   if (!l.active() && !live) return;
-  if (live && l.any()) {
+  if (live && (l.any() || l.gpu_time)) {
     // Live settings: every pass's pipelines, so the options can change later (game_effects.cpp); the
     // timers feed the graphics panel (logged only with --native_lighting_gpu_time).
     LightingConfig all = l;
@@ -238,13 +238,13 @@ void GameRenderer::LightingWriteConstants(nvrhi::ICommandList* cl) {
   // Shadows (lighting_shadow.hlsl). Radii in guest shadow-map texels (832 per side), so the footprint
   // is the same at every shadow-map resolution and only the sampling gets finer.
   const float soft = l.shadow_softness;
-  k.shadow[0] = 1.5f * soft;
-  k.shadow[1] = 5.0f * soft;
+  k.shadow[0] = 0.6f * soft;
+  k.shadow[1] = 3.0f * soft;
   k.shadow[2] = lighting_.penumbra_scale * soft;
   k.shadow[3] = LightingShadowScale();
   k.shadowShape[0] = lighting_.slope_limit;
-  k.shadowShape[1] = 0.6f;
-  k.shadowShape[2] = 6.0f * soft;
+  k.shadowShape[1] = 0.35f;
+  k.shadowShape[2] = 2.0f * soft;
   k.shadowShape[3] = l.shadows == ShadowQuality::kUltra ? 1.0f : 0.0f;
   // Water reflections (kk_lighting.hlsli): this frame's scene, once it is made.
   const SceneLighting::SsrView* ssr = scene_lighting_ ? &scene_lighting_->ssr() : nullptr;

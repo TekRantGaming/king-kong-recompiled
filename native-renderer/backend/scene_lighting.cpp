@@ -16,8 +16,6 @@
 #include "backend/shaders/generated/lighting_ssr_depth_cs_spirv.h"
 #include "backend/shaders/generated/lighting_ssr_depth_down_cs_dxil.h"
 #include "backend/shaders/generated/lighting_ssr_depth_down_cs_spirv.h"
-#include "backend/shaders/generated/lighting_volumetric_centroid_cs_dxil.h"
-#include "backend/shaders/generated/lighting_volumetric_centroid_cs_spirv.h"
 #include "backend/shaders/generated/lighting_volumetric_mask_cs_dxil.h"
 #include "backend/shaders/generated/lighting_volumetric_mask_cs_spirv.h"
 #include "backend/shaders/generated/lighting_volumetric_ps_dxil.h"
@@ -42,14 +40,14 @@ struct SsrPrepareConstants {
 // shaders/lighting_volumetric.hlsl's VolumetricConstants.
 struct VolumetricConstants {
   float light[16];
-  float shadow[4];      // bias, steps, share of the fog a shadowed ray loses, strength
+  float shadow[4];      // bias, samples, reserved, strength
   float fog_color[4];
   float fog_params[4];  // near over distance, density, inverse distance, depth clamp
   float fog_norm[4];    // 1 / view z = x * d - y; z: 1 with a shadow map
   float screen[4];      // 1 / size, size of the colour target
   float sun[4];         // view-space direction to the sun (0: not known), the phase function's g
-  float camera[4];      // projection x and y scales, god rays' strength, their samples
-  float rays[4];        // quarter-resolution size, the sky's brightness threshold, decay per sample
+  float camera[4];      // projection x and y scales, exposure, reserved
+  float rays[4];        // quarter-resolution size, reserved
 };
 
 // The god rays work at a quarter of the colour target's resolution.
@@ -66,6 +64,15 @@ uint32_t MipCount(uint32_t w, uint32_t h) {
     ++n;
   }
   return n;
+}
+
+// Include map raster and the mask/composite/blur, not only the comparisons.
+// This is the production shadow cost at the actual scaled target sizes.
+int TimedFamily(LightFamily family) {
+  if (family == LightFamily::kShadow || family == LightFamily::kShadowQuad ||
+      family == LightFamily::kCompositeShadow || family == LightFamily::kBlurShadow) return 0;
+  if (family == LightFamily::kWater || family == LightFamily::kOcean) return 1;
+  return -1;
 }
 
 }  // namespace
@@ -95,7 +102,7 @@ bool SceneLighting::MakePass(Pass& pass, const void* data, size_t size, const ch
 
 bool SceneLighting::Initialize() {
   if (config_.gpu_time) {
-    timers_[0] = std::make_unique<AoGpuTimer>(device_, "the screen-space shadow", "Lighting GPU time");
+    timers_[0] = std::make_unique<AoGpuTimer>(device_, "the shadow maps and mask", "Lighting GPU time");
     timers_[1] = std::make_unique<AoGpuTimer>(device_, "the water and its reflections", "Lighting GPU time");
     timers_[2] = std::make_unique<AoGpuTimer>(device_, "the volumetric light", "Lighting GPU time");
   }
@@ -148,21 +155,10 @@ bool SceneLighting::Initialize() {
     const auto vcb = I::VolatileConstantBuffer(0);
     const bool passes =
         MakePass(mask_pass_, NR_VOL_BLOB(lighting_volumetric_mask_cs), "cs_mask",
-                 {vcb, I::Texture_SRV(0), I::Texture_SRV(2), I::Sampler(0), I::Sampler(1), I::Texture_UAV(0)}) &&
-        MakePass(centroid_pass_, NR_VOL_BLOB(lighting_volumetric_centroid_cs), "cs_centroid",
-                 {vcb, I::Texture_SRV(3), I::Texture_UAV(0)}) &&
+                 {vcb, I::Texture_SRV(0), I::Texture_SRV(1), I::Sampler(0), I::Texture_UAV(0)}) &&
         MakePass(radial_pass_, NR_VOL_BLOB(lighting_volumetric_radial_cs), "cs_radial",
-                 {vcb, I::Texture_SRV(3), I::Texture_SRV(4), I::Sampler(1), I::Texture_UAV(0)});
+                 {vcb, I::Texture_SRV(3), I::Sampler(1), I::Texture_UAV(0)});
 #undef NR_VOL_BLOB
-    {
-      nvrhi::TextureDesc td;
-      td.width = td.height = 1;
-      td.format = nvrhi::Format::R32_FLOAT;
-      td.initialState = nvrhi::ResourceStates::ShaderResource;
-      td.keepInitialState = true;
-      td.debugName = "Lighting no shadow map";
-      vol_no_shadow_ = device_->createTexture(td);
-    }
     nvrhi::BufferDesc bd;
     bd.byteSize = sizeof(VolumetricConstants);
     bd.isConstantBuffer = true;
@@ -175,8 +171,7 @@ bool SceneLighting::Initialize() {
     point_clamp_ = device_->createSampler(sd);
     sd.setAllFilters(true);
     linear_clamp_ = device_->createSampler(sd);
-    if (!vol_vs_ || !vol_ps_ || !vol_layout_ || !vol_constants_ || !point_clamp_ || !linear_clamp_ || !passes ||
-        !vol_no_shadow_) {
+    if (!vol_vs_ || !vol_ps_ || !vol_layout_ || !vol_constants_ || !point_clamp_ || !linear_clamp_ || !passes) {
       Logf(LogLevel::kWarning, "rexgpu-native: lighting: the volumetric light's shaders could not be created; it stays off");
       config_.volumetrics = Volumetrics::kOff;
     }
@@ -207,7 +202,15 @@ void SceneLighting::NoteFog(uint64_t frame, const Fog& f) {
 void SceneLighting::NoteShafts(uint64_t frame) { shafts_frame_ = frame; }
 
 bool SunDirectionFromShadow(const float light[16], float norm_x, float norm_y, float px, float py, float out[3]) {
-  if (norm_x == 0.0f || px == 0.0f || py == 0.0f) return false;
+  if (!std::isfinite(norm_x) || !std::isfinite(norm_y) || norm_x == 0.0f || !(px > 0.0f) || !(py > 0.0f)) return false;
+  for (int i = 0; i < 16; ++i) if (!std::isfinite(light[i])) return false;
+  // An orthographic light has constant w in view space. In the game's stored
+  // depth representation its last row is a multiple of (0, 0, norm_x, -norm_y).
+  // A perspective/local light cannot be treated as one sun direction.
+  const float w_scale = light[14] / norm_x;
+  const float tolerance = 1e-4f * std::max(std::fabs(light[14]) + std::fabs(light[15]), 1e-6f);
+  if (std::fabs(w_scale) < 1e-8f || std::fabs(light[12]) > tolerance || std::fabs(light[13]) > tolerance ||
+      std::fabs(light[15] + norm_y * w_scale) > tolerance) return false;
   // The light's NDC of a view-space point, as lighting_volumetric.hlsl (and the game) computes it.
   auto light_ndc = [&](const double p[3], double l[3]) {
     const double z = p[2];
@@ -238,6 +241,7 @@ bool SunDirectionFromShadow(const float light[16], float norm_x, float norm_y, f
   if (!(len > 1e-12) || !std::isfinite(len)) return false;
   // Towards the light: where the light-space depth gets smaller.
   const double depth_change = j[2][0] * d[0] + j[2][1] * d[1] + j[2][2] * d[2];
+  if (!std::isfinite(depth_change) || std::fabs(depth_change) < len * 1e-9) return false;
   const double sign = depth_change > 0.0 ? -1.0 : 1.0;
   for (int i = 0; i < 3; ++i) out[i] = float(sign * d[i] / len);
   return true;
@@ -263,10 +267,13 @@ bool SceneLighting::RunVolumetric(nvrhi::ICommandList* cl) {
   if (!Volumetric(cl, in)) return false;
   ++stats_.volumetric;
   if (shafts_frame_ == frame_) ++stats_.volumetric_shafts;
-  if (stats_.volumetric == 1)
-    Logf(LogLevel::kInfo, "rexgpu-native: lighting: first volumetric light (frame %llu): fog %.3g %.3g %.3g, %s",
+  if (stats_.volumetric == 1) {
+    float sun[3] = {};
+    SunDirectionFromShadow(in.shadow->light, in.fog.normalizing[0], in.fog.normalizing[1], in.px, in.py, sun);
+    Logf(LogLevel::kInfo, "rexgpu-native: lighting: first volumetric light (frame %llu): fog %.3g %.3g %.3g, sun %.4g %.4g %.4g",
          static_cast<unsigned long long>(frame_), fog_.params[1], fog_.params[2], fog_.params[3],
-         in.shadow ? "with the shadow map" : "god rays only (no screen-space shadow this frame)");
+         sun[0], sun[1], sun[2]);
+  }
   return true;
 }
 
@@ -294,21 +301,23 @@ bool SceneLighting::EnsureVolumetricImages(const nvrhi::TextureDesc& cd) {
     q.debugName = name;
     return device_->createTexture(q);
   };
-  vol_mask_ = make(qw, qh, nvrhi::Format::RGBA16_FLOAT, "Lighting god rays sky");
-  vol_rays_ = make(qw, qh, nvrhi::Format::RGBA16_FLOAT, "Lighting god rays");
-  vol_centroid_ = make(1, 1, nvrhi::Format::RGBA32_FLOAT, "Lighting god rays centre");
-  if (!vol_copy_ || !vol_mask_ || !vol_rays_ || !vol_centroid_) {
-    vol_copy_ = vol_mask_ = vol_rays_ = vol_centroid_ = nullptr;
+  vol_mask_ = make(qw, qh, nvrhi::Format::RGBA16_FLOAT, "Lighting shadowed fog samples");
+  vol_rays_ = make(qw, qh, nvrhi::Format::RGBA16_FLOAT, "Lighting shadowed fog filtered");
+  if (!vol_copy_ || !vol_mask_ || !vol_rays_) {
+    vol_copy_ = vol_mask_ = vol_rays_ = nullptr;
     return false;
   }
   return true;
 }
 
 bool SceneLighting::Volumetric(nvrhi::ICommandList* cl, const VolumetricInput& in) {
-  if (!in.color || !in.depth || !vol_ps_ || !mask_pass_.pipeline) return false;
+  if (!config_.volumetrics_on() || !(config_.volumetric_strength > 0.0f) || !in.color || !in.depth ||
+      !in.shadow || !in.shadow->shadow_map || !vol_ps_ || !mask_pass_.pipeline) return false;
   const Fog& fog = in.fog;
   // No fog, nothing to light (a clear scene stays clear).
   if (!(fog.params[2] > 0.0f) || !(fog.params[3] > 0.0f) || fog.normalizing[0] == 0.0f) return false;
+  float sun[3] = {};
+  if (!SunDirectionFromShadow(in.shadow->light, fog.normalizing[0], fog.normalizing[1], in.px, in.py, sun)) return false;
   nvrhi::ITexture* color = in.color;
   nvrhi::FramebufferHandle& fb = vol_framebuffers_[color];
   if (!fb) {
@@ -335,7 +344,6 @@ bool SceneLighting::Volumetric(nvrhi::ICommandList* cl, const VolumetricInput& i
   if (in.shadow) std::memcpy(k.light, in.shadow->light, sizeof(k.light));
   k.shadow[0] = in.shadow ? in.shadow->bias : 0.0f;
   k.shadow[1] = high ? 32.0f : 16.0f;
-  k.shadow[2] = high ? 0.4f : 0.3f;  // the share of the fog's light a shadowed ray loses
   k.shadow[3] = strength;
   std::memcpy(k.fog_color, fog.color, sizeof(k.fog_color));
   k.fog_params[0] = fog.params[0];
@@ -349,20 +357,13 @@ bool SceneLighting::Volumetric(nvrhi::ICommandList* cl, const VolumetricInput& i
   k.screen[1] = 1.0f / float(h);
   k.screen[2] = float(w);
   k.screen[3] = float(h);
-  float sun[3] = {0.0f, 0.0f, 0.0f};
-  if (in.shadow && SunDirectionFromShadow(in.shadow->light, fog.normalizing[0], fog.normalizing[1], in.px, in.py, sun))
-    std::memcpy(k.sun, sun, sizeof(sun));
-  k.sun[3] = 0.6f;
+  std::memcpy(k.sun, sun, sizeof(sun));
+  k.sun[3] = 0.45f;
   k.camera[0] = in.px > 0.0f ? in.px : 1.0f;
   k.camera[1] = in.py > 0.0f ? in.py : 1.0f;
-  // The god rays scale with the fog: the game's fog amount 30 units away (denser fog, more light).
-  const float fog30 = std::clamp(std::clamp(30.0f * fog.params[3] - fog.params[0], 0.0f, 1.0f) * fog.params[2], 0.0f, 1.0f);
-  k.camera[2] = strength * kGodRayExposure * fog30;
-  k.camera[3] = high ? 64.0f : 32.0f;
+  k.camera[2] = 0.35f * strength;
   k.rays[0] = float(qw);
   k.rays[1] = float(qh);
-  k.rays[2] = 0.45f;  // the sky brighter than this (a picture value) sends rays
-  k.rays[3] = high ? 0.985f : 0.97f;
   cl->writeBuffer(vol_constants_, &k, sizeof(k));
 
   using S = nvrhi::BindingSetItem;
@@ -373,32 +374,24 @@ bool SceneLighting::Volumetric(nvrhi::ICommandList* cl, const VolumetricInput& i
     bs.bindings = items;
     return device_->createBindingSet(bs, layout);
   };
-  nvrhi::ITexture* shadow_map = in.shadow && in.shadow->shadow_map ? in.shadow->shadow_map : vol_no_shadow_.Get();
+  nvrhi::ITexture* shadow_map = in.shadow->shadow_map;
   nvrhi::BindingSetHandle mask =
-      make_set(mask_pass_.layout, {cb, S::Texture_SRV(0, in.depth, nvrhi::Format::UNKNOWN, first), S::Texture_SRV(2, vol_copy_),
-                                   S::Sampler(0, point_clamp_), S::Sampler(1, linear_clamp_), S::Texture_UAV(0, vol_mask_)});
-  nvrhi::BindingSetHandle centroid =
-      make_set(centroid_pass_.layout, {cb, S::Texture_SRV(3, vol_mask_), S::Texture_UAV(0, vol_centroid_)});
+      make_set(mask_pass_.layout, {cb, S::Texture_SRV(0, in.depth, nvrhi::Format::UNKNOWN, first),
+                                   S::Texture_SRV(1, shadow_map, nvrhi::Format::UNKNOWN, first),
+                                   S::Sampler(0, point_clamp_), S::Texture_UAV(0, vol_mask_)});
   nvrhi::BindingSetHandle radial =
-      make_set(radial_pass_.layout, {cb, S::Texture_SRV(3, vol_mask_), S::Texture_SRV(4, vol_centroid_),
+      make_set(radial_pass_.layout, {cb, S::Texture_SRV(3, vol_mask_),
                                      S::Sampler(1, linear_clamp_), S::Texture_UAV(0, vol_rays_)});
   nvrhi::BindingSetHandle composite =
       make_set(vol_layout_, {cb, S::Texture_SRV(0, in.depth, nvrhi::Format::UNKNOWN, first),
                              S::Texture_SRV(1, shadow_map, nvrhi::Format::UNKNOWN, first), S::Texture_SRV(2, vol_copy_),
                              S::Texture_SRV(3, vol_rays_), S::Sampler(0, point_clamp_), S::Sampler(1, linear_clamp_)});
-  if (!mask || !centroid || !radial || !composite) return false;
+  if (!mask || !radial || !composite) return false;
   if (timers_[2]) timers_[2]->Begin(cl);
   // The scene as it is, read by every pass; the composite writes the target whole.
   const nvrhi::TextureSlice slice = nvrhi::TextureSlice().resolve(cd);
   cl->copyTexture(vol_copy_, slice, color, slice);
   Dispatch(cl, mask_pass_, mask, qw, qh);
-  {
-    nvrhi::ComputeState cs;
-    cs.pipeline = centroid_pass_.pipeline;
-    cs.bindings = {centroid};
-    cl->setComputeState(cs);
-    cl->dispatch(1, 1, 1);
-  }
   Dispatch(cl, radial_pass_, radial, qw, qh);
   nvrhi::GraphicsState gs;
   gs.pipeline = pipeline;
@@ -482,7 +475,7 @@ void SceneLighting::OnDraw(nvrhi::ICommandList* cl, const Draw& d) {
 
   // GPU time of the game's own runs of draws the options change (--native_lighting_gpu_time).
   const bool water = d.family == LightFamily::kWater || d.family == LightFamily::kOcean;
-  const int run = d.family == LightFamily::kShadowQuad ? 0 : (water ? 1 : -1);
+  const int run = TimedFamily(d.family);
   if (timing_ >= 0 && timing_ != run) {
     timers_[timing_]->End(cl);
     timing_ = -1;
@@ -509,8 +502,7 @@ void SceneLighting::OnDraw(nvrhi::ICommandList* cl, const Draw& d) {
 }
 
 void SceneLighting::BeforeDraw(nvrhi::ICommandList* cl, uint64_t frame, LightFamily family) {
-  const bool water = family == LightFamily::kWater || family == LightFamily::kOcean;
-  const int run = family == LightFamily::kShadowQuad ? 0 : (water ? 1 : -1);
+  const int run = TimedFamily(family);
   if (frame != frame_ || run != timing_) EndTimedDraws(cl);
 }
 

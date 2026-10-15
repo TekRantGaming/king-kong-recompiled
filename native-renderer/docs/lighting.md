@@ -1,4 +1,47 @@
-# Lighting: softer shadows, reflections on water, volumetric light (beta)
+# Lighting: dynamic shadows, water reflections and light shafts (experimental)
+
+## Task 101 candidates (15 October 2026)
+
+All three options remain hidden and default to Original/Off after the six permitted runs. The visual
+acceptance targets were not established: worthwhile dynamic-shadow edges, generic water coverage,
+and a clearly useful shaft improvement still need verification. GI's preset defaults are unchanged.
+`codex/REPORT-101.md` records the per-effect HIDE verdicts, pictures, costs and remaining gaps.
+This section supersedes the implementation details and timer scope in the historical sections below.
+
+- Shadows retain 2x maps for High and Ultra and the existing finer screen-space mask. High uses four
+  bilinear PCF gathers over 0.6 guest texels. Ultra uses four blocker-search gathers over three guest
+  texels and eight filter gathers, with a 0.35-2 guest-texel penumbra. Softness still scales the kernels.
+  Receiver-plane correction now includes each of the four texels in a gather, in both blocker search
+  and filtering. Comparing every texel against the tap centre's depth darkened a sloped plane in the
+  new synthetic fixture; per-texel correction keeps it lit. The game's constant bias is retained.
+  Replacement identities changed for both qualities. No world casters or baked shadows are added.
+- Water has 20 verified `pswater` shader identities: 13 existing reflection-fetch hooks and seven
+  non-reflective base-colour output hooks. The additional six have refraction/depth fetches and a
+  constant colour, distinguishing them from the mask and additive lighting-only variants. Normal
+  map fetch 3 is used where present. This does not identify arbitrary `psgeneric` surfaces as water.
+  The pack compatibility stamp now includes the hook list and each hook's mode, as well as its HLSL;
+  changing only the list therefore invalidates an incomplete older pack. Both scaled and unscaled
+  lighting variants remain in the DXIL/SPIR-V packs and use the existing prewarm path.
+- Shafts now integrate sunlight through fog along each view ray at quarter resolution, using 16/32
+  samples for Low/High. Each sample is projected into the current frame's first static shadow map
+  with the game's matrix and bias. A covered, lit sample contributes; a blocked sample or one outside
+  map/depth coverage contributes nothing. A valid camera, map and orthographic light direction are
+  required. The last matrix row must match the game's inverse-depth representation; a perspective
+  light or degenerate light-depth gradient is rejected. This recovers a light direction, not proof
+  that every chapter's first light represents the sun or that its map contains every roof/caster.
+  The bright-colour mask and sky-centroid search are no longer used. Sky, zero fog, missing maps,
+  unknown coverage, zero strength and Off add nothing. A compact depth-aware filter and four-tap
+  depth-aware upsample keep distant fog off foreground silhouettes. The composite only adds light,
+  keeps alpha, and caps each channel's addition at 35% of `max(receiver, 0.03)` before headroom.
+
+`native_lighting_gpu_time` now includes shadow-map draws and mask composite/blur, rather than only
+`psshadowquad`. Water timing includes preparation when it runs and the game's water draws. These
+are total pass costs; On minus Original is the incremental cost. No ROG Ally timing is inferred
+from desktop measurements. Explicit GPU profiling keeps the timing tracker alive with all effects
+Original/Off, so it can measure that baseline; ordinary Off still parks the temporary resources.
+The synthetic shader tests and the real-game checks are separate evidence. In the channel census,
+generic normal-mapped shader `E4A4C51DEA2423BB` uses a skinned vertex shader, so it is not assumed to be
+the water. No generic material is hooked from texture dimensions or draw order alone.
 
 ## Task 062 disposition (15 October 2026)
 

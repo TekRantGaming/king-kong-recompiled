@@ -24,6 +24,15 @@ const WaterEntry kWater[] = {
     // The census at frame 10800 shows this non-reflective pswater variant drawing the
     // visible water after its alpha/depth mask. It has normal map 3, but no fetch 1/2.
     {0x805E38F150347CFAull, {0, true, true}},
+    // Other base-water variants: refraction/depth fetches 0/5 and constant
+    // colour, but no reflection fetch 1/2. Do not hook the mask or the
+    // additive lighting-only variants (which have no constant colour).
+    {0x2C692E9464F37898ull, {0, true, true}},
+    {0x392C35731702335Cull, {0, true, false}},
+    {0x7459E958CCB3441Full, {0, true, true}},
+    {0x8BCD088F72D56CB0ull, {0, true, false}},
+    {0xC3D3636900021FEAull, {0, true, true}},
+    {0xDC264F3A8121F19Full, {0, true, true}},
     {0x2C85A92BB1A137E8ull, {kPlanar | kCube, false, true}},
     {0x360F0E42457F07F7ull, {kPlanar | kCube, false, false}},
     {0x52E2BA7C879B4217ull, {kPlanar | kCube, false, true}},

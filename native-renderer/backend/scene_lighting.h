@@ -94,7 +94,7 @@ class SceneLighting {
   // The game drew its own light shafts this frame (pslightshaft's render mode).
   void NoteShafts(uint64_t frame);
   // The volumetric light on a colour target with its depth (RunVolumetric, after the fog pass; the
-  // tests call it directly). shadow: the screen-space shadow's light and map, or none (god rays only).
+  // tests call it directly). A valid current-frame shadow map and light direction are required.
   // px, py: the camera's projection scales (0: not known).
   struct VolumetricInput {
     nvrhi::ITexture* color = nullptr;
@@ -104,8 +104,6 @@ class SceneLighting {
     float px = 0.0f, py = 0.0f;
   };
   bool Volumetric(nvrhi::ICommandList* cl, const VolumetricInput& in);
-  // The god rays' strength at --native_volumetric_strength 1 (times the rays' mean brightness).
-  static constexpr float kGodRayExposure = 0.5f;
   // At Present.
   void OnPresent(nvrhi::ICommandList* cl);
 
@@ -174,8 +172,8 @@ class SceneLighting {
   nvrhi::BindingLayoutHandle vol_layout_;
   nvrhi::BufferHandle vol_constants_;
   nvrhi::SamplerHandle point_clamp_, linear_clamp_;
-  Pass mask_pass_, centroid_pass_, radial_pass_;
-  nvrhi::TextureHandle vol_copy_, vol_mask_, vol_rays_, vol_centroid_, vol_no_shadow_;
+  Pass mask_pass_, radial_pass_;
+  nvrhi::TextureHandle vol_copy_, vol_mask_, vol_rays_;
   std::map<nvrhi::ITexture*, nvrhi::FramebufferHandle> vol_framebuffers_;
   std::map<uint32_t, nvrhi::GraphicsPipelineHandle> vol_pipelines_;  // by colour format
   ShadowQuad shadow_quad_;

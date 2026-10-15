@@ -851,13 +851,16 @@ TEST(Lighting_FogLastCompletesVolumetricsAtPresentOnce) {
     scene.Opaque(lighting, cl, 0);
     SceneLighting::Fog fog;
     fog.color[0] = fog.color[1] = fog.color[2] = 0.3f;
-    fog.params[1] = fog.params[2] = fog.params[3] = 0.01f;
-    fog.normalizing[0] = 1;
+    fog.params[2] = 1.0f; fog.params[3] = 0.04f;
+    fog.normalizing[0] = fog.normalizing[1] = -20.0f;
+    fog.normalizing[2] = 1.0f;
     lighting.NoteFog(0, fog);
     if (shadow) {
       SceneLighting::ShadowQuad quad;
       quad.depth = quad.shadow_map = scene.depth;
-      quad.light[0] = quad.light[5] = quad.light[10] = quad.light[15] = 1;
+      quad.light[0] = quad.light[5] = 0.02f;
+      quad.light[10] = -10.01f; quad.light[11] = 10.0f;
+      quad.light[14] = -20.0f; quad.light[15] = 20.0f;
       lighting.NoteShadowQuad(0, quad);
     }
     scene.draw.family = LightFamily::kFog;
@@ -865,16 +868,16 @@ TEST(Lighting_FogLastCompletesVolumetricsAtPresentOnce) {
     lighting.OnDraw(cl, scene.draw);
     CHECK_EQ(lighting.stats().volumetric, uint64_t(0));
     lighting.OnPresent(cl);
-    CHECK_EQ(lighting.stats().volumetric, uint64_t(1));  // sky gather also runs without a shadow map
+    CHECK_EQ(lighting.stats().volumetric, uint64_t(shadow ? 1 : 0));  // no light is invented without a map
     CHECK_EQ(lighting.stats().volumetric_no_shadow, uint64_t(shadow ? 0 : 1));
     lighting.OnPresent(cl);  // pending work was consumed with or without a shadow map
-    CHECK_EQ(lighting.stats().volumetric, uint64_t(1));
+    CHECK_EQ(lighting.stats().volumetric, uint64_t(shadow ? 1 : 0));
     CHECK_EQ(lighting.stats().volumetric_no_shadow, uint64_t(shadow ? 0 : 1));
     cl->close(); Device()->Execute(cl); Device()->WaitIdle();
     cl->open();
     scene.Opaque(lighting, cl, 1);  // a fog-free frame never reuses the pending pass
     lighting.OnPresent(cl);
-    CHECK_EQ(lighting.stats().volumetric, uint64_t(1));
+    CHECK_EQ(lighting.stats().volumetric, uint64_t(shadow ? 1 : 0));
     cl->close(); Device()->Execute(cl); Device()->WaitIdle();
   }
 }

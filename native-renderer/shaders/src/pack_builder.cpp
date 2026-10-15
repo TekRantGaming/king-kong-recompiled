@@ -105,7 +105,13 @@ bool moveInto(const fs::path& from, const fs::path& to, std::string* error) {
 }
 
 uint64_t lightingStampHash() {
-    const std::string& text = lightingText();
+    // A pack with the old hook list is incomplete even when the HLSL text is
+    // unchanged. Include the identities and hook modes in its compatibility stamp.
+    std::string text = lightingText();
+    size_t count = 0;
+    const uint64_t* list = waterReflectionShaders(&count);
+    for (size_t i = 0; i < count; ++i)
+        text += "\n" + hex16(list[i]) + " " + formatWaterReflectionHook(waterReflectionHookFor(list[i]));
     const uint64_t h = XXH3_64bits(text.data(), text.size());
     return h ? h : 1;
 }
