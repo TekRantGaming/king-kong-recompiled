@@ -176,9 +176,8 @@ class Dialog final : public rex::ui::ImGuiDialog {
       if (ImGui::Button(T("Copy results"))) ImGui::SetClipboardText(report.c_str());
       ImGui::SameLine();
       if (ImGui::Button(T("Quit game")) && quit_) quit_();
-      ImGui::Separator();
-      ImGui::TextUnformatted(T("Settings and hardware"));
-      ImGui::TextWrapped("%s", report.c_str());
+      // The dialog shows the translated summary. Detailed route/settings and
+      // hardware diagnostics stay in results.txt (and the explicit copy action).
     }
     ImGui::End();
   }
