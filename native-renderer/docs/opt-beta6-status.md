@@ -260,3 +260,15 @@ in-flight staging until GPU completion. Small/over-budget/existing resources
 use the original mandatory path. First-use scheduling is per draw; it does not
 run a cross-frame asset streamer or remove required CPU joins/in-place updates.
 Final Beta 5 chapter comparisons are in progress within the six-run allowance.
+
+Task-099 background-audit correction: the full process CPU inventories show an
+external `kkshaders` compiler consuming roughly eight logical CPUs during all
+five original fixture pairs and both Beta 5/candidate Vulkan games. The earlier
+filter watched clang/ninja/cmake/CTest, so its four "clean" fixture labels were
+wrong. Their timings remain recorded as loaded observations; the clean-gain
+claim above is withdrawn pending isolated offline repeats. Both Vulkan startup
+AND steady windows are loaded. The DirectX pair and the two original profiling
+runs have no sampled build/test/shader-compiler overlap. All six games exit 0;
+no additional game launch is permitted or planned. Offline repeats wait for
+`kkshaders` and other builds/tests as well as the shared slot. Correctness-test
+passes are unaffected by this performance-label correction.
