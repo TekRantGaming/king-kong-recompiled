@@ -2867,4 +2867,5 @@ constexpr Entry kEntries[] = {
      "Attiva l'illuminazione globale per regolarne la distanza."},
 #include "debug_overlay_text_table.inc"
 #include "benchmark_text_table.inc"
+#include "hdr_text_table.inc"
 };

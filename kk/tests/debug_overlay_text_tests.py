@@ -7,6 +7,7 @@ root = Path(sys.argv[1])
 source = (root / 'src/debug_overlay.cpp').read_text(encoding='utf-8')
 table = (root / 'src/launcher_text_table.inc').read_text(encoding='utf-8')
 table += (root / 'src/debug_overlay_text_table.inc').read_text(encoding='utf-8')
+table += (root / 'src/hdr_text_table.inc').read_text(encoding='utf-8')
 literal = r'"((?:[^"\\]|\\.)*)"'
 entries = {}
 for match in re.finditer(r'\{\s*' + literal + r'\s*,\s*' + literal + r'\s*,\s*' + literal +

@@ -1386,6 +1386,20 @@ class SettingsPages {
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
 
+    if (FindFlag("present_hdr")) {
+      items.push_back(Section("HDR output"));
+      items.push_back(CvarToggle("HDR",
+          "Requires Windows HDR on the current display. Uses SDR when HDR is unavailable.", "present_hdr"));
+      if (GetBool("present_hdr")) {
+        auto nits = [](float value) { return std::to_string(int(std::lround(value))) + " nits"; };
+        items.push_back(CvarSlider("Peak brightness (nits)",
+            "Highlight ceiling, limited to the display's reported peak brightness.",
+            "present_hdr_peak", 80, 10000, 20, nits));
+        items.push_back(CvarSlider("Paper white (nits)",
+            "Brightness of neutral whites and menus. Limited by peak brightness.",
+            "present_hdr_paper_white", 80, 500, 10, nits));
+      }
+    }
     items.push_back(Section("Image"));
     items.push_back(CvarChoice("Texture pack", "Use replacement textures made from your own extracted files.",
                               "native_texture_pack", {{"Off", "false"}, {"On", "true"}}));
