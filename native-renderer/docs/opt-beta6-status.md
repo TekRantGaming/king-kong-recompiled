@@ -55,6 +55,33 @@ upload would also defer its dependent draws. Those parts remain open.
   controls show no consistent change. Repeated-material uploads fall from
   320,400 to 800 across 400 frames, with every requested draw retained.
 
-Texture workers show identical hashes and substantial large-texture benchmark
-gains; Linux correctness and final integration are pending before that commit
-is accepted. Game comparisons and final combined CTest are still pending.
+- `e6d46bd`: bounded workers convert owned guest snapshots in independent slabs.
+  Extra workers are capped at three and respect process/thread affinity. The
+  pool belongs to the renderer; all jobs join before GPU upload and first use.
+  Small textures stay serial. Three alternating Windows pairs, whole-texture
+  conversion time in us (before -> after):
+
+  | Texture | Before | After | Reduction |
+  |---|---:|---:|---:|
+  | DXT1 1024, mips | 560.5 | 356.6 | 36.4% |
+  | DXT5 1024, mips | 914.9 | 616.4 | 32.6% |
+  | RGBA8 1024, mips | 6223.5 | 3112.9 | 50.0% |
+  | 565 1024 -> RGBA8 | 8349.1 | 2898.0 | 65.3% |
+  | Unaligned DXT5 -> RGBA8 | 4005.9 | 1634.1 | 59.2% |
+  | RGBA8 cube 256, mips | 2597.6 | 1354.9 | 47.8% |
+  | RGBA8 volume 128x128x16 | 1748.8 | 788.1 | 54.9% |
+
+  Complete output hashes match. The small-texture control is 26.0 -> 26.4 us;
+  no gain claimed. Candidate serial control is within about 1.5% of baseline.
+  Windows resource CTest passes 2/2 (76 resource cases, three format-map cases);
+  WSL Ubuntu 24.04 / GCC 13.3 resource CTest passes 2/2. No Linux timing claim.
+
+The combined native renderer/plugin builds successfully, including the added
+diagnostic counter fields. Final combined CTest remains pending. One of the
+allowed six Windows games has run: released Beta 5, Vulkan, chapter 8. It confirms
+109.4 ms texture work and 38.6 ms buffer work in individual startup frames; first
+10 seconds after level load have two frames above 50 ms, worst 206.3 ms. No
+texture failures or skipped draws. The comparison uses private roots, windowed
+1280x720, uncapped, render scale 1, GI Low, GTAO full/three samples, upscaler off.
+Other tasks' game locks are respected between runs; remaining comparisons wait
+for the shared slot. These are local measurements, not release claims.
