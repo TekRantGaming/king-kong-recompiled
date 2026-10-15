@@ -63,8 +63,6 @@ bool recording_route = false;
 Recording recording;
 std::atomic<size_t> chapter_index{0};
 uint64_t game_frame = 0;
-double raw_delta = 0, scaled_delta = 0;
-uint32_t game_clock = 0;
 bool advance_chapter = false, returned = false;
 double checkpoint_at = 0;
 RouteReplay replay;
@@ -458,7 +456,6 @@ void LevelLoaded() {
   if (chapter_index == 0) settings = Settings();
   game_seconds = 0;
   game_frame = 0;
-  raw_delta = scaled_delta = 0;
   checkpoint_at = 0;
   {
     std::lock_guard lock(mutex); last_guest = last_host = {};
@@ -466,7 +463,6 @@ void LevelLoaded() {
   if (recording_route) {
     if (chapter_index == 0) recording.settings = settings;
     game_frame = 0;
-    raw_delta = scaled_delta = 0;
     checkpoint_at = 0;
     phase = Phase::kRunning;
     REXLOG_INFO("KK benchmark recording: chapter {} entry {}, duration {} game seconds",
@@ -484,7 +480,7 @@ void LevelLoaded() {
       chapter_index.load() + 1, recording.chapters[chapter_index].entry, recording.chapters[chapter_index].duration);
 }
 
-void Frame(double dt, double scaled_dt, uint32_t game_ms, const uint8_t* base) {
+void Frame(double dt, double scaled_dt, const uint8_t* base) {
   const auto p = phase.load();
   if (p != Phase::kRunning) return;
   if (recording_route) {
@@ -494,7 +490,6 @@ void Frame(double dt, double scaled_dt, uint32_t game_ms, const uint8_t* base) {
     }
     // The same unscaled game delta used by the old benchmark, not a wall clock
     // or a frame count. Preserve both deltas and the title's absolute clock.
-    raw_delta = dt; scaled_delta = scaled_dt; game_clock = game_ms;
     game_seconds = game_seconds.load() + dt;
     ++game_frame;
     if (game_seconds >= checkpoint_at) {
@@ -587,13 +582,18 @@ bool Pad(uint32_t user, uint8_t* state, uint32_t& status) {
   return true;
 }
 
-void PadRead(uint32_t user, const uint8_t* state, uint32_t status) {
+void PadRead(uint32_t user, const uint8_t* state, uint32_t status, const uint8_t* base) {
   if (!recording_route || phase != Phase::kRunning) return;
   if (recording.samples.size() >= kMaxSamples) { interrupted = true; return; }
   PadSample sample;
   sample.chapter = chapter_index; sample.frame = game_frame;
-  sample.seconds = game_seconds; sample.raw_dt = raw_delta; sample.scaled_dt = scaled_delta;
-  sample.game_ms = game_clock; sample.user = user; sample.status = status;
+  sample.seconds = game_seconds;
+  // Read metadata with the pad, including polls after LevelLoaded but before
+  // the first frame hook. Cached deltas/clocks could still belong to the last chapter.
+  sample.raw_dt = hfr::LoadF(base, 0x82C4EDBC);
+  sample.scaled_dt = hfr::LoadF(base, hfr::kFrameTime);
+  sample.game_ms = hfr::Load32(base, 0x82CCAE1C);
+  sample.user = user; sample.status = status;
   if (state && status == 0) std::memcpy(sample.state.data(), state, 16);
   recording.samples.push_back(sample);
 }

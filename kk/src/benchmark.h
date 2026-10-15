@@ -10,7 +10,7 @@ bool RecordingRoute();
 std::filesystem::path RouteFile();
 bool RouteAvailable();
 // Final state/status returned to the game, after remapping and developer input.
-void PadRead(uint32_t user, const uint8_t* state, uint32_t status);
+void PadRead(uint32_t user, const uint8_t* state, uint32_t status, const uint8_t* base);
 // Game thread only, before uni_go services a load. -1 means no route jump.
 int NextChapter();
 // Finish an owned save before either normal teardown or the SDK hard exit.
@@ -20,7 +20,7 @@ void Shutdown();
 std::filesystem::path Prepare(const std::filesystem::path& user_root);
 void InstallPresentObserver();
 void LevelLoaded();
-void Frame(double unscaled_dt, double scaled_dt, uint32_t game_ms, const uint8_t* base);
+void Frame(double unscaled_dt, double scaled_dt, const uint8_t* base);
 void GuestSwap();
 bool Pad(uint32_t user, uint8_t* state, uint32_t& status);
 void Interrupted();

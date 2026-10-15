@@ -154,9 +154,9 @@ REX_HOOK_RAW(sub_821074E8) {
   const uint32_t state_ptr = ctx.r4.u32;
   __imp__sub_821074E8(ctx, base);
   struct RecordRead {
-    uint32_t user; const uint8_t* state; PPCContext& ctx;
-    ~RecordRead() { kk::benchmark::PadRead(user, state, ctx.r3.u32); }
-  } record_read{user, state_ptr ? base + state_ptr : nullptr, ctx};
+    uint32_t user; const uint8_t* state; PPCContext& ctx; const uint8_t* base;
+    ~RecordRead() { kk::benchmark::PadRead(user, state, ctx.r3.u32, base); }
+  } record_read{user, state_ptr ? base + state_ptr : nullptr, ctx, base};
   uint32_t replay_status = 0;
   if (state_ptr && kk::benchmark::Pad(user, base + state_ptr, replay_status)) {
     ctx.r3.u64 = replay_status;

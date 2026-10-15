@@ -90,7 +90,7 @@ void SetFrameTime(PPCContext& ctx, uint8_t* base) {
 REX_HOOK_RAW(sub_8272CA20) {
   SetFrameTime(ctx, base);
   kk::benchmark::Frame(kk::hfr::LoadF(base, kRawFrameTime),
-      kk::hfr::LoadF(base, kk::hfr::kFrameTime), kk::hfr::Load32(base, 0x82CCAE1C), base);
+      kk::hfr::LoadF(base, kk::hfr::kFrameTime), base);
 #if defined(KK_DEV_TOOLS)
   kk::DevFrameLogTick(base);
 #endif
