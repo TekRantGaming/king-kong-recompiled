@@ -15,6 +15,7 @@
 
 #include "platform.h"
 #include "hardware_recommendation.h"
+#include "graphics_presets.h"
 
 REXCVAR_DEFINE_BOOL(kk_launcher, true, "KK",
                     "Show the launcher before starting the game (hold Shift at start to force it)");
@@ -312,7 +313,7 @@ bool SaveSettings(const std::filesystem::path& path, bool include_temporary) {
     const bool hardware_setting = e.name == "kk_render_quality" || e.name == "native_upscaler_quality" ||
         e.name == "native_ao_quality" || e.name == "native_ao_samples" || e.name == "ao_mode" || e.name == "native_upscaler" ||
         e.name == "present_effect" || e.name == "resolution_scale" || e.name == "draw_resolution_scale_x" ||
-        e.name == "draw_resolution_scale_y";
+        e.name == "draw_resolution_scale_y" || e.name == "native_gi";
     if (value == e.default_value && !(hardware_setting && source != rex::cvar::Source::kDefault)) continue;
     out += e.name + " = ";
     if (e.type == rex::cvar::FlagType::String) {
@@ -342,7 +343,8 @@ void MigrateSettings(const std::filesystem::path& config_path) {
   // older one that has no upscaler setting meant the old default: keep it, so
   // an update doesn't change a player's picture (or turn their High, Ultra or
   // Steam Deck preset into Custom). New installs get the new defaults.
-  constexpr int32_t kVersion = 2;
+  // 3: GI follows the preset. Saved GI values, including an explicit Off, win.
+  constexpr int32_t kVersion = 3;
   if (REXCVAR_GET(kk_settings_version) >= kVersion) return;
   std::error_code ec;
   if (std::filesystem::exists(config_path, ec)) {
@@ -351,7 +353,8 @@ void MigrateSettings(const std::filesystem::path& config_path) {
     // defaults over every setting in it (issue #37). Keep a copy and leave it.
     std::ifstream file(config_path, std::ios::binary);
     const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-    if (text.find("kk_settings_version") != std::string::npos) {
+    if (!file || (text.find("kk_settings_version") != std::string::npos &&
+                  rex::cvar::GetFlagSource("kk_settings_version") == rex::cvar::Source::kDefault)) {
       auto backup = config_path;
       backup += ".bak";
       std::filesystem::copy_file(config_path, backup, std::filesystem::copy_options::overwrite_existing, ec);
@@ -361,11 +364,49 @@ void MigrateSettings(const std::filesystem::path& config_path) {
     }
     static constexpr std::pair<const char*, const char*> kOldDefaults[] = {{"present_effect", "bilinear"},
                                                                            {"kk_render_quality", "native"}};
-    for (const auto& [name, value] : kOldDefaults)
-      for (const auto& e : rex::cvar::GetRegistry())
-        if (e.name == name && e.source == rex::cvar::Source::kDefault) rex::cvar::SetFlagByName(name, value);
-    REXLOG_INFO("KK: settings from an older version: kept its upscaler settings ({}, {})",
-                rex::cvar::GetFlagByName("present_effect"), rex::cvar::GetFlagByName("kk_render_quality"));
+    if (REXCVAR_GET(kk_settings_version) < 2) {
+      for (const auto& [name, value] : kOldDefaults)
+        for (const auto& e : rex::cvar::GetRegistry())
+          if (e.name == name && e.source == rex::cvar::Source::kDefault) rex::cvar::SetFlagByName(name, value);
+      REXLOG_INFO("KK: settings from an older version: kept its upscaler settings ({}, {})",
+                  rex::cvar::GetFlagByName("present_effect"), rex::cvar::GetFlagByName("kk_render_quality"));
+    }
+    auto preset_gi = [](auto get) {
+      for (const auto& p : kGraphicsPresets)
+        if (MatchesGraphicsPresetSettings(p, get, false)) return p.gi;
+      // Custom settings retain their hardware recommendation, or Medium when
+      // they predate hardware detection. Do not change any other graphics value.
+      for (const auto& t : kHardwareTiers)
+        if (REXCVAR_GET(kk_hardware_tier) == t.id) return t.gi;
+      return "medium";
+    };
+    if (REXCVAR_GET(kk_original_look)) {
+      // The live Off belongs to Original. Migrate the saved Modern settings
+      // instead, so switching back restores GI with the rest of that look.
+      std::string modern = REXCVAR_GET(kk_modern_settings);
+      if (!modern.empty()) {
+        std::map<std::string, std::string> values;
+        for (size_t pos = 0, end; pos < modern.size(); pos = end + 1) {
+          end = modern.find(';', pos);
+          if (end == std::string::npos) end = modern.size();
+          const auto eq = modern.find('=', pos);
+          if (eq < end) values[modern.substr(pos, eq - pos)] = modern.substr(eq + 1, end - eq - 1);
+        }
+        if (!values.count("native_gi")) {
+          values["native_gi"] = preset_gi([&](const char* name) {
+            const auto it = values.find(name);
+            return it != values.end() ? it->second : rex::cvar::GetFlagByName(name);
+          });
+          modern.clear();
+          for (const auto& [name, value] : values) modern += name + "=" + value + ";";
+          rex::cvar::SetFlagByName("kk_modern_settings", modern);
+        }
+      }
+    } else if (rex::cvar::GetFlagSource("native_gi") == rex::cvar::Source::kDefault) {
+      rex::cvar::SetFlagByName("native_gi", preset_gi(rex::cvar::GetFlagByName));
+    }
+    REXLOG_INFO("KK: GI settings migrated to version 3: {} (Original look {})",
+                rex::cvar::GetFlagByName("native_gi"), REXCVAR_GET(kk_original_look));
     rex::cvar::SetFlagByName("kk_settings_version", std::to_string(kVersion));
     SaveSettings(config_path);
     return;
@@ -445,7 +486,17 @@ void ApplyUpscalerDefaults() {
 
 void ApplyHardwareRecommendation(bool detect, int width, int height) {
 #if !defined(_WIN32)
-  return; // Windows first; Linux work is on hold.
+  // Only GI follows detection on Linux in this update; the existing resolution
+  // and upscaler recommendation behaviour is unchanged.
+  if (detect) {
+    const auto& tier = kHardwareTiers[HardwareTierIndex(DetectHardware())];
+    rex::cvar::SetFlagByName("kk_hardware_tier", tier.id);
+  }
+  if (!REXCVAR_GET(kk_original_look)) {
+    for (const auto& tier : kHardwareTiers)
+      if (REXCVAR_GET(kk_hardware_tier) == tier.id) SetCvarDefault("native_gi", tier.gi);
+  }
+  return;
 #endif
   if (detect) {
     const HardwareProfile h = DetectHardware();
@@ -472,6 +523,7 @@ void ApplyHardwareRecommendation(bool detect, int width, int height) {
     if (!PreserveHardwareSetting(explicit_setting(name), custom, original)) SetCvarDefault(name, quality);
   }
   if (!original) {
+    SetCvarDefault("native_gi", tier->gi);
     SetCvarDefault("native_ao_quality", tier->ao_quality);
     SetCvarDefault("native_ao_samples", std::to_string(tier->ao_samples));
     SetCvarDefault("ao_mode", tier->ao_enabled ? "1" : "0");
@@ -615,6 +667,7 @@ void ApplyPortDefaults() {
   SetCvarDefault("d3d12_allow_variable_refresh_rate_and_tearing", "true");
   SetCvarDefault("swap_post_effect", "fxaa");
   SetCvarDefault("anisotropic_override", "3");
+  SetCvarDefault("native_gi", "medium");  // hardware recommendation refines this; explicit choices win
   // An upscaler at Quality (kk_render_quality): FSR 1 until the settings are read and the renderer is
   // known (ApplyUpscalerDefaults then picks the temporal one where it runs). The player's own choice in
   // the settings file still wins.
@@ -658,6 +711,7 @@ void EnforceOriginalLook() {
 void ApplyRuntimeOverrides() {
   rex::cvar::SetFlagByName("vsync", "false");
   REXLOG_INFO("KK: frame-rate cap {}", REXCVAR_GET(kk_frame_rate));
+  REXLOG_INFO("KK: global illumination {}", rex::cvar::GetFlagByName("native_gi"));
 
   // The game sizes its frame from the console's video mode: 1280x720 on an HD
   // mode, but the whole game at 640x480 (stretched to 16:9) on a mode under 720

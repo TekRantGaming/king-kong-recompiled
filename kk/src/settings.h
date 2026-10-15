@@ -144,8 +144,8 @@ void ApplyUpscalerDefaults();
 // The launcher's answer: "none" or the upscalers offered ("dlss,fsr3,xess"). Applies the defaults.
 void SetOfferedUpscalers(const std::string& offered);
 // Once the settings file is read: brings one from an older version up to date
-// (keeping the defaults it was made with) and saves it; a new install just
-// gets the current defaults.
+// (preserving explicit choices; version 3 enables GI for old presets) and saves
+// it; a new install just gets the current defaults.
 void MigrateSettings(const std::filesystem::path& config_path);
 // Settings the player can't change (shader preparing is always Balanced).
 void ApplyFixedSettings();

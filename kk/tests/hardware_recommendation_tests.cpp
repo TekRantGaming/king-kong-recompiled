@@ -1,5 +1,6 @@
 #include "hardware_recommendation.h"
 #include "settings.h"
+#include "graphics_presets.h"
 #include <chrono>
 #include <fstream>
 #include <iostream>
@@ -18,6 +19,10 @@ REXCVAR_DEFINE_STRING(present_effect, "fsr", "Test", "Test");
 REXCVAR_DEFINE_INT32(resolution_scale, 1, "Test", "Test");
 REXCVAR_DEFINE_INT32(draw_resolution_scale_x, 1, "Test", "Test");
 REXCVAR_DEFINE_INT32(draw_resolution_scale_y, 1, "Test", "Test");
+REXCVAR_DEFINE_STRING(native_gi, "off", "Test", "Test");
+REXCVAR_DEFINE_STRING(swap_post_effect, "none", "Test", "Test");
+REXCVAR_DEFINE_INT32(anisotropic_override, -1, "Test", "Test");
+REXCVAR_DEFINE_INT32(ao_strength, 1, "Test", "Test");
 
 namespace kk {
 HardwareProfile fake;
@@ -110,6 +115,8 @@ int main() {
       std::chrono::steady_clock::now().time_since_epoch().count()));
   std::filesystem::create_directories(dir);
   const auto config = dir / "king_kong.toml";
+  ApplyPortDefaults();
+  Equals("native_gi", "medium");
   fake = {{GpuVendor::kNvidia, "RTX 4070 Ti", 12 * GiB}, 8, 32 * GiB, 3840, 2160, 120, false};
   Check(rex::cvar::SetFlagByName("gpu_plugin", "native"), "test native renderer selected");
   InitializeHardwareRecommendation(config, 3840, 2160);
@@ -119,6 +126,7 @@ int main() {
   Equals("kk_frame_rate", "30");
   Equals("native_backend", "auto");
   Equals("native_upscaler", "dlss");
+  Equals("native_gi", "high");
   SetOfferedUpscalers("fsr3");
   Equals("native_upscaler", "fsr3");
   Check(SaveSettings(config), "save first-launch marker");
@@ -131,6 +139,7 @@ int main() {
   Equals("native_ao_quality", "half");
   Equals("native_ao_samples", "1");
   Equals("ao_mode", "0");
+  Equals("native_gi", "low");
 
   // Explicit choice equal to default must remain explicit after saving and loading.
   rex::cvar::SetFlagByName("native_ao_quality", "half");
@@ -139,6 +148,7 @@ int main() {
   rex::cvar::SetFlagByName("native_upscaler", "off");
   rex::cvar::SetFlagByName("kk_frame_rate", "144");
   rex::cvar::SetFlagByName("native_backend", "d3d12");
+  rex::cvar::SetFlagByName("native_gi", "low");
   Check(SaveSettings(config), "save explicit choices");
   rex::cvar::ResetAllToDefaults();
   rex::cvar::LoadConfig(config);
@@ -150,6 +160,7 @@ int main() {
   Equals("native_upscaler", "off");
   Equals("kk_frame_rate", "144");
   Equals("native_backend", "d3d12");
+  Equals("native_gi", "low"); // explicit choice equal to the default survives a new recommendation
   for (auto source : {rex::cvar::Source::kConfig, rex::cvar::Source::kEnvironment,
                      rex::cvar::Source::kCommandLine, rex::cvar::Source::kRuntime}) {
     for (auto& e : rex::cvar::GetRegistry()) if (e.name == "native_ao_samples") { e.setter("2"); e.source = source; }
@@ -189,6 +200,89 @@ int main() {
   const std::string committed_text((std::istreambuf_iterator<char>(committed_file)), {});
   Check(committed_text.find("native_ao_samples = 3") != std::string::npos, "explicit save writes trial AO quality");
   ClearTemporarySettingBaselines();
+  // Version 3 recognises every old preset without touching its other settings.
+  for (const auto& p : kGraphicsPresets) {
+    rex::cvar::ResetAllToDefaults();
+    ApplyPortDefaults();
+    rex::cvar::SetFlagByName("kk_settings_version", "2");
+    ApplyGraphicsPresetSettings(p, [](const char* n, const char* v) { rex::cvar::SetFlagByName(n, v); });
+    rex::cvar::ResetToDefault("native_gi"); // old files omitted the default Off
+    Check(SaveSettings(config), "write old preset");
+    rex::cvar::ResetAllToDefaults();
+    rex::cvar::LoadConfig(config);
+    MigrateSettings(config);
+    Equals("native_gi", p.gi);
+    Equals("kk_settings_version", "3");
+    Equals("kk_render_quality", p.quality);
+    Check(!std::filesystem::exists(config.string() + ".bak"), "valid version 2 is not mistaken for unread settings");
+    MigrateSettings(config);
+    Equals("native_gi", p.gi);
+  }
+  for (const char* gi : {"off", "low", "medium", "high"}) {
+    rex::cvar::ResetAllToDefaults();
+    ApplyPortDefaults();
+    rex::cvar::SetFlagByName("kk_settings_version", "2");
+    rex::cvar::SetFlagByName("native_gi", gi);
+    Check(SaveSettings(config), "save explicit GI including the current default");
+    rex::cvar::ResetAllToDefaults();
+    rex::cvar::LoadConfig(config);
+    MigrateSettings(config);
+    ApplyHardwareRecommendation(true, 1920, 1080);
+    Equals("native_gi", gi);
+  }
+  // Non-file overrides win over migration too.
+  for (auto source : {rex::cvar::Source::kEnvironment, rex::cvar::Source::kCommandLine}) {
+    rex::cvar::ResetAllToDefaults();
+    std::ofstream(config) << "kk_settings_version = 2\n";
+    rex::cvar::LoadConfig(config);
+    for (auto& e : rex::cvar::GetRegistry()) if (e.name == "native_gi") { e.setter("off"); e.source = source; }
+    MigrateSettings(config);
+    Equals("native_gi", "off");
+  }
+  rex::cvar::ResetAllToDefaults();
+  ApplyPortDefaults();
+  std::ofstream(config) << "kk_settings_version = 2\nkk_original_look = true\n"
+      "kk_modern_settings = \"kk_render_quality=native;swap_post_effect=fxaa;"
+      "anisotropic_override=5;ao_mode=1;ao_strength=3;\"\n";
+  rex::cvar::LoadConfig(config);
+  MigrateSettings(config);
+  EnforceOriginalLook();
+  Equals("native_gi", "off");
+  Check(REXCVAR_GET(kk_modern_settings).find("native_gi=high;") != std::string::npos,
+        "Original keeps a migrated Ultra GI in its saved Modern settings");
+  rex::cvar::ResetAllToDefaults();
+  for (const char* gi : {"off", "low", "medium", "high"}) {
+    rex::cvar::ResetAllToDefaults();
+    std::ofstream(config) << "kk_settings_version = 2\nkk_original_look = true\n"
+        "kk_modern_settings = \"native_gi=" << gi << ";kk_render_quality=native;\"\n";
+    rex::cvar::LoadConfig(config);
+    MigrateSettings(config);
+    Check(REXCVAR_GET(kk_modern_settings).find(std::string("native_gi=") + gi + ";") != std::string::npos,
+          "Original preserves every saved Modern GI choice, including Off");
+  }
+  rex::cvar::ResetAllToDefaults();
+  std::ofstream(config) << "kk_frame_rate = 144\n";
+  rex::cvar::LoadConfig(config);
+  MigrateSettings(config);
+  Equals("present_effect", "bilinear");
+  Equals("kk_render_quality", "native");
+  Equals("kk_frame_rate", "144");
+  Equals("kk_settings_version", "3");
+  // A failed config load still must not overwrite the player's settings.
+  rex::cvar::ResetAllToDefaults();
+  const std::string unread = "kk_settings_version = 2\ninvalid settings\n";
+  std::ofstream(config) << unread;
+  MigrateSettings(config);
+  std::ifstream untouched(config);
+  Check(std::string((std::istreambuf_iterator<char>(untouched)), {}) == unread, "unread settings left intact");
+  Check(std::filesystem::exists(config.string() + ".bak"), "unread settings backed up");
+  rex::cvar::ResetAllToDefaults();
+  ApplyPortDefaults();
+  MigrateSettings(dir / "new-install.toml");
+  Equals("kk_settings_version", "3");
+  InitializeHardwareRecommendation(dir / "new-install.toml", 1920, 1080);
+  Equals("native_gi", "high");
+  Check(!std::filesystem::exists(dir / "new-install.toml"), "migration does not create a new-install config early");
   rex::cvar::ResetAllToDefaults();
   Check(rex::cvar::SetFlagFromCommandLine("native_ao_samples", "1"), "set command-line AO quality");
   SetTemporarySettingBaseline("native_ao_samples", "1");

@@ -67,6 +67,7 @@
 #include "cheats.h"
 #include "platform.h"
 #include "settings.h"
+#include "graphics_presets.h"
 #include "iso.h"
 #include "toast.h"
 
@@ -321,27 +322,9 @@ OfferedUpscalers OfferedTemporalUpscalers() {
 
 // ------------------------------------------------------------ presets ---
 // Graphics presets set the upscaler, render quality, anti-aliasing, texture
-// filtering and ambient occlusion (motion blur and fog are left to taste).
+// filtering, ambient occlusion and GI (motion blur and fog are left to taste).
 // The preset shown is the one the settings match; anything else is Custom.
 // Medium is the default settings (the default upscaler at Quality).
-struct GraphicsPreset {
-  const char* label;
-  const char* temporal;   // native_upscaler_quality, with the default upscaler a temporal one (Quality: the
-                          // user's default, Performance for Low); the upscaler itself is always the default
-                          // one (settings.h, ApplyUpscalerDefaults: DLSS, FSR 4, FSR 3.1, XeSS or FSR 1)
-  const char* quality;    // kk_render_quality (with FSR 1)
-  const char* aa;         // swap_post_effect
-  const char* filtering;  // anisotropic_override: 2 = 2x, 3 = 4x, 4 = 8x, 5 = 16x
-  bool ao;                // ao_mode 1 at strength 1
-};
-constexpr GraphicsPreset kGraphicsPresets[] = {
-    {"Low", "performance", "performance", "fxaa", "2", false},
-    {"Medium", "quality", "quality", "fxaa", "3", false},
-    {"High", "quality", "native", "fxaa", "4", true},
-    {"Ultra", "quality", "native", "fxaa", "5", true},
-    {"Steam Deck", "quality", "native", "fxaa", "2", false},
-};
-constexpr int kGraphicsPresetCount = int(std::size(kGraphicsPresets));
 
 // The upscaler modes (kk_render_quality); -1 for another render quality.
 constexpr const char* kUpscalerModes[] = {"native", "quality", "balanced", "performance"};
@@ -378,17 +361,10 @@ bool PresetUpscalerMatches(const GraphicsPreset& p) {
   return CurrentTemporalUpscaler().empty() || Get("native_upscaler_quality") == p.temporal;
 }
 
-// The AO strength the presets, Remastered and a new install use: Strong (3) for the native renderer's GTAO
-// (the user's choice, Beta 3).
-int DefaultAoStrength() { return 3; }
-
 int MatchGraphicsPreset() {
   for (int i = 0; i < kGraphicsPresetCount; ++i) {
     const GraphicsPreset& p = kGraphicsPresets[i];
-    const bool ao = GetInt("ao_mode", 0) != 0;
-    if (PresetUpscalerMatches(p) && Get("kk_render_quality") == p.quality &&
-        Get("swap_post_effect") == p.aa && Get("anisotropic_override") == p.filtering && ao == p.ao &&
-        (!ao || GetInt("ao_strength", 1) == DefaultAoStrength()))
+    if (PresetUpscalerMatches(p) && MatchesGraphicsPresetSettings(p, Get))
       return i;
   }
   return -1;
@@ -402,11 +378,7 @@ void ApplyGraphicsPreset(int index) {
     Reset("native_upscaler");
     Set("native_upscaler_quality", p.temporal);
   }
-  Set("kk_render_quality", p.quality);
-  Set("swap_post_effect", p.aa);
-  Set("anisotropic_override", p.filtering);
-  SetInt("ao_mode", p.ao ? 1 : 0);
-  if (p.ao) SetInt("ao_strength", DefaultAoStrength());
+  ApplyGraphicsPresetSettings(p, Set);
 }
 
 // The Original look: the Xbox 360's own settings (OriginalLookSettings).
@@ -422,6 +394,8 @@ void SetOriginalLook(bool on) {
   } else {
     const std::string saved = Get("kk_modern_settings");
     if (saved.empty()) {  // no saved Modern choices: use the hardware defaults
+      SetBool("kk_original_look", false);
+      Reset("native_gi");  // the Original look's Off is not a Modern choice
       const auto output = PrimaryScreenSize();
       ApplyHardwareRecommendation(true, output.first, output.second);
       SetInt("kk_frame_rate", 60);  // Remastered plays at 60 FPS (the owner's choice); Original keeps 30
@@ -1361,7 +1335,7 @@ class SettingsPages {
       it.type = ItemType::kChoice;
       it.label = "Preset";
       it.description =
-          "Quick settings for anti-aliasing, texture filtering and ambient occlusion here, and the upscaler and "
+          "Quick settings for anti-aliasing, texture filtering, ambient occlusion and global illumination here, and the upscaler and "
           "render quality on the Display page. Change any of them yourself and it shows Custom.";
       for (const auto& p : kGraphicsPresets) it.options.push_back(p.label);
       it.options.push_back("Custom");
@@ -1379,8 +1353,8 @@ class SettingsPages {
     if (!in_game_) {
       Item it;
       it.label = "Recommended";
-      it.description = "Detect your hardware and recommend render resolution, upscaling and ambient occlusion. "
-                       "Settings you changed are kept. The frame-rate cap, graphics API and lighting effects are kept.";
+      it.description = "Detect your hardware and recommend render resolution, upscaling, ambient occlusion and global illumination. "
+                       "Settings you changed are kept. The frame-rate cap, graphics API and other lighting effects are kept.";
       const std::string tier = Get("kk_hardware_tier");
       it.value_text = tier == "low" ? "Low" : tier == "mid" ? "Medium" : tier == "high" ? "High" : tier;
       it.on_activate = [this] {
@@ -1444,7 +1418,7 @@ class SettingsPages {
       Item it = CvarChoice("Global illumination",
                            "Light bouncing off sunlit surfaces into the shade beside them: sunlit rock tints the "
                            "shadow next to it, the jungle's green reaches the people in it. Medium costs about 1 ms a "
-                           "frame at 1440p.",
+                           "frame at 1440p. On by default, following the graphics preset. Original keeps it off.",
                            "native_gi", {{"Off", "off"}, {"Low", "low"}, {"Medium", "medium"}, {"High", "high"}});
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }

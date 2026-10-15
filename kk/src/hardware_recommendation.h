@@ -23,12 +23,13 @@ struct HardwareTier {
   const char* ao_quality;
   int ao_samples;
   bool ao_enabled;
+  const char* gi;
 };
 // Conservative starting points, not measured performance guarantees.
 inline constexpr std::array<HardwareTier, 3> kHardwareTiers = {{
-    {"low", "performance", "half", 1, false},
-    {"mid", "quality", "half", 2, true},
-    {"high", "quality", "auto", 3, true},
+    {"low", "performance", "half", 1, false, "low"},
+    {"mid", "quality", "half", 2, true, "medium"},
+    {"high", "quality", "auto", 3, true, "high"},
 }};
 inline size_t HardwareTierIndex(const HardwareProfile& h) {
   constexpr uint64_t GiB = uint64_t(1) << 30;

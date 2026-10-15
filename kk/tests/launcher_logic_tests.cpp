@@ -3,6 +3,7 @@
 // (profile_save_file.h), on made-up saves in a temporary folder.
 #include "profile_save_file.h"
 #include "shader_progress.h"
+#include "graphics_presets.h"
 
 #include <bit>
 #include <chrono>
@@ -11,6 +12,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -24,6 +26,23 @@ void Check(bool condition, const char* message) {
   }
 }
 bool Near(float a, float b) { return std::fabs(a - b) < 1e-4f; }
+
+void GraphicsPresetChecks() {
+  const char* expected[] = {"low", "medium", "high", "high", "low"};
+  for (int i = 0; i < kk::kGraphicsPresetCount; ++i) {
+    const auto& p = kk::kGraphicsPresets[i];
+    Check(std::string_view(p.gi) == expected[i], "preset GI mapping");
+    std::map<std::string, std::string> settings;
+    auto get = [&](const char* name) { return settings[name]; };
+    kk::ApplyGraphicsPresetSettings(p, [&](const char* name, const char* value) { settings[name] = value; });
+    Check(kk::MatchesGraphicsPresetSettings(p, get), "applied preset matches");
+    settings["native_gi"] = "off";
+    Check(!kk::MatchesGraphicsPresetSettings(p, get), "different GI makes the preset Custom");
+    Check(kk::MatchesGraphicsPresetSettings(p, get, false), "old preset is recognised without GI");
+    settings["anisotropic_override"] = "-1";
+    Check(!kk::MatchesGraphicsPresetSettings(p, get, false), "other custom settings do not match");
+  }
+}
 
 void ShaderProgressChecks() {
   using kk::ShaderJobFraction;
@@ -233,6 +252,7 @@ void AllSavesChecks() {
 }  // namespace
 
 int main() {
+  GraphicsPresetChecks();
   ShaderProgressChecks();
   AllSavesChecks();
   std::cout << checks << " launcher checks passed\n";

@@ -8,6 +8,7 @@ version's notes the first time you start it.
 **Beta 5**: a small update to Beta 4, from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/PET2xU5FJq). Your saves and settings are kept, and you can switch back to stable at any time.
 
 ### What's new
+- **Global illumination is now on by default** and follows the graphics preset: Low, Medium or High (Ultra uses High, Steam Deck uses Low). The Original look keeps it off. If you chose a level yourself, it is kept.
 - **An experimental native Linux version.** A Linux AppImage (`KingKong-v2.0.0-beta.5-linux-x86_64.AppImage`) runs the game natively with the Vulkan renderer. It was tested on a ROG Ally with Bazzite, including Steam's Game Mode (add it to Steam as a non-Steam game). DLSS, FSR 3/4 and XeSS are Windows only; FSR 1 is available. This is an early test build: please report how it runs.
 - **The renderer does much less CPU work for each thing it draws.** This helps most on handhelds and slower processors, and with high frame rates.
 - **Smoother Vulkan presentation.** The final step that puts each frame on screen no longer waits for the graphics card and rebuilds itself every frame.
@@ -25,6 +26,7 @@ version's notes the first time you start it.
 - Coming in Beta 6: sharper shadows, reflections on water and volumetric light shafts, a low graphics memory mode, support for older graphics cards, high frame rates done properly, frame pacing and a built-in benchmark.
 
 ### Full changelog
+- Graphics presets set and match `native_gi`: Low = Low, Medium = Medium, High/Ultra = High, Steam Deck = Low. Remastered and new installs use the hardware recommendation. Settings version 3 migrates GI that was never saved, preserves saved choices, and keeps GI with the saved Modern look while Original is off.
 - SDK patch 0038 (Vulkan presenter keeps the swapchain format of its final pipeline; before, every paint waited for the previous one and rebuilt the pipeline), now on Windows too; 0039/0040 (Linux: timed waits sleep, the timer queue waits instead of spinning).
 - The render thread receives only the device state blocks that changed; shader constants are compared and converted in 64-byte blocks; indexed draws scan their indices only for dynamic vertex buffers; the AO rules test shader hashes first; texture untiling and copying do less work per block.
 - The pause menu's settings use the settings file path from the start (the dialogs were made before the path was known).
