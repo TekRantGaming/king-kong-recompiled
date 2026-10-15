@@ -72,16 +72,17 @@ class KingKongApp : public rex::ReXApp {
         PPCImageConfig));
   }
 
-  ~KingKongApp() override { kk::SetUiPaintRequest({}); kk::startup::CleanExit(); }
+  ~KingKongApp() override { kk::benchmark::Shutdown(); kk::SetUiPaintRequest({}); kk::startup::CleanExit(); }
 
  protected:
   bool OnWindowCloseRequested() override {
     // The SDK's accepted window close hard-exits without running our destructor.
+    kk::benchmark::Shutdown();
     kk::startup::CleanExit();
     return true;
   }
 
-  void OnShutdown() override { kk::startup::CleanExit(); }
+  void OnShutdown() override { kk::benchmark::Shutdown(); kk::startup::CleanExit(); }
 
   void OnConfigurePaths(rex::PathConfig& paths) override {
     // Register the GPU plugin's cvars before the config is read so the

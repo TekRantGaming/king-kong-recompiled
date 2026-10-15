@@ -1,5 +1,6 @@
 #include "benchmark.h"
 #include "benchmark_data.h"
+#include "benchmark_writer.h"
 
 #include <atomic>
 #include <bit>
@@ -48,6 +49,7 @@ std::string report, settings, save_error;
 Stats guest_stats, host_stats;
 std::vector<float> graph;
 bool observer_available = false;
+ResultWriter writer;
 
 std::string Settings() {
   std::string out = "Version: " KK_VERSION "\nRoute: " + std::string(kRoute) +
@@ -67,51 +69,49 @@ std::string Settings() {
   return RedactDiagnostics(std::move(out));
 }
 
-bool Write(const std::filesystem::path& path, const std::string& text) {
-  std::ofstream file(path, std::ios::binary | std::ios::trunc);
-  file.write(text.data(), std::streamsize(text.size()));
-  file.close();
-  return !file.fail();
-}
-
 void Finish() {
   // Called by the game thread after the last measured swap. IO and sorting are
   // outside the measured interval and off the game/presenter threads.
-  phase = Phase::kSaving;
-  std::vector<double> guest, host;
-  {
-    std::lock_guard lock(mutex);
-    guest.swap(guest_times);
-    host.swap(host_times);
-  }
-  std::thread([guest = std::move(guest), host = std::move(host)] {
-    const Stats gs = Summarize(guest), hs = Summarize(host);
-    std::string text = "King Kong benchmark v1\n";
-    text += interrupted ? "Status: interrupted (do not compare)\n" : "Status: complete\n";
-    text += settings;
-    text += "\nGame swap intervals (includes cap and stalls):\n" + Describe(gs);
-    text += observer_available ? "\nSuccessful host present return intervals (not scanout):\n" + Describe(hs)
-                              : "\nHost present timing: unavailable (SDK patch 0041 required)\n";
-    text += "\n1% low = reciprocal of the mean of the slowest ceil(N/100) intervals.\n"
-            "Graph = peak frame time per elapsed-time bucket. CSV contains every interval.\n"
-            "Compare the same route, settings, cap, API, cache and power state. AI can differ.\n";
-    text = RedactDiagnostics(std::move(text));
-    const std::string csv = "series,frame,elapsed_seconds,frame_ms\n" + Csv(guest, "game") + Csv(host, "host");
-    const bool txt_ok = Write(result_dir / "results.txt", text);
-    const bool csv_ok = Write(result_dir / "frames.csv", csv);
-    {
+  writer.Start([] {
+    try {
+      std::vector<double> guest, host;
+      {
+        std::lock_guard lock(mutex);
+        guest.swap(guest_times);
+        host.swap(host_times);
+      }
+      const Stats gs = Summarize(guest), hs = Summarize(host);
+      std::string text = "King Kong benchmark v1\n";
+      text += interrupted ? "Status: interrupted (do not compare)\n" : "Status: complete\n";
+      text += settings;
+      text += "\nGame swap intervals (includes cap and stalls):\n" + Describe(gs);
+      text += observer_available ? "\nSuccessful host present return intervals (not scanout):\n" + Describe(hs)
+                                : "\nHost present timing: unavailable (SDK patch 0041 required)\n";
+      text += "\n1% low = reciprocal of the mean of the slowest ceil(N/100) intervals.\n"
+              "Graph = peak frame time per elapsed-time bucket. CSV contains every interval.\n"
+              "Compare the same route, settings, cap, API, cache and power state. AI can differ.\n";
+      text = RedactDiagnostics(std::move(text));
+      const std::string csv = "series,frame,elapsed_seconds,frame_ms\n" + Csv(guest, "game") + Csv(host, "host");
+      const bool txt_ok = WriteResult(result_dir / "results.txt", text);
+      const bool csv_ok = WriteResult(result_dir / "frames.csv", csv);
+      {
+        std::lock_guard lock(mutex);
+        report = std::move(text);
+        guest_stats = gs;
+        host_stats = hs;
+        graph = Graph(guest);
+        if (!txt_ok || !csv_ok) save_error = "Could not save benchmark results.";
+      }
+      REXLOG_INFO("KK benchmark: complete, average {:.3f}, 1% low {:.3f}, worst {:.3f} ms, saved {}",
+                  gs.average_fps, gs.low_fps, gs.worst_ms, txt_ok && csv_ok);
+    } catch (const std::exception& error) {
+      REXLOG_ERROR("KK benchmark: saving results failed: {}", error.what());
       std::lock_guard lock(mutex);
-      report = std::move(text);
-      guest_stats = gs;
-      host_stats = hs;
-      graph = Graph(guest);
-      if (!txt_ok || !csv_ok) save_error = "Could not save benchmark results.";
+      save_error = "Could not save benchmark results.";
     }
-    REXLOG_INFO("KK benchmark: complete, average {:.3f}, 1% low {:.3f}, worst {:.3f} ms, saved {}",
-                gs.average_fps, gs.low_fps, gs.worst_ms, txt_ok && csv_ok);
     phase = Phase::kComplete;
     RequestUiPaint();
-  }).detach();
+  }, [] { phase = Phase::kSaving; });
   RequestUiPaint();
 }
 
@@ -189,6 +189,7 @@ class Dialog final : public rex::ui::ImGuiDialog {
 
 bool Requested() { return REXCVAR_GET(kk_benchmark); }
 bool Active() { return phase != Phase::kOff; }
+void Shutdown() { writer.Shutdown(); }
 
 std::filesystem::path Prepare(const std::filesystem::path& root) {
   // Unique directory, never an existing player save. Failure aborts startup,
