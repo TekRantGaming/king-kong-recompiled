@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -45,7 +46,10 @@ class VulkanTestDevice {
   void WaitIdle();
 
   using Pixels = nr::test::Pixels;
-  Pixels ReadBack(nvrhi::ITexture* texture) { return ReadBackTexture(nvrhi_device_, texture); }
+  Pixels ReadBack(nvrhi::ITexture* texture) {
+    std::lock_guard lock(queue_mutex_);
+    return ReadBackTexture(nvrhi_device_, texture);
+  }
 
  private:
   VulkanTestDevice() = default;
@@ -55,6 +59,7 @@ class VulkanTestDevice {
   std::unique_ptr<Impl> impl_;
   std::unique_ptr<nr::VulkanPipelineCache> pipeline_cache_;  // destroyed after nvrhi_device_
   nvrhi::DeviceHandle nvrhi_device_;
+  std::mutex queue_mutex_;
   std::string device_name_;
   bool khronos_validation_ = false;
 };

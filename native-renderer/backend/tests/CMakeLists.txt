@@ -6,6 +6,9 @@
 #   nr_trace_replay  replays a KK_DEV_D3D_TRACE log (a tool for real traces)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
+add_executable(nr_memory_budget_tests memory_budget_tests.cpp)
+target_include_directories(nr_memory_budget_tests PRIVATE "${NR_ROOT}")
+add_test(NAME nr_memory_budget_tests COMMAND nr_memory_budget_tests)
 if(WIN32 AND NR_BUILD_PLUGIN AND NR_GAME_RENDERER)
     add_executable(nr_guest_frame_sampler guest_frame_sampler.cpp)
     target_compile_features(nr_guest_frame_sampler PRIVATE cxx_std_23)

@@ -1,4 +1,4 @@
-param([switch]$D3D12)
+param([switch]$D3D12, [ValidatePattern('^task[0-9]+$')][string]$Task='task036')
 $ErrorActionPreference='Stop'
 $lock='F:\KK-native-renderer\runs\codex-game.lock'
 while ($true) {
@@ -8,8 +8,11 @@ while ($true) {
     $bytes=New-Object byte[] ([int]$file.Length); $null=$file.Read($bytes,0,$bytes.Length)
     $state=[Text.Encoding]::UTF8.GetString($bytes).Trim([char]0xFEFF).Trim()
     if ($state.StartsWith('user')) { throw 'USER_PAUSE: GPU validation deferred' }
-    if (($state -eq 'free' -or !$state) -and !(Get-Process king_kong -ErrorAction SilentlyContinue)) {
-      $claim=[Text.Encoding]::UTF8.GetBytes("task036-gpu $(Get-Date -Format o)")
+    $priorityPath='F:\KK-native-renderer\runs\codex-game.priority'
+    $priority=if (Test-Path $priorityPath) { (Get-Content $priorityPath -Raw).Trim() } else { $null }
+    if (($state -eq 'free' -or !$state) -and !(Get-Process king_kong -ErrorAction SilentlyContinue) -and
+        (!$priority -or $priority -eq $Task)) {
+      $claim=[Text.Encoding]::UTF8.GetBytes("$Task-gpu $(Get-Date -Format o)")
       $file.SetLength(0); $file.Write($claim,0,$claim.Length); $file.Flush(); $claimed=$true
     }
   } catch [IO.IOException] {} finally { if ($file) { $file.Dispose() } }
@@ -29,10 +32,10 @@ try {
   $stdout=$test.StandardOutput.ReadToEndAsync(); $stderr=$test.StandardError.ReadToEndAsync()
   if (!$test.WaitForExit(120000)) { Stop-Process -Id $test.Id; throw 'GPU validation exceeded two minutes' }
   $tag=if ($D3D12) { '-d3d12' } else { '' }
-  $stdout.Result | Set-Content "F:\KK-native-renderer\runs\task036-gpu-test$tag.log"
-  $stderr.Result | Set-Content "F:\KK-native-renderer\runs\task036-gpu-test$tag-errors.log"
+  $stdout.Result | Set-Content "F:\KK-native-renderer\runs\$Task-gpu-test$tag.log"
+  $stderr.Result | Set-Content "F:\KK-native-renderer\runs\$Task-gpu-test$tag-errors.log"
   if ($test.ExitCode -ne 0) { throw "GPU validation failed: $($test.ExitCode)" }
   Write-Output 'GPU validation passed'
 } finally {
-  if ((Get-Content $lock -Raw).Trim().StartsWith('task036-gpu ')) { Set-Content $lock 'free' }
+  if ((Get-Content $lock -Raw).Trim().StartsWith("$Task-gpu ")) { Set-Content $lock 'free' }
 }

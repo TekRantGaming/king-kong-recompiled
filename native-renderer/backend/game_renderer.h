@@ -403,6 +403,7 @@ class GameRenderer {
   nvrhi::IGraphicsPipeline* MemoryColorPipeline(nvrhi::Format format);
   bool memory_scale_aware_ = false, memory_migration_ready_ = false;
   float memory_floor_x_ = 1.0f, memory_floor_y_ = 1.0f;
+  float memory_shadow_limit_ = 0.0f;
   float pending_memory_scale_ = 0.0f;
   uint32_t memory_scale_steps_ = 0;
   nvrhi::ShaderHandle memory_depth_ps_;

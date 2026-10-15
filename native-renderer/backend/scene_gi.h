@@ -45,6 +45,15 @@ class SceneGi {
   const GiConfig& config() const { return config_; }
   void SetConfig(const GiConfig& config) { config_ = config; }
   void SetTimer(AoGpuTimer* timer) { timer_ = timer; }
+  void ForgetTargets() {
+    if (gtao_) gtao_->ForgetTargetViews();
+    if (ssgi_) ssgi_->ForgetTargetViews();
+    scene_color_ = {}; scene_depth_ = {};
+    tracker_ = {}; camera_ = {};
+    frame_ = UINT64_MAX;
+    applied_ = applied_before_ = last_applied_ = false;
+    rows_now_.clear(); rows_before_.clear();
+  }
 
   // A draw as the ambient occlusion describes it (scene_ao.h). Before it is recorded: classify,
   // follow, and at the end of the opaque pass add the bounce light into `cl`, before the draw.

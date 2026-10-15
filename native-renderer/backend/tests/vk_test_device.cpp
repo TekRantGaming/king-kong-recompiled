@@ -9,6 +9,7 @@
 #include <vulkan/vulkan.hpp>
 
 #include "backend/upscaler_vulkan.h"
+#include "backend/upscaler.h"
 #include "backend/vk_pipeline_cache.h"
 #include "backend/vulkan_dispatch.h"
 
@@ -280,6 +281,7 @@ bool VulkanTestDevice::Init(bool validation, bool driver_pipeline_cache, bool up
   }
   std::vector<const char*> device_extension_names;
   for (const std::string& name : upscaler_device_extensions) device_extension_names.push_back(name.c_str());
+  impl_->device_extensions = upscaler_device_extensions;
   float priority = 1.0f;
   vk::DeviceQueueCreateInfo qci({}, impl_->queue_family, 1, &priority);
   vk::DeviceCreateInfo dci({}, qci, {}, device_extension_names);
@@ -290,6 +292,7 @@ bool VulkanTestDevice::Init(bool validation, bool driver_pipeline_cache, bool up
 
   std::vector<const char*> instance_ext_ptrs, device_ext_ptrs;
   for (auto& s : impl_->instance_extensions) instance_ext_ptrs.push_back(s.c_str());
+  for (auto& s : impl_->device_extensions) device_ext_ptrs.push_back(s.c_str());
   nvrhi::vulkan::DeviceDesc desc;
   desc.errorCB = &g_message_callback;
   desc.instance = impl_->instance;
@@ -311,10 +314,20 @@ bool VulkanTestDevice::Init(bool validation, bool driver_pipeline_cache, bool up
   if (validation) {
     nvrhi_device_ = nvrhi::validation::createValidationLayer(nvrhi_device_);
   }
+  // Live settings prepare SDK contexts on a worker, as the game does. Share
+  // the queue lock with submissions and readbacks, including SDK setup work.
+  SetUpscalerIdleWait(nvrhi_device_, [this] { WaitIdle(); });
+  SetUpscalerExclusive(nvrhi_device_, [this](const std::function<void()>& fn) {
+    std::lock_guard lock(queue_mutex_);
+    nvrhi_device_->waitForIdle();
+    fn();
+  });
   return true;
 }
 
 VulkanTestDevice::~VulkanTestDevice() {
+  SetUpscalerIdleWait(nvrhi_device_, {});
+  SetUpscalerExclusive(nvrhi_device_, {});
   if (nvrhi_device_) {
     nvrhi_device_->waitForIdle();
     nvrhi_device_->runGarbageCollection();
@@ -335,11 +348,13 @@ void VulkanTestDevice::MakeCurrent() {
 int VulkanTestDevice::errors() const { return g_vulkan_errors + g_nvrhi_errors; }
 
 void VulkanTestDevice::Execute(nvrhi::ICommandList* command_list) {
+  std::lock_guard lock(queue_mutex_);
   nvrhi_device_->executeCommandList(command_list);
   nvrhi_device_->runGarbageCollection();
 }
 
 void VulkanTestDevice::WaitIdle() {
+  std::lock_guard lock(queue_mutex_);
   nvrhi_device_->waitForIdle();
   nvrhi_device_->runGarbageCollection();
 }

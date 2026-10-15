@@ -563,13 +563,19 @@ void GameRenderer::TrimClearTargets() {
       it = framebuffers_.erase(it);
     } else ++it;
   }
-  // Upscaler and GTAO keep independent attachment views and can write targets
+  // Scene effects and upscalers keep independent views and can write targets
   // outside GetFramebuffer. Until those writes participate in clear tracking,
   // retain their targets rather than incorrectly restore an old clear.
   // Drop GTAO's old target views once on entering pressure. No image or
   // pipeline is rebuilt here, and the next frame classifies its targets anew.
-  if (scene_ao_ && memory_pressure_samples_ == 0) scene_ao_->ForgetTargets();
-  if (upscale_ || scene_ao_) return;
+  if (memory_pressure_samples_ == 0) {
+    if (scene_ao_) scene_ao_->ForgetTargets();
+    if (scene_gi_) scene_gi_->ForgetTargets();
+    if (gi_parked_) gi_parked_->ForgetTargets();
+    if (scene_lighting_) scene_lighting_->ForgetTargets();
+    if (lighting_parked_) lighting_parked_->ForgetTargets();
+  }
+  if (upscale_ || scene_ao_ || scene_gi_ || gi_parked_ || scene_lighting_ || lighting_parked_) return;
   for (auto& [key, t] : targets_) {
     if (!t || !t->texture || !CanEvictClearTarget(t->clear_only, bool(upscale_ || scene_ao_),
                                                 t->used_frame, frame_)) continue;
@@ -650,6 +656,10 @@ void GameRenderer::CheckMemoryBudget() {
 }
 
 void GameRenderer::EndFrame() {
+  // These Beta 5 passes bypass GetFramebuffer. Their writes invalidate saved
+  // clears even if the player disables the effect before pressure next occurs.
+  if (scene_gi_ || scene_lighting_)
+    for (auto& [key, target] : targets_) if (target) target->clear_only = false;
   if (tessellation_timer_) tessellation_timer_->FrameEnd();
   PublishEffectTimes();
   if (TessellationBenchRequested() && frame_%300==0)

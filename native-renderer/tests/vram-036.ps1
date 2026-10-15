@@ -2,7 +2,9 @@ param([int[]]$Budgets=@(4,6,8), [string[]]$Cases=@('ch0','ch8','ch27','tour'),
       [string[]]$Controls=@('before','after'), [string]$Scale='2560x1440',
       [switch]$Pressure, [switch]$Gtao,
       [ValidateSet('vulkan','d3d12')][string]$Backend='vulkan',
-      [string]$PackRoot='F:\KK-native-renderer\runs\task048-after-d3d12-dlss-0-fresh-20261014-072055\cache\native-shaders')
+      [string]$PackRoot='F:\KK-native-renderer\runs\task048-after-d3d12-dlss-0-fresh-20261014-072055\cache\native-shaders',
+      [ValidatePattern('^task[0-9]+$')][string]$Task='task036',
+      [ValidateSet('','off','low','medium','high')][string]$Gi='', [string]$Shots='60,120')
 $ErrorActionPreference='Stop'
 $workspace=(Resolve-Path "$PSScriptRoot/../..").Path
 $lockPath='F:\KK-native-renderer\runs\codex-game.lock'
@@ -18,6 +20,8 @@ function Acquire-Game {
       $null=$file.Read($bytes,0,$bytes.Length)
       $state=[Text.Encoding]::UTF8.GetString($bytes).Trim([char]0xFEFF).Trim()
       if ($state.StartsWith('user')) { throw 'USER_PAUSE: no game launches permitted' }
+      $priorityPath='F:\KK-native-renderer\runs\codex-game.priority'
+      $priority=if (Test-Path $priorityPath) { (Get-Content $priorityPath -Raw).Trim() } else { $null }
       $games=@(Get-Process king_kong -ErrorAction SilentlyContinue)
       foreach ($existingGame in $games) {
         $existingPath=$existingGame.Path
@@ -26,9 +30,9 @@ function Acquire-Game {
           $pollSeconds=60
         }
       }
-      if (($state -eq 'free' -or !$state) -and $games.Count -eq 0) {
+      if (($state -eq 'free' -or !$state) -and $games.Count -eq 0 -and (!$priority -or $priority -eq $Task)) {
         if (!(Get-Process kkbg2 -ErrorAction SilentlyContinue)) { throw 'kkbg2 is required' }
-        $claim=[Text.Encoding]::UTF8.GetBytes("task036 $(Get-Date -Format o)")
+        $claim=[Text.Encoding]::UTF8.GetBytes("$Task $(Get-Date -Format o)")
         $file.SetLength(0); $file.Write($claim,0,$claim.Length); $file.Flush()
         return
       }
@@ -46,11 +50,15 @@ foreach ($budget in $Budgets) {
     $tag=if ($Pressure) { '-pressure' } else { '' }
     if ($Gtao) { $tag+='-gtao' }
     if ($Backend -ne 'vulkan') { $tag+="-$Backend" }
-    $run="F:\KK-native-renderer\runs\task036-$control-$budget-$case$tag-$(Get-Date -Format yyyyMMdd-HHmmss)"
+    $run="F:\KK-native-renderer\runs\$Task-$control-$budget-$case$tag-$(Get-Date -Format yyyyMMdd-HHmmss)"
     New-Item -ItemType Directory -Path $run | Out-Null
     Get-ChildItem $build -File | Where-Object Extension -In '.exe','.dll' | Copy-Item -Destination $run
     Copy-Item "$build\glyphs" $run -Recurse
-    foreach ($pack in 'kkshaders-spirv.pack','kkshaders-dxil.pack') { Copy-Item "$PackRoot\$pack" $run }
+    foreach ($pack in 'kkshaders-spirv.pack','kkshaders-dxil.pack') {
+      if (Test-Path "$PackRoot\$pack") { Copy-Item "$PackRoot\$pack" $run }
+    }
+    $requiredPack=if ($Backend -eq 'vulkan') { 'kkshaders-spirv.pack' } else { 'kkshaders-dxil.pack' }
+    if (!(Test-Path "$run\$requiredPack")) { throw "Missing $requiredPack" }
     Copy-Item 'F:\KK-native-renderer\downloads\dxc-v1.9.2609\dxc\bin\x64\dxcompiler.dll' $run
     robocopy F:\KK-native-renderer\userdata "$run\userdata" /E /NFL /NDL /NJH /NJS | Out-Null
     if ($LASTEXITCODE -ge 8) { throw 'User data copy failed' }
@@ -69,6 +77,7 @@ foreach ($budget in $Budgets) {
       '--native_upscaler=off','--kk_frame_rate=30','--native_debug=32768','--native_stutter_stats=true',
       '--native_validation=true','--kk_check_updates=false','--kk_online_count=false','--kk_discord_status=false')
     $args+='--log_max_file_size_mb=500'
+    if ($Gi) { $args+="--native_gi=$Gi" }
     if ($Gtao) { $args+='--ao_mode=1','--native_ao_method=gtao','--native_ao_quality=full' }
     else { $args+='--ao_mode=0' }
     if ($case -eq 'tour') {
@@ -82,7 +91,7 @@ foreach ($budget in $Budgets) {
     } elseif ($case -match '^ch(0|8|27)$') {
       $chapter=[int]$Matches[1]
       $args+="--kk_start=chapter:0:$chapter"
-      $env:KK_DEV_SCRIPT='0:SKIP/120'; $env:KK_DEV_SHOTS='60,120'; $env:KK_DEV_SHOTS_FROM='menu'
+      $env:KK_DEV_SCRIPT='0:SKIP/120'; $env:KK_DEV_SHOTS=$Shots; $env:KK_DEV_SHOTS_FROM='menu'
       # Capture time is the loaded-level clock. Allow a bounded cold pipeline
       # startup as well as Venture's intro without shortening the 120s sample.
       $limit=240
@@ -109,7 +118,7 @@ foreach ($budget in $Budgets) {
         if (!$game.WaitForExit(10000)) { Stop-Process -Id $game.Id; $game.WaitForExit() }
       }
       # Do not overwrite a user pause request written during this run.
-      if ((Get-Content $lockPath -Raw).Trim().StartsWith('task036 ')) { Set-Content $lockPath 'free' }
+      if ((Get-Content $lockPath -Raw).Trim().StartsWith("$Task ")) { Set-Content $lockPath 'free' }
     }
     Write-Output "DONE $run exit=$($game.ExitCode) seconds=$($clock.Elapsed.TotalSeconds)"
     if ($game.ExitCode -ne 0) { throw "Game failed with exit $($game.ExitCode): $run" }

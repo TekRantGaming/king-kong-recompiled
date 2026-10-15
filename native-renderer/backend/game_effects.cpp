@@ -215,6 +215,7 @@ void GameRenderer::PurgeOutputGeneration() {
     it = targets_.erase(it);
   }
   framebuffers_.clear();
+  framebuffer_used_.clear();
 }
 
 void GameRenderer::FlushSamplers() {
@@ -277,7 +278,9 @@ void GameRenderer::UpdateLighting(const LightingConfig& want, float shadow_scale
   options_.lighting = want;
   options_.lighting.census_every = lighting_initial_.census_every;
   options_.lighting.gpu_time = lighting_initial_.gpu_time;
-  options_.shadow_scale = shadow_scale;
+  // Live settings are sampled each frame; keep the session's budget reduction.
+  options_.shadow_scale = shadow_scale > 1.0f && memory_shadow_limit_ > 0.0f ?
+      std::min(shadow_scale, memory_shadow_limit_) : shadow_scale;
   // The soft shadows' screen-space mask is finer than the frame; the game's own is not.
   if (!want.shadows_on()) lighting_mask_pitches_.clear();
   if (Ready(lighting_build_)) {

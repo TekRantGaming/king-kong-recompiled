@@ -204,9 +204,9 @@ void GameRenderer::ApplyMemoryScale(nvrhi::ICommandList* cl) {
     auto& t = *targets_.at(r.key);
     if (!r.texture) continue;
     bool copied = true;
-    // AO can write outside GetFramebuffer, leaving an old clear hint behind.
+    // Scene effects can write outside GetFramebuffer, leaving an old clear hint behind.
     // Its targets must migrate the actual image, exactly as for eviction.
-    if (t.clear_only && !scene_ao_) {
+    if (t.clear_only && !scene_ao_ && !scene_gi_ && !gi_parked_ && !scene_lighting_ && !lighting_parked_) {
       if (t.depth) cl->clearDepthStencilTexture(r.texture, nvrhi::AllSubresources, true, t.saved_depth, true, t.saved_stencil);
       else cl->clearTextureFloat(r.texture, nvrhi::AllSubresources, t.saved_color);
     } else {
@@ -237,6 +237,11 @@ void GameRenderer::ApplyMemoryScale(nvrhi::ICommandList* cl) {
     t.scale_x = r.scale.x; t.scale_y = r.scale.y; t.host_width = r.width; t.host_height = r.height;
   }
   memory_staged_.clear();
+  if (options_.shadow_scale > 0.0f) memory_shadow_limit_ = options_.shadow_scale;
+  if (scene_gi_) scene_gi_->ForgetTargets();
+  if (gi_parked_) gi_parked_->ForgetTargets();
+  if (scene_lighting_) scene_lighting_->ForgetTargets();
+  if (lighting_parked_) lighting_parked_->ForgetTargets();
   if (scene_ao_) {
     scene_ao_->ForgetTargets();
     // Keep old bindless descriptors valid for pending frames, but force a new

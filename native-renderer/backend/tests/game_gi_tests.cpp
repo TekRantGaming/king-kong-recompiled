@@ -62,7 +62,8 @@ namespace {
 
 VulkanTestDevice* Device() {
   static std::unique_ptr<VulkanTestDevice> device = [] {
-    auto d = VulkanTestDevice::Create(true);
+    // Live settings also warm DLSS on a worker, even while the upscaler is off.
+    auto d = VulkanTestDevice::Create(true, false, /*upscaler_needs=*/true);
     if (d) {
       std::printf("  device: %s, Khronos validation %s\n", d->device_name().c_str(),
                   d->khronos_validation() ? "on" : "not installed");

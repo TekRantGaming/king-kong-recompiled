@@ -12,18 +12,34 @@
 
 namespace nr {
 struct MemoryMigrationTestAccess {
-  static void SimulateUntrackedWriter(GameRenderer& g) {
+  static void SimulateUntrackedWriter(GameRenderer& g, unsigned writer) {
     // Model a whole-clear hint followed by external GPU writes: the pattern
     // already in the images is newer than these intentionally stale hints.
-    // A SceneAo owner is sufficient; running its shading is outside this test.
-    g.scene_ao_ = std::make_unique<SceneAo>(g.device_, AoConfig{});
+    // An owner is sufficient; running its shading is outside this pixel test.
+    if (writer == 0) g.scene_ao_ = std::make_unique<SceneAo>(g.device_, AoConfig{});
+    if (writer == 1) g.scene_gi_ = std::make_unique<SceneGi>(g.device_, GiConfig{}, std::vector<AoRule>{});
+    if (writer == 2) g.scene_lighting_ = std::make_unique<SceneLighting>(g.device_, LightingConfig{});
     auto* color = g.FindTarget(false, 0, 16, 0);
     auto* depth = g.FindTarget(true, 0, 16, 0);
     color->clear_only = depth->clear_only = true;
     color->saved_color = nvrhi::Color(0.f);
     depth->saved_depth = 1.f; depth->saved_stencil = 0;
   }
-  static void StopUntrackedWriter(GameRenderer& g) { g.scene_ao_.reset(); }
+  static void StopUntrackedWriter(GameRenderer& g) {
+    g.scene_ao_.reset(); g.scene_gi_.reset(); g.scene_lighting_.reset();
+    g.gi_parked_.reset(); g.lighting_parked_.reset();
+  }
+  static bool ProtectExternalTargets(GameRenderer& g) {
+    g.frame_ += 200;
+    g.TrimClearTargets();
+    for (const auto& [key, target] : g.targets_)
+      if (target && !target->texture) return false;
+    return true;
+  }
+  static bool PreserveLiveShadowLimit(GameRenderer& g) {
+    g.UpdateLighting(LightingConfig{}, 4.0f);
+    return g.options().shadow_scale == 1.0f;
+  }
   static void Seed(GameRenderer& g, nvrhi::ICommandList* cl) {
     auto* color = g.GetTarget(false, 0, 16, 0, 16);
     auto* depth = g.GetTarget(true, 0, 16, 0, 16);
@@ -45,6 +61,8 @@ struct MemoryMigrationTestAccess {
   static void Scale(GameRenderer& g, nvrhi::ICommandList* cl) {
     g.pending_memory_scale_ = 0.5f;
     for (unsigned frame = 0; frame < 16 && g.options().render_scale_x != 1; ++frame) {
+      // A pass may write after the last whole clear in the same frame.
+      for (auto& [key, target] : g.targets_) if (target) target->clear_only = true;
       g.ApplyMemoryScale(cl);
       if (g.options().render_scale_x != 1) g.EndFrame();
     }
@@ -117,7 +135,7 @@ static void Check(bool ok) {
   ++checks;
 }
 template<class Host>
-int RunMemoryMigration(Host& host, const char* validation, bool native_validation) {
+int RunMemoryMigration(Host& host, const char* validation, bool native_validation, unsigned writer) {
   using namespace nr;
   if (!host) return 2;
   auto* device = host->device();
@@ -127,17 +145,20 @@ int RunMemoryMigration(Host& host, const char* validation, bool native_validatio
   ShaderLibrary shaders(device, guest);
   GameRenderer game(device, guest, physical, &shaders);
   game.options().render_scale_x = game.options().render_scale_y = 2;
+  game.options().shadow_scale = 2;
   game.options().guest_frame_width = game.options().guest_frame_height = 16;
   game.options().memory_budget = [] { return MemoryBudget{1ull << 30, 0, true}; };
   Check(game.Initialize());
   auto seed = device->createCommandList(); seed->open(); game.UploadDummies(seed);
   MemoryMigrationTestAccess::Seed(game, seed); seed->close(); host->Execute(seed); host->WaitIdle();
-  MemoryMigrationTestAccess::SimulateUntrackedWriter(game);
+  MemoryMigrationTestAccess::SimulateUntrackedWriter(game, writer);
+  Check(MemoryMigrationTestAccess::ProtectExternalTargets(game));
   game.WaitForPrewarm();
   auto migration = device->createCommandList(); migration->open();
   Check(MemoryMigrationTestAccess::CancelReplacedSource(game, migration));
   MemoryMigrationTestAccess::Scale(game, migration);
   Check(game.options().render_scale_x == 1);
+  Check(MemoryMigrationTestAccess::PreserveLiveShadowLimit(game));
   // Stress command-list ownership: remove the explicit retirement references
   // before submitting the recorded copy. No raw target pointer may keep it alive.
   for (unsigned i = 0; i < 12; ++i) game.EndFrame();
@@ -178,13 +199,21 @@ int RunMemoryMigration(Host& host, const char* validation, bool native_validatio
               host->device_name().c_str(), validation, native_validation ? "on" : "unavailable (NVRHI on)");
   return 0;
 }
+template<class Host>
+int RunMemorySuite(Host& host, const char* validation, bool native_validation) {
+  for (unsigned writer = 0; writer < 3; ++writer) {
+    const int result = RunMemoryMigration(host, validation, native_validation, writer);
+    if (result) return result;
+  }
+  return 0;
+}
 int main(int argc, char** argv) {
 #if NR_HAS_D3D12
   if (argc == 2 && std::strcmp(argv[1], "--d3d12") == 0) {
     auto host = nr::test::MemoryD3D12TestDevice::Create();
-    return host ? RunMemoryMigration(host, "native D3D12", host->native_validation()) : 2;
+    return host ? RunMemorySuite(host, "native D3D12", host->native_validation()) : 2;
   }
 #endif
   auto host = nr::test::VulkanTestDevice::Create(true);
-  return host ? RunMemoryMigration(host, "Khronos", host->khronos_validation()) : 2;
+  return host ? RunMemorySuite(host, "Khronos", host->khronos_validation()) : 2;
 }
