@@ -773,6 +773,47 @@ TEST(Draw_IndexedAndPrimitiveTypes) {
   CHECK_EQ(f.tracker->stats().dropped_draws, uint64_t(0));
 }
 
+// A vertex buffer the CPU rewrites every frame turns dynamic (only the vertices a draw reads go up);
+// indexed draws then find their vertex range in their indices (task 085: worked out only for dynamic
+// buffers). Each frame's new colours must reach the picture, and only through the drawn ranges.
+TEST(Draw_IndexedFromADynamicVertexBuffer) {
+  Fixture f;
+  if (!f.Init()) return;
+  f.game->options().dynamic_vertex_buffers = true;
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  const uint32_t bytes = 16 * 16;  // four quads of four vertices
+  uint32_t data = 0;
+  const uint32_t vb = f.mem.NewVertexBuffer(bytes, data);
+  const uint32_t first = f.mem.NewIndexBuffer({4, 5, 6, 4, 6, 7, 8, 9, 10, 8, 10, 11}, false);  // quadrants 1, 2
+  const uint32_t last = f.mem.NewIndexBuffer({0, 1, 2, 0, 2, 3}, true);                         // + base 12: 3
+  for (uint32_t frame = 0; frame < 6; ++frame) {
+    uint32_t colors[4];
+    std::vector<ColorVertex> quads;
+    for (int q = 0; q < 4; ++q) {
+      colors[q] = 0xFF000000u | ((40u * frame + 60u * q) & 0xFF) << 16 | ((200u - 30u * frame) & 0xFF) << 8 | (50u + 20u * q);
+      auto v = QuadVertices(kQuadrants[q], colors[q]);
+      quads.insert(quads.end(), v.begin(), v.end());
+    }
+    const std::vector<uint8_t> b = Bytes(quads);
+    std::memcpy(f.mem.Writable(data), b.data(), b.size());
+    f.game->InvalidateRange(data - FakeGuestMemory::kPhysicalView, bytes);  // the write watch
+    f.Clear(kClearTarget0, 0xFF000000);
+    f.SetDeclaration(p.decl);
+    f.SetShaders(p.vs, p.ps_interp);
+    f.SetStream(0, vb, 0, 16);
+    f.SetIndices(first);
+    f.DrawIndexed(4, 0, 0, 12);
+    f.SetIndices(last);
+    f.DrawIndexed(4, 12, 0, 6);
+    Pixels px = f.Present(rt, frame == 5 ? "draw_dynamic_indexed" : nullptr);
+    Rgb want[4] = {FromArgb(0xFF000000), FromArgb(colors[1]), FromArgb(colors[2]), FromArgb(colors[3])};
+    f.CheckQuadrants(px, want, __LINE__);
+  }
+  CHECK_EQ(f.game->stats().dynamic_vertex_buffers, uint64_t(1));
+  CHECK_EQ(f.game->stats().draws, uint64_t(12));
+}
+
 TEST(Draw_ConstantsReachShaders) {
   Fixture f;
   if (!f.Init()) return;

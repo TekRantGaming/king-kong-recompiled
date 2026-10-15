@@ -552,6 +552,13 @@ uint32_t GameRenderer::BindSampler(const uint32_t words[6], const kkshaders::Sam
 
 // ---------------------------------------------------------------- buffers
 
+bool GameRenderer::IsDynamicVertexBuffer(uint32_t physical, uint32_t bytes) {
+  // The same test as BindVertexBuffer's dynamic path (no hashing, no watch, nothing changes).
+  const kknr::BufferCache::Entry* known = bytes ? vertex_buffers_.Find(physical, bytes, 0) : nullptr;
+  const auto* host = known ? static_cast<const HostBuffer*>(known->host) : nullptr;
+  return host && host->dynamic && host->buffer && host->slot;
+}
+
 GameRenderer::HostBuffer* GameRenderer::BindVertexBuffer(nvrhi::ICommandList* cl, uint32_t physical,
                                                          uint32_t bytes, uint32_t used_begin, uint32_t used_end) {
   if (!bytes) return nullptr;

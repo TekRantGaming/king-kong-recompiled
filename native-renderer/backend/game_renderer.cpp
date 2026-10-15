@@ -1511,8 +1511,14 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
 
   if (stop_at == 3) return;
   // The vertices this draw reads (for dynamic vertex buffers): the index range, or the vertex range.
+  // Only a dynamic buffer uploads just those (the others go up whole), so an indexed draw's indices
+  // are scanned at its first dynamic buffer, not at every draw (task 085: the scan of every draw's
+  // indices took about a quarter of the render thread in chapter 8 on the ROG Ally).
   uint32_t first_vertex = 0, last_vertex = ~0u;
-  if (options_.dynamic_vertex_buffers) {
+  bool vertex_range_known = !options_.dynamic_vertex_buffers;
+  auto find_vertex_range = [&] {
+    if (vertex_range_known) return;
+    vertex_range_known = true;
     if (!call.indexed) {
       first_vertex = call.start;
       last_vertex = call.start + call.count;
@@ -1531,7 +1537,8 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
         last_vertex = uint32_t(std::max<int64_t>(0, int64_t(hi) + base + 1));
       }
     }
-  }
+  };
+  if (!call.indexed) find_vertex_range();  // no scan: the same for every buffer
 
   // Vertex fetch: each binding's declaration element, from its stream.
   auto& elements = scratch_declaration_;
@@ -1571,6 +1578,8 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     if (extra_normal) info = normal_it->second.buffer;
     else if (!vb_object || !DecodeVertexBuffer(memory_.Virtual(vb_object), info)) continue;
     uint32_t used_begin = 0, used_end = ~0u;
+    if (!vb.raw && stride && !vertex_range_known && IsDynamicVertexBuffer(info.physical, info.size_bytes))
+      find_vertex_range();
     if (!vb.raw && stride && last_vertex != ~0u) {
       used_begin = uint32_t(std::min<uint64_t>(uint64_t(offset) + uint64_t(first_vertex) * stride, info.size_bytes));
       used_end = uint32_t(std::min<uint64_t>(uint64_t(offset) + uint64_t(last_vertex) * stride, info.size_bytes));

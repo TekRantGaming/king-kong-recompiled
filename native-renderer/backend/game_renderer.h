@@ -462,6 +462,8 @@ class GameRenderer {
   // those); the whole buffer when unknown.
   HostBuffer* BindVertexBuffer(nvrhi::ICommandList* cl, uint32_t physical, uint32_t bytes, uint32_t used_begin = 0,
                                uint32_t used_end = ~0u);
+  // Whether BindVertexBuffer would upload only the used bytes of this buffer (a dynamic one).
+  bool IsDynamicVertexBuffer(uint32_t physical, uint32_t bytes);
   HostBuffer* BindIndexBuffer(nvrhi::ICommandList* cl, uint32_t physical, uint32_t bytes,
                               bool index32);
   void ProcessInvalidations();
