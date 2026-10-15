@@ -594,6 +594,8 @@ int testCorpus(int argc, char** argv) {
     std::printf("DXC %s; spirv-val: %s\n", dxcVersion().c_str(), spirvVal.empty() ? "not given (DXC's validator only)" : spirvVal.c_str());
 
     std::vector<CorpusShader> corpus = buildCorpus(fuzz, seed);
+    const auto orderedGe = buildOrderedGeCorpus();
+    corpus.insert(corpus.end(), orderedGe.begin(), orderedGe.end());
     if (!filter.empty())
         corpus.erase(std::remove_if(corpus.begin(), corpus.end(),
                                     [&](const CorpusShader& s) { return (s.group + " " + s.name).find(filter) == std::string::npos; }),

@@ -87,6 +87,7 @@ bool Gpu::init(std::string* error) {
             if (pass == 0 && p12.driverID != VK_DRIVER_ID_MESA_LLVMPIPE) continue;
             physical_ = d;
             deviceName_ = p.properties.deviceName;
+            subTexelPrecisionBits_ = p.properties.limits.subTexelPrecisionBits;
             break;
         }
     }

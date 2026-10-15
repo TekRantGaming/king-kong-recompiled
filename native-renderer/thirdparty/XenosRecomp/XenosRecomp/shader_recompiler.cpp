@@ -196,6 +196,8 @@ static std::string compare(const char* a, const char* op, const char* b)
 {
     if (std::string_view(op) == "!=")
         return fmt::format("kk_Ne({}, {})", a, b);
+    if (std::string_view(op) == ">=")
+        return fmt::format("kk_Ge({}, {})", a, b);
     return fmt::format("{} {} {}", a, op, b);
 }
 
@@ -735,14 +737,14 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
         case AluVectorOpcode::Min: value = "kk_Min(kv1, kv2)"; break;
         case AluVectorOpcode::Seq: value = "float4(kv1 == kv2)"; break;
         case AluVectorOpcode::Sgt: value = "float4(kv1 > kv2)"; break;
-        case AluVectorOpcode::Sge: value = "float4(kv1 >= kv2)"; break;
+        case AluVectorOpcode::Sge: value = "float4(kk_Ge(kv1, kv2))"; break;
         case AluVectorOpcode::Sne: value = "float4(kk_Ne(kv1, kv2))"; break;
         case AluVectorOpcode::Frc: value = "kv1 - floor(kv1)"; break;
         case AluVectorOpcode::Trunc: value = "trunc(kv1)"; break;
         case AluVectorOpcode::Floor: value = "floor(kv1)"; break;
         case AluVectorOpcode::Mad: value = "kk_Mul(kv1, kv2) + kv3"; break;
         case AluVectorOpcode::CndEq: value = "select(kv1 == 0.0, kv2, kv3)"; break;
-        case AluVectorOpcode::CndGe: value = "select(kv1 >= 0.0, kv2, kv3)"; break;
+        case AluVectorOpcode::CndGe: value = "select(kk_Ge(kv1, 0.0), kv2, kv3)"; break;
         case AluVectorOpcode::CndGt: value = "select(kv1 > 0.0, kv2, kv3)"; break;
         case AluVectorOpcode::Dp4: value = "kk_Dot4(kv1, kv2).xxxx"; break;
         case AluVectorOpcode::Dp3: value = "kk_Dot3(kv1, kv2).xxxx"; break;
@@ -873,11 +875,11 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
             value = "kk_Muls(ka_, kb_)"; break;
         case AluScalarOpcode::MulsPrev: value = "kk_Muls(ka_, ps)"; break;
         case AluScalarOpcode::MulsPrev2: value = "kk_MulsPrev2(ka_, kb_, ps)"; break;
-        case AluScalarOpcode::Maxs: value = "select(ka_ >= kb_, ka_, kb_)"; break;
+        case AluScalarOpcode::Maxs: value = "select(kk_Ge(ka_, kb_), ka_, kb_)"; break;
         case AluScalarOpcode::Mins: value = "select(ka_ < kb_, ka_, kb_)"; break;
         case AluScalarOpcode::Seqs: value = "select(ka_ == 0.0, 1.0, 0.0)"; break;
         case AluScalarOpcode::Sgts: value = "select(ka_ > 0.0, 1.0, 0.0)"; break;
-        case AluScalarOpcode::Sges: value = "select(ka_ >= 0.0, 1.0, 0.0)"; break;
+        case AluScalarOpcode::Sges: value = "select(kk_Ge(ka_, 0.0), 1.0, 0.0)"; break;
         case AluScalarOpcode::Snes: value = "select(kk_Ne(ka_, 0.0), 1.0, 0.0)"; break;
         case AluScalarOpcode::Frcs: value = "(ka_ - floor(ka_))"; break;
         case AluScalarOpcode::Truncs: value = "trunc(ka_)"; break;
@@ -896,7 +898,7 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
             indent();
             println("int ksa = int(floor(clamp(ka_, -256.0, 255.0){}));", sop == AluScalarOpcode::MaxAs ? " + 0.5" : "");
             newA0 = true;
-            value = "select(ka_ >= kb_, ka_, kb_)";
+            value = "select(kk_Ge(ka_, kb_), ka_, kb_)";
             break;
         case AluScalarOpcode::Subs:
         case AluScalarOpcode::Subsc0:
@@ -950,7 +952,7 @@ void ShaderRecompiler::recompile(const AluInstruction& instr)
         {
             const char* test = sop == AluScalarOpcode::KillsEq ? "ka_ == 0.0" :
                 (sop == AluScalarOpcode::KillsGt ? "ka_ > 0.0" :
-                (sop == AluScalarOpcode::KillsGe ? "ka_ >= 0.0" :
+                (sop == AluScalarOpcode::KillsGe ? "kk_Ge(ka_, 0.0)" :
                 (sop == AluScalarOpcode::KillsNe ? "kk_Ne(ka_, 0.0)" : "ka_ == 1.0")));
             indent();
             println("bool ksk = {};", test);

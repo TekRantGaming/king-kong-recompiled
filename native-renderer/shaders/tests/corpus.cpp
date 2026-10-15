@@ -860,3 +860,27 @@ std::vector<CorpusShader> buildCorpus(uint32_t fuzzCount, uint32_t seed) {
     fuzzGroup(g, fuzzCount, seed);
     return out;
 }
+
+std::vector<CorpusShader> buildOrderedGeCorpus() {
+    std::vector<CorpusShader> out;
+    Gen g(out);
+    for (bool vertex : {true, false}) {
+        // Nonzero runtime constants give log(-abs(c0.x)) = NaN. The outputs
+        // are finite comparison results, so this checks observable control
+        // and data flow rather than the bit pattern of a NaN export.
+        Program p;
+        if (vertex) p.exec({F(positionFetch())});
+        p.exec({
+            A(Alu().s(LOG_IEEE, 8, "xyzw", c(0, "x", true)).absConst()),
+            A(Alu().v(SGEv, 2, "x", r(8, "xxxx", false, true), r(63))),
+            A(Alu().v(SETP_GE_PUSHv, 2, "y", r(63), r(8, "xxxx", false, true))),
+            A(Alu().s(SGEs, 2, "z", r(8, "x", false, true))),
+            A(Alu().v(CNDGEv, 2, "w", r(8, "xxxx", false, true), c(1), c(2))),
+            A(Alu().v(ADDv, 2, "x", r(2), c(3)).pred(true)),
+        });
+        if (vertex) Gen::finishVs(p);
+        else Gen::finishPs(p, 2);
+        g.add("ordered-ge", vertex ? "vs ordered GE NaN" : "ps ordered GE NaN", vertex, p, defaultSpec(vertex));
+    }
+    return out;
+}

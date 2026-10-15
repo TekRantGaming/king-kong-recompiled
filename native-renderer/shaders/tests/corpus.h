@@ -18,6 +18,8 @@ struct CorpusShader {
 };
 
 std::vector<CorpusShader> buildCorpus(uint32_t fuzzCount, uint32_t seed);
+// Kept separate so adding regressions does not change the original random seeds.
+std::vector<CorpusShader> buildOrderedGeCorpus();
 
 // Instruction addresses of the vfetch instructions, in program order of the execs.
 std::vector<uint32_t> findVfetchAddresses(const std::vector<uint32_t>& ucode);

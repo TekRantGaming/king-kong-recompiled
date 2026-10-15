@@ -154,9 +154,9 @@ CompileOutput Compiler::compileEntry(const std::string& hlsl, const std::wstring
         out.messages = "DXC is not loaded";
         return out;
     }
-    // -Gis (IEEE strictness): no fast-math, so x - x, x * 0 and comparisons keep their NaN and
-    // infinity results as on Xenos (DXC otherwise folds them for DXIL, and for SPIR-V marks
-    // nothing that stops the driver from doing so).
+    // -Gis inhibits DXC's fast-math transforms and adds NoContraction to SPIR-V
+    // arithmetic. It does not enable Vulkan's optional SignedZeroInfNanPreserve
+    // mode; the prelude's ordered-GE helpers also guard NaNs through integer bits.
     std::vector<std::wstring> args = {L"-T", profile, L"-E", entry, L"-HV", L"2021", L"-O3", L"-Gis", L"-Qstrip_debug"};
     if (target == CompileTarget::Spirv) {
         args.insert(args.end(), {L"-spirv", L"-fspv-target-env=vulkan1.2", L"-fvk-use-dx-layout"});

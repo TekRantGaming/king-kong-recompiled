@@ -60,6 +60,7 @@ public:
     bool init(std::string* error);
     const std::string& deviceName() const { return deviceName_; }
     bool validation() const { return validation_; }
+    uint32_t subTexelPrecisionBits() const { return subTexelPrecisionBits_; }
     int validationErrors() const;
 
     Buffer buffer(VkDeviceSize size, VkBufferUsageFlags usage);
@@ -108,6 +109,7 @@ private:
     VkDescriptorPool descriptorPool_ = VK_NULL_HANDLE;
     std::string deviceName_;
     bool validation_ = false;
+    uint32_t subTexelPrecisionBits_ = 8;
     VkPhysicalDeviceMemoryProperties memoryProperties_{};
     std::vector<std::pair<uint32_t, VkSampler>> samplers_;
     // Dummies for unused array entries.

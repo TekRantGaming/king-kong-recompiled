@@ -25,7 +25,6 @@ constexpr float kSqrtRel = 0x1p-21f;
 constexpr float kExpRel = 0x1p-18f;
 constexpr float kLogAbs = 0x1p-18f;
 constexpr float kSinAbs = 0x1p-17f;   // per unit of |argument| / pi beyond the first
-constexpr float kFilterWeight = 0x1p-8f; // 8-bit sub-texel precision (lavapipe, most GPUs)
 
 float ulp(float x) {
     float a = std::fabs(x);
@@ -39,7 +38,11 @@ Num unknown() {
     return n;
 }
 
-Num exact(float v) { return Num{v, 0.0f, false}; }
+Num exact(float v) {
+    // Loads preserve the bits, but shader arithmetic/comparisons may flush a
+    // subnormal input even when no arithmetic has produced it yet.
+    return Num{v, std::fabs(v) < FLT_MIN ? std::fabs(v) : 0.0f, false};
+}
 
 bool special(float v) { return !std::isfinite(v); }
 
@@ -1132,6 +1135,7 @@ int32_t address(int64_t i, uint32_t size, bool clamp) {
 Vec Machine::sample(const Texture& t, uint32_t dim, const std::array<Num, 3>& c, bool linear, bool& unknownOut) {
     Vec r;
     unknownOut = false;
+    const float weightQuantum = std::ldexp(1.0f, -int(t.subTexelPrecisionBits));
     // Texel-space coordinates.
     uint32_t sizes[3] = {t.width, dim == 0 ? 1u : t.height, dim == 2 ? t.depth : 1u};
     uint32_t axes = dim == 0 ? 1 : (dim == 2 ? 3 : 2);
@@ -1193,8 +1197,8 @@ Vec Machine::sample(const Texture& t, uint32_t dim, const std::array<Num, 3>& c,
             return r;
         }
         pos[a] = cc[a].v * float(sizes[a]);
-        // Coordinates are converted to fixed point with 8 sub-texel bits.
-        posErr[a] = cc[a].e * float(sizes[a]) + kFilterWeight;
+        // Coordinates are converted to fixed point at the device's precision.
+        posErr[a] = cc[a].e * float(sizes[a]) + weightQuantum;
     }
     auto fetch = [&](int64_t x, int64_t y, int64_t z) {
         uint32_t ix = uint32_t(address(x, sizes[0], t.clamp));
@@ -1227,7 +1231,7 @@ Vec Machine::sample(const Texture& t, uint32_t dim, const std::array<Num, 3>& c,
             }
         }
     }
-    auto filter = [&](const float* at, double* outValue) {
+    auto filter = [&](const float* at, double* outValue, double* weightError) {
         int64_t base[3] = {};
         double frac[3] = {};
         for (uint32_t a = 0; a < axes; a++) {
@@ -1237,6 +1241,7 @@ Vec Machine::sample(const Texture& t, uint32_t dim, const std::array<Num, 3>& c,
             frac[a] = p - f;
         }
         for (int k = 0; k < 4; k++) outValue[k] = 0.0;
+        double texels[4][8] = {};
         for (uint32_t cnr = 0; cnr < (1u << axes); cnr++) {
             double weight = 1.0;
             int64_t ix[3] = {};
@@ -1246,11 +1251,30 @@ Vec Machine::sample(const Texture& t, uint32_t dim, const std::array<Num, 3>& c,
                 weight *= hi ? frac[a] : 1.0 - frac[a];
             }
             const float* p = fetch(ix[0], ix[1], ix[2]);
-            for (int k = 0; k < 4; k++) outValue[k] += weight * p[k];
+            for (int k = 0; k < 4; k++) {
+                outValue[k] += weight * p[k];
+                texels[k][cnr] = p[k];
+            }
+        }
+        for (int k = 0; k < 4; k++) {
+            weightError[k] = 0;
+            if (axes == 1) continue; // the single lerp's error is already in posErr
+            // Hardware can round the PRODUCTS of the axis weights independently.
+            // A basis-texture probe on NVIDIA gives (41,87,40,88)/256 where
+            // exact bilinear weights are (40.70,87.30,40.70,87.30)/256.
+            // A coordinate-only error interval misses this redistribution.
+            // With |delta_weight| <= quantum and sum(delta_weight) == 0,
+            // |delta_result| <= quantum * sum(|texel - anchor|). The median
+            // minimises that bound and keeps a constant footprint exact.
+            const uint32_t count = 1u << axes;
+            std::sort(texels[k], texels[k] + count);
+            const double anchor = texels[k][count / 2];
+            for (uint32_t i = 0; i < count; i++)
+                weightError[k] += weightQuantum * std::fabs(texels[k][i] - anchor);
         }
     };
-    double centre[4];
-    filter(pos, centre);
+    double centre[4], centreWeightError[4];
+    filter(pos, centre, centreWeightError);
     // The result is piecewise linear in each coordinate, with kinks at texel centres: over the
     // coordinate's error interval its extremes are at the interval's ends or at those kinks.
     std::vector<float> candidates[3];
@@ -1264,9 +1288,14 @@ Vec Machine::sample(const Texture& t, uint32_t dim, const std::array<Num, 3>& c,
         }
         candidates[a] = {lo, pos[a], hi};
         for (float k = std::floor(lo - 0.5f) + 0.5f; k <= hi; k += 1.0f)
-            if (k > lo) candidates[a].push_back(k);
+            if (k > lo) {
+                candidates[a].push_back(k);
+                // The independently rounded weight bound uses the entire
+                // footprint, which changes on either side of a texel centre.
+                candidates[a].push_back(std::nextafter(k, -kInf));
+            }
     }
-    double spread[4] = {};
+    double spread[4] = {centreWeightError[0], centreWeightError[1], centreWeightError[2], centreWeightError[3]};
     float at[3] = {};
     for (float x : candidates[0])
         for (float y : (axes > 1 ? candidates[1] : std::vector<float>{0.0f}))
@@ -1274,9 +1303,10 @@ Vec Machine::sample(const Texture& t, uint32_t dim, const std::array<Num, 3>& c,
                 at[0] = x;
                 at[1] = y;
                 at[2] = z;
-                double v[4];
-                filter(at, v);
-                for (int k = 0; k < 4; k++) spread[k] = std::max(spread[k], std::fabs(v[k] - centre[k]));
+                double v[4], weightError[4];
+                filter(at, v, weightError);
+                for (int k = 0; k < 4; k++)
+                    spread[k] = std::max(spread[k], std::fabs(v[k] - centre[k]) + weightError[k]);
             }
     for (int k = 0; k < 4; k++) {
         float v = float(centre[k]);

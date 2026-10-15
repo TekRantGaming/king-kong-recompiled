@@ -10,8 +10,9 @@
 //
 // Every value carries an error bound: the largest difference a conforming GPU (IEEE float32
 // with any rounding of transcendental functions within a stated precision, fused or separate
-// multiply-add, 8-bit sub-texel precision in filtering) may show against the value computed
-// here. Inputs are exact. A value whose bound cannot be stated (a comparison, floor or point
+// multiply-add, device sub-texel precision for coordinates and combined filter weights) may show against the value computed
+// here. Input bits are exact; subnormal inputs may be flushed by shader operations.
+// A value whose bound cannot be stated (a comparison, floor or point
 // sample that could go either way within the error) becomes "unknown" and is not compared; a
 // control decision of that kind (predicate, kill, address register, branch) makes the whole
 // invocation "fragile" and it is not compared either. With the dyadic inputs the tests use,
@@ -45,6 +46,8 @@ struct Texture {
     // constant", 3) and address mode (clamp to edge, else wrap).
     bool linear = false;
     bool clamp = false;
+    // Vulkan device limit, supplied by the harness rather than assumed per driver.
+    uint32_t subTexelPrecisionBits = 8;
     const float* texel(uint32_t x, uint32_t y, uint32_t layer) const {
         return &texels[((size_t(layer) * height + y) * width + x) * 4];
     }

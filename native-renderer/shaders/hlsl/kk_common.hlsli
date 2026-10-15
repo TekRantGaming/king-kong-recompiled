@@ -76,6 +76,22 @@ bool4 kk_Ne(float4 a, float4 b)
     return !(a == b);
 }
 
+// Ordered >= must stay false for NaN, including abs(NaN) >= 0. Without
+// SignedZeroInfNanPreserve, a Vulkan driver may fold that float comparison
+// to true even with DXC -Gis. Classify NaNs through their integer bits so
+// this also works on devices without the optional float-control mode.
+bool kk_Ge(float a, float b)
+{
+    return and(and((asuint(a) & 0x7FFFFFFFu) <= 0x7F800000u,
+                   (asuint(b) & 0x7FFFFFFFu) <= 0x7F800000u), a >= b);
+}
+
+bool4 kk_Ge(float4 a, float4 b)
+{
+    return and(and((asuint(a) & 0x7FFFFFFFu) <= 0x7F800000u,
+                   (asuint(b) & 0x7FFFFFFFu) <= 0x7F800000u), a >= b);
+}
+
 bool kk_BoolConst(uint index)
 {
     return (kk_Bool[index >> 7][(index >> 5) & 3] & (1u << (index & 31))) != 0;
@@ -144,7 +160,7 @@ float kk_MulsPrev2(float a, float b, float previous)
 
 float4 kk_Max(float4 a, float4 b)
 {
-    return select(a >= b, a, b);
+    return select(kk_Ge(a, b), a, b);
 }
 
 float4 kk_Min(float4 a, float4 b)
@@ -172,9 +188,9 @@ float kk_Dot2Add(float4 a, float4 b, float4 c)
 
 float kk_Max4(float4 a)
 {
-    float zw = select(a.z >= a.w, a.z, a.w);
-    float yzw = select(and(a.y >= a.z, a.y >= a.w), a.y, zw);
-    return select(and(and(a.x >= a.y, a.x >= a.z), a.x >= a.w), a.x, yzw);
+    float zw = select(kk_Ge(a.z, a.w), a.z, a.w);
+    float yzw = select(and(kk_Ge(a.y, a.z), kk_Ge(a.y, a.w)), a.y, zw);
+    return select(and(and(kk_Ge(a.x, a.y), kk_Ge(a.x, a.z)), kk_Ge(a.x, a.w)), a.x, yzw);
 }
 
 float4 kk_Dst(float4 a, float4 b)

@@ -449,6 +449,8 @@ void Runner::runShader(const CorpusShader& shader, uint32_t rounds, uint32_t see
     for (uint32_t round = 0; round < rounds; round++) {
         Rng rng(seed + round * 7919u);
         Env env = makeEnv(rng, info, tr.bindings);
+        for (auto& [slot, texture] : env.textures)
+            texture.subTexelPrecisionBits = gpu_.subTexelPrecisionBits();
         if (!runRound(shader, info, tr, prog, env, round, stats, reported, mismatched)) break;
     }
     if (mismatched) {
@@ -748,6 +750,8 @@ int runGpu(int argc, char** argv) {
     if (corpus) shaders = buildCorpus(fuzz, seed);
     for (uint32_t i = 0; i < randomCount; i++)
         for (int k = 0; k < 4; k++) shaders.push_back(randomProgram(seed + i, (k & 1) == 0, (k & 2) != 0));
+    const auto orderedGe = buildOrderedGeCorpus();
+    shaders.insert(shaders.end(), orderedGe.begin(), orderedGe.end());
 
     Compiler compiler;
     Runner runner(gpu, compiler, out, maxReport, option(argc, argv, "--trace", "0") != "0");
@@ -961,6 +965,62 @@ int runInterpreterChecks() {
             ICHECK(std::fabs(o.exports[0][0].v - expect) <= o.exports[0][0].e + 1e-6f);
             ICHECK(std::fabs(o.exports[0][3].v - 4.0f * expect) <= o.exports[0][3].e + 1e-6f);
         }
+    }
+    // Loaded subnormals can be flushed by a comparison before any arithmetic.
+    // Exercise the vertex-fetch path, both signs, zero and the smallest normal.
+    {
+        Program p;
+        VFetch f;
+        f.dst = 1;
+        f.format = F_32_FLOAT;
+        f.stride = 1;
+        p.exec({{f.encode(), true}, A(Alu().s(PRED_SETNEs, 2, "x", r(1, "x"))),
+                A(Alu().v(ADDv, 3, "x", r(3), c(0)).pred(true))});
+        p.alloc(2, 0);
+        p.exec({expo(0, 3)}, true);
+        for (uint32_t bits : {0u, 1u, 0x007FFFFFu, 0x80000001u, 0x807FFFFFu, 0x00800000u, 0x80800000u}) {
+            xinterp::Inputs in;
+            in.ucode = p.assemble();
+            in.fetchConstants[95] = {0, 0, 4, 2};
+            in.buffers = {{uint8_t(bits >> 24), uint8_t(bits >> 16), uint8_t(bits >> 8), uint8_t(bits)}};
+            in.constants[0] = {1, 0, 0, 0};
+            auto o = xinterp::run(in);
+            const bool subnormal = (bits & 0x7FFFFFFFu) != 0 && (bits & 0x7F800000u) == 0;
+            ICHECK(o.fragile == subnormal);
+            if (!subnormal) ICHECK(o.exports[0][0].v == (bits ? 1.0f : 0.0f));
+        }
+    }
+    // Independent rounding of bilinear corner weights, isolated with basis
+    // textures on the GPU. Coordinate rounding alone cannot enclose this value.
+    {
+        xinterp::Texture t;
+        t.width = 8;
+        t.height = 3;
+        t.texels.resize(8 * 3 * 4, 0.375f);
+        const float corners[] = {1.84375f, 0.6875f, -0.59375f, 0.875f};
+        for (uint32_t i = 0; i < 4; i++)
+            t.texels[(((i & 2) ? 0 : 2) * 8 + ((i & 1) ? 0 : 7)) * 4] = corners[i];
+        Program p;
+        TFetch f;
+        f.dst = 1;
+        f.magFilter = 1;
+        p.exec({{f.encode(), true}});
+        p.alloc(2, 0);
+        p.exec({expo(0, 1)}, true);
+        auto evaluate = [&](float x) {
+            return runPixel(p, [&](xinterp::Inputs& in) {
+                in.initialRegisters[0] = {x, 0.0f, 0, 0};
+                in.textures[0] = &t;
+            });
+        };
+        const float x = std::bit_cast<float>(0x3cba6142u);
+        const auto o = evaluate(x);
+        const float hardware = (41 * corners[0] + 87 * corners[1] + 40 * corners[2] + 88 * corners[3]) / 256.0f;
+        ICHECK(hardware == 0.7369384765625f);
+        ICHECK(close(hardware, o.exports[0][0]));
+        ICHECK(!close(hardware + 0.0625f, o.exports[0][0]));
+        ICHECK(!close(hardware, evaluate(x + 0.25f / 8.0f).exports[0][0]));
+        ICHECK(o.exports[0][1].v == 0.375f && o.exports[0][1].e < 0.00001f);
     }
     // Error bounds: a comparison on a rounded value next to the boundary is not decided.
     {
