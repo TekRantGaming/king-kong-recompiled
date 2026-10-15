@@ -217,6 +217,7 @@ uint32_t DxgiFormat(HostFormat f) {
     case H::BC4_SNORM: return 81;
     case H::BC5_UNORM: return 83;
     case H::BC5_SNORM: return 84;
+    case H::BC7_UNORM: return 98;
     default: return 0;
   }
 }

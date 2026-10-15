@@ -21,6 +21,7 @@ add_library(kknr_resources STATIC
     src/endian.cpp
     src/texture_convert.cpp
     src/texture_workers.cpp
+    src/texture_pack.cpp
     src/buffers.cpp
     src/texture_cache.cpp
     src/render_targets.cpp
@@ -29,6 +30,13 @@ add_library(kknr_resources STATIC
 target_include_directories(kknr_resources PUBLIC include)
 find_package(Threads REQUIRED)
 target_link_libraries(kknr_resources PUBLIC Threads::Threads)
+find_path(KKNR_XXHASH_INCLUDE_DIR xxh3.h HINTS
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/rexglue-vulkan/win-amd64/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/rexglue/win-amd64/include" REQUIRED)
+target_include_directories(kknr_resources PRIVATE "${KKNR_XXHASH_INCLUDE_DIR}")
+if(WIN32)
+    target_link_libraries(kknr_resources PUBLIC windowscodecs ole32)
+endif()
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(kknr_resources PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
 endif()
@@ -41,6 +49,8 @@ if(KKNR_RESOURCES_TOOLS)
     target_link_libraries(kknr_bfscan PRIVATE kknr_resources)
     add_executable(kknr_formats tools/formats_table.cpp)
     target_link_libraries(kknr_formats PRIVATE kknr_resources)
+    add_executable(kknr_packcheck tools/packcheck.cpp)
+    target_link_libraries(kknr_packcheck PRIVATE kknr_resources)
     if(MSVC OR CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
         target_compile_definitions(kknr_texdump PRIVATE _CRT_SECURE_NO_WARNINGS)
         target_compile_definitions(kknr_bfscan PRIVATE _CRT_SECURE_NO_WARNINGS)
@@ -71,6 +81,8 @@ add_executable(kknr_resources_tests
     tests/test_tail_mips.cpp
     tests/test_convert.cpp
     tests/test_convert_workers.cpp
+    tests/test_texture_pack.cpp
+    tools/image_io.cpp
     tests/test_buffers.cpp
     tests/test_cache.cpp
     tests/test_render_targets.cpp

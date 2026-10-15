@@ -29,6 +29,7 @@
 #include <ctime>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <sstream>
 #include <string>
@@ -53,6 +54,7 @@
 #endif
 
 #include <imgui.h>
+#include <SDL3/SDL_dialog.h>
 #include <toml++/toml.hpp>
 
 #include <rex/cvar.h>
@@ -86,6 +88,11 @@ using ui::ItemType;
 namespace color = ui::color;
 
 constexpr uint32_t kTitleId = 0x555307D3;
+struct TexturePackFolderChoice {
+  std::mutex mutex;
+  bool busy = false;
+  std::string selected;
+} texture_pack_folder_choice;
 constexpr const char* kProjectUrl = "https://github.com/TekRantGaming/king-kong-recompiled";
 constexpr const char* kDiscordUrl = "https://discord.gg/PET2xU5FJq";  // permanent (expires_at null)
 #include "discord_icon.inc"
@@ -1314,6 +1321,14 @@ class SettingsPages {
 
   // ----------------------------------------------------------- Graphics ---
   std::vector<Item> GraphicsItems() {
+    {
+      std::lock_guard lock(texture_pack_folder_choice.mutex);
+      if (!texture_pack_folder_choice.selected.empty()) {
+        Set("native_texture_pack_folder", texture_pack_folder_choice.selected);
+        texture_pack_folder_choice.selected.clear();
+        ++g_changes;
+      }
+    }
     const bool original = GetBool("kk_original_look");
     std::vector<Item> items;
     items.push_back(Section("Look"));
@@ -1366,6 +1381,28 @@ class SettingsPages {
     }
 
     items.push_back(Section("Image"));
+    items.push_back(CvarChoice("Texture pack", "Use replacement textures made from your own extracted files.",
+                              "native_texture_pack", {{"Off", "false"}, {"On", "true"}}));
+    {
+      const std::string folder = Get("native_texture_pack_folder");
+      Item it = ActionItem("Texture pack folder", "Choose the folder containing your texture pack.",
+                           folder.empty() ? T("Choose folder") : folder, [] {
+        {
+          std::lock_guard lock(texture_pack_folder_choice.mutex);
+          if (texture_pack_folder_choice.busy) return;
+          texture_pack_folder_choice.busy = true;
+        }
+        const std::string current = Get("native_texture_pack_folder");
+        SDL_ShowOpenFolderDialog([](void*, const char* const* files, int) {
+          std::lock_guard lock(texture_pack_folder_choice.mutex);
+          if (files && files[0]) texture_pack_folder_choice.selected = files[0];
+          texture_pack_folder_choice.busy = false;
+        }, nullptr, nullptr, current.empty() ? nullptr : current.c_str(), false);
+      });
+      it.on_default = [] { Reset("native_texture_pack_folder"); };
+      { std::lock_guard lock(texture_pack_folder_choice.mutex); it.disabled = texture_pack_folder_choice.busy; }
+      items.push_back(std::move(it));
+    }
     {
       Item it = CvarChoice("Anti-aliasing", "Smooths jagged edges after the frame is drawn.", "swap_post_effect",
                            {{"Off", "none"}, {"FXAA", "fxaa"}});
@@ -4387,6 +4424,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                 "resolution_scale", "draw_resolution_scale_x", "draw_resolution_scale_y", "present_letterbox"};
       case kGraphics:
         return {"kk_original_look", "kk_modern_settings", "swap_post_effect", "anisotropic_override",
+                "native_texture_pack", "native_texture_pack_folder",
                 "kk_motion_blur", "kk_big_blur", "kk_fog", "ao_mode", "ao_strength", "native_ao_method",
                 "native_ao_apply", "native_ao_quality", "native_ao_samples", "native_backend", "kk_renderer", "native_gi", "native_shadow_quality", "native_water_reflections", "native_volumetrics"};
       case kGameplay:

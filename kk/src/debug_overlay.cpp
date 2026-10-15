@@ -142,6 +142,8 @@ const std::vector<Setting>& Settings() {
       {"Upscaling", "Render quality", "kk_render_quality", Kind::kRestart, {}, 0, 1, "", false},
       {"Upscaling", "Spatial upscaler", "present_effect", Kind::kRestart, {}, 0, 1, "", false},
       // Image.
+      {"Image", "Texture pack", "native_texture_pack", Kind::kToggle, {{"Off", "false"}, {"On", "true"}},
+       0, 1, "", true, Show::kAlways, "Compare your texture pack with the original textures."},
       {"Image", "Anti-aliasing (FXAA)", "swap_post_effect", Kind::kChoice, {{"Off", "none"}, {"FXAA", "fxaa"}}, 0, 1,
        "", true, Show::kAlways, "Off while a temporal upscaler runs (it anti-aliases itself)."},
       {"Image", "Texture filtering", "anisotropic_override", Kind::kChoice,

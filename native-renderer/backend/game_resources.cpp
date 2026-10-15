@@ -313,6 +313,10 @@ GameRenderer::HostTexture* GameRenderer::ResolveDestTexture(kknr::TextureCache::
 
 void GameRenderer::ReleaseHostTexture(HostTexture* host) {
   if (!host) return;
+  pack_originals_.erase(host);
+  if (pack_upload_.original == host) pack_upload_ = {};
+  if (host->replacement) { ReleaseHostTexture(host->replacement); host->replacement = nullptr; }
+  pack_bytes_ -= std::min(pack_bytes_, host->pack_allocation);
   descriptor_textures_.erase(host);
   if (host->twin) {
     HostTexture* twin = host->twin;
@@ -384,6 +388,13 @@ GameRenderer::HostTexture* GameRenderer::UploadTexture(nvrhi::ICommandList* cl,
     }
   }
   host->material_hash = 0;
+  if (host->replacement) { ReleaseHostTexture(host->replacement); host->replacement = nullptr; }
+  if (pack_upload_.original == host) pack_upload_ = {};
+  host->pack_hash = kknr::TextureBaseHash(data);
+  host->pack_unavailable = false;
+  if (host->pack_hash) pack_originals_.insert(host);
+  else pack_originals_.erase(host);
+  if (texture_pack_stream_ && host->pack_hash) texture_pack_stream_->Request(host->pack_hash, host->plan);
   // Only a new resource can be moved ahead of this frame's earlier draws. The
   // upload list finishes in ShaderResource; explicitly start the draw list's
   // local tracking there (the new Vulkan image otherwise starts in Common).
@@ -533,6 +544,9 @@ uint32_t GameRenderer::BindTexture(nvrhi::ICommandList* cl, const uint32_t words
   if (!host->alias_source) RememberResource(ResourcePreloadRecord::Tex(fetch), *r.entry);
   bound_scale_x_ = host->scale_x;
   bound_scale_y_ = host->scale_y;
+  if (options_.texture_pack && !pack_pressure_ && !r.entry->gpu_written && !host->alias_source &&
+      host->replacement && host->replacement->pack_ready)
+    host = host->replacement;
   return TextureView(host, fetch, dimension, base_map);
 }
 
@@ -1020,6 +1034,7 @@ void GameRenderer::PrepareResourceRequests(nvrhi::ICommandList* cl,
         job.upload_bytes = scratch.texture.bytes.size();
         tasks[i].bytes = job.upload_bytes;
         job.host_texture.reset(CreateHostTexture(scratch.texture.plan, false, 1.0f, 1.0f, profile));
+        if (job.host_texture) job.host_texture->pack_hash = kknr::TextureBaseHash(scratch.texture);
         return bool(job.host_texture);
       }
       job.host_buffer = std::make_unique<HostBuffer>();
@@ -1094,6 +1109,10 @@ void GameRenderer::PrepareResourceRequests(nvrhi::ICommandList* cl,
     if (!tasks[i].ready || stale[i]) { ++stats_.prepared_discarded; continue; }
     if (job.texture) {
       job.host_texture->preloaded = preload;
+      if (job.host_texture->pack_hash) {
+        pack_originals_.insert(job.host_texture.get());
+        if (texture_pack_stream_) texture_pack_stream_->Request(job.host_texture->pack_hash, job.host_texture->plan);
+      }
       cl->beginTrackingTextureState(job.host_texture->texture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
       job.texture->host = job.host_texture.release();
       textures_.OnUploaded(*job.texture, job.hash);

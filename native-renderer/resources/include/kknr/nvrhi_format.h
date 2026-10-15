@@ -49,6 +49,7 @@ inline nvrhi::Format ToNvrhi(HostFormat f) {
     case HostFormat::BC4_SNORM: return N::BC4_SNORM;
     case HostFormat::BC5_UNORM: return N::BC5_UNORM;
     case HostFormat::BC5_SNORM: return N::BC5_SNORM;
+    case HostFormat::BC7_UNORM: return N::BC7_UNORM;
     default: return N::UNKNOWN;
   }
 }

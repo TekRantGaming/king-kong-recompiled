@@ -15,6 +15,7 @@
 
 #include "image_io.h"
 #include "kknr/texture_convert.h"
+#include "kknr/texture_pack.h"
 #include "kktx.h"
 
 namespace fs = std::filesystem;
@@ -54,9 +55,11 @@ struct Options {
   fs::path out = ".";
   std::string csv;
   bool images = true;
+  fs::path pack;
+  bool pack_png = false;
 };
 
-bool Process(const fs::path& path, const Options& o, FILE* csv) {
+bool Process(const fs::path& path, const Options& o, FILE* csv, TexturePackManifest& manifest) {
   kknr_tools::Kktx dump;
   std::string load_why;
   if (!kknr_tools::LoadKktx(path, dump, load_why)) {
@@ -82,6 +85,14 @@ bool Process(const fs::path& path, const Options& o, FILE* csv) {
   const TextureRanges ranges = GetTextureRanges(fetch);
   const FormatInfo& info = GetFormatInfo(fetch.Format());
   const std::string stem = path.stem().string();
+  const uint64_t base_hash = ok ? TextureBaseHash(data) : 0;
+  const auto alias = std::find_if(manifest.entries.begin(), manifest.entries.end(), [&](const auto& e) {
+    return e.hash == base_hash && e.Matches(data.plan);
+  });
+  // Every CSV row must point at an image that the template actually writes,
+  // including BF records with identical converted content.
+  const std::string pack_key = base_hash ? TexturePackKey(base_hash,
+      alias == manifest.entries.end() ? stem : alias->name) : "";
   std::string signs;
   for (int i = 0; i < 4; ++i) signs += "uSbg"[int(fetch.Sign(i))];
   std::string short_regions =
@@ -96,7 +107,7 @@ bool Process(const fs::path& path, const Options& o, FILE* csv) {
               ConversionName(data.plan.conversion), HostSwizzleText(data.plan.view_swizzle).c_str(),
               FlagsText(data.plan.shader_flags).c_str(), ok ? "" : (" FAILED: " + why).c_str(), short_regions.c_str());
   if (csv)
-    std::fprintf(csv, "%s,%08X,%08X,%s,%s,%s,%s,%u,%u,%u,%u,%u,%d,%s,%s,%s,%s,%s,%s,%d,%d,%016llX,%s\n", stem.c_str(),
+    std::fprintf(csv, "%s,%08X,%08X,%s,%s,%s,%s,%u,%u,%u,%u,%u,%d,%s,%s,%s,%s,%s,%s,%d,%d,%016llX,%s,%016llX,%s\n", stem.c_str(),
                  original_base, original_mip, info.name, EndianName(fetch.EndianMode()),
                  fetch.Tiled() ? "tiled" : "linear", DimensionName(fetch.Dim()), data.plan.width, data.plan.height,
                  data.plan.dimension == Dimension::k3D ? data.plan.depth : data.plan.layers, data.plan.min_level,
@@ -105,7 +116,21 @@ bool Process(const fs::path& path, const Options& o, FILE* csv) {
                  HostSwizzleText(data.plan.view_swizzle).c_str(), FlagsText(data.plan.shader_flags).c_str(),
                  int(data.plan.decompressed), int(ok),
                  (unsigned long long)kknr_tools::Fnv1a64(data.bytes.data(), data.bytes.size()),
-                 ok ? "" : why.c_str());
+                 ok ? "" : why.c_str(), (unsigned long long)base_hash, pack_key.c_str());
+  if (ok && base_hash && !o.pack.empty() && stem.size()==20 && stem.substr(0,3)=="bf_") {
+    // Identical BF records cannot be distinguished at runtime; use the first
+    // sorted alias and list the content key on every CSV row.
+    if (alias == manifest.entries.end()) {
+      TexturePackEntry e{base_hash,stem,pack_key+(o.pack_png?".png":".dds"),data.plan.format,data.plan.width,data.plan.height};
+      if (o.pack_png) {
+        auto raw=data; raw.plan.view_swizzle=kSwizzleXYZW;
+        const auto* sub=raw.Find(0,0);
+        if (!sub || !kknr_tools::WritePng((o.pack/e.file).string(),sub->width,sub->height,
+            kknr_tools::HostToRgba8(raw,*sub,0))) return false;
+      } else if (!kknr_tools::WriteDds((o.pack/e.file).string(),data)) return false;
+      manifest.entries.push_back(std::move(e));
+    }
+  }
   if (!ok || !o.images) return ok;
 
   kknr_tools::WriteDds((o.out / (stem + ".dds")).string(), data);
@@ -140,6 +165,10 @@ int main(int argc, char** argv) {
       o.csv = argv[++i];
     else if (a == "--no-images")
       o.images = false;
+    else if (a == "--pack-template" && i + 1 < argc)
+      o.pack = fs::u8path(argv[++i]);
+    else if (a == "--pack-png")
+      o.pack_png = true;
     else if (a.rfind("--", 0) == 0) {
       std::printf("unknown option %s\n", a.c_str());
       return 2;
@@ -147,15 +176,17 @@ int main(int argc, char** argv) {
       inputs.push_back(a);
   }
   if (inputs.empty()) {
-    std::printf("usage: kknr_texdump [--out DIR] [--csv FILE] [--no-images] FILE_OR_DIR...\n");
+    std::printf("usage: kknr_texdump [--out DIR] [--csv FILE] [--no-images] [--pack-template DIR] [--pack-png] FILE_OR_DIR...\n");
     return 2;
   }
   std::error_code ec;
   fs::create_directories(o.out, ec);
+  if (!o.pack.empty()) { fs::create_directories(o.pack,ec); if(ec) return 1; }
+  TexturePackManifest manifest;
   FILE* csv = o.csv.empty() ? nullptr : std::fopen(o.csv.c_str(), "w");
   if (csv)
     std::fprintf(csv, "name,base,mip,format,endian,tiling,dim,width,height,depth_or_layers,min_level,levels,packed,"
-                      "signs,swizzle,host_format,conversion,view,flags,decompressed,ok,host_hash,error\n");
+                      "signs,swizzle,host_format,conversion,view,flags,decompressed,ok,host_hash,error,base_xxh3,pack_key\n");
   int total = 0, failed = 0;
   for (const fs::path& in : inputs) {
     std::vector<fs::path> files;
@@ -168,10 +199,11 @@ int main(int argc, char** argv) {
     }
     for (const fs::path& f : files) {
       ++total;
-      failed += !Process(f, o, csv);
+      failed += !Process(f, o, csv, manifest);
     }
   }
   if (csv) std::fclose(csv);
+  if (!o.pack.empty() && !manifest.Write(o.pack)) ++failed;
   std::printf("%d textures, %d failed\n", total, failed);
   return failed ? 1 : 0;
 }

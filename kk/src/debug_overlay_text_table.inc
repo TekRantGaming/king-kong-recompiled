@@ -1,4 +1,5 @@
 // F8 panel entries, included in the launcher's five-language table.
+    {"Compare your texture pack with the original textures.", "Vergleiche dein Texturpaket mit den Originaltexturen.", "Compara tu paquete de texturas con las texturas originales.", "Comparez votre pack de textures aux textures d'origine.", "Confronta il tuo pacchetto texture con le texture originali."},
     {"%.0f FPS  %.1f ms  (longest %.0f ms)", "%.0f FPS  %.1f ms  (längstes Bild %.0f ms)", "%.0f FPS  %.1f ms  (máximo %.0f ms)", "%.0f FPS  %.1f ms  (maximum %.0f ms)", "%.0f FPS  %.1f ms  (massimo %.0f ms)"},
     {"%.1f FPS   %.2f ms   longest %.0f ms", "%.1f FPS   %.2f ms   längstes Bild %.0f ms", "%.1f FPS   %.2f ms   máximo %.0f ms", "%.1f FPS   %.2f ms   maximum %.0f ms", "%.1f FPS   %.2f ms   massimo %.0f ms"},
     {"%s: draws %ux%u for %ux%u", "%s: rendert %ux%u für %ux%u", "%s: dibuja %ux%u para %ux%u", "%s : rendu en %ux%u pour %ux%u", "%s: disegna %ux%u per %ux%u"},

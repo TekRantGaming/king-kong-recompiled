@@ -2,6 +2,11 @@
 // passes it (the key; {0}, {1}... are filled in), then German, Spanish,
 // French and Italian.
 constexpr Entry kEntries[] = {
+    {"Texture pack", "Texturpaket", "Paquete de texturas", "Pack de textures", "Pacchetto texture"},
+    {"Texture pack folder", "Texturpaket-Ordner", "Carpeta del paquete de texturas", "Dossier du pack de textures", "Cartella del pacchetto texture"},
+    {"Choose folder", "Ordner wählen", "Elegir carpeta", "Choisir un dossier", "Scegli cartella"},
+    {"Use replacement textures made from your own extracted files.", "Verwendet Ersatztexturen aus deinen eigenen extrahierten Dateien.", "Usa texturas de reemplazo creadas con tus propios archivos extraídos.", "Utilise des textures de remplacement créées à partir de vos propres fichiers extraits.", "Usa texture sostitutive create dai tuoi file estratti."},
+    {"Choose the folder containing your texture pack.", "Wähle den Ordner mit deinem Texturpaket.", "Elige la carpeta que contiene tu paquete de texturas.", "Choisissez le dossier contenant votre pack de textures.", "Scegli la cartella che contiene il tuo pacchetto texture."},
     {"Run benchmark", "Benchmark starten", "Iniciar prueba de rendimiento", "Lancer le test de performances", "Avvia benchmark"},
     {"Runs a 75-second camera replay after warmup, using your graphics settings and private saves. Results are saved locally.", "Spielt nach dem Aufwärmen eine 75-sekündige Kamerafahrt mit deinen Grafikeinstellungen und separaten Spielständen ab. Ergebnisse werden lokal gespeichert.", "Reproduce un recorrido de cámara de 75 segundos tras el calentamiento, con tus ajustes gráficos y partidas separadas. Los resultados se guardan localmente.", "Lance un parcours de caméra de 75 secondes après préchauffage, avec vos réglages graphiques et des sauvegardes séparées. Les résultats sont enregistrés localement.", "Riproduce un percorso della telecamera di 75 secondi dopo il riscaldamento, con le tue impostazioni grafiche e salvataggi separati. I risultati vengono salvati localmente."},
     {"Benchmark", "Benchmark", "Prueba de rendimiento", "Test de performances", "Benchmark"},

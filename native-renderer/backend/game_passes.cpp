@@ -503,6 +503,8 @@ void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
 
 bool GameRenderer::Present(nvrhi::ICommandList* cl, uint32_t device, nvrhi::ITexture* target) {
   PollResourcePreload(cl);
+  UpdateEffects();
+  ServiceTexturePacks(cl);
   EnsureFallbackResources(cl);
   dev::DeviceView d(device ? memory_.Virtual(device) : nullptr);
   if (!d.valid()) return false;

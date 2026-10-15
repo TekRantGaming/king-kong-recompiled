@@ -108,6 +108,8 @@ void GameRenderer::PreloadResources(nvrhi::ICommandList* cl, bool loading, uint3
          static_cast<unsigned long long>(stats_.preload_bytes));
   }
   resource_loading_ = loading;
+  UpdateEffects();
+  ServiceTexturePacks(cl);
   if (resource_learning_ && now - resource_learn_start_ >= std::chrono::seconds(10)) {
     resource_learning_ = false;
     SaveResourcePreload();
