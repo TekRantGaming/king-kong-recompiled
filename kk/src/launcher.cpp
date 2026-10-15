@@ -362,12 +362,7 @@ bool PresetUpscalerMatches(const GraphicsPreset& p) {
 }
 
 int MatchGraphicsPreset() {
-  for (int i = 0; i < kGraphicsPresetCount; ++i) {
-    const GraphicsPreset& p = kGraphicsPresets[i];
-    if (PresetUpscalerMatches(p) && MatchesGraphicsPresetSettings(p, Get))
-      return i;
-  }
-  return -1;
+  return FindGraphicsPreset(Get, PresetUpscalerMatches);
 }
 
 void ApplyGraphicsPreset(int index) {
@@ -4386,7 +4381,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                 "d3d12_allow_variable_refresh_rate_and_tearing", "present_effect", "kk_render_quality",
                 "resolution_scale", "draw_resolution_scale_x", "draw_resolution_scale_y", "present_letterbox"};
       case kGraphics:
-        return {"kk_original_look", "kk_modern_settings", "swap_post_effect", "anisotropic_override",
+        return {"kk_original_look", "kk_modern_settings", "kk_graphics_preset", "swap_post_effect", "anisotropic_override",
                 "kk_motion_blur", "kk_big_blur", "kk_fog", "ao_mode", "ao_strength", "native_ao_method",
                 "native_ao_apply", "native_ao_quality", "native_ao_samples", "native_backend", "kk_renderer", "native_gi", "native_shadow_quality", "native_water_reflections", "native_volumetrics"};
       case kGameplay:

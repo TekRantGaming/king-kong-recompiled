@@ -118,6 +118,8 @@ REXCVAR_DEFINE_STRING(kk_upscalers_offered, "", "KK/Graphics",
                       "'dlss,fsr3,xess'); empty until it has asked (the default upscaler follows it)");
 REXCVAR_DEFINE_STRING(kk_modern_settings, "", "KK/Graphics",
                       "Internal: the Modern settings to put back when leaving the Original look");
+REXCVAR_DEFINE_STRING(kk_graphics_preset, "", "KK/Graphics",
+                      "Internal: the chosen preset label when presets have identical values");
 REXCVAR_DEFINE_INT32(kk_fov, 69, "KK/Gameplay",
                      "Field of view in degrees for Jack's camera (69 = original); other cameras widen to match");
 REXCVAR_DEFINE_BOOL(kk_skip_intros, true, "KK/Gameplay",

@@ -16,7 +16,7 @@ struct GraphicsPreset {
 inline constexpr GraphicsPreset kGraphicsPresets[] = {
     {"Low", "performance", "performance", "fxaa", "2", false, "low"},
     {"Medium", "quality", "quality", "fxaa", "3", false, "medium"},
-    {"High", "quality", "native", "fxaa", "4", true, "high"},
+    {"High", "quality", "native", "fxaa", "5", true, "high"},
     {"Ultra", "quality", "native", "fxaa", "5", true, "high"},
     {"Steam Deck", "quality", "native", "fxaa", "2", false, "low"},
 };
@@ -32,6 +32,20 @@ bool MatchesGraphicsPresetSettings(const GraphicsPreset& p, Get get, bool includ
          (!ao || get("ao_strength") == "3") && (!include_gi || get("native_gi") == p.gi);
 }
 
+// High and Ultra currently share their values. Keep an explicit selection, and recognise
+// an unmarked old 16x configuration as Ultra. A preference never hides custom settings.
+template <typename Get, typename ExtraMatch>
+int FindGraphicsPreset(Get get, ExtraMatch extra_match) {
+  const auto preferred = get("kk_graphics_preset");
+  for (int i = 0; i < kGraphicsPresetCount; ++i) {
+    const auto& p = kGraphicsPresets[i];
+    if (std::string_view(preferred) == p.label && extra_match(p) && MatchesGraphicsPresetSettings(p, get)) return i;
+  }
+  for (int i = kGraphicsPresetCount - 1; i >= 0; --i)
+    if (extra_match(kGraphicsPresets[i]) && MatchesGraphicsPresetSettings(kGraphicsPresets[i], get)) return i;
+  return -1;
+}
+
 template <typename Set>
 void ApplyGraphicsPresetSettings(const GraphicsPreset& p, Set set) {
   set("kk_render_quality", p.quality);
@@ -40,5 +54,6 @@ void ApplyGraphicsPresetSettings(const GraphicsPreset& p, Set set) {
   set("ao_mode", p.ao ? "1" : "0");
   if (p.ao) set("ao_strength", "3");
   set("native_gi", p.gi);
+  set("kk_graphics_preset", p.label);
 }
 }  // namespace kk
