@@ -9,6 +9,9 @@
 //   F7 (held)   the saved settings while held, the trial ones again when let go: an A/B comparison
 //   F6          a capture of the game's picture (PNG, without the panel) and a text file of the settings, in
 //               <user data>/screenshots
+// Controller: both stick clicks toggle the panel; D-pad/left stick navigate,
+// left/right change, A activates, B closes, LB compares while held, RB captures.
+// All controller input is consumed while open, then until neutral on closing.
 // The SDK binds F7 to its achievements list: in play the panel takes F7; elsewhere the SDK still has it.
 //
 // Every setting is a cvar the launcher also writes (the native renderer reads its live ones once a frame,
@@ -16,6 +19,7 @@
 // "needs restart" mark and cannot be changed here.
 
 #include "debug_overlay.h"
+#include "debug_overlay_logic.h"
 
 #include <algorithm>
 #include <atomic>
@@ -59,6 +63,8 @@
 #include "diagnostics.h"
 #include "frame_stats.h"
 #include "launcher_ui.h"
+#include "launcher_text.h"
+#include "ui_paint.h"
 #include "play_internal.h"
 #include "settings.h"
 #if defined(KK_DEV_TOOLS)
@@ -75,6 +81,20 @@ REXCVAR_DEFINE_BOOL(kk_graphics_panel_compact, false, "KK/Graphics panel",
 
 namespace kk {
 namespace {
+using text::T;
+using text::F;
+
+std::mutex g_pad_mutex;
+panel::PadCapture g_pad[4];
+std::chrono::steady_clock::time_point g_pad_at{};
+#if defined(KK_DEV_TOOLS)
+// The controller harness supplies physical samples at the real game pad read,
+// so its assertions cover the wrapper's input suppression as well as the UI.
+bool g_controller_test_override = false;
+panel::PadState g_controller_test_pad;
+int g_controller_test_samples = 0;
+bool g_controller_test_consumed = false;
+#endif
 
 // ------------------------------------------------------------------ settings ---
 
@@ -174,29 +194,24 @@ std::string Get(const char* name) { return rex::cvar::GetFlagByName(name); }
 bool Exists(const char* name) { return rex::cvar::GetFlagInfo(name) != nullptr; }
 bool NativeRenderer() { return Get("gpu_plugin") == "native"; }
 
-struct UpscalerChoice {
-  const char* label;
-  const char* value;
-};
-constexpr UpscalerChoice kUpscalers[] = {
-    {"Off", "off"}, {"NVIDIA DLSS", "dlss"}, {"AMD FSR 4", "fsr4"}, {"AMD FSR 3.1", "fsr3"}, {"Intel XeSS", "xess"}};
+using panel::UpscalerChoice;
+using panel::kUpscalers;
 
 NrEffectStats Stats() { return nr::kk::EffectTimes(); }
 
 // The temporal upscalers this PC runs: the launcher's answer (it asked the SDKs), else by the GPU's vendor.
 std::vector<UpscalerChoice> OfferedUpscalers() {
-  std::vector<UpscalerChoice> out = {kUpscalers[0]};
-#if !defined(__linux__)
+  std::vector<UpscalerChoice> out;
   const NrEffectStats s = Stats();
-  const bool d3d12 = s.size && s.api == 2;
   const nr::kk::UpscalerChoices c = nr::kk::PeekUpscalers();
-  const bool known = c.state == 2;
-  const uint32_t vendor = s.size ? s.vendor : 0;
-  if (known ? c.dlss : vendor == 0x10DE) out.push_back(kUpscalers[1]);
-  if (d3d12 && (known ? c.fsr4 : false)) out.push_back(kUpscalers[2]);
-  if (known ? c.fsr3 : true) out.push_back(kUpscalers[3]);
-  if (known ? c.xess : true) out.push_back(kUpscalers[4]);
+#if !defined(__linux__)
+  constexpr bool windows = true;
+#else
+  constexpr bool windows = false;
 #endif
+  for (int i : panel::OfferedUpscalers(s.size ? s.api : 0, s.size ? s.vendor : 0,
+                                     {c.state == 2, c.dlss, c.fsr4, c.fsr3, c.xess}, windows))
+    out.push_back(kUpscalers[i]);
   return out;
 }
 
@@ -218,18 +233,27 @@ std::string ValueText(const Setting& s) {
   const std::string v = Get(s.cvar);
   if (s.kind == Kind::kUpscaler) {
     const char* n = UpscalerName(v);
-    return n ? n : v;
+    return n ? T(n) : v;
   }
-  if (s.kind == Kind::kSharpness) return std::atof(v.c_str()) < 0 ? "Off" : Number(std::atof(v.c_str()));
+  if (s.kind == Kind::kSharpness) return std::atof(v.c_str()) < 0 ? T("Off") : Number(std::atof(v.c_str()));
   if (s.kind == Kind::kSlider) return Number(std::atof(v.c_str()), s.format);
   for (const Option& o : s.options)
-    if (v == o.value) return o.label;
+    if (v == o.value) return T(o.label);
   if (s.kind == Kind::kRestart) {
-    if (std::string_view(s.cvar) == "kk_original_look") return v == "true" ? "Original Xbox 360" : "Remastered";
+    if (std::string_view(s.cvar) == "kk_original_look") return T(v == "true" ? "Original Xbox 360" : "Remastered");
     if (std::string_view(s.cvar) == "present_effect") {
-      if (v == "bilinear") return "Off";
+      if (v == "bilinear") return T("Off");
       if (v == "fsr") return "AMD FSR 1";
       if (v == "nis") return "NVIDIA NIS";
+    }
+    if (std::string_view(s.cvar) == "native_backend") {
+      if (v == "auto") return T("Auto");
+      if (v == "vulkan") return "Vulkan";
+      if (v == "d3d12") return "DirectX 12";
+    }
+    if (std::string_view(s.cvar) == "kk_render_quality") {
+      for (const auto& p : RenderPresets()) if (v == p.id) return T(p.label);
+      if (v == "custom") return T("Custom");
     }
   }
   return v;
@@ -338,84 +362,83 @@ bool Visible(const Setting& s) {
 // What the renderer applies this frame, and why a setting that is on does not show (the panel's check that
 // a change reached the picture).
 std::string AppliedText(const NrEffectStats& s, std::vector<std::string>* notes) {
-  static const char* const kGi[] = {"off", "low", "medium", "high"};
+  static const char* const kGi[] = {"Off", "Low", "Medium", "High"};
   std::string out;
   auto add = [&](const std::string& t) { out += (out.empty() ? "" : ", ") + t; };
-  if (s.applied & 64) add("upscaler");
+  if (s.applied & 64) add(T("Upscaler"));
   if (s.applied & 1) add("AO");
-  if (s.applied & 2) add(std::string("GI ") + kGi[std::min<uint32_t>(s.gi_level, 3)]);
+  if (s.applied & 2) add(std::string("GI ") + T(kGi[std::min<uint32_t>(s.gi_level, 3)]));
   if (s.applied & 4)
-    add("soft shadows (" + std::to_string(s.shadow_draws) + " draws, maps x" + Number(s.shadow_scale, "%.3g") + ")");
-  if (s.applied & 8) add("water reflections (" + std::to_string(s.water_draws) + " water draws)");
-  if (s.applied & 16) add("light shafts");
+    add(F("Soft shadows ({0} draws, maps x{1})", {std::to_string(s.shadow_draws), Number(s.shadow_scale, "%.3g")}));
+  if (s.applied & 8) add(F("Water reflections ({0} water draws)", {std::to_string(s.water_draws)}));
+  if (s.applied & 16) add(T("Light shafts"));
   if (s.applied & 32) add("FXAA");
-  if (s.anisotropy >= 2) add(std::to_string(1 << (s.anisotropy - 1)) + "x filtering");
+  if (s.anisotropy >= 2) add(F("{0}x filtering", {std::to_string(1 << (s.anisotropy - 1))}));
   if (notes) {
     if (Get("native_shadow_quality") != "original" && !(s.applied & 4))
-      notes->push_back(s.shadow_draws_waiting ? "Shadows: their shader is being prepared."
-                                              : "Shadows: nothing in view draws the sun's shadows here.");
+      notes->push_back(T(s.shadow_draws_waiting ? "Shadows: their shader is being prepared."
+                                              : "Shadows: nothing in view draws the sun's shadows here."));
     if (Get("native_water_reflections") == "ssr" && !s.water_draws)
-      notes->push_back(s.water_draws_waiting ? "Water reflections: their shader is being prepared."
-                                             : "Water reflections: no water in view.");
+      notes->push_back(T(s.water_draws_waiting ? "Water reflections: their shader is being prepared."
+                                             : "Water reflections: no water in view."));
     if (Get("swap_post_effect") != "none" && (s.applied & 64))
-      notes->push_back("FXAA: off while a temporal upscaler runs (it anti-aliases itself).");
-    if (Get("native_volumetrics") != "off" && !(s.applied & 16)) notes->push_back("Light shafts: being prepared.");
-    if (Get("native_gi") != "off" && !(s.applied & 2)) notes->push_back("GI: being prepared.");
+      notes->push_back(T("FXAA: off while a temporal upscaler runs (it anti-aliases itself)."));
+    if (Get("native_volumetrics") != "off" && !(s.applied & 16)) notes->push_back(T("Light shafts: being prepared."));
+    if (Get("native_gi") != "off" && !(s.applied & 2)) notes->push_back(T("GI: being prepared."));
   }
-  return out.empty() ? "nothing beyond the game's own picture" : out;
+  return out.empty() ? T("Nothing beyond the game's own picture") : out;
 }
 
 std::string Readout() {
   std::string out;
   const auto frame = GetGuestFrameStats();
-  out += "Frame rate: " + Number(frame.fps, "%.1f") + " FPS, " + Number(frame.frame_time_ms, "%.2f") +
-         " ms a frame, longest " + Number(GuestWorstFrameMs(), "%.0f") + " ms in the last second\n";
+  out += F("Frame rate: {0} FPS, {1} ms a frame, longest {2} ms in the last second",
+           {Number(frame.fps, "%.1f"), Number(frame.frame_time_ms), Number(GuestWorstFrameMs(), "%.0f")}) + "\n";
   const NrEffectStats s = Stats();
   if (NativeRenderer() && s.size && s.frame) {
-    out += std::string("Renderer: Native, ") + (s.api == 1 ? "Vulkan" : "DirectX 12") + "\n";
-    out += std::string("Upscaler: ") + s.upscaler;
+    out += F("Renderer: Native, {0}", {s.api == 1 ? "Vulkan" : "DirectX 12"}) + "\n";
+    out += std::string(T("Upscaler")) + ": " + T(UpscalerName(s.upscaler) ? UpscalerName(s.upscaler) : s.upscaler);
     if (std::string_view(s.upscaler) != "off")
-      out += ", draws " + std::to_string(s.input_width) + "x" + std::to_string(s.input_height) + " for " +
-             std::to_string(s.output_width) + "x" + std::to_string(s.output_height) + ", mip bias " +
-             Number(s.mip_bias);
+      out += F(", draws {0}x{1} for {2}x{3}, mip bias {4}", {std::to_string(s.input_width), std::to_string(s.input_height),
+                 std::to_string(s.output_width), std::to_string(s.output_height), Number(s.mip_bias)});
     else
-      out += ", draws " + std::to_string(s.output_width) + "x" + std::to_string(s.output_height);
+      out += F(", draws {0}x{1}", {std::to_string(s.output_width), std::to_string(s.output_height)});
     out += "\n";
     std::string gpu;
     auto add = [&](const char* name, double ms) {
-      if (ms >= 0) gpu += std::string(gpu.empty() ? "" : ", ") + name + " " + Number(ms) + " ms";
+      if (ms >= 0) gpu += std::string(gpu.empty() ? "" : ", ") + T(name) + " " + Number(ms) + " ms";
     };
-    add("ambient occlusion", s.ao_ms);
+    add("Ambient occlusion", s.ao_ms);
     add("GI", s.gi_ms);
-    add("shadows", s.shadows_ms);
-    add("water", s.water_ms);
-    add("light shafts", s.volumetric_ms);
-    add("upscaler", s.upscaler_ms);
-    add("tessellation", s.tessellation_ms);
-    out += "Tessellated Ann draws: "+std::to_string(s.tessellation_draws)+"\n";
-    out += "GPU time a frame: " + (gpu.empty() ? std::string("no effect timed") : gpu) + "\n";
+    add("Shadows", s.shadows_ms);
+    add("Water", s.water_ms);
+    add("Light shafts", s.volumetric_ms);
+    add("Upscaler", s.upscaler_ms);
+    add("Tessellation", s.tessellation_ms);
+    out += F("Tessellated Ann draws: {0}", {std::to_string(s.tessellation_draws)}) + "\n";
+    out += F("GPU time a frame: {0}", {gpu.empty() ? T("No effect timed") : gpu}) + "\n";
     std::vector<std::string> notes;
-    out += "Applied: " + AppliedText(s, &notes) + "\n";
+    out += F("Applied: {0}", {AppliedText(s, &notes)}) + "\n";
     for (const auto& n : notes) out += "  " + n + "\n";
   } else {
-    out += "Renderer: " + std::string("Native") + "\n";
+    out += std::string(T("Renderer: Native")) + "\n";
   }
   return out;
 }
 
 std::string SettingsText() {
-  std::string out = "King Kong PC port graphics settings (F8 panel)\nVersion: " KK_VERSION "\n";
+  std::string out = std::string(T("King Kong PC port graphics settings (F8 panel)")) + "\n" + T("Version") + ": " KK_VERSION "\n";
   out += DiagnosticsHardware();
   out += Readout();
   const auto changed = Changed();
-  out += "Settings (* changed in the panel, not saved):\n";
+  out += std::string(T("Settings (* changed in the panel, not saved):")) + "\n";
   for (const Setting& s : Settings()) {
     if (!Exists(s.cvar) || (s.native && !NativeRenderer())) continue;
     const bool star = std::find(changed.begin(), changed.end(), s.cvar) != changed.end();
     std::string value = ValueText(s);
-    if (s.kind == Kind::kMipBias && value == "auto") value = "Auto";
-    out += std::string("  ") + s.section + " / " + s.label + ": " + value + (star ? " *" : "") +
-           (s.kind == Kind::kRestart ? " (needs restart)" : "") + "\n";
+    if (s.kind == Kind::kMipBias && value == "auto") value = T("Auto");
+    out += std::string("  ") + T(s.section) + " / " + T(s.label) + ": " + value + (star ? " *" : "") +
+           (s.kind == Kind::kRestart ? std::string(" (") + T("Needs restart") + ")" : "") + "\n";
   }
   return RedactDiagnostics(out);
 }
@@ -429,6 +452,7 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
     // Above the SDK's input (the ImGui drawer, the keyboard and mouse driver, the mouse look): the
     // panel's keys and, while it is open, the mouse.
     window_->AddInputListener(this, 1200);
+    pad_input_.set_keyboard_enabled(false);
   }
   ~GraphicsPanel() override { window_->RemoveInputListener(this); }
 
@@ -442,7 +466,7 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
         e.set_handled(true);
         break;
       case rex::ui::VirtualKey::kF7:
-        if (!e.prev_state()) StartAb();
+        if (!e.prev_state()) { key_compare_ = true; Comparison(); }
         e.set_handled(true);
         break;
       case rex::ui::VirtualKey::kF6:
@@ -455,7 +479,8 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
   }
   void OnKeyUp(rex::ui::KeyEvent& e) override {
     if (e.virtual_key() == rex::ui::VirtualKey::kF7 && (g_ab || InPlay())) {
-      EndAb();
+      key_compare_ = false;
+      Comparison();
       e.set_handled(true);
     } else if ((e.virtual_key() == rex::ui::VirtualKey::kF8 || e.virtual_key() == rex::ui::VirtualKey::kF6) && InPlay()) {
       e.set_handled(true);
@@ -490,9 +515,15 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
     UiPaintTick();
     TestTick();
 #endif
+    ControllerTick();
+#if defined(KK_DEV_TOOLS)
+    ControllerTestTick();
+#endif
     // A held F7 whose release went to another window (focus lost) ends the comparison.
     const bool focus = window_->HasFocus();
-    if (had_focus_ && !focus) EndAb();
+    if (had_focus_ && !focus) {
+      key_compare_ = false; pad_compare_ = false; pad_ready_ = false; EndAb();
+    }
     had_focus_ = focus;
     if (!InPlay()) {
       EndAb();
@@ -515,14 +546,129 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
     // Compact readout: F8 brings the full panel; the full panel: F8 closes it.
     if (g_open.load() && REXCVAR_GET(kk_graphics_panel_compact)) {
       rex::cvar::SetFlagByName("kk_graphics_panel_compact", "false");
+      pad_ready_ = false;
       return;
     }
     SetOpen(!g_open.load());
   }
   void SetOpen(bool open) {
     g_open.store(open);
+    if (open) { focus_row_ = 0; focus_cvar_.clear(); pad_ready_ = false; }
+    else { pad_compare_ = false; key_compare_ = false; EndAb(); }
     window_->RequestPresenterUIPaintFromUIThread();
     REXLOG_INFO("KK graphics panel: {}", open ? "open" : "closed");
+  }
+
+  void Comparison() {
+    if (key_compare_ || pad_compare_) StartAb();
+    else EndAb();
+  }
+
+  std::vector<const Setting*> ControllerRows() {
+    std::vector<const Setting*> rows;
+    for (const auto& st : Settings()) if (Visible(st)) rows.push_back(&st);
+    return rows;
+  }
+
+  void Adjust(const Setting& st, int direction) {
+    if (g_ab || st.kind == Kind::kRestart) return;
+    std::vector<Option> options = st.options;
+    if (st.kind == Kind::kUpscaler)
+      for (const auto& u : OfferedUpscalers()) options.push_back({u.label, u.value});
+    const std::string cur = Get(st.cvar);
+    if (!options.empty()) {
+      int index = -1;
+      for (int i = 0; i < int(options.size()); ++i) if (cur == options[i].value) index = i;
+      Change(st.cvar, options[panel::NextChoice(index, int(options.size()), direction)].value);
+      return;
+    }
+    if (st.kind == Kind::kMipBias && (cur == "auto" || cur.empty())) {
+      Change(st.cvar, Number(direction > 0 ? st.min : st.max));
+      return;
+    }
+    float value = float(std::atof(cur.c_str()));
+    if (st.kind == Kind::kMipBias && ((value <= st.min && direction < 0) || (value >= st.max && direction > 0))) {
+      Change(st.cvar, "auto");
+    } else if (st.kind == Kind::kSharpness && value <= 0 && direction < 0) {
+      Change(st.cvar, "-1");
+    } else {
+      const float step = st.kind == Kind::kSliderInt ? 1.0f : 0.05f;
+      value = value < st.min ? st.min : std::clamp(value + direction * step, st.min, st.max);
+      Change(st.cvar, Number(value, st.kind == Kind::kSliderInt ? "%.0f" : "%.2f"));
+    }
+  }
+
+  void FooterAction(int row) {
+    if (row == 0 && !g_ab) { Reset(); Status(T("Your saved settings are back.")); }
+    if (row == 1 && !g_ab)
+      Status(T(SaveAsMine() ? "Saved: these are now your settings, in the launcher too." : "Could not save the settings."));
+    if (row == 2) {
+      ImGui::SetClipboardText(SettingsText().c_str());
+      Status(T("Copied the settings, frame rate and GPU times (names and paths left out)."));
+    }
+    if (row == 3) Capture();
+    if (row == 4) { rex::cvar::SetFlagByName("kk_graphics_panel_compact", "true"); pad_compare_ = false; Comparison(); }
+  }
+
+  void ControllerTick() {
+    panel::PadState pad;
+    bool toggle = false;
+    {
+      std::lock_guard lock(g_pad_mutex);
+      toggle = g_pad[0].TakeToggle();
+      if (std::chrono::steady_clock::now() - g_pad_at < std::chrono::milliseconds(250)) pad = g_pad[0].latest;
+    }
+    if (toggle && InPlay()) { Toggle(); pad_navigation_ = true; scroll_to_focus_ = true; }
+    if (!Interactive() || !InPlay()) {
+      if (pad_compare_) { pad_compare_ = false; Comparison(); }
+      pad_input_.FeedPad(0, 0, 0, 0, 0);
+      pad_input_.Update();
+      return;
+    }
+    // An input already held as the panel opens must first be released.
+    if (!pad_ready_) {
+      pad_ready_ = pad.Neutral();
+      pad = {};
+    }
+    const bool compare = (pad.buttons & 0x0100) != 0;
+    if (compare != pad_compare_) { pad_compare_ = compare; Comparison(); }
+    pad_input_.FeedPad(pad.buttons, pad.lx, pad.ly, 0, 0);
+    pad_input_.Update();
+    using ui::Action;
+    if (pad_input_.Pressed(Action::kBack)) { SetOpen(false); return; }
+    if (pad_input_.Pressed(Action::kNextTab)) Capture();  // RB
+    const auto rows = ControllerRows();
+    if (!focus_cvar_.empty()) {
+      for (int i = 0; i < int(rows.size()); ++i) if (focus_cvar_ == rows[i]->cvar) focus_row_ = i;
+    }
+    focus_row_ = std::clamp(focus_row_, 0, int(rows.size()) + 5);
+    const int move = int(pad_input_.Pressed(Action::kDown)) - int(pad_input_.Pressed(Action::kUp));
+    if (move) {
+      focus_row_ = (focus_row_ + int(rows.size()) + 6 + move) % (int(rows.size()) + 6);
+      pad_navigation_ = true;
+      scroll_to_focus_ = true;
+    }
+    focus_cvar_ = focus_row_ < int(rows.size()) ? rows[focus_row_]->cvar : "";
+    int direction = int(pad_input_.Pressed(Action::kRight)) - int(pad_input_.Pressed(Action::kLeft));
+    if (direction || pad_input_.Pressed(Action::kAccept)) pad_navigation_ = true;
+    if (focus_row_ < int(rows.size())) {
+      const auto& st = *rows[focus_row_];
+      if (!direction && pad_input_.Pressed(Action::kAccept) && st.kind == Kind::kToggle) direction = 1;
+      if (direction) Adjust(st, direction);
+    } else {
+      const int footer = focus_row_ - int(rows.size());
+      if (footer == 5 && direction)
+        rex::cvar::SetFlagByName("kk_graphics_panel_opacity",
+                               Number(std::clamp(REXCVAR_GET(kk_graphics_panel_opacity) + direction * 0.05, 0.3, 1.0)));
+      if (pad_input_.Pressed(Action::kAccept)) FooterAction(footer);
+    }
+  }
+
+  void MarkFocus(bool focused) {
+    if (!pad_navigation_ || !focused) return;
+    const ImVec2 lo = ImGui::GetItemRectMin(), hi = ImGui::GetItemRectMax();
+    ImGui::GetWindowDrawList()->AddRect(ImVec2(lo.x - 2, lo.y - 2), ImVec2(hi.x + 2, hi.y + 2), ui::color::kFocus);
+    if (scroll_to_focus_) { ImGui::SetScrollHereY(); scroll_to_focus_ = false; }
   }
 
   void UpdateCursor(ImGuiIO& io) {
@@ -563,10 +709,10 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
     const auto png = dir / (std::string(name) + art::kDevCaptureExtension);
     art::CaptureFrame(png);
     std::string text = SettingsText();
-    if (g_ab) text += "Captured while F7 showed the saved settings.\n";
+    if (g_ab) text += std::string(T("Captured while showing your saved settings.")) + "\n";
     std::ofstream(dir / (std::string(name) + ".txt"), std::ios::binary | std::ios::trunc) << text;
     last_capture_ = png;
-    Status("Saved " + std::string(name) + art::kDevCaptureExtension + " and its settings in screenshots.");
+    Status(F("Saved {0} and its settings in screenshots.", {std::string(name) + art::kDevCaptureExtension}));
     REXLOG_INFO("KK graphics panel: capture {}", name);
   }
 
@@ -619,13 +765,13 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
                                    ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
     if (ImGui::Begin("##kk_graphics_compact", nullptr, flags)) {
       const auto frame = GetGuestFrameStats();
-      ImGui::Text("%.0f FPS  %.1f ms  (longest %.0f ms)", frame.fps, frame.frame_time_ms, GuestWorstFrameMs());
+      ImGui::Text(T("%.0f FPS  %.1f ms  (longest %.0f ms)"), frame.fps, frame.frame_time_ms, GuestWorstFrameMs());
       if (g_ab) {
-        ImGui::TextColored(ImColor(ui::color::kAccent), "Your saved settings (F7)");
+        ImGui::TextColored(ImColor(ui::color::kAccent), "%s", T("Your saved settings (F7 / LB)"));
       } else {
         const size_t n = Changed().size();
-        if (n) ImGui::TextColored(ImColor(ui::color::kWarn), "%zu change%s not saved", n, n == 1 ? "" : "s");
-        ImGui::TextDisabled("Hold F7: saved settings   F8: panel");
+        if (n) ImGui::TextColored(ImColor(ui::color::kWarn), "%s", F("Unsaved changes: {0}", {std::to_string(n)}).c_str());
+        ImGui::TextDisabled("%s", T("Hold F7: saved settings   F8 / L3+R3: panel"));
       }
     }
     ImGui::End();
@@ -640,10 +786,10 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
                              ImGuiCond_Appearing);
     PushStyle(float(std::clamp(REXCVAR_GET(kk_graphics_panel_opacity), 0.3, 1.0)));
     bool visible = true;
-    if (ImGui::Begin("Graphics (F8)###kk_graphics_panel", &visible,
+    if (ImGui::Begin((std::string(T("Graphics (F8)")) + "###kk_graphics_panel").c_str(), &visible,
                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse)) {
       DrawHeader();
-      const float footer = ImGui::GetFrameHeightWithSpacing() * 3.2f + ImGui::GetTextLineHeightWithSpacing() * 1.2f;
+      const float footer = ImGui::GetFrameHeightWithSpacing() * 5.2f + ImGui::GetTextLineHeightWithSpacing() * 2.2f;
       if (ImGui::BeginChild("##settings", ImVec2(0, -footer))) DrawSettings();
       ImGui::EndChild();
       DrawFooter();
@@ -655,18 +801,18 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
 
   void DrawHeader() {
     const auto frame = GetGuestFrameStats();
-    ImGui::Text("%.1f FPS   %.2f ms   longest %.0f ms", frame.fps, frame.frame_time_ms, GuestWorstFrameMs());
+    ImGui::Text(T("%.1f FPS   %.2f ms   longest %.0f ms"), frame.fps, frame.frame_time_ms, GuestWorstFrameMs());
     const NrEffectStats st = Stats();
     if (NativeRenderer() && st.size && st.frame) {
       if (std::string_view(st.upscaler) != "off") {
-        ImGui::TextWrapped("%s: draws %ux%u for %ux%u", st.upscaler, st.input_width, st.input_height, st.output_width,
+        ImGui::TextWrapped(T("%s: draws %ux%u for %ux%u"), st.upscaler, st.input_width, st.input_height, st.output_width,
                            st.output_height);
       } else {
-        ImGui::Text("No temporal upscaler: draws %ux%u", st.output_width, st.output_height);
+        ImGui::Text(T("No temporal upscaler: draws %ux%u"), st.output_width, st.output_height);
       }
       std::string gpu;
       auto add = [&](const char* name, double ms) {
-        if (ms >= 0) gpu += std::string(gpu.empty() ? "" : "   ") + name + " " + Number(ms) + " ms";
+        if (ms >= 0) gpu += std::string(gpu.empty() ? "" : "   ") + T(name) + " " + Number(ms) + " ms";
       };
       add("AO", st.ao_ms);
       add("GI", st.gi_ms);
@@ -676,36 +822,36 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
       add("Upscaler", st.upscaler_ms);
       add("Tessellation", st.tessellation_ms);
       if(Get("native_tessellation")=="true" && !st.tessellation_draws)
-        ImGui::TextDisabled("Tessellation: no eligible prepared Ann draw");
+        ImGui::TextDisabled("%s", T("Tessellation: no eligible prepared Ann draw"));
       if (!gpu.empty()) ImGui::TextColored(ImColor(ui::color::kTextDim), "GPU: %s", gpu.c_str());
       std::vector<std::string> notes;
       const std::string applied = AppliedText(st, &notes);
       ImGui::PushTextWrapPos(0.0f);
-      ImGui::TextColored(ImColor(ui::color::kTextDim), "Applied: %s", applied.c_str());
+      ImGui::TextColored(ImColor(ui::color::kTextDim), "%s", F("Applied: {0}", {applied}).c_str());
       ImGui::PopTextWrapPos();
       for (const auto& n : notes) ImGui::TextColored(ImColor(ui::color::kWarn), "%s", n.c_str());
       if (st.preparing) {
         std::string what;
-        if (st.preparing & 4) what += " upscaler";
+        if (st.preparing & 4) what += std::string(" ") + T("Upscaler");
         if (st.preparing & 1) what += " GI";
-        if (st.preparing & 2) what += " lighting";
-        if (st.preparing & 8) what += " shaders";
-        ImGui::TextColored(ImColor(ui::color::kWarn), "Preparing:%s (the game keeps drawing meanwhile)", what.c_str());
+        if (st.preparing & 2) what += std::string(" ") + T("Lighting");
+        if (st.preparing & 8) what += std::string(" ") + T("Shaders");
+        ImGui::TextColored(ImColor(ui::color::kWarn), "%s", F("Preparing:{0} (the game keeps drawing meanwhile)", {what}).c_str());
       }
 
     }
     if (g_ab) {
-      ImGui::TextColored(ImColor(ui::color::kAccent), "Showing your saved settings while F7 is held.");
+      ImGui::TextWrapped("%s", T("Showing your saved settings while F7 or LB is held."));
     } else {
       const size_t n = Changed().size();
       if (n) {
-        ImGui::TextColored(ImColor(ui::color::kWarn), "%zu change%s not saved (temporary until you save).", n,
-                           n == 1 ? "" : "s");
+        ImGui::TextWrapped("%s", F("Unsaved changes: {0} (temporary until you save).", {std::to_string(n)}).c_str());
       } else {
-        ImGui::TextColored(ImColor(ui::color::kTextDim), "Changes apply at once and stay until the game closes.");
+        ImGui::TextWrapped("%s", T("Changes apply at once and stay until the game closes."));
       }
-      ImGui::TextColored(ImColor(ui::color::kTextFaint), "Hold F7 to compare with your saved settings. F6 captures.");
+      ImGui::TextWrapped("%s", T("Hold F7 / LB to compare. F6 / RB captures."));
     }
+    ImGui::TextWrapped("%s", T("L3+R3: panel. D-pad / left stick: move. Left/right: change. A: select. B: close."));
     ImGui::Separator();
   }
 
@@ -719,7 +865,12 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
       if (!section || std::string_view(section) != st.section) {
         section = st.section;
         ImGui::Spacing();
-        section_open = ImGui::CollapsingHeader(st.section, std::string_view(st.section) == "Needs restart"
+        if (pad_navigation_ && focus_cvar_ == st.cvar) ImGui::SetNextItemOpen(true);
+        // A focused row can be below the section's first setting.
+        if (pad_navigation_)
+          for (const auto& row : Settings())
+            if (focus_cvar_ == row.cvar && std::string_view(row.section) == st.section) ImGui::SetNextItemOpen(true);
+        section_open = ImGui::CollapsingHeader((std::string(T(st.section)) + "###" + st.section).c_str(), std::string_view(st.section) == "Needs restart"
                                                                ? ImGuiTreeNodeFlags_None
                                                                : ImGuiTreeNodeFlags_DefaultOpen);
       }
@@ -735,21 +886,23 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
       return it != g_saved.end() && it->second != Get(st.cvar);
     }();
     ImGui::AlignTextToFramePadding();
-    if (changed) ImGui::TextColored(ImColor(ui::color::kAccent), "%s *", st.label);
-    else ImGui::TextUnformatted(st.label);
-    if (st.help[0] && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", st.help);
+    if (changed) ImGui::TextColored(ImColor(ui::color::kAccent), "%s *", T(st.label));
+    else ImGui::TextUnformatted(T(st.label));
+    MarkFocus(focus_cvar_ == st.cvar);
+    if (st.help[0] && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", T(st.help));
     ImGui::SameLine(column_);
     ImGui::SetNextItemWidth(-1);
   }
 
   void Combo(const Setting& st, const std::vector<Option>& options) {
     const std::string cur = Get(st.cvar);
-    std::string preview = cur;
+    std::string preview = cur == "auto" ? T("Auto") : cur;
+    if (const char* name = UpscalerName(cur); st.kind == Kind::kUpscaler && name) preview = T(name);
     for (const Option& o : options)
-      if (cur == o.value) preview = o.label;
+      if (cur == o.value) preview = T(o.label);
     if (ImGui::BeginCombo((std::string("##") + st.cvar).c_str(), preview.c_str())) {
       for (const Option& o : options) {
-        if (ImGui::Selectable(o.label, cur == o.value) && cur != o.value) Change(st.cvar, o.value);
+        if (ImGui::Selectable(T(o.label), cur == o.value) && cur != o.value) Change(st.cvar, o.value);
       }
       ImGui::EndCombo();
     }
@@ -784,10 +937,8 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
         std::vector<Option> options;
         for (const auto& u : OfferedUpscalers()) options.push_back({u.label, u.value});
         const std::string cur = Get(st.cvar);
-        bool listed = false;
-        for (const Option& o : options) listed = listed || cur == o.value;
-        if (!listed) options.push_back({cur == "auto" ? "Auto" : cur.c_str(), cur.c_str()});
-        // Each choice's label points into kUpscalers or `cur` (alive for this call).
+        if (cur == "auto") options.push_back({"Auto", "auto"});
+        // Unavailable saved choices remain a preview, never a selectable entry.
         Combo(st, options);
         break;
       }
@@ -806,7 +957,7 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
       case Kind::kMipBias: {
         const std::string cur = Get(st.cvar);
         bool automatic = cur == "auto" || cur.empty();
-        if (ImGui::Checkbox("Auto##auto", &automatic)) Change(st.cvar, automatic ? "auto" : "0");
+        if (ImGui::Checkbox((std::string(T("Auto")) + "##auto").c_str(), &automatic)) Change(st.cvar, automatic ? "auto" : "0");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(-1);
         ImGui::BeginDisabled(automatic);
@@ -819,34 +970,33 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
         break;
       }
       case Kind::kRestart:
-        ImGui::TextDisabled("%s  (needs restart: change it in the launcher)", ValueText(st).c_str());
+        ImGui::TextWrapped("%s", F("{0} (needs restart: change it in the launcher)", {ValueText(st)}).c_str());
         break;
     }
+    if (pad_navigation_ && focus_cvar_ == st.cvar && st.help[0]) ImGui::TextWrapped("%s", T(st.help));
     ImGui::PopID();
   }
 
   void DrawFooter() {
     ImGui::Separator();
     ImGui::BeginDisabled(g_ab);
-    if (ImGui::Button("Reset to my settings")) {
-      Reset();
-      Status("Your saved settings are back.");
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Save as my settings")) {
-      Status(SaveAsMine() ? "Saved: these are now your settings, in the launcher too." : "Could not save the settings.");
-    }
+    const int footer = focus_row_ - int(ControllerRows().size());
+    if (ImGui::Button(T("Reset to my settings"))) FooterAction(0);
+    MarkFocus(footer == 0);
+    if (ImGui::Button(T("Save as my settings"))) FooterAction(1);
+    MarkFocus(footer == 1);
     ImGui::EndDisabled();
-    if (ImGui::Button("Copy settings")) {
-      ImGui::SetClipboardText(SettingsText().c_str());
-      Status("Copied the settings, frame rate and GPU times (names and paths left out).");
-    }
+    if (ImGui::Button(T("Copy settings"))) FooterAction(2);
+    MarkFocus(footer == 2);
     ImGui::SameLine();
-    if (ImGui::Button("Capture (F6)")) Capture();
+    if (ImGui::Button(T("Capture (F6 / RB)"))) Capture();
+    MarkFocus(footer == 3);
     ImGui::SameLine();
-    if (ImGui::Button("Compact")) rex::cvar::SetFlagByName("kk_graphics_panel_compact", "true");
+    if (ImGui::Button(T("Compact"))) FooterAction(4);
+    MarkFocus(footer == 4);
     ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Opacity");
+    ImGui::TextUnformatted(T("Opacity"));
+    MarkFocus(footer == 5);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-1);
     float opacity = float(REXCVAR_GET(kk_graphics_panel_opacity));
@@ -858,6 +1008,158 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
   }
 
 #if defined(KK_DEV_TOOLS)
+  // KK_DEV_PANEL_CONTROLLER=1, with KK_DEV_AUTOSKIP=1 and a direct chapter
+  // start: a short controller-only pass through the actual pad wrapper. No OS
+  // input or focus is needed. The old full settings stress harness stays opt-in.
+  void ControllerTestTick() {
+    if (!std::getenv("KK_DEV_PANEL_CONTROLLER") || controller_test_stage_ >= 1000 || !InPlay() ||
+        DevSecondsSinceMenu() < 8) return;
+    const auto now = std::chrono::steady_clock::now();
+    if (now < controller_test_next_) return;
+    int samples;
+    bool consumed;
+    {
+      std::lock_guard lock(g_pad_mutex);
+      samples = g_controller_test_samples;
+      consumed = g_controller_test_consumed;
+    }
+    auto check = [&](bool ok, const char* message) {
+      ++(ok ? test_pass_ : test_fail_);
+      REXLOG_INFO("KK panel controller test: {} {}", ok ? "PASS" : "FAIL", message);
+    };
+    auto drive = [&](panel::PadState state) {
+      std::lock_guard lock(g_pad_mutex);
+      g_controller_test_override = true;
+      g_controller_test_pad = state;
+      g_controller_test_samples = 0;
+      controller_test_next_ = now + std::chrono::milliseconds(200);
+    };
+    if (controller_test_stage_ && !samples) {
+      // A missing/disconnected scripted pad is a failure, not a false pass.
+      if (++controller_test_waits_ < 30) return;
+      check(false, "no game pad reads reached the controller harness");
+      controller_test_stage_ = 24;
+    }
+    controller_test_waits_ = 0;
+    switch (controller_test_stage_++) {
+      case 0:
+        controller_test_upscaler_ = Get("native_upscaler");
+        controller_test_fxaa_ = Get("swap_post_effect");
+        controller_test_language_ = Get("user_language");
+        SetOpen(false);
+        rex::cvar::SetFlagByName("native_upscaler", "off");
+        rex::cvar::SetFlagByName("swap_post_effect", "none");
+        drive({});
+        break;
+      case 1: drive({0x00C0}); break;
+      case 2:
+        check(Interactive() && consumed, "both stick clicks open the panel and never reach the game");
+        drive({0x00C0});
+        break;
+      case 3:
+        check(Interactive(), "holding the opening chord does not close the panel again");
+        drive({});
+        break;
+      case 4: drive({0x0002}); break;
+      case 5:
+        check(consumed && focus_row_ > 0, "D-pad moves focus while the game's pad remains neutral");
+        drive({});
+        if (focus_cvar_ != "swap_post_effect" && ++controller_test_moves_ < 30) controller_test_stage_ = 4;
+        break;
+      case 6: drive({0x0008}); break;
+      case 7:
+        check(consumed && Get("swap_post_effect") == "fxaa", "right changes the focused setting without a game input");
+        drive({});
+        break;
+      case 8: drive({0x0100}); break;
+      case 9:
+        check(consumed && g_ab && Get("swap_post_effect") == "none", "LB held shows the saved setting");
+        Key(rex::ui::VirtualKey::kF7, true);
+        drive({});
+        break;
+      case 10:
+        check(g_ab, "releasing LB keeps comparison while F7 is held");
+        Key(rex::ui::VirtualKey::kF7, false);
+        check(!g_ab && Get("swap_post_effect") == "fxaa", "releasing comparison restores the trial");
+        drive({0x0200});
+        break;
+      case 11:
+        // Frame encoding happens on a worker. Give it up to five seconds,
+        // without holding a direction long enough to repeat it.
+        if (!last_capture_.empty() && !std::filesystem::exists(last_capture_) && ++controller_capture_waits_ < 25) {
+          controller_test_stage_ = 11;
+          controller_test_next_ = now + std::chrono::milliseconds(200);
+          return;
+        }
+        check(consumed && !last_capture_.empty() && std::filesystem::exists(last_capture_), "RB captures the game frame");
+        drive({});
+        break;
+      case 12: drive({0, 0, 0, 0, 32767}); break;
+      case 13:
+        check(consumed && focus_cvar_ != "swap_post_effect", "left stick up moves focus without moving the player");
+        drive({});
+        break;
+      case 14: drive({0, 0, 0, 0, -32768}); break;
+      case 15:
+        check(consumed && focus_cvar_ == "swap_post_effect", "left stick down returns to the setting");
+        drive({});
+        break;
+      case 16: {
+        const char* languages[] = {"1", "3", "5", "4", "6"};
+        if (controller_language_step_ < 5) {
+          rex::cvar::SetFlagByName("user_language", languages[controller_language_step_++]);
+          REXLOG_INFO("KK panel controller test: show language {}", Get("user_language"));
+          drive({});
+          controller_test_stage_ = 16;
+          controller_test_next_ = now + std::chrono::milliseconds(800);
+        } else drive({0xFFFF, 255, 255, 32767, -32768, -32768, 32767});
+        break;
+      }
+      case 17:
+        check(!Interactive() && consumed && !g_ab, "closing chord consumes all controls and ends comparison");
+        drive({0x2000, 255, 255, 32767, 0, -32768, 0});
+        break;
+      case 18:
+        check(consumed, "held buttons, triggers and sticks remain hidden after closing");
+        drive({});
+        break;
+      case 19:
+        check(!consumed, "neutral restores game input after closing");
+        drive({0x00C0});
+        break;
+      case 20:
+        check(Interactive(), "controller reopens the panel");
+        drive({});
+        break;
+      case 21: drive({0x2000}); break;
+      case 22:
+        check(!Interactive() && consumed, "B closes the panel without reaching the game");
+        drive({});
+        break;
+      case 23:
+        check(!consumed, "game input resumes after B is released");
+        drive({});
+        break;
+      case 24:
+        SetOpen(false);
+        Reset();
+        rex::cvar::SetFlagByName("native_upscaler", controller_test_upscaler_);
+        rex::cvar::SetFlagByName("swap_post_effect", controller_test_fxaa_);
+        rex::cvar::SetFlagByName("user_language", controller_test_language_);
+        {
+          std::lock_guard lock(g_pad_mutex);
+          g_controller_test_override = false;
+        }
+        REXLOG_INFO("KK panel controller test: done: {} passed, {} failed", test_pass_, test_fail_);
+        controller_test_stage_ = 1000;
+        break;
+    }
+  }
+  int controller_test_stage_ = 0, controller_test_moves_ = 0, controller_test_waits_ = 0;
+  int controller_capture_waits_ = 0, controller_language_step_ = 0;
+  std::chrono::steady_clock::time_point controller_test_next_{};
+  std::string controller_test_upscaler_, controller_test_fxaa_, controller_test_language_;
+
   // ------------------------------------------------------- the robustness test ---
   // KK_DEV_PANEL_TEST=<folder>: in play, every live setting is toggled KK_DEV_PANEL_TOGGLES times (100)
   // every KK_DEV_PANEL_INTERVAL seconds (0.1), with a capture before and after each; then the upscalers
@@ -1116,7 +1418,7 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
         std::ifstream f(txt, std::ios::binary);
         const std::string text((std::istreambuf_iterator<char>(f)), {});
         check(png, "the capture key wrote " + last_capture_.filename().string());
-        check(text.find("Global illumination / Global illumination: High *") != std::string::npos,
+        check(text.find(std::string(T("Global illumination")) + " / " + T("Global illumination") + ": " + T("High") + " *") != std::string::npos,
               "the capture's text lists the trial settings");
         Reset();
         bool back = true;
@@ -1356,11 +1658,50 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
   std::chrono::steady_clock::time_point status_until_{};
   float bias_ = 0, column_ = 0;
   bool dragging_bias_ = false;
+  ui::Input pad_input_{false};
+  bool key_compare_ = false, pad_compare_ = false, pad_ready_ = false;
+  bool pad_navigation_ = false, scroll_to_focus_ = false;
+  int focus_row_ = 0;
+  std::string focus_cvar_;
 };
 
 }  // namespace
 
 bool DebugOverlayOpen() { return g_open.load(std::memory_order_relaxed) && !REXCVAR_GET(kk_graphics_panel_compact); }
+
+bool DebugOverlayFilterPad(uint32_t user, uint8_t* state) {
+  if (user >= 4) return false;
+  auto s16 = [&](int at) { return int16_t(uint16_t(state[at] << 8 | state[at + 1])); };
+  panel::PadState pad{uint16_t(state[4] << 8 | state[5]), state[6], state[7], s16(8), s16(10), s16(12), s16(14)};
+  const bool in_play = play::SessionActive() && !play::CoverScreen() && !play::PauseMenuOpen();
+  bool consumed, request;
+  {
+    std::lock_guard lock(g_pad_mutex);
+#if defined(KK_DEV_TOOLS)
+    if (user == 0 && in_play && g_controller_test_override) {
+      pad = g_controller_test_pad;
+      auto store16 = [&](int at, uint16_t value) { state[at] = uint8_t(value >> 8); state[at + 1] = uint8_t(value); };
+      store16(4, pad.buttons);
+      state[6] = pad.lt; state[7] = pad.rt;
+      store16(8, uint16_t(pad.lx)); store16(10, uint16_t(pad.ly));
+      store16(12, uint16_t(pad.rx)); store16(14, uint16_t(pad.ry));
+    }
+#endif
+    const bool pending = g_pad[user].toggle;
+    consumed = g_pad[user].Filter(pad, in_play && user == 0, DebugOverlayOpen());
+    request = !pending && g_pad[user].toggle;
+    if (user == 0) g_pad_at = std::chrono::steady_clock::now();
+#if defined(KK_DEV_TOOLS)
+    if (user == 0 && g_controller_test_override) {
+      ++g_controller_test_samples;
+      g_controller_test_consumed = consumed;
+    }
+#endif
+  }
+  if (request) RequestUiPaint();
+  if (consumed) std::fill(state + 4, state + 16, uint8_t(0));
+  return consumed;
+}
 
 void SetDebugOverlayConfigPath(const std::filesystem::path& config) { g_settings_path = config; }
 

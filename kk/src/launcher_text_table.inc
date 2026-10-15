@@ -2817,4 +2817,5 @@ constexpr Entry kEntries[] = {
      "No se pudo iniciar Vulkan ni DirectX 12. Actualiza el controlador gráfico y comprueba los requisitos de GPU en README.md. Para obtener ayuda, usa los enlaces de soporte de README.md e incluye la carpeta logs.",
      "Impossible de démarrer Vulkan ou DirectX 12. Mettez à jour votre pilote graphique et vérifiez les exigences GPU dans README.md. Pour obtenir de l'aide, utilisez les liens de support de README.md et joignez le dossier logs.",
      "Impossibile avviare Vulkan o DirectX 12. Aggiorna il driver grafico e controlla i requisiti della GPU in README.md. Per assistenza, usa i link di supporto in README.md e includi la cartella logs."},
+#include "debug_overlay_text_table.inc"
 };
