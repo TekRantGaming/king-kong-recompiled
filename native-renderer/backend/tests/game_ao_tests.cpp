@@ -39,6 +39,7 @@
 #include "backend/renderer.h"
 #include "backend/shader_library.h"
 #include "backend/tests/check.h"
+#include "backend/tests/descriptor_test_options.h"
 #include "backend/tests/fake_guest.h"
 #include "backend/tests/vk_test_device.h"
 #include "container_writer.h"
@@ -360,6 +361,7 @@ struct Fixture {
     renderer->set_submit([this](nvrhi::ICommandList* cl) { gpu->Execute(cl); });
     auto g = std::make_unique<GameRenderer>(
         gpu->device(), mem, kknr::GuestMemory{mem.PhysicalBase(), mem.PhysicalSize(), 0}, shaders.get());
+    ConfigureTestDescriptors(g->options(), gpu);
     g->options().render_scale_x = g->options().render_scale_y = opt.scale;
     g->options().guest_frame_width = kW;
     g->options().ao = opt.ao;  // before Initialize, as the backend does

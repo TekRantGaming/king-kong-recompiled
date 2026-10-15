@@ -41,6 +41,7 @@
 #include "backend/renderer.h"
 #include "backend/shader_library.h"
 #include "backend/tests/check.h"
+#include "backend/tests/descriptor_test_options.h"
 #include "backend/tests/fake_guest.h"
 #include "backend/tests/vk_test_device.h"
 #include "backend/vk_pipeline_cache.h"
@@ -330,6 +331,9 @@ struct Fixture {
   // The render scale under test (1: the renderer as it was) and the shadow map scale (0: the same).
   float scale_x = 1.0f, scale_y = 1.0f, shadow_scale = 0.0f;
   bool force_unaware = false;  // scaled, but with the 1:1 pixel shaders (a negative control)
+  NativeTableCapacities table_capacities = kNativeTableCapacities;
+  bool force_table_capacities = false;
+  unsigned descriptor_drains = 0;
   Fixture() = default;
   explicit Fixture(float sx, float sy = 0.0f, float shadow = 0.0f)
       : scale_x(sx), scale_y(sy > 0.0f ? sy : sx), shadow_scale(shadow) {}
@@ -353,6 +357,9 @@ struct Fixture {
     renderer->set_submit([this](nvrhi::ICommandList* cl) { gpu->Execute(cl); });
     auto g = std::make_unique<GameRenderer>(
         gpu->device(), mem, kknr::GuestMemory{mem.PhysicalBase(), mem.PhysicalSize(), 0}, shaders.get());
+    g->options().table_capacities = table_capacities;
+    ConfigureTestDescriptors(g->options(), gpu, &descriptor_drains);
+    if (force_table_capacities) g->options().table_capacities = table_capacities;
     // SwiftShader's JIT is not safe against pipeline creation racing draws: NR_TEST_SYNC_PIPELINES=1.
     if (std::getenv("NR_TEST_SYNC_PIPELINES")) g->options().async_pipelines = false;
     g->options().render_scale_x = scale_x;
@@ -2831,6 +2838,78 @@ TEST(Scale_ShadowMapsHaveTheirOwnScale) {
     }
     CHECK(saw_shadow);
     CHECK(saw_main);
+  }
+}
+
+TEST(Descriptors_RecyclingPreservesGpuWrittenResolve) {
+  Fixture f;
+  f.force_table_capacities = true;
+  f.table_capacities = kMinimumTableCapacities;
+  if (!f.Init()) return;
+  const uint32_t rt = f.BindMainSurface();
+  const auto p = f.MakeColorPipeline();
+  const uint32_t tex = f.NewTexture(Desc(kknr::TextureFormat::k_8_8_8_8, kknr::Endian::kNone, kknr::kSwizzleXYZW));
+  f.DrawQuadrants(p);
+  f.Resolve(0, 0, tex);
+  // Only the GPU has the quadrant image. The CPU copy cannot reconstruct it.
+  for (unsigned i = 0; i < 300; ++i) f.DrawColored(p, QuadTriangles(kFull, 0xFF555555));
+  CHECK(f.descriptor_drains > 0);
+  f.DrawTextured(tex);
+  const Pixels image = f.Present(rt, "descriptors_gpu_resolve");
+  f.CheckQuadrantColors(image, __LINE__);
+  CHECK_EQ(f.game->stats().resolve_failures, uint64_t(0));
+  CHECK_EQ(f.game->stats().texture_uploads, uint64_t(0));
+}
+
+TEST(Descriptors_PressureMatchesFullTablesExactly) {
+  std::vector<Pixels> reference;
+  for (bool reduced : {false, true}) {
+    Fixture f(2.0f);  // exercise b3 across mid-frame list reopening too
+    f.force_table_capacities = true;
+    f.table_capacities = reduced ? kMinimumTableCapacities : kNativeTableCapacities;
+    if (!f.Init()) return;
+    const uint32_t rt = f.BindMainSurface();
+    std::array<uint8_t, 64> texels;
+    for (unsigned i = 0; i < 16; ++i) {
+      texels[4 * i] = 32; texels[4 * i + 1] = 96;
+      texels[4 * i + 2] = 160; texels[4 * i + 3] = 255;
+    }
+    auto desc = Desc(kknr::TextureFormat::k_8_8_8_8, kknr::Endian::kNone, kknr::kSwizzleXYZW, 4, true);
+    uint32_t base = 0;
+    const uint32_t tex = f.NewTexture(desc, [&](uint32_t, uint32_t) { return texels.data(); }, &base);
+    desc.base_address = base - FakeGuestMemory::kPhysicalView;
+    const auto start = std::chrono::steady_clock::now();
+    for (unsigned batch = 0; batch < 3; ++batch) {
+      f.Clear(kClearTarget0, 0xFF000000);
+      for (unsigned i = 0; i < 300; ++i) {
+        // More live views, samplers and buffers than the minimum tables hold.
+        // Earlier tiles must retain their data after subsequent descriptors recycle.
+        desc.swizzle = kknr::MakeSwizzle(i % 6, (i / 6) % 6, (i / 36) % 6, 5);
+        auto fetch = kknr::MakeTextureFetch(desc);
+        fetch.words[4] |= (i & 0x3FFu) << 12;  // distinct LOD biases, one mip
+        for (unsigned w = 0; w < 6; ++w) f.W32(tex + 16 + 4 * w, fetch.words[w]);
+        f.W32(tex + 20, (fetch.words[1] & 0xFFFu) | base);
+        f.SetViewport((i % 16) * 4, ((i / 16) % 16) * 4, 4, 4);
+        f.DrawTextured(tex);
+      }
+      Pixels image = f.Present(rt, reduced ? "descriptors_minimum" : "descriptors_full");
+      CHECK(!image.rgba.empty());
+      if (!reduced) reference.push_back(image);
+      else {
+        CHECK_EQ(image.width, reference[batch].width);
+        CHECK_EQ(image.height, reference[batch].height);
+        CHECK(image.rgba == reference[batch].rgba);
+      }
+      // Exercise mapping eviction after the retirement window as well as pressure.
+      for (unsigned idle = 0; idle < 10; ++idle) f.Present(rt);
+    }
+    CHECK_EQ(f.game->stats().draws, uint64_t(900));
+    CHECK_EQ(f.game->stats().texture_failures, uint64_t(0));
+    if (reduced) CHECK(f.descriptor_drains > 0);
+    else CHECK_EQ(f.descriptor_drains, 0u);
+    std::printf("  descriptors %s: 900 draws, %u drains, %.3f ms including readback/idle frames\n",
+                reduced ? "minimum" : "full", f.descriptor_drains,
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
   }
 }
 

@@ -40,6 +40,7 @@
 #include "backend/renderer.h"
 #include "backend/shader_library.h"
 #include "backend/tests/check.h"
+#include "backend/tests/descriptor_test_options.h"
 #include "backend/tests/fake_guest.h"
 #include "backend/tests/vk_test_device.h"
 #include "container_writer.h"
@@ -316,6 +317,7 @@ constexpr uint32_t kDepthOff = 0;
 constexpr uint32_t kClearTarget0 = 0x1, kClearZ = 0x10, kClearStencil = 0x20;
 
 struct Options {
+  NativeTableCapacities table_capacities = kNativeTableCapacities;
   bool upscale = true;
   UpscaleConfig config;
   GiConfig gi;
@@ -364,6 +366,9 @@ struct Fixture {
     renderer->set_submit([this](nvrhi::ICommandList* cl) { gpu->Execute(cl); });
     auto g = std::make_unique<GameRenderer>(
         gpu->device(), mem, kknr::GuestMemory{mem.PhysicalBase(), mem.PhysicalSize(), 0}, shaders.get());
+    ConfigureTestDescriptors(g->options(), gpu);
+    if (opt.table_capacities != kNativeTableCapacities || !std::getenv("NR_TEST_DESCRIPTOR_TABLES"))
+      g->options().table_capacities = opt.table_capacities;
     g->options().render_scale_x = g->options().render_scale_y = opt.scale;
     g->options().guest_frame_width = kW;
     g->options().guest_frame_height = kH;
@@ -626,6 +631,29 @@ double MeanDifference(const Pixels& a, const Pixels& b) {
 constexpr float kTol = 2.5f / 255.0f;
 
 }  // namespace
+
+TEST(GameUpscale_ReducedTablesKeepStartupAndLiveReplayDisabled) {
+  for (const auto& tables : {kSmallTableCapacities, kMinimumTableCapacities}) {
+    EffectSettings live;
+    live.upscale.kind = UpscalerKind::kBilinear;
+    live.upscale.quality = UpscaleQuality::kQuality;
+    Options reduced;
+    reduced.table_capacities = tables;
+    reduced.config = live.upscale;
+    reduced.live = [&live] { return live; };
+    Options native;
+    native.upscale = false;
+    Fixture a(reduced), b(native);
+    if (!a.Init() || !b.Init()) return;
+    CHECK(a.game->upscale() == nullptr);
+    for (int i = 0; i < 3; ++i) {
+      const Pixels pa = a.Render({}, "reduced_tables"), pb = b.Render({}, "native_tables");
+      CHECK(a.game->upscale() == nullptr);
+      CHECK(MaxDifference(pa, pb) <= kTol);
+    }
+    CHECK(live.upscale.kind == UpscalerKind::kBilinear);
+  }
+}
 
 TEST(GameUpscale_NativeWithoutJitterIsTheSameFrame) {
   // The plumbing alone: native-resolution AA, the bilinear stretch (a copy at 1:1), no jitter. Every
