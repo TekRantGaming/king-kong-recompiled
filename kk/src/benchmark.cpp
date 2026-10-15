@@ -138,7 +138,10 @@ class Dialog final : public rex::ui::ImGuiDialog {
     using text::T;
     const auto p = phase.load();
     if (p == Phase::kOff) return;
-    if (p == Phase::kRunning && (DebugOverlayOpen() || play::PauseMenuOpen())) Interrupted();
+    // Settings were captured when the level loaded, before warmup. Opening
+    // either settings UI during warmup invalidates that snapshot too.
+    if ((p == Phase::kWarmup || p == Phase::kRunning) &&
+        (DebugOverlayOpen() || play::PauseMenuOpen())) Interrupted();
     if (p == Phase::kLoading || p == Phase::kWarmup || p == Phase::kRunning) {
       ImGui::SetNextWindowPos(ImVec2(12, 50), ImGuiCond_Always);
       ImGui::SetNextWindowBgAlpha(.8f);
