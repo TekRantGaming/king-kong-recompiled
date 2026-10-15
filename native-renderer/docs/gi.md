@@ -5,6 +5,39 @@ Status, 12 October 2026: branch `beta-ssgi` (from `beta` = `nr-integration` 1ba7
 (`--native_gi=off`); the launcher's Graphics page has the row "Global illumination: Off / Low / Medium / High"
 next to Ambient occlusion. Ray-traced GI is for later; this is screen space only.
 
+## Task 071 sunlight source estimate (15 October 2026)
+
+The source pass now uses the task's scene-colour fallback, rather than trying to capture diffuse
+textures or identify a sun constant without verified shader coverage. For each opaque host texel:
+`C = max(scene, 0)^2.2`, `a = luminance(frame ambient) * albedoLimit`,
+`s = smoothstep(a, a + max(0.15, a), luminance(scene))`,
+`source = C + 0.45 * s * C / max(maxChannel(C), 0.0001)`.
+The classification uses the game's display-space ambient; the gather transports linear energy.
+The added source is bounded, smoothly selected and preserves source chromaticity. It estimates
+sunlit-ness, not the actual diffuse texture, sun direction or shadow visibility. A bright material
+or baked highlight can be mistaken for sunlight. Ambient-only sources retain the previous energy.
+
+Full-resolution stored depth excludes sky texels BEFORE the half-resolution colour mean and mips.
+Checking only one working-depth sample per block allowed sky energy into silhouettes in a new
+source test; the final implementation rejects each host texel. No new passes, game shader variants,
+translator hooks or shader-pack entries are introduced. The updated radiance shader is embedded in
+both DXIL and SPIR-V, using the existing compute-pipeline initialization/prewarm path.
+The current temporal sample weight is 0.20 (formerly 0.15), to reduce stronger-source lag; the
+existing moving-camera 0.02 display-error bound passes unchanged. The x3 composite calibration stays.
+
+The GPU source test reads RGBA16F gathered light before receiver albedo/multi-bounce: a dim brown
+wall yields about eight times the red energy when above ambient; a dark wall is bit-identical under
+both ambient classifications. Existing additive, transparency, sky, alpha, off/zero, render-scale,
+camera and live-toggle tests pass. Source preparation now requires the full scene depth binding.
+
+Visual acceptance is incomplete. Three launches were used (one invalid chapter argument, one beach
+close-up and one brighter dusk shore). The beach has conspicuous concentrated under-face light;
+the shore gains some rock bounce at Medium but does not prove bright-sun character/wall behaviour.
+The sheets precede the final per-host sky-edge correction. No further game run was permitted.
+Final Vulkan synthetic 1440p times: Low half 0.757 ms, Medium half 0.989 ms, High auto/half 1.228 ms;
+High forced full 4.581 ms. Medium misses the requested approximately 0.6 ms, although near the
+inherited documented approximately 0.97 ms. See codex/REPORT-071.md for evidence and limitations.
+
 ## Task 066 strength calibration (15 October 2026)
 
 Intensity 1 now applies three times the former gathered energy, in the composite constant only.

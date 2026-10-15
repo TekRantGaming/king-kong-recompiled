@@ -111,7 +111,7 @@ bool Ssgi::Initialize() {
   using I = nvrhi::BindingLayoutItem;
   const auto cb = I::VolatileConstantBuffer(0);
   const bool ok =
-      MakePass(radiance_pass_, kRadiance, "cs_radiance", {cb, I::Texture_SRV(0), I::Texture_UAV(0)}) &&
+      MakePass(radiance_pass_, kRadiance, "cs_radiance", {cb, I::Texture_SRV(0), I::Texture_SRV(1), I::Texture_UAV(0)}) &&
       MakePass(radiance_down_, kRadianceDown, "cs_radiance_down", {cb, I::Texture_SRV(0), I::Texture_UAV(0)}) &&
       MakePass(gather_, kGather, "cs_gather",
                {cb, I::Texture_SRV(0), I::Texture_SRV(1), I::Texture_SRV(2), I::Texture_SRV(3), I::Sampler(0), I::Sampler(1),
@@ -284,9 +284,9 @@ void Ssgi::FillConstants(Constants& k, const Gtao& gtao, const SsgiSettings& s, 
   k.shape[2] = kGamma;
 }
 
-bool Ssgi::Compute(nvrhi::ICommandList* cl, const Gtao& gtao, nvrhi::ITexture* color, const SsgiSettings& s) {
+bool Ssgi::Compute(nvrhi::ICommandList* cl, const Gtao& gtao, nvrhi::ITexture* color, nvrhi::ITexture* depth, const SsgiSettings& s) {
   result_ = nullptr;
-  if (!ready_ || !color || gtao.constants_bytes().size() < kGtaoShared + 16 || !gtao.padded_width()) return false;
+  if (!ready_ || !color || !depth || gtao.constants_bytes().size() < kGtaoShared + 16 || !gtao.padded_width()) return false;
   if (!EnsureImages(gtao)) return false;
   const uint32_t pw = padded_w_, ph = padded_h_;
   Constants k;
@@ -294,10 +294,11 @@ bool Ssgi::Compute(nvrhi::ICommandList* cl, const Gtao& gtao, nvrhi::ITexture* c
   cl->writeBuffer(constants_, &k, sizeof(k));
   if (sets_.size() > 16) sets_.clear();
   using S = nvrhi::BindingSetItem;
-  nvrhi::BindingSetHandle& radiance = sets_[{kSetRadiance, color, nullptr}];
+  nvrhi::BindingSetHandle& radiance = sets_[{kSetRadiance, color, depth}];
   if (!radiance) {
     radiance = Set(radiance_pass_, {S::ConstantBuffer(0, constants_),
                                S::Texture_SRV(0, color, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(0, 1, 0, 1)),
+                               S::Texture_SRV(1, depth, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(0, 1, 0, 1)),
                                S::Texture_UAV(0, radiance_, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(0, 1, 0, 1))});
   }
   if (!radiance) return false;

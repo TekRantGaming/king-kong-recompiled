@@ -1,8 +1,8 @@
 // Screen-space global illumination for the native renderer (docs/gi.md): one bounce of light
 // from the surfaces on the screen, gathered on the depth XeGTAO already prepares (gtao.hlsl's
 // cs_prepare, cs_prefilter and cs_normals: view-space depth with four smaller mips, normals
-// rebuilt from it), with the lit scene colour at the end of the game's opaque pass as the
-// light the surfaces send. Compiled to SPIR-V and DXIL by compile_shaders.sh / .ps1.
+// rebuilt from it), with a bounded sunlit-source estimate from colour above the frame's
+// ambient level, at the end of the opaque pass. Compiled to SPIR-V and DXIL.
 //
 // The gather is a visibility bitmask over GTAO's slices (Therrien, Levesque and Gilet, "Screen
 // Space Indirect Lighting with Visibility Bitmask", 2023): each slice through the pixel keeps 32
@@ -19,7 +19,7 @@
 // added in linear light (the picture's values to the power kk_Shape.z, 2.2) and encoded again at the
 // end, so a sunlit wall lights the shade beside it as much as it physically would.
 //
-//   cs_radiance        the scene colour over the picture into the working image (a block's mean, linear)
+//   cs_radiance        the reconstructed source over the picture (a block's mean, linear; sky excluded)
 //   cs_radiance_down   its smaller mips (2x2 means), for samples far away
 //   cs_gather          the bounce light (rgb) and the visibility (a) per working pixel
 //   cs_denoise         an edge-aware blur (5x5 a-trous, depth and normal weights), run with steps
@@ -65,6 +65,7 @@ SamplerState g_samplerLinearClamp : register(s1);
 
 // cs_radiance, cs_radiance_down
 Texture2D<float4> g_srcColor : register(t0);      // the scene colour target (radiance) or the mip above (down)
+Texture2D<float> g_srcSourceDepth : register(t1); // full stored depth, to exclude sky emitters
 RWTexture2D<float4> g_outRadiance : register(u0);
 
 // cs_gather
@@ -123,6 +124,22 @@ float3 ToGamma(float3 c)
 
 // ------------------------------------------------------------------ radiance
 
+// The final baked-lit picture is not diffuse reflectance. Restore a bounded amount of
+// source energy only where brightness exceeds the frame's ambient-lit albedo ceiling.
+// This is a sunlit-ness heuristic, not a recovered sun direction or material albedo.
+// Work in display values for classification (as the game does), then transport linear
+// energy. The smooth ramp avoids a moving hard threshold; normalising all channels by
+// one peak preserves the source hue. Dark/ambient-only surfaces retain their old energy.
+float3 SourceRadiance(float3 color)
+{
+    float3 energy = ToLinear(color);
+    float ambient = Luma(max(kk_Ambient.rgb, 0.0));
+    float ceiling = ambient * pow(kk_Ambient.w, 1.0 / kk_Shape.z);
+    float sunlit = smoothstep(ceiling, ceiling + max(0.15, ceiling), Luma(color));
+    float peak = max(max(energy.r, energy.g), energy.b);
+    return energy + (energy / max(peak, 1e-4)) * (0.45 * sunlit);
+}
+
 [numthreads(8, 8, 1)]
 void cs_radiance(uint2 id : SV_DispatchThreadID)
 {
@@ -135,7 +152,13 @@ void cs_radiance(uint2 id : SV_DispatchThreadID)
     float3 sum = 0.0;
     for (int j = 0; j < step; ++j)
         for (int i = 0; i < step; ++i)
-            sum += ToLinear(g_srcColor.Load(int3(min(base + int2(i, j), last), 0)).rgb);
+        {
+            int2 p = min(base + int2(i, j), last);
+            // Test every host texel before averaging: a half-resolution block may
+            // contain both rock and sky. Never reconstruct sunlight from that sky.
+            if (g_srcSourceDepth.Load(int3(p, 0)) < kk_Params.y)
+                sum += SourceRadiance(g_srcColor.Load(int3(p, 0)).rgb);
+        }
     g_outRadiance[id] = float4(max(sum / float(step * step), 0.0), 1.0);
 }
 

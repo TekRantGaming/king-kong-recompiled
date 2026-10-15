@@ -951,6 +951,54 @@ TEST(GameGi_BrightOutdoorBounce) {
   }
 }
 
+TEST(GameGi_SunlitSourceRestoresDimColour) {
+  // Same dim baked picture, two ambient constants: read the gathered linear term
+  // before the composite's receiver-albedo/multi-bounce estimate. Brightness above ambient must
+  // send more coloured energy; an ambient-only wall must not acquire sunlight.
+  const float bright_ambient[4] = {0.5f, 0.5f, 0.5f, 0};
+  for (uint32_t wall : {0xFF382010u, 0xFF080808u}) {
+    Mesh yard;
+    Quad(yard, {-12, 0, -14}, {12, 0, -14}, {12, 0, 2}, {-12, 0, 2}, kYardFloor);
+    Quad(yard, {-2, 0, 2}, {2, 0, 2}, {2, 3, 2}, {-2, 3, 2}, wall);
+    Options on;
+    on.mode = 0;
+    on.gi.level = GiLevel::kMedium;
+    on.gi.debug = 1;
+    Fixture sun(on), ambient(on);
+    if (!sun.Init() || !ambient.Init()) return;
+    YardCamera(sun.cam);
+    YardCamera(ambient.cam);
+    Fixture::Frame fr;
+    fr.quad = false;
+    fr.scene = &yard;
+    Pixels a, b;
+    for (int i = 0; i < 8; ++i) {
+      fr.ambient = kYardAmbient;
+      a = sun.Render(fr, "source_sun_" + std::to_string(wall));
+      fr.ambient = bright_ambient;
+      b = ambient.Render(fr, "source_ambient_" + std::to_string(wall));
+    }
+    const Rgb s = Colour(a, sun.cam, {0, 0, 0}), t = Colour(b, ambient.cam, {0, 0, 0});
+    const Pixels raw_sun = sun.gpu->ReadBack(sun.game->scene_gi()->ssgi()->result());
+    const Pixels raw_ambient = ambient.gpu->ReadBack(ambient.game->scene_gi()->ssgi()->result());
+    const Rgb rs = Colour(raw_sun, sun.cam, {0, 0, 0}, 0.5f);
+    const Rgb ra = Colour(raw_ambient, ambient.cam, {0, 0, 0}, 0.5f);
+    std::printf("  source wall %08X: bounce RGB %.4f %.4f %.4f, ambient-only %.4f %.4f %.4f\n",
+                wall, s.r, s.g, s.b, t.r, t.g, t.b);
+    std::printf("  gathered linear source: %.6f %.6f %.6f versus %.6f %.6f %.6f\n",
+                rs.r, rs.g, rs.b, ra.r, ra.g, ra.b);
+    if (wall == 0xFF382010u) {
+      CHECK(rs.r > 4.0f * ra.r);
+      CHECK(rs.r > 4.0f * rs.b);
+    } else {
+      CHECK(MaxDifference(raw_sun, raw_ambient) == 0.0f);
+    }
+    // Sky and alpha stay untouched, even with the reconstructed emitter energy.
+    for (int c = 0; c < 4; ++c) CHECK(a.at(2, 2)[c] == b.at(2, 2)[c]);
+    for (size_t i = 3; i < a.rgba.size(); i += 4) CHECK(a.rgba[i] == b.rgba[i]);
+  }
+}
+
 TEST(GameGi_RenderScaleTwoMatchesOne) {
   for (GiLevel level : {GiLevel::kMedium, GiLevel::kHigh}) {
     Options one, two;

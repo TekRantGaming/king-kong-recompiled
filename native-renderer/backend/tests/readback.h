@@ -15,7 +15,7 @@ struct Pixels {
   const float* at(uint32_t x, uint32_t y) const { return &rgba[(size_t(y) * width + x) * 4]; }
 };
 
-// Copies a 2D R10G10B10A2_UNORM, RGBA8_UNORM, R8_UNORM, RG16_FLOAT or R32_FLOAT texture to a
+// Copies a 2D R10G10B10A2_UNORM, RGBA8_UNORM, R8_UNORM, RG16_FLOAT, RGBA16_FLOAT or R32_FLOAT texture to a
 // staging texture, waits for the device and decodes it to RGBA floats (missing channels 0, alpha 1).
 Pixels ReadBackTexture(nvrhi::IDevice* device, nvrhi::ITexture* texture);
 
