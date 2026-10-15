@@ -23,6 +23,7 @@
 #include <rex/logging.h>
 
 #include "mouse_look.h"
+#include "debug_overlay.h"
 #include "play_internal.h"
 #include "settings.h"
 
@@ -154,10 +155,18 @@ REX_HOOK_RAW(sub_821074E8) {
   if (kk::g_dev_pad_input && state_ptr && kk::g_dev_pad_input(user, base + state_ptr)) {
     ctx.r3.u64 = 0;  // ERROR_SUCCESS: a pad is connected
     if (kk::g_dev_pad_filter) kk::g_dev_pad_filter(user, base + state_ptr);
+    if (kk::DebugOverlayFilterPad(user, base + state_ptr)) {
+      g_aim[user & 3] = {};
+      return;
+    }
     kk::play::FilterPad(user, base + state_ptr);
     return;
   }
   if (ctx.r3.u32 == 0 && state_ptr) {  // ERROR_SUCCESS
+    if (kk::DebugOverlayFilterPad(user, base + state_ptr)) {
+      g_aim[user & 3] = {};
+      return;
+    }
     Remap(user, base + state_ptr);
     if (kk::g_dev_pad_filter) kk::g_dev_pad_filter(user, base + state_ptr);
     // The port's pause menu: the game reads an empty pad while it is open (pause_hooks.cpp).
