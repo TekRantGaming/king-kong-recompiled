@@ -29,10 +29,10 @@ int main(int argc, char** argv) {
           "switch to other native API");
     Check(!second.RecoverCrash(), "failure consumed only once");
     Check(second.Advance("lost its graphics device"), "known device loss advances immediately");
-    Check(second.selected == "classic", "Classic terminates chain");
-    Check(!second.Advance("failed") && !second.RecoverCrash(), "Classic cannot loop");
+    Check(second.selected == "failed", "both native APIs terminate chain");
+    Check(!second.Advance("failed") && !second.RecoverCrash(), "exhausted chain cannot loop");
     RecoveryState remembered(dir);
-    Check(remembered.Load() && remembered.selected == "classic" && remembered.preferred == preferred,
+    Check(remembered.Load() && remembered.selected == "failed" && remembered.preferred == preferred,
           "remember fallback and preference");
     Check(remembered.Retry() && remembered.selected == preferred && remembered.reason.empty(), "try native again");
     RecoveryState retry(dir);
@@ -54,6 +54,12 @@ int main(int argc, char** argv) {
     { std::ifstream in(dir / "saves" / "sentinel"); std::getline(in, save); }
     Check(save == "save must survive", "save unchanged");
   }
+  RecoveryState legacy(root / "legacy");
+  std::filesystem::create_directories(legacy.directory);
+  { std::ofstream out(legacy.directory / "fallback.state"); out << "d3d12\nclassic\n1\nold fallback\n1\n1\n"; }
+  Check(legacy.Marker("d3d12"), "old marker created");
+  Check(!legacy.Load() && legacy.selected.empty() && !legacy.RecoverCrash(), "old Classic fallback and marker reset");
+  Check(legacy.preferred == "vulkan", "legacy migration uses Vulkan default");
   RecoveryState broken(root / "corrupt");
   std::filesystem::create_directories(broken.directory);
   { std::ofstream out(broken.directory / "fallback.state"); out << "vulkan\nclassic\n999\ninvalid\n"; }

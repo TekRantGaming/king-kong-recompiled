@@ -47,10 +47,7 @@ void PreloadGpuPlugin();
 // The native renderer's plugin was found and loaded by PreloadGpuPlugin.
 bool NativeRendererAvailable();
 
-// Points gpu_plugin at the renderer kk_renderer picks: native, or xenos for classic (and whenever the
-// native renderer is not there). It is set as gpu_plugin's default, so it is never written to the
-// settings file and a version without the native renderer never reads it; a gpu_plugin from the
-// command line or the settings file wins. Returns the plugin the game will load.
+// Selects the native plugin, normalizes legacy config, then applies startup recovery.
 std::string ApplyRendererChoice();
 
 // Creates the launcher dialog; it deletes itself when closed.

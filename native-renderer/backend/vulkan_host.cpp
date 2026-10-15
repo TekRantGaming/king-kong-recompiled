@@ -64,13 +64,13 @@ class VulkanHost final : public HostDevice {
     properties.pNext = &indexing;
     const auto get_properties = vulkan_instance->functions().vkGetPhysicalDeviceProperties2;
     if (!get_properties) {
-      REXGPU_ERROR("rexgpu-native: cannot verify descriptor limits. Choose Native D3D12 or Classic.");
+      REXGPU_ERROR("rexgpu-native: cannot verify descriptor limits. Update your graphics driver or choose DirectX 12.");
       return false;
     }
     get_properties(vulkan_device->physical_device(), &properties);
     if (!CheckNativeBindlessLimits(properties.properties.limits.maxBoundDescriptorSets, indexing,
           [](const char* name, unsigned available, unsigned needed) {
-            REXGPU_ERROR("rexgpu-native: descriptor limit {} is {}, requires {}. Choose Native D3D12 or Classic.",
+            REXGPU_ERROR("rexgpu-native: descriptor limit {} is {}, requires {}. Update your graphics driver or choose DirectX 12.",
                          name, available, needed);
           })) return false;
     queue_family_ = vulkan_device->queue_family_graphics_compute();
@@ -314,7 +314,7 @@ class VulkanHost final : public HostDevice {
     REXGPU_ERROR("rexgpu-native: SDK bindless features cannot be verified; apply sdk-patches/0002");
     ok = false;
 #endif
-    if (!ok) REXGPU_ERROR("rexgpu-native: Native Vulkan unsupported on this device. Choose Native D3D12 or Classic in the launcher.");
+    if (!ok) REXGPU_ERROR("rexgpu-native: Native Vulkan unsupported on this device. Update your graphics driver or choose DirectX 12 in the launcher.");
     return ok;
   }
 

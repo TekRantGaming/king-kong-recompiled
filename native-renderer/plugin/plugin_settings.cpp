@@ -263,10 +263,10 @@ GameSettings ReadGameSettings(bool vulkan) {
   game.render_thread_presents = uint32_t(std::clamp<int32_t>(REXCVAR_GET(native_render_thread_presents), 1, 4));
   game.frame_wait_at_open = REXCVAR_GET(native_frame_wait) == "open";
   {
-    // The launcher's texture filtering (defined by the runtime / Xenos plugin; absent: the game's own).
+    // The launcher's texture filtering (defined by the native plugin; absent: the game's own).
     const std::string aniso = rex::cvar::GetFlagByName("anisotropic_override");
     game.anisotropic_override = aniso.empty() ? -1 : std::atoi(aniso.c_str());
-    // The launcher's anti-aliasing (swap_post_effect, the Xenos plugin's swap pass).
+    // The launcher's anti-aliasing (swap_post_effect, the native post pass).
     const std::string aa = rex::cvar::GetFlagByName("swap_post_effect");
     game.fxaa = aa == "fxaa" ? 1u : (aa == "fxaa_extreme" ? 2u : 0u);
   }
@@ -280,11 +280,7 @@ GameSettings ReadGameSettings(bool vulkan) {
   // --native_shadow_scale, else what --native_shadow_quality asks for (docs/lighting.md).
   game.shadow_scale = EffectiveShadowScale();
   game.stutter_stats = REXCVAR_GET(native_stutter_stats);
-  // Ambient occlusion: the Xenos plugin's own settings (ao_mode 0 off, 1 on, 2 AO only; ao_strength
-  // 1 to 3), looked up by name at every use. They are defined by rexgpu-xenos, which the launcher
-  // and the game's start load first so that its cvars exist when the config and command line are read
-  // (the launcher's Graphics page and F8 / F9 set them by name too). Without that plugin loaded
-  // the lookup finds nothing and AO stays off.
+  // Ambient occlusion settings are registered by the native plugin before config loading.
   game.ao_settings = [] {
     AoSettings s;
     s.mode = std::clamp(std::atoi(rex::cvar::GetFlagByName("ao_mode").c_str()), 0, 2);

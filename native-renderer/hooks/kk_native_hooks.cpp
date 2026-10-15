@@ -4,11 +4,8 @@
 // call to rexgpu-native through its NrApi table (when that plugin is the one
 // loaded) and then runs the game's original.
 //
-// With --gpu_plugin=xenos the plugin is not loaded, nr_get_api is never
-// found, and every hook only calls the original: the Xenos path is unchanged.
-//
-// Conflicts with kk/src/dev_d3d_trace.cpp, which hooks the same functions:
-// build one or the other (KK_NATIVE_HOOKS in kk/CMakeLists.txt).
+// All game builds load the native plugin and include these hooks. The old
+// developer Direct3D tracer hooks the same functions and is no longer built.
 
 #include <atomic>
 

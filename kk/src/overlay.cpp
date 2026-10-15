@@ -15,9 +15,7 @@
 #include "platform.h"
 #include "play_internal.h"
 #include "settings.h"
-#if defined(KK_NATIVE_RENDERER)
 #include "hooks/kk_native_ui.h"  // the native renderer's pipeline stutter line
-#endif
 
 namespace kk {
 namespace {
@@ -51,7 +49,6 @@ class FpsOverlay final : public rex::ui::ImGuiDialog {
                         : stats.fps >= 28 ? IM_COL32(240, 200, 90, 255)
                                           : IM_COL32(240, 110, 90, 255);
     dl->AddText(font, size, ImVec2(p0.x + pad.x, p0.y + pad.y), color, text);
-#if defined(KK_NATIVE_RENDERER)
     // The native renderer's pipeline stutter counter (--native_stutter_stats), under the counter.
     const std::string stutter = nr::kk::StutterLine();
     if (!stutter.empty()) {
@@ -62,7 +59,6 @@ class FpsOverlay final : public rex::ui::ImGuiDialog {
       dl->AddRectFilled(q0, q1, IM_COL32(7, 10, 22, 190), 8 * s);
       dl->AddText(font, line_size, ImVec2(q0.x + pad.x, q0.y + pad.y), IM_COL32(220, 220, 230, 255), stutter.c_str());
     }
-#endif
   }
 };
 

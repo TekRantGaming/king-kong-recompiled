@@ -22,9 +22,19 @@
 #include "plugin/native_effect_stats.h"
 #include "plugin/upscaler_query.h"
 
+// Shared graphics settings are owned here; the emulation plugin is never loaded.
+REXCVAR_DEFINE_BOOL(vsync, false, "GPU", "Enable vertical sync");
+REXCVAR_DEFINE_STRING(swap_post_effect, "fxaa", "GPU", "Anti-aliasing: none, fxaa, fxaa_extreme")
+    .allowed({"none", "fxaa", "fxaa_extreme"});
+REXCVAR_DEFINE_INT32(anisotropic_override, 3, "GPU", "Texture filtering override (-1 = game default)").range(-1, 5);
+REXCVAR_DEFINE_INT32(draw_resolution_scale_x, 1, "GPU", "Draw resolution scale X").range(1, 8);
+REXCVAR_DEFINE_INT32(draw_resolution_scale_y, 1, "GPU", "Draw resolution scale Y").range(1, 8);
+REXCVAR_DEFINE_INT32(resolution_scale, 1, "GPU", "Draw resolution scale").range(1, 8);
+REXCVAR_DEFINE_INT32(ao_mode, 0, "GPU", "Ambient occlusion: 0 off, 1 on, 2 AO only").range(0, 2);
+REXCVAR_DEFINE_INT32(ao_strength, 3, "GPU", "Ambient occlusion strength: 1 Light, 2 Medium, 3 Strong").range(1, 3);
+
 REXCVAR_DEFINE_STRING(native_backend, "auto", "Native renderer",
                       "Host API for the native renderer: auto, d3d12 or vulkan")
-    .allowed({"auto", "d3d12", "vulkan"})
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_STRING(native_test, "triangle", "Native renderer",
