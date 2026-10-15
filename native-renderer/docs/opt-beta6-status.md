@@ -347,7 +347,7 @@ build/CTest logs and `artifact-verification.json`. Candidate SHA-256:
 
 ## Task 104: learned loading-screen resource preparation
 
-Starting at `f80166c`. Read DECISIONS.md first, then TASK-104, GAME-RULES,
+Starting at `f80166c`; implementation `54b7e39`. Read DECISIONS.md first, then TASK-104, GAME-RULES,
 reports 099/097/091 and this status. No standing-decision conflict. Windows
 only; no game logic, AI cadence, frame cap, shader, quality/default, queue or
 Present-bound changes. No shared SDK/link changes, merge, push or release.
@@ -383,33 +383,47 @@ request-field changes, content mismatch, writes during capture and before first
 draw, subsequent rewrites, malformed lists and both memory/frame bounds. NVRHI
 checks are used; no installed Khronos-layer certification is claimed.
 
-Four of the six authorized game launches have completed, all exit 0. The first
+Exactly six authorized game launches completed, all exit 0 and under 80 seconds. The first
 candidate run did not save the chapter list and is retained as an initial-build
 observation. The corrected learning run saved 189 chapter-8 descriptions. Replay
 prepared 113 chapter resources (51,604,723 bytes) while loading, plus six earlier
-screen resources; all 119 were consumed at first draw. Initial-list hash misses
+screen resources; all 119 were consumed at first draw. DirectX replay prepared
+75 chapter resources (37,623,168 bytes), plus six earlier resources; all 81 were
+consumed at first draw. Initial-list hash misses
 are retried only while loading. Relocated, absent, changed, small, over-budget
 and already-hosted resources use the ordinary mandatory path. A first visit
 without a learned list gets no ahead-of-use benefit.
 
-| Vulkan run | Startup >50 ms | Worst startup ms | Peak room ms | Steady FPS |
+| Run | Startup >50 ms | Worst startup ms | Peak room ms | Vulkan steady FPS |
 |---|---:|---:|---:|---:|
-| Beta 5 | 2 | 196.5 | 117.3 | 205.11 |
-| Initial candidate, no chapter list | 2 | 180.0 | 97.4 | 207.33 |
-| Corrected learning | 2 | 182.7 | 101.4 | 204.06 (loaded) |
-| Corrected replay | 1 | 132.9 | 52.1 | 203.85 |
+| Vulkan Beta 5 | 2 | 196.5 | 117.3 | 205.11 (build processes present) |
+| Vulkan initial candidate, no chapter list | 2 | 180.0 | 97.4 | 207.33 |
+| Vulkan corrected learning | 2 | 182.7 | 101.4 | 204.06 (loaded) |
+| Vulkan corrected replay | 1 | 132.9 | 52.1 | 203.85 |
+| DirectX Beta 5 (loaded startup) | 3 | 303.2 | 223.4 | not judged |
+| DirectX corrected replay | 2 | 209.9 | 130.5 | not judged |
 
 Same report-099 private seed/settings/window and first-10-second / seconds-30-65
-method. The corrected learning run's steady segment contains sampled clang work;
-the other displayed windows have no sampled compiler/test/shader overlap.
-One Beta 5/replay pair suggests a startup improvement, with no steady FPS gain
-established. The loading-screen interval is 650 ms learning / 674 ms replay in
-these two samples; preparation has a loading cost. These are not repeated,
+method. The Vulkan Beta 5/replay startup windows have no sampled compiler/test/
+shader overlap. Beta 5's steady window has four build-process presence samples
+without sampled CPU deltas; corrected learning has sampled clang CPU work.
+DirectX Beta 5 startup overlaps sampled clang/ninja work, and its steady window
+later overlaps shader compilation. The DirectX replay has no sampled overlap.
+One Vulkan pair suggests a startup improvement; neither a steady FPS gain nor
+an isolated DirectX startup gain is established. Beta 5 logs total room time;
+the candidates split it, with zero command-capacity waits and all room blocking
+at the unchanged one-Present bound. The loading-screen interval is 650 ms learning
+/ 674 ms Vulkan replay and 630 ms DirectX replay; preparation has a loading cost.
+These are not repeated,
 cold-driver-cache, full-game pixel-equality or owner-configuration results.
-DirectX startup comparisons remain pending within the two unused launches;
-external compilation is active. Steady performance is judged on Vulkan only:
+All measured windows have zero skipped draws/startup pipeline wait, and every
+run reports zero texture failures. The six-launch limit is exhausted. Steady
+performance is judged on Vulkan only:
 the owner's global driver cap limits DirectX 12 and is unchanged.
 
 Evidence: `kk/out/task104`, including corrected build/CTest logs, private run
 ledger, raw profiles, full process inventories, unrounded CPU samples, run and
-analysis scripts. Production code is frozen after corrected validation.
+analysis scripts and artifact verification. Production code is unchanged after
+`54b7e39`. All task-owned games exited, their shared game locks were released,
+and this task's priority reservation was moved aside. Full report:
+`F:\KK-native-renderer\codex\REPORT-104.md`.
