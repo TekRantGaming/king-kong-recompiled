@@ -68,6 +68,21 @@ int main() {
   nr::NativeTableCapacities selected;
   if (!nr::SelectNativeTableCapacities(7, limits, false, selected) || selected != nr::kNativeTableCapacities) return 7;
   if (!nr::SelectNativeTableCapacities(7, limits, true, selected) || selected != nr::kSmallTableCapacities) return 8;
+  for (unsigned type = 0; type < 3; ++type) {
+    Limits single = limits;
+    auto want = nr::kNativeTableCapacities;
+    if (type == 0) {
+      single.maxPerStageDescriptorUpdateAfterBindSamplers = single.maxDescriptorSetUpdateAfterBindSamplers = 128;
+      want[4] = 128;
+    } else if (type == 1) {
+      single.maxPerStageDescriptorUpdateAfterBindStorageBuffers = single.maxDescriptorSetUpdateAfterBindStorageBuffers = 300;
+      want[5] = 300;
+    } else {
+      single.maxPerStageDescriptorUpdateAfterBindSampledImages = single.maxDescriptorSetUpdateAfterBindSampledImages = 512;
+      for (unsigned i = 0; i < 4; ++i) want[i] = 128;
+    }
+    if (!nr::SelectNativeTableCapacities(7, single, false, selected) || selected != want) return 17;
+  }
   Limits low = limits;
   low.maxPerStageDescriptorUpdateAfterBindSampledImages = low.maxDescriptorSetUpdateAfterBindSampledImages = 4096;
   low.maxPerStageDescriptorUpdateAfterBindStorageBuffers = low.maxDescriptorSetUpdateAfterBindStorageBuffers = 1024;
@@ -105,5 +120,5 @@ int main() {
     for (std::size_t i = 0; i < selected.size(); ++i)
       if (selected[i] < nr::kMinimumTableCapacities[i] || selected[i] > nr::kNativeTableCapacities[i]) return 14;
   }
-  std::puts("Native Vulkan requirements: 290 cases passed");
+  std::puts("Native Vulkan requirements: feature, limit, capacity-isolation and 256 mixed-budget cases passed");
 }

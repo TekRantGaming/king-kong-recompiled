@@ -33,16 +33,27 @@ bool SelectNativeTableCapacities(unsigned bound_sets, const Limits& p,
                                  bool force_small, NativeTableCapacities& c) {
   c = force_small ? kSmallTableCapacities : kNativeTableCapacities;
   if (bound_sets < 7 || !NativeTablesFit(kMinimumTableCapacities, p)) return false;
-  while (!NativeTablesFit(c, p)) {
-    // Shrink the largest remaining table. Check every aggregate again, so
-    // combined image and resource limits cannot slip through the selection.
-    std::size_t largest = c.size();
-    for (std::size_t i = 0; i < c.size(); ++i)
-      if (c[i] > kMinimumTableCapacities[i] && (largest == c.size() || c[i] > c[largest])) largest = i;
-    if (largest == c.size()) return false;
+  // Restrict each descriptor type first. A low sampler limit must not also
+  // shrink otherwise-supported image and buffer tables and force extra drains.
+  c[4] = std::min(c[4], std::min(p.maxPerStageDescriptorUpdateAfterBindSamplers, p.maxDescriptorSetUpdateAfterBindSamplers));
+  c[5] = std::min(c[5], std::min(p.maxPerStageDescriptorUpdateAfterBindStorageBuffers, p.maxDescriptorSetUpdateAfterBindStorageBuffers));
+  auto shrink = [&](std::size_t end) {
+    std::size_t largest = end;
+    for (std::size_t i = 0; i < end; ++i)
+      if (c[i] > kMinimumTableCapacities[i] && (largest == end || c[i] > c[largest])) largest = i;
+    if (largest == end) return false;
     c[largest] = std::max(c[largest] / 2, kMinimumTableCapacities[largest]);
+    return true;
+  };
+  auto images = [&] { return c[0] + c[1] + c[2] + c[3]; };
+  const unsigned image_budget = std::min(p.maxPerStageDescriptorUpdateAfterBindSampledImages, p.maxDescriptorSetUpdateAfterBindSampledImages);
+  while (images() > image_budget) if (!shrink(4)) return false;
+  const unsigned all_budget = std::min(p.maxPerStageUpdateAfterBindResources - kNativeConstantBufferSlots,
+                                       p.maxUpdateAfterBindDescriptorsInAllPools);
+  while (images() + c[4] + c[5] > all_budget) {
+    if (!shrink(c.size())) return false;
   }
-  return true;
+  return NativeTablesFit(c, p);
 }
 // These are the features used by translated bindless shaders and NVRHI's
 // PARTIALLY_BOUND / UPDATE_AFTER_BIND / UPDATE_UNUSED_WHILE_PENDING layouts.
