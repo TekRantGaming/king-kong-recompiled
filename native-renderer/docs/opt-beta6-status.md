@@ -193,3 +193,19 @@ in-place uploads. DX12 buffer work still reaches 101.3 ms and Present room waits
 197.7 ms. There is no ahead-of-use resource scheduler, CPU staging worker or
 hard budget on all mandatory uploads. The early GPU-transfer benefit does not
 establish that these remaining chapter-start CPU stalls are fixed.
+
+# Task 099: render-thread chapter-start CPU work
+
+Branch `opt-beta6`, starting at `0fe206a`. Read DECISIONS.md first, then
+GAME-RULES.md, reports 097 and 091, and the status above. Work is limited to
+resource CPU scheduling, caches, profiling, regression coverage and measurements.
+Both queue limits and the one outstanding Present allowance stay unchanged.
+No game logic, graphics defaults, shader or quality changes; no Linux work,
+push, merge, release, package or owner build handoff.
+
+Investigation has started with opt-in per-stage resource CPU timing on both
+Windows APIs. The six-launch allowance is shared across profiling and final
+Beta 5 comparisons; no task-099 game launched yet. Existing conversion workers
+join before upload; resource creation, staging, hashing and watches are still
+synchronous at this point. Changes will preserve first-use readiness and the
+ordering of in-place rewrites.
