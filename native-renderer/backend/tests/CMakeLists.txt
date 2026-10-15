@@ -14,6 +14,11 @@ if(WIN32 AND NR_BUILD_PLUGIN AND NR_GAME_RENDERER)
     target_compile_features(nr_shader_pack_service_tests PRIVATE cxx_std_23)
     target_link_libraries(nr_shader_pack_service_tests PRIVATE kkshaders rex::runtime)
     add_dependencies(nr_shader_pack_service_tests rexgpu-native)
+    add_executable(nr_builtin_shader_tests builtin_shader_tests.cpp "${NR_ROOT}/plugin/builtin_shaders.cpp")
+    target_include_directories(nr_builtin_shader_tests PRIVATE "${NR_ROOT}")
+    target_compile_features(nr_builtin_shader_tests PRIVATE cxx_std_23)
+    target_link_libraries(nr_builtin_shader_tests PRIVATE kkshaders rex::runtime)
+    add_test(NAME nr_builtin_shader_tests COMMAND nr_builtin_shader_tests)
 endif()
 add_executable(nr_vulkan_requirements_tests vulkan_requirements_tests.cpp)
 target_include_directories(nr_vulkan_requirements_tests PRIVATE "${NR_ROOT}")
@@ -227,6 +232,10 @@ add_executable(nr_cpu_paths_tests cpu_paths_tests.cpp
     "${NR_ROOT}/resources/src/tiling.cpp")
 target_include_directories(nr_cpu_paths_tests PRIVATE "${NR_ROOT}" "${NR_ROOT}/resources/include")
 add_test(NAME nr_cpu_paths_tests COMMAND nr_cpu_paths_tests)
+
+add_executable(nr_scheduling_tests scheduling_tests.cpp)
+target_include_directories(nr_scheduling_tests PRIVATE "${NR_ROOT}")
+add_test(NAME nr_scheduling_tests COMMAND nr_scheduling_tests)
 
 # Synthetic lighting scenes, no game process or game-derived assets.
 if(NR_HAS_VULKAN AND NR_GAME_RENDERER)

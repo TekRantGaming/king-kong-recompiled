@@ -130,9 +130,8 @@ void NativeShaderPack::Start(const std::filesystem::path& cache_dir, const std::
   impl_->worked = false;
   impl_->bar.Reset();
   impl_->started = true;
-  // Every hardware thread but one: the launcher's window and its music keep one for themselves.
-  const unsigned hardware = std::max(1u, std::thread::hardware_concurrency());
-  const uint32_t threads = hardware > 1 ? hardware - 1 : 1;
+  // The plugin caps this request to process affinity, leaving one CPU for the UI/music.
+  const uint32_t threads = 0;
   impl_->job = impl_->api->start(Utf8(cache_dir).c_str(), Utf8(game_dir).c_str(), threads, 1, force ? 1 : 0);
 }
 

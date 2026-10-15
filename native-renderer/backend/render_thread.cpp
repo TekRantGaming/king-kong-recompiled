@@ -5,6 +5,7 @@
 
 #include "backend/cpu_profile.h"
 #include "backend/guest_device.h"
+#include "backend/thread_scheduling.h"
 
 namespace nr {
 
@@ -258,6 +259,7 @@ ThreadedSink::Stats ThreadedSink::stats() const {
 }
 
 void ThreadedSink::Run() {
+  ScheduleCriticalThread();
   std::unique_lock lock(mutex_);
   for (;;) {
     if (queue_.empty() && !stop_) {

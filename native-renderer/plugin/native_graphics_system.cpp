@@ -46,6 +46,7 @@
 #include "plugin/plugin_settings.h"
 #include "plugin/native_startup.h"
 #include "plugin/ring_skimmer.h"
+#include "backend/thread_scheduling.h"
 #include "plugin/upscaler_query.h"
 #if NR_GAME_RENDERER
 #include "plugin/shader_pack_service.h"
@@ -305,6 +306,7 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
   vsync_running_ = true;
   vsync_thread_ = rex::system::object_ref<rex::system::XHostThread>(
       new rex::system::XHostThread(kernel_state_, 128 * 1024, 0, [this]() {
+        ScheduleCriticalThread();
         rex::system::X_VIDEO_MODE mode;
         rex::kernel::xboxkrnl::VdQueryVideoMode(&mode);
         double refresh_rate_hz = std::max(1.0, double(float(mode.refresh_rate)));

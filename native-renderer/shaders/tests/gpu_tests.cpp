@@ -785,7 +785,8 @@ int runInterpreterChecks();
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::setvbuf(stdout, nullptr, _IOLBF, 0);
+    // The Windows CRT rejects a zero-sized line buffer with a fail-fast.
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     if (argc < 2) {
         std::printf("usage: kkshaders_gpu_tests interp | gpu --dxc <dir> [options]\n");
         return 2;

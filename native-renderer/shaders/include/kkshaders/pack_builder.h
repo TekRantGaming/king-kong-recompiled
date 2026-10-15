@@ -1,6 +1,7 @@
 // King Kong native renderer: the shader pack, built on the player's machine.
 //
-// The pack (kkshaders/cache.h, ShaderPack) holds every shader of the game's Shaders/xeshaders.bin,
+// The pack (kkshaders/cache.h, ShaderPack) holds every shader of the game's Shaders/xeshaders.bin
+// and any shader containers supplied from the player's executable,
 // translated and compiled for one backend: SPIR-V for Vulkan, DXIL for D3D12. It is derived from
 // the game's files, so the port never ships one: the launcher builds it from the player's own copy
 // of the game into the user's cache folder (<cache root>/native-shaders), and the plugin looks for
@@ -17,6 +18,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace kkshaders {
 
@@ -31,7 +33,7 @@ struct PackStamp {
     PackBackend backend = PackBackend::Spirv;
     uint64_t translator = 0;    // translatorHash()
     std::string dxc;            // dxcIdentity()
-    uint64_t database = 0;      // XXH3-64 of xeshaders.bin
+    uint64_t database = 0;      // source hash: xeshaders.bin and additional containers
     bool scaled = false;        // render scale aware pixel variants included
     bool motion = false;        // motion vertex variants included
     uint32_t tessellation = 0;  // Ann stage generator revision, 0 for old packs
@@ -58,6 +60,7 @@ PackCheck comparePackStamp(const PackStamp* found, const PackStamp& wanted);
 struct PackBuildOptions {
     std::filesystem::path database;  // the game's Shaders/xeshaders.bin
     std::filesystem::path folder;    // where the pack goes (<cache root>/native-shaders)
+    std::vector<std::vector<uint8_t>> additionalContainers; // shaders in the player's executable
     PackBackend backend = PackBackend::Spirv;
     bool scaled = false;             // also the render scale aware pixel shaders
     bool motion = false;             // also the motion vertex shaders
@@ -97,7 +100,7 @@ std::filesystem::path stampPath(const std::filesystem::path& pack);  // <pack>.s
 // The stamp found beside a pack (false: no pack, no stamp, or unreadable).
 bool readPackStamp(const std::filesystem::path& pack, PackStamp& out);
 
-// The stamp a build with these options would write now. Loads DXC and hashes the database.
+// The stamp a build would write now. Loads DXC and hashes the database/additional containers.
 bool wantedPackStamp(const PackBuildOptions& options, PackStamp& out, std::string* error);
 
 // Whether the pack in options.folder is current for these options.

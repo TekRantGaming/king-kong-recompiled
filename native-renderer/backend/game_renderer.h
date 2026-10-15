@@ -296,6 +296,7 @@ class GameRenderer {
   // (the prewarm's and the draws'), jobs not started and jobs being made.
   struct WorkerProgress {
     uint64_t queued = 0, made = 0, waiting = 0, active = 0;
+    uint64_t failed = 0;
   };
   WorkerProgress worker_progress();
 
@@ -524,6 +525,7 @@ class GameRenderer {
   std::unordered_set<uint64_t> noted_keys_;   // render thread only
   int pipelines_active_ = 0;                  // jobs a worker is compiling (pipeline_mutex_)
   uint64_t pipelines_made_ = 0;               // jobs the workers finished (pipeline_mutex_)
+  uint64_t pipelines_failed_ = 0;             // failed creations (pipeline_mutex_)
   uint64_t deferred_shader_count_ = 0;        // shaders registered when deferred_ was last tried
   std::mutex pipeline_mutex_;
   std::condition_variable pipeline_cv_;

@@ -52,6 +52,7 @@ class PipelinePrewarm {
     uint64_t made = 0;        // made by the workers
     uint64_t waiting = 0;     // whose shaders are not in the pack (the game makes those)
     uint64_t other_kind = 0;  // of another render scale or face flip
+    uint64_t failed = 0;      // driver pipeline creations that failed
     bool done = false;        // the workers have nothing left
   };
 

@@ -52,6 +52,7 @@ void InstallFpeGuard();  // fpe_guard.cpp
 #include "overlay.h"
 #include "ui_paint.h"
 #include "platform.h"
+#include "scheduled_audio.h"
 #include "pause_menu.h"
 #include "play_internal.h"
 #include "settings.h"
@@ -250,7 +251,7 @@ class KingKongApp : public rex::ReXApp {
     }
     REXLOG_INFO("KK: renderer {} (kk_renderer {})", config.gpu_plugin, rex::cvar::GetFlagByName("kk_renderer"));
     if (!config.audio_factory)
-      config.audio_factory = REX_AUDIO_BACKEND(rex::audio::sdl::SDLAudioSystem);
+      config.audio_factory = REX_AUDIO_BACKEND(kk::ScheduledAudioSystem);
   }
 
   void OnPostSetup() override {

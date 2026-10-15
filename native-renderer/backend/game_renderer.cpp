@@ -651,6 +651,8 @@ void GameRenderer::EndFrame() {
 }
 
 void GameRenderer::PipelineWorker() {
+  bool urgent_priority = false;
+  SchedulePipelineCompiler(false);
   for (;;) {
     PipelineJob job;
     {
@@ -666,6 +668,10 @@ void GameRenderer::PipelineWorker() {
       pipeline_jobs_.pop_front();
       ++pipelines_active_;
     }
+    if (job.urgent != urgent_priority) {
+      urgent_priority = job.urgent;
+      SchedulePipelineCompiler(urgent_priority);
+    }
     const auto start = std::chrono::steady_clock::now();
     nvrhi::GraphicsPipelineHandle p = CreatePipeline(job.desc, job.framebuffer);
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
@@ -675,6 +681,7 @@ void GameRenderer::PipelineWorker() {
       pipeline_worker_ms_ += ms;
       pipelines_done_.emplace_back(job.key, p);
       ++pipelines_made_;
+      if (!p) ++pipelines_failed_;
       // The last job of a burst: this worker stays counted while it saves the driver's cache, so
       // WaitForPrewarm includes the save.
       idle = pipeline_jobs_.empty() && pipelines_active_ == 1;
@@ -1043,7 +1050,8 @@ bool GameRenderer::SaveDriverCacheLocked() {
 
 GameRenderer::WorkerProgress GameRenderer::worker_progress() {
   std::lock_guard lock(pipeline_mutex_);
-  return {stats_.prewarm_queued, pipelines_made_, uint64_t(pipeline_jobs_.size()), uint64_t(pipelines_active_)};
+  return {stats_.prewarm_queued, pipelines_made_, uint64_t(pipeline_jobs_.size()),
+          uint64_t(pipelines_active_), pipelines_failed_};
 }
 
 void GameRenderer::WaitForPrewarm() {

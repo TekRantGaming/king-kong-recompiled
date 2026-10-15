@@ -23,6 +23,7 @@
 #endif
 
 #include "hooks/hook_table.h"
+#include "backend/thread_scheduling.h"
 
 namespace {
 
@@ -88,6 +89,12 @@ const NrApi* Api() {
   return api;
 }
 
+void ScheduleGameThreadOnce() {
+  // Present identifies the game/draw thread without pinning asset-loader threads.
+  thread_local const bool scheduled = [] { nr::ScheduleCriticalThread(); return true; }();
+  (void)scheduled;
+}
+
 nr::hooks::GuestArgs ArgsFrom(const PPCContext& ctx) {
   nr::hooks::GuestArgs a;
   a.r[0] = ctx.r3.u32;
@@ -107,6 +114,7 @@ nr::hooks::GuestArgs ArgsFrom(const PPCContext& ctx) {
 #define NR_HOOK(ADDR)                                                                     \
   REX_EXTERN(__imp__sub_##ADDR);                                                         \
   REX_HOOK_RAW(sub_##ADDR) {                                                             \
+    if constexpr (0x##ADDR == 0x821147B8) ScheduleGameThreadOnce();                       \
     static const nr::hooks::HookEntry* entry = nr::hooks::Find(0x##ADDR);                \
     nr::hooks::Run(*entry, Api(), ArgsFrom(ctx), [&] {                                \
       __imp__sub_##ADDR(ctx, base);                                                   \
