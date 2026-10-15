@@ -7,6 +7,11 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#if defined(KK_DEV_TOOLS)
+#include <cstdlib>
+#include <rex/logging.h>
+namespace kk { double DevSecondsSinceMenu(); }
+#endif
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -284,6 +289,17 @@ rex::ui::ImmediateTexture* AchievementToast::Icon(uint32_t id) {
 }
 
 void AchievementToast::OnDraw(ImGuiIO& io) {
+#if defined(KK_DEV_TOOLS)
+  // Exercise the real notification queue without unlocking or saving an achievement.
+  if (std::getenv("KK_DEV_UIPAINT_TEST")) {
+    static bool sent = false;
+    if (!sent && DevSecondsSinceMenu() >= 112) {
+      sent = true;
+      Show("UI repaint verification", 0);
+      REXLOG_INFO("KK dev UI toast: queued");
+    }
+  }
+#endif
   Toast toast;
   const double now = ImGui::GetTime();
   {

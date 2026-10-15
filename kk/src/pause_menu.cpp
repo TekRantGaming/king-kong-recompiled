@@ -75,6 +75,9 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
     const bool open = play::PauseMenuOpen();
     if (open != open_) {
       open_ = open;
+#if defined(KK_DEV_TOOLS)
+      REXLOG_INFO("KK dev pause panel: {}", open ? "open" : "closed");
+#endif
       if (open) Opened();
       else Closed();
     }

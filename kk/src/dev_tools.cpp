@@ -155,6 +155,7 @@ void ParseScript(const char* text) {
 
 std::atomic<int64_t> g_menu_ms{-1};  // ms since start when the save menu opened
 std::atomic<bool> g_done{false};
+std::atomic<int64_t> g_pause_start_until{0};
 bool g_wander = false;
 bool g_wander_calm = false;  // KK_DEV_WANDER=2
 
@@ -534,6 +535,12 @@ bool AutoskipPad(uint32_t user, uint8_t* state) {
   if (user != pad_user) return false;
   SkipFreezes(NowMs());
   const int64_t now = ScriptNowMs();
+  if (NowMs() < g_pause_start_until.load()) {
+    std::memset(state, 0, 16);
+    StoreBE<uint32_t>(state, uint32_t(now / 50));
+    StoreBE<uint16_t>(state + 4, kStart);
+    return true;
+  }
   if (g_done) {
     static const int64_t done_ms = now;
     const double since_menu = MenuSeconds(now);
@@ -632,6 +639,8 @@ const bool g_installed = [] {
 }();
 
 }  // namespace
+
+void DevPressPauseStart() { g_pause_start_until = NowMs() + 250; }
 
 // A chapter jump (dev_chapter_jump.cpp, KK_DEV_JUMP) never opens the save menu: it starts the clock
 // KK_DEV_SCRIPT and KK_DEV_SHOTS_FROM=menu use when the chapter's level has loaded instead.

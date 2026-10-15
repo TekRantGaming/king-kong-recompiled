@@ -56,6 +56,7 @@
 #if defined(KK_DEV_TOOLS)
 namespace kk {
 void DevPageRuns(const char* name, uint8_t* base);  // dev_pause.cpp (KK_DEV_PAGE_TRACE)
+void DevPressPauseStart();
 }
 #define KK_PAGE_TRACE(name) kk::DevPageRuns(name, base)
 #else
@@ -588,6 +589,14 @@ const bool g_steps_thread = [] {
       const double t = kk::DevSecondsSinceMenu();
       if (t < 0 || t < steps[next].at) continue;
       const std::string& w = steps[next].what;
+      if (w == "open" || w == "close") {
+        const bool open = PauseMenuOpen();
+        REXLOG_INFO("KK dev pause step {:.1f} s: {} (menu open {})", t, w, open);
+        if (w == "open" && !open) kk::DevPressPauseStart();
+        if (w == "close" && open) RunPauseAction(PauseAction::kResume);
+        ++next;
+        continue;
+      }
       if (w.rfind("optpick=", 0) == 0) {
         g_dev_opt_row = std::atoi(w.c_str() + 8);
         ++next;

@@ -55,12 +55,13 @@ class FpsOverlay final : public rex::ui::ImGuiDialog {
       const double seconds = DevSecondsSinceMenu();
       static int phase = -1;
       const int next = seconds < 0 ? -1 : seconds < 12 ? 0 : seconds < 24 ? 1 : seconds < 36 ? 2 :
-                       seconds < 48 ? 3 : seconds < 52 ? 4 : 5;
+                       seconds < 48 ? 3 : seconds < 60 ? 4 : seconds < 72 ? 5 : 6;
       if (next >= 0 && next != phase) {
         phase = next;
-        rex::cvar::SetFlagByName("ui_paint_on_demand", phase == 0 || phase == 2 ? "false" : "true");
-        rex::cvar::SetFlagByName("kk_frame_rate", phase < 2 ? "30" : "0");
-        rex::cvar::SetFlagByName("kk_show_fps", phase == 4 ? "true" : "false");
+        rex::cvar::SetFlagByName("ui_paint_on_demand", phase == 0 || phase == 2 || phase == 4 ? "false" : "true");
+        rex::cvar::SetFlagByName("kk_frame_rate", phase < 2 || phase == 6 ? "30" : "0");
+        rex::cvar::SetFlagByName("native_upscaler", phase == 4 || phase == 5 ? "dlss" : "off");
+        rex::cvar::SetFlagByName("native_upscaler_quality", "quality");
         RequestUiPaint();
         REXLOG_INFO("UI repaint test phase {} at {:.3f} seconds", phase, seconds);
       }
@@ -116,6 +117,9 @@ void CreateFpsOverlay(rex::ui::ImGuiDrawer* drawer) {
 #endif
   rex::ui::RegisterBind("bind_kk_fps", "F2", "Toggle frame counter", [] {
     rex::cvar::SetFlagByName("kk_show_fps", REXCVAR_GET(kk_show_fps) ? "false" : "true");
+#if defined(KK_DEV_TOOLS)
+    REXLOG_INFO("KK dev F2: {}", REXCVAR_GET(kk_show_fps) ? "open" : "closed");
+#endif
     RequestUiPaint();
   });
 }
