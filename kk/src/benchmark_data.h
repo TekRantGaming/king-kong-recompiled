@@ -11,27 +11,13 @@
 #include <vector>
 
 namespace kk::benchmark {
-constexpr int kChapter = 8;
-constexpr double kWarmupSeconds = 10;
-constexpr double kRunSeconds = 75;
 constexpr size_t kMaxSamples = 1000000;
-constexpr const char* kRoute = "chapter8-camera-v1";
-
-// The camera replay from tests/task016-run.ps1, repeated in three 25 s views.
-// The player stays at the chapter start, avoiding navigation/AI-dependent routes.
-// Timings use the game's unscaled elapsed time; no fixed-rate simulation or AI changes.
-inline int CameraX(double seconds) {
-  const double t = std::fmod(std::max(0.0, seconds), 25.0);
-  if (t >= 0 && t < 3) return 32767;
-  if (t >= 6 && t < 12) return -32767;
-  if (t >= 14 && t < 17) return 32767;
-  return 0;
-}
 
 struct Stats {
   size_t count = 0;
-  double seconds = 0, average_fps = 0, low_fps = 0, worst_ms = 0;
-  double p50_ms = 0, p99_ms = 0, stdev_ms = 0;
+  double seconds = 0, average_fps = 0, low_fps = 0, worst_ms = 0, final_fps = 0;
+  double low01_fps = 0, p50_ms = 0, p95_ms = 0, p99_ms = 0, stdev_ms = 0;
+  size_t stutters = 0;
 };
 
 inline Stats Summarize(std::span<const double> samples) {
@@ -40,6 +26,7 @@ inline Stats Summarize(std::span<const double> samples) {
   Stats s;
   if (sorted.empty()) return s;
   s.count = sorted.size();
+  s.final_fps = 1000 / sorted.back();
   const double sum = std::accumulate(sorted.begin(), sorted.end(), 0.0);
   const double mean = sum / s.count;
   double square = 0;
@@ -51,8 +38,13 @@ inline Stats Summarize(std::span<const double> samples) {
   const size_t low_count = std::max<size_t>(1, (s.count + 99) / 100);
   const double low_sum = std::accumulate(sorted.end() - low_count, sorted.end(), 0.0);
   s.low_fps = 1000 * low_count / low_sum;
+  const size_t low01_count = std::max<size_t>(1, (s.count + 999) / 1000);
+  s.low01_fps = 1000 * low01_count /
+      std::accumulate(sorted.end() - low01_count, sorted.end(), 0.0);
+  s.stutters = size_t(sorted.end() - std::upper_bound(sorted.begin(), sorted.end(), 50.0));
   s.worst_ms = sorted.back();
   s.p50_ms = sorted[size_t(std::ceil(s.count * .50)) - 1];
+  s.p95_ms = sorted[size_t(std::ceil(s.count * .95)) - 1];
   s.p99_ms = sorted[size_t(std::ceil(s.count * .99)) - 1];
   return s;
 }
@@ -63,8 +55,10 @@ inline std::string Describe(const Stats& s) {
   out << std::fixed << std::setprecision(3)
       << "Samples: " << s.count << "\nMeasured seconds: " << s.seconds
       << "\nAverage FPS: " << s.average_fps << "\n1% low FPS: " << s.low_fps
+      << "\nFinal FPS: " << s.final_fps
+      << "\n0.1% low FPS: " << s.low01_fps << "\nStutters (>50 ms): " << s.stutters
       << "\nWorst frame ms: " << s.worst_ms << "\nStdev ms: " << s.stdev_ms
-      << "\np50 ms: " << s.p50_ms << "\np99 ms: " << s.p99_ms
+      << "\np50 ms: " << s.p50_ms << "\np95 ms: " << s.p95_ms << "\np99 ms: " << s.p99_ms
       << "\np99-p50 ms: " << s.p99_ms - s.p50_ms << '\n';
   return out.str();
 }

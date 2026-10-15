@@ -65,15 +65,6 @@ void TestStats() {
   Check(graph.size() == 20 && *std::max_element(graph.begin(), graph.end()) == 500, "graph preserves a single hitch");
   Check(Graph({}, 0).empty(), "empty graph");
   Check(Csv(std::vector<double>{10, 20}, "game") == "game,1,0.010000,10.000000\ngame,2,0.030000,20.000000\n", "CSV elapsed times and locale");
-  Check(CameraX(0) == 32767 && CameraX(3) == 0 && CameraX(6) == -32767 &&
-        CameraX(12) == 0 && CameraX(14) == 32767 && CameraX(17) == 0 &&
-        CameraX(25) == 32767 && CameraX(75) == 32767, "replay boundaries");
-  for (int fps : {30, 60, 120, 144, 240, 1000}) {
-    // Integrate the replay's stick command at each supported simulation rate.
-    double area = 0;
-    for (int frame = 0; frame < fps * 75; ++frame) area += CameraX((frame + .5) / fps) / double(fps);
-    Check(std::abs(area) < 1, "camera sweep has the same total motion at every frame rate");
-  }
 }
 
 // The Beta 5 limiter, retained only in this offline comparison tool.

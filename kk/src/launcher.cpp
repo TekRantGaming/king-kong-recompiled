@@ -3,6 +3,7 @@
 #include "ingame_settings.h"
 #include "pause_menu.h"
 #include "play_session.h"
+#include "benchmark.h"
 #include "launcher_art.h"
 #include "launcher_music.h"
 #include "launcher_sounds.h"
@@ -4191,8 +4192,15 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     std::vector<Item> items;
     items.push_back(Section("King Kong PC port"));
     Item benchmark = ActionItem("Run benchmark",
-        "Runs a 75-second camera replay after warmup, using your graphics settings and private saves. Results are saved locally.",
-        "Start", [this] { benchmark_pending_ = true; StartGame(); });
+        "Replays benchmark-route.kkbr beside the game, using your graphics settings and private saves. Results and route drift are saved locally.",
+        "Start", [this] {
+          if (!benchmark::RouteAvailable()) {
+            OpenModal("Benchmark", "Place a complete benchmark-route.kkbr beside the game before running the benchmark.",
+                {"Back"}, 0, {});
+            return;
+          }
+          benchmark::CreateBenchmarkStartDialog(imgui_drawer(), [this] { benchmark_pending_ = true; StartGame(); });
+        });
     items.push_back(Disable(benchmark, !CanPlay(), "Install the game first."));
     items.push_back(ActionItem("Copy diagnostics",
         "Copies version, hardware, settings, fallbacks and recent errors. Names and paths are redacted. Nothing is uploaded.",

@@ -489,7 +489,8 @@ void LoadStartRequestFromSettings() {
 
 bool RelaunchWith(const std::wstring& extra) {
   static constexpr const wchar_t* kDropped[] = {L"--kk_skip_launcher", L"--kk_start", L"--kk_launcher_open",
-                                               L"--kk_startup_child", L"--kk_benchmark"};
+                                               L"--kk_startup_child", L"--kk_benchmark", L"--kk_benchmark_record",
+                                               L"--kk_benchmark_route"};
   auto dropped = [](const std::wstring& arg) {
     for (const wchar_t* d : kDropped) {
       const std::wstring p(d);
@@ -957,6 +958,12 @@ REX_HOOK_RAW(sub_8253DB80) {
   const uint32_t ai = Load32(base, kAiPtr);
   const uint32_t g = ai ? Load32(base, ai + 0x40) : 0;
   if (g) {
+    if (const int chapter = kk::benchmark::NextChapter(); chapter >= 0) {
+      g_level_loaded = false;
+      g_cover = true;
+      g_cheats_pending = true;
+      StartChapter(ctx, base, g, chapter, 0);
+    }
     const bool request = Load32(base, g + 4) != 0;
     const uint32_t level = Load32(base, g + 8);
     // The title's own level request; the start is carried out a few frames after it has loaded.

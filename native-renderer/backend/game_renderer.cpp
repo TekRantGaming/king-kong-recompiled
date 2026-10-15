@@ -1,4 +1,5 @@
 #include "backend/game_renderer.h"
+#include "plugin/native_benchmark_stats.h"
 #include "backend/resource_upload_workers.h"
 #include "backend/upload_batch.h"
 #include "kkshaders/tessellation.h"
@@ -736,6 +737,12 @@ void GameRenderer::CheckMemoryBudget() {
   if (first) memory_start_ = now;
   memory_sample_ = now;
   const MemoryBudget live = options_.memory_budget ? options_.memory_budget() : MemoryBudget{};
+  if (benchmark_stats_enabled.load(std::memory_order_relaxed)) {
+    std::lock_guard lock(benchmark_stats_mutex);
+    benchmark_stats.vram_used = live.usage;
+    benchmark_stats.vram_budget = live.budget;
+    benchmark_stats.memory_valid = live.valid;
+  }
   if (!live.valid) {
     if (first) Logf(LogLevel::kWarning, "rexgpu-native: live GPU memory budget unavailable; adaptation disabled");
     memory_pressure_samples_ = 0;
