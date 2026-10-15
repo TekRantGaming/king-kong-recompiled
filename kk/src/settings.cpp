@@ -419,7 +419,11 @@ bool NormalizeRendererSettings() {
   const std::string plugin = rex::cvar::GetFlagByName("gpu_plugin");
   const std::string api = rex::cvar::GetFlagByName("native_backend");
   const bool legacy = renderer != "native" || plugin == "xenos" || plugin == "classic" ||
-                      (api != "auto" && api != "vulkan" && api != "d3d12");
+                      (api != "auto" && api != "vulkan"
+#if !defined(__linux__)
+                       && api != "d3d12"
+#endif
+                      );
   rex::cvar::SetFlagByName("kk_renderer", "native");
   rex::cvar::SetFlagByName("gpu_plugin", "native");
   if (legacy) rex::cvar::SetFlagByName("native_backend", "auto");

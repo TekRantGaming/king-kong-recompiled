@@ -17,6 +17,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="${KK_WORK:-$HOME/kk-linux-build}"
 
 echo "== Packages"
+if [ "${KK_SKIP_PACKAGES:-OFF}" != ON ]; then
 sudo apt-get update
 sudo apt-get install -y wget gnupg lsb-release ca-certificates
 if ! command -v clang++-20 >/dev/null && ! sudo apt-get install -y clang-20 lld-20; then
@@ -32,10 +33,12 @@ sudo apt-get install -y g++ cmake ninja-build pkg-config file unzip rsync deskto
   libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxinerama-dev libxss-dev \
   libxkbcommon-dev libwayland-dev libdecor-0-dev libegl-dev libgl-dev libvulkan-dev \
   libasound2-dev libpulse-dev libpipewire-0.3-dev libdbus-1-dev libudev-dev libgtk-3-dev
+fi
 
 echo "== Source"
 mkdir -p "$WORK"
-rsync -a --delete --exclude out --exclude assets --exclude image.bin "$ROOT/kk/" "$WORK/kk/"
+rsync -aL --delete --exclude out --exclude assets --exclude image.bin "$ROOT/kk/" "$WORK/kk/"
+rsync -a --delete --exclude out --exclude build "$ROOT/native-renderer/" "$WORK/native-renderer/"
 mkdir -p "$WORK/tools/rexglue" "$WORK/kk/assets"
 cp "$ROOT/CHANGELOG.md" "$WORK/"  # the launcher's What's new and version history are built in
 # The build checks the translated code against your default.xex (from your own disc).
@@ -63,7 +66,7 @@ fi
 echo "== Build"
 cd "$WORK/kk"
 # KK_DEV_TOOLS=ON builds the developer test aids in (for testing only, never a release).
-cmake --preset kk-linux-release -DKK_DEV_TOOLS="${KK_DEV_TOOLS:-OFF}"
+cmake --preset kk-linux-release -DKK_DEV_TOOLS="${KK_DEV_TOOLS:-OFF}" -DNR_DXC_DIR="${KK_DXC_DIR:-}"
 cmake --build --preset kk-linux-release -- -k 0
 BIN="$WORK/kk/out/build/kk-linux-release"
 
@@ -88,6 +91,10 @@ for lib in libstdc++.so.6 libgcc_s.so.1; do
     cp -L "/usr/lib/x86_64-linux-gnu/$lib" "$APPDIR/usr/lib/"
 done
 cp "$ROOT/docs/images/icon.png" "$APPDIR/king_kong.png"
+if [ -n "${KK_DXC_DIR:-}" ]; then
+  mkdir -p "$APPDIR/usr/share/licenses/dxc"
+  find "$KK_DXC_DIR" -maxdepth 1 -iname '*LICENSE*' -exec cp {} "$APPDIR/usr/share/licenses/dxc/" \;
+fi
 cat > "$APPDIR/king_kong.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
@@ -120,7 +127,11 @@ if find "$APPDIR" \( -iname '*.pack' -o -iname '*.pack.stamp' -o -iname '*.kksh'
 fi
 
 echo "== Missing libraries check"
-LD_LIBRARY_PATH="$APPDIR/usr/bin" ldd "$APPDIR/usr/bin/king_kong" | grep "not found" || echo "none"
+for lib in king_kong librexgpu-native.so libdxcompiler.so; do
+  [ -f "$APPDIR/usr/bin/$lib" ] || { echo "error: missing $lib" >&2; exit 1; }
+  DEPS="$(LD_LIBRARY_PATH="$APPDIR/usr/bin:$APPDIR/usr/lib" ldd "$APPDIR/usr/bin/$lib")"
+  if grep 'not found' <<< "$DEPS"; then exit 1; fi
+done
 
 echo "== AppImage"
 TOOL="$WORK/appimagetool-x86_64.AppImage"

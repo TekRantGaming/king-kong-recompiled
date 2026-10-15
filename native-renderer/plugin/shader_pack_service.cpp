@@ -63,7 +63,11 @@ std::string PrewarmStamp(const kkshaders::PackStamp& stamp, const nr::PipelinePr
   out << stamp.toText() << "pipeline layouts 1\n";
   std::error_code ec;
   // A renderer update or a changed pipeline list invalidates preparation even if the translator did not change.
+#if defined(__linux__)
+  const auto plugin = nr::ProgramFolder() / "librexgpu-native.so";
+#else
   const auto plugin = nr::ProgramFolder() / "rexgpu-native.dll";
+#endif
   out << std::filesystem::last_write_time(plugin, ec).time_since_epoch().count() << '\n';
   for (const auto& list : settings.lists) {
     // Newly recorded pipelines were already compiled by the game. Their append must not trigger
@@ -237,6 +241,9 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
     std::string warnings;
     std::vector<kkshaders::PackBackend> backends;
     for (auto backend : {kkshaders::PackBackend::Spirv, kkshaders::PackBackend::Dxil}) {
+#if defined(__linux__)
+      if (backend == kkshaders::PackBackend::Dxil) continue;
+#endif
 #if !NR_HAS_VULKAN
       if (backend == kkshaders::PackBackend::Spirv) continue;
 #endif
