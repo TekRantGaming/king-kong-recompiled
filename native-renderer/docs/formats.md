@@ -113,6 +113,11 @@ cache watches all of it), and `GetLevelSource` read levels 1+ from the base regi
 `HasMipsInBaseTail` holds change. The Windows side should compare a minified one (a distant 16x16 decal or
 icon) against the golden frames with the option on and off: on is expected to match the 360.
 
+Task 121 kept the default off. With the option on, its Windows Original-look V-Rex golden run
+passed 4/5 scenes on Vulkan (loading failed) and 5/5 on D3D12. This is not a paired same-build
+off/on proof of a minified tail texture, so it does not establish that enabling the option is
+correct globally. See [REPORT-121](../../codex/REPORT-121.md) for the captures and limits.
+
 Untiling and tiling share one address walk (`ReadGuestBlocks` / `WriteGuestBlocks` in
 `kknr/guest_texture.h`). `EncodeGuestTexture` is the full inverse of reading (tiling plus the endian swap); the
 round-trip tests push random blocks for 11 formats (1 to 16-byte blocks, 4x4, 2x1, 4x1 and 8x1 blocks) through
