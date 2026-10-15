@@ -1,3 +1,4 @@
+param([ValidateSet('both','vulkan','d3d12')][string]$Backend='both')
 $ErrorActionPreference='Stop'
 $workspace=(Resolve-Path "$PSScriptRoot/..").Path
 $lockPath='F:\KK-native-renderer\runs\codex-game.lock'
@@ -39,7 +40,8 @@ $documentary=Join-Path $workspace 'documentary/uipaint'
 New-Item -ItemType Directory -Path $documentary -Force | Out-Null
 $campaign='F:\KK-native-renderer\runs\task069-'+(Get-Date -Format yyyyMMdd-HHmmss)
 New-Item -ItemType Directory -Path $campaign | Out-Null
-foreach ($api in @('vulkan','d3d12')) {
+$apis=if($Backend -eq 'both') { @('vulkan','d3d12') } else { @($Backend) }
+foreach ($api in $apis) {
   Wait-GameSlot
   $run=Join-Path $campaign $api
   New-Item -ItemType Directory -Path $run | Out-Null
@@ -89,7 +91,14 @@ foreach ($api in @('vulkan','d3d12')) {
     Write-Output "RUN $api $run PID $($game.Id)"
     $wall=[Diagnostics.Stopwatch]::StartNew(); $level=$null; $captures=@{}; $opened=$false; $closed=$false
     while (!$game.HasExited -and $wall.Elapsed.TotalSeconds -lt 240) {
-      $log=if (Test-Path "$run/run.log") { [IO.File]::ReadAllText("$run/run.log") } else { '' }
+      $log=''
+      if (Test-Path "$run/run.log") {
+        try {
+          $stream=[IO.File]::Open("$run/run.log",'Open','Read',([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+          try { $reader=New-Object IO.StreamReader($stream); $log=$reader.ReadToEnd() }
+          finally { if($reader){$reader.Dispose()}else{$stream.Dispose()} }
+        } catch [IO.IOException] { } # A logger rotation is transient, not a failed game run.
+      }
       if (!$level -and $log -match 'UI repaint test phase 0 at') { $level=[Diagnostics.Stopwatch]::StartNew() }
       if ($level) {
         $t=$level.Elapsed.TotalSeconds

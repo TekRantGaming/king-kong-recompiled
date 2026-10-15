@@ -14,6 +14,7 @@
 #include <atomic>
 #include <bit>
 #include <cstring>
+#include <cstdlib>
 #include <chrono>
 #include <mutex>
 #include <thread>
@@ -121,6 +122,10 @@ void OnGuestSwap() {
     g_window_worst_ms = 0;
     REXLOG_INFO("Guest FPS: {:.1f} ({:.2f} ms/frame, {:.2f} ms in swap)",
                 g_stats.fps, g_stats.frame_time_ms, g_window_swap_ms / g_window_frames);
+#if defined(KK_DEV_TOOLS)
+    if (std::getenv("KK_DEV_UIPAINT_TEST"))
+      REXLOG_INFO("UI repaint guest trace: {} guest swaps in {:.3f} s", g_window_frames, elapsed);
+#endif
     g_window_start = now;
     g_window_frames = 0;
     g_window_swap_ms = 0;
