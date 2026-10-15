@@ -5,7 +5,7 @@
 // so the port ships none: the launcher has the native renderer's plugin build them into
 // <cache>/native-shaders, once, and again whenever the port's translator, its DXC or the game
 // files change (native-renderer/plugin/native_shader_pack_api.h, docs/shaders.md in
-// native-renderer). With the Xenos renderer none of this runs.
+// native-renderer). All game builds include the native renderer.
 #pragma once
 
 #include <filesystem>

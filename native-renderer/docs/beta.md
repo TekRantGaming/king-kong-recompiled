@@ -1,3 +1,11 @@
+> Current renderer policy (15 October 2026): all future builds use the native renderer only.
+> Vulkan is primary and Auto selects Vulkan; DirectX 12 is secondary. Graphics > Advanced offers
+> Graphics API only. Startup recovery tries the other native API, then reports driver/GPU requirements
+> and support instructions and exits. Old Classic/Xenos configs migrate to native Auto; old recovery
+> markers are cleared. Original and all hardware/preset choices use native rendering. Remastered keeps
+> 60 FPS and Strong GTAO; Original keeps 30 FPS. The Xenos GPU DLL is neither loaded nor packaged.
+> Earlier dated testing records below describe historical builds.
+
 # The native renderer beta: launcher changes (for the release session)
 
 Status: 12 October 2026, branch `beta-launcher` (from `beta` = `nr-integration` 1ba7339, launcher v1.9.11). Three
@@ -43,13 +51,10 @@ still be changed on the Gameplay page. The warning before Play ("Frame rate abov
 
 **Changing it later**: Graphics > Look ("Original Xbox 360" / "Remastered"). Choosing Original at setup first
 applies Remastered and then the Original look, so the settings the Original look puts aside (`kk_modern_settings`)
-are the Remastered ones: switching Look to Remastered later gives exactly Remastered. With AO on and the native
-renderer, Graphics shows **AO method** (GTAO (new) / Classic = `native_ao_method` gtao / legacy; GTAO also sets
-`native_ao_apply = opaque`, Classic resets it).
+are the Remastered ones: switching Look to Remastered later gives exactly Remastered. With AO on, Graphics uses GTAO and offers its strength and quality settings.
 
-**The renderer**: Graphics > Advanced > **Renderer**: "Native (beta)" or "Classic (emulated GPU)", with a description
-saying Classic is there to compare. It is `kk_renderer` (below); changing it restarts the game when Play is pressed
-(`gpu_plugin` is in the launcher's restart list), because the plugin is loaded before the launcher opens.
+**The renderer**: native only. Graphics > Advanced > **Graphics API** offers Auto (Vulkan),
+Vulkan and DirectX 12. Changes restart the game when Play is pressed.
 
 **Shader preparation wording**: wherever the native shaders are being prepared, the launcher says "Your PC may run
 slower until this finishes, because preparing the shaders uses its processor." (`KK_SLOW_PC` in `launcher.cpp`):
@@ -91,9 +96,7 @@ The pop-up: **Recompile shaders**, "Recompile your shaders? This takes about a m
 Yes starts a forced build (`NativeShaderPack::Start(..., force = true)`, the plugin's `start(..., force)`, interface
 version 2): the status line shows "Preparing N%" with its progress bar, and Play waits for it with the existing
 "Preparing shaders" pop-up. While a check or build runs, selecting it says "The shaders are being prepared right
-now." Decided: **native only**. With the Classic renderer the column is the downloaded SHADER PACK (the runtime's
-pipeline storage merged from GitHub); "recompiling" that would mean deleting the player's prepared pipelines, which
-the runtime then prepares again as they play: not useful, and not easy to make safe.
+now." All game builds use this native shader service.
 
 Also fixed on the way: B while a Home side panel (Steam, Discord) had the focus opened the Quit pop-up (the global
 Back ran first); it now goes back to the menu, as the footer said.
@@ -146,9 +149,9 @@ swapchain with `VK_FULL_SCREEN_EXCLUSIVE_DISALLOWED_EXT`; `--vulkan_allow_fullsc
 - **GTAO only.** `native_ao_method` `gtao` and `native_ao_apply` `opaque` are the port's defaults
   (`ApplyPortDefaults`; the plugin's own defaults stay `legacy`/`resolve` for its tests). The AO method row is gone;
   a settings file's `native_ao_method`/`native_ao_apply` (Beta 1's choice) is reset at start (`ApplyFixedSettings`).
-  Remastered no longer writes them. **AO strength** is now Light (1, recommended), Medium (2) and Strong (3): with GTAO
+  Remastered no longer writes them. **AO strength** is now Light (1), Medium (2) and Strong (3, recommended): with GTAO
   it sets XeGTAO's final power (1.6, 2.2, 3.0) and the radius (6, 8, 12 near-plane distances), see `ao.md`. The
-  Classic renderer keeps its own AO and the Intel note.
+  native renderer owns the shared AO settings; no emulation plugin is loaded.
 - **Supersampling** (`kk_render_quality` `supersample`) is gone: the row, the preset and the disabling it did. A
   settings file with it gets `native` (`ApplyFixedSettings`). Custom's Internal resolution stays.
 
@@ -156,7 +159,7 @@ swapchain with `VK_FULL_SCREEN_EXCLUSIVE_DISALLOWED_EXT`; `--vulkan_allow_fullsc
 
 | Setting | Values (default first) | Where | Notes |
 |---|---|---|---|
-| `kk_renderer` | `native`, `classic` | `settings.cpp`, Graphics > Advanced > Renderer | at start `ApplyRendererChoice` (`launcher.cpp`, called from `OnPreSetup`) sets **gpu_plugin's default** to `native` or `xenos` (always `xenos` when `rexgpu-native` isn't there). So `gpu_plugin` itself is never written to the settings file; a `gpu_plugin` from the command line or the settings file still wins (the Renderer row says so, and is disabled for the command line). Choosing a renderer in the launcher takes a settings-file `gpu_plugin` out. |
+| `kk_renderer` | legacy input only | `settings.cpp` | Old selections normalize to `native`; `gpu_plugin` is always `native`. Classic/Xenos selections also reset `native_backend` to `auto` and clear old recovery state. |
 | `kk_fullscreen_mode` | `desktop`, `WIDTHxHEIGHT@HZ` | `settings.cpp`, Display > Resolution and Refresh rate | set on the game's window when it starts (Beta 2) |
 | `kk_discord_status` | `true`, `false` | `settings.cpp`, About > Discord status | Beta 2 |
 | `kk_original_look` | (existing) | Graphics > Look | the label Modern is now Remastered |

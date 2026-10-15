@@ -1,3 +1,7 @@
+> Since 15 October 2026, game builds are native only (Vulkan primary, DirectX 12 secondary).
+> There is no `KK_NATIVE_RENDERER` build switch, Classic selection or Xenos GPU DLL in packages.
+> Emulation build commands and comparison runs below are historical records, not current instructions.
+
 # Temporal upscalers
 
 The native renderer can render the scene at a lower resolution and have a temporal upscaler rebuild it at
@@ -89,7 +93,7 @@ The user's rule: the best upscaler for the card, at Quality.
 | AMD | FSR 4 where it runs (RDNA 3 or 4 on Direct3D 12; never on Vulkan), else FSR 3.1 |
 | Intel | XeSS where it runs, else FSR 3.1 |
 | Any card whose vendor's upscaler does not run, but FSR 3.1 does (an NVIDIA GTX) | FSR 3.1 |
-| None of them runs, or the Classic renderer | FSR 1 (`present_effect` `fsr`); NIS is a choice only |
+| None of them runs | FSR 1 (`present_effect` `fsr`); NIS is a choice only |
 
 How (kk/src/settings.cpp, `ApplyUpscalerDefaults`):
 

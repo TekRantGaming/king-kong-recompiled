@@ -1,4 +1,4 @@
-param([string]$Label = 'before-vulkan', [string]$Backend = 'vulkan', [switch]$Classic, [switch]$Original, [switch]$Ground, [switch]$Uncapped, [string[]]$Extra = @())
+param([string]$Label = 'before-vulkan', [string]$Backend = 'vulkan', [switch]$Original, [switch]$Ground, [switch]$Uncapped, [string[]]$Extra = @())
 . (Join-Path $PSScriptRoot "run-storage.ps1")
 $ErrorActionPreference = 'Stop'
 $workspace = (Resolve-Path (Join-Path  '..\..')).Path
@@ -32,12 +32,11 @@ $args = @('--fullscreen=false','--window_width=1280','--window_height=720','--kk
  '--kk_start=chapter:0:8','--kk_launcher=false','--kk_cheats=true','--kk_cheat_ammo=true','--kk_cheat_machine_gun=true',
  "--user_data_root=$run\userdata","--cache_root=$run\cache",'--game_data_root=F:/KK-native-renderer/wt/codex-perf/kk/assets',"--log_file=$run\run.log",
  '--native_debug=32768',"--native_backend=$Backend")
-if ($Classic) { $args += '--kk_renderer=classic' }
 if ($Original) { $args += '--kk_original_look=true' }
 if ($Ground) { $args += '--mnk_mode=false','--kk_camera_sensitivity=400' }
 if ($Uncapped) { $args += '--kk_frame_rate=0' }
 $args += $Extra
-Set-Content "$run\test.json" (@{label=$Label;backend=$Backend;classic=[bool]$Classic;script=$env:KK_DEV_SCRIPT;args=$args} | ConvertTo-Json)
+Set-Content "$run\test.json" (@{label=$Label;backend=$Backend;classic=$false;script=$env:KK_DEV_SCRIPT;args=$args} | ConvertTo-Json)
 $game = $null
 # Copying the run takes time. Recheck the shared lock immediately before launch.
 while ((Get-Content -LiteralPath $lockPath -Raw).Trim() -ne 'free') { Start-Sleep -Seconds 30 }

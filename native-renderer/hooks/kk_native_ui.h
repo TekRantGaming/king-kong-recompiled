@@ -1,5 +1,5 @@
 // The game's side of the native renderer's launcher prewarm and stutter counter: compiled into
-// king_kong (kk/CMakeLists.txt, with KK_NATIVE_RENDERER) like kk_native_hooks.cpp. Each function
+// king_kong (kk/CMakeLists.txt, always native) like kk_native_hooks.cpp. Each function
 // looks for the plugin the launcher preloaded and does nothing when it is not there; the plugin
 // decides from its own options whether to do anything (docs/backend.md, "Prewarm from the
 // launcher", "Stutter counter").

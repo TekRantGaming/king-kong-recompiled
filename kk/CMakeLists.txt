@@ -79,16 +79,8 @@ endif()
 
 # Developer-only test aids (never in release builds): -DKK_DEV_TOOLS=ON.
 option(KK_DEV_TOOLS "Build developer test aids such as KK_DEV_AUTOSKIP" OFF)
-# The native renderer (Phase 1, experimental): -DKK_NATIVE_RENDERER=ON builds the
-# rexgpu-native plugin beside the game and the D3D hooks into it; run with
-# --gpu_plugin=native. Off: the game is built exactly as before.
-option(KK_NATIVE_RENDERER "Build the native renderer plugin and its D3D hooks" OFF)
 if(KK_DEV_TOOLS)
     list(APPEND KINGKONG_SOURCES src/dev_tools.cpp src/dev_watch.cpp src/dev_ae.cpp src/dev_sound_trace.cpp src/dev_load_trace.cpp src/dev_frame_log.cpp src/dev_sample.cpp src/dev_venture.cpp src/dev_chapter_jump.cpp src/dev_pause.cpp)
-    # dev_d3d_trace.cpp hooks the same Direct3D functions as the native renderer's hooks.
-    if(NOT KK_NATIVE_RENDERER)
-        list(APPEND KINGKONG_SOURCES src/dev_d3d_trace.cpp)
-    endif()
 endif()
 
 if(WIN32)
@@ -97,23 +89,23 @@ else()
     add_executable(king_kong ${KINGKONG_SOURCES})
 endif()
 
-rexglue_setup_target(king_kong GPU_PLUGINS xenos)
+rexglue_setup_target(king_kong)
 
-if(KK_NATIVE_RENDERER)
-    set(NR_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-    # plugin/CMakeLists.txt copies rexgpu-native beside this target after each plugin build.
-    set(NR_PLUGIN_COPY_BESIDE king_kong)
-    add_subdirectory(../native-renderer native-renderer)
-    if(KK_DEV_TOOLS)
-        target_compile_definitions(rexgpu-native PRIVATE KK_DEV_TOOLS=1)
-    endif()
-    target_sources(king_kong PRIVATE ../native-renderer/hooks/kk_native_hooks.cpp
-                                     ../native-renderer/hooks/kk_native_ui.cpp)
-    target_link_libraries(king_kong PRIVATE nr_hooks)
-    target_compile_definitions(king_kong PRIVATE KK_NATIVE_RENDERER=1)
-    # The runtime loads the plugin from beside the program.
-    add_dependencies(king_kong rexgpu-native)
+# All game builds use the native renderer.
+option(NR_BUILD_TESTS "Build native renderer tests" OFF)
+set(NR_BUILD_PLUGIN ON CACHE BOOL "" FORCE)
+# plugin/CMakeLists.txt copies rexgpu-native beside this target after each plugin build.
+set(NR_PLUGIN_COPY_BESIDE king_kong)
+add_subdirectory(../native-renderer native-renderer)
+if(KK_DEV_TOOLS)
+    target_compile_definitions(rexgpu-native PRIVATE KK_DEV_TOOLS=1)
 endif()
+target_sources(king_kong PRIVATE ../native-renderer/hooks/kk_native_hooks.cpp
+                                 ../native-renderer/hooks/kk_native_ui.cpp)
+target_link_libraries(king_kong PRIVATE nr_hooks)
+# The runtime loads the plugin from beside the program.
+add_dependencies(king_kong rexgpu-native)
+
 if(WIN32)
     target_link_libraries(king_kong PRIVATE windowscodecs ole32)
     # UTF-8 as the program's code page (src/king_kong.manifest, issue #37).
@@ -173,6 +165,8 @@ if(KK_DEV_TOOLS)
     target_include_directories(kk-launcher-tests PRIVATE src)
     rexglue_apply_target_settings(kk-launcher-tests)
     add_test(NAME launcher-logic COMMAND kk-launcher-tests)
+    add_executable(kk-startup-tests ../native-renderer/tests/startup-recovery-039.cpp)
+    add_test(NAME startup-recovery COMMAND kk-startup-tests "${CMAKE_CURRENT_BINARY_DIR}/startup-test-state")
 endif()
 
 # Button prompt pictures (kk_button_prompts) live beside the program.

@@ -17,7 +17,7 @@ struct RecoveryState {
   explicit RecoveryState(const std::filesystem::path& root) : directory(root / "renderer-recovery") {}
   static bool Native(const std::string& api) { return api == "vulkan" || api == "d3d12"; }
   static std::string Name(const std::string& api) {
-    return api == "vulkan" ? "Vulkan" : api == "d3d12" ? "DirectX 12" : "Classic";
+    return api == "vulkan" ? "Vulkan" : api == "d3d12" ? "DirectX 12" : "Unavailable";
   }
   bool Load() {
     std::ifstream in(directory / "fallback.state");
@@ -26,7 +26,9 @@ struct RecoveryState {
     if (!(in >> p >> s >> c)) return false;
     in.ignore(1, '\n');
     std::getline(in, r);
-    if (!Native(p) || (!Native(s) && s != "classic") || c < 0 || c > 1) return false;
+    if (!Native(p) || (!Native(s) && s != "classic" && s != "failed") || c < 0 || c > 1) return false;
+    // Old builds exhausted recovery into Classic. Forget that state and its crash marker.
+    if (s == "classic") { Clear(); return false; }
     preferred = p; selected = s; crashes = c; reason = r;
     in >> retry_requested;
     in >> notice_shown;  // missing in older files: stays false
@@ -51,9 +53,9 @@ struct RecoveryState {
     return bool(out);
   }
   bool Advance(const std::string& why) {
-    if (!Native(selected)) return false;  // Classic is the end, never a restart loop.
+    if (!Native(selected)) return false;
     const std::string failed = selected;
-    selected = selected == preferred ? (preferred == "vulkan" ? "d3d12" : "vulkan") : "classic";
+    selected = selected == preferred ? (preferred == "vulkan" ? "d3d12" : "vulkan") : "failed";
     crashes = 0;
     retry_requested = false;
     notice_shown = false;

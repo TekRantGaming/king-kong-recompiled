@@ -63,9 +63,7 @@ namespace kk {
 double DevSecondsSinceMenu();
 }
 #endif
-#if defined(KK_NATIVE_RENDERER)
 #include "hooks/kk_native_ui.h"
-#endif
 
 REXCVAR_DEFINE_DOUBLE(kk_graphics_panel_opacity, 0.82, "KK/Graphics panel",
                       "The graphics panel's (F8) background opacity, 0.3 to 1");
@@ -94,7 +92,7 @@ struct Setting {
   std::vector<Option> options;  // choices; a toggle's {off, on}
   float min = 0, max = 1;
   const char* format = "%.2f";
-  bool native = true;  // the native renderer's (hidden on the Classic renderer)
+  bool native = true;  // the native renderer's effects
   Show show = Show::kAlways;
   const char* help = "";
 };
@@ -161,7 +159,6 @@ const std::vector<Setting>& Settings() {
       // Only at the next start.
       {"Needs restart", "Look", "kk_original_look", Kind::kRestart, {}, 0, 1, "", false},
       {"Needs restart", "Graphics API", "native_backend", Kind::kRestart, {}, 0, 1, "", true},
-      {"Needs restart", "Renderer", "gpu_plugin", Kind::kRestart, {}, 0, 1, "", false},
   };
   return settings;
 }
@@ -177,14 +174,11 @@ struct UpscalerChoice {
 constexpr UpscalerChoice kUpscalers[] = {
     {"Off", "off"}, {"NVIDIA DLSS", "dlss"}, {"AMD FSR 4", "fsr4"}, {"AMD FSR 3.1", "fsr3"}, {"Intel XeSS", "xess"}};
 
-#if defined(KK_NATIVE_RENDERER)
 NrEffectStats Stats() { return nr::kk::EffectTimes(); }
-#endif
 
 // The temporal upscalers this PC runs: the launcher's answer (it asked the SDKs), else by the GPU's vendor.
 std::vector<UpscalerChoice> OfferedUpscalers() {
   std::vector<UpscalerChoice> out = {kUpscalers[0]};
-#if defined(KK_NATIVE_RENDERER)
   const NrEffectStats s = Stats();
   const bool d3d12 = s.size && s.api == 2;
   const nr::kk::UpscalerChoices c = nr::kk::PeekUpscalers();
@@ -194,7 +188,6 @@ std::vector<UpscalerChoice> OfferedUpscalers() {
   if (d3d12 && (known ? c.fsr4 : false)) out.push_back(kUpscalers[2]);
   if (known ? c.fsr3 : true) out.push_back(kUpscalers[3]);
   if (known ? c.xess : true) out.push_back(kUpscalers[4]);
-#endif
   return out;
 }
 
@@ -333,7 +326,6 @@ bool Visible(const Setting& s) {
 
 // ---------------------------------------------------------------- the text ---
 
-#if defined(KK_NATIVE_RENDERER)
 // What the renderer applies this frame, and why a setting that is on does not show (the panel's check that
 // a change reached the picture).
 std::string AppliedText(const NrEffectStats& s, std::vector<std::string>* notes) {
@@ -363,14 +355,12 @@ std::string AppliedText(const NrEffectStats& s, std::vector<std::string>* notes)
   }
   return out.empty() ? "nothing beyond the game's own picture" : out;
 }
-#endif
 
 std::string Readout() {
   std::string out;
   const auto frame = GetGuestFrameStats();
   out += "Frame rate: " + Number(frame.fps, "%.1f") + " FPS, " + Number(frame.frame_time_ms, "%.2f") +
          " ms a frame, longest " + Number(GuestWorstFrameMs(), "%.0f") + " ms in the last second\n";
-#if defined(KK_NATIVE_RENDERER)
   const NrEffectStats s = Stats();
   if (NativeRenderer() && s.size && s.frame) {
     out += std::string("Renderer: Native, ") + (s.api == 1 ? "Vulkan" : "DirectX 12") + "\n";
@@ -397,9 +387,8 @@ std::string Readout() {
     out += "Applied: " + AppliedText(s, &notes) + "\n";
     for (const auto& n : notes) out += "  " + n + "\n";
   } else {
-    out += "Renderer: " + std::string(NativeRenderer() ? "Native" : "Classic (emulated GPU)") + "\n";
+    out += "Renderer: " + std::string("Native") + "\n";
   }
-#endif
   return out;
 }
 
@@ -652,7 +641,6 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
   void DrawHeader() {
     const auto frame = GetGuestFrameStats();
     ImGui::Text("%.1f FPS   %.2f ms   longest %.0f ms", frame.fps, frame.frame_time_ms, GuestWorstFrameMs());
-#if defined(KK_NATIVE_RENDERER)
     const NrEffectStats st = Stats();
     if (NativeRenderer() && st.size && st.frame) {
       if (std::string_view(st.upscaler) != "off") {
@@ -686,10 +674,8 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
         if (st.preparing & 8) what += " shaders";
         ImGui::TextColored(ImColor(ui::color::kWarn), "Preparing:%s (the game keeps drawing meanwhile)", what.c_str());
       }
-    } else if (!NativeRenderer()) {
-      ImGui::TextWrapped("Classic renderer: only the ambient occlusion and the game's own effects apply here.");
+
     }
-#endif
     if (g_ab) {
       ImGui::TextColored(ImColor(ui::color::kAccent), "Showing your saved settings while F7 is held.");
     } else {
@@ -1222,7 +1208,6 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
         return;
       case 122: {
         TestCapture(TrialName("V"));
-#if defined(KK_NATIVE_RENDERER)
         if (trial_ == 0) {
           const NrEffectStats es = Stats();
           log("verify " + std::to_string(step_) + "-" + plan_[step_].cvar + "-V" + std::to_string(value_) + "-" +
@@ -1231,7 +1216,6 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
               " water=" + Number(es.water_ms) + " shafts=" + Number(es.volumetric_ms) + " up=" + Number(es.upscaler_ms) +
               " shadow_draws=" + std::to_string(es.shadow_draws) + " water_draws=" + std::to_string(es.water_draws));
         }
-#endif
         Change(plan_[step_].cvar.c_str(), step_base_);
         test_state_ = 123;
         test_next_ = now + 0.8;

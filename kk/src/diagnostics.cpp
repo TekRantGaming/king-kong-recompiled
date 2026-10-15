@@ -86,7 +86,7 @@ void Capture(std::string line, bool error) {
   const auto lower = Lower(line);
   const bool fallback = lower.find("fallback") != std::string::npos ||
       lower.find("falling back") != std::string::npos || lower.find("not supported") != std::string::npos ||
-      lower.find("unsupported") != std::string::npos || lower.find("using classic") != std::string::npos ||
+      lower.find("unsupported") != std::string::npos || lower.find("both native graphics APIs failed") != std::string::npos ||
       lower.find("disabled") != std::string::npos || lower.find("not available") != std::string::npos;
   const bool selection = lower.starts_with("kk: renderer ") || lower.starts_with("kk: fullscreen mode:") ||
       lower.starts_with("kk: graphics card:") || lower.find("using \"nvidia") != std::string::npos ||

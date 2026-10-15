@@ -17,9 +17,7 @@
 #include "discord_presence.h"
 #include "online.h"
 #include "diagnostics.h"
-#if defined(KK_NATIVE_RENDERER)
 #include "hooks/kk_native_ui.h"  // the temporal upscalers this PC runs
-#endif
 
 #include <algorithm>
 #include <atomic>
@@ -311,7 +309,6 @@ struct OfferedUpscalers {
 };
 OfferedUpscalers OfferedTemporalUpscalers() {
   OfferedUpscalers o;
-#if defined(KK_NATIVE_RENDERER)
   if (!HasTemporalSetting() || !UsingNativeRenderer()) return o;
   const nr::kk::UpscalerChoices c = nr::kk::QueryUpscalers();
   o.known = c.state == 2;
@@ -319,7 +316,6 @@ OfferedUpscalers OfferedTemporalUpscalers() {
   o.fsr4 = c.fsr4;
   o.dlss = c.dlss;
   o.xess = c.xess;
-#endif
   return o;
 }
 
@@ -383,8 +379,8 @@ bool PresetUpscalerMatches(const GraphicsPreset& p) {
 }
 
 // The AO strength the presets, Remastered and a new install use: Strong (3) for the native renderer's GTAO
-// (the user's choice, Beta 3), Light (1) for the Classic renderer's own AO.
-int DefaultAoStrength() { return rex::cvar::GetFlagByName("gpu_plugin") == "native" ? 3 : 1; }
+// (the user's choice, Beta 3).
+int DefaultAoStrength() { return 3; }
 
 int MatchGraphicsPreset() {
   for (int i = 0; i < kGraphicsPresetCount; ++i) {
@@ -445,16 +441,6 @@ void SetOriginalLook(bool on) {
 // the settings file (an earlier test build's) is taken out so that the choice holds.
 bool UsingNativeRenderer() { return Get("gpu_plugin") == "native"; }
 
-void SetRenderer(bool native) {
-  startup::ManualChoice();  // the player's choice wins over a startup fallback
-  Set("kk_renderer", native ? "native" : "classic");
-  if (const auto* flag = FindFlag("gpu_plugin"); flag && flag->source != rex::cvar::Source::kDefault &&
-                                                 flag->source != rex::cvar::Source::kCommandLine &&
-                                                 flag->source != rex::cvar::Source::kEnvironment)
-    Reset("gpu_plugin");
-  ApplyRendererChoice();
-}
-
 // ------------------------------------------------------- graphics style ---
 // The setup's last step: Original (the Original look) or Remastered (the Modern look, named
 // Remastered on the Graphics page, with a preset for this graphics card and the native renderer's
@@ -467,7 +453,7 @@ void ApplyRemastered() {
   SetInt("ao_strength", 3);  // Strong: GTAO's default since Beta 3 (the owner's choice)
   SetInt("kk_frame_rate", 60);  // Remastered plays at 60 FPS (the owner's choice); Original keeps 30
   ++g_changes;
-  SetRenderer(true);  // with the native renderer's GTAO, the only method since Beta 2 (ApplyPortDefaults)
+  ApplyRendererChoice();
 }
 
 // The Remastered settings first: the Original look keeps the settings it replaces and puts them back
@@ -1430,14 +1416,12 @@ class SettingsPages {
                                     "rocks, grass and people (GTAO). Water, smoke, fire and the sky are never darkened. "
                                     "Costs about 1 to 2 ms a frame at 4K."
                                   : "Soft shading where surfaces meet: in corners and creases, and on the ground under "
-                                    "rocks, grass and people. Costs about 1 ms a frame at 4K. Not available with Intel "
-                                    "graphics on the Classic renderer.",
+                                    "rocks, grass and people. Costs about 1 ms a frame at 4K.",
                            "ao_mode", {{"Off", "0"}, {"On", "1"}});
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
       if (GetInt("ao_mode", 0) != 0) {
         // GTAO: the shading's darkness (XeGTAO's final power 1.6, 2.2, 3.0) and how far it reaches from
-        // each crease (6, 8, 12 near-plane distances). Light darkens about as much as the Classic
-        // renderer's AO on the whole, with a crisper footprint (docs/ao.md, "In the game").
+        // each crease (6, 8, 12 near-plane distances). See docs/ao.md, "In the game".
         Item st = CvarChoice("AO strength",
                              native ? "How dark the shading gets and how far it spreads from each corner. Strong is "
                                       "recommended; Light and Medium are subtler."
@@ -1491,28 +1475,9 @@ class SettingsPages {
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
 
-    // Advanced: the Classic renderer stays for comparison (gpu_plugin xenos), as the stable version draws.
+    // The native API is the only renderer choice.
     if (NativeRendererAvailable()) {
       items.push_back(Section("Advanced"));
-      Item it;
-      it.type = ItemType::kChoice;
-      it.label = "Renderer";
-      it.description =
-          "Native draws the game with its own shaders, translated for your graphics card: faster, sharper at high "
-          "resolutions, with the new ambient occlusion. Classic emulates the Xbox 360's graphics chip, as the stable "
-          "version does; it's here to compare the two. The launcher restarts the game to change it.";
-      it.options = {"Native (beta)", "Classic (emulated GPU)"};
-      it.index = UsingNativeRenderer() ? 0 : Get("gpu_plugin") == "xenos" ? 1 : -1;
-      it.value_text = Get("gpu_plugin");
-      it.default_text = "Native (beta)";
-      it.on_choice = [](int i) { SetRenderer(i == 0); };
-      it.on_default = [] { SetRenderer(true); };
-      if (UsingNativeRenderer() != (Get("kk_renderer") != "classic"))
-        it.facts.push_back("Set by gpu_plugin in the settings file or on the command line.");
-      const auto* flag = FindFlag("gpu_plugin");
-      Disable(it, flag && (flag->source == rex::cvar::Source::kCommandLine || flag->source == rex::cvar::Source::kEnvironment),
-              "Set on the command line (--gpu_plugin).");
-      items.push_back(std::move(it));
       if (UsingNativeRenderer() && FindFlag("native_backend")) {
         Item api;
         api.type = ItemType::kChoice;
@@ -1695,7 +1660,6 @@ class SettingsPages {
       items.push_back(std::move(Disable(it, !mnk || !GetBool("mnk_mouse"), mnk_note)));
     }
 
-#if defined(KK_NATIVE_RENDERER)
     // The graphics panel (debug_overlay.cpp): its keys work in play with either input.
     items.push_back(Section("Keys while playing"));
     {
@@ -1706,7 +1670,6 @@ class SettingsPages {
       it.description = "F8 opens a panel over the game for trying graphics settings while you play. Hold F7 to see your saved settings for comparison. F6 saves a screenshot and its settings in the screenshots folder. Changes are temporary until you choose Save as my settings.";
       items.push_back(std::move(it));
     }
-#endif
 
     items.push_back(Section("Mapping"));
     {
@@ -2123,11 +2086,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       std::string failed, selected;
       startup::NoticeApis(failed, selected);
       const std::string recovery =
-          (selected == "Classic"
-               ? F("{0} did not start correctly on this PC, so the game now uses the Classic renderer. You can "
-                   "keep it or try {0} again.", {failed})
-               : F("{0} did not start correctly on this PC, so the game now uses {1}. You can keep it or try {0} "
-                   "again.", {failed, selected})) +
+          F("{0} did not start correctly on this PC, so the game now uses {1}. You can keep it or try {0} "
+            "again.", {failed, selected}) +
           "\n\n" + F("Details: {0}", {startup::Message()});
       startup::NoticeShown();
       OpenModal("Renderer startup recovery", recovery,
@@ -4283,7 +4243,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       it.on_activate = [this] { OpenVersionHistory(); };
       items.push_back(std::move(it));
     }
-#if defined(KK_NATIVE_RENDERER)
     {
       Item it;
       it.type = ItemType::kInfo;
@@ -4292,7 +4251,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       it.description = "Press F8 while playing to try graphics settings live, and hold F7 to compare with your saved settings. Nothing changes for good until you save. Copy settings and F6 screenshots make it easy to share what you find.";
       items.push_back(std::move(it));
     }
-#endif
     items.push_back(ActionItem("Project page", "The port's GitHub page: releases, issues and the source code.",
                                "GitHub", [] { OpenUrl(kProjectUrl); }));
     items.push_back(ActionItem("Discord",
@@ -5059,7 +5017,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // The temporal upscalers this PC runs (asked when the launcher opened): once the answer is in, it is
   // kept in the settings (kk_upscalers_offered) and the default upscaler follows it (SetOfferedUpscalers).
   void TickUpscalerQuery() {
-#if defined(KK_NATIVE_RENDERER)
     if (!HasTemporalSetting() || !UsingNativeRenderer()) return;
     const std::string backend = Get("native_backend");
     if (upscaler_answer_taken_ && upscaler_answer_backend_ == backend) return;
@@ -5077,7 +5034,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (Get("native_upscaler") != before)
       REXLOG_INFO("KK: default upscaler now {} (was {})", Get("native_upscaler"), before);
     ++g_changes;  // kk_upscalers_offered is saved with the settings
-#endif
   }
 
   // The native renderer's shaders: the end of the setup step, and Play waiting for them (the
@@ -5456,24 +5412,15 @@ bool g_native_renderer = false;  // PreloadGpuPlugin loaded rexgpu-native
 }  // namespace
 
 void PreloadGpuPlugin() {
-  if (!PreloadGpuPluginNamed("xenos"))
-    REXLOG_WARN("KK: GPU plugin not found for preload; graphics settings unavailable in launcher");
-  // The native renderer (--gpu_plugin=native), when it was built
-  // (KK_NATIVE_RENDERER): its cvars (native_test, native_draws, ...) must exist
-  // before the command line and the config are read, like the Xenos plugin's.
   g_native_renderer = PreloadGpuPluginNamed("native");
+  if (!g_native_renderer) REXLOG_ERROR("KK: native graphics plugin could not be loaded");
 }
 
 bool NativeRendererAvailable() { return g_native_renderer; }
 
 std::string ApplyRendererChoice() {
-  const bool native = g_native_renderer && rex::cvar::GetFlagByName("kk_renderer") != "classic";
-  SetCvarDefault("gpu_plugin", native ? "native" : "xenos");
-  // GTAO's default strength is Strong; the Classic renderer's AO keeps Light (DefaultAoStrength). A strength
-  // the player chose stays (SetCvarDefault only changes values still at their default).
-  SetCvarDefault("ao_strength", native ? "3" : "1");
-  // The default upscaler follows the renderer: the best temporal one with the native renderer, FSR 1 with
-  // the Classic renderer (settings.h, ApplyUpscalerDefaults).
+  NormalizeRendererSettings();
+  SetCvarDefault("ao_strength", "3");
   ApplyUpscalerDefaults();
   return startup::ApplyChoice(rex::cvar::GetFlagByName("gpu_plugin"));
 }

@@ -129,7 +129,7 @@ void ApplyHardwareRecommendation(bool detect, int width, int height);
 // The default upscaler (Beta 3, docs/upscalers.md "The default"): with the native renderer, the best
 // temporal upscaler this PC runs (native_upscaler): DLSS on an NVIDIA card that supports it, FSR 4 on
 // an AMD card that runs it (Direct3D 12 only), else FSR 3.1, XeSS on an Intel card, FSR 3.1 on any
-// other card that runs it; FSR 1 (present_effect) where none runs and with the Classic renderer. NIS
+// other card that runs it; FSR 1 (present_effect) where none runs. NIS
 // is a choice only. What runs is the launcher's question to the plugin (kk_upscalers_offered, kept in
 // the settings file); before it has answered once, the card's vendor decides (the game falls back to
 // FSR 3.1 itself if the guess cannot run).
@@ -163,5 +163,8 @@ const std::vector<std::pair<const char*, const char*>>& OriginalLookSettings();
 // With kk_original_look on, sets those values (in case the settings file was
 // edited). Call before the GPU starts, as it sets the render resolution.
 void EnforceOriginalLook();
+
+// Normalize old renderer/API config values before graphics setup; true if migrated.
+bool NormalizeRendererSettings();
 
 }  // namespace kk

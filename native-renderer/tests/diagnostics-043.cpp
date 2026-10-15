@@ -43,7 +43,7 @@ int main(int argc, char** argv) {
     if (const char* user = std::getenv("USERNAME"))
       Check(kk::RedactDiagnostics(std::string("hello ") + user).find(user) == std::string::npos, "user leaked");
     spdlog::logger log("test", test_sink);
-    log.warn("startup fallback to Classic: C:\\Users\\OtherPerson\\shader.pack");
+    log.warn("startup fallback to DirectX 12: C:\\Users\\OtherPerson\\shader.pack");
     for (int i = 0; i < 20; ++i) log.error("test error {}: C:/Users/OtherPerson/log.txt", i);
     // Long lines are cut before redaction: a path starting at the cut must still be redacted.
     for (size_t pad : {760u, 765u, 768u, 770u, 5000u})
@@ -52,7 +52,7 @@ int main(int argc, char** argv) {
     Check(report.find("Version: test043") != std::string::npos, "version missing");
     Check(report.find("kk_update_channel = beta") != std::string::npos, "channel missing");
     Check(report.find("Primary desktop mode (Windows") != std::string::npos, "desktop mode missing");
-    Check(report.find("startup fallback to Classic") != std::string::npos, "fallback missing");
+    Check(report.find("startup fallback to DirectX 12") != std::string::npos, "fallback missing");
     Check(report.find("test error 19:") != std::string::npos, "latest error missing");
     Check(report.find("test error 0:") == std::string::npos, "unbounded errors");
     Check(report.find("OtherPerson") == std::string::npos, "report leaked a profile path");

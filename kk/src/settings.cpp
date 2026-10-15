@@ -107,11 +107,8 @@ REXCVAR_DEFINE_BOOL(kk_big_blur, false, "KK/Graphics",
                     "The game's full-screen blur in some levels (Necropolis, Brontosaurus), sized for 720p");
 REXCVAR_DEFINE_BOOL(kk_original_look, false, "KK/Graphics",
                     "Play with the Xbox 360's own settings (launcher: Graphics > Look)");
-REXCVAR_DEFINE_STRING(kk_renderer, "native", "KK/Graphics",
-                      "Which renderer draws the game: native (the native renderer) or classic (the emulated Xbox "
-                      "360 GPU, rexgpu-xenos). Sets gpu_plugin at start; a gpu_plugin given on the command line or "
-                      "in the settings file wins. Builds without the native renderer always use classic")
-    .allowed({"native", "classic"});
+// Compatibility input only: old values are normalized before graphics setup.
+REXCVAR_DEFINE_STRING(kk_renderer, "native", "KK/Graphics", "Legacy renderer selection (always native)");
 REXCVAR_DEFINE_STRING(kk_fullscreen_mode, "desktop", "KK/Video",
                       "Fullscreen resolution: desktop (a borderless window at the desktop's resolution) or a display "
                       "mode WIDTHxHEIGHT@HZ, e.g. 2560x1440@144 (exclusive fullscreen at that mode)");
@@ -417,6 +414,18 @@ bool NativeRendererInUse() { return rex::cvar::GetFlagByName("gpu_plugin") == "n
 
 }  // namespace
 
+bool NormalizeRendererSettings() {
+  const std::string renderer = rex::cvar::GetFlagByName("kk_renderer");
+  const std::string plugin = rex::cvar::GetFlagByName("gpu_plugin");
+  const std::string api = rex::cvar::GetFlagByName("native_backend");
+  const bool legacy = renderer != "native" || plugin == "xenos" || plugin == "classic" ||
+                      (api != "auto" && api != "vulkan" && api != "d3d12");
+  rex::cvar::SetFlagByName("kk_renderer", "native");
+  rex::cvar::SetFlagByName("gpu_plugin", "native");
+  if (legacy) rex::cvar::SetFlagByName("native_backend", "auto");
+  return legacy;
+}
+
 std::string DefaultTemporalUpscaler() {
   if (!Flag("native_upscaler") || !NativeRendererInUse()) return "off";
   return BestTemporalUpscaler();
@@ -608,18 +617,9 @@ void ApplyPortDefaults() {
   SetCvarDefault("present_effect", SpatialDefault());
   // Ambient occlusion on the native renderer: GTAO at the end of the opaque pass, so water, smoke,
   // fire, fur and the sky are never darkened (native-renderer/docs/ao.md). The plugin's own defaults
-  // stay the legacy method for its tests; the Classic renderer keeps its own AO.
+  // stay the legacy method for standalone renderer tests.
   SetCvarDefault("native_ao_method", "gtao");
   SetCvarDefault("native_ao_apply", "opaque");
-  // Shader preparing: Balanced. New pipelines are created on background
-  // threads, many at once, and a frame may wait up to async_shader_wait_ms in
-  // total for them (a setting added to this port's build of the GPU plugin),
-  // drawing without one only if it still isn't ready. Creating them one at a
-  // time while the game waits (Wait) froze V-Rex for up to 2 seconds the first
-  // time; never waiting (Background) skips the draws, so objects vanish or
-  // flash for a moment instead.
-  SetCvarDefault("async_shader_compilation", "true");
-  SetCvarDefault("async_shader_wait_ms", std::to_string(kBalancedShaderWaitMs));
 }
 
 const std::vector<std::pair<const char*, const char*>>& OriginalLookSettings() {
@@ -632,12 +632,10 @@ const std::vector<std::pair<const char*, const char*>>& OriginalLookSettings() {
       {"anisotropic_override", "-1"},  {"ao_mode", "0"},          {"ao_strength", "1"},
       {"kk_motion_blur", "true"},      {"kk_fog", "true"},        {"kk_big_blur", "true"},
       {"kk_frame_rate", "30"},         {"kk_fov", "69"},
-#if defined(KK_NATIVE_RENDERER)
       {"native_gi", "off"},
       {"native_upscaler", "off"},  // the native renderer's temporal upscalers (Display > Upscaling)
       // The native renderer's lighting options (native-renderer/docs/lighting.md): the game's own.
       {"native_shadow_quality", "original"}, {"native_water_reflections", "original"}, {"native_volumetrics", "off"},
-#endif
   };
   return settings;
 }
@@ -654,29 +652,8 @@ void EnforceOriginalLook() {
 }
 
 void ApplyRuntimeOverrides() {
-  // ReXGlue submits GPU work at every primary ring-buffer end by default, which
-  // stalls this title to ~27 ms per frame (the 30 FPS "lock"). Batching lets
-  // it run at any rate; the title's delta-time keeps game speed correct.
-  // Guest vsync only paces the emulated console (60 Hz vblank + coarse sleeps
-  // in GPU waits). Frame pacing is done by kk_frame_rate instead.
-  for (const char* name : {"d3d12_submit_on_primary_buffer_end", "vsync"}) {
-    if (!rex::cvar::SetFlagByName(name, "false"))
-      REXLOG_WARN("KK: could not set {} (cvar not registered)", name);
-  }
+  rex::cvar::SetFlagByName("vsync", "false");
   REXLOG_INFO("KK: frame-rate cap {}", REXCVAR_GET(kk_frame_rate));
-
-  // Shader preparing: Balanced waits up to half a frame at the frame-rate cap
-  // for pipelines being prepared (16 ms at 30 FPS, 8 at 60, 4 from 120 or
-  // unlimited), which fits in the frame's spare time. A fixed 16 ms caused a
-  // hitch at 60 FPS.
-  {
-    const int32_t fps = REXCVAR_GET(kk_frame_rate);
-    const int32_t wait = fps > 0 ? std::clamp(500 / fps, 4, kBalancedShaderWaitMs) : 4;
-    SetCvarDefault("async_shader_wait_ms", std::to_string(wait));
-    REXLOG_INFO("KK: shader preparing {}, waiting up to {} ms a frame",
-                rex::cvar::GetFlagByName("async_shader_compilation") == "true" ? "in the background" : "on demand",
-                rex::cvar::GetFlagByName("async_shader_wait_ms"));
-  }
 
   // The game sizes its frame from the console's video mode: 1280x720 on an HD
   // mode, but the whole game at 640x480 (stretched to 16:9) on a mode under 720

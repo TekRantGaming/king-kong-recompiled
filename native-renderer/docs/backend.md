@@ -1,3 +1,7 @@
+> Since 15 October 2026, game builds are native only (Vulkan primary, DirectX 12 secondary).
+> There is no `KK_NATIVE_RENDERER` build switch, Classic selection or Xenos GPU DLL in packages.
+> Emulation build commands and comparison runs below are historical records, not current instructions.
+
 # Stream 04: the backend and the `rexgpu-native` plugin
 
 Status, 10 October 2026 (Phase 2): the game renderer draws the game with its own translated shaders, textures,
@@ -9,7 +13,7 @@ states, render targets and resolves. On Windows with Vulkan **all 13 golden scen
 
 | Path | What | Depends on |
 |---|---|---|
-| `CMakeLists.txt`, `cmake/nvrhi.cmake` | standalone project; kk includes it with `KK_NATIVE_RENDERER=ON` | |
+| `CMakeLists.txt`, `cmake/nvrhi.cmake` | standalone project; kk always includes it | |
 | `backend/draw_state.*`, `draw_sink.h` | the draw-state tracker: D3D-level state from the hooked calls, one record per clear / draw / resolve / present | nothing |
 | `backend/api_binding.*` | the `NrApi` table (`plugin/native_api.h`) bound to a tracker; the plugin and the tests use the same code | nothing |
 | `backend/guest_layout.h`, `guest_memory.h` | guest object layouts (vertex / index buffer, declaration, viewport), big-endian helpers | nothing |
@@ -901,7 +905,7 @@ The native renderer has the same screen-space AO as the Xenos plugin (patches 00
 
 **Settings.** `ao_mode` (0 off, 1 on, 2 show the AO only) and `ao_strength` (1 to 3) are read each
 frame with `rex::cvar::GetFlagByName`, the way the launcher sets them. They are defined by the
-Xenos plugin (rexgpu-xenos), which the launcher preloads, so the Graphics page keeps working. Off
+native plugin, which the launcher preloads, so the Graphics page keeps working without Xenos. Off
 (the default) costs nothing and changes nothing.
 
 **Detection** (in `GameRenderer::Resolve`, the same rules as the plugin). A full-screen D24S8 depth
@@ -1385,7 +1389,7 @@ cleared or full driver cache, or drivers without one.
 #### Prewarm from the launcher
 
 The launcher calls the plugin when it opens (`nr_prewarm_start`, `plugin/native_prewarm.h`; the game's side is
-`hooks/kk_native_ui.cpp`, compiled into `king_kong` with `KK_NATIVE_RENDERER`), so the game's pipelines are made
+`hooks/kk_native_ui.cpp`, always compiled into `king_kong`), so the game's pipelines are made
 while the player is still choosing. With `--native_launcher_prewarm` off (the default), `--gpu_plugin` other than
 `native`, `--native_backend=d3d12`, `--native_game=false` or `--native_async_pipelines=false` the call does nothing.
 

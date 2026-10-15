@@ -56,9 +56,7 @@ void InstallFpeGuard();  // fpe_guard.cpp
 #include "settings.h"
 #include "toast.h"
 #include "startup_recovery.h"
-#if defined(KK_NATIVE_RENDERER)
 #include "hooks/kk_native_ui.h"  // the native renderer's launcher prewarm
-#endif
 
 class KingKongApp : public rex::ReXApp {
  public:
@@ -171,9 +169,7 @@ class KingKongApp : public rex::ReXApp {
       });
     };
     cb.restart_and_play = [this] {
-#if defined(KK_NATIVE_RENDERER)
       nr::kk::StopLauncherPrewarm();  // its device goes before this process does
-#endif
       // The start request chosen on the Play menu goes with it (kk::play::SetStartRequest).
       const std::wstring start = kk::play::StartRequestArg();
       kk::startup::CleanExit();
@@ -181,9 +177,7 @@ class KingKongApp : public rex::ReXApp {
       app_context().CallInUIThreadDeferred([this] { app_context().QuitFromUIThread(); });
     };
     cb.quit = [this] {
-#if defined(KK_NATIVE_RENDERER)
       nr::kk::StopLauncherPrewarm();
-#endif
       app_context().CallInUIThreadDeferred([this] { app_context().QuitFromUIThread(); });
     };
     cb.set_fullscreen = [this](bool on) {
@@ -199,12 +193,10 @@ class KingKongApp : public rex::ReXApp {
     kk::ShowLauncher(imgui_drawer(), immediate_drawer(),
                       {defaults.game_data_root, defaults.user_data_root, defaults.config_path},
                       std::move(cb));
-#if defined(KK_NATIVE_RENDERER)
     // The native renderer makes the game's pipelines while the player is in the launcher, when
     // --native_launcher_prewarm is on (the plugin decides; nothing happens otherwise). After the
     // launcher is made: it applies the Original look, which the settings the prewarm reads follow.
     nr::kk::StartLauncherPrewarm(defaults.cache_root);
-#endif
     return std::nullopt;
   }
 
@@ -221,7 +213,7 @@ class KingKongApp : public rex::ReXApp {
     }
     // The renderer: kk_renderer (Graphics > Renderer) unless gpu_plugin was given (launcher.h).
     if (!config.graphics) config.gpu_plugin = kk::ApplyRendererChoice();
-    if (!config.graphics && config.gpu_plugin.empty()) config.gpu_plugin = "xenos";
+    if (!config.graphics && config.gpu_plugin.empty()) config.gpu_plugin = "native";
     if (!config.graphics) {
       config.gpu_plugin = kk::startup::ApplyChoice(config.gpu_plugin);
       gpu_plugin_ = config.gpu_plugin;
@@ -301,9 +293,7 @@ class KingKongApp : public rex::ReXApp {
     // The port's pause menu (pause_menu.cpp; the launcher's Play makes it too, later calls do nothing).
     kk::CreatePauseMenu(drawer, immediate_drawer(), config_path_, user_data_root_, game_data_root());
     kk::CreateFpsOverlay(drawer);
-#if defined(KK_NATIVE_RENDERER)
     kk::CreateDebugOverlay(drawer, window(), config_path_, user_data_root_);
-#endif
   }
 
   // Xbox 360-style toast with a chime for the game's achievements.

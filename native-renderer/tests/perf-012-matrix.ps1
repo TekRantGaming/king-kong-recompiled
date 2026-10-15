@@ -13,7 +13,6 @@ if ($Group -in 'basic','all') {
    $jobs+=@{Label="final-$backend-1440-off";Chapter=$chapter;Scale='2560x1440';Backend=$backend;PassTimers=$true}
   }
  }
- $jobs+=@{Label='final-classic-1440-off';Chapter=8;Scale='2560x1440';Classic=$true}
 }
 if ($Group -in 'gunfire','all') {
  $before='F:\KK-native-renderer\runs\task012-before-vk-1440-ch8-20261013-153744\rexgpu-native.dll'

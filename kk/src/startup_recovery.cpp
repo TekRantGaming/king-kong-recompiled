@@ -1,6 +1,9 @@
 #include "startup_recovery.h"
 #include "startup_recovery_state.h"
 #include "launcher.h"
+#include "launcher_text.h"
+#include "settings.h"
+#include <rex/system.h>
 #include <cstdlib>
 #include <memory>
 #include <chrono>
@@ -9,9 +12,7 @@
 #include <thread>
 #include <rex/cvar.h>
 #include <rex/logging.h>
-#if defined(KK_NATIVE_RENDERER)
 #include "hooks/kk_native_ui.h"
-#endif
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -67,6 +68,16 @@ void Signal(char value) {
 
 bool IsDeviceLoss(const char* why) { return why && std::string_view(why).find("lost") != std::string_view::npos; }
 
+// End the recovery chain after both native APIs fail. No monitor retry is signalled.
+[[noreturn]] void Exhausted() {
+  REXLOG_ERROR("KK recovery: both native graphics APIs failed; see logs for details");
+  rex::ShowSimpleMessageBox(rex::SimpleMessageBoxType::Error,
+      kk::text::T("Neither Vulkan nor DirectX 12 could start. Update your graphics driver and check that your GPU meets the requirements in README.md. For help, use the support links in README.md and include the logs folder."));
+  if (state) state->Clear();
+  Signal('C');
+  std::_Exit(1);
+}
+
 int Failure(const char* why) {
   std::lock_guard lock(mutex);
   // Device loss after startup, or in the launcher, retains the existing fatal path.
@@ -75,6 +86,7 @@ int Failure(const char* why) {
     REXLOG_ERROR("KK recovery: could not persist startup fallback");
     return 0;
   }
+  if (state->selected == "failed") Exhausted();
   armed = false;
   init_only = false;
   REXLOG_ERROR("KK recovery: {}", state->reason);
@@ -88,7 +100,6 @@ void PublishFailed() {
   std::string failed;
   if (state && !state->reason.empty() && state->selected != state->preferred) {
     failed = state->preferred;
-    if (state->selected == "classic") failed = "vulkan,d3d12";
   }
   rex::cvar::SetFlagByName("native_failed_backends", failed);
 }
@@ -100,8 +111,8 @@ void Apply() {
     original_plugin = rex::cvar::GetFlagByName("gpu_plugin");
     original_backend = rex::cvar::GetFlagByName("native_backend");
   }
-  rex::cvar::SetFlagByName("kk_renderer", state->selected == "classic" ? "classic" : "native");
-  rex::cvar::SetFlagByName("gpu_plugin", state->selected == "classic" ? "xenos" : "native");
+  rex::cvar::SetFlagByName("kk_renderer", "native");
+  rex::cvar::SetFlagByName("gpu_plugin", "native");
   if (RecoveryState::Native(state->selected)) rex::cvar::SetFlagByName("native_backend", state->selected);
 }
 // Mutex held. Startup is over: the marker goes and a fallback that reached the game is kept.
@@ -187,7 +198,7 @@ void MonitorStartup() {
       if (!ReadFile(read, &value, 1, &got, nullptr) || !got) break;
       last = value;
     }
-    // A normal close is not a crash. Never retry a crash after a chapter, or a Classic failure.
+    // A normal close is not a crash. Never retry a crash after a chapter, or an exhausted recovery.
     if (last != 'F' && !(last == 'B' && result != 0)) break;
   }
   CloseHandle(read); CloseHandle(write);
@@ -198,26 +209,29 @@ void MonitorStartup() {
 void Configure(const std::filesystem::path& root) {
   std::lock_guard lock(mutex);
   state = std::make_unique<RecoveryState>(root);
-  if (state->Load()) state->RecoverCrash();
+  if (kk::NormalizeRendererSettings()) state->Clear();
+  else if (state->Load()) state->RecoverCrash();
+  if (state->selected == "failed") Exhausted();
   Apply();
   PublishFailed();
-#if defined(KK_NATIVE_RENDERER)
   nr::kk::SetStartupFailureHandler(Failure);
   nr::kk::SetStartupPresentedHandler(FirstFramePresented);
-#endif
 }
 
 std::string ApplyChoice(const std::string& plugin) {
   std::lock_guard lock(mutex);
   Apply();
   return state && (!state->reason.empty() || state->retry_requested)
-      ? (state->selected == "classic" ? "xenos" : "native") : plugin;
+      ? ("native") : plugin;
 }
 
 void Begin(const std::string& plugin, bool game) {
   {
     std::lock_guard lock(mutex);
     if (!state || plugin != "native" || armed) return;
+    const std::string wanted = rex::cvar::GetFlagByName("native_backend");
+    const std::string api = wanted == "d3d12" ? "d3d12" : "vulkan";
+    if (state->reason.empty()) { state->preferred = api; state->selected = api; }
     if (!game) {
       // The launcher shows first: nothing is written and a crash is not counted.
       init_only = true;
@@ -225,9 +239,6 @@ void Begin(const std::string& plugin, bool game) {
       return;
     }
     init_only = false;
-    const std::string wanted = rex::cvar::GetFlagByName("native_backend");
-    const std::string api = wanted == "d3d12" ? "d3d12" : "vulkan";
-    if (state->reason.empty()) { state->preferred = api; state->selected = api; }
     if (!state->Save() || !state->Marker(api)) {
       REXLOG_ERROR("KK recovery: startup marker could not be written");
       return;

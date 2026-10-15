@@ -548,7 +548,7 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
       }
       REXLOG_INFO("rexgpu-native: game renderer ready");
     } else {
-      REXGPU_ERROR("rexgpu-native: game renderer initialisation failed. Choose Classic or another native API in the launcher.");
+      REXGPU_ERROR("rexgpu-native: game renderer initialisation failed. Choose the other native API in the launcher and update your graphics driver.");
       shaders_.reset();
       return false;
     }

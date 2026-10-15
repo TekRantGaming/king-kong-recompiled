@@ -4,7 +4,6 @@
 #include <rex/filesystem.h>
 #include <rex/logging.h>
 
-#if defined(KK_NATIVE_RENDERER)
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -17,7 +16,6 @@
 #include <dlfcn.h>
 #endif
 #include "../../native-renderer/plugin/native_shader_pack_api.h"
-#endif
 
 #include "launcher_text.h"
 #include "shader_progress.h"
@@ -30,7 +28,6 @@ namespace kk {
 using text::F;
 using text::T;
 
-#if defined(KK_NATIVE_RENDERER)
 
 namespace {
 
@@ -182,22 +179,5 @@ std::string NativeShaderPack::StatusText() {
   return T(std::string("Not prepared"));
 }
 
-#else  // the native renderer is not built: nothing to prepare
-
-struct NativeShaderPack::Impl {};
-NativeShaderPack::NativeShaderPack() : impl_(std::make_unique<Impl>()) {}
-NativeShaderPack::~NativeShaderPack() = default;
-bool NativeShaderPack::Wanted() { return false; }
-void NativeShaderPack::Start(const std::filesystem::path&, const std::filesystem::path&, bool) {}
-void NativeShaderPack::Cancel() {}
-bool NativeShaderPack::Busy() { return false; }
-bool NativeShaderPack::Finished() { return false; }
-bool NativeShaderPack::Ok() { return false; }
-float NativeShaderPack::Fraction() { return -1.0f; }
-bool NativeShaderPack::Working() { return false; }
-std::string NativeShaderPack::StepText() { return {}; }
-std::string NativeShaderPack::StatusText() { return {}; }
-
-#endif
 
 }  // namespace kk

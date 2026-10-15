@@ -36,6 +36,21 @@ void Equals(const char* name, const char* expected) {
 }
 int main() {
   using namespace kk;
+  for (const char* legacy : {"classic", "xenos"}) {
+    rex::cvar::SetFlagByName("kk_renderer", legacy);
+    rex::cvar::SetFlagByName("gpu_plugin", "xenos");
+    rex::cvar::SetFlagByName("native_backend", "d3d12");
+    Check(NormalizeRendererSettings(), "legacy renderer migrated");
+    Equals("gpu_plugin", "native"); Equals("kk_renderer", "native"); Equals("native_backend", "auto");
+    Check(!NormalizeRendererSettings(), "migration is idempotent");
+  }
+  rex::cvar::SetFlagByName("native_backend", "classic");
+  Check(NormalizeRendererSettings(), "legacy API migrated");
+  Equals("native_backend", "auto");
+  rex::cvar::SetFlagByName("native_backend", "d3d12");
+  Check(!NormalizeRendererSettings(), "native API preserved");
+  Equals("native_backend", "d3d12");
+  rex::cvar::SetFlagByName("native_backend", "auto");
   constexpr uint64_t GiB = uint64_t(1) << 30;
   struct Case { GpuVendor vendor; const char* model; unsigned vram, cores, ram; bool deck; size_t tier; };
   const Case cases[] = {
