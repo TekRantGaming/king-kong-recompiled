@@ -25,8 +25,8 @@
 
 // Shared graphics settings are owned here; the emulation plugin is never loaded.
 REXCVAR_DEFINE_BOOL(vsync, false, "GPU", "Enable vertical sync");
-REXCVAR_DEFINE_STRING(swap_post_effect, "fxaa", "GPU", "Anti-aliasing: none, fxaa, fxaa_extreme")
-    .allowed({"none", "fxaa", "fxaa_extreme"});
+REXCVAR_DEFINE_STRING(swap_post_effect, "fxaa", "GPU", "Anti-aliasing: none, fxaa, smaa (SMAA 1x), fxaa_extreme")
+    .allowed({"none", "fxaa", "smaa", "fxaa_extreme"});
 REXCVAR_DEFINE_INT32(anisotropic_override, 3, "GPU", "Texture filtering override (-1 = game default)").range(-1, 5);
 REXCVAR_DEFINE_INT32(draw_resolution_scale_x, 1, "GPU", "Draw resolution scale X").range(1, 8);
 REXCVAR_DEFINE_INT32(draw_resolution_scale_y, 1, "GPU", "Draw resolution scale Y").range(1, 8);

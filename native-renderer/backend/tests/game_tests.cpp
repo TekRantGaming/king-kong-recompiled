@@ -734,6 +734,37 @@ TEST(Draw_VertexColoursAndOrientation) {
   CHECK_EQ(f.shaders->stats().from_object, uint64_t(0));
 }
 
+TEST(Present_SmaaMatchesTheEmbeddedPassAtTheNativeFrameFormat) {
+  Fixture f;
+  if (!f.Init()) return;
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  f.Clear(kClearTarget0, 0xFF000000); f.DrawQuadrants(p);
+  const Pixels off = f.Present(rt);
+  nvrhi::TextureDesc d;
+  d.width = d.height = kSize; d.format = Renderer::kFrameFormat;
+  d.isRenderTarget = true; d.initialState = nvrhi::ResourceStates::ShaderResource; d.keepInitialState = true;
+  auto source = f.gpu->device()->createTexture(d), target = f.gpu->device()->createTexture(d);
+  std::vector<uint32_t> packed(kSize*kSize);
+  for (size_t i=0;i<packed.size();++i) {
+    const auto* c=&off.rgba[i*4];
+    packed[i]=uint32_t(std::lround(c[0]*1023)) | (uint32_t(std::lround(c[1]*1023))<<10) |
+              (uint32_t(std::lround(c[2]*1023))<<20) | (uint32_t(std::lround(c[3]*3))<<30);
+  }
+  Smaa aa(f.gpu->device()); CHECK(aa.Initialize());
+  auto cl=f.gpu->device()->createCommandList(); cl->open();
+  cl->writeTexture(source,0,0,packed.data(),kSize*4);
+  CHECK(aa.Render(cl,source,target)); cl->close(); f.gpu->Execute(cl); f.gpu->WaitIdle();
+  const Pixels expected=f.gpu->ReadBack(target);
+  f.game->options().fxaa=3;
+  f.Clear(kClearTarget0, 0xFF000000); f.DrawQuadrants(p);
+  const Pixels actual=f.Present(rt,"smaa_present");
+  CHECK_EQ(actual.rgba.size(),expected.rgba.size());
+  for(size_t i=0;i<std::min(actual.rgba.size(),expected.rgba.size());++i)
+    CHECK(std::abs(actual.rgba[i]-expected.rgba[i])<2.0f/1023.0f);
+  f.CheckQuadrantColors(actual,__LINE__);
+}
+
 TEST(Draw_IndexedAndPrimitiveTypes) {
   Fixture f;
   if (!f.Init()) return;

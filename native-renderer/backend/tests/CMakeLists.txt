@@ -170,6 +170,13 @@ endif()
 # The game renderer without the game: synthetic guest memory, shaders from the
 # shader tests' assembler and container writer, through the hooks on lavapipe.
 if(NR_HAS_VULKAN AND NR_GAME_RENDERER)
+    add_executable(nr_smaa_tests smaa_tests.cpp vk_test_device.cpp readback.cpp)
+    target_link_libraries(nr_smaa_tests PRIVATE nr_renderer ${CMAKE_DL_LIBS})
+    add_test(NAME nr_smaa_tests COMMAND nr_smaa_tests)
+    if(NR_HAS_D3D12)
+        target_link_libraries(nr_smaa_tests PRIVATE d3d12)
+        add_test(NAME nr_smaa_d3d12_tests COMMAND nr_smaa_tests --d3d12)
+    endif()
     add_executable(nr_game_tests game_tests.cpp vk_test_device.cpp readback.cpp
         "${NR_ROOT}/shaders/tests/xenos_asm.cpp" "${NR_ROOT}/shaders/tests/container_writer.cpp")
     target_include_directories(nr_game_tests PRIVATE "${NR_ROOT}/shaders/tests")

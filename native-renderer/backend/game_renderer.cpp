@@ -416,6 +416,11 @@ bool GameRenderer::Initialize() {
   cset.bindings = {nvrhi::BindingSetItem::PushConstants(0, 32)};
   clear_set_ = device_->createBindingSet(cset, clear_layout_);
   if (!clear_set_) return false;
+  smaa_ = std::make_unique<Smaa>(device_);
+  if (!smaa_->Initialize()) {
+    Logf(LogLevel::kWarning, "rexgpu-native: SMAA initialization failed; spatial AA falls back to FXAA");
+    smaa_.reset();
+  }
   // Ambient occlusion: optional, never a reason to refuse to start.
   ao_ = std::make_unique<AmbientOcclusion>(device_);
   if (!ao_->Initialize()) ao_.reset();

@@ -31,6 +31,12 @@ enum class ShaderId {
   kAoBlurPs,
   kAoUpsamplePs,
   kAoApplyPs,
+  kSmaaEdgeVs,
+  kSmaaEdgePs,
+  kSmaaWeightVs,
+  kSmaaWeightPs,
+  kSmaaBlendVs,
+  kSmaaBlendPs,
 };
 
 // Empty bytecode when the API has no build of the shader.

@@ -17,7 +17,7 @@ typedef struct NrEffectStats {
   float mip_bias;                        // the upscaler's texture LOD bias for the scene's draws
   uint32_t sampler_slots, targets, retired;  // cache sizes (the robustness test watches them)
   // What the renderer applies this frame (bits): 1 ambient occlusion, 2 GI, 4 soft shadows, 8 water
-  // reflections, 16 volumetric light, 32 FXAA, 64 an upscaler.
+  // reflections, 16 volumetric light, 32 spatial AA (FXAA / SMAA), 64 an upscaler.
   uint32_t applied;
   int32_t anisotropy;                    // the override in use (-1 the game's)
   uint32_t gi_level;                     // nr::GiLevel

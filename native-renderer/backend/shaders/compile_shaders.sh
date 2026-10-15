@@ -55,4 +55,16 @@ for spec in ssgi_radiance_cs:cs:cs_radiance ssgi_radiance_down_cs:cs:cs_radiance
   "$DXC" -nologo -T "${stage}_6_0" -E "$entry" -O3 -Fh "$out/${base}_dxil.h" -Vn "k_${base}_dxil" "$src"
   "$DXC" -nologo -T "${stage}_6_0" -E "$entry" -O3 -spirv -fspv-target-env=vulkan1.2     -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-b-shift 256 0 -fvk-u-shift 384 0     -Fh "$out/${base}_spirv.h" -Vn "k_${base}_spirv" "$src"
 done
+# Official SMAA v2.8 1x (both lookup textures are embedded by smaa.cpp).
+src="$here/smaa.hlsl"
+for part in edge weight blend; do
+  for stage in vs ps; do
+    base="smaa_${part}_${stage}"
+    "$DXC" -nologo -T "${stage}_6_0" -E "${stage}_${part}" -O3 -Fh "$out/${base}_dxil.h" -Vn "k_${base}_dxil" "$src"
+    sed -i 's/[[:blank:]]*$//' "$out/${base}_dxil.h"
+    "$DXC" -nologo -T "${stage}_6_0" -E "${stage}_${part}" -O3 -spirv -fspv-target-env=vulkan1.2 \
+      -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-b-shift 256 0 -fvk-u-shift 384 0 \
+      -Fh "$out/${base}_spirv.h" -Vn "k_${base}_spirv" "$src"
+  done
+done
 echo "Shaders written to $out"

@@ -24,7 +24,7 @@ struct EffectSettings {
   // A change of kind, mode or preset makes the upscaler again at a frame boundary; the others apply
   // to the next frame.
   UpscaleConfig upscale;
-  uint32_t fxaa = 0;                  // swap_post_effect: 0 off, 1 fxaa, 2 fxaa_extreme
+  uint32_t fxaa = 0;                  // swap_post_effect: 0 off, 1 fxaa, 2 fxaa_extreme, 3 SMAA 1x
   bool effect_buffers = true;
   uint32_t sharpness = 0;
   int32_t anisotropic_override = -1;  // anisotropic_override: -1 the game's, 0 off, 2 to 5 (2x to 16x)

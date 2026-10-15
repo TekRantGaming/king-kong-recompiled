@@ -69,6 +69,7 @@
 #include "shader_pack.h"
 
 namespace kk {
+void DevAaTick(double seconds);
 extern bool (*g_dev_pad_input)(uint32_t user, uint8_t* state);
 void DevWatchTick(double seconds_since_menu);
 double DevGameSecondsSinceMenu();  // dev_frame_log.cpp
@@ -274,6 +275,7 @@ bool ShotsFromBoot() {
 
 // t: seconds since gameplay was reached (or since the save menu opened).
 void TakeShots(double t) {
+  DevAaTick(t);
   static std::vector<double> times = [] {
     std::vector<double> t;
     if (const char* v = std::getenv("KK_DEV_SHOTS"); v && *v) {
