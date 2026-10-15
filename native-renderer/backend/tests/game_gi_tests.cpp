@@ -890,6 +890,67 @@ TEST(GameGi_GameLikeDarkSceneBounceIsVisible) {
   }
 }
 
+TEST(GameGi_BrightOutdoorBounce) {
+  // A bright outdoor receiver already contains substantial baked/ambient light. Check the
+  // actual RGB addition, rather than a ratio against an almost black floor.
+  Mesh yard;
+  Quad(yard, {-12, 0, -14}, {12, 0, -14}, {12, 0, 2}, {-12, 0, 2}, 0xFF4C4C4C);
+  Quad(yard, {-2, 0, 2}, {2, 0, 2}, {2, 3, 2}, {-2, 3, 2}, kYardWall);
+  const float ambient[4] = {0.5f, 0.5f, 0.5f, 0};
+  Fixture::Frame fr;
+  fr.quad = false;
+  fr.scene = &yard;
+  fr.ambient = ambient;
+  for (GiLevel level : {GiLevel::kLow, GiLevel::kMedium, GiLevel::kHigh}) {
+    Options off, on;
+    off.mode = on.mode = 0;
+    on.gi.level = level;
+    Fixture a(on), b(off);
+    if (!a.Init() || !b.Init()) return;
+    YardCamera(a.cam);
+    YardCamera(b.cam);
+    const std::string name = std::string("bright_") + GiLevelName(level);
+    const Pixels base = b.Render(fr, name + "_off");
+    Pixels p;
+    for (int i = 0; i < 8; ++i) p = a.Render(fr, name);
+    for (V3 point : {V3{0, 0, 1.4f}, V3{0, 0, 0}}) {
+      const Rgb c = Colour(p, a.cam, point), c0 = Colour(base, b.cam, point);
+      std::printf("  %s z=%.1f: RGB %.4f %.4f %.4f, addition %+.4f %+.4f %+.4f\n",
+                  name.c_str(), point.z, c.r, c.g, c.b, c.r-c0.r, c.g-c0.g, c.b-c0.b);
+      CHECK(c.r > c0.r);
+      CHECK(c.r-c0.r > c.b-c0.b);
+      // Bright receivers must gain visible colour, including beyond the contact strip.
+      if (level == GiLevel::kMedium) CHECK(c.r - c0.r > (point.z > 1 ? 0.12f : 0.06f));
+    }
+    float mean, darkest, brightest;
+    FrameChange(p, base, mean, darkest, brightest);
+    std::printf("  %s picture mean %+.5f, darkest %+.5f, brightest %+.5f\n", name.c_str(), mean, darkest, brightest);
+    CHECK(darkest >= -1e-6f);
+    for (int c = 0; c < 4; ++c) CHECK(p.at(2, 2)[c] == base.at(2, 2)[c]);
+    if (level == GiLevel::kMedium) {
+      Options strong = on, zero = on;
+      strong.gi.intensity = 4;
+      zero.gi.intensity = 0;
+      Fixture s(strong), z(zero);
+      if (!s.Init() || !z.Init()) return;
+      YardCamera(s.cam);
+      YardCamera(z.cam);
+      Pixels p4;
+      for (int i = 0; i < 8; ++i) p4 = s.Render(fr, "bright_medium_intensity4");
+      const Pixels p0 = z.Render(fr, "bright_medium_intensity0");
+      CHECK(MaxDifference(p0, base) == 0);
+      const Rgb c4 = Colour(p4, s.cam, {0, 0, 0}), c1 = Colour(p, a.cam, {0, 0, 0});
+      std::printf("  bright_medium intensity4 at 2 m: RGB %.4f %.4f %.4f\n", c4.r, c4.g, c4.b);
+      CHECK(c4.r - 76.0f / 255 > 2 * (c1.r - 76.0f / 255));
+      for (size_t i = 0; i < p4.rgba.size(); ++i) {
+        if (i % 4 == 3) CHECK(p4.rgba[i] == base.rgba[i]);
+        else CHECK(p4.rgba[i] >= p.rgba[i]);
+      }
+      for (int c = 0; c < 4; ++c) CHECK(p4.at(2, 2)[c] == base.at(2, 2)[c]);
+    }
+  }
+}
+
 TEST(GameGi_RenderScaleTwoMatchesOne) {
   for (GiLevel level : {GiLevel::kMedium, GiLevel::kHigh}) {
     Options one, two;
@@ -1009,7 +1070,11 @@ TEST(GameGi_LiveOnOffAndIntensity) {
   if (!f.Init() || !a.Init() || !b.Init()) return;
   Fixture::Frame plain;
   plain.quad = false;
-  const Pixels with = a.Render(plain, "live_ref_on"), without = b.Render(plain, "live_ref_off");
+  Pixels with;
+  // Compare settled histories across a complete 64-pattern noise cycle. A single initial
+  // frame versus a two-frame live history hid sampling differences at the old weak strength.
+  for (int i = 0; i < 64; ++i) with = a.Render(plain, "live_ref_on");
+  const Pixels without = b.Render(plain, "live_ref_off");
   Pixels p = f.Render(plain, "live_off");
   CHECK(MaxDifference(p, without) <= kTol);
   const Camera& cam = f.cam;
@@ -1017,7 +1082,7 @@ TEST(GameGi_LiveOnOffAndIntensity) {
     settings->gi = Gi(GiLevel::kMedium);
     int frames = 0;
     for (; frames < 400 && !f.game->scene_gi(); ++frames) p = f.Render(plain, "live_on");
-    for (int i = 0; i < 2; ++i) p = f.Render(plain, "live_on");
+    for (int i = 0; i < 64; ++i) p = f.Render(plain, "live_on");
     const float d_on = MaxDifference(p, with);
     const Rgb n1 = Colour(p, cam, kNearFloor), n0 = Colour(without, cam, kNearFloor);
     std::printf("  round %d: GI on after %d frames: red bleed %+.3f, largest difference to GI from the start %.4f\n",

@@ -16,7 +16,7 @@ enum class GiQuality : uint8_t { kAuto, kHalf, kFull };
 struct GiConfig {
   GiLevel level = GiLevel::kOff;
   GiQuality quality = GiQuality::kAuto;
-  // --native_gi_intensity: the bounce light times this (1: one physical bounce).
+  // --native_gi_intensity: calibrated bounce strength (1: normal, 4: strong).
   float intensity = 1.0f;
   // --native_gi_radius: how far the bounce light is gathered from, in the game's world units
   // (metres); 0: the level's.

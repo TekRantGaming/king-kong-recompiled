@@ -274,7 +274,7 @@ REXCVAR_DEFINE_STRING(native_gi, "off", "Native renderer",
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 REXCVAR_DEFINE_DOUBLE(native_gi_intensity, 1.0, "Native renderer",
-                      "The global illumination's bounce light times this (1: one physical bounce)")
+                      "Global illumination strength (1: normal calibrated bounce, 4: strong)")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 REXCVAR_DEFINE_STRING(native_gi_quality, "auto", "Native renderer",

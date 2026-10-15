@@ -5,6 +5,23 @@ Status, 12 October 2026: branch `beta-ssgi` (from `beta` = `nr-integration` 1ba7
 (`--native_gi=off`); the launcher's Graphics page has the row "Global illumination: Off / Low / Medium / High"
 next to Ambient occlusion. Ray-traced GI is for later; this is screen space only.
 
+## Task 066 strength calibration (15 October 2026)
+
+Intensity 1 now applies three times the former gathered energy, in the composite constant only.
+Intensity 4 is correspondingly strong (twelve times the old unit energy). This is a presentation
+calibration for partial screen-space transport over already baked-lit colour, not a claim of a
+complete physical bounce. Sampling counts, radius, resolution, temporal filtering and blur are unchanged.
+GI remains off by default; the default occlusion remains zero and AO owns contact darkening.
+
+The old almost-black yard overstated how visible the bounce would be outdoors. A new bright receiver
+test uses a 0.298 grey floor, ambient 0.5, and the same 0.75/0.35/0.15 sunlit wall. At Medium, the
+floor's red addition at 0.6 m increases from 0.060 to 0.152; at 2 m from 0.027 to 0.076. Green/blue
+additions at 2 m are 0.016/0.004, so this is coloured bounce rather than a uniform exposure lift.
+These are synthetic GPU pixel measurements; see REPORT-066.md for the chapter captures and limits.
+The new test checks visible Medium colour, zero-intensity identity, stronger intensity 4, no
+darkening, unchanged sky and preserved alpha. Live-toggle comparisons now let both histories settle
+through 64 noise patterns, retaining their original error bound.
+
 ## Task 062 verification (15 October 2026)
 
 The inherited linear-light, wider-radius rework is retained. GI stays off by default. With GI enabled,
@@ -159,7 +176,7 @@ the frame's flat ambient light `A`:
   the limit (`--native_gi_albedo`, 0.75 as a picture value): the estimate never exceeds the limit and is exact in the shade, which is
   where indirect light matters;
 - in linear light (the picture's values to the power 2.2; the game's targets hold gamma encoded values):
-  out = colour + albedo x (bounce x intensity x bounces - `A` x (1 - visibility) x occlusion), where bounces =
+  out = colour + albedo x (bounce x 3 x intensity x bounces - `A` x (1 - visibility) x occlusion), where bounces =
   1 / (1 - albedo x (1 - visibility)) (at most 2.5) stands for the light the surroundings send back again, and
   the result is never darker than 65 % of the pixel's own linear light; then encoded back to gamma.
 
@@ -219,7 +236,7 @@ moment measured 0.46 to 1.01 ms the same way).
 | Setting | Values (default first) | What it does |
 |---|---|---|
 | `native_gi` | `off`, `low`, `medium`, `high` | the launcher's row; off creates nothing of it |
-| `--native_gi_intensity` | 1, 0 to 8 | the bounce light times this |
+| `--native_gi_intensity` | 1, 0 to 8 | calibrated bounce strength: 1 normal, 4 strong (three times the old unit energy) |
 | `--native_gi_quality` | `auto`, `half`, `full` | the working resolution (auto: the level's) |
 | `--native_gi_radius` | 0, world units | how far light is gathered from (0: the level's) |
 | `--native_gi_thickness` | 0, world units | how deep a surface on the screen is taken to be (0: a fifth of the radius, 0.25 to 1) |

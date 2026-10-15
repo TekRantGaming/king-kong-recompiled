@@ -258,7 +258,11 @@ void Ssgi::FillConstants(Constants& k, const Gtao& gtao, const SsgiSettings& s, 
   // At most this share of the picture's height (working pixels): the radiance's mips and the
   // temporal accumulation keep a scene-scale gather smooth.
   k.gather[2] = std::max(8.0f, kMaxScreenRadius * float(k.working[1]));
-  k.gather[3] = s.intensity;
+  // Calibrate the screen-space bounce against a bright, already baked-lit receiver, rather
+  // than the old nearly black yard. The visible screen is only part of the surroundings;
+  // intensity 1 is the normal presentation strength, not a claim of complete physical GI.
+  // Keep this in the composite: gathering/history and quality costs are unchanged.
+  k.gather[3] = 3.0f * s.intensity;
   k.ambient[0] = s.ambient[0];
   k.ambient[1] = s.ambient[1];
   k.ambient[2] = s.ambient[2];
