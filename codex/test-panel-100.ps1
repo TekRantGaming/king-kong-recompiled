@@ -3,12 +3,12 @@ param([ValidateSet('vulkan','d3d12')][string]$Api='vulkan',
       [ValidateSet(1,3,4,5,6)][int]$Language=1)
 $ErrorActionPreference='Stop'
 $workspace=(Resolve-Path "$PSScriptRoot\..").Path
+. (Join-Path $PSScriptRoot 'game-slot.ps1')
 $build="$workspace\kk\out\build\kk-dev-vulkan"
 $lock='F:\KK-native-renderer\runs\codex-game.lock'
 $priority='F:\KK-native-renderer\runs\codex-game.priority'
 $me='task100'
-if (!(Test-Path -LiteralPath $lock)) { Set-Content -LiteralPath $lock -Value 'free' -Encoding ascii }
-if ((Get-Content -LiteralPath $lock -Raw).Trim().StartsWith('user')) { throw 'USER LOCK: code-only work; no game launch.' }
+if ((Read-GameSlotState -LockPath $lock).StartsWith('user')) { throw 'USER LOCK: code-only work; no game launch.' }
 if (@(Get-ChildItem 'F:\KK-native-renderer\runs' -Directory -Filter 'task100-panel-*' |
       Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'launched.txt') }).Count -ge 2) {
   throw 'Task 100 has already used its two game runs.'
@@ -71,28 +71,10 @@ function Read-PanelLog {
 }
 $owned=[Collections.Generic.HashSet[int]]::new()
 $game=$null
-$claimed=$false
+$guard=$null
 $completed=$false
 try {
-  while (!$claimed) {
-    $state=(Get-Content -LiteralPath $lock -Raw).Trim()
-    if ($state.StartsWith('user')) { throw 'USER LOCK: no game launch.' }
-    if ((Test-Path -LiteralPath $priority) -and (Get-Content -LiteralPath $priority -Raw).Trim() -ne $me) {
-      Write-Output 'Priority belongs to another task; waiting 30 seconds.'
-      Start-Sleep -Seconds 30
-      continue
-    }
-    $others=@(Get-CimInstance Win32_Process -Filter "Name='king_kong.exe'")
-    if ($state -ne 'free' -or $others.Count) {
-      $ownGame=@($others | Where-Object { $_.ExecutablePath -notlike 'F:\KK-native-renderer\runs\*' -and $_.ExecutablePath -notlike 'F:\KK-native-renderer\wt\*' })
-      Write-Output "Game slot busy: $state; $($others.Count) processes."
-      if ($ownGame.Count) { Start-Sleep -Seconds 60 } else { Start-Sleep -Seconds 30 }
-      continue
-    }
-    if (!(Get-Process kkbg2 -ErrorAction SilentlyContinue)) { throw 'kkbg2 must already be running.' }
-    Set-Content -LiteralPath $lock -Value "$me $(Get-Date -Format o)" -Encoding ascii
-    $claimed=$true
-  }
+  $guard=Wait-GameSlot -Task $me -LockPath $lock -PriorityPath $priority -RequireBackgroundHelper
   $env:SDL_WINDOW_ACTIVATE_WHEN_SHOWN='0'
   $env:SDL_WINDOW_ACTIVATE_WHEN_RAISED='0'
   $env:KK_DEV_AUTOSKIP='1'
@@ -154,8 +136,6 @@ try {
     $p=Get-Process -Id $ownedId -ErrorAction SilentlyContinue
     if ($p -and !$p.HasExited) { Stop-Process -Id $ownedId; $p.WaitForExit() }
   }
-  if ($claimed -and (Get-Content -LiteralPath $lock -Raw).Trim().StartsWith("$me ")) {
-    Set-Content -LiteralPath $lock -Value 'free' -Encoding ascii
-  }
+  Release-GameSlot -Guard $guard
   Write-Output "DONE $run"
 }

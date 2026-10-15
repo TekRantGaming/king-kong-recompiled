@@ -12,6 +12,10 @@ if(WIN32)
   target_compile_features(kk-benchmark-writer-tests PRIVATE cxx_std_23)
   target_include_directories(kk-benchmark-writer-tests PRIVATE ../../src)
   add_test(NAME benchmark-writer COMMAND kk-benchmark-writer-tests)
+  add_test(NAME game-slot-lock COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+    -File "${CMAKE_CURRENT_SOURCE_DIR}/../../../codex/game-slot-tests.ps1"
+    -OutputRoot "${CMAKE_CURRENT_BINARY_DIR}")
+  set_tests_properties(game-slot-lock PROPERTIES TIMEOUT 90)
 endif()
 if(WIN32 AND TARGET rex::runtime)
   add_executable(kk-vsync-tests vsync.cpp ../../src/settings.cpp)

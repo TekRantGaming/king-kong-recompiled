@@ -3,12 +3,13 @@ param([ValidateSet('chapter','golden')][string]$Kind='chapter',
  [string]$SceneRun='vrex', [switch]$Gtao, [string]$Upscaler='off', [switch]$DenseRescue)
 $ErrorActionPreference='Stop'
 $workspace=(Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
+. (Join-Path $workspace 'codex/game-slot.ps1')
 $lockPath='F:\KK-native-renderer\runs\codex-game.lock'
 $priorityPath='F:\KK-native-renderer\runs\codex-game.priority'
 $python='C:\Users\TekRa\AppData\Local\Programs\Python\Python312\python.exe'
 $compare=Join-Path $PSScriptRoot 'compare.py'
 $root="F:\KK-native-renderer\runs\task098-$Kind-$Tables-$(Get-Date -Format yyyyMMdd-HHmmss)"
-if ((Test-Path $lockPath) -and (Get-Content $lockPath -Raw).Trim().StartsWith('user')) {
+if ((Read-GameSlotState -LockPath $lockPath).StartsWith('user')) {
  Write-Output 'USER LOCK: no launch; code-only work.'; exit 3
 }
 New-Item -ItemType Directory -Path $root | Out-Null
@@ -79,29 +80,12 @@ $gameArgs=@($sceneArgs | Where-Object { $names -notcontains (($_ -split '=',2)[0
 @{kind=$Kind;tables=$Tables;chapter=$(if ($Kind -eq 'chapter') {$Chapter} else {$null});scene_run=$SceneRun;args=$gameArgs;
  shots=$env:KK_DEV_SHOTS;shots_from=$env:KK_DEV_SHOTS_FROM;script=$env:KK_DEV_SCRIPT;dense_rescue=[bool]$DenseRescue;
  dll_sha256=(Get-FileHash "$run\rexgpu-native.dll").Hash;limit_s=$limit;expected=$expected} | ConvertTo-Json -Depth 6 | Set-Content "$root\test.json"
-if (!(Test-Path -LiteralPath $lockPath)) { Set-Content -LiteralPath $lockPath 'free' }
-while ($true) {
- try { $state=(Get-Content -LiteralPath $lockPath -Raw).Trim() } catch {
-  Write-Output 'Waiting: shared game lock is being updated.'
-  Start-Sleep -Seconds 30
-  continue
- }
- if ($state -match '^user') { Write-Output "USER LOCK: no launch. Prepared $root"; exit 3 }
- try { $priority=if (Test-Path $priorityPath) { (Get-Content $priorityPath -Raw).Trim() } else { '' } } catch { $priority='busy' }
- $busy=@(Get-Process king_kong -ErrorAction SilentlyContinue)
- if ($state -eq 'free' -and !$busy -and (!$priority -or $priority -match '^task098(?:\s|$)')) { break }
- Write-Output "Waiting: lock=$state priority=$priority game_pids=$($busy.Id -join ',')"
- Start-Sleep -Seconds $(if ($busy | Where-Object { $_.Path -notlike 'F:\KK-native-renderer\runs\*' -and $_.Path -notlike 'F:\KK-native-renderer\wt\*' }) {60} else {30})
-}
-if (!(Get-Process kkbg2 -ErrorAction SilentlyContinue)) { throw 'kkbg2 must be running before launch.' }
-if ((Get-Content $lockPath -Raw).Trim() -ne 'free') { throw 'Game lock changed; retry.' }
-if (Get-Process king_kong -ErrorAction SilentlyContinue) { throw 'Another game appeared; retry.' }
-if ((Test-Path $priorityPath) -and (Get-Content $priorityPath -Raw).Trim() -notmatch '^task098(?:\s|$)') { throw 'Another task has priority; retry.' }
 $launchHistory='F:\KK-native-renderer\runs\task098-launches.txt'
 if ((Test-Path $launchHistory) -and @(Get-Content $launchHistory).Count -ge 3) { throw 'Task 098 has used all three game launches.' }
-Set-Content -LiteralPath $lockPath "task098 $(Get-Date -Format o)"
+$guard=$null
 $game=$null
 try {
+ $guard=Wait-GameSlot -Task 'task098' -LockPath $lockPath -PriorityPath $priorityPath -RequireBackgroundHelper
  Add-Content -LiteralPath $launchHistory $root
  $game=Start-Process -FilePath "$run\king_kong.exe" -ArgumentList $gameArgs -WorkingDirectory $run -WindowStyle Hidden -PassThru
  Write-Output "RUN $root PID $($game.Id)"
@@ -137,13 +121,7 @@ try {
  }
 } finally {
  if ($game -and !$game.HasExited) { $null=$game.CloseMainWindow(); if (!$game.WaitForExit(15000)) { Stop-Process -Id $game.Id; $game.WaitForExit() } }
- for ($attempt=0; $attempt -lt 3; ++$attempt) {
-  try {
-   $owner=(Get-Content -LiteralPath $lockPath -Raw).Trim()
-   if ($owner -match '^task098(?:\s|$)') { Set-Content -LiteralPath $lockPath 'free' }
-   break
-  } catch { Start-Sleep -Seconds 1 }
- }
+ Release-GameSlot -Guard $guard
 }
 if ($Kind -eq 'golden') {
  & $python -I $compare collect --run $SceneRun --run-dir $run --out-root $root --scenes $SceneRun --plugin native --label "task098 $Tables" "--trigger=$($scene.env.REX_DEV_FRAME_LOG)"
