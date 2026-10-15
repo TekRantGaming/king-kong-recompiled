@@ -1,12 +1,15 @@
 # Build the changed SDK objects and their header consumers, then relink against the existing
 # SDK -038 objects/libraries. Nothing in the shared SDK source/build/install is
-# written. Patch 0039 is the source change to carry into a normal SDK build.
+# written. Patch 0041 is the source change to carry into a normal SDK build.
 $ErrorActionPreference='Continue'
 $workspace=(Resolve-Path "$PSScriptRoot/..").Path.Replace('\','/')
 $output="$workspace/kk/out/presentation-096"
 $sdk='F:/KK-native-renderer/sdk-src-upscalers-038'
 $sdkBuild="$sdk/out/build/win-amd64"
 New-Item -ItemType Directory -Path $output -Force | Out-Null
+# Record the patch identity beside the private SDK sources and runtime. The
+# shared -038 source/install is only an input, not the patched SDK copy.
+[IO.File]::WriteAllText("$output/sdk-patch.txt", "Patch: native-renderer/sdk-patches/0041-pacing-benchmark-present-observer.patch`nBase SDK source: $sdk`nBase SDK build: $sdkBuild`nPatched SDK copy: $output`n")
 $taskEnv = cmd /c 'call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" & set'
 foreach ($line in $taskEnv) {
   if ($line -match '^([^=]+)=(.*)$') { [Environment]::SetEnvironmentVariable($matches[1],$matches[2],'Process') }

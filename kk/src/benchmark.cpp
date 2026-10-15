@@ -91,7 +91,7 @@ void Finish() {
     text += settings;
     text += "\nGame swap intervals (includes cap and stalls):\n" + Describe(gs);
     text += observer_available ? "\nSuccessful host present return intervals (not scanout):\n" + Describe(hs)
-                              : "\nHost present timing: unavailable (SDK patch 0039 required)\n";
+                              : "\nHost present timing: unavailable (SDK patch 0041 required)\n";
     text += "\n1% low = reciprocal of the mean of the slowest ceil(N/100) intervals.\n"
             "Graph = peak frame time per elapsed-time bucket. CSV contains every interval.\n"
             "Compare the same route, settings, cap, API, cache and power state. AI can differ.\n";
