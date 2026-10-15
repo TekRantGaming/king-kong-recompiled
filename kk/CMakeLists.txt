@@ -68,6 +68,7 @@ set(KINGKONG_SOURCES
     src/http.cpp
     src/update.cpp
     src/play_session.cpp
+    src/ps2_movies.cpp
     src/profile_options.cpp
     src/profile_save_file.cpp
     src/pause_hooks.cpp
@@ -158,6 +159,10 @@ execute_process(COMMAND git describe --always --dirty --abbrev=12 WORKING_DIRECT
 target_compile_definitions(king_kong PRIVATE KK_BENCH_BUILD="${KK_BENCH_BUILD}-task115")
 
 if(KK_DEV_TOOLS)
+    add_executable(kk-ps2-movie-tests tests/ps2_movies_tests.cpp)
+    target_include_directories(kk-ps2-movie-tests PRIVATE src)
+    enable_testing()
+    add_test(NAME ps2-movie-logic COMMAND kk-ps2-movie-tests)
     add_executable(kk-hardware-tests tests/hardware_recommendation_tests.cpp src/settings.cpp)
     target_include_directories(kk-hardware-tests PRIVATE src)
     target_compile_definitions(kk-hardware-tests PRIVATE KK_VERSION="${KK_VERSION}")
