@@ -67,6 +67,7 @@ extern char** environ;
 #include "play_internal.h"
 #include "benchmark.h"
 #include "settings.h"
+#include "ps2_movies.h"
 
 namespace kk {
 #if defined(KK_DEV_TOOLS)
@@ -999,7 +1000,10 @@ REX_HOOK_RAW(sub_8253DB80) {
   const bool request = g && Load32(base, g + 4) != 0;
   if (request && g_level_loaded) kk::benchmark::Interrupted();
   if (request && g_jump_requested) REXLOG_INFO("KK play: uni_go loads level {}", int32_t(Load32(base, g + 8)));
+  const bool ps2_movie = request && kk::movies::BeforeLoad(base, g, g_starting, g_leaving);
   __imp__sub_8253DB80(ctx, base);
+  if (ps2_movie) REXLOG_INFO("PS2 movie: original level loader returned, current {} requested {}",
+                            Load32(base, g + 0x18), Load32(base, g + 8));
   ServiceProfileOptions(ctx, base);
 #if defined(KK_DEV_TOOLS)
   if (g && std::getenv("KK_DEV_AUDIO_TRACE")) {

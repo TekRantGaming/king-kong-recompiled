@@ -51,6 +51,8 @@ REXCVAR_DECLARE(double, kk_mouse_sensitivity);
 REXCVAR_DECLARE(bool, kk_mouse_invert_y);
 REXCVAR_DECLARE(std::string, kk_pad_prompts);
 REXCVAR_DECLARE(bool, kk_skip_intros);
+REXCVAR_DECLARE(bool, kk_ps2_cutscenes);
+REXCVAR_DECLARE(std::string, kk_ps2_movie_folder);
 REXCVAR_DECLARE(int32_t, kk_fov);
 REXCVAR_DECLARE(bool, kk_motion_blur);
 REXCVAR_DECLARE(bool, kk_fog);

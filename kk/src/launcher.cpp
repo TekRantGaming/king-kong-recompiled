@@ -9,6 +9,7 @@
 #include "launcher_sounds.h"
 #include "launcher_text.h"
 #include "launcher_ui.h"
+#include "ps2_movies.h"
 #include "shader_pack.h"
 #include "native_shaders.h"
 #include "display_modes.h"
@@ -1533,6 +1534,21 @@ class SettingsPages {
                                 {"Fran\xC3\xA7" "ais", "4"},
                                 {"Italiano", "6"}}));
     items.push_back(SubtitlesItem());
+#if defined(_WIN32)
+    items.push_back(CvarToggle("Play PS2 cutscenes",
+        "Play local PS2 movies between missions in the story.", "kk_ps2_cutscenes"));
+    {
+      const auto folder = movies::Folder().u8string();
+      Item it = ActionItem("PS2 movie folder", "Choose the folder containing BK_xxxx.mp4.", "", [this] {
+        const auto path = movies::BrowseFolder();
+        if (!path.empty()) {
+          Set("kk_ps2_movie_folder", path);
+        }
+      });
+      it.value_text.assign(reinterpret_cast<const char*>(folder.data()), folder.size());
+      items.push_back(std::move(it));
+    }
+#endif
     items.push_back(CvarToggle("Camera shake",
                                "The camera shaking from the V-Rex's footsteps, explosions and Kong's blows.",
                                "kk_camera_shake"));

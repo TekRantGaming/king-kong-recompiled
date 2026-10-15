@@ -57,6 +57,7 @@ void InstallFpeGuard();  // fpe_guard.cpp
 #include "scheduled_audio.h"
 #include "pause_menu.h"
 #include "play_internal.h"
+#include "ps2_movies.h"
 #include "settings.h"
 #include "toast.h"
 #include "startup_recovery.h"
@@ -73,7 +74,7 @@ class KingKongApp : public rex::ReXApp {
         PPCImageConfig));
   }
 
-  ~KingKongApp() override { kk::benchmark::Shutdown(); kk::SetUiPaintRequest({}); kk::startup::CleanExit(); }
+  ~KingKongApp() override { kk::movies::Shutdown(); kk::benchmark::Shutdown(); kk::SetUiPaintRequest({}); kk::startup::CleanExit(); }
 
  protected:
   bool OnWindowCloseRequested() override {
@@ -352,6 +353,7 @@ class KingKongApp : public rex::ReXApp {
       kk::startup::CleanExit();
       app_context().CallInUIThreadDeferred([this] { if (window()) window()->RequestClose(); });
     });
+    kk::movies::CreateMovieDialog(drawer, immediate_drawer(), rex::filesystem::GetExecutableFolder() / "glyphs");
   }
 
   // Xbox 360-style toast with a chime for the game's achievements.
