@@ -116,6 +116,7 @@ GameRenderer::GameRenderer(nvrhi::IDevice* device, const GuestMemory& memory,
     auto* h = static_cast<HostBuffer*>(e.host);
     if (h && h->slot) RetireSlot(kBuffers, h->slot);
     if (h) RetireResource(h->buffer);
+    descriptor_buffers_.erase(h);
     delete h;
     e.host = nullptr;
   };
@@ -199,6 +200,12 @@ void GameRenderer::set_watch(std::function<void(uint32_t, uint32_t)> watch) {
 
 bool GameRenderer::Initialize() {
   const nvrhi::GraphicsAPI api = device_->getGraphicsAPI();
+  if (options_.table_capacities != kNativeTableCapacities && options_.upscale.enabled()) {
+    // Motion replay retains indices until the upscale point, beyond a possible
+    // descriptor drain. Keep them disabled for prewarm and standalone users too.
+    options_.upscale.kind = UpscalerKind::kOff;
+    Logf(LogLevel::kWarning, "rexgpu-native: reduced Vulkan descriptor tables: temporal upscaling unavailable; using native render size");
+  }
   // Live settings (game_effects.cpp): what the start asked for, which the changes are compared with.
   upscale_initial_ = upscale_requested_ = options_.upscale;
   lighting_initial_ = options_.lighting;
@@ -269,30 +276,31 @@ bool GameRenderer::Initialize() {
   struct Spec {
     Table table;
     nvrhi::BindingLayoutItem item;
-    uint32_t capacity;
   };
   const Spec specs[] = {
-      {kTex2D, nvrhi::BindingLayoutItem::Texture_SRV(1), 16384},
-      {kTex3D, nvrhi::BindingLayoutItem::Texture_SRV(2), 256},
-      {kTexCube, nvrhi::BindingLayoutItem::Texture_SRV(3), 2048},
-      {kTex2DArray, nvrhi::BindingLayoutItem::Texture_SRV(4), 256},
-      {kSamplers, nvrhi::BindingLayoutItem::Sampler(5), 1024},
-      {kBuffers, nvrhi::BindingLayoutItem::RawBuffer_SRV(6), 16384},
+      {kTex2D, nvrhi::BindingLayoutItem::Texture_SRV(1)},
+      {kTex3D, nvrhi::BindingLayoutItem::Texture_SRV(2)},
+      {kTexCube, nvrhi::BindingLayoutItem::Texture_SRV(3)},
+      {kTex2DArray, nvrhi::BindingLayoutItem::Texture_SRV(4)},
+      {kSamplers, nvrhi::BindingLayoutItem::Sampler(5)},
+      {kBuffers, nvrhi::BindingLayoutItem::RawBuffer_SRV(6)},
   };
   pipeline_layouts_ = {constants_layout_};
   for (const Spec& s : specs) {
     nvrhi::BindlessLayoutDesc d;
     d.visibility = nvrhi::ShaderType::All;
     d.firstSlot = 0;
-    d.maxCapacity = s.capacity;
+    const uint32_t capacity = options_.table_capacities[s.table];
+    d.maxCapacity = capacity;
     d.registerSpaces.push_back(s.item);
     DescriptorTable& t = tables_[s.table];
     t.layout = device_->createBindlessLayout(d);
     if (!t.layout) return false;
     t.table = device_->createDescriptorTable(t.layout);
     if (!t.table) return false;
-    device_->resizeDescriptorTable(t.table, s.capacity, false);
-    t.capacity = s.capacity;
+    device_->resizeDescriptorTable(t.table, capacity, false);
+    t.capacity = capacity;
+    t.last_used.resize(capacity);
     pipeline_layouts_.push_back(t.layout);
   }
 
@@ -421,13 +429,124 @@ void GameRenderer::EnsureFallbackResources(nvrhi::ICommandList* cl) {
 
 uint32_t GameRenderer::AllocateSlot(Table table) {
   DescriptorTable& t = tables_[table];
+  if (t.free.empty() && t.next >= t.capacity) RecycleDescriptors(table);
   if (!t.free.empty()) {
     uint32_t s = t.free.back();
     t.free.pop_back();
+    TouchSlot(table, s);
     return s;
   }
-  if (t.next < t.capacity) return t.next++;
+  if (t.next < t.capacity) {
+    const uint32_t s = t.next++;
+    TouchSlot(table, s);
+    return s;
+  }
+  Logf(LogLevel::kError, "rexgpu-native: descriptor table %u exhausted (%u slots still live); draw binding failed", unsigned(table), t.capacity);
   return 0;  // full: the dummy
+}
+
+void GameRenderer::TouchSlot(Table table, uint32_t slot) {
+  if (slot) tables_[table].last_used[slot] = frame_;
+}
+
+void GameRenderer::PrepareDescriptorDraw(nvrhi::ICommandList* cl, const GameShader& vs, const GameShader* ps) {
+  if (options_.table_capacities == kNativeTableCapacities) return;
+  // Reserve before generating any draw indices. Count this draw's shader
+  // uses rather than draining small tables for a hypothetical maximum draw.
+  // Both stages share fetch constants and the base-map choice. Count unique
+  // (fetch slot, dimension) views. 1D/2D/3D fetches may select an array.
+  unsigned image_reserve[4] = {3, 0, 0, 0};  // AO and the two lighting views
+  std::array<unsigned, 32> seen{};
+  auto count_images = [&](const GameShader& shader) {
+    for (const auto& use : shader.bindings.textures) {
+      const unsigned dim = unsigned(use.dimension) & 3;
+      const unsigned slot = use.slot & 31;
+      if (seen[slot] & (1u << dim)) continue;
+      seen[slot] |= 1u << dim;
+      if (use.dimension == kkshaders::TextureDimension::Cube) ++image_reserve[kTexCube];
+      else {
+        ++image_reserve[kTex2DArray];
+        ++image_reserve[use.dimension == kkshaders::TextureDimension::Tex3D ? kTex3D : kTex2D];
+      }
+    }
+  };
+  count_images(vs);
+  if (ps) count_images(*ps);
+  const unsigned samplers = 2 + unsigned(std::min(vs.bindings.samplers.size(), size_t(32)) +
+      (ps ? std::min(ps->bindings.samplers.size(), size_t(32)) : 0));
+  const unsigned buffers = unsigned(std::min(vs.bindings.vertexBindings.size(), size_t(16)));
+  const unsigned reserve[kTableCount] = {image_reserve[0], image_reserve[1], image_reserve[2], image_reserve[3], samplers, buffers};
+  bool pressure = false;
+  for (unsigned i = 0; i < kTableCount; ++i) {
+    auto& t = tables_[i];
+    if (t.capacity - t.next + t.free.size() < reserve[i]) RecycleDescriptors(Table(i));
+    pressure |= t.capacity - t.next + t.free.size() < reserve[i];
+  }
+  // Full-capacity mode can still have pending motion replay. Its saved draw
+  // constants contain indices that must survive until that replay completes.
+  if (!pressure || !options_.drain_descriptors || upscale_) return;
+  const auto start = std::chrono::steady_clock::now();
+  options_.drain_descriptors(cl);
+  NoteFrameWait(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+  // GPU completion, rather than an age heuristic, permits immediate reuse
+  // of every non-dummy index while preserving all guest resource data.
+  for (HostTexture* h : descriptor_textures_) h->views.clear();
+  for (HostBuffer* h : descriptor_buffers_) h->slot = 0;
+  for (auto& [key, sampler] : samplers_) RetireResource(sampler.first);
+  samplers_.clear();
+  for (auto& t : tables_) {
+    t.next = 1;
+    t.free.clear();
+    t.retired.clear();
+    std::fill(t.last_used.begin(), t.last_used.end(), frame_);
+  }
+  ao_slot_ = 0;
+  ao_slot_texture_ = nullptr;
+  constants_valid_ = ao_constants_valid_ = false;
+  lighting_.sampler_slot = lighting_.wrap_sampler_slot = 0;
+  lighting_.color_slot = lighting_.depth_slot = 0;
+  lighting_.color_slot_texture = lighting_.depth_slot_texture = nullptr;
+  lighting_.constants_valid = false;
+  Logf(LogLevel::kInfo, "rexgpu-native: descriptor pressure: completed GPU work and recycled tables at frame %llu", static_cast<unsigned long long>(frame_));
+}
+
+void GameRenderer::RecycleDescriptors(Table table) {
+  // Only remove descriptor mappings unused for more than eight frames. Two GPU frames are
+  // bounded by Renderer::FrameCommandList's completion wait. Current-draw
+  // mappings have already been touched and cannot be evicted here. Texture
+  // and buffer cache owners stay intact, including GPU-written resolve data.
+  if (table <= kTex2DArray) {
+    for (HostTexture* host : descriptor_textures_) {
+      for (auto it = host->views.begin(); it != host->views.end();) {
+        const uint32_t index = it->second;
+        const uint32_t dim = (it->first >> 12) & 3;
+        const Table owner = (index & 0x80000000u) ? kTex2DArray :
+            dim == uint32_t(kkshaders::TextureDimension::Cube) ? kTexCube :
+            dim == uint32_t(kkshaders::TextureDimension::Tex3D) ? kTex3D : kTex2D;
+        const uint32_t slot = index & 0x7FFFFFFFu;
+        if (owner == table && tables_[table].last_used[slot] + 8 < frame_) {
+          RetireSlot(table, slot);
+          it = host->views.erase(it);
+        } else ++it;
+      }
+    }
+  } else if (table == kBuffers) {
+    for (HostBuffer* host : descriptor_buffers_) {
+      if (host->slot && tables_[table].last_used[host->slot] + 8 < frame_) {
+        RetireSlot(table, host->slot);
+        host->slot = 0;
+      }
+    }
+  }
+  else {
+    for (auto it = samplers_.begin(); it != samplers_.end();) {
+      if (it->second.last_used + 8 < frame_) {
+        RetireSlot(kSamplers, it->second.second);
+        RetireResource(it->second.first);
+        it = samplers_.erase(it);
+      } else ++it;
+    }
+  }
 }
 
 void GameRenderer::RetireResource(nvrhi::IResource* resource) {
@@ -435,7 +554,10 @@ void GameRenderer::RetireResource(nvrhi::IResource* resource) {
 }
 
 void GameRenderer::RetireSlot(Table table, uint32_t slot) {
-  if (slot) tables_[table].retired.emplace_back(frame_, slot);
+  if (!slot) return;
+  DescriptorTable& t = tables_[table];
+  if (t.last_used[slot] + 8 < frame_) t.free.push_back(slot);
+  else t.retired.emplace_back(frame_, slot);
 }
 
 void GameRenderer::WriteSlot(Table table, const nvrhi::BindingSetItem& item) {
@@ -1392,6 +1514,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   NoteRecord(record, key);
   // AO hook (game_ao.cpp): classify the draw; at the end of the opaque pass the occlusion goes into
   // the scene before this draw.
+  PrepareDescriptorDraw(cl, *vs, ps.get());
   if (scene_ao_ || ao_constants_) AoDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
   // GI hook (game_gi.cpp): at the end of the opaque pass the bounce light goes in (after the AO's occlusion).
   if (scene_gi_) GiDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());

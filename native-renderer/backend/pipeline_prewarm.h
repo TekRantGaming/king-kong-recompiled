@@ -16,6 +16,7 @@
 #include <vector>
 
 #include <nvrhi/nvrhi.h>
+#include "backend/vulkan_requirements.h"
 
 #include "backend/lighting_config.h"
 #include "backend/upscale_config.h"
@@ -29,6 +30,7 @@ class ShaderLibrary;
 class PipelinePrewarm {
  public:
   struct Settings {
+    NativeTableCapacities table_capacities = kNativeTableCapacities;
     std::string shader_pack;  // the pack the game uses (the prewarm makes shaders from it alone)
     std::string dxc;
     float render_scale_x = 1.0f, render_scale_y = 1.0f;  // render_scale.h, ResolveRenderScale

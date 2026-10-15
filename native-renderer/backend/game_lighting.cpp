@@ -248,14 +248,27 @@ void GameRenderer::LightingWriteConstants(nvrhi::ICommandList* cl) {
   k.shadowShape[3] = l.shadows == ShadowQuality::kUltra ? 1.0f : 0.0f;
   // Water reflections (kk_lighting.hlsli): this frame's scene, once it is made.
   const SceneLighting::SsrView* ssr = scene_lighting_ ? &scene_lighting_->ssr() : nullptr;
+  if (ssr && ssr->valid) {
+    auto sampler_slot = [&](nvrhi::ISampler* sampler, uint32_t& slot) {
+      if (!sampler) return;
+      if (!slot) {
+        slot = AllocateSlot(kSamplers);
+        if (slot) WriteSlot(kSamplers, nvrhi::BindingSetItem::Sampler(slot, sampler));
+      }
+      TouchSlot(kSamplers, slot);
+    };
+    sampler_slot(lighting_.sampler, lighting_.sampler_slot);
+    sampler_slot(lighting_.wrap_sampler, lighting_.wrap_sampler_slot);
+  }
   if (ssr && ssr->valid && lighting_.sampler_slot) {
     auto slot = [&](nvrhi::ITexture* texture, uint32_t& slot, nvrhi::ITexture*& slot_texture) {
-      if (texture != slot_texture) {
+      if (texture != slot_texture || !slot) {
         if (slot) RetireSlot(kTex2D, slot);
         slot = AllocateSlot(kTex2D);
-        WriteSlot(kTex2D, nvrhi::BindingSetItem::Texture_SRV(slot, texture));
+        if (slot) WriteSlot(kTex2D, nvrhi::BindingSetItem::Texture_SRV(slot, texture));
         slot_texture = texture;
       }
+      TouchSlot(kTex2D, slot);
       return slot;
     };
     k.ssrTextures[0] = slot(ssr->color, lighting_.color_slot, lighting_.color_slot_texture);

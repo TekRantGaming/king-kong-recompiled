@@ -491,7 +491,9 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
     // With live settings (the graphics panel) an upscaler, its mode or the shadows can change while the
     // game runs: the aware translations from the start (the pack holds them; at a scale of 1 they draw
     // the same picture), and the water's reflection shaders are made when the option is turned on.
-    const bool upscale_scaled = game.upscale.enabled() && game.upscale.quality != UpscaleQuality::kNative && !(game.debug & 16);
+    const bool reduced_tables = host_->table_capacities() != kNativeTableCapacities;
+    const bool upscale_enabled = game.upscale.enabled() && !reduced_tables;
+    const bool upscale_scaled = upscale_enabled && game.upscale.quality != UpscaleQuality::kNative && !(game.debug & 16);
     const bool live = bool(game.effect_settings);
     shaders_->SetRenderScaleAware(shaders_aware || upscale_scaled || (live && !(game.debug & 16)));
     shaders_->SetWaterReflections(!live && game.lighting.water_on());
@@ -507,6 +509,20 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
     physical.origin = 0;
     auto renderer = std::make_unique<GameRenderer>(host_->device(), snapshot_memory_, physical, shaders_.get());
     renderer->options().tessellation_supported = host_->tessellation_supported();
+    renderer->options().table_capacities = host_->table_capacities();
+    const auto descriptor_completion = host_->device()->createEventQuery();
+    if (!descriptor_completion) {
+      REXGPU_ERROR("rexgpu-native: could not create the descriptor recycling completion query");
+      return false;
+    }
+    renderer->options().drain_descriptors = [this, descriptor_completion](nvrhi::ICommandList* cl) {
+      cl->close();
+      // All earlier game draws precede this ticket on the graphics queue.
+      // Their descriptor references are complete once the ticket completes.
+      host_->ExecuteFrameCommandList(cl, descriptor_completion);
+      host_->WaitFrame(descriptor_completion);
+      cl->open();
+    };
     renderer->options().render_scale_x = scale.x;
     renderer->options().render_scale_y = scale.y;
     renderer->options().shadow_scale = shadow_scale;
@@ -514,7 +530,7 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
     renderer->options().guest_frame_height = height;
     renderer->options().ao = game.ao;  // before Initialize: the ambient-only AO adds a binding
     renderer->options().gi = game.gi;  // before Initialize (GiInitialize)
-    if (game.upscale.enabled() && (game.ao.method == AoMethod::kLegacy || game.ao.apply == AoApply::kResolve)) {
+    if (upscale_enabled && (game.ao.method == AoMethod::kLegacy || game.ao.apply == AoApply::kResolve)) {
       // The legacy AO (and GTAO at the resolve moment) darkens the scene copy the post effects read, after
       // the upscaler took its input: with an upscaler the occlusion goes into the scene at the end of its
       // opaque pass instead (docs/upscalers.md, "Ambient occlusion").
@@ -524,6 +540,13 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
     }
     // Temporal upscalers (docs/upscalers.md): before Initialize (the input size changes the layouts).
     renderer->options().upscale = game.upscale;
+    if (reduced_tables && game.upscale.enabled()) {
+      // Motion replay saves descriptor indices until the upscale point.
+      // Reusing those indices after a mid-frame drain would corrupt replay.
+      // Use the existing native render size until replay can rebind resources.
+      renderer->options().upscale.kind = UpscalerKind::kOff;
+      REXGPU_WARN("rexgpu-native: reduced Vulkan descriptor tables: temporal upscaling disabled because deferred motion replay requires stable descriptor indices; using native render size");
+    }
     renderer->options().fxaa = game.fxaa;
     renderer->options().lighting = game.lighting;  // before Initialize too (docs/lighting.md)
     renderer->options().effect_settings = game.effect_settings;

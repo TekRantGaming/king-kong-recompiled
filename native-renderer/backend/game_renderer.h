@@ -58,6 +58,7 @@
 #include "kknr/texture_cache.h"
 #include "kknr/texture_convert.h"
 #include "kkshaders/abi.h"
+#include "backend/vulkan_requirements.h"
 
 namespace nr {
 
@@ -72,6 +73,10 @@ class GameRenderer {
  public:
   struct Options {
     bool tessellation_supported = false;
+    NativeTableCapacities table_capacities = kNativeTableCapacities;
+    // Submit and complete the open list, then reopen it, before recycling
+    // descriptors that are still referenced by current/queued draws.
+    std::function<void(nvrhi::ICommandList*)> drain_descriptors;
     // Read each vertex element with its declaration's own endian field (the
     // game's SHORT4N normals and tangents are 8in16 in 8in32 streams) rather
     // than the vertex buffer's. Proven on the game's frames: with the
@@ -341,11 +346,15 @@ class GameRenderer {
     uint32_t capacity = 0;
     uint32_t next = 1;  // slot 0 is the dummy
     std::vector<uint32_t> free;
+    std::vector<uint64_t> last_used;
     std::deque<std::pair<uint64_t, uint32_t>> retired;  // (frame, slot)
   };
   uint32_t AllocateSlot(Table table);
   void RetireSlot(Table table, uint32_t slot);
   void WriteSlot(Table table, const nvrhi::BindingSetItem& item);
+  void TouchSlot(Table table, uint32_t slot);
+  void RecycleDescriptors(Table table);
+  void PrepareDescriptorDraw(nvrhi::ICommandList* cl, const GameShader& vs, const GameShader* ps);
 
   // ---- render targets: one host texture per EDRAM placement
   struct HostTarget {
@@ -467,6 +476,8 @@ class GameRenderer {
     bool dynamic = false;
     kknr::BufferCache::Entry* entry = nullptr;
   };
+  std::unordered_set<HostTexture*> descriptor_textures_;
+  std::unordered_set<HostBuffer*> descriptor_buffers_;
   // used_begin / used_end: the bytes of the buffer this draw reads (a dynamic buffer uploads only
   // those); the whole buffer when unknown.
   HostBuffer* BindVertexBuffer(nvrhi::ICommandList* cl, uint32_t physical, uint32_t bytes, uint32_t used_begin = 0,
@@ -798,7 +809,12 @@ class GameRenderer {
   uint64_t resolve_serial_ = 0;
   kknr::BufferCache vertex_buffers_;
   kknr::BufferCache index_buffers_;
-  std::unordered_map<uint64_t, std::pair<nvrhi::SamplerHandle, uint32_t>> samplers_;
+  struct CachedSampler {
+    nvrhi::SamplerHandle first;
+    uint32_t second = 0;
+    uint64_t last_used = 0;
+  };
+  std::unordered_map<uint64_t, CachedSampler> samplers_;
 
   // ---- temporal upscalers (game_upscale.cpp, docs/upscalers.md). upscale_ is null when off; the
   // hooks are called from Initialize, Draw, Clear, Resolve, Present and EndFrame.

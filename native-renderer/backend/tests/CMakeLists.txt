@@ -174,6 +174,15 @@ if(NR_HAS_VULKAN AND NR_GAME_RENDERER)
              COMMAND ${Python3_EXECUTABLE} -I "${CMAKE_CURRENT_SOURCE_DIR}/check_validation.py"
                      $<TARGET_FILE:nr_game_gi_tests>)
     set_tests_properties(nr_game_gi_tests PROPERTIES ENVIRONMENT "${_env}")
+    foreach(_suite game game_ao game_gi)
+        foreach(_tables small minimum)
+            add_test(NAME nr_${_suite}_${_tables}_tests
+                     COMMAND ${Python3_EXECUTABLE} -I "${CMAKE_CURRENT_SOURCE_DIR}/check_validation.py"
+                             $<TARGET_FILE:nr_${_suite}_tests>)
+            set_tests_properties(nr_${_suite}_${_tables}_tests PROPERTIES
+                                 ENVIRONMENT "${_env};NR_TEST_DESCRIPTOR_TABLES=${_tables}")
+        endforeach()
+    endforeach()
     # The temporal upscalers' frame plumbing through the game renderer (docs/upscalers.md).
     add_executable(nr_game_upscale_tests game_upscale_tests.cpp vk_test_device.cpp readback.cpp
         "${NR_ROOT}/shaders/tests/xenos_asm.cpp" "${NR_ROOT}/shaders/tests/container_writer.cpp")

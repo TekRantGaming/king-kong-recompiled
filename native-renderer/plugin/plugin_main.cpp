@@ -443,6 +443,13 @@ REXCVAR_DEFINE_INT32(native_debug, 0, "Native renderer",
                        "524288 GPU pass batches (every fourth frame)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_BOOL(native_vk_small_tables, false, "Native renderer",
+                    "Force reduced Vulkan descriptor tables for hardware testing")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(native_vk_minimum_tables, false, "Native renderer",
+                    "Force minimum Vulkan descriptor tables and stress GPU-completed recycling")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_STRING(native_show_texture, "", "Native renderer",
                       "Debugging: show the texture a resolve wrote at this guest address (hex, the fetch "
                       "constant's base) instead of the frame")
