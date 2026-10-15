@@ -142,6 +142,36 @@ inline uint32_t DigitalBits(const PadSample& s) {
       (s.state[6] > 30 ? 1u << 16 : 0) | (s.state[7] > 30 ? 1u << 17 : 0);
 }
 
+// Frame() timestamps reads/checkpoints after adding dt, but runs before that
+// frame's simulation. A frame-zero read has not begun an interval yet.
+inline double SampleStartSeconds(const PadSample& s) {
+  return s.frame ? std::max(0.0, s.seconds - s.raw_dt) : s.seconds;
+}
+
+inline std::vector<double> CheckpointStartSeconds(const Recording& r) {
+  std::vector<double> times(r.checkpoints.size(), std::numeric_limits<double>::quiet_NaN());
+  size_t sample = 0;
+  for (size_t i = 0; i < r.checkpoints.size(); ++i) {
+    const auto& c = r.checkpoints[i];
+    while (sample < r.samples.size() && (r.samples[sample].chapter < c.chapter ||
+        (r.samples[sample].chapter == c.chapter && r.samples[sample].seconds < c.seconds - 1e-9))) ++sample;
+    for (size_t j = sample; j < r.samples.size() && r.samples[j].chapter == c.chapter &&
+        std::abs(r.samples[j].seconds - c.seconds) < 1e-9; ++j) {
+      if (r.samples[j].user == 0) { times[i] = SampleStartSeconds(r.samples[j]); break; }
+    }
+  }
+  return times;
+}
+
+inline std::array<float, 3> PositionAt(const std::array<float, 3>& previous,
+    double previous_seconds, const std::array<float, 3>& current, double current_seconds, double target) {
+  if (current_seconds <= previous_seconds) return current;
+  const double fraction = std::clamp((target - previous_seconds) / (current_seconds - previous_seconds), 0.0, 1.0);
+  std::array<float, 3> position;
+  for (size_t i = 0; i < 3; ++i) position[i] = float(previous[i] + fraction * (double(current[i]) - previous[i]));
+  return position;
+}
+
 // Zero-order hold on the game's elapsed seconds, never wall frames or a fixed
 // simulation step. Keep every recorded read; report digital transitions that
 // cannot be represented by one state at a replay poll.
@@ -155,14 +185,14 @@ class RouteReplay {
     Reset(0);
   }
   void Reset(size_t chapter) { chapter_ = chapter; next_.fill(0); selected_.fill(nullptr); }
-  const PadSample* Read(uint32_t user, double seconds, uint32_t& missed) {
+  const PadSample* Read(uint32_t user, double seconds, uint32_t& missed, bool before_first_frame = false) {
     missed = 0;
     if (!recording_ || user > 3 || chapter_ >= indices_.size()) return nullptr;
     const auto& rows = indices_[chapter_][user];
     uint32_t previous = selected_[user] ? DigitalBits(*selected_[user]) : 0, changed = 0;
     while (next_[user] < rows.size()) {
       const auto& s = recording_->samples[rows[next_[user]]];
-      if (s.seconds > seconds + 1e-9) break;
+      if ((before_first_frame && s.frame) || SampleStartSeconds(s) > seconds + 1e-9) break;
       const uint32_t bits = DigitalBits(s);
       const uint32_t edges = bits ^ previous;
       missed |= changed & edges;

@@ -78,6 +78,10 @@ std::array<Drift, 4> chapter_drift;
 std::atomic<bool> drift_detected{false};
 std::atomic<bool> checkpoints_incomplete{false};
 size_t next_checkpoint = 0;
+std::vector<double> checkpoint_seconds;
+double input_seconds = 0, previous_position_seconds = -1;
+std::array<float, 3> previous_position{};
+const uint8_t* replay_base = nullptr;
 std::ostringstream drift_csv;
 
 Recording ReadRecording(const std::filesystem::path& path, std::string* id = nullptr) {
@@ -188,6 +192,39 @@ std::string Settings() {
   return RedactDiagnostics(std::move(out));
 }
 
+void ObserveReplayPosition(double seconds, const uint8_t* base) {
+  std::array<float, 3> position;
+  for (size_t i = 0; i < 3; ++i) position[i] = hfr::LoadF(base, 0x82D64250 + uint32_t(i) * 4);
+  while (next_checkpoint < recording.checkpoints.size()) {
+    const auto& c = recording.checkpoints[next_checkpoint];
+    const double target = checkpoint_seconds[next_checkpoint];
+    if (c.chapter != chapter_index || (std::isfinite(target) && target > seconds + 1e-9)) break;
+    auto& d = chapter_drift[chapter_index];
+    const double lag = std::isfinite(target) ? std::max(0.0, seconds - target) : 0;
+    const bool available = c.valid && c.seconds >= 1 && recording.chapters[chapter_index].entry != 10 &&
+        std::isfinite(target) && previous_position_seconds >= 0 && previous_position_seconds <= target;
+    const auto compared = PositionAt(previous_position, previous_position_seconds, position, seconds, target);
+    const double distance = available ? PositionDistance(compared, c.position) : 0;
+    if (available) {
+      ++d.compared;
+      d.max_distance = std::max(d.max_distance, distance);
+      if (distance > 1 || lag > .1) { ++d.mismatches; drift_detected = true; }
+    } else {
+      ++d.unavailable;
+      if (c.valid && c.seconds >= 1) checkpoints_incomplete = true;
+    }
+    d.max_checkpoint_lag = std::max(d.max_checkpoint_lag, lag);
+    drift_csv << chapter_index.load() + 1 << ',' << c.seconds << ',' << seconds << ','
+        << distance << ',' << lag << ',' << available << ',' << target;
+    for (float v : c.position) drift_csv << ',' << v;
+    for (float v : compared) drift_csv << ',' << v;
+    drift_csv << '\n';
+    ++next_checkpoint;
+  }
+  previous_position = position;
+  previous_position_seconds = seconds;
+}
+
 void EndReplayChapter() {
   // Different frame rates can stop on opposite sides of the recording's last
   // checkpoint. Account for those checks explicitly rather than dropping them.
@@ -198,7 +235,8 @@ void EndReplayChapter() {
     if (c.valid && c.seconds >= 1 && recording.chapters[chapter_index].entry != 10)
       checkpoints_incomplete = true;
     drift_csv << chapter_index.load() + 1 << ',' << c.seconds << ',' << game_seconds
-        << ",0," << game_seconds.load() - c.seconds << ",0\n";
+        << ",0," << game_seconds.load() - c.seconds << ",0," << checkpoint_seconds[next_checkpoint - 1]
+        << ",0,0,0,0,0,0\n";
   }
 }
 
@@ -222,9 +260,10 @@ void Finish() {
       text += settings;
       text += "Recording build: " + recording.build + "\nRecording ID (FNV-1a): " + route_id + '\n';
       text += "No confirmed game RNG seed API is exposed. AI, particles, collisions and load timing can vary.\n";
-      text += "Replay holds the latest pad state at each game time, without changing simulation dt.\n";
+      text += "Replay holds the latest pad at each pre-step game time, without changing simulation dt.\n";
       text += "Jack position checkpoints: 1 unit tolerance, first second excluded. Kong position unavailable.\n";
       text += "Clock word in recording is the raw guest value at 0x82CCAE1C; alignment uses summed raw dt.\n";
+      text += "Version-1 checkpoint times subtract their frame delta; live positions are sampled at that time between adjacent observations.\n";
       text += "\nGame swap intervals (includes cap and stalls):\n" + Describe(gs);
       text += observer_available ? "\nSuccessful host present return intervals (not scanout):\n" + Describe(hs)
                                 : "\nHost present timing: unavailable (SDK patch 0041 required)\n";
@@ -400,6 +439,7 @@ std::filesystem::path Prepare(const std::filesystem::path& root) {
   if (!recording_route) {
     recording = ReadRecording(RouteFile(), &route_id);
     replay.Attach(recording);
+    checkpoint_seconds = CheckpointStartSeconds(recording);
     ApplyReplayControls();
     for (size_t chapter = 0; chapter < recording.chapters.size(); ++chapter) {
       bool available = false;
@@ -408,7 +448,7 @@ std::filesystem::path Prepare(const std::filesystem::path& root) {
       if (!available) checkpoints_incomplete = true;
     }
     drift_csv.imbue(std::locale::classic());
-    drift_csv << "chapter,recorded_seconds,replay_seconds,position_distance,time_lag_seconds,available\n";
+    drift_csv << "chapter,recorded_seconds,replay_seconds,position_distance,time_lag_seconds,available,position_seconds,recorded_x,recorded_y,recorded_z,replay_x,replay_y,replay_z\n";
   }
   result_dir = root / "benchmarks" / ((recording_route ? "record-" : "run-") + std::to_string(stamp));
   std::filesystem::create_directories(result_dir);
@@ -456,6 +496,9 @@ void LevelLoaded() {
   if (chapter_index == 0) settings = Settings();
   game_seconds = 0;
   game_frame = 0;
+  input_seconds = 0;
+  previous_position_seconds = -1;
+  replay_base = nullptr;
   checkpoint_at = 0;
   {
     std::lock_guard lock(mutex); last_guest = last_host = {};
@@ -509,28 +552,11 @@ void Frame(double dt, double scaled_dt, const uint8_t* base) {
   }
   if (interrupted) { Finish(); return; }
   if (!std::isfinite(dt) || dt <= 0) { interrupted = true; Finish(); return; }
+  input_seconds = game_seconds;
   game_seconds = game_seconds.load() + dt;
   ++game_frame;
-  while (next_checkpoint < recording.checkpoints.size()) {
-    const auto& c = recording.checkpoints[next_checkpoint];
-    if (c.chapter != chapter_index || c.seconds > game_seconds) break;
-    auto& d = chapter_drift[chapter_index];
-    const double lag = game_seconds.load() - c.seconds;
-    const bool available = c.valid && c.seconds >= 1 && recording.chapters[chapter_index].entry != 10;
-    double distance = 0;
-    if (available) {
-      std::array<float, 3> position;
-      for (size_t i = 0; i < 3; ++i) position[i] = hfr::LoadF(base, 0x82D64250 + uint32_t(i) * 4);
-      distance = PositionDistance(position, c.position);
-      ++d.compared;
-      d.max_distance = std::max(d.max_distance, distance);
-      if (distance > 1 || lag > .1) { ++d.mismatches; drift_detected = true; }
-    } else ++d.unavailable;
-    d.max_checkpoint_lag = std::max(d.max_checkpoint_lag, lag);
-    drift_csv << chapter_index.load() + 1 << ',' << c.seconds << ',' << game_seconds << ','
-        << distance << ',' << lag << ',' << available << '\n';
-    ++next_checkpoint;
-  }
+  replay_base = base;
+  ObserveReplayPosition(input_seconds, base);
 }
 
 void GuestSwap() {
@@ -555,6 +581,9 @@ void GuestSwap() {
   }
   if (interrupted) Finish();
   else if (game_seconds >= recording.chapters[chapter_index].duration) {
+    // The final swap follows the simulation, so its state covers the last
+    // recorded pre-step checkpoint without inventing an extra game frame.
+    if (replay_base) ObserveReplayPosition(game_seconds, replay_base);
     EndReplayChapter();
     if (chapter_index + 1 == recording.chapters.size()) Finish();
     else { std::lock_guard lock(mutex); phase = Phase::kLoading; advance_chapter = true; }
@@ -567,13 +596,13 @@ bool Pad(uint32_t user, uint8_t* state, uint32_t& status) {
   status = user == 0 ? 0 : 1167;
   if (phase == Phase::kRunning) {
     uint32_t missed = 0;
-    if (const auto* sample = replay.Read(user, game_seconds, missed)) {
+    if (const auto* sample = replay.Read(user, input_seconds, missed, game_frame == 0)) {
       status = sample->status;
       std::memcpy(state, sample->state.data(), 16);
       auto& d = chapter_drift[chapter_index];
-      d.max_input_age = std::max(d.max_input_age, game_seconds.load() - sample->seconds);
+      d.max_input_age = std::max(d.max_input_age, input_seconds - SampleStartSeconds(*sample));
       if (missed) { ++d.missed_pulses; drift_detected = true; }
-      if (game_seconds.load() - sample->seconds > .25) drift_detected = true;
+      if (input_seconds - SampleStartSeconds(*sample) > .25) drift_detected = true;
     } else if (user < 4 && game_seconds > .25) {
       ++chapter_drift[chapter_index].missing_inputs;
       drift_detected = true;

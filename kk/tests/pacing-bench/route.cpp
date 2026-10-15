@@ -27,7 +27,7 @@ Recording Fixture() {
     for (uint64_t frame = 0; frame <= 240; ++frame) {
       for (uint32_t user = 0; user < 4; ++user) {
         PadSample s;
-        s.chapter = c; s.frame = frame; s.seconds = frame / 60.0;
+        s.chapter = c; s.frame = frame + 1; s.seconds = (frame + 1) / 60.0;
         s.raw_dt = 1.0 / 60; s.scaled_dt = s.raw_dt * .5;
         s.game_ms = uint32_t(frame * 1000 / 60); s.user = user;
         s.status = user == 0 ? 0 : 1167;
@@ -103,7 +103,7 @@ void ReplayTests() {
         const auto* actual = replay.Read(0, seconds, missed);
         const size_t recorded_frame = std::min<size_t>(240, size_t(std::floor(seconds * 60 + 1e-7)));
         const auto& expected = r.samples[c * 964 + recorded_frame * 4];
-        Check(actual && actual->seconds <= seconds + 1e-9 && actual->state == expected.state,
+        Check(actual && SampleStartSeconds(*actual) <= seconds + 1e-9 && actual->state == expected.state,
             "game-time selection at arbitrary frame rates without future inputs");
       }
     }
@@ -113,13 +113,22 @@ void ReplayTests() {
   uint32_t missed = 0;
   for (double t : {0., .003, .033, .049, .113, .877, 1.001, 3.01, 4.}) {
     const auto* s = replay.Read(0, t, missed);
-    Check(s && s->seconds <= t + 1e-9 && t - s->seconds < 1.0 / 60 + 1e-8,
+    Check(s && SampleStartSeconds(*s) <= t + 1e-9 && t - SampleStartSeconds(*s) < 1.0 / 60 + 1e-8,
         "variable game deltas retain bounded input age");
   }
   replay.Reset(1);
   Check(replay.Read(0, 0, missed)->chapter == 1, "chapter load resets replay cursor");
   Check(replay.Read(1, 0, missed)->status == 1167, "secondary pad status replayed independently");
   Check(!replay.Read(4, 0, missed), "invalid user cannot index replay storage");
+  replay.Reset(0);
+  Check(!replay.Read(0, 0, missed, true), "no frame-one input before the first frame hook");
+  Check(replay.Read(0, 0, missed)->frame == 1, "first input applies to the first simulation interval");
+  const auto times = CheckpointStartSeconds(r);
+  Check(std::abs(times[1] - (1.0 - 1.0 / 60)) < 1e-9,
+      "version-one pre-step checkpoint removes the recorded frame delta");
+  Check(std::isnan(times[0]), "unmatched checkpoint time remains explicitly unavailable");
+  Check(PositionDistance(PositionAt({0, 0, 0}, 0, {100, 0, 0}, .1, .033), {33, 0, 0}) < 1e-5,
+      "fast motion compares at the recorded instant instead of the next replay poll");
   Recording pulses;
   pulses.chapters = DefaultRoute(4);
   auto add = [&](double seconds, bool pressed) {
