@@ -552,4 +552,48 @@ TEST(RenderThreadRunsCallsOnTheirCopies) {
   CHECK_EQ(sink.stats().commands, 2u);
   CHECK_EQ(sink.stats().device_copies, 2u);
 }
+TEST(ApiTimingDoesNotGateForwarding) {
+  const bool previous = DiagnosticsEnabled();
+  for (bool enabled : {false, true, false}) {
+    SetDiagnosticsEnabled(enabled);
+    FakeGuestMemory memory(1 << 20);
+    RecordingSink sink;
+    DrawTracker tracker(memory, &sink);
+    ApiBinding binding;
+    InitApiBinding(binding, &tracker, [](void* owner) { return static_cast<DrawTracker*>(owner); });
+    const uint64_t before = ApiCallCount(), time_before = ApiCallMicroseconds();
+    binding.api.present(binding.api.self, 0);
+    CHECK_EQ(tracker.stats().presents, 1u);
+    CHECK_EQ(ApiCallCount() - before, enabled ? 1u : 0u);
+    if (!enabled) CHECK_EQ(ApiCallMicroseconds(), time_before);
+  }
+  SetDiagnosticsEnabled(previous);
+}
+
+TEST(RenderThreadHitchReportingAndTicketsSurviveDiagnosticsSwitch) {
+  const bool previous = DiagnosticsEnabled();
+  for (bool enabled : {false, true}) {
+    SetDiagnosticsEnabled(enabled);
+    FakeGuestMemory memory(1 << 20);
+    RecordingSink inner;
+    ThreadedSink sink(inner, memory);
+    unsigned hitches = 0;
+    sink.long_frame_us = 1000;
+    sink.on_long_frame = [&](const ThreadedSink::LongFrame& frame) {
+      ++hitches;
+      CHECK(frame.frame_us > 1000);
+      CHECK_EQ(frame.calls, 1u);
+    };
+    sink.OnPresent(0, 0, 0);
+    sink.WaitDone(sink.Ticket());
+    std::this_thread::sleep_for(std::chrono::milliseconds(3));
+    sink.OnPresent(1, 0, 0);
+    CHECK_EQ(sink.Ticket(), 2u);
+    sink.WaitDone(sink.Ticket());
+    CHECK_EQ(sink.stats().presents, 2u);
+    CHECK_EQ(hitches, 1u);
+  }
+  SetDiagnosticsEnabled(previous);
+}
+
 NR_TEST_MAIN()

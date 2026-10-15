@@ -16,6 +16,7 @@
 #include <rex/system/xmemory.h>
 
 #include "backend/api_binding.h"
+#include "backend/diagnostics.h"
 #include "backend/cpu_profile.h"
 #include "backend/frame_log.h"
 #include "backend/log.h"
@@ -32,6 +33,7 @@ class ShaderLibrary {};  // never made without the game renderer; Backend's uniq
 
 REXCVAR_DECLARE(int32_t, native_dump_frame);
 REXCVAR_DECLARE(int32_t, native_debug);
+REXCVAR_DECLARE(bool, native_diagnostics);
 
 namespace nr {
 
@@ -66,18 +68,23 @@ std::mutex g_frames_mutex;
 std::vector<FrameRecord> g_worst_frames;
 // --native_stutter_stats: the counter after the last Present, for the overlay.
 std::mutex g_stutter_mutex;
-bool g_stutter_on = false, g_stutter_valid = false;
+std::atomic<bool> g_stutter_on{false};
+bool g_stutter_valid = false;
 StutterSnapshot g_stutter;
 std::chrono::steady_clock::time_point g_last_present;
 uint64_t g_last_calls_us = 0, g_frame_draws = 0;
 struct CallTimer {
-  explicit CallTimer(int kind) : kind_(kind), start_(std::chrono::steady_clock::now()) {}
+  explicit CallTimer(int kind)
+      : kind_(kind), enabled_(DiagnosticsEnabled()),
+        start_(enabled_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{}) {}
   ~CallTimer() {
+    if (!enabled_) return;
     g_call_us[kind_].fetch_add(uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
                                             std::chrono::steady_clock::now() - start_).count()),
                                std::memory_order_relaxed);
   }
   int kind_;
+  bool enabled_;
   std::chrono::steady_clock::time_point start_;
 };
 
@@ -145,7 +152,8 @@ class LockedSink final : public DrawSink {
     if (Dump(frame)) {
       REXLOG_INFO("rexgpu-native: frame {} present rt0 {:08X}", frame, rt0);
     }
-    const auto start = std::chrono::steady_clock::now();
+    const auto start = DiagnosticsEnabled() ? std::chrono::steady_clock::now()
+                                            : std::chrono::steady_clock::time_point{};
     {
       CallTimer timer(3);
       std::lock_guard lock(mutex_);
@@ -156,6 +164,19 @@ class LockedSink final : public DrawSink {
 
   // Keeps the eight slowest frames of the window (see g_worst_frames).
   void RecordFrame(std::chrono::steady_clock::time_point present_start) {
+#if NR_GAME_RENDERER
+    // The player overlay is independent of detailed timing.
+    if (g_stutter_on.load(std::memory_order_relaxed)) {
+      if (const GameRenderer* g = renderer_game_ ? renderer_game_() : nullptr) {
+        const GameRenderer::StutterStats st = g->stutter();
+        std::lock_guard lock(g_stutter_mutex);
+        g_stutter = {st.frames,        st.stutter_frames,   st.frames_waited, st.frames_skipped,
+                     st.draws_skipped, st.worst_wait_frame, st.wait_ms,       st.worst_wait_ms};
+        g_stutter_valid = true;
+      }
+    }
+#endif
+    if (!DiagnosticsEnabled()) return;
     const auto now = std::chrono::steady_clock::now();
     uint64_t calls = 0;
     for (int i = 0; i < 4; ++i) calls += g_call_us[i].load(std::memory_order_relaxed);
@@ -178,13 +199,6 @@ class LockedSink final : public DrawSink {
       last_wait_ms_ = s.pipeline_wait_ms;
       last_texture_ms_ = s.texture_ms;
       last_draws_ = s.draws;
-      std::lock_guard lock(g_stutter_mutex);
-      if (g_stutter_on) {
-        const GameRenderer::StutterStats st = g->stutter();
-        g_stutter = {st.frames,        st.stutter_frames,   st.frames_waited, st.frames_skipped,
-                     st.draws_skipped, st.worst_wait_frame, st.wait_ms,       st.worst_wait_ms};
-        g_stutter_valid = true;
-      }
     }
 #endif
     g_last_present = now;
@@ -438,6 +452,7 @@ Backend::Backend(std::unique_ptr<HostDevice> host, rex::memory::Memory* memory)
 
 
 bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& game) {
+  SetDiagnosticsEnabled(REXCVAR_GET(native_diagnostics));
   SetLogSink(LogToRuntime);
   RenderScale scale;
   float shadow_scale = 0.0f;
@@ -534,7 +549,7 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
       if (!(game.debug & 256)) {
         renderer->set_watch([memory](uint32_t physical_address, uint32_t bytes) {
           CallTimer timer(4);
-          g_watch_calls.fetch_add(1, std::memory_order_relaxed);
+          if (DiagnosticsEnabled()) g_watch_calls.fetch_add(1, std::memory_order_relaxed);
           memory->EnablePhysicalMemoryAccessCallbacks(physical_address, bytes, true, false);
         });
       }
@@ -796,7 +811,7 @@ void Backend::PresentNow(rex::ui::Presenter* presenter, uint32_t frontbuffer_wid
   const uint32_t width = renderer_->width(), height = renderer_->height();
   const uint32_t swap = swaps_++;
   if (swap % 600 == 0) LogFrameTiming();
-  if (swap % 300 == 0 && draws_) {
+  if (swap % 300 == 0 && draws_ && DiagnosticsEnabled()) {
     // In the core category: the app keeps only warnings of the gpu one.
     const DrawTracker::Stats& d = draws_->stats();
     const Renderer::Stats& r = renderer_->stats();
@@ -860,8 +875,8 @@ void Backend::PresentNow(rex::ui::Presenter* presenter, uint32_t frontbuffer_wid
       g_worst_frames.clear();
       REXLOG_INFO("rexgpu-native: slowest frames:{}", text);
     }
-    LogStutter("so far");
   }
+  if (swap % 300 == 0) LogStutter("so far");
   (void)frontbuffer_width;
   (void)frontbuffer_height;
   if (game_frame && unlocked_present_) {

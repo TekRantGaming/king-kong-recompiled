@@ -17,6 +17,7 @@
 #include <rex/types.h>
 
 #include "plugin/native_graphics_system.h"
+#include "backend/diagnostics.h"
 
 namespace nr {
 
@@ -102,19 +103,23 @@ void RingSkimmer::WorkerMain() {
     }
     batch_ticket_ = write_ticket_.load(std::memory_order_acquire);
     batch_waited_ = false;
-    const auto busy_start = std::chrono::steady_clock::now();
+    const bool diagnostics = DiagnosticsEnabled();
+    const auto busy_start = diagnostics ? std::chrono::steady_clock::now()
+                                        : std::chrono::steady_clock::time_point{};
     read_ptr_index_ = ExecutePrimaryBuffer(read_ptr_index_, write_ptr_index);
-    const auto busy_end = std::chrono::steady_clock::now();
-    busy_us_ += uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(busy_end - busy_start).count());
-    if (busy_end - stats_logged_ > std::chrono::seconds(10)) {
-      REXLOG_INFO("rexgpu-native: ring skimmer: {} ms executing packets, {} WAIT_REG_MEM waits, {} ms waiting",
-                  busy_us_ / 1000, waits_, wait_us_ / 1000);
-      std::string ops;
-      for (uint32_t op = 0; op < 128; ++op) {
-        if (opcode_counts_[op]) ops += fmt::format(" {:02X}:{}", op, opcode_counts_[op]);
+    if (diagnostics) {
+      const auto busy_end = std::chrono::steady_clock::now();
+      busy_us_ += uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(busy_end - busy_start).count());
+      if (busy_end - stats_logged_ > std::chrono::seconds(10)) {
+        REXLOG_INFO("rexgpu-native: ring skimmer: {} ms executing packets, {} WAIT_REG_MEM waits, {} ms waiting",
+                    busy_us_ / 1000, waits_, wait_us_ / 1000);
+        std::string ops;
+        for (uint32_t op = 0; op < 128; ++op) {
+          if (opcode_counts_[op]) ops += fmt::format(" {:02X}:{}", op, opcode_counts_[op]);
+        }
+        REXLOG_INFO("rexgpu-native: ring skimmer: type 3 packets by opcode:{}", ops);
+        stats_logged_ = busy_end;
       }
-      REXLOG_INFO("rexgpu-native: ring skimmer: type 3 packets by opcode:{}", ops);
-      stats_logged_ = busy_end;
     }
     if (read_ptr_writeback_ptr_) {
       rex::memory::store_and_swap<uint32_t>(memory_->TranslatePhysical(read_ptr_writeback_ptr_),
@@ -219,7 +224,7 @@ bool RingSkimmer::ExecutePacketType3(RingBuffer* reader, uint32_t packet) {
     REXGPU_DEBUG("rexgpu-native: packet opcode {:02X} count {}: {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
                  opcode, count, data[0], data[1], data[2], data[3], data[4], data[5]);
   }
-  ++opcode_counts_[opcode & 0x7F];
+  if (DiagnosticsEnabled()) ++opcode_counts_[opcode & 0x7F];
   switch (opcode) {
     case PM4_INTERRUPT:
     case PM4_XE_SWAP:
@@ -472,7 +477,7 @@ bool RingSkimmer::ExecuteWaitRegMem(RingBuffer* reader) {
     if (!matched) {
       if (!reported_wait) {
         reported_wait = true;
-        ++waits_;
+        if (DiagnosticsEnabled()) ++waits_;
       }
       if (wait >= 0x100) {
         rex::thread::Sleep(std::chrono::milliseconds(wait / 0x100));
@@ -485,7 +490,7 @@ bool RingSkimmer::ExecuteWaitRegMem(RingBuffer* reader) {
       }
     }
   } while (!matched);
-  if (reported_wait) {
+  if (reported_wait && DiagnosticsEnabled()) {
     wait_us_ += uint64_t(
         std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - wait_start).count());
   }
