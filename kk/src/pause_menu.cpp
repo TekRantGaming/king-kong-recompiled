@@ -453,6 +453,24 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
       at = now + 1.6;
       return;
     }
+    // Deterministic integration checks still drive the actual list with pad
+    // actions; selecting a page/row here avoids depending on optional entries.
+    if (t == "settings:controls") {
+      OpenSettings(InGameSettings::kControls);
+      return;
+    }
+    if (t.rfind("focus:", 0) == 0) {
+      const auto rows = settings_->Items(page_);
+      for (size_t i = 0; i < rows.size(); ++i) if (rows[i].label == t.substr(6)) {
+        auto& state = lists_[int(page_)];
+        state.focus = int(i);
+        state.focus_label = rows[i].label;
+        REXLOG_INFO("KK dev: pause focused {} value {}", rows[i].label, rows[i].value_text);
+        return;
+      }
+      REXLOG_INFO("KK dev: pause focus FAIL {}", t.substr(6));
+      return;
+    }
     auto at_point = [&](const std::string& xy) {
       const size_t colon = xy.find(':');
       io.AddMousePosEvent(o_.x + std::stof(xy.substr(0, colon)) * m_.s, o_.y + std::stof(xy.substr(colon + 1)) * m_.s);

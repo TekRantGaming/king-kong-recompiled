@@ -2,6 +2,7 @@
 #include "debug_overlay.h"
 #include "freecam_math.h"
 #include "play_internal.h"
+#include "ps2_movies.h"
 #include "settings.h"
 #include "ui_paint.h"
 #include <atomic>
@@ -100,6 +101,8 @@ public:
   }
   bool NeedsContinuousPaint() override {
 #if defined(KK_DEV_TOOLS)
+    if (std::getenv("KK_DEV_PUBLIC_DEFAULT_TEST") && !defaults_tested)
+      return true;
     if (std::getenv("KK_DEV_FREECAM_TEST") && test_stage < 36)
       return true;
 #endif
@@ -138,6 +141,18 @@ public:
 protected:
   void OnDraw(ImGuiIO &) override {
 #if defined(KK_DEV_TOOLS)
+    if (std::getenv("KK_DEV_PUBLIC_DEFAULT_TEST") && !defaults_tested && InPlay()) {
+      defaults_tested = true;
+      for (unsigned k : {0x78u, 0x79u}) {
+        rex::ui::KeyEvent e(window, rex::ui::VirtualKey(k), 1, false, false,
+                            false, false, false);
+        Key(e, true);
+      }
+      const bool pass = !REXCVAR_GET(kk_freecam) && !active && !hidden &&
+                        !REXCVAR_GET(kk_ps2_cutscenes) && movies::Folder().empty();
+      REXLOG_INFO("KK public defaults test: {} F9/F10 inert, movies off, folder empty",
+                  pass ? "PASS" : "FAIL");
+    }
     TestTick();
 #endif
     const bool want =
@@ -153,6 +168,7 @@ protected:
 
 private:
 #if defined(KK_DEV_TOOLS)
+  bool defaults_tested = false;
   void TestTick() {
     if (!std::getenv("KK_DEV_FREECAM_TEST") || !InPlay())
       return;
@@ -234,7 +250,11 @@ private:
 };
 } // namespace
 void Install(rex::ui::ImGuiDrawer *d, rex::ui::Window *w) {
-  if (!REXCVAR_GET(kk_freecam))
+  bool test_defaults = false;
+#if defined(KK_DEV_TOOLS)
+  test_defaults = std::getenv("KK_DEV_PUBLIC_DEFAULT_TEST") != nullptr;
+#endif
+  if (!REXCVAR_GET(kk_freecam) && !test_defaults)
     return;
   new Controls(d, w);
 }

@@ -1573,6 +1573,7 @@ class SettingsPages {
         }
       });
       it.value_text.assign(reinterpret_cast<const char*>(folder.data()), folder.size());
+      it.on_default = [] { Reset("kk_ps2_movie_folder"); };
       items.push_back(std::move(it));
     }
 #endif
@@ -4496,6 +4497,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       case kGraphics:
         return {"kk_original_look", "kk_modern_settings", "kk_graphics_preset", "swap_post_effect", "anisotropic_override",
                 "native_texture_pack", "native_texture_pack_folder",
+                "present_hdr", "present_hdr_peak", "present_hdr_paper_white", "kk_ps2_cutscenes", "kk_ps2_movie_folder",
                 "kk_motion_blur", "kk_big_blur", "kk_fog", "ao_mode", "ao_strength", "native_ao_method",
                 "native_ao_apply", "native_ao_quality", "native_ao_samples", "native_backend", "kk_renderer", "native_gi", "native_gi_distance", "native_shadow_quality", "native_water_reflections", "native_volumetrics", "native_effect_buffers", "native_sharpness"};
       case kGameplay:
