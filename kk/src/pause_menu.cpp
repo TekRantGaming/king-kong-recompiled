@@ -67,11 +67,17 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
         game_dir_(std::move(game_dir)),
         settings_(CreateInGameSettings(immediate, std::move(config_path), user_dir_)) {}
 
+ public:
+  bool NeedsContinuousPaint() override { return play::PauseMenuOpen(); }
+
  protected:
   void OnDraw(ImGuiIO& io) override {
     const bool open = play::PauseMenuOpen();
     if (open != open_) {
       open_ = open;
+#if defined(KK_DEV_TOOLS)
+      REXLOG_INFO("KK dev pause panel: {}", open ? "open" : "closed");
+#endif
       if (open) Opened();
       else Closed();
     }

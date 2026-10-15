@@ -47,6 +47,9 @@
 #include <rex/logging.h>
 #include <rex/ui/imgui_dialog.h>
 #include <rex/ui/imgui_drawer.h>
+#if defined(KK_DEV_TOOLS)
+#include <rex/ui/keybinds.h>
+#endif
 #include <rex/ui/ui_event.h>
 #include <rex/ui/virtual_key.h>
 #include <rex/ui/window.h>
@@ -421,6 +424,8 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
   }
   ~GraphicsPanel() override { window_->RemoveInputListener(this); }
 
+  bool NeedsContinuousPaint() override { return g_open.load(); }
+
   void OnKeyDown(rex::ui::KeyEvent& e) override {
     if (!InPlay()) return;
     switch (e.virtual_key()) {
@@ -474,6 +479,7 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
  protected:
   void OnDraw(ImGuiIO& io) override {
 #if defined(KK_DEV_TOOLS)
+    UiPaintTick();
     TestTick();
 #endif
     // A held F7 whose release went to another window (focus lost) ends the comparison.
@@ -507,6 +513,7 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
   }
   void SetOpen(bool open) {
     g_open.store(open);
+    window_->RequestPresenterUIPaintFromUIThread();
     REXLOG_INFO("KK graphics panel: {}", open ? "open" : "closed");
   }
 
@@ -1245,10 +1252,32 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
         return;
     }
   }
+  // Background-safe input through the same listeners/bind registry as real keys.
+  // No OS focus, raw window messages or changes to the player's input state.
+  void UiPaintTick() {
+    if (!std::getenv("KK_DEV_UIPAINT_TEST")) return;
+    const double t = DevSecondsSinceMenu();
+    struct Press { double at; rex::ui::VirtualKey key; bool down; };
+    static const Press plan[] = {
+        {74, rex::ui::VirtualKey::kF2, true}, {74.2, rex::ui::VirtualKey::kF2, false},
+        {78, rex::ui::VirtualKey::kF2, true}, {78.2, rex::ui::VirtualKey::kF2, false},
+        {94, rex::ui::VirtualKey::kF8, true}, {94.2, rex::ui::VirtualKey::kF8, false},
+        {99, rex::ui::VirtualKey::kF7, true}, {102, rex::ui::VirtualKey::kF7, false},
+        {104, rex::ui::VirtualKey::kF6, true}, {104.2, rex::ui::VirtualKey::kF6, false},
+        {108, rex::ui::VirtualKey::kF8, true}, {108.2, rex::ui::VirtualKey::kF8, false}};
+    static size_t next = 0;
+    if (next < std::size(plan) && t >= plan[next].at) {
+      const auto& p = plan[next++];
+      Key(p.key, p.down);
+      REXLOG_INFO("KK dev UI key: {} {} handled={} at {:.3f}", rex::ui::VirtualKeyToString(p.key),
+                  p.down ? "down" : "up", test_key_handled_, t);
+    }
+  }
   void Key(rex::ui::VirtualKey key, bool down) {
     rex::ui::KeyEvent e(window_, key, 1, !down, false, false, false, false);
     if (down) OnKeyDown(e);
     else OnKeyUp(e);
+    if (down && !e.is_handled()) rex::ui::ProcessKeyEvent(e);
     test_key_handled_ = e.is_handled();
   }
   std::string TrialName(const char* which) const {

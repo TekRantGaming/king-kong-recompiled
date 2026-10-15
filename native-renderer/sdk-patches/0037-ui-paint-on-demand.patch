@@ -1,0 +1,179 @@
+--- a/include/rex/ui/imgui_dialog.h
++++ b/include/rex/ui/imgui_dialog.h
+@@ -39,6 +39,10 @@
+ 
+   void Draw();
+ 
++  // Persistent hidden dialogs override this. State changes outside Draw must
++  // explicitly wake the presenter; registration alone is not visibility.
++  virtual bool NeedsContinuousPaint() { return true; }
++
+  protected:
+   ImGuiDialog(ImGuiDrawer* imgui_drawer);
+ 
+--- a/src/ui/imgui_drawer.cpp
++++ b/src/ui/imgui_drawer.cpp
+@@ -15,6 +15,7 @@
+ #include <map>
+ 
+ #include <rex/assert.h>
++#include <rex/cvar.h>
+ #include <rex/chrono/clock.h>
+ #include <rex/logging.h>
+ #include <rex/ui/imgui_dialog.h>
+@@ -23,6 +24,9 @@
+ #include <rex/ui/window.h>
+ 
+ #include <imgui.h>
++
++REXCVAR_DEFINE_BOOL(ui_paint_on_demand, true, "UI/Diagnostics",
++                    "Stop continuous paints for inactive persistent dialogs").debug_only();
+ 
+ namespace rex {
+ namespace ui {
+@@ -139,6 +143,7 @@
+     }
+   }
+   dialogs_.push_back(dialog);
++  if (presenter_) presenter_->RequestUIPaintFromUIThread();
+ }
+ 
+ void ImGuiDrawer::RemoveDialog(ImGuiDialog* dialog) {
+@@ -155,6 +160,7 @@
+     }
+   }
+   dialogs_.erase(it);
++  if (presenter_) presenter_->RequestUIPaintFromUIThread();
+   DetachIfLastDialogRemoved();
+ }
+ 
+@@ -467,13 +473,12 @@
+   // it now if needed.
+   DetachIfLastDialogRemoved();
+ 
+-  if (!dialogs_.empty()) {
+-    // Repaint (and handle input) continuously if still active. In detached mode
+-    // there is no presenter; the app drives repaint via its own present loop.
+-    if (presenter_) {
+-      presenter_->RequestUIPaintFromUIThread();
+-    }
+-  }
++  // Query after callbacks: a dialog may have closed/deleted itself. Removal
++  // and explicit state changes request a final clearing paint separately.
++  // Hidden persistent dialogs no longer keep the presenter running by existing.
++  const bool continuous = !REXCVAR_GET(ui_paint_on_demand) || std::any_of(dialogs_.begin(), dialogs_.end(),
++      [](ImGuiDialog* dialog) { return dialog->NeedsContinuousPaint(); });
++  if (presenter_ && continuous) presenter_->RequestUIPaintFromUIThread();
+ }
+ 
+ void ImGuiDrawer::RenderDrawLists(ImDrawData* data, UIDrawContext& ui_draw_context) {
+--- a/src/ui/window.cpp
++++ b/src/ui/window.cpp
+@@ -645,6 +645,7 @@
+   if (destruction_receiver.IsWindowDestroyed()) {
+     return;
+   }
++  RequestPresenterUIPaintFromUIThread();
+ }
+ 
+ void Window::OnKeyUp(KeyEvent& e, WindowDestructionReceiver& destruction_receiver) {
+@@ -657,6 +658,7 @@
+   if (destruction_receiver.IsWindowDestroyed()) {
+     return;
+   }
++  RequestPresenterUIPaintFromUIThread();
+ }
+ 
+ void Window::OnKeyChar(KeyEvent& e, WindowDestructionReceiver& destruction_receiver) {
+@@ -669,6 +671,7 @@
+   if (destruction_receiver.IsWindowDestroyed()) {
+     return;
+   }
++  RequestPresenterUIPaintFromUIThread();
+ }
+ 
+ void Window::OnMouseDown(MouseEvent& e, WindowDestructionReceiver& destruction_receiver) {
+@@ -681,6 +684,7 @@
+   if (destruction_receiver.IsWindowDestroyed()) {
+     return;
+   }
++  RequestPresenterUIPaintFromUIThread();
+ }
+ 
+ void Window::OnMouseMove(MouseEvent& e, WindowDestructionReceiver& destruction_receiver) {
+@@ -693,6 +697,7 @@
+   if (destruction_receiver.IsWindowDestroyed()) {
+     return;
+   }
++  RequestPresenterUIPaintFromUIThread();
+ }
+ 
+ void Window::OnMouseUp(MouseEvent& e, WindowDestructionReceiver& destruction_receiver) {
+@@ -705,6 +710,7 @@
+   if (destruction_receiver.IsWindowDestroyed()) {
+     return;
+   }
++  RequestPresenterUIPaintFromUIThread();
+ }
+ 
+ void Window::OnMouseWheel(MouseEvent& e, WindowDestructionReceiver& destruction_receiver) {
+@@ -717,6 +723,7 @@
+   if (destruction_receiver.IsWindowDestroyed()) {
+     return;
+   }
++  RequestPresenterUIPaintFromUIThread();
+ }
+ 
+ void Window::OnTouchEvent(TouchEvent& e, WindowDestructionReceiver& destruction_receiver) {
+@@ -729,6 +736,7 @@
+   if (destruction_receiver.IsWindowDestroyed()) {
+     return;
+   }
++  RequestPresenterUIPaintFromUIThread();
+ }
+ 
+ void Window::SendEventToListeners(std::function<void(WindowListener*)> fn,
+--- a/src/ui/presenter.cpp
++++ b/src/ui/presenter.cpp
+@@ -16,6 +16,7 @@
+ 
+ #include <rex/assert.h>
+ #include <rex/cvar.h>
++#include <rex/chrono/clock.h>
+ #include <rex/logging.h>
+ #include <rex/platform.h>
+ #include <rex/ui/presenter.h>
+@@ -289,6 +290,9 @@
+ }
+ 
+ }  // namespace
++
++REXCVAR_DEFINE_BOOL(ui_paint_trace, false, "UI/Diagnostics",
++                    "Log successful host presents once per second").debug_only();
+ 
+ namespace rex {
+ namespace ui {
+@@ -1559,6 +1563,23 @@
+   assert_false(execute_ui_drawers && !is_in_ui_thread_paint_);
+   assert_true(surface_paint_connection_state_ == SurfacePaintConnectionState::kConnectedPaintable);
+   PaintResult result = PaintAndPresentImpl(execute_ui_drawers);
++  if (REXCVAR_GET(ui_paint_trace) &&
++      (result == PaintResult::kPresented || result == PaintResult::kPresentedSuboptimal)) {
++    // Opt-in test instrumentation only. Both paint owners share this counter.
++    static std::mutex trace_mutex;
++    std::lock_guard lock(trace_mutex);
++    static uint64_t start = rex::chrono::Clock::QueryHostTickCount();
++    static uint64_t presents = 0;
++    ++presents;
++    const auto now = rex::chrono::Clock::QueryHostTickCount();
++    const double seconds = double(now - start) / rex::chrono::Clock::QueryHostTickFrequency();
++    if (seconds >= 1.0) {
++      REXLOG_INFO("UI paint trace: {} host presents in {:.3f} s ({:.1f}/s)",
++                  presents, seconds, presents / seconds);
++      start = now;
++      presents = 0;
++    }
++  }
+   switch (result) {
+     case PaintResult::kPresented:
+       surface_paint_connection_was_optimal_at_successful_paint_ = true;

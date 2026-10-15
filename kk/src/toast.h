@@ -35,6 +35,10 @@ class AchievementToast final : public rex::ui::AchievementNotificationDialog {
 
   // Shows a toast. `icon_id` is a game achievement ID (0 = the game's title icon).
   void Show(std::string title, uint32_t gamerscore, uint32_t icon_id = 0);
+  bool NeedsContinuousPaint() override {
+    std::lock_guard lock(mutex_);
+    return !queue_.empty();
+  }
 
  protected:
   void OnDraw(ImGuiIO& io) override;

@@ -1,6 +1,9 @@
+#include "ui_paint.h"
+
 #include "overlay.h"
 
 #include <chrono>
+#include <mutex>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -10,6 +13,10 @@
 #include <rex/cvar.h>
 #include <rex/ui/imgui_dialog.h>
 #include <rex/ui/keybinds.h>
+#if defined(KK_DEV_TOOLS)
+#include <rex/logging.h>
+namespace kk { double DevSecondsSinceMenu(); }
+#endif
 
 #include "frame_stats.h"
 #include "platform.h"
@@ -19,14 +26,45 @@
 
 namespace kk {
 namespace {
+std::mutex paint_mutex;
+std::function<void()> paint_request;
+}
+void SetUiPaintRequest(std::function<void()> request) {
+  std::lock_guard lock(paint_mutex);
+  paint_request = std::move(request);
+}
+void RequestUiPaint() {
+  std::lock_guard lock(paint_mutex);
+  if (paint_request) paint_request();
+}
+namespace {
 
 
 class FpsOverlay final : public rex::ui::ImGuiDialog {
  public:
   explicit FpsOverlay(rex::ui::ImGuiDrawer* drawer) : ImGuiDialog(drawer) {}
 
+  bool NeedsContinuousPaint() override { return play::CoverScreen(); }
+
  protected:
   void OnDraw(ImGuiIO& io) override {
+#if defined(KK_DEV_TOOLS)
+    if (std::getenv("KK_DEV_UIPAINT_TEST")) {
+      const double seconds = DevSecondsSinceMenu();
+      static int phase = -1;
+      const int next = seconds < 0 ? -1 : seconds < 12 ? 0 : seconds < 24 ? 1 : seconds < 36 ? 2 :
+                       seconds < 48 ? 3 : seconds < 60 ? 4 : seconds < 72 ? 5 : 6;
+      if (next >= 0 && next != phase) {
+        phase = next;
+        rex::cvar::SetFlagByName("ui_paint_on_demand", phase == 0 || phase == 2 || phase == 4 ? "false" : "true");
+        rex::cvar::SetFlagByName("kk_frame_rate", phase < 2 || phase == 6 ? "30" : "0");
+        rex::cvar::SetFlagByName("native_upscaler", phase == 4 || phase == 5 ? "dlss" : "off");
+        rex::cvar::SetFlagByName("native_upscaler_quality", "quality");
+        RequestUiPaint();
+        REXLOG_INFO("UI repaint test phase {} at {:.3f} seconds", phase, seconds);
+      }
+    }
+#endif
     // Black while the launcher's start request is carried out (the title and the game's menus never
     // show) and on the way back to the launcher.
     if (play::CoverScreen())
@@ -75,6 +113,10 @@ void CreateFpsOverlay(rex::ui::ImGuiDrawer* drawer) {
 #endif
   rex::ui::RegisterBind("bind_kk_fps", "F2", "Toggle frame counter", [] {
     rex::cvar::SetFlagByName("kk_show_fps", REXCVAR_GET(kk_show_fps) ? "false" : "true");
+#if defined(KK_DEV_TOOLS)
+    REXLOG_INFO("KK dev F2: {}", REXCVAR_GET(kk_show_fps) ? "open" : "closed");
+#endif
+    RequestUiPaint();
   });
 }
 

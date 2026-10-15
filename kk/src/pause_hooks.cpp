@@ -25,6 +25,8 @@
 // KK_DEV_PAUSE_ACTIONS="<s>:<action>,..." runs pause actions at those seconds of the script clock
 // (resume, again, score, quit, open = press Start), for tests.
 
+#include "ui_paint.h"
+
 #include <algorithm>
 #include "debug_overlay.h"
 #include <atomic>
@@ -54,6 +56,7 @@
 #if defined(KK_DEV_TOOLS)
 namespace kk {
 void DevPageRuns(const char* name, uint8_t* base);  // dev_pause.cpp (KK_DEV_PAGE_TRACE)
+void DevPressPauseStart();
 }
 #define KK_PAGE_TRACE(name) kk::DevPageRuns(name, base)
 #else
@@ -206,6 +209,8 @@ class PauseBackdrop final : public rex::ui::ImGuiDialog {
   PauseBackdrop(rex::ui::ImGuiDrawer* drawer, rex::ui::ImmediateDrawer* immediate)
       : ImGuiDialog(drawer), immediate_(immediate) {}
 
+  bool NeedsContinuousPaint() override { return TakeoverOn() && !g_game_page && (MenuUp() || g_pending >= 0) && !CoverScreen(); }
+
  protected:
   void OnDraw(ImGuiIO& io) override {
     const bool show = TakeoverOn() && !g_game_page && (MenuUp() || g_pending >= 0) && !CoverScreen();
@@ -256,6 +261,7 @@ void FilterPad(uint32_t user, uint8_t* state) {
   if (user == 0) {
     if (menu && !was_menu) held_at_open = buttons;
     held_at_open &= buttons;
+    if (menu != was_menu) kk::RequestUiPaint();
     was_menu = menu;
   }
   if (user == 0 && menu) {
@@ -361,7 +367,9 @@ REX_HOOK_RAW(sub_824BA560) {
     g_phase = kIdle;
     REXLOG_INFO("KK pause: the port's pause menu is open (the game's page is not run)");
   }
+  const bool was_visible = PauseMenuOpen();
   g_main_seen_ms = now;
+  if (PauseMenuOpen() != was_visible) kk::RequestUiPaint();
   const uint32_t g = Load32(base, kGamePtr);
   const bool slot = int32_t(Load32(base, g + 0x4E10)) != -1, chapter_run = Load32(base, g + 0x5668) != 0;
   g_has_slot = slot && chapter_run;
@@ -581,6 +589,14 @@ const bool g_steps_thread = [] {
       const double t = kk::DevSecondsSinceMenu();
       if (t < 0 || t < steps[next].at) continue;
       const std::string& w = steps[next].what;
+      if (w == "open" || w == "close") {
+        const bool open = PauseMenuOpen();
+        REXLOG_INFO("KK dev pause step {:.1f} s: {} (menu open {})", t, w, open);
+        if (w == "open" && !open) kk::DevPressPauseStart();
+        if (w == "close" && open) RunPauseAction(PauseAction::kResume);
+        ++next;
+        continue;
+      }
       if (w.rfind("optpick=", 0) == 0) {
         g_dev_opt_row = std::atoi(w.c_str() + 8);
         ++next;
