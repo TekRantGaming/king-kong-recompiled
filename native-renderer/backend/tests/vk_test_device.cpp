@@ -8,6 +8,7 @@
 #include <nvrhi/vulkan.h>
 #include <vulkan/vulkan.hpp>
 
+#include "backend/upscaler.h"
 #include "backend/upscaler_vulkan.h"
 #include "backend/vk_pipeline_cache.h"
 #include "backend/vulkan_dispatch.h"
@@ -311,10 +312,23 @@ bool VulkanTestDevice::Init(bool validation, bool driver_pipeline_cache, bool up
   if (validation) {
     nvrhi_device_ = nvrhi::validation::createValidationLayer(nvrhi_device_);
   }
+#if NR_GAME_RENDERER
+  if (upscaler_needs) {
+    SetUpscalerIdleWait(nvrhi_device_, [this] { WaitIdle(); });
+    SetUpscalerExclusive(nvrhi_device_, [this](const std::function<void()>& fn) { RunExclusive(fn); });
+    upscaler_callbacks_ = true;
+  }
+#endif
   return true;
 }
 
 VulkanTestDevice::~VulkanTestDevice() {
+#if NR_GAME_RENDERER
+  if (upscaler_callbacks_) {
+    SetUpscalerIdleWait(nvrhi_device_, nullptr);
+    SetUpscalerExclusive(nvrhi_device_, nullptr);
+  }
+#endif
   if (nvrhi_device_) {
     nvrhi_device_->waitForIdle();
     nvrhi_device_->runGarbageCollection();
@@ -335,13 +349,27 @@ void VulkanTestDevice::MakeCurrent() {
 int VulkanTestDevice::errors() const { return g_vulkan_errors + g_nvrhi_errors; }
 
 void VulkanTestDevice::Execute(nvrhi::ICommandList* command_list) {
+  std::lock_guard lock(queue_mutex_);
   nvrhi_device_->executeCommandList(command_list);
   nvrhi_device_->runGarbageCollection();
 }
 
 void VulkanTestDevice::WaitIdle() {
+  std::lock_guard lock(queue_mutex_);
   nvrhi_device_->waitForIdle();
   nvrhi_device_->runGarbageCollection();
+}
+
+void VulkanTestDevice::RunExclusive(const std::function<void()>& fn) {
+  std::lock_guard lock(queue_mutex_);
+  nvrhi_device_->waitForIdle();
+  fn();
+}
+
+VulkanTestDevice::Pixels VulkanTestDevice::ReadBack(nvrhi::ITexture* texture) {
+  // ReadBackTexture submits and waits directly rather than calling Execute.
+  std::lock_guard lock(queue_mutex_);
+  return ReadBackTexture(nvrhi_device_, texture);
 }
 
 }  // namespace nr::test

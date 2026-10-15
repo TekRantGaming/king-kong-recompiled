@@ -5,7 +5,9 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -43,9 +45,11 @@ class VulkanTestDevice {
 
   void Execute(nvrhi::ICommandList* command_list);
   void WaitIdle();
+  // Match the game host's exclusion while an upscaler worker initialises an SDK.
+  void RunExclusive(const std::function<void()>& fn);
 
   using Pixels = nr::test::Pixels;
-  Pixels ReadBack(nvrhi::ITexture* texture) { return ReadBackTexture(nvrhi_device_, texture); }
+  Pixels ReadBack(nvrhi::ITexture* texture);
 
  private:
   VulkanTestDevice() = default;
@@ -57,6 +61,8 @@ class VulkanTestDevice {
   nvrhi::DeviceHandle nvrhi_device_;
   std::string device_name_;
   bool khronos_validation_ = false;
+  bool upscaler_callbacks_ = false;
+  std::mutex queue_mutex_;
 };
 
 
