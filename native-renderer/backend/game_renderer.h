@@ -875,6 +875,8 @@ class GameRenderer {
   std::vector<kknr::VertexElement> scratch_declaration_;
   std::vector<kkshaders::DeclElement> scratch_patch_declaration_;
   std::vector<uint8_t> scratch_index_upload_;
+  // Lazy CPU conversion pool. Every conversion joins before returning, so teardown has no guest/GPU work.
+  std::unique_ptr<kknr::TextureConversionWorkers> texture_conversion_workers_;
 
   // Built-in passes.
   nvrhi::ShaderHandle blit_vs_, blit_ps_, clear_vs_, clear_ps_;

@@ -448,16 +448,16 @@ struct Fixture {
   // EncodeGuestTexture); returns the object.
   uint32_t NewTexture(kknr::TextureFetchDesc desc,
                       const std::function<const uint8_t*(uint32_t, uint32_t)>& blocks = nullptr,
-                      uint32_t* base_cpu = nullptr, uint32_t* base_bytes = nullptr) {
-    // Room for the largest test texture.
-    const uint32_t base = mem.AllocPhysical(256 * 1024);
+                      uint32_t* base_cpu = nullptr, uint32_t* base_bytes = nullptr,
+                      uint32_t allocation_bytes = 256 * 1024) {
+    const uint32_t base = mem.AllocPhysical(allocation_bytes);
     desc.base_address = base - FakeGuestMemory::kPhysicalView;
     const kknr::TextureFetch fetch = kknr::MakeTextureFetch(desc);
     if (blocks) {
       kknr::GuestTextureImage image;
       if (!kknr::EncodeGuestTexture(fetch, blocks, image)) {
         Fail(__FILE__, __LINE__, "EncodeGuestTexture failed");
-      } else if (image.base.size() > 256 * 1024) {
+      } else if (image.base.size() > allocation_bytes) {
         Fail(__FILE__, __LINE__, "texture too large for the test allocation");
       } else {
         std::memcpy(mem.Writable(base), image.base.data(), image.base.size());
@@ -1333,26 +1333,30 @@ TEST(Shaders_ParsedFromObjectWithoutCreateHook) {
   CHECK_EQ(f.shaders->stats().failed, uint64_t(0));
 }
 
-TEST(Textures_UploadSampleAndInvalidate) {
+static void CheckTextureUploadSampleAndInvalidate(uint32_t side) {
   Fixture f;
   if (!f.Init()) return;
   const uint32_t rt = f.BindMainSurface();
-  // A tiled 4x4 A8R8G8B8 texture, one colour per texel. Host-order blocks:
+  // A tiled A8R8G8B8 texture, with sixteen colour regions. The 512 case is large enough to use the
+  // lazy CPU conversion workers. Its very first draw must sample the real pixels, then see invalidation.
   // X = blue, Y = green, Z = red, W = alpha (the swizzle reads Z as red).
   auto texel = [](uint32_t i, uint32_t salt) -> std::array<uint8_t, 4> {
     return {uint8_t(i * 16 + salt), uint8_t(255 - i * 12), uint8_t((i * 37 + salt) & 255), 255};
   };
-  std::vector<uint8_t> blocks(4 * 4 * 4);
+  std::vector<uint8_t> blocks(size_t(side) * side * 4);
   auto fill = [&](uint32_t salt) {
-    for (uint32_t i = 0; i < 16; ++i) {
-      auto t = texel(i, salt);
-      std::memcpy(&blocks[i * 4], t.data(), 4);
-    }
+    for (uint32_t y = 0; y < side; ++y)
+      for (uint32_t x = 0; x < side; ++x) {
+        const uint32_t region = (y * 4 / side) * 4 + x * 4 / side;
+        auto t = texel(region, salt);
+        std::memcpy(&blocks[(size_t(y) * side + x) * 4], t.data(), 4);
+      }
   };
   fill(0);
   uint32_t base = 0, bytes = 0;
-  const auto desc = Desc(kknr::TextureFormat::k_8_8_8_8, kknr::Endian::k8in32, kSwizzleZYXW, 4, true);
-  const uint32_t tex = f.NewTexture(desc, [&](uint32_t, uint32_t) { return blocks.data(); }, &base, &bytes);
+  const auto desc = Desc(kknr::TextureFormat::k_8_8_8_8, kknr::Endian::k8in32, kSwizzleZYXW, side, true);
+  const uint32_t tex = f.NewTexture(desc, [&](uint32_t, uint32_t) { return blocks.data(); }, &base, &bytes,
+                                    std::max(256u * 1024, side * side * 4));
   auto check = [&](const Pixels& px, uint32_t salt, int line) {
     for (uint32_t i = 0; i < 16; ++i) {
       auto t = texel(i, salt);
@@ -1368,7 +1372,8 @@ TEST(Textures_UploadSampleAndInvalidate) {
 
   // Drawn again unchanged: no upload.
   f.DrawTextured(tex);
-  f.Present(rt);
+  px = f.Present(rt);
+  check(px, 0, __LINE__);
   CHECK_EQ(f.game->stats().texture_uploads, uint64_t(1));
 
   // The CPU rewrites the texels and the write watch reports it.
@@ -1388,6 +1393,9 @@ TEST(Textures_UploadSampleAndInvalidate) {
   CHECK_EQ(f.game->stats().texture_uploads, uint64_t(2));
   CHECK_EQ(f.game->stats().texture_failures, uint64_t(0));
 }
+
+TEST(Textures_UploadSampleAndInvalidate) { CheckTextureUploadSampleAndInvalidate(4); }
+TEST(Textures_WorkerUploadSampleAndInvalidate) { CheckTextureUploadSampleAndInvalidate(512); }
 
 
 // ------------------------------------------------------------- frame log ---

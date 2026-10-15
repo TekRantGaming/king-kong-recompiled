@@ -20,6 +20,7 @@ if(TARGET rex::runtime AND TARGET fmt::fmt)
         ${NR_ROOT}/resources/src/guest_texture.cpp
         ${NR_ROOT}/resources/src/endian.cpp
         ${NR_ROOT}/resources/src/texture_convert.cpp
+        ${NR_ROOT}/resources/src/texture_workers.cpp
         ${NR_ROOT}/resources/src/buffers.cpp
         ${NR_ROOT}/resources/src/texture_cache.cpp
         ${NR_ROOT}/resources/src/render_targets.cpp
@@ -27,6 +28,8 @@ if(TARGET rex::runtime AND TARGET fmt::fmt)
     )
     target_include_directories(kknr_resources PUBLIC ${NR_ROOT}/resources/include)
     target_compile_features(kknr_resources PUBLIC cxx_std_20)
+    find_package(Threads REQUIRED)
+    target_link_libraries(kknr_resources PUBLIC Threads::Threads)
 
     # The SDK's include folder (xxh3.h, dxc/dxcapi.h) without linking it here.
     # The Linux SDK install has no dxcapi.h: NR_DXC_DIR names a DXC release

@@ -6,6 +6,7 @@
 
 #include "backend/game_renderer.h"
 #include "backend/log.h"
+#include "backend/texture_workers.h"
 #include "kknr/buffers.h"
 #include "kknr/nvrhi_format.h"
 #include "kknr/resolve.h"
@@ -296,7 +297,17 @@ GameRenderer::HostTexture* GameRenderer::UploadTexture(nvrhi::ICommandList* cl,
   } timer{start, stats_.texture_ms};
   kknr::HostTextureData data;
   std::string why;
-  if (!kknr::ConvertTexture(fetch, physical_, data, &why, TextureOptions())) {
+  const auto options = TextureOptions();
+  const auto ranges = kknr::GetTextureRanges(fetch, options);
+  kknr::TextureConversionWorkers* workers = nullptr;
+  if (uint64_t(ranges.base_bytes) + ranges.mip_bytes >= (256u << 10)) {
+    // Only the CPU conversion is parallel. This thread retains command-list ownership and waits for
+    // all slabs before writing any texture or letting the dependent draw bind it.
+    if (!texture_conversion_workers_)
+      texture_conversion_workers_ = std::make_unique<kknr::TextureConversionWorkers>(TextureWorkerCount());
+    if (texture_conversion_workers_->WorkerCount()) workers = texture_conversion_workers_.get();
+  }
+  if (!kknr::ConvertTexture(fetch, physical_, data, &why, options, workers)) {
     texture_bind_failure_ = "conversion: " + why;
     ++stats_.texture_failures;
     if (stats_.texture_failures < 50) {

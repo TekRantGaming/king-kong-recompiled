@@ -60,6 +60,12 @@ struct BlockExtent {
 bool ReadGuestBlocks(const GuestLayout& layout, const GuestRegions& regions, uint32_t level, uint32_t layer,
                      std::vector<uint8_t>& out, BlockExtent& extent);
 
+// A contiguous range of block rows, with depth slices flattened into the row index. The caller provides
+// row_count * width_blocks * BytesPerBlock() bytes. Used to untile independent slabs of a large texture;
+// like ReadGuestBlocks, whole blocks outside the supplied regions are zero.
+bool ReadGuestBlockRows(const GuestLayout& layout, const GuestRegions& regions, uint32_t level, uint32_t layer,
+                        uint32_t first_row, uint32_t row_count, uint8_t* out);
+
 // Writes tightly packed blocks of one level / layer into regions (host byte order) sized by the layout.
 bool WriteGuestBlocks(const GuestLayout& layout, uint8_t* base, size_t base_size, uint8_t* mips, size_t mips_size,
                       uint32_t level, uint32_t layer, const uint8_t* blocks);

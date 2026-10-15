@@ -14,6 +14,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -162,8 +163,27 @@ struct HostTextureData {
 
 bool PlanHostTexture(const TextureFetch& fetch, HostTexturePlan& plan, std::string* why = nullptr,
                      const TextureOptions& options = TextureOptions());
+
+// Reusable bounded CPU workers. Jobs receive only owned, endian-swapped texture bytes and disjoint output
+// slabs; Run joins every job before returning (and before rethrowing a job exception). No GPU API runs here.
+// The calling thread also works. max_workers is clamped to 3; callers choose an affinity-aware limit.
+class TextureConversionWorkers {
+ public:
+  explicit TextureConversionWorkers(unsigned max_workers);
+  ~TextureConversionWorkers();
+  TextureConversionWorkers(const TextureConversionWorkers&) = delete;
+  TextureConversionWorkers& operator=(const TextureConversionWorkers&) = delete;
+  unsigned WorkerCount() const;
+  void Run(unsigned jobs, void* context, void (*job)(void*, unsigned));
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
+
 bool ConvertTexture(const TextureFetch& fetch, const GuestMemory& memory, HostTextureData& out,
-                    std::string* why = nullptr, const TextureOptions& options = TextureOptions());
+                    std::string* why = nullptr, const TextureOptions& options = TextureOptions(),
+                    TextureConversionWorkers* workers = nullptr);
 
 // Guest blocks of one subresource (host byte order, as ReadGuestBlocks returns them) -> host data.
 // width / height / depth are the level's size in texels; dst has row_pitch bytes per row of host blocks and
