@@ -1540,16 +1540,22 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   std::array<StreamBind, 16> stream_binds = {};
   if (const uint8_t* decl = call.vertex_declaration ? memory_.Virtual(call.vertex_declaration) : nullptr)
     kknr::DecodeVertexDeclaration(decl, elements);
-  for (size_t b = 0; b < vs->bindings.vertexBindings.size() && b < 16; ++b) {
-    const kkshaders::VertexBinding& vb = vs->bindings.vertexBindings[b];
+  const bool ann_depth = vs->ucode_hash == 0xD710A475A7840F37ull || vs->ucode_hash == 0xC66476D2889954ECull;
+  auto normal_it = ann_depth && (tessellation_ || tessellation_previous_flags_) ? ann_normals_.find(GeometryContentHash(call)) : ann_normals_.end();
+  if(normal_it!=ann_normals_.end() && !normal_it->second.learned) normal_it=ann_normals_.end();
+  for (size_t b = 0; b < (normal_it != ann_normals_.end() ? 16 : vs->bindings.vertexBindings.size()) && b < 16; ++b) {
+    const bool extra_normal = b == 15 && normal_it != ann_normals_.end();
+    if (!extra_normal && b >= vs->bindings.vertexBindings.size()) continue;
+    const kkshaders::VertexBinding vb = extra_normal ? kkshaders::VertexBinding{false, kkshaders::DeclUsage::Normal} : vs->bindings.vertexBindings[b];
     uint32_t stream = 0;
     const kknr::VertexElement* element = nullptr;
     if (vb.raw) {
       if (vb.fetchConstant < 80) continue;
       stream = 95 - vb.fetchConstant;
     } else {
+      if (extra_normal) element = &normal_it->second.element;
       for (const kknr::VertexElement& e : elements) {
-        if (e.usage == uint8_t(vb.usage) && e.usage_index == vb.usageIndex) {
+        if (!extra_normal && e.usage == uint8_t(vb.usage) && e.usage_index == vb.usageIndex) {
           element = &e;
           break;
         }
@@ -1559,10 +1565,11 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     }
     if (stream >= 16) continue;
     const uint32_t vb_object = d.u32(dev::kStreamBuffer + 8 * stream);
-    const uint32_t offset = d.u32(dev::kStreamOffset + 8 * stream);
-    const uint32_t stride = uint32_t(*d.at(12688 + stream)) * 4;
+    const uint32_t offset = extra_normal ? normal_it->second.offset : d.u32(dev::kStreamOffset + 8 * stream);
+    const uint32_t stride = extra_normal ? normal_it->second.stride : uint32_t(*d.at(12688 + stream)) * 4;
     VertexBufferInfo info;
-    if (!vb_object || !DecodeVertexBuffer(memory_.Virtual(vb_object), info)) continue;
+    if (extra_normal) info = normal_it->second.buffer;
+    else if (!vb_object || !DecodeVertexBuffer(memory_.Virtual(vb_object), info)) continue;
     uint32_t used_begin = 0, used_end = ~0u;
     if (!vb.raw && stride && last_vertex != ~0u) {
       used_begin = uint32_t(std::min<uint64_t>(uint64_t(offset) + uint64_t(first_vertex) * stride, info.size_bytes));
@@ -1648,13 +1655,17 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   constants_frame_ = frame_;
   // Only prepared, complete material/pass pairs can use the experimental geometry.
   // Missing pipelines keep the whole pair original; this never queues a compile in play.
-  const bool ann_material = (dc.vertexFetch[1][3]&0x3Fu) && (tessellation_ || std::getenv("REX_DEV_TESS_BENCH")) &&
+  bool ann_material = (vs->ucode_hash==0x5E779DBA373D121Cull || vs->ucode_hash==0x3390D930CD168AC0ull) && (dc.vertexFetch[1][3]&0x3Fu) && (tessellation_ || std::getenv("REX_DEV_TESS_BENCH")) &&
                             AnnTessellationMaterial(d,*vs,ps.get());
   bool tessellated=false;
   if (ann_material && tessellation_) {
     if (auto* prepared=AnnTessellationPipeline(record)) {
       pipeline=prepared; tessellated=true; dc.reserved=TessellationFlags();
     }
+  }
+  if (AnnMainTessellation(call,d,*vs,ps.get(),dc,record,pipeline)) {
+    ann_material = true;
+    tessellated = (record.flags & kRecordTessellation)!=0;
   }
   cl->writeBuffer(draw_constants_, &dc, sizeof(dc));
   stats_.upload_bytes += sizeof(dc);

@@ -443,6 +443,15 @@ void GameRenderer::UpscaleRecordMotion(const DrawCall& call, const dev::DeviceVi
   GameUpscale& u = *upscale_;
   if (u.upscaled || u.motion_draws.size() >= 8192) return;
   GameUpscale::MotionDraw m;
+  const AnnNormalLayout* ann_normal = nullptr;
+  m.previous_tessellation_flags = tessellation_previous_flags_;
+  if (record.flags & kRecordTessellation) {
+    const auto it = ann_normals_.find(GeometryContentHash(call));
+    if (it != ann_normals_.end()) {
+      ann_normal = &it->second;
+      m.previous_tessellation_flags = it->second.previous_flags;
+    }
+  }
   m.key.vs_hash = vs->ucode_hash;
   for (uint32_t stream = 0; stream < 2; ++stream) {
     const uint32_t object = d.u32(dev::kStreamBuffer + 8 * stream);
@@ -462,6 +471,8 @@ void GameRenderer::UpscaleRecordMotion(const DrawCall& call, const dev::DeviceVi
       m.key.vertex_buffer2 = info.physical;
     }
   }
+  if (ann_normal)
+    m.key.vertex_buffer2 = ann_normal->element.stream ? ann_normal->buffer.physical : 0;
   m.key.index_buffer = call.indexed ? call.index_info.physical : 0;
   m.key.start = call.start;
   m.key.count = call.count;
@@ -763,7 +774,7 @@ void GameRenderer::UpscaleMotionPass(nvrhi::ICommandList* cl, HostTarget* depth_
     mc.params[1] = 0.5f * float(md.height);
     mc.params[2] = vulkan ? 1.0f : -1.0f;
     mc.params[3] = 0.0f;
-    if (m.pipeline.flags&kRecordTessellation) std::memcpy(&mc.params[3],&tessellation_previous_flags_,sizeof(uint32_t));
+    if (m.pipeline.flags&kRecordTessellation) std::memcpy(&mc.params[3],&m.previous_tessellation_flags,sizeof(uint32_t));
     cl->writeBuffer(u.motion_vs_constants, m.constants.data(), sizeof(float) * 1024);
     cl->writeBuffer(u.motion_draw_constants, &m.dc, sizeof(m.dc));
     cl->writeBuffer(u.motion_constants, &mc, sizeof(mc));

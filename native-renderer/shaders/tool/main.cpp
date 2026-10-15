@@ -1206,11 +1206,11 @@ int main(int argc, char** argv) {
             }
         };
         std::set<std::pair<uint64_t,uint64_t>> seen;
-        unsigned variants=0;
+        unsigned variants=0; std::set<uint64_t> variantHashes;
         for(const auto& entry:db.entries()) {
             if(entry.kind!=1 && entry.kind!=2) continue;
             auto source=db.parse(entry);
-            if(source.ok && entry.kind==2 && (source.info.ucodeHash==0x7DC46286A4EA2E2Eull || source.info.ucodeHash==0xF5BCD47A4145F958ull)) {
+            if(source.ok && entry.kind==2 && (source.info.ucodeHash==0x7DC46286A4EA2E2Eull || source.info.ucodeHash==0xF5BCD47A4145F958ull || source.info.ucodeHash==0x01D62D86BB133315ull || source.info.ucodeHash==0xBBD239D3BEB254D9ull || source.info.ucodeHash==0x3A076C4DF061DFA7ull || source.info.ucodeHash==0x07BA5284CF0C43AEull)) {
                 for(bool scaled:{false,true}) {
                     source.info.renderScaleAware=scaled;
                     if(!seen.insert({source.info.ucodeHash,translationInputHash(source.info)}).second) continue;
@@ -1235,10 +1235,13 @@ int main(int argc, char** argv) {
                 auto hlsl=makeAnnTessellationShader(source.info,motion);
                 if(hlsl.ok) { auto path=fs::path(a.get("--out")); path += "."+hex16(source.info.ucodeHash)+(motion?".motion.hlsl":".hlsl"); writeFile(path,hlsl.hlsl.data(),hlsl.hlsl.size()); }
             }
-            if(!buildAnnTessellationShaders(source.info,compiler,kBuildBoth,all,error)) { std::fprintf(stderr,"%s\n",error.c_str()); return 1; }
+            std::vector<CompiledShader> stages;
+            if(!buildAnnTessellationShaders(source.info,compiler,kBuildBoth,stages,error)) { std::fprintf(stderr,"%s\n",error.c_str()); return 1; }
+            for(auto& stage:stages) merge(std::move(stage));
+            variantHashes.insert(source.info.ucodeHash);
             ++variants;
         }
-        if(variants!=2 || !ShaderPack::write(a.get("--out"),all,&error)) { std::fprintf(stderr,"%u variants: %s\n",variants,error.c_str()); return 1; }
+        if(variantHashes.size()!=8 || !ShaderPack::write(a.get("--out"),all,&error)) { std::fprintf(stderr,"%u variants: %s\n",variants,error.c_str()); return 1; }
         std::printf("Ann tessellation: %u vertex permutations, %u signed DXIL/SPIR-V stage entries, %zu total pack entries\n",variants,variants*6,all.size());
         return 0;
     }

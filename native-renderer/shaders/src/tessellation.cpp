@@ -13,7 +13,10 @@ void Replace(std::string &s, const std::string &from, const std::string &to) {
 } // namespace
 
 bool annTessellationShader(uint64_t h) {
-    return h == 0x5E779DBA373D121Cull || h == 0x3390D930CD168AC0ull;
+    return h == 0x5E779DBA373D121Cull || h == 0x3390D930CD168AC0ull ||
+           h == 0xD710A475A7840F37ull || h == 0xC66476D2889954ECull ||
+           h == 0x7149CE3656F92235ull || h == 0xA6E7AF900E6F2741ull ||
+           h == 0x91632BD5704802BDull || h == 0x448D8A65A65954D8ull;
 }
 
 TessellationSource makeAnnTessellationShader(const ShaderInfo &info,
@@ -21,10 +24,15 @@ TessellationSource makeAnnTessellationShader(const ShaderInfo &info,
     TessellationSource result;
     if (info.kind != ShaderKind::Vertex ||
         !annTessellationShader(info.ucodeHash)) {
-        result.error = "not a verified normal-bearing Ann hair permutation";
+        result.error = "not a verified Ann tessellation permutation";
         return result;
     }
     const bool first = info.ucodeHash == 0x5E779DBA373D121Cull;
+    const bool hair = first || info.ucodeHash == 0x3390D930CD168AC0ull;
+    const bool depth = info.ucodeHash == 0xD710A475A7840F37ull ||
+                       info.ucodeHash == 0xC66476D2889954ECull;
+    const bool litFirst = info.ucodeHash == 0x7149CE3656F92235ull ||
+                          info.ucodeHash == 0x91632BD5704802BDull;
     auto translated = translate(info, {.annotateAddresses = true});
     if (!translated.ok) {
         result.error = translated.error;
@@ -55,18 +63,27 @@ TessellationSource makeAnnTessellationShader(const ShaderInfo &info,
         Replace(signature, " : TEXCOORD" + std::to_string(i), "");
     signature += ", out float3 ktP, out float3 ktN)\n{\n";
     std::string body = text.substr(open + 4);
-    const std::string posMarker = first ? "\t// @39 alu\n" : "\t// @35 alu\n";
+    const std::string posMarker = hair ? (first ? "\t// @39 alu\n" : "\t// @35 alu\n") :
+        depth ? "\t// @23 alu\n" : litFirst ? "\t// @37 alu\n" : "\t// @32 alu\n";
     const std::string normalMarker =
         first ? "\t// @47 alu\n" : "\t// @51 alu\n";
     if (body.find(posMarker) == std::string::npos ||
-        body.find(normalMarker) == std::string::npos) {
+        (hair && body.find(normalMarker) == std::string::npos)) {
         result.error = "verified split instruction missing";
         return result;
     }
     // Verified from these actual shaders: r2 / r1 is the skinned position,
     // r4.xyz is the skinned artist normal after the three palette dot products.
     const int view = first ? 56 : 44;
-    const int project = first ? 52 : 36;
+    int project = first ? 52 : 36;
+    if (!hair) {
+        bool found = false;
+        for (const auto& c : info.constants)
+            if (c.name == "g_mWorldViewProj" && c.registerSet == RegisterSet::Float4 && c.registerCount == 4) {
+                project = c.registerIndex; found = true;
+            }
+        if (!found) { result.error = "verified projection constant missing"; return result; }
+    }
     const std::string p = first ? "r2" : "r1";
     const auto vc = [](int i) { return "kk_VC[" + std::to_string(i) + "]"; };
     std::string pos = "\tktP = float3(dot(float4(" + p + ".xyz, 1), " +
@@ -75,8 +92,24 @@ TessellationSource makeAnnTessellationShader(const ShaderInfo &info,
                       vc(view + 2) + "));\n";
     std::string normal = "\tktN = ktViewNormal(r4.xyz, " + vc(view) + ".xyz, " +
                          vc(view + 1) + ".xyz, " + vc(view + 2) + ".xyz);\n";
-    Replace(body, posMarker, pos + posMarker);
-    Replace(body, normalMarker, normal + normalMarker);
+    if (hair) {
+        Replace(body, posMarker, pos + posMarker);
+        Replace(body, normalMarker, normal + normalMarker);
+    } else {
+        // The main pieces use model space in every pass. Reuse the actual
+        // translated palette blend, including its loop and literal selectors.
+        // Slot 15 in depth is supplied from the paired lit NORMAL declaration.
+        const std::string n = depth ? "kk_FetchElement(15, iVertexId).xyz" : "kkIn[1].xyz";
+        const std::string a = depth || litFirst ? "r5" : "r11";
+        const std::string b = depth ? "r6" : litFirst ? "r8" : "r10";
+        const std::string c = depth ? "r7" : "r6";
+        const std::string capture = "\tktP = " + std::string(depth ? "r0" : "r1") + ".xyz;\n" +
+            "\tfloat3 ktArtist = " + n + ";\n" +
+            "\tktN = float3(dot(ktArtist," + a + ".xyz),dot(ktArtist," + b +
+            ".xyz),dot(ktArtist," + c + ".xyz));\n" +
+            "\tktN *= rsqrt(max(dot(ktN,ktN),1e-20));\n";
+        Replace(body, posMarker, capture + posMarker);
+    }
     std::string h = prefix + R"(
 float3 ktViewNormal(float3 n, float3 a, float3 b, float3 c) {
     float d = dot(a, cross(b,c));
@@ -157,14 +190,14 @@ float3 ktPhong(float3 b, float3 p0, float3 p1, float3 p2, float3 n0, float3 n1, 
         auto c = [&](int i) {
             return constants + "[" + std::to_string(i) + "]";
         };
-        return "float3 a=" + c(view) + ".xyz, bb=" + c(view + 1) +
+        const std::string model = hair ? "float3 a=" + c(view) + ".xyz, bb=" + c(view + 1) +
                ".xyz, cc=" + c(view + 2) +
                ".xyz;\n"
                "float determinant=dot(a,cross(bb,cc));\n"
                "float3 model = abs(determinant)>1e-12 ? "
                "(cross(bb,cc)*delta.x+cross(cc,a)*delta.y+cross(a,bb)*delta.z)/"
-               "determinant : 0;\n"
-               "float4 clipDelta=float4(dot(model," +
+               "determinant : 0;\n" : "float3 model=delta;\n";
+        return model + "float4 clipDelta=float4(dot(model," +
                c(project) + ".xyz),dot(model," + c(project + 1) +
                ".xyz),dot(model," + c(project + 2) + ".xyz),dot(model," +
                c(project + 3) +

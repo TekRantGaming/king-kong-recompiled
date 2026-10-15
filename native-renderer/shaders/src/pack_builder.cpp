@@ -242,7 +242,7 @@ bool wantedPackStamp(const PackBuildOptions& options, PackStamp& out, std::strin
     out.database = XXH3_64bits(bytes.data(), bytes.size());
     out.scaled = options.scaled;
     out.motion = options.motion;
-    out.tessellation = 2;
+    out.tessellation = 3;
     out.lighting = options.lighting ? lightingStampHash() : 0;
     return true;
 }
@@ -287,7 +287,7 @@ PackBuildResult buildPack(const PackBuildOptions& options, PackBuildProgress* pr
     r.stamp.database = XXH3_64bits(bytes.data(), bytes.size());
     r.stamp.scaled = options.scaled;
     r.stamp.motion = options.motion;
-    r.stamp.tessellation = 2;
+    r.stamp.tessellation = 3;
     r.stamp.lighting = options.lighting ? lightingStampHash() : 0;
     if (!force) {
         PackStamp found;

@@ -716,6 +716,24 @@ class GameRenderer {
   };
   void UpdateEffects();
   bool AnnTessellationMaterial(const dev::DeviceView& d, const GameShader& vs, const GameShader* ps);
+  uint64_t GeometryContentHash(const DrawCall& call) const;
+  bool AnnMainTessellation(const DrawCall& call, const dev::DeviceView& d,
+                           const GameShader& vs, const GameShader* ps,
+                           kkshaders::DrawConstants& dc, PipelineRecord& record,
+                           nvrhi::IGraphicsPipeline*& pipeline);
+  struct AnnNormalLayout {
+    kknr::VertexElement element;
+    VertexBufferInfo buffer;
+    uint32_t offset = 0;
+    uint64_t normal_content = 0;
+    uint32_t stride = 0, format = 0;
+    uint64_t learned = 0, decision_frame = ~0ull, skin = 0;
+    bool admitted = false, noted = false;
+    uint64_t bones = 0;
+    PipelineRecord lit[2];
+    uint32_t seen = 0, previous_flags = 0, current_flags = 0;
+  };
+  std::unordered_map<uint64_t, AnnNormalLayout> ann_normals_;
   nvrhi::IGraphicsPipeline* AnnTessellationPipeline(PipelineRecord& record);
   nvrhi::IGraphicsPipeline* FindPreparedPipeline(uint64_t key);
   uint32_t TessellationFlags() const;

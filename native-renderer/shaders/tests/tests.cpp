@@ -775,7 +775,7 @@ int testPackStamp() {
     s.database = 0xFEDCBA9876543210ull;
     s.scaled = true;
     s.motion = true;
-    s.tessellation = 2;
+    s.tessellation = 3;
     s.shaders = 4796;
     PackStamp back;
     CHECK(PackStamp::parse(s.toText(), back));
@@ -810,7 +810,7 @@ int testPackStamp() {
     CHECK(comparePackStamp(&plain, want).state == PackState::Stale);  // but not the other way
     CHECK(comparePackStamp(&s, want).state == PackState::Current);
     PackStamp other = s;
-    other.tessellation = 0;
+    other.tessellation = 2;
     CHECK(comparePackStamp(&other, want).state == PackState::Stale);
     other = s;
     other.motion = false;

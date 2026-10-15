@@ -953,10 +953,11 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
       const int next=std::min(3,int((seconds-8)/16));
       if(next!=phase) {
         phase=next; captured=false;
+        Change("kk_frame_rate","0");
         Change("native_tessellation",phase==1||phase==2?"true":"false");
         Change("native_tessellation_smoothness","0.75");
         Change("native_tessellation_detail",phase==2?"16":"4");
-        REXLOG_INFO("KK tess test: phase {} at {:.3f} seconds",phase,seconds);
+        REXLOG_INFO("KK tess test: phase {} at {:.3f} seconds, frame cap {}",phase,seconds,Get("kk_frame_rate"));
       }
       if(phase<3 && !captured && seconds>=8+phase*16+12) {
         std::filesystem::path root(dir); std::filesystem::create_directories(root);

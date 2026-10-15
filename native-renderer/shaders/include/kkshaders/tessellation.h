@@ -3,7 +3,7 @@
 #include <array>
 
 namespace kkshaders {
-// Only the two normal-bearing hair permutations verified in task 072. The
+// Verified hair, main lit and paired depth permutations (tasks 072/077). The
 // caller must additionally match Ann's material content; a shader hash is not
 // an actor ID.
 bool annTessellationShader(uint64_t hash);

@@ -21,6 +21,10 @@
 
 using namespace nr::test;
 namespace {
+constexpr uint64_t hashes[]={0x5E779DBA373D121Cull,0x3390D930CD168AC0ull,
+0xD710A475A7840F37ull,0xC66476D2889954ECull,0x7149CE3656F92235ull,
+0xA6E7AF900E6F2741ull,0x91632BD5704802BDull,0x448D8A65A65954D8ull};
+constexpr int projects[]={52,36,144,36,160,144,52,36};
 struct Harness {
   std::unique_ptr<VulkanTestDevice> host;
 #if NR_HAS_D3D12
@@ -48,13 +52,13 @@ struct Harness {
   nvrhi::BindingSetHandle constants;
   std::array<nvrhi::DescriptorTableHandle, 6> tables;
   nvrhi::ShaderHandle pixel, motionPixel;
-  nvrhi::ShaderHandle materialPixel[2];
+  nvrhi::ShaderHandle materialPixel[8];
   float floats[256][4]{};
   kkshaders::DrawConstants draw{};
   kkshaders::MotionConstants history{};
   struct Stages {
     nvrhi::ShaderHandle base, vs, hs, ds, mvs, mhs, mds;
-  } stages[2];
+  } stages[8];
 
   nvrhi::ShaderHandle Load(uint64_t hash, uint64_t input,
                            nvrhi::ShaderType type, const char *entry) {
@@ -155,8 +159,8 @@ struct Harness {
     sd.entryName = "main";
     pixel = device->createShader(sd, ps.blob.data(), ps.blob.size());
     motionPixel = device->createShader(sd, mps.blob.data(), mps.blob.size());
-    for (int v = 0; v < 2; v++) {
-      const uint64_t hash = v ? 0x3390D930CD168AC0ull : 0x5E779DBA373D121Cull;
+    for (int v = 0; v < 8; v++) {
+      const uint64_t hash = hashes[v];
       kkshaders::CompiledShader base;
       if (!pack.find(hash, 0, base))
         return false;
@@ -176,7 +180,10 @@ struct Harness {
                    nvrhi::ShaderType::Domain, "ktDS");
       if (!s.base || !s.vs || !s.hs || !s.ds || !s.mvs || !s.mhs || !s.mds)
         return false;
-      materialPixel[v] = Load(v ? 0xF5BCD47A4145F958ull : 0x7DC46286A4EA2E2Eull,
+      if(v==2 || v==3) continue;
+      const uint64_t pixels[]={0x7DC46286A4EA2E2Eull,0xF5BCD47A4145F958ull,0,0,
+        0x01D62D86BB133315ull,0xBBD239D3BEB254D9ull,0x3A076C4DF061DFA7ull,0x07BA5284CF0C43AEull};
+      materialPixel[v] = Load(pixels[v],
                               0, nvrhi::ShaderType::Pixel, "main");
       if (!materialPixel[v])
         return false;
@@ -238,7 +245,7 @@ struct Harness {
       v[1][1] = xy[i % 3][1] * 0.6f;
       v[1][2] = -1;
       v[2][0] = v[2][1] = v[2][2] = v[2][3] = 1;
-      v[3][0] = 1;
+      v[3][0] = 0.65f; v[3][1] = 0.35f; v[4][1] = 1.0f;
       v[6][0] = 1;
       v[6][3] = 1;
     }
@@ -261,7 +268,7 @@ struct Harness {
       draw.vertexFetch[i][2] = 7 * 16;
       draw.vertexFetch[i][3] = 38u | (0x688u << 17);
     }
-    draw.loopConstants[0] = 1;
+    draw.loopConstants[0] = 2 | (1u<<16);
     draw.ndcScale[0] = 1;
     draw.ndcScale[1] = 1;
     draw.ndcScale[2] = 1;
@@ -329,15 +336,24 @@ struct Harness {
   void Constants(int variant, int detail, float alpha) {
     std::memset(floats, 0, sizeof(floats));
     floats[0][0] = floats[1][1] = floats[2][2] = 1;
-    int project = variant ? 36 : 52, view = variant ? 44 : 56;
+    floats[3][0]=0.95f; floats[3][1]=-0.1f; floats[4][0]=0.1f; floats[4][1]=1.05f; floats[5][2]=1;
+    int project = projects[variant], view = variant ? 44 : 56;
+    // Depth has POSITION/WEIGHTS/INDICES at 0/1/2 and the paired normal at 15.
+    // Lit has the usual 0..6 declaration.
+    for(int i=0;i<7;++i) { draw.vertexFetch[i][1]=i*16; draw.vertexFetch[i][2]=112; draw.vertexFetch[i][3]=38u|(0x688u<<17); }
+    std::memcpy(draw.vertexFetch[15],draw.vertexFetch[1],16);
+    if(variant==2 || variant==3) {
+      std::memcpy(draw.vertexFetch[1],draw.vertexFetch[3],16);
+      std::memcpy(draw.vertexFetch[2],draw.vertexFetch[4],16);
+    }
     for (int i = 0; i < 4; i++)
       floats[project + i][i] = 1;
-    for (int i = 0; i < 3; i++)
+    if(variant<2) for (int i = 0; i < 3; i++)
       floats[view + i][i] = 1;
     draw.reserved = uint32_t(std::max(1, detail)) |
                     (uint32_t(std::lround(alpha * 65535)) << 8);
     std::memcpy(history.previous, floats, sizeof(floats));
-    history.previous[0][3] = 0.1f;
+    history.previous[0][3] = history.previous[3][3] = 0.1f;
     std::memcpy(&history.params[3], &draw.reserved, 4);
   }
   void State(nvrhi::ICommandList *cl, nvrhi::IGraphicsPipeline *pipeline) {
@@ -376,6 +392,26 @@ struct Harness {
     Execute(cl);
     WaitIdle();
     return ReadBack();
+  }
+  Pixels Paired(int depthVariant, int litVariant, int detail, bool motion) {
+    auto dp=Pipeline(depthVariant,detail,false,true);
+    auto lp=Pipeline(litVariant,detail,motion);
+    // Clone a depth-equal pipeline using lit stages, including ordinary colour replay.
+    auto desc=lp->getDesc();
+    desc.renderState.depthStencilState.depthTestEnable=true;
+    desc.renderState.depthStencilState.depthFunc=nvrhi::ComparisonFunc::Equal;
+    lp=device->createGraphicsPipeline(desc,framebuffer->getFramebufferInfo());
+    CHECK(dp && lp);
+    auto cl=device->createCommandList(); cl->open();
+    cl->clearTextureFloat(color,nvrhi::AllSubresources,nvrhi::Color(0));
+    cl->clearDepthStencilTexture(depth,nvrhi::AllSubresources,true,1,false,0);
+    Constants(depthVariant,detail,0.75f);
+    cl->writeBuffer(vc,floats,sizeof(floats)); cl->writeBuffer(dc,&draw,sizeof(draw));
+    State(cl,dp);
+    Constants(litVariant,detail,0.75f);
+    cl->writeBuffer(vc,floats,sizeof(floats)); cl->writeBuffer(dc,&draw,sizeof(draw));
+    cl->writeBuffer(previous,&history,sizeof(history));
+    State(cl,lp); cl->close(); Execute(cl); WaitIdle(); return ReadBack();
   }
   double Bench(int detail) {
     Constants(0, detail, 0.75f);
@@ -416,8 +452,8 @@ int main(int argc, char **argv) {
   if (!h.Init(argv[1], argv[2], dx))
     return 1;
   std::printf("API: %s\n", dx ? "D3D12" : "Vulkan");
-  for (int variant = 0; variant < 2; variant++) {
-    CHECK(h.Pipeline(variant, 4, false, false, true));
+  for (int variant = 0; variant < 8; variant++) {
+    if(variant!=2 && variant!=3) CHECK(h.Pipeline(variant, 4, false, false, true));
     auto off = h.Render(variant, 0, 0);
     for (int detail : {4, 16}) {
       auto zero = h.Render(variant, detail, 0);
@@ -440,6 +476,18 @@ int main(int argc, char **argv) {
       CHECK(moving > 1000);
     }
   }
+  for(int lit=4;lit<8;++lit) for(int detail:{4,16}) {
+    auto reference=h.Render(lit,detail,0.75f);
+    auto equal=h.Paired(lit<6?2:3,lit,detail,false);
+    auto motion=h.Paired(lit<6?2:3,lit,detail,true);
+    unsigned covered=0, missed=0, moving=0;
+    for(size_t i=0;i<reference.rgba.size();i+=4) {
+      if(reference.rgba[i]>0.5f) {++covered; if(equal.rgba[i]<0.5f) ++missed;}
+      if(motion.rgba[i]>0.08f && motion.rgba[i]<0.12f) ++moving;
+    }
+    std::printf("paired depth/lit %d detail %d covered %u missing %u moving %u\n",lit,detail,covered,missed,moving);
+    CHECK(covered>1000); CHECK_EQ(missed,0u); CHECK_EQ(moving,covered);
+  }
   if (const char *list = std::getenv("NR_TESS_PREWARM_LIST")) {
     const char *filtered = std::getenv("NR_TESS_PREWARM_FILTERED");
     if (!filtered)
@@ -448,11 +496,11 @@ int main(int argc, char **argv) {
     CHECK(nr::ReadPipelineList(list, records));
     records.erase(std::remove_if(records.begin(), records.end(),
                                  [](const auto &r) {
-                                   return !(
-                                       (r.vs_hash == 0x5E779DBA373D121Cull &&
-                                        r.ps_hash == 0x7DC46286A4EA2E2Eull) ||
-                                       (r.vs_hash == 0x3390D930CD168AC0ull &&
-                                        r.ps_hash == 0xF5BCD47A4145F958ull));
+                                   if(!kkshaders::annTessellationShader(r.vs_hash)) return true;
+                                   if(!r.ps_hash) return false;
+                                   const uint64_t pixels[]={0x7DC46286A4EA2E2Eull,0xF5BCD47A4145F958ull,
+                                     0x01D62D86BB133315ull,0xBBD239D3BEB254D9ull,0x3A076C4DF061DFA7ull,0x07BA5284CF0C43AEull};
+                                   return std::find(std::begin(pixels),std::end(pixels),r.ps_hash)==std::end(pixels);
                                  }),
                   records.end());
     CHECK(nr::WritePipelineList(filtered, records));

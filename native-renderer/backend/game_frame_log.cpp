@@ -241,25 +241,7 @@ void GameRenderer::LogDraw(const DrawCall& call, const dev::DeviceView& d, const
             f.write(reinterpret_cast<const char*>(data.bytes.data() + sub->offset), sub->size);
           }
         }
-        uint64_t mesh = 0;
-        if (call.indexed && call.index_data && call.stride && call.vertex_data) {
-          const uint32_t index_bytes = call.index_info.index32 ? 4 : 2;
-          if ((uint64_t(call.start) + call.count) * index_bytes <= call.index_info.size_bytes) {
-            mesh = kkshaders::hashBytes(call.index_data + size_t(call.start) * index_bytes,
-                                       size_t(call.count) * index_bytes);
-            for (uint32_t i = 0; i < call.count; ++i) {
-              const auto* p = call.index_data + size_t(call.start + i) * index_bytes;
-              const uint32_t index = index_bytes == 4 ? LoadBE32(p) : LoadBE16(p);
-              const int64_t vertex = int64_t(index) + call.base_vertex;
-              if (index == (index_bytes == 4 ? UINT32_MAX : UINT16_MAX)) continue;
-              if (vertex < 0 || (uint64_t(vertex) + 1) * call.stride > call.vertex_data_size) {
-                mesh = 0;
-                break;
-              }
-              mesh = Mix(mesh, kkshaders::hashBytes(call.vertex_data + size_t(vertex) * call.stride, call.stride));
-            }
-          }
-        }
+        const uint64_t mesh = GeometryContentHash(call);
         uint64_t skin = 0;
         if (vs.source) for (const auto& c : vs.source->constants) {
           if (c.name == "g_amSkinning" && c.registerSet == kkshaders::RegisterSet::Float4 &&
