@@ -21,7 +21,6 @@ using text::T;
 
 namespace {
 
-constexpr double kRepeatDelay = 0.34, kRepeatRate = 0.075;
 // A controller press and a key press of the same action this close together
 // are one press (Steam's desktop layout types keys for the controller).
 constexpr double kSameInput = 0.25;
@@ -137,21 +136,7 @@ void Input::Release() {
 }
 
 bool Input::RepeatHeld(Repeat& r, bool down, double now) {
-  if (!down) {
-    r.held = false;
-    return false;
-  }
-  if (!r.held) {
-    r.held = true;
-    r.since = now;
-    r.next = now + kRepeatDelay;
-    return true;
-  }
-  if (now >= r.next) {
-    r.next = now + kRepeatRate;
-    return true;
-  }
-  return false;
+  return r.Update(down, now);
 }
 
 float Input::HeldFor(Action a) const {
@@ -266,7 +251,12 @@ void Input::UpdateGamepads(double now) {
   }
   // A press the keyboard just reported (typed by Steam for this controller) already counted.
   auto press = [&](Action a) {
-    if (now - key_pressed_at_[size_t(a)] >= kSameInput) pressed_[size_t(a)] = true;
+    const size_t i = size_t(a);
+    if (now - key_pressed_at_[i] < kSameInput) {
+      key_pressed_at_[i] = -1e9;  // consume this echo pair, not the next rapid physical press
+    } else {
+      pressed_[i] = true;
+    }
   };
   static constexpr Action kDirActions[6] = {Action::kUp,   Action::kDown,   Action::kLeft,
                                             Action::kRight, Action::kPageUp, Action::kPageDown};
@@ -752,10 +742,7 @@ const Item* DrawList(ImDrawList* dl, std::vector<Item>& items, ListState& st, Im
       if (it.type == ItemType::kChoice && can_change && n > 0) {
         choose(it, it.index < 0 ? (dir > 0 ? 0 : n - 1) : std::clamp(it.index + dir, 0, n - 1));
       } else if (it.type == ItemType::kSlider && can_change) {
-        // Held: faster after a moment.
-        const float held = in.HeldFor(dir > 0 ? Action::kRight : Action::kLeft);
-        const float mult = held > 2.0f ? 10.0f : held > 0.9f ? 4.0f : 1.0f;
-        set_value(it, std::clamp(it.value + dir * it.step * mult, it.lo, it.hi));
+        set_value(it, StepSlider(it.value, it.lo, it.hi, it.step, dir));
       } else if (it.disabled && (it.type == ItemType::kChoice || it.type == ItemType::kSlider)) {
         Cue(Sound::kDeny);
       }

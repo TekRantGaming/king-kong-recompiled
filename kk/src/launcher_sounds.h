@@ -23,8 +23,12 @@ class LauncherSounds {
 
   // `value`: where a slider is (0..1), which sets its pitch. `volume`: 0..1.
   void Play(ui::Sound sound, float value, float volume);
+  // Apply to the whole stream, including sounds already playing/queued.
+  void SetVolume(float volume);
 
  private:
+  friend struct LauncherSoundsTest;
+  LauncherSounds() = default;  // in-memory stream fixture, no device or game files
   struct Clip {
     std::vector<float> pcm;  // mono
     double rate = 0;

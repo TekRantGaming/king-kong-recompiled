@@ -91,6 +91,10 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
     }
     in.set_keyboard_enabled(!settings_->Capturing());
     in.Update();
+    if (sounds_) {
+      const float volume = GetBool("kk_launcher_sounds") ? GetInt("kk_launcher_sounds_volume", 50) / 100.0f : 0.0f;
+      sounds_->SetVolume(volume * volume);
+    }
     // The press that opened the menu (Start, Esc) is not a press on it.
     if (ImGui::GetFrameCount() <= opened_frame_ + 1) in.ConsumeAll();
     if (pending_click_ != Action::kCount) {

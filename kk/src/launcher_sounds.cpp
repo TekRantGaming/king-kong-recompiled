@@ -83,7 +83,12 @@ LauncherSounds::~LauncherSounds() {
   if (audio_ready_) SDL_QuitSubSystem(SDL_INIT_AUDIO);
 }
 
+void LauncherSounds::SetVolume(float volume) {
+  if (stream_) SDL_SetAudioStreamGain(stream_, std::clamp(volume, 0.0f, 1.0f));
+}
+
 void LauncherSounds::Play(ui::Sound sound, float value, float volume) {
+  SetVolume(volume);
   const size_t i = size_t(sound);
 #if defined(KK_DEV_TOOLS)
   static const bool log = std::getenv("KK_DEV_SOUNDS_LOG") != nullptr;
@@ -101,7 +106,7 @@ void LauncherSounds::Play(ui::Sound sound, float value, float volume) {
   if (sound == ui::Sound::kSlide) pitch = 0.85 + 0.35 * std::clamp(value, 0.0f, 1.0f);
   std::lock_guard<std::mutex> hold(lock_);
   if (voices_.size() >= 8) voices_.erase(voices_.begin());
-  voices_.push_back({&clip, 0.0, clip.rate / kRate * pitch, volume * use.gain});
+  voices_.push_back({&clip, 0.0, clip.rate / kRate * pitch, use.gain});
 }
 
 // The audio thread asks for more: mixes the sounds that are playing.

@@ -19,6 +19,7 @@
 #include <vector>
 
 #include <imgui.h>
+#include "slider_input.h"
 
 namespace rex::ui {
 class ImmediateDrawer;
@@ -98,7 +99,7 @@ class Input {
   bool Pressed(Action a) const { return pressed_[size_t(a)]; }
   void Consume(Action a) { pressed_[size_t(a)] = false; }
   void ConsumeAll() { pressed_ = {}; }
-  // How long a direction has been held (sliders speed up).
+  // How long a direction has been held.
   float HeldFor(Action a) const;
   void Inject(Action a, Device d);  // testing aid
   Device device() const { return device_; }
@@ -114,10 +115,7 @@ class Input {
   void set_keyboard_enabled(bool on) { keyboard_enabled_ = on; }
 
  private:
-  struct Repeat {
-    bool held = false;
-    double since = 0, next = 0;
-  };
+  using Repeat = DirectionRepeat;
   bool RepeatHeld(Repeat& r, bool down, double now);
   void UpdateGamepads(double now);
 

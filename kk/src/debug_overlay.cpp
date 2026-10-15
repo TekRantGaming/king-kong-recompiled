@@ -593,7 +593,7 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
       Change(st.cvar, "-1");
     } else {
       const float step = st.kind == Kind::kSliderInt ? 1.0f : 0.05f;
-      value = value < st.min ? st.min : std::clamp(value + direction * step, st.min, st.max);
+      value = value < st.min ? st.min : ui::StepSlider(value, st.min, st.max, step, direction);
       Change(st.cvar, Number(value, st.kind == Kind::kSliderInt ? "%.0f" : "%.2f"));
     }
   }
@@ -659,7 +659,7 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
       const int footer = focus_row_ - int(rows.size());
       if (footer == 5 && direction)
         rex::cvar::SetFlagByName("kk_graphics_panel_opacity",
-                               Number(std::clamp(REXCVAR_GET(kk_graphics_panel_opacity) + direction * 0.05, 0.3, 1.0)));
+                               Number(ui::StepSlider(float(REXCVAR_GET(kk_graphics_panel_opacity)), 0.3f, 1.0f, 0.05f, direction)));
       if (pad_input_.Pressed(Action::kAccept)) FooterAction(footer);
     }
   }
