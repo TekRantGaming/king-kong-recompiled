@@ -26,6 +26,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <future>
 #include <map>
 #include <memory>
 #include <string>
@@ -39,6 +40,7 @@
 #include "backend/render_scale.h"
 #include "backend/renderer.h"
 #include "backend/shader_library.h"
+#include "backend/upscaler.h"
 #include "backend/tests/check.h"
 #include "backend/tests/fake_guest.h"
 #include "backend/tests/vk_test_device.h"
@@ -626,6 +628,27 @@ double MeanDifference(const Pixels& a, const Pixels& b) {
 constexpr float kTol = 2.5f / 255.0f;
 
 }  // namespace
+
+TEST(GameUpscale_SdkInitialisationOwnsTheQueue) {
+  auto* gpu = Device();
+  CHECK(gpu != nullptr);
+  if (!gpu) return;
+  std::promise<void> started, entered;
+  auto started_future = started.get_future();
+  auto entered_future = entered.get_future();
+  std::future<void> worker;
+  gpu->RunExclusive([&] {
+    worker = std::async(std::launch::async, [&] {
+      started.set_value();
+      UpscalerRunExclusive(gpu->device(), [&] { entered.set_value(); });
+    });
+    started_future.wait();
+    // The worker must not enter its SDK while another queue owner holds it.
+    CHECK(entered_future.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout);
+  });
+  worker.get();
+  CHECK(entered_future.wait_for(std::chrono::seconds(0)) == std::future_status::ready);
+}
 
 TEST(GameUpscale_NativeWithoutJitterIsTheSameFrame) {
   // The plumbing alone: native-resolution AA, the bilinear stretch (a copy at 1:1), no jitter. Every
