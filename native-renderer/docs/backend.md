@@ -574,12 +574,15 @@ snapshots in `analysis\phase2c`:
 **The render thread** (`--native_render_thread`, off by default; `backend/render_thread.{h,cpp}`). The hooks
 keep the draw-state tracker on the game's thread; `ThreadedSink` sits between it and the renderer:
 
-- At each clear, draw, resolve and Present it copies the D3D device struct (20,608 bytes) and the small objects
-  the call names (render target and depth surfaces, the vertex declaration, the 16 streams' vertex buffer
-  objects, a resolve's destination texture, the back and front buffers) and queues the call. A call shares the
-  previous call's device copy when the parts the renderer reads are unchanged (rare: the constants change at
-  almost every draw); copies hold only those parts and come from a pool. The game may run one frame (at most
-  8,000 calls) ahead; two frames made unlimited frame rates more uneven.
+- At each clear, draw, resolve and Present it copies what the call needs of the D3D device struct (20,608
+  bytes) and the small objects the call names (render target and depth surfaces, the vertex declaration, the 16
+  streams' vertex buffer objects, a resolve's destination texture, the back and front buffers) and queues the
+  call. Of the device only the parts the renderer reads, and of those only the 64-byte blocks that changed since
+  the previous call (`ThreadedSink::DeviceBlocks`; the constants change at almost every draw, usually a few
+  registers): the render thread keeps one copy of the device and applies each call's changed blocks, in order,
+  before it runs the call (task 085; copying the whole 11.6 KB at every call was a fifth of the game thread's
+  time in the hooks on the ROG Ally). Commands are reused, so a call allocates nothing. The game may run one
+  frame (at most 8,000 calls) ahead; two frames made unlimited frame rates more uneven.
 - The render thread runs the calls through the renderer as before. Its guest object reads go through
   `SnapshotGuestMemory` (the call's copies first); vertex, index and texture data are read from guest memory
   when the call runs, as the Xenos plugin's command processor reads them.
