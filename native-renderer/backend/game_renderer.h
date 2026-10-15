@@ -48,6 +48,7 @@
 #include "backend/game_upscale.h"
 #include "backend/pipeline_cache.h"
 #include "backend/resource_preload.h"
+#include "backend/resource_preload_bundle.h"
 #include "backend/guest_device.h"
 #include "backend/guest_memory.h"
 #include "backend/lighting_config.h"
@@ -277,6 +278,9 @@ class GameRenderer {
   // Render-thread loading-screen service. Also callable with an explicit state
   // by offline fixtures; the normal path reads the title's loading variables.
   void PreloadResources(nvrhi::ICommandList* cl, bool loading, uint32_t level, uint32_t start);
+  // Versioned chapter hints shipped beside the executable. Read before the first
+  // draw; independent of the writable pipeline/local-learning cache.
+  bool LoadResourceList(const std::string& path);
 
   // The pipeline cache file (pipeline_cache.h): reads the descriptions of earlier runs and
   // starts creating them on the worker threads, then appends each new description the draws
@@ -498,6 +502,7 @@ class GameRenderer {
   void SaveResourcePreload();
   std::string resource_cache_base_, resource_cache_path_;
   std::vector<ResourcePreloadRecord> preload_records_, learned_resources_;
+  std::vector<ResourcePreloadChapter> shipped_resources_;  // protected by cache_mutex_
   std::unordered_set<const kknr::ResidentEntry*> resource_seen_;
   size_t preload_cursor_ = 0;
   uint32_t preload_level_ = 0, preload_start_ = 0;

@@ -653,6 +653,15 @@ bool Backend::LoadPipelineList(const std::string& path) {
   return false;
 }
 
+bool Backend::LoadResourceList(const std::string& path) {
+#if NR_GAME_RENDERER
+  if (renderer_ && renderer_->game()) return renderer_->game()->LoadResourceList(path);
+#else
+  (void)path;
+#endif
+  return false;
+}
+
 bool Backend::OpenShaderPack(const std::string& path) {
 #if NR_GAME_RENDERER
   if (shaders_ && !shaders_->pack_open()) return shaders_->OpenPack(path);

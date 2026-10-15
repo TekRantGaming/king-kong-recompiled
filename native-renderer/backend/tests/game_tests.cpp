@@ -2997,7 +2997,9 @@ struct PreloadBuffers {
   }
 };
 
-void CheckBufferPreload(bool index32, bool mismatch, bool during_capture, bool after_capture = false) {
+void CheckBufferPreload(bool index32, bool mismatch, bool during_capture, bool after_capture = false,
+                        bool shipped = false, bool local_cache = true, bool stale_local = false,
+                        bool invalid_bundle = false) {
   const auto path = PreloadTestPath("buffers");
   {
     Fixture learn;
@@ -3013,9 +3015,29 @@ void CheckBufferPreload(bool index32, bool mismatch, bool during_capture, bool a
   std::vector<ResourcePreloadRecord> records;
   CHECK(ResourcePreloadFile::Read(path + ".resources-305-0", records));
   CHECK_EQ(records.size(), 2u);
+  if (shipped) CHECK(ResourcePreloadBundle::Write(path + ".list", {{305, 0, records}}));
   Fixture f;
   if (!f.Init()) return;
-  CHECK(f.game->SetPipelineCache(path));
+  const auto cache = shipped ? path + "-fresh" : path;
+  CHECK(!shipped || !std::filesystem::exists(cache + ".resources-305-0"));
+  if (stale_local || invalid_bundle) {
+    auto local = records;
+    if (stale_local) {
+      for (auto& r : local) r.hash ^= 1;
+      auto extra = ResourcePreloadRecord::Buffer(0, 65536, false, false);
+      extra.hash = 123;
+      local.push_back(extra);
+    }
+    CHECK(ResourcePreloadFile::Write(cache + ".resources-305-0", local));
+  }
+  if (local_cache) CHECK(f.game->SetPipelineCache(cache));
+  if (shipped) {
+    if (invalid_bundle) {
+      std::ofstream file(path + ".list", std::ios::binary | std::ios::trunc);
+      file << "incompatible";
+    }
+    CHECK_EQ(f.game->LoadResourceList(path + ".list"), !invalid_bundle);
+  }
   const auto rt = f.BindMainSurface();
   PreloadBuffers scene(f, index32);
   auto rewrite = [&](uint32_t color) {
@@ -3057,6 +3079,18 @@ void CheckBufferPreload(bool index32, bool mismatch, bool during_capture, bool a
   const Rgb changed[4] = {FromArgb(0xFF11CC33), FromArgb(0xFF11CC33),
                          FromArgb(0xFF11CC33), FromArgb(0xFF11CC33)};
   f.CheckQuadrants(px, changed, __LINE__);
+  if (stale_local) {
+    ServicePreload(f, true, 307);  // flush this visit's refreshed local hashes
+    std::vector<ResourcePreloadRecord> saved;
+    CHECK(ResourcePreloadFile::Read(cache + ".resources-305-0", saved));
+    CHECK_EQ(saved.size(), 3u);
+    for (const auto& original : records) {
+      CHECK(std::any_of(saved.begin(), saved.end(), [&](const auto& r) {
+        return r.SameResource(original) && r.hash == original.hash;
+      }));
+    }
+    CHECK_EQ(saved.back().hash, 123u);
+  }
 }
 
 }  // namespace
@@ -3066,6 +3100,12 @@ TEST(Preload_LearnedVertexAnd32BitIndexPixels) { CheckBufferPreload(true, false,
 TEST(Preload_ContentMismatchUsesRequiredUpload) { CheckBufferPreload(false, true, false); }
 TEST(Preload_WriteDuringCaptureDiscardsOnlyOverlappingJob) { CheckBufferPreload(false, false, true); }
 TEST(Preload_WriteAfterCaptureBeforeFirstDraw) { CheckBufferPreload(false, false, false, true); }
+TEST(Preload_ShippedFirstVisitVertexAnd16BitIndexPixels) { CheckBufferPreload(false, false, false, false, true); }
+TEST(Preload_ShippedFirstVisitWithoutWritableCache) { CheckBufferPreload(true, false, false, false, true, false); }
+TEST(Preload_ShippedContentMismatchUsesRequiredUpload) { CheckBufferPreload(false, true, false, false, true); }
+TEST(Preload_ShippedWriteAfterCaptureBeforeFirstDraw) { CheckBufferPreload(false, false, false, true, true); }
+TEST(Preload_ShippedVariantRefreshesStaleLocalHash) { CheckBufferPreload(false, false, false, false, true, true, true); }
+TEST(Preload_IncompatibleBundleFallsBackToLocal) { CheckBufferPreload(false, false, false, false, true, true, false, true); }
 
 TEST(Preload_TextureBeforeFirstDrawAndRewrite) {
   const auto path = PreloadTestPath("texture");
@@ -3097,6 +3137,44 @@ TEST(Preload_TextureBeforeFirstDrawAndRewrite) {
     CHECK_COLOR(px, 32, 32, (Rgb{1, 1, 1}), "rewritten preloaded texture");
     CHECK_EQ(f.game->stats().texture_uploads, 2u);
   }
+}
+
+TEST(Preload_ShippedTextureFirstVisitAndLocalExtension) {
+  const auto source = PreloadTestPath("shipped-texture");
+  const auto cache = source + "-fresh";
+  for (int pass = 0; pass < 2; ++pass) {
+    Fixture f;
+    if (!f.Init()) return;
+    CHECK(f.game->SetPipelineCache(pass ? cache : source));
+    if (pass) CHECK(f.game->LoadResourceList(source + ".list"));
+    const auto rt = f.BindMainSurface();
+    std::vector<uint8_t> blocks(128 * 128 * 4, 255);
+    const auto desc = Desc(kknr::TextureFormat::k_8_8_8_8, kknr::Endian::k8in32, kSwizzleZYXW, 128, true);
+    const auto tex = f.NewTexture(desc, [&](uint32_t, uint32_t) { return blocks.data(); });
+    ServicePreload(f, true);
+    CHECK_EQ(f.game->stats().preloaded_resources, TextureWorkerCount() ? uint64_t(pass) : 0u);
+    ServicePreload(f, false);
+    f.DrawTextured(tex);
+    auto px = f.Present(rt);
+    CHECK_COLOR(px, 32, 32, (Rgb{1, 1, 1}), "shipped first-visit texture");
+    CHECK_EQ(f.game->stats().preload_hits, TextureWorkerCount() ? uint64_t(pass) : 0u);
+    if (!pass) {
+      // Switching chapter saves the learned record before this fixture exits.
+      ServicePreload(f, true, 306);
+      std::vector<ResourcePreloadRecord> records;
+      CHECK(ResourcePreloadFile::Read(source + ".resources-305-0", records));
+      CHECK_EQ(records.size(), 1u);
+      CHECK(ResourcePreloadBundle::Write(source + ".list", {{305, 0, records}}));
+      CHECK(!std::filesystem::exists(cache + ".resources-305-0"));
+      auto extra = ResourcePreloadRecord::Buffer(0, 65536, false, false);
+      extra.hash = 123;  // an earlier local observation absent from this visit
+      CHECK(ResourcePreloadFile::Write(cache + ".resources-305-0", {extra}));
+    }
+  }
+  std::vector<ResourcePreloadRecord> extended;
+  CHECK(ResourcePreloadFile::Read(cache + ".resources-305-0", extended));
+  CHECK_EQ(extended.size(), 2u);  // retain earlier local key and learn the shipped hit
+  CHECK_EQ(extended[0].hash, 123u);
 }
 
 TEST(Preload_FileRejectsTornOversizedAndChangedData) {

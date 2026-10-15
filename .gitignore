@@ -28,3 +28,7 @@
 # Player-supplied sounds (not ours to share)
 *.wav
 /dist/
+
+# Recorded resource content keys are generated from private game runs.
+kkresources.list
+*.resources-*

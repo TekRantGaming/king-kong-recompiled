@@ -6,6 +6,18 @@
 
 namespace nr {
 
+bool GameRenderer::LoadResourceList(const std::string& path) {
+  std::vector<ResourcePreloadChapter> chapters;
+  const bool loaded = ResourcePreloadBundle::Read(path, chapters);
+  size_t count = 0;
+  for (const auto& chapter : chapters) count += chapter.records.size();
+  std::lock_guard lock(cache_mutex_);
+  shipped_resources_ = std::move(chapters);
+  Logf(LogLevel::kInfo, "rexgpu-native: shipped resource list %s: %zu chapters, %zu descriptions%s",
+       path.c_str(), shipped_resources_.size(), count, loaded ? "" : " (absent or incompatible; using local learning)");
+  return loaded;
+}
+
 void GameRenderer::PollResourcePreload(nvrhi::ICommandList* cl) {
   if (resource_poll_frame_ == frame_) return;
   resource_poll_frame_ = frame_;
@@ -38,7 +50,7 @@ void GameRenderer::SaveResourcePreload() {
 void GameRenderer::RememberResource(ResourcePreloadRecord record, const kknr::ResidentEntry& entry) {
   if (!resource_learning_ || entry.gpu_written || entry.dirty || !entry.host ||
       uint64_t(entry.ranges[0].bytes) + entry.ranges[1].bytes < UploadBatch::kMinBytes ||
-      learned_resources_.size() >= ResourcePreloadFile::kMaxRecords || !resource_seen_.insert(&entry).second) return;
+      !resource_seen_.insert(&entry).second) return;
   record.hash = entry.content_hash;
   for (auto& known : learned_resources_) if (known.SameResource(record)) {
     if (known.hash != record.hash) { known.hash = record.hash; resource_cache_dirty_ = true; }
@@ -66,9 +78,26 @@ void GameRenderer::PreloadResources(nvrhi::ICommandList* cl, bool loading, uint3
       resource_cache_path_ = resource_cache_base_.empty() ? std::string{} : resource_cache_base_ +
           ".resources-" + std::to_string(level) + "-" + std::to_string(start);
     }
-    if (!resource_cache_path_.empty()) ResourcePreloadFile::Read(resource_cache_path_, preload_records_);
-    Logf(LogLevel::kInfo, "rexgpu-native: resource loading: level %u start %u, %zu descriptions",
-         level, start, preload_records_.size());
+    // Keep earlier local learning when extending it. Local content takes polling
+    // priority; shipped variants are hints and never overwrite the player's file.
+    if (!resource_cache_path_.empty()) ResourcePreloadFile::Read(resource_cache_path_, learned_resources_);
+    preload_records_ = learned_resources_;
+    const size_t local = preload_records_.size();
+    {
+      std::lock_guard lock(cache_mutex_);
+      for (const auto& chapter : shipped_resources_) if (chapter.level == level && chapter.start == start) {
+        for (const auto& r : chapter.records) {
+          if (preload_records_.size() >= ResourcePreloadFile::kMaxRecords) break;
+          const bool duplicate = std::any_of(preload_records_.begin(), preload_records_.end(), [&](const auto& known) {
+            return known.SameResource(r) && known.hash == r.hash;
+          });
+          if (!duplicate) preload_records_.push_back(r);
+        }
+        break;
+      }
+    }
+    Logf(LogLevel::kInfo, "rexgpu-native: resource loading: level %u start %u, %zu descriptions (%zu local, %zu shipped)",
+         level, start, preload_records_.size(), local, preload_records_.size() - local);
   } else if (!loading && resource_loading_) {
     // The universe can clear/change its request fields as loading ends. Keep
     // the map/start captured while that request's loading screen was up.
