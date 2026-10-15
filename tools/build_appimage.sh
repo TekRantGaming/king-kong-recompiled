@@ -90,6 +90,14 @@ for lib in libstdc++.so.6 libgcc_s.so.1; do
   cp -L "$(g++ -print-file-name=$lib 2>/dev/null || true)" "$APPDIR/usr/lib/" 2>/dev/null ||
     cp -L "/usr/lib/x86_64-linux-gnu/$lib" "$APPDIR/usr/lib/"
 done
+# The shipped pipeline list (kkpipelines.list, the same file as the Windows zip's; not in git): the game
+# reads it beside the program (inside the AppImage's read-only mount) and makes every pipeline at start,
+# instead of compiling them in play on each area's first visit (task 083: up to 3.9 s frames without it).
+if [ -n "${KK_PIPELINE_LIST:-}" ]; then
+  cp "$KK_PIPELINE_LIST" "$APPDIR/usr/bin/kkpipelines.list"
+else
+  echo "warning: KK_PIPELINE_LIST not set: no kkpipelines.list, pipelines are compiled in play" >&2
+fi
 cp "$ROOT/docs/images/icon.png" "$APPDIR/king_kong.png"
 if [ -n "${KK_DXC_DIR:-}" ]; then
   mkdir -p "$APPDIR/usr/share/licenses/dxc"
