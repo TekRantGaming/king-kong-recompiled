@@ -1,4 +1,5 @@
 #include "backend/renderer.h"
+#include "plugin/native_benchmark_stats.h"
 #include "backend/cpu_profile.h"
 #include "backend/dev_gpu_stats.h"
 
@@ -538,6 +539,15 @@ void Renderer::OnPresent(uint32_t frame, uint32_t render_target0, uint32_t devic
   if (frame_gpu_timer_) frame_gpu_timer_->FrameEnd();
   // The frame timing summary: this thread's CPU time and the interval between Presents.
   stats_.render_cpu_us = CurrentThreadCpuMicroseconds();
+  if (benchmark_stats_enabled.load(std::memory_order_relaxed)) {
+    std::lock_guard lock(benchmark_stats_mutex);
+    benchmark_stats.frame = stats_.frames_submitted;
+    benchmark_stats.render_cpu_us = stats_.render_cpu_us;
+    benchmark_stats.gpu_ms = frame_gpu_timer_ ? frame_gpu_timer_->milliseconds() : -1;
+#if NR_GAME_RENDERER
+    benchmark_stats.pipeline_total_ms = game_ ? game_->stats().pipeline_wait_ms : 0;
+#endif
+  }
   if (last_present_time_.time_since_epoch().count() != 0 && frame_intervals_.size() < 8192)
     frame_intervals_.push_back(uint32_t(std::min<uint64_t>(us(last_present_time_, t3), UINT32_MAX)));
   last_present_time_ = t3;

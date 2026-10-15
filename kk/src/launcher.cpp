@@ -4199,7 +4199,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                 {"Back"}, 0, {});
             return;
           }
-          benchmark_pending_ = true; StartGame();
+          benchmark::CreateBenchmarkStartDialog(imgui_drawer(), [this] { benchmark_pending_ = true; StartGame(); });
         });
     items.push_back(Disable(benchmark, !CanPlay(), "Install the game first."));
     items.push_back(ActionItem("Copy diagnostics",

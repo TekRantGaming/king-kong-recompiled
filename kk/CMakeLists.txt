@@ -17,6 +17,7 @@ set(KINGKONG_SOURCES
     src/fpe_guard.cpp
     src/frame_stats.cpp
     src/benchmark.cpp
+    src/benchmark_monitor.cpp
     src/sampler.cpp
     src/settings.cpp
     src/input_remap.cpp
@@ -108,7 +109,7 @@ target_link_libraries(king_kong PRIVATE nr_hooks)
 add_dependencies(king_kong rexgpu-native)
 
 if(WIN32)
-    target_link_libraries(king_kong PRIVATE windowscodecs ole32)
+    target_link_libraries(king_kong PRIVATE windowscodecs ole32 pdh psapi)
     # UTF-8 as the program's code page (src/king_kong.manifest, issue #37).
     target_link_options(king_kong PRIVATE "LINKER:/MANIFEST:EMBED" "LINKER:/MANIFESTUAC:NO"
                         "LINKER:/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/src/king_kong.manifest")
@@ -177,6 +178,8 @@ if(KK_DEV_TOOLS)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     add_test(NAME graphics-panel-text COMMAND "${Python3_EXECUTABLE}" -I
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/debug_overlay_text_tests.py" "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME benchmark-text COMMAND "${Python3_EXECUTABLE}" -I
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/benchmark_text_tests.py" "${CMAKE_CURRENT_SOURCE_DIR}")
     add_executable(kk-startup-tests ../native-renderer/tests/startup-recovery-039.cpp)
     add_test(NAME startup-recovery COMMAND kk-startup-tests "${CMAKE_CURRENT_BINARY_DIR}/startup-test-state")
 endif()

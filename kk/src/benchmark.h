@@ -24,5 +24,6 @@ void Frame(double unscaled_dt, double scaled_dt, const uint8_t* base);
 void GuestSwap();
 bool Pad(uint32_t user, uint8_t* state, uint32_t& status);
 void Interrupted();
+void CreateBenchmarkStartDialog(rex::ui::ImGuiDrawer* drawer, std::function<void()> start);
 void CreateBenchmarkDialog(rex::ui::ImGuiDrawer* drawer, std::function<void()> quit);
 }  // namespace kk::benchmark

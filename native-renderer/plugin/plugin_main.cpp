@@ -20,6 +20,7 @@
 #include "plugin/native_prewarm.h"
 #include "plugin/native_stutter.h"
 #include "plugin/native_effect_stats.h"
+#include "plugin/native_benchmark_stats.h"
 #include "plugin/upscaler_query.h"
 
 // Shared graphics settings are owned here; the emulation plugin is never loaded.
@@ -525,6 +526,13 @@ extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_effect_stats(NrEffectStats* stats) 
 #else
   return 0;
 #endif
+}
+
+extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_benchmark_stats(NrBenchmarkStats* stats) {
+  return nr::ReadBenchmarkStats(stats) ? 1u : 0u;
+}
+extern "C" REX_GPU_PLUGIN_EXPORT void nr_benchmark_enable(uint32_t enabled) {
+  nr::benchmark_stats_enabled.store(enabled != 0, std::memory_order_relaxed);
 }
 
 // The launcher's upscaler menu (native_upscaler_query.h).
