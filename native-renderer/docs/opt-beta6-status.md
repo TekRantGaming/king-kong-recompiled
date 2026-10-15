@@ -125,3 +125,26 @@ queue room waits still reach 100.2 ms in the repeated candidate Vulkan start and
 Buffer uploads, the remaining device comparisons, per-draw map/hash/mutex costs,
 and identical-picture GI/GTAO GPU optimisation remain open. No game logic,
 graphics defaults, effect quality or GPU shader changes were made.
+
+# Task 097: chapter-start transfers and render-queue room
+
+Starting at `176c9ef` on `opt-beta6`. Read DECISIONS.md, GAME-RULES.md,
+reports 091/a/b/c and the preceding status before editing. Nothing pushed,
+merged, released or packaged. Windows renderer-only work; no game logic,
+AI cadence, shader, picture quality, graphics default or presentation bound changes.
+
+The candidate records large first-use textures and vertex/index buffers into
+an early graphics-queue transfer list, submitted after the draw is recorded and
+before its frame list can execute. New-resource copies can start while the
+remaining frame is recorded. Updated resources stay inline to preserve earlier
+draws in the same list. The early path has a 32 MiB / 32 batch frame budget;
+required over-budget and small uploads remain inline, never skipped/deferred.
+CPU conversion and staging copies still run on the render thread. This is a
+bounded early GPU transfer experiment, not a complete asynchronous CPU scheduler.
+
+Queue instrumentation separates the existing 8,000-command bound from the
+one-Present bound and measures retained queued command/snapshot bytes. Neither
+bound is enlarged. Tests cover both blocked conditions, first-use transfer
+contents and same-frame updates on Vulkan/D3D12, budget exhaustion and reopening.
+Build, offline paired measurements and permitted game comparisons are pending.
+Task 097 game launches so far: zero (maximum six).
