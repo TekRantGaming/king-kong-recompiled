@@ -22,11 +22,8 @@ constexpr size_t kMaxQueuedCommands = 8000;
 // only (the library's dirty bits and counters change at every call) shares the previous copy.
 constexpr uint32_t kReadRanges[][2] = {{1152, 10272}, {11424, 12000}, {12532, 12944}, {13960, 13968}, {14060, 15596}};
 
-bool SameReadParts(const uint8_t* a, const uint8_t* b) {
-  for (const auto& r : kReadRanges)
-    if (std::memcmp(a + r[0], b + r[0], r[1] - r[0]) != 0) return false;
-  return true;
-}
+// Commands kept for reuse at most (each holds a few kilobytes of room).
+constexpr size_t kMaxFreeCommands = 1024;
 
 // Object sizes copied (d3d-structs.md): surfaces are 64 bytes, a texture's fetch constant ends at
 // +40, a vertex buffer's at +20; a declaration has its count at +8 and 12-byte elements from +36.
@@ -53,8 +50,8 @@ void GuestSnapshot::AddObject(const GuestMemory& memory, uint32_t address, uint3
 }
 
 const uint8_t* GuestSnapshot::Find(uint32_t address) const {
-  if (device && address >= device_address && address - device_address < device->size())
-    return device->data() + (address - device_address);
+  if (device && address >= device_address && address - device_address < device_size)
+    return device + (address - device_address);
   for (const Object& o : objects)
     if (address >= o.address && address - o.address < o.size) return bytes.data() + o.offset + (address - o.address);
   return nullptr;
@@ -70,7 +67,11 @@ const uint8_t* SnapshotGuestMemory::Virtual(uint32_t address) const {
 void SnapshotGuestMemory::SetCurrent(const GuestSnapshot* snapshot) { t_snapshot = snapshot; }
 
 ThreadedSink::ThreadedSink(DrawSink& inner, const GuestMemory& memory)
-    : inner_(inner), memory_(memory), thread_([this] { Run(); }) {}
+    : inner_(inner),
+      memory_(memory),
+      sent_device_(dev::kSize, 0),
+      device_image_(dev::kSize, 0),
+      thread_([this] { Run(); }) {}
 
 ThreadedSink::~ThreadedSink() {
   {
@@ -81,32 +82,55 @@ ThreadedSink::~ThreadedSink() {
   thread_.join();
 }
 
-void ThreadedSink::CaptureDevice(GuestSnapshot& s, uint32_t device) {
-  const uint8_t* live = device ? memory_.Virtual(device) : nullptr;
-  if (!live) return;
-  if (!last_device_ || last_device_address_ != device || !SameReadParts(last_device_->data(), live)) {
-    // From the pool: a copy goes back when its last call has run (no allocation per call).
-    std::vector<uint8_t>* copy = nullptr;
-    {
-      std::lock_guard lock(device_pool_->mutex);
-      if (!device_pool_->free.empty()) {
-        copy = device_pool_->free.back();
-        device_pool_->free.pop_back();
-      }
-    }
-    if (!copy) copy = new std::vector<uint8_t>(dev::kSize);
-    // Only the parts the renderer reads (the rest of a pooled copy is stale and never read).
-    for (const auto& r : kReadRanges) std::memcpy(copy->data() + r[0], live + r[0], r[1] - r[0]);
-    last_device_ = std::shared_ptr<const std::vector<uint8_t>>(copy, [pool = device_pool_](const std::vector<uint8_t>* p) {
-      std::lock_guard lock(pool->mutex);
-      pool->free.push_back(const_cast<std::vector<uint8_t>*>(p));
-    });
-    last_device_address_ = device;
-    device_copies_.fetch_add(1, std::memory_order_relaxed);
-  }
-  s.device = last_device_;
-  s.device_address = device;
+const std::vector<ThreadedSink::DeviceBlock>& ThreadedSink::DeviceBlocks() {
+  static const std::vector<DeviceBlock> blocks = [] {
+    std::vector<DeviceBlock> b;
+    for (const auto& r : kReadRanges)
+      for (uint32_t o = r[0]; o < r[1]; o += 64) b.push_back({uint16_t(o), uint16_t(std::min<uint32_t>(64, r[1] - o))});
+    return b;
+  }();
+  return blocks;
 }
+
+std::unique_ptr<ThreadedSink::Command> ThreadedSink::NewCommand(Kind kind) {
+  std::unique_ptr<Command> c = next_ ? std::move(next_) : std::make_unique<Command>();
+  c->kind = kind;
+  c->snapshot.device = nullptr;
+  c->snapshot.device_size = 0;
+  c->snapshot.device_address = 0;
+  c->snapshot.bytes.clear();
+  c->snapshot.objects.clear();
+  c->device_address = 0;
+  c->device_blocks.clear();
+  c->device_bytes.clear();
+  return c;
+}
+
+bool ThreadedSink::CaptureDevice(Command& c, uint32_t device) {
+  const uint8_t* live = device ? memory_.Virtual(device) : nullptr;
+  if (!live) return false;
+  // The blocks that differ from what the render thread will have (all of them for another device).
+  // Comparing only the parts the renderer reads: the library's dirty bits and counters change at
+  // every call elsewhere.
+  const bool all = sent_device_address_ != device;
+  const std::vector<DeviceBlock>& blocks = DeviceBlocks();
+  uint8_t* sent = sent_device_.data();
+  for (size_t i = 0; i < blocks.size(); ++i) {
+    const DeviceBlock& b = blocks[i];
+    const bool same = !all && (b.size == 64 ? std::memcmp(live + b.offset, sent + b.offset, 64) == 0
+                                            : std::memcmp(live + b.offset, sent + b.offset, b.size) == 0);
+    if (same) continue;
+    std::memcpy(sent + b.offset, live + b.offset, b.size);
+    c.device_blocks.push_back(uint16_t(i));
+    c.device_bytes.insert(c.device_bytes.end(), live + b.offset, live + b.offset + b.size);
+  }
+  sent_device_address_ = device;
+  c.device_address = device;
+  if (!c.device_blocks.empty()) device_copies_.fetch_add(1, std::memory_order_relaxed);
+  return true;
+}
+
+uint32_t ThreadedSink::SentDeviceWord(uint32_t offset) const { return LoadBE32(sent_device_.data() + offset); }
 
 void ThreadedSink::CaptureSurface(GuestSnapshot& s, uint32_t surface) {
   s.AddObject(memory_, surface, kSurfaceBytes);
@@ -114,47 +138,43 @@ void ThreadedSink::CaptureSurface(GuestSnapshot& s, uint32_t surface) {
 
 void ThreadedSink::OnClear(const ClearCall& call) {
   const auto start = std::chrono::steady_clock::now();
-  Command c;
-  c.kind = Kind::kClear;
-  c.clear = call;
-  CaptureDevice(c.snapshot, call.device);
-  if (c.snapshot.device) {
-    for (uint32_t i = 0; i < 4; ++i) CaptureSurface(c.snapshot, LoadBE32(c.snapshot.device->data() + dev::kRenderTargets + 4 * i));
+  std::unique_ptr<Command> c = NewCommand(Kind::kClear);
+  c->clear = call;
+  if (CaptureDevice(*c, call.device)) {
+    for (uint32_t i = 0; i < 4; ++i) CaptureSurface(c->snapshot, SentDeviceWord(dev::kRenderTargets + 4 * i));
   }
-  CaptureSurface(c.snapshot, call.render_target0);
-  CaptureSurface(c.snapshot, call.depth_stencil);
+  CaptureSurface(c->snapshot, call.render_target0);
+  CaptureSurface(c->snapshot, call.depth_stencil);
   Enqueue(std::move(c), start);
 }
 
 void ThreadedSink::OnDraw(const DrawCall& call) {
   const auto start = std::chrono::steady_clock::now();
-  Command c;
-  c.kind = Kind::kDraw;
-  c.draw = call;
-  CaptureDevice(c.snapshot, call.device);
-  for (uint32_t rt : call.render_targets) CaptureSurface(c.snapshot, rt);
-  CaptureSurface(c.snapshot, call.depth_stencil);
+  std::unique_ptr<Command> c = NewCommand(Kind::kDraw);
+  c->draw = call;
+  const bool device = CaptureDevice(*c, call.device);
+  for (uint32_t rt : call.render_targets) CaptureSurface(c->snapshot, rt);
+  CaptureSurface(c->snapshot, call.depth_stencil);
   if (const uint8_t* decl = call.vertex_declaration ? memory_.Virtual(call.vertex_declaration) : nullptr) {
     const uint32_t count = std::min(LoadBE32(decl + 8), kMaxDeclarationElements);
-    c.snapshot.AddObject(memory_, call.vertex_declaration, 36 + 12 * count);
+    c->snapshot.AddObject(memory_, call.vertex_declaration, 36 + 12 * count);
   }
-  if (c.snapshot.device) {
+  if (device) {
     for (uint32_t s = 0; s < 16; ++s)
-      c.snapshot.AddObject(memory_, LoadBE32(c.snapshot.device->data() + dev::kStreamBuffer + 8 * s), kVertexBufferBytes);
+      c->snapshot.AddObject(memory_, SentDeviceWord(dev::kStreamBuffer + 8 * s), kVertexBufferBytes);
   }
   Enqueue(std::move(c), start);
 }
 
 void ThreadedSink::OnResolve(const ResolveCall& call) {
   const auto start = std::chrono::steady_clock::now();
-  Command c;
-  c.kind = Kind::kResolve;
-  c.resolve = call;
-  CaptureDevice(c.snapshot, call.device);
-  for (uint32_t rt : call.render_targets) CaptureSurface(c.snapshot, rt);
-  CaptureSurface(c.snapshot, call.render_target0);
-  CaptureSurface(c.snapshot, call.depth_stencil);
-  c.snapshot.AddObject(memory_, call.dest_texture, kTextureBytes);
+  std::unique_ptr<Command> c = NewCommand(Kind::kResolve);
+  c->resolve = call;
+  CaptureDevice(*c, call.device);
+  for (uint32_t rt : call.render_targets) CaptureSurface(c->snapshot, rt);
+  CaptureSurface(c->snapshot, call.render_target0);
+  CaptureSurface(c->snapshot, call.depth_stencil);
+  c->snapshot.AddObject(memory_, call.dest_texture, kTextureBytes);
   Enqueue(std::move(c), start);
 }
 
@@ -166,22 +186,21 @@ void ThreadedSink::OnPresent(uint32_t frame, uint32_t render_target0, uint32_t d
     std::lock_guard lock(mutex_);
     stats_.game_cpu_us = game_cpu_us;
   }
-  Command c;
-  c.kind = Kind::kPresent;
-  c.present_frame = frame;
-  c.present_rt0 = render_target0;
-  c.present_device = device;
-  CaptureDevice(c.snapshot, device);
-  CaptureSurface(c.snapshot, render_target0);
-  if (c.snapshot.device) {
-    CaptureSurface(c.snapshot, LoadBE32(c.snapshot.device->data() + dev::kBackBuffer));
-    c.snapshot.AddObject(memory_, LoadBE32(c.snapshot.device->data() + dev::kFrontBuffer), kTextureBytes);
+  std::unique_ptr<Command> c = NewCommand(Kind::kPresent);
+  c->present_frame = frame;
+  c->present_rt0 = render_target0;
+  c->present_device = device;
+  const bool has_device = CaptureDevice(*c, device);
+  CaptureSurface(c->snapshot, render_target0);
+  if (has_device) {
+    CaptureSurface(c->snapshot, SentDeviceWord(dev::kBackBuffer));
+    c->snapshot.AddObject(memory_, SentDeviceWord(dev::kFrontBuffer), kTextureBytes);
   }
   Enqueue(std::move(c), start);
 }
 
-void ThreadedSink::Enqueue(Command&& command, std::chrono::steady_clock::time_point start) {
-  const bool present = command.kind == Kind::kPresent;
+void ThreadedSink::Enqueue(std::unique_ptr<Command> command, std::chrono::steady_clock::time_point start) {
+  const bool present = command->kind == Kind::kPresent;
   std::unique_lock lock(mutex_);
   const auto copied = std::chrono::steady_clock::now();
   room_cv_.wait(lock, [&] {
@@ -190,6 +209,11 @@ void ThreadedSink::Enqueue(Command&& command, std::chrono::steady_clock::time_po
   stats_.backpressure_us += Micros(copied);
   queue_.push_back(std::move(command));
   if (present) ++queued_presents_;
+  // The next call's command: one the render thread has run, if any.
+  if (!next_ && !free_.empty()) {
+    next_ = std::move(free_.back());
+    free_.pop_back();
+  }
   stats_.max_backlog = std::max<uint64_t>(stats_.max_backlog, queue_.size());
   ++stats_.commands;
   queued_.fetch_add(1, std::memory_order_release);
@@ -243,20 +267,34 @@ void ThreadedSink::Run() {
       stats_.render_idle_us += Micros(idle);
     }
     if (queue_.empty()) return;  // stopping, and nothing left
-    Command c = std::move(queue_.front());
+    std::unique_ptr<Command> c = std::move(queue_.front());
     queue_.pop_front();
     lock.unlock();
     room_cv_.notify_all();
-    SnapshotGuestMemory::SetCurrent(&c.snapshot);
-    switch (c.kind) {
-      case Kind::kClear: inner_.OnClear(c.clear); break;
-      case Kind::kDraw: inner_.OnDraw(c.draw); break;
-      case Kind::kResolve: inner_.OnResolve(c.resolve); break;
-      case Kind::kPresent: inner_.OnPresent(c.present_frame, c.present_rt0, c.present_device); break;
+    // The device as this call saw it: the copy brought up to date with the call's changes.
+    if (c->device_address) {
+      const std::vector<DeviceBlock>& blocks = DeviceBlocks();
+      const uint8_t* bytes = c->device_bytes.data();
+      for (uint16_t i : c->device_blocks) {
+        std::memcpy(device_image_.data() + blocks[i].offset, bytes, blocks[i].size);
+        bytes += blocks[i].size;
+      }
+      c->snapshot.device = device_image_.data();
+      c->snapshot.device_size = uint32_t(device_image_.size());
+      c->snapshot.device_address = c->device_address;
+    }
+    SnapshotGuestMemory::SetCurrent(&c->snapshot);
+    switch (c->kind) {
+      case Kind::kClear: inner_.OnClear(c->clear); break;
+      case Kind::kDraw: inner_.OnDraw(c->draw); break;
+      case Kind::kResolve: inner_.OnResolve(c->resolve); break;
+      case Kind::kPresent: inner_.OnPresent(c->present_frame, c->present_rt0, c->present_device); break;
     }
     SnapshotGuestMemory::SetCurrent(nullptr);
+    const bool was_present = c->kind == Kind::kPresent;
     lock.lock();
-    if (c.kind == Kind::kPresent) --queued_presents_;
+    if (free_.size() < kMaxFreeCommands) free_.push_back(std::move(c));
+    if (was_present) --queued_presents_;
     ++done_;
     done_cv_.notify_all();
     room_cv_.notify_all();
