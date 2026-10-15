@@ -163,6 +163,11 @@ bool ParseHash(const std::string& v, uint64_t& out) {
 }  // namespace
 
 bool AoRule::Matches(const AoDrawState& s) const {
+  // Every condition must hold, so their order changes nothing: the shader hashes first, as most
+  // built-in rules name a shader and a draw of another fails there at once (task 085: classifying
+  // each draw against the 58 built-in rules, for the AO and the GI, was 5% of the render thread).
+  if (ps_hash && ps_hash != s.ps_hash) return false;
+  if (vs_hash && vs_hash != s.vs_hash) return false;
   if (!TriMatches(color, s.color) || !TriMatches(depth_test, s.depth_test) ||
       !TriMatches(depth_write, s.depth_write) || !TriMatches(alpha_test, s.alpha_test))
     return false;
@@ -171,8 +176,6 @@ bool AoRule::Matches(const AoDrawState& s) const {
     if (blend == AoBlend::kOn ? kind == AoBlend::kOff : kind != blend) return false;
   }
   if (primitives && (s.primitive >= 32 || !(primitives & (1u << s.primitive)))) return false;
-  if (vs_hash && vs_hash != s.vs_hash) return false;
-  if (ps_hash && ps_hash != s.ps_hash) return false;
   return true;
 }
 
