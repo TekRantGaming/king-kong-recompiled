@@ -69,6 +69,8 @@ class Ssgi {
   // (false after the images were made anew).
   bool has_history() const { return history_valid_; }
   void DropHistory() { history_valid_ = false; }
+  // Submitted command lists own the views they use until GPU completion.
+  void ForgetTargetViews() { sets_.clear(); framebuffers_.clear(); DropHistory(); }
 
   static constexpr uint32_t kRadianceMips = 5;
   // The picture's gamma (the game's targets hold display values; the GI works in linear light).

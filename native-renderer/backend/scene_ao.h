@@ -118,6 +118,14 @@ class SceneAo {
   const AoRuleTable& rules() const { return rules_; }
   const AoFrameTracker& tracker() const { return tracker_; }
   const Gtao* gtao() const { return gtao_.get(); }
+  void SetMemoryPressure(bool pressure) { memory_pressure_ = pressure; }
+  void ForgetTargets() {
+    if (gtao_) gtao_->ForgetTargetViews();
+    scene_color_ = {}; scene_depth_ = {}; depth_copy_ = nullptr;
+    ambient_view_ = {}; frame_ = UINT64_MAX;
+    computed_ = applied_ = ambient_ready_ = ambient_drawn_ = false;
+    depth_copied_ = scene_resolved_ = false;
+  }
 
  private:
   void NewFrame(uint64_t frame);
@@ -137,6 +145,7 @@ class SceneAo {
   void TimeBegin(nvrhi::ICommandList* cl) { if (timer_) timer_->Begin(cl); }
   void TimeEnd(nvrhi::ICommandList* cl) { if (timer_) timer_->End(cl); }
   AoConfig config_;
+  bool memory_pressure_ = false;
   AoRuleTable rules_;
   std::shared_ptr<const kkshaders::AmbientTable> ambient_;
   std::unique_ptr<Gtao> gtao_;

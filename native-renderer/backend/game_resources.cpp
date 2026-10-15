@@ -53,7 +53,36 @@ GameRenderer::HostTarget* GameRenderer::FindTarget(bool depth, uint32_t edram_ba
                                                    uint32_t format, int generation) {
   const bool out = upscale_ && (generation < 0 ? OutputGeneration() : generation == 1);
   auto it = targets_.find(TargetKey(depth, edram_base, pitch, format) | (out ? kOutputGeneration : 0));
-  return it == targets_.end() ? nullptr : it->second.get();
+  if (it == targets_.end() || !it->second || !RestoreTarget(*it->second)) return nullptr;
+  // Upscaler generations use used_frame to mean GetTarget actually selected
+  // the attachment, not a FindTarget probe for height or a stale resolve.
+  if (!upscale_) it->second->used_frame = frame_;
+  return it->second.get();
+}
+
+bool GameRenderer::RestoreTarget(HostTarget& t) {
+  if (t.texture) return true;
+  if (!t.clear_only || !current_cl_) return false;
+  nvrhi::TextureDesc d;
+  d.width = t.host_width;
+  d.height = t.host_height;
+  d.format = t.format;
+  d.isRenderTarget = true;
+  d.initialState = t.depth ? nvrhi::ResourceStates::DepthWrite : nvrhi::ResourceStates::RenderTarget;
+  d.keepInitialState = true;
+  d.debugName = "Restored clear-only EDRAM target";
+  auto texture = device_->createTexture(d);
+  if (!texture) return false;
+  if (t.depth)
+    current_cl_->clearDepthStencilTexture(texture, nvrhi::AllSubresources, true, t.saved_depth, true, t.saved_stencil);
+  else
+    current_cl_->clearTextureFloat(texture, nvrhi::AllSubresources, t.saved_color);
+  t.texture = texture;
+  t.allocation_bytes = device_->getTextureMemoryRequirements(texture).size;
+  stats_.edram_target_bytes += t.allocation_bytes;
+  ++memory_restores_;
+  ++frame_resource_creations_;
+  return true;
 }
 
 GameRenderer::Scale GameRenderer::ScaleFor(bool depth, uint32_t pitch, uint32_t format, bool output_gen) {
@@ -80,6 +109,8 @@ GameRenderer::HostTarget* GameRenderer::GetTarget(bool depth, uint32_t edram_bas
   auto& slot = targets_[key];
   if (slot && slot->height >= height) {
     if (slot->scale_x == ScaleFor(depth, pitch, format, !upscale_ || out).x) {
+      if (!RestoreTarget(*slot)) return nullptr;
+      if (!upscale_) slot->used_frame = frame_;
       if (upscale_) {
         // A target of the output generation first used after the upscale point gets its input
         // twin's picture of this frame (MigrateTarget does nothing otherwise).
@@ -122,11 +153,13 @@ GameRenderer::HostTarget* GameRenderer::GetTarget(bool depth, uint32_t edram_bas
   ++frame_resource_creations_;
   if (!t->texture) return nullptr;
   t->allocation_bytes = device_->getTextureMemoryRequirements(t->texture).size;
+  if (memory_migration_ready_ && !depth) MemoryColorPipeline(t->format);
   stats_.edram_target_bytes += t->allocation_bytes;
   if (slot) stats_.edram_target_bytes -= slot->allocation_bytes;
   if (slot) {
     // Framebuffers holding the old texture are dropped with it.
     framebuffers_.clear();
+    framebuffer_used_.clear();
     blit_sets_.erase(slot->texture.Get());
     RetireResource(slot->texture);
     if (upscale_) {
@@ -136,6 +169,7 @@ GameRenderer::HostTarget* GameRenderer::GetTarget(bool depth, uint32_t edram_bas
   }
   if (!slot) ++stats_.edram_targets;
   slot = std::move(t);
+  slot->used_frame = frame_;
   if (upscale_) {
     slot->used_frame = frame_;
     if (out && current_cl_ && upscale_->upscaled) MigrateTarget(current_cl_, slot.get());
@@ -146,7 +180,7 @@ GameRenderer::HostTarget* GameRenderer::GetTarget(bool depth, uint32_t edram_bas
 std::vector<GameRenderer::TargetInfo> GameRenderer::DebugTargets() const {
   std::vector<TargetInfo> out;
   for (const auto& [key, t] : targets_) {
-    if (!t) continue;
+    if (!t || !t->texture) continue;
     TargetInfo i;
     i.depth = t->depth;
     i.edram_base = uint32_t(key & 0xFFF);
@@ -171,10 +205,15 @@ uint64_t GameRenderer::FormatSignature(const std::array<HostTarget*, 4>& colors,
 
 nvrhi::IFramebuffer* GameRenderer::GetFramebuffer(const std::array<HostTarget*, 4>& colors,
                                                   HostTarget* depth) {
+  // A bound attachment may be written. Conservative even for read-only draws,
+  // failed pipeline creation, and partial clears.
+  for (HostTarget* c : colors) if (c) c->clear_only = false;
+  if (depth) depth->clear_only = false;
   MsTimer timer(stats_.target_ms);
   uint64_t key = 0xFB;
   for (const HostTarget* c : colors) key = Mix64(key, reinterpret_cast<uintptr_t>(c ? c->texture.Get() : nullptr));
   key = Mix64(key, reinterpret_cast<uintptr_t>(depth ? depth->texture.Get() : nullptr));
+  framebuffer_used_[key] = frame_;
   auto it = framebuffers_.find(key);
   if (it != framebuffers_.end()) return it->second;
   nvrhi::FramebufferDesc desc;

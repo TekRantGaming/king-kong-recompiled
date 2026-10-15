@@ -11,6 +11,7 @@
 #include <nvrhi/nvrhi.h>
 #include <rex/ui/presenter.h>
 #include "backend/vulkan_requirements.h"
+#include "backend/memory_budget.h"
 
 namespace rex::ui {
 class GraphicsProvider;
@@ -28,6 +29,7 @@ class HostDevice {
   virtual nvrhi::GraphicsAPI api() const = 0;
   virtual bool tessellation_supported() const { return api() == nvrhi::GraphicsAPI::D3D12; }
   virtual NativeTableCapacities table_capacities() const { return kNativeTableCapacities; }
+  virtual MemoryBudget QueryMemoryBudget() { return {}; }
 
   // Submits a closed command list (serialised against the SDK's own use of
   // the queue where that matters).

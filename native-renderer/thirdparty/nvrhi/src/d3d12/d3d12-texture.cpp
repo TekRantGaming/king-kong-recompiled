@@ -661,7 +661,8 @@ namespace nvrhi::d3d12
                   toD3D12ComponentMapping(componentMapping.b),
                   toD3D12ComponentMapping(componentMapping.a)));
 
-        uint32_t planeSlice = (viewDesc.Format == DXGI_FORMAT_X24_TYPELESS_G8_UINT) ? 1 : 0;
+        uint32_t planeSlice = (viewDesc.Format == DXGI_FORMAT_X24_TYPELESS_G8_UINT ||
+                              viewDesc.Format == DXGI_FORMAT_X32_TYPELESS_G8X24_UINT) ? 1 : 0;
 
         switch (dimension)
         {

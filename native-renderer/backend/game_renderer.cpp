@@ -199,6 +199,12 @@ void GameRenderer::set_watch(std::function<void(uint32_t, uint32_t)> watch) {
 }
 
 bool GameRenderer::Initialize() {
+  // Keep the scale-aware shader ABI at the native-resolution floor too. It
+  // was selected before shader creation for these initially scaled runs.
+  memory_floor_x_ = std::min(options_.render_scale_x, 1.0f);
+  memory_floor_y_ = std::min(options_.render_scale_y, 1.0f);
+  memory_scale_aware_ = !(options_.debug & 16) &&
+                       std::max({options_.render_scale_x, options_.render_scale_y, options_.shadow_scale}) > 1.0f;
   const nvrhi::GraphicsAPI api = device_->getGraphicsAPI();
   if (options_.table_capacities != kNativeTableCapacities && options_.upscale.enabled()) {
     // Motion replay retains indices until the upscale point, beyond a possible
@@ -409,6 +415,7 @@ bool GameRenderer::Initialize() {
     shaders_->SetMotionPrewarm(false);
   }
   LightingInitialize();  // Lighting hook (game_lighting.cpp)
+  if (memory_scale_aware_ && !upscale_) memory_migration_ready_ = InitializeMemoryMigration();
   return true;
 }
 
@@ -416,6 +423,7 @@ void GameRenderer::UploadDummies(nvrhi::ICommandList* cl) {
   // Frame start and first-use paths share one initialization flag and must upload
   // the same contents, including the identity gamma ramp and committed barriers.
   EnsureFallbackResources(cl);
+  if (pending_memory_scale_ > 0.0f || !memory_staged_.empty()) ApplyMemoryScale(cl);
 }
 
 // ---------------------------------------------------------------- tables
@@ -664,7 +672,116 @@ GameRenderer::StutterStats GameRenderer::stutter() const {
   return stutter_;
 }
 
+void GameRenderer::TrimClearTargets() {
+  // A cache entry owns an attachment reference, not the contents of EDRAM.
+  // Drop references only after recording ends; the ordinary eight-frame
+  // retirement queue outlives the two-frame GPU completion bound. NVRHI also
+  // retains resources referenced by submitted command lists until completion.
+  for (auto it = framebuffers_.begin(); it != framebuffers_.end();) {
+    auto used = framebuffer_used_.find(it->first);
+    if (used != framebuffer_used_.end() && frame_ > used->second && frame_ - used->second > 120) {
+      RetireResource(it->second);
+      framebuffer_used_.erase(used);
+      it = framebuffers_.erase(it);
+    } else ++it;
+  }
+  // Scene effects and upscalers keep independent views and can write targets
+  // outside GetFramebuffer. Until those writes participate in clear tracking,
+  // retain their targets rather than incorrectly restore an old clear.
+  // Drop GTAO's old target views once on entering pressure. No image or
+  // pipeline is rebuilt here, and the next frame classifies its targets anew.
+  if (memory_pressure_samples_ == 0) {
+    if (scene_ao_) scene_ao_->ForgetTargets();
+    if (scene_gi_) scene_gi_->ForgetTargets();
+    if (gi_parked_) gi_parked_->ForgetTargets();
+    if (scene_lighting_) scene_lighting_->ForgetTargets();
+    if (lighting_parked_) lighting_parked_->ForgetTargets();
+  }
+  if (upscale_ || scene_ao_ || scene_gi_ || gi_parked_ || scene_lighting_ || lighting_parked_) return;
+  for (auto& [key, t] : targets_) {
+    if (!t || !t->texture || !CanEvictClearTarget(t->clear_only, bool(upscale_ || scene_ao_),
+                                                t->used_frame, frame_)) continue;
+    if (auto it = blit_sets_.find(t->texture.Get()); it != blit_sets_.end()) {
+      RetireResource(it->second);
+      blit_sets_.erase(it);
+    }
+    RetireResource(t->texture);
+    t->texture = nullptr;
+    stats_.edram_target_bytes -= t->allocation_bytes;
+    t->allocation_bytes = 0;
+    ++memory_evictions_;
+  }
+}
+
+void GameRenderer::CheckMemoryBudget() {
+  const auto now = std::chrono::steady_clock::now();
+  if (memory_sample_ != std::chrono::steady_clock::time_point{} &&
+      now - memory_sample_ < std::chrono::seconds(1)) return;
+  const bool first = memory_sample_ == std::chrono::steady_clock::time_point{};
+  if (first) memory_start_ = now;
+  memory_sample_ = now;
+  const MemoryBudget live = options_.memory_budget ? options_.memory_budget() : MemoryBudget{};
+  if (!live.valid) {
+    if (first) Logf(LogLevel::kWarning, "rexgpu-native: live GPU memory budget unavailable; adaptation disabled");
+    memory_pressure_samples_ = 0;
+    return;
+  }
+  uint64_t cap = 0;
+  if (const char* value = std::getenv("KK_DEV_VRAM_BUDGET_GB")) {
+    if (std::strcmp(value, "4") == 0) cap = 4ull << 30;
+    else if (std::strcmp(value, "6") == 0) cap = 6ull << 30;
+    else if (std::strcmp(value, "8") == 0) cap = 8ull << 30;
+    else if (first) Logf(LogLevel::kWarning, "rexgpu-native: KK_DEV_VRAM_BUDGET_GB must be 4, 6 or 8; ignored");
+  }
+  const MemoryBudget effective = CapMemoryBudget(live, cap);
+  MemoryBudget tested = effective;
+  // Developer fault injection: exercise pressure handling on a large GPU
+  // without allocating gigabytes or disturbing other applications. The live
+  // values remain separately logged. Requires an explicit synthetic cap.
+  const char* force = std::getenv("KK_DEV_VRAM_PRESSURE");
+  // Let the chapter allocate and use its full-resolution AO first, so the
+  // fault injection exercises a live resize rather than just startup sizing.
+  const bool simulated = cap && force && std::strcmp(force, "1") == 0 &&
+                         now - memory_start_ >= std::chrono::seconds(20);
+  if (simulated) tested.usage = std::max(tested.usage, tested.budget);
+  const bool pressure = MemoryPressure(tested);
+  const char* control = std::getenv("KK_DEV_VRAM_CONTROL");
+  const bool enabled = !control || std::strcmp(control, "0") != 0;
+  if (enabled && pressure) {
+    // Reclaim first. Wait five one-second samples before reducing GTAO; never
+    // wait for the GPU, flush the queue, or restore quality in a pressure loop.
+    if (memory_pressure_samples_ % 5 == 0) TrimClearTargets();
+    if (++memory_pressure_samples_ >= 5 && scene_ao_ && !memory_half_ao_) {
+      scene_ao_->SetMemoryPressure(true);
+      memory_half_ao_ = true;
+      Logf(LogLevel::kWarning, "rexgpu-native: GPU budget pressure: GTAO capped at half resolution when enabled");
+    }
+    if (memory_pressure_samples_ >= 10 && memory_pressure_samples_ % 5 == 0 &&
+        memory_migration_ready_ && !upscale_ &&
+        (options_.render_scale_x > memory_floor_x_ + 0.001f ||
+         options_.render_scale_y > memory_floor_y_ + 0.001f || options_.shadow_scale > 1.001f))
+      pending_memory_scale_ = 0.75f;
+  } else {
+    memory_pressure_samples_ = 0;
+  }
+  Logf(LogLevel::kInfo,
+       "rexgpu-native: memory budget frame %llu: usage=%llu budget=%llu effective=%llu pressure=%u "
+       "control=%u targets=%llu target_bytes=%llu framebuffers=%zu retired=%zu evictions=%llu restores=%llu half_ao=%u simulated=%u tested_usage=%llu scale_steps=%u scale_x_milli=%u scale_y_milli=%u",
+       static_cast<unsigned long long>(frame_), static_cast<unsigned long long>(live.usage),
+       static_cast<unsigned long long>(live.budget), static_cast<unsigned long long>(effective.budget),
+       unsigned(pressure), unsigned(enabled), static_cast<unsigned long long>(stats_.edram_targets),
+       static_cast<unsigned long long>(stats_.edram_target_bytes), framebuffers_.size(), retired_resources_.size(),
+       static_cast<unsigned long long>(memory_evictions_), static_cast<unsigned long long>(memory_restores_),
+       unsigned(memory_half_ao_), unsigned(simulated), static_cast<unsigned long long>(tested.usage),
+       memory_scale_steps_, unsigned(std::lround(options_.render_scale_x * 1000)),
+       unsigned(std::lround(options_.render_scale_y * 1000)));
+}
+
 void GameRenderer::EndFrame() {
+  // These Beta 5 passes bypass GetFramebuffer. Their writes invalidate saved
+  // clears even if the player disables the effect before pressure next occurs.
+  if (scene_gi_ || scene_lighting_)
+    for (auto& [key, target] : targets_) if (target) target->clear_only = false;
   if (tessellation_timer_) tessellation_timer_->FrameEnd();
   PublishEffectTimes();
   if (TessellationBenchRequested() && frame_%300==0)
@@ -715,6 +832,7 @@ void GameRenderer::EndFrame() {
   frame_skips_ = 0;
   if (upscale_) UpscaleEndFrame();
   ++frame_;
+  current_cl_ = nullptr;
   index_ring_used_ = 0;
   for (DescriptorTable& t : tables_) {
     while (!t.retired.empty() && t.retired.front().first + 8 < frame_) {
@@ -723,6 +841,7 @@ void GameRenderer::EndFrame() {
     }
   }
   while (!retired_resources_.empty() && retired_resources_.front().first + 8 < frame_) retired_resources_.pop_front();
+  CheckMemoryBudget();
   stats_.edram_framebuffers = framebuffers_.size();
   if (frame_ % 300 == 0) {
     if (options_.debug & 32768) {

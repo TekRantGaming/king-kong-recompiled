@@ -41,6 +41,14 @@ class SceneLighting {
   ~SceneLighting();
   bool Initialize();
   const LightingConfig& config() const { return config_; }
+  void ForgetTargets() {
+    vol_framebuffers_.clear();
+    scene_color_ = {}; scene_depth_ = {}; shadow_quad_ = {};
+    tracker_ = {}; camera_ = {};
+    frame_ = shadow_quad_frame_ = fog_frame_ = shafts_frame_ = UINT64_MAX;
+    vol_pending_ = false;
+    ssr_.valid = false;
+  }
   void SetConfig(const LightingConfig& config) {
     config_ = config;
     if (!depth_pass_.pipeline) config_.water = WaterReflections::kOriginal;

@@ -523,6 +523,7 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
       host_->WaitFrame(descriptor_completion);
       cl->open();
     };
+    renderer->options().memory_budget = [this] { return host_->QueryMemoryBudget(); };
     renderer->options().render_scale_x = scale.x;
     renderer->options().render_scale_y = scale.y;
     renderer->options().shadow_scale = shadow_scale;

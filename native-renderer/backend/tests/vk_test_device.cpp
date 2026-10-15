@@ -288,6 +288,7 @@ bool VulkanTestDevice::Init(bool validation, bool driver_pipeline_cache, bool up
                   VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME) == upscaler_device_extensions.end())
       upscaler_device_extensions.emplace_back(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
   }
+  impl_->device_extensions = upscaler_device_extensions;
   for (const std::string& name : upscaler_device_extensions) device_extension_names.push_back(name.c_str());
   float priority = 1.0f;
   vk::DeviceQueueCreateInfo qci({}, impl_->queue_family, 1, &priority);
@@ -299,7 +300,6 @@ bool VulkanTestDevice::Init(bool validation, bool driver_pipeline_cache, bool up
 
   std::vector<const char*> instance_ext_ptrs, device_ext_ptrs;
   for (auto& s : impl_->instance_extensions) instance_ext_ptrs.push_back(s.c_str());
-  impl_->device_extensions = upscaler_device_extensions;
   for (auto& s : impl_->device_extensions) device_ext_ptrs.push_back(s.c_str());
   nvrhi::vulkan::DeviceDesc desc;
   desc.errorCB = &g_message_callback;

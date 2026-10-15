@@ -42,6 +42,7 @@
 #include "backend/scene_ao.h"
 #include "backend/scene_gi.h"
 #include "backend/scene_lighting.h"
+#include "backend/memory_budget.h"
 #include "backend/draw_sink.h"
 #include "backend/driver_pipeline_cache.h"
 #include "backend/frame_log.h"
@@ -70,6 +71,7 @@ inline bool TessellationBenchRequested() {
 }
 
 class GameRenderer {
+  friend struct MemoryMigrationTestAccess;
  public:
   struct Options {
     bool tessellation_supported = false;
@@ -162,6 +164,7 @@ class GameRenderer {
     // time, 128 no widening of a written range, 8 log the pages CPU writes
     // invalidate most (every 300 frames).
     uint32_t debug = 0;
+    std::function<MemoryBudget()> memory_budget;
   };
 
   struct Stats {
@@ -221,7 +224,8 @@ class GameRenderer {
   Options& options() { return options_; }
   // Any target or texture at a scale other than 1 (the pixel shaders must be render scale aware).
   bool scaled() const {
-    return bool(options_.effect_settings) || options_.render_scale_x != 1.0f || options_.render_scale_y != 1.0f ||
+    return bool(options_.effect_settings) || memory_scale_aware_ ||
+            options_.render_scale_x != 1.0f || options_.render_scale_y != 1.0f ||
            (options_.shadow_scale > 0.0f && options_.shadow_scale != 1.0f) ||
            (upscale_ && (upscale_->in_x != 1.0f || upscale_->in_y != 1.0f));
   }
@@ -360,6 +364,12 @@ class GameRenderer {
   struct HostTarget {
     nvrhi::TextureHandle texture;
     uint64_t allocation_bytes = 0;
+    // Only a whole colour clear or a whole depth AND stencil clear can be
+    // represented without GPU storage. Any attachment use invalidates this.
+    bool clear_only = false;
+    nvrhi::Color saved_color;
+    float saved_depth = 1.0f;
+    uint8_t saved_stencil = 0;
     nvrhi::Format format = nvrhi::Format::UNKNOWN;
     uint32_t width = 0, height = 0;  // in guest pixels (the pitch and the rows drawn so far)
     uint32_t host_width = 0, host_height = 0;  // the texture's: the guest's times the scale
@@ -393,6 +403,40 @@ class GameRenderer {
   HostTarget* GetTarget(bool depth, uint32_t edram_base, uint32_t pitch, uint32_t format,
                         uint32_t height, int generation = -1);
   HostTarget* FindTarget(bool depth, uint32_t edram_base, uint32_t pitch, uint32_t format, int generation = -1);
+  bool RestoreTarget(HostTarget& target);
+  void CheckMemoryBudget();
+  void TrimClearTargets();
+  bool InitializeMemoryMigration();
+  void ApplyMemoryScale(nvrhi::ICommandList* cl);
+  bool MigrateMemoryDepth(nvrhi::ICommandList* cl, nvrhi::ITexture* from, nvrhi::ITexture* to,
+                         nvrhi::IFramebuffer* framebuffer, nvrhi::IBindingSet* set);
+  nvrhi::IGraphicsPipeline* MemoryColorPipeline(nvrhi::Format format);
+  bool memory_scale_aware_ = false, memory_migration_ready_ = false;
+  float memory_floor_x_ = 1.0f, memory_floor_y_ = 1.0f;
+  float memory_shadow_limit_ = 0.0f;
+  float pending_memory_scale_ = 0.0f;
+  uint32_t memory_scale_steps_ = 0;
+  nvrhi::ShaderHandle memory_depth_ps_;
+  nvrhi::BindingLayoutHandle memory_depth_layout_;
+  std::array<nvrhi::GraphicsPipelineHandle, 9> memory_depth_pipelines_;
+  struct MemoryReplacement {
+    uint64_t key = 0;
+    nvrhi::TextureHandle source, texture;
+    nvrhi::FramebufferHandle framebuffer;
+    nvrhi::BindingSetHandle bindings;
+    Scale scale;
+    uint32_t width = 0, height = 0, old_width = 0, old_height = 0;
+    uint64_t bytes = 0;
+  };
+  std::vector<MemoryReplacement> memory_staged_;
+  std::array<float, 3> memory_staged_options_{};
+  size_t memory_staged_index_ = 0, memory_staged_target_count_ = 0;
+  uint64_t memory_staged_first_frame_ = 0;
+  std::chrono::steady_clock::time_point memory_sample_{};
+  std::chrono::steady_clock::time_point memory_start_{};
+  uint32_t memory_pressure_samples_ = 0;
+  bool memory_half_ao_ = false;
+  uint64_t memory_evictions_ = 0, memory_restores_ = 0;
   static nvrhi::Format ColorTargetFormat(uint32_t format);
   kknr::TextureOptions TextureOptions() const {
     kknr::TextureOptions o;
@@ -604,7 +648,9 @@ class GameRenderer {
                  uint32_t stencil);
   bool Blit(nvrhi::ICommandList* cl, nvrhi::ITexture* source, int32_t sx, int32_t sy, int32_t w,
             int32_t h, nvrhi::ITexture* dest, uint32_t dest_level, uint32_t dest_slice, int32_t dx,
-            int32_t dy, const uint32_t channels[4], uint32_t blit_flags = 0, uint32_t blit_arg = 0);
+            int32_t dy, const uint32_t channels[4], uint32_t blit_flags = 0, uint32_t blit_arg = 0,
+            int32_t dest_width = 0, int32_t dest_height = 0,
+            nvrhi::IFramebuffer* prepared_framebuffer = nullptr, nvrhi::IBindingSet* prepared_set = nullptr);
   static constexpr uint32_t kBlitGammaRamp = 1;   // r, g, b through the display gamma ramp
   static constexpr uint32_t kBlitFxaa = 16;       // FXAA (blit_arg: edge search steps)
   static constexpr uint32_t kBlitDepthBytes = 2;  // a depth value as the D24S8 word's bytes
@@ -641,6 +687,7 @@ class GameRenderer {
 
   std::unordered_map<uint64_t, std::unique_ptr<HostTarget>> targets_;
   std::unordered_map<uint64_t, nvrhi::FramebufferHandle> framebuffers_;
+  std::unordered_map<uint64_t, uint64_t> framebuffer_used_;
   std::unordered_map<uint64_t, nvrhi::GraphicsPipelineHandle> pipelines_;
 
   // Ambient occlusion (null until Initialize, and when its shaders are missing).

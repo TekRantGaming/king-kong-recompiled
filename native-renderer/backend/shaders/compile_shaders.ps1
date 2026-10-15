@@ -25,6 +25,10 @@ function Compile-Entries([string]$src, [string[]]$specs, [bool]$shift = $true) {
     }
 }
 # Temporal upscalers (upscale.hlsl, docs/upscalers.md): one blob per entry point. The object motion
+if ($Only -eq "" -or $Only -eq "memory") {
+    Compile-Entries (Join-Path $here "memory_depth.hlsl") @("memory_depth_ps:ps:ps_main", "memory_probe_ps:ps:ps_probe")
+    if ($Only -eq "memory") { exit 0 }
+}
 # pixel shader runs with the translated vertex shaders' motion variants: their binding mapping.
 if ($Only -eq "" -or $Only -eq "upscale") {
     $up = Join-Path $here "upscale.hlsl"

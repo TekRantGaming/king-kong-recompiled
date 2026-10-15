@@ -112,6 +112,9 @@ class Gtao {
     uint64_t history_frames = 0;  // frames eligible for local depth-validated history
   };
   const Stats& stats() const { return stats_; }
+  // These views can retain guest colour/depth targets across a scale change.
+  // Submitted command lists keep their own binding/framebuffer references.
+  void ForgetTargetViews() { sets_.clear(); framebuffers_.clear(); }
 
  private:
   struct Constants;

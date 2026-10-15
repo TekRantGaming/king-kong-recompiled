@@ -52,14 +52,18 @@ kknr::TextureFetch FetchFromObject(const uint8_t* object) {
 bool GameRenderer::Blit(nvrhi::ICommandList* cl, nvrhi::ITexture* source, int32_t sx, int32_t sy, int32_t w,
                         int32_t h, nvrhi::ITexture* dest, uint32_t dest_level, uint32_t dest_slice,
                         int32_t dx, int32_t dy, const uint32_t channels[4], uint32_t blit_flags,
-                        uint32_t blit_arg) {
+                        uint32_t blit_arg, int32_t dest_width, int32_t dest_height,
+                        nvrhi::IFramebuffer* prepared_framebuffer, nvrhi::IBindingSet* prepared_set) {
   if (w <= 0 || h <= 0) return false;
   EnsureFallbackResources(cl);
   nvrhi::FramebufferDesc fd;
   fd.addColorAttachment(nvrhi::FramebufferAttachment().setTexture(dest).setMipLevel(dest_level).setArraySlice(dest_slice));
   uint64_t fb_key = Mix64(Mix64(0xB117, reinterpret_cast<uintptr_t>(dest)), (uint64_t(dest_level) << 32) | dest_slice);
-  nvrhi::IFramebuffer* fb = nullptr;
-  if (auto it = framebuffers_.find(fb_key); it != framebuffers_.end()) {
+  if (!prepared_framebuffer) framebuffer_used_[fb_key] = frame_;
+  nvrhi::IFramebuffer* fb = prepared_framebuffer;
+  if (fb) {
+    // Budget migration prepared its views on an earlier frame.
+  } else if (auto it = framebuffers_.find(fb_key); it != framebuffers_.end()) {
     fb = it->second;
   } else {
     nvrhi::FramebufferHandle h2 = device_->createFramebuffer(fd);
@@ -80,8 +84,10 @@ bool GameRenderer::Blit(nvrhi::ICommandList* cl, nvrhi::ITexture* source, int32_
   pd.renderState.rasterState.scissorEnable = true;
   nvrhi::IGraphicsPipeline* pipeline = GetPipeline(pd, fb, pipe_key);
   if (!pipeline) return false;
-  nvrhi::IBindingSet* set = nullptr;
-  if (auto it = blit_sets_.find(source); it != blit_sets_.end()) {
+  nvrhi::IBindingSet* set = prepared_set;
+  if (set) {
+    // The source version is checked again before committing the migration.
+  } else if (auto it = blit_sets_.find(source); it != blit_sets_.end()) {
     set = it->second;
   } else {
     nvrhi::BindingSetDesc bs;
@@ -98,8 +104,9 @@ bool GameRenderer::Blit(nvrhi::ICommandList* cl, nvrhi::ITexture* source, int32_
   gs.pipeline = pipeline;
   gs.framebuffer = fb;
   gs.bindings = {set};
-  gs.viewport.addViewport(nvrhi::Viewport(float(dx), float(dx + w), float(dy), float(dy + h), 0.0f, 1.0f));
-  gs.viewport.addScissorRect(nvrhi::Rect(dx, dx + w, dy, dy + h));
+  const int32_t dw = dest_width > 0 ? dest_width : w, dh = dest_height > 0 ? dest_height : h;
+  gs.viewport.addViewport(nvrhi::Viewport(float(dx), float(dx + dw), float(dy), float(dy + dh), 0.0f, 1.0f));
+  gs.viewport.addScissorRect(nvrhi::Rect(dx, dx + dw, dy, dy + dh));
   cl->setGraphicsState(gs);
   BlitConstants c = {{sx, sy, w, h}, {channels[0], channels[1], channels[2], channels[3]}, {blit_flags, blit_arg, 0, 0}};
   cl->setPushConstants(&c, sizeof(c));
@@ -138,6 +145,16 @@ void GameRenderer::ClearRect(nvrhi::ICommandList* cl, HostTarget* color, HostTar
   const bool whole = rect.minX == 0 && rect.minY == 0 && rect.maxX == int(size_from->width) &&
                      rect.maxY == int(size_from->height);
   if (whole) {
+    if (clear_color) {
+      color->clear_only = true;
+      color->saved_color = nvrhi::Color(rgba[0], rgba[1], rgba[2], rgba[3]);
+    }
+    if (clear_depth || clear_stencil) {
+      // A one-aspect clear cannot describe the other aspect's contents.
+      depth->clear_only = clear_depth && clear_stencil;
+      depth->saved_depth = std::clamp(z, 0.0f, 1.0f);
+      depth->saved_stencil = uint8_t(stencil);
+    }
     if (clear_color)
       cl->clearTextureFloat(color->texture, nvrhi::AllSubresources, nvrhi::Color(rgba[0], rgba[1], rgba[2], rgba[3]));
     if (clear_depth || clear_stencil)
@@ -557,6 +574,8 @@ bool GameRenderer::Present(nvrhi::ICommandList* cl, uint32_t device, nvrhi::ITex
   // The frame image is the scaled size: the whole back buffer 1:1 in host pixels.
   const int32_t fw = int32_t(std::min(uint32_t(ScaleCoord(int32_t(s.width), source->scale_x)), td.width));
   const int32_t fh = int32_t(std::min(uint32_t(ScaleCoord(int32_t(s.height), source->scale_y)), td.height));
+  const int32_t pw = memory_scale_steps_ ? int32_t(td.width) : fw;
+  const int32_t ph = memory_scale_steps_ ? int32_t(td.height) : fh;
   if (options_.fxaa) {
     // FXAA (the port's swap_post_effect): the back buffer through the ramp into a scratch image,
     // then anti-aliased into the frame image.
@@ -573,11 +592,13 @@ bool GameRenderer::Present(nvrhi::ICommandList* cl, uint32_t device, nvrhi::ITex
       fxaa_source_ = device_->createTexture(fd);
     }
     if (fxaa_source_ && Blit(cl, source->texture, 0, 0, fw, fh, fxaa_source_, 0, 0, 0, 0, channels,
-                             use_ramp ? kBlitGammaRamp : 0)) {
-      return Blit(cl, fxaa_source_, 0, 0, fw, fh, target, 0, 0, 0, 0, channels, kBlitFxaa, options_.fxaa == 2 ? 24u : 12u);
+                             use_ramp ? kBlitGammaRamp : 0, 0, pw, ph)) {
+      return Blit(cl, fxaa_source_, 0, 0, pw, ph, target, 0, 0, 0, 0, channels,
+                  kBlitFxaa, options_.fxaa == 2 ? 24u : 12u);
     }
   }
-  return Blit(cl, source->texture, 0, 0, fw, fh, target, 0, 0, 0, 0, channels, use_ramp ? kBlitGammaRamp : 0);
+  return Blit(cl, source->texture, 0, 0, fw, fh, target, 0, 0, 0, 0, channels,
+              use_ramp ? kBlitGammaRamp : 0, 0, pw, ph);
 }
 
 }  // namespace nr
