@@ -1,4 +1,5 @@
 #include "random_program.h"
+#include <bit>
 
 #include <random>
 #include <string>
