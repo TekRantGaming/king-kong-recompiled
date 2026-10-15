@@ -1,6 +1,7 @@
 #include "plugin/shader_pack_service.h"
 #include "plugin/plugin_settings.h"
 #include "plugin/builtin_shaders.h"
+#include "plugin/setup_prewarm_availability.h"
 
 #include <algorithm>
 #include <atomic>
@@ -281,6 +282,7 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
               nr::ToUtf8(kkshaders::packPath(job->options)), kkshaders::packBackendName(job->options.backend),
               job->options.scaled ? ", render scale variants" : "", job->options.threads);
   job->thread = std::thread([job] {
+    const auto selected_backend = job->options.backend;
     kkshaders::PackBuildResult r;
     bool current = true;
     bool pipelines_ok = true;
@@ -336,6 +338,12 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
       marker += ".pipelines-ready";
       const auto& plan = job->prewarm[backend == kkshaders::PackBackend::Spirv ? 0 : 1];
       const auto expected = nr::PrewarmStamp(r.stamp, plan, job->player_records, drivers);
+      const nr::SetupPrewarmAvailability availability(r.pack, expected, backend == selected_backend);
+      if (availability.Skip()) {
+        REXLOG_INFO("rexgpu-native: setup {} pipeline device previously unavailable; retry when selected",
+                    kkshaders::packBackendName(backend));
+        continue;
+      }
       std::ifstream prepared(marker, std::ios::binary);
       const std::string previous((std::istreambuf_iterator<char>(prepared)), {});
       prepared.close();
@@ -376,7 +384,7 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
         }
       }
 #endif
-      if (!r.upToDate || previous != expected || !driver_ready || driver_changed) {
+      if (!r.upToDate || previous != expected || !driver_ready || driver_changed || availability.Retry()) {
         const auto start = std::chrono::steady_clock::now();
 #if NR_HAS_VULKAN
         if (backend == kkshaders::PackBackend::Spirv && !host) {
@@ -438,6 +446,7 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
           if (completed && !job->progress.cancel) {
             std::ofstream ready(marker, std::ios::binary | std::ios::trunc);
             ready << expected;
+            availability.Prepared();
           } else if (!job->progress.cancel) {
             pipelines_ok = false;
             warnings += std::string(kkshaders::packBackendName(backend)) + ": pipeline preparation incomplete; ";
@@ -455,7 +464,7 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
             attempt << expected;
           }
         } else {
-          pipelines_ok = false;
+          pipelines_ok = availability.DeviceUnavailable() && pipelines_ok;
           warnings += std::string(kkshaders::packBackendName(backend)) + ": pipeline device unavailable; ";
           REXLOG_WARN("rexgpu-native: setup {} pipeline prewarm unavailable", kkshaders::packBackendName(backend));
         }

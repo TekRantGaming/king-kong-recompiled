@@ -6,6 +6,10 @@
 #   nr_trace_replay  replays a KK_DEV_D3D_TRACE log (a tool for real traces)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
+add_executable(nr_setup_prewarm_availability_tests setup_prewarm_availability_tests.cpp)
+target_include_directories(nr_setup_prewarm_availability_tests PRIVATE "${NR_ROOT}")
+target_compile_features(nr_setup_prewarm_availability_tests PRIVATE cxx_std_23)
+add_test(NAME nr_setup_prewarm_availability_tests COMMAND nr_setup_prewarm_availability_tests)
 add_executable(nr_memory_budget_tests memory_budget_tests.cpp)
 target_include_directories(nr_memory_budget_tests PRIVATE "${NR_ROOT}")
 add_test(NAME nr_memory_budget_tests COMMAND nr_memory_budget_tests)
