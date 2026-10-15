@@ -77,11 +77,20 @@ upload would also defer its dependent draws. Those parts remain open.
   WSL Ubuntu 24.04 / GCC 13.3 resource CTest passes 2/2. No Linux timing claim.
 
 The combined native renderer/plugin builds successfully, including the added
-diagnostic counter fields. Final combined CTest remains pending. One of the
-allowed six Windows games has run: released Beta 5, Vulkan, chapter 8. It confirms
+diagnostic counter fields. Final Windows native CTest passes **21/21** (86.74 s),
+including the new large-texture first-use/invalidation and draw-constant pixel
+regressions. Linux native CTest passes **20/20** (71.38 s), using software Vulkan
+with Khronos validation and the game renderer enabled. The Linux plugin fixture
+needed its missing `native_debug` and `native_diagnostics` definitions:
+`e1dc6c8` adds only those test definitions; production flags are unchanged. The
+full plugin-enabled Linux suite passes, with no excluded test. Native temporal
+upscaler SDKs remain disabled in that existing Linux SDK setup.
+
+Two of the allowed six Windows games have run: released Beta 5, Vulkan and
+DirectX 12, chapter 8. The Vulkan baseline confirms
 109.4 ms texture work and 38.6 ms buffer work in individual startup frames; first
 10 seconds after level load have two frames above 50 ms, worst 206.3 ms. No
 texture failures or skipped draws. The comparison uses private roots, windowed
 1280x720, uncapped, render scale 1, GI Low, GTAO full/three samples, upscaler off.
-Other tasks' game locks are respected between runs; remaining comparisons wait
+Other tasks' game locks and priority are respected between runs; candidate comparisons wait
 for the shared slot. These are local measurements, not release claims.
