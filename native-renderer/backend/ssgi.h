@@ -35,7 +35,7 @@ struct SsgiSettings {
   bool temporal = false;
   bool history = false;
   uint32_t frame = 0;            // the noise changes with it (0 to 63)
-  float new_weight = 0.15f;      // the new light's weight in the history
+  float new_weight = 0.20f;      // reduce lag with the stronger source; history still filters 64 noise patterns
   float reproject[16] = {};      // this frame's NDC to last frame's clip space (rows)
   float screen_xy[4] = {};       // guest pixel = ndc * scale + offset: x_scale, x_offset, y_scale, y_offset
   float screen_z[4] = {};        // z_scale, z_offset, host pixels per guest pixel x and y
@@ -50,8 +50,9 @@ class Ssgi {
   bool ready() const { return ready_; }
 
   // The bounce light over the picture Gtao::Prepare last prepared, with `color` (the scene colour
-  // target that picture lies in) as the light the surfaces send. False when it cannot be done.
-  bool Compute(nvrhi::ICommandList* cl, const Gtao& gtao, nvrhi::ITexture* color, const SsgiSettings& s);
+  // target that picture lies in) to estimate sunlight above ambient. Full scene `depth`
+  // excludes sky before downsampling the source. False when it cannot be done.
+  bool Compute(nvrhi::ICommandList* cl, const Gtao& gtao, nvrhi::ITexture* color, nvrhi::ITexture* depth, const SsgiSettings& s);
   // Into `color` over the picture: the light added (and the hidden ambient taken away), from a
   // copy of it. `depth`: the scene's depth target (the sky is left alone). Alpha is not written.
   bool Composite(nvrhi::ICommandList* cl, const Gtao& gtao, nvrhi::ITexture* color, nvrhi::ITexture* depth,

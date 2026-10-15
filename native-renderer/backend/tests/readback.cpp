@@ -1,5 +1,6 @@
 #include "backend/tests/readback.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -40,16 +41,21 @@ Pixels ReadBackTexture(nvrhi::IDevice* device, nvrhi::ITexture* texture) {
     else f = std::ldexp(float(m | 1024), int(e) - 25);
     return s ? -f : f;
   };
-  const uint32_t bytes = td.format == nvrhi::Format::R8_UNORM ? 1 : 4;
+  const uint32_t bytes = td.format == nvrhi::Format::R8_UNORM ? 1 :
+                         td.format == nvrhi::Format::RGBA16_FLOAT ? 8 : 4;
   for (uint32_t y = 0; y < td.height; ++y) {
     for (uint32_t x = 0; x < td.width; ++x) {
       uint32_t v = 0;
-      std::memcpy(&v, data + y * pitch + x * bytes, bytes);
+      std::memcpy(&v, data + y * pitch + x * bytes, std::min(bytes, 4u));
       float* p = &out.rgba[(size_t(y) * td.width + x) * 4];
       if (td.format == nvrhi::Format::R8_UNORM) {
         p[0] = float(v & 255) / 255.0f;
         p[1] = p[2] = 0.0f;
         p[3] = 1.0f;
+      } else if (td.format == nvrhi::Format::RGBA16_FLOAT) {
+        uint16_t channels[4];
+        std::memcpy(channels, data + y * pitch + x * bytes, sizeof(channels));
+        for (int c = 0; c < 4; ++c) p[c] = half(channels[c]);
       } else if (td.format == nvrhi::Format::RG16_FLOAT) {
         p[0] = half(v & 0xFFFF);
         p[1] = half(v >> 16);

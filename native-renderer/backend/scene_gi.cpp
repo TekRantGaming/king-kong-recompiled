@@ -173,7 +173,7 @@ bool SceneGi::Apply(nvrhi::ICommandList* cl, bool ao_on, bool depth_before_draw)
   for (int i = 0; i < 3; ++i) ss.ambient[i] = ambient_used_[i];
 
   if (timer_) timer_->Begin(cl);
-  const bool ok = gtao_->Prepare(cl, in, gs) && ssgi_->Compute(cl, *gtao_, scene_color_.texture, ss) &&
+  const bool ok = gtao_->Prepare(cl, in, gs) && ssgi_->Compute(cl, *gtao_, scene_color_.texture, depth, ss) &&
                   ssgi_->Composite(cl, *gtao_, scene_color_.texture, depth, ss);
   if (timer_) timer_->End(cl);
   if (!ok) return false;

@@ -257,7 +257,7 @@ int main(int argc, char** argv) {
         cl->endTimerQuery(tq[0]);
         cl->beginTimerQuery(tq[1]);
         ss.frame = uint32_t(f);
-        ssgi.Compute(cl, gtao, color, ss);
+        ssgi.Compute(cl, gtao, color, depth, ss);
         cl->endTimerQuery(tq[1]);
         cl->beginTimerQuery(tq[2]);
         ssgi.Composite(cl, gtao, color, depth, ss);
