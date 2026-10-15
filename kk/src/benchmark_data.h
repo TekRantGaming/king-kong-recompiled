@@ -11,22 +11,7 @@
 #include <vector>
 
 namespace kk::benchmark {
-constexpr int kChapter = 8;
-constexpr double kWarmupSeconds = 10;
-constexpr double kRunSeconds = 75;
 constexpr size_t kMaxSamples = 1000000;
-constexpr const char* kRoute = "chapter8-camera-v1";
-
-// The camera replay from tests/task016-run.ps1, repeated in three 25 s views.
-// The player stays at the chapter start, avoiding navigation/AI-dependent routes.
-// Timings use the game's unscaled elapsed time; no fixed-rate simulation or AI changes.
-inline int CameraX(double seconds) {
-  const double t = std::fmod(std::max(0.0, seconds), 25.0);
-  if (t >= 0 && t < 3) return 32767;
-  if (t >= 6 && t < 12) return -32767;
-  if (t >= 14 && t < 17) return 32767;
-  return 0;
-}
 
 struct Stats {
   size_t count = 0;
