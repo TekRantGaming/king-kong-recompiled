@@ -462,7 +462,7 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
     if (t.rfind("focus:", 0) == 0) {
       const auto rows = settings_->Items(page_);
       for (size_t i = 0; i < rows.size(); ++i) if (rows[i].label == t.substr(6)) {
-        auto& state = lists_[int(page_)];
+        auto& state = lists_[int(page_) * 4 + settings_->SubPage()];
         state.focus = int(i);
         state.focus_label = rows[i].label;
         REXLOG_INFO("KK dev: pause focused {} value {}", rows[i].label, rows[i].value_text);
