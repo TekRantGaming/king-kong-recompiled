@@ -27,6 +27,7 @@ REXCVAR_DECLARE(std::string, native_dxc);
 REXCVAR_DECLARE(bool, native_element_endian);
 REXCVAR_DECLARE(bool, native_flip_front_face);
 REXCVAR_DECLARE(bool, native_texture_tail_mips);
+REXCVAR_DECLARE(bool, native_effect_buffers);
 REXCVAR_DECLARE(int32_t, native_dump_frame);
 REXCVAR_DECLARE(std::string, native_show_texture);
 REXCVAR_DECLARE(int32_t, native_debug);
@@ -253,6 +254,7 @@ GameSettings ReadGameSettings(bool vulkan) {
   game.element_endian = REXCVAR_GET(native_element_endian);
   game.flip_front_face = REXCVAR_GET(native_flip_front_face);
   game.texture_tail_mips = REXCVAR_GET(native_texture_tail_mips);
+  game.effect_buffers = REXCVAR_GET(native_effect_buffers);
   game.dump_frame = REXCVAR_GET(native_dump_frame);
   game.show_texture = uint32_t(std::strtoul(REXCVAR_GET(native_show_texture).c_str(), nullptr, 16));
   game.debug = uint32_t(REXCVAR_GET(native_debug));
@@ -339,6 +341,7 @@ GameSettings ReadGameSettings(bool vulkan) {
     s.upscale = upscale;
     const std::string aa = get("swap_post_effect");
     s.fxaa = aa == "fxaa" ? 1u : (aa == "fxaa_extreme" ? 2u : 0u);
+    s.effect_buffers = get("native_effect_buffers") != "false";
     const std::string aniso = get("anisotropic_override");
     s.anisotropic_override = aniso.empty() ? -1 : std::atoi(aniso.c_str());
     return s;

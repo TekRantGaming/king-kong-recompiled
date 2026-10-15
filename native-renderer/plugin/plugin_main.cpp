@@ -437,6 +437,9 @@ REXCVAR_DEFINE_BOOL(native_texture_tail_mips, false, "Native renderer",
                     "mip address 0): read the smaller levels from that tail. Off: level 0 only, as the SDK")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_BOOL(native_effect_buffers, true, "Native renderer",
+                    "Scale the game's small bloom, blur and glow buffers with output resolution; false keeps their original size");
+
 REXCVAR_DEFINE_INT32(native_debug, 0, "Native renderer",
                      "Debugging aids (bits): 1 the game's clears are green, 2 the frame image is "
                        "magenta under the back buffer, 32768 residency/upload/frame GPU counters, "

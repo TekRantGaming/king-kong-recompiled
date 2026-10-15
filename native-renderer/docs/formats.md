@@ -266,6 +266,15 @@ constants are checked against it) drives the swaps:
 
 ## Render targets
 
+`native_effect_buffers` keeps the census's 320x180 and 640x360/480 effect targets at a size
+scaled with output resolution (default on). It uses the smaller output axis scale on both axes,
+preserving each target's aspect, and includes the corresponding depth attachments. These targets
+use output scale even while a temporal upscaler is drawing the scene at input scale. The existing
+viewport/scissor, resolve rectangle and `texInvScale` shader paths carry their new sizes through
+sampling, including VPOS and unnormalised texture fetches. Known shadow-map pitches are excluded.
+Graphics and F8 offer Original/output resolution; Original look selects Original. Changes apply
+at a frame boundary and recreate a target only when its size changes.
+
 `kknr/render_targets.h` (tests: `test_render_targets.cpp`):
 
 | 360 surface format | Host render target |

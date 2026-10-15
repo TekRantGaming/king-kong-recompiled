@@ -1362,6 +1362,11 @@ class SettingsPages {
 
     items.push_back(Section("Image"));
     {
+      Item it = CvarChoice("Effect resolution", "Resolution of bloom, blur and glow buffers.",
+                           "native_effect_buffers", {{"Original", "false"}, {"Output", "true"}});
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
+    {
       Item it = CvarChoice("Anti-aliasing", "Smooths jagged edges after the frame is drawn.", "swap_post_effect",
                            {{"Off", "none"}, {"FXAA", "fxaa"}});
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));

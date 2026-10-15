@@ -109,6 +109,7 @@ class GameRenderer {
     // The port's swap_post_effect, which the Xenos plugin applies in its swap: 0 none, 1 "fxaa",
     // 2 "fxaa_extreme" (more edge search steps). Applied to the frame image at Present.
     uint32_t fxaa = 0;
+    bool effect_buffers = true;  // identified small post targets follow output; false: guest sizes
     // Create the game's pipelines on worker threads. pipeline_wait controls whether
     // a draw waits for its pending pipeline or may be skipped after the frame budget.
     bool async_pipelines = true;

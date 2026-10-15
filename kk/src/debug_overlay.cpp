@@ -142,6 +142,9 @@ const std::vector<Setting>& Settings() {
       {"Upscaling", "Render quality", "kk_render_quality", Kind::kRestart, {}, 0, 1, "", false},
       {"Upscaling", "Spatial upscaler", "present_effect", Kind::kRestart, {}, 0, 1, "", false},
       // Image.
+      {"Image", "Effect resolution", "native_effect_buffers", Kind::kChoice,
+       {{"Original", "false"}, {"Output", "true"}}, 0, 1, "", true, Show::kAlways,
+       "Resolution of bloom, blur and glow buffers."},
       {"Image", "Anti-aliasing (FXAA)", "swap_post_effect", Kind::kChoice, {{"Off", "none"}, {"FXAA", "fxaa"}}, 0, 1,
        "", true, Show::kAlways, "Off while a temporal upscaler runs (it anti-aliases itself)."},
       {"Image", "Texture filtering", "anisotropic_override", Kind::kChoice,
