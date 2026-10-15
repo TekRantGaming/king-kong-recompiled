@@ -43,6 +43,19 @@ function Acquire-Game {
     Start-Sleep -Seconds $pollSeconds
   }
 }
+function Find-OwnGameChildren($parent, [string]$run, $children) {
+  # Beta 5's startup monitor owns the process returned by Start-Process. Its
+  # child owns the window; retain both handles and never follow another copy.
+  foreach ($child in @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($parent.Id) AND Name='king_kong.exe'")) {
+    if ($child.ExecutablePath -ne "$run\king_kong.exe" -or $children.Id -contains [int]$child.ProcessId) { continue }
+    try {
+      $process=[Diagnostics.Process]::GetProcessById([int]$child.ProcessId)
+      $null=$process.Handle
+      $children.Add($process)
+      Write-Output "CHILD $run PID $($process.Id) parent $($parent.Id)"
+    } catch [ArgumentException] { } # The child already exited.
+  }
+}
 foreach ($budget in $Budgets) {
   if ($budget -notin 4,6,8) { throw 'Budget must be 4, 6 or 8 GiB' }
   foreach ($case in $Cases) { foreach ($control in $Controls) {
@@ -104,17 +117,28 @@ foreach ($budget in $Budgets) {
       pack_root=$PackRoot} | ConvertTo-Json -Depth 4 | Set-Content "$run\test.json"
     Acquire-Game
     $game=$null
+    $children=[Collections.Generic.List[Diagnostics.Process]]::new()
     try {
       $game=Start-Process "$run\king_kong.exe" -ArgumentList $args -WorkingDirectory $run -WindowStyle Hidden -PassThru
+      $null=$game.Handle
       Write-Output "RUN $run PID $($game.Id)"
       $clock=[Diagnostics.Stopwatch]::StartNew()
       while (!$game.HasExited -and $clock.Elapsed.TotalSeconds -lt $limit) {
-        if (Test-Path "$run\shot_1200.bmp") { break }
+        Find-OwnGameChildren $game $run $children
+        if ((Test-Path "$run\shot_1200.bmp") -or (Test-Path "$run\shot_1200.png")) { break }
         Start-Sleep -Seconds 2
       }
     } finally {
+      if ($game) { Find-OwnGameChildren $game $run $children }
+      foreach ($child in $children) {
+        if (!$child.HasExited) {
+          $null=$child.CloseMainWindow()
+          if (!$child.WaitForExit(10000)) { Stop-Process -Id $child.Id; $child.WaitForExit() }
+        }
+        Write-Output "CHILD DONE $run PID $($child.Id) exit=$($child.ExitCode)"
+      }
       if ($game -and !$game.HasExited) {
-        $null=$game.CloseMainWindow()
+        if (!$children.Count) { $null=$game.CloseMainWindow() }
         if (!$game.WaitForExit(10000)) { Stop-Process -Id $game.Id; $game.WaitForExit() }
       }
       # Do not overwrite a user pause request written during this run.
@@ -122,6 +146,8 @@ foreach ($budget in $Budgets) {
     }
     Write-Output "DONE $run exit=$($game.ExitCode) seconds=$($clock.Elapsed.TotalSeconds)"
     if ($game.ExitCode -ne 0) { throw "Game failed with exit $($game.ExitCode): $run" }
-    if (!(Test-Path "$run\shot_1200.bmp")) { throw "Two-minute capture missing: $run" }
+    if (!(Test-Path "$run\shot_1200.bmp") -and !(Test-Path "$run\shot_1200.png")) {
+      throw "Two-minute capture missing: $run"
+    }
   } }
 }
