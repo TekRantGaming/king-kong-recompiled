@@ -128,27 +128,68 @@ graphics defaults, effect quality or GPU shader changes were made.
 
 # Task 097: chapter-start transfers and render-queue room
 
-Starting at `176c9ef` on `opt-beta6`. Read DECISIONS.md, GAME-RULES.md,
-reports 091/a/b/c and the preceding status before editing. Nothing pushed,
-merged, released or packaged. Windows renderer-only work; no game logic,
-AI cadence, shader, picture quality, graphics default or presentation bound changes.
+Branch `opt-beta6`, starting at `176c9ef`. Implementation `3338252`.
+Read DECISIONS.md, GAME-RULES.md, reports 091/a/b/c and this status before
+editing. Nothing pushed, merged, released, packaged or deployed. No game logic,
+AI cadence, frame cap, shader, quality, graphics default or presentation bound
+changed. No Linux work or shared SDK/link change.
 
-The candidate records large first-use textures and vertex/index buffers into
-an early graphics-queue transfer list, submitted after the draw is recorded and
-before its frame list can execute. New-resource copies can start while the
-remaining frame is recorded. Updated resources stay inline to preserve earlier
-draws in the same list. The early path has a 32 MiB / 32 batch frame budget;
-required over-budget and small uploads remain inline, never skipped/deferred.
-CPU conversion and staging copies still run on the render thread. This is a
-bounded early GPU transfer experiment, not a complete asynchronous CPU scheduler.
+Large first-use textures and vertex/index buffers can use a reusable early
+graphics-queue transfer list on both APIs. Each draw's resource bindings form
+a batch; it is submitted before its graphics frame list. Queue ordering and
+explicit texture state tracking guarantee first-use contents. The early path
+has a 32 MiB logical-payload / 32 batch frame budget. Small, over-budget,
+dynamic and in-place updates remain inline and mandatory, preserving earlier
+reads in the same frame. No placeholder, skipped draw or delayed dependent draw.
+CPU conversion, resource creation, staging copies and cache/watch work remain
+on the render thread: the broader asynchronous CPU upload goal is partial.
 
-Queue instrumentation separates the existing 8,000-command bound from the
-one-Present bound and measures retained queued command/snapshot bytes. Neither
-bound is enlarged. Tests cover both blocked conditions, first-use transfer
-contents and same-frame updates on Vulkan/D3D12, budget exhaustion and reopening.
-Windows build and all 22 CTest entries pass (69.75 s). Five alternating
-synthetic upload pairs complete in 1.443 -> 1.055 ms on Vulkan and
-1.647 -> 0.983 ms on DirectX 12; CPU recording increases 0.092 / 0.200 ms.
-The queue diagnostic fixture is 527 -> 537 ns/call with overlapping ranges;
-no queue throughput gain is claimed. Chapter comparisons are in progress.
-Task 097 game launches so far: two (maximum six).
+Windows Release / Clang 19.1.5 / SDK 038 builds. **All 22 Windows CTest entries
+pass (69.75 s)**, including both-API upload contents/order/budget/reuse checks,
+real first-draw vertex/index pixels and same-frame invalidation, the large tiled
+texture's first-use/reupload pixels, and queue-bound/fence/wakeup coverage.
+No Khronos validation layer is installed; NVRHI validation is used.
+
+Five alternating synthetic 16 MiB upload pairs complete in 1.443 -> 1.055 ms
+on Vulkan and 1.647 -> 0.983 ms on DirectX 12. CPU recording/submission increases
+0.092 / 0.200 ms respectively. This is a GPU transfer-overlap tradeoff, not a
+CPU upload-time or FPS gain. Five paired queue fixtures measure 527 -> 537
+ns/call with overlapping ranges; no queue-throughput gain is claimed.
+The existing graphics-list GPU timer excludes the earlier transfer lists;
+the synthetic completion interval above includes them.
+
+Exactly **six** authorized games, all exit 0, chapter 8, same private Beta 5
+executable/runtime/cache seed as 091; candidate replaces only the native DLL.
+Windowed 1280x720, both SDL activation hints zero, kkbg2 running, uncapped,
+render scale 1, GI Low, full GTAO/three samples, upscaler off. No user data,
+user game or screenshot touched. The shared priority reservation was moved
+aside after the runs; no task-owned game remains. No further task-097 launch.
+
+| Run | First-10s frames >50 ms | Worst startup ms | Peak room ms | Steady FPS |
+|---|---:|---:|---:|---:|
+| vk-before-1 | 4 | 214.0 | 134.1 | 175.07 |
+| vk-after-1 | 2 | 181.9 | 97.9 | 203.64 |
+| vk-after-2 | 2 | 163.4 | 83.0 | 201.90 (loaded) |
+| vk-before-2 | 2 | 177.6 | 98.8 | 205.50 |
+| dx-before | 3 | 314.8 | 222.3 | 110.55 (loaded) |
+| dx-after | 2 | 277.8 | 197.7 | 110.58 (loaded) |
+
+The second Vulkan candidate's steady segment overlaps compilation; both DX12
+steady windows also contain sampled background activity, with one sample in
+the DX12 candidate's startup window. The first pair predates activity sampling.
+These are raw local intervals, not a controlled FPS gain. Comparison to Beta 5
+includes task 091's improvements too, so it cannot isolate task 097's effect.
+Every measured window has zero skipped draws/startup pipeline-wait time and
+all summaries have zero texture failures. Full results: codex/REPORT-097.md.
+
+Every candidate reports zero command-capacity wait: all room waits are at the
+one-Present bound. Peak retained queued command storage is 5.0-5.8 million bytes,
+not the 8,000-call capacity. Changing command count to bytes cannot remove this
+Present wait; neither queue/presentation bound is enlarged. Early transfers total
+64,721,525 bytes in 94 batches in each candidate. No overall FPS gain is established.
+
+Remaining: synchronous CPU conversion/creation/staging/cache work and required
+in-place uploads. DX12 buffer work still reaches 101.3 ms and Present room waits
+197.7 ms. There is no ahead-of-use resource scheduler, CPU staging worker or
+hard budget on all mandatory uploads. The early GPU-transfer benefit does not
+establish that these remaining chapter-start CPU stalls are fixed.
