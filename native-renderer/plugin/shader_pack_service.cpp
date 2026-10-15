@@ -413,6 +413,7 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
             }
             nr::PipelinePrewarm prewarm(host->device());
             settings.tessellation_supported = host->tessellation_supported();
+            settings.table_capacities = host->table_capacities();
             if (prewarm.Start(settings)) {
               job->progress.phase = kkshaders::PackBuildProgress::kCompiling;
               while (!job->progress.cancel) {
