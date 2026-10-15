@@ -304,7 +304,9 @@ void GameRenderer::UpdateLighting(const LightingConfig& want, float shadow_scale
     lighting_.color_slot = lighting_.depth_slot = 0;
     lighting_.color_slot_texture = lighting_.depth_slot_texture = nullptr;
   };
-  if (!want.any()) {
+  // Explicit profiling also measures the Original baseline. Ordinary Off
+  // still parks everything, including the temporary F8 testing resources.
+  if (!want.any() && !lighting_initial_.gpu_time) {
     lighting_build_failed_ = false;
     if (scene_lighting_) {
       drop_slots();

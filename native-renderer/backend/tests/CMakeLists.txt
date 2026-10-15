@@ -270,6 +270,22 @@ if(NR_HAS_VULKAN AND NR_GAME_RENDERER)
             DEPENDS lighting_trace.hlsl "${NR_ROOT}/shaders/hlsl/kk_lighting.hlsli")
         list(APPEND lighting_test_blobs "${blob}")
     endforeach()
+    foreach(spec "vs:vs:0" "pcf:ps:0" "pcss:ps:1")
+        string(REPLACE ":" ";" parts "${spec}")
+        list(GET parts 0 name)
+        list(GET parts 1 stage)
+        list(GET parts 2 pcss)
+        set(blob "${CMAKE_CURRENT_BINARY_DIR}/lighting_filter_${name}.h")
+        add_custom_command(OUTPUT "${blob}"
+            COMMAND "${NR_LIGHTING_DXC}" -T ${stage}_6_0 -E ${stage}_main -HV 2021 -O3 -Gis
+                -D KL_SHADOW_FIXTURE=1 -D KL_PCSS=${pcss}
+                -spirv -fspv-target-env=vulkan1.2
+                -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-b-shift 256 0
+                -Fh "${blob}" -Vn lighting_filter_${name}
+                "${NR_ROOT}/backend/shaders/lighting_shadow.hlsl"
+            DEPENDS "${NR_ROOT}/backend/shaders/lighting_shadow.hlsl")
+        list(APPEND lighting_test_blobs "${blob}")
+    endforeach()
     add_executable(nr_lighting_tests lighting_tests.cpp vk_test_device.cpp readback.cpp ${lighting_test_blobs})
     target_include_directories(nr_lighting_tests PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
     target_link_libraries(nr_lighting_tests PRIVATE nr_renderer ${CMAKE_DL_LIBS})

@@ -14,8 +14,18 @@
 // and DXC's flags for the game's shaders (compile_shaders.ps1): the renderer uses it in place of the
 // translated psshadowquad of the same hash (shader_library.h, SetReplacements).
 #define KK_PIXEL_SHADER 1
+#if defined(KL_SHADOW_FIXTURE)
+cbuffer Fixture : register(b0) {
+    float4 kl_Shadow;
+    float4 kl_ShadowShape;
+    float4 fixture_surface; // depth at centre, depth slope xy, reserved
+};
+Texture2D<float4> fixture_map : register(t0);
+SamplerState fixture_sampler : register(s0);
+#else
 #include "../../shaders/hlsl/kk_common.hlsli"
 #include "../../shaders/hlsl/kk_lighting.hlsli"
+#endif
 
 #ifndef KL_LIGHTS
 #define KL_LIGHTS 1
@@ -30,9 +40,9 @@
 #define KL_PCSS 0
 #endif
 
-#define KL_PCF_TAPS 16
-#define KL_SEARCH_TAPS 8
-#define KL_PCSS_TAPS 12
+#define KL_PCF_TAPS 4
+#define KL_SEARCH_TAPS 4
+#define KL_PCSS_TAPS 8
 
 // Interleaved gradient noise (Jimenez 2014): a per-pixel angle that turns the disc, so neighbouring
 // pixels sample different offsets and the game's blur of the mask (psblurshadow) averages them.
@@ -51,10 +61,18 @@ float2 kl_Disc(uint i, uint n, float angle)
 
 // One bilinear comparison: the four texels around uv against the reference, weighted as bilinear
 // filtering would weight them (lit when the shadow map is not nearer, as the game decides).
-float kl_Compare(Texture2D<float4> map, SamplerState s, float2 uv, float2 size, float reference)
+float4 kl_GatherPlane(float2 uv, float2 size, float2 slope)
+{
+    float2 step = slope / size;
+    float base = -dot(frac(uv * size - 0.5), step);
+    // Gather order: (0,1), (1,1), (1,0), (0,0).
+    return base + float4(step.y, step.x + step.y, step.x, 0.0);
+}
+
+float kl_Compare(Texture2D<float4> map, SamplerState s, float2 uv, float2 size, float reference, float2 slope)
 {
     float4 z = map.GatherRed(s, uv);  // x (0,1), y (1,1), z (1,0), w (0,0)
-    float4 lit = select(z >= reference, 1.0, 0.0);
+    float4 lit = select(z >= reference + kl_GatherPlane(uv, size, slope), 1.0, 0.0);
     float2 f = frac(uv * size - 0.5);
     return lerp(lerp(lit.w, lit.z, f.x), lerp(lit.x, lit.y, f.x), f.y);
 }
@@ -81,9 +99,10 @@ float kl_Shadow1(Texture2D<float4> map, SamplerState s, KLReceiver r, float angl
         float2 o = kl_Disc(i, KL_SEARCH_TAPS, angle) * searchUv;
         float4 z = map.GatherRed(s, r.uv + o);
         float reference = r.depth + dot(r.slope, o);
-        float4 nearer = select(z < reference, 1.0, 0.0);
+        float4 plane = kl_GatherPlane(r.uv + o, size, r.slope);
+        float4 nearer = select(z < reference + plane, 1.0, 0.0);
         blockers += dot(nearer, 1.0);
-        blockerDepth += dot(nearer, z);
+        blockerDepth += dot(nearer, z - dot(r.slope, o) - plane);
     }
     if (blockers == 0.0)
         return 1.0;
@@ -100,11 +119,12 @@ float kl_Shadow1(Texture2D<float4> map, SamplerState s, KLReceiver r, float angl
     [unroll] for (uint j = 0; j < taps; j++)
     {
         float2 o = kl_Disc(j, taps, angle) * radiusUv;
-        lit += kl_Compare(map, s, r.uv + o, size, r.depth + dot(r.slope, o));
+        lit += kl_Compare(map, s, r.uv + o, size, r.depth + dot(r.slope, o), r.slope);
     }
     return lit / float(taps);
 }
 
+#if !defined(KL_SHADOW_FIXTURE)
 KLReceiver kl_Receiver(float4 viewPos, uint light)
 {
     float4 lp;
@@ -167,3 +187,20 @@ void main(
     oC0 = float4(lerp(shadowColor, 1.0, lit), 0.0);
     kk_AlphaTest(oC0.w);
 }
+#else
+// A synthetic host exercises the very same filter without game-derived shaders.
+float4 vs_main(uint id : SV_VertexID, out float2 uv : TEXCOORD0) : SV_Position
+{
+    uv = float2((id << 1) & 2, id & 2);
+    return float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
+}
+float4 ps_main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target0
+{
+    KLReceiver r;
+    r.uv = uv;
+    r.slope = fixture_surface.yz;
+    r.depth = fixture_surface.x + dot(r.slope, uv - 0.5);
+    float lit = kl_Shadow1(fixture_map, fixture_sampler, r, kl_Noise(pos.xy) * 6.28318531);
+    return float4(lit, lit, lit, 1.0);
+}
+#endif
