@@ -427,3 +427,120 @@ analysis scripts and artifact verification. Production code is unchanged after
 `54b7e39`. All task-owned games exited, their shared game locks were released,
 and this task's priority reservation was moved aside. Full report:
 `F:\KK-native-renderer\codex\REPORT-104.md`.
+
+## Task 107: shipped chapter resource lists
+
+Starting at `2f90b7a`; bundle/tool `360801f`, packaging `e90c1cd`, renderer
+integration `48183e4`. Read DECISIONS.md first, then TASK-107, GAME-RULES.md,
+REPORT-104 and this status. Two task-authorized sub-agents used their own
+`mkwt.ps1` worktrees for packaging and the bundle/tool. No standing-decision
+conflict. AppImage work is limited to its build script; no Linux build or run.
+
+The renderer reads `kkresources.list` beside the executable before the first
+draw, including with the writable pipeline cache disabled. Bundle v1 contains
+chapter map/start keys, resource descriptions and complete guest-range hashes;
+it contains no texture, vertex or index payload. The explicit little-endian
+header checks the format version, resource-key version and title id. Whole-file
+size/count/checksum validation rejects incompatible, damaged or oversized lists
+without accepting a prefix. Limits: 128 chapter keys, 1,024 records per chapter,
+65,536 records total and a maximum 2,360,864-byte file.
+
+`nr_resources -o <output> <recording-or-bundle-or-directory>...` merges local
+`.resources-<level>-<start>` recordings and existing bundles. It groups chapter
+keys, sorts deterministically, deduplicates exact descriptions/hashes and keeps
+different content variants. Invalid inputs, count overflow and output/input
+aliases fail before writing. Recursive scans skip symlinks/junctions. Keep the
+output outside scanned recording directories. The generated bundle and local
+recordings are ignored by Git and must be supplied separately when packaging.
+Windows staging accepts `-ResourceList` or `KK_RESOURCE_LIST`; AppImage assembly
+accepts `KK_RESOURCE_LIST`. Both copy it beside the executable. Missing optional
+input retains ordinary local learning and required draw-time uploads.
+
+During loading, the matching chapter's shipped hints merge with local hints,
+with local polling priority and the existing combined 1,024-record bound.
+Replayed resources still require an immutable snapshot whose full content hash
+matches, and retain the existing watched-write checks, joined workers, ordered
+upload/publication and required first draw. The existing frame/chapter upload
+and scratch bounds apply. Local learning retains earlier records, refreshes
+observed hashes and adds newly bound resources; it never rewrites the shipped
+file. Relocated/changed/unrecorded resources retain their mandatory bind path.
+
+Windows Release / Clang 19.1.5 / permanent SDK 038 builds with both native APIs
+and all Windows upscalers. Final native CTest passes **23/23 (72.08 s)**;
+standalone resource CTest passes **2/2 (3.04 s)**, no test exclusions. Seven new
+renderer regressions cover actual first-visit texture/vertex/index pixels,
+operation without a writable cache, content mismatch, writes before first draw,
+stale local versus matching shipped hashes, local extension and incompatible
+bundle fallback. Eight bundle/tool cases cover the wire, corruption, versions,
+bounds, deterministic merging and input/output aliases. An optional unprivileged
+directory-symlink fixture was unavailable; a separate Windows junction check
+passed. No installed Khronos-layer certification is claimed.
+
+The first full suite passed 22/23: the existing upscaler live-switching test
+terminated without an assertion/validation message. The unchanged full rerun
+passed 23/23. Its intermittent termination has no established cause; both logs
+are retained. The resource-list pixel regressions passed in both suites.
+
+Four recording launches visited all **42 chapter-select entries** and saved a
+valid list for each. Merging those recordings with the earlier direct-start
+V-Rex recording produces **6,167 descriptions / 222,548 bytes** across 42 chapter
+keys. The generated file remains outside Git. The final file passes Windows
+staging/hash verification and a list-only Windows-tar zip/PK/header check.
+
+One recording launch was stopped by its own harness after Millipedes: a brief
+exclusive read of the shared lock made an unguarded monitoring read throw. The
+abort counts against the run allowance. The harness now tolerates read
+contention and releases its lock atomically; synthetic contention/release checks
+pass. Two later batches recovered the remaining entries within the same four
+recording launches. The successful tours took about 11, 11 and 12 minutes:
+multiple chapter visits within the eight-launch cap required the established
+menu timings. The other recording ended after roughly two minutes. These are
+opening-window hints, not complete gameplay coverage: learning retains the
+existing first-ten-seconds window, which can cover an intro rather than later
+gameplay (notably Venture).
+
+All eight launches are finished: three successful tours, the documented harness
+abort, and four successful chapter-8 comparisons. Every measurement starts with
+an empty private application cache, the same Beta 5 executable/runtime, pipeline
+list and shader packs. Candidate measurements replace only the native DLL and
+add the frozen shipped resource bundle. Both log **0 local / 237 shipped**
+chapter hints. Vulkan publishes/consumes **78/78** resources (38,322,445 bytes);
+DirectX publishes/consumes **75/75** (36,137,845 bytes). Content-mismatch polling
+attempts are 383/386, with ordinary required binds retained.
+
+First ten seconds after the level-loaded marker; steady seconds 30-65, using
+the earlier renderer-interval/QPC alignment method. Windowed 1280x720, uncapped,
+VSync off, GI Low, full GTAO/three samples, upscaler off. The owner's global
+driver cap remains unchanged; steady performance is judged on Vulkan only.
+
+| Run | Startup >50 ms | Worst startup ms | Peak room ms | Vulkan steady FPS |
+|---|---:|---:|---:|---:|
+| Vulkan Beta 5 | 2 | 201.7 | 120.8 | 205.76 |
+| Vulkan shipped list | 1 | 143.6 | 61.3 | 180.31 |
+| DirectX Beta 5 | 3 | 311.6 | 230.5 | not judged |
+| DirectX shipped list | 2 | 221.2 | 138.2 | not judged |
+
+The startup statistics are lower in these single pairs. **The Vulkan candidate's
+steady sample is slower by 12.4%; its cause remains unresolved.** Mid-run GPU
+frame/AO/GI times increase in that candidate. This does not establish a cause:
+no identical-frame or GPU-clock capture was made. No compiler/test/shader
+process overlap is sampled in any comparison window, but audio/desktop and
+coordinator processes remain active. The full inventories/CPU samples are kept;
+absence of sampled compiler work does not certify an idle PC. No steady FPS
+gain or steady-performance certification is claimed.
+
+The comparison also includes earlier optimisation tasks, so it cannot isolate
+task 107. These are unrepeated fresh-application-cache results, with supplied
+shader packs and an uncontrolled driver cache, not a cold-driver-cache or owner
+configuration certification. Candidate request-to-loaded times are 739 ms Vulkan
+and 672 ms DirectX, versus 703/686 ms Beta 5; their loading-screen intervals are
+692/665 ms. Preparation has a loading cost. All measured windows have zero
+skipped draws/pipeline wait, all four run summaries have zero texture failures,
+and both candidates have zero command-capacity wait. Remaining room blocking is
+at the unchanged Present bound.
+
+The eight-launch allowance is exhausted. No further game run. All task-owned
+games exited; owned lock/priority reservations were released or moved aside.
+No game-derived data was committed, test build handed over, Linux runtime tested,
+SDK/link changed, push, beta-line merge or release performed. Evidence:
+`kk/out/task107`. Full report: `F:\KK-native-renderer\codex\REPORT-107.md`.
