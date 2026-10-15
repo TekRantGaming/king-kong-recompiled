@@ -35,6 +35,7 @@ bool PipelinePrewarm::Start(const Settings& settings) {
   o.render_scale_y = settings.render_scale_y;
   o.shadow_scale = settings.shadow_scale;
   o.flip_front_face = settings.flip_front_face;
+  o.tessellation_supported = settings.tessellation_supported;
   o.lighting = settings.lighting;
   o.lighting.census_every = 0;
   o.lighting.gpu_time = false;

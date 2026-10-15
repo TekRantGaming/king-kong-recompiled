@@ -7,6 +7,8 @@ typedef struct NrEffectStats {
   uint32_t size;
   uint32_t preparing;  // being made on a worker: 1 GI, 2 the lighting passes, 4 an upscaler, 8 shader variants
   double ao_ms, gi_ms, shadows_ms, water_ms, volumetric_ms, upscaler_ms;
+  double tessellation_ms;
+  uint32_t tessellation_draws;
   uint32_t input_width, input_height;    // the scene's size (the upscaler's input)
   uint32_t output_width, output_height;  // the render scale's (the upscaler's output)
   uint32_t upscaler_kind;                // what runs (nr::UpscalerKind; 0 off)

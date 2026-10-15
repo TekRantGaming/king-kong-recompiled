@@ -51,6 +51,7 @@ if(NR_GAME_RENDERER)
         game_resources.cpp
         game_passes.cpp
         game_frame_log.cpp
+        game_tessellation.cpp
         game_ao.cpp
         game_upscale.cpp
         game_lighting.cpp

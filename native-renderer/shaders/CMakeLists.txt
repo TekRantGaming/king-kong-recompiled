@@ -88,6 +88,7 @@ add_library(kkshaders STATIC
     src/container.cpp
     src/ambient.cpp
     src/motion.cpp
+    src/tessellation.cpp
     src/translator.cpp
     src/compiler.cpp
     src/cache.cpp

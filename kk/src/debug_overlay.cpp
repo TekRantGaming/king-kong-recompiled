@@ -144,6 +144,10 @@ const std::vector<Setting>& Settings() {
       {"Global illumination", "Resolution", "native_gi_quality", Kind::kChoice,
        {{"Auto", "auto"}, {"Half", "half"}, {"Full", "full"}}, 0, 1, "", true, Show::kGi},
       // Lighting.
+      {"Tessellation", "Tessellation", "native_tessellation", Kind::kToggle, {{"Off", "false"}, {"On", "true"}},
+       0, 1, "", true, Show::kAlways, "Ann only. Parts whose depth shaders have no normals retain their original geometry."},
+      {"Tessellation", "Smoothness", "native_tessellation_smoothness", Kind::kSlider, {}, 0, 1, "%.2f"},
+      {"Tessellation", "Detail", "native_tessellation_detail", Kind::kSliderInt, {}, 1, 16, "%d"},
       {"Lighting", "Shadows", "native_shadow_quality", Kind::kChoice,
        {{"Original", "original"}, {"High", "high"}, {"Ultra", "ultra"}}},
       {"Lighting", "Shadow softness", "native_shadow_softness", Kind::kSlider, {}, 0.25f, 4, "%.2f", true, Show::kShadows},
@@ -385,6 +389,8 @@ std::string Readout() {
     add("water", s.water_ms);
     add("light shafts", s.volumetric_ms);
     add("upscaler", s.upscaler_ms);
+    add("tessellation", s.tessellation_ms);
+    out += "Tessellated Ann draws: "+std::to_string(s.tessellation_draws)+"\n";
     out += "GPU time a frame: " + (gpu.empty() ? std::string("no effect timed") : gpu) + "\n";
     std::vector<std::string> notes;
     out += "Applied: " + AppliedText(s, &notes) + "\n";
@@ -666,6 +672,9 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
       add("Water", st.water_ms);
       add("Shafts", st.volumetric_ms);
       add("Upscaler", st.upscaler_ms);
+      add("Tessellation", st.tessellation_ms);
+      if(Get("native_tessellation")=="true" && !st.tessellation_draws)
+        ImGui::TextDisabled("Tessellation: no eligible prepared Ann draw");
       if (!gpu.empty()) ImGui::TextColored(ImColor(ui::color::kTextDim), "GPU: %s", gpu.c_str());
       std::vector<std::string> notes;
       const std::string applied = AppliedText(st, &notes);
@@ -885,7 +894,7 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
           step.values = {Number(st.min, "%.3f"), Number(st.max, "%.3f"), Number((st.min + st.max) / 2, "%.3f")};
           break;
         case Kind::kSliderInt:
-          step.values = {std::to_string(int(st.min)), std::to_string(int(st.max)), "90"};
+          step.values = {std::to_string(int(st.min)), std::to_string(int(st.max)), std::to_string(int(std::lround((st.min+st.max)*0.5f)))};
           break;
         case Kind::kUpscaler:
           step.values = upscalers;
@@ -926,6 +935,32 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
   }
 
   void TestTick() {
+    // Task 072's one-run Off/4/16 comparison, through the same live changes as
+    // the F8 controls. Captures the game's frame only, in a private test folder.
+    if (const char* dir=std::getenv("KK_DEV_TESS_BENCH"); dir && *dir) {
+      if (!InPlay()) return;
+      const double seconds=DevSecondsSinceMenu();
+      if (seconds<8) return;
+      static int phase=-1;
+      static bool captured=false;
+      const int next=std::min(3,int((seconds-8)/16));
+      if(next!=phase) {
+        phase=next; captured=false;
+        Change("kk_frame_rate","0");
+        Change("native_tessellation",phase==1||phase==2?"true":"false");
+        Change("native_tessellation_smoothness","0.75");
+        Change("native_tessellation_detail",phase==2?"16":"4");
+        REXLOG_INFO("KK tess test: phase {} at {:.3f} seconds, frame cap {}",phase,seconds,Get("kk_frame_rate"));
+      }
+      if(phase<3 && !captured && seconds>=8+phase*16+12) {
+        std::filesystem::path root(dir); std::filesystem::create_directories(root);
+        const char* names[]={"off","4","16"};
+        art::CaptureFrame(root/(std::string("ann-")+names[phase]+art::kDevCaptureExtension));
+        std::ofstream(root/(std::string("ann-")+names[phase]+".txt"))<<SettingsText();
+        REXLOG_INFO("KK tess test: capture {}",names[phase]); captured=true;
+      }
+      return;
+    }
     if (test_state_ < 0) {
       const char* dir = std::getenv("KK_DEV_PANEL_TEST");
       if (!dir || !*dir) {

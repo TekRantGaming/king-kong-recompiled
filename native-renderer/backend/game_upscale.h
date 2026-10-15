@@ -59,6 +59,7 @@ struct GameUpscale {
   struct MotionDraw {
     MotionDrawKey key;
     uint32_t ordinal = 0;
+    uint32_t previous_tessellation_flags = 0;
     std::shared_ptr<const GameShader> vs;
     VsConstants constants{};
     int wvp_register = -1;

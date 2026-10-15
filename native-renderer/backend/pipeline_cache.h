@@ -67,6 +67,7 @@ constexpr uint32_t kRecordScaled = 1u << 1;
 // Object motion replay: the vertex shader is its motion variant, the pixel shader and set 0
 // are the upscaler's built-ins. This layout does not use the game's scale constants.
 constexpr uint32_t kRecordMotion = 1u << 2;
+constexpr uint32_t kRecordTessellation = 1u << 3;
 PipelineRecord MotionPipelineRecord(const PipelineRecord& draw, uint32_t motion_format);
 
 constexpr uint32_t kPipelineCacheMagic = 0x4350474Bu;  // 'KGPC'

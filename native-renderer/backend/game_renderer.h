@@ -63,6 +63,7 @@ namespace nr {
 class GameRenderer {
  public:
   struct Options {
+    bool tessellation_supported = false;
     // Read each vertex element with its declaration's own endian field (the
     // game's SHORT4N normals and tangents are 8in16 in 8in32 streams) rather
     // than the vertex buffer's. Proven on the game's frames: with the
@@ -386,6 +387,7 @@ class GameRenderer {
 
   // ---- textures, samplers, buffers
   struct HostTexture {
+    uint64_t material_hash = 0;
     nvrhi::TextureHandle texture;
     kknr::HostTexturePlan plan;
     nvrhi::Format format = nvrhi::Format::UNKNOWN;
@@ -713,6 +715,35 @@ class GameRenderer {
     double ms = 0;
   };
   void UpdateEffects();
+  bool AnnTessellationMaterial(const dev::DeviceView& d, const GameShader& vs, const GameShader* ps);
+  uint64_t GeometryContentHash(const DrawCall& call) const;
+  bool AnnMainTessellation(const DrawCall& call, const dev::DeviceView& d,
+                           const GameShader& vs, const GameShader* ps,
+                           kkshaders::DrawConstants& dc, PipelineRecord& record,
+                           nvrhi::IGraphicsPipeline*& pipeline);
+  struct AnnNormalLayout {
+    kknr::VertexElement element;
+    VertexBufferInfo buffer;
+    uint32_t offset = 0;
+    uint64_t normal_content = 0;
+    uint32_t stride = 0, format = 0;
+    uint64_t learned = 0, decision_frame = ~0ull, skin = 0;
+    bool admitted = false, noted = false;
+    uint64_t bones = 0;
+    PipelineRecord lit[2];
+    uint32_t seen = 0, previous_flags = 0, current_flags = 0;
+  };
+  std::unordered_map<uint64_t, AnnNormalLayout> ann_normals_;
+  nvrhi::IGraphicsPipeline* AnnTessellationPipeline(PipelineRecord& record);
+  nvrhi::IGraphicsPipeline* FindPreparedPipeline(uint64_t key);
+  uint32_t TessellationFlags() const;
+  std::vector<PipelineRecord> tessellation_records_;
+  bool tessellation_drawn_this_frame_ = false;
+  uint32_t tessellation_draws_this_frame_ = 0;
+  bool tessellation_ = false;
+  float tessellation_smoothness_ = 0.75f;
+  uint32_t tessellation_detail_ = 4, tessellation_previous_flags_ = 0;
+  std::unique_ptr<AoGpuTimer> tessellation_timer_;
   void UpdateUpscaler(UpscaleConfig want);
   void InstallUpscaler(const UpscaleConfig& want, PreparedUpscaler* prepared);
   void UpdateGi(const GiConfig& want);

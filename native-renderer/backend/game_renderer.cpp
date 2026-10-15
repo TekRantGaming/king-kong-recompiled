@@ -1,4 +1,5 @@
 #include "backend/game_renderer.h"
+#include "kkshaders/tessellation.h"
 
 #include <algorithm>
 #include <mutex>
@@ -542,7 +543,13 @@ GameRenderer::StutterStats GameRenderer::stutter() const {
 }
 
 void GameRenderer::EndFrame() {
+  if (tessellation_timer_) tessellation_timer_->FrameEnd();
   PublishEffectTimes();
+  if (std::getenv("REX_DEV_TESS_BENCH") && frame_%300==0)
+    Logf(LogLevel::kInfo,"rexgpu-native: ANN TESS status frame %llu enabled %d detail %u draws %u prepared %zu",(unsigned long long)frame_,int(tessellation_),tessellation_detail_,tessellation_draws_this_frame_,tessellation_records_.size());
+  tessellation_previous_flags_ = tessellation_drawn_this_frame_ ? TessellationFlags() : 0;
+  tessellation_drawn_this_frame_ = false;
+  tessellation_draws_this_frame_ = 0;
   if (!frame_trace_checked_) {
     frame_trace_checked_ = true;
     if (const char* path = std::getenv("KK_DEV_DLSS_LOG"); path && *path) {
@@ -838,8 +845,10 @@ bool GameRenderer::QueuePrewarm(const PipelineRecord& record) {
   if (!vs || (record.ps_hash && !ps)) return false;
   if (ps) adapted.ps_input = ps->input_hash;
   const bool motion = (record.flags & kRecordMotion) != 0;
+  const bool tess = (record.flags & kRecordTessellation) != 0;
+  if (tess && (!options_.tessellation_supported || !shaders_->AnnTessellationStages(vs->ucode_hash,vs->input_hash,motion))) return false;
   nvrhi::IShader* vertex = vs->handle;
-  if (motion) {
+  if (motion && !tess) {
     // Prepared motion shaders are keyed by the original translation and need no guest container.
     if (!upscale_) return false;
     vertex = shaders_->MotionVariant(*vs);
@@ -849,6 +858,8 @@ bool GameRenderer::QueuePrewarm(const PipelineRecord& record) {
   nvrhi::FramebufferInfo framebuffer;
   BuildPipelineDesc(adapted, vertex, motion ? upscale_->object_ps.Get() : (ps ? ps->handle.Get() : nullptr), desc, framebuffer);
   if (motion && !desc.bindingLayouts.empty()) desc.bindingLayouts[0] = upscale_->motion_layout;
+  if (tess && std::find(tessellation_records_.begin(),tessellation_records_.end(),adapted)==tessellation_records_.end())
+    tessellation_records_.push_back(adapted);
   const uint64_t key = PipelineKey(adapted);
   std::lock_guard lock(pipeline_mutex_);
   if (pipelines_.count(key) || pipelines_pending_.count(key)) return true;
@@ -868,6 +879,12 @@ void GameRenderer::QueueRecordVariants(const PipelineRecord& record) {
   QueueOrDefer(record);
   if (upscale_ && !(record.flags & kRecordMotion) && record.depth_format && (record.depth_control & 6) == 6)
     QueueOrDefer(MotionPipelineRecord(record, uint32_t(nvrhi::Format::RG16_FLOAT)));
+  if (options_.tessellation_supported && kkshaders::annTessellationShader(record.vs_hash) && !(record.flags & kRecordTessellation)) {
+    auto tess=record; tess.flags |= kRecordTessellation;
+    QueueOrDefer(tess);
+    if (upscale_ && !(record.flags & kRecordMotion) && record.depth_format && (record.depth_control&6)==6)
+      QueueOrDefer(MotionPipelineRecord(tess,uint32_t(nvrhi::Format::RG16_FLOAT)));
+  }
 }
 
 void GameRenderer::QueueOrDefer(const PipelineRecord& record) {
@@ -876,7 +893,8 @@ void GameRenderer::QueueOrDefer(const PipelineRecord& record) {
   if (!prewarm_seen_.insert(PipelineKey(record)).second) return;
   // Scale variants are adapted by QueuePrewarm; flipped faces and unknown flags stay isolated.
   const bool motion = (record.flags & kRecordMotion) != 0;
-  const uint32_t wanted = motion ? ((RecordFlags() & kRecordFlipFrontFace) | kRecordMotion) : RecordFlags();
+  const uint32_t wanted = (motion ? ((RecordFlags() & kRecordFlipFrontFace) | kRecordMotion) : RecordFlags()) |
+                          (record.flags & kRecordTessellation);
   if ((record.flags & ~kRecordScaled) != (wanted & ~kRecordScaled) || (motion && !upscale_)) {
     ++stats_.prewarm_other_kind;
     return;
@@ -1119,6 +1137,11 @@ void GameRenderer::BuildPipelineDesc(const PipelineRecord& r, nvrhi::IShader* vs
   pd.primType = nvrhi::PrimitiveType(r.topology);
   pd.VS = vs;
   pd.PS = ps;
+  if (r.flags & kRecordTessellation) {
+    const auto stages=shaders_->AnnTessellationStages(r.vs_hash,r.vs_input,(r.flags&kRecordMotion)!=0);
+    pd.VS=stages.vs; pd.HS=stages.hs; pd.DS=stages.ds;
+    pd.primType=nvrhi::PrimitiveType::PatchList; pd.patchControlPoints=3;
+  }
   for (const nvrhi::BindingLayoutHandle& l : pipeline_layouts_) pd.bindingLayouts.push_back(l);
   for (uint32_t i = 0; i < r.color_count && i < 4; ++i) {
     pd.renderState.blendState.targets[i] = BlendTargetFrom(r.color_control[i], r.color_mask[i]);
@@ -1517,16 +1540,22 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   std::array<StreamBind, 16> stream_binds = {};
   if (const uint8_t* decl = call.vertex_declaration ? memory_.Virtual(call.vertex_declaration) : nullptr)
     kknr::DecodeVertexDeclaration(decl, elements);
-  for (size_t b = 0; b < vs->bindings.vertexBindings.size() && b < 16; ++b) {
-    const kkshaders::VertexBinding& vb = vs->bindings.vertexBindings[b];
+  const bool ann_depth = vs->ucode_hash == 0xD710A475A7840F37ull || vs->ucode_hash == 0xC66476D2889954ECull;
+  auto normal_it = ann_depth && (tessellation_ || tessellation_previous_flags_) ? ann_normals_.find(GeometryContentHash(call)) : ann_normals_.end();
+  if(normal_it!=ann_normals_.end() && !normal_it->second.learned) normal_it=ann_normals_.end();
+  for (size_t b = 0; b < (normal_it != ann_normals_.end() ? 16 : vs->bindings.vertexBindings.size()) && b < 16; ++b) {
+    const bool extra_normal = b == 15 && normal_it != ann_normals_.end();
+    if (!extra_normal && b >= vs->bindings.vertexBindings.size()) continue;
+    const kkshaders::VertexBinding vb = extra_normal ? kkshaders::VertexBinding{false, kkshaders::DeclUsage::Normal} : vs->bindings.vertexBindings[b];
     uint32_t stream = 0;
     const kknr::VertexElement* element = nullptr;
     if (vb.raw) {
       if (vb.fetchConstant < 80) continue;
       stream = 95 - vb.fetchConstant;
     } else {
+      if (extra_normal) element = &normal_it->second.element;
       for (const kknr::VertexElement& e : elements) {
-        if (e.usage == uint8_t(vb.usage) && e.usage_index == vb.usageIndex) {
+        if (!extra_normal && e.usage == uint8_t(vb.usage) && e.usage_index == vb.usageIndex) {
           element = &e;
           break;
         }
@@ -1536,10 +1565,11 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     }
     if (stream >= 16) continue;
     const uint32_t vb_object = d.u32(dev::kStreamBuffer + 8 * stream);
-    const uint32_t offset = d.u32(dev::kStreamOffset + 8 * stream);
-    const uint32_t stride = uint32_t(*d.at(12688 + stream)) * 4;
+    const uint32_t offset = extra_normal ? normal_it->second.offset : d.u32(dev::kStreamOffset + 8 * stream);
+    const uint32_t stride = extra_normal ? normal_it->second.stride : uint32_t(*d.at(12688 + stream)) * 4;
     VertexBufferInfo info;
-    if (!vb_object || !DecodeVertexBuffer(memory_.Virtual(vb_object), info)) continue;
+    if (extra_normal) info = normal_it->second.buffer;
+    else if (!vb_object || !DecodeVertexBuffer(memory_.Virtual(vb_object), info)) continue;
     uint32_t used_begin = 0, used_end = ~0u;
     if (!vb.raw && stride && last_vertex != ~0u) {
       used_begin = uint32_t(std::min<uint64_t>(uint64_t(offset) + uint64_t(first_vertex) * stride, info.size_bytes));
@@ -1623,6 +1653,20 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   constants_valid_ = true;
   constants_list_ = cl;
   constants_frame_ = frame_;
+  // Only prepared, complete material/pass pairs can use the experimental geometry.
+  // Missing pipelines keep the whole pair original; this never queues a compile in play.
+  bool ann_material = (vs->ucode_hash==0x5E779DBA373D121Cull || vs->ucode_hash==0x3390D930CD168AC0ull) && (dc.vertexFetch[1][3]&0x3Fu) && (tessellation_ || std::getenv("REX_DEV_TESS_BENCH")) &&
+                            AnnTessellationMaterial(d,*vs,ps.get());
+  bool tessellated=false;
+  if (ann_material && tessellation_) {
+    if (auto* prepared=AnnTessellationPipeline(record)) {
+      pipeline=prepared; tessellated=true; dc.reserved=TessellationFlags();
+    }
+  }
+  if (AnnMainTessellation(call,d,*vs,ps.get(),dc,record,pipeline)) {
+    ann_material = true;
+    tessellated = (record.flags & kRecordTessellation)!=0;
+  }
   cl->writeBuffer(draw_constants_, &dc, sizeof(dc));
   stats_.upload_bytes += sizeof(dc);
   if (scaled()) {
@@ -1753,11 +1797,19 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   if (debug_last_pipeline_ != pipeline) ++stats_.pipeline_changes;
   debug_last_pipeline_ = pipeline;
   if (indexed_draw) {
+    if (ann_material && tessellation_timer_) tessellation_timer_->Begin(cl);
     cl->drawIndexed(args);
+    if (ann_material && tessellation_timer_) tessellation_timer_->End(cl);
   } else {
     cl->draw(args);
   }
   ++stats_.draws;
+  if (tessellated) {
+    tessellation_drawn_this_frame_=true;
+    ++tessellation_draws_this_frame_;
+  }
+  if (tessellated && frame_log_ && frame_log_->active())
+    Logf(LogLevel::kWarning,"rexgpu-native: ANN TESS frame %llu draw %u detail %u smoothness %.4f",(unsigned long long)call.frame,call.index_in_frame,tessellation_detail_,tessellation_smoothness_);
   if (dump) {
     for (size_t b = 0; b < vs->bindings.vertexBindings.size() && b < 16; ++b) {
       Logf(LogLevel::kInfo, "rexgpu-native:   fetch %zu usage %u/%u -> %u %u %u %08X", b,

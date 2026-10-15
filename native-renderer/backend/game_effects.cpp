@@ -35,6 +35,7 @@ NrEffectStats effect_stats = [] {
   NrEffectStats s{};
   s.size = sizeof(NrEffectStats);
   s.ao_ms = s.gi_ms = s.shadows_ms = s.water_ms = s.volumetric_ms = s.upscaler_ms = -1;
+  s.tessellation_ms=-1;
   std::snprintf(s.upscaler, sizeof(s.upscaler), "off");
   return s;
 }();
@@ -76,6 +77,13 @@ void GameRenderer::UpdateEffects() {
   effects_frame_ = frame_;
   const auto start = std::chrono::steady_clock::now();
   const EffectSettings s = options_.effect_settings();
+  tessellation_=s.tessellation && options_.tessellation_supported;
+  tessellation_smoothness_=std::isfinite(s.tessellation_smoothness)?std::clamp(s.tessellation_smoothness,0.0f,1.0f):0.75f;
+  tessellation_detail_=std::clamp(s.tessellation_detail,1u,16u);
+  if ((tessellation_ || std::getenv("REX_DEV_TESS_BENCH")) && !tessellation_timer_) {
+    tessellation_timer_=std::make_unique<AoGpuTimer>(device_,"Ann tessellation");
+    tessellation_timer_->EnableTrace(".tess.csv");
+  }
   // Ambient occlusion: the resolution (GTAO makes its textures for it at its next pass).
   options_.ao.quality = s.ao_quality;
   if (scene_ao_) scene_ao_->SetQuality(s.ao_quality);
@@ -351,6 +359,9 @@ void GameRenderer::PublishEffectTimes() {
   NrEffectStats s{};
   s.size = sizeof(NrEffectStats);
   s.ao_ms = s.gi_ms = s.shadows_ms = s.water_ms = s.volumetric_ms = s.upscaler_ms = -1;
+  s.tessellation_ms=tessellation_timer_ && (tessellation_draws_this_frame_ || std::getenv("REX_DEV_TESS_BENCH"))
+                        ? tessellation_timer_->milliseconds() : -1;
+  s.tessellation_draws=tessellation_draws_this_frame_;
   s.preparing = (gi_build_.valid() ? 1u : 0u) | (lighting_build_.valid() ? 2u : 0u) | (upscale_build_.valid() ? 4u : 0u) |
                 (shaders_->lighting_variants_pending() ? 8u : 0u);
   if (ao_timer_ && AoSettingsFor(ao_settings_frame_).mode) s.ao_ms = ao_timer_->milliseconds();

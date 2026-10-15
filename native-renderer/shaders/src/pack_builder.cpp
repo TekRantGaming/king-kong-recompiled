@@ -19,6 +19,7 @@
 #include "kkshaders/container.h"
 #include "kkshaders/lighting.h"
 #include "kkshaders/translator.h"
+#include "kkshaders/tessellation.h"
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -126,6 +127,7 @@ std::string PackStamp::toText() const {
     s << "database " << hex16(database) << "\n";
     s << "scaled " << (scaled ? 1 : 0) << "\n";
     s << "motion " << (motion ? 1 : 0) << "\n";
+    s << "tessellation " << tessellation << "\n";
     if (lighting) s << "lighting " << hex16(lighting) << "\n";
     s << "shaders " << shaders << "\n";
     return s.str();
@@ -165,6 +167,8 @@ bool PackStamp::parse(const std::string& text, PackStamp& out) {
         } else if (key == "motion") {
             if (value != "0" && value != "1") return false;
             s.motion = value == "1";
+        } else if (key == "tessellation") {
+            s.tessellation = uint32_t(std::strtoul(value.c_str(), nullptr, 10));
         } else if (key == "lighting") {
             if (!parseHex(value, s.lighting)) return false;
         } else if (key == "shaders") {
@@ -195,6 +199,8 @@ PackCheck comparePackStamp(const PackStamp* found, const PackStamp& wanted) {
         c.reason = "the game's shader database changed (" + hex16(found->database) + ", now " + hex16(wanted.database) + ")";
     else if (wanted.scaled && !found->scaled)
         c.reason = "without the render scale aware pixel shaders";
+    else if (wanted.tessellation != found->tessellation)
+        c.reason = "without the current Ann tessellation stages";
     else if (wanted.motion && !found->motion)
         c.reason = "without the motion vertex shaders";
     else if (wanted.lighting && found->lighting != wanted.lighting)
@@ -236,6 +242,7 @@ bool wantedPackStamp(const PackBuildOptions& options, PackStamp& out, std::strin
     out.database = XXH3_64bits(bytes.data(), bytes.size());
     out.scaled = options.scaled;
     out.motion = options.motion;
+    out.tessellation = 3;
     out.lighting = options.lighting ? lightingStampHash() : 0;
     return true;
 }
@@ -280,6 +287,7 @@ PackBuildResult buildPack(const PackBuildOptions& options, PackBuildProgress* pr
     r.stamp.database = XXH3_64bits(bytes.data(), bytes.size());
     r.stamp.scaled = options.scaled;
     r.stamp.motion = options.motion;
+    r.stamp.tessellation = 3;
     r.stamp.lighting = options.lighting ? lightingStampHash() : 0;
     if (!force) {
         PackStamp found;
@@ -380,6 +388,14 @@ PackBuildResult buildPack(const PackBuildOptions& options, PackBuildProgress* pr
                 }
             }
             p.done++;
+            if (jobs[i].kind == ShaderKind::Vertex && annTessellationShader(jobs[i].ucodeHash) && !p.cancel) {
+                std::string error;
+                if (!buildAnnTessellationShaders(jobs[i], compiler, targets, mine, error)) {
+                    p.failed++;
+                    std::lock_guard<std::mutex> g(lock);
+                    if (firstError.empty()) firstError = "Ann tessellation: " + error.substr(0,300);
+                }
+            }
             if (options.motion && jobs[i].kind == ShaderKind::Vertex && !p.cancel) {
                 BuildResult m = buildMotionShader(jobs[i], compiler, targets);
                 if (m.ok) mine.push_back(std::move(m.shader));

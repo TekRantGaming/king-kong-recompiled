@@ -13,6 +13,8 @@
 //   kkshaders scale-report <xeshaders.bin>
 //   kkshaders xsh <file.xsh> [<file.xsh> ...] --dxc <dir> [--out <dir>] [--spirv-val <exe>] [--jobs N] [--database <xeshaders.bin>]
 //   kkshaders pack-lookup <pack> [<hash> ...]
+//   kkshaders ann-tess <database> <base-pack> --out <pack> --dxc <folder>
+//                      extends a developer pack with both APIs' verified Ann hair stages
 //   kkshaders pack-build <xeshaders.bin> --out <folder> [--backend spirv|dxil] [--scaled] [--lighting] [--motion] [--jobs N] [--dxc <dir>]
 //                        [--force] [--low-priority] [--check]   (the player's pack, as the launcher builds it)
 //   kkshaders ao-list <xeshaders.bin> [--family <name>] [--term "<term>"] [--list <file>] [-o <file>] [--sources <dir>]
@@ -48,6 +50,7 @@
 #include "kkshaders/pack_builder.h"
 #include "kkshaders/translator.h"
 #include "kkshaders/vertex_patch.h"
+#include "kkshaders/tessellation.h"
 
 using namespace kkshaders;
 namespace fs = std::filesystem;
@@ -1176,6 +1179,72 @@ int main(int argc, char** argv) {
     }
     std::string command = argv[1];
     Args a = parseArgs(argc, argv, 2);
+    // Offline task-072 preparation: extend an inherited pack with both APIs'
+    // verified Ann stages without recompiling its unrelated shaders.
+    if (command == "ann-tess") {
+        if (a.positional.size()!=2 || a.get("--out").empty()) return 2;
+        Database db; ShaderPack pack; std::string error;
+        if(!db.load(a.positional[0],&error) || !pack.open(a.positional[1],&error) || !loadDxc(a.get("--dxc"),&error)) {
+            std::fprintf(stderr,"%s\n",error.c_str()); return 1;
+        }
+        Compiler compiler; std::vector<CompiledShader> all;
+        std::map<std::pair<uint64_t,uint64_t>,size_t> originals;
+        for(auto key:pack.keys()) {
+            CompiledShader s; if(!pack.find(key.ucodeHash,key.inputHash,s)) continue;
+            const auto identity=std::make_pair(s.ucodeHash,s.inputHash);
+            auto [where,inserted]=originals.emplace(identity,all.size());
+            if(inserted) all.push_back(std::move(s));
+            if(key.ucodeHash!=identity.first || key.inputHash!=identity.second)
+                all[where->second].packAliases.emplace_back(key.ucodeHash,key.inputHash);
+        }
+        auto merge=[&](CompiledShader shader) {
+            auto found=originals.find({shader.ucodeHash,shader.inputHash});
+            if(found==originals.end()) { originals[{shader.ucodeHash,shader.inputHash}]=all.size(); all.push_back(std::move(shader)); }
+            else {
+                auto& old=all[found->second]; old.dxil=std::move(shader.dxil); old.spirv=std::move(shader.spirv);
+                old.packAliases.insert(old.packAliases.end(),shader.packAliases.begin(),shader.packAliases.end());
+            }
+        };
+        std::set<std::pair<uint64_t,uint64_t>> seen;
+        unsigned variants=0; std::set<uint64_t> variantHashes;
+        for(const auto& entry:db.entries()) {
+            if(entry.kind!=1 && entry.kind!=2) continue;
+            auto source=db.parse(entry);
+            if(source.ok && entry.kind==2 && (source.info.ucodeHash==0x7DC46286A4EA2E2Eull || source.info.ucodeHash==0xF5BCD47A4145F958ull || source.info.ucodeHash==0x01D62D86BB133315ull || source.info.ucodeHash==0xBBD239D3BEB254D9ull || source.info.ucodeHash==0x3A076C4DF061DFA7ull || source.info.ucodeHash==0x07BA5284CF0C43AEull)) {
+                for(bool scaled:{false,true}) {
+                    source.info.renderScaleAware=scaled;
+                    if(!seen.insert({source.info.ucodeHash,translationInputHash(source.info)}).second) continue;
+                    auto built=buildShader(source.info,compiler,false,kBuildBoth);
+                    if(!built.ok) { std::fprintf(stderr,"%s\n",built.error.c_str()); return 1; }
+                    for(bool other:{false,true}) {
+                        auto alias=source.info; alias.renderScaleAware=other;
+                        built.shader.packAliases.emplace_back(source.info.ucodeHash^(scaled?kScaledPackTag:kUnscaledPackTag),translationInputHash(alias));
+                    }
+                    merge(std::move(built.shader));
+                }
+                continue;
+            }
+            if(!source.ok || !annTessellationShader(source.info.ucodeHash) || !seen.insert({source.info.ucodeHash,translationInputHash(source.info)}).second) continue;
+            auto original=buildShader(source.info,compiler,false,kBuildBoth);
+            if(!original.ok) { std::fprintf(stderr,"%s\n",original.error.c_str()); return 1; }
+            merge(std::move(original.shader));
+            auto originalMotion=buildMotionShader(source.info,compiler,kBuildBoth);
+            if(!originalMotion.ok) { std::fprintf(stderr,"%s\n",originalMotion.error.c_str()); return 1; }
+            merge(std::move(originalMotion.shader));
+            for(bool motion:{false,true}) {
+                auto hlsl=makeAnnTessellationShader(source.info,motion);
+                if(hlsl.ok) { auto path=fs::path(a.get("--out")); path += "."+hex16(source.info.ucodeHash)+(motion?".motion.hlsl":".hlsl"); writeFile(path,hlsl.hlsl.data(),hlsl.hlsl.size()); }
+            }
+            std::vector<CompiledShader> stages;
+            if(!buildAnnTessellationShaders(source.info,compiler,kBuildBoth,stages,error)) { std::fprintf(stderr,"%s\n",error.c_str()); return 1; }
+            for(auto& stage:stages) merge(std::move(stage));
+            variantHashes.insert(source.info.ucodeHash);
+            ++variants;
+        }
+        if(variantHashes.size()!=8 || !ShaderPack::write(a.get("--out"),all,&error)) { std::fprintf(stderr,"%u variants: %s\n",variants,error.c_str()); return 1; }
+        std::printf("Ann tessellation: %u vertex permutations, %u signed DXIL/SPIR-V stage entries, %zu total pack entries\n",variants,variants*6,all.size());
+        return 0;
+    }
     if (command == "info") return cmdInfo(a);
     if (command == "translate") return cmdTranslate(a);
     if (command == "compile") return cmdCompile(a);

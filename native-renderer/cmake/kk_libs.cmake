@@ -94,6 +94,7 @@ if(NR_GAME_RENDERER)
         ${NR_ROOT}/shaders/src/pack_builder.cpp
         ${NR_ROOT}/shaders/src/ambient.cpp
         ${NR_ROOT}/shaders/src/motion.cpp
+        ${NR_ROOT}/shaders/src/tessellation.cpp
         ${NR_ROOT}/shaders/src/lighting.cpp
         "${CMAKE_CURRENT_BINARY_DIR}/kkshaders_prelude.cpp"
         "${CMAKE_CURRENT_BINARY_DIR}/kkshaders_lighting.cpp")

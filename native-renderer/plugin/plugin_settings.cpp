@@ -309,6 +309,10 @@ GameSettings ReadGameSettings(bool vulkan) {
     };
     ParseAoQuality(get("native_ao_quality"), quality);
     s.ao_quality = quality;
+    s.tessellation = get("native_tessellation")=="true";
+    s.tessellation_smoothness = float(std::clamp(number("native_tessellation_smoothness",0.75),0.0,1.0));
+    const double tess_detail=number("native_tessellation_detail",4);
+    s.tessellation_detail = std::isfinite(tess_detail)?uint32_t(std::clamp(tess_detail,1.0,16.0)):4;
     ParseGiLevel(get("native_gi"), gi.level);
     ParseGiQuality(get("native_gi_quality"), gi.quality);
     gi.intensity = float(std::clamp(number("native_gi_intensity", 1.0), 0.0, 8.0));

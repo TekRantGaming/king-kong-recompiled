@@ -54,7 +54,7 @@ PipelineRecord MotionPipelineRecord(const PipelineRecord& draw, uint32_t motion_
   r.clip_control = draw.clip_control;
   r.poly_scale = draw.poly_scale;
   r.poly_offset = draw.poly_offset;
-  r.flags = (draw.flags & kRecordFlipFrontFace) | kRecordMotion;
+  r.flags = (draw.flags & (kRecordFlipFrontFace | kRecordTessellation)) | kRecordMotion;
   return r;
 }
 
