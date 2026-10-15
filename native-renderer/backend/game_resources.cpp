@@ -595,6 +595,14 @@ GameRenderer::HostTexture* GameRenderer::AliasTexture(nvrhi::ICommandList* cl, k
 
 uint32_t GameRenderer::BindSampler(const uint32_t words[6], const kkshaders::SamplerBinding& b, float extra_lod_bias) {
   const kknr::TextureFetch f = kknr::TextureFetch::FromWords(words);
+  // A scene material may also read a shadow/depth/resolve texture. Never apply the upscaler's
+  // material bias to those, even though this draw is jittered. UI and post draws already pass zero.
+  if (extra_lod_bias != 0.0f) {
+    const auto* entry = textures_.Find(f);
+    const auto* host = entry ? static_cast<const HostTexture*>(entry->host) : nullptr;
+    if (!host || host->render_target || !host->texture || host->texture->getDesc().mipLevels <= 1)
+      extra_lod_bias = 0.0f;
+  }
   const uint32_t mag = b.magFilter == 3 ? f.MagFilter() : b.magFilter;
   const uint32_t min = b.minFilter == 3 ? f.MinFilter() : b.minFilter;
   const uint32_t mip = b.mipFilter == 3 ? f.MipFilter() : b.mipFilter;

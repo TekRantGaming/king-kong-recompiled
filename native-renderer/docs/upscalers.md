@@ -25,7 +25,7 @@ All are read at start (init only).
 | `native_upscaler_point` | `post` | `post`: before the game's post effects and HUD; `present`: at the end of the frame (everything upscaled, HUD included) |
 | `native_upscaler_dlss_preset` | `latest` | DLSS render preset: `latest` (the newest model: DLSS 4.5's `M`, `L` for ultra performance, as NVIDIA recommends), `default` (the DLL's choice per mode: `K` for DLAA, quality and balanced), `J` or `K` (DLSS 4, transformer), `L` or `M` (DLSS 4.5) |
 | `native_upscaler_sharpness` | `-1` | 0 to 1: FSR's RCAS after the upscale (DLSS and XeSS have none); negative: off |
-| `native_upscaler_mip_bias` | `auto` | texture LOD bias of the scene's draws: `auto` = log2(input / output), as the SDKs recommend, or a number |
+| `native_upscaler_mip_bias` | `auto` | material LOD bias: `auto` = log2(input / output), minus 1 for DLSS/FSR below output size; or a number |
 | `native_upscaler_reactive` | `1.0` | strength of the reactive mask (0: none) |
 | `native_upscaler_debug` | `0` | bits: 1 show the motion vectors, 2 the reactive mask, 4 camera motion only, 8 no jitter, 16 a log line per frame (and NGX's log), 32 show the depth, 64 no mip bias, 128 log the camera vote and which constants changed, 512 read the motion vectors back every 150 frames and log how many pixels move and how far, 1024 draws on rewritten vertex buffers get the camera's motion only (as before Beta 3) |
 | `native_upscaler_gpu_time` | `false` | time the upscaler's GPU work (the renderer's passes and the SDK's) and log the averages every 600 frames |
@@ -172,7 +172,14 @@ The convention handed to every SDK: the jitter is the picture's shift in input p
 with either sign flipped every upscaler's result gets worse (nr_game_upscale_tests on Vulkan, by hand;
 nr_upscaler_sdk_tests on both APIs, as a check).
 
-The mip bias (auto) is log2(input / output): -0.585 in quality mode, -1 in performance.
+The automatic material mip bias uses the actual SDK sizes: DLSS and FSR 3.1/4 use
+log2(input / output) - 1 (-1.585 at 1.5x); XeSS uses log2(input / output) (-0.585 at 1.5x).
+Native AA keeps the game's bias. Only jittered scene draws receive it, and their GPU-resolved
+shadow/depth/post textures and textures without mip chains are excluded. A numeric override is retained.
+The ratio is rebuilt when the output resolution is selected at startup or the upscaler mode changes live.
+References: [NVIDIA section 3.5](https://github.com/NVIDIA/DLSS/blob/main/doc/DLSS_Programming_Guide_Release.pdf),
+[AMD](https://gpuopen.com/manuals/fidelityfx_sdk/techniques/super-resolution-upscaler/#mipmap-biasing),
+[Intel](https://www.intel.com/content/www/us/en/developer/articles/guide/xe-super-sampling-developer-guide.html).
 
 ## Motion vectors
 

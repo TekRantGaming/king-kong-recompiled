@@ -33,6 +33,10 @@ bool ParseUpscaleQuality(const std::string& text, UpscaleQuality& out);
 // later use other ratios for the same names; the XeSS upscaler asks its SDK.
 float DefaultUpscaleRatio(UpscaleQuality q);
 
+// Additional material bias, using the actual SDK input/output ratio. DLSS and FSR recommend
+// log2(input/output)-1; XeSS recommends log2(input/output). Native AA keeps the game's bias.
+float MaterialMipBias(UpscalerKind kind, float output_over_input);
+
 // Where in the frame the upscaler runs (docs/upscalers.md, "Where it runs").
 enum class UpscalePoint : uint8_t {
   kPost,     // before the game's post effects and HUD (the default): the scene at the input size, the
@@ -51,8 +55,7 @@ struct UpscaleConfig {
   char dlss_preset = 0;
   // Sharpening after the upscale, 0 to 1 (FSR's RCAS; DLSS 3.1+ and XeSS have none). Negative: off.
   float sharpness = -1.0f;
-  // The texture LOD bias of the scene's draws: with mip_bias_auto (the default) log2(input / output)
-  // as the SDKs recommend; else mip_bias (0: none).
+  // Additional LOD bias for material textures only: automatic vendor recommendation, or a number.
   float mip_bias = 0.0f;
   bool mip_bias_auto = true;
   // The reactive (and DLSS bias-current-colour, XeSS responsive) mask from the draws after the opaque

@@ -151,7 +151,7 @@ bool GameRenderer::UpscaleSetup(PreparedUpscaler* prepared) {
 
 float GameRenderer::UpscaleMipBiasFor(const GameUpscale& u) {
   if (u.config.debug & 64) return 0.0f;
-  return u.config.mip_bias_auto ? UpscaleMipBias(u.ratio) : u.config.mip_bias;
+  return u.config.mip_bias_auto ? MaterialMipBias(u.kind, u.ratio) : u.config.mip_bias;
 }
 
 bool GameRenderer::UpscaleInitialize() {

@@ -364,8 +364,8 @@ REXCVAR_DEFINE_DOUBLE(native_upscaler_sharpness, -1.0, "Native renderer",
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 REXCVAR_DEFINE_STRING(native_upscaler_mip_bias, "auto", "Native renderer",
-                      "The texture LOD bias of the scene's draws: auto (log2 of input over output, as the SDKs "
-                      "recommend) or a number")
+                      "Material texture LOD bias: auto (log2 of input over output, minus 1 for DLSS/FSR below "
+                      "output size), or a number")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 REXCVAR_DEFINE_DOUBLE(native_upscaler_reactive, 1.0, "Native renderer",
