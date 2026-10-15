@@ -38,6 +38,16 @@ inline void StoreBE16(uint8_t* p, uint16_t v) {
   p[0] = uint8_t(v >> 8);
   p[1] = uint8_t(v);
 }
+// Whether the 64 bytes at a and b are equal, with inline loads (a memcmp of them is a library call;
+// the renderer compares shader constants and the device in such blocks at every draw).
+inline bool SameBytes64(const uint8_t* a, const uint8_t* b) {
+  uint64_t x[8], y[8];
+  std::memcpy(x, a, sizeof(x));
+  std::memcpy(y, b, sizeof(y));
+  uint64_t differ = 0;
+  for (int i = 0; i < 8; ++i) differ |= x[i] ^ y[i];
+  return differ == 0;
+}
 inline void StoreBEFloat(uint8_t* p, float f) {
   uint32_t u;
   std::memcpy(&u, &f, 4);

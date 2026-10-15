@@ -186,6 +186,7 @@ NrEffectStats Stats() { return nr::kk::EffectTimes(); }
 // The temporal upscalers this PC runs: the launcher's answer (it asked the SDKs), else by the GPU's vendor.
 std::vector<UpscalerChoice> OfferedUpscalers() {
   std::vector<UpscalerChoice> out = {kUpscalers[0]};
+#if !defined(__linux__)
   const NrEffectStats s = Stats();
   const bool d3d12 = s.size && s.api == 2;
   const nr::kk::UpscalerChoices c = nr::kk::PeekUpscalers();
@@ -195,6 +196,7 @@ std::vector<UpscalerChoice> OfferedUpscalers() {
   if (d3d12 && (known ? c.fsr4 : false)) out.push_back(kUpscalers[2]);
   if (known ? c.fsr3 : true) out.push_back(kUpscalers[3]);
   if (known ? c.xess : true) out.push_back(kUpscalers[4]);
+#endif
   return out;
 }
 

@@ -4,6 +4,14 @@
 // Ssgi::Composite timed with GPU timer queries over many frames.
 //
 //   nr_ssgi_bench [width height]     default 2560 1440; prints the mean GPU time of each level
+//
+// Environment (task 085):
+//   NR_SSGI_LEVELS=high          only these levels (comma separated: low, medium, high)
+//   NR_SSGI_DETAIL=1             also time the gather alone, the temporal pass and the blur (by
+//                                running Compute without the later passes)
+//   NR_SSGI_BUMPY=1              a bumpy scene (the depth and normals vary per pixel)
+//   NR_SSGI_DUMP=<file>          write the level's result (the light, then the composited colour, floats)
+//   NR_SSGI_REF=<file>           compare the result with such a dump: values that differ, largest difference
 
 #include <algorithm>
 #include <cmath>
@@ -18,6 +26,7 @@
 #include "backend/gi_config.h"
 #include "backend/gtao.h"
 #include "backend/ssgi.h"
+#include "backend/tests/readback.h"
 #include "backend/tests/vk_test_device.h"
 
 using namespace nr;
@@ -137,7 +146,11 @@ std::vector<float> RayCast(const Camera& cam, const AoScreen& s, uint32_t w, uin
       const float nx = (gx - s.x_offset - s.offset_x()) / s.x_scale, ny = (gy - s.y_offset - s.offset_y()) / s.y_scale;
       const V3 dir = cam.r * (nx / cam.px) + cam.u * (ny / cam.py) + cam.f;  // view z = 1 along it
       const float t = Hit(cam.eye, dir);
-      if (t > 0.0f) z[size_t(j) * w + i] = cam.a + cam.b / t;  // t is the view z: dir has view z 1
+      static const bool bumpy = std::getenv("NR_SSGI_BUMPY") != nullptr;
+      const float tb = bumpy ? t * (1.0f + 0.004f * std::sin(float(i) * 0.37f) * std::sin(float(j) * 0.23f) +
+                                    0.002f * std::sin(float(i * 7 + j * 3) * 0.11f))
+                             : t;
+      if (t > 0.0f) z[size_t(j) * w + i] = cam.a + cam.b / tb;  // t is the view z: dir has view z 1
     }
   }
   return z;
@@ -206,14 +219,15 @@ int main(int argc, char** argv) {
   cd.keepInitialState = true;
   cd.debugName = "Bench colour";
   nvrhi::TextureHandle color = dev->createTexture(cd);
-  {
+  // The composite writes into the colour: each configuration starts from the same picture.
+  auto reset_color = [&] {
     nvrhi::CommandListHandle cl = dev->createCommandList();
     cl->open();
     cl->writeTexture(color, 0, 0, rgba.data(), size_t(w) * 4);
     cl->close();
     dev->executeCommandList(cl);
     dev->waitForIdle();
-  }
+  };
   float rows[16];
   cam.Rows(rows);
   GtaoInput in;
@@ -222,61 +236,119 @@ int main(int argc, char** argv) {
   in.height = h;
   ExtractAoProjection(rows, in.projection);
   in.screen = screen;
-  std::printf("  %ux%u\n", w, h);
+  std::printf("  %ux%u%s\n", w, h, std::getenv("NR_SSGI_BUMPY") ? " (bumpy)" : "");
+  const char* levels_env = std::getenv("NR_SSGI_LEVELS");
+  const bool detail = std::getenv("NR_SSGI_DETAIL") != nullptr;
+  const char* dump = std::getenv("NR_SSGI_DUMP");
+  const char* ref = std::getenv("NR_SSGI_REF");
+  int failures = 0;
+  // One configuration from a fresh Gtao, Ssgi and colour: `frames` timed frames after 5 warm-up ones.
+  // times: the mean prepare, compute and composite GPU times; out: the light and the colour at the end.
+  auto run = [&](GiLevel level, bool half, bool temporal, uint32_t denoise, int frames, double times[3],
+                 std::vector<float>* out) -> bool {
+    reset_color();
+    const GiLevelParams p = GiParamsFor(level);
+    Gtao gtao(dev);
+    Ssgi ssgi(dev);
+    if (!gtao.Initialize() || !ssgi.Initialize()) return false;
+    GtaoSettings gs;
+    gs.half = half;
+    SsgiSettings ss;
+    ss.level = p;
+    ss.level.denoise = denoise;
+    ss.radius = p.radius;
+    ss.thickness = 0.25f * p.radius;
+    // Temporal accumulation as in the game (a still camera: the identity reprojection).
+    ss.temporal = temporal;
+    ss.history = temporal;
+    for (int i = 0; i < 4; ++i) ss.reproject[i * 5] = 1.0f;
+    ss.screen_xy[0] = screen.x_scale;
+    ss.screen_xy[1] = screen.x_offset + screen.offset_x();
+    ss.screen_xy[2] = screen.y_scale;
+    ss.screen_xy[3] = screen.y_offset + screen.offset_y();
+    ss.screen_z[0] = 1.0f;
+    ss.screen_z[2] = screen.host_scale_x;
+    ss.screen_z[3] = screen.host_scale_y;
+    nvrhi::TimerQueryHandle tq[3] = {dev->createTimerQuery(), dev->createTimerQuery(), dev->createTimerQuery()};
+    double sum[3] = {};
+    for (int f = 0; f < frames + 5; ++f) {
+      nvrhi::CommandListHandle cl = dev->createCommandList();
+      cl->open();
+      cl->beginTimerQuery(tq[0]);
+      gtao.Prepare(cl, in, gs);
+      cl->endTimerQuery(tq[0]);
+      cl->beginTimerQuery(tq[1]);
+      ss.frame = uint32_t(f);
+      ssgi.Compute(cl, gtao, color, depth, ss);
+      cl->endTimerQuery(tq[1]);
+      cl->beginTimerQuery(tq[2]);
+      ssgi.Composite(cl, gtao, color, depth, ss);
+      cl->endTimerQuery(tq[2]);
+      cl->close();
+      dev->executeCommandList(cl);
+      dev->waitForIdle();
+      dev->runGarbageCollection();
+      for (int i = 0; i < 3; ++i) {
+        const double t = double(dev->getTimerQueryTime(tq[i])) * 1000.0;
+        if (f >= 5) sum[i] += t;
+        dev->resetTimerQuery(tq[i]);
+      }
+    }
+    for (int i = 0; i < 3; ++i) times[i] = sum[i] / frames;
+    if (out) {
+      const Pixels light = ReadBackTexture(dev, ssgi.result());
+      const Pixels pic = ReadBackTexture(dev, color);
+      out->assign(light.rgba.begin(), light.rgba.end());
+      out->insert(out->end(), pic.rgba.begin(), pic.rgba.end());
+    }
+    return true;
+  };
   for (GiLevel level : {GiLevel::kLow, GiLevel::kMedium, GiLevel::kHigh}) {
+    if (levels_env && !std::strstr(levels_env, GiLevelName(level))) continue;
     for (int quality = 0; quality < 2; ++quality) {  // 0: the level's resolution, 1: the other one
       const GiLevelParams p = GiParamsFor(level);
-      Gtao gtao(dev);
-      Ssgi ssgi(dev);
-      if (!gtao.Initialize() || !ssgi.Initialize()) return 1;
-      GtaoSettings gs;
-      gs.half = quality == 0 ? p.half : !p.half;
-      SsgiSettings ss;
-      ss.level = p;
-      ss.radius = p.radius;
-      ss.thickness = 0.25f * p.radius;
-      // Temporal accumulation as in the game (a still camera: the identity reprojection).
-      ss.temporal = true;
-      ss.history = true;
-      for (int i = 0; i < 4; ++i) ss.reproject[i * 5] = 1.0f;
-      ss.screen_xy[0] = screen.x_scale;
-      ss.screen_xy[1] = screen.x_offset + screen.offset_x();
-      ss.screen_xy[2] = screen.y_scale;
-      ss.screen_xy[3] = screen.y_offset + screen.offset_y();
-      ss.screen_z[0] = 1.0f;
-      ss.screen_z[2] = screen.host_scale_x;
-      ss.screen_z[3] = screen.host_scale_y;
-      nvrhi::TimerQueryHandle tq[3] = {dev->createTimerQuery(), dev->createTimerQuery(), dev->createTimerQuery()};
-      double sum[3] = {};
-      const int frames = 60;
-      for (int f = 0; f < frames + 5; ++f) {
-        nvrhi::CommandListHandle cl = dev->createCommandList();
-        cl->open();
-        cl->beginTimerQuery(tq[0]);
-        gtao.Prepare(cl, in, gs);
-        cl->endTimerQuery(tq[0]);
-        cl->beginTimerQuery(tq[1]);
-        ss.frame = uint32_t(f);
-        ssgi.Compute(cl, gtao, color, depth, ss);
-        cl->endTimerQuery(tq[1]);
-        cl->beginTimerQuery(tq[2]);
-        ssgi.Composite(cl, gtao, color, depth, ss);
-        cl->endTimerQuery(tq[2]);
-        cl->close();
-        dev->executeCommandList(cl);
-        dev->waitForIdle();
-        dev->runGarbageCollection();
-        for (int i = 0; i < 3; ++i) {
-          const double t = double(dev->getTimerQueryTime(tq[i])) * 1000.0;
-          if (f >= 5) sum[i] += t;
-          dev->resetTimerQuery(tq[i]);
+      const bool half = quality == 0 ? p.half : !p.half;
+      double t[3];
+      std::vector<float> result;
+      if (!run(level, half, true, p.denoise, 60, t, quality == 0 && (dump || ref) ? &result : nullptr)) return 1;
+      std::printf("  %-6s %s: prepare %.3f ms, gather and blur %.3f ms, composite %.3f ms, total %.3f ms\n",
+                  GiLevelName(level), half ? "half" : "full", t[0], t[1], t[2], t[0] + t[1] + t[2]);
+      if (detail && quality == 0) {
+        double g[3], gt[3];
+        if (!run(level, half, false, 0, 60, g, nullptr) || !run(level, half, true, 0, 60, gt, nullptr)) return 1;
+        std::printf("         radiance and gather %.3f ms, temporal %.3f ms, blur (%u passes) %.3f ms\n", g[1],
+                    gt[1] - g[1], p.denoise, t[1] - gt[1]);
+      }
+      if (quality == 0 && dump) {
+        std::string path = std::string(dump) + "." + GiLevelName(level);
+        if (FILE* f = std::fopen(path.c_str(), "wb")) {
+          std::fwrite(result.data(), sizeof(float), result.size(), f);
+          std::fclose(f);
         }
       }
-      std::printf("  %-6s %s: prepare %.3f ms, gather and blur %.3f ms, composite %.3f ms, total %.3f ms\n", GiLevelName(level),
-                  gs.half ? "half" : "full", sum[0] / frames, sum[1] / frames, sum[2] / frames,
-                  (sum[0] + sum[1] + sum[2]) / frames);
+      if (quality == 0 && ref) {
+        std::string path = std::string(ref) + "." + GiLevelName(level);
+        std::vector<float> want(result.size());
+        FILE* f = std::fopen(path.c_str(), "rb");
+        const size_t n = f ? std::fread(want.data(), sizeof(float), want.size(), f) : 0;
+        if (f) std::fclose(f);
+        if (n != result.size()) {
+          std::printf("  reference %s: missing or of another size\n", path.c_str());
+          ++failures;
+        } else {
+          double largest = 0;
+          size_t differ = 0;
+          for (size_t i = 0; i < n; ++i) {
+            const double d = std::fabs(double(result[i]) - double(want[i]));
+            if (d > 0) ++differ;
+            largest = std::max(largest, d);
+          }
+          std::printf("  %-6s against the reference: %zu of %zu values differ, largest difference %.3g\n",
+                      GiLevelName(level), differ, n, largest);
+        }
+      }
     }
   }
   std::printf("  validation errors: %d\n", gpu->errors());
-  return 0;
+  return failures;
 }

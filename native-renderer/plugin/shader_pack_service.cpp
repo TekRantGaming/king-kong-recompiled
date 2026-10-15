@@ -31,6 +31,7 @@
 #include "backend/render_scale.h"
 #include "backend/host_device.h"
 #include "backend/pipeline_prewarm.h"
+#include "backend/driver_pipeline_cache.h"
 #include <rex/kernel/xboxkrnl/video.h>
 #if NR_HAS_VULKAN
 #include <rex/ui/vulkan/provider.h>
@@ -63,13 +64,29 @@ std::string PrewarmStamp(const kkshaders::PackStamp& stamp, const nr::PipelinePr
   out << stamp.toText() << "pipeline layouts 1\n";
   std::error_code ec;
   // A renderer update or a changed pipeline list invalidates preparation even if the translator did not change.
+#if defined(__linux__)
+  const auto plugin = nr::ProgramFolder() / "librexgpu-native.so";
+#else
   const auto plugin = nr::ProgramFolder() / "rexgpu-native.dll";
+#endif
   out << std::filesystem::last_write_time(plugin, ec).time_since_epoch().count() << '\n';
   for (const auto& list : settings.lists) {
     // Newly recorded pipelines were already compiled by the game. Their append must not trigger
     // another full preparation at the next Play; the shipped list and renderer updates still do.
     if (list == player_records) continue;
-    out << list << '\n' << std::filesystem::file_size(list, ec) << '\n'
+#if defined(__linux__)
+    // An AppImage mounts the program under a new /tmp/.mount_<random> folder at every start: the
+    // shipped list beside the program is named by its file name, or the stamp never matched and
+    // the pipeline step ran again at every launcher start and Play.
+    if (std::filesystem::path(list).parent_path() == nr::ProgramFolder()) {
+      out << "<program>/" << std::filesystem::path(list).filename().string();
+    } else {
+      out << list;
+    }
+#else
+    out << list;
+#endif
+    out << '\n' << std::filesystem::file_size(list, ec) << '\n'
         << std::filesystem::last_write_time(list, ec).time_since_epoch().count() << '\n';
   }
   return out.str();
@@ -237,6 +254,9 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
     std::string warnings;
     std::vector<kkshaders::PackBackend> backends;
     for (auto backend : {kkshaders::PackBackend::Spirv, kkshaders::PackBackend::Dxil}) {
+#if defined(__linux__)
+      if (backend == kkshaders::PackBackend::Dxil) continue;
+#endif
 #if !NR_HAS_VULKAN
       if (backend == kkshaders::PackBackend::Spirv) continue;
 #endif
@@ -294,12 +314,38 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
       const bool driver_ready = !job->need_driver_cache || backend != kkshaders::PackBackend::Spirv ||
           std::filesystem::is_regular_file(job->driver_cache_path, marker_error) ||
           (previous == expected && attempted == expected);
-      if (!r.upToDate || previous != expected || !driver_ready) {
+      std::unique_ptr<rex::ui::GraphicsProvider> provider;
+      std::unique_ptr<nr::HostDevice> host;
+      bool driver_changed = false;
+#if defined(__linux__) && NR_HAS_VULKAN
+      // Linux drivers (Mesa) update often, and a driver cache made by another driver version is
+      // dropped by the game at start, which then made every pipeline in the background while the
+      // player played. Here the file is read with the driver it will be used with: a cache the
+      // driver cannot use is prepared again now, before Play, like a missing one.
+      if (r.upToDate && previous == expected && driver_ready && job->need_driver_cache &&
+          backend == kkshaders::PackBackend::Spirv &&
+          std::filesystem::is_regular_file(job->driver_cache_path, marker_error)) {
+        provider = rex::ui::vulkan::VulkanProvider::Create(true, false);
+        if (provider) host = nr::CreateVulkanHostDevice(*provider);
+        if (host && host->pipeline_cache()) {
+          std::string note;
+          const auto load = host->pipeline_cache()->LoadFile(job->driver_cache_path, &note);
+          if (load != nr::DriverPipelineCache::Load::kLoaded) {
+            driver_changed = true;
+            REXLOG_INFO("rexgpu-native: setup: the Vulkan driver pipeline cache is {} ({}): preparing the pipelines again",
+                        nr::LoadResultName(load), note);
+          }
+        }
+        if (!driver_changed) {
+          host.reset();
+          provider.reset();
+        }
+      }
+#endif
+      if (!r.upToDate || previous != expected || !driver_ready || driver_changed) {
         const auto start = std::chrono::steady_clock::now();
-        std::unique_ptr<rex::ui::GraphicsProvider> provider;
-        std::unique_ptr<nr::HostDevice> host;
 #if NR_HAS_VULKAN
-        if (backend == kkshaders::PackBackend::Spirv) {
+        if (backend == kkshaders::PackBackend::Spirv && !host) {
           provider = rex::ui::vulkan::VulkanProvider::Create(true, false);
           if (provider) host = nr::CreateVulkanHostDevice(*provider);
         }

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <type_traits>
 
 #include "kknr/endian.h"
 
@@ -37,16 +38,34 @@ BlockExtent GetLevelBlockExtent(const GuestLayout& layout, uint32_t level) {
 }
 
 // Calls fn(byte offset in the region, index of the block in the packed level) for every block of a level.
+// The offsets are BlockOffset's, with the format's block size worked out once per level instead of
+// once per block (task 085: untiling a chapter's textures held up its first frames).
 template <typename Fn>
 static bool WalkLevel(const GuestLayout& layout, uint32_t level, uint32_t layer, LevelSource& src, Fn&& fn) {
   if (!GetLevelSource(layout, level, layer, src)) return false;
+  const LevelStorage& s = *src.storage;
+  const uint32_t bpb = GetFormatInfo(layout.format).BytesPerBlock();
+  uint32_t bpb_log2 = 0;
+  while ((2u << bpb_log2) <= bpb) ++bpb_log2;  // Log2Floor (bpb >= 1)
+  const size_t base = src.layer_offset_bytes;
   size_t index = 0;
   for (uint32_t z = 0; z < src.depth; ++z)
-    for (uint32_t y = 0; y < src.height_blocks; ++y)
-      for (uint32_t x = 0; x < src.width_blocks; ++x, ++index)
-        fn(size_t(src.layer_offset_bytes) +
-               BlockOffset(layout, *src.storage, x + src.x_blocks, y + src.y_blocks, z + src.z),
-           index);
+    for (uint32_t y = 0; y < src.height_blocks; ++y) {
+      const uint32_t gy = y + src.y_blocks, gz = z + src.z;
+      if (!layout.tiled) {
+        const uint32_t row = (gz * s.height_blocks + gy) * s.row_pitch_bytes;
+        for (uint32_t x = 0; x < src.width_blocks; ++x, ++index)
+          fn(base + uint32_t(row + (x + src.x_blocks) * bpb), index);
+      } else if (layout.dimension == Dimension::k3D) {
+        for (uint32_t x = 0; x < src.width_blocks; ++x, ++index)
+          fn(base + uint32_t(TiledOffset3D(int32_t(x + src.x_blocks), int32_t(gy), int32_t(gz), s.pitch_blocks,
+                                           s.height_blocks, bpb_log2)),
+             index);
+      } else {
+        for (uint32_t x = 0; x < src.width_blocks; ++x, ++index)
+          fn(base + uint32_t(TiledOffset2D(int32_t(x + src.x_blocks), int32_t(gy), s.pitch_blocks, bpb_log2)), index);
+      }
+    }
   return true;
 }
 
@@ -59,9 +78,23 @@ bool ReadGuestBlocks(const GuestLayout& layout, const GuestRegions& regions, uin
   const uint8_t* region = src.from_mips ? regions.mips : regions.base;
   const size_t region_size = src.from_mips ? regions.mips_size : regions.base_size;
   out.assign(extent.Count() * bpb, 0);
-  return WalkLevel(layout, level, layer, src, [&](size_t offset, size_t index) {
-    if (region && offset + bpb <= region_size) std::memcpy(out.data() + index * bpb, region + offset, bpb);
-  });
+  // The usual block sizes as constants: a copy of a run-time size was a library call per block.
+  uint8_t* dst = out.data();
+  auto read = [&](auto block_bytes) {
+    constexpr size_t kBytes = decltype(block_bytes)::value;
+    return WalkLevel(layout, level, layer, src, [&](size_t offset, size_t index) {
+      if (region && offset + kBytes <= region_size) std::memcpy(dst + index * kBytes, region + offset, kBytes);
+    });
+  };
+  switch (bpb) {
+    case 4: return read(std::integral_constant<size_t, 4>());
+    case 8: return read(std::integral_constant<size_t, 8>());
+    case 16: return read(std::integral_constant<size_t, 16>());
+    default:
+      return WalkLevel(layout, level, layer, src, [&](size_t offset, size_t index) {
+        if (region && offset + bpb <= region_size) std::memcpy(dst + index * bpb, region + offset, bpb);
+      });
+  }
 }
 
 bool WriteGuestBlocks(const GuestLayout& layout, uint8_t* base, size_t base_size, uint8_t* mips, size_t mips_size,

@@ -1482,10 +1482,15 @@ class SettingsPages {
         Item api;
         api.type = ItemType::kChoice;
         api.label = "Graphics API";
+#if defined(__linux__)
+        api.description = "How the native renderer talks to your graphics card. Auto uses Vulkan. Changes apply when the game starts.";
+        api.options = {"Auto", "Vulkan"};
+#else
         api.description =
             "How the native renderer talks to your graphics card. Auto keeps the usual choice. DirectX 12 is "
             "needed for AMD FSR 4. Changes apply when the game starts: press Play to restart with your choice.";
         api.options = {"Auto", "Vulkan", "DirectX 12"};
+#endif
         const std::string backend = Get("native_backend");
         api.index = backend == "auto" ? 0 : backend == "vulkan" ? 1 : backend == "d3d12" ? 2 : -1;
         api.value_text = backend;

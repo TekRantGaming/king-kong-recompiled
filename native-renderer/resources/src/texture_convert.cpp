@@ -797,6 +797,17 @@ void ConvertBlocks(Conversion conversion, TextureFormat guest_format, HostFormat
     }
     return;
   }
+  if (conversion == Conversion::kCopy && host_bpb == guest_bpb) {
+    // The blocks as they are (the compressed formats and most others): a row at a time, the same
+    // bytes ConvertTexel copies one block at a time (task 085).
+    const size_t row_bytes = size_t(extent.width_blocks) * guest_bpb;
+    for (uint32_t z = 0; z < extent.depth; ++z) {
+      uint8_t* slice = dst + size_t(z) * depth_pitch;
+      for (uint32_t by = 0; by < extent.height_blocks; ++by, src += row_bytes)
+        std::memcpy(slice + size_t(by) * row_pitch, src, row_bytes);
+    }
+    return;
+  }
   for (uint32_t z = 0; z < extent.depth; ++z) {
     uint8_t* slice = dst + size_t(z) * depth_pitch;
     for (uint32_t by = 0; by < extent.height_blocks; ++by)

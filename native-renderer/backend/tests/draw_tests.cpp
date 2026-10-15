@@ -3,6 +3,9 @@
 // the records that reach the renderer's interface (DrawSink).
 
 #include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <condition_variable>
 #include <functional>
 #include <mutex>
@@ -552,6 +555,116 @@ TEST(RenderThreadRunsCallsOnTheirCopies) {
   CHECK_EQ(sink.stats().commands, 2u);
   CHECK_EQ(sink.stats().device_copies, 2u);
 }
+// The render thread gets only the device's changed blocks with each call (task 085) and keeps its own copy:
+// many calls queued before any runs, changes at the edges of the copied ranges and outside them, two
+// devices taking turns. Each call must see the read parts exactly as they were at the call.
+TEST(RenderThreadDeviceChangesArriveInOrder) {
+  FakeGuestMemory m(1 << 20);
+  const uint32_t devices[2] = {m.AllocHeap(dev::kSize), m.AllocHeap(dev::kSize)};
+  const std::vector<ThreadedSink::DeviceBlock>& blocks = ThreadedSink::DeviceBlocks();
+  auto read_parts = [&](const uint8_t* d) {
+    std::vector<uint8_t> v;
+    for (const auto& b : blocks) v.insert(v.end(), d + b.offset, d + b.offset + b.size);
+    return v;
+  };
+  std::mutex gate_mutex;
+  std::condition_variable gate_cv;
+  bool open = false;
+  std::vector<std::vector<uint8_t>> seen;
+  class Inner final : public DrawSink {
+   public:
+    Inner(const GuestMemory& memory, std::function<void(const DrawCall&, const GuestMemory&)> note, std::function<void()> wait)
+        : view_(memory), note_(std::move(note)), wait_(std::move(wait)) {}
+    void OnClear(const ClearCall&) override {}
+    void OnResolve(const ResolveCall&) override {}
+    void OnPresent(uint32_t, uint32_t, uint32_t) override {}
+    void OnDraw(const DrawCall& d) override {
+      wait_();
+      note_(d, view_);
+    }
+    SnapshotGuestMemory view_;
+    std::function<void(const DrawCall&, const GuestMemory&)> note_;
+    std::function<void()> wait_;
+  } inner(m, [&](const DrawCall& d, const GuestMemory& view) { seen.push_back(read_parts(view.Virtual(d.device))); },
+          [&] {
+            std::unique_lock lock(gate_mutex);
+            gate_cv.wait(lock, [&] { return open; });
+          });
+  std::vector<std::vector<uint8_t>> want;
+  uint32_t calls_that_changed = 0;
+  {
+    ThreadedSink sink(inner, m);
+    uint32_t seed = 12345;
+    auto next = [&] { return seed = seed * 1664525u + 1013904223u; };
+    // Offsets at the edges of the read ranges and inside them, and two outside them.
+    const uint32_t edges[] = {1152, 1156, 4000, 10268, 11424, 11996, 12532, 12560, 12940, 13960, 13964, 14060, 15592, 100, 11000};
+    std::vector<uint8_t> last[2];
+    for (uint32_t i = 0; i < 300; ++i) {
+      const uint32_t d = devices[(next() >> 8) % 7 == 0 ? 1 : 0];
+      const uint32_t changes = (next() >> 8) % 4;  // none, some
+      for (uint32_t k = 0; k < changes; ++k) {
+        const uint32_t offset = (next() >> 8) % 3 == 0 ? edges[(next() >> 8) % 15] : ((next() >> 8) % (dev::kSize / 4)) * 4;
+        m.Write32(d + offset, next());
+      }
+      DrawCall call;
+      call.device = d;
+      sink.OnDraw(call);
+      want.push_back(read_parts(m.Virtual(d)));
+    }
+    CHECK_EQ(sink.Ticket(), 300u);
+    {
+      std::lock_guard lock(gate_mutex);
+      open = true;
+    }
+    gate_cv.notify_all();
+    sink.WaitDone(sink.Ticket());
+    calls_that_changed = uint32_t(sink.stats().device_copies);
+  }
+  CHECK_EQ(seen.size(), want.size());
+  uint32_t mismatches = 0;
+  for (size_t i = 0; i < std::min(seen.size(), want.size()); ++i) mismatches += seen[i] != want[i];
+  CHECK_EQ(mismatches, 0u);
+  CHECK(calls_that_changed > 0 && calls_that_changed < 300);
+}
+
+// NR_BENCH=1: the game thread's cost of queueing draws for the render thread (copying what each call
+// needs), with a draw's usual change between calls (one 4x4 matrix of vertex shader constants) and
+// sixteen streams' vertex buffer objects. Not a check.
+TEST(Bench_RenderThreadQueueing) {
+  if (!std::getenv("NR_BENCH")) return;
+  FakeGuestMemory m(4 << 20);
+  const uint32_t device = m.AllocHeap(dev::kSize);
+  for (uint32_t s = 0; s < 4; ++s) {
+    uint32_t data = 0;
+    m.Write32(device + dev::kStreamBuffer + 8 * s, m.NewVertexBuffer(256, data));
+  }
+  class Inner final : public DrawSink {
+   public:
+    void OnClear(const ClearCall&) override {}
+    void OnDraw(const DrawCall&) override {}
+    void OnResolve(const ResolveCall&) override {}
+    void OnPresent(uint32_t, uint32_t, uint32_t) override {}
+  } inner;
+  ThreadedSink sink(inner, m);
+  const uint32_t surface = m.AllocHeap(64);
+  std::vector<double> per_call;
+  for (int round = 0; round < 7; ++round) {
+    const auto start = std::chrono::steady_clock::now();
+    const uint32_t calls = 20000;
+    for (uint32_t i = 0; i < calls; ++i) {
+      for (uint32_t r = 0; r < 16; ++r) m.WriteFloat(device + dev::kVsConstants + 4 * r, float(i * 16 + r));
+      DrawCall call;
+      call.device = device;
+      call.render_targets[0] = surface;
+      sink.OnDraw(call);
+    }
+    sink.WaitDone(sink.Ticket());
+    per_call.push_back(std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - start).count() / calls);
+  }
+  std::sort(per_call.begin(), per_call.end());
+  std::printf("  BENCH render thread queueing: median %.0f ns per draw (calls and the render thread's run)\n", per_call[3]);
+}
+
 TEST(ApiTimingDoesNotGateForwarding) {
   const bool previous = DiagnosticsEnabled();
   for (bool enabled : {false, true, false}) {

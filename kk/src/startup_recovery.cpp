@@ -70,9 +70,15 @@ bool IsDeviceLoss(const char* why) { return why && std::string_view(why).find("l
 
 // End the recovery chain after both native APIs fail. No monitor retry is signalled.
 [[noreturn]] void Exhausted() {
+#if defined(__linux__)
+  REXLOG_ERROR("KK recovery: Vulkan could not start; see logs for details");
+  rex::ShowSimpleMessageBox(rex::SimpleMessageBoxType::Error,
+      kk::text::T("Vulkan could not start. Update your graphics driver and check that your GPU meets the requirements in README.md. For help, use the support links in README.md and include the logs folder."));
+#else
   REXLOG_ERROR("KK recovery: both native graphics APIs failed; see logs for details");
   rex::ShowSimpleMessageBox(rex::SimpleMessageBoxType::Error,
       kk::text::T("Neither Vulkan nor DirectX 12 could start. Update your graphics driver and check that your GPU meets the requirements in README.md. For help, use the support links in README.md and include the logs folder."));
+#endif
   if (state) state->Clear();
   Signal('C');
   std::_Exit(1);

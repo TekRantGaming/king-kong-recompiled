@@ -15,7 +15,13 @@ struct RecoveryState {
   bool notice_shown = false;
 
   explicit RecoveryState(const std::filesystem::path& root) : directory(root / "renderer-recovery") {}
-  static bool Native(const std::string& api) { return api == "vulkan" || api == "d3d12"; }
+  static bool Native(const std::string& api) {
+#if defined(__linux__)
+    return api == "vulkan";
+#else
+    return api == "vulkan" || api == "d3d12";
+#endif
+  }
   static std::string Name(const std::string& api) {
     return api == "vulkan" ? "Vulkan" : api == "d3d12" ? "DirectX 12" : "Unavailable";
   }
@@ -55,7 +61,11 @@ struct RecoveryState {
   bool Advance(const std::string& why) {
     if (!Native(selected)) return false;
     const std::string failed = selected;
+#if defined(__linux__)
+    selected = "failed";
+#else
     selected = selected == preferred ? (preferred == "vulkan" ? "d3d12" : "vulkan") : "failed";
+#endif
     crashes = 0;
     retry_requested = false;
     notice_shown = false;

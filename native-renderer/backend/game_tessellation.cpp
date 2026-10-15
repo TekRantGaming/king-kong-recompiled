@@ -25,7 +25,7 @@ uint64_t GameRenderer::GeometryContentHash(const DrawCall& call) const {
 bool GameRenderer::AnnMainTessellation(const DrawCall& call, const dev::DeviceView& d,
     const GameShader& vs, const GameShader* ps, kkshaders::DrawConstants& dc,
     PipelineRecord& record, nvrhi::IGraphicsPipeline*& pipeline) {
-  if (!options_.tessellation_supported || (!tessellation_ && !tessellation_previous_flags_ && !std::getenv("REX_DEV_TESS_BENCH"))) return false;
+  if (!options_.tessellation_supported || (!tessellation_ && !tessellation_previous_flags_ && !TessellationBenchRequested())) return false;
   const uint64_t h=vs.ucode_hash;
   const bool depth=h==0xD710A475A7840F37ull || h==0xC66476D2889954ECull;
   const bool first=h==0x7149CE3656F92235ull || h==0x91632BD5704802BDull;
@@ -53,7 +53,7 @@ bool GameRenderer::AnnMainTessellation(const DrawCall& call, const dev::DeviceVi
     const kknr::VertexElement* normal=nullptr;
     for (const auto& e:scratch_declaration_) if(e.usage==uint8_t(kkshaders::DeclUsage::Normal) && e.usage_index==0) normal=&e;
     if (!normal || normal->stream>=16 || !(dc.vertexFetch[1][3]&63)) return false;
-    if (!learned.noted && std::getenv("REX_DEV_TESS_BENCH"))
+    if (!learned.noted && TessellationBenchRequested())
       Logf(LogLevel::kInfo,"rexgpu-native: ANN NORMAL mesh %016llX stream %u offset %u type %08X stride %u format %08X",
            (unsigned long long)mesh,normal->stream,normal->offset,normal->type.value,dc.vertexFetch[1][2],dc.vertexFetch[1][3]);
     learned.noted=true;

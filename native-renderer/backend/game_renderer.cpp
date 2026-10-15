@@ -545,7 +545,7 @@ GameRenderer::StutterStats GameRenderer::stutter() const {
 void GameRenderer::EndFrame() {
   if (tessellation_timer_) tessellation_timer_->FrameEnd();
   PublishEffectTimes();
-  if (std::getenv("REX_DEV_TESS_BENCH") && frame_%300==0)
+  if (TessellationBenchRequested() && frame_%300==0)
     Logf(LogLevel::kInfo,"rexgpu-native: ANN TESS status frame %llu enabled %d detail %u draws %u prepared %zu",(unsigned long long)frame_,int(tessellation_),tessellation_detail_,tessellation_draws_this_frame_,tessellation_records_.size());
   tessellation_previous_flags_ = tessellation_drawn_this_frame_ ? TessellationFlags() : 0;
   tessellation_drawn_this_frame_ = false;
@@ -1511,8 +1511,14 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
 
   if (stop_at == 3) return;
   // The vertices this draw reads (for dynamic vertex buffers): the index range, or the vertex range.
+  // Only a dynamic buffer uploads just those (the others go up whole), so an indexed draw's indices
+  // are scanned at its first dynamic buffer, not at every draw (task 085: the scan of every draw's
+  // indices took about a quarter of the render thread in chapter 8 on the ROG Ally).
   uint32_t first_vertex = 0, last_vertex = ~0u;
-  if (options_.dynamic_vertex_buffers) {
+  bool vertex_range_known = !options_.dynamic_vertex_buffers;
+  auto find_vertex_range = [&] {
+    if (vertex_range_known) return;
+    vertex_range_known = true;
     if (!call.indexed) {
       first_vertex = call.start;
       last_vertex = call.start + call.count;
@@ -1531,7 +1537,8 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
         last_vertex = uint32_t(std::max<int64_t>(0, int64_t(hi) + base + 1));
       }
     }
-  }
+  };
+  if (!call.indexed) find_vertex_range();  // no scan: the same for every buffer
 
   // Vertex fetch: each binding's declaration element, from its stream.
   auto& elements = scratch_declaration_;
@@ -1571,6 +1578,8 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     if (extra_normal) info = normal_it->second.buffer;
     else if (!vb_object || !DecodeVertexBuffer(memory_.Virtual(vb_object), info)) continue;
     uint32_t used_begin = 0, used_end = ~0u;
+    if (!vb.raw && stride && !vertex_range_known && IsDynamicVertexBuffer(info.physical, info.size_bytes))
+      find_vertex_range();
     if (!vb.raw && stride && last_vertex != ~0u) {
       used_begin = uint32_t(std::min<uint64_t>(uint64_t(offset) + uint64_t(first_vertex) * stride, info.size_bytes));
       used_end = uint32_t(std::min<uint64_t>(uint64_t(offset) + uint64_t(last_vertex) * stride, info.size_bytes));
@@ -1639,12 +1648,19 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   // Volatile buffers must be written in every command list that binds them
   // (one per frame; the same object is reopened, hence the frame number).
   const bool new_list = !constants_valid_ || constants_list_ != cl || constants_frame_ != frame_;
+  // Compared and converted in blocks of 16 constants: a draw usually changes a few of the 256
+  // registers (a matrix), and `last` always holds `last_raw` converted (task 085).
   auto upload = [&](uint32_t base, std::array<uint8_t, 4096>& last_raw, std::array<float, 1024>& last,
                     const nvrhi::BufferHandle& buffer) {
     const uint8_t* raw = d.at(base);
-    if (!new_list && std::memcmp(raw, last_raw.data(), last_raw.size()) == 0) return;
-    std::memcpy(last_raw.data(), raw, last_raw.size());
-    for (uint32_t i = 0; i < 1024; ++i) last[i] = LoadBEFloat(raw + i * 4);
+    bool changed = false;
+    for (uint32_t block = 0; block < 4096; block += 64) {
+      if (SameBytes64(raw + block, last_raw.data() + block)) continue;
+      changed = true;
+      std::memcpy(last_raw.data() + block, raw + block, 64);
+      for (uint32_t i = block / 4; i < block / 4 + 16; ++i) last[i] = LoadBEFloat(raw + i * 4);
+    }
+    if (!changed && !new_list) return;
     cl->writeBuffer(buffer, last.data(), sizeof(last));
     stats_.upload_bytes += sizeof(last);
   };
@@ -1655,7 +1671,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   constants_frame_ = frame_;
   // Only prepared, complete material/pass pairs can use the experimental geometry.
   // Missing pipelines keep the whole pair original; this never queues a compile in play.
-  bool ann_material = (vs->ucode_hash==0x5E779DBA373D121Cull || vs->ucode_hash==0x3390D930CD168AC0ull) && (dc.vertexFetch[1][3]&0x3Fu) && (tessellation_ || std::getenv("REX_DEV_TESS_BENCH")) &&
+  bool ann_material = (vs->ucode_hash==0x5E779DBA373D121Cull || vs->ucode_hash==0x3390D930CD168AC0ull) && (dc.vertexFetch[1][3]&0x3Fu) && (tessellation_ || TessellationBenchRequested()) &&
                             AnnTessellationMaterial(d,*vs,ps.get());
   bool tessellated=false;
   if (ann_material && tessellation_) {

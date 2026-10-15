@@ -7,8 +7,11 @@
 // it the hooks only copy what each call needs and queue it:
 //
 // - The D3D device struct (20,608 bytes: register images, constants, fetch constants, the bound
-//   objects' addresses), whole, because the game changes it right after the call. Consecutive
-//   calls with an unchanged device share one copy.
+//   objects' addresses), because the game changes it right after the call. Only the parts the
+//   renderer reads, and of those only the 64-byte blocks that changed since the previous call: the
+//   render thread keeps one copy of the device and brings it up to date with each call's changes
+//   before running it (task 085: copying all of it at every call was a fifth of the game thread's
+//   time in the hooks).
 // - The small guest objects a call names (render target and depth surfaces, the vertex
 //   declaration, the vertex buffer objects of the 16 streams, a resolve's destination texture,
 //   the back and front buffers): their headers can be rewritten for the next call
@@ -44,7 +47,9 @@ namespace nr {
 
 // Guest bytes copied at a call on the game's thread.
 struct GuestSnapshot {
-  std::shared_ptr<const std::vector<uint8_t>> device;  // the device struct, shared between calls
+  // The device struct as the call saw it (the render thread's copy; null: none).
+  const uint8_t* device = nullptr;
+  uint32_t device_size = 0;
   uint32_t device_address = 0;
   std::vector<uint8_t> bytes;  // the objects, back to back
   struct Object {
@@ -97,6 +102,11 @@ class ThreadedSink final : public DrawSink {
   void OnDraw(const DrawCall& call) override;
   void OnResolve(const ResolveCall& call) override;
   void OnPresent(uint32_t frame, uint32_t render_target0, uint32_t device) override;
+  // The parts of the device struct the renderer reads (byte ranges), and their 64-byte blocks.
+  struct DeviceBlock {
+    uint16_t offset = 0, size = 0;
+  };
+  static const std::vector<DeviceBlock>& DeviceBlocks();
   // Shader creation stays on the calling thread (the shader library has its own lock).
   void OnShaderCreated(uint32_t kind, uint32_t container, uint32_t object) override {
     inner_.OnShaderCreated(kind, container, object);
@@ -131,6 +141,7 @@ class ThreadedSink final : public DrawSink {
 
  private:
   enum class Kind : uint8_t { kClear, kDraw, kResolve, kPresent };
+  // Commands are reused (their vectors keep their room): no allocation per call.
   struct Command {
     Kind kind = Kind::kDraw;
     ClearCall clear;
@@ -138,30 +149,35 @@ class ThreadedSink final : public DrawSink {
     ResolveCall resolve;
     uint32_t present_frame = 0, present_rt0 = 0, present_device = 0;
     GuestSnapshot snapshot;
+    // The device's changes since the previous call: its address (0: no device), the indexes of the
+    // blocks (DeviceBlocks) that changed and their new bytes, back to back.
+    uint32_t device_address = 0;
+    std::vector<uint16_t> device_blocks;
+    std::vector<uint8_t> device_bytes;
   };
-  void CaptureDevice(GuestSnapshot& s, uint32_t device);
+  std::unique_ptr<Command> NewCommand(Kind kind);
+  // The device's changed blocks into the command; false: no device.
+  bool CaptureDevice(Command& c, uint32_t device);
+  // A word of the device as the command will see it (after CaptureDevice).
+  uint32_t SentDeviceWord(uint32_t offset) const;
   void CaptureSurface(GuestSnapshot& s, uint32_t surface);
-  void Enqueue(Command&& command, std::chrono::steady_clock::time_point start);
+  void Enqueue(std::unique_ptr<Command> command, std::chrono::steady_clock::time_point start);
   void Run();
 
   DrawSink& inner_;
   const GuestMemory& memory_;
-  // Device copies that no call holds any more, for reuse.
-  struct DevicePool {
-    std::mutex mutex;
-    std::vector<std::vector<uint8_t>*> free;
-    ~DevicePool() {
-      for (auto* p : free) delete p;
-    }
-  };
-  std::shared_ptr<DevicePool> device_pool_ = std::make_shared<DevicePool>();
-  // The last device copy (game's thread only).
-  std::shared_ptr<const std::vector<uint8_t>> last_device_;
-  uint32_t last_device_address_ = 0;
+  // The device as the render thread will see it after the calls queued so far (game's thread only),
+  // and the command the next call fills in (taken from free_ in Enqueue).
+  std::vector<uint8_t> sent_device_;
+  uint32_t sent_device_address_ = 0;
+  std::unique_ptr<Command> next_;
+  // The device as the call running now sees it (render thread only).
+  std::vector<uint8_t> device_image_;
 
   mutable std::mutex mutex_;
   std::condition_variable work_cv_, room_cv_, done_cv_;
-  std::deque<Command> queue_;
+  std::deque<std::unique_ptr<Command>> queue_;
+  std::vector<std::unique_ptr<Command>> free_;  // run commands, for reuse
   uint32_t queued_presents_ = 0;
   std::atomic<uint64_t> queued_{0};
   std::atomic<uint64_t> device_copies_{0};
