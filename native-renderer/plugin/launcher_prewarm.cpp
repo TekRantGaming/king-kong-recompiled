@@ -130,6 +130,7 @@ class LauncherPrewarm {
     }
     PipelinePrewarm::Settings settings = plan_.settings;
     settings.tessellation_supported = host->tessellation_supported();
+    settings.table_capacities = host->table_capacities();
     if (!plan_.driver_cache_path.empty() && host->pipeline_cache()) {
       settings.driver_cache = host->pipeline_cache();
       settings.driver_cache_path = plan_.driver_cache_path;

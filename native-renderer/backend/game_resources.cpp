@@ -266,6 +266,7 @@ GameRenderer::HostTexture* GameRenderer::ResolveDestTexture(kknr::TextureCache::
 
 void GameRenderer::ReleaseHostTexture(HostTexture* host) {
   if (!host) return;
+  descriptor_textures_.erase(host);
   if (host->twin) {
     HostTexture* twin = host->twin;
     host->twin = nullptr;
@@ -333,6 +334,7 @@ GameRenderer::HostTexture* GameRenderer::UploadTexture(nvrhi::ICommandList* cl,
 
 uint32_t GameRenderer::TextureView(HostTexture* host, const kknr::TextureFetch& fetch,
                                    kkshaders::TextureDimension dimension, bool base_map) {
+  descriptor_textures_.insert(host);
   kknr::HostTexturePlan plan;
   if (!kknr::PlanHostTexture(fetch, plan, nullptr, TextureOptions())) plan = host->plan;
   const uint32_t levels = std::max(host->plan.levels, 1u);
@@ -343,7 +345,6 @@ uint32_t GameRenderer::TextureView(HostTexture* host, const kknr::TextureFetch& 
   const uint32_t key = uint32_t(plan.view_swizzle & 0xFFF) | (uint32_t(dimension) & 3) << 12 | (lo & 15) << 14 |
                        (hi & 15) << 18;
   auto it = host->views.find(key);
-  if (it != host->views.end()) return it->second;
 
   const bool cube = host->plan.dimension == kknr::Dimension::kCube;
   const bool volume = host->plan.dimension == kknr::Dimension::k3D;
@@ -387,6 +388,10 @@ uint32_t GameRenderer::TextureView(HostTexture* host, const kknr::TextureFetch& 
         view_dim = nvrhi::TextureDimension::Texture2D;
       }
       break;
+  }
+  if (it != host->views.end()) {
+    TouchSlot(table, it->second & 0x7FFFFFFFu);
+    return it->second;
   }
   const uint32_t slot = AllocateSlot(table);
   if (!slot) {
@@ -517,7 +522,11 @@ uint32_t GameRenderer::BindSampler(const uint32_t words[6], const kkshaders::Sam
   const int32_t extra = int32_t(std::lround(extra_lod_bias * 32.0f));
   const uint64_t key64 = uint64_t(key) | (uint64_t(uint16_t(int16_t(extra))) << 32);
   auto it = samplers_.find(key64);
-  if (it != samplers_.end()) return it->second.second;
+  if (it != samplers_.end()) {
+    it->second.last_used = frame_;
+    TouchSlot(kSamplers, it->second.second);
+    return it->second.second;
+  }
   auto address = [](uint32_t clamp) {
     switch (clamp) {
       case 0: return nvrhi::SamplerAddressMode::Wrap;
@@ -546,7 +555,8 @@ uint32_t GameRenderer::BindSampler(const uint32_t words[6], const kkshaders::Sam
     slot = AllocateSlot(kSamplers);
     if (slot) WriteSlot(kSamplers, nvrhi::BindingSetItem::Sampler(slot, sampler));
   }
-  samplers_[key64] = {sampler, slot};
+  // A failed allocation is retryable after retirement, never cached as dummy.
+  if (slot) samplers_[key64] = {sampler, slot, frame_};
   return slot;
 }
 
@@ -569,7 +579,12 @@ GameRenderer::HostBuffer* GameRenderer::BindVertexBuffer(nvrhi::ICommandList* cl
     // A dynamic buffer: no watch, no hash; this draw's vertices go up every time.
     if (const kknr::BufferCache::Entry* known = vertex_buffers_.Find(physical, bytes, 0)) {
       auto* host = static_cast<HostBuffer*>(known->host);
+      if (host && host->dynamic && host->buffer && !host->slot) {
+        host->slot = AllocateSlot(kBuffers);
+        if (host->slot) WriteSlot(kBuffers, nvrhi::BindingSetItem::RawBuffer_SRV(host->slot, host->buffer));
+      }
       if (host && host->dynamic && host->buffer && host->slot) {
+        TouchSlot(kBuffers, host->slot);
         vertex_buffers_.Touch(physical, bytes, 0, frame_);
         const uint32_t begin = std::min(used_begin, bytes) & ~3u;
         const uint32_t end = std::min((uint64_t(std::min(used_end, bytes)) + 3) & ~uint64_t(3), uint64_t(host->bytes + 3) & ~uint64_t(3));
@@ -609,7 +624,13 @@ GameRenderer::HostBuffer* GameRenderer::BindVertexBuffer(nvrhi::ICommandList* cl
     r.entry->host = host;
     r.action = kknr::BindAction::kCreateAndUpload;
   }
+  descriptor_buffers_.insert(host);
+  if (host->buffer && !host->slot) {
+    host->slot = AllocateSlot(kBuffers);
+    if (host->slot) WriteSlot(kBuffers, nvrhi::BindingSetItem::RawBuffer_SRV(host->slot, host->buffer));
+  }
   if (!host->buffer || !host->slot) return nullptr;
+  TouchSlot(kBuffers, host->slot);
   if (r.action != kknr::BindAction::kUseExisting) {
     if (r.action == kknr::BindAction::kReupload && options_.dynamic_vertex_buffers) {
       // Uploaded again within four frames (rings of three buffers are common): three times running makes it dynamic (the

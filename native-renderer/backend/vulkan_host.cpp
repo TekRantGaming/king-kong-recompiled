@@ -39,6 +39,8 @@
 REXCVAR_DECLARE(bool, native_validation);
 REXCVAR_DECLARE(bool, native_vk_pipeline_cache);
 REXCVAR_DECLARE(int32_t, native_debug);
+REXCVAR_DECLARE(bool, native_vk_small_tables);
+REXCVAR_DECLARE(bool, native_vk_minimum_tables);
 
 namespace nr {
 
@@ -72,11 +74,18 @@ class VulkanHost final : public HostDevice {
       return false;
     }
     get_properties(vulkan_device->physical_device(), &properties);
-    if (!CheckNativeBindlessLimits(properties.properties.limits.maxBoundDescriptorSets, indexing,
+    if (!SelectNativeTableCapacities(properties.properties.limits.maxBoundDescriptorSets, indexing,
+                                    REXCVAR_GET(native_vk_small_tables), table_capacities_)) {
+      CheckNativeBindlessLimits(properties.properties.limits.maxBoundDescriptorSets, indexing,
           [](const char* name, unsigned available, unsigned needed) {
-            REXGPU_ERROR("rexgpu-native: descriptor limit {} is {}, requires {}. Update your graphics driver or choose DirectX 12.",
-                         name, available, needed);
-          })) return false;
+            REXGPU_ERROR("rexgpu-native: Vulkan descriptor limit {} is {}, minimum {}", name, available, needed);
+          }, kMinimumTableCapacities);
+      REXGPU_ERROR("rexgpu-native: Vulkan needs 7 sets, 512 update-after-bind images, 256 storage buffers, 128 samplers, 902 stage resources and 896 pool descriptors. Update your graphics driver or choose DirectX 12.");
+      return false;
+    }
+    if (REXCVAR_GET(native_vk_minimum_tables)) table_capacities_ = kMinimumTableCapacities;
+    REXLOG_INFO("rexgpu-native: Vulkan descriptor capacities: 2D {}, 3D {}, cube {}, array {}, samplers {}, buffers {} (on-demand recycling)",
+                table_capacities_[0], table_capacities_[1], table_capacities_[2], table_capacities_[3], table_capacities_[4], table_capacities_[5]);
     queue_family_ = vulkan_device->queue_family_graphics_compute();
     // The SDK loads the Vulkan loader itself; NVRHI's calls go through
     // vulkan.hpp's dispatcher, filled from the same loader.
@@ -131,6 +140,7 @@ class VulkanHost final : public HostDevice {
 
   nvrhi::IDevice* device() override { return device_; }
   nvrhi::GraphicsAPI api() const override { return nvrhi::GraphicsAPI::VULKAN; }
+  NativeTableCapacities table_capacities() const override { return table_capacities_; }
 
   void ExecuteCommandList(nvrhi::ICommandList* command_list) override {
     ExecuteFrameCommandList(command_list, nullptr);
@@ -361,6 +371,7 @@ class VulkanHost final : public HostDevice {
   }
 
   rex::ui::vulkan::VulkanProvider& provider_;
+  NativeTableCapacities table_capacities_ = kNativeTableCapacities;
   mutable std::mutex times_mutex_;
   std::mutex execute_mutex_;
   SubmitTimes times_;

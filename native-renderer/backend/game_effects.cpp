@@ -114,6 +114,9 @@ void GameRenderer::UpdateEffects() {
 // ---------------------------------------------------------------- the upscaler
 
 void GameRenderer::UpdateUpscaler(UpscaleConfig want) {
+  // A live settings callback must obey the same replay lifetime restriction
+  // as startup and pipeline prewarm. Keep the player's saved choice intact.
+  if (options_.table_capacities != kNativeTableCapacities) want.kind = UpscalerKind::kOff;
   // What only the start sets (the point, debugging, timers, rules) stays as it was.
   want.point = upscale_initial_.point;
   want.debug = upscale_initial_.debug;

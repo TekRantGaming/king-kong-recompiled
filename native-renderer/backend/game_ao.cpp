@@ -197,13 +197,14 @@ void GameRenderer::AoWriteAmbientConstants(nvrhi::ICommandList* cl, bool reads) 
   AmbientConstants k = {};
   if (reads && v.texture) {
     // The occlusion in the bindless 2D table (a new slot when Gtao made a new image).
-    if (v.texture != ao_slot_texture_) {
+    if (v.texture != ao_slot_texture_ || !ao_slot_) {
       if (ao_slot_) RetireSlot(kTex2D, ao_slot_);
       ao_slot_ = AllocateSlot(kTex2D);
-      WriteSlot(kTex2D, nvrhi::BindingSetItem::Texture_SRV(ao_slot_, v.texture));
+      if (ao_slot_) WriteSlot(kTex2D, nvrhi::BindingSetItem::Texture_SRV(ao_slot_, v.texture));
       ao_slot_texture_ = v.texture;
     }
     k.texture[0] = ao_slot_;
+    TouchSlot(kTex2D, ao_slot_);
     k.texture[1] = uint32_t(v.x);
     k.texture[2] = uint32_t(v.y);
     k.params[0] = 1.0f;

@@ -31,6 +31,7 @@ bool PipelinePrewarm::Start(const Settings& settings) {
   shaders_->Initialize(settings.shader_pack, settings.dxc);
   auto renderer = std::make_unique<GameRenderer>(device_, *memory_, kknr::GuestMemory{}, shaders_.get());
   GameRenderer::Options& o = renderer->options();
+  o.table_capacities = settings.table_capacities;
   o.render_scale_x = settings.render_scale_x;
   o.render_scale_y = settings.render_scale_y;
   o.shadow_scale = settings.shadow_scale;
