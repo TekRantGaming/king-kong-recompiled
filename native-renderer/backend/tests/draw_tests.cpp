@@ -570,4 +570,30 @@ TEST(ApiTimingDoesNotGateForwarding) {
   SetDiagnosticsEnabled(previous);
 }
 
+TEST(RenderThreadHitchReportingAndTicketsSurviveDiagnosticsSwitch) {
+  const bool previous = DiagnosticsEnabled();
+  for (bool enabled : {false, true}) {
+    SetDiagnosticsEnabled(enabled);
+    FakeGuestMemory memory(1 << 20);
+    RecordingSink inner;
+    ThreadedSink sink(inner, memory);
+    unsigned hitches = 0;
+    sink.long_frame_us = 1000;
+    sink.on_long_frame = [&](const ThreadedSink::LongFrame& frame) {
+      ++hitches;
+      CHECK(frame.frame_us > 1000);
+      CHECK_EQ(frame.calls, 1u);
+    };
+    sink.OnPresent(0, 0, 0);
+    sink.WaitDone(sink.Ticket());
+    std::this_thread::sleep_for(std::chrono::milliseconds(3));
+    sink.OnPresent(1, 0, 0);
+    CHECK_EQ(sink.Ticket(), 2u);
+    sink.WaitDone(sink.Ticket());
+    CHECK_EQ(sink.stats().presents, 2u);
+    CHECK_EQ(hitches, 1u);
+  }
+  SetDiagnosticsEnabled(previous);
+}
+
 NR_TEST_MAIN()
