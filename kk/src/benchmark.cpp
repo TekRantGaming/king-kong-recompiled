@@ -73,11 +73,12 @@ std::array<std::vector<double>, 4> chapter_guest, chapter_host;
 std::array<Stats, 4> chapter_stats;
 std::array<std::vector<float>, 4> chapter_graphs;
 struct Drift {
-  size_t compared = 0, unavailable = 0, mismatches = 0, missed_pulses = 0;
+  size_t compared = 0, unavailable = 0, mismatches = 0, missed_pulses = 0, missing_inputs = 0;
   double max_distance = 0, max_checkpoint_lag = 0, max_input_age = 0;
 };
 std::array<Drift, 4> chapter_drift;
 std::atomic<bool> drift_detected{false};
+std::atomic<bool> checkpoints_incomplete{false};
 size_t next_checkpoint = 0;
 std::ostringstream drift_csv;
 
@@ -102,28 +103,38 @@ void ApplyReplayControls() {
     if (split == std::string::npos) continue;
     const auto key = line.substr(0, split), value = line.substr(split + 3);
     const bool control = key == "kk_camera_sensitivity" || key == "kk_camera_modern" ||
-        key == "kk_fov" || key == "kk_hfr_fixes" || key == "kk_cheats";
+        key == "kk_fov" || key == "kk_hfr_fixes" || key == "kk_cheats" || key == "kk_camera_shake";
     bool cheat = false;
     for (const auto& c : kCheats) cheat |= key == std::string("kk_cheat_") + c.id;
     if (control || cheat) rex::cvar::SetFlagByName(key, value);
   }
+  rex::cvar::SetFlagByName("mnk_mode", "false");
 }
 
 std::string GraphSvg(const std::array<std::vector<double>, 4>& chapters) {
   std::ostringstream svg;
   svg.imbue(std::locale::classic());
-  svg << "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1000\" height=\"800\" viewBox=\"0 0 1000 800\">"
-      << "<rect width=\"1000\" height=\"800\" fill=\"#111820\"/>";
-  for (size_t c = 0; c < recording.chapters.size(); ++c) {
-    const auto stats = Summarize(chapters[c]);
-    const auto points = Graph(chapters[c], 900);
-    const double top = 30 + c * 195, scale = std::max(40.0, stats.worst_ms);
-    svg << "<text x=\"30\" y=\"" << top << "\" fill=\"white\" font-family=\"sans-serif\">Chapter entry "
-        << recording.chapters[c].entry << " / peak frame ms / scale " << scale << "</text>"
+  const size_t height = 200 * (recording.chapters.size() + 1);
+  svg << "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1000\" height=\"" << height
+      << "\" viewBox=\"0 0 1000 " << height << "\">"
+      << "<rect width=\"1000\" height=\"" << height << "\" fill=\"#111820\"/>";
+  auto draw = [&](const std::vector<double>& samples, size_t row, const std::string& label) {
+    const auto stats = Summarize(samples);
+    const auto points = Graph(samples, 900);
+    const double top = 30 + row * 200, scale = std::max(40.0, stats.worst_ms);
+    svg << "<text x=\"30\" y=\"" << top << "\" fill=\"white\" font-family=\"sans-serif\">"
+        << label << " / peak frame ms / scale " << scale << " / horizontal: measured elapsed time</text>"
         << "<polyline fill=\"none\" stroke=\"#5ed1ae\" points=\"";
     for (size_t i = 0; i < points.size(); ++i)
       svg << 30 + 940.0 * i / std::max<size_t>(1, points.size() - 1) << ',' << top + 150 - 140 * points[i] / scale << ' ';
     svg << "\"/>";
+  };
+  std::vector<double> total;
+  for (size_t c = 0; c < recording.chapters.size(); ++c)
+    total.insert(total.end(), chapters[c].begin(), chapters[c].end());
+  draw(total, 0, "total (loading excluded)");
+  for (size_t c = 0; c < recording.chapters.size(); ++c) {
+    draw(chapters[c], c + 1, "Chapter entry " + std::to_string(recording.chapters[c].entry));
   }
   return svg.str() + "</svg>\n";
 }
@@ -133,6 +144,12 @@ void FinishRecording() {
   writer.Start([] {
     try {
       recording.complete = !interrupted;
+      // A successful write alone does not prove that every chapter captured a
+      // controller through its ending. Never publish an unusable route as complete.
+      if (recording.complete) {
+        try { DecodeRecording(EncodeRecording(recording)); }
+        catch (const std::exception&) { recording.complete = false; interrupted = true; }
+      }
       const bool ok = WriteResult(result_dir / "route.kkbr", EncodeRecording(recording));
       if (!ok) { std::lock_guard lock(mutex); save_error = "Could not save benchmark results."; }
       REXLOG_INFO("KK benchmark recording: saved {} ({} reads, {} chapters, complete {})",
@@ -173,9 +190,24 @@ std::string Settings() {
   return RedactDiagnostics(std::move(out));
 }
 
+void EndReplayChapter() {
+  // Different frame rates can stop on opposite sides of the recording's last
+  // checkpoint. Account for those checks explicitly rather than dropping them.
+  while (next_checkpoint < recording.checkpoints.size() &&
+      recording.checkpoints[next_checkpoint].chapter == chapter_index) {
+    const auto& c = recording.checkpoints[next_checkpoint++];
+    ++chapter_drift[chapter_index].unavailable;
+    if (c.valid && c.seconds >= 1 && recording.chapters[chapter_index].entry != 10)
+      checkpoints_incomplete = true;
+    drift_csv << chapter_index.load() + 1 << ',' << c.seconds << ',' << game_seconds
+        << ",0," << game_seconds.load() - c.seconds << ",0\n";
+  }
+}
+
 void Finish() {
   // Called by the game thread after the last measured swap. IO and sorting are
   // outside the measured interval and off the game/presenter threads.
+  EndReplayChapter();
   writer.Start([] {
     try {
       std::vector<double> guest, host;
@@ -187,7 +219,8 @@ void Finish() {
       const Stats gs = Summarize(guest), hs = Summarize(host);
       std::string text = "King Kong recorded-route benchmark v2\n";
       text += interrupted ? "Status: interrupted (do not compare)\n" : drift_detected ?
-          "Status: complete with route drift (do not compare)\n" : "Status: complete\n";
+          "Status: complete with route drift (do not compare)\n" : checkpoints_incomplete ?
+          "Status: complete (route verification incomplete)\n" : "Status: complete\n";
       text += settings;
       text += "Recording build: " + recording.build + "\nRecording ID (FNV-1a): " + route_id + '\n';
       text += "No confirmed game RNG seed API is exposed. AI, particles, collisions and load timing can vary.\n";
@@ -215,7 +248,8 @@ void Finish() {
             "\nMax position distance: " + std::to_string(d.max_distance) +
             "\nMax checkpoint time lag seconds: " + std::to_string(d.max_checkpoint_lag) +
             "\nMax input age seconds: " + std::to_string(d.max_input_age) +
-            "\nMissed button/trigger pulses between replay polls: " + std::to_string(d.missed_pulses) + '\n';
+            "\nPolls with skipped button/trigger transitions: " + std::to_string(d.missed_pulses) +
+            "\nPolls missing recorded inputs after initial 0.25 seconds: " + std::to_string(d.missing_inputs) + '\n';
         const auto game_series = "game-chapter-" + std::to_string(c + 1), host_series = "host-chapter-" + std::to_string(c + 1);
         csv += Csv(chapter_guest[c], game_series.c_str()) + Csv(chapter_host[c], host_series.c_str());
       }
@@ -286,10 +320,6 @@ class Dialog final : public rex::ui::ImGuiDialog {
       ImGui::End();
       return;
     }
-    // Settings were captured when the level loaded, before warmup. Opening
-    // either settings UI during warmup invalidates that snapshot too.
-    if (p == Phase::kRunning &&
-        (DebugOverlayOpen() || play::PauseMenuOpen())) Interrupted();
     if (p == Phase::kLoading || p == Phase::kRunning) {
       ImGui::SetNextWindowPos(ImVec2(12, 50), ImGuiCond_Always);
       ImGui::SetNextWindowBgAlpha(.8f);
@@ -313,6 +343,7 @@ class Dialog final : public rex::ui::ImGuiDialog {
       std::lock_guard lock(mutex);
       if (interrupted) ImGui::TextWrapped("%s", T("Benchmark interrupted. Run it again before comparing results."));
       if (drift_detected) ImGui::TextWrapped("%s", T("Route drift detected. Do not compare these results."));
+      if (checkpoints_incomplete) ImGui::TextWrapped("%s", T("Some chapters have no verified position checkpoints."));
       ImGui::Text("%s: %.1f", T("Average FPS"), guest_stats.average_fps);
       ImGui::Text("%s: %.1f", T("1% low FPS"), guest_stats.low_fps);
       ImGui::Text("%s: %.2f ms", T("Worst frame"), guest_stats.worst_ms);
@@ -371,6 +402,13 @@ std::filesystem::path Prepare(const std::filesystem::path& root) {
   if (!recording_route) {
     recording = ReadRecording(RouteFile(), &route_id);
     replay.Attach(recording);
+    ApplyReplayControls();
+    for (size_t chapter = 0; chapter < recording.chapters.size(); ++chapter) {
+      bool available = false;
+      for (const auto& c : recording.checkpoints)
+        available |= c.chapter == chapter && c.valid && c.seconds >= 1 && recording.chapters[chapter].entry != 10;
+      if (!available) checkpoints_incomplete = true;
+    }
     drift_csv.imbue(std::locale::classic());
     drift_csv << "chapter,recorded_seconds,replay_seconds,position_distance,time_lag_seconds,available\n";
   }
@@ -384,7 +422,7 @@ std::filesystem::path Prepare(const std::filesystem::path& root) {
   rex::cvar::ResetToDefault("kk_benchmark_record");
   rex::cvar::ResetToDefault("kk_benchmark_route");
   if (recording_route) {
-    double duration = 120;
+    double duration = 45;
 #if defined(KK_DEV_TOOLS)
     if (const char* s = std::getenv("KK_DEV_BENCH_SECONDS"); s && *s)
       duration = std::clamp(std::atof(s), 1.0, 120.0);
@@ -408,11 +446,14 @@ void InstallPresentObserver() {
   const auto setter = runtime ? reinterpret_cast<Setter>(GetProcAddress(runtime, "RexSetPresentObserver096")) : nullptr;
   if (setter) { setter(HostPresent); observer_available = true; }
 #endif
+  // Linux observer implementation remains deferred under the standing hold.
   REXLOG_INFO("KK benchmark: host present observer {}", observer_available ? "available" : "unavailable");
 }
 
 void LevelLoaded() {
   if (phase != Phase::kLoading) { if (Active()) Interrupted(); return; }
+  // The SDK reads the settings file after Prepare. Reapply these before the
+  // first gameplay poll as well, without changing graphics or the frame cap.
   if (!recording_route && chapter_index == 0) ApplyReplayControls();
   if (chapter_index == 0) settings = Settings();
   game_seconds = 0;
@@ -465,6 +506,7 @@ void Frame(double dt, double scaled_dt, uint32_t game_ms, const uint8_t* base) {
         c.position[i] = hfr::LoadF(base, 0x82D64250 + uint32_t(i) * 4);
         c.valid = c.valid && std::isfinite(c.position[i]);
       }
+      if (!c.valid) c.position = {};
       recording.checkpoints.push_back(c);
       checkpoint_at += 1;
     }
@@ -518,6 +560,7 @@ void GuestSwap() {
   }
   if (interrupted) Finish();
   else if (game_seconds >= recording.chapters[chapter_index].duration) {
+    EndReplayChapter();
     if (chapter_index + 1 == recording.chapters.size()) Finish();
     else { std::lock_guard lock(mutex); phase = Phase::kLoading; advance_chapter = true; }
   }
@@ -536,6 +579,9 @@ bool Pad(uint32_t user, uint8_t* state, uint32_t& status) {
       d.max_input_age = std::max(d.max_input_age, game_seconds.load() - sample->seconds);
       if (missed) { ++d.missed_pulses; drift_detected = true; }
       if (game_seconds.load() - sample->seconds > .25) drift_detected = true;
+    } else if (user < 4 && game_seconds > .25) {
+      ++chapter_drift[chapter_index].missing_inputs;
+      drift_detected = true;
     }
   }
   return true;

@@ -152,7 +152,7 @@ if(NOT DEFINED KK_VERSION)
     set(KK_VERSION "2.0.0-beta.5")
 endif()
 target_compile_definitions(king_kong PRIVATE KK_VERSION="${KK_VERSION}" KK_VERSION_W=L"${KK_VERSION}")
-execute_process(COMMAND git rev-parse --short HEAD WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+execute_process(COMMAND git describe --always --dirty --abbrev=12 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     OUTPUT_VARIABLE KK_BENCH_BUILD OUTPUT_STRIP_TRAILING_WHITESPACE)
 target_compile_definitions(king_kong PRIVATE KK_BENCH_BUILD="${KK_BENCH_BUILD}-task115")
 

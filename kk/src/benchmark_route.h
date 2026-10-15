@@ -4,12 +4,14 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstddef>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
 #include <limits>
+#include <locale>
 #include <string_view>
 
 namespace kk::benchmark {
@@ -37,7 +39,7 @@ struct Recording {
   std::vector<PadSample> samples;
   std::vector<Checkpoint> checkpoints;
 };
-inline std::vector<RouteChapter> DefaultRoute(double duration = 120) {
+inline std::vector<RouteChapter> DefaultRoute(double duration = 45) {
   return {{2, duration, "Necropolis"}, {8, duration, "V-Rex"},
           {10, duration, "Kong"}, {1, duration, "Skull Island (coast)"}};
 }
@@ -141,8 +143,8 @@ inline uint32_t DigitalBits(const PadSample& s) {
 }
 
 // Zero-order hold on the game's elapsed seconds, never wall frames or a fixed
-// simulation step. Keep every recorded read; report pulses entirely missed
-// between replay polls rather than silently declaring identical traversal.
+// simulation step. Keep every recorded read; report digital transitions that
+// cannot be represented by one state at a replay poll.
 class RouteReplay {
  public:
   void Attach(const Recording& r) {
@@ -157,15 +159,16 @@ class RouteReplay {
     missed = 0;
     if (!recording_ || user > 3 || chapter_ >= indices_.size()) return nullptr;
     const auto& rows = indices_[chapter_][user];
-    uint32_t previous = selected_[user] ? DigitalBits(*selected_[user]) : 0, rising = 0;
+    uint32_t previous = selected_[user] ? DigitalBits(*selected_[user]) : 0, changed = 0;
     while (next_[user] < rows.size()) {
       const auto& s = recording_->samples[rows[next_[user]]];
       if (s.seconds > seconds + 1e-9) break;
       const uint32_t bits = DigitalBits(s);
-      rising |= bits & ~previous;
+      const uint32_t edges = bits ^ previous;
+      missed |= changed & edges;
+      changed |= edges;
       previous = bits; selected_[user] = &s; ++next_[user];
     }
-    if (selected_[user]) missed = rising & ~DigitalBits(*selected_[user]);
     return selected_[user];
   }
  private:
