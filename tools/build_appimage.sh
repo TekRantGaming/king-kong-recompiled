@@ -77,9 +77,11 @@ find "$BIN" -maxdepth 1 -name '*.so*' -exec cp -a {} "$APPDIR/usr/bin/" \;
 # The button prompt pictures (kk_button_prompts and the launcher) live beside the program.
 cp -a "$BIN/glyphs" "$APPDIR/usr/bin/"
 # The SDK's own copies win: the build only refreshes the ones beside the binary when it relinks.
-for lib in librexruntime.so librexgpu-xenos.so libTracyClient.so; do
+for lib in librexruntime.so libTracyClient.so; do
   [ ! -e "$SDK/lib/$lib" ] || cp -a "$SDK/lib/$lib" "$APPDIR/usr/bin/"
 done
+# Native rendering only: the Classic (Xenos) GPU plugin never ships, even if an old build left it beside the binary.
+rm -f "$APPDIR/usr/bin/"librexgpu-xenos.so*
 # The SDK needs a GCC 13 C++ runtime (GLIBCXX_3.4.32); bundle it for older distros.
 for lib in libstdc++.so.6 libgcc_s.so.1; do
   cp -L "$(g++ -print-file-name=$lib 2>/dev/null || true)" "$APPDIR/usr/lib/" 2>/dev/null ||
