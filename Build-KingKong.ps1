@@ -106,6 +106,7 @@ if (Get-ChildItem -LiteralPath $OutDir -Filter '*rexgpu-xenos*.dll') {
 }
 Get-ChildItem "$bin\*.exe", "$bin\*.dll" | Where-Object { $_.Name -notlike '*rexgpu-xenos*' } |
   Copy-Item -Destination $OutDir -Force
+Copy-Item -LiteralPath "$root\kk\THIRD-PARTY-NOTICES.txt" -Destination $OutDir -Force
 # Recorded content keys only, supplied outside Git. Keep beside the executable
 # when the staged KingKong folder is packaged in the Windows zip.
 if ($ResourceList) {

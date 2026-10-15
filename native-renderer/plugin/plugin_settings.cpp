@@ -268,7 +268,7 @@ GameSettings ReadGameSettings(bool vulkan) {
     game.anisotropic_override = aniso.empty() ? -1 : std::atoi(aniso.c_str());
     // The launcher's anti-aliasing (swap_post_effect, the native post pass).
     const std::string aa = rex::cvar::GetFlagByName("swap_post_effect");
-    game.fxaa = aa == "fxaa" ? 1u : (aa == "fxaa_extreme" ? 2u : 0u);
+    game.fxaa = aa == "smaa" ? 3u : (aa == "fxaa" ? 1u : (aa == "fxaa_extreme" ? 2u : 0u));
   }
   game.pipeline_wait_budget_ms = REXCVAR_GET(native_pipeline_wait_budget_ms);
   if (const char* frame_log = std::getenv("REX_DEV_FRAME_LOG")) game.frame_log = frame_log;
@@ -338,7 +338,7 @@ GameSettings ReadGameSettings(bool vulkan) {
     upscale.reactive = float(std::clamp(number("native_upscaler_reactive", 1.0), 0.0, 1.0));
     s.upscale = upscale;
     const std::string aa = get("swap_post_effect");
-    s.fxaa = aa == "fxaa" ? 1u : (aa == "fxaa_extreme" ? 2u : 0u);
+    s.fxaa = aa == "smaa" ? 3u : (aa == "fxaa" ? 1u : (aa == "fxaa_extreme" ? 2u : 0u));
     const std::string aniso = get("anisotropic_override");
     s.anisotropic_override = aniso.empty() ? -1 : std::atoi(aniso.c_str());
     return s;

@@ -35,6 +35,19 @@
 #include "backend/shaders/generated/ao_apply_ps_dxil.h"
 #include "backend/shaders/generated/ao_apply_ps_spirv.h"
 
+#include "backend/shaders/generated/smaa_edge_vs_dxil.h"
+#include "backend/shaders/generated/smaa_edge_vs_spirv.h"
+#include "backend/shaders/generated/smaa_edge_ps_dxil.h"
+#include "backend/shaders/generated/smaa_edge_ps_spirv.h"
+#include "backend/shaders/generated/smaa_weight_vs_dxil.h"
+#include "backend/shaders/generated/smaa_weight_vs_spirv.h"
+#include "backend/shaders/generated/smaa_weight_ps_dxil.h"
+#include "backend/shaders/generated/smaa_weight_ps_spirv.h"
+#include "backend/shaders/generated/smaa_blend_vs_dxil.h"
+#include "backend/shaders/generated/smaa_blend_vs_spirv.h"
+#include "backend/shaders/generated/smaa_blend_ps_dxil.h"
+#include "backend/shaders/generated/smaa_blend_ps_spirv.h"
+
 namespace nr {
 
 ShaderBytecode GetShaderBytecode(nvrhi::GraphicsAPI api, ShaderId id) {
@@ -59,6 +72,12 @@ ShaderBytecode GetShaderBytecode(nvrhi::GraphicsAPI api, ShaderId id) {
     case ShaderId::kAoBlurPs: return NR_BLOB(ao_blur_ps);
     case ShaderId::kAoUpsamplePs: return NR_BLOB(ao_upsample_ps);
     case ShaderId::kAoApplyPs: return NR_BLOB(ao_apply_ps);
+    case ShaderId::kSmaaEdgeVs: return NR_BLOB(smaa_edge_vs);
+    case ShaderId::kSmaaEdgePs: return NR_BLOB(smaa_edge_ps);
+    case ShaderId::kSmaaWeightVs: return NR_BLOB(smaa_weight_vs);
+    case ShaderId::kSmaaWeightPs: return NR_BLOB(smaa_weight_ps);
+    case ShaderId::kSmaaBlendVs: return NR_BLOB(smaa_blend_vs);
+    case ShaderId::kSmaaBlendPs: return NR_BLOB(smaa_blend_ps);
   }
 #undef NR_BLOB
   return {};

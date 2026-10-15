@@ -38,6 +38,7 @@ add_library(nr_renderer STATIC
     gtao.cpp
     ssgi.cpp
     shaders.cpp
+    smaa.cpp
     output_blit.cpp
     log.cpp
 )

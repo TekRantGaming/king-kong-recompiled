@@ -142,7 +142,7 @@ const std::vector<Setting>& Settings() {
       {"Upscaling", "Render quality", "kk_render_quality", Kind::kRestart, {}, 0, 1, "", false},
       {"Upscaling", "Spatial upscaler", "present_effect", Kind::kRestart, {}, 0, 1, "", false},
       // Image.
-      {"Image", "Anti-aliasing (FXAA)", "swap_post_effect", Kind::kChoice, {{"Off", "none"}, {"FXAA", "fxaa"}}, 0, 1,
+      {"Image", "Anti-aliasing", "swap_post_effect", Kind::kChoice, {{"Off", "none"}, {"FXAA", "fxaa"}, {"SMAA", "smaa"}}, 0, 2,
        "", true, Show::kAlways, "Off while a temporal upscaler runs (it anti-aliases itself)."},
       {"Image", "Texture filtering", "anisotropic_override", Kind::kChoice,
        {{"Game", "-1"}, {"Off", "0"}, {"2x", "2"}, {"4x", "3"}, {"8x", "4"}, {"16x", "5"}}},
@@ -372,7 +372,7 @@ std::string AppliedText(const NrEffectStats& s, std::vector<std::string>* notes)
     add(F("Soft shadows ({0} draws, maps x{1})", {std::to_string(s.shadow_draws), Number(s.shadow_scale, "%.3g")}));
   if (s.applied & 8) add(F("Water reflections ({0} water draws)", {std::to_string(s.water_draws)}));
   if (s.applied & 16) add(T("Light shafts"));
-  if (s.applied & 32) add("FXAA");
+  if (s.applied & 32) add(Get("swap_post_effect") == "smaa" ? "SMAA" : "FXAA");
   if (s.anisotropy >= 2) add(F("{0}x filtering", {std::to_string(1 << (s.anisotropy - 1))}));
   if (notes) {
     if (Get("native_shadow_quality") != "original" && !(s.applied & 4))
@@ -382,7 +382,7 @@ std::string AppliedText(const NrEffectStats& s, std::vector<std::string>* notes)
       notes->push_back(T(s.water_draws_waiting ? "Water reflections: their shader is being prepared."
                                              : "Water reflections: no water in view."));
     if (Get("swap_post_effect") != "none" && (s.applied & 64))
-      notes->push_back(T("FXAA: off while a temporal upscaler runs (it anti-aliases itself)."));
+      notes->push_back(T("FXAA / SMAA: off while a temporal upscaler runs (it anti-aliases itself)."));
     if (Get("native_volumetrics") != "off" && !(s.applied & 16)) notes->push_back(T("Light shafts: being prepared."));
     if (Get("native_gi") != "off" && !(s.applied & 2)) notes->push_back(T("GI: being prepared."));
   }

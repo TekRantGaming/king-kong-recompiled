@@ -1368,7 +1368,7 @@ class SettingsPages {
     items.push_back(Section("Image"));
     {
       Item it = CvarChoice("Anti-aliasing", "Smooths jagged edges after the frame is drawn.", "swap_post_effect",
-                           {{"Off", "none"}, {"FXAA", "fxaa"}});
+                           {{"Off", "none"}, {"FXAA", "fxaa"}, {"SMAA", "smaa"}});
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
     // 2x MSAA is not offered as a choice: it is how the Xbox 360 drew those
@@ -4253,7 +4253,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
           "GeForce RTX, RTX and DLSS are trademarks and/or registered trademarks of NVIDIA Corporation in the U.S. "
           "and other countries. AMD, FidelityFX and FSR are trademarks of Advanced Micro Devices, Inc. Intel and "
           "XeSS are trademarks of Intel Corporation. This project is not sponsored or endorsed by NVIDIA, AMD or "
-          "Intel. Their licences are in THIRD-PARTY-NOTICES.txt beside the game.";
+          "Intel. Uses SMAA. Copyright (C) 2011 by Jorge Jimenez, Jose I. Echevarria, "
+          "Tiago Sousa, Belen Masia, Fernando Navarro and Diego Gutierrez. "
+          "Their licences are in THIRD-PARTY-NOTICES.txt beside the game.";
       items.push_back(std::move(it));
     }
 

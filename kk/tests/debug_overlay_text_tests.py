@@ -28,7 +28,7 @@ keys.update([
     'Saved: these are now your settings, in the launcher too.', 'Could not save the settings.',
     'Shadows', 'Water', 'Shafts', 'Tessellation', 'Lighting', 'Shaders', 'Off', 'Low', 'Medium', 'High', 'Auto',
 ])
-invariant = {'AO', 'GI', 'FXAA', 'J', 'K', 'L', 'M', '2x', '4x', '8x', '16x'}
+invariant = {'AO', 'GI', 'FXAA', 'SMAA', 'J', 'K', 'L', 'M', '2x', '4x', '8x', '16x'}
 missing = sorted(keys - entries.keys() - invariant)
 assert not missing, 'Missing panel translations: ' + repr(missing)
 for key in keys - invariant:

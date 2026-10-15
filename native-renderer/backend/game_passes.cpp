@@ -578,8 +578,8 @@ bool GameRenderer::Present(nvrhi::ICommandList* cl, uint32_t device, nvrhi::ITex
   const int32_t pw = memory_scale_steps_ ? int32_t(td.width) : fw;
   const int32_t ph = memory_scale_steps_ ? int32_t(td.height) : fh;
   if (options_.fxaa) {
-    // FXAA (the port's swap_post_effect): the back buffer through the ramp into a scratch image,
-    // then anti-aliased into the frame image.
+    // Spatial AA (swap_post_effect): the back buffer through the ramp into a scratch image,
+    // then FXAA or SMAA 1x into the frame image at its native pixel dimensions.
     if (!fxaa_source_ || fxaa_source_->getDesc().width != td.width || fxaa_source_->getDesc().height != td.height) {
       nvrhi::TextureDesc fd;
       fd.width = td.width;
@@ -588,12 +588,13 @@ bool GameRenderer::Present(nvrhi::ICommandList* cl, uint32_t device, nvrhi::ITex
       fd.isRenderTarget = true;
       fd.initialState = nvrhi::ResourceStates::ShaderResource;
       fd.keepInitialState = true;
-      fd.debugName = "FXAA source";
+      fd.debugName = "Spatial AA source";
       if (fxaa_source_) RetireResource(fxaa_source_);
       fxaa_source_ = device_->createTexture(fd);
     }
     if (fxaa_source_ && Blit(cl, source->texture, 0, 0, fw, fh, fxaa_source_, 0, 0, 0, 0, channels,
                              use_ramp ? kBlitGammaRamp : 0, 0, pw, ph)) {
+      if (options_.fxaa == 3 && smaa_ && smaa_->Render(cl, fxaa_source_, target)) return true;
       return Blit(cl, fxaa_source_, 0, 0, pw, ph, target, 0, 0, 0, 0, channels,
                   kBlitFxaa, options_.fxaa == 2 ? 24u : 12u);
     }

@@ -1090,7 +1090,7 @@ TEST(GameUpscale_LiveSwitching) {
       state->s.upscale.mip_bias_auto = std::string(st.bias) == "auto";
       state->s.upscale.mip_bias = state->s.upscale.mip_bias_auto ? 0.0f : float(std::atof(st.bias));
       state->s.upscale.reactive = round == 1 ? 0.0f : 1.0f;
-      state->s.fxaa = round == 2 ? 1u : 0u;
+      state->s.fxaa = round == 2 ? 3u : 0u;  // SMAA must be suppressed and restored across upscaler changes too.
       state->s.anisotropic_override = round == 1 ? 5 : -1;
       // The SDK is made on a worker: frames go on meanwhile (each with a picture).
       // NGX's first start takes seconds (made on a worker; the frames go on).
@@ -1111,6 +1111,7 @@ TEST(GameUpscale_LiveSwitching) {
                   u ? u->name.c_str() : "off", waited);
       CHECK(off_or(u, st.kind));
       if (u) CHECK_EQ(u->stats.failures, uint64_t(0));
+      CHECK_EQ(f.game->options().fxaa, u ? 0u : state->s.fxaa);
       if (st.kind == UpscalerKind::kOff && round != 2) {
         const float d = MaxDifference(p, reference);
         std::printf("    back to off: largest difference to a renderer without an upscaler %.4f\n", d);

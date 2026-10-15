@@ -37,6 +37,7 @@
 #include <nvrhi/nvrhi.h>
 
 #include "backend/ambient_occlusion.h"
+#include "backend/smaa.h"
 #include "backend/ao_config.h"
 #include "backend/ao_timer.h"
 #include "backend/scene_ao.h"
@@ -107,7 +108,7 @@ class GameRenderer {
     // Xenos plugin applies it.
     int32_t anisotropic_override = -1;
     // The port's swap_post_effect, which the Xenos plugin applies in its swap: 0 none, 1 "fxaa",
-    // 2 "fxaa_extreme" (more edge search steps). Applied to the frame image at Present.
+    // 2 "fxaa_extreme", 3 "smaa" (SMAA 1x). Applied to the frame image at Present.
     uint32_t fxaa = 0;
     // Create the game's pipelines on worker threads. pipeline_wait controls whether
     // a draw waits for its pending pipeline or may be skipped after the frame budget.
@@ -521,7 +522,8 @@ class GameRenderer {
   // do not add one): destroying them at once freed images the command list then put a barrier on
   // at its close (a crash in the NVIDIA driver at the start of the Venture chapter).
   void RetireResource(nvrhi::IResource* resource);
-  nvrhi::TextureHandle fxaa_source_;  // Options::fxaa: the frame before the anti-aliasing
+  nvrhi::TextureHandle fxaa_source_;  // Options::fxaa: the frame before spatial anti-aliasing
+  std::unique_ptr<Smaa> smaa_;
   std::deque<std::pair<uint64_t, nvrhi::ResourceHandle>> retired_resources_;  // (frame, resource)
   uint32_t TextureView(HostTexture* host, const kknr::TextureFetch& fetch,
                        kkshaders::TextureDimension dimension, bool base_map);
