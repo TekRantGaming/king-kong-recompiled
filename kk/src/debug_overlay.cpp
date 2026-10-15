@@ -122,6 +122,13 @@ struct Setting {
 
 const std::vector<Setting>& Settings() {
   static const std::vector<Setting> settings = {
+      {"HDR output", "HDR", "present_hdr", Kind::kToggle, {{"Off", "false"}, {"On", "true"}},
+       0, 1, "", false, Show::kAlways,
+       "Requires Windows HDR on the current display. Uses SDR when HDR is unavailable."},
+      {"HDR output", "Peak brightness (nits)", "present_hdr_peak", Kind::kSlider, {}, 80, 10000, "%.0f", false,
+       Show::kAlways, "Highlight ceiling, limited to the display's reported peak brightness."},
+      {"HDR output", "Paper white (nits)", "present_hdr_paper_white", Kind::kSlider, {}, 80, 500, "%.0f", false,
+       Show::kAlways, "Brightness of neutral whites and menus. Limited by peak brightness."},
       // Upscaling.
       {"Upscaling", "Upscaler", "native_upscaler", Kind::kUpscaler, {}, 0, 1, "", true, Show::kAlways,
        "Temporal upscalers rebuild a sharp picture from several frames. Only those this PC runs are listed."},
