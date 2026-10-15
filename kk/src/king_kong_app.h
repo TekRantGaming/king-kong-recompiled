@@ -103,13 +103,12 @@ class KingKongApp : public rex::ReXApp {
       }
     }
     if (paths.game_data_root.empty()) paths.game_data_root = base / "game";
-#if defined(__linux__)
     // The SDK makes the dialogs (OnCreateDialogs: the pause menu and its in-game Settings, which
     // keep this path) in SetupPresentation, before OnFinalizePaths: without this they had an empty
-    // path and every in-game change failed to save ("cannot write settings to "). This is the
-    // path the SDK and OnFinalizePaths use (SetupEnvironment takes it from here unchanged).
+    // path and every in-game change failed to save ("cannot write settings to "), on Windows and
+    // Linux. This is the path the SDK and OnFinalizePaths use (SetupEnvironment takes it from here
+    // unchanged).
     config_path_ = paths.config_path;
-#endif
     // Achievement names and icons extracted from the player's default.xex by the builder.
     if (paths.metadata_root.empty()) paths.metadata_root = kk::art::AchievementDir(paths.game_data_root);
   }
