@@ -1648,12 +1648,19 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   // Volatile buffers must be written in every command list that binds them
   // (one per frame; the same object is reopened, hence the frame number).
   const bool new_list = !constants_valid_ || constants_list_ != cl || constants_frame_ != frame_;
+  // Compared and converted in blocks of 16 constants: a draw usually changes a few of the 256
+  // registers (a matrix), and `last` always holds `last_raw` converted (task 085).
   auto upload = [&](uint32_t base, std::array<uint8_t, 4096>& last_raw, std::array<float, 1024>& last,
                     const nvrhi::BufferHandle& buffer) {
     const uint8_t* raw = d.at(base);
-    if (!new_list && std::memcmp(raw, last_raw.data(), last_raw.size()) == 0) return;
-    std::memcpy(last_raw.data(), raw, last_raw.size());
-    for (uint32_t i = 0; i < 1024; ++i) last[i] = LoadBEFloat(raw + i * 4);
+    bool changed = false;
+    for (uint32_t block = 0; block < 4096; block += 64) {
+      if (std::memcmp(raw + block, last_raw.data() + block, 64) == 0) continue;
+      changed = true;
+      std::memcpy(last_raw.data() + block, raw + block, 64);
+      for (uint32_t i = block / 4; i < block / 4 + 16; ++i) last[i] = LoadBEFloat(raw + i * 4);
+    }
+    if (!changed && !new_list) return;
     cl->writeBuffer(buffer, last.data(), sizeof(last));
     stats_.upload_bytes += sizeof(last);
   };
