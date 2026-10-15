@@ -20,6 +20,8 @@
 // Save safety: every launch backs up the saves before the game can write; the save routine and the
 // save job never let a save go out with continue level 0 (the game deletes the save then).
 
+#include "ui_paint.h"
+
 #include "play_session.h"
 
 #include <algorithm>
@@ -588,6 +590,7 @@ void ReturnToLauncher(const char* why, const char* page) {
   g_leave_page = page;
   g_leave_since = NowMs();
   g_cover = true;
+  kk::RequestUiPaint();
   REXLOG_INFO("KK play: back to the launcher ({})", why);
 }
 
@@ -1013,6 +1016,7 @@ REX_HOOK_RAW(sub_8253DB80) {
     g_level_loaded = true;
     g_level_loaded_ms = NowMs();
     g_cover = false;
+    kk::RequestUiPaint();
     REXLOG_INFO("KK play: the start request's level is loaded");
 #if defined(KK_DEV_TOOLS)
     kk::DevStartScriptClock();

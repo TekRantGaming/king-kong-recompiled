@@ -432,6 +432,8 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
   }
   ~GraphicsPanel() override { window_->RemoveInputListener(this); }
 
+  bool NeedsContinuousPaint() override { return g_open.load(); }
+
   void OnKeyDown(rex::ui::KeyEvent& e) override {
     if (!InPlay()) return;
     switch (e.virtual_key()) {
@@ -518,6 +520,7 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
   }
   void SetOpen(bool open) {
     g_open.store(open);
+    window_->RequestPresenterUIPaintFromUIThread();
     REXLOG_INFO("KK graphics panel: {}", open ? "open" : "closed");
   }
 

@@ -6,6 +6,8 @@
 // once a second, and feed ReXGlue's F3 debug overlay. Also applies the
 // kk_frame_rate cap.
 
+#include "ui_paint.h"
+
 #include "frame_stats.h"
 
 #include <algorithm>
@@ -114,6 +116,7 @@ void OnGuestSwap() {
     g_stats.fps = g_window_frames / elapsed;
     g_stats.frame_time_ms = elapsed * 1000.0 / g_window_frames;
     g_stats.frame_count = total;
+    if (REXCVAR_GET(kk_show_fps)) RequestUiPaint();
     g_worst_ms = g_window_worst_ms;
     g_window_worst_ms = 0;
     REXLOG_INFO("Guest FPS: {:.1f} ({:.2f} ms/frame, {:.2f} ms in swap)",

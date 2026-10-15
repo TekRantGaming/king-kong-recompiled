@@ -25,6 +25,8 @@
 // KK_DEV_PAUSE_ACTIONS="<s>:<action>,..." runs pause actions at those seconds of the script clock
 // (resume, again, score, quit, open = press Start), for tests.
 
+#include "ui_paint.h"
+
 #include <algorithm>
 #include "debug_overlay.h"
 #include <atomic>
@@ -206,6 +208,8 @@ class PauseBackdrop final : public rex::ui::ImGuiDialog {
   PauseBackdrop(rex::ui::ImGuiDrawer* drawer, rex::ui::ImmediateDrawer* immediate)
       : ImGuiDialog(drawer), immediate_(immediate) {}
 
+  bool NeedsContinuousPaint() override { return TakeoverOn() && !g_game_page && (MenuUp() || g_pending >= 0) && !CoverScreen(); }
+
  protected:
   void OnDraw(ImGuiIO& io) override {
     const bool show = TakeoverOn() && !g_game_page && (MenuUp() || g_pending >= 0) && !CoverScreen();
@@ -256,6 +260,7 @@ void FilterPad(uint32_t user, uint8_t* state) {
   if (user == 0) {
     if (menu && !was_menu) held_at_open = buttons;
     held_at_open &= buttons;
+    if (menu != was_menu) kk::RequestUiPaint();
     was_menu = menu;
   }
   if (user == 0 && menu) {
@@ -361,7 +366,9 @@ REX_HOOK_RAW(sub_824BA560) {
     g_phase = kIdle;
     REXLOG_INFO("KK pause: the port's pause menu is open (the game's page is not run)");
   }
+  const bool was_visible = PauseMenuOpen();
   g_main_seen_ms = now;
+  if (PauseMenuOpen() != was_visible) kk::RequestUiPaint();
   const uint32_t g = Load32(base, kGamePtr);
   const bool slot = int32_t(Load32(base, g + 0x4E10)) != -1, chapter_run = Load32(base, g + 0x5668) != 0;
   g_has_slot = slot && chapter_run;

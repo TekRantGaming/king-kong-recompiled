@@ -50,6 +50,7 @@ void InstallFpeGuard();  // fpe_guard.cpp
 #include "shader_pack.h"
 #include "launcher.h"
 #include "overlay.h"
+#include "ui_paint.h"
 #include "platform.h"
 #include "pause_menu.h"
 #include "play_internal.h"
@@ -71,7 +72,7 @@ class KingKongApp : public rex::ReXApp {
         PPCImageConfig));
   }
 
-  ~KingKongApp() override { kk::startup::CleanExit(); }
+  ~KingKongApp() override { kk::SetUiPaintRequest({}); kk::startup::CleanExit(); }
 
  protected:
   bool OnWindowCloseRequested() override {
@@ -295,6 +296,11 @@ class KingKongApp : public rex::ReXApp {
   }
 
   void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {
+    kk::SetUiPaintRequest([this] {
+      app_context().CallInUIThreadDeferred([this] {
+        if (window()) window()->RequestPresenterUIPaintFromUIThread();
+      });
+    });
     SetGuestFrameStats(kk::GetGuestFrameStats);  // F3 overlay "Guest: N FPS"
     // The port's pause menu: the last frame of play behind it (pause_hooks.cpp), under every other dialog.
     kk::play::CreatePauseBackdrop(drawer, immediate_drawer());

@@ -1,3 +1,5 @@
+#include "ui_paint.h"
+
 #include "toast.h"
 
 #include <algorithm>
@@ -266,6 +268,7 @@ void AchievementToast::Show(std::string title, uint32_t gamerscore, uint32_t ico
   if (!REXCVAR_GET(kk_achievement_toasts)) return;
   std::lock_guard lock(mutex_);
   queue_.push_back({std::move(title), gamerscore, icon_id});
+  RequestUiPaint();
 }
 
 rex::ui::ImmediateTexture* AchievementToast::Icon(uint32_t id) {
