@@ -46,6 +46,9 @@ REXCVAR_DEFINE_BOOL(native_vk_pipeline_cache, false, "Native renderer", "Keep th
 REXCVAR_DEFINE_STRING(gpu_plugin, "", "GPU", "GPU plugin");
 // backend.cpp reads it (the plugin defines it in plugin_main.cpp).
 REXCVAR_DEFINE_INT32(native_dump_frame, -1, "Native renderer", "Log every call of this game frame");
+// The host/backend also read these plugin-defined flags when linked into this fixture.
+REXCVAR_DEFINE_INT32(native_debug, 0, "Native renderer", "Native renderer debug flags");
+REXCVAR_DEFINE_BOOL(native_diagnostics, false, "Native renderer", "Detailed native renderer diagnostics");
 
 using namespace nr;
 using namespace nr::test;
