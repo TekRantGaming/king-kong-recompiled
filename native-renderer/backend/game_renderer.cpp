@@ -1,4 +1,5 @@
 #include "backend/game_renderer.h"
+#include "backend/resource_upload_workers.h"
 #include "backend/upload_batch.h"
 #include "kkshaders/tessellation.h"
 
@@ -125,6 +126,7 @@ GameRenderer::GameRenderer(nvrhi::IDevice* device, const GuestMemory& memory,
 }
 
 GameRenderer::~GameRenderer() {
+  if (resource_profile_file_) std::fclose(resource_profile_file_);
   if (gi_build_.valid()) gi_build_.wait();
   if (lighting_build_.valid()) lighting_build_.wait();
   if (upscale_build_.valid()) upscale_build_.wait();
@@ -199,6 +201,14 @@ void GameRenderer::set_watch(std::function<void(uint32_t, uint32_t)> watch) {
 }
 
 bool GameRenderer::Initialize() {
+  if (const char* path = std::getenv("NR_RESOURCE_PROFILE"); path && *path) {
+    resource_profile_file_ = std::fopen(path, "w");
+    if (resource_profile_file_) {
+      std::fprintf(resource_profile_file_, "frame,wall_s,texture_convert_ms,texture_create_ms,texture_stage_ms,buffer_create_ms,buffer_convert_ms,buffer_stage_ms,hash_ms,watch_ms,cache_bind_ms,invalidate_ms,descriptor_ms,submit_ms,snapshot_ms,prepare_wall_ms,prepared_resources,prepared_discarded,prepare_total_ms\n");
+      resource_profile_ = &resource_work_;
+      textures_.profile = vertex_buffers_.profile = index_buffers_.profile = resource_profile_;
+    }
+  }
   const nvrhi::GraphicsAPI api = device_->getGraphicsAPI();
   // Live settings (game_effects.cpp): what the start asked for, which the changes are compared with.
   upscale_initial_ = upscale_requested_ = options_.upscale;
@@ -440,6 +450,7 @@ void GameRenderer::RetireSlot(Table table, uint32_t slot) {
 }
 
 void GameRenderer::WriteSlot(Table table, const nvrhi::BindingSetItem& item) {
+  kknr::ResourceWorkTimer timer(resource_profile_, kknr::ResourceWork::Descriptor);
   device_->writeDescriptorTable(tables_[table].table, item);
   ++stats_.descriptor_updates;
 }
@@ -488,10 +499,12 @@ std::pair<uint32_t, uint32_t> GameRenderer::OnGuestWrite(uint32_t physical, uint
 
 void GameRenderer::InvalidateRange(uint32_t physical, uint32_t bytes) {
   std::lock_guard lock(invalidation_mutex_);
+  resource_revision_.fetch_add(1, std::memory_order_release);
   invalidations_.emplace_back(physical, bytes);
 }
 
 void GameRenderer::ProcessInvalidations() {
+  kknr::ResourceWorkTimer timer(resource_profile_, kknr::ResourceWork::Invalidate);
   std::vector<std::pair<uint32_t, uint32_t>> list;
   {
     std::lock_guard lock(invalidation_mutex_);
@@ -544,6 +557,7 @@ GameRenderer::StutterStats GameRenderer::stutter() const {
 }
 
 void GameRenderer::EndFrame() {
+  ProfileResources();
   FlushUploads();
   if (upload_batch_) upload_batch_->EndFrame();
   if (tessellation_timer_) tessellation_timer_->FrameEnd();
@@ -1204,7 +1218,7 @@ void GameRenderer::BuildPipelineDesc(const PipelineRecord& r, nvrhi::IShader* vs
 void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   struct UploadGuard {
     GameRenderer* game;
-    ~UploadGuard() { game->FlushUploads(); }
+    ~UploadGuard() { game->resource_prepare_call_ = nullptr; game->FlushUploads(); }
   } uploads{this};
   UpdateEffects();
   if (options_.debug & 512) return;  // debugging: no draws
@@ -1440,6 +1454,11 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   }
 
   if (stop_at == 2) return;
+  resource_prepare_call_ = &call;
+  resource_prepare_device_ = &d;
+  resource_prepare_vs_ = vs.get();
+  resource_prepare_ps_ = ps.get();
+  resource_prepare_tried_ = false;
   // Draw constants: textures, samplers, vertex fetch, clip planes, viewport,
   // alpha test.
   kkshaders::DrawConstants dc = {};

@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "kknr/texture_convert.h"
+#include "kknr/resource_work.h"
 #include "kknr/xenos.h"
 
 namespace kknr {
@@ -46,10 +47,16 @@ struct GuestRange {
   bool Overlaps(uint32_t s, uint32_t n) const { return bytes && n && s < start + bytes && start < s + n; }
 };
 
+// Hash the original ranges using their readable bytes (null means a missing complete range).
+uint64_t HashGuestRanges(const GuestRange ranges[2], const uint8_t* const data[2]);
+
 // Shared bookkeeping for entries that live in guest memory: dirty marking by range, content hashes, LRU.
 struct ResidentEntry {
   GuestRange ranges[2];
   uint64_t content_hash = 0;
+  // Reuse a dirty Bind's full-range hash at upload completion until the next invalidation.
+  uint64_t checked_hash = 0;
+  bool checked_hash_valid = false;
   uint64_t last_used_frame = 0;
   uint32_t uploads = 0;        // how many times the host copy was (re)built
   bool dirty = false;          // guest memory written since the last upload / check
@@ -85,12 +92,15 @@ class TextureCache {
   // Skip arming the watch of an entry that is still watched (ResidentEntry::watched). Off: arm
   // it at every check, upload and resolve (debugging).
   bool watch_once = true;
+  ResourceWork* profile = nullptr;  // optional, render-thread-owned CPU timings
   // Called before an entry is dropped, to free its host resource.
   std::function<void(Entry&)> release_host;
 
   BindResult Bind(const TextureFetch& fetch, const GuestMemory& memory, uint64_t frame);
   // The renderer reports a finished upload (or creation) so the entry's state and watches are current.
   void OnUploaded(Entry& entry, const GuestMemory& memory);
+  void OnUploaded(Entry& entry, uint64_t captured_hash);
+  void EnsureWatched(Entry& entry);
 
   // Guest memory [physical, physical + bytes) was written by the CPU (write watch or Unlock).
   void InvalidateRange(uint32_t physical, uint32_t bytes);
@@ -132,11 +142,14 @@ class BufferCache {
   // Skip arming the watch of an entry that is still watched (ResidentEntry::watched). Off: arm
   // it at every check, upload and resolve (debugging).
   bool watch_once = true;
+  ResourceWork* profile = nullptr;  // optional, render-thread-owned CPU timings
   std::function<void(Entry&)> release_host;
 
   BindResult Bind(uint32_t physical, uint32_t bytes, uint64_t conversion_id, const GuestMemory& memory,
                   uint64_t frame);
   void OnUploaded(Entry& entry, const GuestMemory& memory);
+  void OnUploaded(Entry& entry, uint64_t captured_hash);
+  void EnsureWatched(Entry& entry);
   // The entry Bind would use, or null (no hashing, no watch, nothing changes).
   Entry* Find(uint32_t physical, uint32_t bytes, uint64_t conversion_id);
   // Marks it used in `frame` (Trim keeps it).

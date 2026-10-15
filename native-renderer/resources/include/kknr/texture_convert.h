@@ -165,7 +165,8 @@ bool PlanHostTexture(const TextureFetch& fetch, HostTexturePlan& plan, std::stri
                      const TextureOptions& options = TextureOptions());
 
 // Reusable bounded CPU workers. Jobs receive only owned, endian-swapped texture bytes and disjoint output
-// slabs; Run joins every job before returning (and before rethrowing a job exception). No GPU API runs here.
+// slabs; Run joins every job before returning (and before rethrowing a job exception).
+// The backend also uses Run for joined resource jobs with separately owned GPU lists.
 // The calling thread also works. max_workers is clamped to 3; callers choose an affinity-aware limit.
 class TextureConversionWorkers {
  public:

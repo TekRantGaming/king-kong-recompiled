@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "kknr/texture_cache.h"
+#include "kknr/resident_snapshot.h"
 #include "test.h"
 
 using namespace kknr;
@@ -158,4 +159,70 @@ TEST(hash_bytes_sensitivity) {
     CHECK(HashBytes(a.data(), a.size()) != HashBytes(b.data(), b.size()));
   }
   CHECK(HashBytes(a.data(), 999) != HashBytes(a.data(), 1000));
+}
+
+TEST(cache_reuses_checked_hash_and_invalidates_it) {
+  FakeGuest guest;
+  const GuestMemory memory{guest.bytes.data(), guest.bytes.size()};
+  ResourceWork work;
+  TextureCache textures; BufferCache buffers;
+  textures.profile = buffers.profile = &work;
+  const auto fetch = Fetch64();
+  auto* t = textures.Bind(fetch, memory, 0).entry;
+  auto* b = buffers.Bind(kBase, 4096, 0, memory, 0).entry;
+  textures.OnUploaded(*t, memory); buffers.OnUploaded(*b, memory);
+  CHECK_EQ(work.calls[ResourceWork::Hash], 2u);
+  guest.bytes[kBase + 8] = 7;
+  textures.InvalidateRange(kBase, 4096); buffers.InvalidateRange(kBase, 4096);
+  CHECK(textures.Bind(fetch, memory, 1).action == BindAction::kReupload);
+  CHECK(buffers.Bind(kBase, 4096, 0, memory, 1).action == BindAction::kReupload);
+  CHECK_EQ(work.calls[ResourceWork::Hash], 4u);
+  textures.OnUploaded(*t, memory); buffers.OnUploaded(*b, memory);
+  CHECK_EQ(work.calls[ResourceWork::Hash], 4u);
+  // Another write between a check and upload cannot reuse the earlier hash.
+  guest.bytes[kBase + 9] = 3;
+  textures.InvalidateRange(kBase, 4096); buffers.InvalidateRange(kBase, 4096);
+  textures.Bind(fetch, memory, 2); buffers.Bind(kBase, 4096, 0, memory, 2);
+  guest.bytes[kBase + 10] = 4;
+  textures.InvalidateRange(kBase, 4096); buffers.InvalidateRange(kBase, 4096);
+  textures.OnUploaded(*t, memory); buffers.OnUploaded(*b, memory);
+  CHECK_EQ(work.calls[ResourceWork::Hash], 8u);
+  CHECK(textures.Bind(fetch, memory, 3).action == BindAction::kUseExisting);
+  CHECK(buffers.Bind(kBase, 4096, 0, memory, 3).action == BindAction::kUseExisting);
+}
+
+TEST(cache_watch_coalesces_only_a_contiguous_union) {
+  FakeGuest guest;
+  GuestMemory memory{guest.bytes.data(), guest.bytes.size()};
+  TextureCache cache;
+  auto* entry = cache.Bind(Fetch64(), memory, 0).entry;
+  std::vector<std::pair<uint32_t, uint32_t>> calls;
+  cache.watch_range = [&](uint32_t p, uint32_t n) { calls.emplace_back(p,n); };
+  for (uint32_t second : {0x1800u, 0x2000u, 0x3000u}) {
+    entry->ranges[0] = {0x1000, 0x1000}; entry->ranges[1] = {second, 0x1000};
+    entry->watched = false; calls.clear();
+    cache.EnsureWatched(*entry);
+    CHECK_EQ(calls.size(), second <= 0x2000 ? 1u : 2u);
+    CHECK_EQ(calls[0].first, 0x1000u);
+    CHECK_EQ(calls[0].second, second <= 0x2000 ? second : 0x1000u);
+    cache.OnUploaded(*entry, uint64_t(123));
+    CHECK_EQ(calls.size(), second <= 0x2000 ? 1u : 2u);
+  }
+}
+
+TEST(resident_snapshot_owns_bytes_preserves_word_padding_and_rejects_truncation) {
+  std::vector<uint8_t> live(64, 0x39), storage;
+  GuestMemory memory{live.data(), live.size(), 0x1000};
+  const GuestRange ranges[2] = {{0x1000, 7}, {0x1020, 13}};
+  ResidentSnapshot snapshot;
+  CHECK(!snapshot.Capture(ranges, memory, storage, 4096));
+  CHECK(snapshot.Capture(ranges, memory, storage, 8192));
+  const auto hash = snapshot.Hash();
+  live[7] = 0xAB;
+  CHECK_EQ(snapshot.memory.At(0x1000, 8)[7], 0x39u);
+  CHECK_EQ(snapshot.Hash(), hash);
+  std::fill(live.begin(), live.end(), 0xFC);
+  CHECK_EQ(snapshot.memory.At(0x1000, 8)[0], 0x39u);
+  GuestMemory truncated{live.data(), 7, 0x1000};
+  CHECK(!snapshot.Capture(ranges, truncated, storage, 8192));
 }

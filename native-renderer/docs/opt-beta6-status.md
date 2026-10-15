@@ -230,3 +230,33 @@ in-place updates stay at their original draw-list positions. Reuse dirty-check
 hashes until invalidation, coalesce contiguous watched ranges, retain conversion
 output/snapshot/staging allocations. Tests and performance evidence are pending;
 no claim yet that chapter-start stalls are fixed.
+
+Task-099 candidate validation: all **22/22 Windows native CTests** pass
+(70.95 s), plus **2/2 resource CTests** (3.59 s). New coverage checks both APIs'
+worker-created buffer bytes, captured staging after caller input changes,
+exception joining, reuse with GPU work in flight, zero-worker fallback, scratch
+capacity, real texture+vertex first-use pixels and same-frame rewrites. A write
+while arming a snapshot's watch forces discard and synchronous retry. Every
+format/shape comparison also checks compact snapshot bytes/metadata/hashes;
+truncated snapshots fall back to the original converter. No validation-layer
+certification is claimed on this Windows installation.
+
+Four clean alternating 16 MiB resource fixture pairs (eight buffers + eight
+tiled RGBA textures; seven warmups and 21 timed iterations) give median CPU
+recording/submission 8.644 -> 5.032 ms Vulkan and 11.302 -> 5.810 ms DirectX 12.
+Including GPU completion: 9.458 -> 5.816 ms and 12.017 -> 6.488 ms. Serial
+controls retain the existing texture slab workers. Creation and conversion are
+inside this timer; external guest snapshots and write watches are not. Every
+readback passes. The fifth pair overlapped compilation, is labelled loaded and
+excluded from the clean medians. These are synthetic gains, not gameplay FPS.
+
+The caller participates in a batch with at most three affinity-limited workers.
+Workers own their upload lists; their list operations serialize for NVRHI's
+non-atomic D3D12 recording counters. All jobs join before render-thread
+submission/publication. Both old early-transfer bounds (32 MiB / 32 batches per
+frame) remain shared with the worker path. Owned input snapshots are also
+limited to 32 MiB per draw and retained CPU scratch to 64 MiB; NVRHI retains
+in-flight staging until GPU completion. Small/over-budget/existing resources
+use the original mandatory path. First-use scheduling is per draw; it does not
+run a cross-frame asset streamer or remove required CPU joins/in-place updates.
+Final Beta 5 chapter comparisons are in progress within the six-run allowance.

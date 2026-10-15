@@ -17,6 +17,19 @@ class UploadBatch {
   static constexpr uint32_t kFrameBatches = 32;
 
   UploadBatch(nvrhi::IDevice* device, Submit submit) : device_(device), submit_(std::move(submit)) {}
+  bool CanPrepare(uint64_t bytes, uint32_t batches) const {
+    return submit_ && !open_ && bytes <= kFrameBytes - frame_bytes_ &&
+        batches <= kFrameBatches - frame_batches_;
+  }
+  // The caller checked CanPrepare before starting a joined worker batch. Every
+  // list is closed and published on this thread, using the host's queue locks.
+  void SubmitPrepared(nvrhi::ICommandList* list, uint64_t bytes) {
+    submit_(list);
+    frame_bytes_ += bytes;
+    bytes_ += bytes;
+    ++frame_batches_;
+    ++batches_;
+  }
   // A null list means the caller must upload inline. Required work is never deferred
   // or omitted when the early-transfer budget runs out.
   nvrhi::ICommandList* Begin(uint64_t bytes) {

@@ -191,6 +191,8 @@ class GameRenderer {
     uint64_t buffer_uploads = 0;
     uint64_t upload_bytes = 0;       // guest textures, vertices, indices and draw constants (not auxiliary passes)
     uint64_t early_upload_bytes = 0, early_upload_batches = 0;
+    uint64_t prepared_resources = 0, prepared_discarded = 0;
+    double resource_prepare_ms = 0;  // render-thread wall time of joined first-use batches
     uint64_t draw_constant_uploads = 0, draw_constant_identical = 0;
     uint64_t scale_uploads = 0, scale_identical = 0;
     uint64_t vertex_binds = 0, vertex_repeated = 0;
@@ -443,7 +445,7 @@ class GameRenderer {
   HostTexture* UploadTexture(nvrhi::ICommandList* cl, kknr::TextureCache::Entry& entry,
                              const kknr::TextureFetch& fetch);
   HostTexture* CreateHostTexture(const kknr::HostTexturePlan& plan, bool render_target, float scale_x = 1.0f,
-                                 float scale_y = 1.0f);
+                                 float scale_y = 1.0f, kknr::ResourceWork* profile = nullptr);
   // The scale of the texture BindTexture bound last (1 when none).
   float bound_scale_x_ = 1.0f, bound_scale_y_ = 1.0f;
   // Set by a failed bind, copied by Draw and logged only if the draw is submitted.
@@ -480,6 +482,21 @@ class GameRenderer {
   HostBuffer* BindIndexBuffer(nvrhi::ICommandList* cl, uint32_t physical, uint32_t bytes,
                               bool index32);
   void ProcessInvalidations();
+  void PrepareResourceUploads(nvrhi::ICommandList* cl, const DrawCall& call,
+                              const dev::DeviceView& device, const GameShader& vs, const GameShader* ps);
+  std::unique_ptr<class ResourceUploadWorkers> resource_upload_workers_;
+  std::atomic<uint64_t> resource_revision_{0};
+  void TryPrepareResourceUploads(nvrhi::ICommandList* cl);
+  const DrawCall* resource_prepare_call_ = nullptr;
+  const dev::DeviceView* resource_prepare_device_ = nullptr;
+  const GameShader* resource_prepare_vs_ = nullptr;
+  const GameShader* resource_prepare_ps_ = nullptr;
+  bool resource_prepare_tried_ = false;
+  std::vector<kknr::VertexElement> scratch_preparation_declaration_;
+  void ProfileResources();
+  kknr::ResourceWork resource_work_;
+  kknr::ResourceWork* resource_profile_ = nullptr;
+  FILE* resource_profile_file_ = nullptr;
   void LogInvalidationHistogram();
   std::unordered_map<uint32_t, uint64_t> invalidation_histogram_;  // --native_debug=8
   uint64_t invalidation_bytes_ = 0;

@@ -905,7 +905,9 @@ bool ConvertPreparedTexture(const GuestLayout& layout, const GuestRegions& regio
 
 bool ConvertTexture(const TextureFetch& fetch, const GuestMemory& memory, HostTextureData& out, std::string* why,
                     const TextureOptions& options, TextureConversionWorkers* workers) {
-  out = HostTextureData();
+  out.plan = {};
+  out.bytes.clear();
+  out.subresources.clear();
   if (!PlanHostTexture(fetch, out.plan, why, options)) return false;
   const HostTexturePlan& plan = out.plan;
   const GuestLayout layout = ComputeGuestLayout(fetch, options);

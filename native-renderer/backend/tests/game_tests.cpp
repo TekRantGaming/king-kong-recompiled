@@ -658,7 +658,7 @@ struct Fixture {
     CheckQuadrants(px, want, line);
   }
   // Draws a full-screen quad sampling `texture` (fetch constant 0).
-  void DrawTextured(uint32_t texture) {
+  void DrawTextured(uint32_t texture, bool large_buffer = false) {
     const uint32_t vs = CreateShader(true, VertexShader(kTexcoord, F_32_32_FLOAT));
     const uint32_t ps = CreateShader(false, PixelShaderTexture());
     const uint32_t decl =
@@ -666,7 +666,9 @@ struct Fixture {
     SetDeclaration(decl);
     SetShaders(vs, ps);
     SetTexture(0, texture);
-    SetStream(0, NewVertexBuffer(FullScreenTextured()), 0, 20);
+    auto vertices = FullScreenTextured();
+    if (large_buffer) vertices.resize(64u << 10, 0);
+    SetStream(0, NewVertexBuffer(vertices), 0, 20);
     Draw(4, 0, 6);
   }
 };
@@ -840,7 +842,7 @@ TEST(Draw_EarlyLargeBuffersPreserveSameFrameUpdates) {
   f.Clear(kClearTarget0, 0xFF000000);
   f.DrawIndexed(4, 0, 0, 12);
   CHECK_EQ(f.game->stats().early_upload_bytes, uint64_t(bytes) * 2);
-  CHECK_EQ(f.game->stats().early_upload_batches, 1u);
+  CHECK(f.game->stats().early_upload_batches >= 1u && f.game->stats().early_upload_batches <= 2u);
   // Reuse the same host buffer after earlier draws have been recorded. The
   // changed last quadrants must not change the first two draws' source data.
   for (auto& vertex : vertices) vertex.argb = 0xFF3399CC;
@@ -854,6 +856,42 @@ TEST(Draw_EarlyLargeBuffersPreserveSameFrameUpdates) {
   f.CheckQuadrants(px, want, __LINE__);
   CHECK_EQ(f.game->stats().buffer_uploads, 3u);
   CHECK_EQ(f.game->stats().early_upload_bytes, uint64_t(bytes) * 2);
+}
+
+TEST(Draw_PreparedSnapshotInvalidationRetriesBeforeFirstUse) {
+  Fixture f;
+  if (!f.Init()) return;
+  const auto rt = f.BindMainSurface();
+  const auto p = f.MakeColorPipeline();
+  constexpr uint32_t bytes = 64u << 10;
+  uint32_t data = 0;
+  const auto vb = f.mem.NewVertexBuffer(bytes, data);
+  auto payload = Bytes(QuadTriangles(kFull, 0xFF39A7D2));
+  std::memcpy(f.mem.Writable(data), payload.data(), payload.size());
+  std::vector<uint32_t> indices(bytes / 2, 0);
+  for (unsigned i = 0; i < 6; ++i) indices[i] = i;
+  const auto ib = f.mem.NewIndexBuffer(indices, false);
+  f.SetDeclaration(p.decl); f.SetShaders(p.vs, p.ps_interp);
+  f.SetStream(0, vb, 0, 16); f.SetIndices(ib);
+  bool invalidated = false;
+  f.game->set_watch([&](uint32_t physical, uint32_t count) {
+    if (!invalidated) {
+      invalidated = true;
+      f.game->InvalidateRange(physical, count);
+    }
+  });
+  f.Clear(kClearTarget0, 0xFF000000);
+  f.DrawIndexed(4, 0, 0, 6);
+  auto px = f.Present(rt);
+  const Rgb want[4] = {FromArgb(0xFF39A7D2), FromArgb(0xFF39A7D2), FromArgb(0xFF39A7D2), FromArgb(0xFF39A7D2)};
+  f.CheckQuadrants(px, want, __LINE__);
+  CHECK(invalidated);
+  // On restricted-affinity machines the worker path is disabled entirely.
+  if (f.game->stats().prepared_discarded) {
+    CHECK_EQ(f.game->stats().prepared_discarded, 2u);
+    CHECK_EQ(f.game->stats().prepared_resources, 0u);
+  }
+  CHECK_EQ(f.game->stats().buffer_uploads, 2u);
 }
 
 TEST(Draw_ConstantsReachShaders) {
@@ -1375,7 +1413,7 @@ TEST(Shaders_ParsedFromObjectWithoutCreateHook) {
   CHECK_EQ(f.shaders->stats().failed, uint64_t(0));
 }
 
-static void CheckTextureUploadSampleAndInvalidate(uint32_t side) {
+static void CheckTextureUploadSampleAndInvalidate(uint32_t side, bool large_buffer = false) {
   Fixture f;
   if (!f.Init()) return;
   const uint32_t rt = f.BindMainSurface();
@@ -1407,13 +1445,13 @@ static void CheckTextureUploadSampleAndInvalidate(uint32_t side) {
     }
   };
   f.Clear(kClearTarget0, 0xFF000000);
-  f.DrawTextured(tex);
+  f.DrawTextured(tex, large_buffer);
   Pixels px = f.Present(rt, "texture_upload");
   check(px, 0, __LINE__);
   CHECK_EQ(f.game->stats().texture_uploads, uint64_t(1));
 
   // Drawn again unchanged: no upload.
-  f.DrawTextured(tex);
+  f.DrawTextured(tex, large_buffer);
   px = f.Present(rt);
   check(px, 0, __LINE__);
   CHECK_EQ(f.game->stats().texture_uploads, uint64_t(1));
@@ -1429,17 +1467,20 @@ static void CheckTextureUploadSampleAndInvalidate(uint32_t side) {
                            [&](uint32_t, uint32_t) { return blocks.data(); }, image);
   std::memcpy(f.mem.Writable(base), image.base.data(), image.base.size());
   f.game->InvalidateRange(base - FakeGuestMemory::kPhysicalView, bytes);
-  f.DrawTextured(tex);
+  f.DrawTextured(tex, large_buffer);
   px = f.Present(rt, "texture_reupload");
   check(px, 100, __LINE__);
   CHECK_EQ(f.game->stats().texture_uploads, uint64_t(2));
   CHECK_EQ(f.game->stats().texture_failures, uint64_t(0));
-  CHECK_EQ(f.game->stats().early_upload_bytes, side >= 128 ? uint64_t(side) * side * 4 : 0u);
-  CHECK_EQ(f.game->stats().early_upload_batches, side >= 128 ? 1u : 0u);
+  CHECK_EQ(f.game->stats().early_upload_bytes, (side >= 128 ? uint64_t(side) * side * 4 : 0u) +
+      (large_buffer ? 3u * (64u << 10) : 0u));
+  if (large_buffer) CHECK(f.game->stats().early_upload_batches >= 3 && f.game->stats().early_upload_batches <= 4);
+  else CHECK_EQ(f.game->stats().early_upload_batches, side >= 128 ? 1u : 0u);
 }
 
 TEST(Textures_UploadSampleAndInvalidate) { CheckTextureUploadSampleAndInvalidate(4); }
 TEST(Textures_WorkerUploadSampleAndInvalidate) { CheckTextureUploadSampleAndInvalidate(512); }
+TEST(Textures_PreparedTextureAndBufferPixels) { CheckTextureUploadSampleAndInvalidate(512, true); }
 
 
 // ------------------------------------------------------------- frame log ---

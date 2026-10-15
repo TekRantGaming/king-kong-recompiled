@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "kknr/texture_convert.h"
+#include "kknr/resident_snapshot.h"
 #include "test.h"
 
 using namespace kknr;
@@ -83,6 +84,18 @@ void Compare(const TextureFetch& fetch, const GuestMemory& memory, TextureConver
   const bool actual = ConvertTexture(fetch, memory, parallel, &why_parallel, options, &workers);
   CHECK_EQ(actual, expected);
   CHECK(why_parallel == why_serial);
+  const auto r = GetTextureRanges(fetch, options);
+  const GuestRange ranges[2] = {{r.base, r.base_bytes}, {r.mip, r.mip_bytes}};
+  ResidentSnapshot snapshot;
+  std::vector<uint8_t> storage;
+  if (snapshot.Capture(ranges, memory, storage, 64u << 20)) {
+    HostTextureData compact;
+    const bool compact_ok = ConvertTexture(snapshot.Relocate(fetch), snapshot.memory, compact, nullptr, options);
+    CHECK_EQ(compact_ok, expected);
+    if (compact_ok) CHECK(Same(serial, compact));
+    const uint8_t* live[2] = {memory.At(ranges[0].start, ranges[0].bytes), memory.At(ranges[1].start, ranges[1].bytes)};
+    CHECK_EQ(snapshot.Hash(), HashGuestRanges(ranges, live));
+  }
   if (actual && !Same(serial, parallel)) {
     kknr_test::Fail(__FILE__, __LINE__, std::string("worker bytes/metadata differ: ") +
                     GetFormatInfo(fetch.Format()).name);

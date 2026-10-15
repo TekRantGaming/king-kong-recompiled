@@ -8,7 +8,9 @@
 #include "backend/log.h"
 #include "backend/texture_workers.h"
 #include "backend/upload_batch.h"
+#include "backend/resource_upload_workers.h"
 #include "kknr/buffers.h"
+#include "kknr/resident_snapshot.h"
 #include "kknr/nvrhi_format.h"
 #include "kknr/resolve.h"
 
@@ -192,7 +194,8 @@ nvrhi::IFramebuffer* GameRenderer::GetFramebuffer(const std::array<HostTarget*, 
 // ---------------------------------------------------------------- textures
 
 GameRenderer::HostTexture* GameRenderer::CreateHostTexture(const kknr::HostTexturePlan& plan,
-                                                           bool render_target, float scale_x, float scale_y) {
+                                                           bool render_target, float scale_x, float scale_y,
+                                                           kknr::ResourceWork* profile) {
   auto host = std::make_unique<HostTexture>();
   if (!render_target) scale_x = scale_y = 1.0f;  // only a resolve makes a scaled texture
   host->scale_x = scale_x;
@@ -225,7 +228,10 @@ GameRenderer::HostTexture* GameRenderer::CreateHostTexture(const kknr::HostTextu
   desc.initialState = nvrhi::ResourceStates::ShaderResource;
   desc.keepInitialState = true;
   desc.debugName = render_target ? "Resolved texture" : "Guest texture";
-  host->texture = device_->createTexture(desc);
+  {
+    kknr::ResourceWorkTimer timer(profile ? profile : resource_profile_, kknr::ResourceWork::TextureCreate);
+    host->texture = device_->createTexture(desc);
+  }
   if (!host->texture) return nullptr;
   return host.release();
 }
@@ -308,7 +314,12 @@ GameRenderer::HostTexture* GameRenderer::UploadTexture(nvrhi::ICommandList* cl,
       texture_conversion_workers_ = std::make_unique<kknr::TextureConversionWorkers>(TextureWorkerCount());
     if (texture_conversion_workers_->WorkerCount()) workers = texture_conversion_workers_.get();
   }
-  if (!kknr::ConvertTexture(fetch, physical_, data, &why, options, workers)) {
+  bool converted;
+  {
+    kknr::ResourceWorkTimer timer(resource_profile_, kknr::ResourceWork::TextureConvert);
+    converted = kknr::ConvertTexture(fetch, physical_, data, &why, options, workers);
+  }
+  if (!converted) {
     texture_bind_failure_ = "conversion: " + why;
     ++stats_.texture_failures;
     if (stats_.texture_failures < 50) {
@@ -340,11 +351,14 @@ GameRenderer::HostTexture* GameRenderer::UploadTexture(nvrhi::ICommandList* cl,
   if (upload) cl->beginTrackingTextureState(host->texture, nvrhi::AllSubresources,
                                            nvrhi::ResourceStates::ShaderResource);
   else upload = cl;
+  {
+  kknr::ResourceWorkTimer timer(resource_profile_, kknr::ResourceWork::TextureStage);
   for (const kknr::HostSubresource& sub : data.subresources) {
     upload->writeTexture(host->texture, sub.layer, sub.level, data.bytes.data() + sub.offset, sub.row_pitch,
                      sub.depth_pitch);
   }
   upload->setTextureState(host->texture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
+  }
   host->alias_source = nullptr;
   textures_.OnUploaded(entry, physical_);
   ++stats_.texture_uploads;
@@ -457,7 +471,13 @@ uint32_t GameRenderer::BindTexture(nvrhi::ICommandList* cl, const uint32_t words
     if (r.entry->gpu_written && host && r.action == kknr::BindAction::kUseExisting) {
       // The resolve's copy is the truth.
     } else {
-      host = UploadTexture(cl, *r.entry, fetch);
+      if (!host) {
+        TryPrepareResourceUploads(cl);
+        host = static_cast<HostTexture*>(r.entry->host);
+        if (host && !r.entry->dirty) r.action = kknr::BindAction::kUseExisting;
+      }
+      if (!host || r.entry->dirty || r.action == kknr::BindAction::kReupload)
+        host = UploadTexture(cl, *r.entry, fetch);
       if (!host) return 0;
     }
   }
@@ -581,6 +601,7 @@ nvrhi::ICommandList* GameRenderer::EarlyUpload(uint64_t bytes) {
 
 void GameRenderer::FlushUploads() {
   if (!upload_batch_) return;
+  kknr::ResourceWorkTimer timer(resource_profile_, kknr::ResourceWork::Submit);
   upload_batch_->Flush();
   stats_.early_upload_bytes = upload_batch_->bytes();
   stats_.early_upload_batches = upload_batch_->batches();
@@ -615,7 +636,10 @@ GameRenderer::HostBuffer* GameRenderer::BindVertexBuffer(nvrhi::ICommandList* cl
             tail.resize(end - begin, 0);
             src = tail.data();
           }
-          cl->writeBuffer(host->buffer, src, end - begin, begin);
+          {
+            kknr::ResourceWorkTimer timer(resource_profile_, kknr::ResourceWork::BufferStage);
+            cl->writeBuffer(host->buffer, src, end - begin, begin);
+          }
           stats_.dynamic_vertex_bytes += end - begin;
           stats_.upload_bytes += end - begin;
         }
@@ -626,6 +650,11 @@ GameRenderer::HostBuffer* GameRenderer::BindVertexBuffer(nvrhi::ICommandList* cl
   }
   kknr::BufferCache::BindResult r = vertex_buffers_.Bind(physical, bytes, 0, physical_, frame_);
   auto* host = static_cast<HostBuffer*>(r.entry->host);
+  if (!host) {
+    TryPrepareResourceUploads(cl);
+    host = static_cast<HostBuffer*>(r.entry->host);
+    if (host && !r.entry->dirty) r.action = kknr::BindAction::kUseExisting;
+  }
   const bool created = !host;
   if (!host) {
     host = new HostBuffer();
@@ -635,7 +664,10 @@ GameRenderer::HostBuffer* GameRenderer::BindVertexBuffer(nvrhi::ICommandList* cl
     d.initialState = nvrhi::ResourceStates::ShaderResource;
     d.keepInitialState = true;
     d.debugName = "Guest vertex data";
-    host->buffer = device_->createBuffer(d);
+    {
+      kknr::ResourceWorkTimer timer(resource_profile_, kknr::ResourceWork::BufferCreate);
+      host->buffer = device_->createBuffer(d);
+    }
     host->bytes = bytes;
     if (host->buffer) {
       host->slot = AllocateSlot(kBuffers);
@@ -660,7 +692,10 @@ GameRenderer::HostBuffer* GameRenderer::BindVertexBuffer(nvrhi::ICommandList* cl
     }
     nvrhi::ICommandList* upload = created ? EarlyUpload((uint64_t(bytes) + 3) & ~uint64_t(3)) : nullptr;
     if (!upload) upload = cl;
-    upload->writeBuffer(host->buffer, data, (uint64_t(bytes) + 3) & ~uint64_t(3));
+    {
+      kknr::ResourceWorkTimer timer(resource_profile_, kknr::ResourceWork::BufferStage);
+      upload->writeBuffer(host->buffer, data, (uint64_t(bytes) + 3) & ~uint64_t(3));
+    }
     upload->setBufferState(host->buffer, nvrhi::ResourceStates::ShaderResource);
     stats_.upload_bytes += (uint64_t(bytes) + 3) & ~uint64_t(3);
     if (!host->dynamic) vertex_buffers_.OnUploaded(*r.entry, physical_);
@@ -679,6 +714,11 @@ GameRenderer::HostBuffer* GameRenderer::BindIndexBuffer(nvrhi::ICommandList* cl,
   kknr::BufferCache::BindResult r =
       index_buffers_.Bind(physical, bytes, kknr::IndexConversionId(index32), physical_, frame_);
   auto* host = static_cast<HostBuffer*>(r.entry->host);
+  if (!host) {
+    TryPrepareResourceUploads(cl);
+    host = static_cast<HostBuffer*>(r.entry->host);
+    if (host && !r.entry->dirty) r.action = kknr::BindAction::kUseExisting;
+  }
   const bool created = !host;
   if (!host) {
     host = new HostBuffer();
@@ -688,7 +728,10 @@ GameRenderer::HostBuffer* GameRenderer::BindIndexBuffer(nvrhi::ICommandList* cl,
     d.initialState = nvrhi::ResourceStates::IndexBuffer;
     d.keepInitialState = true;
     d.debugName = "Guest indices";
-    host->buffer = device_->createBuffer(d);
+    {
+      kknr::ResourceWorkTimer timer(resource_profile_, kknr::ResourceWork::BufferCreate);
+      host->buffer = device_->createBuffer(d);
+    }
     host->bytes = bytes;
     r.entry->host = host;
     r.action = kknr::BindAction::kCreateAndUpload;
@@ -696,16 +739,275 @@ GameRenderer::HostBuffer* GameRenderer::BindIndexBuffer(nvrhi::ICommandList* cl,
   if (!host->buffer) return nullptr;
   if (r.action != kknr::BindAction::kUseExisting) {
     auto& converted = scratch_index_upload_;
-    kknr::ConvertIndexBuffer(data, converted, bytes, index32);
+    {
+      kknr::ResourceWorkTimer timer(resource_profile_, kknr::ResourceWork::BufferConvert);
+      kknr::ConvertIndexBuffer(data, converted, bytes, index32);
+    }
     nvrhi::ICommandList* upload = created ? EarlyUpload(converted.size()) : nullptr;
     if (!upload) upload = cl;
-    upload->writeBuffer(host->buffer, converted.data(), converted.size());
+    {
+      kknr::ResourceWorkTimer timer(resource_profile_, kknr::ResourceWork::BufferStage);
+      upload->writeBuffer(host->buffer, converted.data(), converted.size());
+    }
     upload->setBufferState(host->buffer, nvrhi::ResourceStates::IndexBuffer);
     stats_.upload_bytes += converted.size();
     index_buffers_.OnUploaded(*r.entry, physical_);
     ++stats_.buffer_uploads;
   }
   return host;
+}
+
+void GameRenderer::TryPrepareResourceUploads(nvrhi::ICommandList* cl) {
+  if (!resource_prepare_call_ || resource_prepare_tried_) return;
+  resource_prepare_tried_ = true;
+  PrepareResourceUploads(cl, *resource_prepare_call_, *resource_prepare_device_,
+                         *resource_prepare_vs_, resource_prepare_ps_);
+}
+
+void GameRenderer::PrepareResourceUploads(nvrhi::ICommandList* cl, const DrawCall& call,
+                                          const dev::DeviceView& d, const GameShader& vs, const GameShader* ps) {
+  if (!options_.upload_submit || !TextureWorkerCount()) return;
+  struct Job {
+    kknr::TextureCache::Entry* texture = nullptr;
+    kknr::BufferCache::Entry* buffer = nullptr;
+    bool index = false, index32 = false;
+    kknr::TextureFetch fetch;
+    kknr::ResidentSnapshot snapshot;
+    uint64_t upload_bytes = 0, hash = 0;
+    std::unique_ptr<HostTexture> host_texture;
+    std::unique_ptr<HostBuffer> host_buffer;
+    kknr::ResourceWork work;
+  };
+  // A draw cannot stage more than the existing early-upload allowance. Storage
+  // snapshots have their own 32 MiB bound; an expanded texture can be larger.
+  std::vector<Job> jobs;
+
+  uint64_t upload_bytes = 0, snapshot_bytes = 0;
+  const auto options = TextureOptions();
+  const uint64_t revision = resource_revision_.load(std::memory_order_acquire);
+  auto fits = [&](uint64_t input, uint64_t output) {
+    if (jobs.size() >= 32 || output < UploadBatch::kMinBytes ||
+        input > UploadBatch::kFrameBytes - snapshot_bytes ||
+        output > UploadBatch::kFrameBytes - upload_bytes) return false;
+    if (!upload_batch_) upload_batch_ = std::make_unique<UploadBatch>(device_, options_.upload_submit);
+    return upload_batch_->CanPrepare(upload_bytes + output,
+        std::min(unsigned(jobs.size()) + 1, TextureWorkerCount() + 1));
+  };
+  auto capture = [&](Job& job, const kknr::GuestRange ranges[2]) {
+    if (!resource_upload_workers_)
+      resource_upload_workers_ = std::make_unique<ResourceUploadWorkers>(device_, TextureWorkerCount());
+    kknr::ResourceWorkTimer timer(resource_profile_, kknr::ResourceWork::Snapshot);
+    auto& scratch = resource_upload_workers_->scratch(jobs.size());
+    if (!job.snapshot.Capture(ranges, physical_, scratch.source, UploadBatch::kFrameBytes - snapshot_bytes))
+      return false;
+    snapshot_bytes += scratch.source.size();
+    upload_bytes += job.upload_bytes;
+    jobs.push_back(std::move(job));
+    return true;
+  };
+  auto texture = [&](const GameShader& shader) {
+    for (const auto& use : shader.bindings.textures) {
+      uint32_t words[6];
+      d.fetch_constant(use.slot & 31, words);
+      const auto fetch = kknr::TextureFetch::FromWords(words);
+      if (fetch.Type() != 2) continue;
+      // A resolve/alias may own the picture. Its usual bind decides this; never
+      // prepare guest bytes over it, even through a different fetch description.
+      if (auto it = resolved_by_base_.find(fetch.BaseAddress());
+          it != resolved_by_base_.end() && it->second->gpu_written) continue;
+      auto* known = textures_.Find(fetch);
+      if (known && (known->host || known->gpu_written)) continue;
+      kknr::HostTexturePlan plan;
+      if (!kknr::PlanHostTexture(fetch, plan, nullptr, options)) continue;
+      const auto ranges = kknr::GetTextureRanges(fetch, options);
+      const auto& format = kknr::GetHostFormatInfo(plan.format);
+      uint64_t size = 0;
+      for (uint32_t level = plan.min_level; level < plan.levels; ++level) {
+        const uint64_t w = std::max(plan.width >> level, 1u), h = std::max(plan.height >> level, 1u);
+        size += ((w + format.block_size - 1) / format.block_size) *
+            ((h + format.block_size - 1) / format.block_size) * format.bytes_per_block *
+            std::max(plan.depth >> level, 1u) * plan.layers;
+      }
+      const uint64_t input = ((uint64_t(ranges.base_bytes) + 4095) & ~uint64_t(4095)) +
+                             ((uint64_t(ranges.mip_bytes) + 4095) & ~uint64_t(4095));
+      if (!fits(input, size)) continue;
+      textures_.options = options;
+      auto* entry = textures_.Bind(fetch, physical_, frame_).entry;
+      if (!entry || entry->host || std::any_of(jobs.begin(), jobs.end(),
+          [&](const Job& j) { return j.texture == entry; })) continue;
+      // Protect before copying. A concurrent write changes resource_revision_;
+      // the joined results are then discarded and the ordinary bind retries.
+      bool readable = true;
+      for (const auto& r : entry->ranges) if (r.bytes && physical_.Available(r.start) <
+          ((uint64_t(r.bytes) + 3) & ~uint64_t(3))) readable = false;
+      if (!readable) continue;
+      textures_.EnsureWatched(*entry);
+      Job job; job.texture = entry; job.fetch = fetch; job.upload_bytes = size;
+      capture(job, entry->ranges);
+    }
+  };
+  texture(vs);
+  if (ps) texture(*ps);
+  auto buffer = [&](uint32_t physical, uint32_t bytes, bool index, bool index32) {
+    if (!bytes || !physical_.At(physical, bytes)) return;
+    auto& cache = index ? index_buffers_ : vertex_buffers_;
+    const uint64_t conversion = index ? kknr::IndexConversionId(index32) : 0;
+    auto* known = cache.Find(physical, bytes, conversion);
+    if (known && known->host) return;
+    const uint64_t size = (uint64_t(bytes) + 3) & ~uint64_t(3);
+    if (!fits((uint64_t(bytes) + 4095) & ~uint64_t(4095), size)) return;
+    auto* entry = cache.Bind(physical, bytes, conversion, physical_, frame_).entry;
+    if (!entry || entry->host || std::any_of(jobs.begin(), jobs.end(),
+        [&](const Job& j) { return j.buffer == entry; })) return;
+    cache.EnsureWatched(*entry);
+    Job job; job.buffer = entry; job.index = index; job.index32 = index32; job.upload_bytes = size;
+    capture(job, entry->ranges);
+  };
+  // Only streams actually read by this shader. Extra tessellation streams keep
+  // their existing path; no game object or declaration is accessed by a worker.
+  auto& elements = scratch_preparation_declaration_;
+  elements.clear();
+  if (const uint8_t* decl = call.vertex_declaration ? memory_.Virtual(call.vertex_declaration) : nullptr)
+    kknr::DecodeVertexDeclaration(decl, elements);
+  for (const auto& binding : vs.bindings.vertexBindings) {
+    uint32_t stream = 16;
+    if (binding.raw) {
+      if (binding.fetchConstant >= 80 && binding.fetchConstant <= 95) stream = 95 - binding.fetchConstant;
+    } else {
+      for (const auto& e : elements) if (e.usage == uint8_t(binding.usage) && e.usage_index == binding.usageIndex) {
+        stream = e.stream; break;
+      }
+    }
+    if (stream >= 16) continue;
+    const uint32_t object = d.u32(dev::kStreamBuffer + 8 * stream);
+    VertexBufferInfo info;
+    if (object && DecodeVertexBuffer(memory_.Virtual(object), info)) buffer(info.physical, info.size_bytes, false, false);
+  }
+  if (call.indexed && call.primitive != GuestPrimitive::kTriangleFan && call.primitive != GuestPrimitive::kQuadList)
+    buffer(call.index_info.physical, call.index_info.size_bytes, true, call.index_info.index32);
+  if (jobs.empty()) return;
+
+  MsTimer total(stats_.resource_prepare_ms);
+  kknr::ResourceWorkTimer wall(resource_profile_, kknr::ResourceWork::PrepareWall);
+  std::vector<ResourceUploadWorkers::Task> tasks(jobs.size());
+  // Retain the existing slab parallelism when this draw has only one large
+  // texture. The batch pool has no other participants in this case.
+  kknr::TextureConversionWorkers* slabs = nullptr;
+  if (jobs.size() == 1 && jobs[0].texture) {
+    if (!texture_conversion_workers_)
+      texture_conversion_workers_ = std::make_unique<kknr::TextureConversionWorkers>(TextureWorkerCount());
+    slabs = texture_conversion_workers_.get();
+  }
+  for (size_t i = 0; i < jobs.size(); ++i) {
+    tasks[i].bytes = jobs[i].upload_bytes;
+    tasks[i].prepare = [&, i] {
+      Job& job = jobs[i];
+      auto* profile = resource_profile_ ? &job.work : nullptr;
+      {
+        kknr::ResourceWorkTimer timer(profile, kknr::ResourceWork::Hash);
+        job.hash = job.snapshot.Hash();
+      }
+      auto& scratch = resource_upload_workers_->scratch(i);
+      if (job.texture) {
+        {
+          kknr::ResourceWorkTimer timer(profile, kknr::ResourceWork::TextureConvert);
+          // The snapshot's addresses are compact; format, layout and texel data
+          // are identical. Workers read no live guest memory. Slabs only run
+          // for a single job on the caller, with the batch workers idle.
+          if (!kknr::ConvertTexture(job.snapshot.Relocate(job.fetch), job.snapshot.memory,
+                                   scratch.texture, nullptr, options, slabs)) return false;
+        }
+        job.upload_bytes = scratch.texture.bytes.size();
+        tasks[i].bytes = job.upload_bytes;
+        job.host_texture.reset(CreateHostTexture(scratch.texture.plan, false, 1.0f, 1.0f, profile));
+        return bool(job.host_texture);
+      }
+      job.host_buffer = std::make_unique<HostBuffer>();
+      nvrhi::BufferDesc desc;
+      desc.byteSize = (uint64_t(job.buffer->bytes) + 15) & ~uint64_t(15);
+      desc.canHaveRawViews = !job.index;
+      desc.isIndexBuffer = job.index;
+      desc.initialState = job.index ? nvrhi::ResourceStates::IndexBuffer : nvrhi::ResourceStates::ShaderResource;
+      desc.keepInitialState = true;
+      desc.debugName = job.index ? "Guest indices" : "Guest vertex data";
+      {
+        kknr::ResourceWorkTimer timer(profile, kknr::ResourceWork::BufferCreate);
+        job.host_buffer->buffer = device_->createBuffer(desc);
+      }
+      job.host_buffer->bytes = job.buffer->bytes;
+      job.host_buffer->last_upload_frame = frame_;
+      if (job.index) {
+        kknr::ResourceWorkTimer timer(profile, kknr::ResourceWork::BufferConvert);
+        kknr::ConvertIndexBuffer(scratch.source.data(), scratch.indices, job.buffer->bytes, job.index32);
+      }
+      return bool(job.host_buffer->buffer);
+    };
+    tasks[i].record = [&, i](nvrhi::ICommandList* upload) {
+      Job& job = jobs[i];
+      auto& scratch = resource_upload_workers_->scratch(i);
+      auto* profile = resource_profile_ ? &job.work : nullptr;
+      if (job.texture) {
+        kknr::ResourceWorkTimer timer(profile, kknr::ResourceWork::TextureStage);
+        for (const auto& sub : scratch.texture.subresources)
+          upload->writeTexture(job.host_texture->texture, sub.layer, sub.level,
+              scratch.texture.bytes.data() + sub.offset, sub.row_pitch, sub.depth_pitch);
+        upload->setTextureState(job.host_texture->texture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
+      } else {
+        kknr::ResourceWorkTimer timer(profile, kknr::ResourceWork::BufferStage);
+        const auto& data = job.index ? scratch.indices : scratch.source;
+        upload->writeBuffer(job.host_buffer->buffer, data.data(), job.upload_bytes);
+        upload->setBufferState(job.host_buffer->buffer,
+            job.index ? nvrhi::ResourceStates::IndexBuffer : nvrhi::ResourceStates::ShaderResource);
+      }
+    };
+  }
+  resource_upload_workers_->Run(tasks);
+  {
+    kknr::ResourceWorkTimer timer(resource_profile_, kknr::ResourceWork::Submit);
+    resource_upload_workers_->SubmitAll([&](auto* list, uint64_t bytes) { upload_batch_->SubmitPrepared(list, bytes); });
+  }
+  const bool stale = resource_revision_.load(std::memory_order_acquire) != revision;
+  if (stale) ProcessInvalidations();
+  for (size_t i = 0; i < jobs.size(); ++i) {
+    auto& job = jobs[i];
+    if (resource_profile_) for (unsigned stage = 0; stage < kknr::ResourceWork::Count; ++stage) {
+      resource_work_.ms[stage] += job.work.ms[stage];
+      resource_work_.calls[stage] += job.work.calls[stage];
+    }
+    if (!tasks[i].ready || stale) { ++stats_.prepared_discarded; continue; }
+    if (job.texture) {
+      cl->beginTrackingTextureState(job.host_texture->texture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
+      job.texture->host = job.host_texture.release();
+      textures_.OnUploaded(*job.texture, job.hash);
+      ++stats_.texture_uploads;
+    } else {
+      if (!job.index) {
+        job.host_buffer->slot = AllocateSlot(kBuffers);
+        if (job.host_buffer->slot) WriteSlot(kBuffers,
+            nvrhi::BindingSetItem::RawBuffer_SRV(job.host_buffer->slot, job.host_buffer->buffer));
+      }
+      job.buffer->host = job.host_buffer.release();
+      (job.index ? index_buffers_ : vertex_buffers_).OnUploaded(*job.buffer, job.hash);
+      ++stats_.buffer_uploads;
+    }
+    stats_.upload_bytes += job.upload_bytes;
+    ++stats_.prepared_resources;
+  }
+  resource_upload_workers_->TrimScratch();
+  stats_.early_upload_bytes = upload_batch_->bytes();
+  stats_.early_upload_batches = upload_batch_->batches();
+}
+
+void GameRenderer::ProfileResources() {
+  if (!resource_profile_file_) return;
+  std::fprintf(resource_profile_file_, "%llu,%.6f", static_cast<unsigned long long>(frame_),
+      std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count());
+  for (double ms : resource_work_.ms) std::fprintf(resource_profile_file_, ",%.6f", ms);
+  std::fprintf(resource_profile_file_, ",%llu,%llu,%.6f\n",
+      static_cast<unsigned long long>(stats_.prepared_resources),
+      static_cast<unsigned long long>(stats_.prepared_discarded), stats_.resource_prepare_ms);
+  resource_work_ = {};
+  if (frame_ % 300 == 0) std::fflush(resource_profile_file_);
 }
 
 }  // namespace nr
