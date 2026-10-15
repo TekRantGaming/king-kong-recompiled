@@ -835,6 +835,42 @@ TEST(Draw_ConstantsReachShaders) {
   f.CheckQuadrants(px, want, __LINE__);
 }
 
+// The 944-byte draw constants may remain identical while the draw arguments change. Their
+// alphaRef field near the end must still update, and reopening a list requires a fresh volatile
+// write even when its final constants equal the next frame's first constants.
+TEST(Draw_ReusesIdenticalDrawConstantsAndKeepsAlphaChanges) {
+  Fixture f;
+  if (!f.Init()) return;
+  const uint32_t rt = f.BindMainSurface();
+  const auto p = f.MakeColorPipeline();
+  std::vector<ColorVertex> vertices;
+  for (const Rect& q : kQuadrants) {
+    const auto quad = QuadTriangles(q, 0x80FF0000);
+    vertices.insert(vertices.end(), quad.begin(), quad.end());
+  }
+  f.SetDeclaration(p.decl);
+  f.SetShaders(p.vs, p.ps_interp);
+  f.SetStream(0, f.NewVertexBuffer(Bytes(vertices)), 0, 16);
+  f.Reg(dev::kRbColorControl, 8 | 4);  // alpha test enabled, GREATER
+  for (uint32_t frame = 0; frame < 6; ++frame) {
+    f.Clear(kClearTarget0, 0xFF0000FF);
+    f.RegF(dev::kRbAlphaRef, 0.25f);
+    f.Draw(4, 0, 6);
+    f.Draw(4, 6, 6);  // same constants; a different start vertex
+    f.RegF(dev::kRbAlphaRef, 0.75f);
+    f.Draw(4, 12, 6);
+    f.Draw(4, 18, 6);  // both bottom quads must fail alpha test
+    f.RegF(dev::kRbAlphaRef, 0.25f);
+    f.Draw(4, 6, 6);  // ends with the same constants the next frame starts with
+    const Pixels px = f.Present(rt);
+    const Rgb want[4] = {{1, 0, 0}, {1, 0, 0}, {0, 0, 1}, {0, 0, 1}};
+    f.CheckQuadrants(px, want, __LINE__);
+    CHECK_EQ(f.game->stats().draws, uint64_t(frame + 1) * 5);
+    CHECK_EQ(f.game->stats().draw_constant_uploads, uint64_t(frame + 1) * 3);
+    CHECK_EQ(f.game->stats().draw_constant_identical, uint64_t(frame + 1) * 2);
+  }
+}
+
 // ------------------------------------------------- pipeline state ---
 
 // ------------------------------------------- vertex element endian ---

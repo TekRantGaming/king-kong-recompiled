@@ -1683,8 +1683,16 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     ann_material = true;
     tessellated = (record.flags & kRecordTessellation)!=0;
   }
-  cl->writeBuffer(draw_constants_, &dc, sizeof(dc));
-  stats_.upload_bytes += sizeof(dc);
+  // Reuse the current volatile version only inside the same list/frame, just as for the
+  // VS/PS and scale constants. Compare every byte, including alpha test and tessellation.
+  if (new_list || std::memcmp(&dc, &last_draw_, sizeof(dc)) != 0) {
+    cl->writeBuffer(draw_constants_, &dc, sizeof(dc));
+    stats_.upload_bytes += sizeof(dc);
+    ++stats_.draw_constant_uploads;
+    last_draw_ = dc;
+  } else {
+    ++stats_.draw_constant_identical;
+  }
   if (scaled()) {
     sc.renderScale[0] = size_from->scale_x;
     sc.renderScale[1] = size_from->scale_y;

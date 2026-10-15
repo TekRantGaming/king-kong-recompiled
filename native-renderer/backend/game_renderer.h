@@ -187,6 +187,7 @@ class GameRenderer {
     uint64_t texture_failures = 0;
     uint64_t buffer_uploads = 0;
     uint64_t upload_bytes = 0;       // guest textures, vertices, indices and draw constants (not auxiliary passes)
+    uint64_t draw_constant_uploads = 0, draw_constant_identical = 0;
     uint64_t scale_uploads = 0, scale_identical = 0;
     uint64_t vertex_binds = 0, vertex_repeated = 0;
     uint64_t descriptor_updates = 0, graphics_states = 0, pipeline_changes = 0;
@@ -890,6 +891,7 @@ class GameRenderer {
   // they changed (and once per command list).
   std::array<float, 1024> last_vs_ = {}, last_ps_ = {};
   std::array<uint8_t, 4096> last_vs_raw_ = {}, last_ps_raw_ = {};  // the guest bytes of those
+  kkshaders::DrawConstants last_draw_ = {};
   bool constants_valid_ = false;
   nvrhi::ICommandList* constants_list_ = nullptr;
   uint64_t constants_frame_ = 0;

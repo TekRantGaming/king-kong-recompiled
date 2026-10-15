@@ -838,7 +838,7 @@ void Backend::PresentNow(rex::ui::Presenter* presenter, uint32_t frontbuffer_wid
       const ShaderLibrary::Stats sh = shaders_->stats();
       REXLOG_INFO(
           "rexgpu-native: game renderer: {} draws, skipped {} (shader) {} (target) {} (primitive) {} "
-          "(pipeline) {} (pipeline not ready) {} (device); {} pipelines ({} drawn after a wait, {:.0f} ms waited); {} texture uploads ({} failed), {} buffer uploads, "
+          "(pipeline) {} (pipeline not ready) {} (device); {} pipelines ({} drawn after a wait, {:.0f} ms waited); {} texture uploads ({} failed), {} buffer uploads, draw constants {} uploads ({} reused), "
           "{} clears, {} resolves ({} failed), {} invalidations; shaders {} created, {} from the pack, "
           "{} compiled, {} failed, {} from objects; {:.0f} ms in pipeline creation, {:.0f} ms in texture uploads, {} aliased ({} failed); "
           "game thread in the renderer: {} ms draws, {} ms clears, {} ms resolves, {} ms presents ({} ms in {} watch calls); "
@@ -847,6 +847,7 @@ void Backend::PresentNow(rex::ui::Presenter* presenter, uint32_t frontbuffer_wid
           s.draws, s.skipped_shader, s.skipped_target, s.skipped_primitive, s.skipped_pipeline,
           s.skipped_pending, s.skipped_device, s.pipelines, s.pipeline_budget_waits + s.pipeline_waits,
           s.pipeline_wait_ms, s.texture_uploads, s.texture_failures, s.buffer_uploads,
+          s.draw_constant_uploads, s.draw_constant_identical,
           s.clears, s.resolves, s.resolve_failures, s.invalidations, sh.created, sh.from_pack,
           sh.compiled, sh.failed, sh.from_object, s.pipeline_ms, s.texture_ms, s.aliases, s.alias_failures,
           g_call_us[0].load() / 1000, g_call_us[1].load() / 1000, g_call_us[2].load() / 1000,
