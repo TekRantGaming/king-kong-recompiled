@@ -65,6 +65,7 @@ extern char** environ;
 #include "launcher_art.h"
 #include "launcher_text.h"
 #include "play_internal.h"
+#include "benchmark.h"
 #include "settings.h"
 
 namespace kk {
@@ -488,7 +489,7 @@ void LoadStartRequestFromSettings() {
 
 bool RelaunchWith(const std::wstring& extra) {
   static constexpr const wchar_t* kDropped[] = {L"--kk_skip_launcher", L"--kk_start", L"--kk_launcher_open",
-                                               L"--kk_startup_child"};
+                                               L"--kk_startup_child", L"--kk_benchmark"};
   auto dropped = [](const std::wstring& arg) {
     for (const wchar_t* d : kDropped) {
       const std::wstring p(d);
@@ -869,6 +870,7 @@ int g_title_frames = -1, g_table_frames = 0;
 
 namespace kk::play {
 bool OnGameMenuPage(const char* page) {
+  if (benchmark::Active()) { benchmark::Interrupted(); return true; }
   if (!g_session) return false;
   if (!g_leaving) {
     // A chapter-select run that has ended (its Score pages and save question are over) goes back to
@@ -977,13 +979,18 @@ REX_HOOK_RAW(sub_8253DB80) {
     // In a session the launcher started, the start menu (level 3) means: back to the launcher.
     if (g_session && Load32(base, g + 4) != 0 && Load32(base, g + 8) == kStartMenuLevel) {
       Store32(base, g + 4, 0);
-      // A chapter-select run that has reached its end goes back to Chapter select; Quit game to the Play menu.
-      const bool chapter_end = g_chapter_session && !LeftByQuit();
-      ReturnToLauncher(chapter_end ? "the chapter-select run is over" : "the game left play",
-                       chapter_end ? "chapters" : "play");
+      if (kk::benchmark::Active()) {
+        kk::benchmark::Interrupted();
+      } else {
+        // A chapter-select run that has reached its end goes back to Chapter select; Quit game to the Play menu.
+        const bool chapter_end = g_chapter_session && !LeftByQuit();
+        ReturnToLauncher(chapter_end ? "the chapter-select run is over" : "the game left play",
+                         chapter_end ? "chapters" : "play");
+      }
     }
   }
   const bool request = g && Load32(base, g + 4) != 0;
+  if (request && g_level_loaded) kk::benchmark::Interrupted();
   if (request && g_jump_requested) REXLOG_INFO("KK play: uni_go loads level {}", int32_t(Load32(base, g + 8)));
   __imp__sub_8253DB80(ctx, base);
   ServiceProfileOptions(ctx, base);
@@ -1018,6 +1025,7 @@ REX_HOOK_RAW(sub_8253DB80) {
     g_cover = false;
     kk::RequestUiPaint();
     REXLOG_INFO("KK play: the start request's level is loaded");
+    kk::benchmark::LevelLoaded();
 #if defined(KK_DEV_TOOLS)
     kk::DevStartScriptClock();
 #endif

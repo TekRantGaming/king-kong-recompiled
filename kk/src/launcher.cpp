@@ -4190,6 +4190,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   std::vector<Item> AboutItems() {
     std::vector<Item> items;
     items.push_back(Section("King Kong PC port"));
+    Item benchmark = ActionItem("Run benchmark",
+        "Runs a 75-second camera replay after warmup, using your graphics settings and private saves. Results are saved locally.",
+        "Start", [this] { benchmark_pending_ = true; StartGame(); });
+    items.push_back(Disable(benchmark, !CanPlay(), "Install the game first."));
     items.push_back(ActionItem("Copy diagnostics",
         "Copies version, hardware, settings, fallbacks and recent errors. Names and paths are redacted. Nothing is uploaded.",
         "Copy", [this] {
@@ -4883,6 +4887,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   void Play() {
     if (!CanPlay()) return;
+    benchmark_pending_ = false;
     const int fps = GetInt("kk_frame_rate", 30);
     if (fps > 0 && fps <= 60) return StartGame();  // 60: Remastered's rate, no warning each time
     OpenFrameRateWarning();
@@ -4901,7 +4906,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (pack_.busy) {
       waiting_for_pack_ = true;
       OpenModal("Shader pack", "The newest shader pack is still downloading. The game starts as soon as it's done.",
-                {"Back"}, 0, [this](int) { waiting_for_pack_ = false; });
+                {"Back"}, 0, [this](int) { waiting_for_pack_ = benchmark_pending_ = false; });
       modal_.progress = [this] { return PackProgress(); };
       return;
     }
@@ -4927,9 +4932,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       needs_restart = true;
     }
     FlushProfileOptions();
-    auto action = needs_restart ? cb_.restart_and_play : cb_.play;
+    auto action = benchmark_pending_ ? cb_.benchmark : needs_restart ? cb_.restart_and_play : cb_.play;
     // The pause menu for the game about to start (the app makes it too when the launcher is skipped).
-    if (!needs_restart) CreatePauseMenu(imgui_drawer(), immediate_, paths_.config_path, paths_.user_dir, paths_.game_dir);
+    if (!needs_restart && !benchmark_pending_) CreatePauseMenu(imgui_drawer(), immediate_, paths_.config_path, paths_.user_dir, paths_.game_dir);
     input_.Release();  // the game opens the controllers itself
     Close();  // deletes this dialog after the current draw
     if (action) action();
@@ -5039,7 +5044,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       OpenModal("Preparing shaders",
                 "The native renderer's shaders are still being prepared from your copy of the game. " KK_SLOW_PC " The game starts "
                 "as soon as they're done.",
-                {"Back"}, 0, [this](int) { waiting_for_native_ = native_modal_ = false; });
+                {"Back"}, 0, [this](int) { waiting_for_native_ = native_modal_ = benchmark_pending_ = false; });
       modal_.progress = [this] { return native_pack_.Fraction(); };
     }
   }
@@ -5214,6 +5219,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   std::vector<std::string> restart_baseline_;
   bool files_ok_ = false;
   bool played_ = false;
+  bool benchmark_pending_ = false;
   std::shared_ptr<UpdateStatus> update_;
   std::shared_ptr<SteamState> steam_;
   bool update_manual_ = false, update_prompted_ = false, installing_update_ = false, relaunched_ = false;

@@ -29,6 +29,7 @@
 #include <rex/hook.h>
 
 #include "hfr.h"
+#include "benchmark.h"
 
 namespace kk {
 #if defined(KK_DEV_TOOLS)
@@ -88,6 +89,7 @@ void SetFrameTime(PPCContext& ctx, uint8_t* base) {
 // (KK_DEV_DT_LOG, dev_frame_log.cpp), which reads what it ended up as.
 REX_HOOK_RAW(sub_8272CA20) {
   SetFrameTime(ctx, base);
+  kk::benchmark::Frame(kk::hfr::LoadF(base, kRawFrameTime));
 #if defined(KK_DEV_TOOLS)
   kk::DevFrameLogTick(base);
 #endif

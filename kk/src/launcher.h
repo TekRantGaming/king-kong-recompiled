@@ -22,6 +22,7 @@ namespace kk {
 struct LauncherCallbacks {
   std::function<void()> play;                // start the game (called deferred, UI thread)
   std::function<void()> restart_and_play;    // relaunch with saved settings, skip launcher
+  std::function<void()> benchmark;           // relaunch the fixed replay with private user data
   std::function<void()> quit;
   std::function<void(bool)> set_fullscreen;  // apply window mode live
   std::function<double()> dpi_scale;         // window DPI / 96
