@@ -74,7 +74,11 @@ upload would also defer its dependent draws. Those parts remain open.
   Complete output hashes match. The small-texture control is 26.0 -> 26.4 us;
   no gain claimed. Candidate serial control is within about 1.5% of baseline.
   Windows resource CTest passes 2/2 (76 resource cases, three format-map cases);
-  WSL Ubuntu 24.04 / GCC 13.3 resource CTest passes 2/2. No Linux timing claim.
+  WSL Ubuntu 24.04 / GCC 13.3 resource CTest passes 2/2.
+  Matched Linux baseline/worker benchmarks also pass with identical full hashes:
+  large-case reductions are 16.3% DXT1, 33.7% DXT5, 44.9% RGBA8, 71.3% 565,
+  70.6% decoded DXT5, 25.3% cube and 54.2% volume. Every large case favors workers
+  in all three pairs. No small-case Linux timing claim because samples vary.
 
 The combined native renderer/plugin builds successfully, including the added
 diagnostic counter fields. Final Windows native CTest passes **21/21** (86.74 s),
@@ -86,11 +90,38 @@ needed its missing `native_debug` and `native_diagnostics` definitions:
 full plugin-enabled Linux suite passes, with no excluded test. Native temporal
 upscaler SDKs remain disabled in that existing Linux SDK setup.
 
-Two of the allowed six Windows games have run: released Beta 5, Vulkan and
-DirectX 12, chapter 8. The Vulkan baseline confirms
-109.4 ms texture work and 38.6 ms buffer work in individual startup frames; first
-10 seconds after level load have two frames above 50 ms, worst 206.3 ms. No
-texture failures or skipped draws. The comparison uses private roots, windowed
-1280x720, uncapped, render scale 1, GI Low, GTAO full/three samples, upscaler off.
-Other tasks' game locks and priority are respected between runs; candidate comparisons wait
-for the shared slot. These are local measurements, not release claims.
+All **six** authorized Windows games completed with exit 0. No further game
+launches. Released Beta 5 executable/runtime and the same private seed data are
+used throughout; the candidate replaces only the native renderer DLL. Chapter 8,
+stationary initial camera, windowed 1280x720, uncapped, render scale 1, GI Low,
+GTAO full/three samples, upscaler off. Both SDL activation hints are zero and
+kkbg2 remains running. Other tasks' locks and priority were respected.
+
+Native frame intervals in the first ten seconds after the level-loaded marker:
+
+| API / run | Frames >50 ms | Worst ms | Peak texture ms | Peak buffer ms |
+|---|---:|---:|---:|---:|
+| Vulkan before 1 | 2 | 206.3 | 109.4 | 38.6 |
+| Vulkan after 1 | 2 | 169.5 | 64.0 | 38.4 |
+| Vulkan before 2 | 3 | 191.4 | 90.1 | 46.3 |
+| Vulkan after 2 | 2 | 204.6 | 74.0 | 52.4 |
+| DirectX 12 before | 3 | 303.6 | 116.8 | 105.2 |
+| DirectX 12 after | 2 | 269.2 | 96.5 | 101.7 |
+
+Texture CPU time falls in both Vulkan comparisons, but **no consistent worst-
+frame or steady-FPS gain is established**. Draw-constant reuse is about 37.2-37.3%
+in the candidate games. Every run reports zero texture failures and zero skipped
+draws in the measured windows. AI/scene workload and upload counts vary across
+runs; these are local measurements, not release claims. Full steady results and
+raw evidence paths are in the private coordinator report `codex/REPORT-091.md`.
+
+## Remaining work
+
+Priority 1 is partial: no asynchronous GPU upload system, ahead-of-use resource
+scheduler or per-frame upload budget was added. Guest snapshot/endian work,
+required conversion joins and GPU uploads remain synchronous. Upload-related
+queue room waits still reach 100.2 ms in the repeated candidate Vulkan start and
+189.6 ms in DirectX 12. Queue/presentation bounds remain exactly as before.
+Buffer uploads, the remaining device comparisons, per-draw map/hash/mutex costs,
+and identical-picture GI/GTAO GPU optimisation remain open. No game logic,
+graphics defaults, effect quality or GPU shader changes were made.
