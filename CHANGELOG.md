@@ -1,3 +1,9 @@
+Native renderer update: all future builds use Vulkan (primary) or DirectX 12. The Classic renderer
+and its GPU DLL are removed. Existing Classic settings migrate to native Auto (Vulkan). Startup
+recovery tries the other native API, then explains how to update drivers and get help.
+
+Earlier version entries below describe those releases as shipped.
+
 # Changelog
 
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a

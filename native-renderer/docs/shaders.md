@@ -1,3 +1,7 @@
+> Since 15 October 2026, game builds are native only (Vulkan primary, DirectX 12 secondary).
+> There is no `KK_NATIVE_RENDERER` build switch, Classic selection or Xenos GPU DLL in packages.
+> Emulation build commands and comparison runs below are historical records, not current instructions.
+
 # Shader translator (stream 02)
 
 Status: 10 October 2026. Every shader of the game's database and every shader in today's shader caches is
@@ -422,9 +426,8 @@ before Play, so this happens only when the game is started without the launcher.
 
 Everything is in `kk/src/native_shaders.h` / `.cpp` (class `NativeShaderPack`, which finds
 `nr_get_shader_pack_api` in the already loaded `rexgpu-native` and wraps start / poll / cancel / release). It is
-only active when `gpu_plugin` is `native` and the plugin has the builder (`NativeShaderPack::Wanted()`); with the
-Xenos renderer, or in a build without `KK_NATIVE_RENDERER`, it is a stub and the launcher behaves exactly as
-before. `kk/CMakeLists.txt` adds `src/native_shaders.cpp`. The changes in `kk/src/launcher.cpp`:
+active when the native plugin has the builder (`NativeShaderPack::Wanted()`). All game builds include
+this implementation; there is no non-native stub. `kk/CMakeLists.txt` adds `src/native_shaders.cpp`. The changes in `kk/src/launcher.cpp`:
 
 1. `#include "native_shaders.h"`; members `native_pack_`, `setup_shaders_`, `waiting_for_native_`,
    `native_modal_`, `native_pack_checked_`, `native_wait_since_`.

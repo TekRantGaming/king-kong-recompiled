@@ -5,8 +5,8 @@
 
 .EXAMPLE
   tests\run.ps1 -Plugin native -Scenes all          # capture with rexgpu-native, compare, write the report
-  tests\run.ps1 -Plugin xenos -Golden -Force        # (re)capture the golden set with today's renderer
-  tests\run.ps1 -Plugin xenos -Scenes title,pause   # a few scenes only (scene or run names)
+  tests\run.ps1 -Plugin native -Golden -Force        # (re)capture the golden set with today's renderer
+  tests\run.ps1 -Plugin native -Scenes title,pause   # a few scenes only (scene or run names)
   tests\run.ps1 -Plugin native -Tour                # the chapter tour (tests/tour.json): all 42 chapters
   tests\run.ps1 -Tour -RecordPipelines              # the tour on the native plugin, recording every pipeline
 
@@ -14,7 +14,7 @@
 #>
 [CmdletBinding()]
 param(
-  [string]$Plugin = 'xenos',
+  [ValidateSet('native')][string]$Plugin = 'native',
   [string[]]$Scenes = @('all'),
   [switch]$Golden,
   [switch]$Force,
@@ -64,7 +64,7 @@ if ($RecordPipelines) {
   if ($Golden) { Write-Output '-RecordPipelines and -Golden do not go together'; exit 4 }
 }
 if (-not $Exe) {
-  # kk-dev has the Xenos plugin only; the native plugin comes with the kk-dev-vulkan build.
+  # Use the native developer build for scripted captures.
   $Exe = Join-Path $repo 'kk\out\build\kk-dev\king_kong.exe'
   $vk = Join-Path $repo 'kk\out\build\kk-dev-vulkan\king_kong.exe'
   if (-not (Get-ChildItem -Path (Split-Path $Exe) -Filter "rexgpu-$Plugin*.dll" -ErrorAction SilentlyContinue) -and

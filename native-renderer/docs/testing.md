@@ -1,3 +1,7 @@
+> Since 15 October 2026, game builds are native only (Vulkan primary, DirectX 12 secondary).
+> There is no `KK_NATIVE_RENDERER` build switch, Classic selection or Xenos GPU DLL in packages.
+> Emulation build commands and comparison runs below are historical records, not current instructions.
+
 # Testing the renderer against golden frames
 
 `native-renderer/tests/` answers one question unattended: does a GPU plugin draw scene X the way today's
@@ -14,14 +18,14 @@ the desktop) and a frame log, and compares them with a golden set captured from 
 ## Use
 
 ```powershell
-# Today's renderer against the golden set (the self-consistency check):
-native-renderer\tests\run.ps1 -Plugin xenos
+# Native renderer against the historical golden set (the self-consistency check):
+native-renderer\tests\run.ps1 -Plugin native
 # The new renderer (rexgpu-native.dll beside king_kong.exe):
 native-renderer\tests\run.ps1 -Plugin native
 # Some scenes only (scene or run names), and wait up to an hour if the game is busy:
 native-renderer\tests\run.ps1 -Plugin native -Scenes title,pause,vrex -WaitMinutes 60
-# Capture the golden set again (asks for -Force when one exists):
-native-renderer\tests\run.ps1 -Plugin xenos -Golden -Force
+# Capture a native reference set (asks for -Force when one exists):
+native-renderer\tests\run.ps1 -Plugin native -Golden -Force
 # The chapter tour (tests/tour.json, all 42 chapter-select entries in four launches, about 35 minutes):
 native-renderer\tests\run.ps1 -Plugin native -Tour
 # The tour on the native plugin with its pipeline cache recording, one file per launch collected in
@@ -291,7 +295,7 @@ that was not used for tuning.
 The golden set is made at the console's size, and the capture is the presenter's image at the render size
 (2560x1440 at `--native_render_scale 2`), so `compare.py` fails a scaled run on `size` (Phase 2b). Judge such a
 run against the Xenos plugin's at the same integer scale (`--draw_resolution_scale_x=2
---draw_resolution_scale_y=2`, `-Plugin xenos -Out <folder>`), shot by shot; `backend.md`, "Render scale in the
+--draw_resolution_scale_y=2`, `-Plugin native -Out <folder>`), shot by shot; `backend.md`, "Render scale in the
 game", has the numbers. Whether scaling itself is right is decided by the synthetic
 `Scale_*` tests in `nr_game_tests` (`backend.md`, "Render scale"); the commands for a run on the game are in
 that section too.

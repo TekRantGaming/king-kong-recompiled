@@ -1,5 +1,5 @@
 param([string]$Label='baseline', [int]$Chapter=8, [string]$Backend='vulkan',
- [switch]$Classic, [string]$Scale='1920x1080', [int]$Cores=0,
+ [string]$Scale='1920x1080', [int]$Cores=0,
  [switch]$Gtao, [string]$Upscaler='off', [switch]$Fire, [switch]$PassTimers, [switch]$Validation,
  [string]$NativeDll='', [switch]$Cutscene, [string]$PipelineList='F:\KK-native-renderer\analysis\tour\pipelines\tour-all.list')
 . (Join-Path $PSScriptRoot "run-storage.ps1")
@@ -76,11 +76,10 @@ $args=@('--fullscreen=false','--window_width=1280','--window_height=720','--kk_f
  "--cache_root=$run\cache",'--kk_original_look=true',"--kk_original_look_keep=$keep",'--kk_frame_rate=0',
  "--native_debug=$debug",'--native_stutter_stats=true',"--native_backend=$Backend",
  "--native_render_scale=$Scale", "--native_upscaler=$Upscaler",'--native_upscaler_quality=quality','--native_upscaler_gpu_time=true','--native_ao_gpu_time=true')
-if ($Classic) { $args+='--kk_renderer=classic'; $args+="--draw_resolution_scale_x=$(if($Scale -eq '1920x1080'){1}else{2})"; $args+="--draw_resolution_scale_y=$(if($Scale -eq '1920x1080'){1}else{2})" }
 if ($Gtao) { $args+='--ao_mode=1','--ao_strength=2','--native_ao_method=gtao' } else { $args+='--ao_mode=0' }
 if ($Fire) { $args+='--kk_cheat_ammo=true','--kk_cheat_machine_gun=true','--mnk_mode=false','--kk_camera_sensitivity=400' }
 if ($Validation) { $args+='--native_validation=true' }
-@{label=$Label;chapter=$Chapter;backend=$Backend;classic=[bool]$Classic;scale=$Scale;cores=$Cores;
+@{label=$Label;chapter=$Chapter;backend=$Backend;classic=$false;scale=$Scale;cores=$Cores;
  affinity_mask=$coreMask.ToString('X'); native_dll=$NativeDll; dll_sha256=(Get-FileHash "$run\rexgpu-native.dll").Hash; args=$args} | ConvertTo-Json | Set-Content "$run\test.json"
 Wait-Free
 Set-Content -LiteralPath $lockPath "task017 $(Get-Date -Format o)"

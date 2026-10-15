@@ -99,7 +99,12 @@ if ($LASTEXITCODE -ne 0) { Fail "Compiling failed (see above)." }
 Step 5 "Putting the game together"
 $bin = "$root\kk\out\build\kk-release"
 New-Item -ItemType Directory -Force $OutDir | Out-Null
-Copy-Item "$bin\*.exe", "$bin\*.dll" $OutDir -Force
+# An old output directory must not carry an emulation DLL into a new native build.
+if (Get-ChildItem -LiteralPath $OutDir -Filter '*rexgpu-xenos*.dll') {
+  Fail "The output folder contains an old Xenos GPU DLL. Choose a fresh output folder."
+}
+Get-ChildItem "$bin\*.exe", "$bin\*.dll" | Where-Object { $_.Name -notlike '*rexgpu-xenos*' } |
+  Copy-Item -Destination $OutDir -Force
 # Move (not copy) the 6.3 GB of game files so they aren't stored twice.
 if (Test-Path "$OutDir\game") { Move-Item "$OutDir\game" "$OutDir\game.old" -Force }
 Move-Item "$root\kk\assets" "$OutDir\game"

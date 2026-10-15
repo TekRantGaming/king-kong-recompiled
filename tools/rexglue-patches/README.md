@@ -1,3 +1,6 @@
+> Historical SDK patch/build record for stable 1.9.x. Future game builds use rexgpu-native only;
+> rexgpu-xenos is neither loaded nor shipped. These old Xenos staging instructions do not apply.
+
 # ReXGlue SDK patches
 
 The port ships the GPU plugin (`rexgpu-xenos.dll`) built from the ReXGlue SDK **v0.10.0** source (tag commit
