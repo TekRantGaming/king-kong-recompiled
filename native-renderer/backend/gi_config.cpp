@@ -20,7 +20,7 @@ GiLevelParams GiParamsFor(GiLevel level) {
       p = {2, 6, 2, true, 3.0f};
       break;
     case GiLevel::kMedium:
-      p = {3, 8, 3, true, 5.0f};
+      p = {2, 6, 2, true, 5.0f};
       break;
     case GiLevel::kHigh:
       p = {4, 10, 3, false, 8.0f};

@@ -19,10 +19,10 @@
 // added in linear light (the picture's values to the power kk_Shape.z, 2.2) and encoded again at the
 // end, so a sunlit wall lights the shade beside it as much as it physically would.
 //
-//   cs_radiance        the reconstructed source over the picture (a block's mean, linear; sky excluded)
+//   cs_radiance        the reconstructed source (encoded block mean, then linearised; sky excluded)
 //   cs_radiance_down   its smaller mips (2x2 means), for samples far away
 //   cs_gather          the bounce light (rgb) and the visibility (a) per working pixel
-//   cs_denoise         an edge-aware blur (5x5 a-trous, depth and normal weights), run with steps
+//   cs_denoise         an edge-aware blur (3x3 / 5x5 a-trous, depth and normal weights), run with steps
 //                      1, 2, 4 ...
 //   vs_main + ps_composite   into the scene colour target: the light added to the surface's
 //                            colour (and the flat ambient light taken away where it is hidden)
@@ -127,17 +127,20 @@ float3 ToGamma(float3 c)
 // The final baked-lit picture is not diffuse reflectance. Restore a bounded amount of
 // source energy only where brightness exceeds the frame's ambient-lit albedo ceiling.
 // This is a sunlit-ness heuristic, not a recovered sun direction or material albedo.
-// Work in display values for classification (as the game does), then transport linear
-// energy. The smooth ramp avoids a moving hard threshold; normalising all channels by
+// Convert the display-space ambient bounds to linear light for block classification.
+// The smooth ramp avoids a moving hard threshold; normalising all channels by
 // one peak preserves the source hue. Dark/ambient-only surfaces retain their old energy.
-float3 SourceRadiance(float3 color)
+float3 SourceRadiance(float3 energy)
 {
-    float3 energy = ToLinear(color);
     float ambient = Luma(max(kk_Ambient.rgb, 0.0));
     float ceiling = ambient * pow(kk_Ambient.w, 1.0 / kk_Shape.z);
-    float sunlit = smoothstep(ceiling, ceiling + max(0.15, ceiling), Luma(color));
+    // Classify the block once, in linear light. The block mean is encoded-space
+    // averaged before one conversion; sky contributes black before that mean.
+    float lower = pow(ceiling, kk_Shape.z);
+    float upper = pow(ceiling + max(0.15, ceiling), kk_Shape.z);
+    float sunlit = smoothstep(lower, upper, Luma(energy));
     float peak = max(max(energy.r, energy.g), energy.b);
-    return energy + (energy / max(peak, 1e-4)) * (0.45 * sunlit);
+    return energy + (energy / max(peak, 1e-4)) * (0.65 * sunlit);
 }
 
 [numthreads(8, 8, 1)]
@@ -157,9 +160,9 @@ void cs_radiance(uint2 id : SV_DispatchThreadID)
             // Test every host texel before averaging: a half-resolution block may
             // contain both rock and sky. Never reconstruct sunlight from that sky.
             if (g_srcSourceDepth.Load(int3(p, 0)) < kk_Params.y)
-                sum += SourceRadiance(g_srcColor.Load(int3(p, 0)).rgb);
+                sum += g_srcColor.Load(int3(p, 0)).rgb;
         }
-    g_outRadiance[id] = float4(max(sum / float(step * step), 0.0), 1.0);
+    g_outRadiance[id] = float4(SourceRadiance(ToLinear(sum / float(step * step))), 1.0);
 }
 
 [numthreads(8, 8, 1)]
@@ -276,7 +279,9 @@ void cs_gather(uint2 pix : SV_DispatchThreadID)
                 float3 S = XeGTAO_ComputeViewspacePosition(suv, sz, consts);
                 float3 d = S - P;
                 float dist = length(d);
-                if (dist > radius || dist < 1e-5)
+                // Do not transport sub-surface/local reconstruction noise. The fixed
+                // view-space floor also protects close-up characters as resolution changes.
+                if (dist > radius || dist < max(0.15, 2.0 * abs(pixelSize)))
                     continue;  // too far to hide anything or send light here
                 float3 back = d - V * thickness;
                 float af = XeGTAO_FastACos(dot(d / dist, V));
@@ -293,7 +298,14 @@ void cs_gather(uint2 pix : SV_DispatchThreadID)
                     continue;
                 // The surface there must face this pixel to light it (its seen side may face away).
                 float3 Ns = LoadNormalAt(g_srcNormalmap, int2(sp));
-                float facing = saturate(dot(Ns, -d / dist) * 4.0);
+                float3 dir = d / dist;
+                float sourceFacing = dot(Ns, -dir);
+                float receiverFacing = dot(N, dir);
+                if (sourceFacing <= 0.0 || receiverFacing <= 0.0)
+                    continue;
+                // Smooth the grazing band: a nearly tangent sample on the same
+                // reconstructed surface must not become a bright emitter.
+                float facing = saturate(sourceFacing * 2.0) * saturate(receiverFacing * 2.0);
                 float fade = saturate((radius - dist) / (0.3 * radius));
                 // The radiance's mip: about the spacing of the samples there (t * t * radius, so
                 // 2 t radius / steps apart), so a far sample stands for the surfaces around it.
@@ -422,6 +434,10 @@ void cs_denoise(uint2 pix : SV_DispatchThreadID)
         [unroll]
         for (int i = -2; i <= 2; ++i)
         {
+            // Two-slice levels use a compact 3x3 kernel in both a-trous passes.
+            // Keep the wider 5x5 filter for High's denser gather.
+            if (kk_Gather.x <= 2.0 && (abs(i) == 2 || abs(j) == 2))
+                continue;
             int2 q = int2(pix) + int2(i, j) * stepPx;
             if (any(q < 0) || any(q > last))
                 continue;
@@ -510,6 +526,12 @@ float4 ps_composite(float4 pos : SV_Position) : SV_Target0
     float3 bounce = gi.rgb * kk_Gather.w * bounces;
     float3 delta = albedo * (bounce - A * hiddenShare * kk_Mode.x);
     delta = max(delta, -kk_Shape.y * lit);
+    // Bound the final addition, after history/blur/multi-bounce, relative to this
+    // receiver's own linear colour. Scale all channels together to keep bounce hue.
+    // At most 75% extra linear light (~29% display lift), even at high intensity.
+    float3 relative = max(delta, 0.0) / max(lit, 1e-6);
+    float largest = max(max(relative.r, relative.g), relative.b);
+    delta = min(delta, 0.0) + max(delta, 0.0) * min(1.0, 0.75 / max(largest, 1e-6));
     float ao = kk_Extra.x > 0.5 ? g_srcOcclusion.Load(int3(q, 0)).x : 1.0;
     float3 result = ToGamma(lit * ao + delta);
     int debugView = int(kk_Mode.y + 0.5);

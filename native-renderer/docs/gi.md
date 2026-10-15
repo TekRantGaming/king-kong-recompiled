@@ -5,7 +5,42 @@ Status, 12 October 2026: branch `beta-ssgi` (from `beta` = `nr-integration` 1ba7
 (`--native_gi=off`); the launcher's Graphics page has the row "Global illumination: Off / Low / Medium / High"
 next to Ambient occlusion. Ray-traced GI is for later; this is screen space only.
 
-## Task 071 sunlight source estimate (15 October 2026)
+## Task 073 self-light rejection and cost (15 October 2026)
+
+The gather now requires both `dot(N_source, -dir) > 0` and `dot(N_receiver, dir) > 0`,
+with a smooth grazing-angle weight on each. Samples closer than `max(0.15, 2 * pixelSize)`
+in view space cannot send light. This rejects coplanar/convex self-light and nearby depth-normal
+noise; depth alone cannot identify an object, so this is geometric rejection rather than an object-ID test.
+After history, filtering, receiver albedo, multi-bounce and the retained x3 calibration, the composite
+bounds positive addition to 75% of the receiver's own linear RGB in every channel. One common scale
+preserves the addition's hue; the maximum encoded lift is about 29%. Higher intensity saturates at
+this same bound. The experimental occlusion override's negative term is bounded separately as before.
+
+The source pass rejects every sky host texel, takes an encoded-colour block mean with sky contributing
+black, and linearises/restores once per working pixel. This deliberately approximates the old mean
+of individually linearised texels to lower cost. Let `E = max(mean, 0)^2.2`,
+`a = luminance(ambient) * albedoLimit`, `lo = a^2.2`, `hi = (a + max(0.15, a))^2.2`:
+`source = E + 0.65 * smoothstep(lo, hi, luminance(E)) * E / max(maxChannel(E), 0.0001)`.
+The linear classification and 0.65 restoration keep dim outdoor sources useful after stricter geometry
+rejection. Bright textures can still be misclassified as sunlight; no actual sun/material recovery is claimed.
+
+Medium now uses 2 slices x 6 steps per side and 2 blur passes (formerly 3 x 8 and 3).
+Low and Medium use compact 3x3 a-trous kernels; High retains 5x5. All other default radii,
+resolutions, temporal weight, off/additive defaults, and the x3 intensity calibration stay.
+The new GPU tests reject self-light on striped planes/convex surfaces, reject sub-0.15-unit transport,
+and check the receiver envelope across the image at intensity 8. Bright-fixture Medium red gains
+are 0.086 at 0.6 m and 0.070 at 2 m. The former stronger almost-black-floor expectations were
+incompatible with the new receiver bound and are replaced by bounded, coloured-lift expectations.
+The live-intensity test uses unsaturated values; zero/off, sky, alpha and temporal bounds remain.
+
+Vulkan 1440p benchmark before the final game runs: Medium 0.651 ms, High automatic half 1.273 ms.
+A post-game repeat measured 0.795 / 1.376 ms; another measured 1.942 / 3.598 ms with variable
+desktop load/clocks. These are RTX 4070 Ti results, not a stable 0.6 ms guarantee. See
+`codex/REPORT-073.md` for the full timing evidence, three-run visual evidence and limitations.
+No translated game shader variants or pack entries changed. Radiance, gather, denoise and composite
+are embedded in both SPIR-V and DXIL and use the existing initialization/prewarm paths.
+
+## Task 071 sunlight source estimate (historical, superseded by 073)
 
 The source pass now uses the task's scene-colour fallback, rather than trying to capture diffuse
 textures or identify a sun constant without verified shader coverage. For each opaque host texel:
@@ -166,7 +201,8 @@ with four smaller mips, normals rebuilt from the depth; full or half resolution 
    nothing).
 3. `cs_temporal` (with `--native_gi_temporal`, the default): this frame's light blended into last frame's;
    see "Temporal accumulation".
-4. `cs_denoise`, 2 or 3 times: a 5x5 a-trous blur with steps 1, 2, 4, weighted by depth and normal (edges stay).
+4. `cs_denoise`, 2 or 3 times: a 3x3 (Low/Medium) or 5x5 (High) a-trous blur with steps 1, 2, 4,
+   weighted by depth and normal (edges stay).
 5. `ps_composite` (a full-screen triangle over the picture, the colour target's alpha left alone), reading a
    copy of the colour: the result upsampled by depth (as GTAO's `cs_output`) and added to the surface.
 
@@ -226,7 +262,7 @@ of every radius; the flat ambient constant stands for the sky).
 | Level | Slices x steps per side | Blur passes | Resolution | Radius (world units) |
 |---|---|---|---|---|
 | Low | 2 x 6 | 2 | half | 3 |
-| Medium | 3 x 8 | 3 | half | 5 |
+| Medium | 2 x 6 | 2 | half | 5 |
 | High | 4 x 10 | 3 | full up to a render scale of 1.5, half above | 8 |
 
 The radius on the screen is at most 0.45 of the picture's height (working pixels); far samples read the
