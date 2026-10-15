@@ -40,6 +40,7 @@ struct Ssgi::Constants {
   float screen_xy[4] = {};
   float screen_z[4] = {};
   float shape[4] = {};    // multi-bounce strength, largest darkening share, gamma
+  float distance[4] = {}; // max camera distance, fade start; 0 is unlimited
 };
 
 namespace {
@@ -282,6 +283,8 @@ void Ssgi::FillConstants(Constants& k, const Gtao& gtao, const SsgiSettings& s, 
   k.shape[0] = std::clamp(s.bounces, 0.0f, 1.0f);
   k.shape[1] = std::clamp(s.darkest, 0.0f, 1.0f);
   k.shape[2] = kGamma;
+  k.distance[0] = std::max(s.distance, 0.0f);
+  k.distance[1] = k.distance[0] * 0.75f;
 }
 
 bool Ssgi::Compute(nvrhi::ICommandList* cl, const Gtao& gtao, nvrhi::ITexture* color, nvrhi::ITexture* depth, const SsgiSettings& s) {

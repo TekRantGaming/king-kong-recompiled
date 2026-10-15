@@ -4,6 +4,29 @@
 
 namespace nr {
 
+float GiDistanceMetres(GiDistance distance) {
+  switch (distance) {
+    case GiDistance::kNear: return 16.0f;
+    case GiDistance::kMedium: return 32.0f;
+    case GiDistance::kFar: return 64.0f;
+    default: return 0.0f;
+  }
+}
+const char* GiDistanceName(GiDistance distance) {
+  switch (distance) {
+    case GiDistance::kNear: return "near";
+    case GiDistance::kMedium: return "medium";
+    case GiDistance::kFar: return "far";
+    default: return "full";
+  }
+}
+bool ParseGiDistance(const std::string& text, GiDistance& out) {
+  for (GiDistance distance : {GiDistance::kNear, GiDistance::kMedium, GiDistance::kFar, GiDistance::kFull}) {
+    if (text == GiDistanceName(distance)) { out = distance; return true; }
+  }
+  return false;
+}
+
 void ApplyGiJitter(float rows[16], float ndc_x, float ndc_y) {
   for (int i = 0; i < 4; ++i) {
     rows[i] += ndc_x * rows[12 + i];

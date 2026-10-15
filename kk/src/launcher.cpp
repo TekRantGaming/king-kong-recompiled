@@ -1430,6 +1430,11 @@ class SettingsPages {
                            "frame at 1440p. On by default, following the graphics preset. Original keeps it off.",
                            "native_gi", {{"Off", "off"}, {"Low", "low"}, {"Medium", "medium"}, {"High", "high"}});
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+      Item distance = CvarChoice("GI distance",
+          "Limits bounced light to nearby surfaces to save GPU time. Near: 16 m, Medium: 32 m, Far: 64 m. Full has no limit. Light fades smoothly over the final quarter of the distance.",
+          "native_gi_distance", {{"Near", "near"}, {"Medium", "medium"}, {"Far", "far"}, {"Full", "full"}});
+      items.push_back(std::move(Disable(distance, original || Get("native_gi") == "off",
+                                       original ? kSetByOriginal : "Switch Global illumination on to set its distance.")));
     }
     LightingItems(items, original);
 
@@ -4402,7 +4407,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       case kGraphics:
         return {"kk_original_look", "kk_modern_settings", "swap_post_effect", "anisotropic_override",
                 "kk_motion_blur", "kk_big_blur", "kk_fog", "ao_mode", "ao_strength", "native_ao_method",
-                "native_ao_apply", "native_ao_quality", "native_ao_samples", "native_backend", "kk_renderer", "native_gi", "native_shadow_quality", "native_water_reflections", "native_volumetrics"};
+                "native_ao_apply", "native_ao_quality", "native_ao_samples", "native_backend", "kk_renderer", "native_gi", "native_gi_distance", "native_shadow_quality", "native_water_reflections", "native_volumetrics"};
       case kGameplay:
         return {"kk_fov", "kk_camera_shake", "kk_camera_shake_strength", "kk_show_fps",
                 "kk_skip_intros", "user_language"};

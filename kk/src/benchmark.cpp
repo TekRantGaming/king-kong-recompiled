@@ -62,7 +62,7 @@ std::string Settings() {
       "vulkan_allow_present_mode_mailbox", "vulkan_allow_present_mode_fifo_relaxed", "ui_paint_on_demand",
       "kk_original_look", "kk_render_quality", "native_render_scale", "resolution_scale",
       "draw_resolution_scale_x", "draw_resolution_scale_y", "native_upscaler", "native_upscaler_quality",
-      "native_ao_method", "native_ao_quality", "native_ao_samples", "ao_mode", "ao_strength", "native_gi",
+      "native_ao_method", "native_ao_quality", "native_ao_samples", "ao_mode", "ao_strength", "native_gi", "native_gi_distance",
       "native_shadow_quality", "native_water_reflections", "native_volumetrics", "kk_fov",
       "kk_camera_sensitivity", "kk_camera_modern", "kk_hfr_fixes", "kk_cheats", "present_effect"})
     out += std::string(key) + " = " + rex::cvar::GetFlagByName(key) + '\n';

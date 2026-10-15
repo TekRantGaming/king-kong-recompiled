@@ -1,5 +1,37 @@
 # Screen-space global illumination (beta)
 
+## Task 123 camera distance (15 October 2026)
+
+`native_gi_distance` is live and saved by Launcher Graphics, pause Graphics and F8:
+Near = 16 m, Medium = 32 m, Far = 64 m, Full = unlimited. Distance is the length
+of the reconstructed view-space position, so it also respects the limit at the
+edges of a wide field of view. The final quarter fades with smoothstep (12-16,
+24-32 or 48-64 m). The composite fades after its receiver-relative bound, so a
+saturated contact point still fades smoothly. Sky, alpha and draws after opaque
+GI keep their existing treatment.
+
+Gather returns neutral light beyond the limit before reading normals or taking
+any gather samples. Temporal history and denoise also skip those receivers; a
+live distance change drops history. The composite rejects far pixels before
+upsampling and fades the remainder. Source preparation, depth preparation and
+dispatch/image sizes remain shared/full-sized, so savings depend on the scene's
+depth distribution. No radius/step reduction is applied within the chosen range.
+
+Presets: Low and Steam Deck use Near, Medium uses Medium, High uses Far, Ultra
+uses Full. New hardware recommendations choose Near/Medium/Far with Low/Medium/
+High GI. The cvar default is Medium. An explicitly saved distance is retained by
+automatic recommendations; selecting a graphics preset also selects its distance.
+GI remains on by default following the preset, Original remains Off, and an
+explicit player GI level is retained by automatic settings, per DECISIONS.md.
+Older default-Off statements below describe historical builds.
+
+`GameGi_DistanceFadeAndLiveChanges` moves the same projected receiver through
+the fade by scaling scene/camera together, checks an unchanged close receiver,
+attenuation inside the fade, zero addition beyond the limit, immediate live
+restoration with Full, a larger limit, and preserved alpha. The existing GI suite
+continues to exercise Full. In-game timing/capture evidence and its limitations
+are recorded in `codex/REPORT-123.md`.
+
 Status, 12 October 2026: branch `beta-ssgi` (from `beta` = `nr-integration` 1ba7339, with `beta-upscalers`
 038dfe7 merged for its camera reprojection vote). Spatial and temporal (camera reprojection). Off by default
 (`--native_gi=off`); the launcher's Graphics page has the row "Global illumination: Off / Low / Medium / High"

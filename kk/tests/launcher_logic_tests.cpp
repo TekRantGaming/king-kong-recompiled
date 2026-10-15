@@ -31,9 +31,11 @@ bool Near(float a, float b) { return std::fabs(a - b) < 1e-4f; }
 
 void GraphicsPresetChecks() {
   const char* expected[] = {"low", "medium", "high", "high", "low"};
+  const char* distances[] = {"near", "medium", "far", "full", "near"};
   for (int i = 0; i < kk::kGraphicsPresetCount; ++i) {
     const auto& p = kk::kGraphicsPresets[i];
     Check(std::string_view(p.gi) == expected[i], "preset GI mapping");
+    Check(std::string_view(p.gi_distance) == distances[i], "preset GI distance mapping");
     std::map<std::string, std::string> settings;
     auto get = [&](const char* name) { return settings[name]; };
     kk::ApplyGraphicsPresetSettings(p, [&](const char* name, const char* value) { settings[name] = value; });

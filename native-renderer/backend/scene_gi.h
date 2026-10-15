@@ -43,7 +43,10 @@ class SceneGi {
   ~SceneGi();
   bool Initialize();
   const GiConfig& config() const { return config_; }
-  void SetConfig(const GiConfig& config) { config_ = config; }
+  void SetConfig(const GiConfig& config) {
+    if (config.distance != config_.distance && ssgi_) ssgi_->DropHistory();
+    config_ = config;
+  }
   void SetTimer(AoGpuTimer* timer) { timer_ = timer; }
   void ForgetTargets() {
     if (gtao_) gtao_->ForgetTargetViews();

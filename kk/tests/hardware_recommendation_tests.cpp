@@ -20,6 +20,7 @@ REXCVAR_DEFINE_INT32(resolution_scale, 1, "Test", "Test");
 REXCVAR_DEFINE_INT32(draw_resolution_scale_x, 1, "Test", "Test");
 REXCVAR_DEFINE_INT32(draw_resolution_scale_y, 1, "Test", "Test");
 REXCVAR_DEFINE_STRING(native_gi, "off", "Test", "Test");
+REXCVAR_DEFINE_STRING(native_gi_distance, "medium", "Test", "Test");
 REXCVAR_DEFINE_STRING(swap_post_effect, "none", "Test", "Test");
 REXCVAR_DEFINE_INT32(anisotropic_override, -1, "Test", "Test");
 REXCVAR_DEFINE_INT32(ao_strength, 1, "Test", "Test");
@@ -127,6 +128,7 @@ int main() {
   Equals("native_backend", "auto");
   Equals("native_upscaler", "dlss");
   Equals("native_gi", "high");
+  Equals("native_gi_distance", "far");
   SetOfferedUpscalers("fsr3");
   Equals("native_upscaler", "fsr3");
   Check(SaveSettings(config), "save first-launch marker");
@@ -140,6 +142,7 @@ int main() {
   Equals("native_ao_samples", "1");
   Equals("ao_mode", "0");
   Equals("native_gi", "low");
+  Equals("native_gi_distance", "near");
 
   // Explicit choice equal to default must remain explicit after saving and loading.
   rex::cvar::SetFlagByName("native_ao_quality", "half");
@@ -149,6 +152,7 @@ int main() {
   rex::cvar::SetFlagByName("kk_frame_rate", "144");
   rex::cvar::SetFlagByName("native_backend", "d3d12");
   rex::cvar::SetFlagByName("native_gi", "low");
+  rex::cvar::SetFlagByName("native_gi_distance", "near");
   Check(SaveSettings(config), "save explicit choices");
   rex::cvar::ResetAllToDefaults();
   rex::cvar::LoadConfig(config);
@@ -161,6 +165,7 @@ int main() {
   Equals("kk_frame_rate", "144");
   Equals("native_backend", "d3d12");
   Equals("native_gi", "low"); // explicit choice equal to the default survives a new recommendation
+  Equals("native_gi_distance", "near"); // default-valued manual distance also survives save/reload and retiering
   for (auto source : {rex::cvar::Source::kConfig, rex::cvar::Source::kEnvironment,
                      rex::cvar::Source::kCommandLine, rex::cvar::Source::kRuntime}) {
     for (auto& e : rex::cvar::GetRegistry()) if (e.name == "native_ao_samples") { e.setter("2"); e.source = source; }

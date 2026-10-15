@@ -161,6 +161,9 @@ const std::vector<Setting>& Settings() {
       {"Global illumination", "Global illumination", "native_gi", Kind::kChoice,
        {{"Off", "off"}, {"Low", "low"}, {"Medium", "medium"}, {"High", "high"}}},
       {"Global illumination", "Intensity", "native_gi_intensity", Kind::kSlider, {}, 0, 4, "%.2f", true, Show::kGi},
+      {"Global illumination", "GI distance", "native_gi_distance", Kind::kChoice,
+       {{"Near", "near"}, {"Medium", "medium"}, {"Far", "far"}, {"Full", "full"}}, 0, 1, "", true, Show::kGi,
+       "Limits bounced light to nearby surfaces to save GPU time. Near: 16 m, Medium: 32 m, Far: 64 m. Full has no limit. Light fades smoothly over the final quarter of the distance."},
       {"Global illumination", "Resolution", "native_gi_quality", Kind::kChoice,
        {{"Auto", "auto"}, {"Half", "half"}, {"Full", "full"}}, 0, 1, "", true, Show::kGi},
       // Lighting.
@@ -1006,8 +1009,9 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
   // start: a short controller-only pass through the actual pad wrapper. No OS
   // input or focus is needed. The old full settings stress harness stays opt-in.
   void ControllerTestTick() {
+    const double start = std::getenv("KK_DEV_PANEL_CONTROLLER_START") ? std::atof(std::getenv("KK_DEV_PANEL_CONTROLLER_START")) : 8;
     if (!std::getenv("KK_DEV_PANEL_CONTROLLER") || controller_test_stage_ >= 1000 || !InPlay() ||
-        DevSecondsSinceMenu() < 8) return;
+        DevSecondsSinceMenu() < start) return;
     const auto now = std::chrono::steady_clock::now();
     if (now < controller_test_next_) return;
     int samples;
@@ -1233,6 +1237,45 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
   }
 
   void TestTick() {
+    // Task 123: fixed-view GI distance/cost comparisons. Guest frames only;
+    // GPU times are the production timer's recent-frame average, not UI CPU time.
+    if (const char* dir = std::getenv("KK_DEV_GI_DISTANCE_TEST"); dir && *dir) {
+      if (!InPlay() || DevSecondsSinceMenu() < 8) return;
+      static const auto start = std::chrono::steady_clock::now();
+      static int previous = -1;
+      static bool captured = false;
+      static double next_sample = 0;
+      const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
+      const char* levels[] = {"off","low","low","medium","medium","high","high","high","high"};
+      const char* distances[] = {"full","full","near","full","medium","full","far","near","full"};
+      const int phase = int(elapsed / 12);
+      const std::filesystem::path root(dir);
+      if (phase >= 9) {
+        if (previous != 9) REXLOG_INFO("KK GI distance test: done");
+        previous = 9; return;
+      }
+      if (phase != previous) {
+        std::filesystem::create_directories(root);
+        Change("native_gi",levels[phase]); Change("native_gi_distance",distances[phase]);
+        REXLOG_INFO("KK GI distance test: phase {} {} {} at {:.3f}",phase,levels[phase],distances[phase],elapsed);
+        if (previous < 0) std::ofstream(root/"gpu.csv") << "seconds,phase,level,distance,gi_ms,input_width,input_height,output_width,output_height,api,applied\n";
+        captured = false; previous = phase;
+      }
+      if (elapsed >= next_sample) {
+        const auto s = nr::kk::EffectTimes();
+        std::ofstream(root/"gpu.csv",std::ios::app) << elapsed << ',' << phase << ',' << levels[phase] << ',' << distances[phase]
+            << ',' << s.gi_ms << ',' << s.input_width << ',' << s.input_height << ',' << s.output_width << ','
+            << s.output_height << ',' << s.api << ',' << s.applied << '\n';
+        next_sample = elapsed + 0.2;
+      }
+      if (!captured && elapsed-phase*12 >= 8) {
+        const std::string name = std::to_string(phase)+"-"+levels[phase]+"-"+distances[phase];
+        art::CaptureFrame(root/(name+art::kDevCaptureExtension));
+        std::ofstream(root/(name+".txt")) << SettingsText();
+        captured = true;
+      }
+      return;
+    }
     // Task 072's one-run Off/4/16 comparison, through the same live changes as
     // the F8 controls. Captures the game's frame only, in a private test folder.
     if (const char* dir=std::getenv("KK_DEV_TESS_BENCH"); dir && *dir) {

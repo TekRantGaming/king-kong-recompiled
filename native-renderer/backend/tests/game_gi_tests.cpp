@@ -1196,6 +1196,57 @@ TEST(GameGi_OffChangesNothing) {
   CHECK(f.game->scene_gi() == nullptr);
 }
 
+TEST(GameGi_DistanceFadeAndLiveChanges) {
+  // Scale geometry AND camera, preserving its projection and transport geometry.
+  // The same receiver moves from fully lit, through Near's fade, beyond Near.
+  for (float scale : {0.7f, 1.15f, 1.5f, 2.0f}) {
+    Mesh yard;
+    Quad(yard, {-12,0,-14}, {12,0,-14}, {12,0,2}, {-12,0,2}, 0xFF4C4C4C);
+    Quad(yard, {-2,0,2}, {2,0,2}, {2,3,2}, {-2,3,2}, kYardWall);
+    for (auto& vertex : yard) vertex.p = vertex.p * scale;
+    const float ambient[4] = {0.5f,0.5f,0.5f,0};
+    Fixture::Frame frame; frame.quad = false; frame.scene = &yard; frame.ambient = ambient;
+    auto settings = std::make_shared<EffectSettings>();
+    settings->gi.level = GiLevel::kMedium;
+    settings->gi.radius = 5 * scale;
+    settings->gi.intensity = 8;  // fade must survive the receiver bound
+    settings->gi.temporal = false;
+    Options live, off; live.mode = off.mode = 0;
+    live.live = [settings] { return *settings; };
+    Fixture a(live), b(off);
+    if (!a.Init() || !b.Init()) return;
+    for (Fixture* f : {&a,&b}) {
+      YardCamera(f->cam);
+      f->cam.eye = f->cam.eye * scale; f->cam.target = f->cam.target * scale; f->cam.Setup();
+    }
+    const V3 receiver = V3{0,0,1.4f} * scale;
+    const Pixels base = b.Render(frame,"distance_off");
+    Pixels full;
+    for (int i=0;i<400 && !a.game->scene_gi();++i) full = a.Render(frame,"distance_warm");
+    full = a.Render(frame,"distance_full");
+    settings->gi.distance = GiDistance::kNear;
+    const Pixels near = a.Render(frame,"distance_near");
+    const float plain = Colour(base,b.cam,receiver).r;
+    const float addition = Colour(full,a.cam,receiver).r - plain;
+    const float faded = Colour(near,a.cam,receiver).r - plain;
+    const V3 delta = receiver - a.cam.eye;
+    const float distance = std::sqrt(Dot(delta,delta));
+    std::printf("  camera distance %.2f m: full red +%.5f, Near +%.5f\n", distance,addition,faded);
+    CHECK(addition > 0.06f);
+    if (distance < 12) CHECK_NEAR(faded,addition,0.008f);
+    else if (distance < 16) CHECK(faded > 0.005f && faded < addition - 0.005f);
+    else CHECK_NEAR(faded,0.0f,1e-6f);
+    settings->gi.distance = GiDistance::kFull;
+    const Pixels restored = a.Render(frame,"distance_restored");
+    CHECK(MaxDifference(full,restored) < 1e-5f);
+    settings->gi.distance = GiDistance::kMedium;
+    const Pixels medium = a.Render(frame,"distance_medium");
+    CHECK(Colour(medium,a.cam,receiver).r >= Colour(near,a.cam,receiver).r - 0.008f);
+    for (size_t p=3;p<medium.rgba.size();p+=4) CHECK_EQ(medium.rgba[p],base.rgba[p]);
+    CHECK(a.gpu->errors() == a.errors_before);
+  }
+}
+
 TEST(GameGi_LiveOnOffAndIntensity) {
   // The graphics panel turns GI on and off and changes its intensity while the game runs: on, the picture
   // is the one a renderer started with GI draws (once its passes, made on a worker, are in); off again, the

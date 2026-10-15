@@ -24,6 +24,7 @@ struct SsgiSettings {
   float intensity = 1.0f;
   float radius = 2.0f;           // world units
   float thickness = 0.5f;        // world units
+  float distance = 0.0f;         // camera distance in metres; 0 is unlimited, final quarter fades out
   float albedo = 0.6f;           // the largest albedo the composite assumes
   float occlusion = 1.0f;        // how much of the hidden ambient light is taken away (0: none)
   float bounces = 1.0f;          // multi-bounce strength (0: one bounce)
