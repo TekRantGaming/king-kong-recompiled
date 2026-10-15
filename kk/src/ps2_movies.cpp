@@ -474,11 +474,7 @@ std::filesystem::path Folder() {
     const auto path = std::filesystem::u8path(value);
     return path.is_absolute() ? path : rex::filesystem::GetExecutableFolder() / path;
   }
-  PWSTR desktop = nullptr;
-  std::filesystem::path folder;
-  if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Desktop, KF_FLAG_DONT_VERIFY, nullptr, &desktop))) folder = desktop;
-  CoTaskMemFree(desktop);
-  return folder.empty() ? std::filesystem::path() : folder / "kk_upscaled_movies";
+  return {};
 }
 
 std::string BrowseFolder() {

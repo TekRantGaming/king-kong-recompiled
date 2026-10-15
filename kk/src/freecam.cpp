@@ -17,6 +17,10 @@
 #include <rex/ui/window.h>
 #include <rex/ui/window_listener.h>
 
+REXCVAR_DEFINE_BOOL(kk_freecam, false, "KK/Debug",
+                    "Enable the hidden F9 free camera and F10 HUD controls")
+    .debug_only();
+
 namespace kk::freecam {
 namespace {
 using Clock = std::chrono::steady_clock;
@@ -200,6 +204,8 @@ private:
   Clock::time_point test_start;
 #endif
   void Key(rex::ui::KeyEvent &e, bool down) {
+    if (!REXCVAR_GET(kk_freecam))
+      return;
     const unsigned k = unsigned(e.virtual_key());
     if (k == 0x78 || k == 0x79) {
       if (!InPlay())
@@ -228,6 +234,8 @@ private:
 };
 } // namespace
 void Install(rex::ui::ImGuiDrawer *d, rex::ui::Window *w) {
+  if (!REXCVAR_GET(kk_freecam))
+    return;
   new Controls(d, w);
 }
 bool Active() { return active.load(); }

@@ -63,10 +63,10 @@ REXCVAR_DEFINE_STRING(kk_button_prompts, "auto", "KK/Controls",
                       "ps2, steam_deck or keyboard")
     .allowed({"auto", "xbox360", "xbox_series", "ps5", "ps2", "steam_deck", "keyboard"});
 REXCVAR_DEFINE_BOOL(kk_show_fps, false, "KK/Video", "Show a frame-rate counter (toggle in game with F2)");
-REXCVAR_DEFINE_BOOL(kk_ps2_cutscenes, true, "KK/Gameplay",
-                    "Private test: play the local PS2 between-mission movies during story progression");
+REXCVAR_DEFINE_BOOL(kk_ps2_cutscenes, false, "KK/Gameplay",
+                    "Play player-owned PS2 between-mission movies during story progression");
 REXCVAR_DEFINE_STRING(kk_ps2_movie_folder, "", "KK/Gameplay",
-                      "Private test: folder containing BK_xxxx.mp4 (empty = Desktop/kk_upscaled_movies)");
+                      "Folder containing player-owned BK_xxxx.mp4 movies (empty disables playback)");
 REXCVAR_DEFINE_INT32(kk_deadzone, 5, "KK/Controls", "Extra stick deadzone in percent (0-50)");
 REXCVAR_DEFINE_INT32(kk_camera_sensitivity, 150, "KK/Controls", "Camera (right stick) sensitivity in percent");
 REXCVAR_DEFINE_BOOL(kk_camera_modern, true, "KK/Controls",

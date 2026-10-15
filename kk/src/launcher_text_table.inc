@@ -3,7 +3,7 @@
 // French and Italian.
 constexpr Entry kEntries[] = {
     {"Play PS2 cutscenes", "PS2-Zwischensequenzen abspielen", "Reproducir escenas de PS2", "Lire les cinématiques PS2", "Riproduci i filmati PS2"},
-    {"Play local PS2 movies between missions in the story.", "Lokale PS2-Filme zwischen den Story-Missionen abspielen.", "Reproduce vídeos locales de PS2 entre las misiones de la historia.", "Lit les vidéos PS2 locales entre les missions de l'histoire.", "Riproduce i video PS2 locali tra le missioni della storia."},
+    {"Play your own PS2 movies between missions. You must supply the movies and choose their folder.", "Eigene PS2-Filme zwischen Missionen abspielen. Du musst die Filme bereitstellen und ihren Ordner wählen.", "Reproduce tus propios vídeos de PS2 entre misiones. Debes aportar los vídeos y elegir su carpeta.", "Lit vos propres vidéos PS2 entre les missions. Vous devez fournir les vidéos et choisir leur dossier.", "Riproduce i tuoi video PS2 tra le missioni. Devi fornire i video e scegliere la loro cartella."},
     {"PS2 movie folder", "PS2-Filmordner", "Carpeta de vídeos de PS2", "Dossier des vidéos PS2", "Cartella dei video PS2"},
     {"Choose the folder containing BK_xxxx.mp4.", "Den Ordner mit BK_xxxx.mp4 auswählen.", "Elige la carpeta que contiene BK_xxxx.mp4.", "Choisissez le dossier contenant BK_xxxx.mp4.", "Scegli la cartella contenente BK_xxxx.mp4."},
     {"Some chapters have no verified position checkpoints.", "Für einige Kapitel sind keine geprüften Positionskontrollpunkte verfügbar.", "Algunos capítulos no tienen puntos de control de posición verificados.", "Certains chapitres n'ont aucun point de contrôle de position vérifié.", "Alcuni capitoli non hanno punti di controllo della posizione verificati."},
