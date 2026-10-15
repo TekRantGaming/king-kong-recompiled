@@ -8,7 +8,7 @@ version's notes the first time you start it.
 **Beta 5**: a small update to Beta 4, from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/PET2xU5FJq). Your saves and settings are kept, and you can switch back to stable at any time.
 
 ### What's new
-- **An experimental native Linux version.** A Linux AppImage (`KingKong-v2.0.0-beta.5-linux-x86_64.AppImage`) runs the game natively with the Vulkan renderer. It was tested on a ROG Ally with Bazzite, in Steam's Game Mode (add it to Steam as a non-Steam game). DLSS, FSR 3/4 and XeSS are Windows only; FSR 1 is available. This is an early test build: please report how it runs.
+- **An experimental native Linux version.** A Linux AppImage (`KingKong-v2.0.0-beta.5-linux-x86_64.AppImage`) runs the game natively with the Vulkan renderer. Earlier builds were tested on a ROG Ally with Bazzite. Beta 5 still needs the owner's Windows and Linux checks, including Steam's Game Mode (add it to Steam as a non-Steam game). DLSS, FSR 3/4 and XeSS are Windows only; FSR 1 is available. This is an early test build: please report how it runs.
 - **The renderer does much less CPU work for each thing it draws.** This helps most on handhelds and slower processors, and with high frame rates.
 - **Smoother Vulkan presentation.** The final step that puts each frame on screen no longer waits for the graphics card and rebuilds itself every frame.
 - **Fewer stutters the first time you reach new places.** The list of graphics pipelines prepared before you play now covers more of the game.
