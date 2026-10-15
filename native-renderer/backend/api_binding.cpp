@@ -1,6 +1,7 @@
 #include "backend/api_binding.h"
 
 #include "backend/draw_state.h"
+#include "backend/diagnostics.h"
 
 #include <atomic>
 #include <chrono>
@@ -16,10 +17,13 @@ DrawTracker* Resolve(void* self) {
 
 std::atomic<uint64_t> g_api_us{0}, g_api_calls{0};
 
-// Every call the hooks forward, timed (the statistics line shows the total).
+// Opt-in call timing; forwarding itself never depends on diagnostics.
 struct ApiTimer {
-  std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+  bool enabled = DiagnosticsEnabled();
+  std::chrono::steady_clock::time_point start =
+      enabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
   ~ApiTimer() {
+    if (!enabled) return;
     g_api_us.fetch_add(uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
                                     std::chrono::steady_clock::now() - start).count()),
                        std::memory_order_relaxed);

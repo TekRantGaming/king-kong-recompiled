@@ -552,4 +552,22 @@ TEST(RenderThreadRunsCallsOnTheirCopies) {
   CHECK_EQ(sink.stats().commands, 2u);
   CHECK_EQ(sink.stats().device_copies, 2u);
 }
+TEST(ApiTimingDoesNotGateForwarding) {
+  const bool previous = DiagnosticsEnabled();
+  for (bool enabled : {false, true, false}) {
+    SetDiagnosticsEnabled(enabled);
+    FakeGuestMemory memory(1 << 20);
+    RecordingSink sink;
+    DrawTracker tracker(memory, &sink);
+    ApiBinding binding;
+    InitApiBinding(binding, &tracker, [](void* owner) { return static_cast<DrawTracker*>(owner); });
+    const uint64_t before = ApiCallCount(), time_before = ApiCallMicroseconds();
+    binding.api.present(binding.api.self, 0);
+    CHECK_EQ(tracker.stats().presents, 1u);
+    CHECK_EQ(ApiCallCount() - before, enabled ? 1u : 0u);
+    if (!enabled) CHECK_EQ(ApiCallMicroseconds(), time_before);
+  }
+  SetDiagnosticsEnabled(previous);
+}
+
 NR_TEST_MAIN()

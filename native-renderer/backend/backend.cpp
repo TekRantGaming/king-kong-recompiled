@@ -16,6 +16,7 @@
 #include <rex/system/xmemory.h>
 
 #include "backend/api_binding.h"
+#include "backend/diagnostics.h"
 #include "backend/cpu_profile.h"
 #include "backend/frame_log.h"
 #include "backend/log.h"
@@ -32,6 +33,7 @@ class ShaderLibrary {};  // never made without the game renderer; Backend's uniq
 
 REXCVAR_DECLARE(int32_t, native_dump_frame);
 REXCVAR_DECLARE(int32_t, native_debug);
+REXCVAR_DECLARE(bool, native_diagnostics);
 
 namespace nr {
 
@@ -71,13 +73,17 @@ StutterSnapshot g_stutter;
 std::chrono::steady_clock::time_point g_last_present;
 uint64_t g_last_calls_us = 0, g_frame_draws = 0;
 struct CallTimer {
-  explicit CallTimer(int kind) : kind_(kind), start_(std::chrono::steady_clock::now()) {}
+  explicit CallTimer(int kind)
+      : kind_(kind), enabled_(DiagnosticsEnabled()),
+        start_(enabled_ ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{}) {}
   ~CallTimer() {
+    if (!enabled_) return;
     g_call_us[kind_].fetch_add(uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
                                             std::chrono::steady_clock::now() - start_).count()),
                                std::memory_order_relaxed);
   }
   int kind_;
+  bool enabled_;
   std::chrono::steady_clock::time_point start_;
 };
 
@@ -438,6 +444,7 @@ Backend::Backend(std::unique_ptr<HostDevice> host, rex::memory::Memory* memory)
 
 
 bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& game) {
+  SetDiagnosticsEnabled(REXCVAR_GET(native_diagnostics));
   SetLogSink(LogToRuntime);
   RenderScale scale;
   float shadow_scale = 0.0f;
@@ -534,7 +541,7 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
       if (!(game.debug & 256)) {
         renderer->set_watch([memory](uint32_t physical_address, uint32_t bytes) {
           CallTimer timer(4);
-          g_watch_calls.fetch_add(1, std::memory_order_relaxed);
+          if (DiagnosticsEnabled()) g_watch_calls.fetch_add(1, std::memory_order_relaxed);
           memory->EnablePhysicalMemoryAccessCallbacks(physical_address, bytes, true, false);
         });
       }

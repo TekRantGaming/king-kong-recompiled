@@ -120,6 +120,10 @@ REXCVAR_DEFINE_BOOL(native_stutter_stats, false, "Native renderer",
                     "under the frame counter (kk_show_fps, F2)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_BOOL(native_diagnostics, false, "Native renderer",
+                    "Collect detailed native renderer call timings, slowest frames and ring telemetry")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_BOOL(native_pipeline_list, true, "Native renderer",
                     "Load the pipeline list shipped beside the game (kkpipelines.list, made by nr_pipelines merge "
                     "from the pipeline cache files of several runs) at start and create its pipelines on the "

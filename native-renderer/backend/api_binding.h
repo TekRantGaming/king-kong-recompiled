@@ -23,7 +23,7 @@ struct ApiBinding {
 // Fills binding.api; api.self points at the binding, which must outlive it.
 void InitApiBinding(ApiBinding& binding, void* owner, DrawTracker* (*resolve)(void* owner));
 
-// The time the game's threads spent in the forwarded calls, and their number (all bindings).
+// Opt-in diagnostic time and call count (all bindings); functional DrawTracker stats are separate.
 uint64_t ApiCallMicroseconds();
 uint64_t ApiCallCount();
 

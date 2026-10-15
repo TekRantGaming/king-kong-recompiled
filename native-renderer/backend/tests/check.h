@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cmath>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <functional>
@@ -12,6 +13,8 @@
 #include <string>
 #include <type_traits>
 #include <vector>
+
+#include "backend/diagnostics.h"
 
 namespace nr::test {
 
@@ -61,6 +64,8 @@ void CheckEq(const A& a, const B& b, const char* sa, const char* sb, const char*
 }
 
 inline int RunAll(int argc, char** argv) {
+  const char* diagnostics = std::getenv("NR_DIAGNOSTICS");
+  SetDiagnosticsEnabled(diagnostics && std::strcmp(diagnostics, "1") == 0);
   const char* filter = argc > 1 ? argv[1] : nullptr;
   int run = 0;
   for (const Case& c : Cases()) {
