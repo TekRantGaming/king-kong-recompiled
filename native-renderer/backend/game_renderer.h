@@ -47,6 +47,7 @@
 #include "backend/frame_log.h"
 #include "backend/game_upscale.h"
 #include "backend/pipeline_cache.h"
+#include "backend/resource_preload.h"
 #include "backend/guest_device.h"
 #include "backend/guest_memory.h"
 #include "backend/lighting_config.h"
@@ -192,6 +193,7 @@ class GameRenderer {
     uint64_t upload_bytes = 0;       // guest textures, vertices, indices and draw constants (not auxiliary passes)
     uint64_t early_upload_bytes = 0, early_upload_batches = 0;
     uint64_t prepared_resources = 0, prepared_discarded = 0;
+    uint64_t preloaded_resources = 0, preload_hits = 0, preload_hash_misses = 0, preload_bytes = 0;
     double resource_prepare_ms = 0;  // render-thread wall time of joined first-use batches
     uint64_t draw_constant_uploads = 0, draw_constant_identical = 0;
     uint64_t scale_uploads = 0, scale_identical = 0;
@@ -272,6 +274,9 @@ class GameRenderer {
   bool Present(nvrhi::ICommandList* cl, uint32_t device, nvrhi::ITexture* target);
   // After the frame's command list was submitted.
   void EndFrame();
+  // Render-thread loading-screen service. Also callable with an explicit state
+  // by offline fixtures; the normal path reads the title's loading variables.
+  void PreloadResources(nvrhi::ICommandList* cl, bool loading, uint32_t level, uint32_t start);
 
   // The pipeline cache file (pipeline_cache.h): reads the descriptions of earlier runs and
   // starts creating them on the worker threads, then appends each new description the draws
@@ -407,6 +412,7 @@ class GameRenderer {
     kknr::HostTexturePlan plan;
     nvrhi::Format format = nvrhi::Format::UNKNOWN;
     bool render_target = false;  // made by a resolve (usable as a blit target)
+    bool preloaded = false;
     // Resolved from a scaled target: the host texture is the guest's size times this.
     float scale_x = 1.0f, scale_y = 1.0f;
     std::unordered_map<uint32_t, uint32_t> views;  // view key -> descriptor index
@@ -471,6 +477,7 @@ class GameRenderer {
     uint64_t last_upload_frame = ~0ull;
     uint32_t upload_streak = 0;
     bool dynamic = false;
+    bool preloaded = false;
     kknr::BufferCache::Entry* entry = nullptr;
   };
   // used_begin / used_end: the bytes of the buffer this draw reads (a dynamic buffer uploads only
@@ -484,6 +491,20 @@ class GameRenderer {
   void ProcessInvalidations();
   void PrepareResourceUploads(nvrhi::ICommandList* cl, const DrawCall& call,
                               const dev::DeviceView& device, const GameShader& vs, const GameShader* ps);
+  void PrepareResourceRequests(nvrhi::ICommandList* cl, const std::vector<ResourcePreloadRecord>& requests,
+                               bool preload = false);
+  void PollResourcePreload(nvrhi::ICommandList* cl);
+  void RememberResource(ResourcePreloadRecord record, const kknr::ResidentEntry& entry);
+  void SaveResourcePreload();
+  std::string resource_cache_base_, resource_cache_path_;
+  std::vector<ResourcePreloadRecord> preload_records_, learned_resources_;
+  std::unordered_set<const kknr::ResidentEntry*> resource_seen_;
+  size_t preload_cursor_ = 0;
+  uint32_t preload_level_ = 0, preload_start_ = 0;
+  bool resource_loading_ = false, resource_learning_ = false, resource_cache_dirty_ = false;
+  uint64_t resource_poll_frame_ = ~0ull, preload_reserved_bytes_ = 0;
+  std::chrono::steady_clock::time_point resource_learn_start_;
+  static constexpr uint64_t kChapterPreloadBytes = 64ull << 20;
   std::unique_ptr<class ResourceUploadWorkers> resource_upload_workers_;
   std::atomic<uint64_t> resource_revision_{0};
   void TryPrepareResourceUploads(nvrhi::ICommandList* cl);

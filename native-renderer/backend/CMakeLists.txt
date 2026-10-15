@@ -49,6 +49,7 @@ if(NR_GAME_RENDERER)
     target_sources(nr_renderer PRIVATE
         game_renderer.cpp
         game_resources.cpp
+        game_preload.cpp
         game_passes.cpp
         game_frame_log.cpp
         game_tessellation.cpp

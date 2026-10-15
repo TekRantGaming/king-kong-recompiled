@@ -1,0 +1,113 @@
+// Chapter-start hints learned locally from real binds, replayed only while the
+// loading screen is up. All cache publication stays on the render thread.
+#include "backend/game_renderer.h"
+#include "backend/upload_batch.h"
+#include "backend/log.h"
+
+namespace nr {
+
+void GameRenderer::PollResourcePreload(nvrhi::ICommandList* cl) {
+  if (resource_poll_frame_ == frame_) return;
+  resource_poll_frame_ = frame_;
+  // loading_fix.cpp and play_session.cpp: the loading thread, its state, and
+  // the universe's requested map/start. Never change these guest variables.
+  const auto* screen = memory_.Virtual(0x82D64080);
+  const auto* ai_ptr = memory_.Virtual(0x82CCBF64);
+  if (!screen || !ai_ptr) return;
+  const uint32_t ai = LoadBE32(ai_ptr);
+  const auto* variables = ai ? memory_.Virtual(ai + 0x40) : nullptr;
+  const uint32_t g = variables ? LoadBE32(variables) : 0;
+  const auto* level = g ? memory_.Virtual(g + 8) : nullptr;
+  const auto* start = g ? memory_.Virtual(g + 12) : nullptr;
+  if (!level || !start) return;
+  const auto* state = memory_.Virtual(0x82D6408C);
+  if (!state) return;
+  const uint32_t s = LoadBE32(state);
+  PreloadResources(cl, LoadBE32(screen) != 0 && (s == 1 || s == 2), LoadBE32(level), LoadBE32(start));
+}
+
+void GameRenderer::SaveResourcePreload() {
+  if (!resource_cache_dirty_) return;
+  if (ResourcePreloadFile::Write(resource_cache_path_, learned_resources_)) {
+    resource_cache_dirty_ = false;
+    Logf(LogLevel::kInfo, "rexgpu-native: resource list saved: level %u start %u, %zu descriptions",
+         preload_level_, preload_start_, learned_resources_.size());
+  }
+}
+
+void GameRenderer::RememberResource(ResourcePreloadRecord record, const kknr::ResidentEntry& entry) {
+  if (!resource_learning_ || entry.gpu_written || entry.dirty || !entry.host ||
+      uint64_t(entry.ranges[0].bytes) + entry.ranges[1].bytes < UploadBatch::kMinBytes ||
+      learned_resources_.size() >= ResourcePreloadFile::kMaxRecords || !resource_seen_.insert(&entry).second) return;
+  record.hash = entry.content_hash;
+  for (auto& known : learned_resources_) if (known.SameResource(record)) {
+    if (known.hash != record.hash) { known.hash = record.hash; resource_cache_dirty_ = true; }
+    return;
+  }
+  if (learned_resources_.size() < ResourcePreloadFile::kMaxRecords) {
+    learned_resources_.push_back(record);
+    resource_cache_dirty_ = true;
+  }
+}
+
+void GameRenderer::PreloadResources(nvrhi::ICommandList* cl, bool loading, uint32_t level, uint32_t start) {
+  const auto now = std::chrono::steady_clock::now();
+  const bool changed = level != preload_level_ || start != preload_start_;
+  if (loading && (!resource_loading_ || changed)) {
+    SaveResourcePreload();
+    preload_level_ = level; preload_start_ = start;
+    preload_cursor_ = 0; preload_reserved_bytes_ = 0;
+    resource_learning_ = false;
+    resource_cache_dirty_ = false;
+    learned_resources_.clear(); preload_records_.clear();
+    resource_seen_.clear();
+    {
+      std::lock_guard lock(cache_mutex_);
+      resource_cache_path_ = resource_cache_base_.empty() ? std::string{} : resource_cache_base_ +
+          ".resources-" + std::to_string(level) + "-" + std::to_string(start);
+    }
+    if (!resource_cache_path_.empty()) ResourcePreloadFile::Read(resource_cache_path_, preload_records_);
+    Logf(LogLevel::kInfo, "rexgpu-native: resource loading: level %u start %u, %zu descriptions",
+         level, start, preload_records_.size());
+  } else if (!loading && resource_loading_) {
+    // The universe can clear/change its request fields as loading ends. Keep
+    // the map/start captured while that request's loading screen was up.
+    resource_learning_ = !resource_cache_path_.empty();
+    resource_learn_start_ = now;
+    Logf(LogLevel::kInfo, "rexgpu-native: resource loading ended: level %u start %u, %llu resources, %llu bytes (run totals)",
+         preload_level_, preload_start_, static_cast<unsigned long long>(stats_.preloaded_resources),
+         static_cast<unsigned long long>(stats_.preload_bytes));
+  }
+  resource_loading_ = loading;
+  if (resource_learning_ && now - resource_learn_start_ >= std::chrono::seconds(10)) {
+    resource_learning_ = false;
+    SaveResourcePreload();
+  }
+  if (!loading || preload_records_.empty() || preload_reserved_bytes_ >= kChapterPreloadBytes) return;
+
+  ProcessInvalidations();
+  FlushUploads();
+  // Limit polling/copying/hashing as well as successful uploads. A mismatch is
+  // retried on a later loading frame, so bytes still being loaded can become a
+  // candidate without a write-watch callback doing work in a fault handler.
+  std::vector<ResourcePreloadRecord> requests;
+  uint64_t scanned = 0;
+  for (size_t n = 0; n < preload_records_.size() && requests.size() < 32; ++n) {
+    const auto& r = preload_records_[preload_cursor_];
+    uint64_t bytes = 0;
+    if (r.kind == ResourcePreloadRecord::Texture) {
+      const auto fetch = kknr::TextureFetch::FromWords(r.words.data());
+      const auto ranges = kknr::GetTextureRanges(fetch, TextureOptions());
+      bytes = ((uint64_t(ranges.base_bytes) + 4095) & ~uint64_t(4095)) +
+              ((uint64_t(ranges.mip_bytes) + 4095) & ~uint64_t(4095));
+    } else bytes = (uint64_t(r.words[1]) + 4095) & ~uint64_t(4095);
+    if (bytes <= UploadBatch::kFrameBytes && bytes > UploadBatch::kFrameBytes - scanned) break;
+    preload_cursor_ = (preload_cursor_ + 1) % preload_records_.size();
+    if (!bytes || bytes > UploadBatch::kFrameBytes) continue;
+    scanned += bytes;
+    requests.push_back(r);
+  }
+  PrepareResourceRequests(cl, requests, true);
+}
+
+}  // namespace nr

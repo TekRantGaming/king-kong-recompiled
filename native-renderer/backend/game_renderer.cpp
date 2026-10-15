@@ -126,6 +126,7 @@ GameRenderer::GameRenderer(nvrhi::IDevice* device, const GuestMemory& memory,
 }
 
 GameRenderer::~GameRenderer() {
+  SaveResourcePreload();
   if (resource_profile_file_) std::fclose(resource_profile_file_);
   if (gi_build_.valid()) gi_build_.wait();
   if (lighting_build_.valid()) lighting_build_.wait();
@@ -204,7 +205,7 @@ bool GameRenderer::Initialize() {
   if (const char* path = std::getenv("NR_RESOURCE_PROFILE"); path && *path) {
     resource_profile_file_ = std::fopen(path, "w");
     if (resource_profile_file_) {
-      std::fprintf(resource_profile_file_, "frame,wall_s,texture_convert_ms,texture_create_ms,texture_stage_ms,buffer_create_ms,buffer_convert_ms,buffer_stage_ms,hash_ms,watch_ms,cache_bind_ms,invalidate_ms,descriptor_ms,submit_ms,snapshot_ms,prepare_wall_ms,prepared_resources,prepared_discarded,prepare_total_ms\n");
+      std::fprintf(resource_profile_file_, "frame,wall_s,texture_convert_ms,texture_create_ms,texture_stage_ms,buffer_create_ms,buffer_convert_ms,buffer_stage_ms,hash_ms,watch_ms,cache_bind_ms,invalidate_ms,descriptor_ms,submit_ms,snapshot_ms,prepare_wall_ms,prepared_resources,prepared_discarded,prepare_total_ms,preloaded_resources,preload_hits,preload_hash_misses,preload_bytes\n");
       resource_profile_ = &resource_work_;
       textures_.profile = vertex_buffers_.profile = index_buffers_.profile = resource_profile_;
     }
@@ -656,9 +657,11 @@ void GameRenderer::EndFrame() {
       debug_previous_ = stats_;
     }
     if (options_.debug & 8) LogInvalidationHistogram();
-    textures_.Trim(frame_, 1800);
-    vertex_buffers_.Trim(frame_, 1800);
-    index_buffers_.Trim(frame_, 1800);
+    if (!resource_loading_) {
+      textures_.Trim(frame_, 1800);
+      vertex_buffers_.Trim(frame_, 1800);
+      index_buffers_.Trim(frame_, 1800);
+    }
   }
   RetryDeferred();
   stats_.driver_cache_saves = driver_cache_saves_.load(std::memory_order_relaxed);
@@ -924,6 +927,7 @@ void GameRenderer::QueueOrDefer(const PipelineRecord& record) {
 
 bool GameRenderer::SetPipelineCache(const std::string& path) {
   std::lock_guard lock(cache_mutex_);
+  resource_cache_base_ = path;
   const bool opened = cache_file_.Open(path);
   cache_recording_.store(opened, std::memory_order_relaxed);
   if (!cache_file_.note().empty()) {
@@ -1220,6 +1224,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     GameRenderer* game;
     ~UploadGuard() { game->resource_prepare_call_ = nullptr; game->FlushUploads(); }
   } uploads{this};
+  PollResourcePreload(cl);
   UpdateEffects();
   if (options_.debug & 512) return;  // debugging: no draws
   if (options_.debug & 8192) {       // debugging: no draws, but 10 us of the game thread's time each

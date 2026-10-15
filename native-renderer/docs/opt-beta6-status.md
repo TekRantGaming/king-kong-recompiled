@@ -344,3 +344,72 @@ Evidence: `kk/out/task099/bench-clean-summary.json`, `game-final-summary.json`,
 `resource-summary.json`, all raw fixtures/process inventories, run scripts,
 build/CTest logs and `artifact-verification.json`. Candidate SHA-256:
 `614d0013bb2ec00ab1bcf3dfcd0d8844e62edd840d603631f2b84e3d1cc60aec`.
+
+## Task 104: learned loading-screen resource preparation
+
+Starting at `f80166c`. Read DECISIONS.md first, then TASK-104, GAME-RULES,
+reports 099/097/091 and this status. No standing-decision conflict. Windows
+only; no game logic, AI cadence, frame cap, shader, quality/default, queue or
+Present-bound changes. No shared SDK/link changes, merge, push or release.
+
+The renderer learns resource descriptions and full-range content hashes from
+the first ten seconds of actual binds after a loading screen. Lists live
+beside the local pipeline cache, keyed by the requested map and start point;
+no game-derived data is committed or shipped. The request key is captured
+during loading: the game changes its request fields as the load finishes.
+An initial game exposed that transition and the corrected regression covers it.
+
+During subsequent loading screens, matching immutable snapshots use the existing
+joined workers and early graphics-queue transfer path for conversion, resource
+creation and upload. No worker reads live guest objects. Writes overlapping a
+captured range discard that job; unrelated loading writes do not discard its
+peers. Later notifications remain queued for the required bind-time checks.
+Existing/in-place resources and resolve-owned pictures retain their normal paths.
+Every draw still requires its actual resource; no placeholder, deferred draw,
+production GPU-idle wait or additional Present allowance was introduced.
+
+Polling copies/hashes at most 32 MiB of candidate storage and selects at most
+32 descriptions per loading frame. Uploads share the existing 32 MiB / 32-batch
+frame allowance. New speculative upload payload, including failed/stale attempts,
+is capped at 64 MiB per loading episode; retained worker scratch stays at 64 MiB.
+Lists have at most 1,024 entries and reject torn/oversized/checksum-invalid files.
+These are logical payload/scratch limits, not a total process or VRAM cap;
+NVRHI retains in-flight resources/staging through GPU completion as before.
+
+Final corrected production build passes **22/22 Windows native CTests** in
+71.09 s and **2/2 resource CTests** in 2.94 s, no exclusions. Eight new offline
+checks cover actual texture/vertex/16- and 32-bit index pixels, learned replay,
+request-field changes, content mismatch, writes during capture and before first
+draw, subsequent rewrites, malformed lists and both memory/frame bounds. NVRHI
+checks are used; no installed Khronos-layer certification is claimed.
+
+Four of the six authorized game launches have completed, all exit 0. The first
+candidate run did not save the chapter list and is retained as an initial-build
+observation. The corrected learning run saved 189 chapter-8 descriptions. Replay
+prepared 113 chapter resources (51,604,723 bytes) while loading, plus six earlier
+screen resources; all 119 were consumed at first draw. Initial-list hash misses
+are retried only while loading. Relocated, absent, changed, small, over-budget
+and already-hosted resources use the ordinary mandatory path. A first visit
+without a learned list gets no ahead-of-use benefit.
+
+| Vulkan run | Startup >50 ms | Worst startup ms | Peak room ms | Steady FPS |
+|---|---:|---:|---:|---:|
+| Beta 5 | 2 | 196.5 | 117.3 | 205.11 |
+| Initial candidate, no chapter list | 2 | 180.0 | 97.4 | 207.33 |
+| Corrected learning | 2 | 182.7 | 101.4 | 204.06 (loaded) |
+| Corrected replay | 1 | 132.9 | 52.1 | 203.85 |
+
+Same report-099 private seed/settings/window and first-10-second / seconds-30-65
+method. The corrected learning run's steady segment contains sampled clang work;
+the other displayed windows have no sampled compiler/test/shader overlap.
+One Beta 5/replay pair suggests a startup improvement, with no steady FPS gain
+established. The loading-screen interval is 650 ms learning / 674 ms replay in
+these two samples; preparation has a loading cost. These are not repeated,
+cold-driver-cache, full-game pixel-equality or owner-configuration results.
+DirectX startup comparisons remain pending within the two unused launches;
+external compilation is active. Steady performance is judged on Vulkan only:
+the owner's global driver cap limits DirectX 12 and is unchanged.
+
+Evidence: `kk/out/task104`, including corrected build/CTest logs, private run
+ledger, raw profiles, full process inventories, unrounded CPU samples, run and
+analysis scripts. Production code is frozen after corrected validation.

@@ -40,6 +40,7 @@
 #include "backend/render_scale.h"
 #include "backend/renderer.h"
 #include "backend/shader_library.h"
+#include "backend/texture_workers.h"
 #include "backend/tests/check.h"
 #include "backend/tests/fake_guest.h"
 #include "backend/tests/vk_test_device.h"
@@ -2961,6 +2962,188 @@ TEST(Scale_ShadowMapsHaveTheirOwnScale) {
     CHECK(saw_shadow);
     CHECK(saw_main);
   }
+}
+
+namespace {
+
+std::string PreloadTestPath(const char* name) {
+  const auto dir = std::filesystem::temp_directory_path() / "nr_resource_preload_tests";
+  std::filesystem::create_directories(dir);
+  return (dir / (std::string(name) + std::to_string(
+      std::chrono::steady_clock::now().time_since_epoch().count()))).string();
+}
+
+void ServicePreload(Fixture& f, bool loading, uint32_t level = 305, uint32_t start = 0) {
+  auto list = f.gpu->device()->createCommandList();
+  list->open();
+  f.game->PreloadResources(list, loading, level, start);
+  list->close();
+  f.gpu->Execute(list);
+}
+
+struct PreloadBuffers {
+  uint32_t vb = 0, ib = 0, data = 0;
+  Fixture::ColorPipeline pipeline;
+  explicit PreloadBuffers(Fixture& f, bool index32) {
+    pipeline = f.MakeColorPipeline();
+    vb = f.mem.NewVertexBuffer(64u << 10, data);
+    const auto payload = Bytes(QuadTriangles(kFull, 0xFF39A7D2));
+    std::memcpy(f.mem.Writable(data), payload.data(), payload.size());
+    std::vector<uint32_t> indices((64u << 10) / (index32 ? 4 : 2));
+    for (uint32_t i = 0; i < 6; ++i) indices[i] = i;
+    ib = f.mem.NewIndexBuffer(indices, index32);
+    f.SetDeclaration(pipeline.decl); f.SetShaders(pipeline.vs, pipeline.ps_interp);
+    f.SetStream(0, vb, 0, 16); f.SetIndices(ib);
+  }
+};
+
+void CheckBufferPreload(bool index32, bool mismatch, bool during_capture, bool after_capture = false) {
+  const auto path = PreloadTestPath("buffers");
+  {
+    Fixture learn;
+    if (!learn.Init()) return;
+    CHECK(learn.game->SetPipelineCache(path));
+    const auto rt = learn.BindMainSurface();
+    PreloadBuffers scene(learn, index32);
+    ServicePreload(learn, true);
+    ServicePreload(learn, false, 305, ~0u);  // the game clears its request after loading
+    learn.DrawIndexed(4, 0, 0, 6);
+    learn.Present(rt);
+  }  // saves the learned list even when exiting in the ten-second window
+  std::vector<ResourcePreloadRecord> records;
+  CHECK(ResourcePreloadFile::Read(path + ".resources-305-0", records));
+  CHECK_EQ(records.size(), 2u);
+  Fixture f;
+  if (!f.Init()) return;
+  CHECK(f.game->SetPipelineCache(path));
+  const auto rt = f.BindMainSurface();
+  PreloadBuffers scene(f, index32);
+  auto rewrite = [&](uint32_t color) {
+    const auto payload = Bytes(QuadTriangles(kFull, color));
+    std::memcpy(f.mem.Writable(scene.data), payload.data(), payload.size());
+  };
+  if (mismatch) rewrite(0xFFCC3311);
+  bool wrote = false;
+  if (during_capture) f.game->set_watch([&](uint32_t physical, uint32_t bytes) {
+    if (!wrote) { wrote = true; f.game->InvalidateRange(physical, bytes); }
+  });
+  ServicePreload(f, true, 306);  // a different chapter cannot consume this list
+  CHECK_EQ(f.game->stats().preloaded_resources, 0u);
+  ServicePreload(f, true);
+  const bool workers = TextureWorkerCount() != 0;
+  const uint64_t expected = workers ? (during_capture || mismatch ? 1 : 2) : 0;
+  CHECK_EQ(f.game->stats().preloaded_resources, expected);
+  if (mismatch && workers) CHECK(f.game->stats().preload_hash_misses > 0);
+  if (during_capture && workers) CHECK_EQ(f.game->stats().prepared_discarded, 1u);
+  if (after_capture) {
+    rewrite(0xFFCC3311);
+    f.game->InvalidateRange(scene.data - FakeGuestMemory::kPhysicalView, 64u << 10);
+  }
+  ServicePreload(f, false);
+  f.Clear(kClearTarget0, 0xFF000000);
+  f.DrawIndexed(4, 0, 0, 6);
+  auto px = f.Present(rt);
+  const auto color = FromArgb(mismatch || after_capture ? 0xFFCC3311 : 0xFF39A7D2);
+  const Rgb want[4] = {color, color, color, color};
+  f.CheckQuadrants(px, want, __LINE__);
+  CHECK_EQ(f.game->stats().preload_hits, after_capture && workers ? 1u : expected);
+  // A rewrite after preload (including an earlier draw in this frame) is
+  // mandatory at the original draw-list position.
+  f.DrawIndexed(4, 0, 0, 6);
+  rewrite(0xFF11CC33);
+  f.game->InvalidateRange(scene.data - FakeGuestMemory::kPhysicalView, 64u << 10);
+  f.DrawIndexed(4, 0, 0, 6);
+  px = f.Present(rt);
+  const Rgb changed[4] = {FromArgb(0xFF11CC33), FromArgb(0xFF11CC33),
+                         FromArgb(0xFF11CC33), FromArgb(0xFF11CC33)};
+  f.CheckQuadrants(px, changed, __LINE__);
+}
+
+}  // namespace
+
+TEST(Preload_LearnedVertexAnd16BitIndexPixels) { CheckBufferPreload(false, false, false); }
+TEST(Preload_LearnedVertexAnd32BitIndexPixels) { CheckBufferPreload(true, false, false); }
+TEST(Preload_ContentMismatchUsesRequiredUpload) { CheckBufferPreload(false, true, false); }
+TEST(Preload_WriteDuringCaptureDiscardsOnlyOverlappingJob) { CheckBufferPreload(false, false, true); }
+TEST(Preload_WriteAfterCaptureBeforeFirstDraw) { CheckBufferPreload(false, false, false, true); }
+
+TEST(Preload_TextureBeforeFirstDrawAndRewrite) {
+  const auto path = PreloadTestPath("texture");
+  for (int pass = 0; pass < 2; ++pass) {
+    Fixture f;
+    if (!f.Init()) return;
+    CHECK(f.game->SetPipelineCache(path));
+    const auto rt = f.BindMainSurface();
+    std::vector<uint8_t> blocks(128 * 128 * 4);
+    for (size_t i = 0; i < blocks.size(); i += 4) {
+      blocks[i] = 0x33; blocks[i + 1] = 0x99; blocks[i + 2] = 0xCC; blocks[i + 3] = 255;
+    }
+    uint32_t base = 0, bytes = 0;
+    const auto desc = Desc(kknr::TextureFormat::k_8_8_8_8, kknr::Endian::k8in32, kSwizzleZYXW, 128, true);
+    const auto tex = f.NewTexture(desc, [&](uint32_t, uint32_t) { return blocks.data(); }, &base, &bytes);
+    ServicePreload(f, true);
+    CHECK_EQ(f.game->stats().preloaded_resources, TextureWorkerCount() ? uint64_t(pass) : 0u);
+    ServicePreload(f, false);
+    f.DrawTextured(tex);
+    auto px = f.Present(rt);
+    CHECK_COLOR(px, 32, 32, (Rgb{0xCC / 255.0, 0x99 / 255.0, 0x33 / 255.0}), "preloaded tiled swizzled texture");
+    CHECK_EQ(f.game->stats().preload_hits, TextureWorkerCount() ? uint64_t(pass) : 0u);
+    CHECK_EQ(f.game->stats().texture_uploads, 1u);
+    // Rewriting all guest texels after replay must be visible on the next draw.
+    std::memset(f.mem.Writable(base), 255, bytes);
+    f.game->InvalidateRange(base - FakeGuestMemory::kPhysicalView, bytes);
+    f.DrawTextured(tex);
+    px = f.Present(rt);
+    CHECK_COLOR(px, 32, 32, (Rgb{1, 1, 1}), "rewritten preloaded texture");
+    CHECK_EQ(f.game->stats().texture_uploads, 2u);
+  }
+}
+
+TEST(Preload_FileRejectsTornOversizedAndChangedData) {
+  const auto path = PreloadTestPath("format");
+  std::vector<ResourcePreloadRecord> records{ResourcePreloadRecord::Buffer(4096, 65536, false, false)};
+  records[0].hash = 0x123456789ABCDEF0;
+  CHECK(ResourcePreloadFile::Write(path, records));
+  std::vector<ResourcePreloadRecord> got;
+  CHECK(ResourcePreloadFile::Read(path, got));
+  CHECK_EQ(got.size(), 1u); CHECK_EQ(got[0].hash, records[0].hash);
+  {
+    std::fstream file(path, std::ios::binary | std::ios::in | std::ios::out);
+    file.seekp(30); file.put('X');
+  }
+  CHECK(!ResourcePreloadFile::Read(path, got)); CHECK(got.empty());
+  {
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    file << "torn";
+  }
+  CHECK(!ResourcePreloadFile::Read(path, got)); CHECK(got.empty());
+  records.resize(ResourcePreloadFile::kMaxRecords + 1);
+  CHECK(!ResourcePreloadFile::Write(path, records));
+}
+
+TEST(Preload_ChapterMemoryAndFrameBudgets) {
+  Fixture f;
+  if (!f.Init()) return;
+  const auto path = PreloadTestPath("budget");
+  CHECK(f.game->SetPipelineCache(path));
+  std::vector<ResourcePreloadRecord> records;
+  for (uint32_t i = 0; i < 80; ++i) {
+    auto r = ResourcePreloadRecord::Buffer(0, (1u << 20) + i * 4096, false, false);
+    const kknr::GuestRange ranges[2] = {{0, r.words[1]}, {}};
+    const uint8_t* data[2] = {f.mem.Physical(0), nullptr};
+    r.hash = kknr::HashGuestRanges(ranges, data);
+    records.push_back(r);
+  }
+  CHECK(ResourcePreloadFile::Write(path + ".resources-305-0", records));
+  for (unsigned frame = 0; frame < 8; ++frame) {
+    const auto before = f.game->stats().preload_bytes;
+    ServicePreload(f, true);
+    CHECK(f.game->stats().preload_bytes - before <= (32u << 20));
+    CHECK(f.game->stats().preload_bytes <= (64u << 20));
+    f.game->EndFrame();
+  }
+  if (TextureWorkerCount()) CHECK(f.game->stats().preload_bytes > (60u << 20));
+  CHECK(f.game->stats().preloaded_resources < records.size());
 }
 
 NR_TEST_MAIN()
