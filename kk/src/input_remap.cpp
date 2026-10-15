@@ -159,7 +159,13 @@ REX_HOOK_RAW(sub_821074E8) {
     ~RecordRead() { kk::benchmark::PadRead(user, state, ctx.r3.u32, base); }
   } record_read{user, state_ptr ? base + state_ptr : nullptr, ctx, base};
   if (kk::freecam::Active() && state_ptr) {
-    std::memset(base+state_ptr+4,0,12);
+    bool connected = ctx.r3.u32 == 0;
+    if (kk::g_dev_pad_input && kk::g_dev_pad_input(user, base + state_ptr))
+      connected = true;
+#if defined(KK_DEV_TOOLS)
+    if (kk::freecam::DevPadInput(user, base + state_ptr)) connected = true;
+#endif
+    kk::freecam::Pad(user, base + state_ptr, connected);
     g_aim[user & 3] = {};
     ctx.r3.u64 = 0;
     return;

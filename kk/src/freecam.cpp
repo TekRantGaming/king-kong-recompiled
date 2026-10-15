@@ -25,6 +25,12 @@ std::atomic<uint32_t> generation{0};
 std::mutex input_mutex;
 bool keys[256]{};
 double mouse_x = 0, mouse_y = 0, wheel = 0;
+std::array<PadInput, 4> pads{};
+#if defined(KK_DEV_TOOLS)
+std::array<uint8_t, 16> test_pad{};
+std::atomic<unsigned> trace_stage{0};
+std::atomic<uint64_t> pad_polls{0}, pad_leaks{0};
+#endif
 Camera camera;
 uint32_t captured_generation = 0, level = 0;
 bool initialized = false;
@@ -59,6 +65,7 @@ void ClearInput() {
   std::lock_guard lock(input_mutex);
   std::memset(keys, 0, sizeof(keys));
   mouse_x = mouse_y = wheel = 0;
+  pads = {};
 }
 void Toggle() {
   active = !active.load();
@@ -89,7 +96,7 @@ public:
   }
   bool NeedsContinuousPaint() override {
 #if defined(KK_DEV_TOOLS)
-    if (std::getenv("KK_DEV_FREECAM_TEST") && test_stage < 12)
+    if (std::getenv("KK_DEV_FREECAM_TEST") && test_stage < 36)
       return true;
 #endif
     return active.load();
@@ -145,85 +152,49 @@ private:
   void TestTick() {
     if (!std::getenv("KK_DEV_FREECAM_TEST") || !InPlay())
       return;
-    if (test_start == Clock::time_point{})
-      test_start = Clock::now();
-    const double t =
-        std::chrono::duration<double>(Clock::now() - test_start).count();
-    constexpr double at[] = {4, 5, 8, 9, 11, 14, 15, 17, 18, 20, 22, 24};
-    if (test_stage >= std::size(at) || t < at[test_stage])
-      return;
+    if (test_start == Clock::time_point{}) test_start = Clock::now();
+    const double t = std::chrono::duration<double>(Clock::now() - test_start).count();
+    const double at = test_stage == 0 ? 4 : test_stage <= 32
+        ? 5 + ((test_stage - 1) / 2) * 1.5 + (test_stage % 2 ? 0 : 1)
+        : test_stage == 33 ? 29.5 : test_stage == 34 ? 31 : 32;
+    if (test_stage >= 36 || t < at) return;
     auto key = [&](unsigned k, bool down) {
       rex::ui::KeyEvent e(window, rex::ui::VirtualKey(k), 1, false, false,
                           false, false, false);
       Key(e, down);
     };
-    auto tap = [&](unsigned k) {
-      key(k, true);
-      key(k, false);
-    };
-    auto wheel_event = [&](int delta) {
-      rex::ui::MouseEvent e(window, rex::ui::MouseEvent::Button::kNone, 0, 0, 0,
-                            delta);
-      OnMouseWheel(e);
-    };
-    switch (test_stage) {
-    case 0:
+    auto tap = [&](unsigned k) { key(k, true); key(k, false); };
+    if (test_stage == 0 || test_stage == 34) {
       tap(0x78);
-      break;
-    case 1: {
-      key('W', true);
-      key('D', true);
-      key('E', true);
-      rex::ui::MouseEvent e(window, rex::ui::MouseEvent::Button::kNone, 0, 0, 0,
-                            0, 140, -60);
+    } else if (test_stage <= 32) {
+      const unsigned i = (test_stage - 1) / 2;
+      const bool down = test_stage % 2;
+      constexpr unsigned keyboard[] = {'W', 'S', 'A', 'D', 0x20, 0x11};
+      if (i < 6) {
+        key(keyboard[i], down);
+      } else {
+        std::lock_guard lock(input_mutex);
+        test_pad = {};
+        if (down) {
+          if (i == 10 || i == 11) test_pad[4] = i == 10 ? 0x10 : 0x20;
+          else {
+            const int offset = i < 8 ? 10 : i < 10 ? 8 : i < 14 ? 12 : 14;
+            const int16_t v = (i == 7 || i == 8 || i == 12 || i == 15)
+                                  ? -32767 : 32767;
+            test_pad[offset] = uint16_t(v) >> 8;
+            test_pad[offset + 1] = uint8_t(v);
+          }
+        }
+      }
+    } else if (test_stage == 33) {
+      rex::ui::MouseEvent e(window, rex::ui::MouseEvent::Button::kNone,
+                            0, 0, 0, 0, 100, -50);
       OnMouseMove(e);
-      wheel_event(240);
-      break;
+    } else {
+      REXLOG_INFO("KK freecam test: DONE active={} hidden={}", active.load(), hidden.load());
     }
-    case 2:
-      key('W', false);
-      key('D', false);
-      key('E', false);
-      tap(0x79);
-      break;
-    case 3:
-      key('W', true);
-      key(0x10, true);
-      wheel_event(1440);
-      break;
-    case 4:
-      key('W', false);
-      key(0x10, false);
-      break;
-    case 5:
-      tap(0x78);
-      break;
-    case 6:
-      tap(0x79);
-      break;
-    case 7:
-      tap(0x78);
-      break;
-    case 8:
-      key('Q', true);
-      key('A', true);
-      key(0x12, true);
-      wheel_event(-1440);
-      break;
-    case 9:
-      key('Q', false);
-      key('A', false);
-      key(0x12, false);
-      break;
-    case 10:
-      tap(0x78);
-      break;
-    case 11:
-      REXLOG_INFO("KK freecam test: DONE active={} hidden={}", active.load(),
-                  hidden.load());
-      break;
-    }
-    REXLOG_INFO("KK freecam test: stage {} at {:.3f}", test_stage++, t);
+    REXLOG_INFO("KK freecam test: stage {} at {:.3f}", test_stage, t);
+    trace_stage = ++test_stage;
   }
   unsigned test_stage = 0;
   Clock::time_point test_start;
@@ -261,6 +232,32 @@ void Install(rex::ui::ImGuiDrawer *d, rex::ui::Window *w) {
 }
 bool Active() { return active.load(); }
 bool HideHud() { return hidden.load() && InPlay(); }
+void Pad(uint32_t user, uint8_t *state, bool connected) {
+  if (user >= pads.size()) {
+    std::memset(state + 4, 0, 12);
+    return;
+  }
+  std::lock_guard lock(input_mutex);
+  const auto input = ConsumePad(
+      state, std::clamp(REXCVAR_GET(kk_deadzone), 0, 50) / 100.f,
+      REXCVAR_GET(kk_invert_rs_x), REXCVAR_GET(kk_invert_rs_y));
+#if defined(KK_DEV_TOOLS)
+  if (std::getenv("KK_DEV_FREECAM_TEST")) {
+    ++pad_polls;
+    for (int i = 4; i < 16; ++i) if (state[i]) ++pad_leaks;
+  }
+#endif
+  pads[user] = connected && InPlay() && !DebugOverlayOpen() ? input : PadInput{};
+}
+#if defined(KK_DEV_TOOLS)
+bool DevPadInput(uint32_t user, uint8_t *state) {
+  if (!std::getenv("KK_DEV_FREECAM_TEST") || user != 0 || !active)
+    return false;
+  std::lock_guard lock(input_mutex);
+  std::memcpy(state, test_pad.data(), test_pad.size());
+  return true;
+}
+#endif
 void Frame(uint8_t *base) {
   const auto now = Clock::now();
   real_dt = last_frame == Clock::time_point{}
@@ -314,25 +311,41 @@ bool OverrideView(uint8_t *base, uint32_t view, uint32_t caller,
                   float(mouse_y) * sensitivity *
                       (REXCVAR_GET(kk_mouse_invert_y) ? -1.f : 1.f));
       camera.Wheel(float(wheel));
+      PadInput pad;
+      // Use the first pad with an active control; never add duplicate inputs
+      // when the title polls more than one connected user.
+      for (const auto &p : pads)
+        if (p.forward || p.side || p.vertical || p.look_x || p.look_y ||
+            p.fast || p.slow) {
+          pad = p;
+          break;
+        }
+      const float turn = std::clamp(REXCVAR_GET(kk_camera_sensitivity), 10, 400) /
+                         100.f * 1.8f * std::clamp(real_dt, 0.f, .1f);
+      camera.Look(pad.look_x * turn, pad.look_y * turn);
       camera.Move(
-          float(keys['W']) - keys['S'], float(keys['D']) - keys['A'],
+          float(keys['W']) - keys['S'] + pad.forward,
+          float(keys['D']) - keys['A'] + pad.side,
           float(keys['E'] || keys[0x20]) -
-              float(keys['Q'] || keys[0x11] || keys[0xA2] || keys[0xA3]),
-          keys[0x10] || keys[0xA0] || keys[0xA1],
-          keys[0x12] || keys[0xA4] || keys[0xA5], real_dt);
+              float(keys['Q'] || keys[0x11] || keys[0xA2] || keys[0xA3]) + pad.vertical,
+          keys[0x10] || keys[0xA0] || keys[0xA1] || pad.fast,
+          keys[0x12] || keys[0xA4] || keys[0xA5] || pad.slow, real_dt);
     }
     mouse_x = mouse_y = wheel = 0;
 #if defined(KK_DEV_TOOLS)
     static auto last_trace = Clock::time_point{};
     if (std::getenv("KK_DEV_FREECAM_TEST") &&
-        Clock::now() - last_trace > std::chrono::seconds(1)) {
+        Clock::now() - last_trace > std::chrono::milliseconds(200)) {
       last_trace = Clock::now();
       const Vec original = ReadVec(base, view + 48);
-      REXLOG_INFO("KK freecam test: position {:.3f} {:.3f} {:.3f}; game camera "
-                  "{:.3f} {:.3f} {:.3f}; distance {:.2f}; speed {:.2f}",
-                  camera.position.x, camera.position.y, camera.position.z,
-                  original.x, original.y, original.z,
-                  Length(camera.position + original * -1), camera.speed);
+      const Vec player = ReadVec(base, 0x82D64250);
+      REXLOG_INFO("KK freecam test: sample stage={} camera={:.5f},{:.5f},{:.5f} "
+                  "yaw={:.5f} pitch={:.5f} player={:.5f},{:.5f},{:.5f} "
+                  "game_camera={:.5f},{:.5f},{:.5f} polls={} leaks={}",
+                  trace_stage.load(), camera.position.x, camera.position.y,
+                  camera.position.z, camera.yaw, camera.pitch,
+                  player.x, player.y, player.z, original.x, original.y, original.z,
+                  pad_polls.load(), pad_leaks.load());
     }
 #endif
   }
