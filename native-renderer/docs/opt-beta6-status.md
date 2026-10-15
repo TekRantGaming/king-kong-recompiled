@@ -209,3 +209,24 @@ Beta 5 comparisons; no task-099 game launched yet. Existing conversion workers
 join before upload; resource creation, staging, hashing and watches are still
 synchronous at this point. Changes will preserve first-use readiness and the
 ordering of in-place rewrites.
+
+Task-099 profiling completed two chapter-8 Windows launches, both exit 0,
+using a diagnostics-only build of `0fe206a` and the task-097 method. Four game
+launches remain. Detailed opt-in CPU attribution is under `kk/out/task099`.
+During the first ten seconds, Vulkan conversion/texture creation/staging total
+81.2/15.2/37.0 ms, buffer creation 30.3 ms; DirectX 12 totals
+80.4/43.8/62.6 ms, buffer creation 100.5 ms. Largest one-frame conversion is
+38.4/37.6 ms; buffer creation is 23.6/76.8 ms. Buffer staging also dominates
+the ten-second aggregate (690.2/424.0 ms), largely recurring work; its frame
+peaks are 7.7/11.5 ms. Cache-bind totals include nested hash/watch work and
+must not be added to those counters. Background activity is recorded.
+
+Implementation in progress: lazily prepare first-use resources in bounded,
+joined worker batches, reading compact owned snapshots; create resources,
+convert/hash and record worker-owned upload lists, then submit/publish on the
+renderer before dependent draws. NVRHI D3D12 recording counters require
+serialized worker list operations; allocation/conversion can overlap. Required
+in-place updates stay at their original draw-list positions. Reuse dirty-check
+hashes until invalidation, coalesce contiguous watched ranges, retain conversion
+output/snapshot/staging allocations. Tests and performance evidence are pending;
+no claim yet that chapter-start stalls are fixed.
