@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 #include "backend/ao_config.h"
 #include "backend/gi_config.h"
@@ -13,6 +14,8 @@
 namespace nr {
 
 struct EffectSettings {
+  bool texture_pack = false;
+  std::string texture_pack_folder;
   bool tessellation = false;
   float tessellation_smoothness = 0.75f;
   uint32_t tessellation_detail = 4;

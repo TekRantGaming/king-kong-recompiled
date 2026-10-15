@@ -61,6 +61,7 @@ enum class HostFormat : uint8_t {
   BC4_SNORM,
   BC5_UNORM,
   BC5_SNORM,
+  BC7_UNORM,
   COUNT,
 };
 

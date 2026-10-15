@@ -21,6 +21,7 @@ if(TARGET rex::runtime AND TARGET fmt::fmt)
         ${NR_ROOT}/resources/src/endian.cpp
         ${NR_ROOT}/resources/src/texture_convert.cpp
         ${NR_ROOT}/resources/src/texture_workers.cpp
+        ${NR_ROOT}/resources/src/texture_pack.cpp
         ${NR_ROOT}/resources/src/buffers.cpp
         ${NR_ROOT}/resources/src/texture_cache.cpp
         ${NR_ROOT}/resources/src/render_targets.cpp
@@ -37,6 +38,10 @@ if(TARGET rex::runtime AND TARGET fmt::fmt)
     # tests also load the compiler from.
     set(NR_DXC_DIR "" CACHE PATH "DXC release folder (include/dxc, lib or bin)")
     get_target_property(_nr_rex_includes rex::runtime INTERFACE_INCLUDE_DIRECTORIES)
+    target_include_directories(kknr_resources PRIVATE ${_nr_rex_includes})
+    if(WIN32)
+        target_link_libraries(kknr_resources PUBLIC windowscodecs ole32)
+    endif()
     set(_nr_dxc_include "")
     foreach(_dir IN LISTS _nr_rex_includes)
         if(EXISTS "${_dir}/dxc/dxcapi.h")

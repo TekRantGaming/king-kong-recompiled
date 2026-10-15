@@ -22,6 +22,7 @@ const HostFormatInfo kHostFormats[] = {
     {"RG32_SINT", 1, 8},        {"RG32_FLOAT", 1, 8},     {"RGBA32_UINT", 1, 16},    {"RGBA32_SINT", 1, 16},
     {"RGBA32_FLOAT", 1, 16},    {"BC1_UNORM", 4, 8},      {"BC2_UNORM", 4, 16},      {"BC3_UNORM", 4, 16},
     {"BC4_UNORM", 4, 8},        {"BC4_SNORM", 4, 8},      {"BC5_UNORM", 4, 16},      {"BC5_SNORM", 4, 16},
+    {"BC7_UNORM", 4, 16},
 };
 static_assert(sizeof(kHostFormats) / sizeof(kHostFormats[0]) == size_t(HostFormat::COUNT), "host format table");
 

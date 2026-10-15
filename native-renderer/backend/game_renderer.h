@@ -51,6 +51,7 @@
 #include "backend/pipeline_cache.h"
 #include "backend/resource_preload.h"
 #include "backend/resource_preload_bundle.h"
+#include "kknr/texture_pack.h"
 #include "backend/guest_device.h"
 #include "backend/guest_memory.h"
 #include "backend/lighting_config.h"
@@ -75,6 +76,7 @@ inline bool TessellationBenchRequested() {
 
 class GameRenderer {
   friend struct MemoryMigrationTestAccess;
+  friend struct TexturePackTestAccess;
  public:
   struct Options {
     bool tessellation_supported = false;
@@ -96,6 +98,8 @@ class GameRenderer {
     // (kknr::TextureOptions::mips_from_base_tail). Off: level 0 only, as the
     // SDK.
     bool texture_tail_mips = false;
+    bool texture_pack = false;
+    std::string texture_pack_folder;
     // Vertex buffers the game rewrites every frame stop being watched: each draw uploads the
     // vertices it reads instead. Watching them cost a write fault per 4 KB page and frame (340 a
     // frame in Venture: the game writes a 4 MB ring of particle vertices between its draws).
@@ -468,6 +472,10 @@ class GameRenderer {
 
   // ---- textures, samplers, buffers
   struct HostTexture {
+    uint64_t pack_hash = 0, pack_allocation = 0;
+    HostTexture* replacement = nullptr;
+    bool pack_ready = false;
+    bool pack_unavailable = false;
     uint64_t material_hash = 0;
     nvrhi::TextureHandle texture;
     kknr::HostTexturePlan plan;
@@ -999,6 +1007,19 @@ class GameRenderer {
   void FlushUploads();
   // Lazy CPU conversion pool. Every conversion joins before returning, so teardown has no guest/GPU work.
   std::unique_ptr<kknr::TextureConversionWorkers> texture_conversion_workers_;
+  std::unique_ptr<kknr::TexturePackStream> texture_pack_stream_;
+  std::unordered_set<HostTexture*> pack_originals_;
+  std::string texture_pack_folder_;
+  uint64_t pack_frame_ = ~0ull, pack_bytes_ = 0, pack_limit_ = 256ull << 20;
+  bool pack_pressure_ = false;
+  struct PackUpload {
+    HostTexture* original = nullptr;
+    std::shared_ptr<const kknr::HostTextureData> data;
+    uint32_t subresource = 0, row = 0;
+  } pack_upload_;
+  void ServiceTexturePacks(nvrhi::ICommandList* cl);
+  void DropTexturePacks();
+  void AdvanceTexturePack(nvrhi::ICommandList* cl);
 
   // Built-in passes.
   nvrhi::ShaderHandle blit_vs_, blit_ps_, clear_vs_, clear_ps_;

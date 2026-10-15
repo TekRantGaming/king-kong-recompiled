@@ -77,6 +77,8 @@ void GameRenderer::UpdateEffects() {
   effects_frame_ = frame_;
   const auto start = std::chrono::steady_clock::now();
   const EffectSettings s = options_.effect_settings();
+  options_.texture_pack = s.texture_pack;
+  options_.texture_pack_folder = s.texture_pack_folder;
   tessellation_=s.tessellation && options_.tessellation_supported;
   tessellation_smoothness_=std::isfinite(s.tessellation_smoothness)?std::clamp(s.tessellation_smoothness,0.0f,1.0f):0.75f;
   tessellation_detail_=std::clamp(s.tessellation_detail,1u,16u);

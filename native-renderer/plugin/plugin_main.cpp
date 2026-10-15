@@ -448,6 +448,10 @@ REXCVAR_DEFINE_BOOL(native_effect_buffers, true, "Native renderer",
 
 REXCVAR_DEFINE_STRING(native_sharpness, "off", "Native renderer",
                       "FidelityFX CAS after native/FXAA/temporal output: off, low, medium, high. Skipped when upscaler sharpening is active");
+REXCVAR_DEFINE_BOOL(native_texture_pack, false, "Native renderer", "Use replacement textures from your own texture pack")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+REXCVAR_DEFINE_STRING(native_texture_pack_folder, "", "Native renderer", "Folder containing the texture pack's pack.txt")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 REXCVAR_DEFINE_INT32(native_debug, 0, "Native renderer",
                      "Debugging aids (bits): 1 the game's clears are green, 2 the frame image is "

@@ -144,6 +144,8 @@ const std::vector<Setting>& Settings() {
       {"Upscaling", "Render quality", "kk_render_quality", Kind::kRestart, {}, 0, 1, "", false},
       {"Upscaling", "Spatial upscaler", "present_effect", Kind::kRestart, {}, 0, 1, "", false},
       // Image.
+      {"Image", "Texture pack", "native_texture_pack", Kind::kToggle, {{"Off", "false"}, {"On", "true"}},
+       0, 1, "", true, Show::kAlways, "Compare your texture pack with the original textures."},
       {"Image", "Sharpness", "native_sharpness", Kind::kChoiceSlider,
        {{"Off", "off"}, {"Low", "low"}, {"Medium", "medium"}, {"High", "high"}}, 0, 1, "", true, Show::kAlways,
        "Adaptive sharpening. Skipped when the upscaler's own sharpening is active."},

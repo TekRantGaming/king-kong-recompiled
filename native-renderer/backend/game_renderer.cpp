@@ -772,6 +772,13 @@ void GameRenderer::CheckMemoryBudget() {
                          now - memory_start_ >= std::chrono::seconds(20);
   if (simulated) tested.usage = std::max(tested.usage, tested.budget);
   const bool pressure = MemoryPressure(tested);
+  pack_limit_ = std::min<uint64_t>(512ull << 20, tested.budget / 8);
+  const uint64_t reserve=MemoryBudgetReserve(tested.budget)+(16ull<<20);
+  const uint64_t spare=tested.budget>tested.usage && tested.budget-tested.usage>reserve ?
+      tested.budget-tested.usage-reserve : 0;
+  pack_limit_=std::min(pack_limit_,pack_bytes_+spare);
+  pack_pressure_ = pressure;
+  if (pressure) DropTexturePacks();
   const char* control = std::getenv("KK_DEV_VRAM_CONTROL");
   const bool enabled = !control || std::strcmp(control, "0") != 0;
   if (enabled && pressure) {
@@ -1487,6 +1494,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   } uploads{this};
   PollResourcePreload(cl);
   UpdateEffects();
+  ServiceTexturePacks(cl);
   if (options_.debug & 512) return;  // debugging: no draws
   if (options_.debug & 8192) {       // debugging: no draws, but 10 us of the game thread's time each
     const auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(10);
