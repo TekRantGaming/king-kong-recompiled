@@ -65,6 +65,7 @@ PipelinePrewarm::Progress PipelinePrewarm::progress() {
   p.listed = listed_;
   p.queued = w.queued;
   p.made = w.made;
+  p.failed = w.failed;
   // Written by Start on its own thread before any caller can see renderer_ running.
   p.waiting = renderer_->stats().prewarm_deferred;
   p.other_kind = renderer_->stats().prewarm_other_kind;

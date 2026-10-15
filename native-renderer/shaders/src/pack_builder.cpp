@@ -76,6 +76,13 @@ bool writeText(const fs::path& path, const std::string& text) {
     return f.write(text.data(), std::streamsize(text.size())) && f.flush();
 }
 
+uint64_t sourceHash(const std::vector<uint8_t>& database, const PackBuildOptions& options) {
+    uint64_t hash = XXH3_64bits(database.data(), database.size());
+    for (const auto& container : options.additionalContainers)
+        hash = XXH3_64bits_withSeed(container.data(), container.size(), hash);
+    return hash;
+}
+
 unsigned long processId() {
 #ifdef _WIN32
     return GetCurrentProcessId();
@@ -239,7 +246,7 @@ bool wantedPackStamp(const PackBuildOptions& options, PackStamp& out, std::strin
     out.backend = options.backend;
     out.translator = translatorHash();
     out.dxc = dxcIdentity();
-    out.database = XXH3_64bits(bytes.data(), bytes.size());
+    out.database = sourceHash(bytes, options);
     out.scaled = options.scaled;
     out.motion = options.motion;
     out.tessellation = 3;
@@ -284,7 +291,7 @@ PackBuildResult buildPack(const PackBuildOptions& options, PackBuildProgress* pr
     r.stamp.backend = options.backend;
     r.stamp.translator = translatorHash();
     r.stamp.dxc = dxcIdentity();
-    r.stamp.database = XXH3_64bits(bytes.data(), bytes.size());
+    r.stamp.database = sourceHash(bytes, options);
     r.stamp.scaled = options.scaled;
     r.stamp.motion = options.motion;
     r.stamp.tessellation = 3;
@@ -311,6 +318,19 @@ PackBuildResult buildPack(const PackBuildOptions& options, PackBuildProgress* pr
     }
     std::vector<ShaderInfo> jobs;
     std::set<std::pair<uint64_t, uint64_t>> seen;
+    for (const auto& container : options.additionalContainers) {
+        auto parsed = parseContainer(container);
+        if (!parsed.ok) {
+            r.error = "executable shader: " + parsed.error;
+            return finish();
+        }
+        if (seen.insert({parsed.info.ucodeHash, translationInputHash(parsed.info)}).second) jobs.push_back(parsed.info);
+        if (options.scaled && parsed.info.kind == ShaderKind::Pixel) {
+            parsed.info.renderScaleAware = true;
+            if (seen.insert({parsed.info.ucodeHash, translationInputHash(parsed.info)}).second)
+                jobs.push_back(std::move(parsed.info));
+        }
+    }
     for (const DatabaseEntry& e : db.entries()) {
         if (e.kind != 1 && e.kind != 2) continue;
         ParseResult parsed = db.parse(e);

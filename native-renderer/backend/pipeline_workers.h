@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <thread>
 #include <vector>
+#include "backend/thread_scheduling.h"
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX

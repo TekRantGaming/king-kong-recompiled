@@ -20,7 +20,7 @@ if(NR_HAS_D3D12)
 endif()
 if(NR_GAME_RENDERER)
     # The shader pack on the player's machine: the launcher's build, the run's lookup.
-    list(APPEND NR_PLUGIN_SOURCES shader_pack_service.cpp)
+    list(APPEND NR_PLUGIN_SOURCES shader_pack_service.cpp builtin_shaders.cpp)
 endif()
 if(NR_HAS_VULKAN)
     list(APPEND NR_PLUGIN_SOURCES ${NR_ROOT}/backend/vulkan_host.cpp)

@@ -18,6 +18,7 @@
 
 #include "plugin/native_graphics_system.h"
 #include "backend/diagnostics.h"
+#include "backend/thread_scheduling.h"
 
 namespace nr {
 
@@ -80,6 +81,7 @@ void RingSkimmer::UpdateWritePointer(uint32_t value, uint64_t ticket) {
 }
 
 void RingSkimmer::WorkerMain() {
+  ScheduleCriticalThread();
   while (running_) {
     uint32_t write_ptr_index = write_ptr_index_.load();
     if (write_ptr_index == 0xBAADF00D || read_ptr_index_ == write_ptr_index) {

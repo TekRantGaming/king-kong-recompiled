@@ -942,6 +942,36 @@ int testPackBuild(int argc, char** argv) {
         prepared.motion = false;
         CHECK(checkPack(prepared).state == PackState::Current);
     }
+    // Executable-only containers join the database jobs, including prepared variants,
+    // and their contents participate in cache invalidation.
+    {
+        auto without = entries;
+        const auto extra = entries.front().container;
+        without.erase(std::remove_if(without.begin(), without.end(), [&](const auto& e) {
+            return e.container == extra;
+        }), without.end());
+        const auto bytes = ctest::writeDatabase({{"vsFixture.hlsl", "// v\n"}, {"psFixture.hlsl", "// p\n"}}, without);
+        PackBuildOptions executable = o;
+        executable.folder = out / "executable";
+        executable.database = out / "without-executable.bin";
+        writeFile(executable.database, std::string(bytes.begin(), bytes.end()));
+        executable.additionalContainers = {extra};
+        executable.scaled = executable.motion = true;
+        const auto result = buildPack(executable);
+        CHECK(result.ok && result.failed == 0);
+        CHECK(result.compiled == distinct + size_t(pixel) + size_t(vertex));
+        CHECK(checkPack(executable).state == PackState::Current);
+        CHECK(buildPack(executable).upToDate);
+        ShaderPack pack;
+        CHECK(pack.open(result.pack, &error));
+        const auto info = parseContainer(extra).info;
+        CompiledShader shader;
+        CHECK(pack.find(info.ucodeHash, translationInputHash(info), shader));
+        executable.additionalContainers.clear();
+        CHECK(checkPack(executable).state == PackState::Stale);
+        executable.additionalContainers = {{1,2,3}};
+        CHECK(!buildPack(executable).ok);
+    }
     // The same pack, byte for byte, from one thread (the order of the workers does not matter).
     {
         PackBuildOptions one = o;

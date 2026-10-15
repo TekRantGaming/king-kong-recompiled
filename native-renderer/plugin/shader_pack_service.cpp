@@ -1,5 +1,6 @@
 #include "plugin/shader_pack_service.h"
 #include "plugin/plugin_settings.h"
+#include "plugin/builtin_shaders.h"
 
 #include <algorithm>
 #include <atomic>
@@ -32,6 +33,7 @@
 #include "backend/host_device.h"
 #include "backend/pipeline_prewarm.h"
 #include "backend/driver_pipeline_cache.h"
+#include "backend/thread_scheduling.h"
 #include <rex/kernel/xboxkrnl/video.h>
 #if NR_HAS_VULKAN
 #include <rex/ui/vulkan/provider.h>
@@ -58,10 +60,39 @@ namespace {
 
 std::filesystem::path ProgramFolder();
 
-std::string PrewarmStamp(const kkshaders::PackStamp& stamp, const nr::PipelinePrewarm::Settings& settings,
-                         const std::string& player_records) {
+std::string WindowsDriverStamp() {
+#if defined(_WIN32) && NR_HAS_D3D12
+  // DX12 has no application VkPipelineCache to check. Record installed adapters
+  // and driver versions without creating a device on every warm launcher start.
+  IDXGIFactory1* factory = nullptr;
+  if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return {};
   std::ostringstream out;
-  out << stamp.toText() << "pipeline layouts 1\n";
+  for (UINT i = 0;; ++i) {
+    IDXGIAdapter1* adapter = nullptr;
+    if (factory->EnumAdapters1(i, &adapter) != S_OK) break;
+    DXGI_ADAPTER_DESC1 desc{};
+    LARGE_INTEGER version{};
+    if (SUCCEEDED(adapter->GetDesc1(&desc)) &&
+        SUCCEEDED(adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice), &version)))
+      out << desc.VendorId << ':' << desc.DeviceId << ':' << desc.SubSysId << ':'
+          << desc.Revision << ':' << version.QuadPart << '\n';
+    adapter->Release();
+  }
+  factory->Release();
+  return out.str();
+#else
+  return {};
+#endif
+}
+
+std::string PrewarmStamp(const kkshaders::PackStamp& stamp, const nr::PipelinePrewarm::Settings& settings,
+                         const std::string& player_records, const std::string& drivers) {
+  std::ostringstream out;
+  out << stamp.toText() << "pipeline layouts 2\n" << drivers;
+  // Scale and temporal layouts are both prepared. These choices change shader
+  // replacements and must invalidate preparation when the player changes them.
+  out << settings.flip_front_face << ' ' << int(settings.lighting.shadows) << ' '
+      << int(settings.lighting.water) << ' ' << int(settings.lighting.volumetrics) << '\n';
   std::error_code ec;
   // A renderer update or a changed pipeline list invalidates preparation even if the translator did not change.
 #if defined(__linux__)
@@ -138,6 +169,7 @@ kkshaders::PackBuildOptions PackOptionsForSettings(const std::filesystem::path& 
                                                    const std::filesystem::path& game_dir) {
   kkshaders::PackBuildOptions o;
   o.database = game_dir / "Shaders" / "xeshaders.bin";
+  o.additionalContainers = ReadBuiltinShaderContainers(game_dir / "default.xex");
   o.folder = cache_root / kkshaders::kPackFolderName;
 #if NR_HAS_VULKAN
   o.backend = REXCVAR_GET(native_backend) == "d3d12" ? kkshaders::PackBackend::Dxil : kkshaders::PackBackend::Spirv;
@@ -216,7 +248,8 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
   auto* job = new NrShaderPackJob;
   job->force = force != 0;
   job->options = nr::PackOptionsForSettings(nr::FromUtf8(cache_dir), nr::FromUtf8(game_dir));
-  job->options.threads = threads;
+  const unsigned budget = nr::ProcessSetupWorkerCount();
+  job->options.threads = threads ? std::min(threads, budget) : budget;
   job->options.lowPriority = low_priority != 0;
   // Capture settings on the UI thread, before the worker starts. Prepare both APIs during
   // the existing shader screen, including scale and motion pipelines, before Play can proceed.
@@ -243,15 +276,18 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
     if (REXCVAR_GET(native_pipeline_cache)) settings.lists.push_back(place.records());
     if (REXCVAR_GET(native_pipeline_list)) settings.lists.push_back(nr::ShippedPipelineList());
   }
-  REXLOG_INFO("rexgpu-native: shader pack: {} {} ({}{})", job->force ? "rebuilding (asked for)" : "checking",
+  REXLOG_INFO("rexgpu-native: shader pack: {} {} ({}{}), {} workers (process affinity, one CPU free)",
+              job->force ? "rebuilding (asked for)" : "checking",
               nr::ToUtf8(kkshaders::packPath(job->options)), kkshaders::packBackendName(job->options.backend),
-              job->options.scaled ? ", render scale variants" : "");
+              job->options.scaled ? ", render scale variants" : "", job->options.threads);
   job->thread = std::thread([job] {
     kkshaders::PackBuildResult r;
     bool current = true;
+    bool pipelines_ok = true;
     double seconds = 0;
     uint32_t compiled = 0;
     std::string warnings;
+    const std::string drivers = nr::WindowsDriverStamp();
     std::vector<kkshaders::PackBackend> backends;
     for (auto backend : {kkshaders::PackBackend::Spirv, kkshaders::PackBackend::Dxil}) {
 #if defined(__linux__)
@@ -299,7 +335,7 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
       auto marker = r.pack;
       marker += ".pipelines-ready";
       const auto& plan = job->prewarm[backend == kkshaders::PackBackend::Spirv ? 0 : 1];
-      const auto expected = nr::PrewarmStamp(r.stamp, plan, job->player_records);
+      const auto expected = nr::PrewarmStamp(r.stamp, plan, job->player_records, drivers);
       std::ifstream prepared(marker, std::ios::binary);
       const std::string previous((std::istreambuf_iterator<char>(prepared)), {});
       prepared.close();
@@ -317,11 +353,9 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
       std::unique_ptr<rex::ui::GraphicsProvider> provider;
       std::unique_ptr<nr::HostDevice> host;
       bool driver_changed = false;
-#if defined(__linux__) && NR_HAS_VULKAN
-      // Linux drivers (Mesa) update often, and a driver cache made by another driver version is
-      // dropped by the game at start, which then made every pipeline in the background while the
-      // player played. Here the file is read with the driver it will be used with: a cache the
-      // driver cannot use is prepared again now, before Play, like a missing one.
+#if NR_HAS_VULKAN
+      // The same usability check on Windows and Linux: existence alone does not
+      // prove this GPU/driver can load the cache. Rebuild before Play if it cannot.
       if (r.upToDate && previous == expected && driver_ready && job->need_driver_cache &&
           backend == kkshaders::PackBackend::Spirv &&
           std::filesystem::is_regular_file(job->driver_cache_path, marker_error)) {
@@ -390,8 +424,10 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
               }
               const auto p = prewarm.progress();
               prewarm.Stop();
-              REXLOG_INFO("rexgpu-native: setup {} pipeline prewarm: {} made, {} waiting for shaders",
-                          kkshaders::packBackendName(backend), p.made, p.waiting);
+              REXLOG_INFO("rexgpu-native: setup {} pipeline prewarm: {} listed, {} queued, {} finished, "
+                          "{} failed, {} waiting for shaders",
+                          kkshaders::packBackendName(backend), p.listed, p.queued, p.made, p.failed, p.waiting);
+              completed = completed && p.done && p.made == p.queued && !p.failed && !p.waiting;
             } else {
               completed = false;
             }
@@ -401,6 +437,9 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
           if (completed && !job->progress.cancel) {
             std::ofstream ready(marker, std::ios::binary | std::ios::trunc);
             ready << expected;
+          } else if (!job->progress.cancel) {
+            pipelines_ok = false;
+            warnings += std::string(kkshaders::packBackendName(backend)) + ": pipeline preparation incomplete; ";
           }
           // The device goes first: the driver cache is saved with it.
           host.reset();
@@ -415,11 +454,14 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
             attempt << expected;
           }
         } else {
+          pipelines_ok = false;
+          warnings += std::string(kkshaders::packBackendName(backend)) + ": pipeline device unavailable; ";
           REXLOG_WARN("rexgpu-native: setup {} pipeline prewarm unavailable", kkshaders::packBackendName(backend));
         }
         seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
       }
     }
+    r.ok = r.ok && pipelines_ok;
     r.upToDate = r.ok && current;
     r.seconds = seconds;
     r.compiled = compiled;
