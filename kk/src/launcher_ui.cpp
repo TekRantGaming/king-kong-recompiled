@@ -171,6 +171,24 @@ void Input::FeedPad(uint16_t xinput_buttons, int16_t lx, int16_t ly, uint8_t lt,
 }
 
 void Input::UpdateGamepads(double now) {
+  if (sdl_ready_) {
+    // Enumerate state rather than depending on queued hotplug events, which
+    // may already have been drained by the session's cursor observer.
+    SDL_UpdateGamepads();
+    int count = 0;
+    SDL_JoystickID* ids = SDL_GetGamepads(&count);
+    for (int i = 0; i < count; ++i) {
+      bool open = false;
+      for (void* pad : pads_) open |= SDL_GetGamepadID(static_cast<SDL_Gamepad*>(pad)) == ids[i];
+      if (!open) if (SDL_Gamepad* pad = SDL_OpenGamepad(ids[i])) pads_.push_back(pad);
+    }
+    SDL_free(ids);
+    for (auto it = pads_.begin(); it != pads_.end();) {
+      auto* pad = static_cast<SDL_Gamepad*>(*it);
+      if (SDL_GamepadConnected(pad)) { ++it; continue; }
+      SDL_CloseGamepad(pad); it = pads_.erase(it);
+    }
+  }
   SDL_Event e;
 #if defined(_WIN32)
   // The program's own SDL (the runtime DLL has its own): everything queued is ours.
@@ -184,20 +202,7 @@ void Input::UpdateGamepads(double now) {
     return SDL_PeepEvents(&e, 1, SDL_GETEVENT, SDL_EVENT_JOYSTICK_AXIS_MOTION, SDL_EVENT_FINGER_DOWN - 1) > 0;
   };
 #endif
-  while (sdl_ready_ && next()) {
-    if (e.type == SDL_EVENT_GAMEPAD_ADDED) {
-      if (SDL_Gamepad* g = SDL_OpenGamepad(e.gdevice.which)) pads_.push_back(g);
-    } else if (e.type == SDL_EVENT_GAMEPAD_REMOVED) {
-      for (auto it = pads_.begin(); it != pads_.end(); ++it) {
-        auto* g = static_cast<SDL_Gamepad*>(*it);
-        if (SDL_GetGamepadID(g) == e.gdevice.which) {
-          SDL_CloseGamepad(g);
-          pads_.erase(it);
-          break;
-        }
-      }
-    }
-  }
+  while (sdl_ready_ && next()) {}  // state and hotplug were read above
   std::array<bool, 8> down{};
   bool dir[6] = {};
   for (void* p : pads_) {

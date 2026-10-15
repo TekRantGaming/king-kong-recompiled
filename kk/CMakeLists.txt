@@ -50,6 +50,7 @@ set(KINGKONG_SOURCES
     src/online.cpp
     src/discord_presence.cpp
     src/mouse_look.cpp
+    src/cursor_activity.cpp
     src/language.cpp
     src/intros.cpp
     src/fov.cpp

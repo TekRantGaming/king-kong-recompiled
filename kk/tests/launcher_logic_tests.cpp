@@ -4,6 +4,7 @@
 #include "profile_save_file.h"
 #include "shader_progress.h"
 #include "graphics_presets.h"
+#include "cursor_activity.h"
 
 #include <bit>
 #include <chrono>
@@ -252,6 +253,21 @@ void AllSavesChecks() {
 }  // namespace
 
 int main() {
+  kk::CursorActivity cursor;
+  kk::CursorActivity::Pad idle, stick, button;
+  stick.axes[2] = 9; button.buttons = 1;
+  Check(cursor.mouse, "pointer starts visible");
+  cursor.Controller(idle, stick);
+  Check(!cursor.mouse, "right stick hides pointer");
+  cursor.Mouse();
+  cursor.Controller(stick, stick);
+  Check(cursor.mouse, "held controller does not override active mouse");
+  cursor.Controller(stick, idle);
+  Check(cursor.mouse, "controller release does not hide pointer");
+  cursor.Controller(idle, button);
+  Check(!cursor.mouse, "fresh button hides pointer");
+  cursor.Mouse();
+  Check(cursor.mouse, "mouse restores pointer");
   GraphicsPresetChecks();
   ShaderProgressChecks();
   AllSavesChecks();

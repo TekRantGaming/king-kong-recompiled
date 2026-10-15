@@ -673,18 +673,12 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
 
   void UpdateCursor(ImGuiIO& io) {
     const bool want = Interactive();
-    if (want == cursor_shown_) {
-      if (want) window_->SetCursorVisibility(rex::ui::Window::CursorVisibility::kVisible);
-      return;
-    }
+    if (want == cursor_shown_) return;
     cursor_shown_ = want;
     if (want) {
-      cursor_before_ = window_->GetCursorVisibility();
       nav_before_ = (io.ConfigFlags & ImGuiConfigFlags_NavNoCaptureKeyboard) != 0;
       io.ConfigFlags |= ImGuiConfigFlags_NavNoCaptureKeyboard;
-      window_->SetCursorVisibility(rex::ui::Window::CursorVisibility::kVisible);
     } else {
-      window_->SetCursorVisibility(cursor_before_);
       if (!nav_before_) io.ConfigFlags &= ~ImGuiConfigFlags_NavNoCaptureKeyboard;
       for (auto& [button, down] : held_) down = false;
     }
@@ -1651,7 +1645,6 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
   rex::ui::Window* window_;
   std::filesystem::path user_root_;
   std::filesystem::path last_capture_;
-  rex::ui::Window::CursorVisibility cursor_before_ = rex::ui::Window::CursorVisibility::kVisible;
   bool cursor_shown_ = false, nav_before_ = false, had_focus_ = false;
   std::map<int, bool> held_;
   std::string status_;
