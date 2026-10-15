@@ -9,6 +9,8 @@
 #include "ui_paint.h"
 
 #include "frame_stats.h"
+#include "frame_pacer.h"
+#include "benchmark.h"
 
 #include <algorithm>
 #include <atomic>
@@ -97,6 +99,7 @@ void RecordFrameTime(double frame_ms) {
 }
 
 void OnGuestSwap() {
+  benchmark::GuestSwap();
   NoteGuestFrame();
   RunDeferredIfDue(Clock::now());
   const uint64_t total = g_frames.fetch_add(1) + 1;
@@ -171,35 +174,8 @@ namespace {
 // Frame limiter for kk_frame_rate: high-resolution waitable timer for the bulk
 // of the wait, then a short spin for precision.
 void LimitFrameRate() {
-  const int32_t fps = REXCVAR_GET(kk_frame_rate);
-  static Clock::time_point next{};
-  if (fps <= 0) {
-    next = {};
-    return;
-  }
-  const auto period = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(1.0 / fps));
-  auto now = Clock::now();
-  if (next == Clock::time_point{} || now - next > period) {
-    next = now + period;  // first frame, or fell behind: resync
-    return;
-  }
-#if defined(_WIN32)
-  static HANDLE timer =
-      CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
-  const auto coarse = next - now - std::chrono::microseconds(500);
-  if (timer && coarse > Clock::duration::zero()) {
-    LARGE_INTEGER due;
-    due.QuadPart = -std::chrono::duration_cast<std::chrono::nanoseconds>(coarse).count() / 100;
-    SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE);
-    WaitForSingleObject(timer, INFINITE);
-  }
-#else
-  // Sleep for the bulk of the wait, then spin for precision.
-  const auto coarse = next - now - std::chrono::microseconds(500);
-  if (coarse > Clock::duration::zero()) std::this_thread::sleep_for(coarse);
-#endif
-  while (Clock::now() < next) std::this_thread::yield();
-  next += period;
+  static pacing::Limiter limiter;
+  limiter.Wait(REXCVAR_GET(kk_frame_rate));
 }
 
 }  // namespace

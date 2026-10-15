@@ -14,6 +14,7 @@
 // turn the game works out from that is replaced by the mouse's.
 
 #include "mouse_look.h"
+#include "benchmark.h"
 #include "debug_overlay.h"
 
 #include <algorithm>
@@ -70,6 +71,7 @@ class Listener : public rex::ui::WindowInputListener {
 Listener g_listener;
 
 bool MouseCamera() {
+  if (kk::benchmark::Active()) return false;
   if (kk::DebugOverlayOpen()) return false;
 #if defined(KK_DEV_TOOLS)
   // KK_DEV_MOUSE (below) tests mouse look without Keyboard & mouse, so the

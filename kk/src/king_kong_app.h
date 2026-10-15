@@ -31,6 +31,7 @@
 #include <rex/ui/windowed_app_context.h>
 
 #include "art.h"
+#include "benchmark.h"
 #include "crash_dump.h"
 #include "diagnostics.h"
 #include "discord_presence.h"
@@ -111,10 +112,16 @@ class KingKongApp : public rex::ReXApp {
     config_path_ = paths.config_path;
     // Achievement names and icons extracted from the player's default.xex by the builder.
     if (paths.metadata_root.empty()) paths.metadata_root = kk::art::AchievementDir(paths.game_data_root);
+    // Before SetupPresentation creates dialogs and captures their user paths.
+    if (kk::benchmark::Requested())
+      paths.user_data_root = kk::benchmark::Prepare(paths.user_data_root);
   }
 
   std::optional<rex::PathConfig> OnFinalizePaths(
-      const rex::PathConfig& defaults, std::function<void(rex::PathConfig)> resume) override {
+      const rex::PathConfig& input_paths, std::function<void(rex::PathConfig)> resume) override {
+    auto defaults = input_paths;
+    if (kk::benchmark::Requested() && !kk::benchmark::Active())
+      defaults.user_data_root = kk::benchmark::Prepare(input_paths.user_data_root);
     user_data_root_ = defaults.user_data_root;
     config_path_ = defaults.config_path;
     kk::SetDebugOverlayConfigPath(defaults.config_path);
@@ -133,7 +140,7 @@ class KingKongApp : public rex::ReXApp {
     // The launcher's Play menu: the saves live under the user data, a start request may be given
     // (--kk_start), and the game goes back to the launcher by restarting (play_session.cpp).
     kk::play::SetUserDir(defaults.user_data_root);
-    kk::play::LoadStartRequestFromSettings();
+    if (!kk::benchmark::Active()) kk::play::LoadStartRequestFromSettings();
     kk::play::SetQuitHandler([this] {
       // As closing the window does (the runtime shuts the game down); quitting the app context directly
       // while the game runs hung.
@@ -149,15 +156,17 @@ class KingKongApp : public rex::ReXApp {
     if (!show) {
       std::error_code recommendation_ec;
       if (!std::filesystem::exists(defaults.config_path, recommendation_ec) && !recommendation_ec &&
-          !rex::cvar::GetFlagByName("kk_hardware_tier").empty()) kk::SaveSettings(defaults.config_path);
+          !kk::benchmark::Active() && !rex::cvar::GetFlagByName("kk_hardware_tier").empty()) kk::SaveSettings(defaults.config_path);
       kk::EnforceOriginalLook();
       kk::ApplyFullscreenMode(window());
       kk::ApplyRendererChoice();  // the renderer, and with it the default upscaler
       kk::ApplyRenderPreset(OutputSize().second);
-      kk::online::SetPlaying(true);
-      kk::online::Start();
-      kk::discord::SetPlaying(true);
-      kk::discord::Start();
+      if (!kk::benchmark::Active()) {
+        kk::online::SetPlaying(true);
+        kk::online::Start();
+        kk::discord::SetPlaying(true);
+        kk::discord::Start();
+      }
       return defaults;
     }
 
@@ -193,6 +202,13 @@ class KingKongApp : public rex::ReXApp {
     };
     cb.set_fullscreen = [this](bool on) {
       if (window()) window()->SetFullscreen(on);
+    };
+    cb.benchmark = [this] {
+      nr::kk::StopLauncherPrewarm();
+      if (kk::play::RelaunchWith(L"--kk_benchmark=true --kk_skip_launcher=true")) {
+        kk::startup::CleanExit();
+        CloseLauncherProcess();
+      }
     };
     cb.dpi_scale = [this] {
       return window() ? double(window()->GetDpi()) / window()->GetMediumDpi() : 1.0;
@@ -263,6 +279,7 @@ class KingKongApp : public rex::ReXApp {
                                                   : rex::filesystem::GetExecutableFolder() / "logs", user_data_root_);
     }
     kk::ApplyRuntimeOverrides();
+    kk::benchmark::InstallPresentObserver();
     UseOneControllerSlot();
     kk::mouse_look::Install(window());
 
@@ -327,6 +344,10 @@ class KingKongApp : public rex::ReXApp {
     kk::CreatePauseMenu(drawer, immediate_drawer(), config_path_, user_data_root_, game_data_root());
     kk::CreateFpsOverlay(drawer);
     kk::CreateDebugOverlay(drawer, window(), config_path_, user_data_root_);
+    kk::benchmark::CreateBenchmarkDialog(drawer, [this] {
+      kk::startup::CleanExit();
+      app_context().CallInUIThreadDeferred([this] { if (window()) window()->RequestClose(); });
+    });
   }
 
   // Xbox 360-style toast with a chime for the game's achievements.
@@ -449,9 +470,10 @@ class KingKongApp : public rex::ReXApp {
   // launcher.cpp): the launcher shows even when it is switched off.
   static bool LauncherWillShow(const std::filesystem::path& game_data_root) {
     const bool skip_once = REXCVAR_GET(kk_skip_launcher);
-    return kk::startup::NeedsNotice() || !kk::GameFilesPresent(game_data_root) || kk::IsShiftHeld() ||
+    return kk::startup::NeedsNotice() || !kk::GameFilesPresent(game_data_root) ||
+           (!kk::benchmark::Requested() && !kk::benchmark::Active() && (kk::IsShiftHeld() ||
            (REXCVAR_GET(kk_launcher) && !skip_once) ||
-           (!skip_once && !rex::cvar::GetFlagByName("kk_launcher_open").empty());
+           (!skip_once && !rex::cvar::GetFlagByName("kk_launcher_open").empty())));
   }
   kk::AchievementToast* toast_ = nullptr;  // owned by ReXApp
 };

@@ -24,6 +24,7 @@
 
 #include "mouse_look.h"
 #include "play_internal.h"
+#include "benchmark.h"
 #include "settings.h"
 
 namespace {
@@ -151,6 +152,10 @@ REX_HOOK_RAW(sub_821074E8) {
   const uint32_t user = ctx.r3.u32;
   const uint32_t state_ptr = ctx.r4.u32;
   __imp__sub_821074E8(ctx, base);
+  if (state_ptr && kk::benchmark::Pad(user, base + state_ptr)) {
+    ctx.r3.u64 = 0;
+    return;
+  }
   if (kk::g_dev_pad_input && state_ptr && kk::g_dev_pad_input(user, base + state_ptr)) {
     ctx.r3.u64 = 0;  // ERROR_SUCCESS: a pad is connected
     if (kk::g_dev_pad_filter) kk::g_dev_pad_filter(user, base + state_ptr);

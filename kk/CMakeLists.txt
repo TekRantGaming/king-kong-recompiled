@@ -16,6 +16,7 @@ set(KINGKONG_SOURCES
     src/startup_recovery.cpp
     src/fpe_guard.cpp
     src/frame_stats.cpp
+    src/benchmark.cpp
     src/sampler.cpp
     src/settings.cpp
     src/input_remap.cpp
@@ -167,6 +168,10 @@ if(KK_DEV_TOOLS)
     add_test(NAME launcher-logic COMMAND kk-launcher-tests)
     add_executable(kk-startup-tests ../native-renderer/tests/startup-recovery-039.cpp)
     add_test(NAME startup-recovery COMMAND kk-startup-tests "${CMAKE_CURRENT_BINARY_DIR}/startup-test-state")
+endif()
+if(KK_DEV_TOOLS OR NR_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests/pacing-bench)
 endif()
 
 # Button prompt pictures (kk_button_prompts) live beside the program.

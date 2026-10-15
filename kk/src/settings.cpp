@@ -555,11 +555,18 @@ void ApplyVSyncSettings() {
   const std::string tearing = rex::cvar::GetFlagByName("d3d12_allow_variable_refresh_rate_and_tearing");
   for (const char* name : {"vulkan_allow_present_mode_immediate", "vulkan_allow_present_mode_mailbox",
                          "vulkan_allow_present_mode_fifo_relaxed"}) {
+    const auto source = rex::cvar::GetFlagSource(name);
     SetCvarDefault(name, tearing);
-    rex::cvar::ResetToDefault(name);
+    // Allow an explicit off-mode choice (e.g. mailbox) for diagnostics. VSync
+    // on still requires FIFO, even when an old CLI override enabled tearing.
+    if (tearing != "true" || (source != rex::cvar::Source::kCommandLine && source != rex::cvar::Source::kEnvironment))
+      rex::cvar::ResetToDefault(name);
   }
-  REXLOG_INFO("KK: VSync {} (D3D12 tearing {}; Vulkan immediate/mailbox/fifo_relaxed {})",
-              tearing == "true" ? "off" : "on", tearing, tearing);
+  REXLOG_INFO("KK: VSync {} (D3D12 tearing {}; Vulkan immediate {} mailbox {} fifo_relaxed {})",
+              tearing == "true" ? "off" : "on", tearing,
+              rex::cvar::GetFlagByName("vulkan_allow_present_mode_immediate"),
+              rex::cvar::GetFlagByName("vulkan_allow_present_mode_mailbox"),
+              rex::cvar::GetFlagByName("vulkan_allow_present_mode_fifo_relaxed"));
 }
 
 void ApplyFixedSettings() {
