@@ -1,13 +1,44 @@
-Native renderer update: all future builds use Vulkan (primary) or DirectX 12. The Classic renderer
-and its GPU DLL are removed. Existing Classic settings migrate to native Auto (Vulkan). Startup
-recovery tries the other native API, then explains how to update drivers and get help.
-
-Earlier version entries below describe those releases as shipped.
-
 # Changelog
 
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
+
+## v2.0.0-beta.4 (15 October 2026)
+
+**Beta 4**: the fourth test build of the next big update, from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/PET2xU5FJq). Your saves and settings are kept, and you can switch back to stable at any time. Windows only for now.
+
+### What's new
+- **Native rendering only.** The game now always uses the native renderer, on **Vulkan** (the default) or **DirectX 12**. The Classic renderer is gone. If you had Classic selected, you start on Vulkan. **Graphics** > **Advanced** > **Graphics API** offers **Auto**, **Vulkan** and **DirectX 12**.
+- **Safer start.** If the graphics API you chose fails to start, the game tries the other one and tells you. If neither starts, it explains how to update your graphics driver and where to get help. Graphics cards that can't run Vulkan are told so clearly, with a suggestion to use DirectX 12.
+- **No more texture flashing at chapter starts.** The game now waits for a new shader to be ready instead of skipping what it draws.
+- **Fixes for heavy firing.** Long bursts of machine gun fire, especially at 4K, no longer make the game fall apart: the renderer no longer lets unfinished frames pile up.
+- **VSync now works on Vulkan.**
+- **Smoother running.** The screen is now only redrawn when the game has a new frame, or a menu is open or moving. Before, the same frame could be sent to the screen many times a second. Overlays such as NVIDIA's now show the same frame rate as the game's own counter (**F2**). The renderer also does less timing and logging work on every draw.
+- **Global illumination (new, off by default).** **Graphics** > **Global illumination**: **Low**, **Medium** or **High**. Light bouncing off sunlit surfaces softly lights and tints nearby shaded ones. It only adds light, and it works best in bright outdoor scenes.
+- **The F8 graphics panel.** Press **F8** in play to change any graphics setting live, including the upscaler. Hold **F7** to compare with your saved settings, and **F6** saves a screenshot with the settings beside it.
+- **Tessellation test on Ann (experimental, off by default).** In the **F8** panel only: **Tessellation**, with **Smoothness** and **Detail** sliders, smooths Ann Darrow's model. Nothing else in the game is changed. The difference is subtle; tell us what you see.
+- **Remastered** plays at **60 FPS** with **Strong** ambient occlusion. **Original** keeps 30 FPS.
+- **Recommended settings for your graphics card** in the setup.
+- **One shader setup.** The setup shows one progress bar from 0 to 100% with each step named, the launcher music waits until it's done, and one CPU thread is kept free. Pressing **Play** doesn't prepare the shaders again.
+- **Audio and subtitles.** Volume settings now apply to every save, with no save slot to pick. **Subtitles** is a row on the **Gameplay** page instead of a page of its own. The pause menu's **Settings** uses the same audio and subtitle settings, and changes apply at once.
+- **Diagnostics.** **About** > **Copy diagnostics** now includes your screen size and refresh rate. If the game crashes, a report is saved on your PC with personal details removed, ready to send to us.
+- The launcher's newer text is translated into German, Spanish, French and Italian.
+- The shaders are prepared again the first time you start Beta 4, as after every update.
+
+### Known issues
+- FSR 4 is untested on the graphics cards that run it (we have none here), and it runs on DirectX 12 only.
+- Coming in Beta 5: sharper shadows, reflections on water and volumetric light shafts (hidden in Beta 4), a low graphics memory mode, support for older graphics cards, high frame rates done properly, frame pacing and a built-in benchmark.
+- In a few chapters the camera starts a pixel or two higher than on the console, because of how loading is timed.
+- With motion blur on, its trail is shorter at high frame rates.
+
+### Full changelog
+- The Classic (Xenos emulation) renderer and `rexgpu-xenos.dll` are removed; the build always includes the native renderer. Old `kk_renderer`, `gpu_plugin` and `native_backend` values migrate to native Auto (Vulkan), and old startup recovery state is cleared. Startup recovery: the chosen API, then the other one, then a translated help message and a clean exit.
+- At most two unfinished GPU frames; the wait for older frames happens just before submitting, outside the submit lock. First-use pipelines are waited for instead of skipped; demanded pipelines take priority over background prewarm, and motion and scale variants are prepared during setup.
+- SDK patch 0035 (Vulkan present semaphores per swapchain image), 0036 (AMD FSR luma history format) and 0037 (UI paint on demand: persistent dialogs repaint only for new game frames, input, changes and animation; `ui_paint_on_demand`).
+- `native_diagnostics` (default off) gates per-call API timing and detailed frame and ring telemetry. The frame timing summary every 600 frames, hitch logs and crash reports stay.
+- Screen-space GI (`native_gi`): a sunlit source term above the frame's ambient light, sources and receivers must face each other, a minimum sample distance, and each pixel's added light bounded by its own colour.
+- Ann tessellation (`native-renderer/docs/tessellation.md`): Phong tessellation for Ann's identified draws only (shader, texture and geometry content keys), with the depth pass reading the paired lit pass's normals so depth, colour and motion vectors match. Its pipelines are prewarmed and its shaders are in the shader packs.
+- Effects hidden for Beta 4: shadows, water reflections and light shafts (code kept). Ultra shadows are capped at twice the game's map size.
 
 ## v2.0.0-beta.3 (13 October 2026)
 
