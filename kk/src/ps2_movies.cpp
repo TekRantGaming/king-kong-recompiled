@@ -1,4 +1,5 @@
 #include "ps2_movies.h"
+#include "freecam.h"
 #include <rex/filesystem.h>
 #include "ps2_movies_logic.h"
 
@@ -436,6 +437,7 @@ class MovieDialog final : public rex::ui::ImGuiDialog {
     if (audio_ready_) { SDL_QuitSubSystem(SDL_INIT_AUDIO); audio_ready_ = false; }
   }
   void Prompt(ImDrawList* dl, ImVec2 origin, ImVec2 size) {
+    if (freecam::HideHud()) return;
     const float s = std::max(.65f, std::min(size.x / 1280, size.y / 720));
     std::string style = ButtonPromptStyle();
     if (style == "keyboard") style = DetectedPadPrompts();
