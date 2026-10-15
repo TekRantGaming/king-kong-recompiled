@@ -10,7 +10,7 @@ index 1bbeaff..b290044 100644
 +    UINT swap_chain_flags = 0;
      std::array<Microsoft::WRL::ComPtr<ID3D12Resource>, kSwapChainBufferCount> swap_chain_buffers;
    };
- 
+
 diff --git a/src/ui/presenter.cpp b/src/ui/presenter.cpp
 index 839eafc..6880097 100644
 --- a/src/ui/presenter.cpp
@@ -18,7 +18,7 @@ index 839eafc..6880097 100644
 @@ -22,6 +22,21 @@
  #include <rex/ui/presenter.h>
  #include <rex/ui/window.h>
- 
+
 +// Optional observer, no Presenter layout/ABI change. Called only after a
 +// successful host present, never for a skipped or failed paint. The caller
 +// keeps its function alive until process exit and does no IO in the callback.
@@ -119,12 +119,12 @@ index 252b6bf..fe5a81a 100644
 @@ -504,7 +523,7 @@ D3D12Presenter::ConnectOrReconnectPaintingToSurfaceFromUIThread(Surface& new_sur
          provider_.OffsetRTVDescriptor(rtv_heap_start, PaintContext::kRTVIndexSwapChainBuffer0 + i));
    }
- 
+
 -  is_vsync_implicit_out = false;
 +  is_vsync_implicit_out = !REXCVAR_GET(d3d12_allow_variable_refresh_rate_and_tearing);
    return SurfacePaintConnectResult::kSuccess;
  }
- 
+
 @@ -574,6 +593,11 @@ void D3D12Presenter::PaintContext::DestroySwapChain() {
    for (Microsoft::WRL::ComPtr<ID3D12Resource>& swap_chain_buffer_ref : swap_chain_buffers) {
      swap_chain_buffer_ref.Reset();
@@ -139,7 +139,7 @@ index 252b6bf..fe5a81a 100644
    swap_chain_height = 0;
 @@ -581,6 +605,17 @@ void D3D12Presenter::PaintContext::DestroySwapChain() {
  }
- 
+
  Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(bool execute_ui_drawers) {
 +  // Wait before consuming the latest guest output, so backpressure does not
 +  // leave an older image queued behind the display. No extra swapchain buffers.
