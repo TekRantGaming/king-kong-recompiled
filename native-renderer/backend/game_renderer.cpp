@@ -545,7 +545,7 @@ GameRenderer::StutterStats GameRenderer::stutter() const {
 void GameRenderer::EndFrame() {
   if (tessellation_timer_) tessellation_timer_->FrameEnd();
   PublishEffectTimes();
-  if (std::getenv("REX_DEV_TESS_BENCH") && frame_%300==0)
+  if (TessellationBenchRequested() && frame_%300==0)
     Logf(LogLevel::kInfo,"rexgpu-native: ANN TESS status frame %llu enabled %d detail %u draws %u prepared %zu",(unsigned long long)frame_,int(tessellation_),tessellation_detail_,tessellation_draws_this_frame_,tessellation_records_.size());
   tessellation_previous_flags_ = tessellation_drawn_this_frame_ ? TessellationFlags() : 0;
   tessellation_drawn_this_frame_ = false;
@@ -1671,7 +1671,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   constants_frame_ = frame_;
   // Only prepared, complete material/pass pairs can use the experimental geometry.
   // Missing pipelines keep the whole pair original; this never queues a compile in play.
-  bool ann_material = (vs->ucode_hash==0x5E779DBA373D121Cull || vs->ucode_hash==0x3390D930CD168AC0ull) && (dc.vertexFetch[1][3]&0x3Fu) && (tessellation_ || std::getenv("REX_DEV_TESS_BENCH")) &&
+  bool ann_material = (vs->ucode_hash==0x5E779DBA373D121Cull || vs->ucode_hash==0x3390D930CD168AC0ull) && (dc.vertexFetch[1][3]&0x3Fu) && (tessellation_ || TessellationBenchRequested()) &&
                             AnnTessellationMaterial(d,*vs,ps.get());
   bool tessellated=false;
   if (ann_material && tessellation_) {

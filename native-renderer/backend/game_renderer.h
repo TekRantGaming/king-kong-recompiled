@@ -21,6 +21,7 @@
 #include <thread>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <deque>
 #include <functional>
 #include <future>
@@ -59,6 +60,13 @@
 #include "kkshaders/abi.h"
 
 namespace nr {
+
+// REX_DEV_TESS_BENCH (a developer aid), read once: the environment does not change while the game
+// runs, and reading it at every draw was 0.8% of the render thread (task 085).
+inline bool TessellationBenchRequested() {
+  static const bool requested = std::getenv("REX_DEV_TESS_BENCH") != nullptr;
+  return requested;
+}
 
 class GameRenderer {
  public:
