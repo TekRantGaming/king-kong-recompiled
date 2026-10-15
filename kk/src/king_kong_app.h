@@ -175,11 +175,15 @@ class KingKongApp : public rex::ReXApp {
       const std::wstring start = kk::play::StartRequestArg();
       kk::startup::CleanExit();
       kk::play::RelaunchWith(L"--kk_skip_launcher=true" + (start.empty() ? std::wstring() : L" " + start));
-      app_context().CallInUIThreadDeferred([this] { app_context().QuitFromUIThread(); });
+      CloseLauncherProcess();
     };
     cb.quit = [this] {
       nr::kk::StopLauncherPrewarm();
-      app_context().CallInUIThreadDeferred([this] { app_context().QuitFromUIThread(); });
+#if defined(__linux__)
+      // The hard exit below skips the launcher's own save a moment after a change.
+      if (!config_path_.empty()) kk::SaveSettings(config_path_);
+#endif
+      CloseLauncherProcess();
     };
     cb.set_fullscreen = [this](bool on) {
       if (window()) window()->SetFullscreen(on);
@@ -199,6 +203,23 @@ class KingKongApp : public rex::ReXApp {
     // launcher is made: it applies the Original look, which the settings the prewarm reads follow.
     nr::kk::StartLauncherPrewarm(defaults.cache_root);
     return std::nullopt;
+  }
+
+  // The launcher's process ends (Quit, or Play restarting the program for restart-only settings).
+  void CloseLauncherProcess() {
+#if defined(__linux__)
+    // On Linux the SDK's normal quit (QuitFromUIThread, then the subsystems' teardown) never returned
+    // after the launcher: the process stayed asleep in a futex wait with its relaunched game as a
+    // <defunct> child, and Steam saw the game still running. Close the window instead: the SDK's
+    // OnClosing flushes the log and hard-exits, as the game's own quit does, and the relaunched
+    // process is then reaped by Steam's reaper (or init).
+    app_context().CallInUIThreadDeferred([this] {
+      if (window()) window()->RequestClose();
+      else app_context().QuitFromUIThread();
+    });
+#else
+    app_context().CallInUIThreadDeferred([this] { app_context().QuitFromUIThread(); });
+#endif
   }
 
   void OnConfigureFonts(ImFontAtlas* atlas) override { kk::LoadUiFont(atlas); }
