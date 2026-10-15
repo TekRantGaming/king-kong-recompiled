@@ -29,7 +29,12 @@ NOT FOR REDISTRIBUTION. This is a test build, not a public release.
 
 Extract the complete KingKong folder. Start king_kong.exe, choose any chapter,
 then use the keyboard camera controls in FREECAM.txt. F9 and F10 do not need
-the F8 panel. PS2 cutscenes are enabled and read the movies folder beside
+the F8 panel. F9 toggles free camera; WASD flies, mouse looks, Space/E goes
+up, Ctrl/Q goes down, Shift is faster, Alt is slower, and the mouse wheel
+changes speed. F10 hides/restores the HUD and overlays. F9 again returns to
+the normal camera. F11 freeze is unavailable.
+
+PS2 cutscenes are enabled and read the movies folder beside
 the executable; keep that folder with the game when moving this build.
 Movies play at normal adjacent story transitions, not at chapter-select,
 boot, restart or arbitrary chapter jumps. The white placeholder is skipped.
