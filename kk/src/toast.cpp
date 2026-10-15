@@ -1,4 +1,5 @@
 #include "ui_paint.h"
+#include "freecam.h"
 
 #include "toast.h"
 
@@ -289,6 +290,7 @@ rex::ui::ImmediateTexture* AchievementToast::Icon(uint32_t id) {
 }
 
 void AchievementToast::OnDraw(ImGuiIO& io) {
+  if (freecam::HideHud()) return;
 #if defined(KK_DEV_TOOLS)
   // Exercise the real notification queue without unlocking or saving an achievement.
   if (std::getenv("KK_DEV_UIPAINT_TEST")) {

@@ -1,4 +1,5 @@
 #include "ps2_movies.h"
+#include <rex/filesystem.h>
 #include "ps2_movies_logic.h"
 
 #if defined(_WIN32)
@@ -467,7 +468,10 @@ class MovieDialog final : public rex::ui::ImGuiDialog {
 
 std::filesystem::path Folder() {
   const auto value = REXCVAR_GET(kk_ps2_movie_folder);
-  if (!value.empty()) return std::filesystem::u8path(value);
+  if (!value.empty()) {
+    const auto path = std::filesystem::u8path(value);
+    return path.is_absolute() ? path : rex::filesystem::GetExecutableFolder() / path;
+  }
   PWSTR desktop = nullptr;
   std::filesystem::path folder;
   if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Desktop, KF_FLAG_DONT_VERIFY, nullptr, &desktop))) folder = desktop;

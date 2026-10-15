@@ -30,6 +30,7 @@
 
 #include "hfr.h"
 #include "benchmark.h"
+#include "freecam.h"
 
 namespace kk {
 #if defined(KK_DEV_TOOLS)
@@ -88,6 +89,7 @@ void SetFrameTime(PPCContext& ctx, uint8_t* base) {
 // The one hook on sub_8272CA20: the frame time as above, then the developer frame log
 // (KK_DEV_DT_LOG, dev_frame_log.cpp), which reads what it ended up as.
 REX_HOOK_RAW(sub_8272CA20) {
+  kk::freecam::Frame(base);
   SetFrameTime(ctx, base);
   kk::benchmark::Frame(kk::hfr::LoadF(base, kRawFrameTime),
       kk::hfr::LoadF(base, kk::hfr::kFrameTime), base);

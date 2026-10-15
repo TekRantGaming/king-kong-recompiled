@@ -27,6 +27,7 @@
 #include "play_internal.h"
 #include "benchmark.h"
 #include "settings.h"
+#include "freecam.h"
 
 namespace {
 
@@ -157,6 +158,12 @@ REX_HOOK_RAW(sub_821074E8) {
     uint32_t user; const uint8_t* state; PPCContext& ctx; const uint8_t* base;
     ~RecordRead() { kk::benchmark::PadRead(user, state, ctx.r3.u32, base); }
   } record_read{user, state_ptr ? base + state_ptr : nullptr, ctx, base};
+  if (kk::freecam::Active() && state_ptr) {
+    std::memset(base+state_ptr+4,0,12);
+    g_aim[user & 3] = {};
+    ctx.r3.u64 = 0;
+    return;
+  }
   uint32_t replay_status = 0;
   if (state_ptr && kk::benchmark::Pad(user, base + state_ptr, replay_status)) {
     ctx.r3.u64 = replay_status;

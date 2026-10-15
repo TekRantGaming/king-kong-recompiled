@@ -55,6 +55,7 @@ set(KINGKONG_SOURCES
     src/language.cpp
     src/intros.cpp
     src/fov.cpp
+    src/freecam.cpp
     src/motion_blur.cpp
     src/fog.cpp
     src/big_blur.cpp
@@ -161,6 +162,10 @@ execute_process(COMMAND git describe --always --dirty --abbrev=12 WORKING_DIRECT
 target_compile_definitions(king_kong PRIVATE KK_BENCH_BUILD="${KK_BENCH_BUILD}-task115")
 
 if(KK_DEV_TOOLS)
+    add_executable(kk-freecam-tests tests/freecam_tests.cpp)
+    target_include_directories(kk-freecam-tests PRIVATE src)
+    enable_testing()
+    add_test(NAME free-camera COMMAND kk-freecam-tests)
     add_executable(kk-ps2-movie-tests tests/ps2_movies_tests.cpp)
     target_include_directories(kk-ps2-movie-tests PRIVATE src)
     enable_testing()

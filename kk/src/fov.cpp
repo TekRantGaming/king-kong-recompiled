@@ -27,6 +27,7 @@
 #include <rex/system/flags.h>
 
 #include "settings.h"
+#include "freecam.h"
 
 namespace {
 
@@ -62,6 +63,13 @@ float LensFactor() {
 
 REX_EXTERN(__imp__sub_82872DB8);
 REX_HOOK_RAW(sub_82872DB8) {
+  const uint32_t view = ctx.r3.u32;
+  std::array<uint8_t, 68> saved;
+  const bool freecam = kk::freecam::OverrideView(base, view, uint32_t(ctx.lr), saved);
+  struct RestoreView {
+    uint8_t* base; uint32_t view; const std::array<uint8_t,68>& saved; bool restore;
+    ~RestoreView() { if (restore) std::memcpy(base+view,saved.data(),saved.size()); }
+  } restore{base,view,saved,freecam};
   const float k = LensFactor();
   const uint32_t at = ctx.r3.u32 + 172;
   const float fov = LoadF(base, at);

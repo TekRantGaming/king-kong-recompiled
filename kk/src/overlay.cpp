@@ -1,6 +1,7 @@
 #include "ui_paint.h"
 
 #include "overlay.h"
+#include "freecam.h"
 
 #include <chrono>
 #include <mutex>
@@ -48,6 +49,7 @@ class FpsOverlay final : public rex::ui::ImGuiDialog {
 
  protected:
   void OnDraw(ImGuiIO& io) override {
+    if (freecam::HideHud()) return;
 #if defined(KK_DEV_TOOLS)
     if (std::getenv("KK_DEV_UIPAINT_TEST")) {
       const double seconds = DevSecondsSinceMenu();

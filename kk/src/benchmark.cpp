@@ -1,4 +1,5 @@
 #include "benchmark.h"
+#include "freecam.h"
 #include "benchmark_monitor.h"
 #include "benchmark_history.h"
 #include "graphics_panel_style.h"
@@ -467,6 +468,7 @@ class StartDialog final : public rex::ui::ImGuiDialog {
   StartDialog(rex::ui::ImGuiDrawer* drawer, std::function<void()> start) : ImGuiDialog(drawer), start_(std::move(start)) {}
  protected:
   void OnDraw(ImGuiIO& io) override {
+    if (freecam::HideHud()) return;
     using text::T;
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x / 2, io.DisplaySize.y / 2), ImGuiCond_Always, ImVec2(.5f, .5f));
     ImGui::SetNextWindowSize(ImVec2(std::min(560.f, io.DisplaySize.x - 32), 0), ImGuiCond_Always);
@@ -498,6 +500,7 @@ class Dialog final : public rex::ui::ImGuiDialog {
   bool NeedsContinuousPaint() override { return phase == Phase::kSaving || phase == Phase::kComplete; }
  protected:
   void OnDraw(ImGuiIO& io) override {
+    if (freecam::HideHud()) return;
     using text::T;
     const auto p = phase.load();
     if (p == Phase::kOff) return;

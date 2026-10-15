@@ -66,6 +66,7 @@
 #include "launcher_ui.h"
 #include "launcher_text.h"
 #include "ui_paint.h"
+#include "freecam.h"
 #include "play_internal.h"
 #include "settings.h"
 #if defined(KK_DEV_TOOLS)
@@ -521,6 +522,7 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
 
  protected:
   void OnDraw(ImGuiIO& io) override {
+    if (freecam::HideHud()) return;
 #if defined(KK_DEV_TOOLS)
     UiPaintTick();
     TestTick();

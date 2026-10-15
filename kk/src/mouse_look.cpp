@@ -16,6 +16,7 @@
 #include "mouse_look.h"
 #include "benchmark.h"
 #include "debug_overlay.h"
+#include "freecam.h"
 
 #include <algorithm>
 #include <atomic>
@@ -71,6 +72,7 @@ class Listener : public rex::ui::WindowInputListener {
 Listener g_listener;
 
 bool MouseCamera() {
+  if (kk::freecam::Active()) return false;
   if (kk::benchmark::Active()) return false;
   if (kk::DebugOverlayOpen()) return false;
 #if defined(KK_DEV_TOOLS)

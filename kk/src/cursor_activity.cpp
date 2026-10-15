@@ -1,4 +1,6 @@
 #include "cursor_activity.h"
+#include "freecam.h"
+#include "debug_overlay.h"
 
 #include <cmath>
 #include <map>
@@ -164,6 +166,10 @@ class Cursor final : public rex::ui::ImGuiDialog, public rex::ui::WindowInputLis
   std::chrono::steady_clock::time_point test_next_{};
 #endif
   void Apply() {
+    if ((freecam::Active() && !DebugOverlayOpen()) || freecam::HideHud()) {
+      window_->SetCursorVisibility(rex::ui::Window::CursorVisibility::kHidden);
+      return;
+    }
     window_->SetCursorVisibility(activity_.mouse ? rex::ui::Window::CursorVisibility::kVisible
                                                : rex::ui::Window::CursorVisibility::kHidden);
   }
