@@ -20,6 +20,7 @@
 #include "discord_presence.h"
 #include "online.h"
 #include "diagnostics.h"
+#include "dev_launcher_chain.h"
 #include "hooks/kk_native_ui.h"  // the temporal upscalers this PC runs
 
 #include <algorithm>
@@ -5618,6 +5619,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   }
 
   // Developer-only: KK_DEV_LAUNCHER_INPUT="pad:down,pad:a,kb:right,shot:name,..."
+  // ('|' separates launcher sessions: each bonus started from Extras hands the next
+  // session to the launcher that comes back, see dev_launcher_chain.h)
   // ("setup:N" shows a stage of the setup screen) presses buttons (a, b, x, y,
   // lb, rb, start, up, down, left, right, lt, rt)
   // one at a time as a controller ("pad:", "ps:") or the keyboard ("kb:", the
@@ -5642,7 +5645,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     static std::vector<std::string> steps = [] {
       std::vector<std::string> out;
       const char* v = std::getenv("KK_DEV_LAUNCHER_INPUT");
-      std::stringstream in(v ? v : "");
+      // Only the first '|' session: the rest is for the runs that come back to Extras (dev_launcher_chain.h).
+      std::stringstream in(std::string(kk::DevLauncherSession(v ? v : "")));
       for (std::string t; std::getline(in, t, ',');)
         if (!t.empty()) out.push_back(t);
       return out;
@@ -5698,9 +5702,13 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       return;
     }
     if (t == "rows") {
-      for (const auto& row : focused_items_)
-        REXLOG_INFO("KK dev: launcher page {} row {}", play_ != PlayView::kNone ? PlayViewName(play_) : kPageNames[page_],
-                    row.label);
+      // With the shown value (a choice's option, else its value text), so a test can read settings back.
+      for (const auto& row : focused_items_) {
+        const bool choice = row.index >= 0 && row.index < int(row.options.size());
+        REXLOG_INFO("KK dev: launcher page {} row {} = {}",
+                    play_ != PlayView::kNone ? PlayViewName(play_) : kPageNames[page_], row.label,
+                    choice ? row.options[size_t(row.index)] : row.value_text);
+      }
       return;
     }
     if (t.rfind("look:", 0) == 0) {  // the setup's look step, when it is up: look:original / look:remastered

@@ -69,6 +69,8 @@ extern char** environ;
 #include "benchmark.h"
 #include "settings.h"
 #include "ps2_movies.h"
+#include "dev_launcher_chain.h"
+#include "video_modes.h"
 
 namespace kk {
 #if defined(KK_DEV_TOOLS)
@@ -112,6 +114,7 @@ constexpr int kScoreEntries = 40;  // the header holds best scores for the first
 constexpr uint32_t kAiPtr = 0x82CCBF64;           // the running AI instance; +0x40 its variables
 constexpr uint32_t kGamePtr = 0x82CC97C0;         // the universe variables G once a level is up
 constexpr uint32_t kProfilePtr = 0x82CC8D24;      // the same block, as the profile P
+constexpr uint32_t kVideoModeTarget = 0x82CCAC30; // the object sub_825EE130 writes the flip to (+0x9CC)
 constexpr uint32_t kMemcard = 0x82C63950;         // the save system M
 constexpr uint32_t kSaveHeaders = kMemcard + 0x4C, kSaveData = kMemcard + 0x550, kSaveSlot = kMemcard + 0x54C;
 constexpr uint32_t kSaveQueue = 0x82C8E7CC;       // the save system's job queue: +0xC a job is waiting
@@ -463,13 +466,18 @@ void SetStartRequest(const StartRequest& request) {
   g_starting = request.kind != StartKind::kNone;
 #if defined(KK_DEV_TOOLS)
   if (request.kind == StartKind::kExtra && std::getenv("KK_DEV_LAUNCHER_INPUT")) {
-    // A scripted controller activation is for this session, never repeated after returning to Extras.
+    // A scripted controller activation is for this session, never repeated after returning to Extras;
+    // the next '|' session, if any, runs there. Frames this run captures are named after the bonus.
+    const std::string next = kk::DevLauncherAfterStart(std::getenv("KK_DEV_LAUNCHER_INPUT"));
+    const std::string tag = fmt::format("extra{}-", request.chapter);
 #if defined(_WIN32)
-    _putenv_s("KK_DEV_LAUNCHER_INPUT", "shot:returned-extras");
+    _putenv_s("KK_DEV_LAUNCHER_INPUT", next.c_str());
     _putenv_s("KK_DEV_LAUNCHER_INPUT_FILE", "");
+    _putenv_s("KK_DEV_SHOTS_TAG", tag.c_str());
 #else
-    setenv("KK_DEV_LAUNCHER_INPUT", "shot:returned-extras", 1);
+    setenv("KK_DEV_LAUNCHER_INPUT", next.c_str(), 1);
     unsetenv("KK_DEV_LAUNCHER_INPUT_FILE");
+    setenv("KK_DEV_SHOTS_TAG", tag.c_str(), 1);
 #endif
   }
 #endif
@@ -635,6 +643,7 @@ bool CoverScreen() { return g_cover; }
 namespace {
 
 bool g_player_registered = false;
+bool g_video_modes_pending = false;  // a loaded save has video modes still to apply (video_modes.h)
 bool g_jump_requested = false;  // our level request is waiting for uni_go
 bool g_level_loaded = false;    // ... and has been carried out
 bool g_cheats_pending = false;
@@ -688,6 +697,23 @@ void SetDeviceAndSlot(uint8_t* base, uint32_t g, int slot) {
   Store32(base, g + 0x5F24, 0);
 }
 
+// The loaded save's "Old movie" filter / horizontal flip, with the game's own sub_825EE130, once its profile
+// pointer and flip target are set (video_modes.h): calling it while the title loads the save crashed.
+void ApplyPendingVideoModes(PPCContext& ctx, uint8_t* base) {
+  const uint32_t p = Load32(base, kProfilePtr), target = Load32(base, kVideoModeTarget);
+  const uint32_t flip = p ? Load32(base, p + 0x4DA0) : 0, old_movie = p ? Load32(base, p + 0x4DA4) : 0;
+  switch (NextVideoModeStep(g_video_modes_pending, p, target, flip, old_movie)) {
+    case VideoModeStep::kWait: return;
+    case VideoModeStep::kNothing: g_video_modes_pending = false; return;
+    case VideoModeStep::kApply: break;
+  }
+  g_video_modes_pending = false;
+  const PPCContext saved = ctx;
+  __imp__sub_825EE130(ctx, base);
+  ctx = saved;
+  REXLOG_INFO("KK play: applied the save's video modes (old movie {}, horizontal flip {})", old_movie, flip);
+}
+
 // The save's file into the save system and the universe, as choosing it in the save menu does (proven:
 // chapter-jump.md, "A jump that loads a save first").
 bool LoadSaveFromFile(PPCContext& ctx, uint8_t* base, uint32_t g, int slot) {
@@ -709,10 +735,8 @@ bool LoadSaveFromFile(PPCContext& ctx, uint8_t* base, uint32_t g, int slot) {
   SetDeviceAndSlot(base, g, slot);
   Store32(base, g + 0x4FF8, BE32(data.data() + 0x28));  // its continue point (header +0x28 / +0x2C)
   Store32(base, g + 0x4FFC, BE32(data.data() + 0x2C));
-  if (Load32(base, g + 0x4DA0) || Load32(base, g + 0x4DA4)) {
-    __imp__sub_825EE130(ctx, base);
-    ctx = saved;
-  }
+  // The save's video modes are applied once the game can take them (ApplyPendingVideoModes).
+  g_video_modes_pending = Load32(base, g + 0x4DA0) || Load32(base, g + 0x4DA4);
   REXLOG_INFO("KK play: loaded save slot {} '{}' (continue {} {})", slot + 1,
               std::string(reinterpret_cast<const char*>(data.data()), strnlen(reinterpret_cast<const char*>(data.data()), 31)),
               int32_t(BE32(data.data() + 0x28)), int32_t(BE32(data.data() + 0x2C)));
@@ -1115,6 +1139,7 @@ REX_HOOK_RAW(sub_8253DB80) {
   }
   if (ps2_movie) REXLOG_INFO("PS2 movie: original level loader returned, current {} requested {}",
                             Load32(base, g + 0x18), Load32(base, g + 8));
+  ApplyPendingVideoModes(ctx, base);
   ServiceProfileOptions(ctx, base);
 #if defined(KK_DEV_TOOLS)
   if (g && std::getenv("KK_DEV_AUDIO_TRACE")) {
