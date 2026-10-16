@@ -89,9 +89,10 @@ std::string WindowsDriverStamp() {
 std::string PrewarmStamp(const kkshaders::PackStamp& stamp, const nr::PipelinePrewarm::Settings& settings,
                          const std::string& player_records, const std::string& drivers) {
   std::ostringstream out;
-  out << stamp.toText() << "pipeline layouts 2\n" << drivers;
-  // Scale and temporal layouts are both prepared. These choices change shader
-  // replacements and must invalidate preparation when the player changes them.
+  // 3 (task 144): the game's own layouts (live settings: the scale and lighting constants in every
+  // pipeline), with and without the ambient-only AO; 2 prepared layouts the game never used.
+  out << stamp.toText() << "pipeline layouts 3\n" << drivers;
+  // These choices change shader replacements and must invalidate preparation when the player changes them.
   out << settings.flip_front_face << ' ' << int(settings.lighting.shadows) << ' '
       << int(settings.lighting.water) << ' ' << int(settings.lighting.volumetrics) << '\n';
   std::error_code ec;
@@ -274,6 +275,7 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
     settings.flip_front_face = game.flip_front_face;
     settings.lighting = game.lighting;
     settings.upscale = game.upscale;
+    settings.ao = game.ao;
     if (REXCVAR_GET(native_pipeline_cache)) settings.lists.push_back(place.records());
     if (REXCVAR_GET(native_pipeline_list)) settings.lists.push_back(nr::ShippedPipelineList());
   }
@@ -364,7 +366,10 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
 #if NR_HAS_VULKAN
       // The same usability check on Windows and Linux: existence alone does not
       // prove this GPU/driver can load the cache. Rebuild before Play if it cannot.
-      if (r.upToDate && previous == expected && driver_ready && job->need_driver_cache &&
+      // On Windows the stamp already holds every adapter's driver version (WindowsDriverStamp), so a
+      // driver change shows there: no device is made at every launcher start and Play just to read the
+      // cache (task 144). Elsewhere the device's own check stays.
+      if (r.upToDate && previous == expected && driver_ready && job->need_driver_cache && drivers.empty() &&
           backend == kkshaders::PackBackend::Spirv &&
           std::filesystem::is_regular_file(job->driver_cache_path, marker_error)) {
         provider = rex::ui::vulkan::VulkanProvider::Create(true, false);
@@ -401,19 +406,25 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
         if (host) {
           bool completed = true;
           job->preparing = true;
-          for (bool temporal : {false, true}) {
+          // The game's pipelines, as Backend::Initialize sets the renderer up (task 144): live settings
+          // (scale and lighting constants in every layout, scale-aware shaders), an upscaler's motion
+          // variants (a run without one makes a subset), and the AO's two layouts: without and with the
+          // ambient-only AO (its own constants and pixel shaders). Whatever the player picks later
+          // (Original or Remastered, any upscaler, AO on or off) is prepared now, so Play makes nothing new.
+          for (bool ambient : {false, true}) {
             if (job->progress.cancel) { completed = false; break; }
-            job->pass = temporal ? 1 : 0;
+            job->pass = ambient ? 1 : 0;
             job->progress.done = 0;
             job->progress.total = 0;
             auto settings = job->prewarm[backend == kkshaders::PackBackend::Spirv ? 0 : 1];
-            // Prepare both layouts even when setup currently has no upscaler selected.
-            // Pipeline keys depend on the scale-aware layout, not image dimensions.
             settings.render_scale_x = settings.render_scale_y = 1.0f;
             settings.shadow_scale = 0.0f;
-            settings.shaders_aware = temporal;
-            settings.upscale.kind = temporal ? nr::UpscalerKind::kBilinear : nr::UpscalerKind::kOff;
+            settings.shaders_aware = true;
+            settings.live_layout = true;
+            settings.upscale.kind = nr::UpscalerKind::kBilinear;
             settings.upscale.quality = nr::UpscaleQuality::kQuality;
+            settings.ao.method = nr::AoMethod::kGtao;
+            settings.ao.apply = ambient ? nr::AoApply::kAmbient : nr::AoApply::kOpaque;
             settings.shader_pack = r.pack.string();
             if (host->pipeline_cache()) {
               settings.driver_cache = host->pipeline_cache();

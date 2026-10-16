@@ -72,6 +72,8 @@ Plan MakePlan(const PipelinePlace& place, const std::filesystem::path& cache_roo
   s.flip_front_face = game.flip_front_face;
   s.lighting = game.lighting;
   s.upscale = game.upscale;
+  s.ao = game.ao;
+  s.live_layout = true;  // the game runs with live settings (pipeline_prewarm.h)
   if (REXCVAR_GET(native_pipeline_cache) && !place.empty()) s.lists.push_back(place.records());
   if (REXCVAR_GET(native_pipeline_list)) s.lists.push_back(ShippedPipelineList());
   if (REXCVAR_GET(native_vk_pipeline_cache) && !place.empty()) plan.driver_cache_path = place.driver_cache();

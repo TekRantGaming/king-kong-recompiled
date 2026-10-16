@@ -2380,6 +2380,64 @@ TEST(LauncherPrewarm_MakesThePipelinesBeforeTheGameAndHandsOverTheDriverCache) {
   CHECK_EQ(f.game->stats().skipped_pending, uint64_t(0));
 }
 
+// Task 144: the setup's shader screen prepares pipelines so Play makes none. It only can when they have
+// the game's layout. The game always runs with live settings (Backend::Initialize sets effect_settings),
+// which add the scale and lighting constants to every pipeline's layout, and its ambient-only AO adds
+// another. The setup's preparation (shader_pack_service.cpp: live_layout, both AO layouts) must make
+// exactly those layouts; the old one (no live layout) made pipelines the game never used.
+TEST(SetupPrewarm_MakesTheGamesPipelineLayouts) {
+  const std::string pack = MakePack("setup_layouts", true);
+  auto dev = CachedDevice();
+  if (!dev) return;
+  dev->MakeCurrent();
+  auto game_signature = [&](bool ambient, bool upscaler) {
+    FakeGuestMemory mem{8u << 20, 16u << 20};
+    ShaderLibrary shaders(dev->device(), mem);
+    shaders.SetRenderScaleAware(true);
+    shaders.Initialize(pack, NR_TEST_DXC_DIR);
+    GameRenderer g(dev->device(), mem, kknr::GuestMemory{mem.PhysicalBase(), mem.PhysicalSize(), 0}, &shaders);
+    g.options().effect_settings = [] { return EffectSettings{}; };  // as every game run
+    g.options().ao.method = AoMethod::kGtao;
+    g.options().ao.apply = ambient ? AoApply::kAmbient : AoApply::kOpaque;
+    if (upscaler) {
+      g.options().upscale.kind = UpscalerKind::kBilinear;
+      g.options().upscale.quality = UpscaleQuality::kQuality;
+    }
+    CHECK(g.Initialize());
+    const uint64_t s = g.layout_signature();
+    dev->WaitIdle();
+    return s;
+  };
+  auto prepared_signature = [&](bool ambient, bool live) {
+    PipelinePrewarm prewarm(dev->device());
+    PipelinePrewarm::Settings s;
+    s.shader_pack = pack;
+    s.dxc = NR_TEST_DXC_DIR;
+    s.shaders_aware = live;
+    s.live_layout = live;
+    s.upscale.kind = live ? UpscalerKind::kBilinear : UpscalerKind::kOff;
+    s.upscale.quality = UpscaleQuality::kQuality;
+    s.ao.method = AoMethod::kGtao;
+    s.ao.apply = ambient ? AoApply::kAmbient : AoApply::kOpaque;
+    CHECK(prewarm.Start(s));
+    const uint64_t signature = prewarm.renderer() ? prewarm.renderer()->layout_signature() : 0;
+    prewarm.Stop();
+    dev->WaitIdle();
+    return signature;
+  };
+  for (const bool ambient : {false, true}) {
+    const uint64_t prepared = prepared_signature(ambient, true);
+    CHECK(prepared != 0);
+    // With or without an upscaler, the game's layout is the prepared one.
+    CHECK_EQ(prepared, game_signature(ambient, true));
+    CHECK_EQ(prepared, game_signature(ambient, false));
+  }
+  // The two AO layouts differ: both must be prepared.
+  CHECK(prepared_signature(false, true) != prepared_signature(true, true));
+  // Negative control: the preparation before task 144 (no live layout, no AO) made other layouts.
+  CHECK(prepared_signature(false, false) != game_signature(false, false));
+}
+
 TEST(LauncherPrewarm_StopsBeforeItIsDone) {
   // Play pressed at once: Stop leaves the rest to the game and returns after the pipelines being
   // made. A list of many descriptions (the scene's pipeline under 64 colour masks and blends).

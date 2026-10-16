@@ -128,11 +128,12 @@ void GameRenderer::LightingCensusDraw(const DrawCall& call, const dev::DeviceVie
 }
 
 void GameRenderer::LightingLayoutBindings(nvrhi::BindingLayoutDesc& set0) const {
-  if (options_.effect_settings || options_.lighting.any()) set0.bindings.push_back(nvrhi::BindingLayoutItem::VolatileConstantBuffer(5));
+  if (options_.effect_settings || options_.live_layout || options_.lighting.any())
+    set0.bindings.push_back(nvrhi::BindingLayoutItem::VolatileConstantBuffer(5));
 }
 
 bool GameRenderer::LightingSetBindings(nvrhi::BindingSetDesc& set0) {
-  if (!options_.effect_settings && !options_.lighting.any()) return true;
+  if (!options_.effect_settings && !options_.live_layout && !options_.lighting.any()) return true;
   nvrhi::BufferDesc d;
   d.byteSize = sizeof(kkshaders::LightingConstants);
   d.isConstantBuffer = true;

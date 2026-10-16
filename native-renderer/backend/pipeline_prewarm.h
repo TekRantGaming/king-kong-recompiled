@@ -18,6 +18,7 @@
 #include <nvrhi/nvrhi.h>
 #include "backend/vulkan_requirements.h"
 
+#include "backend/ao_config.h"
 #include "backend/lighting_config.h"
 #include "backend/upscale_config.h"
 
@@ -41,6 +42,13 @@ class PipelinePrewarm {
     // The lighting options (docs/lighting.md): they add b5 to the game's layout and change shaders.
     LightingConfig lighting;
     UpscaleConfig upscale;
+    // As the game: a run always has live settings (the graphics panel; Backend::Initialize), which put the
+    // scale and lighting constants in every pipeline's layout and use the scale-aware shaders. The setup's
+    // and the launcher's preparation set it (task 144); off is a renderer without them (older tests).
+    bool live_layout = false;
+    // The ambient occlusion the game draws with: its ambient-only mode adds a constant buffer (b4) and
+    // its own pixel shaders, so it makes other pipelines.
+    AoConfig ao;
     // Pipeline files to make, read only, in this order (the player's cache file, the shipped list).
     std::vector<std::string> lists;
     // The driver's pipeline cache of the prewarm's device and its file (null: none): read at Start,
@@ -69,6 +77,8 @@ class PipelinePrewarm {
   Progress progress();
   // Waits until the workers are done or `seconds` passed; true when done.
   bool Wait(double seconds);
+  // The renderer making the pipelines (null before Start or after Stop), for tests.
+  const GameRenderer* renderer() const { return renderer_.get(); }
   // Stops the workers once their current pipeline is made (the rest is left to the game) and saves
   // the driver's pipeline cache. Idempotent.
   void Stop();

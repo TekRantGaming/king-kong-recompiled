@@ -261,6 +261,13 @@ bool GameRenderer::Initialize() {
   AoLayoutBindings(constants);  // AO hook (game_ao.cpp): b4 for the ambient-only shaders
   LightingLayoutBindings(constants);  // Lighting hook (game_lighting.cpp): b5 for the lighting options
   constants_layout_ = device_->createBindingLayout(constants);
+  // What every game pipeline's layout is made of (set 0's constant buffers and the tables' capacities):
+  // a pipeline prepared before play is the game's only when this matches (pipeline_prewarm.h).
+  layout_signature_ = 1469598103934665603ull;
+  auto mix = [this](uint64_t v) { layout_signature_ = (layout_signature_ ^ v) * 1099511628211ull; };
+  for (const nvrhi::BindingLayoutItem& item : constants.bindings) mix((uint64_t(item.type) << 32) | item.slot);
+  for (uint32_t capacity : options_.table_capacities) mix(capacity);
+  mix(scaled() ? 1 : 0);
   if (!constants_layout_) return false;
 
   auto make_cb = [&](uint32_t size, const char* name) {
