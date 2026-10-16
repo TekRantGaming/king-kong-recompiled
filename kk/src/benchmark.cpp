@@ -467,7 +467,8 @@ class Dialog final : public rex::ui::ImGuiDialog {
     const MonitorView v = monitor.View();
     ImGui::SetNextWindowPos(live ? ImVec2(16 * scale, 16 * scale) : ImVec2(io.DisplaySize.x / 2, io.DisplaySize.y / 2),
         ImGuiCond_Always, live ? ImVec2(0, 0) : ImVec2(.5f, .5f));
-    ImGui::SetNextWindowSize(ImVec2(std::min((live ? 510.f : 420.f) * scale, io.DisplaySize.x - 32), 0), ImGuiCond_Always);
+    const float width = std::min((live ? 510.f : 420.f) * scale, io.DisplaySize.x - 32);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0), ImVec2(width, std::max(120.f, io.DisplaySize.y - 32 * scale)));
     ui::PushGraphicsPanelStyle(.90f);
     ImGui::PushStyleColor(ImGuiCol_PlotLines, ui::color::kAccent);
     const auto flags = ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoFocusOnAppearing |
@@ -482,6 +483,15 @@ class Dialog final : public rex::ui::ImGuiDialog {
         ImGui::TextUnformatted(text::F("Pass {0} of {1}", {std::to_string(pass_index.load() + 1), std::to_string(passes)}).c_str());
       if (!recording_route && p == Phase::kRunning && !measuring)
         ImGui::TextDisabled("%s", T("Settling, not measured yet"));
+      if (!recording_route) {
+        if (cancelled) ImGui::TextUnformatted(T("Cancelling..."));
+        else {
+          if (ImGui::Button(T("Cancel"))) Cancel("mouse");
+          ImGui::SameLine();
+          ImGui::TextDisabled("%s", T("B, Back or Start on the controller, or Esc, also cancels."));
+        }
+        ImGui::Separator();
+      }
       if (!recording_route && monitoring) {
         ImGui::Text("%s: %.1f | %s: %.1f", T("Current FPS"), v.current_fps, T("Average FPS"), v.frames.average_fps);
         ImGui::Text("%s: %.1f | %s: %.1f", T("1% low FPS"), v.frames.low_fps, T("0.1% low FPS"), v.frames.low01_fps);
@@ -494,15 +504,6 @@ class Dialog final : public rex::ui::ImGuiDialog {
         if (v.recent_count) ImGui::PlotLines("##live-graph", v.recent.data(), int(v.recent_count), 0, nullptr, 0,
             std::max(40.f, *std::max_element(v.recent.begin(), v.recent.begin() + v.recent_count)), ImVec2(-1, 64 * scale));
         Configuration(v);
-      }
-      if (!recording_route) {
-        ImGui::Separator();
-        if (cancelled) ImGui::TextUnformatted(T("Cancelling..."));
-        else {
-          if (ImGui::Button(T("Cancel"))) Cancel("mouse");
-          ImGui::SameLine();
-          ImGui::TextDisabled("%s", T("B, Back or Start on the controller, or Esc, also cancels."));
-        }
       }
     } else {
       ImGui::TextUnformatted(T(p == Phase::kSaving ? "Saving results..." : "Returning to the launcher..."));
@@ -610,6 +611,12 @@ std::filesystem::path Prepare(const std::filesystem::path& root) {
     recording.build = KK_VERSION " / " KK_BENCH_BUILD " / " __DATE__ " " __TIME__;
     recording.samples.reserve(262144);
   }
+#if defined(_WIN32)
+  // Other programs at normal priority (a build, a download) take turns with the
+  // game less often while it is measured. This process exits after the run.
+  if (!recording_route && SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS))
+    REXLOG_INFO("KK benchmark: process priority above normal for the run");
+#endif
   REXLOG_INFO("KK benchmark: {} passes, {} settle seconds per chapter", passes, settle_seconds);
   play::SetStartRequest({play::StartKind::kChapter, 0,
       recording.chapters.front().entry, "Benchmark"});
@@ -826,6 +833,15 @@ int NextChapter() {
       chapter_index = 0;
       ++pass_index;
       next_checkpoint = 0;
+#if defined(_WIN32) && defined(KK_DEV_TOOLS)
+      // Test aid: KK_DEV_BENCH_PRIORITY_AB=1 measures even passes at normal
+      // priority, odd passes above normal, to compare them under the same load.
+      if (std::getenv("KK_DEV_BENCH_PRIORITY_AB")) {
+        const bool boost = pass_index % 2 == 0;
+        SetPriorityClass(GetCurrentProcess(), boost ? ABOVE_NORMAL_PRIORITY_CLASS : NORMAL_PRIORITY_CLASS);
+        REXLOG_INFO("KK benchmark: pass {} priority {}", pass_index.load() + 1, boost ? "above normal" : "normal");
+      }
+#endif
     } else {
       ++chapter_index;
     }

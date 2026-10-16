@@ -75,7 +75,7 @@ Page StartPage(bool have_results) {
   Page p;
   p.title = "Benchmark";
   p.body = "Plays a recorded route through four chapters with your graphics settings and private saves. "
-           "A standard run plays it three times (about 11 minutes) and reports the middle result of each "
+           "A standard run plays it three times (about 10 minutes) and reports the middle result of each "
            "chapter with how close the passes were. A quick run plays it once (about 4 minutes). Close other "
            "programs first. To cancel during the run, press B, Back or Start on the controller, or Esc.";
   p.buttons = {"Standard run", "Quick run"};

@@ -4610,6 +4610,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   void OpenBenchmarkResults(int focus = 0) {
     const auto result = bench_ui::LoadNewest(paths_.user_dir);
     const auto page = bench_ui::ResultsPage(result);
+    REXLOG_INFO("KK launcher: benchmark results page ({}, {} pass rows)",
+                result.found ? result.dir.filename().string() : std::string("no results"), result.rows.size());
     OpenModal(page.title, page.body, page.buttons, page.cancel, [this, result](int i) {
       switch (bench_ui::ResultChoiceFor(i)) {
         case bench_ui::ResultChoice::kRunAgain: OpenBenchmark(); break;

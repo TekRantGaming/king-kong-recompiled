@@ -59,14 +59,14 @@ Get-ChildItem Env: | Where-Object {$_.Name -like 'KK_*' -or $_.Name -like 'REX_D
  ForEach-Object {[Environment]::SetEnvironmentVariable($_.Name,$null,'Process')}
 $env:SDL_WINDOW_ACTIVATE_WHEN_SHOWN='0'; $env:SDL_WINDOW_ACTIVATE_WHEN_RAISED='0'
 foreach($pair in ($Env -split ';' | Where-Object {$_})) { $k,$v=$pair -split '=',2; [Environment]::SetEnvironmentVariable($k,$v,'Process') }
-# The same requested settings for every build: 1280x720 window and output, 2x internal (2560x1440),
+# The same requested settings for every build: 1280x720 window and output, render scale 2 (2560x1440),
 # upscaler off, GTAO, GI off (Beta 3 has none), unfinished effects off, uncapped, VSync off.
 $arguments=@('--fullscreen=false','--window_width=1280','--window_height=720','--kk_fullscreen_mode=desktop',
  "--user_data_root=$run/userdata","--game_data_root=$workspace/kk/assets",
  "--cache_root=$cache","--log_file=$run/run.log","--config=$run/king_kong.toml",
  '--kk_renderer=native','--gpu_plugin=native','--kk_original_look=false','--kk_frame_rate=0','--vsync=false',
  '--video_mode_width=1280','--video_mode_height=720','--kk_render_quality=custom',
- '--draw_resolution_scale_x=2','--draw_resolution_scale_y=2','--native_render_scale=1',
+ '--draw_resolution_scale_x=1','--draw_resolution_scale_y=1','--native_render_scale=2',
  '--native_upscaler=off','--native_ao_method=gtao','--ao_mode=1','--ao_strength=3',
  '--kk_check_updates=false','--kk_online_count=false','--kk_discord_status=false')
 if($Build -ne 'beta3') {
@@ -90,6 +90,18 @@ public static class Task147Shot {
  [DllImport("user32.dll")] static extern bool PrintWindow(IntPtr w, IntPtr dc, uint f);
  [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr w, out Rect r);
  [StructLayout(LayoutKind.Sequential)] struct Rect { public int l,t,r,b; }
+ delegate bool EnumProc(IntPtr w, IntPtr p);
+ [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc f, IntPtr p);
+ [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr w, out uint pid);
+ [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr w);
+ // The largest visible top-level window of a process (never another program's).
+ public static IntPtr WindowOf(int pid) {
+  IntPtr best=IntPtr.Zero; long area=0;
+  EnumWindows((w,p)=>{ uint id; GetWindowThreadProcessId(w,out id); Rect r;
+   if(id==(uint)pid && IsWindowVisible(w) && GetWindowRect(w,out r)) { long a=(long)(r.r-r.l)*(r.b-r.t); if(a>area){area=a;best=w;} }
+   return true; }, IntPtr.Zero);
+  return best;
+ }
  public static bool Capture(IntPtr w,string path) {
   if(w==IntPtr.Zero)return false;
   var old=SetThreadDpiAwarenessContext(new IntPtr(-4));
@@ -138,15 +150,17 @@ try {
   if($progress -and $progress -ne $last){Write-Output $progress;$last=$progress}
   if($Mode -eq 'route') {
    if(!$overlay -and $log -match 'replay: pass 1 chapter 1' -and ((Get-Date)-$started).TotalSeconds -gt 40) {
-    $game.Refresh(); if([Task147Shot]::Capture($game.MainWindowHandle,"$run/overlay.png")){$shots+='overlay.png'}; $overlay=$true
+    if([Task147Shot]::Capture([Task147Shot]::WindowOf($game.Id),"$run/overlay.png")){$shots+='overlay.png'}; $overlay=$true
    }
    if(!$doneAt -and $log.Contains('KK benchmark: complete,')) {$doneAt=Get-Date}
    if($doneAt) {
     if(!$ShotLauncher) {$complete=$true; break}
     $relaunch=@(Own-Games | Where-Object {$_.ProcessId -ne $game.Id})
     if($relaunch.Count -and ((Get-Date)-$doneAt).TotalSeconds -gt 14) {
-     $p=Get-Process -Id $relaunch[0].ProcessId -ErrorAction SilentlyContinue
-     if($p -and $p.MainWindowHandle -ne 0 -and [Task147Shot]::Capture($p.MainWindowHandle,"$run/launcher-results.png")){$shots+='launcher-results.png'}
+     foreach($r in $relaunch) {
+      $w=[Task147Shot]::WindowOf([int]$r.ProcessId)
+      if($w -ne [IntPtr]::Zero -and [Task147Shot]::Capture($w,"$run/launcher-results.png")){$shots+='launcher-results.png'; break}
+     }
      $complete=$true; break
     }
     if(((Get-Date)-$doneAt).TotalSeconds -gt 60) {$complete=$true; Write-Output 'No relaunch window seen'; break}
