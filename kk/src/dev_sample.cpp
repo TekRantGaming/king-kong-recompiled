@@ -309,7 +309,10 @@ Sampler& Get() {
 }  // namespace
 
 // For other dev aids that sample inside the AI pass.
+void DevClockAi();  // dev_clock_trace.cpp
+
 void DevSampleTick(PPCContext* ctx, uint8_t* base, uint32_t world) {
+  DevClockAi();
   static const bool on = Get().on();
   if (on) Get().Tick(ctx, base, world);
 }

@@ -16,6 +16,16 @@
 // game's own millisecond clock (0x82CCAE1C, used for absolute times) is left
 // as it is, and a world that asks for fixed steps (its byte +2444) keeps them.
 //
+// Start-up clock (kk_hfr_fixes, "start_clock"): the game clock is real time since boot (sub_8287DFE8
+// resets it there) and the game time the world reads is that clock minus the time spent paused
+// (0x82CCC02C). When the port carries out a start (launcher, --kk_start, benchmark), boot runs a fixed
+// number of covered frames before the chapter's level (title level, the port's 5-frame wait: 26-28
+// frames), so the level began about 0.45 s earlier in game time at 60 FPS and 0.65 s at 120 than at
+// 30. Things that run on game time from the level's start then start at another phase (the Necropolis
+// boat's start-up lean). Until that level has loaded, each frame now counts at least 1/30 s of game time
+// (the paused total is lowered by the rest), as at 30 FPS; loading stalls count as they are. Frames in
+// play are never changed, and a boot through the game's own menus has no fixed start to keep.
+//
 // Dev builds: KK_DEV_FORCE_DT=0.004 (seconds) replaces the frame time with that
 // value every frame instead, so each system steps as it would at 250 FPS on a
 // PC that cannot reach it (the game then runs slower than real time);
@@ -31,11 +41,15 @@
 #include "hfr.h"
 #include "benchmark.h"
 #include "freecam.h"
+#include "play_internal.h"
+
+#include <rex/logging.h>
 
 namespace kk {
 #if defined(KK_DEV_TOOLS)
 double DevSecondsSinceMenu();
 void DevFrameLogTick(const uint8_t* base);  // dev_frame_log.cpp
+void DevClockFrame(const uint8_t* base);    // dev_clock_trace.cpp
 #endif
 }  // namespace kk
 
@@ -47,6 +61,9 @@ using Clock = std::chrono::steady_clock;
 constexpr uint32_t kRawFrameTime = 0x82C4EDBC;
 constexpr uint32_t kTimeScale = 0x828D178C;
 constexpr uint32_t kUniverse = 0x828E836C;  // +12: the current world (its +2444: fixed step in 1/60 s)
+constexpr uint32_t kGameClock = 0x82CCAE1C;      // real seconds since boot (sub_8272CA20)
+constexpr uint32_t kPausedTotal = 0x82CCC02C;    // game time = clock - this
+constexpr float kBootFrame = 1.0f / 30.0f;
 
 #if defined(KK_DEV_TOOLS)
 bool ForceFrameTime(uint8_t* base) {
@@ -84,16 +101,41 @@ void SetFrameTime(PPCContext& ctx, uint8_t* base) {
   StoreF(base, kFrameTime, dt * LoadF(base, kTimeScale));
 }
 
+// The start-up clock above: once a frame, after the game has set its clock (it was `before`).
+void StartClock(uint8_t* base, float before) {
+  using namespace kk::hfr;
+  static bool seen = false, done = false;
+  static int frames = 0;
+  static double added = 0.0;
+  if (done) return;
+  if (!kk::play::StartLevelLoading()) {
+    if (seen) {
+      done = true;
+      if (frames) REXLOG_INFO("KK hfr: start-up clock +{:.3f} s over {} boot frames", added, frames);
+    }
+    return;
+  }
+  seen = true;
+  const float step = LoadF(base, kGameClock) - before;
+  if (!On("start_clock") || !(step >= 0.0f && step < kBootFrame)) return;
+  StoreF(base, kPausedTotal, LoadF(base, kPausedTotal) - (kBootFrame - step));
+  added += kBootFrame - step;
+  ++frames;
+}
+
 }  // namespace
 
 // The one hook on sub_8272CA20: the frame time as above, then the developer frame log
 // (KK_DEV_DT_LOG, dev_frame_log.cpp), which reads what it ended up as.
 REX_HOOK_RAW(sub_8272CA20) {
   kk::freecam::Frame(base);
+  const float clock = kk::hfr::LoadF(base, kGameClock);
   SetFrameTime(ctx, base);
+  StartClock(base, clock);
   kk::benchmark::Frame(kk::hfr::LoadF(base, kRawFrameTime),
       kk::hfr::LoadF(base, kk::hfr::kFrameTime), base);
 #if defined(KK_DEV_TOOLS)
   kk::DevFrameLogTick(base);
+  kk::DevClockFrame(base);
 #endif
 }

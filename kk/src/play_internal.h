@@ -67,6 +67,10 @@ bool ApplyCheatsNow(uint8_t* base);
 // The session the launcher started (a start request was carried out).
 bool SessionActive();
 
+// A start the port carries out (the launcher's, --kk_start, the benchmark) is waiting for its level or
+// loading it: the frames before it (logos, title) are covered. False once that level has loaded.
+bool StartLevelLoading();
+
 // One of the game's menu pages (the chapter select, the start menu) is about to run. In a session the
 // launcher started, that means play is over (a chapter-select run ends on the start menu's level, after
 // its Score pages and save question): back to the launcher instead. True when the page must not run.
