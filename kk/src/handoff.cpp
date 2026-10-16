@@ -31,7 +31,8 @@ HANDLE g_event = nullptr;    // parent: signalled by the child's first frame
 HANDLE g_process = nullptr;  // parent: the child
 std::string g_child_event;   // child: the event's name, until signalled
 std::atomic<bool> g_child_armed{false};
-std::atomic<int> g_presents{0};
+std::atomic<int> g_presents{0};       // presented frames since ContentDrawn
+std::atomic<bool> g_content{false};   // ContentDrawn was called
 
 // The program's own top-level window when it is the foreground window (the player is looking at it).
 HWND OwnForegroundWindow() {
@@ -144,10 +145,17 @@ void ArmChild() {
 #endif
 }
 
+void ContentDrawn() {
+#if defined(_WIN32)
+  if (g_child_armed.load(std::memory_order_relaxed)) g_content.store(true, std::memory_order_release);
+#endif
+}
+
 void OnPresent() {
 #if defined(_WIN32)
-  if (!g_child_armed.load(std::memory_order_relaxed)) return;
-  // The second presented frame: the first is surely on screen by then.
+  if (!g_child_armed.load(std::memory_order_relaxed) || !g_content.load(std::memory_order_acquire)) return;
+  // The second presented frame after the content was drawn: it is surely on screen by then (a blank frame
+  // the presenter shows before the launcher or the game has drawn does not count).
   if (g_presents.fetch_add(1) + 1 < 2) return;
   if (!g_child_armed.exchange(false)) return;
   if (HANDLE e = OpenEventA(EVENT_MODIFY_STATE, FALSE, g_child_event.c_str())) {

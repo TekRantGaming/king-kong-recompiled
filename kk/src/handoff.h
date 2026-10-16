@@ -28,6 +28,9 @@ void QuitWhenChildShown(std::function<void()> quit);
 
 // Child side: called once, early. Does nothing unless this process was started by a handoff.
 void ArmChild();
+// This process drew what it shows (the launcher's page, the game's black cover or its first frame): the
+// next presented frame lets the previous process close. Any thread.
+void ContentDrawn();
 // A frame was presented (the present observer; also called from the benchmark's own observer).
 void OnPresent();
 

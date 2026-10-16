@@ -1,4 +1,5 @@
 #include "launcher.h"
+#include "handoff.h"
 #include "startup_recovery.h"
 #include "ingame_settings.h"
 #include "pause_menu.h"
@@ -2440,6 +2441,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     DrawBottomBar(dl);  // over a pop-up's shade: its prompts stay clear
     ImGui::End();
     NoteActivity(io);
+    handoff::ContentDrawn();  // started by the game going back: it closes once this page is on screen
 #if defined(KK_DEV_TOOLS)
     DevPerf(draw_start);
 #endif

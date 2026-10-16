@@ -1,4 +1,5 @@
 #include "ui_paint.h"
+#include "handoff.h"
 
 #include "overlay.h"
 #include "freecam.h"
@@ -69,8 +70,10 @@ class FpsOverlay final : public rex::ui::ImGuiDialog {
 #endif
     // Black while the launcher's start request is carried out (the title and the game's menus never
     // show) and on the way back to the launcher.
-    if (play::CoverScreen())
+    if (play::CoverScreen()) {
       ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), io.DisplaySize, IM_COL32(0, 0, 0, 255));
+      handoff::ContentDrawn();  // the game's black cover is up: the launcher before it may close
+    }
     if (!REXCVAR_GET(kk_show_fps)) return;
     const auto stats = GetGuestFrameStats();
     if (stats.frame_count == 0) return;  // nothing to show yet (launcher, loading)
