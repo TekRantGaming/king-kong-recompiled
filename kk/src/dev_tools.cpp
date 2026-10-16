@@ -64,6 +64,7 @@
 #endif
 
 #include "art.h"
+#include "dev_movie_input.h"
 #include "guest.h"
 #include "menu_hook.h"
 #include "shader_pack.h"
@@ -108,17 +109,13 @@ constexpr uint32_t kRsUp = 1u << 18, kRsDown = 1u << 19, kRsLeft = 1u << 20, kRs
 // movies never opens the pause menu once they're over.
 constexpr uint32_t kSkip = 1u << 23;
 
-// The game's movie player (*(0x82CCAE80)): +268 and +272 are set while a movie
-// is starting or playing (sub_82723AF0 won't start another until both are 0).
 bool MoviePlaying() {
   if (!g_guest_base) return false;
-  auto load = [](uint32_t a) {
+  return DevMoviePlaying([](uint32_t a) {
     uint32_t v;
     std::memcpy(&v, g_guest_base + a, 4);
     return std::byteswap(v);
-  };
-  const uint32_t player = load(0x82CCAE80);
-  return player && (load(player + 268) || load(player + 272));
+  });
 }
 std::vector<Step> g_script;
 double g_script_end = 0;

@@ -7,6 +7,7 @@
 #include "cursor_activity.h"
 #include "slider_input.h"
 #include "extras.h"
+#include "dev_movie_input.h"
 
 #include <bit>
 #include <chrono>
@@ -329,6 +330,21 @@ void AllSavesChecks() {
 }  // namespace
 
 int main() {
+  // Extras playback does not set either story-movie flag. SKIP must still
+  // send Start, and must stop sending it once playback ends.
+  std::map<uint32_t, uint32_t> movie;
+  auto read_movie = [&](uint32_t address) { return movie.at(address); };
+  movie[0x82CCAE80] = 0;
+  Check(!kk::DevMoviePlaying(read_movie), "no movie player is idle without dereferencing it");
+  movie[0x82CCAE80] = 0x1000;
+  for (uint32_t flags = 0; flags < 8; ++flags) {
+    movie[0x110C] = flags & 1;
+    movie[0x1110] = flags & 2;
+    movie[0x1130] = flags & 4;
+    Check(kk::DevMoviePlaying(read_movie) == (flags != 0), "story and Extras playback enable scripted skip");
+  }
+  movie[0x110C] = movie[0x1110] = movie[0x1130] = 0;
+  Check(!kk::DevMoviePlaying(read_movie), "completed Extras playback cannot pause the next screen");
   // All launcher/pause slider ranges and F8's float/integer/opacity controls.
   for (auto range : std::vector<std::array<float, 3>>{{0,100,1}, {0,100,5}, {69,110,1}, {0,100,10},
        {0.05f,10,0.05f}, {0,50,1}, {0,1,0.05f}, {0,4,0.05f}, {0.25f,4,0.05f},
