@@ -5,9 +5,11 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <string>
 #include <vector>
+#include "backend/background_file_writer.h"
 #include "kknr/texture_cache.h"
 
 namespace nr {
@@ -47,13 +49,43 @@ class ResourcePreloadFile {
     const auto bytes = file.tellg();
     if (bytes < 24 || bytes > 24 + std::streamoff(kMaxRecords * 36)) return false;
     file.seekg(0);
+    std::vector<uint8_t> data(static_cast<size_t>(bytes));
+    file.read(reinterpret_cast<char*>(data.data()), std::streamsize(data.size()));
+    if (!file) return false;
+    return Decode(data, records);
+  }
+  // The file's bytes (task 177: the render thread encodes, the background writer writes). False when
+  // there are too many records.
+  static bool Encode(const std::vector<ResourcePreloadRecord>& records, std::vector<uint8_t>& out) {
+    out.clear();
+    if (records.size() > kMaxRecords) return false;
+    std::vector<std::array<uint32_t, 9>> wire;
+    wire.reserve(records.size());
+    for (const auto& r : records) {
+      std::array<uint32_t, 9> w{};
+      w[0] = r.kind;
+      std::copy(r.words.begin(), r.words.end(), w.begin() + 1);
+      w[7] = uint32_t(r.hash); w[8] = uint32_t(r.hash >> 32);
+      wire.push_back(w);
+    }
+    const uint64_t hash = kknr::HashBytes(wire.data(), wire.size() * sizeof(wire[0]));
+    const uint32_t header[] = {0x52504B4B, 1, uint32_t(wire.size()), 0, uint32_t(hash), uint32_t(hash >> 32)};
+    out.resize(sizeof(header) + wire.size() * sizeof(wire[0]));
+    std::memcpy(out.data(), header, sizeof(header));
+    if (!wire.empty()) std::memcpy(out.data() + sizeof(header), wire.data(), wire.size() * sizeof(wire[0]));
+    return true;
+  }
+  static bool Decode(const std::vector<uint8_t>& data, std::vector<ResourcePreloadRecord>& records) {
+    records.clear();
+    const size_t bytes = data.size();
+    if (bytes < 24 || bytes > 24 + kMaxRecords * 36) return false;
     uint32_t header[6]{};
-    file.read(reinterpret_cast<char*>(header), sizeof(header));
-    if (!file || header[0] != 0x52504B4B || header[1] != 1 || header[2] > kMaxRecords ||
-        bytes != 24 + std::streamoff(header[2] * 36) || header[3]) return false;
+    std::memcpy(header, data.data(), sizeof(header));
+    if (header[0] != 0x52504B4B || header[1] != 1 || header[2] > kMaxRecords ||
+        bytes != 24 + size_t(header[2]) * 36 || header[3]) return false;
     std::vector<std::array<uint32_t, 9>> wire(header[2]);
-    file.read(reinterpret_cast<char*>(wire.data()), wire.size() * sizeof(wire[0]));
-    if (!file || kknr::HashBytes(wire.data(), wire.size() * sizeof(wire[0])) !=
+    if (!wire.empty()) std::memcpy(wire.data(), data.data() + 24, wire.size() * sizeof(wire[0]));
+    if (kknr::HashBytes(wire.data(), wire.size() * sizeof(wire[0])) !=
         (uint64_t(header[4]) | uint64_t(header[5]) << 32)) return false;
     for (const auto& w : wire) {
       if (w[0] > ResourcePreloadRecord::Index32) { records.clear(); return false; }
@@ -65,23 +97,11 @@ class ResourcePreloadFile {
     }
     return true;
   }
+  // Synchronous write (tests, tools); atomic since task 177 (temp file + rename).
   static bool Write(const std::string& path, const std::vector<ResourcePreloadRecord>& records) {
-    if (path.empty() || records.size() > kMaxRecords) return false;
-    std::vector<std::array<uint32_t, 9>> wire;
-    for (const auto& r : records) {
-      std::array<uint32_t, 9> w{};
-      w[0] = r.kind;
-      std::copy(r.words.begin(), r.words.end(), w.begin() + 1);
-      w[7] = uint32_t(r.hash); w[8] = uint32_t(r.hash >> 32);
-      wire.push_back(w);
-    }
-    const uint64_t hash = kknr::HashBytes(wire.data(), wire.size() * sizeof(wire[0]));
-    const uint32_t header[] = {0x52504B4B, 1, uint32_t(wire.size()), 0, uint32_t(hash), uint32_t(hash >> 32)};
-    std::ofstream file(path, std::ios::binary | std::ios::trunc);
-    file.write(reinterpret_cast<const char*>(header), sizeof(header));
-    file.write(reinterpret_cast<const char*>(wire.data()), wire.size() * sizeof(wire[0]));
-    file.close();
-    return bool(file);
+    std::vector<uint8_t> bytes;
+    if (path.empty() || !Encode(records, bytes)) return false;
+    return ReplaceFileAtomically(path, bytes.data(), bytes.size());
   }
 };
 

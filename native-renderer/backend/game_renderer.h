@@ -41,6 +41,7 @@
 #include "backend/smaa.h"
 #include "backend/ao_config.h"
 #include "backend/ao_timer.h"
+#include "backend/background_file_writer.h"
 #include "backend/scene_ao.h"
 #include "backend/scene_gi.h"
 #include "backend/scene_lighting.h"
@@ -206,6 +207,7 @@ class GameRenderer {
     uint64_t dynamic_vertex_buffers = 0;  // vertex buffers turned dynamic
     uint64_t dynamic_vertex_bytes = 0;    // bytes their draws uploaded
     uint64_t cache_recorded = 0;     // descriptions appended to the pipeline cache file
+    double resource_save_render_ms = 0;  // render-thread time in SaveResourcePreload (task 177: encode + queue)
     uint64_t prewarm_queued = 0;     // cached descriptions sent to the workers
     uint64_t prewarm_deferred = 0;   // cached descriptions whose shaders were not available yet
     uint64_t prewarm_failed = 0;     // cached descriptions that could not be built or created
@@ -321,6 +323,9 @@ class GameRenderer {
   // Versioned chapter hints shipped beside the executable. Read before the first
   // draw; independent of the writable pipeline/local-learning cache.
   bool LoadResourceList(const std::string& path);
+  // Task 177: the learned resource lists and the pipeline cache file's new records are written on a
+  // background thread (never in a frame). Blocks until everything queued so far is on disk (tests).
+  void FlushFileWrites() { file_writer_.Flush(); }
 
   // The pipeline cache file (pipeline_cache.h): reads the descriptions of earlier runs and
   // starts creating them on the worker threads, then appends each new description the draws
@@ -681,6 +686,10 @@ class GameRenderer {
   std::vector<std::thread> pipeline_threads_;
   std::condition_variable pipeline_done_cv_;
   PipelineCacheFile cache_file_;
+  // Task 177: file writes off the render thread (learned resource lists, the cache file's new records).
+  // Stopped (flushed and joined) in the destructor before cache_file_ closes.
+  BackgroundFileWriter file_writer_;
+  std::atomic<bool> pipeline_records_queued_{false};
   std::mutex cache_mutex_;                    // the file and deferred_ (SetPipelineCache comes from another thread)
   std::vector<PipelineRecord> deferred_;
   std::unordered_set<uint64_t> prewarm_seen_;  // keys sent to the prewarm from any source (cache_mutex_)

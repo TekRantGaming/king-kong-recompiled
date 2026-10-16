@@ -108,6 +108,16 @@ nvrhi::ComparisonFunc CompareFrom(uint32_t f) { return nvrhi::ComparisonFunc((f 
 GameRenderer::GameRenderer(nvrhi::IDevice* device, const GuestMemory& memory,
                            kknr::GuestMemory physical, ShaderLibrary* shaders)
     : device_(device), memory_(memory), physical_(physical), shaders_(shaders) {
+  // Developer aids (task 177): KK_DEV_SLOW_PRELOAD_SAVE_MS=<ms> delays every learned-list write as a
+  // slow disk would; KK_DEV_SYNC_FILE_WRITES=1 writes on the render thread again (the old path).
+  if (const char* value = std::getenv("KK_DEV_SLOW_PRELOAD_SAVE_MS"); value && *value) {
+    file_writer_.set_delay_ms(uint32_t(std::strtoul(value, nullptr, 10)));
+    Logf(LogLevel::kInfo, "rexgpu-native: learned resource list writes delayed by %s ms (developer aid)", value);
+  }
+  if (const char* value = std::getenv("KK_DEV_SYNC_FILE_WRITES"); value && *value == '1') {
+    file_writer_.set_synchronous(true);
+    Logf(LogLevel::kInfo, "rexgpu-native: file writes on the render thread (developer A/B, the old path)");
+  }
   textures_.release_host = [this](kknr::TextureCache::Entry& e) {
     for (auto it = resolved_by_base_.begin(); it != resolved_by_base_.end();) {
       it = it->second == &e ? resolved_by_base_.erase(it) : std::next(it);
@@ -146,6 +156,9 @@ GameRenderer::~GameRenderer() {
   }
   // What this run added to the driver's pipeline cache (the workers are stopped).
   if (driver_cache_ && driver_cache_new_.load() > 0) SaveDriverPipelineCache();
+  // Every queued file write is finished before the renderer (and its cache folder's owner) goes;
+  // cache_file_'s own Close then writes records still waiting.
+  file_writer_.Stop();
   textures_.Trim(UINT64_MAX / 2, 0);
   vertex_buffers_.Trim(UINT64_MAX / 2, 0);
   index_buffers_.Trim(UINT64_MAX / 2, 0);
@@ -1037,8 +1050,13 @@ void GameRenderer::EndFrame() {
   RetryDeferred();
   stats_.driver_cache_saves = driver_cache_saves_.load(std::memory_order_relaxed);
   stats_.driver_cache_bytes = driver_cache_bytes_.load(std::memory_order_relaxed);
-  std::lock_guard lock(cache_mutex_);
-  cache_file_.Flush();
+  // New cache file records go to disk on the file writer (task 177), one queued write at a time.
+  if (cache_file_.has_pending() && !pipeline_records_queued_.exchange(true)) {
+    file_writer_.Post([this] {
+      pipeline_records_queued_.store(false);
+      cache_file_.Flush();
+    });
+  }
 }
 
 void GameRenderer::PipelineWorker() {

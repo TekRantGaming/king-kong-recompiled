@@ -82,11 +82,16 @@ class KingKongApp : public rex::ReXApp {
   bool OnWindowCloseRequested() override {
     // The SDK's accepted window close hard-exits without running our destructor.
     kk::benchmark::Shutdown();
+    kk::play::FlushRendererFiles();
     kk::startup::CleanExit();
     return true;
   }
 
-  void OnShutdown() override { kk::benchmark::Shutdown(); kk::startup::CleanExit(); }
+  void OnShutdown() override {
+    kk::benchmark::Shutdown();
+    kk::play::FlushRendererFiles();
+    kk::startup::CleanExit();
+  }
 
   // Task 173: a restore from minimised is not a size change, and the SDK's presenter retries a surface it
   // found zero-sized (minimised) only at a size change: reconnect it here, as a resize would.

@@ -260,3 +260,57 @@ TEST(ResourceBundle_ToolMergedCountLimitsAndDirectorySymlink) {
 }
 
 NR_TEST_MAIN()
+
+// Task 177: the list is now encoded on the render thread and written by the background file writer
+// (temp file + rename). The bytes must be exactly what the old synchronous writer produced.
+namespace {
+bool OldWrite(const std::string& path, const std::vector<ResourcePreloadRecord>& records) {
+  std::vector<std::array<uint32_t, 9>> wire;
+  for (const auto& r : records) {
+    std::array<uint32_t, 9> w{};
+    w[0] = r.kind;
+    std::copy(r.words.begin(), r.words.end(), w.begin() + 1);
+    w[7] = uint32_t(r.hash); w[8] = uint32_t(r.hash >> 32);
+    wire.push_back(w);
+  }
+  const uint64_t hash = kknr::HashBytes(wire.data(), wire.size() * sizeof(wire[0]));
+  const uint32_t header[] = {0x52504B4B, 1, uint32_t(wire.size()), 0, uint32_t(hash), uint32_t(hash >> 32)};
+  std::ofstream file(path, std::ios::binary | std::ios::trunc);
+  file.write(reinterpret_cast<const char*>(header), sizeof(header));
+  file.write(reinterpret_cast<const char*>(wire.data()), wire.size() * sizeof(wire[0]));
+  file.close();
+  return bool(file);
+}
+}  // namespace
+
+TEST(ResourcePreloadFile_BackgroundWriteIsByteIdenticalToTheOldWriter) {
+  for (size_t count : {size_t(0), size_t(1), size_t(155), ResourcePreloadFile::kMaxRecords}) {
+    std::vector<ResourcePreloadRecord> records;
+    for (size_t i = 0; i < count; ++i) {
+      auto r = Record(uint32_t(i + 1), i % 4 == 3 ? ResourcePreloadRecord::Index32 : ResourcePreloadRecord::Vertex);
+      r.hash = 0x9E3779B97F4A7C15uLL * (i + 7);
+      records.push_back(r);
+    }
+    const auto old_path = Path("old-" + std::to_string(count)), new_path = Path("new-" + std::to_string(count));
+    CHECK(OldWrite(old_path, records));
+    Bytes encoded;
+    CHECK(ResourcePreloadFile::Encode(records, encoded));
+    {
+      BackgroundFileWriter writer;
+      writer.set_delay_ms(20);
+      writer.Replace(new_path, encoded);
+    }  // the destructor flushes
+    CHECK(Load(old_path) == Load(new_path));
+    CHECK(Load(old_path) == encoded);
+    std::vector<ResourcePreloadRecord> decoded, read;
+    CHECK(ResourcePreloadFile::Decode(encoded, decoded));
+    CHECK(ResourcePreloadFile::Read(new_path, read));
+    CHECK_EQ(decoded.size(), count); CHECK_EQ(read.size(), count);
+    for (size_t i = 0; i < std::min(count, read.size()); ++i)
+      CHECK(read[i].SameResource(records[i]) && read[i].hash == records[i].hash);
+    CHECK(!fs::exists(new_path + ".tmp"));
+  }
+  std::vector<ResourcePreloadRecord> too_many(ResourcePreloadFile::kMaxRecords + 1);
+  Bytes encoded;
+  CHECK(!ResourcePreloadFile::Encode(too_many, encoded));
+}
