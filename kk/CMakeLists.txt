@@ -52,6 +52,7 @@ set(KINGKONG_SOURCES
     src/hfr_rowing.cpp
     src/hfr_splash.cpp
     src/hfr_fish.cpp
+    src/hfr_sway.cpp
     src/online.cpp
     src/discord_presence.cpp
     src/mouse_look.cpp
