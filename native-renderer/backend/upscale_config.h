@@ -5,7 +5,8 @@
 //                            bilinear stretch with the same frame plumbing: tests and comparisons)
 // --native_upscaler_quality  native (native-resolution anti-aliasing: DLAA, FSR native AA, XeSS native
 //                            AA), quality, balanced, performance, ultra_performance
-// The output resolution is the render scale's (--native_render_scale, auto: the display's); the input
+// The output resolution is the render scale's (--native_render_scale; auto: native_upscaler_output, the
+// resolution chosen in the launcher as a 16:9 picture, never above it; DECISIONS 16 Oct); the input
 // is the output divided by the mode's ratio (each SDK's own ratio where it has one).
 #pragma once
 

@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
+#include <cstdlib>
 #include <cmath>
 #include <fstream>
 #include <iterator>
@@ -254,15 +256,64 @@ int RenderScaleFor(std::string_view preset, int output_height) {
   return 0;  // custom
 }
 
-void ApplyRenderPreset(int output_height) {
-  // A temporal upscaler (the native renderer's native_upscaler, Display > Upscaling) takes the picture
-  // at the screen's size, in 720p steps (Native), and draws fewer pixels itself.
-  std::string quality = REXCVAR_GET(kk_render_quality);
-  if (quality == "custom") return; // retain explicitly supplied render scales
-  if (rex::cvar::GetFlagByName("gpu_plugin") == "native") {
-    const std::string temporal = rex::cvar::GetFlagByName("native_upscaler");
-    if (!temporal.empty() && temporal != "off") quality = "native";
+namespace {
+// One axis of the draw resolution scale the renderer uses (the runtime's rule: resolution_scale when the
+// player set it and left the axis alone, else the axis), 1 to 8.
+int DrawScaleAxis(const char* name) {
+  const std::string v = rex::cvar::HasNonDefaultValue("resolution_scale") && !rex::cvar::HasNonDefaultValue(name)
+                            ? rex::cvar::GetFlagByName("resolution_scale")
+                            : rex::cvar::GetFlagByName(name);
+  const int n = std::atoi(v.c_str());
+  return n >= 1 && n <= 8 ? n : 1;
+}
+
+bool TemporalUpscalerOn() {
+  if (rex::cvar::GetFlagByName("gpu_plugin") != "native") return false;
+  const std::string temporal = rex::cvar::GetFlagByName("native_upscaler");
+  return !temporal.empty() && temporal != "off";
+}
+}  // namespace
+
+std::pair<int, int> UpscalerOutputSize(int screen_w, int screen_h, int cap_w, int cap_h) {
+  int w = std::max(screen_w, 1), h = std::max(screen_h, 1);
+  if (cap_w > 0 && cap_h > 0) {
+    w = std::min(w, cap_w);
+    h = std::min(h, cap_h);
   }
+  // The largest 16:9 inside w x h; rounding never goes past w or h (h * 16 / 9 <= w there, and the
+  // other way round).
+  int ow = w, oh = h;
+  if (int64_t(w) * 9 >= int64_t(h) * 16) ow = int(std::lround(double(h) * 16.0 / 9.0));
+  else oh = int(std::lround(double(w) * 9.0 / 16.0));
+  // The native renderer's render scale limits (render_scale.h): 0.25 to 8 times the game's 1280x720.
+  return {std::clamp(ow, 320, 10240), std::clamp(oh, 180, 5760)};
+}
+
+std::pair<int, int> UpscalerOutputFor(int screen_w, int screen_h) {
+  if (REXCVAR_GET(kk_render_quality) == "custom")
+    return UpscalerOutputSize(screen_w, screen_h, 1280 * DrawScaleAxis("draw_resolution_scale_x"),
+                              720 * DrawScaleAxis("draw_resolution_scale_y"));
+  return UpscalerOutputSize(screen_w, screen_h);
+}
+
+void ApplyRenderPreset(int output_width, int output_height) {
+  // A temporal upscaler (the native renderer's native_upscaler, Display > Upscaling) rebuilds the picture
+  // at the resolution chosen in the launcher (never above it: DECISIONS 16 Oct) and draws fewer pixels
+  // itself; the renderer takes that size from native_upscaler_output (set as a default: not saved).
+  std::string quality = REXCVAR_GET(kk_render_quality);
+  const bool temporal = TemporalUpscalerOn();
+  if (temporal) {
+    const auto [ow, oh] = UpscalerOutputFor(output_width, output_height);
+    SetCvarDefault("native_upscaler_output", std::to_string(ow) + "x" + std::to_string(oh));
+    REXLOG_INFO("KK: upscaler output {}x{} (the chosen resolution {}x{}{})", ow, oh, output_width, output_height,
+                quality == "custom" ? ", at most the custom render scale" : "");
+  } else {
+    SetCvarDefault("native_upscaler_output", "");
+  }
+  if (quality == "custom") return; // retain explicitly supplied render scales
+  // With an upscaler the draw resolution scale no longer sets the native renderer's output (above); it is
+  // kept at the screen's size in 720p steps for the logs and for an upscaler turned off live.
+  if (temporal) quality = "native";
   const int scale = RenderScaleFor(quality, output_height);
   if (scale <= 0) return;  // custom: the player's resolution_scale is used as is
   // The runtime only honours resolution_scale when it differs from its default,
@@ -725,11 +776,7 @@ void EnforceOriginalLook() {
   }
 }
 
-void ApplyRuntimeOverrides() {
-  rex::cvar::SetFlagByName("vsync", "false");
-  REXLOG_INFO("KK: frame-rate cap {}", REXCVAR_GET(kk_frame_rate));
-  REXLOG_INFO("KK: global illumination {}", rex::cvar::GetFlagByName("native_gi"));
-
+void ApplyVideoMode() {
   // The game sizes its frame from the console's video mode: 1280x720 on an HD
   // mode, but the whole game at 640x480 (stretched to 16:9) on a mode under 720
   // lines. The runtime reports the window size as that mode whenever a window
@@ -748,6 +795,17 @@ void ApplyRuntimeOverrides() {
   REXLOG_INFO("KK: video mode {}x{} (window {}x{})", rex::cvar::GetFlagByName("video_mode_width"),
               rex::cvar::GetFlagByName("video_mode_height"), rex::cvar::GetFlagByName("window_width"),
               rex::cvar::GetFlagByName("window_height"));
+  // It also runs before the GPU starts (king_kong_app.h, with ApplyRenderPreset): the native renderer
+  // sizes its frame from the same mode, and a window size there (1920x1080, or 768x432 at 250%) gave it a
+  // frame the game never draws (the picture in a corner, no scene found: task 167).
+}
+
+void ApplyRuntimeOverrides() {
+  rex::cvar::SetFlagByName("vsync", "false");
+  REXLOG_INFO("KK: frame-rate cap {}", REXCVAR_GET(kk_frame_rate));
+  REXLOG_INFO("KK: global illumination {}", rex::cvar::GetFlagByName("native_gi"));
+
+  ApplyVideoMode();
 
   // The draw resolution scale the GPU uses (same rule as the runtime's
   // TextureCache::GetConfigDrawResolutionScale), for bug reports.

@@ -2488,6 +2488,59 @@ TEST(SetupPrewarm_MakesTheGamesPipelineLayouts) {
   CHECK(prepared_signature(false, false) != game_signature(false, false));
 }
 
+// The upscaler's output is the size the game asks for (native_upscaler_output: the resolution chosen in
+// the launcher as a 16:9 picture; DECISIONS 16 Oct), given as native_render_scale's WxH; each mode picks its
+// input from that output, native AA (DLAA) draws at the output itself. Odd sizes keep every pixel.
+TEST(Upscale_OutputIsTheChosenResolutionAndTheModePicksTheInput) {
+  auto dev = CachedDevice();
+  if (!dev) return;
+  dev->MakeCurrent();
+  struct Case {
+    const char* output;
+    UpscaleQuality quality;
+    uint32_t out_w, out_h, in_w, in_h;
+  };
+  const Case cases[] = {
+      {"1920x1080", UpscaleQuality::kNative, 1920, 1080, 1920, 1080},       // a 4K screen set to 1080p, DLAA
+      {"1920x1080", UpscaleQuality::kBalanced, 1920, 1080, 1129, 635},      // ... Balanced (1.7)
+      {"2560x1440", UpscaleQuality::kQuality, 2560, 1440, 1707, 960},       // set to 1440p, Quality (1.5)
+      {"3840x2160", UpscaleQuality::kPerformance, 3840, 2160, 1920, 1080},  // the desktop's 4K, Performance
+      {"1365x768", UpscaleQuality::kBalanced, 1365, 768, 803, 452},         // a 1366x768 window's 16:9
+      {"1365x768", UpscaleQuality::kNative, 1365, 768, 1365, 768},
+      {"1001x563", UpscaleQuality::kUltraPerformance, 1001, 563, 334, 188}, // odd window size
+      // An axis within a thousandth of the 360's size is that size (the exact 1:1 path; render_scale.h):
+      // 1281 draws 1280 (1 px less), 721 stays (0.14% more than 720).
+      {"1281x721", UpscaleQuality::kQuality, 1280, 721, 853, 481},
+      {"1280x720", UpscaleQuality::kQuality, 1280, 720, 853, 480},          // the 360's size (scale 1)
+  };
+  for (const Case& c : cases) {
+    FakeGuestMemory mem{8u << 20, 16u << 20};
+    ShaderLibrary shaders(dev->device(), mem);
+    shaders.SetRenderScaleAware(true);
+    shaders.Initialize("", NR_TEST_DXC_DIR);
+    GameRenderer g(dev->device(), mem, kknr::GuestMemory{mem.PhysicalBase(), mem.PhysicalSize(), 0}, &shaders);
+    const RenderScale scale = ParseRenderScale(c.output, 1280, 720);
+    CHECK(scale.valid);
+    g.options().render_scale_x = scale.x;
+    g.options().render_scale_y = scale.y;
+    g.options().guest_frame_width = 1280;
+    g.options().guest_frame_height = 720;
+    g.options().upscale.kind = UpscalerKind::kBilinear;
+    g.options().upscale.quality = c.quality;
+    CHECK(g.Initialize());
+    const GameUpscale* u = g.upscale();
+    CHECK(u != nullptr);
+    if (!u) continue;
+    CHECK_EQ(ScaledSize(1280, u->out_x), c.out_w);
+    CHECK_EQ(ScaledSize(720, u->out_y), c.out_h);
+    CHECK_EQ(uint32_t(std::lround(1280.0 * u->in_x)), c.in_w);
+    CHECK_EQ(uint32_t(std::lround(720.0 * u->in_y)), c.in_h);
+    CHECK(u->ratio >= 1.0f);
+    if (c.quality == UpscaleQuality::kNative) CHECK_EQ(u->ratio, 1.0f);
+    dev->WaitIdle();
+  }
+}
+
 TEST(LauncherPrewarm_StopsBeforeItIsDone) {
   // Play pressed at once: Stop leaves the rest to the game and returns after the pipelines being
   // made. A list of many descriptions (the scene's pipeline under 64 colour masks and blends).

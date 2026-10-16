@@ -108,8 +108,16 @@ struct RenderPreset {
 const std::array<RenderPreset, 5>& RenderPresets();
 // resolution_scale (1-8) a preset gives for an output height; 0 for "custom".
 int RenderScaleFor(std::string_view preset, int output_height);
-// Applies kk_render_quality for the given output height (call before the GPU starts).
-void ApplyRenderPreset(int output_height);
+// The temporal upscaler's output size (DECISIONS 16 Oct): the resolution chosen in the launcher
+// (screen_w x screen_h: the fullscreen mode, the desktop's, or the window's size) as the largest 16:9
+// picture inside it (the game's shape: the presenter letterboxes or stretches it as before). Never above
+// the chosen resolution. cap_w/cap_h above 0 (a Custom render scale): at most that size too.
+std::pair<int, int> UpscalerOutputSize(int screen_w, int screen_h, int cap_w = 0, int cap_h = 0);
+// The same with the current settings: a Custom render quality's draw resolution scale is the cap.
+std::pair<int, int> UpscalerOutputFor(int screen_w, int screen_h);
+// Applies kk_render_quality for the given output size (call before the GPU starts). With a temporal
+// upscaler it also sets native_upscaler_output (not saved) to UpscalerOutputFor(the output size).
+void ApplyRenderPreset(int output_width, int output_height);
 
 // Writes the current settings (skipping command-line/env overrides) to `path`.
 bool SaveSettings(const std::filesystem::path& path, bool include_temporary = false);
@@ -157,6 +165,9 @@ void ApplyVSyncSettings();
 
 // Forces the ReXGlue settings the port depends on (see settings.cpp).
 void ApplyRuntimeOverrides();
+// Reports the console video mode 1280x720 whatever the window size (part of ApplyRuntimeOverrides; also
+// called before the GPU starts, which sizes its frame from it).
+void ApplyVideoMode();
 
 // The Original look (launcher: Graphics > Look): the Xbox 360's own settings,
 // as cvar name and value.

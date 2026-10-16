@@ -1125,7 +1125,7 @@ class SettingsPages {
     }
     if (!temporal.empty()) {
       // The temporal upscaler's mode: it draws the game at the output size divided by the mode's ratio
-      // and rebuilds the output size (the screen's, in 720p steps: Render quality Native).
+      // and rebuilds the output size (the chosen resolution's 16:9 picture, never above it: settings.h).
       Item it;
       it.type = ItemType::kChoice;
       it.label = "Upscaler mode";
@@ -1135,8 +1135,7 @@ class SettingsPages {
           "Performance draw fewer for more speed.";
       const std::string cur = Get("native_upscaler_quality");
       it.index = -1;
-      const int scale = RenderScaleFor("native", out_h);
-      const int ow = 1280 * scale, oh = 720 * scale;
+      const auto [ow, oh] = UpscalerOutputFor(out_w, out_h);
       for (size_t m = 0; m < std::size(kTemporalModes); ++m) {
         it.options.push_back(kTemporalModes[m].label);
         if (cur == kTemporalModes[m].value) {

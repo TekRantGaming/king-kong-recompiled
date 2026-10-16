@@ -167,7 +167,8 @@ class KingKongApp : public rex::ReXApp {
       kk::EnforceOriginalLook();
       kk::ApplyFullscreenMode(window());
       kk::ApplyRendererChoice();  // the renderer, and with it the default upscaler
-      kk::ApplyRenderPreset(OutputSize().second);
+      { const auto out = OutputSize(); kk::ApplyRenderPreset(out.first, out.second); }
+      kk::ApplyVideoMode();  // before the GPU starts: it sizes its frame from the mode (settings.cpp)
       if (!kk::benchmark::Active()) {
         kk::online::SetPlaying(true);
         kk::online::Start();
@@ -183,7 +184,8 @@ class KingKongApp : public rex::ReXApp {
         // The Resolution (Display page) before the render quality, which follows it.
         kk::ApplyFullscreenMode(window());
         kk::ApplyRendererChoice();  // the renderer, and with it the default upscaler
-        kk::ApplyRenderPreset(OutputSize().second);
+        { const auto out = OutputSize(); kk::ApplyRenderPreset(out.first, out.second); }
+        kk::ApplyVideoMode();  // before the GPU starts: it sizes its frame from the mode (settings.cpp)
         kk::online::SetPlaying(true);
         kk::discord::SetPlaying(true);
         // The game starts in this process: startup recovery watches it from here.
