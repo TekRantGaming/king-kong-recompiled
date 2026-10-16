@@ -2853,7 +2853,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
     if (play_ != PlayView::kNone) return PlayPrompts();
     if (page_ == kHome) {
-      if (status_focus_) return {{Action::kAccept, "Recompile shaders"}, {Action::kBack, "Back"}};
+      if (status_focus_) return {{Action::kAccept, "Rebuild shaders"}, {Action::kBack, "Back"}};
       if (side_focus_ < 0 && menu_value_) p.push_back({Action::kLeft, "Change"});
       p.push_back({Action::kAccept, side_focus_ >= 0 ? SidePanelVerb(true) : "Select"});
       p.push_back({Action::kBack, side_focus_ >= 0 ? "Back" : "Quit"});
@@ -3877,22 +3877,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   // "Recompile shaders": the native renderer's pack built again (force), with the status line's
   // progress bar; Play waits for it as for any build.
+  // Home's shaders status: the same as Graphics > Advanced > Rebuild shaders (asked first, then the shader
+  // screen with its one bar; task 144: it used to say "about a minute" and build behind Home).
   void OpenRecompileShaders() {
-    if (native_pack_.Busy()) {
-      ui::Cue(ui::Sound::kDeny);
-      Status("The shaders are being prepared right now.");
-      return;
-    }
-    ui::Cue(ui::Sound::kSelect);
-    OpenModal("Recompile shaders",
-              "Recompile your shaders? This takes about a minute. " KK_SLOW_PC, {"Yes", "No"}, 1,
-              [this](int i) {
-                if (i != 0) return;
-                if (native_pack_.Busy()) return;
-                native_pack_.Start(CacheDir(), paths_.game_dir, true);
-                REXLOG_INFO("KK: recompiling the native renderer's shaders (asked for on Home)");
-                Status("Recompiling the shaders. Play waits for them.");
-              });
+    ui::Cue(native_pack_.Busy() ? ui::Sound::kDeny : ui::Sound::kSelect);
+    OpenRebuildShaders();
   }
 
   // ------------------------------------------------------------- setup ---
@@ -4648,7 +4637,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                 if (i != 0 || native_pack_.Busy()) return;
                 native_pack_.Start(CacheDir(), paths_.game_dir, true);
                 rebuild_shaders_screen_ = true;
-                REXLOG_INFO("KK: rebuilding the native renderer's shaders (asked for in Graphics settings)");
+                REXLOG_INFO("KK: rebuilding the native renderer's shaders (asked for)");
               },
               1);
   }
