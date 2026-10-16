@@ -25,7 +25,8 @@ namespace kk { double DevSecondsSinceMenu(); }
 
 namespace kk::play {
 namespace {
-constexpr uint32_t kFields[] = {18712, 18704, 18700, 18708, 19856, 0x4DA4, 0x4DA0, 0x4DB0, 0x4DDC};
+constexpr uint32_t kFields[] = {18712, 18704, 18700, 18708, 19856,
+                              FindExtra(1)->mode_offset, FindExtra(8)->mode_offset, 0x4DB0, 0x4DDC};
 static_assert(size_t(ProfileOption::kCount) == save_file::kOptionCount);
 // Their places in the save file (profile_save_file.h): filled from the universe's saved-variable
 // descriptors, verified by KK_DEV_AUDIO_TRACE.

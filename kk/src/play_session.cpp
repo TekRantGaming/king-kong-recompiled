@@ -910,14 +910,14 @@ void CarryOut(PPCContext& ctx, uint8_t* base, uint32_t g) {
     ctx = saved;
     std::memmove(base + 0x82C6BDE0, base + kSaveData, kDataSize);
     std::memmove(base + 0x82C73D20, base + kSaveHeaders, 0x500);
-    if (extra->id == 2) Store32(base, g + 0x5674, 1);  // original alternate-ending session
+    if (extra->session_flag) Store32(base, g + 0x5674, extra->session_flag);
     else {
       for (uint32_t offset : {0x4DDCu, 0x4DD8u, 0x3348u, 0x3394u, 0x33E0u}) Store32(base, g + offset, 0);
       __imp__sub_82413190(ctx, base);
       ctx = saved;
     }
-    RequestLevel(base, g, extra->level, extra->id == 2 ? 1 : 0);
-    REXLOG_INFO("KK extras: starting bonus {} level {} start {}", extra->id, extra->level, extra->id == 2 ? 1 : 0);
+    RequestLevel(base, g, extra->level, extra->start_point);
+    REXLOG_INFO("KK extras: starting bonus {} level {} start {}", extra->id, extra->level, extra->start_point);
     return;
   }
   if (r.slot < 0 || r.slot >= kSlotCount) {

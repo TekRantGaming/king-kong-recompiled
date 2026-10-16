@@ -14,25 +14,29 @@ struct ExtraInfo {
   uint32_t level;        // original level key or movie string's guest address
   int score;
   int progress;          // percent, -1 no progress requirement; >100 online-code bonus
+  uint32_t start_point = 0;
+  uint32_t session_flag = 0;  // value written to G+0x5674, alternate ending only
+  uint32_t mode_offset = 0;   // G-relative option field; modes do not load a level
 };
+// Targets from sub_824CBFE8's id switch, not the order of its branch labels.
 inline constexpr std::array<ExtraInfo, 15> kExtras = {{
     {19, ExtraType::kMovie, 0x820AE520, -1, -1},
     {18, ExtraType::kLevel, 7, -1, -1},
-    {12, ExtraType::kLevel, 55, -1, 5},
-    {1, ExtraType::kMode, 0, -1, 15},
-    {15, ExtraType::kLevel, 57, -1, 1000},
-    {9, ExtraType::kLevel, 52, -1, 50},
+    {12, ExtraType::kLevel, 54, -1, 5},
+    {1, ExtraType::kMode, 0, -1, 15, 0, 0, 0x4DA4},
+    {15, ExtraType::kLevel, 55, -1, 1000},
+    {9, ExtraType::kLevel, 57, -1, 50},
     {5, ExtraType::kLevel, 50, -1, 75},
-    {8, ExtraType::kMode, 0, -1, 100},
+    {8, ExtraType::kMode, 0, -1, 100, 0, 0, 0x4DA0},
     {6, ExtraType::kLevel, 51, 20000, -1},
     {7, ExtraType::kLevel, 56, 50000, -1},
     {0, ExtraType::kMovie, 0x820AE4F0, 75000, -1},
-    {10, ExtraType::kLevel, 53, 100000, -1},
-    {11, ExtraType::kLevel, 54, 150000, -1},
+    {10, ExtraType::kLevel, 52, 100000, -1},
+    {11, ExtraType::kLevel, 53, 150000, -1},
     {3, ExtraType::kMovie, 0x820AE508, -1, 2000},
-    {2, ExtraType::kLevel, 2003, 250000, 100},
+    {2, ExtraType::kLevel, 2003, 250000, 100, 1, 1},
 }};
-inline const ExtraInfo* FindExtra(int id) {
+inline constexpr const ExtraInfo* FindExtra(int id) {
   for (const auto& e : kExtras) if (e.id == id) return &e;
   return nullptr;
 }

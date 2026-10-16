@@ -35,6 +35,37 @@ void ExtrasChecks() {
   using namespace kk::play;
   ExtraProgress fresh;
   Check(kExtras.size() == 15, "the retail Extras page has fifteen entries");
+  // Independently transcribed from sub_824CBFE8, loc_824CCD08's id switch.
+  // Modes return from that switch; their fields are read by sub_825EE130.
+  constexpr ExtraInfo original[] = {
+      {19, ExtraType::kMovie, 0x820AE520, -1, -1},
+      {18, ExtraType::kLevel, 7, -1, -1},
+      {12, ExtraType::kLevel, 54, -1, 5},
+      {1, ExtraType::kMode, 0, -1, 15, 0, 0, 0x4DA4},
+      {15, ExtraType::kLevel, 55, -1, 1000},
+      {9, ExtraType::kLevel, 57, -1, 50},
+      {5, ExtraType::kLevel, 50, -1, 75},
+      {8, ExtraType::kMode, 0, -1, 100, 0, 0, 0x4DA0},
+      {6, ExtraType::kLevel, 51, 20000, -1},
+      {7, ExtraType::kLevel, 56, 50000, -1},
+      {0, ExtraType::kMovie, 0x820AE4F0, 75000, -1},
+      {10, ExtraType::kLevel, 52, 100000, -1},
+      {11, ExtraType::kLevel, 53, 150000, -1},
+      {3, ExtraType::kMovie, 0x820AE508, -1, 2000},
+      {2, ExtraType::kLevel, 2003, 250000, 100, 1, 1},
+  };
+  for (size_t i = 0; i < kExtras.size(); ++i) {
+    const auto& want = original[i];
+    const auto* got = FindExtra(want.id);
+    Check(kExtras[i].id == want.id && got, "original Extras order and id lookup");
+    Check(got->type == want.type && got->level == want.level,
+          "every original id selects its exact level or movie address");
+    Check(got->start_point == want.start_point && got->session_flag == want.session_flag &&
+              got->mode_offset == want.mode_offset,
+          "every original id preserves its start point and session or mode flags");
+    Check(got->score == want.score && got->progress == want.progress,
+          "every original id retains its own unlock requirements");
+  }
   Check(!FindExtra(-1) && !FindExtra(4) && !FindExtra(13) && !FindExtra(20), "unused and invalid bonus ids are not launchable");
   std::map<int, bool> ids;
   for (const auto& e : kExtras) {
