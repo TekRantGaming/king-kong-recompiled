@@ -68,6 +68,7 @@ extern char** environ;
 #include "benchmark.h"
 #include "settings.h"
 #include "ps2_movies.h"
+#include "dev_launcher_chain.h"
 #include "video_modes.h"
 
 namespace kk {
@@ -464,13 +465,18 @@ void SetStartRequest(const StartRequest& request) {
   g_starting = request.kind != StartKind::kNone;
 #if defined(KK_DEV_TOOLS)
   if (request.kind == StartKind::kExtra && std::getenv("KK_DEV_LAUNCHER_INPUT")) {
-    // A scripted controller activation is for this session, never repeated after returning to Extras.
+    // A scripted controller activation is for this session, never repeated after returning to Extras;
+    // the next '|' session, if any, runs there. Frames this run captures are named after the bonus.
+    const std::string next = kk::DevLauncherAfterStart(std::getenv("KK_DEV_LAUNCHER_INPUT"));
+    const std::string tag = fmt::format("extra{}-", request.chapter);
 #if defined(_WIN32)
-    _putenv_s("KK_DEV_LAUNCHER_INPUT", "shot:returned-extras");
+    _putenv_s("KK_DEV_LAUNCHER_INPUT", next.c_str());
     _putenv_s("KK_DEV_LAUNCHER_INPUT_FILE", "");
+    _putenv_s("KK_DEV_SHOTS_TAG", tag.c_str());
 #else
-    setenv("KK_DEV_LAUNCHER_INPUT", "shot:returned-extras", 1);
+    setenv("KK_DEV_LAUNCHER_INPUT", next.c_str(), 1);
     unsetenv("KK_DEV_LAUNCHER_INPUT_FILE");
+    setenv("KK_DEV_SHOTS_TAG", tag.c_str(), 1);
 #endif
   }
 #endif

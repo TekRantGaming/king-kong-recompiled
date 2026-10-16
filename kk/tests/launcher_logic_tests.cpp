@@ -7,6 +7,7 @@
 #include "cursor_activity.h"
 #include "slider_input.h"
 #include "extras.h"
+#include "dev_launcher_chain.h"
 #include "dev_movie_input.h"
 #include "video_modes.h"
 
@@ -398,6 +399,38 @@ int main() {
     Check(NextVideoModeStep(true, 0x1000, 0x2000, 0, 0) == VideoModeStep::kNothing,
           "a save with both modes off calls nothing");
     Check(NextVideoModeStep(true, 0, 0, 0, 0) == VideoModeStep::kWait, "pending modes keep waiting before the profile");
+  }
+  // Chained scripted Extras sessions: the launcher runs only the first, a started bonus hands on the rest.
+  Check(kk::DevLauncherSession("a,b") == "a,b", "a single launcher session runs whole");
+  Check(kk::DevLauncherSession("a,b|c|d") == "a,b", "only the first chained session runs");
+  Check(kk::DevLauncherSession("") == "", "no launcher input stays empty");
+  Check(kk::DevLauncherAfterStart("a,b") == "shot:returned-extras", "an unchained run only marks the return");
+  Check(kk::DevLauncherAfterStart("a|c,d|e") == "shot:returned-extras,c,d|e", "the next session follows the return");
+  Check(kk::DevLauncherAfterStart("a|") == "shot:returned-extras", "an empty trailing session is dropped");
+  Check(kk::DevLauncherSession(kk::DevLauncherAfterStart("a|c|e")) == "shot:returned-extras,c",
+        "each return runs exactly one further session");
+  // Script buttons: existing names keep their bits; the left stick drives both axes and half pushes.
+  Check(kk::DevScriptButton("A") == 0x1000 && kk::DevScriptButton("RIGHT") == 0x0008 &&
+            kk::DevScriptButton("SKIP") == kk::kDevSkip && kk::DevScriptButton("RSUP") == kk::kDevRsUp,
+        "existing script buttons are unchanged");
+  Check(kk::DevScriptButton("NOPE") == 0 && kk::DevScriptButton("") == 0, "unknown script buttons press nothing");
+  {
+    uint32_t all = 0;
+    for (const char* n : {"LSUP", "LSDOWN", "LSLEFT", "LSRIGHT", "LSHALF"}) {
+      const uint32_t bit = kk::DevScriptButton(n);
+      Check(bit && !(all & bit) && bit > kk::kDevSkip, "left stick names have their own bits");
+      all |= bit;
+    }
+    const auto none = kk::DevScriptSticks(0x1000 | kk::kDevSkip);
+    Check(!none.lx && !none.ly && !none.rx && !none.ry, "buttons alone leave both sticks centred");
+    const auto up = kk::DevScriptSticks(kk::kDevLsUp);
+    Check(up.ly == 32767 && !up.lx && !up.rx && !up.ry, "LSUP pushes the left stick fully forward only");
+    const auto back = kk::DevScriptSticks(kk::kDevLsDown | kk::kDevLsLeft | kk::kDevLsHalf);
+    Check(back.ly == -16384 && back.lx == -16384, "LSHALF halves both left axes");
+    const auto look = kk::DevScriptSticks(kk::kDevRsRight | kk::kDevLsRight);
+    Check(look.rx == 32767 && look.lx == 32767 && !look.ry && !look.ly, "both sticks can be held together");
+    const auto right_half = kk::DevScriptSticks(kk::kDevRsUp | kk::kDevRsHalf);
+    Check(right_half.ry == 16384 && !right_half.ly, "RSHALF still halves only the right stick");
   }
   // All launcher/pause slider ranges and F8's float/integer/opacity controls.
   for (auto range : std::vector<std::array<float, 3>>{{0,100,1}, {0,100,5}, {69,110,1}, {0,100,10},
