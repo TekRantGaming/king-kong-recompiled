@@ -141,7 +141,7 @@ void ShaderProgressChecks() {
   using kk::ShaderJobState;
   ShaderJobState s;
   Check(ShaderJobFraction(s) == 0.0f, "no steps yet: 0");
-  // Two APIs: four steps, shaders 40% each and pipelines 10% each.
+  // Two APIs: four steps, shaders 45% each and pipelines 5% each.
   s.steps = 4;
   s.step = 1;
   s.phase = 1;  // reading the database
@@ -149,19 +149,19 @@ void ShaderProgressChecks() {
   s.phase = 2;
   s.total = 1000;
   s.done = 500;
-  Check(Near(ShaderJobFraction(s), 0.40f * 0.5f * kk::kShaderCompileShare), "step 1 half compiled");
+  Check(Near(ShaderJobFraction(s), 0.45f * 0.5f * kk::kShaderCompileShare), "step 1 half compiled");
   s.phase = 3;
-  Check(Near(ShaderJobFraction(s), 0.40f * kk::kShaderCompileShare), "step 1 writing");
+  Check(Near(ShaderJobFraction(s), 0.45f * kk::kShaderCompileShare), "step 1 writing");
   s.phase = 4;
-  Check(Near(ShaderJobFraction(s), 0.40f), "step 1 finished");
+  Check(Near(ShaderJobFraction(s), 0.45f), "step 1 finished");
   s.step = 2;
   s.step_kind = 1;
   s.done = s.total = 0;
   s.pass = 0;
-  Check(Near(ShaderJobFraction(s), 0.40f), "step 2 starts where step 1 ended");
+  Check(Near(ShaderJobFraction(s), 0.45f), "step 2 starts where step 1 ended");
   s.total = 100;
   s.done = 50;
-  Check(Near(ShaderJobFraction(s), 0.40f + 0.10f * 0.25f), "step 2 first pass half");
+  Check(Near(ShaderJobFraction(s), 0.45f + 0.05f * 0.25f), "step 2 first pass half");
   s.pass = 1;
   s.done = 100;
   Check(Near(ShaderJobFraction(s), 0.50f), "step 2 both passes done");
@@ -180,7 +180,7 @@ void ShaderProgressChecks() {
   one.steps = 2;
   one.step = 2;
   one.step_kind = 1;
-  Check(Near(ShaderJobFraction(one), 0.40f / 0.5f), "one API: its shaders are 80%");
+  Check(Near(ShaderJobFraction(one), 0.45f / 0.5f), "one API: its shaders are 90%");
   // Out-of-range reports stay on the bar.
   ShaderJobState odd;
   odd.steps = 2;
@@ -251,7 +251,7 @@ void ShaderProgressChecks() {
   c.done = 100;
   c.pass = 1;
   const float after_vulkan = only_pipelines.Update(c);
-  Check(after_vulkan > 0.1f && after_vulkan < 0.5f, "the prepared step fills its own share of what is left");
+  Check(after_vulkan > 0.04f && after_vulkan < 0.2f, "the prepared step fills its own share of what is left");
   Check(only_pipelines.skipped() == 1u, "step 1 is known as skipped");
   // Smoothness: the drawn bar follows the job's value over time, never past it, never back.
   kk::ShaderProgressBar eased;

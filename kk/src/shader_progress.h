@@ -22,10 +22,11 @@ struct ShaderJobState {
   bool working = true;  // the current step is building something (not only checking that it is current)
 };
 
-// The steps' shares of the job, measured on the setup screen (task 144, RTX 4070 Ti, 16 threads): compiling
-// one API's shaders takes about 40 seconds, preparing its pipelines about 10 on a first run.
-constexpr float kShaderStepWeight = 0.40f;
-constexpr float kPipelineStepWeight = 0.10f;
+// The steps' shares of the job, measured on the setup screen (task 144, RTX 4070 Ti, 15 workers, other work
+// running): compiling one API's shaders took 68 to 99 seconds, preparing its pipelines 2 to 4 (longer where the
+// driver has none of them cached yet), so the bar moves at an even pace.
+constexpr float kShaderStepWeight = 0.45f;
+constexpr float kPipelineStepWeight = 0.05f;
 // Compiling ends here; writing the pack (a large file) is the rest of the shaders' step.
 constexpr float kShaderCompileShare = 0.97f;
 constexpr int kMaxShaderSteps = 8;
