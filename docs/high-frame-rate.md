@@ -49,6 +49,7 @@ assumes one call per 1/30 s is frame-rate dependent; one that uses the frame tim
 | `KK_DEV_HFR_OFF=<name,...>` or `all` | Turns fixes off one by one in dev builds, to measure with and without |
 | `KK_DEV_GFX_TRACE` | Once a second, the effects added to the world effect list (`sub_827F9978`) per caller and effect type |
 | `KK_DEV_FORCE_DT=<seconds>` | Every frame counts as that long (small steps such as 0.004 s on a PC that cannot reach 250 FPS) |
+| `KK_DEV_FISH=<csv>[,from,to]` (`kk/src/dev_fish.cpp`) | One row per call of the water creatures' swim state (`sub_8243B2C8`): swim phase before/after, facing, position, the wiggle angle asked for and used. `KK_DEV_FISH_VIEW=ann-water` moves the player near the fish in Ann's chapter (the game's own teleport trigger) so they swim; far away they are faded out and idle. `KK_DEV_FISH_OFF_UNTIL=<s>` keeps the fix off until then, to measure both in one run |
 
 Objects are matched between runs by their file key (the BIG key of the loaded object, found by reversing the
 loader's key -> index -> address tables at `0x82C4ED94` and `0x82C4EDC0`), which is stable between runs even
@@ -75,6 +76,7 @@ These were found by scanning the recompiled code for how the frame time is used 
 | 0.016 s floor | `k_ETAT_grab` `sub_825CA350`, `k_ETAT_grab_mashing` `sub_8259D998`, `k_ETAT_finished` `sub_825B3288`, `k_ETAT_cine` `sub_825B62E0`, `KT_ETAT_Finish` `sub_824876F0`, `KBC_ETAT_KK_Finished` `sub_8252B1D0`, `BC_exec_MOVE_beziers` `sub_8263E1B8` | The frame time is clamped to 0.016 .. 0.048 s before use, so above 62.5 FPS these run fast (1.9x at 120 FPS, 3.8x at 240): Kong's grabs, button mashing and finishers, the BC creature's path moves | fixed (`hfr_dt_floor.cpp`) |
 | Decay per 0.016 s | inlined in `BC_TAG_On` `sub_8263C930`, `KBC_TAG_On` `sub_82512FA8`, `KBC_ETAT_Fight_BB_Poursuit` `sub_8252E1E8`, `k_ETAT_grab_ANN` `sub_8259F698`, `CM_Kong_Mode_Swing_Horiz` `sub_826245B8`, `k_ETAT_grab` (five more); helper `sub_8261AD78` | `f = k; while (t > 0.016) { t -= 0.016; f *= k; }`: one factor a frame plus one per extra step, 90 a second on the console, 120 at 120 FPS, 240 at 240. Knock-back slides and Kong's swing camera stop sooner. `k_ETAT_grab` also grows a vector by 1.005 per 1/60 s in whole steps rounded up (70 a second on the console, 110 at 110 FPS) | fixed (`hfr_step_decay.cpp`; the velocity is corrected after the call when the game's step was the only change to it) |
 | Follow smoothing in 1/300 s steps | `sub_828271E8` (from `sub_82827B10`, a render-time modifier; runs on four objects in the Venture opening, two in Kong to the Rescue) | `ceil(dt * 300)` steps a frame: 310 a second at 30 FPS, 340 at 60, 360 at 120, 432 at 144, 480 at 240, 1000 at 1000 FPS. Follows its target faster at high rates | fixed (`hfr_follow.cpp`) |
+| Fish swimming wiggle (Ann's chapter) | `PNJ_EatMe_ETAT_Water` `sub_8243B2C8` turning the fish's facing with `sub_827184C0` (call at `8243C10C`) | Each call turns the facing 6 x frame time of the way to the fish's course, then by `sin(swim phase) x min(forward speed, 0.25)` radians. The phase advances by pi x frame time (a 2 s period at any rate) but the turn is added once a call with no frame time: the heading swings about +-65 degrees on the console, twice that at 60 FPS, four times at 120 (the fish turn circles). Measured with `KK_DEV_FISH` (below) | fixed (`hfr_fish.cpp`: that angle times 30 x frame time) |
 | Menu background drift | `IntMIG_Background` `sub_824A0E70` | Its drift velocity is multiplied by 0.999 once a frame (0.97 a second at 30 FPS, 0.90 at 110) before it is steered back to its speed; hardly visible | found, left |
 | Motion blur strength | `sub_82768DE8` (after effect; only with `kk_motion_blur` or the Original look) | Its blend weight is `s * (0.6 + 0.4 * frame_ms / 30)`, `frame_ms` being the device's measured frame time (`0x82D623E0`): 1.04 s at 30 FPS, 0.72 s at 110. For the same trail length in seconds a weight for the previous frame would have to rise with the frame rate (`a ^ (30 / fps)`), so the trail is about 3x shorter at 110 FPS. Whether the shader's weight is the previous frame's or the new one's decides the right formula; not changed until that is checked on screen | found |
 | Raft | `Raft_exec_compute_position` `sub_825EFE78` | A fixed 0.016 s step from an accumulator: right speed at any rate, but moves in 62.5 Hz steps | ok (note) |
@@ -177,6 +179,31 @@ the two water effects (`KK_DEV_GFX_TRACE`, per second in which they ran):
 The rain itself (`sgo_gener` and `sgo_move`, about 6 drop splashes a second) is the same at both rates. With both
 fixes about 140 footstep splash calls and 70 ripple calls a second were skipped at 110 FPS.
 
+### Fish in Ann's chapter (fix verified)
+
+Chapter-select entry 9, `kk-dev-vulkan`, `KK_DEV_FISH` with `KK_DEV_FISH_VIEW=ann-water` (the player moved near the
+water so the five fish there swim), script-clock seconds 8 to 50 (or 8 to 28 without and 34 to 60 with the fix in one
+run, `KK_DEV_FISH_OFF_UNTIL=30`; the 60 and unlimited runs in the quiet window). Averages over the five fish; heading swing is the RMS of the facing angle about its
+2 s running mean, turn rate the facing's total turning per game second. The fish's paths are random, so values move
+by about 10% between runs at the same rate.
+
+| Run | Measured FPS | Wiggle angle used, rad per game s | Heading swing RMS, rad | Turn rate, rad/s | Phase rate, rad/s |
+|---|---|---|---|---|---|
+| Vulkan 30 (fix off by design) | 29.9 | 4.14 | 1.11 | 3.24 | 3.141593 |
+| Vulkan 60, no fix | 60.0 | 8.00 | 2.09 | 6.16 | 3.141593 |
+| Vulkan 60, fix | 60.0 | 4.06 | 1.05 | 3.01 | 3.141593 |
+| Vulkan 120, no fix | 120.0 | 15.82 | 5.36 | 14.74 | 3.141593 |
+| Vulkan 120, fix | 120.0 | 4.15 | 1.05 | 2.97 | 3.141593 |
+| DirectX 12 120, no fix | 120.0 | 16.06 | 5.48 | 15.07 | 3.141593 |
+| DirectX 12 120, fix | 119.9 | 4.16 | 1.04 | 2.93 | 3.141593 |
+| Vulkan unlimited, no fix | 488.6 | 64.96 | 23.92 | 65.01 | 3.141592 |
+| Vulkan unlimited, fix | 489.7 | 4.19 | 0.96 | 2.92 | 3.141593 |
+
+Every fish ran its swim state once per frame in every run (no skipped frames). The swim phase advances by exactly
+pi per game second whenever it advances; it holds while a fish is above the water line (a leap of about 0.86 s, the
+same length at 30 and 120 FPS, or a fish skimming the surface), 13% of calls at 30 FPS, 17% at 120 without the fix
+(the circling fish break the surface more), 13% with it.
+
 ### Step counts, worked out
 
 The game's own step logic (float32, the millisecond frame times the tick count gives) against the fixes'
@@ -236,6 +263,7 @@ frame), so their effect is not compared run against run.
 | `step_decay`: decays and growth per 0.016 or 1/60 s step | `hfr_step_decay.cpp` | Acts during V-Rex hits in Kong to the Rescue; per-second rates worked out above |
 | `follow`: follow smoothing in 1/300 s steps | `hfr_follow.cpp` | Runs on four objects in the Venture opening; per-second rates worked out above |
 | `splash` and `ripple`: footstep splashes and ripples in water | `hfr_splash.cpp` | In game at 110 FPS (V-Rex chapter): effects started a second and particles alive as at 30 FPS (720 alive on average against 746 and 754 at 30 FPS, 2 356 without the fixes; table above) |
+| `fish`: the water creatures' swimming wiggle | `hfr_fish.cpp` | In game, Ann's chapter: heading swing and turn rate per game second at 60, 120 and unlimited match 30 FPS (table above); `kk-hfr-fish-tests` models the recurrence at 30 to 500 FPS |
 | Camera shake (v1.9.10, before this work) | `camera_shake.cpp` | #39 |
 
 At 30 FPS every fix calls the game's own code unchanged (`hfr::Active()` is false), so the console behaviour and
