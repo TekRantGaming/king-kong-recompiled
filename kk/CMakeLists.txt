@@ -201,6 +201,9 @@ if(KK_DEV_TOOLS)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     add_test(NAME graphics-panel-text COMMAND "${Python3_EXECUTABLE}" -I
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/debug_overlay_text_tests.py" "${CMAKE_CURRENT_SOURCE_DIR}")
+    # Task 144: settings categories' texts in five languages, no online reminder, one shader bar.
+    add_test(NAME launcher-text COMMAND "${Python3_EXECUTABLE}" -I
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/launcher_text_tests.py" "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME benchmark-text COMMAND "${Python3_EXECUTABLE}" -I
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/benchmark_text_tests.py" "${CMAKE_CURRENT_SOURCE_DIR}")
     add_executable(kk-startup-tests ../native-renderer/tests/startup-recovery-039.cpp)

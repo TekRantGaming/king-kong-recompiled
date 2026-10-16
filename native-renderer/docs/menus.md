@@ -27,7 +27,9 @@ Play on Home opens the **Play menu** (a launcher page in its existing style, gam
    one), its best score in the current save, grouped the way the game groups them (Jack / Kong where it
    applies). Starts the entry with the current save loaded (the most recent one; the save is picked on the
    Load game page); with no save at all it first creates one (as New game).
-5. **Back**.
+5. **Extras**: the original game's bonuses (artwork galleries, interviews, the trailer, the alternative end, the
+   bonus video modes), unlocked by the chosen save's progress and scores.
+6. **Back**.
 
 Whatever is chosen, the game starts with no logos, no title screen and no menus.
 
@@ -86,9 +88,18 @@ PrintWindow of the test window): `F:\KK-native-renderer\runs\menus-ui-1013-*`.
 
 ### The launcher
 
+Home is the main menu (task 144, owner 16 Oct: a tidy top level): Play, Update to vX (only when one was found),
+Settings, Achievements, About, Quit. Settings has the six categories as tabs (LB / RB or a click), in the order of
+`kk/src/settings_layout.h`: Display, Graphics, Audio, Controls, Gameplay, Advanced, with `SETTINGS` at the right;
+Achievements and About are pages of their own with their name as the header. B goes back to Home from each.
+Reinstall game and Check for updates now are on About; Graphics > Advanced has Rebuild shaders (asks first, then
+the shader screen with its one progress bar). The online player count is explained and switched in the first
+setup and on About; no reminder opens by itself. What's new opens only once the game files are installed, the
+shaders prepared and the look chosen (`launcher_policy.h`).
+
 - **Play** on Home (and Start / P on any page) opens the **Play menu**: Home's look (clear stills, the logo, the
   large entries), the header `PLAY` instead of the tabs. Continue (only with a save: the one saved last), New
-  game, Load game (greyed with no save), Chapter select, Back. The status row shows what the focused entry does:
+  game, Load game (greyed with no save), Chapter select, Extras, Back. The status row shows what the focused entry does:
   Continue its save, chapter (continue point) and when it was saved; New game the free slots; Chapter select the
   save it uses. B goes back to Home.
 - **Load game** (`PLAY - LOAD GAME`, the settings pages' layout): the five slots as tall rows (name, slot,
@@ -104,7 +115,7 @@ PrintWindow of the test window): `F:\KK-native-renderer\runs\menus-ui-1013-*`.
   with (with none: "a new one is made in slot N first").
 - Every choice calls `play::SetStartRequest` and then Play as before (the frame-rate warning, the shader wait, the
   restart for the renderer or a temporal upscaler).
-- `--kk_launcher_open=play|chapters` (never saved) opens the launcher on the Play menu or Chapter select: for the
+- `--kk_launcher_open=play|chapters|extras` (never saved) opens the launcher on the Play menu or Chapter select: for the
   game side when it goes back to the launcher.
 - The Cheats page no longer has "All chapters".
 
@@ -116,8 +127,8 @@ the game's logo, `PAUSED`, and Resume, Start again and Score (when `PauseActionA
 game. Start again and Quit game ask first (Cancel focused); B, Esc or Start resume. Options shows the port's
 settings (Gameplay) until the game's own Options page is known.
 
-**Settings**: tabs Display, Graphics, Gameplay, Controls (with Button remapping and Keyboard bindings), Cheats,
-the launcher's own rows (`SettingsPages`, shared code) with the rows that need a restart left out (`LiveOnly`:
+**Settings**: tabs Display, Graphics, Audio, Controls (with Button remapping and Keyboard bindings), Gameplay,
+Advanced (the same order as the launcher's Settings, `settings_layout.h`), the launcher's own rows (`SettingsPages`, shared code) with the rows that need a restart left out (`LiveOnly`:
 window mode and size, resolution, refresh rate, monitor, frame rate, VSync, upscaler and its mode, render quality,
 internal resolution, look, preset, renderer, language, startup logos). Changes are saved like in the launcher.
 Controls: the game gives the menu the pad it read (`PauseMenuPad`); keyboard and mouse come through ImGui.

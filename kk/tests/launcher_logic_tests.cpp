@@ -3,6 +3,8 @@
 // (profile_save_file.h), on made-up saves in a temporary folder.
 #include "profile_save_file.h"
 #include "shader_progress.h"
+#include "settings_layout.h"
+#include "launcher_policy.h"
 #include "graphics_presets.h"
 #include "cursor_activity.h"
 #include "slider_input.h"
@@ -139,7 +141,7 @@ void ShaderProgressChecks() {
   using kk::ShaderJobState;
   ShaderJobState s;
   Check(ShaderJobFraction(s) == 0.0f, "no steps yet: 0");
-  // Two APIs: four steps, shaders 42% each and pipelines 8% each.
+  // Two APIs: four steps, shaders 40% each and pipelines 10% each.
   s.steps = 4;
   s.step = 1;
   s.phase = 1;  // reading the database
@@ -147,19 +149,19 @@ void ShaderProgressChecks() {
   s.phase = 2;
   s.total = 1000;
   s.done = 500;
-  Check(Near(ShaderJobFraction(s), 0.42f * 0.5f * kk::kShaderCompileShare), "step 1 half compiled");
+  Check(Near(ShaderJobFraction(s), 0.40f * 0.5f * kk::kShaderCompileShare), "step 1 half compiled");
   s.phase = 3;
-  Check(Near(ShaderJobFraction(s), 0.42f * kk::kShaderCompileShare), "step 1 writing");
+  Check(Near(ShaderJobFraction(s), 0.40f * kk::kShaderCompileShare), "step 1 writing");
   s.phase = 4;
-  Check(Near(ShaderJobFraction(s), 0.42f), "step 1 finished");
+  Check(Near(ShaderJobFraction(s), 0.40f), "step 1 finished");
   s.step = 2;
   s.step_kind = 1;
   s.done = s.total = 0;
   s.pass = 0;
-  Check(Near(ShaderJobFraction(s), 0.42f), "step 2 starts where step 1 ended");
+  Check(Near(ShaderJobFraction(s), 0.40f), "step 2 starts where step 1 ended");
   s.total = 100;
   s.done = 50;
-  Check(Near(ShaderJobFraction(s), 0.42f + 0.08f * 0.25f), "step 2 first pass half");
+  Check(Near(ShaderJobFraction(s), 0.40f + 0.10f * 0.25f), "step 2 first pass half");
   s.pass = 1;
   s.done = 100;
   Check(Near(ShaderJobFraction(s), 0.50f), "step 2 both passes done");
@@ -178,7 +180,7 @@ void ShaderProgressChecks() {
   one.steps = 2;
   one.step = 2;
   one.step_kind = 1;
-  Check(Near(ShaderJobFraction(one), 0.42f / 0.5f), "one API: its shaders are 84%");
+  Check(Near(ShaderJobFraction(one), 0.40f / 0.5f), "one API: its shaders are 80%");
   // Out-of-range reports stay on the bar.
   ShaderJobState odd;
   odd.steps = 2;
@@ -230,7 +232,143 @@ void ShaderProgressChecks() {
   Check(Near(last, 1.0f), "a whole job ends at 100%");
   bar.Reset();
   Check(bar.Shown() == 0.0f, "a new job starts at 0");
+
+  // Task 144: ONE bar, no steps shown. A step with nothing to do (its API's shaders already current) takes
+  // no room, so the bar does not jump by its share; the drawn bar eases and never goes back.
+  kk::ShaderProgressBar only_pipelines;
+  ShaderJobState c;
+  c.steps = 4;
+  c.step = 1;
+  c.working = false;  // Vulkan's shaders: only checked
+  c.phase = 4;
+  only_pipelines.Update(c);
+  c.step = 2;
+  c.step_kind = 1;
+  c.working = true;  // Vulkan's pipelines: prepared
+  c.total = 100;
+  c.done = 0;
+  Check(only_pipelines.Update(c) < 0.01f, "a skipped step does not move the bar");
+  c.done = 100;
+  c.pass = 1;
+  const float after_vulkan = only_pipelines.Update(c);
+  Check(after_vulkan > 0.1f && after_vulkan < 0.5f, "the prepared step fills its own share of what is left");
+  Check(only_pipelines.skipped() == 1u, "step 1 is known as skipped");
+  // Smoothness: the drawn bar follows the job's value over time, never past it, never back.
+  kk::ShaderProgressBar eased;
+  ShaderJobState e;
+  e.steps = 2;
+  e.step = 1;
+  e.phase = 2;
+  e.total = 100;
+  e.done = 100;
+  const float target = eased.Update(e);
+  float drawn = eased.Drawn(0.0), previous = drawn;
+  bool smooth = true;
+  for (int frame = 1; frame <= 120; ++frame) {
+    drawn = eased.Drawn(frame / 60.0);
+    smooth = smooth && drawn >= previous && drawn <= target && drawn - previous < 0.2f;
+    previous = drawn;
+  }
+  Check(smooth, "the drawn bar moves in small steps, never back, never past the job");
+  Check(target - drawn < 0.01f, "the drawn bar reaches the job's value within two seconds");
+  Check(eased.Drawn(2.0) == drawn, "drawing twice at the same time changes nothing");
 }
+
+void SettingsLayoutChecks() {
+  namespace L = kk::settings_layout;
+  // The owner's order (16 Oct), page by page: each label must come after the one before.
+  auto in_order = [](L::Page page, std::initializer_list<const char*> labels) {
+    int last = -1;
+    for (const char* label : labels) {
+      const int at = L::IndexOf(page, label);
+      if (at < 0 || at <= last) return false;
+      last = at;
+    }
+    return true;
+  };
+  Check(std::string(L::kPageNames[0]) == "Display" && std::string(L::kPageNames[1]) == "Graphics" &&
+            std::string(L::kPageNames[2]) == "Audio" && std::string(L::kPageNames[3]) == "Controls" &&
+            std::string(L::kPageNames[4]) == "Gameplay" && std::string(L::kPageNames[5]) == "Advanced",
+        "categories: Display, Graphics, Audio, Controls, Gameplay, Advanced");
+  Check(in_order(L::kDisplay, {"Window mode", "Monitor", "Resolution", "Refresh rate", "VSync", "Frame rate", "HDR"}),
+        "Display: window mode, monitor, resolution, refresh rate, VSync, frame-rate cap, HDR");
+  Check(in_order(L::kGraphics, {"Preset", "Graphics API", "Upscaler", "Upscaler mode", "Anti-aliasing",
+                                "Ambient occlusion", "Global illumination", "Motion blur", "Texture pack"}),
+        "Graphics: preset, API, upscaler and quality, anti-aliasing, effects, advanced last");
+  Check(L::IndexOf(L::kGraphics, "Look") < L::IndexOf(L::kGraphics, "Graphics API"), "the look is with the preset");
+  Check(std::string(L::RowsOf(L::kGraphics).begin()[L::IndexOf(L::kGraphics, "Rebuild shaders")].section) == "Advanced",
+        "Rebuild shaders is in Graphics' advanced section");
+  Check(in_order(L::kAudio, {"Master volume", "Music volume", "Effects volume", "Voices volume", "Menu sounds"}),
+        "Audio: master, music, effects, speech, menu sounds");
+  Check(in_order(L::kControls, {"Camera sensitivity", "Camera horizontal", "Camera vertical", "Vibration",
+                                "Button remapping", "Keyboard bindings"}),
+        "Controls: sensitivity, inversion, vibration, bindings");
+  Check(in_order(L::kGameplay, {"Subtitles", "Language", "Aiming visor", "Inventory", "Cheats"}),
+        "Gameplay: subtitles, language, HUD, then the rest");
+  Check(in_order(L::kAdvanced, {"Frame counter", "Copy diagnostics"}), "Advanced: diagnostics");
+  for (int p = 0; p < L::kPageCount; ++p) {
+    // Every label once per page (rows are found by label), headings in one run each.
+    std::map<std::string, int> seen;
+    std::vector<std::string> headings;
+    for (const L::Row& r : L::RowsOf(L::Page(p))) {
+      Check(++seen[r.label] == 1, "a label appears once on its page");
+      if (headings.empty() || headings.back() != r.section) headings.push_back(r.section);
+    }
+    std::map<std::string, int> runs;
+    for (const auto& h : headings) Check(++runs[h] == 1, "each heading is one block on its page");
+  }
+  // Moved rows are on their new pages only.
+  Check(L::IndexOf(L::kGraphics, "Graphics API") >= 0 && L::IndexOf(L::kAdvanced, "Graphics API") < 0,
+        "Graphics API moved from Advanced to Graphics");
+  Check(L::IndexOf(L::kGameplay, "Aiming visor") >= 0 && L::IndexOf(L::kControls, "Aiming visor") < 0,
+        "the HUD rows moved from Controls to Gameplay");
+  // The check the builders' pages go through (developer builds log it for the launcher and pause menu).
+  std::string why;
+  Check(L::InLayoutOrder(L::kDisplay, {{true, "Screen"}, {false, "Window mode"}, {false, "Monitor"},
+                                       {false, "Window size"}, {true, "Frame rate"}, {false, "VSync"},
+                                       {false, "Frame rate"}}, &why),
+        "a Display page in order passes");
+  Check(!L::InLayoutOrder(L::kDisplay, {{true, "Screen"}, {false, "Monitor"}, {false, "Window mode"}}, &why),
+        "rows out of order fail");
+  Check(!L::InLayoutOrder(L::kDisplay, {{true, "Window"}, {false, "Window mode"}}, &why),
+        "a row under another heading fails");
+  Check(!L::InLayoutOrder(L::kAudio, {{true, "Game audio"}, {false, "Surround"}}, &why), "an unknown row fails");
+  Check(L::InLayoutOrder(L::kGameplay, {{true, "Cheats"}, {false, "Cheats"}, {true, "Cheat list"},
+                                        {false, "Infinite ammo"}, {false, "Revolver"}}, &why),
+        "the cheat list's rows are one block");
+}
+
+void WhatsNewChecks() {
+  // Task 144: What's new never opens during first-time setup; only with the game files there, the
+  // shaders prepared and the look chosen. Every combination of the gate's inputs.
+  int shown = 0;
+  for (int bits = 0; bits < 256; ++bits) {
+    kk::WhatsNewGate g;
+    g.pending = bits & 1;
+    g.modal_open = bits & 2;
+    g.files_ok = bits & 4;
+    g.in_setup = bits & 8;
+    g.shader_screen = bits & 16;
+    g.shaders_busy = bits & 32;
+    g.shaders_wanted = bits & 64;
+    g.shaders_finished = bits & 128;
+    const bool show = kk::ShowWhatsNewNow(g);
+    if (!show) continue;
+    ++shown;
+    Check(g.pending && !g.modal_open, "only a waiting one, never over another pop-up");
+    Check(g.files_ok, "never before the game files are given");
+    Check(!g.in_setup, "never during any setup step (disc, install, artwork, shaders, look)");
+    Check(!g.shader_screen && !g.shaders_busy, "never while shaders are prepared");
+    Check(!g.shaders_wanted || g.shaders_finished, "only once the shaders were checked or prepared");
+  }
+  Check(shown > 0, "it does open once everything is ready");
+  kk::WhatsNewGate ready;
+  ready.pending = ready.files_ok = ready.shaders_wanted = ready.shaders_finished = true;
+  Check(kk::ShowWhatsNewNow(ready), "after an update, with the shaders done, it opens");
+  ready.in_setup = true;
+  Check(!kk::ShowWhatsNewNow(ready), "the setup screen asking for the game files holds it back");
+}
+
 namespace fs = std::filesystem;
 namespace sf = kk::play::save_file;
 
@@ -430,6 +568,8 @@ int main() {
   GraphicsPresetChecks();
   ExtrasChecks();
   ShaderProgressChecks();
+  SettingsLayoutChecks();
+  WhatsNewChecks();
   AllSavesChecks();
   std::cout << checks << " launcher checks passed\n";
   return 0;

@@ -36,6 +36,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -71,6 +72,8 @@
 #include "cheats.h"
 #include "platform.h"
 #include "settings.h"
+#include "settings_layout.h"
+#include "launcher_policy.h"
 #include "graphics_presets.h"
 #include "iso.h"
 #include "toast.h"
@@ -142,8 +145,22 @@ void Reset(const char* name) {
   ++g_changes;
 }
 
+// The pages are built every frame and look up many settings: by name through an index of the registry's
+// positions (task 144: it searched the whole registry each time), checked against the name so a registry
+// that grew or moved is searched again. UI thread only.
 const rex::cvar::FlagEntry* FindFlag(std::string_view name) {
-  for (auto& e : rex::cvar::GetRegistry())
+  static std::unordered_map<std::string, size_t> index;
+  static size_t indexed_size = 0;
+  auto& registry = rex::cvar::GetRegistry();
+  if (registry.size() != indexed_size) {
+    index.clear();
+    for (size_t i = 0; i < registry.size(); ++i) index.emplace(registry[i].name, i);
+    indexed_size = registry.size();
+  }
+  const auto it = index.find(std::string(name));
+  if (it == index.end()) return nullptr;  // the index has every entry of a registry this size
+  if (registry[it->second].name == name) return &registry[it->second];
+  for (auto& e : registry)  // moved since it was indexed
     if (e.name == name) return &e;
   return nullptr;
 }
@@ -253,13 +270,19 @@ constexpr const char* kRestartCvars[] = {"present_effect", "window_width", "wind
                                          "native_upscaler", "native_backend",
                                          "d3d12_allow_variable_refresh_rate_and_tearing"};
 
-enum Page { kHome, kDisplay, kGraphics, kAudio, kControls, kGameplay, kAdvanced, kExtras, kAchievements, kAbout, kPageCount };
+// The launcher's pages (owner, 16 Oct: a tidy top level). Home is the main menu: Play (its own pages,
+// PlayView, with Extras among them), Settings, Achievements and About. Settings has the six categories of
+// settings_layout.h as tabs; Achievements and About are pages of their own.
+enum Page { kHome, kDisplay, kGraphics, kAudio, kControls, kGameplay, kAdvanced, kAchievements, kAbout, kPageCount };
 constexpr const char* kPageNames[kPageCount] = {"Home", "Display", "Graphics", "Audio", "Controls", "Gameplay",
-                                               "Advanced", "Extras", "Achievements", "About"};
+                                               "Advanced", "Achievements", "About"};
+constexpr Page kFirstSettingsPage = kDisplay, kLastSettingsPage = kAdvanced;
+constexpr bool IsSettingsPage(Page page) { return page >= kFirstSettingsPage && page <= kLastSettingsPage; }
+static_assert(kLastSettingsPage - kFirstSettingsPage + 1 == settings_layout::kPageCount);
 // Sub-pages of Controls.
 enum SubPage { kNoSubPage, kRemapPage, kKeysPage };
 // Play on Home: the Play menu and its pages (docs/menus.md).
-enum class PlayView { kNone, kMenu, kLoad, kNew, kChapters };
+enum class PlayView { kNone, kMenu, kLoad, kNew, kChapters, kExtras };
 
 struct Achievement {
   uint32_t id = 0;
@@ -813,10 +836,23 @@ class SettingsPages {
     return it;
   }
 
+  // A save's bonus progress, read at most twice a second (the pages are built every frame; task 144: the
+  // Graphics page and Extras read the save file on every frame).
+  play::ExtraProgress ExtraProgressFor(int slot) {
+    const double now = ImGui::GetTime();
+    if (slot != extra_progress_slot_ || extra_progress_at_ < 0 || now - extra_progress_at_ >= kProfileReadInterval ||
+        profile_read_at_ < 0) {
+      extra_progress_ = play::ReadExtraProgress(profile_user_dir_, slot);
+      extra_progress_slot_ = slot;
+      extra_progress_at_ = now;
+    }
+    return extra_progress_;
+  }
+
   void OriginalVideoItems(std::vector<Item>& items) {
     const auto profile = ShownProfileOptions();
     const int slot = profile.slot;
-    auto progress = play::ReadExtraProgress(profile_user_dir_, slot);
+    auto progress = ExtraProgressFor(slot);
     progress.museum |= GetBool("kk_cheats") && GetBool("kk_cheat_bonus");
     items.push_back(Section("Extras"));
     for (int id : {1, 8}) {
@@ -837,13 +873,14 @@ class SettingsPages {
     const auto profile = ShownProfileOptions();
     if (!profile.error.empty()) Status(profile.error);
     items.push_back(Section("Game audio"));
+    // Shown master, music, effects, then voices (settings_layout.h); `i` stays the save's option number.
     const char* labels[] = {"Master volume", "Voices volume", "Music volume", "Effects volume"};
     const char* descriptions[] = {"How loud all game audio is. Applies during play and to every save.",
                                   "How loud the characters' voices are. Applies during play and to every save.",
                                   "How loud the game's music is. Applies during play and to every save.",
                                   "How loud the game's sound effects are. Applies during play and to every save."};
     const float values[] = {profile.master, profile.voices, profile.music, profile.effects};
-    for (int i = 0; i < 4; ++i) {
+    for (const int i : {0, 2, 3, 1}) {
       Item it;
       it.type = ItemType::kSlider;
       it.label = labels[i];
@@ -857,31 +894,26 @@ class SettingsPages {
       Disable(it, !profile.available, ProfileUnavailableNote());
       items.push_back(std::move(it));
     }
-    items.push_back(ActionItem("Reset page", "Put these settings back to their defaults.", "", [this] {
-      ui::Modal m;
-      m.open = true; m.title = "Reset page";
-      m.body = "Put these settings back to their defaults?";
-      m.buttons = {"Reset", "Cancel"}; m.cancel = m.focus = 1; m.width = 560;
-      m.on_button = [this](int i) { if (i == 0) ResetAudio(); };
-      modal_ = std::move(m);
-    }));
     if (!in_game_) {
       items.push_back(Section("Launcher"));
-    items.push_back(CvarToggle("Music", "The game's main menu music while the launcher is open, from your copy of the game.",
-                               "kk_launcher_music"));
-    {
-      Item it = CvarSlider("Music volume", "How loud the launcher's music is.", "kk_launcher_music_volume", 0, 100, 5,
-                           [](float v) { return std::to_string(int(std::lround(v))) + "%"; });
-      items.push_back(std::move(Disable(it, !GetBool("kk_launcher_music"), "Switch Music on to set its volume.")));
-    }
-    items.push_back(CvarToggle("Menu sounds", "The game's own menu sounds as you move around the launcher and choose things.",
-                               "kk_launcher_sounds"));
-    {
-      Item it = CvarSlider("Menu sound volume", "How loud the launcher's menu sounds are.",
-                           "kk_launcher_sounds_volume", 0, 100, 5,
-                           [](float v) { return std::to_string(int(std::lround(v))) + "%"; });
-      items.push_back(std::move(Disable(it, !GetBool("kk_launcher_sounds"), "Switch Menu sounds on to set their volume.")));
-    }
+      items.push_back(CvarToggle("Menu music",
+                                 "The game's main menu music while the launcher is open, from your copy of the game.",
+                                 "kk_launcher_music"));
+      {
+        Item it = CvarSlider("Menu music volume", "How loud the launcher's music is.", "kk_launcher_music_volume", 0,
+                             100, 5, [](float v) { return std::to_string(int(std::lround(v))) + "%"; });
+        items.push_back(std::move(Disable(it, !GetBool("kk_launcher_music"), "Switch Menu music on to set its volume.")));
+      }
+      items.push_back(CvarToggle("Menu sounds",
+                                 "The game's own menu sounds as you move around the launcher and choose things.",
+                                 "kk_launcher_sounds"));
+      {
+        Item it = CvarSlider("Menu sound volume", "How loud the launcher's menu sounds are.",
+                             "kk_launcher_sounds_volume", 0, 100, 5,
+                             [](float v) { return std::to_string(int(std::lround(v))) + "%"; });
+        items.push_back(
+            std::move(Disable(it, !GetBool("kk_launcher_sounds"), "Switch Menu sounds on to set their volume.")));
+      }
     }
     items.push_back(Section("Achievements"));
     items.push_back(CvarToggle("Sound", "The sound that plays with each pop-up.", "kk_achievement_sound"));
@@ -927,6 +959,15 @@ class SettingsPages {
     items.push_back(ActionItem("Open sounds folder", "Where your own .wav sounds go.", "", [this] {
       OpenInExplorer(SoundsDir(profile_user_dir_));
       sounds_.clear();  // rescan when the list is next built
+    }));
+    items.push_back(Section("Reset"));
+    items.push_back(ActionItem("Reset page", "Put these settings back to their defaults.", "", [this] {
+      ui::Modal m;
+      m.open = true; m.title = "Reset page";
+      m.body = "Put these settings back to their defaults?";
+      m.buttons = {"Reset", "Cancel"}; m.cancel = m.focus = 1; m.width = 560;
+      m.on_button = [this](int i) { if (i == 0) ResetAudio(); };
+      modal_ = std::move(m);
     }));
     return items;
   }
@@ -1186,26 +1227,26 @@ class SettingsPages {
   }
 
   std::vector<Item> DisplayItems() {
+    // The order of settings_layout.h (kDisplayRows).
     std::vector<Item> items;
-    items.push_back(Section("Window"));
+    items.push_back(Section("Screen"));
     items.push_back(WindowModeItem());
+    items.push_back(MonitorItem());
     // Each mode's own size: the window's, or the screen's in exclusive fullscreen (Borderless has none).
     if (!GetBool("fullscreen")) items.push_back(WindowSizeItem());
     if (ExclusiveFullscreen()) {
       items.push_back(ResolutionItem());
       items.push_back(RefreshRateItem());
     }
-    items.push_back(MonitorItem());
+    items.push_back(CvarChoice("Aspect ratio",
+                               "The game is 16:9. Letterbox keeps its shape on other screens; Stretch fills them.",
+                               "present_letterbox", {{"Letterbox 16:9", "true"}, {"Stretch", "false"}}));
     items.push_back(Section("Frame rate"));
-    items.push_back(FrameRateItem());
     items.push_back(CvarToggle("VSync",
                                "On waits for the display for tear-free frames. Off has the lowest latency and lets "
                                "G-Sync and FreeSync displays run freely.",
                                "d3d12_allow_variable_refresh_rate_and_tearing", "Off", "On", /*invert=*/true));
-    items.push_back(Section("Picture"));
-    items.push_back(CvarChoice("Aspect ratio",
-                               "The game is 16:9. Letterbox keeps its shape on other screens; Stretch fills them.",
-                               "present_letterbox", {{"Letterbox 16:9", "true"}, {"Stretch", "false"}}));
+    items.push_back(FrameRateItem());
     if (FindFlag("present_hdr")) {
       items.push_back(Section("HDR output"));
       items.push_back(CvarToggle("HDR",
@@ -1445,7 +1486,7 @@ class SettingsPages {
     }
     const bool original = GetBool("kk_original_look");
     std::vector<Item> items;
-    items.push_back(Section("Look"));
+    items.push_back(Section("Preset"));
     {
       Item it = CvarChoice("Look",
                            "Original keeps the Xbox 360 look. Remastered enables graphics presets and custom graphics settings. Its setup defaults are 60 FPS and Strong GTAO; Display sets the frame-rate cap.",
@@ -1487,29 +1528,13 @@ class SettingsPages {
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
 
+    GraphicsApiItem(items);
     UpscalingItems(items);
     items.push_back(Section("Image"));
-    items.push_back(CvarChoice("Texture pack", "Use replacement textures made from your own extracted files.",
-                              "native_texture_pack", {{"Off", "false"}, {"On", "true"}}));
     {
-      const std::string folder = Get("native_texture_pack_folder");
-      Item it = ActionItem("Texture pack folder", "Choose the folder containing your texture pack.",
-                           folder.empty() ? T("Choose folder") : folder, [] {
-        {
-          std::lock_guard lock(texture_pack_folder_choice.mutex);
-          if (texture_pack_folder_choice.busy) return;
-          texture_pack_folder_choice.busy = true;
-        }
-        const std::string current = Get("native_texture_pack_folder");
-        SDL_ShowOpenFolderDialog([](void*, const char* const* files, int) {
-          std::lock_guard lock(texture_pack_folder_choice.mutex);
-          if (files && files[0]) texture_pack_folder_choice.selected = files[0];
-          texture_pack_folder_choice.busy = false;
-        }, nullptr, nullptr, current.empty() ? nullptr : current.c_str(), false);
-      });
-      it.on_default = [] { Reset("native_texture_pack_folder"); };
-      { std::lock_guard lock(texture_pack_folder_choice.mutex); it.disabled = texture_pack_folder_choice.busy; }
-      items.push_back(std::move(it));
+      Item it = CvarChoice("Anti-aliasing", "Smooths jagged edges after the frame is drawn.", "swap_post_effect",
+                           {{"Off", "none"}, {"FXAA", "fxaa"}, {"SMAA", "smaa"}});
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
     {
       Item it = CvarChoice("Sharpness", "Adaptive sharpening. Skipped when the upscaler's own sharpening is active.",
@@ -1521,16 +1546,6 @@ class SettingsPages {
       it.on_value = [choose = it.on_choice](float v) { choose(std::clamp(int(std::lround(v)), 0, 3)); };
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
-    {
-      Item it = CvarChoice("Effect resolution", "Resolution of bloom, blur and glow buffers.",
-                           "native_effect_buffers", {{"Original", "false"}, {"Output", "true"}});
-      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
-    }
-    {
-      Item it = CvarChoice("Anti-aliasing", "Smooths jagged edges after the frame is drawn.", "swap_post_effect",
-                           {{"Off", "none"}, {"FXAA", "fxaa"}, {"SMAA", "smaa"}});
-      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
-    }
     // 2x MSAA is not offered as a choice: it is how the Xbox 360 drew those
     // surfaces (native_2x_msaa, on by default), and the shader pack is built with it.
     {
@@ -1540,6 +1555,7 @@ class SettingsPages {
                             {"16" KK_TIMES, "5"}});
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
+    items.push_back(Section("Lighting"));
     {
       // Ambient occlusion lives in the GPU plugin (ao_mode, ao_strength). On the native renderer it is
       // GTAO (ApplyPortDefaults), worked out from the scene's depth at the end of the opaque pass, so
@@ -1615,44 +1631,75 @@ class SettingsPages {
     }
 
     OriginalVideoItems(items);
+    items.push_back(Section("Advanced"));
+    {
+      Item it = CvarChoice("Effect resolution", "Resolution of bloom, blur and glow buffers.",
+                           "native_effect_buffers", {{"Original", "false"}, {"Output", "true"}});
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
+    items.push_back(CvarChoice("Texture pack", "Use replacement textures made from your own extracted files.",
+                              "native_texture_pack", {{"Off", "false"}, {"On", "true"}}));
+    {
+      const std::string folder = Get("native_texture_pack_folder");
+      Item it = ActionItem("Texture pack folder", "Choose the folder containing your texture pack.",
+                           folder.empty() ? T("Choose folder") : folder, [] {
+        {
+          std::lock_guard lock(texture_pack_folder_choice.mutex);
+          if (texture_pack_folder_choice.busy) return;
+          texture_pack_folder_choice.busy = true;
+        }
+        const std::string current = Get("native_texture_pack_folder");
+        SDL_ShowOpenFolderDialog([](void*, const char* const* files, int) {
+          std::lock_guard lock(texture_pack_folder_choice.mutex);
+          if (files && files[0]) texture_pack_folder_choice.selected = files[0];
+          texture_pack_folder_choice.busy = false;
+        }, nullptr, nullptr, current.empty() ? nullptr : current.c_str(), false);
+      });
+      it.on_default = [] { Reset("native_texture_pack_folder"); };
+      { std::lock_guard lock(texture_pack_folder_choice.mutex); it.disabled = texture_pack_folder_choice.busy; }
+      items.push_back(std::move(it));
+    }
+    RebuildShadersItem(items);
     return items;
+  }
+
+  // Graphics > Renderer: the native renderer's graphics API (Vulkan or DirectX 12).
+  static void GraphicsApiItem(std::vector<Item>& items) {
+    if (!NativeRendererAvailable()) return;
+    if (UsingNativeRenderer() && FindFlag("native_backend")) {
+      items.push_back(Section("Renderer"));
+      Item api;
+      api.type = ItemType::kChoice;
+      api.label = "Graphics API";
+#if defined(__linux__)
+      api.description = "How the native renderer talks to your graphics card. Auto uses Vulkan. Changes apply when the game starts.";
+      api.options = {"Auto", "Vulkan"};
+#else
+      api.description = "Auto uses Vulkan. DirectX 12 is needed for AMD FSR 4. Changes apply when the game starts.";
+      api.options = {"Auto", "Vulkan", "DirectX 12"};
+#endif
+      const std::string backend = Get("native_backend");
+      api.index = backend == "auto" ? 0 : backend == "vulkan" ? 1 : backend == "d3d12" ? 2 : -1;
+      api.value_text = backend;
+      api.default_text = "Auto";
+      api.on_choice = [](int i) {
+        startup::ManualChoice();  // the player's choice wins over a startup fallback
+        Set("native_backend", i == 0 ? "auto" : i == 1 ? "vulkan" : "d3d12");
+        ApplyUpscalerDefaults();
+      };
+      api.on_default = [] {
+        startup::ManualChoice();
+        Reset("native_backend");
+        ApplyUpscalerDefaults();
+      };
+      items.push_back(std::move(api));
+    }
   }
 
   std::vector<Item> AdvancedItems() {
     std::vector<Item> items;
-    // The native API is the only renderer choice.
-    if (NativeRendererAvailable()) {
-      items.push_back(Section("Advanced"));
-      if (UsingNativeRenderer() && FindFlag("native_backend")) {
-        Item api;
-        api.type = ItemType::kChoice;
-        api.label = "Graphics API";
-#if defined(__linux__)
-        api.description = "How the native renderer talks to your graphics card. Auto uses Vulkan. Changes apply when the game starts.";
-        api.options = {"Auto", "Vulkan"};
-#else
-        api.description = "Auto uses Vulkan. DirectX 12 is needed for AMD FSR 4. Changes apply when the game starts.";
-        api.options = {"Auto", "Vulkan", "DirectX 12"};
-#endif
-        const std::string backend = Get("native_backend");
-        api.index = backend == "auto" ? 0 : backend == "vulkan" ? 1 : backend == "d3d12" ? 2 : -1;
-        api.value_text = backend;
-        api.default_text = "Auto";
-        api.on_choice = [](int i) {
-          startup::ManualChoice();  // the player's choice wins over a startup fallback
-          Set("native_backend", i == 0 ? "auto" : i == 1 ? "vulkan" : "d3d12");
-          ApplyUpscalerDefaults();
-        };
-        api.on_default = [] {
-          startup::ManualChoice();
-          Reset("native_backend");
-          ApplyUpscalerDefaults();
-        };
-        items.push_back(std::move(api));
-      }
-    }
-
 #if defined(_WIN32)
+    items.push_back(Section("Cutscenes"));
     items.push_back(CvarToggle("Play PS2 cutscenes",
         "Play your own PS2 movies between missions. You must supply the movies and choose their folder.",
         "kk_ps2_cutscenes"));
@@ -1678,26 +1725,42 @@ class SettingsPages {
 
   // ----------------------------------------------------------- Gameplay ---
   std::vector<Item> GameplayItems() {
+    // The order of settings_layout.h (kGameplayRows).
     const bool original = GetBool("kk_original_look");
     std::vector<Item> items;
-    items.push_back(Section("Game"));
+    items.push_back(Section("Subtitles and language"));
+    items.push_back(SubtitlesItem());
+    items.push_back(CvarChoice("Language", "The game's language, where the game includes it.", "user_language",
+                               {{"English", "1"},
+                                {"Deutsch", "3"},
+                                {"EspaÃ±ol", "5"},
+                                {"FranÃ§" "ais", "4"},
+                                {"Italiano", "6"}}));
+    items.push_back(Section("HUD"));
+    {
+      const auto profile = ShownProfileOptions();
+      items.push_back(ProfileToggle("Aiming visor", "Show the game's aiming visor.", play::ProfileOption::kAimingVisor,
+                                    profile.aiming_visor));
+      items.push_back(ProfileToggle("Inventory", "Show the game's inventory indicators.", play::ProfileOption::kInventory,
+                                    profile.inventory));
+    }
+    items.push_back(CvarToggle("Notifications", "A pop-up when you unlock an achievement in game.",
+                               "kk_achievement_toasts"));
+    items.push_back(CvarChoice("Pop-up style",
+                               "Xbox 360 unfolds from a green ring at the bottom of the screen. Steam slides up in "
+                               "the bottom-right corner. Try them with Test notification.",
+                               "kk_achievement_style", {{"Xbox 360", "xbox360"}, {"Steam", "steam"}}));
+    items.push_back(Section("Camera"));
     {
       Item it = CvarSlider("Field of view",
                            "How wide the camera sees. 69" KK_DEG " is the original for Jack; Kong, cutscene and other "
                            "cameras widen by the same amount. Jack's gun keeps its usual size.",
                            "kk_fov", 69, 110, 1, [](float v) {
                              const int d = int(std::lround(v));
-                             return d <= 69 ? F("{0}\xC2\xB0 (original)", {std::to_string(d)}) : std::to_string(d) + KK_DEG;
+                             return d <= 69 ? F("{0}Â° (original)", {std::to_string(d)}) : std::to_string(d) + KK_DEG;
                            });
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
-    items.push_back(CvarChoice("Language", "The game's language, where the game includes it.", "user_language",
-                               {{"English", "1"},
-                                {"Deutsch", "3"},
-                                {"Espa\xC3\xB1ol", "5"},
-                                {"Fran\xC3\xA7" "ais", "4"},
-                                {"Italiano", "6"}}));
-    items.push_back(SubtitlesItem());
     items.push_back(CvarToggle("Camera shake",
                                "The camera shaking from the V-Rex's footsteps, explosions and Kong's blows.",
                                "kk_camera_shake"));
@@ -1709,17 +1772,11 @@ class SettingsPages {
       items.push_back(
           std::move(Disable(it, !GetBool("kk_camera_shake"), "Switch Camera shake on to set its strength.")));
     }
+    items.push_back(Section("Game"));
     items.push_back(CvarToggle("Startup logos",
                                "The Ubisoft, Universal and WingNut movies before the title screen. Story movies "
                                "still play.",
                                "kk_skip_intros", "Play", "Skip"));
-    items.push_back(Section("Notifications"));
-    items.push_back(CvarToggle("Notifications", "A pop-up when you unlock an achievement in game.",
-                               "kk_achievement_toasts"));
-    items.push_back(CvarChoice("Pop-up style",
-                               "Xbox 360 unfolds from a green ring at the bottom of the screen. Steam slides up in "
-                               "the bottom-right corner. Try them with Test notification.",
-                               "kk_achievement_style", {{"Xbox 360", "xbox360"}, {"Steam", "steam"}}));
     auto cheats = CheatItems();
     items.insert(items.end(), std::make_move_iterator(cheats.begin()), std::make_move_iterator(cheats.end()));
     return items;
@@ -1729,7 +1786,7 @@ class SettingsPages {
   std::vector<Item> ControlsItems() {
     std::vector<Item> items;
     const auto percent = [](float v) { return std::to_string(int(std::lround(v))) + "%"; };
-    items.push_back(Section("Controller"));
+    items.push_back(Section("Input"));
     {
       Item it = CvarToggle("Input",
                            "Controllers work automatically. Keyboard & mouse plays with a keyboard and mouse instead: "
@@ -1762,6 +1819,7 @@ class SettingsPages {
       }
       items.push_back(std::move(it));
     }
+    items.push_back(Section("Controller"));
     items.push_back(CvarSlider("Camera sensitivity", "How fast the right stick turns the camera and moves your aim.",
                                "kk_camera_sensitivity", 25, 300, 5, percent));
     items.push_back(CvarToggle("Camera response",
@@ -1769,6 +1827,8 @@ class SettingsPages {
                                "even. Original is the Xbox 360's own: small pushes up and down turn much more slowly "
                                "than small pushes sideways.",
                                "kk_camera_modern", "Original", "Modern"));
+    items.push_back(CvarSlider("Stick deadzone", "Ignores small stick movements. Raise it if the camera or cursor drifts.",
+                               "kk_deadzone", 0, 40, 1, percent));
     items.push_back(CvarToggle("Camera horizontal",
                                "Which way the camera turns when you push the right stick left or right.",
                                "kk_invert_rs_x", "Normal", "Inverted"));
@@ -1793,8 +1853,6 @@ class SettingsPages {
       it.default_text = "Normal";
       items.push_back(std::move(it));
     }
-    items.push_back(CvarSlider("Stick deadzone", "Ignores small stick movements. Raise it if the camera or cursor drifts.",
-                               "kk_deadzone", 0, 40, 1, percent));
     items.push_back(CvarToggle("Aim",
                                "Hold: keep the left trigger held to raise the gun, as on the console. Toggle: press "
                                "it once to raise the gun and again to lower it. Pausing lowers it.",
@@ -1811,9 +1869,6 @@ class SettingsPages {
 
     const bool mnk = GetBool("mnk_mode");
     const char* mnk_note = "Used when Input is Keyboard & mouse.";
-    const auto profile = ShownProfileOptions();
-    items.push_back(ProfileToggle("Aiming visor", "Show the game's aiming visor.", play::ProfileOption::kAimingVisor, profile.aiming_visor));
-    items.push_back(ProfileToggle("Inventory", "Show the game's inventory indicators.", play::ProfileOption::kInventory, profile.inventory));
     items.push_back(Section("Keyboard & mouse"));
     {
       Item it = CvarSlider("Mouse sensitivity",
@@ -1838,17 +1893,6 @@ class SettingsPages {
       items.push_back(std::move(Disable(it, !mnk || !GetBool("mnk_mouse"), mnk_note)));
     }
 
-    // The graphics panel (debug_overlay.cpp): its keys work in play with either input.
-    items.push_back(Section("Keys while playing"));
-    {
-      Item it;
-      it.type = ItemType::kInfo;
-      it.label = "Graphics panel";
-      it.value_text = "F8";
-      it.description = "F8 opens a panel over the game for trying graphics settings while you play. Hold F7 to see your saved settings for comparison. F6 saves a screenshot and its settings in the screenshots folder. Changes are temporary until you choose Save as my settings.";
-      items.push_back(std::move(it));
-    }
-
     items.push_back(Section("Mapping"));
     {
       Item it;
@@ -1866,6 +1910,17 @@ class SettingsPages {
       it.on_activate = [this] { sub_ = kKeysPage; };
       items.push_back(std::move(it));
     }
+    // The graphics panel (debug_overlay.cpp): its keys work in play with either input.
+    items.push_back(Section("Keys while playing"));
+    {
+      Item it;
+      it.type = ItemType::kInfo;
+      it.label = "Graphics panel";
+      it.value_text = "F8";
+      it.description = "F8 opens a panel over the game for trying graphics settings while you play. Hold F7 to see your saved settings for comparison. F6 saves a screenshot and its settings in the screenshots folder. Changes are temporary until you choose Save as my settings.";
+      items.push_back(std::move(it));
+    }
+
     return items;
   }
 
@@ -2045,6 +2100,38 @@ class SettingsPages {
     return items;
   }
 
+  // Graphics > Advanced: Rebuild shaders (the launcher's only: the game uses them while it runs). The same
+  // job as Home's shader status, shown on the shader screen with its one progress bar.
+  std::function<void()> rebuild_shaders_;
+  void RebuildShadersItem(std::vector<Item>& items) {
+    if (in_game_ || !rebuild_shaders_ || !NativeShaderPack::Wanted()) return;
+    items.push_back(ActionItem("Rebuild shaders",
+                               "Prepares all of the game's shaders again, for Vulkan and DirectX 12. It takes a few "
+                               "minutes. It can help after a graphics driver update, or if the game shows graphics "
+                               "problems.",
+                               "", rebuild_shaders_));
+  }
+
+  // A built page against settings_layout.h (`layout_page`: its settings_layout::Page).
+  static bool CheckLayout(int layout_page, const std::vector<Item>& items, std::string* why) {
+    std::vector<settings_layout::Built> rows;
+    for (const Item& it : items) rows.push_back({it.type == ItemType::kSection, it.label});
+    return settings_layout::InLayoutOrder(settings_layout::Page(layout_page), rows, why);
+  }
+#if defined(KK_DEV_TOOLS)
+  // Developer builds log each page's check once per outcome ("KK dev: layout ... ok" or "FAIL").
+  void DevCheckLayout(int layout_page, const std::vector<Item>& items, const char* where) {
+    std::string why;
+    const bool ok = CheckLayout(layout_page, items, &why);
+    if (!layout_logged_.insert(std::string(where) + std::to_string(layout_page) + why).second) return;
+    if (ok)
+      REXLOG_INFO("KK dev: layout {} {} ok ({} rows)", where, settings_layout::kPageNames[layout_page], items.size());
+    else
+      REXLOG_ERROR("KK dev: layout {} {} FAIL {}", where, settings_layout::kPageNames[layout_page], why);
+  }
+  std::set<std::string> layout_logged_;
+#endif
+
   // In game: the rows that change while the game runs. Left out (they need a restart, or only make
   // sense before the game starts): the window, resolution, refresh rate and monitor, the frame rate
   // cap and VSync, the upscaler and render quality, the look and preset, the renderer, the language
@@ -2103,6 +2190,9 @@ class SettingsPages {
   std::array<bool, size_t(play::ProfileOption::kCount)> profile_dirty_{};
   std::array<bool, size_t(play::ProfileOption::kCount)> profile_waiting_{};
   double profile_changed_at_ = 0;
+  play::ExtraProgress extra_progress_;
+  int extra_progress_slot_ = -2;
+  double extra_progress_at_ = -1;
 };
 
 class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
@@ -2117,6 +2207,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     for (const char* name : kRestartCvars) restart_baseline_.push_back(Get(name));
     files_ok_ = GameFilesPresent(paths_.game_dir);
     home_focus_ = 0;
+    rebuild_shaders_ = [this] { OpenRebuildShaders(); };
     EnforceOriginalLook();
     // Which temporal upscalers this PC runs (Display > Upscaling): asked now, in the background.
     ApplyRendererChoice();      // the renderer decided, the default upscaler follows it
@@ -2138,6 +2229,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         // Existing game files with fresh user settings still need the setup's one shader screen.
         setup_shaders_ = true;
         REXLOG_INFO("KK: first start: preparing both native shader packs on the setup screen");
+      }
+      if (first_start) {
+        // ... and its last step, Original or Remastered, as after an install.
+        setup_style_ = true;
+        style_focus_ = 1;
       }
       if (updated && NativeShaderPack::Wanted()) {
         update_shaders_ = true;
@@ -2183,7 +2279,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       OpenPlayMenu();
       if (open_on == "chapters") OpenPlayView(PlayView::kChapters);
     }
-    if (files_ok_ && open_on == "extras") GoTo(kExtras);
+    if (files_ok_ && open_on == "extras") {  // back from an Extras bonus: Play > Extras
+      OpenPlayMenu();
+      OpenPlayView(PlayView::kExtras);
+    }
     saved_changes_ = seen_changes_ = g_changes;
   }
 
@@ -2203,15 +2302,29 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
  protected:
   void OnDraw(ImGuiIO& io) override {
-#if !defined(_WIN32)
-    // The SDK holds the launcher to the display's refresh rate on Windows only: elsewhere
-    // it draws as fast as it can (a handheld's battery), so keep it to 60 frames a second.
     {
+      // The frame rate (task 144). The SDK holds the launcher to the display's refresh rate on Windows
+      // only: elsewhere it draws as fast as it can (a handheld's battery), so keep it to 60 frames a
+      // second there. Once nothing has moved for a second (no input, no page change, no pop-up opening,
+      // no notification), only the backdrop's slow drift is left: 30 frames a second draw it the same
+      // and save most of the launcher's processor and graphics time while it sits on a page. The first
+      // input after that is answered within a frame of 33 ms.
       using clock = std::chrono::steady_clock;
-      constexpr auto kFrame = std::chrono::microseconds(16667);
-      if (next_frame_ > clock::now()) std::this_thread::sleep_until(next_frame_);
-      next_frame_ = std::max(next_frame_, clock::now() - kFrame) + kFrame;
+      const bool idle = ImGui::GetTime() - last_activity_ > 1.0;
+#if defined(_WIN32)
+      const auto frame = idle ? std::chrono::microseconds(33333) : std::chrono::microseconds(0);
+#else
+      const auto frame = std::chrono::microseconds(idle ? 33333 : 16667);
+#endif
+      if (frame.count() > 0) {
+        if (next_frame_ > clock::now()) std::this_thread::sleep_until(next_frame_);
+        next_frame_ = std::max(next_frame_, clock::now() - frame) + frame;
+      } else {
+        next_frame_ = clock::now();
+      }
     }
+#if defined(KK_DEV_TOOLS)
+    const auto draw_start = std::chrono::steady_clock::now();
 #endif
     // Testing aid: KK_AUTOPLAY=1 presses Play after a couple of seconds (120 frames); KK_AUTOPLAY=40
     // after 40 s (60 frames a second), to keep the launcher open as a player might.
@@ -2258,6 +2371,12 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     m_.row_h = 46 * s;
     m_.tall_h = 74 * s;
     m_.section_h = 52 * s;
+    if (leaving_) {  // the game is starting in a new process (StartGame): the backdrop only, the music fading
+      if (music_) music_->Update(0.0f, io.DeltaTime);
+      DrawBackdrop(dl);
+      ImGui::End();
+      return;
+    }
 
     input_.set_keyboard_enabled(capturing_.empty() && !editing_name_);  // keys go to the binding or the name
     input_.Update();
@@ -2320,12 +2439,82 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     ui::DrawModal(dl, modal_, o_, ImVec2(o_.x + w_, o_.y + h_), m_, input_);
     DrawBottomBar(dl);  // over a pop-up's shade: its prompts stay clear
     ImGui::End();
-    (void)io;
+    NoteActivity(io);
+#if defined(KK_DEV_TOOLS)
+    DevPerf(draw_start);
+#endif
   }
+
+  // What keeps the launcher at its full frame rate (OnDraw): input of any kind, a page, view, pop-up or
+  // setup step changing, a notification showing, the shader job's bar moving.
+  void NoteActivity(const ImGuiIO& io) {
+    bool active = input_.mouse_moved() || io.MouseWheel != 0.0f || io.MouseWheelH != 0.0f ||
+                  io.InputQueueCharacters.Size > 0 || ImGui::IsAnyMouseDown() || !capturing_.empty();
+    for (int a = 0; a < int(Action::kCount) && !active; ++a) active = input_.Pressed(Action(a)) || input_.HeldFor(Action(a)) > 0;
+    for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END && !active; ++k) active = ImGui::IsKeyDown(ImGuiKey(k));
+    const int view = int(page_) * 16 + int(play_) * 4 + int(sub_) + (modal_.open ? 1000 : 0) + SetupStage() * 10000 +
+                     (ShaderScreen() ? 100000 : 0) + (leaving_ ? 1000000 : 0);
+    active = active || view != last_view_ || (toast_ && toast_->NeedsContinuousPaint()) || native_pack_.Working() ||
+             installing_ || art_progress_.busy || (update_ && update_->busy) || status_focus_ != last_status_focus_;
+    last_view_ = view;
+    last_status_focus_ = status_focus_;
+    if (active) last_activity_ = ImGui::GetTime();
+  }
+
+#if defined(KK_DEV_TOOLS)
+  // Developer: KK_DEV_LAUNCHER_PERF=1 logs the launcher's own drawing cost every two seconds (frames, the
+  // processor time of OnDraw on average and at most) and how long after the process started it first drew.
+  void DevPerf(std::chrono::steady_clock::time_point start) {
+    static const bool on = std::getenv("KK_DEV_LAUNCHER_PERF") != nullptr;
+    if (!on) return;
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    static int frames = 0;
+    static double total = 0, worst = 0, since = -1;
+    static bool first = true;
+    if (first) {
+      first = false;
+#if defined(_WIN32)
+      FILETIME created, exited, kernel, user, now_ft;
+      GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user);
+      GetSystemTimeAsFileTime(&now_ft);
+      auto ticks = [](const FILETIME& t) { return (uint64_t(t.dwHighDateTime) << 32) | t.dwLowDateTime; };
+      REXLOG_INFO("KK dev: launcher perf: first frame {:.0f} ms after the process started",
+                  double(ticks(now_ft) - ticks(created)) / 10000.0);
+#endif
+    }
+    ++frames;
+    total += ms;
+    worst = std::max(worst, ms);
+    const double now = ImGui::GetTime();
+    if (since < 0) since = now;
+    if (now - since >= 2.0) {
+      REXLOG_INFO("KK dev: launcher perf: {} frames in {:.1f} s ({:.0f} a second), OnDraw {:.2f} ms average, {:.2f} ms "
+                  "worst, idle {}",
+                  frames, now - since, frames / (now - since), total / frames, worst, now - last_activity_ > 1.0);
+      frames = 0;
+      total = worst = 0;
+      since = now;
+    }
+  }
+#endif
 
  private:
   float S() const { return m_.s; }
   float Margin() const { return 64 * m_.s; }
+
+  // A value read from disk at most every `seconds` (the pages are built every frame; task 144: some read a
+  // file or a folder on every frame).
+  template <class T, class F>
+  const T& Cached(std::pair<double, T>& slot, double seconds, F&& read) {
+    const double now = ImGui::GetTime();
+    if (now - slot.first >= seconds) {
+      slot.second = read();
+      slot.first = now;
+    }
+    return slot.second;
+  }
+  std::pair<double, bool> crash_reports_cache_{-1e9, false}, launcher_art_cache_{-1e9, false};
+  std::map<std::string, std::pair<double, bool>> port_achievement_cache_;
 
   // ---------------------------------------------------------------- art ---
   rex::ui::ImmediateTexture* MakeTexture(const art::Image& img) {
@@ -2549,49 +2738,56 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   }
 
   // ------------------------------------------------------------ top bar ---
+  // The top of every page but the setup's: on Settings the six categories as tabs (LB and RB, or a click,
+  // move between them) with SETTINGS at the right; on Achievements and About the page's name; on Home
+  // nothing but the online player count. The Play pages have their own (DrawPlayHeader).
   void DrawTopBar(ImDrawList* dl) {
     const float s = S();
     const online::Counts counts = online::Get();
-    const bool show_counts = counts.known && !InSetup();
-    const ui::Fonts top_fonts = ui::GetFonts();
-    const float caption_width = show_counts
-        ? ui::TrackedWidth(top_fonts.display, 13 * s,
-                           Upper(F("Players online: {0}", {std::to_string(counts.online)})), 2.2f * s) + 16 * s
-        : ui::TrackedWidth(top_fonts.display, 15 * s, "KING KONG", 4 * s);
-    std::vector<std::string> names;
-    for (const char* n : kPageNames) names.push_back(Upper(T(n)));
-    float ux = 0, uw = 0;
-    const int clicked = ui::DrawTabs(dl, glyphs_, PromptSet(), names, page_, ImVec2(o_.x + Margin(), o_.y + 44 * s),
-                                     m_, !modal_.open, &ux, &uw, w_ - Margin() * 2 - caption_width - 32 * s);
-    if (clicked >= 0 && clicked != int(page_)) {
-      ui::Cue(ui::Sound::kTab);
-      GoTo(Page(clicked));
-    }
-    if (tab_x_ < 0) {
-      tab_x_ = ux;
-      tab_w_ = uw;
-    }
-    tab_x_ = ui::Approach(tab_x_, ux, 22.0f);
-    tab_w_ = ui::Approach(tab_w_, uw, 22.0f);
-    const float ly = std::round(o_.y + 74 * s);
-    dl->AddLine(ImVec2(o_.x + Margin(), ly), ImVec2(o_.x + w_ - Margin(), ly), color::kHairline, 1.0f);
-    dl->AddRectFilled(ImVec2(tab_x_, ly - 2 * s), ImVec2(tab_x_ + tab_w_, ly), color::kAccent);
-    // The game's name at the right, away from Home (which shows it large).
-    // The online player count takes its place while it's shown.
+    const bool show_counts = counts.known && !InSetup() && page_ == kHome;
+    const ui::Fonts f = ui::GetFonts();
     const float right = o_.x + w_ - Margin();
-    if (home_mix_ < 0.99f && !show_counts) {
-      const ui::Fonts f = ui::GetFonts();
-      const std::string name = "KING KONG";
-      const float fs = 15 * s, tr = 4 * s;
-      const float tw = ui::TrackedWidth(f.display, fs, name, tr);
-      ui::DrawTracked(dl, f.display, fs, ImVec2(right - tw, o_.y + 44 * s - fs * 0.5f),
-                      ui::WithAlpha(color::kTextDim, 1.0f - home_mix_), name, tr);
+    const float ly = std::round(o_.y + 74 * s);
+    if (page_ != kHome) {
+      const std::string caption = IsSettingsPage(page_) ? Upper(T("Settings")) : std::string("KING KONG");
+      const float caption_fs = 15 * s, caption_tr = 4 * s;
+      const float caption_width = ui::TrackedWidth(f.display, caption_fs, caption, caption_tr);
+      float ux = 0, uw = 0;
+      if (IsSettingsPage(page_)) {
+        if (tab_names_lang_ != int(text::Current()) || tab_names_.empty()) {  // made once per language
+          tab_names_.clear();
+          for (int p = kFirstSettingsPage; p <= kLastSettingsPage; ++p) tab_names_.push_back(Upper(T(kPageNames[p])));
+          tab_names_lang_ = int(text::Current());
+        }
+        const int clicked = ui::DrawTabs(dl, glyphs_, PromptSet(), tab_names_, int(page_) - kFirstSettingsPage,
+                                         ImVec2(o_.x + Margin(), o_.y + 44 * s), m_, !modal_.open, &ux, &uw,
+                                         w_ - Margin() * 2 - caption_width - 32 * s);
+        if (clicked >= 0 && clicked != int(page_) - kFirstSettingsPage) {
+          ui::Cue(ui::Sound::kTab);
+          GoTo(Page(kFirstSettingsPage + clicked));
+        }
+      } else {
+        const float fs = 15 * s, tr = 1.6f * s, cy = o_.y + 44 * s;
+        const std::string name = Upper(T(kPageNames[page_]));
+        ui::DrawTracked(dl, f.display, fs, ImVec2(o_.x + Margin(), cy - fs * 0.5f), color::kText, name, tr);
+        ux = o_.x + Margin();
+        uw = ui::TrackedWidth(f.display, fs, name, tr);
+      }
+      if (tab_x_ < 0) {
+        tab_x_ = ux;
+        tab_w_ = uw;
+      }
+      tab_x_ = ui::Approach(tab_x_, ux, 22.0f);
+      tab_w_ = ui::Approach(tab_w_, uw, 22.0f);
+      dl->AddLine(ImVec2(o_.x + Margin(), ly), ImVec2(o_.x + w_ - Margin(), ly), color::kHairline, 1.0f);
+      dl->AddRectFilled(ImVec2(tab_x_, ly - 2 * s), ImVec2(tab_x_ + tab_w_, ly), color::kAccent);
+      ui::DrawTracked(dl, f.display, caption_fs, ImVec2(right - caption_width, o_.y + 44 * s - caption_fs * 0.5f),
+                      color::kTextDim, caption, caption_tr);
+      return;
     }
     // The online player count, while it's on and the server has answered.
     if (show_counts) {
-      const online::Counts& c = counts;
-      const ui::Fonts f = ui::GetFonts();
-      const std::string text = Upper(F("Players online: {0}", {std::to_string(c.online)}));
+      const std::string text = Upper(F("Players online: {0}", {std::to_string(counts.online)}));
       const float fs = 13 * s, tr = 2.2f * s, cy = o_.y + 44 * s;
       const float tw = ui::TrackedWidth(f.display, fs, text, tr);
       ui::DrawTracked(dl, f.display, fs, ImVec2(right - tw, cy - fs * 0.5f), color::kTextDim, text, tr);
@@ -2599,15 +2795,14 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
   }
 
-
   void GoTo(Page page) {
-    if (page == kExtras) ReadSaves();
     if (page == kDisplay && page_ != kDisplay) {
       monitors_.clear();
       display_modes_monitor_ = -1;
       LoadDisplayModes();
     }
     if (page != page_) sub_ = kNoSubPage;
+    if (IsSettingsPage(page)) settings_page_ = page;
     side_focus_ = -1;
     play_ = PlayView::kNone;
     page_ = page;
@@ -2688,9 +2883,12 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     ui::Input& in = input_;
     if (play_ != PlayView::kNone) return HandlePlayInput();
     if (in.Pressed(Action::kPrevTab) || in.Pressed(Action::kNextTab)) {
-      const int dir = in.Pressed(Action::kNextTab) ? 1 : -1;
-      ui::Cue(ui::Sound::kTab);
-      GoTo(Page((int(page_) + dir + kPageCount) % kPageCount));
+      // LB and RB move between the settings categories (only on Settings).
+      if (IsSettingsPage(page_)) {
+        const int dir = in.Pressed(Action::kNextTab) ? 1 : -1, n = kLastSettingsPage - kFirstSettingsPage + 1;
+        ui::Cue(ui::Sound::kTab);
+        GoTo(Page(kFirstSettingsPage + (int(page_) - kFirstSettingsPage + dir + n) % n));
+      }
       in.Consume(Action::kPrevTab);
       in.Consume(Action::kNextTab);
     }
@@ -2725,17 +2923,12 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   std::vector<HomeEntry> HomeEntries() {
     std::vector<HomeEntry> e;
     e.push_back({"Play", CanPlay(), [this] { OpenPlayMenu(); }});
-    if (installing_) e.push_back({"Cancel install", true, [this] { progress_.cancel = true; }});
-    else e.push_back({files_ok_ ? "Reinstall game" : "Install game", true, [this] { StartInstall(); }});
+    // An update that was found stays one press away; checking, reinstalling and the rest are on About.
     if (update_ && update_->found && !installing_update_)
       e.push_back({F("Update to v{0}", {update_->found->version}), true, [this] { OpenUpdatePrompt(); }});
-    else if (update_ && update_->busy)
-      e.push_back({"Checking for updates", false, nullptr});
-    else
-      e.push_back({"Check for updates", true, [this] { StartUpdateCheck(true); }});
-    e.push_back({"Settings", true, [this] { GoTo(kDisplay); }});
-    e.push_back({"Extras", CanPlay(), [this] { GoTo(kExtras); }});
+    e.push_back({"Settings", true, [this] { GoTo(settings_page_); }});
     e.push_back({"Achievements", true, [this] { GoTo(kAchievements); }});
+    e.push_back({"About", true, [this] { GoTo(kAbout); }});
     e.push_back({"Quit", true, [this] { Quit(); }});
     return e;
   }
@@ -3148,6 +3341,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     e.push_back({"New game", CanPlay(), [this] { OpenPlayView(PlayView::kNew); }});
     e.push_back({"Load game", UsedSlots() > 0, [this] { OpenPlayView(PlayView::kLoad); }});
     e.push_back({"Chapter select", CanPlay(), [this] { OpenPlayView(PlayView::kChapters); }});
+    e.push_back({"Extras", CanPlay(), [this] { OpenPlayView(PlayView::kExtras); }});
     e.push_back({"Back", true, [this] { play_ = PlayView::kNone; }});
     return e;
   }
@@ -3182,6 +3376,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       const int slot = ChapterSlot();
       cols = {{"Chapters", F("All {0} open", {std::to_string(play::kChapterCount)})},
               {"Save", slot >= 0 ? SaveName(saves_[size_t(slot)]) : T("A new one is made")}};
+    } else if (label == "Extras") {
+      const int slot = ChapterSlot();
+      cols = {{"Extras", T("Bonuses use this save's progress and scores.")},
+              {"Save", slot >= 0 ? SaveName(saves_[size_t(slot)]) : T("No save yet")}};
     }
     DrawInfoColumns(dl, x, o_.y + h_ - 120 * s, a, cols);
   }
@@ -3206,6 +3404,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       case PlayView::kLoad: return "Load game";
       case PlayView::kNew: return "New game";
       case PlayView::kChapters: return "Chapter select";
+      case PlayView::kExtras: return "Extras";
       default: return "";
     }
   }
@@ -3363,9 +3562,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // Load game, New game and Chapter select: the settings pages' layout (list and description).
   void DrawPlayPage(ImDrawList* dl) {
     const float s = S();
-    std::vector<Item> items = play_ == PlayView::kLoad  ? LoadItems()
-                              : play_ == PlayView::kNew ? NewGameItems()
-                                                        : ChapterItems();
+    std::vector<Item> items = play_ == PlayView::kLoad     ? LoadItems()
+                              : play_ == PlayView::kNew    ? NewGameItems()
+                              : play_ == PlayView::kExtras ? ExtrasItems()
+                                                           : ChapterItems();
+    if (play_ == PlayView::kExtras) row_data_.clear();  // its rows are the bonuses, not slots or chapters
     ui::ListState& st = play_lists_[int(play_)];
     // The page's own buttons, on the focused row (last frame's): on Load game X deletes and Y opens
     // Chapter select with that save; on Chapter select Y changes the save.
@@ -3567,6 +3768,13 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         p.push_back({Action::kBack, "Back"});
         return p;
       }
+      case PlayView::kExtras: {  // the save row changes with Left and Right; a bonus row plays it
+        std::vector<ui::Prompt> p;
+        if (focused_ && focused_->type == ItemType::kChoice && !focused_->disabled) p.push_back({Action::kLeft, "Change"});
+        if (focused_ && focused_->type == ItemType::kAction && focused_->on_activate) p.push_back({Action::kAccept, "Select"});
+        p.push_back({Action::kBack, "Back"});
+        return p;
+      }
       default:
         return {{Action::kAccept, "Select"}, {Action::kBack, "Back"}};
     }
@@ -3714,7 +3922,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 #if defined(KK_DEV_TOOLS)
     if (dev_setup_ >= 0) return dev_setup_ == 4;
 #endif
-    return setup_shaders_ || update_shaders_;
+    return setup_shaders_ || update_shaders_ || rebuild_shaders_screen_;
   }
   // The setup's step and the plain setup screens draw the night sky; the shader screen the stills.
   bool PlainSetup() const { return InSetup() && !ShaderScreen(); }
@@ -3725,22 +3933,34 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   void DrawShaderScreen(ImDrawList* dl) {
     const float s = S();
     const ui::Fonts f = ui::GetFonts();
-    bool after_update = !setup_shaders_;
-    // One bar for the whole job (every API's shaders and pipelines), with the step under it.
-    float fraction = native_pack_.Fraction();
-    std::string step = native_pack_.StepText();
+    bool after_update = !setup_shaders_ && update_shaders_;
+    const bool rebuild = !setup_shaders_ && !update_shaders_ && rebuild_shaders_screen_;
+    // ONE bar for the whole job, every API's shaders and pipelines, with one label (owner, 16 Oct: no steps).
+    float fraction = native_pack_.DrawnFraction(ImGui::GetTime());
+    std::string label = native_pack_.ProgressLabel();
+#if defined(KK_DEV_TOOLS)
+    {  // Developer: the bar as drawn, once a second (task 144: one bar, smooth, never back).
+      static double logged = -10;
+      if (std::getenv("KK_DEV_LAUNCHER_PERF") && ImGui::GetTime() - logged >= 1.0) {
+        logged = ImGui::GetTime();
+        REXLOG_INFO("KK dev: shader bar {:.4f} job {:.4f} label '{}'", fraction, native_pack_.Fraction(), label);
+      }
+    }
+#endif
 #if defined(KK_DEV_TOOLS)
     if (dev_setup_ == 4) {
       after_update = false;
       if (!native_pack_.Busy()) {  // screenshots
         fraction = 0.45f;
-        step = F("Step {0} of {1}: {2}", {"2", "4", F("Preparing the {0} pipelines", {"Vulkan"})});
+        label = T(std::string("Preparing shaders"));
       }
     }
 #endif
-    const std::string caption = Upper(T("PC port")) + "  " KK_DOT "  " + Upper(T(after_update ? "Update" : "Setup"));
-    const std::string title =
-        after_update ? F("Updated to v{0}: preparing the shaders", {KK_VERSION}) : T(std::string("Preparing the shaders"));
+    const std::string caption =
+        Upper(T("PC port")) + "  " KK_DOT "  " + Upper(T(after_update ? "Update" : rebuild ? "Settings" : "Setup"));
+    const std::string title = after_update ? F("Updated to v{0}: preparing the shaders", {KK_VERSION})
+                              : rebuild    ? T(std::string("Rebuilding the shaders"))
+                                           : T(std::string("Preparing the shaders"));
     const std::string why = T(
         "The game's shaders are translated for your graphics card from your copy of the game, once, so effects "
         "never stutter the first time they appear.");
@@ -3790,7 +4010,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       dl->AddRectFilled(ImVec2(a0, by), ImVec2(a1, by + 3 * s), color::kAccent);
     }
     ty += 3 * s + 14 * s;
-    const std::string left = fraction >= 0 && !step.empty() ? step : T(std::string("Checking"));
+    const std::string left = fraction >= 0 ? label : T(std::string("Checking"));
     const std::string right = fraction >= 0 ? std::to_string(int(fraction * 100)) + "%" : "";
     dl->AddText(f.text, 15 * s, ImVec2(tx, ty), color::kTextDim, left.c_str());
     dl->AddText(f.text, 15 * s, ImVec2(tx + wrap - ui::TextSize(f.text, 15 * s, right).x, ty), color::kTextDim,
@@ -3812,11 +4032,14 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   void ContinueShadersInBackground() {
     ui::Cue(ui::Sound::kSelect);
+    const bool rebuild = rebuild_shaders_screen_ && !setup_shaders_ && !update_shaders_;
     setup_shaders_ = false;  // the setup goes on to the look step
     update_shaders_ = false;
+    rebuild_shaders_screen_ = false;
 #if defined(KK_DEV_TOOLS)
     if (dev_setup_ == 4) dev_setup_ = 5;
 #endif
+    if (rebuild) return;  // back to the Graphics page it was asked for on
     page_ = kHome;
     home_focus_ = 0;
   }
@@ -4213,7 +4436,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     cols[1] = {Upper(T("Shader pack")), PackStatusText(), pack_.failed ? color::kWarn : color::kText, PackProgress()};
     if (NativeShaderPack::Wanted())  // the native renderer's own shaders instead (native_shaders.h)
       cols[1] = {Upper(T("Shaders")), native_pack_.StatusText(),
-                 native_pack_.Finished() && !native_pack_.Ok() ? color::kWarn : color::kText, native_pack_.Fraction()};
+                 native_pack_.Finished() && !native_pack_.Ok() ? color::kWarn : color::kText,
+                 native_pack_.DrawnFraction(ImGui::GetTime())};
     if (update_ && update_->found)
       cols[2] = {Upper(T("Version")), F("v{0}   " KK_DOT "   v{1} is out", {KK_VERSION, update_->found->version}),
                  color::kAccent, -1};
@@ -4264,7 +4488,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
           ImGui::SetClipboardText(report.c_str());
           Status("Diagnostics copied to the clipboard.");
         }));
-    if (HasCrashReports(paths_.user_dir)) {
+    if (Cached(crash_reports_cache_, 2.0, [this] { return HasCrashReports(paths_.user_dir); })) {
       items.push_back(ActionItem("Saved crash reports",
           "A previous crash saved local diagnostics and a minidump. Dumps may contain private process memory. Review before sharing. Nothing is uploaded.",
           "Open folder", [this] { OpenInExplorer(paths_.user_dir / "crashes"); }));
@@ -4321,7 +4545,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     save.disabled = slots.empty();
     items.push_back(std::move(save));
     items.push_back(Section("Extras"));
-    auto progress = play::ReadExtraProgress(paths_.user_dir, slot);
+    auto progress = ExtraProgressFor(slot);
     progress.museum |= GetBool("kk_cheats") && GetBool("kk_cheat_bonus");
     for (const auto& extra : play::kExtras) {
       const int id = extra.id;
@@ -4361,11 +4585,13 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         items = sub_ == kRemapPage ? RemapItems() : sub_ == kKeysPage ? KeyItems() : ControlsItems();
         break;
       case kAdvanced: items = AdvancedPageItems(); break;
-      case kExtras: items = ExtrasItems(); break;
       case kAchievements: items = AchievementItems(); break;
       case kAbout: items = AboutItems(); break;
       default: break;
     }
+#if defined(KK_DEV_TOOLS)
+    if (IsSettingsPage(page_) && sub_ == kNoSubPage) DevCheckLayout(page_ - kFirstSettingsPage, items, "launcher");
+#endif
     const float top = o_.y + 104 * s, bottom = o_.y + h_ - 96 * s;
     const float x0 = o_.x + Margin();
     const float avail = w_ - Margin() * 2;
@@ -4380,6 +4606,51 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     focused_ = st.focus >= 0 && st.focus < int(focused_items_.size()) ? &focused_items_[size_t(st.focus)] : nullptr;
   }
 
+#if defined(KK_DEV_TOOLS)
+  // Developer: every settings page as it is built now, checked against settings_layout.h and logged.
+  void LogLayoutCheck() {
+    const SubPage sub = sub_;
+    sub_ = kNoSubPage;
+    for (int p = kFirstSettingsPage; p <= kLastSettingsPage; ++p) {
+      std::vector<Item> items;
+      switch (Page(p)) {
+        case kDisplay: items = DisplayItems(); break;
+        case kGraphics: items = GraphicsItems(); break;
+        case kAudio: items = AudioItems(); break;
+        case kControls: items = ControlsItems(); break;
+        case kGameplay: items = GameplayItems(); break;
+        case kAdvanced: items = AdvancedPageItems(); break;
+        default: break;
+      }
+      for (const Item& it : items)
+        REXLOG_INFO("KK dev: launcher page {} {} {}", kPageNames[p], it.type == ItemType::kSection ? "section" : "row",
+                    it.label);
+      DevCheckLayout(p - kFirstSettingsPage, items, "launcher");
+    }
+    sub_ = sub;
+  }
+#endif
+
+  // Graphics > Advanced > Rebuild shaders: asked first (A on Rebuild, B or Cancel to keep them), then the
+  // shader screen with its one bar, as at setup.
+  void OpenRebuildShaders() {
+    if (native_pack_.Busy()) {
+      ui::Cue(ui::Sound::kDeny);
+      Status("The shaders are being prepared right now.");
+      return;
+    }
+    OpenModal("Rebuild shaders",
+              "Prepare all of the game's shaders again? This takes a few minutes. " KK_SLOW_PC, {"Rebuild", "Cancel"},
+              1,
+              [this](int i) {
+                if (i != 0 || native_pack_.Busy()) return;
+                native_pack_.Start(CacheDir(), paths_.game_dir, true);
+                rebuild_shaders_screen_ = true;
+                REXLOG_INFO("KK: rebuilding the native renderer's shaders (asked for in Graphics settings)");
+              },
+              1);
+  }
+
   // ------------------------------------------------------- Achievements ---
   std::vector<Item> AchievementItems() {
     std::vector<Item> items;
@@ -4391,7 +4662,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
     items.push_back(Section("PC port"));
     for (const auto& pa : PortAchievements()) {
-      const bool unlocked = IsPortAchievementUnlocked(paths_.user_dir, pa.id);
+      const bool unlocked = Cached(port_achievement_cache_.try_emplace(pa.id, -1e9, false).first->second, 2.0,
+                                   [&] { return IsPortAchievementUnlocked(paths_.user_dir, pa.id); });
       Item it;
       it.type = ItemType::kInfo;
       it.tall = true;
@@ -4578,6 +4850,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
 
     items.push_back(Section("Files"));
+    items.push_back(ActionItem(files_ok_ ? "Reinstall game" : "Install game",
+                               "Copies the game's files again from your disc image. Your saves and settings stay as "
+                               "they are.",
+                               "", [this] { StartInstall(); }));
     items.push_back(ActionItem("Open save folder", "Your saves, achievements and caches.", "",
                                [this] { OpenInExplorer(paths_.user_dir); }));
     items.push_back(ActionItem("Open save backups",
@@ -4598,7 +4874,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       OpenInExplorer(paths_.config_path);
     }));
     {
-      const bool have = art::HasLauncherArt(ArtDir());
+      const bool have = Cached(launcher_art_cache_, 2.0, [this] { return art::HasLauncherArt(ArtDir()); });
       Item it = ActionItem("Launcher art",
                            "The launcher's logo and backgrounds come from your copy of the game: the game's own logo, "
                            "and stills from the movie trailer and the intro on the disc.",
@@ -4628,7 +4904,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                 "d3d12_allow_variable_refresh_rate_and_tearing", "present_letterbox",
                 "present_hdr", "present_hdr_peak", "present_hdr_paper_white"};
       case kGraphics:
-        return {"kk_original_look", "kk_modern_settings", "kk_graphics_preset", "swap_post_effect", "anisotropic_override",
+        return {"kk_original_look", "kk_modern_settings", "kk_graphics_preset", "native_backend", "kk_renderer",
+                "swap_post_effect", "anisotropic_override",
                 "native_texture_pack", "native_texture_pack_folder",
                 "present_effect", "kk_render_quality", "resolution_scale", "draw_resolution_scale_x",
                 "draw_resolution_scale_y", "native_upscaler", "native_upscaler_quality",
@@ -4647,7 +4924,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                 "kk_toggle_aim", "kk_deadzone", "kk_vibration", "kk_vibration_strength", "kk_map_*",
                 "@Input/Keybinds/Controller"};
       case kAdvanced:
-        return {"native_backend", "kk_renderer", "kk_show_fps", "kk_ps2_cutscenes", "kk_ps2_movie_folder"};
+        return {"kk_show_fps", "kk_ps2_cutscenes", "kk_ps2_movie_folder"};
       default:
         return {};
     }
@@ -4658,7 +4935,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (page == kAudio) {
       ResetAudio();
     }
-    if (page == kAdvanced) startup::ManualChoice();  // resets the renderer and API by hand
+    if (page == kGraphics) startup::ManualChoice();  // resets the renderer and API by hand
     const auto names = PageSettings(page);
     auto on_page = [&](const rex::cvar::FlagEntry& e) {
       for (const auto& n : names) {
@@ -4675,16 +4952,17 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
     ++g_changes;
     // Gameplay's Subtitles is the game's own option, in every save (its default follows the language).
-    if (page == kGameplay) ResetSubtitles();
-    if (page == kGraphics) {
-      ChangeProfileOption(play::ProfileOption::kOldMovie, 0);
-      ChangeProfileOption(play::ProfileOption::kHorizontalFlip, 0);
-    }
-    if (page == kControls) {
+    // Its HUD rows (Aiming visor, Inventory) are the game's own options too.
+    if (page == kGameplay) {
+      ResetSubtitles();
       ChangeProfileOption(play::ProfileOption::kAimingVisor, 0);
       ChangeProfileOption(play::ProfileOption::kInventory, 0);
     }
-    if (page == kAdvanced) ApplyRendererChoice();  // gpu_plugin follows kk_renderer
+    if (page == kGraphics) {
+      ChangeProfileOption(play::ProfileOption::kOldMovie, 0);
+      ChangeProfileOption(play::ProfileOption::kHorizontalFlip, 0);
+      ApplyRendererChoice();  // gpu_plugin follows kk_renderer
+    }
     if (page == kDisplay && cb_.set_fullscreen) cb_.set_fullscreen(GetBool("fullscreen"));
     Status(F("{0} settings are back to their defaults.", {T(std::string(kPageNames[page]))}));
   }
@@ -4764,6 +5042,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       text += ChangelogText(e);
       if (whats_new_from_.empty()) break;  // only this version when we don't know the last one
     }
+    REXLOG_INFO("KK: What's new opened (from v{})", whats_new_from_);
     OpenModal(F("What's new in v{0}", {KK_VERSION}), "", {"Close", "Every version"}, 0, [this](int i) {
       if (i == 1) OpenVersionHistory();
     });
@@ -4894,25 +5173,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     online::Wake();
   }
 
-  // Once ever, for players who installed before it existed (new players see it
-  // on the setup screen): told on Home after What's new that it's on, with a
-  // choice. Saved as asked the moment it shows, so closing the launcher, an
-  // update or a restart never asks again; the About page changes it.
-  void MaybeAskOnline() {
-    if (online_asked_ || modal_.open || open_whats_new_ || InSetup() || page_ != kHome || ImGui::GetTime() < 1.5)
-      return;
-    online_asked_ = true;
-    if (GetBool("kk_online_asked") || std::getenv("KK_AUTOPLAY")) return;
-#if defined(KK_DEV_TOOLS)
-    if (std::getenv("KK_DEV_LAUNCHER_INPUT")) return;  // scripted test runs
-#endif
-    SetBool("kk_online_asked", true);
-    SaveSettings(paths_.config_path);
-    OpenModal("Online player count",
-              std::string(T(kOnlineAbout)) + "\n\n" +
-                  T("It's on unless you switch it off, here or at any time on the About page."),
-              {"Keep it on", "Switch it off"}, 0, [this](int i) { SetOnlineCount(i == 0); });
-  }
+  // No reminder about the online player count ever opens by itself (owner, 16 Oct): it is explained and
+  // switched in the first-time setup, and on the About page, and nowhere else.
 
   // The update screen shows the download (SetupStage 3).
   void BeginUpdateInstall(const UpdateInfo& info) {
@@ -5165,7 +5427,12 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
     // The native renderer's shaders for the settings the game starts with (they may have changed
     // here): a build in progress, or one these settings need, finishes first (Tick).
-    if (NativeShaderPack::Wanted() && !std::exchange(native_pack_checked_, false)) {
+    // Checked (and prepared) when the launcher opened, or at setup, for these settings: nothing to do. A
+    // job still running finishes first; settings that change the shaders or pipelines check again.
+    const bool checked = std::exchange(native_pack_checked_, false);
+    if (NativeShaderPack::Wanted() && !checked && native_pack_.OkForCurrentSettings() && !native_pack_.Busy())
+      REXLOG_INFO("KK: Play: shaders already checked and prepared for these settings; nothing to do");
+    if (NativeShaderPack::Wanted() && !checked && !(native_pack_.OkForCurrentSettings() && !native_pack_.Busy())) {
       if (!native_pack_.Busy()) native_pack_.Start(CacheDir(), paths_.game_dir);
       waiting_for_native_ = true;
       native_wait_since_ = ImGui::GetTime();
@@ -5189,7 +5456,14 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // The pause menu for the game about to start (the app makes it too when the launcher is skipped).
     if (!needs_restart && !benchmark_pending_) CreatePauseMenu(imgui_drawer(), immediate_, paths_.config_path, paths_.user_dir, paths_.game_dir);
     input_.Release();  // the game opens the controllers itself
-    Close();  // deletes this dialog after the current draw
+    if (needs_restart || benchmark_pending_) {
+      // The game starts as a new process: this window keeps showing the launcher's backdrop (no menus,
+      // no input, the music fading) until the game's window has drawn, then this process ends (handoff.h).
+      leaving_ = true;
+      modal_.open = false;
+    } else {
+      Close();  // deletes this dialog after the current draw
+    }
     if (action) action();
   }
 
@@ -5209,7 +5483,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     FinishArtIfDone();
     RefreshPack();
     TickUpdate();
-    MaybeAskOnline();
     TickSteam();
     CaptureKey();
     TickNameEditor();
@@ -5224,9 +5497,12 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
             });
       }
     }
-    // What's new waits until the shaders an update rebuilds are done: building them loads every processor
-    // core, and the launcher answers slowly meanwhile.
-    if (open_whats_new_ && !modal_.open && !update_shaders_ && !native_pack_.Busy()) {
+    // What's new only once the game is playable (owner, 16 Oct): never during the first-time setup (the
+    // game files asked for, installed, the artwork, the shaders, the look), nor while shaders are prepared
+    // (that loads every processor core and the launcher answers slowly meanwhile). launcher_policy.h.
+    if (open_whats_new_ &&
+        ShowWhatsNewNow({open_whats_new_, modal_.open, files_ok_, InSetup(), ShaderScreen(), native_pack_.Busy(),
+                         NativeShaderPack::Wanted(), native_pack_.Finished()})) {
       open_whats_new_ = false;
       OpenWhatsNew();
     }
@@ -5277,6 +5553,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       setup_shaders_ = false;
       if (!setup_style_) Status(InstalledMessage());  // else once the look is chosen
     }
+    if (rebuild_shaders_screen_ && !native_pack_.Busy()) {
+      rebuild_shaders_screen_ = false;
+      Status(native_pack_.Ok() ? "The shaders are ready." : "The shaders were not prepared: the game compiles them as it starts.");
+    }
     if (update_shaders_ && !native_pack_.Busy()) {
       update_shaders_ = false;
       Status(native_pack_.Ok() ? F("Updated to v{0}. The shaders are ready.", {KK_VERSION})
@@ -5289,13 +5569,16 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       native_modal_ = false;
       native_pack_checked_ = true;
       StartGame();
-    } else if (!native_modal_ && !modal_.open && ImGui::GetTime() - native_wait_since_ > 0.5) {
+    } else if (!native_modal_ && !modal_.open &&
+               (native_pack_.Working() || ImGui::GetTime() - native_wait_since_ > 3.0)) {
+      // Only while something is actually prepared (or a check takes unusually long): a quick check at
+      // Play shows nothing.
       native_modal_ = true;
       OpenModal("Preparing shaders",
                 "The native renderer's shaders are still being prepared from your copy of the game. " KK_SLOW_PC " The game starts "
                 "as soon as they're done.",
                 {"Back"}, 0, [this](int) { waiting_for_native_ = native_modal_ = benchmark_pending_ = false; });
-      modal_.progress = [this] { return native_pack_.Fraction(); };
+      modal_.progress = [this] { return native_pack_.DrawnFraction(ImGui::GetTime()); };
     }
   }
 
@@ -5356,7 +5639,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // update (the full shader rebuild and its screen); "setup:4" shows the setup's shader screen.
   void DevInput() {
     ImGuiIO& io = ImGui::GetIO();
-    if (std::getenv("KK_DEV_LAUNCHER_INPUT_FILE") && (InSetup() || ShaderScreen())) return;
+    // Scripted runs wait for the setup's work (only captures go on); the look step (stage 5) takes input
+    // like the pages.
+    const bool waiting =
+        std::getenv("KK_DEV_LAUNCHER_INPUT_FILE") && (InSetup() || ShaderScreen()) && SetupStage() != 5;
     static bool release = false;
     if (release) {
       io.AddMouseButtonEvent(0, false);
@@ -5383,6 +5669,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     static double at = 2.5;
     const double now = ImGui::GetTime();
     if (next >= steps.size() || now < at) return;
+    if (waiting && steps[next].rfind("shot:", 0) != 0) return;
     std::string t = steps[next++];
     at = now + 0.45;
     REXLOG_INFO("KK dev: input {}", t);
@@ -5393,19 +5680,24 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       return;
     }
     // Private Extras tests choose a save, then navigate/activate through normal UI actions.
-    if (t.rfind("extras-save:", 0) == 0) {
+    if (t.rfind("extras-save:", 0) == 0) {  // Play > Extras with that save
       chapter_slot_ = std::atoi(t.c_str() + 12);
-      GoTo(kExtras);
+      OpenPlayMenu();
+      OpenPlayView(PlayView::kExtras);
       return;
     }
     if (t.rfind("page:", 0) == 0) {
+      if (text::Upper(t.substr(5)) == "EXTRAS") {
+        OpenPlayMenu();
+        OpenPlayView(PlayView::kExtras);
+      }
       for (int p = 0; p < kPageCount; ++p)
         if (text::Upper(t.substr(5)) == text::Upper(kPageNames[p])) GoTo(Page(p));
       return;
     }
     if (t.rfind("focus:", 0) == 0) {
       for (size_t i = 0; i < focused_items_.size(); ++i) if (focused_items_[i].label == t.substr(6)) {
-        auto& state = lists_[page_ * 4 + sub_];
+        auto& state = play_ != PlayView::kNone ? play_lists_[int(play_)] : lists_[page_ * 4 + sub_];
         state.focus = int(i);
         state.focus_label = focused_items_[i].label;
         REXLOG_INFO("KK dev: launcher focused {} value {}", state.focus_label, focused_items_[i].value_text);
@@ -5416,7 +5708,22 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
     if (t == "rows") {
       for (const auto& row : focused_items_)
-        REXLOG_INFO("KK dev: launcher page {} row {}", kPageNames[page_], row.label);
+        REXLOG_INFO("KK dev: launcher page {} row {}", play_ != PlayView::kNone ? PlayViewName(play_) : kPageNames[page_],
+                    row.label);
+      return;
+    }
+    if (t.rfind("look:", 0) == 0) {  // the setup's look step, when it is up: look:original / look:remastered
+      if (SetupStage() == 5) {
+        if (t == "look:original") ApplyOriginal();
+        else ApplyRemastered();
+        REXLOG_INFO("KK: setup: look {}", t == "look:original" ? "Original" : "Remastered");
+        setup_style_ = false;
+        Status(InstalledMessage());
+      }
+      return;
+    }
+    if (t == "layout-check") {  // every settings page against settings_layout.h
+      LogLayoutCheck();
       return;
     }
     if (t.rfind("language:", 0) == 0) { SetInt("user_language", std::atoi(t.c_str() + 9)); return; }
@@ -5491,7 +5798,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   std::vector<int> row_data_;           // the Play pages' rows: the slot or chapter entry each stands for
   std::string new_name_, name_before_;  // New game's name ("" the game's own)
   bool editing_name_ = false;
-  bool online_asked_ = false;  // MaybeAskOnline has looked this session
   std::string upscaler_answer_backend_;
   bool upscaler_answer_taken_ = false;  // TickUpscalerQuery has the plugin's answer
   bool menu_value_ = false;    // the menu's focused entry has a value (Left and Right change it)
@@ -5508,6 +5814,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   std::vector<std::string> restart_baseline_;
   bool files_ok_ = false;
   bool played_ = false;
+  bool leaving_ = false;  // the game starts in a new process; this one closes once it is shown
+  double last_activity_ = 0;  // NoteActivity: when something last moved (ImGui time)
+  int last_view_ = -1;
+  bool last_status_focus_ = false;
+  std::chrono::steady_clock::time_point next_frame_{};
   bool benchmark_pending_ = false;
   std::shared_ptr<UpdateStatus> update_;
   std::shared_ptr<SteamState> steam_;
@@ -5523,14 +5834,15 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   NativeShaderPack native_pack_;      // the native renderer's shaders (native_shaders.h)
   bool setup_shaders_ = false;        // being prepared as the install's last step
   bool update_shaders_ = false;       // built again in full after an update (DrawShaderScreen)
+  bool rebuild_shaders_screen_ = false;  // Graphics > Rebuild shaders: the shader screen until it's done
+  Page settings_page_ = kDisplay;     // the settings category Home's Settings opens (the last one shown)
+  std::vector<std::string> tab_names_;  // the settings tabs, upper case, in tab_names_lang_
+  int tab_names_lang_ = -1;
   bool waiting_for_native_ = false;   // Play was pressed: they are checked (and built) first
   bool native_modal_ = false;         // the pop-up of that wait is open
   bool native_pack_checked_ = false;  // checked for this Play: StartGame goes on
   double native_wait_since_ = 0;
   int autoplay_frames_ = 0;
-#if !defined(_WIN32)
-  std::chrono::steady_clock::time_point next_frame_{};
-#endif
   double saved_time_ = -100;
   int seen_changes_ = 0, saved_changes_ = 0;
   double changed_time_ = 0;
@@ -5603,7 +5915,11 @@ class InGameSettingsImpl final : public InGameSettings, private SettingsPages {
       case kAdvanced: items = AdvancedItems(); break;
       default: break;
     }
-    return LiveOnly(std::move(items));
+    items = LiveOnly(std::move(items));
+#if defined(KK_DEV_TOOLS)
+    if (sub_ == kNoSubPage) DevCheckLayout(int(page), items, "pause");
+#endif
+    return items;
   }
   int SubPage() const override { return int(sub_); }
   bool CanResetPage(Page page) const override { return page == kAudio; }
