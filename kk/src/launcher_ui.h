@@ -229,6 +229,7 @@ struct ListState {
   int focus = -1;
   std::string focus_label;  // follows its row when rows above appear or go
   float scroll = 0, scroll_target = 0;
+  int shown_focus = -1;  // the focus the last frame drew: a change made outside the list scrolls it into view
   float band_y = -1, band_h = 0;
   int dragging = -1;  // slider held with the mouse
 };

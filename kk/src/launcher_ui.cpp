@@ -708,7 +708,8 @@ const Item* DrawList(ImDrawList* dl, std::vector<Item>& items, ListState& st, Im
     it.on_activate();
   };
 
-  bool keep_visible = false;
+  // Focus moved since the last frame by the page itself (e.g. Extras opening Graphics at its row): bring it into view.
+  bool keep_visible = st.focus != st.shown_focus;
   const ImGuiIO& io = ImGui::GetIO();
   if (active && st.focus >= 0) {
     auto step = [&](int dir) {
@@ -825,6 +826,7 @@ const Item* DrawList(ImDrawList* dl, std::vector<Item>& items, ListState& st, Im
   }
   st.scroll_target = std::clamp(st.scroll_target, 0.0f, max_scroll);
   st.scroll = std::clamp(Approach(st.scroll, st.scroll_target, 20.0f), 0.0f, max_scroll);
+  st.shown_focus = st.focus;
 
   // The focus band glides between rows.
   if (st.focus >= 0) {
