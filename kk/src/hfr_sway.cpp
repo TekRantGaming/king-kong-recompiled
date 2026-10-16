@@ -72,12 +72,23 @@ float GameTime(const uint8_t* base) { return LoadF(base, kGameClock) - LoadF(bas
 }  // namespace
 }  // namespace kk::hfr
 
+#if defined(KK_DEV_TOOLS)
+namespace kk {
+void DevClockMark(const uint8_t* base, const char* what, uint32_t lr);  // dev_clock_trace.cpp
+}
+#endif
+
 // Dev builds: KK_DEV_BOAT_TRACE=1 writes boat.csv in KK_DEV_SAMPLE_DIR, a row before and after
 // every Chaloupe_Rotation call (game time, frame time, the boat's axes, its leader's up axis and
 // the script values the tilt uses).
 static void BoatTrace(const uint8_t* base, uint32_t vars, const char* when) {
 #if defined(KK_DEV_TOOLS)
   using namespace kk::hfr;
+  static bool marked = false;
+  if (!marked && vars) {
+    marked = true;
+    kk::DevClockMark(base, "boat first", 0);
+  }
   static FILE* f = nullptr;
   static bool tried = false;
   if (!tried) {

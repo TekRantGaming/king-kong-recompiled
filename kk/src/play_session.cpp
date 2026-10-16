@@ -657,6 +657,9 @@ int64_t g_level_loaded_ms = 0;
 
 }  // namespace
 bool BonusMovieActive() { return g_extra_movie; }
+bool StartLevelLoading() {
+  return !g_level_loaded && (g_starting || g_jump_requested || kk::benchmark::Active());
+}
 }  // namespace kk::play
 
 REX_EXTERN(__imp__sub_82413190);  // universe -> save data
