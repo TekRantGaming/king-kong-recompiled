@@ -1176,10 +1176,12 @@ class SettingsPages {
       it.index = mode;
       if (mode >= 0) {
         const int scale = RenderScaleFor(kUpscalerModes[mode], out_h);
-        it.facts.push_back(F(draws, {Size(1280 * scale, 720 * scale), Size(out_w, out_h)}));
+        const auto [fw, fh] = NoUpscalerFrameSize(out_w, out_h, 1280 * scale, 720 * scale);
+        it.facts.push_back(F(draws, {Size(fw, fh), Size(out_w, out_h)}));
         std::string same;
         for (int m = 0; m < 4; ++m) {
-          if (m == mode || RenderScaleFor(kUpscalerModes[m], out_h) != scale) continue;
+          const int ms = RenderScaleFor(kUpscalerModes[m], out_h);
+          if (m == mode || NoUpscalerFrameSize(out_w, out_h, 1280 * ms, 720 * ms) != std::pair{fw, fh}) continue;
           same += same.empty() ? T(std::string(kUpscalerModeNames[m]))
                                : " " + T(std::string("and")) + " " + T(std::string(kUpscalerModeNames[m]));
         }
@@ -1209,7 +1211,8 @@ class SettingsPages {
         const int scale = RenderScaleFor(p.id, out_h);
         if (cur == p.id) {
           it.index = int(values.size());
-          it.facts.push_back(F(draws, {Size(1280 * scale, 720 * scale), Size(out_w, out_h)}));
+          const auto [fw, fh] = NoUpscalerFrameSize(out_w, out_h, 1280 * scale, 720 * scale);
+          it.facts.push_back(F(draws, {Size(fw, fh), Size(out_w, out_h)}));
         }
         it.options.push_back(p.label);
         values.push_back(p.id);
@@ -1234,6 +1237,12 @@ class SettingsPages {
                             {"4" KK_TIMES "  " KK_DOT "  5120 " KK_TIMES " 2880", "4"},
                             {"5" KK_TIMES "  " KK_DOT "  6400 " KK_TIMES " 3600", "5"},
                             {"6" KK_TIMES "  " KK_DOT "  7680 " KK_TIMES " 4320", "6"}});
+      {
+        // Never above the chosen resolution without an upscaler (settings.h, NoUpscalerFrameSize).
+        const int s = std::clamp(std::atoi(Get("resolution_scale").c_str()), 1, 8);
+        const auto [fw, fh] = NoUpscalerFrameSize(out_w, out_h, 1280 * s, 720 * s);
+        it.facts.push_back(F(draws, {Size(fw, fh), Size(out_w, out_h)}));
+      }
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
   }

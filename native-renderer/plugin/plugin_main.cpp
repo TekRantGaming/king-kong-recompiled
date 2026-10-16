@@ -210,7 +210,8 @@ REXCVAR_DEFINE_STRING(native_render_scale, "auto", "Native renderer",
                       "the render scale aware ones: build the pack with kkshaders db-build --also-scaled, "
                       "else they are compiled at startup (needs DXC). auto: the port's draw resolution scale "
                       "(draw_resolution_scale_x / _y, which the launcher's render quality presets set, or "
-                      "resolution_scale), as the Xenos plugin uses it (the default; 1 = the old default)")
+                      "resolution_scale), as the Xenos plugin uses it (the default; 1 = the old default); the game "
+                      "caps it at the chosen resolution (native_upscaler_output / native_frame_size)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_DOUBLE(native_shadow_scale, 0.0, "Native renderer",
@@ -360,6 +361,12 @@ REXCVAR_DEFINE_STRING(native_upscaler_output, "", "Native renderer",
                       "With an upscaler and native_render_scale auto: the upscaler's output size, WxH. The game "
                       "sets it (not saved) to the resolution chosen in the launcher as a 16:9 picture, never above "
                       "it; empty: the draw resolution scale's size")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+REXCVAR_DEFINE_STRING(native_frame_size, "", "Native renderer",
+                      "Without an upscaler and native_render_scale auto: the frame size, WxH. The game sets it "
+                      "(not saved) to the draw resolution scale's size, never above the resolution chosen in the "
+                      "launcher (its 16:9 picture); empty: the draw resolution scale's size")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_STRING(native_upscaler_point, "post", "Native renderer",

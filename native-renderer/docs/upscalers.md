@@ -47,8 +47,13 @@ window's size, as the largest 16:9 picture inside it (`kk::UpscalerOutputSize`; 
 or stretches it as before). Nothing is drawn above that size: a 4K screen set to 1080p gets 1920x1080 out
 of the upscaler, and the draw resolution scale (the render quality preset) no longer sets the output. A
 Custom render quality's draw resolution scale is an upper limit (smaller of the two). A 1920x1200 window
-gets 1920x1080, a 2560x1080 one 1920x1080. Without an upscaler nothing changed: the draw resolution scale
-(the render quality in 720p steps) is the size.
+gets 1920x1080, a 2560x1080 one 1920x1080. Without an upscaler (DECISIONS 16 Oct, late) the frame is the draw
+resolution scale's size (the render quality in 720p steps) but never above that 16:9 picture either, each axis
+the smaller of the two (`native_frame_size`, set the same way; `kk::NoUpscalerFrameSize`): Native on a 1080p
+or 1200p screen draws 1920x1080 (render scale 1.5) instead of 2560x1440 shrunk; 1440p and 4K are unchanged, and
+a size below the chosen one stays (Native at 900p: 720p). A Custom scale is an upper limit here too. At scale
+1.5 the AO and GI `auto` quality is full resolution (half only above 1.5): at 1080p High they work on 1920x1080
+instead of 1280x720 (+1.1 ms GPU on an RTX 4070 Ti, task 175).
 
 ### Who gets what
 

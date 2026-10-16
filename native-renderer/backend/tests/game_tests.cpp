@@ -2880,7 +2880,9 @@ TEST(Scale_FlatSceneMatchesAtScales) {
   const Pixels want = SceneFlat(reference, "scale_flat_1");
   // The reference itself still draws what the unscaled tests expect.
   CHECK_COLOR(want, 16, 48, FromArgb(kQuadrantColors[2]), "quadrant");
-  const float scales[][2] = {{2, 2}, {3, 3}, {1.5f, 1.5f}, {2, 1.5f}};
+  // 1.5 and 2.5: a 1080p screen and a 1280x720 window at 250% DPI without an upscaler (frames never above the
+  // chosen resolution: kk::NoUpscalerFrameSize).
+  const float scales[][2] = {{2, 2}, {3, 3}, {1.5f, 1.5f}, {2, 1.5f}, {2.5f, 2.5f}};
   for (const auto& s : scales) {
     Fixture f(s[0], s[1]);
     if (!f.Init()) return;
