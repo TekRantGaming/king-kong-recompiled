@@ -160,7 +160,8 @@ std::string NativeShaderPack::SettingsFingerprint() {
   static constexpr const char* kNames[] = {
       "native_backend", "native_flip_front_face", "native_shadow_quality", "native_water_reflections",
       "native_volumetrics", "native_pipeline_list", "native_pipeline_cache", "native_vk_pipeline_cache",
-      "native_pipeline_cache_dir", "native_failed_backends", "native_dxc", "cache_root", "gpu_plugin"};
+      "native_pipeline_cache_dir", "native_failed_backends", "native_dxc", "cache_root", "gpu_plugin",
+      "ao_mode", "native_ao_method", "native_ao_apply"};  // the ambient-only AO has a layout of its own
   std::string out;
   for (const char* name : kNames) out += std::string(name) + "=" + rex::cvar::GetFlagByName(name) + ";";
   return out;

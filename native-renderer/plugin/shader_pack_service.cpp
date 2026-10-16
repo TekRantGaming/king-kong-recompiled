@@ -94,7 +94,8 @@ std::string PrewarmStamp(const kkshaders::PackStamp& stamp, const nr::PipelinePr
   out << stamp.toText() << "pipeline layouts 3\n" << drivers;
   // These choices change shader replacements and must invalidate preparation when the player changes them.
   out << settings.flip_front_face << ' ' << int(settings.lighting.shadows) << ' '
-      << int(settings.lighting.water) << ' ' << int(settings.lighting.volumetrics) << '\n';
+      << int(settings.lighting.water) << ' ' << int(settings.lighting.volumetrics) << ' ' << settings.ao.ambient()
+      << '\n';
   std::error_code ec;
   // A renderer update or a changed pipeline list invalidates preparation even if the translator did not change.
 #if defined(__linux__)
@@ -407,13 +408,13 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
           bool completed = true;
           job->preparing = true;
           // The game's pipelines, as Backend::Initialize sets the renderer up (task 144): live settings
-          // (scale and lighting constants in every layout, scale-aware shaders), an upscaler's motion
-          // variants (a run without one makes a subset), and the AO's two layouts: without and with the
-          // ambient-only AO (its own constants and pixel shaders). Whatever the player picks later
-          // (Original or Remastered, any upscaler, AO on or off) is prepared now, so Play makes nothing new.
-          for (bool ambient : {false, true}) {
-            if (job->progress.cancel) { completed = false; break; }
-            job->pass = ambient ? 1 : 0;
+          // (scale and lighting constants in every layout, scale-aware shaders) and an upscaler's motion
+          // variants (a run without one makes a subset of them). The look, the upscaler, the render scale
+          // and AO on or off do not change these layouts, so whatever the player picks after the setup is
+          // prepared now and Play makes nothing new. Only the ambient-only AO (--native_ao_apply=ambient,
+          // not a player setting) has a layout of its own: the settings' AO is used, and the stamp has it.
+          {
+            job->pass = 0;
             job->progress.done = 0;
             job->progress.total = 0;
             auto settings = job->prewarm[backend == kkshaders::PackBackend::Spirv ? 0 : 1];
@@ -423,8 +424,6 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
             settings.live_layout = true;
             settings.upscale.kind = nr::UpscalerKind::kBilinear;
             settings.upscale.quality = nr::UpscaleQuality::kQuality;
-            settings.ao.method = nr::AoMethod::kGtao;
-            settings.ao.apply = ambient ? nr::AoApply::kAmbient : nr::AoApply::kOpaque;
             settings.shader_pack = r.pack.string();
             if (host->pipeline_cache()) {
               settings.driver_cache = host->pipeline_cache();
@@ -447,7 +446,10 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
               REXLOG_INFO("rexgpu-native: setup {} pipeline prewarm: {} listed, {} queued, {} finished, "
                           "{} failed, {} waiting for shaders",
                           kkshaders::packBackendName(backend), p.listed, p.queued, p.made, p.failed, p.waiting);
-              completed = completed && p.done && p.made == p.queued && !p.failed && !p.waiting;
+              // The ambient-only AO's own pixel shaders are not in the pack: the game makes those pipelines
+              // at first use, as it always did. Everything else must be made.
+              completed = completed && p.done && p.made == p.queued && !p.failed &&
+                          (!p.waiting || settings.ao.ambient());
             } else {
               completed = false;
             }
@@ -520,7 +522,7 @@ void PollJob(NrShaderPackJob* job, NrShaderPackProgress* out) {
   out->steps = job->steps;
   out->step_kind = job->step_kind;
   out->pass = job->pass;
-  out->passes = 2;
+  out->passes = 1;  // one pass of the game's layouts (task 144)
   // Shaders: working once the pack turned out stale (reading the database, compiling, writing).
   const int phase = job->progress.phase;
   out->working = job->step_kind == 1 ? int(job->preparing.load())

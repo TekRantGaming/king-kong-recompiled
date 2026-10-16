@@ -591,11 +591,13 @@ ones it builds in code; see "Open problems" at the top), a few ms each.
   no steps (owner, 16 Oct; kk/src/shader_progress.h): a step with nothing to do takes no room on it, and the
   drawn bar eases towards the job's value, never back.
 - The pipelines the setup prepares are the game's (task 144): the game always runs with live settings, which put
-  the scale (b3) and lighting (b5) constants in every pipeline's layout, and its ambient-only AO adds b4 and its
-  own pixel shaders. The setup prepares the live layout with an upscaler's motion variants, once without and once
-  with the ambient-only AO (`shader_pack_service.cpp`, `PipelinePrewarm::Settings::live_layout`), so whatever look,
-  upscaler or AO the player picks after it, Play makes nothing new. Before, it prepared layouts the game never
-  used (`SetupPrewarm_MakesTheGamesPipelineLayouts` in `nr_game_tests`). The readiness stamp says "pipeline
+  the scale (b3) and lighting (b5) constants in every pipeline's layout. The setup prepares that live layout once,
+  with an upscaler's motion variants (`shader_pack_service.cpp`, `PipelinePrewarm::Settings::live_layout`); the
+  look, the upscaler, the render scale and AO on or off do not change it, so whatever the player picks after the
+  setup, Play makes nothing new. Only the ambient-only AO (`--native_ao_apply=ambient`, not a player setting) adds
+  b4 and pixel shaders of its own: the settings' AO is prepared and is in the stamp. Before, the setup prepared
+  two layouts the game never used (`SetupPrewarm_MakesTheGamesPipelineLayouts` in `nr_game_tests`; task 144 run:
+  the first game start's driver cache grew 45 MB before, 79 KB after). The readiness stamp says "pipeline
   layouts 3". On Windows the stamp holds every adapter's driver version, so the check no longer makes a Vulkan
   device to read the driver's cache at every launcher start and Play; elsewhere it still does.
 - Ship `dxcompiler` only.

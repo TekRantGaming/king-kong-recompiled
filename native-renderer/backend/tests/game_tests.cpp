@@ -2383,8 +2383,9 @@ TEST(LauncherPrewarm_MakesThePipelinesBeforeTheGameAndHandsOverTheDriverCache) {
 // Task 144: the setup's shader screen prepares pipelines so Play makes none. It only can when they have
 // the game's layout. The game always runs with live settings (Backend::Initialize sets effect_settings),
 // which add the scale and lighting constants to every pipeline's layout, and its ambient-only AO adds
-// another. The setup's preparation (shader_pack_service.cpp: live_layout, both AO layouts) must make
-// exactly those layouts; the old one (no live layout) made pipelines the game never used.
+// another. The setup's preparation (shader_pack_service.cpp: live_layout, the settings' AO) must make
+// exactly those layouts, with or without an upscaler; the old one (no live layout) made pipelines the
+// game never used.
 TEST(SetupPrewarm_MakesTheGamesPipelineLayouts) {
   const std::string pack = MakePack("setup_layouts", true);
   auto dev = CachedDevice();
