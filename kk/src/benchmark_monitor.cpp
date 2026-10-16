@@ -51,12 +51,14 @@ struct Counters {
   }
   ~Counters() { if (query) PdhCloseQuery(query); if (nvml) { if (shutdown) shutdown(); FreeLibrary(nvml); } }
   double Gpu() {
+    last_count = 0;
     if (!gpu || PdhCollectQueryData(query) != ERROR_SUCCESS) return -1;
     DWORD bytes = 0, count = 0;
     if (PdhGetFormattedCounterArrayW(gpu, PDH_FMT_DOUBLE, &bytes, &count, nullptr) != PDH_MORE_DATA) return -1;
     std::vector<unsigned char> buffer(bytes);
     auto* items = reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(buffer.data());
     if (PdhGetFormattedCounterArrayW(gpu, PDH_FMT_DOUBLE, &bytes, &count, items) != ERROR_SUCCESS) return -1;
+    last = buffer; last_count = count;
     const auto prefix = L"pid_" + std::to_wstring(GetCurrentProcessId()) + L"_";
     double busiest = -1;
     for (DWORD i = 0; i < count; ++i)
@@ -65,8 +67,44 @@ struct Counters {
         busiest = std::max(busiest, std::clamp(items[i].FmtValue.doubleValue, 0.0, 100.0));
     return busiest;
   }
+  // The busiest engine's use summed over every other process (instance names
+  // pid_<n>_luid_<a>_<b>_phys_<p>_eng_<e>_engtype_<t>), -1 when unavailable.
+  double OtherGpu() {
+    if (!gpu || !last_count) return -1;
+    const auto own = L"pid_" + std::to_wstring(GetCurrentProcessId()) + L"_";
+    std::map<std::wstring, double> engines;
+    auto* items = reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(last.data());
+    for (DWORD i = 0; i < last_count; ++i) {
+      const std::wstring_view name(items[i].szName);
+      if (name.starts_with(own) || (items[i].FmtValue.CStatus != PDH_CSTATUS_VALID_DATA &&
+          items[i].FmtValue.CStatus != PDH_CSTATUS_NEW_DATA)) continue;
+      const auto luid = name.find(L"_luid_");
+      if (luid == std::wstring_view::npos) continue;
+      engines[std::wstring(name.substr(luid))] += std::clamp(items[i].FmtValue.doubleValue, 0.0, 100.0);
+    }
+    double busiest = 0;
+    for (const auto& [key, value] : engines) busiest = std::max(busiest, std::min(100.0, value));
+    return busiest;
+  }
+  // Every logical processor's busy share since the last call (percent).
+  double SystemCpu() {
+    FILETIME idle{}, kernel{}, user{};
+    if (!GetSystemTimes(&idle, &kernel, &user)) return -1;
+    const uint64_t i = Ticks(idle), k = Ticks(kernel), u = Ticks(user);
+    double out = -1;
+    if (sys_total && k + u > sys_total) {
+      const double total = double(k + u - sys_total), busy = total - double(i - sys_idle);
+      out = std::clamp(busy / total * 100, 0.0, 100.0);
+    }
+    sys_idle = i; sys_total = k + u;
+    return out;
+  }
+  uint64_t sys_idle = 0, sys_total = 0;
+  std::vector<unsigned char> last;
+  DWORD last_count = 0;
   void Sample(Values& v, uint32_t vendor) {
     v[kGpuUse] = Gpu();
+    v[kOtherGpu] = OtherGpu();
     PROCESS_MEMORY_COUNTERS_EX m{}; m.cb = sizeof(m);
     if (GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&m), sizeof(m)))
       v[kRam] = double(m.WorkingSetSize) / 1048576;
@@ -146,7 +184,7 @@ void Monitor::Run() {
     read_.store(read, std::memory_order_release);
     const auto now = Clock::now();
     const double seconds = std::chrono::duration<double>(now - last).count();
-    const int chapter = chapter_.load();
+    const int chapter = chapter_.load(), pass = pass_.load();
     Values v = MissingValues();
     const auto effects = nr::kk::EffectTimes();
     view.width = effects.input_width; view.height = effects.input_height;
@@ -158,6 +196,8 @@ void Monitor::Run() {
     const auto pc = Cpu(process, true);
     if (seconds > 0 && pc >= process_cpu) v[kCpuUse] = (pc - process_cpu) / (seconds * 100000.0 * cpus);
     process_cpu = pc;
+    if (const double system = counters.SystemCpu(); system >= 0 && v[kCpuUse] >= 0)
+      v[kOtherCpu] = std::max(0.0, system - v[kCpuUse]);
     const auto gc = game_thread_.load() ? Cpu(game_thread_.load(), false) : 0;
     if (read_native && read_native(&native)) {
       v[kGpuMs] = native.gpu_ms;
@@ -176,6 +216,10 @@ void Monitor::Run() {
       for (size_t i = 0; i < kMetricCount; ++i) if (i != kLatency) {
         view.metrics[0][i].Add(v[i], seconds); view.metrics[chapter + 1][i].Add(v[i], seconds);
       }
+    if (chapter >= 0 && chapter < 4 && chapter == previous_chapter && pass >= 0 && pass < kMaxPasses) {
+      for (size_t i = 0; i < kPassMetricCount; ++i)
+        view.background[size_t(pass) * kRouteChapters + size_t(chapter)][i].Add(v[kPassMetrics[i]], seconds);
+    }
     previous = native; previous_chapter = chapter; last = now;
     view.current = v;
     view.current[kLatency] = last_latency;

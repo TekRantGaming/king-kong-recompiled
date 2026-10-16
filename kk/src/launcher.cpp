@@ -5,6 +5,7 @@
 #include "pause_menu.h"
 #include "play_session.h"
 #include "benchmark.h"
+#include "launcher_benchmark.h"
 #include "launcher_art.h"
 #include "launcher_music.h"
 #include "launcher_sounds.h"
@@ -2278,6 +2279,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // or Chapter select.
     const std::string open_on = Get("kk_launcher_open");
     rex::cvar::ResetToDefault("kk_launcher_open");  // never saved
+    if (files_ok_ && open_on == "benchmark") {  // back from a benchmark run: its results
+      page_ = kAbout;
+      open_benchmark_results_ = true;
+    }
     if (files_ok_ && (open_on == "play" || open_on == "chapters")) {
       OpenPlayMenu();
       if (open_on == "chapters") OpenPlayView(PlayView::kChapters);
@@ -2428,6 +2433,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     } else if (InSetup()) {
       DrawSetup(dl);
     } else {
+      if (open_benchmark_results_ && !modal_.open) {
+        open_benchmark_results_ = false;
+        OpenBenchmarkResults();
+      }
       if (!modal_.open) HandleGlobalInput();
       if (play_ != PlayView::kNone) {
         DrawPlayHeader(dl);
@@ -4717,14 +4726,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     items.push_back(Section("King Kong PC port"));
     Item benchmark = ActionItem("Run benchmark",
         "Replays benchmark-route.kkbr beside the game, using your graphics settings and private saves. Results and route drift are saved locally.",
-        "Start", [this] {
-          if (!benchmark::RouteAvailable()) {
-            OpenModal("Benchmark", "Place a complete benchmark-route.kkbr beside the game before running the benchmark.",
-                {"Back"}, 0, {});
-            return;
-          }
-          benchmark::CreateBenchmarkStartDialog(imgui_drawer(), [this] { benchmark_pending_ = true; StartGame(); });
-        });
+        "Start", [this] { OpenBenchmark(); });
     items.push_back(Disable(benchmark, !CanPlay(), "Install the game first."));
     {
       Item it;
@@ -4989,6 +4991,57 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     m.focus = focus;
     m.on_button = std::move(on_button);
     modal_ = std::move(m);
+  }
+
+  // ---------------------------------------------------------- Benchmark ---
+  // Its start pop-up and results page (launcher_benchmark.h), in the launcher's own pop-up.
+  void OpenBenchmark() {
+    if (!benchmark::RouteAvailable()) {
+      OpenModal("Benchmark", "Place a complete benchmark-route.kkbr beside the game before running the benchmark.",
+                {"Back"}, 0, {});
+      return;
+    }
+    const bool have = bench_ui::HasResults(paths_.user_dir);
+    const auto page = bench_ui::StartPage(have);
+    OpenModal(page.title, page.body, page.buttons, page.cancel, [this, have](int i) {
+      switch (bench_ui::StartChoiceFor(i, have)) {
+        case bench_ui::StartChoice::kStandard: StartBenchmark(bench_ui::kStandardPasses); break;
+        case bench_ui::StartChoice::kQuick: StartBenchmark(bench_ui::kQuickPasses); break;
+        case bench_ui::StartChoice::kResults: OpenBenchmarkResults(); break;
+        default: break;
+      }
+    });
+    modal_.width = page.width;
+  }
+
+  void StartBenchmark(int passes) {
+    rex::cvar::SetFlagByName("kk_benchmark_passes", std::to_string(passes));  // never saved
+    benchmark_pending_ = true;
+    StartGame();
+  }
+
+  void OpenBenchmarkResults(int focus = 0) {
+    const auto result = bench_ui::LoadNewest(paths_.user_dir);
+    const auto page = bench_ui::ResultsPage(result);
+    REXLOG_INFO("KK launcher: benchmark results page ({}, {} pass rows)",
+                result.found ? result.dir.filename().string() : std::string("no results"), result.rows.size());
+    OpenModal(page.title, page.body, page.buttons, page.cancel, [this, result](int i) {
+      switch (bench_ui::ResultChoiceFor(i)) {
+        case bench_ui::ResultChoice::kRunAgain: OpenBenchmark(); break;
+        case bench_ui::ResultChoice::kOpenFolder:
+          OpenInExplorer(result.dir);
+          OpenBenchmarkResults(i);
+          break;
+        case bench_ui::ResultChoice::kCopy:
+          ImGui::SetClipboardText(result.report.c_str());
+          Status("Benchmark results copied to the clipboard.");
+          OpenBenchmarkResults(i);
+          break;
+        default: break;
+      }
+    }, focus);
+    modal_.reader = page.reader;
+    modal_.width = page.width;
   }
 
   void OpenQuit() {
@@ -5820,6 +5873,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   bool last_status_focus_ = false;
   std::chrono::steady_clock::time_point next_frame_{};
   bool benchmark_pending_ = false;
+  bool open_benchmark_results_ = false;  // --kk_launcher_open=benchmark, once the launcher draws
   std::shared_ptr<UpdateStatus> update_;
   std::shared_ptr<SteamState> steam_;
   bool update_manual_ = false, update_prompted_ = false, installing_update_ = false, relaunched_ = false;

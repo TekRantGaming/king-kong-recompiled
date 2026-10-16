@@ -28,6 +28,7 @@ set(KINGKONG_SOURCES
     src/launcher_text.cpp
     src/launcher_music.cpp
     src/launcher_sounds.cpp
+    src/launcher_benchmark.cpp
     src/game_sound.cpp
     src/steam_shortcut.cpp
     src/platform.cpp
@@ -43,6 +44,7 @@ set(KINGKONG_SOURCES
     src/camera_shake.cpp
     src/hfr.cpp
     src/hfr_particles.cpp
+    src/hfr_water.cpp
     src/hfr_dt_floor.cpp
     src/hfr_step_decay.cpp
     src/hfr_follow.cpp
@@ -193,6 +195,13 @@ if(KK_DEV_TOOLS)
     target_link_libraries(kk-slider-ui-tests PRIVATE rex::runtime)
     rexglue_apply_target_settings(kk-slider-ui-tests)
     add_test(NAME slider-controller-ui COMMAND kk-slider-ui-tests)
+    # The benchmark's launcher pages with controller, keyboard and mouse; results files and pass rules.
+    add_executable(kk-benchmark-ui-tests tests/benchmark_ui_tests.cpp src/launcher_ui.cpp src/launcher_text.cpp
+        src/launcher_benchmark.cpp)
+    target_include_directories(kk-benchmark-ui-tests PRIVATE src)
+    target_link_libraries(kk-benchmark-ui-tests PRIVATE rex::runtime)
+    rexglue_apply_target_settings(kk-benchmark-ui-tests)
+    add_test(NAME benchmark-launcher-ui COMMAND kk-benchmark-ui-tests "${CMAKE_CURRENT_BINARY_DIR}/benchmark-ui-test")
     add_executable(kk-panel-tests tests/debug_overlay_tests.cpp src/launcher_text.cpp)
     target_include_directories(kk-panel-tests PRIVATE src)
     target_link_libraries(kk-panel-tests PRIVATE rex::runtime)

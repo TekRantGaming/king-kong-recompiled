@@ -213,7 +213,10 @@ class KingKongApp : public rex::ReXApp {
     };
     cb.benchmark = [this] {
       nr::kk::StopLauncherPrewarm();
-      if (kk::play::RelaunchWith(L"--kk_benchmark=true --kk_skip_launcher=true")) {
+      // The launcher's choice of passes (a standard or a quick run) goes to the new process.
+      const std::string passes = rex::cvar::GetFlagByName("kk_benchmark_passes");
+      if (kk::play::RelaunchWith(L"--kk_benchmark=true --kk_benchmark_passes=" +
+                                 std::wstring(passes.begin(), passes.end()) + L" --kk_skip_launcher=true")) {
         kk::startup::CleanExit();
         kk::handoff::QuitWhenChildShown([this] { CloseLauncherProcess(); });
       }
@@ -354,10 +357,7 @@ class KingKongApp : public rex::ReXApp {
     kk::CreateDebugOverlay(drawer, window(), config_path_, user_data_root_);
     kk::CreateCursorActivity(drawer, window());
     kk::freecam::Install(drawer, window());
-    kk::benchmark::CreateBenchmarkDialog(drawer, [this] {
-      kk::startup::CleanExit();
-      app_context().CallInUIThreadDeferred([this] { if (window()) window()->RequestClose(); });
-    });
+    kk::benchmark::CreateBenchmarkDialog(drawer);
     kk::movies::CreateMovieDialog(drawer, immediate_drawer(), rex::filesystem::GetExecutableFolder() / "glyphs");
   }
 
