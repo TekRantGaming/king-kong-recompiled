@@ -34,7 +34,9 @@ bool ParseUpscaleQuality(const std::string& text, UpscaleQuality& out);
 float DefaultUpscaleRatio(UpscaleQuality q);
 
 // Additional material bias, using the actual SDK input/output ratio. DLSS and FSR recommend
-// log2(input/output)-1; XeSS recommends log2(input/output). Native AA keeps the game's bias.
+// log2(input/output)-1; XeSS recommends log2(input/output). Native-resolution AA (DLAA, FSR and XeSS
+// native AA; output / input <= 1) uses kNativeAaMipBias for every temporal upscaler (owner, 16 Oct).
+inline constexpr float kNativeAaMipBias = -1.0f;
 float MaterialMipBias(UpscalerKind kind, float output_over_input);
 
 // Where in the frame the upscaler runs (docs/upscalers.md, "Where it runs").

@@ -20,7 +20,12 @@ std::string Lower(std::string s) {
 }  // namespace
 
 float MaterialMipBias(UpscalerKind kind, float ratio) {
-  if (!std::isfinite(ratio) || ratio <= 1.0f) return 0.0f;
+  if (!std::isfinite(ratio) || ratio <= 0.0f) return 0.0f;
+  const bool temporal = kind == UpscalerKind::kDlss || kind == UpscalerKind::kFsr3 ||
+                        kind == UpscalerKind::kFsr4 || kind == UpscalerKind::kXess;
+  // Native-resolution AA (DLAA, FSR native AA, XeSS native AA): -1, the owner's decision of 16 Oct
+  // (vendor advice; DECISIONS.md). The bilinear stretch is not an AA and keeps the game's bias.
+  if (ratio <= 1.0f) return temporal ? kNativeAaMipBias : 0.0f;
   const float bias = -std::log2(ratio);
   switch (kind) {
     case UpscalerKind::kDlss:
