@@ -87,6 +87,10 @@ bool PipelinePrewarm::Wait(double seconds) {
   return true;
 }
 
+std::vector<PipelineRecord> PipelinePrewarm::waiting_records() {
+  return renderer_ ? renderer_->deferred_records() : std::vector<PipelineRecord>{};
+}
+
 void PipelinePrewarm::Stop() {
   // The renderer stops its workers after their current pipeline and saves the driver's cache.
   renderer_.reset();

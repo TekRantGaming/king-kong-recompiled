@@ -354,6 +354,11 @@ class GameRenderer {
     uint64_t failed = 0;
   };
   WorkerProgress worker_progress();
+  // The records still waiting for their shaders (a list naming shaders the pack does not have).
+  std::vector<PipelineRecord> deferred_records() {
+    std::lock_guard lock(cache_mutex_);
+    return deferred_;
+  }
 
   // REX_DEV_FRAME_LOG: the draw and resolve lines of frame_log.h, from the game's
   // calls. Off until set; emit null = the warning log (the harness reads it there).
@@ -637,6 +642,13 @@ class GameRenderer {
   void BuildPipelineDesc(const PipelineRecord& record, nvrhi::IShader* vs, nvrhi::IShader* ps,
                          nvrhi::GraphicsPipelineDesc& desc, nvrhi::FramebufferInfo& framebuffer) const;
   bool IsPending(uint64_t key);
+  // NR_PIPELINE_LOG=<csv> (diagnostic, task 171): one row per pipeline a draw or pass asked for that
+  // was not made yet (made on demand during play, or a prewarm job it waited for), with the wait and
+  // the draw's record when there is one.
+  void LogPipelineDemand(uint64_t key, const char* kind, double ms, bool made);
+  FILE* pipeline_log_ = nullptr;
+  bool pipeline_log_checked_ = false;
+  const PipelineRecord* demand_record_ = nullptr;  // the draw's record while Draw asks for its pipeline
   void EnsureWorkers();
   // A description the draws need: appended to the cache file the first time.
   void NoteRecord(const PipelineRecord& record, uint64_t key);

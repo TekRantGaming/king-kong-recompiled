@@ -135,6 +135,7 @@ GameRenderer::~GameRenderer() {
   if (upscale_build_.valid()) upscale_build_.wait();
   if (dlss_warm_.valid()) dlss_warm_.wait();
   if (frame_trace_) std::fclose(frame_trace_);
+  if (pipeline_log_) std::fclose(pipeline_log_);
   if (!pipeline_threads_.empty()) {
     {
       std::lock_guard lock(pipeline_mutex_);
@@ -1110,7 +1111,8 @@ nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelin
     std::unique_lock lock(pipeline_mutex_);
     drain();
     if (auto found = pipelines_.find(key); found != pipelines_.end()) return found->second;
-    if (!pipelines_pending_.count(key)) {
+    const bool was_pending = pipelines_pending_.count(key) != 0;
+    if (!was_pending) {
       EnsureWorkers();
       pipelines_pending_[key] = true;
       pipeline_jobs_.push_front({key, desc, framebuffer, true});
@@ -1119,6 +1121,7 @@ nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelin
       // Promote an unstarted prewarm job too. An already active job needs no duplicate.
       if (PromotePipelineJob(pipeline_jobs_, key)) pipeline_cv_.notify_all();
     }
+    const char* demand_kind = was_pending ? "pending" : "new";
     if (options_.pipeline_wait) {
       // Wait for the worker that has this pipeline (the draw's own job, or the prewarm's).
       const auto start = std::chrono::steady_clock::now();
@@ -1131,6 +1134,8 @@ nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelin
       stats_.pipeline_wait_ms += waited;
       NoteFrameWait(waited);
       auto found = pipelines_.find(key);
+      if (pipeline_log_ || !pipeline_log_checked_)
+        LogPipelineDemand(key, demand_kind, waited, found != pipelines_.end() && found->second);
       return found != pipelines_.end() ? found->second.Get() : nullptr;
     }
     if (for_draws && options_.pipeline_wait_budget_ms > 0) {
@@ -1152,10 +1157,12 @@ nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelin
         NoteFrameWait(ms);
         if (auto found = pipelines_.find(key); found != pipelines_.end()) {
           ++stats_.pipeline_budget_waits;
+          if (pipeline_log_ || !pipeline_log_checked_) LogPipelineDemand(key, demand_kind, ms, bool(found->second));
           return found->second;
         }
       }
     }
+    if (for_draws && (pipeline_log_ || !pipeline_log_checked_)) LogPipelineDemand(key, demand_kind, 0, false);
     ++stats_.skipped_pending;
     ++frame_skips_;
     return nullptr;
@@ -1165,12 +1172,40 @@ nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelin
   const double made_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
   stats_.pipeline_ms += made_ms;
   if (for_draws) NoteFrameWait(made_ms);  // the draw waited for the driver on its own thread
+  if (pipeline_log_ || !pipeline_log_checked_) LogPipelineDemand(key, for_draws ? "draw-thread" : "pass", made_ms, bool(p));
   pipelines_[key] = p;  // a failure is remembered too (null)
   if (p) {
     ++stats_.pipelines;
     if (for_draws) ++stats_.draw_pipelines;
   }
   return p;
+}
+
+void GameRenderer::LogPipelineDemand(uint64_t key, const char* kind, double ms, bool made) {
+  if (!pipeline_log_checked_) {
+    pipeline_log_checked_ = true;
+    if (const char* path = std::getenv("NR_PIPELINE_LOG"); path && *path) {
+      pipeline_log_ = std::fopen(path, "a");  // appended: a relaunched process (back to the launcher) keeps the rows
+      if (pipeline_log_) std::fseek(pipeline_log_, 0, SEEK_END);
+      if (pipeline_log_ && std::ftell(pipeline_log_) == 0)
+        std::fprintf(pipeline_log_, "unix_s,frame,key,kind,wait_ms,made,vs,vs_input,ps,ps_input,flags,colors,depth\n");
+    }
+  }
+  if (!pipeline_log_) return;
+  const double unix_s =
+      std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+  const PipelineRecord* r = demand_record_;
+  std::fprintf(pipeline_log_, "%.3f,%llu,%016llX,%s,%.3f,%d", unix_s, static_cast<unsigned long long>(frame_),
+               static_cast<unsigned long long>(key), kind, ms, made ? 1 : 0);
+  if (r && PipelineKey(*r) == key) {
+    std::fprintf(pipeline_log_, ",%016llX,%016llX,%016llX,%016llX,%u,%u,%u\n",
+                 static_cast<unsigned long long>(r->vs_hash), static_cast<unsigned long long>(r->vs_input),
+                 static_cast<unsigned long long>(r->ps_hash), static_cast<unsigned long long>(r->ps_input), r->flags,
+                 r->color_count, r->depth_format);
+  } else {
+    std::fprintf(pipeline_log_, ",,,,,,,\n");
+  }
+  std::fflush(pipeline_log_);
 }
 
 // ------------------------------------------------------- the pipeline cache
@@ -1769,7 +1804,9 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     nvrhi::GraphicsPipelineDesc pd;
     nvrhi::FramebufferInfo framebuffer_info;
     BuildPipelineDesc(record, vs->handle, ps ? ps->handle.Get() : nullptr, pd, framebuffer_info);
+    demand_record_ = &record;
     pipeline = GetPipeline(pd, framebuffer_info, key, true);
+    demand_record_ = nullptr;
   }
   if (!pipeline) {
     const bool pending = IsPending(key);
