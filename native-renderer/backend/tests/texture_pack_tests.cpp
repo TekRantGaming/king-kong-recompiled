@@ -49,17 +49,22 @@ struct TexturePackTestAccess {
     Check(kknr_tools::WriteDds((folder/e.file).string(),replacement),"write synthetic DDS");
     kknr::TexturePackManifest m;m.entries.push_back(e);Check(m.Write(folder),"write manifest");
     g.options_.texture_pack_folder=folder.string();g.options_.texture_pack=true;
-    unsigned frames=0;const auto start=std::chrono::steady_clock::now();
+    unsigned frames=0,incomplete=0;const auto start=std::chrono::steady_clock::now();
     while((!original->replacement || !original->replacement->pack_ready) && frames<1000) {
       ++g.frame_;cl->open();g.ServiceTexturePacks(cl);
-      if(original->replacement && !original->replacement->pack_ready)
+      if(original->replacement && !original->replacement->pack_ready) {
+        ++incomplete;
         Check(g.BindTexture(cl,fetch.words,kkshaders::TextureDimension::Tex2D,false)==original_index,"incomplete upload uses original");
+      }
       cl->close();host->Execute(cl);host->WaitIdle();++frames;
       std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
     const double ready_ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
     Check(original->replacement && original->replacement->pack_ready,"async pack becomes ready");
-    Check(frames>=replacement.plan.levels+1,"large base staged over multiple frames");
+    // The 2.1 MB base needs two 2 MiB gameplay strips; the ten smaller levels
+    // share the second frame's budget instead of taking a frame each.
+    Check(incomplete>=1,"large base staged over multiple frames");
+    Check(incomplete<=2,"small levels share a frame's upload budget");
     const auto pixels=host->ReadBack(original->replacement->texture);
     Check(pixels.width==1025 && pixels.height==513,"NPOT replacement dimensions");
     for(unsigned y=0;y<pixels.height;++y)for(unsigned x=0;x<pixels.width;++x) {
@@ -80,6 +85,33 @@ struct TexturePackTestAccess {
     Check(g.pack_pressure_ && !original->replacement && !g.pack_bytes_,"memory pressure drops pack");
     cl->open();Check(g.BindTexture(cl,fetch.words,kkshaders::TextureDimension::Tex2D,false)==original_index,"pressure uses original descriptor");
     cl->close();host->Execute(cl);host->WaitIdle();
+    // A 12 GiB budget allows a quarter (no fixed 512 MiB cap any more).
+    g.options_.memory_budget=[] { return MemoryBudget{12ull<<30,2ull<<30,true}; };
+    g.memory_sample_={};g.CheckMemoryBudget();
+    Check(!g.pack_pressure_ && g.pack_limit_==3ull<<30,"pack limit is a quarter of the budget");
+    // Over the limit but not under pressure: the original stays, the decoded
+    // data is dropped and the file is not read again every frame.
+    g.options_.memory_budget=[] { return MemoryBudget{1ull<<30,(1ull<<30)-(1ull<<30)/10-(17ull<<20),true}; };
+    g.memory_sample_={};g.CheckMemoryBudget();
+    Check(!g.pack_pressure_ && g.pack_limit_==1ull<<20,"small free space limits the pack");
+    for(unsigned i=0;i<1000 && !original->pack_capped;++i) {
+      ++g.frame_;cl->open();g.ServiceTexturePacks(cl);cl->close();host->Execute(cl);host->WaitIdle();
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    Check(original->pack_capped && !original->replacement && g.pack_capped_==1 && !g.pack_bytes_,"over-limit replacement keeps original");
+    for(unsigned i=0;i<20;++i) { ++g.frame_;cl->open();g.ServiceTexturePacks(cl);cl->close();host->Execute(cl);host->WaitIdle(); }
+    Check(original->pack_capped && g.pack_capped_==1,"capped original is not requested again");
+    cl->open();Check(g.BindTexture(cl,fetch.words,kkshaders::TextureDimension::Tex2D,false)==original_index,"capped uses original descriptor");
+    cl->close();host->Execute(cl);host->WaitIdle();
+    // When room returns, the capped original retries once (after 600 frames).
+    g.options_.memory_budget=[] { return MemoryBudget{12ull<<30,2ull<<30,true}; };
+    g.memory_sample_={};g.CheckMemoryBudget();
+    g.frame_+=600;
+    for(unsigned i=0;i<1000 && !(original->replacement && original->replacement->pack_ready);++i) {
+      ++g.frame_;cl->open();g.ServiceTexturePacks(cl);cl->close();host->Execute(cl);host->WaitIdle();
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    Check(original->replacement && original->replacement->pack_ready && !g.pack_capped_ && g.pack_bytes_==bytes,"capped original retries when room returns");
     Check(host->errors()==0,"API and NVRHI validation");
     std::printf("PASS texture pack: %u service frames, %.2f ms until ready, %.2f ms total test, %llu resident bytes, zero validation errors\n",frames,
         ready_ms,std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count(),(unsigned long long)bytes);

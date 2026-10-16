@@ -321,6 +321,7 @@ GameRenderer::HostTexture* GameRenderer::ResolveDestTexture(kknr::TextureCache::
 void GameRenderer::ReleaseHostTexture(HostTexture* host) {
   if (!host) return;
   pack_originals_.erase(host);
+  if (host->pack_capped) { host->pack_capped = false; pack_capped_ -= std::min<uint64_t>(pack_capped_, 1); }
   if (pack_upload_.original == host) pack_upload_ = {};
   if (host->replacement) { ReleaseHostTexture(host->replacement); host->replacement = nullptr; }
   pack_bytes_ -= std::min(pack_bytes_, host->pack_allocation);
@@ -399,6 +400,7 @@ GameRenderer::HostTexture* GameRenderer::UploadTexture(nvrhi::ICommandList* cl,
   if (pack_upload_.original == host) pack_upload_ = {};
   host->pack_hash = kknr::TextureBaseHash(data);
   host->pack_unavailable = false;
+  if (host->pack_capped) { host->pack_capped = false; pack_capped_ -= std::min<uint64_t>(pack_capped_, 1); }
   if (host->pack_hash) pack_originals_.insert(host);
   else pack_originals_.erase(host);
   if (texture_pack_stream_ && host->pack_hash) texture_pack_stream_->Request(host->pack_hash, host->plan);

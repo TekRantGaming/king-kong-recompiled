@@ -39,7 +39,12 @@ class TexturePackStream {
   ~TexturePackStream();
   void Configure(const std::string& folder);
   void Request(uint64_t hash, const HostTexturePlan& original);
-  std::shared_ptr<const HostTextureData> Take(uint64_t hash, const HostTexturePlan& original, uint64_t max_bytes = UINT64_MAX);
+  // A ready image larger than max_bytes is dropped (its decoded bytes freed and
+  // its identity requestable again) and reported through too_large, so a full
+  // pack limit never leaves the ready set re-reading files. Without too_large
+  // it stays ready.
+  std::shared_ptr<const HostTextureData> Take(uint64_t hash, const HostTexturePlan& original, uint64_t max_bytes = UINT64_MAX,
+                                              uint64_t* too_large = nullptr);
   std::string Status() const;
  private:
   struct Impl;

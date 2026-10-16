@@ -501,6 +501,7 @@ class GameRenderer {
     HostTexture* replacement = nullptr;
     bool pack_ready = false;
     bool pack_unavailable = false;
+    bool pack_capped = false;  // kept original: its replacement did not fit the pack limit
     uint64_t material_hash = 0;
     nvrhi::TextureHandle texture;
     kknr::HostTexturePlan plan;
@@ -1036,7 +1037,10 @@ class GameRenderer {
   std::unique_ptr<kknr::TexturePackStream> texture_pack_stream_;
   std::unordered_set<HostTexture*> pack_originals_;
   std::string texture_pack_folder_;
-  uint64_t pack_frame_ = ~0ull, pack_bytes_ = 0, pack_limit_ = 256ull << 20;
+  uint64_t pack_frame_ = ~0ull, pack_bytes_ = 0, pack_limit_ = kTexturePackFallbackLimit;
+  // Originals kept because their replacement exceeded the limit. Their data is
+  // dropped (no repeated file reads); they retry only once the smallest fits.
+  uint64_t pack_capped_ = 0, pack_capped_min_ = UINT64_MAX, pack_capped_frame_ = 0;
   bool pack_pressure_ = false;
   struct PackUpload {
     HostTexture* original = nullptr;
@@ -1045,6 +1049,7 @@ class GameRenderer {
   } pack_upload_;
   void ServiceTexturePacks(nvrhi::ICommandList* cl);
   void DropTexturePacks();
+  void CapTexturePack(HostTexture* original, uint64_t bytes);
   void AdvanceTexturePack(nvrhi::ICommandList* cl);
 
   // Built-in passes.

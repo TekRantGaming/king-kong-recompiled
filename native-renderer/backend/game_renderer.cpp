@@ -842,11 +842,10 @@ void GameRenderer::CheckMemoryBudget() {
                          now - memory_start_ >= std::chrono::seconds(20);
   if (simulated) tested.usage = std::max(tested.usage, tested.budget);
   const bool pressure = MemoryPressure(tested);
-  pack_limit_ = std::min<uint64_t>(512ull << 20, tested.budget / 8);
-  const uint64_t reserve=MemoryBudgetReserve(tested.budget)+(16ull<<20);
-  const uint64_t spare=tested.budget>tested.usage && tested.budget-tested.usage>reserve ?
-      tested.budget-tested.usage-reserve : 0;
-  pack_limit_=std::min(pack_limit_,pack_bytes_+spare);
+  pack_limit_ = TexturePackLimit(tested, pack_bytes_);
+  // Developer: a small card's pack limit without real memory pressure (MiB).
+  if (const char* value = std::getenv("KK_DEV_TEXTURE_PACK_LIMIT_MIB"))
+    pack_limit_ = std::min<uint64_t>(pack_limit_, std::strtoull(value, nullptr, 10) << 20);
   pack_pressure_ = pressure;
   if (pressure) DropTexturePacks();
   const char* control = std::getenv("KK_DEV_VRAM_CONTROL");
