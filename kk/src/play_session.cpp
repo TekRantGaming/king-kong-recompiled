@@ -23,6 +23,7 @@
 #include "ui_paint.h"
 
 #include "play_session.h"
+#include "handoff.h"
 
 #include <algorithm>
 #include <atomic>
@@ -585,12 +586,14 @@ bool RelaunchWith(const std::wstring& extra) {
   STARTUPINFOW si{sizeof(si)};
   PROCESS_INFORMATION pi{};
   const auto dir = std::filesystem::path(exe).parent_path();
+  kk::handoff::BeforeChild();  // this window stays up until the new one has drawn (handoff.h)
   if (!CreateProcessW(exe, cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, dir.c_str(), &si, &pi)) {
     REXLOG_ERROR("KK play: relaunch failed ({})", GetLastError());
+    kk::handoff::ChildFailed();
     return false;
   }
   CloseHandle(pi.hThread);
-  CloseHandle(pi.hProcess);
+  kk::handoff::ChildStarted(pi.hProcess);
 #else
   const char* appimage = std::getenv("APPIMAGE");
   const std::string exe = appimage ? appimage : std::filesystem::read_symlink("/proc/self/exe").string();
@@ -1166,7 +1169,8 @@ REX_HOOK_RAW(sub_8253DB80) {
         REXLOG_INFO("KK play: Quit game: the program exits");
         if (g_quit) g_quit();
       } else if (RelaunchWith(L"--kk_launcher_open=" + page) && g_quit) {
-        g_quit();
+        // The game's black cover stays up until the launcher has drawn its first frame (handoff.h).
+        kk::handoff::QuitWhenChildShown(g_quit);
       }
     }
   }

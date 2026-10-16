@@ -16,6 +16,7 @@ set(KINGKONG_SOURCES
     src/startup_recovery.cpp
     src/fpe_guard.cpp
     src/frame_stats.cpp
+    src/handoff.cpp
     src/benchmark.cpp
     src/benchmark_monitor.cpp
     src/sampler.cpp

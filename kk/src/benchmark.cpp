@@ -1,4 +1,5 @@
 #include "benchmark.h"
+#include "handoff.h"
 #include "freecam.h"
 #include "benchmark_monitor.h"
 #include "benchmark_history.h"
@@ -374,6 +375,7 @@ void Finish() {
 }
 
 void HostPresent() {
+  kk::handoff::OnPresent();  // this observer replaces the handoff's (handoff.h)
   if (recording_route) return;
   if (phase != Phase::kRunning) return;
   const auto now = Clock::now();

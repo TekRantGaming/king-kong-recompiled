@@ -39,6 +39,7 @@
 #include "frame_stats.h"
 #include "glyphs.h"
 #include "guest.h"
+#include "handoff.h"
 #include "hfr.h"
 
 namespace kk {
@@ -90,6 +91,7 @@ class KingKongApp : public rex::ReXApp {
   void OnConfigurePaths(rex::PathConfig& paths) override {
     // Register the GPU plugin's cvars before the config is read so the
     // launcher can edit and save them, and set the port's own defaults.
+    kk::handoff::ArmChild();  // started by a previous run: tell it when this one's first frame is up
     kk::PreloadGpuPlugin();
     kk::ApplyPortDefaults();
     // An AppImage runs from a read-only mount, so keep the game files and the
@@ -195,7 +197,8 @@ class KingKongApp : public rex::ReXApp {
       const std::wstring start = kk::play::StartRequestArg();
       kk::startup::CleanExit();
       kk::play::RelaunchWith(L"--kk_skip_launcher=true" + (start.empty() ? std::wstring() : L" " + start));
-      CloseLauncherProcess();
+      // The launcher's window stays until the game's has drawn (handoff.h): no desktop between them.
+      kk::handoff::QuitWhenChildShown([this] { CloseLauncherProcess(); });
     };
     cb.quit = [this] {
       nr::kk::StopLauncherPrewarm();
@@ -212,7 +215,7 @@ class KingKongApp : public rex::ReXApp {
       nr::kk::StopLauncherPrewarm();
       if (kk::play::RelaunchWith(L"--kk_benchmark=true --kk_skip_launcher=true")) {
         kk::startup::CleanExit();
-        CloseLauncherProcess();
+        kk::handoff::QuitWhenChildShown([this] { CloseLauncherProcess(); });
       }
     };
     cb.dpi_scale = [this] {
