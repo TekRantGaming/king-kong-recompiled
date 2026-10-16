@@ -337,6 +337,31 @@ void CheckFsr4(nvrhi::GraphicsAPI api) {
   }
 }
 
+// The FSR 4 code path (AMD FSR SDK 2.3: context, dispatch, resource states, jitter and motion conventions)
+// on a GPU without FSR 4: NR_DEV_FSR4_ANY_PROVIDER runs the library's newest provider (FSR 3.1.x) through
+// it. This checks the integration, not FSR 4's model, which needs an AMD Radeon RX 7000/9000 GPU.
+void CheckFsr4Path(nvrhi::GraphicsAPI api) {
+  nvrhi::IDevice* dev = Device(api);
+  if (!dev) return;
+  UpscaleConfig config;
+  config.kind = UpscalerKind::kFsr4;
+  config.quality = UpscaleQuality::kPerformance;
+  UpscalerKind chosen = UpscalerKind::kOff;
+  std::string why;
+  if (CreateUpscaler(dev, config, &chosen, &why) && chosen == UpscalerKind::kFsr4) {
+    std::printf("  FSR 4 itself runs here: covered by the FSR 4 test\n");
+    return;
+  }
+  _putenv_s("NR_DEV_FSR4_ANY_PROVIDER", "1");
+  CheckUpscaler(api, UpscalerKind::kFsr4);
+  const Run run = Upscale(dev, UpscalerKind::kFsr4, 1.0f, 2);
+  _putenv_s("NR_DEV_FSR4_ANY_PROVIDER", "");
+  std::printf("  FSR 4 path with %s: chosen %s\n", run.name.c_str(), UpscalerKindName(run.chosen));
+  CHECK(run.ran);
+  CHECK(run.chosen == UpscalerKind::kFsr4);
+  CHECK(MaterialMipBias(run.chosen, 2.0f) == -2.0f);  // AMD's log2(render/display) - 1 at Performance
+}
+
 void CheckSupport(nvrhi::GraphicsAPI api) {
   nvrhi::IDevice* dev = Device(api);
   if (!dev) return;
@@ -417,6 +442,7 @@ TEST(UpscalerD3D12_Fsr3) { CheckUpscaler(nvrhi::GraphicsAPI::D3D12, UpscalerKind
 TEST(UpscalerD3D12_Dlss) { CheckUpscaler(nvrhi::GraphicsAPI::D3D12, UpscalerKind::kDlss); }
 TEST(UpscalerD3D12_Xess) { CheckUpscaler(nvrhi::GraphicsAPI::D3D12, UpscalerKind::kXess); }
 TEST(UpscalerD3D12_Fsr4) { CheckFsr4(nvrhi::GraphicsAPI::D3D12); }
+TEST(UpscalerD3D12_Fsr4Path) { CheckFsr4Path(nvrhi::GraphicsAPI::D3D12); }
 TEST(UpscalerD3D12_Support) { CheckSupport(nvrhi::GraphicsAPI::D3D12); }
 TEST(UpscalerD3D12_Cost) { Cost(nvrhi::GraphicsAPI::D3D12); }
 #if NR_HAS_VULKAN

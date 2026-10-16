@@ -263,7 +263,10 @@ and, on D3D12, descriptor heaps).
   them unchecked; `FfxGetDeviceProcAddr` gives the core function when the extension name is not there.
 - **FSR 4** asks AMD's library which upscaler versions this device can run and takes the newest FSR 4. On
   NVIDIA it reports "FSR 4 does not run on this GPU (the AMD library offers FSR 3.1.5, 2.3.4)" and the choice
-  falls back to FSR 3.1. Untested on AMD hardware (none here).
+  falls back to FSR 3.1. Untested on AMD hardware (none here). Developer check only:
+  `NR_DEV_FSR4_ANY_PROVIDER=1` makes it take the library's newest version when there is no FSR 4 (FSR 3.1.5
+  on NVIDIA), so the FSR 4 code path (AMD's SDK 2.3 context and dispatch, the game's FSR 4 choice and its
+  mip bias) runs on any D3D12 GPU; `UpscalerD3D12_Fsr4Path` does this. It does not test FSR 4's model.
 - **DLSS** starts NGX once per device with a project ID for a custom engine (the game has no NVIDIA
   application ID), checks `SuperSampling.Available` (an RTX GPU; a recent enough driver, else it names the
   version needed) and takes the input size from NGX's optimal settings. `native` is DLAA. The preset goes to
