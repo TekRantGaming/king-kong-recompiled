@@ -302,7 +302,8 @@ void Finish() {
           PassScope r; r.pass = p + 1; r.chapter = int(c + 1);
           r.frames = Summarize(pass_guest[p][c]);
           const auto& bg = final_monitor.background[size_t(p) * kRouteChapters + c];
-          r.other_cpu = bg[0].Mean(); r.other_gpu = bg[1].Mean();
+          r.other_cpu = bg[0].Mean(); r.other_gpu = bg[1].Mean(); r.gpu_clock = bg[2].Mean();
+          r.gpu_temp = bg[3].Mean(); r.gpu_ms = bg[4].Mean(); r.game_ms = bg[5].Mean(); r.render_ms = bg[6].Mean();
           if (bg[0].weight > 0) { cpu_sum += bg[0].sum; cpu_w += bg[0].weight; }
           if (bg[1].weight > 0) { gpu_sum += bg[1].sum; gpu_w += bg[1].weight; }
           rows.push_back(r);
@@ -334,14 +335,15 @@ void Finish() {
             std::to_string(recording.chapters[size_t(scope - 1)].entry) + " (" + ChapterName(size_t(scope - 1)) + ")"
             : std::string("Total")) + ", median of " + std::to_string(summary.passes) + " passes\n" +
             Describe(summary.median);
-        char line[256];
+        char line[512];
         std::snprintf(line, sizeof(line), "Pass spread: %.2f%% (%.1f to %.1f FPS), confidence %s, busy passes %zu\n",
             summary.spread, summary.min_fps, summary.max_fps, ConfidenceLabel(summary.confidence), summary.busy_passes);
         text += line;
         for (const auto& r : rows) if (r.chapter == scope) {
-          std::snprintf(line, sizeof(line), "  Pass %d: %.2f FPS average, %.2f 1%% low, worst %.1f ms, other CPU %.1f%%, other GPU %.1f%%%s\n",
+          std::snprintf(line, sizeof(line), "  Pass %d: %.2f FPS average, %.2f 1%% low, worst %.1f ms, other CPU %.1f%%, other GPU %.1f%%%s;"
+              " GPU %.0f MHz %.0f C, GPU frame %.2f ms, game thread %.2f ms, render thread %.2f ms\n",
               r.pass, r.frames.average_fps, r.frames.low_fps, r.frames.worst_ms, r.other_cpu, r.other_gpu,
-              r.Busy() ? " (busy)" : "");
+              r.Busy() ? " (busy)" : "", r.gpu_clock, r.gpu_temp, r.gpu_ms, r.game_ms, r.render_ms);
           text += line;
         }
         if (scope) {

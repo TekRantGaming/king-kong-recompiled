@@ -36,6 +36,8 @@ struct PassScope {
   int chapter = 0;   // 0: the whole pass, 1..4 the route's chapters
   Stats frames;
   double other_cpu = -1, other_gpu = -1;  // -1: not available
+  // Diagnostics (means over the pass's measured time; -1: not available).
+  double gpu_clock = -1, gpu_temp = -1, gpu_ms = -1, game_ms = -1, render_ms = -1;
   bool Busy() const { return other_cpu > kBusyOtherCpu || other_gpu > kBusyOtherGpu; }
 };
 
@@ -118,13 +120,14 @@ inline std::string PassesCsv(const std::vector<PassScope>& rows) {
   std::ostringstream out;
   out.imbue(std::locale::classic());
   out << "pass,scope,count,seconds,average_fps,low1_fps,low01_fps,p50_ms,p95_ms,p99_ms,worst_ms,stutters,"
-         "other_cpu_percent,other_gpu_percent\n";
+         "other_cpu_percent,other_gpu_percent,gpu_clock_mhz,gpu_temp_c,gpu_frame_ms,game_cpu_ms,render_cpu_ms\n";
   out << std::setprecision(10);
   for (const auto& r : rows) {
     const auto& s = r.frames;
     out << r.pass << ',' << r.chapter << ',' << s.count << ',' << s.seconds << ',' << s.average_fps << ','
         << s.low_fps << ',' << s.low01_fps << ',' << s.p50_ms << ',' << s.p95_ms << ',' << s.p99_ms << ','
-        << s.worst_ms << ',' << s.stutters << ',' << r.other_cpu << ',' << r.other_gpu << '\n';
+        << s.worst_ms << ',' << s.stutters << ',' << r.other_cpu << ',' << r.other_gpu << ',' << r.gpu_clock << ','
+        << r.gpu_temp << ',' << r.gpu_ms << ',' << r.game_ms << ',' << r.render_ms << '\n';
   }
   return out.str();
 }
@@ -145,7 +148,7 @@ inline std::vector<PassScope> ReadPassesCsv(const std::string& csv) {
       if (end == f.c_str() || *end || !std::isfinite(n)) return {};
       v.push_back(n);
     }
-    if (v.size() != 14 || v[0] < 1 || v[0] > kMaxPasses || v[1] < 0 || v[1] > double(kRouteChapters) || v[2] < 0 ||
+    if ((v.size() != 14 && v.size() != 19) || v[0] < 1 || v[0] > kMaxPasses || v[1] < 0 || v[1] > double(kRouteChapters) || v[2] < 0 ||
         rows.size() >= size_t(kMaxPasses) * (kRouteChapters + 1)) return {};
     PassScope r;
     r.pass = int(v[0]); r.chapter = int(v[1]);
@@ -154,6 +157,7 @@ inline std::vector<PassScope> ReadPassesCsv(const std::string& csv) {
     s.low_fps = v[5]; s.low01_fps = v[6]; s.p50_ms = v[7]; s.p95_ms = v[8]; s.p99_ms = v[9]; s.worst_ms = v[10];
     s.stutters = size_t(std::clamp(v[11], 0.0, double(kMaxSamples)));
     r.other_cpu = v[12]; r.other_gpu = v[13];
+    if (v.size() == 19) { r.gpu_clock = v[14]; r.gpu_temp = v[15]; r.gpu_ms = v[16]; r.game_ms = v[17]; r.render_ms = v[18]; }
     rows.push_back(r);
   }
   return rows;

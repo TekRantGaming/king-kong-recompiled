@@ -217,8 +217,8 @@ void Monitor::Run() {
         view.metrics[0][i].Add(v[i], seconds); view.metrics[chapter + 1][i].Add(v[i], seconds);
       }
     if (chapter >= 0 && chapter < 4 && chapter == previous_chapter && pass >= 0 && pass < kMaxPasses) {
-      view.background[size_t(pass) * kRouteChapters + size_t(chapter)][0].Add(v[kOtherCpu], seconds);
-      view.background[size_t(pass) * kRouteChapters + size_t(chapter)][1].Add(v[kOtherGpu], seconds);
+      for (size_t i = 0; i < kPassMetricCount; ++i)
+        view.background[size_t(pass) * kRouteChapters + size_t(chapter)][i].Add(v[kPassMetrics[i]], seconds);
     }
     previous = native; previous_chapter = chapter; last = now;
     view.current = v;

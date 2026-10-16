@@ -17,6 +17,8 @@ inline constexpr const char* kMetricNames[] = {
   "Other programs CPU (%)", "Other programs GPU (%)",
   "GPU clock (MHz)", "GPU temperature (C)", "GPU power (W)"};
 using Values = std::array<double, kMetricCount>;
+inline constexpr Metric kPassMetrics[] = {kOtherCpu, kOtherGpu, kClock, kTemperature, kGpuMs, kGameMs, kRenderMs};
+inline constexpr size_t kPassMetricCount = std::size(kPassMetrics);
 inline Values MissingValues() { Values v; v.fill(-1); return v; }
 struct MetricMean {
   double sum = 0, weight = 0, peak = -1;
@@ -43,8 +45,9 @@ struct MonitorView {
   std::array<float, 240> recent{};
   size_t recent_count = 0;
   std::array<Metrics, 5> metrics{}; // total, then four chapters (every pass)
-  // Other programs' CPU and GPU use per pass and chapter (pass * 4 + chapter).
-  std::array<std::array<MetricMean, 2>, kMaxPasses * kRouteChapters> background{};
+  // Per pass and chapter (pass * 4 + chapter): other programs' CPU and GPU use,
+  // GPU clock and temperature, GPU frame time and the game/render threads' CPU time.
+  std::array<std::array<MetricMean, kPassMetricCount>, kMaxPasses * kRouteChapters> background{};
   uint32_t width = 0, height = 0, output_width = 0, output_height = 0, api = 0;
   std::string upscaler;
   uint64_t dropped = 0, samples = 0;

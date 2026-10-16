@@ -54,6 +54,7 @@ gpu_plugin = "native"
 kk_camera_sensitivity = 150
 kk_deadzone = 5
 kk_vibration_strength = 100
+kk_last_version = "2.0.0-beta.5"
 '@ | Set-Content -LiteralPath "$run/king_kong.toml" -Encoding ASCII
 Get-ChildItem Env: | Where-Object {$_.Name -like 'KK_*' -or $_.Name -like 'REX_DEV_*'} |
  ForEach-Object {[Environment]::SetEnvironmentVariable($_.Name,$null,'Process')}
@@ -126,7 +127,13 @@ function Read-Log($path) {
  $stream=[IO.File]::Open($path,'Open','Read','ReadWrite'); $reader=[IO.StreamReader]::new($stream)
  try {$reader.ReadToEnd()} finally {$reader.Dispose()}
 }
-$guard=Wait-GameSlot -Task $task -RequireBackgroundHelper
+# Wait-GameSlot polls every 30 s; poll every 3 s so a free slot is not always taken first by others.
+$guard=$null
+while(!$guard) {
+ $claim=Try-ClaimGameSlot -Task $task -RequireBackgroundHelper
+ if($claim.State -eq 'user') {throw 'USER LOCK: code-only work; no game launch.'}
+ if($claim.Guard){$guard=$claim.Guard} else {Start-Sleep -Seconds $(if($claim.UserGame){60}else{3})}
+}
 # The shared rule: re-read after 2 s and make sure the claim is still ours.
 Start-Sleep -Seconds 2
 if((Read-GameSlotState) -ne $guard.Token){Release-GameSlot $guard; throw 'Lost the game lock race; retry later'}
