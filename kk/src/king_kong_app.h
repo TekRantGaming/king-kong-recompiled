@@ -88,6 +88,14 @@ class KingKongApp : public rex::ReXApp {
 
   void OnShutdown() override { kk::benchmark::Shutdown(); kk::startup::CleanExit(); }
 
+  // Task 173: a restore from minimised is not a size change, and the SDK's presenter retries a surface it
+  // found zero-sized (minimised) only at a size change: reconnect it here, as a resize would.
+  void OnWindowRestored() override {
+    REXLOG_INFO("KK: window restored");
+    RecoverPresentation("window restored");
+  }
+  void OnWindowMinimized() override { REXLOG_INFO("KK: window minimised"); }
+
   void OnConfigurePaths(rex::PathConfig& paths) override {
     // Register the GPU plugin's cvars before the config is read so the
     // launcher can edit and save them, and set the port's own defaults.
@@ -235,6 +243,8 @@ class KingKongApp : public rex::ReXApp {
     cb.output_size = [this] { return OutputSize(); };
     cb.display_modes = [this](int monitor) { return kk::ListDisplayModes(monitor, window()); };
     cb.desktop_mode = [this](int monitor) { return kk::DesktopDisplayMode(monitor, window()); };
+    cb.post_to_ui = [this](std::function<void()> f) { app_context().CallInUIThreadDeferred(std::move(f)); };
+    cb.recover_presentation = [this] { RecoverPresentation(nullptr); };
     // The Display page's Resolution list, made on a worker while the launcher opens (display_modes.h).
     kk::PrefetchDisplayModes(std::atoi(rex::cvar::GetFlagByName("monitor").c_str()), window());
     kk::ShowLauncher(imgui_drawer(), immediate_drawer(),
@@ -379,6 +389,32 @@ class KingKongApp : public rex::ReXApp {
   }
 
  private:
+  // Window::presenter() is protected; a class derived from Window may name it (never made).
+  struct WindowPresenter : rex::ui::Window {
+    static rex::ui::Presenter* Of(const rex::ui::Window& w) { return (w.*&WindowPresenter::presenter)(); }
+  };
+  // Reconnects the presenter to the window's surface (what a resize does), when the window can be drawn
+  // (not minimised or hidden, some pixels). UI thread. `why`: logged (null: the launcher's heartbeat, which
+  // counts its own).
+  void RecoverPresentation(const char* why) {
+#if defined(KK_DEV_TOOLS)
+    static const bool off = std::getenv("KK_DEV_NO_HEARTBEAT") != nullptr;  // the behaviour before task 173
+    if (off) return;
+#endif
+    rex::ui::Window* w = window();
+    rex::ui::Presenter* presenter = w ? WindowPresenter::Of(*w) : nullptr;
+    if (!presenter) return;
+    // SDL_GetWindows here sees none of the SDK's windows (another SDL): ask the platform instead.
+    const bool drawable = kk::NativeWindowDrawable(w->GetNativeWindowHandle());
+    static int asked = 0;
+    if (why || ++asked <= 3 || asked % 30 == 0)
+      REXLOG_INFO("KK: presenter reconnect ({}): {}", why ? why : "launcher heartbeat",
+                  drawable ? "reconnecting" : "window minimised or hidden, later");
+    if (!drawable) return;
+    presenter->OnSurfaceResizeFromUIThread();
+    w->RequestPaint();
+  }
+
   // Size the game is shown at: in fullscreen the Resolution picked on the Display page, or the
   // monitor's; else the window.
   std::pair<int, int> OutputSize() const {

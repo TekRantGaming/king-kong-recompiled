@@ -30,6 +30,12 @@ struct LauncherCallbacks {
   std::function<std::pair<int, int>()> output_size;  // size the game will be shown at
   std::function<std::vector<DisplayMode>(int)> display_modes;  // a monitor's fullscreen modes (display_modes.h)
   std::function<DisplayMode(int)> desktop_mode;                // a monitor's mode on the desktop
+  // The launcher's heartbeat (task 173): its setup steps and jobs go on while nothing is drawn (window
+  // minimised, or the presenter lost the window's surface). post_to_ui runs a function on the UI thread
+  // soon (any thread); recover_presentation (UI thread) reconnects the presenter to the window when the
+  // window can be drawn again.
+  std::function<void(std::function<void()>)> post_to_ui;
+  std::function<void()> recover_presentation;
 };
 
 struct LauncherPaths {
@@ -37,6 +43,10 @@ struct LauncherPaths {
   std::filesystem::path user_dir;
   std::filesystem::path config_path;
 };
+
+// Whether a window (the SDK's native handle: an HWND on Windows) can be drawn to now: shown, not
+// minimised, some client area. True where the platform is not asked (the presenter checks the size).
+bool NativeWindowDrawable(void* handle);
 
 // True when the game files needed to boot exist under `game_dir`.
 bool GameFilesPresent(const std::filesystem::path& game_dir);

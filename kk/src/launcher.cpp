@@ -30,6 +30,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <condition_variable>
 #include <cstring>
 #include <ctime>
 #include <map>
@@ -2305,9 +2306,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       OpenPlayView(PlayView::kExtras);
     }
     saved_changes_ = seen_changes_ = g_changes;
+    StartHeartbeat();
   }
 
   ~Launcher() override {
+    StopHeartbeat();
     FlushProfileOptions();
     ui::SetSoundHandler(nullptr);
     if (install_thread_.joinable()) {
@@ -2323,6 +2326,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
  protected:
   void OnDraw(ImGuiIO& io) override {
+    NoteDrawn();
     {
       // The frame rate (task 144). The SDK holds the launcher to the display's refresh rate on Windows
       // only: elsewhere it draws as fast as it can (a handheld's battery), so keep it to 60 frames a
@@ -5501,6 +5505,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   void Quit() {
     SaveIfChanged();
     input_.Release();
+    StopHeartbeat();  // before the app context goes
     if (cb_.quit) cb_.quit();
   }
 
@@ -5546,6 +5551,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // The pause menu for the game about to start (the app makes it too when the launcher is skipped).
     if (!needs_restart && !benchmark_pending_) CreatePauseMenu(imgui_drawer(), immediate_, paths_.config_path, paths_.user_dir, paths_.game_dir);
     input_.Release();  // the game opens the controllers itself
+    StopHeartbeat();   // the launcher's work is done (its process ends, or the game runs in it)
     if (needs_restart || benchmark_pending_) {
       // The game starts as a new process: this window keeps showing the launcher's backdrop (no menus,
       // no input, the music fading) until the game's window has drawn, then this process ends (handoff.h).
@@ -5555,6 +5561,110 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       Close();  // deletes this dialog after the current draw
     }
     if (action) action();
+  }
+
+  // ---------------------------------------------------------- heartbeat ---
+  // Task 173: the launcher's logic runs in OnDraw, which the SDK calls only while it presents. With the
+  // window minimised, or after a "swapchain outdated" frame whose reconnect found no surface to draw to,
+  // nothing is presented and nothing retries until a resize, so the setup waited (the shader job finished
+  // behind a screen that never moved on). A small thread looks four times a second; once nothing has been
+  // drawn for 0.4 s it has the UI thread run the bookkeeping (TickState: the setup's steps and the jobs)
+  // and, once a second while the window is not minimised, ask the presenter to reconnect. While the
+  // launcher draws normally it posts nothing.
+  struct Heartbeat {
+    std::mutex mutex;
+    std::condition_variable wake;
+    Launcher* owner = nullptr;
+    bool stop = false, queued = false;
+    std::atomic<int64_t> last_draw{0};  // steady_clock ticks of the last OnDraw
+    std::thread thread;
+  };
+  static int64_t SteadyTicks() { return std::chrono::steady_clock::now().time_since_epoch().count(); }
+
+  void StartHeartbeat() {
+#if defined(KK_DEV_TOOLS)
+    if (std::getenv("KK_DEV_NO_HEARTBEAT")) {  // the behaviour before task 173, for comparison runs
+      REXLOG_INFO("KK dev: launcher heartbeat off (KK_DEV_NO_HEARTBEAT)");
+      return;
+    }
+#endif
+    if (!cb_.post_to_ui) return;
+    auto hb = std::make_shared<Heartbeat>();
+    hb->owner = this;
+    // The first frame comes a moment after this (the window opening): no reconnect before then, unless
+    // nothing has been drawn after 3 s (a launcher started minimised still does its setup).
+    hb->last_draw = SteadyTicks() + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                        std::chrono::milliseconds(2600)).count();
+    hb->thread = std::thread([hb, post = cb_.post_to_ui] {
+      const int64_t stale = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                std::chrono::milliseconds(400)).count();
+      std::unique_lock lock(hb->mutex);
+      while (!hb->stop) {
+        hb->wake.wait_for(lock, std::chrono::milliseconds(250));
+        if (hb->stop || hb->queued || SteadyTicks() - hb->last_draw.load() < stale) continue;
+        hb->queued = true;
+        lock.unlock();  // the UI thread's call takes the lock
+        post([hb] {
+          Launcher* owner;
+          {
+            std::lock_guard l(hb->mutex);
+            hb->queued = false;
+            owner = hb->owner;
+          }
+          if (owner) owner->OnHeartbeat();
+        });
+        lock.lock();
+      }
+    });
+    heartbeat_ = std::move(hb);
+  }
+
+  void StopHeartbeat() {
+    if (!heartbeat_) return;
+    {
+      std::lock_guard l(heartbeat_->mutex);
+      heartbeat_->owner = nullptr;
+      heartbeat_->stop = true;
+    }
+    heartbeat_->wake.notify_all();
+    if (heartbeat_->thread.joinable()) heartbeat_->thread.join();
+    heartbeat_.reset();
+  }
+
+  // OnDraw: drawing (again).
+  void NoteDrawn() {
+    if (!heartbeat_) return;
+    heartbeat_->last_draw = SteadyTicks();
+    if (stalled_since_ != std::chrono::steady_clock::time_point{}) {
+      const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - stalled_since_).count();
+      REXLOG_INFO("KK: launcher drawing again after {:.1f} s without frames ({} heartbeat ticks, {} reconnects asked)",
+                  s, stall_ticks_, stall_reconnects_);
+      stalled_since_ = {};
+    }
+  }
+
+  // The UI thread, nothing drawn for 0.4 s or more.
+  void OnHeartbeat() {
+    if (played_) return;  // the game is starting: nothing left to do here
+    const auto now = std::chrono::steady_clock::now();
+    if (stalled_since_ == std::chrono::steady_clock::time_point{}) {
+      stalled_since_ = now;
+      stall_ticks_ = stall_reconnects_ = 0;
+      last_reconnect_ = {};
+      REXLOG_INFO("KK: launcher not drawing (window minimised or its surface lost): setup and jobs go on, the "
+                  "presenter is asked to reconnect while the window can be drawn");
+    }
+    ++stall_ticks_;
+    const bool was_setup = InSetup(), was_shaders = ShaderScreen();
+    TickState();
+    if (was_setup != InSetup() || was_shaders != ShaderScreen())
+      REXLOG_INFO("KK: launcher setup moved on without frames (setup {} -> {}, shader screen {} -> {})", was_setup,
+                  InSetup(), was_shaders, ShaderScreen());
+    if (cb_.recover_presentation && now - last_reconnect_ >= std::chrono::seconds(1)) {
+      last_reconnect_ = now;
+      ++stall_reconnects_;
+      cb_.recover_presentation();
+    }
   }
 
   // --------------------------------------------------------------- tick ---
@@ -5567,6 +5677,16 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // Bookkeeping each frame: downloads, the install, pop-ups that open by
   // themselves, and saving settings a moment after they change.
   void Tick() {
+    CaptureKey();
+    TickNameEditor();
+    TickState();
+    PreviewAudio();
+  }
+
+  // The part of Tick that needs no frame (no input, no drawing): the setup's steps, the jobs (install,
+  // artwork, shaders, downloads) and what follows them, the pop-ups they open, saving the settings. It also
+  // runs from the heartbeat while nothing is drawn (task 173), so a minimised launcher's setup goes on.
+  void TickState() {
     const double now = ImGui::GetTime();
     FlushProfileOptions(false);
     FinishInstallIfDone();
@@ -5574,8 +5694,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     RefreshPack();
     TickUpdate();
     TickSteam();
-    CaptureKey();
-    TickNameEditor();
     if (offer_crash_reports_ && !modal_.open && !InSetup() && !update_shaders_ && !native_pack_.Busy()) {
       offer_crash_reports_ = false;
       if (HasCrashReports(paths_.user_dir)) {
@@ -5603,7 +5721,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       modal_.open = false;
       StartGame();
     }
-    PreviewAudio();
     if (g_changes != seen_changes_) {
       seen_changes_ = g_changes;
       changed_time_ = now;
@@ -5941,6 +6058,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   int last_view_ = -1;
   bool last_status_focus_ = false;
   std::chrono::steady_clock::time_point next_frame_{};
+  std::shared_ptr<Heartbeat> heartbeat_;  // task 173 (StartHeartbeat)
+  std::chrono::steady_clock::time_point stalled_since_{}, last_reconnect_{};  // not drawing since
+  int stall_ticks_ = 0, stall_reconnects_ = 0;
   bool benchmark_pending_ = false;
   bool open_benchmark_results_ = false;  // --kk_launcher_open=benchmark, once the launcher draws
   std::shared_ptr<UpdateStatus> update_;
@@ -6095,6 +6215,18 @@ std::unique_ptr<InGameSettings> CreateInGameSettings(rex::ui::ImmediateDrawer* i
                                                      std::filesystem::path config_path,
                                                      std::filesystem::path user_dir) {
   return std::make_unique<InGameSettingsImpl>(immediate, std::move(config_path), user_dir);
+}
+
+bool NativeWindowDrawable(void* handle) {
+#if defined(_WIN32)
+  const HWND hwnd = static_cast<HWND>(handle);
+  RECT r{};
+  return hwnd && IsWindow(hwnd) && IsWindowVisible(hwnd) && !IsIconic(hwnd) && GetClientRect(hwnd, &r) &&
+         r.right > 0 && r.bottom > 0;
+#else
+  (void)handle;
+  return true;
+#endif
 }
 
 bool GameFilesPresent(const std::filesystem::path& game_dir) {
