@@ -672,6 +672,31 @@ std::filesystem::path ChapterNamesPath(const std::filesystem::path& dir, const c
   return dir / "chapters" / (std::string("names_") + lang + ".txt");
 }
 
+std::map<uint32_t, std::string> ReadMenuTexts(const std::filesystem::path& game_dir, const char* lang) {
+  std::map<uint32_t, std::string> out;
+  uint32_t jade = 2;
+  for (const auto& l : kTextLanguages) if (std::string_view(l.code) == lang) jade = l.jade;
+  std::vector<uint8_t> bytes;
+  std::string why;
+  if (!ReadPack(game_dir / "KKMaps.bf", 0xFD000000u | jade << 19 | (kFrontEndPack & 0x7FFFF), bytes, why)) return out;
+  for (size_t table = 8; table + 24 <= bytes.size(); ++table) {
+    const uint32_t size = LE32(&bytes[table - 8]), count = LE32(&bytes[table - 4]);
+    const uint64_t end = uint64_t(table) - 4 + size;
+    const uint64_t strings = uint64_t(table) + uint64_t(count) * 24;
+    if (!count || count > 4096 || end > bytes.size() || strings >= end || LE32(&bytes[table + 4]) != 0xFFFFFFFFu) continue;
+    for (uint32_t i = 0; i < count; ++i) {
+      const size_t e = table + size_t(i) * 24;
+      const uint32_t id = LE32(&bytes[e]), offset = LE32(&bytes[e + 8]);
+      if (id < 0x49020000 || id >= 0x49030000 || strings + offset >= end) continue;
+      const char* s = reinterpret_cast<const char*>(&bytes[size_t(strings + offset)]);
+      const size_t length = strnlen(s, size_t(end - strings - offset));
+      if (length < end - strings - offset) out.emplace(id, Cp1252ToUtf8(std::string(s, length)));
+    }
+    table = size_t(end) - 1;
+  }
+  return out;
+}
+
 std::filesystem::path ChapterPicturePath(const std::filesystem::path& dir, int text_index) {
   return dir / "chapters" / ("chapter" + std::to_string(text_index) + ".bmp");
 }

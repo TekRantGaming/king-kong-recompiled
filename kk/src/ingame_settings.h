@@ -19,7 +19,7 @@ namespace kk {
 
 class InGameSettings {
  public:
-  enum Page { kDisplay, kGraphics, kGameplay, kControls, kCheats, kAudio, kPageCount };
+  enum Page { kDisplay, kGraphics, kAudio, kControls, kGameplay, kAdvanced, kPageCount };
   static const char* PageName(Page page);  // English, translated as drawn
 
   virtual ~InGameSettings() = default;

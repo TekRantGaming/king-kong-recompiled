@@ -274,7 +274,7 @@ void FilterPad(uint32_t user, uint8_t* state) {
     look_off = mouse_ui;
     rex::input::mnk::SetMouseLookActive(!mouse_ui);
   }
-  const bool open = menu || CoverScreen() || (g_pending >= 0 && MenuUp());
+  const bool open = menu || (CoverScreen() && !BonusMovieActive()) || (g_pending >= 0 && MenuUp());
   if (open) {
     g_was_open = true;
     g_hidden_mask = 0xFFFF;

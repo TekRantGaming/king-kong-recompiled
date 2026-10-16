@@ -46,6 +46,9 @@ void ReturnToLauncher(const char* why, const char* page);
 // True while the screen should be black: the start request is being carried out (the logos, the title
 // and the start menu must never show) or the game is on its way back to the launcher.
 bool CoverScreen();
+// Bonus movies use the game's movie player while the title stays covered. Let
+// its own skip input through during playback; the underlying menus stay hidden.
+bool BonusMovieActive();
 
 // The pause takeover's backdrop: the game draws a black screen while paused, so the last frame of play is
 // captured as the pause starts (`grab` fills RGBA pixels from the presenter's guest output; set by the

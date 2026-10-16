@@ -455,8 +455,18 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
     }
     // Deterministic integration checks still drive the actual list with pad
     // actions; selecting a page/row here avoids depending on optional entries.
-    if (t == "settings:controls") {
-      OpenSettings(InGameSettings::kControls);
+    if (t.rfind("settings:", 0) == 0) {
+      static const std::pair<const char*, InGameSettings::Page> pages[] = {
+          {"display", InGameSettings::kDisplay}, {"graphics", InGameSettings::kGraphics},
+          {"gameplay", InGameSettings::kGameplay}, {"audio", InGameSettings::kAudio},
+          {"controls", InGameSettings::kControls}, {"advanced", InGameSettings::kAdvanced}};
+      for (const auto& [name, page] : pages) if (t.substr(9) == name) {
+        OpenSettings(page);
+        for (const auto& row : settings_->Items(page))
+          REXLOG_INFO("KK dev: pause page {} row {}", name, row.label);
+        return;
+      }
+      REXLOG_INFO("KK dev: pause page FAIL {}", t.substr(9));
       return;
     }
     if (t.rfind("focus:", 0) == 0) {

@@ -253,10 +253,46 @@ void DevUniGoTick(uint8_t* base, uint32_t g, bool request, bool started) {
   }
 
 REX_EXTERN(__imp__sub_824AE560);
+REX_EXTERN(__imp__sub_825E7788);
+REX_EXTERN(__imp__sub_825E6188);
 REX_HOOK_RAW(sub_824AE560) {
   using namespace kk::jump;
   if (Tracing()) REXLOG_INFO("KK dev jump: IntMIG_init in: {}", Vars(base));
   __imp__sub_824AE560(ctx, base);
+  if (std::getenv("KK_DEV_EXTRAS_TRACE")) {
+    const PPCContext saved = ctx;
+    __imp__sub_825E7788(ctx, base);
+    ctx = saved;
+    __imp__sub_825E6188(ctx, base);
+    ctx = saved;
+    const uint32_t ai = Load32(base, kAiPtr), v = ai ? Load32(base, ai + 0x40) : 0;
+    if (v) for (uint32_t i = 0; i < 20; ++i)
+      REXLOG_INFO("KK extras table: {} score {} progress-bits {:08X} order {}", i,
+                  int32_t(Load32(base, v + 0x6C0 + 4 * i)), Load32(base, v + 0x714 + 4 * i),
+                  Load32(base, v + 0x768 + 4 * i));
+    // The save serializer walks this descriptor and packs only variables with flag 0x10.
+    const uint32_t script = Load32(base, 0x828E838C), object = script ? Load32(base, script) : 0;
+    const uint32_t desc = object ? Load32(base, object) : 0;
+    if (desc) {
+      const uint32_t table = Load32(base, desc + 8), count = Load32(base, desc + 12);
+      uint32_t packed = 0x100;
+      for (uint32_t i = 0; i < count; ++i) {
+        const uint32_t d = table + 16 * i, offset = Load32(base, d), shape = Load32(base, d + 8);
+        const uint32_t type = (uint32_t(base[d + 12]) << 8) | base[d + 13];
+        const uint32_t flags = (uint32_t(base[d + 14]) << 8) | base[d + 15];
+        const uint32_t size = (uint32_t(base[0x828CEFF0 + type * 8 + 2]) << 8) |
+                              base[0x828CEFF0 + type * 8 + 3];
+        const uint32_t bytes = (shape >> 30) * 4 + (shape & 0x3FFFFFFF) * size;
+        if (flags & 0x10) {
+          if ((offset <= 0xBF0 && offset + bytes > 0xBF0) ||
+              (offset <= 0x567C && offset + bytes > 0x567C) ||
+              (offset >= 0x4D90 && offset <= 0x4DE0) || (offset <= 0x5E80 && offset + bytes > 0x5E80))
+            REXLOG_INFO("KK extras save field: G+{:X} bytes {:X} file+{:X}", offset, bytes, packed);
+          packed += bytes;
+        }
+      }
+    }
+  }
   g_menu_ready = true;
   if (Tracing()) REXLOG_INFO("KK dev jump: IntMIG_init out: {}", Vars(base));
 }

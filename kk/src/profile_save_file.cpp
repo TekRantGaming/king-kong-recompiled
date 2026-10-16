@@ -46,7 +46,8 @@ bool OptionsValid(const uint8_t* bytes, const uint32_t* fields) {
     const float v = std::bit_cast<float>(ReadWord(bytes + fields[i]));
     if (!std::isfinite(v) || v < 0 || v > 1.001f) return false;
   }
-  return ReadWord(bytes + fields[4]) <= 1;
+  for (int i = 4; i < kOptionCount; ++i) if (ReadWord(bytes + fields[i]) > (i == 5 ? 2u : 1u)) return false;
+  return true;
 }
 
 namespace {
@@ -81,9 +82,13 @@ bool WriteOptions(const std::filesystem::path& path, const std::filesystem::path
   for (int i = 0; i < kOptionCount; ++i) {
     if (!changed[size_t(i)]) continue;
     const float value = values[size_t(i)];
-    const uint32_t bits = i == 4 ? uint32_t(value != 0) : std::bit_cast<uint32_t>(value / 100.0f);
+    const uint32_t bits = i >= 4 ? uint32_t(value != 0) : std::bit_cast<uint32_t>(value / 100.0f);
     different |= ReadWord(bytes.data() + kFileFields[i]) != bits;
     WriteWord(bytes.data() + kFileFields[i], bits);
+    if (i == 8) {
+      different |= ReadWord(bytes.data() + kInventoryCompanion) != bits;
+      WriteWord(bytes.data() + kInventoryCompanion, bits);
+    }
   }
   if (!different) return true;
   static uint64_t serial = 0;

@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#include "extras.h"
 
 namespace kk::play {
 
@@ -55,18 +56,21 @@ enum class StartKind {
   kContinue,      // load `slot`, start at its continue point
   kNewGame,       // create a new save in `slot` (empty, or overwritten after a backup), start the story
   kChapter,       // load `slot` (or create one when it's empty), start chapter-select entry `chapter`
+  kExtra,         // `chapter` is an original Extras id; load the selected save, never create one
 };
 
 struct StartRequest {
   StartKind kind = StartKind::kNone;
   int slot = -1;
-  int chapter = -1;        // kChapter only, 0..kChapterCount-1
+  int chapter = -1;        // kChapter: 0..kChapterCount-1; kExtra: an id from kExtras
   std::string new_name;    // kNewGame / kChapter on an empty slot: the new save's name ("" = the game's default)
 };
 
 // The launcher sets it before Play; the game side carries it out on the title screen (one frame, no menu).
 void SetStartRequest(const StartRequest& request);
 StartRequest GetStartRequest();
+
+ExtraProgress ReadExtraProgress(const std::filesystem::path& user_dir, int slot);
 
 // Chapter-select entries: the name shown (the game's own, in the launcher's language, once the launcher has
 // extracted it from the player's game files; "Chapter N" until then) and, when the game files have one, a
@@ -96,14 +100,17 @@ void RunPauseAction(PauseAction action);
 // Whether an item is available right now (e.g. Start again and Score need a save loaded).
 bool PauseActionAvailable(PauseAction action);
 
-// Audio and subtitles are options in each game save, not port cvars. The launcher and the pause
-// menu set them in every save at once. A negative slot reads the active game profile (in play).
-enum class ProfileOption { kMaster, kVoices, kMusic, kEffects, kSubtitles, kCount };
+// Original audio, subtitle, video and control options live in each save, not port cvars.
+// Launcher/pause changes apply across saves (bonus modes only in saves that have unlocked them).
+// A negative slot reads the active game profile (in play).
+enum class ProfileOption { kMaster, kVoices, kMusic, kEffects, kSubtitles, kOldMovie, kHorizontalFlip, kAimingVisor, kInventory, kCount };
 struct ProfileOptions {
   bool available = false;
+  int slot = -1;
   float master = 100, voices = 100, music = 100, effects = 100;
   bool subtitles = false;
   bool subtitle_default = false;
+  bool old_movie = false, horizontal_flip = false, aiming_visor = false, inventory = false;
   std::string error;
 };
 ProfileOptions ReadProfileOptions(const std::filesystem::path& user_dir, int slot);
