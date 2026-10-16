@@ -170,7 +170,7 @@ REX_HOOK_RAW(sub_821074E8) {
     ctx.r3.u64 = 0;
     return;
   }
-  uint32_t replay_status = 0;
+  uint32_t replay_status = ctx.r3.u32;  // the player's own read, for a cancel press
   if (state_ptr && kk::benchmark::Pad(user, base + state_ptr, replay_status)) {
     ctx.r3.u64 = replay_status;
     return;

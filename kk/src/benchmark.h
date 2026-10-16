@@ -22,8 +22,10 @@ void InstallPresentObserver();
 void LevelLoaded();
 void Frame(double unscaled_dt, double scaled_dt, const uint8_t* base);
 void GuestSwap();
+// Replaces the pad the game read with the route's. `status` comes in as the
+// player's own read (a cancel press is taken from it) and goes out as the route's.
 bool Pad(uint32_t user, uint8_t* state, uint32_t& status);
 void Interrupted();
-void CreateBenchmarkStartDialog(rex::ui::ImGuiDrawer* drawer, std::function<void()> start);
-void CreateBenchmarkDialog(rex::ui::ImGuiDrawer* drawer, std::function<void()> quit);
+// The live panel during a run (results are shown by the launcher afterwards).
+void CreateBenchmarkDialog(rex::ui::ImGuiDrawer* drawer);
 }  // namespace kk::benchmark
