@@ -42,6 +42,7 @@ set(KINGKONG_SOURCES
     src/camera_shake.cpp
     src/hfr.cpp
     src/hfr_particles.cpp
+    src/hfr_water.cpp
     src/hfr_dt_floor.cpp
     src/hfr_step_decay.cpp
     src/hfr_follow.cpp
