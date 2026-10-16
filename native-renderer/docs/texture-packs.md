@@ -103,16 +103,27 @@ validated chapter-list preparations. Loading-screen service also publishes compl
 replacement uploads before first binds where the recorded resources are available.
 An unfamiliar chapter still renders originals until its replacements are ready.
 
-GPU staging does one mip or strip per frame: 2 MiB in gameplay, 16 MiB while loading.
-Large images become visible only after the whole chain is uploaded. BC NPOT mip
-edges that cannot form legal strip copies use one whole-mip write, bounded by
-16 MiB. This bounds work; it is not a guarantee of zero driver/allocation latency.
+GPU staging copies at most 2 MiB per gameplay frame and 16 MiB per loading frame.
+Whole levels that fit share a frame's budget, so a 4096 replacement's mip tail no
+longer costs one frame per level; larger levels are copied in strips of the
+remaining budget. Large images become visible only after the whole chain is
+uploaded. BC NPOT mip edges that cannot form legal strip copies use one whole-mip
+write, alone in its frame and bounded by 16 MiB. This bounds work; it is not a
+guarantee of zero driver/allocation latency.
 Originals are never replaced in place. Descriptors and GPU resources use the
 renderer's existing retirement lifetime.
 
-Replacement allocations are capped at 512 MiB, at most one eighth of a known GPU
-budget, and available space after the normal memory reserve plus strip headroom.
-Without a supported live budget query the conservative initial cap is 256 MiB.
+Replacement allocations may use one quarter of the live GPU budget (sized for 4x
+packs up to 4096 per side; 16 Oct 2026 decision, previously min(512 MiB, budget/8)),
+and never more than the replacements already resident plus the space available
+after the normal memory reserve and 16 MiB of strip headroom (sampled once per
+second). Without a supported live budget query the card's size and use are
+unknown, so the cap stays a conservative 256 MiB. A replacement that does not fit
+keeps its original: its decoded data is freed, it is counted (`capped=` in the
+renderer log, and one warning when the limit is first reached) and its file is not
+read again until the smallest capped replacement fits (at most every 600 frames).
+Developers can emulate a smaller card's limit with `KK_DEV_TEXTURE_PACK_LIMIT_MIB=<MiB>`,
+and pressure with `KK_DEV_VRAM_BUDGET_GB=4` plus `KK_DEV_VRAM_PRESSURE=1`.
 Existing low-memory pressure handling drops replacements and keeps originals.
 Switching Off parks replacements for quick comparison; clear the folder to free
 them immediately (GPU retirement still applies). Actual resident bytes and ready
@@ -125,8 +136,11 @@ Resource tests exercise canonical identity, raw channel handling, manifest/versi
 errors, ambiguous BF aliases, DDS bounds/formats/alpha/signedness, missing mips,
 NPOT PNGs and asynchronous generation/budget behavior. `nr_texture_pack_tests` runs
 the real renderer on Vulkan and D3D12: every pixel/alpha of a 1025x513 synthetic
-replacement, incremental base upload, original-until-ready, descriptor reuse for
-On/Off, unchanged original pixels and GPU-budget pressure fallback. No game data
+replacement, incremental base upload with mip levels sharing a frame's budget,
+original-until-ready, descriptor reuse for On/Off, unchanged original pixels,
+GPU-budget pressure fallback, the quarter-of-budget limit, the over-limit original
+(no repeated reads) and its retry once room returns. `nr_memory_budget_tests` checks
+the limit arithmetic. No game data
 is needed by these tests.
 
 Game test evidence and measurement limits are in the external `codex/REPORT-126.md`.

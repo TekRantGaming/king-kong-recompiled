@@ -42,6 +42,19 @@ inline MemoryBudget CapMemoryBudget(MemoryBudget m, uint64_t cap) {
   return m;
 }
 
+// Player replacement textures (DECISIONS 16 Oct: 4x packs) may hold at most a
+// quarter of the effective budget, and never more than the replacements already
+// resident plus what is free after the normal reserve and 16 MiB of upload strip
+// headroom. Without a live budget query the size and use of the card are unknown,
+// so a conservative fixed cap applies (originals render beyond it).
+constexpr uint64_t kTexturePackFallbackLimit = 256ull << 20;
+inline uint64_t TexturePackLimit(const MemoryBudget& m, uint64_t resident) {
+  if (!m.valid || !m.budget) return kTexturePackFallbackLimit;
+  const uint64_t reserve = MemoryBudgetReserve(m.budget) + (16ull << 20);
+  const uint64_t spare = m.budget > m.usage && m.budget - m.usage > reserve ? m.budget - m.usage - reserve : 0;
+  return std::min(m.budget / 4, resident + spare);
+}
+
 inline bool CanEvictClearTarget(bool clear_only, bool has_external_writer,
                                uint64_t used_frame, uint64_t frame) {
   return clear_only && !has_external_writer && used_frame != UINT64_MAX &&

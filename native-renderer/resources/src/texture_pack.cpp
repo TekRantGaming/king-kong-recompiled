@@ -400,10 +400,19 @@ void TexturePackStream::Request(uint64_t hash, const HostTexturePlan& original) 
   if (impl_->folder.empty() || impl_->requests.size()>=256 || impl_->seen.size()>=65536 || !impl_->seen.insert(key).second) return;
   impl_->requests.push_back({hash,original,std::move(key)}); impl_->work.notify_one();
 }
-std::shared_ptr<const HostTextureData> TexturePackStream::Take(uint64_t hash, const HostTexturePlan& original, uint64_t max_bytes) {
+std::shared_ptr<const HostTextureData> TexturePackStream::Take(uint64_t hash, const HostTexturePlan& original, uint64_t max_bytes,
+                                                              uint64_t* too_large) {
+  if (too_large) *too_large=0;
   std::lock_guard lock(impl_->mutex);
   auto it=impl_->ready.find(RequestKey(hash,original));
-  if (it==impl_->ready.end() || it->second->bytes.size() > max_bytes) return {};
+  if (it==impl_->ready.end()) return {};
+  if (it->second->bytes.size() > max_bytes) {
+    if (too_large) {
+      *too_large=it->second->bytes.size(); impl_->ready_bytes-=it->second->bytes.size();
+      impl_->ready.erase(it); impl_->seen.erase(RequestKey(hash,original));
+    }
+    return {};
+  }
   auto data=std::move(it->second); impl_->ready_bytes-=data->bytes.size(); impl_->ready.erase(it);
   // Allow another cache instance with the same original to request the data.
   impl_->seen.erase(RequestKey(hash,original));

@@ -48,5 +48,17 @@ int main() {
   Check(TighterMemoryBudget(large, {})); Check(!TighterMemoryBudget({}, large));
   Check(ParseMemoryBudgetCap("4") == 4 * GiB && ParseMemoryBudgetCap("6") == 6 * GiB && ParseMemoryBudgetCap("8") == 8 * GiB);
   Check(ParseMemoryBudgetCap("5") == 0 && ParseMemoryBudgetCap(nullptr) == 0);
+  // Texture packs: a quarter of the budget (no fixed 512 MiB cap any more), bounded by free space.
+  Check(TexturePackLimit({}, 0) == kTexturePackFallbackLimit);
+  Check(TexturePackLimit({12 * GiB, 0, false}, 0) == 256 * MiB);
+  Check(TexturePackLimit({12 * GiB, 2 * GiB, true}, 0) == 3 * GiB);
+  Check(TexturePackLimit({11 * GiB, 1 * GiB, true}, 0) == 11 * GiB / 4);
+  Check(TexturePackLimit({24 * GiB, 2 * GiB, true}, 0) == 6 * GiB);
+  // 4 GiB budget, 3 GiB used: 1 GiB - 256 MiB reserve - 16 MiB strips, plus what is resident.
+  Check(TexturePackLimit({4 * GiB, 3 * GiB, true}, 0) == 752 * MiB);
+  Check(TexturePackLimit({4 * GiB, 3 * GiB, true}, 200 * MiB) == 952 * MiB);
+  Check(TexturePackLimit({4 * GiB, 4 * GiB, true}, 300 * MiB) == 300 * MiB);
+  Check(TexturePackLimit({4 * GiB, 5 * GiB, true}, 0) == 0);
+  Check(TexturePackLimit({1 * GiB, 100 * MiB, true}, 0) == 256 * MiB);
   std::printf("memory budget: %d cases passed\n", cases);
 }
