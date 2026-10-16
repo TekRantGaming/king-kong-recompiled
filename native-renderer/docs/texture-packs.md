@@ -1,6 +1,7 @@
 # Player-owned replacement texture packs
 
-Texture packs default Off. Graphics has a Texture pack switch and a folder picker;
+Texture packs default Off. The launcher and pause menu's Graphics page has a
+Texture pack switch and a folder picker;
 F8 has the same live switch. The renderer retains the original, so switching Off
 does not read files, reconvert textures or wait for an upload. Nothing is downloaded.
 Players supply their own extracted textures. No game art or example game pack is
