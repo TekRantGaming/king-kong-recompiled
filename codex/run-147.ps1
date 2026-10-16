@@ -8,7 +8,8 @@ param(
  [int]$Seconds=50,
  [string]$Label='',
  [string]$Env='',          # extra NAME=value;NAME=value for developer aids
- [switch]$ShotLauncher     # route: capture the launcher's results page after the run
+ [switch]$ShotLauncher,    # route: capture the launcher's results page after the run
+ [switch]$NoLock           # the caller (quiet-147.ps1) already holds the quiet window and both slots
 )
 # Task 147 game runner: one launch per call, GAME-RULES windowed/private, the
 # shared lock held only while this launch's own processes run.
@@ -129,20 +130,24 @@ function Read-Log($path) {
 }
 # Wait-GameSlot polls every 30 s; poll every 3 s so a free slot is not always taken first by others.
 $guard=$null
+if($NoLock){$guard=[pscustomobject]@{NoLock=$true;Token=''}}
 while(!$guard) {
  $claim=Try-ClaimGameSlot -Task $task -RequireBackgroundHelper
  if($claim.State -eq 'user') {throw 'USER LOCK: code-only work; no game launch.'}
  if($claim.Guard){$guard=$claim.Guard} else {Start-Sleep -Seconds $(if($claim.UserGame){60}else{3})}
 }
 # The shared rule: re-read after 2 s and make sure the claim is still ours.
-Start-Sleep -Seconds 2
-if((Read-GameSlotState) -ne $guard.Token){Release-GameSlot $guard; throw 'Lost the game lock race; retry later'}
+if(!$NoLock) {
+ Start-Sleep -Seconds 2
+ if((Read-GameSlotState) -ne $guard.Token){Release-GameSlot $guard; throw 'Lost the game lock race; retry later'}
+}
 $game=$null; $complete=$false; $started=Get-Date; $shots=@(); $pids=@()
 try {
  $others=@(Get-CimInstance Win32_Process -Filter "Name='king_kong.exe'")
  if($others.Count){throw 'A game appeared after slot acquisition'}
  $rtss=@(Get-Process RTSS,RTSSHooksLoader64,EncoderServer -ErrorAction SilentlyContinue)
- [pscustomobject]@{Run=$run;Mode=$Mode;Build=$Build;Passes=$Passes;Entry=$Entry;Started=$started.ToString('o');RTSS=$rtss.Count} |
+ $builds=@(Get-Process clang,clang++,clang-cl,ninja,lld,lld-link -ErrorAction SilentlyContinue)
+ [pscustomobject]@{Run=$run;Mode=$Mode;Build=$Build;Passes=$Passes;Entry=$Entry;Started=$started.ToString('o');RTSS=$rtss.Count;Quiet=$NoLock.IsPresent;BuildProcesses=$builds.Count} |
   ConvertTo-Json -Compress | Add-Content -LiteralPath $ledger
  $game=Start-Process -FilePath "$run/king_kong.exe" -ArgumentList $arguments -WorkingDirectory $run -WindowStyle Hidden -PassThru
  $pids+=$game.Id
@@ -182,7 +187,7 @@ try {
 } finally {
  foreach($p in Own-Games){ if($pids -notcontains $p.ProcessId){$pids+=[int]$p.ProcessId} }
  foreach($id in $pids){ if(Get-Process -Id $id -ErrorAction SilentlyContinue){Stop-Process -Id $id -ErrorAction SilentlyContinue; Wait-Process -Id $id -Timeout 20 -ErrorAction SilentlyContinue} }
- Release-GameSlot $guard
+ if(!$NoLock){Release-GameSlot $guard}
  [pscustomobject]@{Run=$run;Pids=$pids;Complete=$complete;Seconds=((Get-Date)-$started).TotalSeconds;Mode=$Mode;Build=$Build;Passes=$Passes;Entry=$Entry;Shots=$shots} |
   ConvertTo-Json | Set-Content -LiteralPath "$run/test-result.json"
 }
