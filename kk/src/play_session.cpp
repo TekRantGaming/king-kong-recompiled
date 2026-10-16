@@ -698,20 +698,37 @@ void SetDeviceAndSlot(uint8_t* base, uint32_t g, int slot) {
   Store32(base, g + 0x5F24, 0);
 }
 
-// The loaded save's "Old movie" filter / horizontal flip, with the game's own sub_825EE130, once its profile
-// pointer and flip target are set (video_modes.h): calling it while the title loads the save crashed.
+// The loaded save's "Old movie" filter / horizontal flip, with the game's own sub_825EE130, once its flip
+// target is set (video_modes.h): calling it while the title loads the save crashed. The profile pointer P is
+// never set in some bonus levels (Credits): the call then reads the universe through P pointed at it, as
+// CreateNewSave does, so the modes apply there as they did after the original menus.
 void ApplyPendingVideoModes(PPCContext& ctx, uint8_t* base) {
-  const uint32_t p = Load32(base, kProfilePtr), target = Load32(base, kVideoModeTarget);
+  const uint32_t ai = Load32(base, kAiPtr), universe = ai ? Load32(base, ai + 0x40) : 0;
+  const uint32_t old_p = Load32(base, kProfilePtr), p = old_p ? old_p : universe;
+  const uint32_t target = Load32(base, kVideoModeTarget);
   const uint32_t flip = p ? Load32(base, p + 0x4DA0) : 0, old_movie = p ? Load32(base, p + 0x4DA4) : 0;
   switch (NextVideoModeStep(g_video_modes_pending, p, target, flip, old_movie)) {
-    case VideoModeStep::kWait: return;
+    case VideoModeStep::kWait:
+#if defined(KK_DEV_TOOLS)
+      if (std::getenv("KK_DEV_EXTRAS_TRACE")) {
+        static int64_t logged = 0;
+        if (NowMs() - logged > 2000) {
+          logged = NowMs();
+          REXLOG_INFO("KK dev: video modes wait (profile {:08X}, flip target {:08X}, universe {:08X})", p, target,
+                      Load32(base, kGamePtr));
+        }
+      }
+#endif
+      return;
     case VideoModeStep::kNothing: g_video_modes_pending = false; return;
     case VideoModeStep::kApply: break;
   }
   g_video_modes_pending = false;
   const PPCContext saved = ctx;
+  if (!old_p) Store32(base, kProfilePtr, p);
   __imp__sub_825EE130(ctx, base);
   ctx = saved;
+  Store32(base, kProfilePtr, old_p);
   REXLOG_INFO("KK play: applied the save's video modes (old movie {}, horizontal flip {})", old_movie, flip);
 }
 
