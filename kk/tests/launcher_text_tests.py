@@ -41,10 +41,12 @@ strings |= {
     # the shader screen's one bar, Rebuild shaders
     'Preparing the shaders', 'Preparing shaders', 'Rebuilding the shaders', 'Checking', 'Ready', 'Preparing {0}%',
     'Not prepared', 'Not prepared (see the log)', 'Rebuild', 'Rebuild shaders', 'The shaders are ready.',
-    'Prepares all of the game\'s shaders again, for Vulkan and DirectX 12. It takes a few minutes. It can help '
-    'after a graphics driver update, or if the game shows graphics problems.',
-    'Prepare all of the game\'s shaders again? This takes a few minutes. Your PC may run slower until this '
-    'finishes, because preparing the shaders uses its processor.',
+    # task 168: Rebuild says it prepares everything again, even what the setup kept
+    'Prepares all of the game\'s shaders again from the start, for Vulkan and DirectX 12, even the ones already '
+    'prepared. It takes a few minutes, longer than the setup, which keeps shaders that are already prepared. It '
+    'can help after a graphics driver update, or if the game shows graphics problems.',
+    'Prepare all of the game\'s shaders again from the start, even the ones already prepared? This takes a few '
+    'minutes. Your PC may run slower until this finishes, because preparing the shaders uses its processor.',
     'Continue in the background', 'Menu music', 'Menu music volume', 'Switch Menu music on to set its volume.',
 }
 # Old movie filter / Horizontal flip (Graphics > Extras): the help text follows the unlock state (task 159).

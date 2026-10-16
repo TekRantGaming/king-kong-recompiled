@@ -2111,9 +2111,10 @@ class SettingsPages {
   void RebuildShadersItem(std::vector<Item>& items) {
     if (in_game_ || !rebuild_shaders_ || !NativeShaderPack::Wanted()) return;
     items.push_back(ActionItem("Rebuild shaders",
-                               "Prepares all of the game's shaders again, for Vulkan and DirectX 12. It takes a few "
-                               "minutes. It can help after a graphics driver update, or if the game shows graphics "
-                               "problems.",
+                               "Prepares all of the game's shaders again from the start, for Vulkan and DirectX 12, "
+                               "even the ones already prepared. It takes a few minutes, longer than the setup, which "
+                               "keeps shaders that are already prepared. It can help after a graphics driver update, "
+                               "or if the game shows graphics problems.",
                                "", rebuild_shaders_));
   }
 
@@ -4658,7 +4659,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       return;
     }
     OpenModal("Rebuild shaders",
-              "Prepare all of the game's shaders again? This takes a few minutes. " KK_SLOW_PC, {"Rebuild", "Cancel"},
+              "Prepare all of the game's shaders again from the start, even the ones already prepared? This takes a "
+              "few minutes. " KK_SLOW_PC, {"Rebuild", "Cancel"},
               1,
               [this](int i) {
                 if (i != 0 || native_pack_.Busy()) return;
