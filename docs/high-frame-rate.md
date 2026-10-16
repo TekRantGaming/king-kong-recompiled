@@ -179,6 +179,31 @@ the two water effects (`KK_DEV_GFX_TRACE`, per second in which they ran):
 The rain itself (`sgo_gener` and `sgo_move`, about 6 drop splashes a second) is the same at both rates. With both
 fixes about 140 footstep splash calls and 70 ripple calls a second were skipped at 110 FPS.
 
+### Fish in Ann's chapter (fix verified)
+
+Chapter-select entry 9, `kk-dev-vulkan`, `KK_DEV_FISH` with `KK_DEV_FISH_VIEW=ann-water` (the player moved near the
+water so the five fish there swim), script-clock seconds 8 to 50 (or 8 to 28 without and 34 to 60 with the fix in one
+run, `KK_DEV_FISH_OFF_UNTIL=30`; the 60 and unlimited runs in the quiet window). Averages over the five fish; heading swing is the RMS of the facing angle about its
+2 s running mean, turn rate the facing's total turning per game second. The fish's paths are random, so values move
+by about 10% between runs at the same rate.
+
+| Run | Measured FPS | Wiggle angle used, rad per game s | Heading swing RMS, rad | Turn rate, rad/s | Phase rate, rad/s |
+|---|---|---|---|---|---|
+| Vulkan 30 (fix off by design) | 29.9 | 4.14 | 1.11 | 3.24 | 3.141593 |
+| Vulkan 60, no fix | 60.0 | 8.00 | 2.09 | 6.16 | 3.141593 |
+| Vulkan 60, fix | 60.0 | 4.06 | 1.05 | 3.01 | 3.141593 |
+| Vulkan 120, no fix | 120.0 | 15.82 | 5.36 | 14.74 | 3.141593 |
+| Vulkan 120, fix | 120.0 | 4.15 | 1.05 | 2.97 | 3.141593 |
+| DirectX 12 120, no fix | 120.0 | 16.06 | 5.48 | 15.07 | 3.141593 |
+| DirectX 12 120, fix | 119.9 | 4.16 | 1.04 | 2.93 | 3.141593 |
+| Vulkan unlimited, no fix | 488.6 | 64.96 | 23.92 | 65.01 | 3.141592 |
+| Vulkan unlimited, fix | 489.7 | 4.19 | 0.96 | 2.92 | 3.141593 |
+
+Every fish ran its swim state once per frame in every run (no skipped frames). The swim phase advances by exactly
+pi per game second whenever it advances; it holds while a fish is above the water line (a leap of about 0.86 s, the
+same length at 30 and 120 FPS, or a fish skimming the surface), 13% of calls at 30 FPS, 17% at 120 without the fix
+(the circling fish break the surface more), 13% with it.
+
 ### Step counts, worked out
 
 The game's own step logic (float32, the millisecond frame times the tick count gives) against the fixes'
