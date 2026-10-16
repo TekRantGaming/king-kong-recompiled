@@ -1,12 +1,19 @@
 #include "benchmark_monitor.h"
+#include "benchmark_other_gpu.h"
 #include "hooks/kk_native_ui.h"
 #include "plugin/native_benchmark_stats.h"
 #include <map>
+#include <set>
+#include <cstdio>
+#include <cstdlib>
+#include <string>
+#include <unordered_map>
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
 #include <psapi.h>
+#include <tlhelp32.h>
 #include <pdh.h>
 #include <pdhmsg.h>
 #endif
@@ -49,7 +56,11 @@ struct Counters {
     power = reinterpret_cast<DeviceUInt>(GetProcAddress(nvml, "nvmlDeviceGetPowerUsage"));
     temperature = reinterpret_cast<decltype(temperature)>(GetProcAddress(nvml, "nvmlDeviceGetTemperature"));
   }
-  ~Counters() { if (query) PdhCloseQuery(query); if (nvml) { if (shutdown) shutdown(); FreeLibrary(nvml); } }
+  ~Counters() {
+#if defined(KK_DEV_TOOLS)
+    if (dump) std::fclose(dump);
+#endif
+    if (query) PdhCloseQuery(query); if (nvml) { if (shutdown) shutdown(); FreeLibrary(nvml); } }
   double Gpu() {
     last_count = 0;
     if (!gpu || PdhCollectQueryData(query) != ERROR_SUCCESS) return -1;
@@ -67,24 +78,54 @@ struct Counters {
         busiest = std::max(busiest, std::clamp(items[i].FmtValue.doubleValue, 0.0, 100.0));
     return busiest;
   }
-  // The busiest engine's use summed over every other process (instance names
-  // pid_<n>_luid_<a>_<b>_phys_<p>_eng_<e>_engtype_<t>), -1 when unavailable.
-  double OtherGpu() {
-    if (!gpu || !last_count) return -1;
-    const auto own = L"pid_" + std::to_wstring(GetCurrentProcessId()) + L"_";
-    std::map<std::wstring, double> engines;
-    auto* items = reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(last.data());
-    for (DWORD i = 0; i < last_count; ++i) {
-      const std::wstring_view name(items[i].szName);
-      if (name.starts_with(own) || (items[i].FmtValue.CStatus != PDH_CSTATUS_VALID_DATA &&
-          items[i].FmtValue.CStatus != PDH_CSTATUS_NEW_DATA)) continue;
-      const auto luid = name.find(L"_luid_");
-      if (luid == std::wstring_view::npos) continue;
-      engines[std::wstring(name.substr(luid))] += std::clamp(items[i].FmtValue.doubleValue, 0.0, 100.0);
+  // Other programs' GPU use (benchmark_other_gpu.h): the game's own processes, other adapters and
+  // fixed-function engines (video encode/decode, copy) are not counted. -1 when unavailable.
+  std::map<uint32_t, bool> same_exe;  // pid -> runs this king_kong.exe (startup parent, closing launcher)
+  std::wstring own_path;
+  bool SameExe(uint32_t pid) {
+    if (own_path.empty()) {
+      wchar_t path[32768]; DWORD size = 32768;
+      if (QueryFullProcessImageNameW(GetCurrentProcess(), 0, path, &size)) own_path.assign(path, size);
     }
-    double busiest = 0;
-    for (const auto& [key, value] : engines) busiest = std::max(busiest, std::min(100.0, value));
-    return busiest;
+    bool same = false;
+    if (HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)) {
+      wchar_t path[32768]; DWORD size = 32768;
+      same = !own_path.empty() && QueryFullProcessImageNameW(h, 0, path, &size) &&
+             CompareStringOrdinal(path, int(size), own_path.c_str(), int(own_path.size()), TRUE) == CSTR_EQUAL;
+      CloseHandle(h);
+    }
+    return same;
+  }
+  double other_all = -1;
+  double OtherGpu() {
+    other_all = -1;
+    if (!gpu || !last_count) return -1;
+    auto* items = reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(last.data());
+    std::vector<GpuInstance> instances;
+    instances.reserve(last_count);
+    std::map<uint32_t, bool> seen;
+    std::set<uint32_t> own{uint32_t(GetCurrentProcessId())};
+    for (DWORD i = 0; i < last_count; ++i) {
+      if (items[i].FmtValue.CStatus != PDH_CSTATUS_VALID_DATA && items[i].FmtValue.CStatus != PDH_CSTATUS_NEW_DATA)
+        continue;
+      const std::wstring_view name(items[i].szName);
+      instances.push_back({name, items[i].FmtValue.doubleValue});
+      // Only processes with GPU use are looked up; a pid's answer is kept while it has instances.
+      const uint32_t pid = InstancePid(name);
+      if (!pid || items[i].FmtValue.doubleValue <= 0 || seen.count(pid)) continue;
+      const auto it = same_exe.find(pid);
+      seen[pid] = it != same_exe.end() ? it->second : SameExe(pid);
+    }
+    for (const auto& [pid, same] : seen) if (same) own.insert(pid);
+    for (const auto& [pid, same] : same_exe) {
+      if (seen.count(pid)) continue;
+      // Idle this sample: keep the answer only while the pid still has counter instances.
+      for (const auto& i : instances) if (InstancePid(i.name) == pid) { seen[pid] = same; if (same) own.insert(pid); break; }
+    }
+    same_exe = std::move(seen);
+    const auto result = OtherGpuUse(instances, GetCurrentProcessId(), own);
+    other_all = result.all_engines;
+    return result.shader;
   }
   // Every logical processor's busy share since the last call (percent).
   double SystemCpu() {
@@ -102,9 +143,70 @@ struct Counters {
   uint64_t sys_idle = 0, sys_total = 0;
   std::vector<unsigned char> last;
   DWORD last_count = 0;
+#if defined(KK_DEV_TOOLS)
+  // Test aid: KK_DEV_BENCH_GPU_DUMP=<file.csv> writes every GPU engine counter instance the monitor
+  // sees (above 0.05%), with its process name, and the own/other values reported for that sample.
+  FILE* dump = nullptr;
+  bool dump_tried = false;
+  std::unordered_map<DWORD, std::string> names;
+  Clock::time_point dump_start = Clock::now();
+  std::string ProcessName(DWORD pid) {
+    if (auto it = names.find(pid); it != names.end()) return it->second;
+    std::string out = "?";
+    if (HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)) {
+      wchar_t path[MAX_PATH]; DWORD size = MAX_PATH;
+      if (QueryFullProcessImageNameW(h, 0, path, &size)) {
+        std::wstring w(path, size);
+        w = w.substr(w.find_last_of(L"\\/") + 1);
+        out.assign(w.begin(), w.end());
+      }
+      CloseHandle(h);
+    }
+    if (out == "?") {  // protected processes (dwm.exe, csrss.exe): the snapshot still names them
+      if (HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0); snap != INVALID_HANDLE_VALUE) {
+        PROCESSENTRY32W e{}; e.dwSize = sizeof(e);
+        for (BOOL more = Process32FirstW(snap, &e); more; more = Process32NextW(snap, &e))
+          if (e.th32ProcessID == pid) { std::wstring w(e.szExeFile); out.assign(w.begin(), w.end()); break; }
+        CloseHandle(snap);
+      }
+    }
+    return names[pid] = out;
+  }
+  void Dump(const Values& v) {
+    if (!dump_tried) {
+      dump_tried = true;
+      if (const char* path = std::getenv("KK_DEV_BENCH_GPU_DUMP"); path && *path) {
+        dump = std::fopen(path, "w");
+        if (dump) std::fprintf(dump, "seconds,kind,pid,process,engine,value,own_pid\n");
+      }
+    }
+    if (!dump) return;
+    const double t = std::chrono::duration<double>(Clock::now() - dump_start).count();
+    auto* items = reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(last.data());
+    for (DWORD i = 0; i < last_count; ++i) {
+      const std::wstring_view name(items[i].szName);
+      const double value = items[i].FmtValue.doubleValue;
+      if (!name.starts_with(L"pid_") || value < 0.05) continue;
+      const DWORD pid = DWORD(std::wcstoul(std::wstring(name.substr(4)).c_str(), nullptr, 10));
+      const auto luid = name.find(L"_luid_");
+      const std::wstring engine(luid == std::wstring_view::npos ? name : name.substr(luid + 1));
+      std::fprintf(dump, "%.2f,instance,%lu,%s,%s,%.2f,%lu\n", t, pid, ProcessName(pid).c_str(),
+                   std::string(engine.begin(), engine.end()).c_str(), value, GetCurrentProcessId());
+    }
+    std::fprintf(dump, "%.2f,own,,,,%.2f,%lu\n%.2f,other,,,,%.2f,%lu\n%.2f,other_all_engines,,,,%.2f,%lu\n", t,
+                 v[kGpuUse], GetCurrentProcessId(), t, v[kOtherGpu], GetCurrentProcessId(), t, other_all,
+                 GetCurrentProcessId());
+    for (const auto& [pid, same] : same_exe)
+      if (same && pid != GetCurrentProcessId()) std::fprintf(dump, "%.2f,own_process,%u,,,,%lu\n", t, pid, GetCurrentProcessId());
+    std::fflush(dump);
+  }
+#endif
   void Sample(Values& v, uint32_t vendor) {
     v[kGpuUse] = Gpu();
     v[kOtherGpu] = OtherGpu();
+#if defined(KK_DEV_TOOLS)
+    Dump(v);
+#endif
     PROCESS_MEMORY_COUNTERS_EX m{}; m.cb = sizeof(m);
     if (GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&m), sizeof(m)))
       v[kRam] = double(m.WorkingSetSize) / 1048576;

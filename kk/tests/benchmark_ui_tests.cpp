@@ -3,6 +3,7 @@
 // controller, the keyboard and the mouse. Also the results files, the pass
 // median/spread rules and the in-run cancel press. No window, game or saves.
 #include "launcher_benchmark.h"
+#include "benchmark_other_gpu.h"
 #include "launcher_ui.h"
 #include "art.h"
 #include "platform.h"
@@ -204,6 +205,47 @@ void Rules() {
 }
 }  // namespace
 
+// Other programs' GPU use (task 172): the game's own processes, other adapters and video/copy engines are
+// not counted; other programs' 3D/compute work on the game's adapter is.
+void OtherGpu() {
+  using kk::benchmark::GpuInstance;
+  const std::wstring dgpu = L"_luid_0x00000000_0x0001_phys_0_eng_", igpu = L"_luid_0x00000000_0x0002_phys_0_eng_";
+  std::vector<std::wstring> names;
+  std::vector<double> values;
+  auto add = [&](int pid, const std::wstring& adapter, const wchar_t* engine, double v) {
+    names.push_back(L"pid_" + std::to_wstring(pid) + adapter + engine);
+    values.push_back(v);
+  };
+  add(100, dgpu, L"0_engtype_3D", 78.9);           // the game
+  add(100, igpu, L"0_engtype_3D", 0.5);            // the game's frames shown by a laptop's integrated GPU
+  add(90, dgpu, L"0_engtype_3D", 2.0);             // the game's startup parent / closing launcher
+  add(500, dgpu, L"2_engtype_VideoEncode", 81.7);  // recording or streaming the game
+  add(600, dgpu, L"3_engtype_VideoDecode", 30);    // a video playing
+  add(700, igpu, L"0_engtype_3D", 60);             // the integrated GPU composing (dwm.exe)
+  add(800, dgpu, L"1_engtype_Copy", 20);
+  add(4, dgpu, L"1_engtype_Copy", 5);
+  auto run = [&](std::set<uint32_t> own) {
+    std::vector<GpuInstance> in;
+    for (size_t i = 0; i < names.size(); ++i) in.push_back({names[i], values[i]});
+    return kk::benchmark::OtherGpuUse(in, 100, own);
+  };
+  auto r = run({100, 90});
+  Check(r.shader == 0, "video, copy, other-adapter and own-process GPU use is not other programs' use");
+  Check(r.all_engines > 81 && r.all_engines < 82, "the old all-engines value keeps the encoder's 81.7%");
+  Check(run({100}).shader == 2.0, "a process of another exe on the game's 3D engine counts");
+  add(900, dgpu, L"0_engtype_3D", 12);             // a real background app (another game, an upscaler)
+  add(901, dgpu, L"5_engtype_Compute_0", 40);      // CUDA/compute work
+  add(902, dgpu, L"0_engtype_3D", 3);
+  r = run({100, 90});
+  Check(r.shader == 40, "background compute counts (busiest engine)");
+  values[values.size() - 2] = 1;
+  Check(run({100, 90}).shader == 15, "background 3D use is summed over programs");
+  // An idle game: every adapter it has a context on is the game's.
+  for (size_t i = 0; i < names.size(); ++i) if (names[i].starts_with(L"pid_100_")) values[i] = 0;
+  Check(run({100, 90}).shader == 60, "idle game: other programs on any of its adapters count");
+  Check(kk::benchmark::InstancePid(L"pid_12345_luid_x") == 12345 && kk::benchmark::InstancePid(L"x") == 0, "pid parse");
+}
+
 int main(int argc, char** argv) {
   try {
     ImGui::CreateContext();
@@ -214,8 +256,9 @@ int main(int argc, char** argv) {
     StartPageNavigation();
     ResultsPage(std::filesystem::path(argc > 1 ? argv[1] : "benchmark-ui-test"));
     Rules();
+    OtherGpu();
     ImGui::DestroyContext();
-    std::cout << "benchmark launcher pages (controller, keyboard, mouse), results and cancel rules passed\n";
+    std::cout << "benchmark launcher pages (controller, keyboard, mouse), results, cancel rules and other-GPU rules passed\n";
   } catch (const std::exception& e) {
     std::cerr << "FAIL: " << e.what() << '\n';
     return 1;

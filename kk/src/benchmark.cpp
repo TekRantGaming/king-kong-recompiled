@@ -341,8 +341,10 @@ void Finish() {
       text += "Spread = (highest - lowest) / median of the passes' average FPS. Confidence: High up to 3%, "
               "Medium up to 6%, Low above. One pass has no confidence figure.\n";
       text += "Background: other programs' CPU above " + std::to_string(int(kBusyOtherCpu)) +
-          "% of all processors, or their busiest GPU engine above " + std::to_string(int(kBusyOtherGpu)) +
-          "%, marks a pass as busy.\n";
+          "% of all processors, or their use of the game's GPU above " + std::to_string(int(kBusyOtherGpu)) +
+          "%, marks a pass as busy. GPU use = the busiest 3D/compute engine of the adapter the game renders on, "
+          "summed over other programs; video encode/decode (recording, streaming, video playback), copy engines "
+          "and other adapters are not counted.\n";
       for (int scope = 0; scope <= int(chapters); ++scope) {
         const auto summary = SummarizePasses(rows, scope);
         text += "\n" + (scope ? "Chapter " + std::to_string(scope) + " entry " +
