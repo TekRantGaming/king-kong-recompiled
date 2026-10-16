@@ -185,7 +185,8 @@ void Rules() {
   Check(SpreadPercent({100}) == 0 && std::abs(SpreadPercent({97, 100, 103}) - 6) < 1e-9, "spread");
   Check(ConfidenceFor(1, 0) == Confidence::kUnknown && ConfidenceFor(3, 3) == Confidence::kHigh &&
         ConfidenceFor(3, 5) == Confidence::kMedium && ConfidenceFor(3, 6.5) == Confidence::kLow, "confidence");
-  PassScope busy; busy.other_cpu = 30; Check(busy.Busy(), "busy CPU");
+  PassScope busy; busy.other_cpu = 20; Check(!busy.Busy(), "system time alone is not busy");
+  busy.other_cpu = 35; Check(busy.Busy(), "busy CPU");
   busy.other_cpu = 1; busy.other_gpu = 40; Check(busy.Busy(), "busy GPU");
   busy.other_gpu = -1; Check(!busy.Busy(), "unavailable is not busy");
   const auto rows = ReadPassesCsv(Passes({{1, 2, 3, 4, 5}}));

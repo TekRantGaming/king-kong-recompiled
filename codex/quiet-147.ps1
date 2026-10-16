@@ -13,12 +13,12 @@ function Note($text){ $line="$(Get-Date -Format o) $text"; Add-Content -LiteralP
 function Minutes($job){ if($job -match '-Mode route'){ if($job -match '-Passes (\d)'){1.2+3.2*[int]$matches[1]}else{4.5} } else {1.6} }
 $claimed=$false
 for($i=0; $i -lt 6 -and !$claimed; $i++) {
- $r=& powershell -NoProfile -File $slot -Job claude-bench147 -Perf | Select-Object -Last 1
+ $r=& powershell -NoProfile -ExecutionPolicy Bypass -File $slot -Job claude-bench147 -Perf | Select-Object -Last 1
  Note "game-slot: $r"
  if($r -like 'USER*'){throw 'USER LOCK: code-only work'}
  $claimed=$r -like 'CLAIMED*'
 }
-if(!$claimed){ & powershell -NoProfile -File $slot -Job claude-bench147 -Release | Out-Null; foreach($j in $Jobs){"REMAINING $j"}; exit 1 }
+if(!$claimed){ & powershell -NoProfile -ExecutionPolicy Bypass -File $slot -Job claude-bench147 -Release | Out-Null; foreach($j in $Jobs){"REMAINING $j"}; exit 1 }
 $window=Get-Date; $done=0
 try {
  foreach($job in $Jobs) {
@@ -31,7 +31,7 @@ try {
   $done++
  }
 } finally {
- $r=& powershell -NoProfile -File $slot -Job claude-bench147 -Release | Select-Object -Last 1
+ $r=& powershell -NoProfile -ExecutionPolicy Bypass -File $slot -Job claude-bench147 -Release | Select-Object -Last 1
  Note "quiet window $r after $([int]((Get-Date)-$window).TotalMinutes) min"
 }
 for($k=$done; $k -lt $Jobs.Count; $k++){ "REMAINING $($Jobs[$k])" }
