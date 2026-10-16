@@ -14,9 +14,12 @@
 namespace kk::play::save_file {
 
 constexpr size_t kSaveSize = 0x8040;
-// Master, voices, music, effects (big-endian floats, 0 to 1), then subtitles (a word, 0 or 1).
-constexpr uint32_t kFileFields[] = {0xA78, 0xA70, 0xA6C, 0xA74, 0x1154};
-constexpr int kOptionCount = 5;
+// Master, voices, music, effects (big-endian floats, 0 to 1), then subtitles,
+// old movie, horizontal flip, aiming visor and inventory (words). The unused
+// original high-contrast value 2 is preserved until the player changes the mode.
+constexpr uint32_t kFileFields[] = {0xA78, 0xA70, 0xA6C, 0xA74, 0x1154, 0x26BC, 0x26B8, 0x3CC4, 0x240};
+constexpr uint32_t kInventoryCompanion = 0x3CCC;
+constexpr int kOptionCount = 9;
 using Values = std::array<float, kOptionCount>;  // volumes in percent, subtitles 0 or 1
 using Changed = std::array<bool, kOptionCount>;
 

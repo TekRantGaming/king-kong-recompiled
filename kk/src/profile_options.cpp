@@ -16,6 +16,7 @@
 #include <rex/logging.h>
 
 REX_EXTERN(__imp__sub_82413298);
+REX_EXTERN(__imp__sub_825EE130);
 #if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_82413190);
 REX_EXTERN(__imp__sub_827291A0);
@@ -24,7 +25,8 @@ namespace kk { double DevSecondsSinceMenu(); }
 
 namespace kk::play {
 namespace {
-constexpr uint32_t kFields[] = {18712, 18704, 18700, 18708, 19856};
+constexpr uint32_t kFields[] = {18712, 18704, 18700, 18708, 19856, 0x4DA4, 0x4DA0, 0x4DB0, 0x4DDC};
+static_assert(size_t(ProfileOption::kCount) == save_file::kOptionCount);
 // Their places in the save file (profile_save_file.h): filled from the universe's saved-variable
 // descriptors, verified by KK_DEV_AUDIO_TRACE.
 using save_file::kFileFields;
@@ -36,8 +38,8 @@ std::mutex g_options_mutex;
 ProfileOptions g_live_options;
 std::string g_error;
 int g_live_slot = -1;
-std::array<float, 5> g_pending{};
-std::array<bool, 5> g_dirty{};
+std::array<float, save_file::kOptionCount> g_pending{};
+std::array<bool, save_file::kOptionCount> g_dirty{};
 
 ProfileOptions Decode(const uint8_t* bytes, const uint32_t* fields, bool percent) {
   ProfileOptions out;
@@ -50,15 +52,18 @@ ProfileOptions Decode(const uint8_t* bytes, const uint32_t* fields, bool percent
     if (!std::isfinite(v) || v < 0 || v > 1.001f) return {};
     *volumes[i] = v * (percent ? 100 : 1);
   }
-  const uint32_t subtitles = ReadWord(bytes + fields[4]);
-  if (subtitles > 1) return {};
-  out.subtitles = subtitles != 0;
+  bool* options[] = {&out.subtitles, &out.old_movie, &out.horizontal_flip, &out.aiming_visor, &out.inventory};
+  for (int i = 4; i < save_file::kOptionCount; ++i) {
+    const uint32_t value = ReadWord(bytes + fields[i]);
+    if (value > (i == 5 ? 2u : 1u)) return {};
+    *options[i - 4] = value == 1;
+  }
   out.available = true;
   return out;
 }
 
-bool WriteOptions(const std::filesystem::path& root, int slot, const std::array<float, 5>& values,
-                  const std::array<bool, 5>& dirty) {
+bool WriteOptions(const std::filesystem::path& root, int slot, const std::array<float, save_file::kOptionCount>& values,
+                  const std::array<bool, save_file::kOptionCount>& dirty) {
   return save_file::WriteOptions(ProfileFilePath(root, slot), root / "audio-option-backups", slot, values, dirty);
 }
 
@@ -72,7 +77,8 @@ bool VerifyLayout(const uint8_t* base) {
   if (!desc) return false;
   const uint32_t table = ReadWord(base + desc + 8), count = ReadWord(base + desc + 12);
   if (!table || !count || count > 16384) return false;
-  std::array<bool, 5> found{};
+  std::array<bool, save_file::kOptionCount> found{};
+  bool inventory_companion = false;
   uint32_t offset = 0x100;
   for (uint32_t i = 0; i < count; ++i) {
     const uint32_t d = table + i * 16, variable = ReadWord(base + d), shape = ReadWord(base + d + 8);
@@ -82,14 +88,16 @@ bool VerifyLayout(const uint8_t* base) {
     if (type > 255) return false;
     const uint32_t size = uint32_t(base[0x828CEFF0 + type * 8 + 2]) << 8 | base[0x828CEFF0 + type * 8 + 3];
     const uint32_t bytes = (shape >> 30) * 4 + (shape & 0x3FFFFFFF) * size;
-    for (int j = 0; j < 5; ++j)
-      if (kFields[j] >= variable && kFields[j] + 4 <= variable + bytes && (flags & 0x40) &&
+    for (int j = 0; j < save_file::kOptionCount; ++j)
+      if (kFields[j] >= variable && kFields[j] + 4 <= variable + bytes &&
           offset + kFields[j] - variable == kFileFields[j]) found[j] = true;
+    if (variable <= 0x4DD8 && variable + bytes >= 0x4DDC &&
+        offset + 0x4DD8 - variable == save_file::kInventoryCompanion) inventory_companion = true;
     offset += bytes;
     if (offset > kSaveSize) return false;
   }
-  verified = std::all_of(found.begin(), found.end(), [](bool b) { return b; });
-  if (verified) REXLOG_INFO("KK audio: game's saved-option layout verified (four volume words and subtitles)");
+  verified = inventory_companion && std::all_of(found.begin(), found.end(), [](bool b) { return b; });
+  if (verified) REXLOG_INFO("KK audio: game's saved-option layout verified (audio, subtitles, video and controls)");
   return verified;
 }
 }  // namespace
@@ -99,7 +107,9 @@ ProfileOptions ReadProfileOptions(const std::filesystem::path& root, int slot) {
   if (slot < 0) return g_live_options;
   const auto data = ReadSave(ProfileFilePath(root, slot));
   if (data.empty()) return {};
-  return Decode(data.data(), kFileFields, true);
+  auto out = Decode(data.data(), kFileFields, true);
+  out.slot = slot;
+  return out;
 }
 
 bool SetProfileOptionsInAllSaves(const std::filesystem::path& root, const ProfileChange& change) {
@@ -107,21 +117,37 @@ bool SetProfileOptionsInAllSaves(const std::filesystem::path& root, const Profil
   save_file::Changed changed{};
   for (size_t i = 0; i < values.size(); ++i) {
     if (!change.set[i] || !std::isfinite(change.values[i])) continue;
-    values[i] = i == 4 ? float(change.values[i] != 0) : std::clamp(change.values[i], 0.0f, 100.0f);
+    values[i] = i >= 4 ? float(change.values[i] != 0) : std::clamp(change.values[i], 0.0f, 100.0f);
     changed[i] = true;
   }
   if (std::none_of(changed.begin(), changed.end(), [](bool b) { return b; })) return true;
   std::lock_guard lock(g_options_mutex);
-  // In play: the game's own save through the game thread (ServiceProfileOptions), which also
-  // applies the values to the running game.
+  auto allowed = [&](int slot) {
+    auto set = changed;
+    auto p = ReadExtraProgress(root, slot);
+    p.museum |= rex::cvar::GetFlagByName("kk_cheats") == "true" &&
+                rex::cvar::GetFlagByName("kk_cheat_bonus") == "true";
+    if (!ExtraUnlocked(*FindExtra(1), p)) set[5] = false;
+    if (!ExtraUnlocked(*FindExtra(8), p)) set[6] = false;
+    return set;
+  };
+  // Each save keeps its own bonus locks. A global option change cannot enable a locked mode.
   int live = -1;
   if (g_live_options.available && g_live_slot >= 0 && g_live_slot < kSlotCount) {
     live = g_live_slot;
+    const auto set = allowed(live);
     for (size_t i = 0; i < values.size(); ++i)
-      if (changed[i]) g_pending[i] = values[i], g_dirty[i] = true;
+      if (set[i]) g_pending[i] = values[i], g_dirty[i] = true;
   }
-  const auto r = save_file::WriteOptionsToSaves([&root](int slot) { return ProfileFilePath(root, slot); }, kSlotCount,
-                                                root / "audio-option-backups", values, changed, live);
+  save_file::AllSavesResult r;
+  for (int slot = 0; slot < kSlotCount; ++slot) {
+    if (slot == live) continue;
+    const auto path = ProfileFilePath(root, slot);
+    if (ReadSave(path).empty()) continue;
+    const auto set = allowed(slot);
+    if (save_file::WriteOptions(path, root / "audio-option-backups", slot, values, set)) ++r.written;
+    else ++r.failed;
+  }
   if (r.failed) REXLOG_ERROR("KK audio: {} save(s) could not take the new options and were left unchanged", r.failed);
   else REXLOG_INFO("KK audio: options written to {} save(s){}", r.written, live >= 0 ? " and the game being played" : "");
   return r.failed == 0;
@@ -139,9 +165,9 @@ void ServiceProfileOptions(PPCContext& ctx, uint8_t* base) {
       std::any_of(g_dirty.begin(), g_dirty.end(), [](bool b) { return b; })) {
     if (WriteOptions(UserDir(), slot, g_pending, g_dirty)) {
       g_error.clear();
-      for (int i = 0; i < 5; ++i) {
+      for (int i = 0; i < save_file::kOptionCount; ++i) {
         if (!g_dirty[i]) continue;
-        const uint32_t bits = i == 4 ? uint32_t(g_pending[i] != 0) : std::bit_cast<uint32_t>(g_pending[i] / 100.0f);
+        const uint32_t bits = i >= 4 ? uint32_t(g_pending[i] != 0) : std::bit_cast<uint32_t>(g_pending[i] / 100.0f);
         WriteWord(base + g + kFields[i], bits);
         // Chapter-select keeps a restart copy of the serialized variables.
         if (ReadWord(base + g + 0x5668)) WriteWord(base + 0x82C6BDE0 + kFileFields[i] - 0x100, bits);
@@ -149,6 +175,10 @@ void ServiceProfileOptions(PPCContext& ctx, uint8_t* base) {
       }
       WriteWord(base + g + 18692, ReadWord(base + g + 18692) | 1);
       const PPCContext saved = ctx;
+      if (g_dirty[8]) WriteWord(base + g + 0x4DD8, uint32_t(g_pending[8] != 0));
+      if (g_dirty[8] && ReadWord(base + g + 0x5668))
+        WriteWord(base + 0x82C6BDE0 + save_file::kInventoryCompanion - 0x100, uint32_t(g_pending[8] != 0));
+      if (g_dirty[5] || g_dirty[6]) { __imp__sub_825EE130(ctx, base); ctx = saved; }
       __imp__sub_82413298(ctx, base);  // the old Options page's Accept: snapshot saved options
       ctx = saved;
     } else {
@@ -158,6 +188,7 @@ void ServiceProfileOptions(PPCContext& ctx, uint8_t* base) {
     g_dirty.fill(false);
   }
   g_live_options = Decode(base + g, kFields, true);
+  g_live_options.slot = slot;
   g_live_options.subtitle_default = ReadWord(base + g + 20456) != 0;
   g_live_options.error = g_error;
   g_live_options.available = g_live_options.available && slot >= 0 && slot < kSlotCount;

@@ -6,6 +6,7 @@
 #include "graphics_presets.h"
 #include "cursor_activity.h"
 #include "slider_input.h"
+#include "extras.h"
 
 #include <bit>
 #include <chrono>
@@ -28,6 +29,39 @@ void Check(bool condition, const char* message) {
   }
 }
 bool Near(float a, float b) { return std::fabs(a - b) < 1e-4f; }
+
+void ExtrasChecks() {
+  using namespace kk::play;
+  ExtraProgress fresh;
+  Check(kExtras.size() == 15, "the retail Extras page has fifteen entries");
+  Check(!FindExtra(-1) && !FindExtra(4) && !FindExtra(13) && !FindExtra(20), "unused and invalid bonus ids are not launchable");
+  std::map<int, bool> ids;
+  for (const auto& e : kExtras) {
+    Check(ids.emplace(e.id, true).second, "each retail bonus appears once");
+    Check(ExtraUnlocked(e, fresh) == (e.id == 19 || e.id == 18), "new profile availability");
+    ExtraProgress p;
+    p.museum = true;
+    Check(ExtraUnlocked(e, p), "the original museum cheat unlocks each bonus");
+    p = {};
+    if (e.progress > 100) {
+      p.percent = 100; p.score = 1000000;
+      Check(!ExtraUnlocked(e, p), "progress and score cannot unlock an online-code bonus");
+      p.online_codes = 1u << e.id;
+      Check(ExtraUnlocked(e, p), "the matching saved online-code flag unlocks its bonus");
+      p.online_codes = 1u << (e.id + 1);
+      Check(!ExtraUnlocked(e, p), "an unrelated code flag does not unlock the bonus");
+    } else {
+      p.percent = std::max(0, e.progress); p.score = std::max(0, e.score);
+      Check(ExtraUnlocked(e, p) == (float(p.percent) * 0.01f >= float(e.progress) / 100.0f),
+            "unlock comparison matches the game's single-precision progress calculation");
+      if (e.progress > 0) { --p.percent; Check(!ExtraUnlocked(e, p), "progress below threshold remains locked"); p.percent = 100; }
+      if (e.score > 0) { --p.score; Check(!ExtraUnlocked(e, p), "score below threshold remains locked"); }
+    }
+  }
+  const auto* ending = FindExtra(2);
+  Check(ending && ending->level == 2003 && ending->score == 250000 && ending->progress == 100,
+        "alternate ending uses its original level, score and completion requirements");
+}
 
 void GraphicsPresetChecks() {
   const char* expected[] = {"low", "medium", "high", "high", "low"};
@@ -169,7 +203,8 @@ std::vector<uint8_t> MadeUpSave(uint32_t seed, float volume, uint32_t subtitles)
   sf::WriteWord(b.data() + 0x28, 0x1234);  // a continue level: a used slot
   sf::WriteWord(b.data() + 0xA68, 4);
   for (int i = 0; i < 4; ++i) sf::WriteWord(b.data() + sf::kFileFields[i], std::bit_cast<uint32_t>(volume));
-  sf::WriteWord(b.data() + sf::kFileFields[4], subtitles);
+  for (int i = 4; i < sf::kOptionCount; ++i) sf::WriteWord(b.data() + sf::kFileFields[i], i == 4 ? subtitles : 0);
+  sf::WriteWord(b.data() + sf::kInventoryCompanion, 0);
   return b;
 }
 void WriteFile(const fs::path& path, const std::vector<uint8_t>& bytes) {
@@ -196,6 +231,7 @@ bool OnlyOptionsChanged(const std::vector<uint8_t>& before, const std::vector<ui
   for (size_t i = 0; i < before.size(); ++i) {
     bool option = false;
     for (uint32_t f : sf::kFileFields) option |= i >= f && i < f + 4;
+    option |= i >= sf::kInventoryCompanion && i < sf::kInventoryCompanion + 4;
     if (!option && before[i] != after[i]) return false;
   }
   return true;
@@ -265,6 +301,28 @@ void AllSavesChecks() {
         "the last value is in every save");
   Check(sf::OptionsValid(ReadFile(slot_file(0)).data(), sf::kFileFields), "the saves stay valid");
 
+  // Original modes / control indicators use the same atomic save writer, with unrelated bytes intact.
+  auto before_modes = ReadFile(slot_file(0));
+  values.fill(0); changed.fill(false);
+  for (int i = 5; i < sf::kOptionCount; ++i) { values[i] = 1; changed[i] = true; }
+  Check(sf::WriteOptions(slot_file(0), backups, 0, values, changed), "original video and control options save");
+  auto after_modes = ReadFile(slot_file(0));
+  for (int i = 5; i < sf::kOptionCount; ++i)
+    Check(sf::ReadWord(after_modes.data() + sf::kFileFields[i]) == 1, "original option has its selected value");
+  Check(sf::ReadWord(after_modes.data() + sf::kInventoryCompanion) == 1, "both original inventory words agree");
+  Check(OnlyOptionsChanged(before_modes, after_modes), "changing bonus modes leaves progress, scores and other bytes untouched");
+  auto progress_save = MadeUpSave(9, 1, 0);
+  sf::WriteWord(progress_save.data() + 0x34, 41);
+  for (int i = 0; i < 40; ++i) sf::WriteWord(progress_save.data() + 0x38 + i * 4, i == 0 ? 250000 : 0);
+  for (int i = 0; i < 20; ++i) sf::WriteWord(progress_save.data() + 0x168 + 4 * i, i == 15 ? 1 : 0);
+  const auto ep = kk::play::DecodeExtraProgress(progress_save);
+  Check(ep.percent == 100 && ep.score == 250000, "private save progress and scores decode exactly");
+  Check(kk::play::ExtraUnlocked(*kk::play::FindExtra(2), ep), "completed private save unlocks the alternate ending");
+  Check(kk::play::ExtraUnlocked(*kk::play::FindExtra(15), ep) && !kk::play::ExtraUnlocked(*kk::play::FindExtra(3), ep),
+        "each original saved online-code word unlocks only its own bonus");
+  Check(kk::play::DecodeExtraProgress({}).score == 0, "missing save is safe");
+  progress_save.resize(100);
+  Check(kk::play::DecodeExtraProgress(progress_save).online_codes == 0, "truncated save has no unlocks");
   std::error_code ec;
   fs::remove_all(root, ec);
 }
@@ -318,6 +376,7 @@ int main() {
   cursor.Mouse();
   Check(cursor.mouse, "mouse restores pointer");
   GraphicsPresetChecks();
+  ExtrasChecks();
   ShaderProgressChecks();
   AllSavesChecks();
   std::cout << checks << " launcher checks passed\n";
