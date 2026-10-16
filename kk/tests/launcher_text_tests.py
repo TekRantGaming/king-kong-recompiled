@@ -3,7 +3,9 @@
   German, Spanish, French and Italian translation (placeholders kept, no em dashes);
 - the online player count reminder can never open by itself (owner, 16 Oct): no code opens it;
 - the shader screen shows one bar with one label: no step text is drawn;
-- the bonus video modes' help text says unlocked or locked to match the save.
+- the bonus video modes' help text says unlocked or locked to match the save;
+- Settings' tabs are Display, Graphics, Audio, Controls, Gameplay, Cheats, Advanced, About (owner, 16 Oct
+  evening), the pause menu's the same without About, and About stays on Home too.
 Usage: launcher_text_tests.py <kk folder>"""
 import re
 import sys
@@ -32,7 +34,8 @@ for m in re.finditer(r'\{\s*' + r'\s*,\s*'.join([STRING] * 5) + r'\s*\}', table_
 layout = (src / 'settings_layout.h').read_text(encoding='utf-8')
 needed = set(re.findall(r'\{"([^"]+)", "([^"*][^"]*)"\}', layout))
 strings = {s for pair in needed for s in pair}
-strings |= set(re.search(r'kPageNames\[kPageCount\] = \{([^}]*)\}', layout).group(1).replace('"', '').replace(' ', '').split(','))
+layout_pages = re.findall(r'"([^"]+)"', re.search(r'kPageNames\[kPageCount\] = \{([^}]*)\}', layout).group(1))
+strings |= set(layout_pages)
 strings |= {
     # Home and its pages, the Play menu's Extras
     'Settings', 'Achievements', 'About', 'Extras', 'Quit', 'Bonuses use this save\'s progress and scores.',
@@ -94,6 +97,28 @@ for text, name in ((launcher, 'launcher.cpp'), (shaders_cpp, 'native_shaders.cpp
             fail(f'{name} still shows steps: {banned}')
 if 'native_pack_.ProgressLabel()' not in launcher or 'DrawnFraction(' not in launcher:
     fail('the shader screen does not draw the single eased bar')
+
+# Settings' tabs (task 169): the settings pages in the owner's order, then About; the pause menu shares the
+# settings pages (not About); Home keeps its About entry.
+if layout_pages != ['Display', 'Graphics', 'Audio', 'Controls', 'Gameplay', 'Cheats', 'Advanced']:
+    fail(f'settings_layout.h pages are {layout_pages}')
+m = re.search(r'enum Page \{([^}]*)\};', launcher)
+launcher_pages = [x.strip() for x in m.group(1).split(',')] if m else []
+tabs = launcher_pages[launcher_pages.index('kDisplay'):launcher_pages.index('kAbout') + 1] if 'kAbout' in launcher_pages else []
+if tabs != ['kDisplay', 'kGraphics', 'kAudio', 'kControls', 'kGameplay', 'kCheats', 'kAdvanced', 'kAbout']:
+    fail(f'the launcher Settings tabs are {tabs}')
+if 'constexpr Page kLastSettingsTab = kAbout;' not in launcher:
+    fail('About is not the last Settings tab')
+if 'e.push_back({"About", true, [this] { GoTo(kAbout); }});' not in launcher:
+    fail('Home lost its About entry')
+ingame = (src / 'ingame_settings.h').read_text(encoding='utf-8')
+if 'enum Page { kDisplay, kGraphics, kAudio, kControls, kGameplay, kCheats, kAdvanced, kPageCount };' not in ingame:
+    fail('the pause menu Settings tabs differ from the launcher ones')
+if 'case kCheats: items = CheatItems(); break;' not in launcher:
+    fail('no page builds the cheats')
+for name in ('Cheats', 'About', 'Settings'):
+    if name not in entries:
+        fail(f'no translation for the tab {name!r}')
 
 if failures:
     print('\n'.join('FAIL: ' + f for f in failures))

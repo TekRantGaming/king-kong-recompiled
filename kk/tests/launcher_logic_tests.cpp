@@ -290,8 +290,9 @@ void SettingsLayoutChecks() {
   };
   Check(std::string(L::kPageNames[0]) == "Display" && std::string(L::kPageNames[1]) == "Graphics" &&
             std::string(L::kPageNames[2]) == "Audio" && std::string(L::kPageNames[3]) == "Controls" &&
-            std::string(L::kPageNames[4]) == "Gameplay" && std::string(L::kPageNames[5]) == "Advanced",
-        "categories: Display, Graphics, Audio, Controls, Gameplay, Advanced");
+            std::string(L::kPageNames[4]) == "Gameplay" && std::string(L::kPageNames[5]) == "Cheats" &&
+            std::string(L::kPageNames[6]) == "Advanced" && L::kPageCount == 7,
+        "categories: Display, Graphics, Audio, Controls, Gameplay, Cheats, Advanced (owner, 16 Oct evening)");
   Check(in_order(L::kDisplay, {"Window mode", "Monitor", "Resolution", "Refresh rate", "VSync", "Frame rate", "HDR"}),
         "Display: window mode, monitor, resolution, refresh rate, VSync, frame-rate cap, HDR");
   Check(in_order(L::kGraphics, {"Preset", "Graphics API", "Upscaler", "Upscaler mode", "Anti-aliasing",
@@ -305,8 +306,9 @@ void SettingsLayoutChecks() {
   Check(in_order(L::kControls, {"Camera sensitivity", "Camera horizontal", "Camera vertical", "Vibration",
                                 "Button remapping", "Keyboard bindings"}),
         "Controls: sensitivity, inversion, vibration, bindings");
-  Check(in_order(L::kGameplay, {"Subtitles", "Language", "Aiming visor", "Inventory", "Cheats"}),
+  Check(in_order(L::kGameplay, {"Subtitles", "Language", "Aiming visor", "Inventory", "Startup logos"}),
         "Gameplay: subtitles, language, HUD, then the rest");
+  Check(in_order(L::kCheats, {"Cheats", "*"}), "Cheats: the switch, then the cheat list");
   Check(in_order(L::kAdvanced, {"Frame counter", "Copy diagnostics"}), "Advanced: diagnostics");
   for (int p = 0; p < L::kPageCount; ++p) {
     // Every label once per page (rows are found by label), headings in one run each.
@@ -324,6 +326,9 @@ void SettingsLayoutChecks() {
         "Graphics API moved from Advanced to Graphics");
   Check(L::IndexOf(L::kGameplay, "Aiming visor") >= 0 && L::IndexOf(L::kControls, "Aiming visor") < 0,
         "the HUD rows moved from Controls to Gameplay");
+  Check(L::IndexOf(L::kCheats, "Cheats") >= 0 && L::IndexOf(L::kGameplay, "Cheats") < 0 &&
+            L::IndexOf(L::kGameplay, "Infinite ammo") < 0 && L::IndexOf(L::kCheats, "Infinite ammo") >= 0,
+        "the cheats moved from Gameplay to their own tab");
   // The check the builders' pages go through (developer builds log it for the launcher and pause menu).
   std::string why;
   Check(L::InLayoutOrder(L::kDisplay, {{true, "Screen"}, {false, "Window mode"}, {false, "Monitor"},
@@ -335,9 +340,10 @@ void SettingsLayoutChecks() {
   Check(!L::InLayoutOrder(L::kDisplay, {{true, "Window"}, {false, "Window mode"}}, &why),
         "a row under another heading fails");
   Check(!L::InLayoutOrder(L::kAudio, {{true, "Game audio"}, {false, "Surround"}}, &why), "an unknown row fails");
-  Check(L::InLayoutOrder(L::kGameplay, {{true, "Cheats"}, {false, "Cheats"}, {true, "Cheat list"},
-                                        {false, "Infinite ammo"}, {false, "Revolver"}}, &why),
+  Check(L::InLayoutOrder(L::kCheats, {{true, "Cheats"}, {false, "Cheats"}, {true, "Cheat list"},
+                                      {false, "Infinite ammo"}, {false, "Revolver"}}, &why),
         "the cheat list's rows are one block");
+  Check(!L::InLayoutOrder(L::kGameplay, {{true, "Cheats"}, {false, "Cheats"}}, &why), "no cheats on Gameplay");
 }
 
 void WhatsNewChecks() {

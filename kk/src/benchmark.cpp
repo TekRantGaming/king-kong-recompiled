@@ -49,6 +49,8 @@ REXCVAR_DEFINE_BOOL(kk_benchmark_record, false, "KK", "Record a controller bench
 REXCVAR_DEFINE_STRING(kk_benchmark_route, "", "KK", "Override benchmark-route.kkbr beside the game (not saved)");
 REXCVAR_DEFINE_INT32(kk_benchmark_passes, 1, "KK",
     "How many times the benchmark plays the whole route; results are the median of the passes (1-5, not saved)");
+REXCVAR_DEFINE_STRING(kk_benchmark_from, "", "KK",
+    "Where the launcher opens the results: empty for About, settings for Settings > About (not saved)");
 REXCVAR_DEFINE_DOUBLE(kk_benchmark_settle, kk::benchmark::kDefaultSettleSeconds, "KK",
     "Game seconds at the start of each chapter that are played but not measured (0-20, not saved)");
 
@@ -75,6 +77,7 @@ Recording recording;
 std::atomic<size_t> chapter_index{0};
 std::atomic<int> pass_index{0};
 int passes = 1;
+bool from_settings = false;  // started from Settings' About tab: the results open there (kk_benchmark_from)
 double settle_seconds = kDefaultSettleSeconds;
 // Set once the first swap at or after the settle time has been seen: the next
 // interval is the first one measured in this chapter.
@@ -585,6 +588,7 @@ std::filesystem::path Prepare(const std::filesystem::path& root) {
       std::chrono::system_clock::now().time_since_epoch()).count();
   recording_route = REXCVAR_GET(kk_benchmark_record);
   passes = std::clamp(REXCVAR_GET(kk_benchmark_passes), 1, kMaxPasses);
+  from_settings = std::string(REXCVAR_GET(kk_benchmark_from)) == "settings";
   settle_seconds = std::clamp(REXCVAR_GET(kk_benchmark_settle), 0.0, 20.0);
   if (!std::isfinite(settle_seconds)) settle_seconds = kDefaultSettleSeconds;
 #if defined(KK_DEV_TOOLS)
@@ -613,7 +617,7 @@ std::filesystem::path Prepare(const std::filesystem::path& root) {
     throw std::runtime_error("Could not create private benchmark user data");
   phase = Phase::kLoading;
   for (const char* name : {"kk_benchmark", "kk_benchmark_record", "kk_benchmark_route", "kk_benchmark_passes",
-                           "kk_benchmark_settle"})
+                           "kk_benchmark_settle", "kk_benchmark_from"})
     rex::cvar::ResetToDefault(name);
   if (recording_route) {
     double duration = 45;
@@ -868,7 +872,7 @@ int NextChapter() {
     if (recording_route) { std::lock_guard lock(mutex); if (!save_error.empty()) return -1; }
     returned = true;
     play::ReturnToLauncher(recording_route ? "benchmark route recording saved" : "benchmark finished",
-                           recording_route ? "about" : "benchmark");
+                           recording_route ? "about" : from_settings ? "benchmark-settings" : "benchmark");
   }
   return -1;
 }

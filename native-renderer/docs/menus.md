@@ -89,9 +89,12 @@ PrintWindow of the test window): `F:\KK-native-renderer\runs\menus-ui-1013-*`.
 ### The launcher
 
 Home is the main menu (task 144, owner 16 Oct: a tidy top level): Play, Update to vX (only when one was found),
-Settings, Achievements, About, Quit. Settings has the six categories as tabs (LB / RB or a click), in the order of
-`kk/src/settings_layout.h`: Display, Graphics, Audio, Controls, Gameplay, Advanced, with `SETTINGS` at the right;
-Achievements and About are pages of their own with their name as the header. B goes back to Home from each.
+Settings, Achievements, About, Quit. Settings has eight tabs (LB / RB or a click, wrapping round): the seven
+categories of `kk/src/settings_layout.h` (Display, Graphics, Audio, Controls, Gameplay, Cheats, Advanced), then About
+(owner, 16 Oct evening), with `SETTINGS` at the right. About is also on Home as a page of its own (same rows, no tabs);
+Achievements is a page of its own with its name as the header. B goes back to Home from each. A benchmark started
+from Settings > About comes back to that tab with its results (`kk_benchmark_from`), one started from Home's About to
+Home's About.
 Reinstall game and Check for updates now are on About; Graphics > Advanced has Rebuild shaders (asks first, then
 the shader screen with its one progress bar). The online player count is explained and switched in the first
 setup and on About; no reminder opens by itself. What's new opens only once the game files are installed, the
@@ -128,7 +131,7 @@ game. Start again and Quit game ask first (Cancel focused); B, Esc or Start resu
 settings (Gameplay) until the game's own Options page is known.
 
 **Settings**: tabs Display, Graphics, Audio, Controls (with Button remapping and Keyboard bindings), Gameplay,
-Advanced (the same order as the launcher's Settings, `settings_layout.h`), the launcher's own rows (`SettingsPages`, shared code) with the rows that need a restart left out (`LiveOnly`:
+Cheats, Advanced (the same order as the launcher's Settings, `settings_layout.h`), the launcher's own rows (`SettingsPages`, shared code) with the rows that need a restart left out (`LiveOnly`:
 window mode and size, resolution, refresh rate, monitor, frame rate, VSync, upscaler and its mode, render quality,
 internal resolution, look, preset, renderer, language, startup logos). Changes are saved like in the launcher.
 Controls: the game gives the menu the pad it read (`PauseMenuPad`); keyboard and mouse come through ImGui.
