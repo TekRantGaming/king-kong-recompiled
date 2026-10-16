@@ -18,8 +18,14 @@ TEST(MaterialMipBias_VendorOffsetsAndActualSizes) {
   for (auto kind : {UpscalerKind::kDlss, UpscalerKind::kFsr3, UpscalerKind::kFsr4}) {
     CHECK_NEAR(MaterialMipBias(kind, 1.5f), -1.5849625, 1e-6);
     CHECK_NEAR(MaterialMipBias(kind, 2.0f), -2.0, 1e-6);
-    CHECK_NEAR(MaterialMipBias(kind, 1.0f), 0.0, 1e-6);
   }
+  // Native-resolution AA (DLAA, FSR / XeSS native AA): -1 for every temporal upscaler (owner, 16 Oct).
+  for (auto kind : {UpscalerKind::kDlss, UpscalerKind::kFsr3, UpscalerKind::kFsr4, UpscalerKind::kXess}) {
+    CHECK_NEAR(MaterialMipBias(kind, 1.0f), -1.0, 1e-6);
+    CHECK_NEAR(MaterialMipBias(kind, 0.999f), -1.0, 1e-6);  // rounding of odd output sizes
+  }
+  CHECK_NEAR(MaterialMipBias(UpscalerKind::kBilinear, 1.0f), 0.0, 1e-6);  // a copy, not an AA
+  CHECK_NEAR(MaterialMipBias(UpscalerKind::kOff, 1.0f), 0.0, 1e-6);
   CHECK_NEAR(MaterialMipBias(UpscalerKind::kXess, 2.0f), -1.0, 1e-6);
   CHECK_NEAR(MaterialMipBias(UpscalerKind::kXess, 3840.0f / 2227.0f),
              std::log2(2227.0 / 3840.0), 1e-6);

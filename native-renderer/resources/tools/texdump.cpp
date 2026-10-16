@@ -1,15 +1,19 @@
 // kknr_texdump: converts texture dumps to host data with the library, as the renderer will.
 //
-//   kknr_texdump [--out DIR] [--csv FILE] [--no-images] FILE_OR_DIR...
+//   kknr_texdump [--out DIR] [--csv FILE] [--no-images] [--tail-check FILE [--tail-images DIR]] FILE_OR_DIR...
 //
+// --tail-check FILE writes only a CSV that checks the levels native_texture_tail_mips would read (see
+// TailCheck below); nothing else is converted or written.
 // Input: KKTX files (KK_DEV_TEX_DUMP in kk/src/dev_d3d_trace.cpp, or kknr_bfscan --dump; see kktx.h). For each one it writes <name>.dds (the host format, every level and layer) and
 // <name>.png (level 0, layers or depth slices stacked vertically, with the view swizzle applied), prints one
 // summary line and adds a CSV row (with an FNV-1a hash of the host data, to compare runs).
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -57,8 +61,135 @@ struct Options {
   bool images = true;
   fs::path pack;
   bool pack_png = false;
+  std::string tail_check;  // --tail-check FILE: the "Mips in the base's tail" data check only
+  fs::path tail_images;    // --tail-images DIR: with --tail-check, a PNG of each distinct texture's levels
 };
 
+// A dump's memory rebuilt at small physical addresses: the base region at 4 KB, the mips after it (both stay
+// 4 KB aligned, so the layout and the endian swap units are unchanged).
+std::vector<uint8_t> RebuildMemory(const kknr_tools::Kktx& dump, TextureFetch& fetch) {
+  const uint32_t original_base = fetch.BaseAddress(), original_mip = fetch.MipAddress();
+  const uint32_t base_bytes = uint32_t(dump.base.size()), mip_bytes = uint32_t(dump.mips.size());
+  const uint32_t base_at = 0x1000, mip_at = (base_at + base_bytes + 0x1FFF) & ~0xFFFu;
+  std::vector<uint8_t> memory(size_t(mip_at) + mip_bytes + 0x1000, 0);
+  if (base_bytes) std::memcpy(memory.data() + base_at, dump.base.data(), base_bytes);
+  if (mip_bytes) std::memcpy(memory.data() + mip_at, dump.mips.data(), mip_bytes);
+  if (original_base) fetch.words[1] = (fetch.words[1] & 0xFFFu) | base_at;
+  if (original_mip) fetch.words[5] = (fetch.words[5] & 0xFFFu) | mip_at;
+  return memory;
+}
+
+// --tail-check (docs/formats.md, "Mips in the base's tail"): for every texture whose whole chain would sit
+// in the base level's packed tail, reads levels 1+ from that tail as native_texture_tail_mips does and
+// measures how far each level is from a 2x2 box filter of the level above (mean absolute difference, 0..255
+// per channel, after the view swizzle). Real mips land near the compression error; a slot holding something
+// else does not. The control is a flat picture of the box filter's mean colour: the error of a level that
+// carries no picture at all. With --tail-images DIR, each distinct texture's levels are also written as one
+// PNG (every level enlarged to level 0's size, top row; the box filter of the level above, bottom row).
+std::vector<uint8_t> BoxDown(const std::vector<uint8_t>& src, uint32_t sw, uint32_t sh, uint32_t dw, uint32_t dh) {
+  std::vector<uint8_t> out(size_t(dw) * dh * 4);
+  for (uint32_t y = 0; y < dh; ++y)
+    for (uint32_t x = 0; x < dw; ++x)
+      for (int c = 0; c < 4; ++c) {
+        uint32_t sum = 0, n = 0;
+        for (uint32_t dy = 0; dy < 2; ++dy)
+          for (uint32_t dx = 0; dx < 2; ++dx) {
+            const uint32_t sx = std::min(sw - 1, x * 2 + dx), sy = std::min(sh - 1, y * 2 + dy);
+            sum += src[(size_t(sy) * sw + sx) * 4 + c];
+            ++n;
+          }
+        out[(size_t(y) * dw + x) * 4 + c] = uint8_t((sum + n / 2) / n);
+      }
+  return out;
+}
+
+double MeanAbs(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b) {
+  if (a.size() != b.size() || a.empty()) return -1.0;
+  double sum = 0;
+  for (size_t i = 0; i < a.size(); ++i) sum += std::abs(int(a[i]) - int(b[i]));
+  return sum / double(a.size());
+}
+
+std::vector<uint8_t> Flat(const std::vector<uint8_t>& src) {
+  std::vector<uint8_t> out(src.size());
+  for (int c = 0; c < 4; ++c) {
+    uint64_t sum = 0;
+    for (size_t i = c; i < src.size(); i += 4) sum += src[i];
+    const uint8_t mean = uint8_t((sum + src.size() / 8) / std::max<size_t>(1, src.size() / 4));
+    for (size_t i = c; i < out.size(); i += 4) out[i] = mean;
+  }
+  return out;
+}
+
+bool TailCheck(const fs::path& path, FILE* out, const fs::path& images, std::map<uint64_t, int>& seen, int& checked) {
+  kknr_tools::Kktx dump;
+  std::string load_why;
+  if (!kknr_tools::LoadKktx(path, dump, load_why)) return false;
+  TextureFetch fetch = TextureFetch::FromWords(dump.words);
+  if (!HasMipsInBaseTail(fetch)) return true;
+  const std::vector<uint8_t> memory = RebuildMemory(dump, fetch);
+  TextureOptions options;
+  options.mips_from_base_tail = true;
+  HostTextureData data;
+  std::string why;
+  const std::string stem = path.stem().string();
+  if (!ConvertTexture(fetch, GuestMemory{memory.data(), memory.size()}, data, &why, options)) {
+    std::fprintf(out, "%s,%s,,,,,,,,FAILED %s\n", stem.c_str(), GetFormatInfo(fetch.Format()).name, why.c_str());
+    return false;
+  }
+  std::vector<std::vector<uint8_t>> levels;  // RGBA8, layer 0
+  std::vector<std::pair<uint32_t, uint32_t>> sizes;
+  for (uint32_t level = data.plan.min_level; level < data.plan.levels; ++level) {
+    const HostSubresource* s = data.Find(level, 0);
+    if (!s) break;
+    levels.push_back(kknr_tools::HostToRgba8(data, *s, 0));
+    sizes.push_back({s->width, s->height});
+  }
+  const uint64_t content = kknr_tools::Fnv1a64(data.bytes.data(), data.bytes.size());
+  const bool first = seen.find(content) == seen.end();
+  const int distinct = first ? int(seen.size()) : seen[content];
+  if (first) seen[content] = distinct;
+  std::string per_level, flat_level;
+  double worst = 0, flat_best = -1;
+  std::vector<std::vector<uint8_t>> expected(levels.size());
+  for (size_t l = 1; l < levels.size(); ++l) {
+    const auto [pw, ph] = sizes[l - 1];
+    const auto [w, h] = sizes[l];
+    expected[l] = BoxDown(levels[l - 1], pw, ph, w, h);
+    const double e = MeanAbs(levels[l], expected[l]);
+    const double f = MeanAbs(levels[l], Flat(expected[l]));
+    char b[64];
+    std::snprintf(b, sizeof(b), "%s%.2f", per_level.empty() ? "" : " ", e);
+    per_level += b;
+    std::snprintf(b, sizeof(b), "%s%.2f", flat_level.empty() ? "" : " ", f);
+    flat_level += b;
+    worst = std::max(worst, e);
+    if (w * h >= 4) flat_best = flat_best < 0 ? f : std::min(flat_best, f);  // 1x1 levels are their own mean
+  }
+  std::fprintf(out, "%s,%s,%u,%u,%zu,%d,%s,%s,%.3f,%.3f\n", stem.c_str(), GetFormatInfo(fetch.Format()).name,
+               data.plan.width, data.plan.height, levels.size(), distinct, per_level.c_str(), flat_level.c_str(), worst,
+               flat_best);
+  if (first && !images.empty() && !levels.empty()) {
+    const uint32_t w0 = sizes[0].first, h0 = sizes[0].second, gap = 2;
+    const uint32_t width = uint32_t(levels.size()) * (w0 + gap), height = 2 * h0 + gap;
+    std::vector<uint8_t> png(size_t(width) * height * 4, 0);
+    auto blit = [&](const std::vector<uint8_t>& src, uint32_t sw, uint32_t sh, uint32_t ox, uint32_t oy) {
+      for (uint32_t y = 0; y < h0; ++y)
+        for (uint32_t x = 0; x < w0; ++x) {
+          const uint32_t sx = x * sw / w0, sy = y * sh / h0;
+          std::memcpy(&png[(size_t(oy + y) * width + ox + x) * 4], &src[(size_t(sy) * sw + sx) * 4], 4);
+          png[(size_t(oy + y) * width + ox + x) * 4 + 3] = 255;
+        }
+    };
+    for (size_t l = 0; l < levels.size(); ++l) {
+      blit(levels[l], sizes[l].first, sizes[l].second, uint32_t(l) * (w0 + gap), 0);
+      if (l) blit(expected[l], sizes[l].first, sizes[l].second, uint32_t(l) * (w0 + gap), h0 + gap);
+    }
+    kknr_tools::WritePng((images / ("tail-" + std::to_string(distinct) + "-" + stem + ".png")).string(), width, height, png);
+  }
+  ++checked;
+  return true;
+}
 bool Process(const fs::path& path, const Options& o, FILE* csv, TexturePackManifest& manifest) {
   kknr_tools::Kktx dump;
   std::string load_why;
@@ -69,15 +200,7 @@ bool Process(const fs::path& path, const Options& o, FILE* csv, TexturePackManif
   TextureFetch fetch = TextureFetch::FromWords(dump.words);
   const uint32_t original_base = fetch.BaseAddress(), original_mip = fetch.MipAddress();
   const uint32_t base_bytes = uint32_t(dump.base.size()), mip_bytes = uint32_t(dump.mips.size());
-
-  // Rebuild a small physical memory: the base region at 4 KB, the mips after it (both stay 4 KB aligned, so
-  // the layout and the endian swap units are unchanged).
-  const uint32_t base_at = 0x1000, mip_at = (base_at + base_bytes + 0x1FFF) & ~0xFFFu;
-  std::vector<uint8_t> memory(size_t(mip_at) + mip_bytes + 0x1000, 0);
-  if (base_bytes) std::memcpy(memory.data() + base_at, dump.base.data(), base_bytes);
-  if (mip_bytes) std::memcpy(memory.data() + mip_at, dump.mips.data(), mip_bytes);
-  if (original_base) fetch.words[1] = (fetch.words[1] & 0xFFFu) | base_at;
-  if (original_mip) fetch.words[5] = (fetch.words[5] & 0xFFFu) | mip_at;
+  const std::vector<uint8_t> memory = RebuildMemory(dump, fetch);
 
   HostTextureData data;
   std::string why;
@@ -169,6 +292,10 @@ int main(int argc, char** argv) {
       o.pack = fs::u8path(argv[++i]);
     else if (a == "--pack-png")
       o.pack_png = true;
+    else if (a == "--tail-check" && i + 1 < argc)
+      o.tail_check = argv[++i];
+    else if (a == "--tail-images" && i + 1 < argc)
+      o.tail_images = fs::u8path(argv[++i]);
     else if (a.rfind("--", 0) == 0) {
       std::printf("unknown option %s\n", a.c_str());
       return 2;
@@ -176,10 +303,38 @@ int main(int argc, char** argv) {
       inputs.push_back(a);
   }
   if (inputs.empty()) {
-    std::printf("usage: kknr_texdump [--out DIR] [--csv FILE] [--no-images] [--pack-template DIR] [--pack-png] FILE_OR_DIR...\n");
+    std::printf("usage: kknr_texdump [--out DIR] [--csv FILE] [--no-images] [--pack-template DIR] [--pack-png] "
+                "[--tail-check FILE [--tail-images DIR]] FILE_OR_DIR...\n");
     return 2;
   }
   std::error_code ec;
+  if (!o.tail_check.empty()) {
+    FILE* out = std::fopen(o.tail_check.c_str(), "w");
+    if (!out) return 1;
+    if (!o.tail_images.empty()) fs::create_directories(o.tail_images, ec);
+    std::fprintf(out, "name,format,width,height,levels,distinct,box_mae_per_level,flat_mae_per_level,worst_box_mae,"
+                      "best_flat_mae\n");
+    std::map<uint64_t, int> seen;
+    int total = 0, checked = 0, failed = 0;
+    for (const fs::path& in : inputs) {
+      std::vector<fs::path> files;
+      if (fs::is_directory(in)) {
+        for (const auto& e : fs::directory_iterator(in))
+          if (e.path().extension() == ".bin") files.push_back(e.path());
+        std::sort(files.begin(), files.end());
+      } else {
+        files.push_back(in);
+      }
+      for (const fs::path& f : files) {
+        ++total;
+        failed += !TailCheck(f, out, o.tail_images, seen, checked);
+      }
+    }
+    std::fclose(out);
+    std::printf("%d textures, %d with their mips in the base's tail (%zu distinct), %d failed\n", total, checked,
+                seen.size(), failed);
+    return failed ? 1 : 0;
+  }
   fs::create_directories(o.out, ec);
   if (!o.pack.empty()) { fs::create_directories(o.pack,ec); if(ec) return 1; }
   TexturePackManifest manifest;

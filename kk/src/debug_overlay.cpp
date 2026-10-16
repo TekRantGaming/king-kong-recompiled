@@ -31,8 +31,10 @@
 #include <ctime>
 #include <fstream>
 #include <functional>
+#include <iomanip>
 #include <map>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -1234,7 +1236,97 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
     art::CaptureFrame(test_dir_ / (name + art::kDevCaptureExtension));
   }
 
+  // Task 146: KK_DEV_GFX_FINISH=<plan file>,<output folder>. Each plan line is one phase,
+  //   <name> <settle s> <measure s> <captures> <cvar>=<value> ...
+  // applied through the same live changes as F8, from KK_DEV_GFX_FINISH_START seconds after the
+  // menu (default 30). A phase waits for any upscaler/effect rebuild, settles, records its timed
+  // window in phases.csv (renderer frames and wall clock, to cut the KK_DEV_DLSS_LOG traces), and
+  // only then captures, so a capture's readback never lands inside a window. Game frames only.
+  struct FinishPhase { std::string name; double settle = 1, measure = 2; int shots = 0;
+                       std::vector<std::pair<std::string, std::string>> set; };
+  bool FinishTick() {
+    const char* spec = std::getenv("KK_DEV_GFX_FINISH");
+    if (!spec || !*spec) return false;
+    static std::vector<FinishPhase> plan;
+    static std::filesystem::path root;
+    static bool loaded = false;
+    static size_t index = 0;
+    static int stage = 0, shot = 0;
+    static std::chrono::steady_clock::time_point mark{};
+    static uint64_t frame_from = 0;
+    static double wall_from = 0;
+    if (!loaded) {
+      loaded = true;
+      const std::string s = spec;
+      const size_t comma = s.find(',');
+      root = comma == std::string::npos ? std::filesystem::path(".") : std::filesystem::path(s.substr(comma + 1));
+      std::ifstream file(s.substr(0, comma));
+      for (std::string line; std::getline(file, line);) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty() || line[0] == '#') continue;
+        std::istringstream words(line);
+        FinishPhase p;
+        words >> p.name >> p.settle >> p.measure >> p.shots;
+        for (std::string kv; words >> kv;) {
+          const size_t eq = kv.find('=');
+          if (eq != std::string::npos) p.set.push_back({kv.substr(0, eq), kv.substr(eq + 1)});
+        }
+        if (!p.name.empty()) plan.push_back(std::move(p));
+      }
+      std::filesystem::create_directories(root);
+      std::ofstream(root / "phases.csv") << "index,name,frame_from,frame_to,wall_from,wall_to,upscaler,bias,input,output,api\n";
+      REXLOG_INFO("KK gfx finish: {} phases", plan.size());
+    }
+    const double start = std::getenv("KK_DEV_GFX_FINISH_START") ? std::atof(std::getenv("KK_DEV_GFX_FINISH_START")) : 30.0;
+    if (!InPlay() || DevSecondsSinceMenu() < start) return true;
+    if (index >= plan.size()) {
+      if (stage != 99) REXLOG_INFO("KK gfx finish: done");
+      stage = 99;
+      return true;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    const double since = std::chrono::duration<double>(now - mark).count();
+    const FinishPhase& p = plan[index];
+    auto wall = [&] { return std::chrono::duration<double>(now.time_since_epoch()).count(); };
+    switch (stage) {
+      case 0:
+        for (const auto& [cvar, value] : p.set) Change(cvar.c_str(), value);
+        REXLOG_INFO("KK gfx finish: phase {} {} begin frame {}", index, p.name, Stats().frame);
+        mark = now; stage = 1;
+        break;
+      case 1:  // a rebuild on a worker (an upscaler, GI, shader variants) finishes first
+        if (Stats().preparing == 0 || since > 20) { mark = now; stage = 2; }
+        break;
+      case 2:
+        if (since >= p.settle) { frame_from = Stats().frame; wall_from = wall(); mark = now; stage = 3; }
+        break;
+      case 3:
+        if (since >= p.measure) {
+          const auto s = Stats();
+          std::ofstream(root / "phases.csv", std::ios::app) << index << ',' << p.name << ',' << frame_from << ','
+              << s.frame << ',' << std::fixed << std::setprecision(6) << wall_from << ',' << wall() << ','
+              << '"' << s.upscaler << '"' << ',' << s.mip_bias << ',' << s.input_width << 'x' << s.input_height
+              << ',' << s.output_width << 'x' << s.output_height << ',' << s.api << '\n';
+          shot = 0; mark = now; stage = 4;
+        }
+        break;
+      case 4:
+        if (shot < p.shots) {
+          if (since >= 0.25 * shot) {
+            const auto stem = std::to_string(index) + "-" + p.name + "-" + std::to_string(shot++);
+            art::CaptureFrame(root / (stem + art::kDevCaptureExtension));
+            if (shot == 1) std::ofstream(root / (stem + ".txt")) << SettingsText();
+          }
+          break;
+        }
+        if (since >= 0.25 * p.shots + 0.3) { ++index; stage = 0; }
+        break;
+    }
+    return true;
+  }
+
   void TestTick() {
+    if (FinishTick()) return;
     // Task 121: bounded same-camera comparisons; no desktop capture or focus changes.
     if (const char* dir = std::getenv("KK_DEV_GFX_QUICK"); dir && *dir) {
       if (!InPlay() || DevSecondsSinceMenu() < 32) return;

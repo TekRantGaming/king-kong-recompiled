@@ -118,6 +118,17 @@ passed 4/5 scenes on Vulkan (loading failed) and 5/5 on D3D12. This is not a pai
 off/on proof of a minified tail texture, so it does not establish that enabling the option is
 correct globally. See [REPORT-121](../../codex/REPORT-121.md) for the captures and limits.
 
+Task 146 checked the data itself: `kknr_texdump --tail-check FILE [--tail-images DIR] DIR` reads, for
+every record of the player's KKTextures.bf, the levels the option would read and compares each with a
+2x2 box filter of the level above. 111 of 11,940 records have their whole chain in the base's tail, and
+they hold only three distinct pictures: a 16x16 and a 16x8 DXT1 streak sprite (55 copies each, one per
+level pack) and one flat 16x128 DXN. In both sprites every stored level is a recognisable downsample of
+the level above: mean absolute difference 1.96 and 2.88 (0..255) at the first smaller level, against
+19.2 and 15.2 for a flat picture of the same mean colour; the 2x2 and 1x1 levels are too small to tell
+from a flat colour. So the tail slots hold real mips, and the option only changes how those two small
+sprites look when minified (softer, as the 360 draws them). See codex/REPORT-146.md for the paired
+golden runs.
+
 Untiling and tiling share one address walk (`ReadGuestBlocks` / `WriteGuestBlocks` in
 `kknr/guest_texture.h`). `EncodeGuestTexture` is the full inverse of reading (tiling plus the endian swap); the
 round-trip tests push random blocks for 11 formats (1 to 16-byte blocks, 4x4, 2x1, 4x1 and 8x1 blocks) through

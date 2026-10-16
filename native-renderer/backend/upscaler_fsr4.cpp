@@ -15,6 +15,7 @@
 #if NR_HAS_FFX && NR_HAS_D3D12
 
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -267,6 +268,15 @@ std::unique_ptr<Upscaler> CreateFsr4Upscaler(nvrhi::IDevice* device, const Upsca
     if (!name.empty() && name[0] == '4') {
       return std::make_unique<Fsr4Upscaler>(device, config, fn, ids[i], name);
     }
+  }
+  // Developer check only (never set by the game or launcher): NR_DEV_FSR4_ANY_PROVIDER=1 takes the newest
+  // version the library offers when it has no FSR 4, so this SDK 2.3 path (context, dispatch, jitter and
+  // the game's FSR 4 plumbing) can run on a GPU without FSR 4. It is not FSR 4's model.
+  if (const char* any = std::getenv("NR_DEV_FSR4_ANY_PROVIDER"); any && std::strcmp(any, "1") == 0 && count) {
+    const std::string name = names[0] ? names[0] : "?";
+    Logf(LogLevel::kWarning, "rexgpu-native: FSR 4 path test: no FSR 4 here (%s); using FSR %s through the same path",
+         offered.c_str(), name.c_str());
+    return std::make_unique<Fsr4Upscaler>(device, config, fn, ids[0], name);
   }
   if (why) *why = "FSR 4 does not run on this GPU (the AMD library offers FSR " + offered + ")";
   return nullptr;

@@ -267,7 +267,11 @@ nvrhi::ICommandList* Renderer::FrameCommandList() {
       frame_gpu_timer_->set_quiet(true);
 #endif
     }
+#if NR_GAME_RENDERER
+    frame_gpu_timer_->Begin(frame_command_list_, game_ ? game_->frame_number() : UINT64_MAX);
+#else
     frame_gpu_timer_->Begin(frame_command_list_);
+#endif
     frame_open_ = true;
     if (game_) game_->UploadDummies(frame_command_list_);
     // A defined depth at the start of every frame (the game's own depth clear
