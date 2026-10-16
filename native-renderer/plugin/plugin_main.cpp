@@ -13,6 +13,7 @@
 #include <rex/system/gpu_plugin.h>
 
 #include "backend/backend.h"
+#include "backend/background_file_writer.h"
 #include "plugin/launcher_prewarm.h"
 #include "plugin/native_api.h"
 #include "plugin/native_startup.h"
@@ -549,6 +550,21 @@ extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_prewarm_status(NrPrewarmStatus* sta
 }
 
 extern "C" REX_GPU_PLUGIN_EXPORT void nr_prewarm_stop(void) { nr::StopLauncherPrewarm(); }
+
+// Task 177: the renderer's cache files are written on a background thread, and the runtime hard-exits
+// (no destructors) when the title ends. The game calls this just before: waits up to `timeout_ms` for
+// queued writes. 1 = everything written.
+extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_flush_file_writes(uint32_t timeout_ms) {
+  const auto start = std::chrono::steady_clock::now();
+  const bool all = nr::BackgroundFileWriter::FlushAll(std::chrono::milliseconds(timeout_ms));
+  const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+  if (!all) {
+    REXLOG_WARN("rexgpu-native: file writes still running after {} ms at exit", timeout_ms);
+  } else if (ms >= 1) {
+    REXLOG_INFO("rexgpu-native: file writes finished before exit ({:.0f} ms)", ms);
+  }
+  return all ? 1u : 0u;
+}
 extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_effect_stats(NrEffectStats* stats) {
 #if NR_GAME_RENDERER
   return nr::ReadEffectStats(stats) ? 1u : 0u;

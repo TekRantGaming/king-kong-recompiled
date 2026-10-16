@@ -39,11 +39,34 @@ void GameRenderer::PollResourcePreload(nvrhi::ICommandList* cl) {
 }
 
 void GameRenderer::SaveResourcePreload() {
-  if (!resource_cache_dirty_) return;
-  if (ResourcePreloadFile::Write(resource_cache_path_, learned_resources_)) {
-    resource_cache_dirty_ = false;
-    Logf(LogLevel::kInfo, "rexgpu-native: resource list saved: level %u start %u, %zu descriptions",
-         preload_level_, preload_start_, learned_resources_.size());
+  if (!resource_cache_dirty_ || resource_cache_path_.empty()) return;
+  // Task 177: the render thread only encodes the list (a copy); the background writer replaces the file
+  // (temp file + rename), so a busy disk never holds a frame. A reader of the same path before the write
+  // is done gets these bytes from the writer (PreloadResources).
+  const auto start = std::chrono::steady_clock::now();
+  std::vector<uint8_t> bytes;
+  if (!ResourcePreloadFile::Encode(learned_resources_, bytes)) return;
+  resource_cache_dirty_ = false;
+  const uint32_t level = preload_level_, chapter_start = preload_start_;
+  const size_t count = learned_resources_.size();
+  const std::string path = resource_cache_path_;
+  file_writer_.Replace(path, std::move(bytes), [path, level, chapter_start, count, start](bool ok, double ms) {
+    const double queued_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() - ms;
+    if (ok) {
+      Logf(LogLevel::kInfo,
+           "rexgpu-native: resource list saved: level %u start %u, %zu descriptions (written in %.1f ms on the file "
+           "writer, started %.1f ms after it was queued at steady %.3f s)",
+           level, chapter_start, count, ms, queued_ms,
+           std::chrono::duration<double>(start.time_since_epoch()).count());
+    } else {
+      Logf(LogLevel::kWarning, "rexgpu-native: resource list %s not saved (level %u start %u, %zu descriptions)",
+           path.c_str(), level, chapter_start, count);
+    }
+  });
+  const double render_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+  stats_.resource_save_render_ms += render_ms;
+  if (render_ms > 2) {
+    Logf(LogLevel::kInfo, "rexgpu-native: resource list save took %.1f ms on the render thread", render_ms);
   }
 }
 
@@ -80,7 +103,12 @@ void GameRenderer::PreloadResources(nvrhi::ICommandList* cl, bool loading, uint3
     }
     // Keep earlier local learning when extending it. Local content takes polling
     // priority; shipped variants are hints and never overwrite the player's file.
-    if (!resource_cache_path_.empty()) ResourcePreloadFile::Read(resource_cache_path_, learned_resources_);
+    // A write of this list still queued (a quick return to the same chapter) is what the file will hold.
+    std::vector<uint8_t> pending;
+    if (!resource_cache_path_.empty()) {
+      if (file_writer_.Pending(resource_cache_path_, &pending)) ResourcePreloadFile::Decode(pending, learned_resources_);
+      else ResourcePreloadFile::Read(resource_cache_path_, learned_resources_);
+    }
     preload_records_ = learned_resources_;
     const size_t local = preload_records_.size();
     {

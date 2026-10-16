@@ -160,37 +160,60 @@ bool PipelineCacheFile::Open(const std::string& path) {
     if (keys_.insert(PipelineKey(record)).second) loaded_.push_back(record);
   }
   const size_t good_bytes = sizeof(Header) + records.size() * sizeof(PipelineRecord);
+  std::FILE* file = nullptr;
   if (keep) {
     // Drop a torn last record (the run was killed mid-write) before appending.
     std::filesystem::resize_file(p, good_bytes, ec);
-    file_ = std::fopen(path.c_str(), "ab");
+    file = std::fopen(path.c_str(), "ab");
   } else {
-    file_ = std::fopen(path.c_str(), "wb");
-    if (file_) {
+    file = std::fopen(path.c_str(), "wb");
+    if (file) {
       Header header;
-      std::fwrite(&header, sizeof(header), 1, file_);
-      std::fflush(file_);
+      std::fwrite(&header, sizeof(header), 1, file);
+      std::fflush(file);
     }
   }
-  return file_ != nullptr;
+  {
+    std::lock_guard lock(file_mutex_);
+    file_ = file;
+  }
+  open_.store(file != nullptr);
+  return file != nullptr;
 }
 
 void PipelineCacheFile::Close() {
+  Flush();
+  std::lock_guard lock(file_mutex_);
   if (file_) {
     std::fflush(file_);
     std::fclose(file_);
     file_ = nullptr;
   }
+  open_.store(false);
 }
 
 bool PipelineCacheFile::Append(const PipelineRecord& record) {
   if (!keys_.insert(PipelineKey(record)).second) return false;
-  if (file_ && std::fwrite(&record, sizeof(record), 1, file_) == 1) ++appended_;
+  if (open_.load(std::memory_order_relaxed)) {
+    std::lock_guard lock(pending_mutex_);
+    pending_.push_back(record);
+    pending_count_.store(pending_.size(), std::memory_order_relaxed);
+    ++appended_;
+  }
   return true;
 }
 
 void PipelineCacheFile::Flush() {
-  if (file_) std::fflush(file_);
+  std::lock_guard file_lock(file_mutex_);  // one writer at a time keeps the records in order
+  std::vector<PipelineRecord> records;
+  {
+    std::lock_guard lock(pending_mutex_);
+    records.swap(pending_);
+    pending_count_.store(0, std::memory_order_relaxed);
+  }
+  if (!file_ || records.empty()) return;
+  std::fwrite(records.data(), sizeof(PipelineRecord), records.size(), file_);
+  std::fflush(file_);
 }
 
 }  // namespace nr

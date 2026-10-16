@@ -124,4 +124,8 @@ struct ProfileChange {
 // when a save could not be written (it is left unchanged).
 bool SetProfileOptionsInAllSaves(const std::filesystem::path& user_dir, const ProfileChange& change);
 
+// Task 177: the native renderer writes its cache files on a background thread and the runtime hard-exits
+// (no destructors) when the title ends; called just before every exit so queued writes finish (<= 3 s).
+void FlushRendererFiles();
+
 }  // namespace kk::play

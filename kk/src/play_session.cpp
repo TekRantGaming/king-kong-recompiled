@@ -499,6 +499,15 @@ ExtraProgress ReadExtraProgress(const std::filesystem::path& user_dir, int slot)
   return DecodeExtraProgress(ReadAll(SlotFile(user_dir, slot)));
 }
 void SetQuitHandler(std::function<void()> quit) { g_quit = std::move(quit); }
+void FlushRendererFiles() {
+#if defined(_WIN32)
+  using Flush = uint32_t (*)(uint32_t);
+  const HMODULE module = GetModuleHandleW(L"rexgpu-native.dll");
+  const auto flush = module ? reinterpret_cast<Flush>(GetProcAddress(module, "nr_flush_file_writes")) : nullptr;
+  if (flush) flush(3000);
+#endif
+  // Linux (on hold): the plugin's writes are lost only if the process ends within a write (milliseconds).
+}
 bool SessionActive() { return g_session; }
 bool ProfileSaveBusy(const uint8_t* base) {
   return g_save_jobs != 0 || Load32(base, kSaveQueue + 0xC) != 0;
@@ -1211,6 +1220,7 @@ REX_HOOK_RAW(sub_8253DB80) {
       done = true;
       if (!idle) REXLOG_WARN("KK play: a save is still being written after 10 s; leaving anyway");
       const std::wstring page(g_leave_page.begin(), g_leave_page.end());
+      FlushRendererFiles();
       if (QuitToDesktop()) {
         REXLOG_INFO("KK play: Quit game: the program exits");
         if (g_quit) g_quit();

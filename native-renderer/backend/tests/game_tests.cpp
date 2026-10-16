@@ -3354,6 +3354,7 @@ void CheckBufferPreload(bool index32, bool mismatch, bool during_capture, bool a
   f.CheckQuadrants(px, changed, __LINE__);
   if (stale_local) {
     ServicePreload(f, true, 307);  // flush this visit's refreshed local hashes
+    f.game->FlushFileWrites();     // written on the background file writer (task 177)
     std::vector<ResourcePreloadRecord> saved;
     CHECK(ResourcePreloadFile::Read(cache + ".resources-305-0", saved));
     CHECK_EQ(saved.size(), 3u);
@@ -3434,6 +3435,7 @@ TEST(Preload_ShippedTextureFirstVisitAndLocalExtension) {
     if (!pass) {
       // Switching chapter saves the learned record before this fixture exits.
       ServicePreload(f, true, 306);
+      f.game->FlushFileWrites();  // written on the background file writer (task 177)
       std::vector<ResourcePreloadRecord> records;
       CHECK(ResourcePreloadFile::Read(source + ".resources-305-0", records));
       CHECK_EQ(records.size(), 1u);
@@ -3470,6 +3472,46 @@ TEST(Preload_FileRejectsTornOversizedAndChangedData) {
   CHECK(!ResourcePreloadFile::Read(path, got)); CHECK(got.empty());
   records.resize(ResourcePreloadFile::kMaxRecords + 1);
   CHECK(!ResourcePreloadFile::Write(path, records));
+}
+
+TEST(Preload_SlowSaveDoesNotHoldTheRenderThread) {
+  // Task 177: the learned list is written on the background file writer. With a slow disk (the
+  // developer delay) the chapter switch that saves it returns at once; a quick return to the chapter
+  // reads the queued list, and the file holds it once the writes are flushed.
+  const auto path = PreloadTestPath("slow-save");
+  auto set_env = [](const char* value) {
+#if defined(_WIN32)
+    _putenv_s("KK_DEV_SLOW_PRELOAD_SAVE_MS", value);
+#else
+    if (*value) setenv("KK_DEV_SLOW_PRELOAD_SAVE_MS", value, 1); else unsetenv("KK_DEV_SLOW_PRELOAD_SAVE_MS");
+#endif
+  };
+  set_env("1500");
+  Fixture f;
+  const bool ready = f.Init();
+  set_env("");
+  if (!ready) return;
+  CHECK(f.game->SetPipelineCache(path));
+  const auto rt = f.BindMainSurface();
+  std::vector<uint8_t> blocks(128 * 128 * 4, 255);
+  const auto desc = Desc(kknr::TextureFormat::k_8_8_8_8, kknr::Endian::k8in32, kSwizzleZYXW, 128, true);
+  const auto tex = f.NewTexture(desc, [&](uint32_t, uint32_t) { return blocks.data(); });
+  ServicePreload(f, true);
+  ServicePreload(f, false);
+  f.DrawTextured(tex);
+  f.Present(rt);
+  const auto start = std::chrono::steady_clock::now();
+  ServicePreload(f, true, 306);  // the chapter switch saves the learned list
+  const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+  CHECK(ms < 750);
+  CHECK(f.game->stats().resource_save_render_ms < 750);
+  CHECK(!std::filesystem::exists(path + ".resources-305-0"));  // still in the writer's delay
+  ServicePreload(f, true, 305);  // back again before the write: the queued list is what it reads
+  ServicePreload(f, true, 307);  // nothing new learned: no second save
+  f.game->FlushFileWrites();
+  std::vector<ResourcePreloadRecord> records;
+  CHECK(ResourcePreloadFile::Read(path + ".resources-305-0", records));
+  CHECK_EQ(records.size(), 1u);
 }
 
 TEST(Preload_ChapterMemoryAndFrameBudgets) {

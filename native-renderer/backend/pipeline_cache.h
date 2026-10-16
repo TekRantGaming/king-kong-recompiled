@@ -22,7 +22,9 @@
 #pragma once
 
 #include <cstdint>
+#include <atomic>
 #include <cstdio>
+#include <mutex>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -131,21 +133,30 @@ class PipelineCacheFile {
   // be opened for writing (loaded() still holds what could be read).
   bool Open(const std::string& path);
   void Close();
-  bool is_open() const { return file_ != nullptr; }
+  bool is_open() const { return open_.load(std::memory_order_relaxed); }
 
   const std::vector<PipelineRecord>& loaded() const { return loaded_; }
   // Records seen so far (loaded or appended): Append ignores one that is already known.
   bool Known(const PipelineRecord& record) const { return keys_.count(PipelineKey(record)) != 0; }
-  // Appends a record the first time it is seen. True when it was new.
+  // Queues a record the first time it is seen (memory only). True when it was new.
   bool Append(const PipelineRecord& record);
+  // Writes the queued records to the file now. Task 177: the game renderer calls it on its background
+  // file writer, never on the render thread; Append and has_pending stay safe meanwhile (the file and
+  // the queue have their own locks). Close() writes what is still queued.
   void Flush();
+  bool has_pending() const { return pending_count_.load(std::memory_order_relaxed) != 0; }
 
   // What was wrong with an existing file, for the log ("" = fine or absent).
   const std::string& note() const { return note_; }
   size_t appended() const { return appended_; }
 
  private:
+  std::mutex file_mutex_;     // file_ (the writer thread writes while the render thread appends)
   std::FILE* file_ = nullptr;
+  std::atomic<bool> open_{false};
+  std::mutex pending_mutex_;  // pending_
+  std::vector<PipelineRecord> pending_;
+  std::atomic<size_t> pending_count_{0};
   std::vector<PipelineRecord> loaded_;
   std::unordered_set<uint64_t> keys_;
   std::string note_;
