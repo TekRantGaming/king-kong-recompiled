@@ -5348,7 +5348,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // lb, rb, start, up, down, left, right, lt, rt)
   // one at a time as a controller ("pad:", "ps:") or the keyboard ("kb:", the
   // default), logging "KK dev: input <step>"; "shot:<name>" logs
-  // "KK dev: shot <name>" and waits for a capture. The mouse, at 1280 x 720
+  // "KK dev: shot <name>" and holds the page for a capture. The mouse, at 1280 x 720
   // layout positions: "move:X:Y", "click:X:Y", "down:X:Y", "up", "wheel:N".
   // "setup:5" is the look step; "reset-beta" does to the settings what switching to
   // stable does (and saves them); "type:<text>" types text (New game's name); "whats-new" opens What's new as after 1.9.11; "update-test"
@@ -5388,7 +5388,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     REXLOG_INFO("KK dev: input {}", t);
     if (t.rfind("shot:", 0) == 0) {
       REXLOG_INFO("KK dev: shot {}", t.substr(5));
-      at = now + 1.6;
+      rex::FlushLogging();
+      at = now + 4.0;
       return;
     }
     // Private Extras tests choose a save, then navigate/activate through normal UI actions.

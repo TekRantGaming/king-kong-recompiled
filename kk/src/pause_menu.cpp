@@ -424,7 +424,7 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
   // Developer-only: KK_DEV_PAUSE_INPUT="pad:down,pad:a,shot:name,..." presses buttons once the
   // menu is open, as the launcher's KK_DEV_LAUNCHER_INPUT does (pad:/ps:/kb: a b x y lb rb start
   // up down left right lt rt; move:X:Y and click:X:Y at 1280 x 720 positions), logging
-  // "KK dev: pause input <step>" and, for shot:<name>, "KK dev: shot <name>" (then waits 1.6 s).
+  // "KK dev: pause input <step>" and, for shot:<name>, "KK dev: shot <name>" (then holds for capture).
   void DevInput() {
     ImGuiIO& io = ImGui::GetIO();
     static bool release = false;
@@ -450,7 +450,8 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
     REXLOG_INFO("KK dev: pause input {}", t);
     if (t.rfind("shot:", 0) == 0) {
       REXLOG_INFO("KK dev: shot {}", t.substr(5));
-      at = now + 1.6;
+      rex::FlushLogging();
+      at = now + 4.0;
       return;
     }
     // Deterministic integration checks still drive the actual list with pad
