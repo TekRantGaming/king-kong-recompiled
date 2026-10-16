@@ -40,7 +40,15 @@ All are read at start (init only).
 | `native_upscaler_rules` | empty | a file of upscale point rules: `post ps=<hash>` starts the post chain, `scene ps=<hash>` never does |
 
 The output size is `native_render_scale`'s; the input size is the output divided by the mode's ratio (as
-each SDK reports it for that output size).
+each SDK reports it for that output size). With `native_render_scale=auto` (the default) and an upscaler on,
+the output is `native_upscaler_output`, which the game sets at the start (not saved) to **the resolution
+chosen in the launcher** (DECISIONS 16 Oct): the fullscreen mode, the desktop's size for borderless, or the
+window's size, as the largest 16:9 picture inside it (`kk::UpscalerOutputSize`; the presenter letterboxes
+or stretches it as before). Nothing is drawn above that size: a 4K screen set to 1080p gets 1920x1080 out
+of the upscaler, and the draw resolution scale (the render quality preset) no longer sets the output. A
+Custom render quality's draw resolution scale is an upper limit (smaller of the two). A 1920x1200 window
+gets 1920x1080, a 2560x1080 one 1920x1080. Without an upscaler nothing changed: the draw resolution scale
+(the render quality in 720p steps) is the size.
 
 ### Who gets what
 
@@ -78,9 +86,9 @@ or artwork (see "What a release ships"). No frame generation anywhere.
   restart and Quit wait for the thread. An upscaler chosen on another PC that this one cannot run stays
   listed as "(not on this PC)".
 - **What a choice sets.** A temporal upscaler sets `present_effect` to `bilinear` (no FSR 1 on top),
-  `native_upscaler` to its value and `kk_render_quality` to `native`: the upscaler's output is the screen's
-  size in the game's 720p steps (`ApplyRenderPreset` uses Native whenever a temporal upscaler is on with
-  the native renderer), and the upscaler draws fewer pixels itself. **Upscaler mode** then sets
+  `native_upscaler` to its value and `kk_render_quality` to `native`: the upscaler's output is the chosen
+  resolution's 16:9 picture (`ApplyRenderPreset` sets `native_upscaler_output`; before 16 Oct it was the
+  screen's size in 720p steps, so 1080p got 2560x1440), and the upscaler draws fewer pixels itself. **Upscaler mode** then sets
   `native_upscaler_quality`: Native AA (DLAA with DLSS), Quality, Balanced, Performance, Ultra Performance,
   with the input and output sizes shown. Render quality and Internal resolution are hidden meanwhile. FSR 1
   and NIS keep their rows as before.

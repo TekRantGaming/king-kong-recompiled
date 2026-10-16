@@ -2,6 +2,7 @@
 #include "settings.h"
 #include "graphics_presets.h"
 #include <chrono>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -12,6 +13,7 @@ REXCVAR_DEFINE_STRING(native_upscaler, "off", "Test", "Test");
 REXCVAR_DEFINE_STRING(native_backend, "auto", "Test", "Test");
 REXCVAR_DEFINE_STRING(gpu_plugin, "native", "Test", "Test");
 REXCVAR_DEFINE_STRING(native_upscaler_quality, "quality", "Test", "Test");
+REXCVAR_DEFINE_STRING(native_upscaler_output, "", "Test", "Test");
 REXCVAR_DEFINE_STRING(native_ao_quality, "auto", "Test", "Test");
 REXCVAR_DEFINE_INT32(native_ao_samples, 2, "Test", "Test");
 REXCVAR_DEFINE_INT32(ao_mode, 0, "Test", "Test");
@@ -37,7 +39,9 @@ void Check(bool condition, const char* message) {
   if (!condition) { std::cerr << "FAIL: " << message << '\n'; std::exit(1); }
 }
 void Equals(const char* name, const char* expected) {
-  Check(rex::cvar::GetFlagByName(name) == expected, name);
+  const std::string actual = rex::cvar::GetFlagByName(name);
+  if (actual != expected) std::cerr << name << " = '" << actual << "', expected '" << expected << "'" << '\n';
+  Check(actual == expected, name);
 }
 }
 int main() {
@@ -176,8 +180,61 @@ int main() {
   rex::cvar::SetFlagByName("resolution_scale", "2");
   ApplyHardwareRecommendation(true, 1920, 1080);
   Equals("kk_render_quality", "custom");
-  ApplyRenderPreset(1080);
+  ApplyRenderPreset(1920, 1080);
   Equals("resolution_scale", "2");
+  // The upscaler's output is the chosen resolution, never above it (DECISIONS 16 Oct).
+  auto size = [](std::pair<int, int> s, int w, int h) { return s.first == w && s.second == h; };
+  Check(size(UpscalerOutputSize(1920, 1080), 1920, 1080), "4K screen set to 1080p: 1080p out");
+  Check(size(UpscalerOutputSize(2560, 1440), 2560, 1440), "4K screen set to 1440p: 1440p out");
+  Check(size(UpscalerOutputSize(3840, 2160), 3840, 2160), "4K desktop: 4K out");
+  Check(size(UpscalerOutputSize(1600, 900), 1600, 900), "900p");
+  Check(size(UpscalerOutputSize(1366, 768), 1365, 768), "1366x768: the 16:9 inside");
+  Check(size(UpscalerOutputSize(1920, 1200), 1920, 1080), "16:10 window: letterboxed 16:9");
+  Check(size(UpscalerOutputSize(2560, 1080), 1920, 1080), "ultrawide: pillarboxed 16:9");
+  Check(size(UpscalerOutputSize(3440, 1440), 2560, 1440), "3440x1440: pillarboxed 16:9");
+  Check(size(UpscalerOutputSize(1281, 721), 1281, 721), "odd window");
+  Check(size(UpscalerOutputSize(1001, 777), 1001, 563), "odd window, taller than 16:9");
+  Check(size(UpscalerOutputSize(800, 600), 800, 450), "4:3 window");
+  Check(size(UpscalerOutputSize(200, 100), 320, 180), "tiny window: the renderer's smallest scale");
+  Check(size(UpscalerOutputSize(0, 0), 320, 180), "no size");
+  Check(size(UpscalerOutputSize(1920, 1080, 1280, 720), 1280, 720), "custom 1x caps 1080p at 720p");
+  Check(size(UpscalerOutputSize(1920, 1080, 3840, 2160), 1920, 1080), "custom 3x never above 1080p");
+  for (int w = 640; w <= 7680; w += 37)
+    for (int h = 360; h <= 4320; h += 53) {
+      const auto [ow, oh] = UpscalerOutputSize(w, h);
+      Check(ow <= w && oh <= h, "never above the chosen size");
+      Check(ow == w || oh == h, "fills one side");
+      Check(std::abs(ow * 9 - oh * 16) <= 16, "16:9");
+    }
+  // ApplyRenderPreset with an upscaler: native_upscaler_output is the chosen size (custom: capped).
+  rex::cvar::SetFlagByName("native_upscaler", "off");
+  ApplyRenderPreset(1920, 1080);
+  Equals("native_upscaler_output", "");  // no upscaler: nothing asked
+  rex::cvar::SetFlagByName("native_upscaler", "dlss");
+  ApplyRenderPreset(1920, 1080);
+  Equals("native_upscaler_output", "1920x1080");  // custom resolution_scale 2 (2560x1440): the screen is less
+  rex::cvar::ResetAllToDefaults();
+  rex::cvar::SetFlagByName("kk_render_quality", "quality");
+  rex::cvar::SetFlagByName("native_upscaler", "dlss");
+  ApplyRenderPreset(1920, 1080);
+  Equals("native_upscaler_output", "1920x1080");
+  Equals("draw_resolution_scale_x", "2");  // kept as before (logs; an upscaler turned off live)
+  ApplyRenderPreset(2560, 1600);
+  Equals("native_upscaler_output", "2560x1440");
+  rex::cvar::SetFlagByName("native_upscaler", "off");
+  ApplyRenderPreset(1920, 1080);
+  Equals("native_upscaler_output", "");
+  Equals("draw_resolution_scale_x", "1");  // no upscaler: unchanged (Quality at 1080p: 720p)
+  rex::cvar::SetFlagByName("native_upscaler", "fsr3");
+  rex::cvar::SetFlagByName("kk_render_quality", "custom");
+  rex::cvar::SetFlagByName("draw_resolution_scale_x", "1");
+  rex::cvar::SetFlagByName("draw_resolution_scale_y", "1");
+  ApplyRenderPreset(3840, 2160);
+  Equals("native_upscaler_output", "1280x720");  // a Custom scale is the upper limit
+  rex::cvar::SetFlagByName("draw_resolution_scale_x", "4");
+  rex::cvar::SetFlagByName("draw_resolution_scale_y", "4");
+  ApplyRenderPreset(2560, 1440);
+  Equals("native_upscaler_output", "2560x1440");
   rex::cvar::ResetAllToDefaults();
   rex::cvar::SetFlagByName("kk_original_look", "true");
   const auto before = rex::cvar::GetFlagByName("native_ao_samples");

@@ -345,7 +345,8 @@ REXCVAR_DEFINE_BOOL(native_gi_gpu_time, false, "Native renderer",
 REXCVAR_DEFINE_STRING(native_upscaler, "auto", "Native renderer",
                       "Temporal upscaler: off, auto (DLSS on NVIDIA RTX, FSR 4 on supported AMD, XeSS on Intel, "
                       "FSR 3.1 otherwise), fsr3, fsr4, dlss, xess (bilinear: a plain stretch, for comparisons). "
-                      "The output is native_render_scale's size. auto until the game sets its own default (the "
+                      "The output is native_render_scale's size (auto: the resolution chosen in the launcher). "
+                      "auto until the game sets its own default (the "
                       "best one this PC runs) once its settings are read. Applied live with its mode, DLSS preset, "
                       "sharpness, mip bias and reactive mask: the upscaler is made again at a frame boundary")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
@@ -354,6 +355,12 @@ REXCVAR_DEFINE_STRING(native_upscaler_quality, "quality", "Native renderer",
                       "The upscaler's mode: native (anti-aliasing at the output resolution: DLAA, FSR native AA, "
                       "XeSS native AA), quality, balanced, performance, ultra_performance")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
+
+REXCVAR_DEFINE_STRING(native_upscaler_output, "", "Native renderer",
+                      "With an upscaler and native_render_scale auto: the upscaler's output size, WxH. The game "
+                      "sets it (not saved) to the resolution chosen in the launcher as a 16:9 picture, never above "
+                      "it; empty: the draw resolution scale's size")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_STRING(native_upscaler_point, "post", "Native renderer",
                       "Where the upscaler runs: post (before the game's post effects and HUD) or present (at the "
