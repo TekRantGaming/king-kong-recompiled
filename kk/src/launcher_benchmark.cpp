@@ -156,7 +156,7 @@ Page ResultsPage(const Result& r) {
   }
   out << "### " << T("Settings") << "\n";
   out << "- " << F("{0}, render {1}, upscaler {2}, preset {3}, frame cap {4}",
-                   {get("api"), get("render"), get("upscaler"), get("preset"),
+                   {get("api"), get("render"), get("upscaler"), T(get("preset")),
                     get("cap") == "0" ? std::string(T("Off")) : get("cap")}) << "\n";
   out << "- " << F("The first {0} seconds of each chapter are played but not measured.", {Num(std::atof(get("settle").c_str()), 0)})
       << "\n";

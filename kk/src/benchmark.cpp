@@ -85,6 +85,8 @@ RouteReplay replay;
 std::string route_id;
 // Measured intervals per pass and chapter.
 std::array<std::array<std::vector<double>, kRouteChapters>, kMaxPasses> pass_guest, pass_host;
+// Chapters played to their end (a cancelled run keeps the ones it finished).
+std::array<std::array<bool, kRouteChapters>, kMaxPasses> chapter_done{};
 // Every guest swap, settling included, for frames.csv.
 struct Swap { uint8_t pass, chapter; bool measured; float seconds; double ms; };
 std::vector<Swap> swaps;
@@ -266,6 +268,12 @@ void EndReplayChapter() {
   }
 }
 
+std::string PresetLabel() {
+  const auto preset = rex::cvar::GetFlagByName("kk_render_quality");
+  for (const auto& item : RenderPresets()) if (item.id == preset) return item.label;
+  return "Custom";
+}
+
 const char* StatusKey() {
   return cancelled ? "cancelled" : interrupted ? "interrupted" : drift_detected ? "drift" :
       checkpoints_incomplete ? "unverified" : "complete";
@@ -293,12 +301,12 @@ void Finish() {
       int complete_passes = 0;
       for (int p = 0; p < passes; ++p) {
         bool whole = true;
-        for (size_t c = 0; c < chapters; ++c) whole = whole && !pass_guest[p][c].empty();
-        if (!whole) continue;
-        ++complete_passes;
+        for (size_t c = 0; c < chapters; ++c) whole = whole && chapter_done[p][c] && !pass_guest[p][c].empty();
+        if (whole) ++complete_passes;
         std::vector<double> total;
         double cpu_sum = 0, cpu_w = 0, gpu_sum = 0, gpu_w = 0;
         for (size_t c = 0; c < chapters; ++c) {
+          if (!chapter_done[p][c] || pass_guest[p][c].empty()) continue;
           PassScope r; r.pass = p + 1; r.chapter = int(c + 1);
           r.frames = Summarize(pass_guest[p][c]);
           const auto& bg = final_monitor.background[size_t(p) * kRouteChapters + c];
@@ -309,6 +317,7 @@ void Finish() {
           rows.push_back(r);
           total.insert(total.end(), pass_guest[p][c].begin(), pass_guest[p][c].end());
         }
+        if (!whole) continue;  // the whole route only for a pass that played every chapter
         PassScope t; t.pass = p + 1; t.chapter = 0; t.frames = Summarize(total);
         t.other_cpu = cpu_w > 0 ? cpu_sum / cpu_w : -1; t.other_gpu = gpu_w > 0 ? gpu_sum / gpu_w : -1;
         rows.push_back(t);
@@ -397,7 +406,7 @@ void Finish() {
       std::string status = std::string("status=") + StatusKey() + "\npasses=" + std::to_string(passes) +
           "\ncomplete_passes=" + std::to_string(complete_passes) + "\nsettle=" + std::to_string(settle_seconds) +
           "\napi=" + api + "\nrender=" + render + "\nupscaler=" + final_monitor.upscaler +
-          "\npreset=" + rex::cvar::GetFlagByName("kk_render_quality") + "\ncap=" + rex::cvar::GetFlagByName("kk_frame_rate") + '\n';
+          "\npreset=" + PresetLabel() + "\ncap=" + rex::cvar::GetFlagByName("kk_frame_rate") + '\n';
       for (size_t c = 0; c < chapters; ++c) status += "chapter" + std::to_string(c + 1) + '=' + ChapterName(c) + '\n';
       std::array<std::vector<double>, 4> graph_chapters;
       for (int p = 0; p < passes; ++p)
@@ -757,6 +766,7 @@ void GuestSwap() {
     // recorded pre-step checkpoint without inventing an extra game frame.
     if (replay_base) ObserveReplayPosition(seconds, replay_base);
     EndReplayChapter();
+    chapter_done[size_t(pass)][chapter] = true;
     measuring = false;
     monitor.Chapter(-1);
     if (chapter + 1 == recording.chapters.size() && pass + 1 >= passes) Finish();
