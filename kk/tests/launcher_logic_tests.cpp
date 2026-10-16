@@ -8,6 +8,7 @@
 #include "slider_input.h"
 #include "extras.h"
 #include "dev_movie_input.h"
+#include "video_modes.h"
 
 #include <bit>
 #include <chrono>
@@ -381,6 +382,23 @@ int main() {
   }
   movie[0x110C] = movie[0x1110] = movie[0x1130] = 0;
   Check(!kk::DevMoviePlaying(read_movie), "completed Extras playback cannot pause the next screen");
+  // A loaded save's video modes wait for the game's profile pointer and flip target (a launcher start loads
+  // the save on the title, where sub_825EE130 read guest 0x4DA4 and crashed), then apply exactly once.
+  {
+    using kk::play::NextVideoModeStep;
+    using kk::play::VideoModeStep;
+    Check(NextVideoModeStep(false, 0x1000, 0x2000, 1, 1) == VideoModeStep::kNothing, "no load, nothing to apply");
+    for (uint32_t profile : {0u, 0x1000u})
+      for (uint32_t target : {0u, 0x2000u})
+        for (uint32_t modes = 1; modes < 4; ++modes) {
+          const auto step = NextVideoModeStep(true, profile, target, modes & 1, modes >> 1);
+          Check(step == (profile && target ? VideoModeStep::kApply : VideoModeStep::kWait),
+                "video modes apply only once both game pointers are set");
+        }
+    Check(NextVideoModeStep(true, 0x1000, 0x2000, 0, 0) == VideoModeStep::kNothing,
+          "a save with both modes off calls nothing");
+    Check(NextVideoModeStep(true, 0, 0, 0, 0) == VideoModeStep::kWait, "pending modes keep waiting before the profile");
+  }
   // All launcher/pause slider ranges and F8's float/integer/opacity controls.
   for (auto range : std::vector<std::array<float, 3>>{{0,100,1}, {0,100,5}, {69,110,1}, {0,100,10},
        {0.05f,10,0.05f}, {0,50,1}, {0,1,0.05f}, {0,4,0.05f}, {0.25f,4,0.05f},
