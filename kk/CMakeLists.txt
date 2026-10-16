@@ -49,6 +49,7 @@ set(KINGKONG_SOURCES
     src/hfr_frame_time.cpp
     src/hfr_rowing.cpp
     src/hfr_splash.cpp
+    src/hfr_fish.cpp
     src/online.cpp
     src/discord_presence.cpp
     src/mouse_look.cpp
@@ -87,7 +88,7 @@ endif()
 option(KK_DEV_TOOLS "Build developer test aids such as KK_DEV_AUTOSKIP" OFF)
 if(KK_DEV_TOOLS)
     list(APPEND KINGKONG_SOURCES src/dev_lod.cpp src/dev_aa.cpp)
-    list(APPEND KINGKONG_SOURCES src/dev_tools.cpp src/dev_watch.cpp src/dev_ae.cpp src/dev_sound_trace.cpp src/dev_load_trace.cpp src/dev_frame_log.cpp src/dev_sample.cpp src/dev_venture.cpp src/dev_chapter_jump.cpp src/dev_pause.cpp)
+    list(APPEND KINGKONG_SOURCES src/dev_tools.cpp src/dev_watch.cpp src/dev_ae.cpp src/dev_sound_trace.cpp src/dev_load_trace.cpp src/dev_frame_log.cpp src/dev_sample.cpp src/dev_venture.cpp src/dev_chapter_jump.cpp src/dev_pause.cpp src/dev_fish.cpp)
 endif()
 
 if(WIN32)
@@ -167,6 +168,9 @@ if(KK_DEV_TOOLS)
     target_include_directories(kk-freecam-tests PRIVATE src)
     enable_testing()
     add_test(NAME free-camera COMMAND kk-freecam-tests)
+    add_executable(kk-hfr-fish-tests tests/hfr_fish_tests.cpp)
+    target_include_directories(kk-hfr-fish-tests PRIVATE src)
+    add_test(NAME hfr-fish-wiggle COMMAND kk-hfr-fish-tests)
     add_executable(kk-ps2-movie-tests tests/ps2_movies_tests.cpp)
     target_include_directories(kk-ps2-movie-tests PRIVATE src)
     enable_testing()
