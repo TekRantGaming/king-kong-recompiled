@@ -74,6 +74,7 @@ REXCVAR_DECLARE(bool, native_gi_temporal);
 REXCVAR_DECLARE(std::string, native_upscaler);
 REXCVAR_DECLARE(std::string, native_upscaler_quality);
 REXCVAR_DECLARE(std::string, native_upscaler_output);
+REXCVAR_DECLARE(std::string, native_frame_size);
 REXCVAR_DECLARE(std::string, native_upscaler_point);
 REXCVAR_DECLARE(std::string, native_upscaler_dlss_preset);
 REXCVAR_DECLARE(double, native_upscaler_sharpness);
@@ -117,12 +118,16 @@ std::string AutoRenderScale() {
   // With a temporal upscaler: the size the game asks for (native_upscaler_output, kk::ApplyRenderPreset:
   // the resolution chosen in the launcher as a 16:9 picture, never above it; DECISIONS 16 Oct). The
   // upscaler rebuilds that size and its mode picks the input from it.
+  auto size = [](const std::string& v) {
+    return !v.empty() && v.find('x') != std::string::npos && ParseRenderScale(v, 1280, 720).valid;
+  };
   const std::string upscaler = REXCVAR_GET(native_upscaler);
   if (!upscaler.empty() && upscaler != "off") {
-    const std::string output = REXCVAR_GET(native_upscaler_output);
-    if (const RenderScale s = ParseRenderScale(output, 1280, 720); !output.empty() && s.valid &&
-                                                                    output.find('x') != std::string::npos)
-      return output;
+    if (const std::string output = REXCVAR_GET(native_upscaler_output); size(output)) return output;
+  } else if (const std::string frame = REXCVAR_GET(native_frame_size); size(frame)) {
+    // Without one: the draw resolution scale's size, never above the chosen resolution (native_frame_size,
+    // kk::ApplyRenderPreset; DECISIONS 16 Oct late): a 1080p screen draws 1920x1080, not 2560x1440 shrunk.
+    return frame;
   }
   // Otherwise the scale the Xenos plugin would draw at (the runtime's rule, as kk/src/settings.cpp logs it):
   // resolution_scale when the player set it and the axis was left alone, else the axis, whose
@@ -300,7 +305,9 @@ GameSettings ReadGameSettings(bool vulkan) {
     REXGPU_INFO("rexgpu-native: render scale auto: {} ({})", game.render_scale,
                 game.render_scale == REXCVAR_GET(native_upscaler_output)
                     ? "the upscaler's output: the resolution chosen in the launcher"
-                    : "the draw resolution scale");
+                    : game.render_scale == REXCVAR_GET(native_frame_size)
+                          ? "no upscaler: the draw resolution scale's size, never above the chosen resolution"
+                          : "the draw resolution scale");
   }
   // --native_shadow_scale, else what --native_shadow_quality asks for (docs/lighting.md).
   game.shadow_scale = EffectiveShadowScale();

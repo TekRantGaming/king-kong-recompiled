@@ -3,7 +3,9 @@
 #include "graphics_presets.h"
 #include <chrono>
 #include <cstdlib>
+#include <algorithm>
 #include <fstream>
+#include <initializer_list>
 #include <iostream>
 #include <iterator>
 
@@ -14,6 +16,7 @@ REXCVAR_DEFINE_STRING(native_backend, "auto", "Test", "Test");
 REXCVAR_DEFINE_STRING(gpu_plugin, "native", "Test", "Test");
 REXCVAR_DEFINE_STRING(native_upscaler_quality, "quality", "Test", "Test");
 REXCVAR_DEFINE_STRING(native_upscaler_output, "", "Test", "Test");
+REXCVAR_DEFINE_STRING(native_frame_size, "", "Test", "Test");
 REXCVAR_DEFINE_STRING(native_ao_quality, "auto", "Test", "Test");
 REXCVAR_DEFINE_INT32(native_ao_samples, 2, "Test", "Test");
 REXCVAR_DEFINE_INT32(ao_mode, 0, "Test", "Test");
@@ -210,9 +213,11 @@ int main() {
   rex::cvar::SetFlagByName("native_upscaler", "off");
   ApplyRenderPreset(1920, 1080);
   Equals("native_upscaler_output", "");  // no upscaler: nothing asked
+  Equals("native_frame_size", "1920x1080");  // custom 2x (2560x1440) without an upscaler: never above 1080p
   rex::cvar::SetFlagByName("native_upscaler", "dlss");
   ApplyRenderPreset(1920, 1080);
   Equals("native_upscaler_output", "1920x1080");  // custom resolution_scale 2 (2560x1440): the screen is less
+  Equals("native_frame_size", "");  // with an upscaler its output is the frame
   rex::cvar::ResetAllToDefaults();
   rex::cvar::SetFlagByName("kk_render_quality", "quality");
   rex::cvar::SetFlagByName("native_upscaler", "dlss");
@@ -225,6 +230,7 @@ int main() {
   ApplyRenderPreset(1920, 1080);
   Equals("native_upscaler_output", "");
   Equals("draw_resolution_scale_x", "1");  // no upscaler: unchanged (Quality at 1080p: 720p)
+  Equals("native_frame_size", "1280x720");
   rex::cvar::SetFlagByName("native_upscaler", "fsr3");
   rex::cvar::SetFlagByName("kk_render_quality", "custom");
   rex::cvar::SetFlagByName("draw_resolution_scale_x", "1");
@@ -235,6 +241,63 @@ int main() {
   rex::cvar::SetFlagByName("draw_resolution_scale_y", "4");
   ApplyRenderPreset(2560, 1440);
   Equals("native_upscaler_output", "2560x1440");
+  // Without an upscaler the frame is never above the chosen resolution either (DECISIONS 16 Oct, late):
+  // the draw resolution scale's size, each axis at most the chosen resolution's 16:9 picture.
+  struct NoUpscalerCase { int sw, sh, scale, fw, fh; const char* what; };
+  for (const NoUpscalerCase& c : std::initializer_list<NoUpscalerCase>{
+           {1920, 1080, 2, 1920, 1080, "1080p, Native (2x): 1920x1080, not 2560x1440 shrunk"},
+           {1920, 1200, 2, 1920, 1080, "1200p, Native (2x): the 16:9 picture"},
+           {2560, 1440, 2, 2560, 1440, "1440p, Native: unchanged"},
+           {3840, 2160, 3, 3840, 2160, "4K, Native: unchanged"},
+           {3840, 2160, 2, 2560, 1440, "4K, Quality (2x): below stays"},
+           {1600, 900, 1, 1280, 720, "900p: 720p as before (below the chosen size is unchanged)"},
+           {1366, 768, 1, 1280, 720, "1366x768: 720p as before"},
+           {3200, 1800, 3, 3200, 1800, "1280x720 window at 250%: 3x capped to the window"},
+           {2560, 1080, 2, 1920, 1080, "ultrawide 1080p: the 16:9 picture"},
+           {1152, 648, 1, 1152, 648, "a window under 720p: never above it"},
+           {1920, 1080, 3, 1920, 1080, "custom 3x at 1080p: 1080p"},
+           {3840, 2160, 1, 1280, 720, "custom 1x (Original look) at 4K: 720p"},
+           {200, 100, 1, 320, 180, "tiny window: the renderer's smallest"}}) {
+    const auto [fw, fh] = NoUpscalerFrameSize(c.sw, c.sh, 1280 * c.scale, 720 * c.scale);
+    Check(fw == c.fw && fh == c.fh, c.what);
+  }
+  for (int w = 640; w <= 7680; w += 41)
+    for (int h = 360; h <= 4320; h += 59)
+      for (int scale = 1; scale <= 8; ++scale) {
+        const auto [fw, fh] = NoUpscalerFrameSize(w, h, 1280 * scale, 720 * scale);
+        const auto [pw, ph] = UpscalerOutputSize(w, h);
+        Check(fw <= pw && fh <= ph, "no upscaler: never above the chosen 16:9 picture");
+        Check(fw <= 1280 * scale && fh <= 720 * scale, "no upscaler: never above the draw scale's size");
+        Check(fw == std::min(1280 * scale, pw) && fh == std::min(720 * scale, ph), "no upscaler: the smaller");
+      }
+  rex::cvar::ResetAllToDefaults();
+  rex::cvar::SetFlagByName("native_upscaler", "off");
+  rex::cvar::SetFlagByName("kk_render_quality", "native");
+  ApplyRenderPreset(1920, 1080);
+  Equals("draw_resolution_scale_x", "2");  // the preset's 720p step, as before
+  Equals("native_frame_size", "1920x1080");  // drawn at 1080p
+  ApplyRenderPreset(1920, 1200);
+  Equals("native_frame_size", "1920x1080");
+  ApplyRenderPreset(2560, 1440);
+  Equals("native_frame_size", "2560x1440");
+  ApplyRenderPreset(3840, 2160);
+  Equals("native_frame_size", "3840x2160");
+  ApplyRenderPreset(1600, 900);
+  Equals("native_frame_size", "1280x720");  // below the chosen size: unchanged
+  rex::cvar::SetFlagByName("native_upscaler", "dlss");
+  ApplyRenderPreset(1920, 1080);
+  Equals("native_frame_size", "");
+  Equals("native_upscaler_output", "1920x1080");
+  rex::cvar::ResetAllToDefaults();
+  rex::cvar::SetFlagByName("native_upscaler", "off");
+  for (const auto& [name, value] : OriginalLookSettings()) rex::cvar::SetFlagByName(name, value);
+  // A fresh start: the axes at the plugin's 1 (a preset above moved their defaults in this process).
+  rex::cvar::SetFlagByName("draw_resolution_scale_x", "1");
+  rex::cvar::SetFlagByName("draw_resolution_scale_y", "1");
+  ApplyRenderPreset(1920, 1080);
+  Equals("native_frame_size", "1280x720");  // the Original look: 720p
+  ApplyRenderPreset(1152, 648);
+  Equals("native_frame_size", "1152x648");  // ... never above a smaller window
   rex::cvar::ResetAllToDefaults();
   rex::cvar::SetFlagByName("kk_original_look", "true");
   const auto before = rex::cvar::GetFlagByName("native_ao_samples");

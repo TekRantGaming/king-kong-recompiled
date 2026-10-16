@@ -296,6 +296,23 @@ std::pair<int, int> UpscalerOutputFor(int screen_w, int screen_h) {
   return UpscalerOutputSize(screen_w, screen_h);
 }
 
+std::pair<int, int> NoUpscalerFrameSize(int screen_w, int screen_h, int draw_w, int draw_h) {
+  const auto [pw, ph] = UpscalerOutputSize(screen_w, screen_h);
+  return {std::clamp(std::min(draw_w, pw), 320, 10240), std::clamp(std::min(draw_h, ph), 180, 5760)};
+}
+
+namespace {
+// Without a temporal upscaler: the frame the native renderer draws (native_frame_size, read by its
+// native_render_scale=auto), the draw resolution scale's size but never above the chosen resolution.
+void SetNoUpscalerFrame(int output_width, int output_height, int scale_x, int scale_y) {
+  const auto [fw, fh] = NoUpscalerFrameSize(output_width, output_height, 1280 * scale_x, 720 * scale_y);
+  SetCvarDefault("native_frame_size", std::to_string(fw) + "x" + std::to_string(fh));
+  REXLOG_INFO("KK: no upscaler: frame {}x{} (draw resolution scale {}x{}: {}x{}; the chosen resolution {}x{}{})", fw,
+              fh, scale_x, scale_y, 1280 * scale_x, 720 * scale_y, output_width, output_height,
+              fw < 1280 * scale_x || fh < 720 * scale_y ? ", never above it" : "");
+}
+}  // namespace
+
 void ApplyRenderPreset(int output_width, int output_height) {
   // A temporal upscaler (the native renderer's native_upscaler, Display > Upscaling) rebuilds the picture
   // at the resolution chosen in the launcher (never above it: DECISIONS 16 Oct) and draws fewer pixels
@@ -307,15 +324,26 @@ void ApplyRenderPreset(int output_width, int output_height) {
     SetCvarDefault("native_upscaler_output", std::to_string(ow) + "x" + std::to_string(oh));
     REXLOG_INFO("KK: upscaler output {}x{} (the chosen resolution {}x{}{})", ow, oh, output_width, output_height,
                 quality == "custom" ? ", at most the custom render scale" : "");
+    SetCvarDefault("native_frame_size", "");
   } else {
     SetCvarDefault("native_upscaler_output", "");
   }
-  if (quality == "custom") return; // retain explicitly supplied render scales
+  if (quality == "custom") {  // retain explicitly supplied render scales (without an upscaler: at most the screen)
+    if (!temporal)
+      SetNoUpscalerFrame(output_width, output_height, DrawScaleAxis("draw_resolution_scale_x"),
+                         DrawScaleAxis("draw_resolution_scale_y"));
+    return;
+  }
   // With an upscaler the draw resolution scale no longer sets the native renderer's output (above); it is
   // kept at the screen's size in 720p steps for the logs and for an upscaler turned off live.
   if (temporal) quality = "native";
   const int scale = RenderScaleFor(quality, output_height);
-  if (scale <= 0) return;  // custom: the player's resolution_scale is used as is
+  if (scale <= 0) {  // unknown preset: the player's resolution_scale is used as is (at most the screen)
+    if (!temporal)
+      SetNoUpscalerFrame(output_width, output_height, DrawScaleAxis("draw_resolution_scale_x"),
+                         DrawScaleAxis("draw_resolution_scale_y"));
+    return;
+  }
   // The runtime only honours resolution_scale when it differs from its default,
   // so a preset drives the per-axis scales instead (read directly). They are set
   // as defaults so the derived value is not written to the config, and any
@@ -327,6 +355,7 @@ void ApplyRenderPreset(int output_width, int output_height) {
   }
   REXLOG_INFO("KK: render preset {} at {}p output -> {}x ({}p)", quality,
               output_height, scale, scale * 720);
+  if (!temporal) SetNoUpscalerFrame(output_width, output_height, scale, scale);
 }
 
 namespace {
