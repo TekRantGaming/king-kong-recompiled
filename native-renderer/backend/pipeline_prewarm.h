@@ -20,6 +20,7 @@
 
 #include "backend/ao_config.h"
 #include "backend/lighting_config.h"
+#include "backend/pipeline_cache.h"
 #include "backend/upscale_config.h"
 
 namespace nr {
@@ -79,6 +80,8 @@ class PipelinePrewarm {
   bool Wait(double seconds);
   // The renderer making the pipelines (null before Start or after Stop), for tests.
   const GameRenderer* renderer() const { return renderer_.get(); }
+  // The records waiting for shaders the pack does not have (before Stop), for the setup's log.
+  std::vector<PipelineRecord> waiting_records();
   // Stops the workers once their current pipeline is made (the rest is left to the game) and saves
   // the driver's pipeline cache. Idempotent.
   void Stop();

@@ -1344,6 +1344,17 @@ first sessions.
 - Tests: `PipelineList_*` (a fresh install draws its first frame with every pipeline made and the list
   unchanged; with the player's file each pipeline is queued once; an absent or version 2 list is refused),
   `PipelineListMerger_*`, `PipelinesTool_MergeAndInfo` (runs the tool), `PipelineList_ReadLeavesTheFileAlone`.
+- Task 171 (16 Oct): the Beta 5 list (tour chapter starts plus a few player files) missed what gameplay draws:
+  the recorded benchmark route made 205 pipelines during play in Kong (one frame needed 57 at once) and 48 in
+  Necropolis, on Vulkan and D3D12 alike, with any settings (GI, DLSS, AO and render scale do not change which
+  records are missing). The Beta 6 list adds the route's recordings and the day's test runs
+  (`testbuilds\beta6-work\pipelines\kkpipelines-beta6-171.list`, 7594 records; game-derived, never in git):
+  setup prepares 4766 pipelines instead of 4235 and the route makes none during play. A list input must only
+  name shaders the pack has: the setup then logs `setup <api> pipeline waiting for shaders: vs .../... ps
+  .../...` for each record that cannot be made, and a list with any such record leaves the setup incomplete
+  (it runs again at every Play). Diagnostic: `NR_PIPELINE_LOG=<csv>` writes one row per pipeline a draw or pass
+  asked for that was not made yet (time, frame, key, `new`/`pending`/`draw-thread`/`pass`, wait, the record's
+  shaders).
 
 #### The driver's pipeline cache
 

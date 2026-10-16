@@ -442,6 +442,11 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
                 std::this_thread::sleep_for(std::chrono::milliseconds(20));
               }
               const auto p = prewarm.progress();
+              // Which records name shaders the pack does not have (a list to correct; task 171).
+              for (const auto& w : prewarm.waiting_records()) {
+                REXLOG_WARN("rexgpu-native: setup {} pipeline waiting for shaders: vs {:016X}/{:016X} ps {:016X}/{:016X} flags {}",
+                            kkshaders::packBackendName(backend), w.vs_hash, w.vs_input, w.ps_hash, w.ps_input, w.flags);
+              }
               prewarm.Stop();
               REXLOG_INFO("rexgpu-native: setup {} pipeline prewarm: {} listed, {} queued, {} finished, "
                           "{} failed, {} waiting for shaders",
