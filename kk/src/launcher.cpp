@@ -5780,6 +5780,16 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       OpenPlayView(PlayView::kExtras);
       return;
     }
+    if (t.rfind("benchmark:", 0) == 0) {  // as the benchmark pop-up's Quick (1) / Standard (3) run
+      // Not repeated by the launcher the finished run returns to.
+#if defined(_WIN32)
+      _putenv_s("KK_DEV_LAUNCHER_INPUT", "shot:returned-benchmark");
+#else
+      setenv("KK_DEV_LAUNCHER_INPUT", "shot:returned-benchmark", 1);
+#endif
+      StartBenchmark(std::clamp(std::atoi(t.c_str() + 10), 1, 5));
+      return;
+    }
     if (t == "page:settings") {  // as Home's Settings: the last Settings tab shown
       GoTo(settings_page_, /*settings_tab=*/true);
       return;
