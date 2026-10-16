@@ -14,6 +14,7 @@
 // tables (2D, 3D, cube and 2D array textures, samplers, vertex data buffers).
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -84,6 +85,14 @@ class GameRenderer {
     // Submit and complete the open list, then reopen it, before recycling
     // descriptors that are still referenced by current/queued draws.
     std::function<void(nvrhi::ICommandList*)> drain_descriptors;
+    // Versions of each per-draw volatile constant buffer (VS/PS/draw/scale, AO, lighting, motion).
+    // Vulkan keeps a version until the GPU has finished the list that wrote it. Versions of earlier,
+    // submitted lists are waited for when all are taken (our NVRHI patch, vulkan-buffer.cpp); those
+    // of the list being recorded cannot be. So one list takes at most volatile_budget() (7/8 of
+    // them): one more draw first completes the list with drain_descriptors and continues in it,
+    // rather than running out (task 154). D3D12's upload ring grows instead; the same bound keeps
+    // its memory in check. The game's own frames stay far below it.
+    uint32_t volatile_versions = 8192;
     // Read each vertex element with its declaration's own endian field (the
     // game's SHORT4N normals and tangents are 8in16 in 8in32 streams) rather
     // than the vertex buffer's. Proven on the game's frames: with the
@@ -216,6 +225,11 @@ class GameRenderer {
     uint64_t preloaded_resources = 0, preload_hits = 0, preload_hash_misses = 0, preload_bytes = 0;
     double resource_prepare_ms = 0;  // render-thread wall time of joined first-use batches
     uint64_t draw_constant_uploads = 0, draw_constant_identical = 0;
+    // Draws (and upscaler motion draws) recorded in one list since it opened or last completed:
+    // the most so far, the lists completed early to stay within volatile_budget(), and the draws
+    // skipped instead when the list cannot be completed (no drain_descriptors).
+    uint32_t volatile_peak_draws = 0, volatile_peak_motion = 0;
+    uint64_t volatile_completions = 0, volatile_skipped = 0;
     uint64_t scale_uploads = 0, scale_identical = 0;
     uint64_t vertex_binds = 0, vertex_repeated = 0;
     uint64_t descriptor_updates = 0, graphics_states = 0, pipeline_changes = 0;
@@ -261,6 +275,10 @@ class GameRenderer {
     AoGpuTimer::Window ao, gi, upscaler, shadows, water, volumetrics;
   };
   EffectGpuWindow TakeEffectGpuWindow();
+  // The most draws and motion draws one list took since the previous call (logged with the frame timing).
+  struct VolatileWindow { uint32_t draws = 0, motion = 0; };
+  VolatileWindow TakeVolatileWindow();
+  uint32_t volatile_budget() const { return std::max(1u, options_.volatile_versions - options_.volatile_versions / 8); }
 
   // Pipeline stutter (docs/backend.md, "Stutter counter"): frames in which a draw waited for its
   // pipeline (on a worker within the budget or with pipeline_wait, or made on the draw thread) or
@@ -1052,6 +1070,14 @@ class GameRenderer {
   double frame_wait_ms_ = 0;
   // This frame's stutter (render thread), folded into stutter_ at EndFrame.
   void NoteFrameWait(double ms);
+  // Counts a draw (or motion draw) against volatile_budget() and completes the list first when it is
+  // reached; false: skip the draw (the list cannot be completed).
+  bool NoteVolatileDraw(nvrhi::ICommandList* cl, bool motion);
+  nvrhi::ICommandList* volatile_list_ = nullptr;
+  uint64_t volatile_frame_ = ~0ull;
+  uint32_t volatile_draws_ = 0, volatile_motion_ = 0;
+  std::atomic<uint32_t> volatile_window_draws_{0}, volatile_window_motion_{0};
+  bool volatile_warned_ = false;
   bool frame_waited_ = false;
   double frame_stutter_wait_ms_ = 0;
   uint64_t deferred_motion_count_ = 0;

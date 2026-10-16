@@ -21,6 +21,7 @@
 */
 
 #include "vulkan-backend.h"
+#include <atomic>
 #include <sstream>
 
 #include <nvrhi/common/misc.h>
@@ -345,6 +346,46 @@ namespace nvrhi::vulkan
 
             if (!found)
             {
+                // KK (task 154): every version is held by command lists the GPU has not finished yet.
+                // Wait for the oldest submitted one instead of failing (which left the draw with the
+                // previous version's data). Versions pending in lists not yet submitted cannot be
+                // waited for: the application must submit first (the native renderer completes its
+                // frame list before one list can take all versions).
+                uint64_t oldestID = 0;
+                uint32_t oldestQueue = 0;
+                for (uint32_t index = 0; index < maxVersions; index++)
+                {
+                    const uint64_t info = buffer->versionTracking[index];
+                    if (info == 0 || (info & c_VersionSubmittedFlag) == 0)
+                        continue;
+                    const uint32_t queueIndex = uint32_t(info >> c_VersionQueueShift) & c_VersionQueueMask;
+                    const uint64_t id = info & c_VersionIDMask;
+                    if (queueIndex >= uint32_t(CommandQueue::Count) || id <= queueCompletionValues[queueIndex])
+                        continue;
+                    if (oldestID == 0 || id < oldestID)
+                    {
+                        oldestID = id;
+                        oldestQueue = queueIndex;
+                    }
+                }
+                if (oldestID != 0)
+                {
+                    Queue* queue = m_Device->getQueue(CommandQueue(oldestQueue));
+                    if (queue && queue->waitCommandList(oldestID, ~0ull))
+                    {
+                        queueCompletionValues[oldestQueue] = queue->updateLastFinishedID();
+                        static std::atomic<bool> s_Warned{ false };
+                        if (!s_Warned.exchange(true))
+                        {
+                            std::stringstream ss;
+                            ss << "Volatile constant buffer " << utils::DebugNameToString(buffer->desc.debugName) <<
+                                ": all " << maxVersions << " versions in use, waited for the GPU (shown once)";
+                            m_Context.warning(ss.str());
+                        }
+                        continue;
+                    }
+                }
+
                 // Not enough versions - need to relay this information to the developer.
                 // This has to be a real message and not assert, because asserts only happen in the
                 // debug mode, and buffer versioning will behave differently in debug vs. release,

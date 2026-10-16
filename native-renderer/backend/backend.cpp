@@ -827,6 +827,17 @@ void Backend::LogFrameTiming() {
       threaded_ ? fmt::format("{:.2f}", per(m.render_idle_us, p.render_idle_us)) : std::string("-"),
       per(m.reuse_wait_us, p.reuse_wait_us), (m.pipeline_wait_ms - p.pipeline_wait_ms) / n, per(m.submit_us, p.submit_us),
       per(m.refresh_us, p.refresh_us), gpu(frame_gpu), frame_gpu.max_ms, groups);
+#if NR_GAME_RENDERER
+  if (g) {
+    // Headroom of the per-draw volatile constant buffers (task 154).
+    const GameRenderer::VolatileWindow w = g->TakeVolatileWindow();
+    const GameRenderer::Stats& s = g->stats();
+    REXLOG_INFO("rexgpu-native: draws per list: peak {} (motion {}) in this window, {} (motion {}) so far; budget {} of "
+                "{} versions; {} lists completed early, {} draws skipped",
+                w.draws, w.motion, s.volatile_peak_draws, s.volatile_peak_motion, g->volatile_budget(),
+                g->options().volatile_versions, s.volatile_completions, s.volatile_skipped);
+  }
+#endif
 }
 
 void Backend::PresentNow(rex::ui::Presenter* presenter, uint32_t frontbuffer_width,

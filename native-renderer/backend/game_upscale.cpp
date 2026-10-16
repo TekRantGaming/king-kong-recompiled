@@ -226,7 +226,7 @@ bool GameRenderer::UpscaleInitialize() {
     d.byteSize = size;
     d.isConstantBuffer = true;
     d.isVolatile = true;
-    d.maxVersions = 8192;
+    d.maxVersions = options_.volatile_versions;
     d.debugName = name;
     return device_->createBuffer(d);
   };
@@ -775,6 +775,7 @@ void GameRenderer::UpscaleMotionPass(nvrhi::ICommandList* cl, HostTarget* depth_
     mc.params[2] = vulkan ? 1.0f : -1.0f;
     mc.params[3] = 0.0f;
     if (m.pipeline.flags&kRecordTessellation) std::memcpy(&mc.params[3],&m.previous_tessellation_flags,sizeof(uint32_t));
+    if (!NoteVolatileDraw(cl, true)) continue;  // within the volatile versions (task 154)
     cl->writeBuffer(u.motion_vs_constants, m.constants.data(), sizeof(float) * 1024);
     cl->writeBuffer(u.motion_draw_constants, &m.dc, sizeof(m.dc));
     cl->writeBuffer(u.motion_constants, &mc, sizeof(mc));

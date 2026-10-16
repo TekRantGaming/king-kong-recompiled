@@ -335,6 +335,7 @@ struct Fixture {
   NativeTableCapacities table_capacities = kNativeTableCapacities;
   bool force_table_capacities = false;
   unsigned descriptor_drains = 0;
+  uint32_t volatile_versions = 0;  // 0: the renderer's default
   Fixture() = default;
   explicit Fixture(float sx, float sy = 0.0f, float shadow = 0.0f)
       : scale_x(sx), scale_y(sy > 0.0f ? sy : sx), shadow_scale(shadow) {}
@@ -368,6 +369,7 @@ struct Fixture {
     g->options().render_scale_y = scale_y;
     g->options().shadow_scale = shadow_scale;
     g->options().guest_frame_width = kSize;
+    if (volatile_versions) g->options().volatile_versions = volatile_versions;
     if (!g->Initialize()) {
       Fail(__FILE__, __LINE__, "GameRenderer::Initialize failed");
       return false;
@@ -987,6 +989,53 @@ TEST(Draw_ReusesIdenticalDrawConstantsAndKeepsAlphaChanges) {
     CHECK_EQ(f.game->stats().draws, uint64_t(frame + 1) * 5);
     CHECK_EQ(f.game->stats().draw_constant_uploads, uint64_t(frame + 1) * 3);
     CHECK_EQ(f.game->stats().draw_constant_identical, uint64_t(frame + 1) * 2);
+  }
+}
+
+// Task 154: a list takes at most 7/8 of each per-draw volatile buffer's versions. A frame with
+// more draws completes its GPU work part-way and continues in a fresh list, instead of
+// running out (NVRHI's "maxVersions ... insufficient", the draw keeping stale constants). Every
+// draw here changes the VS and PS constants, so each takes new versions.
+TEST(Draw_MoreDrawsThanVolatileVersionsCompleteTheListInParts) {
+  for (bool drain : {true, false}) {
+    Fixture f;
+    f.volatile_versions = 32;  // a budget of 28 draws per list
+    if (!f.Init()) return;
+    if (!drain) f.game->options().drain_descriptors = nullptr;  // cannot complete: skips instead
+    const uint32_t rt = f.BindMainSurface();
+    const auto p = f.MakeColorPipeline(true);
+    f.SetDeclaration(p.decl);
+    f.SetShaders(p.vs, p.ps_const);
+    f.SetStream(0, f.NewVertexBuffer(Bytes(QuadTriangles(kQuadrants[0], 0xFFFFFFFF))), 0, 16);
+    const float offsets[4][2] = {{0, 0}, {1, 0}, {0, -1}, {1, -1}};  // c0 moves the top-left quad
+    const Rgb colors[4] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}, {1, 1, 0}};
+    for (uint32_t frame = 0; frame < 3; ++frame) {
+      f.Clear(kClearTarget0, 0xFF000000);
+      const uint32_t draws = drain ? 100 : 28;  // without completion only the budget's draws are drawn
+      for (uint32_t i = 0; i < draws + (drain ? 0 : 4); ++i) {
+        const uint32_t q = i % 4;
+        // Each quadrant's last drawn draw has its full colour, the earlier ones a darker shade, and
+        // the skipped ones white (they must not reach the picture).
+        const float shade = i + 4 >= draws ? 1.0f : float(i + 1) / 128.0f;
+        f.SetConstants(true, 0, {offsets[q][0], offsets[q][1], 0.0f, 0.0f});
+        if (i >= draws) f.SetConstants(false, 0, {1.0f, 1.0f, 1.0f, 1.0f});
+        else f.SetConstants(false, 0, {float(colors[q].r) * shade, float(colors[q].g) * shade, float(colors[q].b) * shade, 1.0f});
+        f.Draw(4, 0, 6);
+      }
+      const Pixels px = f.Present(rt, drain ? "volatile_parts" : "volatile_skipped");
+      f.CheckQuadrants(px, colors, __LINE__);
+    }
+    const GameRenderer::Stats& s = f.game->stats();
+    CHECK_EQ(s.volatile_peak_draws, 28u);
+    if (drain) {
+      CHECK_EQ(s.draws, uint64_t(300));
+      CHECK_EQ(s.volatile_completions, uint64_t(3 * 3));  // 100 draws: completed after 28, 56 and 84
+      CHECK_EQ(s.volatile_skipped, uint64_t(0));
+    } else {
+      CHECK_EQ(s.draws, uint64_t(3 * 28));
+      CHECK_EQ(s.volatile_completions, uint64_t(0));
+      CHECK_EQ(s.volatile_skipped, uint64_t(12));
+    }
   }
 }
 

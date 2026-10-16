@@ -138,7 +138,7 @@ bool GameRenderer::LightingSetBindings(nvrhi::BindingSetDesc& set0) {
   d.byteSize = sizeof(kkshaders::LightingConstants);
   d.isConstantBuffer = true;
   d.isVolatile = true;
-  d.maxVersions = 8192;
+  d.maxVersions = options_.volatile_versions;
   d.debugName = "Game lighting constants";
   lighting_constants_ = device_->createBuffer(d);
   if (!lighting_constants_) return false;
