@@ -76,7 +76,7 @@ class KingKongApp : public rex::ReXApp {
         PPCImageConfig));
   }
 
-  ~KingKongApp() override { kk::movies::Shutdown(); kk::benchmark::Shutdown(); kk::SetUiPaintRequest({}); kk::startup::CleanExit(); }
+  ~KingKongApp() override { kk::FinishDisplayModePrefetch(); kk::movies::Shutdown(); kk::benchmark::Shutdown(); kk::SetUiPaintRequest({}); kk::startup::CleanExit(); }
 
  protected:
   bool OnWindowCloseRequested() override {
@@ -228,6 +228,8 @@ class KingKongApp : public rex::ReXApp {
     cb.output_size = [this] { return OutputSize(); };
     cb.display_modes = [this](int monitor) { return kk::ListDisplayModes(monitor, window()); };
     cb.desktop_mode = [this](int monitor) { return kk::DesktopDisplayMode(monitor, window()); };
+    // The Display page's Resolution list, made on a worker while the launcher opens (display_modes.h).
+    kk::PrefetchDisplayModes(std::atoi(rex::cvar::GetFlagByName("monitor").c_str()), window());
     kk::ShowLauncher(imgui_drawer(), immediate_drawer(),
                       {defaults.game_data_root, defaults.user_data_root, defaults.config_path},
                       std::move(cb));

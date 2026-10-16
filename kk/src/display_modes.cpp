@@ -2,9 +2,13 @@
 
 #include "platform.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <future>
+#include <mutex>
+#include <unordered_set>
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
@@ -27,6 +31,10 @@ DisplayMode FromSdk(const rex::ui::DisplayMode& m) { return {m.width, m.height, 
 int Monitor() { return std::atoi(rex::cvar::GetFlagByName("monitor").c_str()); }
 
 std::optional<std::pair<int, int>> g_applied_size;
+
+// PrefetchDisplayModes's worker (UI thread only: started, waited for).
+std::future<void> g_prefetch;
+bool g_prefetched = false;
 
 }  // namespace
 
@@ -51,14 +59,29 @@ std::optional<DisplayMode> ParseDisplayMode(const std::string& value) {
   return m;
 }
 
+void PrefetchDisplayModes(int monitor, const rex::ui::Window* window) {
+  if (g_prefetched) return;
+  g_prefetched = true;
+  g_prefetch = std::async(std::launch::async, [monitor, window] {
+    const auto start = std::chrono::steady_clock::now();
+    const size_t count = rex::ui::GetFullscreenDisplayModes(monitor, window).size();
+    REXLOG_INFO("KK: display {}: {} fullscreen modes listed ahead in {:.0f} ms", monitor, count,
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+  });
+}
+
+void FinishDisplayModePrefetch() {
+  if (g_prefetch.valid()) g_prefetch.get();
+}
+
 std::vector<DisplayMode> ListDisplayModes(int monitor, const rex::ui::Window* window) {
+  FinishDisplayModePrefetch();
   std::vector<DisplayMode> out;
+  std::unordered_set<std::string> seen;
   for (const rex::ui::DisplayMode& m : rex::ui::GetFullscreenDisplayModes(monitor, window)) {
     const DisplayMode mode = FromSdk(m);
     // Two rates that print the same (59.94 and 59.95) are one choice.
-    bool seen = false;
-    for (const DisplayMode& o : out) seen = seen || o.Value() == mode.Value();
-    if (!seen && mode.width >= 640 && mode.height >= 480) out.push_back(mode);
+    if (mode.width >= 640 && mode.height >= 480 && seen.insert(mode.Value()).second) out.push_back(mode);
   }
   std::string list;
   for (const DisplayMode& m : out) list += (list.empty() ? "" : ", ") + m.Value();
@@ -85,6 +108,7 @@ std::optional<std::pair<int, int>> FullscreenModeSize() {
 }
 
 void ApplyFullscreenMode(rex::ui::Window* window) {
+  FinishDisplayModePrefetch();
   g_applied_size.reset();
   if (!window) {
     REXLOG_WARN("KK: fullscreen mode: no window");

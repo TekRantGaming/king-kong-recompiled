@@ -39,6 +39,15 @@ std::optional<DisplayMode> ParseDisplayMode(const std::string& value);
 // UI thread.
 std::vector<DisplayMode> ListDisplayModes(int monitor, const rex::ui::Window* window);
 
+// Lists the display's modes once on a worker thread, so the first Settings > Display open doesn't wait for it (Windows
+// takes about a second for a monitor with hundreds of modes; SDL keeps the list afterwards). Call at launcher start
+// (UI thread); ListDisplayModes and ApplyFullscreenMode wait for it, so SDL's mode list is only ever used by one
+// thread at a time.
+void PrefetchDisplayModes(int monitor, const rex::ui::Window* window);
+
+// Waits for PrefetchDisplayModes's worker (if any). UI thread; before the window or SDL go away.
+void FinishDisplayModePrefetch();
+
 // The display's mode on the desktop (width 0 when unknown); `monitor` as above. UI thread.
 DisplayMode DesktopDisplayMode(int monitor, const rex::ui::Window* window);
 

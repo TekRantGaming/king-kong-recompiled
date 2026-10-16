@@ -860,11 +860,13 @@ class SettingsPages {
     items.push_back(Section("Extras"));
     for (int id : {1, 8}) {
       const bool old = id == 1;
+      const bool unlocked = play::ExtraUnlocked(*play::FindExtra(id), progress);
       auto it = ProfileToggle(old ? "Old movie filter" : "Horizontal flip",
-          "An original bonus video mode. Unlock it in Extras before changing it.",
+          unlocked ? "An original bonus video mode, unlocked in Extras."
+                   : "An original bonus video mode. Unlock it in Extras before changing it.",
           old ? play::ProfileOption::kOldMovie : play::ProfileOption::kHorizontalFlip,
           old ? profile.old_movie : profile.horizontal_flip);
-      Disable(it, !play::ExtraUnlocked(*play::FindExtra(id), progress), "Locked");
+      Disable(it, !unlocked, "Locked");
       items.push_back(std::move(it));
     }
   }
@@ -5764,7 +5766,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         auto& state = play_ != PlayView::kNone ? play_lists_[int(play_)] : lists_[page_ * 4 + sub_];
         state.focus = int(i);
         state.focus_label = focused_items_[i].label;
-        REXLOG_INFO("KK dev: launcher focused {} value {}", state.focus_label, focused_items_[i].value_text);
+        REXLOG_INFO("KK dev: launcher focused {} value {} help {}", state.focus_label, focused_items_[i].value_text,
+                    text::T(focused_items_[i].description));
         return;
       }
       REXLOG_INFO("KK dev: launcher focus FAIL {}", t.substr(6));

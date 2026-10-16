@@ -2,7 +2,8 @@
 - every settings heading and row in settings_layout.h, and the launcher's new page and shader texts, has a
   German, Spanish, French and Italian translation (placeholders kept, no em dashes);
 - the online player count reminder can never open by itself (owner, 16 Oct): no code opens it;
-- the shader screen shows one bar with one label: no step text is drawn.
+- the shader screen shows one bar with one label: no step text is drawn;
+- the bonus video modes' help text says unlocked or locked to match the save.
 Usage: launcher_text_tests.py <kk folder>"""
 import re
 import sys
@@ -46,6 +47,10 @@ strings |= {
     'finishes, because preparing the shaders uses its processor.',
     'Continue in the background', 'Menu music', 'Menu music volume', 'Switch Menu music on to set its volume.',
 }
+# Old movie filter / Horizontal flip (Graphics > Extras): the help text follows the unlock state (task 159).
+LOCKED_HELP = 'An original bonus video mode. Unlock it in Extras before changing it.'
+UNLOCKED_HELP = 'An original bonus video mode, unlocked in Extras.'
+strings |= {LOCKED_HELP, UNLOCKED_HELP}
 for s in sorted(strings):
     if s == 'Home':
         continue  # never drawn as text
@@ -75,6 +80,9 @@ if 'CvarToggle("Online player count"' not in launcher:
     fail('the About page lost its Online player count switch')
 if '"Online players"' not in launcher:
     fail('the setup lost its Online players entry')
+
+if not re.search(r'unlocked \? "' + re.escape(UNLOCKED_HELP) + r'"\s*:\s*"' + re.escape(LOCKED_HELP) + '"', launcher):
+    fail('the bonus video help text does not follow the unlock state')
 
 # One bar, one label: no step text on the shader screen or in the pack's status.
 shaders_cpp = (src / 'native_shaders.cpp').read_text(encoding='utf-8')

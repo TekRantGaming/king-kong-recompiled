@@ -5,6 +5,7 @@ constexpr Entry kEntries[] = {
     {"Old movie filter", "Alter Film", "Filtro de película antigua", "Filtre vieux film", "Filtro vecchio film"},
     {"Horizontal flip", "Horizontal spiegeln", "Inversión horizontal", "Retournement horizontal", "Ribaltamento orizzontale"},
     {"An original bonus video mode. Unlock it in Extras before changing it.", "Ein ursprünglicher Bonus-Bildmodus. Vor dem Ändern unter Extras freischalten.", "Un modo de vídeo adicional del juego original. Desbloquéalo en Extras para cambiarlo.", "Un mode vidéo bonus du jeu original. Débloquez-le dans les Extras pour le modifier.", "Una modalità video bonus del gioco originale. Sbloccala negli Extra per modificarla."},
+    {"An original bonus video mode, unlocked in Extras.", "Ein ursprünglicher Bonus-Bildmodus, in den Extras freigeschaltet.", "Un modo de vídeo adicional del juego original, desbloqueado en Extras.", "Un mode vidéo bonus du jeu original, débloqué dans les Extras.", "Una modalità video bonus del gioco originale, sbloccata negli Extra."},
     {"Aiming visor", "Zielvisier", "Visor de apuntado", "Viseur", "Mirino"},
     {"Show the game's aiming visor.", "Das Zielvisier des Spiels anzeigen.", "Muestra el visor de apuntado del juego.", "Affiche le viseur du jeu.", "Mostra il mirino del gioco."},
     {"Inventory", "Inventar", "Inventario", "Inventaire", "Inventario"},
