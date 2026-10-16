@@ -274,14 +274,22 @@ constexpr const char* kRestartCvars[] = {"present_effect", "window_width", "wind
                                          "d3d12_allow_variable_refresh_rate_and_tearing"};
 
 // The launcher's pages (owner, 16 Oct: a tidy top level). Home is the main menu: Play (its own pages,
-// PlayView, with Extras among them), Settings, Achievements and About. Settings has the six categories of
-// settings_layout.h as tabs; Achievements and About are pages of their own.
-enum Page { kHome, kDisplay, kGraphics, kAudio, kControls, kGameplay, kAdvanced, kAchievements, kAbout, kPageCount };
-constexpr const char* kPageNames[kPageCount] = {"Home", "Display", "Graphics", "Audio", "Controls", "Gameplay",
-                                               "Advanced", "Achievements", "About"};
+// PlayView, with Extras among them), Settings, Achievements and About. Settings has the seven categories of
+// settings_layout.h as tabs, then About as its last tab (owner, 16 Oct evening: Display, Graphics, Audio,
+// Controls, Gameplay, Cheats, Advanced, About). About is also on Home as a page of its own (no tabs), the same
+// page and rows (AboutItems); Achievements is a page of its own.
+enum Page { kHome, kDisplay, kGraphics, kAudio, kControls, kGameplay, kCheats, kAdvanced, kAbout, kAchievements,
+            kPageCount };
+constexpr const char* kPageNames[kPageCount] = {"Home",     "Display", "Graphics", "Audio", "Controls",    "Gameplay",
+                                               "Cheats",   "Advanced", "About",   "Achievements"};
+// The pages with settings rows (settings_layout.h, same order).
 constexpr Page kFirstSettingsPage = kDisplay, kLastSettingsPage = kAdvanced;
 constexpr bool IsSettingsPage(Page page) { return page >= kFirstSettingsPage && page <= kLastSettingsPage; }
 static_assert(kLastSettingsPage - kFirstSettingsPage + 1 == settings_layout::kPageCount);
+// Settings' tabs: those pages, then About.
+constexpr Page kLastSettingsTab = kAbout;
+constexpr int kSettingsTabCount = kLastSettingsTab - kFirstSettingsPage + 1;
+static_assert(kSettingsTabCount == 8);
 // Sub-pages of Controls.
 enum SubPage { kNoSubPage, kRemapPage, kKeysPage };
 // Play on Home: the Play menu and its pages (docs/menus.md).
@@ -1782,9 +1790,7 @@ class SettingsPages {
                                "The Ubisoft, Universal and WingNut movies before the title screen. Story movies "
                                "still play.",
                                "kk_skip_intros", "Play", "Skip"));
-    auto cheats = CheatItems();
-    items.insert(items.end(), std::make_move_iterator(cheats.begin()), std::make_move_iterator(cheats.end()));
-    return items;
+    return items;  // the cheats have their own tab (CheatItems)
   }
 
   // ----------------------------------------------------------- Controls ---
@@ -2085,6 +2091,7 @@ class SettingsPages {
   }
 
   // ------------------------------------------------------------- Cheats ---
+  // Settings' Cheats tab (settings_layout.h kCheatsRows), in the launcher and the pause menu.
   std::vector<Item> CheatItems() {
     std::vector<Item> items;
     items.push_back(Section("Cheats"));
@@ -2095,7 +2102,7 @@ class SettingsPages {
                                "kk_cheats"));
     const bool on = GetBool("kk_cheats");
     items.push_back(Section("Cheat list"));
-    for (const auto& cheat : kCheats) {
+    for (const auto& cheat : kk::kCheats) {  // the list (cheats.h), not the Page
       // Every chapter is open in the Play menu's Chapter select (docs/menus.md): no "All chapters".
       if (std::string_view(cheat.id) == "chapters") continue;
       Item it = CvarToggle(cheat.label, "One of the game's own cheats.", std::string("kk_cheat_") + cheat.id);
@@ -2282,9 +2289,13 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // or Chapter select.
     const std::string open_on = Get("kk_launcher_open");
     rex::cvar::ResetToDefault("kk_launcher_open");  // never saved
-    if (files_ok_ && open_on == "benchmark") {  // back from a benchmark run: its results
+    // Back from a benchmark run: its results, over the About it was started from (Home's, or Settings' tab).
+    if (files_ok_ && (open_on == "benchmark" || open_on == "benchmark-settings")) {
       page_ = kAbout;
+      about_in_settings_ = open_on == "benchmark-settings";
+      if (about_in_settings_) settings_page_ = kAbout;
       open_benchmark_results_ = true;
+      REXLOG_INFO("KK launcher: back from the benchmark to {}", about_in_settings_ ? "Settings > About" : "About");
     }
     if (files_ok_ && (open_on == "play" || open_on == "chapters")) {
       OpenPlayMenu();
@@ -2754,9 +2765,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   }
 
   // ------------------------------------------------------------ top bar ---
-  // The top of every page but the setup's: on Settings the six categories as tabs (LB and RB, or a click,
-  // move between them) with SETTINGS at the right; on Achievements and About the page's name; on Home
-  // nothing but the online player count. The Play pages have their own (DrawPlayHeader).
+  // The top of every page but the setup's: on Settings its eight tabs (LB and RB, or a click, move between
+  // them) with SETTINGS at the right; on Achievements and Home's About the page's name; on Home nothing but
+  // the online player count. The Play pages have their own (DrawPlayHeader).
   void DrawTopBar(ImDrawList* dl) {
     const float s = S();
     const online::Counts counts = online::Get();
@@ -2765,14 +2776,14 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     const float right = o_.x + w_ - Margin();
     const float ly = std::round(o_.y + 74 * s);
     if (page_ != kHome) {
-      const std::string caption = IsSettingsPage(page_) ? Upper(T("Settings")) : std::string("KING KONG");
+      const std::string caption = OnSettingsTab() ? Upper(T("Settings")) : std::string("KING KONG");
       const float caption_fs = 15 * s, caption_tr = 4 * s;
       const float caption_width = ui::TrackedWidth(f.display, caption_fs, caption, caption_tr);
       float ux = 0, uw = 0;
-      if (IsSettingsPage(page_)) {
+      if (OnSettingsTab()) {
         if (tab_names_lang_ != int(text::Current()) || tab_names_.empty()) {  // made once per language
           tab_names_.clear();
-          for (int p = kFirstSettingsPage; p <= kLastSettingsPage; ++p) tab_names_.push_back(Upper(T(kPageNames[p])));
+          for (int p = kFirstSettingsPage; p <= kLastSettingsTab; ++p) tab_names_.push_back(Upper(T(kPageNames[p])));
           tab_names_lang_ = int(text::Current());
         }
         const int clicked = ui::DrawTabs(dl, glyphs_, PromptSet(), tab_names_, int(page_) - kFirstSettingsPage,
@@ -2780,7 +2791,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                                          w_ - Margin() * 2 - caption_width - 32 * s);
         if (clicked >= 0 && clicked != int(page_) - kFirstSettingsPage) {
           ui::Cue(ui::Sound::kTab);
-          GoTo(Page(kFirstSettingsPage + clicked));
+          GoTo(Page(kFirstSettingsPage + clicked), /*settings_tab=*/true);
         }
       } else {
         const float fs = 15 * s, tr = 1.6f * s, cy = o_.y + 44 * s;
@@ -2811,14 +2822,24 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
   }
 
-  void GoTo(Page page) {
+  // Settings' tabs: a page with settings rows, or About when it was opened as Settings' last tab.
+  bool OnSettingsTab() const { return IsSettingsPage(page_) || (page_ == kAbout && about_in_settings_); }
+
+  // `settings_tab`: open `page` as one of Settings' tabs (Home's Settings, the tab bar). About opened from a
+  // Settings tab (LB/RB, a click, the dev page: step) stays a tab; from Home it is its own page.
+  void GoTo(Page page, bool settings_tab = false) {
     if (page == kDisplay && page_ != kDisplay) {
       monitors_.clear();
       display_modes_monitor_ = -1;
       LoadDisplayModes();
     }
+    const bool was_tab = OnSettingsTab();
+    const bool about_tab = page == kAbout && (settings_tab || was_tab);
+    if (page != page_ || about_tab != about_in_settings_)
+      REXLOG_INFO("KK launcher: page {}{}", kPageNames[page], about_tab || IsSettingsPage(page) ? " (Settings tab)" : "");
+    about_in_settings_ = about_tab;
     if (page != page_) sub_ = kNoSubPage;
-    if (IsSettingsPage(page)) settings_page_ = page;
+    if (IsSettingsPage(page) || about_tab) settings_page_ = page;
     extras_return_focus_ = -1;  // only the Graphics visit an Extras row opened returns there
     side_focus_ = -1;
     play_ = PlayView::kNone;
@@ -2900,11 +2921,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     ui::Input& in = input_;
     if (play_ != PlayView::kNone) return HandlePlayInput();
     if (in.Pressed(Action::kPrevTab) || in.Pressed(Action::kNextTab)) {
-      // LB and RB move between the settings categories (only on Settings).
-      if (IsSettingsPage(page_)) {
-        const int dir = in.Pressed(Action::kNextTab) ? 1 : -1, n = kLastSettingsPage - kFirstSettingsPage + 1;
+      // LB and RB move between Settings' tabs, About included, wrapping round (only on Settings).
+      if (OnSettingsTab()) {
+        const int dir = in.Pressed(Action::kNextTab) ? 1 : -1, n = kSettingsTabCount;
         ui::Cue(ui::Sound::kTab);
-        GoTo(Page(kFirstSettingsPage + (int(page_) - kFirstSettingsPage + dir + n) % n));
+        GoTo(Page(kFirstSettingsPage + (int(page_) - kFirstSettingsPage + dir + n) % n), /*settings_tab=*/true);
       }
       in.Consume(Action::kPrevTab);
       in.Consume(Action::kNextTab);
@@ -2949,7 +2970,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // An update that was found stays one press away; checking, reinstalling and the rest are on About.
     if (update_ && update_->found && !installing_update_)
       e.push_back({F("Update to v{0}", {update_->found->version}), true, [this] { OpenUpdatePrompt(); }});
-    e.push_back({"Settings", true, [this] { GoTo(settings_page_); }});
+    e.push_back({"Settings", true, [this] { GoTo(settings_page_, /*settings_tab=*/true); }});
     e.push_back({"Achievements", true, [this] { GoTo(kAchievements); }});
     e.push_back({"About", true, [this] { GoTo(kAbout); }});
     e.push_back({"Quit", true, [this] { Quit(); }});
@@ -4599,6 +4620,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       case kDisplay: items = DisplayItems(); break;
       case kGraphics: items = GraphicsItems(); break;
       case kGameplay: items = GameplayItems(); break;
+      case kCheats: items = CheatItems(); break;
       case kAudio: items = AudioItems(); break;
       case kControls:
         items = sub_ == kRemapPage ? RemapItems() : sub_ == kKeysPage ? KeyItems() : ControlsItems();
@@ -4638,6 +4660,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         case kAudio: items = AudioItems(); break;
         case kControls: items = ControlsItems(); break;
         case kGameplay: items = GameplayItems(); break;
+        case kCheats: items = CheatItems(); break;
         case kAdvanced: items = AdvancedPageItems(); break;
         default: break;
       }
@@ -4925,9 +4948,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                 "kk_motion_blur", "kk_big_blur", "kk_fog", "ao_mode", "ao_strength", "native_ao_method",
                 "native_ao_apply", "native_ao_quality", "native_ao_samples", "native_gi", "native_gi_distance", "native_shadow_quality", "native_water_reflections", "native_volumetrics", "native_effect_buffers", "native_sharpness"};
       case kGameplay:
-        return {"kk_fov", "kk_camera_shake", "kk_camera_shake_strength", "kk_cheats", "kk_cheat_*",
-                "kk_achievement_toasts", "kk_achievement_style",
-                "kk_skip_intros", "user_language"};
+        return {"kk_fov", "kk_camera_shake", "kk_camera_shake_strength", "kk_achievement_toasts",
+                "kk_achievement_style", "kk_skip_intros", "user_language"};
+      case kCheats:
+        return {"kk_cheats", "kk_cheat_*"};
       case kAudio:
         return {"#profile", "kk_launcher_music", "kk_launcher_music_volume", "kk_launcher_sounds",
                 "kk_launcher_sounds_volume", "kk_achievement_sound", "kk_achievement_sound_file", "kk_achievement_volume"};
@@ -5034,6 +5058,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   void StartBenchmark(int passes) {
     rex::cvar::SetFlagByName("kk_benchmark_passes", std::to_string(passes));  // never saved
+    // Back to the About it was started from: Settings' tab or Home's page (king_kong_app.h passes it on).
+    rex::cvar::SetFlagByName("kk_benchmark_from", about_in_settings_ ? "settings" : "");
+    REXLOG_INFO("KK launcher: benchmark started from {}", about_in_settings_ ? "Settings > About" : "About");
     benchmark_pending_ = true;
     StartGame();
   }
@@ -5670,12 +5697,13 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     static const Step kSteps[] = {
         {kHome, kNoSubPage, "play"},         {kDisplay, kNoSubPage, "display"},
         {kGraphics, kNoSubPage, "graphics"}, {kGameplay, kNoSubPage, "gameplay"},
-        {kControls, kNoSubPage, "controls"}, {kControls, kRemapPage, "remap"},
-        {kAdvanced, kNoSubPage, "advanced"}, {kAchievements, kNoSubPage, "achievements"},
-        {kAbout, kNoSubPage, "about"}};
+        {kCheats, kNoSubPage, "cheats"},     {kControls, kNoSubPage, "controls"},
+        {kControls, kRemapPage, "remap"},    {kAdvanced, kNoSubPage, "advanced"},
+        {kAchievements, kNoSubPage, "achievements"}, {kAbout, kNoSubPage, "about"}};
     constexpr int kCount = int(std::size(kSteps));
     if (step < kCount) {
       page_ = kSteps[step].page;
+      about_in_settings_ = false;
       sub_ = kSteps[step].sub;
       modal_.open = false;
       REXLOG_INFO("KK dev: tour {}", kSteps[step].name);
@@ -5751,6 +5779,17 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       chapter_slot_ = std::atoi(t.c_str() + 12);
       OpenPlayMenu();
       OpenPlayView(PlayView::kExtras);
+      return;
+    }
+    if (t == "page:settings") {  // as Home's Settings: the last Settings tab shown
+      GoTo(settings_page_, /*settings_tab=*/true);
+      return;
+    }
+    if (t == "focused") {  // the page, whether it is a Settings tab, and its focused row
+      const auto& state = play_ != PlayView::kNone ? play_lists_[int(play_)] : lists_[page_ * 4 + sub_];
+      REXLOG_INFO("KK dev: launcher focused page {} tab {} row {} label {}",
+                  play_ != PlayView::kNone ? PlayViewName(play_) : kPageNames[page_], OnSettingsTab() ? 1 : 0,
+                  state.focus, focused_ ? focused_->label : std::string("-"));
       return;
     }
     if (t.rfind("page:", 0) == 0) {
@@ -5910,7 +5949,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   bool setup_shaders_ = false;        // being prepared as the install's last step
   bool update_shaders_ = false;       // built again in full after an update (DrawShaderScreen)
   bool rebuild_shaders_screen_ = false;  // Graphics > Rebuild shaders: the shader screen until it's done
-  Page settings_page_ = kDisplay;     // the settings category Home's Settings opens (the last one shown)
+  Page settings_page_ = kDisplay;     // the Settings tab Home's Settings opens (the last one shown, About too)
+  bool about_in_settings_ = false;    // About is open as Settings' last tab (else Home's About page)
   std::vector<std::string> tab_names_;  // the settings tabs, upper case, in tab_names_lang_
   int tab_names_lang_ = -1;
   bool waiting_for_native_ = false;   // Play was pressed: they are checked (and built) first
@@ -5983,6 +6023,7 @@ class InGameSettingsImpl final : public InGameSettings, private SettingsPages {
       case kDisplay: items = DisplayItems(); break;
       case kGraphics: items = GraphicsItems(); break;
       case kGameplay: items = GameplayItems(); break;
+      case kCheats: items = CheatItems(); break;
       case kAudio: items = AudioItems(); break;
       case kControls:
         items = sub_ == kRemapPage ? RemapItems() : sub_ == kKeysPage ? KeyItems() : ControlsItems();
@@ -6037,8 +6078,8 @@ class InGameSettingsImpl final : public InGameSettings, private SettingsPages {
 }  // namespace
 
 const char* InGameSettings::PageName(Page page) {
-  static const char* const kNames[kPageCount] = {"Display", "Graphics", "Audio", "Controls", "Gameplay", "Advanced"};
-  return page >= 0 && page < kPageCount ? kNames[page] : "";
+  static_assert(int(kPageCount) == int(settings_layout::kPageCount));  // the same tabs, same order
+  return page >= 0 && page < kPageCount ? settings_layout::kPageNames[page] : "";
 }
 
 std::unique_ptr<InGameSettings> CreateInGameSettings(rex::ui::ImmediateDrawer* immediate,

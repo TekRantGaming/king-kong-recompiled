@@ -215,8 +215,13 @@ class KingKongApp : public rex::ReXApp {
       nr::kk::StopLauncherPrewarm();
       // The launcher's choice of passes (a standard or a quick run) goes to the new process.
       const std::string passes = rex::cvar::GetFlagByName("kk_benchmark_passes");
+      // Started from Settings' About tab: the results open there again (benchmark.cpp kk_benchmark_from).
+      const bool from_settings = rex::cvar::GetFlagByName("kk_benchmark_from") == "settings";
+      rex::cvar::ResetToDefault("kk_benchmark_from");  // never saved
       if (kk::play::RelaunchWith(L"--kk_benchmark=true --kk_benchmark_passes=" +
-                                 std::wstring(passes.begin(), passes.end()) + L" --kk_skip_launcher=true")) {
+                                 std::wstring(passes.begin(), passes.end()) +
+                                 (from_settings ? L" --kk_benchmark_from=settings" : L"") +
+                                 L" --kk_skip_launcher=true")) {
         kk::startup::CleanExit();
         kk::handoff::QuitWhenChildShown([this] { CloseLauncherProcess(); });
       }

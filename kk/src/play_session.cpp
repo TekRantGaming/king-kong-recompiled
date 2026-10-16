@@ -529,7 +529,7 @@ bool RelaunchWith(const std::wstring& extra) {
   static constexpr const wchar_t* kDropped[] = {L"--kk_skip_launcher", L"--kk_start", L"--kk_launcher_open",
                                                L"--kk_startup_child", L"--kk_benchmark", L"--kk_benchmark_record",
                                                L"--kk_benchmark_route", L"--kk_benchmark_passes",
-                                               L"--kk_benchmark_settle"};
+                                               L"--kk_benchmark_settle", L"--kk_benchmark_from"};
   auto dropped = [](const std::wstring& arg) {
     for (const wchar_t* d : kDropped) {
       const std::wstring p(d);

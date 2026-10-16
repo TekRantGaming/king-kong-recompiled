@@ -1,6 +1,7 @@
 // Where every setting lives: the settings categories and the order of their rows, shared by the launcher's
 // Settings and the pause menu's (launcher.cpp, SettingsPages). The order follows what most PC games use
-// (owner, 16 Oct): Display, Graphics, Audio, Controls, Gameplay, then Advanced; inside each, the usual order
+// (owner, 16 Oct): Display, Graphics, Audio, Controls, Gameplay, Cheats, then Advanced (Cheats has its own tab,
+// owner 16 Oct evening; the launcher adds About as its last tab, which has no settings rows); inside each, the usual order
 // (Display: window mode, monitor, resolution, refresh rate, VSync, frame-rate cap, HDR; Graphics: preset,
 // graphics API, upscaler and quality, anti-aliasing, the effects, advanced items last; Audio: master,
 // music, effects, speech, menu sounds; Controls: sensitivity, inversion, vibration, bindings; Gameplay:
@@ -16,8 +17,9 @@
 
 namespace kk::settings_layout {
 
-enum Page { kDisplay, kGraphics, kAudio, kControls, kGameplay, kAdvanced, kPageCount };
-inline constexpr const char* kPageNames[kPageCount] = {"Display", "Graphics", "Audio", "Controls", "Gameplay", "Advanced"};
+enum Page { kDisplay, kGraphics, kAudio, kControls, kGameplay, kCheats, kAdvanced, kPageCount };
+inline constexpr const char* kPageNames[kPageCount] = {"Display", "Graphics", "Audio", "Controls", "Gameplay",
+                                                      "Cheats", "Advanced"};
 
 struct Row {
   const char* section;  // the heading the row is under (English, translated as drawn)
@@ -111,6 +113,9 @@ inline constexpr Row kGameplayRows[] = {
     {"Camera", "Camera shake"},
     {"Camera", "Camera shake strength"},
     {"Game", "Startup logos"},
+};
+
+inline constexpr Row kCheatsRows[] = {
     {"Cheats", "Cheats"},
     {"Cheat list", "*"},
 };
@@ -137,6 +142,7 @@ inline Rows RowsOf(Page page) {
     case kAudio: return {kAudioRows, std::size(kAudioRows)};
     case kControls: return {kControlsRows, std::size(kControlsRows)};
     case kGameplay: return {kGameplayRows, std::size(kGameplayRows)};
+    case kCheats: return {kCheatsRows, std::size(kCheatsRows)};
     case kAdvanced: return {kAdvancedRows, std::size(kAdvancedRows)};
     default: return {nullptr, 0};
   }

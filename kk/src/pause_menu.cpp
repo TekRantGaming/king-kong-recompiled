@@ -460,7 +460,8 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
       static const std::pair<const char*, InGameSettings::Page> pages[] = {
           {"display", InGameSettings::kDisplay}, {"graphics", InGameSettings::kGraphics},
           {"gameplay", InGameSettings::kGameplay}, {"audio", InGameSettings::kAudio},
-          {"controls", InGameSettings::kControls}, {"advanced", InGameSettings::kAdvanced}};
+          {"controls", InGameSettings::kControls}, {"cheats", InGameSettings::kCheats},
+          {"advanced", InGameSettings::kAdvanced}};
       for (const auto& [name, page] : pages) if (t.substr(9) == name) {
         OpenSettings(page);
         for (const auto& row : settings_->Items(page))

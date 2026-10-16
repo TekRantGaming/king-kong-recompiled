@@ -19,7 +19,8 @@ namespace kk {
 
 class InGameSettings {
  public:
-  enum Page { kDisplay, kGraphics, kAudio, kControls, kGameplay, kAdvanced, kPageCount };
+  // The launcher's settings tabs (settings_layout.h, same order); About is the launcher's only.
+  enum Page { kDisplay, kGraphics, kAudio, kControls, kGameplay, kCheats, kAdvanced, kPageCount };
   static const char* PageName(Page page);  // English, translated as drawn
 
   virtual ~InGameSettings() = default;
