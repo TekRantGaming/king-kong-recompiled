@@ -39,7 +39,7 @@ bool GameRenderer::AoSetBindings(nvrhi::BindingSetDesc& set0) {
   d.byteSize = sizeof(AmbientConstants);
   d.isConstantBuffer = true;
   d.isVolatile = true;
-  d.maxVersions = 8192;
+  d.maxVersions = options_.volatile_versions;
   d.debugName = "Game AO constants";
   ao_constants_ = device_->createBuffer(d);
   if (!ao_constants_) return false;

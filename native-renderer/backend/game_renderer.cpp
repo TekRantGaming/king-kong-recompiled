@@ -210,6 +210,12 @@ bool GameRenderer::Initialize() {
   memory_floor_y_ = std::min(options_.render_scale_y, 1.0f);
   memory_scale_aware_ = !(options_.debug & 16) &&
                        std::max({options_.render_scale_x, options_.render_scale_y, options_.shadow_scale}) > 1.0f;
+  // Developer test (task 154): fewer volatile versions, so an ordinary frame shows the completion
+  // path (KK_DEV_VOLATILE_VERSIONS=1024 completes every list of a ~1,500-draw scene part-way).
+  if (const char* value = std::getenv("KK_DEV_VOLATILE_VERSIONS"); value && *value) {
+    options_.volatile_versions = uint32_t(std::clamp(std::atoi(value), 64, 65536));
+    Logf(LogLevel::kWarning, "rexgpu-native: KK_DEV_VOLATILE_VERSIONS: %u volatile versions", options_.volatile_versions);
+  }
   if (const char* path = std::getenv("NR_RESOURCE_PROFILE"); path && *path) {
     resource_profile_file_ = std::fopen(path, "w");
     if (resource_profile_file_) {
@@ -275,7 +281,7 @@ bool GameRenderer::Initialize() {
     d.byteSize = size;
     d.isConstantBuffer = true;
     d.isVolatile = true;
-    d.maxVersions = 8192;
+    d.maxVersions = options_.volatile_versions;
     d.debugName = name;
     return device_->createBuffer(d);
   };
@@ -540,7 +546,64 @@ void GameRenderer::PrepareDescriptorDraw(nvrhi::ICommandList* cl, const GameShad
   lighting_.color_slot = lighting_.depth_slot = 0;
   lighting_.color_slot_texture = lighting_.depth_slot_texture = nullptr;
   lighting_.constants_valid = false;
+  volatile_draws_ = volatile_motion_ = 0;  // every volatile version is free again too
   Logf(LogLevel::kInfo, "rexgpu-native: descriptor pressure: completed GPU work and recycled tables at frame %llu", static_cast<unsigned long long>(frame_));
+}
+
+bool GameRenderer::NoteVolatileDraw(nvrhi::ICommandList* cl, bool motion) {
+  // Each draw writes at most one version of each per-draw volatile buffer (VS/PS/draw/scale, AO and
+  // lighting; motion draws their own three), so the draws a list took bound the versions it holds.
+  if (volatile_list_ != cl || volatile_frame_ != frame_) {
+    volatile_list_ = cl;
+    volatile_frame_ = frame_;
+    volatile_draws_ = volatile_motion_ = 0;
+  }
+  uint32_t& count = motion ? volatile_motion_ : volatile_draws_;
+  if (count >= volatile_budget()) {
+    if (!options_.drain_descriptors) {
+      ++stats_.volatile_skipped;
+      if (!volatile_warned_) {
+        volatile_warned_ = true;
+        Logf(LogLevel::kWarning, "rexgpu-native: more than %u draws in one frame; extra draws are skipped",
+             volatile_budget());
+      }
+      return false;
+    }
+    // Complete the GPU work so far (the versions of this list and the frames still on the GPU) and
+    // continue in a fresh list. Only for a frame far heavier than the game's own.
+    const auto start = std::chrono::steady_clock::now();
+    options_.drain_descriptors(cl);
+    NoteFrameWait(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+    ++stats_.volatile_completions;
+    // The reopened list must write every volatile buffer again before a draw binds it.
+    constants_valid_ = ao_constants_valid_ = false;
+    lighting_.constants_valid = false;
+    volatile_draws_ = volatile_motion_ = 0;
+    if (!volatile_warned_) {
+      volatile_warned_ = true;
+      Logf(LogLevel::kWarning, "rexgpu-native: more than %u draws in one frame (frame %llu); the frame's GPU work is "
+           "completed in parts (shown once)", volatile_budget(), static_cast<unsigned long long>(frame_));
+    }
+  }
+  const uint32_t n = ++count;
+  uint32_t& peak = motion ? stats_.volatile_peak_motion : stats_.volatile_peak_draws;
+  if (n > peak) {
+    peak = n;
+    // A new record above 2,048 (the game's own frames stay under about 1,600): noted every 512.
+    if (n >= 2048 && n % 512 == 0)
+      Logf(LogLevel::kInfo, "rexgpu-native: %u %sdraws in one list (frame %llu, budget %u)", n, motion ? "motion " : "",
+           static_cast<unsigned long long>(frame_), volatile_budget());
+  }
+  std::atomic<uint32_t>& window = motion ? volatile_window_motion_ : volatile_window_draws_;
+  if (n > window.load(std::memory_order_relaxed)) window.store(n, std::memory_order_relaxed);
+  return true;
+}
+
+GameRenderer::VolatileWindow GameRenderer::TakeVolatileWindow() {
+  VolatileWindow w;
+  w.draws = volatile_window_draws_.exchange(0, std::memory_order_relaxed);
+  w.motion = volatile_window_motion_.exchange(0, std::memory_order_relaxed);
+  return w;
 }
 
 void GameRenderer::RecycleDescriptors(Table table) {
@@ -1687,6 +1750,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   // AO hook (game_ao.cpp): classify the draw; at the end of the opaque pass the occlusion goes into
   // the scene before this draw.
   PrepareDescriptorDraw(cl, *vs, ps.get());
+  if (!NoteVolatileDraw(cl, false)) return;
   if (scene_ao_ || ao_constants_) AoDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
   // GI hook (game_gi.cpp): at the end of the opaque pass the bounce light goes in (after the AO's occlusion).
   if (scene_gi_) GiDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
