@@ -239,6 +239,7 @@ class GameRenderer {
   // Record the fallback contents before the first draw or built-in pass can sample them.
   void UploadDummies(nvrhi::ICommandList* cl);
   Options& options() { return options_; }
+  uint64_t frame_number() const { return frame_; }  // the frame EndFrame publishes (dev traces)
   // Any target or texture at a scale other than 1 (the pixel shaders must be render scale aware).
   bool scaled() const {
     return bool(options_.effect_settings) || memory_scale_aware_ ||

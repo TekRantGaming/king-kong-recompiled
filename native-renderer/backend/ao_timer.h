@@ -33,7 +33,8 @@ class AoGpuTimer {
   }
 
   // Around one piece of AO work in a command list (Begin and End in the same list).
-  void Begin(nvrhi::ICommandList* cl) {
+  // label_frame: the frame number the trace file records for this piece (default: the timer's own count).
+  void Begin(nvrhi::ICommandList* cl, uint64_t label_frame = UINT64_MAX) {
     if (open_) return;
     nvrhi::TimerQueryHandle q;
     if (!free_.empty()) {
@@ -45,11 +46,12 @@ class AoGpuTimer {
     if (!q) return;
     cl->beginTimerQuery(q);
     open_ = q;
+    open_label_ = label_frame;
   }
   void End(nvrhi::ICommandList* cl) {
     if (!open_) return;
     cl->endTimerQuery(open_);
-    pending_.push_back({open_, frame_});
+    pending_.push_back({open_, frame_, open_label_ == UINT64_MAX ? frame_ : open_label_});
     open_ = nullptr;
   }
 
@@ -77,7 +79,7 @@ class AoGpuTimer {
       pending_.pop_front();
       const double seconds = double(device_->getTimerQueryTime(p.query));
       total_s_ += seconds;
-      if (trace_) std::fprintf(trace_, "%llu,%.6f\n", static_cast<unsigned long long>(p.frame), 1000 * seconds);
+      if (trace_) std::fprintf(trace_, "%llu,%.6f\n", static_cast<unsigned long long>(p.label), 1000 * seconds);
       device_->resetTimerQuery(p.query);
       free_.push_back(p.query);
       if (p.frame != last_frame_counted_) {
@@ -110,12 +112,14 @@ class AoGpuTimer {
   struct Pending {
     nvrhi::TimerQueryHandle query;
     uint64_t frame = 0;
+    uint64_t label = 0;
   };
   nvrhi::IDevice* device_;
   FILE* trace_ = nullptr;
   const char* what_;
   const char* label_;
   nvrhi::TimerQueryHandle open_;
+  uint64_t open_label_ = UINT64_MAX;
   std::deque<Pending> pending_;
   std::vector<nvrhi::TimerQueryHandle> free_;
   uint64_t frame_ = 0;
