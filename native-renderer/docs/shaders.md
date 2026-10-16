@@ -583,9 +583,23 @@ ones it builds in code; see "Open problems" at the top), a few ms each.
 - Version = backend + translator hash + DXC identity + database hash (+ the scaled flag), in a text stamp beside
   the pack, written last.
 - The launcher checks at every start, builds in the background, makes it the install's last setup step, and Play
-  waits for it. Worker threads: one per hardware thread but one (the launcher's window and music keep it),
-  below normal priority. The launcher's music is silent while a build works. The setup screen shows the whole job
-  (each API's shaders, then its pipelines) as one bar, with "Step N of M" under it (kk/src/shader_progress.h).
+  waits for one still running. Play checks nothing more when the launcher's own check (or the setup) finished
+  for the settings the game starts with (`NativeShaderPack::OkForCurrentSettings`, task 144: Play used to check
+  again every time, and showed "Preparing shaders" for a moment). Worker threads: one per hardware thread but one
+  (the launcher's window and music keep it), below normal priority. The launcher's music is silent while a build
+  works. The setup screen shows the whole job (each API's shaders, then its pipelines) as ONE bar with one label,
+  no steps (owner, 16 Oct; kk/src/shader_progress.h): a step with nothing to do takes no room on it, and the
+  drawn bar eases towards the job's value, never back.
+- The pipelines the setup prepares are the game's (task 144): the game always runs with live settings, which put
+  the scale (b3) and lighting (b5) constants in every pipeline's layout. The setup prepares that live layout once,
+  with an upscaler's motion variants (`shader_pack_service.cpp`, `PipelinePrewarm::Settings::live_layout`); the
+  look, the upscaler, the render scale and AO on or off do not change it, so whatever the player picks after the
+  setup, Play makes nothing new. Only the ambient-only AO (`--native_ao_apply=ambient`, not a player setting) adds
+  b4 and pixel shaders of its own: the settings' AO is prepared and is in the stamp. Before, the setup prepared
+  two layouts the game never used (`SetupPrewarm_MakesTheGamesPipelineLayouts` in `nr_game_tests`; task 144 run:
+  the first game start's driver cache grew 45 MB before, 79 KB after). The readiness stamp says "pipeline
+  layouts 3". On Windows the stamp holds every adapter's driver version, so the check no longer makes a Vulkan
+  device to read the driver's cache at every launcher start and Play; elsewhere it still does.
 - Ship `dxcompiler` only.
 - A shader missing from the pack is compiled for the device's API only (it was compiled for both).
 

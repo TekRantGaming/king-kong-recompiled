@@ -168,6 +168,10 @@ class GameRenderer {
     // All original by default. Initial value before Initialize; effect_settings changes it live.
     LightingConfig lighting;
     std::function<EffectSettings()> effect_settings;
+    // The pipelines a run with live settings (effect_settings) makes, without the settings themselves:
+    // its scale constants (b3) and lighting constants (b5) in the layout. For the pipeline preparation
+    // before play (pipeline_prewarm.h), so what it makes is what the game makes (task 144).
+    bool live_layout = false;
     // Log every draw of this game frame (-1 none).
     int32_t dump_frame = -1;
     // Debugging aids (bits): 1 the game's clears are green, 2 the frame image
@@ -241,7 +245,7 @@ class GameRenderer {
   Options& options() { return options_; }
   // Any target or texture at a scale other than 1 (the pixel shaders must be render scale aware).
   bool scaled() const {
-    return bool(options_.effect_settings) || memory_scale_aware_ ||
+    return bool(options_.effect_settings) || options_.live_layout || memory_scale_aware_ ||
             options_.render_scale_x != 1.0f || options_.render_scale_y != 1.0f ||
            (options_.shadow_scale > 0.0f && options_.shadow_scale != 1.0f) ||
            (upscale_ && (upscale_->in_x != 1.0f || upscale_->in_y != 1.0f));
@@ -346,6 +350,8 @@ class GameRenderer {
 
   // The ambient-only AO's shader list (null unless --native_ao_apply=ambient), for the shader library.
   std::shared_ptr<const kkshaders::AmbientTable> ao_ambient_table() const;
+  // The pipelines' layout (Initialize): equal for two renderers whose pipelines can be shared.
+  uint64_t layout_signature() const { return layout_signature_; }
   // The lighting options' replacement pixel shaders (game_lighting.cpp), for the shader library.
   std::unordered_map<uint64_t, ShaderLibrary::Replacement> LightingReplacements() const;
   // The GTAO method's state (null with the legacy method; tests and logging).
@@ -738,6 +744,7 @@ class GameRenderer {
 
   std::array<DescriptorTable, kTableCount> tables_;
   nvrhi::BindingLayoutHandle constants_layout_;
+  uint64_t layout_signature_ = 0;
   nvrhi::BindingSetHandle constants_set_;
   nvrhi::BufferHandle vs_constants_, ps_constants_, draw_constants_, scale_constants_;
   std::vector<nvrhi::BindingLayoutHandle> pipeline_layouts_;  // set 0 + the six tables

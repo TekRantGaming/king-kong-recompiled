@@ -25,9 +25,10 @@ bool PipelinePrewarm::Start(const Settings& settings) {
   if (renderer_) return false;
   memory_ = std::make_unique<NoGuestMemory>();
   shaders_ = std::make_unique<ShaderLibrary>(device_, *memory_);
-  shaders_->SetRenderScaleAware(settings.shaders_aware ||
+  // As Backend::Initialize sets them up for the game.
+  shaders_->SetRenderScaleAware(settings.live_layout || settings.shaders_aware ||
       (settings.upscale.enabled() && settings.upscale.quality != UpscaleQuality::kNative));
-  shaders_->SetWaterReflections(settings.lighting.water_on());
+  shaders_->SetWaterReflections(!settings.live_layout && settings.lighting.water_on());
   shaders_->Initialize(settings.shader_pack, settings.dxc);
   auto renderer = std::make_unique<GameRenderer>(device_, *memory_, kknr::GuestMemory{}, shaders_.get());
   GameRenderer::Options& o = renderer->options();
@@ -41,6 +42,8 @@ bool PipelinePrewarm::Start(const Settings& settings) {
   o.lighting.census_every = 0;
   o.lighting.gpu_time = false;
   o.upscale = settings.upscale;
+  o.live_layout = settings.live_layout;
+  o.ao = settings.ao;  // before Initialize: the ambient-only AO adds a binding
   // Only the motion layout/shaders and input scale are needed, not an SDK context.
   // All temporal upscalers use the same object-motion pipeline layout.
   if (o.upscale.enabled()) o.upscale.kind = UpscalerKind::kBilinear;
@@ -50,7 +53,8 @@ bool PipelinePrewarm::Start(const Settings& settings) {
     shaders_.reset();
     return false;
   }
-  shaders_->SetReplacements(renderer->LightingReplacements());
+  shaders_->SetAmbientOcclusion(renderer->ao_ambient_table());
+  if (!settings.live_layout) shaders_->SetReplacements(renderer->LightingReplacements());
   renderer_ = std::move(renderer);
   // The driver's cache first: nothing may create a pipeline while its file is read.
   if (settings.driver_cache) renderer_->SetDriverPipelineCache(settings.driver_cache, settings.driver_cache_path);

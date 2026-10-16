@@ -78,6 +78,7 @@ struct NativeShaderPack::Impl {
   NrShaderPackJob* job = nullptr;
   NrShaderPackProgress last{};
   bool started = false;
+  std::string fingerprint;  // SettingsFingerprint() when the job started
   bool logged = false;
   bool worked = false;  // this job has built something (not only checked)
   ShaderProgressBar bar;
@@ -86,8 +87,9 @@ struct NativeShaderPack::Impl {
     if (!job) return;
     api->poll(job, &last);
     if (last.working) worked = true;
-    if (worked && !last.finished) {
+    if (!last.finished && last.steps > 0) {
       ShaderJobState s;
+      s.working = last.working != 0;
       s.step = last.step;
       s.steps = last.steps;
       s.step_kind = last.step_kind;
@@ -130,6 +132,7 @@ void NativeShaderPack::Start(const std::filesystem::path& cache_dir, const std::
   impl_->worked = false;
   impl_->bar.Reset();
   impl_->started = true;
+  impl_->fingerprint = SettingsFingerprint();
   // The plugin caps this request to process affinity, leaving one CPU for the UI/music.
   const uint32_t threads = 0;
   impl_->job = impl_->api->start(Utf8(cache_dir).c_str(), Utf8(game_dir).c_str(), threads, 1, force ? 1 : 0);
@@ -151,6 +154,21 @@ bool NativeShaderPack::Finished() {
 
 bool NativeShaderPack::Ok() { return Finished() && impl_->last.ok; }
 
+std::string NativeShaderPack::SettingsFingerprint() {
+  // The settings the plugin's preparation reads (shader_pack_service.cpp, StartJob and PrewarmStamp): the
+  // API, what changes the game's pipelines and where the pipeline files are.
+  static constexpr const char* kNames[] = {
+      "native_backend", "native_flip_front_face", "native_shadow_quality", "native_water_reflections",
+      "native_volumetrics", "native_pipeline_list", "native_pipeline_cache", "native_vk_pipeline_cache",
+      "native_pipeline_cache_dir", "native_failed_backends", "native_dxc", "cache_root", "gpu_plugin",
+      "ao_mode", "native_ao_method", "native_ao_apply"};  // the ambient-only AO has a layout of its own
+  std::string out;
+  for (const char* name : kNames) out += std::string(name) + "=" + rex::cvar::GetFlagByName(name) + ";";
+  return out;
+}
+
+bool NativeShaderPack::OkForCurrentSettings() { return Ok() && impl_->fingerprint == SettingsFingerprint(); }
+
 float NativeShaderPack::Fraction() {
   if (!Busy() || !impl_->worked) return -1.0f;
   return impl_->bar.Shown();
@@ -158,14 +176,14 @@ float NativeShaderPack::Fraction() {
 
 bool NativeShaderPack::Working() { return Busy() && impl_->worked; }
 
-std::string NativeShaderPack::StepText() {
-  if (!Working() || impl_->last.steps <= 0 || impl_->last.step <= 0) return {};
-  const std::string backend = impl_->last.backend;
-  const std::string api = backend == "spirv" ? "Vulkan" : backend == "dxil" ? "DirectX 12" : backend;
-  const std::string what = impl_->last.step_kind == 0 ? F("Compiling the {0} shaders", {api})
-                                                      : F("Preparing the {0} pipelines", {api});
-  return F("Step {0} of {1}: {2}", {std::to_string(std::min(impl_->last.step, impl_->last.steps)),
-                                    std::to_string(impl_->last.steps), what});
+float NativeShaderPack::DrawnFraction(double now) {
+  if (!Busy() || !impl_->worked) return -1.0f;
+  return impl_->bar.Drawn(now);
+}
+
+std::string NativeShaderPack::ProgressLabel() {
+  // One label for the whole job, whichever API's shaders or pipelines are being prepared (owner, 16 Oct).
+  return T(std::string(Working() ? "Preparing shaders" : "Checking"));
 }
 
 std::string NativeShaderPack::StatusText() {

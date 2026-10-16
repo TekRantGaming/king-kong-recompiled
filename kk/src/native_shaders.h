@@ -34,14 +34,21 @@ class NativeShaderPack {
   bool Busy();          // started and not finished
   bool Finished();      // the last one finished (Busy() is false)
   bool Ok();            // ... and the pack is current
+  // The last job finished with everything current or prepared, for the settings the game starts with now:
+  // Play needs no other check (task 144: Play used to check again, and show "Preparing shaders", every time).
+  bool OkForCurrentSettings();
+  // What the job's work depends on, from the settings (the plugin's stamp follows the same settings).
+  static std::string SettingsFingerprint();
   // The whole job as one bar (shader_progress.h): 0 to 1, never going back, once something is being
   // built; -1 while it is only checking, or when idle.
   float Fraction();
   // Something is being compiled or prepared in this job, not only checked (the launcher's music
   // waits for it).
   bool Working();
-  // "Step 2 of 4: Preparing the Vulkan pipelines" (translated), "" when nothing is being built.
-  std::string StepText();
+  // The bar as drawn at `now` (seconds): Fraction() eased, smooth and never backwards.
+  float DrawnFraction(double now);
+  // The bar's one label for the whole job (translated): no steps or graphics APIs (owner, 16 Oct).
+  std::string ProgressLabel();
   std::string StatusText();  // for the launcher's status line (English, through T())
 
  private:

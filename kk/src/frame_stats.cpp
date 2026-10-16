@@ -7,6 +7,7 @@
 // kk_frame_rate cap.
 
 #include "ui_paint.h"
+#include "handoff.h"
 
 #include "frame_stats.h"
 #include "frame_pacer.h"
@@ -62,7 +63,10 @@ void RunDeferredIfDue(Clock::time_point now) {
   std::vector<std::function<void()>> due;
   {
     std::lock_guard lock(g_mutex);
-    if (g_first_frame == Clock::time_point{}) g_first_frame = now;
+    if (g_first_frame == Clock::time_point{}) {
+      g_first_frame = now;
+      handoff::ContentDrawn();  // the game's first frame
+    }
     if (g_deferred.empty()) return;
     const double elapsed = std::chrono::duration<double>(now - g_first_frame).count();
     for (auto it = g_deferred.begin(); it != g_deferred.end();) {
