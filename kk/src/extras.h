@@ -40,6 +40,14 @@ inline constexpr const ExtraInfo* FindExtra(int id) {
   for (const auto& e : kExtras) if (e.id == id) return &e;
   return nullptr;
 }
+// G+0x5680 records the level bonus's one-based menu row for restoring its
+// session. The original movie and mode branches leave that field alone.
+inline constexpr uint32_t ExtraSelection(int id) {
+  for (size_t row = 0; row < kExtras.size(); ++row)
+    if (kExtras[row].id == id)
+      return kExtras[row].type == ExtraType::kLevel ? uint32_t(row + 1) : 0;
+  return 0;
+}
 struct ExtraProgress {
   int percent = 0;
   int64_t score = 0;

@@ -890,8 +890,7 @@ void CarryOut(PPCContext& ctx, uint8_t* base, uint32_t g) {
       Store32(base, g + 0x4E10, uint32_t(-1));
     }
     const PPCContext saved = ctx;
-    const auto row = size_t(extra - kExtras.data());
-    Store32(base, g + 0x5680, uint32_t(row + 1));
+    if (const auto selection = ExtraSelection(extra->id)) Store32(base, g + 0x5680, selection);
     if (extra->type == ExtraType::kMovie) {
       // Exactly the original Extras movie call. Its worker clears player+0x130 when finished.
       ctx.r3.u64 = Load32(base, 0x82CCAE80);

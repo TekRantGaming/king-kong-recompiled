@@ -54,6 +54,7 @@ void ExtrasChecks() {
       {3, ExtraType::kMovie, 0x820AE508, -1, 2000},
       {2, ExtraType::kLevel, 2003, 250000, 100, 1, 1},
   };
+  constexpr uint32_t original_selection[] = {0, 2, 3, 0, 5, 6, 7, 0, 9, 10, 0, 12, 13, 0, 15};
   for (size_t i = 0; i < kExtras.size(); ++i) {
     const auto& want = original[i];
     const auto* got = FindExtra(want.id);
@@ -65,7 +66,11 @@ void ExtrasChecks() {
           "every original id preserves its start point and session or mode flags");
     Check(got->score == want.score && got->progress == want.progress,
           "every original id retains its own unlock requirements");
+    Check(ExtraSelection(want.id) == original_selection[i],
+          "only level bonuses write their original one-based selection to G+0x5680");
   }
+  Check(!ExtraSelection(-1) && !ExtraSelection(4) && !ExtraSelection(13) && !ExtraSelection(20),
+        "invalid bonuses do not write the selection field");
   Check(!FindExtra(-1) && !FindExtra(4) && !FindExtra(13) && !FindExtra(20), "unused and invalid bonus ids are not launchable");
   std::map<int, bool> ids;
   for (const auto& e : kExtras) {
