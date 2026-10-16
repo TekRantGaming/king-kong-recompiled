@@ -153,7 +153,7 @@ try {
  $pids+=$game.Id
  Write-Output "LAUNCHED PID=$($game.Id) $run"
  $limit=if($Mode -eq 'route'){[Math]::Min(14,2+4.2*$Passes)}else{4}
- $deadline=(Get-Date).AddMinutes($limit); $last=''; $loadedAt=$null; $doneAt=$null; $overlay=$false
+ $deadline=(Get-Date).AddMinutes($limit); $procs=$false; $last=''; $loadedAt=$null; $doneAt=$null; $overlay=$false
  while((Get-Date) -lt $deadline) {
   if(@(Get-CimInstance Win32_Process -Filter "Name='king_kong.exe'" | Where-Object {!$_.ExecutablePath -or !$_.ExecutablePath.StartsWith($run,'OrdinalIgnoreCase')}).Count) {throw 'Another game appeared; stopping only ours'}
   foreach($p in Own-Games){ if($pids -notcontains $p.ProcessId){$pids+=[int]$p.ProcessId; Write-Output "OWN RELAUNCH PID=$($p.ProcessId)"} }
@@ -182,7 +182,13 @@ try {
    if($loadedAt -and ((Get-Date)-$loadedAt).TotalSeconds -ge $Seconds) {$complete=$true; break}
    if($game.HasExited) {break}
   }
-  Start-Sleep -Milliseconds 1000
+  # Other programs' CPU once per run, 60 s after launch (what the game's 'other programs' figure was made of).
+  if(!$procs -and ((Get-Date)-$started).TotalSeconds -gt 60) {
+   $procs=$true; $a=@{}; Get-Process | ForEach-Object { $a[$_.Id]=$_.CPU }; Start-Sleep -Seconds 5
+   Get-Process | ForEach-Object { [pscustomobject]@{Name=$_.Name; Id=$_.Id; Percent=[math]::Round(($_.CPU-$a[$_.Id])/5/[Environment]::ProcessorCount*100,2)} } |
+    Sort-Object Percent -Descending | Select-Object -First 12 | Format-Table -AutoSize | Out-String | Set-Content -LiteralPath "$run/processes.txt"
+  }
+  Start-Sleep -Milliseconds 2500
  }
 } finally {
  foreach($p in Own-Games){ if($pids -notcontains $p.ProcessId){$pids+=[int]$p.ProcessId} }
