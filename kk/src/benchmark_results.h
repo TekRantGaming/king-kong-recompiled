@@ -24,10 +24,11 @@ constexpr size_t kRouteChapters = 4;
 // Game seconds at the start of each chapter that are replayed but not measured:
 // the fade in from loading, streaming and the first sight of the scene.
 constexpr double kDefaultSettleSeconds = 5;
-// Average CPU use by other programs (percent of all logical processors), or
+// Average CPU use outside the game (percent of all logical processors; this includes
+// system and driver time, about 10-20% while the game runs on its own), or
 // the busiest GPU engine's use by other processes, above which a pass is
 // marked as disturbed by background activity.
-constexpr double kBusyOtherCpu = 15;
+constexpr double kBusyOtherCpu = 30;
 constexpr double kBusyOtherGpu = 15;
 
 // One chapter (or the whole route, chapter = 0) of one pass.

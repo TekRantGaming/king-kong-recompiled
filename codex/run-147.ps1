@@ -6,6 +6,7 @@ param(
  [double]$Settle=-1,
  [int]$Entry=2,
  [int]$Seconds=50,
+ [int]$Scale=2,             # native_render_scale: 2 = 2560x1440, 3 = 3840x2160
  [string]$Label='',
  [string]$Env='',          # extra NAME=value;NAME=value for developer aids
  [switch]$ShotLauncher,    # route: capture the launcher's results page after the run
@@ -21,6 +22,7 @@ $ledger="$workspace/kk/out/task147/launches.jsonl"
 if((Read-GameSlotState).StartsWith('user')) {throw 'USER LOCK: no launch or wait; code-only work'}
 $stamp=Get-Date -Format yyyyMMdd-HHmmss
 $name=if($Mode -eq 'route'){"route-$Build-p$Passes"}else{"chapter-$Build-e$Entry"}
+if($Scale -ne 2){$name+="-s$Scale"}
 if($Label){$name+="-$Label"}
 $run="F:\KK-native-renderer\runs\task147-$name-$stamp"
 New-Item -ItemType Directory -Path $run -Force | Out-Null
@@ -68,7 +70,7 @@ $arguments=@('--fullscreen=false','--window_width=1280','--window_height=720','-
  "--cache_root=$cache","--log_file=$run/run.log","--config=$run/king_kong.toml",
  '--kk_renderer=native','--gpu_plugin=native','--kk_original_look=false','--kk_frame_rate=0','--vsync=false',
  '--video_mode_width=1280','--video_mode_height=720','--kk_render_quality=custom',
- '--draw_resolution_scale_x=1','--draw_resolution_scale_y=1','--native_render_scale=2',
+ '--draw_resolution_scale_x=1','--draw_resolution_scale_y=1',"--native_render_scale=$Scale",
  '--native_upscaler=off','--native_ao_method=gtao','--ao_mode=1','--ao_strength=3',
  '--kk_check_updates=false','--kk_online_count=false','--kk_discord_status=false')
 if($Build -ne 'beta3') {
