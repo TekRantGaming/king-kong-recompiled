@@ -5,6 +5,11 @@ monitor containing its own HWND with `IDXGIOutput6::GetDesc1`. HDR is eligible
 only when Windows reports `RGB_FULL_G2084_NONE_P2020` for that monitor. The
 request is retained when the monitor or OS cannot provide HDR.
 
+The launcher and pause menu expose HDR under Settings > Display. Turning HDR
+on shows Peak brightness and Paper white controls. These settings apply live;
+the launcher Display reset also resets all three HDR values. F8 retains its
+temporary HDR controls.
+
 Both APIs use linear scRGB with BT.709 primaries and FP16 RGBA pixels:
 
 | API | Swapchain format | Color space |

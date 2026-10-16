@@ -13,6 +13,7 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -47,6 +48,10 @@ LauncherArt LoadLauncherArt(const std::filesystem::path& dir);
 constexpr uint32_t kChapterNames = 42;
 std::filesystem::path ChapterNamesPath(const std::filesystem::path& dir, const char* lang);
 std::filesystem::path ChapterPicturePath(const std::filesystem::path& dir, int text_index);
+
+// Original front-end labels and unlock hints, read from the player's KKMaps.bf.
+// No game strings or artwork are distributed with the executable.
+std::map<uint32_t, std::string> ReadMenuTexts(const std::filesystem::path& game_dir, const char* lang);
 
 // A 32-bit BMP with its alpha channel (art::LoadImage reads it back).
 bool SaveImage(const Image& image, const std::filesystem::path& path);

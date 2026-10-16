@@ -9,7 +9,8 @@
 // KK_DEV_SCRIPT="12:LB+RB+LT+RT/6,12.5:DOWN,..." (with KK_DEV_AUTOSKIP): replaces
 // the presses after the save menu with this list: seconds after the menu
 // opened, buttons joined by '+', optional "/hold seconds" (default 0.12).
-// Buttons: A B X Y START BACK UP DOWN LEFT RIGHT LB RB LT RT LS RS.
+// Buttons: A B X Y START BACK UP DOWN LEFT RIGHT LB RB LT RT LS RS, the sticks
+// RSUP RSDOWN RSLEFT RSRIGHT (RSHALF) and LSUP LSDOWN LSLEFT LSRIGHT (LSHALF), SKIP.
 //
 // KK_DEV_FREEZE_SKIP=<seconds> (with KK_DEV_AUTOSKIP): a freeze longer than that (no pad read) does not
 // count on the script clock (see SkipFreezes).
@@ -64,6 +65,8 @@
 #endif
 
 #include "art.h"
+#include "dev_launcher_chain.h"
+#include "dev_movie_input.h"
 #include "guest.h"
 #include "menu_hook.h"
 #include "shader_pack.h"
@@ -99,39 +102,26 @@ struct Step {
   double at, hold;
   uint32_t buttons;
 };
-constexpr uint32_t kLT = 1u << 16, kRT = 1u << 17;
-// Right stick in scripts: RSUP, RSDOWN, RSLEFT, RSRIGHT push it all the way;
-// add RSHALF (e.g. RSUP+RSHALF) for half way.
-constexpr uint32_t kRsUp = 1u << 18, kRsDown = 1u << 19, kRsLeft = 1u << 20, kRsRight = 1u << 21,
-                   kRsHalf = 1u << 22;
+constexpr uint32_t kLT = kDevLT, kRT = kDevRT;
+// Sticks in scripts: RSUP, RSDOWN, RSLEFT, RSRIGHT (right) and LSUP, LSDOWN,
+// LSLEFT, LSRIGHT (left) push them all the way; add RSHALF / LSHALF for half way.
 // SKIP presses Start only while a movie is playing, so skipping a chapter's
 // movies never opens the pause menu once they're over.
-constexpr uint32_t kSkip = 1u << 23;
+constexpr uint32_t kSkip = kDevSkip;
 
-// The game's movie player (*(0x82CCAE80)): +268 and +272 are set while a movie
-// is starting or playing (sub_82723AF0 won't start another until both are 0).
 bool MoviePlaying() {
   if (!g_guest_base) return false;
-  auto load = [](uint32_t a) {
+  return DevMoviePlaying([](uint32_t a) {
     uint32_t v;
     std::memcpy(&v, g_guest_base + a, 4);
     return std::byteswap(v);
-  };
-  const uint32_t player = load(0x82CCAE80);
-  return player && (load(player + 268) || load(player + 272));
+  });
 }
 std::vector<Step> g_script;
 double g_script_end = 0;
 
 uint32_t ParseButton(const std::string& s) {
-  static const std::pair<const char*, uint32_t> kNames[] = {
-      {"UP", 0x0001},   {"DOWN", 0x0002}, {"LEFT", 0x0004}, {"RIGHT", 0x0008}, {"START", 0x0010},
-      {"BACK", 0x0020}, {"LS", 0x0040},   {"RS", 0x0080},   {"LB", 0x0100},    {"RB", 0x0200},
-      {"A", 0x1000},    {"B", 0x2000},    {"X", 0x4000},    {"Y", 0x8000},     {"LT", kLT},
-      {"RT", kRT},      {"RSUP", kRsUp},  {"RSDOWN", kRsDown}, {"RSLEFT", kRsLeft}, {"RSRIGHT", kRsRight},
-      {"RSHALF", kRsHalf}, {"SKIP", kSkip}};
-  for (auto& [name, bit] : kNames)
-    if (s == name) return bit;
+  if (const uint32_t bit = DevScriptButton(s)) return bit;
   REXLOG_WARN("KK dev: unknown button '{}' in KK_DEV_SCRIPT", s);
   return 0;
 }
@@ -294,8 +284,11 @@ void TakeShots(double t) {
     // overwrite captures less than 100 ms apart. Keep existing test names by default.
     const char* fine = std::getenv("KK_DEV_SHOTS_FINE");
     const bool milliseconds = fine && *fine == '1';
-    const std::string name = milliseconds ? "shot_ms_" + std::to_string(int(*it * 1000 + 0.5))
-                                          : "shot_" + std::to_string(int(*it * 10));
+    // KK_DEV_SHOTS_TAG (set when a scripted Extras run starts a bonus) keeps chained runs' frames apart.
+    const char* tag = std::getenv("KK_DEV_SHOTS_TAG");
+    const std::string name = std::string(tag ? tag : "") +
+                             (milliseconds ? "shot_ms_" + std::to_string(int(*it * 1000 + 0.5))
+                                           : "shot_" + std::to_string(int(*it * 10)));
     art::CaptureFrame(std::filesystem::path(dir && *dir ? dir : ".") / (name + art::kDevCaptureExtension));
     it = times.erase(it);
   }
@@ -607,9 +600,11 @@ bool AutoskipPad(uint32_t user, uint8_t* state) {
   StoreBE<uint16_t>(state + 4, buttons);
   state[6] = triggers[0];
   state[7] = triggers[1];
-  const int16_t push = (held & kRsHalf) ? 16384 : 32767;
-  if (held & (kRsLeft | kRsRight)) StoreBE<int16_t>(state + 12, int16_t((held & kRsLeft) ? -push : push));
-  if (held & (kRsUp | kRsDown)) StoreBE<int16_t>(state + 14, int16_t((held & kRsDown) ? -push : push));
+  const DevSticks sticks = DevScriptSticks(held);
+  StoreBE<int16_t>(state + 8, sticks.lx);
+  StoreBE<int16_t>(state + 10, sticks.ly);
+  StoreBE<int16_t>(state + 12, sticks.rx);
+  StoreBE<int16_t>(state + 14, sticks.ry);
   return true;
 }
 

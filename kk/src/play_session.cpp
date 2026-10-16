@@ -68,6 +68,8 @@ extern char** environ;
 #include "benchmark.h"
 #include "settings.h"
 #include "ps2_movies.h"
+#include "dev_launcher_chain.h"
+#include "video_modes.h"
 
 namespace kk {
 #if defined(KK_DEV_TOOLS)
@@ -111,6 +113,7 @@ constexpr int kScoreEntries = 40;  // the header holds best scores for the first
 constexpr uint32_t kAiPtr = 0x82CCBF64;           // the running AI instance; +0x40 its variables
 constexpr uint32_t kGamePtr = 0x82CC97C0;         // the universe variables G once a level is up
 constexpr uint32_t kProfilePtr = 0x82CC8D24;      // the same block, as the profile P
+constexpr uint32_t kVideoModeTarget = 0x82CCAC30; // the object sub_825EE130 writes the flip to (+0x9CC)
 constexpr uint32_t kMemcard = 0x82C63950;         // the save system M
 constexpr uint32_t kSaveHeaders = kMemcard + 0x4C, kSaveData = kMemcard + 0x550, kSaveSlot = kMemcard + 0x54C;
 constexpr uint32_t kSaveQueue = 0x82C8E7CC;       // the save system's job queue: +0xC a job is waiting
@@ -225,6 +228,7 @@ const char* KindName(StartKind kind) {
     case StartKind::kContinue: return "continue";
     case StartKind::kNewGame: return "new";
     case StartKind::kChapter: return "chapter";
+    case StartKind::kExtra: return "extra";
     default: return "none";
   }
 }
@@ -256,6 +260,7 @@ std::string FormatRequest(const StartRequest& r) {
     case StartKind::kContinue: return fmt::format("continue:{}", r.slot);
     case StartKind::kNewGame: return fmt::format("new:{}:{}", r.slot, EncodeName(r.new_name));
     case StartKind::kChapter: return fmt::format("chapter:{}:{}:{}", r.slot, r.chapter, EncodeName(r.new_name));
+    case StartKind::kExtra: return fmt::format("extra:{}:{}", r.slot, r.chapter);
     default: return "";
   }
 }
@@ -278,6 +283,16 @@ StartRequest ParseRequest(const std::string& text) {
     r.slot = num(1, -1);
     r.chapter = num(2, 0);
     if (parts.size() > 3) r.new_name = DecodeName(parts[3]);
+  } else if (parts[0] == "extra" && parts.size() == 3) {
+    // Extra ids must be exact: an invalid request must never start a different bonus.
+    try {
+      size_t n = 0;
+      r.chapter = std::stoi(parts[2], &n);
+      if (n == parts[2].size() && FindExtra(r.chapter)) {
+        r.kind = StartKind::kExtra;
+        r.slot = num(1, -1);
+      }
+    } catch (...) {}
   }
   return r;
 }
@@ -448,6 +463,23 @@ void SetStartRequest(const StartRequest& request) {
   std::lock_guard lock(g_mutex);
   g_request = request;
   g_starting = request.kind != StartKind::kNone;
+#if defined(KK_DEV_TOOLS)
+  if (request.kind == StartKind::kExtra && std::getenv("KK_DEV_LAUNCHER_INPUT")) {
+    // A scripted controller activation is for this session, never repeated after returning to Extras;
+    // the next '|' session, if any, runs there. Frames this run captures are named after the bonus.
+    const std::string next = kk::DevLauncherAfterStart(std::getenv("KK_DEV_LAUNCHER_INPUT"));
+    const std::string tag = fmt::format("extra{}-", request.chapter);
+#if defined(_WIN32)
+    _putenv_s("KK_DEV_LAUNCHER_INPUT", next.c_str());
+    _putenv_s("KK_DEV_LAUNCHER_INPUT_FILE", "");
+    _putenv_s("KK_DEV_SHOTS_TAG", tag.c_str());
+#else
+    setenv("KK_DEV_LAUNCHER_INPUT", next.c_str(), 1);
+    unsetenv("KK_DEV_LAUNCHER_INPUT_FILE");
+    setenv("KK_DEV_SHOTS_TAG", tag.c_str(), 1);
+#endif
+  }
+#endif
   REXLOG_INFO("KK play: start request {} (slot {}, chapter {})", KindName(request.kind), request.slot, request.chapter);
 }
 
@@ -460,6 +492,10 @@ void SetUserDir(const std::filesystem::path& user_dir) { g_user_dir = user_dir; 
 const std::filesystem::path& UserDir() { return g_user_dir; }
 std::filesystem::path ProfileFilePath(const std::filesystem::path& user_dir, int slot) {
   return slot >= 0 && slot < kSlotCount ? SlotFile(user_dir, slot) : std::filesystem::path{};
+}
+ExtraProgress ReadExtraProgress(const std::filesystem::path& user_dir, int slot) {
+  if (slot < 0 || slot >= kSlotCount) return {};
+  return DecodeExtraProgress(ReadAll(SlotFile(user_dir, slot)));
 }
 void SetQuitHandler(std::function<void()> quit) { g_quit = std::move(quit); }
 bool SessionActive() { return g_session; }
@@ -604,14 +640,19 @@ bool CoverScreen() { return g_cover; }
 namespace {
 
 bool g_player_registered = false;
+bool g_video_modes_pending = false;  // a loaded save has video modes still to apply (video_modes.h)
 bool g_jump_requested = false;  // our level request is waiting for uni_go
 bool g_level_loaded = false;    // ... and has been carried out
 bool g_cheats_pending = false;
+bool g_extra_session = false;
+std::atomic<bool> g_extra_movie{false};
+int64_t g_extra_movie_since = 0;
 int g_pending_save_slot = -1;   // a new save to write once the save system is idle
 int64_t g_pending_save_since = 0;
 int64_t g_level_loaded_ms = 0;
 
 }  // namespace
+bool BonusMovieActive() { return g_extra_movie; }
 }  // namespace kk::play
 
 REX_EXTERN(__imp__sub_82413190);  // universe -> save data
@@ -622,6 +663,8 @@ REX_EXTERN(__imp__sub_827291A0);  // the save system's command entry
 REX_EXTERN(__imp__sub_82729138);  // allocates and clears the five slots' file buffer (M+0x14)
 REX_EXTERN(__imp__sub_82413978);  // builds a slot's header
 REX_EXTERN(__imp__sub_825EAB98);  // what "Create new" calls after the re-init
+REX_EXTERN(__imp__sub_827252C8);  // the Extras movie player; player+0x130 stays set during playback
+REX_EXTERN(__imp__sub_825EE130);  // applies the original saved video modifiers
 
 namespace kk::play {
 namespace {
@@ -651,6 +694,40 @@ void SetDeviceAndSlot(uint8_t* base, uint32_t g, int slot) {
   Store32(base, g + 0x5F24, 0);
 }
 
+// The loaded save's "Old movie" filter / horizontal flip, with the game's own sub_825EE130, once its flip
+// target is set (video_modes.h): calling it while the title loads the save crashed. The profile pointer P is
+// never set in some bonus levels (Credits): the call then reads the universe through P pointed at it, as
+// CreateNewSave does, so the modes apply there as they did after the original menus.
+void ApplyPendingVideoModes(PPCContext& ctx, uint8_t* base) {
+  const uint32_t ai = Load32(base, kAiPtr), universe = ai ? Load32(base, ai + 0x40) : 0;
+  const uint32_t old_p = Load32(base, kProfilePtr), p = old_p ? old_p : universe;
+  const uint32_t target = Load32(base, kVideoModeTarget);
+  const uint32_t flip = p ? Load32(base, p + 0x4DA0) : 0, old_movie = p ? Load32(base, p + 0x4DA4) : 0;
+  switch (NextVideoModeStep(g_video_modes_pending, p, target, flip, old_movie)) {
+    case VideoModeStep::kWait:
+#if defined(KK_DEV_TOOLS)
+      if (std::getenv("KK_DEV_EXTRAS_TRACE")) {
+        static int64_t logged = 0;
+        if (NowMs() - logged > 2000) {
+          logged = NowMs();
+          REXLOG_INFO("KK dev: video modes wait (profile {:08X}, flip target {:08X}, universe {:08X})", p, target,
+                      Load32(base, kGamePtr));
+        }
+      }
+#endif
+      return;
+    case VideoModeStep::kNothing: g_video_modes_pending = false; return;
+    case VideoModeStep::kApply: break;
+  }
+  g_video_modes_pending = false;
+  const PPCContext saved = ctx;
+  if (!old_p) Store32(base, kProfilePtr, p);
+  __imp__sub_825EE130(ctx, base);
+  ctx = saved;
+  Store32(base, kProfilePtr, old_p);
+  REXLOG_INFO("KK play: applied the save's video modes (old movie {}, horizontal flip {})", old_movie, flip);
+}
+
 // The save's file into the save system and the universe, as choosing it in the save menu does (proven:
 // chapter-jump.md, "A jump that loads a save first").
 bool LoadSaveFromFile(PPCContext& ctx, uint8_t* base, uint32_t g, int slot) {
@@ -672,6 +749,8 @@ bool LoadSaveFromFile(PPCContext& ctx, uint8_t* base, uint32_t g, int slot) {
   SetDeviceAndSlot(base, g, slot);
   Store32(base, g + 0x4FF8, BE32(data.data() + 0x28));  // its continue point (header +0x28 / +0x2C)
   Store32(base, g + 0x4FFC, BE32(data.data() + 0x2C));
+  // The save's video modes are applied once the game can take them (ApplyPendingVideoModes).
+  g_video_modes_pending = Load32(base, g + 0x4DA0) || Load32(base, g + 0x4DA4);
   REXLOG_INFO("KK play: loaded save slot {} '{}' (continue {} {})", slot + 1,
               std::string(reinterpret_cast<const char*>(data.data()), strnlen(reinterpret_cast<const char*>(data.data()), 31)),
               int32_t(BE32(data.data() + 0x28)), int32_t(BE32(data.data() + 0x2C)));
@@ -822,10 +901,65 @@ void CarryOut(PPCContext& ctx, uint8_t* base, uint32_t g) {
   g_starting = false;
   g_session = true;
   g_chapter_session = r.kind == StartKind::kChapter;
+  g_extra_session = r.kind == StartKind::kExtra;
   CheckChapterTable(base, g);
-  if (!BackupSaves(g_user_dir, fmt::format("before play ({})", KindName(r.kind))))
+  if (!BackupSaves(g_user_dir, fmt::format("before play ({})", KindName(r.kind)))) {
     REXLOG_ERROR("KK play: the saves could not be backed up before play");
+    if (g_extra_session) {
+      ReturnToLauncher("the bonus save backup failed", "extras");
+      return;
+    }
+  }
   const auto slots = ListSaves(g_user_dir);
+  if (g_extra_session) {
+    const auto* extra = FindExtra(r.chapter);
+    auto progress = ReadExtraProgress(g_user_dir, r.slot);
+    progress.museum |= rex::cvar::GetFlagByName("kk_cheats") == "true" &&
+                       rex::cvar::GetFlagByName("kk_cheat_bonus") == "true";
+    if (!extra || extra->type == ExtraType::kMode || !ExtraUnlocked(*extra, progress)) {
+      REXLOG_WARN("KK extras: refused unavailable bonus {}", r.chapter);
+      ReturnToLauncher("the bonus is locked or unavailable", "extras");
+      return;
+    }
+    if (r.slot >= 0 && r.slot < kSlotCount && slots[size_t(r.slot)].exists) {
+      if (!LoadSaveFromFile(ctx, base, g, r.slot)) {
+        ReturnToLauncher("the bonus save could not be loaded", "extras");
+        return;
+      }
+    } else {
+      RegisterPlayer(ctx, base);
+      Store32(base, g + 0x4E10, uint32_t(-1));
+    }
+    const PPCContext saved = ctx;
+    if (const auto selection = ExtraSelection(extra->id)) Store32(base, g + 0x5680, selection);
+    if (extra->type == ExtraType::kMovie) {
+      // Exactly the original Extras movie call. Its worker clears player+0x130 when finished.
+      ctx.r3.u64 = Load32(base, 0x82CCAE80);
+      ctx.r4.u64 = extra->level;
+      REXLOG_INFO("KK extras: playing movie {}", extra->id);
+      g_extra_movie = true;
+      g_extra_movie_since = NowMs();
+#if defined(KK_DEV_TOOLS)
+      kk::DevStartScriptClock();
+#endif
+      __imp__sub_827252C8(ctx, base);
+      ctx = saved;
+      return;
+    }
+    __imp__sub_82413190(ctx, base);
+    ctx = saved;
+    std::memmove(base + 0x82C6BDE0, base + kSaveData, kDataSize);
+    std::memmove(base + 0x82C73D20, base + kSaveHeaders, 0x500);
+    if (extra->session_flag) Store32(base, g + 0x5674, extra->session_flag);
+    else {
+      for (uint32_t offset : {0x4DDCu, 0x4DD8u, 0x3348u, 0x3394u, 0x33E0u}) Store32(base, g + offset, 0);
+      __imp__sub_82413190(ctx, base);
+      ctx = saved;
+    }
+    RequestLevel(base, g, extra->level, extra->start_point);
+    REXLOG_INFO("KK extras: starting bonus {} level {} start {}", extra->id, extra->level, extra->start_point);
+    return;
+  }
   if (r.slot < 0 || r.slot >= kSlotCount) {
     // No slot given: Continue takes the most recent save, the others the first empty slot.
     r.slot = MostRecentSave(slots);
@@ -874,6 +1008,7 @@ namespace kk::play {
 bool OnGameMenuPage(const char* page) {
   if (benchmark::Active()) { benchmark::Interrupted(); return true; }
   if (!g_session) return false;
+  if (g_extra_movie) return true;
   if (!g_leaving) {
     // A chapter-select run that has ended (its Score pages and save question are over) goes back to
     // Chapter select; anything else to the Play menu.
@@ -884,7 +1019,7 @@ bool OnGameMenuPage(const char* page) {
     if (std::getenv("KK_DEV_TEXT_DUMP") && kk::g_guest_base) kk::DevDumpTexts(kk::g_guest_base, "texts-menu.txt");
 #endif
     ReturnToLauncher(chapter_run ? "the chapter-select run is over" : "the game left play",
-                     chapter_run ? "chapters" : "play");
+                     g_extra_session ? "extras" : chapter_run ? "chapters" : "play");
   }
   return true;
 }
@@ -987,13 +1122,15 @@ REX_HOOK_RAW(sub_8253DB80) {
     // In a session the launcher started, the start menu (level 3) means: back to the launcher.
     if (g_session && Load32(base, g + 4) != 0 && Load32(base, g + 8) == kStartMenuLevel) {
       Store32(base, g + 4, 0);
-      if (kk::benchmark::Active()) {
+      if (g_extra_movie) {
+        // A movie runs over the title level; keep its menus covered until playback ends.
+      } else if (kk::benchmark::Active()) {
         kk::benchmark::Interrupted();
       } else {
         // A chapter-select run that has reached its end goes back to Chapter select; Quit game to the Play menu.
         const bool chapter_end = g_chapter_session && !LeftByQuit();
         ReturnToLauncher(chapter_end ? "the chapter-select run is over" : "the game left play",
-                         chapter_end ? "chapters" : "play");
+                         g_extra_session ? "extras" : chapter_end ? "chapters" : "play");
       }
     }
   }
@@ -1002,8 +1139,21 @@ REX_HOOK_RAW(sub_8253DB80) {
   if (request && g_jump_requested) REXLOG_INFO("KK play: uni_go loads level {}", int32_t(Load32(base, g + 8)));
   const bool ps2_movie = request && kk::movies::BeforeLoad(base, g, g_starting, g_leaving);
   __imp__sub_8253DB80(ctx, base);
+  if (g_extra_movie) {
+    const uint32_t player = Load32(base, 0x82CCAE80);
+    if (player && Load32(base, player + 0x130) &&
+        (Load32(base, player + 0x10C) || Load32(base, player + 0x110)) && g_cover) {
+      g_cover = false;
+      kk::RequestUiPaint();
+    }
+    if (NowMs() - g_extra_movie_since > 250 && (!player || Load32(base, player + 0x130) == 0)) {
+      g_extra_movie = false;
+      ReturnToLauncher("the bonus movie finished", "extras");
+    }
+  }
   if (ps2_movie) REXLOG_INFO("PS2 movie: original level loader returned, current {} requested {}",
                             Load32(base, g + 0x18), Load32(base, g + 8));
+  ApplyPendingVideoModes(ctx, base);
   ServiceProfileOptions(ctx, base);
 #if defined(KK_DEV_TOOLS)
   if (g && std::getenv("KK_DEV_AUDIO_TRACE")) {

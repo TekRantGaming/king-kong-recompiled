@@ -19,6 +19,7 @@
 #include "discord_presence.h"
 #include "online.h"
 #include "diagnostics.h"
+#include "dev_launcher_chain.h"
 #include "hooks/kk_native_ui.h"  // the temporal upscalers this PC runs
 
 #include <algorithm>
@@ -253,9 +254,9 @@ constexpr const char* kRestartCvars[] = {"present_effect", "window_width", "wind
                                          "native_upscaler", "native_backend",
                                          "d3d12_allow_variable_refresh_rate_and_tearing"};
 
-enum Page { kHome, kDisplay, kGraphics, kGameplay, kControls, kCheatsPage, kAudio, kAchievements, kAbout, kPageCount };
-constexpr const char* kPageNames[kPageCount] = {"Home",   "Display", "Graphics",     "Gameplay", "Controls",
-                                                "Cheats", "Audio",   "Achievements", "About"};
+enum Page { kHome, kDisplay, kGraphics, kAudio, kControls, kGameplay, kAdvanced, kExtras, kAchievements, kAbout, kPageCount };
+constexpr const char* kPageNames[kPageCount] = {"Home", "Display", "Graphics", "Audio", "Controls", "Gameplay",
+                                               "Advanced", "Extras", "Achievements", "About"};
 // Sub-pages of Controls.
 enum SubPage { kNoSubPage, kRemapPage, kKeysPage };
 // Play on Home: the Play menu and its pages (docs/menus.md).
@@ -719,7 +720,7 @@ class SettingsPages {
       play::ProfileOptions read;
       if (in_game_) read = play::ReadProfileOptions(profile_user_dir_, -1);
       if (!read.available) {
-        const int slot = play::MostRecentSave(ProfileSaves());
+        const int slot = profile_slot_ >= 0 ? profile_slot_ : play::MostRecentSave(ProfileSaves());
         if (slot >= 0) read = play::ReadProfileOptions(profile_user_dir_, slot);
       }
       profile_read_ = std::move(read);
@@ -728,13 +729,12 @@ class SettingsPages {
     play::ProfileOptions shown = profile_read_;
     if (shown.available) {
       float* volumes[] = {&shown.master, &shown.voices, &shown.music, &shown.effects};
-      for (int i = 0; i < 5; ++i) {
-        const float observed = i == 4 ? float(shown.subtitles) : *volumes[i];
+      bool* toggles[] = {&shown.subtitles, &shown.old_movie, &shown.horizontal_flip, &shown.aiming_visor, &shown.inventory};
+      for (size_t i = 0; i < size_t(play::ProfileOption::kCount); ++i) {
+        const float observed = i >= 4 ? float(*toggles[i - 4]) : *volumes[i];
         if (std::abs(observed - profile_values_[i]) < 0.001f || !shown.error.empty()) profile_waiting_[i] = false;
-        // The game thread acknowledges the write later. Do not step from a
-        // stale cached read between submitting the write and that acknowledgement.
         if (profile_dirty_[i] || profile_waiting_[i]) {
-          if (i == 4) shown.subtitles = profile_values_[i] != 0;
+          if (i >= 4) *toggles[i - 4] = profile_values_[i] != 0;
           else *volumes[i] = profile_values_[i];
         }
       }
@@ -766,6 +766,9 @@ class SettingsPages {
 
   void ResetAudio() {
     for (int i = 0; i < 4; ++i) ChangeProfileOption(play::ProfileOption(i), 100);
+    for (const char* name : {"kk_achievement_sound", "kk_achievement_sound_file", "kk_achievement_volume"}) Reset(name);
+    if (!in_game_) for (const char* name : {"kk_launcher_music", "kk_launcher_music_volume",
+                                           "kk_launcher_sounds", "kk_launcher_sounds_volume"}) Reset(name);
   }
   void ResetSubtitles() {
     profile_read_at_ = -1;  // its default follows the language, which may have just been reset
@@ -795,6 +798,37 @@ class SettingsPages {
     it.on_default = [this] { ResetSubtitles(); };
     Disable(it, !profile.available, ProfileUnavailableNote());
     return it;
+  }
+
+  Item ProfileToggle(const char* label, const char* description, play::ProfileOption option, bool value) {
+    Item it;
+    it.type = ItemType::kChoice;
+    it.label = label;
+    it.description = description;
+    it.options = {"Off", "On"};
+    it.index = value ? 1 : 0;
+    it.default_text = "Off";
+    it.on_choice = [this, option](int i) { ChangeProfileOption(option, float(i)); };
+    it.on_default = [this, option] { ChangeProfileOption(option, 0); };
+    Disable(it, !ShownProfileOptions().available, ProfileUnavailableNote());
+    return it;
+  }
+
+  void OriginalVideoItems(std::vector<Item>& items) {
+    const auto profile = ShownProfileOptions();
+    const int slot = profile.slot;
+    auto progress = play::ReadExtraProgress(profile_user_dir_, slot);
+    progress.museum |= GetBool("kk_cheats") && GetBool("kk_cheat_bonus");
+    items.push_back(Section("Extras"));
+    for (int id : {1, 8}) {
+      const bool old = id == 1;
+      auto it = ProfileToggle(old ? "Old movie filter" : "Horizontal flip",
+          "An original bonus video mode. Unlock it in Extras before changing it.",
+          old ? play::ProfileOption::kOldMovie : play::ProfileOption::kHorizontalFlip,
+          old ? profile.old_movie : profile.horizontal_flip);
+      Disable(it, !play::ExtraUnlocked(*play::FindExtra(id), progress), "Locked");
+      items.push_back(std::move(it));
+    }
   }
 
   // The Audio page: the game's four volumes.
@@ -832,7 +866,69 @@ class SettingsPages {
       m.on_button = [this](int i) { if (i == 0) ResetAudio(); };
       modal_ = std::move(m);
     }));
-    Disable(items.back(), !profile.available, ProfileUnavailableNote());
+    if (!in_game_) {
+      items.push_back(Section("Launcher"));
+    items.push_back(CvarToggle("Music", "The game's main menu music while the launcher is open, from your copy of the game.",
+                               "kk_launcher_music"));
+    {
+      Item it = CvarSlider("Music volume", "How loud the launcher's music is.", "kk_launcher_music_volume", 0, 100, 5,
+                           [](float v) { return std::to_string(int(std::lround(v))) + "%"; });
+      items.push_back(std::move(Disable(it, !GetBool("kk_launcher_music"), "Switch Music on to set its volume.")));
+    }
+    items.push_back(CvarToggle("Menu sounds", "The game's own menu sounds as you move around the launcher and choose things.",
+                               "kk_launcher_sounds"));
+    {
+      Item it = CvarSlider("Menu sound volume", "How loud the launcher's menu sounds are.",
+                           "kk_launcher_sounds_volume", 0, 100, 5,
+                           [](float v) { return std::to_string(int(std::lround(v))) + "%"; });
+      items.push_back(std::move(Disable(it, !GetBool("kk_launcher_sounds"), "Switch Menu sounds on to set their volume.")));
+    }
+    }
+    items.push_back(Section("Achievements"));
+    items.push_back(CvarToggle("Sound", "The sound that plays with each pop-up.", "kk_achievement_sound"));
+    const bool sound = GetBool("kk_achievement_sound");
+    const char* sound_note = "Switch Sound on to choose it.";
+    {
+      if (sounds_.empty() || ImGui::GetTime() - sounds_scanned_ > 3.0) {
+        sounds_ = ListSounds(profile_user_dir_);
+        sounds_.insert(sounds_.begin(), std::filesystem::path());  // built-in chime
+        sounds_scanned_ = ImGui::GetTime();
+      }
+      Item it;
+      it.type = ItemType::kChoice;
+      it.label = "Sound to play";
+      it.description =
+          "The built-in chime or a sound you added. Put .wav files in the sounds folder to see them here.";
+      const std::string cur = Get("kk_achievement_sound_file");
+      it.index = 0;
+      std::vector<std::string> values;
+      for (size_t i = 0; i < sounds_.size(); ++i) {
+        it.options.push_back(sounds_[i].empty() ? std::string("Original chime") : SoundLabel(sounds_[i]));
+        values.push_back(sounds_[i].string());
+        if (values.back() == cur) it.index = int(i);
+      }
+      it.on_choice = [this, values](int i) {
+        Set("kk_achievement_sound_file", values[size_t(i)]);
+        PlayAchievementSound(profile_user_dir_);  // preview
+      };
+      it.on_default = [] { Reset("kk_achievement_sound_file"); };
+      it.default_text = "Original chime";
+      items.push_back(std::move(Disable(it, !sound, sound_note)));
+    }
+    {
+      Item it = CvarSlider("Volume", "How loud the sound is. It plays as you change it.", "kk_achievement_volume", 0,
+                           100, 5, [](float v) { return std::to_string(int(std::lround(v))) + "%"; });
+      auto set = it.on_value;
+      it.on_value = [this, set](float v) {
+        set(v);
+        preview_at_ = ImGui::GetTime() + 0.3;  // once it settles
+      };
+      items.push_back(std::move(Disable(it, !sound, sound_note)));
+    }
+    items.push_back(ActionItem("Open sounds folder", "Where your own .wav sounds go.", "", [this] {
+      OpenInExplorer(SoundsDir(profile_user_dir_));
+      sounds_.clear();  // rescan when the list is next built
+    }));
     return items;
   }
 
@@ -1107,11 +1203,24 @@ class SettingsPages {
                                "On waits for the display for tear-free frames. Off has the lowest latency and lets "
                                "G-Sync and FreeSync displays run freely.",
                                "d3d12_allow_variable_refresh_rate_and_tearing", "Off", "On", /*invert=*/true));
-    UpscalingItems(items);
     items.push_back(Section("Picture"));
     items.push_back(CvarChoice("Aspect ratio",
                                "The game is 16:9. Letterbox keeps its shape on other screens; Stretch fills them.",
                                "present_letterbox", {{"Letterbox 16:9", "true"}, {"Stretch", "false"}}));
+    if (FindFlag("present_hdr")) {
+      items.push_back(Section("HDR output"));
+      items.push_back(CvarToggle("HDR",
+          "Requires Windows HDR on the current display. Uses SDR when HDR is unavailable.", "present_hdr"));
+      if (GetBool("present_hdr")) {
+        auto nits = [](float value) { return std::to_string(int(std::lround(value))) + " nits"; };
+        items.push_back(CvarSlider("Peak brightness (nits)",
+            "Highlight ceiling, limited to the display's reported peak brightness.",
+            "present_hdr_peak", 80, 10000, 20, nits));
+        items.push_back(CvarSlider("Paper white (nits)",
+            "Brightness of neutral whites and menus. Limited by peak brightness.",
+            "present_hdr_paper_white", 80, 500, 10, nits));
+      }
+    }
     return items;
   }
 
@@ -1340,12 +1449,7 @@ class SettingsPages {
     items.push_back(Section("Look"));
     {
       Item it = CvarChoice("Look",
-                           "Original is the Xbox 360 version as it was: 720p at 30 FPS, the console's own "
-                           "anti-aliasing and texture filtering, its 69" KK_DEG " field of view, motion blur, screen "
-                           "blur and distance fog, and no ambient occlusion. Remastered gives you the presets, every "
-                           "setting on this page and the frame rate and upscaling on the Display page; chosen at "
-                           "setup, it starts with the preset for your graphics card, 60 FPS and the new GTAO ambient "
-                           "occlusion.",
+                           "Original keeps the Xbox 360 look. Remastered enables graphics presets and custom graphics settings. Its setup defaults are 60 FPS and Strong GTAO; Display sets the frame-rate cap.",
                            "kk_original_look", {{"Original Xbox 360", "true"}, {"Remastered", "false"}});
       it.on_choice = [](int i) { SetOriginalLook(i == 0); };
       it.on_default = [] { SetOriginalLook(false); };
@@ -1355,9 +1459,7 @@ class SettingsPages {
       Item it;
       it.type = ItemType::kChoice;
       it.label = "Preset";
-      it.description =
-          "Quick settings for anti-aliasing, texture filtering, ambient occlusion and global illumination here, and the upscaler and "
-          "render quality on the Display page. Change any of them yourself and it shows Custom.";
+      it.description = "Sets image quality, upscaling, ambient occlusion and global illumination. Changing a setting shows Custom.";
       for (const auto& p : kGraphicsPresets) it.options.push_back(p.label);
       it.options.push_back("Custom");
       const int match = MatchGraphicsPreset();
@@ -1386,20 +1488,7 @@ class SettingsPages {
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
 
-    if (FindFlag("present_hdr")) {
-      items.push_back(Section("HDR output"));
-      items.push_back(CvarToggle("HDR",
-          "Requires Windows HDR on the current display. Uses SDR when HDR is unavailable.", "present_hdr"));
-      if (GetBool("present_hdr")) {
-        auto nits = [](float value) { return std::to_string(int(std::lround(value))) + " nits"; };
-        items.push_back(CvarSlider("Peak brightness (nits)",
-            "Highlight ceiling, limited to the display's reported peak brightness.",
-            "present_hdr_peak", 80, 10000, 20, nits));
-        items.push_back(CvarSlider("Paper white (nits)",
-            "Brightness of neutral whites and menus. Limited by peak brightness.",
-            "present_hdr_paper_white", 80, 500, 10, nits));
-      }
-    }
+    UpscalingItems(items);
     items.push_back(Section("Image"));
     items.push_back(CvarChoice("Texture pack", "Use replacement textures made from your own extracted files.",
                               "native_texture_pack", {{"Off", "false"}, {"On", "true"}}));
@@ -1526,6 +1615,12 @@ class SettingsPages {
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
 
+    OriginalVideoItems(items);
+    return items;
+  }
+
+  std::vector<Item> AdvancedItems() {
+    std::vector<Item> items;
     // The native API is the only renderer choice.
     if (NativeRendererAvailable()) {
       items.push_back(Section("Advanced"));
@@ -1537,9 +1632,7 @@ class SettingsPages {
         api.description = "How the native renderer talks to your graphics card. Auto uses Vulkan. Changes apply when the game starts.";
         api.options = {"Auto", "Vulkan"};
 #else
-        api.description =
-            "How the native renderer talks to your graphics card. Auto keeps the usual choice. DirectX 12 is "
-            "needed for AMD FSR 4. Changes apply when the game starts: press Play to restart with your choice.";
+        api.description = "Auto uses Vulkan. DirectX 12 is needed for AMD FSR 4. Changes apply when the game starts.";
         api.options = {"Auto", "Vulkan", "DirectX 12"};
 #endif
         const std::string backend = Get("native_backend");
@@ -1578,6 +1671,9 @@ class SettingsPages {
     }
 #endif
 
+    items.push_back(Section("Diagnostics"));
+    items.push_back(CvarToggle("Frame counter", "Shows the game's frame rate in the corner. F2 toggles it while playing.",
+                               "kk_show_fps", "Hidden", "Shown"));
     return items;
   }
 
@@ -1614,13 +1710,19 @@ class SettingsPages {
       items.push_back(
           std::move(Disable(it, !GetBool("kk_camera_shake"), "Switch Camera shake on to set its strength.")));
     }
-    items.push_back(Section("Extras"));
-    items.push_back(CvarToggle("Frame counter", "Shows the game's frame rate in the corner. F2 toggles it while playing.",
-                               "kk_show_fps", "Hidden", "Shown"));
     items.push_back(CvarToggle("Startup logos",
                                "The Ubisoft, Universal and WingNut movies before the title screen. Story movies "
                                "still play.",
                                "kk_skip_intros", "Play", "Skip"));
+    items.push_back(Section("Notifications"));
+    items.push_back(CvarToggle("Notifications", "A pop-up when you unlock an achievement in game.",
+                               "kk_achievement_toasts"));
+    items.push_back(CvarChoice("Pop-up style",
+                               "Xbox 360 unfolds from a green ring at the bottom of the screen. Steam slides up in "
+                               "the bottom-right corner. Try them with Test notification.",
+                               "kk_achievement_style", {{"Xbox 360", "xbox360"}, {"Steam", "steam"}}));
+    auto cheats = CheatItems();
+    items.insert(items.end(), std::make_move_iterator(cheats.begin()), std::make_move_iterator(cheats.end()));
     return items;
   }
 
@@ -1710,6 +1812,9 @@ class SettingsPages {
 
     const bool mnk = GetBool("mnk_mode");
     const char* mnk_note = "Used when Input is Keyboard & mouse.";
+    const auto profile = ShownProfileOptions();
+    items.push_back(ProfileToggle("Aiming visor", "Show the game's aiming visor.", play::ProfileOption::kAimingVisor, profile.aiming_visor));
+    items.push_back(ProfileToggle("Inventory", "Show the game's inventory indicators.", play::ProfileOption::kInventory, profile.inventory));
     items.push_back(Section("Keyboard & mouse"));
     {
       Item it = CvarSlider("Mouse sensitivity",
@@ -1967,6 +2072,15 @@ class SettingsPages {
   static constexpr const char* kSetByOriginalInGame =
       "Set by the Original Xbox 360 look. Change Look in the launcher to set it.";
 
+  double preview_at_ = 0;
+  std::vector<std::filesystem::path> sounds_;
+  double sounds_scanned_ = -10.0;
+  void PreviewAudio() {
+    if (preview_at_ > 0 && ImGui::GetTime() >= preview_at_ && !ImGui::IsMouseDown(0)) {
+      preview_at_ = 0;
+      PlayAchievementSound(profile_user_dir_);
+    }
+  }
   LauncherCallbacks cb_;
   ui::Input input_;
   ui::Glyphs glyphs_;
@@ -1980,14 +2094,15 @@ class SettingsPages {
   int display_modes_monitor_ = -1;
   const bool in_game_;  // drawn by the pause menu
   std::filesystem::path profile_user_dir_;
+  int profile_slot_ = -1;
   std::vector<play::SaveSlot> profile_saves_;
   double profile_saves_at_ = -1;
   play::ProfileOptions profile_read_;
   double profile_read_at_ = -1;
   // Changes waiting to be written to every save (FlushProfileOptions).
-  std::array<float, 5> profile_values_{};
-  std::array<bool, 5> profile_dirty_{};
-  std::array<bool, 5> profile_waiting_{};
+  std::array<float, size_t(play::ProfileOption::kCount)> profile_values_{};
+  std::array<bool, size_t(play::ProfileOption::kCount)> profile_dirty_{};
+  std::array<bool, size_t(play::ProfileOption::kCount)> profile_waiting_{};
   double profile_changed_at_ = 0;
 };
 
@@ -2069,6 +2184,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       OpenPlayMenu();
       if (open_on == "chapters") OpenPlayView(PlayView::kChapters);
     }
+    if (files_ok_ && open_on == "extras") GoTo(kExtras);
     saved_changes_ = seen_changes_ = g_changes;
   }
 
@@ -2110,7 +2226,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       diagnostics_tested = true;
       const char* previous = ImGui::GetClipboardText();
       const std::string saved = previous ? previous : "";
-      for (const auto& item : AboutItems()) if (item.label == "Copy diagnostics" && item.on_activate) item.on_activate();
+      for (const auto& item : AdvancedPageItems()) if (item.label == "Copy diagnostics" && item.on_activate) item.on_activate();
       if (const char* copied = ImGui::GetClipboardText()) {
         std::ofstream file(paths_.user_dir / "diagnostics-clipboard.txt", std::ios::binary);
         file << copied;
@@ -2486,6 +2602,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
 
   void GoTo(Page page) {
+    if (page == kExtras) ReadSaves();
     if (page == kDisplay && page_ != kDisplay) {
       monitors_.clear();
       display_modes_monitor_ = -1;
@@ -2618,6 +2735,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     else
       e.push_back({"Check for updates", true, [this] { StartUpdateCheck(true); }});
     e.push_back({"Settings", true, [this] { GoTo(kDisplay); }});
+    e.push_back({"Extras", CanPlay(), [this] { GoTo(kExtras); }});
     e.push_back({"Achievements", true, [this] { GoTo(kAchievements); }});
     e.push_back({"Quit", true, [this] { Quit(); }});
     return e;
@@ -4138,7 +4256,100 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
   }
 
+  std::vector<Item> AdvancedPageItems() {
+    auto items = AdvancedItems();
+    items.push_back(ActionItem("Copy diagnostics",
+        "Copies version, hardware, settings, fallbacks and recent errors. Names and paths are redacted. Nothing is uploaded.",
+        "Copy", [this] {
+          const auto report = DiagnosticsReport();
+          ImGui::SetClipboardText(report.c_str());
+          Status("Diagnostics copied to the clipboard.");
+        }));
+    if (HasCrashReports(paths_.user_dir)) {
+      items.push_back(ActionItem("Saved crash reports",
+          "A previous crash saved local diagnostics and a minidump. Dumps may contain private process memory. Review before sharing. Nothing is uploaded.",
+          "Open folder", [this] { OpenInExplorer(paths_.user_dir / "crashes"); }));
+    }
+    return items;
+  }
+
   // ----------------------------------------------------- settings pages ---
+  std::string MenuText(uint32_t id) {
+    static constexpr const char* codes[] = {"en", "de", "es", "fr", "it"};
+    const std::string lang = codes[int(text::Current())];
+    if (extras_lang_ != lang) {
+      extras_texts_ = art::ReadMenuTexts(paths_.game_dir, lang.c_str());
+      extras_lang_ = lang;
+    }
+    auto it = extras_texts_.find(id);
+    return it == extras_texts_.end() ? std::string() : it->second;
+  }
+
+  static void ReplaceText(std::string& text, const std::string& from, const std::string& to) {
+    for (size_t at = 0; (at = text.find(from, at)) != std::string::npos; at += to.size()) text.replace(at, from.size(), to);
+  }
+
+  std::string ExtraHint(const play::ExtraInfo& e, const play::ExtraProgress& progress) {
+    std::string hint;
+    if (e.progress > 100) hint = MenuText(0x4902EF32);
+    else if (e.score >= 0) hint = MenuText(progress.percent < 100 ? 0x4902EF2D : 0x4902EF2B);
+    else hint = MenuText(0x4902EF2A);
+    ReplaceText(hint, "\\m1\\", e.progress > 100 ? MenuText(0x4902EC04 + e.id) : std::to_string(progress.percent));
+    ReplaceText(hint, "\\m2\\", std::to_string(e.progress));
+    ReplaceText(hint, "\\m3\\", std::to_string(progress.score));
+    ReplaceText(hint, "\\m4\\", std::to_string(e.score));
+    ReplaceText(hint, "\\cFF7FFF\\", "");
+    ReplaceText(hint, "\\cFFFFFF\\", "");
+    return hint;
+  }
+
+  std::vector<Item> ExtrasItems() {
+    std::vector<Item> items;
+    const int slot = ChapterSlot();
+    Item save;
+    save.type = ItemType::kChoice;
+    save.label = "Save";
+    save.description = "Bonuses use this save's progress and scores.";
+    save.index = -1;
+    std::vector<int> slots;
+    for (const auto& sv : saves_) if (sv.exists) {
+      if (sv.index == slot) save.index = int(slots.size());
+      slots.push_back(sv.index);
+      save.options.push_back(SaveName(sv));
+    }
+    save.value_text = "No save yet";
+    save.on_choice = [this, slots](int i) { chapter_slot_ = slots[size_t(i)]; };
+    save.disabled = slots.empty();
+    items.push_back(std::move(save));
+    items.push_back(Section("Extras"));
+    auto progress = play::ReadExtraProgress(paths_.user_dir, slot);
+    progress.museum |= GetBool("kk_cheats") && GetBool("kk_cheat_bonus");
+    for (const auto& extra : play::kExtras) {
+      const int id = extra.id;
+      Item it;
+      it.type = ItemType::kAction;
+      it.label = MenuText(0x4902EC04 + id);
+      if (it.label.empty()) it.label = F("Bonus {0}", {std::to_string(id + 1)});
+      const bool unlocked = play::ExtraUnlocked(extra, progress);
+      it.value_text = unlocked ? "Unlocked" : "Locked";
+      it.description = unlocked ? T("Play this bonus, then return to Extras.") : ExtraHint(extra, progress);
+      it.value_color = unlocked ? color::kAccent : color::kTextFaint;
+      // Locked rows stay selectable so a controller can read their unlock hints.
+      if (unlocked && extra.type == play::ExtraType::kMode) {
+        it.description = MenuText(0x4902EF30);
+        ReplaceText(it.description, "\\m1\\", MenuText(id == 1 ? 0x4902D4FA : 0x4902D4EE));
+        it.on_activate = [this, slot] {
+          profile_slot_ = slot;
+          profile_read_at_ = -1;
+          GoTo(kGraphics);
+        };
+      } else if (unlocked) it.on_activate = [this, slot, id] { PlayWith({play::StartKind::kExtra, slot, id, ""}); };
+      else it.on_activate = [] { ui::Cue(ui::Sound::kDeny); };
+      items.push_back(std::move(it));
+    }
+    return items;
+  }
+
   void DrawSettings(ImDrawList* dl) {
     const float s = S();
     std::vector<Item> items;
@@ -4150,7 +4361,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       case kControls:
         items = sub_ == kRemapPage ? RemapItems() : sub_ == kKeysPage ? KeyItems() : ControlsItems();
         break;
-      case kCheatsPage: items = CheatItems(); break;
+      case kAdvanced: items = AdvancedPageItems(); break;
+      case kExtras: items = ExtrasItems(); break;
       case kAchievements: items = AchievementItems(); break;
       case kAbout: items = AboutItems(); break;
       default: break;
@@ -4172,57 +4384,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // ------------------------------------------------------- Achievements ---
   std::vector<Item> AchievementItems() {
     std::vector<Item> items;
-    items.push_back(Section("Notifications"));
-    items.push_back(CvarToggle("Notifications", "A pop-up when you unlock an achievement in game.",
-                               "kk_achievement_toasts"));
-    items.push_back(CvarChoice("Pop-up style",
-                               "Xbox 360 unfolds from a green ring at the bottom of the screen. Steam slides up in "
-                               "the bottom-right corner. Try them with Test notification.",
-                               "kk_achievement_style", {{"Xbox 360", "xbox360"}, {"Steam", "steam"}}));
-    items.push_back(CvarToggle("Sound", "The sound that plays with each pop-up.", "kk_achievement_sound"));
-    const bool sound = GetBool("kk_achievement_sound");
-    const char* sound_note = "Switch Sound on to choose it.";
-    {
-      if (sounds_.empty() || ImGui::GetTime() - sounds_scanned_ > 3.0) {
-        sounds_ = ListSounds(paths_.user_dir);
-        sounds_.insert(sounds_.begin(), std::filesystem::path());  // built-in chime
-        sounds_scanned_ = ImGui::GetTime();
-      }
-      Item it;
-      it.type = ItemType::kChoice;
-      it.label = "Sound to play";
-      it.description =
-          "The built-in chime or a sound you added. Put .wav files in the sounds folder to see them here.";
-      const std::string cur = Get("kk_achievement_sound_file");
-      it.index = 0;
-      std::vector<std::string> values;
-      for (size_t i = 0; i < sounds_.size(); ++i) {
-        it.options.push_back(sounds_[i].empty() ? std::string("Original chime") : SoundLabel(sounds_[i]));
-        values.push_back(sounds_[i].string());
-        if (values.back() == cur) it.index = int(i);
-      }
-      it.on_choice = [this, values](int i) {
-        Set("kk_achievement_sound_file", values[size_t(i)]);
-        PlayAchievementSound(paths_.user_dir);  // preview
-      };
-      it.on_default = [] { Reset("kk_achievement_sound_file"); };
-      it.default_text = "Original chime";
-      items.push_back(std::move(Disable(it, !sound, sound_note)));
-    }
-    {
-      Item it = CvarSlider("Volume", "How loud the sound is. It plays as you change it.", "kk_achievement_volume", 0,
-                           100, 5, [](float v) { return std::to_string(int(std::lround(v))) + "%"; });
-      auto set = it.on_value;
-      it.on_value = [this, set](float v) {
-        set(v);
-        preview_at_ = ImGui::GetTime() + 0.3;  // once it settles
-      };
-      items.push_back(std::move(Disable(it, !sound, sound_note)));
-    }
-    items.push_back(ActionItem("Open sounds folder", "Where your own .wav sounds go.", "", [this] {
-      OpenInExplorer(SoundsDir(paths_.user_dir));
-      sounds_.clear();  // rescan when the list is next built
-    }));
     items.push_back(ActionItem("Test notification", "Shows a sample notification right now.", "", [this] {
       if (!GetBool("kk_achievement_toasts")) Status("Notifications are off; switch them on to see the test.");
       const uint32_t icon = achievements_.empty() ? 0 : achievements_[test_index_++ % achievements_.size()].id;
@@ -4301,18 +4462,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
           benchmark::CreateBenchmarkStartDialog(imgui_drawer(), [this] { benchmark_pending_ = true; StartGame(); });
         });
     items.push_back(Disable(benchmark, !CanPlay(), "Install the game first."));
-    items.push_back(ActionItem("Copy diagnostics",
-        "Copies version, hardware, settings, fallbacks and recent errors. Names and paths are redacted. Nothing is uploaded.",
-        "Copy", [this] {
-          const auto report = DiagnosticsReport();
-          ImGui::SetClipboardText(report.c_str());
-          Status("Diagnostics copied to the clipboard.");
-        }));
-    if (HasCrashReports(paths_.user_dir)) {
-      items.push_back(ActionItem("Saved crash reports",
-          "A previous crash saved local diagnostics and a minidump. Dumps may contain private process memory. Review before sharing. Nothing is uploaded.",
-          "Open folder", [this] { OpenInExplorer(paths_.user_dir / "crashes"); }));
-    }
     {
       Item it;
       it.type = ItemType::kInfo;
@@ -4370,21 +4519,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     items.push_back(CvarToggle("Show this launcher",
                                "Off starts the game directly. Hold Shift while starting to bring the launcher back.",
                                "kk_launcher", "Off", "At startup"));
-    items.push_back(CvarToggle("Music", "The game's main menu music while the launcher is open, from your copy of the game.",
-                               "kk_launcher_music"));
-    {
-      Item it = CvarSlider("Music volume", "How loud the launcher's music is.", "kk_launcher_music_volume", 0, 100, 5,
-                           [](float v) { return std::to_string(int(std::lround(v))) + "%"; });
-      items.push_back(std::move(Disable(it, !GetBool("kk_launcher_music"), "Switch Music on to set its volume.")));
-    }
-    items.push_back(CvarToggle("Menu sounds", "The game's own menu sounds as you move around the launcher and choose things.",
-                               "kk_launcher_sounds"));
-    {
-      Item it = CvarSlider("Menu sound volume", "How loud the launcher's menu sounds are.",
-                           "kk_launcher_sounds_volume", 0, 100, 5,
-                           [](float v) { return std::to_string(int(std::lround(v))) + "%"; });
-      items.push_back(std::move(Disable(it, !GetBool("kk_launcher_sounds"), "Switch Menu sounds on to set their volume.")));
-    }
     items.push_back(CvarToggle("Check for updates",
                                "Checks GitHub for a newer version of the port each time the launcher opens, and offers "
                                "it. The shader pack keeps itself up to date either way.",
@@ -4492,29 +4626,29 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     switch (page) {
       case kDisplay:
         return {"fullscreen", "kk_fullscreen_mode", "window_width", "window_height", "monitor", "kk_frame_rate",
-                "d3d12_allow_variable_refresh_rate_and_tearing", "present_effect", "kk_render_quality",
-                "resolution_scale", "draw_resolution_scale_x", "draw_resolution_scale_y", "present_letterbox"};
+                "d3d12_allow_variable_refresh_rate_and_tearing", "present_letterbox",
+                "present_hdr", "present_hdr_peak", "present_hdr_paper_white"};
       case kGraphics:
         return {"kk_original_look", "kk_modern_settings", "kk_graphics_preset", "swap_post_effect", "anisotropic_override",
                 "native_texture_pack", "native_texture_pack_folder",
-                "present_hdr", "present_hdr_peak", "present_hdr_paper_white", "kk_ps2_cutscenes", "kk_ps2_movie_folder",
+                "present_effect", "kk_render_quality", "resolution_scale", "draw_resolution_scale_x",
+                "draw_resolution_scale_y", "native_upscaler", "native_upscaler_quality",
                 "kk_motion_blur", "kk_big_blur", "kk_fog", "ao_mode", "ao_strength", "native_ao_method",
-                "native_ao_apply", "native_ao_quality", "native_ao_samples", "native_backend", "kk_renderer", "native_gi", "native_gi_distance", "native_shadow_quality", "native_water_reflections", "native_volumetrics", "native_effect_buffers", "native_sharpness"};
+                "native_ao_apply", "native_ao_quality", "native_ao_samples", "native_gi", "native_gi_distance", "native_shadow_quality", "native_water_reflections", "native_volumetrics", "native_effect_buffers", "native_sharpness"};
       case kGameplay:
-        return {"kk_fov", "kk_camera_shake", "kk_camera_shake_strength", "kk_show_fps",
+        return {"kk_fov", "kk_camera_shake", "kk_camera_shake_strength", "kk_cheats", "kk_cheat_*",
+                "kk_achievement_toasts", "kk_achievement_style",
                 "kk_skip_intros", "user_language"};
       case kAudio:
-        return {"#profile"};
+        return {"#profile", "kk_launcher_music", "kk_launcher_music_volume", "kk_launcher_sounds",
+                "kk_launcher_sounds_volume", "kk_achievement_sound", "kk_achievement_sound_file", "kk_achievement_volume"};
       case kControls:
         return {"mnk_mode", "kk_button_prompts", "kk_camera_sensitivity", "kk_camera_modern", "kk_mouse_sensitivity",
                 "mnk_mouse", "kk_mouse_invert_y", "kk_invert_rs_x", "kk_invert_rs_y", "kk_invert_ls_x", "kk_invert_ls_y",
                 "kk_toggle_aim", "kk_deadzone", "kk_vibration", "kk_vibration_strength", "kk_map_*",
                 "@Input/Keybinds/Controller"};
-      case kCheatsPage:
-        return {"kk_cheats", "kk_cheat_*"};
-      case kAchievements:
-        return {"kk_achievement_toasts", "kk_achievement_style", "kk_achievement_sound", "kk_achievement_sound_file",
-                "kk_achievement_volume"};
+      case kAdvanced:
+        return {"native_backend", "kk_renderer", "kk_show_fps", "kk_ps2_cutscenes", "kk_ps2_movie_folder"};
       default:
         return {};
     }
@@ -4524,9 +4658,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   void ResetPage(Page page) {
     if (page == kAudio) {
       ResetAudio();
-      return;
     }
-    if (page == kGraphics) startup::ManualChoice();  // resets the renderer and API by hand
+    if (page == kAdvanced) startup::ManualChoice();  // resets the renderer and API by hand
     const auto names = PageSettings(page);
     auto on_page = [&](const rex::cvar::FlagEntry& e) {
       for (const auto& n : names) {
@@ -4544,7 +4677,15 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     ++g_changes;
     // Gameplay's Subtitles is the game's own option, in every save (its default follows the language).
     if (page == kGameplay) ResetSubtitles();
-    if (page == kGraphics) ApplyRendererChoice();  // gpu_plugin follows kk_renderer
+    if (page == kGraphics) {
+      ChangeProfileOption(play::ProfileOption::kOldMovie, 0);
+      ChangeProfileOption(play::ProfileOption::kHorizontalFlip, 0);
+    }
+    if (page == kControls) {
+      ChangeProfileOption(play::ProfileOption::kAimingVisor, 0);
+      ChangeProfileOption(play::ProfileOption::kInventory, 0);
+    }
+    if (page == kAdvanced) ApplyRendererChoice();  // gpu_plugin follows kk_renderer
     if (page == kDisplay && cb_.set_fullscreen) cb_.set_fullscreen(GetBool("fullscreen"));
     Status(F("{0} settings are back to their defaults.", {T(std::string(kPageNames[page]))}));
   }
@@ -4558,6 +4699,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
     ResetAudio();  // the game's own options, in every save
     ResetSubtitles();
+    for (int i = int(play::ProfileOption::kOldMovie); i < int(play::ProfileOption::kCount); ++i)
+      ChangeProfileOption(play::ProfileOption(i), 0);
     ++g_changes;
     ApplyRendererChoice();
     if (cb_.set_fullscreen) cb_.set_fullscreen(GetBool("fullscreen"));
@@ -5095,10 +5238,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       modal_.open = false;
       StartGame();
     }
-    if (preview_at_ > 0 && now >= preview_at_ && !ImGui::IsMouseDown(0)) {
-      preview_at_ = 0;
-      PlayAchievementSound(paths_.user_dir);
-    }
+    PreviewAudio();
     if (g_changes != seen_changes_) {
       seen_changes_ = g_changes;
       changed_time_ = now;
@@ -5185,7 +5325,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         {kHome, kNoSubPage, "play"},         {kDisplay, kNoSubPage, "display"},
         {kGraphics, kNoSubPage, "graphics"}, {kGameplay, kNoSubPage, "gameplay"},
         {kControls, kNoSubPage, "controls"}, {kControls, kRemapPage, "remap"},
-        {kCheatsPage, kNoSubPage, "cheats"}, {kAchievements, kNoSubPage, "achievements"},
+        {kAdvanced, kNoSubPage, "advanced"}, {kAchievements, kNoSubPage, "achievements"},
         {kAbout, kNoSubPage, "about"}};
     constexpr int kCount = int(std::size(kSteps));
     if (step < kCount) {
@@ -5205,11 +5345,13 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   }
 
   // Developer-only: KK_DEV_LAUNCHER_INPUT="pad:down,pad:a,kb:right,shot:name,..."
+  // ('|' separates launcher sessions: each bonus started from Extras hands the next
+  // session to the launcher that comes back, see dev_launcher_chain.h)
   // ("setup:N" shows a stage of the setup screen) presses buttons (a, b, x, y,
   // lb, rb, start, up, down, left, right, lt, rt)
   // one at a time as a controller ("pad:", "ps:") or the keyboard ("kb:", the
   // default), logging "KK dev: input <step>"; "shot:<name>" logs
-  // "KK dev: shot <name>" and waits for a capture. The mouse, at 1280 x 720
+  // "KK dev: shot <name>" and holds the page for a capture. The mouse, at 1280 x 720
   // layout positions: "move:X:Y", "click:X:Y", "down:X:Y", "up", "wheel:N".
   // "setup:5" is the look step; "reset-beta" does to the settings what switching to
   // stable does (and saves them); "type:<text>" types text (New game's name); "whats-new" opens What's new as after 1.9.11; "update-test"
@@ -5217,6 +5359,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // update (the full shader rebuild and its screen); "setup:4" shows the setup's shader screen.
   void DevInput() {
     ImGuiIO& io = ImGui::GetIO();
+    if (std::getenv("KK_DEV_LAUNCHER_INPUT_FILE") && (InSetup() || ShaderScreen())) return;
     static bool release = false;
     if (release) {
       io.AddMouseButtonEvent(0, false);
@@ -5225,12 +5368,22 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     static std::vector<std::string> steps = [] {
       std::vector<std::string> out;
       const char* v = std::getenv("KK_DEV_LAUNCHER_INPUT");
-      std::stringstream in(v ? v : "");
+      // Only the first '|' session: the rest is for the runs that come back to Extras (dev_launcher_chain.h).
+      std::stringstream in(std::string(kk::DevLauncherSession(v ? v : "")));
       for (std::string t; std::getline(in, t, ',');)
         if (!t.empty()) out.push_back(t);
       return out;
     }();
     static size_t next = 0;
+    // Test commands may be appended inside a private run without focusing the window.
+    if (const char* path = std::getenv("KK_DEV_LAUNCHER_INPUT_FILE")) {
+      static size_t loaded = 0;
+      std::ifstream file(path);
+      size_t line = 0;
+      for (std::string command; std::getline(file, command); ++line)
+        if (line >= loaded && !command.empty()) steps.push_back(command);
+      loaded = line;
+    }
     static double at = 2.5;
     const double now = ImGui::GetTime();
     if (next >= steps.size() || now < at) return;
@@ -5239,9 +5392,42 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     REXLOG_INFO("KK dev: input {}", t);
     if (t.rfind("shot:", 0) == 0) {
       REXLOG_INFO("KK dev: shot {}", t.substr(5));
-      at = now + 1.6;
+      rex::FlushLogging();
+      at = now + 4.0;
       return;
     }
+    // Private Extras tests choose a save, then navigate/activate through normal UI actions.
+    if (t.rfind("extras-save:", 0) == 0) {
+      chapter_slot_ = std::atoi(t.c_str() + 12);
+      GoTo(kExtras);
+      return;
+    }
+    if (t.rfind("page:", 0) == 0) {
+      for (int p = 0; p < kPageCount; ++p)
+        if (text::Upper(t.substr(5)) == text::Upper(kPageNames[p])) GoTo(Page(p));
+      return;
+    }
+    if (t.rfind("focus:", 0) == 0) {
+      for (size_t i = 0; i < focused_items_.size(); ++i) if (focused_items_[i].label == t.substr(6)) {
+        auto& state = lists_[page_ * 4 + sub_];
+        state.focus = int(i);
+        state.focus_label = focused_items_[i].label;
+        REXLOG_INFO("KK dev: launcher focused {} value {}", state.focus_label, focused_items_[i].value_text);
+        return;
+      }
+      REXLOG_INFO("KK dev: launcher focus FAIL {}", t.substr(6));
+      return;
+    }
+    if (t == "rows") {
+      // With the shown value (a choice's option, else its value text), so a test can read settings back.
+      for (const auto& row : focused_items_) {
+        const bool choice = row.index >= 0 && row.index < int(row.options.size());
+        REXLOG_INFO("KK dev: launcher page {} row {} = {}", kPageNames[page_], row.label,
+                    choice ? row.options[size_t(row.index)] : row.value_text);
+      }
+      return;
+    }
+    if (t.rfind("language:", 0) == 0) { SetInt("user_language", std::atoi(t.c_str() + 9)); return; }
     auto at_point = [&](const std::string& xy) {
       const size_t colon = xy.find(':');
       const float x = std::stof(xy.substr(0, colon)), y = std::stof(xy.substr(colon + 1));
@@ -5356,7 +5542,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   double saved_time_ = -100;
   int seen_changes_ = 0, saved_changes_ = 0;
   double changed_time_ = 0;
-  double preview_at_ = 0;
 
   std::vector<std::unique_ptr<rex::ui::ImmediateTexture>> textures_;
   struct Slide {
@@ -5383,14 +5568,14 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // The chapter select's pictures by file (nullptr: none or unreadable), made when first shown.
   std::map<std::filesystem::path, rex::ui::ImmediateTexture*> chapter_pictures_;
   std::map<std::filesystem::path, float> chapter_aspects_;
+  std::map<uint32_t, std::string> extras_texts_;
+  std::string extras_lang_;
   std::vector<Achievement> achievements_;
   bool have_achievement_names_ = false;
   std::unique_ptr<AchievementToast> toast_;
   std::unique_ptr<LauncherMusic> music_;  // once the game is installed
   std::unique_ptr<LauncherSounds> ui_sounds_;
   size_t test_index_ = 0;
-  std::vector<std::filesystem::path> sounds_;
-  double sounds_scanned_ = -10.0;
 
   iso::Progress progress_;
   std::thread install_thread_;
@@ -5423,7 +5608,7 @@ class InGameSettingsImpl final : public InGameSettings, private SettingsPages {
       case kControls:
         items = sub_ == kRemapPage ? RemapItems() : sub_ == kKeysPage ? KeyItems() : ControlsItems();
         break;
-      case kCheats: items = CheatItems(); break;
+      case kAdvanced: items = AdvancedItems(); break;
       default: break;
     }
     return LiveOnly(std::move(items));
@@ -5436,6 +5621,7 @@ class InGameSettingsImpl final : public InGameSettings, private SettingsPages {
   void LeaveSubPage() override { sub_ = kNoSubPage; }
   void Tick() override {
     CaptureKey();
+    PreviewAudio();
     FlushProfileOptions(false);
     const double now = ImGui::GetTime();
     if (g_changes != seen_changes_) {
@@ -5468,7 +5654,7 @@ class InGameSettingsImpl final : public InGameSettings, private SettingsPages {
 }  // namespace
 
 const char* InGameSettings::PageName(Page page) {
-  static const char* const kNames[kPageCount] = {"Display", "Graphics", "Gameplay", "Controls", "Cheats", "Audio"};
+  static const char* const kNames[kPageCount] = {"Display", "Graphics", "Audio", "Controls", "Gameplay", "Advanced"};
   return page >= 0 && page < kPageCount ? kNames[page] : "";
 }
 

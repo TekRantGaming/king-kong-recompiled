@@ -6,6 +6,10 @@
 #include "graphics_presets.h"
 #include "cursor_activity.h"
 #include "slider_input.h"
+#include "extras.h"
+#include "dev_launcher_chain.h"
+#include "dev_movie_input.h"
+#include "video_modes.h"
 
 #include <bit>
 #include <chrono>
@@ -28,6 +32,75 @@ void Check(bool condition, const char* message) {
   }
 }
 bool Near(float a, float b) { return std::fabs(a - b) < 1e-4f; }
+
+void ExtrasChecks() {
+  using namespace kk::play;
+  ExtraProgress fresh;
+  Check(kExtras.size() == 15, "the retail Extras page has fifteen entries");
+  // Independently transcribed from sub_824CBFE8, loc_824CCD08's id switch.
+  // Modes return from that switch; their fields are read by sub_825EE130.
+  constexpr ExtraInfo original[] = {
+      {19, ExtraType::kMovie, 0x820AE520, -1, -1},
+      {18, ExtraType::kLevel, 7, -1, -1},
+      {12, ExtraType::kLevel, 54, -1, 5},
+      {1, ExtraType::kMode, 0, -1, 15, 0, 0, 0x4DA4},
+      {15, ExtraType::kLevel, 55, -1, 1000},
+      {9, ExtraType::kLevel, 57, -1, 50},
+      {5, ExtraType::kLevel, 50, -1, 75},
+      {8, ExtraType::kMode, 0, -1, 100, 0, 0, 0x4DA0},
+      {6, ExtraType::kLevel, 51, 20000, -1},
+      {7, ExtraType::kLevel, 56, 50000, -1},
+      {0, ExtraType::kMovie, 0x820AE4F0, 75000, -1},
+      {10, ExtraType::kLevel, 52, 100000, -1},
+      {11, ExtraType::kLevel, 53, 150000, -1},
+      {3, ExtraType::kMovie, 0x820AE508, -1, 2000},
+      {2, ExtraType::kLevel, 2003, 250000, 100, 1, 1},
+  };
+  constexpr uint32_t original_selection[] = {0, 2, 3, 0, 5, 6, 7, 0, 9, 10, 0, 12, 13, 0, 15};
+  for (size_t i = 0; i < kExtras.size(); ++i) {
+    const auto& want = original[i];
+    const auto* got = FindExtra(want.id);
+    Check(kExtras[i].id == want.id && got, "original Extras order and id lookup");
+    Check(got->type == want.type && got->level == want.level,
+          "every original id selects its exact level or movie address");
+    Check(got->start_point == want.start_point && got->session_flag == want.session_flag &&
+              got->mode_offset == want.mode_offset,
+          "every original id preserves its start point and session or mode flags");
+    Check(got->score == want.score && got->progress == want.progress,
+          "every original id retains its own unlock requirements");
+    Check(ExtraSelection(want.id) == original_selection[i],
+          "only level bonuses write their original one-based selection to G+0x5680");
+  }
+  Check(!ExtraSelection(-1) && !ExtraSelection(4) && !ExtraSelection(13) && !ExtraSelection(20),
+        "invalid bonuses do not write the selection field");
+  Check(!FindExtra(-1) && !FindExtra(4) && !FindExtra(13) && !FindExtra(20), "unused and invalid bonus ids are not launchable");
+  std::map<int, bool> ids;
+  for (const auto& e : kExtras) {
+    Check(ids.emplace(e.id, true).second, "each retail bonus appears once");
+    Check(ExtraUnlocked(e, fresh) == (e.id == 19 || e.id == 18), "new profile availability");
+    ExtraProgress p;
+    p.museum = true;
+    Check(ExtraUnlocked(e, p), "the original museum cheat unlocks each bonus");
+    p = {};
+    if (e.progress > 100) {
+      p.percent = 100; p.score = 1000000;
+      Check(!ExtraUnlocked(e, p), "progress and score cannot unlock an online-code bonus");
+      p.online_codes = 1u << e.id;
+      Check(ExtraUnlocked(e, p), "the matching saved online-code flag unlocks its bonus");
+      p.online_codes = 1u << (e.id + 1);
+      Check(!ExtraUnlocked(e, p), "an unrelated code flag does not unlock the bonus");
+    } else {
+      p.percent = std::max(0, e.progress); p.score = std::max(0, e.score);
+      Check(ExtraUnlocked(e, p) == (float(p.percent) * 0.01f >= float(e.progress) / 100.0f),
+            "unlock comparison matches the game's single-precision progress calculation");
+      if (e.progress > 0) { --p.percent; Check(!ExtraUnlocked(e, p), "progress below threshold remains locked"); p.percent = 100; }
+      if (e.score > 0) { --p.score; Check(!ExtraUnlocked(e, p), "score below threshold remains locked"); }
+    }
+  }
+  const auto* ending = FindExtra(2);
+  Check(ending && ending->level == 2003 && ending->score == 250000 && ending->progress == 100,
+        "alternate ending uses its original level, score and completion requirements");
+}
 
 void GraphicsPresetChecks() {
   const char* expected[] = {"low", "medium", "high", "high", "low"};
@@ -169,7 +242,8 @@ std::vector<uint8_t> MadeUpSave(uint32_t seed, float volume, uint32_t subtitles)
   sf::WriteWord(b.data() + 0x28, 0x1234);  // a continue level: a used slot
   sf::WriteWord(b.data() + 0xA68, 4);
   for (int i = 0; i < 4; ++i) sf::WriteWord(b.data() + sf::kFileFields[i], std::bit_cast<uint32_t>(volume));
-  sf::WriteWord(b.data() + sf::kFileFields[4], subtitles);
+  for (int i = 4; i < sf::kOptionCount; ++i) sf::WriteWord(b.data() + sf::kFileFields[i], i == 4 ? subtitles : 0);
+  sf::WriteWord(b.data() + sf::kInventoryCompanion, 0);
   return b;
 }
 void WriteFile(const fs::path& path, const std::vector<uint8_t>& bytes) {
@@ -196,6 +270,7 @@ bool OnlyOptionsChanged(const std::vector<uint8_t>& before, const std::vector<ui
   for (size_t i = 0; i < before.size(); ++i) {
     bool option = false;
     for (uint32_t f : sf::kFileFields) option |= i >= f && i < f + 4;
+    option |= i >= sf::kInventoryCompanion && i < sf::kInventoryCompanion + 4;
     if (!option && before[i] != after[i]) return false;
   }
   return true;
@@ -265,12 +340,98 @@ void AllSavesChecks() {
         "the last value is in every save");
   Check(sf::OptionsValid(ReadFile(slot_file(0)).data(), sf::kFileFields), "the saves stay valid");
 
+  // Original modes / control indicators use the same atomic save writer, with unrelated bytes intact.
+  auto before_modes = ReadFile(slot_file(0));
+  values.fill(0); changed.fill(false);
+  for (int i = 5; i < sf::kOptionCount; ++i) { values[i] = 1; changed[i] = true; }
+  Check(sf::WriteOptions(slot_file(0), backups, 0, values, changed), "original video and control options save");
+  auto after_modes = ReadFile(slot_file(0));
+  for (int i = 5; i < sf::kOptionCount; ++i)
+    Check(sf::ReadWord(after_modes.data() + sf::kFileFields[i]) == 1, "original option has its selected value");
+  Check(sf::ReadWord(after_modes.data() + sf::kInventoryCompanion) == 1, "both original inventory words agree");
+  Check(OnlyOptionsChanged(before_modes, after_modes), "changing bonus modes leaves progress, scores and other bytes untouched");
+  auto progress_save = MadeUpSave(9, 1, 0);
+  sf::WriteWord(progress_save.data() + 0x34, 41);
+  for (int i = 0; i < 40; ++i) sf::WriteWord(progress_save.data() + 0x38 + i * 4, i == 0 ? 250000 : 0);
+  for (int i = 0; i < 20; ++i) sf::WriteWord(progress_save.data() + 0x168 + 4 * i, i == 15 ? 1 : 0);
+  const auto ep = kk::play::DecodeExtraProgress(progress_save);
+  Check(ep.percent == 100 && ep.score == 250000, "private save progress and scores decode exactly");
+  Check(kk::play::ExtraUnlocked(*kk::play::FindExtra(2), ep), "completed private save unlocks the alternate ending");
+  Check(kk::play::ExtraUnlocked(*kk::play::FindExtra(15), ep) && !kk::play::ExtraUnlocked(*kk::play::FindExtra(3), ep),
+        "each original saved online-code word unlocks only its own bonus");
+  Check(kk::play::DecodeExtraProgress({}).score == 0, "missing save is safe");
+  progress_save.resize(100);
+  Check(kk::play::DecodeExtraProgress(progress_save).online_codes == 0, "truncated save has no unlocks");
   std::error_code ec;
   fs::remove_all(root, ec);
 }
 }  // namespace
 
 int main() {
+  // Extras playback does not set either story-movie flag. SKIP must still
+  // send Start, and must stop sending it once playback ends.
+  std::map<uint32_t, uint32_t> movie;
+  auto read_movie = [&](uint32_t address) { return movie.at(address); };
+  movie[0x82CCAE80] = 0;
+  Check(!kk::DevMoviePlaying(read_movie), "no movie player is idle without dereferencing it");
+  movie[0x82CCAE80] = 0x1000;
+  for (uint32_t flags = 0; flags < 8; ++flags) {
+    movie[0x110C] = flags & 1;
+    movie[0x1110] = flags & 2;
+    movie[0x1130] = flags & 4;
+    Check(kk::DevMoviePlaying(read_movie) == (flags != 0), "story and Extras playback enable scripted skip");
+  }
+  movie[0x110C] = movie[0x1110] = movie[0x1130] = 0;
+  Check(!kk::DevMoviePlaying(read_movie), "completed Extras playback cannot pause the next screen");
+  // A loaded save's video modes wait for the game's profile pointer and flip target (a launcher start loads
+  // the save on the title, where sub_825EE130 read guest 0x4DA4 and crashed), then apply exactly once.
+  {
+    using kk::play::NextVideoModeStep;
+    using kk::play::VideoModeStep;
+    Check(NextVideoModeStep(false, 0x1000, 0x2000, 1, 1) == VideoModeStep::kNothing, "no load, nothing to apply");
+    for (uint32_t profile : {0u, 0x1000u})
+      for (uint32_t target : {0u, 0x2000u})
+        for (uint32_t modes = 1; modes < 4; ++modes) {
+          const auto step = NextVideoModeStep(true, profile, target, modes & 1, modes >> 1);
+          Check(step == (profile && target ? VideoModeStep::kApply : VideoModeStep::kWait),
+                "video modes apply only once both game pointers are set");
+        }
+    Check(NextVideoModeStep(true, 0x1000, 0x2000, 0, 0) == VideoModeStep::kNothing,
+          "a save with both modes off calls nothing");
+    Check(NextVideoModeStep(true, 0, 0, 0, 0) == VideoModeStep::kWait, "pending modes keep waiting before the profile");
+  }
+  // Chained scripted Extras sessions: the launcher runs only the first, a started bonus hands on the rest.
+  Check(kk::DevLauncherSession("a,b") == "a,b", "a single launcher session runs whole");
+  Check(kk::DevLauncherSession("a,b|c|d") == "a,b", "only the first chained session runs");
+  Check(kk::DevLauncherSession("") == "", "no launcher input stays empty");
+  Check(kk::DevLauncherAfterStart("a,b") == "shot:returned-extras", "an unchained run only marks the return");
+  Check(kk::DevLauncherAfterStart("a|c,d|e") == "shot:returned-extras,c,d|e", "the next session follows the return");
+  Check(kk::DevLauncherAfterStart("a|") == "shot:returned-extras", "an empty trailing session is dropped");
+  Check(kk::DevLauncherSession(kk::DevLauncherAfterStart("a|c|e")) == "shot:returned-extras,c",
+        "each return runs exactly one further session");
+  // Script buttons: existing names keep their bits; the left stick drives both axes and half pushes.
+  Check(kk::DevScriptButton("A") == 0x1000 && kk::DevScriptButton("RIGHT") == 0x0008 &&
+            kk::DevScriptButton("SKIP") == kk::kDevSkip && kk::DevScriptButton("RSUP") == kk::kDevRsUp,
+        "existing script buttons are unchanged");
+  Check(kk::DevScriptButton("NOPE") == 0 && kk::DevScriptButton("") == 0, "unknown script buttons press nothing");
+  {
+    uint32_t all = 0;
+    for (const char* n : {"LSUP", "LSDOWN", "LSLEFT", "LSRIGHT", "LSHALF"}) {
+      const uint32_t bit = kk::DevScriptButton(n);
+      Check(bit && !(all & bit) && bit > kk::kDevSkip, "left stick names have their own bits");
+      all |= bit;
+    }
+    const auto none = kk::DevScriptSticks(0x1000 | kk::kDevSkip);
+    Check(!none.lx && !none.ly && !none.rx && !none.ry, "buttons alone leave both sticks centred");
+    const auto up = kk::DevScriptSticks(kk::kDevLsUp);
+    Check(up.ly == 32767 && !up.lx && !up.rx && !up.ry, "LSUP pushes the left stick fully forward only");
+    const auto back = kk::DevScriptSticks(kk::kDevLsDown | kk::kDevLsLeft | kk::kDevLsHalf);
+    Check(back.ly == -16384 && back.lx == -16384, "LSHALF halves both left axes");
+    const auto look = kk::DevScriptSticks(kk::kDevRsRight | kk::kDevLsRight);
+    Check(look.rx == 32767 && look.lx == 32767 && !look.ry && !look.ly, "both sticks can be held together");
+    const auto right_half = kk::DevScriptSticks(kk::kDevRsUp | kk::kDevRsHalf);
+    Check(right_half.ry == 16384 && !right_half.ly, "RSHALF still halves only the right stick");
+  }
   // All launcher/pause slider ranges and F8's float/integer/opacity controls.
   for (auto range : std::vector<std::array<float, 3>>{{0,100,1}, {0,100,5}, {69,110,1}, {0,100,10},
        {0.05f,10,0.05f}, {0,50,1}, {0,1,0.05f}, {0,4,0.05f}, {0.25f,4,0.05f},
@@ -318,6 +479,7 @@ int main() {
   cursor.Mouse();
   Check(cursor.mouse, "mouse restores pointer");
   GraphicsPresetChecks();
+  ExtrasChecks();
   ShaderProgressChecks();
   AllSavesChecks();
   std::cout << checks << " launcher checks passed\n";
