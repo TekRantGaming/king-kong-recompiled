@@ -45,6 +45,7 @@
 #include "backend/scene_gi.h"
 #include "backend/scene_lighting.h"
 #include "backend/memory_budget.h"
+#include "backend/retire_budget.h"
 #include "backend/draw_sink.h"
 #include "backend/driver_pipeline_cache.h"
 #include "backend/frame_log.h"
@@ -568,6 +569,13 @@ class GameRenderer {
   std::unique_ptr<AoGpuTimer> cas_timer_;
   std::unique_ptr<Smaa> smaa_;
   std::deque<std::pair<uint64_t, nvrhi::ResourceHandle>> retired_resources_;  // (frame, resource)
+  // Destroys the retired resources past their GPU lifetime within a per-frame time budget (task 174:
+  // a whole chapter's trim destroyed in one frame was a 50-130 ms frame); see retire_budget.h.
+  void ReleaseRetiredResources();
+  RetireBudget retire_budget_;
+  bool retire_budget_checked_ = false;
+  uint64_t retire_backlog_frames_ = 0, retire_backlog_released_ = 0;
+  double retire_backlog_ms_ = 0;
   uint32_t TextureView(HostTexture* host, const kknr::TextureFetch& fetch,
                        kkshaders::TextureDimension dimension, bool base_map);
   // extra_lod_bias: added to the fetch constant's (the upscalers' mip bias for the scene's draws).

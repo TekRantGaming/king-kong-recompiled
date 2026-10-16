@@ -650,6 +650,37 @@ void GameRenderer::RetireResource(nvrhi::IResource* resource) {
   if (resource) retired_resources_.emplace_back(frame_, resource);
 }
 
+void GameRenderer::ReleaseRetiredResources() {
+  if (!retire_budget_checked_) {
+    retire_budget_checked_ = true;
+    // Developer A/B: KK_DEV_RETIRE_BUDGET_MS=<ms per frame>; 0 = every aged resource at once (the old path).
+    if (const char* value = std::getenv("KK_DEV_RETIRE_BUDGET_MS"); value && *value) {
+      retire_budget_.budget_ms = std::strtod(value, nullptr);
+      Logf(LogLevel::kInfo, "rexgpu-native: retired resources released within %.2f ms a frame (0 = all at once)",
+           retire_budget_.budget_ms);
+    }
+  }
+  const auto start = std::chrono::steady_clock::now();
+  // Under memory pressure the memory matters more than the frame: release all of them, as before.
+  const bool all = pack_pressure_ || retire_budget_.budget_ms <= 0;
+  const RetireRelease r = ReleaseRetired(retired_resources_, frame_, 8, all, retire_budget_);
+  const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+  if (r.aged_left || retire_backlog_frames_ || r.released >= 64) {
+    ++retire_backlog_frames_;
+    retire_backlog_released_ += r.released;
+    retire_backlog_ms_ = std::max(retire_backlog_ms_, ms);
+    if (!r.aged_left) {
+      Logf(LogLevel::kInfo,
+           "rexgpu-native: retired resources: %llu released over %llu frames, longest %.2f ms (frame %llu)",
+           static_cast<unsigned long long>(retire_backlog_released_),
+           static_cast<unsigned long long>(retire_backlog_frames_), retire_backlog_ms_,
+           static_cast<unsigned long long>(frame_));
+      retire_backlog_frames_ = retire_backlog_released_ = 0;
+      retire_backlog_ms_ = 0;
+    }
+  }
+}
+
 void GameRenderer::RetireSlot(Table table, uint32_t slot) {
   if (!slot) return;
   DescriptorTable& t = tables_[table];
@@ -947,7 +978,7 @@ void GameRenderer::EndFrame() {
       t.retired.pop_front();
     }
   }
-  while (!retired_resources_.empty() && retired_resources_.front().first + 8 < frame_) retired_resources_.pop_front();
+  ReleaseRetiredResources();
   CheckMemoryBudget();
   stats_.edram_framebuffers = framebuffers_.size();
   if (frame_ % 300 == 0) {
@@ -988,9 +1019,19 @@ void GameRenderer::EndFrame() {
     }
     if (options_.debug & 8) LogInvalidationHistogram();
     if (!resource_loading_) {
-      textures_.Trim(frame_, 1800);
-      vertex_buffers_.Trim(frame_, 1800);
-      index_buffers_.Trim(frame_, 1800);
+      // Drops what has been unused for 1800 frames; the host resources go to retired_resources_ and are
+      // destroyed a few per frame (ReleaseRetiredResources).
+      const auto trim_start = std::chrono::steady_clock::now();
+      const size_t dt = textures_.Trim(frame_, 1800);
+      const size_t dv = vertex_buffers_.Trim(frame_, 1800);
+      const size_t di = index_buffers_.Trim(frame_, 1800);
+      if (dt + dv + di)
+        Logf(LogLevel::kInfo,
+             "rexgpu-native: cache trim frame %llu: %zu textures, %zu vertex buffers, %zu index buffers unused for "
+             "1800 frames dropped in %.2f ms (kept %zu/%zu/%zu); retired resources %zu",
+             static_cast<unsigned long long>(frame_), dt, dv, di,
+             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - trim_start).count(),
+             textures_.size(), vertex_buffers_.size(), index_buffers_.size(), retired_resources_.size());
     }
   }
   RetryDeferred();
