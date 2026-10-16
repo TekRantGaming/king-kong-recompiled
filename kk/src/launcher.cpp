@@ -2816,6 +2816,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
     if (page != page_) sub_ = kNoSubPage;
     if (IsSettingsPage(page)) settings_page_ = page;
+    extras_return_focus_ = -1;  // only the Graphics visit an Extras row opened returns there
     side_focus_ = -1;
     play_ = PlayView::kNone;
     page_ = page;
@@ -2917,7 +2918,13 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       in.Consume(Action::kBack);
       ui::Cue(ui::Sound::kBack);
       if (sub_ != kNoSubPage) sub_ = kNoSubPage;
-      else if (page_ != kHome) GoTo(kHome);
+      else if (page_ == kGraphics && extras_return_focus_ >= 0) {  // opened from Extras: back there
+        const int focus = extras_return_focus_;
+        OpenPlayMenu();
+        OpenPlayView(PlayView::kExtras);
+        play_lists_[int(PlayView::kExtras)].focus = focus;
+        REXLOG_INFO("KK: back from Graphics to Extras, row {}", focus);
+      } else if (page_ != kHome) GoTo(kHome);
       else if (status_focus_ || side_focus_ >= 0) status_focus_ = false, side_focus_ = -1;  // back to the menu
       else OpenQuit();
     }
@@ -4563,10 +4570,17 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       if (unlocked && extra.type == play::ExtraType::kMode) {
         it.description = MenuText(0x4902EF30);
         ReplaceText(it.description, "\\m1\\", MenuText(id == 1 ? 0x4902D4FA : 0x4902D4EE));
-        it.on_activate = [this, slot] {
+        // Opens its row on the Graphics page; B comes back to Extras on the same row (task 144: the
+        // Extras page kept a stale focus after a visit to Graphics).
+        it.on_activate = [this, slot, row = std::string(id == 1 ? "Old movie filter" : "Horizontal flip")] {
           profile_slot_ = slot;
           profile_read_at_ = -1;
+          const int extras_focus = play_lists_[int(PlayView::kExtras)].focus;
           GoTo(kGraphics);
+          ui::ListState& st = lists_[kGraphics * 4 + kNoSubPage];
+          st.focus = -1;
+          st.focus_label = row;
+          extras_return_focus_ = extras_focus;
         };
       } else if (unlocked) it.on_activate = [this, slot, id] { PlayWith({play::StartKind::kExtra, slot, id, ""}); };
       else it.on_activate = [] { ui::Cue(ui::Sound::kDeny); };
@@ -5745,7 +5759,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       return;
     }
     if (t.rfind("focus:", 0) == 0) {
-      for (size_t i = 0; i < focused_items_.size(); ++i) if (focused_items_[i].label == t.substr(6)) {
+      for (size_t i = 0; i < focused_items_.size(); ++i)
+        if (focused_items_[i].label == t.substr(6) && focused_items_[i].type != ItemType::kSection) {
         auto& state = play_ != PlayView::kNone ? play_lists_[int(play_)] : lists_[page_ * 4 + sub_];
         state.focus = int(i);
         state.focus_label = focused_items_[i].label;
@@ -5868,6 +5883,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   bool files_ok_ = false;
   bool played_ = false;
   bool leaving_ = false;  // the game starts in a new process; this one closes once it is shown
+  int extras_return_focus_ = -1;  // Graphics was opened from this Extras row: B goes back to it
   double last_activity_ = 0;  // NoteActivity: when something last moved (ImGui time)
   int last_view_ = -1;
   bool last_status_focus_ = false;
