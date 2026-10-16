@@ -2269,6 +2269,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       if (!last.empty() || std::filesystem::exists(paths_.config_path, ec)) {
         whats_new_from_ = last;  // empty: from before the launcher remembered (show this version)
         open_whats_new_ = true;
+        REXLOG_INFO("KK: What's new pending (last run v{}): it opens once the game files, shaders and look are ready", last);
       }
       Set("kk_last_version", KK_VERSION);
       SaveSettings(paths_.config_path);
