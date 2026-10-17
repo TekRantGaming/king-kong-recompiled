@@ -73,6 +73,7 @@
 
 #include "art.h"
 #include "changelog.h"
+#include "content.h"
 #include "cheats.h"
 #include "platform.h"
 #include "settings.h"
@@ -102,6 +103,12 @@ struct TexturePackFolderChoice {
   bool busy = false;
   std::string selected;
 } texture_pack_folder_choice;
+// "Import texture pack ZIP": the file the OS dialog returned (its callback can run on another thread).
+struct TexturePackZipChoice {
+  std::mutex mutex;
+  bool busy = false;
+  std::string selected;
+} texture_pack_zip_choice;
 constexpr const char* kProjectUrl = "https://github.com/TekRantGaming/king-kong-recompiled";
 constexpr const char* kDiscordUrl = "https://discord.gg/PET2xU5FJq";  // permanent (expires_at null)
 #include "discord_icon.inc"
@@ -1681,8 +1688,167 @@ class SettingsPages {
       { std::lock_guard lock(texture_pack_folder_choice.mutex); it.disabled = texture_pack_folder_choice.busy; }
       items.push_back(std::move(it));
     }
+    if (!in_game_) ContentItems(items, content::Kind::kTexturePack);
     RebuildShadersItem(items);
     return items;
+  }
+
+  // ------------------------------------------------- content downloads ---
+  // Settings rows for the HD texture pack and the PS2 cutscenes (codex/state/setup-flow.md "Downloads",
+  // job J1: the service and these rows; the setup pages come later). The service runs on its own thread;
+  // the rows show its state each frame.
+  static std::string Gb(uint64_t bytes) {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%.1f", double(bytes) / 1e9);
+    return buf;
+  }
+  static std::string ProblemText(content::Problem problem) {
+    using content::Problem;
+    switch (problem) {
+      case Problem::kNotZip: return T("It is not a ZIP file.");
+      case Problem::kUnsafeName: return T("It has file names that are not safe to unpack.");
+      case Problem::kNoManifest: return T("It has no pack.txt.");
+      case Problem::kManyManifests: return T("It has more than one pack.txt.");
+      case Problem::kSubfolders: return T("The pack folder has folders inside it.");
+      case Problem::kTooLarge: return T("A file in it is too large.");
+      case Problem::kBadManifest: return T("Its pack.txt does not start with KKTP 1, or a line in it is broken.");
+      case Problem::kMissingFile: return T("A file listed in its pack.txt is missing.");
+      case Problem::kNoMovies: return T("It has no cutscene files.");
+      case Problem::kNone: break;
+    }
+    return {};
+  }
+  static std::string ContentError(const content::Status& st, bool tex) {
+    using content::Error;
+    switch (st.error) {
+      case Error::kConnection: return T("The connection was lost. Select to continue the download.");
+      case Error::kServer: return T("The download server did not answer as expected. Try again later.");
+      case Error::kSpace:
+        return F("Not enough free space. It needs {0} GB and the drive has {1} GB free.",
+                 {Gb(st.space_needed), Gb(st.space_free)});
+      case Error::kChecksum: return T("The download did not pass its check and was deleted. Select to download it again.");
+      case Error::kBadPack:
+        return std::string(tex ? T("This is not a texture pack the game can use.") : T("The download is not usable.")) +
+               " " + ProblemText(st.problem);
+      case Error::kUnpack: return T("The files could not be unpacked. Select to try again.");
+      case Error::kWrite: return T("Your user folder could not be written to. Check that the drive is not full.");
+      case Error::kBusy: return T("Another download is running. Try again when it has finished.");
+      case Error::kNone: break;
+    }
+    return {};
+  }
+  static std::string TimeLeft(double seconds) {
+    if (seconds < 0) return {};
+    if (seconds < 60) return T("Less than a minute left");
+    return F("About {0} min left", {std::to_string(int(seconds / 60 + 0.5))});
+  }
+
+  void ContentItems(std::vector<Item>& items, content::Kind kind) {
+    using namespace content;
+    auto& service = Service::Get();
+    if (!service.Ready()) return;
+    const content::Status st = service.Get(kind);
+    const bool tex = kind == Kind::kTexturePack;
+    const Info& info = InfoFor(kind);
+    Item it = ActionItem(tex ? "HD texture pack" : "Restored PS2 cutscenes", "", "", nullptr);
+    std::function<void()> action;
+    auto percent = [&] {
+      return st.total ? std::to_string(int(double(st.done) * 100 / double(st.total))) + "%" : std::string();
+    };
+    switch (st.stage) {
+      case Stage::kNone:
+        it.value_text = "Download";
+        it.description = tex ? F("Downloads the HD texture pack ({0} GB) and turns it on. It needs {1} GB of free space while it installs.",
+                                 {Gb(info.zip_size), Gb(SpaceNeeded(info.zip_size, 0, info.unpacked))})
+                             : F("Downloads the upscaled PS2 cutscenes that the Xbox 360 version left out ({0} GB) and turns them on. It needs {1} GB of free space while it installs.",
+                                 {Gb(info.zip_size), Gb(SpaceNeeded(info.zip_size, 0, info.unpacked))});
+        action = [kind] { Service::Get().Download(kind); };
+        break;
+      case Stage::kQueued:
+      case Stage::kStarting:
+      case Stage::kDownloading:
+        it.value_text = st.stage == Stage::kDownloading ? percent() : st.stage == Stage::kQueued ? "Waiting" : "Starting";
+        it.description = "Downloading. Select to pause. It continues where it stopped, also after closing the launcher.";
+        if (st.total) it.facts.push_back(F("{0} of {1} GB", {Gb(st.done), Gb(st.total)}));
+        if (st.speed > 0) {
+          char speed[32];
+          std::snprintf(speed, sizeof(speed), "%.1f", st.speed / 1e6);
+          it.facts.push_back(F("{0} MB/s", {speed}));
+        }
+        if (const std::string left = TimeLeft(st.seconds_left); !left.empty()) it.facts.push_back(left);
+        action = [kind] { Service::Get().Pause(kind); };
+        break;
+      case Stage::kPaused:
+        it.value_text = "Paused";
+        it.description = "Paused. Select to continue the download.";
+        if (st.total) it.facts.push_back(F("{0} of {1} GB", {Gb(st.done), Gb(st.total)}));
+        action = [kind] { Service::Get().Download(kind); };
+        break;
+      case Stage::kVerifying:
+        it.value_text = percent();
+        it.description = "Checking the download.";
+        action = [kind] { Service::Get().Pause(kind); };
+        break;
+      case Stage::kUnpacking:
+        it.value_text = percent();
+        it.description = "Unpacking the files. This takes a few minutes.";
+        break;
+      case Stage::kInstalled:
+        it.value_text = "Installed";
+        it.description = tex ? F("Installed: {0}. Turn it on or off with Texture pack above.", {st.installed_name})
+                             : T("Installed. Turn them on or off with Play PS2 cutscenes above.");
+        break;
+      case Stage::kFailed:
+        it.value_text = st.installed ? "Installed" : "Try again";
+        it.description = ContentError(st, tex);
+        if (!st.installed) action = [kind] { Service::Get().Download(kind); };
+        break;
+      case Stage::kRemoving:
+        it.value_text = "Removing";
+        it.description = "Removing.";
+        break;
+    }
+    it.on_activate = action;
+    items.push_back(std::move(it));
+
+    if (tex) {
+      Item imp = ActionItem("Import texture pack ZIP",
+                            "Already have a texture pack as a ZIP file? Choose it and the launcher unpacks it, checks it and turns it on. Your ZIP file is kept.",
+                            "Choose ZIP", [] {
+        {
+          std::lock_guard lock(texture_pack_zip_choice.mutex);
+          if (texture_pack_zip_choice.busy) return;
+          texture_pack_zip_choice.busy = true;
+        }
+        static const SDL_DialogFileFilter kZip[] = {{"ZIP", "zip"}};
+        SDL_ShowOpenFileDialog([](void*, const char* const* files, int) {
+          std::lock_guard lock(texture_pack_zip_choice.mutex);
+          if (files && files[0]) texture_pack_zip_choice.selected = files[0];
+          texture_pack_zip_choice.busy = false;
+        }, nullptr, nullptr, kZip, 1, nullptr, false);
+      });
+      {
+        std::lock_guard lock(texture_pack_zip_choice.mutex);
+        imp.disabled = texture_pack_zip_choice.busy || st.Busy();
+      }
+      if (st.Busy()) imp.disabled_note = "A download or install is running.";
+      items.push_back(std::move(imp));
+    }
+
+    const bool partial = st.Busy() || st.stage == Stage::kPaused || (st.stage == Stage::kFailed && !st.installed);
+    Item rem = ActionItem(tex ? "Remove HD texture pack" : "Remove PS2 cutscenes",
+                          partial ? "Stops the download and deletes what was downloaded so far."
+                          : tex   ? "Deletes the installed texture pack and turns Texture pack off."
+                                  : "Deletes the restored cutscenes and turns Play PS2 cutscenes off.",
+                          partial ? "Cancel download" : "Remove", [kind, partial] {
+        if (partial) Service::Get().Cancel(kind);
+        else Service::Get().Remove(kind);
+      });
+    if (st.stage == Stage::kUnpacking || st.stage == Stage::kRemoving || (!partial && !st.installed)) {
+      rem.disabled = true;
+      rem.disabled_note = st.installed || st.Busy() ? "Wait until it has finished." : "Not installed.";
+    }
+    items.push_back(std::move(rem));
   }
 
   // Graphics > Renderer: the native renderer's graphics API (Vulkan or DirectX 12).
@@ -1737,6 +1903,8 @@ class SettingsPages {
       it.on_default = [] { Reset("kk_ps2_movie_folder"); };
       items.push_back(std::move(it));
     }
+    // The PS2 movies play on Windows only (ps2_movies.cpp), so their download is offered there only.
+    if (!in_game_) ContentItems(items, content::Kind::kCutscenes);
 #endif
 
     items.push_back(Section("Diagnostics"));
@@ -2264,6 +2432,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       }
     }
     toast_ = std::make_unique<AchievementToast>(drawer, immediate_, paths_.game_dir, paths_.user_dir);
+    StartContent();
     CleanUpAfterUpdate();
     online::Start();
     discord::Start();
@@ -5677,6 +5846,60 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   }
 
   // --------------------------------------------------------------- tick ---
+  // Content downloads (content.h): the service's user folder, and a download that was running when the
+  // launcher closed goes on. Developer builds: KK_DEV_CONTENT_URL_TEX / _CUT point at a local server
+  // (same files, so the same SHA-256), KK_DEV_CONTENT_DROP_AT=<bytes> loses the connection once.
+  void StartContent() {
+    content::SetLog([](bool warning, const std::string& line) {
+      if (warning) REXLOG_WARN("{}", line);
+      else REXLOG_INFO("{}", line);
+    });
+    auto& service = content::Service::Get();
+#if defined(KK_DEV_TOOLS)
+    if (const char* v = std::getenv("KK_DEV_CONTENT_URL_TEX"); v && *v)
+      service.OverrideUrl(content::Kind::kTexturePack, v, content::InfoFor(content::Kind::kTexturePack).sha256);
+    if (const char* v = std::getenv("KK_DEV_CONTENT_URL_CUT"); v && *v)
+      service.OverrideUrl(content::Kind::kCutscenes, v, content::InfoFor(content::Kind::kCutscenes).sha256);
+#endif
+    service.Init(paths_.user_dir);
+  }
+
+  // Each tick (also from the heartbeat while minimised): the settings an install or Remove changes, a
+  // chosen ZIP to import, a status line when something finished. Progress is logged by the service's own
+  // thread: a log write from the UI thread can wait for the disk while 5 GB are being unpacked.
+  void TickContent() {
+    auto& service = content::Service::Get();
+    if (!service.Ready()) return;
+    for (const auto& c : service.TakeChanges()) {
+      if (!c.when_name.empty() && Get(c.when_name.c_str()) != c.when_value) continue;
+      if (c.reset) Reset(c.name.c_str());
+      else Set(c.name.c_str(), c.value);
+      REXLOG_INFO("KK content: setting {} = {}", c.name, c.reset ? std::string("(default)") : c.value);
+    }
+    {
+      std::string zip;
+      {
+        std::lock_guard lock(texture_pack_zip_choice.mutex);
+        zip.swap(texture_pack_zip_choice.selected);
+      }
+      if (!zip.empty()) service.Import(std::filesystem::path(std::u8string(zip.begin(), zip.end())));
+    }
+    for (int i = 0; i < content::kKindCount; ++i) {
+      const auto kind = content::Kind(i);
+      const auto st = service.Get(kind);
+      auto& last = content_last_[i];
+      if (st.stage != last) {
+        const bool tex = kind == content::Kind::kTexturePack;
+        if (st.stage == content::Stage::kInstalled && last != content::Stage::kNone)
+          Status(tex ? "The HD texture pack is installed and turned on." : "The PS2 cutscenes are restored and turned on.");
+        if (st.stage == content::Stage::kNone && last == content::Stage::kRemoving) Status("Removed.");
+        if (st.stage == content::Stage::kFailed)
+          REXLOG_WARN("KK content: {} failed: {}", content::InfoFor(kind).id, ContentError(st, tex));
+        last = st.stage;
+      }
+    }
+  }
+
   void SaveIfChanged() {
     if (saved_changes_ == g_changes) return;
     SaveSettings(paths_.config_path);
@@ -5701,6 +5924,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     FinishInstallIfDone();
     FinishArtIfDone();
     RefreshPack();
+    TickContent();
     TickUpdate();
     TickSteam();
     if (offer_crash_reports_ && !modal_.open && !InSetup() && !update_shaders_ && !native_pack_.Busy()) {
@@ -5969,6 +6193,25 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       }
       return;
     }
+    if (t.rfind("content:", 0) == 0) {  // content:<download|pause|cancel|remove>:<tex|cut>, content:import:<zip>, content:status
+      auto& service = content::Service::Get();
+      const std::string rest = t.substr(8);
+      const size_t colon = rest.find(':');
+      const std::string verb = rest.substr(0, colon), arg = colon == std::string::npos ? "" : rest.substr(colon + 1);
+      const auto kind = arg == "cut" ? content::Kind::kCutscenes : content::Kind::kTexturePack;
+      if (verb == "download") service.Download(kind);
+      else if (verb == "pause") service.Pause(kind);
+      else if (verb == "cancel") service.Cancel(kind);
+      else if (verb == "remove") service.Remove(kind);
+      else if (verb == "import") service.Import(std::filesystem::path(std::u8string(arg.begin(), arg.end())));
+      for (int i = 0; i < content::kKindCount; ++i) {
+        const auto st = service.Get(content::Kind(i));
+        REXLOG_INFO("KK dev: content {} stage {} error {} problem {} {} / {} installed {} name {}",
+                    content::InfoFor(content::Kind(i)).id, int(st.stage), int(st.error), int(st.problem), st.done,
+                    st.total, st.installed ? 1 : 0, st.installed_name);
+      }
+      return;
+    }
     if (t == "layout-check") {  // every settings page against settings_layout.h
       LogLayoutCheck();
       return;
@@ -6118,6 +6361,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   int style_focus_ = 1;       // the card with the focus (Remastered first)
   rex::ui::ImmediateTexture* still_low_ = nullptr;  // the first still, smaller (the Original card)
   int setup_focus_ = 0;
+  content::Stage content_last_[content::kKindCount] = {};  // TickContent: the stage last seen
 #if defined(KK_DEV_TOOLS)
   int dev_setup_ = -1;  // KK_DEV_LAUNCHER_SETUP: show a setup stage (screenshots)
 #endif

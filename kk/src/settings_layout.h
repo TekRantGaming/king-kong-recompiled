@@ -63,6 +63,9 @@ inline constexpr Row kGraphicsRows[] = {
     {"Advanced", "Effect resolution"},
     {"Advanced", "Texture pack"},
     {"Advanced", "Texture pack folder"},
+    {"Advanced", "HD texture pack"},
+    {"Advanced", "Import texture pack ZIP"},
+    {"Advanced", "Remove HD texture pack"},
     {"Advanced", "Rebuild shaders"},
 };
 
@@ -123,6 +126,8 @@ inline constexpr Row kCheatsRows[] = {
 inline constexpr Row kAdvancedRows[] = {
     {"Cutscenes", "Play PS2 cutscenes"},
     {"Cutscenes", "PS2 movie folder"},
+    {"Cutscenes", "Restored PS2 cutscenes"},
+    {"Cutscenes", "Remove PS2 cutscenes"},
     {"Diagnostics", "Frame counter"},
     {"Diagnostics", "Copy diagnostics"},
     {"Diagnostics", "Saved crash reports"},
