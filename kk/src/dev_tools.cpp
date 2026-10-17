@@ -67,6 +67,7 @@
 #include "art.h"
 #include "dev_launcher_chain.h"
 #include "dev_movie_input.h"
+#include "freecam.h"
 #include "guest.h"
 #include "menu_hook.h"
 #include "shader_pack.h"
@@ -575,6 +576,10 @@ bool AutoskipPad(uint32_t user, uint8_t* state) {
         if (t >= s.at && t < s.at + s.hold) held |= s.buttons;
     }
     buttons = uint16_t(held);
+    if (static bool freecam_held = false; bool(held & kDevFreecam) != freecam_held) {
+      freecam_held = held & kDevFreecam;
+      if (freecam_held) kk::freecam::DevToggle();  // the press switches it, as F9
+    }
     if ((held & kSkip) && MoviePlaying()) buttons |= kStart;
     if (held & kLT) triggers[0] = 255;
     if (held & kRT) triggers[1] = 255;

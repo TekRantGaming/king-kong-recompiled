@@ -962,7 +962,7 @@ class GameRenderer {
     // Shadows: PCSS's penumbra width per unit of light-space depth, the receiver plane bias's limit.
     float penumbra_scale = 300.0f;
     float slope_limit = 0.01f;
-    std::array<uint8_t, 208> constants_last = {};  // sizeof(kkshaders::LightingConstants)
+    std::array<uint8_t, 224> constants_last = {};  // sizeof(kkshaders::LightingConstants)
     float water_axes[3][4] = {};  // the last water draw's flat planes (WaterPlanesFromConstants)
     uint32_t water_axes_logged = 0;
     bool constants_valid = false;

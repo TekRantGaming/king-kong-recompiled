@@ -48,8 +48,13 @@ struct alignas(16) LightingConstants {
     // (0: the faceted one), z: colour mips of blur along the whole ray, w: how much a hit that only grazes
     // the back of a thin object fades (0-1)
     float ssrSmooth[4];
+    // Soft miss edge (smooth reflections): x the radius around a hit or near pass whose share of hittable
+    // texels fades the reflection (host pixels), y 1 on, z how far behind a thin object a ray still keeps
+    // a fading share of it (thicknesses), w how near the ray's depth a surface beside it counts as a near
+    // pass (thicknesses)
+    float ssrEdge[4];
 };
-static_assert(sizeof(LightingConstants) == 13 * 16, "LightingConstants must match KKLighting");
+static_assert(sizeof(LightingConstants) == 14 * 16, "LightingConstants must match KKLighting");
 
 // The water reflection hook of a pixel shader (docs/lighting.md, "Water reflections"): the screen-space
 // reflection traced at the top of main (kl_WaterTrace), and where it goes.

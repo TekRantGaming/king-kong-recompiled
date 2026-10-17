@@ -27,6 +27,7 @@ cbuffer KKLighting : register(b5, space0)
     float4 kl_SsrAxis1;      //   normals, from its world-view-projection and the frame's camera), w 1 when known
     float4 kl_SsrAxis2;
     float4 kl_SsrSmooth;     // x ripple (0-1), y 1 smooth trace (0: the faceted one), z blur along the ray (mips), w thin-hit fade
+    float4 kl_SsrEdge;       // soft miss edge: x radius (host pixels), y 1 on (2 developer view), z reach behind objects (radii), w window of a near pass (thicknesses)
 };
 
 // Test hosts can bind the same algorithm without the game's bindless tables.
@@ -43,7 +44,23 @@ struct KLSsr
     float confidence;  // 0: no hit (the game's own reflection stays)
     float lod;         // mip of the colour copy (rough water)
     float fresnel;     // Schlick's, for shaders that have none of their own (the ocean)
+    float kind;        // soft miss edge: 0 a hit, 1 a near pass beside a surface, 2 behind a thin one
+    float cover;       //   and the share of its surroundings a ray could hit (1 deep inside a surface)
 };
+
+// --native_ssr_debug: hits from blue (at a silhouette) to red (inside), near passes green, behind thin
+// objects cyan (brighter for more cover); misses with nothing near: yellow out of steps, magenta to the
+// ray's end. Shown in full wherever there is any confidence.
+float3 kl_EdgeDebug(KLSsr s)
+{
+    if (s.kind < 0.5)
+        return lerp(float3(0.0, 0.0, 1.0), float3(1.0, 0.0, 0.0), s.cover);
+    if (s.kind > 3.5)
+        return float3(1.0, 0.0, 1.0);
+    if (s.kind > 2.5)
+        return float3(1.0, 1.0, 0.0);
+    return (s.kind < 1.5 ? float3(0.0, 1.0, 0.0) : float3(0.0, 1.0, 1.0)) * (0.2 + 1.6 * s.cover);
+}
 
 float kl_ViewDepth(float stored)
 {
@@ -80,6 +97,39 @@ float3 kl_WaterPlane(float3 facet, float3 p)
     return dot(best, p) > 0.0 ? -best : best;
 }
 
+// Soft miss edge: around a point the ray reached (s, mip 0 texels), the share of the texels within
+// kl_SsrEdge.x that a ray could have hit there: within the depths the ray sweeps over that distance
+// (zRef +- window: a rock's silhouette against the far background ends it) and above the water's plane
+// (the water itself never counts); centre: where those texels are (the colour to show).
+// Seventeen taps (the point, eight at the radius, eight at half of it between them): at a straight
+// silhouette through the point about a half; deep inside an object 1; a radius outside it 0.
+static const float2 kl_EdgeTaps[16] = {
+    float2(1.0, 0.0), float2(0.7071, 0.7071), float2(0.0, 1.0), float2(-0.7071, 0.7071),
+    float2(-1.0, 0.0), float2(-0.7071, -0.7071), float2(0.0, -1.0), float2(0.7071, -0.7071),
+    float2(0.4619, 0.1913), float2(0.1913, 0.4619), float2(-0.1913, 0.4619), float2(-0.4619, 0.1913),
+    float2(-0.4619, -0.1913), float2(-0.1913, -0.4619), float2(0.1913, -0.4619), float2(0.4619, -0.1913)};
+
+float kl_EdgeCoverage(Texture2D<float4> pyramid, float2 s, float zRef, float window, float3 p, float3 up, out float2 centre)
+{
+    float2 size = kl_SsrRect.zw;
+    float pixel = abs(kl_SsrScreen.y) / size.y;  // a texel's height in view units per unit of depth
+    float count = 0.0;
+    float2 sum = 0.0;
+    [unroll] for (uint i = 0; i < 17; i++)
+    {
+        float2 st = clamp(s + (i == 0 ? float2(0.0, 0.0) : kl_EdgeTaps[i - 1] * kl_SsrEdge.x), 0.5, size - 0.5);
+        float z = pyramid.Load(int3(int2(st), 0)).x;
+        float3 q = kl_ViewFromUv(st / size, z);
+        if (abs(z - zRef) <= window && dot(q - p, up) > 2.0 * z * pixel)
+        {
+            count += 1.0;
+            sum += st;
+        }
+    }
+    centre = count > 0.0 ? sum / count : s;
+    return count / 17.0;
+}
+
 // normalMap: the water's normal map's tangent-space x y (-1..1) at the pixel, 0 without one.
 KLSsr kl_WaterTrace(float4 pos, float2 normalMap)
 {
@@ -96,6 +146,7 @@ KLSsr kl_WaterTrace(float4 pos, float2 normalMap)
     if (dot(facet, p) > 0.0)
         facet = -facet;
     float3 n = facet;
+    float3 up = facet;  // the water's plane at the pixel, out of the water (soft miss edge)
     float waveBlur = 0.0;
     if (kl_SsrSmooth.y > 0.5)
     {
@@ -104,6 +155,7 @@ KLSsr kl_WaterTrace(float4 pos, float2 normalMap)
         // from the water's flat plane instead (the plane of its model nearest this triangle), keep
         // only a share (the ripple) of the triangle's tilt, and turn the rest into blur.
         float3 plane = kl_WaterPlane(facet, p);
+        up = plane;
         float3 tilt = facet - plane * dot(facet, plane);
         n = normalize(plane + tilt * kl_SsrSmooth.x);
         waveBlur = length(tilt) * (1.0 - kl_SsrSmooth.x) * 8.0;
@@ -137,7 +189,9 @@ KLSsr kl_WaterTrace(float4 pos, float2 normalMap)
         if (d[a] < 0.0) tMax = min(tMax, (0.01 - s0[a]) / d[a]);
     }
     float k0 = 1.0 / p.z, k1 = 1.0 / p1.z;
-    float2 inv = 1.0 / select(abs(d) > 1e-6, d, 1e-6);
+    // A near-zero step keeps its sign (a vertical ray with d.x a hair below zero otherwise found its cell
+    // boundary behind it, crept by eps and ran out of steps: one-pixel holes at power-of-two columns).
+    float2 inv = 1.0 / select(abs(d) > 1e-6, d, select(d >= 0.0, 1e-6, -1e-6));
     Texture2D<float4> pyramid = KL_DEPTH_TEXTURE;
     int maxLevel = int(kl_SsrTextures.z) - 1;
     float eps = 0.02 / span;
@@ -145,6 +199,16 @@ KLSsr kl_WaterTrace(float4 pos, float2 normalMap)
     int level = 0;
     bool hit = false;
     float hitZ = 0.0;
+    // Soft miss edge (smooth trace): where the ray found nothing it may still have passed a surface,
+    // behind a thin one (thinT) or within a few texels beside one at its own depth (passT, the finest
+    // pyramid level that saw it). Either keeps a fading share of that surface's colour, so the edge to
+    // the game's own reflection fades over a few pixels instead of cutting.
+    bool edgeOn = kl_SsrSmooth.y > 0.5 && kl_SsrEdge.y > 0.5;
+    float pixel = abs(kl_SsrScreen.y) / size.y;
+    float3 pk0 = p * k0, pk1 = p1 * k1;  // the ray's view point at t: lerp(pk0, pk1, t) / lerp(k0, k1, t)
+    float thinT = -1.0, thinZ = 0.0, thinGap = 0.0;
+    float passT = -1.0, passZ = 0.0;
+    int passLevel = 99;
     uint steps = uint(kl_SsrParams.w);
     [loop] for (uint i = 0; i < steps && t < tMax; i++)
     {
@@ -170,6 +234,18 @@ KLSsr kl_WaterTrace(float4 pos, float2 normalMap)
         }
         if (level > 0)
         {
+            // A surface near the ray's depth within this cell: a near pass, unless the ray is still so
+            // close to the water that the cell's nearest texel can be the water itself.
+            if (edgeOn && level < passLevel && min(zA, zB) <= zc * (1.0 + kl_SsrParams.z * kl_SsrEdge.w))
+            {
+                float3 q = lerp(pk0, pk1, t) / lerp(k0, k1, t);
+                if (dot(q - p, up) > 2.0 * cellSize * q.z * pixel)
+                {
+                    passT = t;
+                    passZ = zc;
+                    passLevel = level;
+                }
+            }
             level--;
             continue;
         }
@@ -184,11 +260,61 @@ KLSsr kl_WaterTrace(float4 pos, float2 normalMap)
             hitZ = zc;
             break;
         }
+        if (edgeOn && thinT < 0.0)
+        {
+            // The first object the ray went behind (above the water: not a wave's crest).
+            float3 q = kl_ViewFromUv(s / size, zc);
+            if (dot(q - p, up) > 2.0 * zc * pixel)
+            {
+                thinT = t;
+                thinZ = zc;
+                // How far (texels) the ray had been behind that depth when it reached the object: a ray
+                // just beyond the last hit only just missed it; further into the miss region, more.
+                float dk = k1 - k0;
+                thinGap = abs(dk) > 1e-6 ? max(t - (1.0 / zc - k0) / dk, 0.0) * span : 1e6;
+            }
+        }
         t = tExit + eps;  // behind a thin object: go on behind it
     }
+    float keep = 1.0;  // a hit 1; behind an object: a quarter (as a hit at the thickness limit) fading with the gap
     if (!hit)
-        return r;
+    {
+        if (!edgeOn || (thinT < 0.0 && passT < 0.0))
+        {
+            if (kl_SsrEdge.y > 1.5)
+            {
+                r.kind = t < tMax ? 3.0 : 4.0;  // developer view: out of steps / to the ray's end
+                r.confidence = 1e-3;
+            }
+            return r;
+        }
+        r.kind = thinT >= 0.0 ? 2.0 : 1.0;
+        if (thinT >= 0.0)
+        {
+            t = thinT;
+            hitZ = thinZ;
+            keep = (1.0 - kl_SsrSmooth.w) * (1.0 - smoothstep(0.0, kl_SsrEdge.z * kl_SsrEdge.x, thinGap));
+        }
+        else
+        {
+            t = passT;
+            hitZ = passZ;
+        }
+    }
     r.uv = (s0 + d * t) / size;
+    float cover = 1.0;
+    if (edgeOn)
+    {
+        // How much of the surroundings a ray could have hit: about a half at the silhouette, from both
+        // sides, so hit and miss meet without a step; the colour comes from where those texels are.
+        float2 centre;
+        // The ray's depth here and how much it changes over the radius (texels), plus the thickness.
+        float zRay = 1.0 / lerp(k0, k1, t);
+        float window = zRay * kl_SsrParams.z + abs(k1 - k0) * zRay * zRay / span * kl_SsrEdge.x;
+        cover = kl_EdgeCoverage(pyramid, s0 + d * t, hitZ, window, p, up, centre);
+        r.cover = cover;
+        r.uv = centre / size;
+    }
     float2 edge = saturate(min(r.uv, 1.0 - r.uv) / max(kl_SsrMisc.x, 1e-4));
     float fadeFar = saturate((1.0 - t) * 4.0);       // the last quarter of the ray fades
     float facing = saturate(1.0 + refl.z * 2.0);  // rays back towards the eye fade
@@ -202,9 +328,10 @@ KLSsr kl_WaterTrace(float4 pos, float2 normalMap)
         edge = smoothstep(0.0, 1.0, edge);
         fadeFar = smoothstep(0.0, 1.0, fadeFar);
         float behind = saturate((1.0 / lerp(k0, k1, t) - hitZ) / max(hitZ * kl_SsrParams.z, 1e-6));
-        float thin = 1.0 - kl_SsrSmooth.w * smoothstep(0.25, 1.0, behind);
-        r.confidence = edge.x * edge.y * fadeFar * facing * thin;
-        r.lod = min(length(normalMap) * kl_SsrMisc.y + waveBlur + kl_SsrSmooth.z * t, float(kl_SsrSampler.y) - 1.0);
+        float thin = hit ? 1.0 - kl_SsrSmooth.w * smoothstep(0.25, 1.0, behind) : keep;
+        r.confidence = edge.x * edge.y * fadeFar * facing * thin * cover;
+        float lodEdge = edgeOn ? log2(max(kl_SsrEdge.x, 1.0)) * (1.0 - cover) : 0.0;  // blurrier towards the edge
+        r.lod = min(length(normalMap) * kl_SsrMisc.y + waveBlur + kl_SsrSmooth.z * t + lodEdge, float(kl_SsrSampler.y) - 1.0);
     }
     return r;
 }
@@ -221,6 +348,11 @@ float4 kl_WaterReflection(float4 game, KLSsr s, float2 gameUv, bool planar)
     if (planar)
         uv += clamp(gameUv - s.pixelUv, -0.05, 0.05);
     float3 c = KL_COLOR_TEXTURE.SampleLevel(KL_LINEAR_SAMPLER, saturate(uv), s.lod).rgb;
+    if (kl_SsrEdge.y > 1.5)
+    {
+        c = kl_EdgeDebug(s);
+        a = 1.0;
+    }
     float4 o = game;
     o.rgb = lerp(game.rgb, c, a);
     if (planar)
@@ -235,6 +367,11 @@ float4 kl_OceanReflection(float4 color, KLSsr s)
     if (!(a > 0.0))
         return color;
     float3 c = KL_COLOR_TEXTURE.SampleLevel(KL_LINEAR_SAMPLER, saturate(s.uv), s.lod).rgb;
+    if (kl_SsrEdge.y > 1.5)
+    {
+        c = kl_EdgeDebug(s);
+        a = 1.0;
+    }
     return float4(lerp(color.rgb, c, a), color.a);
 }
 

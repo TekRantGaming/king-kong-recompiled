@@ -33,6 +33,7 @@ inline constexpr uint32_t kDevRsUp = 1u << 18, kDevRsDown = 1u << 19, kDevRsLeft
                           kDevRsRight = 1u << 21, kDevRsHalf = 1u << 22, kDevSkip = 1u << 23;
 inline constexpr uint32_t kDevLsUp = 1u << 24, kDevLsDown = 1u << 25, kDevLsLeft = 1u << 26,
                           kDevLsRight = 1u << 27, kDevLsHalf = 1u << 28;
+inline constexpr uint32_t kDevFreecam = 1u << 29;  // switches the free camera (dev_tools.cpp)
 inline uint32_t DevScriptButton(std::string_view s) {
   struct Name {
     std::string_view name;
@@ -45,7 +46,7 @@ inline uint32_t DevScriptButton(std::string_view s) {
       {"X", 0x4000},         {"Y", 0x8000},           {"LT", kDevLT},          {"RT", kDevRT},
       {"RSUP", kDevRsUp},    {"RSDOWN", kDevRsDown},  {"RSLEFT", kDevRsLeft},  {"RSRIGHT", kDevRsRight},
       {"RSHALF", kDevRsHalf}, {"SKIP", kDevSkip},     {"LSUP", kDevLsUp},      {"LSDOWN", kDevLsDown},
-      {"LSLEFT", kDevLsLeft}, {"LSRIGHT", kDevLsRight}, {"LSHALF", kDevLsHalf}};
+      {"LSLEFT", kDevLsLeft}, {"LSRIGHT", kDevLsRight}, {"LSHALF", kDevLsHalf}, {"FREECAM", kDevFreecam}};
   for (const auto& n : kNames)
     if (s == n.name) return n.bit;
   return 0;

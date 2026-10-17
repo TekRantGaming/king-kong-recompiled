@@ -480,6 +480,17 @@ REXCVAR_DEFINE_BOOL(native_ssr_smooth, true, "Native renderer",
                     "version; a comparison switch, docs/lighting.md)")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
+REXCVAR_DEFINE_BOOL(native_ssr_soft_edge, true, "Native renderer",
+                    "Smooth water reflections: where a ray misses beside something it could hit, fade into the "
+                    "game's own reflection over a few pixels (false: a hard edge; a comparison switch, "
+                    "docs/lighting.md)")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+
+REXCVAR_DEFINE_BOOL(native_ssr_debug, false, "Native renderer",
+                    "Water reflections developer view: hits red, near passes green, behind thin objects blue "
+                    "(docs/lighting.md)")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+
 REXCVAR_DEFINE_DOUBLE(native_volumetric_strength, 1.0, "Native renderer",
                       "The volumetric light's strength times this (tuning, docs/lighting.md)")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);

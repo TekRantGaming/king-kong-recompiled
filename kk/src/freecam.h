@@ -13,6 +13,8 @@ bool HideHud();
 void Pad(uint32_t user, uint8_t *state, bool connected);
 #if defined(KK_DEV_TOOLS)
 bool DevPadInput(uint32_t user, uint8_t *state);
+// KK_DEV_SCRIPT's FREECAM press: switches the free camera on or off (F9), the script's sticks then fly it.
+void DevToggle();
 #endif
 void Frame(uint8_t *base);
 // Save/override the game view before its normal camera/frustum setup; restore

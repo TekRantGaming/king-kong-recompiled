@@ -287,6 +287,7 @@ void Pad(uint32_t user, uint8_t *state, bool connected) {
   pads[user] = connected && InPlay() && !DebugOverlayOpen() ? input : PadInput{};
 }
 #if defined(KK_DEV_TOOLS)
+void DevToggle() { Toggle(); }
 bool DevPadInput(uint32_t user, uint8_t *state) {
   if (!std::getenv("KK_DEV_FREECAM_TEST") || user != 0 || !active)
     return false;

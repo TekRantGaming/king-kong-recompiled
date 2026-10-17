@@ -308,6 +308,11 @@ void GameRenderer::LightingWriteConstants(nvrhi::ICommandList* cl) {
   k.ssrSmooth[2] = 1.0f;    // one colour mip of blur over the whole ray
   k.ssrSmooth[3] = 0.75f;   // grazing hits behind thin objects keep a quarter
   if (l.ssr_smooth) k.ssrMisc[0] = 0.12f;  // a wider, smooth edge fade
+  // Soft miss edge: over about 6 pixels each side at 1080p (12 at 4K; never under 2.5).
+  k.ssrEdge[0] = std::max(2.5f, k.ssrRect[3] / 180.0f);
+  k.ssrEdge[1] = l.ssr_soft_edge ? (l.ssr_debug ? 2.0f : 1.0f) : 0.0f;
+  k.ssrEdge[2] = 2.0f;  // behind an object: a quarter where the ray only just missed it, nothing two radii on
+  k.ssrEdge[3] = 4.0f;  // a surface beside the ray within four thicknesses of its depth
   static_assert(sizeof(k) <= sizeof(lighting_.constants_last), "LightingState::constants_last is too small");
   // A volatile buffer is written in every command list that binds it, and when it changes.
   const bool new_list = !lighting_.constants_valid || lighting_.constants_list != cl || lighting_.constants_frame != frame_;

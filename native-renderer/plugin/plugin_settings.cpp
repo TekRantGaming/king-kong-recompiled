@@ -91,6 +91,8 @@ REXCVAR_DECLARE(double, native_shadow_softness);
 REXCVAR_DECLARE(double, native_ssr_strength);
 REXCVAR_DECLARE(double, native_ssr_ripple);
 REXCVAR_DECLARE(bool, native_ssr_smooth);
+REXCVAR_DECLARE(bool, native_ssr_soft_edge);
+REXCVAR_DECLARE(bool, native_ssr_debug);
 REXCVAR_DECLARE(double, native_volumetric_strength);
 REXCVAR_DECLARE(bool, native_cel_gpu_time);
 REXCVAR_DECLARE(int32_t, native_lighting_census);
@@ -268,6 +270,8 @@ void ReadLightingConfig(LightingConfig& l) {
   l.ssr_strength = float(std::clamp(REXCVAR_GET(native_ssr_strength), 0.0, 4.0));
   l.ssr_ripple = float(std::clamp(REXCVAR_GET(native_ssr_ripple), 0.0, 1.0));
   l.ssr_smooth = REXCVAR_GET(native_ssr_smooth);
+  l.ssr_soft_edge = REXCVAR_GET(native_ssr_soft_edge);
+  l.ssr_debug = REXCVAR_GET(native_ssr_debug);
   l.volumetric_strength = float(std::clamp(REXCVAR_GET(native_volumetric_strength), 0.0, 10.0));
   l.census_every = uint32_t(std::max(0, REXCVAR_GET(native_lighting_census)));
   l.gpu_time = REXCVAR_GET(native_lighting_gpu_time);
@@ -388,6 +392,8 @@ GameSettings ReadGameSettings(bool vulkan) {
     lighting.ssr_strength = float(std::clamp(number("native_ssr_strength", 1.0), 0.0, 4.0));
     lighting.ssr_ripple = float(std::clamp(number("native_ssr_ripple", 0.25), 0.0, 1.0));
     lighting.ssr_smooth = get("native_ssr_smooth") != "false";
+    lighting.ssr_soft_edge = get("native_ssr_soft_edge") != "false";
+    lighting.ssr_debug = get("native_ssr_debug") == "true";
     lighting.volumetric_strength = float(std::clamp(number("native_volumetric_strength", 1.0), 0.0, 10.0));
     s.gi = gi;
     s.lighting = lighting;

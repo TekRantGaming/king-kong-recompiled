@@ -93,7 +93,9 @@ without a rebuild, live too:
 `--native_shadow_softness` (the PCF and PCSS kernels' size, 1), `--native_ssr_strength` (0 to 1 of the game's
 reflection the hits replace, 1), `--native_ssr_ripple` (0 to 1, how much of the wave triangles' own tilt the
 smooth reflections keep, 0.25; F8 "Reflection ripple"), `--native_ssr_smooth` (true; false traces from each wave
-triangle as the first version did, a comparison switch), `--native_volumetric_strength` (1). Tools: `--native_lighting_census=N` (every N
+triangle as the first version did, a comparison switch), `--native_ssr_soft_edge` (true; false keeps the hard
+edge where rays miss, a comparison switch), `--native_ssr_debug` (false; a developer view of what each reflected
+pixel comes from), `--native_volumetric_strength` (1). Tools: `--native_lighting_census=N` (every N
 frames, every draw of the frame with its family, targets and their host sizes, state, the textures its pixel shader
 reads with their guest and host sizes, and the constants of the lighting passes; the frame's resolves too) and
 `--native_lighting_gpu_time` (GPU time of the screen-space shadow, of the water with its reflections and of the
@@ -237,8 +239,42 @@ reflected water, the game's own water / faceted trace / smooth trace: Vulkan 0.0
 0.0009 / 0.0094 / 0.0056, so the steps the reflections add drop by 59 % and 45 %; the rock's reflection is one
 piece instead of shards. Cost of a full-screen water trace (synthetic, NR_WATER_BENCH_WIDTH): 1080p 0.100 ->
 0.102 ms, 4K 0.453 -> 0.459 ms. The water's animation keeps running under the developer freeze, so frames are
-compared by their own hard steps, not pixel by pixel. Left: where a ray misses (the reflected silhouette of a rock
-against the far gorge) the edge to the game's own reflection is still hard.
+compared by their own hard steps, not pixel by pixel. Where a ray misses (the reflected silhouette of a rock
+against the far gorge) the edge to the game's own reflection was still hard: see the next section.
+
+### Soft miss edge (task 201)
+
+Where the rays stop finding the rock (they pass beside its outline into the far gorge, beyond their reach, or go
+behind it), the screen-space reflection gave way to the game's own reflection in one pixel: a hard cut outline.
+With `--native_ssr_soft_edge` (on whenever the smooth reflections are) the hand-over fades over a few pixels, all
+inside the same trace (the water shaders keep no history, so nothing depends on the frame rate):
+
+- **Coverage.** Around the point a ray reached, 17 taps of the depth (the point, eight at a radius, eight at half
+  of it; radius `max(2.5, picture height / 180)` pixels: 6 at 1080p, 12 at 4K) count how much of the surroundings
+  a ray could have hit there: depths within the range the ray sweeps over that radius (plus the 3 % thickness), and
+  above the water's plane (the water itself never counts). Deep inside an object that is 1, at a straight
+  silhouette about a half, a radius outside it 0. The confidence is multiplied by it and the colour is taken where
+  those texels are (one more blur mip towards the edge), so hit and miss meet at about a half from both sides.
+- **Near passes.** A ray that hits nothing still remembers the finest pyramid cell where it came within a few
+  texels of a surface at its own depth (within four thicknesses; not while it is still so close to the water that
+  the cell's nearest texel can be the water) and the first object it went behind. Beside an outline the coverage
+  there gives the outer half of the fade; behind an object the ray keeps a quarter of it (as a hit at the
+  thickness limit does), fading out over two radii of how far behind its depth it already was.
+- **Holes.** Fixed on the way: a near-vertical ray whose step was a hair below zero took its cell boundary for one
+  behind it, crept by tiny steps and ran out of steps (one-pixel holes in the reflection at power-of-two columns).
+- **Developer view** (`--native_ssr_debug=true`, live): hits blue (at a silhouette) to red (inside), near passes
+  green, behind objects cyan, misses with nothing near yellow (out of steps) or magenta (to the ray's end).
+
+In To Save Ann the misses beside the rocks are mostly rays that reach their end (three view depths) in front of the
+far gorge; the outline of each rock's reflection now fades instead of cutting. Thin objects (branches) are
+reflected a little fainter and softer (their coverage stays under 1). Measured (17 Oct, frozen, entry 22 at 30 s,
+1920x1080; band = 3 px around where the soft edge changes the picture): neighbour steps over 12/255, game / hard /
+soft: Vulkan 0.014 / 0.052 / 0.030, D3D12 0.013 / 0.046 / 0.024 (the steps the reflections add: -58 % and -66 %);
+over 24/255: Vulkan 0.0018 / 0.0074 / 0.0037, D3D12 0.0032 / 0.0060 / 0.0034. Flicker over the band (frozen
+camera, frames 0.25 s apart, hard / soft): 60 FPS 1.35 / 1.36, 120 FPS 1.56 / 1.34, D3D12 60 FPS 1.36 / 1.26 /255.
+Cost (synthetic full-screen water with the water's depth in the pyramid): 1080p 0.127 -> 0.148 ms, 4K 0.65 ->
+0.71 ms. `Lighting_WaterMissEdgeFades` checks it on a synthetic wall: the largest step at its reflected sides drops
+from the whole reflection to 0.27 of it, over about 6 pixels per side, with the middle and the open water unchanged.
 
 **Pack.** The hooked shaders are in the player's pack when it is built for the setting (`PackBuildOptions::lighting`,
 the stamp's `lighting <hash>`: a pack without them, or with another version of the hook, is rebuilt). Nothing compiles

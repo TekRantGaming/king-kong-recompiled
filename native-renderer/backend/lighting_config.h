@@ -33,6 +33,13 @@ struct LightingConfig {
   // the triangles' tilt the rays keep (0 a mirror-flat plane, 1 the full waves).
   bool ssr_smooth = true;
   float ssr_ripple = 0.25f;
+  // --native_ssr_soft_edge (smooth reflections only): where a ray misses next to something it could hit
+  // (a rock's reflected outline against the far background), the reflection fades into the game's own over
+  // a few pixels instead of cutting (false: the hard edge, for comparison).
+  bool ssr_soft_edge = true;
+  // --native_ssr_debug: the reflections show what they come from (hits red, near passes green, behind thin
+  // objects blue), by how sure they are. A developer view.
+  bool ssr_debug = false;
   // --native_lighting_census: every this many frames, the lighting-related draws of the frame (shadow
   // maps and the screen-space shadow, water, light shafts, fog) with their targets, textures and
   // constants in the log (0 off). A tool for finding the passes, independent of the options.

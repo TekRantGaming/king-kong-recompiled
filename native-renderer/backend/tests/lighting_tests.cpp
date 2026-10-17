@@ -172,8 +172,10 @@ struct WaterScene {
   nvrhi::FramebufferHandle fb;nvrhi::GraphicsPipelineHandle pipe;nvrhi::ShaderHandle vs,ps;
   nvrhi::BindingLayoutHandle layout;nvrhi::SamplerHandle sam;
   kkshaders::LightingConstants k={};
-  // striped: the wall has vertical stripes (8 px) so that a broken reflection shows.
-  bool Create(VulkanTestDevice* g,uint32_t width,uint32_t height,bool striped) {
+  bool softEdge=true;  // the soft miss edge, as shipped (Smooth writes it)
+  // striped: the wall has vertical stripes (8 px) so that a broken reflection shows. waterDepth: the
+  // water's own depth is in the pyramid below the horizon, as in the game (its mask is drawn first).
+  bool Create(VulkanTestDevice* g,uint32_t width,uint32_t height,bool striped,bool waterDepth=false) {
     gpu=g;d=g->device();w=width;h=height;
     for(uint32_t mw=w,mh=h;(mw>1||mh>1)&&mipCount<12;++mipCount){mw=std::max(mw/2,1u);mh=std::max(mh/2,1u);}
     depth=Image(d,w,h,nvrhi::Format::RGBA32_FLOAT,false,mipCount);
@@ -184,6 +186,11 @@ struct WaterScene {
     for(uint32_t y=h/8;y<h/2;y++) for(uint32_t x=w/4;x<3*w/4;x++) {
       zs[(y*w+x)*4]=6;rgb[y*w+x]=striped && ((x/8)&1) ? 0xFF102040u : 0xFF4080FFu;
     }
+    if(waterDepth)
+      for(uint32_t y=h/2;y<h;y++) {
+        const float v=(y+0.5f)/h,z=std::min(1.0f/std::max(2*v-1,1e-4f),1000.0f);
+        for(uint32_t x=0;x<w;x++){zs[(y*w+x)*4]=z;rgb[y*w+x]=0xFF0D0D0Du;}
+      }
     // Use the same nearest-depth hierarchy as production. A single mip at 4K
     // cannot cross the picture within the production 64-step budget.
     auto upload=d->createCommandList();upload->open();
@@ -250,6 +257,7 @@ struct WaterScene {
     if(planes){k.ssrAxis[0][0]=1;k.ssrAxis[0][3]=1;k.ssrAxis[1][1]=1;k.ssrAxis[1][3]=1;k.ssrAxis[2][2]=1;k.ssrAxis[2][3]=1;}
     k.ssrSmooth[0]=ripple;k.ssrSmooth[1]=on ? 1.0f : 0.0f;k.ssrSmooth[2]=1;k.ssrSmooth[3]=0.75f;
     k.ssrMisc[0]=on ? 0.12f : 0.08f;
+    k.ssrEdge[0]=std::max(2.5f,h/180.0f);k.ssrEdge[1]=softEdge ? 1.0f : 0.0f;k.ssrEdge[2]=2;k.ssrEdge[3]=4;
   }
 };
 // Shards: the share of neighbouring water pixels (across and down) whose reflection differs by more
@@ -271,14 +279,19 @@ TEST(Lighting_WaterPlaneReflectsBrightObject) {
   auto gpu=VulkanTestDevice::Create();CHECK(gpu!=nullptr);if(!gpu)return;
   const char* width=std::getenv("NR_WATER_BENCH_WIDTH");
   const uint32_t w=width ? uint32_t(std::atoi(width)) : 192,h=width ? w*9/16 : 128;
-  WaterScene s;CHECK(s.Create(gpu.get(),w,h,false));
-  // NR_WATER_BENCH_SMOOTH=0: the first (faceted) trace; otherwise the smooth one, as shipped.
+  // The bench has the water's own depth in the pyramid, as in the game.
+  WaterScene s;CHECK(s.Create(gpu.get(),w,h,false,width!=nullptr));
+  // NR_WATER_BENCH_SMOOTH=0: the first (faceted) trace; NR_WATER_BENCH_SOFT=0: no soft miss edge;
+  // otherwise as shipped.
   const char* smooth=std::getenv("NR_WATER_BENCH_SMOOTH");
+  const char* soft=std::getenv("NR_WATER_BENCH_SOFT");
+  s.softEdge=!(soft && soft[0]=='0');
   s.Smooth(!(smooth && smooth[0]=='0'),0.25f,true);
   auto render=[&](bool valid) {
     s.k.ssrTextures[3]=valid;double ms=0;
     auto p=s.Render(width ? 25 : 1,&ms);
-    if(width)std::printf("water trace bench %ux%u %s %s: %.3f ms\n",w,h,valid ? "on" : "off",s.k.ssrSmooth[1]>0 ? "smooth" : "faceted",ms);
+    if(width)std::printf("water trace bench %ux%u %s %s: %.3f ms\n",w,h,valid ? "on" : "off",
+                         s.k.ssrSmooth[1]>0 ? (s.softEdge ? "smooth soft" : "smooth") : "faceted",ms);
     return p;
   };
   auto off=render(false),on=render(true);float maxGain=0;int changed=0;
@@ -320,6 +333,62 @@ TEST(Lighting_FacetedWaterReflectionStaysWhole) {
   CHECK(calm<=smooth+0.01f);      // ripple 0 is the calmest
   CHECK(noPlane>smooth);          // without the plane the triangles' normals stay
   CHECK(flatSmooth<=flat+0.02f);  // flat water: no new edges
+  CHECK_EQ(gpu->errors(),0);
+}
+
+// Where rays miss beside something they hit (the wall's reflected sides against the far background) the
+// reflection fades into the game's own over a few pixels instead of cutting; the middle of the reflection
+// and the open water away from it stay as they were (the water's own depth never counts as a surface).
+TEST(Lighting_WaterMissEdgeFades) {
+  auto gpu=VulkanTestDevice::Create();CHECK(gpu!=nullptr);if(!gpu)return;
+  const uint32_t w=480,h=320;
+  WaterScene s;CHECK(s.Create(gpu.get(),w,h,false,true));
+  auto layer=[&](bool soft) {
+    s.softEdge=soft;s.Smooth(true,0.25f,true);
+    s.k.ssrEdge[0]=6;  // as at 1080p (the radius the renderer gives 1080 rows)
+    s.k.ssrTextures[3]=0;auto off=s.Render();
+    s.k.ssrTextures[3]=1;auto on=s.Render();
+    std::vector<float> l(w*h);
+    for(uint32_t y=0;y<h;y++)for(uint32_t x=0;x<w;x++)l[y*w+x]=on.at(x,y)[0]-off.at(x,y)[0];
+    return l;
+  };
+  const auto hard=layer(false),soft=layer(true);
+  const float R=6;
+  float hardStep=0,softStep=0,plateauDiff=0,stray=0;int rows=0,softWidth=0,hardWidth=0,holes=0;
+  // The reflection reaches rows 0.65-0.77 of the picture (nearer water: the rays end short of the wall);
+  // rows clear of its top edge (the wall's foot, also a miss edge).
+  for(uint32_t y=h*45/64;y<h*3/4;y+=2) {
+    const float plateau=hard[y*w+w/2];
+    if(plateau<0.02f)continue;
+    ++rows;plateauDiff=std::max(plateauDiff,std::fabs(soft[y*w+w/2]-plateau)/plateau);
+    for(uint32_t edge : {w/4,3*w/4}) {
+      float amp=0;  // the reflection's height at this edge (the hard edge's step)
+      for(uint32_t x=edge-20;x<edge+20;x++)amp=std::max(amp,hard[y*w+x]);
+      if(amp<10.0f/255)continue;  // too faint for 8-bit steps to mean anything
+      for(uint32_t x=edge-20;x<edge+20;x++) {
+        hardStep=std::max(hardStep,std::fabs(hard[y*w+x+1]-hard[y*w+x])/amp);
+        const float ds=std::fabs(soft[y*w+x+1]-soft[y*w+x])/amp;
+        softStep=std::max(softStep,ds);
+        const float hs=hard[y*w+x]/amp,ss=soft[y*w+x]/amp;
+        if(hs>0.1f&&hs<0.9f)++hardWidth;
+        if(ss>0.1f&&ss<0.9f)++softWidth;
+      }
+    }
+    for(uint32_t x=0;x<w;x++) {
+      if(x+4*R<w/4||x>3*w/4+4*R)stray=std::max(stray,std::fabs(soft[y*w+x]));
+      if(x>w/4+8&&x<3*w/4-8&&hard[y*w+x]<0.25f*plateau)++holes;  // a vertical ray once ran out of steps
+    }
+  }
+  std::printf("water miss edge (%d rows): largest step hard %.3f soft %.3f of the reflection; transition px per "
+              "edge hard %.1f soft %.1f; middle changed %.3f; open water %.4f; holes %d\n",rows,hardStep,softStep,
+              rows ? hardWidth/(2.0f*rows) : 0,rows ? softWidth/(2.0f*rows) : 0,plateauDiff,stray,holes);
+  CHECK(rows>=4);
+  CHECK_EQ(holes,0);
+  CHECK(hardStep>0.5f);               // the hard edge is there without it
+  CHECK(softStep<hardStep*0.5f);      // under half the step
+  CHECK(softWidth>=2*rows*3);         // at least three pixels of transition at each edge
+  CHECK(plateauDiff<0.05f);           // the middle of the reflection stays
+  CHECK(stray<2.0f/255);              // nothing new on the open water
   CHECK_EQ(gpu->errors(),0);
 }
 
