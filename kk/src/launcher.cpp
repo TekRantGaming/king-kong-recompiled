@@ -88,6 +88,10 @@
 #include "iso.h"
 #include "toast.h"
 #include "workshop.h"
+#include "workshop_net.h"
+#include "artbook.h"
+#include "artbook_files.h"
+#include "artbook_logic.h"
 
 REXCVAR_DEFINE_STRING(kk_launcher_open, "", "KK",
                       "Internal: the screen the launcher opens on, set by the game when it goes back to the "
@@ -312,7 +316,7 @@ static_assert(kSettingsTabCount == 8);
 // Sub-pages of Controls.
 enum SubPage { kNoSubPage, kRemapPage, kKeysPage };
 // Play on Home: the Play menu and its pages (docs/menus.md).
-enum class PlayView { kNone, kMenu, kLoad, kNew, kChapters, kExtras };
+enum class PlayView { kNone, kMenu, kLoad, kNew, kChapters, kExtras, kArtbook };
 
 struct Achievement {
   uint32_t id = 0;
@@ -2529,6 +2533,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         // (the texture pack, the PS2 cutscenes, the new graphics pages). Remembered until it is dismissed, so
         // closing the launcher on it shows it again next time; never on a fresh install (no settings file).
         if (Get("kk_setup_version").empty()) Set("kk_setup_version", kSetupWaiting);
+        artbook_want_ = "first start after an update";  // Beta 7: the bonus disc's artbook, if missing
       }
       Set("kk_last_version", KK_VERSION);
       SaveSettings(paths_.config_path);
@@ -3725,6 +3730,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       case PlayView::kNew: return "New game";
       case PlayView::kChapters: return "Chapter select";
       case PlayView::kExtras: return "Extras";
+      case PlayView::kArtbook: return "Artbook";
       default: return "";
     }
   }
@@ -3881,6 +3887,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   // Load game, New game and Chapter select: the settings pages' layout (list and description).
   void DrawPlayPage(ImDrawList* dl) {
+    if (play_ == PlayView::kArtbook) return DrawArtbook(dl);  // Beta 7: its own page (artbook.h)
     const float s = S();
     std::vector<Item> items = play_ == PlayView::kLoad     ? LoadItems()
                               : play_ == PlayView::kNew    ? NewGameItems()
@@ -4095,6 +4102,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         p.push_back({Action::kBack, "Back"});
         return p;
       }
+      case PlayView::kArtbook:
+        if (artbook_) return artbook_->Prompts();
+        return {{Action::kBack, "Back"}};
       default:
         return {{Action::kAccept, "Select"}, {Action::kBack, "Back"}};
     }
@@ -4102,6 +4112,15 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   void HandlePlayInput() {
     ui::Input& in = input_;
+    if (play_ == PlayView::kArtbook) {  // LB / RB are its previous / next; B leaves the viewer, then the page
+      in.Consume(Action::kPlay);
+      if (in.Pressed(Action::kBack)) {
+        in.Consume(Action::kBack);
+        ui::Cue(ui::Sound::kBack);
+        if (!(artbook_ && artbook_->Back())) play_ = PlayView::kExtras;  // on its Extras row again
+      }
+      return;
+    }
     for (const Action a : {Action::kPrevTab, Action::kNextTab, Action::kPlay}) in.Consume(a);
     if (in.Pressed(Action::kBack)) {
       in.Consume(Action::kBack);
@@ -4885,6 +4904,23 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       else it.on_activate = [] { ui::Cue(ui::Sound::kDeny); };
       items.push_back(std::move(it));
     }
+    // Beta 7: the Weta Artbook from the PS2 bonus disc (artbook.h), downloaded quietly in the background.
+    items.push_back(Section("Bonus disc"));
+    {
+      auto& service = content::Service::Get();
+      const content::Status st = service.Ready() ? service.Get(content::Kind::kArtbook) : content::Status{};
+      Item it;
+      it.type = ItemType::kAction;
+      it.label = "Artbook";
+      it.value_text = st.installed ? F("{0} paintings", {std::to_string(artbook::kPaintingCount)})
+                      : st.Busy()  ? T("Downloading")
+                                   : T("Not downloaded");
+      it.value_color = st.installed ? color::kAccent : color::kTextFaint;
+      it.description = T("Concept paintings by Weta from the game's bonus disc. Look at them up close and save "
+                         "them to your PC.");
+      it.on_activate = [this] { OpenPlayView(PlayView::kArtbook); };
+      items.push_back(std::move(it));
+    }
     return items;
   }
 
@@ -4894,6 +4930,15 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     const float s = S();
     workshop_->Draw(dl, ImVec2(o_.x + Margin(), o_.y + 96 * s), ImVec2(o_.x + w_ - Margin(), o_.y + h_ - 96 * s), m_,
                     input_, !modal_.open);
+    focused_ = nullptr;
+  }
+
+  // Beta 7: Play > Extras > Artbook (artbook.cpp); its viewer covers the whole window.
+  void DrawArtbook(ImDrawList* dl) {
+    if (!artbook_) artbook_ = std::make_unique<Artbook>(immediate_, paths_.user_dir);
+    const float s = S();
+    artbook_->Draw(dl, ImVec2(o_.x + Margin(), o_.y + 96 * s), ImVec2(o_.x + w_ - Margin(), o_.y + h_ - 96 * s), o_,
+                   ImVec2(o_.x + w_, o_.y + h_), m_, input_, !modal_.open);
     focused_ = nullptr;
   }
 
@@ -5867,7 +5912,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     for (int i = 0; i < content::kKindCount; ++i) {
       const auto kind = content::Kind(i);
       const auto st = service.Get(kind);
-      if (!st.Busy()) continue;
+      if (!st.Busy() || content::Quiet(kind)) continue;
       if (MustFinish(st, kind == content::Kind::kTexturePack && content_importing_)) finishing = true;
       else running.push_back(kind);
     }
@@ -5904,6 +5949,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
               "s as soon as it is done.", {"Stay here"}, 0, [this](int) { StopPlayWait(false); });
     modal_.live = [] {
       for (int i = 0; i < content::kKindCount; ++i) {
+        if (content::Quiet(content::Kind(i))) continue;
         const auto st = content::Service::Get().Get(content::Kind(i));
         if (MustFinish(st, false) || st.stage == content::Stage::kVerifying) return ContentProgressLine(st, false);
       }
@@ -5911,6 +5957,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     };
     modal_.progress = [] {
       for (int i = 0; i < content::kKindCount; ++i) {
+        if (content::Quiet(content::Kind(i))) continue;
         const auto st = content::Service::Get().Get(content::Kind(i));
         if (st.stage == content::Stage::kUnpacking) return ContentFraction(st);
       }
@@ -5930,6 +5977,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     bool busy = false, finishing = false;
     for (int i = 0; i < content::kKindCount; ++i) {
       const auto kind = content::Kind(i);
+      if (content::Quiet(kind)) continue;
       const auto st = service.Get(kind);
       busy = busy || st.Busy();
       finishing = finishing || MustFinish(st, kind == content::Kind::kTexturePack && content_importing_);
@@ -6347,6 +6395,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     content::Status st;
     for (const int rank : {0, 1, 2, 3}) {  // running, queued, paused, stopped
       for (int i = 0; i < kKindCount && pick < 0; ++i) {
+        if (Quiet(Kind(i))) continue;  // the artbook shows no strip
         const content::Status k = service.Get(Kind(i));
         const bool match = rank == 0   ? k.Busy() && k.stage != Stage::kQueued && k.stage != Stage::kRemoving
                            : rank == 1 ? k.stage == Stage::kQueued
@@ -6357,7 +6406,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
     if (pick < 0) return false;
     for (int i = 0; i < kKindCount; ++i)
-      if (i != pick && service.Get(Kind(i)).stage == Stage::kQueued) ++waiting;
+      if (i != pick && !Quiet(Kind(i)) && service.Get(Kind(i)).stage == Stage::kQueued) ++waiting;
     const Kind kind = Kind(pick);
     const float s = S();
     const ui::Fonts f = ui::GetFonts();
@@ -6529,7 +6578,14 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       service.OverrideUrl(content::Kind::kTexturePack, v, content::InfoFor(content::Kind::kTexturePack).sha256);
     if (const char* v = std::getenv("KK_DEV_CONTENT_URL_CUT"); v && *v)
       service.OverrideUrl(content::Kind::kCutscenes, v, content::InfoFor(content::Kind::kCutscenes).sha256);
+    if (const char* v = std::getenv("KK_DEV_CONTENT_URL_ART"); v && *v)
+      service.OverrideUrl(content::Kind::kArtbook, v, content::InfoFor(content::Kind::kArtbook).sha256);
 #endif
+    // Beta 7 artbook: each picture that comes off the bonus disc must decode (WIC on Windows, stb_image on Linux).
+    content::SetPictureCheck([](const std::filesystem::path& file) {
+      std::vector<uint8_t> bytes;
+      return artbook::ReadBytes(file, bytes, artbook::kMaxPictureBytes) && bool(workshop::DecodePicture(bytes, 256));
+    });
     service.Init(paths_.user_dir);
     // Job J3: a download paused because the game was started (PlayWithContent) goes on now.
     if (service.ResumeAfterPlay()) REXLOG_INFO("KK content: download paused for the game continues");
@@ -6570,6 +6626,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       const auto kind = content::Kind(i);
       const auto st = service.Get(kind);
       auto& last = content_last_[i];
+      if (content::Quiet(kind)) {
+        if (st.stage != last) ArtbookStageChanged(st, last);
+        last = st.stage;
+        continue;
+      }
       if (st.stage != last) {
         const bool tex = kind == content::Kind::kTexturePack;
         // Not while it unpacks: a log write from the UI thread can wait for the busy disk (REPORT-181).
@@ -6588,6 +6649,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         last = st.stage;
       }
     }
+    TickArtbook();
     // The progress pop-up: closed by something else (forget it), its buttons changed with the stage (open
     // it again with the same focus), or its job cancelled (close it).
     if (content_watch_ >= 0) {
@@ -6611,6 +6673,109 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       popup();
     }
     TickSetupContent();
+  }
+
+  // ------------------------------------------------ Beta 7: the artbook ---
+  // The bonus disc downloads by itself, quietly (no pop-up, strip or Play question), at the end of the first setup
+  // and on the first start after an update, when the artbook is not installed (DECISIONS 17 Oct "Beta 7 Extras",
+  // ROADMAP Beta 7). Remembered in content\downloads\artbook.auto until it is installed: a failed try is tried
+  // again once more in the same session after a while, and at the next starts; after kArtbookTries failed tries
+  // in a row, one pop-up says so. Developer builds start it only with KK_DEV_CONTENT_URL_ART (a local server) or
+  // KK_DEV_ARTBOOK_AUTO=1, so test runs never fetch the disc from archive.org by accident.
+  static constexpr int kArtbookTries = 3;
+  std::string artbook_want_;       // why it should download now (set before the content service is ready)
+  bool artbook_checked_ = false;   // the remembered wish was looked at this session
+  bool artbook_auto_run_ = false;  // the running download was started automatically
+  double artbook_retry_at_ = 0;    // ImGui time of the retry in this session (0: none)
+
+  static bool ArtbookAutoAllowed() {
+#if defined(KK_DEV_TOOLS)
+    const char* url = std::getenv("KK_DEV_CONTENT_URL_ART");
+    const char* on = std::getenv("KK_DEV_ARTBOOK_AUTO");
+    return (url && *url) || (on && std::string_view(on) == "1");
+#else
+    return true;
+#endif
+  }
+  void StartArtbookAuto(const std::string& why) {
+    if (!ArtbookAutoAllowed()) {
+      REXLOG_INFO("KK artbook: automatic download not started ({}): developer build without KK_DEV_CONTENT_URL_ART "
+                  "or KK_DEV_ARTBOOK_AUTO=1", why);
+      return;
+    }
+    REXLOG_INFO("KK artbook: downloading the bonus disc in the background ({})", why);
+    artbook_auto_run_ = true;
+    content::Service::Get().Download(content::Kind::kArtbook);
+  }
+  void TickArtbook() {
+    auto& service = content::Service::Get();
+    const content::Status st = service.Get(content::Kind::kArtbook);
+    const std::filesystem::path& user = paths_.user_dir;
+    if (!artbook_want_.empty()) {
+      const std::string why = std::exchange(artbook_want_, std::string());
+      if (st.installed) return;
+      artbook::AutoState a = artbook::ReadAuto(user);
+      if (!a.wanted) {
+        a = {true, 0, false};
+        artbook::WriteAuto(user, a);
+      }
+      artbook_checked_ = true;
+      if (st.Busy()) artbook_auto_run_ = true;
+      else if (a.fails < kArtbookTries) StartArtbookAuto(why);
+      return;
+    }
+    if (!artbook_checked_) {  // once a session: wanted at an earlier start and not installed yet
+      artbook_checked_ = true;
+      const artbook::AutoState a = artbook::ReadAuto(user);
+      if (a.wanted && st.installed) artbook::ClearAuto(user);
+      else if (a.wanted && st.Busy()) artbook_auto_run_ = true;  // continued by the service as it started
+      else if (a.wanted && a.fails < kArtbookTries) StartArtbookAuto("not finished at an earlier start");
+    }
+    if (artbook_retry_at_ > 0 && ImGui::GetTime() >= artbook_retry_at_) {
+      artbook_retry_at_ = 0;
+      if (!st.installed && !st.Busy()) StartArtbookAuto("trying again");
+    }
+  }
+  void ArtbookStageChanged(const content::Status& st, content::Stage last) {
+    using content::Stage;
+    if (st.stage != Stage::kUnpacking) REXLOG_INFO("KK content: artbook stage {} -> {}", int(last), int(st.stage));
+    if (st.stage == Stage::kInstalled && last != Stage::kNone) {
+      artbook::ClearAuto(paths_.user_dir);
+      artbook_auto_run_ = false;
+      artbook_retry_at_ = 0;
+      REXLOG_INFO("KK artbook: ready in Play > Extras > Artbook");
+      return;
+    }
+    if (st.stage != Stage::kFailed) return;
+    REXLOG_WARN("KK artbook: download failed: {}", ContentError(st, false));
+    if (!std::exchange(artbook_auto_run_, false)) return;  // started on the Artbook page: the page shows it
+    artbook::AutoState a = artbook::ReadAuto(paths_.user_dir);
+    a.wanted = true;
+    ++a.fails;
+    if (a.fails < kArtbookTries) {
+      double wait = 90.0;
+#if defined(KK_DEV_TOOLS)
+      if (const char* v = std::getenv("KK_DEV_ARTBOOK_RETRY_S"); v && *v) wait = std::atof(v);  // tests: shorter
+#endif
+      artbook_retry_at_ = ImGui::GetTime() + wait;
+      REXLOG_INFO("KK artbook: try {} of {} failed; trying again in {:.0f} s", a.fails, kArtbookTries, wait);
+    } else if (!a.told) {
+      a.told = true;
+      REXLOG_INFO("KK artbook: {} tries failed: telling the player", a.fails);
+      content_popups_.push_back([this] {
+        OpenModal("Artbook download failed",
+                  "The artbook could not be downloaded from archive.org after several tries. You can try again now, "
+                  "or later in Play > Extras > Artbook.",
+                  {"Try again", "Later"}, 1, [this](int i) {
+                    if (i != 0) return;
+                    artbook::WriteAuto(paths_.user_dir, {true, 0, false});
+                    REXLOG_INFO("KK artbook: try again");
+                    artbook_auto_run_ = true;
+                    content::Service::Get().Download(content::Kind::kArtbook);
+                  });
+      });
+    }
+    artbook::WriteAuto(paths_.user_dir, a);
   }
 
   void SaveIfChanged() {
@@ -6863,6 +7028,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       if (w.rfind("wait-setup:", 0) == 0) met = InSetup() && SetupStage() == std::atoi(w.c_str() + 11);
       else if (w == "wait-home") met = !InSetup() && !ShaderScreen();
       else if (w == "wait-modal") met = modal_.open;  // a pop-up is up (logged with its title)
+      else if (w == "wait-artbook") {  // Beta 7: the artbook installed, or its download failed
+        const auto st = content::Service::Get().Get(content::Kind::kArtbook);
+        met = st.installed || st.stage == content::Stage::kFailed;
+      }
       else if (w == "wait-unpack") {  // job J3: a download is being unpacked
         met = false;
         for (int i = 0; i < content::kKindCount; ++i)
@@ -6913,6 +7082,19 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       REXLOG_INFO("KK dev: launcher focused page {} tab {} row {} label {}",
                   play_ != PlayView::kNone ? PlayViewName(play_) : kPageNames[page_], OnSettingsTab() ? 1 : 0,
                   state.focus, focused_ ? focused_->label : std::string("-"));
+      return;
+    }
+    if (t.rfind("artbook:", 0) == 0) {  // Beta 7: artbook:<page|auto|state|open:N|next|prev|zoom:X|pan:DX:DY|save|back|download>
+      const std::string c = t.substr(8);
+      if (c == "page") {
+        OpenPlayMenu();
+        OpenPlayView(PlayView::kExtras);
+        OpenPlayView(PlayView::kArtbook);
+      } else if (c == "auto") {
+        artbook_want_ = "developer step";
+      } else if (artbook_) {
+        artbook_->DevCommand(c);
+      }
       return;
     }
     if (t.rfind("workshop:", 0) == 0) {  // job J8: workshop:<state|open:N|tile:N|mods|download|github|link:N|links|scroll:PX>
@@ -7068,6 +7250,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   bool recovery_shown_ = false;
   std::map<int, ui::ListState> lists_;
   std::vector<Item> focused_items_;
+  std::unique_ptr<Artbook> artbook_;  // Beta 7: made when Extras > Artbook first opens
   std::unique_ptr<Workshop> workshop_;  // job J8: made when the Workshop page first opens
   const Item* focused_ = nullptr;
   Action pending_click_ = Action::kCount;

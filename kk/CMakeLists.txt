@@ -77,6 +77,8 @@ set(KINGKONG_SOURCES
     src/native_shaders.cpp
     src/http.cpp
     src/content.cpp
+    src/artbook_files.cpp
+    src/artbook.cpp
     src/workshop.cpp
     src/workshop_markdown.cpp
     src/workshop_net.cpp
@@ -248,7 +250,7 @@ if(KK_DEV_TOOLS)
     rexglue_apply_target_settings(kk-launcher-tests)
     add_test(NAME launcher-logic COMMAND kk-launcher-tests)
     # Content downloads (texture pack, PS2 cutscenes): service, ZIP checks, resume, with a fake server.
-    add_executable(kk-content-tests tests/content_tests.cpp src/content.cpp)
+    add_executable(kk-content-tests tests/content_tests.cpp src/content.cpp src/artbook_files.cpp)
     target_include_directories(kk-content-tests PRIVATE src)
     rexglue_apply_target_settings(kk-content-tests)
     add_test(NAME content-downloads COMMAND kk-content-tests "${CMAKE_CURRENT_BINARY_DIR}/content-test")
@@ -268,6 +270,13 @@ if(KK_DEV_TOOLS)
     target_include_directories(kk-workshop-tests PRIVATE src)
     rexglue_apply_target_settings(kk-workshop-tests)
     add_test(NAME workshop COMMAND kk-workshop-tests "${CMAKE_CURRENT_BINARY_DIR}/workshop-test")
+    # Beta 7 Extras > Artbook: raw sectors to ISO, our ISO 9660 / Joliet reader (a synthetic disc), the readme's
+    # Word text, titles, the Pictures folder and Save to PC, and the content service installing a synthetic disc.
+    add_executable(kk-artbook-tests tests/artbook_tests.cpp src/artbook_files.cpp src/content.cpp src/workshop_net.cpp)
+    target_include_directories(kk-artbook-tests PRIVATE src)
+    target_compile_definitions(kk-artbook-tests PRIVATE KK_DEV_TOOLS=1)
+    rexglue_apply_target_settings(kk-artbook-tests)
+    add_test(NAME artbook COMMAND kk-artbook-tests "${CMAKE_CURRENT_BINARY_DIR}/artbook-test")
     add_executable(kk-slider-ui-tests tests/slider_ui_tests.cpp src/launcher_ui.cpp src/launcher_text.cpp)
     target_include_directories(kk-slider-ui-tests PRIVATE src)
     target_link_libraries(kk-slider-ui-tests PRIVATE rex::runtime)

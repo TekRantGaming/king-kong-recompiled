@@ -22,8 +22,12 @@
 
 namespace kk::content {
 
-enum class Kind { kTexturePack = 0, kCutscenes = 1 };
-constexpr int kKindCount = 2;
+// kArtbook (Beta 7 Extras, artbook_files.h): the PS2 bonus disc from archive.org, turned into the Weta
+// paintings in contentrtbook. It is quiet: it runs in the background without the download pop-ups, strip or
+// "Play while downloading" question, never pauses for the game and changes no settings (Quiet()).
+enum class Kind { kTexturePack = 0, kCutscenes = 1, kArtbook = 2 };
+constexpr int kKindCount = 3;
+constexpr bool Quiet(Kind kind) { return kind == Kind::kArtbook; }
 
 struct Info {
   const char* id;         // file names: content\downloads\<id>.part, <id>.state
@@ -110,6 +114,10 @@ std::unique_ptr<Fetcher> MakeSystemFetcher();
 // else python3's zipfile. False when the tool failed or none was found (`detail` says which).
 bool UnpackZip(const std::filesystem::path& zip, const std::filesystem::path& into,
                const std::function<bool()>& progress, std::string& detail);
+
+// Kind::kArtbook: how its pictures are checked after they come off the disc (the launcher passes a real
+// decoder; without one the JPEG header is checked).
+void SetPictureCheck(std::function<bool(const std::filesystem::path&)> check);
 
 // Where each kind is installed: <user data>\content\<folder> (Windows: Documents\king_kong\content; Linux:
 // ~/.local/share/king_kong/content, or $XDG_DATA_HOME/king_kong/content: the SDK chooses the user folder).

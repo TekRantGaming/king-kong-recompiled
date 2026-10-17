@@ -111,6 +111,12 @@ class Input {
   // empty before any controller was used.
   const std::string& pad_style() const { return pad_style_; }
   bool mouse_moved() const { return mouse_moved_; }
+  // The controllers' sticks (-1..1, right and down positive, a small dead zone) and triggers (0..1) this frame,
+  // the strongest of all of them; zero while the window is not the active one (Extras > Artbook zoom and pan).
+  struct Sticks {
+    float lx = 0, ly = 0, rx = 0, ry = 0, lt = 0, rt = 0;
+  };
+  const Sticks& sticks() const { return sticks_; }
   int gamepad_count() const { return int(pads_.size()); }
   // While a key binding is being captured, keys aren't actions.
   void set_keyboard_enabled(bool on) { keyboard_enabled_ = on; }
@@ -131,6 +137,7 @@ class Input {
   Device pad_device_ = Device::kXbox;
   std::string pad_style_;
   bool mouse_moved_ = false;
+  Sticks sticks_;
   bool keyboard_enabled_ = true;
   bool pads_active_ = true;
   std::array<bool, 6> dir_stale_{};  // a direction held while the window was not active (until let go)
