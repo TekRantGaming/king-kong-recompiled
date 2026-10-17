@@ -300,6 +300,18 @@ strings |= {
     'Compare',
     'Checking which other upscalers your graphics card runs...',
 }
+# Job J5: setup step 9 (button prompts).
+strings |= {
+    'Choose your button prompts',
+    'Pick which buttons the game and this launcher show in menus and hints.',
+    'Keyboard and mouse', 'Mouse camera', 'Now: {0}', 'Automatic ({0})', 'Preview',
+    'Press {0} to select and {1} to go back.',
+    'In play, Kong grabs with {0} and jumps with {1}.',
+    'Shows the buttons of the controller you are using, and changes when you switch controllers.',
+    "Plays with a keyboard and mouse: the game's hints show the keys and the mouse turns the camera.",
+    'Always shows the {0} buttons.',
+    'Controller buttons and keyboard keys can be remapped any time in Settings > Controls.',
+}
 for s in sorted(strings):
     if s == 'Home':
         continue  # never drawn as text
@@ -421,6 +433,31 @@ for needle, why in (
         fail(f'{why} ({needle})')
 if '—' in gfx or '–' in gfx:
     fail('dash in launcher_setup_graphics.inc')
+
+# Job J5: setup steps 9 and 10 come after the graphics pages (launcher_setup_end.inc): the button prompt cards
+# set kk_button_prompts (Keyboard and mouse through the Controls page's own input switch).
+end = (src / 'launcher_setup_end.inc').read_text(encoding='utf-8')
+for needle, why in (
+        ('#include "launcher_setup_end.inc"', 'launcher.cpp includes the last setup pages'),
+        ('setup_prompts_ ? kPromptsStage', 'SetupStage has the button prompts page'),
+):
+    if needle not in launcher:
+        fail(f'{why} ({needle})')
+if 'setup_prompts_ = true;' not in gfx:
+    fail('the graphics pages do not go on to the button prompts')
+for needle, why in (
+        ('Set("kk_button_prompts", value)', 'the cards set kk_button_prompts'),
+        ('SetInputMode(true)', 'Keyboard and mouse switches Input as Controls does'),
+        ('"Controller buttons and keyboard keys can be remapped any time in Settings > Controls."', 'remap note'),
+        ('{"auto", "Automatic"}', 'Automatic card'), ('{"xbox360", "Xbox 360"}', 'Xbox 360 card'),
+        ('{"xbox_series", "Xbox Series"}', 'Xbox Series card'), ('{"ps5", "PlayStation 5"}', 'PlayStation 5 card'),
+        ('{"ps2", "PlayStation 2"}', 'PlayStation 2 card'), ('{"steam_deck", "Steam Deck"}', 'Steam Deck card'),
+        ('{"keyboard", "Keyboard and mouse"}', 'Keyboard and mouse card'),
+):
+    if needle not in end:
+        fail(f'{why} ({needle})')
+if '\u2014' in end or '\u2013' in end:
+    fail('dash in launcher_setup_end.inc')
 
 if failures:
     print('\n'.join('FAIL: ' + f for f in failures))

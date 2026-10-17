@@ -3141,6 +3141,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         case 9:
         case 10:
         case 11: return GfxPrompts();
+        case kPromptsStage: return EndPrompts();
         default: return {};
       }
     }
@@ -3238,7 +3239,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // one moves in, with a brass mark. Returns the one chosen, or -1. `item_h`:
   // each entry's height when there's less room than usual (0: the usual).
   int DrawMenu(ImDrawList* dl, const std::vector<HomeEntry>& entries, int& focus, float x, float y, float alpha,
-               float item_h = 0) {
+               float item_h = 0, bool focusable = true) {
     const float s = S();
     const ui::Fonts f = ui::GetFonts();
     const int n = int(entries.size());
@@ -3246,7 +3247,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     focus = std::clamp(focus, 0, n - 1);
     const int focus_before = focus;
     menu_value_ = bool(entries[size_t(focus)].change);
-    const bool active = !modal_.open && side_focus_ < 0 && !status_focus_;
+    const bool active = focusable && !modal_.open && side_focus_ < 0 && !status_focus_;
     // Home: down from the last entry (or up from the first) moves to the shaders' status below.
     if (active && menu_to_status_ && n > 1 &&
         ((focus == n - 1 && input_.Pressed(Action::kDown)) || (focus == 0 && input_.Pressed(Action::kUp)))) {
@@ -3285,7 +3286,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
           chosen = i;
         }
       }
-      const bool on = i == focus && side_focus_ < 0 && !status_focus_;
+      const bool on = focusable && i == focus && side_focus_ < 0 && !status_focus_;
       home_offset_[size_t(i)] = ui::Approach(home_offset_[size_t(i)], on ? 22 * s : 0.0f, 18.0f);
       const float off = home_offset_[size_t(i)];
       const float k = off / (22 * s);
@@ -4193,7 +4194,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (dev_setup_ >= 0) return true;
 #endif
     return !files_ok_ || installing_ || setup_art_ || setup_shaders_ || setup_textures_ || setup_cutscenes_ ||
-           setup_graphics_ || setup_style_ || installing_update_ || update_shaders_;
+           setup_graphics_ || setup_prompts_ || setup_style_ || installing_update_ || update_shaders_;
   }
 
   // A version this launcher has not run before, on an installation that has run one (What's new uses
@@ -4223,7 +4224,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   bool AssetSetup() const {
     if (!InSetup() || slides_.empty()) return false;
     const int stage = SetupStage();
-    return stage == 5 || stage == 6 || stage == 7 || GraphicsSetupStage(stage);
+    return stage == 5 || stage == 6 || stage == 7 || GraphicsSetupStage(stage) || EndSetupStage(stage);
   }
 
   // Home's look (the stills, blurred; the game's logo; the music), with a centred panel: what is
@@ -4345,15 +4346,16 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   // 0: asking for the disc image, 1: installing, 2: taking the artwork,
   // 3: updating the port, 4: preparing the native renderer's shaders, 6: the HD texture pack, 7: restore
-  // the PS2 cutscenes?, 8 to 11: the graphics pages (setup-flow.md steps 5 to 8), 5: the old look step (not
-  // shown after the graphics pages, which start from Remastered; job J6 removes it).
+  // the PS2 cutscenes?, 8 to 11: the graphics pages (setup-flow.md steps 5 to 8), 12: the button prompts
+  // (step 9), 5: the old look step (not shown after the graphics pages, which start from Remastered; job J6
+  // removes it).
   int SetupStage() const {
 #if defined(KK_DEV_TOOLS)
     if (dev_setup_ >= 0) return dev_setup_;
 #endif
     return installing_update_ ? 3 : installing_ ? 1 : setup_art_ ? 2 : setup_shaders_ ? 4 : setup_textures_ ? 6
            : setup_cutscenes_ ? 7 : setup_graphics_ ? kGfxFirstStage + std::clamp(gfx_page_, 0, kGfxPages - 1)
-           : setup_style_ ? 5 : 0;
+           : setup_prompts_ ? kPromptsStage : setup_style_ ? 5 : 0;
   }
 
   // The first-time setup's content steps (setup-flow.md 3 and 4): the cutscene page only where the PS2
@@ -4376,6 +4378,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     float y = o_.y + std::max(84 * s, h_ * 0.12f);
     const int stage = SetupStage();
     if (GraphicsSetupStage(stage)) return DrawSetupGraphics(dl);  // setup steps 5 to 8: a layout of their own
+    if (stage == kPromptsStage) return DrawSetupPrompts(dl);       // setup step 9 (launcher_setup_end.inc)
     float copied = 0, copy_total = 0;
     if (installing_) {
       copied = float(progress_.bytes_done.load());
@@ -4682,6 +4685,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   }
 
 #include "launcher_setup_graphics.inc"
+#include "launcher_setup_end.inc"
 
   // The status line once the setup is over.
   const char* InstalledMessage() {
@@ -6872,7 +6876,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // like the pages.
     const bool waiting = std::getenv("KK_DEV_LAUNCHER_INPUT_FILE") && (InSetup() || ShaderScreen()) &&
                          SetupStage() != 5 && SetupStage() != 6 && SetupStage() != 7 &&
-                         !GraphicsSetupStage(SetupStage());
+                         !GraphicsSetupStage(SetupStage()) && !EndSetupStage(SetupStage());
     static bool release = false;
     if (release) {
       io.AddMouseButtonEvent(0, false);
