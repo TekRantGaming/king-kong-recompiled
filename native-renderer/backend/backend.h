@@ -113,6 +113,8 @@ struct GameSettings {
   // The lighting options (docs/lighting.md): --native_shadow_quality, --native_water_reflections,
   // --native_volumetrics and their tuning. All original by default.
   LightingConfig lighting;
+  // Cel shading (docs/cel.md): --native_cel_shading and its settings. Off by default.
+  CelConfig cel;
   std::function<EffectSettings()> effect_settings;
 };
 

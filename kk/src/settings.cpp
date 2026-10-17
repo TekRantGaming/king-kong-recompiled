@@ -790,6 +790,7 @@ const std::vector<std::pair<const char*, const char*>>& OriginalLookSettings() {
       {"kk_motion_blur", "true"},      {"kk_fog", "true"},        {"kk_big_blur", "true"},
       {"kk_frame_rate", "30"},         {"kk_fov", "69"},
       {"native_gi", "off"}, {"native_ao_normal_smoothing", "0"},
+      {"native_cel_shading", "false"},  // a screen effect the console never had (docs/cel.md)
       {"native_effect_buffers", "false"},
       {"native_sharpness", "off"},
       {"native_upscaler", "off"},  // the native renderer's temporal upscalers (Display > Upscaling)

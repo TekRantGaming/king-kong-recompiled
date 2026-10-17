@@ -70,6 +70,12 @@ class Gtao {
   // four smaller mips, and the normals rebuilt from it (what the screen-space GI works from, ssgi.h).
   // False when the input cannot be used. Compute runs this first.
   bool Prepare(nvrhi::ICommandList* cl, const GtaoInput& in, const GtaoSettings& s);
+  // After a Prepare with the same settings: the normal smoothing passes alone (as Compute runs them),
+  // for an effect that reads the normals without the occlusion (the cel shading's creases). False
+  // when nothing was prepared or s.normal_smoothing is off.
+  bool SmoothNormals(nvrhi::ICommandList* cl, const GtaoSettings& s);
+  // The last Prepare's normals were smoothed since (by Compute or SmoothNormals).
+  bool normals_smoothed() const { return normals_smoothed_; }
   // The working images of the last Prepare (padded_width x padded_height; pixel i is host pixel
   // origin + step * i): the stored depth (R32F), view-space depth (R32F, XE_GTAO_DEPTH_MIP_LEVELS
   // mips) and the normals (R32_UINT, XeGTAO's R11G11B10 packing). After a Compute with normal
@@ -151,6 +157,7 @@ class Gtao {
 
   nvrhi::IDevice* device_;
   bool ready_ = false;
+  bool prepared_ = false, normals_smoothed_ = false;
   Stats stats_;
 
   Pass prepare_, prefilter_, normals_, smooth_h_, smooth_v_, main_, main_low_, main_high_, denoise_, denoise_last_, output_pass_, temporal_;

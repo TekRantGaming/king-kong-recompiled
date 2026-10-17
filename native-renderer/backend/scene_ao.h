@@ -118,6 +118,9 @@ class SceneAo {
   const AoRuleTable& rules() const { return rules_; }
   const AoFrameTracker& tracker() const { return tracker_; }
   const Gtao* gtao() const { return gtao_.get(); }
+  // The GTAO images worked out in `frame` so far (depth, normals of the scene's picture), for an effect
+  // later in the frame that reads them (the cel shading); null when none were.
+  const Gtao* prepared(uint64_t frame) const { return gtao_ && computed_ && frame_ == frame ? gtao_.get() : nullptr; }
   void SetMemoryPressure(bool pressure) { memory_pressure_ = pressure; }
   void ForgetTargets() {
     if (gtao_) gtao_->ForgetTargetViews();

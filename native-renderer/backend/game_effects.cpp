@@ -36,6 +36,7 @@ NrEffectStats effect_stats = [] {
   s.size = sizeof(NrEffectStats);
   s.ao_ms = s.gi_ms = s.shadows_ms = s.water_ms = s.volumetric_ms = s.upscaler_ms = -1;
   s.tessellation_ms=-1;
+  s.cel_ms = -1;
   std::snprintf(s.upscaler, sizeof(s.upscaler), "off");
   return s;
 }();
@@ -101,7 +102,9 @@ void GameRenderer::UpdateEffects() {
   }
   UpdateGi(s.gi);
   UpdateLighting(s.lighting, s.shadow_scale);
+  UpdateCel(s.cel);  // game_cel.cpp
   while (!retired_gi_.empty() && retired_gi_.front().first + kRetireFrames < frame_) retired_gi_.pop_front();
+  while (!retired_cel_.empty() && retired_cel_.front().first + kRetireFrames < frame_) retired_cel_.pop_front();
   while (!retired_lighting_.empty() && retired_lighting_.front().first + kRetireFrames < frame_) retired_lighting_.pop_front();
   while (!retired_upscale_.empty() && retired_upscale_.front().first + kRetireFrames < frame_) {
     const auto destroy = std::chrono::steady_clock::now();
@@ -357,6 +360,7 @@ GameRenderer::EffectGpuWindow GameRenderer::TakeEffectGpuWindow() {
   EffectGpuWindow w;
   if (ao_timer_) w.ao = ao_timer_->TakeWindow();
   if (gi_timer_) w.gi = gi_timer_->TakeWindow();
+  if (cel_timer_) w.cel = cel_timer_->TakeWindow();
   if (upscale_ && upscale_->timer) w.upscaler = upscale_->timer->TakeWindow();
   if (scene_lighting_) {
     AoGpuTimer::Window* out[3] = {&w.shadows, &w.water, &w.volumetrics};
@@ -371,11 +375,12 @@ void GameRenderer::PublishEffectTimes() {
   NrEffectStats s{};
   s.size = sizeof(NrEffectStats);
   s.ao_ms = s.gi_ms = s.shadows_ms = s.water_ms = s.volumetric_ms = s.upscaler_ms = -1;
+  s.cel_ms = cel_timer_ && scene_cel_ ? cel_timer_->milliseconds() : -1;
   s.tessellation_ms=tessellation_timer_ && (tessellation_draws_this_frame_ || TessellationBenchRequested())
                         ? tessellation_timer_->milliseconds() : -1;
   s.tessellation_draws=tessellation_draws_this_frame_;
   s.preparing = (gi_build_.valid() ? 1u : 0u) | (lighting_build_.valid() ? 2u : 0u) | (upscale_build_.valid() ? 4u : 0u) |
-                (shaders_->lighting_variants_pending() ? 8u : 0u);
+                (shaders_->lighting_variants_pending() ? 8u : 0u) | (cel_build_.valid() ? 16u : 0u);
   if (ao_timer_ && AoSettingsFor(ao_settings_frame_).mode) s.ao_ms = ao_timer_->milliseconds();
   if (gi_timer_ && scene_gi_) s.gi_ms = gi_timer_->milliseconds();
   if (scene_lighting_) {
@@ -407,7 +412,7 @@ void GameRenderer::PublishEffectTimes() {
   s.applied = (ao ? 1u : 0u) | (scene_gi_ ? 2u : 0u) | (options_.lighting.shadows_on() && live_draws_.shadows ? 4u : 0u) |
               (options_.lighting.water_on() && scene_lighting_ && live_draws_.water ? 8u : 0u) |
               (options_.lighting.volumetrics_on() && scene_lighting_ ? 16u : 0u) | (options_.fxaa ? 32u : 0u) |
-              (upscale_ ? 64u : 0u);
+              (upscale_ ? 64u : 0u) | (scene_cel_ && options_.cel.any() ? 128u : 0u);
   s.anisotropy = options_.anisotropic_override;
   s.gi_level = scene_gi_ ? uint32_t(options_.gi.level) : 0u;
   s.shadow_scale = LightingShadowScale();
@@ -423,7 +428,7 @@ void GameRenderer::PublishEffectTimes() {
   s.last_change_ms = live_last_change_ms_;
   s.sampler_slots = uint32_t(samplers_.size());
   s.targets = uint32_t(targets_.size());
-  s.retired = uint32_t(retired_resources_.size() + retired_gi_.size() + retired_lighting_.size() +
+  s.retired = uint32_t(retired_resources_.size() + retired_gi_.size() + retired_lighting_.size() + retired_cel_.size() +
                        retired_upscale_.size() + retired_upscalers_.size());
   if (std::getenv("KK_DEV_EFFECT_TEST") && frame_ % 300 == 0)
     Logf(LogLevel::kInfo,

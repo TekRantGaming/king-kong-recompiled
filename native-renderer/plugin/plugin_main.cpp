@@ -304,6 +304,28 @@ REXCVAR_DEFINE_DOUBLE(native_tessellation_smoothness, 0.75, "Native renderer", "
 REXCVAR_DEFINE_INT32(native_tessellation_detail, 4, "Native renderer", "Ann tessellation detail, 1 to 16")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
+// Cel shading (docs/cel.md): ink outlines and flat colour bands on the 3D scene. Off by default; the
+// Original look keeps it off. All live (the F8 panel's "Cel shading").
+REXCVAR_DEFINE_BOOL(native_cel_shading, false, "Native renderer",
+                    "Cel shading: ink outlines and flat colour bands on the 3D scene (before water, smoke, fog and "
+                    "the HUD; docs/cel.md)")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+REXCVAR_DEFINE_DOUBLE(native_cel_outline, 1.5, "Native renderer",
+                      "Cel shading: outline thickness in pixels of a 1080-line picture (scaled with the resolution; "
+                      "0 no outlines)")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+REXCVAR_DEFINE_DOUBLE(native_cel_darkness, 0.8, "Native renderer", "Cel shading: outline darkness, 0 to 1 (1 black)")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+REXCVAR_DEFINE_INT32(native_cel_bands, 3, "Native renderer", "Cel shading: flat light bands, 2 to 4")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+REXCVAR_DEFINE_DOUBLE(native_cel_strength, 0.6, "Native renderer",
+                      "Cel shading: how flat the bands are, 0 (the original shading) to 1")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+REXCVAR_DEFINE_INT32(native_cel_debug, 0, "Native renderer", "Cel shading: 1 shows the outlines alone on white, 2 depth lines cyan and creases magenta (testing)")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+REXCVAR_DEFINE_BOOL(native_cel_gpu_time, false, "Native renderer",
+                    "Cel shading: log its GPU time (timer queries, averaged every 600 frames)");
+
 REXCVAR_DEFINE_STRING(native_gi, "off", "Native renderer",
                       "Screen-space global illumination (one bounce of light from the surfaces on the screen, "
                       "added at the end of the opaque pass): off, low, medium or high")

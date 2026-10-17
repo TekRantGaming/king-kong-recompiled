@@ -20,6 +20,8 @@ add_library(nr_draw STATIC
     ao_config.cpp
     # Screen-space GI (docs/gi.md): the settings.
     gi_config.cpp
+    # Cel shading (docs/cel.md): the settings and the band function.
+    cel_config.cpp
     # Temporal upscalers (docs/upscalers.md): settings, jitter, motion matching, the upscale point.
     upscale_config.cpp
     upscale_jitter.cpp
@@ -37,6 +39,7 @@ add_library(nr_renderer STATIC
     ambient_occlusion.cpp
     gtao.cpp
     ssgi.cpp
+    cel_shade.cpp
     shaders.cpp
     smaa.cpp
     output_blit.cpp
@@ -64,6 +67,8 @@ if(NR_GAME_RENDERER)
         game_gi.cpp
         game_effects.cpp
         scene_gi.cpp
+        game_cel.cpp
+        scene_cel.cpp
         shader_library.cpp
         pipeline_prewarm.cpp
         # Temporal upscalers (docs/upscalers.md): the choice, and each SDK (loaded at run time).

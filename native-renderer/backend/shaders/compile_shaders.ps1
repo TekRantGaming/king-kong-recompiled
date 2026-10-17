@@ -5,7 +5,7 @@
 # The headers are checked in so the build needs no shader compiler.
 #
 # Usage: compile_shaders.ps1 -Dxc <path\dxc.exe>
-#        compile_shaders.ps1 -Dxc <path\dxc.exe> -Only upscale   (one group: base, ao, gtao, upscale)
+#        compile_shaders.ps1 -Dxc <path\dxc.exe> -Only upscale   (one group: base, ao, gtao, upscale, memory, cel)
 param([Parameter(Mandatory = $true)][string]$Dxc, [string]$Only = "")
 $ErrorActionPreference = "Stop"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -24,6 +24,12 @@ function Compile-Entries([string]$src, [string[]]$specs, [bool]$shift = $true) {
         if ($LASTEXITCODE -ne 0) { throw "dxc (SPIR-V) failed on $src $entry" }
     }
 }
+# Cel shading (cel.hlsl, docs/cel.md): one blob per entry point. -Only cel compiles just these.
+if ($Only -eq "" -or $Only -eq "cel") {
+    Compile-Entries (Join-Path $here "cel.hlsl") @("cel_vs:vs:vs_main", "cel_ps:ps:ps_cel")
+    if ($Only -eq "cel") { Write-Host "Shaders written to $out"; exit 0 }
+}
+
 # Temporal upscalers (upscale.hlsl, docs/upscalers.md): one blob per entry point. The object motion
 if ($Only -eq "" -or $Only -eq "memory") {
     Compile-Entries (Join-Path $here "memory_depth.hlsl") @("memory_depth_ps:ps:ps_main", "memory_probe_ps:ps:ps_probe")
@@ -93,7 +99,6 @@ foreach ($spec in @("ssgi_radiance_cs:cs:cs_radiance", "ssgi_radiance_down_cs:cs
         -Fh (Join-Path $out "${base}_spirv.h") -Vn "k_${base}_spirv" $ssgi
     if ($LASTEXITCODE -ne 0) { throw "dxc (SPIR-V) failed on $ssgi $entry" }
 }
-
 # The lighting options (docs/lighting.md). The soft shadows replace the game's psshadowquad, so they are
 # built like the game's translated shaders (kkshaders' compiler.cpp flags: HLSL 2021, -Gis, the DX layout,
 # no binding shifts) with the translator's prelude: one blob per variant of it (lights, constant

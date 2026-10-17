@@ -161,6 +161,7 @@ GameRenderer::~GameRenderer() {
   LogPipelineLibrary(true);
   if (resource_profile_file_) std::fclose(resource_profile_file_);
   if (gi_build_.valid()) gi_build_.wait();
+  if (cel_build_.valid()) cel_build_.wait();
   if (lighting_build_.valid()) lighting_build_.wait();
   if (upscale_build_.valid()) upscale_build_.wait();
   if (dlss_warm_.valid()) dlss_warm_.wait();
@@ -484,6 +485,7 @@ bool GameRenderer::Initialize() {
   if (!ao_->Initialize()) ao_.reset();
   AoInitialize();  // AO hook (game_ao.cpp): the GTAO method
   GiInitialize();  // GI hook (game_gi.cpp): the screen-space GI
+  CelInitialize();  // Cel hook (game_cel.cpp): the cel shading
   // Upscalers: their passes. Without them the renderer runs as without an upscaler (logged).
   if (upscale_ && !UpscaleInitialize()) {
     Logf(LogLevel::kWarning, "rexgpu-native: upscaler: the passes could not be made; no upscaler");
@@ -866,8 +868,10 @@ void GameRenderer::TrimClearTargets() {
     if (gi_parked_) gi_parked_->ForgetTargets();
     if (scene_lighting_) scene_lighting_->ForgetTargets();
     if (lighting_parked_) lighting_parked_->ForgetTargets();
+    if (scene_cel_) scene_cel_->ForgetTargets();
+    if (cel_parked_) cel_parked_->ForgetTargets();
   }
-  if (upscale_ || scene_ao_ || scene_gi_ || gi_parked_ || scene_lighting_ || lighting_parked_) return;
+  if (upscale_ || scene_ao_ || scene_gi_ || gi_parked_ || scene_lighting_ || lighting_parked_ || scene_cel_ || cel_parked_) return;
   for (auto& [key, t] : targets_) {
     if (!t || !t->texture || !CanEvictClearTarget(t->clear_only, bool(upscale_ || scene_ao_),
                                                 t->used_frame, frame_)) continue;
@@ -962,7 +966,7 @@ void GameRenderer::CheckMemoryBudget() {
 void GameRenderer::EndFrame() {
   // These Beta 5 passes bypass GetFramebuffer. Their writes invalidate saved
   // clears even if the player disables the effect before pressure next occurs.
-  if (scene_gi_ || scene_lighting_)
+  if (scene_gi_ || scene_lighting_ || scene_cel_)
     for (auto& [key, target] : targets_) if (target) target->clear_only = false;
   ProfileResources();
   FlushUploads();
@@ -2112,6 +2116,8 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   if (scene_ao_ || ao_constants_) AoDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
   // GI hook (game_gi.cpp): at the end of the opaque pass the bounce light goes in (after the AO's occlusion).
   if (scene_gi_) GiDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
+  // Cel hook (game_cel.cpp): at the end of the opaque pass the lines and bands go in (after AO and GI).
+  if (scene_cel_) CelDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
   // Lighting hook (game_lighting.cpp): the lighting options' moments and the census.
   // With live settings b5 is always bound (the layout cannot change): written every draw list.
   if (options_.lighting.active() || options_.effect_settings) LightingDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());

@@ -43,6 +43,7 @@
 #include "backend/ao_timer.h"
 #include "backend/background_file_writer.h"
 #include "backend/scene_ao.h"
+#include "backend/scene_cel.h"
 #include "backend/scene_gi.h"
 #include "backend/scene_lighting.h"
 #include "backend/memory_budget.h"
@@ -185,6 +186,9 @@ class GameRenderer {
     // The lighting options (docs/lighting.md): shadows, water reflections, volumetric light shafts.
     // All original by default. Initial value before Initialize; effect_settings changes it live.
     LightingConfig lighting;
+    // Cel shading (cel_config.h, docs/cel.md). Off by default: nothing of it is created. Initial value
+    // before Initialize; effect_settings changes it live.
+    CelConfig cel;
     std::function<EffectSettings()> effect_settings;
     // The pipelines a run with live settings (effect_settings) makes, without the settings themselves:
     // its scale constants (b3) and lighting constants (b5) in the layout. For the pipeline preparation
@@ -309,7 +313,7 @@ class GameRenderer {
   // the timers that already run (AO and the upscale point with the graphics panel's live settings, GI
   // and the lighting options while they are on). frames == 0: not timed in the window.
   struct EffectGpuWindow {
-    AoGpuTimer::Window ao, gi, upscaler, shadows, water, volumetrics;
+    AoGpuTimer::Window ao, gi, upscaler, shadows, water, volumetrics, cel;
   };
   EffectGpuWindow TakeEffectGpuWindow();
   // The most draws and motion draws one list took since the previous call (logged with the frame timing).
@@ -422,6 +426,8 @@ class GameRenderer {
   const SceneAo* scene_ao() const { return scene_ao_.get(); }
   // The screen-space GI's state (null when it is off; tests and logging).
   const SceneGi* scene_gi() const { return scene_gi_.get(); }
+  // The cel shading's state (null when it is off; tests and logging).
+  const SceneCel* scene_cel() const { return scene_cel_.get(); }
 
   // The host render targets made so far (tests and debugging).
   struct TargetInfo {
@@ -994,6 +1000,23 @@ class GameRenderer {
   bool GiAoOn(uint64_t frame);
   std::unique_ptr<SceneGi> scene_gi_;
   std::unique_ptr<AoGpuTimer> gi_timer_;  // --native_gi_gpu_time
+  // ---- cel shading (game_cel.cpp, docs/cel.md). The hooks are called from Initialize, Draw, Clear,
+  // Resolve and Present; scene_cel_ is null when it is off.
+  void CelInitialize();
+  void CelDrawHook(nvrhi::ICommandList* cl, const DrawCall& call, const dev::DeviceView& d,
+                   const std::array<HostTarget*, 4>& colors, HostTarget* depth, const PipelineRecord& record,
+                   const GameShader& vs, const GameShader* ps);
+  void CelClearHook(const ClearCall& call, const HostTarget* depth);
+  void CelResolveHook(const ResolveCall& call);
+  void CelPresentHook();
+  void UpdateCel(const CelConfig& want);
+  std::unique_ptr<SceneCel> scene_cel_;
+  std::unique_ptr<AoGpuTimer> cel_timer_;  // --native_cel_gpu_time (else the panel's only)
+  std::future<std::unique_ptr<SceneCel>> cel_build_;
+  std::unique_ptr<SceneCel> cel_parked_;
+  uint64_t cel_parked_frame_ = 0;
+  std::deque<std::pair<uint64_t, std::unique_ptr<SceneCel>>> retired_cel_;
+  bool cel_build_failed_ = false, cel_user_gpu_time_ = false;
   // ---- live settings (game_effects.cpp, effect_settings.h): applied at a frame's first call.
   struct PreparedUpscaler {
     UpscaleConfig config;

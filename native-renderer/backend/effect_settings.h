@@ -7,6 +7,7 @@
 #include <string>
 
 #include "backend/ao_config.h"
+#include "backend/cel_config.h"
 #include "backend/gi_config.h"
 #include "backend/lighting_config.h"
 #include "backend/upscale_config.h"
@@ -22,6 +23,7 @@ struct EffectSettings {
   AoQuality ao_quality = AoQuality::kAuto;
   GiConfig gi;
   LightingConfig lighting;
+  CelConfig cel;  // cel shading (cel_config.h): made on a worker when turned on, parked when off
   float shadow_scale = 0;
   // The temporal upscaler as asked for (kind, mode, DLSS preset, sharpness, mip bias, reactive mask).
   // A change of kind, mode or preset makes the upscaler again at a frame boundary; the others apply

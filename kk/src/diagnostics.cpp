@@ -231,7 +231,8 @@ void RefreshDiagnostics() {
        "monitor", "kk_render_quality", "native_render_scale", "ao_mode", "ao_strength",
        "kk_renderer", "gpu_plugin", "native_backend", "resolution_scale", "draw_resolution_scale_x", "draw_resolution_scale_y",
        "native_upscaler", "native_upscaler_quality", "native_upscaler_output", "native_frame_size", "native_ao_method", "native_ao_apply",
-       "native_ao_quality", "native_ao_samples", "native_ao_normal_smoothing", "present_effect", "ssao"}) {
+       "native_ao_quality", "native_ao_samples", "native_ao_normal_smoothing", "native_cel_shading", "native_cel_outline",
+       "native_cel_darkness", "native_cel_bands", "native_cel_strength", "present_effect", "ssao"}) {
     const auto value = rex::cvar::GetFlagByName(key);
     out << "  " << key << " = " << (value.empty() ? "default/unavailable" : value) << '\n';
   }
