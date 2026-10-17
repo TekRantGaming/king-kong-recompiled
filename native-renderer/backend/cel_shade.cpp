@@ -9,6 +9,8 @@
 #include "thirdparty/XeGTAO/XeGTAO.h"
 
 #include "backend/log.h"
+#include "backend/shaders/generated/cel_exposure_cs_dxil.h"
+#include "backend/shaders/generated/cel_exposure_cs_spirv.h"
 #include "backend/shaders/generated/cel_ps_dxil.h"
 #include "backend/shaders/generated/cel_ps_spirv.h"
 #include "backend/shaders/generated/cel_vs_dxil.h"
@@ -24,7 +26,8 @@ struct CelShade::Constants {
   float lines[4] = {};              // depth start / full, cos crease start / full
   float fade[4] = {};               // fade start / end, crease weight, debug view
   float bands[4] = {};              // bands, strength, softness, stops
-  float levels[4] = {};             // level, top level
+  float levels[4] = {};             // level, the new average's share, 1 to start again
+  float anchor[4] = {};             // the bands' centre's limits, its value before a measurement
 };
 
 namespace {
@@ -32,16 +35,23 @@ namespace {
 static_assert(sizeof(XeGTAO::GTAOConstants) == 96, "GTAOConstants is 6 float4");
 constexpr size_t kGtaoShared = 96 + 16 + 16;
 
-nvrhi::ShaderHandle MakeShader(nvrhi::IDevice* device, bool pixel) {
+nvrhi::ShaderHandle MakeShader(nvrhi::IDevice* device, nvrhi::ShaderType type) {
   const bool spirv = device->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN;
-  const void* data = pixel ? (spirv ? static_cast<const void*>(k_cel_ps_spirv) : k_cel_ps_dxil)
-                           : (spirv ? static_cast<const void*>(k_cel_vs_spirv) : k_cel_vs_dxil);
-  const size_t size = pixel ? (spirv ? sizeof(k_cel_ps_spirv) : sizeof(k_cel_ps_dxil))
-                            : (spirv ? sizeof(k_cel_vs_spirv) : sizeof(k_cel_vs_dxil));
   nvrhi::ShaderDesc desc;
-  desc.shaderType = pixel ? nvrhi::ShaderType::Pixel : nvrhi::ShaderType::Vertex;
-  desc.entryName = pixel ? "ps_cel" : "vs_main";
-  return device->createShader(desc, data, size);
+  desc.shaderType = type;
+  if (type == nvrhi::ShaderType::Vertex) {
+    desc.entryName = "vs_main";
+    return spirv ? device->createShader(desc, k_cel_vs_spirv, sizeof(k_cel_vs_spirv))
+                 : device->createShader(desc, k_cel_vs_dxil, sizeof(k_cel_vs_dxil));
+  }
+  if (type == nvrhi::ShaderType::Pixel) {
+    desc.entryName = "ps_cel";
+    return spirv ? device->createShader(desc, k_cel_ps_spirv, sizeof(k_cel_ps_spirv))
+                 : device->createShader(desc, k_cel_ps_dxil, sizeof(k_cel_ps_dxil));
+  }
+  desc.entryName = "cs_exposure";
+  return spirv ? device->createShader(desc, k_cel_exposure_cs_spirv, sizeof(k_cel_exposure_cs_spirv))
+               : device->createShader(desc, k_cel_exposure_cs_dxil, sizeof(k_cel_exposure_cs_dxil));
 }
 
 }  // namespace
@@ -50,17 +60,34 @@ CelShade::CelShade(nvrhi::IDevice* device) : device_(device) {}
 CelShade::~CelShade() = default;
 
 bool CelShade::Initialize() {
-  vs_ = MakeShader(device_, false);
-  ps_ = MakeShader(device_, true);
-  if (!vs_ || !ps_) {
+  vs_ = MakeShader(device_, nvrhi::ShaderType::Vertex);
+  ps_ = MakeShader(device_, nvrhi::ShaderType::Pixel);
+  cs_ = MakeShader(device_, nvrhi::ShaderType::Compute);
+  if (!vs_ || !ps_ || !cs_) {
     Logf(LogLevel::kWarning, "rexgpu-native: cel shading: its shaders could not be created, it is unavailable");
     return false;
   }
   using I = nvrhi::BindingLayoutItem;
   nvrhi::BindingLayoutDesc bl;
   bl.visibility = nvrhi::ShaderType::All;
-  bl.bindings = {I::VolatileConstantBuffer(0), I::Texture_SRV(0), I::Texture_SRV(1), I::Texture_SRV(2)};
+  bl.bindings = {I::VolatileConstantBuffer(0), I::Texture_SRV(0), I::Texture_SRV(1), I::Texture_SRV(2), I::Texture_SRV(3)};
   layout_ = device_->createBindingLayout(bl);
+  bl.bindings = {I::VolatileConstantBuffer(0), I::Texture_SRV(0), I::Texture_SRV(1), I::Texture_UAV(0)};
+  exposure_layout_ = device_->createBindingLayout(bl);
+  nvrhi::ComputePipelineDesc cd;
+  cd.CS = cs_;
+  cd.bindingLayouts = {exposure_layout_};
+  if (exposure_layout_) exposure_pipeline_ = device_->createComputePipeline(cd);
+  // The followed average: R32F (every Vulkan device stores to it), the log2 mean then a "measured" flag.
+  nvrhi::TextureDesc ed;
+  ed.width = 2;
+  ed.height = 1;
+  ed.format = nvrhi::Format::R32_FLOAT;
+  ed.isUAV = true;
+  ed.initialState = nvrhi::ResourceStates::ShaderResource;
+  ed.keepInitialState = true;
+  ed.debugName = "Cel shading average";
+  exposure_ = device_->createTexture(ed);
   nvrhi::BufferDesc bd;
   bd.byteSize = sizeof(Constants);
   bd.isConstantBuffer = true;
@@ -68,7 +95,7 @@ bool CelShade::Initialize() {
   bd.maxVersions = 64;  // one write a frame
   bd.debugName = "Cel shading constants";
   constants_ = device_->createBuffer(bd);
-  ready_ = layout_ && constants_;
+  ready_ = layout_ && exposure_pipeline_ && exposure_ && constants_;
   if (ready_) {
     // The scene colour formats the game's targets use (made now, not at the first frame with it).
     for (const auto format : {nvrhi::Format::RGBA8_UNORM, nvrhi::Format::R10G10B10A2_UNORM,
@@ -112,7 +139,7 @@ nvrhi::IGraphicsPipeline* CelShade::GraphicsPipeline(const nvrhi::FramebufferInf
 }
 
 bool CelShade::Apply(nvrhi::ICommandList* cl, const Gtao& gtao, nvrhi::ITexture* color, nvrhi::ITexture* depth,
-                     const CelConfig& c) {
+                     const CelConfig& c, uint64_t frame) {
   if (!ready_ || !color || !depth || !gtao.normals() || gtao.constants_bytes().size() < kGtaoShared + 16) return false;
   const nvrhi::TextureDesc& cd = color->getDesc();
   if (!copy_ || copy_->getDesc().width != cd.width || copy_->getDesc().height != cd.height ||
@@ -161,7 +188,14 @@ bool CelShade::Apply(nvrhi::ICommandList* cl, const Gtao& gtao, nvrhi::ITexture*
   k.bands[2] = CelTuning::kSoftness;
   k.bands[3] = CelTuning::kStops;
   k.levels[0] = CelTuning::kLevel;
-  k.levels[1] = CelTuning::kTopLevel;
+  k.levels[1] = CelTuning::kAnchorFollow;
+  // A gap (the effect was off, a new run): the average starts again from this frame's.
+  k.levels[2] = frame == UINT64_MAX || last_frame_ == UINT64_MAX || frame != last_frame_ + 1 ? 1.0f : 0.0f;
+  last_frame_ = frame;
+  k.anchor[0] = CelTuning::kAnchorMin;
+  k.anchor[1] = CelTuning::kAnchorMax;
+  k.anchor[2] = CelTuning::kAnchorDefault;
+  k.anchor[3] = CelBandRadius(uint32_t(source[3]));
   nvrhi::IFramebuffer* fb = Framebuffer(color);
   nvrhi::IGraphicsPipeline* pipeline = fb ? GraphicsPipeline(fb->getFramebufferInfo()) : nullptr;
   if (!pipeline) return false;
@@ -169,16 +203,32 @@ bool CelShade::Apply(nvrhi::ICommandList* cl, const Gtao& gtao, nvrhi::ITexture*
   cl->copyTexture(copy_, slice, color, slice);
   cl->writeBuffer(constants_, &k, sizeof(k));
   if (sets_.size() > 16) sets_.clear();
+  using S = nvrhi::BindingSetItem;
+  const auto depth_srv = S::Texture_SRV(1, depth, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(0, 1, 0, 1));
   nvrhi::BindingSetHandle& set = sets_[{depth, gtao.normals()}];
   if (!set) {
-    using S = nvrhi::BindingSetItem;
     nvrhi::BindingSetDesc bs;
-    bs.bindings = {S::ConstantBuffer(0, constants_), S::Texture_SRV(0, copy_),
-                   S::Texture_SRV(1, depth, nvrhi::Format::UNKNOWN, nvrhi::TextureSubresourceSet(0, 1, 0, 1)),
-                   S::Texture_SRV(2, gtao.normals())};
+    bs.bindings = {S::ConstantBuffer(0, constants_), S::Texture_SRV(0, copy_), depth_srv, S::Texture_SRV(2, gtao.normals()),
+                   S::Texture_SRV(3, exposure_)};
     set = device_->createBindingSet(bs, layout_);
   }
-  if (!set) return false;
+  nvrhi::BindingSetHandle& exposure_set = sets_[{depth, nullptr}];
+  if (!exposure_set) {
+    nvrhi::BindingSetDesc bs;
+    bs.bindings = {S::ConstantBuffer(0, constants_), S::Texture_SRV(0, copy_), depth_srv, S::Texture_UAV(0, exposure_)};
+    exposure_set = device_->createBindingSet(bs, exposure_layout_);
+  }
+  if (!set || !exposure_set) return false;
+  // The frame's average first (one group), when there are bands.
+  if (k.bands[0] > 0.0f) {
+    nvrhi::ComputeState cs;
+    cs.pipeline = exposure_pipeline_;
+    cs.bindings = {exposure_set};
+    cl->setComputeState(cs);
+    cl->dispatch(1, 1, 1);
+  } else {
+    last_frame_ = UINT64_MAX;  // not followed this frame
+  }
   nvrhi::GraphicsState gs;
   gs.pipeline = pipeline;
   gs.framebuffer = fb;

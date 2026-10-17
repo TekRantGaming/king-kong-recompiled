@@ -25,9 +25,12 @@ class CelShade {
   bool ready() const { return ready_; }
 
   // Into `color` over the picture `gtao` last prepared: lines from `depth` (the scene's depth target,
-  // host pixels) and the gtao's normals, bands per `c`. False when it cannot be done.
+  // host pixels) and the gtao's normals, bands per `c` around the frame's average luminance (followed
+  // over consecutive `frame`s; a gap starts it again). False when it cannot be done.
   bool Apply(nvrhi::ICommandList* cl, const Gtao& gtao, nvrhi::ITexture* color, nvrhi::ITexture* depth,
-             const CelConfig& c);
+             const CelConfig& c, uint64_t frame = UINT64_MAX);
+  // The followed average (R32F 2 x 1: log2 mean luminance, then 1 once measured; tests).
+  nvrhi::ITexture* exposure() const { return exposure_; }
 
   struct Stats {
     uint64_t applied = 0;
@@ -44,8 +47,11 @@ class CelShade {
   nvrhi::IDevice* device_;
   bool ready_ = false;
   Stats stats_;
-  nvrhi::ShaderHandle vs_, ps_;
-  nvrhi::BindingLayoutHandle layout_;
+  nvrhi::ShaderHandle vs_, ps_, cs_;
+  nvrhi::BindingLayoutHandle layout_, exposure_layout_;
+  nvrhi::ComputePipelineHandle exposure_pipeline_;
+  nvrhi::TextureHandle exposure_;
+  uint64_t last_frame_ = UINT64_MAX;
   nvrhi::BufferHandle constants_;
   nvrhi::TextureHandle copy_;
   std::map<std::tuple<nvrhi::ITexture*, nvrhi::ITexture*>, nvrhi::BindingSetHandle> sets_;

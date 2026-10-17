@@ -2,6 +2,8 @@
 // pass, into the scene colour target from a copy of it. Compiled to SPIR-V and DXIL by
 // compile_shaders.sh / .ps1.
 //
+//   cs_exposure        the frame's log2 mean luminance (a 64 x 36 grid of the picture, the sky left out),
+//                      followed smoothly over frames: the bands are centred on it
 //   vs_main + ps_cel   ink lines where a neighbour lies well behind this pixel's own surface (a
 //                      silhouette: the line is drawn on the nearer object's side, so it also shows
 //                      against the sky) or where the normals fold sharply (a crease), faded with
@@ -13,7 +15,8 @@
 // frame; else the cel shading's own). The sky (stored depth at the far plane) is left as it is.
 //
 // Bindings (NVRHI's Vulkan offsets: t at 0, s at 128, b at 256, u at 384): b0 the constants, t0 the
-// scene colour copy, t1 the scene depth, t2 the normals.
+// scene colour copy, t1 the scene depth, t2 the normals, t3 / u0 the followed average (R32F 2 x 1:
+// the log2 mean, then 1 once it holds one).
 
 #define XE_GTAO_USE_HALF_FLOAT_PRECISION 0
 #define XE_GTAO_FP32_DEPTHS 1
@@ -32,8 +35,10 @@ cbuffer CelConstants : register(b0)
     float4 kk_Lines;    // x, y: relative depth step where a line starts / is full; z, w: cos of the crease
                         // angle where a line starts / is full
     float4 kk_Fade;     // x, y: view depth where lines start to fade / are gone; z: crease weight; w: debug view
-    float4 kk_Bands;    // x: bands (0: none), y: strength, z: softness (share of a band), w: log2 steps below white
-    float4 kk_Levels;   // x: a band's level in it, y: the top band's
+    float4 kk_Bands;    // x: bands (0: none), y: strength, z: softness (share of a band), w: log2 steps they share
+    float4 kk_Levels;   // x: a band's level in it, y: the new average's share per frame, z: 1 to start again
+    float4 kk_Anchor;   // x, y: the bands' centre's limits (log2), z: the centre before an average was measured,
+                        // w: the radius (host pixels) of the local luminance the bands are chosen from
 };
 
 #include "../../thirdparty/XeGTAO/XeGTAO.hlsli"
@@ -41,6 +46,8 @@ cbuffer CelConstants : register(b0)
 Texture2D<float4> g_srcSceneCopy : register(t0);
 Texture2D<float> g_srcSceneDepth : register(t1);
 Texture2D<uint> g_srcNormals : register(t2);
+Texture2D<float> g_srcExposure : register(t3);
+RWTexture2D<float> g_outExposure : register(u0);
 
 float4 vs_main(uint id : SV_VertexID) : SV_Position
 {
@@ -55,31 +62,74 @@ float Luma(float3 c)
 
 // --------------------------------------------------------------------- bands
 
-float BandLevel(float band, float n)
+groupshared float gs_sum[256];
+groupshared float gs_count[256];
+
+[numthreads(16, 16, 1)]
+void cs_exposure(uint gi : SV_GroupIndex)
 {
-    float at = band >= n - 1.0 ? kk_Levels.y : kk_Levels.x;
-    return exp2(((band + at) / n - 1.0) * kk_Bands.w);
+    float sum = 0.0, count = 0.0;
+    for (uint k = gi; k < 64 * 36; k += 256)
+    {
+        float2 cell = (float2(k % 64, k / 64) + 0.5) / float2(64.0, 36.0);
+        int2 p = kk_Source.xy + int2(cell * float2(kk_Source.zw));
+        if (g_srcSceneDepth.Load(int3(p, 0)).x >= kk_Params.y)
+            continue;  // the sky
+        sum += log2(max(Luma(g_srcSceneCopy.Load(int3(p, 0)).rgb), 1.0 / 1024.0));
+        count += 1.0;
+    }
+    gs_sum[gi] = sum;
+    gs_count[gi] = count;
+    GroupMemoryBarrierWithGroupSync();
+    [unroll]
+    for (uint s = 128; s > 0; s >>= 1)
+    {
+        if (gi < s)
+        {
+            gs_sum[gi] += gs_sum[gi + s];
+            gs_count[gi] += gs_count[gi + s];
+        }
+        GroupMemoryBarrierWithGroupSync();
+    }
+    if (gi == 0)
+    {
+        bool had = g_outExposure[uint2(1, 0)] > 0.5 && kk_Levels.z < 0.5;
+        float before = had ? g_outExposure[uint2(0, 0)] : kk_Anchor.z;
+        float now = gs_count[0] > 0.0 ? gs_sum[0] / gs_count[0] : before;
+        g_outExposure[uint2(0, 0)] = had ? lerp(before, now, kk_Levels.y) : now;
+        g_outExposure[uint2(1, 0)] = 1.0;
+    }
+}
+
+float BandLevel(float low, float band, float n)
+{
+    return exp2(low + (band + kk_Levels.x) * kk_Bands.w / n);
 }
 
 // backend/cel_config.cpp CelBandLuma.
-float CelBandLuma(float y, float n)
+float CelBandLuma(float y, float n, float anchor)
 {
-    float s = log2(max(y, 1e-6)) / kk_Bands.w + 1.0;
+    float low = anchor - 0.5 * kk_Bands.w;
+    float s = (log2(max(y, 1e-6)) - low) / kk_Bands.w;
     if (s <= 0.0 || s >= 1.0)
         return y;
     float t = s * n;
     float i = floor(t), f = t - i;
     float blend = i < n - 1.0 ? smoothstep(1.0 - kk_Bands.z, 1.0, f) : 0.0;
-    float level = lerp(BandLevel(i, n), BandLevel(i + 1.0, n), blend);
-    float fromDark = smoothstep(0.0, kk_Bands.z / n, s);
-    return lerp(y, level, fromDark);
+    float level = lerp(BandLevel(low, i, n), BandLevel(low, i + 1.0, n), blend);
+    float edge = kk_Bands.z / n;
+    float inside = smoothstep(0.0, edge, s) * (1.0 - smoothstep(1.0 - edge, 1.0, s));
+    return lerp(y, level, inside);
 }
 
-// backend/cel_config.cpp CelBandColour.
-float3 CelBandColour(float3 c)
+// backend/cel_config.cpp CelBandAnchor and CelBandColour: the band is chosen from the local luminance
+// yl (the surface's lighting, LocalLuma) and its change applied to the pixel, so texture detail is
+// kept and does not flicker between two bands.
+float3 CelBandColour(float3 c, float yl)
 {
+    float anchor = clamp(g_srcExposure.Load(int3(0, 0, 0)).x, kk_Anchor.x, kk_Anchor.y);
     float y = Luma(c);
-    float scale = y > 1e-5 ? CelBandLuma(y, kk_Bands.x) / y : 1.0;
+    float scale = y > 1e-5 && yl > 1e-5 ? CelBandLuma(yl, kk_Bands.x, anchor) / yl : 1.0;
     float3 b = c * scale;
     float top = max(b.r, max(b.g, b.b)), was = max(max(c.r, max(c.g, c.b)), 1.0);
     if (top > was)
@@ -187,6 +237,29 @@ float2 Lines(int2 p, float w)
     return float2(depthLine, creaseLine * kk_Fade.z);
 }
 
+// The mean luminance around a pixel on its own surface (taps within 5% of its depth; not the sky):
+// two rings of 8 at kk_Anchor.w and half of it, and the pixel.
+float LocalLuma(int2 p, float w, float y)
+{
+    float sum = y, count = 1.0;
+    [unroll]
+    for (int ring = 0; ring < 2; ++ring)
+    {
+        float r = ring == 0 ? kk_Anchor.w : max(1.0, floor(kk_Anchor.w * 0.5 + 0.5));
+        [unroll]
+        for (int i = 0; i < 8; ++i)
+        {
+            int2 q = Clamp(p + int2(round(kDirections[i] * r)));
+            float stored = g_srcSceneDepth.Load(int3(q, 0)).x;
+            if (stored >= kk_Params.y || abs(InverseZ(stored) / w - 1.0) > 0.05)
+                continue;
+            sum += Luma(g_srcSceneCopy.Load(int3(q, 0)).rgb);
+            count += 1.0;
+        }
+    }
+    return sum / count;
+}
+
 float4 ps_cel(float4 pos : SV_Position) : SV_Target0
 {
     int2 p = int2(pos.xy);
@@ -214,7 +287,7 @@ float4 ps_cel(float4 pos : SV_Position) : SV_Target0
         return float4((1.0 - ink).xxx, colour.a);
     float3 rgb = colour.rgb;
     if (kk_Bands.x >= 2.0 && kk_Bands.y > 0.0)
-        rgb = CelBandColour(rgb);
+        rgb = CelBandColour(rgb, LocalLuma(p, w, Luma(rgb)));
     rgb *= 1.0 - ink * kk_Outline.z;
     return float4(rgb, colour.a);
 }

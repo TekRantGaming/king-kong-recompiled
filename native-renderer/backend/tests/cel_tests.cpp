@@ -201,6 +201,8 @@ struct Run {
   std::vector<uint8_t> in;  // the colour before
   Pixels out;               // and after
   bool ok = false;
+  float average = 0.0f;     // the followed average the pass measured (log2), and whether it did
+  bool measured = false;
 };
 
 constexpr uint32_t kGw = 640, kGh = 360;
@@ -276,6 +278,11 @@ Run Shade(float scale, const CelConfig& c, float world = 1.0f, double* gpu_ms = 
     *gpu_ms = ms[ms.size() / 2];
   }
   run.out = gpu->ReadBack(color);
+  const Pixels e = gpu->ReadBack(cel.exposure());
+  if (e.width == 2) {
+    run.average = e.at(0, 0)[0];
+    run.measured = e.at(1, 0)[0] > 0.5f;
+  }
   return run;
 }
 
@@ -306,6 +313,34 @@ float InkNear(const Run& r, V3 p, int rad) {
   return best;
 }
 
+float LumaAt(const Run& r, int x, int y) {
+  const uint8_t* p = &r.in[(size_t(y) * r.w + uint32_t(x)) * 4];
+  return 0.2126f * p[0] / 255.0f + 0.7152f * p[1] / 255.0f + 0.0722f * p[2] / 255.0f;
+}
+
+// shaders/cel.hlsl LocalLuma: the mean luminance around a pixel on its own surface (taps within 5% of
+// its depth, not the sky), two rings of 8 at the band radius and half of it.
+float LocalLuma(const Run& r, int x, int y) {
+  static const float kDir[8][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}, {0.7071f, 0.7071f}, {-0.7071f, 0.7071f},
+                                   {0.7071f, -0.7071f}, {-0.7071f, -0.7071f}};
+  auto inverse_z = [&](float d) { return (d - r.cam.a) / r.cam.b; };  // 1 / view depth
+  const float w = inverse_z(r.z[size_t(y) * r.w + uint32_t(x)]);
+  const float radius = CelBandRadius(r.h);
+  float sum = LumaAt(r, x, y), count = 1;
+  for (int ring = 0; ring < 2; ++ring) {
+    const float rr = ring == 0 ? radius : std::max(1.0f, std::floor(radius * 0.5f + 0.5f));
+    for (const auto& d : kDir) {
+      const int qx = std::clamp(x + int(std::lround(d[0] * rr)), 0, int(r.w) - 1);
+      const int qy = std::clamp(y + int(std::lround(d[1] * rr)), 0, int(r.h) - 1);
+      const float stored = r.z[size_t(qy) * r.w + uint32_t(qx)];
+      if (stored >= 1.0f || std::fabs(inverse_z(stored) / w - 1.0f) > 0.05f) continue;
+      sum += LumaAt(r, qx, qy);
+      count += 1;
+    }
+  }
+  return sum / count;
+}
+
 uint32_t LinePixels(const Run& r, float above = 0.5f) {
   uint32_t n = 0;
   for (uint32_t y = 0; y < r.h; ++y)
@@ -326,41 +361,53 @@ const V3 kOpenFloor{0.8f, 0.0f, 1.2f}, kFarFloor{3.5f, 0.0f, 3.0f}, kWall{1.6f, 
 }  // namespace
 
 TEST(Cel_BandFunction) {
-  for (uint32_t bands : {2u, 3u, 4u}) {
-    float last = 0;
-    std::vector<float> levels;
-    for (int i = 1; i <= 4000; ++i) {
-      const float y = float(i) / 4000.0f;
-      const float v = CelBandLuma(y, bands);
-      CHECK(v >= last - 1e-6f);  // never darker for a brighter input
-      CHECK(v <= 1.0f);
-      last = v;
-      // Flat inside a band: the middle of each band in log2 steps gives the band's level.
-      const float s = std::log2(y) / CelTuning::kStops + 1.0f;
-      const float f = s * float(bands) - std::floor(s * float(bands));
-      if (s > 0.02f && f > 0.2f && f < 0.8f) {
-        bool seen = false;
-        for (float l : levels) seen = seen || std::fabs(l - v) < 1e-5f;
-        if (!seen) levels.push_back(v);
+  const float half = 0.5f * CelTuning::kStops;
+  for (float anchor : {-4.5f, -2.5f}) {
+    for (uint32_t bands : {2u, 3u, 4u}) {
+      float last = 0;
+      std::vector<float> levels;
+      for (int i = 0; i <= 4000; ++i) {
+        const float l2 = anchor - half - 0.5f + (CelTuning::kStops + 1.0f) * float(i) / 4000.0f;
+        const float y = std::exp2(l2);
+        const float v = CelBandLuma(y, bands, anchor);
+        CHECK(v >= last - 1e-6f);  // never darker for a brighter input
+        last = v;
+        // Flat inside a band: the middle of each band gives the band's level.
+        const float s = (l2 - anchor + half) / CelTuning::kStops;
+        const float f = s * float(bands) - std::floor(s * float(bands));
+        const float edge = CelTuning::kSoftness / float(bands) + 0.01f;
+        if (s > edge && s < 1.0f - edge && f > 0.05f && f < 0.97f - CelTuning::kSoftness) {
+          bool seen = false;
+          for (float l : levels) seen = seen || std::fabs(l - v) < 1e-5f * std::max(v, 1e-3f) * 100.0f;
+          if (!seen) levels.push_back(v);
+        }
+        // A night frame is banded as a day frame (the same picture two steps darker, its centre too).
+        CHECK_NEAR(CelBandLuma(y * 0.25f, bands, anchor - 2.0f), 0.25f * v, 1e-4 * std::max(v, 0.01f));
       }
+      CHECK_EQ(levels.size(), size_t(bands));
+      // Darker and brighter than the bands: kept.
+      const float dark = std::exp2(anchor - half - 0.3f), bright = std::exp2(anchor + half + 0.3f);
+      CHECK_NEAR(CelBandLuma(dark, bands, anchor), dark, 1e-7);
+      CHECK_NEAR(CelBandLuma(bright, bands, anchor), bright, 1e-6);
     }
-    CHECK_EQ(levels.size(), size_t(bands));
-    // The top band stays bright, the darkest pixels keep their value.
-    CHECK(CelBandLuma(0.95f, bands) > 0.7f);
-    CHECK_NEAR(CelBandLuma(0.005f, bands), 0.005f, 1e-6);
-    CHECK_NEAR(CelBandLuma(1.5f, bands), 1.5f, 1e-6);
+    // Three bands: the middle one's level is the centre.
+    CHECK_NEAR(CelBandLuma(std::exp2(anchor + 0.2f), 3, anchor), std::exp2(anchor), 1e-5);
   }
+  CHECK_NEAR(CelBandAnchor(-20.0f), CelTuning::kAnchorMin, 1e-6);
+  CHECK_NEAR(CelBandAnchor(0.0f), CelTuning::kAnchorMax, 1e-6);
+  CHECK_NEAR(CelBandAnchor(-3.3f), -3.3f, 1e-6);
   // The colour: the hue kept, strength 0 the original, white not passed.
   const float orange[3] = {0.8f, 0.4f, 0.1f};
   float out[3];
-  CelBandColour(orange, 3, 1.0f, out);
+  CelBandColour(orange, 3, 1.0f, -2.5f, out);
   CHECK_NEAR(out[1] / out[0], 0.5, 1e-4);
   CHECK_NEAR(out[2] / out[0], 0.125, 1e-4);
-  CelBandColour(orange, 3, 0.0f, out);
+  CelBandColour(orange, 3, 0.0f, -2.5f, out);
   CHECK_NEAR(out[0], 0.8, 1e-6);
   const float red[3] = {0.95f, 0.05f, 0.05f};  // dark luminance, bright channel: scaled up past white
-  CelBandColour(red, 2, 1.0f, out);
+  CelBandColour(red, 2, 1.0f, -2.5f, out);
   CHECK(out[0] <= 1.0f + 1e-6f);
+  CHECK(out[0] > 0.99f);
   CHECK_NEAR(out[1] / out[0], 0.05 / 0.95, 1e-4);
   float opacity = 0;
   CHECK_NEAR(CelRadius(1.5f, 1080, &opacity), 1.5, 1e-6);
@@ -443,6 +490,19 @@ TEST(Cel_SkyAlphaAndGpuBandsMatchTheCpu) {
   const Run r = Shade(1.0f, c);
   CHECK(r.ok);
   Save(r, "bands");
+  // The average: the log2 mean luminance of a 64 x 36 grid of the picture, the sky left out.
+  double sum = 0;
+  int count = 0;
+  for (int k = 0; k < 64 * 36; ++k) {
+    const uint32_t x = uint32_t((float(k % 64) + 0.5f) / 64.0f * float(r.w)), y = uint32_t((float(k / 64) + 0.5f) / 36.0f * float(r.h));
+    if (r.z[size_t(y) * r.w + x] >= 1.0f) continue;
+    const uint8_t* p = &r.in[(size_t(y) * r.w + x) * 4];
+    sum += std::log2(std::max(0.2126 * p[0] / 255.0 + 0.7152 * p[1] / 255.0 + 0.0722 * p[2] / 255.0, 1.0 / 1024.0));
+    ++count;
+  }
+  std::printf("  average: GPU %.4f (measured %d), CPU %.4f over %d samples\n", r.average, int(r.measured), sum / count, count);
+  CHECK(r.measured);
+  CHECK_NEAR(r.average, sum / count, 1e-3);
   float worst = 0, sky_worst = 0, alpha_worst = 0;
   uint32_t sky = 0, changed = 0;
   for (uint32_t y = 0; y < r.h; ++y) {
@@ -457,7 +517,7 @@ TEST(Cel_SkyAlphaAndGpuBandsMatchTheCpu) {
         continue;
       }
       float want[3];
-      CelBandColour(in, c.bands, c.strength, want);
+      CelBandColour(in, c.bands, c.strength, CelBandAnchor(r.average), want, LocalLuma(r, int(x), int(y)));
       for (int i = 0; i < 3; ++i) {
         worst = std::max(worst, std::fabs(o[i] - want[i]));
         changed += std::fabs(o[i] - in[i]) > 2.0f / 255 ? 1 : 0;

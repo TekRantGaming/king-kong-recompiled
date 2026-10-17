@@ -26,7 +26,7 @@ function Compile-Entries([string]$src, [string[]]$specs, [bool]$shift = $true) {
 }
 # Cel shading (cel.hlsl, docs/cel.md): one blob per entry point. -Only cel compiles just these.
 if ($Only -eq "" -or $Only -eq "cel") {
-    Compile-Entries (Join-Path $here "cel.hlsl") @("cel_vs:vs:vs_main", "cel_ps:ps:ps_cel")
+    Compile-Entries (Join-Path $here "cel.hlsl") @("cel_exposure_cs:cs:cs_exposure", "cel_vs:vs:vs_main", "cel_ps:ps:ps_cel")
     if ($Only -eq "cel") { Write-Host "Shaders written to $out"; exit 0 }
 }
 

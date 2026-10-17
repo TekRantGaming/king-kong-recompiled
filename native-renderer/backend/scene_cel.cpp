@@ -93,7 +93,7 @@ bool SceneCel::Apply(nvrhi::ICommandList* cl, const Gtao* ao, bool depth_before_
     ok = gtao_->Prepare(cl, in, gs);
     if (ok) gtao_->SmoothNormals(cl, gs);
   }
-  ok = ok && cel_->Apply(cl, *source, scene_color_.texture, depth, config_);
+  ok = ok && cel_->Apply(cl, *source, scene_color_.texture, depth, config_, frame_);
   if (timer_) timer_->End(cl);
   if (!ok) return false;
   if (reuse) ++stats_.ao_normals;
