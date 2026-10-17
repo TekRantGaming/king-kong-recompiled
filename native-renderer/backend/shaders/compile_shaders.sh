@@ -56,6 +56,13 @@ for spec in ssgi_radiance_cs:cs:cs_radiance ssgi_radiance_down_cs:cs:cs_radiance
   "$DXC" -nologo -T "${stage}_6_0" -E "$entry" -O3 -Fh "$out/${base}_dxil.h" -Vn "k_${base}_dxil" "$src"
   "$DXC" -nologo -T "${stage}_6_0" -E "$entry" -O3 -spirv -fspv-target-env=vulkan1.2     -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-b-shift 256 0 -fvk-u-shift 384 0     -Fh "$out/${base}_spirv.h" -Vn "k_${base}_spirv" "$src"
 done
+# Cel shading (cel.hlsl, docs/cel.md): one blob per entry point.
+src="$here/cel.hlsl"
+for spec in cel_exposure_cs:cs:cs_exposure cel_vs:vs:vs_main cel_ps:ps:ps_cel; do
+  base=${spec%%:*}; rest=${spec#*:}; stage=${rest%%:*}; entry=${rest#*:}
+  "$DXC" -nologo -T "${stage}_6_0" -E "$entry" -O3 -Fh "$out/${base}_dxil.h" -Vn "k_${base}_dxil" "$src"
+  "$DXC" -nologo -T "${stage}_6_0" -E "$entry" -O3 -spirv -fspv-target-env=vulkan1.2     -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-b-shift 256 0 -fvk-u-shift 384 0     -Fh "$out/${base}_spirv.h" -Vn "k_${base}_spirv" "$src"
+done
 # Official SMAA v2.8 1x (both lookup textures are embedded by smaa.cpp).
 src="$here/smaa.hlsl"
 for part in edge weight blend; do

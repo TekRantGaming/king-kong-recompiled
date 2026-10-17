@@ -3,6 +3,7 @@
 #include "backend/render_scale.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -91,6 +92,7 @@ REXCVAR_DECLARE(double, native_ssr_strength);
 REXCVAR_DECLARE(double, native_ssr_ripple);
 REXCVAR_DECLARE(bool, native_ssr_smooth);
 REXCVAR_DECLARE(double, native_volumetric_strength);
+REXCVAR_DECLARE(bool, native_cel_gpu_time);
 REXCVAR_DECLARE(int32_t, native_lighting_census);
 REXCVAR_DECLARE(bool, native_lighting_gpu_time);
 
@@ -235,6 +237,26 @@ void ReadUpscaleConfig(UpscaleConfig& u) {
 
 // --native_shadow_quality and the other lighting options (docs/lighting.md): a value it cannot read is
 // logged and its default (the game's own) kept.
+// Cel shading (docs/cel.md): by name, so the same reader serves the start and the live settings.
+CelConfig ReadCelConfig() {
+  auto get = [](const char* name) { return rex::cvar::GetFlagByName(name); };
+  auto number = [&](const char* name, double fallback) {
+    const std::string text = get(name);
+    char* end = nullptr;
+    const double v = std::strtod(text.c_str(), &end);
+    return end && end != text.c_str() && std::isfinite(v) ? v : fallback;
+  };
+  CelConfig c;
+  c.enabled = get("native_cel_shading") == "true";
+  c.outline = float(std::clamp(number("native_cel_outline", 1.5), 0.0, 4.0));
+  c.darkness = float(std::clamp(number("native_cel_darkness", 0.8), 0.0, 1.0));
+  c.bands = uint32_t(std::clamp(number("native_cel_bands", 3.0), 2.0, 4.0));
+  c.strength = float(std::clamp(number("native_cel_strength", 0.6), 0.0, 1.0));
+  c.debug = int(std::clamp(number("native_cel_debug", 0.0), 0.0, 2.0));
+  c.gpu_time = REXCVAR_GET(native_cel_gpu_time);
+  return c;
+}
+
 void ReadLightingConfig(LightingConfig& l) {
   if (!ParseShadowQuality(REXCVAR_GET(native_shadow_quality), l.shadows))
     REXGPU_WARN("rexgpu-native: native_shadow_quality '{}' is not original, high or ultra", REXCVAR_GET(native_shadow_quality));
@@ -332,6 +354,7 @@ GameSettings ReadGameSettings(bool vulkan) {
   ReadGiConfig(game.gi);
   ReadUpscaleConfig(game.upscale);
   ReadLightingConfig(game.lighting);
+  game.cel = ReadCelConfig();
   // The settings the graphics panel (F8) and the in-game pages change while the game runs: read once a
   // frame by the game renderer (effect_settings.h). The init-only parts (tuning, debugging, rule
   // files) stay as read above.
@@ -368,6 +391,7 @@ GameSettings ReadGameSettings(bool vulkan) {
     lighting.volumetric_strength = float(std::clamp(number("native_volumetric_strength", 1.0), 0.0, 10.0));
     s.gi = gi;
     s.lighting = lighting;
+    s.cel = ReadCelConfig();
     s.shadow_scale = shadow_override > 0 && !(lighting.shadows_on() && shadow_override == 1)
                          ? shadow_override : ShadowScaleForQuality(lighting.shadows);
     ParseUpscalerKind(get("native_upscaler"), upscale.kind);

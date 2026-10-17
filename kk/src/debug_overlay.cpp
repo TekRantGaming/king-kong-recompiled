@@ -104,7 +104,7 @@ bool g_controller_test_consumed = false;
 
 enum class Kind { kChoice, kChoiceSlider, kToggle, kSlider, kSliderInt, kUpscaler, kSharpness, kMipBias, kRestart };
 // When a row is shown (the upscaler's own rows only with one that uses them).
-enum class Show { kAlways, kTemporal, kDlss, kFsr, kAo, kGi, kShadows, kWater, kShafts };
+enum class Show { kAlways, kTemporal, kDlss, kFsr, kAo, kGi, kShadows, kWater, kShafts, kCel };
 
 struct Option {
   const char* label;
@@ -188,6 +188,18 @@ const std::vector<Setting>& Settings() {
        "Limits bounced light to nearby surfaces to save GPU time. Near: 16 m, Medium: 32 m, Far: 64 m. Full has no limit. Light fades smoothly over the final quarter of the distance."},
       {"Global illumination", "Resolution", "native_gi_quality", Kind::kChoice,
        {{"Auto", "auto"}, {"Half", "half"}, {"Full", "full"}}, 0, 1, "", true, Show::kGi},
+      // Cel shading (native-renderer/docs/cel.md): off by default; the Workshop's built-in mod switches it on.
+      {"Cel shading", "Cel shading", "native_cel_shading", Kind::kToggle, {{"Off", "false"}, {"On", "true"}},
+       0, 1, "", true, Show::kAlways,
+       "Ink outlines and flat colour bands on the 3D scene. Water, smoke, fog, the sky and the HUD are left as they are."},
+      {"Cel shading", "Outline thickness", "native_cel_outline", Kind::kSlider, {}, 0, 4, "%.2f", true, Show::kCel,
+       "Line width in pixels at 1080p (scaled with the resolution). 0 turns the outlines off."},
+      {"Cel shading", "Outline darkness", "native_cel_darkness", Kind::kSlider, {}, 0, 1, "%.2f", true, Show::kCel,
+       "How dark the outlines are. Distant scenery fades out."},
+      {"Cel shading", "Colour bands", "native_cel_bands", Kind::kSliderInt, {}, 2, 4, "%d", true, Show::kCel,
+       "How many flat light levels the shading is split into. Colours keep their hue."},
+      {"Cel shading", "Band strength", "native_cel_strength", Kind::kSlider, {}, 0, 1, "%.2f", true, Show::kCel,
+       "How flat the bands are. 0 keeps the original shading."},
       // Lighting.
       {"Tessellation", "Tessellation", "native_tessellation", Kind::kToggle, {{"Off", "false"}, {"On", "true"}},
        0, 1, "", true, Show::kAlways, "Ann only. Parts whose depth shaders have no normals retain their original geometry."},
@@ -380,6 +392,7 @@ bool Visible(const Setting& s) {
     case Show::kShadows: return Get("native_shadow_quality") != "original";
     case Show::kWater: return Get("native_water_reflections") == "ssr";
     case Show::kShafts: return Get("native_volumetrics") != "off";
+    case Show::kCel: return Get("native_cel_shading") == "true";
   }
   return true;
 }
@@ -400,6 +413,7 @@ std::string AppliedText(const NrEffectStats& s, std::vector<std::string>* notes)
   if (s.applied & 8) add(F("Water reflections ({0} water draws)", {std::to_string(s.water_draws)}));
   if (s.applied & 16) add(T("Light shafts"));
   if (s.applied & 32) add(Get("swap_post_effect") == "smaa" ? "SMAA" : "FXAA");
+  if (s.applied & 128) add(T("Cel shading"));
   if (s.anisotropy >= 2) add(F("{0}x filtering", {std::to_string(1 << (s.anisotropy - 1))}));
   if (notes) {
     if (Get("native_shadow_quality") != "original" && !(s.applied & 4))
@@ -412,6 +426,7 @@ std::string AppliedText(const NrEffectStats& s, std::vector<std::string>* notes)
       notes->push_back(T("FXAA / SMAA: off while a temporal upscaler runs (it anti-aliases itself)."));
     if (Get("native_volumetrics") != "off" && !(s.applied & 16)) notes->push_back(T("Light shafts: being prepared."));
     if (Get("native_gi") != "off" && !(s.applied & 2)) notes->push_back(T("GI: being prepared."));
+    if (Get("native_cel_shading") == "true" && !(s.applied & 128)) notes->push_back(T("Cel shading: being prepared."));
   }
   return out.empty() ? T("Nothing beyond the game's own picture") : out;
 }
@@ -442,6 +457,7 @@ std::string Readout() {
     add("Light shafts", s.volumetric_ms);
     add("Upscaler", s.upscaler_ms);
     add("Tessellation", s.tessellation_ms);
+    add("Cel shading", s.cel_ms);
     out += F("Tessellated Ann draws: {0}", {std::to_string(s.tessellation_draws)}) + "\n";
     out += F("GPU time a frame: {0}", {gpu.empty() ? T("No effect timed") : gpu}) + "\n";
     std::vector<std::string> notes;
@@ -813,6 +829,7 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
       add("Shafts", st.volumetric_ms);
       add("Upscaler", st.upscaler_ms);
       add("Tessellation", st.tessellation_ms);
+      add("Cel shading", st.cel_ms);
       if(Get("native_tessellation")=="true" && !st.tessellation_draws)
         ImGui::TextDisabled("%s", T("Tessellation: no eligible prepared Ann draw"));
       if (!gpu.empty()) ImGui::TextColored(ImColor(ui::color::kTextDim), "GPU: %s", gpu.c_str());
@@ -1758,7 +1775,7 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
           log("verify " + std::to_string(step_) + "-" + plan_[step_].cvar + "-V" + std::to_string(value_) + "-" +
               verify_value_ + " base=" + step_base_ + " upscaler=" + es.upscaler + " applied=" + AppliedText(es, nullptr) +
               " gpu ao=" + Number(es.ao_ms) + " gi=" + Number(es.gi_ms) + " shadows=" + Number(es.shadows_ms) +
-              " water=" + Number(es.water_ms) + " shafts=" + Number(es.volumetric_ms) + " up=" + Number(es.upscaler_ms) +
+              " water=" + Number(es.water_ms) + " shafts=" + Number(es.volumetric_ms) + " up=" + Number(es.upscaler_ms) + " cel=" + Number(es.cel_ms) +
               " shadow_draws=" + std::to_string(es.shadow_draws) + " water_draws=" + std::to_string(es.water_draws));
         }
         Change(plan_[step_].cvar.c_str(), step_base_);

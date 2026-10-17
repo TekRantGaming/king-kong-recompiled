@@ -215,6 +215,7 @@ std::string Settings() {
       "native_upscaler_output", "native_frame_size",
       "native_ao_method", "native_ao_quality", "native_ao_samples", "native_ao_normal_smoothing", "ao_mode", "ao_strength",
       "native_gi", "native_gi_distance",
+      "native_cel_shading", "native_cel_outline", "native_cel_darkness", "native_cel_bands", "native_cel_strength",
       "native_shadow_quality", "native_water_reflections", "native_volumetrics", "kk_fov",
       "kk_camera_sensitivity", "kk_camera_modern", "kk_hfr_fixes", "kk_cheats", "present_effect",
       "kk_deadzone", "kk_toggle_aim", "kk_invert_ls_x", "kk_invert_ls_y", "kk_invert_rs_x", "kk_invert_rs_y",

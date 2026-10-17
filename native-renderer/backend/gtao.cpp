@@ -451,11 +451,22 @@ bool Gtao::Prepare(nvrhi::ICommandList* cl, const GtaoInput& in, const GtaoSetti
   Dispatch(cl, prepare_, prepare, pw / 8, ph / 8);
   Dispatch(cl, prefilter_, fixed_sets_[0], pw / 16, ph / 16);
   Dispatch(cl, normals_, fixed_sets_[1], pw / XE_GTAO_NUMTHREADS_X, ph / XE_GTAO_NUMTHREADS_Y);
+  normals_smoothed_ = false;
+  prepared_ = true;
+  return true;
+}
+
+bool Gtao::SmoothNormals(nvrhi::ICommandList* cl, const GtaoSettings& s) {
+  if (!prepared_ || fixed_sets_.size() < 7 || SmoothingFor(s.normal_smoothing).max_pixels_1080 <= 0.0f) return false;
+  Dispatch(cl, smooth_h_, fixed_sets_[5], padded_w_ / XE_GTAO_NUMTHREADS_X, padded_h_ / XE_GTAO_NUMTHREADS_Y);
+  Dispatch(cl, smooth_v_, fixed_sets_[6], padded_w_ / XE_GTAO_NUMTHREADS_X, padded_h_ / XE_GTAO_NUMTHREADS_Y);
+  normals_smoothed_ = true;
   return true;
 }
 
 nvrhi::ITexture* Gtao::Compute(nvrhi::ICommandList* cl, const GtaoInput& in, const GtaoSettings& s) {
   if (!Prepare(cl, in, s)) return nullptr;
+  normals_smoothed_ = SmoothingFor(s.normal_smoothing).max_pixels_1080 > 0.0f;
   const uint32_t pw = padded_w_, ph = padded_h_;
   using S = nvrhi::BindingSetItem;
   const auto cb = S::ConstantBuffer(0, constants_);

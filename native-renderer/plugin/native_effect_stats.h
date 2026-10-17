@@ -5,7 +5,7 @@
 // frames; negative: off, or no sample yet.
 typedef struct NrEffectStats {
   uint32_t size;
-  uint32_t preparing;  // being made on a worker: 1 GI, 2 the lighting passes, 4 an upscaler, 8 shader variants
+  uint32_t preparing;  // being made on a worker: 1 GI, 2 the lighting passes, 4 an upscaler, 8 shader variants, 16 cel shading
   double ao_ms, gi_ms, shadows_ms, water_ms, volumetric_ms, upscaler_ms;
   double tessellation_ms;
   uint32_t tessellation_draws;
@@ -17,7 +17,7 @@ typedef struct NrEffectStats {
   float mip_bias;                        // the upscaler's texture LOD bias for the scene's draws
   uint32_t sampler_slots, targets, retired;  // cache sizes (the robustness test watches them)
   // What the renderer applies this frame (bits): 1 ambient occlusion, 2 GI, 4 soft shadows, 8 water
-  // reflections, 16 volumetric light, 32 spatial AA (FXAA / SMAA), 64 an upscaler.
+  // reflections, 16 volumetric light, 32 spatial AA (FXAA / SMAA), 64 an upscaler, 128 cel shading.
   uint32_t applied;
   int32_t anisotropy;                    // the override in use (-1 the game's)
   uint32_t gi_level;                     // nr::GiLevel
@@ -28,6 +28,7 @@ typedef struct NrEffectStats {
   uint64_t live_changes;                 // upscalers made again and effects put in while running
   double last_change_ms;                 // the render thread's time for the last one
   char upscaler[96];                     // "DLSS 310.9.1 Quality preset M (Vulkan)", "off"
+  double cel_ms;                         // cel shading (bit 128 of applied; preparing bit 16)
 } NrEffectStats;
 #ifdef __cplusplus
 namespace nr { bool ReadEffectStats(NrEffectStats* out); }

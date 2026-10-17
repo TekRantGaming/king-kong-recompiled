@@ -532,6 +532,7 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
     renderer->options().guest_frame_height = height;
     renderer->options().ao = game.ao;  // before Initialize: the ambient-only AO adds a binding
     renderer->options().gi = game.gi;  // before Initialize (GiInitialize)
+    renderer->options().cel = game.cel;  // before Initialize (CelInitialize)
     if (upscale_enabled && (game.ao.method == AoMethod::kLegacy || game.ao.apply == AoApply::kResolve)) {
       // The legacy AO (and GTAO at the resolve moment) darkens the scene copy the post effects read, after
       // the upscaler took its input: with an upscaler the occlusion goes into the scene at the end of its
@@ -812,9 +813,9 @@ void Backend::LogFrameTiming() {
   };
   std::string groups;
 #if NR_GAME_RENDERER
-  groups = fmt::format("; GPU passes ms: AO {}, GI {}, upscaler {}, shadows {}, water {}, volumetrics {}", gpu(passes.ao),
+  groups = fmt::format("; GPU passes ms: AO {}, GI {}, upscaler {}, shadows {}, water {}, volumetrics {}, cel {}", gpu(passes.ao),
                        gpu(passes.gi), gpu(passes.upscaler), gpu(passes.shadows), gpu(passes.water),
-                       gpu(passes.volumetrics));
+                       gpu(passes.volumetrics), gpu(passes.cel));
 #endif
   REXLOG_INFO(
       "rexgpu-native: frame timing ({} frames, {:.1f} s, {:.1f} FPS): frame p50 {:.2f} p95 {:.2f} p99 {:.2f} max {:.2f} "
