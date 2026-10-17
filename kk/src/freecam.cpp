@@ -18,8 +18,8 @@
 #include <rex/ui/window.h>
 #include <rex/ui/window_listener.h>
 
-REXCVAR_DEFINE_BOOL(kk_freecam, false, "KK/Debug",
-                    "Enable the hidden F9 free camera and F10 HUD controls")
+REXCVAR_DEFINE_BOOL(kk_freecam, true, "KK/Debug",
+                    "F9 free camera and F10 HUD toggle (on by default since 17 Oct, owner decision)")
     .debug_only();
 
 namespace kk::freecam {
@@ -143,15 +143,24 @@ protected:
 #if defined(KK_DEV_TOOLS)
     if (std::getenv("KK_DEV_PUBLIC_DEFAULT_TEST") && !defaults_tested && InPlay()) {
       defaults_tested = true;
-      for (unsigned k : {0x78u, 0x79u}) {
+      // F9/F10 are public since 17 Oct (owner): on by default, idle until pressed, and each key
+      // toggles its feature on and back off.
+      const bool idle = REXCVAR_GET(kk_freecam) && !active && !hidden;
+      auto press = [&](unsigned k) {
         rex::ui::KeyEvent e(window, rex::ui::VirtualKey(k), 1, false, false,
                             false, false, false);
         Key(e, true);
-      }
-      const bool pass = !REXCVAR_GET(kk_freecam) && !active && !hidden &&
+      };
+      press(0x78u);
+      press(0x79u);
+      const bool on = active && hidden;
+      press(0x78u);
+      press(0x79u);
+      const bool off = !active && !hidden;
+      const bool pass = idle && on && off &&
                         !REXCVAR_GET(kk_ps2_cutscenes) && movies::Folder().empty();
-      REXLOG_INFO("KK public defaults test: {} F9/F10 inert, movies off, folder empty",
-                  pass ? "PASS" : "FAIL");
+      REXLOG_INFO("KK public defaults test: {} F9/F10 work (idle {}, on {}, off {}), movies off, folder empty",
+                  pass ? "PASS" : "FAIL", idle, on, off);
     }
     TestTick();
 #endif
