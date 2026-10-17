@@ -14,6 +14,14 @@
 // Otherwise the driver changed (or the file is damaged): the cache starts empty and is filled
 // again by the pipelines the run makes (the prewarm makes them all in the background), and the
 // next save replaces the file.
+//
+// Several devices save the same file (task 185: the setup job's and the launcher prewarm's in one
+// process, the launcher's and the game's in two). A save holds an exclusive lock on "<file>.lock"
+// (file_lock.h) while it writes "<file>.tmp" and renames it over the file, so the file is always one
+// whole save. When the file changed since this cache last loaded or saved it (another device saved),
+// the save merges that file's pipelines with this cache's (in a cache of its own: the live cache
+// keeps serving pipeline creation) so neither device's pipelines are lost. A save that cannot get
+// the lock within a few seconds is skipped and tried again later.
 #pragma once
 
 #include <cstdint>
@@ -66,10 +74,21 @@ class VulkanPipelineCache final : public DriverPipelineCache {
 
  private:
   VulkanPipelineCache() = default;
+  std::vector<uint8_t> DataOf(VkPipelineCache cache);
+  // The file `path` holds pipelines this cache does not (another device saved since): merges them
+  // with this cache's data into `data`. False: nothing merged.
+  bool MergeFile(const std::string& path, std::vector<uint8_t>* data, std::string* note);
+  void Remember(const std::vector<uint8_t>& file);
+
   VkDevice device_ = VK_NULL_HANDLE;
   VkPipelineCache cache_ = VK_NULL_HANDLE;
   Identity identity_;
   std::mutex save_mutex_;  // one save at a time (workers and shutdown)
+  // The file as this cache last loaded or wrote it (its header's data size and hash): a different
+  // file at the next save was written by another device.
+  bool known_ = false;
+  uint64_t known_size_ = 0, known_hash_ = 0;
+  bool merged_ = false;  // the file holds another device's pipelines too: every save merges
 };
 
 }  // namespace nr

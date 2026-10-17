@@ -632,7 +632,7 @@ class GameRenderer {
   RetireBudget retire_budget_;
   bool retire_budget_checked_ = false;
   uint64_t retire_backlog_frames_ = 0, retire_backlog_released_ = 0;
-  double retire_backlog_ms_ = 0;
+  double retire_backlog_ms_ = 0, retire_backlog_budget_ms_ = 0;
   uint32_t TextureView(HostTexture* host, const kknr::TextureFetch& fetch,
                        kkshaders::TextureDimension dimension, bool base_map);
   // extra_lod_bias: added to the fetch constant's (the upscalers' mip bias for the scene's draws).

@@ -1,8 +1,12 @@
 #include "backend/vk_pipeline_cache.h"
 
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <thread>
+
+#include "backend/file_lock.h"
 
 #ifndef VULKAN_HPP_DISPATCH_LOADER_DYNAMIC
 #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
@@ -54,6 +58,31 @@ std::string Hex(const uint8_t* p, size_t n) {
 
 void Set(std::string* note, std::string text) {
   if (note) *note = std::move(text);
+}
+
+// How long a load or save waits for another device's save of the same file (a 150 MB save takes well
+// under a second; the game's exit flush allows 3 s in all).
+constexpr std::chrono::milliseconds kLockWait(2000);
+
+std::string LockPath(const std::string& path) { return path + ".lock"; }
+
+bool ReadFile(const std::string& path, std::vector<uint8_t>* file) {
+  std::FILE* in = std::fopen(path.c_str(), "rb");
+  if (!in) return false;
+  uint8_t buffer[65536];
+  size_t n = 0;
+  while ((n = std::fread(buffer, 1, sizeof(buffer), in)) > 0) file->insert(file->end(), buffer, buffer + n);
+  std::fclose(in);
+  return true;
+}
+
+// The header of the file at `path`, when it has ours.
+bool ReadHeader(const std::string& path, FileHeader* h) {
+  std::FILE* in = std::fopen(path.c_str(), "rb");
+  if (!in) return false;
+  const bool ok = std::fread(h, 1, sizeof(*h), in) == sizeof(*h);
+  std::fclose(in);
+  return ok && h->magic == kFileMagic && h->version == kFileVersion && h->header_size == sizeof(*h);
 }
 
 }  // namespace
@@ -175,15 +204,14 @@ DriverPipelineCache::Load VulkanPipelineCache::CheckFile(const std::vector<uint8
 DriverPipelineCache::Load VulkanPipelineCache::LoadFile(const std::string& path, std::string* note) {
   std::vector<uint8_t> file;
   {
-    std::FILE* in = std::fopen(path.c_str(), "rb");
-    if (!in) {
+    // Not while another device writes it (the rename is atomic, but a reader holding the file open
+    // makes the writer's rename fail on Windows). Without the lock the file is read anyway.
+    FileLock lock;
+    if (std::filesystem::exists(path)) lock.Lock(LockPath(path), kLockWait);
+    if (!ReadFile(path, &file)) {
       Set(note, "no file yet");
       return Load::kAbsent;
     }
-    uint8_t buffer[65536];
-    size_t n = 0;
-    while ((n = std::fread(buffer, 1, sizeof(buffer), in)) > 0) file.insert(file.end(), buffer, buffer + n);
-    std::fclose(in);
   }
   size_t offset = 0;
   const Load check = CheckFile(file, identity_, note, &offset);
@@ -203,17 +231,31 @@ DriverPipelineCache::Load VulkanPipelineCache::LoadFile(const std::string& path,
     Set(note, "vkMergePipelineCaches failed");
     return Load::kRefused;
   }
+  {
+    std::lock_guard save_lock(save_mutex_);
+    Remember(file);
+  }
   return Load::kLoaded;
 }
 
-std::vector<uint8_t> VulkanPipelineCache::Data() {
+void VulkanPipelineCache::Remember(const std::vector<uint8_t>& file) {
+  FileHeader h;
+  std::memcpy(&h, file.data(), sizeof(h));
+  known_ = true;
+  known_size_ = h.data_size;
+  known_hash_ = h.data_hash;
+}
+
+std::vector<uint8_t> VulkanPipelineCache::Data() { return DataOf(cache_); }
+
+std::vector<uint8_t> VulkanPipelineCache::DataOf(VkPipelineCache cache) {
   std::vector<uint8_t> data;
   // The cache may grow between the two calls (workers keep creating pipelines): try again.
   for (int attempt = 0; attempt < 4; ++attempt) {
     size_t size = 0;
-    if (VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPipelineCacheData(device_, cache_, &size, nullptr) != VK_SUCCESS) return {};
+    if (VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPipelineCacheData(device_, cache, &size, nullptr) != VK_SUCCESS) return {};
     data.resize(size);
-    const VkResult r = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPipelineCacheData(device_, cache_, &size, data.data());
+    const VkResult r = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPipelineCacheData(device_, cache, &size, data.data());
     if (r == VK_SUCCESS) {
       data.resize(size);
       return data;
@@ -223,18 +265,67 @@ std::vector<uint8_t> VulkanPipelineCache::Data() {
   return {};
 }
 
-bool VulkanPipelineCache::SaveFile(const std::string& path, size_t* bytes, std::string* note) {
-  std::lock_guard lock(save_mutex_);
-  const std::vector<uint8_t> data = Data();
-  if (bytes) *bytes = data.size();
-  if (data.size() < kVulkanHeaderSize) {
-    Set(note, "the driver gave no data");
+bool VulkanPipelineCache::MergeFile(const std::string& path, std::vector<uint8_t>* data, std::string* note) {
+  std::vector<uint8_t> file;
+  size_t offset = 0;
+  std::string why;
+  if (!ReadFile(path, &file) || CheckFile(file, identity_, &why, &offset) != Load::kLoaded) {
+    Set(note, "not merged (" + (why.empty() ? std::string("unreadable") : why) + ")");
+    return false;  // another driver's or a damaged file: replaced
+  }
+  // A cache of its own made from the file, this cache merged into it (only the destination of a merge
+  // must not be used meanwhile: the live cache keeps serving pipeline creation).
+  VkPipelineCacheCreateInfo info = {};
+  info.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+  info.initialDataSize = file.size() - offset;
+  info.pInitialData = file.data() + offset;
+  VkPipelineCache both = VK_NULL_HANDLE;
+  if (VULKAN_HPP_DEFAULT_DISPATCHER.vkCreatePipelineCache(device_, &info, nullptr, &both) != VK_SUCCESS) {
+    Set(note, "not merged (vkCreatePipelineCache refused the file)");
     return false;
   }
-  const std::vector<uint8_t> file = MakeFile(identity_, data);
+  std::vector<uint8_t> merged;
+  if (VULKAN_HPP_DEFAULT_DISPATCHER.vkMergePipelineCaches(device_, both, 1, &cache_) == VK_SUCCESS) {
+    merged = DataOf(both);
+  }
+  VULKAN_HPP_DEFAULT_DISPATCHER.vkDestroyPipelineCache(device_, both, nullptr);
+  if (merged.size() < kVulkanHeaderSize) {
+    Set(note, "not merged (vkMergePipelineCaches failed)");
+    return false;
+  }
+  Set(note, "merged with another device's save of " + std::to_string((file.size() - offset) / 1024) + " KB");
+  *data = std::move(merged);
+  return true;
+}
+
+bool VulkanPipelineCache::SaveFile(const std::string& path, size_t* bytes, std::string* note) {
+  std::lock_guard lock(save_mutex_);
   std::error_code ec;
   const std::filesystem::path p(path);
   if (p.has_parent_path()) std::filesystem::create_directories(p.parent_path(), ec);
+  // One save of this file at a time across devices and processes (task 185).
+  FileLock file_lock;
+  if (!file_lock.Lock(LockPath(path), kLockWait)) {
+    Set(note, "another device or process kept the file locked (" + LockPath(path) + "): tried again later");
+    return false;
+  }
+  std::vector<uint8_t> data = Data();
+  if (data.size() < kVulkanHeaderSize) {
+    if (bytes) *bytes = data.size();
+    Set(note, "the driver gave no data");
+    return false;
+  }
+  // Another device saved since this cache last loaded or saved the file: keep its pipelines too.
+  std::string merge_note;
+  FileHeader on_disk;
+  if (ReadHeader(path, &on_disk) &&
+      (merged_ || !known_ || on_disk.data_size != known_size_ || on_disk.data_hash != known_hash_)) {
+    if (MergeFile(path, &data, &merge_note)) merged_ = true;
+  }
+  if (bytes) *bytes = data.size();
+  const std::vector<uint8_t> file = MakeFile(identity_, data);
+  // Only the lock holder writes the temporary file, so its name can be fixed (a save cut off by the
+  // end of the process leaves one temporary file, replaced by the next save).
   const std::string temp = path + ".tmp";
   std::FILE* out = std::fopen(temp.c_str(), "wb");
   if (!out) {
@@ -245,7 +336,13 @@ bool VulkanPipelineCache::SaveFile(const std::string& path, size_t* bytes, std::
   ok = std::fflush(out) == 0 && ok;
   ok = std::fclose(out) == 0 && ok;
   if (ok) {
-    std::filesystem::rename(temp, p, ec);
+    // An atomic replace. A reader of an older build (or a virus scanner) holding the file open can make
+    // it fail for a moment on Windows: a few tries.
+    for (int attempt = 0; attempt < 5; ++attempt) {
+      std::filesystem::rename(temp, p, ec);
+      if (!ec) break;
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
     ok = !ec;
   }
   if (!ok) {
@@ -253,7 +350,8 @@ bool VulkanPipelineCache::SaveFile(const std::string& path, size_t* bytes, std::
     Set(note, "cannot write " + path);
     return false;
   }
-  Set(note, std::to_string(data.size() / 1024) + " KB");
+  Remember(file);
+  Set(note, std::to_string(data.size() / 1024) + " KB" + (merge_note.empty() ? "" : ", " + merge_note));
   return true;
 }
 

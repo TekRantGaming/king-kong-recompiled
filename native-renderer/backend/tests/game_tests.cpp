@@ -14,6 +14,7 @@
 // NR_TEST_IMAGES=<dir> writes each read-back image there as a PPM.
 
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -32,6 +33,7 @@
 
 #include "backend/api_binding.h"
 #include "backend/draw_state.h"
+#include "backend/file_lock.h"
 #include "backend/frame_log.h"
 #include "backend/pipeline_cache.h"
 #include "backend/pipeline_prewarm.h"
@@ -2407,6 +2409,116 @@ TEST(VkPipelineCache_ADamagedFileStartsEmptyAndIsReplaced) {
   std::string note;
   CHECK(VulkanPipelineCache::CheckFile(ReadAll(path), dev->pipeline_cache()->identity(), &note, nullptr) ==
         DriverPipelineCache::Load::kLoaded);
+}
+
+TEST(FileLock_OneHolderAtATimeAlsoInOneProcess) {
+  // Task 185: the lock belongs to the handle, so two devices in one process wait for each other as two
+  // processes do.
+  const std::string path = CachePath("file_lock") + ".lock";
+  FileLock a, b;
+  CHECK(a.Lock(path, std::chrono::milliseconds(0)));
+  CHECK(!b.Lock(path, std::chrono::milliseconds(0)));
+  CHECK(!b.Lock(path, std::chrono::milliseconds(30)));
+  std::thread release([&] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    a.Unlock();
+  });
+  CHECK(b.Lock(path, std::chrono::milliseconds(5000)));  // taken once the first holder lets go
+  release.join();
+  CHECK(!a.Lock(path, std::chrono::milliseconds(0)));
+  b.Unlock();
+  CHECK(a.Lock(path, std::chrono::milliseconds(0)));
+}
+
+TEST(VkPipelineCache_TwoDevicesSavingTheSameFileAtOnceLeaveAWholeFile) {
+  // Task 185: with --native_launcher_prewarm the setup job's device and the prewarm's saved the same
+  // .vkcache in the same millisecond (one temporary file for both) and the next start found it damaged.
+  // Two devices here save the same file over and over from two threads; a reader (as a third device's
+  // load would) checks the file in between: always whole, always this driver's.
+  const std::string path = CachePath("vk_two_devices") + ".vkcache";
+  std::filesystem::remove(path);
+  auto dev_a = CachedDevice();
+  auto dev_b = CachedDevice();
+  if (!dev_a || !dev_b) return;
+  Fixture fa, fb;
+  fa.gpu = dev_a.get();
+  fb.gpu = dev_b.get();
+  if (!fa.Init() || !fb.Init()) return;
+  CHECK(fa.game->SetDriverPipelineCache(dev_a->pipeline_cache(), path) == DriverPipelineCache::Load::kAbsent);
+  CHECK(fb.game->SetDriverPipelineCache(dev_b->pipeline_cache(), path) == DriverPipelineCache::Load::kAbsent);
+  for (Fixture* f : {&fa, &fb}) {
+    const uint32_t rt = f->BindMainSurface();
+    auto p = f->MakeColorPipeline();
+    DrawQuadrantFrame(*f, rt, p);
+  }
+  // A saves first; B (whose load found no file) then finds A's file and merges it.
+  std::string note;
+  CHECK(dev_a->pipeline_cache()->SaveFile(path, nullptr, &note));
+  CHECK(note.find("merged") == std::string::npos);
+  CHECK(dev_b->pipeline_cache()->SaveFile(path, nullptr, &note));
+  std::printf("  second device's save: %s\n", note.c_str());
+  CHECK(note.find("merged with another device's save") != std::string::npos);
+  std::atomic<int> saved{0}, refused{0}, checked{0}, bad{0};
+  std::atomic<bool> done{false};
+  auto saver = [&](VulkanPipelineCache* cache) {
+    for (int i = 0; i < 25; ++i) {
+      std::string n;
+      (cache->SaveFile(path, nullptr, &n) ? saved : refused).fetch_add(1);
+    }
+  };
+  std::thread reader([&] {
+    while (!done.load()) {
+      FileLock lock;
+      if (!lock.Lock(path + ".lock", std::chrono::milliseconds(5000))) continue;
+      std::string why;
+      if (VulkanPipelineCache::CheckFile(ReadAll(path), dev_a->pipeline_cache()->identity(), &why, nullptr) !=
+          DriverPipelineCache::Load::kLoaded) {
+        std::printf("  not whole: %s\n", why.c_str());
+        bad.fetch_add(1);
+      }
+      checked.fetch_add(1);
+      lock.Unlock();
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+  });
+  std::thread ta(saver, dev_a->pipeline_cache());
+  std::thread tb(saver, dev_b->pipeline_cache());
+  ta.join();
+  tb.join();
+  done.store(true);
+  reader.join();
+  std::printf("  50 saves at once: %d saved, %d waited out, %d checks, %d not whole\n", saved.load(), refused.load(),
+              checked.load(), bad.load());
+  CHECK_EQ(bad.load(), 0);
+  CHECK_EQ(saved.load(), 50);  // each save waits for the other (well under the 2 s lock wait here)
+  CHECK(!std::filesystem::exists(path + ".tmp"));
+  // The next start takes the file.
+  auto dev_c = CachedDevice();
+  if (!dev_c) return;
+  CHECK(dev_c->pipeline_cache()->LoadFile(path, &note) == DriverPipelineCache::Load::kLoaded);
+}
+
+TEST(VkPipelineCache_ASaveWaitsForTheLockAndGivesUpWithoutWriting) {
+  // Another process holding the lock past the wait: the save is skipped (tried again later), the file
+  // is left as it was.
+  const std::string path = CachePath("vk_locked") + ".vkcache";
+  std::filesystem::remove(path);
+  auto dev = CachedDevice();
+  if (!dev) return;
+  std::string note;
+  CHECK(dev->pipeline_cache()->SaveFile(path, nullptr, &note));
+  const std::vector<uint8_t> before = ReadAll(path);
+  FileLock other;
+  CHECK(other.Lock(path + ".lock", std::chrono::milliseconds(0)));
+  const auto start = std::chrono::steady_clock::now();
+  CHECK(!dev->pipeline_cache()->SaveFile(path, nullptr, &note));
+  const double waited = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+  std::printf("  locked elsewhere: %s (after %.1f s)\n", note.c_str(), waited);
+  CHECK(note.find("locked") != std::string::npos);
+  CHECK(waited >= 1.5 && waited < 10);
+  CHECK(ReadAll(path) == before);
+  other.Unlock();
+  CHECK(dev->pipeline_cache()->SaveFile(path, nullptr, &note));
 }
 
 TEST(VkPipelineCache_SavedAfterEnoughNewPipelines) {

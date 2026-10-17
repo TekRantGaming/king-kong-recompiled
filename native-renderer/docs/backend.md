@@ -1467,6 +1467,17 @@ cleared or full driver cache, or drivers without one.
   (`driver_cache_save_seconds`), and when the renderer is destroyed (the end of the game, the end of the launcher's
   prewarm). Never on the render thread. Decided against saving after every pipeline: NVIDIA's data for a few
   thousand pipelines is tens of megabytes.
+- Several savers of one file (task 185): the setup job's device and the launcher prewarm's
+  (`--native_launcher_prewarm`) in one process, the launcher's and the game's in two. Two saves at once wrote the
+  same temporary file and the next start found the cache damaged. A save now holds an exclusive lock on
+  `<file>.lock` (`backend/file_lock.*`: `LockFileEx` / `flock` on the handle, so two devices in one process wait
+  for each other like two processes, and the system drops it when a process ends), writes `<file>.tmp` and
+  renames it over the file; a load takes the same lock. When the file changed since this cache loaded or last
+  saved it (another device saved), the save merges that file into a cache of its own together with the live
+  cache's data (`vkMergePipelineCaches` into the separate cache: the live one keeps serving pipeline creation),
+  so neither device's pipelines are lost; log `saved: N KB, merged with another device's save of M KB`. A save
+  that cannot get the lock within 2 s is skipped and tried again later (`not saved: another device or process
+  kept the file locked`). A damaged file still only means an empty start and a rebuild.
 - Pipeline creation holds a shared lock (`GameRenderer::CreatePipeline`), reading the file an exclusive one;
   `SetDriverPipelineCache` must come before the first draw and before the prewarm starts (it does: shader storage
   is initialised before the game's main thread runs). The built-in passes outside the game renderer (AO, the
