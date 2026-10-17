@@ -34,3 +34,6 @@
 # Recorded resource content keys are generated from private game runs.
 kkresources.list
 *.resources-*
+
+# Setup comparison close-ups (tools/setup_art.ps1): captured from the game, shipped in packages only
+setup-art/

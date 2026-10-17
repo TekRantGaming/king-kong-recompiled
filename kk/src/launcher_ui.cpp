@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <sstream>
 
@@ -121,7 +122,8 @@ enum PadButton { kPadA, kPadB, kPadX, kPadY, kPadLB, kPadRB, kPadStart, kPadBack
 Input::Input(bool own_gamepads) {
   // The program's own SDL (the game's input runs in the runtime's): only
   // while the launcher is open. Gamepads already connected arrive as events.
-  sdl_ready_ = own_gamepads && SDL_InitSubSystem(SDL_INIT_GAMEPAD);
+  // KK_DEV_NO_PADS (tests): the controllers are left alone, so one in use in another program cannot press anything.
+  sdl_ready_ = own_gamepads && !std::getenv("KK_DEV_NO_PADS") && SDL_InitSubSystem(SDL_INIT_GAMEPAD);
   pad_held_at_.fill(-1e9);
   key_pressed_at_.fill(-1e9);
 }
@@ -146,6 +148,7 @@ float Input::HeldFor(Action a) const {
 
 void Input::Inject(Action a, Device d) {
   pressed_[size_t(a)] = true;
+  injected_ = true;
   device_ = d;
   if (d != Device::kKeyboard) pad_device_ = d;
   if (d != Device::kKeyboard) pad_style_ = d == Device::kPlayStation ? "ps5" : "xbox360";
@@ -280,6 +283,7 @@ void Input::UpdateGamepads(double now) {
 
 void Input::Update() {
   pressed_ = {};
+  injected_ = false;
   held_ = {};
   const double now = ImGui::GetTime();
   const ImGuiIO& io = ImGui::GetIO();

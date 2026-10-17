@@ -21,6 +21,10 @@ bool IsShiftHeld();
 // Primary monitor resolution in physical pixels.
 std::pair<int, int> PrimaryScreenSize();
 
+// Whether a screen has HDR switched on (Windows: a DXGI output in the HDR10 colour space; Linux: SDL's
+// HDR property of the primary display). The setup's HDR row only shows when one has (job J4).
+bool ScreenHdrOn();
+
 // The graphics card the game runs on: the dedicated one when there is one,
 // else the integrated one (Windows' high-performance adapter). Unknown when it
 // can't be told (and on Linux).
