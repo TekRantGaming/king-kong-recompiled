@@ -378,6 +378,12 @@ OfferedUpscalers OfferedTemporalUpscalers() {
   if (!HasTemporalSetting() || !UsingNativeRenderer()) return o;
   const nr::kk::UpscalerChoices c = nr::kk::QueryUpscalers();
   o.known = c.state == 2;
+#if !defined(_WIN32)
+  // Linux builds have no temporal upscaler (native-renderer/docs/linux.md, "Upscalers on Linux"): the
+  // renderer answers "none here" (0) or "failed" (3) at once. That is the final answer, not "still asking",
+  // so the setup's cards and Display > Upscaling must not say "Checking" for ever.
+  o.known = o.known || c.state == 0 || c.state == 3;
+#endif
   o.fsr3 = c.fsr3;
   o.fsr4 = c.fsr4;
   o.dlss = c.dlss;

@@ -119,6 +119,12 @@ if [ -n "${KK_RESOURCE_LIST:-}" ]; then
 else
   echo "warning: KK_RESOURCE_LIST not set: no kkresources.list, chapter resources are learned in play" >&2
 fi
+# Other files the Windows zip ships beside the program and the game looks for there (space-separated paths,
+# e.g. benchmark-route.kkbr for About > Run benchmark, FREECAM.txt, the setup-art/ folder of graphics close-ups);
+# not in git, like the lists above.
+for f in ${KK_EXTRA_FILES:-}; do
+  cp -a "$f" "$APPDIR/usr/bin/"
+done
 cp "$ROOT/docs/images/icon.png" "$APPDIR/king_kong.png"
 # The FFmpeg libraries came beside the binary with the *.so* above; their licence and source note go here.
 if [ -n "$FFMPEG_DIR" ]; then
@@ -131,6 +137,9 @@ cp "$ROOT/kk/THIRD-PARTY-NOTICES.txt" "$APPDIR/usr/bin/"
 if [ -n "${KK_DXC_DIR:-}" ]; then
   mkdir -p "$APPDIR/usr/share/licenses/dxc"
   find "$KK_DXC_DIR" -maxdepth 1 -iname '*LICENSE*' -exec cp {} "$APPDIR/usr/share/licenses/dxc/" \;
+  # The notices for the code inside libdxcompiler.so (SPIRV-Tools, SPIRV-Headers, DirectX-Headers, Apache 2.0):
+  # the official repository's licence files at the release tag, in <KK_DXC_DIR>/licences (build_linux_beta.sh).
+  [ ! -d "$KK_DXC_DIR/licences" ] || cp "$KK_DXC_DIR/licences/"* "$APPDIR/usr/share/licenses/dxc/"
 fi
 cat > "$APPDIR/king_kong.desktop" <<'EOF'
 [Desktop Entry]
@@ -178,10 +187,13 @@ if [ -n "$FFMPEG_DIR" ]; then
 fi
 
 echo "== AppImage"
-TOOL="$WORK/appimagetool-x86_64.AppImage"
+TOOL="${KK_APPIMAGETOOL:-$WORK/appimagetool-x86_64.AppImage}"  # KK_APPIMAGETOOL: a copy already on disk
 [ -x "$TOOL" ] || { wget -q -O "$TOOL" \
   https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage && chmod +x "$TOOL"; }
 mkdir -p "$ROOT/dist"
 OUT="$ROOT/dist/KingKong-$VERSION-linux-x86_64.AppImage"
-ARCH=x86_64 "$TOOL" --appimage-extract-and-run "$APPDIR" "$OUT"
+# KK_APPIMAGE_RUNTIME: the AppImage type 2 runtime already on disk (otherwise appimagetool downloads it).
+RUNTIME_ARGS=()
+[ -z "${KK_APPIMAGE_RUNTIME:-}" ] || RUNTIME_ARGS=(--runtime-file "$KK_APPIMAGE_RUNTIME")
+ARCH=x86_64 "$TOOL" --appimage-extract-and-run "${RUNTIME_ARGS[@]}" "$APPDIR" "$OUT"
 ls -la "$OUT"
