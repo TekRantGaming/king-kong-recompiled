@@ -401,6 +401,9 @@ void ShaderLibrary::OnCreated(uint32_t kind, uint32_t container, uint32_t object
   if (!p) return;
   kkshaders::ParseResult parsed = kkshaders::parseContainer(p, SIZE_MAX);
   const kkshaders::ShaderKind want = kind == 0 ? kkshaders::ShaderKind::Vertex : kkshaders::ShaderKind::Pixel;
+  std::shared_ptr<const GameShader> built;
+  BuiltCallback callback;
+  {
   std::lock_guard lock(mutex_);
   ++stats_.created;
   if (parsed.ok) parsed.info.renderScaleAware = scale_aware_ && parsed.info.kind == kkshaders::ShaderKind::Pixel;
@@ -417,9 +420,13 @@ void ShaderLibrary::OnCreated(uint32_t kind, uint32_t container, uint32_t object
   if (shader) {
     by_object_[object] = shader;
     if (motion_prewarm_ && want == kkshaders::ShaderKind::Vertex) MotionVariant(*shader);
+    built = shader;
+    callback = built_callback_;
   } else {
     by_object_[object] = nullptr;
   }
+  }
+  if (built && callback) callback(want, built);
 }
 
 std::shared_ptr<GameShader> ShaderLibrary::FromObject(kkshaders::ShaderKind kind, uint32_t object) {

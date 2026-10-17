@@ -41,6 +41,8 @@
 REXCVAR_DEFINE_BOOL(native_validation, true, "Native renderer", "NVRHI validation layer");
 // vulkan_host.cpp reads it too: the host keeps a VkPipelineCache of its own when it is on.
 REXCVAR_DEFINE_BOOL(native_vk_pipeline_cache, false, "Native renderer", "Keep the driver's pipeline cache");
+// And this: the graphics pipeline library (task 183).
+REXCVAR_DEFINE_BOOL(native_vk_pipeline_library, true, "Native renderer", "Vulkan graphics pipeline library");
 // The SDK's app defines it (rex_app.cpp, not in the runtime library this test links); the plugin
 // reads it by name (the launcher's prewarm runs only for the native plugin).
 REXCVAR_DEFINE_STRING(gpu_plugin, "", "GPU", "GPU plugin");

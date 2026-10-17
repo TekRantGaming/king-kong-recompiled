@@ -187,15 +187,7 @@ bool GameRenderer::AnnTessellationMaterial(const dev::DeviceView &d,
 
 nvrhi::IGraphicsPipeline *GameRenderer::FindPreparedPipeline(uint64_t key) {
   std::lock_guard lock(pipeline_mutex_);
-  for (auto &[k, p] : pipelines_done_) {
-    pipelines_[k] = p;
-    pipelines_pending_.erase(k);
-    if (p) {
-      ++stats_.pipelines;
-      ++stats_.draw_pipelines;
-    }
-  }
-  pipelines_done_.clear();
+  DrainDonePipelinesLocked();
   const auto it = pipelines_.find(key);
   return it == pipelines_.end() ? nullptr : it->second.Get();
 }

@@ -11,6 +11,7 @@
 #include "backend/upscaler.h"
 #include "backend/upscaler_vulkan.h"
 #include "backend/vk_pipeline_cache.h"
+#include "backend/vk_pipeline_library.h"
 #include "backend/vulkan_dispatch.h"
 
 namespace nr::test {
@@ -58,11 +59,10 @@ struct VulkanTestDevice::Impl {
   std::vector<std::string> instance_extensions, device_extensions;
 };
 
-std::unique_ptr<VulkanTestDevice> VulkanTestDevice::Create(bool validation, bool driver_pipeline_cache,
-                                                           bool upscaler_needs) {
+std::unique_ptr<VulkanTestDevice> VulkanTestDevice::Create(bool validation, bool driver_pipeline_cache, bool upscaler_needs, bool pipeline_library) {
   std::unique_ptr<VulkanTestDevice> d(new VulkanTestDevice());
   try {
-    if (!d->Init(validation, driver_pipeline_cache, upscaler_needs)) return nullptr;
+    if (!d->Init(validation, driver_pipeline_cache, upscaler_needs, pipeline_library)) return nullptr;
   } catch (const std::exception& e) {
     std::fprintf(stderr, "Vulkan test device: %s\n", e.what());
     return nullptr;
@@ -70,7 +70,7 @@ std::unique_ptr<VulkanTestDevice> VulkanTestDevice::Create(bool validation, bool
   return d;
 }
 
-bool VulkanTestDevice::Init(bool validation, bool driver_pipeline_cache, bool upscaler_needs) {
+bool VulkanTestDevice::Init(bool validation, bool driver_pipeline_cache, bool upscaler_needs, bool pipeline_library) {
   impl_ = std::make_unique<Impl>();
   auto gipa = impl_->loader.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
   impl_->gipa = gipa;
@@ -288,6 +288,17 @@ bool VulkanTestDevice::Init(bool validation, bool driver_pipeline_cache, bool up
                   VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME) == upscaler_device_extensions.end())
       upscaler_device_extensions.emplace_back(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
   }
+  // Task 183: the graphics pipeline library, as the plugin asks for it (vk_pipeline_library.h).
+  VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT gpl_features{};
+  gpl_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_GRAPHICS_PIPELINE_LIBRARY_FEATURES_EXT;
+  if (pipeline_library && QueryVulkanPipelineLibrary(impl_->instance, chosen, gipa).usable()) {
+    upscaler_device_extensions.emplace_back(VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME);
+    upscaler_device_extensions.emplace_back(VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME);
+    gpl_features.graphicsPipelineLibrary = VK_TRUE;
+    gpl_features.pNext = features2.pNext;
+    features2.pNext = &gpl_features;
+    pipeline_library_ = true;
+  }
   impl_->device_extensions = upscaler_device_extensions;
   for (const std::string& name : upscaler_device_extensions) device_extension_names.push_back(name.c_str());
   float priority = 1.0f;
@@ -317,6 +328,7 @@ bool VulkanTestDevice::Init(bool validation, bool driver_pipeline_cache, bool up
     if (!pipeline_cache_) return false;
     desc.pipelineCache = pipeline_cache_->handle();
   }
+  desc.graphicsPipelineLibrary = pipeline_library_;
   nvrhi_device_ = nvrhi::vulkan::createDevice(desc);
   if (!nvrhi_device_) return false;
   if (validation) {

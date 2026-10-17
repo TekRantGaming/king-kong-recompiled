@@ -2650,6 +2650,13 @@ namespace nvrhi
         VariableRateShadingState shadingRateState;
 
         BindingLayoutVector bindingLayouts;
+
+        // Vulkan with Feature::GraphicsPipelineLibrary (KK patch): made by linking pipeline library parts
+        // (vertex input, pre-rasterization shaders, fragment shader, fragment output) that the device makes
+        // once and keeps, without link-time optimisation: microseconds when the parts exist. The fixed-function
+        // state a part leaves dynamic is set by the command list when the pipeline is bound. Ignored on other
+        // APIs and devices (the pipeline is compiled whole, as without it).
+        bool vulkanLibraryLink = false;
         
         GraphicsPipelineDesc& setPrimType(PrimitiveType value) { primType = value; return *this; }
         GraphicsPipelineDesc& setPatchControlPoints(uint32_t value) { patchControlPoints = value; return *this; }
@@ -2665,6 +2672,7 @@ namespace nvrhi
         GraphicsPipelineDesc& setRenderState(const RenderState& value) { renderState = value; return *this; }
         GraphicsPipelineDesc& setVariableRateShadingState(const VariableRateShadingState& value) { shadingRateState = value; return *this; }
         GraphicsPipelineDesc& addBindingLayout(IBindingLayout* layout) { bindingLayouts.push_back(layout); return *this; }
+        GraphicsPipelineDesc& setVulkanLibraryLink(bool value) { vulkanLibraryLink = value; return *this; }
     };
 
     class IGraphicsPipeline : public IResource
@@ -3186,6 +3194,9 @@ namespace nvrhi
         CooperativeVectorInferencing,
         CooperativeVectorTraining,
         EnhancedBarriers, // DX12 only feature
+        // Vulkan only (KK patch): VK_EXT_graphics_pipeline_library is enabled on the device
+        // (vulkan::DeviceDesc::graphicsPipelineLibrary), so GraphicsPipelineDesc::vulkanLibraryLink works.
+        GraphicsPipelineLibrary,
     };
 
     enum class MessageSeverity : uint8_t

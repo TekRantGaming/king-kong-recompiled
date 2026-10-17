@@ -90,6 +90,20 @@ Changes we make to vendored code are kept as small as possible and listed here:
   the edges image is a plain `float` image (R32_FLOAT) on both APIs. R32 formats are the ones every Vulkan device
   can store to without `shaderStorageImageExtendedFormats`. The C++ side uses only `XeGTAO.h`'s `GTAOConstants`
   struct for the constant buffer layout.
+- `nvrhi/include/nvrhi/nvrhi.h`, `nvrhi/include/nvrhi/vulkan.h`, `nvrhi/src/vulkan/vulkan-backend.h`,
+  `vulkan-device.cpp`, `vulkan-graphics.cpp` (task 183, Vulkan graphics pipeline libraries): NVRHI had no
+  VK_EXT_graphics_pipeline_library. With `vulkan::DeviceDesc::graphicsPipelineLibrary` (the application enabled the
+  extension and feature) a `GraphicsPipelineDesc::vulkanLibraryLink` pipeline is linked, without link-time
+  optimisation, from four parts the device makes once and keeps in `PipelineLibraryCache` (vertex input; the
+  pre-rasterization shaders with polygon mode and depth clip; the fragment shader with the multisample state; the
+  fragment output with formats and blending), keyed by the objects and state they are made from and holding
+  references to them. Cull mode, front face, depth bias, and the depth and stencil state are dynamic in the parts
+  (core in Vulkan 1.3), so more pipelines share them; `CommandList::setGraphicsState` sets them from the pipeline's
+  description whenever it binds such a pipeline (`GraphicsPipeline::dynamicFixedFunction`). A failed part or link
+  falls back to the whole pipeline. `Feature::GraphicsPipelineLibrary` says whether it is on;
+  `vulkan::IDevice::getPipelineLibraryStats` counts parts made and reused, links and failures. Without the field,
+  or on D3D12, nothing changes. Tests: `PipelineLibrary_*` in nr_game_tests (the state tests on linked pipelines,
+  under the Khronos layer).
 
 ## SDKs used but not vendored
 

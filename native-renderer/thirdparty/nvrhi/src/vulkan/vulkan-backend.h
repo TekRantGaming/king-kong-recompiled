@@ -30,6 +30,10 @@
 #include <mutex>
 #include <list>
 #include <atomic>
+#include <array>
+#include <memory>
+#include <string>
+#include <unordered_map>
 
 #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
 #include <vulkan/vulkan.hpp>
@@ -846,6 +850,40 @@ namespace nvrhi::vulkan
         VulkanContext const& context,
         BindingLayoutVector const& inBindingLayouts);
 
+    // KK patch: one part of a graphics pipeline library (vulkan-graphics.cpp), shared by the pipelines linked
+    // from it. Made once by the first thread that needs it (the others wait on `mutex`).
+    struct PipelineLibraryPart
+    {
+        vk::Device device;
+        vk::AllocationCallbacks* allocationCallbacks = nullptr;
+        std::mutex mutex;
+        bool done = false;
+        vk::Pipeline pipeline;
+        vk::PipelineLayout layout;                 // the pre-rasterization and fragment shader parts' own
+        std::vector<RefCountPtr<IResource>> keep;  // shaders, binding layouts, input layout the key names
+
+        ~PipelineLibraryPart()
+        {
+            if (pipeline)
+                device.destroyPipeline(pipeline, allocationCallbacks);
+            if (layout)
+                device.destroyPipelineLayout(layout, allocationCallbacks);
+        }
+    };
+
+    struct PipelineLibraryCache
+    {
+        std::mutex mutex;
+        std::unordered_map<std::string, std::shared_ptr<PipelineLibraryPart>> parts[4];  // by part kind, then key
+        std::atomic<uint64_t> partsMade[4] = {};
+        std::atomic<uint64_t> partsReused[4] = {};
+        std::atomic<uint64_t> partFailures{0};
+        std::atomic<uint64_t> links{0};
+        std::atomic<uint64_t> linkFailures{0};
+        std::atomic<uint64_t> partMicroseconds{0};
+        std::atomic<uint64_t> linkMicroseconds{0};
+    };
+
     class GraphicsPipeline : public RefCounter<IGraphicsPipeline>
     {
     public:
@@ -858,6 +896,10 @@ namespace nvrhi::vulkan
         vk::Pipeline pipeline;
         vk::ShaderStageFlags pushConstantVisibility;
         bool usesBlendConstants = false;
+        // KK patch: linked from graphics pipeline library parts (kept alive here); the command list sets
+        // the fixed-function state they leave dynamic whenever it binds this pipeline.
+        std::array<std::shared_ptr<PipelineLibraryPart>, 4> libraryParts;
+        bool dynamicFixedFunction = false;
 
         explicit GraphicsPipeline(const VulkanContext& context)
             : m_Context(context)
@@ -1211,8 +1253,16 @@ namespace nvrhi::vulkan
         void queueWaitForSemaphore(CommandQueue waitQueue, VkSemaphore semaphore, uint64_t value) override;
         void queueSignalSemaphore(CommandQueue executionQueue, VkSemaphore semaphore, uint64_t value) override;
         uint64_t queueGetCompletedInstance(CommandQueue queue) override;
+        PipelineLibraryStats getPipelineLibraryStats() override;
+        bool prepareGraphicsPipelineParts(const GraphicsPipelineDesc& desc, const FramebufferInfo& fbinfo) override;
 
     private:
+        // KK patch: graphics pipeline library parts (DeviceDesc::graphicsPipelineLibrary), null without it.
+        std::unique_ptr<PipelineLibraryCache> m_PipelineLibrary;
+        // partsOnly: the pre-rasterization and fragment shader parts of the shaders set, no link (returns null).
+        GraphicsPipelineHandle createLinkedGraphicsPipeline(const GraphicsPipelineDesc& desc, FramebufferInfo const& fbinfo,
+                                                            bool partsOnly = false, bool* partsMade = nullptr);
+
         // Warning m_AftermathCrashDump helper must be first due to reverse destruction order
         // Queues will destroy CommandLists which will unregister from m_AftermathCrashDumpHelper in their destructors
         bool m_AftermathEnabled = false;

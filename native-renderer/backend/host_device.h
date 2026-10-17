@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
+#include <vector>
 
 #include <nvrhi/nvrhi.h>
 #include <rex/ui/presenter.h>
@@ -69,6 +71,13 @@ std::unique_ptr<HostDevice> CreateD3D12HostDevice(rex::ui::GraphicsProvider& pro
 #endif
 #if NR_HAS_VULKAN
 std::unique_ptr<HostDevice> CreateVulkanHostDevice(rex::ui::GraphicsProvider& provider);
+// What the next Vulkan device the SDK makes is asked for (sdk-patches/0003): the graphics pipeline library
+// (vk_pipeline_library.h, unless --native_vk_pipeline_library=false or KK_DEV_NO_GPL=1) and whatever `extra` adds
+// (the upscalers' needs). Called before every rex::ui::vulkan::VulkanProvider::Create.
+using VulkanDeviceRequestAdder = std::function<void(void* instance, void* physical_device,
+                                                    std::vector<std::string>& extensions,
+                                                    std::vector<std::vector<uint8_t>>& features)>;
+void PrepareVulkanDeviceRequests(VulkanDeviceRequestAdder extra = {});
 #endif
 
 // Logs NVRHI's messages through the runtime's GPU log category.

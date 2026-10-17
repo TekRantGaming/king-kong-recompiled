@@ -20,6 +20,9 @@
 // includer must agree on.
 #include <rex/ui/vulkan/api.h>
 
+#include <atomic>
+#include <string>
+
 #include <nvrhi/validation.h>
 #include <nvrhi/vulkan.h>
 #include <rex/cvar.h>
@@ -34,11 +37,13 @@
 #include "backend/dev_gpu_stats.h"
 #include "backend/output_blit.h"
 #include "backend/vk_pipeline_cache.h"
+#include "backend/vk_pipeline_library.h"
 #include "backend/vulkan_dispatch.h"
 #include "backend/vulkan_requirements.h"
 
 REXCVAR_DECLARE(bool, native_validation);
 REXCVAR_DECLARE(bool, native_vk_pipeline_cache);
+REXCVAR_DECLARE(bool, native_vk_pipeline_library);
 REXCVAR_DECLARE(int32_t, native_debug);
 REXCVAR_DECLARE(bool, native_vk_small_tables);
 REXCVAR_DECLARE(bool, native_vk_minimum_tables);
@@ -46,6 +51,10 @@ REXCVAR_DECLARE(bool, native_vk_minimum_tables);
 namespace nr {
 
 namespace {
+
+// The physical device the last device request callback asked the graphics pipeline library for (null: not asked):
+// the device has the extension enabled only then (PrepareVulkanDeviceRequests).
+std::atomic<VkPhysicalDevice> g_pipeline_library_requested{VK_NULL_HANDLE};
 
 class VulkanHost final : public HostDevice {
  public:
@@ -112,6 +121,29 @@ class VulkanHost final : public HostDevice {
         desc.pipelineCache = pipeline_cache_->handle();
       } else {
         REXGPU_WARN("rexgpu-native: unable to create the Vulkan pipeline cache; pipelines are not kept");
+      }
+    }
+    {
+      // Task 183: game pipelines linked from cached library parts (vk_pipeline_library.h).
+      std::string why;
+      if (!REXCVAR_GET(native_vk_pipeline_library)) {
+        why = "native_vk_pipeline_library is off";
+      } else if (VulkanPipelineLibraryAllowedByEnvironment(&why)) {
+        const VulkanPipelineLibrarySupport gpl = QueryVulkanPipelineLibrary(
+            vulkan_instance->instance(), vulkan_device->physical_device(), vulkan_instance->functions().vkGetInstanceProcAddr);
+        if (!gpl.usable()) {
+          why = gpl.reason();
+        } else if (g_pipeline_library_requested.load() != vulkan_device->physical_device()) {
+          why = "the device was made without asking for it";
+        } else {
+          desc.graphicsPipelineLibrary = true;
+        }
+      }
+      if (desc.graphicsPipelineLibrary) {
+        REXLOG_INFO("rexgpu-native: Vulkan graphics pipeline library on: new game pipelines are linked from cached "
+                    "parts, then compiled whole in the background");
+      } else {
+        REXLOG_INFO("rexgpu-native: Vulkan graphics pipeline library off ({}): pipelines are compiled whole", why);
       }
     }
     nvrhi::vulkan::DeviceHandle vulkan_nvrhi = nvrhi::vulkan::createDevice(desc);
@@ -415,6 +447,26 @@ class VulkanHost final : public HostDevice {
 };
 
 }  // namespace
+
+void PrepareVulkanDeviceRequests(VulkanDeviceRequestAdder extra) {
+#if defined(REX_UI_VULKAN_HAS_DEVICE_REQUESTS)
+  // The flag is only written by the callback: devices made at the same time on other threads (the launcher's
+  // prewarm and the setup job) each run it.
+  rex::ui::vulkan::SetVulkanDeviceRequestCallback([extra](VkInstance instance, VkPhysicalDevice physical) {
+    rex::ui::vulkan::VulkanDeviceRequests requests;
+    if (extra) extra(instance, physical, requests.extensions, requests.features);
+    bool asked = false;
+    if (REXCVAR_GET(native_vk_pipeline_library)) {
+      AddVulkanPipelineLibraryRequests(instance, physical, requests.extensions, requests.features);
+      for (const std::string& e : requests.extensions) asked = asked || e == VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME;
+    }
+    g_pipeline_library_requested.store(asked ? physical : VK_NULL_HANDLE);
+    return requests;
+  });
+#else
+  (void)extra;
+#endif
+}
 
 std::unique_ptr<HostDevice> CreateVulkanHostDevice(rex::ui::GraphicsProvider& provider) {
   auto host = std::make_unique<VulkanHost>(static_cast<rex::ui::vulkan::VulkanProvider&>(provider));

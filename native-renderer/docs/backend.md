@@ -23,6 +23,7 @@ states, render targets and resolves. On Windows with Vulkan **all 13 golden scen
 | `backend/shader_library.*` | the game's shader objects as NVRHI shaders (the pack, else translated and compiled with DXC) | `kkshaders` |
 | `backend/pipeline_cache.*` | pipeline records, the player's pipeline file, shipped lists and their merging | nothing |
 | `backend/driver_pipeline_cache.h`, `vk_pipeline_cache.*` | the driver's pipeline cache kept in a file (Vulkan) | Vulkan-Headers |
+| `backend/vk_pipeline_library.*` | Vulkan graphics pipeline library: device support and requests (task 183, "Pipeline libraries") | Vulkan-Headers |
 | `backend/pipeline_prewarm.*` | the game's pipelines made on a device of their own before the game (the launcher's prewarm) | NVRHI, `kkshaders` |
 | `backend/guest_device.h` | the D3D device struct's register images, shadows and fields the game renderer reads | nothing |
 | `backend/ao_classifier.*`, `ao_camera.*`, `ao_config.*`, `gtao.*`, `scene_ao.*`, `game_ao.cpp` | Phase 3: the GTAO ambient occlusion at the end of the opaque pass (`ao.md`) | NVRHI, `kkshaders` |
@@ -1390,6 +1391,49 @@ fallback: skip the draw / keep the original pass).
   (log `driver pipeline cache: saving N new pipelines before exit` / `nothing new to save at exit`).
 - Tests: `nr_pipeline_demand_tests` (classes, queue order), `PipelineSkip_*` in nr_game_tests, the exit task in
   `nr_background_file_writer_tests`.
+
+#### Pipeline libraries (Vulkan, task 183, 17 Oct)
+
+Owner decision (DECISIONS.md, "Shader stutter work" (2)): make creating a missing pipeline cheap on Vulkan. With
+VK_EXT_graphics_pipeline_library (`backend/vk_pipeline_library.*`; the vendored NVRHI, thirdparty/NOTES.md, task 183)
+a game pipeline is linked from four parts the device makes once and keeps: vertex input (topology), the
+pre-rasterization shaders, the fragment shader and the fragment output (formats, blending). The link has no
+link-time optimisation: about 6 us on the RTX 4070 Ti. Cull mode, front face, depth bias and the depth/stencil state
+are dynamic in the parts (core Vulkan 1.3), so a part depends on its shader and the renderer's pipeline layout only;
+NVRHI's command list sets that state from the pipeline's description when it binds a linked pipeline.
+
+- Who uses it: the game draws' pipelines made on the workers (`PipelineDemand::kMustDraw` / `kMaySkip`, a job a draw
+  asked for). The worker links it (`PipelineBuild::kLinked`, drawn at once or within the 4 ms budget), then queues the
+  whole optimised pipeline behind everything else (`kReplace`); when that is made it replaces the linked one in
+  `pipelines_` (the linked one is released two frames later, `replaced_pipelines_`). The renderer's own passes, the
+  optional passes and D3D12 are unchanged.
+- Parts ahead of the draws: every listed record in the prewarm (setup, launcher, game start) makes its parts as well
+  as its whole pipeline (`kPrewarm`), and every shader the game creates (`ShaderLibrary::SetBuiltCallback`, about 4,800
+  at boot) gets its part on the workers behind the prewarm (`kParts`, `nvrhi::vulkan::IDevice::prepareGraphicsPipelineParts`).
+  So a new pipeline during play normally compiles nothing. The parts go into the driver's pipeline cache file too
+  (Beta 5 list: 63 MB without, 106 MB with list parts, 154 MB with the game shaders' parts).
+- Fallback: the device is asked for the extension only when it offers VK_EXT_graphics_pipeline_library with
+  graphicsPipelineLibrary and graphicsPipelineLibraryFastLinking on a Vulkan 1.3 device (`PrepareVulkanDeviceRequests`,
+  before every `VulkanProvider::Create`). Otherwise, or with `--native_vk_pipeline_library=false` or
+  `KK_DEV_NO_GPL=1`, every pipeline is compiled whole as before. The start log says which: `Vulkan graphics pipeline
+  library on: ...` / `... off (<reason>): pipelines are compiled whole`. A part or link the driver refuses also falls
+  back to the whole pipeline (counted as failures).
+- Log: every 300 frames when something changed, `pipeline library so far, frame F: N draws' pipelines linked (avg, max
+  ms on a worker), R replaced by whole ones, S game shaders' parts made ahead, parts made a/b/c/d, reused ..., links
+  L, failures`. `NR_PIPELINE_LOG` rows `built:linked`, `built:whole` (a draw's, no library), `built:whole-replace`,
+  `built:optional`, with the worker's ms.
+- Dev: `KK_DEV_GPL_LINK_ONLY=1` keeps every game pipeline linked (the prewarm too; for the GPU cost check),
+  `KK_DEV_GPL_NO_SHADER_PARTS=1` makes no parts for the game's shaders.
+- Measured (task 183, benchmark route, old Beta 5 list, after a setup prewarm with fresh caches, NVIDIA's own disk
+  cache moved to a fresh folder with `__GL_SHADER_DISK_CACHE_PATH`): a draw's missing pipeline took median 0.5-6.3 /
+  mean 26 / max 150 ms compiled whole; linked: 98% under 1 ms, mean 1.5 ms (100%, mean 0.18 ms at the next start);
+  the 4 slower ones came in the first 18 s while the game shaders' parts were still being made. Skipped draws 1,800 in
+  ~155 frames -> ~100 in ~15 frames; worst frame pipeline wait 69 -> 5 ms. GPU frame time unchanged, also with every
+  pipeline linked. Cost: ~132 s of worker time on low priority over the first ~27 s of the first start after an
+  install or driver update (cached after: 0.8 s), and +70 to +190 MB of video memory for the parts.
+- Untested: AMD, Intel, Linux Mesa (RADV and ANV have the extension; lavapipe too), and drivers without fast linking.
+- Tests: `PipelineLibrary_*` in nr_game_tests (blend, depth, stencil, cull on linked pipelines; linked then replaced;
+  the game shaders' parts), run under the Khronos layer with no validation errors.
 
 #### The driver's pipeline cache
 

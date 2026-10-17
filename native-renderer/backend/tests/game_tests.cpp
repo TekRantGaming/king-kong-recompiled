@@ -81,6 +81,17 @@ VulkanTestDevice* Device() {
   return device.get();
 }
 
+// Task 183: a device with the Vulkan graphics pipeline library (null when the driver has none).
+VulkanTestDevice* LibraryDevice() {
+  static std::unique_ptr<VulkanTestDevice> device = [] {
+    auto d = VulkanTestDevice::Create(true, false, false, true);
+    if (d && !d->pipeline_library()) d.reset();
+    std::printf("  graphics pipeline library device: %s\n", d ? d->device_name().c_str() : "none (no extension)");
+    return d;
+  }();
+  return device.get();
+}
+
 void MaybeSave(const Pixels& p, const char* name) {
   if (const char* dir = std::getenv("NR_TEST_IMAGES")) WritePpm(std::string(dir) + "/" + name + ".ppm", p);
 }
@@ -320,6 +331,7 @@ constexpr uint32_t kClearTarget0 = 0x1, kClearZ = 0x10, kClearStencil = 0x20;
 
 struct Fixture {
   VulkanTestDevice* gpu = Device();
+  bool linked = false;  // task 183: the draws' pipelines linked from library parts (LibraryDevice())
   FakeGuestMemory mem{8u << 20, 16u << 20};
   std::unique_ptr<ShaderLibrary> shaders;
   std::unique_ptr<Renderer> renderer;
@@ -341,6 +353,7 @@ struct Fixture {
       : scale_x(sx), scale_y(sy > 0.0f ? sy : sx), shadow_scale(shadow) {}
 
   bool Init() {
+    if (linked) gpu = LibraryDevice();
     if (!gpu) {
       Fail(__FILE__, __LINE__, "no Vulkan device (install mesa-vulkan-drivers for lavapipe)");
       return false;
@@ -379,6 +392,7 @@ struct Fixture {
     // pipeline (the plugin's default) would fail them. The asynchronous path
     // has its own tests (PipelineCache_*).
     g->options().async_pipelines = false;
+    g->options().link_draw_pipelines = linked;
     game = g.get();
     renderer->EnableGame(std::move(g));
     sink.renderer = renderer.get();
@@ -1149,8 +1163,13 @@ TEST(Endian_LegacyUsesTheBuffersMode) {
   f.CheckQuadrantColors(px, __LINE__);
 }
 
-TEST(State_Blend) {
+void CheckBlend(bool linked) {
   Fixture f;
+  f.linked = linked;
+  if (linked && !LibraryDevice()) {
+    std::printf("  skipped: no graphics pipeline library\n");
+    return;
+  }
   if (!f.Init()) return;
   const uint32_t rt = f.BindMainSurface();
   auto p = f.MakeColorPipeline();
@@ -1175,10 +1194,18 @@ TEST(State_Blend) {
   const Rgb want[4] = {{red + 0.5, 0.25, 0.0}, half, {red + 0.5, 0.25, 0.0}, {half.r - 0.25, 0.25, 0.25}};
   f.CheckQuadrants(px, want, __LINE__);
   CHECK_EQ(f.game->stats().pipelines, uint64_t(4));  // three blend states and Present's blit
+  if (linked) CHECK_EQ(f.game->stats().pipelines_linked, uint64_t(3));
 }
+TEST(State_Blend) { CheckBlend(false); }
+TEST(PipelineLibrary_Blend) { CheckBlend(true); }
 
-TEST(State_DepthTestWriteAndClear) {
+void CheckDepthTestWriteAndClear(bool linked) {
   Fixture f;
+  f.linked = linked;
+  if (linked && !LibraryDevice()) {
+    std::printf("  skipped: no graphics pipeline library\n");
+    return;
+  }
   if (!f.Init()) return;
   const uint32_t rt = f.BindMainSurface();
   f.SetDepthStencil(f.NewSurface(kSize, kSize, 200, 0));
@@ -1211,10 +1238,53 @@ TEST(State_DepthTestWriteAndClear) {
   px = f.Present(rt, "state_depth_clear");
   const Rgb want2[4] = {{0, 0, 0}, {0, 1, 0}, {0, 0, 1}, {1, 1, 1}};
   f.CheckQuadrants(px, want2, __LINE__);
+  if (linked) CHECK(f.game->stats().pipelines_linked >= 3);
 }
+TEST(State_DepthTestWriteAndClear) { CheckDepthTestWriteAndClear(false); }
+TEST(PipelineLibrary_DepthTestWriteAndClear) { CheckDepthTestWriteAndClear(true); }
 
-TEST(State_Cull) {
+// Stencil: a quad writes the reference with REPLACE, a full-screen quad drawn where the stencil EQUALs it.
+void CheckStencil(bool linked) {
   Fixture f;
+  f.linked = linked;
+  if (linked && !LibraryDevice()) {
+    std::printf("  skipped: no graphics pipeline library\n");
+    return;
+  }
+  if (!f.Init()) return;
+  const uint32_t rt = f.BindMainSurface();
+  f.SetDepthStencil(f.NewSurface(kSize, kSize, 200, 0));
+  auto p = f.MakeColorPipeline();
+  f.Clear(kClearTarget0 | kClearZ | kClearStencil, 0xFF000000, 1.0f, 0);
+  f.Reg(dev::kRbStencilRefMask, 0xFFFF05);  // reference 5, read and write masks 0xFF
+  f.Reg(dev::kRbDepthControl, 1 | (7 << 8) | (2 << 14));  // stencil ALWAYS, pass REPLACE; no depth test
+  f.DrawColored(p, QuadTriangles(kQuadrants[1], 0xFFFF0000, 0.5f));
+  f.Reg(dev::kRbDepthControl, 1 | (2 << 8));  // stencil EQUAL, KEEP
+  f.DrawColored(p, QuadTriangles(kFull, 0xFF00FF00, 0.5f));
+  f.Reg(dev::kRbDepthControl, 0);
+  Pixels px = f.Present(rt, linked ? "library_stencil" : "state_stencil");
+  const Rgb want[4] = {{0, 0, 0}, {0, 1, 0}, {0, 0, 0}, {0, 0, 0}};
+  f.CheckQuadrants(px, want, __LINE__);
+  if (linked) {
+    CHECK_EQ(f.game->stats().pipelines_linked, uint64_t(2));
+    // The two pipelines differ only in stencil state (dynamic in the parts): one part of each kind, reused once.
+    const auto l = f.game->PipelineLibraryCounts();
+    CHECK(l.links >= 2);
+    CHECK_EQ(l.linkFailures, uint64_t(0));
+    CHECK_EQ(l.partFailures, uint64_t(0));
+    CHECK(l.partsReused[1] >= 1 && l.partsReused[2] >= 1);
+  }
+}
+TEST(State_Stencil) { CheckStencil(false); }
+TEST(PipelineLibrary_Stencil) { CheckStencil(true); }
+
+void CheckCull(bool linked) {
+  Fixture f;
+  f.linked = linked;
+  if (linked && !LibraryDevice()) {
+    std::printf("  skipped: no graphics pipeline library\n");
+    return;
+  }
   if (!f.Init()) return;
   const uint32_t rt = f.BindMainSurface();
   auto p = f.MakeColorPipeline();
@@ -1247,7 +1317,10 @@ TEST(State_Cull) {
     CHECK_COLOR(px, 4, 4, (Rgb{0, 0, 0}), c.what);
   }
   f.Reg(dev::kPaSuScModeCntl, 0);
+  if (linked) CHECK(f.game->stats().pipelines_linked >= 4);
 }
+TEST(State_Cull) { CheckCull(false); }
+TEST(PipelineLibrary_Cull) { CheckCull(true); }
 
 TEST(State_ColourMask) {
   Fixture f;
@@ -2632,6 +2705,69 @@ TEST(Stutter_ASkippedDrawIsAStutterFrame) {
   CHECK_EQ(s.draws_skipped, uint64_t(1));
   // The present's own pass is made on the render thread (a built-in, not a game draw): no wait.
   CHECK_EQ(s.frames_waited, uint64_t(0));
+}
+
+// Task 183: on the workers a draw's pipeline is linked from library parts (drawn within the wait budget), then the
+// whole pipeline is compiled behind and replaces it; the picture is the same with either.
+TEST(PipelineLibrary_ADrawsPipelineIsLinkedThenReplacedByTheWholeOne) {
+  if (!LibraryDevice()) {
+    std::printf("  skipped: no graphics pipeline library\n");
+    return;
+  }
+  Fixture f;
+  f.linked = true;
+  if (!f.Init()) return;
+  f.game->options().link_draw_pipelines = false;  // the workers' path
+  f.game->options().async_pipelines = true;
+  f.game->options().pipeline_wait = false;
+  f.game->options().pipeline_wait_for_dependencies = false;
+  f.game->options().pipeline_wait_budget_ms = 2000;  // a link is microseconds; a busy test machine is not
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  const Pixels linked = DrawQuadrantFrame(f, rt, p);
+  CHECK_EQ(f.game->stats().skipped_pending, uint64_t(0));
+  CHECK_EQ(f.game->stats().pipelines_linked, uint64_t(1));
+  f.game->WaitForPrewarm();  // the whole pipeline's job
+  const Pixels whole = DrawQuadrantFrame(f, rt, p);
+  CHECK_EQ(f.game->stats().pipelines_replaced, uint64_t(1));
+  for (int i = 0; i < 3; ++i) DrawQuadrantFrame(f, rt, p);  // the linked one is released two frames on
+  CHECK_EQ(linked.width, whole.width);
+  double worst = 0;
+  for (uint32_t y = 0; y < linked.height && y < whole.height; ++y)
+    for (uint32_t x = 0; x < linked.width && x < whole.width; ++x)
+      for (int c = 0; c < 3; ++c) worst = std::max(worst, double(std::fabs(linked.at(x, y)[c] - whole.at(x, y)[c])));
+  CHECK(worst <= kTol);
+  const auto l = f.game->PipelineLibraryCounts();
+  CHECK(l.links >= 1);
+  CHECK_EQ(l.linkFailures, uint64_t(0));
+}
+
+// Task 183: a shader the game creates gets its library part on the workers at once, so the first draw of it only
+// links (no part is compiled for the draw).
+TEST(PipelineLibrary_GameShadersGetTheirPartsWhenCreated) {
+  if (!LibraryDevice()) {
+    std::printf("  skipped: no graphics pipeline library\n");
+    return;
+  }
+  Fixture f;
+  f.linked = true;
+  if (!f.Init()) return;
+  f.game->options().link_draw_pipelines = false;
+  f.game->options().async_pipelines = true;
+  f.game->options().pipeline_wait = false;
+  f.game->options().pipeline_wait_for_dependencies = false;
+  f.game->options().pipeline_wait_budget_ms = 2000;
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();  // the game creates a vertex and a pixel shader
+  f.game->WaitForPrewarm();
+  CHECK(f.game->stats().shader_parts >= 2);
+  const auto before = f.game->PipelineLibraryCounts();
+  DrawQuadrantFrame(f, rt, p);
+  const auto after = f.game->PipelineLibraryCounts();
+  CHECK_EQ(f.game->stats().pipelines_linked, uint64_t(1));
+  CHECK_EQ(after.partsMade[1], before.partsMade[1]);  // the shaders' parts were there
+  CHECK_EQ(after.partsMade[2], before.partsMade[2]);
+  CHECK(after.partsReused[1] > before.partsReused[1] && after.partsReused[2] > before.partsReused[2]);
 }
 
 TEST(Stutter_AWaitIsCountedWithItsTime) {
