@@ -392,7 +392,8 @@ for name in ('Cheats', 'About', 'Settings'):
 for needle, why in (
         ('setup_shaders_ ? 4 : setup_textures_ ? 6', 'the texture pack page does not follow the shaders'),
         ('setup_cutscenes_ ? 7 : setup_graphics_ ? kGfxFirstStage', 'the cutscene page does not follow the texture pack page (the graphics pages after it)'),
-        ('setup_cutscenes_ = kPs2MoviePlayback;', 'the cutscene page is not tied to PS2 movie playback'),
+        ('setup_cutscenes_ = movies::PlaybackAvailable();', 'the cutscene page is not tied to PS2 movie playback'),
+        ('if (movies::PlaybackAvailable()) {', 'Advanced > Cutscenes is not tied to PS2 movie playback (Linux too, task 187)'),
         ('{"Download HD texture pack", true,', 'the texture pack page lost Download'),
         ('{"I already have a texture pack", true,', 'the texture pack page lost I already have a texture pack'),
         ('{"Skip", true,', 'the texture pack page lost Skip'),
@@ -480,6 +481,13 @@ if 'setup_all_set_ ? kAllSetStage' not in launcher:
     fail("SetupStage has the You're all set page")
 if '\u2014' in end or '\u2013' in end:
     fail('dash in launcher_setup_end.inc')
+
+# Job J5 part 3: the launcher's controllers press nothing while its window is not the active one (REPORT-188).
+ui_src = (src / 'launcher_ui.cpp').read_text(encoding='utf-8')
+if 'input_.set_pads_active(active);' not in launcher:
+    fail('the launcher does not tell its input whether its window is active')
+if 'if (!pads_active_)' not in ui_src or 'dir_stale_' not in ui_src:
+    fail('the input does not ignore controllers while the window is not active')
 
 if failures:
     print('\n'.join('FAIL: ' + f for f in failures))

@@ -224,13 +224,23 @@ void Input::UpdateGamepads(double now) {
       down[size_t(i)] = down[size_t(i)] || pad_down[i];
       any = any || (pad_down[i] && !buttons_down_[size_t(i)]);
     }
-    if (any) {
+    if (any && pads_active_) {
       const SDL_GamepadType type = SDL_GetGamepadType(g);
       const bool ps = type == SDL_GAMEPAD_TYPE_PS3 || type == SDL_GAMEPAD_TYPE_PS4 || type == SDL_GAMEPAD_TYPE_PS5;
       pad_device_ = device_ = ps ? Device::kPlayStation : Device::kXbox;
       pad_style_ = PadPromptsFor(type, SDL_GetGamepadName(g));
     }
   }
+  // Not the active window: the controllers press nothing (another program has them). What they hold then is
+  // remembered, so it does not press when the window comes back: a button counts once let go and pressed
+  // again, a direction once let go.
+  for (size_t i = 0; i < 6; ++i) {
+    if (!dir[i]) dir_stale_[i] = false;
+    else if (!pads_active_) dir_stale_[i] = true;
+    if (dir_stale_[i]) dir[i] = false;
+  }
+  if (!pads_active_)
+    for (size_t i = 0; i < 8; ++i) buttons_down_[i] = buttons_down_[i] || down[i];
   // In game: the pad the game read (FeedPad), XInput's layout.
   if (now - fed_.at < 0.25) {
     const uint16_t b = fed_.buttons;

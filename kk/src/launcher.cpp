@@ -126,13 +126,6 @@ constexpr const char* kOnlineAbout =
 #define KK_TIMES "\xC3\x97"
 #define KK_DOT "\xC2\xB7"
 
-// The restored PS2 cutscenes play on Windows only (ps2_movies.cpp): their setup page and Settings rows are
-// there only (setup-flow.md: on Linux the page is shown only if playback exists).
-#if defined(_WIN32)
-constexpr bool kPs2MoviePlayback = true;
-#else
-constexpr bool kPs2MoviePlayback = false;
-#endif
 #define KK_DEG "\xC2\xB0"
 // Said wherever the native renderer's shaders are being prepared.
 #define KK_SLOW_PC "Your PC may run slower until this finishes, because preparing the shaders uses its processor."
@@ -1945,33 +1938,34 @@ class SettingsPages {
                                  "sound that plays with it follows Menu sounds.",
                                  "kk_notify_downloads"));
     }
-#if defined(_WIN32)
-    // The PS2 movies play on Windows only (kPs2MoviePlayback), so the rows are there only.
-    items.push_back(Section("Cutscenes"));
-    items.push_back(CvarToggle("PS2 cutscenes",
-        in_game_ ? "Plays the restored PS2 cutscenes in the game, between the missions where the Xbox 360 version has "
-                   "none. Download them in the launcher's Settings > Advanced. You can switch them at any time."
-                 : "Plays the restored PS2 cutscenes in the game, between the missions where the Xbox 360 version has "
-                   "none. Download them below, or choose a folder with your own BK_xxxx.mp4 files. You can switch "
-                   "them at any time.",
-        "kk_ps2_cutscenes"));
-    if (!in_game_) {
-      auto& service = content::Service::Get();
-      const content::Status st = service.Ready() ? service.Get(content::Kind::kCutscenes) : content::Status{};
-      items.push_back(ContentDownloadItem(content::Kind::kCutscenes, st));
-      items.push_back(ContentRemoveItem(content::Kind::kCutscenes, st));
-      const auto folder = movies::Folder().u8string();
-      Item it = ActionItem("PS2 movie folder", "Choose the folder containing BK_xxxx.mp4.", "", [this] {
-        const auto path = movies::BrowseFolder();
-        if (!path.empty()) {
-          Set("kk_ps2_movie_folder", path);
-        }
-      });
-      it.value_text.assign(reinterpret_cast<const char*>(folder.data()), folder.size());
-      it.on_default = [] { Reset("kk_ps2_movie_folder"); };
-      items.push_back(std::move(it));
+    // The restored PS2 cutscenes' rows, where this build can play them (Windows: Media Foundation; Linux: the
+    // bundled FFmpeg, task 187).
+    if (movies::PlaybackAvailable()) {
+      items.push_back(Section("Cutscenes"));
+      items.push_back(CvarToggle("PS2 cutscenes",
+          in_game_ ? "Plays the restored PS2 cutscenes in the game, between the missions where the Xbox 360 version has "
+                     "none. Download them in the launcher's Settings > Advanced. You can switch them at any time."
+                   : "Plays the restored PS2 cutscenes in the game, between the missions where the Xbox 360 version has "
+                     "none. Download them below, or choose a folder with your own BK_xxxx.mp4 files. You can switch "
+                     "them at any time.",
+          "kk_ps2_cutscenes"));
+      if (!in_game_) {
+        auto& service = content::Service::Get();
+        const content::Status st = service.Ready() ? service.Get(content::Kind::kCutscenes) : content::Status{};
+        items.push_back(ContentDownloadItem(content::Kind::kCutscenes, st));
+        items.push_back(ContentRemoveItem(content::Kind::kCutscenes, st));
+        const auto folder = movies::Folder().u8string();
+        Item it = ActionItem("PS2 movie folder", "Choose the folder containing BK_xxxx.mp4.", "", [this] {
+          const auto path = movies::BrowseFolder();
+          if (!path.empty()) {
+            Set("kk_ps2_movie_folder", path);
+          }
+        });
+        it.value_text.assign(reinterpret_cast<const char*>(folder.data()), folder.size());
+        it.on_default = [] { Reset("kk_ps2_movie_folder"); };
+        items.push_back(std::move(it));
+      }
     }
-#endif
 
     items.push_back(Section("Diagnostics"));
     items.push_back(CvarToggle("Frame counter", "Shows the game's frame rate in the corner. F2 toggles it while playing.",
@@ -2653,6 +2647,15 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
 
     input_.set_keyboard_enabled(capturing_.empty() && !editing_name_);  // keys go to the binding or the name
+    // Controllers count only while the launcher is the active window (REPORT-188: a controller used in
+    // another program pressed buttons here). Ours again once the player brings it back (a click, the taskbar,
+    // a notification), e.g. for a finished download's pop-up after "Minimise and notify me".
+    if (cb_.window_state) {
+      const bool active = cb_.window_state().second;
+      if (active != pads_active_) REXLOG_INFO("KK: launcher controller input {}", active ? "on (window active)" : "ignored (window not active)");
+      pads_active_ = active;
+      input_.set_pads_active(active);
+    }
     input_.Update();
     if (ui_sounds_) {
       const float volume = GetBool("kk_launcher_sounds") ? GetInt("kk_launcher_sounds_volume", 50) / 100.0f : 0.0f;
@@ -4362,16 +4365,16 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   }
 
   // The first-time setup's content steps (setup-flow.md 3 and 4): the cutscene page only where the PS2
-  // movies can play (Windows); TickSetupContent skips a page whose content is already there.
+  // movies can play (Windows, and Linux builds with FFmpeg); TickSetupContent skips a page whose content is already there.
   void AskContentInSetup() {
     setup_textures_ = true;
-    setup_cutscenes_ = kPs2MoviePlayback;
+    setup_cutscenes_ = movies::PlaybackAvailable();
     // ... and then the graphics pages (job J4).
     setup_graphics_ = true;
     gfx_page_ = 0;
     gfx_entered_ = false;
     gfx_cards_page_ = -1;
-    if (!kPs2MoviePlayback) REXLOG_INFO("KK: setup: no PS2 cutscene page (PS2 movies do not play on this system)");
+    if (!setup_cutscenes_) REXLOG_INFO("KK: setup: no PS2 cutscene page (PS2 movies do not play on this system)");
   }
 
   void DrawSetup(ImDrawList* dl) {
@@ -6025,7 +6028,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     setup_focus_ = 0;
     if (content_watch_ >= 0 && content_watch_setup_ == stage) content_watch_setup_ = 0;
 #if defined(KK_DEV_TOOLS)
-    if (dev_setup_ == 6) dev_setup_ = kPs2MoviePlayback ? 7 : kGfxFirstStage;
+    if (dev_setup_ == 6) dev_setup_ = movies::PlaybackAvailable() ? 7 : kGfxFirstStage;
     else if (dev_setup_ == 7) dev_setup_ = kGfxFirstStage;
 #endif
   }
@@ -7231,6 +7234,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   rex::ui::ImmediateTexture* still_low_ = nullptr;  // the first still, smaller (the Original card)
   int setup_focus_ = 0;
   content::Stage content_last_[content::kKindCount] = {};  // TickContent: the stage last seen
+  bool pads_active_ = true;  // the launcher's window is the active one: controllers count
 #if defined(KK_DEV_TOOLS)
   int dev_setup_ = -1;  // KK_DEV_LAUNCHER_SETUP: show a setup stage (screenshots)
 #endif

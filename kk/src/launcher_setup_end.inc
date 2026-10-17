@@ -118,7 +118,7 @@
       if (c.art) c.art(ImVec2(p0.x + pad, p0.y + pad), ImVec2(p1.x - pad, p1.y - pad - text_h - 8 * s), on);
       // The label smaller when it is long ("Keyboard and mouse"), shortened only if it still does not fit.
       const float lw = ui::TextSize(f.semibold, 16 * s, T(c.label)).x;
-      const float lfs = lw > room ? std::max(13 * s, 16 * s * room / lw) : 16 * s;
+      const float lfs = lw > room ? std::max(13 * s, 16 * s * room / lw * 0.95f) : 16 * s;
       const std::string label = ui::Ellipsize(f.semibold, lfs, T(c.label), room);
       const float ly = p1.y - pad - text_h;
       dl->AddText(f.semibold, lfs, ImVec2(p0.x + pad, ly + (16 * s - lfs) * 0.6f), color::kText, label.c_str());
@@ -493,7 +493,7 @@
     float ty = p0.y + 6 * s;
     // The title smaller when it is long (German, French), shortened only if it still does not fit.
     const float full = ui::TextSize(f.display, 22 * s, title).x;
-    const float fs = full > room ? std::max(14 * s, 22 * s * room / full) : 22 * s;
+    const float fs = full > room ? std::max(14 * s, 22 * s * room / full * 0.95f) : 22 * s;
     const std::string t = ui::Ellipsize(f.display, fs, title, room);
     dl->AddText(f.display, fs, ImVec2(tx, ty + (22 * s - fs) * 0.6f), color::kText, t.c_str());
     ty += 34 * s;
