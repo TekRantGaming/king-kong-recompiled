@@ -449,7 +449,7 @@ this implementation; there is no non-native stub. `kk/CMakeLists.txt` adds `src/
    progress and "Back" opens. It also ends the setup step and sets the status message.
 6. **Recompile** (branch `beta-launcher`, `beta.md`): the SHADERS column is selectable on Home and asks "Recompile
    your shaders?"; Yes starts a forced build (`start(..., force)`, interface version 2), which Play waits for as
-   above. The setup's shader step is now followed by the look step (`beta.md`).
+   above. The setup's shader step is now followed by the HD texture pack page (the look step was removed in job J6).
 
 New English strings (no translations yet; `T()` shows English): "Shaders", "Checking", "Preparing {0}%",
 "Ready", "Not prepared", "Not prepared (see the log)", "Preparing the shaders", the setup sentence, "{0} of {1}

@@ -14,7 +14,11 @@ what was checked. Runs and captures: `F:\KK-native-renderer\analysis\beta-launch
 
 ## What a player sees
 
-### 1. Setup ends with "Choose a look"
+### 1. Setup ends with "Choose a look" (removed in job J6, 17 Oct)
+
+**Superseded:** the Choose a look step below was removed (owner, 17 Oct: new installs are Remastered; the Original
+look is on graphics page 4 of the setup and on the Graphics page). The Remastered settings below still apply to every
+new install, set when the setup starts (`StartFullSetup`). The current setup is described in `menus.md`.
 
 After the disc image is installed, the artwork taken from it and the native renderer's shaders prepared (or sent to
 the background with "Continue in the background"), the setup screen shows one more step, **Choose a look**, step
@@ -72,7 +76,7 @@ background** (A, Enter or a click; the footer shows it). After that the build go
 Play waits for it. When the build ends on the screen, the screen closes by itself.
 
 - **At setup** it replaces the old zero-asset step (by then the game is installed and the artwork taken): title
-  "Preparing the shaders"; it is followed by the look step.
+  "Preparing the shaders"; it is followed by the HD texture pack page (the look step is gone, job J6).
 - **After every update** the first start of a version the launcher has not run before (`kk_last_version` differs from
   `KK_VERSION` on an installation that has run before: an update, a beta-to-beta update, a channel switch; the same
   test as What's new) **forces a full rebuild** of the pack (the Home recompile's forced build), whatever the stamp says,
@@ -233,7 +237,7 @@ uns`):
   AO defaults are not changed (the harness), the values are written to the settings file.
 - The renderer is a beta-only setting (`kk_renderer`) mapped to `gpu_plugin`'s default at start, never `gpu_plugin`
   itself. Native is the default when the plugin is there.
-- The look step is part of a fresh install only (players who update keep their settings).
+- Remastered is set for a fresh install only (players who update keep their settings and get New in this update).
 - Recompile is native only (above).
 - Fullscreen resolution: designed as SDL's per-window fullscreen mode set by the port; it needs an SDK addition
   (above), so it is off for the first beta rather than half working.

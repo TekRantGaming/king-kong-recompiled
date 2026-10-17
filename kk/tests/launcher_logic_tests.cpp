@@ -353,10 +353,10 @@ void SettingsLayoutChecks() {
 }
 
 void WhatsNewChecks() {
-  // Task 144: What's new never opens during first-time setup; only with the game files there, the
-  // shaders prepared and the look chosen. Every combination of the gate's inputs.
+  // Task 144 / job J6: What's new never opens during first-time setup or over the New in this update screen;
+  // only with the game files there and the shaders prepared. Every combination of the gate's inputs.
   int shown = 0;
-  for (int bits = 0; bits < 256; ++bits) {
+  for (int bits = 0; bits < 512; ++bits) {
     kk::WhatsNewGate g;
     g.pending = bits & 1;
     g.modal_open = bits & 2;
@@ -366,12 +366,14 @@ void WhatsNewChecks() {
     g.shaders_busy = bits & 32;
     g.shaders_wanted = bits & 64;
     g.shaders_finished = bits & 128;
+    g.new_screen = bits & 256;
     const bool show = kk::ShowWhatsNewNow(g);
     if (!show) continue;
     ++shown;
     Check(g.pending && !g.modal_open, "only a waiting one, never over another pop-up");
     Check(g.files_ok, "never before the game files are given");
-    Check(!g.in_setup, "never during any setup step (disc, install, artwork, shaders, look)");
+    Check(!g.in_setup, "never during any setup page (disc, install, artwork, shaders, downloads, graphics, prompts)");
+    Check(!g.new_screen, "never over the New in this update screen");
     Check(!g.shader_screen && !g.shaders_busy, "never while shaders are prepared");
     Check(!g.shaders_wanted || g.shaders_finished, "only once the shaders were checked or prepared");
   }
@@ -379,6 +381,9 @@ void WhatsNewChecks() {
   kk::WhatsNewGate ready;
   ready.pending = ready.files_ok = ready.shaders_wanted = ready.shaders_finished = true;
   Check(kk::ShowWhatsNewNow(ready), "after an update, with the shaders done, it opens");
+  ready.new_screen = true;
+  Check(!kk::ShowWhatsNewNow(ready), "the New in this update screen holds it back until Continue");
+  ready.new_screen = false;
   ready.in_setup = true;
   Check(!kk::ShowWhatsNewNow(ready), "the setup screen asking for the game files holds it back");
 }

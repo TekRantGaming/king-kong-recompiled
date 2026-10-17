@@ -7,6 +7,7 @@
 - job J2: setup steps 3 and 4 (texture pack, PS2 cutscenes), their pop-ups and the Settings rows;
 - job J3: the notification switch (Settings > Advanced > Downloads) and the ding/notification calls;
 - job J8: the Workshop page's text and its Home entry;
+- job J6: the look step gone, new installs Remastered, the New in this update screen;
 - Settings' tabs are Display, Graphics, Audio, Controls, Gameplay, Cheats, Advanced, About (owner, 16 Oct
   evening), the pause menu's the same without About, and About stays on Home too.
 Usage: launcher_text_tests.py <kk folder>"""
@@ -335,6 +336,22 @@ strings |= {
     'Chat with players, share feedback, shape the project.',
     "Steam wasn't found on this computer, or nobody has signed in to it yet.",
 }
+# Job J6: New in this update (players who had the setup on an older build) and the graphics pages opened from it.
+strings |= {
+    'New in this update',
+    'This update adds a few things you can set up now. Everything here is also in Settings, so you can leave it for later.',
+    "Sharper versions of the game's textures, made at four times their original size. A separate download of {0} GB "
+    'that you can turn on or off at any time in Settings > Graphics.',
+    'Installed: your texture pack ({0})', 'You use a texture pack folder of your own.',
+    'Not now. You can get it later in Settings > Graphics.', 'I already have one', 'Not now',
+    'The PS2 version has cutscenes between some missions that the Xbox 360 version left out. Restore them as upscaled '
+    'videos? A separate download of {0} GB.',
+    'Restored', 'No thanks. You can restore them later in Settings > Advanced.',
+    'New graphics options: display and frame rate, upscaling and sharpness, lighting and effects, and the Original '
+    'look. Your settings stay as they are until you change them.',
+    'See the new graphics options', 'Back to New in this update.', 'Done', 'Update', 'New', 'Graphics',
+    'PS2 cutscenes', 'Download', 'Watch progress', 'Yes, restore them', 'No thanks', 'Continue', 'Installed',
+}
 for s in sorted(strings):
     if s == 'Home':
         continue  # never drawn as text
@@ -494,6 +511,50 @@ if 'setup_all_set_ ? kAllSetStage' not in launcher:
     fail("SetupStage has the You're all set page")
 if '\u2014' in end or '\u2013' in end:
     fail('dash in launcher_setup_end.inc')
+
+# Job J6: the Original or Remastered step is gone (new installs are Remastered from the setup's start; the Original
+# look stays on graphics page 4 and in Settings), and players who updated get the one-time New in this update screen.
+new_src = (src / 'launcher_setup_new.inc').read_text(encoding='utf-8')
+for banned in ('setup_style_', 'DrawStyleCards', 'ApplyOriginal', '"Choose a look"', 'look:original'):
+    if banned in launcher or banned in gfx or banned in end or banned in new_src:
+        fail(f'J6: the old look step is back: {banned}')
+for needle, why in (
+        ('#include "launcher_setup_new.inc"', 'launcher.cpp includes the New screen'),
+        ('update_new_ ? kNewStage : 0', 'SetupStage has the New screen last'),
+        ('void StartFullSetup(', 'one entry to the full setup'),
+        ('if (first_start) StartFullSetup(false);', 'a fresh start does not save before the update test (What' + chr(39) + 's new would wait as after an update)'),
+        ('if (save) SaveSettings(paths_.config_path);', 'the full setup saves only when asked'),
+        ('if (Get("kk_setup_version").empty()) Set("kk_setup_version", kSetupWaiting);', 'an update marks the New screen as waiting'),
+        ('update_new_ = files_ok_ && !testing && Get("kk_setup_version") == kSetupWaiting;', 'the New screen only when waiting'),
+        ('InSetup(), update_new_, ShaderScreen()', "What's new is held back by the New screen"),
+):
+    if needle not in launcher:
+        fail(f'J6: {why} ({needle})')
+m = re.search(r'void StartFullSetup\(bool save = true\) \{(.*?)\n  \}\n', launcher, re.S)
+body = m.group(1) if m else ''
+if 'if (Get("kk_setup_version").empty()) {\n      ApplyRemastered();' not in body:
+    fail('J6: a new install does not start Remastered')
+if 'Set("kk_setup_version", KK_VERSION);' not in body or 'update_new_ = false;' not in body:
+    fail('J6: the full setup does not stand in for the New screen')
+for needle, why in (
+        ('{"Download", new_tex_answer_ == 0,', 'texture pack Download'), ('{"I already have one",', 'I already have one'),
+        ('{"Not now",', 'Not now'), ('{"Yes, restore them",', 'cutscenes Yes'), ('{"No thanks",', 'cutscenes No thanks'),
+        ('if (movies::PlaybackAvailable()) {', 'cutscenes only where PS2 movies play'),
+        ('{"See the new graphics options", false, [this] { OpenNewGraphics(); }}', 'the graphics pages from the New screen'),
+        ('{"Continue", false, [this] { DismissNewScreen(); }}', 'Continue'),
+        ('Set("kk_setup_version", KK_VERSION);', 'dismissed for good'),
+        ('AskContentDownload(Kind::kTexturePack, 0);', 'the download asks first, as from Settings'),
+):
+    if needle not in new_src:
+        fail(f'J6: {why} ({needle})')
+if 'if (gfx_from_new_) return BackToNewScreen();' not in gfx:
+    fail('J6: the last graphics page does not go back to the New screen')
+if 'ApplyRemastered();\n        setup_style_' in gfx:
+    fail('J6: the graphics pages still set Remastered as they come up')
+if 'Set("kk_setup_version", KK_VERSION);' not in end or '!whats_new_shown_' not in end:
+    fail("J6: Finish setup does not record the setup or could open What's new twice")
+if '—' in new_src or '–' in new_src:
+    fail('dash in launcher_setup_new.inc')
 
 # Job J5 part 3: the launcher's controllers press nothing while its window is not the active one (REPORT-188).
 ui_src = (src / 'launcher_ui.cpp').read_text(encoding='utf-8')
