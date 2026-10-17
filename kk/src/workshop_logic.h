@@ -20,7 +20,7 @@
 namespace kk::workshop {
 
 struct Project {
-  const char* name;  // shown as is (owner, 17 Oct: these exact names)
+  const char* name;  // shown as is (owner, 17 Oct: these exact names; the South Park ones from each README's title)
   const char* owner;
   const char* repo;
 };
@@ -32,6 +32,8 @@ inline constexpr Project kProjects[] = {
     {"Outpost Kaloki X Recompiled", "TekRantGaming", "outpost-kaloki-x-recompiled"},
     {"Super Mario Sunshine", "chasem-dev", "sms-launcher"},
     {"Dig Dug Native", "TekRantGaming", "digdug-native"},
+    {"South Park: Tenorman's Revenge Recompiled", "TekRantGaming", "south-park-tenormans-revenge-recompiled"},
+    {"South Park: Let's Go Tower Defense Play! Recompiled", "TekRantGaming", "south-park-tower-defense-recompiled"},
 };
 inline constexpr int kProjectCount = int(sizeof(kProjects) / sizeof(kProjects[0]));
 
