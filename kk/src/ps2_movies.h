@@ -7,7 +7,10 @@
 namespace rex::ui { class ImGuiDrawer; class ImmediateDrawer; }
 
 namespace kk::movies {
-// Windows-only private test feature. The files stay in the player's folder.
+// The restored PS2 cutscenes (Windows: Media Foundation; Linux: the bundled LGPL FFmpeg, ps2_movie_decoder.h).
+// The files stay in the player's folder.
+// Whether this build can play them: the launcher shows the cutscene setup page and Settings rows only then.
+bool PlaybackAvailable();
 std::filesystem::path Folder();
 std::string BrowseFolder();
 void CreateMovieDialog(rex::ui::ImGuiDrawer* drawer, rex::ui::ImmediateDrawer* immediate,

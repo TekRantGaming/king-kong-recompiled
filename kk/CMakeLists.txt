@@ -89,6 +89,35 @@ if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/play_session.cpp")
     list(APPEND KINGKONG_SOURCES src/play_session_stub.cpp)
 endif()
 
+# The restored PS2 cutscenes' decoder (src/ps2_movie_decoder.h): Media Foundation on Windows. On Linux, small
+# LGPL builds of FFmpeg's H.264/AAC decoders (tools/build_ffmpeg_linux.sh; -DKK_FFMPEG_DIR=<its install
+# folder>), linked dynamically and copied beside the program. Without them a Linux build has no PS2 cutscenes.
+set(KK_FFMPEG_DIR "" CACHE PATH "Linux: install folder of tools/build_ffmpeg_linux.sh (PS2 cutscene playback)")
+if(WIN32)
+    set(KK_PS2_DECODER src/ps2_movie_decoder_mf.cpp)
+elseif(KK_FFMPEG_DIR)
+    set(KK_PS2_DECODER src/ps2_movie_decoder_ffmpeg.cpp)
+    add_library(kk_ffmpeg INTERFACE)
+    target_include_directories(kk_ffmpeg INTERFACE "${KK_FFMPEG_DIR}/include")
+    foreach(lib avformat-kk avcodec-kk swscale-kk swresample-kk avutil-kk)
+        find_library(KK_FFMPEG_LIB_${lib} NAMES ${lib} PATHS "${KK_FFMPEG_DIR}/lib" NO_DEFAULT_PATH REQUIRED)
+        target_link_libraries(kk_ffmpeg INTERFACE "${KK_FFMPEG_LIB_${lib}}")
+    endforeach()
+    # The files the program loads (by their sonames, e.g. libavcodec-kk.so.58), copied beside it.
+    file(GLOB KK_FFMPEG_ALL "${KK_FFMPEG_DIR}/lib/lib*-kk.so.*")
+    set(KK_FFMPEG_RUNTIME "")
+    foreach(path ${KK_FFMPEG_ALL})
+        if(path MATCHES "-kk\\.so\\.[0-9]+$")
+            list(APPEND KK_FFMPEG_RUNTIME "${path}")
+        endif()
+    endforeach()
+else()
+    set(KK_PS2_DECODER src/ps2_movie_decoder_none.cpp)
+    message(WARNING "KK_FFMPEG_DIR is not set: this Linux build cannot play the PS2 cutscenes "
+                    "(tools/build_ffmpeg_linux.sh builds the libraries).")
+endif()
+list(APPEND KINGKONG_SOURCES ${KK_PS2_DECODER})
+
 # Developer-only test aids (never in release builds): -DKK_DEV_TOOLS=ON.
 option(KK_DEV_TOOLS "Build developer test aids such as KK_DEV_AUTOSKIP" OFF)
 if(KK_DEV_TOOLS)
@@ -119,6 +148,13 @@ target_link_libraries(king_kong PRIVATE nr_hooks)
 # The runtime loads the plugin from beside the program.
 add_dependencies(king_kong rexgpu-native)
 
+if(TARGET kk_ffmpeg)
+    target_link_libraries(king_kong PRIVATE kk_ffmpeg)
+    foreach(path ${KK_FFMPEG_RUNTIME})
+        add_custom_command(TARGET king_kong POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${path}" $<TARGET_FILE_DIR:king_kong>/)
+    endforeach()
+endif()
 if(WIN32)
     target_link_libraries(king_kong PRIVATE windowscodecs ole32 pdh psapi)
     # UTF-8 as the program's code page (src/king_kong.manifest, issue #37).
@@ -183,6 +219,16 @@ if(KK_DEV_TOOLS)
     target_include_directories(kk-ps2-movie-tests PRIVATE src)
     enable_testing()
     add_test(NAME ps2-movie-logic COMMAND kk-ps2-movie-tests)
+    # Decodes one private clip (KK_PS2_TEST_CLIP, _FRAMES, _SECONDS in the environment) with this platform's
+    # decoder and checks frames, timestamps and audio; skipped without a clip (they are never in git).
+    add_executable(kk-ps2-movie-decode-tests tests/ps2_movie_decode_tests.cpp ${KK_PS2_DECODER})
+    target_include_directories(kk-ps2-movie-decode-tests PRIVATE src)
+    if(TARGET kk_ffmpeg)
+        target_link_libraries(kk-ps2-movie-decode-tests PRIVATE kk_ffmpeg)
+        set_target_properties(kk-ps2-movie-decode-tests PROPERTIES BUILD_RPATH "${KK_FFMPEG_DIR}/lib")
+    endif()
+    add_test(NAME ps2-movie-decode COMMAND kk-ps2-movie-decode-tests)
+    set_tests_properties(ps2-movie-decode PROPERTIES SKIP_RETURN_CODE 77)
     add_executable(kk-hardware-tests tests/hardware_recommendation_tests.cpp src/settings.cpp)
     target_include_directories(kk-hardware-tests PRIVATE src)
     target_compile_definitions(kk-hardware-tests PRIVATE KK_VERSION="${KK_VERSION}")
