@@ -139,6 +139,36 @@ bool IsSteamDeck() {
   return false;
 }
 
+bool ScreenHdrOn() {
+  if (const char* v = std::getenv("KK_DEV_SCREEN_HDR"); v && *v) return *v == '1';  // tests
+#if defined(_WIN32)
+  IDXGIFactory1* factory = nullptr;
+  if (FAILED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), reinterpret_cast<void**>(&factory)))) return false;
+  bool hdr = false;
+  IDXGIAdapter1* adapter = nullptr;
+  for (UINT a = 0; !hdr && factory->EnumAdapters1(a, &adapter) != DXGI_ERROR_NOT_FOUND; ++a) {
+    IDXGIOutput* output = nullptr;
+    for (UINT o = 0; !hdr && adapter->EnumOutputs(o, &output) != DXGI_ERROR_NOT_FOUND; ++o) {
+      IDXGIOutput6* output6 = nullptr;
+      if (SUCCEEDED(output->QueryInterface(__uuidof(IDXGIOutput6), reinterpret_cast<void**>(&output6)))) {
+        DXGI_OUTPUT_DESC1 desc{};
+        hdr = SUCCEEDED(output6->GetDesc1(&desc)) && desc.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
+        output6->Release();
+      }
+      output->Release();
+    }
+    adapter->Release();
+  }
+  factory->Release();
+  return hdr;
+#else
+  if (!SDL_WasInit(SDL_INIT_VIDEO)) return false;
+  const SDL_DisplayID id = SDL_GetPrimaryDisplay();
+  const SDL_PropertiesID props = id ? SDL_GetDisplayProperties(id) : 0;
+  return props && SDL_GetBooleanProperty(props, SDL_PROP_DISPLAY_HDR_ENABLED_BOOLEAN, false);
+#endif
+}
+
 std::pair<int, int> PrimaryScreenSize() {
 #if defined(_WIN32)
   DEVMODEW mode{};

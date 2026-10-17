@@ -229,6 +229,77 @@ strings |= {
     'The download has finished and is being unpacked. That cannot be paused safely, so the game starts as soon as it is done.',
     'Shows a system notification when the HD texture pack or the PS2 cutscenes finish downloading, or stop, while the launcher is minimised or behind other windows. The sound that plays with it follows Menu sounds.',
 }
+# Job J4: the graphics setup pages (setup steps 5 to 8): headings, sentences, cards, the close-up panel.
+strings |= {
+    'Upscaling and sharpness',
+    'Lighting and effects',
+    'Choose how the game fills your screen and how smoothly it runs.',
+    'Choose how the picture is scaled up to your screen and how sharp it looks.',
+    'New lighting effects made for this PC port.',
+    'Keep the new look, or play the game as it looked on the Xbox 360.',
+    'You can change this any time in Settings.',
+    'King Kong was made to run at 30 FPS, and above that some character animations can look wrong, such as the crew rowing the boat at the start.',
+    'Match my screen ({0} FPS)',
+    'The most pictures the game draws each second.',
+    'How the game fills your screen: in a window, borderless or fullscreen.',
+    'The size your screen switches to while the game runs.',
+    'The game is drawn at up to this size.',
+    'How many times a second your screen refreshes while the game runs.',
+    "Borderless uses your desktop's resolution. Choose Fullscreen to pick another one.",
+    'Desktop',
+    "Borderless uses your desktop's refresh rate.",
+    "The size of the game's window.",
+    'Scales the picture up to your screen and sharpens it.',
+    'How many pixels the game draws before they are scaled up to your screen.',
+    'How many pixels the game draws before the upscaler rebuilds the picture.',
+    '{0} to {1}',
+    'How sharply the game is drawn compared with your screen.',
+    'Smooths jagged edges after the picture is drawn.',
+    'The upscaler smooths edges itself, so SMAA is not used with it.',
+    'Makes fine detail crisper.',
+    '16x texture filtering',
+    'Keeps the ground and distant textures sharp at steep angles.',
+    'Brighter highlights and deeper colour on your HDR screen.',
+    'Sunlight bounces off surfaces and softly lights the shade beside them.',
+    'Soft shading where surfaces meet, in corners and under rocks and grass.',
+    "Sharper, softer-edged shadows than the game's own.",
+    'The water reflects the rocks, trees and the ship around it.',
+    'Sunlight shines through the mist and fog in visible shafts.',
+    'Original look',
+    'Plays the game exactly as it looked on the Xbox 360.',
+    'Use recommended for my PC',
+    'Sets every graphics option to what suits your PC, with the new look.',
+    'Apply',
+    'Use recommended',
+    'Sets the options on this page to what suits your PC.',
+    'Next',
+    'Finishes the graphics setup.',
+    'The next page.',
+    'The page before.',
+    '{0} of {1}',
+    'The recommended settings for your PC are set.',
+    'The recommended settings for this page are set.',
+    'The recommended graphics API. It works on every graphics card the game supports.',
+    'Needed for AMD FSR 4',
+    'Also works well, and AMD FSR 4 needs it.',
+    'Not on this graphics card',
+    'Supported',
+    'Rebuilds a sharp picture from fewer pixels on NVIDIA RTX graphics cards.',
+    'Rebuilds a sharp picture from fewer pixels and runs on most graphics cards.',
+    'Rebuilds a sharp picture from fewer pixels, best on Intel graphics cards.',
+    'Plain scaling',
+    "No upscaler: the game is drawn at up to your screen's size and scaled plainly.",
+    'Nothing to compare',
+    'This option changes how the game runs, not how it looks.',
+    'Comparison picture not included',
+    'Release builds show a close-up from the game here: Original on the left, New on the right.',
+    'New',
+    'Graphics {0} of {1}',
+    'Applies when the game starts.',
+    'Your graphics card does not run this upscaler.',
+    'Compare',
+    'Checking which other upscalers your graphics card runs...',
+}
 for s in sorted(strings):
     if s == 'Home':
         continue  # never drawn as text
@@ -298,7 +369,7 @@ for name in ('Cheats', 'About', 'Settings'):
 # from the UI thread while a download unpacks (REPORT-181).
 for needle, why in (
         ('setup_shaders_ ? 4 : setup_textures_ ? 6', 'the texture pack page does not follow the shaders'),
-        ('setup_cutscenes_ ? 7 : setup_style_ ? 5', 'the cutscene page does not follow the texture pack page'),
+        ('setup_cutscenes_ ? 7 : setup_graphics_ ? kGfxFirstStage', 'the cutscene page does not follow the texture pack page (the graphics pages after it)'),
         ('setup_cutscenes_ = kPs2MoviePlayback;', 'the cutscene page is not tied to PS2 movie playback'),
         ('{"Download HD texture pack", true,', 'the texture pack page lost Download'),
         ('{"I already have a texture pack", true,', 'the texture pack page lost I already have a texture pack'),
@@ -328,6 +399,28 @@ m = re.search(r'void TexturePackItems\(std::vector<Item>& items\) \{(.*?)\n  \}\
 body = m.group(1) if m else ''
 if 'if (in_game_) return;' not in body or body.find('if (in_game_) return;') > body.find('"Installed"'):
     fail('the pause menu shows more than the texture pack switch')
+
+# Job J4: the graphics pages are setup stages 8 to 11 after the cutscene step, drawn by launcher_setup_graphics.inc
+# with the Settings rows (one source of truth), "Use recommended" and "change any time in Settings" on every page,
+# and the close-ups loaded from setup-art beside the program (never in git).
+gfx = (src / 'launcher_setup_graphics.inc').read_text(encoding='utf-8')
+for needle, why in (
+        ('#include "launcher_setup_graphics.inc"', 'launcher.cpp includes the graphics pages'),
+        ('setup_graphics_ ? kGfxFirstStage', 'SetupStage has the graphics pages'),
+        ('setup_graphics_ = true;', 'the setup asks the graphics pages'),
+):
+    if needle not in launcher:
+        fail(f'{why} ({needle})')
+for needle, why in (
+        ('std::string(T(kGfxIntros[page])) + " " + T(kChangeLater)', 'every page says it can be changed in Settings'),
+        ('"Use recommended"', 'Use recommended row'), ('"Use recommended for my PC"', 'Use recommended for my PC row'),
+        ('/ "setup-art"', 'close-ups beside the program'), ('"-original.png"', 'Original close-up'), ('"-new.png"', 'New close-up'),
+        ('DisplayItems()', 'Display rows from Settings'), ('GraphicsItems()', 'Graphics rows from Settings'),
+):
+    if needle not in gfx:
+        fail(f'{why} ({needle})')
+if '—' in gfx or '–' in gfx:
+    fail('dash in launcher_setup_graphics.inc')
 
 if failures:
     print('\n'.join('FAIL: ' + f for f in failures))

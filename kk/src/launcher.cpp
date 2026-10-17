@@ -1012,11 +1012,10 @@ class SettingsPages {
   // The native renderer's lighting options (native-renderer/docs/lighting.md): rows on the Graphics
   // page while the native renderer draws the game. Its own cvars (native_*), which the stable version
   // does not have.
+  // Owner, 17 Oct: shadows, water reflections and light shafts are shown on the setup's graphics pages (and so
+  // in Settings > Graphics too, where the setup says they can be changed), still off by default.
   static void LightingItems(std::vector<Item>& items, bool original) {
-    // Task 062: keep experimental code available to the coordinator, hide unverified
-    // water coverage, shaft placement and sparse dynamic-shadow gains for Beta 4.
-    constexpr bool ready_for_beta4 = false;
-    if (!ready_for_beta4 || !NativeShaderPack::Wanted()) return;
+    if (!NativeShaderPack::Wanted()) return;
     {
       Item it = CvarChoice("Shadows",
                            "Original keeps the game's blocky shadows. High draws them at twice the detail with soft "
@@ -3138,6 +3137,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         case 5: return {{Action::kLeft, "Change"}, {Action::kAccept, "Select"}};
         case 6:
         case 7: return {{Action::kAccept, "Select"}};
+        case 8:
+        case 9:
+        case 10:
+        case 11: return GfxPrompts();
         default: return {};
       }
     }
@@ -4190,7 +4193,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (dev_setup_ >= 0) return true;
 #endif
     return !files_ok_ || installing_ || setup_art_ || setup_shaders_ || setup_textures_ || setup_cutscenes_ ||
-           setup_style_ || installing_update_ || update_shaders_;
+           setup_graphics_ || setup_style_ || installing_update_ || update_shaders_;
   }
 
   // A version this launcher has not run before, on an installation that has run one (What's new uses
@@ -4220,7 +4223,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   bool AssetSetup() const {
     if (!InSetup() || slides_.empty()) return false;
     const int stage = SetupStage();
-    return stage == 5 || stage == 6 || stage == 7;
+    return stage == 5 || stage == 6 || stage == 7 || GraphicsSetupStage(stage);
   }
 
   // Home's look (the stills, blurred; the game's logo; the music), with a centred panel: what is
@@ -4342,13 +4345,15 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   // 0: asking for the disc image, 1: installing, 2: taking the artwork,
   // 3: updating the port, 4: preparing the native renderer's shaders, 6: the HD texture pack, 7: restore
-  // the PS2 cutscenes?, 5: the look (setup-flow.md steps 3 and 4 come before it).
+  // the PS2 cutscenes?, 8 to 11: the graphics pages (setup-flow.md steps 5 to 8), 5: the old look step (not
+  // shown after the graphics pages, which start from Remastered; job J6 removes it).
   int SetupStage() const {
 #if defined(KK_DEV_TOOLS)
     if (dev_setup_ >= 0) return dev_setup_;
 #endif
     return installing_update_ ? 3 : installing_ ? 1 : setup_art_ ? 2 : setup_shaders_ ? 4 : setup_textures_ ? 6
-           : setup_cutscenes_ ? 7 : setup_style_ ? 5 : 0;
+           : setup_cutscenes_ ? 7 : setup_graphics_ ? kGfxFirstStage + std::clamp(gfx_page_, 0, kGfxPages - 1)
+           : setup_style_ ? 5 : 0;
   }
 
   // The first-time setup's content steps (setup-flow.md 3 and 4): the cutscene page only where the PS2
@@ -4356,6 +4361,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   void AskContentInSetup() {
     setup_textures_ = true;
     setup_cutscenes_ = kPs2MoviePlayback;
+    // ... and then the graphics pages (job J4).
+    setup_graphics_ = true;
+    gfx_page_ = 0;
+    gfx_entered_ = false;
+    gfx_cards_page_ = -1;
     if (!kPs2MoviePlayback) REXLOG_INFO("KK: setup: no PS2 cutscene page (PS2 movies do not play on this system)");
   }
 
@@ -4365,6 +4375,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     const float x = o_.x + Margin();
     float y = o_.y + std::max(84 * s, h_ * 0.12f);
     const int stage = SetupStage();
+    if (GraphicsSetupStage(stage)) return DrawSetupGraphics(dl);  // setup steps 5 to 8: a layout of their own
     float copied = 0, copy_total = 0;
     if (installing_) {
       copied = float(progress_.bytes_done.load());
@@ -4669,6 +4680,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       choose(chosen);
     }
   }
+
+#include "launcher_setup_graphics.inc"
 
   // The status line once the setup is over.
   const char* InstalledMessage() {
@@ -6002,8 +6015,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     setup_focus_ = 0;
     if (content_watch_ >= 0 && content_watch_setup_ == stage) content_watch_setup_ = 0;
 #if defined(KK_DEV_TOOLS)
-    if (dev_setup_ == 6) dev_setup_ = kPs2MoviePlayback ? 7 : 5;
-    else if (dev_setup_ == 7) dev_setup_ = 5;
+    if (dev_setup_ == 6) dev_setup_ = kPs2MoviePlayback ? 7 : kGfxFirstStage;
+    else if (dev_setup_ == 7) dev_setup_ = kGfxFirstStage;
 #endif
   }
 
@@ -6372,10 +6385,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // The download strip: the later setup pages and Home show what downloads, how far it is and the time
   // left (bottom right above the side panels' row; `top`: at the top right instead, where the look step's
   // cards leave room). A click opens the progress pop-up; controllers reach it through Settings.
-  void DrawContentStrip(ImDrawList* dl, float alpha, bool top) {
+  bool DrawContentStrip(ImDrawList* dl, float alpha, bool top) {
     using namespace content;
     auto& service = Service::Get();
-    if (!service.Ready()) return;
+    if (!service.Ready()) return false;
     int pick = -1, waiting = 0;
     content::Status st;
     for (const int rank : {0, 1, 2, 3}) {  // running, queued, paused, stopped
@@ -6388,7 +6401,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         if (match) pick = i, st = k;
       }
     }
-    if (pick < 0) return;
+    if (pick < 0) return false;
     for (int i = 0; i < kKindCount; ++i)
       if (i != pick && service.Get(Kind(i)).stage == Stage::kQueued) ++waiting;
     const Kind kind = Kind(pick);
@@ -6440,6 +6453,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       }
     }
 #endif
+    return true;
   }
 
   // ---------------------------------------------------------- heartbeat ---
@@ -6857,7 +6871,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // Scripted runs wait for the setup's work (only captures go on); the look step (stage 5) takes input
     // like the pages.
     const bool waiting = std::getenv("KK_DEV_LAUNCHER_INPUT_FILE") && (InSetup() || ShaderScreen()) &&
-                         SetupStage() != 5 && SetupStage() != 6 && SetupStage() != 7;
+                         SetupStage() != 5 && SetupStage() != 6 && SetupStage() != 7 &&
+                         !GraphicsSetupStage(SetupStage());
     static bool release = false;
     if (release) {
       io.AddMouseButtonEvent(0, false);
@@ -6955,9 +6970,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       return;
     }
     if (t.rfind("focus:", 0) == 0) {
+      const bool gfx = InSetup() && GraphicsSetupStage(SetupStage());
       for (size_t i = 0; i < focused_items_.size(); ++i)
         if (focused_items_[i].label == t.substr(6) && focused_items_[i].type != ItemType::kSection) {
-        auto& state = play_ != PlayView::kNone ? play_lists_[int(play_)] : lists_[page_ * 4 + sub_];
+        auto& state = gfx ? gfx_lists_[GfxPage()] : play_ != PlayView::kNone ? play_lists_[int(play_)] : lists_[page_ * 4 + sub_];
+        if (gfx) gfx_on_cards_ = false;
         state.focus = int(i);
         state.focus_label = focused_items_[i].label;
         REXLOG_INFO("KK dev: launcher focused {} value {} help {}", state.focus_label, focused_items_[i].value_text,
@@ -6966,6 +6983,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       }
       REXLOG_INFO("KK dev: launcher focus FAIL {}", t.substr(6));
       return;
+    }
+    if (t == "rows" && InSetup() && GraphicsSetupStage(SetupStage())) {  // job J4: a graphics page's cards too
+      for (const auto& c : GfxCards(GfxPage()))
+        REXLOG_INFO("KK dev: setup graphics card {} {}{}", c.label, c.selected ? "selected" : "-", c.enabled ? "" : " (not offered)");
+      LogGraphicsChoices("rows");
     }
     if (t == "rows") {
       // With the shown value (a choice's option, else its value text), so a test can read settings back.

@@ -102,6 +102,7 @@ class Input {
   // How long a direction has been held.
   float HeldFor(Action a) const;
   void Inject(Action a, Device d);  // testing aid
+  bool injected() const { return injected_; }  // this frame's input includes an injected press (testing aid)
   Device device() const { return device_; }
   // The kind of controller last used (for controller pictures while the
   // keyboard is in use).
@@ -128,6 +129,7 @@ class Input {
   std::string pad_style_;
   bool mouse_moved_ = false;
   bool keyboard_enabled_ = true;
+  bool injected_ = false;
   ImVec2 last_mouse_{-1, -1};
   bool sdl_ready_ = false;
   std::vector<void*> pads_;  // SDL_Gamepad*
