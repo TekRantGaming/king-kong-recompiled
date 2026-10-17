@@ -2,8 +2,6 @@
     {"Workshop", "Workshop", "Taller", "Atelier", "Officina"},
     {"Projects", "Projekte", "Proyectos", "Projets", "Progetti"},
     {"Kong mods", "Kong-Mods", "Mods de Kong", "Mods de Kong", "Mod di Kong"},
-    {"Coming soon", "Demnächst", "Próximamente", "Bientôt disponible", "Prossimamente"},
-    {"Mods for King Kong will be shared here.", "Hier werden Mods für King Kong geteilt.", "Aquí se compartirán mods para King Kong.", "Les mods pour King Kong seront partagés ici.", "Qui verranno condivise le mod per King Kong."},
     {"View on GitHub", "Auf GitHub ansehen", "Ver en GitHub", "Voir sur GitHub", "Vedi su GitHub"},
     {"Loading", "Wird geladen", "Cargando", "Chargement", "Caricamento"},
     {"Link", "Link", "Enlace", "Lien", "Link"},

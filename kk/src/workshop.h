@@ -1,6 +1,6 @@
 // Job J8 (owner, 17 Oct): the launcher's Workshop page. A row of the owner's other projects as app-style
 // tiles (name and picture; LB/RB, left/right, the mouse or its wheel move along it), then "Kong mods"
-// (coming soon). Selecting a tile shows the project's GitHub README inside the launcher, with [Download]
+// (task 200: the mods on disk, workshop_mods.h). Selecting a tile shows the project's GitHub README inside the launcher, with [Download]
 // (the latest release's page in the browser: the launcher downloads and runs nothing) and [View on GitHub].
 //
 // Everything about the projects (READMEs, repository facts, pictures) is fetched at run time on the
@@ -27,7 +27,8 @@ namespace kk {
 
 class Workshop {
  public:
-  Workshop(rex::ui::ImmediateDrawer* drawer, std::filesystem::path user_dir);
+  // `config_path`: where the Kong mods row saves its choice (kk_mods).
+  Workshop(rex::ui::ImmediateDrawer* drawer, std::filesystem::path user_dir, std::filesystem::path config_path);
   ~Workshop();
   Workshop(const Workshop&) = delete;
   Workshop& operator=(const Workshop&) = delete;
@@ -38,7 +39,8 @@ class Workshop {
   // Back from a project's README to the tiles (true); false on the tiles (the launcher goes Home).
   bool Back();
   std::vector<ui::Prompt> Prompts() const;
-  // Developer steps (workshop:<command>): state, open:<n>, tile:<n>, download, github, link:<n>, scroll:<px>.
+  // Developer steps (workshop:<command>): state, open:<n>, tile:<n>, download, github, link:<n>, scroll:<px>,
+  // mods (focus the Kong mods row), mods:<command> (KongMods::Dev).
   void DevCommand(const std::string& command);
 
   // <user data>/cache/workshop.

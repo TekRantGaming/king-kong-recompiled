@@ -68,6 +68,8 @@ set(KINGKONG_SOURCES
     src/fog.cpp
     src/big_blur.cpp
     src/cheats.cpp
+    src/hardcore.cpp
+    src/mods.cpp
     src/changelog.cpp
     src/menu_hook.cpp
     src/glyphs.cpp
@@ -80,6 +82,7 @@ set(KINGKONG_SOURCES
     src/artbook_files.cpp
     src/artbook.cpp
     src/workshop.cpp
+    src/workshop_mods.cpp
     src/workshop_markdown.cpp
     src/workshop_net.cpp
     src/system_notify.cpp
@@ -272,6 +275,12 @@ if(KK_DEV_TOOLS)
     add_test(NAME workshop COMMAND kk-workshop-tests "${CMAKE_CURRENT_BINARY_DIR}/workshop-test")
     # Beta 7 Extras > Artbook: raw sectors to ISO, our ISO 9660 / Joliet reader (a synthetic disc), the readme's
     # Word text, titles, the Pictures folder and Save to PC, and the content service installing a synthetic disc.
+    # Task 200: Kong mods: mod.toml for each type, broken files, version ranges, load order, conflicts, the plan.
+    add_executable(kk-mods-tests tests/mods_tests.cpp)
+    target_include_directories(kk-mods-tests PRIVATE src)
+    target_link_libraries(kk-mods-tests PRIVATE rex::runtime)
+    rexglue_apply_target_settings(kk-mods-tests)
+    add_test(NAME kong-mods COMMAND kk-mods-tests)
     add_executable(kk-artbook-tests tests/artbook_tests.cpp src/artbook_files.cpp src/content.cpp src/workshop_net.cpp)
     target_include_directories(kk-artbook-tests PRIVATE src)
     target_compile_definitions(kk-artbook-tests PRIVATE KK_DEV_TOOLS=1)
@@ -326,6 +335,10 @@ if(KK_DEV_TOOLS OR NR_BUILD_TESTS)
 endif()
 
 # Button prompt pictures (kk_button_prompts) live beside the program.
+# Task 200: the built-in Kong mods and the modding guide ship beside the program (packages copy them too).
+add_custom_command(TARGET king_kong POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/mods-builtin $<TARGET_FILE_DIR:king_kong>/mods-builtin
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/../MODDING.md $<TARGET_FILE_DIR:king_kong>/MODDING.md)
 add_custom_command(TARGET king_kong POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/glyphs $<TARGET_FILE_DIR:king_kong>/glyphs
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/THIRD-PARTY-NOTICES.txt

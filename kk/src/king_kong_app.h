@@ -53,6 +53,7 @@ void InstallFpeGuard();  // fpe_guard.cpp
 #include "online.h"
 #include "shader_pack.h"
 #include "launcher.h"
+#include "mods.h"
 #include "overlay.h"
 #include "ui_paint.h"
 #include "platform.h"
@@ -192,6 +193,9 @@ class KingKongApp : public rex::ReXApp {
       std::error_code recommendation_ec;
       if (!std::filesystem::exists(defaults.config_path, recommendation_ec) && !recommendation_ec &&
           !kk::benchmark::Active() && !rex::cvar::GetFlagByName("kk_hardware_tier").empty()) kk::SaveSettings(defaults.config_path);
+      // Kong mods: over the player's settings for this run only (never saved), before the Original look
+      // (which wins) and before the GPU starts.
+      if (!kk::benchmark::Active()) kk::mods::ApplyAtGameStart(defaults.user_data_root);
       kk::EnforceOriginalLook();
       kk::ApplyFullscreenMode(window());
       kk::ApplyRendererChoice();  // the renderer, and with it the default upscaler
@@ -210,6 +214,8 @@ class KingKongApp : public rex::ReXApp {
     kk::LauncherCallbacks cb;
     cb.play = [this, resume, defaults] {
       app_context().CallInUIThreadDeferred([this, resume, defaults] {
+        kk::mods::ApplyAtGameStart(defaults.user_data_root);  // Kong mods, for this run only
+        kk::EnforceOriginalLook();  // the Original look still wins over a settings mod
         // The Resolution (Display page) before the render quality, which follows it.
         kk::ApplyFullscreenMode(window());
         kk::ApplyRendererChoice();  // the renderer, and with it the default upscaler

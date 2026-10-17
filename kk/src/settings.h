@@ -131,6 +131,10 @@ bool SaveSettings(const std::filesystem::path& path, bool include_temporary = fa
 void SetTemporarySettingBaseline(const std::string& name, const std::string& value);
 void SetTemporarySettingTrialValue(const std::string& name, const std::string& value);
 void ClearTemporarySettingBaselines();
+// Kong mods (mods.cpp): a settings mod's value, put over the player's own for this run only. Saves keep the
+// player's value while the mod's is in place (mods_logic.h ValueToSave). False if the setting refused it.
+bool SetModSetting(const std::string& name, const std::string& value);
+void ClearModSettings();
 
 // Changes a cvar's default; values from the config file or command line still win.
 void SetCvarDefault(std::string_view name, std::string_view value);

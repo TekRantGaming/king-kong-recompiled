@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace rex::ui { class ImGuiDrawer; class ImmediateDrawer; }
 
@@ -12,6 +13,10 @@ namespace kk::movies {
 // Whether this build can play them: the launcher shows the cutscene setup page and Settings rows only then.
 bool PlaybackAvailable();
 std::filesystem::path Folder();
+// Kong cutscene mods (mods.cpp, at the game's start): folders whose clips play instead of the PS2 clip of the
+// same name, in load order (the last one that has the clip wins). They play even with kk_ps2_cutscenes off;
+// clips they do not have come from Folder() only when kk_ps2_cutscenes is on.
+void SetOverrideFolders(std::vector<std::filesystem::path> folders);
 std::string BrowseFolder();
 void CreateMovieDialog(rex::ui::ImGuiDrawer* drawer, rex::ui::ImmediateDrawer* immediate,
                   const std::filesystem::path& glyph_dir);

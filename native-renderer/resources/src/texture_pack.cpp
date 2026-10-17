@@ -258,6 +258,17 @@ std::string TexturePackKey(uint64_t hash, const std::string& name) {
 bool TexturePackEntry::Matches(const HostTexturePlan& p) const {
   return TexturePackEligible(p) && p.format == format && p.width == width && p.height == height;
 }
+std::vector<std::string> SplitPackFolders(const std::string& folders) {
+  std::vector<std::string> out;
+  size_t start = 0;
+  while (start <= folders.size()) {
+    size_t end = folders.find('|', start);
+    if (end == std::string::npos) end = folders.size();
+    if (end > start) out.push_back(folders.substr(start, end - start));
+    start = end + 1;
+  }
+  return out;
+}
 bool TexturePackManifest::Read(const std::filesystem::path& folder, std::string& why) {
   entries.clear();
   std::vector<uint8_t> bytes;
@@ -336,7 +347,9 @@ struct TexturePackStream::Impl {
   }
   void Run() {
     TexturePackManifest manifest;
-    std::map<std::string, TexturePackEntry> index;
+    // Each entry with the pack folder it came from (several packs: Kong texture-pack mods, task 200).
+    std::map<std::string, std::pair<TexturePackEntry, size_t>> index;
+    std::vector<std::string> roots;
     for (;;) {
       std::string root; uint64_t epoch; std::vector<Request> batch;
       bool changed;
@@ -348,28 +361,42 @@ struct TexturePackStream::Impl {
         while (!requests.empty() && batch.size() < 4) { batch.push_back(std::move(requests.front())); requests.pop_front(); }
       }
       if (changed) {
-        std::string why; index.clear(); manifest.entries.clear();
-        bool ok=false;
-        try { ok = !root.empty() && manifest.Read(Utf8Path(root), why); }
-        catch (const std::exception& e) { why=e.what(); }
-        if (ok) for (const auto& e : manifest.entries) {
-          HostTexturePlan p; p.format=e.format; p.width=e.width; p.height=e.height;
-          index.emplace(RequestKey(e.hash, p), e);
+        // The folder setting may name several packs separated by '|' (the player's own pack, then Kong
+        // texture-pack mods in load order): all are read, and a later pack's entry for the same original wins.
+        // A pack that cannot be read is skipped; the others still load.
+        std::string why; index.clear(); roots = SplitPackFolders(root);
+        size_t read = 0;
+        for (size_t f = 0; f < roots.size(); ++f) {
+          manifest.entries.clear();
+          std::string pack_why;
+          bool ok=false;
+          try { ok = manifest.Read(Utf8Path(roots[f]), pack_why); }
+          catch (const std::exception& e) { pack_why=e.what(); }
+          if (!ok) { why = roots.size() > 1 ? roots[f] + ": " + pack_why : pack_why; continue; }
+          ++read;
+          for (const auto& e : manifest.entries) {
+            HostTexturePlan p; p.format=e.format; p.width=e.width; p.height=e.height;
+            index.insert_or_assign(RequestKey(e.hash, p), std::make_pair(e, f));
+          }
         }
         std::lock_guard lock(mutex);
-        if (epoch == generation) status = ok ? std::to_string(index.size()) + " entries" : why;
+        if (epoch == generation)
+          status = read ? std::to_string(index.size()) + " entries" +
+                              (roots.size() > 1 ? " from " + std::to_string(read) + " of " + std::to_string(roots.size()) + " packs" : "") +
+                              (read < roots.size() ? " (" + why + ")" : "")
+                        : why;
       }
       struct Result { std::shared_ptr<HostTextureData> data; std::string error; };
       std::vector<Result> results(batch.size());
-      struct Context { const std::string* root; const std::map<std::string,TexturePackEntry>* index;
-        std::vector<Request>* batch; std::vector<Result>* results; } context{&root,&index,&batch,&results};
+      struct Context { const std::vector<std::string>* roots; const std::map<std::string,std::pair<TexturePackEntry,size_t>>* index;
+        std::vector<Request>* batch; std::vector<Result>* results; } context{&roots,&index,&batch,&results};
       workers.Run(unsigned(batch.size()), &context, [](void* arg, unsigned i) {
         auto& c=*static_cast<Context*>(arg); auto& r=(*c.results)[i]; const auto& request=(*c.batch)[i];
         const auto it=c.index->find(request.key);
         if (it==c.index->end()) return;
         try {
           auto data=std::make_shared<HostTextureData>();
-          if (LoadTextureReplacement(Utf8Path(*c.root), it->second, *data, r.error)) r.data=std::move(data);
+          if (LoadTextureReplacement(Utf8Path((*c.roots)[it->second.second]), it->second.first, *data, r.error)) r.data=std::move(data);
         } catch (const std::exception& e) { r.error=e.what(); }
       });
       {

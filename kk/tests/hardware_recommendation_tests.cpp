@@ -325,6 +325,40 @@ int main() {
   const std::string committed_text((std::istreambuf_iterator<char>(committed_file)), {});
   Check(committed_text.find("native_ao_samples = 3") != std::string::npos, "explicit save writes trial AO quality");
   ClearTemporarySettingBaselines();
+  // Task 200 (Kong mods): a settings mod's values are used while it is on and never saved; the player's
+  // own values come back exactly (a value the player set, and one left at its default).
+  {
+    rex::cvar::ResetAllToDefaults();
+    rex::cvar::SetFlagByName("kk_frame_rate", "120");  // the player's choice
+    const std::string fog_default = rex::cvar::GetFlagByName("kk_fog");
+    Check(SetModSetting("kk_frame_rate", "30"), "mod sets the frame rate");
+    Check(SetModSetting("kk_fog", fog_default == "true" ? "false" : "true"), "mod sets fog");
+    Equals("kk_frame_rate", "30");
+    Check(SaveSettings(config), "save while a settings mod is on");
+    std::ifstream f(config);
+    const std::string text((std::istreambuf_iterator<char>(f)), {});
+    Check(text.find("kk_frame_rate = 120") != std::string::npos, "mod: the player's frame rate is saved");
+    Check(text.find("kk_frame_rate = 30") == std::string::npos, "mod: the mod's frame rate is never saved");
+    Check(text.find("kk_fog") == std::string::npos, "mod: a default left alone stays out of the file");
+    // The player changes the setting while the mod is on: their new choice is saved.
+    rex::cvar::SetFlagByName("kk_frame_rate", "90");
+    Check(SaveSettings(config), "save after the player's change");
+    std::ifstream g(config);
+    const std::string text2((std::istreambuf_iterator<char>(g)), {});
+    Check(text2.find("kk_frame_rate = 90") != std::string::npos, "mod: the player's later change is saved");
+    // Mod off (the next start reads the file): exactly the player's settings.
+    ClearModSettings();
+    rex::cvar::ResetAllToDefaults();
+    rex::cvar::SetFlagByName("kk_frame_rate", "120");
+    Check(SetModSetting("kk_frame_rate", "30") && SetModSetting("kk_frame_rate", "45"), "two mods, same setting");
+    Check(SaveSettings(config), "save with two mods");
+    std::ifstream h(config);
+    const std::string text3((std::istreambuf_iterator<char>(h)), {});
+    Check(text3.find("kk_frame_rate = 120") != std::string::npos, "mod: two mods still save the player's value");
+    ClearModSettings();
+    Check(!SetModSetting("no_such_setting_x", "1"), "mod: unknown setting refused");
+    ClearModSettings();
+  }
   // Version 3 recognises every old preset without touching its other settings.
   for (const auto& p : kGraphicsPresets) {
     rex::cvar::ResetAllToDefaults();

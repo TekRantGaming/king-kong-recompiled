@@ -20,6 +20,7 @@
 #include "platform.h"
 #include "workshop_logic.h"
 #include "workshop_markdown.h"
+#include "workshop_mods.h"
 #include "workshop_net.h"
 
 namespace kk {
@@ -424,7 +425,10 @@ struct Workshop::Impl {
   // Where things were drawn this frame (mouse).
   ImVec2 button_rect[2][2]{};
 
-  Impl(rex::ui::ImmediateDrawer* d, fs::path user_dir) : drawer(d), dir(Workshop::CacheDir(user_dir)) {
+  std::unique_ptr<KongMods> kong;  // row 1 (task 200)
+
+  Impl(rex::ui::ImmediateDrawer* d, fs::path user_dir, fs::path config_path)
+      : drawer(d), dir(Workshop::CacheDir(user_dir)), kong(std::make_unique<KongMods>(d, user_dir, config_path)) {
 #if defined(KK_DEV_TOOLS)
     no_browser = std::getenv("KK_DEV_WORKSHOP_NO_BROWSER") != nullptr;
 #endif
@@ -763,35 +767,16 @@ struct Workshop::Impl {
       if (!facts.empty()) dl->AddText(f.text, 13.5f * s, ImVec2(p0.x, fy), color::kTextFaint, facts.c_str());
     }
 
-    // Kong mods: coming soon.
+    // Kong mods (task 200): the mods on disk, built-ins first.
     y += 86 * s;
     DrawCaption(dl, f, p0.x, p1.x, y, s, "Kong mods");
-    const ImVec2 ma(p0.x, y + 32 * s), mb(p1.x, y + 32 * s + 92 * s);
-    const bool mods_focus = row == 1;
-    if (active && ImGui::IsMouseHoveringRect(ma, mb, false)) {
-      if (in.mouse_moved()) row = 1;
-      if (ImGui::IsMouseClicked(0)) {
-        row = 1;
-        ui::Cue(ui::Sound::kDeny);
-      }
-    }
-    mods_glow = ui::Approach(mods_glow, mods_focus ? 100.0f : 0.0f, 12.0f);
-    dl->AddRectFilled(ma, mb, ui::WithAlpha(color::kPanel, 0.82f));
-    dl->AddRectFilledMultiColor(ma, mb, ui::WithAlpha(color::kAccent, 0.10f), ui::WithAlpha(color::kAccent, 0.0f),
-                                ui::WithAlpha(color::kAccent, 0.0f), ui::WithAlpha(color::kAccent, 0.06f));
-    dl->AddRectFilled(ma, ImVec2(ma.x + 3 * s, mb.y), ui::WithAlpha(color::kAccent, 0.5f + 0.005f * mods_glow));
-    const std::string soon = text::Upper(T("Coming soon"));
-    ui::DrawTracked(dl, f.display, 20 * s, ImVec2(ma.x + 28 * s, ma.y + 22 * s), color::kText, soon, 3 * s);
-    dl->AddText(f.text, 15 * s, ImVec2(ma.x + 28 * s, ma.y + 54 * s), color::kTextDim,
-                T("Mods for King Kong will be shared here."));
-    if (mods_focus) dl->AddRect(ImVec2(ma.x - 1 * s, ma.y - 1 * s), ImVec2(mb.x + 1 * s, mb.y + 1 * s), color::kFocus, 0, 0, 2 * s);
-    else dl->AddRect(ma, mb, ui::WithAlpha(color::kText, 0.08f));
+    const int row_mods = row;
+    if (kong->DrawRow(dl, ImVec2(p0.x, y + 28 * s), p1, m, in, active, row_mods == 1)) row = 1;
 
     if (tile != tile_before || row != row_before) ui::Cue(ui::Sound::kMove);
-    if (active && in.Pressed(Action::kAccept)) {
+    if (active && row == 0 && in.Pressed(Action::kAccept)) {
       in.Consume(Action::kAccept);
-      if (row == 0) open = tile;
-      else ui::Cue(ui::Sound::kDeny);
+      open = tile;
     }
     if (open >= 0) {
       ui::Cue(ui::Sound::kSelect);
@@ -1166,6 +1151,7 @@ struct Workshop::Impl {
     Start();
     TakeResults();
     if (detail >= 0) DrawDetail(dl, p0, p1, m, in, active);
+    else if (kong->InDetail()) kong->DrawDetail(dl, p0, p1, m, in, active);
     else DrawTiles(dl, p0, p1, m, in, active);
   }
 
@@ -1195,6 +1181,10 @@ struct Workshop::Impl {
     } else if (c == "mods") {
       detail = -1;
       row = 1;
+    } else if (c.rfind("mods:", 0) == 0) {
+      detail = -1;
+      row = 1;
+      kong->Dev(c.substr(5));
     } else if (detail >= 0 && c == "download") {
       Activate(0);
     } else if (detail >= 0 && c == "github") {
@@ -1211,8 +1201,8 @@ struct Workshop::Impl {
   }
 };
 
-Workshop::Workshop(rex::ui::ImmediateDrawer* drawer, fs::path user_dir)
-    : impl_(std::make_unique<Impl>(drawer, std::move(user_dir))) {}
+Workshop::Workshop(rex::ui::ImmediateDrawer* drawer, fs::path user_dir, fs::path config_path)
+    : impl_(std::make_unique<Impl>(drawer, std::move(user_dir), std::move(config_path))) {}
 
 Workshop::~Workshop() = default;
 
@@ -1221,6 +1211,7 @@ void Workshop::Draw(ImDrawList* dl, ImVec2 p0, ImVec2 p1, const ui::Metrics& m, 
 }
 
 bool Workshop::Back() {
+  if (impl_->kong->Back()) return true;
   if (impl_->detail < 0) return false;
   impl_->detail = -1;
   return true;
@@ -1228,7 +1219,7 @@ bool Workshop::Back() {
 
 std::vector<ui::Prompt> Workshop::Prompts() const {
   if (impl_->detail >= 0) return {{Action::kUp, "Scroll"}, {Action::kAccept, "Select"}, {Action::kBack, "Back"}};
-  if (impl_->row == 1) return {{Action::kBack, "Back"}};
+  if (impl_->kong->InDetail() || impl_->row == 1) return impl_->kong->Prompts(impl_->row == 1);
   return {{Action::kAccept, "Select"}, {Action::kBack, "Back"}};
 }
 

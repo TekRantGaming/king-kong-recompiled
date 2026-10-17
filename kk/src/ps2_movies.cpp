@@ -334,6 +334,16 @@ std::filesystem::path Folder() {
 
 bool PlaybackAvailable() { return DecoderAvailable(); }
 
+namespace {
+std::mutex override_mutex;
+std::vector<std::filesystem::path> override_folders;
+}  // namespace
+
+void SetOverrideFolders(std::vector<std::filesystem::path> folders) {
+  std::lock_guard lock(override_mutex);
+  override_folders = std::move(folders);
+}
+
 #if !defined(_WIN32)
 // Linux: the desktop's own folder picker (zenity on GNOME and SteamOS desktop mode, kdialog on KDE), when
 // one is installed. The downloaded cutscenes set the folder themselves; this is for the player's own files.
@@ -394,7 +404,13 @@ void CreateMovieDialog(rex::ui::ImGuiDrawer* drawer, rex::ui::ImmediateDrawer* i
 }
 
 bool BeforeLoad(const uint8_t* base, uint32_t g, bool starting, bool leaving) {
-  if (!dialog_ready || shutting_down || !DecoderAvailable() || !REXCVAR_GET(kk_ps2_cutscenes) || !g ||
+  std::vector<std::filesystem::path> overrides;
+  {
+    std::lock_guard lock(override_mutex);
+    overrides = override_folders;
+  }
+  const bool ps2 = REXCVAR_GET(kk_ps2_cutscenes);
+  if (!dialog_ready || shutting_down || !DecoderAvailable() || (!ps2 && overrides.empty()) || !g ||
       !Word(base,g+4)) return false;
   const int from = int(Word(base,g+0x18)), to = int(Word(base,g+8));
   std::vector<int> levels;
@@ -403,10 +419,14 @@ bool BeforeLoad(const uint8_t* base, uint32_t g, bool starting, bool leaving) {
   const uint32_t catalog = Word(base,0x82CC9354);
   const auto world = WorldForLevel(catalog, to, [&](uint32_t at) { return Word(base, at); });
   const auto name = MovieName(world);
-  const auto folder = Folder();
-  if (name.empty() || folder.empty()) return false;
+  if (name.empty()) return false;
   // Linux file names are case-sensitive and the clips' are not consistent (BK_9bb9.mp4 for BK_9BB9).
-  const auto file = FindMovie(folder, name);
+  // A cutscene mod's clip first (the last in the load order wins), then the PS2 folder.
+  std::filesystem::path file;
+  for (auto it = overrides.rbegin(); it != overrides.rend() && file.empty(); ++it) file = FindMovie(*it, name);
+  if (!file.empty()) REXLOG_INFO("PS2 movie: {} from a cutscene mod ({})", name, file.parent_path().string());
+  const auto folder = Folder();
+  if (file.empty() && ps2 && !folder.empty()) file = FindMovie(folder, name);
   if (file.empty()) {
     REXLOG_INFO("PS2 movie: no local {} for {} -> {}; normal load", name, from, to);
     return false;
