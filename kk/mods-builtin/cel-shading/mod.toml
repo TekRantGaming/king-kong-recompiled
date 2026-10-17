@@ -1,0 +1,10 @@
+# Built-in mod (ships with the game). Format: MODDING.md.
+name = "Cel shading"
+author = "TekRantGaming"
+version = "1.0"
+description = "A comic book look: ink outlines and flat bands of light and shade. Water, smoke, sky and the HUD stay as they are. Fine controls (outline, darkness, bands, strength) are in the F8 panel under Cel shading. The Original look switches it off."
+type = "settings"
+min_game_version = "2.0.0-beta.6"
+
+[settings]
+native_cel_shading = true

@@ -1,4 +1,5 @@
 #include "settings.h"
+#include "mods_logic.h"
 #include <map>
 #include <mutex>
 
@@ -385,6 +386,22 @@ void ClearTemporarySettingBaselines() {
   std::lock_guard lock(temporary_mutex);
   temporary_baselines.clear();
 }
+namespace {
+std::map<std::string, mods::OverlayEntry, std::less<>> mod_overlay;  // under temporary_mutex
+}
+bool SetModSetting(const std::string& name, const std::string& value) {
+  std::lock_guard lock(temporary_mutex);
+  auto it = mod_overlay.find(name);
+  const std::string saved = it != mod_overlay.end() ? it->second.saved : rex::cvar::GetFlagByName(name);
+  const int source = it != mod_overlay.end() ? it->second.saved_source : int(rex::cvar::GetFlagSource(name));
+  if (!rex::cvar::SetFlagByName(name, value)) return false;
+  mod_overlay[name] = mods::OverlayEntry{saved, source, rex::cvar::GetFlagByName(name)};
+  return true;
+}
+void ClearModSettings() {
+  std::lock_guard lock(temporary_mutex);
+  mod_overlay.clear();
+}
 bool SaveSettings(const std::filesystem::path& path, bool include_temporary) {
   std::lock_guard lock(temporary_mutex);
   // Like rex::cvar::SaveConfig, but values that came from the command line or
@@ -396,11 +413,16 @@ bool SaveSettings(const std::filesystem::path& path, bool include_temporary) {
     const auto baseline = temporary_baselines.find(e.name);
     const std::string live = e.getter();
     const bool protect = !include_temporary && baseline != temporary_baselines.end() && live == baseline->second.trial;
-    const auto source = protect ? baseline->second.source : e.source;
+    auto source = protect ? baseline->second.source : e.source;
     if (source == rex::cvar::Source::kCommandLine || source == rex::cvar::Source::kEnvironment) continue;
     // Set by the port at every start (ApplyRuntimeOverrides).
     if (e.name == "video_mode_width" || e.name == "video_mode_height") continue;
-    const std::string value = protect ? baseline->second.saved : live;
+    std::string value = protect ? baseline->second.saved : live;
+    // A settings mod's value still in place: the player's own is saved (Kong mods, mods_logic.h).
+    if (const auto mod = mod_overlay.find(e.name); mod != mod_overlay.end() && value == mod->second.applied) {
+      value = mod->second.saved;
+      source = rex::cvar::Source(mod->second.saved_source);
+    }
     const bool hardware_setting = e.name == "kk_render_quality" || e.name == "native_upscaler_quality" ||
         e.name == "native_ao_quality" || e.name == "native_ao_samples" || e.name == "ao_mode" || e.name == "native_upscaler" ||
         e.name == "present_effect" || e.name == "resolution_scale" || e.name == "draw_resolution_scale_x" ||

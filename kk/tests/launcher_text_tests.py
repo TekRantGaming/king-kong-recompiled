@@ -28,7 +28,7 @@ def fail(message):
 table_text = ''
 for name in ('launcher_text_table.inc', 'debug_overlay_text_table.inc', 'benchmark_text_table.inc',
              'hdr_text_table.inc', 'launcher_layout_text_table.inc', 'workshop_text_table.inc',
-             'artbook_text_table.inc'):
+             'artbook_text_table.inc', 'mods_text_table.inc'):
     table_text += (src / name).read_text(encoding='utf-8') + '\n'
 STRING = r'"((?:[^"\\]|\\.)*)"'
 entries = {}
@@ -313,6 +313,25 @@ workshop_strings |= {'Workshop', 'Download', 'View on GitHub', 'Scroll', 'Select
 if len(workshop_strings) < 14:
     fail(f'J8: only {len(workshop_strings)} Workshop strings found')
 strings |= workshop_strings
+# Task 200: the Kong mods row (workshop_mods.cpp): every string it draws, in five languages, no dashes; the row
+# replaced "Coming soon"; the two built-in mods ship (mods-builtin) and MODDING.md exists.
+mods_cpp = (src / 'workshop_mods.cpp').read_text(encoding='utf-8')
+mods_strings = set(re.findall(r'(?<![A-Za-z_])[TF]\("([^"]+)"', mods_cpp))
+mods_strings |= set(re.findall(r'\{Action::k[A-Za-z]+, "([^"]+)"\}', mods_cpp))
+if len(mods_strings) < 35:
+    fail(f'task 200: only {len(mods_strings)} Kong mods strings found')
+strings |= mods_strings
+if 'Coming soon' in workshop_cpp or 'KongMods' not in workshop_cpp:
+    fail('task 200: the Workshop still shows Coming soon instead of the Kong mods row')
+for builtin in ('hardcore', 'cel-shading'):
+    if not (root / 'mods-builtin' / builtin / 'mod.toml').exists():
+        fail(f'task 200: built-in mod {builtin} missing')
+if not (root.parent / 'MODDING.md').exists():
+    fail('task 200: MODDING.md missing')
+else:
+    guide = (root.parent / 'MODDING.md').read_text(encoding='utf-8')
+    if '—' in guide or '–' in guide:
+        fail('task 200: dash in MODDING.md')
 if 'e.push_back({"Workshop", true, [this] { GoTo(kWorkshop); }});' not in (src / 'launcher.cpp').read_text(encoding='utf-8'):
     fail('J8: no Workshop entry on Home')
 # Beta 7: Extras > Artbook (artbook.cpp, its Extras row and the quiet download in launcher.cpp): every string it

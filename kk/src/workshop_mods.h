@@ -1,0 +1,48 @@
+// Task 200 (Beta 7): the Workshop's "Kong mods" row. Every mod found in <user data>/mods and the built-ins in
+// <program folder>/mods-builtin is a tile (picture or a plain panel, name, author, version, Built-in / On /
+// Off badges); selecting one opens its page: description, what it changes, problems and conflicts, Enable /
+// Disable and its place in the load order (Load earlier / Load later). The choice is the saved setting kk_mods
+// (mods.h); the game applies it at its next start. Folders are read on a worker thread.
+
+#pragma once
+
+#include <filesystem>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include <imgui.h>
+
+#include "launcher_ui.h"
+
+namespace rex::ui {
+class ImmediateDrawer;
+}
+
+namespace kk {
+
+class KongMods {
+ public:
+  KongMods(rex::ui::ImmediateDrawer* drawer, std::filesystem::path user_dir, std::filesystem::path config_path);
+  ~KongMods();
+  KongMods(const KongMods&) = delete;
+  KongMods& operator=(const KongMods&) = delete;
+
+  // The row between p0 and p1 on the Workshop's tile page. `focused`: the row has the focus (left/right move
+  // along it, A opens the mod). Returns true when the mouse took the focus to this row.
+  bool DrawRow(ImDrawList* dl, ImVec2 p0, ImVec2 p1, const ui::Metrics& m, ui::Input& in, bool active, bool focused);
+  // A mod's page is open.
+  bool InDetail() const;
+  void DrawDetail(ImDrawList* dl, ImVec2 p0, ImVec2 p1, const ui::Metrics& m, ui::Input& in, bool active);
+  // From a mod's page back to the row (true); false when no page is open.
+  bool Back();
+  std::vector<ui::Prompt> Prompts(bool focused) const;
+  // Developer steps (workshop:mods:<command>): state, open:<n>, openid:<id>, toggle, earlier, later, rescan, tile:<n>.
+  void Dev(const std::string& command);
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
+
+}  // namespace kk

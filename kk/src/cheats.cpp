@@ -50,6 +50,10 @@
 #include "play_internal.h"
 #include "settings.h"
 
+namespace kk::hardcore {
+void Frame(uint8_t* base);  // hardcore.cpp: every frame (the input poll)
+}
+
 namespace kk {
 namespace {
 
@@ -289,6 +293,7 @@ REX_HOOK_RAW(sub_8272C320) {
   __imp__sub_8272C320(ctx, base);
   if (REXCVAR_GET(kk_cheats)) kk::WatchLoadout(base);
   kk::WatchChanges(base);
+  kk::hardcore::Frame(base);
 #if defined(KK_DEV_TOOLS)
   kk::DevGunfire(base);
 #endif

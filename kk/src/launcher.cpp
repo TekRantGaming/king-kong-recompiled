@@ -4926,7 +4926,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   // Job J8: the Workshop page (workshop.cpp), between the top bar and the prompts.
   void DrawWorkshop(ImDrawList* dl) {
-    if (!workshop_) workshop_ = std::make_unique<Workshop>(immediate_, paths_.user_dir);
+    if (!workshop_) workshop_ = std::make_unique<Workshop>(immediate_, paths_.user_dir, paths_.config_path);
     const float s = S();
     workshop_->Draw(dl, ImVec2(o_.x + Margin(), o_.y + 96 * s), ImVec2(o_.x + w_ - Margin(), o_.y + h_ - 96 * s), m_,
                     input_, !modal_.open);

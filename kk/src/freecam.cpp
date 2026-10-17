@@ -21,6 +21,9 @@
 REXCVAR_DEFINE_BOOL(kk_freecam, true, "KK/Debug",
                     "F9 free camera and F10 HUD toggle (on by default since 17 Oct, owner decision)")
     .debug_only();
+REXCVAR_DEFINE_BOOL(kk_hide_hud, false, "KK",
+                    "Hide the game's HUD all the time (saved; the Hardcore mod). F10 still hides the rest for "
+                    "screenshots. The weapon in Jack's hands stays");
 
 namespace kk::freecam {
 namespace {
@@ -269,6 +272,7 @@ void Install(rex::ui::ImGuiDrawer *d, rex::ui::Window *w) {
 }
 bool Active() { return active.load(); }
 bool HideHud() { return hidden.load() && InPlay(); }
+bool HideGameHud() { return (hidden.load() || REXCVAR_GET(kk_hide_hud)) && InPlay(); }
 void Pad(uint32_t user, uint8_t *state, bool connected) {
   if (user >= pads.size()) {
     std::memset(state + 4, 0, 12);
@@ -400,12 +404,18 @@ bool OverrideView(uint8_t *base, uint32_t view, uint32_t caller,
 // persistent HUD elements immediately.
 namespace {
 thread_local bool hide_screen_list = false;
+// One log line the first time a HUD draw is left out in a run (tests check kk_hide_hud with it).
+void NoteHudHidden() {
+  static std::atomic<bool> noted{false};
+  if (!noted.exchange(true))
+    REXLOG_INFO("KK freecam: game HUD hidden ({})", REXCVAR_GET(kk_hide_hud) ? "kk_hide_hud" : "F10");
+}
 }
 REX_EXTERN(__imp__sub_827FA2B0);
 REX_HOOK_RAW(sub_827FA2B0) {
   const bool old = hide_screen_list;
   hide_screen_list =
-      old || (kk::freecam::HideHud() && uint32_t(ctx.lr) == 0x82873AB0);
+      old || (kk::freecam::HideGameHud() && uint32_t(ctx.lr) == 0x82873AB0);
   __imp__sub_827FA2B0(ctx, base);
   hide_screen_list = old;
 }
@@ -413,6 +423,7 @@ REX_HOOK_RAW(sub_827FA2B0) {
   REX_EXTERN(__imp__sub_##addr);                                               \
   REX_HOOK_RAW(sub_##addr) {                                                   \
     if (hide_screen_list) {                                                    \
+      NoteHudHidden();                                                         \
       ctx.r3.u64 = 1;                                                          \
       return;                                                                  \
     }                                                                          \
@@ -440,7 +451,8 @@ KK_HUD_LEAF(827C40E8)
 #undef KK_HUD_LEAF
 REX_EXTERN(__imp__sub_827C6660);
 REX_HOOK_RAW(sub_827C6660) {
-  if (hide_screen_list || kk::freecam::Active())
-    return; // first-person weapon pass
+  // First-person weapon pass: hidden by F10 (screenshots) and the free camera, not by kk_hide_hud.
+  if ((hide_screen_list && kk::freecam::HideHud()) || kk::freecam::Active())
+    return;
   __imp__sub_827C6660(ctx, base);
 }

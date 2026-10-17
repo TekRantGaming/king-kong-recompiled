@@ -93,6 +93,9 @@ cp "$BIN/king_kong" "$APPDIR/usr/bin/"
 find "$BIN" -maxdepth 1 -name '*.so*' -exec cp -a {} "$APPDIR/usr/bin/" \;
 # The button prompt pictures (kk_button_prompts and the launcher) live beside the program.
 cp -a "$BIN/glyphs" "$APPDIR/usr/bin/"
+# Task 200: the built-in Kong mods (read from beside the program) and the modding guide.
+[ -d "$BIN/mods-builtin" ] && cp -a "$BIN/mods-builtin" "$APPDIR/usr/bin/"
+[ -f "$BIN/MODDING.md" ] && cp -a "$BIN/MODDING.md" "$APPDIR/usr/bin/"
 # The SDK's own copies win: the build only refreshes the ones beside the binary when it relinks.
 for lib in librexruntime.so libTracyClient.so; do
   [ ! -e "$SDK/lib/$lib" ] || cp -a "$SDK/lib/$lib" "$APPDIR/usr/bin/"

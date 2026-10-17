@@ -19,6 +19,8 @@ struct TexturePackEntry {
   uint32_t width = 0, height = 0;
   bool Matches(const HostTexturePlan& plan) const;
 };
+// The folder setting can list several packs separated by '|' (later packs win for the same original).
+std::vector<std::string> SplitPackFolders(const std::string& folders);
 struct TexturePackManifest {
   static constexpr size_t kMaxEntries = 32768;
   std::vector<TexturePackEntry> entries;
