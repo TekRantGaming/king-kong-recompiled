@@ -762,7 +762,7 @@ void GameRenderer::UpscaleMotionPass(nvrhi::ICommandList* cl, HostTarget* depth_
       nvrhi::FramebufferInfo fbi;
       BuildPipelineDesc(r, mvs, u.object_ps, pd, fbi);
       if (!pd.bindingLayouts.empty()) pd.bindingLayouts[0] = u.motion_layout;
-      pipeline = GetPipeline(pd, fbi, key, true, true);
+      pipeline = GetPipeline(pd, fbi, key, PipelineDemand::kOptional);
     }
     if (!pipeline) {
       ++u.stats.motion_waiting;

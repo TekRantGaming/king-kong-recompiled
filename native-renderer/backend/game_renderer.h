@@ -52,6 +52,7 @@
 #include "backend/frame_log.h"
 #include "backend/game_upscale.h"
 #include "backend/pipeline_cache.h"
+#include "backend/pipeline_demand.h"
 #include "backend/resource_preload.h"
 #include "backend/resource_preload_bundle.h"
 #include "kknr/texture_pack.h"
@@ -128,18 +129,21 @@ class GameRenderer {
     bool effect_buffers = true;  // identified small post targets follow output; false: guest sizes
     uint32_t sharpness = 0;  // 0 off, 1/2/3 CAS low/medium/high
     // Create the game's pipelines on worker threads. pipeline_wait controls whether
-    // a draw waits for its pending pipeline or may be skipped after the frame budget.
+    // a draw waits for its pending pipeline or may be skipped (pipeline_demand.h).
     bool async_pipelines = true;
-    // Wait for a pending draw pipeline by default so first-use surfaces do not flash or vanish.
-    // False opts into skipping draws after the frame budget. Only with async_pipelines.
-    bool pipeline_wait = true;
-    // Without pipeline_wait: the time a frame may spend waiting for pipelines being made before
-    // its draws are skipped (milliseconds, all draws of the frame together; 0 skips at once).
-    // The workers usually finish a pipeline in a few milliseconds, so most new pipelines are
-    // drawn in their first frame, and the frame the game leaves on screen during a load (the
-    // V-Rex loading screen) is complete, while a burst of hundreds at a chapter start still
-    // costs one long frame at most rather than a stall.
-    double pipeline_wait_budget_ms = 30.0;
+    // True: every draw waits for its pending pipeline (before task 179 the default; now
+    // KK_DEV_PIPELINE_BLOCK=1 or --native_pipeline_wait=true). False: a frame never waits for a
+    // scene draw's pipeline: the draw is skipped until a worker has made it (task 179). Only with
+    // async_pipelines.
+    bool pipeline_wait = false;
+    // Without pipeline_wait: draws later draws depend on (ClassifyPipelineMiss: depth/stencil-only,
+    // stencil writes, screen-space passes and fades, frames while the game loads) still wait, so a
+    // frame is never left with a wrong picture (the V-Rex fade, task 011). False: any draw may be
+    // skipped (the pre-task-179 skip path; tests).
+    bool pipeline_wait_for_dependencies = true;
+    // Without pipeline_wait: the time a frame may spend waiting for skippable draws' pipelines before
+    // they are skipped (milliseconds, all draws of the frame together; 0 skips at once, the default).
+    double pipeline_wait_budget_ms = 0.0;
     // The driver's pipeline cache (SetDriverPipelineCache) is saved when the workers run out of work
     // with at least this many new pipelines made since the last save, or with any after
     // driver_cache_save_seconds. A rebuild (the file was another driver's) is saved when the workers
@@ -204,6 +208,13 @@ class GameRenderer {
     uint64_t pipeline_waits = 0;     // draws that waited for their pipeline (pipeline_wait)
     double pipeline_wait_ms = 0;
     uint64_t pipeline_budget_waits = 0;  // draws drawn after waiting within pipeline_wait_budget_ms
+    // Task 179: waits by why the draw had to wait (PipelineMissClass; kScene = within the budget), and
+    // the pipelines skipped draws missed: how many, and how long (frames, ms) until they were drawn.
+    std::array<uint64_t, size_t(PipelineMissClass::kCount)> pipeline_waits_by_class{};
+    uint64_t pipelines_missed = 0;       // pipelines whose draws were skipped
+    uint64_t pipelines_missed_ready = 0;  // of those, made and drawn since
+    uint64_t missed_frames_total = 0, missed_frames_max = 0;  // frames in which its draws were skipped
+    double missed_ms_total = 0, missed_ms_max = 0;  // first skip to the request that found it ready
     uint64_t dynamic_vertex_buffers = 0;  // vertex buffers turned dynamic
     uint64_t dynamic_vertex_bytes = 0;    // bytes their draws uploaded
     uint64_t cache_recorded = 0;     // descriptions appended to the pipeline cache file
@@ -642,24 +653,39 @@ class GameRenderer {
   uint64_t invalidation_bytes_ = 0;
 
   // ---- pipelines
-  // async: the game's draws (may return null while the worker creates it);
-  // the built-in passes create theirs at once.
+  // The request / ready / fallback interface (pipeline_demand.h): the pipeline when it is made, else
+  // kNow makes it here (the built-in passes), kMustDraw waits for a worker, kMaySkip and kOptional
+  // queue it and return null (the caller skips the draw or keeps its original pass).
   nvrhi::IGraphicsPipeline* GetPipeline(const nvrhi::GraphicsPipelineDesc& desc,
-                                        nvrhi::IFramebuffer* framebuffer, uint64_t key, bool async = false) {
-    return GetPipeline(desc, framebuffer->getFramebufferInfo(), key, async);
+                                        nvrhi::IFramebuffer* framebuffer, uint64_t key,
+                                        PipelineDemand demand = PipelineDemand::kNow) {
+    return GetPipeline(desc, framebuffer->getFramebufferInfo(), key, demand);
   }
-  // optional: an extra pass's pipeline (the upscalers' motion pass): made on the workers like a draw's,
-  // but never waited for and never counted as stutter.
   nvrhi::IGraphicsPipeline* GetPipeline(const nvrhi::GraphicsPipelineDesc& desc,
-                                        const nvrhi::FramebufferInfo& framebuffer, uint64_t key, bool async = false,
-                                        bool optional = false);
+                                        const nvrhi::FramebufferInfo& framebuffer, uint64_t key,
+                                        PipelineDemand demand = PipelineDemand::kNow,
+                                        PipelineMissClass miss_class = PipelineMissClass::kScene);
+  // Finished pipelines (the draws' and the prewarm's) join pipelines_; pipeline_mutex_ held, render thread.
+  void DrainDonePipelinesLocked();
+  // The class a draw's missing pipeline is asked for with (Options::pipeline_wait and friends).
+  PipelineMissClass DrawMissClass(const PipelineRecord& record) const;
+  // Task 179: pipelines skipped draws are missing (render thread): since when, for the time-to-ready.
+  struct MissingPipeline {
+    uint64_t first_frame = 0, last_frame = 0;
+    uint64_t frames = 1;  // frames in which a draw of it was skipped (how long the object was missing)
+    std::chrono::steady_clock::time_point first;
+  };
+  std::unordered_map<uint64_t, MissingPipeline> missing_pipelines_;
+  void LogPipelineMisses(bool final);
+  Stats miss_log_previous_{};
   void BuildPipelineDesc(const PipelineRecord& record, nvrhi::IShader* vs, nvrhi::IShader* ps,
                          nvrhi::GraphicsPipelineDesc& desc, nvrhi::FramebufferInfo& framebuffer) const;
   bool IsPending(uint64_t key);
   // NR_PIPELINE_LOG=<csv> (diagnostic, task 171): one row per pipeline a draw or pass asked for that
   // was not made yet (made on demand during play, or a prewarm job it waited for), with the wait and
   // the draw's record when there is one.
-  void LogPipelineDemand(uint64_t key, const char* kind, double ms, bool made);
+  void LogPipelineDemand(uint64_t key, const char* kind, double ms, bool made,
+                         PipelineMissClass miss_class = PipelineMissClass::kScene);
   FILE* pipeline_log_ = nullptr;
   bool pipeline_log_checked_ = false;
   const PipelineRecord* demand_record_ = nullptr;  // the draw's record while Draw asks for its pipeline

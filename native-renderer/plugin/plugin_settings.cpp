@@ -285,6 +285,8 @@ GameSettings ReadGameSettings(bool vulkan) {
   game.debug = uint32_t(REXCVAR_GET(native_debug));
   game.async_pipelines = REXCVAR_GET(native_async_pipelines);
   game.pipeline_wait = REXCVAR_GET(native_pipeline_wait);
+  // Developer A/B (task 179): KK_DEV_PIPELINE_BLOCK=1 = every draw waits for its pipeline (the old path).
+  if (const char* block = std::getenv("KK_DEV_PIPELINE_BLOCK"); block && *block == '1') game.pipeline_wait = true;
   game.dynamic_vertex_buffers = REXCVAR_GET(native_dynamic_vertex_buffers);
   game.render_thread = REXCVAR_GET(native_render_thread);
   game.render_thread_presents = uint32_t(std::clamp<int32_t>(REXCVAR_GET(native_render_thread_presents), 1, 4));

@@ -7,12 +7,17 @@
 #include "benchmark_data.h"
 #include "benchmark_writer.h"
 #include "benchmark_route.h"
+#include "art.h"
 
 #include <atomic>
 #include <bit>
 #include <chrono>
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <string>
+#include <vector>
 #include <fstream>
 #include <mutex>
 #include <thread>
@@ -733,6 +738,35 @@ void Frame(double dt, double scaled_dt, const uint8_t* base) {
   ObserveReplayPosition(input_seconds, base);
 }
 
+#if defined(KK_DEV_TOOLS)
+// KK_DEV_BENCH_SHOTS="<chapter>:<from>-<to>[,...]" (task 179): every guest frame of the route between those
+// game seconds of that chapter (1-based) saved as bench_c<chapter>_<ms> in KK_DEV_SHOTS_DIR, so runs can
+// be compared frame by frame at the same game time.
+void BenchShots(size_t chapter, double seconds) {
+  struct Window { size_t chapter; double from, to; };
+  static const std::vector<Window> windows = [] {
+    std::vector<Window> w;
+    const char* v = std::getenv("KK_DEV_BENCH_SHOTS");
+    for (std::string all = v ? v : "", item; !all.empty();) {
+      const size_t comma = all.find(',');
+      item = all.substr(0, comma);
+      all = comma == std::string::npos ? "" : all.substr(comma + 1);
+      Window x{};
+      if (std::sscanf(item.c_str(), "%zu:%lf-%lf", &x.chapter, &x.from, &x.to) == 3) w.push_back(x);
+    }
+    return w;
+  }();
+  for (const Window& w : windows) {
+    if (w.chapter != chapter + 1 || seconds < w.from || seconds > w.to) continue;
+    const char* dir = std::getenv("KK_DEV_SHOTS_DIR");
+    art::CaptureFrame(std::filesystem::path(dir && *dir ? dir : ".") /
+                      ("bench_c" + std::to_string(chapter + 1) + "_" + std::to_string(int(seconds * 1000 + 0.5)) +
+                       art::kDevCaptureExtension));
+    return;
+  }
+}
+#endif
+
 void GuestSwap() {
   if (phase != Phase::kRunning) return;
   if (recording_route) {
@@ -747,6 +781,9 @@ void GuestSwap() {
   const double seconds = game_seconds.load();
   const size_t chapter = chapter_index.load();
   const int pass = pass_index.load();
+#if defined(KK_DEV_TOOLS)
+  BenchShots(chapter, seconds);
+#endif
   {
     std::lock_guard lock(mutex);
     const bool was_measuring = measuring.load();

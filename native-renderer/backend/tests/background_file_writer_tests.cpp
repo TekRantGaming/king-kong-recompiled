@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <thread>
 #include <vector>
 
 static int cases = 0;
@@ -119,6 +120,22 @@ int main() {
     const auto t = std::chrono::steady_clock::now();
     w.Replace(b, Bytes("sync"));
     Check(MsSince(t) >= 140 && ReadAll(b) == "sync", "synchronous write on the caller");
+  }
+  // Task 179: the exit task (the driver's pipeline cache save) runs inside FlushAll's bounded wait, every time.
+  {
+    BackgroundFileWriter w;
+    int runs = 0;
+    w.set_exit_task([&] {
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      ++runs;
+    });
+    Check(BackgroundFileWriter::FlushAll(std::chrono::milliseconds(3000)) && runs == 1, "exit task inside FlushAll");
+    Check(BackgroundFileWriter::FlushAll(std::chrono::milliseconds(3000)) && runs == 2, "exit task again");
+    w.set_exit_task({});
+    Check(BackgroundFileWriter::FlushAll(std::chrono::milliseconds(3000)) && runs == 2, "cleared exit task");
+    w.set_exit_task([] { std::this_thread::sleep_for(std::chrono::milliseconds(400)); });
+    Check(!BackgroundFileWriter::FlushAll(std::chrono::milliseconds(50)), "exit task bounded by the timeout");
+    w.set_exit_task({});
   }
   std::filesystem::remove_all(dir, ec);
   std::printf("nr_background_file_writer_tests: %d cases passed\n", cases);

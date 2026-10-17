@@ -569,6 +569,9 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
       renderer->options().effect_buffers = game.effect_buffers;
       renderer->options().sharpness = game.sharpness;
       renderer->options().pipeline_wait_budget_ms = game.pipeline_wait_budget_ms;
+      REXLOG_INFO("rexgpu-native: pipelines not ready: {}", !game.async_pipelines ? "made on the draw thread"
+                  : game.pipeline_wait ? "every draw waits (native_pipeline_wait / KK_DEV_PIPELINE_BLOCK=1)"
+                                       : "scene draws skipped until ready, dependent draws wait (task 179)");
       renderer->SetFrameLog(FrameLogConfig::Parse(game.frame_log.c_str()));
       renderer->options().ao_settings = game.ao_settings;
       rex::memory::Memory* memory = memory_;
