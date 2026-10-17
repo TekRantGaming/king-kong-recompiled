@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <limits>
 #include <cstdio>
+#include <filesystem>
 #include <span>
 #include <string>
 
@@ -60,6 +61,25 @@ inline int64_t RelativePts(int64_t pts, int64_t first) {
   if (pts <= first) return 0;
   const uint64_t delta = uint64_t(pts) - uint64_t(first);
   return int64_t(std::min<uint64_t>(delta, std::numeric_limits<int64_t>::max()));
+}
+
+// The movie file in the folder. Windows file names ignore case; Linux ones do not, and the downloaded
+// clips' names are not consistent (BK_9bb9.mp4 for world 9BB9), so the name is matched ignoring ASCII case.
+inline std::filesystem::path FindMovie(const std::filesystem::path& folder, const std::string& name) {
+  std::error_code ec;
+  if (folder.empty() || name.empty()) return {};
+  const auto exact = folder / name;
+  if (std::filesystem::is_regular_file(exact, ec)) return exact;
+  auto lower = [](unsigned char c) { return c >= 'A' && c <= 'Z' ? char(c - 'A' + 'a') : char(c); };
+  for (std::filesystem::directory_iterator it(folder, ec), end; !ec && it != end; it.increment(ec)) {
+    const std::string other = it->path().filename().string();
+    if (other.size() != name.size()) continue;
+    bool same = true;
+    for (size_t i = 0; same && i < name.size(); ++i) same = lower(other[i]) == lower(name[i]);
+    std::error_code type_ec;
+    if (same && it->is_regular_file(type_ec)) return it->path();
+  }
+  return {};
 }
 
 struct FitRect { float x, y, w, h; };

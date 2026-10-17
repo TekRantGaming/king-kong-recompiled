@@ -2647,3 +2647,29 @@ POSSIBILITY OF SUCH DAMAGE.
 The views and conclusions contained in the software and documentation are
 those of the authors and should not be interpreted as representing official
 policies, either expressed or implied, of the copyright holders.
+
+------------------------------------------------------------------------------
+FFmpeg 4.4 (Linux only: plays the restored PS2 cutscenes)
+https://ffmpeg.org/
+------------------------------------------------------------------------------
+
+The Linux version uses FFmpeg's MP4 demuxer, H.264 and AAC decoders, libswscale
+and libswresample, built without any GPL or non-free parts, so they are covered
+by the GNU Lesser General Public License version 2.1 or later. They are the
+separate, dynamically linked files libavformat-kk.so.58, libavcodec-kk.so.58,
+libavutil-kk.so.56, libswscale-kk.so.5 and libswresample-kk.so.3 beside the
+program, and you may replace them with your own build of the same FFmpeg
+version and options. The full licence text, the exact source revision and the
+configure options are in usr/share/licenses/ffmpeg (COPYING.LGPLv2.1 and
+SOURCE.txt) inside the AppImage; the build script is tools/build_ffmpeg_linux.sh
+in the port's source. The source is the FFmpeg copy in the ReXGlue SDK
+(thirdparty/FFmpeg, https://github.com/rexglue/rexglue-sdk), the same FFmpeg 4.4
+that the official releases at https://ffmpeg.org/releases/ provide.
+
+FFmpeg is free software; you can redistribute it and/or modify it under the
+terms of the GNU Lesser General Public License as published by the Free
+Software Foundation; either version 2.1 of the License, or (at your option) any
+later version. FFmpeg is distributed in the hope that it will be useful, but
+WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+FITNESS FOR A PARTICULAR PURPOSE. See the GNU Lesser General Public License for
+more details.

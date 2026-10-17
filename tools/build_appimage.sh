@@ -8,6 +8,10 @@
 #   tools/build_appimage.sh [version]
 #
 # Output: dist/KingKong-<version>-linux-x86_64.AppImage
+#
+# PS2 cutscene playback needs the small LGPL FFmpeg libraries (tools/build_ffmpeg_linux.sh):
+# KK_FFMPEG_DIR=<their install folder>, or KK_FFMPEG_SRC=<an FFmpeg 4.4 source tree, e.g. the ReXGlue SDK's
+# thirdparty/FFmpeg> to build them here. Without either, the AppImage has no PS2 cutscenes.
 set -euo pipefail
 
 VERSION="${1:-dev}"
@@ -32,7 +36,7 @@ fi
 sudo apt-get install -y g++ cmake ninja-build pkg-config file unzip rsync desktop-file-utils \
   libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxinerama-dev libxss-dev \
   libxkbcommon-dev libwayland-dev libdecor-0-dev libegl-dev libgl-dev libvulkan-dev \
-  libasound2-dev libpulse-dev libpipewire-0.3-dev libdbus-1-dev libudev-dev libgtk-3-dev
+  libasound2-dev libpulse-dev libpipewire-0.3-dev libdbus-1-dev libudev-dev libgtk-3-dev nasm
 fi
 
 echo "== Source"
@@ -63,10 +67,20 @@ elif [ "$(cat "$SDK/.kk-sdk-source" 2>/dev/null)" != "$WANT" ]; then
   echo "$WANT" > "$SDK/.kk-sdk-source"
 fi
 
+# The PS2 cutscenes' decoder libraries (LGPL FFmpeg, kk/src/ps2_movie_decoder_ffmpeg.cpp).
+FFMPEG_DIR="${KK_FFMPEG_DIR:-}"
+if [ -z "$FFMPEG_DIR" ] && [ -n "${KK_FFMPEG_SRC:-}" ]; then
+  echo "== FFmpeg for the PS2 cutscenes from $KK_FFMPEG_SRC"
+  FFMPEG_DIR="$WORK/ffmpeg-kk"
+  bash "$ROOT/tools/build_ffmpeg_linux.sh" "$KK_FFMPEG_SRC" "$FFMPEG_DIR"
+fi
+[ -n "$FFMPEG_DIR" ] || echo "warning: KK_FFMPEG_DIR/KK_FFMPEG_SRC not set: this AppImage cannot play the PS2 cutscenes" >&2
+
 echo "== Build"
 cd "$WORK/kk"
 # KK_DEV_TOOLS=ON builds the developer test aids in (for testing only, never a release).
-cmake --preset kk-linux-release -DKK_DEV_TOOLS="${KK_DEV_TOOLS:-OFF}" -DNR_DXC_DIR="${KK_DXC_DIR:-}"
+cmake --preset kk-linux-release -DKK_DEV_TOOLS="${KK_DEV_TOOLS:-OFF}" -DNR_DXC_DIR="${KK_DXC_DIR:-}" \
+  -DKK_FFMPEG_DIR="$FFMPEG_DIR"
 cmake --build --preset kk-linux-release -- -k 0
 BIN="$WORK/kk/out/build/kk-linux-release"
 
@@ -106,6 +120,14 @@ else
   echo "warning: KK_RESOURCE_LIST not set: no kkresources.list, chapter resources are learned in play" >&2
 fi
 cp "$ROOT/docs/images/icon.png" "$APPDIR/king_kong.png"
+# The FFmpeg libraries came beside the binary with the *.so* above; their licence and source note go here.
+if [ -n "$FFMPEG_DIR" ]; then
+  mkdir -p "$APPDIR/usr/share/licenses"
+  cp -a "$FFMPEG_DIR/share/licenses/ffmpeg" "$APPDIR/usr/share/licenses/"
+else
+  rm -f "$APPDIR/usr/bin/"lib*-kk.so*  # left beside the binary by an earlier build with FFmpeg
+fi
+cp "$ROOT/kk/THIRD-PARTY-NOTICES.txt" "$APPDIR/usr/bin/"
 if [ -n "${KK_DXC_DIR:-}" ]; then
   mkdir -p "$APPDIR/usr/share/licenses/dxc"
   find "$KK_DXC_DIR" -maxdepth 1 -iname '*LICENSE*' -exec cp {} "$APPDIR/usr/share/licenses/dxc/" \;
@@ -147,6 +169,13 @@ for lib in king_kong librexgpu-native.so libdxcompiler.so; do
   DEPS="$(LD_LIBRARY_PATH="$APPDIR/usr/bin:$APPDIR/usr/lib" ldd "$APPDIR/usr/bin/$lib")"
   if grep 'not found' <<< "$DEPS"; then exit 1; fi
 done
+if [ -n "$FFMPEG_DIR" ]; then
+  # The cutscene decoder must use the bundled LGPL build, never a system FFmpeg.
+  DEPS="$(LD_LIBRARY_PATH="$APPDIR/usr/bin:$APPDIR/usr/lib" ldd "$APPDIR/usr/bin/king_kong")"
+  for lib in libavformat-kk libavcodec-kk libavutil-kk libswscale-kk libswresample-kk; do
+    grep -q "$lib.so.[0-9]* => $APPDIR/usr/bin/" <<< "$DEPS" || { echo "error: $lib is not the bundled one" >&2; exit 1; }
+  done
+fi
 
 echo "== AppImage"
 TOOL="$WORK/appimagetool-x86_64.AppImage"

@@ -1,6 +1,8 @@
 #include "ps2_movies_logic.h"
 
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <map>
 #include <vector>
@@ -69,5 +71,22 @@ int main() {
   CHECK(RelativePts(1666666, 1250000) == 416666);
   CHECK(RelativePts(1000000, 1250000) == 0);
   CHECK(RelativePts(INT64_MAX, INT64_MIN) == INT64_MAX);
+  {
+    // The clip is found whatever the case of its name (Linux file names are case-sensitive).
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "kk-ps2-movie-find-test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / "BK_ABCD.mp4");  // a folder with the name is not a movie
+    std::ofstream(dir / "BK_9bb9.mp4") << "x";
+    std::ofstream(dir / "BK_1234.mp4") << "x";
+    CHECK(fs::equivalent(FindMovie(dir, "BK_9BB9.mp4"), dir / "BK_9bb9.mp4"));  // Windows: either spelling
+    CHECK(FindMovie(dir, "BK_1234.mp4").filename() == "BK_1234.mp4");
+    CHECK(FindMovie(dir, "BK_ABCD.mp4").empty());
+    CHECK(FindMovie(dir, "BK_5678.mp4").empty());
+    CHECK(FindMovie(dir / "missing", "BK_1234.mp4").empty());
+    CHECK(FindMovie({}, "BK_1234.mp4").empty());
+    fs::remove_all(dir, ec);
+  }
   std::cout << checks << " PS2 movie logic checks passed\n";
 }

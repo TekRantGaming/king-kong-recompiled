@@ -1,8 +1,11 @@
 #include "ps2_movies.h"
 #include "freecam.h"
 #include <rex/filesystem.h>
+#include "ps2_movie_decoder.h"
 #include "ps2_movies_logic.h"
 
+// The restored PS2 cutscenes' player, the same on Windows and Linux: the decoder is Media Foundation on
+// Windows and the bundled LGPL FFmpeg on Linux (ps2_movie_decoder.h).
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -11,18 +14,13 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
-#include <mfapi.h>
-#include <mfidl.h>
-#include <mfreadwrite.h>
-#include <propvarutil.h>
 #include <shlobj.h>
 #include <shobjidl.h>
 #include <wrl/client.h>
-#pragma comment(lib, "mfplat.lib")
-#pragma comment(lib, "mfreadwrite.lib")
-#pragma comment(lib, "mfuuid.lib")
-#pragma comment(lib, "propsys.lib")
 #pragma comment(lib, "shell32.lib")
+#else
+#include <cstdio>
+#endif
 
 #include <SDL3/SDL.h>
 #include <imgui.h>
@@ -31,7 +29,9 @@
 #include <rex/ui/imgui_dialog.h>
 #include <rex/ui/immediate_drawer.h>
 
+#include <algorithm>
 #include <atomic>
+#include <cfloat>
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
@@ -53,15 +53,9 @@
 
 namespace kk::movies {
 namespace {
-using Microsoft::WRL::ComPtr;
-constexpr DWORD kVideo = DWORD(MF_SOURCE_READER_FIRST_VIDEO_STREAM);
-constexpr DWORD kAudio = DWORD(MF_SOURCE_READER_FIRST_AUDIO_STREAM);
-constexpr int kRate = 48000, kChannels = 2, kFrameBytes = 4;
+constexpr int kRate = kAudioRate, kChannels = kAudioChannels;
 
 double Now() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
-void Check(HRESULT hr, const char* what) {
-  if (FAILED(hr)) throw std::runtime_error(std::string(what) + " HRESULT=" + std::to_string(uint32_t(hr)));
-}
 uint32_t Word(const uint8_t* base, uint32_t at) {
   return uint32_t(base[at]) << 24 | uint32_t(base[at+1]) << 16 | uint32_t(base[at+2]) << 8 | base[at+3];
 }
@@ -77,7 +71,7 @@ struct Job {
   std::filesystem::path file;
   std::deque<Frame> frames;
   std::vector<uint8_t> audio;
-  UINT32 width = 0, height = 0;
+  uint32_t width = 0, height = 0;
   float pixel_aspect = 1;
   double duration = 0;
   int decoded = 0;
@@ -96,111 +90,6 @@ void End(const std::shared_ptr<Job>& job, const char* why) {
   }
 }
 
-ComPtr<IMFSourceReader> Reader(const std::filesystem::path& path, bool video) {
-  ComPtr<IMFAttributes> attributes;
-  Check(MFCreateAttributes(&attributes, 2), "reader attributes");
-  if (video) {
-    Check(attributes->SetUINT32(MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, TRUE), "video resizing");
-  }
-  ComPtr<IMFSourceReader> reader;
-  Check(MFCreateSourceReaderFromURL(path.c_str(), attributes.Get(), &reader), "open movie");
-  Check(reader->SetStreamSelection(DWORD(MF_SOURCE_READER_ALL_STREAMS), FALSE), "select streams");
-  Check(reader->SetStreamSelection(video ? kVideo : kAudio, TRUE), "select stream");
-  ComPtr<IMFMediaType> type;
-  Check(MFCreateMediaType(&type), "media type");
-  Check(type->SetGUID(MF_MT_MAJOR_TYPE, video ? MFMediaType_Video : MFMediaType_Audio), "major type");
-  Check(type->SetGUID(MF_MT_SUBTYPE, video ? MFVideoFormat_RGB32 : MFAudioFormat_PCM), "subtype");
-  if (video) {
-    ComPtr<IMFMediaType> native;
-    UINT32 width = 0, height = 0;
-    Check(reader->GetNativeMediaType(kVideo, 0, &native), "native video type");
-    Check(MFGetAttributeSize(native.Get(), MF_MT_FRAME_SIZE, &width, &height), "native video dimensions");
-    if (!width || !height || width > 4096 || height > 4096) throw std::runtime_error("unsupported source dimensions");
-    UINT32 rate_n = 0, rate_d = 0;
-    if (SUCCEEDED(MFGetAttributeRatio(native.Get(), MF_MT_FRAME_RATE, &rate_n, &rate_d)) && rate_n && rate_d)
-      Check(MFSetAttributeRatio(type.Get(), MF_MT_FRAME_RATE, rate_n, rate_d), "unchanged source frame rate");
-    Check(MFSetAttributeSize(type.Get(), MF_MT_FRAME_SIZE, width, height), "unchanged source dimensions");
-  } else {
-    Check(type->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, kChannels), "audio channels");
-    Check(type->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, kRate), "audio rate");
-    Check(type->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16), "audio bits");
-    Check(type->SetUINT32(MF_MT_AUDIO_BLOCK_ALIGNMENT, kFrameBytes), "audio alignment");
-    Check(type->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, kRate * kFrameBytes), "audio byte rate");
-  }
-  Check(reader->SetCurrentMediaType(video ? kVideo : kAudio, nullptr, type.Get()), "decode format");
-  return reader;
-}
-
-// Audio is small (under 3 MB for these clips). Decode it before starting the
-// clock so that 4K video decoding can never starve the soundtrack's queue.
-std::vector<uint8_t> ReadAudio(const std::shared_ptr<Job>& job) {
-  auto reader = Reader(job->file, false);
-  std::vector<uint8_t> pcm;
-  LONGLONG origin = 0;
-  bool have_origin = false;
-  for (int count = 0; count < 32768 && !job->done; ++count) {
-    DWORD flags = 0;
-    LONGLONG pts = 0;
-    ComPtr<IMFSample> sample;
-    Check(reader->ReadSample(kAudio, 0, nullptr, &flags, &pts, &sample), "audio sample");
-    if (flags & MF_SOURCE_READERF_ERROR) throw std::runtime_error("audio decoder error");
-    if (sample) {
-      if (!have_origin) { origin = pts; have_origin = true; }
-      pts = RelativePts(pts, origin);
-      ComPtr<IMFMediaBuffer> buffer;
-      Check(sample->ConvertToContiguousBuffer(&buffer), "audio buffer");
-      BYTE* bytes = nullptr;
-      DWORD length = 0;
-      Check(buffer->Lock(&bytes, nullptr, &length), "lock audio");
-      // Preserve gaps/trim overlaps in the source timestamps.
-      const size_t offset = size_t(std::max<LONGLONG>(0, pts)) * kRate / 10000000 * kFrameBytes;
-      if (offset + length > size_t(kRate) * kFrameBytes * 60) {
-        buffer->Unlock();
-        throw std::runtime_error("soundtrack exceeds the private clip limit (60 s)");
-      }
-      if (offset > pcm.size()) pcm.resize(offset, 0);
-      const size_t skip = std::min<size_t>(length, pcm.size() > offset ? pcm.size() - offset : 0);
-      pcm.insert(pcm.end(), bytes + skip, bytes + length);
-      buffer->Unlock();
-    }
-    if (flags & MF_SOURCE_READERF_ENDOFSTREAM) return pcm;
-  }
-  if (!job->done) throw std::runtime_error("audio sample limit");
-  return {};
-}
-
-Frame Pixels(IMFSample* sample, UINT32 w, UINT32 h, LONG fallback_stride, int64_t pts) {
-  ComPtr<IMFMediaBuffer> buffer;
-  Check(sample->ConvertToContiguousBuffer(&buffer), "video buffer");
-  ComPtr<IMF2DBuffer> two_d;
-  BYTE* scan = nullptr;
-  LONG stride = fallback_stride;
-  bool locked_2d = SUCCEEDED(buffer.As(&two_d)) && SUCCEEDED(two_d->Lock2D(&scan, &stride));
-  DWORD length = 0;
-  if (!locked_2d) {
-    Check(buffer->Lock(&scan, nullptr, &length), "lock video");
-    const uint64_t bytes = uint64_t(std::abs(stride)) * h;
-    if (std::abs(stride) < LONG(w * 4) || bytes > length) {
-      buffer->Unlock();
-      throw std::runtime_error("invalid RGB stride/size");
-    }
-    if (stride < 0) scan += size_t(h-1) * size_t(-stride);
-  }
-  Frame frame;
-  frame.pts = pts;
-  frame.rgba.resize(size_t(w) * h * 4);
-  for (UINT32 y = 0; y < h; ++y) {
-    const BYTE* src = scan + ptrdiff_t(y) * stride;
-    auto* dst = frame.rgba.data() + size_t(y) * w * 4;
-    for (UINT32 x = 0; x < w; ++x) {
-      dst[x*4] = src[x*4+2]; dst[x*4+1] = src[x*4+1];
-      dst[x*4+2] = src[x*4]; dst[x*4+3] = 255;
-    }
-  }
-  if (locked_2d) two_d->Unlock2D(); else buffer->Unlock();
-  return frame;
-}
-
 bool White(const Frame& frame) {
   for (size_t i = 0; i + 3 < frame.rgba.size(); i += 4)
     if (frame.rgba[i] < 250 || frame.rgba[i+1] < 250 || frame.rgba[i+2] < 250) return false;
@@ -208,117 +97,83 @@ bool White(const Frame& frame) {
 }
 
 void Decode(const std::shared_ptr<Job>& job) {
-  const HRESULT com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-  const HRESULT mf = MFStartup(MF_VERSION);
   try {
-    Check(com, "COM"); Check(mf, "Media Foundation startup");
+    // Audio is small (under 3 MB for these clips). Decode it before starting the
+    // clock so that 4K video decoding can never starve the soundtrack's queue.
     std::vector<uint8_t> pcm;
-    try { pcm = ReadAudio(job); }
+    try { pcm = DecodeAudio(job->file, job->done); }
     catch (const std::exception& e) { REXLOG_WARN("PS2 movie: audio unavailable: {}", e.what()); }
     if (job->done) throw std::runtime_error("cancelled while opening");
-    auto reader = Reader(job->file, true);
-    ComPtr<IMFMediaType> format;
-    Check(reader->GetCurrentMediaType(kVideo, &format), "video format");
-    UINT32 w = 0, h = 0, par_x = 1, par_y = 1;
-    Check(MFGetAttributeSize(format.Get(), MF_MT_FRAME_SIZE, &w, &h), "video dimensions");
+    VideoReader reader(job->file);
+    const uint32_t w = reader.width(), h = reader.height();
     if (!w || !h || w > 4096 || h > 4096) throw std::runtime_error("unsupported video dimensions");
-    MFGetAttributeRatio(format.Get(), MF_MT_PIXEL_ASPECT_RATIO, &par_x, &par_y);
-    UINT32 raw_stride = w * 4;
-    format->GetUINT32(MF_MT_DEFAULT_STRIDE, &raw_stride);
-    PROPVARIANT duration;
-    PropVariantInit(&duration);
-    double seconds = 0;
-    if (SUCCEEDED(reader->GetPresentationAttribute(DWORD(MF_SOURCE_READER_MEDIASOURCE), MF_PD_DURATION, &duration)) &&
-        duration.vt == VT_UI8) seconds = double(duration.uhVal.QuadPart) / 1e7;
-    PropVariantClear(&duration);
+    const double seconds = reader.duration();
     if (!(seconds > 0 && seconds <= 60)) throw std::runtime_error("invalid movie duration (limit 60 s)");
     {
       std::lock_guard lock(job->mutex);
       job->width = w; job->height = h;
-      job->pixel_aspect = par_y ? float(par_x) / par_y : 1;
+      job->pixel_aspect = reader.pixel_aspect();
       job->duration = seconds;
       job->audio = std::move(pcm);
     }
     std::error_code ec;
     const bool compact_file = std::filesystem::file_size(job->file, ec) < 1024 * 1024 && !ec;
     bool all_white = compact_file;
-    LONGLONG video_origin = 0;
+    int64_t video_origin = 0;
     bool have_video_origin = false;
     for (int count = 0; count < 15000 && !job->done; ++count) {
-      DWORD flags = 0;
-      LONGLONG pts = 0;
-      ComPtr<IMFSample> sample;
-      Check(reader->ReadSample(kVideo, 0, nullptr, &flags, &pts, &sample), "video sample");
-      if (flags & MF_SOURCE_READERF_ERROR) throw std::runtime_error("video decoder error");
-      if (flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED) {
-        // The H.264 decoder announces its negotiated stride on its first
-        // sample. Accept that notification, but reject a real size/subtype
-        // change before interpreting any bytes with the old layout.
-        ComPtr<IMFMediaType> changed;
-        UINT32 next_w = 0, next_h = 0;
-        GUID subtype{};
-        Check(reader->GetCurrentMediaType(kVideo, &changed), "changed video format");
-        Check(MFGetAttributeSize(changed.Get(), MF_MT_FRAME_SIZE, &next_w, &next_h), "changed dimensions");
-        Check(changed->GetGUID(MF_MT_SUBTYPE, &subtype), "changed subtype");
-        if (next_w != w || next_h != h || subtype != MFVideoFormat_RGB32)
-          throw std::runtime_error("unsupported mid-movie format change");
-        changed->GetUINT32(MF_MT_DEFAULT_STRIDE, &raw_stride);
-      }
-      if (sample) {
-        if (!have_video_origin) {
-          video_origin = pts;
-          have_video_origin = true;
-          REXLOG_INFO("PS2 movie: video timestamp origin {:.3f}ms normalized", double(video_origin) / 10000);
-        }
-        // MF's H.264 decoder can report a reorder offset on the first
-        // sample (125 ms in the supplied files). These standalone clips
-        // start both streams at zero; preserve cadence, remove the offset.
-        pts = RelativePts(pts, video_origin);
-        const double start = job->started;
-        if (start > 0 && double(pts) / 1e7 < Now() - start - .08) {
-          ++job->late_samples;
-          if (flags & MF_SOURCE_READERF_ENDOFSTREAM) { job->eof = true; RequestUiPaint(); break; }
-          continue;
-        }
-        Frame frame = Pixels(sample.Get(), w, h, LONG(raw_stride), pts);
-        all_white = all_white && White(frame);
-        std::unique_lock lock(job->mutex);
-        ++job->decoded;
-        // Reject the supplied white-placeholder type without embedding an
-        // asset identifier. A normal fade in a larger movie remains valid.
-        if (compact_file && all_white && job->decoded == 3) {
-          lock.unlock();
-          End(job, "ignored: small uniform-white placeholder");
-          break;
-        }
-        job->cv.wait(lock, [&] { return job->done || job->frames.size() < 3; });
-        if (job->done) break;
-        if (start > 0 && double(pts) / 1e7 < Now() - start - .08) {
-          ++job->late_samples;
-          lock.unlock();
-          if (flags & MF_SOURCE_READERF_ENDOFSTREAM) { job->eof = true; RequestUiPaint(); break; }
-          continue;
-        }
-        job->frames.push_back(std::move(frame));
-        if (!all_white || job->decoded >= 3) job->primed = true;
-        lock.unlock();
-        RequestUiPaint();
-      }
-      if (flags & MF_SOURCE_READERF_ENDOFSTREAM) {
+      int64_t pts = 0;
+      if (!reader.Next(pts)) {
         job->eof = true;
         if (!job->primed) End(job, "ignored: no usable video frames");
         RequestUiPaint();
         break;
       }
+      if (!have_video_origin) {
+        video_origin = pts;
+        have_video_origin = true;
+        REXLOG_INFO("PS2 movie: video timestamp origin {:.3f}ms normalized", double(video_origin) / 10000);
+      }
+      // MF's H.264 decoder can report a reorder offset on the first
+      // sample (125 ms in the supplied files). These standalone clips
+      // start both streams at zero; preserve cadence, remove the offset.
+      pts = RelativePts(pts, video_origin);
+      const double start = job->started;
+      if (start > 0 && double(pts) / 1e7 < Now() - start - .08) {
+        ++job->late_samples;  // late: skipped without converting it
+        continue;
+      }
+      Frame frame;
+      frame.pts = pts;
+      reader.Pixels(frame.rgba);
+      all_white = all_white && White(frame);
+      std::unique_lock lock(job->mutex);
+      ++job->decoded;
+      // Reject the supplied white-placeholder type without embedding an
+      // asset identifier. A normal fade in a larger movie remains valid.
+      if (compact_file && all_white && job->decoded == 3) {
+        lock.unlock();
+        End(job, "ignored: small uniform-white placeholder");
+        break;
+      }
+      job->cv.wait(lock, [&] { return job->done || job->frames.size() < 3; });
+      if (job->done) break;
+      if (start > 0 && double(pts) / 1e7 < Now() - start - .08) {
+        ++job->late_samples;
+        continue;
+      }
+      job->frames.push_back(std::move(frame));
+      if (!all_white || job->decoded >= 3) job->primed = true;
+      lock.unlock();
+      RequestUiPaint();
     }
     if (!job->done && !job->eof) End(job, "video sample limit");
   } catch (const std::exception& e) {
     if (!job->done) REXLOG_WARN("PS2 movie: {}: {}", job->file.filename().string(), e.what());
     End(job, "decoder stopped; continuing load");
   }
-  if (SUCCEEDED(mf)) MFShutdown();
-  if (SUCCEEDED(com)) CoUninitialize();
 }
+
 
 class MovieDialog final : public rex::ui::ImGuiDialog {
  public:
@@ -477,9 +332,38 @@ std::filesystem::path Folder() {
   return {};
 }
 
+bool PlaybackAvailable() { return DecoderAvailable(); }
+
+#if !defined(_WIN32)
+// Linux: the desktop's own folder picker (zenity on GNOME and SteamOS desktop mode, kdialog on KDE), when
+// one is installed. The downloaded cutscenes set the folder themselves; this is for the player's own files.
+std::string BrowseFolder() {
+  struct Picker { const char* tool; const char* command; };
+  const Picker pickers[] = {
+      {"zenity", "env -u LD_LIBRARY_PATH zenity --file-selection --directory "
+                 "--title='Select the PS2 movie folder' 2>/dev/null"},
+      {"kdialog", "env -u LD_LIBRARY_PATH kdialog --getexistingdirectory \"$HOME\" "
+                  "--title 'Select the PS2 movie folder' 2>/dev/null"},
+  };
+  for (const auto& picker : pickers) {
+    if (std::system((std::string("command -v ") + picker.tool + " >/dev/null 2>&1").c_str()) != 0) continue;
+    FILE* pipe = popen(picker.command, "r");
+    if (!pipe) continue;
+    std::string result;
+    char buffer[512];
+    while (std::fgets(buffer, sizeof(buffer), pipe)) result += buffer;
+    pclose(pipe);
+    while (!result.empty() && (result.back() == '\n' || result.back() == '\r')) result.pop_back();
+    return result;  // empty if the player cancelled
+  }
+  REXLOG_INFO("PS2 movie: no folder picker (zenity or kdialog) on this system");
+  return {};
+}
+#else
+
 std::string BrowseFolder() {
   const HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-  ComPtr<IFileOpenDialog> dialog;
+  Microsoft::WRL::ComPtr<IFileOpenDialog> dialog;
   std::string result;
   if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog)))) {
     DWORD options = 0;
@@ -487,7 +371,7 @@ std::string BrowseFolder() {
     dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_PATHMUSTEXIST | FOS_NOCHANGEDIR);
     dialog->SetTitle(L"Select the PS2 movie folder");
     if (SUCCEEDED(dialog->Show(nullptr))) {
-      ComPtr<IShellItem> item;
+      Microsoft::WRL::ComPtr<IShellItem> item;
       PWSTR path = nullptr;
       if (SUCCEEDED(dialog->GetResult(&item)) && SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))) {
         const auto utf8 = std::filesystem::path(path).u8string();
@@ -500,6 +384,7 @@ std::string BrowseFolder() {
   if (SUCCEEDED(com)) CoUninitialize();
   return result;
 }
+#endif
 
 void CreateMovieDialog(rex::ui::ImGuiDrawer* drawer, rex::ui::ImmediateDrawer* immediate,
                   const std::filesystem::path& glyph_dir) {
@@ -509,7 +394,8 @@ void CreateMovieDialog(rex::ui::ImGuiDrawer* drawer, rex::ui::ImmediateDrawer* i
 }
 
 bool BeforeLoad(const uint8_t* base, uint32_t g, bool starting, bool leaving) {
-  if (!dialog_ready || shutting_down || !REXCVAR_GET(kk_ps2_cutscenes) || !g || !Word(base,g+4)) return false;
+  if (!dialog_ready || shutting_down || !DecoderAvailable() || !REXCVAR_GET(kk_ps2_cutscenes) || !g ||
+      !Word(base,g+4)) return false;
   const int from = int(Word(base,g+0x18)), to = int(Word(base,g+8));
   std::vector<int> levels;
   for (const auto& chapter : play::Chapters()) levels.push_back(chapter.level_key);
@@ -519,16 +405,17 @@ bool BeforeLoad(const uint8_t* base, uint32_t g, bool starting, bool leaving) {
   const auto name = MovieName(world);
   const auto folder = Folder();
   if (name.empty() || folder.empty()) return false;
-  const auto file = folder / name;
-  std::error_code ec;
-  if (!std::filesystem::is_regular_file(file, ec)) {
+  // Linux file names are case-sensitive and the clips' are not consistent (BK_9bb9.mp4 for BK_9BB9).
+  const auto file = FindMovie(folder, name);
+  if (file.empty()) {
     REXLOG_INFO("PS2 movie: no local {} for {} -> {}; normal load", name, from, to);
     return false;
   }
   auto job = std::make_shared<Job>();
   job->file = file;
   { std::lock_guard lock(job_mutex); current_job = job; }
-  REXLOG_INFO("PS2 movie: story {} -> {} world {:08X} {}", from, to, world, name);
+  REXLOG_INFO("PS2 movie: story {} -> {} world {:08X} {} ({})", from, to, world, file.filename().string(),
+              DecoderName());
   RequestUiPaint();
   std::thread worker([job] { Decode(job); });
   // Only the level loader waits. The presenter continues painting on its UI
@@ -550,13 +437,3 @@ void Shutdown() {
   End(job, "shutdown");
 }
 }  // namespace kk::movies
-
-#else
-namespace kk::movies {
-std::filesystem::path Folder() { return {}; }
-std::string BrowseFolder() { return {}; }
-void CreateMovieDialog(rex::ui::ImGuiDrawer*, rex::ui::ImmediateDrawer*, const std::filesystem::path&) {}
-bool BeforeLoad(const uint8_t*, uint32_t, bool, bool) { return false; }
-void Shutdown() {}
-}  // namespace kk::movies
-#endif
