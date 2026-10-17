@@ -10,3 +10,5 @@ tools/run_to_ship.ps1 export-ignore
 tools/time_opening.ps1 export-ignore
 tools/build_appimage.sh text eol=lf
 tools/build_ffmpeg_linux.sh text eol=lf
+tools/build_linux_beta.sh text eol=lf
+tools/linux_headless_run.sh text eol=lf
