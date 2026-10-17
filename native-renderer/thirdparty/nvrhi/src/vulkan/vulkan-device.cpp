@@ -243,6 +243,9 @@ namespace nvrhi::vulkan
             m_Context.warning("Opacity micro-maps are not currently supported by RTXMU.");
         }
 #endif
+        if (desc.graphicsPipelineLibrary)
+            m_PipelineLibrary = std::make_unique<PipelineLibraryCache>();
+
         vk::Result res = vk::Result::eSuccess;
         if (desc.pipelineCache)
         {
@@ -282,6 +285,8 @@ namespace nvrhi::vulkan
 
     Device::~Device()
     {
+        m_PipelineLibrary.reset();
+
         if (m_TimerQueryPool)
         {
             m_Context.device.destroyQueryPool(m_TimerQueryPool);
@@ -354,6 +359,25 @@ namespace nvrhi::vulkan
                 m_Queue->runGarbageCollection();
             }
         }
+    }
+
+    IDevice::PipelineLibraryStats Device::getPipelineLibraryStats()
+    {
+        PipelineLibraryStats stats;
+        if (!m_PipelineLibrary)
+            return stats;
+        PipelineLibraryCache& c = *m_PipelineLibrary;
+        for (int i = 0; i < 4; i++)
+        {
+            stats.partsMade[i] = c.partsMade[i].load();
+            stats.partsReused[i] = c.partsReused[i].load();
+        }
+        stats.partFailures = c.partFailures.load();
+        stats.partMs = double(c.partMicroseconds.load()) / 1000.0;
+        stats.links = c.links.load();
+        stats.linkFailures = c.linkFailures.load();
+        stats.linkMs = double(c.linkMicroseconds.load()) / 1000.0;
+        return stats;
     }
 
     bool Device::queryFeatureSupport(Feature feature, void* pInfo, size_t infoSize)
@@ -439,6 +463,8 @@ namespace nvrhi::vulkan
             return m_Context.extensions.NV_ray_tracing_linear_swept_spheres && m_Context.linearSweptSpheresFeatures.spheres;
         case Feature::LinearSweptSpheres:
             return m_Context.extensions.NV_ray_tracing_linear_swept_spheres && m_Context.linearSweptSpheresFeatures.linearSweptSpheres;
+        case Feature::GraphicsPipelineLibrary:
+            return m_PipelineLibrary != nullptr;
         default:
             return false;
         }

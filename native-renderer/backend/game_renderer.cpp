@@ -1,4 +1,7 @@
 #include "backend/game_renderer.h"
+#if NR_HAS_VULKAN
+#include <nvrhi/vulkan.h>
+#endif
 #include "plugin/native_benchmark_stats.h"
 #include "backend/resource_upload_workers.h"
 #include "backend/upload_batch.h"
@@ -151,9 +154,11 @@ GameRenderer::GameRenderer(nvrhi::IDevice* device, const GuestMemory& memory,
 }
 
 GameRenderer::~GameRenderer() {
+  if (pipeline_library_ && shaders_) shaders_->SetBuiltCallback({});
   file_writer_.set_exit_task({});  // this renderer is going: FlushAll must not reach it
   SaveResourcePreload();
   LogPipelineMisses(true);
+  LogPipelineLibrary(true);
   if (resource_profile_file_) std::fclose(resource_profile_file_);
   if (gi_build_.valid()) gi_build_.wait();
   if (lighting_build_.valid()) lighting_build_.wait();
@@ -233,6 +238,17 @@ void GameRenderer::set_watch(std::function<void(uint32_t, uint32_t)> watch) {
 }
 
 bool GameRenderer::Initialize() {
+  pipeline_library_ = device_->queryFeatureSupport(nvrhi::Feature::GraphicsPipelineLibrary);
+  // Dev (task 183, the linked pipelines' GPU cost): every game pipeline stays linked, none is compiled whole.
+  if (const char* v = std::getenv("KK_DEV_GPL_LINK_ONLY"); pipeline_library_ && v && *v && *v != '0') {
+    pipeline_library_link_only_ = true;
+    Logf(LogLevel::kInfo, "rexgpu-native: KK_DEV_GPL_LINK_ONLY: game pipelines stay linked (never compiled whole)");
+  }
+  if (const char* v = std::getenv("KK_DEV_GPL_NO_SHADER_PARTS"); pipeline_library_ && shaders_ && !(v && *v && *v != '0')) {
+    shaders_->SetBuiltCallback([this](kkshaders::ShaderKind kind, const std::shared_ptr<const GameShader>& shader) {
+      if (shader) QueueShaderParts(kind == kkshaders::ShaderKind::Vertex, shader->handle);
+    });
+  }
   // Keep the scale-aware shader ABI at the native-resolution floor too. It
   // was selected before shader creation for these initially scaled runs.
   memory_floor_x_ = std::min(options_.render_scale_x, 1.0f);
@@ -1009,8 +1025,16 @@ void GameRenderer::EndFrame() {
   ReleaseRetiredResources();
   CheckMemoryBudget();
   stats_.edram_framebuffers = framebuffers_.size();
+  if (pipeline_library_) {
+    // Task 183: the whole pipelines that replace linked ones come in here (a draw finds its pipeline without
+    // asking the workers), and the linked ones go two frames on (the lists hold their own references).
+    std::lock_guard lock(pipeline_mutex_);
+    DrainDonePipelinesLocked();
+    std::erase_if(replaced_pipelines_, [&](const auto& r) { return r.first + 2 <= frame_; });
+  }
   if (frame_ % 300 == 0) {
     LogPipelineMisses(false);
+    LogPipelineLibrary(false);
     if (options_.debug & 32768) {
       Logf(LogLevel::kInfo,
            "rexgpu-native: EDRAM cache: %llu targets, %llu target allocation bytes, %llu framebuffers "
@@ -1097,14 +1121,57 @@ void GameRenderer::PipelineWorker() {
       urgent_priority = job.urgent;
       SchedulePipelineCompiler(urgent_priority);
     }
+    // Task 183: with the graphics pipeline library a draw's pipeline (a job a draw asked for: urgent) is linked
+    // from cached parts, then compiled whole behind the other jobs; a listed record's parts are made with it.
+    PipelineBuild build = job.build;
+    if (job.urgent && build != PipelineBuild::kReplace && build != PipelineBuild::kParts)
+      build = pipeline_library_ ? PipelineBuild::kLinked : PipelineBuild::kWhole;
     const auto start = std::chrono::steady_clock::now();
-    nvrhi::GraphicsPipelineHandle p = CreatePipeline(job.desc, job.framebuffer);
+    nvrhi::GraphicsPipelineHandle p;
+    if (build == PipelineBuild::kParts) {
+      const bool made = PrepareLibraryParts(job.desc, job.framebuffer);
+      const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+      bool idle = false;
+      {
+        std::lock_guard lock(pipeline_mutex_);
+        pipeline_worker_ms_ += ms;
+        if (made) ++stats_.shader_parts;
+        stats_.shader_parts_ms += ms;
+        idle = pipeline_jobs_.empty() && pipelines_active_ == 1;
+        if (!idle) --pipelines_active_;
+      }
+      pipeline_done_cv_.notify_all();
+      pipeline_cv_.notify_all();
+      if (idle) {
+        MaybeSaveDriverCache();
+        {
+          std::lock_guard lock(pipeline_mutex_);
+          --pipelines_active_;
+        }
+        pipeline_done_cv_.notify_all();
+        pipeline_cv_.notify_all();
+      }
+      continue;
+    }
+    if (pipeline_library_ && (build == PipelineBuild::kLinked || build == PipelineBuild::kPrewarm)) {
+      nvrhi::GraphicsPipelineDesc linked = job.desc;
+      linked.vulkanLibraryLink = true;
+      p = CreatePipeline(linked, job.framebuffer);
+      if (build == PipelineBuild::kPrewarm && !pipeline_library_link_only_) p = nullptr;  // only its parts are kept
+    }
+    if (!p) p = CreatePipeline(job.desc, job.framebuffer);
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     bool idle = false;
     {
       std::lock_guard lock(pipeline_mutex_);
       pipeline_worker_ms_ += ms;
-      pipelines_done_.emplace_back(job.key, p);
+      pipelines_done_.push_back({job.key, p, build, ms, job.urgent});
+      if (build == PipelineBuild::kLinked && p && !pipeline_stop_ && !pipeline_library_link_only_) {
+        // The whole pipeline after everything queued (the prewarm included): it replaces the linked one.
+        PipelineJob replace{job.key, std::move(job.desc), job.framebuffer};
+        replace.build = PipelineBuild::kReplace;
+        pipeline_jobs_.push_back(std::move(replace));
+      }
       ++pipelines_made_;
       if (!p) ++pipelines_failed_;
       // The last job of a burst: this worker stays counted while it saves the driver's cache, so
@@ -1134,6 +1201,39 @@ nvrhi::GraphicsPipelineHandle GameRenderer::CreatePipeline(const nvrhi::Graphics
   return p;
 }
 
+bool GameRenderer::PrepareLibraryParts(const nvrhi::GraphicsPipelineDesc& desc, const nvrhi::FramebufferInfo& framebuffer) {
+#if NR_HAS_VULKAN
+  void* native = device_->getNativeObject(nvrhi::ObjectTypes::Nvrhi_VK_Device);
+  if (!native) return false;
+  std::shared_lock lock(creation_mutex_);
+  const bool made = static_cast<nvrhi::vulkan::IDevice*>(native)->prepareGraphicsPipelineParts(desc, framebuffer);
+  if (made && driver_cache_) driver_cache_new_.fetch_add(1, std::memory_order_relaxed);
+  return made;
+#else
+  (void)desc;
+  (void)framebuffer;
+  return false;
+#endif
+}
+
+void GameRenderer::QueueShaderParts(bool vertex, const nvrhi::ShaderHandle& shader) {
+  // The game's thread, as it creates the shader. The part is keyed as a draw's pipeline will key it (BuildPipelineDesc:
+  // this renderer's layouts, solid fill, one sample, no alpha to coverage).
+  if (!shader) return;
+  nvrhi::GraphicsPipelineDesc desc;
+  (vertex ? desc.VS : desc.PS) = shader;
+  for (const nvrhi::BindingLayoutHandle& l : pipeline_layouts_) desc.bindingLayouts.push_back(l);
+  nvrhi::FramebufferInfo framebuffer;
+  framebuffer.sampleCount = 1;
+  std::lock_guard lock(pipeline_mutex_);
+  if (pipeline_stop_ || !shader_parts_queued_.insert(shader.Get()).second) return;
+  EnsureWorkers();
+  PipelineJob job{0, std::move(desc), framebuffer};
+  job.build = PipelineBuild::kParts;
+  pipeline_jobs_.push_back(std::move(job));
+  pipeline_cv_.notify_one();
+}
+
 bool GameRenderer::IsPending(uint64_t key) {
   std::lock_guard lock(pipeline_mutex_);
   return pipelines_pending_.count(key) != 0;
@@ -1142,12 +1242,36 @@ bool GameRenderer::IsPending(uint64_t key) {
 void GameRenderer::DrainDonePipelinesLocked() {
   if (pipelines_done_.empty()) return;
   const auto now = std::chrono::steady_clock::now();
-  for (auto& [k, p] : pipelines_done_) {
+  for (DonePipeline& done : pipelines_done_) {
+    const uint64_t k = done.key;
+    const nvrhi::GraphicsPipelineHandle& p = done.pipeline;
+    if (done.build == PipelineBuild::kReplace) {
+      // Task 183: the whole pipeline replaces the linked one; draws use it from now on.
+      if (p) {
+        nvrhi::GraphicsPipelineHandle& slot = pipelines_[k];
+        if (slot) replaced_pipelines_.emplace_back(frame_, std::move(slot));
+        slot = p;
+        ++stats_.pipelines_replaced;
+        stats_.replace_ms_total += done.ms;
+      }
+      if (pipeline_log_) LogPipelineDemand(k, "built:whole-replace", done.ms, bool(p));
+      continue;
+    }
     pipelines_[k] = p;
     pipelines_pending_.erase(k);
     if (p) {
       ++stats_.pipelines;
       ++stats_.draw_pipelines;
+    }
+    if (done.build == PipelineBuild::kLinked) {
+      ++stats_.pipelines_linked;
+      stats_.linked_ms_total += done.ms;
+      stats_.linked_ms_max = std::max(stats_.linked_ms_max, done.ms);
+    }
+    if (pipeline_log_ && done.build != PipelineBuild::kPrewarm) {
+      // Task 183: the worker's time for a pipeline made on demand (linked, or whole without the library).
+      LogPipelineDemand(k, done.build == PipelineBuild::kLinked ? "built:linked" : (done.urgent ? "built:whole" : "built:optional"),
+                        done.ms, bool(p));
     }
     if (auto miss = missing_pipelines_.find(k); miss != missing_pipelines_.end()) {
       // Task 179: a skipped draw's pipeline is ready; its draws are drawn from this frame on.
@@ -1267,7 +1391,15 @@ nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelin
     return nullptr;
   }
   const auto start = std::chrono::steady_clock::now();
-  nvrhi::GraphicsPipelineHandle p = CreatePipeline(desc, framebuffer);
+  nvrhi::GraphicsPipelineHandle p;
+  const bool link = for_draws && pipeline_library_ && options_.link_draw_pipelines;
+  if (link) {
+    nvrhi::GraphicsPipelineDesc linked = desc;
+    linked.vulkanLibraryLink = true;
+    p = CreatePipeline(linked, framebuffer);
+    if (p) ++stats_.pipelines_linked;
+  }
+  if (!p) p = CreatePipeline(desc, framebuffer);
   const double made_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
   stats_.pipeline_ms += made_ms;
   if (for_draws) NoteFrameWait(made_ms);  // the draw waited for the driver on its own thread
@@ -1313,6 +1445,56 @@ void GameRenderer::LogPipelineMisses(bool final) {
        static_cast<unsigned long long>(w[size_t(PipelineMissClass::kLoading)]),
        static_cast<unsigned long long>(w[size_t(PipelineMissClass::kBlockAll)]),
        static_cast<unsigned long long>(w[size_t(PipelineMissClass::kScene)]), s.pipeline_wait_ms);
+}
+
+GameRenderer::PipelineLibraryStats GameRenderer::PipelineLibraryCounts() const {
+  PipelineLibraryStats out;
+#if NR_HAS_VULKAN
+  // NVRHI's own Vulkan device, under its validation layer too (which passes the native object through).
+  if (!pipeline_library_) return out;
+  void* native = device_->getNativeObject(nvrhi::ObjectTypes::Nvrhi_VK_Device);
+  if (!native) return out;
+  const nvrhi::vulkan::IDevice::PipelineLibraryStats l =
+      static_cast<nvrhi::vulkan::IDevice*>(native)->getPipelineLibraryStats();
+  for (int i = 0; i < 4; ++i) {
+    out.partsMade[i] = l.partsMade[i];
+    out.partsReused[i] = l.partsReused[i];
+  }
+  out.partFailures = l.partFailures;
+  out.partMs = l.partMs;
+  out.links = l.links;
+  out.linkFailures = l.linkFailures;
+  out.linkMs = l.linkMs;
+#endif
+  return out;
+}
+
+void GameRenderer::LogPipelineLibrary(bool final) {
+  // Task 183: the graphics pipeline library's parts and links (a line when something changed, and at the end).
+  if (!pipeline_library_) return;
+  const PipelineLibraryStats l = PipelineLibraryCounts();
+  const uint64_t parts = l.partsMade[0] + l.partsMade[1] + l.partsMade[2] + l.partsMade[3];
+  if (!final && l.links == library_logged_links_ && parts == library_logged_parts_) return;
+  library_logged_links_ = l.links;
+  library_logged_parts_ = parts;
+  const Stats& s = stats_;
+  Logf(LogLevel::kInfo,
+       "rexgpu-native: pipeline library %s frame %llu: %llu draws' pipelines linked (avg %.2f max %.2f ms on a "
+       "worker), %llu replaced by whole ones (avg %.1f ms); %llu game shaders' parts made ahead (%.0f ms); parts made %llu/%llu/%llu/%llu, reused "
+       "%llu/%llu/%llu/%llu (vertex input/pre-rasterization/fragment shader/output), %.0f ms; %llu links %.1f ms, "
+       "%llu part and %llu link failures",
+       final ? "at the end," : "so far,", static_cast<unsigned long long>(frame_),
+       static_cast<unsigned long long>(s.pipelines_linked),
+       s.pipelines_linked ? s.linked_ms_total / double(s.pipelines_linked) : 0.0, s.linked_ms_max,
+       static_cast<unsigned long long>(s.pipelines_replaced),
+       s.pipelines_replaced ? s.replace_ms_total / double(s.pipelines_replaced) : 0.0,
+       static_cast<unsigned long long>(s.shader_parts), s.shader_parts_ms,
+       static_cast<unsigned long long>(l.partsMade[0]), static_cast<unsigned long long>(l.partsMade[1]),
+       static_cast<unsigned long long>(l.partsMade[2]), static_cast<unsigned long long>(l.partsMade[3]),
+       static_cast<unsigned long long>(l.partsReused[0]), static_cast<unsigned long long>(l.partsReused[1]),
+       static_cast<unsigned long long>(l.partsReused[2]), static_cast<unsigned long long>(l.partsReused[3]),
+       l.partMs, static_cast<unsigned long long>(l.links), l.linkMs,
+       static_cast<unsigned long long>(l.partFailures), static_cast<unsigned long long>(l.linkFailures));
 }
 
 void GameRenderer::LogPipelineDemand(uint64_t key, const char* kind, double ms, bool made,
@@ -1393,7 +1575,9 @@ bool GameRenderer::QueuePrewarm(const PipelineRecord& record) {
   if (pipelines_.count(key) || pipelines_pending_.count(key)) return true;
   EnsureWorkers();
   pipelines_pending_[key] = true;
-  pipeline_jobs_.push_back({key, std::move(desc), framebuffer});
+  PipelineJob job{key, std::move(desc), framebuffer};
+  job.build = PipelineBuild::kPrewarm;
+  pipeline_jobs_.push_back(std::move(job));
   pipeline_cv_.notify_one();
   ++stats_.prewarm_queued;
   return true;

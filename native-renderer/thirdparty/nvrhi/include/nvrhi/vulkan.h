@@ -43,6 +43,27 @@ namespace nvrhi::vulkan
         virtual void queueWaitForSemaphore(CommandQueue waitQueue, VkSemaphore semaphore, uint64_t value) = 0;
         virtual void queueSignalSemaphore(CommandQueue executionQueue, VkSemaphore semaphore, uint64_t value) = 0;
         virtual uint64_t queueGetCompletedInstance(CommandQueue queue) = 0;
+
+        // Graphics pipeline library parts and links so far (KK patch; all zero without the library).
+        struct PipelineLibraryStats
+        {
+            uint64_t partsMade[4] = {};   // vertex input, pre-rasterization, fragment shader, fragment output
+            uint64_t partsReused[4] = {}; // found made (or being made by another thread)
+            uint64_t partFailures = 0;
+            double partMs = 0;            // making parts, all threads
+            uint64_t links = 0;
+            uint64_t linkFailures = 0;    // compiled whole instead
+            double linkMs = 0;            // linking alone
+        };
+        virtual PipelineLibraryStats getPipelineLibraryStats() { return {}; }
+        // Makes the pre-rasterization part of desc.VS and the fragment shader part of desc.PS (whichever are set)
+        // now, without a pipeline: a later linked pipeline of these shaders then compiles nothing. False without
+        // the library or when the driver failed.
+        virtual bool prepareGraphicsPipelineParts(const GraphicsPipelineDesc& desc, const FramebufferInfo& fbinfo)
+        {
+            (void)desc; (void)fbinfo;
+            return false;
+        }
     };
 
     typedef RefCountPtr<IDevice> DeviceHandle;
@@ -88,6 +109,13 @@ namespace nvrhi::vulkan
         // fill it from a file and save it). The device does not destroy it. VK_NULL_HANDLE: the device
         // makes an empty cache of its own.
         VkPipelineCache pipelineCache = VK_NULL_HANDLE;
+
+        // KK patch: the application enabled VK_KHR_pipeline_library and VK_EXT_graphics_pipeline_library with
+        // VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT::graphicsPipelineLibrary on a Vulkan 1.3 device (the
+        // linked pipelines leave cull mode, front face, depth bias, depth and stencil state dynamic, core in 1.3).
+        // Then GraphicsPipelineDesc::vulkanLibraryLink pipelines are linked from cached parts
+        // (Feature::GraphicsPipelineLibrary). False: every pipeline is compiled whole.
+        bool graphicsPipelineLibrary = false;
     };
 
     NVRHI_API DeviceHandle createDevice(const DeviceDesc& desc);

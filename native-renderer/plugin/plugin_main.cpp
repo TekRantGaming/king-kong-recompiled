@@ -194,6 +194,13 @@ REXCVAR_DEFINE_BOOL(native_async_submit, true, "Native renderer",
                     "wait for the queue while the presenter holds it")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_BOOL(native_vk_pipeline_library, true, "Native renderer",
+                    "Vulkan: link a game pipeline the renderer has not made yet from cached graphics pipeline library "
+                    "parts (VK_EXT_graphics_pipeline_library) in microseconds, then compile it whole in the background "
+                    "and use that from then on. Off, or a driver without the extension: every pipeline is compiled "
+                    "whole (KK_DEV_NO_GPL=1 turns it off too)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_BOOL(native_present_unlocked, true, "Native renderer",
                     "Hand the game's frame to the presenter without holding the renderer's lock, so the "
                     "game's draws do not wait while the presenter waits for its previous paint")

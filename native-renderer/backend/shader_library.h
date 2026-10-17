@@ -17,6 +17,7 @@
 #include <condition_variable>
 #include <future>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -97,6 +98,13 @@ class ShaderLibrary {
 
   // A shader was created: kind 0 vertex, 1 pixel.
   void OnCreated(uint32_t kind, uint32_t container, uint32_t object);
+  // Task 183: told about each shader the game creates once it is built (on the game's thread, without the
+  // library's lock): the game renderer makes its graphics pipeline library part ahead of the draws.
+  using BuiltCallback = std::function<void(kkshaders::ShaderKind kind, const std::shared_ptr<const GameShader>& shader)>;
+  void SetBuiltCallback(BuiltCallback callback) {
+    std::lock_guard lock(mutex_);
+    built_callback_ = std::move(callback);
+  }
   // The shader with this microcode hash (the key the library keeps them under): one already
   // made, else one built from the pack alone (no container needed). Null when neither exists
   // (a shader that DXC would translate waits for the game to create it). For the pipeline
@@ -166,6 +174,7 @@ class ShaderLibrary {
   }
 
   mutable std::mutex mutex_;
+  BuiltCallback built_callback_;  // task 183 (mutex_)
   // Object address -> shader (addresses are reused after a release; a new
   // creation replaces the entry).
   std::unordered_map<uint32_t, std::shared_ptr<GameShader>> by_object_;

@@ -29,8 +29,9 @@ class VulkanTestDevice {
   // ours (the plugin's --native_vk_pipeline_cache), pipeline_cache().
   // upscaler_needs: the instance and device also get what DLSS and XeSS ask for (upscaler_vulkan.h), as
   // the plugin's device does with an upscaler on.
+  // pipeline_library: VK_EXT_graphics_pipeline_library when the device has it (task 183; pipeline_library()).
   static std::unique_ptr<VulkanTestDevice> Create(bool validation = true, bool driver_pipeline_cache = false,
-                                                  bool upscaler_needs = false);
+                                                  bool upscaler_needs = false, bool pipeline_library = false);
   ~VulkanTestDevice();
 
   nvrhi::IDevice* device() const { return nvrhi_device_; }
@@ -39,6 +40,7 @@ class VulkanTestDevice {
   // test device was made).
   void MakeCurrent();
   const std::string& device_name() const { return device_name_; }
+  bool pipeline_library() const { return pipeline_library_; }
   bool khronos_validation() const { return khronos_validation_; }
   // Validation errors so far (Vulkan layer + NVRHI).
   int errors() const;
@@ -53,7 +55,8 @@ class VulkanTestDevice {
 
  private:
   VulkanTestDevice() = default;
-  bool Init(bool validation, bool driver_pipeline_cache, bool upscaler_needs);
+  bool Init(bool validation, bool driver_pipeline_cache, bool upscaler_needs, bool pipeline_library);
+  bool pipeline_library_ = false;
 
   struct Impl;
   std::unique_ptr<Impl> impl_;

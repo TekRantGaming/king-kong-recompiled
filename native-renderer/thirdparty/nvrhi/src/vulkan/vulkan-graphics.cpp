@@ -23,6 +23,8 @@
 #include "vulkan-backend.h"
 #include "../../../../backend/dev_gpu_stats.h"
 #include <nvrhi/common/misc.h>
+#include <chrono>
+#include <functional>
 
 namespace nvrhi::vulkan
 {
@@ -214,12 +216,387 @@ namespace nvrhi::vulkan
         return shaderStageCreateInfo;
     }
 
+    // ---- KK patch: graphics pipeline libraries (VK_EXT_graphics_pipeline_library) ------------------------------
+    //
+    // A pipeline is linked from four parts that the device makes once and keeps: vertex input (topology), the
+    // pre-rasterization shaders (VS/HS/DS/GS with the polygon mode and depth clip), the fragment shader (PS with the
+    // multisample state) and the fragment output (formats, blending). The link has no link-time optimisation, so it
+    // takes microseconds once the parts exist; a new pipeline of known shaders needs no shader compile at all. To
+    // share parts between more pipelines the pre-rasterization part leaves cull mode, front face and depth bias
+    // dynamic and the fragment shader part leaves the depth and stencil state dynamic (all core in Vulkan 1.3): the
+    // command list sets them from the pipeline description when it binds the pipeline (setGraphicsState).
+
+    namespace
+    {
+        enum PipelineLibraryPartKind : int
+        {
+            PartVertexInput = 0,
+            PartPreRasterization = 1,
+            PartFragmentShader = 2,
+            PartFragmentOutput = 3,
+        };
+
+        struct PartKey
+        {
+            std::string bytes;
+            template <typename T> void put(const T& value)
+            {
+                bytes.append(reinterpret_cast<const char*>(&value), sizeof(value));
+            }
+            void putObject(const void* object) { put(reinterpret_cast<uintptr_t>(object)); }
+        };
+
+        uint64_t microsecondsSince(std::chrono::steady_clock::time_point start)
+        {
+            return uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
+        }
+
+        const vk::DynamicState c_PreRasterizationDynamicStates[] = {
+            vk::DynamicState::eViewport, vk::DynamicState::eScissor, vk::DynamicState::eCullMode,
+            vk::DynamicState::eFrontFace, vk::DynamicState::eDepthBiasEnable, vk::DynamicState::eDepthBias,
+        };
+        const vk::DynamicState c_FragmentShaderDynamicStates[] = {
+            vk::DynamicState::eDepthTestEnable, vk::DynamicState::eDepthWriteEnable, vk::DynamicState::eDepthCompareOp,
+            vk::DynamicState::eStencilTestEnable, vk::DynamicState::eStencilOp, vk::DynamicState::eStencilCompareMask,
+            vk::DynamicState::eStencilWriteMask, vk::DynamicState::eStencilReference,
+        };
+    }
+
+    // The part of `kind` with this key: made now by this thread if nobody has made it (null when the driver failed).
+    static std::shared_ptr<PipelineLibraryPart> getPipelineLibraryPart(PipelineLibraryCache& cache, const VulkanContext& context,
+        int kind, PartKey&& key, std::vector<RefCountPtr<IResource>>&& keep, const std::function<vk::Pipeline(vk::PipelineLayout&)>& make)
+    {
+        std::shared_ptr<PipelineLibraryPart> part;
+        {
+            std::lock_guard<std::mutex> lock(cache.mutex);
+            std::shared_ptr<PipelineLibraryPart>& slot = cache.parts[kind][key.bytes];
+            if (!slot)
+            {
+                slot = std::make_shared<PipelineLibraryPart>();
+                slot->device = context.device;
+                slot->allocationCallbacks = context.allocationCallbacks;
+                slot->keep = std::move(keep);
+            }
+            part = slot;
+        }
+        std::lock_guard<std::mutex> lock(part->mutex);
+        if (part->done)
+        {
+            cache.partsReused[kind]++;
+            return part->pipeline ? part : nullptr;
+        }
+        const auto start = std::chrono::steady_clock::now();
+        part->pipeline = make(part->layout);
+        part->done = true;
+        cache.partMicroseconds += microsecondsSince(start);
+        if (!part->pipeline)
+        {
+            cache.partFailures++;
+            return nullptr;
+        }
+        cache.partsMade[kind]++;
+        return part;
+    }
+
+    bool Device::prepareGraphicsPipelineParts(const GraphicsPipelineDesc& desc, const FramebufferInfo& fbinfo)
+    {
+        if (!m_PipelineLibrary)
+            return false;
+        bool made = false;
+        createLinkedGraphicsPipeline(desc, fbinfo, true, &made);
+        return made;
+    }
+
+    GraphicsPipelineHandle Device::createLinkedGraphicsPipeline(const GraphicsPipelineDesc& desc, FramebufferInfo const& fbinfo,
+                                                                bool partsOnly, bool* partsMade)
+    {
+        PipelineLibraryCache& cache = *m_PipelineLibrary;
+        InputLayout* inputLayout = checked_cast<InputLayout*>(desc.inputLayout.Get());
+        Shader* stages[4] = {
+            checked_cast<Shader*>(desc.VS.Get()), checked_cast<Shader*>(desc.HS.Get()),
+            checked_cast<Shader*>(desc.DS.Get()), checked_cast<Shader*>(desc.GS.Get()) };
+        Shader* PS = checked_cast<Shader*>(desc.PS.Get());
+        const auto& rasterState = desc.renderState.rasterState;
+        const auto& blendState = desc.renderState.blendState;
+        const vk::PipelineCreateFlags libraryFlags = vk::PipelineCreateFlagBits::eLibraryKHR;
+        const vk::SampleCountFlagBits samples = vk::SampleCountFlagBits(fbinfo.sampleCount);
+        const bool usesBlendConstants = blendState.usesConstantColor(uint32_t(fbinfo.colorFormats.size()));
+
+        auto makeLayout = [&](vk::PipelineLayout& layout) {
+            BindingVector<RefCountPtr<BindingLayout>> bindingLayouts;
+            vk::ShaderStageFlags pushConstantVisibility;
+            BindingVector<uint32_t> setToBinding;
+            return createPipelineLayout(layout, bindingLayouts, pushConstantVisibility, setToBinding, m_Context, desc.bindingLayouts);
+        };
+        auto createLibrary = [&](vk::GraphicsPipelineCreateInfo& info) {
+            vk::Pipeline pipeline;
+            const vk::Result res = m_Context.device.createGraphicsPipelines(m_Context.pipelineCache, 1, &info, m_Context.allocationCallbacks, &pipeline);
+            return res == vk::Result::eSuccess ? pipeline : vk::Pipeline();
+        };
+
+        // Vertex input: the input layout and topology.
+        std::shared_ptr<PipelineLibraryPart> vertexInputPart;
+        if (!partsOnly)
+        {
+            PartKey key;
+            key.putObject(inputLayout);
+            key.put(desc.primType);
+            std::vector<RefCountPtr<IResource>> keep;
+            if (inputLayout) keep.emplace_back(inputLayout);
+            vertexInputPart = getPipelineLibraryPart(cache, m_Context, PartVertexInput, std::move(key), std::move(keep), [&](vk::PipelineLayout&) {
+                auto vertexInput = vk::PipelineVertexInputStateCreateInfo();
+                if (inputLayout)
+                {
+                    vertexInput.setVertexBindingDescriptionCount(uint32_t(inputLayout->bindingDesc.size()))
+                               .setPVertexBindingDescriptions(inputLayout->bindingDesc.data())
+                               .setVertexAttributeDescriptionCount(uint32_t(inputLayout->attributeDesc.size()))
+                               .setPVertexAttributeDescriptions(inputLayout->attributeDesc.data());
+                }
+                auto inputAssembly = vk::PipelineInputAssemblyStateCreateInfo().setTopology(convertPrimitiveTopology(desc.primType));
+                auto libraryInfo = vk::GraphicsPipelineLibraryCreateInfoEXT().setFlags(vk::GraphicsPipelineLibraryFlagBitsEXT::eVertexInputInterface);
+                auto info = vk::GraphicsPipelineCreateInfo().setPNext(&libraryInfo).setFlags(libraryFlags)
+                    .setPVertexInputState(&vertexInput).setPInputAssemblyState(&inputAssembly);
+                return createLibrary(info);
+            });
+        }
+
+        // Pre-rasterization shaders.
+        std::shared_ptr<PipelineLibraryPart> preRasterizationPart;
+        if (partsOnly ? desc.VS != nullptr : vertexInputPart != nullptr)
+        {
+            PartKey key;
+            std::vector<RefCountPtr<IResource>> keep;
+            for (Shader* s : stages)
+            {
+                key.putObject(s);
+                if (s) keep.emplace_back(s);
+            }
+            for (const BindingLayoutHandle& l : desc.bindingLayouts)
+            {
+                key.putObject(l.Get());
+                keep.emplace_back(l.Get());
+            }
+            key.put(rasterState.fillMode);
+            // Depth clip changes the part only through VK_EXT_depth_clip_enable (as in the whole pipeline).
+            key.put(m_Context.extensions.EXT_depth_clip_enable ? rasterState.depthClipEnable : true);
+            key.put(rasterState.conservativeRasterEnable);
+            key.put(desc.primType == PrimitiveType::PatchList ? desc.patchControlPoints : 0u);
+            preRasterizationPart = getPipelineLibraryPart(cache, m_Context, PartPreRasterization, std::move(key), std::move(keep), [&](vk::PipelineLayout& layout) {
+                if (makeLayout(layout) != vk::Result::eSuccess)
+                    return vk::Pipeline();
+                std::vector<vk::PipelineShaderStageCreateInfo> shaderStages;
+                std::vector<vk::SpecializationInfo> specInfos;
+                std::vector<vk::SpecializationMapEntry> specMapEntries;
+                std::vector<uint32_t> specData;
+                size_t numShaders = 0, numShadersWithSpecializations = 0, numSpecializationConstants = 0;
+                for (Shader* s : stages)
+                    countSpecializationConstants(s, numShaders, numShadersWithSpecializations, numSpecializationConstants);
+                shaderStages.reserve(numShaders);
+                specInfos.reserve(numShadersWithSpecializations);
+                specMapEntries.reserve(numSpecializationConstants);
+                specData.reserve(numSpecializationConstants);
+                for (Shader* s : stages)
+                    if (s) shaderStages.push_back(makeShaderStageCreateInfo(s, specInfos, specMapEntries, specData));
+                auto viewportState = vk::PipelineViewportStateCreateInfo().setViewportCount(1).setScissorCount(1);
+                auto rasterizer = vk::PipelineRasterizationStateCreateInfo()
+                    .setPolygonMode(convertFillMode(rasterState.fillMode))
+                    .setCullMode(vk::CullModeFlagBits::eNone)
+                    .setFrontFace(vk::FrontFace::eCounterClockwise)
+                    .setLineWidth(1.0f);
+                vk::PipelineRasterizationDepthClipStateCreateInfoEXT depthClipEnableExt;
+                auto conservativeRasterState = vk::PipelineRasterizationConservativeStateCreateInfoEXT()
+                    .setConservativeRasterizationMode(vk::ConservativeRasterizationModeEXT::eOverestimate);
+                if (m_Context.extensions.EXT_depth_clip_enable && !rasterState.depthClipEnable)
+                {
+                    depthClipEnableExt.setDepthClipEnable(false);
+                    rasterizer.setPNext(&depthClipEnableExt);
+                }
+                if (rasterState.conservativeRasterEnable)
+                    rasterizer.setPNext(&conservativeRasterState);
+                auto dynamicStateInfo = vk::PipelineDynamicStateCreateInfo()
+                    .setDynamicStateCount(uint32_t(std::size(c_PreRasterizationDynamicStates)))
+                    .setPDynamicStates(c_PreRasterizationDynamicStates);
+                auto tessellationState = vk::PipelineTessellationStateCreateInfo().setPatchControlPoints(desc.patchControlPoints);
+                auto libraryInfo = vk::GraphicsPipelineLibraryCreateInfoEXT().setFlags(vk::GraphicsPipelineLibraryFlagBitsEXT::ePreRasterizationShaders);
+                auto info = vk::GraphicsPipelineCreateInfo().setPNext(&libraryInfo).setFlags(libraryFlags)
+                    .setStageCount(uint32_t(shaderStages.size())).setPStages(shaderStages.data())
+                    .setPViewportState(&viewportState).setPRasterizationState(&rasterizer)
+                    .setPDynamicState(&dynamicStateInfo).setLayout(layout);
+                if (desc.primType == PrimitiveType::PatchList)
+                    info.setPTessellationState(&tessellationState);
+                return createLibrary(info);
+            });
+        }
+
+        // Fragment shader, with the multisample state (the fragment output part has the same).
+        auto multisample = vk::PipelineMultisampleStateCreateInfo()
+            .setRasterizationSamples(samples)
+            .setAlphaToCoverageEnable(blendState.alphaToCoverageEnable);
+        std::shared_ptr<PipelineLibraryPart> fragmentShaderPart;
+        if (partsOnly ? desc.PS != nullptr : preRasterizationPart != nullptr)
+        {
+            PartKey key;
+            std::vector<RefCountPtr<IResource>> keep;
+            key.putObject(PS);
+            if (PS) keep.emplace_back(PS);
+            for (const BindingLayoutHandle& l : desc.bindingLayouts)
+            {
+                key.putObject(l.Get());
+                keep.emplace_back(l.Get());
+            }
+            key.put(fbinfo.sampleCount);
+            key.put(blendState.alphaToCoverageEnable);
+            fragmentShaderPart = getPipelineLibraryPart(cache, m_Context, PartFragmentShader, std::move(key), std::move(keep), [&](vk::PipelineLayout& layout) {
+                if (makeLayout(layout) != vk::Result::eSuccess)
+                    return vk::Pipeline();
+                std::vector<vk::SpecializationInfo> specInfos;
+                std::vector<vk::SpecializationMapEntry> specMapEntries;
+                std::vector<uint32_t> specData;
+                size_t numShaders = 0, numShadersWithSpecializations = 0, numSpecializationConstants = 0;
+                countSpecializationConstants(PS, numShaders, numShadersWithSpecializations, numSpecializationConstants);
+                specInfos.reserve(numShadersWithSpecializations);
+                specMapEntries.reserve(numSpecializationConstants);
+                specData.reserve(numSpecializationConstants);
+                vk::PipelineShaderStageCreateInfo stage;
+                if (PS) stage = makeShaderStageCreateInfo(PS, specInfos, specMapEntries, specData);
+                auto depthStencil = vk::PipelineDepthStencilStateCreateInfo();  // all dynamic but depth bounds (off)
+                auto dynamicStateInfo = vk::PipelineDynamicStateCreateInfo()
+                    .setDynamicStateCount(uint32_t(std::size(c_FragmentShaderDynamicStates)))
+                    .setPDynamicStates(c_FragmentShaderDynamicStates);
+                auto libraryInfo = vk::GraphicsPipelineLibraryCreateInfoEXT().setFlags(vk::GraphicsPipelineLibraryFlagBitsEXT::eFragmentShader);
+                auto info = vk::GraphicsPipelineCreateInfo().setPNext(&libraryInfo).setFlags(libraryFlags)
+                    .setStageCount(PS ? 1u : 0u).setPStages(PS ? &stage : nullptr)
+                    .setPDepthStencilState(&depthStencil).setPMultisampleState(&multisample)
+                    .setPDynamicState(&dynamicStateInfo).setLayout(layout);
+                return createLibrary(info);
+            });
+        }
+
+        if (partsOnly)
+        {
+            if (partsMade)
+                *partsMade = (!desc.VS || preRasterizationPart) && (!desc.PS || fragmentShaderPart);
+            return nullptr;
+        }
+
+        // Fragment output: attachment formats and blending.
+        std::shared_ptr<PipelineLibraryPart> fragmentOutputPart;
+        if (fragmentShaderPart)
+        {
+            PartKey key;
+            key.put(uint32_t(fbinfo.colorFormats.size()));
+            for (size_t i = 0; i < fbinfo.colorFormats.size(); i++)
+            {
+                const BlendState::RenderTarget& t = blendState.targets[i];
+                key.put(fbinfo.colorFormats[i]);
+                key.put(t.blendEnable); key.put(t.srcBlend); key.put(t.destBlend); key.put(t.blendOp);
+                key.put(t.srcBlendAlpha); key.put(t.destBlendAlpha); key.put(t.blendOpAlpha); key.put(t.colorWriteMask);
+            }
+            key.put(fbinfo.depthFormat);
+            key.put(fbinfo.sampleCount);
+            key.put(blendState.alphaToCoverageEnable);
+            key.put(usesBlendConstants);
+            fragmentOutputPart = getPipelineLibraryPart(cache, m_Context, PartFragmentOutput, std::move(key), {}, [&](vk::PipelineLayout&) {
+                static_vector<vk::PipelineColorBlendAttachmentState, c_MaxRenderTargets> colorBlendAttachments(fbinfo.colorFormats.size());
+                for (uint32_t i = 0; i < uint32_t(fbinfo.colorFormats.size()); i++)
+                    colorBlendAttachments[i] = convertBlendState(blendState.targets[i]);
+                auto colorBlend = vk::PipelineColorBlendStateCreateInfo()
+                    .setAttachmentCount(uint32_t(colorBlendAttachments.size()))
+                    .setPAttachments(colorBlendAttachments.data());
+                const vk::DynamicState blendConstants = vk::DynamicState::eBlendConstants;
+                auto dynamicStateInfo = vk::PipelineDynamicStateCreateInfo()
+                    .setDynamicStateCount(usesBlendConstants ? 1u : 0u).setPDynamicStates(&blendConstants);
+                std::array<vk::Format, c_MaxRenderTargets> colorFormats;
+                for (size_t i = 0; i < fbinfo.colorFormats.size(); i++)
+                    colorFormats[i] = vk::Format(convertFormat(fbinfo.colorFormats[i]));
+                FormatInfo const& depthStencilFormatInfo = getFormatInfo(fbinfo.depthFormat);
+                const vk::Format depthStencilFormat = vk::Format(convertFormat(fbinfo.depthFormat));
+                auto renderingInfo = vk::PipelineRenderingCreateInfo()
+                    .setColorAttachmentCount(uint32_t(fbinfo.colorFormats.size()))
+                    .setPColorAttachmentFormats(colorFormats.data())
+                    .setDepthAttachmentFormat(depthStencilFormatInfo.hasDepth ? depthStencilFormat : vk::Format::eUndefined)
+                    .setStencilAttachmentFormat(depthStencilFormatInfo.hasStencil ? depthStencilFormat : vk::Format::eUndefined);
+                auto libraryInfo = vk::GraphicsPipelineLibraryCreateInfoEXT().setFlags(vk::GraphicsPipelineLibraryFlagBitsEXT::eFragmentOutputInterface);
+                libraryInfo.setPNext(&renderingInfo);
+                auto info = vk::GraphicsPipelineCreateInfo().setPNext(&libraryInfo).setFlags(libraryFlags)
+                    .setPColorBlendState(&colorBlend).setPMultisampleState(&multisample)
+                    .setPDynamicState(&dynamicStateInfo);
+                return createLibrary(info);
+            });
+        }
+        if (!fragmentOutputPart)
+            return nullptr;
+
+        // The link.
+        RefCountPtr<GraphicsPipeline> pso = RefCountPtr<GraphicsPipeline>::Create(new GraphicsPipeline(m_Context));
+        pso->desc = desc;
+        pso->framebufferInfo = fbinfo;
+        pso->usesBlendConstants = usesBlendConstants;
+        pso->dynamicFixedFunction = true;
+        pso->libraryParts = { vertexInputPart, preRasterizationPart, fragmentShaderPart, fragmentOutputPart };
+        if (desc.VS) pso->shaderMask = pso->shaderMask | ShaderType::Vertex;
+        if (desc.HS) pso->shaderMask = pso->shaderMask | ShaderType::Hull;
+        if (desc.DS) pso->shaderMask = pso->shaderMask | ShaderType::Domain;
+        if (desc.GS) pso->shaderMask = pso->shaderMask | ShaderType::Geometry;
+        if (desc.PS) pso->shaderMask = pso->shaderMask | ShaderType::Pixel;
+        if (createPipelineLayout(pso->pipelineLayout, pso->pipelineBindingLayouts, pso->pushConstantVisibility,
+                pso->descriptorSetIdxToBindingIdx, m_Context, desc.bindingLayouts) != vk::Result::eSuccess)
+            return nullptr;
+        const vk::Pipeline libraries[4] = { vertexInputPart->pipeline, preRasterizationPart->pipeline,
+                                            fragmentShaderPart->pipeline, fragmentOutputPart->pipeline };
+        auto libraryInfo = vk::PipelineLibraryCreateInfoKHR().setLibraryCount(4).setPLibraries(libraries);
+        auto info = vk::GraphicsPipelineCreateInfo().setPNext(&libraryInfo).setLayout(pso->pipelineLayout)
+            .setBasePipelineIndex(-1);
+        const auto start = std::chrono::steady_clock::now();
+        const vk::Result res = m_Context.device.createGraphicsPipelines(m_Context.pipelineCache, 1, &info,
+            m_Context.allocationCallbacks, &pso->pipeline);
+        cache.linkMicroseconds += microsecondsSince(start);
+        if (res != vk::Result::eSuccess)
+        {
+            cache.linkFailures++;
+            return nullptr;
+        }
+        cache.links++;
+        return GraphicsPipelineHandle(pso.Get());
+    }
+
+    // The fixed-function state a linked pipeline's parts leave dynamic, from its description.
+    static void setLinkedPipelineDynamicState(vk::CommandBuffer cmdBuf, const GraphicsPipeline& pso, uint32_t stencilRef)
+    {
+        const auto& rs = pso.desc.renderState.rasterState;
+        const auto& ds = pso.desc.renderState.depthStencilState;
+        cmdBuf.setCullMode(convertCullMode(rs.cullMode));
+        cmdBuf.setFrontFace(rs.frontCounterClockwise ? vk::FrontFace::eCounterClockwise : vk::FrontFace::eClockwise);
+        cmdBuf.setDepthBiasEnable(rs.depthBias ? true : false);
+        cmdBuf.setDepthBias(float(rs.depthBias), rs.depthBiasClamp, rs.slopeScaledDepthBias);
+        cmdBuf.setDepthTestEnable(ds.depthTestEnable);
+        cmdBuf.setDepthWriteEnable(ds.depthWriteEnable);
+        cmdBuf.setDepthCompareOp(convertCompareOp(ds.depthFunc));
+        cmdBuf.setStencilTestEnable(ds.stencilEnable);
+        const auto setOps = [&](vk::StencilFaceFlags face, const DepthStencilState::StencilOpDesc& op) {
+            cmdBuf.setStencilOp(face, convertStencilOp(op.failOp), convertStencilOp(op.passOp),
+                                convertStencilOp(op.depthFailOp), convertCompareOp(op.stencilFunc));
+        };
+        setOps(vk::StencilFaceFlagBits::eFront, ds.frontFaceStencil);
+        setOps(vk::StencilFaceFlagBits::eBack, ds.backFaceStencil);
+        cmdBuf.setStencilCompareMask(vk::StencilFaceFlagBits::eFrontAndBack, ds.stencilReadMask);
+        cmdBuf.setStencilWriteMask(vk::StencilFaceFlagBits::eFrontAndBack, ds.stencilWriteMask);
+        cmdBuf.setStencilReference(vk::StencilFaceFlagBits::eFrontAndBack, ds.dynamicStencilRef ? stencilRef : uint32_t(ds.stencilRefValue));
+    }
+
     GraphicsPipelineHandle Device::createGraphicsPipeline(const GraphicsPipelineDesc& desc, FramebufferInfo const& fbinfo)
     {
         if (desc.renderState.singlePassStereo.enabled)
         {
             m_Context.error("Single-pass stereo is not supported by the Vulkan backend");
             return nullptr;
+        }
+
+        if (desc.vulkanLibraryLink && m_PipelineLibrary && !desc.shadingRateState.enabled)
+        {
+            if (GraphicsPipelineHandle linked = createLinkedGraphicsPipeline(desc, fbinfo))
+                return linked;
+            // A part or the link failed: compiled whole below (getPipelineLibraryStats counts it).
         }
 
         vk::Result res;
@@ -600,7 +977,12 @@ namespace nvrhi::vulkan
             nr::CountGpuCommand(nr::DevGpuCounter::Scissor);
         }
 
-        if (pso->desc.renderState.depthStencilState.dynamicStencilRef && (updatePipeline || m_CurrentGraphicsState.dynamicStencilRefValue != state.dynamicStencilRefValue))
+        if (pso->dynamicFixedFunction && updatePipeline)
+        {
+            // KK patch: a pipeline linked from library parts.
+            setLinkedPipelineDynamicState(m_CurrentCmdBuf->cmdBuf, *pso, state.dynamicStencilRefValue);
+        }
+        else if (pso->desc.renderState.depthStencilState.dynamicStencilRef && (updatePipeline || m_CurrentGraphicsState.dynamicStencilRefValue != state.dynamicStencilRefValue))
         {
             m_CurrentCmdBuf->cmdBuf.setStencilReference(vk::StencilFaceFlagBits::eFrontAndBack, state.dynamicStencilRefValue);
             nr::CountGpuCommand(nr::DevGpuCounter::Stencil);

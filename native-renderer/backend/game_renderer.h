@@ -131,6 +131,9 @@ class GameRenderer {
     // Create the game's pipelines on worker threads. pipeline_wait controls whether
     // a draw waits for its pending pipeline or may be skipped (pipeline_demand.h).
     bool async_pipelines = true;
+    // Tests (task 183): with the Vulkan graphics pipeline library, the draws' pipelines made on the draw thread
+    // (async_pipelines off) are linked from library parts as the workers' are for a draw, and never replaced.
+    bool link_draw_pipelines = false;
     // True: every draw waits for its pending pipeline (before task 179 the default; now
     // KK_DEV_PIPELINE_BLOCK=1 or --native_pipeline_wait=true). False: a frame never waits for a
     // scene draw's pipeline: the draw is skipped until a worker has made it (task 179). Only with
@@ -258,6 +261,14 @@ class GameRenderer {
     uint64_t aliases = 0;           // textures converted from a resolve through another format
     uint64_t alias_failures = 0;
     double pipeline_ms = 0;         // time spent creating pipelines
+    // Task 183 (Vulkan graphics pipeline library): draws' pipelines linked from parts, their time (worker), and
+    // the whole pipelines that replaced them.
+    uint64_t pipelines_linked = 0;
+    double linked_ms_total = 0, linked_ms_max = 0;
+    uint64_t pipelines_replaced = 0;
+    double replace_ms_total = 0;
+    uint64_t shader_parts = 0;      // game shaders whose library part was made when the game created them
+    double shader_parts_ms = 0;
     double texture_ms = 0;          // time spent converting and uploading textures
     double buffer_ms = 0;           // vertex and index buffers: finding, creating and uploading
     double target_ms = 0;           // render targets and framebuffers: finding and creating
@@ -282,6 +293,18 @@ class GameRenderer {
   // The temporal upscaler's state (null when off; tests and logging).
   const GameUpscale* upscale() const { return upscale_.get(); }
   const Stats& stats() const { return stats_; }
+  // Task 183: the Vulkan graphics pipeline library's parts and links (all zero without it; as
+  // nvrhi::vulkan::IDevice::PipelineLibraryStats, without the Vulkan headers here).
+  struct PipelineLibraryStats {
+    uint64_t partsMade[4] = {};    // vertex input, pre-rasterization, fragment shader, fragment output
+    uint64_t partsReused[4] = {};
+    uint64_t partFailures = 0;
+    double partMs = 0;
+    uint64_t links = 0;
+    uint64_t linkFailures = 0;
+    double linkMs = 0;
+  };
+  PipelineLibraryStats PipelineLibraryCounts() const;
   // The frame timing summary (backend.cpp): the GPU time of each pass group since the last call, from
   // the timers that already run (AO and the upscale point with the graphics panel's live settings, GI
   // and the lighting options while they are on). frames == 0: not timed in the window.
@@ -721,12 +744,42 @@ class GameRenderer {
   uint32_t RecordFlags() const;
   void RetryDeferred();
   void PipelineWorker();
+  // Task 183: how a worker makes a job's pipeline. With the Vulkan graphics pipeline library (pipeline_library_):
+  // a draw's pipeline is linked from cached parts at once and compiled whole in the background (kReplace swaps it
+  // in); the prewarm also makes each record's parts, so later new pipelines of the same shaders link at once.
+  enum class PipelineBuild : uint8_t {
+    kWhole,    // compiled whole (no library, or not a draw's)
+    kPrewarm,  // a listed record: its library parts, then whole
+    kLinked,   // a draw waits or skips: linked now, then a kReplace job
+    kReplace,  // the whole pipeline that replaces a linked one
+    kParts,    // a shader the game created: its library part (pre-rasterization or fragment shader), no pipeline
+  };
   struct PipelineJob {
     uint64_t key = 0;
     nvrhi::GraphicsPipelineDesc desc;
     nvrhi::FramebufferInfo framebuffer;
     bool urgent = false;
+    PipelineBuild build = PipelineBuild::kWhole;
   };
+  struct DonePipeline {
+    uint64_t key = 0;
+    nvrhi::GraphicsPipelineHandle pipeline;
+    PipelineBuild build = PipelineBuild::kWhole;
+    double ms = 0;  // the worker's time making it
+    bool urgent = false;  // a draw asked for it
+  };
+  // The Vulkan device links pipelines from library parts (nvrhi::Feature::GraphicsPipelineLibrary).
+  bool pipeline_library_ = false;
+  bool pipeline_library_link_only_ = false;  // KK_DEV_GPL_LINK_ONLY=1 (dev): linked pipelines are never replaced
+  // Task 183: the game's shaders get their library parts made on the workers when the game creates them (behind
+  // the prewarm), so a later new pipeline of them links without compiling (KK_DEV_GPL_NO_SHADER_PARTS=1: not).
+  void QueueShaderParts(bool vertex, const nvrhi::ShaderHandle& shader);
+  std::unordered_set<const nvrhi::IShader*> shader_parts_queued_;  // pipeline_mutex_
+  bool PrepareLibraryParts(const nvrhi::GraphicsPipelineDesc& desc, const nvrhi::FramebufferInfo& framebuffer);
+  // Linked pipelines replaced by their whole ones: released two frames later (a draw may still hold the pointer).
+  std::vector<std::pair<uint64_t, nvrhi::GraphicsPipelineHandle>> replaced_pipelines_;
+  void LogPipelineLibrary(bool final);
+  uint64_t library_logged_links_ = ~0ull, library_logged_parts_ = ~0ull;
   std::vector<std::thread> pipeline_threads_;
   std::condition_variable pipeline_done_cv_;
   PipelineCacheFile cache_file_;
@@ -746,7 +799,7 @@ class GameRenderer {
   std::mutex pipeline_mutex_;
   std::condition_variable pipeline_cv_;
   std::deque<PipelineJob> pipeline_jobs_;
-  std::vector<std::pair<uint64_t, nvrhi::GraphicsPipelineHandle>> pipelines_done_;
+  std::vector<DonePipeline> pipelines_done_;
   std::unordered_map<uint64_t, bool> pipelines_pending_;
   bool pipeline_stop_ = false;
   double pipeline_worker_ms_ = 0;

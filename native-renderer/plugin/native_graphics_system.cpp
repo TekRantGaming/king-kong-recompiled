@@ -90,19 +90,23 @@ void PrepareVulkanForUpscalers() {
   UpscalerVulkanWants(config, 0, &dlss, &xess);
   std::vector<std::string> instance_extensions = UpscalerVulkanInstanceExtensions(dlss, true);
   rex::ui::vulkan::SetVulkanInstanceExtensionRequests(instance_extensions);
-  rex::ui::vulkan::SetVulkanDeviceRequestCallback([config](VkInstance instance, VkPhysicalDevice physical) {
-    rex::ui::vulkan::VulkanDeviceRequests requests;
+  // With the graphics pipeline library's requests (task 183, PrepareVulkanDeviceRequests).
+  PrepareVulkanDeviceRequests([config](void* instance_handle, void* physical_handle, std::vector<std::string>& extensions,
+                                       std::vector<std::vector<uint8_t>>& features) {
+    VkInstance instance = static_cast<VkInstance>(instance_handle);
+    VkPhysicalDevice physical = static_cast<VkPhysicalDevice>(physical_handle);
     bool want_dlss = false, want_xess = false;
     UpscalerVulkanWants(config, UpscalerVulkanVendor(instance, physical, nullptr), &want_dlss, &want_xess);
     want_xess = true;  // XeSS runs on other vendors' GPUs too
     UpscalerVulkanNeeds needs = UpscalerVulkanDeviceNeeds(want_dlss, want_xess, instance, physical, nullptr);
     REXGPU_INFO("rexgpu-native: the upscalers ask the Vulkan device for {} extensions and {} feature structures",
                 needs.extensions.size(), needs.features.size());
-    requests.extensions = std::move(needs.extensions);
-    requests.features = std::move(needs.features);
-    return requests;
+    extensions = std::move(needs.extensions);
+    features = std::move(needs.features);
   });
   REXGPU_INFO("rexgpu-native: the upscalers ask the Vulkan instance for {} extensions", instance_extensions.size());
+#elif NR_HAS_VULKAN
+  PrepareVulkanDeviceRequests();  // the graphics pipeline library alone (task 183)
 #endif
 }
 

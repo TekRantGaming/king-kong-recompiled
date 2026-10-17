@@ -373,6 +373,7 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
       if (r.upToDate && previous == expected && driver_ready && job->need_driver_cache && drivers.empty() &&
           backend == kkshaders::PackBackend::Spirv &&
           std::filesystem::is_regular_file(job->driver_cache_path, marker_error)) {
+        nr::PrepareVulkanDeviceRequests();  // the graphics pipeline library (task 183)
         provider = rex::ui::vulkan::VulkanProvider::Create(true, false);
         if (provider) host = nr::CreateVulkanHostDevice(*provider);
         if (host && host->pipeline_cache()) {
@@ -394,6 +395,7 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
         const auto start = std::chrono::steady_clock::now();
 #if NR_HAS_VULKAN
         if (backend == kkshaders::PackBackend::Spirv && !host) {
+          nr::PrepareVulkanDeviceRequests();  // the graphics pipeline library (task 183)
           provider = rex::ui::vulkan::VulkanProvider::Create(true, false);
           if (provider) host = nr::CreateVulkanHostDevice(*provider);
         }

@@ -123,6 +123,7 @@ class LauncherPrewarm {
   void Run() {
     // The SDK's provider as the game's start makes it (the same GPU and features), without
     // presentation.
+    nr::PrepareVulkanDeviceRequests();  // the graphics pipeline library (task 183)
     std::unique_ptr<rex::ui::vulkan::VulkanProvider> provider = rex::ui::vulkan::VulkanProvider::Create(true, false);
     std::unique_ptr<HostDevice> host = provider ? CreateVulkanHostDevice(*provider) : nullptr;
     if (!host) {
