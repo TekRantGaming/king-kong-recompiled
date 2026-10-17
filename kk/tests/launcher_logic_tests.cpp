@@ -106,7 +106,7 @@ void ExtrasChecks() {
 
 void GraphicsPresetChecks() {
   const char* expected[] = {"low", "medium", "high", "high", "low"};
-  const char* distances[] = {"near", "medium", "far", "full", "near"};
+  const char* distances[] = {"near", "medium", "far", "far", "near"};  // Ultra: Far since Beta 8 (Full is F8 only)
   for (int i = 0; i < kk::kGraphicsPresetCount; ++i) {
     const auto& p = kk::kGraphicsPresets[i];
     Check(std::string_view(p.gi) == expected[i], "preset GI mapping");

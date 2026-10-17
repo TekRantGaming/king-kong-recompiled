@@ -323,9 +323,11 @@ if len(mods_strings) < 35:
 strings |= mods_strings
 if 'Coming soon' in workshop_cpp or 'KongMods' not in workshop_cpp:
     fail('task 200: the Workshop still shows Coming soon instead of the Kong mods row')
-for builtin in ('hardcore', 'cel-shading'):
+for builtin in ('cel-shading',):  # Hardcore held back until no healing works (owner, Beta 7)
     if not (root / 'mods-builtin' / builtin / 'mod.toml').exists():
         fail(f'task 200: built-in mod {builtin} missing')
+if (root / 'mods-builtin' / 'hardcore').exists():
+    fail('task 200: the Hardcore mod is held back and must not ship as a built-in mod yet')
 if not (root.parent / 'MODDING.md').exists():
     fail('task 200: MODDING.md missing')
 else:
