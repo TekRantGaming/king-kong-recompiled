@@ -75,6 +75,7 @@ set(KINGKONG_SOURCES
     src/native_shaders.cpp
     src/http.cpp
     src/content.cpp
+    src/system_notify.cpp
     src/update.cpp
     src/play_session.cpp
     src/ps2_movies.cpp
@@ -120,7 +121,7 @@ target_link_libraries(king_kong PRIVATE nr_hooks)
 add_dependencies(king_kong rexgpu-native)
 
 if(WIN32)
-    target_link_libraries(king_kong PRIVATE windowscodecs ole32 pdh psapi)
+    target_link_libraries(king_kong PRIVATE windowscodecs ole32 pdh psapi runtimeobject shell32)
     # UTF-8 as the program's code page (src/king_kong.manifest, issue #37).
     target_link_options(king_kong PRIVATE "LINKER:/MANIFEST:EMBED" "LINKER:/MANIFESTUAC:NO"
                         "LINKER:/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/src/king_kong.manifest")
@@ -205,6 +206,11 @@ if(KK_DEV_TOOLS)
     target_link_libraries(kk-menu-sound-tests PRIVATE rex::runtime)
     rexglue_apply_target_settings(kk-menu-sound-tests)
     add_test(NAME menu-sound-volume COMMAND kk-menu-sound-tests)
+    # Job J3: when a download end dings and sends a system notification; the toast's XML.
+    add_executable(kk-notify-tests tests/notify_tests.cpp)
+    target_include_directories(kk-notify-tests PRIVATE src)
+    rexglue_apply_target_settings(kk-notify-tests)
+    add_test(NAME download-notifications COMMAND kk-notify-tests)
     add_executable(kk-slider-ui-tests tests/slider_ui_tests.cpp src/launcher_ui.cpp src/launcher_text.cpp)
     target_include_directories(kk-slider-ui-tests PRIVATE src)
     target_link_libraries(kk-slider-ui-tests PRIVATE rex::runtime)

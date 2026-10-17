@@ -125,6 +125,7 @@ inline constexpr Row kCheatsRows[] = {
 };
 
 inline constexpr Row kAdvancedRows[] = {
+    {"Downloads", "Notify me when downloads finish"},
     {"Cutscenes", "PS2 cutscenes"},
     {"Cutscenes", "Download PS2 cutscenes"},
     {"Cutscenes", "Remove PS2 cutscenes"},

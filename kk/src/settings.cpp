@@ -45,6 +45,8 @@ REXCVAR_DEFINE_BOOL(kk_launcher_music, true, "KK", "Play the game's main menu mu
 REXCVAR_DEFINE_INT32(kk_launcher_music_volume, 50, "KK", "The launcher's music volume, 0-100").range(0, 100);
 REXCVAR_DEFINE_BOOL(kk_launcher_sounds, true, "KK", "The game's menu sounds when moving around and choosing in the launcher");
 REXCVAR_DEFINE_INT32(kk_launcher_sounds_volume, 50, "KK", "The launcher's interface sound volume, 0-100").range(0, 100);
+REXCVAR_DEFINE_BOOL(kk_notify_downloads, true, "KK",
+                    "A system notification when a content download finishes or stops while the launcher is minimised or in the background");
 REXCVAR_DEFINE_INT32(kk_settings_version, 0, "KK",
                      "Internal: which defaults the settings file was written with (see MigrateSettings)");
 REXCVAR_DEFINE_STRING(kk_hardware_tier, "", "KK",

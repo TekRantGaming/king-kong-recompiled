@@ -133,6 +133,10 @@ class Service {
   Status Get(Kind kind) const;
   void Download(Kind kind);  // starts, or continues a paused or failed download
   void Pause(Kind kind);
+  // Job J3, Play while a download runs: paused like Pause (the partial file kept), and remembered (also over
+  // a restart) so that ResumeAfterPlay continues it when the launcher is back.
+  void PauseForPlay(Kind kind);
+  bool ResumeAfterPlay();    // continues what PauseForPlay paused; true if anything was continued
   void Cancel(Kind kind);    // stops and deletes the partial download
   void Remove(Kind kind);    // cancels, uninstalls, puts the settings back
   void Import(const std::filesystem::path& zip);  // "I already have a texture pack"

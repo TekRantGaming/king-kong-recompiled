@@ -457,6 +457,59 @@ static void ServiceTests(const fs::path& work) {
     CHECK(!fs::exists(user3 / "content" / "downloads" / "hd-textures.state"));
   }
 
+  // Job J3, Play while downloading: PauseForPlay keeps the partial file; the next start (a relaunch) or
+  // ResumeAfterPlay in the same process continues it, where a plain Pause stays paused.
+  {
+    const fs::path user5 = work / "user5";
+    auto fake = std::make_unique<FakeFetcher>();
+    fake->data = zip;
+    fake->chunk_ms = 15;
+    uint64_t paused_at = 0;
+    {
+      Service s;
+      s.OverrideUrl(Kind::kTexturePack, "fake://pack", Sha(zip));
+      s.Init(user5, std::move(fake));
+      CHECK(!s.ResumeAfterPlay());  // nothing paused for the game
+      s.Download(Kind::kTexturePack);
+      CHECK(WaitFor([&] { return s.Get(Kind::kTexturePack).done >= 4096; }));
+      s.PauseForPlay(Kind::kTexturePack);
+      CHECK(WaitFor([&] { return s.Idle(); }));
+      paused_at = s.Get(Kind::kTexturePack).done;
+      CHECK(s.Get(Kind::kTexturePack).stage == Stage::kPaused && paused_at >= 4096 && paused_at < zip.size());
+      const std::string state = ReadFile(user5 / "content" / "downloads" / "hd-textures.state");
+      CHECK(state.find("state=paused") != std::string::npos && state.find("for_play=1") != std::string::npos);
+    }
+    CHECK(fs::file_size(user5 / "content" / "downloads" / "hd-textures.part") == paused_at);
+    auto fake2 = std::make_unique<FakeFetcher>();
+    auto* f2 = fake2.get();
+    fake2->data = zip;
+    Service s;
+    s.OverrideUrl(Kind::kTexturePack, "fake://pack", Sha(zip));
+    s.Init(user5, std::move(fake2));
+    CHECK(s.Get(Kind::kTexturePack).stage == Stage::kPaused && s.Idle());  // Init alone keeps it paused
+    CHECK(s.ResumeAfterPlay());                                          // the launcher is back
+    CHECK(WaitFor([&] { return s.Idle() && s.Get(Kind::kTexturePack).installed; }));
+    CHECK(!f2->ranges.empty() && f2->ranges[0] == paused_at);  // continued, not started again
+    CHECK(!s.ResumeAfterPlay());
+  }
+  {  // the same process: pause for the game, back in the launcher, continues
+    const fs::path user6 = work / "user6";
+    auto fake = std::make_unique<FakeFetcher>();
+    fake->data = zip;
+    fake->chunk_ms = 15;
+    Service s;
+    s.OverrideUrl(Kind::kTexturePack, "fake://pack", Sha(zip));
+    s.Init(user6, std::move(fake));
+    s.Download(Kind::kTexturePack);
+    CHECK(WaitFor([&] { return s.Get(Kind::kTexturePack).done >= 4096; }));
+    s.PauseForPlay(Kind::kTexturePack);
+    CHECK(WaitFor([&] { return s.Idle(); }));
+    CHECK(s.Get(Kind::kTexturePack).stage == Stage::kPaused);
+    CHECK(s.ResumeAfterPlay());
+    CHECK(ReadFile(user6 / "content" / "downloads" / "hd-textures.state").find("for_play=0") != std::string::npos);
+    CHECK(WaitFor([&] { return s.Idle() && s.Get(Kind::kTexturePack).installed; }));
+  }
+
   // A download still waiting behind another one also goes on after a restart.
   {
     const fs::path user4 = work / "user4";

@@ -109,6 +109,17 @@ void LauncherSounds::Play(ui::Sound sound, float value, float volume) {
   voices_.push_back({&clip, 0.0, clip.rate / kRate * pitch, use.gain});
 }
 
+void LauncherSounds::PlayDing(float volume) {
+  SetVolume(volume);
+  if (!stream_ || volume <= 0) return;
+  const Clip& clip = clips_[kSelectClip];
+  if (clip.pcm.empty()) return;
+  std::lock_guard<std::mutex> hold(lock_);
+  while (voices_.size() > 6) voices_.erase(voices_.begin());
+  voices_.push_back({&clip, 0.0, clip.rate / kRate, 1.0f, 0});
+  voices_.push_back({&clip, 0.0, clip.rate / kRate * 1.5, 0.85f, int(kRate * 0.12)});
+}
+
 // The audio thread asks for more: mixes the sounds that are playing.
 void LauncherSounds::Feed(void* user, SDL_AudioStream* stream, int additional, int) {
   auto* self = static_cast<LauncherSounds*>(user);
@@ -119,7 +130,12 @@ void LauncherSounds::Feed(void* user, SDL_AudioStream* stream, int additional, i
   self->mix_.assign(size_t(frames), 0.0f);
   for (Voice& v : self->voices_) {
     const std::vector<float>& pcm = v.clip->pcm;
-    for (int f = 0; f < frames && v.pos + 1 < double(pcm.size()); ++f) {
+    int f = 0;
+    if (v.wait > 0) {
+      f = std::min(v.wait, frames);
+      v.wait -= f;
+    }
+    for (; f < frames && v.pos + 1 < double(pcm.size()); ++f) {
       const size_t a = size_t(v.pos);
       const float t = float(v.pos - double(a));
       self->mix_[size_t(f)] += v.gain * (pcm[a] + (pcm[a + 1] - pcm[a]) * t);

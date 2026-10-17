@@ -5,6 +5,7 @@
 - the shader screen shows one bar with one label: no step text is drawn;
 - the bonus video modes' help text says unlocked or locked to match the save;
 - job J2: setup steps 3 and 4 (texture pack, PS2 cutscenes), their pop-ups and the Settings rows;
+- job J3: the notification switch (Settings > Advanced > Downloads) and the ding/notification calls;
 - Settings' tabs are Display, Graphics, Audio, Controls, Gameplay, Cheats, Advanced, About (owner, 16 Oct
   evening), the pause menu's the same without About, and About stays on Home too.
 Usage: launcher_text_tests.py <kk folder>"""
@@ -217,6 +218,17 @@ strings |= {
     '{0} more waiting',
     'Select',
 }
+# Job J3: Settings > Advanced > Downloads (the section and row come from settings_layout.h), and the
+# pop-ups for Play while a download runs or an install finishes.
+strings |= {
+    'Your download will pause while you play', 'Play now', 'Stay here', 'Pausing the download',
+    'The game starts in a moment.', 'Finishing the install', 'Finishing',
+    'The HD texture pack carries on downloading when you come back to the launcher. What was downloaded so far is kept.',
+    'The PS2 cutscenes carry on downloading when you come back to the launcher. What was downloaded so far is kept.',
+    'The HD texture pack and the PS2 cutscenes carry on downloading when you come back to the launcher. What was downloaded so far is kept.',
+    'The download has finished and is being unpacked. That cannot be paused safely, so the game starts as soon as it is done.',
+    'Shows a system notification when the HD texture pack or the PS2 cutscenes finish downloading, or stop, while the launcher is minimised or behind other windows. The sound that plays with it follows Menu sounds.',
+}
 for s in sorted(strings):
     if s == 'Home':
         continue  # never drawn as text
@@ -296,7 +308,17 @@ for needle, why in (
         ('{"Minimise and notify me", "Watch progress"}', 'the This can take a while buttons differ'),
         ('{"Pause", "Run in background", "Cancel"}', 'the progress pop-up buttons differ'),
         ('if (st.stage != content::Stage::kUnpacking)', 'the UI thread logs while unpacking'),
-        ('void NotifyContentDone(', 'no notification hook for job J3')):
+        ('void NotifyContentDone(', 'no notification hook for job J3'),
+        # Job J3: the decision (notify_logic.h), the switch, the ding and the system notification.
+        ('const notify::Plan plan = notify::Decide(s);', 'J3: the download end does not decide what to notify'),
+        ('s.setting_on = GetBool("kk_notify_downloads");', 'J3: the Settings switch is not respected'),
+        ('if (plan.ding) PlayDing();', 'J3: no ding'),
+        ('if (plan.system) notify::Show(title, body,', 'J3: no system notification'),
+        ('items.push_back(CvarToggle("Notify me when downloads finish",', 'J3: no Settings switch'),
+        ('if (!ContentReadyForPlay()) return;', 'J3: Play does not ask while a download runs'),
+        ('{"Play now", "Stay here"}', 'J3: the Play while downloading buttons differ'),
+        ('content::Service::Get().PauseForPlay(kind);', 'J3: Play now does not pause the download'),
+        ('if (service.ResumeAfterPlay())', 'J3: the launcher does not continue a download paused for the game')):
     if needle not in launcher:
         fail(why)
 for banned in ('"Import texture pack ZIP"', '"Restored PS2 cutscenes"', '"Remove HD texture pack"', '"Play PS2 cutscenes"'):

@@ -512,6 +512,7 @@ struct Service::Impl {
     std::atomic<uint64_t> progress{0};
     Want want = Want::kNone;
     bool importing = false;
+    std::atomic<bool> for_play{false};  // paused because the game was started (PauseForPlay)
     std::string url, sha;
     std::string installed_setting;  // the folder as the settings hold it (UTF-8)
     // Speed: (time, bytes) samples of the last few seconds.
@@ -552,13 +553,17 @@ struct Service::Impl {
   }
 
   void WriteState(Kind k, const std::string& state, uint64_t total) {
-    WriteKeys(StateFile(k), {{"state", state}, {"total", std::to_string(total)}, {"url", S(k).url}});
+    WriteKeys(StateFile(k), {{"state", state},
+                             {"total", std::to_string(total)},
+                             {"url", S(k).url},
+                             {"for_play", S(k).for_play.load() ? "1" : "0"}});
   }
   void ClearDownload(Kind k) {
     std::error_code ec;
     fs::remove(Part(k), ec);
     fs::remove(Zip(k), ec);
     fs::remove(StateFile(k), ec);
+    S(k).for_play = false;
   }
 
   void Changes(Kind k, bool install, const std::string& folder) {
@@ -1046,6 +1051,7 @@ void Service::Init(const fs::path& user_dir, std::unique_ptr<Fetcher> fetcher) {
     if (state.count("state")) {
       const uint64_t total = ToU64(state.count("total") ? state.at("total") : "");
       const uint64_t have = std::max(FileSize(impl_->Part(k)), FileSize(impl_->Zip(k)));
+      slot.for_play = state.count("for_play") && state.at("for_play") == "1";
       if (state.at("state") == "downloading") {
         Log(std::string(InfoFor(k).id) + ": continuing the download from the last session (" + std::to_string(have) +
             " bytes kept)");
@@ -1096,6 +1102,7 @@ void Service::Download(Kind kind) {
     const auto& st = impl_->S(kind).status;
     if (st.Busy() || impl_->Queued(kind) || st.installed) return;
   }
+  impl_->S(kind).for_play = false;
   // Kept from now on: a download still waiting for the one before it also goes on after a restart.
   impl_->WriteState(kind, "downloading", ToU64(ReadKeys(impl_->StateFile(kind))["total"]));
   impl_->Push({Impl::JobType::kDownload, kind, {}});
@@ -1120,6 +1127,28 @@ void Service::Pause(Kind kind) {
     slot.stop = true;
     impl_->cv.notify_all();
   }
+}
+
+void Service::PauseForPlay(Kind kind) {
+  if (!impl_->ready) return;
+  impl_->S(kind).for_play = true;
+  Log(std::string(InfoFor(kind).id) + ": pausing while the game runs");
+  Pause(kind);
+}
+
+bool Service::ResumeAfterPlay() {
+  if (!impl_->ready) return false;
+  bool any = false;
+  for (int i = 0; i < kKindCount; ++i) {
+    const Kind k = Kind(i);
+    if (!impl_->S(k).for_play.exchange(false)) continue;
+    Status st = Get(k);
+    if (st.stage != Stage::kPaused && st.stage != Stage::kFailed) continue;
+    Log(std::string(InfoFor(k).id) + ": continuing after the game (paused while it ran)");
+    Download(k);
+    any = true;
+  }
+  return any;
 }
 
 void Service::Cancel(Kind kind) {

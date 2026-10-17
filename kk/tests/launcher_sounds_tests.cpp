@@ -51,11 +51,27 @@ struct LauncherSoundsTest {
     if (SDL_GetAudioStreamGain(sound.stream_) != 1) throw std::runtime_error("maximum clamp failed");
     sound.Play(ui::Sound::kMove,0.5f,0);
     if (SDL_GetAudioStreamGain(sound.stream_) != 0) throw std::runtime_error("zero cue did not mute existing voice");
+    // Job J3: the ding is the select sound twice, the second higher and 0.12 s later, at the menu volume.
+    sound.voices_.clear();
+    SDL_ClearAudioStream(sound.stream_);
+    sound.PlayDing(0.5f);
+    if (sound.voices_.size() != 2 || SDL_GetAudioStreamGain(sound.stream_) != 0.5f)
+      throw std::runtime_error("ding is not two voices at the menu volume");
+    if (sound.voices_[0].wait != 0 || sound.voices_[1].wait != 5760 || sound.voices_[1].step != 0.75)
+      throw std::runtime_error("ding's second note is not a fifth higher 0.12 s later");
+    LauncherSounds::Feed(&sound,sound.stream_,4096,0);  // 1024 frames: the second note still waits
+    if (sound.voices_.size() != 2 || sound.voices_[1].wait != 5760 - 1024 || sound.voices_[1].pos != 0)
+      throw std::runtime_error("ding's second note started early");
+    for (int i = 0; i < 6; ++i) LauncherSounds::Feed(&sound,sound.stream_,4096,0);
+    if (sound.voices_[1].wait != 0 || sound.voices_[1].pos <= 0) throw std::runtime_error("ding's second note never started");
+    sound.voices_.clear();
+    sound.PlayDing(0);
+    if (!sound.voices_.empty()) throw std::runtime_error("muted ding was queued");
   }
 };
 }
 int main() {
   try { kk::LauncherSoundsTest::Run(); }
   catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
-  std::cout << "menu sound live gain, mute, endpoints and resampling passed\n";
+  std::cout << "menu sound live gain, mute, endpoints, resampling and the download ding passed\n";
 }
