@@ -87,6 +87,7 @@
 #include "graphics_presets.h"
 #include "iso.h"
 #include "toast.h"
+#include "workshop.h"
 
 REXCVAR_DEFINE_STRING(kk_launcher_open, "", "KK",
                       "Internal: the screen the launcher opens on, set by the game when it goes back to the "
@@ -300,9 +301,9 @@ constexpr const char* kRestartCvars[] = {"present_effect", "window_width", "wind
 // Controls, Gameplay, Cheats, Advanced, About). About is also on Home as a page of its own (no tabs), the same
 // page and rows (AboutItems); Achievements is a page of its own.
 enum Page { kHome, kDisplay, kGraphics, kAudio, kControls, kGameplay, kCheats, kAdvanced, kAbout, kAchievements,
-            kPageCount };
+            kWorkshop, kPageCount };
 constexpr const char* kPageNames[kPageCount] = {"Home",     "Display", "Graphics", "Audio", "Controls",    "Gameplay",
-                                               "Cheats",   "Advanced", "About",   "Achievements"};
+                                               "Cheats",   "Advanced", "About",   "Achievements", "Workshop"};
 // The pages with settings rows (settings_layout.h, same order).
 constexpr Page kFirstSettingsPage = kDisplay, kLastSettingsPage = kAdvanced;
 constexpr bool IsSettingsPage(Page page) { return page >= kFirstSettingsPage && page <= kLastSettingsPage; }
@@ -2709,6 +2710,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       } else {
         DrawTopBar(dl);
         if (page_ == kHome) DrawHome(dl);
+        else if (page_ == kWorkshop) DrawWorkshop(dl);
         else DrawSettings(dl);
       }
     }
@@ -3145,6 +3147,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       }
     }
     if (play_ != PlayView::kNone) return PlayPrompts();
+    if (page_ == kWorkshop && workshop_) {  // job J8
+      p = workshop_->Prompts();
+      if (CanPlay()) p.insert(p.end() - 1, {Action::kPlay, "Play"});
+      return p;
+    }
     if (page_ == kHome) {
       if (status_focus_) return {{Action::kAccept, "Rebuild shaders"}, {Action::kBack, "Back"}};
       if (side_focus_ < 0 && menu_value_) p.push_back({Action::kLeft, "Change"});
@@ -3177,7 +3184,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   void HandleGlobalInput() {
     ui::Input& in = input_;
     if (play_ != PlayView::kNone) return HandlePlayInput();
-    if (in.Pressed(Action::kPrevTab) || in.Pressed(Action::kNextTab)) {
+    if ((in.Pressed(Action::kPrevTab) || in.Pressed(Action::kNextTab)) && page_ != kWorkshop) {  // Workshop: its own
       // LB and RB move between Settings' tabs, About included, wrapping round (only on Settings).
       if (OnSettingsTab()) {
         const int dir = in.Pressed(Action::kNextTab) ? 1 : -1, n = kSettingsTabCount;
@@ -3205,6 +3212,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         OpenPlayView(PlayView::kExtras);
         play_lists_[int(PlayView::kExtras)].focus = focus;
         REXLOG_INFO("KK: back from Graphics to Extras, row {}", focus);
+      } else if (page_ == kWorkshop && workshop_ && workshop_->Back()) {  // a project's page: back to the tiles
       } else if (page_ != kHome) GoTo(kHome);
       else if (status_focus_ || side_focus_ >= 0) status_focus_ = false, side_focus_ = -1;  // back to the menu
       else OpenQuit();
@@ -3228,6 +3236,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (update_ && update_->found && !installing_update_)
       e.push_back({F("Update to v{0}", {update_->found->version}), true, [this] { OpenUpdatePrompt(); }});
     e.push_back({"Settings", true, [this] { GoTo(settings_page_, /*settings_tab=*/true); }});
+    e.push_back({"Workshop", true, [this] { GoTo(kWorkshop); }});  // job J8: the owner's other projects
     e.push_back({"Achievements", true, [this] { GoTo(kAchievements); }});
     e.push_back({"About", true, [this] { GoTo(kAbout); }});
     e.push_back({"Quit", true, [this] { Quit(); }});
@@ -4944,6 +4953,15 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       items.push_back(std::move(it));
     }
     return items;
+  }
+
+  // Job J8: the Workshop page (workshop.cpp), between the top bar and the prompts.
+  void DrawWorkshop(ImDrawList* dl) {
+    if (!workshop_) workshop_ = std::make_unique<Workshop>(immediate_, paths_.user_dir);
+    const float s = S();
+    workshop_->Draw(dl, ImVec2(o_.x + Margin(), o_.y + 96 * s), ImVec2(o_.x + w_ - Margin(), o_.y + h_ - 96 * s), m_,
+                    input_, !modal_.open);
+    focused_ = nullptr;
   }
 
   void DrawSettings(ImDrawList* dl) {
@@ -6960,6 +6978,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                   state.focus, focused_ ? focused_->label : std::string("-"));
       return;
     }
+    if (t.rfind("workshop:", 0) == 0) {  // job J8: workshop:<state|open:N|tile:N|mods|download|github|link:N|links|scroll:PX>
+      if (workshop_) workshop_->DevCommand(t.substr(9));
+      return;
+    }
     if (t.rfind("page:", 0) == 0) {
       if (text::Upper(t.substr(5)) == "EXTRAS") {
         OpenPlayMenu();
@@ -7119,6 +7141,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   bool recovery_shown_ = false;
   std::map<int, ui::ListState> lists_;
   std::vector<Item> focused_items_;
+  std::unique_ptr<Workshop> workshop_;  // job J8: made when the Workshop page first opens
   const Item* focused_ = nullptr;
   Action pending_click_ = Action::kCount;
   int home_focus_ = 0;

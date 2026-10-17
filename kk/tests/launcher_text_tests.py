@@ -6,6 +6,7 @@
 - the bonus video modes' help text says unlocked or locked to match the save;
 - job J2: setup steps 3 and 4 (texture pack, PS2 cutscenes), their pop-ups and the Settings rows;
 - job J3: the notification switch (Settings > Advanced > Downloads) and the ding/notification calls;
+- job J8: the Workshop page's text and its Home entry;
 - Settings' tabs are Display, Graphics, Audio, Controls, Gameplay, Cheats, Advanced, About (owner, 16 Oct
   evening), the pause menu's the same without About, and About stays on Home too.
 Usage: launcher_text_tests.py <kk folder>"""
@@ -25,7 +26,7 @@ def fail(message):
 # All translation tables the launcher includes.
 table_text = ''
 for name in ('launcher_text_table.inc', 'debug_overlay_text_table.inc', 'benchmark_text_table.inc',
-             'hdr_text_table.inc', 'launcher_layout_text_table.inc'):
+             'hdr_text_table.inc', 'launcher_layout_text_table.inc', 'workshop_text_table.inc'):
     table_text += (src / name).read_text(encoding='utf-8') + '\n'
 STRING = r'"((?:[^"\\]|\\.)*)"'
 entries = {}
@@ -300,6 +301,18 @@ strings |= {
     'Compare',
     'Checking which other upscalers your graphics card runs...',
 }
+# Job J8: the Workshop page (workshop.cpp): every string it draws through T() / F(), and the Home entry.
+workshop_cpp = (src / 'workshop.cpp').read_text(encoding='utf-8')
+workshop_strings = set(re.findall(r'(?<![A-Za-z_])[TF]\("([^"]+)"', workshop_cpp))
+workshop_strings |= set(re.findall(r'DrawCaption\([^;]*?"([^"]+)"\);', workshop_cpp))
+workshop_strings |= {'Workshop', 'Download', 'View on GitHub', 'Scroll', 'Select', 'Back',
+                     "Opens the project's page on GitHub in your web browser.",
+                     'Opens the latest release on GitHub in your web browser. The launcher does not download or run anything.'}
+if len(workshop_strings) < 14:
+    fail(f'J8: only {len(workshop_strings)} Workshop strings found')
+strings |= workshop_strings
+if 'e.push_back({"Workshop", true, [this] { GoTo(kWorkshop); }});' not in (src / 'launcher.cpp').read_text(encoding='utf-8'):
+    fail('J8: no Workshop entry on Home')
 for s in sorted(strings):
     if s == 'Home':
         continue  # never drawn as text
