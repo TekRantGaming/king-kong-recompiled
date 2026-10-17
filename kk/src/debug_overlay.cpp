@@ -199,6 +199,8 @@ const std::vector<Setting>& Settings() {
       {"Lighting", "Water reflections", "native_water_reflections", Kind::kChoice,
        {{"Original", "original"}, {"Screen space", "ssr"}}},
       {"Lighting", "Reflection strength", "native_ssr_strength", Kind::kSlider, {}, 0, 1, "%.2f", true, Show::kWater},
+      {"Lighting", "Reflection ripple", "native_ssr_ripple", Kind::kSlider, {}, 0, 1, "%.2f", true, Show::kWater,
+       "How much the waves bend the reflections. Lower is calmer and smoother."},
       {"Lighting", "Light shafts", "native_volumetrics", Kind::kChoice,
        {{"Original", "off"}, {"Volumetric low", "low"}, {"Volumetric high", "high"}}},
       {"Lighting", "Light shaft strength", "native_volumetric_strength", Kind::kSlider, {}, 0, 4, "%.2f", true,

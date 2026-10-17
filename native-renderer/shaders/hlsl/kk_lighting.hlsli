@@ -23,6 +23,10 @@ cbuffer KKLighting : register(b5, space0)
     float4 kl_SsrScreen;     // view xy = (picture uv * xy + zw) * view z
     float4 kl_SsrParams;     // x strength, y longest ray (view depths), z thickness, w steps
     float4 kl_SsrMisc;       // x edge fade, y roughness from the normal map, z normal map tilt, w F0 (ocean)
+    float4 kl_SsrAxis0;      // the water draw's flat planes in view space (its model's yz, zx and xy planes'
+    float4 kl_SsrAxis1;      //   normals, from its world-view-projection and the frame's camera), w 1 when known
+    float4 kl_SsrAxis2;
+    float4 kl_SsrSmooth;     // x ripple (0-1), y 1 smooth trace (0: the faceted one), z blur along the ray (mips), w thin-hit fade
 };
 
 // Test hosts can bind the same algorithm without the game's bindless tables.
@@ -56,6 +60,26 @@ float2 kl_UvFromView(float3 v)
     return (v.xy / v.z - kl_SsrScreen.zw) / kl_SsrScreen.xy;
 }
 
+// The water's flat plane at a triangle: of its model's three planes (kl_SsrAxis0-2), the one whose
+// normal is nearest the triangle's (waves tilt a triangle far less than 45 degrees from its plane),
+// facing the eye. The triangle's own normal when no plane is known or none is near.
+float3 kl_WaterPlane(float3 facet, float3 p)
+{
+    float3 best = facet;
+    float bestDot = 0.7;  // about 45 degrees
+    float4 axes[3] = {kl_SsrAxis0, kl_SsrAxis1, kl_SsrAxis2};
+    [unroll] for (uint i = 0; i < 3; i++)
+    {
+        float d = abs(dot(facet, axes[i].xyz));
+        if (axes[i].w > 0.5 && d > bestDot)
+        {
+            bestDot = d;
+            best = axes[i].xyz;
+        }
+    }
+    return dot(best, p) > 0.0 ? -best : best;
+}
+
 // normalMap: the water's normal map's tangent-space x y (-1..1) at the pixel, 0 without one.
 KLSsr kl_WaterTrace(float4 pos, float2 normalMap)
 {
@@ -67,12 +91,25 @@ KLSsr kl_WaterTrace(float4 pos, float2 normalMap)
     float3 dx = ddx(p), dy = ddy(p);
     if (kl_SsrTextures.w == 0u || !(z0 > 0.0) || z0 >= kl_SsrDepth.w)
         return r;
-    // The surface's own normal from its geometry (flat water is exact), facing the eye, tilted by
-    // the normal map in the screen's frame.
-    float3 n = normalize(cross(dy, dx));
-    if (dot(n, p) > 0.0)
-        n = -n;
-    float3 tangent = normalize(dx), bitangent = normalize(cross(n, tangent));
+    // The surface's own normal from its geometry (flat water is exact), facing the eye.
+    float3 facet = normalize(cross(dy, dx));
+    if (dot(facet, p) > 0.0)
+        facet = -facet;
+    float3 n = facet;
+    float waveBlur = 0.0;
+    if (kl_SsrSmooth.y > 0.5)
+    {
+        // Smooth trace: the game's wave meshes are low-poly and move, so each triangle's normal
+        // points elsewhere and the reflection breaks into shards along the triangle edges. Trace
+        // from the water's flat plane instead (the plane of its model nearest this triangle), keep
+        // only a share (the ripple) of the triangle's tilt, and turn the rest into blur.
+        float3 plane = kl_WaterPlane(facet, p);
+        float3 tilt = facet - plane * dot(facet, plane);
+        n = normalize(plane + tilt * kl_SsrSmooth.x);
+        waveBlur = length(tilt) * (1.0 - kl_SsrSmooth.x) * 8.0;
+    }
+    // Tilted by the normal map (smooth: a texture) in the surface's frame.
+    float3 tangent = normalize(dx - n * dot(dx, n)), bitangent = normalize(cross(n, tangent));
     n = normalize(n + (tangent * normalMap.x + bitangent * normalMap.y) * kl_SsrMisc.z);
     float3 v = normalize(p);
     float3 refl = reflect(v, n);
@@ -107,6 +144,7 @@ KLSsr kl_WaterTrace(float4 pos, float2 normalMap)
     float t = 1.0 / span;  // a texel away from the start
     int level = 0;
     bool hit = false;
+    float hitZ = 0.0;
     uint steps = uint(kl_SsrParams.w);
     [loop] for (uint i = 0; i < steps && t < tMax; i++)
     {
@@ -143,6 +181,7 @@ KLSsr kl_WaterTrace(float4 pos, float2 normalMap)
             float dk = k1 - k0;
             if (abs(dk) > 1e-6 && zc != 0.0)
                 t = clamp((1.0 / zc - k0) / dk, t, tExit);
+            hitZ = zc;
             break;
         }
         t = tExit + eps;  // behind a thin object: go on behind it
@@ -155,6 +194,18 @@ KLSsr kl_WaterTrace(float4 pos, float2 normalMap)
     float facing = saturate(1.0 + refl.z * 2.0);  // rays back towards the eye fade
     r.confidence = edge.x * edge.y * fadeFar * facing;
     r.lod = min(length(normalMap) * kl_SsrMisc.y, float(kl_SsrSampler.y) - 1.0);
+    if (kl_SsrSmooth.y > 0.5)
+    {
+        // Soft instead of hard: smooth fades at the picture's edges and the ray's end; a ray that
+        // only grazes the back of a thin object (grass, a splash) counts less the deeper behind it
+        // it already was; blur grows with the waves' lost tilt and along the ray.
+        edge = smoothstep(0.0, 1.0, edge);
+        fadeFar = smoothstep(0.0, 1.0, fadeFar);
+        float behind = saturate((1.0 / lerp(k0, k1, t) - hitZ) / max(hitZ * kl_SsrParams.z, 1e-6));
+        float thin = 1.0 - kl_SsrSmooth.w * smoothstep(0.25, 1.0, behind);
+        r.confidence = edge.x * edge.y * fadeFar * facing * thin;
+        r.lod = min(length(normalMap) * kl_SsrMisc.y + waveBlur + kl_SsrSmooth.z * t, float(kl_SsrSampler.y) - 1.0);
+    }
     return r;
 }
 

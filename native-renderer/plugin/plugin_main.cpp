@@ -448,6 +448,16 @@ REXCVAR_DEFINE_DOUBLE(native_ssr_strength, 1.0, "Native renderer",
                       "The water's screen-space reflections' strength times this (tuning, docs/lighting.md)")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
+REXCVAR_DEFINE_DOUBLE(native_ssr_ripple, 0.25, "Native renderer",
+                      "Smooth water reflections: the share of the wave triangles' tilt the reflections keep "
+                      "(0 a mirror-flat surface, 1 the full waves; docs/lighting.md)")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+
+REXCVAR_DEFINE_BOOL(native_ssr_smooth, true, "Native renderer",
+                    "Water reflections from the water's flat plane (false: from each wave triangle, the first "
+                    "version; a comparison switch, docs/lighting.md)")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+
 REXCVAR_DEFINE_DOUBLE(native_volumetric_strength, 1.0, "Native renderer",
                       "The volumetric light's strength times this (tuning, docs/lighting.md)")
     .lifecycle(rex::cvar::Lifecycle::kHotReload);

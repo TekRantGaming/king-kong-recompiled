@@ -300,6 +300,15 @@ void GameRenderer::LightingWriteConstants(nvrhi::ICommandList* cl) {
   k.ssrMisc[1] = 4.0f;      // colour mips per unit of normal-map slope
   k.ssrMisc[2] = 0.15f;     // normal-map tilt
   k.ssrMisc[3] = 0.02f;     // F0 of water
+  // Smooth reflections: the last water draw's planes (other shaders do not read them, so they stay and
+  // the buffer is rewritten only when a water draw brings new ones).
+  std::memcpy(k.ssrAxis, lighting_.water_axes, sizeof(k.ssrAxis));
+  k.ssrSmooth[0] = std::clamp(l.ssr_ripple, 0.0f, 1.0f);
+  k.ssrSmooth[1] = l.ssr_smooth ? 1.0f : 0.0f;
+  k.ssrSmooth[2] = 1.0f;    // one colour mip of blur over the whole ray
+  k.ssrSmooth[3] = 0.75f;   // grazing hits behind thin objects keep a quarter
+  if (l.ssr_smooth) k.ssrMisc[0] = 0.12f;  // a wider, smooth edge fade
+  static_assert(sizeof(k) <= sizeof(lighting_.constants_last), "LightingState::constants_last is too small");
   // A volatile buffer is written in every command list that binds it, and when it changes.
   const bool new_list = !lighting_.constants_valid || lighting_.constants_list != cl || lighting_.constants_frame != frame_;
   if (!new_list && std::memcmp(&k, lighting_.constants_last.data(), sizeof(k)) == 0) return;
@@ -394,6 +403,22 @@ void GameRenderer::LightingDrawHook(nvrhi::ICommandList* cl, const DrawCall& cal
       }
     }
     scene_lighting_->OnDraw(cl, a);
+    // Smooth water reflections: this water draw's flat planes, from its own matrix.
+    const SceneLighting::SsrView& ssr = scene_lighting_->ssr();
+    if (ssr.valid && options_.lighting.water_on() && options_.lighting.ssr_smooth && ps &&
+        kkshaders::waterReflectionHookFor(ps->ucode_hash).enabled()) {
+      float axes[3][4];
+      const bool found = WaterPlanesFromConstants(ssr.projection, a.vs_constants, axes);
+      std::memcpy(lighting_.water_axes, axes, sizeof(axes));
+      if (lighting_.water_axes_logged < 8) {
+        ++lighting_.water_axes_logged;
+        Logf(LogLevel::kInfo,
+             "rexgpu-native: lighting: water ps %016llX vs %016llX planes %s (%.3f %.3f %.3f) (%.3f %.3f %.3f) (%.3f %.3f %.3f)",
+             static_cast<unsigned long long>(ps->ucode_hash), static_cast<unsigned long long>(vs.ucode_hash),
+             found ? "found" : "not found", axes[0][0], axes[0][1], axes[0][2], axes[1][0], axes[1][1], axes[1][2],
+             axes[2][0], axes[2][1], axes[2][2]);
+      }
+    }
   }
   LightingWriteConstants(cl);
 }

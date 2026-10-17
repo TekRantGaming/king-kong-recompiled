@@ -64,7 +64,12 @@ design and measurements below are superseded as follows:
   do not prove useful in-game source coverage. Placement must be verified before exposing the option.
 
 `nr_lighting_tests` uses synthetic images and the production reflection HLSL and shaft passes. A water
-plane reflects a bright orange wall (+0.173 peak red, 1056 visibly changed pixels at 192x128). Dense fog
+plane reflects a bright orange wall (+0.173 peak red, 1056 visibly changed pixels at 192x128; 960 with the smooth
+trace's wider edge fade). `Lighting_FacetedWaterReflectionStaysWhole` gives the water low-poly waves (a triangulated
+height grid) and a striped wall: the faceted trace adds 0.083 of hard steps over the reflection, the smooth trace
+0.036 (ripple 0: none), without the plane it keeps the triangles' normals; `Lighting_WaterPlanesFromTheDrawsMatrix`
+checks the planes from a world-view-projection (even and uneven model scale, a projective texture matrix before or
+after it). Dense fog
 receives +0.0899 mean red, thin fog +0.00558; clear fog and no bright source are unchanged. No shaft pixel
 darkens, and alpha is unchanged. GPU checks use NVRHI validation; the Khronos validation layer is absent
 on this host. See codex/REPORT-062.md for costs, limits and the coordinator's chapter checks.
@@ -86,7 +91,9 @@ on a worker too (the water's come from the pack when it has them), and until the
 game's own shader. Turned off, the passes are kept for 300 frames (an A/B switch back is instant). Tuning
 without a rebuild, live too:
 `--native_shadow_softness` (the PCF and PCSS kernels' size, 1), `--native_ssr_strength` (0 to 1 of the game's
-reflection the hits replace, 1), `--native_volumetric_strength` (1). Tools: `--native_lighting_census=N` (every N
+reflection the hits replace, 1), `--native_ssr_ripple` (0 to 1, how much of the wave triangles' own tilt the
+smooth reflections keep, 0.25; F8 "Reflection ripple"), `--native_ssr_smooth` (true; false traces from each wave
+triangle as the first version did, a comparison switch), `--native_volumetric_strength` (1). Tools: `--native_lighting_census=N` (every N
 frames, every draw of the frame with its family, targets and their host sizes, state, the textures its pixel shader
 reads with their guest and host sizes, and the constants of the lighting passes; the frame's resolves too) and
 `--native_lighting_gpu_time` (GPU time of the screen-space shadow, of the water with its reflections and of the
@@ -197,6 +204,41 @@ hit is within 3 % of the surface's depth (thicker objects are passed behind). 64
 over the outer 8 % of the picture, over the last quarter of the ray, and for rays turning back towards the eye; the
 game's ripple offset (the planar reflection's coordinate minus the pixel's) moves the hit too; the normal map's slope
 picks a blurrier mip (rough water). `--native_ssr_strength` scales how much of the game's texel the hit replaces.
+
+### Smooth water reflections (task 196)
+
+The game's wave meshes are low-poly and move. Traced from each triangle's own normal (above), neighbouring triangles
+send their rays to different places, so the reflection broke into jagged shards along the triangle edges (tester
+screenshots, swamp chapters, 17 Oct). With `--native_ssr_smooth` (on by default whenever the reflections are on):
+
+- **The flat plane.** Per water draw, `WaterPlanesFromConstants` (scene_lighting.cpp) takes the draw's
+  world-view-projection (the first vertex constants that look like a perspective matrix with the frame camera's depth
+  rows; one whose off-centre terms match too is preferred, so the planar reflection's projective texture matrix is
+  passed over) and takes the camera's projection out: model-to-view. The normals of the model's three planes (yz,
+  zx, xy) go to `kl_SsrAxis0-2` (b5, per draw; the buffer is rewritten only when a water draw brings new ones). In
+  the shader `kl_WaterPlane` picks, per pixel, the plane whose normal is nearest the triangle's (waves tilt a triangle
+  far less than 45 degrees; none within 45 degrees, or no matrix: the triangle's own normal, as before). In the game
+  (Swamps) the water's model is z-up, the xy plane is the one picked.
+- **Ripple.** The ray's normal is the plane's plus `--native_ssr_ripple` (0.25) of the triangle's tilt within it;
+  the tilt left out becomes blur (8 colour mips per unit of it). The normal map (a smooth texture, animated by game
+  time) still tilts it as before, so the ripples move at the same speed at any frame rate (nothing is kept between
+  frames).
+- **Soft, not hard.** The picture-edge fade is wider (12 %) and smooth, the far-ray fade is smooth, the colour gets one
+  more mip along the whole ray, and a hit that only grazes the back of a thin object (grass, a splash: the ray was
+  already behind its front when it reached it) keeps less (down to a quarter at the 3 % thickness limit). Where no ray
+  hits, the game's own reflection stays, as before.
+- **No temporal pass.** The trace runs inside the game's own water pixel shaders, which cannot keep a history image;
+  a reprojected accumulation would need the water's reflection drawn separately and resolved in a pass of its own
+  (left out; the stable plane removes most of the frame-to-frame change already).
+
+Measured (17 Oct, RTX 4070 Ti, 1920x1080, frozen game clock; details in the task's kk\out\task196\details.md):
+the stream in To Save Ann (entry 22, 30 s) is the clearest spot. Hard steps (> 12/255 between neighbours) over the
+reflected water, the game's own water / faceted trace / smooth trace: Vulkan 0.0069 / 0.0163 / 0.0108, D3D12
+0.0009 / 0.0094 / 0.0056, so the steps the reflections add drop by 59 % and 45 %; the rock's reflection is one
+piece instead of shards. Cost of a full-screen water trace (synthetic, NR_WATER_BENCH_WIDTH): 1080p 0.100 ->
+0.102 ms, 4K 0.453 -> 0.459 ms. The water's animation keeps running under the developer freeze, so frames are
+compared by their own hard steps, not pixel by pixel. Left: where a ray misses (the reflected silhouette of a rock
+against the far gorge) the edge to the game's own reflection is still hard.
 
 **Pack.** The hooked shaders are in the player's pack when it is built for the setting (`PackBuildOptions::lighting`,
 the stamp's `lighting <hash>`: a pack without them, or with another version of the hook, is rebuilt). Nothing compiles

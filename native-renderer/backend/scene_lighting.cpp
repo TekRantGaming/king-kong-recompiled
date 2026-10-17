@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstring>
 
+#include "backend/guest_memory.h"
 #include "backend/log.h"
 #include "kkshaders/lighting.h"
 #include "backend/shaders/generated/lighting_ssr_color_cs_dxil.h"
@@ -200,6 +201,52 @@ void SceneLighting::NoteFog(uint64_t frame, const Fog& f) {
 }
 
 void SceneLighting::NoteShafts(uint64_t frame) { shafts_frame_ = frame; }
+
+bool WaterPlanesFromConstants(const AoProjection& camera, const uint8_t* be, float out[3][4]) {
+  std::memset(out, 0, sizeof(float) * 12);
+  if (!be || !camera.valid()) return false;
+  auto near_value = [](float x, float y, float rel) {
+    return std::fabs(x - y) <= rel * std::max({std::fabs(x), std::fabs(y), 1e-6f});
+  };
+  // The camera's matrix: its depth rows match the camera's whatever the model's scale. A projective
+  // texture matrix (the planar reflection's) has them too, but its bias moves the off-centre terms by
+  // about a half, so a match whose off-centre terms agree comes first; an unevenly scaled model skews
+  // them as well, so without one the first depth-row match (the game's world-view-projection comes
+  // first in its vertex constants) is taken.
+  float m[16];
+  int first = -1, best = -1;
+  for (uint32_t r = 0; r + 4 <= 256 && best < 0; ++r) {
+    for (uint32_t i = 0; i < 16; ++i) m[i] = LoadBEFloat(be + (r * 4 + i) * 4);
+    AoProjection q;
+    if (!ExtractAoProjection(m, q) || !near_value(q.a, camera.a, 0.01f) || !near_value(q.b, camera.b, 0.01f)) continue;
+    if (first < 0) first = int(r);
+    if (std::fabs(q.cx - camera.cx) <= 0.05f && std::fabs(q.cy - camera.cy) <= 0.05f) best = int(r);
+  }
+  if (best < 0) best = first;
+  if (best >= 0) {
+    for (uint32_t i = 0; i < 16; ++i) m[i] = LoadBEFloat(be + (uint32_t(best) * 4 + i) * 4);
+    // Model to view: view x = (clip x - cx clip w) / px, view y likewise, view z = clip w.
+    float c[3][3];  // c[j]: the model's axis j in view space
+    for (int j = 0; j < 3; ++j) {
+      c[j][0] = (m[j] - camera.cx * m[12 + j]) / camera.px;
+      c[j][1] = (m[4 + j] - camera.cy * m[12 + j]) / camera.py;
+      c[j][2] = m[12 + j];
+    }
+    bool any = false;
+    for (int i = 0; i < 3; ++i) {
+      const float* a = c[(i + 1) % 3];
+      const float* b = c[(i + 2) % 3];
+      const float n[3] = {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
+      const float len = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+      if (!(len > 1e-12f) || !std::isfinite(len)) continue;
+      for (int k = 0; k < 3; ++k) out[i][k] = n[k] / len;
+      out[i][3] = 1.0f;
+      any = true;
+    }
+    return any;
+  }
+  return false;
+}
 
 bool SunDirectionFromShadow(const float light[16], float norm_x, float norm_y, float px, float py, float out[3]) {
   if (!std::isfinite(norm_x) || !std::isfinite(norm_y) || norm_x == 0.0f || !(px > 0.0f) || !(py > 0.0f)) return false;
@@ -656,6 +703,7 @@ bool SceneLighting::PrepareSsr(nvrhi::ICommandList* cl) {
   ssr_.mapping = m;
   ssr_.near_plane = p.near_plane();
   ssr_.far_plane = p.far_plane();
+  ssr_.projection = p;
   if (stats_.ssr_prepared == 0)
     Logf(LogLevel::kInfo, "rexgpu-native: lighting: first water reflections (frame %llu): picture %ux%u at %d,%d, near %.4f far %.1f",
          static_cast<unsigned long long>(frame_), w, h, x0, y0, p.near_plane(), p.far_plane());

@@ -41,8 +41,15 @@ struct alignas(16) LightingConstants {
     // x: the screen edge fade (fraction of the picture), y: colour mips per unit of the normal map's
     // slope (rough water), z: how far the normal map tilts the surface's normal, w: F0 for the ocean's fresnel
     float ssrMisc[4];
+    // The water draw's flat planes in view space (smooth reflections): the unit normals of its model's
+    // yz, zx and xy planes, w 1 when known (per draw, from its world-view-projection and the camera)
+    float ssrAxis[3][4];
+    // x: ripple (0-1, the share of the wave triangles' own tilt the rays keep), y: 1 for the smooth trace
+    // (0: the faceted one), z: colour mips of blur along the whole ray, w: how much a hit that only grazes
+    // the back of a thin object fades (0-1)
+    float ssrSmooth[4];
 };
-static_assert(sizeof(LightingConstants) == 9 * 16, "LightingConstants must match KKLighting");
+static_assert(sizeof(LightingConstants) == 13 * 16, "LightingConstants must match KKLighting");
 
 // The water reflection hook of a pixel shader (docs/lighting.md, "Water reflections"): the screen-space
 // reflection traced at the top of main (kl_WaterTrace), and where it goes.

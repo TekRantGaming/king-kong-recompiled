@@ -35,6 +35,13 @@ namespace nr {
 // when it cannot be told (a degenerate matrix).
 bool SunDirectionFromShadow(const float light[16], float norm_x, float norm_y, float px, float py, float out[3]);
 
+// The water's flat planes for the smooth reflections (docs/lighting.md, "Smooth water reflections"):
+// the water draw's world-view-projection (the first four vertex constants that look like a perspective
+// matrix and have the frame camera's depth rows, big-endian) with the camera's projection taken out
+// leaves model-to-view; out[i] is the normal (view space, unit, w 1) of the model's plane across axis i
+// (yz, zx, xy). False (w 0) when the draw has no such matrix.
+bool WaterPlanesFromConstants(const AoProjection& camera, const uint8_t* vs_constants_be, float out[3][4]);
+
 class SceneLighting {
  public:
   SceneLighting(nvrhi::IDevice* device, const LightingConfig& config);
@@ -125,6 +132,7 @@ class SceneLighting {
     uint32_t width = 0, height = 0;
     AoViewMapping mapping;  // over the picture (step 1)
     float near_plane = 0.0f, far_plane = 0.0f;
+    AoProjection projection;  // the frame's camera (WaterPlanes)
   };
   const SsrView& ssr() const { return ssr_; }
 

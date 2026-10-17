@@ -28,6 +28,11 @@ struct LightingConfig {
   float shadow_softness = 1.0f;
   float ssr_strength = 1.0f;
   float volumetric_strength = 1.0f;
+  // Smooth water reflections (docs/lighting.md): --native_ssr_smooth traces from the water's flat plane
+  // (false: from each wave triangle's own normal, the first version); --native_ssr_ripple is the share of
+  // the triangles' tilt the rays keep (0 a mirror-flat plane, 1 the full waves).
+  bool ssr_smooth = true;
+  float ssr_ripple = 0.25f;
   // --native_lighting_census: every this many frames, the lighting-related draws of the frame (shadow
   // maps and the screen-space shadow, water, light shafts, fog) with their targets, textures and
   // constants in the log (0 off). A tool for finding the passes, independent of the options.
