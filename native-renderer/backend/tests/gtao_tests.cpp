@@ -686,6 +686,348 @@ TEST(Gtao_RefusesWhatItCannotUse) {
   Device()->WaitIdle();
 }
 
+// ------------------------------------------------------ normal smoothing ---
+// A low-poly scene: a 12-sided prism (30 degrees between neighbouring sides, a faceted character's
+// creases) standing on the floor in front of the back wall, and the box (right angles). Each solid is
+// convex: planes with outward normals, inside where n.p <= d.
+
+namespace {
+
+struct Plane {
+  V3 n;
+  float d;
+};
+struct Solid {
+  std::vector<Plane> planes;
+  int id;
+};
+
+Solid BoxSolid(const Box& b, int id) {
+  return {{{{1, 0, 0}, b.hi.x}, {{-1, 0, 0}, -b.lo.x}, {{0, 1, 0}, b.hi.y}, {{0, -1, 0}, -b.lo.y},
+           {{0, 0, 1}, b.hi.z}, {{0, 0, -1}, -b.lo.z}},
+          id};
+}
+
+constexpr int kPrismSides = 12;
+const V3 kPrismCentre{0.9f, 0.0f, 2.0f};
+constexpr float kPrismRadius = 0.6f, kPrismHeight = 1.3f;
+
+Solid PrismSolid(int id) {
+  Solid s{{{{0, 1, 0}, kPrismHeight}, {{0, -1, 0}, 0.0f}}, id};
+  for (int k = 0; k < kPrismSides; ++k) {
+    const float a = 6.2831853f * (float(k) + 0.5f) / float(kPrismSides);
+    const V3 n{std::cos(a), 0.0f, std::sin(a)};
+    s.planes.push_back({n, Dot(n, kPrismCentre) + kPrismRadius * std::cos(3.14159265f / kPrismSides)});
+  }
+  return s;
+}
+
+enum SmoothId { kSkyId = -1, kFloorId = 0, kWallId = 1, kBoxId = 2, kPrismId = 3, kPanelId = 4 };
+
+// A flat panel in front of the back wall, turned 25 degrees: its normal is close to the wall's, so only
+// the plane test keeps the two apart at its silhouette.
+Solid PanelSolid(int id) {
+  const float a = 25.0f * 3.14159265f / 180.0f;
+  const V3 c{-0.4f, 1.9f, 3.5f}, n{-std::sin(a), 0.0f, -std::cos(a)}, t{std::cos(a), 0.0f, -std::sin(a)};
+  return {{{n, Dot(n, c) + 0.05f}, {n * -1.0f, -Dot(n, c) + 0.05f}, {t, Dot(t, c) + 0.5f}, {t * -1.0f, -Dot(t, c) + 0.5f},
+           {{0, 1, 0}, c.y + 0.4f}, {{0, -1, 0}, -c.y + 0.4f}},
+          id};
+}
+
+std::vector<Solid> SmoothScene() {
+  return {BoxSolid(kScene[0], kFloorId), BoxSolid(kScene[1], kWallId), BoxSolid(kScene[3], kBoxId),
+          PrismSolid(kPrismId), PanelSolid(kPanelId)};
+}
+
+// Nearest hit: distance (or -1), which solid and which of its planes (the face).
+float HitSolids(const std::vector<Solid>& solids, V3 o, V3 d, int& id, int& face) {
+  float best = -1.0f;
+  id = kSkyId;
+  face = -1;
+  for (const Solid& s : solids) {
+    float t0 = 0.0f, t1 = 1e30f;
+    int entered = -1;
+    bool miss = false;
+    for (size_t i = 0; i < s.planes.size() && !miss; ++i) {
+      const float denom = Dot(s.planes[i].n, d), num = s.planes[i].d - Dot(s.planes[i].n, o);
+      if (std::fabs(denom) < 1e-12f) {
+        miss = num < 0.0f;
+        continue;
+      }
+      const float t = num / denom;
+      if (denom < 0.0f) {
+        if (t > t0) {
+          t0 = t;
+          entered = int(i);
+        }
+      } else {
+        t1 = std::min(t1, t);
+      }
+      miss = t0 > t1;
+    }
+    if (!miss && t0 > 0.0f && entered >= 0 && (best < 0.0f || t0 < best)) {
+      best = t0;
+      id = s.id;
+      face = entered;
+    }
+  }
+  return best;
+}
+
+struct SmoothRunResult {
+  uint32_t w = 0, h = 0;
+  std::vector<int> id, face;
+  std::vector<V3> normal;  // the view-space normals after Compute (decoded)
+  Image ao;
+};
+
+V3 DecodeNormal(uint32_t p) {
+  const V3 u{float(p & 0x7ff) / 2047.0f, float((p >> 11) & 0x7ff) / 2047.0f, float((p >> 22) & 0x3ff) / 1023.0f};
+  return Normalize(u * 2.0f - V3{1, 1, 1});
+}
+
+SmoothRunResult SmoothRun(int level, float scale = 2.0f, bool half = false) {
+  SmoothRunResult r;
+  VulkanTestDevice* gpu = Device();
+  Camera cam;
+  cam.Setup(float(kGw) / float(kGh));
+  const AoScreen screen = Screen(float(kGw), float(kGh), scale);
+  r.w = uint32_t(std::lround(kGw * scale));
+  r.h = uint32_t(std::lround(kGh * scale));
+  const std::vector<Solid> solids = SmoothScene();
+  std::vector<float> z(size_t(r.w) * r.h, 1.0f);
+  r.id.assign(z.size(), kSkyId);
+  r.face.assign(z.size(), -1);
+  for (uint32_t j = 0; j < r.h; ++j) {
+    for (uint32_t i = 0; i < r.w; ++i) {
+      const float gx = (float(i) + 0.5f) / screen.host_scale_x, gy = (float(j) + 0.5f) / screen.host_scale_y;
+      const float nx = (gx - screen.x_offset - screen.offset_x()) / screen.x_scale,
+                  ny = (gy - screen.y_offset - screen.offset_y()) / screen.y_scale;
+      const V3 dir = cam.r * (nx / cam.px) + cam.u * (ny / cam.py) + cam.f;
+      const size_t k = size_t(j) * r.w + i;
+      const float t = HitSolids(solids, cam.eye, dir, r.id[k], r.face[k]);
+      if (t > 0.0f) z[k] = cam.a + cam.b / t;
+    }
+  }
+  nvrhi::TextureHandle depth = DepthTexture(gpu->device(), z, r.w, r.h);
+  Gtao gtao(gpu->device());
+  CHECK(gtao.Initialize());
+  float rows[16];
+  cam.Rows(rows);
+  GtaoInput in;
+  in.depth = depth;
+  in.width = r.w;
+  in.height = r.h;
+  in.screen = screen;
+  CHECK(ExtractAoProjection(rows, in.projection));
+  GtaoSettings s;
+  s.half = half;
+  s.normal_smoothing = level;
+  nvrhi::CommandListHandle cl = gpu->device()->createCommandList();
+  cl->open();
+  nvrhi::ITexture* out = gtao.Compute(cl, in, s);
+  cl->close();
+  CHECK(out != nullptr);
+  if (!out) return r;
+  gpu->Execute(cl);
+  gpu->WaitIdle();
+  r.ao = ReadR32(gpu->device(), out);
+  // The normals (padded working image, R32_UINT): the raw bits through the R32 readback.
+  const Image packed = ReadR32(gpu->device(), gtao.normals());
+  const uint32_t step = half ? 2 : 1;
+  r.normal.resize(z.size());
+  for (uint32_t j = 0; j < r.h; ++j) {
+    for (uint32_t i = 0; i < r.w; ++i) {
+      uint32_t bits;
+      std::memcpy(&bits, &packed.v[size_t(j / step) * packed.w + i / step], 4);
+      r.normal[size_t(j) * r.w + i] = DecodeNormal(bits);
+    }
+  }
+  return r;
+}
+
+float AngleDegrees(V3 a, V3 b) {
+  return std::acos(std::clamp(Dot(a, b), -1.0f, 1.0f)) * 57.29578f;
+}
+
+struct SmoothStats {
+  float prism_step = 0;     // mean of the largest neighbour-to-neighbour turn around each crease of the prism
+  float box_turn = 0;       // mean total turn across the box's edges (right angles: kept near 90 degrees)
+  float prism_up = 0;       // largest |n . up| inside the prism's sides (0: vertical)
+  float floor_up = 1;       // smallest n . up inside the floor (1: flat)
+  float flat_change = 0;    // largest change against `ref` on the wall and the panel near their silhouette
+  int crease_pairs = 0, box_pairs = 0, flat_pixels = 0, flat_x = 0, flat_y = 0, flat_id = 0;
+};
+
+// Pairs are taken `step` pixels apart (2 at half resolution, where two host pixels share a working pixel).
+SmoothStats Measure(const SmoothRunResult& r, V3 up, const SmoothRunResult& ref, int step) {
+  SmoothStats s;
+  double steps = 0, turns = 0;
+  const int m = 4 * step;
+  auto n = [&](int x, int y) { return r.normal[size_t(y) * r.w + size_t(x)]; };
+  auto id = [&](int x, int y) { return r.id[size_t(y) * r.w + size_t(x)]; };
+  auto face = [&](int x, int y) { return r.face[size_t(y) * r.w + size_t(x)]; };
+  for (int y = m; y + m < int(r.h); ++y) {
+    for (int x = m; x + m < int(r.w); ++x) {
+      const int o = id(x, y);
+      // A crease between x and x + step, with the same solid 3 steps either side (not a silhouette).
+      bool same = true;
+      for (int d = -3; d <= 4; ++d) same &= id(x + d * step, y) == o;
+      if (same && face(x, y) != face(x + step, y) && (x % step) == 0) {
+        if (o == kPrismId && face(x - 3 * step, y) >= 2 && face(x + 4 * step, y) >= 2) {
+          float largest = 0;
+          for (int d = -3; d <= 3; ++d) largest = std::max(largest, AngleDegrees(n(x + d * step, y), n(x + (d + 1) * step, y)));
+          steps += largest;
+          ++s.crease_pairs;
+        } else if (o == kBoxId) {
+          turns += AngleDegrees(n(x - 3 * step, y), n(x + 4 * step, y));
+          ++s.box_pairs;
+        }
+      }
+      // The wall and the panel in front of it: pixels whose own face covers their (2 step) neighbourhood
+      // (the rebuilt normal is exact there) and with nothing but wall and panel within 10 pixels, so
+      // the silhouette between the two is in reach of every tap but the floor's and prism's creases
+      // (whose rebuilt crease pixels blend both sides) are not.
+      if ((o == kWallId || o == kPanelId) && x >= 10 && y >= 10 && x + 10 < int(r.w) && y + 10 < int(r.h)) {
+        bool flat = true;
+        for (int dy = -10; dy <= 10 && flat; ++dy)
+          for (int dx = -10; dx <= 10; ++dx) {
+            const int q = id(x + dx, y + dy);
+            flat &= q == kWallId || q == kPanelId;
+            if (std::abs(dx) <= 2 * step && std::abs(dy) <= 2 * step) flat &= q == o && face(x + dx, y + dy) == face(x, y);
+          }
+        if (flat) {
+          const float change = AngleDegrees(n(x, y), ref.normal[size_t(y) * r.w + size_t(x)]);
+          if (change > s.flat_change) { s.flat_change = change; s.flat_x = x; s.flat_y = y; s.flat_id = o; }
+          ++s.flat_pixels;
+        }
+      }
+      // Pixels with their whole (4 step) neighbourhood on their own solid; the prism's sides only.
+      bool inside = true;
+      for (int dy = -m; dy <= m && inside; ++dy)
+        for (int dx = -m; dx <= m; ++dx) inside &= id(x + dx, y + dy) == o && !(o == kPrismId && face(x + dx, y + dy) < 2);
+      if (!inside) continue;
+      if (o == kPrismId) s.prism_up = std::max(s.prism_up, std::fabs(Dot(n(x, y), up)));
+      if (o == kFloorId) s.floor_up = std::min(s.floor_up, Dot(n(x, y), up));
+    }
+  }
+  s.prism_step = s.crease_pairs ? float(steps / s.crease_pairs) : 0.0f;
+  s.box_turn = s.box_pairs ? float(turns / s.box_pairs) : 0.0f;
+  return s;
+}
+
+// The floor's view-space normal (up) from the unsmoothed run: the mean over open floor.
+V3 FloorUp(const SmoothRunResult& r) {
+  V3 sum{0, 0, 0};
+  for (size_t k = 0; k < r.normal.size(); ++k)
+    if (r.id[k] == kFloorId) sum = sum + r.normal[k];
+  return Normalize(sum);
+}
+
+}  // namespace
+
+TEST(Gtao_NormalSmoothingSoftensFacetsKeepsEdges) {
+  if (!Device()) return;
+  ErrorsChecked errors;
+  for (bool half : {false, true}) {
+    // 960 x 540: the smoothing radius (16 host pixels of a 1080-line picture at High) is 8 pixels here.
+    const SmoothRunResult off = SmoothRun(0, 5.0f, half), low = SmoothRun(1, 5.0f, half), high = SmoothRun(2, 5.0f, half);
+    const V3 up = FloorUp(off);
+    const int step = half ? 2 : 1;
+    const SmoothStats o = Measure(off, up, off, step), l = Measure(low, up, off, step), h = Measure(high, up, off, step);
+    for (const auto& [name, st] : {std::pair{"off", o}, std::pair{"low", l}, std::pair{"high", h}}) {
+      std::printf("  %s %s: prism largest step %.1f deg (%d creases), box turn %.1f deg (%d), prism |n.up| %.3f, "
+                  "floor n.up min %.3f, wall/panel change %.2f deg (%d px; largest at %d,%d on %d)\n",
+                  half ? "half" : "full", name, st.prism_step, st.crease_pairs, st.box_turn, st.box_pairs, st.prism_up,
+                  st.floor_up, st.flat_change, st.flat_pixels, st.flat_x, st.flat_y, st.flat_id);
+    }
+    CHECK(o.crease_pairs > 20);
+    CHECK(o.box_pairs > 5);
+    CHECK(o.flat_pixels > 500);
+    // Off: the facets are flat, a 30 degree turn within a pixel or two.
+    CHECK(o.prism_step > 12.0f);
+    CHECK(o.box_turn > 80.0f);
+    // Smoothing spreads the crease over several pixels: much smaller steps between neighbours.
+    CHECK(l.prism_step < o.prism_step * 0.8f);
+    CHECK(h.prism_step < o.prism_step * 0.6f);
+    for (const SmoothStats& st : {l, h}) {
+      // Right angles are kept.
+      CHECK(st.box_turn > o.box_turn - 5.0f);
+      CHECK(st.floor_up > o.floor_up - 0.01f);
+      // The prism's sides stay vertical: nothing of the floor leaks in.
+      CHECK(st.prism_up < o.prism_up + 0.03f);
+      // The panel (25 degrees from the wall behind it) and the wall keep their own normals: the plane
+      // test separates them at the silhouette (blending the two would turn them by up to 25 degrees; what
+      // remains, about 2.5, comes from the panel's thin side, whose rebuilt pixels mix front and side).
+      CHECK(st.flat_change < 4.0f);
+    }
+    // The occlusion stays valid.
+    for (float v : high.ao.v) {
+      if (v < 0.0f || v > 1.0f) {
+        CHECK(v >= 0.0f && v <= 1.0f);
+        break;
+      }
+    }
+  }
+}
+
+TEST(Gtao_NormalSmoothingKeepsCreaseOcclusion) {
+  if (!Device()) return;
+  ErrorsChecked errors;
+  // The corner of floor and walls is a right angle, so the occlusion there does not change.
+  for (int level : {1, 2}) {
+    Run r;
+    {
+      VulkanTestDevice* gpu = Device();
+      r.cam.Setup(float(kGw) / float(kGh));
+      r.screen = Screen(float(kGw), float(kGh), 1.0f);
+      r.w = kGw;
+      r.h = kGh;
+      r.z = RayCast(r.cam, r.screen, r.w, r.h);
+      nvrhi::TextureHandle depth = DepthTexture(gpu->device(), r.z, r.w, r.h);
+      Gtao gtao(gpu->device());
+      CHECK(gtao.Initialize());
+      float rows[16];
+      r.cam.Rows(rows);
+      GtaoInput in;
+      in.depth = depth;
+      in.width = r.w;
+      in.height = r.h;
+      in.screen = r.screen;
+      CHECK(ExtractAoProjection(rows, in.projection));
+      GtaoSettings s;
+      s.normal_smoothing = level;
+      nvrhi::CommandListHandle cl = gpu->device()->createCommandList();
+      cl->open();
+      nvrhi::ITexture* out = gtao.Compute(cl, in, s);
+      cl->close();
+      CHECK(out != nullptr);
+      if (!out) continue;
+      gpu->Execute(cl);
+      gpu->WaitIdle();
+      r.ao = ReadR32(gpu->device(), out);
+    }
+    const Run plain = Occlusion(1.0f, false);
+    double sum = 0;
+    for (size_t i = 0; i < plain.ao.v.size(); ++i) sum += std::fabs(plain.ao.v[i] - r.ao.v[i]);
+    const double mae = sum / double(plain.ao.v.size());
+    std::printf("  smoothing %d: crease %.3f (off %.3f), open floor %.3f, mean difference to off %.4f\n", level,
+                Probe(r, kCrease), Probe(plain, kCrease), Probe(r, kOpenFloor), mae);
+    CHECK(Probe(r, kOpenFloor) > 0.93f);
+    CHECK(std::fabs(Probe(r, kCrease) - Probe(plain, kCrease)) < 0.02f);
+    CHECK(mae < 0.01);
+  }
+}
+
+TEST(Gtao_SmoothingLevels) {
+  CHECK_EQ(Gtao::SmoothingFor(0).max_pixels_1080, 0.0f);
+  CHECK(Gtao::SmoothingFor(1).max_pixels_1080 > 0.0f);
+  CHECK(Gtao::SmoothingFor(2).max_pixels_1080 > Gtao::SmoothingFor(1).max_pixels_1080);
+  CHECK(Gtao::SmoothingFor(2).max_angle_degrees <= 60.0f);  // right angles are never smoothed
+  CHECK(Gtao::SmoothingFor(1).full_angle_degrees < Gtao::SmoothingFor(1).max_angle_degrees);
+  CHECK_EQ(Gtao::SmoothingFor(3).max_pixels_1080, 0.0f);
+}
+
 TEST(Lighting_TimersGroupContiguousDraws) {
   if (!Device()) return;
   ErrorsChecked errors;
@@ -934,6 +1276,60 @@ TEST(Bench_GtaoGpuTime) {
         std::sort(ms.begin(), ms.end());
         std::printf("  BENCH GTAO 2560x1440 %s, samples %d (%s): median %.3f ms GPU\n", half ? "half" : "full", quality,
                     temporal ? "local temporal" : "SDK upscaler", ms[ms.size() / 2]);
+      }
+    }
+  }
+}
+
+// GPU cost of normal smoothing (NR_BENCH=1 only; not a check): the scene at 1280x720 guest pixels drawn
+// at 1920x1080 and 3840x2160, full and half resolution, smoothing off / low / high (medium samples, no
+// temporal pass), the median of 60 timed runs of the whole Compute, then the difference to off.
+TEST(Bench_GtaoNormalSmoothing) {
+  if (!std::getenv("NR_BENCH") || !Device()) return;
+  VulkanTestDevice* gpu = Device();
+  nvrhi::IDevice* device = gpu->device();
+  Camera cam;
+  cam.Setup(1280.0f / 720.0f);
+  float rows[16];
+  cam.Rows(rows);
+  for (float scale : {1.5f, 3.0f}) {
+    const AoScreen screen = Screen(1280.0f, 720.0f, scale);
+    const uint32_t w = uint32_t(1280 * scale), h = uint32_t(720 * scale);
+    const std::vector<float> z = RayCast(cam, screen, w, h);
+    nvrhi::TextureHandle depth = DepthTexture(device, z, w, h);
+    for (bool half : {false, true}) {
+      double base = 0;
+      for (int level : {0, 1, 2}) {
+        Gtao gtao(device);
+        CHECK(gtao.Initialize());
+        GtaoInput in;
+        in.depth = depth;
+        in.width = w;
+        in.height = h;
+        in.screen = screen;
+        CHECK(ExtractAoProjection(rows, in.projection));
+        GtaoSettings s;
+        s.half = half;
+        s.normal_smoothing = level;
+        std::vector<double> ms;
+        for (int i = 0; i < 70; ++i) {
+          in.frame = uint64_t(i + 1);
+          nvrhi::TimerQueryHandle q = device->createTimerQuery();
+          nvrhi::CommandListHandle cl = device->createCommandList();
+          cl->open();
+          cl->beginTimerQuery(q);
+          CHECK(gtao.Compute(cl, in, s) != nullptr);
+          cl->endTimerQuery(q);
+          cl->close();
+          gpu->Execute(cl);
+          gpu->WaitIdle();
+          if (i >= 10) ms.push_back(1000.0 * device->getTimerQueryTime(q));
+        }
+        std::sort(ms.begin(), ms.end());
+        const double median = ms[ms.size() / 2];
+        if (level == 0) base = median;
+        std::printf("  BENCH GTAO smoothing %ux%u %s, level %d: median %.3f ms GPU (+%.3f)\n", w, h,
+                    half ? "half" : "full", level, median, median - base);
       }
     }
   }

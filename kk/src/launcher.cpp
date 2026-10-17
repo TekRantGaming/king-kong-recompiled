@@ -5229,7 +5229,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                 "present_effect", "kk_render_quality", "resolution_scale", "draw_resolution_scale_x",
                 "draw_resolution_scale_y", "native_upscaler", "native_upscaler_quality",
                 "kk_motion_blur", "kk_big_blur", "kk_fog", "ao_mode", "ao_strength", "native_ao_method",
-                "native_ao_apply", "native_ao_quality", "native_ao_samples", "native_gi", "native_gi_distance", "native_shadow_quality", "native_water_reflections", "native_volumetrics", "native_effect_buffers", "native_sharpness"};
+                "native_ao_apply", "native_ao_quality", "native_ao_samples", "native_ao_normal_smoothing", "native_gi", "native_gi_distance", "native_shadow_quality", "native_water_reflections", "native_volumetrics", "native_effect_buffers", "native_sharpness"};
       case kGameplay:
         return {"kk_fov", "kk_camera_shake", "kk_camera_shake_strength", "kk_achievement_toasts",
                 "kk_achievement_style", "kk_skip_intros", "user_language"};

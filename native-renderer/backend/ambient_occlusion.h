@@ -44,6 +44,7 @@ struct AoSettings {
   int mode = 0;      // ao_mode: 0 off, 1 on, 2 show the AO only
   int strength = 1;  // ao_strength: 1 to 3 (1 is recommended)
   int sample_quality = 2;  // native_ao_samples: 1 low, 2 medium (3x3), 3 high
+  int normal_smoothing = 0;  // native_ao_normal_smoothing: 0 off, 1 low, 2 high (gtao only)
   bool temporal_upscaler = false;  // the scene goes through an active temporal SDK
   bool temporal_denoise = true;
   // tan(half the horizontal field of view); the Xenos plugin's default (it

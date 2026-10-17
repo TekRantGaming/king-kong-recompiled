@@ -176,6 +176,9 @@ const std::vector<Setting>& Settings() {
        {{"Auto", "auto"}, {"Half", "half"}, {"Full", "full"}}, 0, 1, "", true, Show::kAo},
       {"Ambient occlusion", "Noise smoothing", "native_ao_temporal", Kind::kToggle, {{"Off", "false"}, {"On", "true"}},
        0, 1, "", true, Show::kAo, "Blends the shading over frames (grain on hands and weapons)."},
+      {"Ambient occlusion", "Normal smoothing", "native_ao_normal_smoothing", Kind::kChoice,
+       {{"Off", "0"}, {"Low", "1"}, {"High", "2"}}, 0, 1, "", true, Show::kAo,
+       "Smooths the shading across low-poly models (faceted characters, Kong, rocks). Edges stay sharp."},
       // Global illumination.
       {"Global illumination", "Global illumination", "native_gi", Kind::kChoice,
        {{"Off", "off"}, {"Low", "low"}, {"Medium", "medium"}, {"High", "high"}}},

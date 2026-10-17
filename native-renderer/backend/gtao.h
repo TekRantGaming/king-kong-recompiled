@@ -39,6 +39,7 @@ struct GtaoSettings {
   float falloff = 0.0f;       // XeGTAO's falloff range (0: its default)
   float power = 0.0f;         // XeGTAO's final power (0: FinalPower(strength))
   float fade = 0.0f;          // near-plane distances where the occlusion has faded out linearly (0: none)
+  int normal_smoothing = 0;   // native_ao_normal_smoothing: 0 off, 1 low, 2 high (Gtao::SmoothingFor)
 };
 
 struct GtaoInput {
@@ -71,7 +72,8 @@ class Gtao {
   bool Prepare(nvrhi::ICommandList* cl, const GtaoInput& in, const GtaoSettings& s);
   // The working images of the last Prepare (padded_width x padded_height; pixel i is host pixel
   // origin + step * i): the stored depth (R32F), view-space depth (R32F, XE_GTAO_DEPTH_MIP_LEVELS
-  // mips) and the normals (R32_UINT, XeGTAO's R11G11B10 packing).
+  // mips) and the normals (R32_UINT, XeGTAO's R11G11B10 packing). After a Compute with normal
+  // smoothing on, the normals are the smoothed ones (smoothed in place; Prepare alone never smooths).
   nvrhi::ITexture* raw_depth() const { return raw_.Get(); }
   nvrhi::ITexture* view_depth() const { return depth_mips_.Get(); }
   nvrhi::ITexture* normals() const { return normal_map_.Get(); }
@@ -103,6 +105,19 @@ class Gtao {
   // method's) and XeGTAO's final power.
   static float RadiusInNearPlanes(int strength);
   static float FinalPower(int strength);
+  // Normal smoothing (native_ao_normal_smoothing 1 low, 2 high): the largest radius in host pixels of a
+  // 1080-line picture (scaled with the picture), the radius in view units as a fraction of the effect
+  // radius (so it shrinks with distance), and the angles between normals smoothed fully and not at all
+  // (low-poly creases are smoothed; the right angles of boxes and walls never). A tap's angle off the
+  // pixel's plane uses the same ramp, capped at kPlaneFull/MaxDegrees (silhouettes stay sharp).
+  struct Smoothing {
+    float max_pixels_1080 = 0.0f;
+    float radius_fraction = 0.0f;
+    float full_angle_degrees = 0.0f;
+    float max_angle_degrees = 0.0f;
+  };
+  static constexpr float kPlaneFullDegrees = 20.0f, kPlaneMaxDegrees = 40.0f;
+  static Smoothing SmoothingFor(int level);
 
   struct Stats {
     uint64_t computed = 0;
@@ -138,7 +153,7 @@ class Gtao {
   bool ready_ = false;
   Stats stats_;
 
-  Pass prepare_, prefilter_, normals_, main_, main_low_, main_high_, denoise_, denoise_last_, output_pass_, temporal_;
+  Pass prepare_, prefilter_, normals_, smooth_h_, smooth_v_, main_, main_low_, main_high_, denoise_, denoise_last_, output_pass_, temporal_;
   nvrhi::ShaderHandle vs_, apply_ps_, apply_resolve_ps_;
   nvrhi::BindingLayoutHandle apply_layout_, apply_resolve_layout_;
   nvrhi::SamplerHandle point_clamp_;

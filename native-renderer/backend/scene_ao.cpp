@@ -45,6 +45,7 @@ GtaoSettings SceneAo::Settings(const AoSettings& s) const {
   g.mode = s.mode;
   g.strength = s.strength;
   g.sample_quality = s.sample_quality;
+  g.normal_smoothing = s.normal_smoothing;
   g.temporal_upscaler = s.temporal_upscaler && s.temporal_denoise;
   g.temporal = s.temporal_denoise && !s.temporal_upscaler;
   g.half = config_.quality == AoQuality::kHalf;

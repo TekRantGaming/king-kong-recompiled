@@ -27,6 +27,10 @@
 #include "backend/shaders/generated/gtao_main_high_cs_spirv.h"
 #include "backend/shaders/generated/gtao_normals_cs_dxil.h"
 #include "backend/shaders/generated/gtao_normals_cs_spirv.h"
+#include "backend/shaders/generated/gtao_smooth_normals_h_cs_dxil.h"
+#include "backend/shaders/generated/gtao_smooth_normals_h_cs_spirv.h"
+#include "backend/shaders/generated/gtao_smooth_normals_v_cs_dxil.h"
+#include "backend/shaders/generated/gtao_smooth_normals_v_cs_spirv.h"
 #include "backend/shaders/generated/gtao_output_cs_dxil.h"
 #include "backend/shaders/generated/gtao_output_cs_spirv.h"
 #include "backend/shaders/generated/gtao_temporal_cs_dxil.h"
@@ -54,6 +58,8 @@ struct Gtao::Constants {
   float viewport[4] = {};  // x scale/offset, y scale/offset (guest pixels)
   float depth_scale[4] = {};  // depth scale/offset, host scale xy
   float temporal[4] = {};  // history weight, previous depth unpack mul/add, sample quality
+  float smooth[4] = {};    // normal smoothing: max radius (working pixels), radius (view), cos full / max angle
+  float smooth2[4] = {};   // sin of the plane's full / max angle
 };
 
 namespace {
@@ -64,6 +70,8 @@ enum BlobId {
   kPrepare,
   kPrefilter,
   kNormals,
+  kSmoothH,
+  kSmoothV,
   kMain,
   kMainLow,
   kMainHigh,
@@ -89,6 +97,8 @@ Blob GetBlob(nvrhi::GraphicsAPI api, int id) {
     case kPrepare: return NR_GTAO_BLOB(gtao_prepare_cs);
     case kPrefilter: return NR_GTAO_BLOB(gtao_prefilter_cs);
     case kNormals: return NR_GTAO_BLOB(gtao_normals_cs);
+    case kSmoothH: return NR_GTAO_BLOB(gtao_smooth_normals_h_cs);
+    case kSmoothV: return NR_GTAO_BLOB(gtao_smooth_normals_v_cs);
     case kMain: return NR_GTAO_BLOB(gtao_main_cs);
     case kMainLow: return NR_GTAO_BLOB(gtao_main_low_cs);
     case kMainHigh: return NR_GTAO_BLOB(gtao_main_high_cs);
@@ -137,6 +147,14 @@ float Gtao::FinalPower(int strength) {
   }
 }
 
+Gtao::Smoothing Gtao::SmoothingFor(int level) {
+  switch (level) {
+    case 1: return {8.0f, 0.25f, 20.0f, 35.0f};
+    case 2: return {16.0f, 0.5f, 35.0f, 60.0f};
+    default: return {};
+  }
+}
+
 bool Gtao::MakePass(Pass& pass, int id, const char* entry, const std::vector<nvrhi::BindingLayoutItem>& items) {
   pass.shader = MakeShader(device_, id, nvrhi::ShaderType::Compute, entry);
   if (!pass.shader) return false;
@@ -160,6 +178,10 @@ bool Gtao::Initialize() {
                      {cb, I::Texture_SRV(0), I::Texture_UAV(0), I::Texture_UAV(1), I::Texture_UAV(2), I::Texture_UAV(3),
                       I::Texture_UAV(4), I::Sampler(0)}) &&
             MakePass(normals_, kNormals, "cs_normals", {cb, I::Texture_SRV(0), I::Texture_UAV(0), I::Sampler(0)}) &&
+            MakePass(smooth_h_, kSmoothH, "cs_smooth_normals_h",
+                     {cb, I::Texture_SRV(0), I::Texture_SRV(1), I::Texture_UAV(0)}) &&
+            MakePass(smooth_v_, kSmoothV, "cs_smooth_normals_v",
+                     {cb, I::Texture_SRV(0), I::Texture_SRV(1), I::Texture_UAV(0)}) &&
             MakePass(main_, kMain, "cs_main",
                      {cb, I::Texture_SRV(0), I::Texture_SRV(1), I::Texture_UAV(0), I::Texture_UAV(1), I::Sampler(0)}) &&
             MakePass(denoise_, kDenoise, "cs_denoise",
@@ -285,6 +307,11 @@ bool Gtao::EnsureImages(uint32_t pw, uint32_t ph, uint32_t ow, uint32_t oh, bool
                      S::Sampler(0, point_clamp_)}),
       Set(denoise_last_, {cb, S::Texture_SRV(0, term_b_), S::Texture_SRV(1, edges_), S::Texture_UAV(0, term_a_),
                           S::Sampler(0, point_clamp_)}),
+      // Normal smoothing, in place through term b (free until the first denoise writes it).
+      Set(smooth_h_, {cb, S::Texture_SRV(0, normal_map_), S::Texture_SRV(1, depth_mips_, nvrhi::Format::UNKNOWN, mip0),
+                      S::Texture_UAV(0, term_b_)}),
+      Set(smooth_v_, {cb, S::Texture_SRV(0, term_b_), S::Texture_SRV(1, depth_mips_, nvrhi::Format::UNKNOWN, mip0),
+                      S::Texture_UAV(0, normal_map_)}),
   };
   for (const nvrhi::BindingSetHandle& s : fixed_sets_) {
     if (!s) {
@@ -363,6 +390,16 @@ void Gtao::FillConstants(Constants& k, const GtaoInput& in, const GtaoSettings& 
   k.depth_scale[2] = in.screen.host_scale_x;
   k.depth_scale[3] = in.screen.host_scale_y;
   k.temporal[3] = float(std::clamp(s.sample_quality, 1, 3));
+  const Smoothing sm = SmoothingFor(s.normal_smoothing);
+  if (sm.max_pixels_1080 > 0.0f) {
+    const float rad = 3.14159265f / 180.0f;
+    k.smooth[0] = std::max(sm.max_pixels_1080 * float(in.height) / 1080.0f / float(step), 1.0f);
+    k.smooth[1] = sm.radius_fraction * g.EffectRadius;
+    k.smooth[2] = std::cos(sm.full_angle_degrees * rad);
+    k.smooth[3] = std::cos(sm.max_angle_degrees * rad);
+    k.smooth2[0] = std::sin(std::min(sm.full_angle_degrees, kPlaneFullDegrees) * rad);
+    k.smooth2[1] = std::sin(std::min(sm.max_angle_degrees, kPlaneMaxDegrees) * rad);
+  }
 }
 
 bool Gtao::Prepare(nvrhi::ICommandList* cl, const GtaoInput& in, const GtaoSettings& s) {
@@ -384,6 +421,7 @@ bool Gtao::Prepare(nvrhi::ICommandList* cl, const GtaoInput& in, const GtaoSetti
       history_settings_.half == s.half && history_settings_.sample_quality == s.sample_quality &&
       history_settings_.radius == s.radius && history_settings_.radius_scale == s.radius_scale &&
       history_settings_.falloff == s.falloff && history_settings_.power == s.power && history_settings_.fade == s.fade &&
+      history_settings_.normal_smoothing == s.normal_smoothing &&
       history_x_ == in.x && history_y_ == in.y &&
       history_screen_.x_scale == in.screen.x_scale && history_screen_.y_scale == in.screen.y_scale &&
       history_screen_.x_offset == in.screen.x_offset && history_screen_.y_offset == in.screen.y_offset &&
@@ -429,6 +467,10 @@ nvrhi::ITexture* Gtao::Compute(nvrhi::ICommandList* cl, const GtaoInput& in, con
   }
   if (!output) return nullptr;
 
+  if (SmoothingFor(s.normal_smoothing).max_pixels_1080 > 0.0f) {
+    Dispatch(cl, smooth_h_, fixed_sets_[5], pw / XE_GTAO_NUMTHREADS_X, ph / XE_GTAO_NUMTHREADS_Y);
+    Dispatch(cl, smooth_v_, fixed_sets_[6], pw / XE_GTAO_NUMTHREADS_X, ph / XE_GTAO_NUMTHREADS_Y);
+  }
   Pass& main = s.sample_quality == 1 ? main_low_ : s.sample_quality == 3 ? main_high_ : main_;
   Dispatch(cl, main, fixed_sets_[2], pw / XE_GTAO_NUMTHREADS_X, ph / XE_GTAO_NUMTHREADS_Y);
   Dispatch(cl, denoise_, fixed_sets_[3], pw / (XE_GTAO_NUMTHREADS_X * 2), ph / XE_GTAO_NUMTHREADS_Y);

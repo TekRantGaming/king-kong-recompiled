@@ -11,6 +11,8 @@
 //   cs_prefilter   XeGTAO_PrefilterDepths16x16: view-space depth and its four smaller mips
 //   cs_normals     XeGTAO_ComputeViewspaceNormal: normals rebuilt from the depth (the game is a
 //                  forward renderer, it has no normal buffer)
+//   cs_smooth_normals_h/_v  optional (native_ao_normal_smoothing): an edge-aware blur of those normals
+//                  across the surface, so low-poly models are not shaded per triangle
 //   cs_main        XeGTAO_MainPass, 3 slices of 3 steps each ("high"), no temporal noise
 //   cs_denoise     XeGTAO_Denoise, twice (the last one scales the term back)
 //   cs_output      the occlusion per host pixel of the picture (R32F, 1 = none): the working
@@ -46,6 +48,9 @@ cbuffer GTAOConstantBuffer : register(b0)
     float4 kk_Viewport;
     float4 kk_DepthScale;
     float4 kk_Temporal; // history weight, previous depth unpack mul/add, sample quality
+    float4 kk_Smooth;   // cs_smooth_normals_*: x largest radius (working pixels), y radius in view units,
+                        // z, w cos of the angles between normals smoothed fully and not at all
+    float4 kk_Smooth2;  // x, y: sin of the same for the angle of a tap off this pixel's plane
 };
 
 #include "../../thirdparty/XeGTAO/XeGTAO.hlsli"
@@ -126,6 +131,89 @@ void cs_normals(uint2 pixCoord : SV_DispatchThreadID)
 {
     float3 viewspaceNormal = XeGTAO_ComputeViewspaceNormal(pixCoord, g_GTAOConsts, g_srcRawDepth, g_samplerPointClamp);
     g_outNormalmap[pixCoord] = XeGTAO_FLOAT3_to_R11G11B10_UNORM(saturate(viewspaceNormal * 0.5 + 0.5));
+}
+
+// cs_smooth_normals_h, cs_smooth_normals_v: the normals rebuilt from depth are flat per triangle, so
+// low-poly models (characters, Kong, rocks) get faceted occlusion with hard creases. A separable
+// cross-bilateral blur of the normals over the surface: 4 taps each side, spaced over a radius in
+// view units (kk_Smooth.y) capped in working pixels (kk_Smooth.x). A tap counts fully when its normal
+// is within the smoothed angle and not at all past the largest one (creases of low-poly models are
+// smoothed, the right angles of boxes and walls never), and only when its position lies near this
+// pixel's plane, so silhouettes and objects in front of others keep their own normals. Renormalised.
+Texture2D<uint> g_srcSmoothNormals : register(t0);
+Texture2D<float> g_srcSmoothDepth : register(t1);   // the working view-space depth (mip 0)
+RWTexture2D<uint> g_outSmoothNormals : register(u0);
+
+float3 UnpackNormal(uint packed)
+{
+    return normalize(XeGTAO_R11G11B10_UNORM_to_FLOAT3(packed) * 2.0 - 1.0);
+}
+
+void SmoothNormals(int2 pix, int2 dir)
+{
+    if (any(pix >= int2(kk_Working.zw)))
+        return;
+    const uint packed = g_srcSmoothNormals.Load(int3(pix, 0)).x;
+    const float z0 = g_srcSmoothDepth.Load(int3(pix, 0)).x;
+    // View units per working pixel at this depth; the radius in pixels shrinks with distance.
+    const float pixelSize = z0 * g_GTAOConsts.NDCToViewMul_x_PixelSize.x;
+    const float radius = min(kk_Smooth.x, kk_Smooth.y / max(pixelSize, 1e-9));
+    if (radius < 1.0)
+    {
+        g_outSmoothNormals[pix] = packed;
+        return;
+    }
+    const float3 n0 = UnpackNormal(packed);
+    const float3 p0 = XeGTAO_ComputeViewspacePosition((float2(pix) + 0.5) * g_GTAOConsts.ViewportPixelSize, z0,
+                                                      g_GTAOConsts);
+    const float3 viewDir = normalize(p0);
+    const float stride = radius * 0.25;
+    const int2 last = int2(kk_Working.xy) - 1;
+    float3 sum = n0;
+    [unroll]
+    for (int i = 1; i <= 4; ++i)
+    {
+        const float gauss = exp(-0.0625 * float(i * i));  // exp(-(i/4)^2)
+        [unroll]
+        for (int side = -1; side <= 1; side += 2)
+        {
+            // The outermost pixels' rebuilt normals see the repeated edge: no taps there or beyond.
+            const int2 q = pix + dir * int(round(float(side * i) * stride));
+            if (any(q < 1) || any(q >= last))
+                continue;
+            const float zq = g_srcSmoothDepth.Load(int3(q, 0)).x;
+            const float3 nq = UnpackNormal(g_srcSmoothNormals.Load(int3(q, 0)).x);
+            const float3 pq = XeGTAO_ComputeViewspacePosition((float2(q) + 0.5) * g_GTAOConsts.ViewportPixelSize, zq,
+                                                              g_GTAOConsts);
+            const float3 d = pq - p0;
+            // Across a crease of angle a, a point past it lies at most sin(a) of its distance off this
+            // plane. A depth step (silhouette, an arm in front of the body) is mostly off-plane even
+            // with parallel normals: the larger of the two pixels' views decides.
+            const float len = max(length(d), 1e-6 * z0);
+            const float offPlane = max(abs(dot(n0, d)), abs(dot(nq, d))) / len;
+            // Seen at a grazing angle (near the picture's sides) a surface behind is not far off that
+            // plane, but the step to it runs along the view ray: within 15 degrees of it is a depth step
+            // (a surface seen that obliquely is past 75 degrees, where rebuilt normals mean little).
+            const float alongView = abs(dot(d, viewDir)) / len;
+            const float wPlane = saturate((kk_Smooth2.y - offPlane) / (kk_Smooth2.y - kk_Smooth2.x)) *
+                                 saturate((0.966 - alongView) / (0.966 - 0.906));
+            const float wNormal = saturate((dot(n0, nq) - kk_Smooth.w) / (kk_Smooth.z - kk_Smooth.w));
+            sum += nq * (gauss * wPlane * wNormal);
+        }
+    }
+    g_outSmoothNormals[pix] = XeGTAO_FLOAT3_to_R11G11B10_UNORM(saturate(normalize(sum) * 0.5 + 0.5));
+}
+
+[numthreads(XE_GTAO_NUMTHREADS_X, XE_GTAO_NUMTHREADS_Y, 1)]
+void cs_smooth_normals_h(uint2 pixCoord : SV_DispatchThreadID)
+{
+    SmoothNormals(int2(pixCoord), int2(1, 0));
+}
+
+[numthreads(XE_GTAO_NUMTHREADS_X, XE_GTAO_NUMTHREADS_Y, 1)]
+void cs_smooth_normals_v(uint2 pixCoord : SV_DispatchThreadID)
+{
+    SmoothNormals(int2(pixCoord), int2(0, 1));
 }
 
 [numthreads(XE_GTAO_NUMTHREADS_X, XE_GTAO_NUMTHREADS_Y, 1)]

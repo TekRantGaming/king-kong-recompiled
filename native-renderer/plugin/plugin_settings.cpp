@@ -320,6 +320,7 @@ GameSettings ReadGameSettings(bool vulkan) {
     s.mode = std::clamp(std::atoi(rex::cvar::GetFlagByName("ao_mode").c_str()), 0, 2);
     s.strength = std::clamp(std::atoi(rex::cvar::GetFlagByName("ao_strength").c_str()), 1, 3);
     s.sample_quality = std::clamp(std::atoi(rex::cvar::GetFlagByName("native_ao_samples").c_str()), 1, 3);
+    s.normal_smoothing = std::clamp(std::atoi(rex::cvar::GetFlagByName("native_ao_normal_smoothing").c_str()), 0, 2);
     s.temporal_denoise = rex::cvar::GetFlagByName("native_ao_temporal") != "false";
     return s;
   };

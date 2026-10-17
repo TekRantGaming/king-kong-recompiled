@@ -253,6 +253,10 @@ REXCVAR_DEFINE_BOOL(native_ao_temporal, true, "Native renderer",
 REXCVAR_DEFINE_INT32(native_ao_samples, 2, "Native renderer",
                      "GTAO sample quality: 1 low (2 slices x 2 steps), 2 medium (3 x 3, the previous setting), "
                      "3 high (9 x 3). Applied live, independently of native_ao_quality's resolution");
+REXCVAR_DEFINE_INT32(native_ao_normal_smoothing, 0, "Native renderer",
+                     "GTAO normal smoothing: 0 off, 1 low, 2 high. The normals rebuilt from depth are flat per "
+                     "triangle, so low-poly models get faceted occlusion; this blurs them across each surface "
+                     "(silhouettes and right-angle edges stay sharp). Applied live");
 
 REXCVAR_DEFINE_DOUBLE(native_ao_radius, 0.0, "Native renderer",
                       "The gtao method's occlusion radius in the game's world units; 0: from the camera (the "

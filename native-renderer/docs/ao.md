@@ -172,6 +172,8 @@ a multiple of 16 (no pass writes outside its images; the padding repeats the pic
 1. `cs_prepare`: the picture's stored depth into the working image (at half resolution every second pixel).
 2. `cs_prefilter`: `XeGTAO_PrefilterDepths16x16`, view-space depth and its four smaller mips.
 3. `cs_normals`: `XeGTAO_ComputeViewspaceNormal`, normals rebuilt from the depth.
+   Then, with `native_ao_normal_smoothing` 1 or 2, `cs_smooth_normals_h` and `cs_smooth_normals_v` (see "Normal
+   smoothing" below).
 4. `cs_main`: `XeGTAO_MainPass`, selectable sample quality (`native_ao_samples`): Low = 2 slices of 2 steps,
    Medium = 3 slices of 3 steps (the previous setting), High = 9 slices of 3 steps. Resolution remains independently
    controlled by `native_ao_quality=auto/full/half`.
@@ -253,6 +255,7 @@ appears). If the mode is adopted, `kkshaders db-build` should learn to read the 
 | `--native_ao_apply` | `resolve`, `opaque`, `ambient` | when the GTAO occlusion reaches the picture (above). The legacy method always uses resolve (a warning is logged for another value) |
 | `--native_ao_quality` | `auto`, `full`, `half` | GTAO's working resolution (of the scene target at the render scale) |
 | `--native_ao_samples` | 1, 2, 3 | GTAO sample quality: Low, Medium (previous 3x3 samples), High; live |
+| `--native_ao_normal_smoothing` | 0, 1, 2 | GTAO normal smoothing: Off, Low, High (F8 "Normal smoothing"); live. Off is the default; whether a preset turns it on is the owner's call |
 | `--native_ao_radius` | 0, any number | GTAO's radius in world units; 0 from the camera |
 | `--native_ao_rules` | a file | classifier rules before the built-in ones |
 | `--native_ao_shaders` | a file | the ambient-only lighting shader list |
@@ -272,6 +275,45 @@ defaults the GTAO code is never created: the game renderer's layouts, pipelines 
 scene, which part of the frame ended before it, and whether the occlusion was worked out, applied or read by it,
 with the state the rules matched and the pixel shader's hash. Every 600 frames with AO on, one line says where the
 occlusion went (`AO last 600 frames: ...`).
+
+### Normal smoothing (task 195, 17 October 2026)
+
+The game has no normal buffer, so the normals are rebuilt from depth and are flat per triangle: low-poly models
+(characters, Kong, rocks, stone floors) get faceted occlusion with hard creases along their triangles (a tester's
+report; MXAO offers "normal smoothing" for the same reason). Two compute passes between `cs_normals` and
+`cs_main` blur the normals across each surface, a separable cross-bilateral filter:
+
+- 4 taps each side per pass, spaced over a radius of a fraction of the effect radius in view units (so it
+  shrinks with distance), capped in pixels: Low 0.25 x effect radius, at most 8 host pixels of a 1080-line
+  picture; High 0.5 x, at most 16 (scaled with the picture's height, halved in working pixels at half
+  resolution). Gaussian weights exp(-(i/4)^2).
+- A tap counts fully when its normal is within the smoothed angle (Low 20, High 35 degrees) and not at all past
+  the largest (Low 35, High 60): low-poly creases are smoothed, right angles (boxes, walls, floor contacts) never.
+- Plane test: the tap's offset from this pixel's plane (the larger of the two pixels' views) over its distance,
+  on the same ramp capped at 20 to 40 degrees; and a depth step test: an offset within 15 degrees of the view ray
+  (a silhouette, an arm in front of the body) does not count. Silhouettes keep their own normals.
+- Taps on the outermost pixel row or column (whose rebuilt normals see the repeated edge) or beyond are skipped.
+- In place: the horizontal pass writes into `term b` (free until the first denoise), the vertical pass back
+  into the normals image. No extra memory. `Gtao::normals()` then holds the smoothed normals; the GI's own
+  `Gtao` only runs `Prepare`, so GI is unchanged.
+
+Off (the default) dispatches nothing. Changing the level resets the local temporal history.
+
+Measured (17 Oct, RTX 4070 Ti):
+- GPU cost of the two passes (`Bench_GtaoNormalSmoothing`, NR_BENCH=1, quiet PC, median of 60, two runs agree):
+  1920x1080 full +0.15 ms (half +0.04), 3840x2160 full +0.63 ms (half +0.15); Low and High cost the same (fixed
+  tap count). The whole GTAO compute in that test is 0.28 / 0.09 / 1.29 / 0.42 ms. At 4K, AO "auto" works at
+  half resolution (render scale above 1.5), so the usual cost is about +0.15 ms.
+- In game (frozen frames, AO-only view, strength 3, full resolution at 1080p, pixels that repeat exactly): the
+  share of hard AO steps (neighbour step above 0.03) Off / Low / High: Ann close-up 0.040 / 0.030 / 0.024,
+  Kong's stone floor 0.164 / 0.155 / 0.141, cutscene (Jack and Ann, wide) 0.105 / - / 0.088, jungle 0.194 /
+  0.183 / 0.164, canyon rocks 0.125 / 0.117 / 0.101. D3D12, Ann: 0.030 / 0.022 / 0.017 (same reduction). The
+  final picture moves by 0.4 to 2.2 / 255 on average (the occlusion is subtle in these dark scenes).
+- Unit tests (`gtao_tests.cpp`): a 12-sided prism (30 degree creases), a box and a panel turned 25 degrees in
+  front of a wall at 960x540: the largest neighbour step around the prism's creases 15.2 degrees Off, 7.8 Low,
+  3.3 High (half resolution 15.4 / 10.9 / 5.6); box edges stay about 87 degrees; the prism's sides stay vertical
+  and the floor flat; the wall and panel move under 4 degrees (no blending across the silhouette); the corner
+  crease's occlusion moves by under 0.01.
 
 ## Tests (Linux, lavapipe, Khronos validation on)
 
