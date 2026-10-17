@@ -163,4 +163,5 @@ the freed one reloading once it is bound again. `nr_memory_budget_tests` checks
 the limit arithmetic. No game data
 is needed by these tests.
 
-Game test evidence and measurement limits are in the external `codex/REPORT-126.md`.
+Game test evidence and measurement limits are in the external `codex/REPORT-126.md`;
+chapter-change release and sharing on the benchmark route in `codex/REPORT-180.md`.
