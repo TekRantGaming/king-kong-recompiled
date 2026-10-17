@@ -3,6 +3,33 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v2.0.0-beta.7 (17 October 2026)
+
+**Beta 7**: from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/PET2xU5FJq). Your saves and settings are kept, and you can switch back to stable at any time. Windows only for this beta.
+
+### What's new
+- **Kong mods in the Workshop.** Put a mod in your `mods` folder and turn it on or off in the Workshop. Mods can be texture packs, settings presets or replacement cutscenes. See MODDING.md for how to make one.
+- **Two built-in mods: Hardcore (no HUD, no healing) and Cel shading** (ink outlines and flat colours).
+- **Artbook in Extras.** The six Weta concept paintings from the PS2 bonus disc, downloaded in the background, with zoom and Save to PC.
+- **Smoother ambient occlusion.** Soft, rounded shading instead of hard creases on characters, Kong and rocks. On by default with the Remastered look.
+- **Better water reflections.** The screen space reflections no longer break up on moving water and fade softly at their edges (Settings > Graphics, off by default).
+- **Fewer stutters for everyone.** The list of graphics pipelines prepared during setup is about 50% larger, including pipelines shared by a player.
+- **Help reduce stutter.** With Online player count on, the game shares its graphics pipeline data and an anonymous performance summary when you quit, and crash reports on the next start. Nothing personal is sent.
+- **Two new projects in the Workshop:** South Park: Tenorman's Revenge Recompiled and South Park: Let's Go Tower Defense Play! Recompiled.
+
+### Known issues
+- FSR 4 runs on DirectX 12 only.
+- Vulkan uses more memory than DirectX 12.
+- Kong's fur is not outlined by the Cel shading mod.
+
+### Full changelog
+- AO: edge-aware smoothing of the depth-rebuilt normals before GTAO (`native_ao_normal_smoothing`, High with Strong GTAO).
+- Water reflections: traced from the water's flat plane with a small ripple (`native_ssr_ripple`), soft fade where rays miss (`native_ssr_soft_edge`).
+- Cel shading screen effect (`native_cel_*`, F8 "Cel shading").
+- Uploads (only with Online player count on): pipeline record file and performance summary on quit, crash and hang reports with the last 200 log lines (names and personal folders removed) on the next start.
+- Artbook: the PS2 USA bonus disc is downloaded from archive.org, checked and read by the launcher; only the paintings and their readme are kept.
+- Shipped pipeline list: 11,666 records (was 7,594).
+
 ## v2.0.0-beta.6 (17 October 2026)
 
 **Beta 6**: a big update, from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/PET2xU5FJq). Your saves and settings are kept, and you can switch back to stable at any time. Windows only for this beta.
