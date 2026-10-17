@@ -489,6 +489,7 @@ void ApplyRemastered() {
   ApplyHardwareRecommendation(true, output.first, output.second);
   SetInt("ao_mode", 1);
   SetInt("ao_strength", 3);  // Strong: GTAO's default since Beta 3 (the owner's choice)
+  SetInt("native_ao_normal_smoothing", 2);  // High (owner 17 Oct): smooths the faceted AO on low-poly models
   SetInt("kk_frame_rate", 60);  // Remastered plays at 60 FPS (the owner's choice); Original keeps 30
   ++g_changes;
   ApplyRendererChoice();
@@ -7393,6 +7394,7 @@ bool NativeRendererAvailable() { return g_native_renderer; }
 std::string ApplyRendererChoice() {
   NormalizeRendererSettings();
   SetCvarDefault("ao_strength", "3");
+  SetCvarDefault("native_ao_normal_smoothing", "2");  // High with Strong GTAO (owner 17 Oct)
   ApplyUpscalerDefaults();
   return startup::ApplyChoice(rex::cvar::GetFlagByName("gpu_plugin"));
 }

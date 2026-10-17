@@ -54,7 +54,10 @@ void ApplyGraphicsPresetSettings(const GraphicsPreset& p, Set set) {
   set("swap_post_effect", p.aa);
   set("anisotropic_override", p.filtering);
   set("ao_mode", p.ao ? "1" : "0");
-  if (p.ao) set("ao_strength", "3");
+  if (p.ao) {
+    set("ao_strength", "3");
+    set("native_ao_normal_smoothing", "2");  // High (owner 17 Oct)
+  }
   set("native_gi", p.gi);
   set("kk_graphics_preset", p.label);
   set("native_gi_distance", p.gi_distance);
