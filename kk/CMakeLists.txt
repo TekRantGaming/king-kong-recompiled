@@ -300,6 +300,11 @@ if(KK_DEV_TOOLS)
     rexglue_apply_target_settings(kk-telemetry-tests)
     add_test(NAME telemetry-uploads COMMAND kk-telemetry-tests "${CMAKE_CURRENT_BINARY_DIR}/telemetry-test")
     set_tests_properties(telemetry-uploads PROPERTIES FIXTURES_SETUP telemetry_files)
+    # Task 197: the crash/hang report's log tail (fixed ring of 200 lines, redaction as for uploads).
+    add_executable(kk-log-tail-tests tests/log_tail_tests.cpp)
+    target_include_directories(kk-log-tail-tests PRIVATE src)
+    rexglue_apply_target_settings(kk-log-tail-tests)
+    add_test(NAME log-tail COMMAND kk-log-tail-tests)
     add_test(NAME telemetry-gzip COMMAND "${Python3_EXECUTABLE}" -I
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/telemetry_gzip_tests.py" "${CMAKE_CURRENT_BINARY_DIR}/telemetry-test")
     set_tests_properties(telemetry-gzip PROPERTIES FIXTURES_REQUIRED telemetry_files)

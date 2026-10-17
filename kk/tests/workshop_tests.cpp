@@ -37,11 +37,18 @@ namespace md = kk::workshop::md;
 const Project& Pb() { return kProjects[0]; }
 
 void Addresses() {
-  Check(kProjectCount == 6, "six projects");
+  Check(kProjectCount == 8, "eight projects");
   Check(std::string(kProjects[4].name) == "Super Mario Sunshine" && std::string(kProjects[4].owner) == "chasem-dev" &&
             std::string(kProjects[4].repo) == "sms-launcher",
         "sms-launcher shown as Super Mario Sunshine");
   Check(std::string(kProjects[5].name) == "Dig Dug Native", "Dig Dug Native name");
+  Check(std::string(kProjects[6].repo) == "south-park-tenormans-revenge-recompiled" &&
+            std::string(kProjects[6].name) == "South Park: Tenorman's Revenge Recompiled",
+        "Tenorman's Revenge added after the existing tiles");
+  Check(std::string(kProjects[7].repo) == "south-park-tower-defense-recompiled" &&
+            std::string(kProjects[7].name) == "South Park: Let's Go Tower Defense Play! Recompiled" &&
+            std::string(kProjects[7].owner) == "TekRantGaming",
+        "Tower Defense added last");
   Check(RepoUrl(Pb()) == "https://github.com/TekRantGaming/point-blank-recompiled", "repository address");
   Check(ReleasesUrl(Pb()) == "https://github.com/TekRantGaming/point-blank-recompiled/releases/latest",
         "Download opens the latest release page");
