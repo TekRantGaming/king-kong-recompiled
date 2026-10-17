@@ -713,14 +713,17 @@ void GameRenderer::ReleaseRetiredResources() {
     ++retire_backlog_frames_;
     retire_backlog_released_ += r.released;
     retire_backlog_ms_ = std::max(retire_backlog_ms_, ms);
+    retire_backlog_budget_ms_ = std::max(retire_backlog_budget_ms_, all ? 0.0 : r.budget_ms);
     if (!r.aged_left) {
+      // Task 185: the budget grows as the backlog ages (retire_budget.h); "budget up to" shows how far.
       Logf(LogLevel::kInfo,
-           "rexgpu-native: retired resources: %llu released over %llu frames, longest %.2f ms (frame %llu)",
+           "rexgpu-native: retired resources: %llu released over %llu frames, longest %.2f ms, budget up to %.2f ms "
+           "(frame %llu)",
            static_cast<unsigned long long>(retire_backlog_released_),
-           static_cast<unsigned long long>(retire_backlog_frames_), retire_backlog_ms_,
+           static_cast<unsigned long long>(retire_backlog_frames_), retire_backlog_ms_, retire_backlog_budget_ms_,
            static_cast<unsigned long long>(frame_));
       retire_backlog_frames_ = retire_backlog_released_ = 0;
-      retire_backlog_ms_ = 0;
+      retire_backlog_ms_ = retire_backlog_budget_ms_ = 0;
     }
   }
 }
