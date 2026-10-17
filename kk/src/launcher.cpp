@@ -475,9 +475,10 @@ void SetOriginalLook(bool on) {
 bool UsingNativeRenderer() { return Get("gpu_plugin") == "native"; }
 
 // ------------------------------------------------------- graphics style ---
-// The setup's last step: Original (the Original look) or Remastered (the Modern look, named
-// Remastered on the Graphics page, with a preset for this graphics card and the native renderer's
-// GTAO ambient occlusion). Both keep the native renderer. native-renderer/docs/beta.md.
+// Remastered: the Modern look (named Remastered on the Graphics page), the hardware recommendation's preset for
+// this graphics card (with that preset's global illumination), the native renderer's GTAO at Strong and 60 FPS.
+// What every new install starts with (StartFullSetup, job J6) and what "Use recommended for my PC" on graphics
+// page 4 gives. Keeps the native renderer. native-renderer/docs/beta.md.
 void ApplyRemastered() {
   SetOriginalLook(false);
   const auto output = PrimaryScreenSize();
@@ -487,13 +488,6 @@ void ApplyRemastered() {
   SetInt("kk_frame_rate", 60);  // Remastered plays at 60 FPS (the owner's choice); Original keeps 30
   ++g_changes;
   ApplyRendererChoice();
-}
-
-// The Remastered settings first: the Original look keeps the settings it replaces and puts them back
-// when Look is switched to Remastered on the Graphics page, which then gives exactly Remastered.
-void ApplyOriginal() {
-  ApplyRemastered();
-  SetOriginalLook(true);
 }
 
 // Settings only this beta has (the native renderer's, the renderer choice, the fullscreen
@@ -2488,13 +2482,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         setup_shaders_ = true;
         REXLOG_INFO("KK: first start: preparing both native shader packs on the setup screen");
       }
-      if (first_start) {
-        // ... then the texture pack and PS2 cutscene pages, and the last step, Original or Remastered, as
-        // after an install.
-        AskContentInSetup();
-        setup_style_ = true;
-        style_focus_ = 1;
-      }
+      // ... then the texture pack and PS2 cutscene pages, the graphics pages and the rest, as after an install.
+      if (first_start) StartFullSetup(false);  // saved below with kk_last_version
       if (updated && NativeShaderPack::Wanted()) {
         update_shaders_ = true;
         REXLOG_INFO("KK: first start of v{} (last v{}): the native renderer's shaders are built again", KK_VERSION,
@@ -2529,11 +2518,18 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       if (!last.empty() || std::filesystem::exists(paths_.config_path, ec)) {
         whats_new_from_ = last;  // empty: from before the launcher remembered (show this version)
         open_whats_new_ = true;
-        REXLOG_INFO("KK: What's new pending (last run v{}): it opens once the game files, shaders and look are ready", last);
+        REXLOG_INFO("KK: What's new pending (last run v{}): it opens on the main menu once the game files, shaders "
+                    "and setup are done", last);
+        // Job J6: a player who finished the setup on an older build gets the one-time New in this update screen
+        // (the texture pack, the PS2 cutscenes, the new graphics pages). Remembered until it is dismissed, so
+        // closing the launcher on it shows it again next time; never on a fresh install (no settings file).
+        if (Get("kk_setup_version").empty()) Set("kk_setup_version", kSetupWaiting);
       }
       Set("kk_last_version", KK_VERSION);
       SaveSettings(paths_.config_path);
     }
+    update_new_ = files_ok_ && !testing && Get("kk_setup_version") == kSetupWaiting;
+    if (update_new_) REXLOG_INFO("KK: the New in this update screen is waiting (setup steps last had: older build)");
     // Back from the game (Quit game, the end of a chapter-select run): straight to the Play menu
     // or Chapter select.
     const std::string open_on = Get("kk_launcher_open");
@@ -2823,7 +2819,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   void LoadArt() {
     slides_.clear();
     logo_ = nullptr;
-    still_low_ = nullptr;
     if (art::HasLauncherArt(ArtDir())) {
       const art::LauncherArt a = art::LoadLauncherArt(ArtDir());
       if (a.logo) {
@@ -2878,7 +2873,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   void AddSlide(const art::Image& sharp, const art::Image& soft) {
     if (!sharp) return;
-    if (slides_.empty()) still_low_ = MakeTexture(Shrink(sharp, 3));  // the setup's Original card
     slides_.push_back({MakeTexture(sharp), MakeTexture(soft ? soft : sharp), float(sharp.width) / float(sharp.height)});
   }
 
@@ -2906,14 +2900,12 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
     if (setup_art_) {
       setup_art_ = false;
-      // With the native renderer, the shaders from the new game files; then, last, the look.
+      // With the native renderer, the shaders from the new game files; then the rest of the setup.
       if (NativeShaderPack::Wanted()) {
         native_pack_.Start(CacheDir(), paths_.game_dir);
         setup_shaders_ = true;
       }
-      AskContentInSetup();
-      setup_style_ = true;
-      style_focus_ = 1;
+      StartFullSetup();
       page_ = kHome;
       home_focus_ = 0;
       home_mix_ = 0;  // the art fades in
@@ -3147,7 +3139,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
           if (menu_value_) return {{Action::kLeft, "Change"}, {Action::kAccept, "Select"}, {Action::kBack, "Quit"}};
           return {{Action::kAccept, "Select"}, {Action::kBack, "Quit"}};
         case 1: return {{Action::kBack, "Cancel"}};
-        case 5: return {{Action::kLeft, "Change"}, {Action::kAccept, "Select"}};
         case 6:
         case 7: return {{Action::kAccept, "Select"}};
         case 8:
@@ -3156,6 +3147,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         case 11: return GfxPrompts();
         case kPromptsStage:
         case kAllSetStage: return EndPrompts();
+        case kNewStage: return NewPrompts();
         default: return {};
       }
     }
@@ -4215,7 +4207,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (dev_setup_ >= 0) return true;
 #endif
     return !files_ok_ || installing_ || setup_art_ || setup_shaders_ || setup_textures_ || setup_cutscenes_ ||
-           setup_graphics_ || setup_prompts_ || setup_all_set_ || setup_style_ || installing_update_ || update_shaders_;
+           setup_graphics_ || setup_prompts_ || setup_all_set_ || update_new_ || installing_update_ || update_shaders_;
   }
 
   // A version this launcher has not run before, on an installation that has run one (What's new uses
@@ -4229,7 +4221,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   }
 
   // The native renderer's shaders being prepared, as a screen of its own: the setup's step (after the
-  // artwork, before the look) and after every update.
+  // artwork, before the texture pack page) and after every update.
   bool ShaderScreen() const {
     if (installing_update_ || installing_ || setup_art_) return false;
 #if defined(KK_DEV_TOOLS)
@@ -4240,12 +4232,12 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // The setup's step and the plain setup screens draw the night sky; the shader screen the stills.
   // Owner, 17 Oct: only the pages before the disc image is given (and the install and artwork that follow it)
   // go without the game's artwork; every setup page after them (the shader screen, the texture pack, the PS2
-  // cutscenes, the look) uses the launcher's own look: the game's stills, its logo, the same panels.
+  // cutscenes, the graphics pages and the rest, the New in this update screen) uses the launcher's own look: the game's stills, its logo, the same panels.
   bool PlainSetup() const { return InSetup() && !ShaderScreen() && !AssetSetup(); }
   bool AssetSetup() const {
     if (!InSetup() || slides_.empty()) return false;
     const int stage = SetupStage();
-    return stage == 5 || stage == 6 || stage == 7 || GraphicsSetupStage(stage) || EndSetupStage(stage);
+    return stage == 6 || stage == 7 || GraphicsSetupStage(stage) || EndSetupStage(stage) || stage == kNewStage;
   }
 
   // Home's look (the stills, blurred; the game's logo; the music), with a centred panel: what is
@@ -4354,11 +4346,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   void ContinueShadersInBackground() {
     ui::Cue(ui::Sound::kSelect);
     const bool rebuild = rebuild_shaders_screen_ && !setup_shaders_ && !update_shaders_;
-    setup_shaders_ = false;  // the setup goes on to the look step
+    setup_shaders_ = false;  // the setup goes on to the texture pack page
     update_shaders_ = false;
     rebuild_shaders_screen_ = false;
 #if defined(KK_DEV_TOOLS)
-    if (dev_setup_ == 4) dev_setup_ = 5;
+    if (dev_setup_ == 4) dev_setup_ = 6;
 #endif
     if (rebuild) return;  // back to the Graphics page it was asked for on
     page_ = kHome;
@@ -4368,15 +4360,41 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // 0: asking for the disc image, 1: installing, 2: taking the artwork,
   // 3: updating the port, 4: preparing the native renderer's shaders, 6: the HD texture pack, 7: restore
   // the PS2 cutscenes?, 8 to 11: the graphics pages (setup-flow.md steps 5 to 8), 12: the button prompts
-  // (step 9), 13: "You're all set" (step 10), 5: the old look step (not shown after the graphics pages, which start from Remastered; job J6
-  // removes it).
+  // (step 9), 13: "You're all set" (step 10), 14: New in this update (players who had the setup on an older
+  // build, launcher_setup_new.inc). 5 is not used any more: it was the Original or Remastered step, removed in
+  // job J6 (new installs are Remastered; the Original look is a switch on graphics page 4 and in Settings).
+  // The graphics pages also come up from the New screen (gfx_from_new_), so they are checked before it.
   int SetupStage() const {
 #if defined(KK_DEV_TOOLS)
     if (dev_setup_ >= 0) return dev_setup_;
 #endif
     return installing_update_ ? 3 : installing_ ? 1 : setup_art_ ? 2 : setup_shaders_ ? 4 : setup_textures_ ? 6
            : setup_cutscenes_ ? 7 : setup_graphics_ ? kGfxFirstStage + std::clamp(gfx_page_, 0, kGfxPages - 1)
-           : setup_prompts_ ? kPromptsStage : setup_all_set_ ? kAllSetStage : setup_style_ ? 5 : 0;
+           : setup_prompts_ ? kPromptsStage : setup_all_set_ ? kAllSetStage : update_new_ ? kNewStage : 0;
+  }
+
+  // The first-time setup after the game files are there (a fresh install, or game files given to a fresh
+  // settings file): the shader screen is started by the caller, then these pages in order.
+  // New installs are Remastered (owner, 17 Oct, DECISIONS "Setup answers"; 12 Oct "Remastered plays at 60 FPS
+  // with Strong GTAO"; 15 Oct "GI follows the presets"): ApplyRemastered gives the hardware recommendation (its
+  // preset, and the global illumination of that preset), 60 FPS and Strong GTAO, set now so a setup left half
+  // way still plays Remastered. A player who had the setup on an older build (a reinstall, kk_setup_version
+  // 'waiting' or a version) keeps the settings they chose. The setup also stands in for the New screen.
+  void StartFullSetup(bool save = true) {
+    if (Get("kk_setup_version").empty()) {
+      ApplyRemastered();
+      REXLOG_INFO("KK: setup: new install: Remastered defaults (kk_frame_rate={} ao_strength={} native_gi={} tier {})",
+                  Get("kk_frame_rate"), Get("ao_strength"), FindFlag("native_gi") ? Get("native_gi") : std::string("-"),
+                  Get("kk_hardware_tier"));
+    } else {
+      REXLOG_INFO("KK: setup: again for a player who had it before (kk_setup_version {}): settings kept",
+                  Get("kk_setup_version"));
+    }
+    Set("kk_setup_version", KK_VERSION);
+    update_new_ = false;
+    gfx_from_new_ = false;
+    if (save) SaveSettings(paths_.config_path);  // the constructor saves later (a saved file now would look like an update)
+    AskContentInSetup();
   }
 
   // The first-time setup's content steps (setup-flow.md 3 and 4): the cutscene page only where the PS2
@@ -4401,6 +4419,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (GraphicsSetupStage(stage)) return DrawSetupGraphics(dl);  // setup steps 5 to 8: a layout of their own
     if (stage == kPromptsStage) return DrawSetupPrompts(dl);       // setup step 9 (launcher_setup_end.inc)
     if (stage == kAllSetStage) return DrawSetupAllSet(dl);         // setup step 10
+    if (stage == kNewStage) return DrawUpdateNew(dl);              // New in this update (launcher_setup_new.inc)
     float copied = 0, copy_total = 0;
     if (installing_) {
       copied = float(progress_.bytes_done.load());
@@ -4436,7 +4455,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // The steps (of the first install).
     static const char* const kSteps[] = {"Your copy", "Install", "Play"};
     if (stage != 3) {
-    const int step = stage == 0 ? 0 : stage == 5 ? 2 : 1;
+    const int step = stage == 0 ? 0 : 1;
     float sx = x;
     for (int i = 0; i < 3; ++i) {
       const ImU32 num = i < step ? color::kTextDim : i == step ? color::kAccent : color::kTextFaint;
@@ -4520,10 +4539,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       body("Taking the game's logo and stills from the movie from your copy of the game.");
       bar(art_fraction);
       y += 30 * s;
-    } else if (stage == 5) {
-      heading("Choose a look");
-      body("Pick how King Kong looks. You can change it at any time with Look on the Graphics page.");
-      DrawStyleCards(dl, y);
     } else if (stage == 6 || stage == 7) {
       // Setup steps 3 and 4 (setup-flow.md): the HD texture pack, and the restored PS2 cutscenes.
       const auto kind = stage == 6 ? content::Kind::kTexturePack : content::Kind::kCutscenes;
@@ -4587,7 +4602,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (stage == 0) DrawSidePanels(dl, 1.0f, false, entries, setup_focus_, o_.y + h_ - 120 * s);
     else side_focus_ = -1;
     // The setup steps after the shaders show a download running in the background (setup-flow.md).
-    if (stage == 5 || stage == 6 || stage == 7) DrawContentStrip(dl, 1.0f, stage == 5);
+    if (stage == 6 || stage == 7) DrawContentStrip(dl, 1.0f, false);
     if (const int i = DrawMenu(dl, entries, setup_focus_, x, y, 1.0f); i >= 0) entries[size_t(i)].action();
     if (!modal_.open && input_.Pressed(Action::kBack)) {
       input_.Consume(Action::kBack);
@@ -4599,115 +4614,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   static ImU32 WithAlphaText(float a) { return ui::WithAlpha(color::kText, a); }
 
-  // The setup's last step: two cards, Original and Remastered, side by side under the heading.
-  // Left and Right (or Up and Down) move between them, A or Enter or a click picks one.
-  void DrawStyleCards(ImDrawList* dl, float top) {
-    const float s = S();
-    const ui::Fonts f = ui::GetFonts();
-    const float x0 = o_.x + Margin(), right = o_.x + w_ - Margin();
-    const float gap = 28 * s, pad = 18 * s, r = 10 * s;
-    const float cw = std::min((right - x0 - gap) * 0.5f, 520 * s);
-    const float bottom = o_.y + h_ - 92 * s;  // above the prompts
-    static const GpuInfo gpu = DetectGpu();
-    struct Card {
-      const char* caption;
-      const char* title;
-      const char* text;
-      std::string fact;
-      rex::ui::ImmediateTexture* still;
-    };
-    const Card cards[2] = {
-        {"Original", "The Xbox 360 as it was",
-         "The console's own picture: 720p at 30 FPS, its anti-aliasing and texture filtering, the 69" KK_DEG " field "
-         "of view, motion blur, screen blur and distance fog. No ambient occlusion.",
-         T("720p  " KK_DOT "  30 FPS  " KK_DOT "  Xbox 360 settings"), still_low_},
-        {"Remastered", "Sharper, with soft shadows",
-         "Drawn for your screen's resolution with sharper textures, and the new GTAO ambient occlusion: soft "
-         "shading in corners, in creases and under rocks, grass and people.",
-         F("Recommended for your {0}  " KK_DOT "  60 FPS", {gpu.name.empty() ? T(std::string("graphics card")) : gpu.name}),
-         slides_.empty() ? nullptr : slides_[0].sharp},
-    };
-    // The text under each still, measured; the stills take what's left (cropped to fit).
-    const float wrap = cw - pad * 2;
-    float text_h = 0;
-    for (const Card& c : cards)
-      text_h = std::max(text_h, 22 * s + 36 * s + ui::TextSize(f.text, 14.5f * s, T(std::string(c.text)), wrap).y + 10 * s +
-                                    ui::TextSize(f.text, 12.5f * s, c.fact, wrap).y);
-    const float still_h = std::clamp(bottom - top - text_h - pad * 2, 60 * s, cw * 9.0f / 16.0f);
-    const float ch = still_h + pad + text_h + pad;
-
-    auto choose = [this](int i) {
-      ui::Cue(ui::Sound::kSelect);
-      if (i == 0) ApplyOriginal();
-      else ApplyRemastered();
-      REXLOG_INFO("KK: setup: look {}", i == 0 ? "Original" : "Remastered");
-      setup_style_ = false;
-#if defined(KK_DEV_TOOLS)
-      dev_setup_ = -1;
-#endif
-      Status(InstalledMessage());
-    };
-    const int before = style_focus_;
-    int chosen = -1;
-    if (!modal_.open) {
-      if (input_.Pressed(Action::kLeft) || input_.Pressed(Action::kUp)) style_focus_ = 0;
-      if (input_.Pressed(Action::kRight) || input_.Pressed(Action::kDown)) style_focus_ = 1;
-      if (input_.Pressed(Action::kAccept)) chosen = style_focus_;
-    }
-    int hovered = -1;
-    for (int i = 0; i < 2; ++i) {
-      const float cx = x0 + float(i) * (cw + gap);
-      if (!modal_.open && ImGui::IsMouseHoveringRect(ImVec2(cx, top), ImVec2(cx + cw, top + ch), false)) hovered = i;
-    }
-    if (hovered >= 0 && input_.mouse_moved()) style_focus_ = hovered;
-    if (hovered >= 0 && ImGui::IsMouseClicked(0)) chosen = style_focus_ = hovered;
-    if (style_focus_ != before) ui::Cue(ui::Sound::kMove);
-
-    for (int i = 0; i < 2; ++i) {
-      const Card& c = cards[i];
-      const float cx = x0 + float(i) * (cw + gap);
-      const bool focused = style_focus_ == i, on = focused || hovered == i;
-      const ImVec2 p0(cx, top), p1(cx + cw, top + ch);
-      dl->AddRectFilled(ImVec2(p0.x, p0.y + 5 * s), ImVec2(p1.x, p1.y + 5 * s), IM_COL32(0, 0, 0, 40), r);
-      dl->AddRectFilled(p0, p1, ui::WithAlpha(on ? IM_COL32(30, 33, 40, 255) : IM_COL32(16, 18, 22, 255), on ? 0.80f : 0.62f), r);
-      // The still, cropped to the room it has.
-      const ImVec2 s0(p0.x, p0.y), s1(p1.x, p0.y + still_h);
-      if (c.still) {
-        const float want = cw / still_h, aspect = 16.0f / 9.0f;
-        float v0 = 0, v1 = 1;
-        if (want > aspect) {
-          const float v = aspect / want;
-          v0 = (1 - v) * 0.5f;
-          v1 = v0 + v;
-        }
-        dl->AddImageRounded(ui::Tex(c.still), s0, s1, ImVec2(0, v0), ImVec2(1, v1),
-                            ui::WithAlpha(IM_COL32_WHITE, on ? 1.0f : 0.78f), r, ImDrawFlags_RoundCornersTop);
-      } else {
-        dl->AddRectFilledMultiColor(s0, s1, IM_COL32(22, 28, 36, 255), IM_COL32(26, 33, 42, 255), color::kBase,
-                                    color::kBase);
-      }
-      dl->AddRect(p0, p1, ui::WithAlpha(color::kText, on ? 0.30f : 0.09f), r, 0, 1.0f * s);
-      if (focused)  // the focus ring, as on the other focused things
-        dl->AddRect(ImVec2(p0.x - 3 * s, p0.y - 3 * s), ImVec2(p1.x + 3 * s, p1.y + 3 * s),
-                    ui::WithAlpha(color::kFocus, 0.85f), r + 3 * s, 0, 2.0f * s);
-      float ty = s1.y + pad;
-      ui::DrawTracked(dl, f.display, 12 * s, ImVec2(cx + pad, ty), color::kAccent, Upper(T(c.caption)), 2.6f * s);
-      ty += 22 * s;
-      dl->AddText(f.display, 24 * s, ImVec2(cx + pad, ty), color::kText, T(c.title));
-      ty += 36 * s;
-      const std::string text = T(std::string(c.text));
-      dl->AddText(f.text, 14.5f * s, ImVec2(cx + pad, ty), on ? color::kText : color::kTextDim, text.c_str(), nullptr, wrap);
-      ty += ui::TextSize(f.text, 14.5f * s, text, wrap).y + 10 * s;
-      dl->AddText(f.text, 12.5f * s, ImVec2(cx + pad, ty), color::kTextFaint, c.fact.c_str(), nullptr, wrap);
-    }
-    if (chosen >= 0) {
-      input_.Consume(Action::kAccept);
-      choose(chosen);
-    }
-  }
-
 #include "launcher_setup_graphics.inc"
 #include "launcher_setup_end.inc"
+#include "launcher_setup_new.inc"
 
   // The status line once the setup is over.
   const char* InstalledMessage() {
@@ -6420,7 +6329,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   }
 
   // The download strip: the later setup pages and Home show what downloads, how far it is and the time
-  // left (bottom right above the side panels' row; `top`: at the top right instead, where the look step's
+  // left (bottom right above the side panels' row; `top`: at the top right instead, where the later setup pages'
   // cards leave room). A click opens the progress pop-up; controllers reach it through Settings.
   bool DrawContentStrip(ImDrawList* dl, float alpha, bool top) {
     using namespace content;
@@ -6738,12 +6647,14 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       }
     }
     // What's new only once the game is playable (owner, 16 Oct): never during the first-time setup (the
-    // game files asked for, installed, the artwork, the shaders, the look), nor while shaders are prepared
-    // (that loads every processor core and the launcher answers slowly meanwhile). launcher_policy.h.
+    // game files asked for, installed, the artwork, the shaders, the setup pages up to Finish setup), nor over the
+    // New in this update screen (job J6), nor while shaders are prepared (that loads every processor core and the
+    // launcher answers slowly meanwhile). launcher_policy.h.
     if (open_whats_new_ &&
-        ShowWhatsNewNow({open_whats_new_, modal_.open, files_ok_, InSetup(), ShaderScreen(), native_pack_.Busy(),
+        ShowWhatsNewNow({open_whats_new_, modal_.open, files_ok_, InSetup(), update_new_, ShaderScreen(), native_pack_.Busy(),
                          NativeShaderPack::Wanted(), native_pack_.Finished()})) {
       open_whats_new_ = false;
+      whats_new_shown_ = true;
       OpenWhatsNew();
     }
     TickNativeShaders();
@@ -6791,7 +6702,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   void TickNativeShaders() {
     if (setup_shaders_ && !native_pack_.Busy()) {
       setup_shaders_ = false;
-      if (!setup_style_) Status(InstalledMessage());  // else once the look is chosen
+      if (!InSetup()) Status(InstalledMessage());  // else once the setup is finished (FinishSetup)
     }
     if (rebuild_shaders_screen_ && !native_pack_.Busy()) {
       rebuild_shaders_screen_ = false;
@@ -6876,7 +6787,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // default), logging "KK dev: input <step>"; "shot:<name>" logs
   // "KK dev: shot <name>" and holds the page for a capture. The mouse, at 1280 x 720
   // layout positions: "move:X:Y", "click:X:Y", "down:X:Y", "up", "wheel:N".
-  // "setup:5" is the look step; "reset-beta" does to the settings what switching to
+  // "setup:N" shows setup stage N (SetupStage numbers; 14 New in this update); "reset-beta" does to the settings what switching to
   // stable does (and saves them); "type:<text>" types text (New game's name); "whats-new" opens What's new as after 1.9.11; "update-test"
   // logs the update choice cases (RunUpdatePickTests); "updated" acts as the first start after an
   // update (the full shader rebuild and its screen); "setup:4" shows the setup's shader screen.
@@ -6905,11 +6816,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   void DevInput() {
     ImGuiIO& io = ImGui::GetIO();
-    // Scripted runs wait for the setup's work (only captures go on); the look step (stage 5) takes input
-    // like the pages.
+    // Scripted runs wait for the setup's work (only captures go on); the pages that ask something take input.
     const bool waiting = std::getenv("KK_DEV_LAUNCHER_INPUT_FILE") && (InSetup() || ShaderScreen()) &&
-                         SetupStage() != 5 && SetupStage() != 6 && SetupStage() != 7 &&
-                         !GraphicsSetupStage(SetupStage()) && !EndSetupStage(SetupStage());
+                         (ShaderScreen() || (SetupStage() != 6 && SetupStage() != 7 && !GraphicsSetupStage(SetupStage()) &&
+                                             !EndSetupStage(SetupStage()) && SetupStage() != kNewStage));
     static bool release = false;
     if (release) {
       io.AddMouseButtonEvent(0, false);
@@ -7037,16 +6947,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         REXLOG_INFO("KK dev: launcher page {} row {} = {}",
                     play_ != PlayView::kNone ? PlayViewName(play_) : kPageNames[page_], row.label,
                     choice ? row.options[size_t(row.index)] : row.value_text);
-      }
-      return;
-    }
-    if (t.rfind("look:", 0) == 0) {  // the setup's look step, when it is up: look:original / look:remastered
-      if (SetupStage() == 5) {
-        if (t == "look:original") ApplyOriginal();
-        else ApplyRemastered();
-        REXLOG_INFO("KK: setup: look {}", t == "look:original" ? "Original" : "Remastered");
-        setup_style_ = false;
-        Status(InstalledMessage());
       }
       return;
     }
@@ -7204,6 +7104,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   bool update_manual_ = false, update_prompted_ = false, installing_update_ = false, relaunched_ = false;
   std::string switch_to_;  // the channel Change version is switching to, while it checks
   bool open_whats_new_ = false;
+  bool whats_new_shown_ = false;  // opened once in this launcher session (FinishSetup asks for it only if not)
   bool offer_crash_reports_ = true;
   std::string whats_new_from_;  // version the player had before this one
   ShaderPackStatus pack_;
@@ -7241,7 +7142,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   art::ArtProgress art_progress_;
   std::thread art_thread_;
   bool setup_art_ = false;  // the art is being taken as the install's last step
-  bool setup_style_ = false;  // the setup's last step: Original or Remastered (DrawStyleCards)
   bool setup_textures_ = false;   // setup step 3: the HD texture pack page (SetupStage 6)
   bool setup_cutscenes_ = false;  // setup step 4: "Restore the PS2 cutscenes?" (SetupStage 7)
   int setup_content_seen_ = 0;    // TickSetupContent: the content pages already looked at (bit per stage)
@@ -7259,8 +7159,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   std::vector<std::function<void()>> content_popups_;
   uint64_t free_space_ = 0;
   double free_space_at_ = -10;
-  int style_focus_ = 1;       // the card with the focus (Remastered first)
-  rex::ui::ImmediateTexture* still_low_ = nullptr;  // the first still, smaller (the Original card)
   int setup_focus_ = 0;
   content::Stage content_last_[content::kKindCount] = {};  // TickContent: the stage last seen
   bool pads_active_ = true;  // the launcher's window is the active one: controllers count

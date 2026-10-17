@@ -97,8 +97,25 @@ from Settings > About comes back to that tab with its results (`kk_benchmark_fro
 Home's About.
 Reinstall game and Check for updates now are on About; Graphics > Advanced has Rebuild shaders (asks first, then
 the shader screen with its one progress bar). The online player count is explained and switched in the first
-setup and on About; no reminder opens by itself. What's new opens only once the game files are installed, the
-shaders prepared and the look chosen (`launcher_policy.h`).
+setup and on About; no reminder opens by itself. What's new never opens during the first-time setup or over the
+New in this update screen; it opens once on the main menu after Finish setup (new install) or after that screen's
+Continue (a player who updated), with the game files installed and the shaders prepared (`launcher_policy.h`).
+
+**First-time setup and New in this update (job J6, 17 Oct; spec `codex/state/setup-flow.md`).** The setup's pages
+(SetupStage numbers in `launcher.cpp`): 0 disc image, 1 install, 2 artwork, 4 shaders, 6 HD texture pack, 7 PS2
+cutscenes (where PS2 movies play), 8 to 11 the graphics pages (`launcher_setup_graphics.inc`), 12 button prompts,
+13 You're all set (`launcher_setup_end.inc`). There is no Original or Remastered step any more (stage 5 removed):
+a new install starts Remastered as the setup begins (`StartFullSetup` -> `ApplyRemastered`: the hardware
+recommendation's preset with that preset's global illumination, Strong GTAO, 60 FPS), the Original look is a switch
+on graphics page 4 and on the Graphics page, and "Use recommended for my PC" gives Remastered again. A player who had
+the setup on an older build gets stage 14 instead, **New in this update** (`launcher_setup_new.inc`), once, on the
+first start after updating (after the update's shader screen): HD texture pack [Download] [I already have one]
+[Not now], PS2 cutscenes [Yes, restore them] [No thanks] (where PS2 movies play), "See the new graphics options"
+(graphics pages 1 to 4 with the player's own settings; Done on page 4 and Back / B on page 1 come back), [Continue].
+`kk_setup_version` remembers it: "waiting" from the first start after an update until Continue, then the version
+(also set by the full setup, which never shows it). Downloads ask and run as from Settings. Up / Down move between the
+rows of buttons, Left / Right along a row, A / Enter / a click use one; B does nothing there. There is no "Run setup
+again" option; Reinstall game (About) runs the full setup again and keeps the settings of a player who had it.
 
 - **Play** on Home (and Start / P on any page) opens the **Play menu**: Home's look (clear stills, the logo, the
   large entries), the header `PLAY` instead of the tabs. Continue (only with a save: the one saved last), New

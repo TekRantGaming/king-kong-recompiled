@@ -26,7 +26,8 @@
 
   bool setup_graphics_ = false;  // setup steps 5-8 (SetupStage 8 to 11)
   int gfx_page_ = 0;
-  bool gfx_entered_ = false;     // the Remastered defaults were set as the pages first came up
+  bool gfx_entered_ = false;     // the settings were logged as the pages first came up
+  bool gfx_from_new_ = false;    // opened from New in this update: Next on the last page and Back on the first go back to it
   ui::ListState gfx_lists_[kGfxPages];
   bool gfx_on_cards_ = false;    // the page's cards (graphics API, upscaler) have the focus
   int gfx_card_focus_ = 0;
@@ -218,14 +219,18 @@
                             [this, page] { ApplyGfxRecommended(page); });
       rows.push_back(std::move(Disable(rec, original, kSetByOriginal)));
     }
-    rows.push_back(ActionItem("Next", page == kGfxPages - 1 ? "Finishes the graphics setup." : "The next page.",
-                              page == kGfxPages - 1 ? "" : F("{0} of {1}", {std::to_string(page + 2), std::to_string(kGfxPages)}),
+    const bool last = page == kGfxPages - 1;
+    rows.push_back(ActionItem(last && gfx_from_new_ ? "Done" : "Next",
+                              !last ? "The next page." : gfx_from_new_ ? "Back to New in this update." : "Finishes the graphics setup.",
+                              last ? "" : F("{0} of {1}", {std::to_string(page + 2), std::to_string(kGfxPages)}),
                               [this, page] {
                                 if (page + 1 < kGfxPages) GfxGo(page + 1);
                                 else FinishSetupGraphics();
                               }));
     if (page > 0)
       rows.push_back(ActionItem("Back", "The page before.", "", [this, page] { GfxGo(page - 1); }));
+    else if (gfx_from_new_)
+      rows.push_back(ActionItem("Back", "Back to New in this update.", "", [this] { BackToNewScreen(); }));
     return rows;
   }
 
@@ -263,6 +268,7 @@
   }
 
   void FinishSetupGraphics() {
+    if (gfx_from_new_) return BackToNewScreen();
     setup_graphics_ = false;
     gfx_entered_ = false;
     setup_prompts_ = true;  // then setup step 9, the button prompts (launcher_setup_end.inc)
@@ -535,14 +541,9 @@
     const int page = GfxPage();
     if (!gfx_entered_) {
       gfx_entered_ = true;
-      // New installs are Remastered (owner, 17 Oct): the pages start from its settings, and Original look is
-      // a switch on the last page. The old look step (stage 5) is not shown after them.
-      if (setup_style_) {
-        ApplyRemastered();
-        setup_style_ = false;
-        REXLOG_INFO("KK: setup: Remastered defaults set for the graphics pages (the look step is not shown)");
-      }
-      LogGraphicsChoices("graphics pages start");
+      // New installs are already Remastered (StartFullSetup, job J6), and the Original look is a switch on the
+      // last page; a player who comes from the New in this update screen sees their own settings.
+      LogGraphicsChoices(gfx_from_new_ ? "graphics pages start (from New in this update)" : "graphics pages start");
     }
     const float x0 = o_.x + Margin(), right = o_.x + w_ - Margin();
     const float list_w = std::round(std::min(660 * s, (right - x0) * 0.5f));
@@ -616,12 +617,16 @@
       gfx_on_cards_ = false;
     const Item* focused = ui::DrawList(dl, items, st, l0, l1, m_, input_, !modal_.open && !gfx_on_cards_);
 
-    // B: the page before (the first page has none: the steps before it are done).
+    // B: the page before (the first page has none in the setup: the steps before it are done; from the New in
+    // this update screen it goes back there).
     if (!modal_.open && input_.Pressed(Action::kBack)) {
       input_.Consume(Action::kBack);
       if (page > 0) {
         ui::Cue(ui::Sound::kBack);
         GfxGo(page - 1);
+      } else if (gfx_from_new_) {
+        ui::Cue(ui::Sound::kBack);
+        BackToNewScreen();
       } else {
         ui::Cue(ui::Sound::kDeny);
       }
@@ -688,6 +693,6 @@
         p.push_back({Action::kAccept, "Select"});
     }
     p.push_back({Action::kPageUp, "Compare"});
-    if (GfxPage() > 0) p.push_back({Action::kBack, "Back"});
+    if (GfxPage() > 0 || gfx_from_new_) p.push_back({Action::kBack, "Back"});
     return p;
   }

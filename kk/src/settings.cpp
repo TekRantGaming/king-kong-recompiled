@@ -54,6 +54,9 @@ REXCVAR_DEFINE_STRING(kk_hardware_tier, "", "KK",
     .allowed({"", "low", "mid", "high"});
 REXCVAR_DEFINE_STRING(kk_last_version, "", "KK",
                       "Last port version the launcher has shown (it shows What's new once after an update)");
+REXCVAR_DEFINE_STRING(kk_setup_version, "", "KK",
+                      "Internal: the port version whose setup steps this player has had (the first-time setup, or "
+                      "the one-time New in this update screen); 'waiting' while that screen is still to be shown");
 REXCVAR_DEFINE_INT32(kk_frame_rate, 30, "KK/Video",
                      "Frame-rate cap: 30, 60, 90, 120, 144, 165, 240, or 0 for unlimited");
 REXCVAR_DEFINE_BOOL(kk_hfr_fixes, true, "KK/Video",

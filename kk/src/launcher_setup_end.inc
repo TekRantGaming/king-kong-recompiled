@@ -25,10 +25,10 @@
     std::function<void()> pick;
   };
 
-  // The left column's top: the logo, "PC PORT · SETUP · <step>", the heading and what the page is for.
-  // Returns where the cards start.
+  // The left column's top: the logo, "PC PORT · SETUP · <step>" (`area` instead of Setup: the New in this update
+  // screen's Update), the heading and what the page is for. Returns where the cards start.
   float DrawEndHeader(ImDrawList* dl, const char* step, const char* title, const std::string& intro, float x0,
-                      float width) {
+                      float width, const char* area = "Setup") {
     const float s = S();
     const ui::Fonts f = ui::GetFonts();
     float y = o_.y + std::max(40 * s, h_ * 0.06f);
@@ -38,7 +38,7 @@
       y += lh;
     }
     ui::DrawTracked(dl, f.display, 13 * s, ImVec2(x0 + 2 * s, y), color::kTextDim,
-                    Upper(T("PC port")) + "  " KK_DOT "  " + Upper(T("Setup")) + "  " KK_DOT "  " + Upper(T(step)),
+                    Upper(T("PC port")) + "  " KK_DOT "  " + Upper(T(area)) + "  " KK_DOT "  " + Upper(T(step)),
                     3 * s);
     y += 30 * s;
     dl->AddText(f.display, 30 * s, ImVec2(x0, y), color::kText, T(title));
@@ -595,7 +595,8 @@
     REXLOG_INFO("KK: setup: back to the button prompts");
   }
 
-  // Finish setup: the main menu, and What's new once on it (a new install has no notes pending otherwise).
+  // Finish setup: the main menu, and What's new once on it (a new install has no notes pending otherwise; never
+  // a second time in one launcher session, e.g. after Reinstall game from About once it was shown).
   void FinishSetup() {
     setup_all_set_ = false;
     end_page_ = -1;
@@ -604,7 +605,9 @@
 #endif
     page_ = kHome;
     home_focus_ = 0;
-    if (!std::getenv("KK_AUTOPLAY")) {
+    Set("kk_setup_version", KK_VERSION);
+    SaveSettings(paths_.config_path);
+    if (!std::getenv("KK_AUTOPLAY") && !whats_new_shown_) {
       whats_new_from_.clear();  // this version's notes
       open_whats_new_ = true;
     }
