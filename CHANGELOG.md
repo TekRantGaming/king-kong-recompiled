@@ -3,6 +3,39 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v2.0.0-beta.6 (17 October 2026)
+
+**Beta 6**: a big update, from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/PET2xU5FJq). Your saves and settings are kept, and you can switch back to stable at any time. Windows only for this beta.
+
+### What's new
+- **A new first-time setup.** After the shaders, setup offers an optional HD texture pack, the restored PS2 cutscenes, four pages of graphics options with side-by-side comparisons, your choice of button prompts, and links to the Discord and Add to Steam. New installs start with the Remastered look; the Original look is in Settings > Graphics.
+- **Optional HD texture pack.** A separate 2.6 GB download with sharper textures at four times their original size. It downloads in the background and can be turned on or off at any time in Settings > Graphics. You can also install a texture pack ZIP you already have.
+- **Restored PS2 cutscenes.** The cutscenes between missions from the PlayStation 2 version, upscaled. A separate 1.9 GB download, on or off in Settings > Advanced.
+- **Downloads tell you when they finish**, with a sound and a Windows notification, and pause while you play.
+- **High frame rates fixed for the boat, the hanging boxes, the fish, the water, motion blur and the camera** at the start of chapters. They now behave the same at 60, 120 and higher as at 30.
+- **Far fewer stutters.** Missing graphics pipelines no longer freeze the game, Vulkan builds new pipelines in under a millisecond on supported drivers, the shipped pipeline list covers much more of the game, and short hitches around 30 seconds into each chapter and when saving files are gone.
+- **Upscalers (DLSS, FSR, XeSS) now draw at the resolution you choose in the launcher**, and without an upscaler the game never draws above it. This is faster on screens below 1440p.
+- **Sharper textures with DLAA and native anti-aliasing.**
+- **Settings reorganised**: Display, Graphics, Audio, Controls, Gameplay, Cheats, Advanced and About. About is also on the main menu.
+- **Workshop** on the main menu: our other projects, with their pages and download links. Kong mods are coming soon.
+- **Free camera** (F9) and hide the HUD (F10) are now part of the game. See FREECAM.txt.
+- **Built-in benchmark** on About > Run benchmark, fully usable with a controller.
+- **Shadows, water reflections and light shafts** can be turned on in Settings > Graphics (off by default, still being improved).
+
+### Known issues
+- The HD texture pack is checked in several chapters; tell us if you see a texture that looks wrong.
+- FSR 4 runs on DirectX 12 only.
+- Vulkan uses more memory than DirectX 12.
+- On the very first start after installing or a driver update, Vulkan prepares pipeline parts in the background for about half a minute.
+
+### Full changelog
+- Launcher: Extras in Play; one shader progress bar; no shader compile at Play; no desktop between screens; Rebuild shaders in Graphics > Advanced; Display page opens instantly; keeps working while minimised; ignores controllers while it is not the active window.
+- Content downloads: resume after a lost connection or restart, SHA-256 check before installing, free space check, installed into the user folder.
+- Renderer: per-list volatile constant budget (heavy frames cannot overflow), retired resources released over several frames, cache files written on a background thread, driver pipeline cache saved before exit and safe when two devices save it, texture pack limit is a quarter of graphics memory, texture pack replacements freed at chapter changes and shared between identical textures.
+- Pipelines: scene draws wait at most 4 ms per frame for a pipeline, then skip that draw until it is ready; Vulkan graphics pipeline library with linked pipelines replaced by optimised ones in the background.
+- High frame rate fixes: game time at a chapter start, boat roll, hanging-box wind, camera pitch after landing, motion blur fade.
+- Benchmark: other programs' GPU use counts only 3D work on the game's graphics card.
+
 ## v2.0.0-beta.5 (16 October 2026)
 
 **Beta 5**: a small update to Beta 4, from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/PET2xU5FJq). Your saves and settings are kept, and you can switch back to stable at any time.
