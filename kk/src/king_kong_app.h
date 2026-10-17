@@ -250,6 +250,7 @@ class KingKongApp : public rex::ReXApp {
     cb.desktop_mode = [this](int monitor) { return kk::DesktopDisplayMode(monitor, window()); };
     cb.post_to_ui = [this](std::function<void()> f) { app_context().CallInUIThreadDeferred(std::move(f)); };
     cb.recover_presentation = [this] { RecoverPresentation(nullptr); };
+    cb.minimize = [this] { return window() && kk::MinimizeNativeWindow(window()->GetNativeWindowHandle()); };
     // The Display page's Resolution list, made on a worker while the launcher opens (display_modes.h).
     kk::PrefetchDisplayModes(std::atoi(rex::cvar::GetFlagByName("monitor").c_str()), window());
     kk::ShowLauncher(imgui_drawer(), immediate_drawer(),

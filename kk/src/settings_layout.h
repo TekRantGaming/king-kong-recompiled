@@ -60,12 +60,13 @@ inline constexpr Row kGraphicsRows[] = {
     {"Effects", "Distance fog"},
     {"Extras", "Old movie filter"},
     {"Extras", "Horizontal flip"},
+    {"Texture pack", "Texture pack"},
+    {"Texture pack", "Installed"},
+    {"Texture pack", "Download HD texture pack"},
+    {"Texture pack", "Import ZIP"},
+    {"Texture pack", "Remove texture pack"},
+    {"Texture pack", "Texture pack folder"},
     {"Advanced", "Effect resolution"},
-    {"Advanced", "Texture pack"},
-    {"Advanced", "Texture pack folder"},
-    {"Advanced", "HD texture pack"},
-    {"Advanced", "Import texture pack ZIP"},
-    {"Advanced", "Remove HD texture pack"},
     {"Advanced", "Rebuild shaders"},
 };
 
@@ -124,10 +125,10 @@ inline constexpr Row kCheatsRows[] = {
 };
 
 inline constexpr Row kAdvancedRows[] = {
-    {"Cutscenes", "Play PS2 cutscenes"},
-    {"Cutscenes", "PS2 movie folder"},
-    {"Cutscenes", "Restored PS2 cutscenes"},
+    {"Cutscenes", "PS2 cutscenes"},
+    {"Cutscenes", "Download PS2 cutscenes"},
     {"Cutscenes", "Remove PS2 cutscenes"},
+    {"Cutscenes", "PS2 movie folder"},
     {"Diagnostics", "Frame counter"},
     {"Diagnostics", "Copy diagnostics"},
     {"Diagnostics", "Saved crash reports"},

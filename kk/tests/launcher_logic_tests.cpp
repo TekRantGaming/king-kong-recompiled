@@ -301,6 +301,12 @@ void SettingsLayoutChecks() {
   Check(L::IndexOf(L::kGraphics, "Look") < L::IndexOf(L::kGraphics, "Graphics API"), "the look is with the preset");
   Check(std::string(L::RowsOf(L::kGraphics).begin()[L::IndexOf(L::kGraphics, "Rebuild shaders")].section) == "Advanced",
         "Rebuild shaders is in Graphics' advanced section");
+  Check(in_order(L::kGraphics, {"Texture pack", "Installed", "Download HD texture pack", "Import ZIP",
+                                "Remove texture pack", "Effect resolution"}) &&
+            std::string(L::RowsOf(L::kGraphics).begin()[L::IndexOf(L::kGraphics, "Installed")].section) == "Texture pack",
+        "Graphics: the texture pack's own section before Advanced (job J2)");
+  Check(in_order(L::kAdvanced, {"PS2 cutscenes", "Download PS2 cutscenes", "Remove PS2 cutscenes", "Frame counter"}),
+        "Advanced: the PS2 cutscenes switch, Download and Remove (job J2)");
   Check(in_order(L::kAudio, {"Master volume", "Music volume", "Effects volume", "Voices volume", "Menu sounds"}),
         "Audio: master, music, effects, speech, menu sounds");
   Check(in_order(L::kControls, {"Camera sensitivity", "Camera horizontal", "Camera vertical", "Vibration",

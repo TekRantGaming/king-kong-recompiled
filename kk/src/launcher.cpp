@@ -62,6 +62,8 @@
 
 #include <imgui.h>
 #include <SDL3/SDL_dialog.h>
+#include <SDL3/SDL_stdinc.h>
+#include <SDL3/SDL_video.h>
 #include <toml++/toml.hpp>
 
 #include <rex/cvar.h>
@@ -103,7 +105,7 @@ struct TexturePackFolderChoice {
   bool busy = false;
   std::string selected;
 } texture_pack_folder_choice;
-// "Import texture pack ZIP": the file the OS dialog returned (its callback can run on another thread).
+// Import ZIP / "I already have a texture pack": the file the OS dialog returned (its callback can run on another thread).
 struct TexturePackZipChoice {
   std::mutex mutex;
   bool busy = false;
@@ -120,6 +122,14 @@ constexpr const char* kOnlineAbout =
     "account, IP address or anything from your PC is kept, and switching it off deletes the random number.";
 #define KK_TIMES "\xC3\x97"
 #define KK_DOT "\xC2\xB7"
+
+// The restored PS2 cutscenes play on Windows only (ps2_movies.cpp): their setup page and Settings rows are
+// there only (setup-flow.md: on Linux the page is shown only if playback exists).
+#if defined(_WIN32)
+constexpr bool kPs2MoviePlayback = true;
+#else
+constexpr bool kPs2MoviePlayback = false;
+#endif
 #define KK_DEG "\xC2\xB0"
 // Said wherever the native renderer's shaders are being prepared.
 #define KK_SLOW_PC "Your PC may run slower until this finishes, because preparing the shaders uses its processor."
@@ -1660,14 +1670,73 @@ class SettingsPages {
     }
 
     OriginalVideoItems(items);
+    TexturePackItems(items);
     items.push_back(Section("Advanced"));
     {
       Item it = CvarChoice("Effect resolution", "Resolution of bloom, blur and glow buffers.",
                            "native_effect_buffers", {{"Original", "false"}, {"Output", "true"}});
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
-    items.push_back(CvarChoice("Texture pack", "Use replacement textures made from your own extracted files.",
-                              "native_texture_pack", {{"Off", "false"}, {"On", "true"}}));
+    RebuildShadersItem(items);
+    return items;
+  }
+
+  // ------------------------------------------------- content downloads ---
+  // Settings rows for the HD texture pack and the PS2 cutscenes (codex/state/setup-flow.md "Settings", job
+  // J2). The service (content.h) runs on its own thread; the rows show its state each frame. What a row
+  // starts (the "This can take a while" pop-up, the progress pop-up, the confirmations) is the launcher's
+  // (content_action_); the pause menu shows the On/Off switches only.
+  enum ContentVerb { kContentDownload, kContentWatch, kContentImport, kContentRemove, kContentCancel };
+  std::function<void(content::Kind, int)> content_action_;
+  void ContentAction(content::Kind kind, int verb) {
+    if (content_action_) content_action_(kind, verb);
+  }
+
+  // Graphics > Texture pack: the switch (any time: the renderer reads it every frame, so in game it
+  // changes at once), what is installed, Download / Import ZIP / Remove, and a folder of the player's own.
+  void TexturePackItems(std::vector<Item>& items) {
+    using namespace content;
+    items.push_back(Section("Texture pack"));
+    const bool have = !Get("native_texture_pack_folder").empty();
+    {
+      Item it = CvarToggle("Texture pack",
+                           "Replaces the game's textures with the sharper ones from the installed texture pack. You "
+                           "can switch it at any time, also from the pause menu, and it changes straight away.",
+                           "native_texture_pack");
+      items.push_back(std::move(Disable(it, !have && !GetBool("native_texture_pack"),
+                                        in_game_ ? "No texture pack is installed. Install one in the launcher's "
+                                                   "Settings > Graphics."
+                                                 : "No texture pack is installed. Download the HD texture pack or "
+                                                   "import a ZIP below.")));
+    }
+    if (in_game_) return;
+    auto& service = Service::Get();
+    const content::Status st = service.Ready() ? service.Get(Kind::kTexturePack) : content::Status{};
+    {
+      Item it;
+      it.type = ItemType::kInfo;
+      it.label = "Installed";
+      it.description = "The texture pack in your user folder that Texture pack uses.";
+      it.value_text = st.installed ? (st.imported ? F("Your texture pack ({0})", {st.installed_name})
+                                                  : T(std::string("HD texture pack")))
+                      : have       ? T(std::string("Your own folder"))
+                                   : T(std::string("None"));
+      items.push_back(std::move(it));
+    }
+    items.push_back(ContentDownloadItem(Kind::kTexturePack, st));
+    {
+      Item imp = ActionItem("Import ZIP",
+                            "Already have a texture pack as a ZIP file? Choose it and the launcher unpacks it, checks "
+                            "it and turns it on. Your ZIP file is kept.",
+                            "Choose ZIP", [this] { ContentAction(Kind::kTexturePack, kContentImport); });
+      {
+        std::lock_guard lock(texture_pack_zip_choice.mutex);
+        imp.disabled = texture_pack_zip_choice.busy || st.Busy();
+      }
+      if (st.Busy()) imp.disabled_note = "A download or install is running.";
+      items.push_back(std::move(imp));
+    }
+    items.push_back(ContentRemoveItem(Kind::kTexturePack, st));
     {
       const std::string folder = Get("native_texture_pack_folder");
       Item it = ActionItem("Texture pack folder", "Choose the folder containing your texture pack.",
@@ -1688,15 +1757,8 @@ class SettingsPages {
       { std::lock_guard lock(texture_pack_folder_choice.mutex); it.disabled = texture_pack_folder_choice.busy; }
       items.push_back(std::move(it));
     }
-    if (!in_game_) ContentItems(items, content::Kind::kTexturePack);
-    RebuildShadersItem(items);
-    return items;
   }
 
-  // ------------------------------------------------- content downloads ---
-  // Settings rows for the HD texture pack and the PS2 cutscenes (codex/state/setup-flow.md "Downloads",
-  // job J1: the service and these rows; the setup pages come later). The service runs on its own thread;
-  // the rows show its state each frame.
   static std::string Gb(uint64_t bytes) {
     char buf[32];
     std::snprintf(buf, sizeof(buf), "%.1f", double(bytes) / 1e9);
@@ -1743,18 +1805,28 @@ class SettingsPages {
     return F("About {0} min left", {std::to_string(int(seconds / 60 + 0.5))});
   }
 
-  void ContentItems(std::vector<Item>& items, content::Kind kind) {
+  static std::string Percent(const content::Status& st) {
+    return st.total ? std::to_string(int(double(st.done) * 100 / double(st.total))) + "%" : std::string();
+  }
+  static void ProgressFacts(const content::Status& st, std::vector<std::string>& facts) {
+    if (st.total) facts.push_back(F("{0} of {1} GB", {Gb(st.done), Gb(st.total)}));
+    if (st.stage == content::Stage::kDownloading && st.speed > 0) {
+      char speed[32];
+      std::snprintf(speed, sizeof(speed), "%.1f", st.speed / 1e6);
+      facts.push_back(F("{0} MB/s", {speed}));
+    }
+    if (st.stage == content::Stage::kDownloading)
+      if (const std::string left = TimeLeft(st.seconds_left); !left.empty()) facts.push_back(left);
+  }
+
+  // Download HD texture pack / Download PS2 cutscenes: Download asks first ("This can take a while"); while
+  // it runs (or is paused) the row opens the progress pop-up (Pause / Continue, Run in background, Cancel).
+  Item ContentDownloadItem(content::Kind kind, const content::Status& st) {
     using namespace content;
-    auto& service = Service::Get();
-    if (!service.Ready()) return;
-    const content::Status st = service.Get(kind);
     const bool tex = kind == Kind::kTexturePack;
     const Info& info = InfoFor(kind);
-    Item it = ActionItem(tex ? "HD texture pack" : "Restored PS2 cutscenes", "", "", nullptr);
-    std::function<void()> action;
-    auto percent = [&] {
-      return st.total ? std::to_string(int(double(st.done) * 100 / double(st.total))) + "%" : std::string();
-    };
+    Item it = ActionItem(tex ? "Download HD texture pack" : "Download PS2 cutscenes", "", "", nullptr);
+    int verb = -1;
     switch (st.stage) {
       case Stage::kNone:
         it.value_text = "Download";
@@ -1762,93 +1834,68 @@ class SettingsPages {
                                  {Gb(info.zip_size), Gb(SpaceNeeded(info.zip_size, 0, info.unpacked))})
                              : F("Downloads the upscaled PS2 cutscenes that the Xbox 360 version left out ({0} GB) and turns them on. It needs {1} GB of free space while it installs.",
                                  {Gb(info.zip_size), Gb(SpaceNeeded(info.zip_size, 0, info.unpacked))});
-        action = [kind] { Service::Get().Download(kind); };
+        verb = kContentDownload;
         break;
       case Stage::kQueued:
       case Stage::kStarting:
       case Stage::kDownloading:
-        it.value_text = st.stage == Stage::kDownloading ? percent() : st.stage == Stage::kQueued ? "Waiting" : "Starting";
-        it.description = "Downloading. Select to pause. It continues where it stopped, also after closing the launcher.";
-        if (st.total) it.facts.push_back(F("{0} of {1} GB", {Gb(st.done), Gb(st.total)}));
-        if (st.speed > 0) {
-          char speed[32];
-          std::snprintf(speed, sizeof(speed), "%.1f", st.speed / 1e6);
-          it.facts.push_back(F("{0} MB/s", {speed}));
-        }
-        if (const std::string left = TimeLeft(st.seconds_left); !left.empty()) it.facts.push_back(left);
-        action = [kind] { Service::Get().Pause(kind); };
+        it.value_text = st.stage == Stage::kDownloading ? Percent(st) : st.stage == Stage::kQueued ? "Waiting" : "Starting";
+        it.description = "Downloading. Select to see the progress, pause or cancel. It continues where it stopped, also after closing the launcher.";
+        ProgressFacts(st, it.facts);
+        verb = kContentWatch;
         break;
       case Stage::kPaused:
         it.value_text = "Paused";
-        it.description = "Paused. Select to continue the download.";
-        if (st.total) it.facts.push_back(F("{0} of {1} GB", {Gb(st.done), Gb(st.total)}));
-        action = [kind] { Service::Get().Download(kind); };
+        it.description = "Paused. Select to continue or cancel the download.";
+        ProgressFacts(st, it.facts);
+        verb = kContentWatch;
         break;
       case Stage::kVerifying:
-        it.value_text = percent();
+        it.value_text = Percent(st);
         it.description = "Checking the download.";
-        action = [kind] { Service::Get().Pause(kind); };
+        verb = kContentWatch;
         break;
       case Stage::kUnpacking:
-        it.value_text = percent();
+        it.value_text = Percent(st);
         it.description = "Unpacking the files. This takes a few minutes.";
+        verb = kContentWatch;
         break;
       case Stage::kInstalled:
         it.value_text = "Installed";
         it.description = tex ? F("Installed: {0}. Turn it on or off with Texture pack above.", {st.installed_name})
-                             : T("Installed. Turn them on or off with Play PS2 cutscenes above.");
+                             : T("Installed. Turn them on or off with PS2 cutscenes above.");
         break;
       case Stage::kFailed:
         it.value_text = st.installed ? "Installed" : "Try again";
         it.description = ContentError(st, tex);
-        if (!st.installed) action = [kind] { Service::Get().Download(kind); };
+        if (!st.installed) verb = kContentDownload;
         break;
       case Stage::kRemoving:
         it.value_text = "Removing";
         it.description = "Removing.";
         break;
     }
-    it.on_activate = action;
-    items.push_back(std::move(it));
+    if (verb >= 0) it.on_activate = [this, kind, verb] { ContentAction(kind, verb); };
+    return it;
+  }
 
-    if (tex) {
-      Item imp = ActionItem("Import texture pack ZIP",
-                            "Already have a texture pack as a ZIP file? Choose it and the launcher unpacks it, checks it and turns it on. Your ZIP file is kept.",
-                            "Choose ZIP", [] {
-        {
-          std::lock_guard lock(texture_pack_zip_choice.mutex);
-          if (texture_pack_zip_choice.busy) return;
-          texture_pack_zip_choice.busy = true;
-        }
-        static const SDL_DialogFileFilter kZip[] = {{"ZIP", "zip"}};
-        SDL_ShowOpenFileDialog([](void*, const char* const* files, int) {
-          std::lock_guard lock(texture_pack_zip_choice.mutex);
-          if (files && files[0]) texture_pack_zip_choice.selected = files[0];
-          texture_pack_zip_choice.busy = false;
-        }, nullptr, nullptr, kZip, 1, nullptr, false);
-      });
-      {
-        std::lock_guard lock(texture_pack_zip_choice.mutex);
-        imp.disabled = texture_pack_zip_choice.busy || st.Busy();
-      }
-      if (st.Busy()) imp.disabled_note = "A download or install is running.";
-      items.push_back(std::move(imp));
-    }
-
+  // Remove texture pack / Remove PS2 cutscenes (asks first), or Cancel download while one is kept.
+  Item ContentRemoveItem(content::Kind kind, const content::Status& st) {
+    using namespace content;
+    const bool tex = kind == Kind::kTexturePack;
     const bool partial = st.Busy() || st.stage == Stage::kPaused || (st.stage == Stage::kFailed && !st.installed);
-    Item rem = ActionItem(tex ? "Remove HD texture pack" : "Remove PS2 cutscenes",
+    Item rem = ActionItem(tex ? "Remove texture pack" : "Remove PS2 cutscenes",
                           partial ? "Stops the download and deletes what was downloaded so far."
                           : tex   ? "Deletes the installed texture pack and turns Texture pack off."
-                                  : "Deletes the restored cutscenes and turns Play PS2 cutscenes off.",
-                          partial ? "Cancel download" : "Remove", [kind, partial] {
-        if (partial) Service::Get().Cancel(kind);
-        else Service::Get().Remove(kind);
+                                  : "Deletes the restored cutscenes and turns PS2 cutscenes off.",
+                          partial ? "Cancel download" : "Remove", [this, kind, partial] {
+        ContentAction(kind, partial ? kContentCancel : kContentRemove);
       });
     if (st.stage == Stage::kUnpacking || st.stage == Stage::kRemoving || (!partial && !st.installed)) {
       rem.disabled = true;
       rem.disabled_note = st.installed || st.Busy() ? "Wait until it has finished." : "Not installed.";
     }
-    items.push_back(std::move(rem));
+    return rem;
   }
 
   // Graphics > Renderer: the native renderer's graphics API (Vulkan or DirectX 12).
@@ -1887,11 +1934,20 @@ class SettingsPages {
   std::vector<Item> AdvancedItems() {
     std::vector<Item> items;
 #if defined(_WIN32)
+    // The PS2 movies play on Windows only (kPs2MoviePlayback), so the rows are there only.
     items.push_back(Section("Cutscenes"));
-    items.push_back(CvarToggle("Play PS2 cutscenes",
-        "Play your own PS2 movies between missions. You must supply the movies and choose their folder.",
+    items.push_back(CvarToggle("PS2 cutscenes",
+        in_game_ ? "Plays the restored PS2 cutscenes in the game, between the missions where the Xbox 360 version has "
+                   "none. Download them in the launcher's Settings > Advanced. You can switch them at any time."
+                 : "Plays the restored PS2 cutscenes in the game, between the missions where the Xbox 360 version has "
+                   "none. Download them below, or choose a folder with your own BK_xxxx.mp4 files. You can switch "
+                   "them at any time.",
         "kk_ps2_cutscenes"));
-    {
+    if (!in_game_) {
+      auto& service = content::Service::Get();
+      const content::Status st = service.Ready() ? service.Get(content::Kind::kCutscenes) : content::Status{};
+      items.push_back(ContentDownloadItem(content::Kind::kCutscenes, st));
+      items.push_back(ContentRemoveItem(content::Kind::kCutscenes, st));
       const auto folder = movies::Folder().u8string();
       Item it = ActionItem("PS2 movie folder", "Choose the folder containing BK_xxxx.mp4.", "", [this] {
         const auto path = movies::BrowseFolder();
@@ -1903,8 +1959,6 @@ class SettingsPages {
       it.on_default = [] { Reset("kk_ps2_movie_folder"); };
       items.push_back(std::move(it));
     }
-    // The PS2 movies play on Windows only (ps2_movies.cpp), so their download is offered there only.
-    if (!in_game_) ContentItems(items, content::Kind::kCutscenes);
 #endif
 
     items.push_back(Section("Diagnostics"));
@@ -2398,6 +2452,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     files_ok_ = GameFilesPresent(paths_.game_dir);
     home_focus_ = 0;
     rebuild_shaders_ = [this] { OpenRebuildShaders(); };
+    content_action_ = [this](content::Kind kind, int verb) { OnContentAction(kind, verb); };
     EnforceOriginalLook();
     // Which temporal upscalers this PC runs (Display > Upscaling): asked now, in the background.
     ApplyRendererChoice();      // the renderer decided, the default upscaler follows it
@@ -2421,7 +2476,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         REXLOG_INFO("KK: first start: preparing both native shader packs on the setup screen");
       }
       if (first_start) {
-        // ... and its last step, Original or Remastered, as after an install.
+        // ... then the texture pack and PS2 cutscene pages, and the last step, Original or Remastered, as
+        // after an install.
+        AskContentInSetup();
         setup_style_ = true;
         style_focus_ = 1;
       }
@@ -2829,6 +2886,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         native_pack_.Start(CacheDir(), paths_.game_dir);
         setup_shaders_ = true;
       }
+      AskContentInSetup();
       setup_style_ = true;
       style_focus_ = 1;
       page_ = kHome;
@@ -3065,6 +3123,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
           return {{Action::kAccept, "Select"}, {Action::kBack, "Quit"}};
         case 1: return {{Action::kBack, "Cancel"}};
         case 5: return {{Action::kLeft, "Change"}, {Action::kAccept, "Select"}};
+        case 6:
+        case 7: return {{Action::kAccept, "Select"}};
         default: return {};
       }
     }
@@ -4063,6 +4123,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (const int i = DrawMenu(dl, entries, home_focus_, x, y, a, item_h); i >= 0) entries[size_t(i)].action();
     menu_to_status_ = false;  // only Home's menu
     DrawHomeStatus(dl, x, o_.y + h_ - 120 * s, a);
+    DrawContentStrip(dl, a, false);  // a download running in the background
   }
 
   // The SHADERS status on Home (the native renderer's pack) can be selected to build it again.
@@ -4115,8 +4176,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 #if defined(KK_DEV_TOOLS)
     if (dev_setup_ >= 0) return true;
 #endif
-    return !files_ok_ || installing_ || setup_art_ || setup_shaders_ || setup_style_ || installing_update_ ||
-           update_shaders_;
+    return !files_ok_ || installing_ || setup_art_ || setup_shaders_ || setup_textures_ || setup_cutscenes_ ||
+           setup_style_ || installing_update_ || update_shaders_;
   }
 
   // A version this launcher has not run before, on an installation that has run one (What's new uses
@@ -4139,7 +4200,15 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     return setup_shaders_ || update_shaders_ || rebuild_shaders_screen_;
   }
   // The setup's step and the plain setup screens draw the night sky; the shader screen the stills.
-  bool PlainSetup() const { return InSetup() && !ShaderScreen(); }
+  // Owner, 17 Oct: only the pages before the disc image is given (and the install and artwork that follow it)
+  // go without the game's artwork; every setup page after them (the shader screen, the texture pack, the PS2
+  // cutscenes, the look) uses the launcher's own look: the game's stills, its logo, the same panels.
+  bool PlainSetup() const { return InSetup() && !ShaderScreen() && !AssetSetup(); }
+  bool AssetSetup() const {
+    if (!InSetup() || slides_.empty()) return false;
+    const int stage = SetupStage();
+    return stage == 5 || stage == 6 || stage == 7;
+  }
 
   // Home's look (the stills, blurred; the game's logo; the music), with a centred panel: what is
   // happening and why, the PC being slower meanwhile, the progress, and Continue in the background
@@ -4259,12 +4328,22 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   }
 
   // 0: asking for the disc image, 1: installing, 2: taking the artwork,
-  // 3: updating the port, 4: preparing the native renderer's shaders, 5: the look.
+  // 3: updating the port, 4: preparing the native renderer's shaders, 6: the HD texture pack, 7: restore
+  // the PS2 cutscenes?, 5: the look (setup-flow.md steps 3 and 4 come before it).
   int SetupStage() const {
 #if defined(KK_DEV_TOOLS)
     if (dev_setup_ >= 0) return dev_setup_;
 #endif
-    return installing_update_ ? 3 : installing_ ? 1 : setup_art_ ? 2 : setup_shaders_ ? 4 : setup_style_ ? 5 : 0;
+    return installing_update_ ? 3 : installing_ ? 1 : setup_art_ ? 2 : setup_shaders_ ? 4 : setup_textures_ ? 6
+           : setup_cutscenes_ ? 7 : setup_style_ ? 5 : 0;
+  }
+
+  // The first-time setup's content steps (setup-flow.md 3 and 4): the cutscene page only where the PS2
+  // movies can play (Windows); TickSetupContent skips a page whose content is already there.
+  void AskContentInSetup() {
+    setup_textures_ = true;
+    setup_cutscenes_ = kPs2MoviePlayback;
+    if (!kPs2MoviePlayback) REXLOG_INFO("KK: setup: no PS2 cutscene page (PS2 movies do not play on this system)");
   }
 
   void DrawSetup(ImDrawList* dl) {
@@ -4287,6 +4366,15 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
 #endif
 
+    if (AssetSetup() && logo_) {
+      // After the disc image the game's own artwork is there: its logo over its stills, as on Home.
+      const float lh = 104 * s, lw = lh * logo_aspect_;
+      dl->AddImage(ui::Tex(logo_), ImVec2(x - 8 * s, y - 14 * s), ImVec2(x - 8 * s + lw, y - 14 * s + lh));
+      y += lh - 4 * s;
+      ui::DrawTracked(dl, f.display, 13 * s, ImVec2(x + 2 * s, y), color::kTextDim,
+                      Upper(T("PC port")) + "  " KK_DOT "  " + Upper(T("Setup")), 4 * s);
+      y += 44 * s;
+    } else {
     ui::DrawTracked(dl, f.display, 15 * s, ImVec2(x + 2 * s, y), color::kAccent, "PETER JACKSON'S", 6 * s);
     y += 20 * s;
     ui::DrawTracked(dl, f.display, 66 * s, ImVec2(x - 1 * s, y), color::kText, "KING KONG", 2 * s);
@@ -4294,6 +4382,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     ui::DrawTracked(dl, f.display, 13 * s, ImVec2(x + 2 * s, y), color::kTextFaint,
                     Upper(T("PC port")) + "  " KK_DOT "  " + Upper(T(stage == 3 ? "Update" : "Setup")), 4 * s);
     y += 62 * s;
+    }
 
     // The steps (of the first install).
     static const char* const kSteps[] = {"Your copy", "Install", "Play"};
@@ -4386,6 +4475,41 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       heading("Choose a look");
       body("Pick how King Kong looks. You can change it at any time with Look on the Graphics page.");
       DrawStyleCards(dl, y);
+    } else if (stage == 6 || stage == 7) {
+      // Setup steps 3 and 4 (setup-flow.md): the HD texture pack, and the restored PS2 cutscenes.
+      const auto kind = stage == 6 ? content::Kind::kTexturePack : content::Kind::kCutscenes;
+      const content::Info& info = content::InfoFor(kind);
+      auto para = [&](const std::string& text, float size, ImU32 col) {
+        dl->AddText(f.text, size * s, ImVec2(x, y), col, text.c_str(), nullptr, col_w);
+        y += ui::TextSize(f.text, size * s, text, col_w).y + 18 * s;
+      };
+      if (stage == 6) {
+        heading("HD texture pack");
+        para(F("Sharper versions of the game's textures, made at four times their original size. It is a separate "
+               "download of {0} GB and takes {1} GB once installed. You can turn it on or off at any time in "
+               "Settings > Graphics.",
+               {Gb(info.zip_size), Gb(info.unpacked)}),
+             16, color::kTextDim);
+      } else {
+        heading("Restore the PS2 cutscenes?");
+        para(F("The PS2 version of King Kong has cutscenes between some missions that the Xbox 360 version left "
+               "out. These are upscaled versions of them, and the game plays them where they belong. It is a "
+               "separate download of {0} GB. You can turn them off at any time in Settings > Advanced.",
+               {Gb(info.zip_size)}),
+             16, color::kTextDim);
+      }
+      para(T("It downloads in the background: the setup goes on, and you can use the launcher meanwhile."), 14.5f,
+           color::kTextFaint);
+      DrawContentCard(dl, kind);
+      y += 8 * s;
+      if (stage == 6) {
+        entries.push_back({"Download HD texture pack", true, [this] { AskContentDownload(content::Kind::kTexturePack, 6); }});
+        entries.push_back({"I already have a texture pack", true, [this] { ChooseTexturePackZip(6); }});
+        entries.push_back({"Skip", true, [this] { FinishSetupContentStep(6, "skipped"); }});
+      } else {
+        entries.push_back({"Yes, restore them", true, [this] { AskContentDownload(content::Kind::kCutscenes, 7); }});
+        entries.push_back({"No thanks", true, [this] { FinishSetupContentStep(7, "no thanks"); }});
+      }
     } else {
       float got = 0, size = 0;
       std::string version;
@@ -4413,6 +4537,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
     if (stage == 0) DrawSidePanels(dl, 1.0f, false, entries, setup_focus_, o_.y + h_ - 120 * s);
     else side_focus_ = -1;
+    // The setup steps after the shaders show a download running in the background (setup-flow.md).
+    if (stage == 5 || stage == 6 || stage == 7) DrawContentStrip(dl, 1.0f, stage == 5);
     if (const int i = DrawMenu(dl, entries, setup_focus_, x, y, 1.0f); i >= 0) entries[size_t(i)].action();
     if (!modal_.open && input_.Pressed(Action::kBack)) {
       input_.Consume(Action::kBack);
@@ -5741,6 +5867,426 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (action) action();
   }
 
+  // ------------------------------------------------- content setup (J2) ---
+  // Setup steps 3 and 4 (codex/state/setup-flow.md): the HD texture pack page (Download / I already have a
+  // texture pack / Skip) and "Restore the PS2 cutscenes?" (Yes / No thanks), shown after the shader screen.
+  // A download asks first ("This can take a while": Minimise and notify me / Watch progress), then runs in
+  // the background (content.h): the setup goes on, a strip shows its progress on the later setup pages and
+  // on Home, and a pop-up says when it has finished or what went wrong. The same pop-ups serve the Settings
+  // rows (content_action_).
+
+  // 6: the texture pack page, 7: the cutscenes page (SetupStage numbers).
+  void FinishSetupContentStep(int stage, const char* what) {
+    REXLOG_INFO("KK: setup: {} {}", stage == 6 ? "texture pack" : "PS2 cutscenes", what);
+    if (stage == 6) setup_textures_ = false;
+    else setup_cutscenes_ = false;
+    setup_focus_ = 0;
+    if (content_watch_ >= 0 && content_watch_setup_ == stage) content_watch_setup_ = 0;
+#if defined(KK_DEV_TOOLS)
+    if (dev_setup_ == 6) dev_setup_ = kPs2MoviePlayback ? 7 : 5;
+    else if (dev_setup_ == 7) dev_setup_ = 5;
+#endif
+  }
+
+  // A setup content page is skipped when there is nothing to ask as it comes up (installed, or a download
+  // from an earlier session already kept).
+  void TickSetupContent() {
+    auto& service = content::Service::Get();
+    const int stage = SetupStage();
+    if (!service.Ready() || (stage != 6 && stage != 7) || (setup_content_seen_ & (1 << stage))) return;
+    setup_content_seen_ |= 1 << stage;
+#if defined(KK_DEV_TOOLS)
+    if (dev_setup_ >= 0) return;  // screenshots of the page
+#endif
+    const auto st = service.Get(stage == 6 ? content::Kind::kTexturePack : content::Kind::kCutscenes);
+    if (st.installed || st.Busy() || st.stage == content::Stage::kPaused)
+      FinishSetupContentStep(stage, st.installed ? "already installed: page skipped" : "already downloading: page skipped");
+    else
+      REXLOG_INFO("KK: setup: {} page", stage == 6 ? "texture pack" : "PS2 cutscenes");
+  }
+
+  void OnContentAction(content::Kind kind, int verb) {
+    switch (verb) {
+      case kContentDownload: AskContentDownload(kind, 0); break;
+      case kContentWatch: OpenContentProgress(kind, 0); break;
+      case kContentImport: ChooseTexturePackZip(0); break;
+      case kContentRemove: ConfirmContentRemove(kind); break;
+      case kContentCancel: ConfirmContentCancel(kind, false); break;
+    }
+  }
+
+  // "This can take a while", before a download starts. `setup_stage`: the setup page it was asked on (0:
+  // Settings): the setup goes on to its next step once the download runs in the background.
+  void AskContentDownload(content::Kind kind, int setup_stage) {
+    using namespace content;
+    const bool tex = kind == Kind::kTexturePack;
+    const Info& info = InfoFor(kind);
+    std::string body = tex ? F("The HD texture pack is a {0} GB download. After that it is checked and unpacked. "
+                               "Depending on your connection this takes from a few minutes to an hour or more.",
+                               {Gb(info.zip_size)})
+                           : F("The restored PS2 cutscenes are a {0} GB download. After that they are checked and "
+                               "unpacked. Depending on your connection this takes from a few minutes to an hour or "
+                               "more.",
+                               {Gb(info.zip_size)});
+    body += std::string(" ") + T("It runs in the background, so you can carry on meanwhile. If the connection drops or "
+                                 "you close the launcher, it continues from where it stopped.");
+    const auto other = Service::Get().Get(tex ? Kind::kCutscenes : Kind::kTexturePack);
+    if (other.Busy()) body += std::string(" ") + T("It starts when the download before it has finished.");
+    REXLOG_INFO("KK content: asking before the {} download ({})", info.id, setup_stage ? "setup" : "Settings");
+    OpenModal("This can take a while", body, {"Minimise and notify me", "Watch progress"}, -1,
+              [this, kind, setup_stage](int i) {
+                content::Service::Get().Download(kind);
+                if (i == 0) {
+                  // Job J3 sends the ding and the system notification when it finishes (NotifyContentDone).
+                  content_notify_[int(kind)] = true;
+                  REXLOG_INFO("KK content: {} download started; minimise and notify", content::InfoFor(kind).id);
+                  if (setup_stage) FinishSetupContentStep(setup_stage, "download started in the background (minimised)");
+                  MinimiseLauncher();
+                } else {
+                  REXLOG_INFO("KK content: {} download started; watching the progress", content::InfoFor(kind).id);
+                  OpenContentProgress(kind, setup_stage);
+                }
+              });
+  }
+
+  void MinimiseLauncher() {
+    const bool done = cb_.minimize && cb_.minimize();
+    REXLOG_INFO("KK content: launcher window {}", done ? "minimise asked" : "not minimised (not available here)");
+  }
+
+  // Job J3 hook: "Minimise and notify me" asked for a notification when the download ends (a ding and a
+  // Windows 11 toast or a freedesktop notification). J2 only logs it; the in-launcher pop-up is J2's.
+  void NotifyContentDone(content::Kind kind, bool ok, const std::string& title) {
+    const bool asked = std::exchange(content_notify_[int(kind)], false);
+    REXLOG_INFO("KK content: notify hook ({}): {} {}: {}", asked ? "asked" : "not asked", content::InfoFor(kind).id,
+                ok ? "finished" : "failed", title);
+  }
+
+  // One line about a download: what it does now, how far, how fast, the time left.
+  static std::string ContentProgressLine(const content::Status& st, bool other_running) {
+    using content::Stage;
+    switch (st.stage) {
+      case Stage::kQueued: return other_running ? T("Waiting for the other download to finish") : T("Starting");
+      case Stage::kStarting: return T("Connecting");
+      case Stage::kDownloading: {
+        std::string line = st.total ? F("{0} of {1} GB", {Gb(st.done), Gb(st.total)}) : std::string(T("Downloading"));
+        if (st.speed > 0) {
+          char speed[32];
+          std::snprintf(speed, sizeof(speed), "%.1f", st.speed / 1e6);
+          line += "  " KK_DOT "  " + F("{0} MB/s", {speed});
+        }
+        if (const std::string left = TimeLeft(st.seconds_left); !left.empty()) line += "  " KK_DOT "  " + left;
+        return line;
+      }
+      case Stage::kPaused: return st.total ? F("Paused at {0} of {1} GB", {Gb(st.done), Gb(st.total)}) : T("Paused");
+      case Stage::kVerifying: return T("Checking the download");
+      case Stage::kUnpacking: return T("Unpacking the files");
+      case Stage::kRemoving: return T("Removing");
+      case Stage::kInstalled: return T("Installed");
+      case Stage::kFailed: return T("Stopped");
+      case Stage::kNone: break;
+    }
+    return {};
+  }
+  static float ContentFraction(const content::Status& st) {
+    if (st.stage == content::Stage::kInstalled) return 1.0f;
+    if (!st.total || st.stage == content::Stage::kQueued || st.stage == content::Stage::kStarting) return -1.0f;
+    return float(std::clamp(double(st.done) / double(st.total), 0.0, 1.0));
+  }
+  static bool OtherRunning(content::Kind kind) {
+    const auto st = content::Service::Get().Get(kind == content::Kind::kTexturePack ? content::Kind::kCutscenes
+                                                                                    : content::Kind::kTexturePack);
+    return st.Busy() && st.stage != content::Stage::kQueued;
+  }
+
+  // The progress pop-up ("Watch progress", or a Settings row while a download runs): the line, the bar,
+  // Pause or Continue, Run in background (also Back) and Cancel. Its buttons follow the stage (TickContent
+  // opens it again when they change); it closes when the job ends, and the finished or error pop-up follows.
+  static int ContentWatchMode(const content::Status& st, bool importing) {
+    using content::Stage;
+    if (importing) return 3;
+    if (st.stage == Stage::kPaused) return 1;
+    if (st.stage == Stage::kUnpacking || st.stage == Stage::kRemoving) return 2;
+    return 0;
+  }
+  void OpenContentProgress(content::Kind kind, int setup_stage, int focus = -1) {
+    using namespace content;
+    const bool tex = kind == Kind::kTexturePack;
+    const auto st = Service::Get().Get(kind);
+    const bool importing = tex && content_importing_;
+    const int mode = ContentWatchMode(st, importing);
+    std::vector<std::string> buttons;
+    if (mode == 0) buttons = {"Pause", "Run in background", "Cancel"};
+    else if (mode == 1) buttons = {"Continue", "Run in background", "Cancel"};
+    else if (mode == 2) buttons = {"Run in background", "Cancel"};
+    else buttons = {"Run in background"};
+    const int background = mode <= 1 ? 1 : 0;
+    const std::string title = importing ? "Installing your texture pack"
+                              : tex     ? "Downloading the HD texture pack"
+                                        : "Downloading the PS2 cutscenes";
+    OpenModal(title,
+              importing ? T("Your ZIP file is checked and unpacked. It carries on in the background if you leave "
+                            "this pop-up.")
+                        : T("It carries on in the background if you leave this pop-up. If the connection drops or "
+                            "you close the launcher, it continues from where it stopped."),
+              buttons, background,
+              [this, kind, mode, background](int i) {
+                const int setup_stage = content_watch_setup_;
+                content_watch_ = -1;
+                auto& service = content::Service::Get();
+                if (i == background) {
+                  REXLOG_INFO("KK content: {}: run in background", content::InfoFor(kind).id);
+                  if (setup_stage) FinishSetupContentStep(setup_stage, "download runs in the background");
+                } else if (mode <= 1 && i == 0) {
+                  if (mode == 0) service.Pause(kind);
+                  else service.Download(kind);
+                  REXLOG_INFO("KK content: {}: {}", content::InfoFor(kind).id, mode == 0 ? "pause" : "continue");
+                  OpenContentProgress(kind, setup_stage, 0);
+                } else {
+                  ConfirmContentCancel(kind, true, setup_stage);
+                }
+              },
+              focus >= 0 ? focus : background);
+    modal_.live = [kind] { return ContentProgressLine(content::Service::Get().Get(kind), OtherRunning(kind)); };
+    modal_.progress = [kind] { return ContentFraction(content::Service::Get().Get(kind)); };
+    content_watch_ = int(kind);
+    content_watch_mode_ = mode;
+    content_watch_title_ = modal_.title;
+    content_watch_setup_ = setup_stage;
+  }
+
+  // Cancel (from the progress pop-up, or the Settings row): asked first; what was downloaded is deleted.
+  void ConfirmContentCancel(content::Kind kind, bool from_progress, int setup_stage = 0) {
+    OpenModal("Cancel the download?",
+              "What was downloaded so far is deleted. You can download it again at any time.",
+              {"Cancel download", "Keep downloading"}, 1, [this, kind, from_progress, setup_stage](int i) {
+                if (i == 0) {
+                  content::Service::Get().Cancel(kind);
+                  content_notify_[int(kind)] = false;
+                  REXLOG_INFO("KK content: {}: cancelled by the player", content::InfoFor(kind).id);
+                  Status("Download cancelled.");
+                } else if (from_progress) {
+                  OpenContentProgress(kind, setup_stage);
+                }
+              });
+  }
+
+  void ConfirmContentRemove(content::Kind kind) {
+    const bool tex = kind == content::Kind::kTexturePack;
+    OpenModal(tex ? "Remove the texture pack?" : "Remove the PS2 cutscenes?",
+              tex ? "This deletes the installed texture pack from your user folder and turns Texture pack off. You "
+                    "can download or import it again at any time."
+                  : "This deletes the restored cutscenes from your user folder and turns PS2 cutscenes off. You can "
+                    "download them again at any time.",
+              {"Remove", "Keep it"}, 1, [kind](int i) {
+                if (i != 0) return;
+                REXLOG_INFO("KK content: {}: remove", content::InfoFor(kind).id);
+                content::Service::Get().Remove(kind);
+              });
+  }
+
+  // "I already have a texture pack" / Import ZIP: the system's file dialog; the chosen ZIP is installed
+  // (TickContent) with the progress pop-up open.
+  void ChooseTexturePackZip(int setup_stage) {
+    {
+      std::lock_guard lock(texture_pack_zip_choice.mutex);
+      if (texture_pack_zip_choice.busy) return;
+      texture_pack_zip_choice.busy = true;
+    }
+    content_import_setup_ = setup_stage;
+    REXLOG_INFO("KK content: choosing a texture pack ZIP ({})", setup_stage ? "setup" : "Settings");
+    static const SDL_DialogFileFilter kZip[] = {{"ZIP", "zip"}};
+    SDL_ShowOpenFileDialog([](void*, const char* const* files, int) {
+      std::lock_guard lock(texture_pack_zip_choice.mutex);
+      if (files && files[0]) texture_pack_zip_choice.selected = files[0];
+      texture_pack_zip_choice.busy = false;
+    }, nullptr, nullptr, kZip, 1, nullptr, false);
+  }
+
+  // A download or install that ended: the progress pop-up closes, the notification hook, and the finished
+  // or error pop-up (shown as soon as no other pop-up is open and the shader screen is not up).
+  void ContentEnded(content::Kind kind, const content::Status& st) {
+    using namespace content;
+    const bool tex = kind == Kind::kTexturePack;
+    const bool imported = tex && content_importing_;
+    if (tex) content_importing_ = false;
+    if (content_watch_ == int(kind)) {
+      if (modal_.open && modal_.title == content_watch_title_) modal_.open = false;
+      const int setup_stage = content_watch_setup_;
+      content_watch_ = -1;
+      if (setup_stage) FinishSetupContentStep(setup_stage, st.stage == Stage::kInstalled ? "installed" : "failed");
+    }
+    if (st.stage == Stage::kInstalled) {
+      const char* title = imported ? "Texture pack installed" : tex ? "HD texture pack installed" : "PS2 cutscenes restored";
+      const char* body =
+          imported ? "Your texture pack is installed and turned on. You can turn it off at any time in Settings > Graphics."
+          : tex    ? "The HD texture pack is installed and turned on. You can turn it off at any time in Settings > Graphics."
+                   : "The PS2 cutscenes are restored and turned on. They play in the game where the Xbox 360 version "
+                     "has none. You can turn them off at any time in Settings > Advanced.";
+      NotifyContentDone(kind, true, title);
+      content_popups_.push_back([this, title, body] { OpenModal(title, body, {"OK"}, 0, {}); });
+      return;
+    }
+    // Failed.
+    std::string title, body;
+    std::vector<std::string> buttons = {"Try again", "Later"};
+    switch (st.error) {
+      case Error::kConnection:
+        title = "Download interrupted";
+        body = T("The connection was lost. What was downloaded so far is kept, so the download continues from where "
+                 "it stopped.");
+        buttons = {"Continue download", "Later"};
+        break;
+      case Error::kChecksum:
+        title = "Download check failed";
+        body = T("The downloaded file did not match the original, so it was deleted. This can happen when a "
+                 "connection damages the download. Download it again?");
+        buttons = {"Download again", "Later"};
+        break;
+      case Error::kSpace:
+        title = "Not enough free space";
+        body = F("It needs {0} GB of free space on the drive with your user folder while it installs, and the drive "
+                 "has {1} GB free. Free some space, then try again.",
+                 {Gb(st.space_needed), Gb(st.space_free)});
+        break;
+      default:
+        title = imported ? "Texture pack not installed" : "Download failed";
+        body = ContentError(st, tex);
+        break;
+    }
+    if (imported) buttons = {"OK"};
+    NotifyContentDone(kind, false, title);
+    content_popups_.push_back([this, kind, title, body, buttons] {
+      OpenModal(title, body, buttons, int(buttons.size()) - 1, [kind, retry = buttons.size() > 1](int i) {
+        if (!retry || i != 0) return;
+        REXLOG_INFO("KK content: {}: try again", content::InfoFor(kind).id);
+        content::Service::Get().Download(kind);
+      });
+    });
+  }
+
+  // The size facts beside a setup content page: the download, the installed size, the free space it
+  // needs and what the drive has.
+  void DrawContentCard(ImDrawList* dl, content::Kind kind) {
+    using namespace content;
+    const float s = S();
+    const ui::Fonts f = ui::GetFonts();
+    const Info& info = InfoFor(kind);
+    const float right = o_.x + w_ - Margin();
+    const float x0 = std::max(o_.x + Margin() + std::min(620 * s, w_ * 0.52f) + 48 * s, right - 470 * s);
+    const float w = right - x0, pad = 18 * s, r = 10 * s;
+    const float y = o_.y + std::max(84 * s, h_ * 0.12f) + 4 * s;
+    if (ImGui::GetTime() - free_space_at_ > 2.0) {
+      free_space_at_ = ImGui::GetTime();
+      std::error_code ec;
+      const auto sp = std::filesystem::space(paths_.user_dir, ec);
+      free_space_ = ec ? 0 : sp.available;
+    }
+    const uint64_t needed = SpaceNeeded(info.zip_size, 0, info.unpacked);
+    struct Row {
+      const char* label;
+      std::string value;
+      ImU32 color;
+    };
+    const Row rows[] = {
+        {"Download", F("{0} GB", {Gb(info.zip_size)}), color::kText},
+        {"Installed size", F("{0} GB", {Gb(info.unpacked)}), color::kText},
+        {"Space needed", F("{0} GB while it installs", {Gb(needed)}), color::kText},
+        {"Free space", free_space_ ? F("{0} GB", {Gb(free_space_)}) : T(std::string("Unknown")),
+         free_space_ && free_space_ < needed ? color::kWarn : color::kText},
+    };
+    const std::string note = T("It goes into your user folder. Remove it at any time in Settings.");
+    const float label_w = 150 * s, line = 26 * s;
+    const float h = pad + 26 * s + line * float(std::size(rows)) + 6 * s +
+                    ui::TextSize(f.text, 12.5f * s, note, w - pad * 2).y + pad;
+    dl->AddRectFilled(ImVec2(x0, y + 5 * s), ImVec2(right, y + h + 5 * s), IM_COL32(0, 0, 0, 40), r);
+    dl->AddRectFilled(ImVec2(x0, y), ImVec2(right, y + h), ui::WithAlpha(IM_COL32(16, 18, 22, 255), 0.62f), r);
+    dl->AddRect(ImVec2(x0, y), ImVec2(right, y + h), ui::WithAlpha(color::kText, 0.09f), r, 0, 1.0f * s);
+    ui::DrawTracked(dl, f.display, 12 * s, ImVec2(x0 + pad, y + pad), color::kAccent,
+                    Upper(T(kind == Kind::kTexturePack ? "HD texture pack" : "PS2 cutscenes")), 2.6f * s);
+    float ry = y + pad + 26 * s;
+    for (const Row& row : rows) {
+      dl->AddText(f.text, 13.5f * s, ImVec2(x0 + pad, ry), color::kTextDim, T(row.label));
+      dl->AddText(f.semibold, 13.5f * s, ImVec2(x0 + pad + label_w, ry), row.color, row.value.c_str());
+      ry += line;
+    }
+    dl->AddLine(ImVec2(x0 + pad, ry + 2 * s), ImVec2(right - pad, ry + 2 * s), color::kHairline, 1.0f);
+    dl->AddText(f.text, 12.5f * s, ImVec2(x0 + pad, ry + 8 * s), color::kTextDim, note.c_str(), nullptr, w - pad * 2);
+  }
+
+  // The download strip: the later setup pages and Home show what downloads, how far it is and the time
+  // left (bottom right above the side panels' row; `top`: at the top right instead, where the look step's
+  // cards leave room). A click opens the progress pop-up; controllers reach it through Settings.
+  void DrawContentStrip(ImDrawList* dl, float alpha, bool top) {
+    using namespace content;
+    auto& service = Service::Get();
+    if (!service.Ready()) return;
+    int pick = -1, waiting = 0;
+    content::Status st;
+    for (const int rank : {0, 1, 2, 3}) {  // running, queued, paused, stopped
+      for (int i = 0; i < kKindCount && pick < 0; ++i) {
+        const content::Status k = service.Get(Kind(i));
+        const bool match = rank == 0   ? k.Busy() && k.stage != Stage::kQueued && k.stage != Stage::kRemoving
+                           : rank == 1 ? k.stage == Stage::kQueued
+                           : rank == 2 ? k.stage == Stage::kPaused
+                                       : k.stage == Stage::kFailed && !k.installed;
+        if (match) pick = i, st = k;
+      }
+    }
+    if (pick < 0) return;
+    for (int i = 0; i < kKindCount; ++i)
+      if (i != pick && service.Get(Kind(i)).stage == Stage::kQueued) ++waiting;
+    const Kind kind = Kind(pick);
+    const float s = S();
+    const ui::Fonts f = ui::GetFonts();
+    const float w = std::min(420 * s, w_ * 0.4f), h = 66 * s, pad = 14 * s, r = 10 * s;
+    const float right = o_.x + w_ - Margin();
+    const float y0 = top ? o_.y + std::max(84 * s, h_ * 0.12f) : o_.y + h_ - 120 * s - 24 * s - h;
+    const ImVec2 p0(right - w, y0), p1(right, y0 + h);
+    const bool hovered = !modal_.open && ImGui::IsMouseHoveringRect(p0, p1, false);
+    dl->AddRectFilled(ImVec2(p0.x, p0.y + 5 * s), ImVec2(p1.x, p1.y + 5 * s), IM_COL32(0, 0, 0, int(40 * alpha)), r);
+    dl->AddRectFilled(p0, p1, ui::WithAlpha(hovered ? IM_COL32(30, 33, 40, 255) : IM_COL32(16, 18, 22, 255), 0.72f * alpha), r);
+    dl->AddRect(p0, p1, ui::WithAlpha(color::kText, (hovered ? 0.22f : 0.09f) * alpha), r, 0, 1.0f * s);
+    std::string caption = Upper(T(kind == Kind::kTexturePack ? "HD texture pack" : "PS2 cutscenes"));
+    if (waiting) caption += "  " KK_DOT "  " + Upper(F("{0} more waiting", {std::to_string(waiting)}));
+    ui::DrawTracked(dl, f.display, 11.5f * s, ImVec2(p0.x + pad, p0.y + pad), ui::WithAlpha(color::kAccent, alpha),
+                    caption, 2.4f * s);
+    const float fraction = ContentFraction(st);
+    const std::string pct = fraction >= 0 && st.stage != Stage::kFailed ? std::to_string(int(fraction * 100)) + "%" : "";
+    const float pw = ui::TextSize(f.semibold, 13 * s, pct).x;
+    dl->AddText(f.semibold, 13 * s, ImVec2(p1.x - pad - pw, p0.y + pad - 1 * s), ui::WithAlpha(color::kText, alpha),
+                pct.c_str());
+    const std::string line = ui::Ellipsize(f.text, 13.5f * s, ContentProgressLine(st, OtherRunning(kind)), w - pad * 2);
+    dl->AddText(f.text, 13.5f * s, ImVec2(p0.x + pad, p0.y + pad + 19 * s),
+                ui::WithAlpha(st.stage == Stage::kFailed ? color::kWarn : color::kTextDim, alpha), line.c_str());
+    const float by = std::round(p1.y - pad + 2 * s), bx0 = p0.x + pad, bx1 = p1.x - pad;
+    dl->AddRectFilled(ImVec2(bx0, by), ImVec2(bx1, by + 2 * s), ui::WithAlpha(color::kText, 0.12f * alpha));
+    if (fraction >= 0) {
+      dl->AddRectFilled(ImVec2(bx0, by), ImVec2(bx0 + (bx1 - bx0) * fraction, by + 2 * s),
+                        ui::WithAlpha(st.stage == Stage::kPaused || st.stage == Stage::kFailed ? color::kTextDim
+                                                                                                : color::kAccent,
+                                      alpha));
+    } else {
+      const float t = float(std::fmod(ImGui::GetTime() * 0.6, 1.0));
+      dl->AddRectFilled(ImVec2(bx0 + (bx1 - bx0) * std::max(0.0f, t * 1.3f - 0.3f), by),
+                        ImVec2(bx0 + (bx1 - bx0) * std::min(1.0f, t * 1.3f), by + 2 * s),
+                        ui::WithAlpha(color::kAccent, alpha));
+    }
+    if (hovered && ImGui::IsMouseClicked(0) && st.stage != Stage::kFailed) {
+      ui::Cue(ui::Sound::kSelect);
+      OpenContentProgress(kind, 0);
+    }
+#if defined(KK_DEV_TOOLS)
+    {  // Developer: what the strip shows, every 5 s (tour logs).
+      static double logged = -10;
+      if (ImGui::GetTime() - logged >= 5.0 && st.stage != Stage::kUnpacking) {  // no UI log while it unpacks
+        logged = ImGui::GetTime();
+        REXLOG_INFO("KK dev: content strip {} '{}' {} ({})", InfoFor(kind).id, line, pct, top ? "top" : "bottom");
+      }
+    }
+#endif
+  }
+
   // ---------------------------------------------------------- heartbeat ---
   // Task 173: the launcher's logic runs in OnDraw, which the SDK calls only while it presents. With the
   // window minimised, or after a "swapchain outdated" frame whose reconnect found no surface to draw to,
@@ -5882,7 +6428,18 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         std::lock_guard lock(texture_pack_zip_choice.mutex);
         zip.swap(texture_pack_zip_choice.selected);
       }
-      if (!zip.empty()) service.Import(std::filesystem::path(std::u8string(zip.begin(), zip.end())));
+      if (!zip.empty()) {
+        const auto before = service.Get(content::Kind::kTexturePack);
+        service.Import(std::filesystem::path(std::u8string(zip.begin(), zip.end())));
+        if (!before.Busy()) {
+          // The progress pop-up follows the install; on a setup page, Run in background goes on to the next step.
+          content_importing_ = true;
+          REXLOG_INFO("KK content: importing the chosen texture pack ZIP");
+          OpenContentProgress(content::Kind::kTexturePack, content_import_setup_);
+        } else {
+          Status("Another download is running. Try again when it has finished.");
+        }
+      }
     }
     for (int i = 0; i < content::kKindCount; ++i) {
       const auto kind = content::Kind(i);
@@ -5890,14 +6447,45 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       auto& last = content_last_[i];
       if (st.stage != last) {
         const bool tex = kind == content::Kind::kTexturePack;
-        if (st.stage == content::Stage::kInstalled && last != content::Stage::kNone)
+        // Not while it unpacks: a log write from the UI thread can wait for the busy disk (REPORT-181).
+        if (st.stage != content::Stage::kUnpacking)
+          REXLOG_INFO("KK content: {} stage {} -> {}", content::InfoFor(kind).id, int(last), int(st.stage));
+        if (st.stage == content::Stage::kInstalled && last != content::Stage::kNone) {
           Status(tex ? "The HD texture pack is installed and turned on." : "The PS2 cutscenes are restored and turned on.");
+          ContentEnded(kind, st);
+        }
         if (st.stage == content::Stage::kNone && last == content::Stage::kRemoving) Status("Removed.");
-        if (st.stage == content::Stage::kFailed)
+        if (st.stage == content::Stage::kFailed) {
           REXLOG_WARN("KK content: {} failed: {}", content::InfoFor(kind).id, ContentError(st, tex));
+          ContentEnded(kind, st);
+        }
+        if (st.stage == content::Stage::kNone && tex) content_importing_ = false;
         last = st.stage;
       }
     }
+    // The progress pop-up: closed by something else (forget it), its buttons changed with the stage (open
+    // it again with the same focus), or its job cancelled (close it).
+    if (content_watch_ >= 0) {
+      const auto kind = content::Kind(content_watch_);
+      const auto st = service.Get(kind);
+      if (!modal_.open || modal_.title != content_watch_title_) {
+        content_watch_ = -1;
+      } else if (st.stage == content::Stage::kNone) {
+        modal_.open = false;
+        content_watch_ = -1;
+      } else if (const int mode = ContentWatchMode(st, kind == content::Kind::kTexturePack && content_importing_);
+                 mode != content_watch_mode_) {
+        // Pause and Continue swap in place (same buttons, same focus); otherwise the focus goes to Run in
+        // background.
+        OpenContentProgress(kind, content_watch_setup_, mode <= 1 && content_watch_mode_ <= 1 ? modal_.focus : -1);
+      }
+    }
+    if (!content_popups_.empty() && !modal_.open && !ShaderScreen()) {
+      auto popup = std::move(content_popups_.front());
+      content_popups_.erase(content_popups_.begin());
+      popup();
+    }
+    TickSetupContent();
   }
 
   void SaveIfChanged() {
@@ -6084,8 +6672,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     ImGuiIO& io = ImGui::GetIO();
     // Scripted runs wait for the setup's work (only captures go on); the look step (stage 5) takes input
     // like the pages.
-    const bool waiting =
-        std::getenv("KK_DEV_LAUNCHER_INPUT_FILE") && (InSetup() || ShaderScreen()) && SetupStage() != 5;
+    const bool waiting = std::getenv("KK_DEV_LAUNCHER_INPUT_FILE") && (InSetup() || ShaderScreen()) &&
+                         SetupStage() != 5 && SetupStage() != 6 && SetupStage() != 7;
     static bool release = false;
     if (release) {
       io.AddMouseButtonEvent(0, false);
@@ -6114,9 +6702,26 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     const double now = ImGui::GetTime();
     if (next >= steps.size() || now < at) return;
     if (waiting && steps[next].rfind("shot:", 0) != 0) return;
+    // Job J2: "wait-setup:N" holds the steps until the setup shows stage N, "wait-home" until the setup is
+    // over, "wait-content" until no download or install is running, waiting or paused.
+    if (const std::string& w = steps[next]; w.rfind("wait-", 0) == 0) {
+      bool met = true;
+      if (w.rfind("wait-setup:", 0) == 0) met = InSetup() && SetupStage() == std::atoi(w.c_str() + 11);
+      else if (w == "wait-home") met = !InSetup() && !ShaderScreen();
+      else if (w == "wait-modal") met = modal_.open;  // a pop-up is up (logged with its title)
+      else if (w == "wait-content") {
+        met = true;  // (its finished pop-ups may be waiting behind each other)
+        for (int i = 0; i < content::kKindCount; ++i) {
+          const auto st = content::Service::Get().Get(content::Kind(i));
+          if (st.Busy() || st.stage == content::Stage::kPaused) met = false;
+        }
+      }
+      if (!met) return;
+    }
     std::string t = steps[next++];
     at = now + 0.45;
     REXLOG_INFO("KK dev: input {}", t);
+    if (t == "wait-modal") REXLOG_INFO("KK dev: pop-up '{}' buttons {}", modal_.title, modal_.buttons.size());
     if (t.rfind("shot:", 0) == 0) {
       REXLOG_INFO("KK dev: shot {}", t.substr(5));
       rex::FlushLogging();
@@ -6210,6 +6815,12 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                     content::InfoFor(content::Kind(i)).id, int(st.stage), int(st.error), int(st.problem), st.done,
                     st.total, st.installed ? 1 : 0, st.installed_name);
       }
+      return;
+    }
+    if (t.rfind("choose-zip:", 0) == 0) {  // as if the file dialog of "I already have a texture pack" chose it
+      content_import_setup_ = InSetup() && SetupStage() == 6 ? 6 : 0;
+      std::lock_guard lock(texture_pack_zip_choice.mutex);
+      texture_pack_zip_choice.selected = t.substr(11);
       return;
     }
     if (t == "layout-check") {  // every settings page against settings_layout.h
@@ -6358,6 +6969,20 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   std::thread art_thread_;
   bool setup_art_ = false;  // the art is being taken as the install's last step
   bool setup_style_ = false;  // the setup's last step: Original or Remastered (DrawStyleCards)
+  bool setup_textures_ = false;   // setup step 3: the HD texture pack page (SetupStage 6)
+  bool setup_cutscenes_ = false;  // setup step 4: "Restore the PS2 cutscenes?" (SetupStage 7)
+  int setup_content_seen_ = 0;    // TickSetupContent: the content pages already looked at (bit per stage)
+  // Content downloads (job J2): "Minimise and notify me" per kind (the J3 hook), the progress pop-up while
+  // it is open (its kind, button set, title and the setup page it came from), an import in progress, and the
+  // finished / error pop-ups waiting for a free moment.
+  bool content_notify_[content::kKindCount] = {};
+  int content_watch_ = -1, content_watch_mode_ = -1, content_watch_setup_ = 0;
+  std::string content_watch_title_;
+  bool content_importing_ = false;
+  int content_import_setup_ = 0;
+  std::vector<std::function<void()>> content_popups_;
+  uint64_t free_space_ = 0;
+  double free_space_at_ = -10;
   int style_focus_ = 1;       // the card with the focus (Remastered first)
   rex::ui::ImmediateTexture* still_low_ = nullptr;  // the first still, smaller (the Original card)
   int setup_focus_ = 0;
@@ -6479,6 +7104,26 @@ bool NativeWindowDrawable(void* handle) {
 #else
   (void)handle;
   return true;
+#endif
+}
+
+bool MinimizeNativeWindow(void* handle) {
+#if defined(_WIN32)
+  const HWND hwnd = static_cast<HWND>(handle);
+  if (!hwnd || !IsWindow(hwnd)) return false;
+  // The player's own click: the usual minimise. Not the active window (a scripted test run behind other
+  // windows): minimised without activating any other window. Posted to the window's message loop: called
+  // while the launcher draws, a direct ShowWindow was undone at once (the window logged restored).
+  return ShowWindowAsync(hwnd, GetForegroundWindow() == hwnd ? SW_MINIMIZE : SW_SHOWMINNOACTIVE) != FALSE;
+#else
+  (void)handle;
+  int count = 0;
+  SDL_Window** windows = SDL_GetWindows(&count);
+  if (!windows) return false;
+  bool done = false;
+  for (int i = 0; i < count; ++i) done = SDL_MinimizeWindow(windows[i]) || done;
+  SDL_free(windows);
+  return done;
 #endif
 }
 

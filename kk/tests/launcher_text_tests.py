@@ -4,6 +4,7 @@
 - the online player count reminder can never open by itself (owner, 16 Oct): no code opens it;
 - the shader screen shows one bar with one label: no step text is drawn;
 - the bonus video modes' help text says unlocked or locked to match the save;
+- job J2: setup steps 3 and 4 (texture pack, PS2 cutscenes), their pop-ups and the Settings rows;
 - Settings' tabs are Display, Graphics, Audio, Controls, Gameplay, Cheats, Advanced, About (owner, 16 Oct
   evening), the pause menu's the same without About, and About stays on Home too.
 Usage: launcher_text_tests.py <kk folder>"""
@@ -114,6 +115,108 @@ strings |= {
     'The PS2 cutscenes are restored and turned on.',
     'Removed.',
 }
+# Content downloads (task J2): setup steps 3 and 4, the pop-ups, the strip and the Settings rows.
+strings |= {
+    # Settings > Graphics > Texture pack, Settings > Advanced > Cutscenes
+    'Texture pack',
+    'Replaces the game\'s textures with the sharper ones from the installed texture pack. You can switch it at any time, also from the pause menu, and it changes straight away.',
+    'No texture pack is installed. Install one in the launcher\'s Settings > Graphics.',
+    'No texture pack is installed. Download the HD texture pack or import a ZIP below.',
+    'Installed',
+    'The texture pack in your user folder that Texture pack uses.',
+    'Your texture pack ({0})',
+    'Your own folder',
+    'None',
+    'Download HD texture pack',
+    'Import ZIP',
+    'Remove texture pack',
+    'PS2 cutscenes',
+    'Download PS2 cutscenes',
+    'Plays the restored PS2 cutscenes in the game, between the missions where the Xbox 360 version has none. Download them in the launcher\'s Settings > Advanced. You can switch them at any time.',
+    'Plays the restored PS2 cutscenes in the game, between the missions where the Xbox 360 version has none. Download them below, or choose a folder with your own BK_xxxx.mp4 files. You can switch them at any time.',
+    'Downloading. Select to see the progress, pause or cancel. It continues where it stopped, also after closing the launcher.',
+    'Paused. Select to continue or cancel the download.',
+    'Installed. Turn them on or off with PS2 cutscenes above.',
+    'Deletes the restored cutscenes and turns PS2 cutscenes off.',
+    # setup steps 3 and 4
+    'HD texture pack',
+    'Sharper versions of the game\'s textures, made at four times their original size. It is a separate download of {0} GB and takes {1} GB once installed. You can turn it on or off at any time in Settings > Graphics.',
+    'Restore the PS2 cutscenes?',
+    'The PS2 version of King Kong has cutscenes between some missions that the Xbox 360 version left out. These are upscaled versions of them, and the game plays them where they belong. It is a separate download of {0} GB. You can turn them off at any time in Settings > Advanced.',
+    'It downloads in the background: the setup goes on, and you can use the launcher meanwhile.',
+    'I already have a texture pack',
+    'Skip',
+    'Yes, restore them',
+    'No thanks',
+    'Download',
+    'Installed size',
+    'Space needed',
+    '{0} GB while it installs',
+    'Free space',
+    '{0} GB',
+    'Unknown',
+    'It goes into your user folder. Remove it at any time in Settings.',
+    # This can take a while, progress, finished and error pop-ups, the strip
+    'This can take a while',
+    'The HD texture pack is a {0} GB download. After that it is checked and unpacked. Depending on your connection this takes from a few minutes to an hour or more.',
+    'The restored PS2 cutscenes are a {0} GB download. After that they are checked and unpacked. Depending on your connection this takes from a few minutes to an hour or more.',
+    'It runs in the background, so you can carry on meanwhile. If the connection drops or you close the launcher, it continues from where it stopped.',
+    'It starts when the download before it has finished.',
+    'Minimise and notify me',
+    'Watch progress',
+    'Pause',
+    'Continue',
+    'Run in background',
+    'Cancel',
+    'Installing your texture pack',
+    'Downloading the HD texture pack',
+    'Downloading the PS2 cutscenes',
+    'Your ZIP file is checked and unpacked. It carries on in the background if you leave this pop-up.',
+    'It carries on in the background if you leave this pop-up. If the connection drops or you close the launcher, it continues from where it stopped.',
+    'Waiting for the other download to finish',
+    'Starting',
+    'Connecting',
+    'Downloading',
+    '{0} of {1} GB',
+    'Paused at {0} of {1} GB',
+    'Paused',
+    'Checking the download',
+    'Unpacking the files',
+    'Removing',
+    'Stopped',
+    'Cancel the download?',
+    'What was downloaded so far is deleted. You can download it again at any time.',
+    'Cancel download',
+    'Keep downloading',
+    'Download cancelled.',
+    'Remove the texture pack?',
+    'Remove the PS2 cutscenes?',
+    'This deletes the installed texture pack from your user folder and turns Texture pack off. You can download or import it again at any time.',
+    'This deletes the restored cutscenes from your user folder and turns PS2 cutscenes off. You can download them again at any time.',
+    'Remove',
+    'Keep it',
+    'Texture pack installed',
+    'HD texture pack installed',
+    'PS2 cutscenes restored',
+    'Your texture pack is installed and turned on. You can turn it off at any time in Settings > Graphics.',
+    'The HD texture pack is installed and turned on. You can turn it off at any time in Settings > Graphics.',
+    'The PS2 cutscenes are restored and turned on. They play in the game where the Xbox 360 version has none. You can turn them off at any time in Settings > Advanced.',
+    'OK',
+    'Download interrupted',
+    'The connection was lost. What was downloaded so far is kept, so the download continues from where it stopped.',
+    'Continue download',
+    'Download check failed',
+    'The downloaded file did not match the original, so it was deleted. This can happen when a connection damages the download. Download it again?',
+    'Download again',
+    'Not enough free space',
+    'It needs {0} GB of free space on the drive with your user folder while it installs, and the drive has {1} GB free. Free some space, then try again.',
+    'Texture pack not installed',
+    'Download failed',
+    'Try again',
+    'Later',
+    '{0} more waiting',
+    'Select',
+}
 for s in sorted(strings):
     if s == 'Home':
         continue  # never drawn as text
@@ -177,6 +280,32 @@ if 'case kCheats: items = CheatItems(); break;' not in launcher:
 for name in ('Cheats', 'About', 'Settings'):
     if name not in entries:
         fail(f'no translation for the tab {name!r}')
+
+# Job J2: setup steps 3 and 4 after the shaders, the cutscene page only where PS2 movies play, the pop-ups'
+# buttons as specified, the J1 temporary rows gone, the pause menu with the switches only, and no log line
+# from the UI thread while a download unpacks (REPORT-181).
+for needle, why in (
+        ('setup_shaders_ ? 4 : setup_textures_ ? 6', 'the texture pack page does not follow the shaders'),
+        ('setup_cutscenes_ ? 7 : setup_style_ ? 5', 'the cutscene page does not follow the texture pack page'),
+        ('setup_cutscenes_ = kPs2MoviePlayback;', 'the cutscene page is not tied to PS2 movie playback'),
+        ('{"Download HD texture pack", true,', 'the texture pack page lost Download'),
+        ('{"I already have a texture pack", true,', 'the texture pack page lost I already have a texture pack'),
+        ('{"Skip", true,', 'the texture pack page lost Skip'),
+        ('{"Yes, restore them", true,', 'the cutscene page lost Yes'),
+        ('{"No thanks", true,', 'the cutscene page lost No thanks'),
+        ('{"Minimise and notify me", "Watch progress"}', 'the This can take a while buttons differ'),
+        ('{"Pause", "Run in background", "Cancel"}', 'the progress pop-up buttons differ'),
+        ('if (st.stage != content::Stage::kUnpacking)', 'the UI thread logs while unpacking'),
+        ('void NotifyContentDone(', 'no notification hook for job J3')):
+    if needle not in launcher:
+        fail(why)
+for banned in ('"Import texture pack ZIP"', '"Restored PS2 cutscenes"', '"Remove HD texture pack"', '"Play PS2 cutscenes"'):
+    if banned in launcher or banned in layout:
+        fail(f'a J1 temporary row is back: {banned}')
+m = re.search(r'void TexturePackItems\(std::vector<Item>& items\) \{(.*?)\n  \}\n', launcher, re.S)
+body = m.group(1) if m else ''
+if 'if (in_game_) return;' not in body or body.find('if (in_game_) return;') > body.find('"Installed"'):
+    fail('the pause menu shows more than the texture pack switch')
 
 if failures:
     print('\n'.join('FAIL: ' + f for f in failures))
