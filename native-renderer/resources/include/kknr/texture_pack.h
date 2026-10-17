@@ -45,6 +45,9 @@ class TexturePackStream {
   // it stays ready.
   std::shared_ptr<const HostTextureData> Take(uint64_t hash, const HostTexturePlan& original, uint64_t max_bytes = UINT64_MAX,
                                               uint64_t* too_large = nullptr);
+  // Forgets an identity nobody needs any more: its queued request and any ready
+  // decoded bytes are dropped, and it can be requested again later.
+  void Cancel(uint64_t hash, const HostTexturePlan& original);
   std::string Status() const;
  private:
   struct Impl;

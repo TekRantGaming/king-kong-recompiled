@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <thread>
 namespace nr {
 static void Check(bool ok,const char* message) { if(!ok) { std::fprintf(stderr,"FAIL %s\n",message);std::exit(1); } }
@@ -112,9 +113,97 @@ struct TexturePackTestAccess {
       std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
     Check(original->replacement && original->replacement->pack_ready && !g.pack_capped_ && g.pack_bytes_==bytes,"capped original retries when room returns");
+    // Task 180, sharing: a second original with the same pack identity (same
+    // content elsewhere in memory) uses the same GPU replacement, not a copy.
+    auto* physical_bytes=const_cast<uint8_t*>(guest.PhysicalBase());
+    std::memcpy(physical_bytes+0x2000,physical_bytes+0x1000,0x1000);
+    std::memset(physical_bytes+0x3000,0x5A,0x1000);
+    auto fetch_at=[&](uint32_t address) { auto d=desc;d.base_address=address;return kknr::MakeTextureFetch(d); };
+    const auto fetch2=fetch_at(0x2000),fetch3=fetch_at(0x3000);
+    cl->open();
+    auto* entry2=g.textures_.Bind(fetch2,physical,g.frame_).entry;auto* entry3=g.textures_.Bind(fetch3,physical,g.frame_).entry;
+    Check(entry2 && entry3,"more original cache entries");
+    auto* original2=g.UploadTexture(cl,*entry2,fetch2);auto* original3=g.UploadTexture(cl,*entry3,fetch3);
+    Check(original2 && original3,"upload more originals");
+    cl->close();host->Execute(cl);host->WaitIdle();
+    Check(original2->pack_hash==original->pack_hash && original3->pack_hash && original3->pack_hash!=original->pack_hash,
+        "same content, same identity; other content, other identity");
+    kknr::TexturePackEntry e3{original3->pack_hash,"bf_12345678_0000000D","",original3->plan.format,8,8};
+    e3.file=kknr::TexturePackKey(e3.hash,e3.name)+".dds";
+    auto write_pack=[&](const char* name) {
+      auto dir=folder/name;std::filesystem::create_directories(dir);
+      Check(kknr_tools::WriteDds((dir/e.file).string(),replacement) && kknr_tools::WriteDds((dir/e3.file).string(),replacement),"write DDS");
+      kknr::TexturePackManifest pack;pack.entries={e,e3};Check(pack.Write(dir),"write two-entry manifest");
+      g.options_.texture_pack_folder=dir.string();
+    };
+    auto serve=[&](unsigned max_frames,auto&& done,auto&& each) {
+      unsigned n=0;
+      for(;n<max_frames && !done();++n) {
+        ++g.frame_;cl->open();each();g.ServiceTexturePacks(cl);cl->close();host->Execute(cl);host->WaitIdle();
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+      }
+      return n;
+    };
+    auto ready=[](GameRenderer::HostTexture* o) { return o->replacement && o->replacement->pack_ready; };
+    write_pack("shared");
+    serve(2000,[&] { return ready(original) && ready(original2) && ready(original3); },[] {});
+    Check(ready(original) && ready(original2) && ready(original3),"three originals get replacements");
+    Check(original->replacement==original2->replacement && original->replacement->pack_refs==2,"equal identities share one replacement");
+    Check(original3->replacement!=original->replacement && g.pack_shared_.size()==2 && g.pack_bytes_==2*bytes,
+        "two identities, two allocations (no duplicate)");
+    cl->open();
+    const auto shared_index=g.BindTexture(cl,fetch.words,kkshaders::TextureDimension::Tex2D,false);
+    Check(shared_index && g.BindTexture(cl,fetch2.words,kkshaders::TextureDimension::Tex2D,false)==shared_index,
+        "both originals bind the shared replacement's descriptor");
+    cl->close();host->Execute(cl);host->WaitIdle();
+    // The texture cache drops one original: the other keeps the replacement.
+    g.ReleaseHostTexture(original2);entry2->host=nullptr;
+    Check(ready(original) && original->replacement->pack_refs==1 && g.pack_bytes_==2*bytes,"shared replacement outlives one original");
+    // Task 180, chapter change: room for one replacement. The one that loads is the
+    // old chapter's, the capped one the new chapter's.
+    write_pack("chapter");
+    g.pack_limit_=bytes+bytes/2;
+    serve(2000,[&] { return (ready(original) || ready(original3)) && g.pack_capped_==1; },[] {});
+    auto* old_chapter=ready(original) ? original : original3;
+    auto* new_chapter=old_chapter==original ? original3 : original;
+    const auto& new_fetch=new_chapter==original ? fetch : fetch3;
+    const auto& old_fetch=old_chapter==original ? fetch : fetch3;
+    Check(ready(old_chapter) && new_chapter->pack_capped && g.pack_capped_==1 && g.pack_bytes_==bytes,"limit holds one, other capped");
+    ++g.frame_;g.TexturePackLoadStarted();
+    auto bind_new=[&] { g.BindTexture(cl,new_fetch.words,kkshaders::TextureDimension::Tex2D,false); };
+    serve(10,[] { return false; },bind_new);  // loading frames: only the new chapter's texture is used
+    Check(ready(old_chapter) && new_chapter->pack_capped,"nothing freed while loading");
+    g.TexturePackLoadEnded();
+    const auto end_frame=g.frame_;
+    serve(1000,[&] { return ready(new_chapter); },bind_new);
+    Check(!old_chapter->replacement && old_chapter->pack_swept && g.pack_shared_.size()==1,"unused old replacement freed after the load");
+    Check(ready(new_chapter) && !g.pack_capped_ && g.pack_bytes_==bytes,"capped new-chapter replacement loads once room is freed");
+    const auto retry_frames=g.frame_-end_frame;
+    Check(retry_frames<GameRenderer::kPackSweepDelayFrames+200,"capped retry is prompt (not the 600-frame wait)");
+    serve(20,[] { return false; },[] {});
+    Check(!old_chapter->replacement && old_chapter->pack_swept,"freed one is not requested again while unused");
+    // Needed again: it reloads normally.
+    g.pack_limit_=3ull<<30;
+    serve(1000,[&] { return ready(old_chapter); },[&] { g.BindTexture(cl,old_fetch.words,kkshaders::TextureDimension::Tex2D,false); });
+    Check(ready(old_chapter) && !old_chapter->pack_swept && g.pack_bytes_==2*bytes,"freed replacement reloads when used again");
+    // Stream Cancel (used for parked/released originals): no ready bytes are left, and it can be requested again.
+    auto& stream=*g.texture_pack_stream_;
+    stream.Request(original3->pack_hash,original3->plan);
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));  // ready, or still being read (dropped then too)
+    stream.Cancel(original3->pack_hash,original3->plan);
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    Check(!stream.Take(original3->pack_hash,original3->plan),"cancelled identity leaves no ready bytes");
+    stream.Request(original3->pack_hash,original3->plan);
+    std::shared_ptr<const kknr::HostTextureData> again;
+    for(unsigned i=0;i<1000 && !again;++i) {
+      again=stream.Take(original3->pack_hash,original3->plan);std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    Check(bool(again),"cancelled identity can be requested again");
     Check(host->errors()==0,"API and NVRHI validation");
-    std::printf("PASS texture pack: %u service frames, %.2f ms until ready, %.2f ms total test, %llu resident bytes, zero validation errors\n",frames,
-        ready_ms,std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count(),(unsigned long long)bytes);
+    std::printf("PASS texture pack: %u service frames, %.2f ms until ready, %.2f ms total test, %llu resident bytes, shared copy, "
+        "chapter-change retry after %llu frames, zero validation errors\n",frames,
+        ready_ms,std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count(),(unsigned long long)bytes,
+        (unsigned long long)retry_frames);
   }
 };
 }

@@ -320,10 +320,14 @@ GameRenderer::HostTexture* GameRenderer::ResolveDestTexture(kknr::TextureCache::
 
 void GameRenderer::ReleaseHostTexture(HostTexture* host) {
   if (!host) return;
-  pack_originals_.erase(host);
-  if (host->pack_capped) { host->pack_capped = false; pack_capped_ -= std::min<uint64_t>(pack_capped_, 1); }
-  if (pack_upload_.original == host) pack_upload_ = {};
-  if (host->replacement) { ReleaseHostTexture(host->replacement); host->replacement = nullptr; }
+  // An original waiting for its replacement: forget the request, so ready bytes
+  // nobody will take do not fill the stream's ready set.
+  if (pack_originals_.erase(host) && texture_pack_stream_ && host->pack_hash && !host->replacement &&
+      !host->pack_unavailable && !host->pack_capped && !host->pack_swept)
+    texture_pack_stream_->Cancel(host->pack_hash, host->plan);
+  UncapTexturePack(host);
+  if (pack_upload_.replacement == host) pack_upload_ = {};
+  ReleasePackReplacement(host);
   pack_bytes_ -= std::min(pack_bytes_, host->pack_allocation);
   descriptor_textures_.erase(host);
   if (host->twin) {
@@ -396,11 +400,14 @@ GameRenderer::HostTexture* GameRenderer::UploadTexture(nvrhi::ICommandList* cl,
     }
   }
   host->material_hash = 0;
-  if (host->replacement) { ReleaseHostTexture(host->replacement); host->replacement = nullptr; }
-  if (pack_upload_.original == host) pack_upload_ = {};
+  ReleasePackReplacement(host);
+  const uint64_t old_pack_hash = host->pack_hash;
   host->pack_hash = kknr::TextureBaseHash(data);
-  host->pack_unavailable = false;
-  if (host->pack_capped) { host->pack_capped = false; pack_capped_ -= std::min<uint64_t>(pack_capped_, 1); }
+  if (!created && old_pack_hash && old_pack_hash != host->pack_hash && texture_pack_stream_)
+    texture_pack_stream_->Cancel(old_pack_hash, host->plan);
+  host->pack_unavailable = host->pack_swept = false;
+  host->pack_used_frame = frame_;
+  UncapTexturePack(host);
   if (host->pack_hash) pack_originals_.insert(host);
   else pack_originals_.erase(host);
   if (texture_pack_stream_ && host->pack_hash) texture_pack_stream_->Request(host->pack_hash, host->plan);
@@ -553,6 +560,9 @@ uint32_t GameRenderer::BindTexture(nvrhi::ICommandList* cl, const uint32_t words
   if (!host->alias_source) RememberResource(ResourcePreloadRecord::Tex(fetch), *r.entry);
   bound_scale_x_ = host->scale_x;
   bound_scale_y_ = host->scale_y;
+  // Chapter-change bookkeeping: a bound original keeps (or asks again for) its replacement.
+  host->pack_used_frame = frame_;
+  host->pack_swept = false;
   if (options_.texture_pack && !pack_pressure_ && !r.entry->gpu_written && !host->alias_source &&
       host->replacement && host->replacement->pack_ready)
     host = host->replacement;
@@ -1126,6 +1136,7 @@ void GameRenderer::PrepareResourceRequests(nvrhi::ICommandList* cl,
     if (!tasks[i].ready || stale[i]) { ++stats_.prepared_discarded; continue; }
     if (job.texture) {
       job.host_texture->preloaded = preload;
+      job.host_texture->pack_used_frame = frame_;
       if (job.host_texture->pack_hash) {
         pack_originals_.insert(job.host_texture.get());
         if (texture_pack_stream_) texture_pack_stream_->Request(job.host_texture->pack_hash, job.host_texture->plan);

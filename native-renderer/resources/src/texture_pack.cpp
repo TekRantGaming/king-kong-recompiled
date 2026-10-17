@@ -379,8 +379,10 @@ struct TexturePackStream::Impl {
           auto& r=results[i];
           if (!r.error.empty()) status = r.error;
           if (!r.data) continue;
+          if (!seen.contains(batch[i].key)) continue;  // cancelled while it was being read
           if (r.data->bytes.size() > kReadyLimit-ready_bytes) { seen.erase(batch[i].key); continue; }
-          ready_bytes+=r.data->bytes.size(); ready.emplace(batch[i].key,std::move(r.data));
+          const auto bytes=r.data->bytes.size();
+          if (ready.emplace(batch[i].key,std::move(r.data)).second) ready_bytes+=bytes;
         }
       }
     }
@@ -417,6 +419,17 @@ std::shared_ptr<const HostTextureData> TexturePackStream::Take(uint64_t hash, co
   // Allow another cache instance with the same original to request the data.
   impl_->seen.erase(RequestKey(hash,original));
   return data;
+}
+void TexturePackStream::Cancel(uint64_t hash, const HostTexturePlan& original) {
+  if (!hash) return;
+  const auto key=RequestKey(hash,original);
+  std::lock_guard lock(impl_->mutex);
+  auto& q=impl_->requests;
+  q.erase(std::remove_if(q.begin(),q.end(),[&](const Impl::Request& r) { return r.key==key; }),q.end());
+  if (auto it=impl_->ready.find(key); it!=impl_->ready.end()) {
+    impl_->ready_bytes-=it->second->bytes.size(); impl_->ready.erase(it);
+  }
+  impl_->seen.erase(key);
 }
 std::string TexturePackStream::Status() const { std::lock_guard lock(impl_->mutex); return impl_->status; }
 }  // namespace kknr
