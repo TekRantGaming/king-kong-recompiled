@@ -25,6 +25,9 @@ class LauncherSounds {
   void Play(ui::Sound sound, float value, float volume);
   // Apply to the whole stream, including sounds already playing/queued.
   void SetVolume(float volume);
+  // Job J3: the ding when a download ends: the game's menu select sound twice, the second a fifth higher
+  // a moment later (a two-note chime). Queued for the audio thread; returns at once.
+  void PlayDing(float volume);
 
  private:
   friend struct LauncherSoundsTest;
@@ -37,6 +40,7 @@ class LauncherSounds {
     const Clip* clip;
     double pos, step;
     float gain;
+    int wait = 0;  // output frames before it starts
   };
   static void Feed(void* self, SDL_AudioStream* stream, int additional, int total);
 

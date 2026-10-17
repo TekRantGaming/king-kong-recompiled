@@ -11,6 +11,8 @@
 #include "launcher_sounds.h"
 #include "launcher_text.h"
 #include "launcher_ui.h"
+#include "notify_logic.h"
+#include "system_notify.h"
 #include "ps2_movies.h"
 #include "shader_pack.h"
 #include "native_shaders.h"
@@ -40,6 +42,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -1933,6 +1936,14 @@ class SettingsPages {
 
   std::vector<Item> AdvancedItems() {
     std::vector<Item> items;
+    if (!in_game_) {
+      items.push_back(Section("Downloads"));
+      items.push_back(CvarToggle("Notify me when downloads finish",
+                                 "Shows a system notification when the HD texture pack or the PS2 cutscenes finish "
+                                 "downloading, or stop, while the launcher is minimised or behind other windows. The "
+                                 "sound that plays with it follows Menu sounds.",
+                                 "kk_notify_downloads"));
+    }
 #if defined(_WIN32)
     // The PS2 movies play on Windows only (kPs2MoviePlayback), so the rows are there only.
     items.push_back(Section("Cutscenes"));
@@ -2490,6 +2501,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
     toast_ = std::make_unique<AchievementToast>(drawer, immediate_, paths_.game_dir, paths_.user_dir);
     StartContent();
+    StartNotifications();
     CleanUpAfterUpdate();
     online::Start();
     discord::Start();
@@ -2546,6 +2558,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   ~Launcher() override {
     StopHeartbeat();
+    notify::Stop();
     FlushProfileOptions();
     ui::SetSoundHandler(nullptr);
     if (install_thread_.joinable()) {
@@ -5268,7 +5281,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                 "kk_toggle_aim", "kk_deadzone", "kk_vibration", "kk_vibration_strength", "kk_map_*",
                 "@Input/Keybinds/Controller"};
       case kAdvanced:
-        return {"kk_show_fps", "kk_ps2_cutscenes", "kk_ps2_movie_folder"};
+        return {"kk_notify_downloads", "kk_show_fps", "kk_ps2_cutscenes", "kk_ps2_movie_folder"};
       default:
         return {};
     }
@@ -5815,6 +5828,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   void StartGame() {
     if (played_) return;
+    if (!ContentReadyForPlay()) return;
     // The pack is merged into the shader cache, which the game opens as it
     // starts: a download in progress finishes first.
     if (pack_.busy) {
@@ -5865,6 +5879,111 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       Close();  // deletes this dialog after the current draw
     }
     if (action) action();
+  }
+
+  // ------------------------------------------- Play while downloading (J3) ---
+  // Owner, 17 Oct: Play while a download runs asks first; Play now pauses it (the partial file kept) and the
+  // launcher continues it when it is back (StartContent: ResumeAfterPlay). An unpack (or Remove, or an
+  // imported ZIP being installed) is never interrupted: the game waits for it ("Finishing the install"),
+  // the safe option, as stopping an unpack half way would mean unpacking again from the start.
+  enum class PlayWait { kNone, kPausing, kFinishing };
+  static bool MustFinish(const content::Status& st, bool importing) {
+    return st.stage == content::Stage::kUnpacking || st.stage == content::Stage::kRemoving || (importing && st.Busy());
+  }
+  // True when nothing runs (the game may start). Otherwise opens the pop-up and returns false.
+  bool ContentReadyForPlay() {
+    if (play_wait_ != PlayWait::kNone) return false;
+    auto& service = content::Service::Get();
+    if (!service.Ready()) return true;
+    bool finishing = false;
+    std::vector<content::Kind> running;
+    for (int i = 0; i < content::kKindCount; ++i) {
+      const auto kind = content::Kind(i);
+      const auto st = service.Get(kind);
+      if (!st.Busy()) continue;
+      if (MustFinish(st, kind == content::Kind::kTexturePack && content_importing_)) finishing = true;
+      else running.push_back(kind);
+    }
+    if (finishing) {
+      REXLOG_INFO("KK content: Play while an install finishes: the game waits for it");
+      OpenFinishingForPlay();
+      return false;
+    }
+    if (running.empty()) return true;
+    const bool tex = std::find(running.begin(), running.end(), content::Kind::kTexturePack) != running.end();
+    const bool cut = std::find(running.begin(), running.end(), content::Kind::kCutscenes) != running.end();
+    REXLOG_INFO("KK content: Play while downloading ({}{}): asking", tex ? "tex " : "", cut ? "cut" : "");
+    OpenModal("Your download will pause while you play",
+              tex && cut ? "The HD texture pack and the PS2 cutscenes carry on downloading when you come back to the launcher. W"
+                                 "hat was downloaded so far is kept." : tex ? "The HD texture pack carries on downloading when you come back to the launcher. What was downloaded so far is kept." : "The PS2 cutscenes carry on downloading when you come back to the launcher. What was downloaded so far is kept.",
+              {"Play now", "Stay here"}, 1, [this, running](int i) {
+                if (i != 0) {
+                  REXLOG_INFO("KK content: Play while downloading: stay here");
+                  benchmark_pending_ = false;
+                  return;
+                }
+                for (const auto kind : running) content::Service::Get().PauseForPlay(kind);
+                play_wait_ = PlayWait::kPausing;
+                play_wait_since_ = std::chrono::steady_clock::now();
+                REXLOG_INFO("KK content: Play now: pausing the download, then the game starts");
+                OpenModal("Pausing the download", "The game starts in a moment.", {"Stay here"}, 0,
+                          [this](int) { StopPlayWait(true); });
+              }, 0);
+    return false;
+  }
+  void OpenFinishingForPlay() {
+    play_wait_ = PlayWait::kFinishing;
+    OpenModal("Finishing the install", "The download has finished and is being unpacked. That cannot be paused safely, so the game start"
+              "s as soon as it is done.", {"Stay here"}, 0, [this](int) { StopPlayWait(false); });
+    modal_.live = [] {
+      for (int i = 0; i < content::kKindCount; ++i) {
+        const auto st = content::Service::Get().Get(content::Kind(i));
+        if (MustFinish(st, false) || st.stage == content::Stage::kVerifying) return ContentProgressLine(st, false);
+      }
+      return std::string(T("Finishing"));
+    };
+    modal_.progress = [] {
+      for (int i = 0; i < content::kKindCount; ++i) {
+        const auto st = content::Service::Get().Get(content::Kind(i));
+        if (st.stage == content::Stage::kUnpacking) return ContentFraction(st);
+      }
+      return -1.0f;
+    };
+    play_wait_title_ = modal_.title;
+  }
+  // "Stay here" while waiting: no game. A download paused for the game continues at once.
+  void StopPlayWait(bool resume) {
+    play_wait_ = PlayWait::kNone;
+    benchmark_pending_ = false;
+    if (resume && content::Service::Get().ResumeAfterPlay()) REXLOG_INFO("KK content: stay here: the download continues");
+  }
+  void TickPlayWithContent() {
+    if (play_wait_ == PlayWait::kNone) return;
+    auto& service = content::Service::Get();
+    bool busy = false, finishing = false;
+    for (int i = 0; i < content::kKindCount; ++i) {
+      const auto kind = content::Kind(i);
+      const auto st = service.Get(kind);
+      busy = busy || st.Busy();
+      finishing = finishing || MustFinish(st, kind == content::Kind::kTexturePack && content_importing_);
+    }
+    if (play_wait_ == PlayWait::kPausing) {
+      if (finishing) {  // the download was already past the point of pausing: wait for its install instead
+        REXLOG_INFO("KK content: the download was already being unpacked: the game waits for it");
+        OpenFinishingForPlay();
+        return;
+      }
+      const double waited = std::chrono::duration<double>(std::chrono::steady_clock::now() - play_wait_since_).count();
+      if (busy && waited < 15.0) return;
+      REXLOG_INFO("KK content: download paused for the game after {:.1f} s{}", waited, busy ? " (still stopping: starting anyway)" : "");
+    } else if (busy) {
+      return;
+    } else {
+      REXLOG_INFO("KK content: install finished: the game starts");
+    }
+    play_wait_ = PlayWait::kNone;
+    if (modal_.open && (modal_.title == play_wait_title_ || modal_.title == "Pausing the download")) modal_.open = false;
+    StartGame();  // checks again: a download queued behind the install asks first
   }
 
   // ------------------------------------------------- content setup (J2) ---
@@ -5954,12 +6073,48 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     REXLOG_INFO("KK content: launcher window {}", done ? "minimise asked" : "not minimised (not available here)");
   }
 
-  // Job J3 hook: "Minimise and notify me" asked for a notification when the download ends (a ding and a
-  // Windows 11 toast or a freedesktop notification). J2 only logs it; the in-launcher pop-up is J2's.
-  void NotifyContentDone(content::Kind kind, bool ok, const std::string& title) {
-    const bool asked = std::exchange(content_notify_[int(kind)], false);
-    REXLOG_INFO("KK content: notify hook ({}): {} {}: {}", asked ? "asked" : "not asked", content::InfoFor(kind).id,
-                ok ? "finished" : "failed", title);
+  // Job J3: system notifications (system_notify.h) on their own worker thread. A click on one restores the
+  // launcher's window (on the UI thread).
+  void StartNotifications() {
+    notify::Start(
+        [post = cb_.post_to_ui, restore = cb_.restore] {
+          if (!post || !restore) return;
+          post([restore] {
+            REXLOG_INFO("KK notify: restoring the launcher's window (notification clicked)");
+            restore();
+          });
+        },
+        [](bool warning, const std::string& line) {
+          if (warning) REXLOG_WARN("{}", line);
+          else REXLOG_INFO("{}", line);
+        });
+  }
+
+  // Job J3: a download or install ended (`title` and `body` already in the player's language). Besides the
+  // launcher's own pop-up (ContentEnded): the ding unless the launcher's sounds are muted, and a system
+  // notification when "Minimise and notify me" was chosen, or (Settings switch on) the launcher is
+  // minimised or not the active window (notify_logic.h).
+  void NotifyContentDone(content::Kind kind, bool ok, const std::string& title, const std::string& body) {
+    notify::Situation s;
+    s.asked = std::exchange(content_notify_[int(kind)], false);
+    if (cb_.window_state) std::tie(s.minimised, s.focused) = cb_.window_state();
+    s.setting_on = GetBool("kk_notify_downloads");
+    s.sounds_on = GetBool("kk_launcher_sounds");
+    s.sounds_volume = GetInt("kk_launcher_sounds_volume", 50);
+    const notify::Plan plan = notify::Decide(s);
+    REXLOG_INFO("KK notify: {} {}: {}; window {}, {}; ding {}; system notification {} ({})",
+                content::InfoFor(kind).id, ok ? "finished" : "failed", title, s.minimised ? "minimised" : "shown",
+                s.focused ? "active" : "not active", plan.ding ? "yes" : "no (sounds muted)",
+                plan.system ? "yes" : "no", plan.why);
+    if (plan.ding) PlayDing();
+    if (plan.system) notify::Show(title, body, content::InfoFor(kind).id);
+  }
+
+  void PlayDing() {
+    if (!ui_sounds_ && files_ok_) ui_sounds_ = std::make_unique<LauncherSounds>(paths_.game_dir);
+    if (!ui_sounds_) return;
+    const float v = GetInt("kk_launcher_sounds_volume", 50) / 100.0f;
+    ui_sounds_->PlayDing(v * v);
   }
 
   // One line about a download: what it does now, how far, how fast, the time left.
@@ -6123,7 +6278,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
           : tex    ? "The HD texture pack is installed and turned on. You can turn it off at any time in Settings > Graphics."
                    : "The PS2 cutscenes are restored and turned on. They play in the game where the Xbox 360 version "
                      "has none. You can turn them off at any time in Settings > Advanced.";
-      NotifyContentDone(kind, true, title);
+      NotifyContentDone(kind, true, T(title), T(body));
       content_popups_.push_back([this, title, body] { OpenModal(title, body, {"OK"}, 0, {}); });
       return;
     }
@@ -6155,7 +6310,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         break;
     }
     if (imported) buttons = {"OK"};
-    NotifyContentDone(kind, false, title);
+    NotifyContentDone(kind, false, T(title), body);
     content_popups_.push_back([this, kind, title, body, buttons] {
       OpenModal(title, body, buttons, int(buttons.size()) - 1, [kind, retry = buttons.size() > 1](int i) {
         if (!retry || i != 0) return;
@@ -6408,6 +6563,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       service.OverrideUrl(content::Kind::kCutscenes, v, content::InfoFor(content::Kind::kCutscenes).sha256);
 #endif
     service.Init(paths_.user_dir);
+    // Job J3: a download paused because the game was started (PlayWithContent) goes on now.
+    if (service.ResumeAfterPlay()) REXLOG_INFO("KK content: download paused for the game continues");
   }
 
   // Each tick (also from the heartbeat while minimised): the settings an install or Remove changes, a
@@ -6508,6 +6665,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // runs from the heartbeat while nothing is drawn (task 173), so a minimised launcher's setup goes on.
   void TickState() {
     const double now = ImGui::GetTime();
+#if defined(KK_DEV_TOOLS)
+    DevNotifyTest();
+#endif
     FlushProfileOptions(false);
     FinishInstallIfDone();
     FinishArtIfDone();
@@ -6542,6 +6702,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       modal_.open = false;
       StartGame();
     }
+    TickPlayWithContent();
     if (g_changes != seen_changes_) {
       seen_changes_ = g_changes;
       changed_time_ = now;
@@ -6668,6 +6829,29 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // stable does (and saves them); "type:<text>" types text (New game's name); "whats-new" opens What's new as after 1.9.11; "update-test"
   // logs the update choice cases (RunUpdatePickTests); "updated" acts as the first start after an
   // update (the full shader rebuild and its screen); "setup:4" shows the setup's shader screen.
+  // The made-up download end of "notify-test" (the real path: decision, ding, system notification, pop-up),
+  // then the notification centre's count 3 s later. Steady clock: ImGui's time stops while minimised.
+  void DevNotifyTest() {
+    using clock = std::chrono::steady_clock;
+    if (dev_notify_at_ != clock::time_point{} && clock::now() >= dev_notify_at_) {
+      dev_notify_at_ = {};
+      dev_history_at_ = clock::now() + std::chrono::seconds(3);
+      const std::string title = "King Kong Recompiled test notification";
+      const std::string body = dev_notify_ok_
+                                   ? "Test 2 of 3 from the launcher agent: HD texture pack installed. No action needed."
+                                   : "Test 2 of 3 from the launcher agent: download failed. No action needed.";
+      REXLOG_INFO("KK dev: notify test fires ({})", dev_notify_ok_ ? "finished" : "failed");
+      NotifyContentDone(content::Kind::kTexturePack, dev_notify_ok_, title, body);
+      content_popups_.push_back([this, title, body] { OpenModal(title, body, {"OK"}, 0, {}); });
+    }
+    if (dev_history_at_ != clock::time_point{} && clock::now() >= dev_history_at_) {
+      dev_history_at_ = {};
+      notify::LogHistory();
+    }
+  }
+  std::chrono::steady_clock::time_point dev_notify_at_{}, dev_history_at_{};
+  bool dev_notify_ok_ = true;
+
   void DevInput() {
     ImGuiIO& io = ImGui::GetIO();
     // Scripted runs wait for the setup's work (only captures go on); the look step (stage 5) takes input
@@ -6709,6 +6893,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       if (w.rfind("wait-setup:", 0) == 0) met = InSetup() && SetupStage() == std::atoi(w.c_str() + 11);
       else if (w == "wait-home") met = !InSetup() && !ShaderScreen();
       else if (w == "wait-modal") met = modal_.open;  // a pop-up is up (logged with its title)
+      else if (w == "wait-unpack") {  // job J3: a download is being unpacked
+        met = false;
+        for (int i = 0; i < content::kKindCount; ++i)
+          met = met || content::Service::Get().Get(content::Kind(i)).stage == content::Stage::kUnpacking;
+      }
       else if (w == "wait-content") {
         met = true;  // (its finished pop-ups may be waiting behind each other)
         for (int i = 0; i < content::kKindCount; ++i) {
@@ -6815,6 +7004,26 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                     content::InfoFor(content::Kind(i)).id, int(st.stage), int(st.error), int(st.problem), st.done,
                     st.total, st.installed ? 1 : 0, st.installed_name);
       }
+      return;
+    }
+    if (t.rfind("notify-test", 0) == 0) {  // notify-test[:fail][:asked][:min]: a made-up download end in 2.5 s
+      dev_notify_ok_ = t.find(":fail") == std::string::npos;
+      if (t.find(":asked") != std::string::npos) content_notify_[int(content::Kind::kTexturePack)] = true;
+      if (t.find(":min") != std::string::npos) MinimiseLauncher();
+      dev_notify_at_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(2500);
+      REXLOG_INFO("KK dev: notify test armed ({})", t);
+      return;
+    }
+    if (t.rfind("pause:", 0) == 0) {  // job J3: the next step this many seconds later
+      at = now + std::atof(t.c_str() + 6);
+      return;
+    }
+    if (t == "play") {  // job J3: Play as from Home (the Play while downloading pop-up)
+      Play();
+      return;
+    }
+    if (t == "notify-history") {
+      notify::LogHistory();
       return;
     }
     if (t.rfind("choose-zip:", 0) == 0) {  // as if the file dialog of "I already have a texture pack" chose it
@@ -6976,6 +7185,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // it is open (its kind, button set, title and the setup page it came from), an import in progress, and the
   // finished / error pop-ups waiting for a free moment.
   bool content_notify_[content::kKindCount] = {};
+  PlayWait play_wait_ = PlayWait::kNone;  // J3: Play waits for a download to pause or an install to finish
+  std::chrono::steady_clock::time_point play_wait_since_{};
+  std::string play_wait_title_;
   int content_watch_ = -1, content_watch_mode_ = -1, content_watch_setup_ = 0;
   std::string content_watch_title_;
   bool content_importing_ = false;
@@ -7124,6 +7336,51 @@ bool MinimizeNativeWindow(void* handle) {
   for (int i = 0; i < count; ++i) done = SDL_MinimizeWindow(windows[i]) || done;
   SDL_free(windows);
   return done;
+#endif
+}
+
+std::pair<bool, bool> NativeWindowState(void* handle) {
+#if defined(_WIN32)
+  const HWND hwnd = static_cast<HWND>(handle);
+  if (!hwnd || !IsWindow(hwnd)) return {false, false};
+  return {IsIconic(hwnd) != FALSE, GetForegroundWindow() == hwnd};
+#else
+  (void)handle;
+  int count = 0;
+  SDL_Window** windows = SDL_GetWindows(&count);
+  if (!windows) return {false, false};
+  bool minimised = count > 0, focused = false;
+  for (int i = 0; i < count; ++i) {
+    const SDL_WindowFlags flags = SDL_GetWindowFlags(windows[i]);
+    minimised = minimised && (flags & SDL_WINDOW_MINIMIZED);
+    focused = focused || (flags & SDL_WINDOW_INPUT_FOCUS);
+  }
+  SDL_free(windows);
+  return {minimised, focused};
+#endif
+}
+
+bool RestoreNativeWindow(void* handle) {
+#if defined(_WIN32)
+  const HWND hwnd = static_cast<HWND>(handle);
+  if (!hwnd || !IsWindow(hwnd)) return false;
+  if (IsIconic(hwnd)) ShowWindowAsync(hwnd, SW_RESTORE);
+  // Windows lets a process take the foreground only in some cases (the player's click on the notification
+  // usually counts); otherwise the taskbar button flashes instead.
+  const bool front = SetForegroundWindow(hwnd) != FALSE;
+  REXLOG_INFO("KK notify: window restored{}", front ? " and brought to the front" : " (Windows kept another window in front)");
+  return true;
+#else
+  (void)handle;
+  int count = 0;
+  SDL_Window** windows = SDL_GetWindows(&count);
+  if (!windows) return false;
+  for (int i = 0; i < count; ++i) {
+    SDL_RestoreWindow(windows[i]);
+    SDL_RaiseWindow(windows[i]);
+  }
+  SDL_free(windows);
+  return count > 0;
 #endif
 }
 

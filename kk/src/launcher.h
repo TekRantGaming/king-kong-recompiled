@@ -39,6 +39,10 @@ struct LauncherCallbacks {
   // Job J2, "Minimise and notify me": minimises the launcher's window without bringing another forward.
   // False where it cannot be done.
   std::function<bool()> minimize;
+  // Job J3, notifications when a download ends: the window's {minimised, active} state, and restore
+  // (a click on a notification: the window comes back and is asked to the front).
+  std::function<std::pair<bool, bool>()> window_state;
+  std::function<void()> restore;
 };
 
 struct LauncherPaths {
@@ -53,6 +57,10 @@ bool NativeWindowDrawable(void* handle);
 // Minimises a window (the SDK's native handle). Windows: SW_MINIMIZE when it is the active window, else
 // without activating anything. Linux: SDL's windows. False when nothing was minimised.
 bool MinimizeNativeWindow(void* handle);
+// {minimised, active (has the keyboard focus)} for a window (the SDK's native handle). Linux: SDL's windows.
+std::pair<bool, bool> NativeWindowState(void* handle);
+// Restores a minimised window and asks for it to be the active window. Linux: SDL's windows.
+bool RestoreNativeWindow(void* handle);
 
 // True when the game files needed to boot exist under `game_dir`.
 bool GameFilesPresent(const std::filesystem::path& game_dir);

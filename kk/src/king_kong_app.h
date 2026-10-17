@@ -251,6 +251,12 @@ class KingKongApp : public rex::ReXApp {
     cb.post_to_ui = [this](std::function<void()> f) { app_context().CallInUIThreadDeferred(std::move(f)); };
     cb.recover_presentation = [this] { RecoverPresentation(nullptr); };
     cb.minimize = [this] { return window() && kk::MinimizeNativeWindow(window()->GetNativeWindowHandle()); };
+    cb.window_state = [this] {
+      return window() ? kk::NativeWindowState(window()->GetNativeWindowHandle()) : std::pair<bool, bool>{false, false};
+    };
+    cb.restore = [this] {
+      if (window()) kk::RestoreNativeWindow(window()->GetNativeWindowHandle());
+    };
     // The Display page's Resolution list, made on a worker while the launcher opens (display_modes.h).
     kk::PrefetchDisplayModes(std::atoi(rex::cvar::GetFlagByName("monitor").c_str()), window());
     kk::ShowLauncher(imgui_drawer(), immediate_drawer(),
