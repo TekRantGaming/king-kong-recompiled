@@ -18,7 +18,7 @@ inline constexpr GraphicsPreset kGraphicsPresets[] = {
     {"Low", "performance", "performance", "fxaa", "2", false, "low", "near"},
     {"Medium", "quality", "quality", "fxaa", "3", false, "medium", "medium"},
     {"High", "quality", "native", "fxaa", "5", true, "high", "far"},
-    {"Ultra", "quality", "native", "fxaa", "5", true, "high", "full"},
+    {"Ultra", "quality", "native", "fxaa", "5", true, "high", "far"},  // Full GI distance is F8 only (owner, Beta 8)
     {"Steam Deck", "quality", "native", "fxaa", "2", false, "low", "near"},
 };
 inline constexpr int kGraphicsPresetCount = int(std::size(kGraphicsPresets));

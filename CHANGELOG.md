@@ -3,6 +3,16 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v2.0.0-beta.8 (17 October 2026)
+
+**Beta 8**: a fix update, from the beta channel (**About** > **Change version**). Your saves and settings are kept. Windows only for this beta.
+
+### Fixed
+- **Shaders are prepared only once.** At the first start and after an update the launcher prepares the shaders one time. Playing a chapter or going back to the launcher no longer prepares them again. Settings > Graphics > Advanced > Rebuild shaders still does it when you ask.
+
+### Changed
+- **Global illumination distance goes up to Far in the launcher** (Ultra now uses Far). Full is still in the F8 panel; it costs too much for most PCs.
+
 ## v2.0.0-beta.7 (17 October 2026)
 
 **Beta 7**: from the beta channel (**About** > **Change version**). Expect bugs, and please tell us how it runs on the [Discord](https://discord.gg/PET2xU5FJq). Your saves and settings are kept, and you can switch back to stable at any time. Windows only for this beta.

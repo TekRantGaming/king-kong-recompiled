@@ -1645,7 +1645,7 @@ class SettingsPages {
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
       Item distance = CvarChoice("GI distance",
           "Limits bounced light to nearby surfaces to save GPU time. Near: 16 m, Medium: 32 m, Far: 64 m. Full has no limit. Light fades smoothly over the final quarter of the distance.",
-          "native_gi_distance", {{"Near", "near"}, {"Medium", "medium"}, {"Far", "far"}, {"Full", "full"}});
+          "native_gi_distance", {{"Near", "near"}, {"Medium", "medium"}, {"Far", "far"}});  // Full: F8 only (owner, Beta 8)
       items.push_back(std::move(Disable(distance, original || Get("native_gi") == "off",
                                        original ? kSetByOriginal : "Switch Global illumination on to set its distance.")));
     }
@@ -2485,7 +2485,13 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       const bool first_start = Get("kk_last_version").empty() &&
                                !std::filesystem::exists(paths_.config_path, config_ec);
       const bool updated = UpdatedSinceLastRun();
-      native_pack_.Start(CacheDir(), paths_.game_dir, updated);
+      // Owner rule (Beta 8): ONE shader preparation per version (first install or update), any other
+      // only when the player asks (Rebuild). A version already prepared is never checked or rebuilt
+      // here; pipelines a new setting needs are made by the game in the background.
+      if (updated || first_start || !ShadersPreparedForThisVersion())
+        native_pack_.Start(CacheDir(), paths_.game_dir, updated);
+      else
+        REXLOG_INFO("KK: shaders already prepared for v{}; not checking them again", KK_VERSION);
       if (first_start && NativeShaderPack::Wanted()) {
         // Existing game files with fresh user settings still need the setup's one shader screen.
         setup_shaders_ = true;
@@ -5857,7 +5863,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     const bool checked = std::exchange(native_pack_checked_, false);
     if (NativeShaderPack::Wanted() && !checked && native_pack_.OkForCurrentSettings() && !native_pack_.Busy())
       REXLOG_INFO("KK: Play: shaders already checked and prepared for these settings; nothing to do");
-    if (NativeShaderPack::Wanted() && !checked && !(native_pack_.OkForCurrentSettings() && !native_pack_.Busy())) {
+    // A job already running (setup, update, Rebuild) finishes first. Otherwise Play never starts one for a
+    // version whose shaders were prepared (owner rule, Beta 8).
+    if (NativeShaderPack::Wanted() && !checked &&
+        (native_pack_.Busy() || (!ShadersPreparedForThisVersion() && !native_pack_.OkForCurrentSettings()))) {
       if (!native_pack_.Busy()) native_pack_.Start(CacheDir(), paths_.game_dir);
       waiting_for_native_ = true;
       native_wait_since_ = ImGui::GetTime();
@@ -6872,7 +6881,22 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   // The native renderer's shaders: the end of the setup step, and Play waiting for them (the
   // pop-up only when the check takes more than a moment, i.e. there is something to build).
+  // The one shader preparation of this version has run (first install, update or Rebuild), with or without
+  // every pipeline: it is not started again until the next version or the player asks.
+  bool ShadersPreparedForThisVersion() {
+    if (Get("kk_shaders_prepared") != KK_VERSION) return false;
+    std::error_code ec;
+    const auto dir = CacheDir() / "native-shaders";
+    return std::filesystem::exists(dir / "kkshaders-spirv.pack", ec) || std::filesystem::exists(dir / "kkshaders-dxil.pack", ec);
+  }
+
   void TickNativeShaders() {
+    if (native_pack_.Finished() && !native_pack_.Busy() && Get("kk_shaders_prepared") != KK_VERSION) {
+      Set("kk_shaders_prepared", KK_VERSION);
+      ++g_changes;
+      REXLOG_INFO("KK: shaders prepared for v{} ({}); not prepared again until an update or Rebuild", KK_VERSION,
+                  native_pack_.Ok() ? "ok" : "with problems");
+    }
     if (setup_shaders_ && !native_pack_.Busy()) {
       setup_shaders_ = false;
       if (!InSetup()) Status(InstalledMessage());  // else once the setup is finished (FinishSetup)
@@ -7579,6 +7603,8 @@ std::string ApplyRendererChoice() {
   NormalizeRendererSettings();
   SetCvarDefault("ao_strength", "3");
   SetCvarDefault("native_ao_normal_smoothing", "2");  // High with Strong GTAO (owner 17 Oct)
+  // Beta 8 (owner): GI distance Full is F8 only; an Ultra preset saved with Full moves to Far.
+  if (Get("native_gi_distance") == "full" && Get("kk_graphics_preset") == "Ultra") Set("native_gi_distance", "far");
   ApplyUpscalerDefaults();
   return startup::ApplyChoice(rex::cvar::GetFlagByName("gpu_plugin"));
 }

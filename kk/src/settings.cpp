@@ -53,6 +53,9 @@ REXCVAR_DEFINE_INT32(kk_settings_version, 0, "KK",
 REXCVAR_DEFINE_STRING(kk_hardware_tier, "", "KK",
                       "Internal: first-launch hardware recommendation; empty for existing installs")
     .allowed({"", "low", "mid", "high"});
+REXCVAR_DEFINE_STRING(kk_shaders_prepared, "", "KK",
+                      "Internal: the port version whose one shader preparation has run; shaders are prepared again "
+                      "only after an update or when the player asks (owner rule, Beta 8)");
 REXCVAR_DEFINE_STRING(kk_last_version, "", "KK",
                       "Last port version the launcher has shown (it shows What's new once after an update)");
 REXCVAR_DEFINE_STRING(kk_setup_version, "", "KK",
