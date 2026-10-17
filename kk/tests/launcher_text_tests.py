@@ -27,7 +27,8 @@ def fail(message):
 # All translation tables the launcher includes.
 table_text = ''
 for name in ('launcher_text_table.inc', 'debug_overlay_text_table.inc', 'benchmark_text_table.inc',
-             'hdr_text_table.inc', 'launcher_layout_text_table.inc', 'workshop_text_table.inc'):
+             'hdr_text_table.inc', 'launcher_layout_text_table.inc', 'workshop_text_table.inc',
+             'artbook_text_table.inc'):
     table_text += (src / name).read_text(encoding='utf-8') + '\n'
 STRING = r'"((?:[^"\\]|\\.)*)"'
 entries = {}
@@ -314,6 +315,37 @@ if len(workshop_strings) < 14:
 strings |= workshop_strings
 if 'e.push_back({"Workshop", true, [this] { GoTo(kWorkshop); }});' not in (src / 'launcher.cpp').read_text(encoding='utf-8'):
     fail('J8: no Workshop entry on Home')
+# Beta 7: Extras > Artbook (artbook.cpp, its Extras row and the quiet download in launcher.cpp): every string it
+# draws, its prompts, no dashes; the artbook never asks before Play and has no download strip.
+artbook_cpp = (src / 'artbook.cpp').read_text(encoding='utf-8')
+artbook_strings = set(re.findall(r'(?<![A-Za-z_])[TF]\("([^"]+)"\s*[,)]', artbook_cpp))
+artbook_strings |= set(re.findall(r'\{Action::k[A-Za-z]+, "([^"]+)"\}', artbook_cpp))
+artbook_strings |= {
+    'Artbook', 'Bonus disc', '{0} paintings', 'Downloading', 'Not downloaded', 'Fit to screen', 'Zoom in',
+    'The artbook is still downloading', 'The artbook is not downloaded yet',
+    "The paintings come from the game's PS2 bonus disc, which the launcher downloads from archive.org ({0} MB). "
+    "Only the pictures are kept.",
+    "Concept paintings by Weta from the game's bonus disc. Look at them up close and save them to your PC.",
+    'Artbook download failed', 'Try again', 'Later',
+    'The artbook could not be downloaded from archive.org after several tries. You can try again now, or later in '
+    'Play > Extras > Artbook.',
+}
+if len(artbook_strings) < 24:
+    fail(f'Artbook: only {len(artbook_strings)} strings found')
+strings |= artbook_strings
+for text, name in ((artbook_cpp, 'artbook.cpp'), ((src / 'artbook_text_table.inc').read_text(encoding='utf-8'),
+                                                  'artbook_text_table.inc')):
+    if '—' in text or '–' in text:
+        fail(f'dash in {name}')
+launcher_src = (src / 'launcher.cpp').read_text(encoding='utf-8')
+for needle, what in (('if (!st.Busy() || content::Quiet(kind)) continue;', 'Play does not ask about the artbook'),
+                     ('if (Quiet(Kind(i))) continue;  // the artbook shows no strip', 'no download strip for it'),
+                     ('artbook_want_ = "first start after an update";', 'it downloads after an update'),
+                     ('it.label = "Artbook";', 'Extras has an Artbook row')):
+    if needle not in launcher_src:
+        fail('Artbook: ' + what)
+if 'artbook_want_ = "end of setup";' not in (src / 'launcher_setup_end.inc').read_text(encoding='utf-8'):
+    fail('Artbook: it does not download at the end of the setup')
 # Job J5: setup step 9 (button prompts).
 strings |= {
     'Choose your button prompts',

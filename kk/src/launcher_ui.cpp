@@ -193,6 +193,14 @@ void Input::UpdateGamepads(double now) {
   while (sdl_ready_ && next()) {}  // state and hotplug were read above
   std::array<bool, 8> down{};
   bool dir[6] = {};
+  sticks_ = {};
+  // The strongest stick / trigger of all controllers, with a dead zone (the rest rescaled to 0..1).
+  auto strongest = [](float& into, float v, float dead) {
+    const float a = std::abs(v);
+    if (a <= dead) return;
+    const float scaled = std::min(1.0f, (a - dead) / (1.0f - dead)) * (v < 0 ? -1.0f : 1.0f);
+    if (std::abs(scaled) > std::abs(into)) into = scaled;
+  };
   for (void* p : pads_) {
     auto* g = static_cast<SDL_Gamepad*>(p);
     auto b = [g](SDL_GamepadButton button) { return SDL_GetGamepadButton(g, button); };
@@ -200,6 +208,14 @@ void Input::UpdateGamepads(double now) {
     const float ly = SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_LEFTY) / 32767.0f;
     const float lt = SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) / 32767.0f;
     const float rt = SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) / 32767.0f;
+    if (pads_active_) {
+      strongest(sticks_.lx, lx, 0.2f);
+      strongest(sticks_.ly, ly, 0.2f);
+      strongest(sticks_.rx, SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_RIGHTX) / 32767.0f, 0.2f);
+      strongest(sticks_.ry, SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_RIGHTY) / 32767.0f, 0.2f);
+      strongest(sticks_.lt, lt, 0.08f);
+      strongest(sticks_.rt, rt, 0.08f);
+    }
     // A stick direction counts once it's well past the middle, and keeps
     // counting until it's nearly back (no flicker at the edge).
     auto past = [](float v, bool was) { return v > (was ? 0.35f : 0.55f); };

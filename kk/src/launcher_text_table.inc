@@ -2847,6 +2847,7 @@ constexpr Entry kEntries[] = {
 #include "hdr_text_table.inc"
 #include "launcher_layout_text_table.inc"
 #include "workshop_text_table.inc"
+#include "artbook_text_table.inc"
 
     // Content downloads (task J1: Settings rows for the HD texture pack and the PS2 cutscenes).
     {"HD texture pack", "HD-Texturpaket", "Paquete de texturas HD", "Pack de textures HD", "Pacchetto texture HD"},

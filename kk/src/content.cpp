@@ -1,5 +1,8 @@
 #include "content.h"
 
+#include "artbook_files.h"
+#include "artbook_logic.h"
+
 #include <cerrno>
 #include <chrono>
 #include <condition_variable>
@@ -488,9 +491,20 @@ const Info& InfoFor(Kind kind) {
       {"ps2-cutscenes", "ps2-cutscenes", "https://bobandersonv115.cypher.usbx.me/filebrowser/api/public/dl/seTbs14N",
        "KK_Cuts_AI.zip", 1871168114ull, 1878520474ull,
        "197eb43b76b0ef6057d07e7db06b9566994ee849b17a935d00f6e55b52bd2df8"},
+      // Beta 7 Extras: the PS2 USA bonus disc (archive.org), only its six Weta paintings and readme kept.
+      {"artbook", "artbook", artbook::kDiscUrl, artbook::kDiscFile, artbook::kDiscSize, artbook::kInstallBytes,
+       artbook::kDiscSha256},
   };
   return kInfo[int(kind)];
 }
+
+namespace {
+std::function<bool(const fs::path&)>& PictureCheckFn() {
+  static std::function<bool(const fs::path&)> check;
+  return check;
+}
+}  // namespace
+void SetPictureCheck(std::function<bool(const fs::path&)> check) { PictureCheckFn() = std::move(check); }
 
 fs::path ContentRoot(const fs::path& user_dir) { return user_dir / "content"; }
 fs::path InstallDir(const fs::path& user_dir, Kind kind) { return ContentRoot(user_dir) / InfoFor(kind).folder; }
@@ -534,7 +548,8 @@ struct Service::Impl {
 
   fs::path Downloads() const { return ContentRoot(user_dir) / "downloads"; }
   fs::path Part(Kind k) const { return Downloads() / (std::string(InfoFor(k).id) + ".part"); }
-  fs::path Zip(Kind k) const { return Downloads() / (std::string(InfoFor(k).id) + ".zip"); }
+  fs::path Zip(Kind k) const { return Downloads() / (std::string(InfoFor(k).id) + (k == Kind::kArtbook ? ".bin" : ".zip")); }
+  fs::path Iso() const { return Downloads() / "artbook.iso"; }  // Kind::kArtbook while it installs
   fs::path StateFile(Kind k) const { return Downloads() / (std::string(InfoFor(k).id) + ".state"); }
   fs::path Root(Kind k) const { return InstallDir(user_dir, k); }
   fs::path InstalledFile(Kind k) const { return Root(k) / "installed.txt"; }
@@ -563,10 +578,12 @@ struct Service::Impl {
     fs::remove(Part(k), ec);
     fs::remove(Zip(k), ec);
     fs::remove(StateFile(k), ec);
+    if (k == Kind::kArtbook) fs::remove(Iso(), ec);
     S(k).for_play = false;
   }
 
   void Changes(Kind k, bool install, const std::string& folder) {
+    if (k == Kind::kArtbook) return;  // no settings
     const bool tex = k == Kind::kTexturePack;
     const char* on = tex ? "native_texture_pack" : "kk_ps2_cutscenes";
     const char* dir = tex ? "native_texture_pack_folder" : "kk_ps2_movie_folder";
@@ -589,7 +606,8 @@ struct Service::Impl {
     if (keys.empty()) return;
     const fs::path folder = FromU8(keys.count("folder") ? keys.at("folder") : "");
     const bool ok = !folder.empty() && Exists(folder) &&
-                    (k != Kind::kTexturePack || Exists(folder / "pack.txt"));
+                    (k != Kind::kTexturePack || Exists(folder / "pack.txt")) &&
+                    (k != Kind::kArtbook || artbook::Installed(folder));
     if (!ok) return;
     slot.status.installed = true;
     slot.status.stage = Stage::kInstalled;
@@ -597,7 +615,7 @@ struct Service::Impl {
     slot.status.installed_name = keys.count("name") ? keys.at("name") : "";
     slot.status.imported = keys.count("source") && keys.at("source") == "import";
     slot.installed_setting = U8(folder);
-    if (queue_changes && keys.count("applied") && keys.at("applied") == "0") {
+    if (queue_changes && k != Kind::kArtbook && keys.count("applied") && keys.at("applied") == "0") {
       const bool tex = k == Kind::kTexturePack;
       changes.push_back({tex ? "native_texture_pack_folder" : "kk_ps2_movie_folder", slot.installed_setting, false, {}, {}});
       changes.push_back({tex ? "native_texture_pack" : "kk_ps2_cutscenes", "true", false, {}, {}});
@@ -783,7 +801,79 @@ struct Service::Impl {
   }
 
   // ----------------------------------------------------------- install ---
+  // Kind::kArtbook: the disc image to an ISO (streamed), the paintings and the readme out of it into a staging
+  // folder, each picture checked, then swapped in as content\artbook; the .bin and the ISO deleted after.
+  bool InstallArtbook(const fs::path& bin) {
+    const Kind k = Kind::kArtbook;
+    const fs::path root = Root(k);
+    fs::path staging = root, old = root;
+    staging += ".new";
+    old += ".old";
+    const uint64_t bin_size = FileSize(bin);
+    {
+      std::lock_guard lock(mutex);
+      SetStage(k, Stage::kUnpacking);
+      S(k).status.total = bin_size;
+      S(k).progress = 0;
+    }
+    if (!CheckSpace(k, InfoFor(k).unpacked + kSpaceMargin)) return false;
+    if (!RemoveAll(staging)) {
+      Fail(k, Error::kWrite, "cannot clear " + U8(staging));
+      return false;
+    }
+    std::error_code ec;
+    fs::create_directories(staging, ec);
+    std::string why;
+    // Progress: the conversion is the first 60 %, the pictures the rest.
+    const bool converted = artbook::ConvertToIso(bin, Iso(), [&](uint64_t done) {
+      S(k).progress = done * 6 / 10;
+      return !Stopped(k) && !quit;
+    }, why);
+    artbook::Extracted got;
+    const bool extracted = converted && artbook::ExtractArtbook(Iso(), staging, PictureCheckFn(), [&](uint64_t done) {
+      S(k).progress = bin_size * 6 / 10 + std::min<uint64_t>(done, bin_size * 4 / 10);
+      return !Stopped(k) && !quit;
+    }, got, why);
+    fs::remove(Iso(), ec);
+    if (!extracted) {
+      RemoveAll(staging);
+      if (Stopped(k) || quit) {
+        FinishStopped(k, bin_size);
+        return false;
+      }
+      // A disc that is not what it should be (it passed the SHA-256, so this would be our reader): fetched again
+      // next time rather than kept.
+      ClearDownload(k);
+      Fail(k, Error::kUnpack, "the bonus disc could not be read: " + why);
+      return false;
+    }
+    S(k).progress = bin_size;
+    if (Exists(root)) {
+      RemoveAll(old);
+      fs::rename(root, old, ec);
+    }
+    fs::rename(staging, root, ec);
+    if (ec) {
+      if (Exists(old) && !Exists(root)) fs::rename(old, root, ec);
+      RemoveAll(staging);
+      Fail(k, Error::kWrite, "cannot move the pictures into " + U8(root));
+      return false;
+    }
+    RemoveAll(old);
+    WriteKeys(InstalledFile(k), {{"name", "Weta Collector's Artwork"},
+                                 {"folder", U8(root)},
+                                 {"source", "download"},
+                                 {"pictures", std::to_string(got.pictures.size())},
+                                 {"readme", got.readme ? "1" : "0"},
+                                 {"applied", "1"}});
+    ReadInstalled(k, /*queue_changes=*/false);
+    Log(std::string(InfoFor(k).id) + ": installed " + std::to_string(got.pictures.size()) + " pictures" +
+        (got.readme ? " and the readme" : " (no readme)") + " in " + U8(root));
+    return true;
+  }
+
   bool Install(Kind k, const fs::path& zip, bool download) {
+    if (k == Kind::kArtbook) return InstallArtbook(zip);
     const Info& info = InfoFor(k);
     std::vector<ZipEntry> entries;
     std::string error;

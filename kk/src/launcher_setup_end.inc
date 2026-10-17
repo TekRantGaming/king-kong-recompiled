@@ -607,6 +607,7 @@
     home_focus_ = 0;
     Set("kk_setup_version", KK_VERSION);
     SaveSettings(paths_.config_path);
+    artbook_want_ = "end of setup";  // Beta 7: the bonus disc's artbook downloads quietly in the background
     if (!std::getenv("KK_AUTOPLAY") && !whats_new_shown_) {
       whats_new_from_.clear();  // this version's notes
       open_whats_new_ = true;
