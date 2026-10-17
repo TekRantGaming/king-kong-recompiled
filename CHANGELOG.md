@@ -3,6 +3,13 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v2.0.0-beta.9 (18 October 2026)
+
+**Beta 9**: a fix update, from the beta channel (**About** > **Change version**). Your saves and settings are kept. Windows only for this beta.
+
+### Fixed
+- **Vulkan crash when loading a chapter on AMD graphics cards.** The faster pipeline building added in Beta 7 is now used on NVIDIA cards only, where it was tested; other cards build pipelines the earlier way.
+
 ## v2.0.0-beta.8 (17 October 2026)
 
 **Beta 8**: a fix update, from the beta channel (**About** > **Change version**). Your saves and settings are kept. Windows only for this beta.

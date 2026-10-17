@@ -22,7 +22,10 @@ struct VulkanPipelineLibrarySupport {
   bool feature = false;       // graphicsPipelineLibrary
   bool fast_linking = false;  // graphicsPipelineLibraryFastLinking: a link without optimisation is cheap
   bool api_1_3 = false;       // the linked pipelines' dynamic depth/stencil/cull state is core in 1.3
-  bool usable() const { return extension && feature && fast_linking && api_1_3; }
+  // Beta 9: only NVIDIA is tested (an RX 9070 XT lost the device at every chapter start with it on). Other
+  // vendors stay on whole pipelines unless KK_GPL_ANY_VENDOR=1 (for testing).
+  bool vendor_tested = false;
+  bool usable() const { return extension && feature && fast_linking && api_1_3 && vendor_tested; }
   // Why not, for the log ("" when usable).
   std::string reason() const;
 };

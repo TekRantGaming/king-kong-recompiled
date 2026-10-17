@@ -43,6 +43,7 @@ std::string VulkanPipelineLibrarySupport::reason() const {
   if (!extension) return "the driver has no VK_EXT_graphics_pipeline_library";
   if (!feature) return "the driver offers VK_EXT_graphics_pipeline_library without graphicsPipelineLibrary";
   if (!fast_linking) return "the driver's library links are not fast (graphicsPipelineLibraryFastLinking)";
+  if (!vendor_tested) return "only tested on NVIDIA so far (KK_GPL_ANY_VENDOR=1 turns it on here)";
   return "";
 }
 
@@ -83,6 +84,10 @@ VulkanPipelineLibrarySupport QueryVulkanPipelineLibrary(VkInstance instance, VkP
   if (s.extension) properties.pNext = &gpl_properties;
   properties2(physical, &properties);
   s.api_1_3 = properties.properties.apiVersion >= VK_MAKE_API_VERSION(0, 1, 3, 0);
+  {
+    const char* any = std::getenv("KK_GPL_ANY_VENDOR");
+    s.vendor_tested = properties.properties.vendorID == 0x10DE || (any && *any && std::strcmp(any, "0") != 0);
+  }
   if (!s.extension) return s;
   s.fast_linking = gpl_properties.graphicsPipelineLibraryFastLinking == VK_TRUE;
   VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT gpl_features{};
