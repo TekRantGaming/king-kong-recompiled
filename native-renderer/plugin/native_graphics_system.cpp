@@ -39,6 +39,7 @@
 #endif
 
 #include "backend/api_binding.h"
+#include "plugin/gpu_preference.h"
 #include "backend/backend.h"
 #include "backend/draw_state.h"
 #include "backend/host_device.h"
@@ -163,11 +164,13 @@ bool NativeGraphicsSystem::CreateProvider(bool with_presentation) {
     case HostApi::kD3D12:
       // D3D12 providers always support presentation (the swap chain is the
       // presenter's).
+      PreferHighPerformanceGpu(GpuApi::kD3D12);  // the high-performance GPU, not adapter 0 (task 203)
       provider_ = rex::ui::d3d12::D3D12Provider::Create();
       break;
 #endif
 #if NR_HAS_VULKAN
     case HostApi::kVulkan:
+      PreferHighPerformanceGpu(GpuApi::kVulkan);  // the high-performance GPU, not adapter 0 (task 203)
       PrepareVulkanForUpscalers();
       provider_ = rex::ui::vulkan::VulkanProvider::Create(true, with_presentation);
       break;

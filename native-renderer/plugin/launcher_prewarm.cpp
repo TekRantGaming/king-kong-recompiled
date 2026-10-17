@@ -20,6 +20,7 @@
 #include "backend/host_device.h"
 #include "backend/render_scale.h"
 #include "plugin/plugin_settings.h"
+#include "plugin/gpu_preference.h"
 #if NR_GAME_RENDERER
 #include "plugin/shader_pack_service.h"
 #endif
@@ -123,6 +124,7 @@ class LauncherPrewarm {
   void Run() {
     // The SDK's provider as the game's start makes it (the same GPU and features), without
     // presentation.
+    PreferHighPerformanceGpu(GpuApi::kVulkan);  // the game's GPU, not adapter 0 (task 203)
     nr::PrepareVulkanDeviceRequests();  // the graphics pipeline library (task 183)
     std::unique_ptr<rex::ui::vulkan::VulkanProvider> provider = rex::ui::vulkan::VulkanProvider::Create(true, false);
     std::unique_ptr<HostDevice> host = provider ? CreateVulkanHostDevice(*provider) : nullptr;

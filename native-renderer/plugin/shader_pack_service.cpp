@@ -2,6 +2,7 @@
 #include "plugin/plugin_settings.h"
 #include "plugin/builtin_shaders.h"
 #include "plugin/setup_prewarm_availability.h"
+#include "plugin/gpu_preference.h"
 
 #include <algorithm>
 #include <atomic>
@@ -373,6 +374,7 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
       if (r.upToDate && previous == expected && driver_ready && job->need_driver_cache && drivers.empty() &&
           backend == kkshaders::PackBackend::Spirv &&
           std::filesystem::is_regular_file(job->driver_cache_path, marker_error)) {
+        nr::PreferHighPerformanceGpu(nr::GpuApi::kVulkan);  // the game's GPU, not adapter 0 (task 203)
         nr::PrepareVulkanDeviceRequests();  // the graphics pipeline library (task 183)
         provider = rex::ui::vulkan::VulkanProvider::Create(true, false);
         if (provider) host = nr::CreateVulkanHostDevice(*provider);
@@ -395,6 +397,7 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
         const auto start = std::chrono::steady_clock::now();
 #if NR_HAS_VULKAN
         if (backend == kkshaders::PackBackend::Spirv && !host) {
+          nr::PreferHighPerformanceGpu(nr::GpuApi::kVulkan);  // the game's GPU, not adapter 0 (task 203)
           nr::PrepareVulkanDeviceRequests();  // the graphics pipeline library (task 183)
           provider = rex::ui::vulkan::VulkanProvider::Create(true, false);
           if (provider) host = nr::CreateVulkanHostDevice(*provider);
@@ -402,6 +405,9 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
 #endif
 #if NR_HAS_D3D12
         if (backend == kkshaders::PackBackend::Dxil) {
+          // The SDK's default is the first adapter: the integrated GPU on hybrid laptops, where
+          // Intel's driver crashed preparing these pipelines (Beta 7/8 reports, task 203).
+          nr::PreferHighPerformanceGpu(nr::GpuApi::kD3D12);
           provider = rex::ui::d3d12::D3D12Provider::Create();
           if (provider) host = nr::CreateD3D12HostDevice(*provider);
         }

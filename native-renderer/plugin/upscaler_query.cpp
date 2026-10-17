@@ -1,6 +1,7 @@
 // The launcher's question "which temporal upscalers run here" (native_upscaler_query.h).
 
 #include "plugin/upscaler_query.h"
+#include "plugin/gpu_preference.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -70,38 +71,25 @@ void Run() {
   NrUpscalerSupport out = {};
   out.size = sizeof(out);
   out.vulkan = 0;
-  IDXGIFactory6* factory = nullptr;
   ID3D12Device* device = nullptr;
   ID3D12CommandQueue* queue = nullptr;
   std::string adapter_name;
-  if (SUCCEEDED(CreateDXGIFactory2(0, __uuidof(IDXGIFactory6), reinterpret_cast<void**>(&factory)))) {
-    IDXGIAdapter1* adapter = nullptr;
-    for (UINT i = 0; factory->EnumAdapterByGpuPreference(i, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
-                                                         __uuidof(IDXGIAdapter1),
-                                                         reinterpret_cast<void**>(&adapter)) == S_OK;
-         ++i) {
-      DXGI_ADAPTER_DESC1 desc{};
-      adapter->GetDesc1(&desc);
-      // The lowest feature level any of the SDKs could run at: each SDK's own support check (below)
-      // decides what runs on the device, not the level (a card at 11_0 or 11_1 can still run FSR 3.1
-      // and XeSS).
-      bool ok = false;
-      if (!(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) {
-        for (const D3D_FEATURE_LEVEL level :
-             {D3D_FEATURE_LEVEL_12_1, D3D_FEATURE_LEVEL_12_0, D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0}) {
-          if (SUCCEEDED(D3D12CreateDevice(adapter, level, __uuidof(ID3D12Device), reinterpret_cast<void**>(&device)))) {
-            ok = true;
-            break;
-          }
-        }
+  // The adapter the game's D3D12 provider uses (plugin/gpu_preference.h: high performance, never a
+  // software or Basic Render adapter, or the player's d3d12_adapter), task 203.
+  if (IDXGIAdapter1* adapter = ChosenD3D12Adapter(&adapter_name)) {
+    // The lowest feature level any of the SDKs could run at: each SDK's own support check (below)
+    // decides what runs on the device, not the level (a card at 11_0 or 11_1 can still run FSR 3.1
+    // and XeSS).
+    bool ok = false;
+    for (const D3D_FEATURE_LEVEL level :
+         {D3D_FEATURE_LEVEL_12_1, D3D_FEATURE_LEVEL_12_0, D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0}) {
+      if (SUCCEEDED(D3D12CreateDevice(adapter, level, __uuidof(ID3D12Device), reinterpret_cast<void**>(&device)))) {
+        ok = true;
+        break;
       }
-      if (ok) {
-        for (const wchar_t* p = desc.Description; *p; ++p) adapter_name += *p < 128 ? char(*p) : '?';
-      }
-      adapter->Release();
-      if (ok) break;
     }
-    factory->Release();
+    if (!ok) adapter_name.clear();
+    adapter->Release();
   }
   if (device) {
     D3D12_COMMAND_QUEUE_DESC qd{};
