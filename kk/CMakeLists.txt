@@ -74,6 +74,7 @@ set(KINGKONG_SOURCES
     src/shader_pack.cpp
     src/native_shaders.cpp
     src/http.cpp
+    src/content.cpp
     src/update.cpp
     src/play_session.cpp
     src/ps2_movies.cpp
@@ -194,6 +195,11 @@ if(KK_DEV_TOOLS)
     target_include_directories(kk-launcher-tests PRIVATE src)
     rexglue_apply_target_settings(kk-launcher-tests)
     add_test(NAME launcher-logic COMMAND kk-launcher-tests)
+    # Content downloads (texture pack, PS2 cutscenes): service, ZIP checks, resume, with a fake server.
+    add_executable(kk-content-tests tests/content_tests.cpp src/content.cpp)
+    target_include_directories(kk-content-tests PRIVATE src)
+    rexglue_apply_target_settings(kk-content-tests)
+    add_test(NAME content-downloads COMMAND kk-content-tests "${CMAKE_CURRENT_BINARY_DIR}/content-test")
     add_executable(kk-menu-sound-tests tests/launcher_sounds_tests.cpp src/launcher_sounds.cpp)
     target_include_directories(kk-menu-sound-tests PRIVATE src)
     target_link_libraries(kk-menu-sound-tests PRIVATE rex::runtime)
