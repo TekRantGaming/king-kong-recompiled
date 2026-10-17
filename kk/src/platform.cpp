@@ -92,6 +92,13 @@ GpuInfo DetectGpu() {
     WideCharToMultiByte(CP_UTF8, 0, d.Description, -1, name, sizeof(name) - 1, nullptr, nullptr);
     info.name = name;
     info.dedicated_memory = uint64_t(d.DedicatedVideoMemory);
+    LARGE_INTEGER umd{};
+    if (SUCCEEDED(adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice), &umd))) {
+      char version[64];
+      std::snprintf(version, sizeof(version), "%u.%u.%u.%u", unsigned(HIWORD(umd.HighPart)),
+                    unsigned(LOWORD(umd.HighPart)), unsigned(HIWORD(umd.LowPart)), unsigned(LOWORD(umd.LowPart)));
+      info.driver = version;
+    }
   }
   adapter->Release();
 #endif

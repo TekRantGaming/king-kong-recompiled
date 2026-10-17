@@ -55,6 +55,8 @@ set(KINGKONG_SOURCES
     src/hfr_sway.cpp
     src/hfr_cam_ground.cpp
     src/online.cpp
+    src/telemetry.cpp
+    src/telemetry_upload.cpp
     src/discord_presence.cpp
     src/mouse_look.cpp
     src/cursor_activity.cpp
@@ -291,6 +293,16 @@ if(KK_DEV_TOOLS)
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/launcher_text_tests.py" "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME benchmark-text COMMAND "${Python3_EXECUTABLE}" -I
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/benchmark_text_tests.py" "${CMAKE_CURRENT_SOURCE_DIR}")
+    # Task 194: the Beta 7 uploads (redaction, gzip, size limits, switch off = nothing sent), then Python's
+    # gzip reads back what the game's gzip wrote.
+    add_executable(kk-telemetry-tests tests/telemetry_tests.cpp src/telemetry_upload.cpp)
+    target_include_directories(kk-telemetry-tests PRIVATE src)
+    rexglue_apply_target_settings(kk-telemetry-tests)
+    add_test(NAME telemetry-uploads COMMAND kk-telemetry-tests "${CMAKE_CURRENT_BINARY_DIR}/telemetry-test")
+    set_tests_properties(telemetry-uploads PROPERTIES FIXTURES_SETUP telemetry_files)
+    add_test(NAME telemetry-gzip COMMAND "${Python3_EXECUTABLE}" -I
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/telemetry_gzip_tests.py" "${CMAKE_CURRENT_BINARY_DIR}/telemetry-test")
+    set_tests_properties(telemetry-gzip PROPERTIES FIXTURES_REQUIRED telemetry_files)
     add_executable(kk-startup-tests ../native-renderer/tests/startup-recovery-039.cpp)
     add_test(NAME startup-recovery COMMAND kk-startup-tests "${CMAKE_CURRENT_BINARY_DIR}/startup-test-state")
 endif()

@@ -7,7 +7,8 @@
 // when it's switched on and deleted when it's switched off), the port's version,
 // the newest version it was offered, the system (win32, or linux for Linux and
 // Proton), x64, the update channel and whether the game is running. Nothing is
-// sent while it's off.
+// sent while it's off. Beta 7: the same switch also covers the pipeline file,
+// performance summary and crash report uploads (telemetry.h).
 
 #pragma once
 
@@ -25,6 +26,10 @@ void SetPlaying(bool playing);
 void SetAvailableVersion(const std::string& version);
 // A new random install ID ("xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx").
 std::string NewInstallId();
+// This install's ID (kk_install_id), made now when the switch is on and there is none yet; empty while off.
+std::string InstallId();
+// The server (developer builds: KK_DEV_ONLINE_URL when set).
+std::string ServerUrl();
 
 struct Counts {
   bool known = false;  // the server has answered since the setting was switched on

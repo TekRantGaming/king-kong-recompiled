@@ -38,6 +38,7 @@
 
 #include "crash_dump.h"
 #include "settings.h"
+#include "telemetry.h"
 
 namespace kk {
 namespace {
@@ -117,6 +118,7 @@ void OnGuestSwap() {
     if (frame_ms >= 50.0) REXLOG_INFO("Hitch: {:.0f} ms frame", frame_ms);
     g_window_worst_ms = std::max(g_window_worst_ms, frame_ms);
     RecordFrameTime(frame_ms);
+    telemetry::NoteFrame(frame_ms);  // the per-chapter summary (Beta 7 uploads)
   }
   last_swap = now;
   const double elapsed = std::chrono::duration<double>(now - g_window_start).count();

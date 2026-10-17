@@ -15,6 +15,9 @@
 #include <cctype>
 #include <cstdlib>
 #include <sstream>
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
 
 #include "platform.h"
 #endif
@@ -118,6 +121,50 @@ bool HttpPost(const std::string& url, const std::string& json, std::vector<uint8
   WinHttpCloseHandle(session);
   return ok;
 }
+int HttpPostBody(const std::string& url, const std::string& content_type, const std::vector<std::string>& headers,
+                 const std::string& body, int timeout_ms, std::vector<uint8_t>& out, const std::string&) {
+  URL_COMPONENTSW parts{};
+  parts.dwStructSize = sizeof(parts);
+  wchar_t host[256], path[2048];
+  parts.lpszHostName = host;
+  parts.dwHostNameLength = 256;
+  parts.lpszUrlPath = path;
+  parts.dwUrlPathLength = 2048;
+  const std::wstring wurl(url.begin(), url.end());
+  if (!WinHttpCrackUrl(wurl.c_str(), 0, 0, &parts)) return 0;
+  HINTERNET session = WinHttpOpen(L"KingKongRecomp/" KK_VERSION_W, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                                  WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+  if (!session) return 0;
+  WinHttpSetTimeouts(session, timeout_ms, timeout_ms, timeout_ms, timeout_ms);
+  std::wstring head = L"Content-Type: " + std::wstring(content_type.begin(), content_type.end()) + L"\r\n";
+  for (const auto& h : headers) head += std::wstring(h.begin(), h.end()) + L"\r\n";
+  int status = 0;
+  if (HINTERNET conn = WinHttpConnect(session, host, parts.nPort, 0)) {
+    const DWORD secure = parts.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0;
+    if (HINTERNET req = WinHttpOpenRequest(conn, L"POST", path, nullptr, WINHTTP_NO_REFERER,
+                                           WINHTTP_DEFAULT_ACCEPT_TYPES, secure)) {
+      DWORD code = 0, len = sizeof(code);
+      if (WinHttpSendRequest(req, head.c_str(), DWORD(-1), const_cast<char*>(body.data()), DWORD(body.size()),
+                             DWORD(body.size()), 0) &&
+          WinHttpReceiveResponse(req, nullptr) &&
+          WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, nullptr, &code, &len,
+                              nullptr)) {
+        status = int(code);
+        for (DWORD avail = 0; out.size() < 65536 && WinHttpQueryDataAvailable(req, &avail) && avail;) {
+          const size_t at = out.size();
+          out.resize(at + avail);
+          DWORD read = 0;
+          if (!WinHttpReadData(req, out.data() + at, avail, &read)) break;
+          out.resize(at + read);
+        }
+      }
+      WinHttpCloseHandle(req);
+    }
+    WinHttpCloseHandle(conn);
+  }
+  WinHttpCloseHandle(session);
+  return status;
+}
 #else
 // Linux: through curl (on SteamOS, Bazzite and the usual desktop distributions).
 bool HttpGet(const std::string& url, std::vector<uint8_t>& out, std::atomic<uint64_t>* bytes,
@@ -145,6 +192,33 @@ bool HttpPost(const std::string& url, const std::string& json, std::vector<uint8
   return RunCapture({"curl", "-sSf", "-m", "10", "-A", agent, "-H", "Content-Type: application/json", "--data-binary",
                      json, url},
                     out);
+}
+int HttpPostBody(const std::string& url, const std::string& content_type, const std::vector<std::string>& headers,
+                 const std::string& body, int timeout_ms, std::vector<uint8_t>& out, const std::string& scratch) {
+  // curl reads the body from a file (it may be binary); the reply's status is all it prints.
+  if (scratch.empty()) return 0;
+  {
+    std::ofstream f(scratch, std::ios::binary | std::ios::trunc);
+    if (!f.write(body.data(), std::streamsize(body.size()))) return 0;
+  }
+  char seconds[32];
+  std::snprintf(seconds, sizeof(seconds), "%.1f", std::max(0.5, timeout_ms / 1000.0));
+  std::vector<std::string> argv = {"curl", "-sS", "-m", seconds, "-A", "KingKongRecomp/" KK_VERSION, "-o",
+                                   "/dev/null", "-w", "%{http_code}", "-H", "Content-Type: " + content_type};
+  for (const auto& h : headers) {
+    argv.push_back("-H");
+    argv.push_back(h);
+  }
+  argv.push_back("--data-binary");
+  argv.push_back("@" + scratch);
+  argv.push_back(url);
+  std::vector<uint8_t> printed;
+  const bool ran = RunCapture(argv, printed);
+  std::error_code ec;
+  std::filesystem::remove(scratch, ec);
+  (void)out;
+  if (!ran) return 0;
+  return std::atoi(std::string(printed.begin(), printed.end()).c_str());
 }
 #endif
 

@@ -63,6 +63,7 @@ void InstallFpeGuard();  // fpe_guard.cpp
 #include "settings.h"
 #include "toast.h"
 #include "startup_recovery.h"
+#include "telemetry.h"
 #include "hooks/kk_native_ui.h"  // the native renderer's launcher prewarm
 
 class KingKongApp : public rex::ReXApp {
@@ -84,6 +85,9 @@ class KingKongApp : public rex::ReXApp {
     kk::benchmark::Shutdown();
     kk::play::FlushRendererFiles();
     kk::startup::CleanExit();
+    // Beta 7 uploads (Online player count on): at most about 2 s in all, on their own threads.
+    kk::telemetry::BeginQuitUploads();
+    kk::telemetry::WaitQuitUploads();
     return true;
   }
 
@@ -91,6 +95,8 @@ class KingKongApp : public rex::ReXApp {
     kk::benchmark::Shutdown();
     kk::play::FlushRendererFiles();
     kk::startup::CleanExit();
+    kk::telemetry::BeginQuitUploads();
+    kk::telemetry::WaitQuitUploads();
   }
 
   // Task 173: a restore from minimised is not a size change, and the SDK's presenter retries a surface it
@@ -151,6 +157,15 @@ class KingKongApp : public rex::ReXApp {
       kk::InstallCrashDumps(log.has_parent_path() ? log.parent_path()
                                                   : rex::filesystem::GetExecutableFolder() / "logs",
                             user_data_root_);
+      // Beta 7 uploads: last session's unsent summary and crash/hang reports, a few seconds from now.
+      const std::string cache_root = rex::cvar::GetFlagByName("cache_root");
+      kk::telemetry::Configure(user_data_root_,
+                               log.has_parent_path() ? log.parent_path()
+                                                     : rex::filesystem::GetExecutableFolder() / "logs",
+                               !defaults.cache_root.empty() ? defaults.cache_root
+                               : cache_root.empty()         ? user_data_root_ / "cache"
+                                                            : std::filesystem::path(cache_root));
+      kk::telemetry::StartupUploads();
     }
     kk::ApplyRendererChoice();
     const auto recommendation_output = OutputSize();
@@ -184,6 +199,7 @@ class KingKongApp : public rex::ReXApp {
       kk::ApplyVideoMode();  // before the GPU starts: it sizes its frame from the mode (settings.cpp)
       if (!kk::benchmark::Active()) {
         kk::online::SetPlaying(true);
+        kk::telemetry::SetGameRunning();
         kk::online::Start();
         kk::discord::SetPlaying(true);
         kk::discord::Start();
@@ -200,6 +216,7 @@ class KingKongApp : public rex::ReXApp {
         { const auto out = OutputSize(); kk::ApplyRenderPreset(out.first, out.second); }
         kk::ApplyVideoMode();  // before the GPU starts: it sizes its frame from the mode (settings.cpp)
         kk::online::SetPlaying(true);
+        kk::telemetry::SetGameRunning();
         kk::discord::SetPlaying(true);
         // The game starts in this process: startup recovery watches it from here.
         kk::startup::Begin(gpu_plugin_, true);

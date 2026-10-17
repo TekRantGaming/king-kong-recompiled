@@ -68,6 +68,7 @@ extern char** environ;
 #include "play_internal.h"
 #include "benchmark.h"
 #include "settings.h"
+#include "telemetry.h"
 #include "ps2_movies.h"
 #include "dev_launcher_chain.h"
 #include "video_modes.h"
@@ -302,16 +303,27 @@ StartRequest ParseRequest(const std::string& text) {
 
 // ============================================================================================== saves ===
 
+namespace {
+// Each chapter-select entry's level (the game's chapter table, G+0x5008; see Chapters()).
+constexpr int kChapterLevelKeys[kChapterCount] = {100,  101,  201,  203,  204,  301,  302,  303,  305,  306,  304,
+                                                  401,  402,  403,  404,  501,  502,  504,  702,  705,  901,  1002,
+                                                  1101, 1200, 1201, 703,  1401, 1402, 1501, 1701, 1702, 1703, 1801,
+                                                  1803, 1804, 1805, 1901, 1902, 2001, 2003, 2004, 7};
+// The chapter-select entry a level belongs to, or -1 (menus, the title).
+int ChapterOfLevel(int level) {
+  for (int i = 0; i < kChapterCount; ++i)
+    if (kChapterLevelKeys[i] == level) return i;
+  return -1;
+}
+}  // namespace
+
 const std::vector<ChapterInfo>& Chapters() {
   // The chapter select's table (filled by uni_init at G+0x5008 / G+0x50D4 / G+0x51A0; checked against the
   // game's own table when a session starts, see CheckChapterTable). Names and pictures: the game's, from the
   // launcher's art cache (launcher_art.cpp extracts them from the player's game files), in the launcher's
   // language; "Chapter N" and no picture until then. Looked for again when the language changes and, while
   // missing, every 2 s (the extraction runs on a worker thread).
-  static constexpr int kKeys[kChapterCount] = {100,  101,  201,  203,  204,  301,  302,  303,  305,  306,  304,
-                                               401,  402,  403,  404,  501,  502,  504,  702,  705,  901,  1002,
-                                               1101, 1200, 1201, 703,  1401, 1402, 1501, 1701, 1702, 1703, 1801,
-                                               1803, 1804, 1805, 1901, 1902, 2001, 2003, 2004, 7};
+  static constexpr const int* kKeys = kChapterLevelKeys;
   static constexpr int kText[kChapterCount] = {17, 0,  1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12,
                                                13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 38, 24, 25, 26,
                                                27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 39, 40, 41};
@@ -1155,6 +1167,8 @@ REX_HOOK_RAW(sub_8253DB80) {
   if (request && g_jump_requested) REXLOG_INFO("KK play: uni_go loads level {}", int32_t(Load32(base, g + 8)));
   const bool ps2_movie = request && kk::movies::BeforeLoad(base, g, g_starting, g_leaving);
   __imp__sub_8253DB80(ctx, base);
+  // The chapter being played, for the per-chapter performance summary (a level change's frames left out).
+  if (g) kk::telemetry::NoteChapter(ChapterOfLevel(int32_t(Load32(base, g + 0x18))), request);
   if (g_extra_movie) {
     const uint32_t player = Load32(base, 0x82CCAE80);
     if (player && Load32(base, player + 0x130) &&
@@ -1221,6 +1235,8 @@ REX_HOOK_RAW(sub_8253DB80) {
       if (!idle) REXLOG_WARN("KK play: a save is still being written after 10 s; leaving anyway");
       const std::wstring page(g_leave_page.begin(), g_leave_page.end());
       FlushRendererFiles();
+      // Beta 7 uploads start now, on their own threads; the window's close waits for them (at most ~2 s).
+      kk::telemetry::BeginQuitUploads();
       if (QuitToDesktop()) {
         REXLOG_INFO("KK play: Quit game: the program exits");
         if (g_quit) g_quit();

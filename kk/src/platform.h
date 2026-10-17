@@ -33,6 +33,7 @@ struct GpuInfo {
   GpuVendor vendor = GpuVendor::kUnknown;
   std::string name;
   uint64_t dedicated_memory = 0;  // bytes of its own video memory (0: unknown, or integrated)
+  std::string driver;             // Windows: the display driver's version ("32.0.15.6094"); empty when unknown
 };
 GpuInfo DetectGpu();
 

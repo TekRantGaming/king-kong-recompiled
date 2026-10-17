@@ -382,6 +382,29 @@ if 'CvarToggle("Online player count"' not in launcher:
 if '"Online players"' not in launcher:
     fail('the setup lost its Online players entry')
 
+# Task 194 (Beta 7 uploads, owner 17 Oct): both descriptions of the switch (setup and About) say it also helps
+# reduce stutter by sharing graphics pipeline data and sends anonymous performance summaries and crash reports,
+# in five languages, with no dashes.
+# Only the descriptions the launcher draws (the source holds each split over several literals).
+flat = re.sub(r'"\s*\n\s*"', '', launcher)
+drawn = [en for en in entries if en.startswith('Shows how many players are online') and en.replace('"', '\\"') in flat]
+if len(drawn) != 2:
+    fail(f'expected the setup and About descriptions of Online players, found {len(drawn)}')
+for en in drawn:
+    for needed in ('Help reduce stutter: share graphics pipeline data', 'anonymous performance summary',
+                   'crash report', 'user name and personal folders removed'):
+        if needed not in en:
+            fail(f'the Online players description lacks "{needed}": {en[:60]!r}')
+    for lang, text in zip(('de', 'es', 'fr', 'it'), entries[en]):
+        if not text.strip() or text == en:
+            fail(f'no {lang} translation of the Online players description')
+        if '—' in text or '–' in text:
+            fail(f'dash in the {lang} Online players description')
+    if '—' in en or '–' in en:
+        fail('dash in the Online players description')
+if 'REXCVAR_DEFINE_BOOL(kk_online_count, true,' not in (src / 'settings.cpp').read_text(encoding='utf-8'):
+    fail('the Online player count default changed')
+
 if not re.search(r'unlocked \? "' + re.escape(UNLOCKED_HELP) + r'"\s*:\s*"' + re.escape(LOCKED_HELP) + '"', launcher):
     fail('the bonus video help text does not follow the unlock state')
 

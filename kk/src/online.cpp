@@ -77,11 +77,8 @@ std::string Quoted(const std::string& s) {
 }
 
 void CheckIn() {
-  std::string id = REXCVAR_GET(kk_install_id);
-  if (id.empty()) {  // switched on without one (the game started without the launcher)
-    id = NewInstallId();
-    rex::cvar::SetFlagByName("kk_install_id", id);
-  }
+  const std::string id = InstallId();
+  if (id.empty()) return;
   bool playing;
   std::string available;
   {
@@ -134,6 +131,20 @@ std::string NewInstallId() {
                 b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]);
   return s;
 }
+
+std::string InstallId() {
+  static std::mutex mutex;
+  std::lock_guard lock(mutex);
+  if (!REXCVAR_GET(kk_online_count)) return {};
+  std::string id = REXCVAR_GET(kk_install_id);
+  if (id.empty()) {  // switched on without one (the game started without the launcher)
+    id = NewInstallId();
+    rex::cvar::SetFlagByName("kk_install_id", id);
+  }
+  return id;
+}
+
+std::string ServerUrl() { return Url(); }
 
 void Start() {
   static std::once_flag once;

@@ -120,10 +120,14 @@ constexpr const char* kDiscordUrl = "https://discord.gg/PET2xU5FJq";  // permane
 #include "discord_icon.inc"
 #include "steam_icon.inc"
 constexpr const char* kOnlineAbout =
-    "Shows how many players are online, at the top right of the launcher. To count you, the launcher sends a tiny "
-    "anonymous check-in every 5 minutes with just four things: a random number that isn't linked to you, the "
-    "port's version (stable or beta), Windows or Linux, and whether you're in the game. That's all. No name, "
-    "account, IP address or anything from your PC is kept, and switching it off deletes the random number.";
+    "Shows how many players are online, at the top right of the launcher. Help reduce stutter: share graphics "
+    "pipeline data. When you quit, the game sends its list of the graphics pipelines it needed, so later "
+    "versions can prepare them in advance. It also sends an anonymous performance summary when you quit (frame "
+    "rate per chapter, graphics card, driver and main graphics settings) and, after a crash, the crash report "
+    "with your user name and personal folders removed. To count you, the launcher sends a tiny anonymous "
+    "check-in every 5 minutes: a random number that isn't linked to you, the port's version (stable or beta), "
+    "Windows or Linux, and whether you're in the game. No name, account, IP address or personal files are "
+    "kept, and switching it off stops all of this and deletes the random number.";
 #define KK_TIMES "\xC3\x97"
 #define KK_DOT "\xC2\xB7"
 
@@ -4682,10 +4686,12 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // Online players.
     const bool on = GetBool("kk_online_count");
     const std::string text = T(
-        "Shows how many players are online, at the top right of the launcher. It only sends a tiny anonymous check-in "
-        "every 5 minutes: a random number, the port's version, Windows or Linux, and whether you're playing. Nothing "
-        "that identifies you or your PC is kept. Switch it off with Online players on the left, or on the About page, "
-        "at any time.");
+        "Shows how many players are online, at the top right of the launcher. Help reduce stutter: share "
+        "graphics pipeline data. It sends a tiny anonymous check-in every 5 minutes (a random number, the "
+        "port's version, Windows or Linux, and whether you're playing) and, when you quit, the game's graphics "
+        "pipeline data and an anonymous performance summary. After a crash, it sends the crash report with "
+        "your user name and personal folders removed. Nothing that identifies you or your PC is kept. Switch "
+        "it off with Online players on the left, or on the About page, at any time.");
     const float th = ui::TextSize(f.text, 12.5f * s, text, w - pad * 2).y;
     const float oh = pad + 22 * s + th + pad;
     card(y, y + oh);

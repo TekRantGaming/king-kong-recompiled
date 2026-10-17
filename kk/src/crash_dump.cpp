@@ -82,6 +82,28 @@ void DescribeAddress(const void* address, wchar_t* out, size_t out_size) {
   }
 }
 
+// The faulting address and up to 16 callers, as "module + 0xoffset" (x64 unwind data; recompiled code
+// without unwind info ends the walk). A damaged stack only ends the list early.
+void WriteCrashStack(FILE* f, EXCEPTION_POINTERS* info) {
+  wchar_t where[MAX_PATH + 64];
+  DescribeAddress(info->ExceptionRecord->ExceptionAddress, where, std::size(where));
+  std::fprintf(f, "Stack:\n  %ls\n", where);
+#if defined(_M_X64) || defined(__x86_64__)
+  CONTEXT ctx = *info->ContextRecord;
+  for (int i = 0; i < 16; ++i) {
+    DWORD64 image = 0;
+    PRUNTIME_FUNCTION fn = RtlLookupFunctionEntry(ctx.Rip, &image, nullptr);
+    if (!fn) break;  // a leaf, or code without unwind data: stop here
+    void* handler_data = nullptr;
+    DWORD64 frame = 0;
+    RtlVirtualUnwind(UNW_FLAG_NHANDLER, image, ctx.Rip, fn, &ctx, &handler_data, &frame, nullptr);
+    if (!ctx.Rip) break;
+    DescribeAddress(reinterpret_cast<const void*>(ctx.Rip), where, std::size(where));
+    std::fprintf(f, "  %ls\n", where);
+  }
+#endif
+}
+
 LONG WINAPI OnCrash(EXCEPTION_POINTERS* info) {
   if (InterlockedExchange(&g_crashing, 1) == 0 && g_crash_dir[0]) {
     wchar_t base[MAX_PATH + 64];
@@ -92,8 +114,12 @@ LONG WINAPI OnCrash(EXCEPTION_POINTERS* info) {
     if (FILE* f = _wfopen(path, L"wb")) {
       const auto* rec = info->ExceptionRecord;
       // Addresses suffice for symbolication; never include a module's full path.
-      std::fprintf(f, "King Kong crashed.\nException 0x%08X at %p\nThread %lu\n\n",
+      std::fprintf(f, "King Kong crashed.\nException 0x%08X at %p\nThread %lu\n",
                    rec->ExceptionCode, rec->ExceptionAddress, GetCurrentThreadId());
+      // Module + offset (with king_kong.map, the game function), and the caller chain from the unwind
+      // tables: the server groups identical crashes by the code and the first three of these.
+      WriteCrashStack(f, info);
+      std::fputs("\n", f);
       WriteCrashDiagnostics(f);
       std::fclose(f);
     }
@@ -197,6 +223,7 @@ void WriteHangReport(ULONGLONG stalled_ms) {
   swprintf(path, MAX_PATH + 80, L"%ls.txt", base);
   if (FILE* f = _wfopen(path, L"w")) {
     std::fwprintf(f, L"King Kong stopped drawing frames for %llu seconds (a freeze).\n"
+                     L"Version: " KK_VERSION_W L"\n"
                      L"Please attach this file, the .dmp file next to it and logs\\king_kong.log to a bug report.\n\n"
                      L"Threads:\n",
                   stalled_ms / 1000);
