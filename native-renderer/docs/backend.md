@@ -1260,7 +1260,8 @@ the in-place patched object memory (already logged under `--native_dump_frame`).
 Options: `--native_pipeline_cache` (on by default since Phase 2b), `--native_pipeline_cache_dir=<dir>` (default
 `<cache root>/native-pipelines/<TITLE8>.pipelines`, set through `InitializeShaderStorage`: the game calls it,
 `555307D3.pipelines` under `--cache_root`; with the folder option the file is `game.pipelines`), `--native_pipeline_wait`
-(off), `--native_pipeline_wait_budget_ms` (30). Phase 2c adds four more, all off by default (below).
+(off), `--native_pipeline_wait_budget_ms` (4 ms since task 179 by owner decision 17 Oct: a missing scene pipeline is waited for up to 4 ms per frame in total, then skipped; was 30). Phase 2c adds four more, all off by default (below).
+Task 179 ("Pipelines never block" below) replaced the waiting default of task 011.
 
 Measured on Kong to the Rescue (`rescue` run, Vulkan, Phase 2b): without the cache the chapter start has 317
 draws skipped while their pipelines were made (139 drawn after waiting within the budget, 185 ms waited in all,
@@ -1354,7 +1355,41 @@ first sessions.
   .../...` for each record that cannot be made, and a list with any such record leaves the setup incomplete
   (it runs again at every Play). Diagnostic: `NR_PIPELINE_LOG=<csv>` writes one row per pipeline a draw or pass
   asked for that was not made yet (time, frame, key, `new`/`pending`/`draw-thread`/`pass`, wait, the record's
-  shaders).
+  shaders; since task 179 also `ready:<frames>` rows when a skipped draw's pipeline is found ready: the frames its draws were skipped, and the ms since the first skip,
+  and a last column `class`).
+
+#### Pipelines never block (task 179, 17 Oct)
+
+Owner decision (DECISIONS.md, "Shader stutter work"): a frame never waits for a missing pipeline; the draw is
+skipped for a frame or two instead (brief pop-in, no freeze). `backend/pipeline_demand.h` is the interface a
+cheaper creation path (graphics pipeline libraries) plugs into: `GameRenderer::GetPipeline(desc, fb, key,
+PipelineDemand)` returns the pipeline when made, else `kNow` makes it on the calling thread (the renderer's own
+passes), `kMustDraw` waits for a worker, `kMaySkip` / `kOptional` queue it and return null (the caller's
+fallback: skip the draw / keep the original pass).
+
+- Which game draws may skip (`ClassifyPipelineMiss`, from the draw's pipeline record): depth-tested draws that
+  write colour (opaque geometry, decals, transparent surfaces, particles, water). No generic substitute pipeline
+  exists: a pipeline is tied to the draw's own translated shaders, vertex layout and target formats, so any
+  stand-in would itself be a new pipeline to make; skipping an opaque draw shows what is behind it for a frame.
+- Which still wait: draws that write no colour (depth prepass, shadow maps, stencil masks), draws that write
+  stencil, screen-space draws (no depth target, depth test off or ALWAYS: post-processing, fades, composites,
+  copies, HUD; the V-Rex fade of task 011 is one), and every draw while the game is loading (its last frame may
+  stay on screen). The renderer's own passes (clears, resolves, AO/GI/lighting, upscalers, SMAA/FXAA, output
+  blit, memory copies) are a small fixed set made at once (`kNow`) or optional (`kOptional`: motion replay,
+  lighting variants, memory blits), as before.
+- Queue: a waited-for draw's job goes to the front, a skipped draw's after the draws' jobs already queued (first
+  use first) and before the prewarm's; a prewarm job a draw asks for moves up the same way. The same workers
+  (cores - 2, one kept for draws while the prewarm has a backlog).
+- `KK_DEV_PIPELINE_BLOCK=1` (or `--native_pipeline_wait=true`) = every draw waits (the old path). The start log
+  says which: `pipelines not ready: ...`. Every 300 frames when something changed: `pipelines not ready so far,
+  frame F: S draws skipped in N frames, P pipelines missed (R ready after avg A max M frames, max X ms); waits W
+  (depth-only, stencil, screen-space, loading, block-all, budget), T ms`. `KK_DEV_DLSS_LOG` has the skipped draws
+  per frame; `Stats::pipeline_waits_by_class`, `pipelines_missed*`, `missed_frames_*`, `missed_ms_*`.
+- Exit: the runtime hard-exits without `~GameRenderer`, so the driver's pipeline cache (Vulkan) is also saved from
+  the game's exit flush: `BackgroundFileWriter::set_exit_task`, run by `nr_flush_file_writes` inside its 3 s bound
+  (log `driver pipeline cache: saving N new pipelines before exit` / `nothing new to save at exit`).
+- Tests: `nr_pipeline_demand_tests` (classes, queue order), `PipelineSkip_*` in nr_game_tests, the exit task in
+  `nr_background_file_writer_tests`.
 
 #### The driver's pipeline cache
 

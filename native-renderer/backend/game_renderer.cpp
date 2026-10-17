@@ -118,6 +118,19 @@ GameRenderer::GameRenderer(nvrhi::IDevice* device, const GuestMemory& memory,
     file_writer_.set_synchronous(true);
     Logf(LogLevel::kInfo, "rexgpu-native: file writes on the render thread (developer A/B, the old path)");
   }
+  // Task 179: the runtime hard-exits without ~GameRenderer, so the driver's pipeline cache is saved from
+  // the game's exit flush (nr_flush_file_writes, bounded): the next session starts warm.
+  file_writer_.set_exit_task([this] {
+    if (!driver_cache_) return;
+    const uint64_t fresh = driver_cache_new_.load();
+    if (fresh == 0) {
+      Logf(LogLevel::kInfo, "rexgpu-native: driver pipeline cache: nothing new to save at exit");
+      return;
+    }
+    Logf(LogLevel::kInfo, "rexgpu-native: driver pipeline cache: saving %llu new pipelines before exit",
+         static_cast<unsigned long long>(fresh));
+    SaveDriverPipelineCache();
+  });
   textures_.release_host = [this](kknr::TextureCache::Entry& e) {
     for (auto it = resolved_by_base_.begin(); it != resolved_by_base_.end();) {
       it = it->second == &e ? resolved_by_base_.erase(it) : std::next(it);
@@ -138,7 +151,9 @@ GameRenderer::GameRenderer(nvrhi::IDevice* device, const GuestMemory& memory,
 }
 
 GameRenderer::~GameRenderer() {
+  file_writer_.set_exit_task({});  // this renderer is going: FlushAll must not reach it
   SaveResourcePreload();
+  LogPipelineMisses(true);
   if (resource_profile_file_) std::fclose(resource_profile_file_);
   if (gi_build_.valid()) gi_build_.wait();
   if (lighting_build_.valid()) lighting_build_.wait();
@@ -995,6 +1010,7 @@ void GameRenderer::EndFrame() {
   CheckMemoryBudget();
   stats_.edram_framebuffers = framebuffers_.size();
   if (frame_ % 300 == 0) {
+    LogPipelineMisses(false);
     if (options_.debug & 32768) {
       Logf(LogLevel::kInfo,
            "rexgpu-native: EDRAM cache: %llu targets, %llu target allocation bytes, %llu framebuffers "
@@ -1123,80 +1139,94 @@ bool GameRenderer::IsPending(uint64_t key) {
   return pipelines_pending_.count(key) != 0;
 }
 
+void GameRenderer::DrainDonePipelinesLocked() {
+  if (pipelines_done_.empty()) return;
+  const auto now = std::chrono::steady_clock::now();
+  for (auto& [k, p] : pipelines_done_) {
+    pipelines_[k] = p;
+    pipelines_pending_.erase(k);
+    if (p) {
+      ++stats_.pipelines;
+      ++stats_.draw_pipelines;
+    }
+    if (auto miss = missing_pipelines_.find(k); miss != missing_pipelines_.end()) {
+      // Task 179: a skipped draw's pipeline is ready; its draws are drawn from this frame on.
+      const uint64_t frames = miss->second.frames;
+      const double ms = std::chrono::duration<double, std::milli>(now - miss->second.first).count();
+      ++stats_.pipelines_missed_ready;
+      stats_.missed_frames_total += frames;
+      stats_.missed_frames_max = std::max(stats_.missed_frames_max, frames);
+      stats_.missed_ms_total += ms;
+      stats_.missed_ms_max = std::max(stats_.missed_ms_max, ms);
+      if (pipeline_log_) {
+        char kind[32];
+        std::snprintf(kind, sizeof(kind), "ready:%llu", static_cast<unsigned long long>(frames));
+        LogPipelineDemand(k, kind, ms, bool(p));
+      }
+      missing_pipelines_.erase(miss);
+    }
+  }
+  pipelines_done_.clear();
+  stats_.pipeline_ms = pipeline_worker_ms_;
+}
+
+PipelineMissClass GameRenderer::DrawMissClass(const PipelineRecord& record) const {
+  if (options_.pipeline_wait) return PipelineMissClass::kBlockAll;
+  if (!options_.pipeline_wait_for_dependencies) return PipelineMissClass::kScene;
+  if (resource_loading_) return PipelineMissClass::kLoading;
+  return ClassifyPipelineMiss(record);
+}
+
 nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelineDesc& desc,
                                                     const nvrhi::FramebufferInfo& framebuffer, uint64_t key,
-                                                    bool async, bool optional) {
+                                                    PipelineDemand demand, PipelineMissClass miss_class) {
   auto it = pipelines_.find(key);
   if (it != pipelines_.end()) return it->second;
-  // optional (the upscalers' motion pass): made on the workers, never waited for, not counted as a draw
-  // that waited or was skipped.
-  const bool for_draws = async && !optional;
-  async = async && (optional || options_.async_pipelines);
-  if (async && optional) {
-    std::unique_lock lock(pipeline_mutex_);
-    for (auto& [k, p] : pipelines_done_) {
-      pipelines_[k] = p;
-      pipelines_pending_.erase(k);
-      if (p) {
-        ++stats_.pipelines;
-        ++stats_.draw_pipelines;
-      }
-    }
-    pipelines_done_.clear();
-    if (auto found = pipelines_.find(key); found != pipelines_.end()) return found->second;
-    if (!pipelines_pending_.count(key)) {
-      EnsureWorkers();
-      pipelines_pending_[key] = true;
-      pipeline_jobs_.push_back({key, desc, framebuffer});
-      pipeline_cv_.notify_one();
-    }
-    return nullptr;
-  }
+  // optional (the upscalers' motion pass, lighting variants, memory blits): made on the workers, never
+  // waited for, not counted as a draw that waited or was skipped.
+  const bool optional = demand == PipelineDemand::kOptional;
+  const bool for_draws = demand == PipelineDemand::kMustDraw || demand == PipelineDemand::kMaySkip;
+  const bool async = optional || (for_draws && options_.async_pipelines);
   if (async) {
-    // Finished pipelines (the draws' and the prewarm's) join the map.
-    auto drain = [&] {
-      for (auto& [k, p] : pipelines_done_) {
-        pipelines_[k] = p;
-        pipelines_pending_.erase(k);
-        if (p) {
-          ++stats_.pipelines;
-          ++stats_.draw_pipelines;
-        }
-      }
-      pipelines_done_.clear();
-      stats_.pipeline_ms = pipeline_worker_ms_;
-    };
     std::unique_lock lock(pipeline_mutex_);
-    drain();
+    DrainDonePipelinesLocked();
     if (auto found = pipelines_.find(key); found != pipelines_.end()) return found->second;
     const bool was_pending = pipelines_pending_.count(key) != 0;
+    const bool first = demand == PipelineDemand::kMustDraw;
     if (!was_pending) {
       EnsureWorkers();
       pipelines_pending_[key] = true;
-      pipeline_jobs_.push_front({key, desc, framebuffer, true});
-      pipeline_cv_.notify_all();
-    } else {
+      if (optional) {
+        pipeline_jobs_.push_back({key, desc, framebuffer});
+        pipeline_cv_.notify_one();
+      } else {
+        QueueDrawJob(pipeline_jobs_, PipelineJob{key, desc, framebuffer}, first);
+        pipeline_cv_.notify_all();
+      }
+    } else if (!optional) {
       // Promote an unstarted prewarm job too. An already active job needs no duplicate.
-      if (PromotePipelineJob(pipeline_jobs_, key)) pipeline_cv_.notify_all();
+      if (PromoteDrawJob(pipeline_jobs_, key, first)) pipeline_cv_.notify_all();
     }
+    if (optional) return nullptr;
     const char* demand_kind = was_pending ? "pending" : "new";
-    if (options_.pipeline_wait) {
+    if (demand == PipelineDemand::kMustDraw) {
       // Wait for the worker that has this pipeline (the draw's own job, or the prewarm's).
       const auto start = std::chrono::steady_clock::now();
       pipeline_done_cv_.wait(lock, [&] {
-        drain();
+        DrainDonePipelinesLocked();
         return pipelines_.count(key) != 0 || pipeline_stop_;
       });
       ++stats_.pipeline_waits;
+      ++stats_.pipeline_waits_by_class[size_t(miss_class)];
       const double waited = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
       stats_.pipeline_wait_ms += waited;
       NoteFrameWait(waited);
       auto found = pipelines_.find(key);
       if (pipeline_log_ || !pipeline_log_checked_)
-        LogPipelineDemand(key, demand_kind, waited, found != pipelines_.end() && found->second);
+        LogPipelineDemand(key, demand_kind, waited, found != pipelines_.end() && found->second, miss_class);
       return found != pipelines_.end() ? found->second.Get() : nullptr;
     }
-    if (for_draws && options_.pipeline_wait_budget_ms > 0) {
+    if (options_.pipeline_wait_budget_ms > 0) {
       // Wait within what is left of this frame's budget.
       if (wait_budget_frame_ != frame_) {
         wait_budget_frame_ = frame_;
@@ -1206,7 +1236,7 @@ nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelin
       if (left > 0) {
         const auto start = std::chrono::steady_clock::now();
         pipeline_done_cv_.wait_for(lock, std::chrono::duration<double, std::milli>(left), [&] {
-          drain();
+          DrainDonePipelinesLocked();
           return pipelines_.count(key) != 0 || pipeline_stop_;
         });
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
@@ -1215,12 +1245,23 @@ nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelin
         NoteFrameWait(ms);
         if (auto found = pipelines_.find(key); found != pipelines_.end()) {
           ++stats_.pipeline_budget_waits;
-          if (pipeline_log_ || !pipeline_log_checked_) LogPipelineDemand(key, demand_kind, ms, bool(found->second));
+          ++stats_.pipeline_waits_by_class[size_t(PipelineMissClass::kScene)];
+          if (pipeline_log_ || !pipeline_log_checked_)
+            LogPipelineDemand(key, demand_kind, ms, bool(found->second), miss_class);
           return found->second;
         }
       }
     }
-    if (for_draws && (pipeline_log_ || !pipeline_log_checked_)) LogPipelineDemand(key, demand_kind, 0, false);
+    // Skipped this frame (task 179): drawn as soon as a worker has made it.
+    auto [miss, added] =
+        missing_pipelines_.try_emplace(key, MissingPipeline{frame_, frame_, 1, std::chrono::steady_clock::now()});
+    if (added) {
+      ++stats_.pipelines_missed;
+      if (pipeline_log_ || !pipeline_log_checked_) LogPipelineDemand(key, demand_kind, 0, false, miss_class);
+    } else if (miss->second.last_frame != frame_) {
+      miss->second.last_frame = frame_;
+      ++miss->second.frames;
+    }
     ++stats_.skipped_pending;
     ++frame_skips_;
     return nullptr;
@@ -1230,7 +1271,8 @@ nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelin
   const double made_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
   stats_.pipeline_ms += made_ms;
   if (for_draws) NoteFrameWait(made_ms);  // the draw waited for the driver on its own thread
-  if (pipeline_log_ || !pipeline_log_checked_) LogPipelineDemand(key, for_draws ? "draw-thread" : "pass", made_ms, bool(p));
+  if (pipeline_log_ || !pipeline_log_checked_)
+    LogPipelineDemand(key, for_draws ? "draw-thread" : "pass", made_ms, bool(p), miss_class);
   pipelines_[key] = p;  // a failure is remembered too (null)
   if (p) {
     ++stats_.pipelines;
@@ -1239,14 +1281,49 @@ nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelin
   return p;
 }
 
-void GameRenderer::LogPipelineDemand(uint64_t key, const char* kind, double ms, bool made) {
+void GameRenderer::LogPipelineMisses(bool final) {
+  // Task 179: the draws skipped while their pipelines were made, and the waits that remain (cumulative;
+  // a line only when something changed, and one when the renderer goes).
+  const Stats& s = stats_;
+  const Stats& p = miss_log_previous_;
+  if (!final && s.skipped_pending == p.skipped_pending && s.pipeline_waits == p.pipeline_waits &&
+      s.pipeline_budget_waits == p.pipeline_budget_waits && s.pipelines_missed_ready == p.pipelines_missed_ready)
+    return;
+  if (final && s.skipped_pending == 0 && s.pipeline_waits == 0 && s.pipeline_budget_waits == 0) return;
+  miss_log_previous_ = stats_;
+  uint64_t frames_skipped = 0;
+  {
+    std::lock_guard lock(stutter_mutex_);
+    frames_skipped = stutter_.frames_skipped;
+  }
+  const auto& w = s.pipeline_waits_by_class;
+  Logf(LogLevel::kInfo,
+       "rexgpu-native: pipelines not ready %s frame %llu: %llu draws skipped in %llu frames, %llu pipelines missed "
+       "(%llu ready after avg %.1f max %llu frames, max %.0f ms); waits %llu (depth-only %llu, stencil %llu, "
+       "screen-space %llu, loading %llu, block-all %llu, budget %llu), %.0f ms",
+       final ? "at the end," : "so far,", static_cast<unsigned long long>(frame_),
+       static_cast<unsigned long long>(s.skipped_pending), static_cast<unsigned long long>(frames_skipped),
+       static_cast<unsigned long long>(s.pipelines_missed), static_cast<unsigned long long>(s.pipelines_missed_ready),
+       s.pipelines_missed_ready ? double(s.missed_frames_total) / double(s.pipelines_missed_ready) : 0.0,
+       static_cast<unsigned long long>(s.missed_frames_max), s.missed_ms_max,
+       static_cast<unsigned long long>(s.pipeline_waits + s.pipeline_budget_waits),
+       static_cast<unsigned long long>(w[size_t(PipelineMissClass::kDepthOnly)]),
+       static_cast<unsigned long long>(w[size_t(PipelineMissClass::kStencil)]),
+       static_cast<unsigned long long>(w[size_t(PipelineMissClass::kScreenSpace)]),
+       static_cast<unsigned long long>(w[size_t(PipelineMissClass::kLoading)]),
+       static_cast<unsigned long long>(w[size_t(PipelineMissClass::kBlockAll)]),
+       static_cast<unsigned long long>(w[size_t(PipelineMissClass::kScene)]), s.pipeline_wait_ms);
+}
+
+void GameRenderer::LogPipelineDemand(uint64_t key, const char* kind, double ms, bool made,
+                                     PipelineMissClass miss_class) {
   if (!pipeline_log_checked_) {
     pipeline_log_checked_ = true;
     if (const char* path = std::getenv("NR_PIPELINE_LOG"); path && *path) {
       pipeline_log_ = std::fopen(path, "a");  // appended: a relaunched process (back to the launcher) keeps the rows
       if (pipeline_log_) std::fseek(pipeline_log_, 0, SEEK_END);
       if (pipeline_log_ && std::ftell(pipeline_log_) == 0)
-        std::fprintf(pipeline_log_, "unix_s,frame,key,kind,wait_ms,made,vs,vs_input,ps,ps_input,flags,colors,depth\n");
+        std::fprintf(pipeline_log_, "unix_s,frame,key,kind,wait_ms,made,vs,vs_input,ps,ps_input,flags,colors,depth,class\n");
     }
   }
   if (!pipeline_log_) return;
@@ -1256,13 +1333,14 @@ void GameRenderer::LogPipelineDemand(uint64_t key, const char* kind, double ms, 
   std::fprintf(pipeline_log_, "%.3f,%llu,%016llX,%s,%.3f,%d", unix_s, static_cast<unsigned long long>(frame_),
                static_cast<unsigned long long>(key), kind, ms, made ? 1 : 0);
   if (r && PipelineKey(*r) == key) {
-    std::fprintf(pipeline_log_, ",%016llX,%016llX,%016llX,%016llX,%u,%u,%u\n",
+    std::fprintf(pipeline_log_, ",%016llX,%016llX,%016llX,%016llX,%u,%u,%u",
                  static_cast<unsigned long long>(r->vs_hash), static_cast<unsigned long long>(r->vs_input),
                  static_cast<unsigned long long>(r->ps_hash), static_cast<unsigned long long>(r->ps_input), r->flags,
                  r->color_count, r->depth_format);
   } else {
-    std::fprintf(pipeline_log_, ",,,,,,,\n");
+    std::fprintf(pipeline_log_, ",,,,,,,");
   }
+  std::fprintf(pipeline_log_, ",%s\n", PipelineMissClassName(miss_class));
   std::fflush(pipeline_log_);
 }
 
@@ -1863,7 +1941,9 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     nvrhi::FramebufferInfo framebuffer_info;
     BuildPipelineDesc(record, vs->handle, ps ? ps->handle.Get() : nullptr, pd, framebuffer_info);
     demand_record_ = &record;
-    pipeline = GetPipeline(pd, framebuffer_info, key, true);
+    // Task 179: a scene draw is skipped until its pipeline is made; a draw later draws depend on waits.
+    const PipelineMissClass miss_class = DrawMissClass(record);
+    pipeline = GetPipeline(pd, framebuffer_info, key, DrawDemand(miss_class), miss_class);
     demand_record_ = nullptr;
   }
   if (!pipeline) {
@@ -1884,7 +1964,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
       nvrhi::FramebufferInfo info;
       BuildPipelineDesc(variant_record, vs->handle, variant->handle, pd, info);
       const bool water = LightFamilyOf(variant->ucode_hash) != LightFamily::kShadowQuad;
-      if (auto* prepared = GetPipeline(pd, info, variant_key, true, true)) {
+      if (auto* prepared = GetPipeline(pd, info, variant_key, PipelineDemand::kOptional)) {
         pipeline = prepared;
         ps = std::move(variant);
         ++(water ? live_draws_.water : live_draws_.shadows);

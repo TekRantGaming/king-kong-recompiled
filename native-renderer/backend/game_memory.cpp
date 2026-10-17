@@ -28,7 +28,7 @@ nvrhi::IGraphicsPipeline* GameRenderer::MemoryColorPipeline(nvrhi::Format format
   d.renderState.rasterState.scissorEnable = true;
   nvrhi::FramebufferInfo info;
   info.colorFormats.push_back(format);
-  return GetPipeline(d, info, MemoryBlitKey(format), true, true);
+  return GetPipeline(d, info, MemoryBlitKey(format), PipelineDemand::kOptional);
 }
 
 bool GameRenderer::InitializeMemoryMigration() {

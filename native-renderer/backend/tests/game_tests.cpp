@@ -1734,6 +1734,7 @@ TEST(FrameLog_DrawWhosePipelineIsNotReady) {
   Fixture& f = t.f;
   f.game->options().async_pipelines = true;
   f.game->options().pipeline_wait = false;
+  f.game->options().pipeline_wait_for_dependencies = false;  // the quad is screen-space: may skip here
   f.game->options().pipeline_wait_budget_ms = 0;
   const uint32_t rt = f.BindMainSurface();
   auto p = f.MakeColorPipeline();
@@ -2617,6 +2618,7 @@ TEST(Stutter_ASkippedDrawIsAStutterFrame) {
   if (!f.Init()) return;
   f.game->options().async_pipelines = true;
   f.game->options().pipeline_wait = false;
+  f.game->options().pipeline_wait_for_dependencies = false;  // the quad is screen-space: may skip here
   f.game->options().pipeline_wait_budget_ms = 0;  // skip at once
   const uint32_t rt = f.BindMainSurface();
   auto p = f.MakeColorPipeline();
@@ -2690,6 +2692,7 @@ TEST(PipelineWait_TheDrawWaitsInsteadOfBeingSkipped) {
     if (!f.Init()) return;
     f.game->options().async_pipelines = true;
     f.game->options().pipeline_wait = false;
+    f.game->options().pipeline_wait_for_dependencies = false;
     f.game->options().pipeline_wait_budget_ms = 0;
     const uint32_t rt = f.BindMainSurface();
     auto p = f.MakeColorPipeline();
@@ -2721,6 +2724,7 @@ TEST(PipelineWait_TheFrameBudgetDrawsANewPipelineInItsFirstFrame) {
   if (!f.Init()) return;
   f.game->options().async_pipelines = true;
   f.game->options().pipeline_wait = false;
+  f.game->options().pipeline_wait_for_dependencies = false;
   f.game->options().pipeline_wait_budget_ms = 5000;
   const uint32_t rt = f.BindMainSurface();
   auto p = f.MakeColorPipeline();
@@ -2730,6 +2734,84 @@ TEST(PipelineWait_TheFrameBudgetDrawsANewPipelineInItsFirstFrame) {
   CHECK_EQ(f.game->stats().skipped_pending, uint64_t(0));
   CHECK_EQ(f.game->stats().pipeline_budget_waits, uint64_t(1));
   CHECK_EQ(f.game->stats().pipeline_waits, uint64_t(0));
+}
+
+// Task 179: the default (no pipeline_wait, no budget) never waits for a scene draw's pipeline: the
+// depth-tested draw is skipped, and drawn once a worker has made it, with the time it was missing.
+TEST(PipelineSkip_ASceneDrawIsSkippedUntilItsPipelineIsReady) {
+  Fixture f;
+  if (!f.Init()) return;
+  f.game->options().async_pipelines = true;
+  CHECK(!f.game->options().pipeline_wait);
+  CHECK_EQ(f.game->options().pipeline_wait_budget_ms, 0.0);
+  const uint32_t rt = f.BindMainSurface();
+  f.SetDepthStencil(f.NewSurface(kSize, kSize, 200, 0));
+  auto p = f.MakeColorPipeline();
+  auto frame = [&] {
+    f.Clear(kClearTarget0 | kClearZ, 0xFF000000, 1.0f);
+    f.Reg(dev::kRbDepthControl, kDepthLess);
+    f.DrawQuadrants(p);
+    return f.Present(rt);
+  };
+  frame();
+  CHECK_EQ(f.game->stats().skipped_pending, uint64_t(1));
+  CHECK_EQ(f.game->stats().pipeline_waits, uint64_t(0));
+  CHECK_EQ(f.game->stats().pipelines_missed, uint64_t(1));
+  f.game->WaitForPrewarm();
+  Pixels px = frame();
+  f.CheckQuadrantColors(px, __LINE__);
+  CHECK_EQ(f.game->stats().skipped_pending, uint64_t(1));
+  CHECK_EQ(f.game->stats().pipelines_missed_ready, uint64_t(1));
+  CHECK_EQ(f.game->stats().missed_frames_max, uint64_t(1));
+  CHECK(f.game->stats().missed_ms_max > 0.0);
+  const GameRenderer::StutterStats st = f.game->stutter();
+  CHECK_EQ(st.frames_skipped, uint64_t(1));
+  CHECK_EQ(st.frames_waited, uint64_t(0));
+}
+
+// Draws later draws depend on still wait: a screen-space pass (no depth test), a depth-only draw, and
+// every draw with pipeline_wait (KK_DEV_PIPELINE_BLOCK=1).
+TEST(PipelineSkip_DependentDrawsStillWait) {
+  {
+    Fixture f;
+    if (!f.Init()) return;
+    f.game->options().async_pipelines = true;
+    const uint32_t rt = f.BindMainSurface();
+    auto p = f.MakeColorPipeline();
+    Pixels px = DrawQuadrantFrame(f, rt, p);
+    f.CheckQuadrantColors(px, __LINE__);
+    CHECK_EQ(f.game->stats().skipped_pending, uint64_t(0));
+    CHECK_EQ(f.game->stats().pipeline_waits_by_class[size_t(PipelineMissClass::kScreenSpace)], uint64_t(1));
+  }
+  {
+    Fixture f;
+    if (!f.Init()) return;
+    f.game->options().async_pipelines = true;
+    const uint32_t rt = f.BindMainSurface();
+    f.SetDepthStencil(f.NewSurface(kSize, kSize, 200, 0));
+    auto p = f.MakeColorPipeline();
+    f.Clear(kClearTarget0 | kClearZ, 0xFF000000, 1.0f);
+    f.Reg(dev::kRbDepthControl, kDepthLess);
+    f.Reg(dev::kRbColorMask, 0);  // depth prepass
+    f.DrawQuadrants(p);
+    f.Present(rt);
+    CHECK_EQ(f.game->stats().skipped_pending, uint64_t(0));
+    CHECK_EQ(f.game->stats().pipeline_waits_by_class[size_t(PipelineMissClass::kDepthOnly)], uint64_t(1));
+  }
+  Fixture f;
+  if (!f.Init()) return;
+  f.game->options().async_pipelines = true;
+  f.game->options().pipeline_wait = true;
+  const uint32_t rt = f.BindMainSurface();
+  f.SetDepthStencil(f.NewSurface(kSize, kSize, 200, 0));
+  auto p = f.MakeColorPipeline();
+  f.Clear(kClearTarget0 | kClearZ, 0xFF000000, 1.0f);
+  f.Reg(dev::kRbDepthControl, kDepthLess);
+  f.DrawQuadrants(p);
+  Pixels px = f.Present(rt);
+  f.CheckQuadrantColors(px, __LINE__);
+  CHECK_EQ(f.game->stats().skipped_pending, uint64_t(0));
+  CHECK_EQ(f.game->stats().pipeline_waits_by_class[size_t(PipelineMissClass::kBlockAll)], uint64_t(1));
 }
 
 TEST(PipelineWait_AlsoWaitsForAPrewarmInFlight) {

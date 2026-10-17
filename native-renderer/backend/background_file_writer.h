@@ -81,12 +81,20 @@ class BackgroundFileWriter {
 
   // Every live writer in this module, flushed within `timeout` in all: the process is about to exit
   // without running destructors (the runtime hard-exits when the title ends). False on a timeout.
+  // Each writer's exit task (set_exit_task) is queued first, so it is inside the same bounded wait.
   static bool FlushAll(std::chrono::milliseconds timeout) {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
     std::lock_guard lock(Registry().mutex);
+    for (BackgroundFileWriter* w : Registry().writers) w->PostExitTask();
     bool all = true;
     for (BackgroundFileWriter* w : Registry().writers) all = w->FlushUntil(deadline) && all;
     return all;
+  }
+
+  // Task 179: a last job FlushAll queues before the hard exit (the driver's pipeline cache save). Empty: none.
+  void set_exit_task(std::function<void()> task) {
+    std::lock_guard lock(mutex_);
+    exit_task_ = std::move(task);
   }
 
   // Developer aid (KK_DEV_SLOW_PRELOAD_SAVE_MS): every replacement waits this long first, as a slow disk would.
@@ -184,6 +192,15 @@ class BackgroundFileWriter {
     return registry;
   }
 
+  void PostExitTask() {
+    std::function<void()> task;
+    {
+      std::lock_guard lock(mutex_);
+      task = exit_task_;
+    }
+    if (task) Post(std::move(task));
+  }
+
   void StartLocked() {
     if (!thread_.joinable()) thread_ = std::thread([this] { Run(); });
   }
@@ -237,6 +254,7 @@ class BackgroundFileWriter {
   std::thread thread_;
   bool busy_ = false, stopped_ = false, synchronous_ = false;
   uint32_t delay_ms_ = 0;
+  std::function<void()> exit_task_;
   uint64_t written_ = 0, failed_ = 0, superseded_ = 0;
 };
 

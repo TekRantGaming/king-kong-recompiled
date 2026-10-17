@@ -148,11 +148,12 @@ REXCVAR_DEFINE_STRING(native_pipeline_list_file, "", "Native renderer",
                       "the game")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-REXCVAR_DEFINE_BOOL(native_pipeline_wait, true, "Native renderer",
-                    "A draw whose pipeline is still being created waits for it (true) instead of being "
-                    "skipped for a frame or two (false). Waiting prevents first-use surfaces from flashing or vanishing. "
-                    "Only with "
-                    "native_async_pipelines")
+REXCVAR_DEFINE_BOOL(native_pipeline_wait, false, "Native renderer",
+                    "Every draw whose pipeline is still being created waits for it (true; the frame freezes "
+                    "while the driver compiles). False (task 179): a scene draw is skipped for a frame or two "
+                    "until its pipeline is ready; draws later draws depend on (depth/stencil-only, screen-space "
+                    "passes and fades, frames while loading) still wait. KK_DEV_PIPELINE_BLOCK=1 = true. Only "
+                    "with native_async_pipelines")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_BOOL(native_dynamic_vertex_buffers, true, "Native renderer",
@@ -198,9 +199,9 @@ REXCVAR_DEFINE_BOOL(native_present_unlocked, true, "Native renderer",
                     "game's draws do not wait while the presenter waits for its previous paint")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-REXCVAR_DEFINE_DOUBLE(native_pipeline_wait_budget_ms, 30.0, "Native renderer",
-                      "Without native_pipeline_wait: milliseconds a frame may wait in all for pipelines "
-                      "being created before its draws are skipped (0: skip at once)")
+REXCVAR_DEFINE_DOUBLE(native_pipeline_wait_budget_ms, 4.0, "Native renderer",
+                      "Without native_pipeline_wait: milliseconds a frame may wait in all for scene draws' "
+                      "pipelines being created before those draws are skipped (0: skip at once, never wait)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_STRING(native_render_scale, "auto", "Native renderer",
