@@ -265,8 +265,9 @@
   void FinishSetupGraphics() {
     setup_graphics_ = false;
     gfx_entered_ = false;
+    setup_prompts_ = true;  // then setup step 9, the button prompts (launcher_setup_end.inc)
 #if defined(KK_DEV_TOOLS)
-    if (GraphicsSetupStage(dev_setup_)) dev_setup_ = -1;
+    if (GraphicsSetupStage(dev_setup_)) dev_setup_ = kPromptsStage;
 #endif
     LogGraphicsChoices("graphics pages done");
     page_ = kHome;

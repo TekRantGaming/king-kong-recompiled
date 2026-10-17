@@ -127,13 +127,6 @@ constexpr const char* kOnlineAbout =
 #define KK_TIMES "\xC3\x97"
 #define KK_DOT "\xC2\xB7"
 
-// The restored PS2 cutscenes play on Windows only (ps2_movies.cpp): their setup page and Settings rows are
-// there only (setup-flow.md: on Linux the page is shown only if playback exists).
-#if defined(_WIN32)
-constexpr bool kPs2MoviePlayback = true;
-#else
-constexpr bool kPs2MoviePlayback = false;
-#endif
 #define KK_DEG "\xC2\xB0"
 // Said wherever the native renderer's shaders are being prepared.
 #define KK_SLOW_PC "Your PC may run slower until this finishes, because preparing the shaders uses its processor."
@@ -627,6 +620,8 @@ art::Image SoftCopy(const art::Image& src) {
 struct SteamState {
   std::atomic<bool> available{false};   // Steam is here, and this copy wasn't started from it
   std::atomic<bool> in_library{false};  // every account has it already
+  std::atomic<bool> checked{false};     // the check below has finished
+  std::atomic<bool> from_steam{false};  // this copy was started from Steam (it is in the library)
   std::atomic<bool> busy{false}, done{false};
   std::atomic<int> phase{0};  // kSteamPhases
   steam::Result result;       // read once done
@@ -1944,33 +1939,34 @@ class SettingsPages {
                                  "sound that plays with it follows Menu sounds.",
                                  "kk_notify_downloads"));
     }
-#if defined(_WIN32)
-    // The PS2 movies play on Windows only (kPs2MoviePlayback), so the rows are there only.
-    items.push_back(Section("Cutscenes"));
-    items.push_back(CvarToggle("PS2 cutscenes",
-        in_game_ ? "Plays the restored PS2 cutscenes in the game, between the missions where the Xbox 360 version has "
-                   "none. Download them in the launcher's Settings > Advanced. You can switch them at any time."
-                 : "Plays the restored PS2 cutscenes in the game, between the missions where the Xbox 360 version has "
-                   "none. Download them below, or choose a folder with your own BK_xxxx.mp4 files. You can switch "
-                   "them at any time.",
-        "kk_ps2_cutscenes"));
-    if (!in_game_) {
-      auto& service = content::Service::Get();
-      const content::Status st = service.Ready() ? service.Get(content::Kind::kCutscenes) : content::Status{};
-      items.push_back(ContentDownloadItem(content::Kind::kCutscenes, st));
-      items.push_back(ContentRemoveItem(content::Kind::kCutscenes, st));
-      const auto folder = movies::Folder().u8string();
-      Item it = ActionItem("PS2 movie folder", "Choose the folder containing BK_xxxx.mp4.", "", [this] {
-        const auto path = movies::BrowseFolder();
-        if (!path.empty()) {
-          Set("kk_ps2_movie_folder", path);
-        }
-      });
-      it.value_text.assign(reinterpret_cast<const char*>(folder.data()), folder.size());
-      it.on_default = [] { Reset("kk_ps2_movie_folder"); };
-      items.push_back(std::move(it));
+    // The restored PS2 cutscenes' rows, where this build can play them (Windows: Media Foundation; Linux: the
+    // bundled FFmpeg, task 187).
+    if (movies::PlaybackAvailable()) {
+      items.push_back(Section("Cutscenes"));
+      items.push_back(CvarToggle("PS2 cutscenes",
+          in_game_ ? "Plays the restored PS2 cutscenes in the game, between the missions where the Xbox 360 version has "
+                     "none. Download them in the launcher's Settings > Advanced. You can switch them at any time."
+                   : "Plays the restored PS2 cutscenes in the game, between the missions where the Xbox 360 version has "
+                     "none. Download them below, or choose a folder with your own BK_xxxx.mp4 files. You can switch "
+                     "them at any time.",
+          "kk_ps2_cutscenes"));
+      if (!in_game_) {
+        auto& service = content::Service::Get();
+        const content::Status st = service.Ready() ? service.Get(content::Kind::kCutscenes) : content::Status{};
+        items.push_back(ContentDownloadItem(content::Kind::kCutscenes, st));
+        items.push_back(ContentRemoveItem(content::Kind::kCutscenes, st));
+        const auto folder = movies::Folder().u8string();
+        Item it = ActionItem("PS2 movie folder", "Choose the folder containing BK_xxxx.mp4.", "", [this] {
+          const auto path = movies::BrowseFolder();
+          if (!path.empty()) {
+            Set("kk_ps2_movie_folder", path);
+          }
+        });
+        it.value_text.assign(reinterpret_cast<const char*>(folder.data()), folder.size());
+        it.on_default = [] { Reset("kk_ps2_movie_folder"); };
+        items.push_back(std::move(it));
+      }
     }
-#endif
 
     items.push_back(Section("Diagnostics"));
     items.push_back(CvarToggle("Frame counter", "Shows the game's frame rate in the corner. F2 toggles it while playing.",
@@ -2652,6 +2648,15 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
 
     input_.set_keyboard_enabled(capturing_.empty() && !editing_name_);  // keys go to the binding or the name
+    // Controllers count only while the launcher is the active window (REPORT-188: a controller used in
+    // another program pressed buttons here). Ours again once the player brings it back (a click, the taskbar,
+    // a notification), e.g. for a finished download's pop-up after "Minimise and notify me".
+    if (cb_.window_state) {
+      const bool active = cb_.window_state().second;
+      if (active != pads_active_) REXLOG_INFO("KK: launcher controller input {}", active ? "on (window active)" : "ignored (window not active)");
+      pads_active_ = active;
+      input_.set_pads_active(active);
+    }
     input_.Update();
     if (ui_sounds_) {
       const float volume = GetBool("kk_launcher_sounds") ? GetInt("kk_launcher_sounds_volume", 50) / 100.0f : 0.0f;
@@ -3143,6 +3148,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         case 9:
         case 10:
         case 11: return GfxPrompts();
+        case kPromptsStage:
+        case kAllSetStage: return EndPrompts();
         default: return {};
       }
     }
@@ -3247,7 +3254,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // one moves in, with a brass mark. Returns the one chosen, or -1. `item_h`:
   // each entry's height when there's less room than usual (0: the usual).
   int DrawMenu(ImDrawList* dl, const std::vector<HomeEntry>& entries, int& focus, float x, float y, float alpha,
-               float item_h = 0) {
+               float item_h = 0, bool focusable = true) {
     const float s = S();
     const ui::Fonts f = ui::GetFonts();
     const int n = int(entries.size());
@@ -3255,7 +3262,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     focus = std::clamp(focus, 0, n - 1);
     const int focus_before = focus;
     menu_value_ = bool(entries[size_t(focus)].change);
-    const bool active = !modal_.open && side_focus_ < 0 && !status_focus_;
+    const bool active = focusable && !modal_.open && side_focus_ < 0 && !status_focus_;
     // Home: down from the last entry (or up from the first) moves to the shaders' status below.
     if (active && menu_to_status_ && n > 1 &&
         ((focus == n - 1 && input_.Pressed(Action::kDown)) || (focus == 0 && input_.Pressed(Action::kUp)))) {
@@ -3294,7 +3301,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
           chosen = i;
         }
       }
-      const bool on = i == focus && side_focus_ < 0 && !status_focus_;
+      const bool on = focusable && i == focus && side_focus_ < 0 && !status_focus_;
       home_offset_[size_t(i)] = ui::Approach(home_offset_[size_t(i)], on ? 22 * s : 0.0f, 18.0f);
       const float off = home_offset_[size_t(i)];
       const float k = off / (22 * s);
@@ -4202,7 +4209,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (dev_setup_ >= 0) return true;
 #endif
     return !files_ok_ || installing_ || setup_art_ || setup_shaders_ || setup_textures_ || setup_cutscenes_ ||
-           setup_graphics_ || setup_style_ || installing_update_ || update_shaders_;
+           setup_graphics_ || setup_prompts_ || setup_all_set_ || setup_style_ || installing_update_ || update_shaders_;
   }
 
   // A version this launcher has not run before, on an installation that has run one (What's new uses
@@ -4232,7 +4239,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   bool AssetSetup() const {
     if (!InSetup() || slides_.empty()) return false;
     const int stage = SetupStage();
-    return stage == 5 || stage == 6 || stage == 7 || GraphicsSetupStage(stage);
+    return stage == 5 || stage == 6 || stage == 7 || GraphicsSetupStage(stage) || EndSetupStage(stage);
   }
 
   // Home's look (the stills, blurred; the game's logo; the music), with a centred panel: what is
@@ -4354,28 +4361,29 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   // 0: asking for the disc image, 1: installing, 2: taking the artwork,
   // 3: updating the port, 4: preparing the native renderer's shaders, 6: the HD texture pack, 7: restore
-  // the PS2 cutscenes?, 8 to 11: the graphics pages (setup-flow.md steps 5 to 8), 5: the old look step (not
-  // shown after the graphics pages, which start from Remastered; job J6 removes it).
+  // the PS2 cutscenes?, 8 to 11: the graphics pages (setup-flow.md steps 5 to 8), 12: the button prompts
+  // (step 9), 13: "You're all set" (step 10), 5: the old look step (not shown after the graphics pages, which start from Remastered; job J6
+  // removes it).
   int SetupStage() const {
 #if defined(KK_DEV_TOOLS)
     if (dev_setup_ >= 0) return dev_setup_;
 #endif
     return installing_update_ ? 3 : installing_ ? 1 : setup_art_ ? 2 : setup_shaders_ ? 4 : setup_textures_ ? 6
            : setup_cutscenes_ ? 7 : setup_graphics_ ? kGfxFirstStage + std::clamp(gfx_page_, 0, kGfxPages - 1)
-           : setup_style_ ? 5 : 0;
+           : setup_prompts_ ? kPromptsStage : setup_all_set_ ? kAllSetStage : setup_style_ ? 5 : 0;
   }
 
   // The first-time setup's content steps (setup-flow.md 3 and 4): the cutscene page only where the PS2
-  // movies can play (Windows); TickSetupContent skips a page whose content is already there.
+  // movies can play (Windows, and Linux builds with FFmpeg); TickSetupContent skips a page whose content is already there.
   void AskContentInSetup() {
     setup_textures_ = true;
-    setup_cutscenes_ = kPs2MoviePlayback;
+    setup_cutscenes_ = movies::PlaybackAvailable();
     // ... and then the graphics pages (job J4).
     setup_graphics_ = true;
     gfx_page_ = 0;
     gfx_entered_ = false;
     gfx_cards_page_ = -1;
-    if (!kPs2MoviePlayback) REXLOG_INFO("KK: setup: no PS2 cutscene page (PS2 movies do not play on this system)");
+    if (!setup_cutscenes_) REXLOG_INFO("KK: setup: no PS2 cutscene page (PS2 movies do not play on this system)");
   }
 
   void DrawSetup(ImDrawList* dl) {
@@ -4385,6 +4393,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     float y = o_.y + std::max(84 * s, h_ * 0.12f);
     const int stage = SetupStage();
     if (GraphicsSetupStage(stage)) return DrawSetupGraphics(dl);  // setup steps 5 to 8: a layout of their own
+    if (stage == kPromptsStage) return DrawSetupPrompts(dl);       // setup step 9 (launcher_setup_end.inc)
+    if (stage == kAllSetStage) return DrawSetupAllSet(dl);         // setup step 10
     float copied = 0, copy_total = 0;
     if (installing_) {
       copied = float(progress_.bytes_done.load());
@@ -4691,6 +4701,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   }
 
 #include "launcher_setup_graphics.inc"
+#include "launcher_setup_end.inc"
 
   // The status line once the setup is over.
   const char* InstalledMessage() {
@@ -5677,11 +5688,13 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   void StartSteamCheck() {
     steam_ = std::make_shared<SteamState>();
     std::thread([s = steam_] {
-      if (steam::StartedFromSteam()) return;
-      if (const auto where = steam::Locate()) {
+      if (steam::StartedFromSteam()) {
+        s->from_steam = true;
+      } else if (const auto where = steam::Locate()) {
         s->in_library = steam::HasShortcut(*where);
         s->available = true;
       }
+      s->checked = true;
     }).detach();
   }
 
@@ -6033,7 +6046,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     setup_focus_ = 0;
     if (content_watch_ >= 0 && content_watch_setup_ == stage) content_watch_setup_ = 0;
 #if defined(KK_DEV_TOOLS)
-    if (dev_setup_ == 6) dev_setup_ = kPs2MoviePlayback ? 7 : kGfxFirstStage;
+    if (dev_setup_ == 6) dev_setup_ = movies::PlaybackAvailable() ? 7 : kGfxFirstStage;
     else if (dev_setup_ == 7) dev_setup_ = kGfxFirstStage;
 #endif
   }
@@ -6890,7 +6903,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // like the pages.
     const bool waiting = std::getenv("KK_DEV_LAUNCHER_INPUT_FILE") && (InSetup() || ShaderScreen()) &&
                          SetupStage() != 5 && SetupStage() != 6 && SetupStage() != 7 &&
-                         !GraphicsSetupStage(SetupStage());
+                         !GraphicsSetupStage(SetupStage()) && !EndSetupStage(SetupStage());
     static bool release = false;
     if (release) {
       io.AddMouseButtonEvent(0, false);
@@ -7244,6 +7257,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   rex::ui::ImmediateTexture* still_low_ = nullptr;  // the first still, smaller (the Original card)
   int setup_focus_ = 0;
   content::Stage content_last_[content::kKindCount] = {};  // TickContent: the stage last seen
+  bool pads_active_ = true;  // the launcher's window is the active one: controllers count
 #if defined(KK_DEV_TOOLS)
   int dev_setup_ = -1;  // KK_DEV_LAUNCHER_SETUP: show a setup stage (screenshots)
 #endif

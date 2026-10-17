@@ -114,6 +114,9 @@ class Input {
   int gamepad_count() const { return int(pads_.size()); }
   // While a key binding is being captured, keys aren't actions.
   void set_keyboard_enabled(bool on) { keyboard_enabled_ = on; }
+  // The program's own controllers press nothing while its window is not the active one; what is held as it
+  // comes back counts only once let go and pressed again.
+  void set_pads_active(bool on) { pads_active_ = on; }
 
  private:
   using Repeat = DirectionRepeat;
@@ -129,6 +132,8 @@ class Input {
   std::string pad_style_;
   bool mouse_moved_ = false;
   bool keyboard_enabled_ = true;
+  bool pads_active_ = true;
+  std::array<bool, 6> dir_stale_{};  // a direction held while the window was not active (until let go)
   bool injected_ = false;
   ImVec2 last_mouse_{-1, -1};
   bool sdl_ready_ = false;

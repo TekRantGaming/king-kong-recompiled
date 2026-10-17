@@ -313,6 +313,28 @@ if len(workshop_strings) < 14:
 strings |= workshop_strings
 if 'e.push_back({"Workshop", true, [this] { GoTo(kWorkshop); }});' not in (src / 'launcher.cpp').read_text(encoding='utf-8'):
     fail('J8: no Workshop entry on Home')
+# Job J5: setup step 9 (button prompts).
+strings |= {
+    'Choose your button prompts',
+    'Pick which buttons the game and this launcher show in menus and hints.',
+    'Keyboard and mouse', 'Mouse camera', 'Now: {0}', 'Automatic ({0})', 'Preview',
+    'Press {0} to select and {1} to go back.',
+    'In play, Kong grabs with {0} and jumps with {1}.',
+    'Shows the buttons of the controller you are using, and changes when you switch controllers.',
+    "Plays with a keyboard and mouse: the game's hints show the keys and the mouse turns the camera.",
+    'Always shows the {0} buttons.',
+    'Controller buttons and keyboard keys can be remapped any time in Settings > Controls.',
+    # step 10, "You're all set"
+    "You're all set", 'Thanks for installing King Kong Recompiled.',
+    'More options, such as field of view, audio, subtitles, controls and much more, are in Settings on the main '
+    'menu. Enjoy the game.',
+    'Join our Discord', 'Finish setup', 'The Discord invite opened in your web browser.',
+    'King Kong is in your Steam library.', 'Checking for Steam...',
+    'You started King Kong from Steam, so it is already in your library.', 'Steam was not found on this PC.',
+    'Add to Steam', 'Added to Steam', 'Play it from your Steam library, with its artwork.',
+    'Chat with players, share feedback, shape the project.',
+    "Steam wasn't found on this computer, or nobody has signed in to it yet.",
+}
 for s in sorted(strings):
     if s == 'Home':
         continue  # never drawn as text
@@ -383,7 +405,8 @@ for name in ('Cheats', 'About', 'Settings'):
 for needle, why in (
         ('setup_shaders_ ? 4 : setup_textures_ ? 6', 'the texture pack page does not follow the shaders'),
         ('setup_cutscenes_ ? 7 : setup_graphics_ ? kGfxFirstStage', 'the cutscene page does not follow the texture pack page (the graphics pages after it)'),
-        ('setup_cutscenes_ = kPs2MoviePlayback;', 'the cutscene page is not tied to PS2 movie playback'),
+        ('setup_cutscenes_ = movies::PlaybackAvailable();', 'the cutscene page is not tied to PS2 movie playback'),
+        ('if (movies::PlaybackAvailable()) {', 'Advanced > Cutscenes is not tied to PS2 movie playback (Linux too, task 187)'),
         ('{"Download HD texture pack", true,', 'the texture pack page lost Download'),
         ('{"I already have a texture pack", true,', 'the texture pack page lost I already have a texture pack'),
         ('{"Skip", true,', 'the texture pack page lost Skip'),
@@ -434,6 +457,50 @@ for needle, why in (
         fail(f'{why} ({needle})')
 if '—' in gfx or '–' in gfx:
     fail('dash in launcher_setup_graphics.inc')
+
+# Job J5: setup steps 9 and 10 come after the graphics pages (launcher_setup_end.inc): the button prompt cards
+# set kk_button_prompts (Keyboard and mouse through the Controls page's own input switch).
+end = (src / 'launcher_setup_end.inc').read_text(encoding='utf-8')
+for needle, why in (
+        ('#include "launcher_setup_end.inc"', 'launcher.cpp includes the last setup pages'),
+        ('setup_prompts_ ? kPromptsStage', 'SetupStage has the button prompts page'),
+):
+    if needle not in launcher:
+        fail(f'{why} ({needle})')
+if 'setup_prompts_ = true;' not in gfx:
+    fail('the graphics pages do not go on to the button prompts')
+for needle, why in (
+        ('Set("kk_button_prompts", value)', 'the cards set kk_button_prompts'),
+        ('SetInputMode(true)', 'Keyboard and mouse switches Input as Controls does'),
+        ('"Controller buttons and keyboard keys can be remapped any time in Settings > Controls."', 'remap note'),
+        ('{"auto", "Automatic"}', 'Automatic card'), ('{"xbox360", "Xbox 360"}', 'Xbox 360 card'),
+        ('{"xbox_series", "Xbox Series"}', 'Xbox Series card'), ('{"ps5", "PlayStation 5"}', 'PlayStation 5 card'),
+        ('{"ps2", "PlayStation 2"}', 'PlayStation 2 card'), ('{"steam_deck", "Steam Deck"}', 'Steam Deck card'),
+        ('{"keyboard", "Keyboard and mouse"}', 'Keyboard and mouse card'),
+):
+    if needle not in end:
+        fail(f'{why} ({needle})')
+# Step 10: both big buttons work through the existing actions, with the marks Home already uses (no new brand
+# artwork), and Finish setup opens What's new once on the main menu.
+for needle, why in (
+        ('OpenUrl(kDiscordUrl)', 'Join our Discord opens the invite'), ('OpenSteamPrompt()', 'Add to Steam as on Home'),
+        ('kDiscordIcon', 'Discord mark'), ('kSteamIcon', 'Steam mark'), ('"Finish setup"', 'Finish setup'),
+        ('open_whats_new_ = true;', "What's new after the setup"),
+        ('"Steam wasn\'t found on this computer, or nobody has signed in to "', 'Steam missing message'),
+):
+    if needle not in end:
+        fail(f'{why} ({needle})')
+if 'setup_all_set_ ? kAllSetStage' not in launcher:
+    fail("SetupStage has the You're all set page")
+if '\u2014' in end or '\u2013' in end:
+    fail('dash in launcher_setup_end.inc')
+
+# Job J5 part 3: the launcher's controllers press nothing while its window is not the active one (REPORT-188).
+ui_src = (src / 'launcher_ui.cpp').read_text(encoding='utf-8')
+if 'input_.set_pads_active(active);' not in launcher:
+    fail('the launcher does not tell its input whether its window is active')
+if 'if (!pads_active_)' not in ui_src or 'dir_stale_' not in ui_src:
+    fail('the input does not ignore controllers while the window is not active')
 
 if failures:
     print('\n'.join('FAIL: ' + f for f in failures))
