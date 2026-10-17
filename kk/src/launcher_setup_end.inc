@@ -7,10 +7,11 @@
   // right. Arrows move between the cards, Down from the last row goes to the menu and Up from its first entry
   // back to the cards; A or a click uses a card; B goes back a page.
 
-  static constexpr int kPromptsStage = 12;
-  bool EndSetupStage(int stage) const { return stage == kPromptsStage; }
+  static constexpr int kPromptsStage = 12, kAllSetStage = 13;
+  bool EndSetupStage(int stage) const { return stage == kPromptsStage || stage == kAllSetStage; }
 
   bool setup_prompts_ = false;  // setup step 9: the button prompts (SetupStage 12)
+  bool setup_all_set_ = false;  // setup step 10: "You're all set" (SetupStage 13)
   bool end_on_cards_ = true;    // the cards have the focus (else the menu under them)
   int end_card_focus_ = -1;     // -1: set from the page's selected card as it comes up
   int end_menu_focus_ = 0;
@@ -20,6 +21,7 @@
     std::string label, caption;  // the label as given (brand names stay), the caption in English
     bool selected = false;
     std::function<void(ImVec2, ImVec2, bool)> art;  // draws the card's picture between the two points
+    bool own_text = false;                           // the picture fills the card and draws its own text
     std::function<void()> pick;
   };
 
@@ -108,6 +110,10 @@
         dl->AddRect(ImVec2(p0.x - 3 * s, p0.y - 3 * s), ImVec2(p1.x + 3 * s, p1.y + 3 * s),
                     ui::WithAlpha(color::kFocus, 0.9f), r + 3 * s, 0, 2.0f * s);
       const float pad = 12 * s, room = cw - pad * 2;
+      if (c.own_text) {
+        if (c.art) c.art(ImVec2(p0.x + pad, p0.y + pad), ImVec2(p1.x - pad, p1.y - pad), on);
+        continue;
+      }
       const float text_h = 16 * s + 6 * s + 12.5f * s;
       if (c.art) c.art(ImVec2(p0.x + pad, p0.y + pad), ImVec2(p1.x - pad, p1.y - pad - text_h - 8 * s), on);
       // The label smaller when it is long ("Keyboard and mouse"), shortened only if it still does not fit.
@@ -410,6 +416,7 @@
 
   void BackFromPrompts() {
     setup_prompts_ = false;
+    end_page_ = -1;  // the focus set up again when the page comes back
     setup_graphics_ = true;
     GfxGo(kGfxPages - 1);
     REXLOG_INFO("KK: setup: back from the button prompts to the graphics pages");
@@ -418,11 +425,189 @@
   void FinishSetupPrompts() {
     setup_prompts_ = false;
 #if defined(KK_DEV_TOOLS)
-    if (dev_setup_ == kPromptsStage) dev_setup_ = -1;
+    if (dev_setup_ == kPromptsStage) dev_setup_ = kAllSetStage;
 #endif
     REXLOG_INFO("KK: setup: button prompts done: kk_button_prompts={} mnk_mode={}", Get("kk_button_prompts"),
                 Get("mnk_mode"));
+    setup_all_set_ = true;  // then the last page
+  }
+
+  // ------------------------------------------------------------------- step 10: you're all set ---
+  // Thanks, where the other options are, and two big buttons with the brands' marks: Join our Discord and
+  // Add to Steam. The marks are the ones Home's panels already show (discord_icon.inc, steam_icon.inc: Simple
+  // Icons' CC0 drawings as alpha masks, white on the brand's colour); no other brand artwork is in the port.
+
+  // Discord: its invite in the web browser (KK_DEV_NO_BROWSER=1 in test runs: logged only).
+  void OpenDiscordFromSetup() {
+#if defined(KK_DEV_TOOLS)
+    if (std::getenv("KK_DEV_NO_BROWSER")) {
+      REXLOG_INFO("KK: setup: Discord invite {} (browser not opened: KK_DEV_NO_BROWSER)", kDiscordUrl);
+      return Status("The Discord invite opened in your web browser.");
+    }
+#endif
+    OpenUrl(kDiscordUrl);
+    REXLOG_INFO("KK: setup: Discord invite {} opened in the web browser", kDiscordUrl);
+    Status("The Discord invite opened in your web browser.");
+  }
+
+  // Add to Steam as on Home (OpenSteamPrompt: it asks first, and closes and reopens a running Steam), with a
+  // message when Steam is missing or the game is already in the library.
+  void AddToSteamFromSetup() {
+    if (!steam_ || !steam_->checked || steam_->busy) return ui::Cue(ui::Sound::kDeny);
+    if (steam_->from_steam || steam_->in_library) {
+      REXLOG_INFO("KK: setup: Add to Steam: already in the Steam library");
+      return OpenModal("Added to Steam", T(std::string("King Kong is in your Steam library.")), {"OK"}, 0, nullptr);
+    }
+    if (!steam_->available) {
+      REXLOG_INFO("KK: setup: Add to Steam: Steam not found");
+      return OpenModal("Add to Steam", T(std::string("Steam wasn't found on this computer, or nobody has signed in to "
+                                                     "it yet.")),
+                       {"Close"}, 0, nullptr);
+    }
+    REXLOG_INFO("KK: setup: Add to Steam asked");
+    OpenSteamPrompt();
+  }
+
+  std::string SteamCardText() const {
+    if (!steam_ || !steam_->checked) return T(std::string("Checking for Steam..."));
+    if (steam_->busy) return T(kSteamPhases[std::clamp(steam_->phase.load(), 0, int(std::size(kSteamPhases)) - 1)]);
+    if (steam_->from_steam) return T(std::string("You started King Kong from Steam, so it is already in your library."));
+    if (steam_->in_library) return T(std::string("King Kong is in your Steam library."));
+    if (!steam_->available) return T(std::string("Steam was not found on this PC."));
+    return T(std::string("Play it from your Steam library, with its artwork."));
+  }
+
+  // A brand button's face: the brand's colour behind its white mark, the title and a line under it.
+  void DrawBrandFace(ImDrawList* dl, rex::ui::ImmediateTexture* mark, ImU32 tile, const std::string& title,
+                     const std::string& line, bool done, ImVec2 p0, ImVec2 p1, bool on) {
+    const float s = S();
+    const ui::Fonts f = ui::GetFonts();
+    const float h = p1.y - p0.y, tw = std::round(h * 0.8f);
+    dl->AddRectFilled(p0, ImVec2(p0.x + tw, p1.y), ui::WithAlpha(tile, on ? 1.0f : 0.9f), 8 * s);
+    if (mark) {
+      const float m = tw * 0.56f;
+      const ImVec2 c(p0.x + tw * 0.5f, p0.y + h * 0.5f);
+      dl->AddImage(ui::Tex(mark), ImVec2(c.x - m * 0.5f, c.y - m * 0.5f), ImVec2(c.x + m * 0.5f, c.y + m * 0.5f));
+    }
+    const float tx = p0.x + tw + 16 * s, room = p1.x - tx;
+    float ty = p0.y + 6 * s;
+    // The title smaller when it is long (German, French), shortened only if it still does not fit.
+    const float full = ui::TextSize(f.display, 22 * s, title).x;
+    const float fs = full > room ? std::max(14 * s, 22 * s * room / full) : 22 * s;
+    const std::string t = ui::Ellipsize(f.display, fs, title, room);
+    dl->AddText(f.display, fs, ImVec2(tx, ty + (22 * s - fs) * 0.6f), color::kText, t.c_str());
+    ty += 34 * s;
+    float lx = tx;
+    if (done) {  // a tick before the line once it is done
+      const float cy = ty + 9 * s;
+      dl->PathLineTo(ImVec2(lx + 1 * s, cy));
+      dl->PathLineTo(ImVec2(lx + 5 * s, cy + 4 * s));
+      dl->PathLineTo(ImVec2(lx + 12 * s, cy - 5 * s));
+      dl->PathStroke(color::kGood, 0, 2.2f * s);
+      lx += 18 * s;
+    }
+    dl->AddText(f.text, 13.5f * s, ImVec2(lx, ty), done ? color::kGood : on ? color::kText : color::kTextDim, line.c_str(),
+                nullptr, p1.x - lx);
+  }
+
+  void DrawSetupAllSet(ImDrawList* dl) {
+    const float s = S();
+    const float x0 = o_.x + Margin(), right = o_.x + w_ - Margin();
+    const float list_w = std::round(std::min(660 * s, (right - x0) * 0.5f));
+    const float top = o_.y + std::max(40 * s, h_ * 0.06f);
+    const std::string intro = std::string(T("Thanks for installing King Kong Recompiled.")) + " " +
+                              T("More options, such as field of view, audio, subtitles, controls and much more, are "
+                                "in Settings on the main menu. Enjoy the game.");
+    float y = DrawEndHeader(dl, "You're all set", "You're all set", intro, x0, list_w);
+    y += 6 * s;
+
+    std::vector<EndCard> cards;
+    {
+      EndCard c;
+      c.label = "Join our Discord";
+      c.own_text = true;
+      auto* mark = BrandIcon(discord_icon_, kDiscordIcon, kDiscordIconSize);
+      c.art = [this, dl, mark](ImVec2 a, ImVec2 b, bool on) {
+        DrawBrandFace(dl, mark, IM_COL32(88, 101, 242, 255), T("Join our Discord"),
+                      T(std::string("Chat with players, share feedback, shape the project.")), false, a, b, on);
+      };
+      c.pick = [this] { OpenDiscordFromSetup(); };
+      cards.push_back(std::move(c));
+    }
+    {
+      EndCard c;
+      c.label = "Add to Steam";
+      c.own_text = true;
+      auto* mark = BrandIcon(steam_icon_, kSteamIcon, kSteamIconSize);
+      const bool done = steam_ && steam_->checked && !steam_->busy && (steam_->in_library || steam_->from_steam);
+      const std::string line = SteamCardText();
+      c.art = [this, dl, mark, done, line](ImVec2 a, ImVec2 b, bool on) {
+        DrawBrandFace(dl, mark, IM_COL32(27, 40, 56, 255), T(done ? "Added to Steam" : "Add to Steam"), line, done, a,
+                      b, on);
+      };
+      c.pick = [this] { AddToSteamFromSetup(); };
+      cards.push_back(std::move(c));
+    }
+    y += DrawEndCards(dl, cards, 2, x0, y, list_w, 112 * s) + 30 * s;
+
+    std::vector<HomeEntry> entries;
+    entries.push_back({"Finish setup", true, [this] { FinishSetup(); }});
+    entries.push_back({"Back", true, [this] { BackFromAllSet(); }});
+    DrawEndMenu(dl, entries, x0, y, [this] { BackFromAllSet(); });
+
+    // The right side: a download's strip (when one runs), and one of the game's stills, framed.
+    const float rx0 = x0 + list_w + 56 * s, rx1 = right;
+    float ry = top;
+    if (DrawContentStrip(dl, 1.0f, true)) ry = o_.y + std::max(84 * s, h_ * 0.12f) + 66 * s + 18 * s;
+    if (!slides_.empty() && slides_[0].sharp) {
+      const float pw = rx1 - rx0, ph = std::min(pw * 9.0f / 16.0f, o_.y + h_ - 120 * s - ry);
+      const float aspect = slides_[0].aspect > 0 ? slides_[0].aspect : 16.0f / 9.0f, want = pw / std::max(ph, 1.0f);
+      float u0 = 0, u1 = 1, v0 = 0, v1 = 1;
+      if (want > aspect) {
+        const float v = aspect / want;
+        v0 = (1 - v) * 0.5f, v1 = v0 + v;
+      } else {
+        const float u = want / aspect;
+        u0 = (1 - u) * 0.5f, u1 = u0 + u;
+      }
+      const ImVec2 p0(rx0, ry), p1(rx1, ry + ph);
+      dl->AddRectFilled(ImVec2(p0.x, p0.y + 5 * s), ImVec2(p1.x, p1.y + 5 * s), IM_COL32(0, 0, 0, 50), 10 * s);
+      dl->AddImageRounded(ui::Tex(slides_[0].sharp), p0, p1, ImVec2(u0, v0), ImVec2(u1, v1), IM_COL32_WHITE, 10 * s);
+      dl->AddRect(p0, p1, ui::WithAlpha(color::kText, 0.12f), 10 * s, 0, 1.0f * s);
+    }
+#if defined(KK_DEV_TOOLS)
+    {
+      static std::string logged;
+      const std::string now = (end_on_cards_ ? "card " + std::to_string(end_card_focus_)
+                                             : "menu " + std::to_string(end_menu_focus_)) +
+                              " steam " + SteamCardText();
+      if (now != logged) {
+        logged = now;
+        REXLOG_INFO("KK dev: setup step 10 focus {}", now);
+      }
+    }
+#endif
+  }
+
+  void BackFromAllSet() {
+    setup_all_set_ = false;
+    setup_prompts_ = true;
+    REXLOG_INFO("KK: setup: back to the button prompts");
+  }
+
+  // Finish setup: the main menu, and What's new once on it (a new install has no notes pending otherwise).
+  void FinishSetup() {
+    setup_all_set_ = false;
+    end_page_ = -1;
+#if defined(KK_DEV_TOOLS)
+    if (EndSetupStage(dev_setup_)) dev_setup_ = -1;
+#endif
     page_ = kHome;
     home_focus_ = 0;
+    if (!std::getenv("KK_AUTOPLAY")) {
+      whats_new_from_.clear();  // this version's notes
+      open_whats_new_ = true;
+    }
+    REXLOG_INFO("KK: setup: finished; main menu{}", open_whats_new_ ? ", What's new opens on it" : "");
     if (!InSetup()) Status(InstalledMessage());
   }

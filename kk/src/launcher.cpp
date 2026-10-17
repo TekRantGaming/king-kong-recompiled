@@ -626,6 +626,8 @@ art::Image SoftCopy(const art::Image& src) {
 struct SteamState {
   std::atomic<bool> available{false};   // Steam is here, and this copy wasn't started from it
   std::atomic<bool> in_library{false};  // every account has it already
+  std::atomic<bool> checked{false};     // the check below has finished
+  std::atomic<bool> from_steam{false};  // this copy was started from Steam (it is in the library)
   std::atomic<bool> busy{false}, done{false};
   std::atomic<int> phase{0};  // kSteamPhases
   steam::Result result;       // read once done
@@ -3141,7 +3143,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         case 9:
         case 10:
         case 11: return GfxPrompts();
-        case kPromptsStage: return EndPrompts();
+        case kPromptsStage:
+        case kAllSetStage: return EndPrompts();
         default: return {};
       }
     }
@@ -4194,7 +4197,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (dev_setup_ >= 0) return true;
 #endif
     return !files_ok_ || installing_ || setup_art_ || setup_shaders_ || setup_textures_ || setup_cutscenes_ ||
-           setup_graphics_ || setup_prompts_ || setup_style_ || installing_update_ || update_shaders_;
+           setup_graphics_ || setup_prompts_ || setup_all_set_ || setup_style_ || installing_update_ || update_shaders_;
   }
 
   // A version this launcher has not run before, on an installation that has run one (What's new uses
@@ -4347,7 +4350,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // 0: asking for the disc image, 1: installing, 2: taking the artwork,
   // 3: updating the port, 4: preparing the native renderer's shaders, 6: the HD texture pack, 7: restore
   // the PS2 cutscenes?, 8 to 11: the graphics pages (setup-flow.md steps 5 to 8), 12: the button prompts
-  // (step 9), 5: the old look step (not shown after the graphics pages, which start from Remastered; job J6
+  // (step 9), 13: "You're all set" (step 10), 5: the old look step (not shown after the graphics pages, which start from Remastered; job J6
   // removes it).
   int SetupStage() const {
 #if defined(KK_DEV_TOOLS)
@@ -4355,7 +4358,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 #endif
     return installing_update_ ? 3 : installing_ ? 1 : setup_art_ ? 2 : setup_shaders_ ? 4 : setup_textures_ ? 6
            : setup_cutscenes_ ? 7 : setup_graphics_ ? kGfxFirstStage + std::clamp(gfx_page_, 0, kGfxPages - 1)
-           : setup_prompts_ ? kPromptsStage : setup_style_ ? 5 : 0;
+           : setup_prompts_ ? kPromptsStage : setup_all_set_ ? kAllSetStage : setup_style_ ? 5 : 0;
   }
 
   // The first-time setup's content steps (setup-flow.md 3 and 4): the cutscene page only where the PS2
@@ -4379,6 +4382,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     const int stage = SetupStage();
     if (GraphicsSetupStage(stage)) return DrawSetupGraphics(dl);  // setup steps 5 to 8: a layout of their own
     if (stage == kPromptsStage) return DrawSetupPrompts(dl);       // setup step 9 (launcher_setup_end.inc)
+    if (stage == kAllSetStage) return DrawSetupAllSet(dl);         // setup step 10
     float copied = 0, copy_total = 0;
     if (installing_) {
       copied = float(progress_.bytes_done.load());
@@ -5663,11 +5667,13 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   void StartSteamCheck() {
     steam_ = std::make_shared<SteamState>();
     std::thread([s = steam_] {
-      if (steam::StartedFromSteam()) return;
-      if (const auto where = steam::Locate()) {
+      if (steam::StartedFromSteam()) {
+        s->from_steam = true;
+      } else if (const auto where = steam::Locate()) {
         s->in_library = steam::HasShortcut(*where);
         s->available = true;
       }
+      s->checked = true;
     }).detach();
   }
 

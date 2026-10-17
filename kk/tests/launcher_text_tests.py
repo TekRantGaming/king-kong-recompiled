@@ -311,6 +311,16 @@ strings |= {
     "Plays with a keyboard and mouse: the game's hints show the keys and the mouse turns the camera.",
     'Always shows the {0} buttons.',
     'Controller buttons and keyboard keys can be remapped any time in Settings > Controls.',
+    # step 10, "You're all set"
+    "You're all set", 'Thanks for installing King Kong Recompiled.',
+    'More options, such as field of view, audio, subtitles, controls and much more, are in Settings on the main '
+    'menu. Enjoy the game.',
+    'Join our Discord', 'Finish setup', 'The Discord invite opened in your web browser.',
+    'King Kong is in your Steam library.', 'Checking for Steam...',
+    'You started King Kong from Steam, so it is already in your library.', 'Steam was not found on this PC.',
+    'Add to Steam', 'Added to Steam', 'Play it from your Steam library, with its artwork.',
+    'Chat with players, share feedback, shape the project.',
+    "Steam wasn't found on this computer, or nobody has signed in to it yet.",
 }
 for s in sorted(strings):
     if s == 'Home':
@@ -456,6 +466,18 @@ for needle, why in (
 ):
     if needle not in end:
         fail(f'{why} ({needle})')
+# Step 10: both big buttons work through the existing actions, with the marks Home already uses (no new brand
+# artwork), and Finish setup opens What's new once on the main menu.
+for needle, why in (
+        ('OpenUrl(kDiscordUrl)', 'Join our Discord opens the invite'), ('OpenSteamPrompt()', 'Add to Steam as on Home'),
+        ('kDiscordIcon', 'Discord mark'), ('kSteamIcon', 'Steam mark'), ('"Finish setup"', 'Finish setup'),
+        ('open_whats_new_ = true;', "What's new after the setup"),
+        ('"Steam wasn\'t found on this computer, or nobody has signed in to "', 'Steam missing message'),
+):
+    if needle not in end:
+        fail(f'{why} ({needle})')
+if 'setup_all_set_ ? kAllSetStage' not in launcher:
+    fail("SetupStage has the You're all set page")
 if '\u2014' in end or '\u2013' in end:
     fail('dash in launcher_setup_end.inc')
 
