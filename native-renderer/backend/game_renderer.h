@@ -518,12 +518,30 @@ class GameRenderer {
   static uint64_t FormatSignature(const std::array<HostTarget*, 4>& colors, const HostTarget* depth);
 
   // ---- textures, samplers, buffers
+  // A pack replacement's identity: the original's content hash, format and size
+  // (the stream's request key). Originals with equal identity share one replacement.
+  struct PackKey {
+    uint64_t hash = 0;
+    uint32_t format = 0, width = 0, height = 0;
+    bool operator==(const PackKey&) const = default;
+  };
+  struct PackKeyHash {
+    size_t operator()(const PackKey& k) const {
+      return size_t(k.hash ^ (uint64_t(k.format) << 48) ^ (uint64_t(k.width) << 24) ^ k.height);
+    }
+  };
   struct HostTexture {
     uint64_t pack_hash = 0, pack_allocation = 0;
-    HostTexture* replacement = nullptr;
+    HostTexture* replacement = nullptr;  // original: its (possibly shared) pack replacement
     bool pack_ready = false;
     bool pack_unavailable = false;
     bool pack_capped = false;  // kept original: its replacement did not fit the pack limit
+    // Original: freed at a chapter change while unused; it asks again only once bound.
+    bool pack_swept = false;
+    uint64_t pack_used_frame = 0;    // original: last frame it was bound or uploaded
+    uint64_t pack_capped_bytes = 0;  // original: the replacement size that did not fit
+    uint32_t pack_refs = 0;          // replacement: the originals sharing it
+    PackKey pack_key;                // replacement: its identity
     uint64_t material_hash = 0;
     nvrhi::TextureHandle texture;
     kknr::HostTexturePlan plan;
@@ -1091,6 +1109,14 @@ class GameRenderer {
   std::unique_ptr<kknr::TextureConversionWorkers> texture_conversion_workers_;
   std::unique_ptr<kknr::TexturePackStream> texture_pack_stream_;
   std::unordered_set<HostTexture*> pack_originals_;
+  // One GPU replacement per identity, shared by every original with it (refcounted).
+  std::unordered_map<PackKey, HostTexture*, PackKeyHash> pack_shared_;
+  uint64_t pack_shared_attached_ = 0;  // originals that reused a resident replacement (run total)
+  // Chapter change: replacements whose originals were not bound since the load
+  // started are freed this many frames after the load ends (task 180).
+  static constexpr uint64_t kPackSweepDelayFrames = 60;
+  uint64_t pack_load_frame_ = 0, pack_sweep_frame_ = UINT64_MAX;
+  bool pack_sweep_pending_ = false;
   std::string texture_pack_folder_;
   uint64_t pack_frame_ = ~0ull, pack_bytes_ = 0, pack_limit_ = kTexturePackFallbackLimit;
   // Originals kept because their replacement exceeded the limit. Their data is
@@ -1098,13 +1124,24 @@ class GameRenderer {
   uint64_t pack_capped_ = 0, pack_capped_min_ = UINT64_MAX, pack_capped_frame_ = 0;
   bool pack_pressure_ = false;
   struct PackUpload {
-    HostTexture* original = nullptr;
+    HostTexture* replacement = nullptr;
     std::shared_ptr<const kknr::HostTextureData> data;
     uint32_t subresource = 0, row = 0;
   } pack_upload_;
+  static PackKey PackKeyOf(const HostTexture& original) {
+    return {original.pack_hash, uint32_t(original.plan.format), original.plan.width, original.plan.height};
+  }
   void ServiceTexturePacks(nvrhi::ICommandList* cl);
   void DropTexturePacks();
   void CapTexturePack(HostTexture* original, uint64_t bytes);
+  void UncapTexturePack(HostTexture* original);
+  // Drops this original's reference; the last one releases the replacement
+  // through the normal retirement lifetime and per-frame release budget.
+  void ReleasePackReplacement(HostTexture* original);
+  // Loading-screen service: a load into a different chapter started / ended.
+  void TexturePackLoadStarted();
+  void TexturePackLoadEnded();
+  void SweepTexturePacks();
   void AdvanceTexturePack(nvrhi::ICommandList* cl);
 
   // Built-in passes.

@@ -89,6 +89,8 @@ void GameRenderer::PreloadResources(nvrhi::ICommandList* cl, bool loading, uint3
   const auto now = std::chrono::steady_clock::now();
   const bool changed = level != preload_level_ || start != preload_start_;
   if (loading && (!resource_loading_ || changed)) {
+    // A different chapter: the previous one's unused pack replacements are freed after this load.
+    if (changed) TexturePackLoadStarted();
     SaveResourcePreload();
     preload_level_ = level; preload_start_ = start;
     preload_cursor_ = 0; preload_reserved_bytes_ = 0;
@@ -127,6 +129,7 @@ void GameRenderer::PreloadResources(nvrhi::ICommandList* cl, bool loading, uint3
     Logf(LogLevel::kInfo, "rexgpu-native: resource loading: level %u start %u, %zu descriptions (%zu local, %zu shipped)",
          level, start, preload_records_.size(), local, preload_records_.size() - local);
   } else if (!loading && resource_loading_) {
+    TexturePackLoadEnded();
     // The universe can clear/change its request fields as loading ends. Keep
     // the map/start captured while that request's loading screen was up.
     resource_learning_ = !resource_cache_path_.empty();

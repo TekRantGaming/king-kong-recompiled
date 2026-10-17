@@ -113,6 +113,20 @@ guarantee of zero driver/allocation latency.
 Originals are never replaced in place. Descriptors and GPU resources use the
 renderer's existing retirement lifetime.
 
+Originals with the same pack identity (content hash, original format and size;
+the same content at two addresses) share one GPU replacement, reference-counted;
+it is released when the last of them goes. Views/descriptors stay per view key on
+that one texture (task 180; before, each original made its own copy, 1-6 per chapter).
+
+Chapter change (task 180): the loading-screen service marks the start of a load
+into a different chapter. 60 frames after that load ends, replacements whose
+identity no original has bound (or uploaded) since the load started are released
+through the normal retirement lifetime and per-frame release budget (task 174), so
+the new chapter gets the room at once instead of 20-60 s later when the texture
+cache trims the old originals. Originals are unchanged; a freed one is parked (not
+requested again) until it is bound, then it reloads like any other. Reloading the
+same chapter does not sweep.
+
 Replacement allocations may use one quarter of the live GPU budget (sized for 4x
 packs up to 4096 per side; 16 Oct 2026 decision, previously min(512 MiB, budget/8)),
 and never more than the replacements already resident plus the space available
@@ -120,8 +134,11 @@ after the normal memory reserve and 16 MiB of strip headroom (sampled once per
 second). Without a supported live budget query the card's size and use are
 unknown, so the cap stays a conservative 256 MiB. A replacement that does not fit
 keeps its original: its decoded data is freed, it is counted (`capped=` in the
-renderer log, and one warning when the limit is first reached) and its file is not
-read again until the smallest capped replacement fits (at most every 600 frames).
+renderer log, one `texture pack capped <hash>` line each, and one warning when the
+limit is first reached) and its file is not read again until room returns. Capped
+originals retry as soon as replacements are freed or the limit grows (checked at
+most every 30 frames, and in the frame of a chapter-change release), but only as
+many as the free room holds, so a full limit never re-reads files that cannot fit.
 Developers can emulate a smaller card's limit with `KK_DEV_TEXTURE_PACK_LIMIT_MIB=<MiB>`,
 and pressure with `KK_DEV_VRAM_BUDGET_GB=4` plus `KK_DEV_VRAM_PRESSURE=1`.
 Existing low-memory pressure handling drops replacements and keeps originals.
@@ -139,8 +156,12 @@ the real renderer on Vulkan and D3D12: every pixel/alpha of a 1025x513 synthetic
 replacement, incremental base upload with mip levels sharing a frame's budget,
 original-until-ready, descriptor reuse for On/Off, unchanged original pixels,
 GPU-budget pressure fallback, the quarter-of-budget limit, the over-limit original
-(no repeated reads) and its retry once room returns. `nr_memory_budget_tests` checks
+(no repeated reads) and its retry once room returns, two originals with one identity
+sharing one replacement (and one descriptor) that outlives either original, and a
+chapter change freeing the unused old replacement so a capped new one loads promptly,
+the freed one reloading once it is bound again. `nr_memory_budget_tests` checks
 the limit arithmetic. No game data
 is needed by these tests.
 
-Game test evidence and measurement limits are in the external `codex/REPORT-126.md`.
+Game test evidence and measurement limits are in the external `codex/REPORT-126.md`;
+chapter-change release and sharing on the benchmark route in `codex/REPORT-180.md`.
