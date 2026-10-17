@@ -75,6 +75,9 @@ set(KINGKONG_SOURCES
     src/native_shaders.cpp
     src/http.cpp
     src/content.cpp
+    src/workshop.cpp
+    src/workshop_markdown.cpp
+    src/workshop_net.cpp
     src/system_notify.cpp
     src/update.cpp
     src/play_session.cpp
@@ -257,6 +260,12 @@ if(KK_DEV_TOOLS)
     target_include_directories(kk-notify-tests PRIVATE src)
     rexglue_apply_target_settings(kk-notify-tests)
     add_test(NAME download-notifications COMMAND kk-notify-tests)
+    # Job J8: the Workshop page: its Markdown subset, cache (ETag / once a day), GitHub addresses, README
+    # pictures and picture decoding (no network: a fake server).
+    add_executable(kk-workshop-tests tests/workshop_tests.cpp src/workshop_markdown.cpp src/workshop_net.cpp)
+    target_include_directories(kk-workshop-tests PRIVATE src)
+    rexglue_apply_target_settings(kk-workshop-tests)
+    add_test(NAME workshop COMMAND kk-workshop-tests "${CMAKE_CURRENT_BINARY_DIR}/workshop-test")
     add_executable(kk-slider-ui-tests tests/slider_ui_tests.cpp src/launcher_ui.cpp src/launcher_text.cpp)
     target_include_directories(kk-slider-ui-tests PRIVATE src)
     target_link_libraries(kk-slider-ui-tests PRIVATE rex::runtime)
