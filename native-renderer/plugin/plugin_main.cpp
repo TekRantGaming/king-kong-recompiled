@@ -199,7 +199,7 @@ REXCVAR_DEFINE_BOOL(native_present_unlocked, true, "Native renderer",
                     "game's draws do not wait while the presenter waits for its previous paint")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-REXCVAR_DEFINE_DOUBLE(native_pipeline_wait_budget_ms, 0.0, "Native renderer",
+REXCVAR_DEFINE_DOUBLE(native_pipeline_wait_budget_ms, 4.0, "Native renderer",
                       "Without native_pipeline_wait: milliseconds a frame may wait in all for scene draws' "
                       "pipelines being created before those draws are skipped (0: skip at once, never wait)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);

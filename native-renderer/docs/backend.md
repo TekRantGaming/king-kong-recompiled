@@ -1260,7 +1260,7 @@ the in-place patched object memory (already logged under `--native_dump_frame`).
 Options: `--native_pipeline_cache` (on by default since Phase 2b), `--native_pipeline_cache_dir=<dir>` (default
 `<cache root>/native-pipelines/<TITLE8>.pipelines`, set through `InitializeShaderStorage`: the game calls it,
 `555307D3.pipelines` under `--cache_root`; with the folder option the file is `game.pipelines`), `--native_pipeline_wait`
-(off), `--native_pipeline_wait_budget_ms` (0 since task 179, was 30). Phase 2c adds four more, all off by default (below).
+(off), `--native_pipeline_wait_budget_ms` (4 ms since task 179 by owner decision 17 Oct: a missing scene pipeline is waited for up to 4 ms per frame in total, then skipped; was 30). Phase 2c adds four more, all off by default (below).
 Task 179 ("Pipelines never block" below) replaced the waiting default of task 011.
 
 Measured on Kong to the Rescue (`rescue` run, Vulkan, Phase 2b): without the cache the chapter start has 317
