@@ -14,6 +14,8 @@
 #include <rex/logging.h>
 #include <spdlog/sinks/base_sink.h>
 
+#include "log_tail_logic.h"
+
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -32,6 +34,12 @@ std::string g_settings;
 std::deque<std::string> g_errors, g_fallbacks, g_selections;
 std::array<char, kReportSize> g_snapshot{}, g_initial{};
 std::vector<std::string> g_private;
+// The last 200 log lines for crash and hang reports, redacted as for uploads (task 197). Fixed memory.
+LogTail<> g_tail;
+telemetry::Private g_personal;  // set once in InitDiagnostics, before any line is added
+void RememberLogLine(std::string_view line) {
+  g_tail.Add(RedactLogLine(line, g_personal, decltype(g_tail)::kMaxLineBytes - 1));
+}
 
 std::string Lower(std::string s) {
   std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return char(std::tolower(c)); });
@@ -108,6 +116,10 @@ void Capture(std::string line, bool error) {
 class DiagnosticSink final : public spdlog::sinks::base_sink<std::mutex> {
   void sink_it_(const spdlog::details::log_msg& msg) override {
     try {
+      // The whole line as the log file has it (time, level, text) for the crash report's log tail.
+      spdlog::memory_buf_t formatted;
+      formatter_->format(msg, formatted);
+      RememberLogLine(std::string_view(formatted.data(), formatted.size()));
       Capture(std::string(msg.payload.data(), msg.payload.size()), msg.level >= spdlog::level::err);
     } catch (...) { /* Diagnostics must not turn a log message into a crash. */ }
   }
@@ -245,6 +257,11 @@ void InitDiagnostics() {
   std::call_once(once, [] {
     for (const char* key : {"USERNAME", "USER", "COMPUTERNAME"})
       if (const char* name = std::getenv(key); name && *name) g_private.emplace_back(name);
+    // As the uploads (telemetry.cpp PersonalNames).
+    for (const char* key : {"USERNAME", "USER", "LOGNAME", "COMPUTERNAME"})
+      if (const char* v = std::getenv(key); v && *v) g_personal.names.emplace_back(v);
+    for (const char* key : {"USERPROFILE", "HOME"})
+      if (const char* v = std::getenv(key); v && *v) g_personal.homes.emplace_back(v);
     g_hardware = Hardware();
     RefreshDiagnostics();
     std::memcpy(g_initial.data(), g_snapshot.data(), g_snapshot.size());
@@ -258,6 +275,7 @@ void InitDiagnostics() {
       std::string line;
       if (start) std::getline(log, line);
       while (std::getline(log, line)) {
+        RememberLogLine(line);
         const auto lower = Lower(line);
         Capture(line, lower.find("[error]") != std::string::npos || lower.find("[critical]") != std::string::npos);
       }
@@ -284,6 +302,15 @@ void WriteCrashDiagnostics(FILE* file) {
     std::fwrite(g_initial.data(), 1, std::strlen(g_initial.data()), file);
     std::fputs("Crash interrupted a diagnostics update; initial snapshot used.\n", file);
   }
+}
+void WriteLogTail(FILE* file) {
+  std::fputs("Last log lines (oldest first; user names and personal folders removed):\n", file);
+  const size_t n = g_tail.ForEach([file](const char* text, size_t size) {
+    std::fputs("  ", file);
+    std::fwrite(text, 1, size, file);
+    std::fputs("\n", file);
+  });
+  if (!n) std::fputs("  None recorded\n", file);
 }
 bool HasCrashReports(const std::filesystem::path& root) {
   std::error_code ec;

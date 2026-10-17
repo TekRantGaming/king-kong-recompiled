@@ -121,6 +121,9 @@ LONG WINAPI OnCrash(EXCEPTION_POINTERS* info) {
       WriteCrashStack(f, info);
       std::fputs("\n", f);
       WriteCrashDiagnostics(f);
+      // What the game was doing: the last 200 log lines (fixed memory, redacted when they were logged).
+      std::fputs("\n", f);
+      WriteLogTail(f);
       std::fclose(f);
     }
   }
@@ -228,6 +231,8 @@ void WriteHangReport(ULONGLONG stalled_ms) {
                      L"Threads:\n",
                   stalled_ms / 1000);
     WriteThreadList(f);
+    std::fputs("\n", f);
+    WriteLogTail(f);
     std::fclose(f);
   }
   WriteMiniDump(base, nullptr);
