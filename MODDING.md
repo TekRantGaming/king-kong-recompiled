@@ -129,8 +129,7 @@ the online and update switches, the setup's own records or the mod list: `kk_mod
 `kk_achievement_sound_file`, `gpu_plugin`, `kk_launcher`, `kk_skip_launcher`, `kk_start`, `kk_renderer`,
 `kk_launcher_open` and the benchmark settings.
 
-The two built-in mods are settings mods: **Hardcore (no HUD, no healing)** (`kk_hide_hud` and
-`kk_no_healing`) and **Cel shading** (`native_cel_shading`; the fine controls are in the F8 panel).
+The built-in mod is a settings mod: **Cel shading** (`native_cel_shading`; the fine controls are in the F8 panel).
 
 ## Cutscene mods
 

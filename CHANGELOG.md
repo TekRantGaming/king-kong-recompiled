@@ -9,7 +9,7 @@ version's notes the first time you start it.
 
 ### What's new
 - **Kong mods in the Workshop.** Put a mod in your `mods` folder and turn it on or off in the Workshop. Mods can be texture packs, settings presets or replacement cutscenes. See MODDING.md for how to make one.
-- **Two built-in mods: Hardcore (no HUD, no healing) and Cel shading** (ink outlines and flat colours).
+- **Built-in Cel shading mod** (ink outlines and flat colours), on or off in the Workshop.
 - **Artbook in Extras.** The six Weta concept paintings from the PS2 bonus disc, downloaded in the background, with zoom and Save to PC.
 - **Smoother ambient occlusion.** Soft, rounded shading instead of hard creases on characters, Kong and rocks. On by default with the Remastered look.
 - **Better water reflections.** The screen space reflections no longer break up on moving water and fade softly at their edges (Settings > Graphics, off by default).
