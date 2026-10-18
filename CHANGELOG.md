@@ -26,6 +26,7 @@ version's notes the first time you start it.
 - **DLSS missing from the upscaler list in the pause menu.** While playing, the list could say DLSS was not available on cards that support it. It now lists what the running game actually supports.
 
 ### Changed
+- **The Old movie filter is gone from Graphics and Extras.** The game no longer turns on its sepia filter from a save. Filters are in photo mode.
 - **All bonus content is unlocked.** Every Extras item can be played straight away, with or without a save, the same way every chapter is open in Chapter select. It is not a cheat to the game: scores and completion are recorded as usual. The "All bonus content" cheat is gone: it isn't needed any more. In Extras there is no save to choose any more, and the Artbook is first in the list.
 - **Benchmark on the main menu** in place of About. About is the last tab in Settings.
 - **The Workshop is one page with three rows:** Texture packs, Mods (many on at once, in load order; the modding guide and your mods folder are at the end of the row) and Other TRG projects and games. Up and Down move between the rows, Left and Right along them; Back from a card's page returns to the same card.
