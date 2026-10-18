@@ -64,6 +64,8 @@ struct Deferred {
 };
 std::vector<Deferred> g_deferred;
 Clock::time_point g_first_frame{};
+// Task 211 (telemetry's worst-frame detail): the last swap call's time and this frame's frame-cap wait (ms).
+std::atomic<double> g_last_swap_call_ms{-1}, g_cap_wait_ms{-1};
 
 void RunDeferredIfDue(Clock::time_point now) {
   std::vector<std::function<void()>> due;
@@ -124,7 +126,9 @@ void OnGuestSwap() {
     g_window_worst_ms = std::max(g_window_worst_ms, frame_ms);
     g_recent[g_recent_count++ % kRecentFrames] = float(frame_ms);
     RecordFrameTime(frame_ms);
-    telemetry::NoteFrame(frame_ms);  // the per-chapter summary (Beta 7 uploads)
+    // The per-chapter summary (Beta 7 uploads); the swap call and cap wait inside this frame (task 211).
+    telemetry::NoteFrame(frame_ms, g_last_swap_call_ms.load(std::memory_order_relaxed),
+                         g_cap_wait_ms.load(std::memory_order_relaxed));
   }
   last_swap = now;
   // Full performance metrics: the graph and readings repaint ten times a second (the frame rate line
@@ -156,6 +160,7 @@ void OnGuestSwap() {
 
 
 void AddSwapTime(double ms) {
+  g_last_swap_call_ms.store(ms, std::memory_order_relaxed);
   std::lock_guard lock(g_mutex);
   g_window_swap_ms += ms;
 }
@@ -209,7 +214,10 @@ void LimitFrameRate() {
 
 REX_EXTERN(__imp__sub_821141D8);
 REX_HOOK_RAW(sub_821141D8) {
+  const auto cap_start = kk::Clock::now();
   kk::LimitFrameRate();
+  kk::g_cap_wait_ms.store(std::chrono::duration<double, std::milli>(kk::Clock::now() - cap_start).count(),
+                          std::memory_order_relaxed);
   kk::OnGuestSwap();
   const auto start = kk::Clock::now();
   __imp__sub_821141D8(ctx, base);

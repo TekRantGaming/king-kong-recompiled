@@ -319,6 +319,115 @@ inline std::string JsonNumber(double v, int decimals = 1) {
   return s;
 }
 
+// ------------------------------------------------------------------------------- worst-frame detail ---
+
+// Task 211 (owner, 18 Oct 2026): what the slowest frames of a chapter were doing, so a report with a
+// multi-second worst frame says why. Only frames of kWorstFrameMs or more are looked at (nothing is
+// collected for a normal frame beyond the running totals the frame already reads); each chapter keeps the
+// kMaxWorstFrames slowest, at most kMaxWorstLoading of them loading frames (so a long level load cannot
+// push every gameplay frame out). Numbers only and a few fixed words: no names, no paths, no free text.
+inline constexpr double kWorstFrameMs = 250.0;
+inline constexpr size_t kMaxWorstFrames = 3;
+inline constexpr size_t kMaxWorstLoading = 1;
+
+struct WorstFrame {
+  double ms = 0;         // the frame (guest swap to guest swap)
+  double at_s = -1;      // seconds since this chapter visit started
+  bool loading = false;  // a level change's frames, or the game's loading screen was up
+  // The swap thread's side of the frame (ms; negative: not known). game = ms - swap - cap wait.
+  double cpu_ms = -1;       // that thread's CPU time in the frame
+  double swap_ms = -1;      // inside the game's swap call (hands the frame to the renderer; waits when it is behind)
+  double cap_wait_ms = -1;  // the frame rate cap's wait
+  // The native renderer's running totals over the frame and the 2 after it (it runs up to 2 frames behind
+  // the game). Only with `native`.
+  bool native = false;
+  uint32_t render_frames = 0;
+  double render_cpu_ms = 0, gpu_ms = -1, gpu_wait_ms = 0, submit_ms = 0;
+  uint32_t pipe_waits = 0, pipes_made = 0, draws_skipped = 0;
+  double pipe_wait_ms = 0, compile_ms = 0;
+  uint32_t tex_uploads = 0, pack_textures = 0;
+  double upload_mb = 0, tex_ms = 0, prepare_ms = 0, pack_mb = 0;
+  bool renderer_loading = false;
+  int worker_jobs = -1;  // pipeline jobs queued or being made in the background (shader preparation)
+  // The game's file reads in the frame (every thread).
+  uint32_t reads = 0, video_reads = 0;
+  double read_mb = 0, read_ms = 0, read_max_ms = 0;
+  // What else was going on.
+  int focus = -1;  // 0 focused, 1 in the background, 2 minimised; -1 not known
+  bool focus_changed = false, paused = false, download = false, texture_pack = false;
+  double sleep_ms = 0;  // the PC was asleep this long during the frame
+  // The settings at the time.
+  int frame_cap = -1, vsync = -1, hfr = -1;
+  std::string upscaler;  // a fixed word from the renderer ("dlss", "fsr3", ...); cut to 16
+
+  static std::string Word(std::string_view s) {  // letters, digits and '-' only, at most 16
+    std::string out;
+    for (const char c : s)
+      if (out.size() < 16 && (std::isalnum(static_cast<unsigned char>(c)) || c == '-')) out += c;
+    return out;
+  }
+  std::string Json() const {
+    const auto n = [](const char* key, double v, int decimals = 1) {
+      return std::string(",\"") + key + "\":" + JsonNumber(v, decimals);
+    };
+    const auto u = [](const char* key, uint64_t v) { return std::string(",\"") + key + "\":" + std::to_string(v); };
+    const auto b = [](const char* key, bool v) { return std::string(",\"") + key + "\":" + (v ? "true" : "false"); };
+    std::string s = "{\"ms\":" + JsonNumber(ms, 1);
+    if (at_s >= 0) s += n("at", at_s);
+    s += std::string(",\"phase\":\"") + (loading ? "load" : "play") + "\"";
+    if (cpu_ms >= 0) s += n("cpuMs", cpu_ms);
+    if (swap_ms >= 0) s += n("swapMs", swap_ms);
+    if (cap_wait_ms >= 0) s += n("capMs", cap_wait_ms);
+    if (swap_ms >= 0 && cap_wait_ms >= 0) s += n("gameMs", std::max(0.0, ms - swap_ms - cap_wait_ms));
+    if (native) {
+      s += u("rFrames", render_frames) + n("rCpuMs", render_cpu_ms);
+      if (gpu_ms >= 0) s += n("gpuMs", gpu_ms, 2);
+      s += n("gpuWaitMs", gpu_wait_ms) + n("submitMs", submit_ms) + b("rLoading", renderer_loading);
+      if (worker_jobs >= 0) s += u("jobs", uint64_t(worker_jobs));
+      s += u("pipeWaits", pipe_waits) + n("pipeWaitMs", pipe_wait_ms) + u("pipesMade", pipes_made) +
+           u("drawsSkipped", draws_skipped) + n("compileMs", compile_ms);
+      s += u("texUploads", tex_uploads) + n("uploadMB", upload_mb, 2) + n("texMs", tex_ms) + n("prepMs", prepare_ms) +
+           u("packTex", pack_textures) + n("packMB", pack_mb, 2);
+    }
+    s += b("pack", texture_pack);
+    s += u("reads", reads) + n("readMB", read_mb, 2) + n("readMs", read_ms) + n("readMaxMs", read_max_ms) +
+         u("videoReads", video_reads);
+    if (focus >= 0) {
+      s += std::string(",\"focus\":\"") + (focus == 0 ? "focused" : focus == 1 ? "background" : "minimised") + "\"";
+      s += b("focusChanged", focus_changed);
+    }
+    s += b("paused", paused) + n("sleepMs", sleep_ms, 0) + b("download", download);
+    if (frame_cap >= 0) s += u("cap", uint64_t(frame_cap));
+    if (vsync >= 0) s += b("vsync", vsync != 0);
+    if (hfr >= 0) s += b("hfr", hfr != 0);
+    if (const std::string w = Word(upscaler); !w.empty()) s += ",\"upscaler\":\"" + w + "\"";
+    return s + "}";
+  }
+};
+
+// Whether a frame gets its detail recorded: in a chapter, and at least kWorstFrameMs.
+inline bool WorstFrameWanted(int entry, double ms) { return entry >= 0 && std::isfinite(ms) && ms >= kWorstFrameMs; }
+
+// Keeps `list` the slowest kMaxWorstFrames frames, slowest first, with at most kMaxWorstLoading loading ones.
+inline void AddWorstFrame(std::vector<WorstFrame>& list, const WorstFrame& f) {
+  if (!std::isfinite(f.ms) || f.ms < kWorstFrameMs) return;
+  if (f.loading) {
+    size_t loading = 0, smallest = list.size();
+    for (size_t i = 0; i < list.size(); ++i)
+      if (list[i].loading) {
+        ++loading;
+        if (smallest == list.size() || list[i].ms < list[smallest].ms) smallest = i;
+      }
+    if (loading >= kMaxWorstLoading) {
+      if (f.ms <= list[smallest].ms) return;
+      list.erase(list.begin() + std::ptrdiff_t(smallest));
+    }
+  }
+  list.push_back(f);
+  std::stable_sort(list.begin(), list.end(), [](const WorstFrame& a, const WorstFrame& b) { return a.ms > b.ms; });
+  if (list.size() > kMaxWorstFrames) list.resize(kMaxWorstFrames);
+}
+
 // ------------------------------------------------------------------------------------------- frame stats ---
 
 // One chapter's frames in a session. Updated on the game thread per frame (a few additions; a 0.5 ms
@@ -338,6 +447,7 @@ struct ChapterStats {
   double game_cpu_ms = 0;   // the game thread's CPU time over...
   uint64_t game_cpu_frames = 0;  // ...this many frames
   double pipeline_wait_ms = 0;
+  std::vector<WorstFrame> worst;  // task 211: the slowest frames' detail (AddWorstFrame)
 
   void AddFrame(double ms) {
     if (!(ms > 0) || !std::isfinite(ms)) return;
@@ -385,15 +495,22 @@ struct ChapterStats {
     game_cpu_ms += o.game_cpu_ms;
     game_cpu_frames += o.game_cpu_frames;
     pipeline_wait_ms += o.pipeline_wait_ms;
+    for (const auto& f : o.worst) AddWorstFrame(worst, f);
   }
-  std::string Json() const {
+  // `details`: with the worst frames' detail (PerfJson leaves it out of the shortest chapters to fit).
+  std::string Json(bool details = true) const {
     std::string s = "{\"entry\":" + std::to_string(entry) + ",\"seconds\":" + JsonNumber(Seconds()) +
                     ",\"avgFps\":" + JsonNumber(AverageFps()) + ",\"p1LowFps\":" + JsonNumber(OnePercentLowFps()) +
                     ",\"worstMs\":" + JsonNumber(worst_ms) + ",\"stutters50ms\":" + std::to_string(over50);
     if (gpu_samples) s += ",\"gpuMs\":" + JsonNumber(gpu_ms_sum / gpu_samples, 2);
     if (game_cpu_frames) s += ",\"cpuGameMs\":" + JsonNumber(game_cpu_ms / double(game_cpu_frames), 2);
-    s += ",\"pipelineWaitMs\":" + JsonNumber(pipeline_wait_ms, 1) + "}";
-    return s;
+    s += ",\"pipelineWaitMs\":" + JsonNumber(pipeline_wait_ms, 1);
+    if (details && !worst.empty()) {
+      s += ",\"worst\":[";
+      for (size_t i = 0; i < worst.size(); ++i) s += (i ? "," : "") + worst[i].Json();
+      s += "]";
+    }
+    return s + "}";
   }
 };
 
@@ -450,11 +567,18 @@ inline std::string PerfJson(const PerfSummary& in) {
   head += "}";
   const std::string tail = std::string(",\"pipelineLibrary\":") + (in.pipeline_library ? "true" : "false") +
                            ",\"startupFallback\":" + (in.startup_fallback ? "true" : "false") + "}";
+  // Too long: the worst-frame detail goes first (from the shortest chapter up), then the shortest chapters.
+  size_t detailed = chapters.size();
   for (;;) {
     std::string json = head + ",\"chapters\":[";
-    for (size_t i = 0; i < chapters.size(); ++i) json += (i ? "," : "") + chapters[i].Json();
+    for (size_t i = 0; i < chapters.size(); ++i) json += (i ? "," : "") + chapters[i].Json(i < detailed);
     json += "]" + tail;
-    if (json.size() <= kMaxPerfBytes || chapters.size() <= 1) return json.size() <= kMaxPerfBytes ? json : "";
+    if (json.size() <= kMaxPerfBytes) return json;
+    if (detailed > 0) {
+      --detailed;
+      continue;
+    }
+    if (chapters.size() <= 1) return "";
     chapters.pop_back();
   }
 }
