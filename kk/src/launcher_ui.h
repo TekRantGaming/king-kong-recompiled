@@ -246,6 +246,7 @@ struct ListState {
   int shown_focus = -1;  // the focus the last frame drew: a change made outside the list scrolls it into view
   float band_y = -1, band_h = 0;
   int dragging = -1;  // slider held with the mouse
+  bool hide_focus = false;  // the page's focus is somewhere else (Workshop > Texture packs: the mods row): no band
 };
 
 struct Metrics {

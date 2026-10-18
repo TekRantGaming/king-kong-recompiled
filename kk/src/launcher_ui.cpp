@@ -883,7 +883,7 @@ const Item* DrawList(ImDrawList* dl, std::vector<Item>& items, ListState& st, Im
       dl->AddLine(ImVec2(p0.x, ly), ImVec2(p1.x, ly), WithAlpha(color::kText, 0.05f), 1.0f);
     }
   }
-  if (st.focus >= 0) {
+  if (st.focus >= 0 && !st.hide_focus) {
     const ImVec2 b0(p0.x, std::round(p0.y + st.band_y - st.scroll));
     const ImVec2 b1(p1.x, std::round(b0.y + st.band_h));
     dl->AddRectFilled(b0, b1, active ? color::kFocus : WithAlpha(color::kFocus, 0.8f));

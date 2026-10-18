@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <deque>
+#include <fstream>
 #include <map>
 #include <mutex>
 #include <thread>
@@ -17,6 +18,7 @@
 #include <rex/ui/immediate_drawer.h>
 
 #include "launcher_text.h"
+#include "mods.h"
 #include "platform.h"
 #include "workshop_logic.h"
 #include "workshop_markdown.h"
@@ -404,6 +406,8 @@ struct Workshop::Impl {
 
   rex::ui::ImmediateDrawer* drawer;
   fs::path dir;
+  fs::path user_dir;
+  Workshop::View view = Workshop::View::kHub;
   std::shared_ptr<Shared> shared;
   std::thread worker;
   bool started = false;
@@ -413,8 +417,12 @@ struct Workshop::Impl {
   std::map<std::string, WebImage> images;
   int image_version = 0;
 
-  // Tiles: row 0 the projects, row 1 Kong mods.
+  // Projects: the tile row. Mods: row 0 the Kong mods row, row 1 the guide's two buttons (guide_button).
   int row = 0, tile = 0;
+  int guide_button = 0;  // 0 Modding guide, 1 Open mods folder
+  // The modding guide (MODDING.md beside the game), shown like a README.
+  bool guide = false;
+  ProjectState guide_page;
   float scroll_x = 0, scroll_x_target = 0;
   float mods_glow = 0;
   // A project's page (-1: the tiles).
@@ -427,8 +435,8 @@ struct Workshop::Impl {
 
   std::unique_ptr<KongMods> kong;  // row 1 (task 200)
 
-  Impl(rex::ui::ImmediateDrawer* d, fs::path user_dir, fs::path config_path)
-      : drawer(d), dir(Workshop::CacheDir(user_dir)), kong(std::make_unique<KongMods>(d, user_dir, config_path)) {
+  Impl(rex::ui::ImmediateDrawer* d, fs::path user, fs::path config_path)
+      : drawer(d), dir(Workshop::CacheDir(user)), user_dir(user), kong(std::make_unique<KongMods>(d, user, config_path)) {
 #if defined(KK_DEV_TOOLS)
     no_browser = std::getenv("KK_DEV_WORKSHOP_NO_BROWSER") != nullptr;
 #endif
@@ -670,16 +678,12 @@ struct Workshop::Impl {
     const float row_top = p0.y + 40 * s;
     const ImVec2 row0(p0.x - 14 * s, row_top - 14 * s), row1(p1.x + 14 * s, row_top + tile_h + 14 * s);
 
-    // Input: left/right and LB/RB along the row, down to Kong mods and up again, A or a click opens.
-    const int tile_before = tile, row_before = row;
+    // Input: left/right and LB/RB along the row, A or a click opens.
+    const int tile_before = tile;
+    row = 0;
     if (active) {
-      if (row == 0) {
-        if (in.Pressed(Action::kLeft) || in.Pressed(Action::kPrevTab)) tile = std::max(0, tile - 1);
-        if (in.Pressed(Action::kRight) || in.Pressed(Action::kNextTab)) tile = std::min(n - 1, tile + 1);
-        if (in.Pressed(Action::kDown)) row = 1;
-      } else if (in.Pressed(Action::kUp)) {
-        row = 0;
-      }
+      if (in.Pressed(Action::kLeft) || in.Pressed(Action::kPrevTab)) tile = std::max(0, tile - 1);
+      if (in.Pressed(Action::kRight) || in.Pressed(Action::kNextTab)) tile = std::min(n - 1, tile + 1);
       in.Consume(Action::kPrevTab);
       in.Consume(Action::kNextTab);
       // The wheel moves along the row.
@@ -767,20 +771,98 @@ struct Workshop::Impl {
       if (!facts.empty()) dl->AddText(f.text, 13.5f * s, ImVec2(p0.x, fy), color::kTextFaint, facts.c_str());
     }
 
-    // Kong mods (task 200): the mods on disk, built-ins first.
-    y += 86 * s;
-    DrawCaption(dl, f, p0.x, p1.x, y, s, "Kong mods");
-    const int row_mods = row;
-    if (kong->DrawRow(dl, ImVec2(p0.x, y + 28 * s), p1, m, in, active, row_mods == 1)) row = 1;
-
-    if (tile != tile_before || row != row_before) ui::Cue(ui::Sound::kMove);
-    if (active && row == 0 && in.Pressed(Action::kAccept)) {
+    if (tile != tile_before) ui::Cue(ui::Sound::kMove);
+    if (active && in.Pressed(Action::kAccept)) {
       in.Consume(Action::kAccept);
       open = tile;
     }
     if (open >= 0) {
       ui::Cue(ui::Sound::kSelect);
       OpenDetail(open);
+    }
+  }
+
+  // -------------------------------------------------------------- Mods ---
+  // Workshop > Mods: the Kong mods row (task 200; texture pack mods are in Texture packs), then the modding
+  // guide and the mods folder. Down / Up move between the row and the two buttons, Left / Right between them.
+  void OpenGuide() {
+    guide = true;
+    focus = 0;
+    scroll_y = scroll_y_target = 0;
+    doc = Doc{};
+    const fs::path path = mods::BuiltinDir().parent_path() / "MODDING.md";
+    std::ifstream file(path, std::ios::binary);
+    const std::string text((std::istreambuf_iterator<char>(file)), {});
+    guide_page = ProjectState{};
+    guide_page.tile = Load::kFailed;
+    // Only web addresses open (the guide's own anchors and relative links do not), and no pictures.
+    guide_page.blocks = md::Parse(text, [](const std::string& url, bool picture) {
+      return !picture && url.rfind("https://", 0) == 0 ? url : std::string();
+    });
+    guide_page.readme = text.empty() ? Load::kFailed : Load::kReady;
+    ++image_version;
+    REXLOG_INFO("KK workshop: modding guide {} ({} bytes, {} blocks)", path.string(), text.size(), guide_page.blocks.size());
+  }
+
+  void OpenModsFolder() {
+    const fs::path folder = mods::UserDir(user_dir);
+    ui::Cue(ui::Sound::kSelect);
+    if (no_browser) {
+      REXLOG_INFO("KK workshop: mods folder {} (not opened: KK_DEV_WORKSHOP_NO_BROWSER)", folder.string());
+      return;
+    }
+    REXLOG_INFO("KK workshop: opening the mods folder {}", folder.string());
+    OpenInExplorer(folder);
+  }
+
+  void DrawModsPage(ImDrawList* dl, ImVec2 p0, ImVec2 p1, const ui::Metrics& m, ui::Input& in, bool active) {
+    const float s = m.s;
+    const ui::Fonts f = ui::GetFonts();
+    const int row_before = row, button_before = guide_button;
+    if (active) {
+      if (row == 0 && in.Pressed(Action::kDown)) row = 1;
+      else if (row == 1 && in.Pressed(Action::kUp)) row = 0;
+      if (row == 1 && (in.Pressed(Action::kLeft) || in.Pressed(Action::kRight))) guide_button = 1 - guide_button;
+    }
+    DrawCaption(dl, f, p0.x, p1.x, p0.y + 6 * s, s, "Kong mods");
+    const float row_bottom = std::min(p1.y, p0.y + 34 * s + 300 * s);
+    if (kong->DrawRow(dl, ImVec2(p0.x, p0.y + 34 * s), ImVec2(p1.x, row_bottom), m, in, active, row == 0)) row = 0;
+    // Making mods: the guide and the folder.
+    const float gy = row_bottom + 12 * s;
+    DrawCaption(dl, f, p0.x, p1.x, gy, s, "Making mods");
+    const float bw = std::round(std::min(320 * s, (p1.x - p0.x - 16 * s) * 0.5f)), bh = 44 * s, by = gy + 30 * s;
+    const char* labels[2] = {"Modding guide", "Open mods folder"};
+    int clicked = -1;
+    for (int b = 0; b < 2; ++b) {
+      const ImVec2 a(p0.x + b * (bw + 16 * s), by), c(a.x + bw, by + bh);
+      const bool hot = active && ImGui::IsMouseHoveringRect(a, c, false);
+      if (hot && in.mouse_moved()) row = 1, guide_button = b;
+      if (hot && ImGui::IsMouseClicked(0)) row = 1, guide_button = b, clicked = b;
+      const bool lit = row == 1 && guide_button == b;
+      if (lit) dl->AddRectFilled(a, c, color::kFocus);
+      else {
+        dl->AddRectFilled(a, c, ui::WithAlpha(color::kPanel, 0.85f));
+        dl->AddRect(a, c, ui::WithAlpha(color::kText, 0.14f));
+      }
+      const std::string label = text::Upper(T(labels[b]));
+      const float lfs = 15 * s, tw = ui::TrackedWidth(f.display, lfs, label, 2 * s);
+      ui::DrawTracked(dl, f.display, lfs, ImVec2(a.x + (bw - tw) * 0.5f, a.y + (bh - lfs) * 0.5f),
+                      lit ? color::kOnFocus : color::kText, label, 2 * s);
+    }
+    const char* hint = guide_button == 1 ? "Opens the folder your mods go in, so you can add or remove them."
+                                         : "How to make texture packs, settings mods and cutscene mods for the game.";
+    if (row == 1)
+      dl->AddText(f.text, 13.5f * s, ImVec2(p0.x, by + bh + 12 * s), color::kTextFaint, T(hint), nullptr, p1.x - p0.x);
+    if (row != row_before || guide_button != button_before) ui::Cue(ui::Sound::kMove);
+    if (active && row == 1 && in.Pressed(Action::kAccept)) {
+      in.Consume(Action::kAccept);
+      clicked = guide_button;
+    }
+    if (clicked == 0) {
+      ui::Cue(ui::Sound::kSelect);
+      OpenGuide();
+    } else if (clicked == 1) {
+      OpenModsFolder();
     }
   }
 
@@ -842,7 +924,9 @@ struct Workshop::Impl {
     return y + row_h + 12 * s;
   }
 
-  void BuildDoc(int p, float width, float s) {
+  // `p`: the project, or kGuideDoc for the modding guide.
+  static constexpr int kGuideDoc = -2;
+  void BuildDoc(int p, const std::vector<md::Block>& blocks, float width, float s) {
     doc = Doc{};
     doc.project = p;
     doc.width = width;
@@ -853,7 +937,7 @@ struct Workshop::Impl {
     const TextStyle body{f.text, f.semibold, 15.5f * s, ui::WithAlpha(color::kText, 0.92f)};
     float y = 0;
     bool first = true;
-    for (const md::Block& b : projects[size_t(p)].blocks) {
+    for (const md::Block& b : blocks) {
       switch (b.kind) {
         case md::BlockKind::kHeading: {
           const int level = b.level;
@@ -941,6 +1025,11 @@ struct Workshop::Impl {
   }
 
   void Activate(int target) {
+    if (guide) {
+      if (target == 0) OpenModsFolder();
+      else if (target - 2 >= 0 && target - 2 < int(doc.targets.size())) OpenLink(doc.targets[size_t(target - 2)].url, "link:");
+      return;
+    }
     const ws::Project& p = ws::kProjects[detail];
     if (target == 0) OpenLink(ws::ReleasesUrl(p), "download: opening the latest release page");
     else if (target == 1) OpenLink(ws::RepoUrl(p), "view on GitHub:");
@@ -957,16 +1046,18 @@ struct Workshop::Impl {
     const float s = m.s;
     const ui::Fonts f = ui::GetFonts();
     const ImGuiIO& io = ImGui::GetIO();
-    if (active && (in.Pressed(Action::kPrevTab) || in.Pressed(Action::kNextTab))) {
+    if (active && !guide && (in.Pressed(Action::kPrevTab) || in.Pressed(Action::kNextTab))) {
       const int dir = in.Pressed(Action::kNextTab) ? 1 : -1;
       in.Consume(Action::kPrevTab);
       in.Consume(Action::kNextTab);
       ui::Cue(ui::Sound::kTab);
       OpenDetail((detail + dir + ws::kProjectCount) % ws::kProjectCount);
     }
-    const int p = detail;
-    ProjectState& ps = projects[size_t(p)];
-    const ws::Project& proj = ws::kProjects[p];
+    // The modding guide uses the same page: its text instead of a README, one button (Open mods folder).
+    const int p = guide ? kGuideDoc : detail;
+    ProjectState& ps = guide ? guide_page : projects[size_t(p)];
+    const int buttons = guide ? 1 : 2;
+    const std::string name = guide ? std::string(T("Modding guide")) : std::string(ws::kProjects[p].name);
     const float avail = p1.x - p0.x;
     const float col_w = std::round(avail * 0.60f);
     const ImVec2 c0(p0.x, p0.y + 4 * s), c1(p0.x + col_w, p1.y);
@@ -974,7 +1065,7 @@ struct Workshop::Impl {
     view_h = c1.y - c0.y;
     if (ps.readme == Load::kReady &&
         (doc.project != p || doc.width != text_w || doc.scale != s || doc.version != image_version))
-      BuildDoc(p, text_w, s);
+      BuildDoc(p, ps.blocks, text_w, s);
     const bool ready = ps.readme == Load::kReady && doc.project == p;
     max_scroll = ready ? std::max(0.0f, doc.height - view_h + 24 * s) : 0.0f;
     if (active) {
@@ -994,8 +1085,7 @@ struct Workshop::Impl {
       std::vector<int> order;
       for (int k = 0; k < int(doc.targets.size()); ++k)
         if (TargetVisible(k)) order.push_back(k + 2);
-      order.push_back(0);
-      order.push_back(1);
+      for (int b = 0; b < buttons; ++b) order.push_back(b);
       const int at = int(std::find(order.begin(), order.end(), focus) - order.begin());
       const int n = int(order.size());
       focus = order[size_t((at + (in.Pressed(Action::kRight) ? 1 : n - 1)) % n)];
@@ -1074,8 +1164,9 @@ struct Workshop::Impl {
       dl->AddText(f.text, 16 * s, ImVec2(c0.x, c0.y + 8 * s), color::kTextDim, loading.c_str());
     } else {
       dl->AddText(f.text, 16 * s, ImVec2(c0.x, c0.y + 8 * s), color::kTextDim,
-                  T("Could not load this page. Check your internet connection and try again later."), nullptr,
-                  text_w);
+                  guide ? T("The modding guide (MODDING.md) was not found beside the game.")
+                        : T("Could not load this page. Check your internet connection and try again later."),
+                  nullptr, text_w);
     }
 
     // The side panel: picture, name, description, facts and the two buttons.
@@ -1084,15 +1175,21 @@ struct Workshop::Impl {
     const float pic_h = std::round(std::min(pw * 9.0f / 16.0f, (p1.y - p0.y) * 0.34f)), pic_w = std::round(pic_h * 16.0f / 9.0f);
     const ImVec2 pa(x0, y), pb(x0 + pic_w, y + pic_h);
     if (ps.tile == Load::kReady && ps.picture.tex) DrawCover(dl, ps.picture.tex.get(), ps.picture.aspect, pa, pb, IM_COL32_WHITE);
-    else DrawPlainPanel(dl, f, pa, pb, s, ps.tile == Load::kFailed ? proj.name : "", ps.tile == Load::kPending);
+    else DrawPlainPanel(dl, f, pa, pb, s, ps.tile == Load::kFailed ? name : std::string(), ps.tile == Load::kPending);
     dl->AddRect(pa, pb, ui::WithAlpha(color::kText, 0.10f));
     dl->AddRectFilled(pa, ImVec2(pa.x + 3 * s, pb.y), color::kAccent);
     y = pb.y + 16 * s;
-    dl->AddText(f.display, 25 * s, ImVec2(x0, y), color::kText, proj.name, nullptr, pw);
-    y += f.display->CalcTextSizeA(25 * s, FLT_MAX, pw, proj.name).y + 4 * s;
-    const std::string repo = std::string("github.com/") + proj.owner + "/" + proj.repo;
+    dl->AddText(f.display, 25 * s, ImVec2(x0, y), color::kText, name.c_str(), nullptr, pw);
+    y += f.display->CalcTextSizeA(25 * s, FLT_MAX, pw, name.c_str()).y + 4 * s;
+    const std::string repo = guide ? std::string("MODDING.md")
+                                   : std::string("github.com/") + ws::kProjects[p].owner + "/" + ws::kProjects[p].repo;
     dl->AddText(f.text, 13.5f * s, ImVec2(x0, y), color::kTextFaint, ui::Ellipsize(f.text, 13.5f * s, repo, pw).c_str());
     y += 24 * s;
+    if (guide) {
+      const char* desc = T("How to make texture packs, settings mods and cutscene mods for the game.");
+      dl->AddText(f.text, 15 * s, ImVec2(x0, y), color::kTextDim, desc, nullptr, pw);
+      y += f.text->CalcTextSizeA(15 * s, FLT_MAX, pw, desc).y + 8 * s;
+    }
     if (ps.facts_ok && !ps.facts.description.empty()) {
       // At most three lines.
       const std::string desc = CleanText(ps.facts.description);
@@ -1108,9 +1205,9 @@ struct Workshop::Impl {
       y += 24 * s;
     }
     y += 6 * s;
-    const char* labels[2] = {"Download", "View on GitHub"};
+    const char* labels[2] = {guide ? "Open mods folder" : "Download", "View on GitHub"};
     const float bh = 44 * s;
-    for (int i = 0; i < 2; ++i) {
+    for (int i = 0; i < buttons; ++i) {
       const ImVec2 a(x0, y), b(x1, y + bh);
       button_rect[i][0] = a;
       button_rect[i][1] = b;
@@ -1132,9 +1229,10 @@ struct Workshop::Impl {
                       on ? color::kOnFocus : color::kText, label, 2 * s);
       y += bh + 10 * s;
     }
-    const char* hint = focus == 1 ? "Opens the project's page on GitHub in your web browser."
-                                  : "Opens the latest release on GitHub in your web browser. The launcher does not "
-                                    "download or run anything.";
+    const char* hint = guide       ? "Opens the folder your mods go in, so you can add or remove them."
+                       : focus == 1 ? "Opens the project's page on GitHub in your web browser."
+                                    : "Opens the latest release on GitHub in your web browser. The launcher does not "
+                                      "download or run anything.";
     dl->AddText(f.text, 13.5f * s, ImVec2(x0, y), color::kTextFaint, T(hint), nullptr, pw);
     y += f.text->CalcTextSizeA(13.5f * s, FLT_MAX, pw, T(hint)).y + 10 * s;
     if (ps.readme_stale && y < p1.y - 20 * s)
@@ -1147,12 +1245,38 @@ struct Workshop::Impl {
     }
   }
 
+  void SetView(Workshop::View v) {
+    if (v == view) return;
+    view = v;
+    detail = -1;
+    guide = false;
+    kong->Back();
+    kong->SetFilter(v == Workshop::View::kTexturePacks ? KongMods::Filter::kTexturePacks : KongMods::Filter::kOthers);
+    row = 0;
+    REXLOG_INFO("KK workshop: view {}", v == Workshop::View::kHub            ? "hub"
+                                        : v == Workshop::View::kMods         ? "mods"
+                                        : v == Workshop::View::kTexturePacks ? "texture packs"
+                                                                             : "projects");
+  }
+
   void Draw(ImDrawList* dl, ImVec2 p0, ImVec2 p1, const ui::Metrics& m, ui::Input& in, bool active) {
-    Start();
-    TakeResults();
-    if (detail >= 0) DrawDetail(dl, p0, p1, m, in, active);
-    else if (kong->InDetail()) kong->DrawDetail(dl, p0, p1, m, in, active);
-    else DrawTiles(dl, p0, p1, m, in, active);
+    switch (view) {
+      case Workshop::View::kProjects:
+        Start();
+        TakeResults();
+        if (detail >= 0) DrawDetail(dl, p0, p1, m, in, active);
+        else DrawTiles(dl, p0, p1, m, in, active);
+        break;
+      case Workshop::View::kMods:
+        if (guide) DrawDetail(dl, p0, p1, m, in, active);
+        else if (kong->InDetail()) kong->DrawDetail(dl, p0, p1, m, in, active);
+        else DrawModsPage(dl, p0, p1, m, in, active);
+        break;
+      case Workshop::View::kTexturePacks:
+        if (kong->InDetail()) kong->DrawDetail(dl, p0, p1, m, in, active);
+        break;
+      case Workshop::View::kHub: break;
+    }
   }
 
   void Dev(const std::string& c) {
@@ -1172,19 +1296,32 @@ struct Workshop::Impl {
                   "pictures, {} links; README pictures ready {} failed {} pending {}",
                   detail >= 0 ? ws::kProjects[detail].repo : "tiles", row, tile, focus, scroll_y, max_scroll,
                   doc.height, doc.runs.size(), doc.pics.size(), doc.targets.size(), ready, failed, pending);
+    } else if (c.rfind("view:", 0) == 0) {
+      const std::string v = c.substr(5);
+      SetView(v == "mods" ? Workshop::View::kMods : v == "textures" ? Workshop::View::kTexturePacks
+              : v == "projects" ? Workshop::View::kProjects : Workshop::View::kHub);
     } else if (c.rfind("open:", 0) == 0) {
+      SetView(Workshop::View::kProjects);
       OpenDetail(std::atoi(c.c_str() + 5));
     } else if (c.rfind("tile:", 0) == 0) {
+      SetView(Workshop::View::kProjects);
       detail = -1;
       row = 0;
       tile = std::clamp(std::atoi(c.c_str() + 5), 0, ws::kProjectCount - 1);
     } else if (c == "mods") {
-      detail = -1;
-      row = 1;
+      if (view != Workshop::View::kTexturePacks) SetView(Workshop::View::kMods);
+      guide = false;
+      row = 0;
     } else if (c.rfind("mods:", 0) == 0) {
-      detail = -1;
-      row = 1;
+      if (view != Workshop::View::kTexturePacks) SetView(Workshop::View::kMods);
+      guide = false;
+      row = 0;
       kong->Dev(c.substr(5));
+    } else if (c == "guide") {
+      SetView(Workshop::View::kMods);
+      OpenGuide();
+    } else if (c == "folder") {
+      OpenModsFolder();
     } else if (detail >= 0 && c == "download") {
       Activate(0);
     } else if (detail >= 0 && c == "github") {
@@ -1206,20 +1343,37 @@ Workshop::Workshop(rex::ui::ImmediateDrawer* drawer, fs::path user_dir, fs::path
 
 Workshop::~Workshop() = default;
 
+void Workshop::SetView(View view) { impl_->SetView(view); }
+Workshop::View Workshop::view() const { return impl_->view; }
+bool Workshop::InDetail() const { return impl_->detail >= 0 || impl_->guide || impl_->kong->InDetail(); }
+
 void Workshop::Draw(ImDrawList* dl, ImVec2 p0, ImVec2 p1, const ui::Metrics& m, ui::Input& in, bool active) {
   impl_->Draw(dl, p0, p1, m, in, active);
 }
 
+bool Workshop::DrawTextureModsRow(ImDrawList* dl, ImVec2 p0, ImVec2 p1, const ui::Metrics& m, ui::Input& in,
+                                  bool active, bool focused) {
+  return impl_->kong->DrawRow(dl, p0, p1, m, in, active, focused);
+}
+
+KongMods::Counts Workshop::ModCounts() { return impl_->kong->GetCounts(); }
+
 bool Workshop::Back() {
   if (impl_->kong->Back()) return true;
+  if (impl_->guide) {
+    impl_->guide = false;
+    return true;
+  }
   if (impl_->detail < 0) return false;
   impl_->detail = -1;
   return true;
 }
 
-std::vector<ui::Prompt> Workshop::Prompts() const {
-  if (impl_->detail >= 0) return {{Action::kUp, "Scroll"}, {Action::kAccept, "Select"}, {Action::kBack, "Back"}};
-  if (impl_->kong->InDetail() || impl_->row == 1) return impl_->kong->Prompts(impl_->row == 1);
+std::vector<ui::Prompt> Workshop::Prompts(bool row_focused) const {
+  if (impl_->detail >= 0 || impl_->guide) return {{Action::kUp, "Scroll"}, {Action::kAccept, "Select"}, {Action::kBack, "Back"}};
+  if (impl_->kong->InDetail()) return impl_->kong->Prompts(false);
+  if (impl_->view == View::kMods && impl_->row == 0) return impl_->kong->Prompts(true);
+  if (impl_->view == View::kTexturePacks) return impl_->kong->Prompts(row_focused);
   return {{Action::kAccept, "Select"}, {Action::kBack, "Back"}};
 }
 

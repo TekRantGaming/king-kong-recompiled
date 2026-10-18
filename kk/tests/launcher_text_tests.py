@@ -3,13 +3,16 @@
   German, Spanish, French and Italian translation (placeholders kept, no em dashes);
 - the online player count reminder can never open by itself (owner, 16 Oct): no code opens it;
 - the shader screen shows one bar with one label: no step text is drawn;
-- the bonus video modes' help text says unlocked or locked to match the save;
+- every bonus is unlocked (owner, 18 Oct): the bonus video modes are never locked, Extras reads no save and has
+  no save row, and the Artbook is its first item;
 - job J2: setup steps 3 and 4 (texture pack, PS2 cutscenes), their pop-ups and the Settings rows;
 - job J3: the notification switch (Settings > Advanced > Downloads) and the ding/notification calls;
-- job J8: the Workshop page's text and its Home entry;
+- job J8: the Workshop page's text and its Home entry; owner, 18 Oct: the Workshop opens a choice of three
+  (Mods, Texture packs, Other TRG projects and games);
 - job J6: the look step gone, new installs Remastered, the New in this update screen;
 - Settings' tabs are Display, Graphics, Audio, Controls, Gameplay, Cheats, Advanced, About (owner, 16 Oct
-  evening), the pause menu's the same without About, and About stays on Home too.
+  evening), the pause menu's the same without About; Home's About entry is Benchmark (owner, 18 Oct);
+- the frame rate warning pop-up is gone (owner, 18 Oct).
 Usage: launcher_text_tests.py <kk folder>"""
 import re
 import sys
@@ -43,7 +46,7 @@ layout_pages = re.findall(r'"([^"]+)"', re.search(r'kPageNames\[kPageCount\] = \
 strings |= set(layout_pages)
 strings |= {
     # Home and its pages, the Play menu's Extras
-    'Settings', 'Achievements', 'About', 'Extras', 'Quit', 'Bonuses use this save\'s progress and scores.',
+    'Settings', 'Achievements', 'About', 'Benchmark', 'Extras', 'Quit', 'Every bonus is unlocked.', 'Bonuses',
     'No save yet', 'Reinstall game', 'Install game',
     'Copies the game\'s files again from your disc image. Your saves and settings stay as they are.',
     # the shader screen's one bar, Rebuild shaders
@@ -57,10 +60,11 @@ strings |= {
     'minutes. Your PC may run slower until this finishes, because preparing the shaders uses its processor.',
     'Continue in the background', 'Menu music', 'Menu music volume', 'Switch Menu music on to set its volume.',
 }
-# Old movie filter / Horizontal flip (Graphics > Extras): the help text follows the unlock state (task 159).
+# Old movie filter / Horizontal flip (Graphics > Extras): always unlocked since every bonus is (owner, 18 Oct;
+# task 159 had the help text follow the save's unlock state).
 LOCKED_HELP = 'An original bonus video mode. Unlock it in Extras before changing it.'
 UNLOCKED_HELP = 'An original bonus video mode, unlocked in Extras.'
-strings |= {LOCKED_HELP, UNLOCKED_HELP}
+strings |= {UNLOCKED_HELP}
 # Content downloads (task J1): the Settings rows, their values, help, errors and status lines.
 strings |= {
     'HD texture pack',
@@ -309,7 +313,18 @@ workshop_strings = set(re.findall(r'(?<![A-Za-z_])[TF]\("([^"]+)"', workshop_cpp
 workshop_strings |= set(re.findall(r'DrawCaption\([^;]*?"([^"]+)"\);', workshop_cpp))
 workshop_strings |= {'Workshop', 'Download', 'View on GitHub', 'Scroll', 'Select', 'Back',
                      "Opens the project's page on GitHub in your web browser.",
-                     'Opens the latest release on GitHub in your web browser. The launcher does not download or run anything.'}
+                     'Opens the latest release on GitHub in your web browser. The launcher does not download or run anything.',
+                     # owner, 18 Oct: Workshop > Mods, its guide and the mods folder
+                     'Making mods', 'Modding guide', 'Open mods folder',
+                     'Opens the folder your mods go in, so you can add or remove them.',
+                     'How to make texture packs, settings mods and cutscene mods for the game.',
+                     'The modding guide (MODDING.md) was not found beside the game.'}
+# Owner, 18 Oct: the Workshop's menu of three and what its entries show (launcher.cpp).
+strings |= {'Mods', 'Texture packs', 'Other TRG projects and games', 'Texture pack mods', 'Switched on', 'On GitHub',
+            '{0} projects', 'Switch mods on or off and read how to make your own.',
+            'The HD texture pack, your own texture packs and texture pack mods.',
+            'More recompiled games and projects by TRG, with their download pages.', 'Not installed', 'Installed',
+            'Downloading', 'Looking for mods', '{0} of {1}'}
 if len(workshop_strings) < 14:
     fail(f'J8: only {len(workshop_strings)} Workshop strings found')
 strings |= workshop_strings
@@ -336,6 +351,27 @@ else:
         fail('task 200: dash in MODDING.md')
 if 'e.push_back({"Workshop", true, [this] { GoTo(kWorkshop); }});' not in (src / 'launcher.cpp').read_text(encoding='utf-8'):
     fail('J8: no Workshop entry on Home')
+# Owner, 18 Oct: the Workshop opens its menu of three (in this order, then Back); Mods leaves the texture pack
+# mods to Texture packs; Texture packs shows the same HD texture pack rows as Settings > Graphics (one source)
+# and keeps the Settings rows; the projects keep their tiles and README pages.
+_launcher = (src / 'launcher.cpp').read_text(encoding='utf-8')
+m = re.search(r'std::vector<HomeEntry> WorkshopEntries\(\) \{(.*?)\n  \}\n', _launcher, re.S)
+hub = re.findall(r'\{"([^"]+)", true,', m.group(1)) if m else []
+if hub != ['Mods', 'Texture packs', 'Other TRG projects and games', 'Back']:
+    fail(f'the Workshop menu is {hub}')
+for needle, why in (
+        ('workshop_->SetView(Workshop::View::kHub);', 'the Workshop does not open on its menu'),
+        ('TexturePackItems(items);\n    const float top', 'Workshop > Texture packs does not use the Settings texture pack rows'),
+        ('workshop_->DrawTextureModsRow(', 'Workshop > Texture packs has no texture pack mods row'),
+        ('switch (WorkshopBackStep(workshop_->InDetail(), WorkshopHub())) {', 'Back on a Workshop page does not go to its menu'),
+        ('    OriginalVideoItems(items);\n    TexturePackItems(items);', 'Settings > Graphics lost its texture pack rows'),
+):
+    if needle not in _launcher:
+        fail(why)
+if 'KongMods::Filter::kTexturePacks : KongMods::Filter::kOthers' not in workshop_cpp:
+    fail('the Mods and Texture packs pages do not split the Kong mods by type')
+if 'void OpenGuide()' not in workshop_cpp or 'mods::BuiltinDir().parent_path() / "MODDING.md"' not in workshop_cpp:
+    fail('Workshop > Mods has no modding guide')
 # Beta 7: Extras > Artbook (artbook.cpp, its Extras row and the quiet download in launcher.cpp): every string it
 # draws, its prompts, no dashes; the artbook never asks before Play and has no download strip.
 artbook_cpp = (src / 'artbook.cpp').read_text(encoding='utf-8')
@@ -458,8 +494,25 @@ for en in drawn:
 if 'REXCVAR_DEFINE_BOOL(kk_online_count, true,' not in (src / 'settings.cpp').read_text(encoding='utf-8'):
     fail('the Online player count default changed')
 
-if not re.search(r'unlocked \? "' + re.escape(UNLOCKED_HELP) + r'"\s*:\s*"' + re.escape(LOCKED_HELP) + '"', launcher):
-    fail('the bonus video help text does not follow the unlock state')
+# Every bonus is unlocked (owner, 18 Oct): nothing in the launcher reads a save to lock a bonus, the bonus video
+# modes are never shown locked, Extras has no save row and starts with the Artbook.
+for banned in (LOCKED_HELP, 'ReadExtraProgress', 'ExtraUnlocked(', 'save.label = "Save";',
+               "Bonuses use this save's progress and scores."):
+    if banned in launcher:
+        fail(f'a bonus can still be locked or tied to a save in the launcher: {banned}')
+if LOCKED_HELP in entries:
+    fail('the locked bonus help text is still translated')
+m = re.search(r'std::vector<Item> ExtrasItems\(\) \{(.*?)\n  \}\n', launcher, re.S)
+extras = m.group(1) if m else ''
+if 'it.label = "Artbook";' not in extras or extras.find('it.label = "Artbook";') > extras.find('for (const auto& extra : play::kExtras)'):
+    fail('the Artbook is not the first item in Extras')
+if '"Unlocked"' not in extras or '"Locked"' in extras:
+    fail('Extras still shows locked bonuses')
+
+# The frame rate warning pop-up is gone (owner, 18 Oct): Play starts the game.
+for banned in ('OpenFrameRateWarning', 'Frame rate above 30 FPS', 'Play at 30 FPS', 'Keep {0} FPS'):
+    if banned in launcher or banned in entries:
+        fail(f'the frame rate warning is still there: {banned}')
 
 # One bar, one label: no step text on the shader screen or in the pack's status.
 shaders_cpp = (src / 'native_shaders.cpp').read_text(encoding='utf-8')
@@ -471,7 +524,7 @@ if 'native_pack_.ProgressLabel()' not in launcher or 'DrawnFraction(' not in lau
     fail('the shader screen does not draw the single eased bar')
 
 # Settings' tabs (task 169): the settings pages in the owner's order, then About; the pause menu shares the
-# settings pages (not About); Home keeps its About entry.
+# settings pages (not About). Owner, 18 Oct: Home's About entry is Benchmark, which opens the benchmark.
 if layout_pages != ['Display', 'Graphics', 'Audio', 'Controls', 'Gameplay', 'Cheats', 'Advanced']:
     fail(f'settings_layout.h pages are {layout_pages}')
 m = re.search(r'enum Page \{([^}]*)\};', launcher)
@@ -481,8 +534,14 @@ if tabs != ['kDisplay', 'kGraphics', 'kAudio', 'kControls', 'kGameplay', 'kCheat
     fail(f'the launcher Settings tabs are {tabs}')
 if 'constexpr Page kLastSettingsTab = kAbout;' not in launcher:
     fail('About is not the last Settings tab')
-if 'e.push_back({"About", true, [this] { GoTo(kAbout); }});' not in launcher:
-    fail('Home lost its About entry')
+if '{"About", true, [this] { GoTo(kAbout); }}' in launcher:
+    fail('Home still has an About entry')
+if 'e.push_back({"Benchmark", CanPlay(), [this] { OpenBenchmark(); }});' not in launcher:
+    fail('Home has no Benchmark entry')
+m = re.search(r'std::vector<HomeEntry> HomeEntries\(\) \{(.*?)\n  \}\n', launcher, re.S)
+home = re.findall(r'e\.push_back\(\{"([^"]+)"', m.group(1)) if m else []
+if home != ['Play', 'Settings', 'Workshop', 'Achievements', 'Benchmark', 'Quit']:
+    fail(f'Home entries are {home}')
 ingame = (src / 'ingame_settings.h').read_text(encoding='utf-8')
 if 'enum Page { kDisplay, kGraphics, kAudio, kControls, kGameplay, kCheats, kAdvanced, kPageCount };' not in ingame:
     fail('the pause menu Settings tabs differ from the launcher ones')

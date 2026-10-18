@@ -297,10 +297,10 @@ constexpr const char* kRestartCvars[] = {"present_effect", "window_width", "wind
                                          "d3d12_allow_variable_refresh_rate_and_tearing"};
 
 // The launcher's pages (owner, 16 Oct: a tidy top level). Home is the main menu: Play (its own pages,
-// PlayView, with Extras among them), Settings, Achievements and About. Settings has the seven categories of
-// settings_layout.h as tabs, then About as its last tab (owner, 16 Oct evening: Display, Graphics, Audio,
-// Controls, Gameplay, Cheats, Advanced, About). About is also on Home as a page of its own (no tabs), the same
-// page and rows (AboutItems); Achievements is a page of its own.
+// PlayView, with Extras among them), Settings, Workshop, Achievements and Benchmark. Settings has the seven
+// categories of settings_layout.h as tabs, then About as its last tab (owner, 16 Oct evening: Display, Graphics,
+// Audio, Controls, Gameplay, Cheats, Advanced, About). About is only a Settings tab: Home's About entry became
+// Benchmark (owner, 18 Oct). Achievements and the Workshop are pages of their own.
 enum Page { kHome, kDisplay, kGraphics, kAudio, kControls, kGameplay, kCheats, kAdvanced, kAbout, kAchievements,
             kWorkshop, kPageCount };
 constexpr const char* kPageNames[kPageCount] = {"Home",     "Display", "Graphics", "Audio", "Controls",    "Gameplay",
@@ -873,35 +873,17 @@ class SettingsPages {
     return it;
   }
 
-  // A save's bonus progress, read at most twice a second (the pages are built every frame; task 144: the
-  // Graphics page and Extras read the save file on every frame).
-  play::ExtraProgress ExtraProgressFor(int slot) {
-    const double now = ImGui::GetTime();
-    if (slot != extra_progress_slot_ || extra_progress_at_ < 0 || now - extra_progress_at_ >= kProfileReadInterval ||
-        profile_read_at_ < 0) {
-      extra_progress_ = play::ReadExtraProgress(profile_user_dir_, slot);
-      extra_progress_slot_ = slot;
-      extra_progress_at_ = now;
-    }
-    return extra_progress_;
-  }
-
+  // Graphics > Extras: the game's two bonus video modes. Every bonus is unlocked (owner, 18 Oct), so no save
+  // is read to decide.
   void OriginalVideoItems(std::vector<Item>& items) {
     const auto profile = ShownProfileOptions();
-    const int slot = profile.slot;
-    auto progress = ExtraProgressFor(slot);
-    progress.museum |= GetBool("kk_cheats") && GetBool("kk_cheat_bonus");
     items.push_back(Section("Extras"));
     for (int id : {1, 8}) {
       const bool old = id == 1;
-      const bool unlocked = play::ExtraUnlocked(*play::FindExtra(id), progress);
-      auto it = ProfileToggle(old ? "Old movie filter" : "Horizontal flip",
-          unlocked ? "An original bonus video mode, unlocked in Extras."
-                   : "An original bonus video mode. Unlock it in Extras before changing it.",
-          old ? play::ProfileOption::kOldMovie : play::ProfileOption::kHorizontalFlip,
-          old ? profile.old_movie : profile.horizontal_flip);
-      Disable(it, !unlocked, "Locked");
-      items.push_back(std::move(it));
+      items.push_back(ProfileToggle(old ? "Old movie filter" : "Horizontal flip",
+                                    "An original bonus video mode, unlocked in Extras.",
+                                    old ? play::ProfileOption::kOldMovie : play::ProfileOption::kHorizontalFlip,
+                                    old ? profile.old_movie : profile.horizontal_flip));
     }
   }
 
@@ -2450,9 +2432,6 @@ class SettingsPages {
   std::array<bool, size_t(play::ProfileOption::kCount)> profile_dirty_{};
   std::array<bool, size_t(play::ProfileOption::kCount)> profile_waiting_{};
   double profile_changed_at_ = 0;
-  play::ExtraProgress extra_progress_;
-  int extra_progress_slot_ = -2;
-  double extra_progress_at_ = -1;
 };
 
 class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
@@ -2550,13 +2529,14 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // or Chapter select.
     const std::string open_on = Get("kk_launcher_open");
     rex::cvar::ResetToDefault("kk_launcher_open");  // never saved
-    // Back from a benchmark run: its results, over the About it was started from (Home's, or Settings' tab).
+    // Back from a benchmark run: its results, over the page it was started from (Home's Benchmark entry, or
+    // Settings' About tab).
     if (files_ok_ && (open_on == "benchmark" || open_on == "benchmark-settings")) {
-      page_ = kAbout;
       about_in_settings_ = open_on == "benchmark-settings";
+      page_ = about_in_settings_ ? kAbout : kHome;
       if (about_in_settings_) settings_page_ = kAbout;
       open_benchmark_results_ = true;
-      REXLOG_INFO("KK launcher: back from the benchmark to {}", about_in_settings_ ? "Settings > About" : "About");
+      REXLOG_INFO("KK launcher: back from the benchmark to {}", about_in_settings_ ? "Settings > About" : "Home");
     }
     if (files_ok_ && (open_on == "play" || open_on == "chapters")) {
       OpenPlayMenu();
@@ -2976,7 +2956,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   void DrawBackdrop(ImDrawList* dl) {
     const float s = S();
-    const bool home = page_ == kHome && !InSetup() && (play_ == PlayView::kNone || play_ == PlayView::kMenu);
+    const bool home = !InSetup() && ((page_ == kHome && (play_ == PlayView::kNone || play_ == PlayView::kMenu)) ||
+                                     (page_ == kWorkshop && play_ == PlayView::kNone && WorkshopHub()));
     home_mix_ = ui::Approach(home_mix_ * 100.0f, home ? 100.0f : 0.0f, 9.0f) / 100.0f;
     slide_clock_ += std::min(ImGui::GetIO().DeltaTime, 0.1f);
     const ImVec2 p1(o_.x + w_, o_.y + h_);
@@ -3038,9 +3019,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   // ------------------------------------------------------------ top bar ---
   // The top of every page but the setup's: on Settings its eight tabs (LB and RB, or a click, move between
-  // them) with SETTINGS at the right; on Achievements and Home's About the page's name; on Home nothing but
-  // the online player count. The Play pages have their own (DrawPlayHeader).
+  // them) with SETTINGS at the right; on Achievements the page's name; on Home nothing but the online player
+  // count. The Play pages and the Workshop have their own (DrawCrumbs).
   void DrawTopBar(ImDrawList* dl) {
+    if (page_ == kWorkshop) return DrawWorkshopHeader(dl);
     const float s = S();
     const online::Counts counts = online::Get();
     const bool show_counts = counts.known && !InSetup() && page_ == kHome;
@@ -3097,16 +3079,16 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // Settings' tabs: a page with settings rows, or About when it was opened as Settings' last tab.
   bool OnSettingsTab() const { return IsSettingsPage(page_) || (page_ == kAbout && about_in_settings_); }
 
-  // `settings_tab`: open `page` as one of Settings' tabs (Home's Settings, the tab bar). About opened from a
-  // Settings tab (LB/RB, a click, the dev page: step) stays a tab; from Home it is its own page.
+  // `settings_tab`: open `page` as one of Settings' tabs (Home's Settings, the tab bar). About is always
+  // Settings' last tab (owner, 18 Oct: Home's About entry became Benchmark).
   void GoTo(Page page, bool settings_tab = false) {
     if (page == kDisplay && page_ != kDisplay) {
       monitors_.clear();
       display_modes_monitor_ = -1;
       LoadDisplayModes();
     }
-    const bool was_tab = OnSettingsTab();
-    const bool about_tab = page == kAbout && (settings_tab || was_tab);
+    (void)settings_tab;
+    const bool about_tab = page == kAbout;
     if (page != page_ || about_tab != about_in_settings_)
       REXLOG_INFO("KK launcher: page {}{}", kPageNames[page], about_tab || IsSettingsPage(page) ? " (Settings tab)" : "");
     about_in_settings_ = about_tab;
@@ -3116,6 +3098,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     side_focus_ = -1;
     play_ = PlayView::kNone;
     page_ = page;
+    if (page == kWorkshop) {  // owner, 18 Oct: its menu of three first
+      EnsureWorkshop();
+      workshop_->SetView(Workshop::View::kHub);
+    }
   }
 
   // ---------------------------------------------------------- bottom bar ---
@@ -3168,8 +3154,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       }
     }
     if (play_ != PlayView::kNone) return PlayPrompts();
-    if (page_ == kWorkshop && workshop_) {  // job J8
-      p = workshop_->Prompts();
+    if (page_ == kWorkshop && workshop_ && (!WorkshopTextureList() || tex_row_focus_)) {  // job J8; owner, 18 Oct
+      p = WorkshopHub() ? std::vector<ui::Prompt>{{Action::kAccept, "Select"}, {Action::kBack, "Back"}}
+                        : workshop_->Prompts(tex_row_focus_);
       if (CanPlay()) p.insert(p.end() - 1, {Action::kPlay, "Play"});
       return p;
     }
@@ -3233,7 +3220,12 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         OpenPlayView(PlayView::kExtras);
         play_lists_[int(PlayView::kExtras)].focus = focus;
         REXLOG_INFO("KK: back from Graphics to Extras, row {}", focus);
-      } else if (page_ == kWorkshop && workshop_ && workshop_->Back()) {  // a project's page: back to the tiles
+      } else if (page_ == kWorkshop && workshop_) {  // owner, 18 Oct: inner page, then the menu of three, then Home
+        switch (WorkshopBackStep(workshop_->InDetail(), WorkshopHub())) {
+          case WorkshopBack::kCloseInner: workshop_->Back(); break;
+          case WorkshopBack::kToMenu: workshop_->SetView(Workshop::View::kHub); break;
+          case WorkshopBack::kToHome: GoTo(kHome); break;
+        }
       } else if (page_ != kHome) GoTo(kHome);
       else if (status_focus_ || side_focus_ >= 0) status_focus_ = false, side_focus_ = -1;  // back to the menu
       else OpenQuit();
@@ -3259,7 +3251,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     e.push_back({"Settings", true, [this] { GoTo(settings_page_, /*settings_tab=*/true); }});
     e.push_back({"Workshop", true, [this] { GoTo(kWorkshop); }});  // job J8: the owner's other projects
     e.push_back({"Achievements", true, [this] { GoTo(kAchievements); }});
-    e.push_back({"About", true, [this] { GoTo(kAbout); }});
+    e.push_back({"Benchmark", CanPlay(), [this] { OpenBenchmark(); }});  // owner, 18 Oct: About is a Settings tab
     e.push_back({"Quit", true, [this] { Quit(); }});
     return e;
   }
@@ -3708,9 +3700,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       cols = {{"Chapters", F("All {0} open", {std::to_string(play::kChapterCount)})},
               {"Save", slot >= 0 ? SaveName(saves_[size_t(slot)]) : T("A new one is made")}};
     } else if (label == "Extras") {
-      const int slot = ChapterSlot();
-      cols = {{"Extras", T("Bonuses use this save's progress and scores.")},
-              {"Save", slot >= 0 ? SaveName(saves_[size_t(slot)]) : T("No save yet")}};
+      cols = {{"Extras", T("Every bonus is unlocked.")},
+              {"Bonuses", std::to_string(std::size(play::kExtras) + 1)}};  // and the Artbook
     }
     DrawInfoColumns(dl, x, o_.y + h_ - 120 * s, a, cols);
   }
@@ -3741,30 +3732,27 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
   }
 
-  // Instead of the tabs: PLAY, then the page's name, with the brass underline under the last (a
-  // click on PLAY goes back to the menu); on Chapter select the save it starts with at the right.
-  void DrawPlayHeader(ImDrawList* dl) {
+  // Instead of the tabs: PLAY (or WORKSHOP), then the page's name (`sub`, nullptr on the menu itself), with
+  // the brass underline under the last. A click on the first goes back to its menu: returns true.
+  bool DrawCrumbs(ImDrawList* dl, const char* root, const char* sub) {
     const float s = S();
     const ui::Fonts f = ui::GetFonts();
     const float fs = 15 * s, tr = 1.6f * s, cy = o_.y + 44 * s;
     float x = o_.x + Margin();
-    const std::string play = Upper(T("Play"));
-    const float pw = ui::TrackedWidth(f.display, fs, play, tr);
-    const bool sub = play_ != PlayView::kMenu;
+    const std::string first = Upper(T(root));
+    const float pw = ui::TrackedWidth(f.display, fs, first, tr);
     const bool hot = sub && !modal_.open &&
                      ImGui::IsMouseHoveringRect(ImVec2(x - 10 * s, cy - 22 * s), ImVec2(x + pw + 10 * s, cy + 22 * s), false);
-    if (hot && ImGui::IsMouseClicked(0)) {
-      ui::Cue(ui::Sound::kBack);
-      play_ = PlayView::kMenu;
-    }
+    const bool clicked = hot && ImGui::IsMouseClicked(0);
+    if (clicked) ui::Cue(ui::Sound::kBack);
     ui::DrawTracked(dl, f.display, fs, ImVec2(x, cy - fs * 0.5f),
-                    sub ? (hot ? color::kText : color::kTextDim) : color::kText, play, tr);
+                    sub ? (hot ? color::kText : color::kTextDim) : color::kText, first, tr);
     float ux = x, uw = pw;
     if (sub) {
       x += pw + 14 * s;
       dl->AddRectFilled(ImVec2(x, cy - 1 * s), ImVec2(x + 8 * s, cy + 1 * s), color::kTextFaint);
       x += 8 * s + 14 * s;
-      const std::string name = Upper(T(PlayViewName(play_)));
+      const std::string name = Upper(T(sub));
       ui::DrawTracked(dl, f.display, fs, ImVec2(x, cy - fs * 0.5f), color::kText, name, tr);
       ux = x;
       uw = ui::TrackedWidth(f.display, fs, name, tr);
@@ -3775,6 +3763,16 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     const float ly = std::round(o_.y + 74 * s);
     dl->AddLine(ImVec2(o_.x + Margin(), ly), ImVec2(o_.x + w_ - Margin(), ly), color::kHairline, 1.0f);
     dl->AddRectFilled(ImVec2(tab_x_, ly - 2 * s), ImVec2(tab_x_ + tab_w_, ly), color::kAccent);
+    return clicked;
+  }
+
+  // PLAY, then the page's name (a click on PLAY goes back to the menu); on Chapter select the save it starts
+  // with at the right.
+  void DrawPlayHeader(ImDrawList* dl) {
+    const float s = S();
+    const ui::Fonts f = ui::GetFonts();
+    const float cy = o_.y + 44 * s;
+    if (DrawCrumbs(dl, "Play", play_ != PlayView::kMenu ? PlayViewName(play_) : nullptr)) play_ = PlayView::kMenu;
     if (play_ == PlayView::kChapters) {
       const int slot = ChapterSlot();
       const std::string right = Upper(slot >= 0 ? F("Save: {0}", {SaveName(saves_[size_t(slot)])}) : T("No save yet"));
@@ -4101,9 +4099,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         p.push_back({Action::kBack, "Back"});
         return p;
       }
-      case PlayView::kExtras: {  // the save row changes with Left and Right; a bonus row plays it
+      case PlayView::kExtras: {  // a bonus row plays it (the Artbook row opens it)
         std::vector<ui::Prompt> p;
-        if (focused_ && focused_->type == ItemType::kChoice && !focused_->disabled) p.push_back({Action::kLeft, "Change"});
         if (focused_ && focused_->type == ItemType::kAction && focused_->on_activate) p.push_back({Action::kAccept, "Select"});
         p.push_back({Action::kBack, "Back"});
         return p;
@@ -4845,71 +4842,12 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     for (size_t at = 0; (at = text.find(from, at)) != std::string::npos; at += to.size()) text.replace(at, from.size(), to);
   }
 
-  std::string ExtraHint(const play::ExtraInfo& e, const play::ExtraProgress& progress) {
-    std::string hint;
-    if (e.progress > 100) hint = MenuText(0x4902EF32);
-    else if (e.score >= 0) hint = MenuText(progress.percent < 100 ? 0x4902EF2D : 0x4902EF2B);
-    else hint = MenuText(0x4902EF2A);
-    ReplaceText(hint, "\\m1\\", e.progress > 100 ? MenuText(0x4902EC04 + e.id) : std::to_string(progress.percent));
-    ReplaceText(hint, "\\m2\\", std::to_string(e.progress));
-    ReplaceText(hint, "\\m3\\", std::to_string(progress.score));
-    ReplaceText(hint, "\\m4\\", std::to_string(e.score));
-    ReplaceText(hint, "\\cFF7FFF\\", "");
-    ReplaceText(hint, "\\cFFFFFF\\", "");
-    return hint;
-  }
-
+  // Play > Extras (owner, 18 Oct): the Artbook first, then the game's own bonuses. Every bonus is unlocked, so
+  // there is no save to choose and no save is read to decide; a bonus starts with the save Chapter select
+  // would use (ChapterSlot: the last played, or none), as before.
   std::vector<Item> ExtrasItems() {
     std::vector<Item> items;
     const int slot = ChapterSlot();
-    Item save;
-    save.type = ItemType::kChoice;
-    save.label = "Save";
-    save.description = "Bonuses use this save's progress and scores.";
-    save.index = -1;
-    std::vector<int> slots;
-    for (const auto& sv : saves_) if (sv.exists) {
-      if (sv.index == slot) save.index = int(slots.size());
-      slots.push_back(sv.index);
-      save.options.push_back(SaveName(sv));
-    }
-    save.value_text = "No save yet";
-    save.on_choice = [this, slots](int i) { chapter_slot_ = slots[size_t(i)]; };
-    save.disabled = slots.empty();
-    items.push_back(std::move(save));
-    items.push_back(Section("Extras"));
-    auto progress = ExtraProgressFor(slot);
-    progress.museum |= GetBool("kk_cheats") && GetBool("kk_cheat_bonus");
-    for (const auto& extra : play::kExtras) {
-      const int id = extra.id;
-      Item it;
-      it.type = ItemType::kAction;
-      it.label = MenuText(0x4902EC04 + id);
-      if (it.label.empty()) it.label = F("Bonus {0}", {std::to_string(id + 1)});
-      const bool unlocked = play::ExtraUnlocked(extra, progress);
-      it.value_text = unlocked ? "Unlocked" : "Locked";
-      it.description = unlocked ? T("Play this bonus, then return to Extras.") : ExtraHint(extra, progress);
-      it.value_color = unlocked ? color::kAccent : color::kTextFaint;
-      // Locked rows stay selectable so a controller can read their unlock hints.
-      if (unlocked && extra.type == play::ExtraType::kMode) {
-        it.description = MenuText(0x4902EF30);
-        ReplaceText(it.description, "\\m1\\", MenuText(id == 1 ? 0x4902D4FA : 0x4902D4EE));
-        // Opens its row on the Graphics page; B comes back to Extras on the same row (task 144: the
-        // Extras page kept a stale focus after a visit to Graphics).
-        it.on_activate = [this, slot, row = std::string(id == 1 ? "Old movie filter" : "Horizontal flip")] {
-          profile_slot_ = slot;
-          profile_read_at_ = -1;
-          const int extras_focus = play_lists_[int(PlayView::kExtras)].focus;
-          GoTo(kGraphics);
-          ui::ListState& st = lists_[kGraphics * 4 + kNoSubPage];
-          st.focus = -1;
-          st.focus_label = row;
-          extras_return_focus_ = extras_focus;
-        };
-      } else if (unlocked) it.on_activate = [this, slot, id] { PlayWith({play::StartKind::kExtra, slot, id, ""}); };
-      else it.on_activate = [] { ui::Cue(ui::Sound::kDeny); };
-      items.push_back(std::move(it));
-    }
     // Beta 7: the Weta Artbook from the PS2 bonus disc (artbook.h), downloaded quietly in the background.
     items.push_back(Section("Bonus disc"));
     {
@@ -4927,12 +4865,166 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       it.on_activate = [this] { OpenPlayView(PlayView::kArtbook); };
       items.push_back(std::move(it));
     }
+    items.push_back(Section("Extras"));
+    for (const auto& extra : play::kExtras) {
+      const int id = extra.id;
+      Item it;
+      it.type = ItemType::kAction;
+      it.label = MenuText(0x4902EC04 + id);
+      if (it.label.empty()) it.label = F("Bonus {0}", {std::to_string(id + 1)});
+      it.value_text = "Unlocked";
+      it.description = T("Play this bonus, then return to Extras.");
+      it.value_color = color::kAccent;
+      if (extra.type == play::ExtraType::kMode) {
+        it.description = MenuText(0x4902EF30);
+        ReplaceText(it.description, "\\m1\\", MenuText(id == 1 ? 0x4902D4FA : 0x4902D4EE));
+        // Opens its row on the Graphics page; B comes back to Extras on the same row (task 144: the
+        // Extras page kept a stale focus after a visit to Graphics).
+        it.on_activate = [this, slot, row = std::string(id == 1 ? "Old movie filter" : "Horizontal flip")] {
+          profile_slot_ = slot;
+          profile_read_at_ = -1;
+          const int extras_focus = play_lists_[int(PlayView::kExtras)].focus;
+          GoTo(kGraphics);
+          ui::ListState& st = lists_[kGraphics * 4 + kNoSubPage];
+          st.focus = -1;
+          st.focus_label = row;
+          extras_return_focus_ = extras_focus;
+        };
+      } else {
+        it.on_activate = [this, slot, id] { PlayWith({play::StartKind::kExtra, slot, id, ""}); };
+      }
+      items.push_back(std::move(it));
+    }
     return items;
+  }
+
+  // ------------------------------------------------------------ Workshop ---
+  // Owner, 18 Oct: the Workshop opens a choice of three, drawn like the Play menu (the clear stills, the game's
+  // logo, the large entries, what the focused one holds in the status row): Mods, Texture packs, Other TRG
+  // projects and games. Mods and the projects are workshop.cpp's pages; Texture packs is the HD texture pack's
+  // rows (the same rows as Settings > Graphics > Texture pack) over the texture pack mods row.
+  void EnsureWorkshop() {
+    if (!workshop_) workshop_ = std::make_unique<Workshop>(immediate_, paths_.user_dir, paths_.config_path);
+  }
+  bool WorkshopHub() const { return !workshop_ || workshop_->view() == Workshop::View::kHub; }
+  // Texture packs with its rows on screen (no mod's page open).
+  bool WorkshopTextureList() const {
+    return workshop_ && workshop_->view() == Workshop::View::kTexturePacks && !workshop_->InDetail();
+  }
+  static const char* WorkshopViewName(Workshop::View view) {
+    switch (view) {
+      case Workshop::View::kMods: return "Mods";
+      case Workshop::View::kTexturePacks: return "Texture packs";
+      case Workshop::View::kProjects: return "Other TRG projects and games";
+      default: return nullptr;
+    }
+  }
+
+  void DrawWorkshopHeader(ImDrawList* dl) {
+    if (DrawCrumbs(dl, "Workshop", workshop_ ? WorkshopViewName(workshop_->view()) : nullptr))
+      workshop_->SetView(Workshop::View::kHub);
+  }
+
+  std::vector<HomeEntry> WorkshopEntries() {
+    return {{"Mods", true, [this] { workshop_->SetView(Workshop::View::kMods); }},
+            {"Texture packs", true,
+             [this] {
+               tex_row_focus_ = false;
+               workshop_->SetView(Workshop::View::kTexturePacks);
+             }},
+            {"Other TRG projects and games", true, [this] { workshop_->SetView(Workshop::View::kProjects); }},
+            {"Back", true, [this] { GoTo(kHome); }}};
+  }
+
+  void DrawWorkshopHub(ImDrawList* dl) {
+    const float s = S();
+    const float x = o_.x + Margin(), a = home_mix_;
+    std::vector<HomeEntry> entries = WorkshopEntries();
+    const float y = DrawLogo(dl, x, entries.size(), a);
+    const float room = o_.y + h_ - 150 * s - y;
+    const float item_h = std::clamp(room / float(entries.size()), 28 * s, 42 * s);
+    if (const int i = DrawMenu(dl, entries, workshop_focus_, x, y, a, item_h); i >= 0) {
+      entries[size_t(i)].action();
+      return;
+    }
+    // What the focused entry holds, in the status row's columns.
+    std::vector<std::pair<std::string, std::string>> cols;
+    const std::string label = entries[size_t(std::clamp(workshop_focus_, 0, int(entries.size()) - 1))].label;
+    if (label == "Mods") {
+      const KongMods::Counts c = workshop_->ModCounts();
+      cols = {{"Mods", T("Switch mods on or off and read how to make your own.")},
+              {"Switched on", c.scanned ? F("{0} of {1}", {std::to_string(c.mods_on), std::to_string(c.mods)})
+                                        : T("Looking for mods")}};
+    } else if (label == "Texture packs") {
+      auto& service = content::Service::Get();
+      const content::Status st = service.Ready() ? service.Get(content::Kind::kTexturePack) : content::Status{};
+      const KongMods::Counts c = workshop_->ModCounts();
+      cols = {{"Texture packs", T("The HD texture pack, your own texture packs and texture pack mods.")},
+              {"HD texture pack", st.installed ? T("Installed") : st.Busy() ? T("Downloading") : T("Not installed")},
+              {"Texture pack mods", F("{0} of {1}", {std::to_string(c.texture_packs_on), std::to_string(c.texture_packs)})}};
+    } else if (label == "Other TRG projects and games") {
+      cols = {{"Projects", T("More recompiled games and projects by TRG, with their download pages.")},
+              {"On GitHub", F("{0} projects", {std::to_string(workshop::kProjectCount)})}};
+    }
+    DrawInfoColumns(dl, x, o_.y + h_ - 120 * s, a, cols);
+  }
+
+  // Workshop > Texture packs: the HD texture pack's rows (TexturePackItems, as on Settings > Graphics) with
+  // their description at the right, then the texture pack mods row under them. Down from the last row moves to
+  // the mods row, Up from it comes back; the mouse takes the focus where it points.
+  void DrawTexturePacks(ImDrawList* dl) {
+    const float s = S();
+    const ui::Fonts f = ui::GetFonts();
+    std::vector<Item> items;
+    TexturePackItems(items);
+    const float top = o_.y + 104 * s, bottom = o_.y + h_ - 96 * s;
+    const float x0 = o_.x + Margin(), x1 = o_.x + w_ - Margin();
+    const float list_w = std::round((x1 - x0) * 0.56f);
+    const float list_bottom = std::max(top + 150 * s, bottom - 206 * s);
+    ui::ListState& st = lists_[kWorkshop * 4 + kNoSubPage];
+    const bool active = !modal_.open;
+    int last = -1;
+    for (int i = 0; i < int(items.size()); ++i)
+      if (items[size_t(i)].type != ItemType::kSection) last = i;
+    if (active && !tex_row_focus_ && st.focus == last && input_.Pressed(Action::kDown)) {
+      input_.Consume(Action::kDown);
+      tex_row_focus_ = true;
+      ui::Cue(ui::Sound::kMove);
+    } else if (active && tex_row_focus_ && input_.Pressed(Action::kUp)) {
+      input_.Consume(Action::kUp);
+      tex_row_focus_ = false;
+      ui::Cue(ui::Sound::kMove);
+    }
+    if (active && tex_row_focus_ && input_.mouse_moved() &&
+        ImGui::IsMouseHoveringRect(ImVec2(x0, top), ImVec2(x0 + list_w, list_bottom), false))
+      tex_row_focus_ = false;
+    st.hide_focus = tex_row_focus_;
+    const Item* focused = ui::DrawList(dl, items, st, ImVec2(x0, top), ImVec2(x0 + list_w, list_bottom), m_, input_,
+                                       active && !tex_row_focus_);
+    ui::DrawDescription(dl, tex_row_focus_ ? nullptr : focused, ImVec2(x0 + list_w + 76 * s, top + 18 * s),
+                        ImVec2(x1, list_bottom), m_);
+    // The texture pack mods (Kong mods of the texture pack type).
+    const float cy = list_bottom + 14 * s, cfs = 13 * s;
+    const std::string caption = Upper(T("Texture pack mods"));
+    const float cw = ui::TrackedWidth(f.display, cfs, caption, 2.2f * s);
+    ui::DrawTracked(dl, f.display, cfs, ImVec2(x0 + 2 * s, cy), color::kAccent, caption, 2.2f * s);
+    dl->AddLine(ImVec2(x0 + cw + 16 * s, std::round(cy + cfs * 0.55f)), ImVec2(x1, std::round(cy + cfs * 0.55f)),
+                color::kHairline, 1.0f);
+    if (workshop_->DrawTextureModsRow(dl, ImVec2(x0, cy + 28 * s), ImVec2(x1, bottom), m_, input_, active,
+                                      tex_row_focus_))
+      tex_row_focus_ = true;
+    // Kept for the prompts (the items live until the next frame's rebuild).
+    focused_items_ = std::move(items);
+    focused_ = !tex_row_focus_ && st.focus >= 0 && st.focus < int(focused_items_.size())
+                   ? &focused_items_[size_t(st.focus)]
+                   : nullptr;
   }
 
   // Job J8: the Workshop page (workshop.cpp), between the top bar and the prompts.
   void DrawWorkshop(ImDrawList* dl) {
-    if (!workshop_) workshop_ = std::make_unique<Workshop>(immediate_, paths_.user_dir, paths_.config_path);
+    EnsureWorkshop();
+    if (WorkshopHub()) return DrawWorkshopHub(dl);
+    if (WorkshopTextureList()) return DrawTexturePacks(dl);
     const float s = S();
     workshop_->Draw(dl, ImVec2(o_.x + Margin(), o_.y + 96 * s), ImVec2(o_.x + w_ - Margin(), o_.y + h_ - 96 * s), m_,
                     input_, !modal_.open);
@@ -5394,9 +5486,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   void StartBenchmark(int passes) {
     rex::cvar::SetFlagByName("kk_benchmark_passes", std::to_string(passes));  // never saved
-    // Back to the About it was started from: Settings' tab or Home's page (king_kong_app.h passes it on).
-    rex::cvar::SetFlagByName("kk_benchmark_from", about_in_settings_ ? "settings" : "");
-    REXLOG_INFO("KK launcher: benchmark started from {}", about_in_settings_ ? "Settings > About" : "About");
+    // Back to where it was started: Settings' About tab, or Home (king_kong_app.h passes it on).
+    const bool from_settings = page_ == kAbout && about_in_settings_;
+    rex::cvar::SetFlagByName("kk_benchmark_from", from_settings ? "settings" : "");
+    REXLOG_INFO("KK launcher: benchmark started from {}", from_settings ? "Settings > About" : "Home");
     benchmark_pending_ = true;
     StartGame();
   }
@@ -5475,37 +5568,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     });
     modal_.reader = text;
     modal_.width = 780;
-  }
-
-  // Above 30 FPS some animations are wrong (game logic stepped per frame), so
-  // say so before starting and offer 30 or 60 instead.
-  void OpenFrameRateWarning() {
-    const int fps = GetInt("kk_frame_rate", 30);
-    const std::string current = fps <= 0 ? T(std::string("an unlimited frame rate")) : std::to_string(fps) + " FPS";
-    std::vector<std::string> buttons = {"Play at 30 FPS"};
-    std::vector<int> rates = {30};
-    if (fps != 60) {
-      buttons.push_back("Play at 60 FPS");
-      rates.push_back(60);
-      buttons.push_back(fps <= 0 ? std::string("Keep unlimited") : F("Keep {0} FPS", {std::to_string(fps)}));
-      rates.push_back(fps);
-    } else {
-      buttons.push_back("Keep 60 FPS");
-      rates.push_back(60);
-    }
-    buttons.push_back("Back");
-    OpenModal("Frame rate above 30 FPS",
-              F("You have chosen {0}. King Kong was made to run at 30 FPS, and above that some character animations "
-                "can look wrong, such as the crew rowing the boat at the start.\n\nWe recommend 30 FPS. 60 FPS also "
-                "works well: the issues are still there, but much less noticeable. This will be fixed in a future "
-                "update.",
-                {current}),
-              buttons, int(buttons.size()) - 1, [this, rates](int i) {
-                if (i >= int(rates.size())) return;
-                SetInt("kk_frame_rate", rates[size_t(i)]);
-                StartGame();
-              });
-    modal_.width = 640;
   }
 
   // ------------------------------------------------------------- updates ---
@@ -5832,9 +5894,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   void Play() {
     if (!CanPlay()) return;
     benchmark_pending_ = false;
-    const int fps = GetInt("kk_frame_rate", 30);
-    if (fps > 0 && fps <= 60) return StartGame();  // 60: Remastered's rate, no warning each time
-    OpenFrameRateWarning();
+    StartGame();  // owner, 18 Oct: no frame rate warning pop-up any more
   }
 
   void Quit() {
@@ -6960,7 +7020,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     constexpr int kCount = int(std::size(kSteps));
     if (step < kCount) {
       page_ = kSteps[step].page;
-      about_in_settings_ = false;
+      about_in_settings_ = page_ == kAbout;
       sub_ = kSteps[step].sub;
       modal_.open = false;
       REXLOG_INFO("KK dev: tour {}", kSteps[step].name);
@@ -7276,6 +7336,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   std::vector<Item> focused_items_;
   std::unique_ptr<Artbook> artbook_;  // Beta 7: made when Extras > Artbook first opens
   std::unique_ptr<Workshop> workshop_;  // job J8: made when the Workshop page first opens
+  int workshop_focus_ = 0;              // the Workshop's menu of three (owner, 18 Oct)
+  bool tex_row_focus_ = false;          // Workshop > Texture packs: the texture pack mods row has the focus
   const Item* focused_ = nullptr;
   Action pending_click_ = Action::kCount;
   int home_focus_ = 0;
@@ -7331,7 +7393,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   bool update_shaders_ = false;       // built again in full after an update (DrawShaderScreen)
   bool rebuild_shaders_screen_ = false;  // Graphics > Rebuild shaders: the shader screen until it's done
   Page settings_page_ = kDisplay;     // the Settings tab Home's Settings opens (the last one shown, About too)
-  bool about_in_settings_ = false;    // About is open as Settings' last tab (else Home's About page)
+  bool about_in_settings_ = false;    // About is open (always as Settings' last tab since 18 Oct)
   std::vector<std::string> tab_names_;  // the settings tabs, upper case, in tab_names_lang_
   int tab_names_lang_ = -1;
   bool waiting_for_native_ = false;   // Play was pressed: they are checked (and built) first

@@ -1,8 +1,9 @@
 # Making mods for King Kong Recompiled
 
 King Kong Recompiled has three kinds of mods: **texture packs**, **settings mods** and **cutscene mods**.
-Players switch them on and off in the launcher: **Workshop > Kong mods**. Nothing in a mod changes the
-game's own files, and switching a mod off brings everything back exactly as it was.
+Players switch them on and off in the launcher: **Workshop > Mods** (texture packs in **Workshop > Texture
+packs**). Nothing in a mod changes the game's own files, and switching a mod off brings everything back
+exactly as it was.
 
 Not supported (for now): replacing records inside the game's archives (the .bf files), new models, levels
 or sounds, and code mods (scripts, DLLs, programs). A mod folder that contains anything else is simply
@@ -16,8 +17,8 @@ ignored apart from the files described here.
 ```
 
 The user folder is `Documents\king_kong` on Windows and the game's user data folder on Linux
-(the launcher shows the full path under the Kong mods row). The launcher creates the `mods` folder the
-first time the Workshop opens.
+(the launcher shows the full path under the Kong mods row, and **Open mods folder** in Workshop > Mods
+opens it). The launcher creates the `mods` folder the first time the Workshop opens.
 
 The folder name is the mod's id. It must not start with a dot or contain `|` or `:`.
 

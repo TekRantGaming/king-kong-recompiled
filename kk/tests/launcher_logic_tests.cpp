@@ -522,6 +522,31 @@ void AllSavesChecks() {
 }
 }  // namespace
 
+// Owner, 18 Oct: the Workshop's menu of three and how Back walks out of it; Load earlier / later on a page that
+// shows only some of the mods (Mods without the texture pack mods, Texture packs with only them).
+void WorkshopChecks() {
+  using kk::WorkshopBack;
+  Check(kk::WorkshopBackStep(true, false) == WorkshopBack::kCloseInner, "Back closes a README or mod page first");
+  Check(kk::WorkshopBackStep(true, true) == WorkshopBack::kCloseInner, "an inner page closes before anything else");
+  Check(kk::WorkshopBackStep(false, false) == WorkshopBack::kToMenu, "Back from Mods / Texture packs / projects goes to the menu of three");
+  Check(kk::WorkshopBackStep(false, true) == WorkshopBack::kToHome, "Back from the menu of three goes Home");
+
+  // Load order: tex A, settings B, tex C, cutscenes D, tex E (true = shown on the Texture packs page).
+  const std::vector<bool> tex = {true, false, true, false, true};
+  Check(kk::WorkshopMoveTarget(tex, 2, -1) == 0, "Load earlier skips the mods another page shows");
+  Check(kk::WorkshopMoveTarget(tex, 2, +1) == 4, "Load later skips the mods another page shows");
+  Check(kk::WorkshopMoveTarget(tex, 0, -1) == -1, "the first shown mod cannot load earlier");
+  Check(kk::WorkshopMoveTarget(tex, 4, +1) == -1, "the last shown mod cannot load later");
+  std::vector<bool> others(tex.size());
+  for (size_t i = 0; i < tex.size(); ++i) others[i] = !tex[i];
+  Check(kk::WorkshopMoveTarget(others, 1, +1) == 3, "Mods page: settings mod moves past the cutscene mod");
+  Check(kk::WorkshopMoveTarget(others, 1, -1) == -1, "Mods page: nothing shown before the first mod it shows");
+  Check(kk::WorkshopMoveTarget({true, true}, 0, +1) == 1, "with every mod shown it is the neighbour (as before)");
+  Check(kk::WorkshopMoveTarget(tex, -1, +1) == -1 && kk::WorkshopMoveTarget(tex, 5, -1) == -1,
+        "a mod that is not switched on does not move");
+  Check(kk::WorkshopMoveTarget(tex, 2, 0) == -1 && kk::WorkshopMoveTarget(tex, 2, 2) == -1, "only one step at a time");
+}
+
 int main() {
   // Extras playback does not set either story-movie flag. SKIP must still
   // send Start, and must stop sending it once playback ends.
@@ -639,6 +664,7 @@ int main() {
   SettingsLayoutChecks();
   WhatsNewChecks();
   AllSavesChecks();
+  WorkshopChecks();
   std::cout << checks << " launcher checks passed\n";
   return 0;
 }

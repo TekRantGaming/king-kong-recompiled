@@ -2,6 +2,8 @@
 // (tests/launcher_logic_tests.cpp).
 #pragma once
 
+#include <vector>
+
 namespace kk {
 
 // What's new (the notes after an update) and when it may open (owner, 16 Oct; job J6, 17 Oct): never during the
@@ -26,6 +28,26 @@ inline bool ShowWhatsNewNow(const WhatsNewGate& g) {
     return false;
   // The shaders were checked (and prepared if needed) since the launcher opened.
   return !g.shaders_wanted || g.shaders_finished;
+}
+
+// The Workshop (owner, 18 Oct) opens a choice of three: Mods, Texture packs, Other TRG projects and games. Back
+// (B, Escape) closes a page opened inside one of them (a project's README, a mod's page, the modding guide),
+// then goes from that page to the menu of three, then from the menu to Home.
+enum class WorkshopBack { kCloseInner, kToMenu, kToHome };
+inline WorkshopBack WorkshopBackStep(bool inner_page_open, bool on_menu) {
+  if (inner_page_open) return WorkshopBack::kCloseInner;
+  return on_menu ? WorkshopBack::kToHome : WorkshopBack::kToMenu;
+}
+
+// Workshop > Mods shows the settings and cutscene mods, Workshop > Texture packs the texture pack mods; the load
+// order (kk_mods) stays one list. Load earlier (delta -1) / Load later (+1) move the switched-on mod at place
+// `at` past the next one SHOWN on the same page: `shown[k]` says whether the mod at place k is. Returns the
+// place it moves to, or -1 when there is none (the button is greyed out).
+inline int WorkshopMoveTarget(const std::vector<bool>& shown, int at, int delta) {
+  if (at < 0 || at >= int(shown.size()) || (delta != -1 && delta != 1)) return -1;
+  for (int k = at + delta; k >= 0 && k < int(shown.size()); k += delta)
+    if (shown[size_t(k)]) return k;
+  return -1;
 }
 
 }  // namespace kk

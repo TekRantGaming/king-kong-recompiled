@@ -14,6 +14,7 @@
 #include <rex/logging.h>
 #include <rex/ui/immediate_drawer.h>
 
+#include "launcher_policy.h"
 #include "launcher_text.h"
 #include "mods.h"
 #include "settings.h"
@@ -103,6 +104,7 @@ struct KongMods::Impl {
   std::vector<float> lift;
   int detail = -1;  // index into mods
   int focus = 0;    // 0 Enable/Disable, 1 Load earlier, 2 Load later
+  KongMods::Filter filter = KongMods::Filter::kAll;
   float detail_scroll = 0;
 
   Impl(rex::ui::ImmediateDrawer* d, fs::path u, fs::path c) : drawer(d), user_dir(std::move(u)), config_path(std::move(c)) {
@@ -183,16 +185,26 @@ struct KongMods::Impl {
     return it == enabled.end() ? -1 : int(it - enabled.begin());
   }
 
+  // Whether the row shows this mod (Filter).
+  static bool IsTexturePack(const Mod& m) { return m.type == Type::kTexturePack; }
+  bool Shown(const Mod& m) const {
+    return filter == KongMods::Filter::kAll || (filter == KongMods::Filter::kTexturePacks) == IsTexturePack(m);
+  }
+  bool Shown(const std::string& id) const {
+    const Mod* m = ById(id);
+    return m && Shown(*m);
+  }
+
   void Reorder() {
     const int current = tile >= 0 && tile < int(order.size()) ? order[size_t(tile)] : -1;
     order.clear();
     for (const auto& id : enabled)
       for (size_t i = 0; i < mods.size(); ++i)
-        if (mods[i].id == id) order.push_back(int(i));
+        if (mods[i].id == id && Shown(mods[i])) order.push_back(int(i));
     for (size_t i = 0; i < mods.size(); ++i)
-      if (!IsOn(mods[i]) && mods[i].builtin) order.push_back(int(i));
+      if (!IsOn(mods[i]) && mods[i].builtin && Shown(mods[i])) order.push_back(int(i));
     for (size_t i = 0; i < mods.size(); ++i)
-      if (!IsOn(mods[i]) && !mods[i].builtin) order.push_back(int(i));
+      if (!IsOn(mods[i]) && !mods[i].builtin && Shown(mods[i])) order.push_back(int(i));
     conflicts = mods::FindConflicts(mods::EnabledInOrder(mods, enabled));
     if (current >= 0)
       for (size_t k = 0; k < order.size(); ++k)
@@ -232,8 +244,17 @@ struct KongMods::Impl {
     Save(on ? "switched on" : "switched off", m);
   }
 
+  // The place in the load order of the next switched-on mod this row shows, before (-1) or after (+1) `m`
+  // (-1: none).
+  int NeighbourPosition(const Mod& m, int delta) const {
+    std::vector<bool> shown;
+    for (const auto& id : enabled) shown.push_back(Shown(id));
+    return WorkshopMoveTarget(shown, Position(m), delta);
+  }
+
   void MoveMod(Mod& m, int delta) {
-    if (!mods::Move(enabled, m.id, delta)) {
+    const int to = NeighbourPosition(m, delta);
+    if (to < 0 || !mods::Move(enabled, m.id, to - Position(m))) {
       ui::Cue(ui::Sound::kDeny);
       return;
     }
@@ -501,7 +522,7 @@ struct KongMods::Impl {
     dl->AddText(f.semibold, 16 * s, ImVec2(x0, ry), on ? color::kGood : color::kTextDim, state.c_str(), nullptr, pw);
     ry += 30 * s;
     const bool can_toggle = on || md.Usable();
-    const bool can_up = on && Position(md) > 0, can_down = on && Position(md) + 1 < int(enabled.size());
+    const bool can_up = on && NeighbourPosition(md, -1) >= 0, can_down = on && NeighbourPosition(md, +1) >= 0;
     const bool enabled_button[3] = {can_toggle, can_up, can_down};
     if (active) {
       if (in.Pressed(Action::kUp)) focus = (focus + 2) % 3, ui::Cue(ui::Sound::kMove);
@@ -579,6 +600,25 @@ KongMods::KongMods(rex::ui::ImmediateDrawer* drawer, fs::path user_dir, fs::path
 KongMods::~KongMods() = default;
 bool KongMods::DrawRow(ImDrawList* dl, ImVec2 p0, ImVec2 p1, const ui::Metrics& m, ui::Input& in, bool active, bool focused) {
   return impl_->DrawRow(dl, p0, p1, m, in, active, focused);
+}
+void KongMods::SetFilter(Filter filter) {
+  if (impl_->filter == filter) return;
+  impl_->filter = filter;
+  impl_->detail = -1;
+  impl_->tile = 0;
+  impl_->scroll_x = impl_->scroll_x_target = 0;
+  impl_->Reorder();
+}
+KongMods::Counts KongMods::GetCounts() {
+  impl_->TakeScan();
+  Counts c;
+  c.scanned = impl_->scanned;
+  for (const Mod& m : impl_->mods) {
+    const bool on = impl_->IsOn(m), tex = Impl::IsTexturePack(m);
+    (tex ? c.texture_packs : c.mods)++;
+    if (on) (tex ? c.texture_packs_on : c.mods_on)++;
+  }
+  return c;
 }
 bool KongMods::InDetail() const { return impl_->detail >= 0; }
 void KongMods::DrawDetail(ImDrawList* dl, ImVec2 p0, ImVec2 p1, const ui::Metrics& m, ui::Input& in, bool active) {
