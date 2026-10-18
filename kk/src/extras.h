@@ -68,6 +68,14 @@ inline ExtraProgress DecodeExtraProgress(std::span<const uint8_t> bytes) {
   // KKmuseum is a temporary runtime flag, not part of the serialized save.
   return p;
 }
+// All bonus content is unlocked for every player, with or without a save (owner, 18 Oct 2026), the way every
+// chapter is open in Chapter select. The launcher and the game ask this, never a save: the port keeps the
+// game's own "all bonus content" flag (KKmuseum, profile flag 0x100 at G+0xBF0, which the save never stores)
+// switched on while it runs (cheats.cpp, UnlockBonusContent). It is not a cheat to the game: its "cheats
+// used" mark is a different flag (0x10000000), set only by the gameplay cheats.
+inline constexpr bool kAllBonusesUnlocked = true;
+inline constexpr bool BonusUnlocked(const ExtraInfo&) { return kAllBonusesUnlocked; }
+// The original unlock rule (progress, score, online codes), kept for the hints and the tests.
 inline bool ExtraUnlocked(const ExtraInfo& e, const ExtraProgress& p) {
   if (p.museum) return true;
   if (e.progress > 100) return (p.online_codes & (1u << e.id)) != 0;

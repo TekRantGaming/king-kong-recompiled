@@ -943,10 +943,8 @@ void CarryOut(PPCContext& ctx, uint8_t* base, uint32_t g) {
   const auto slots = ListSaves(g_user_dir);
   if (g_extra_session) {
     const auto* extra = FindExtra(r.chapter);
-    auto progress = ReadExtraProgress(g_user_dir, r.slot);
-    progress.museum |= rex::cvar::GetFlagByName("kk_cheats") == "true" &&
-                       rex::cvar::GetFlagByName("kk_cheat_bonus") == "true";
-    if (!extra || extra->type == ExtraType::kMode || !ExtraUnlocked(*extra, progress)) {
+    // Every bonus is unlocked (extras.h, BonusUnlocked): no save is needed to play one.
+    if (!extra || extra->type == ExtraType::kMode || !BonusUnlocked(*extra)) {
       REXLOG_WARN("KK extras: refused unavailable bonus {}", r.chapter);
       ReturnToLauncher("the bonus is locked or unavailable", "extras");
       return;

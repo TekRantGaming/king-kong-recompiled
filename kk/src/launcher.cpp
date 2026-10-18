@@ -889,12 +889,10 @@ class SettingsPages {
   void OriginalVideoItems(std::vector<Item>& items) {
     const auto profile = ShownProfileOptions();
     const int slot = profile.slot;
-    auto progress = ExtraProgressFor(slot);
-    progress.museum |= GetBool("kk_cheats") && GetBool("kk_cheat_bonus");
     items.push_back(Section("Extras"));
     for (int id : {1, 8}) {
       const bool old = id == 1;
-      const bool unlocked = play::ExtraUnlocked(*play::FindExtra(id), progress);
+      const bool unlocked = play::BonusUnlocked(*play::FindExtra(id));  // always (extras.h)
       auto it = ProfileToggle(old ? "Old movie filter" : "Horizontal flip",
           unlocked ? "An original bonus video mode, unlocked in Extras."
                    : "An original bonus video mode. Unlock it in Extras before changing it.",
@@ -4879,14 +4877,13 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     items.push_back(std::move(save));
     items.push_back(Section("Extras"));
     auto progress = ExtraProgressFor(slot);
-    progress.museum |= GetBool("kk_cheats") && GetBool("kk_cheat_bonus");
     for (const auto& extra : play::kExtras) {
       const int id = extra.id;
       Item it;
       it.type = ItemType::kAction;
       it.label = MenuText(0x4902EC04 + id);
       if (it.label.empty()) it.label = F("Bonus {0}", {std::to_string(id + 1)});
-      const bool unlocked = play::ExtraUnlocked(extra, progress);
+      const bool unlocked = play::BonusUnlocked(extra);  // always: no save decides (extras.h)
       it.value_text = unlocked ? "Unlocked" : "Locked";
       it.description = unlocked ? T("Play this bonus, then return to Extras.") : ExtraHint(extra, progress);
       it.value_color = unlocked ? color::kAccent : color::kTextFaint;
