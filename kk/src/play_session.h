@@ -95,7 +95,11 @@ bool PauseMenuOpen();
 // restarts into the launcher's Play menu. kQuitToDesktop ("Quit game"): the same, then the program exits.
 // kSave: the game's "Save" (story runs only; see menus.md). kGameOptions: the game's own Options pages
 // (Audio, Video, Controls), drawn and read by the game; the pause menu comes back when they close.
-enum class PauseAction { kResume, kStartAgain, kScore, kQuitToLauncher, kSave, kQuitToDesktop, kGameOptions };
+// kLoadCheckpoint ("Load last checkpoint", task 237): the pause page's own item 6, which its list never shows:
+// play resumes and the game reloads the last checkpoint the way it does after a death, without the death
+// (no death counters, no confirmation page of the game's; the port asks first).
+enum class PauseAction { kResume, kStartAgain, kScore, kQuitToLauncher, kSave, kQuitToDesktop, kGameOptions,
+                         kLoadCheckpoint };
 void RunPauseAction(PauseAction action);
 // Whether an item is available right now (e.g. Start again and Score need a save loaded).
 bool PauseActionAvailable(PauseAction action);

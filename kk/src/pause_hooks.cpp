@@ -23,7 +23,7 @@
 // Developer builds: KK_DEV_GAME_PAUSE=1 keeps the game's own pause menu; KK_DEV_PAUSE_STANDIN=1 draws a
 // plain ImGui list for the port's menu until the launcher-style one (pause_menu.cpp) is in;
 // KK_DEV_PAUSE_ACTIONS="<s>:<action>,..." runs pause actions at those seconds of the script clock
-// (resume, again, score, quit, open = press Start), for tests.
+// (resume, again, checkpoint, score, quit, open = press Start), for tests.
 
 #include "ui_paint.h"
 
@@ -112,6 +112,7 @@ std::atomic<int64_t> g_game_page_seen_ms{-100000};     // a game page (Score, Sa
 std::atomic<bool> g_game_page{false};               // the Score or Save item's pages are showing (the game's)
 std::atomic<bool> g_has_slot{false};               // a chapter-select run: Start again and Score exist
 std::atomic<bool> g_can_save{false};               // a story run with a save slot: Save exists
+std::atomic<bool> g_can_checkpoint{false};         // a level with a checkpoint to go back to (not a gallery)
 std::atomic<int64_t> g_game_page_since{0};         // when Score or Save opened the game's own pages
 std::atomic<int64_t> g_closing_until{0};
 std::atomic<bool> g_left_by_quit{false};
@@ -140,14 +141,34 @@ int ItemId(int action) {
     case PauseAction::kQuitToLauncher: return 3;
     case PauseAction::kSave: return 1;
     case PauseAction::kQuitToDesktop: return 3;
+    case PauseAction::kLoadCheckpoint: return 6;  // never in the page's list: carried out by the port (below)
+    case PauseAction::kGameOptions: return 2;
   }
-  return action == int(PauseAction::kGameOptions) ? 2 : 4;
+  return 4;
 }
 const char* ActionName(int action) {
   static const char* const kNames[] = {"Resume", "Start again", "Score", "Return to main menu", "Save",
-                                       "Quit game", "Options"};
-  return action >= 0 && action < 7 ? kNames[action] : "none";
+                                       "Quit game", "Options", "Load last checkpoint"};
+  return action >= 0 && action < 8 ? kNames[action] : "none";
 }
+
+// "Load last checkpoint" (task 237): what the pause page's item 6 does (sub_824BA560 at 0x824BB4C0). Its list
+// never offers that item, so the port does the same on the game thread while the page is up:
+//   - the pause count *(0x82CCAE34) goes down by one (as when the page closes on Resume, 0x824BB648);
+//   - sub_825E66D0: the pause is over (page variable +0x1C = 0, the paused time added to the game clock);
+//   - G+0x4900 &= 0xF0000000;
+//   - *(0x82CCAA80) = 1, *(0x82CCBFD4) = 30: the reload request. The engine's frame (sub_82857F28) sees it,
+//     re-initialises the universe (sub_8271D698) and IntMIG_init (sub_824AE560) restores the universe
+//     variables from the snapshot (sub_82413080) that the last checkpoint took (ES_CheckPoint sub_826437D0:
+//     G+0xC = the checkpoint's start point, then sub_82413190) or the level start took (uni_go, 0x8253E21C);
+//   - sound 11 (sub_825FC978), the page's "chosen" sound.
+// A death sets the same request (H_ETAT_IA_mort sub_826B95A0 at 0x826B9C78, Kong's k_reflex sub_8258B208) after
+// adding one to the death counters (G+0x4DBC all deaths, G+0x4DC0 deaths since the checkpoint, read by
+// TrigTest_NbrOfDeath sub_8244E408; the chapter's death statistics) and writing them into the snapshot
+// (sub_82413298). The port does none of that: no death, no counters. "Start again" (the game's Yes code 4,
+// 0x824BCCB8) is the same request after G+0xC = 1 (the chapter's first start point) and the chapter score reset.
+constexpr uint32_t kPauseCount = 0x82CCAE34, kReloadRequest = 0x82CCAA80, kReloadFrames = 0x82CCBFD4;
+constexpr uint32_t kGameFlags4900 = 0x4900;
 
 }  // namespace
 
@@ -160,6 +181,7 @@ bool PauseActionAvailable(PauseAction action) {
   if (!PauseMenuOpen() || g_pending >= 0) return false;
   if (action == PauseAction::kStartAgain || action == PauseAction::kScore) return g_has_slot;
   if (action == PauseAction::kSave) return g_can_save;
+  if (action == PauseAction::kLoadCheckpoint) return g_can_checkpoint;
   return true;
 }
 
@@ -309,6 +331,7 @@ void FilterPad(uint32_t user, uint8_t* state) {
   if (g_was_open) {  // just closed: whatever is still held stays hidden until let go
     g_was_open = false;
     g_hidden_mask = buttons;
+    if (buttons) REXLOG_INFO("KK pause: closed with buttons {:04X} held: hidden from the game until let go", buttons);
   }
   g_hidden_mask &= buttons;
   if (g_hidden_mask) {
@@ -396,6 +419,8 @@ REX_HOOK_RAW(sub_8272B7E8) {
 
 // The pause page (IntMIG_Page_Main; also the start menu's main page, left alone there).
 REX_EXTERN(__imp__sub_824BA560);
+REX_EXTERN(__imp__sub_825E66D0);  // the pause is over (Load last checkpoint)
+REX_EXTERN(__imp__sub_825FC978);  // a menu sound
 REX_HOOK_RAW(sub_824BA560) {
   using namespace kk::play;
   KK_PAGE_TRACE("IntMIG_Page_Main");
@@ -419,6 +444,9 @@ REX_HOOK_RAW(sub_824BA560) {
   const bool slot = int32_t(Load32(base, g + 0x4E10)) != -1, chapter_run = Load32(base, g + 0x5668) != 0;
   g_has_slot = slot && chapter_run;
   g_can_save = slot && !chapter_run && Load32(base, g + 0x5674) == 0;
+  // Every level has a checkpoint to go back to (its start counts: uni_go takes the snapshot as it loads); the
+  // galleries and the credits from Extras do not (their pause is the port's, task 204).
+  g_can_checkpoint = !BonusLevelSession();
   // Back from the game's own pages (Score, Save, Options): while they show, this page is not run; it runs
   // again when they close (after its own last frames right after the press).
   if (g_game_page && now - g_game_page_seen_ms.load() > kPageGoneMs && now - g_game_page_since.load() > 500) {
@@ -439,6 +467,27 @@ REX_HOOK_RAW(sub_824BA560) {
     return;
   }
   if (pending < 0) return;  // the menu is up: the game's page does not run
+  if (pending == int(PauseAction::kLoadCheckpoint)) {
+    // The page's item 6, done by the port (see kReloadRequest above); the page itself is not run.
+    const int32_t count = int32_t(Load32(base, kPauseCount));
+    if (count > 0) Store32(base, kPauseCount, uint32_t(count - 1));
+    PPCContext call = ctx;
+    __imp__sub_825E66D0(call, base);
+    Store32(base, g + kGameFlags4900, Load32(base, g + kGameFlags4900) & 0xF0000000u);
+    Store32(base, kReloadRequest, 1);
+    Store32(base, kReloadFrames, 30);
+    call = ctx;
+    call.r3.u64 = 11;
+    __imp__sub_825FC978(call, base);
+    REXLOG_INFO("KK pause: Load last checkpoint: reload requested (start point {}, level {})",
+                int32_t(Load32(base, g + 0xC)), int32_t(Load32(base, g + 8)));
+    g_pending = -1;
+    g_phase = kIdle;
+    g_main_seen_ms = -100000;
+    g_pause_started_ms = -100000;
+    g_closing_until = now + 1000;
+    return;
+  }
   const int want = ItemId(pending);
   if (g_phase == kFindRow) {
     // Find the wanted item's row: the page keeps the selected item's id at +0x44.
@@ -533,6 +582,8 @@ REX_HOOK_RAW(sub_824D1958) {
 #include <sstream>
 
 #include <rex/cvar.h>
+
+#include "guest.h"  // g_guest_base (dev "state" step)
 
 namespace kk {
 double DevSecondsSinceMenu();  // dev_tools.cpp: the script clock, -1 before it starts
@@ -652,6 +703,29 @@ const bool g_steps_thread = [] {
         ++next;
         continue;
       }
+      // "state": log what Load last checkpoint must restore (task 241): level, start point, death counters
+      // G+0x4DBC/G+0x4DC0, weapon and ammo, G flags, and the camera actor's (Jack's, or Kong's) position.
+      if (w == "state") {
+        const uint8_t* base = kk::g_guest_base;
+        const uint32_t g = base ? Load32(base, kGamePtr) : 0;
+        if (g) {
+          auto ok = [](uint32_t a) { return a >= 0x40000000u && a < 0xA0000000u; };
+          auto f = [&](uint32_t a) { uint32_t u = Load32(base, a); float v; std::memcpy(&v, &u, 4); return v; };
+          float x = 0, y = 0, z = 0;
+          const uint32_t actor = Load32(base, 0x82CCBF7C);
+          const uint32_t m = ok(actor) ? Load32(base, actor + 12) : 0;
+          if (ok(m)) x = f(m + 48), y = f(m + 52), z = f(m + 56);
+          REXLOG_INFO("KK dev state {:.1f} s: level {} sp {} deaths {} {} weapon {} ammo {} {} {} {} flags {:08X} "
+                      "actor {:08X} ({:.2f},{:.2f},{:.2f}) menu {}",
+                      t, int32_t(Load32(base, g + 8)), int32_t(Load32(base, g + 0xC)),
+                      int32_t(Load32(base, g + 0x4DBC)), int32_t(Load32(base, g + 0x4DC0)),
+                      int32_t(Load32(base, g + 13128)), int32_t(Load32(base, g + 13432)),
+                      int32_t(Load32(base, g + 13504)), int32_t(Load32(base, g + 13576)),
+                      int32_t(Load32(base, g + 13648)), Load32(base, g + 3056), actor, x, y, z, PauseMenuOpen());
+        }
+        ++next;
+        continue;
+      }
       // "set=<cvar>=<value>": change a setting as the pause menu's Settings would (live settings tests).
       if (w.rfind("set=", 0) == 0) {
         const size_t eq = w.find('=', 4);
@@ -671,6 +745,7 @@ const bool g_steps_thread = [] {
       else if (w == "desktop") a = PauseAction::kQuitToDesktop;
       else if (w == "save") a = PauseAction::kSave;
       else if (w == "options") a = PauseAction::kGameOptions;
+      else if (w == "checkpoint") a = PauseAction::kLoadCheckpoint;
       else known = false;
       REXLOG_INFO("KK dev pause step {:.1f} s: {} (menu open {}, available {})", t, w, PauseMenuOpen(),
                   known && PauseActionAvailable(a));
@@ -689,6 +764,19 @@ void CreatePauseStandIn(rex::ui::ImGuiDrawer* drawer) {
   if (play::StandInOn()) new play::PauseStandIn(drawer);
 }
 }  // namespace kk
+
+// Test aid (task 241): log each checkpoint the game takes (ES_CheckPoint: G+0xC = its start point, then the
+// universe snapshot that Load last checkpoint and a death go back to).
+REX_EXTERN(__imp__sub_826437D0);
+REX_HOOK_RAW(sub_826437D0) {
+  const uint32_t g = kk::play::Load32(base, kk::play::kGamePtr);
+  const int32_t before = g ? int32_t(kk::play::Load32(base, g + 0xC)) : -1;
+  __imp__sub_826437D0(ctx, base);
+  const int32_t after = g ? int32_t(kk::play::Load32(base, g + 0xC)) : -1;
+  static int calls = 0;
+  if (before != after || ++calls <= 2)
+    REXLOG_INFO("KK dev: checkpoint taken (ES_CheckPoint): start point {} -> {}", before, after);
+}
 
 #endif
 

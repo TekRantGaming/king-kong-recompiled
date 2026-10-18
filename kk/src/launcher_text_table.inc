@@ -165,7 +165,7 @@ constexpr Entry kEntries[] = {
     {"Resume", "Fortsetzen", "Reanudar", "Reprendre", "Riprendi"},
     {"Score", "Punktzahl", "Puntuación", "Score", "Punteggio"},
     {"Start again", "Neu starten", "Empezar de nuevo", "Recommencer", "Ricomincia"},
-    {"Start this chapter again from its beginning?", "Dieses Kapitel von Anfang an neu starten?", "¿Empezar este capítulo desde el principio?", "Recommencer ce chapitre depuis le début ?", "Ricominciare questo capitolo dall'inizio?"},
+    {"Go back to the last checkpoint? Your progress since then is lost.", "Zurück zum letzten Checkpoint? Dein Fortschritt seitdem geht verloren.", "¿Volver al último punto de control? Se perderá el progreso desde entonces.", "Revenir au dernier point de contrôle ? La progression depuis sera perdue.", "Tornare all'ultimo checkpoint? I progressi da allora andranno persi."},
     {"Return to main menu", "Zum Hauptmenü", "Volver al menú principal", "Retour au menu principal", "Torna al menu principale"},
     {"Leave the game and go back to the main menu?", "Das Spiel verlassen und zum Hauptmenü zurückkehren?", "¿Salir del juego y volver al menú principal?", "Quitter le jeu et retourner au menu principal ?", "Uscire dal gioco e tornare al menu principale?"},
     {"Leave", "Verlassen", "Salir", "Quitter", "Esci"},

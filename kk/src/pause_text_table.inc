@@ -1,6 +1,6 @@
 // The pause menu's own text (task 222, option A; pause_menu_logic.h): its entries and the description strip's
 // sentence for each. In game the launcher is "the main menu" (owner, 18 Oct). Included by launcher_text_table.inc.
-    {"Restart chapter", "Kapitel neu starten", "Reiniciar capítulo", "Recommencer le chapitre", "Ricomincia capitolo"},
+    {"Load last checkpoint", "Letzten Checkpoint laden", "Cargar último punto de control", "Charger le dernier point de contrôle", "Carica ultimo checkpoint"},
     {"Quit to main menu", "Zurück zum Hauptmenü", "Salir al menú principal", "Quitter vers le menu principal", "Esci al menu principale"},
     {"Save game", "Spiel speichern", "Guardar partida", "Sauvegarder", "Salva partita"},
     {"Go back to the game where you left off.", "Zurück ins Spiel, genau dort, wo du aufgehört hast.", "Vuelve al juego justo donde lo dejaste.", "Reprenez la partie là où vous l'avez laissée.", "Torna al gioco dove eri rimasto."},
@@ -11,7 +11,7 @@
     {"Camera, controller, mouse and button mapping.", "Kamera, Controller, Maus und Tastenbelegung.", "Cámara, mando, ratón y asignación de botones.", "Caméra, manette, souris et attribution des boutons.", "Telecamera, controller, mouse e mappatura dei tasti."},
     {"Subtitles, language, HUD and Performance metrics.", "Untertitel, Sprache, HUD und Leistungsdaten.", "Subtítulos, idioma, HUD y métricas de rendimiento.", "Sous-titres, langue, ATH et mesures de performances.", "Sottotitoli, lingua, HUD e metriche delle prestazioni."},
     {"Switch cheats on or off. Changes apply at once.", "Cheats ein- oder ausschalten. Änderungen gelten sofort.", "Activa o desactiva trucos. Los cambios se aplican al momento.", "Activez ou désactivez des codes de triche. Les changements s'appliquent aussitôt.", "Attiva o disattiva i trucchi. Le modifiche si applicano subito."},
-    {"Start this chapter again from its beginning.", "Dieses Kapitel von Anfang an neu starten.", "Empieza este capítulo de nuevo desde el principio.", "Recommencez ce chapitre depuis le début.", "Ricomincia questo capitolo dall'inizio."},
+    {"Go back to the last checkpoint you reached.", "Zurück zum letzten Checkpoint, den du erreicht hast.", "Vuelve al último punto de control que alcanzaste.", "Revenez au dernier point de contrôle atteint.", "Torna all'ultimo checkpoint raggiunto."},
     {"See your score for this chapter.", "Deine Punktzahl für dieses Kapitel ansehen.", "Consulta tu puntuación en este capítulo.", "Consultez votre score pour ce chapitre.", "Guarda il tuo punteggio per questo capitolo."},
     {"Save your progress.", "Deinen Fortschritt speichern.", "Guarda tu progreso.", "Sauvegardez votre progression.", "Salva i tuoi progressi."},
     {"Leave the game and go back to the main menu.", "Das Spiel verlassen und zum Hauptmenü zurückkehren.", "Sal del juego y vuelve al menú principal.", "Quittez le jeu et retournez au menu principal.", "Esci dal gioco e torna al menu principale."},

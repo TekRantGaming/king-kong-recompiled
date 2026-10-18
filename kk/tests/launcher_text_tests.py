@@ -595,7 +595,7 @@ for _needle, _why in (
     if _needle not in _l206:
         fail(f'206: {_why}')
 # Task 222 (owner, 18 Oct, option A): the pause menu is a slim list (Resume, Photo mode, Display, Graphics, Audio,
-# Controls, Gameplay, then Restart chapter and Quit to main menu), each settings entry opening its own page; the old
+# Controls, Gameplay, then Load last checkpoint and Quit to main menu), each settings entry opening its own page; the old
 # layout (tabs across the top, a Settings entry, the logo) is gone; in game nothing says "launcher".
 _pm = (src / 'pause_menu.cpp').read_text(encoding='utf-8')
 _pl = (src / 'pause_menu_logic.h').read_text(encoding='utf-8')
@@ -608,12 +608,28 @@ for _dev in ('kGameOptions',):  # developer builds only
     _labels.pop(_dev, None)
     _whats.pop(_dev, None)
 if set(_whats) != {'kResume', 'kPhotoMode', 'kDisplay', 'kGraphics', 'kAudio', 'kControls', 'kGameplay', 'kCheats',
-                   'kRestart', 'kScore', 'kSave', 'kQuitToMainMenu', 'kQuitGame'}:
+                   'kLoadCheckpoint', 'kScore', 'kSave', 'kQuitToMainMenu', 'kQuitGame'}:
     fail(f'222: the strip sentences cover {sorted(_whats)}')
 strings |= set(_labels.values()) | set(_whats.values())
-strings |= {'Change from the main menu', 'Photo mode', 'Start this chapter again from its beginning?',
+strings |= {'Change from the main menu', 'Photo mode', 'Go back to the last checkpoint? Your progress since then is lost.',
             'Leave the game and go back to the main menu?', 'Leave the game and close it?', 'Leave', 'Quit', 'Cancel',
             'Paused', 'Select', 'Back', 'Change', 'Default', 'Resume', 'Reset page', 'Default: {0}'}
+# Task 237 (owner 18 Oct): "Load last checkpoint" replaces "Restart chapter". It does what the pause page's own
+# item 6 does (the reload request a death makes, without the death counters) and never the chapter's Start again.
+if _labels.get('kLoadCheckpoint') != 'Load last checkpoint' or 'Restart chapter' in _pm + _pl:
+    fail('237: the pause list has no "Load last checkpoint" or still says "Restart chapter"')
+if 'play::RunPauseAction(PauseAction::kLoadCheckpoint)' not in _pm or 'PauseAction::kStartAgain' in _pm:
+    fail('237: the pause menu does not run Load last checkpoint (or still runs Start again)')
+_ph237 = (src / 'pause_hooks.cpp').read_text(encoding='utf-8')
+for _needle, _why in (('Store32(base, kReloadRequest, 1);', 'no reload request'),
+                      ('Store32(base, kReloadFrames, 30);', 'no reload frame count'),
+                      ('__imp__sub_825E66D0(call, base);', "the pause is not ended the game's way"),
+                      ('g_can_checkpoint = !BonusLevelSession();', 'offered in the Extras galleries and credits')):
+    if _needle not in _ph237:
+        fail(f'237: {_why}')
+for _bad in ('19900', '19904', '0x4DBC', '0x4DC0'):
+    if re.search(r'Store32\([^;]*' + re.escape(_bad), _ph237):
+        fail('237: Load last checkpoint touches a death counter')
 if _labels.get('kQuitToMainMenu') != 'Quit to main menu':
     fail('222: no "Quit to main menu" entry')
 for _needle, _why in (('ui::DrawTabs(', 'the old tab bar is still drawn'), ('"Settings"', 'the old Settings entry is back'),
