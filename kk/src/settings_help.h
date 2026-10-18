@@ -64,7 +64,7 @@ inline bool RestartOnly(std::string_view label) {
 using C = Cost;
 using A = Applies;
 
-// The rows of settings_layout.h in its order (HDR output's rows are task 219's), then About's switches.
+// The rows of settings_layout.h in its order, then About's switches.
 inline constexpr Help kHelp[] = {
     // ---------------------------------------------------------------- Display ---
     {"Window mode", C::kNone, C::kUnset, A::kAuto, nullptr,
@@ -95,6 +95,20 @@ inline constexpr Help kHelp[] = {
      {{"30 FPS", "The Xbox 360's rate. Every animation is right, and it is the lightest."},
       {"60 FPS", "Twice as smooth. Needs about twice the work from your PC."},
       {"Unlimited", "As fast as your PC can go. Best with VSync or a G-Sync or FreeSync screen."}}},
+    // HDR output (task 219: HDR follows Windows; the calibration button is the launcher's only).
+    {"HDR", C::kNone, C::kUnset, A::kAuto, "Brighter highlights and deeper colour on your HDR screen.",
+     {{"Follow Windows", "HDR when Windows HDR is on for this screen, SDR when it is off. It follows a change in Windows."},
+      {"On", "Always asks for HDR. Windows HDR must be on too."},
+      {"Off", "Always SDR, as on the Xbox 360."}}},
+    {"HDR brightness", C::kNone, C::kUnset, A::kAuto, nullptr,
+     {{"Automatic", "Both values come from Windows and follow it when it changes."},
+      {"Manual", "Set Peak brightness and Paper white yourself with the sliders below."}}},
+    {"Peak brightness (nits)", C::kNone, C::kUnset, A::kAuto,
+     "Set it to your screen's peak brightness, so bright skies, fire and sparks keep their detail.", {}},
+    {"Paper white (nits)", C::kNone, C::kUnset, A::kAuto,
+     "Raise it if the picture looks dim next to Windows, lower it if it looks washed out.", {}},
+    {"Open Windows HDR Calibration", C::kUnset, C::kUnset, A::kNone,
+     "Measures your screen with a few test patterns. HDR brightness on Automatic then uses the results.", {}},
     {"Performance metrics", C::kLow, C::kUnset, A::kAuto, nullptr,
      {{"Off", "Nothing over the game."},
       {"FPS only", "The frame rate and the frame time."},

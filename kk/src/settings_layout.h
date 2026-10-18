@@ -32,8 +32,10 @@ inline constexpr Row kDisplayRows[] = {
     {"Screen", "Refresh rate"},      {"Screen", "Aspect ratio"},
     {"Picture", "Brightness"},       {"Picture", "Gamma"},
     {"Frame rate", "VSync"},         {"Frame rate", "Frame rate"},
-    {"HDR output", "HDR"},           {"HDR output", "Peak brightness (nits)"},
+    {"HDR output", "HDR"},           {"HDR output", "HDR brightness"},
+    {"HDR output", "Peak brightness (nits)"},
     {"HDR output", "Paper white (nits)"},
+    {"HDR output", "Open Windows HDR Calibration"},
     {"Overlay", "Performance metrics"},
 };
 

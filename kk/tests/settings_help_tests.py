@@ -1,5 +1,5 @@
 """Task 220 source checks for the description panel's structured help (kk/src/settings_help.h), no game needed:
-- every settings row in settings_layout.h has a help entry (HDR output's rows are task 219's), and every entry is
+- every settings row in settings_layout.h has a help entry (HDR output's too, task 227), and every entry is
   a row, a help_key the launcher uses, or one of About's switches;
 - every entry that has a "when it applies" label also has a performance label;
 - every English string of the help (how it shows, the option notes, the impact labels) and the rows' rewritten
@@ -56,9 +56,8 @@ if declared != len(helps):
 
 layout = (src / 'settings_layout.h').read_text(encoding='utf-8')
 rows = [label for _, label in re.findall(r'\{"([^"]+)", "([^"*][^"]*)"\}', layout)]
-TASK_219 = {'HDR', 'Peak brightness (nits)', 'Paper white (nits)'}
 for label in rows:
-    if label not in TASK_219 and label not in helps:
+    if label not in helps:
         fail(f'no help for the settings row "{label}"')
 
 launcher = (src / 'launcher.cpp').read_text(encoding='utf-8')

@@ -3,18 +3,22 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
-## v2.0.0-beta.10 (18 October 2026)
+## v2.0.0-beta.11 (unreleased)
 
-**Beta 10**: an emergency fix update, from the beta channel (**About** > **Change version**). Your saves and settings are kept. Windows only for this beta.
-
-### Changed
-- **Every setting explains itself.** The panel beside the settings, in the launcher and in the pause menu, now says what each setting does, what you will notice in the game, what each option changes, and shows its performance and video memory impact and when a change takes effect. In five languages.
+**Beta 11**: new features and fixes, from the beta channel (**About** > **Change version**). Your saves and settings are kept. Windows only for this beta.
 
 ### What's new
 - **HDR follows Windows**: HDR is on when Windows HDR is on for the screen the game is on, and off otherwise. Settings > Display > HDR has **Follow Windows** (the default), **On** and **Off**.
 - **HDR brightness from Windows**: by default, Peak brightness comes from the Windows HDR Calibration app and Paper white from the SDR content brightness in Windows. Choose **Manual** to use the sliders. The HDR rows show the values Windows reports.
 - **Open Windows HDR Calibration** button in Settings > Display (the Microsoft Store page when the app is not installed). The values are read again when you come back.
 - **Setup graphics pictures from your own game**: the first setup's graphics pages no longer use screenshots shipped with the download. Their pictures are made from your copy of the game while the launcher runs, and options that only show in the game itself show a still from your game with a description.
+
+### Changed
+- **Every setting explains itself.** The panel beside the settings, in the launcher and in the pause menu, now says what each setting does, what you will notice in the game, what each option changes, and shows its performance and video memory impact and when a change takes effect. In five languages.
+
+## v2.0.0-beta.10 (18 October 2026)
+
+**Beta 10**: an emergency fix update, from the beta channel (**About** > **Change version**). Your saves and settings are kept. Windows only for this beta.
 
 ### Fixed
 - **Jack's arm and what he holds flickered with an upscaler on** (DLSS, FSR or XeSS). In some places, for example in the Hayes chapter, parts of the arm and of the gun, spear, bone or lever turned into flat patches in the colour of the fog for single frames. They are now drawn whole.
