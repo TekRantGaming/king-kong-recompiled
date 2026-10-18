@@ -72,6 +72,7 @@ extern char** environ;
 #include "ps2_movies.h"
 #include "dev_launcher_chain.h"
 #include "video_modes.h"
+#include "profile_save_file.h"
 
 namespace kk {
 #if defined(KK_DEV_TOOLS)
@@ -749,13 +750,24 @@ void ApplyPendingVideoModes(PPCContext& ctx, uint8_t* base) {
     case VideoModeStep::kNothing: g_video_modes_pending = false; return;
     case VideoModeStep::kApply: break;
   }
+  // Task 213 (owner, 18 Oct): the game's Old movie filter never applies in normal play, whatever the save holds
+  // (filters belong to photo mode). Should anything put it back every frame, it is forced off twice a second.
+  static int64_t forced_at = -1000;
+  if (old_movie) {
+    if (!g_video_modes_pending && NowMs() - forced_at < 500) return;
+    forced_at = NowMs();
+    Store32(base, p + 0x4DA4, 0);
+    // Chapter-select keeps a restart copy of the serialized variables (profile_options.cpp).
+    if (Load32(base, p + 0x5668)) Store32(base, 0x82C6BDE0 + save_file::kFileFields[5] - 0x100, 0);
+  }
   g_video_modes_pending = false;
   const PPCContext saved = ctx;
   if (!old_p) Store32(base, kProfilePtr, p);
   __imp__sub_825EE130(ctx, base);
   ctx = saved;
   Store32(base, kProfilePtr, old_p);
-  REXLOG_INFO("KK play: applied the save's video modes (old movie {}, horizontal flip {})", old_movie, flip);
+  REXLOG_INFO("KK play: applied the save's video modes (horizontal flip {}; old movie {} in the save, always off)", flip,
+              old_movie);
 }
 
 // The save's file into the save system and the universe, as choosing it in the save menu does (proven:

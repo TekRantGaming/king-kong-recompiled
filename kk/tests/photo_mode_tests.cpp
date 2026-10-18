@@ -3,12 +3,14 @@
 // (radius, roll), the controller mapping, the picture names, and the renderer's side: which draws it leaves
 // out (only Jack's arms, never by shader alone) and the photo grade's colour function (the GPU pass does the
 // same, shaders/photo.hlsl).
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
 
 #include "backend/photo_config.h"
+#include "backend/picture_adjust.h"
 #include "freecam_math.h"
 #include "photo_mode_logic.h"
 
@@ -50,6 +52,57 @@ int main() {
   const NrPhotoSettings l = ToRenderer(look, true);
   Check(l.look == 2 && Near(l.letterbox, 2.39f) && Near(l.dof, 0.5f), "look, letterbox and depth of field");
   Check(nr::PhotoGradeNeeded(nr::SanitizePhotoSettings(l)), "a look needs the grade pass");
+  // Task 213 (Beta 9 "amber tint"): outside photo mode the picture is the game's own. The renderer starts
+  // inactive; no setting grades or overrides anything while inactive; leaving photo mode (what Exit sends)
+  // puts every value back, even after a warm sepia session.
+  {
+    const NrPhotoSettings start = nr::PhotoSettingsNow();
+    Check(!start.active && !start.hide && !nr::PhotoGradeNeeded(start), "the renderer starts outside photo mode");
+    Check(start.cel == -1 && start.sharpness == -1 && std::isnan(start.brightness) && std::isnan(start.gamma),
+          "outside photo mode the player's own picture settings apply");
+    Values warm = v;
+    warm.look = 2;
+    warm.temperature = 100;
+    warm.exposure = 1;
+    warm.contrast = 150;
+    warm.saturation = 50;
+    warm.vignette = 60;
+    warm.grain = 40;
+    warm.letterbox = 3;
+    warm.flip = true;
+    warm.dof = 50;
+    warm.cel = 1;
+    warm.brightness = 20;
+    warm.gamma = 1.3f;
+    Check(nr::PhotoGradeNeeded(nr::SanitizePhotoSettings(ToRenderer(warm, true))), "a sepia session grades");
+    for (int look = 0; look <= 6; ++look) {
+      NrPhotoSettings off = ToRenderer(warm, true);
+      off.look = uint32_t(look);
+      off.active = 0;
+      Check(!nr::PhotoGradeNeeded(nr::SanitizePhotoSettings(off)), "no grade pass while photo mode is closed");
+    }
+    nr::SetPhotoSettings(ToRenderer(warm, true));
+    Check(nr::PhotoGradeNeeded(nr::PhotoSettingsNow()), "the renderer grades while photo mode is open");
+    nr::SetPhotoSettings(ToRenderer(Values{}, false));  // photo_mode.cpp Exit
+    const NrPhotoSettings after = nr::PhotoSettingsNow();
+    Check(!after.active && !after.hide && !nr::PhotoGradeNeeded(after), "leaving photo mode ends the grade");
+    Check(after.look == 0 && after.exposure == 0 && after.contrast == 1 && after.saturation == 1 &&
+              after.temperature == 0 && after.vignette == 0 && after.grain == 0 && after.letterbox == 0 &&
+              !after.flip && after.dof == 0,
+          "leaving photo mode restores the identity grade");
+    Check(after.cel == -1 && after.sharpness == -1 && std::isnan(after.brightness) && std::isnan(after.gamma),
+          "leaving photo mode gives the picture settings back to the player");
+    const auto c = nr::PhotoGradeColour(after, {0.8f, 0.5f, 0.2f});
+    Check(Near(c[0], 0.8f, 1e-4f) && Near(c[1], 0.5f, 1e-4f) && Near(c[2], 0.2f, 1e-4f),
+          "the neutral grade leaves a colour unchanged");
+    // The Present pass at the default brightness and gamma: the game's ramp alone (none when it set none).
+    const nr::PictureAdjust picture = nr::PictureAdjust::FromSettings(0.0, 1.0);
+    std::array<uint16_t, 768> unset{}, game{};
+    for (uint32_t i = 0; i < 768; ++i) game[i] = uint16_t((i % 256) * 200 + (i / 256) * 7);
+    Check(picture.identity() && !nr::PictureAdjust::PresentUsesRamp(unset, picture),
+          "default brightness and gamma add no ramp");
+    Check(picture.PresentRamp(game) == game, "default brightness and gamma keep the game's own ramp");
+  }
   // Field of view: the game's until set, then the player's.
   Values f = v;
   Check(Near(FieldOfViewRadians(f, 1.2f), 1.2f), "field of view follows the game until set");

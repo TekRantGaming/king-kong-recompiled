@@ -15,7 +15,6 @@ constexpr Entry kEntries[] = {
     {"More recompiled games and projects by TRG, with their download pages.", "Weitere neu kompilierte Spiele und Projekte von TRG, mit ihren Download-Seiten.", "Más juegos y proyectos recompilados de TRG, con sus páginas de descarga.", "D'autres jeux et projets recompilés par TRG, avec leurs pages de téléchargement.", "Altri giochi e progetti ricompilati da TRG, con le loro pagine di download."},
     {"On GitHub", "Auf GitHub", "En GitHub", "Sur GitHub", "Su GitHub"},
     {"{0} projects", "{0} Projekte", "{0} proyectos", "{0} projets", "{0} progetti"},
-    {"Old movie filter", "Alter Film", "Filtro de película antigua", "Filtre vieux film", "Filtro vecchio film"},
     {"Horizontal flip", "Horizontal spiegeln", "Inversión horizontal", "Retournement horizontal", "Ribaltamento orizzontale"},
     {"An original bonus video mode, unlocked in Extras.", "Ein ursprünglicher Bonus-Bildmodus, in den Extras freigeschaltet.", "Un modo de vídeo adicional del juego original, desbloqueado en Extras.", "Un mode vidéo bonus du jeu original, débloqué dans les Extras.", "Una modalità video bonus del gioco originale, sbloccata negli Extra."},
     {"Aiming visor", "Zielvisier", "Visor de apuntado", "Viseur", "Mirino"},
