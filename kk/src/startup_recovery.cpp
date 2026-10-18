@@ -1,5 +1,6 @@
 #include "startup_recovery.h"
 #include "startup_recovery_state.h"
+#include "amd_shader_cache.h"
 #include "launcher.h"
 #include "launcher_text.h"
 #include "settings.h"
@@ -10,6 +11,7 @@
 #include <mutex>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <rex/cvar.h>
 #include <rex/logging.h>
 #include "hooks/kk_native_ui.h"
@@ -28,6 +30,11 @@
 #endif
 
 REXCVAR_DEFINE_BOOL(kk_startup_child, false, "KK/Internal", "Internal startup monitor child").debug_only();
+// Task 228, OWNER DECISION PENDING: off = the launcher only tells the player how to empty the AMD
+// driver's shader caches by hand; on = it also offers to empty them (at the next start, with consent).
+REXCVAR_DEFINE_BOOL(kk_amd_shader_cache_offer, false, "KK/Internal",
+    "After a start that ended unexpectedly, offer to empty the AMD driver shader caches (VkCache, DxCache, "
+    "DxcCache in LOCALAPPDATA/AMD) at the next start");
 #if defined(KK_DEV_TOOLS)
 REXCVAR_DEFINE_BOOL(kk_dev_startup_skip_notice, false, "KK/Debug",
     "Skip the recovery launcher during isolated gameplay tests").debug_only();
@@ -39,6 +46,9 @@ REXCVAR_DEFINE_STRING(kk_dev_startup_api, "all", "KK/Debug",
 
 namespace kk::startup {
 namespace {
+constexpr const char* kAmdHint =
+    "A damaged graphics driver shader cache can also cause this, most often on AMD graphics cards: close the "
+    "game, empty the folders VkCache, DxCache and DxcCache in %LOCALAPPDATA%\\AMD, then start the game again.";
 std::mutex mutex;
 std::unique_ptr<RecoveryState> state;
 // Armed: this process runs the game and has not shown its first frame yet. A failure, a device loss
@@ -55,6 +65,42 @@ constexpr unsigned kRetryExit = 0x4B4B0039;
 // then chooses a renderer or API by hand.
 bool overridden = false;
 std::string original_renderer, original_plugin, original_backend;
+// Task 228: the launcher's own start (LauncherGuard). `left` = how the last launcher start ended.
+std::filesystem::path user_root;
+LauncherGuard::Left left;
+bool launcher_active = false;  // this process is the launcher's and its marker is written
+std::string launcher_api, launcher_phase;
+int launcher_count = 0;
+bool crash_notice_shown = false;
+std::string amd_report;  // what emptying the AMD caches at this start did (once, for the launcher)
+
+std::filesystem::path AmdRequestFile() { return state->directory / "clear-amd-cache.request"; }
+std::filesystem::path LocalAppData() {
+#if defined(_WIN32)
+  if (const wchar_t* v = _wgetenv(L"LOCALAPPDATA"); v && *v) return std::filesystem::path(v);
+#endif
+  return {};
+}
+// Our own Vulkan driver pipeline cache files (<cache root>/native-pipelines/*.vkcache, or
+// native_pipeline_cache_dir). They are checked against the driver (vendor, device, pipelineCacheUUID,
+// driverUUID, driver version, data hash) before use; after a start that ended unexpectedly they go
+// anyway: they are rebuilt from the driver, and no file of ours can then be involved in a second crash.
+void DiscardOwnDriverCaches() {
+  std::filesystem::path folder = rex::cvar::GetFlagByName("native_pipeline_cache_dir");
+  if (folder.empty()) {
+    const std::string root = rex::cvar::GetFlagByName("cache_root");
+    folder = (root.empty() ? user_root / "cache" : std::filesystem::path(root)) / "native-pipelines";
+  }
+  std::error_code ec;
+  for (auto it = std::filesystem::directory_iterator(folder, ec); !ec && it != std::filesystem::directory_iterator();
+       it.increment(ec)) {
+    if (it->path().extension() != ".vkcache") continue;
+    std::error_code e;
+    std::filesystem::remove(it->path(), e);
+    REXLOG_INFO("KK recovery: removed our pipeline cache {} after an unexpected end ({})", it->path().string(),
+                e ? e.message() : std::string("ok"));
+  }
+}
 
 void Signal(char value) {
 #if defined(_WIN32)
@@ -77,7 +123,8 @@ bool IsDeviceLoss(const char* why) { return why && std::string_view(why).find("l
 #else
   REXLOG_ERROR("KK recovery: both native graphics APIs failed; see logs for details");
   rex::ShowSimpleMessageBox(rex::SimpleMessageBoxType::Error,
-      kk::text::T("Neither Vulkan nor DirectX 12 could start. Update your graphics driver and check that your GPU meets the requirements in README.md. For help, use the support links in README.md and include the logs folder."));
+      std::string(kk::text::T("Neither Vulkan nor DirectX 12 could start. Update your graphics driver and check that your GPU meets the requirements in README.md. For help, use the support links in README.md and include the logs folder.")) +
+          "\n\n" + kk::text::T(kAmdHint));
 #endif
   if (state) state->Clear();
   Signal('C');
@@ -214,7 +261,12 @@ void MonitorStartup() {
 
 void Configure(const std::filesystem::path& root) {
   std::lock_guard lock(mutex);
+  user_root = root;
   state = std::make_unique<RecoveryState>(root);
+  left = LauncherGuard(state->directory).Read();
+  if (left.count > 0)
+    REXLOG_WARN("KK recovery: the last launcher start ended unexpectedly ({} {}, {} in a row)", left.api, left.phase,
+                left.count);
   if (kk::NormalizeRendererSettings()) state->Clear();
   else if (state->Load()) state->RecoverCrash();
   if (state->selected == "failed") Exhausted();
@@ -239,9 +291,34 @@ void Begin(const std::string& plugin, bool game) {
     const std::string api = wanted == "d3d12" ? "d3d12" : "vulkan";
     if (state->reason.empty()) { state->preferred = api; state->selected = api; }
     if (!game) {
-      // The launcher shows first: nothing is written and a crash is not counted.
+      // The launcher shows first: only a renderer that cannot start, or (task 228) one that crashed
+      // twice in a row before the launcher showed, switches the API.
       init_only = true;
       REXLOG_INFO("KK recovery: launcher process, only a renderer that cannot start switches the API");
+      if (LauncherGuard::SwitchApi(left, state->selected) &&
+          state->Advance("crashed twice before the main menu showed")) {
+        if (state->selected == "failed") Exhausted();
+        Apply();
+        PublishFailed();
+        REXLOG_ERROR("KK recovery: {}", state->reason);
+      }
+      if (left.count > 0) DiscardOwnDriverCaches();
+      std::error_code ec;
+      if (std::filesystem::exists(AmdRequestFile(), ec)) {
+        std::filesystem::remove(AmdRequestFile(), ec);
+        if (REXCVAR_GET(kk_amd_shader_cache_offer)) {
+          // Before this process opens the driver; only at a launcher start (the launcher that took the
+          // request has exited). A file another program still has open is kept.
+          const auto r = amd_cache::Clear(LocalAppData());
+          REXLOG_INFO("KK recovery: AMD shader cache emptied at the player's request: {} files ({} MB), {} kept",
+                      r.removed, r.bytes >> 20, r.kept);
+          amd_report = std::to_string(r.removed) + " " + std::to_string(r.kept);
+        }
+      }
+      launcher_api = state->selected.empty() ? api : state->selected;
+      launcher_phase = "window";
+      launcher_count = LauncherGuard::Next(left, launcher_api);
+      launcher_active = LauncherGuard(state->directory).Write(launcher_api, launcher_phase, launcher_count);
       return;
     }
     init_only = false;
@@ -275,6 +352,8 @@ void Begin(const std::string& plugin, bool game) {
 
 void CleanExit() {
   std::lock_guard lock(mutex);
+  if (launcher_active && state) LauncherGuard(state->directory).Clear();
+  launcher_active = false;
   if (armed && state) { state->Marker(); state->crashes = 0; state->Save(); }
   armed = false;
   init_only = false;
@@ -286,6 +365,39 @@ void NoticeApis(std::string& failed, std::string& selected) {
   std::lock_guard lock(mutex);
   failed = state ? RecoveryState::Name(state->preferred) : "";
   selected = state ? RecoveryState::Name(state->selected) : "";
+}
+void LauncherShown(bool preparing_shaders) {
+  std::lock_guard lock(mutex);
+  if (!launcher_active || !state) return;
+  const std::string phase = preparing_shaders ? "shaders" : "";
+  if (phase == launcher_phase) return;
+  launcher_phase = phase;
+  const LauncherGuard guard(state->directory);
+  if (phase.empty()) guard.Clear();
+  else guard.Write(launcher_api, phase, launcher_count);
+}
+std::string CrashNotice() {
+  std::lock_guard lock(mutex);
+  return crash_notice_shown ? std::string() : left.phase;
+}
+void CrashNoticeShown() {
+  std::lock_guard lock(mutex);
+  crash_notice_shown = true;
+}
+bool AmdCacheOffer() { return REXCVAR_GET(kk_amd_shader_cache_offer) && amd_cache::Present(LocalAppData()); }
+bool RequestAmdCacheClear() {
+  std::lock_guard lock(mutex);
+  if (!state || !REXCVAR_GET(kk_amd_shader_cache_offer)) return false;
+  std::error_code ec;
+  std::filesystem::create_directories(state->directory, ec);
+  std::ofstream out(AmdRequestFile(), std::ios::trunc);
+  out << "requested by the player\n";
+  REXLOG_INFO("KK recovery: the player asked to empty the AMD shader cache at the next start");
+  return bool(out);
+}
+std::string AmdCacheReport() {
+  std::lock_guard lock(mutex);
+  return std::exchange(amd_report, std::string());
 }
 bool NeedsNotice() {
 #if defined(KK_DEV_TOOLS)

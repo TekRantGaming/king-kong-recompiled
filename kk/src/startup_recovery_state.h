@@ -97,4 +97,49 @@ struct RecoveryState {
     return !ec && Marker();
   }
 };
+
+// The launcher's own start (task 228). The launcher's process never switched API for a crash, so a
+// driver that crashed while the launcher started (players on AMD with a stale driver shader cache:
+// black window, then back to the desktop) closed the game at every start with no message at all.
+// launcher.marker = "<api> <phase> <count>", written when the launcher's process starts and cleared
+// once its first frames are shown and no shader preparation runs, or at any clean exit. A marker
+// found at the next start = that launcher ended without either (a crash, or the process was killed).
+//   phase "window":  before the launcher's first frames (the renderer's own start).
+//   phase "shaders": while the launcher prepared shaders (both APIs' pipelines, in this process).
+struct LauncherGuard {
+  struct Left {
+    std::string api, phase;
+    int count = 0;  // launcher starts in a row that ended this way (0 = the last one finished)
+  };
+  std::filesystem::path file;
+  explicit LauncherGuard(const std::filesystem::path& recovery_dir) : file(recovery_dir / "launcher.marker") {}
+
+  Left Read() const {
+    Left left;
+    std::ifstream in(file);
+    if (!(in >> left.api >> left.phase >> left.count) || !RecoveryState::Native(left.api) ||
+        (left.phase != "window" && left.phase != "shaders") || left.count < 1 || left.count > 100)
+      return {};
+    return left;
+  }
+  bool Write(const std::string& api, const std::string& phase, int count) const {
+    std::error_code ec;
+    std::filesystem::create_directories(file.parent_path(), ec);
+    if (ec) return false;
+    std::ofstream out(file, std::ios::trunc);
+    out << api << ' ' << phase << ' ' << count << '\n';
+    out.flush();
+    return bool(out);
+  }
+  void Clear() const {
+    std::error_code ec;
+    std::filesystem::remove(file, ec);
+  }
+  // The count this start writes: one more when the last start on the same API ended the same way.
+  static int Next(const Left& left, const std::string& api) { return left.count > 0 && left.api == api ? left.count + 1 : 1; }
+  // The launcher's renderer crashed twice in a row before it showed: switch API, as a game start does.
+  static bool SwitchApi(const Left& left, const std::string& api) {
+    return left.phase == "window" && left.api == api && left.count >= 2;
+  }
+};
 }  // namespace kk::startup

@@ -2830,6 +2830,37 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                   if (i == 1 && startup::TryNativeAgain()) ++g_changes;
                 });
     }
+    // Task 228: the launcher has shown (a crash before this, or while shaders are prepared, is told
+    // at the next start), and the last start that ended unexpectedly is explained once.
+    if (shown_frames_ < 30) ++shown_frames_;
+    if (shown_frames_ >= 30) startup::LauncherShown(native_pack_.Working());
+    if (!crash_notice_shown_ && !modal_.open && shown_frames_ >= 30) {
+      crash_notice_shown_ = true;
+      if (const std::string phase = startup::CrashNotice(); !phase.empty()) {
+        startup::CrashNoticeShown();
+        std::string body = std::string(T(phase == "shaders" ? "The last start ended unexpectedly while shaders were being prepared."
+                                                : "The last start ended unexpectedly before the main menu showed.")) +
+                           "\n\n" +
+                           T("A damaged graphics driver shader cache can cause this, most often on AMD graphics cards. "
+                             "The game's own pipeline cache was reset. If it happens again, close the game, empty the "
+                             "folders VkCache, DxCache and DxcCache in %LOCALAPPDATA%\\AMD, then start the game again.");
+        std::vector<std::string> buttons = {"OK"};
+        if (startup::AmdCacheOffer()) {
+          body += std::string("\n\n") + T("Clear AMD shader cache empties those folders the next time you start the game. Other "
+                             "games and apps then rebuild their shaders once.");
+          buttons.push_back("Clear AMD shader cache");
+        }
+        OpenModal("The game closed unexpectedly", body, buttons, 0, [](int i) {
+          if (i == 1) startup::RequestAmdCacheClear();
+        });
+      } else if (const std::string report = startup::AmdCacheReport(); !report.empty()) {
+        const auto space = report.find(' ');
+        std::string body = F("The AMD shader cache was emptied ({0} files).", {report.substr(0, space)});
+        if (report.substr(space + 1) != "0")
+          body += " " + F("{0} files in use by another program were left.", {report.substr(space + 1)});
+        OpenModal("Clear AMD shader cache", body, {"OK"}, 0, {});
+      }
+    }
     if (files_ok_ && !music_) music_ = std::make_unique<LauncherMusic>(paths_.game_dir);
     if (music_) {
       // Silent while the native renderer's shaders are built (setup, after an update, before Play): the
@@ -7613,6 +7644,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   float w_ = 1280, h_ = 720;
   Page page_ = kHome;
   bool recovery_shown_ = false;
+  bool crash_notice_shown_ = false;  // task 228
+  int shown_frames_ = 0;
   std::map<int, ui::ListState> lists_;
   std::vector<Item> focused_items_;
   std::unique_ptr<Artbook> artbook_;  // Beta 7: made when Extras > Artbook first opens
