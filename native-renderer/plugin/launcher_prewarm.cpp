@@ -18,6 +18,7 @@
 
 #include "backend/backend.h"
 #include "backend/host_device.h"
+#include "backend/pipeline_exit_gate.h"
 #include "backend/render_scale.h"
 #include "plugin/plugin_settings.h"
 #include "plugin/gpu_preference.h"
@@ -158,7 +159,12 @@ class LauncherPrewarm {
           progress_[1] = p.queued;
           progress_[2] = p.made;
           progress_[3] = p.waiting;
-          if (p.done) break;
+          if (p.done) {
+            // Task 233: the program is exiting (its workers refused the rest): no teardown here.
+            lock.unlock();
+            HoldWhileExiting(ExitGate(), [this] { return Stopping(); });
+            break;
+          }
           if (cv_.wait_for(lock, std::chrono::milliseconds(50), [&] { return stop_; })) {
             state = NR_PREWARM_STOPPED;
             break;

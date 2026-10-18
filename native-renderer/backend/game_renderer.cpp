@@ -14,8 +14,10 @@
 #include <cstring>
 #include <cstdlib>
 
+#include "backend/draw_tags.h"
 #include "backend/guest_layout.h"
 #include "backend/log.h"
+#include "backend/pipeline_exit_gate.h"
 #include "backend/pipeline_workers.h"
 #include "backend/renderer.h"
 #include "backend/shaders.h"
@@ -1165,10 +1167,12 @@ void GameRenderer::PipelineWorker() {
     if (pipeline_library_ && (build == PipelineBuild::kLinked || build == PipelineBuild::kPrewarm)) {
       nvrhi::GraphicsPipelineDesc linked = job.desc;
       linked.vulkanLibraryLink = true;
-      p = CreatePipeline(linked, job.framebuffer);
+      p = CreatePipeline(linked, job.framebuffer, true);
       if (build == PipelineBuild::kPrewarm && !pipeline_library_link_only_) p = nullptr;  // only its parts are kept
     }
-    if (!p) p = CreatePipeline(job.desc, job.framebuffer);
+    // Task 233: after the exit gate closed, a job is refused at once (nullptr, counted as failed: a setup run
+    // the exit cut short is never marked prepared); a draw waiting for it then skips.
+    if (!p) p = CreatePipeline(job.desc, job.framebuffer, true);
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     bool idle = false;
     {
@@ -1203,9 +1207,9 @@ void GameRenderer::PipelineWorker() {
 }
 
 nvrhi::GraphicsPipelineHandle GameRenderer::CreatePipeline(const nvrhi::GraphicsPipelineDesc& desc,
-                                                           const nvrhi::FramebufferInfo& framebuffer) {
+                                                           const nvrhi::FramebufferInfo& framebuffer, bool background) {
   std::shared_lock lock(creation_mutex_);
-  nvrhi::GraphicsPipelineHandle p = CreateGraphicsPipeline(device_, desc, framebuffer);
+  nvrhi::GraphicsPipelineHandle p = CreateGraphicsPipeline(device_, desc, framebuffer, background);
   if (p && driver_cache_) driver_cache_new_.fetch_add(1, std::memory_order_relaxed);
   return p;
 }
@@ -1215,6 +1219,8 @@ bool GameRenderer::PrepareLibraryParts(const nvrhi::GraphicsPipelineDesc& desc, 
   void* native = device_->getNativeObject(nvrhi::ObjectTypes::Nvrhi_VK_Device);
   if (!native) return false;
   std::shared_lock lock(creation_mutex_);
+  PipelineExitGate::Pass pass(ExitGate(), true);  // a worker's job (task 233): refused once the exit started
+  if (!pass) return false;
   const bool made = static_cast<nvrhi::vulkan::IDevice*>(native)->prepareGraphicsPipelineParts(desc, framebuffer);
   if (made && driver_cache_) driver_cache_new_.fetch_add(1, std::memory_order_relaxed);
   return made;
@@ -1721,7 +1727,8 @@ DriverPipelineCache::Load GameRenderer::SetDriverPipelineCache(DriverPipelineCac
 }
 
 void GameRenderer::MaybeSaveDriverCache() {
-  if (!driver_cache_) return;
+  // Task 233: once the exit started, the exit flush saves it (the file writer's exit task), not an idle worker.
+  if (!driver_cache_ || ExitGate().closed()) return;
   const uint64_t fresh = driver_cache_new_.load(std::memory_order_relaxed);
   if (fresh == 0) return;
   std::unique_lock lock(driver_cache_save_mutex_, std::try_to_lock);
@@ -1920,6 +1927,69 @@ void GameRenderer::BuildPipelineDesc(const PipelineRecord& r, nvrhi::IShader* vs
   }
   fb.sampleCount = 1;
 }
+
+namespace {
+// Task 231 (draw_tags.h): does a HUD-tagged draw cover the whole guest width (a fade, a full-screen tint)?
+// Reads up to 64 of its vertices' positions; true when they span the viewport's width as pixels, or the clip
+// space through the c0-c3 rows (dp4 per row, as the game's 2D shaders do) spans -1..1. Logs the first distinct
+// tagged draws when KK_ULTRAWIDE_HUD_LOG=1.
+bool HudDrawCoversWidth(const DrawCall& c, const dev::DeviceView& d) {
+  if (!c.vertex_data || c.stride == 0 || c.count == 0) return false;
+  const uint32_t format = DeclTypeFormat(c.position_type);
+  // Xenos formats: 37 = 32_32_FLOAT, 57 = 32_32_32_FLOAT, 38 = 32_32_32_32_FLOAT.
+  const uint32_t comps = format == 38 ? 4 : format == 57 ? 3 : format == 37 ? 2 : (c.position_type ? 0 : 3);
+  if (comps == 0) return false;
+  float x0 = 1e30f, x1 = -1e30f, cx0 = 1e30f, cx1 = -1e30f;
+  uint32_t n = 0;
+  for (uint32_t i = 0; i < std::min(c.count, 64u); ++i) {
+    int64_t v = int64_t(c.start) + i;
+    if (c.indexed) {
+      if (!c.index_data) return false;
+      const uint64_t at = uint64_t(c.start) + i;
+      if ((at + 1) * (c.index_info.index32 ? 4 : 2) > c.index_info.size_bytes) break;
+      v = int64_t(c.index_info.index32 ? LoadBE32(c.index_data + at * 4) : LoadBE16(c.index_data + at * 2)) +
+          c.base_vertex;
+    }
+    const uint64_t at = uint64_t(std::max<int64_t>(v, 0)) * c.stride + c.position_offset;
+    if (v < 0 || at + comps * 4 > c.vertex_data_size) continue;
+    float p[4] = {0, 0, 0, 1};
+    for (uint32_t k = 0; k < comps; ++k) p[k] = LoadBEFloat(c.vertex_data + at + k * 4);
+    const float* m = c.vs_c0_c3.data();
+    const float cx = m[0] * p[0] + m[1] * p[1] + m[2] * p[2] + m[3] * p[3];
+    const float cw = m[12] * p[0] + m[13] * p[1] + m[14] * p[2] + m[15] * p[3];
+    x0 = std::min(x0, p[0]);
+    x1 = std::max(x1, p[0]);
+    if (std::fabs(cw) > 1e-6f) {
+      cx0 = std::min(cx0, cx / cw);
+      cx1 = std::max(cx1, cx / cw);
+    }
+    ++n;
+  }
+  if (n == 0) return false;
+  const uint32_t vte = d.u32(dev::kPaClVteCntl);
+  const float vw = float(c.viewport.width ? c.viewport.width : 1280), vx = float(c.viewport.x);
+  const bool pixels = (vte & 1) == 0 && x0 <= vx + 0.02f * vw && x1 >= vx + 0.98f * vw;
+  // Clip space through c0-c3, or an untextured quad given straight in clip space (a fade: x -1..1).
+  const bool clip = (cx0 <= -0.98f && cx1 >= 0.98f) ||
+      ((vte & 1) && c.textures[0] == 0 && x0 <= -0.98f && x1 >= 0.98f);
+  static const bool log = [] {
+    const char* e = std::getenv("KK_ULTRAWIDE_HUD_LOG");
+    return e && *e == '1';
+  }();
+  if (log) {
+    static std::unordered_set<uint64_t> seen;
+    const uint64_t key = (uint64_t(c.tags) << 40) ^ (uint64_t(c.count) << 20) ^ (c.vertex_shader & 0xFFFFF) ^
+        (uint64_t(pixels || clip) << 63);
+    if (seen.size() < 300 && seen.insert(key).second)
+      Logf(LogLevel::kInfo,
+           "KK: ultrawide HUD draw leaf %u prim %u count %u vs %08X tex0 %08X vte %X vp %u+%u x %.4g..%.4g clip "
+           "%.4g..%.4g full %d",
+           (c.tags >> kDrawTagLeafShift) & 0xFF, uint32_t(c.primitive), c.count, c.vertex_shader, c.textures[0],
+           vte, c.viewport.x, c.viewport.width, x0, x1, cx0, cx1, int(pixels || clip));
+  }
+  return pixels || clip;
+}
+}  // namespace
 
 void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   struct UploadGuard {
@@ -2373,6 +2443,14 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   for (uint32_t c = 0; c < 3; ++c) {
     dc.ndcScale[c] = vp.ndc_scale[c];
     dc.ndcOffset[c] = vp.ndc_offset[c];
+  }
+  if (call.tags & kDrawTagHud) {
+    // Ultrawide mod (task 231): the game's 2D in a centred 16:9 box, full-width draws (fades) left as they are.
+    const float a = HudWidthScale();
+    if (a > 1.0f && !HudDrawCoversWidth(call, d)) {
+      dc.ndcScale[0] /= a;
+      dc.ndcOffset[0] /= a;
+    }
   }
   if (up.jitter && upscale_) {
     // Upscalers: the picture moved by this frame's jitter (input pixels over the target's host size).

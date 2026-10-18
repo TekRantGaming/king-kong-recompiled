@@ -31,20 +31,21 @@ bool Contains(std::string_view text, std::string_view word) {
 }  // namespace
 
 int main() {
-  // The owner's list (18 Oct): Resume, Photo mode, Display, Graphics, Audio, Controls, Gameplay, (gap) Restart,
+  // The owner's list (18 Oct): Resume, Photo mode, Display, Graphics, Audio, Controls, Gameplay, (gap) Load last
+  // checkpoint (owner 18 Oct, replaces Restart chapter),
   // Quit to main menu.
   Available a;
   a.photo = true;
-  a.restart = true;
+  a.checkpoint = true;
   a.quit_game = false;
   const std::vector<Listed> list = Entries(a);
   Check(Only(list) == std::vector<Entry>{Entry::kResume, Entry::kPhotoMode, Entry::kDisplay, Entry::kGraphics,
-                                         Entry::kAudio, Entry::kControls, Entry::kGameplay, Entry::kRestart,
+                                         Entry::kAudio, Entry::kControls, Entry::kGameplay, Entry::kLoadCheckpoint,
                                          Entry::kQuitToMainMenu},
         "the owner's list");
   int gaps = 0;
   for (const Listed& l : list) gaps += l.gap_before;
-  Check(gaps == 1 && list[7].gap_before, "one gap, before Restart chapter");
+  Check(gaps == 1 && list[7].gap_before, "one gap, before Load last checkpoint");
 
   // Nothing optional: no Photo mode, no game items; the gap moves to the first way out.
   Available none;
@@ -59,11 +60,11 @@ int main() {
 
   // Everything: Cheats after Gameplay, the game's items in order, Quit game last.
   Available all;
-  all.photo = all.cheats = all.game_options = all.restart = all.score = all.save = true;
+  all.photo = all.cheats = all.game_options = all.checkpoint = all.score = all.save = true;
   const std::vector<Entry> full = Only(Entries(all));
   Check(full == std::vector<Entry>{Entry::kResume, Entry::kPhotoMode, Entry::kDisplay, Entry::kGraphics, Entry::kAudio,
                                    Entry::kControls, Entry::kGameplay, Entry::kCheats, Entry::kGameOptions,
-                                   Entry::kRestart, Entry::kScore, Entry::kSave, Entry::kQuitToMainMenu,
+                                   Entry::kLoadCheckpoint, Entry::kScore, Entry::kSave, Entry::kQuitToMainMenu,
                                    Entry::kQuitGame},
         "full list");
 
@@ -77,11 +78,20 @@ int main() {
     if (page >= 0) Check(std::string_view(Label(e)) == kk::settings_layout::kPageNames[page], "tab names");
   }
   Check(std::string_view(Label(Entry::kQuitToMainMenu)) == "Quit to main menu", "Quit to main menu");
+  // Task 237 (owner 18 Oct): "Load last checkpoint" replaces "Restart chapter"; it is listed only when offered.
+  Check(std::string_view(Label(Entry::kLoadCheckpoint)) == "Load last checkpoint", "Load last checkpoint");
+  Check(Contains(What(Entry::kLoadCheckpoint), "checkpoint") && !Contains(What(Entry::kLoadCheckpoint), "chapter"),
+        "the strip speaks of the checkpoint, not the chapter");
+  for (Entry e : full) Check(!Contains(Label(e), "restart"), "no Restart entry");
+  Available no_checkpoint = all;
+  no_checkpoint.checkpoint = false;
+  for (const Listed& l : Entries(no_checkpoint))
+    Check(l.entry != Entry::kLoadCheckpoint, "no checkpoint (Extras galleries, credits): not listed");
   Check(!Contains(kQuietCaption, "launcher") && !Contains(kGreyedNote, "launcher"), "quiet group text");
   Check(std::string_view(kQuietCaption) == "Change from the main menu", "quiet caption wording");
   Check(std::string_view(kGreyedNote) == "This can't be changed while you play. Change it from the main menu.",
         "greyed note wording");
-  Check(PageOf(Entry::kResume) < 0 && PageOf(Entry::kRestart) < 0 && PageOf(Entry::kQuitGame) < 0,
+  Check(PageOf(Entry::kResume) < 0 && PageOf(Entry::kLoadCheckpoint) < 0 && PageOf(Entry::kQuitGame) < 0,
         "game items open no page");
 
   // LB / RB: the listed pages, wrapping; Cheats only while listed.

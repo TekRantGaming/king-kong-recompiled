@@ -29,9 +29,12 @@ namespace nr {
 
 class GameRenderer;
 
-// device->createGraphicsPipeline: every pipeline of the renderer is made through it (renderer.cpp).
+// device->createGraphicsPipeline: every pipeline of the renderer is made through it (renderer.cpp). It passes
+// the exit gate (pipeline_exit_gate.h, task 233): `background` (a worker's compile) is refused (nullptr) once the
+// program is about to exit; any other creation is only counted, so the exit can wait for it.
 nvrhi::GraphicsPipelineHandle CreateGraphicsPipeline(nvrhi::IDevice* device, const nvrhi::GraphicsPipelineDesc& desc,
-                                                     const nvrhi::FramebufferInfo& framebuffer);
+                                                     const nvrhi::FramebufferInfo& framebuffer,
+                                                     bool background = false);
 
 // The placeholder pipeline's push constants (shaders/placeholder.hlsl).
 struct PlaceholderConstants {

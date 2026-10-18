@@ -14,6 +14,7 @@
 
 #include "backend/backend.h"
 #include "backend/background_file_writer.h"
+#include "backend/pipeline_exit_gate.h"
 #include "plugin/launcher_prewarm.h"
 #include "plugin/native_api.h"
 #include "plugin/native_startup.h"
@@ -625,6 +626,24 @@ extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_flush_file_writes(uint32_t timeout_
   }
   return all ? 1u : 0u;
 }
+// Task 233: before a hard exit, or before handing over to a new process of the game: no new background
+// pipeline compile from now on (the workers' jobs are refused), and a bounded wait for the pipeline creations
+// already inside the driver, so none is killed while the driver may be writing its own shader cache. Returns
+// how many were still running when the wait ended (0 = none). One log line per exit.
+extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_quiesce_pipelines(uint32_t timeout_ms) {
+  const nr::PipelineExitGate::Result r = nr::ExitGate().CloseAndWait(std::chrono::milliseconds(timeout_ms));
+  if (r.first || r.running) {
+    if (r.left) {
+      REXLOG_WARN("rexgpu-native: exit: {} pipeline compiles running, {} still running after {:.0f} ms (limit {} ms)",
+                  r.running, r.left, r.waited_ms, timeout_ms);
+    } else {
+      REXLOG_INFO("rexgpu-native: exit: {} pipeline compiles running, waited {:.0f} ms; no new ones from now on",
+                  r.running, r.waited_ms);
+    }
+  }
+  return r.left;
+}
+
 extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_effect_stats(NrEffectStats* stats) {
 #if NR_GAME_RENDERER
   return nr::ReadEffectStats(stats) ? 1u : 0u;

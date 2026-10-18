@@ -3,8 +3,14 @@
 
 #include <rex/system/gpu_plugin.h>
 
+#include "backend/draw_tags.h"
 #include "backend/photo_config.h"
 #include "plugin/native_photo.h"
+
+// The ultrawide mod's draw tags (backend/draw_tags.h, task 231): called on the game's thread around the draws.
+extern "C" REX_GPU_PLUGIN_EXPORT void nr_set_draw_tags(uint32_t tags, float hud_width_scale) {
+  nr::SetDrawTags(tags, hud_width_scale);
+}
 
 extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_photo_set(const NrPhotoSettings* settings) {
   if (!settings || settings->size != sizeof(NrPhotoSettings)) return 0;
