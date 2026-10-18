@@ -5,7 +5,7 @@ version's notes the first time you start it.
 
 ## v2.0.0-beta.9 (18 October 2026)
 
-**Beta 9**: a fix update, from the beta channel (**About** > **Change version**). Your saves and settings are kept. Windows only for this beta.
+**Beta 9**: new features and fixes, from the beta channel (**About** > **Change version**). Your saves and settings are kept. Windows only for this beta.
 
 ### What's new
 - **Brightness and gamma** in Settings > Display > Picture and in the pause menu. Brightness raises or lowers the darkest parts of the picture, Gamma the middle tones. Changes show at once, also while paused. Only the game's picture changes, not the launcher or the menus. At 0 and 1.00 the picture is exactly as before. With HDR, white stays at the Paper white brightness.
