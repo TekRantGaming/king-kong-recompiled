@@ -2,10 +2,12 @@
 // Settings and the pause menu's (launcher.cpp, SettingsPages). The order follows what most PC games use
 // (owner, 16 Oct): Display, Graphics, Audio, Controls, Gameplay, Cheats, then Advanced (Cheats has its own tab,
 // owner 16 Oct evening; the launcher adds About as its last tab, which has no settings rows); inside each, the usual order
-// (Display: window mode, monitor, resolution, refresh rate, VSync, frame-rate cap, HDR; Graphics: preset,
-// graphics API, upscaler and quality, anti-aliasing, the effects, advanced items last; Audio: master,
-// music, effects, speech, menu sounds; Controls: sensitivity, inversion, vibration, bindings; Gameplay:
-// subtitles, language, HUD, then the rest). Only placement and order: no setting's value or meaning.
+// (Display: window mode, monitor, resolution, refresh rate, VSync, frame-rate cap, HDR, then the camera: field of
+// view, motion blur, camera shake; Graphics: preset, graphics API, upscaler and quality, anti-aliasing, the effects,
+// advanced items last; Audio: master, music, effects, speech, menu sounds; Controls: sensitivity, inversion,
+// vibration, bindings; Gameplay: subtitles, language, HUD, Performance metrics, then the rest). Owner, 18 Oct (after
+// task 222): Field of view, Motion blur and Camera shake moved to Display, Performance metrics to Gameplay; the
+// frame rate cap stays in Display. Only placement and order: no setting's value or meaning.
 //
 // The page builders add rows in this order (conditional rows may be missing); the developer build checks
 // each built page against this table (InLayoutOrder) and tests check the table itself.
@@ -36,7 +38,8 @@ inline constexpr Row kDisplayRows[] = {
     {"HDR output", "Peak brightness (nits)"},
     {"HDR output", "Paper white (nits)"},
     {"HDR output", "Open Windows HDR Calibration"},
-    {"Overlay", "Performance metrics"},
+    {"Camera", "Field of view"},     {"Camera", "Motion blur"},
+    {"Camera", "Camera shake"},      {"Camera", "Camera shake strength"},
 };
 
 inline constexpr Row kGraphicsRows[] = {
@@ -59,7 +62,6 @@ inline constexpr Row kGraphicsRows[] = {
     {"Lighting", "Shadows"},
     {"Lighting", "Water reflections"},
     {"Lighting", "Light shafts"},
-    {"Effects", "Motion blur"},
     {"Effects", "Screen blur"},
     {"Effects", "Distance fog"},
     {"Extras", "Horizontal flip"},
@@ -113,9 +115,7 @@ inline constexpr Row kGameplayRows[] = {
     {"HUD", "Inventory"},
     {"HUD", "Notifications"},
     {"HUD", "Pop-up style"},
-    {"Camera", "Field of view"},
-    {"Camera", "Camera shake"},
-    {"Camera", "Camera shake strength"},
+    {"Overlay", "Performance metrics"},
     {"Game", "Startup logos"},
 };
 

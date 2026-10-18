@@ -165,8 +165,11 @@ API, renderer, language, startup logos). Live since task 206: the frame rate cap
 upscaler between Off and the temporal upscalers the running device offers (as F8 lists them; the renderer swaps
 them at a frame boundary) and its mode; with FSR 1 / NIS or a render quality below Native the Upscaler row is greyed
 (the presenter's spatial upscalers are chosen at start). Display has Picture (Brightness, Gamma; applied at Present,
-`backend/picture_adjust.h`; the kept pause frame is retouched to follow them) and Overlay (Performance metrics,
-hidden while the pause menu is open). Changes are saved like in the launcher.
+`backend/picture_adjust.h`; the kept pause frame is retouched to follow them) and, since 18 Oct (owner, after task
+222), Camera (Field of view, Motion blur, Camera shake and its strength; before that in Gameplay and Graphics);
+Gameplay has Overlay (Performance metrics, hidden while the pause menu is open; before that in Display). The frame
+rate cap stays in Display. Launcher tabs and pause pages are built by the same code, so they always match.
+Changes are saved like in the launcher.
 Controls: the game gives the menu the pad it read (`PauseMenuPad`); keyboard and mouse come through ImGui.
 
 ## Game side (menus-game, branch `beta3-game`)

@@ -96,11 +96,11 @@ inline const char* What(Entry e) {
   switch (e) {
     case Entry::kResume: return "Go back to the game where you left off.";
     case Entry::kPhotoMode: return "Freeze the game and take pictures with a free camera.";
-    case Entry::kDisplay: return "Brightness, gamma, the frame rate cap, HDR and Performance metrics.";
+    case Entry::kDisplay: return "Brightness, gamma, the frame rate cap, HDR, field of view and camera shake.";
     case Entry::kGraphics: return "Upscaling, anti-aliasing, lighting, effects and the texture pack.";
     case Entry::kAudio: return "The game's volumes and the menu sounds.";
     case Entry::kControls: return "Camera, controller, mouse and button mapping.";
-    case Entry::kGameplay: return "Subtitles, HUD, field of view and camera shake.";
+    case Entry::kGameplay: return "Subtitles, language, HUD and Performance metrics.";
     case Entry::kCheats: return "Switch cheats on or off. Changes apply at once.";
     case Entry::kGameOptions: return "The game's own options pages (test builds only).";
     case Entry::kRestart: return "Start this chapter again from its beginning.";

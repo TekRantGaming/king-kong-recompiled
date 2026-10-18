@@ -390,7 +390,7 @@ void SettingsLayoutChecks() {
   Check(in_order(L::kDisplay, {"Window mode", "Monitor", "Resolution", "Refresh rate", "VSync", "Frame rate", "HDR"}),
         "Display: window mode, monitor, resolution, refresh rate, VSync, frame-rate cap, HDR");
   Check(in_order(L::kGraphics, {"Preset", "Graphics API", "Upscaler", "Upscaler mode", "Anti-aliasing",
-                                "Ambient occlusion", "Global illumination", "Motion blur", "Texture pack"}),
+                                "Ambient occlusion", "Global illumination", "Screen blur", "Texture pack"}),
         "Graphics: preset, API, upscaler and quality, anti-aliasing, effects, advanced last");
   Check(L::IndexOf(L::kGraphics, "Look") < L::IndexOf(L::kGraphics, "Graphics API"), "the look is with the preset");
   Check(std::string(L::RowsOf(L::kGraphics).begin()[L::IndexOf(L::kGraphics, "Rebuild shaders")].section) == "Advanced",
@@ -405,11 +405,39 @@ void SettingsLayoutChecks() {
   Check(in_order(L::kAdvanced, {"PS2 cutscenes", "Download PS2 cutscenes", "Remove PS2 cutscenes", "PS2 movie folder"}),
         "Advanced: the PS2 cutscenes switch, Download and Remove (job J2)");
   // Owner, 18 Oct: brightness and gamma on Display (Picture), and the frame counter became Performance metrics
-  // (Display > Overlay, the last row; the pause menu shows it too).
-  Check(in_order(L::kDisplay, {"Aspect ratio", "Brightness", "Gamma", "VSync", "HDR", "Performance metrics"}) &&
-            std::string(L::RowsOf(L::kDisplay).begin()[L::IndexOf(L::kDisplay, "Gamma")].section) == "Picture" &&
-            L::IndexOf(L::kDisplay, "Performance metrics") + 1 == int(L::RowsOf(L::kDisplay).size),
-        "Display: Picture (brightness, gamma) after the screen rows, Performance metrics last");
+  // (the pause menu shows it too).
+  Check(in_order(L::kDisplay, {"Aspect ratio", "Brightness", "Gamma", "VSync", "HDR"}) &&
+            std::string(L::RowsOf(L::kDisplay).begin()[L::IndexOf(L::kDisplay, "Gamma")].section) == "Picture",
+        "Display: Picture (brightness, gamma) after the screen rows");
+  // Owner, 18 Oct (after task 222): Field of view, Motion blur and Camera shake (with its strength) moved to Display
+  // (Camera, the last section); Performance metrics moved to Gameplay; the frame rate cap stays in Display.
+  {
+    const auto section = [](L::Page p, const char* label) {
+      const int at = L::IndexOf(p, label);
+      return at < 0 ? std::string() : std::string(L::RowsOf(p).begin()[at].section);
+    };
+    Check(in_order(L::kDisplay, {"VSync", "Frame rate", "HDR", "Field of view", "Motion blur", "Camera shake",
+                                 "Camera shake strength"}) &&
+              section(L::kDisplay, "Field of view") == "Camera" && section(L::kDisplay, "Motion blur") == "Camera" &&
+              section(L::kDisplay, "Camera shake strength") == "Camera" &&
+              L::IndexOf(L::kDisplay, "Camera shake strength") + 1 == int(L::RowsOf(L::kDisplay).size),
+          "Display ends with Camera: field of view, motion blur, camera shake and its strength");
+    Check(section(L::kDisplay, "Frame rate") == "Frame rate", "the frame rate cap stays in Display");
+    Check(in_order(L::kGameplay, {"Pop-up style", "Performance metrics", "Startup logos"}) &&
+              section(L::kGameplay, "Performance metrics") == "Overlay",
+          "Gameplay: Performance metrics (Overlay) after the HUD");
+    for (const char* moved : {"Field of view", "Motion blur", "Camera shake", "Camera shake strength",
+                              "Performance metrics"}) {
+      int pages = 0;
+      for (int p = 0; p < L::kPageCount; ++p)
+        if (L::IndexOf(L::Page(p), moved) >= 0 && L::IndexOf(L::Page(p), moved) != L::IndexOf(L::Page(p), "*"))
+          ++pages;
+      Check(pages == 1, (std::string(moved) + " is on exactly one page").c_str());
+    }
+    Check(L::IndexOf(L::kGraphics, "Motion blur") < 0 && L::IndexOf(L::kDisplay, "Performance metrics") < 0 &&
+              L::IndexOf(L::kGameplay, "Field of view") < 0,
+          "the moved rows left their old pages");
+  }
   for (int p = 0; p < L::kPageCount; ++p)
     Check(L::IndexOf(L::Page(p), "Frame counter") < 0 || L::IndexOf(L::Page(p), "Frame counter") ==
               L::IndexOf(L::Page(p), "*"), "the old Frame counter row is gone (now Performance metrics)");
