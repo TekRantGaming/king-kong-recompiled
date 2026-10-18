@@ -34,6 +34,7 @@
 #include "backend/render_scale.h"
 #include "backend/host_device.h"
 #include "backend/pipeline_prewarm.h"
+#include "backend/pipeline_exit_gate.h"
 #include "backend/driver_pipeline_cache.h"
 #include "backend/thread_scheduling.h"
 #include <rex/kernel/xboxkrnl/video.h>
@@ -340,6 +341,8 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
       REXLOG_INFO("rexgpu-native: {} shader pack: {} shaders, {:.1f} s, {}",
                   kkshaders::packBackendName(backend), r.stamp.shaders, r.seconds,
                   r.ok ? (r.upToDate ? "current" : "built") : r.error);
+      // Task 233: no new device for the pipelines once the program is exiting.
+      nr::HoldWhileExiting(nr::ExitGate(), [&] { return job->progress.cancel.load(); });
       if (!r.ok || job->progress.cancel) break;
       job->packs_ready |= pack_bit(backend);  // built (or already current) for this version's translator
       // The pipelines' step (ends at once when they are ready).
@@ -455,7 +458,11 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
                 const auto p = prewarm.progress();
                 job->progress.total = uint32_t(p.queued);
                 job->progress.done = uint32_t(p.made);
-                if (p.done) break;
+                if (p.done) {
+                  // Task 233: the program is exiting (the workers refused the rest): no teardown, no marker.
+                  nr::HoldWhileExiting(nr::ExitGate(), [&] { return job->progress.cancel.load(); });
+                  break;
+                }
                 std::this_thread::sleep_for(std::chrono::milliseconds(20));
               }
               const auto p = prewarm.progress();

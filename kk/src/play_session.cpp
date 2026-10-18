@@ -512,7 +512,17 @@ ExtraProgress ReadExtraProgress(const std::filesystem::path& user_dir, int slot)
   return DecodeExtraProgress(ReadAll(SlotFile(user_dir, slot)));
 }
 void SetQuitHandler(std::function<void()> quit) { g_quit = std::move(quit); }
+void QuiescePipelines() {
+#if defined(_WIN32)
+  using Quiesce = uint32_t (*)(uint32_t);
+  const HMODULE module = GetModuleHandleW(L"rexgpu-native.dll");
+  const auto quiesce = module ? reinterpret_cast<Quiesce>(GetProcAddress(module, "nr_quiesce_pipelines")) : nullptr;
+  if (quiesce) quiesce(1000);  // the plugin logs how many were running and the wait
+#endif
+  // Linux (on hold): the same export is reachable with dlsym when the AppImage work resumes.
+}
 void FlushRendererFiles() {
+  QuiescePipelines();  // first: the driver's cache save in the flush below then has no compile beside it
 #if defined(_WIN32)
   using Flush = uint32_t (*)(uint32_t);
   const HMODULE module = GetModuleHandleW(L"rexgpu-native.dll");

@@ -16,6 +16,7 @@
 
 #include "backend/guest_layout.h"
 #include "backend/log.h"
+#include "backend/pipeline_exit_gate.h"
 #include "backend/pipeline_workers.h"
 #include "backend/renderer.h"
 #include "backend/shaders.h"
@@ -1165,10 +1166,12 @@ void GameRenderer::PipelineWorker() {
     if (pipeline_library_ && (build == PipelineBuild::kLinked || build == PipelineBuild::kPrewarm)) {
       nvrhi::GraphicsPipelineDesc linked = job.desc;
       linked.vulkanLibraryLink = true;
-      p = CreatePipeline(linked, job.framebuffer);
+      p = CreatePipeline(linked, job.framebuffer, true);
       if (build == PipelineBuild::kPrewarm && !pipeline_library_link_only_) p = nullptr;  // only its parts are kept
     }
-    if (!p) p = CreatePipeline(job.desc, job.framebuffer);
+    // Task 233: after the exit gate closed, a job is refused at once (nullptr, counted as failed: a setup run
+    // the exit cut short is never marked prepared); a draw waiting for it then skips.
+    if (!p) p = CreatePipeline(job.desc, job.framebuffer, true);
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     bool idle = false;
     {
@@ -1203,9 +1206,9 @@ void GameRenderer::PipelineWorker() {
 }
 
 nvrhi::GraphicsPipelineHandle GameRenderer::CreatePipeline(const nvrhi::GraphicsPipelineDesc& desc,
-                                                           const nvrhi::FramebufferInfo& framebuffer) {
+                                                           const nvrhi::FramebufferInfo& framebuffer, bool background) {
   std::shared_lock lock(creation_mutex_);
-  nvrhi::GraphicsPipelineHandle p = CreateGraphicsPipeline(device_, desc, framebuffer);
+  nvrhi::GraphicsPipelineHandle p = CreateGraphicsPipeline(device_, desc, framebuffer, background);
   if (p && driver_cache_) driver_cache_new_.fetch_add(1, std::memory_order_relaxed);
   return p;
 }
@@ -1215,6 +1218,8 @@ bool GameRenderer::PrepareLibraryParts(const nvrhi::GraphicsPipelineDesc& desc, 
   void* native = device_->getNativeObject(nvrhi::ObjectTypes::Nvrhi_VK_Device);
   if (!native) return false;
   std::shared_lock lock(creation_mutex_);
+  PipelineExitGate::Pass pass(ExitGate(), true);  // a worker's job (task 233): refused once the exit started
+  if (!pass) return false;
   const bool made = static_cast<nvrhi::vulkan::IDevice*>(native)->prepareGraphicsPipelineParts(desc, framebuffer);
   if (made && driver_cache_) driver_cache_new_.fetch_add(1, std::memory_order_relaxed);
   return made;
@@ -1721,7 +1726,8 @@ DriverPipelineCache::Load GameRenderer::SetDriverPipelineCache(DriverPipelineCac
 }
 
 void GameRenderer::MaybeSaveDriverCache() {
-  if (!driver_cache_) return;
+  // Task 233: once the exit started, the exit flush saves it (the file writer's exit task), not an idle worker.
+  if (!driver_cache_ || ExitGate().closed()) return;
   const uint64_t fresh = driver_cache_new_.load(std::memory_order_relaxed);
   if (fresh == 0) return;
   std::unique_lock lock(driver_cache_save_mutex_, std::try_to_lock);

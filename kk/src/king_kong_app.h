@@ -245,6 +245,8 @@ class KingKongApp : public rex::ReXApp {
     };
     cb.restart_and_play = [this] {
       nr::kk::StopLauncherPrewarm();  // its device goes before this process does
+      // Task 233: no pipeline compile of this process beside the game's (one driver shader cache).
+      kk::play::QuiescePipelines();
       // The start request chosen on the Play menu goes with it (kk::play::SetStartRequest).
       const std::wstring start = kk::play::StartRequestArg();
       kk::startup::CleanExit();
@@ -274,6 +276,7 @@ class KingKongApp : public rex::ReXApp {
                                  std::wstring(passes.begin(), passes.end()) +
                                  (from_settings ? L" --kk_benchmark_from=settings" : L"") +
                                  L" --kk_skip_launcher=true")) {
+        kk::play::QuiescePipelines();  // task 233, as Play (only when this process is going)
         kk::startup::CleanExit();
         kk::handoff::QuitWhenChildShown([this] { CloseLauncherProcess(); });
       }

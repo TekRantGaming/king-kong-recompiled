@@ -34,6 +34,7 @@ class GameRenderer {
 #endif
 #include "backend/shaders.h"
 #include "backend/log.h"
+#include "backend/pipeline_exit_gate.h"
 
 namespace nr {
 
@@ -41,7 +42,10 @@ namespace nr {
 // one pipeline at a time; the vendored NVRHI now locks the cache (thirdparty/NOTES.md, Phase 2c) and the
 // workers make D3D12 pipelines in parallel as on Vulkan.
 nvrhi::GraphicsPipelineHandle CreateGraphicsPipeline(nvrhi::IDevice* device, const nvrhi::GraphicsPipelineDesc& desc,
-                                                     const nvrhi::FramebufferInfo& framebuffer) {
+                                                     const nvrhi::FramebufferInfo& framebuffer, bool background) {
+  // Task 233: the exit waits (bounded) for the creations inside the driver, and refuses new background ones.
+  PipelineExitGate::Pass pass(ExitGate(), background);
+  if (!pass) return nullptr;
   return device->createGraphicsPipeline(desc, framebuffer);
 }
 
