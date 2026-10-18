@@ -95,6 +95,7 @@ struct DrawCall {
   std::array<uint32_t, 8> textures = {};  // samplers 0-7 (0-6 seen)
   RenderStates states;
   int32_t conditional_id = -1;  // innermost Begin/EndConditionalRendering, -1 when none
+  uint32_t tags = 0;  // draw_tags.h, as the game set them at the call (0 unless the ultrawide mod is on)
 };
 
 struct ResolveCall {

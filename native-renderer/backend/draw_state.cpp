@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include "backend/draw_tags.h"
+
 namespace nr {
 
 void DrawTracker::SetRenderTarget(uint32_t index, uint32_t surface) {
@@ -251,6 +253,20 @@ bool DrawTracker::FillCommon(DrawCall& call) {
   }
   call.states = states_;
   call.conditional_id = conditional_id();
+  call.tags = CurrentDrawTags();
+  if (call.tags & kDrawTagHud) {
+    // A 3D draw inside a HUD element (the first-person arms of one of the display list's leaves): it has a
+    // perspective matrix and is already widened, so it stays out of the 16:9 HUD box (task 231).
+    for (uint32_t r = 0; r + 4 <= kVsFloatConstants; ++r) {
+      float rows[16];
+      for (uint32_t i = 0; i < 4; ++i)
+        for (uint32_t c = 0; c < 4; ++c) rows[i * 4 + c] = vs_f_[r + i][c];
+      if (LooksLikePerspectiveRows(rows)) {
+        call.tags &= ~kDrawTagHud;
+        break;
+      }
+    }
+  }
   return true;
 }
 

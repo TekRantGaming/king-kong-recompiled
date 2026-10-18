@@ -1,4 +1,4 @@
-# Ultrawide mod (task 223): state after phase 1 (18 Oct, Beta 11 queue)
+# Ultrawide mod (task 223/231): state after phase 2 step 1 (18 Oct, Beta 11 queue)
 
 Phase 1 done on branch ultrawide (commit 0754571 + this file; merged beta4-next 837a49d = Beta 10 first).
 Plan steps 1, 2, 3, 5 built and checked in game (Vulkan + one D3D12 run). Step 4 (HUD box) not started.
@@ -31,15 +31,32 @@ Plan steps 1, 2, 3, 5 built and checked in game (Vulkan + one D3D12 run). Step 4
 - Not seen yet: the presented window itself (only the game's frame was captured), the HUD (none in those
   shots), culling at the new edges (nothing obviously missing in chapter 7's start).
 
-## Phase 2 must check / fix
-1. HUD and 2D overlays (orthographic, sub_8278A918): drawn over the whole width = stretched by A. Plan step 4
-   (centred 16:9 box via draw tags, ComputeViewport ndc x / A); watch full-screen fades in that list.
-2. Culling: confirm the frustum (sub_827E5BB8 is the VIEW matrix; frustum builder not found) covers the
-   wider view: look for pop-in at the side edges while turning; if it pops, also widen the fov at
-   sub_82872DB8 and compensate m11 in the push.
-3. Presented window (PrintWindow of our own window): no 16:9 letterbox, no squash.
-4. Menus (front end 3D pieces kept 16:9 = stretched with the 2D), pause cover (pause_hooks.cpp fits the
-   game's output), loading screens, subtitles, fades, photo mode letterbox maths, freecam, PS2 movies.
-5. Screen-space effects with guest-pixel steps (blur/bloom taps, point sprites, 320/640 buffers use
-   min(x,y) scale) and AO/GI/cel at a non-16:9 frame.
-6. Launcher Display page still shows 16:9 sizes (the mod only applies at game start); fine for a mod.
+## Phase 2 (task 231): HUD box built, not yet seen with a HUD on screen
+- Game side (ultrawide.cpp, called from freecam.cpp's display-list hooks, the only hooks of those functions):
+  sub_827FA2B0 from 0x82873AB0 = "in list" (mod on, not fov::InMenus()); each of the 19 leaf routines
+  (KK_HUD_LEAF(addr, n)) sets tag HUD | leaf n << 8 for its call; sub_827C6660 (weapon pass) clears it. Draws of
+  the list outside leaves (sub_827FA0B8/sub_827FA138 paths: 3D pieces, counts 1000-2700) stay untagged.
+  Tags go to the renderer through nr_set_draw_tags(tags, A) (plugin/photo_api.cpp; backend/draw_tags.h).
+- Renderer: draw_state.cpp copies the tags into DrawCall.tags on the game thread (travels with the render
+  thread queue); a HUD draw with a perspective matrix in its VS constants is untagged (leaf 10 = sub_82874C98
+  draws the 14310-index arms mesh AND the text: found in run v7on3). GameRenderer::Draw divides
+  ndcScale.x / ndcOffset.x by A for tagged draws unless HudDrawCoversWidth (positions span the viewport in
+  pixels, or c0-c3 clip spans -1..1, or an untextured quad given in clip space x -1..1 = a fade).
+- KK_ULTRAWIDE_HUD_LOG=1 logs the first 300 distinct tagged draws (leaf, prim, count, vs, tex0, bounds, full).
+  Seen: leaf 10 text (font tex 414FA7xx, pixel x 309..670), a full-screen untextured strip (vs 400FCE80, fade),
+  a textured full-screen quad (vs 400F7B80) -> both kept full width. No other leaf drew in ch 7/8 starts.
+- Window check (runs\claude-231-toolsun.ps1 PrintWindow, must be DPI aware: 250 % scaling makes a 2560x1080
+  window 6400x2700 physical; non-aware capture shows only the top-left crop): window = full wide picture,
+  same as the game frame, no letterbox, no squash (Vulkan, ch 7).
+- Test-script lessons: the shot clock starts at "gameplay reached" = when the held SKIP ends (or at the
+  pause); START in the script pauses and every later shot is the paused (black) game. Ch 8 intro ~29 s.
+
+## Still to do (phase 2)
+1. See the HUD in game: ammo / health tint / subtitles / pause cover / cutscene start, with shots after
+   gameplay reached (SKIP short, presses after it). The perspective-matrix untag (arms) is built + tested
+   (CTest) but not yet run in game.
+2. Mod off vs Beta 10 and one D3D12 run were not repeated for task 231 (off path unchanged by code: no tags
+   are ever sent at factor 1, the renderer only acts on tags).
+3. Culling at the edges while turning (phase 1 item 2): not checked.
+4. Menus (InMenus: no box, as phase 1), loading screens, photo mode letterbox, freecam, PS2 movies;
+   screen-space effects at non-16:9 (blur taps, point sprites, AO/GI/cel); launcher Display page sizes.
