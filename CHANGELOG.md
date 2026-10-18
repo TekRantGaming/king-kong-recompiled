@@ -5,6 +5,9 @@ version's notes the first time you start it.
 
 ## v2.0.0-beta.10 (unreleased)
 
+### Changed
+- **Every setting explains itself.** The panel beside the settings, in the launcher and in the pause menu, now says what each setting does, what you will notice in the game, what each option changes, and shows its performance and video memory impact and when a change takes effect. In five languages.
+
 ### Fixed
 - **Jack's arm and what he holds flickered with an upscaler on** (DLSS, FSR or XeSS). In some places, for example in the Hayes chapter, parts of the arm and of the gun, spear, bone or lever turned into flat patches in the colour of the fog for single frames. They are now drawn whole.
 

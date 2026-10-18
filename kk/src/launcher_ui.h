@@ -26,6 +26,10 @@ class ImmediateDrawer;
 class ImmediateTexture;
 }  // namespace rex::ui
 
+namespace kk::help {
+struct Help;
+}  // namespace kk::help
+
 namespace kk::ui {
 
 // ------------------------------------------------------------------ theme ---
@@ -236,6 +240,10 @@ struct Item {
   std::function<void(float)> on_value;
   std::function<void()> on_activate;
   std::function<void()> on_default;  // back to the default
+  // The description panel's structured help (settings_help.h, task 220): attached by the settings pages.
+  const char* help_key = nullptr;      // looks the help up by this instead of the label
+  const help::Help* help = nullptr;    // how it shows, a note per option, impact labels
+  const char* applies = nullptr;       // when a change takes effect (English), or nullptr
 };
 
 // Kept per page: focus, scroll and the focus band's animation.
@@ -261,6 +269,9 @@ const Item* DrawList(ImDrawList* dl, std::vector<Item>& items, ListState& st, Im
 
 // The description panel for the focused item.
 void DrawDescription(ImDrawList* dl, const Item* item, ImVec2 p0, ImVec2 p1, const Metrics& m);
+// How the panel fits between p0 and p1: 0 at full size, 1 or 2 with smaller text, 3 without the help's second
+// paragraph, 4 too tall even then (the developer build's description check).
+int DescriptionFit(const Item* item, ImVec2 p0, ImVec2 p1, const Metrics& m);
 
 // The prompt bar, right-aligned to `right` and centred on `center_y`. A
 // clicked prompt returns its action (Action::kCount if none).
