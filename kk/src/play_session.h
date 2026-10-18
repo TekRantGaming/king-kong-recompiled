@@ -126,6 +126,11 @@ bool SetProfileOptionsInAllSaves(const std::filesystem::path& user_dir, const Pr
 
 // Task 177: the native renderer writes its cache files on a background thread and the runtime hard-exits
 // (no destructors) when the title ends; called just before every exit so queued writes finish (<= 3 s).
+// Task 233: it first stops the renderer's pipeline compiles (QuiescePipelines).
 void FlushRendererFiles();
+// Task 233: before a hard exit or a hand-over to a new process: the native renderer starts no new background
+// pipeline compile and waits up to about 1 s for the ones inside the driver (never hangs; once per process,
+// later calls return at once). Nothing happens without the native renderer.
+void QuiescePipelines();
 
 }  // namespace kk::play

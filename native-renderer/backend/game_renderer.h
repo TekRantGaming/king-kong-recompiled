@@ -819,8 +819,9 @@ class GameRenderer {
   double pipeline_worker_ms_ = 0;
   // Pipeline creation holds it shared, reading the driver's cache file exclusively.
   std::shared_mutex creation_mutex_;
+  // background: a worker's compile, refused (nullptr) once the program is about to exit (pipeline_exit_gate.h).
   nvrhi::GraphicsPipelineHandle CreatePipeline(const nvrhi::GraphicsPipelineDesc& desc,
-                                               const nvrhi::FramebufferInfo& framebuffer);
+                                               const nvrhi::FramebufferInfo& framebuffer, bool background = false);
   // The driver's pipeline cache: the file, pipelines made since the last save, and whether the
   // first save is due as soon as the workers are idle (a rebuild).
   void MaybeSaveDriverCache();
