@@ -56,7 +56,8 @@ Plan steps 1, 2, 3, 5 built and checked in game (Vulkan + one D3D12 run). Step 4
   native-renderer/hooks/kk_native_hooks.cpp: walks r1 back chain, saved LR at chain-8).
 
 ## Checks (task 239, ch 8, 2560x1080 = 6400x2700 at 250 % DPI; runs\claude-239-*, tools runs\claude-239-tools)
-- run.ps1 (as 236) + measure.py (ammo/subtitle x range, side brightness). Test save: runs\claude-236-tools  userdata-hud (subtitles, aiming visor, inventory on). KK_DEV_SHOTS_FROM=menu; never START in scripts.
+- run.ps1 (as 236) + measure.py (ammo/subtitle x range, side brightness). Test save:
+  runs\claude-236-tools\userdata-hud (subtitles, aiming visor, inventory on). KK_DEV_SHOTS_FROM=menu; no START.
 - Mod on Vulkan (on8): ammo x 0.738..0.766 of the width (before 0.816..0.855; 16:9 box maps to 0.737..0.766),
   subtitles 0.383..0.614 (before 0.344..0.652): both in the box. Cutscene start at 1 s: dark over the full
   width (fade not boxed). D3D12 (dx8): same numbers. Mod off (off8): 4800x2700, no ultrawide log line, no
