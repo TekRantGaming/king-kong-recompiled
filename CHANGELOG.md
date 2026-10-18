@@ -16,6 +16,7 @@ version's notes the first time you start it.
 - **Vulkan crash when loading a chapter on AMD graphics cards.** The faster pipeline building added in Beta 7 is now used on NVIDIA cards only, where it was tested; other cards build pipelines the earlier way.
 - **Crash during shader setup on laptops with two graphics chips.** The shader setup, the launcher and the game now always use the more powerful graphics card instead of the built-in Intel or AMD chip. A graphics card chosen in the settings file is still respected.
 - **Pause menu in the Weta artwork galleries.** In a gallery started from Extras, **Start** or **Esc** threw you straight back to Extras. It now opens the pause menu, as in any chapter: **Resume**, **Settings**, **Return to main menu**. A gallery never writes to your save.
+- **Shaders said "Not prepared" after setup.** After the first setup or an update the shaders are prepared once, and the main menu now shows them as **Ready** from then on, including after restarting the launcher. They are not prepared again when you play, change graphics settings or restart, only when you choose **Rebuild shaders**. If the launcher is closed before they finish, they are prepared the next time it opens.
 - **DLSS missing from the upscaler list in the pause menu.** While playing, the list could say DLSS was not available on cards that support it. It now lists what the running game actually supports.
 
 ### Changed

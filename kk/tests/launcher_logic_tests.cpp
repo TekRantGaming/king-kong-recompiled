@@ -3,6 +3,7 @@
 // (profile_save_file.h), on made-up saves in a temporary folder.
 #include "profile_save_file.h"
 #include "shader_progress.h"
+#include "shader_prepared.h"
 #include "settings_layout.h"
 #include "launcher_policy.h"
 #include "graphics_presets.h"
@@ -143,6 +144,92 @@ void GraphicsPresetChecks() {
   settings["kk_graphics_preset"] = "High";
   settings["anisotropic_override"] = "4";
   Check(match() == -1 && settings["anisotropic_override"] == "4", "existing 8x choice remains Custom and is not overwritten");
+}
+
+// The ONE definition of "the shaders are prepared" (shader_prepared.h; owner, 18 Oct): exactly one preparation
+// per version, which setup, Home, What's new and Play all read the same way.
+void ShaderPreparedChecks() {
+  using namespace kk;
+  const std::string v = "2.0.0-beta.9";
+  // The marker round trip.
+  Check(FormatPreparedMarker(v, kShaderPackAll) == "2.0.0-beta.9;spirv,dxil", "marker names both packs");
+  Check(FormatPreparedMarker(v, kShaderPackSpirv) == "2.0.0-beta.9;spirv", "marker for Vulkan only (Linux)");
+  Check(FormatPreparedMarker(v, kShaderPackDxil) == "2.0.0-beta.9;dxil", "marker for DirectX 12 only");
+  for (int packs = 1; packs <= kShaderPackAll; ++packs) {
+    const PreparedMarker m = ParsePreparedMarker(FormatPreparedMarker(v, packs));
+    Check(m.version == v && m.packs == packs, "marker parses back to its version and packs");
+  }
+  Check(ParsePreparedMarker("2.0.0-beta.9;dxil,spirv").packs == kShaderPackAll, "pack order does not matter");
+  Check(ParsePreparedMarker("2.0.0-beta.9;spirv,bogus").packs == kShaderPackSpirv, "unknown pack names are ignored");
+
+  // The definition.
+  const std::string both = FormatPreparedMarker(v, kShaderPackAll);
+  Check(ShadersPrepared(both, v, kShaderPackAll), "this version, both packs there: prepared");
+  Check(!ShadersPrepared(both, v, kShaderPackSpirv), "a pack the preparation made is missing: not prepared");
+  Check(!ShadersPrepared(both, v, kShaderPackDxil), "the Vulkan pack missing: not prepared");
+  Check(!ShadersPrepared(both, v, 0), "no packs: not prepared");
+  Check(!ShadersPrepared(both, "2.0.0-beta.10", kShaderPackAll), "another version (an update): not prepared");
+  Check(!ShadersPrepared("", v, kShaderPackAll), "never prepared (a fresh install): not prepared");
+  // Beta 8 / Beta 9 test build: only the version, written even for a cancelled job. Not trusted.
+  Check(!ShadersPrepared(v, v, kShaderPackAll), "the old marker without packs is not trusted");
+  Check(!ShadersPrepared(v + ";", v, kShaderPackAll), "a marker naming no pack is not prepared");
+  Check(ShadersPrepared(FormatPreparedMarker(v, kShaderPackSpirv), v, kShaderPackSpirv),
+        "Linux: the Vulkan pack alone is the whole preparation");
+  Check(ShadersPrepared(FormatPreparedMarker(v, kShaderPackSpirv), v, kShaderPackAll),
+        "an extra pack in the cache does not matter");
+
+  // Which job counts as the preparation.
+  ShaderJobEnd e;
+  e.finished = true;
+  e.packs_needed = kShaderPackAll;
+  e.packs_ready = kShaderPackAll;
+  Check(JobIsThePreparation(e), "finished with both packs: the preparation");
+  e.cancelled = true;
+  Check(!JobIsThePreparation(e), "a cancelled job (launcher closed during setup) is not the preparation");
+  e.cancelled = false;
+  e.packs_ready = kShaderPackSpirv;
+  Check(!JobIsThePreparation(e), "a job that left a pack unbuilt is not the preparation");
+  e.packs_ready = kShaderPackAll;
+  e.finished = false;
+  Check(!JobIsThePreparation(e), "a job still running is not the preparation yet");
+  e.finished = true;
+  e.packs_needed = e.packs_ready = 0;
+  Check(!JobIsThePreparation(e), "a job that covered no pack is not the preparation");
+  e.packs_needed = e.packs_ready = kShaderPackSpirv;
+  Check(JobIsThePreparation(e), "Linux: the Vulkan pack is all the job needs");
+  // What the job records is exactly what the definition then accepts.
+  e.packs_needed = e.packs_ready = kShaderPackAll;
+  Check(ShadersPrepared(FormatPreparedMarker(v, e.packs_needed), v, e.packs_ready),
+        "the finished setup's marker reads as prepared on Home and at Play");
+
+  // The launcher opening: exactly once per version.
+  Check(JobAtLauncherStart(false, false) == ShaderJobAtStart::kPrepare, "first start: prepare");
+  Check(JobAtLauncherStart(false, true) == ShaderJobAtStart::kNone, "prepared: never again at a launcher start");
+  Check(JobAtLauncherStart(true, false) == ShaderJobAtStart::kRebuild, "after an update: rebuilt in full once");
+  // The update's rebuild records the new version: the next start does nothing.
+  Check(JobAtLauncherStart(false, ShadersPrepared(FormatPreparedMarker(v, kShaderPackAll), v, kShaderPackAll)) ==
+            ShaderJobAtStart::kNone,
+        "after the update's preparation, the next start prepares nothing");
+
+  // Play.
+  Check(AtPlay(true, false, false) == ShaderPlayStep::kWaitForJob, "a job running finishes first");
+  Check(AtPlay(true, true, false) == ShaderPlayStep::kWaitForJob, "a Rebuild running finishes first");
+  Check(AtPlay(false, true, false) == ShaderPlayStep::kPlay, "prepared (a later launcher start): straight to the game");
+  Check(AtPlay(false, true, true) == ShaderPlayStep::kPlay, "prepared at setup in this launcher: straight to the game");
+  Check(AtPlay(false, false, false) == ShaderPlayStep::kPrepareFirst, "never prepared (setup closed half way): once");
+  Check(AtPlay(false, false, true) == ShaderPlayStep::kPlay, "a job that failed here is not repeated at Play");
+
+  // Home's status reads the same definition, not the launcher's own job.
+  Check(HomeStatus(false, false, true, false, false) == ShaderHomeStatus::kReady,
+        "a launcher start with prepared shaders and no job shows Ready (the Beta 9 bug showed Not prepared)");
+  Check(HomeStatus(false, false, true, true, false) == ShaderHomeStatus::kReady, "right after the setup's job: Ready");
+  Check(HomeStatus(true, true, true, false, false) == ShaderHomeStatus::kPreparing, "a Rebuild shows its progress");
+  Check(HomeStatus(true, false, false, false, false) == ShaderHomeStatus::kChecking, "a job only checking");
+  Check(HomeStatus(false, false, false, true, false) == ShaderHomeStatus::kFailed, "a job that failed: see the log");
+  Check(HomeStatus(false, false, false, true, true) == ShaderHomeStatus::kNotPrepared, "a cancelled job: not prepared");
+  Check(HomeStatus(false, false, false, false, false) == ShaderHomeStatus::kNotPrepared, "nothing yet: not prepared");
+  Check(HomeStatus(false, false, true, true, true) == ShaderHomeStatus::kReady,
+        "a cancelled Rebuild leaves the earlier preparation Ready");
 }
 
 void ShaderProgressChecks() {
@@ -677,6 +764,7 @@ int main() {
   GraphicsPresetChecks();
   ExtrasChecks();
   ShaderProgressChecks();
+  ShaderPreparedChecks();
   SettingsLayoutChecks();
   WhatsNewChecks();
   AllSavesChecks();

@@ -78,8 +78,8 @@ struct NativeShaderPack::Impl {
   NrShaderPackJob* job = nullptr;
   NrShaderPackProgress last{};
   bool started = false;
-  std::string fingerprint;  // SettingsFingerprint() when the job started
   bool logged = false;
+  bool taken = false;   // TakeFinished() reported this job
   bool worked = false;  // this job has built something (not only checked)
   ShaderProgressBar bar;
 
@@ -129,10 +129,10 @@ void NativeShaderPack::Start(const std::filesystem::path& cache_dir, const std::
   impl_->api = PluginApi();
   impl_->last = {};
   impl_->logged = false;
+  impl_->taken = false;
   impl_->worked = false;
   impl_->bar.Reset();
   impl_->started = true;
-  impl_->fingerprint = SettingsFingerprint();
   // The plugin caps this request to process affinity, leaving one CPU for the UI/music.
   const uint32_t threads = 0;
   impl_->job = impl_->api->start(Utf8(cache_dir).c_str(), Utf8(game_dir).c_str(), threads, 1, force ? 1 : 0);
@@ -154,20 +154,23 @@ bool NativeShaderPack::Finished() {
 
 bool NativeShaderPack::Ok() { return Finished() && impl_->last.ok; }
 
-std::string NativeShaderPack::SettingsFingerprint() {
-  // The settings the plugin's preparation reads (shader_pack_service.cpp, StartJob and PrewarmStamp): the
-  // API, what changes the game's pipelines and where the pipeline files are.
-  static constexpr const char* kNames[] = {
-      "native_backend", "native_flip_front_face", "native_shadow_quality", "native_water_reflections",
-      "native_volumetrics", "native_pipeline_list", "native_pipeline_cache", "native_vk_pipeline_cache",
-      "native_pipeline_cache_dir", "native_failed_backends", "native_dxc", "cache_root", "gpu_plugin",
-      "ao_mode", "native_ao_method", "native_ao_apply"};  // the ambient-only AO has a layout of its own
-  std::string out;
-  for (const char* name : kNames) out += std::string(name) + "=" + rex::cvar::GetFlagByName(name) + ";";
-  return out;
+bool NativeShaderPack::Cancelled() { return Finished() && impl_->last.cancelled; }
+
+ShaderJobEnd NativeShaderPack::End() {
+  ShaderJobEnd e;
+  e.finished = Finished();
+  if (!e.finished) return e;
+  e.cancelled = impl_->last.cancelled != 0;
+  e.packs_needed = impl_->last.packs_needed;
+  e.packs_ready = impl_->last.packs_ready;
+  return e;
 }
 
-bool NativeShaderPack::OkForCurrentSettings() { return Ok() && impl_->fingerprint == SettingsFingerprint(); }
+bool NativeShaderPack::TakeFinished() {
+  if (!Finished() || impl_->taken) return false;
+  impl_->taken = true;
+  return true;
+}
 
 float NativeShaderPack::Fraction() {
   if (!Busy() || !impl_->worked) return -1.0f;
@@ -186,13 +189,21 @@ std::string NativeShaderPack::ProgressLabel() {
   return T(std::string(Working() ? "Preparing shaders" : "Checking"));
 }
 
-std::string NativeShaderPack::StatusText() {
-  if (Busy()) {
-    const float f = Fraction();
-    return f >= 0 ? F("Preparing {0}%", {std::to_string(int(f * 100))}) : T(std::string("Checking"));
+ShaderHomeStatus NativeShaderPack::Status(bool prepared) {
+  return HomeStatus(Busy(), Working(), prepared, Finished(), Cancelled());
+}
+
+std::string NativeShaderPack::StatusText(bool prepared) {
+  switch (Status(prepared)) {
+    case ShaderHomeStatus::kPreparing: {
+      const float f = Fraction();
+      return f >= 0 ? F("Preparing {0}%", {std::to_string(int(f * 100))}) : T(std::string("Checking"));
+    }
+    case ShaderHomeStatus::kChecking: return T(std::string("Checking"));
+    case ShaderHomeStatus::kReady: return T(std::string("Ready"));
+    case ShaderHomeStatus::kFailed: return T(std::string("Not prepared (see the log)"));
+    case ShaderHomeStatus::kNotPrepared: break;
   }
-  if (Ok()) return T(std::string("Ready"));
-  if (Finished() && !impl_->last.cancelled) return T(std::string("Not prepared (see the log)"));
   return T(std::string("Not prepared"));
 }
 

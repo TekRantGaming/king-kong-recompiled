@@ -244,6 +244,8 @@ struct NrShaderPackJob {
   // The steps (NrShaderPackProgress): per API its shaders, then its pipelines in two passes.
   std::atomic<int> step{0}, steps{0}, step_kind{0}, pass{0};
   std::atomic<bool> preparing{false};  // the pipelines are being prepared (not only checked)
+  // NrShaderPackProgress::packs_needed / packs_ready (NR_SHADER_PACK_SPIRV | NR_SHADER_PACK_DXIL).
+  std::atomic<int> packs_needed{0}, packs_ready{0};
 };
 
 namespace {
@@ -311,6 +313,12 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
       }
       backends.push_back(backend);
     }
+    const auto pack_bit = [](kkshaders::PackBackend b) {
+      return b == kkshaders::PackBackend::Spirv ? NR_SHADER_PACK_SPIRV : NR_SHADER_PACK_DXIL;
+    };
+    int needed = 0;
+    for (auto b : backends) needed |= pack_bit(b);
+    job->packs_needed = needed;
     job->steps = int(backends.size()) * 2;
     for (size_t b = 0; b < backends.size(); ++b) {
       const auto backend = backends[b];
@@ -333,6 +341,7 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
                   kkshaders::packBackendName(backend), r.stamp.shaders, r.seconds,
                   r.ok ? (r.upToDate ? "current" : "built") : r.error);
       if (!r.ok || job->progress.cancel) break;
+      job->packs_ready |= pack_bit(backend);  // built (or already current) for this version's translator
       // The pipelines' step (ends at once when they are ready).
       job->progress.done = 0;
       job->progress.total = 0;
@@ -459,10 +468,14 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
               REXLOG_INFO("rexgpu-native: setup {} pipeline prewarm: {} listed, {} queued, {} finished, "
                           "{} failed, {} waiting for shaders",
                           kkshaders::packBackendName(backend), p.listed, p.queued, p.made, p.failed, p.waiting);
-              // The ambient-only AO's own pixel shaders are not in the pack: the game makes those pipelines
-              // at first use, as it always did. Everything else must be made.
-              completed = completed && p.done && p.made == p.queued && !p.failed &&
-                          (!p.waiting || settings.ao.ambient());
+              // Everything it could queue must be made. Records waiting for shaders the pack does not have
+              // (and the ambient-only AO's own pixel shaders) are made by the game if it meets them
+              // (SetupPipelinesComplete; task 210).
+              completed = completed && nr::SetupPipelinesComplete(p.done, p.queued, p.made, p.failed);
+              if (p.waiting)
+                REXLOG_INFO("rexgpu-native: setup {}: {} listed pipelines name shaders this pack does not have; "
+                            "the game makes them if it meets those shaders",
+                            kkshaders::packBackendName(backend), p.waiting);
             } else {
               completed = false;
             }
@@ -538,6 +551,8 @@ void PollJob(NrShaderPackJob* job, NrShaderPackProgress* out) {
   out->passes = 1;  // one pass of the game's layouts (task 144)
   // Shaders: working once the pack turned out stale (reading the database, compiling, writing).
   const int phase = job->progress.phase;
+  out->packs_needed = job->packs_needed;
+  out->packs_ready = job->progress.cancel ? 0 : job->packs_ready.load();
   out->working = job->step_kind == 1 ? int(job->preparing.load())
                                      : int(phase >= kkshaders::PackBuildProgress::kReading &&
                                            phase <= kkshaders::PackBuildProgress::kWriting);

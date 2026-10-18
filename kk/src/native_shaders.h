@@ -12,6 +12,8 @@
 #include <memory>
 #include <string>
 
+#include "shader_prepared.h"
+
 namespace kk {
 
 class NativeShaderPack {
@@ -34,11 +36,11 @@ class NativeShaderPack {
   bool Busy();          // started and not finished
   bool Finished();      // the last one finished (Busy() is false)
   bool Ok();            // ... and the pack is current
-  // The last job finished with everything current or prepared, for the settings the game starts with now:
-  // Play needs no other check (task 144: Play used to check again, and show "Preparing shaders", every time).
-  bool OkForCurrentSettings();
-  // What the job's work depends on, from the settings (the plugin's stamp follows the same settings).
-  static std::string SettingsFingerprint();
+  bool Cancelled();     // the last job finished because it was cancelled
+  // How the last job ended (shader_prepared.h decides whether it was the version's one preparation).
+  ShaderJobEnd End();
+  // True once for each job that has finished (the launcher records the preparation then).
+  bool TakeFinished();
   // The whole job as one bar (shader_progress.h): 0 to 1, never going back, once something is being
   // built; -1 while it is only checking, or when idle.
   float Fraction();
@@ -49,7 +51,10 @@ class NativeShaderPack {
   float DrawnFraction(double now);
   // The bar's one label for the whole job (translated): no steps or graphics APIs (owner, 16 Oct).
   std::string ProgressLabel();
-  std::string StatusText();  // for the launcher's status line (English, through T())
+  // Home's SHADERS status (translated). prepared: ShadersPrepared() (shader_prepared.h), the one definition the
+  // setup, Home and Play share; this job's state only adds the progress while one runs.
+  ShaderHomeStatus Status(bool prepared);
+  std::string StatusText(bool prepared);
 
  private:
   struct Impl;
