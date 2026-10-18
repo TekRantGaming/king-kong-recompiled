@@ -1,11 +1,22 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <string>
 
 namespace nr {
+// The setup's pipeline step is complete when every pipeline it could queue was made and none failed. A listed
+// pipeline whose shaders are not in this player's pack ("waiting for shaders": a shipped or recorded record
+// from other game files or an older translator) cannot be made at setup at all; the game makes it when it meets
+// those shaders. Counting those as incomplete made every setup report "not prepared" (task 210: the Beta 9
+// list has 47 such records), so Home said the shaders were not prepared and Rebuild could never fix it. The
+// ambient-only AO's own shaders are the same case.
+inline bool SetupPipelinesComplete(bool done, uint64_t queued, uint64_t made, uint64_t failed) {
+  return done && made == queued && failed == 0;
+}
+
 // A failed secondary device is remembered only for this preparation plan and
 // driver. Selecting that API always retries it, rather than claiming it ready.
 class SetupPrewarmAvailability {

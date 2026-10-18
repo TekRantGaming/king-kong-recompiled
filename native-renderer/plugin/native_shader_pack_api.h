@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define NR_SHADER_PACK_API_VERSION 3  // 2: start takes force; 3: the job's steps
+#define NR_SHADER_PACK_API_VERSION 4  // 2: start takes force; 3: the job's steps; 4: packs_needed/packs_ready
 
 typedef struct NrShaderPackJob NrShaderPackJob;
 
@@ -40,7 +40,16 @@ typedef struct NrShaderPackProgress {
   int step_kind;      // 0 shaders, 1 pipelines
   int pass, passes;   // pipelines: the current pass (0-based) and how many there are
   int working;        // 1 while something is being compiled or prepared (not only checked)
+  // Which packs this job covers on this system (bits NR_SHADER_PACK_SPIRV, NR_SHADER_PACK_DXIL: the APIs the
+  // plugin was built with, less any that failed to start here), and, once finished, which of them it left built
+  // and current. The launcher counts the job as the version's one shader preparation only when it finished,
+  // was not cancelled and left every needed pack (kk/src/shader_prepared.h).
+  int packs_needed;
+  int packs_ready;
 } NrShaderPackProgress;
+
+#define NR_SHADER_PACK_SPIRV 1
+#define NR_SHADER_PACK_DXIL 2
 
 typedef struct NrShaderPackApi {
   uint32_t version;  // NR_SHADER_PACK_API_VERSION

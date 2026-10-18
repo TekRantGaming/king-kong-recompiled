@@ -1,5 +1,5 @@
 // Task 194 (Beta 7 uploads, codex/state/telemetry-b7.md): redaction, gzip, the size limits, per-chapter
-// statistics and the rule that nothing is sent while the Online player count switch is off. No game, no
+// statistics (task 211: the worst-frame detail) and the rule that nothing is sent while the Online player count switch is off. No game, no
 // network: a fake sender. Writes gzip samples and a crash report's upload body into <out folder>, which
 // tests/telemetry_gzip_tests.py then decompresses with Python's own gzip.
 // Usage: kk-telemetry-tests <out folder>
@@ -273,6 +273,131 @@ void Uploads(const fs::path& out) {
 }
 }  // namespace
 
+// Task 211: the worst-frame detail: which frames are kept, and what they look like in the summary.
+WorstFrame Frame(double ms, bool loading = false) {
+  WorstFrame f;
+  f.ms = ms;
+  f.loading = loading;
+  return f;
+}
+std::string MsList(const std::vector<WorstFrame>& list) {
+  std::string s;
+  for (const auto& f : list) s += (s.empty() ? "" : ",") + JsonNumber(f.ms, 0) + (f.loading ? "L" : "");
+  return s;
+}
+WorstFrame FullFrame() {
+  WorstFrame f;
+  f.ms = 11234.56, f.at_s = 12.34, f.cpu_ms = 3.21, f.swap_ms = 11200.04, f.cap_wait_ms = 0;
+  f.native = true, f.render_frames = 3, f.render_cpu_ms = 11190.0, f.gpu_ms = 4.567, f.gpu_wait_ms = 1.0;
+  f.submit_ms = 0.5, f.worker_jobs = 12, f.pipe_waits = 2, f.pipe_wait_ms = 11150.3, f.pipes_made = 40;
+  f.compile_ms = 250.0, f.tex_uploads = 7, f.upload_mb = 1.5, f.tex_ms = 2.0, f.pack_textures = 1, f.pack_mb = 0.75;
+  f.texture_pack = true, f.reads = 4, f.read_mb = 0.25, f.read_ms = 3.0, f.read_max_ms = 2.5, f.focus = 0;
+  f.frame_cap = 60, f.vsync = 0, f.hfr = 1, f.upscaler = "dlss";
+  return f;
+}
+
+void WorstFrames(const fs::path& out) {
+  // The threshold: only chapter frames of 250 ms and more.
+  Check(!WorstFrameWanted(-1, 11200), "menus are not recorded");
+  Check(!WorstFrameWanted(3, 249.9), "249.9 ms is under the threshold");
+  Check(WorstFrameWanted(3, 250.0) && WorstFrameWanted(0, 11200), "250 ms and over are recorded");
+  Check(!WorstFrameWanted(3, std::nan("")) && !WorstFrameWanted(3, INFINITY), "not finite: not recorded");
+  std::vector<WorstFrame> list;
+  AddWorstFrame(list, Frame(249.9));
+  AddWorstFrame(list, Frame(std::nan("")));
+  Check(list.empty(), "under the threshold is never kept");
+
+  // The slowest 3, slowest first.
+  for (double ms : {300.0, 1000.0, 260.0, 11200.0, 500.0}) AddWorstFrame(list, Frame(ms));
+  Same(MsList(list), "11200,1000,500", "top 3 gameplay frames");
+  // At most one loading frame: a slower load replaces it, a faster one is not kept.
+  AddWorstFrame(list, Frame(5000, true));
+  Same(MsList(list), "11200,5000L,1000", "a loading frame joins");
+  AddWorstFrame(list, Frame(4000, true));
+  Same(MsList(list), "11200,5000L,1000", "a faster second load is not kept");
+  AddWorstFrame(list, Frame(6000, true));
+  Same(MsList(list), "11200,6000L,1000", "a slower load replaces the loading frame");
+  AddWorstFrame(list, Frame(7000));
+  AddWorstFrame(list, Frame(8000));
+  Same(MsList(list), "11200,8000,7000", "gameplay frames push the load out when they are slower");
+  AddWorstFrame(list, Frame(400));
+  Same(MsList(list), "11200,8000,7000", "a faster frame is not kept when the list is full");
+
+  // Merging visits keeps the same rule.
+  ChapterStats a, b;
+  a.entry = b.entry = 2;
+  AddWorstFrame(a.worst, Frame(900));
+  AddWorstFrame(a.worst, Frame(3000, true));
+  AddWorstFrame(b.worst, Frame(2500, true));
+  AddWorstFrame(b.worst, Frame(1200));
+  AddWorstFrame(b.worst, Frame(700));
+  a.Merge(b);
+  Same(MsList(a.worst), "3000L,1200,900", "merged visits: top 3, one load");
+
+  // The serialised format, exactly.
+  Same(FullFrame().Json(),
+       "{\"ms\":11234.6,\"at\":12.3,\"phase\":\"play\",\"cpuMs\":3.2,\"swapMs\":11200.0,\"capMs\":0.0,\"gameMs\":34.5,"
+       "\"rFrames\":3,\"rCpuMs\":11190.0,\"gpuMs\":4.57,\"gpuWaitMs\":1.0,\"submitMs\":0.5,\"rLoading\":false,"
+       "\"jobs\":12,\"pipeWaits\":2,\"pipeWaitMs\":11150.3,\"pipesMade\":40,\"drawsSkipped\":0,\"compileMs\":250.0,"
+       "\"texUploads\":7,\"uploadMB\":1.50,\"texMs\":2.0,\"prepMs\":0.0,\"packTex\":1,\"packMB\":0.75,\"pack\":true,"
+       "\"reads\":4,\"readMB\":0.25,\"readMs\":3.0,\"readMaxMs\":2.5,\"videoReads\":0,\"focus\":\"focused\","
+       "\"focusChanged\":false,\"paused\":false,\"sleepMs\":0,\"download\":false,\"cap\":60,\"vsync\":false,"
+       "\"hfr\":true,\"upscaler\":\"dlss\"}",
+       "full worst-frame JSON");
+  // What is not known is left out (no renderer, no window state, no settings read).
+  Same(Frame(300, true).Json(),
+       "{\"ms\":300.0,\"phase\":\"load\",\"pack\":false,\"reads\":0,\"readMB\":0.00,\"readMs\":0.0,\"readMaxMs\":0.0,"
+       "\"videoReads\":0,\"paused\":false,\"sleepMs\":0,\"download\":false}",
+       "minimal worst-frame JSON");
+  WorstFrame odd = Frame(300);
+  odd.focus = 2, odd.focus_changed = true, odd.sleep_ms = 9000.4, odd.upscaler = "C:\\Users\\x/../\"fsr 3\"";
+  const std::string oj = odd.Json();
+  Check(oj.find("\"focus\":\"minimised\",\"focusChanged\":true") != std::string::npos, "minimised: " + oj);
+  Check(oj.find("\"sleepMs\":9000") != std::string::npos, "asleep: " + oj);
+  Check(oj.find("\"upscaler\":\"CUsersxfsr3\"") != std::string::npos && oj.find('\\') == std::string::npos,
+        "the upscaler is a plain word, never a path or free text: " + oj);
+
+  // In the chapter's JSON (and left out on request).
+  ChapterStats c;
+  c.entry = 1;
+  for (int i = 0; i < 600; ++i) c.AddFrame(16.7);
+  c.AddFrame(11234.56);
+  AddWorstFrame(c.worst, FullFrame());
+  const std::string cj = c.Json();
+  Check(cj.find(",\"worst\":[{\"ms\":11234.6,") != std::string::npos && cj.back() == '}', "chapter JSON: " + cj);
+  Check(c.Json(false).find("worst\"") == std::string::npos, "chapter JSON without the detail");
+  Check(ChapterStats{}.Json().find("worst\"") == std::string::npos, "no slow frame, no worst list");
+
+  // The 16 KB limit: the detail goes from the shortest chapters first, every chapter stays.
+  PerfSummary s;
+  s.install_id = "0123abcd-0000-4000-8000-0000000000ff";
+  s.version = "2.0.0-beta.9";
+  s.api = "vulkan";
+  for (int e = 0; e < 20; ++e) {
+    ChapterStats ch;
+    ch.entry = e;
+    for (int i = 0; i < 1000 - e * 10; ++i) ch.AddFrame(16.7);
+    for (int k = 0; k < 3; ++k) {
+      WorstFrame f = FullFrame();
+      f.ms = 300 + 100 * k + e;
+      AddWorstFrame(ch.worst, f);
+    }
+    s.chapters.push_back(ch);
+  }
+  const std::string json = PerfJson(s);
+  size_t chapters = 0, details = 0;
+  for (size_t at = 0; (at = json.find("\"entry\":", at)) != std::string::npos; ++at) ++chapters;
+  for (size_t at = 0; (at = json.find("\"worst\":", at)) != std::string::npos; ++at) ++details;
+  Check(!json.empty() && json.size() <= kMaxPerfBytes, "summary with details within 16 KB: " + std::to_string(json.size()));
+  Check(chapters == 20, "every chapter kept, only detail dropped: " + std::to_string(chapters));
+  Check(details > 0 && details < 20, "some chapters keep their detail: " + std::to_string(details));
+  Check(json.find("{\"entry\":0,") != std::string::npos &&
+            json.find("\"worst\":") < json.find("{\"entry\":1,"),
+        "the longest chapter keeps its detail");
+  Check(json.find(":\\") == std::string::npos && json.find("Users") == std::string::npos, "no paths in the detail");
+  WriteFile(out / "perf-worst.json", json);
+}
+
 int main(int argc, char** argv) {
   const fs::path out = argc > 1 ? argv[1] : "telemetry-test";
   fs::create_directories(out);
@@ -280,6 +405,7 @@ int main(int argc, char** argv) {
   Json();
   Stats();
   Perf(out);
+  WorstFrames(out);
   GzipSamples(out);
   Uploads(out);
   if (failures) return 1;

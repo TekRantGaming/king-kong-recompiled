@@ -188,6 +188,7 @@ void GameRenderer::AdvanceTexturePack(nvrhi::ICommandList* cl) {
     if (!pending.row && sub.size <= left) {
       cl->writeTexture(replacement->texture,0,sub.level,data.bytes.data()+sub.offset,sub.row_pitch,sub.depth_pitch);
       ++pending.subresource; spent += sub.size;
+      stats_.pack_upload_bytes += sub.size;
       continue;
     }
     if (!pending.row && sub.size <= budget) break;  // whole in the next frame, no strip
@@ -199,6 +200,7 @@ void GameRenderer::AdvanceTexturePack(nvrhi::ICommandList* cl) {
       if (spent) break;
       cl->writeTexture(replacement->texture,0,sub.level,data.bytes.data()+sub.offset,sub.row_pitch,sub.depth_pitch);
       ++pending.subresource;
+      stats_.pack_upload_bytes += sub.size;
       break;
     }
     if (left < sub.row_pitch && spent) break;
@@ -224,12 +226,14 @@ void GameRenderer::AdvanceTexturePack(nvrhi::ICommandList* cl) {
     cl->copyTexture(replacement->texture,dst,strip,src);
     RetireResource(strip);
     spent += uint64_t(rows)*sub.row_pitch;
+    stats_.pack_upload_bytes += uint64_t(rows)*sub.row_pitch;
     pending.row+=rows;
     if (pending.row==block_rows) { pending.row=0; ++pending.subresource; }
   }
   if (pending.subresource == data.subresources.size()) {
     cl->setTextureState(replacement->texture,nvrhi::AllSubresources,nvrhi::ResourceStates::ShaderResource);
     replacement->pack_ready=true;
+    ++stats_.pack_textures_ready;
     Logf(LogLevel::kInfo,"rexgpu-native: texture pack ready %016llX %ux%u %s %u mips bytes=%llu",
         (unsigned long long)replacement->pack_hash,data.plan.width,data.plan.height,
         kknr::GetHostFormatInfo(data.plan.format).name,data.plan.levels,(unsigned long long)replacement->pack_allocation);

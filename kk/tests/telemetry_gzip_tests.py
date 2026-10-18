@@ -38,6 +38,20 @@ for key in ('installId', 'version', 'api', 'settings', 'chapters', 'pipelineLibr
 if not 0 < len(perf.get('chapters', [])) <= 64:
     failures.append('the summary has the wrong number of chapters')
 
+# Task 211: the summary with worst-frame detail is valid JSON with the fields the server keeps.
+worst = json.loads((out / 'perf-worst.json').read_text(encoding='utf-8'))
+frames = [f for c in worst.get('chapters', []) for f in c.get('worst', [])]
+if not frames:
+    failures.append('the worst-frame summary has no detail')
+for f in frames:
+    for key in ('ms', 'phase', 'cpuMs', 'swapMs', 'gpuMs', 'pipeWaitMs', 'texUploads', 'reads', 'focus', 'paused', 'cap'):
+        if key not in f:
+            failures.append(f'a worst frame has no {key}')
+    if f.get('phase') not in ('play', 'load'):
+        failures.append(f'a worst frame has the phase {f.get("phase")!r}')
+    if any(isinstance(v, str) and ('\\' in v or '/' in v) for v in f.values()):
+        failures.append('a worst frame holds a path')
+
 if failures:
     print('\n'.join('FAIL: ' + f for f in failures))
     sys.exit(1)

@@ -278,6 +278,8 @@ class GameRenderer {
     uint64_t shader_parts = 0;      // game shaders whose library part was made when the game created them
     double shader_parts_ms = 0;
     double texture_ms = 0;          // time spent converting and uploading textures
+    uint64_t pack_textures_ready = 0;  // texture pack replacements finished uploading (task 211)
+    uint64_t pack_upload_bytes = 0;    // texture pack bytes written to the GPU (task 211)
     double buffer_ms = 0;           // vertex and index buffers: finding, creating and uploading
     double target_ms = 0;           // render targets and framebuffers: finding and creating
   };
@@ -301,6 +303,8 @@ class GameRenderer {
   // The temporal upscaler's state (null when off; tests and logging).
   const GameUpscale* upscale() const { return upscale_.get(); }
   const Stats& stats() const { return stats_; }
+  // The game's level resources are loading (task 211: the worst-frame detail; render thread).
+  bool resource_loading() const { return resource_loading_; }
   // Task 183: the Vulkan graphics pipeline library's parts and links (all zero without it; as
   // nvrhi::vulkan::IDevice::PipelineLibraryStats, without the Vulkan headers here).
   struct PipelineLibraryStats {

@@ -32,11 +32,16 @@
 #include <rex/logging.h>
 
 #include "benchmark.h"
+#include "content.h"
 #include "frame_stats.h"
+#include "guest.h"
 #include "hooks/kk_native_ui.h"
 #include "http.h"
+#include "io_stats.h"
 #include "online.h"
 #include "platform.h"
+#include "play_session.h"
+#include "photo_mode.h"
 #include "plugin/native_benchmark_stats.h"
 #include "settings.h"
 #include "hardware_recommendation.h"
@@ -71,6 +76,29 @@ double g_cpu_base = -1, g_pipe_base = -1;
 bool g_cpu_valid = false;
 int g_samples = 0;
 
+// Task 211, the worst-frame detail (game thread): running totals as the previous frame ended, and a slow
+// frame waiting for the renderer's totals to catch up.
+struct Snapshot {
+  double cpu_ms = -1;
+  bool native = false;
+  NrBenchmarkStats n;
+  iostats::Counters io;
+  double sleep_bias_ms = -1;
+};
+Snapshot g_prev;
+bool g_prev_valid = false;
+struct Pending {
+  bool active = false;
+  int frames_left = 0;
+  WorstFrame f;
+  Snapshot start;
+} g_pending;
+constexpr int kPendingFrames = 2;  // the renderer runs up to 2 frames behind the game
+Clock::time_point g_visit_start{};
+int g_focus_sampled = -1;  // FocusState() at the last once-a-second sample
+#if defined(_WIN32)
+HWND g_own_window = nullptr;
+#endif
 // The quit's uploads.
 std::mutex g_quit_mutex;
 std::condition_variable g_quit_cv;
@@ -133,7 +161,7 @@ bool ReadNative(NrBenchmarkStats& s) {
 
 void Commit() {  // game thread
   const int entry = g_current.entry;
-  if (entry >= 0 && (g_current.frames || g_current.pipeline_wait_ms > 0)) {
+  if (entry >= 0 && (g_current.frames || g_current.pipeline_wait_ms > 0 || !g_current.worst.empty())) {
     std::lock_guard lock(g_mutex);
     ChapterStats& c = g_chapters[entry];
     c.entry = entry;
@@ -141,6 +169,135 @@ void Commit() {  // game thread
   }
   g_current = ChapterStats{};
   g_current.entry = entry;
+}
+
+// ---------------------------------------------------------------------- task 211: worst-frame detail ---
+
+// The time the PC has spent asleep or hibernating since it started (ms): it only grows while it sleeps.
+double SleepBiasMs() {
+#if defined(_WIN32)
+  ULONGLONG unbiased = 0;
+  if (!QueryUnbiasedInterruptTime(&unbiased)) return -1;
+  return double(GetTickCount64()) - double(unbiased) / 10000.0;
+#else
+  timespec boot{}, mono{};
+  if (clock_gettime(CLOCK_BOOTTIME, &boot) != 0 || clock_gettime(CLOCK_MONOTONIC, &mono) != 0) return -1;
+  return double(boot.tv_sec - mono.tv_sec) * 1000.0 + double(boot.tv_nsec - mono.tv_nsec) / 1e6;
+#endif
+}
+
+// 0 the game's window is the foreground window, 1 another program's is, 2 the game's is minimised; -1 not known.
+int FocusState() {
+#if defined(_WIN32)
+  const HWND fg = GetForegroundWindow();
+  DWORD pid = 0;
+  if (fg) GetWindowThreadProcessId(fg, &pid);
+  if (fg && pid == GetCurrentProcessId()) {
+    g_own_window = fg;
+    return IsIconic(fg) ? 2 : 0;
+  }
+  if (g_own_window && IsWindow(g_own_window) && IsIconic(g_own_window)) return 2;
+  return 1;
+#else
+  return -1;
+#endif
+}
+
+// The game's loading screen is up (loading_fix.cpp: its thread handle at +0, state at +12, 1 shown, 2 starting).
+bool LoadingScreenUp() {
+  const uint8_t* base = g_guest_base;
+  if (!base) return false;
+  constexpr uint32_t kLoadingScreen = 0x82D64080;
+  const auto load32 = [base](uint32_t a) {
+    const uint8_t* p = base + a;
+    return uint32_t(p[0]) << 24 | uint32_t(p[1]) << 16 | uint32_t(p[2]) << 8 | p[3];
+  };
+  const uint32_t state = load32(kLoadingScreen + 12);
+  return load32(kLoadingScreen) != 0 && (state == 1 || state == 2);
+}
+
+Snapshot TakeSnapshot() {  // every frame: a few reads, no allocation
+  Snapshot s;
+  s.cpu_ms = ThreadCpuMs();
+  s.native = ReadNative(s.n);
+  s.io = iostats::Take();
+  s.sleep_bias_ms = SleepBiasMs();
+  return s;
+}
+
+// A slow frame just ended: what the game's side knows now; the renderer's part follows in FinishPending.
+void StartPending(double frame_ms, double swap_ms, double cap_ms, bool level_load, const Snapshot& now,
+                  Clock::time_point t) {
+  WorstFrame f;
+  f.ms = frame_ms;
+  if (g_visit_start != Clock::time_point{}) f.at_s = std::chrono::duration<double>(t - g_visit_start).count();
+  f.loading = level_load || LoadingScreenUp();
+  if (swap_ms >= 0) f.swap_ms = std::min(swap_ms, frame_ms);
+  if (cap_ms >= 0) f.cap_wait_ms = std::min(cap_ms, frame_ms);
+  if (g_prev_valid) {
+    if (g_prev.cpu_ms >= 0 && now.cpu_ms >= g_prev.cpu_ms) f.cpu_ms = now.cpu_ms - g_prev.cpu_ms;
+    f.reads = uint32_t(now.io.reads - g_prev.io.reads);
+    f.video_reads = uint32_t(now.io.video_reads - g_prev.io.video_reads);
+    f.read_mb = double(now.io.bytes - g_prev.io.bytes) / (1024.0 * 1024.0);
+    f.read_ms = double(now.io.us - g_prev.io.us) / 1000.0;
+    f.read_max_ms = double(now.io.longest_us) / 1000.0;
+    // The bias moves in clock ticks (about 16 ms): less than 100 ms is no sleep.
+    if (g_prev.sleep_bias_ms >= 0 && now.sleep_bias_ms - g_prev.sleep_bias_ms >= 100)
+      f.sleep_ms = now.sleep_bias_ms - g_prev.sleep_bias_ms;
+  }
+  f.focus = FocusState();
+  f.focus_changed = f.focus >= 0 && g_focus_sampled >= 0 && f.focus != g_focus_sampled;
+  f.paused = play::PauseMenuOpen() || photo::Active();
+  {
+    auto& service = content::Service::Get();
+    f.download = service.Ready() && !service.Idle();
+  }
+  f.texture_pack = CvarOn("native_texture_pack");
+  f.frame_cap = std::max(0, std::atoi(Cvar("kk_frame_rate").c_str()));
+  f.vsync = CvarOn("vsync") ? 1 : 0;
+  f.hfr = CvarOn("kk_hfr_fixes") && f.frame_cap != 30 ? 1 : 0;
+  {
+    std::lock_guard lock(g_mutex);
+    f.upscaler = g_renderer.upscaler;
+  }
+  g_pending.active = true;
+  g_pending.frames_left = kPendingFrames;
+  g_pending.f = std::move(f);
+  g_pending.start = g_prev_valid ? g_prev : Snapshot{};
+}
+
+// The renderer's totals since the frame before the slow one; then the frame joins its chapter's list.
+void FinishPending() {
+  if (!g_pending.active) return;
+  g_pending.active = false;
+  WorstFrame& f = g_pending.f;
+  const NrBenchmarkStats& a = g_pending.start.n;
+  NrBenchmarkStats b;
+  if (g_pending.start.native && ReadNative(b) && b.frame >= a.frame) {
+    const auto du = [](uint64_t to, uint64_t from) { return to >= from ? to - from : 0; };
+    const auto dd = [](double to, double from) { return to >= from ? to - from : 0.0; };
+    constexpr double kMiB = 1024.0 * 1024.0;
+    f.native = true;
+    f.render_frames = uint32_t(du(b.frame, a.frame));
+    f.render_cpu_ms = double(du(b.render_cpu_us, a.render_cpu_us)) / 1000.0;
+    if (const uint64_t timed = du(b.gpu_frames, a.gpu_frames)) f.gpu_ms = dd(b.gpu_ms_total, a.gpu_ms_total) / double(timed);
+    f.gpu_wait_ms = double(du(b.gpu_wait_us, a.gpu_wait_us)) / 1000.0;
+    f.submit_ms = double(du(b.submit_us, a.submit_us)) / 1000.0;
+    f.pipe_waits = uint32_t(du(b.pipeline_waits, a.pipeline_waits));
+    f.pipe_wait_ms = dd(b.pipeline_stutter_ms, a.pipeline_stutter_ms);
+    f.pipes_made = uint32_t(du(b.pipelines_made, a.pipelines_made));
+    f.draws_skipped = uint32_t(du(b.draws_skipped, a.draws_skipped));
+    f.compile_ms = dd(b.pipeline_compile_ms, a.pipeline_compile_ms);
+    f.tex_uploads = uint32_t(du(b.texture_uploads, a.texture_uploads));
+    f.upload_mb = double(du(b.upload_bytes, a.upload_bytes)) / kMiB;
+    f.tex_ms = dd(b.texture_ms, a.texture_ms);
+    f.prepare_ms = dd(b.prepare_ms, a.prepare_ms);
+    f.pack_textures = uint32_t(du(b.pack_textures, a.pack_textures));
+    f.pack_mb = double(du(b.pack_bytes, a.pack_bytes)) / kMiB;
+    f.renderer_loading = a.resource_loading || b.resource_loading;
+    f.worker_jobs = int(std::min<uint32_t>(std::max(a.worker_jobs, b.worker_jobs), 1u << 20));
+  }
+  AddWorstFrame(g_current.worst, f);
 }
 
 void Sample(bool attribute) {  // game thread, once a second
@@ -163,6 +320,7 @@ void Sample(bool attribute) {  // game thread, once a second
   g_cpu_valid = cpu >= 0;
   g_pipe_base = have ? native.pipeline_total_ms : -1;
   g_frames_since_sample = 0;
+  g_focus_sampled = FocusState();
   if (g_samples++ % 10 == 0) {
     const NrEffectStats e = nr::kk::EffectTimes();
     if (e.size) {
@@ -468,24 +626,36 @@ void SetGameRunning() {
   }
 }
 
-void NoteFrame(double frame_ms) {
+void NoteFrame(double frame_ms, double swap_ms, double cap_wait_ms) {
   if (g_disabled) return;
   const int entry = g_entry.load(std::memory_order_relaxed);
+  const bool slow = WorstFrameWanted(entry, frame_ms);
+  // Task 211: a slow frame's detail is finished kPendingFrames later, or sooner when the chapter changes or
+  // another slow frame comes.
+  if (g_pending.active && (entry != g_current.entry || slow || --g_pending.frames_left <= 0)) FinishPending();
+  const auto now = Clock::now();
   if (entry != g_current.entry) {
     Commit();
     g_current.entry = entry;
     g_cpu_valid = false;
+    g_visit_start = now;
   }
-  const auto now = Clock::now();
   bool attribute = entry >= 0;
+  bool level_load = false;
   if (g_skip.load(std::memory_order_relaxed) > 0) {
     g_skip.fetch_sub(1, std::memory_order_relaxed);
     g_cpu_valid = false;  // the load's CPU time is not a frame's
     attribute = false;
+    level_load = true;
   } else if (entry >= 0) {
     g_current.AddFrame(frame_ms);
     ++g_frames_since_sample;
   }
+  // Task 211: the running totals every frame (cheap reads); the detail only for a slow frame.
+  const Snapshot snap = TakeSnapshot();
+  if (slow) StartPending(frame_ms, swap_ms, cap_wait_ms, level_load, snap, now);
+  g_prev = snap;
+  g_prev_valid = true;
   if (now - g_last_sample >= std::chrono::seconds(1)) {
     g_last_sample = now;
     Sample(attribute);

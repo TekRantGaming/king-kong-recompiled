@@ -12,11 +12,14 @@
 // Fix: when ReadFile reports pending but the OVERLAPPED already holds a
 // successful status, finish it the way the console does.
 
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 
 #include <rex/hook.h>
 #include <rex/logging.h>
+
+#include "io_stats.h"
 
 namespace kk {
 namespace {
@@ -53,7 +56,13 @@ REX_HOOK_RAW(sub_82106DE0) {
     REXLOG_INFO("KK dev: read h={:08X} offset={:#x} size={:#x} lr={:08X}", ctx.r3.u32,
                 kk::Load32(base, overlapped + 8), ctx.r5.u32, caller);
 #endif
+  const uint32_t asked = ctx.r5.u32;
+  const auto start = std::chrono::steady_clock::now();
   __imp__sub_82106DE0(ctx, base);
+  // Task 211: the slow frames' file reads (telemetry's worst-frame detail).
+  kk::iostats::NoteRead(asked, uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
+                                         std::chrono::steady_clock::now() - start).count()),
+                        kk::IsVideoPlayer(caller));
   if (ctx.r3.u32 != 0 || !overlapped || kk::IsVideoPlayer(caller)) return;
   // OVERLAPPED: Internal (status), InternalHigh (bytes transferred), ...
   if (kk::Load32(base, overlapped) != 0) return;  // a real error, or truly pending

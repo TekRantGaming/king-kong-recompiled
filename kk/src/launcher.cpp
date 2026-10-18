@@ -2548,13 +2548,21 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       const bool first_start = Get("kk_last_version").empty() &&
                                !std::filesystem::exists(paths_.config_path, config_ec);
       const bool updated = UpdatedSinceLastRun();
-      // Owner rule (Beta 8): ONE shader preparation per version (first install or update), any other
+      // Owner rule (Beta 8, 18 Oct): ONE shader preparation per version (first install or update), any other
       // only when the player asks (Rebuild). A version already prepared is never checked or rebuilt
-      // here; pipelines a new setting needs are made by the game in the background.
-      if (updated || first_start || !ShadersPreparedForThisVersion())
-        native_pack_.Start(CacheDir(), paths_.game_dir, updated);
-      else
-        REXLOG_INFO("KK: shaders already prepared for v{}; not checking them again", KK_VERSION);
+      // here; pipelines a new setting needs are made by the game in the background (shader_prepared.h).
+      switch (JobAtLauncherStart(updated, ShadersPreparedForThisVersion())) {
+        case ShaderJobAtStart::kRebuild: native_pack_.Start(CacheDir(), paths_.game_dir, true); break;
+        case ShaderJobAtStart::kPrepare:
+          REXLOG_INFO("KK: shaders not prepared for v{} yet (kk_shaders_prepared '{}'): preparing them", KK_VERSION,
+                      Get("kk_shaders_prepared"));
+          native_pack_.Start(CacheDir(), paths_.game_dir);
+          break;
+        case ShaderJobAtStart::kNone:
+          REXLOG_INFO("KK: shaders already prepared for v{} ({}); not checking them again", KK_VERSION,
+                      Get("kk_shaders_prepared"));
+          break;
+      }
       if (first_start && NativeShaderPack::Wanted()) {
         // Existing game files with fresh user settings still need the setup's one shader screen.
         setup_shaders_ = true;
@@ -4738,7 +4746,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   // The status line once the setup is over.
   const char* InstalledMessage() {
-    return NativeShaderPack::Wanted() && native_pack_.Finished() && !native_pack_.Ok()
+    return NativeShaderPack::Wanted() && native_pack_.Finished() && !ShadersPreparedForThisVersion()
                ? "Installed. The shaders were not prepared: the game compiles them as it starts."
                : "Installed. Your copy of King Kong is ready to play.";
   }
@@ -4856,8 +4864,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
     cols[1] = {Upper(T("Shader pack")), PackStatusText(), pack_.failed ? color::kWarn : color::kText, PackProgress()};
     if (NativeShaderPack::Wanted())  // the native renderer's own shaders instead (native_shaders.h)
-      cols[1] = {Upper(T("Shaders")), native_pack_.StatusText(),
-                 native_pack_.Finished() && !native_pack_.Ok() ? color::kWarn : color::kText,
+      cols[1] = {Upper(T("Shaders")), native_pack_.StatusText(ShadersPreparedForThisVersion()),
+                 native_pack_.Status(ShadersPreparedForThisVersion()) == ShaderHomeStatus::kFailed ? color::kWarn
+                                                                                                  : color::kText,
                  native_pack_.DrawnFraction(ImGui::GetTime())};
     if (update_ && update_->found)
       cols[2] = {Upper(T("Version")), F("v{0}   " KK_DOT "   v{1} is out", {KK_VERSION, update_->found->version}),
@@ -5921,21 +5930,26 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       modal_.progress = [this] { return PackProgress(); };
       return;
     }
-    // The native renderer's shaders for the settings the game starts with (they may have changed
-    // here): a build in progress, or one these settings need, finishes first (Tick).
-    // Checked (and prepared) when the launcher opened, or at setup, for these settings: nothing to do. A
-    // job still running finishes first; settings that change the shaders or pipelines check again.
+    // The native renderer's shaders (shader_prepared.h, the one definition): a job still running (setup,
+    // update, Rebuild) finishes first; prepared shaders, whatever the settings now, go straight to the game;
+    // Play never prepares them again (owner rule, Beta 8 and 18 Oct). Only a version whose preparation has
+    // not run yet (a setup closed half way) prepares them here, once.
     const bool checked = std::exchange(native_pack_checked_, false);
-    if (NativeShaderPack::Wanted() && !checked && native_pack_.OkForCurrentSettings() && !native_pack_.Busy())
-      REXLOG_INFO("KK: Play: shaders already checked and prepared for these settings; nothing to do");
-    // A job already running (setup, update, Rebuild) finishes first. Otherwise Play never starts one for a
-    // version whose shaders were prepared (owner rule, Beta 8).
-    if (NativeShaderPack::Wanted() && !checked &&
-        (native_pack_.Busy() || (!ShadersPreparedForThisVersion() && !native_pack_.OkForCurrentSettings()))) {
-      if (!native_pack_.Busy()) native_pack_.Start(CacheDir(), paths_.game_dir);
-      waiting_for_native_ = true;
-      native_wait_since_ = ImGui::GetTime();
-      return;
+    if (NativeShaderPack::Wanted() && !checked) {
+      const bool prepared = ShadersPreparedForThisVersion();
+      const ShaderPlayStep step = AtPlay(native_pack_.Busy(), prepared, native_pack_.Finished());
+      if (step == ShaderPlayStep::kPlay) {
+        REXLOG_INFO("KK: Play: shaders {} for v{}; nothing to prepare",
+                    prepared ? "prepared" : "not prepared (the game compiles them)", KK_VERSION);
+      } else {
+        if (step == ShaderPlayStep::kPrepareFirst) {
+          REXLOG_INFO("KK: Play: shaders not prepared for v{} yet: preparing them first", KK_VERSION);
+          native_pack_.Start(CacheDir(), paths_.game_dir);
+        }
+        waiting_for_native_ = true;
+        native_wait_since_ = ImGui::GetTime();
+        return;
+      }
     }
     played_ = true;
     SaveSettings(paths_.config_path);
@@ -6974,7 +6988,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // launcher answers slowly meanwhile). launcher_policy.h.
     if (open_whats_new_ &&
         ShowWhatsNewNow({open_whats_new_, modal_.open, files_ok_, InSetup(), update_new_, ShaderScreen(), native_pack_.Busy(),
-                         NativeShaderPack::Wanted(), native_pack_.Finished()})) {
+                         NativeShaderPack::Wanted(), native_pack_.Finished() || ShadersPreparedForThisVersion()})) {
       open_whats_new_ = false;
       whats_new_shown_ = true;
       OpenWhatsNew();
@@ -7021,21 +7035,43 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   // The native renderer's shaders: the end of the setup step, and Play waiting for them (the
   // pop-up only when the check takes more than a moment, i.e. there is something to build).
-  // The one shader preparation of this version has run (first install, update or Rebuild), with or without
-  // every pipeline: it is not started again until the next version or the player asks.
-  bool ShadersPreparedForThisVersion() {
-    if (Get("kk_shaders_prepared") != KK_VERSION) return false;
-    std::error_code ec;
-    const auto dir = CacheDir() / "native-shaders";
-    return std::filesystem::exists(dir / "kkshaders-spirv.pack", ec) || std::filesystem::exists(dir / "kkshaders-dxil.pack", ec);
+  // The one shader preparation of this version has finished (first install, update or Rebuild) and its packs
+  // are in the cache: shader_prepared.h, the ONE definition the setup's end, Home, What's new and Play share. It
+  // is not started again until the next version or the player asks.
+  bool ShadersPreparedForThisVersion() const {
+    // Home asks every frame: the cache folder is looked at again when the marker changes or after a second,
+    // not at every frame.
+    const std::string marker = Get("kk_shaders_prepared");
+    const auto now = std::chrono::steady_clock::now();
+    if (marker != prepared_marker_ || now - prepared_checked_ > std::chrono::seconds(1)) {
+      std::error_code ec;
+      const auto dir = CacheDir() / "native-shaders";
+      int present = 0;
+      for (int pack : {kShaderPackSpirv, kShaderPackDxil})
+        if (std::filesystem::is_regular_file(dir / ShaderPackFileName(pack), ec)) present |= pack;
+      prepared_ = ShadersPrepared(marker, KK_VERSION, present);
+      prepared_marker_ = marker;
+      prepared_checked_ = now;
+    }
+    return prepared_;
   }
 
   void TickNativeShaders() {
-    if (native_pack_.Finished() && !native_pack_.Busy() && Get("kk_shaders_prepared") != KK_VERSION) {
-      Set("kk_shaders_prepared", KK_VERSION);
-      ++g_changes;
-      REXLOG_INFO("KK: shaders prepared for v{} ({}); not prepared again until an update or Rebuild", KK_VERSION,
-                  native_pack_.Ok() ? "ok" : "with problems");
+    // Each job, once, as it ends: the version's one preparation only when it ran to its end and left every pack
+    // it covers (a cancelled job, e.g. the launcher closed during the setup's shaders, is not one). Saved at
+    // once, so a launcher closed or a game started right after it still finds it.
+    if (native_pack_.TakeFinished()) {
+      const ShaderJobEnd end = native_pack_.End();
+      if (JobIsThePreparation(end)) {
+        Set("kk_shaders_prepared", FormatPreparedMarker(KK_VERSION, end.packs_needed));
+        SaveSettings(paths_.config_path);
+        REXLOG_INFO("KK: shaders prepared for v{} ({}, {}); not prepared again until an update or Rebuild", KK_VERSION,
+                    Get("kk_shaders_prepared"), native_pack_.Ok() ? "every pipeline" : "some pipelines left to the game");
+      } else {
+        REXLOG_WARN("KK: shader job ended without preparing the shaders ({}packs needed {} ready {}); prepared: {}",
+                    end.cancelled ? "cancelled, " : "", end.packs_needed, end.packs_ready,
+                    ShadersPreparedForThisVersion() ? "yes (an earlier preparation)" : "no");
+      }
     }
     if (setup_shaders_ && !native_pack_.Busy()) {
       setup_shaders_ = false;
@@ -7043,11 +7079,12 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
     if (rebuild_shaders_screen_ && !native_pack_.Busy()) {
       rebuild_shaders_screen_ = false;
-      Status(native_pack_.Ok() ? "The shaders are ready." : "The shaders were not prepared: the game compiles them as it starts.");
+      Status(ShadersPreparedForThisVersion() ? "The shaders are ready."
+                                             : "The shaders were not prepared: the game compiles them as it starts.");
     }
     if (update_shaders_ && !native_pack_.Busy()) {
       update_shaders_ = false;
-      Status(native_pack_.Ok() ? F("Updated to v{0}. The shaders are ready.", {KK_VERSION})
+      Status(ShadersPreparedForThisVersion() ? F("Updated to v{0}. The shaders are ready.", {KK_VERSION})
                                : T(std::string("The shaders were not prepared: the game compiles them as it starts.")));
     }
     if (!waiting_for_native_) return;
@@ -7377,6 +7414,13 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       SaveSettings(paths_.config_path);
       return;
     }
+    if (t == "shaders:status") {  // task 210: Home's SHADERS status and the one definition behind it
+      REXLOG_INFO("KK dev: shaders status '{}' prepared {} marker '{}' job busy {} finished {}",
+                  native_pack_.StatusText(ShadersPreparedForThisVersion()), ShadersPreparedForThisVersion(),
+                  Get("kk_shaders_prepared"), native_pack_.Busy(), native_pack_.Finished());
+      return;
+    }
+    if (t == "shaders:rebuild") return OpenRebuildShaders();  // task 210: the Rebuild shaders pop-up, as from Home
     if (t == "updated") {  // as on the first start after an update: the full rebuild and its screen
       update_shaders_ = true;
       if (!native_pack_.Busy()) native_pack_.Start(CacheDir(), paths_.game_dir, true);
@@ -7486,6 +7530,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   bool waiting_for_native_ = false;   // Play was pressed: they are checked (and built) first
   bool native_modal_ = false;         // the pop-up of that wait is open
   bool native_pack_checked_ = false;  // checked for this Play: StartGame goes on
+  mutable bool prepared_ = false;      // ShadersPreparedForThisVersion(), as last looked at
+  mutable std::string prepared_marker_;  // ... for this kk_shaders_prepared
+  mutable std::chrono::steady_clock::time_point prepared_checked_{};
   double native_wait_since_ = 0;
   int autoplay_frames_ = 0;
   double saved_time_ = -100;

@@ -546,12 +546,47 @@ void Renderer::OnPresent(uint32_t frame, uint32_t render_target0, uint32_t devic
   // The frame timing summary: this thread's CPU time and the interval between Presents.
   stats_.render_cpu_us = CurrentThreadCpuMicroseconds();
   if (benchmark_stats_enabled.load(std::memory_order_relaxed)) {
+#if NR_GAME_RENDERER
+    // Task 211: read under the game renderer's own locks before taking the benchmark's.
+    GameRenderer::StutterStats stutter{};
+    uint64_t worker_jobs = UINT64_MAX;
+    if (game_) {
+      stutter = game_->stutter();
+      if (stats_.frames_submitted % 8 == 0) {
+        const auto w = game_->worker_progress();
+        worker_jobs = w.waiting + w.active;
+      }
+    }
+#endif
     std::lock_guard lock(benchmark_stats_mutex);
     benchmark_stats.frame = stats_.frames_submitted;
     benchmark_stats.render_cpu_us = stats_.render_cpu_us;
     benchmark_stats.gpu_ms = frame_gpu_timer_ ? frame_gpu_timer_->milliseconds() : -1;
+    benchmark_stats.gpu_wait_us = stats_.gpu_reuse_wait_us;
+    benchmark_stats.submit_us = stats_.present_submit_us;
+    if (benchmark_stats.gpu_ms > 0 && benchmark_stats.gpu_ms < 10000) {
+      benchmark_stats.gpu_ms_total += benchmark_stats.gpu_ms;
+      ++benchmark_stats.gpu_frames;
+    }
 #if NR_GAME_RENDERER
     benchmark_stats.pipeline_total_ms = game_ ? game_->stats().pipeline_wait_ms : 0;
+    if (game_) {
+      // Task 211: the totals the game's worst-frame detail takes differences of.
+      const auto& gs = game_->stats();
+      benchmark_stats.resource_loading = game_->resource_loading() ? 1u : 0u;
+      benchmark_stats.pipeline_waits = gs.pipeline_waits + gs.pipeline_budget_waits;
+      benchmark_stats.pipelines_made = gs.pipelines;
+      benchmark_stats.pipeline_compile_ms = gs.pipeline_ms;
+      benchmark_stats.texture_uploads = gs.texture_uploads;
+      benchmark_stats.upload_bytes = gs.upload_bytes;
+      benchmark_stats.texture_ms = gs.texture_ms;
+      benchmark_stats.prepare_ms = gs.resource_prepare_ms;
+      benchmark_stats.pack_textures = gs.pack_textures_ready;
+      benchmark_stats.pack_bytes = gs.pack_upload_bytes;
+      benchmark_stats.draws_skipped = stutter.draws_skipped;
+      benchmark_stats.pipeline_stutter_ms = stutter.wait_ms;
+      if (worker_jobs != UINT64_MAX) benchmark_stats.worker_jobs = uint32_t(std::min<uint64_t>(worker_jobs, UINT32_MAX));
+    }
 #endif
   }
   if (last_present_time_.time_since_epoch().count() != 0 && frame_intervals_.size() < 8192)
