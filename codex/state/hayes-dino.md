@@ -1,4 +1,20 @@
-# Hayes stuck dinosaur (task 224, 18 Oct 2026) - PAUSED (owner using PC)
+# Hayes stuck dinosaur (task 224, 18 Oct 2026) - RESCUE FIX IN (kk/src/fix_raptor_path.cpp)
+
+## Result (21:25)
+- Stall = raptor 1 (42657DD0) right after waking stops in PNJ_Raptor_ETAT_VALA (sub_825E06B0) on the ledge
+  (214.6,73.1,-1.0): path list (+7028, count +6776) keeps being rebuilt 1 <-> 9 waypoints, next waypoint
+  42660288 (210.5,82.8,-2.9) is never walked to, raptor stands still forever; Hayes waits (CapaBit on all three).
+- Happens with AND without the machine gun cheat in our flow (ng30-a and v-vk30none: no cheats, stalled). Player's
+  log 013: healing + machine gun were switched on in play in level 302, before Hayes (my earlier "no cheats" was wrong).
+- Fix (rescue, level 303 only): in ETAT_VALA, alive + path > 0 + still < 0.3 m for 8 s game time -> move onto next
+  waypoint (sub_8270FCE0 / sub_827117E0 / sub_82401AA8, as the game's own warp-link code at 0x82569494);
+  3rd stall -> life 0. KK_RAPTOR_RESCUE=0 turns it off. In stalled runs it takes 2 moves (down to 42660288,
+  stalls, up to 426612D0), then the raptor goes round to the sailor and the fight ends normally.
+- Verified (kills by KK_DEV_KILL stand in for the player's shots once the raptor is reachable):
+  v-vk60mg-2 (stall, rescued), v-vk30none (no cheat, stall, rescued), v-dx30mg (D3D12, stall, rescued),
+  v-vk60mg-1 and v-dx60mg (no stall, rescue silent): Hayes H_CINE_Vala -> walks down -> H_ETAT_IA_suivi in all.
+  Without rescue: mg60, mg60c, ng30-a stalled for good.
+- Not root-caused: why the path finder routes back through 42660288 (a link the mover can't take).
 
 ## Facts
 - Chapter Hayes = chapter-select entry 7 = level 303. Player (Beta 9, Ally X, kk_frame_rate 60 then 30) got stuck

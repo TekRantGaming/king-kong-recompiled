@@ -36,11 +36,11 @@ void DevTrigNote(const char* name, uint8_t* base, uint32_t rec, uint32_t lr, uin
   auto it = last.find(key);
   if (it != last.end() && it->second == result) return;
   last[key] = result;
-  uint32_t w[8] = {};
+  uint32_t w[24] = {};
   if (Ok(rec))
-    for (int i = 0; i < 8; ++i) w[i] = hfr::Load32(base, rec + i * 4);
-  REXLOG_INFO("KK dev trig: {:.2f} s {} rec {:08X} caller {:08X} -> {} [{:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}]",
-              DevSecondsSinceMenu(), name, rec, lr, int32_t(result), w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7]);
+    for (int i = 0; i < 24; ++i) w[i] = hfr::Load32(base, rec + i * 4);
+  REXLOG_INFO("KK dev trig: {:.2f} s {} rec {:08X} caller {:08X} -> {} [{:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}] +84 {:08X} +88 {} +92 {}",
+              DevSecondsSinceMenu(), name, rec, lr, int32_t(result), w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], w[21], int32_t(w[22]), int32_t(w[23]));
 }
 
 }  // namespace kk

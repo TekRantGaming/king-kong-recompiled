@@ -54,6 +54,7 @@ set(KINGKONG_SOURCES
     src/hfr_fish.cpp
     src/hfr_sway.cpp
     src/hfr_cam_ground.cpp
+    src/fix_raptor_path.cpp
     src/online.cpp
     src/telemetry.cpp
     src/telemetry_upload.cpp
