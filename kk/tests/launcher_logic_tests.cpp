@@ -671,10 +671,12 @@ int main() {
   Check(!kk::DevMoviePlaying(read_movie), "completed Extras playback cannot pause the next screen");
   // A loaded save's video modes wait for the game's profile pointer and flip target (a launcher start loads
   // the save on the title, where sub_825EE130 read guest 0x4DA4 and crashed), then apply exactly once.
+  // Task 213 (owner, 18 Oct): the game's Old movie filter never applies in normal play, whatever a save holds:
+  // a nonzero value (1 sepia, 2 the other filter) is always forced off, with or without a load.
   {
     using kk::play::NextVideoModeStep;
     using kk::play::VideoModeStep;
-    Check(NextVideoModeStep(false, 0x1000, 0x2000, 1, 1) == VideoModeStep::kNothing, "no load, nothing to apply");
+    Check(NextVideoModeStep(false, 0x1000, 0x2000, 1, 0) == VideoModeStep::kNothing, "no load, nothing to apply");
     for (uint32_t profile : {0u, 0x1000u})
       for (uint32_t target : {0u, 0x2000u})
         for (uint32_t modes = 1; modes < 4; ++modes) {
@@ -685,6 +687,14 @@ int main() {
     Check(NextVideoModeStep(true, 0x1000, 0x2000, 0, 0) == VideoModeStep::kNothing,
           "a save with both modes off calls nothing");
     Check(NextVideoModeStep(true, 0, 0, 0, 0) == VideoModeStep::kWait, "pending modes keep waiting before the profile");
+    for (uint32_t old_movie : {1u, 2u})
+      for (uint32_t flip : {0u, 1u}) {
+        Check(NextVideoModeStep(false, 0x1000, 0x2000, flip, old_movie) == VideoModeStep::kApply,
+              "an Old movie value in the profile is always forced off");
+        Check(NextVideoModeStep(false, 0x1000, 0, flip, old_movie) == VideoModeStep::kWait &&
+                  NextVideoModeStep(false, 0, 0x2000, flip, old_movie) == VideoModeStep::kWait,
+              "the Old movie filter is forced off only once both game pointers are set");
+      }
   }
   // Chained scripted Extras sessions: the launcher runs only the first, a started bonus hands on the rest.
   Check(kk::DevLauncherSession("a,b") == "a,b", "a single launcher session runs whole");

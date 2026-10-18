@@ -899,18 +899,14 @@ class SettingsPages {
     return it;
   }
 
-  // Graphics > Extras: the game's two bonus video modes. Every bonus is unlocked (owner, 18 Oct), so no save
-  // is read to decide.
+  // Graphics > Extras: the game's bonus horizontal flip. Every bonus is unlocked (owner, 18 Oct), so no save
+  // is read to decide. The game's Old movie filter is not offered (owner, 18 Oct, task 213: filters belong to
+  // photo mode only; the game never applies it, play_session.cpp ApplyPendingVideoModes).
   void OriginalVideoItems(std::vector<Item>& items) {
     const auto profile = ShownProfileOptions();
     items.push_back(Section("Extras"));
-    for (int id : {1, 8}) {
-      const bool old = id == 1;
-      items.push_back(ProfileToggle(old ? "Old movie filter" : "Horizontal flip",
-                                    "An original bonus video mode, unlocked in Extras.",
-                                    old ? play::ProfileOption::kOldMovie : play::ProfileOption::kHorizontalFlip,
-                                    old ? profile.old_movie : profile.horizontal_flip));
-    }
+    items.push_back(ProfileToggle("Horizontal flip", "An original bonus video mode, unlocked in Extras.",
+                                  play::ProfileOption::kHorizontalFlip, profile.horizontal_flip));
   }
 
   // The Audio page: the game's four volumes.
@@ -4969,6 +4965,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     items.push_back(Section("Extras"));
     for (const auto& extra : play::kExtras) {
       const int id = extra.id;
+      if (id == 1) continue;  // the game's Old movie filter: not offered (owner, 18 Oct, task 213)
       Item it;
       it.type = ItemType::kAction;
       it.label = MenuText(0x4902EC04 + id);
