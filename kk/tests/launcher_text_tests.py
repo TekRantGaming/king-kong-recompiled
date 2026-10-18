@@ -7,8 +7,9 @@
   no save row, and the Artbook is its first item;
 - job J2: setup steps 3 and 4 (texture pack, PS2 cutscenes), their pop-ups and the Settings rows;
 - job J3: the notification switch (Settings > Advanced > Downloads) and the ding/notification calls;
-- job J8: the Workshop page's text and its Home entry; owner, 18 Oct: the Workshop opens a choice of three
-  (Mods, Texture packs, Other TRG projects and games);
+- job J8: the Workshop page's text and its Home entry; task 209 (owner, 18 Oct, replacing the menu of three): the
+  Workshop is one page with three rows (Texture packs, Mods, Other TRG projects and games), the two import buttons,
+  the "Build your own" link, the UHD note before its download, and one texture pack on at a time;
 - job J6: the look step gone, new installs Remastered, the New in this update screen;
 - Settings' tabs are Display, Graphics, Audio, Controls, Gameplay, Cheats, Advanced, About (owner, 16 Oct
   evening), the pause menu's the same without About; Home's About entry is Benchmark (owner, 18 Oct);
@@ -31,7 +32,7 @@ def fail(message):
 table_text = ''
 for name in ('launcher_text_table.inc', 'debug_overlay_text_table.inc', 'benchmark_text_table.inc',
              'hdr_text_table.inc', 'launcher_layout_text_table.inc', 'workshop_text_table.inc',
-             'artbook_text_table.inc', 'mods_text_table.inc', 'picture_text_table.inc'):
+             'artbook_text_table.inc', 'mods_text_table.inc', 'picture_text_table.inc', 'texture_packs_text_table.inc'):
     table_text += (src / name).read_text(encoding='utf-8') + '\n'
 STRING = r'"((?:[^"\\]|\\.)*)"'
 entries = {}
@@ -319,12 +320,57 @@ workshop_strings |= {'Workshop', 'Download', 'View on GitHub', 'Scroll', 'Select
                      'Opens the folder your mods go in, so you can add or remove them.',
                      'How to make texture packs, settings mods and cutscene mods for the game.',
                      'The modding guide (MODDING.md) was not found beside the game.'}
-# Owner, 18 Oct: the Workshop's menu of three and what its entries show (launcher.cpp).
-strings |= {'Mods', 'Texture packs', 'Other TRG projects and games', 'Texture pack mods', 'Switched on', 'On GitHub',
-            '{0} projects', 'Switch mods on or off and read how to make your own.',
-            'The HD texture pack, your own texture packs and texture pack mods.',
-            'More recompiled games and projects by TRG, with their download pages.', 'Not installed', 'Installed',
-            'Downloading', 'Looking for mods', '{0} of {1}'}
+# Task 209: the Workshop's rows and texture pack cards (workshop.cpp, workshop_texpacks.cpp) and the launcher's
+# texture pack row, import pop-ups and setup lines: every string drawn through T() / F(), in five languages.
+texpacks_cpp = (src / 'workshop_texpacks.cpp').read_text(encoding='utf-8')
+# String literals split over lines ("..." "...") count as one.
+_tp_flat = re.sub(r'"\s*\n\s*"', '', texpacks_cpp)
+texpack_strings = set(re.findall(r'(?<![A-Za-z_])[TF]\("((?:[^"\\]|\\.)*)"', _tp_flat))
+texpack_strings |= set(re.findall(r'\bAsk\("((?:[^"\\]|\\.)*)"', _tp_flat))
+texpack_strings |= {'Remove', 'Keep it', 'Download', 'Not now'}
+texpack_strings = {bytes(x, 'utf-8').decode('unicode_escape').encode('latin-1').decode('utf-8') for x in texpack_strings}
+if len(texpack_strings) < 30:
+    fail(f'task 209: only {len(texpack_strings)} texture pack strings found')
+strings |= texpack_strings
+_ws_flat = re.sub(r'"\s*\n\s*"', '', workshop_cpp)
+for m in re.finditer(r'action\("[a-z]+", "([^"]+)", "([^"]+)",\s*"((?:[^"\\]|\\.)*)"\);', _ws_flat):
+    workshop_strings |= {m.group(1), m.group(2), m.group(3)}
+workshop_strings |= set(re.findall(r'(?<![A-Za-z_])[TF]\("((?:[^"\\]|\\.)*)"', _ws_flat))
+strings |= {'Mods', 'Texture packs', 'Other TRG projects and games', 'Not installed', 'Installed', 'Downloading',
+            'Looking for mods', 'Texture pack', 'Texture packs in the Workshop', 'Open Workshop', 'Texture pack folder',
+            'Choose folder', 'Original textures', 'HD texture pack', 'Kong UHD Textures', 'Mod', 'Installing your mod',
+            'Downloading Kong UHD Textures', 'Mod installed', 'Mod not installed', 'Kong UHD Textures installed',
+            'Cancel the install?', 'Cancel install', 'Keep going', 'Install cancelled.',
+            'Another import is running. Try again when it has finished.', 'Continue',
+            "Which texture pack the game uses. Only one is on at a time: choosing one switches the other off. Original "
+            "textures are the game's own. You can switch at any time, also from the pause menu, and it changes straight away.",
+            'Download the HD and UHD texture packs, import your own from a ZIP file, see what each one is and remove the '
+            'ones you no longer want.',
+            'A texture pack in a folder of your own (with its pack.txt). Choosing one switches it on.',
+            "No texture pack is on. Choose one in the launcher's Workshop.",
+            'Nothing is installed and everything you had stays as it was. Your ZIP file is kept.',
+            'Your ZIP file is checked and unpacked. It carries on in the background if you leave this pop-up, and Cancel '
+            'stops it without changing anything you have installed.',
+            'Kong UHD Textures is a {0} GB download. After that it is checked and unpacked. Depending on your connection '
+            'this takes from a few minutes to an hour or more.',
+            'Your downloads carry on when you come back to the launcher. What was downloaded so far is kept.',
+            'Unpacking: {0} of {1} GB',
+            "{0} is in your mods folder. Switch it on in the Workshop's Mods row.",
+            '{0} is installed and turned on. It is the only texture pack on: the one before it was switched off. Choose '
+            'another at any time in the Workshop or in Settings > Graphics.',
+            'The HD texture pack is installed and turned on. It is the only texture pack on: the one before it was '
+            'switched off. You can turn it off at any time in Settings > Graphics or the Workshop.',
+            'Nothing was installed and everything you had stays as it was.',
+            'It has no mod.toml. A mod is one folder with its mod.toml.',
+            'It has more than one mod.toml. Put one mod in each ZIP file.',
+            'It is a texture pack, not a mod. Use Import texture pack.',
+            'It is a mod, not a texture pack. Use Import mod.',
+            'It is a texture pack mod without textures/pack.txt.',
+            'Its mod.toml has no type the game knows (texture-pack, settings or cutscenes).',
+            'Already installed. Turn it on or off at any time in the Workshop or Settings > Graphics.',
+            'Already installed. Turn them on or off at any time in Settings > Advanced.',
+            'Already downloading. It carries on in the background.',
+            'Enabled {0}', 'Disabled', 'Problem', 'Built-in', 'Conflict', 'Version {0}', 'Import mod', 'From a ZIP file'}
 if len(workshop_strings) < 14:
     fail(f'J8: only {len(workshop_strings)} Workshop strings found')
 strings |= workshop_strings
@@ -351,27 +397,60 @@ else:
         fail('task 200: dash in MODDING.md')
 if 'e.push_back({"Workshop", true, [this] { GoTo(kWorkshop); }});' not in (src / 'launcher.cpp').read_text(encoding='utf-8'):
     fail('J8: no Workshop entry on Home')
-# Owner, 18 Oct: the Workshop opens its menu of three (in this order, then Back); Mods leaves the texture pack
-# mods to Texture packs; Texture packs shows the same HD texture pack rows as Settings > Graphics (one source)
-# and keeps the Settings rows; the projects keep their tiles and README pages.
+# Task 209 (owner, 18 Oct): the Workshop is ONE page with three rows in this order; Home's Workshop opens it
+# directly; Back closes an inner page (its card keeps the focus), then goes Home; Settings > Graphics keeps its
+# texture pack rows; the two import buttons and the website link are on the page; the mods row leaves the texture
+# pack mods to the texture packs row; the UHD pack's note is asked before its download.
 _launcher = (src / 'launcher.cpp').read_text(encoding='utf-8')
-m = re.search(r'std::vector<HomeEntry> WorkshopEntries\(\) \{(.*?)\n  \}\n', _launcher, re.S)
-hub = re.findall(r'\{"([^"]+)", true,', m.group(1)) if m else []
-if hub != ['Mods', 'Texture packs', 'Other TRG projects and games', 'Back']:
-    fail(f'the Workshop menu is {hub}')
 for needle, why in (
-        ('workshop_->SetView(Workshop::View::kHub);', 'the Workshop does not open on its menu'),
-        ('TexturePackItems(items);\n    const float top', 'Workshop > Texture packs does not use the Settings texture pack rows'),
-        ('workshop_->DrawTextureModsRow(', 'Workshop > Texture packs has no texture pack mods row'),
-        ('switch (WorkshopBackStep(workshop_->InDetail(), WorkshopHub())) {', 'Back on a Workshop page does not go to its menu'),
+        ('if (page == kWorkshop) EnsureWorkshop();', 'Home does not open the Workshop page directly'),
+        ('if (!workshop_->Back()) GoTo(kHome);', 'Back on the Workshop does not close the inner page, then go Home'),
         ('    OriginalVideoItems(items);\n    TexturePackItems(items);', 'Settings > Graphics lost its texture pack rows'),
+        ('texture_pack_enable_(keys[size_t(i)]);', 'Settings > Graphics does not switch packs with the Workshop rule'),
+        ('if (c.name == "@texture-pack-mod") workshop_->OnTexturePackModInstalled(c.value);',
+         'a newly imported texture pack is not switched on as the only one'),
+        ('if (c.name == "native_texture_pack" && c.value == "true") workshop_->OnFolderPackOn();',
+         'the HD texture pack turned on does not switch the texture pack mods off'),
 ):
     if needle not in _launcher:
         fail(why)
-if 'KongMods::Filter::kTexturePacks : KongMods::Filter::kOthers' not in workshop_cpp:
-    fail('the Mods and Texture packs pages do not split the Kong mods by type')
-if 'void OpenGuide()' not in workshop_cpp or 'mods::BuiltinDir().parent_path() / "MODDING.md"' not in workshop_cpp:
-    fail('Workshop > Mods has no modding guide')
+for banned in ('Workshop::View', 'WorkshopEntries', 'DrawWorkshopHub', 'tex_row_focus_'):
+    if banned in _launcher or banned in workshop_cpp:
+        fail(f'the menu of three is back: {banned}')
+if 'const char* captions[kRows] = {"Texture packs", "Mods", "Other TRG projects and games"};' not in workshop_cpp:
+    fail('the Workshop rows are not Texture packs, Mods, Other TRG projects and games (in that order)')
+for needle, why in (
+        ('action("import", "Import mod",', 'no Import mod button on the Mods row'),
+        ('action("link", "Build your own mods and texture packs",', 'no Build your own mods and texture packs link'),
+        ('kModsUrl = "https://kong.tekrantgaming.com/mods"', 'the Build your own link does not open the website Mods page'),
+        ('kong->SetFilter(KongMods::Filter::kOthers);', 'the Mods row shows texture pack mods'),
+        ('if (m.texture_pack) continue;', 'the Mods row shows texture pack mods'),
+        ('void OpenGuide()', 'the Workshop has no modding guide'),
+        ('mods::BuiltinDir().parent_path() / "MODDING.md"', 'the Workshop has no modding guide'),
+):
+    if needle not in workshop_cpp:
+        fail(why)
+UHD_NOTE = ('This pack replaces many surfaces with high-detail materials that were not made for this game, so the game '
+            'will no longer look exactly as its developers intended. Every effort was made to keep the original style: '
+            'where no good match was found, the original texture is used, upscaled with AI.')
+_flat = re.sub(r'"\s*\n\s*"', '', texpacks_cpp)
+if _flat.count(UHD_NOTE) < 2:
+    fail('the UHD note is not both on its page and in the question before its download')
+m = re.search(r'void DownloadUhd\(\) \{(.*?)\n  \}\n', _flat, re.S)
+if not m or UHD_NOTE not in m.group(1) or '{"Download", "Not now"}' not in m.group(1) or 'host->download(content::Kind::kUhd)' not in m.group(1):
+    fail('the UHD download does not start only after the player confirms the note')
+for needle, why in (
+        ('imp.name = T("Import texture pack");', 'no Import texture pack button on the texture packs row'),
+        ('texpacks::EnableMod(', 'the texture pack row does not use the one-pack rule'),
+        ('texpacks::EnableFolder(', 'the texture pack row does not use the one-pack rule'),
+        ('texpacks::Normalize(', 'old settings with several packs on are not reduced to one'),
+):
+    if needle not in texpacks_cpp:
+        fail(why)
+if 'texpacks::EnableMod(' not in mods_cpp:
+    fail('switching a texture pack mod on in its mod page does not switch the others off')
+if 'texpacks::Normalize(' not in (src / 'mods.cpp').read_text(encoding='utf-8'):
+    fail('the game start does not keep only one texture pack')
 # Beta 7: Extras > Artbook (artbook.cpp, its Extras row and the quiet download in launcher.cpp): every string it
 # draws, its prompts, no dashes; the artbook never asks before Play and has no download strip.
 artbook_cpp = (src / 'artbook.cpp').read_text(encoding='utf-8')
@@ -626,7 +705,9 @@ for banned in ('"Import texture pack ZIP"', '"Restored PS2 cutscenes"', '"Remove
         fail(f'a J1 temporary row is back: {banned}')
 m = re.search(r'void TexturePackItems\(std::vector<Item>& items\) \{(.*?)\n  \}\n', launcher, re.S)
 body = m.group(1) if m else ''
-if 'if (in_game_) return;' not in body or body.find('if (in_game_) return;') > body.find('"Installed"'):
+# Task 209: in the pause menu (in_game_) only the switch; the launcher's choice of packs comes after its return.
+_game = body.find('if (in_game_ || !texture_pack_choices_) {')
+if _game < 0 or body.find('return;', _game) > body.find('it.type = ItemType::kChoice;') or body.find('return;', _game) < 0:
     fail('the pause menu shows more than the texture pack switch')
 
 # Job J4: the graphics pages are setup stages 8 to 11 after the cutscene step, drawn by launcher_setup_graphics.inc

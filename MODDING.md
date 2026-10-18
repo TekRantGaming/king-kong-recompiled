@@ -1,9 +1,13 @@
 # Making mods for King Kong Recompiled
 
 King Kong Recompiled has three kinds of mods: **texture packs**, **settings mods** and **cutscene mods**.
-Players switch them on and off in the launcher: **Workshop > Mods** (texture packs in **Workshop > Texture
-packs**). Nothing in a mod changes the game's own files, and switching a mod off brings everything back
+Players switch them on and off in the launcher's **Workshop**: texture packs in its **Texture packs** row
+(only one texture pack is on at a time), settings and cutscene mods in its **Mods** row (many at once, in load
+order). Nothing in a mod changes the game's own files, and switching a mod off brings everything back
 exactly as it was.
+
+Guides and the modding tools (texture extractor, pack checker) are on the game's website:
+https://kong.tekrantgaming.com/mods (also **Build your own mods and texture packs** in the Workshop).
 
 Not supported (for now): replacing records inside the game's archives (the .bf files), new models, levels
 or sounds, and code mods (scripts, DLLs, programs). A mod folder that contains anything else is simply
@@ -21,6 +25,26 @@ The user folder is `Documents\king_kong` on Windows and the game's user data fol
 opens it). The launcher creates the `mods` folder the first time the Workshop opens.
 
 The folder name is the mod's id. It must not start with a dot or contain `|` or `:`.
+
+### Installing from a ZIP file
+
+The Workshop's **Import texture pack** and **Import mod** buttons install a ZIP file for the player, after
+checking it. The ZIP holds one of these:
+
+```
+MyPack.zip                                Import texture pack
+  My Pack/pack.txt, *.dds                 a texture pack: pack.txt and its images in one folder
+MyPackMod.zip                             Import texture pack
+  My Pack/mod.toml, picture.png           a texture pack mod (type = "texture-pack")
+  My Pack/textures/pack.txt, *.dds
+MyMod.zip                                 Import mod
+  My Mod/mod.toml, ...                    a settings or cutscenes mod
+```
+
+One mod per ZIP; no folders inside `textures`. A ZIP that does not fit (no mod.toml, no pack.txt, a mod given
+to the texture pack button or the other way round) is refused with the reason, and nothing is installed. A
+texture pack without a mod.toml gets one, named after its folder (or the ZIP). Installing the same mod again
+(same folder name and same `name`) replaces it.
 
 ## mod.toml
 

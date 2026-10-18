@@ -83,6 +83,7 @@ set(KINGKONG_SOURCES
     src/artbook.cpp
     src/workshop.cpp
     src/workshop_mods.cpp
+    src/workshop_texpacks.cpp
     src/workshop_markdown.cpp
     src/workshop_net.cpp
     src/system_notify.cpp
@@ -291,6 +292,11 @@ if(KK_DEV_TOOLS)
     target_link_libraries(kk-mods-tests PRIVATE rex::runtime)
     rexglue_apply_target_settings(kk-mods-tests)
     add_test(NAME kong-mods COMMAND kk-mods-tests)
+    # Task 209: one texture pack on at a time (the HD pack, the player's folder, texture pack mods).
+    add_executable(kk-texture-packs-tests tests/texture_packs_tests.cpp)
+    target_include_directories(kk-texture-packs-tests PRIVATE src)
+    target_compile_features(kk-texture-packs-tests PRIVATE cxx_std_20)
+    add_test(NAME texture-pack-rules COMMAND kk-texture-packs-tests)
     add_executable(kk-artbook-tests tests/artbook_tests.cpp src/artbook_files.cpp src/content.cpp src/workshop_net.cpp)
     target_include_directories(kk-artbook-tests PRIVATE src)
     target_compile_definitions(kk-artbook-tests PRIVATE KK_DEV_TOOLS=1)

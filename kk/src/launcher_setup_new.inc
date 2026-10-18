@@ -107,7 +107,7 @@
         sec.buttons.push_back({"I already have one", new_tex_answer_ == 1, [this] {
                                  new_tex_answer_ = 1;
                                  REXLOG_INFO("KK: New in this update: texture pack I already have one");
-                                 ChooseTexturePackZip(0);
+                                 ChooseImportZip(content::ImportTarget::kTexturePack, 0);
                                }});
         sec.buttons.push_back({"Not now", new_tex_answer_ == 2, [this] {
                                  new_tex_answer_ = 2;

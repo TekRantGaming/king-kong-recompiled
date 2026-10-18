@@ -63,10 +63,7 @@ inline constexpr Row kGraphicsRows[] = {
     {"Extras", "Old movie filter"},
     {"Extras", "Horizontal flip"},
     {"Texture pack", "Texture pack"},
-    {"Texture pack", "Installed"},
-    {"Texture pack", "Download HD texture pack"},
-    {"Texture pack", "Import ZIP"},
-    {"Texture pack", "Remove texture pack"},
+    {"Texture pack", "Texture packs in the Workshop"},  // task 209: downloads, imports, removing are there
     {"Texture pack", "Texture pack folder"},
     {"Advanced", "Effect resolution"},
     {"Advanced", "Rebuild shaders"},

@@ -1,4 +1,5 @@
 #include "mods.h"
+#include "texture_packs_logic.h"
 
 #include <algorithm>
 #include <charconv>
@@ -14,6 +15,10 @@
 
 REXCVAR_DEFINE_STRING(kk_mods, "", "KK",
                       "Kong mods switched on, in load order (Workshop > Kong mods): ids separated by |");
+// Task 209: the player's own texture pack folder, kept apart from native_texture_pack_folder (which holds the
+// folder of the pack that is on: the HD texture pack or this one), so switching between them loses neither.
+REXCVAR_DEFINE_STRING(kk_texture_pack_own_folder, "", "KK",
+                      "Your own texture pack folder (Workshop > Texture packs, Settings > Graphics)");
 
 #ifndef KK_VERSION
 #define KK_VERSION ""
@@ -185,9 +190,26 @@ std::vector<Mod> Scan(const fs::path& user_data) {
 }
 
 void ApplyAtGameStart(const fs::path& user_data) {
-  const std::vector<std::string> ids = ParseEnabled(REXCVAR_GET(kk_mods));
+  std::vector<std::string> ids = ParseEnabled(REXCVAR_GET(kk_mods));
   if (ids.empty()) return;
   const std::vector<Mod> all = Scan(user_data);
+  {
+    // Task 209: one texture pack at a time. Settings that have several on (from an older build, or the settings
+    // file edited by hand) keep the same one the launcher keeps (texture_packs_logic.h Normalize).
+    const auto is_tex = [&](const std::string& id) {
+      const auto it = std::find_if(all.begin(), all.end(), [&](const Mod& m) { return m.id == id; });
+      return it != all.end() && it->type == Type::kTexturePack;
+    };
+    texpacks::Choice c{rex::cvar::GetFlagByName("native_texture_pack") == "true",
+                       rex::cvar::GetFlagByName("native_texture_pack_folder"), ids};
+    if (texpacks::CountOn(c, is_tex) > 1) {
+      const texpacks::Choice n = texpacks::Normalize(c, is_tex);
+      REXLOG_INFO("KK mods: several texture packs were on; keeping {}", texpacks::ActiveId(n, is_tex));
+      ids = n.mods;
+      rex::cvar::SetFlagByName("kk_mods", JoinEnabled(n.mods));
+      rex::cvar::SetFlagByName("native_texture_pack", n.folder_on ? "true" : "false");
+    }
+  }
   for (const auto& id : ids) {
     const auto it = std::find_if(all.begin(), all.end(), [&](const Mod& m) { return m.id == id; });
     if (it == all.end()) REXLOG_WARN("KK mods: {} is switched on but was not found; skipped", id);

@@ -310,6 +310,13 @@ enum class Problem {
   kBadManifest,     // pack.txt does not start with "KKTP 1" or a row is malformed
   kMissingFile,     // a file pack.txt lists is not in the pack
   kNoMovies,        // no BK_xxxx.mp4
+  // Task 209, the Workshop's imports (CheckImportNames / CheckImportType):
+  kNoModToml,       // Import mod: no mod.toml
+  kManyMods,        // more than one mod.toml
+  kIsTexturePack,   // Import mod was given a texture pack
+  kIsMod,           // Import texture pack was given a settings or cutscenes mod
+  kNoModTextures,   // a texture pack mod without textures/pack.txt
+  kBadModType,      // mod.toml's type is not texture-pack, settings or cutscenes
 };
 
 // The loader's limits (native-renderer/docs/texture-packs.md): 32,768 rows, an 8 MiB manifest,
@@ -452,6 +459,137 @@ inline Layout ChooseMovieFolder(const std::vector<ZipEntry>& entries) {
   if (!best) layout.problem = Problem::kNoMovies;
   layout.files = best;
   return layout;
+}
+
+// ----------------------------------------------------------- imports ---
+// Task 209 (owner, 18 Oct): the Workshop's two import buttons. "Import texture pack" takes a plain pack (pack.txt
+// with its images in one folder) or a texture pack mod (mod.toml with type "texture-pack" and textures/pack.txt);
+// "Import mod" takes a settings or cutscenes mod (mod.toml in one folder). The folder structure is MODDING.md's.
+// Both install into the player's mods folder as a mod folder of their own (a plain pack gets a mod.toml written
+// for it), so an imported pack keeps its name, picture and credits and never replaces another pack. These checks
+// read only the ZIP's names (before anything is unpacked); CheckImportType decides once mod.toml is read.
+enum class ImportTarget { kTexturePack, kMod };
+enum class ZipKind { kNone, kPlainPack, kModFolder };
+
+struct ImportLayout {
+  Problem problem = Problem::kNone;
+  ZipKind kind = ZipKind::kNone;
+  std::string root;         // the mod folder inside the ZIP ("" = the top); kPlainPack: the pack's folder
+  std::string pack;         // the folder that holds pack.txt ("" when none)
+  std::string folder_name;  // the folder it installs as (in the mods folder)
+  bool has_textures = false;  // kModFolder: root/textures/pack.txt is in the ZIP
+  uint64_t unpacked = 0;
+};
+
+// A folder name the mods folder accepts (mods_logic.h ValidFolderName: no '|' or ':'), from a name in a ZIP or
+// the ZIP file's own name. Characters Windows does not allow in names become '-'; never empty, never "." or "..".
+inline std::string SafeFolderName(std::string_view name) {
+  std::string out;
+  for (char c : name) {
+    const unsigned char u = static_cast<unsigned char>(c);
+    if (u < 32 || std::strchr("|:<>\"/\\?*", c)) out += '-';
+    else out += c;
+  }
+  while (!out.empty() && (out.back() == ' ' || out.back() == '.')) out.pop_back();
+  while (!out.empty() && out.front() == ' ') out.erase(out.begin());
+  if (out.empty() || out == "." || out == "..") out = "texture-pack";
+  if (out.size() > 80) out.resize(80);
+  return out;
+}
+
+inline ImportLayout CheckImportNames(const std::vector<ZipEntry>& entries, ImportTarget target, std::string_view zip_stem) {
+  ImportLayout out;
+  const Layout names = CheckNames(entries);
+  out.unpacked = names.unpacked;
+  if (names.problem != Problem::kNone) return out.problem = names.problem, out;
+  const ZipEntry* toml = nullptr;
+  bool any_pack = false;
+  for (const auto& e : entries) {
+    if (e.directory) continue;
+    const std::string leaf = LeafOf(e.name);
+    if (leaf == "mod.toml") {
+      // A second mod.toml deeper inside the first mod's folder is its own business only when it is not a mod
+      // root: two mod folders in one ZIP are refused.
+      if (toml) return out.problem = Problem::kManyMods, out;
+      toml = &e;
+    }
+    if (leaf == "pack.txt") any_pack = true;
+  }
+  if (!toml) {
+    if (target == ImportTarget::kMod) return out.problem = any_pack ? Problem::kIsTexturePack : Problem::kNoModToml, out;
+    const Layout pack = CheckPackLayout(entries);
+    if (pack.problem != Problem::kNone) return out.problem = pack.problem, out;
+    out.kind = ZipKind::kPlainPack;
+    out.root = out.pack = pack.folder;
+    const std::string leaf = LeafOf(pack.folder);
+    out.folder_name = SafeFolderName(leaf.empty() || leaf == "textures" ? zip_stem : std::string_view(leaf));
+    return out;
+  }
+  out.kind = ZipKind::kModFolder;
+  out.root = ParentOf(toml->name);
+  const std::string prefix = out.root.empty() ? "" : out.root + "/";
+  const std::string textures = prefix + "textures/";
+  for (const auto& e : entries) {
+    if (e.name.compare(0, textures.size(), textures) != 0) continue;
+    const std::string_view rest = std::string_view(e.name).substr(textures.size());
+    if (rest == "pack.txt" && !e.directory) out.has_textures = true;
+    // The pack folder holds the images directly, as the loader reads it.
+    if (rest.find('/') != std::string_view::npos) return out.problem = Problem::kSubfolders, out;
+    if (!e.directory && e.size > kMaxImageBytes && rest != "pack.txt") return out.problem = Problem::kTooLarge, out;
+  }
+  if (out.has_textures) out.pack = prefix + "textures";
+  // Before mod.toml is read, the files tell the two kinds apart: a texture pack mod has textures/pack.txt.
+  if (target == ImportTarget::kMod && out.has_textures) return out.problem = Problem::kIsTexturePack, out;
+  if (target == ImportTarget::kTexturePack && !out.has_textures)
+    return out.problem = any_pack ? Problem::kNoModTextures : Problem::kIsMod, out;
+  const std::string leaf = LeafOf(out.root);
+  out.folder_name = SafeFolderName(leaf.empty() ? zip_stem : std::string_view(leaf));
+  if (out.unpacked > kMaxPackBytes) out.problem = Problem::kTooLarge;
+  return out;
+}
+
+// mod.toml's `key = "value"` (the first one, outside any [table]); "" when it is not there.
+inline std::string TomlTopValue(std::string_view text, std::string_view key) {
+  while (!text.empty()) {
+    const size_t nl = text.find('\n');
+    std::string_view line = text.substr(0, nl);
+    text = nl == std::string_view::npos ? std::string_view() : text.substr(nl + 1);
+    while (!line.empty() && (line.front() == ' ' || line.front() == '\t' || line.front() == '\xEF' ||
+                             line.front() == '\xBB' || line.front() == '\xBF'))
+      line.remove_prefix(1);
+    if (!line.empty() && line.front() == '[') return {};  // a table: the top level is over
+    if (line.compare(0, key.size(), key) != 0) continue;
+    std::string_view rest = line.substr(key.size());
+    while (!rest.empty() && (rest.front() == ' ' || rest.front() == '\t')) rest.remove_prefix(1);
+    if (rest.empty() || rest.front() != '=') continue;
+    rest.remove_prefix(1);
+    while (!rest.empty() && (rest.front() == ' ' || rest.front() == '\t')) rest.remove_prefix(1);
+    if (rest.empty() || (rest.front() != '"' && rest.front() != '\'')) continue;
+    const char q = rest.front();
+    rest.remove_prefix(1);
+    const size_t end = rest.find(q);
+    if (end == std::string_view::npos) continue;
+    return std::string(rest.substr(0, end));
+  }
+  return {};
+}
+
+// The final word once mod.toml is read: its type must fit the button that was used.
+inline Problem CheckImportType(ImportTarget target, std::string_view type, const ImportLayout& layout) {
+  if (layout.kind != ZipKind::kModFolder) return Problem::kNone;
+  const bool tex = type == "texture-pack", other = type == "settings" || type == "cutscenes";
+  if (!tex && !other) return Problem::kBadModType;
+  if (target == ImportTarget::kMod) return tex ? Problem::kIsTexturePack : Problem::kNone;
+  if (!tex) return Problem::kIsMod;
+  return layout.has_textures ? Problem::kNone : Problem::kNoModTextures;
+}
+
+// The mod.toml written for an imported plain pack (its name: the pack folder's or the ZIP's).
+inline std::string PlainPackToml(std::string_view name) {
+  std::string n;
+  for (char c : name)
+    if (c != '"' && c != '\\' && static_cast<unsigned char>(c) >= 32) n += c;
+  return "name = \"" + n + "\"\ntype = \"texture-pack\"\ndescription = \"A texture pack you imported.\"\n";
 }
 
 // ------------------------------------------------------------ free space ---

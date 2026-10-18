@@ -494,6 +494,13 @@ const Info& InfoFor(Kind kind) {
       // Beta 7 Extras: the PS2 USA bonus disc (archive.org), only its six Weta paintings and readme kept.
       {"artbook", "artbook", artbook::kDiscUrl, artbook::kDiscFile, artbook::kDiscSize, artbook::kInstallBytes,
        artbook::kDiscSha256},
+      // Task 209 (owner, 18 Oct): the Kong UHD Textures pack, a texture pack mod ZIP (mod.toml, picture.png, README,
+      // CREDITS, textures/pack.txt). It installs into the mods folder; content/uhd-textures keeps its record.
+      {"uhd-textures", "uhd-textures", "https://bobandersonv115.cypher.usbx.me/filebrowser/api/public/dl/QBGh8N8b",
+       "Kong-UHD-Textures-1.0.zip", 2423136757ull, 5323516778ull,
+       "72419cbea7d6a6c19b9da6a5e55ea46d3bc1270da937be435c92cbe37d910502"},
+      // The Workshop's imports: no download, only the status of the import (or mod removal) running now.
+      {"import", "import", "", "", 0, 0, ""},
   };
   return kInfo[int(kind)];
 }
@@ -513,11 +520,12 @@ void SetLog(std::function<void(bool, const std::string&)> log) { LogSink() = std
 
 // --------------------------------------------------------------- service ---
 struct Service::Impl {
-  enum class JobType { kDownload, kImport, kRemove };
+  enum class JobType { kDownload, kImport, kRemove, kRemoveMod };
   struct Job {
     JobType type;
     Kind kind;
-    fs::path zip;
+    fs::path zip;  // kImport: the ZIP; kRemoveMod: the mod folder
+    ImportTarget target = ImportTarget::kTexturePack;
   };
   enum class Want { kNone, kPause, kCancel };
   struct Slot {
@@ -583,7 +591,7 @@ struct Service::Impl {
   }
 
   void Changes(Kind k, bool install, const std::string& folder) {
-    if (k == Kind::kArtbook) return;  // no settings
+    if (k != Kind::kTexturePack && k != Kind::kCutscenes) return;  // no settings (artbook, mods: events)
     const bool tex = k == Kind::kTexturePack;
     const char* on = tex ? "native_texture_pack" : "kk_ps2_cutscenes";
     const char* dir = tex ? "native_texture_pack_folder" : "kk_ps2_movie_folder";
@@ -607,6 +615,7 @@ struct Service::Impl {
     const fs::path folder = FromU8(keys.count("folder") ? keys.at("folder") : "");
     const bool ok = !folder.empty() && Exists(folder) &&
                     (k != Kind::kTexturePack || Exists(folder / "pack.txt")) &&
+                    (k != Kind::kUhd || Exists(folder / "textures" / "pack.txt")) &&
                     (k != Kind::kArtbook || artbook::Installed(folder));
     if (!ok) return;
     slot.status.installed = true;
@@ -615,7 +624,9 @@ struct Service::Impl {
     slot.status.installed_name = keys.count("name") ? keys.at("name") : "";
     slot.status.imported = keys.count("source") && keys.at("source") == "import";
     slot.installed_setting = U8(folder);
-    if (queue_changes && k != Kind::kArtbook && keys.count("applied") && keys.at("applied") == "0") {
+    slot.status.mod_id = k == Kind::kUhd ? U8(folder.filename()) : std::string();
+    if (queue_changes && (k == Kind::kTexturePack || k == Kind::kCutscenes) && keys.count("applied") &&
+        keys.at("applied") == "0") {
       const bool tex = k == Kind::kTexturePack;
       changes.push_back({tex ? "native_texture_pack_folder" : "kk_ps2_movie_folder", slot.installed_setting, false, {}, {}});
       changes.push_back({tex ? "native_texture_pack" : "kk_ps2_cutscenes", "true", false, {}, {}});
@@ -632,7 +643,7 @@ struct Service::Impl {
       std::lock_guard lock(mutex);
       want = S(k).want;
     }
-    if (want == Want::kCancel || quit) {
+    if (want == Want::kCancel || quit || k == Kind::kImport) {  // an import is never kept half done
       if (want == Want::kCancel) ClearDownload(k);
       std::lock_guard lock(mutex);
       SetStage(k, S(k).status.installed ? Stage::kInstalled : Stage::kNone);
@@ -874,6 +885,8 @@ struct Service::Impl {
 
   bool Install(Kind k, const fs::path& zip, bool download) {
     if (k == Kind::kArtbook) return InstallArtbook(zip);
+    if (k == Kind::kUhd || k == Kind::kImport)
+      return InstallMod(k, zip, k == Kind::kUhd ? ImportTarget::kTexturePack : S(k).status.target, download);
     const Info& info = InfoFor(k);
     std::vector<ZipEntry> entries;
     std::string error;
@@ -1020,18 +1033,238 @@ struct Service::Impl {
     return true;
   }
 
-  void RunImport(const fs::path& zip) {
-    const Kind k = Kind::kTexturePack;
+  // Task 209: a texture pack (plain or a texture pack mod) or a mod from a ZIP, into <user data>/mods/<folder>.
+  // Checked by its names first (CheckImportNames), unpacked into a staging folder, checked again (every file,
+  // mod.toml's type, pack.txt), and only then moved in. A failure or Cancel leaves everything installed as it was.
+  // The same mod again (same folder, same name in mod.toml) is replaced: an update. Another mod with that folder
+  // name stays, and the new one gets "<name> 2" (3, ...).
+  fs::path ModsDir() const { return user_dir / "mods"; }
+  bool InstallMod(Kind k, const fs::path& zip, ImportTarget target, bool download) {
+    std::vector<ZipEntry> entries;
+    std::string error;
+    {
+      std::ifstream f(zip, std::ios::binary);
+      const uint64_t size = FileSize(zip);
+      auto read_at = [&](uint64_t at, uint8_t* out, size_t n) {
+        f.clear();
+        f.seekg(std::streamoff(at));
+        f.read(reinterpret_cast<char*>(out), std::streamsize(n));
+        return uint64_t(f.gcount()) == n;
+      };
+      if (!f || !ReadZipDirectory(read_at, size, entries, error)) {
+        if (download) ClearDownload(k);
+        Fail(k, Error::kBadPack, "not a ZIP file we can read: " + error, Problem::kNotZip);
+        return false;
+      }
+    }
+    std::string stem = U8(zip.stem());
+    if (k == Kind::kUhd) stem = "Kong UHD Textures";
+    const ImportLayout layout = CheckImportNames(entries, target, stem);
+    if (layout.problem != Problem::kNone) {
+      if (download) ClearDownload(k);
+      Fail(k, Error::kBadPack, "the ZIP's layout is not usable (problem " + std::to_string(int(layout.problem)) + ")",
+           layout.problem);
+      return false;
+    }
+    if (!CheckSpace(k, layout.unpacked + kSpaceMargin)) return false;
+    const fs::path staging = Downloads() / (std::string(InfoFor(k).id) + "-staging");
     {
       std::lock_guard lock(mutex);
-      SetStage(k, Stage::kStarting);
+      SetStage(k, Stage::kUnpacking);
+      S(k).status.total = layout.unpacked;
+      S(k).progress = 0;
+    }
+    if (!RemoveAll(staging)) {
+      Fail(k, Error::kWrite, "cannot clear " + U8(staging));
+      return false;
+    }
+    std::error_code ec;
+    fs::create_directories(staging, ec);
+    Log(std::string(InfoFor(k).id) + ": unpacking " + U8(zip) + " (" + std::to_string(entries.size()) + " entries, " +
+        std::to_string(layout.unpacked) + " bytes) as " + (target == ImportTarget::kMod ? "a mod" : "a texture pack"));
+    std::string detail;
+    auto logged = Clock::now();
+    const bool unpacked = UnpackZip(zip, staging, [&] {
+      S(k).progress = DirBytes(staging);
+      if (Clock::now() - logged >= std::chrono::seconds(15)) {
+        logged = Clock::now();
+        Log(std::string(InfoFor(k).id) + ": unpacked " + std::to_string(S(k).progress.load()) + " of " +
+            std::to_string(layout.unpacked) + " bytes");
+      }
+      return !Stopped(k) && !quit;
+    }, detail);
+    auto fail_clean = [&](Error e, const std::string& why, Problem p = Problem::kNone) {
+      RemoveAll(staging);
+      if (download && e == Error::kBadPack) ClearDownload(k);
+      Fail(k, e, why, p);
+      return false;
+    };
+    if (!unpacked) {
+      RemoveAll(staging);
+      if (Stopped(k) || quit) {
+        FinishStopped(k, download ? FileSize(zip) : 0);
+        return false;
+      }
+      return fail_clean(Error::kUnpack, "unpacking failed: " + detail);
+    }
+    S(k).progress = layout.unpacked;
+    // Only what the directory listed, as regular files and folders inside the staging folder.
+    std::map<std::string, uint64_t> expected;
+    std::set<std::string> folders;
+    for (const auto& e : entries) {
+      std::string name = e.name;
+      if (e.directory) {
+        name.pop_back();
+        folders.insert(name);
+      } else {
+        expected[name] = e.size;
+      }
+      for (std::string p = ParentOf(name); !p.empty(); p = ParentOf(p)) folders.insert(p);
+    }
+    size_t found = 0;
+    for (fs::recursive_directory_iterator it(staging, ec), end; !ec && it != end; it.increment(ec)) {
+      const std::string rel = U8(it->path().lexically_relative(staging).generic_u8string());
+      const auto st = it->symlink_status(ec);
+      bool ok = false;
+      if (fs::is_directory(st)) ok = folders.count(rel) != 0;
+      else if (fs::is_regular_file(st)) {
+        const auto e = expected.find(rel);
+        ok = e != expected.end() && FileSize(it->path()) == e->second;
+        found += ok;
+      }
+      if (!ok) return fail_clean(Error::kBadPack, "unexpected item after unpacking: " + rel, Problem::kUnsafeName);
+    }
+    if (ec || found != expected.size())
+      return fail_clean(Error::kUnpack, "unpacking left out " + std::to_string(expected.size() - found) + " files");
+    const fs::path root = layout.root.empty() ? staging : staging / FromU8(layout.root);
+    std::string name = layout.folder_name;
+    if (layout.kind == ZipKind::kModFolder) {
+      std::stringstream text;
+      {
+        std::ifstream m(root / "mod.toml", std::ios::binary);
+        text << m.rdbuf();
+      }
+      const std::string toml = text.str();
+      const Problem type = CheckImportType(target, TomlTopValue(toml, "type"), layout);
+      if (type != Problem::kNone) return fail_clean(Error::kBadPack, "mod.toml's type does not fit (problem " +
+                                                                         std::to_string(int(type)) + ")", type);
+      if (const std::string n = TomlTopValue(toml, "name"); !n.empty()) name = n;
+    }
+    if (target == ImportTarget::kTexturePack) {
+      const fs::path pack = staging / FromU8(layout.pack);
+      std::stringstream text;
+      {
+        std::ifstream m(pack / "pack.txt", std::ios::binary);
+        text << m.rdbuf();
+      }
+      size_t rows = 0;
+      const Problem problem = CheckManifest(text.str(), [&](const std::string& file) {
+        std::error_code e2;
+        return fs::is_regular_file(pack / FromU8(file), e2);
+      }, &rows);
+      if (problem != Problem::kNone)
+        return fail_clean(Error::kBadPack, "pack.txt check failed (problem " + std::to_string(int(problem)) + ")", problem);
+      Log(std::string(InfoFor(k).id) + ": pack.txt ok, " + std::to_string(rows) + " replacements");
+    }
+    // A plain pack becomes a texture pack mod: <folder>/textures with a mod.toml written beside it.
+    fs::path source = root;
+    if (layout.kind == ZipKind::kPlainPack) {
+      source = staging / ".pack-mod";
+      fs::create_directories(source, ec);
+      fs::rename(root == staging ? staging / FromU8(layout.pack) : root, source / "textures", ec);
+      if (ec) {
+        // The pack is the staging folder itself (pack.txt at the ZIP's top): move its files one by one.
+        ec.clear();
+        fs::create_directories(source / "textures", ec);
+        std::vector<fs::path> items;
+        for (fs::directory_iterator it(staging, ec), end; !ec && it != end; it.increment(ec))
+          if (it->path().filename() != ".pack-mod") items.push_back(it->path());
+        for (const fs::path& item : items) fs::rename(item, source / "textures" / item.filename(), ec);
+      }
+      std::ofstream t(source / "mod.toml", std::ios::binary);
+      t << PlainPackToml(name);
+      if (!t) return fail_clean(Error::kWrite, "cannot write mod.toml");
+    }
+    // Where it goes: its folder name, unless another mod (not this one again) has it.
+    fs::create_directories(ModsDir(), ec);
+    std::string folder = layout.folder_name;
+    fs::path dest = ModsDir() / FromU8(folder);
+    for (int n = 2; Exists(dest); ++n) {
+      std::stringstream text;
+      {
+        std::ifstream m(dest / "mod.toml", std::ios::binary);
+        text << m.rdbuf();
+      }
+      if (TomlTopValue(text.str(), "name") == name) break;  // the same mod: replaced below
+      folder = layout.folder_name + " " + std::to_string(n);
+      dest = ModsDir() / FromU8(folder);
+    }
+    fs::path old = dest;
+    old += ".old";
+    RemoveAll(old);
+    if (Exists(dest)) fs::rename(dest, old, ec);
+    if (ec) return fail_clean(Error::kWrite, "cannot move the old " + U8(dest) + " aside");
+    fs::rename(source, dest, ec);
+    if (ec) {
+      if (Exists(old)) fs::rename(old, dest, ec);
+      return fail_clean(Error::kWrite, "cannot move the unpacked folder into " + U8(dest));
+    }
+    RemoveAll(staging);
+    RemoveAll(old);
+    if (k == Kind::kUhd)
+      WriteKeys(InstalledFile(k), {{"name", name}, {"folder", U8(dest)}, {"source", download ? "download" : "import"},
+                                   {"applied", "1"}});
+    {
+      std::lock_guard lock(mutex);
+      auto& st = S(k).status;
+      st.stage = Stage::kInstalled;
+      st.error = Error::kNone;
+      st.problem = Problem::kNone;
+      st.installed = true;
+      st.imported = !download;
+      st.installed_name = name;
+      st.folder = dest;
+      st.mod_id = folder;
+      S(k).installed_setting = U8(dest);
+      changes.push_back({target == ImportTarget::kTexturePack ? "@texture-pack-mod" : "@mod-installed", folder, false, {}, {}});
+    }
+    Log(std::string(InfoFor(k).id) + ": installed '" + name + "' in " + U8(dest));
+    return true;
+  }
+
+  void RunImport(const fs::path& zip, ImportTarget target) {
+    const Kind k = Kind::kImport;
+    {
+      std::lock_guard lock(mutex);
+      auto& st = S(k).status;
+      st = Status{};
+      st.stage = Stage::kStarting;
+      st.target = target;
       S(k).importing = true;
     }
     const bool ok = Install(k, zip, /*download=*/false);
     std::lock_guard lock(mutex);
     S(k).importing = false;
-    // A failed import leaves an earlier install as it was.
-    if (!ok && S(k).status.stage == Stage::kStarting) SetStage(k, S(k).status.installed ? Stage::kInstalled : Stage::kNone);
+    if (!ok && S(k).status.stage == Stage::kStarting) SetStage(k, Stage::kNone);
+  }
+
+  // A mod folder (an imported pack, the UHD pack, a mod) deleted on the worker: 5 GB take a while.
+  void RunRemoveMod(const fs::path& folder) {
+    const Kind k = Kind::kImport;
+    {
+      std::lock_guard lock(mutex);
+      S(k).status = Status{};
+      SetStage(k, Stage::kRemoving);
+    }
+    const std::string id = U8(folder.filename());
+    // Only a folder directly inside the mods folder.
+    if (folder.parent_path().lexically_normal() != ModsDir().lexically_normal() || id.empty() || id == "." || id == "..")
+      return Fail(k, Error::kWrite, "not a mod folder: " + U8(folder));
+    if (!RemoveAll(folder)) return Fail(k, Error::kWrite, "cannot delete " + U8(folder));
+    std::lock_guard lock(mutex);
+    S(k).status = Status{};
+    changes.push_back({"@mod-removed", id, false, {}, {}});
+    Log("mod folder removed: " + U8(folder));
   }
 
   void RunRemove(Kind k) {
@@ -1043,6 +1276,13 @@ struct Service::Impl {
     }
     if (!setting.empty()) Changes(k, /*install=*/false, setting);
     ClearDownload(k);
+    if (k == Kind::kUhd && !setting.empty()) {  // the pack itself is a folder in the mods folder
+      const fs::path folder = FromU8(setting);
+      if (folder.parent_path().lexically_normal() == ModsDir().lexically_normal() && !RemoveAll(folder))
+        return Fail(k, Error::kWrite, "cannot delete " + setting);
+      std::lock_guard lock(mutex);
+      changes.push_back({"@mod-removed", U8(folder.filename()), false, {}, {}});
+    }
     const fs::path root = Root(k);
     fs::path staging = root, old = root;
     staging += ".new";
@@ -1072,8 +1312,9 @@ struct Service::Impl {
       }
       switch (job.type) {
         case JobType::kDownload: RunDownload(job.kind); break;
-        case JobType::kImport: RunImport(job.zip); break;
+        case JobType::kImport: RunImport(job.zip, job.target); break;
         case JobType::kRemove: RunRemove(job.kind); break;
+        case JobType::kRemoveMod: RunRemoveMod(job.zip); break;
       }
       std::lock_guard lock(mutex);
       running = false;
@@ -1248,7 +1489,7 @@ void Service::Cancel(Kind kind) {
     it = it->kind == kind && it->type == Impl::JobType::kDownload ? impl_->jobs.erase(it) : it + 1;
   const Stage stage = slot.status.stage;
   if (stage == Stage::kStarting || stage == Stage::kDownloading || stage == Stage::kVerifying ||
-      (stage == Stage::kUnpacking && !slot.importing)) {
+      (stage == Stage::kUnpacking && (!slot.importing || kind == Kind::kImport))) {
     slot.want = Impl::Want::kCancel;
     slot.stop = true;
     impl_->cv.notify_all();
@@ -1267,18 +1508,28 @@ void Service::Remove(Kind kind) {
   impl_->Push({Impl::JobType::kRemove, kind, {}});
 }
 
-void Service::Import(const fs::path& zip) {
+void Service::Import(const fs::path& zip, ImportTarget target) {
   if (!impl_->ready) return;
   {
     std::lock_guard lock(impl_->mutex);
-    auto& st = impl_->S(Kind::kTexturePack).status;
-    if (st.Busy() || impl_->Queued(Kind::kTexturePack)) {
+    auto& st = impl_->S(Kind::kImport).status;
+    if (st.Busy() || impl_->Queued(Kind::kImport)) {
       st.error = Error::kBusy;
       return;
     }
   }
-  Log("importing " + U8(zip));
-  impl_->Push({Impl::JobType::kImport, Kind::kTexturePack, zip});
+  Log("importing " + U8(zip) + (target == ImportTarget::kMod ? " (a mod)" : " (a texture pack)"));
+  impl_->Push({Impl::JobType::kImport, Kind::kImport, zip, target});
+}
+
+void Service::RemoveMod(const fs::path& folder) {
+  if (!impl_->ready) return;
+  {
+    std::lock_guard lock(impl_->mutex);
+    if (impl_->S(Kind::kImport).status.Busy() || impl_->Queued(Kind::kImport)) return;
+  }
+  Log("removing the mod folder " + U8(folder));
+  impl_->Push({Impl::JobType::kRemoveMod, Kind::kImport, folder});
 }
 
 std::vector<Change> Service::TakeChanges() {

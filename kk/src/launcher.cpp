@@ -120,6 +120,7 @@ struct TexturePackZipChoice {
   std::mutex mutex;
   bool busy = false;
   std::string selected;
+  kk::content::ImportTarget target = kk::content::ImportTarget::kTexturePack;  // task 209: which import button
 } texture_pack_zip_choice;
 constexpr const char* kProjectUrl = "https://github.com/TekRantGaming/king-kong-recompiled";
 constexpr const char* kDiscordUrl = "https://discord.gg/PET2xU5FJq";  // permanent (expires_at null)
@@ -1585,14 +1586,6 @@ class SettingsPages {
 
   // ----------------------------------------------------------- Graphics ---
   std::vector<Item> GraphicsItems() {
-    {
-      std::lock_guard lock(texture_pack_folder_choice.mutex);
-      if (!texture_pack_folder_choice.selected.empty()) {
-        Set("native_texture_pack_folder", texture_pack_folder_choice.selected);
-        texture_pack_folder_choice.selected.clear();
-        ++g_changes;
-      }
-    }
     const bool original = GetBool("kk_original_look");
     std::vector<Item> items;
     items.push_back(Section("Preset"));
@@ -1762,68 +1755,69 @@ class SettingsPages {
     if (content_action_) content_action_(kind, verb);
   }
 
-  // Graphics > Texture pack: the switch (any time: the renderer reads it every frame, so in game it
-  // changes at once), what is installed, Download / Import ZIP / Remove, and a folder of the player's own.
-  void TexturePackItems(std::vector<Item>& items) {
-    using namespace content;
-    items.push_back(Section("Texture pack"));
-    const bool have = !Get("native_texture_pack_folder").empty();
+  // Graphics > Texture pack. Task 209 (owner, 18 Oct): only one texture pack is on at a time, so the launcher's row
+  // is a choice of the packs installed (the original textures first), with the same rule and the same settings as
+  // the Workshop's texture pack row (texture_packs_logic.h); downloads, imports and removing are in the Workshop.
+  // In the pause menu: the switch only (the renderer reads it every frame, so in game it changes at once).
+  std::function<std::vector<std::pair<std::string, std::string>>()> texture_pack_choices_;
+  std::function<std::string()> texture_pack_active_;
+  std::function<void(const std::string&)> texture_pack_enable_;
+  std::function<void()> open_workshop_;
+  static void ChooseTexturePackFolder() {
     {
+      std::lock_guard lock(texture_pack_folder_choice.mutex);
+      if (texture_pack_folder_choice.busy) return;
+      texture_pack_folder_choice.busy = true;
+    }
+    const std::string current = Get("kk_texture_pack_own_folder");
+    SDL_ShowOpenFolderDialog([](void*, const char* const* files, int) {
+      std::lock_guard lock(texture_pack_folder_choice.mutex);
+      if (files && files[0]) texture_pack_folder_choice.selected = files[0];
+      texture_pack_folder_choice.busy = false;
+    }, nullptr, nullptr, current.empty() ? nullptr : current.c_str(), false);
+  }
+  void TexturePackItems(std::vector<Item>& items) {
+    items.push_back(Section("Texture pack"));
+    if (in_game_ || !texture_pack_choices_) {
+      const bool have = !Get("native_texture_pack_folder").empty();
       Item it = CvarToggle("Texture pack",
                            "Replaces the game's textures with the sharper ones from the installed texture pack. You "
                            "can switch it at any time, also from the pause menu, and it changes straight away.",
                            "native_texture_pack");
       items.push_back(std::move(Disable(it, !have && !GetBool("native_texture_pack"),
-                                        in_game_ ? "No texture pack is installed. Install one in the launcher's "
-                                                   "Settings > Graphics."
-                                                 : "No texture pack is installed. Download the HD texture pack or "
-                                                   "import a ZIP below.")));
+                                        "No texture pack is on. Choose one in the launcher's Workshop.")));
+      return;
     }
-    if (in_game_) return;
-    auto& service = Service::Get();
-    const content::Status st = service.Ready() ? service.Get(Kind::kTexturePack) : content::Status{};
     {
+      const auto choices = texture_pack_choices_();
+      const std::string active = texture_pack_active_();
       Item it;
-      it.type = ItemType::kInfo;
-      it.label = "Installed";
-      it.description = "The texture pack in your user folder that Texture pack uses.";
-      it.value_text = st.installed ? (st.imported ? F("Your texture pack ({0})", {st.installed_name})
-                                                  : T(std::string("HD texture pack")))
-                      : have       ? T(std::string("Your own folder"))
-                                   : T(std::string("None"));
+      it.type = ItemType::kChoice;
+      it.label = "Texture pack";
+      it.description = "Which texture pack the game uses. Only one is on at a time: choosing one switches the other "
+                       "off. Original textures are the game's own. You can switch at any time, also from the pause "
+                       "menu, and it changes straight away.";
+      std::vector<std::string> keys;
+      for (const auto& [key, name] : choices) {
+        keys.push_back(key);
+        it.options.push_back(name);
+        if (key == active) it.index = int(keys.size()) - 1;
+      }
+      if (it.index < 0) it.index = 0;
+      it.on_choice = [this, keys](int i) {
+        if (i >= 0 && i < int(keys.size()) && texture_pack_enable_) texture_pack_enable_(keys[size_t(i)]);
+      };
       items.push_back(std::move(it));
     }
-    items.push_back(ContentDownloadItem(Kind::kTexturePack, st));
+    items.push_back(ActionItem("Texture packs in the Workshop",
+                               "Download the HD and UHD texture packs, import your own from a ZIP file, see what each "
+                               "one is and remove the ones you no longer want.",
+                               "Open Workshop", [this] { if (open_workshop_) open_workshop_(); }));
     {
-      Item imp = ActionItem("Import ZIP",
-                            "Already have a texture pack as a ZIP file? Choose it and the launcher unpacks it, checks "
-                            "it and turns it on. Your ZIP file is kept.",
-                            "Choose ZIP", [this] { ContentAction(Kind::kTexturePack, kContentImport); });
-      {
-        std::lock_guard lock(texture_pack_zip_choice.mutex);
-        imp.disabled = texture_pack_zip_choice.busy || st.Busy();
-      }
-      if (st.Busy()) imp.disabled_note = "A download or install is running.";
-      items.push_back(std::move(imp));
-    }
-    items.push_back(ContentRemoveItem(Kind::kTexturePack, st));
-    {
-      const std::string folder = Get("native_texture_pack_folder");
-      Item it = ActionItem("Texture pack folder", "Choose the folder containing your texture pack.",
-                           folder.empty() ? T("Choose folder") : folder, [] {
-        {
-          std::lock_guard lock(texture_pack_folder_choice.mutex);
-          if (texture_pack_folder_choice.busy) return;
-          texture_pack_folder_choice.busy = true;
-        }
-        const std::string current = Get("native_texture_pack_folder");
-        SDL_ShowOpenFolderDialog([](void*, const char* const* files, int) {
-          std::lock_guard lock(texture_pack_folder_choice.mutex);
-          if (files && files[0]) texture_pack_folder_choice.selected = files[0];
-          texture_pack_folder_choice.busy = false;
-        }, nullptr, nullptr, current.empty() ? nullptr : current.c_str(), false);
-      });
-      it.on_default = [] { Reset("native_texture_pack_folder"); };
+      const std::string folder = Get("kk_texture_pack_own_folder");
+      Item it = ActionItem("Texture pack folder",
+                           "A texture pack in a folder of your own (with its pack.txt). Choosing one switches it on.",
+                           folder.empty() ? T("Choose folder") : folder, [] { ChooseTexturePackFolder(); });
       { std::lock_guard lock(texture_pack_folder_choice.mutex); it.disabled = texture_pack_folder_choice.busy; }
       items.push_back(std::move(it));
     }
@@ -1846,6 +1840,13 @@ class SettingsPages {
       case Problem::kBadManifest: return T("Its pack.txt does not start with KKTP 1, or a line in it is broken.");
       case Problem::kMissingFile: return T("A file listed in its pack.txt is missing.");
       case Problem::kNoMovies: return T("It has no cutscene files.");
+      // Task 209: the Workshop's imports (MODDING.md's folder structure).
+      case Problem::kNoModToml: return T("It has no mod.toml. A mod is one folder with its mod.toml.");
+      case Problem::kManyMods: return T("It has more than one mod.toml. Put one mod in each ZIP file.");
+      case Problem::kIsTexturePack: return T("It is a texture pack, not a mod. Use Import texture pack.");
+      case Problem::kIsMod: return T("It is a mod, not a texture pack. Use Import mod.");
+      case Problem::kNoModTextures: return T("It is a texture pack mod without textures/pack.txt.");
+      case Problem::kBadModType: return T("Its mod.toml has no type the game knows (texture-pack, settings or cutscenes).");
       case Problem::kNone: break;
     }
     return {};
@@ -3039,8 +3040,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   void DrawBackdrop(ImDrawList* dl) {
     const float s = S();
-    const bool home = !InSetup() && ((page_ == kHome && (play_ == PlayView::kNone || play_ == PlayView::kMenu)) ||
-                                     (page_ == kWorkshop && play_ == PlayView::kNone && WorkshopHub()));
+    const bool home = !InSetup() && page_ == kHome && (play_ == PlayView::kNone || play_ == PlayView::kMenu);
     home_mix_ = ui::Approach(home_mix_ * 100.0f, home ? 100.0f : 0.0f, 9.0f) / 100.0f;
     slide_clock_ += std::min(ImGui::GetIO().DeltaTime, 0.1f);
     const ImVec2 p1(o_.x + w_, o_.y + h_);
@@ -3181,10 +3181,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     side_focus_ = -1;
     play_ = PlayView::kNone;
     page_ = page;
-    if (page == kWorkshop) {  // owner, 18 Oct: its menu of three first
-      EnsureWorkshop();
-      workshop_->SetView(Workshop::View::kHub);
-    }
+    if (page == kWorkshop) EnsureWorkshop();  // task 209: one page with three rows
   }
 
   // ---------------------------------------------------------- bottom bar ---
@@ -3237,9 +3234,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       }
     }
     if (play_ != PlayView::kNone) return PlayPrompts();
-    if (page_ == kWorkshop && workshop_ && (!WorkshopTextureList() || tex_row_focus_)) {  // job J8; owner, 18 Oct
-      p = WorkshopHub() ? std::vector<ui::Prompt>{{Action::kAccept, "Select"}, {Action::kBack, "Back"}}
-                        : workshop_->Prompts(tex_row_focus_);
+    if (page_ == kWorkshop && workshop_) {  // job J8; task 209: one page with three rows
+      p = workshop_->Prompts();
       if (CanPlay()) p.insert(p.end() - 1, {Action::kPlay, "Play"});
       return p;
     }
@@ -3303,12 +3299,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         OpenPlayView(PlayView::kExtras);
         play_lists_[int(PlayView::kExtras)].focus = focus;
         REXLOG_INFO("KK: back from Graphics to Extras, row {}", focus);
-      } else if (page_ == kWorkshop && workshop_) {  // owner, 18 Oct: inner page, then the menu of three, then Home
-        switch (WorkshopBackStep(workshop_->InDetail(), WorkshopHub())) {
-          case WorkshopBack::kCloseInner: workshop_->Back(); break;
-          case WorkshopBack::kToMenu: workshop_->SetView(Workshop::View::kHub); break;
-          case WorkshopBack::kToHome: GoTo(kHome); break;
-        }
+      } else if (page_ == kWorkshop && workshop_) {  // task 209: an inner page back to its card, then Home
+        if (!workshop_->Back()) GoTo(kHome);
       } else if (page_ != kHome) GoTo(kHome);
       else if (status_focus_ || side_focus_ >= 0) status_focus_ = false, side_focus_ = -1;  // back to the menu
       else OpenQuit();
@@ -4672,13 +4664,29 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                {Gb(info.zip_size)}),
              16, color::kTextDim);
       }
-      para(T("It downloads in the background: the setup goes on, and you can use the launcher meanwhile."), 14.5f,
-           color::kTextFaint);
-      DrawContentCard(dl, kind);
-      y += 8 * s;
-      if (stage == 6) {
+      const auto have = content::Service::Get().Get(kind);
+      const bool already = have.installed, running = !already && (have.Busy() || have.stage == content::Stage::kPaused);
+      if (already || running) {
+        para(already ? (stage == 6 ? T("Already installed. Turn it on or off at any time in the Workshop or Settings > Graphics.")
+                                   : T("Already installed. Turn them on or off at any time in Settings > Advanced."))
+                     : T("Already downloading. It carries on in the background."),
+             15.5f, color::kGood);
+        DrawContentCard(dl, kind);
+        y += 8 * s;
+        entries.push_back({"Continue", true, [this, stage, already] {
+                             FinishSetupContentStep(stage, already ? "already installed: continue" : "already downloading: continue");
+                           }});
+      } else
+        para(T("It downloads in the background: the setup goes on, and you can use the launcher meanwhile."), 14.5f,
+             color::kTextFaint);
+      if (!already && !running) {
+        DrawContentCard(dl, kind);
+        y += 8 * s;
+      }
+      if (already || running) {
+      } else if (stage == 6) {
         entries.push_back({"Download HD texture pack", true, [this] { AskContentDownload(content::Kind::kTexturePack, 6); }});
-        entries.push_back({"I already have a texture pack", true, [this] { ChooseTexturePackZip(6); }});
+        entries.push_back({"I already have a texture pack", true, [this] { ChooseImportZip(content::ImportTarget::kTexturePack, 6); }});
         entries.push_back({"Skip", true, [this] { FinishSetupContentStep(6, "skipped"); }});
       } else {
         entries.push_back({"Yes, restore them", true, [this] { AskContentDownload(content::Kind::kCutscenes, 7); }});
@@ -4982,132 +4990,46 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   }
 
   // ------------------------------------------------------------ Workshop ---
-  // Owner, 18 Oct: the Workshop opens a choice of three, drawn like the Play menu (the clear stills, the game's
-  // logo, the large entries, what the focused one holds in the status row): Mods, Texture packs, Other TRG
-  // projects and games. Mods and the projects are workshop.cpp's pages; Texture packs is the HD texture pack's
-  // rows (the same rows as Settings > Graphics > Texture pack) over the texture pack mods row.
+  // Task 209 (owner, 18 Oct): one page with three rows of cards (workshop.h): texture packs, mods, other TRG
+  // projects and games. The launcher gives it its pop-ups, file dialogs, downloads and stills (WorkshopHost).
+  // It is made when the launcher starts (StartContent), so the texture pack rule and Settings > Graphics have the
+  // mods scan (done on its worker) from the start.
   void EnsureWorkshop() {
-    if (!workshop_) workshop_ = std::make_unique<Workshop>(immediate_, paths_.user_dir, paths_.config_path);
-  }
-  bool WorkshopHub() const { return !workshop_ || workshop_->view() == Workshop::View::kHub; }
-  // Texture packs with its rows on screen (no mod's page open).
-  bool WorkshopTextureList() const {
-    return workshop_ && workshop_->view() == Workshop::View::kTexturePacks && !workshop_->InDetail();
-  }
-  static const char* WorkshopViewName(Workshop::View view) {
-    switch (view) {
-      case Workshop::View::kMods: return "Mods";
-      case Workshop::View::kTexturePacks: return "Texture packs";
-      case Workshop::View::kProjects: return "Other TRG projects and games";
-      default: return nullptr;
-    }
+    if (workshop_) return;
+    workshop_ = std::make_unique<Workshop>(immediate_, paths_.user_dir, paths_.config_path);
+    WorkshopHost h;
+    h.download = [this](content::Kind kind) { AskContentDownload(kind, 0); };
+    h.progress = [this](content::Kind kind) { OpenContentProgress(kind, 0); };
+    h.remove = [this](content::Kind kind) { ConfirmContentRemove(kind); };
+    h.import_zip = [this](content::ImportTarget target) { ChooseImportZip(target, 0); };
+    h.choose_folder = [] { ChooseTexturePackFolder(); };
+    h.ask = [this](const std::string& title, const std::string& body, std::vector<std::string> buttons, int cancel,
+                   std::function<void(int)> then) { OpenModal(title, body, std::move(buttons), cancel, std::move(then), cancel); };
+    h.status = [this](const std::string& line) { Status(line); };
+    h.open_url = [](const std::string& url) { OpenUrl(url); };
+    h.still = [this](int i, float* aspect) -> rex::ui::ImmediateTexture* {
+      if (slides_.empty()) return nullptr;
+      const Slide& sl = slides_[size_t(i) % slides_.size()];
+      *aspect = sl.aspect;
+      return sl.sharp;
+    };
+    h.save = [] { ++g_changes; };
+    workshop_->SetHost(std::move(h));
+    texture_pack_choices_ = [this] { return workshop_->TexturePackChoices(); };
+    texture_pack_active_ = [this] { return workshop_->ActiveTexturePack(); };
+    texture_pack_enable_ = [this](const std::string& key) { workshop_->EnableTexturePack(key); };
+    open_workshop_ = [this] { GoTo(kWorkshop); };
   }
 
   void DrawWorkshopHeader(ImDrawList* dl) {
-    if (DrawCrumbs(dl, "Workshop", workshop_ ? WorkshopViewName(workshop_->view()) : nullptr))
-      workshop_->SetView(Workshop::View::kHub);
-  }
-
-  std::vector<HomeEntry> WorkshopEntries() {
-    return {{"Mods", true, [this] { workshop_->SetView(Workshop::View::kMods); }},
-            {"Texture packs", true,
-             [this] {
-               tex_row_focus_ = false;
-               workshop_->SetView(Workshop::View::kTexturePacks);
-             }},
-            {"Other TRG projects and games", true, [this] { workshop_->SetView(Workshop::View::kProjects); }},
-            {"Back", true, [this] { GoTo(kHome); }}};
-  }
-
-  void DrawWorkshopHub(ImDrawList* dl) {
-    const float s = S();
-    const float x = o_.x + Margin(), a = home_mix_;
-    std::vector<HomeEntry> entries = WorkshopEntries();
-    const float y = DrawLogo(dl, x, entries.size(), a);
-    const float room = o_.y + h_ - 150 * s - y;
-    const float item_h = std::clamp(room / float(entries.size()), 28 * s, 42 * s);
-    if (const int i = DrawMenu(dl, entries, workshop_focus_, x, y, a, item_h); i >= 0) {
-      entries[size_t(i)].action();
-      return;
-    }
-    // What the focused entry holds, in the status row's columns.
-    std::vector<std::pair<std::string, std::string>> cols;
-    const std::string label = entries[size_t(std::clamp(workshop_focus_, 0, int(entries.size()) - 1))].label;
-    if (label == "Mods") {
-      const KongMods::Counts c = workshop_->ModCounts();
-      cols = {{"Mods", T("Switch mods on or off and read how to make your own.")},
-              {"Switched on", c.scanned ? F("{0} of {1}", {std::to_string(c.mods_on), std::to_string(c.mods)})
-                                        : T("Looking for mods")}};
-    } else if (label == "Texture packs") {
-      auto& service = content::Service::Get();
-      const content::Status st = service.Ready() ? service.Get(content::Kind::kTexturePack) : content::Status{};
-      const KongMods::Counts c = workshop_->ModCounts();
-      cols = {{"Texture packs", T("The HD texture pack, your own texture packs and texture pack mods.")},
-              {"HD texture pack", st.installed ? T("Installed") : st.Busy() ? T("Downloading") : T("Not installed")},
-              {"Texture pack mods", F("{0} of {1}", {std::to_string(c.texture_packs_on), std::to_string(c.texture_packs)})}};
-    } else if (label == "Other TRG projects and games") {
-      cols = {{"Projects", T("More recompiled games and projects by TRG, with their download pages.")},
-              {"On GitHub", F("{0} projects", {std::to_string(workshop::kProjectCount)})}};
-    }
-    DrawInfoColumns(dl, x, o_.y + h_ - 120 * s, a, cols);
-  }
-
-  // Workshop > Texture packs: the HD texture pack's rows (TexturePackItems, as on Settings > Graphics) with
-  // their description at the right, then the texture pack mods row under them. Down from the last row moves to
-  // the mods row, Up from it comes back; the mouse takes the focus where it points.
-  void DrawTexturePacks(ImDrawList* dl) {
-    const float s = S();
-    const ui::Fonts f = ui::GetFonts();
-    std::vector<Item> items;
-    TexturePackItems(items);
-    const float top = o_.y + 104 * s, bottom = o_.y + h_ - 96 * s;
-    const float x0 = o_.x + Margin(), x1 = o_.x + w_ - Margin();
-    const float list_w = std::round((x1 - x0) * 0.56f);
-    const float list_bottom = std::max(top + 150 * s, bottom - 206 * s);
-    ui::ListState& st = lists_[kWorkshop * 4 + kNoSubPage];
-    const bool active = !modal_.open;
-    int last = -1;
-    for (int i = 0; i < int(items.size()); ++i)
-      if (items[size_t(i)].type != ItemType::kSection) last = i;
-    if (active && !tex_row_focus_ && st.focus == last && input_.Pressed(Action::kDown)) {
-      input_.Consume(Action::kDown);
-      tex_row_focus_ = true;
-      ui::Cue(ui::Sound::kMove);
-    } else if (active && tex_row_focus_ && input_.Pressed(Action::kUp)) {
-      input_.Consume(Action::kUp);
-      tex_row_focus_ = false;
-      ui::Cue(ui::Sound::kMove);
-    }
-    if (active && tex_row_focus_ && input_.mouse_moved() &&
-        ImGui::IsMouseHoveringRect(ImVec2(x0, top), ImVec2(x0 + list_w, list_bottom), false))
-      tex_row_focus_ = false;
-    st.hide_focus = tex_row_focus_;
-    const Item* focused = ui::DrawList(dl, items, st, ImVec2(x0, top), ImVec2(x0 + list_w, list_bottom), m_, input_,
-                                       active && !tex_row_focus_);
-    ui::DrawDescription(dl, tex_row_focus_ ? nullptr : focused, ImVec2(x0 + list_w + 76 * s, top + 18 * s),
-                        ImVec2(x1, list_bottom), m_);
-    // The texture pack mods (Kong mods of the texture pack type).
-    const float cy = list_bottom + 14 * s, cfs = 13 * s;
-    const std::string caption = Upper(T("Texture pack mods"));
-    const float cw = ui::TrackedWidth(f.display, cfs, caption, 2.2f * s);
-    ui::DrawTracked(dl, f.display, cfs, ImVec2(x0 + 2 * s, cy), color::kAccent, caption, 2.2f * s);
-    dl->AddLine(ImVec2(x0 + cw + 16 * s, std::round(cy + cfs * 0.55f)), ImVec2(x1, std::round(cy + cfs * 0.55f)),
-                color::kHairline, 1.0f);
-    if (workshop_->DrawTextureModsRow(dl, ImVec2(x0, cy + 28 * s), ImVec2(x1, bottom), m_, input_, active,
-                                      tex_row_focus_))
-      tex_row_focus_ = true;
-    // Kept for the prompts (the items live until the next frame's rebuild).
-    focused_items_ = std::move(items);
-    focused_ = !tex_row_focus_ && st.focus >= 0 && st.focus < int(focused_items_.size())
-                   ? &focused_items_[size_t(st.focus)]
-                   : nullptr;
+    const std::string sub = workshop_ ? workshop_->DetailTitle() : std::string();
+    if (DrawCrumbs(dl, "Workshop", sub.empty() ? nullptr : sub.c_str()))
+      while (workshop_ && workshop_->Back()) {}
   }
 
   // Job J8: the Workshop page (workshop.cpp), between the top bar and the prompts.
   void DrawWorkshop(ImDrawList* dl) {
     EnsureWorkshop();
-    if (WorkshopHub()) return DrawWorkshopHub(dl);
-    if (WorkshopTextureList()) return DrawTexturePacks(dl);
     const float s = S();
     workshop_->Draw(dl, ImVec2(o_.x + Margin(), o_.y + 96 * s), ImVec2(o_.x + w_ - Margin(), o_.y + h_ - 96 * s), m_,
                     input_, !modal_.open);
@@ -6066,7 +5988,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       const auto kind = content::Kind(i);
       const auto st = service.Get(kind);
       if (!st.Busy() || content::Quiet(kind)) continue;
-      if (MustFinish(st, kind == content::Kind::kTexturePack && content_importing_)) finishing = true;
+      if (MustFinish(st, kind == content::Kind::kImport)) finishing = true;
       else running.push_back(kind);
     }
     if (finishing) {
@@ -6077,9 +5999,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (running.empty()) return true;
     const bool tex = std::find(running.begin(), running.end(), content::Kind::kTexturePack) != running.end();
     const bool cut = std::find(running.begin(), running.end(), content::Kind::kCutscenes) != running.end();
+    const bool uhd = std::find(running.begin(), running.end(), content::Kind::kUhd) != running.end();
     REXLOG_INFO("KK content: Play while downloading ({}{}): asking", tex ? "tex " : "", cut ? "cut" : "");
     OpenModal("Your download will pause while you play",
-              tex && cut ? "The HD texture pack and the PS2 cutscenes carry on downloading when you come back to the launcher. W"
+              uhd ? "Your downloads carry on when you come back to the launcher. What was downloaded so far is kept."
+              : tex && cut ? "The HD texture pack and the PS2 cutscenes carry on downloading when you come back to the launcher. W"
                                  "hat was downloaded so far is kept." : tex ? "The HD texture pack carries on downloading when you come back to the launcher. What was downloaded so far is kept." : "The PS2 cutscenes carry on downloading when you come back to the launcher. What was downloaded so far is kept.",
               {"Play now", "Stay here"}, 1, [this, running](int i) {
                 if (i != 0) {
@@ -6133,7 +6057,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       if (content::Quiet(kind)) continue;
       const auto st = service.Get(kind);
       busy = busy || st.Busy();
-      finishing = finishing || MustFinish(st, kind == content::Kind::kTexturePack && content_importing_);
+      finishing = finishing || MustFinish(st, kind == content::Kind::kImport);
     }
     if (play_wait_ == PlayWait::kPausing) {
       if (finishing) {  // the download was already past the point of pausing: wait for its install instead
@@ -6185,18 +6109,18 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 #if defined(KK_DEV_TOOLS)
     if (dev_setup_ >= 0) return;  // screenshots of the page
 #endif
+    // Task 209: installed or downloading from before, the page still shows (with "Already installed" and Continue)
+    // instead of being skipped without a word.
     const auto st = service.Get(stage == 6 ? content::Kind::kTexturePack : content::Kind::kCutscenes);
-    if (st.installed || st.Busy() || st.stage == content::Stage::kPaused)
-      FinishSetupContentStep(stage, st.installed ? "already installed: page skipped" : "already downloading: page skipped");
-    else
-      REXLOG_INFO("KK: setup: {} page", stage == 6 ? "texture pack" : "PS2 cutscenes");
+    REXLOG_INFO("KK: setup: {} page{}", stage == 6 ? "texture pack" : "PS2 cutscenes",
+                st.installed ? " (already installed)" : st.Busy() || st.stage == content::Stage::kPaused ? " (already downloading)" : "");
   }
 
   void OnContentAction(content::Kind kind, int verb) {
     switch (verb) {
       case kContentDownload: AskContentDownload(kind, 0); break;
       case kContentWatch: OpenContentProgress(kind, 0); break;
-      case kContentImport: ChooseTexturePackZip(0); break;
+      case kContentImport: ChooseImportZip(content::ImportTarget::kTexturePack, 0); break;
       case kContentRemove: ConfirmContentRemove(kind); break;
       case kContentCancel: ConfirmContentCancel(kind, false); break;
     }
@@ -6208,7 +6132,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     using namespace content;
     const bool tex = kind == Kind::kTexturePack;
     const Info& info = InfoFor(kind);
-    std::string body = tex ? F("The HD texture pack is a {0} GB download. After that it is checked and unpacked. "
+    std::string body = kind == Kind::kUhd
+                           ? F("Kong UHD Textures is a {0} GB download. After that it is checked and unpacked. "
+                               "Depending on your connection this takes from a few minutes to an hour or more.",
+                               {Gb(info.zip_size)})
+                       : tex ? F("The HD texture pack is a {0} GB download. After that it is checked and unpacked. "
                                "Depending on your connection this takes from a few minutes to an hour or more.",
                                {Gb(info.zip_size)})
                            : F("The restored PS2 cutscenes are a {0} GB download. After that they are checked and "
@@ -6217,8 +6145,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                                {Gb(info.zip_size)});
     body += std::string(" ") + T("It runs in the background, so you can carry on meanwhile. If the connection drops or "
                                  "you close the launcher, it continues from where it stopped.");
-    const auto other = Service::Get().Get(tex ? Kind::kCutscenes : Kind::kTexturePack);
-    if (other.Busy()) body += std::string(" ") + T("It starts when the download before it has finished.");
+    bool other_busy = false;
+    for (const Kind k : {Kind::kTexturePack, Kind::kCutscenes, Kind::kUhd})
+      other_busy = other_busy || (k != kind && Service::Get().Get(k).Busy());
+    if (other_busy) body += std::string(" ") + T("It starts when the download before it has finished.");
     REXLOG_INFO("KK content: asking before the {} download ({})", info.id, setup_stage ? "setup" : "Settings");
     OpenModal("This can take a while", body, {"Minimise and notify me", "Watch progress"}, -1,
               [this, kind, setup_stage](int i) {
@@ -6303,7 +6233,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       }
       case Stage::kPaused: return st.total ? F("Paused at {0} of {1} GB", {Gb(st.done), Gb(st.total)}) : T("Paused");
       case Stage::kVerifying: return T("Checking the download");
-      case Stage::kUnpacking: return T("Unpacking the files");
+      case Stage::kUnpacking:  // task 209: a big pack takes minutes: how far it is, steadily
+        return st.total ? F("Unpacking: {0} of {1} GB", {Gb(st.done), Gb(st.total)}) : T("Unpacking the files");
       case Stage::kRemoving: return T("Removing");
       case Stage::kInstalled: return T("Installed");
       case Stage::kFailed: return T("Stopped");
@@ -6317,9 +6248,23 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     return float(std::clamp(double(st.done) / double(st.total), 0.0, 1.0));
   }
   static bool OtherRunning(content::Kind kind) {
-    const auto st = content::Service::Get().Get(kind == content::Kind::kTexturePack ? content::Kind::kCutscenes
-                                                                                    : content::Kind::kTexturePack);
-    return st.Busy() && st.stage != content::Stage::kQueued;
+    for (const auto k : {content::Kind::kTexturePack, content::Kind::kCutscenes, content::Kind::kUhd, content::Kind::kImport}) {
+      if (k == kind) continue;
+      const auto st = content::Service::Get().Get(k);
+      if (st.Busy() && st.stage != content::Stage::kQueued) return true;
+    }
+    return false;
+  }
+  // Task 209: what a download or install is called in its pop-ups and on the strip.
+  static const char* ContentName(content::Kind kind) {
+    switch (kind) {
+      case content::Kind::kTexturePack: return "HD texture pack";
+      case content::Kind::kCutscenes: return "PS2 cutscenes";
+      case content::Kind::kUhd: return "Kong UHD Textures";
+      case content::Kind::kImport:
+        return content::Service::Get().Get(content::Kind::kImport).target == content::ImportTarget::kMod ? "Mod" : "Texture pack";
+      default: return "";
+    }
   }
 
   // The progress pop-up ("Watch progress", or a Settings row while a download runs): the line, the bar,
@@ -6327,7 +6272,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // opens it again when they change); it closes when the job ends, and the finished or error pop-up follows.
   static int ContentWatchMode(const content::Status& st, bool importing) {
     using content::Stage;
-    if (importing) return 3;
+    if (importing) return st.stage == Stage::kRemoving ? 3 : 2;  // task 209: an import can be cancelled
     if (st.stage == Stage::kPaused) return 1;
     if (st.stage == Stage::kUnpacking || st.stage == Stage::kRemoving) return 2;
     return 0;
@@ -6336,7 +6281,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     using namespace content;
     const bool tex = kind == Kind::kTexturePack;
     const auto st = Service::Get().Get(kind);
-    const bool importing = tex && content_importing_;
+    const bool importing = kind == Kind::kImport;
+    const bool mod_import = importing && Service::Get().Get(kind).target == ImportTarget::kMod;
     const int mode = ContentWatchMode(st, importing);
     std::vector<std::string> buttons;
     if (mode == 0) buttons = {"Pause", "Run in background", "Cancel"};
@@ -6344,12 +6290,13 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     else if (mode == 2) buttons = {"Run in background", "Cancel"};
     else buttons = {"Run in background"};
     const int background = mode <= 1 ? 1 : 0;
-    const std::string title = importing ? "Installing your texture pack"
+    const std::string title = importing ? (mod_import ? "Installing your mod" : "Installing your texture pack")
+                              : kind == Kind::kUhd ? "Downloading Kong UHD Textures"
                               : tex     ? "Downloading the HD texture pack"
                                         : "Downloading the PS2 cutscenes";
     OpenModal(title,
               importing ? T("Your ZIP file is checked and unpacked. It carries on in the background if you leave "
-                            "this pop-up.")
+                            "this pop-up, and Cancel stops it without changing anything you have installed.")
                         : T("It carries on in the background if you leave this pop-up. If the connection drops or "
                             "you close the launcher, it continues from where it stopped."),
               buttons, background,
@@ -6380,6 +6327,19 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   // Cancel (from the progress pop-up, or the Settings row): asked first; what was downloaded is deleted.
   void ConfirmContentCancel(content::Kind kind, bool from_progress, int setup_stage = 0) {
+    if (kind == content::Kind::kImport) {  // task 209: nothing to keep; the staging folder is deleted
+      OpenModal("Cancel the install?", "Nothing is installed and everything you had stays as it was. Your ZIP file is kept.",
+                {"Cancel install", "Keep going"}, 1, [this, from_progress, setup_stage](int i) {
+                  if (i == 0) {
+                    content::Service::Get().Cancel(content::Kind::kImport);
+                    REXLOG_INFO("KK content: import cancelled by the player");
+                    Status("Install cancelled.");
+                  } else if (from_progress) {
+                    OpenContentProgress(content::Kind::kImport, setup_stage);
+                  }
+                });
+      return;
+    }
     OpenModal("Cancel the download?",
               "What was downloaded so far is deleted. You can download it again at any time.",
               {"Cancel download", "Keep downloading"}, 1, [this, kind, from_progress, setup_stage](int i) {
@@ -6408,16 +6368,18 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
               });
   }
 
-  // "I already have a texture pack" / Import ZIP: the system's file dialog; the chosen ZIP is installed
-  // (TickContent) with the progress pop-up open.
-  void ChooseTexturePackZip(int setup_stage) {
+  // "I already have a texture pack" (setup), the Workshop's Import texture pack and Import mod: the system's file
+  // dialog; the chosen ZIP is installed (TickContent) with the progress pop-up open.
+  void ChooseImportZip(content::ImportTarget target, int setup_stage) {
     {
       std::lock_guard lock(texture_pack_zip_choice.mutex);
       if (texture_pack_zip_choice.busy) return;
       texture_pack_zip_choice.busy = true;
+      texture_pack_zip_choice.target = target;
     }
     content_import_setup_ = setup_stage;
-    REXLOG_INFO("KK content: choosing a texture pack ZIP ({})", setup_stage ? "setup" : "Settings");
+    REXLOG_INFO("KK content: choosing a {} ZIP ({})", target == content::ImportTarget::kMod ? "mod" : "texture pack",
+                setup_stage ? "setup" : "Workshop");
     static const SDL_DialogFileFilter kZip[] = {{"ZIP", "zip"}};
     SDL_ShowOpenFileDialog([](void*, const char* const* files, int) {
       std::lock_guard lock(texture_pack_zip_choice.mutex);
@@ -6430,9 +6392,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // or error pop-up (shown as soon as no other pop-up is open and the shader screen is not up).
   void ContentEnded(content::Kind kind, const content::Status& st) {
     using namespace content;
-    const bool tex = kind == Kind::kTexturePack;
-    const bool imported = tex && content_importing_;
-    if (tex) content_importing_ = false;
+    const bool tex = kind == Kind::kTexturePack || kind == Kind::kUhd;
+    const bool imported = kind == Kind::kImport;
+    const bool mod_import = imported && st.target == ImportTarget::kMod;
     if (content_watch_ == int(kind)) {
       if (modal_.open && modal_.title == content_watch_title_) modal_.open = false;
       const int setup_stage = content_watch_setup_;
@@ -6440,13 +6402,20 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       if (setup_stage) FinishSetupContentStep(setup_stage, st.stage == Stage::kInstalled ? "installed" : "failed");
     }
     if (st.stage == Stage::kInstalled) {
-      const char* title = imported ? "Texture pack installed" : tex ? "HD texture pack installed" : "PS2 cutscenes restored";
-      const char* body =
-          imported ? "Your texture pack is installed and turned on. You can turn it off at any time in Settings > Graphics."
-          : tex    ? "The HD texture pack is installed and turned on. You can turn it off at any time in Settings > Graphics."
-                   : "The PS2 cutscenes are restored and turned on. They play in the game where the Xbox 360 version "
-                     "has none. You can turn them off at any time in Settings > Advanced.";
-      NotifyContentDone(kind, true, T(title), T(body));
+      std::string title = imported ? (mod_import ? "Mod installed" : "Texture pack installed")
+                          : kind == Kind::kUhd ? "Kong UHD Textures installed"
+                          : tex ? "HD texture pack installed" : "PS2 cutscenes restored";
+      std::string body =
+          mod_import ? F("{0} is in your mods folder. Switch it on in the Workshop's Mods row.", {st.installed_name})
+          : imported || kind == Kind::kUhd
+              ? F("{0} is installed and turned on. It is the only texture pack on: the one before it was switched off. "
+                  "Choose another at any time in the Workshop or in Settings > Graphics.",
+                  {st.installed_name})
+          : tex ? T("The HD texture pack is installed and turned on. It is the only texture pack on: the one before it "
+                    "was switched off. You can turn it off at any time in Settings > Graphics or the Workshop.")
+                : T("The PS2 cutscenes are restored and turned on. They play in the game where the Xbox 360 version "
+                    "has none. You can turn them off at any time in Settings > Advanced.");
+      NotifyContentDone(kind, true, T(title), body);
       content_popups_.push_back([this, title, body] { OpenModal(title, body, {"OK"}, 0, {}); });
       return;
     }
@@ -6473,8 +6442,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                  {Gb(st.space_needed), Gb(st.space_free)});
         break;
       default:
-        title = imported ? "Texture pack not installed" : "Download failed";
-        body = ContentError(st, tex);
+        title = imported ? (mod_import ? "Mod not installed" : "Texture pack not installed") : "Download failed";
+        body = ContentError(st, tex || imported);
+        if (imported) body += std::string(" ") + T("Nothing was installed and everything you had stays as it was.");
         break;
     }
     if (imported) buttons = {"OK"};
@@ -6526,7 +6496,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     dl->AddRectFilled(ImVec2(x0, y), ImVec2(right, y + h), ui::WithAlpha(IM_COL32(16, 18, 22, 255), 0.62f), r);
     dl->AddRect(ImVec2(x0, y), ImVec2(right, y + h), ui::WithAlpha(color::kText, 0.09f), r, 0, 1.0f * s);
     ui::DrawTracked(dl, f.display, 12 * s, ImVec2(x0 + pad, y + pad), color::kAccent,
-                    Upper(T(kind == Kind::kTexturePack ? "HD texture pack" : "PS2 cutscenes")), 2.6f * s);
+                    Upper(T(ContentName(kind))), 2.6f * s);
     float ry = y + pad + 26 * s;
     for (const Row& row : rows) {
       dl->AddText(f.text, 13.5f * s, ImVec2(x0 + pad, ry), color::kTextDim, T(row.label));
@@ -6571,7 +6541,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     dl->AddRectFilled(ImVec2(p0.x, p0.y + 5 * s), ImVec2(p1.x, p1.y + 5 * s), IM_COL32(0, 0, 0, int(40 * alpha)), r);
     dl->AddRectFilled(p0, p1, ui::WithAlpha(hovered ? IM_COL32(30, 33, 40, 255) : IM_COL32(16, 18, 22, 255), 0.72f * alpha), r);
     dl->AddRect(p0, p1, ui::WithAlpha(color::kText, (hovered ? 0.22f : 0.09f) * alpha), r, 0, 1.0f * s);
-    std::string caption = Upper(T(kind == Kind::kTexturePack ? "HD texture pack" : "PS2 cutscenes"));
+    std::string caption = Upper(T(ContentName(kind)));
     if (waiting) caption += "  " KK_DOT "  " + Upper(F("{0} more waiting", {std::to_string(waiting)}));
     ui::DrawTracked(dl, f.display, 11.5f * s, ImVec2(p0.x + pad, p0.y + pad), ui::WithAlpha(color::kAccent, alpha),
                     caption, 2.4f * s);
@@ -6750,31 +6720,58 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   void TickContent() {
     auto& service = content::Service::Get();
     if (!service.Ready()) return;
+    EnsureWorkshop();  // task 209: the texture pack rule needs the mods scan (its own worker)
     for (const auto& c : service.TakeChanges()) {
+      // Task 209: the service's events (content.h Change): a texture pack mod installed becomes the one texture pack
+      // on; a mod installed or removed is read again (and a removed one leaves the load order).
+      if (!c.name.empty() && c.name[0] == '@') {
+        REXLOG_INFO("KK content: {} {}", c.name, c.value);
+        if (c.name == "@texture-pack-mod") workshop_->OnTexturePackModInstalled(c.value);
+        else if (c.name == "@mod-installed") workshop_->OnModsChanged({});
+        else if (c.name == "@mod-removed") workshop_->OnModsChanged(c.value);
+        continue;
+      }
       if (!c.when_name.empty() && Get(c.when_name.c_str()) != c.when_value) continue;
       if (c.reset) Reset(c.name.c_str());
       else Set(c.name.c_str(), c.value);
       REXLOG_INFO("KK content: setting {} = {}", c.name, c.reset ? std::string("(default)") : c.value);
+      // The HD texture pack installed and turned on: the only texture pack on (texture pack mods off).
+      if (c.name == "native_texture_pack" && c.value == "true") workshop_->OnFolderPackOn();
+    }
+    {
+      std::string folder;
+      {
+        std::lock_guard lock(texture_pack_folder_choice.mutex);
+        folder.swap(texture_pack_folder_choice.selected);
+      }
+      if (!folder.empty()) {  // the player's own folder: remembered, and switched on (the only one on)
+        Set("kk_texture_pack_own_folder", folder);
+        ++g_changes;
+        REXLOG_INFO("KK content: your texture pack folder {}", folder);
+        workshop_->EnableTexturePack("folder");
+      }
     }
     {
       std::string zip;
+      content::ImportTarget target;
       {
         std::lock_guard lock(texture_pack_zip_choice.mutex);
         zip.swap(texture_pack_zip_choice.selected);
+        target = texture_pack_zip_choice.target;
       }
       if (!zip.empty()) {
-        const auto before = service.Get(content::Kind::kTexturePack);
-        service.Import(std::filesystem::path(std::u8string(zip.begin(), zip.end())));
+        const auto before = service.Get(content::Kind::kImport);
         if (!before.Busy()) {
+          service.Import(std::filesystem::path(std::u8string(zip.begin(), zip.end())), target);
           // The progress pop-up follows the install; on a setup page, Run in background goes on to the next step.
-          content_importing_ = true;
-          REXLOG_INFO("KK content: importing the chosen texture pack ZIP");
-          OpenContentProgress(content::Kind::kTexturePack, content_import_setup_);
+          REXLOG_INFO("KK content: importing the chosen ZIP");
+          OpenContentProgress(content::Kind::kImport, content_import_setup_);
         } else {
-          Status("Another download is running. Try again when it has finished.");
+          Status("Another import is running. Try again when it has finished.");
         }
       }
     }
+    workshop_->Tick();
     for (int i = 0; i < content::kKindCount; ++i) {
       const auto kind = content::Kind(i);
       const auto st = service.Get(kind);
@@ -6798,7 +6795,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
           REXLOG_WARN("KK content: {} failed: {}", content::InfoFor(kind).id, ContentError(st, tex));
           ContentEnded(kind, st);
         }
-        if (st.stage == content::Stage::kNone && tex) content_importing_ = false;
         last = st.stage;
       }
     }
@@ -6813,7 +6809,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       } else if (st.stage == content::Stage::kNone) {
         modal_.open = false;
         content_watch_ = -1;
-      } else if (const int mode = ContentWatchMode(st, kind == content::Kind::kTexturePack && content_importing_);
+      } else if (const int mode = ContentWatchMode(st, kind == content::Kind::kImport);
                  mode != content_watch_mode_) {
         // Pause and Continue swap in place (same buttons, same focus); otherwise the focus goes to Run in
         // background.
@@ -7319,6 +7315,14 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       else if (verb == "cancel") service.Cancel(kind);
       else if (verb == "remove") service.Remove(kind);
       else if (verb == "import") service.Import(std::filesystem::path(std::u8string(arg.begin(), arg.end())));
+      else if (verb == "choose" || verb == "choose-mod") {  // as if the import's file dialog returned this ZIP
+        std::lock_guard lock(texture_pack_zip_choice.mutex);
+        texture_pack_zip_choice.selected = arg;
+        texture_pack_zip_choice.target = verb == "choose" ? content::ImportTarget::kTexturePack : content::ImportTarget::kMod;
+      }
+      else if (verb == "download-uhd") service.Download(content::Kind::kUhd);
+      else if (verb == "cancel-uhd") service.Cancel(content::Kind::kUhd);
+      else if (verb == "cancel-import") service.Cancel(content::Kind::kImport);
       for (int i = 0; i < content::kKindCount; ++i) {
         const auto st = service.Get(content::Kind(i));
         REXLOG_INFO("KK dev: content {} stage {} error {} problem {} {} / {} installed {} name {}",
@@ -7351,6 +7355,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       content_import_setup_ = InSetup() && SetupStage() == 6 ? 6 : 0;
       std::lock_guard lock(texture_pack_zip_choice.mutex);
       texture_pack_zip_choice.selected = t.substr(11);
+      texture_pack_zip_choice.target = content::ImportTarget::kTexturePack;
       return;
     }
     if (t == "layout-check") {  // every settings page against settings_layout.h
@@ -7420,8 +7425,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   std::vector<Item> focused_items_;
   std::unique_ptr<Artbook> artbook_;  // Beta 7: made when Extras > Artbook first opens
   std::unique_ptr<Workshop> workshop_;  // job J8: made when the Workshop page first opens
-  int workshop_focus_ = 0;              // the Workshop's menu of three (owner, 18 Oct)
-  bool tex_row_focus_ = false;          // Workshop > Texture packs: the texture pack mods row has the focus
   const Item* focused_ = nullptr;
   Action pending_click_ = Action::kCount;
   int home_focus_ = 0;
@@ -7515,7 +7518,6 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   std::string play_wait_title_;
   int content_watch_ = -1, content_watch_mode_ = -1, content_watch_setup_ = 0;
   std::string content_watch_title_;
-  bool content_importing_ = false;
   int content_import_setup_ = 0;
   std::vector<std::function<void()>> content_popups_;
   uint64_t free_space_ = 0;

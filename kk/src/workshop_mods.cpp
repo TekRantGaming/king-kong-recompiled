@@ -18,6 +18,7 @@
 #include "launcher_text.h"
 #include "mods.h"
 #include "settings.h"
+#include "texture_packs_logic.h"
 #include "workshop_net.h"
 
 namespace kk {
@@ -75,7 +76,7 @@ std::string Join(const std::vector<std::string>& items, size_t total) {
   return out;
 }
 
-struct Scanned {
+struct ScanResult {
   std::vector<Mod> mods;
   std::vector<ws::Picture> pictures;  // per mod (empty: none)
 };
@@ -88,7 +89,7 @@ struct KongMods::Impl {
 
   // Worker: one scan at a time.
   std::mutex mutex;
-  std::shared_ptr<Scanned> result;  // set by the worker
+  std::shared_ptr<ScanResult> result;  // set by the worker
   std::thread worker;
   std::atomic<bool> scanning{false};
   bool scanned = false;
@@ -120,7 +121,7 @@ struct KongMods::Impl {
     if (worker.joinable()) worker.join();
     const fs::path dir = user_dir;
     worker = std::thread([this, dir] {
-      auto s = std::make_shared<Scanned>();
+      auto s = std::make_shared<ScanResult>();
       try {
         std::error_code ec;
         fs::create_directories(mods::UserDir(dir), ec);  // so the player finds the folder
@@ -144,7 +145,7 @@ struct KongMods::Impl {
   }
 
   void TakeScan() {
-    std::shared_ptr<Scanned> s;
+    std::shared_ptr<ScanResult> s;
     {
       std::lock_guard lock(mutex);
       s = std::move(result);
@@ -195,6 +196,19 @@ struct KongMods::Impl {
     return m && Shown(*m);
   }
 
+  // Every mod in tile order, whatever the filter shows (switched-on in load order, built-ins, the others).
+  std::vector<int> FullOrder() const {
+    std::vector<int> out;
+    for (const auto& id : enabled)
+      for (size_t i = 0; i < mods.size(); ++i)
+        if (mods[i].id == id) out.push_back(int(i));
+    for (size_t i = 0; i < mods.size(); ++i)
+      if (!IsOn(mods[i]) && mods[i].builtin) out.push_back(int(i));
+    for (size_t i = 0; i < mods.size(); ++i)
+      if (!IsOn(mods[i]) && !mods[i].builtin) out.push_back(int(i));
+    return out;
+  }
+
   void Reorder() {
     const int current = tile >= 0 && tile < int(order.size()) ? order[size_t(tile)] : -1;
     order.clear();
@@ -237,6 +251,18 @@ struct KongMods::Impl {
     const bool on = !IsOn(m);
     if (on && !m.Usable()) {
       ui::Cue(ui::Sound::kDeny);
+      return;
+    }
+    if (on && IsTexturePack(m)) {
+      // Task 209: one texture pack at a time. This one on turns the others off, the HD texture pack and the
+      // player's folder too (texture_packs_logic.h; the Workshop's texture pack row normally does this).
+      texpacks::Choice c{rex::cvar::GetFlagByName("native_texture_pack") == "true",
+                         rex::cvar::GetFlagByName("native_texture_pack_folder"), enabled};
+      c = texpacks::EnableMod(c, m.id, [this](const std::string& id) { const Mod* x = ById(id); return x && IsTexturePack(*x); });
+      enabled = c.mods;
+      rex::cvar::SetFlagByName("native_texture_pack", c.folder_on ? "true" : "false");
+      ui::Cue(ui::Sound::kOn);
+      Save("switched on (the only texture pack on)", m);
       return;
     }
     mods::SetEnabled(enabled, m.id, on);
@@ -594,6 +620,58 @@ struct KongMods::Impl {
     }
   }
 };
+
+std::vector<KongMods::Card> KongMods::Cards() {
+  impl_->TakeScan();
+  std::vector<Card> out;
+  for (const int i : impl_->FullOrder()) {
+    const Mod& m = impl_->mods[size_t(i)];
+    Card c;
+    c.id = m.id;
+    c.name = m.name;
+    c.author = m.author;
+    c.version = m.version;
+    c.description = m.description;
+    c.picture = impl_->textures.size() > size_t(i) ? impl_->textures[size_t(i)].get() : nullptr;
+    c.aspect = impl_->aspects.size() > size_t(i) ? impl_->aspects[size_t(i)] : 16.0f / 9.0f;
+    c.builtin = m.builtin;
+    c.on = impl_->IsOn(m);
+    c.position = impl_->Position(m);
+    c.usable = m.Usable();
+    c.conflict = !impl_->ConflictsOf(m).empty();
+    c.texture_pack = Impl::IsTexturePack(m);
+    c.dir = m.dir;
+    for (const Issue& is : m.issues)
+      if (!mods::IsWarning(is.problem)) c.problems.push_back(IssueText(is));
+    out.push_back(std::move(c));
+  }
+  return out;
+}
+bool KongMods::Scanned() {
+  impl_->TakeScan();
+  return impl_->scanned;
+}
+void KongMods::OpenMod(const std::string& id) {
+  impl_->TakeScan();
+  for (size_t k = 0; k < impl_->order.size(); ++k)
+    if (impl_->mods[size_t(impl_->order[k])].id == id) {
+      impl_->tile = int(k);
+      impl_->Open(impl_->order[k]);
+      return;
+    }
+  for (size_t i = 0; i < impl_->mods.size(); ++i)
+    if (impl_->mods[i].id == id) impl_->Open(int(i));
+}
+void KongMods::ReloadEnabled() {
+  impl_->enabled = mods::ParseEnabled(rex::cvar::GetFlagByName("kk_mods"));
+  impl_->Reorder();
+}
+void KongMods::Rescan() { impl_->Rescan(); }
+bool KongMods::IsTexturePack(const std::string& id) {
+  impl_->TakeScan();
+  const Mod* m = impl_->ById(id);
+  return m && Impl::IsTexturePack(*m);
+}
 
 KongMods::KongMods(rex::ui::ImmediateDrawer* drawer, fs::path user_dir, fs::path config_path)
     : impl_(std::make_unique<Impl>(drawer, std::move(user_dir), std::move(config_path))) {}

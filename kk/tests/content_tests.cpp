@@ -15,6 +15,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <set>
 #include <thread>
 
 namespace fs = std::filesystem;
@@ -189,6 +190,57 @@ static std::map<std::string, std::string> Apply(Service& s, std::map<std::string
 }
 
 static void PureTests() {
+  // Task 209: the import checks by name (before unpacking), mod.toml's top values, folder names.
+  CHECK(SafeFolderName("Kong UHD Textures") == "Kong UHD Textures");
+  CHECK(SafeFolderName("a|b:c<d>e?.") == "a-b-c-d-e-");
+  CHECK(SafeFolderName(" .. ") == "texture-pack" && SafeFolderName("") == "texture-pack");
+  CHECK(TomlTopValue("\xEF\xBB\xBFname = \"Kong\"\ntype='texture-pack'\n[settings]\nname = \"x\"\n", "type") == "texture-pack");
+  CHECK(TomlTopValue("name = \"Kong\"\n", "name") == "Kong");
+  CHECK(TomlTopValue("[settings]\nname = \"x\"\n", "name").empty());
+  CHECK(TomlTopValue("names = \"x\"\n", "name").empty());
+  {
+    auto names = [](std::vector<std::pair<std::string, uint64_t>> list) {
+      std::vector<ZipEntry> out;
+      for (auto& [n, size] : list) {
+        ZipEntry e;
+        e.name = n;
+        e.size = size;
+        e.directory = !n.empty() && n.back() == '/';
+        out.push_back(e);
+      }
+      return out;
+    };
+    const auto uhd = names({{"Kong UHD Textures/", 0}, {"Kong UHD Textures/mod.toml", 10}, {"Kong UHD Textures/picture.png", 5},
+                            {"Kong UHD Textures/textures/", 0}, {"Kong UHD Textures/textures/pack.txt", 9},
+                            {"Kong UHD Textures/textures/a.dds", 99}});
+    auto l = CheckImportNames(uhd, ImportTarget::kTexturePack, "zip");
+    CHECK(l.problem == Problem::kNone && l.kind == ZipKind::kModFolder && l.root == "Kong UHD Textures" &&
+          l.pack == "Kong UHD Textures/textures" && l.folder_name == "Kong UHD Textures" && l.has_textures);
+    CHECK(CheckImportType(ImportTarget::kTexturePack, "texture-pack", l) == Problem::kNone);
+    CHECK(CheckImportType(ImportTarget::kTexturePack, "settings", l) == Problem::kIsMod);
+    CHECK(CheckImportType(ImportTarget::kTexturePack, "", l) == Problem::kBadModType);
+    CHECK(CheckImportNames(uhd, ImportTarget::kMod, "zip").problem == Problem::kIsTexturePack);
+    l = CheckImportNames(names({{"mod.toml", 5}, {"textures/pack.txt", 5}, {"textures/x.dds", 5}}), ImportTarget::kTexturePack, "My Zip");
+    CHECK(l.problem == Problem::kNone && l.root.empty() && l.pack == "textures" && l.folder_name == "My Zip");
+    l = CheckImportNames(names({{"p/pack.txt", 5}, {"p/x.dds", 5}}), ImportTarget::kTexturePack, "z");
+    CHECK(l.problem == Problem::kNone && l.kind == ZipKind::kPlainPack && l.pack == "p" && l.folder_name == "p");
+    l = CheckImportNames(names({{"textures/pack.txt", 5}}), ImportTarget::kTexturePack, "Zip Name");
+    CHECK(l.kind == ZipKind::kPlainPack && l.folder_name == "Zip Name");
+    CHECK(CheckImportNames(names({{"a/mod.toml", 5}, {"b/mod.toml", 5}}), ImportTarget::kMod, "z").problem == Problem::kManyMods);
+    CHECK(CheckImportNames(names({{"a/readme.txt", 5}}), ImportTarget::kMod, "z").problem == Problem::kNoModToml);
+    CHECK(CheckImportNames(names({{"a/mod.toml", 5}, {"a/movies/BK_0001.mp4", 5}}), ImportTarget::kTexturePack, "z").problem ==
+          Problem::kIsMod);
+    CHECK(CheckImportNames(names({{"a/mod.toml", 5}, {"a/pack.txt", 5}}), ImportTarget::kTexturePack, "z").problem ==
+          Problem::kNoModTextures);
+    CHECK(CheckImportNames(names({{"a/mod.toml", 5}, {"a/textures/pack.txt", 5}, {"a/textures/sub/x.dds", 5}}),
+                           ImportTarget::kTexturePack, "z").problem == Problem::kSubfolders);
+    l = CheckImportNames(names({{"Fast/mod.toml", 5}}), ImportTarget::kMod, "z");
+    CHECK(l.problem == Problem::kNone && l.folder_name == "Fast" && CheckImportType(ImportTarget::kMod, "settings", l) == Problem::kNone);
+    CHECK(CheckImportType(ImportTarget::kMod, "cutscenes", l) == Problem::kNone);
+    CHECK(CheckImportType(ImportTarget::kMod, "texture-pack", l) == Problem::kIsTexturePack);
+    CHECK(PlainPackToml("My \"pack\"") ==
+          "name = \"My pack\"\ntype = \"texture-pack\"\ndescription = \"A texture pack you imported.\"\n");
+  }
   // SHA-256 (FIPS 180-2 vectors), in one piece and split at odd places.
   CHECK(Sha("") == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
   CHECK(Sha("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
@@ -585,57 +637,167 @@ static void ServiceTests(const fs::path& work) {
     CHECK(!fs::exists(InstallDir(u, Kind::kCutscenes)));
   }
 
-  // "I already have a texture pack": good ZIP, then bad ones (nothing applied, nothing left behind, an
-  // earlier install kept).
+  // Task 209: the Workshop's Import texture pack / Import mod (and the setup's "I already have a texture pack").
+  // Every import becomes a mod folder of its own in <user data>/mods: a plain pack gets a mod.toml, a texture
+  // pack mod keeps its name, picture and credits. The HD texture pack is never touched. Wrong ZIPs install
+  // nothing and leave everything as it was.
   {
     const fs::path u = work / "user-import";
+    // An HD texture pack installed earlier (as the setup's download leaves it).
+    const fs::path hd = InstallDir(u, Kind::kTexturePack) / "kk-4x-usv2";
+    for (const auto& f : PackFiles(""))
+      if (!f.name.empty()) WriteFile(hd / f.name, f.data);
+    WriteFile(InstallDir(u, Kind::kTexturePack) / "installed.txt",
+              "name=kk-4x-usv2\nfolder=" + hd.string() + "\nsource=download\napplied=1\n");
     Service s;
     s.Init(u, std::make_unique<FakeFetcher>());
+    CHECK(s.Get(Kind::kTexturePack).installed);
+    auto events = [&] {
+      std::vector<std::string> out;
+      for (const auto& c : s.TakeChanges()) out.push_back(c.name + "=" + c.value);
+      return out;
+    };
+    auto hd_untouched = [&] {
+      const auto st = s.Get(Kind::kTexturePack);
+      return st.installed && st.installed_name == "kk-4x-usv2" && fs::exists(hd / "pack.txt") &&
+             ReadFile(InstallDir(u, Kind::kTexturePack) / "installed.txt").find(hd.string()) != std::string::npos;
+    };
+    const fs::path mods = u / "mods";
+
+    // 1. A plain pack (pack.txt and its images in a folder): mods/my-pack with textures/ and a mod.toml.
     const fs::path good = work / "zips" / "my pack.zip";
     auto files = PackFiles("my-pack/");
     files.push_back({"notes.txt", "not part of the pack"});
     WriteFile(good, MakeZip(files));
     s.Import(good);
-    CHECK(WaitFor([&] { return s.Idle() && s.Get(Kind::kTexturePack).installed; }));
-    auto st = s.Get(Kind::kTexturePack);
-    CHECK(st.imported && st.installed_name == "my-pack" && fs::exists(good));  // the player's ZIP is kept
-    CHECK(!fs::exists(InstallDir(u, Kind::kTexturePack) / "notes.txt"));
-    CHECK(Apply(s, {})["native_texture_pack"] == "true");
+    CHECK(WaitFor([&] { return s.Idle() && s.Get(Kind::kImport).installed; }));
+    auto st = s.Get(Kind::kImport);
+    CHECK(st.imported && st.installed_name == "my-pack" && st.mod_id == "my-pack" && fs::exists(good));  // ZIP kept
+    CHECK(fs::exists(mods / "my-pack" / "textures" / "pack.txt") && fs::exists(mods / "my-pack" / "mod.toml"));
+    CHECK(ReadFile(mods / "my-pack" / "mod.toml").find("type = \"texture-pack\"") != std::string::npos);
+    CHECK(!fs::exists(mods / "my-pack" / "notes.txt") && !fs::exists(mods / "notes.txt"));
+    CHECK(events() == std::vector<std::string>{"@texture-pack-mod=my-pack"});
+    CHECK(hd_untouched());
+
+    // 2. A plain pack at the ZIP's top: named after the ZIP.
+    const fs::path top = work / "zips" / "Top Pack.zip";
+    WriteFile(top, MakeZip(PackFiles("")));
+    s.Import(top);
+    CHECK(WaitFor([&] { return s.Idle() && s.Get(Kind::kImport).mod_id == "Top Pack"; }));
+    CHECK(fs::exists(mods / "Top Pack" / "textures" / "pack.txt") && fs::exists(mods / "Top Pack" / "mod.toml"));
+    CHECK(events() == std::vector<std::string>{"@texture-pack-mod=Top Pack"});
+
+    // 3. A texture pack mod like Kong UHD Textures: name, picture, README and CREDITS kept.
+    auto uhd = std::vector<ZipFile>{{"Kong UHD Textures/", ""},
+                                    {"Kong UHD Textures/mod.toml",
+                                     "name = \"Kong UHD Textures\"\nauthor = \"TekRantGaming\"\nversion = \"1.0\"\n"
+                                     "picture = \"picture.png\"\ntype = \"texture-pack\"\n"},
+                                    {"Kong UHD Textures/picture.png", "PNG"},
+                                    {"Kong UHD Textures/README.txt", "readme"},
+                                    {"Kong UHD Textures/CREDITS.txt", "credits"}};
+    for (const auto& f : PackFiles("Kong UHD Textures/textures/")) uhd.push_back(f);
+    const fs::path uhd_zip = work / "zips" / "Kong-UHD-Textures-1.0.zip";
+    WriteFile(uhd_zip, MakeZip(uhd));
+    s.Import(uhd_zip);
+    CHECK(WaitFor([&] { return s.Idle() && s.Get(Kind::kImport).mod_id == "Kong UHD Textures"; }));
+    st = s.Get(Kind::kImport);
+    CHECK(st.installed_name == "Kong UHD Textures");
+    for (const char* f : {"mod.toml", "picture.png", "README.txt", "CREDITS.txt", "textures/pack.txt"})
+      CHECK(fs::exists(mods / "Kong UHD Textures" / f));
+    CHECK(events() == std::vector<std::string>{"@texture-pack-mod=Kong UHD Textures"});
+    CHECK(hd_untouched());
+    // The same mod again replaces it (an update); another mod with that folder name gets a folder of its own.
+    WriteFile(mods / "Kong UHD Textures" / "old-file.txt", "from the first copy");
+    s.Import(uhd_zip);
+    CHECK(WaitFor([&] { return s.Idle() && s.Get(Kind::kImport).installed; }));
+    CHECK(s.Get(Kind::kImport).mod_id == "Kong UHD Textures" && !fs::exists(mods / "Kong UHD Textures" / "old-file.txt"));
+    events();
+    auto other = uhd;
+    other[1].data = "name = \"Somebody else\"\ntype = \"texture-pack\"\n";
+    const fs::path other_zip = work / "zips" / "other.zip";
+    WriteFile(other_zip, MakeZip(other));
+    s.Import(other_zip);
+    CHECK(WaitFor([&] { return s.Idle() && s.Get(Kind::kImport).installed; }));
+    CHECK(s.Get(Kind::kImport).mod_id == "Kong UHD Textures 2" && fs::exists(mods / "Kong UHD Textures" / "picture.png"));
+    CHECK(events() == std::vector<std::string>{"@texture-pack-mod=Kong UHD Textures 2"});
+
+    // 4. Import mod: a settings mod into mods/<folder>, not switched on by itself.
+    const fs::path mod_zip = work / "zips" / "fast.zip";
+    WriteFile(mod_zip, MakeZip({{"Fast Kong/mod.toml", "name = \"Fast Kong\"\ntype = \"settings\"\n[settings]\nkk_fov = 90\n"}}));
+    s.Import(mod_zip, ImportTarget::kMod);
+    CHECK(WaitFor([&] { return s.Idle() && s.Get(Kind::kImport).mod_id == "Fast Kong"; }));
+    CHECK(fs::exists(mods / "Fast Kong" / "mod.toml"));
+    CHECK(events() == std::vector<std::string>{"@mod-installed=Fast Kong"});
+
+    // 5. Wrong ZIPs: the problem says what is wrong; nothing is installed, nothing changes, no staging left.
     struct Bad {
       const char* name;
       std::vector<ZipFile> files;
+      ImportTarget target;
       Problem problem;
     };
     auto missing = PackFiles("p/");
     missing.erase(missing.begin() + 1);  // an image pack.txt lists
     auto subfolder = PackFiles("p/");
     subfolder.push_back({"p/deeper/x.dds", "x"});
+    auto mod_sub = uhd;
+    mod_sub.push_back({"Kong UHD Textures/textures/deeper/x.dds", "x"});
+    auto wrong_type = uhd;
+    wrong_type[1].data = "name = \"Kong UHD Textures\"\ntype = \"settings\"\n";
+    auto odd_type = uhd;
+    odd_type[1].data = "name = \"Kong UHD Textures\"\ntype = \"shaders\"\n";
+    auto two = uhd;
+    two.push_back({"Second/mod.toml", "name = \"Second\"\ntype = \"settings\"\n"});
     const std::vector<Bad> bad = {
-        {"slip.zip", {{"../../evil.txt", "owned"}, {"p/pack.txt", "KKTP 1\n"}}, Problem::kUnsafeName},
-        {"abs.zip", {{"/tmp/evil.txt", "owned"}}, Problem::kUnsafeName},
-        {"version.zip", PackFiles("p/", "KKTP 2"), Problem::kBadManifest},
-        {"missing.zip", missing, Problem::kMissingFile},
-        {"subfolder.zip", subfolder, Problem::kSubfolders},
-        {"nopack.zip", {{"p/a.dds", "x"}}, Problem::kNoManifest},
+        {"slip.zip", {{"../../evil.txt", "owned"}, {"p/pack.txt", "KKTP 1\n"}}, ImportTarget::kTexturePack, Problem::kUnsafeName},
+        {"abs.zip", {{"/tmp/evil.txt", "owned"}}, ImportTarget::kTexturePack, Problem::kUnsafeName},
+        {"version.zip", PackFiles("p/", "KKTP 2"), ImportTarget::kTexturePack, Problem::kBadManifest},
+        {"missing.zip", missing, ImportTarget::kTexturePack, Problem::kMissingFile},
+        {"subfolder.zip", subfolder, ImportTarget::kTexturePack, Problem::kSubfolders},
+        {"nopack.zip", {{"p/a.dds", "x"}}, ImportTarget::kTexturePack, Problem::kNoManifest},
+        {"modsub.zip", mod_sub, ImportTarget::kTexturePack, Problem::kSubfolders},
+        {"settings-as-pack.zip", {{"M/mod.toml", "name = \"M\"\ntype = \"settings\"\n"}}, ImportTarget::kTexturePack, Problem::kIsMod},
+        {"wrongtype.zip", wrong_type, ImportTarget::kTexturePack, Problem::kIsMod},
+        {"oddtype.zip", odd_type, ImportTarget::kTexturePack, Problem::kBadModType},
+        {"two.zip", two, ImportTarget::kTexturePack, Problem::kManyMods},
+        {"pack-as-mod.zip", uhd, ImportTarget::kMod, Problem::kIsTexturePack},
+        {"plain-as-mod.zip", PackFiles("p/"), ImportTarget::kMod, Problem::kIsTexturePack},
+        {"notoml.zip", {{"M/readme.txt", "x"}}, ImportTarget::kMod, Problem::kNoModToml},
+        {"oddmod.zip", {{"M/mod.toml", "name = \"M\"\ntype = \"shaders\"\n"}}, ImportTarget::kMod, Problem::kBadModType},
     };
+    std::set<std::string> before;
+    for (const auto& e : fs::directory_iterator(mods)) before.insert(e.path().filename().string());
     for (const auto& b : bad) {
       const fs::path z = work / "zips" / b.name;
       WriteFile(z, MakeZip(b.files));
-      s.Import(z);
+      s.Import(z, b.target);
       CHECK(WaitFor([&] { return s.Idle(); }));
-      st = s.Get(Kind::kTexturePack);
+      st = s.Get(Kind::kImport);
       if (st.stage != Stage::kFailed || st.error != Error::kBadPack || st.problem != b.problem)
         std::cerr << b.name << ": stage " << int(st.stage) << " error " << int(st.error) << " problem " << int(st.problem) << "\n";
-      CHECK(st.stage == Stage::kFailed && st.error == Error::kBadPack && st.problem == b.problem);
-      CHECK(st.installed && st.installed_name == "my-pack");  // the earlier pack is untouched
+      CHECK(st.stage == Stage::kFailed && st.error == Error::kBadPack && st.problem == b.problem && !st.installed);
       CHECK(s.TakeChanges().empty());
-      CHECK(!fs::exists(InstallDir(u, Kind::kTexturePack).string() + ".new"));
+      std::set<std::string> after;
+      for (const auto& e : fs::directory_iterator(mods)) after.insert(e.path().filename().string());
+      CHECK(after == before);  // nothing new, nothing gone
+      CHECK(!fs::exists(ContentRoot(u) / "downloads" / "import-staging"));
+      CHECK(hd_untouched());
     }
     CHECK(!fs::exists(work / "evil.txt") && !fs::exists(work.parent_path() / "evil.txt"));
     WriteFile(work / "zips" / "junk.zip", "this is not a zip file at all............");
     s.Import(work / "zips" / "junk.zip");
     CHECK(WaitFor([&] { return s.Idle(); }));
-    CHECK(s.Get(Kind::kTexturePack).problem == Problem::kNotZip);
+    CHECK(s.Get(Kind::kImport).problem == Problem::kNotZip);
+
+    // 6. Removing an imported pack: only that folder goes; the launcher hears which.
+    s.RemoveMod(mods / "my-pack");
+    CHECK(WaitFor([&] { return s.Idle(); }));
+    CHECK(!fs::exists(mods / "my-pack") && fs::exists(mods / "Top Pack"));
+    CHECK(events() == std::vector<std::string>{"@mod-removed=my-pack"});
+    s.RemoveMod(u / "content");  // not a mod folder: refused
+    CHECK(WaitFor([&] { return s.Idle(); }));
+    CHECK(fs::exists(u / "content") && s.Get(Kind::kImport).stage == Stage::kFailed);
+    CHECK(hd_untouched());
   }
 }
 

@@ -308,10 +308,13 @@ void SettingsLayoutChecks() {
   Check(L::IndexOf(L::kGraphics, "Look") < L::IndexOf(L::kGraphics, "Graphics API"), "the look is with the preset");
   Check(std::string(L::RowsOf(L::kGraphics).begin()[L::IndexOf(L::kGraphics, "Rebuild shaders")].section) == "Advanced",
         "Rebuild shaders is in Graphics' advanced section");
-  Check(in_order(L::kGraphics, {"Texture pack", "Installed", "Download HD texture pack", "Import ZIP",
-                                "Remove texture pack", "Effect resolution"}) &&
-            std::string(L::RowsOf(L::kGraphics).begin()[L::IndexOf(L::kGraphics, "Installed")].section) == "Texture pack",
-        "Graphics: the texture pack's own section before Advanced (job J2)");
+  // Task 209: the texture pack row is a choice of the installed packs (one on at a time); downloading, importing
+  // and removing moved to the Workshop, which the next row opens.
+  Check(in_order(L::kGraphics, {"Texture pack", "Texture packs in the Workshop", "Texture pack folder", "Effect resolution"}) &&
+            std::string(L::RowsOf(L::kGraphics).begin()[L::IndexOf(L::kGraphics, "Texture packs in the Workshop")].section) ==
+                "Texture pack" &&
+            L::IndexOf(L::kGraphics, "Import ZIP") < 0 && L::IndexOf(L::kGraphics, "Download HD texture pack") < 0,
+        "Graphics: the texture pack's own section before Advanced (job J2), its row opening the Workshop (task 209)");
   Check(in_order(L::kAdvanced, {"PS2 cutscenes", "Download PS2 cutscenes", "Remove PS2 cutscenes", "PS2 movie folder"}),
         "Advanced: the PS2 cutscenes switch, Download and Remove (job J2)");
   // Owner, 18 Oct: brightness and gamma on Display (Picture), and the frame counter became Performance metrics

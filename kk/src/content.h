@@ -25,8 +25,11 @@ namespace kk::content {
 // kArtbook (Beta 7 Extras, artbook_files.h): the PS2 bonus disc from archive.org, turned into the Weta
 // paintings in contentrtbook. It is quiet: it runs in the background without the download pop-ups, strip or
 // "Play while downloading" question, never pauses for the game and changes no settings (Quiet()).
-enum class Kind { kTexturePack = 0, kCutscenes = 1, kArtbook = 2 };
-constexpr int kKindCount = 3;
+// Task 209 (owner, 18 Oct): kUhd, the Kong UHD Textures pack, a Workshop download (a texture pack mod ZIP that
+// installs into the mods folder); kImport, the Workshop's Import texture pack / Import mod (and removing a mod
+// folder): its status is the progress of the one running now.
+enum class Kind { kTexturePack = 0, kCutscenes = 1, kArtbook = 2, kUhd = 3, kImport = 4 };
+constexpr int kKindCount = 5;
 constexpr bool Quiet(Kind kind) { return kind == Kind::kArtbook; }
 
 struct Info {
@@ -76,7 +79,9 @@ struct Status {
   uint64_t space_free = 0;
   bool installed = false;
   bool imported = false;           // installed from the player's own ZIP
-  std::string installed_name;      // the pack folder's name ("kk-4x-usv2")
+  std::string installed_name;      // the pack folder's name ("kk-4x-usv2"); kUhd / kImport: the mod's name
+  std::string mod_id;              // kUhd / kImport: the mod folder it installed as (its kk_mods id)
+  ImportTarget target = ImportTarget::kTexturePack;  // kImport: which button started it
   std::filesystem::path folder;    // the folder the settings point at
   bool Busy() const {
     return stage == Stage::kQueued || stage == Stage::kStarting || stage == Stage::kDownloading ||
@@ -86,6 +91,9 @@ struct Status {
 
 // A setting to change on the UI thread. With `when_name`, only when that setting is `when_value` now
 // (Remove puts a folder back only when it still points at the removed content).
+// Names starting with '@' are events for the launcher (task 209): "@texture-pack-mod" = a texture pack mod was
+// installed (value: its folder, the kk_mods id; it becomes the one texture pack on), "@mod-installed" = a mod
+// was installed (value: its id), "@mod-removed" = a mod folder was deleted (value: its id).
 struct Change {
   std::string name, value;
   bool reset = false;
@@ -147,7 +155,12 @@ class Service {
   bool ResumeAfterPlay();    // continues what PauseForPlay paused; true if anything was continued
   void Cancel(Kind kind);    // stops and deletes the partial download
   void Remove(Kind kind);    // cancels, uninstalls, puts the settings back
-  void Import(const std::filesystem::path& zip);  // "I already have a texture pack"
+  // "I already have a texture pack" (the setup) and the Workshop's Import texture pack / Import mod: the ZIP
+  // installs into <user data>/mods as a mod folder of its own (Kind::kImport's status follows it). It never
+  // touches anything already installed unless it is the same mod again (same folder and name: an update).
+  void Import(const std::filesystem::path& zip, ImportTarget target = ImportTarget::kTexturePack);
+  // Deletes a mod folder in <user data>/mods on the worker (Kind::kImport's status, stage kRemoving).
+  void RemoveMod(const std::filesystem::path& folder);
   std::vector<Change> TakeChanges();
   bool Idle() const;         // no job running or queued
   Fetcher* fetcher() { return fetcher_.get(); }

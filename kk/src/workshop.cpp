@@ -23,6 +23,7 @@
 #include "workshop_logic.h"
 #include "workshop_markdown.h"
 #include "workshop_mods.h"
+#include "workshop_texpacks.h"
 #include "workshop_net.h"
 
 namespace kk {
@@ -407,7 +408,6 @@ struct Workshop::Impl {
   rex::ui::ImmediateDrawer* drawer;
   fs::path dir;
   fs::path user_dir;
-  Workshop::View view = Workshop::View::kHub;
   std::shared_ptr<Shared> shared;
   std::thread worker;
   bool started = false;
@@ -417,14 +417,19 @@ struct Workshop::Impl {
   std::map<std::string, WebImage> images;
   int image_version = 0;
 
-  // Projects: the tile row. Mods: row 0 the Kong mods row, row 1 the guide's two buttons (guide_button).
+  // Task 209: the page's three rows (kRowTextures, kRowMods, kRowProjects), each with its own focused card and
+  // scroll; `row` has the focus. `tile` is the project shown (the projects row's card).
+  enum { kRowTextures = 0, kRowMods = 1, kRowProjects = 2, kRows = 3 };
   int row = 0, tile = 0;
-  int guide_button = 0;  // 0 Modding guide, 1 Open mods folder
+  int card[kRows] = {1, 0, 0};  // the texture packs row starts on the HD texture pack (after the original textures)
+  float row_scroll[kRows] = {}, row_target[kRows] = {};
+  std::vector<float> lift[kRows];
+  WorkshopHost host;
+  std::unique_ptr<TexturePackShelf> shelf;
   // The modding guide (MODDING.md beside the game), shown like a README.
   bool guide = false;
   ProjectState guide_page;
   float scroll_x = 0, scroll_x_target = 0;
-  float mods_glow = 0;
   // A project's page (-1: the tiles).
   int detail = -1;
   float scroll_y = 0, scroll_y_target = 0, view_h = 0, max_scroll = 0;
@@ -437,6 +442,9 @@ struct Workshop::Impl {
 
   Impl(rex::ui::ImmediateDrawer* d, fs::path user, fs::path config_path)
       : drawer(d), dir(Workshop::CacheDir(user)), user_dir(user), kong(std::make_unique<KongMods>(d, user, config_path)) {
+    kong->SetFilter(KongMods::Filter::kOthers);  // the mods row's mod pages: LB / RB go through the other mods
+    shelf = std::make_unique<TexturePackShelf>(user, kong.get());
+    shelf->SetHost(&host);
 #if defined(KK_DEV_TOOLS)
     no_browser = std::getenv("KK_DEV_WORKSHOP_NO_BROWSER") != nullptr;
 #endif
@@ -664,73 +672,133 @@ struct Workshop::Impl {
     return out;
   }
 
-  void DrawTiles(ImDrawList* dl, ImVec2 p0, ImVec2 p1, const ui::Metrics& m, ui::Input& in, bool active) {
+  // -------------------------------------------------------------- the page ---
+  // Task 209 (owner, 18 Oct): one page, three rows of cards (texture packs, mods, projects). Each card is drawn the
+  // same way: a picture (or a plain panel), a band with its name and a line under it, a badge for its state.
+  // Action cards (Import texture pack, Import mod, Modding guide, Open mods folder, Build your own mods and texture
+  // packs) are plain panels with their label.
+  struct RowCard {
+    std::string key, name, sub, hint, state;
+    rex::ui::ImmediateTexture* picture = nullptr;
+    float aspect = 16.0f / 9.0f;
+    ImU32 state_bg = 0, state_fg = 0;
+    std::string corner;  // a second badge at the top left (Built-in, Conflict)
+    ImU32 corner_bg = 0;
+    bool action = false, loading = false;
+    float progress = -1;
+  };
+
+  static float Badge(ImDrawList* dl, const ui::Fonts& f, float x, float y, float s, const std::string& label, ImU32 bg,
+                     ImU32 fg, bool right) {
+    const float fs = 11.5f * s;
+    const std::string up = text::Upper(label);
+    const float w = ui::TrackedWidth(f.display, fs, up, 1.5f * s) + 12 * s;
+    if (right) x -= w;
+    dl->AddRectFilled(ImVec2(x, y), ImVec2(x + w, y + fs + 8 * s), bg, 2 * s);
+    ui::DrawTracked(dl, f.display, fs, ImVec2(x + 6 * s, y + 4 * s), fg, up, 1.5f * s);
+    return w;
+  }
+
+  // One row: its caption (and, while it has the focus, the focused card's hint at the right), then its cards.
+  // Returns the card clicked or chosen with A (-1: none).
+  int DrawRow(ImDrawList* dl, int r, const char* caption, const std::vector<RowCard>& cards, float x0, float x1, float y,
+              float tile_w, float pic_h, float band_h, const ui::Metrics& m, ui::Input& in, bool active) {
     const float s = m.s;
     const ui::Fonts f = ui::GetFonts();
     const ImGuiIO& io = ImGui::GetIO();
-    const float avail = p1.x - p0.x;
-    const float gap = 20 * s;
-    const float tile_w = std::round(std::clamp((avail - 3 * gap) / 3.6f, 220 * s, 340 * s));
-    const float pic_h = std::round(tile_w * 9.0f / 16.0f), band_h = 62 * s, tile_h = pic_h + band_h;
-    const int n = ws::kProjectCount;
-    const float content_w = n * tile_w + (n - 1) * gap;
-    const float max_x = std::max(0.0f, content_w - avail);
-    const float row_top = p0.y + 40 * s;
-    const ImVec2 row0(p0.x - 14 * s, row_top - 14 * s), row1(p1.x + 14 * s, row_top + tile_h + 14 * s);
-
-    // Input: left/right and LB/RB along the row, A or a click opens.
-    const int tile_before = tile;
-    row = 0;
-    if (active) {
-      if (in.Pressed(Action::kLeft) || in.Pressed(Action::kPrevTab)) tile = std::max(0, tile - 1);
-      if (in.Pressed(Action::kRight) || in.Pressed(Action::kNextTab)) tile = std::min(n - 1, tile + 1);
+    const int n = int(cards.size());
+    const bool focused_row = row == r;
+    card[r] = std::clamp(card[r], 0, std::max(0, n - 1));
+    if (lift[r].size() != size_t(n)) lift[r].assign(size_t(n), 0.0f);
+    const float gap = 16 * s, avail = x1 - x0;
+    const float tile_h = pic_h + band_h, top = y + 26 * s;
+    const ImVec2 r0(x0 - 14 * s, top - 8 * s), r1(x1 + 14 * s, top + tile_h + 6 * s);
+    const float content_w = n * tile_w + std::max(0, n - 1) * gap, max_x = std::max(0.0f, content_w - avail);
+    const int before = card[r];
+    int open = -1;
+    if (active && focused_row) {
+      if (in.Pressed(Action::kLeft) || in.Pressed(Action::kPrevTab)) card[r] = std::max(0, card[r] - 1);
+      if (in.Pressed(Action::kRight) || in.Pressed(Action::kNextTab)) card[r] = std::min(n - 1, card[r] + 1);
       in.Consume(Action::kPrevTab);
       in.Consume(Action::kNextTab);
-      // The wheel moves along the row.
+    }
+    if (active) {
       const float wheel = io.MouseWheel + io.MouseWheelH;
-      if (wheel != 0 && ImGui::IsMouseHoveringRect(row0, row1, false))
-        scroll_x_target = std::clamp(scroll_x_target - wheel * (tile_w + gap) * 0.5f, 0.0f, max_x);
+      if (wheel != 0 && ImGui::IsMouseHoveringRect(r0, r1, false))
+        row_target[r] = std::clamp(row_target[r] - wheel * (tile_w + gap) * 0.5f, 0.0f, max_x);
     }
-    if (tile != tile_before) {
-      // Keep the focused tile in view.
-      const float tx = tile * (tile_w + gap);
-      if (tx < scroll_x_target) scroll_x_target = tx;
-      if (tx + tile_w > scroll_x_target + avail) scroll_x_target = tx + tile_w - avail;
+    if (card[r] != before || (focused_row && n > 0)) {
+      // Keep the focused card in view.
+      const float tx = card[r] * (tile_w + gap);
+      if (tx < row_target[r]) row_target[r] = tx;
+      if (tx + tile_w > row_target[r] + avail) row_target[r] = tx + tile_w - avail;
     }
-    scroll_x_target = std::clamp(scroll_x_target, 0.0f, max_x);
-    scroll_x = ui::Approach(scroll_x, scroll_x_target, 14.0f);
+    if (card[r] != before) ui::Cue(ui::Sound::kMove);
+    row_target[r] = std::clamp(row_target[r], 0.0f, max_x);
+    row_scroll[r] = ui::Approach(row_scroll[r], row_target[r], 14.0f);
 
-    DrawCaption(dl, f, p0.x, p1.x, p0.y + 6 * s, s, "Projects");
-    dl->PushClipRect(row0, row1, true);
-    int open = -1;
-    for (int i = 0; i < n; ++i) {
-      ProjectState& ps = projects[size_t(i)];
-      const float x = std::round(p0.x + i * (tile_w + gap) - scroll_x);
-      if (x > row1.x || x + tile_w < row0.x) continue;
-      const bool focused = row == 0 && tile == i;
-      ps.lift = ui::Approach(ps.lift, focused ? 100.0f : 0.0f, 12.0f);  // in hundredths (Approach snaps at 0.3)
-      const float y = std::round(row_top - 6 * s * ps.lift / 100.0f);
-      const ImVec2 a(x, y), b(x + tile_w, y + tile_h), pb(x + tile_w, y + pic_h);
-      if (active && ImGui::IsMouseHoveringRect(ImVec2(std::max(a.x, p0.x - 14 * s), a.y), b, false)) {
-        if (in.mouse_moved()) row = 0, tile = i;
-        if (ImGui::IsMouseClicked(0)) row = 0, tile = i, open = i;
+    // Caption, and the focused card's hint.
+    const float cfs = 13 * s;
+    const std::string cap = text::Upper(T(caption));
+    const float cw = ui::TrackedWidth(f.display, cfs, cap, 2.2f * s);
+    ui::DrawTracked(dl, f.display, cfs, ImVec2(x0 + 2 * s, y), focused_row ? color::kAccent : ui::WithAlpha(color::kAccent, 0.7f),
+                    cap, 2.2f * s);
+    float line_x = x0 + cw + 16 * s;
+    if (focused_row && n > 0 && !cards[size_t(card[r])].hint.empty()) {
+      const float hfs = 13.5f * s;
+      const std::string hint = ui::Ellipsize(f.text, hfs, cards[size_t(card[r])].hint, std::max(40 * s, x1 - line_x - 8 * s));
+      const float hw = ui::TextSize(f.text, hfs, hint).x;
+      dl->AddText(f.text, hfs, ImVec2(x1 - hw, y - 1 * s), color::kTextDim, hint.c_str());
+      dl->AddLine(ImVec2(line_x, std::round(y + cfs * 0.55f)), ImVec2(x1 - hw - 14 * s, std::round(y + cfs * 0.55f)),
+                  color::kHairline, 1.0f);
+    } else {
+      dl->AddLine(ImVec2(line_x, std::round(y + cfs * 0.55f)), ImVec2(x1, std::round(y + cfs * 0.55f)), color::kHairline, 1.0f);
+    }
+
+    dl->PushClipRect(r0, r1, true);
+    for (int k = 0; k < n; ++k) {
+      const RowCard& c = cards[size_t(k)];
+      const float x = std::round(x0 + k * (tile_w + gap) - row_scroll[r]);
+      if (x > r1.x || x + tile_w < r0.x) continue;
+      const bool on_card = focused_row && card[r] == k;
+      lift[r][size_t(k)] = ui::Approach(lift[r][size_t(k)], on_card ? 100.0f : 0.0f, 12.0f);
+      const float cy = std::round(top - 5 * s * lift[r][size_t(k)] / 100.0f);
+      const ImVec2 a(x, cy), b(x + tile_w, cy + tile_h), pb(x + tile_w, cy + pic_h);
+      if (active && ImGui::IsMouseHoveringRect(ImVec2(std::max(a.x, x0 - 14 * s), a.y), ImVec2(std::min(b.x, x1 + 14 * s), b.y), false)) {
+        if (in.mouse_moved()) {
+          if (row != r || card[r] != k) ui::Cue(ui::Sound::kMove);
+          row = r, card[r] = k;
+        }
+        if (ImGui::IsMouseClicked(0)) row = r, card[r] = k, open = k;
       }
-      // The card: picture, then a band with the name and the repository's owner.
       dl->AddRectFilled(a, b, ui::WithAlpha(color::kPanel, 0.88f));
-      const std::string name = ws::kProjects[i].name;
-      if (ps.tile == Load::kReady && ps.picture.tex) {
-        DrawCover(dl, ps.picture.tex.get(), ps.picture.aspect, a, pb,
-                  focused ? IM_COL32_WHITE : IM_COL32(205, 208, 214, 255));
+      if (c.action) {
+        // A button card: a soft brass panel, a plus or arrow mark, the label.
+        dl->AddRectFilledMultiColor(a, pb, ui::WithAlpha(color::kAccent, on_card ? 0.30f : 0.18f),
+                                    ui::WithAlpha(color::kAccent, 0.06f), ui::WithAlpha(color::kBase, 0.0f),
+                                    ui::WithAlpha(color::kAccent, 0.10f));
+        const float mfs = std::min(40 * s, pic_h * 0.42f);
+        const char* mark = c.key == "link" ? "\xE2\x86\x97" : c.key == "guide" ? "?" : c.key == "folder" ? "\xE2\x80\xA6" : "+";
+        const ImVec2 ms = f.display->CalcTextSizeA(mfs, FLT_MAX, 0, mark);
+        dl->AddText(f.display, mfs, ImVec2(a.x + (tile_w - ms.x) * 0.5f, a.y + (pic_h - ms.y) * 0.5f),
+                    on_card ? color::kText : color::kTextDim, mark);
+      } else if (c.picture) {
+        DrawCover(dl, c.picture, c.aspect, a, pb, on_card ? IM_COL32_WHITE : IM_COL32(205, 208, 214, 255));
       } else {
-        DrawPlainPanel(dl, f, a, pb, s, ps.tile == Load::kFailed ? name : std::string(), ps.tile == Load::kPending);
+        DrawPlainPanel(dl, f, a, pb, s, c.loading ? std::string() : c.name, c.loading);
       }
-      const float nfs = 16.5f * s;
-      dl->AddText(f.semibold, nfs, ImVec2(x + 16 * s, pb.y + 12 * s), focused ? color::kText : color::kTextDim,
-                  ui::Ellipsize(f.semibold, nfs, name, tile_w - 32 * s).c_str());
-      const std::string owner = std::string("github.com/") + ws::kProjects[i].owner;
-      dl->AddText(f.text, 13.5f * s, ImVec2(x + 16 * s, pb.y + 36 * s), color::kTextFaint,
-                  ui::Ellipsize(f.text, 13.5f * s, owner, tile_w - 32 * s).c_str());
-      if (focused) {
+      if (!c.state.empty()) Badge(dl, f, b.x - 8 * s, a.y + 8 * s, s, c.state, c.state_bg, c.state_fg, true);
+      if (!c.corner.empty()) Badge(dl, f, a.x + 8 * s, pb.y - 27 * s, s, c.corner, c.corner_bg, color::kOnFocus, false);
+      if (c.progress >= 0) {
+        dl->AddRectFilled(ImVec2(a.x, pb.y - 4 * s), ImVec2(b.x, pb.y), ui::WithAlpha(color::kBase, 0.8f));
+        dl->AddRectFilled(ImVec2(a.x, pb.y - 4 * s), ImVec2(a.x + tile_w * c.progress, pb.y), color::kAccent);
+      }
+      const float nfs = 15 * s;
+      dl->AddText(f.semibold, nfs, ImVec2(x + 12 * s, pb.y + 7 * s), on_card ? color::kText : color::kTextDim,
+                  ui::Ellipsize(f.semibold, nfs, c.name, tile_w - 24 * s).c_str());
+      dl->AddText(f.text, 12.5f * s, ImVec2(x + 12 * s, pb.y + 27 * s), color::kTextFaint,
+                  ui::Ellipsize(f.text, 12.5f * s, c.sub, tile_w - 24 * s).c_str());
+      if (on_card) {
         dl->AddRect(ImVec2(a.x - 1 * s, a.y - 1 * s), ImVec2(b.x + 1 * s, b.y + 1 * s), color::kFocus, 0, 0, 2 * s);
         dl->AddRectFilled(ImVec2(a.x, pb.y), ImVec2(a.x + 3 * s, b.y), color::kAccent);
       } else {
@@ -738,48 +806,165 @@ struct Workshop::Impl {
       }
     }
     dl->PopClipRect();
-    // More tiles to the right / left: a fade at that edge.
-    if (scroll_x < max_x - 1)
-      dl->AddRectFilledMultiColor(ImVec2(p1.x - 40 * s, row0.y), ImVec2(p1.x + 14 * s, row1.y),
-                                  ui::WithAlpha(color::kBase, 0.0f), ui::WithAlpha(color::kBase, 0.75f),
-                                  ui::WithAlpha(color::kBase, 0.75f), ui::WithAlpha(color::kBase, 0.0f));
-    if (scroll_x > 1)
-      dl->AddRectFilledMultiColor(ImVec2(p0.x - 14 * s, row0.y), ImVec2(p0.x + 26 * s, row1.y),
-                                  ui::WithAlpha(color::kBase, 0.75f), ui::WithAlpha(color::kBase, 0.0f),
-                                  ui::WithAlpha(color::kBase, 0.0f), ui::WithAlpha(color::kBase, 0.75f));
-
-    // The focused project's description and facts.
-    float y = row_top + tile_h + 22 * s;
-    {
-      const ProjectState& ps = projects[size_t(tile)];
-      const float wrap = std::min(avail, 900 * s);
-      std::string desc = ps.facts_ok ? CleanText(ps.facts.description) : std::string();
-      if (desc.empty()) desc = ps.readme == Load::kFailed && ps.tile == Load::kFailed
-                                   ? T("Could not reach GitHub. Check your internet connection.")
-                                   : std::string();
-      const float dfs = 15.5f * s;
-      float fy = y;
-      if (!desc.empty() && row == 0) {
-        // At most two lines.
-        const float h = std::min(f.text->CalcTextSizeA(dfs, FLT_MAX, wrap, desc.c_str()).y, dfs * 1.18f * 2);
-        dl->PushClipRect(ImVec2(p0.x, y), ImVec2(p0.x + wrap, y + h + 1), true);
-        dl->AddText(f.text, dfs, ImVec2(p0.x, y), color::kTextDim, desc.c_str(), nullptr, wrap);
-        dl->PopClipRect();
-        fy = y + h + 6 * s;
-      }
-      const std::string facts = row == 0 ? FactsLine(ps) : std::string();
-      if (!facts.empty()) dl->AddText(f.text, 13.5f * s, ImVec2(p0.x, fy), color::kTextFaint, facts.c_str());
-    }
-
-    if (tile != tile_before) ui::Cue(ui::Sound::kMove);
-    if (active && in.Pressed(Action::kAccept)) {
+    if (row_scroll[r] < max_x - 1)
+      dl->AddRectFilledMultiColor(ImVec2(x1 - 40 * s, r0.y), ImVec2(x1 + 14 * s, r1.y), ui::WithAlpha(color::kBase, 0.0f),
+                                  ui::WithAlpha(color::kBase, 0.75f), ui::WithAlpha(color::kBase, 0.75f),
+                                  ui::WithAlpha(color::kBase, 0.0f));
+    if (row_scroll[r] > 1)
+      dl->AddRectFilledMultiColor(ImVec2(x0 - 14 * s, r0.y), ImVec2(x0 + 26 * s, r1.y), ui::WithAlpha(color::kBase, 0.75f),
+                                  ui::WithAlpha(color::kBase, 0.0f), ui::WithAlpha(color::kBase, 0.0f),
+                                  ui::WithAlpha(color::kBase, 0.75f));
+    if (active && focused_row && n > 0 && in.Pressed(Action::kAccept)) {
       in.Consume(Action::kAccept);
-      open = tile;
+      open = card[r];
     }
-    if (open >= 0) {
-      ui::Cue(ui::Sound::kSelect);
-      OpenDetail(open);
+    return open;
+  }
+
+  std::vector<RowCard> TextureCards() {
+    std::vector<RowCard> out;
+    for (auto& c : shelf->Cards()) {
+      RowCard rc;
+      rc.key = c.key;
+      rc.name = c.name;
+      rc.sub = c.sub;
+      rc.hint = c.hint;
+      rc.picture = c.picture;
+      rc.aspect = c.aspect;
+      rc.state = c.state;
+      rc.state_bg = c.state_bg;
+      rc.state_fg = c.state_fg;
+      rc.action = c.action;
+      rc.progress = c.progress;
+      out.push_back(std::move(rc));
     }
+    return out;
+  }
+
+  std::vector<RowCard> ModCards() {
+    std::vector<RowCard> out;
+    const bool scanned = kong->Scanned();
+    for (const auto& m : kong->Cards()) {
+      if (m.texture_pack) continue;  // in the texture packs row
+      RowCard rc;
+      rc.key = "mod:" + m.id;
+      rc.name = m.name;
+      rc.sub = m.author;
+      if (!m.version.empty()) rc.sub += (rc.sub.empty() ? "" : "   " KK_WS_DOT "   ") + F("Version {0}", {m.version});
+      rc.picture = m.picture;
+      rc.aspect = m.aspect;
+      if (m.on) {
+        rc.state = F("Enabled {0}", {std::to_string(m.position + 1)});
+        rc.state_bg = ui::WithAlpha(color::kGood, 0.95f);
+        rc.state_fg = color::kOnFocus;
+      } else if (!m.usable) {
+        rc.state = T("Problem");
+        rc.state_bg = ui::WithAlpha(color::kBad, 0.92f);
+        rc.state_fg = color::kOnFocus;
+      } else {
+        rc.state = T("Disabled");
+        rc.state_bg = ui::WithAlpha(color::kBase, 0.82f);
+        rc.state_fg = color::kTextDim;
+      }
+      if (m.builtin) rc.corner = T("Built-in"), rc.corner_bg = ui::WithAlpha(color::kAccent, 0.92f);
+      else if (m.conflict) rc.corner = T("Conflict"), rc.corner_bg = ui::WithAlpha(color::kWarn, 0.92f);
+      std::string d = m.description.substr(0, m.description.find('\n'));
+      rc.hint = rc.state + (d.empty() ? std::string() : "   " KK_WS_DOT "   " + d);
+      out.push_back(std::move(rc));
+    }
+    if (!scanned) {
+      RowCard rc;
+      rc.key = "scanning";
+      rc.name = T("Looking for mods");
+      rc.loading = true;
+      out.push_back(std::move(rc));
+    }
+    auto action = [&](const char* key, const char* name, const char* sub, const char* hint) {
+      RowCard rc;
+      rc.key = key;
+      rc.action = true;
+      rc.name = T(name);
+      rc.sub = T(sub);
+      rc.hint = T(hint);
+      out.push_back(std::move(rc));
+    };
+    action("import", "Import mod", "From a ZIP file",
+           "A ZIP with one folder holding mod.toml (a settings or cutscenes mod) and its files, as MODDING.md describes. "
+           "It is checked before anything is installed.");
+    action("guide", "Modding guide", "MODDING.md", "How to make texture packs, settings mods and cutscene mods for the game.");
+    action("folder", "Open mods folder", "Your mods", "Opens the folder your mods go in, so you can add or remove them.");
+    action("link", "Build your own mods and texture packs", "kong.tekrantgaming.com/mods",
+           "Opens the Mods page of the game's website in your browser, with the guides and the modding tools to download.");
+    return out;
+  }
+
+  std::vector<RowCard> ProjectCards() {
+    std::vector<RowCard> out;
+    for (int i = 0; i < ws::kProjectCount; ++i) {
+      const ProjectState& ps = projects[size_t(i)];
+      RowCard rc;
+      rc.key = std::to_string(i);
+      rc.name = ws::kProjects[i].name;
+      rc.sub = std::string("github.com/") + ws::kProjects[i].owner;
+      if (ps.tile == Load::kReady && ps.picture.tex) rc.picture = ps.picture.tex.get(), rc.aspect = ps.picture.aspect;
+      rc.loading = ps.tile == Load::kPending;
+      std::string desc = ps.facts_ok ? CleanText(ps.facts.description) : std::string();
+      if (desc.empty() && ps.readme == Load::kFailed && ps.tile == Load::kFailed)
+        desc = T("Could not reach GitHub. Check your internet connection.");
+      const std::string facts = FactsLine(ps);
+      rc.hint = desc.empty() ? facts : facts.empty() ? desc : desc + "   " KK_WS_DOT "   " + facts;
+      out.push_back(std::move(rc));
+    }
+    return out;
+  }
+
+  static constexpr const char* kModsUrl = "https://kong.tekrantgaming.com/mods";
+
+  void DrawPage(ImDrawList* dl, ImVec2 p0, ImVec2 p1, const ui::Metrics& m, ui::Input& in, bool active) {
+    const float s = m.s;
+    const int row_before = row;
+    if (active) {
+      if (in.Pressed(Action::kUp) && row > 0) --row;
+      if (in.Pressed(Action::kDown) && row < kRows - 1) ++row;
+    }
+    if (row != row_before) ui::Cue(ui::Sound::kMove);
+    // Three rows share the height: picture 16:9, a band of two lines, the caption and a gap.
+    const float row_h = (p1.y - p0.y) / 3.0f, band_h = 46 * s;
+    const float pic_h = std::round(std::clamp(row_h - band_h - 26 * s - 18 * s, 60 * s, 200 * s));
+    const float tile_w = std::round(pic_h * 16.0f / 9.0f);
+    const std::vector<RowCard> rows[kRows] = {TextureCards(), ModCards(), ProjectCards()};
+    const char* captions[kRows] = {"Texture packs", "Mods", "Other TRG projects and games"};
+    for (int r = 0; r < kRows; ++r) {
+      const int open = DrawRow(dl, r, captions[r], rows[r], p0.x, p1.x, std::round(p0.y + r * row_h), tile_w, pic_h,
+                               band_h, m, in, active);
+      if (open < 0 || open >= int(rows[r].size())) continue;
+      const std::string& key = rows[r][size_t(open)].key;
+      if (r == kRowTextures) {
+        ui::Cue(ui::Sound::kSelect);
+        shelf->Activate(key);
+      } else if (r == kRowMods) {
+        if (key == "scanning") ui::Cue(ui::Sound::kDeny);
+        else if (key == "import") {
+          ui::Cue(ui::Sound::kSelect);
+          if (host.import_zip) host.import_zip(content::ImportTarget::kMod);
+        } else if (key == "guide") {
+          ui::Cue(ui::Sound::kSelect);
+          OpenGuide();
+        } else if (key == "folder") {
+          OpenModsFolder();
+        } else if (key == "link") {
+          ui::Cue(ui::Sound::kSelect);
+          OpenLink(kModsUrl, "build your own mods:");
+        } else if (key.rfind("mod:", 0) == 0) {
+          ui::Cue(ui::Sound::kSelect);
+          kong->OpenMod(key.substr(4));
+        }
+      } else {
+        ui::Cue(ui::Sound::kSelect);
+        OpenDetail(std::atoi(key.c_str()));
+      }
+    }
+    tile = card[kRowProjects];
   }
 
   // -------------------------------------------------------------- Mods ---
@@ -813,57 +998,6 @@ struct Workshop::Impl {
     }
     REXLOG_INFO("KK workshop: opening the mods folder {}", folder.string());
     OpenInExplorer(folder);
-  }
-
-  void DrawModsPage(ImDrawList* dl, ImVec2 p0, ImVec2 p1, const ui::Metrics& m, ui::Input& in, bool active) {
-    const float s = m.s;
-    const ui::Fonts f = ui::GetFonts();
-    const int row_before = row, button_before = guide_button;
-    if (active) {
-      if (row == 0 && in.Pressed(Action::kDown)) row = 1;
-      else if (row == 1 && in.Pressed(Action::kUp)) row = 0;
-      if (row == 1 && (in.Pressed(Action::kLeft) || in.Pressed(Action::kRight))) guide_button = 1 - guide_button;
-    }
-    DrawCaption(dl, f, p0.x, p1.x, p0.y + 6 * s, s, "Kong mods");
-    const float row_bottom = std::min(p1.y, p0.y + 34 * s + 300 * s);
-    if (kong->DrawRow(dl, ImVec2(p0.x, p0.y + 34 * s), ImVec2(p1.x, row_bottom), m, in, active, row == 0)) row = 0;
-    // Making mods: the guide and the folder.
-    const float gy = row_bottom + 12 * s;
-    DrawCaption(dl, f, p0.x, p1.x, gy, s, "Making mods");
-    const float bw = std::round(std::min(320 * s, (p1.x - p0.x - 16 * s) * 0.5f)), bh = 44 * s, by = gy + 30 * s;
-    const char* labels[2] = {"Modding guide", "Open mods folder"};
-    int clicked = -1;
-    for (int b = 0; b < 2; ++b) {
-      const ImVec2 a(p0.x + b * (bw + 16 * s), by), c(a.x + bw, by + bh);
-      const bool hot = active && ImGui::IsMouseHoveringRect(a, c, false);
-      if (hot && in.mouse_moved()) row = 1, guide_button = b;
-      if (hot && ImGui::IsMouseClicked(0)) row = 1, guide_button = b, clicked = b;
-      const bool lit = row == 1 && guide_button == b;
-      if (lit) dl->AddRectFilled(a, c, color::kFocus);
-      else {
-        dl->AddRectFilled(a, c, ui::WithAlpha(color::kPanel, 0.85f));
-        dl->AddRect(a, c, ui::WithAlpha(color::kText, 0.14f));
-      }
-      const std::string label = text::Upper(T(labels[b]));
-      const float lfs = 15 * s, tw = ui::TrackedWidth(f.display, lfs, label, 2 * s);
-      ui::DrawTracked(dl, f.display, lfs, ImVec2(a.x + (bw - tw) * 0.5f, a.y + (bh - lfs) * 0.5f),
-                      lit ? color::kOnFocus : color::kText, label, 2 * s);
-    }
-    const char* hint = guide_button == 1 ? "Opens the folder your mods go in, so you can add or remove them."
-                                         : "How to make texture packs, settings mods and cutscene mods for the game.";
-    if (row == 1)
-      dl->AddText(f.text, 13.5f * s, ImVec2(p0.x, by + bh + 12 * s), color::kTextFaint, T(hint), nullptr, p1.x - p0.x);
-    if (row != row_before || guide_button != button_before) ui::Cue(ui::Sound::kMove);
-    if (active && row == 1 && in.Pressed(Action::kAccept)) {
-      in.Consume(Action::kAccept);
-      clicked = guide_button;
-    }
-    if (clicked == 0) {
-      ui::Cue(ui::Sound::kSelect);
-      OpenGuide();
-    } else if (clicked == 1) {
-      OpenModsFolder();
-    }
   }
 
   // ------------------------------------------------------------ README ---
@@ -1245,38 +1379,14 @@ struct Workshop::Impl {
     }
   }
 
-  void SetView(Workshop::View v) {
-    if (v == view) return;
-    view = v;
-    detail = -1;
-    guide = false;
-    kong->Back();
-    kong->SetFilter(v == Workshop::View::kTexturePacks ? KongMods::Filter::kTexturePacks : KongMods::Filter::kOthers);
-    row = 0;
-    REXLOG_INFO("KK workshop: view {}", v == Workshop::View::kHub            ? "hub"
-                                        : v == Workshop::View::kMods         ? "mods"
-                                        : v == Workshop::View::kTexturePacks ? "texture packs"
-                                                                             : "projects");
-  }
-
   void Draw(ImDrawList* dl, ImVec2 p0, ImVec2 p1, const ui::Metrics& m, ui::Input& in, bool active) {
-    switch (view) {
-      case Workshop::View::kProjects:
-        Start();
-        TakeResults();
-        if (detail >= 0) DrawDetail(dl, p0, p1, m, in, active);
-        else DrawTiles(dl, p0, p1, m, in, active);
-        break;
-      case Workshop::View::kMods:
-        if (guide) DrawDetail(dl, p0, p1, m, in, active);
-        else if (kong->InDetail()) kong->DrawDetail(dl, p0, p1, m, in, active);
-        else DrawModsPage(dl, p0, p1, m, in, active);
-        break;
-      case Workshop::View::kTexturePacks:
-        if (kong->InDetail()) kong->DrawDetail(dl, p0, p1, m, in, active);
-        break;
-      case Workshop::View::kHub: break;
-    }
+    Start();
+    TakeResults();
+    shelf->Tick();
+    if (detail >= 0 || guide) DrawDetail(dl, p0, p1, m, in, active);
+    else if (shelf->InDetail()) shelf->DrawDetail(dl, p0, p1, m, in, active);
+    else if (kong->InDetail()) kong->DrawDetail(dl, p0, p1, m, in, active);
+    else DrawPage(dl, p0, p1, m, in, active);
   }
 
   void Dev(const std::string& c) {
@@ -1296,29 +1406,32 @@ struct Workshop::Impl {
                   "pictures, {} links; README pictures ready {} failed {} pending {}",
                   detail >= 0 ? ws::kProjects[detail].repo : "tiles", row, tile, focus, scroll_y, max_scroll,
                   doc.height, doc.runs.size(), doc.pics.size(), doc.targets.size(), ready, failed, pending);
-    } else if (c.rfind("view:", 0) == 0) {
-      const std::string v = c.substr(5);
-      SetView(v == "mods" ? Workshop::View::kMods : v == "textures" ? Workshop::View::kTexturePacks
-              : v == "projects" ? Workshop::View::kProjects : Workshop::View::kHub);
+    } else if (c.rfind("row:", 0) == 0) {  // task 209: the focused row (0 texture packs, 1 mods, 2 projects)
+      row = std::clamp(std::atoi(c.c_str() + 4), 0, kRows - 1);
+    } else if (c.rfind("card:", 0) == 0) {  // the focused row's card n
+      card[row] = std::max(0, std::atoi(c.c_str() + 5));
+    } else if (c == "cards") {
+      const std::vector<RowCard> rows[kRows] = {TextureCards(), ModCards(), ProjectCards()};
+      for (int r = 0; r < kRows; ++r)
+        for (size_t k = 0; k < rows[r].size(); ++k)
+          REXLOG_INFO("KK workshop: row {} card {} {} '{}' [{}]{}", r, k, rows[r][k].key, rows[r][k].name, rows[r][k].state,
+                      row == r && card[r] == int(k) ? " (focused)" : "");
+    } else if (c.rfind("tex:", 0) == 0) {
+      shelf->Dev(c.substr(4));
     } else if (c.rfind("open:", 0) == 0) {
-      SetView(Workshop::View::kProjects);
       OpenDetail(std::atoi(c.c_str() + 5));
     } else if (c.rfind("tile:", 0) == 0) {
-      SetView(Workshop::View::kProjects);
       detail = -1;
-      row = 0;
-      tile = std::clamp(std::atoi(c.c_str() + 5), 0, ws::kProjectCount - 1);
+      row = kRowProjects;
+      card[row] = tile = std::clamp(std::atoi(c.c_str() + 5), 0, ws::kProjectCount - 1);
     } else if (c == "mods") {
-      if (view != Workshop::View::kTexturePacks) SetView(Workshop::View::kMods);
       guide = false;
-      row = 0;
+      row = kRowMods;
     } else if (c.rfind("mods:", 0) == 0) {
-      if (view != Workshop::View::kTexturePacks) SetView(Workshop::View::kMods);
       guide = false;
-      row = 0;
+      row = kRowMods;
       kong->Dev(c.substr(5));
     } else if (c == "guide") {
-      SetView(Workshop::View::kMods);
       OpenGuide();
     } else if (c == "folder") {
       OpenModsFolder();
@@ -1343,39 +1456,54 @@ Workshop::Workshop(rex::ui::ImmediateDrawer* drawer, fs::path user_dir, fs::path
 
 Workshop::~Workshop() = default;
 
-void Workshop::SetView(View view) { impl_->SetView(view); }
-Workshop::View Workshop::view() const { return impl_->view; }
-bool Workshop::InDetail() const { return impl_->detail >= 0 || impl_->guide || impl_->kong->InDetail(); }
+void Workshop::SetHost(WorkshopHost host) { impl_->host = std::move(host); }
+bool Workshop::InDetail() const {
+  return impl_->detail >= 0 || impl_->guide || impl_->kong->InDetail() || impl_->shelf->InDetail();
+}
 
 void Workshop::Draw(ImDrawList* dl, ImVec2 p0, ImVec2 p1, const ui::Metrics& m, ui::Input& in, bool active) {
   impl_->Draw(dl, p0, p1, m, in, active);
 }
 
-bool Workshop::DrawTextureModsRow(ImDrawList* dl, ImVec2 p0, ImVec2 p1, const ui::Metrics& m, ui::Input& in,
-                                  bool active, bool focused) {
-  return impl_->kong->DrawRow(dl, p0, p1, m, in, active, focused);
-}
-
-KongMods::Counts Workshop::ModCounts() { return impl_->kong->GetCounts(); }
-
 bool Workshop::Back() {
-  if (impl_->kong->Back()) return true;
   if (impl_->guide) {
     impl_->guide = false;
     return true;
   }
-  if (impl_->detail < 0) return false;
-  impl_->detail = -1;
-  return true;
+  if (impl_->detail >= 0) {
+    impl_->card[Impl::kRowProjects] = impl_->detail;  // back on the project shown (LB / RB may have moved on)
+    impl_->detail = -1;
+    return true;
+  }
+  if (impl_->shelf->Back()) return true;
+  return impl_->kong->Back();
 }
 
-std::vector<ui::Prompt> Workshop::Prompts(bool row_focused) const {
+std::vector<ui::Prompt> Workshop::Prompts() const {
   if (impl_->detail >= 0 || impl_->guide) return {{Action::kUp, "Scroll"}, {Action::kAccept, "Select"}, {Action::kBack, "Back"}};
   if (impl_->kong->InDetail()) return impl_->kong->Prompts(false);
-  if (impl_->view == View::kMods && impl_->row == 0) return impl_->kong->Prompts(true);
-  if (impl_->view == View::kTexturePacks) return impl_->kong->Prompts(row_focused);
   return {{Action::kAccept, "Select"}, {Action::kBack, "Back"}};
 }
+
+std::string Workshop::DetailTitle() const {
+  if (impl_->guide) return T("Modding guide");
+  if (impl_->detail >= 0) return T("Other TRG projects and games");
+  if (impl_->shelf->InDetail()) return T("Texture packs");
+  if (impl_->kong->InDetail()) return T("Mods");
+  return {};
+}
+
+KongMods& Workshop::Mods() { return *impl_->kong; }
+std::vector<std::pair<std::string, std::string>> Workshop::TexturePackChoices() { return impl_->shelf->Choices(); }
+std::string Workshop::ActiveTexturePack() { return impl_->shelf->Active(); }
+void Workshop::EnableTexturePack(const std::string& key) { impl_->shelf->Enable(key); }
+void Workshop::OnTexturePackModInstalled(const std::string& id) { impl_->shelf->OnModInstalled(id); }
+void Workshop::OnModsChanged(const std::string& removed_id) {
+  if (!removed_id.empty()) impl_->shelf->OnModRemoved(removed_id);
+  else impl_->kong->Rescan();
+}
+void Workshop::OnFolderPackOn() { impl_->shelf->OnFolderOn(); }
+void Workshop::Tick() { impl_->shelf->Tick(); }
 
 void Workshop::DevCommand(const std::string& command) { impl_->Dev(command); }
 

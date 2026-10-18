@@ -53,6 +53,29 @@ class KongMods {
   // Developer steps (workshop:mods:<command>): state, open:<n>, openid:<id>, toggle, earlier, later, rescan, tile:<n>.
   void Dev(const std::string& command);
 
+  // Task 209 (owner, 18 Oct): the Workshop is one page whose rows the Workshop draws itself (workshop.cpp); this
+  // class gives it the mods as cards and keeps their pages, Enable / Disable and load order.
+  struct Card {
+    std::string id, name, author, version, description;
+    rex::ui::ImmediateTexture* picture = nullptr;  // nullptr: a plain panel
+    float aspect = 16.0f / 9.0f;
+    bool builtin = false, on = false, usable = true, conflict = false, texture_pack = false;
+    int position = -1;  // in the load order (on)
+    std::filesystem::path dir;
+    std::vector<std::string> problems;  // why it cannot be switched on (translated)
+  };
+  // Every mod found, in tile order (switched-on ones in load order, then built-ins, then the others).
+  std::vector<Card> Cards();
+  bool Scanned();
+  // Opens a mod's page (as a click on its tile does).
+  void OpenMod(const std::string& id);
+  // kk_mods was changed elsewhere (the texture pack rule, an import, a removal): read it again.
+  void ReloadEnabled();
+  // Reads the mods folder again (after an import or a removal).
+  void Rescan();
+  // A kk_mods entry is a texture pack mod (as far as the last scan knows).
+  bool IsTexturePack(const std::string& id);
+
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;
