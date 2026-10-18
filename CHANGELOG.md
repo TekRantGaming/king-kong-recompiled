@@ -13,6 +13,10 @@ version's notes the first time you start it.
 - **Open Windows HDR Calibration** button in Settings > Display (the Microsoft Store page when the app is not installed). The values are read again when you come back.
 - **Setup graphics pictures from your own game**: the first setup's graphics pages no longer use screenshots shipped with the download. Their pictures are made from your copy of the game while the launcher runs, and options that only show in the game itself show a still from your game with a description.
 
+### Fixed
+- **Garbled letters in Settings**: the Language row showed "EspaÃ±ol" and "FranÃ§ais", and Field of view showed "69Â° (original)". They now read Español, Français and 69° (original).
+- **The Upscaler description is translated**, and in the pause menu it no longer says things that only apply in the main menu.
+
 ### Changed
 - **Every setting explains itself.** The panel beside the settings, in the launcher and in the pause menu, now says what each setting does, what you will notice in the game, what each option changes, and shows its performance and video memory impact and when a change takes effect. In five languages.
 - **New pause menu.** A slim list on the left over the paused game: Resume, Photo mode, Display, Graphics, Audio, Controls, Gameplay, Restart chapter and Quit to main menu. Each settings entry opens its own page, with the settings you can't change while playing greyed at the bottom under **Change from the main menu**. A strip at the bottom says what the selected item does. Works with a controller, keyboard and mouse.
