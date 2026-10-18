@@ -10,6 +10,7 @@
 #include "backend/cel_config.h"
 #include "backend/gi_config.h"
 #include "backend/lighting_config.h"
+#include "backend/picture_adjust.h"
 #include "backend/upscale_config.h"
 
 namespace nr {
@@ -33,6 +34,8 @@ struct EffectSettings {
   bool effect_buffers = true;
   uint32_t sharpness = 0;
   int32_t anisotropic_override = -1;  // anisotropic_override: -1 the game's, 0 off, 2 to 5 (2x to 16x)
+  // Brightness and gamma (kk_brightness, kk_gamma; picture_adjust.h): applied at Present.
+  PictureAdjust picture;
 };
 
 }  // namespace nr

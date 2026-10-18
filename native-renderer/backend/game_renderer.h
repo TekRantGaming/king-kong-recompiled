@@ -42,6 +42,7 @@
 #include "backend/ao_config.h"
 #include "backend/ao_timer.h"
 #include "backend/background_file_writer.h"
+#include "backend/picture_adjust.h"
 #include "backend/scene_ao.h"
 #include "backend/scene_cel.h"
 #include "backend/scene_gi.h"
@@ -1231,6 +1232,11 @@ class GameRenderer {
   nvrhi::TextureHandle gamma_ramp_;
   std::array<uint16_t, 768> gamma_ramp_values_ = {};
   bool gamma_ramp_uploaded_ = false;
+  // The player's brightness and gamma (picture_adjust.h, from the live settings): put after the game's
+  // ramp at Present; at the defaults the ramp is left as the game set it.
+  PictureAdjust picture_;
+  PictureAdjust picture_composed_for_;
+  std::array<uint16_t, 768> picture_composed_from_ = {}, picture_composed_ = {};
   std::unordered_map<nvrhi::ITexture*, nvrhi::BindingSetHandle> blit_sets_;
 
   // The previous draw's constants, to rewrite the volatile buffers only when

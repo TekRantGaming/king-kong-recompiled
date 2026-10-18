@@ -14,6 +14,7 @@
 #include "benchmark.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <bit>
 #include <cstring>
@@ -52,6 +53,10 @@ uint64_t g_window_frames = 0;
 double g_window_swap_ms = 0;  // time spent inside the swap call this window
 double g_window_worst_ms = 0, g_worst_ms = 0;  // the longest frame of this window, of the last one
 rex::ui::FrameStats g_stats;
+// The last guest frame times (ms), for the Performance metrics overlay's graph.
+constexpr size_t kRecentFrames = 256;
+std::array<float, kRecentFrames> g_recent{};
+size_t g_recent_count = 0;  // all frames ever recorded; the newest is at (count - 1) % size
 
 struct Deferred {
   double after;
@@ -117,16 +122,24 @@ void OnGuestSwap() {
     const double frame_ms = std::chrono::duration<double, std::milli>(now - last_swap).count();
     if (frame_ms >= 50.0) REXLOG_INFO("Hitch: {:.0f} ms frame", frame_ms);
     g_window_worst_ms = std::max(g_window_worst_ms, frame_ms);
+    g_recent[g_recent_count++ % kRecentFrames] = float(frame_ms);
     RecordFrameTime(frame_ms);
     telemetry::NoteFrame(frame_ms);  // the per-chapter summary (Beta 7 uploads)
   }
   last_swap = now;
+  // Full performance metrics: the graph and readings repaint ten times a second (the frame rate line
+  // above once a second is enough for "FPS only").
+  static Clock::time_point last_paint{};
+  if (now - last_paint >= std::chrono::milliseconds(100) && REXCVAR_GET(kk_performance_metrics) == "full") {
+    last_paint = now;
+    RequestUiPaint();
+  }
   const double elapsed = std::chrono::duration<double>(now - g_window_start).count();
   if (elapsed >= 1.0) {
     g_stats.fps = g_window_frames / elapsed;
     g_stats.frame_time_ms = elapsed * 1000.0 / g_window_frames;
     g_stats.frame_count = total;
-    if (REXCVAR_GET(kk_show_fps)) RequestUiPaint();
+    if (REXCVAR_GET(kk_performance_metrics) != "off") RequestUiPaint();
     g_worst_ms = g_window_worst_ms;
     g_window_worst_ms = 0;
     REXLOG_INFO("Guest FPS: {:.1f} ({:.2f} ms/frame, {:.2f} ms in swap)",
@@ -152,6 +165,13 @@ void AddSwapTime(double ms) {
 rex::ui::FrameStats GetGuestFrameStats() {
   std::lock_guard lock(g_mutex);
   return g_stats;
+}
+
+size_t GuestFrameTimes(float* out, size_t max) {
+  std::lock_guard lock(g_mutex);
+  const size_t n = std::min({max, g_recent_count, kRecentFrames});
+  for (size_t i = 0; i < n; ++i) out[i] = g_recent[(g_recent_count - n + i) % kRecentFrames];
+  return n;
 }
 
 double GuestWorstFrameMs() {

@@ -764,8 +764,9 @@ class GraphicsPanel final : public rex::ui::ImGuiDialog, public rex::ui::WindowI
 
   void DrawCompact(ImGuiIO& io) {
     const float s = ImGui::GetFontSize() / 18.0f;
-    // Under the frame counter (F2) when it shows.
-    const float top = (rex::cvar::GetFlagByName("kk_show_fps") == "true" ? 64 : 16) * s;
+    // The performance metrics (F2) are at the top left; the stutter line they bring sits at the top right.
+    const float top = (rex::cvar::GetFlagByName("kk_performance_metrics") != "off" &&
+                       rex::cvar::GetFlagByName("native_stutter_stats") == "true" ? 48 : 16) * s;
     ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 16 * s, top), ImGuiCond_Always, ImVec2(1, 0));
     PushStyle(float(std::clamp(REXCVAR_GET(kk_graphics_panel_opacity), 0.3, 1.0)));
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |

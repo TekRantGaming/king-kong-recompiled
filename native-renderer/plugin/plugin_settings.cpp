@@ -420,6 +420,8 @@ GameSettings ReadGameSettings(bool vulkan) {
     if (spatial == "fsr" || spatial == "nis") s.sharpness = 0;
     const std::string aniso = get("anisotropic_override");
     s.anisotropic_override = aniso.empty() ? -1 : std::atoi(aniso.c_str());
+    // The port's brightness and gamma (kk_brightness -50..50, kk_gamma 0.5..1.5; absent: the defaults).
+    s.picture = PictureAdjust::FromSettings(number("kk_brightness", 0.0), number("kk_gamma", 1.0));
     return s;
   };
   return game;

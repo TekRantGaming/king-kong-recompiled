@@ -88,4 +88,32 @@ inline OtherGpuResult OtherGpuUse(const std::vector<GpuInstance>& instances, uin
   for (const auto& [k, v] : all) out.all_engines = std::max(out.all_engines, std::min(100.0, v));
   return out;
 }
+
+// The whole graphics card's load, as Task Manager shows it (the Performance metrics overlay's GPU row):
+// every process's use summed per engine of the adapter the game renders on (the one with its busiest
+// engine, or every one it has a context on when idle), and the busiest engine. -1 without the game's
+// adapter in the list.
+inline double AdapterGpuLoad(const std::vector<GpuInstance>& instances, uint32_t own_pid) {
+  std::set<std::wstring_view> adapters;
+  double busiest = 0;
+  std::wstring_view busiest_adapter;
+  for (const auto& i : instances) {
+    if (InstancePid(i.name) != own_pid) continue;
+    const auto adapter = InstanceAdapter(i.name);
+    if (adapter.empty()) continue;
+    adapters.insert(adapter);
+    if (i.value > busiest) { busiest = i.value; busiest_adapter = adapter; }
+  }
+  if (adapters.empty()) return -1;
+  if (busiest > 0) adapters = {busiest_adapter};
+  std::map<std::wstring_view, double> engines;
+  for (const auto& i : instances) {
+    const auto engine = InstanceEngine(i.name);
+    if (!InstancePid(i.name) || engine.empty() || !adapters.count(InstanceAdapter(i.name))) continue;
+    engines[engine] += std::clamp(i.value, 0.0, 100.0);
+  }
+  double load = 0;
+  for (const auto& [k, v] : engines) load = std::max(load, std::min(100.0, v));
+  return load;
+}
 }  // namespace kk::benchmark

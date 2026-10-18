@@ -30,6 +30,9 @@ REXCVAR_DECLARE(std::string, kk_discord_app_id);
 REXCVAR_DECLARE(bool, kk_online_asked);
 REXCVAR_DECLARE(std::string, kk_install_id);
 REXCVAR_DECLARE(bool, kk_show_fps);
+REXCVAR_DECLARE(std::string, kk_performance_metrics);
+REXCVAR_DECLARE(int32_t, kk_brightness);
+REXCVAR_DECLARE(double, kk_gamma);
 REXCVAR_DECLARE(int32_t, kk_deadzone);
 REXCVAR_DECLARE(int32_t, kk_camera_sensitivity);
 REXCVAR_DECLARE(bool, kk_camera_modern);
@@ -167,6 +170,8 @@ void SetOfferedUpscalers(const std::string& offered);
 // (preserving explicit choices; version 3 enables GI for old presets) and saves
 // it; a new install just gets the current defaults.
 void MigrateSettings(const std::filesystem::path& config_path);
+// Beta 9: an old Show FPS (kk_show_fps = true) becomes Performance metrics "fps" (run after the settings load).
+void MigrateFrameCounter();
 // Settings the player can't change (shader preparing is always Balanced).
 void ApplyFixedSettings();
 

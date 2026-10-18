@@ -78,6 +78,17 @@ struct Counters {
         busiest = std::max(busiest, std::clamp(items[i].FmtValue.doubleValue, 0.0, 100.0));
     return busiest;
   }
+  // The whole adapter's load from the last Gpu() sample (benchmark_other_gpu.h, AdapterGpuLoad).
+  double GpuTotal() {
+    if (!last_count) return -1;
+    auto* items = reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(last.data());
+    std::vector<GpuInstance> instances;
+    instances.reserve(last_count);
+    for (DWORD i = 0; i < last_count; ++i)
+      if (items[i].FmtValue.CStatus == PDH_CSTATUS_VALID_DATA || items[i].FmtValue.CStatus == PDH_CSTATUS_NEW_DATA)
+        instances.push_back({std::wstring_view(items[i].szName), items[i].FmtValue.doubleValue});
+    return AdapterGpuLoad(instances, GetCurrentProcessId());
+  }
   // Other programs' GPU use (benchmark_other_gpu.h): the game's own processes, other adapters and
   // fixed-function engines (video encode/decode, copy) are not counted. -1 when unavailable.
   std::map<uint32_t, bool> same_exe;  // pid -> runs this king_kong.exe (startup parent, closing launcher)
@@ -223,6 +234,57 @@ struct Counters {
 };
 #endif
 }
+// ---------------------------------------------------------------- the overlay's sampler
+struct SystemSampler::Impl {
+#if defined(_WIN32)
+  Counters counters;
+  uint64_t process_cpu = 0;
+  Clock::time_point last{};
+  double cpus = std::max<DWORD>(1, GetActiveProcessorCount(ALL_PROCESSOR_GROUPS));
+#endif
+};
+SystemSampler::SystemSampler() : impl_(std::make_unique<Impl>()) {
+#if defined(_WIN32)
+  impl_->process_cpu = Cpu(GetCurrentProcess(), true);
+  impl_->last = Clock::now();
+  impl_->counters.SystemCpu();  // the first call only starts the window
+#endif
+}
+SystemSampler::~SystemSampler() = default;
+SystemSample SystemSampler::Sample(uint32_t vendor) {
+  SystemSample out;
+#if defined(_WIN32)
+  Counters& c = impl_->counters;
+  out.gpu_own = c.Gpu();
+  out.gpu_load = c.GpuTotal();
+  out.cpu_load = c.SystemCpu();
+  const auto now = Clock::now();
+  const double seconds = std::chrono::duration<double>(now - impl_->last).count();
+  const uint64_t pc = Cpu(GetCurrentProcess(), true);
+  if (seconds > 0 && pc >= impl_->process_cpu) out.cpu_game = std::min(100.0, (pc - impl_->process_cpu) / (seconds * 100000.0 * impl_->cpus));
+  impl_->process_cpu = pc;
+  impl_->last = now;
+  PROCESS_MEMORY_COUNTERS_EX m{}; m.cb = sizeof(m);
+  if (GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&m), sizeof(m)))
+    out.ram_game = double(m.WorkingSetSize) / 1048576;
+  MEMORYSTATUSEX system{sizeof(system)};
+  if (GlobalMemoryStatusEx(&system)) {
+    out.ram_used = double(system.ullTotalPhys - system.ullAvailPhys) / 1048576;
+    out.ram_total = double(system.ullTotalPhys) / 1048576;
+  }
+  if (c.device && vendor == 0x10de) {
+    unsigned value = 0;
+    auto clocks = reinterpret_cast<int(*)(void*, unsigned, unsigned*)>(GetProcAddress(c.nvml, "nvmlDeviceGetClockInfo"));
+    if (clocks && !clocks(c.device, 0, &value)) out.gpu_clock = value;
+    if (c.temperature && !c.temperature(c.device, 0, &value)) out.gpu_temperature = value;
+    if (c.power && !c.power(c.device, &value)) out.gpu_power = value / 1000.0;
+  }
+#else
+  (void)vendor;
+#endif
+  return out;
+}
+
 void Monitor::Start() { worker_ = std::thread([this] { Run(); }); }
 void Monitor::Stop() {
   { std::lock_guard lock(stop_mutex_); stop_ = true; }

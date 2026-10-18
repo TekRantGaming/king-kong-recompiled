@@ -172,6 +172,7 @@ class KingKongApp : public rex::ReXApp {
     const auto recommendation_output = OutputSize();
     kk::InitializeHardwareRecommendation(defaults.config_path, recommendation_output.first, recommendation_output.second);
     kk::MigrateSettings(defaults.config_path);
+    kk::MigrateFrameCounter();
     kk::ApplyFixedSettings();
     // The launcher's Play menu: the saves live under the user data, a start request may be given
     // (--kk_start), and the game goes back to the launcher by restarting (play_session.cpp).
