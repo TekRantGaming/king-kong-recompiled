@@ -6604,12 +6604,17 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // drawn for 0.4 s it has the UI thread run the bookkeeping (TickState: the setup's steps and the jobs)
   // and, once a second while the window is not minimised, ask the presenter to reconnect. While the
   // launcher draws normally it posts nothing.
+  // Task 209 (the owner's Beta 9 flicker): a reconnect makes a new swapchain, which shows as a flash. It is asked
+  // for only when the UI thread is free and frames still do not come (two heartbeats in a row that ran at once,
+  // so at least 0.5 s): a UI thread that was merely busy for a moment (a slow disk during a 5 GB import, a
+  // settings write, a long frame) used to get a new swapchain every time it came back, which flickered.
   struct Heartbeat {
     std::mutex mutex;
     std::condition_variable wake;
     Launcher* owner = nullptr;
     bool stop = false, queued = false;
     std::atomic<int64_t> last_draw{0};  // steady_clock ticks of the last OnDraw
+    std::atomic<int64_t> posted{0};     // when the heartbeat's call was posted to the UI thread
     std::thread thread;
   };
   static int64_t SteadyTicks() { return std::chrono::steady_clock::now().time_since_epoch().count(); }
@@ -6636,6 +6641,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         hb->wake.wait_for(lock, std::chrono::milliseconds(250));
         if (hb->stop || hb->queued || SteadyTicks() - hb->last_draw.load() < stale) continue;
         hb->queued = true;
+        hb->posted = SteadyTicks();
         lock.unlock();  // the UI thread's call takes the lock
         post([hb] {
           Launcher* owner;
@@ -6644,7 +6650,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
             hb->queued = false;
             owner = hb->owner;
           }
-          if (owner) owner->OnHeartbeat();
+          // How long the call waited for the UI thread: long means it was busy, not that frames stopped.
+          const double waited = std::chrono::duration<double>(std::chrono::steady_clock::duration(SteadyTicks() - hb->posted.load())).count();
+          if (owner) owner->OnHeartbeat(waited);
         });
         lock.lock();
       }
@@ -6676,24 +6684,27 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
   }
 
-  // The UI thread, nothing drawn for 0.4 s or more.
-  void OnHeartbeat() {
+  // The UI thread, nothing drawn for 0.4 s or more. `waited`: seconds the call waited for the UI thread.
+  void OnHeartbeat(double waited) {
     if (played_) return;  // the game is starting: nothing left to do here
     const auto now = std::chrono::steady_clock::now();
     if (stalled_since_ == std::chrono::steady_clock::time_point{}) {
       stalled_since_ = now;
-      stall_ticks_ = stall_reconnects_ = 0;
+      stall_ticks_ = stall_reconnects_ = stall_free_ticks_ = 0;
       last_reconnect_ = {};
       REXLOG_INFO("KK: launcher not drawing (window minimised or its surface lost): setup and jobs go on, the "
                   "presenter is asked to reconnect while the window can be drawn");
     }
     ++stall_ticks_;
+    // Busy, not stalled (task 209): the call waited for the UI thread. Frames come again right after it.
+    const bool busy = waited > 0.15;
+    stall_free_ticks_ = busy ? 0 : stall_free_ticks_ + 1;
     const bool was_setup = InSetup(), was_shaders = ShaderScreen();
     TickState();
     if (was_setup != InSetup() || was_shaders != ShaderScreen())
       REXLOG_INFO("KK: launcher setup moved on without frames (setup {} -> {}, shader screen {} -> {})", was_setup,
                   InSetup(), was_shaders, ShaderScreen());
-    if (cb_.recover_presentation && now - last_reconnect_ >= std::chrono::seconds(1)) {
+    if (cb_.recover_presentation && stall_free_ticks_ >= 2 && now - last_reconnect_ >= std::chrono::seconds(1)) {
       last_reconnect_ = now;
       ++stall_reconnects_;
       cb_.recover_presentation();
@@ -7376,6 +7387,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       REXLOG_INFO("KK dev: notify test armed ({})", t);
       return;
     }
+    if (t.rfind("stall:", 0) == 0) {  // task 209: the UI thread busy this many ms (a slow disk write, a long frame)
+      std::this_thread::sleep_for(std::chrono::milliseconds(std::atoi(t.c_str() + 6)));
+      return;
+    }
     if (t.rfind("pause:", 0) == 0) {  // job J3: the next step this many seconds later
       at = now + std::atof(t.c_str() + 6);
       return;
@@ -7505,6 +7520,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   std::shared_ptr<Heartbeat> heartbeat_;  // task 173 (StartHeartbeat)
   std::chrono::steady_clock::time_point stalled_since_{}, last_reconnect_{};  // not drawing since
   int stall_ticks_ = 0, stall_reconnects_ = 0;
+  int stall_free_ticks_ = 0;  // heartbeats in a row that ran at once (the UI thread free, still no frames)
   bool benchmark_pending_ = false;
   bool open_benchmark_results_ = false;  // --kk_launcher_open=benchmark, once the launcher draws
   std::shared_ptr<UpdateStatus> update_;
