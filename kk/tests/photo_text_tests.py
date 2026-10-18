@@ -51,7 +51,10 @@ if re.search('[\U0001F300-\U0001FAFF☀-➿]', photo_table + code):
     failures.append('emoji in photo mode text')
 
 menu = (src / 'pause_menu.cpp').read_text(encoding='utf-8')
-if not re.search(r'if \(photo::Available\(\)\) e\.push_back\(\{"Photo mode"', menu):
+logic = (src / 'pause_menu_logic.h').read_text(encoding='utf-8')
+# Task 222: the list comes from pause_menu_logic.h; Photo mode is listed when photo::Available().
+if ('a.photo = photo::Available();' not in menu or 'if (a.photo) add(Entry::kPhotoMode);' not in logic or
+        'case Entry::kPhotoMode: return photo::Enter();' not in menu):
     failures.append('the pause menu does not offer Photo mode when available')
 if re.search(r'SetFlagByName|REXCVAR_SET|\bSet\(', code):
     failures.append('photo_mode.cpp sets a setting (photo mode must never save over the player\'s settings)')

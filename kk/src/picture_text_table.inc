@@ -1,4 +1,4 @@
-    // Task 206 (owner, 18 Oct): brightness and gamma (Display > Picture), Performance metrics (Display > Overlay,
+    // Task 206 (owner, 18 Oct): brightness and gamma (Display > Picture), Performance metrics (Gameplay > Overlay,
     // the in-game overlay) and the pause menu's greyed rows. Included by launcher_text_table.inc.
     {"Brightness", "Helligkeit", "Brillo", "Luminosité", "Luminosità"},
     {"Gamma", "Gamma", "Gamma", "Gamma", "Gamma"},

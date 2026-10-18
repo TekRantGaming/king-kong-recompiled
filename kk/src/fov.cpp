@@ -1,4 +1,4 @@
-// Field of view (launcher: Gameplay > Field of view, kk_fov).
+// Field of view (launcher: Display > Camera > Field of view, kk_fov).
 //
 // Each frame the renderer copies the active view's camera into its own camera
 // (GDI = *(0x82CCAC30), camera at GDI +208) in sub_82872DB8: the view's field

@@ -1,4 +1,4 @@
-// Motion blur (launcher: Graphics > Motion blur, kk_motion_blur).
+// Motion blur (launcher: Display > Camera > Motion blur, kk_motion_blur).
 //
 // The game's motion blur is one of its after effects (sub_82768DE8, a virtual
 // method of the effect's class): it blends the previous frame over the new one

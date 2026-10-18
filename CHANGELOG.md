@@ -15,12 +15,16 @@ version's notes the first time you start it.
 - **Workshop pictures and details**: every texture pack and built-in mod has a details table (what it changes, how it looks, what it goes well with, its size, what it needs) in five languages, and the texture packs and Cel shading have a picture of what they do. Kong UHD Textures and Kong Comic Book show their own pictures before you download them (about 1 MB each); the HD texture pack and Cel shading pictures are made from your copy of the game. The **Other TRG projects and games** row comes up in a new random order each time you open the Workshop.
 - **Ultrawide (experimental)**, a built-in mod in the Workshop, off unless you switch it on: on a 21:9 or 32:9 screen or window the game fills the width and shows more on the sides instead of black bars, without stretching. It may not work as intended: the HUD, menus and some effects are not adapted yet. Without the mod nothing changes.
 
-### Changed
-- **Every setting explains itself.** The panel beside the settings, in the launcher and in the pause menu, now says what each setting does, what you will notice in the game, what each option changes, and shows its performance and video memory impact and when a change takes effect. In five languages.
-
 ### Fixed
 - **The launcher could crash again and again with a black screen on some AMD graphics cards** when the driver's own shader cache was damaged. The launcher now notices when it ended unexpectedly: the next start clears the game's own shader cache, explains how to empty the AMD shader cache folders and offers to empty them for you if you agree, and after two such ends in a row it switches to the other graphics API (Vulkan or DirectX 12).
 - **The launcher or game could close without leaving a trace.** Every close now leaves evidence in the logs: a crash report with the reason, how long the launcher or game ran before it stopped, and what Windows recorded about it. This helps us find why some launchers closed by themselves.
+- **Garbled letters in Settings**: the Language row showed "EspaÃ±ol" and "FranÃ§ais", and Field of view showed "69Â° (original)". They now read Español, Français and 69° (original).
+- **The Upscaler description is translated**, and in the pause menu it no longer says things that only apply in the main menu.
+
+### Changed
+- **Every setting explains itself.** The panel beside the settings, in the launcher and in the pause menu, now says what each setting does, what you will notice in the game, what each option changes, and shows its performance and video memory impact and when a change takes effect. In five languages.
+- **New pause menu.** A slim list on the left over the paused game: Resume, Photo mode, Display, Graphics, Audio, Controls, Gameplay, Restart chapter and Quit to main menu. Each settings entry opens its own page, with the settings you can't change while playing greyed at the bottom under **Change from the main menu**. A strip at the bottom says what the selected item does. Works with a controller, keyboard and mouse.
+- **Some settings moved to another tab**, in the launcher and the pause menu alike: Field of view, Motion blur and Camera shake are now in Settings > Display > Camera, and Performance metrics in Settings > Gameplay > Overlay. The frame rate cap stays in Display.
 
 ## v2.0.0-beta.10 (18 October 2026)
 

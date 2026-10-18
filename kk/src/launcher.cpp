@@ -1114,15 +1114,21 @@ class SettingsPages {
       Item it;
       it.type = ItemType::kChoice;
       it.label = "Upscaler";
-      std::string desc =
-          std::string("Scales the picture up to your screen and sharpens it, for a clearer image when the game draws "
-                      "fewer pixels than your screen has. ") +
-          which + " Off uses plain smooth scaling.";
-      if (any_temporal || !temporal.empty())
-        desc += " DLSS, FSR 4, FSR 3.1 and XeSS rebuild a sharp picture from several frames and smooth jagged edges "
-                "too; only those your graphics card supports are listed. The default is the best one it runs: DLSS "
-                "on NVIDIA cards, FSR 4 or FSR 3.1 on AMD cards, XeSS on Intel cards, FSR 3.1 on others, and FSR 1 "
-                "where none of them runs. Choosing one of them restarts the game when you press Play.";
+      // Translated sentence by sentence (task 222 game check: the whole text had no translation). In game the
+      // pause menu leaves out what does not apply there (FSR 1 / NIS are not listed, nothing restarts) so the
+      // strip fits at 1280 x 720.
+      std::string desc = T("Scales the picture up to your screen and sharpens it, for a clearer image when the game "
+                           "draws fewer pixels than your screen has.");
+      if (!in_game_ || spatial_now) desc += std::string(" ") + T(std::string(which));
+      desc += std::string(" ") + T("Off uses plain smooth scaling.");
+      if (any_temporal || !temporal.empty()) {
+        desc += std::string(" ") + T("DLSS, FSR 4, FSR 3.1 and XeSS rebuild a sharp picture from several frames and smooth jagged "
+                        "edges too; only those your graphics card supports are listed.");
+        if (!in_game_)
+          desc += std::string(" ") + T("The default is the best one it runs: DLSS on NVIDIA cards, FSR 4 or FSR 3.1 on AMD cards, "
+                          "XeSS on Intel cards, FSR 3.1 on others, and FSR 1 where none of them runs. Choosing one of "
+                          "them restarts the game when you press Play.");
+      }
       it.description = desc;
       it.index = -1;
       const std::string present = Get("present_effect");
@@ -1279,6 +1285,7 @@ class SettingsPages {
 
   std::vector<Item> DisplayItems() {
     // The order of settings_layout.h (kDisplayRows).
+    const bool original = GetBool("kk_original_look");
     std::vector<Item> items;
     items.push_back(Section("Screen"));
     items.push_back(WindowModeItem());
@@ -1299,10 +1306,38 @@ class SettingsPages {
                                "d3d12_allow_variable_refresh_rate_and_tearing", "Off", "On", /*invert=*/true));
     items.push_back(FrameRateItem());
     if (FindFlag("present_hdr")) HdrItems(items);
-    items.push_back(Section("Overlay"));
-    items.push_back(CvarChoice("Performance metrics",
-                               "Readings in the top left corner while you play. F2 switches between them.",
-                               "kk_performance_metrics", {{"Off", "off"}, {"FPS only", "fps"}, {"Full", "full"}}));
+    // Camera (owner, 18 Oct, after task 222): Field of view, Motion blur and Camera shake moved here from Gameplay
+    // and Graphics; Performance metrics went to Gameplay. The pause menu's Display page follows.
+    items.push_back(Section("Camera"));
+    {
+      Item it = CvarSlider("Field of view",
+                           "How wide the camera sees. 69" KK_DEG " is the original for Jack; Kong, cutscene and other "
+                           "cameras widen by the same amount. Jack's gun keeps its usual size.",
+                           "kk_fov", 69, 110, 1, [](float v) {
+                             const int d = int(std::lround(v));
+                             return d <= 69 ? F("{0}" KK_DEG " (original)", {std::to_string(d)})
+                                            : std::to_string(d) + KK_DEG;
+                           });
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
+    {
+      Item it = CvarToggle("Motion blur",
+                           "The trail the game blends over fast moments, mostly in Kong's sequences and some "
+                           "transitions.",
+                           "kk_motion_blur");
+      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
+    }
+    items.push_back(CvarToggle("Camera shake",
+                               "The camera shaking from the V-Rex's footsteps, explosions and Kong's blows.",
+                               "kk_camera_shake"));
+    {
+      Item it = CvarSlider("Camera shake strength",
+                           "How hard the camera shakes. 100% is the Xbox 360's; lower it if the shaking bothers you.",
+                           "kk_camera_shake_strength", 10, 200, 5,
+                           [](float v) { return std::to_string(int(std::lround(v))) + "%"; });
+      items.push_back(
+          std::move(Disable(it, !GetBool("kk_camera_shake"), "Switch Camera shake on to set its strength.")));
+    }
     return items;
   }
 
@@ -1747,14 +1782,7 @@ class SettingsPages {
     }
     LightingItems(items, original);
 
-    items.push_back(Section("Effects"));
-    {
-      Item it = CvarToggle("Motion blur",
-                           "The trail the game blends over fast moments, mostly in Kong's sequences and some "
-                           "transitions.",
-                           "kk_motion_blur");
-      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
-    }
+    items.push_back(Section("Effects"));  // Motion blur is on Display > Camera (owner, 18 Oct)
     {
       Item it = CvarToggle("Screen blur",
                            "Some levels (Necropolis, Brontosaurus) blur the whole picture slightly.",
@@ -2084,15 +2112,14 @@ class SettingsPages {
   // ----------------------------------------------------------- Gameplay ---
   std::vector<Item> GameplayItems() {
     // The order of settings_layout.h (kGameplayRows).
-    const bool original = GetBool("kk_original_look");
     std::vector<Item> items;
     items.push_back(Section("Subtitles and language"));
     items.push_back(SubtitlesItem());
     items.push_back(CvarChoice("Language", "The game's language, where the game includes it.", "user_language",
                                {{"English", "1"},
                                 {"Deutsch", "3"},
-                                {"EspaÃ±ol", "5"},
-                                {"FranÃ§" "ais", "4"},
+                                {"Español", "5"},
+                                {"Franç" "ais", "4"},
                                 {"Italiano", "6"}}));
     items.push_back(Section("HUD"));
     {
@@ -2108,28 +2135,11 @@ class SettingsPages {
                                "Xbox 360 unfolds from a green ring at the bottom of the screen. Steam slides up in "
                                "the bottom-right corner. Try them with Test notification.",
                                "kk_achievement_style", {{"Xbox 360", "xbox360"}, {"Steam", "steam"}}));
-    items.push_back(Section("Camera"));
-    {
-      Item it = CvarSlider("Field of view",
-                           "How wide the camera sees. 69" KK_DEG " is the original for Jack; Kong, cutscene and other "
-                           "cameras widen by the same amount. Jack's gun keeps its usual size.",
-                           "kk_fov", 69, 110, 1, [](float v) {
-                             const int d = int(std::lround(v));
-                             return d <= 69 ? F("{0}Â° (original)", {std::to_string(d)}) : std::to_string(d) + KK_DEG;
-                           });
-      items.push_back(std::move(Disable(it, original, kSetByOriginal)));
-    }
-    items.push_back(CvarToggle("Camera shake",
-                               "The camera shaking from the V-Rex's footsteps, explosions and Kong's blows.",
-                               "kk_camera_shake"));
-    {
-      Item it = CvarSlider("Camera shake strength",
-                           "How hard the camera shakes. 100% is the Xbox 360's; lower it if the shaking bothers you.",
-                           "kk_camera_shake_strength", 10, 200, 5,
-                           [](float v) { return std::to_string(int(std::lround(v))) + "%"; });
-      items.push_back(
-          std::move(Disable(it, !GetBool("kk_camera_shake"), "Switch Camera shake on to set its strength.")));
-    }
+    // Performance metrics moved here from Display (owner, 18 Oct); the camera rows went to Display > Camera.
+    items.push_back(Section("Overlay"));
+    items.push_back(CvarChoice("Performance metrics",
+                               "Readings in the top left corner while you play. F2 switches between them.",
+                               "kk_performance_metrics", {{"Off", "off"}, {"FPS only", "fps"}, {"Full", "full"}}));
     items.push_back(Section("Game"));
     items.push_back(CvarToggle("Startup logos",
                                "The Ubisoft, Universal and WingNut movies before the title screen. Story movies "

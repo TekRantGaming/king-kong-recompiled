@@ -590,7 +590,7 @@ void DrawItem(ImDrawList* dl, const Item& it, float x0, float y0, float x1, floa
     const float fs = 13 * s, ty = y0 + h - 16 * s - fs;
     const std::string caption = text::Upper(T(it.label));
     const float w = TrackedWidth(f.display, fs, caption, 2.2f * s);
-    DrawTracked(dl, f.display, fs, ImVec2(x0 + 2 * s, ty), color::kAccent, caption, 2.2f * s);
+    DrawTracked(dl, f.display, fs, ImVec2(x0 + 2 * s, ty), it.value_color ? it.value_color : color::kAccent, caption, 2.2f * s);
     dl->AddLine(ImVec2(x0 + w + 16 * s, std::round(ty + fs * 0.55f)), ImVec2(x1, std::round(ty + fs * 0.55f)),
                 color::kHairline, 1.0f);
     return;

@@ -2852,6 +2852,7 @@ constexpr Entry kEntries[] = {
 #include "artbook_text_table.inc"
 #include "picture_text_table.inc"
 #include "photo_text_table.inc"
+#include "pause_text_table.inc"
 #include "texture_packs_text_table.inc"
 #include "settings_help_text_table.inc"
 

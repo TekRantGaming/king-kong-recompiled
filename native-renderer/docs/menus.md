@@ -38,11 +38,14 @@ Whatever is chosen, the game starts with no logos, no title screen and no menus.
 Start (Esc) in play opens the port's pause menu instead of the game's: launcher look (same fonts, colours,
 focus highlight, controller / keyboard / mouse prompts), over the frozen, dimmed game frame:
 
-- **Resume**, **Start again**, **Score**, **Options**, **Quit game**: everything the game's pause menu has, doing
-  what the game's items do (the game's own page code and confirmations, answered by the port). Quit game saves
-  as the game does, then goes back to the launcher (the process restarts into the launcher's Play menu).
-- **Settings**: the launcher's Display, Graphics, Controls (with remapping) and Cheats pages, showing only what
-  can change live. Changes apply at once and are saved like in the launcher.
+Task 222 (owner, 18 Oct, option A): a slim list on the left over the paused game (dark band on the left, the
+game visible on the right): **Resume**, **Photo mode**, **Display**, **Graphics**, **Audio**, **Controls**,
+**Gameplay** (and **Cheats** while the cheats are on), then after a gap the game's items when it offers them
+(**Restart chapter** = the game's Start again, **Score**, **Save game**), **Quit to main menu** and **Quit game**.
+Each settings entry opens its page in the same column ("PAUSED / DISPLAY"); Back returns to the list on the same
+entry; LB / RB move between the listed pages. A description strip at the bottom left says what the entry or row
+does (task 220's help: what, the chosen option's note, then when it applies, performance, video memory, default).
+Layout logic: `kk/src/pause_menu_logic.h` (tested by `pause-menu-layout`).
 - Start in a cutscene still skips it (not a pause). Loading screens: no menu.
 - Extras (task 204): the Weta galleries get the same menu. The game itself leaves a gallery on Start
   (IntMIG_wait asks for the start menu while G+0x5680, the Extras row, is set); the port hides the row from that
@@ -147,23 +150,26 @@ again" option; Reinstall game (About) runs the full setup again and keeps the se
 ### The pause menu
 
 `CreatePauseMenu` (`pause_menu.h`) makes one ImGui dialog for the session (the launcher makes it at Play; the app
-should also make it when the launcher is skipped). While `play::PauseMenuOpen()` it draws over the dimmed frame:
-the game's logo, `PAUSED`, and Resume, Start again and Score (when `PauseActionAvailable`), Options, Settings, Quit
-game. Start again and Quit game ask first (Cancel focused); B, Esc or Start resume. Options shows the port's
-settings (Gameplay) until the game's own Options page is known.
+should also make it when the launcher is skipped). While `play::PauseMenuOpen()` it draws the list above
+(`PAUSED`, entries from `pause::Entries`, the game's items when `PauseActionAvailable`). Restart chapter, Quit to
+main menu and Quit game ask first (Cancel focused); on the list B, Esc or Start resume; on a page Start resumes, B,
+Esc, the right mouse button or a click on `PAUSED` go back. The game's own Options pages: developer builds only.
 
-**Settings**: tabs Display, Graphics, Audio, Controls (with Button remapping and Keyboard bindings), Gameplay,
-Cheats, Advanced (the same order as the launcher's Settings, `settings_layout.h`), the launcher's own rows (`SettingsPages`, shared code). Owner, 18 Oct (task 206): every row is shown; those that
-cannot change while the game runs are greyed out with the note "This can't be changed while you play. Quit to the
-launcher's main menu and change it in Settings." (`LiveOnly`: window mode and size, resolution, refresh rate,
-monitor, VSync, render quality, internal resolution, look, preset, Recommended, graphics API, renderer, language,
-startup logos). Live since task 206: the frame rate cap (the limiter and the HFR fixes read it every frame), the
+**Pages**: the launcher's Settings rows (`SettingsPages`, shared code; `settings_layout.h` order) for Display,
+Graphics, Audio, Controls (with Button remapping and Keyboard bindings), Gameplay and Cheats; Advanced is not in
+the pause menu (task 222). Owner, 18 Oct (task 206): every row is shown; those that cannot change while the game
+runs are greyed with the note "This can't be changed while you play. Change it from the main menu." and, since
+task 222, gathered at the bottom of the page under "Change from the main menu" (`LiveOnly`: window mode and size,
+resolution, refresh rate, monitor, VSync, render quality, internal resolution, look, preset, Recommended, graphics
+API, renderer, language, startup logos). Live since task 206: the frame rate cap (the limiter and the HFR fixes read it every frame), the
 upscaler between Off and the temporal upscalers the running device offers (as F8 lists them; the renderer swaps
 them at a frame boundary) and its mode; with FSR 1 / NIS or a render quality below Native the Upscaler row is greyed
 (the presenter's spatial upscalers are chosen at start). Display has Picture (Brightness, Gamma; applied at Present,
-`backend/picture_adjust.h`; the kept pause frame is retouched to follow them) and Overlay (Performance metrics,
-hidden while the pause menu is open). The menu's list has a **Graphics** entry that opens the Graphics tab. Changes
-are saved like in the launcher.
+`backend/picture_adjust.h`; the kept pause frame is retouched to follow them) and, since 18 Oct (owner, after task
+222), Camera (Field of view, Motion blur, Camera shake and its strength; before that in Gameplay and Graphics);
+Gameplay has Overlay (Performance metrics, hidden while the pause menu is open; before that in Display). The frame
+rate cap stays in Display. Launcher tabs and pause pages are built by the same code, so they always match.
+Changes are saved like in the launcher.
 Controls: the game gives the menu the pad it read (`PauseMenuPad`); keyboard and mouse come through ImGui.
 
 ## Game side (menus-game, branch `beta3-game`)

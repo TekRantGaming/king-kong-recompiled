@@ -33,7 +33,7 @@ table_text = ''
 for name in ('settings_help_text_table.inc', 'launcher_text_table.inc', 'debug_overlay_text_table.inc', 'benchmark_text_table.inc',
              'hdr_text_table.inc', 'launcher_layout_text_table.inc', 'workshop_text_table.inc',
              'artbook_text_table.inc', 'mods_text_table.inc', 'picture_text_table.inc', 'texture_packs_text_table.inc',
-             'setup_pictures_text_table.inc'):
+             'setup_pictures_text_table.inc', 'photo_text_table.inc', 'pause_text_table.inc'):
     table_text += (src / name).read_text(encoding='utf-8') + '\n'
 STRING = r'"((?:[^"\\]|\\.)*)"'
 entries = {}
@@ -594,8 +594,47 @@ for _needle, _why in (
         ('"kk_brightness", -50, 50, 1,', 'the brightness slider'), ('"kk_gamma", 0.5f, 1.5f, 0.05f,', 'the gamma slider')):
     if _needle not in _l206:
         fail(f'206: {_why}')
-if 'e.push_back({"Graphics", [this] { OpenSettings(InGameSettings::kGraphics); }});' not in (src / 'pause_menu.cpp').read_text(encoding='utf-8'):
-    fail('206: the pause menu has no Graphics entry')
+# Task 222 (owner, 18 Oct, option A): the pause menu is a slim list (Resume, Photo mode, Display, Graphics, Audio,
+# Controls, Gameplay, then Restart chapter and Quit to main menu), each settings entry opening its own page; the old
+# layout (tabs across the top, a Settings entry, the logo) is gone; in game nothing says "launcher".
+_pm = (src / 'pause_menu.cpp').read_text(encoding='utf-8')
+_pl = (src / 'pause_menu_logic.h').read_text(encoding='utf-8')
+_pt222 = (src / 'pause_text_table.inc').read_text(encoding='utf-8')
+_m = re.search(r'inline const char\* Label\(Entry e\) \{(.*?)\n\}', _pl, re.S)
+_labels = dict(re.findall(r'case Entry::(\w+): return "([^"]+)";', _m.group(1))) if _m else {}
+_m = re.search(r'inline const char\* What\(Entry e\) \{(.*?)\n\}', _pl, re.S)
+_whats = dict(re.findall(r'case Entry::(\w+): return "([^"]+)";', _m.group(1))) if _m else {}
+for _dev in ('kGameOptions',):  # developer builds only
+    _labels.pop(_dev, None)
+    _whats.pop(_dev, None)
+if set(_whats) != {'kResume', 'kPhotoMode', 'kDisplay', 'kGraphics', 'kAudio', 'kControls', 'kGameplay', 'kCheats',
+                   'kRestart', 'kScore', 'kSave', 'kQuitToMainMenu', 'kQuitGame'}:
+    fail(f'222: the strip sentences cover {sorted(_whats)}')
+strings |= set(_labels.values()) | set(_whats.values())
+strings |= {'Change from the main menu', 'Photo mode', 'Start this chapter again from its beginning?',
+            'Leave the game and go back to the main menu?', 'Leave the game and close it?', 'Leave', 'Quit', 'Cancel',
+            'Paused', 'Select', 'Back', 'Change', 'Default', 'Resume', 'Reset page', 'Default: {0}'}
+if _labels.get('kQuitToMainMenu') != 'Quit to main menu':
+    fail('222: no "Quit to main menu" entry')
+for _needle, _why in (('ui::DrawTabs(', 'the old tab bar is still drawn'), ('"Settings"', 'the old Settings entry is back'),
+                      ('LoadLogo', 'the old logo is still drawn'), ('"Return to main menu"', 'the old "Return to main menu" entry')):
+    if _needle in _pm:
+        fail(f'222: {_why}')
+for _needle, _why in (('pause::PageOrder(kinds)', 'pages are not ordered live rows first, then the quiet group'),
+                      ('caption.label = pause::kQuietCaption;', 'no "Change from the main menu" group'),
+                      ('DrawStrip(dl, focused,', 'a page has no description strip'),
+                      ('DrawStrip(dl, nullptr, T(pause::What(focus_entry_))', 'the list has no description strip'),
+                      ('pause::NextPage(', 'LB / RB do not move between pages'),
+                      ('BackToList()', 'Back does not return to the list on the same entry')):
+    if _needle not in _pm:
+        fail(f'222: {_why}')
+for _name, _text in (('pause_menu.cpp', _pm), ('pause_menu_logic.h', _pl), ('pause_text_table.inc', _pt222)):
+    _code = '\n'.join(l.split('//')[0] for l in _text.splitlines() if not l.lstrip().startswith('#include'))
+    for _s in re.findall(r'"([^"\n]*)"', _code):
+        if 'launcher' in _s.lower() and not _s.startswith('kk_launcher'):
+            fail(f'222: {_name} says "launcher" in game: {_s!r}')
+    if '\u2014' in _text or '\u2013' in _text:
+        fail(f'222: dash in {_name}')
 if '"kk_show_fps"' in _l206 or '"Frame counter"' in _l206:
     fail('206: the old Frame counter row is still in the launcher')
 _settings206 = (src / 'settings.cpp').read_text(encoding='utf-8')
