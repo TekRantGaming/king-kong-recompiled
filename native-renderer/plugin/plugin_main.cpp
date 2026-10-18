@@ -398,6 +398,11 @@ REXCVAR_DEFINE_STRING(native_upscaler_output, "", "Native renderer",
                       "it; empty: the draw resolution scale's size")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
+REXCVAR_DEFINE_STRING(native_display_aspect, "", "Native renderer",
+                      "The shown picture's shape, WxH (the game sets it, not saved, for the experimental Ultrawide "
+                      "mod); empty: the game's own 16:9")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
 REXCVAR_DEFINE_STRING(native_frame_size, "", "Native renderer",
                       "Without an upscaler and native_render_scale auto: the frame size, WxH. The game sets it "
                       "(not saved) to the draw resolution scale's size, never above the resolution chosen in the "

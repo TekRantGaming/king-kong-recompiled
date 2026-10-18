@@ -3,6 +3,11 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v2.0.0-beta.11 (unreleased)
+
+### What's new
+- **Ultrawide (experimental)**, a built-in mod in the Workshop, off unless you switch it on: on a 21:9 or 32:9 screen or window the game fills the width and shows more on the sides instead of black bars, without stretching. It may not work as intended: the HUD, menus and some effects are not adapted yet. Without the mod nothing changes.
+
 ## v2.0.0-beta.10 (18 October 2026)
 
 **Beta 10**: an emergency fix update, from the beta channel (**About** > **Change version**). Your saves and settings are kept. Windows only for this beta.

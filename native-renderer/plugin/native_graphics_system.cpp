@@ -7,6 +7,7 @@
 #include <cstring>
 #include <filesystem>
 #include <iterator>
+#include <utility>
 
 #include <rex/assert.h>
 #include <rex/chrono/clock.h>
@@ -59,6 +60,7 @@
 REXCVAR_DECLARE(bool, native_draws);
 REXCVAR_DECLARE(bool, native_game);
 REXCVAR_DECLARE(std::string, native_shader_pack);
+REXCVAR_DECLARE(std::string, native_display_aspect);
 REXCVAR_DECLARE(bool, native_log_packets);
 REXCVAR_DECLARE(std::string, native_test);
 REXCVAR_DECLARE(bool, native_wvp_transpose);
@@ -539,8 +541,17 @@ void NativeGraphicsSystem::OnSwap(uint32_t /*frontbuffer_ptr*/, uint32_t width, 
   }
   rex::system::X_VIDEO_MODE mode;
   rex::kernel::xboxkrnl::VdQueryVideoMode(&mode);
-  backend_->Present(presenter_.get(), width, height, std::max<uint32_t>(1, mode.display_width),
-                    std::max<uint32_t>(1, mode.display_height));
+  // The experimental Ultrawide mod (kk_aspect): the picture is wider than the game's 16:9 and the presenter
+  // fits that shape instead (native_display_aspect, WxH, set by the game before the GPU starts).
+  static const std::pair<uint32_t, uint32_t> shape = [] {
+    unsigned w = 0, h = 0;
+    const std::string v = REXCVAR_GET(native_display_aspect);
+    if (std::sscanf(v.c_str(), "%ux%u", &w, &h) != 2 || !w || !h) w = h = 0;
+    return std::pair<uint32_t, uint32_t>{w, h};
+  }();
+  backend_->Present(presenter_.get(), width, height,
+                    shape.first ? shape.first : std::max<uint32_t>(1, mode.display_width),
+                    shape.second ? shape.second : std::max<uint32_t>(1, mode.display_height));
   // With --native_async_present the frame is shown after Present returns: a later swap sees it.
   if (!startup_presented_ && backend_->presented_game_frames()) {
     startup_presented_ = true;

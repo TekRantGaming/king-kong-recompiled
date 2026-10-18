@@ -60,6 +60,9 @@ std::string IssueText(const Issue& i) {
   return {};
 }
 
+// A built-in mod's description in the player's language (mods_text_table.inc); a player's mod's as written.
+std::string Description(const Mod& m) { return m.builtin ? T(m.description) : m.description; }
+
 const char* TypeName(Type t) {
   switch (t) {
     case Type::kTexturePack: return T("Texture pack");
@@ -428,7 +431,8 @@ struct KongMods::Impl {
       const Mod& md = mods[size_t(order[size_t(tile)])];
       std::string line = TypeName(md.type);
       if (!md.description.empty()) {
-        std::string d = md.description.substr(0, md.description.find('\n'));
+        const std::string desc = Description(md);
+        std::string d = desc.substr(0, desc.find('\n'));
         line += (line.empty() ? "" : "   " KK_MODS_DOT "   ") + d;
       }
       dl->AddText(f.text, 14.5f * s, ImVec2(p0.x, y), color::kTextDim, ui::Ellipsize(f.text, 14.5f * s, line, avail).c_str());
@@ -490,8 +494,9 @@ struct KongMods::Impl {
     dl->AddText(f.text, 14.5f * s, ImVec2(bx, y + 1 * s), color::kTextDim, ui::Ellipsize(f.text, 14.5f * s, fl, p0.x + wrap - bx).c_str());
     y += 34 * s;
     if (!md.description.empty()) {
-      dl->AddText(f.text, 16 * s, ImVec2(p0.x, y), color::kText, md.description.c_str(), nullptr, wrap);
-      y += f.text->CalcTextSizeA(16 * s, FLT_MAX, wrap, md.description.c_str()).y + 16 * s;
+      const std::string desc = Description(md);
+      dl->AddText(f.text, 16 * s, ImVec2(p0.x, y), color::kText, desc.c_str(), nullptr, wrap);
+      y += f.text->CalcTextSizeA(16 * s, FLT_MAX, wrap, desc.c_str()).y + 16 * s;
     }
     auto caption = [&](const char* label) {
       const std::string up = text::Upper(label);
@@ -631,7 +636,7 @@ std::vector<KongMods::Card> KongMods::Cards() {
     c.name = m.name;
     c.author = m.author;
     c.version = m.version;
-    c.description = m.description;
+    c.description = Description(m);
     c.picture = impl_->textures.size() > size_t(i) ? impl_->textures[size_t(i)].get() : nullptr;
     c.aspect = impl_->aspects.size() > size_t(i) ? impl_->aspects[size_t(i)] : 16.0f / 9.0f;
     c.builtin = m.builtin;
