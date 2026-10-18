@@ -825,6 +825,110 @@ static void ServerTest(const fs::path& work, const std::string& server) {
   std::cout << "real fetcher: ok\n";
 }
 
+// Task 212: the Workshop's downloadable texture pack mods (content::kModPacks), Kong UHD Textures and Kong Comic
+// Book: the table, the kind numbers task 209 used, a download that installs into the mods folder as a texture pack
+// mod, records written before (UHD) that still load next to the new one, and Remove.
+static void ModPackTests(const fs::path& work) {
+  CHECK(std::size(kModPacks) == 2);
+  CHECK(kModPacks[0].kind == Kind::kUhd && std::string(kModPacks[0].key) == "uhd" &&
+        std::string(kModPacks[0].name) == "Kong UHD Textures");
+  CHECK(kModPacks[1].kind == Kind::kComic && std::string(kModPacks[1].key) == "comic" &&
+        std::string(kModPacks[1].name) == "Kong Comic Book");
+  CHECK(IsModPack(Kind::kUhd) && IsModPack(Kind::kComic));
+  for (const Kind k : {Kind::kTexturePack, Kind::kCutscenes, Kind::kArtbook, Kind::kImport}) CHECK(!IsModPack(k) && !ModPackFor(k));
+  CHECK(ModPackFor(Kind::kComic) == &kModPacks[1] && !Quiet(Kind::kComic));
+  // Task 209's numbers are kept (array indexes); new kinds only at the end.
+  CHECK(int(Kind::kTexturePack) == 0 && int(Kind::kCutscenes) == 1 && int(Kind::kArtbook) == 2 &&
+        int(Kind::kUhd) == 3 && int(Kind::kImport) == 4 && int(Kind::kComic) == 5 && kKindCount == 6);
+  const Info& comic = InfoFor(Kind::kComic);
+  CHECK(std::string(comic.id) == "comic-textures" && std::string(comic.folder) == "comic-textures");
+  CHECK(std::string(comic.url) == "https://bobandersonv115.cypher.usbx.me/filebrowser/api/public/dl/A_vaZ0kx");
+  CHECK(std::string(comic.zip_name) == "Kong-Comic-Book-1.0.zip" && comic.zip_size == 1404861922ull &&
+        comic.unpacked == 5323466668ull);
+  CHECK(std::string(comic.sha256) == "840fa08f3c4e10664037a2cf9f459a4067d1469f8bb25a5be9a3c4c99faef68f");
+  const Info& uhd = InfoFor(Kind::kUhd);  // unchanged
+  CHECK(std::string(uhd.id) == "uhd-textures" && uhd.zip_size == 2423136757ull &&
+        std::string(uhd.url).find("QBGh8N8b") != std::string::npos);
+  std::set<std::string> ids, folders;
+  for (int i = 0; i < kKindCount; ++i) ids.insert(InfoFor(Kind(i)).id), folders.insert(InfoFor(Kind(i)).folder);
+  CHECK(int(ids.size()) == kKindCount && int(folders.size()) == kKindCount);  // each has its own files
+
+  const fs::path u = work / "user-modpacks";
+  const fs::path mods = u / "mods";
+  // Kong UHD Textures installed by task 209's build: its mod folder and its record.
+  const fs::path uhd_dir = mods / "Kong UHD Textures";
+  for (const auto& f : PackFiles("")) WriteFile(uhd_dir / "textures" / f.name, f.data);
+  WriteFile(uhd_dir / "mod.toml", "name = \"Kong UHD Textures\"\ntype = \"texture-pack\"\n");
+  WriteFile(InstallDir(u, Kind::kUhd) / "installed.txt",
+            "name=Kong UHD Textures\nfolder=" + uhd_dir.string() + "\nsource=download\napplied=1\n");
+  // A Kong Comic Book ZIP laid out like the real one.
+  const std::string name = "Kong Comic Book";
+  std::vector<ZipFile> files{{name + "/", ""},
+                             {name + "/mod.toml", "name = \"Kong Comic Book\"\nauthor = \"TekRantGaming\"\nversion = \"1.0\"\n"
+                                                  "picture = \"picture.png\"\ntype = \"texture-pack\"\nmin_game_version = \"2.0.0-beta.7\"\n"},
+                             {name + "/picture.png", "PNG"},
+                             {name + "/README.txt", "readme"}};
+  for (const auto& f : PackFiles(name + "/textures/")) files.push_back(f);
+  const std::string zip = MakeZip(files);
+  {
+    auto fake = std::make_unique<FakeFetcher>();
+    fake->drop_at = zip.size() / 2;  // a lost connection: continues from the partial file
+    fake->data = zip;
+    Service s;
+    s.OverrideUrl(Kind::kComic, "fake://comic", Sha(zip));
+    s.Init(u, std::move(fake));
+    CHECK(s.Get(Kind::kUhd).installed && s.Get(Kind::kUhd).mod_id == "Kong UHD Textures");  // the old record loads
+    CHECK(s.Get(Kind::kComic).stage == Stage::kNone && !s.Get(Kind::kComic).installed);
+    s.TakeChanges();
+    s.Download(Kind::kComic);
+    CHECK(WaitFor([&] { return s.Idle() && s.Get(Kind::kComic).installed; }));
+    const auto st = s.Get(Kind::kComic);
+    CHECK(!st.imported && st.installed_name == "Kong Comic Book" && st.mod_id == "Kong Comic Book" &&
+          st.folder == mods / "Kong Comic Book");
+    for (const char* f : {"mod.toml", "picture.png", "README.txt", "textures/pack.txt"}) CHECK(fs::exists(mods / name / f));
+    CHECK(ReadFile(InstallDir(u, Kind::kComic) / "installed.txt").find("source=download") != std::string::npos);
+    CHECK(!fs::exists(u / "content" / "downloads" / "comic-textures.zip") &&
+          !fs::exists(u / "content" / "downloads" / "comic-textures.part"));
+    // It becomes the one texture pack on (the launcher's event), and changes no folder pack setting.
+    const auto changes = s.TakeChanges();
+    CHECK(changes.size() == 1 && changes[0].name == "@texture-pack-mod" && changes[0].value == "Kong Comic Book");
+    CHECK(s.Get(Kind::kUhd).installed && fs::exists(uhd_dir / "textures" / "pack.txt"));  // UHD untouched
+  }
+  {
+    // A restart reads both records; Remove deletes only the Comic pack's folder.
+    Service s;
+    s.Init(u, std::make_unique<FakeFetcher>());
+    CHECK(s.Get(Kind::kUhd).installed && s.Get(Kind::kComic).installed && s.Get(Kind::kComic).mod_id == "Kong Comic Book");
+    s.TakeChanges();
+    s.Remove(Kind::kComic);
+    CHECK(WaitFor([&] { return s.Idle() && !s.Get(Kind::kComic).installed; }));
+    CHECK(!fs::exists(mods / name) && !fs::exists(InstallDir(u, Kind::kComic)) && fs::exists(uhd_dir / "textures" / "pack.txt"));
+    const auto changes = s.TakeChanges();
+    CHECK(changes.size() == 1 && changes[0].name == "@mod-removed" && changes[0].value == "Kong Comic Book");
+    CHECK(s.Get(Kind::kUhd).installed);
+  }
+  {
+    // Pause and Cancel work for it like for the HD pack (a slow server, a bigger ZIP).
+    auto big_files = files;
+    big_files.push_back({name + "/textures/big.dds", std::string(200000, 'z')});
+    const std::string big = MakeZip(big_files);
+    auto fake = std::make_unique<FakeFetcher>();
+    fake->data = big;
+    fake->chunk_ms = 15;
+    Service s;
+    s.OverrideUrl(Kind::kComic, "fake://comic", Sha(big));
+    s.Init(u, std::move(fake));
+    s.Download(Kind::kComic);
+    CHECK(WaitFor([&] { return s.Get(Kind::kComic).done >= 4096; }));
+    s.Pause(Kind::kComic);
+    CHECK(WaitFor([&] { return s.Get(Kind::kComic).stage == Stage::kPaused && s.Idle(); }));
+    CHECK(fs::exists(u / "content" / "downloads" / "comic-textures.part"));
+    s.Cancel(Kind::kComic);
+    CHECK(s.Get(Kind::kComic).stage == Stage::kNone && !fs::exists(u / "content" / "downloads" / "comic-textures.part"));
+    CHECK(!fs::exists(mods / name));
+  }
+}
+
 int main(int argc, char** argv) {
   if (argc < 2) {
     std::cerr << "usage: kk-content-tests <work folder>\n";
@@ -839,6 +943,7 @@ int main(int argc, char** argv) {
   });
   PureTests();
   ServiceTests(work);
+  ModPackTests(work);
   if (const char* server = std::getenv("KK_CONTENT_TEST_SERVER"); server && *server) ServerTest(work, server);
   std::cout << checks << " content checks passed\n";
   return 0;

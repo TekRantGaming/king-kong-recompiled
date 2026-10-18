@@ -14,6 +14,7 @@
 #include "content.h"
 #include "launcher_text.h"
 #include "mods.h"
+#include "texture_packs_downloads.h"
 #include "texture_packs_logic.h"
 #include "workshop.h"
 #include "workshop_mods.h"
@@ -31,9 +32,6 @@ using ui::Action;
 #define KK_TP_DOT "\xC2\xB7"
 
 namespace {
-
-// The UHD pack's mod folder and name (its ZIP's mod.toml).
-constexpr const char* kUhdName = "Kong UHD Textures";
 
 std::string Gb(uint64_t bytes) {
   char buf[32];
@@ -81,16 +79,19 @@ std::string ReadHead(const fs::path& file, size_t max) {
 }  // namespace
 
 struct TexturePackShelf::Impl {
-  enum class Kind { kOriginal, kHd, kUhd, kMod, kFolder };
+  // kDownload: a Workshop download that installs as a texture pack mod (content::kModPacks: UHD, Comic).
+  enum class Kind { kOriginal, kHd, kDownload, kMod, kFolder };
   struct Pack {
     Kind kind = Kind::kOriginal;
+    content::Kind content_kind = content::Kind::kTexturePack;  // kHd / kDownload: its download
+    const texpacks::DownloadPage* page = nullptr;              // kDownload: what its card and page say
     std::string key, name, author, version, description;
     std::string mod_id, folder;  // mods: the kk_mods id; folder packs: the folder setting
     fs::path dir;                // mods: the mod folder
     rex::ui::ImmediateTexture* picture = nullptr;
     float aspect = 16.0f / 9.0f;
     bool installed = false, usable = true, enabled = false, busy = false, builtin = false;
-    content::Status st;  // HD / UHD downloads
+    content::Status st;  // kHd / kDownload: its download
     std::vector<std::string> problems;
   };
 
@@ -103,7 +104,7 @@ struct TexturePackShelf::Impl {
   float detail_scroll = 0;
   // Startup: settings from older builds keep one texture pack (once the first mods scan is in).
   bool normalized = false;
-  // A texture pack mod just installed (import or UHD download): switched on once the scan knows it.
+  // A texture pack mod just installed (import or a Workshop download): switched on once the scan knows it.
   std::string pending_mod;
   std::chrono::steady_clock::time_point pending_since;
   bool pending_folder = false;  // the HD texture pack was turned on before the mods scan was in
@@ -164,6 +165,7 @@ struct TexturePackShelf::Impl {
     {
       Pack p;
       p.kind = Kind::kHd;
+      p.content_kind = content::Kind::kTexturePack;
       p.key = "hd";
       p.name = T("HD texture pack");
       p.author = "TekRantGaming";
@@ -179,47 +181,51 @@ struct TexturePackShelf::Impl {
       p.picture = Still(3, &p.aspect);
       out.push_back(std::move(p));
     }
-    // Kong UHD Textures (a Workshop download, installed as a texture pack mod), then the other texture pack mods.
-    const content::Status uhd_st = ready ? service.Get(content::Kind::kUhd) : content::Status{};
+    // The Workshop's downloads that install as texture pack mods (content::kModPacks: Kong UHD Textures, Kong Comic
+    // Book; what they say: texture_packs_downloads.h), then the other texture pack mods.
     const std::vector<KongMods::Card> cards = mods->Cards();
-    const KongMods::Card* uhd = nullptr;
-    for (const auto& c : cards)
-      if (c.texture_pack && !c.builtin && (c.id == uhd_st.mod_id || c.id == kUhdName || c.name == kUhdName)) {
-        uhd = &c;
-        break;
-      }
-    {
+    std::vector<const KongMods::Card*> taken;
+    for (const content::ModPack& mp : content::kModPacks) {
+      const texpacks::DownloadPage* page = texpacks::DownloadPageFor(mp.kind);
+      if (!page) continue;
+      const content::Status st = ready ? service.Get(mp.kind) : content::Status{};
+      const KongMods::Card* card = nullptr;
+      for (const auto& c : cards)
+        if (c.texture_pack && !c.builtin && std::find(taken.begin(), taken.end(), &c) == taken.end() &&
+            ((!st.mod_id.empty() && c.id == st.mod_id) || c.id == mp.name || c.name == mp.name)) {
+          card = &c;
+          break;
+        }
       Pack p;
-      p.kind = Kind::kUhd;
-      p.key = "uhd";
-      p.name = kUhdName;
-      p.author = "TekRantGaming";
-      p.version = "1.0";
-      p.st = uhd_st;
-      const content::Info& info = content::InfoFor(content::Kind::kUhd);
-      p.description = F("Every texture in the game at up to four times its resolution. Rock, moss, forest ground, "
-                        "dirt, gravel, wood, bark and rust use real photographed materials, recoloured to the game's "
-                        "look; everything else is AI upscaled from the original textures. A download of {0} GB that "
-                        "takes {1} GB once installed. Needs about 1 GB of graphics memory per chapter.",
-                        {Gb(info.zip_size), Gb(info.unpacked)});
-      p.busy = uhd_st.Busy() || uhd_st.stage == content::Stage::kPaused;
-      if (uhd) {
+      p.kind = Kind::kDownload;
+      p.content_kind = mp.kind;
+      p.page = page;
+      p.key = mp.key;
+      p.name = mp.name;
+      p.author = page->author;
+      p.version = page->version;
+      p.st = st;
+      const content::Info& info = content::InfoFor(mp.kind);
+      p.description = F(page->description, {Gb(info.zip_size), Gb(info.unpacked)});
+      p.busy = st.Busy() || st.stage == content::Stage::kPaused;
+      if (card) {
+        taken.push_back(card);
         p.installed = true;
-        p.mod_id = uhd->id;
-        p.dir = uhd->dir;
-        p.usable = uhd->usable;
-        p.problems = uhd->problems;
-        if (!uhd->author.empty()) p.author = uhd->author;
-        if (!uhd->version.empty()) p.version = uhd->version;
-        p.enabled = active == "mod:" + uhd->id;
-        p.picture = uhd->picture;
-        p.aspect = uhd->aspect;
+        p.mod_id = card->id;
+        p.dir = card->dir;
+        p.usable = card->usable;
+        p.problems = card->problems;
+        if (!card->author.empty()) p.author = card->author;
+        if (!card->version.empty()) p.version = card->version;
+        p.enabled = active == "mod:" + card->id;
+        p.picture = card->picture;
+        p.aspect = card->aspect;
       }
-      if (!p.picture) p.picture = Still(4, &p.aspect);
+      if (!p.picture) p.picture = Still(page->still, &p.aspect);
       out.push_back(std::move(p));
     }
     for (const auto& c : cards) {
-      if (!c.texture_pack || &c == uhd) continue;
+      if (!c.texture_pack || std::find(taken.begin(), taken.end(), &c) != taken.end()) continue;
       Pack p;
       p.kind = Kind::kMod;
       p.key = "mod:" + c.id;
@@ -328,10 +334,22 @@ struct TexturePackShelf::Impl {
     else if (key == "hd" && !HdFolder().empty()) Apply(texpacks::EnableFolder(c, HdFolder(), is_tex), "the HD texture pack");
     else if (key == "folder" && !OwnFolder().empty()) Apply(texpacks::EnableFolder(c, OwnFolder(), is_tex), "your folder");
     else if (key.rfind("mod:", 0) == 0) Apply(texpacks::EnableMod(c, key.substr(4), is_tex), "a texture pack mod");
-    else if (key == "uhd") {
+    else {  // a Workshop download ("uhd", "comic")
       for (const Pack& p : Build())
-        if (p.kind == Kind::kUhd && p.installed) Apply(texpacks::EnableMod(c, p.mod_id, is_tex), "Kong UHD Textures");
+        if (p.kind == Kind::kDownload && p.key == key && p.installed)
+          Apply(texpacks::EnableMod(c, p.mod_id, is_tex), p.name.c_str());
     }
+  }
+
+  // The mod a download's description recommends (Kong Comic Book: Cel shading), switched on from its page. Mods of
+  // the other types stay many at once in their load order (it goes last); texture packs are not touched.
+  void EnableRecommended(const std::string& id) {
+    std::vector<std::string> list = mods::ParseEnabled(Flag("kk_mods"));
+    mods::SetEnabled(list, id, true);
+    rex::cvar::SetFlagByName("kk_mods", mods::JoinEnabled(list));
+    if (host && host->save) host->save();
+    mods->ReloadEnabled();
+    REXLOG_INFO("KK texture packs: the recommended mod {} switched on (kk_mods '{}')", id, Flag("kk_mods"));
   }
 
   void Tick() {
@@ -394,31 +412,35 @@ struct TexturePackShelf::Impl {
     }
     const fs::path dir = p.dir;
     const std::string mod_id = p.mod_id;
-    const bool uhd_record = p.kind == Kind::kUhd && content::Service::Get().Get(content::Kind::kUhd).installed &&
-                            content::Service::Get().Get(content::Kind::kUhd).mod_id == mod_id;
+    // A Workshop download's own record (content\<id>\installed.txt) goes with its folder.
+    const content::Kind kind = p.content_kind;
+    const bool record = p.kind == Kind::kDownload && content::Service::Get().Get(kind).installed &&
+                        content::Service::Get().Get(kind).mod_id == mod_id;
     Ask("Remove this texture pack?",
         F("This deletes {0} from your mods folder. If it is on, the game goes back to its original textures. You can "
           "import or download it again at any time.",
           {p.name}),
-        {"Remove", "Keep it"}, 1, [dir, uhd_record](int i) {
+        {"Remove", "Keep it"}, 1, [dir, record, kind](int i) {
           if (i != 0) return;
           REXLOG_INFO("KK texture packs: removing {}", mods::U8(dir));
-          if (uhd_record) content::Service::Get().Remove(content::Kind::kUhd);
+          if (record) content::Service::Get().Remove(kind);
           else content::Service::Get().RemoveMod(dir);
         });
   }
 
-  void DownloadUhd() {
-    // The owner's words (18 Oct): said plainly before the download starts; the player confirms.
-    Ask("Before you download",
-        "This pack replaces many surfaces with high-detail materials that were not made for this game, so the game "
-        "will no longer look exactly as its developers intended. Every effort was made to keep the original style: "
-        "where no good match was found, the original texture is used, upscaled with AI.",
-        {"Download", "Not now"}, 1, [this](int i) {
-          if (i != 0) return;
-          REXLOG_INFO("KK texture packs: Kong UHD Textures: the player confirmed the note; downloading");
-          if (host && host->download) host->download(content::Kind::kUhd);
-        });
+  // A download: its note first when it has one (Kong UHD Textures: the owner's words, 18 Oct, said plainly before
+  // the download starts; the player confirms), then the launcher's own "This can take a while" question.
+  void Download(content::Kind kind) {
+    const texpacks::DownloadPage* page = texpacks::DownloadPageFor(kind);
+    if (!page || !page->note) {
+      if (host && host->download) host->download(kind);
+      return;
+    }
+    Ask("Before you download", page->note, {"Download", "Not now"}, 1, [this, kind](int i) {
+      if (i != 0) return;
+      REXLOG_INFO("KK texture packs: {}: the player confirmed the note; downloading", content::ModPackFor(kind)->name);
+      if (host && host->download) host->download(kind);
+    });
   }
 
   struct Button {
@@ -437,23 +459,30 @@ struct TexturePackShelf::Impl {
       Enable("original");
       ui::Cue(ui::Sound::kOff);
     };
-    const content::Kind kind = p.kind == Kind::kHd ? content::Kind::kTexturePack : content::Kind::kUhd;
+    const content::Kind kind = p.content_kind;
     switch (p.kind) {
       case Kind::kOriginal:
         b.push_back({p.enabled ? T("In use") : T("Use the original textures"), !p.enabled, enable});
         break;
       case Kind::kHd:
-      case Kind::kUhd:
+      case Kind::kDownload:
         if (!p.installed && p.busy) {
           b.push_back({T("Show progress"), true, [this, kind] { if (host && host->progress) host->progress(kind); }});
         } else if (!p.installed) {
-          b.push_back({F("Download ({0} GB)", {Gb(content::InfoFor(kind).zip_size)}), true, [this, kind] {
-                         if (kind == content::Kind::kUhd) DownloadUhd();
-                         else if (host && host->download) host->download(kind);
-                       }});
+          b.push_back({F("Download ({0} GB)", {Gb(content::InfoFor(kind).zip_size)}), true, [this, kind] { Download(kind); }});
         } else {
           b.push_back({p.enabled ? T("Disable") : T("Enable"), p.enabled || p.usable, p.enabled ? std::function<void()>(disable) : enable});
           b.push_back({T("Remove"), true, [this, p] { Remove(p); }});
+        }
+        // The mod its description recommends (Kong Comic Book: Cel shading): switched on from here.
+        if (p.page && p.page->recommended_mod) {
+          for (const auto& c : mods->Cards()) {
+            if (c.id != p.page->recommended_mod) continue;
+            const std::string id = c.id;
+            if (c.on) b.push_back({F("{0} is on", {T(c.name)}), false, nullptr});
+            else b.push_back({F("Switch on {0}", {T(c.name)}), c.usable, [this, id] { EnableRecommended(id); }});
+            break;
+          }
         }
         break;
       case Kind::kMod:
@@ -476,11 +505,9 @@ struct TexturePackShelf::Impl {
   }
 
   std::string Credits(const Pack& p) {
-    if (p.kind == Kind::kUhd)
-      return T("AI upscaling: 4x-UltraSharpV2 by Kim2091 (CC BY-NC-SA 4.0). Real materials: ambientCG and Poly Haven "
-               "(CC0). Free to download, not for sale. The full list is in CREDITS.txt in its folder.");
+    if (p.page && p.page->credits) return T(p.page->credits);
     if (p.kind == Kind::kHd) return T("AI upscaling: 4x-UltraSharpV2 by Kim2091 (CC BY-NC-SA 4.0). Free to download, not for sale.");
-    if (p.kind != Kind::kMod || p.dir.empty()) return {};
+    if ((p.kind != Kind::kMod && p.kind != Kind::kDownload) || p.dir.empty()) return {};
     if (credits_for != p.key) {  // read once when the page opens (a few KB)
       credits_for = p.key;
       credits = ReadHead(p.dir / "CREDITS.txt", 2048);
@@ -524,7 +551,7 @@ struct TexturePackShelf::Impl {
     const float s = m.s;
     const ui::Fonts f = ui::GetFonts();
     const float avail = p1.x - p0.x, col_w = std::round(avail * 0.58f), wrap = col_w - 24 * s;
-    // Left: name, facts, state, the description, the UHD note, credits, problems.
+    // Left: name, facts, state, the description, its note (UHD), credits, problems.
     float y = p0.y + 8 * s;
     dl->PushClipRect(p0, ImVec2(p0.x + col_w, p1.y), true);
     dl->AddText(f.display, 30 * s, ImVec2(p0.x, y), color::kText, p.name.c_str(), nullptr, wrap);
@@ -533,8 +560,8 @@ struct TexturePackShelf::Impl {
     facts.push_back(T("Texture pack"));
     if (!p.author.empty()) facts.push_back(F("By {0}", {p.author}));
     if (!p.version.empty()) facts.push_back(F("Version {0}", {p.version}));
-    if (p.kind == Kind::kHd || p.kind == Kind::kUhd)
-      facts.push_back(F("{0} GB", {Gb(content::InfoFor(p.kind == Kind::kHd ? content::Kind::kTexturePack : content::Kind::kUhd).unpacked)}));
+    if (p.kind == Kind::kHd || p.kind == Kind::kDownload)
+      facts.push_back(F("{0} GB", {Gb(content::InfoFor(p.content_kind).unpacked)}));
     std::string fl;
     for (const auto& x : facts) fl += (fl.empty() ? "" : "   " KK_TP_DOT "   ") + x;
     dl->AddText(f.text, 14.5f * s, ImVec2(p0.x, y), color::kTextDim, ui::Ellipsize(f.text, 14.5f * s, fl, wrap).c_str());
@@ -563,12 +590,9 @@ struct TexturePackShelf::Impl {
       y += 24 * s;
     };
     para(p.description, 16, color::kText);
-    if (p.kind == Kind::kUhd) {
-      // The owner's note about the look (18 Oct), on the page as well as before the download.
-      const std::string note = T("This pack replaces many surfaces with high-detail materials that were not made for "
-                                 "this game, so the game will no longer look exactly as its developers intended. Every "
-                                 "effort was made to keep the original style: where no good match was found, the "
-                                 "original texture is used, upscaled with AI.");
+    if (p.page && p.page->note) {
+      // Its note (UHD: the owner's note about the look, 18 Oct), on the page as well as before the download.
+      const std::string note = T(p.page->note);
       const float h = f.text->CalcTextSizeA(14.5f * s, FLT_MAX, wrap - 28 * s, note.c_str()).y;
       dl->AddRectFilled(ImVec2(p0.x, y), ImVec2(p0.x + wrap, y + h + 24 * s), ui::WithAlpha(color::kWarn, 0.10f), 4 * s);
       dl->AddRectFilled(ImVec2(p0.x, y), ImVec2(p0.x + 3 * s, y + h + 24 * s), color::kWarn);

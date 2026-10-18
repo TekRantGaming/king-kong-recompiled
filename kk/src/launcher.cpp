@@ -30,6 +30,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -6013,10 +6014,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (running.empty()) return true;
     const bool tex = std::find(running.begin(), running.end(), content::Kind::kTexturePack) != running.end();
     const bool cut = std::find(running.begin(), running.end(), content::Kind::kCutscenes) != running.end();
-    const bool uhd = std::find(running.begin(), running.end(), content::Kind::kUhd) != running.end();
+    const bool mod_pack = std::any_of(running.begin(), running.end(), content::IsModPack);  // a Workshop download
     REXLOG_INFO("KK content: Play while downloading ({}{}): asking", tex ? "tex " : "", cut ? "cut" : "");
     OpenModal("Your download will pause while you play",
-              uhd ? "Your downloads carry on when you come back to the launcher. What was downloaded so far is kept."
+              mod_pack ? "Your downloads carry on when you come back to the launcher. What was downloaded so far is kept."
               : tex && cut ? "The HD texture pack and the PS2 cutscenes carry on downloading when you come back to the launcher. W"
                                  "hat was downloaded so far is kept." : tex ? "The HD texture pack carries on downloading when you come back to the launcher. What was downloaded so far is kept." : "The PS2 cutscenes carry on downloading when you come back to the launcher. What was downloaded so far is kept.",
               {"Play now", "Stay here"}, 1, [this, running](int i) {
@@ -6146,10 +6147,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     using namespace content;
     const bool tex = kind == Kind::kTexturePack;
     const Info& info = InfoFor(kind);
-    std::string body = kind == Kind::kUhd
-                           ? F("Kong UHD Textures is a {0} GB download. After that it is checked and unpacked. "
+    const ModPack* pack = ModPackFor(kind);
+    std::string body = pack
+                           ? F("{0} is a {1} GB download. After that it is checked and unpacked. "
                                "Depending on your connection this takes from a few minutes to an hour or more.",
-                               {Gb(info.zip_size)})
+                               {pack->name, Gb(info.zip_size)})
                        : tex ? F("The HD texture pack is a {0} GB download. After that it is checked and unpacked. "
                                "Depending on your connection this takes from a few minutes to an hour or more.",
                                {Gb(info.zip_size)})
@@ -6160,8 +6162,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     body += std::string(" ") + T("It runs in the background, so you can carry on meanwhile. If the connection drops or "
                                  "you close the launcher, it continues from where it stopped.");
     bool other_busy = false;
-    for (const Kind k : {Kind::kTexturePack, Kind::kCutscenes, Kind::kUhd})
-      other_busy = other_busy || (k != kind && Service::Get().Get(k).Busy());
+    for (int i = 0; i < kKindCount; ++i) {  // the downloads (not the quiet artbook, not an import)
+      const Kind k = Kind(i);
+      if (!Quiet(k) && k != Kind::kImport) other_busy = other_busy || (k != kind && Service::Get().Get(k).Busy());
+    }
     if (other_busy) body += std::string(" ") + T("It starts when the download before it has finished.");
     REXLOG_INFO("KK content: asking before the {} download ({})", info.id, setup_stage ? "setup" : "Settings");
     OpenModal("This can take a while", body, {"Minimise and notify me", "Watch progress"}, -1,
@@ -6262,8 +6266,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     return float(std::clamp(double(st.done) / double(st.total), 0.0, 1.0));
   }
   static bool OtherRunning(content::Kind kind) {
-    for (const auto k : {content::Kind::kTexturePack, content::Kind::kCutscenes, content::Kind::kUhd, content::Kind::kImport}) {
-      if (k == kind) continue;
+    for (int i = 0; i < content::kKindCount; ++i) {  // every job but the quiet artbook
+      const auto k = content::Kind(i);
+      if (k == kind || content::Quiet(k)) continue;
       const auto st = content::Service::Get().Get(k);
       if (st.Busy() && st.stage != content::Stage::kQueued) return true;
     }
@@ -6274,10 +6279,12 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     switch (kind) {
       case content::Kind::kTexturePack: return "HD texture pack";
       case content::Kind::kCutscenes: return "PS2 cutscenes";
-      case content::Kind::kUhd: return "Kong UHD Textures";
       case content::Kind::kImport:
         return content::Service::Get().Get(content::Kind::kImport).target == content::ImportTarget::kMod ? "Mod" : "Texture pack";
-      default: return "";
+      default: {
+        const content::ModPack* pack = content::ModPackFor(kind);  // a Workshop mod pack: its name
+        return pack ? pack->name : "";
+      }
     }
   }
 
@@ -6305,7 +6312,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     else buttons = {"Run in background"};
     const int background = mode <= 1 ? 1 : 0;
     const std::string title = importing ? (mod_import ? "Installing your mod" : "Installing your texture pack")
-                              : kind == Kind::kUhd ? "Downloading Kong UHD Textures"
+                              : IsModPack(kind) ? "Downloading " + std::string(ModPackFor(kind)->name)  // its own text row
                               : tex     ? "Downloading the HD texture pack"
                                         : "Downloading the PS2 cutscenes";
     OpenModal(title,
@@ -6406,7 +6413,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // or error pop-up (shown as soon as no other pop-up is open and the shader screen is not up).
   void ContentEnded(content::Kind kind, const content::Status& st) {
     using namespace content;
-    const bool tex = kind == Kind::kTexturePack || kind == Kind::kUhd;
+    const bool tex = kind == Kind::kTexturePack || IsModPack(kind);
     const bool imported = kind == Kind::kImport;
     const bool mod_import = imported && st.target == ImportTarget::kMod;
     if (content_watch_ == int(kind)) {
@@ -6417,11 +6424,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
     if (st.stage == Stage::kInstalled) {
       std::string title = imported ? (mod_import ? "Mod installed" : "Texture pack installed")
-                          : kind == Kind::kUhd ? "Kong UHD Textures installed"
+                          : IsModPack(kind) ? std::string(ModPackFor(kind)->name) + " installed"  // its own text row
                           : tex ? "HD texture pack installed" : "PS2 cutscenes restored";
       std::string body =
           mod_import ? F("{0} is in your mods folder. Switch it on in the Workshop's Mods row.", {st.installed_name})
-          : imported || kind == Kind::kUhd
+          : imported || IsModPack(kind)
               ? F("{0} is installed and turned on. It is the only texture pack on: the one before it was switched off. "
                   "Choose another at any time in the Workshop or in Settings > Graphics.",
                   {st.installed_name})
@@ -6728,6 +6735,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       service.OverrideUrl(content::Kind::kCutscenes, v, content::InfoFor(content::Kind::kCutscenes).sha256);
     if (const char* v = std::getenv("KK_DEV_CONTENT_URL_ART"); v && *v)
       service.OverrideUrl(content::Kind::kArtbook, v, content::InfoFor(content::Kind::kArtbook).sha256);
+    for (const content::ModPack& pack : content::kModPacks) {  // KK_DEV_CONTENT_URL_UHD, KK_DEV_CONTENT_URL_COMIC
+      std::string name = "KK_DEV_CONTENT_URL_";
+      for (const char* k = pack.key; *k; ++k) name += char(std::toupper(static_cast<unsigned char>(*k)));
+      if (const char* v = std::getenv(name.c_str()); v && *v) service.OverrideUrl(pack.kind, v, content::InfoFor(pack.kind).sha256);
+    }
 #endif
     // Beta 7 artbook: each picture that comes off the bonus disc must decode (WIC on Windows, stb_image on Linux).
     content::SetPictureCheck([](const std::filesystem::path& file) {
@@ -6812,7 +6824,13 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         if (st.stage != content::Stage::kUnpacking)
           REXLOG_INFO("KK content: {} stage {} -> {}", content::InfoFor(kind).id, int(last), int(st.stage));
         if (st.stage == content::Stage::kInstalled && last != content::Stage::kNone) {
-          Status(tex ? "The HD texture pack is installed and turned on." : "The PS2 cutscenes are restored and turned on.");
+          // Task 212: a Workshop download or an import says its own name (it said the PS2 cutscenes before).
+          const content::ModPack* pack = content::ModPackFor(kind);
+          Status(tex ? std::string("The HD texture pack is installed and turned on.")
+                 : pack ? std::string(pack->name) + " installed"
+                 : kind == content::Kind::kImport
+                     ? std::string(st.target == content::ImportTarget::kMod ? "Mod installed" : "Texture pack installed")
+                     : std::string("The PS2 cutscenes are restored and turned on."));
           ContentEnded(kind, st);
         }
         if (st.stage == content::Stage::kNone && last == content::Stage::kRemoving) Status("Removed.");
@@ -7368,9 +7386,16 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         texture_pack_zip_choice.selected = arg;
         texture_pack_zip_choice.target = verb == "choose" ? content::ImportTarget::kTexturePack : content::ImportTarget::kMod;
       }
-      else if (verb == "download-uhd") service.Download(content::Kind::kUhd);
-      else if (verb == "cancel-uhd") service.Cancel(content::Kind::kUhd);
       else if (verb == "cancel-import") service.Cancel(content::Kind::kImport);
+      for (const content::ModPack& pack : content::kModPacks) {  // download-uhd, cancel-comic, url-comic:<url>, ...
+        if (verb == std::string("download-") + pack.key) service.Download(pack.kind);
+        if (verb == std::string("cancel-") + pack.key) service.Cancel(pack.kind);
+        if (verb == std::string("url-") + pack.key) {  // url-comic:<url>[|<sha256 of a test copy>]
+          const size_t bar = arg.rfind('|');
+          service.OverrideUrl(pack.kind, arg.substr(0, bar),
+                              bar == std::string::npos ? std::string(content::InfoFor(pack.kind).sha256) : arg.substr(bar + 1));
+        }
+      }
       for (int i = 0; i < content::kKindCount; ++i) {
         const auto st = service.Get(content::Kind(i));
         REXLOG_INFO("KK dev: content {} stage {} error {} problem {} {} / {} installed {} name {}",

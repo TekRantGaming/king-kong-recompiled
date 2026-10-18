@@ -328,6 +328,12 @@ _tp_flat = re.sub(r'"\s*\n\s*"', '', texpacks_cpp)
 texpack_strings = set(re.findall(r'(?<![A-Za-z_])[TF]\("((?:[^"\\]|\\.)*)"', _tp_flat))
 texpack_strings |= set(re.findall(r'\bAsk\("((?:[^"\\]|\\.)*)"', _tp_flat))
 texpack_strings |= {'Remove', 'Keep it', 'Download', 'Not now'}
+# Task 212: the downloads' cards and pages (texture_packs_downloads.h): every sentence in its table and the UHD note.
+_downloads_h = re.sub(r'"\s*\n\s*"', '', (src / 'texture_packs_downloads.h').read_text(encoding='utf-8'))
+_download_texts = {x for x in re.findall(r'"((?:[^"\\]|\\.)*)"', _downloads_h) if ' ' in x}
+if len(_download_texts) < 4:
+    fail(f'task 212: only {len(_download_texts)} texts found in texture_packs_downloads.h')
+texpack_strings |= _download_texts
 texpack_strings = {bytes(x, 'utf-8').decode('unicode_escape').encode('latin-1').decode('utf-8') for x in texpack_strings}
 if len(texpack_strings) < 30:
     fail(f'task 209: only {len(texpack_strings)} texture pack strings found')
@@ -351,8 +357,9 @@ strings |= {'Mods', 'Texture packs', 'Other TRG projects and games', 'Not instal
             'Nothing is installed and everything you had stays as it was. Your ZIP file is kept.',
             'Your ZIP file is checked and unpacked. It carries on in the background if you leave this pop-up, and Cancel '
             'stops it without changing anything you have installed.',
-            'Kong UHD Textures is a {0} GB download. After that it is checked and unpacked. Depending on your connection '
+            '{0} is a {1} GB download. After that it is checked and unpacked. Depending on your connection '
             'this takes from a few minutes to an hour or more.',
+            'Kong Comic Book', 'Downloading Kong Comic Book', 'Kong Comic Book installed', 'Switch on {0}', '{0} is on',
             'Your downloads carry on when you come back to the launcher. What was downloaded so far is kept.',
             'Unpacking: {0} of {1} GB',
             "{0} is in your mods folder. Switch it on in the Workshop's Mods row.",
@@ -434,11 +441,21 @@ UHD_NOTE = ('This pack replaces many surfaces with high-detail materials that we
             'will no longer look exactly as its developers intended. Every effort was made to keep the original style: '
             'where no good match was found, the original texture is used, upscaled with AI.')
 _flat = re.sub(r'"\s*\n\s*"', '', texpacks_cpp)
-if _flat.count(UHD_NOTE) < 2:
-    fail('the UHD note is not both on its page and in the question before its download')
-m = re.search(r'void DownloadUhd\(\) \{(.*?)\n  \}\n', _flat, re.S)
-if not m or UHD_NOTE not in m.group(1) or '{"Download", "Not now"}' not in m.group(1) or 'host->download(content::Kind::kUhd)' not in m.group(1):
+# Task 212: the downloads' texts are one table (texture_packs_downloads.h); the UHD row carries the note, the Comic
+# row none. The page draws a row's note, and the download asks it first and starts only after Download.
+_uhd_row = _downloads_h[_downloads_h.find('{content::Kind::kUhd,'):_downloads_h.find('{content::Kind::kComic,')]
+_comic_row = _downloads_h[_downloads_h.find('{content::Kind::kComic,'):]
+if f'kUhdNote =\n    "{UHD_NOTE}";' not in _downloads_h or 'kUhdNote,' not in _uhd_row or 'kUhdNote' in _comic_row:
+    fail('the UHD note is not exactly the owner\'s words in the UHD row of texture_packs_downloads.h')
+if 'const std::string note = T(p.page->note);' not in _flat:
+    fail('the UHD note is not on its page')
+m = re.search(r'void Download\(content::Kind kind\) \{(.*?)\n  \}\n', _flat, re.S)
+if (not m or 'if (!page || !page->note) {' not in m.group(1) or
+        'Ask("Before you download", page->note, {"Download", "Not now"}, 1, [this, kind](int i) {\n      if (i != 0) return;'
+        not in m.group(1) or m.group(1).count('host->download(kind)') != 2):
     fail('the UHD download does not start only after the player confirms the note')
+if 'Download(kind); }});' not in _flat or 'DownloadUhd' in _flat:
+    fail('the Download button does not go through the note question')
 for needle, why in (
         ('imp.name = T("Import texture pack");', 'no Import texture pack button on the texture packs row'),
         ('texpacks::EnableMod(', 'the texture pack row does not use the one-pack rule'),

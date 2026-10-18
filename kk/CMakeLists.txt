@@ -293,9 +293,12 @@ if(KK_DEV_TOOLS)
     rexglue_apply_target_settings(kk-mods-tests)
     add_test(NAME kong-mods COMMAND kk-mods-tests)
     # Task 209: one texture pack on at a time (the HD pack, the player's folder, texture pack mods).
-    add_executable(kk-texture-packs-tests tests/texture_packs_tests.cpp)
+    # Task 212: plus the Workshop downloads' table and their texts in five languages (the launcher's lookup).
+    add_executable(kk-texture-packs-tests tests/texture_packs_tests.cpp src/launcher_text.cpp)
     target_include_directories(kk-texture-packs-tests PRIVATE src)
     target_compile_features(kk-texture-packs-tests PRIVATE cxx_std_20)
+    target_link_libraries(kk-texture-packs-tests PRIVATE rex::runtime)
+    rexglue_apply_target_settings(kk-texture-packs-tests)
     add_test(NAME texture-pack-rules COMMAND kk-texture-packs-tests)
     add_executable(kk-artbook-tests tests/artbook_tests.cpp src/artbook_files.cpp src/content.cpp src/workshop_net.cpp)
     target_include_directories(kk-artbook-tests PRIVATE src)

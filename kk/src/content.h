@@ -28,9 +28,31 @@ namespace kk::content {
 // Task 209 (owner, 18 Oct): kUhd, the Kong UHD Textures pack, a Workshop download (a texture pack mod ZIP that
 // installs into the mods folder); kImport, the Workshop's Import texture pack / Import mod (and removing a mod
 // folder): its status is the progress of the one running now.
-enum class Kind { kTexturePack = 0, kCutscenes = 1, kArtbook = 2, kUhd = 3, kImport = 4 };
-constexpr int kKindCount = 5;
+// Task 212 (owner, 18 Oct): kComic, the Kong Comic Book pack, a second Workshop download like kUhd. New kinds are
+// only ever added at the end: the numbers are array indexes, and what is saved on disk uses Info::id, not them.
+enum class Kind { kTexturePack = 0, kCutscenes = 1, kArtbook = 2, kUhd = 3, kImport = 4, kComic = 5 };
+constexpr int kKindCount = 6;
 constexpr bool Quiet(Kind kind) { return kind == Kind::kArtbook; }
+
+// The Workshop's downloadable texture pack mods (task 212): each is a texture pack mod ZIP ("<name>/mod.toml",
+// picture.png, README, textures/pack.txt) that downloads like the HD pack and installs into <user data>/mods/<name>
+// as a texture pack mod (one texture pack on at a time). Its record is content\<Info::folder>\installed.txt.
+// Order = the order of their cards in Workshop > Texture packs. One row here (plus its Info) adds a pack.
+struct ModPack {
+  Kind kind;
+  const char* key;   // the Workshop card's key and dev-step name ("uhd" -> card "uhd", step download-uhd)
+  const char* name;  // the mod folder and the name in its mod.toml
+};
+inline constexpr ModPack kModPacks[] = {
+    {Kind::kUhd, "uhd", "Kong UHD Textures"},
+    {Kind::kComic, "comic", "Kong Comic Book"},
+};
+constexpr const ModPack* ModPackFor(Kind kind) {
+  for (const ModPack& p : kModPacks)
+    if (p.kind == kind) return &p;
+  return nullptr;
+}
+constexpr bool IsModPack(Kind kind) { return ModPackFor(kind) != nullptr; }
 
 struct Info {
   const char* id;         // file names: content\downloads\<id>.part, <id>.state
@@ -79,8 +101,8 @@ struct Status {
   uint64_t space_free = 0;
   bool installed = false;
   bool imported = false;           // installed from the player's own ZIP
-  std::string installed_name;      // the pack folder's name ("kk-4x-usv2"); kUhd / kImport: the mod's name
-  std::string mod_id;              // kUhd / kImport: the mod folder it installed as (its kk_mods id)
+  std::string installed_name;      // the pack folder's name ("kk-4x-usv2"); mod packs / kImport: the mod's name
+  std::string mod_id;              // mod packs / kImport: the mod folder it installed as (its kk_mods id)
   ImportTarget target = ImportTarget::kTexturePack;  // kImport: which button started it
   std::filesystem::path folder;    // the folder the settings point at
   bool Busy() const {

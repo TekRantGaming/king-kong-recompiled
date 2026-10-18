@@ -501,6 +501,10 @@ const Info& InfoFor(Kind kind) {
        "72419cbea7d6a6c19b9da6a5e55ea46d3bc1270da937be435c92cbe37d910502"},
       // The Workshop's imports: no download, only the status of the import (or mod removal) running now.
       {"import", "import", "", "", 0, 0, ""},
+      // Task 212 (owner, 18 Oct): the Kong Comic Book pack, a texture pack mod ZIP laid out like the UHD one.
+      {"comic-textures", "comic-textures", "https://bobandersonv115.cypher.usbx.me/filebrowser/api/public/dl/A_vaZ0kx",
+       "Kong-Comic-Book-1.0.zip", 1404861922ull, 5323466668ull,
+       "840fa08f3c4e10664037a2cf9f459a4067d1469f8bb25a5be9a3c4c99faef68f"},
   };
   return kInfo[int(kind)];
 }
@@ -615,7 +619,7 @@ struct Service::Impl {
     const fs::path folder = FromU8(keys.count("folder") ? keys.at("folder") : "");
     const bool ok = !folder.empty() && Exists(folder) &&
                     (k != Kind::kTexturePack || Exists(folder / "pack.txt")) &&
-                    (k != Kind::kUhd || Exists(folder / "textures" / "pack.txt")) &&
+                    (!IsModPack(k) || Exists(folder / "textures" / "pack.txt")) &&
                     (k != Kind::kArtbook || artbook::Installed(folder));
     if (!ok) return;
     slot.status.installed = true;
@@ -624,7 +628,7 @@ struct Service::Impl {
     slot.status.installed_name = keys.count("name") ? keys.at("name") : "";
     slot.status.imported = keys.count("source") && keys.at("source") == "import";
     slot.installed_setting = U8(folder);
-    slot.status.mod_id = k == Kind::kUhd ? U8(folder.filename()) : std::string();
+    slot.status.mod_id = IsModPack(k) ? U8(folder.filename()) : std::string();
     if (queue_changes && (k == Kind::kTexturePack || k == Kind::kCutscenes) && keys.count("applied") &&
         keys.at("applied") == "0") {
       const bool tex = k == Kind::kTexturePack;
@@ -885,8 +889,8 @@ struct Service::Impl {
 
   bool Install(Kind k, const fs::path& zip, bool download) {
     if (k == Kind::kArtbook) return InstallArtbook(zip);
-    if (k == Kind::kUhd || k == Kind::kImport)
-      return InstallMod(k, zip, k == Kind::kUhd ? ImportTarget::kTexturePack : S(k).status.target, download);
+    if (IsModPack(k) || k == Kind::kImport)
+      return InstallMod(k, zip, IsModPack(k) ? ImportTarget::kTexturePack : S(k).status.target, download);
     const Info& info = InfoFor(k);
     std::vector<ZipEntry> entries;
     std::string error;
@@ -1058,7 +1062,7 @@ struct Service::Impl {
       }
     }
     std::string stem = U8(zip.stem());
-    if (k == Kind::kUhd) stem = "Kong UHD Textures";
+    if (const ModPack* pack = ModPackFor(k)) stem = pack->name;
     const ImportLayout layout = CheckImportNames(entries, target, stem);
     if (layout.problem != Problem::kNone) {
       if (download) ClearDownload(k);
@@ -1211,7 +1215,7 @@ struct Service::Impl {
     }
     RemoveAll(staging);
     RemoveAll(old);
-    if (k == Kind::kUhd)
+    if (IsModPack(k))
       WriteKeys(InstalledFile(k), {{"name", name}, {"folder", U8(dest)}, {"source", download ? "download" : "import"},
                                    {"applied", "1"}});
     {
@@ -1248,7 +1252,7 @@ struct Service::Impl {
     if (!ok && S(k).status.stage == Stage::kStarting) SetStage(k, Stage::kNone);
   }
 
-  // A mod folder (an imported pack, the UHD pack, a mod) deleted on the worker: 5 GB take a while.
+  // A mod folder (an imported pack, a downloaded mod pack, a mod) deleted on the worker: 5 GB take a while.
   void RunRemoveMod(const fs::path& folder) {
     const Kind k = Kind::kImport;
     {
@@ -1276,7 +1280,7 @@ struct Service::Impl {
     }
     if (!setting.empty()) Changes(k, /*install=*/false, setting);
     ClearDownload(k);
-    if (k == Kind::kUhd && !setting.empty()) {  // the pack itself is a folder in the mods folder
+    if (IsModPack(k) && !setting.empty()) {  // the pack itself is a folder in the mods folder
       const fs::path folder = FromU8(setting);
       if (folder.parent_path().lexically_normal() == ModsDir().lexically_normal() && !RemoveAll(folder))
         return Fail(k, Error::kWrite, "cannot delete " + setting);
