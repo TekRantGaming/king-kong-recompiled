@@ -88,6 +88,16 @@ REXCVAR_DEFINE_INT32(kk_brightness, 0, "KK/Video",
 REXCVAR_DEFINE_DOUBLE(kk_gamma, 1.0, "KK/Video",
                       "Picture gamma (middle tones), 0.5 to 1.5; above 1 is brighter; 1 = the game's own picture")
     .range(0.5, 1.5);
+// HDR follows Windows (owner, 17/18 Oct; hdr_logic.h): kk_hdr and kk_hdr_levels decide the presenter's
+// present_hdr, present_hdr_peak and present_hdr_paper_white (hdr_display.cpp sets them at every start and while
+// the settings pages are open). Those three are then not saved, except Peak and Paper white in Manual.
+REXCVAR_DEFINE_STRING(kk_hdr, "auto", "KK/Video",
+                      "HDR output: auto (follow Windows HDR for the game's screen), on or off")
+    .allowed({"auto", "on", "off"});
+REXCVAR_DEFINE_STRING(kk_hdr_levels, "auto", "KK/Video",
+                      "HDR peak brightness and paper white: auto (from Windows HDR Calibration and Windows' SDR "
+                      "content brightness) or manual (present_hdr_peak, present_hdr_paper_white)")
+    .allowed({"auto", "manual"});
 REXCVAR_DEFINE_BOOL(kk_ps2_cutscenes, false, "KK/Gameplay",
                     "Play player-owned PS2 between-mission movies during story progression");
 REXCVAR_DEFINE_STRING(kk_ps2_movie_folder, "", "KK/Gameplay",
@@ -434,6 +444,10 @@ bool SaveSettings(const std::filesystem::path& path, bool include_temporary) {
     if (source == rex::cvar::Source::kCommandLine || source == rex::cvar::Source::kEnvironment) continue;
     // Set by the port at every start (ApplyRuntimeOverrides).
     if (e.name == "video_mode_width" || e.name == "video_mode_height") continue;
+    // Set from kk_hdr and kk_hdr_levels at every start (hdr_display.cpp, HDR follows Windows).
+    if (e.name == "present_hdr" || ((e.name == "present_hdr_peak" || e.name == "present_hdr_paper_white") &&
+                                    REXCVAR_GET(kk_hdr_levels) != "manual"))
+      continue;
     std::string value = protect ? baseline->second.saved : live;
     // A settings mod's value still in place: the player's own is saved (Kong mods, mods_logic.h).
     if (const auto mod = mod_overlay.find(e.name); mod != mod_overlay.end() && value == mod->second.applied) {
@@ -477,6 +491,24 @@ void MigrateFrameCounter() {
   rex::cvar::SetFlagByName("kk_show_fps", "false");
   REXLOG_INFO("KK: the frame counter setting moved to Performance metrics ({})",
               rex::cvar::GetFlagByName("kk_performance_metrics"));
+}
+
+void MigrateHdrSettings() {
+  // Beta 10: HDR follows Windows. A settings file from before has present_hdr only when the player turned HDR on
+  // (On stays On), and Peak brightness or Paper white only when the player moved them (Manual keeps them). Newer
+  // files never save present_hdr, and save the two levels only in Manual, so this changes nothing after that.
+  using rex::cvar::GetFlagSource, rex::cvar::Source;
+  const bool hdr_saved = GetFlagSource("present_hdr") == Source::kConfig;
+  if (hdr_saved && GetFlagSource("kk_hdr") == Source::kDefault && rex::cvar::GetFlagByName("present_hdr") == "true")
+    rex::cvar::SetFlagByName("kk_hdr", "on");
+  bool levels_saved = false;
+  for (const char* name : {"present_hdr_peak", "present_hdr_paper_white"})
+    levels_saved |= GetFlagSource(name) == Source::kConfig;
+  if (levels_saved && GetFlagSource("kk_hdr_levels") == Source::kDefault)
+    rex::cvar::SetFlagByName("kk_hdr_levels", "manual");
+  if (hdr_saved || levels_saved)
+    REXLOG_INFO("KK: HDR settings from an older version: kk_hdr={} kk_hdr_levels={}",
+                rex::cvar::GetFlagByName("kk_hdr"), rex::cvar::GetFlagByName("kk_hdr_levels"));
 }
 
 void MigrateSettings(const std::filesystem::path& config_path) {

@@ -40,6 +40,7 @@
 #include "glyphs.h"
 #include "guest.h"
 #include "handoff.h"
+#include "hdr_display.h"
 #include "hfr.h"
 
 namespace kk {
@@ -174,6 +175,8 @@ class KingKongApp : public rex::ReXApp {
     kk::InitializeHardwareRecommendation(defaults.config_path, recommendation_output.first, recommendation_output.second);
     kk::MigrateSettings(defaults.config_path);
     kk::MigrateFrameCounter();
+    kk::MigrateHdrSettings();
+    kk::hdr::Apply("start");  // HDR follows Windows: present_hdr and its levels, before the presenter starts
     kk::ApplyFixedSettings();
     // The launcher's Play menu: the saves live under the user data, a start request may be given
     // (--kk_start), and the game goes back to the launcher by restarting (play_session.cpp).
@@ -282,6 +285,7 @@ class KingKongApp : public rex::ReXApp {
     cb.restore = [this] {
       if (window()) kk::RestoreNativeWindow(window()->GetNativeWindowHandle());
     };
+    kk::hdr::SetWindowProvider([this]() -> void* { return window() ? window()->GetNativeWindowHandle() : nullptr; });
     // The Display page's Resolution list, made on a worker while the launcher opens (display_modes.h).
     kk::PrefetchDisplayModes(std::atoi(rex::cvar::GetFlagByName("monitor").c_str()), window());
     kk::ShowLauncher(imgui_drawer(), immediate_drawer(),
@@ -349,6 +353,9 @@ class KingKongApp : public rex::ReXApp {
     kk::benchmark::InstallPresentObserver();
     UseOneControllerSlot();
     kk::mouse_look::Install(window());
+    // HDR follows Windows for the screen the game's window is on (hdr_display.h).
+    kk::hdr::SetWindowProvider([this]() -> void* { return window() ? window()->GetNativeWindowHandle() : nullptr; });
+    kk::hdr::Apply("game window");
 
     ExportAchievementArt();
     // Give the launcher the achievement names (read from the game by the runtime).

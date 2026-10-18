@@ -123,7 +123,7 @@ else
   echo "warning: KK_RESOURCE_LIST not set: no kkresources.list, chapter resources are learned in play" >&2
 fi
 # Other files the Windows zip ships beside the program and the game looks for there (space-separated paths,
-# e.g. benchmark-route.kkbr for About > Run benchmark, FREECAM.txt, the setup-art/ folder of graphics close-ups);
+# e.g. benchmark-route.kkbr for About > Run benchmark, FREECAM.txt);
 # not in git, like the lists above.
 for f in ${KK_EXTRA_FILES:-}; do
   cp -a "$f" "$APPDIR/usr/bin/"
