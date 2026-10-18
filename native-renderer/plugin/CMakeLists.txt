@@ -14,6 +14,7 @@ set(NR_PLUGIN_SOURCES
     upscaler_query.cpp
     gpu_preference.cpp
     ring_skimmer.cpp
+    photo_api.cpp
     ${NR_ROOT}/backend/backend.cpp
 )
 if(NR_HAS_D3D12)

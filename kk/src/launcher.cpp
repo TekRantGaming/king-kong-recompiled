@@ -3,6 +3,7 @@
 #include "startup_recovery.h"
 #include "ingame_settings.h"
 #include "pause_menu.h"
+#include "photo_mode.h"
 #include "play_session.h"
 #include "benchmark.h"
 #include "launcher_benchmark.h"
@@ -6031,6 +6032,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     auto action = benchmark_pending_ ? cb_.benchmark : needs_restart ? cb_.restart_and_play : cb_.play;
     // The pause menu for the game about to start (the app makes it too when the launcher is skipped).
     if (!needs_restart && !benchmark_pending_) CreatePauseMenu(imgui_drawer(), immediate_, paths_.config_path, paths_.user_dir, paths_.game_dir);
+    if (!needs_restart && !benchmark_pending_) photo::CreatePanel(imgui_drawer(), immediate_, paths_.user_dir);
     input_.Release();  // the game opens the controllers itself
     StopHeartbeat();   // the launcher's work is done (its process ends, or the game runs in it)
     if (needs_restart || benchmark_pending_) {

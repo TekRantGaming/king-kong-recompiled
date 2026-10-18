@@ -45,6 +45,9 @@
 #include "backend/picture_adjust.h"
 #include "backend/scene_ao.h"
 #include "backend/scene_cel.h"
+#include "backend/scene_photo.h"
+#include "backend/photo_grade.h"
+#include "backend/photo_config.h"
 #include "backend/scene_gi.h"
 #include "backend/scene_lighting.h"
 #include "backend/memory_budget.h"
@@ -1018,6 +1021,27 @@ class GameRenderer {
   uint64_t cel_parked_frame_ = 0;
   std::deque<std::pair<uint64_t, std::unique_ptr<SceneCel>>> retired_cel_;
   bool cel_build_failed_ = false, cel_user_gpu_time_ = false;
+  // ---- photo mode (game_photo.cpp, docs/photo-mode.md; task 208): the game's settings each frame
+  // (plugin/native_photo.h). While it is off nothing here runs and nothing is made.
+ public:
+  // After the frame's Present copy (renderer.cpp): the photo grade into the frame image.
+  void PhotoPresent(nvrhi::ICommandList* cl, nvrhi::ITexture* frame_image);
+ private:
+  void PhotoOverrideEffects(EffectSettings& s);
+  bool PhotoHidesDraw(const DrawCall& call, const dev::DeviceView& d, const GameShader& vs, const GameShader* ps);
+  void PhotoDrawHook(nvrhi::ICommandList* cl, const DrawCall& call, const dev::DeviceView& d,
+                     const std::array<HostTarget*, 4>& colors, HostTarget* depth, const PipelineRecord& record,
+                     const GameShader& vs, const GameShader* ps);
+  void PhotoClearHook(const ClearCall& call, const HostTarget* depth);
+  void PhotoResolveHook(const ResolveCall& call);
+  NrPhotoSettings photo_ = NeutralPhotoSettings();
+  uint64_t photo_read_frame_ = UINT64_MAX;
+  int32_t photo_frame_w_ = 0, photo_frame_h_ = 0;  // the picture in the frame image (Present)
+  std::unique_ptr<PhotoGrade> photo_grade_;
+  bool photo_grade_failed_ = false;
+  std::unique_ptr<ScenePhotoDepth> scene_photo_;
+  std::deque<std::pair<uint64_t, std::unique_ptr<ScenePhotoDepth>>> retired_photo_;
+  uint64_t photo_hidden_ = 0, photo_hidden_logged_ = 0;
   // ---- live settings (game_effects.cpp, effect_settings.h): applied at a frame's first call.
   struct PreparedUpscaler {
     UpscaleConfig config;

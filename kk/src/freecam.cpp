@@ -1,6 +1,7 @@
 #include "freecam.h"
 #include "debug_overlay.h"
 #include "freecam_math.h"
+#include "photo_mode.h"
 #include "play_internal.h"
 #include "ps2_movies.h"
 #include "settings.h"
@@ -30,6 +31,11 @@ namespace {
 using Clock = std::chrono::steady_clock;
 std::atomic<bool> active{false}, hidden{false};
 std::atomic<uint32_t> generation{0};
+// Photo mode (photo_mode.cpp): the camera inside it, its limits and what the mouse does.
+std::atomic<bool> photo{false}, photo_mouse{false};
+std::atomic<float> photo_roll{0}, photo_speed{3};
+float photo_radius = 15;
+Vec photo_center;
 std::mutex input_mutex;
 bool keys[256]{};
 double mouse_x = 0, mouse_y = 0, wheel = 0;
@@ -69,6 +75,14 @@ void WriteVec(uint8_t *b, uint32_t a, Vec v) {
   Put(b, a + 4, v.y);
   Put(b, a + 8, v.z);
 }
+// Photo mode's pad: the buttons to its panel (the first player's), the rest for the camera.
+PhotoPadExtra ReadPhotoPad(const uint8_t *state, uint32_t user, bool live) {
+  if (user == 0 && live) {
+    auto s16 = [&](int at) { return int16_t(uint16_t(state[at] << 8 | state[at + 1])); };
+    kk::photo::OnPad(uint16_t(state[4] << 8 | state[5]), s16(8), s16(10), s16(12), s16(14), state[6], state[7]);
+  }
+  return PhotoPadFromState(state);
+}
 void ClearInput() {
   std::lock_guard lock(input_mutex);
   std::memset(keys, 0, sizeof(keys));
@@ -85,6 +99,8 @@ void Toggle() {
                                     : "disabled; normal game camera restored");
 }
 bool MotionKey(unsigned k) {
+  // Photo mode: Q and E switch the panel's tabs (Space and Ctrl still go up and down).
+  if (photo && (k == 'Q' || k == 'E')) return false;
   return k == 'W' || k == 'A' || k == 'S' || k == 'D' || k == 'E' || k == 'Q' ||
          k == 0x20 || k == 0x10 || k == 0x11 || k == 0x12 ||
          (k >= 0xA0 && k <= 0xA5);
@@ -115,7 +131,7 @@ public:
   void OnKeyDown(rex::ui::KeyEvent &e) override { Key(e, true); }
   void OnKeyUp(rex::ui::KeyEvent &e) override { Key(e, false); }
   void OnMouseMove(rex::ui::MouseEvent &e) override {
-    if (!active || DebugOverlayOpen() || !InPlay())
+    if (!active || DebugOverlayOpen() || !InPlay() || (photo && !photo_mouse))
       return;
     const double density = window->GetMediumDpi() ? double(window->GetDpi()) /
                                                         window->GetMediumDpi()
@@ -126,18 +142,19 @@ public:
     e.set_handled(true);
   }
   void OnMouseWheel(rex::ui::MouseEvent &e) override {
-    if (!active || DebugOverlayOpen() || !InPlay())
+    if (!active || DebugOverlayOpen() || !InPlay() || (photo && !photo_mouse))
       return;
     std::lock_guard lock(input_mutex);
     wheel += double(e.scroll_y()) / rex::ui::MouseEvent::kScrollPerDetent;
     e.set_handled(true);
   }
+  // Photo mode leaves the buttons to its panel (the right button held turns the camera there).
   void OnMouseDown(rex::ui::MouseEvent &e) override {
-    if (active && !DebugOverlayOpen())
+    if (active && !DebugOverlayOpen() && !photo)
       e.set_handled(true);
   }
   void OnMouseUp(rex::ui::MouseEvent &e) override {
-    if (active && !DebugOverlayOpen())
+    if (active && !DebugOverlayOpen() && !photo)
       e.set_handled(true);
   }
 
@@ -168,10 +185,10 @@ protected:
     TestTick();
 #endif
     const bool want =
-        active && InPlay() && !DebugOverlayOpen() && window->HasFocus();
+        active && InPlay() && !DebugOverlayOpen() && window->HasFocus() && (!photo || photo_mouse);
     if (want != relative) {
       relative = want;
-      const bool normal = rex::cvar::GetFlagByName("mnk_mode") == "true" &&
+      const bool normal = !photo && rex::cvar::GetFlagByName("mnk_mode") == "true" &&
                           rex::cvar::GetFlagByName("mnk_mouse") == "true" &&
                           InPlay() && !DebugOverlayOpen() && window->HasFocus();
       window->SetRelativeMouseMode(want || normal);
@@ -236,6 +253,10 @@ private:
       return;
     const unsigned k = unsigned(e.virtual_key());
     if (k == 0x78 || k == 0x79) {
+      if (photo) {  // photo mode has its own camera and hides the HUD itself
+        e.set_handled(true);
+        return;
+      }
       if (!InPlay())
         return;
       if (down && !e.prev_state()) {
@@ -271,15 +292,47 @@ void Install(rex::ui::ImGuiDrawer *d, rex::ui::Window *w) {
   new Controls(d, w);
 }
 bool Active() { return active.load(); }
-bool HideHud() { return hidden.load() && InPlay(); }
-bool HideGameHud() { return (hidden.load() || REXCVAR_GET(kk_hide_hud)) && InPlay(); }
+void PhotoStart(float radius) {
+  photo_radius = std::max(radius, 1.f);
+  photo_roll = 0;
+  photo_mouse = false;
+  photo = true;
+  active = true;
+  ++generation;
+  ClearInput();
+  RequestUiPaint();
+  REXLOG_INFO("KK freecam: photo mode camera on (radius {:.1f} m)", photo_radius);
+}
+void PhotoStop() {
+  if (!photo.exchange(false)) return;
+  active = false;
+  photo_mouse = false;
+  ++generation;
+  ClearInput();
+  RequestUiPaint();
+  REXLOG_INFO("KK freecam: photo mode camera off; normal game camera restored");
+}
+void PhotoParams(float roll, float speed, bool mouse_look) {
+  photo_roll = roll;
+  photo_speed = std::clamp(speed, 0.1f, 100.f);
+  photo_mouse = mouse_look;
+}
+void PhotoResetView() {
+  ++generation;
+}
+bool PhotoActive() { return photo.load(); }
+bool HideHud() { return (hidden.load() && InPlay()) || photo.load(); }
+bool HideGameHud() { return ((hidden.load() || REXCVAR_GET(kk_hide_hud)) && InPlay()) || photo.load(); }
 void Pad(uint32_t user, uint8_t *state, bool connected) {
   if (user >= pads.size()) {
     std::memset(state + 4, 0, 12);
     return;
   }
   std::lock_guard lock(input_mutex);
-  const auto input = ConsumePad(
+  // Photo mode: the buttons go to its panel; the triggers go down / up, the stick clicks faster / slower.
+  PhotoPadExtra extra;
+  if (photo) extra = ReadPhotoPad(state, user, connected && InPlay());
+  auto input = ConsumePad(
       state, std::clamp(REXCVAR_GET(kk_deadzone), 0, 50) / 100.f,
       REXCVAR_GET(kk_invert_rs_x), REXCVAR_GET(kk_invert_rs_y));
 #if defined(KK_DEV_TOOLS)
@@ -288,6 +341,7 @@ void Pad(uint32_t user, uint8_t *state, bool connected) {
     for (int i = 4; i < 16; ++i) if (state[i]) ++pad_leaks;
   }
 #endif
+  if (photo) ApplyPhotoPad(extra, input);
   pads[user] = connected && InPlay() && !DebugOverlayOpen() ? input : PadInput{};
 }
 #if defined(KK_DEV_TOOLS)
@@ -336,6 +390,7 @@ bool OverrideView(uint8_t *base, uint32_t view, uint32_t caller,
       return false;
     camera.yaw = std::atan2(f.y, f.x);
     camera.pitch = std::asin(std::clamp(f.z / Length(f), -1.f, 1.f));
+    if (photo) photo_center = camera.position;
     initialized = true;
     captured_generation = gen;
     moved_frame = frame;
@@ -352,7 +407,8 @@ bool OverrideView(uint8_t *base, uint32_t view, uint32_t caller,
       camera.Look(float(mouse_x) * sensitivity,
                   float(mouse_y) * sensitivity *
                       (REXCVAR_GET(kk_mouse_invert_y) ? -1.f : 1.f));
-      camera.Wheel(float(wheel));
+      if (photo) camera.speed = photo_speed.load();
+      else camera.Wheel(float(wheel));
       PadInput pad;
       // Use the first pad with an active control; never add duplicate inputs
       // when the title polls more than one connected user.
@@ -373,6 +429,7 @@ bool OverrideView(uint8_t *base, uint32_t view, uint32_t caller,
           keys[0x10] || keys[0xA0] || keys[0xA1] || pad.fast,
           keys[0x12] || keys[0xA4] || keys[0xA5] || pad.slow, real_dt);
     }
+    if (photo) camera.position = ClampToRadius(camera.position, photo_center, photo_radius);
     mouse_x = mouse_y = wheel = 0;
 #if defined(KK_DEV_TOOLS)
     static auto last_trace = Clock::time_point{};
@@ -392,9 +449,10 @@ bool OverrideView(uint8_t *base, uint32_t view, uint32_t caller,
 #endif
   }
   std::memcpy(saved.data(), base + view, saved.size());
-  WriteVec(base, view, camera.Right());
+  const float roll = photo ? photo_roll.load() : 0.f;
+  WriteVec(base, view, RollAxis(camera.Right(), camera.Up(), roll, true));
   WriteVec(base, view + 16, camera.Forward());
-  WriteVec(base, view + 32, camera.Up());
+  WriteVec(base, view + 32, RollAxis(camera.Right(), camera.Up(), roll, false));
   WriteVec(base, view + 48, camera.position);
   return true;
 }

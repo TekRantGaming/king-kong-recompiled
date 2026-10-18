@@ -22,6 +22,8 @@ add_library(nr_draw STATIC
     gi_config.cpp
     # Cel shading (docs/cel.md): the settings and the band function.
     cel_config.cpp
+    # Photo mode (docs/photo-mode.md): its settings, hidden draws and the grade's colour function.
+    photo_config.cpp
     # Temporal upscalers (docs/upscalers.md): settings, jitter, motion matching, the upscale point.
     upscale_config.cpp
     upscale_jitter.cpp
@@ -40,6 +42,7 @@ add_library(nr_renderer STATIC
     gtao.cpp
     ssgi.cpp
     cel_shade.cpp
+    photo_grade.cpp
     shaders.cpp
     smaa.cpp
     output_blit.cpp
@@ -69,6 +72,8 @@ if(NR_GAME_RENDERER)
         scene_gi.cpp
         game_cel.cpp
         scene_cel.cpp
+        game_photo.cpp
+        scene_photo.cpp
         shader_library.cpp
         pipeline_prewarm.cpp
         # Temporal upscalers (docs/upscalers.md): the choice, and each SDK (loaded at run time).

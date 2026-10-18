@@ -155,7 +155,8 @@ if(KK_DEV_TOOLS)
     target_compile_definitions(rexgpu-native PRIVATE KK_DEV_TOOLS=1)
 endif()
 target_sources(king_kong PRIVATE ../native-renderer/hooks/kk_native_hooks.cpp
-                                 ../native-renderer/hooks/kk_native_ui.cpp)
+                                 ../native-renderer/hooks/kk_native_ui.cpp
+                                 ../native-renderer/hooks/kk_native_photo.cpp)
 target_link_libraries(king_kong PRIVATE nr_hooks)
 # The runtime loads the plugin from beside the program.
 add_dependencies(king_kong rexgpu-native)

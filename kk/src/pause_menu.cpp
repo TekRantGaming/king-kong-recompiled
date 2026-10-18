@@ -24,6 +24,7 @@
 #include "launcher_sounds.h"
 #include "launcher_text.h"
 #include "launcher_ui.h"
+#include "photo_mode.h"
 #include "play_session.h"
 #include "toast.h"
 
@@ -199,6 +200,7 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
   std::vector<Entry> Entries() {
     std::vector<Entry> e;
     e.push_back({"Resume", [] { play::RunPauseAction(play::PauseAction::kResume); }});
+    if (photo::Available()) e.push_back({"Photo mode", [] { photo::Enter(); }});  // photo_mode.cpp (task 208)
     if (play::PauseActionAvailable(play::PauseAction::kStartAgain))
       e.push_back({"Start again", [this] {
                      Confirm("Start again", "Start this chapter again from its beginning?", "Start again",

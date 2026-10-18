@@ -870,8 +870,10 @@ void GameRenderer::TrimClearTargets() {
     if (lighting_parked_) lighting_parked_->ForgetTargets();
     if (scene_cel_) scene_cel_->ForgetTargets();
     if (cel_parked_) cel_parked_->ForgetTargets();
+    if (scene_photo_) scene_photo_->ForgetTargets();
   }
-  if (upscale_ || scene_ao_ || scene_gi_ || gi_parked_ || scene_lighting_ || lighting_parked_ || scene_cel_ || cel_parked_) return;
+  if (upscale_ || scene_ao_ || scene_gi_ || gi_parked_ || scene_lighting_ || lighting_parked_ || scene_cel_ || cel_parked_ ||
+      scene_photo_) return;
   for (auto& [key, t] : targets_) {
     if (!t || !t->texture || !CanEvictClearTarget(t->clear_only, bool(upscale_ || scene_ao_),
                                                 t->used_frame, frame_)) continue;
@@ -1957,6 +1959,7 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     }
     return;
   }
+  if (PhotoHidesDraw(call, d, *vs, ps.get())) return;  // photo mode (game_photo.cpp): arms, weapon, pause cover
 
   if (stop_at == 1) return;
   // The game's fog pass: its two AfterEffects fog pixel shaders (microcode
@@ -2118,6 +2121,8 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   if (scene_gi_) GiDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
   // Cel hook (game_cel.cpp): at the end of the opaque pass the lines and bands go in (after AO and GI).
   if (scene_cel_) CelDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
+  // Photo hook (game_photo.cpp): the depth of field's depth at the end of the opaque pass.
+  if (scene_photo_) PhotoDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
   // Lighting hook (game_lighting.cpp): the lighting options' moments and the census.
   // With live settings b5 is always bound (the layout cannot change): written every draw list.
   if (options_.lighting.active() || options_.effect_settings) LightingDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());

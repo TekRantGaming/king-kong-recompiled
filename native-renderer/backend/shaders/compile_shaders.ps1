@@ -5,7 +5,7 @@
 # The headers are checked in so the build needs no shader compiler.
 #
 # Usage: compile_shaders.ps1 -Dxc <path\dxc.exe>
-#        compile_shaders.ps1 -Dxc <path\dxc.exe> -Only upscale   (one group: base, ao, gtao, upscale, memory, cel)
+#        compile_shaders.ps1 -Dxc <path\dxc.exe> -Only upscale   (one group: base, ao, gtao, upscale, memory, cel, photo)
 param([Parameter(Mandatory = $true)][string]$Dxc, [string]$Only = "")
 $ErrorActionPreference = "Stop"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -28,6 +28,12 @@ function Compile-Entries([string]$src, [string[]]$specs, [bool]$shift = $true) {
 if ($Only -eq "" -or $Only -eq "cel") {
     Compile-Entries (Join-Path $here "cel.hlsl") @("cel_exposure_cs:cs:cs_exposure", "cel_vs:vs:vs_main", "cel_ps:ps:ps_cel")
     if ($Only -eq "cel") { Write-Host "Shaders written to $out"; exit 0 }
+}
+
+# Photo mode (photo.hlsl, docs/photo-mode.md): one blob per entry point. -Only photo compiles just these.
+if ($Only -eq "" -or $Only -eq "photo") {
+    Compile-Entries (Join-Path $here "photo.hlsl") @("photo_vs:vs:vs_main", "photo_ps:ps:ps_photo")
+    if ($Only -eq "photo") { Write-Host "Shaders written to $out"; exit 0 }
 }
 
 # Temporal upscalers (upscale.hlsl, docs/upscalers.md): one blob per entry point. The object motion

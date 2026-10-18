@@ -267,6 +267,7 @@ void GameRenderer::Clear(nvrhi::ICommandList* cl, const ClearCall& call) {
   if (scene_ao_) AoClearHook(call, depth);  // AO hook (game_ao.cpp): the scene's depth is cleared
   if (scene_gi_) GiClearHook(call, depth);  // GI hook (game_gi.cpp)
   if (scene_cel_) CelClearHook(call, depth);  // Cel hook (game_cel.cpp)
+  if (scene_photo_) PhotoClearHook(call, depth);  // Photo hook (game_photo.cpp)
   if (scene_lighting_ && call.depth && depth) scene_lighting_->OnDepthClear(call.frame, depth->key);
   // The rectangles, or the viewport (the device's, after its clamp).
   std::vector<nvrhi::Rect> rects;
@@ -454,6 +455,7 @@ void GameRenderer::Resolve(nvrhi::ICommandList* cl, const ResolveCall& call) {
 
   if (scene_gi_) GiResolveHook(call, source, from_depth);  // GI hook (game_gi.cpp): scene copies, depth clears
   if (scene_cel_) CelResolveHook(call);  // Cel hook (game_cel.cpp): depth clears
+  if (scene_photo_) PhotoResolveHook(call);  // Photo hook (game_photo.cpp): depth clears
   const uint8_t* dest_object = call.dest_texture ? memory_.Virtual(call.dest_texture) : nullptr;
   bool copied = false;
   kknr::TextureFetch dest_fetch;
@@ -590,6 +592,7 @@ bool GameRenderer::Present(nvrhi::ICommandList* cl, uint32_t device, nvrhi::ITex
   const int32_t fh = int32_t(std::min(uint32_t(ScaleCoord(int32_t(s.height), source->scale_y)), td.height));
   const int32_t pw = memory_scale_steps_ ? int32_t(td.width) : fw;
   const int32_t ph = memory_scale_steps_ ? int32_t(td.height) : fh;
+  photo_frame_w_ = pw, photo_frame_h_ = ph;  // photo mode's grade covers this (game_photo.cpp)
   if (cas_timer_) cas_timer_->FrameEnd();
   // FSR's RCAS already sharpens. Never stack CAS over it. DLSS and XeSS do not expose
   // sharpening here; spatial FSR/NIS are excluded when reading the settings.

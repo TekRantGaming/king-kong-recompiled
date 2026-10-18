@@ -79,6 +79,9 @@ bool StartLevelLoading();
 // its Score pages and save question): back to the launcher instead. True when the page must not run.
 bool OnGameMenuPage(const char* page);
 
+// The game's pause page is up and the port's pause takeover has it (the pause menu, or photo mode over it).
+bool GamePausePageUp();
+
 // pause_hooks.cpp, for play_session.cpp: forget the pause state (a new level).
 void ResetPause();
 // True when the last thing done in the pause menu was Quit game (the start menu request that follows

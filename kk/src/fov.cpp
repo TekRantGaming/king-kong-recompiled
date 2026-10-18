@@ -28,6 +28,7 @@
 
 #include "settings.h"
 #include "freecam.h"
+#include "photo_mode.h"
 
 namespace {
 
@@ -76,6 +77,14 @@ REX_HOOK_RAW(sub_82872DB8) {
   const int since_menu = g_views_since_menu.load(std::memory_order_relaxed);
   if (since_menu < 1000) g_views_since_menu.store(since_menu + 1, std::memory_order_relaxed);
   const bool menus = since_menu < 8;
+  // Photo mode: its own field of view for the scene view it flies (the pause's menu script runs meanwhile).
+  if (freecam && kk::photo::Active() && fov > 0.01f && fov < 3.0f) {
+    const float wide = k == 1.0f ? fov : 2.0f * std::atan(k * std::tan(fov * 0.5f));
+    StoreF(base, at, kk::photo::SceneFieldOfView(wide));
+    __imp__sub_82872DB8(ctx, base);
+    StoreF(base, at, fov);
+    return;
+  }
   if (k == 1.0f || menus || !(fov > 0.01f && fov < 3.0f)) {
     __imp__sub_82872DB8(ctx, base);
     return;

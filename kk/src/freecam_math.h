@@ -9,8 +9,20 @@ struct Vec {
 };
 inline Vec operator+(Vec a, Vec b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
 inline Vec operator*(Vec a, float b) { return {a.x * b, a.y * b, a.z * b}; }
+inline Vec operator-(Vec a, Vec b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
 inline float Length(Vec a) {
   return std::sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
+}
+// Photo mode: the camera stays within `radius` of where it started (the free camera has no streaming).
+inline Vec ClampToRadius(Vec p, Vec centre, float radius) {
+  const Vec d = p - centre;
+  const float n = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+  return n > radius && n > 0 ? centre + d * (radius / n) : p;
+}
+// Photo mode's roll: the view's right (or up) axis turned about its forward axis by `roll` radians.
+inline Vec RollAxis(Vec right, Vec up, float roll, bool want_right) {
+  const float c = std::cos(roll), s = std::sin(roll);
+  return want_right ? right * c + up * s : up * c + right * -s;
 }
 struct PadInput {
   float forward = 0, side = 0, vertical = 0, look_x = 0, look_y = 0;
@@ -82,4 +94,26 @@ struct Camera {
                                (slow ? .25f : 1.f) * std::clamp(dt, 0.f, .1f));
   }
 };
+} // namespace kk::freecam
+namespace kk::freecam {
+// Photo mode's controller on top of ConsumePad's: the triggers go down (left) and up (right) instead of
+// slow / fast, the stick clicks are fast (left) and slow (right), and the A / B buttons do not move it.
+struct PhotoPadExtra {
+  float vertical = 0;
+  bool fast = false, slow = false;
+};
+inline PhotoPadExtra PhotoPadFromState(const uint8_t *state) {
+  PhotoPadExtra e;
+  const uint16_t buttons = uint16_t(uint16_t(state[4]) << 8 | state[5]);
+  auto trigger = [](uint8_t v) { return v > 30 ? float(v - 30) / 225.f : 0.f; };
+  e.vertical = trigger(state[7]) - trigger(state[6]);
+  e.fast = buttons & 0x0040;
+  e.slow = buttons & 0x0080;
+  return e;
+}
+inline void ApplyPhotoPad(const PhotoPadExtra &e, PadInput &input) {
+  input.vertical = e.vertical;
+  input.fast = e.fast;
+  input.slow = e.slow;
+}
 } // namespace kk::freecam

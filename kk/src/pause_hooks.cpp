@@ -51,6 +51,7 @@
 #include <rex/input/mnk/mnk_input_driver.h>
 
 #include "pause_menu.h"
+#include "photo_mode.h"
 #include "play_internal.h"
 #include "backend/picture_adjust.h"  // brightness and gamma on the kept frame
 
@@ -150,9 +151,10 @@ const char* ActionName(int action) {
 
 }  // namespace
 
-bool PauseMenuOpen() {
-  return TakeoverOn() && MenuUp() && !g_game_page && !CoverScreen();
-}
+bool GamePausePageUp() { return TakeoverOn() && MenuUp() && !g_game_page && !CoverScreen(); }
+
+// Photo mode (photo_mode.cpp) keeps the game's pause and steps the port's menu aside while it is open.
+bool PauseMenuOpen() { return GamePausePageUp() && !photo::Active(); }
 
 bool PauseActionAvailable(PauseAction action) {
   if (!PauseMenuOpen() || g_pending >= 0) return false;
@@ -222,7 +224,8 @@ class PauseBackdrop final : public rex::ui::ImGuiDialog {
 
  protected:
   void OnDraw(ImGuiIO& io) override {
-    const bool show = TakeoverOn() && !g_game_page && (MenuUp() || g_pending >= 0) && !CoverScreen();
+    // Photo mode shows the live scene instead (the game's black cover is left out by the renderer).
+    const bool show = TakeoverOn() && !g_game_page && (MenuUp() || g_pending >= 0) && !CoverScreen() && !photo::Active();
     if (!show) {
       if (texture_ && !MenuUp()) texture_.reset();  // the pause is over: let the memory go
       return;

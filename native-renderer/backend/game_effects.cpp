@@ -77,7 +77,8 @@ void GameRenderer::UpdateEffects() {
   if (!options_.effect_settings || effects_frame_ == frame_) return;
   effects_frame_ = frame_;
   const auto start = std::chrono::steady_clock::now();
-  const EffectSettings s = options_.effect_settings();
+  EffectSettings s = options_.effect_settings();
+  PhotoOverrideEffects(s);  // photo mode (game_photo.cpp): its picture settings while it lasts
   options_.texture_pack = s.texture_pack;
   options_.texture_pack_folder = s.texture_pack_folder;
   tessellation_=s.tessellation && options_.tessellation_supported;

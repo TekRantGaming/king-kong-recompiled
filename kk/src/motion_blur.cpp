@@ -26,6 +26,7 @@
 
 #include "hfr.h"
 #include "hfr_blur_logic.h"
+#include "photo_mode.h"
 #include "settings.h"
 
 #if defined(KK_DEV_TOOLS)
@@ -88,7 +89,7 @@ REX_HOOK_RAW(sub_82768DE8) {
   std::memcpy(&saved, base + strength, 4);
   float s = kk::hfr::LoadF(base, strength);
   float used = s;
-  if (!REXCVAR_GET(kk_motion_blur)) {
+  if (!REXCVAR_GET(kk_motion_blur) || kk::photo::Active()) {  // photo mode: no trails behind its camera
     used = 0.0f;
   } else if (s > 0.0f && kk::hfr::On("blur")) {
     const float dt = kk::hfr::LoadF(base, kRawFrameTime);

@@ -501,6 +501,7 @@ void Renderer::OnPresent(uint32_t frame, uint32_t render_target0, uint32_t devic
     auto* cl = FrameCommandList();
     if (game_->options().debug & 524288) DebugGpuPass(cl, UINT64_MAX - 2, "game Present copy");
     game_->Present(cl, device, frames_[recording_]);
+    game_->PhotoPresent(cl, frames_[recording_]);  // photo mode's grade, before the presenter and captures
   }
   const auto t1 = clock::now();
   stats_.present_copy_us += us(t0, t1);

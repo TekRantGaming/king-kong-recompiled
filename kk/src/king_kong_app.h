@@ -59,6 +59,7 @@ void InstallFpeGuard();  // fpe_guard.cpp
 #include "platform.h"
 #include "scheduled_audio.h"
 #include "pause_menu.h"
+#include "photo_mode.h"
 #include "play_internal.h"
 #include "ps2_movies.h"
 #include "settings.h"
@@ -408,6 +409,7 @@ class KingKongApp : public rex::ReXApp {
     kk::play::CreatePauseBackdrop(drawer, immediate_drawer());
     // The port's pause menu (pause_menu.cpp; the launcher's Play makes it too, later calls do nothing).
     kk::CreatePauseMenu(drawer, immediate_drawer(), config_path_, user_data_root_, game_data_root());
+    kk::photo::CreatePanel(drawer, immediate_drawer(), user_data_root_);  // photo mode (photo_mode.cpp)
     kk::CreateFpsOverlay(drawer);
     kk::CreateDebugOverlay(drawer, window(), config_path_, user_data_root_);
     kk::CreateCursorActivity(drawer, window());
