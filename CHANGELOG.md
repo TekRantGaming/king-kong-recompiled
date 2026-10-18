@@ -14,8 +14,6 @@ version's notes the first time you start it.
 
 ### Changed
 - **All bonus content is unlocked.** Every Extras item can be played straight away, with or without a save, the same way every chapter is open in Chapter select. It is not a cheat to the game: scores and completion are recorded as usual. The "All bonus content" cheat is gone: it isn't needed any more.
-
-### Changed
 - **Benchmark on the main menu** in place of About. About is the last tab in Settings.
 - **The Workshop opens a choice of three:** Mods, Texture packs (the HD texture pack, your own texture packs and texture pack mods) and Other TRG projects and games. Mods also has the modding guide and a button that opens your mods folder.
 - **Extras: every bonus is unlocked.** There is no save to choose any more, and the Artbook is first in the list.
