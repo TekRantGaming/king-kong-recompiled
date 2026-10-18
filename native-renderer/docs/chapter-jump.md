@@ -292,7 +292,7 @@ handles A through the button query `sub_8272B7E8(button)` (pressed this frame, 0
 | 3 | Quit game | `+0x408 = 0`, opens the Yes/No page; its Yes opens `IntMIG_Page_load`, which loads the start menu (level 3) |
 | 5 | Options | opens the page at `*(0x82CC97C4)` (the options pages `IntMIG_Page_OptStart*`) |
 | 7 | Score | opens the page at `*(0x82CC9798)` |
-| 6 | (not in the pause list) | `sub_825E66D0()`, `*(0x82CCAA80) = 1`, `G+0x4900 &= 0xF0000000`, `*(0x82CCBFD4) = 30` |
+| 6 | (not in the pause list) | `sub_825E66D0()`, `*(0x82CCAA80) = 1`, `G+0x4900 &= 0xF0000000`, `*(0x82CCBFD4) = 30` = reload the last checkpoint, the request a death makes (task 237: the port's "Load last checkpoint" does this) |
 
 Start again and Score are only in the list when a save slot is chosen (`G+0x4E10 != -1`). Resume is the default
 row. B also resumes.

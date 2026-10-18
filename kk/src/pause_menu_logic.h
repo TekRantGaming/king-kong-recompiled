@@ -22,7 +22,7 @@ enum class Entry {
   kGameplay,
   kCheats,        // only while the cheats are switched on (the owner's list has no Cheats entry)
   kGameOptions,   // the game's own Options pages: developer builds only
-  kRestart,       // the game's "Start again": restarts the chapter (there is no checkpoint restart)
+  kLoadCheckpoint,  // "Load last checkpoint" (owner 18 Oct, replaces the chapter restart): the reload a death makes
   kScore,         // the game's Score page (chapter-select runs)
   kSave,          // the game's Save (story runs)
   kQuitToMainMenu,
@@ -34,7 +34,7 @@ struct Available {
   bool photo = false;
   bool cheats = false;
   bool game_options = false;
-  bool restart = false;
+  bool checkpoint = false;
   bool score = false;
   bool save = false;
   bool quit_to_main_menu = true;
@@ -62,7 +62,7 @@ inline std::vector<Listed> Entries(const Available& a) {
     add(e, gap);
     gap = false;
   };
-  lower(a.restart, Entry::kRestart);
+  lower(a.checkpoint, Entry::kLoadCheckpoint);
   lower(a.score, Entry::kScore);
   lower(a.save, Entry::kSave);
   lower(a.quit_to_main_menu, Entry::kQuitToMainMenu);
@@ -82,7 +82,7 @@ inline const char* Label(Entry e) {
     case Entry::kGameplay: return settings_layout::kPageNames[settings_layout::kGameplay];
     case Entry::kCheats: return settings_layout::kPageNames[settings_layout::kCheats];
     case Entry::kGameOptions: return "Options";
-    case Entry::kRestart: return "Restart chapter";
+    case Entry::kLoadCheckpoint: return "Load last checkpoint";
     case Entry::kScore: return "Score";
     case Entry::kSave: return "Save game";
     case Entry::kQuitToMainMenu: return "Quit to main menu";
@@ -103,7 +103,7 @@ inline const char* What(Entry e) {
     case Entry::kGameplay: return "Subtitles, language, HUD and Performance metrics.";
     case Entry::kCheats: return "Switch cheats on or off. Changes apply at once.";
     case Entry::kGameOptions: return "The game's own options pages (test builds only).";
-    case Entry::kRestart: return "Start this chapter again from its beginning.";
+    case Entry::kLoadCheckpoint: return "Go back to the last checkpoint you reached.";
     case Entry::kScore: return "See your score for this chapter.";
     case Entry::kSave: return "Save your progress.";
     case Entry::kQuitToMainMenu: return "Leave the game and go back to the main menu.";

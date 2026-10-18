@@ -199,7 +199,7 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
     // Keep the original pages reachable in test builds for profile compatibility checks.
     a.game_options = play::PauseActionAvailable(play::PauseAction::kGameOptions);
 #endif
-    a.restart = play::PauseActionAvailable(play::PauseAction::kStartAgain);
+    a.checkpoint = play::PauseActionAvailable(play::PauseAction::kLoadCheckpoint);
     a.score = play::PauseActionAvailable(play::PauseAction::kScore);
     a.save = play::PauseActionAvailable(play::PauseAction::kSave);
     a.quit_to_main_menu = play::PauseActionAvailable(play::PauseAction::kQuitToLauncher);
@@ -213,9 +213,9 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
       case Entry::kResume: return play::RunPauseAction(PauseAction::kResume);
       case Entry::kPhotoMode: return photo::Enter();
       case Entry::kGameOptions: return play::RunPauseAction(PauseAction::kGameOptions);
-      case Entry::kRestart:
-        return Confirm("Restart chapter", "Start this chapter again from its beginning?", "Restart chapter",
-                       [] { play::RunPauseAction(PauseAction::kStartAgain); });
+      case Entry::kLoadCheckpoint:
+        return Confirm("Load last checkpoint", "Go back to the last checkpoint? Your progress since then is lost.",
+                       "Load last checkpoint", [] { play::RunPauseAction(PauseAction::kLoadCheckpoint); });
       case Entry::kScore: return play::RunPauseAction(PauseAction::kScore);
       case Entry::kSave: return play::RunPauseAction(PauseAction::kSave);
       // The launcher is the game's main menu now: two ways out, both through the game's quit (and its saving).
@@ -665,7 +665,7 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
         if (fit > 0) REXLOG_INFO("KK dev: stripfit {} {} '{}' fit {}", lang, page, label, fit);
       };
       pause::Available all;
-      all.photo = all.cheats = all.restart = all.score = all.save = true;
+      all.photo = all.cheats = all.checkpoint = all.score = all.save = true;
       for (const pause::Listed& l : pause::Entries(all))
         check(nullptr, T(pause::What(l.entry)), ListWidth(), "list", pause::Label(l.entry));
       for (const pause::Listed& l : pause::Entries(all)) {
