@@ -917,7 +917,12 @@ void StartChapter(PPCContext& ctx, uint8_t* base, uint32_t g, int idx, int slot)
   Store32(base, kChapterNumber, Load32(base, g + (0x149B + uint32_t(idx)) * 4));
   Store32(base, g + 0x5668, 1);  // started from the chapter select
   Store32(base, g + 0x5670, uint32_t(idx));
-  const uint32_t level = Load32(base, g + (0x1402 + uint32_t(idx)) * 4), start = Load32(base, g + (0x1435 + uint32_t(idx)) * 4);
+  const uint32_t level = Load32(base, g + (0x1402 + uint32_t(idx)) * 4);
+  uint32_t start = Load32(base, g + (0x1435 + uint32_t(idx)) * 4);
+#if defined(KK_DEV_TOOLS)
+  // KK_DEV_START_POINT=<n>: start the chapter's level at another start point (its checkpoints), for tests.
+  if (const char* sp = std::getenv("KK_DEV_START_POINT"); sp && *sp) start = uint32_t(std::atoi(sp));
+#endif
   RequestLevel(base, g, level, start);
   REXLOG_INFO("KK play: starting chapter-select entry {} (level {} start {})", idx, int32_t(level), int32_t(start));
 }

@@ -35,6 +35,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <sstream>
 #include <string>
@@ -143,6 +144,8 @@ struct Sampler {
   }
   std::unordered_map<uint32_t, uint32_t> keys;
   double keys_at = -100;
+  const uint32_t vars_of = [] { const char* v = std::getenv("KK_DEV_SAMPLE_VARS"); return v && *v ? uint32_t(std::strtoul(v, nullptr, 16)) : 0u; }();
+  FILE* vf = nullptr;
 
   bool on() const { return range.size() >= 2 || !dumps.empty(); }
 
@@ -166,6 +169,7 @@ struct Sampler {
       float ev_t = 0, ai_t = 0;
       int ev_i = -1;
       uint32_t ai_f = 0;
+      char tracks[64] = "";
       // Animation: [[obj+20]+0] is the object's animation block: +156 the
       // current action, +160 its item, +132 the first layer's animation. Its
       // frame (1/60 s units) comes from the game's own sub_823F8AF0(obj, 0).
@@ -192,13 +196,32 @@ struct Sampler {
             // script tables in the image, {hash, function, name}).
             const uint32_t block = Load32(base, ai + (first + 6) * 4);
             ai_f = Valid(block) ? Load32(base, block + 20) : 0;
+            // Every track's function (task 224: the raptors' states), first to last.
+            for (uint32_t k = first; k <= Load16(base, ai + 82) && k < first + 5; ++k) {
+              const uint32_t b2 = Load32(base, ai + (k + 6) * 4);
+              std::snprintf(tracks + std::strlen(tracks), sizeof(tracks) - std::strlen(tracks), "%s%08X",
+                            k == first ? "" : "|", Valid(b2) ? Load32(base, b2 + 20) : 0u);
+            }
+          }
+        }
+      }
+      // Task 224: KK_DEV_SAMPLE_VARS=<first track function, hex>: the AI variables ([[obj+24]+4]+64,
+      // 12 KB) of those objects at each sample, to vars.bin ({double t, u32 obj, 12288 bytes}).
+      if (rows && vars_of && ai_f == vars_of) {
+        const uint32_t ai = Load32(base, Load32(base, obj + 24) + 4), v = Valid(ai) ? Load32(base, ai + 64) : 0;
+        if (Valid(v) && v + 12288 < 0xA0000000) {
+          if (!vf) vf = std::fopen((OutDir() / "vars.bin").string().c_str(), "wb");
+          if (vf) {
+            std::fwrite(&t, sizeof(t), 1, vf);
+            std::fwrite(&obj, sizeof(obj), 1, vf);
+            std::fwrite(base + v, 1, 12288, vf);
           }
         }
       }
       if (rows && f)
-        std::fprintf(f, "%.4f,%llu,%.4f,%.5f,%d,%08X,%08X,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%d,%.4f,%08X,%08X\n", t,
+        std::fprintf(f,"%.4f,%llu,%.4f,%.5f,%d,%08X,%08X,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%d,%.4f,%08X,%08X,%s\n", t,
                      static_cast<unsigned long long>(frame), gt, dt, i, obj, Load32(base, obj), x, y, z, ax, ay, az,
-                     ev_t, ev_i, ai_t, ai_f, keys.count(obj) ? keys[obj] : 0u);
+                     ev_t, ev_i, ai_t, ai_f, keys.count(obj) ? keys[obj] : 0u, tracks);
     }
   }
 
@@ -255,6 +278,7 @@ struct Sampler {
         std::fclose(f);
         f = nullptr;
         REXLOG_INFO("KK dev sample: done");
+        if (vf) std::fclose(vf), vf = nullptr;
       }
       if (g) {
         std::fclose(g);
@@ -269,7 +293,7 @@ struct Sampler {
         range.clear();
         return;
       }
-      std::fprintf(f, "t,frame,gt,dt,i,obj,flags,x,y,z,ax,ay,az,ev_t,ev_i,ai_t,ai_f,key\n");
+      std::fprintf(f, "t,frame,gt,dt,i,obj,flags,x,y,z,ax,ay,az,ev_t,ev_i,ai_t,ai_f,key,tracks\n");
       next = t;
       REXLOG_INFO("KK dev sample: sampling from {:.2f} s", t);
     }
@@ -282,7 +306,7 @@ struct Sampler {
     }
     ++frame;
     gt += dt;
-    std::fprintf(f, "%.4f,%llu,%.4f,%.5f,-1,%08X,0,0,0,0,0,0,0,0,-1,0,0,0\n", t,
+    std::fprintf(f, "%.4f,%llu,%.4f,%.5f,-1,%08X,0,0,0,0,0,0,0,0,-1,0,0,0,\n", t,
                  static_cast<unsigned long long>(frame), gt, dt, world);
     Globals(base, t, dt);
     const double interval = range.size() >= 3 ? range[2] : 0.05;
@@ -310,9 +334,11 @@ Sampler& Get() {
 
 // For other dev aids that sample inside the AI pass.
 void DevClockAi();  // dev_clock_trace.cpp
+void DevTeleportTick(PPCContext* ctx, uint8_t* base, uint32_t world);  // dev_teleport.cpp
 
 void DevSampleTick(PPCContext* ctx, uint8_t* base, uint32_t world) {
   DevClockAi();
+  DevTeleportTick(ctx, base, world);
   static const bool on = Get().on();
   if (on) Get().Tick(ctx, base, world);
 }
