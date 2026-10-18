@@ -8,16 +8,17 @@
 // ultrawide_logic.h WidenProjection) and the scratch matrix put back afterwards, so the game never sees a change.
 // Orthographic projections (HUD, menus, full-screen passes) and the menus' 3D pieces stay as they are.
 //
-// HUD (task 231): the draws of the game's screen-space display list (sub_827FA2B0 called from the main view at
-// 0x82873AB0; its hooks are in freecam.cpp, which call HudListEnter / HudLeaf / HudTagsRestore below) are tagged
-// for the native renderer (nr_set_draw_tags, native-renderer/backend/draw_tags.h), which puts them in a centred
-// 16:9 box; a draw covering the whole width (a fade, a tint) stays full width. The first-person weapon pass in that
-// list (sub_827C6660) is a 3D view and is not tagged. At 16:9 (the default) nothing here does anything.
+// HUD (task 231, moved in task 239): the draws of the executor's HUD pass (pass 4 of sub_82796C10: HUD text and
+// icons, the ammo counter, subtitles, loading text) are tagged for the native renderer (nr_set_draw_tags,
+// native-renderer/backend/draw_tags.h), which puts them in a centred 16:9 box; a draw covering the whole width
+// (a fade, a tint) or with a perspective matrix in c0-c3 stays as it is. At 16:9 (the default) nothing here does
+// anything and no tag is ever sent.
 
 #include <array>
 #include <atomic>
 #include <bit>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 
 #include <rex/hook.h>
@@ -70,44 +71,43 @@ SetTagsFn FindSetTags() {
   return nullptr;
 }
 
-constexpr uint32_t kInList = 1u << 30;  // inside the main view's screen list (not sent)
-
-void SetState(uint32_t state) {
-  if (state == g_tags) return;
-  const bool send = (state & ~kInList) != (g_tags & ~kInList);
-  g_tags = state;
+void SetTags(uint32_t tags) {
+  if (tags == g_tags) return;
+  g_tags = tags;
   static const SetTagsFn set = FindSetTags();
-  if (send && set) set(state & ~kInList, kk::UltrawideFactor());
+  if (set) set(tags, kk::UltrawideFactor());
 }
+
+// KK_ULTRAWIDE_PASS_DIAG=1 (diagnostics): every pass is tagged, so KK_ULTRAWIDE_HUD_LOG shows which pass draws
+// what (its "leaf" is the pass number + 1). Shadows and other passes then go wrong: never for play.
+bool PassDiag() {
+  static const bool on = [] {
+    const char* e = std::getenv("KK_ULTRAWIDE_PASS_DIAG");
+    return e && *e == '1';
+  }();
+  return on;
+}
+
+constexpr uint32_t kHudPass = 4;  // the last 2D pass: HUD text and icons, ammo counter, subtitles, loading text
 
 }  // namespace
 
-namespace kk::ultrawide {
-
-// sub_827FA2B0 (the screen-space display list). Its leaf routines (HudLeaf) are the HUD; draws of the list
-// outside them (3D pieces drawn through sub_827FA0B8 / sub_827FA138, already widened) stay untagged.
-uint32_t HudListEnter(bool main_view_list) {
+// The render executor's pass runner (r4 = pass number; called from the frame's pass sequence sub_82797460,
+// pass 4 at 0x827977A8). The game records its draws into passes while it updates and draws them here, on
+// the drawing thread, so the HUD tag is set around the pass itself (task 239; the display-list hooks of task 231
+// run on the recording thread and only tagged whatever the drawing thread drew at that moment).
+REX_EXTERN(__imp__sub_82796C10);
+REX_HOOK_RAW(sub_82796C10) {
+  const uint32_t pass = ctx.r4.u32;
+  if (kk::UltrawideFactor() == 1.0f || kk::fov::InMenus() || (pass != kHudPass && !PassDiag())) {
+    __imp__sub_82796C10(ctx, base);
+    return;
+  }
   const uint32_t old = g_tags;
-  if (main_view_list && kk::UltrawideFactor() > 1.0f && !kk::fov::InMenus()) SetState(kInList);
-  return old;
+  SetTags(kTagHud | (((pass + 1) & 0xFF) << kTagLeafShift));
+  __imp__sub_82796C10(ctx, base);
+  SetTags(old);
 }
-
-uint32_t HudLeaf(uint32_t leaf) {
-  const uint32_t old = g_tags;
-  if (old & kInList) SetState(kInList | kTagHud | ((leaf & 0xFF) << kTagLeafShift));
-  return old;
-}
-
-// The first-person weapon pass inside the list: a 3D view.
-uint32_t HudPause() {
-  const uint32_t old = g_tags;
-  SetState(old & kInList);
-  return old;
-}
-
-void HudTagsRestore(uint32_t old) { SetState(old); }
-
-}  // namespace kk::ultrawide
 
 REX_EXTERN(__imp__sub_8278AB00);
 REX_HOOK_RAW(sub_8278AB00) {

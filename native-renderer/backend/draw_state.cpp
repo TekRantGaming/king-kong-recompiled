@@ -255,17 +255,10 @@ bool DrawTracker::FillCommon(DrawCall& call) {
   call.conditional_id = conditional_id();
   call.tags = CurrentDrawTags();
   if (call.tags & kDrawTagHud) {
-    // A 3D draw inside a HUD element (the first-person arms of one of the display list's leaves): it has a
-    // perspective matrix and is already widened, so it stays out of the 16:9 HUD box (task 231).
-    for (uint32_t r = 0; r + 4 <= kVsFloatConstants; ++r) {
-      float rows[16];
-      for (uint32_t i = 0; i < 4; ++i)
-        for (uint32_t c = 0; c < 4; ++c) rows[i * 4 + c] = vs_f_[r + i][c];
-      if (LooksLikePerspectiveRows(rows)) {
-        call.tags &= ~kDrawTagHud;
-        break;
-      }
-    }
+    // A 3D draw inside the HUD pass: its c0-c3 hold a perspective matrix and it is already widened, so it stays
+    // out of the 16:9 HUD box (task 231). Only c0-c3: the other registers keep stale matrices of earlier 3D
+    // draws, which untagged every 2D draw of the HUD (task 239).
+    if (LooksLikePerspectiveRows(call.vs_c0_c3.data())) call.tags &= ~kDrawTagHud;
   }
   return true;
 }

@@ -458,13 +458,6 @@ bool OverrideView(uint8_t *base, uint32_t view, uint32_t caller,
 }
 } // namespace kk::freecam
 
-namespace kk::ultrawide {  // ultrawide.cpp (task 231)
-uint32_t HudListEnter(bool main_view_list);
-uint32_t HudLeaf(uint32_t leaf);
-uint32_t HudPause();
-void HudTagsRestore(uint32_t old);
-}  // namespace kk::ultrawide
-
 // The game's screen-space display list. Keep its lifetime/removal bookkeeping
 // running while suppressing its leaf drawing routines, so F10 can restore
 // persistent HUD elements immediately.
@@ -482,13 +475,10 @@ REX_HOOK_RAW(sub_827FA2B0) {
   const bool old = hide_screen_list;
   hide_screen_list =
       old || (kk::freecam::HideGameHud() && uint32_t(ctx.lr) == 0x82873AB0);
-  // Ultrawide mod (task 231): this list's 2D draws go in a centred 16:9 box (ultrawide.cpp).
-  const uint32_t old_tags = kk::ultrawide::HudListEnter(uint32_t(ctx.lr) == 0x82873AB0);
   __imp__sub_827FA2B0(ctx, base);
-  kk::ultrawide::HudTagsRestore(old_tags);
   hide_screen_list = old;
 }
-#define KK_HUD_LEAF(addr, n)                                                   \
+#define KK_HUD_LEAF(addr)                                                      \
   REX_EXTERN(__imp__sub_##addr);                                               \
   REX_HOOK_RAW(sub_##addr) {                                                   \
     if (hide_screen_list) {                                                    \
@@ -496,36 +486,32 @@ REX_HOOK_RAW(sub_827FA2B0) {
       ctx.r3.u64 = 1;                                                          \
       return;                                                                  \
     }                                                                          \
-    const uint32_t old_tags = kk::ultrawide::HudLeaf(n);                       \
     __imp__sub_##addr(ctx, base);                                              \
-    kk::ultrawide::HudTagsRestore(old_tags);                                   \
   }
-KK_HUD_LEAF(827C57D0, 1)
-KK_HUD_LEAF(827CCB28, 2)
-KK_HUD_LEAF(82875BB8, 3)
-KK_HUD_LEAF(827C50B8, 4)
-KK_HUD_LEAF(82863938, 5)
-KK_HUD_LEAF(827C2518, 6)
-KK_HUD_LEAF(828750F0, 7)
-KK_HUD_LEAF(82863018, 8)
-KK_HUD_LEAF(827CC200, 9)
-KK_HUD_LEAF(82874C98, 10)
-KK_HUD_LEAF(827CBC70, 11)
-KK_HUD_LEAF(827C8C20, 12)
-KK_HUD_LEAF(828745D0, 13)
-KK_HUD_LEAF(82873DF8, 14)
-KK_HUD_LEAF(827C7438, 15)
-KK_HUD_LEAF(827C38E0, 16)
-KK_HUD_LEAF(827C6B30, 17)
-KK_HUD_LEAF(827C6078, 18)
-KK_HUD_LEAF(827C40E8, 19)
+KK_HUD_LEAF(827C57D0)
+KK_HUD_LEAF(827CCB28)
+KK_HUD_LEAF(82875BB8)
+KK_HUD_LEAF(827C50B8)
+KK_HUD_LEAF(82863938)
+KK_HUD_LEAF(827C2518)
+KK_HUD_LEAF(828750F0)
+KK_HUD_LEAF(82863018)
+KK_HUD_LEAF(827CC200)
+KK_HUD_LEAF(82874C98)
+KK_HUD_LEAF(827CBC70)
+KK_HUD_LEAF(827C8C20)
+KK_HUD_LEAF(828745D0)
+KK_HUD_LEAF(82873DF8)
+KK_HUD_LEAF(827C7438)
+KK_HUD_LEAF(827C38E0)
+KK_HUD_LEAF(827C6B30)
+KK_HUD_LEAF(827C6078)
+KK_HUD_LEAF(827C40E8)
 #undef KK_HUD_LEAF
 REX_EXTERN(__imp__sub_827C6660);
 REX_HOOK_RAW(sub_827C6660) {
   // First-person weapon pass: hidden by F10 (screenshots) and the free camera, not by kk_hide_hud.
   if ((hide_screen_list && kk::freecam::HideHud()) || kk::freecam::Active())
     return;
-  const uint32_t old_tags = kk::ultrawide::HudPause();  // a 3D view: not in the HUD box (task 231)
   __imp__sub_827C6660(ctx, base);
-  kk::ultrawide::HudTagsRestore(old_tags);
 }
