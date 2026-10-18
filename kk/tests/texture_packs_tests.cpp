@@ -108,17 +108,17 @@ static void DownloadTable() {
       "Un paquete de texturas de estilo c\xC3\xB3mic para King Kong. Recomendamos activar tambi\xC3\xA9n el mod Cel shading.",
       "Un pack de textures style bande dessin\xC3\xA9" "e pour King Kong. Nous recommandons d'activer aussi le mod Cel shading.",
       "Un pacchetto texture in stile fumetto per King Kong. Consigliamo di attivare anche la mod Cel shading."};
-  const char* comic_title[] = {"Downloading Kong Comic Book", "Kong Comic Book wird heruntergeladen",
-                               "Descargando Kong Comic Book", "T\xC3\xA9l\xC3\xA9" "chargement de Kong Comic Book",
-                               "Download di Kong Comic Book"};
+  const char* comic_title[] = {"Downloading Comic Book Texture Pack", "Comic Book Texture Pack wird heruntergeladen",
+                               "Descargando Comic Book Texture Pack", "T\xC3\xA9l\xC3\xA9" "chargement de Comic Book Texture Pack",
+                               "Download di Comic Book Texture Pack"};
   for (int l = 0; l < 5; ++l) {
     CHECK(rex::cvar::SetFlagByName("user_language", langs[l]));
     const std::string desc = kk::text::T(comic->description);
     CHECK(desc == comic_text[l] && !HasDash(desc));
-    CHECK(kk::text::T("Kong Comic Book") == std::string("Kong Comic Book"));  // a name: the same everywhere
-    CHECK(kk::text::T(std::string("Downloading ") + kk::content::ModPackFor(Kind::kComic)->name) == comic_title[l]);
+    CHECK(kk::text::T("Comic Book Texture Pack") == std::string("Comic Book Texture Pack"));  // a name: the same everywhere
+    CHECK(kk::text::T(std::string("Downloading ") + kk::content::ModPackFor(Kind::kComic)->title) == comic_title[l]);
     for (const auto& page : kDownloadPages) {
-      const std::string name = kk::content::ModPackFor(page.kind)->name;
+      const std::string name = kk::content::ModPackFor(page.kind)->title;
       // Every text of every download is translated (the page texts, the pop-up titles), with no dashes.
       for (const char* t : {page.description, page.note, page.credits}) {
         if (!t) continue;

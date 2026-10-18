@@ -387,7 +387,7 @@ strings |= {'Mods', 'Texture packs', 'Other TRG projects and games', 'Not instal
             'stops it without changing anything you have installed.',
             '{0} is a {1} GB download. After that it is checked and unpacked. Depending on your connection '
             'this takes from a few minutes to an hour or more.',
-            'Kong Comic Book', 'Downloading Kong Comic Book', 'Kong Comic Book installed', 'Switch on {0}', '{0} is on',
+            'Comic Book Texture Pack', 'Downloading Comic Book Texture Pack', 'Comic Book Texture Pack installed', 'Switch on {0}', '{0} is on',
             'Your downloads carry on when you come back to the launcher. What was downloaded so far is kept.',
             'Unpacking: {0} of {1} GB',
             "{0} is in your mods folder. Switch it on in the Workshop's Mods row.",
