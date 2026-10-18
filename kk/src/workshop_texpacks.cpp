@@ -201,7 +201,7 @@ struct TexturePackShelf::Impl {
       p.content_kind = mp.kind;
       p.page = page;
       p.key = mp.key;
-      p.name = mp.name;
+      p.name = mp.title;
       p.author = page->author;
       p.version = page->version;
       p.st = st;
