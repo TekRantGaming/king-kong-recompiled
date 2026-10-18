@@ -3,6 +3,11 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
+## v2.0.0-beta.10 (unreleased)
+
+### Fixed
+- **Jack's arm and what he holds flickered with an upscaler on** (DLSS, FSR or XeSS). In some places, for example in the Hayes chapter, parts of the arm and of the gun, spear, bone or lever turned into flat patches in the colour of the fog for single frames. They are now drawn whole.
+
 ## v2.0.0-beta.9 (18 October 2026)
 
 **Beta 9**: new features and fixes, from the beta channel (**About** > **Change version**). Your saves and settings are kept. Windows only for this beta.

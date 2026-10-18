@@ -23,6 +23,7 @@ struct UpscaleParams {
   float4 p0;       // camera: x_scale, x_offset, y_scale, y_offset (guest pixel = ndc * scale + offset)
                    // reactive: x strength, y largest value
                    // depth upsample: xy source pixels per destination pixel, zw the source's size
+                   //   (p2.xy: the jitter the source was drawn with, in source pixels)
                    // stretch, show motion: the source rectangle, normalised (x, y, width, height)
   float4 p1;       // camera: z_scale, z_offset, host_scale_x, host_scale_y
   float4 p2;       // camera: xy the jitter (input pixels), z 1 when the reprojection is valid
@@ -110,9 +111,22 @@ float ps_reactive(VSOut i) : SV_Target0 {
 
 // ---------------------------------------------------------------- depth upsample
 
+// The farthest of the four source depths around this pixel's centre (where the jittered input put it),
+// a few steps farther still. A surface drawn again after the point (King Kong's first-person arms and
+// whatever Jack holds: their depth goes in with the pre-pass, their colour after the upscale point when
+// the game copies and clears the scene first) lies between those four depths, so its LESS_EQUAL test
+// passes at the output size. The nearest source depth (the old way) is nearer than the surface for about
+// half the pixels of a slanted triangle, which left whole triangles in the colour of the fog (task 216).
+// Draws tested against the scene (the HUD, the heat shimmer) may show up to a source pixel past an edge.
 float ps_depth_upsample(VSOut i) : SV_Depth {
-  const int2 p = min(int2(floor(i.pos.xy * params.p0.xy)), int2(params.p0.zw) - 1);
-  return source0.Load(int3(p, 0)).r;
+  const float2 c = i.pos.xy * params.p0.xy + params.p2.xy - 0.5;
+  const int2 lo = int2(floor(c)), last = int2(params.p0.zw) - 1;
+  float d = 0.0;
+  [unroll] for (int y = 0; y < 2; ++y)
+    [unroll] for (int x = 0; x < 2; ++x)
+      d = max(d, source0.Load(int3(clamp(lo + int2(x, y), int2(0, 0), last), 0)).r);
+  // Eight float steps past it (no depth interpolates bit for bit at two sizes); 1 stays 1.
+  return d < 1.0 ? min(asfloat(asuint(d) + 8u), 1.0) : d;
 }
 
 // ---------------------------------------------------------------- stretch

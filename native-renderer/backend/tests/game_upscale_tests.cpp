@@ -993,6 +993,57 @@ TEST(GameUpscale_PointBeforeThePostPass) {
   CHECK(sky[0] > 0.9f && sky[2] > 0.9f && sky[1] < 0.1f);  // the quad, drawn where the depth was clear
 }
 
+TEST(GameUpscale_SurfaceDrawnAgainAfterThePointPassesItsOwnDepth) {
+  // King Kong's first-person arms and held items (task 216): their depth goes in with the pre-pass (ALWAYS),
+  // their colour after the fog, tested LESS_EQUAL against that depth. When the game copies and clears the
+  // scene target before them, the upscale point comes first and the test is against the depth carried
+  // over. Here a box close to the camera, slanted faces towards it: its depth before the point (input
+  // size, jittered), its colour after it (output size). Every pixel the box covers in a frame drawn at
+  // the output size without an upscaler must be the box's colour here too (the nearest depth left whole
+  // triangles failing, in the colour of what was under them).
+  Options o;
+  o.scale = 2.0f;
+  o.config.quality = UpscaleQuality::kPerformance;
+  Options ref_o;
+  ref_o.upscale = false;
+  ref_o.scale = 2.0f;
+  Fixture f(o), r(ref_o);
+  if (!f.Init() || !r.Init()) return;
+  constexpr uint32_t kDepthAlways = 0x2 | 0x4 | (7 << 4);
+  constexpr uint32_t kHeld = 0xFFFF00FF;
+  Mesh held;
+  Box(held, {0.80f, 1.05f, -0.80f}, {1.20f, 1.45f, -0.40f}, kHeld);
+  auto frame = [&](Fixture& x, int i, const char* name) {
+    x.DrawScene({});
+    x.DrawMesh("held", held, x.cam.rows, x.ps_lit, kBlendOpaque, kDepthAlways, 0);
+    x.ClearRect(kClearTarget0, 0xFF00FF00, 0, 0, kW / 4, kH / 4);  // the upscale point (with an upscaler)
+    x.DrawMesh("held", held, x.cam.rows, x.ps_lit, kBlendOpaque, kDepthPrepass);
+    return x.Present(x.rt, std::string(name) + std::to_string(i));
+  };
+  Pixels p, ref;
+  for (int i = 0; i < 4; ++i) {  // several jitter phases
+    p = frame(f, i, "held_");
+    ref = frame(r, i, "held_ref_");
+    CHECK_EQ(p.width, ref.width);
+    CHECK_EQ(p.height, ref.height);
+    if (p.width != ref.width || p.height != ref.height || p.rgba.empty()) return;
+    uint32_t covered = 0, missing = 0;
+    for (uint32_t y = 0; y < p.height; ++y)
+      for (uint32_t x = 0; x < p.width; ++x) {
+        const float* a = ref.at(x, y);
+        if (!(a[0] > 0.9f && a[2] > 0.9f && a[1] < 0.1f)) continue;  // not the box in the reference
+        ++covered;
+        const float* b = p.at(x, y);
+        if (!(b[0] > 0.9f && b[2] > 0.9f && b[1] < 0.1f)) ++missing;
+      }
+    std::printf("  frame %d: the box covers %u pixels, %u not drawn after the point\n", i, covered, missing);
+    CHECK(covered > 2000);
+    CHECK_EQ(missing, 0u);
+  }
+  const GameUpscale* u = f.game->upscale();
+  CHECK(u && u->tracker.stats().by_trigger[uint32_t(UpscaleFrameTracker::Trigger::kPartialTarget)] >= 3);
+}
+
 namespace {
 
 // A real upscaler on the test device: a still scene drawn for `frames` jittered frames, the last output

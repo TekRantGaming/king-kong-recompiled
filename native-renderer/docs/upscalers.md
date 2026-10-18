@@ -168,6 +168,14 @@ With an upscaler on, a frame with a scene has two parts (`UpscaleFrameTracker`, 
    target, carries the depth over (upsampled, so the heat shimmer's and the HUD's depth tests still work),
    and makes again from the upscaled picture any full-frame copy of the scene the game took since its last
    draw (the post effects read those).
+   The carried depth is the farthest of the four input depths around each output pixel (where this
+   frame's jitter put them), eight float steps farther (task 216). Jack's first-person arms and held items
+   have their depth in the pre-pass and their colour after the fog, tested LESS_EQUAL against it; in Hayes
+   the game resolves and clears the scene target between the fog and them on many frames (the point:
+   "resolve with clear"), so they come after the point. The nearest input depth was nearer than them on
+   about half of each slanted triangle, which left flat patches of what was under them (the cleared,
+   fog-coloured target), changing with the jitter every frame (GitHub beta issue 2). A draw tested against
+   the scene after the point may now show up to an input pixel past an edge.
 3. **The post phase.** The frame-size targets are the output generation (a second set of targets at the
    output size, keyed apart from the input ones): the post effects, the HUD and Present at the output size,
    nothing jittered. A target first used there whose picture is still in its input twin gets it stretched

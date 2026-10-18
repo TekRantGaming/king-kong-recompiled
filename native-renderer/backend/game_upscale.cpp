@@ -710,6 +710,8 @@ void GameRenderer::MigrateTarget(nvrhi::ICommandList* cl, HostTarget* target) {
     p.p0[1] = float(in->host_height) / float(target->host_height) * float(target->height) / float(std::max(in->height, 1u));
     p.p0[2] = float(in->host_width);
     p.p0[3] = float(in->host_height);
+    p.p2[0] = u.jitter.x;  // the input twin was drawn this frame, jittered
+    p.p2[1] = u.jitter.y;
     cl->clearDepthStencilTexture(target->texture, nvrhi::AllSubresources, true, 1.0f, true, 0);
     UpscalePass(cl, u.depth_ps, &p, sizeof(p), in->texture, nullptr, nullptr, nullptr, target->texture, dest, 3);
   } else {
@@ -1093,6 +1095,10 @@ void GameRenderer::RunUpscale(nvrhi::ICommandList* cl, UpscaleFrameTracker::Trig
         p.p0[1] = float(depth->host_height) / float(out_depth->host_height);
         p.p0[2] = float(depth->host_width);
         p.p0[3] = float(depth->host_height);
+        // The farthest depth around each pixel (upscale.hlsl): a surface drawn again after the point
+        // (the first-person arms and held items, task 216) passes its own pre-pass depth.
+        p.p2[0] = u.jitter.x;
+        p.p2[1] = u.jitter.y;
         UpscalePass(cl, u.depth_ps, &p, sizeof(p), depth->texture, nullptr, nullptr, nullptr, out_depth->texture,
                     nvrhi::Rect(0, int(out_depth->host_width), 0, int(out_depth->host_height)), 3);
       }
