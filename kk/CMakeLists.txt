@@ -93,6 +93,7 @@ set(KINGKONG_SOURCES
     src/profile_save_file.cpp
     src/pause_hooks.cpp
     src/pause_menu.cpp
+    src/photo_mode.cpp
 )
 # The game side of the launcher's Play menu and the pause menu (play_session.h) is play_session.cpp;
 # until it is there, a stand-in with made-up saves lets the UI side build (play_session_stub.cpp).
