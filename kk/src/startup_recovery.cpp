@@ -1,4 +1,5 @@
 #include "startup_recovery.h"
+#include "exit_evidence.h"
 #include "startup_recovery_state.h"
 #include "launcher.h"
 #include "launcher_text.h"
@@ -274,6 +275,7 @@ void Begin(const std::string& plugin, bool game) {
 }
 
 void CleanExit() {
+  kk::exit_evidence::NoteCleanExit("quit or restart");  // task 229: logs\session-<role>.txt
   std::lock_guard lock(mutex);
   if (armed && state) { state->Marker(); state->crashes = 0; state->Save(); }
   armed = false;

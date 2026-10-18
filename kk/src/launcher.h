@@ -59,6 +59,9 @@ bool NativeWindowDrawable(void* handle);
 bool MinimizeNativeWindow(void* handle);
 // {minimised, active (has the keyboard focus)} for a window (the SDK's native handle). Linux: SDL's windows.
 std::pair<bool, bool> NativeWindowState(void* handle);
+// Task 229: the window in front now, for the log: "no window", or its class and program file name (never
+// a window title or a path). Empty off Windows.
+std::string ForegroundWindowOwner();
 // Restores a minimised window and asks for it to be the active window. Linux: SDL's windows.
 bool RestoreNativeWindow(void* handle);
 
