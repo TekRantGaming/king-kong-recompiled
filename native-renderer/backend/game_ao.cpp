@@ -9,6 +9,7 @@
 #include "backend/game_renderer.h"
 #include "backend/game_upscale.h"
 #include "backend/log.h"
+#include "backend/photo_config.h"
 #include "kknr/render_targets.h"
 
 namespace nr {
@@ -154,6 +155,14 @@ void GameRenderer::AoDrawHook(nvrhi::ICommandList* cl, const DrawCall& call, con
          int(st.depth_write), st.blend_control, int(st.alpha_test), st.primitive, static_cast<unsigned long long>(st.vs_hash),
          static_cast<unsigned long long>(st.ps_hash), static_cast<unsigned long long>(a.color.key),
          static_cast<unsigned long long>(a.depth.key));
+    // Task 240 diagnostics: depth function, index count, the photo mode's arms mesh, the draw's projection.
+    float rows[16];
+    AoProjection p;
+    const bool persp = FindAoPerspectiveRegister(a.vs_constants, rows) >= 0 && ExtractAoProjection(rows, p);
+    const bool arms = call.indexed && PhotoMeshCountCandidate(call.count) && PhotoHidesMesh(GeometryContentHash(call), call.count);
+    Logf(LogLevel::kInfo, "rexgpu-native:   AO draw %u extra: zfunc %u count %u arms %d near %.4f px %.3f",
+         call.index_in_frame, (d.u32(dev::kRbDepthControl) >> 4) & 7, call.count, int(arms), persp ? p.near_plane() : -1.0f,
+         persp ? p.px : -1.0f);
   }
 }
 
