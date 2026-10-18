@@ -18,11 +18,11 @@ inline const char* LevelValue(Level l) { return l == Level::kFull ? "full" : l =
 // F2 while playing: Off, FPS only, Full, Off...
 inline Level NextLevel(Level l) { return l == Level::kOff ? Level::kFps : l == Level::kFps ? Level::kFull : Level::kOff; }
 
-// The frame time graph's top (ms): the next of 20, 35, 50, 100, 200 above the slowest frame shown, so a
-// steady 60 or 30 FPS line sits in the lower part and a hitch reaches the top without rescaling every frame.
+// The frame time graph's top (ms): the first of 35, 50, 100, 200 with the slowest frame shown in its lower
+// 70%, so a steady 60 or 30 FPS line sits in the middle and a hitch rescales it (it never rescales each frame).
 inline float GraphTop(float slowest_ms) {
-  for (float top : {20.0f, 35.0f, 50.0f, 100.0f, 200.0f})
-    if (slowest_ms <= top) return top;
+  for (float top : {35.0f, 50.0f, 100.0f, 200.0f})
+    if (slowest_ms <= top * 0.7f) return top;
   return 200.0f;
 }
 

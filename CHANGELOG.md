@@ -7,6 +7,10 @@ version's notes the first time you start it.
 
 **Beta 9**: a fix update, from the beta channel (**About** > **Change version**). Your saves and settings are kept. Windows only for this beta.
 
+### What's new
+- **Brightness and gamma** in Settings > Display > Picture and in the pause menu. Brightness raises or lowers the darkest parts of the picture, Gamma the middle tones. Changes show at once, also while paused. Only the game's picture changes, not the launcher or the menus. At 0 and 1.00 the picture is exactly as before. With HDR, white stays at the Paper white brightness.
+- **Performance metrics** replace the frame counter (Settings > Display > Overlay, or **F2** while playing): Off, FPS only, or Full with a frame time graph, the graphics card's load, temperature, clock and memory, the processor and memory use, the graphics API and the upscaler. A frame counter that was on becomes FPS only.
+
 ### Fixed
 - **Vulkan crash when loading a chapter on AMD graphics cards.** The faster pipeline building added in Beta 7 is now used on NVIDIA cards only, where it was tested; other cards build pipelines the earlier way.
 - **Crash during shader setup on laptops with two graphics chips.** The shader setup, the launcher and the game now always use the more powerful graphics card instead of the built-in Intel or AMD chip. A graphics card chosen in the settings file is still respected.
@@ -18,6 +22,7 @@ version's notes the first time you start it.
 - **The Workshop opens a choice of three:** Mods, Texture packs (the HD texture pack, your own texture packs and texture pack mods) and Other TRG projects and games. Mods also has the modding guide and a button that opens your mods folder.
 - **Extras: every bonus is unlocked.** There is no save to choose any more, and the Artbook is first in the list.
 - **No frame rate pop-up** when pressing Play with a frame rate above 60 FPS.
+- **More settings in the pause menu.** Settings that cannot change while you play (window, resolution, VSync, render quality, look, preset, graphics API, language) are now shown greyed out with a note to change them from the launcher's main menu. The upscaler (DLSS, FSR 4, FSR 3.1, XeSS or Off), its mode and the frame rate cap now change while you play. A new **Graphics** entry opens the graphics settings directly.
 
 ## v2.0.0-beta.8 (17 October 2026)
 

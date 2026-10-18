@@ -470,6 +470,8 @@ for _needle, _why in (
         ('"kk_brightness", -50, 50, 1,', 'the brightness slider'), ('"kk_gamma", 0.5f, 1.5f, 0.05f,', 'the gamma slider')):
     if _needle not in _l206:
         fail(f'206: {_why}')
+if 'e.push_back({"Graphics", [this] { OpenSettings(InGameSettings::kGraphics); }});' not in (src / 'pause_menu.cpp').read_text(encoding='utf-8'):
+    fail('206: the pause menu has no Graphics entry')
 if '"kk_show_fps"' in _l206 or '"Frame counter"' in _l206:
     fail('206: the old Frame counter row is still in the launcher')
 _settings206 = (src / 'settings.cpp').read_text(encoding='utf-8')

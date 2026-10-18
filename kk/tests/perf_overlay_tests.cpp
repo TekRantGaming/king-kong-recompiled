@@ -111,8 +111,8 @@ void OverlayTests() {
             NextLevel(Level::kFull) == Level::kOff,
         "F2 goes Off, FPS only, Full, Off");
   for (Level l : {Level::kOff, Level::kFps, Level::kFull}) Check(ParseLevel(LevelValue(l)) == l, "level values round trip");
-  Check(GraphTop(16.7f) == 20 && GraphTop(33.4f) == 35 && GraphTop(48) == 50 && GraphTop(80) == 100 &&
-            GraphTop(150) == 200 && GraphTop(900) == 200,
+  Check(GraphTop(16.7f) == 35 && GraphTop(20) == 35 && GraphTop(33.4f) == 50 && GraphTop(48) == 100 &&
+            GraphTop(80) == 200 && GraphTop(900) == 200,
         "graph tops: 60 FPS and 30 FPS sit low, hitches reach the top");
   Check(GiB(1638.4) == "1.6" && GiB(-1) == "-" && Whole(45.4) == "45" && Whole(-1) == "-" && Whole(NAN) == "-",
         "number formats");

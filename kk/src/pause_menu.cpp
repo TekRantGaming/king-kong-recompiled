@@ -213,6 +213,9 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
       e.push_back({"Options", [] { play::RunPauseAction(play::PauseAction::kGameOptions); }});
 #endif
     e.push_back({"Settings", [this] { OpenSettings(InGameSettings::kDisplay); }});
+    // Owner, 18 Oct: the graphics settings (upscaler and DLSS among them) one press away; Settings opens on
+    // Display (brightness, gamma, Performance metrics).
+    e.push_back({"Graphics", [this] { OpenSettings(InGameSettings::kGraphics); }});
     // Story runs: the game's own Save (its save pages show, then this menu comes back).
     if (play::PauseActionAvailable(play::PauseAction::kSave))
       e.push_back({"Save", [] { play::RunPauseAction(play::PauseAction::kSave); }});

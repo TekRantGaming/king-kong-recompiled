@@ -25,6 +25,7 @@
 #include "diagnostics.h"
 #include "dev_launcher_chain.h"
 #include "hooks/kk_native_ui.h"  // the temporal upscalers this PC runs
+#include "debug_overlay_logic.h"  // the upscalers the running game offers (as F8 lists them)
 
 #include <algorithm>
 #include <atomic>
@@ -389,6 +390,28 @@ OfferedUpscalers OfferedTemporalUpscalers() {
   o.fsr4 = c.fsr4;
   o.dlss = c.dlss;
   o.xess = c.xess;
+  return o;
+}
+
+// While the game runs (the pause menu): the upscalers the game's own device runs, as the graphics panel (F8)
+// lists them (debug_overlay_logic.h): never a new question, which would make a second device in the game.
+OfferedUpscalers OfferedWhilePlaying() {
+  OfferedUpscalers o;
+  if (!HasTemporalSetting() || !UsingNativeRenderer()) return o;
+  const NrEffectStats s = nr::kk::EffectTimes();
+  const nr::kk::UpscalerChoices c = nr::kk::PeekUpscalers();
+#if defined(_WIN32)
+  constexpr bool windows = true;
+#else
+  constexpr bool windows = false;
+#endif
+  o.known = true;
+  for (int i : panel::OfferedUpscalers(s.size ? s.api : 0, s.size ? s.vendor : 0,
+                                       {c.state == 2, c.dlss, c.fsr4, c.fsr3, c.xess}, windows)) {
+    const std::string_view v = panel::kUpscalers[i].value;
+    o.dlss = o.dlss || v == "dlss", o.fsr4 = o.fsr4 || v == "fsr4", o.fsr3 = o.fsr3 || v == "fsr3";
+    o.xess = o.xess || v == "xess";
+  }
   return o;
 }
 
@@ -1069,7 +1092,7 @@ class SettingsPages {
 #else
       const char* which = "AMD FSR 1 works on any graphics card.";
 #endif
-      const OfferedUpscalers offered = OfferedTemporalUpscalers();
+      const OfferedUpscalers offered = in_game_ ? OfferedWhilePlaying() : OfferedTemporalUpscalers();
       bool any_temporal = false;
       for (const TemporalUpscaler& t : kTemporalUpscalers) {
         if (offered.Has(t.value)) {

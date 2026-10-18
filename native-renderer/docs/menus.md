@@ -153,9 +153,17 @@ game. Start again and Quit game ask first (Cancel focused); B, Esc or Start resu
 settings (Gameplay) until the game's own Options page is known.
 
 **Settings**: tabs Display, Graphics, Audio, Controls (with Button remapping and Keyboard bindings), Gameplay,
-Cheats, Advanced (the same order as the launcher's Settings, `settings_layout.h`), the launcher's own rows (`SettingsPages`, shared code) with the rows that need a restart left out (`LiveOnly`:
-window mode and size, resolution, refresh rate, monitor, frame rate, VSync, upscaler and its mode, render quality,
-internal resolution, look, preset, renderer, language, startup logos). Changes are saved like in the launcher.
+Cheats, Advanced (the same order as the launcher's Settings, `settings_layout.h`), the launcher's own rows (`SettingsPages`, shared code). Owner, 18 Oct (task 206): every row is shown; those that
+cannot change while the game runs are greyed out with the note "This can't be changed while you play. Quit to the
+launcher's main menu and change it in Settings." (`LiveOnly`: window mode and size, resolution, refresh rate,
+monitor, VSync, render quality, internal resolution, look, preset, Recommended, graphics API, renderer, language,
+startup logos). Live since task 206: the frame rate cap (the limiter and the HFR fixes read it every frame), the
+upscaler between Off and the temporal upscalers the running device offers (as F8 lists them; the renderer swaps
+them at a frame boundary) and its mode; with FSR 1 / NIS or a render quality below Native the Upscaler row is greyed
+(the presenter's spatial upscalers are chosen at start). Display has Picture (Brightness, Gamma; applied at Present,
+`backend/picture_adjust.h`; the kept pause frame is retouched to follow them) and Overlay (Performance metrics,
+hidden while the pause menu is open). The menu's list has a **Graphics** entry that opens the Graphics tab. Changes
+are saved like in the launcher.
 Controls: the game gives the menu the pad it read (`PauseMenuPad`); keyboard and mouse come through ImGui.
 
 ## Game side (menus-game, branch `beta3-game`)
@@ -277,9 +285,10 @@ pause menu's Settings; the others stay launcher-only (the user's decision).
 | Cheats (`kk_cheats`, `kk_cheat_*`) | live (new) | applied when the chapter's level is up; changes in play apply at once: flag cheats switched off are cleared again (only the ones the port set), weapons and ammo given stay until the next chapter or checkpoint |
 | Aspect ratio (`present_letterbox`) | live | the presenter, every paint |
 | Ambient occlusion (`ao_mode`, `ao_strength`) | live | native renderer every frame; F8 / F9 already change it |
-| Frame counter, achievement pop-ups and sound | live | every frame / every unlock |
+| Achievement pop-ups and sound | live | every frame / every unlock |
 | Anti-aliasing (`swap_post_effect`), texture filtering (`anisotropic_override`) | restart | read once when the renderer starts (both renderers: `plugin_settings.cpp` `ReadGameSettings`, the Xenos plugin's graphics system) |
-| Render quality and scale, resolution, window mode, monitor, refresh rate, VSync, frame rate cap, upscaler, renderer, language, Original look, startup logos | restart | launcher-only (decided) |
+| Render quality and scale, resolution, window mode, monitor, refresh rate, VSync, spatial upscaler (FSR 1 / NIS), renderer, language, Original look, startup logos | restart | greyed in the pause menu with a note (owner, 18 Oct) |
+| Frame rate cap (`kk_frame_rate`), temporal upscaler and its mode, brightness and gamma, Performance metrics | live (task 206) | the limiter and HFR fixes every frame; the renderer's live settings (`effect_settings.h`) every frame; the overlay every paint. Tested: 60 -> 30 FPS, DLSS -> FSR 3.1 -> Off in play (`runs	ask206-live2-vk-*`) |
 
 The game's own Options pages hold audio volumes and other values kept in the save; see "The game's Options"
 below.

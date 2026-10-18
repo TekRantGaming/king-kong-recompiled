@@ -200,7 +200,8 @@ class FpsOverlay final : public rex::ui::ImGuiDialog {
     const perf::Level level = perf::ParseLevel(REXCVAR_GET(kk_performance_metrics));
     const bool benchmark_run = benchmark::Active();  // its own live overlay shows the same readings
     sampler_.Want(level == perf::Level::kFull && !benchmark_run);
-    if (level == perf::Level::kOff || benchmark_run) return;
+    // Not over the pause menu either (its logo and tabs are at the top left); it comes back with the game.
+    if (level == perf::Level::kOff || benchmark_run || play::PauseMenuOpen()) return;
     DrawMetrics(io, level);
     DrawStutterLine(io);  // with the metrics, as with the old frame counter
   }
@@ -308,7 +309,7 @@ class FpsOverlay final : public rex::ui::ImGuiDialog {
         const float top = perf::GraphTop(slowest);
         char label[16];
         std::snprintf(label, sizeof(label), "%.0f ms", top);
-        dl->AddText(font, unit, ImVec2(g1.x - text_w(font, unit, label) - 3 * s, g0.y + 1 * s), pc::kUnit, label);
+        dl->AddText(font, unit, ImVec2(g0.x + 3 * s, g0.y + 1 * s), pc::kUnit, label);  // the scale, top left
         // A faint guide at the current average frame time.
         const float guide = g1.y - std::min(float(stats.frame_time_ms) / top, 1.0f) * (graph_h - 2 * s);
         dl->AddLine(ImVec2(g0.x, guide), ImVec2(g1.x, guide), pc::kGuide, 1.0f);
