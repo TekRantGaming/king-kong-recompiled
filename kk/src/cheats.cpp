@@ -284,6 +284,10 @@ bool ApplyCheatsNow(uint8_t* base) {
   if (!g || !p) return false;
   kk::UnlockBonusContent(base);
   if (REXCVAR_GET(kk_cheats)) kk::ApplyCheats(base);
+  // For player logs and the scoring check (task 204): the game's own marks at the level start.
+  const uint32_t flags = Load32(base, g + kFlags);
+  REXLOG_INFO("KK: game flags {:08X} at the level start: cheats-used mark {}, all bonus content {}", flags,
+              (flags & kCheatsUsed) ? "ON (scores of this run are not recorded)" : "off", (flags & 0x100) ? "on" : "off");
   kk::g_applied = true;
   kk::g_applied_bits = kk::ChosenBits();
   return true;
