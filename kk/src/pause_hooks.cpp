@@ -331,6 +331,7 @@ void FilterPad(uint32_t user, uint8_t* state) {
   if (g_was_open) {  // just closed: whatever is still held stays hidden until let go
     g_was_open = false;
     g_hidden_mask = buttons;
+    if (buttons) REXLOG_INFO("KK pause: closed with buttons {:04X} held: hidden from the game until let go", buttons);
   }
   g_hidden_mask &= buttons;
   if (g_hidden_mask) {
@@ -582,6 +583,8 @@ REX_HOOK_RAW(sub_824D1958) {
 
 #include <rex/cvar.h>
 
+#include "guest.h"  // g_guest_base (dev "state" step)
+
 namespace kk {
 double DevSecondsSinceMenu();  // dev_tools.cpp: the script clock, -1 before it starts
 }
@@ -700,6 +703,29 @@ const bool g_steps_thread = [] {
         ++next;
         continue;
       }
+      // "state": log what Load last checkpoint must restore (task 241): level, start point, death counters
+      // G+0x4DBC/G+0x4DC0, weapon and ammo, G flags, and the camera actor's (Jack's, or Kong's) position.
+      if (w == "state") {
+        const uint8_t* base = kk::g_guest_base;
+        const uint32_t g = base ? Load32(base, kGamePtr) : 0;
+        if (g) {
+          auto ok = [](uint32_t a) { return a >= 0x40000000u && a < 0xA0000000u; };
+          auto f = [&](uint32_t a) { uint32_t u = Load32(base, a); float v; std::memcpy(&v, &u, 4); return v; };
+          float x = 0, y = 0, z = 0;
+          const uint32_t actor = Load32(base, 0x82CCBF7C);
+          const uint32_t m = ok(actor) ? Load32(base, actor + 12) : 0;
+          if (ok(m)) x = f(m + 48), y = f(m + 52), z = f(m + 56);
+          REXLOG_INFO("KK dev state {:.1f} s: level {} sp {} deaths {} {} weapon {} ammo {} {} {} {} flags {:08X} "
+                      "actor {:08X} ({:.2f},{:.2f},{:.2f}) menu {}",
+                      t, int32_t(Load32(base, g + 8)), int32_t(Load32(base, g + 0xC)),
+                      int32_t(Load32(base, g + 0x4DBC)), int32_t(Load32(base, g + 0x4DC0)),
+                      int32_t(Load32(base, g + 13128)), int32_t(Load32(base, g + 13432)),
+                      int32_t(Load32(base, g + 13504)), int32_t(Load32(base, g + 13576)),
+                      int32_t(Load32(base, g + 13648)), Load32(base, g + 3056), actor, x, y, z, PauseMenuOpen());
+        }
+        ++next;
+        continue;
+      }
       // "set=<cvar>=<value>": change a setting as the pause menu's Settings would (live settings tests).
       if (w.rfind("set=", 0) == 0) {
         const size_t eq = w.find('=', 4);
@@ -738,6 +764,19 @@ void CreatePauseStandIn(rex::ui::ImGuiDrawer* drawer) {
   if (play::StandInOn()) new play::PauseStandIn(drawer);
 }
 }  // namespace kk
+
+// Test aid (task 241): log each checkpoint the game takes (ES_CheckPoint: G+0xC = its start point, then the
+// universe snapshot that Load last checkpoint and a death go back to).
+REX_EXTERN(__imp__sub_826437D0);
+REX_HOOK_RAW(sub_826437D0) {
+  const uint32_t g = kk::play::Load32(base, kk::play::kGamePtr);
+  const int32_t before = g ? int32_t(kk::play::Load32(base, g + 0xC)) : -1;
+  __imp__sub_826437D0(ctx, base);
+  const int32_t after = g ? int32_t(kk::play::Load32(base, g + 0xC)) : -1;
+  static int calls = 0;
+  if (before != after || ++calls <= 2)
+    REXLOG_INFO("KK dev: checkpoint taken (ES_CheckPoint): start point {} -> {}", before, after);
+}
 
 #endif
 
