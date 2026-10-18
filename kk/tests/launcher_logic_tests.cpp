@@ -312,8 +312,17 @@ void SettingsLayoutChecks() {
                                 "Remove texture pack", "Effect resolution"}) &&
             std::string(L::RowsOf(L::kGraphics).begin()[L::IndexOf(L::kGraphics, "Installed")].section) == "Texture pack",
         "Graphics: the texture pack's own section before Advanced (job J2)");
-  Check(in_order(L::kAdvanced, {"PS2 cutscenes", "Download PS2 cutscenes", "Remove PS2 cutscenes", "Frame counter"}),
+  Check(in_order(L::kAdvanced, {"PS2 cutscenes", "Download PS2 cutscenes", "Remove PS2 cutscenes", "PS2 movie folder"}),
         "Advanced: the PS2 cutscenes switch, Download and Remove (job J2)");
+  // Owner, 18 Oct: brightness and gamma on Display (Picture), and the frame counter became Performance metrics
+  // (Display > Overlay, the last row; the pause menu shows it too).
+  Check(in_order(L::kDisplay, {"Aspect ratio", "Brightness", "Gamma", "VSync", "HDR", "Performance metrics"}) &&
+            std::string(L::RowsOf(L::kDisplay).begin()[L::IndexOf(L::kDisplay, "Gamma")].section) == "Picture" &&
+            L::IndexOf(L::kDisplay, "Performance metrics") + 1 == int(L::RowsOf(L::kDisplay).size),
+        "Display: Picture (brightness, gamma) after the screen rows, Performance metrics last");
+  for (int p = 0; p < L::kPageCount; ++p)
+    Check(L::IndexOf(L::Page(p), "Frame counter") < 0 || L::IndexOf(L::Page(p), "Frame counter") ==
+              L::IndexOf(L::Page(p), "*"), "the old Frame counter row is gone (now Performance metrics)");
   Check(in_order(L::kAudio, {"Master volume", "Music volume", "Effects volume", "Voices volume", "Menu sounds"}),
         "Audio: master, music, effects, speech, menu sounds");
   Check(in_order(L::kControls, {"Camera sensitivity", "Camera horizontal", "Camera vertical", "Vibration",
@@ -322,7 +331,7 @@ void SettingsLayoutChecks() {
   Check(in_order(L::kGameplay, {"Subtitles", "Language", "Aiming visor", "Inventory", "Startup logos"}),
         "Gameplay: subtitles, language, HUD, then the rest");
   Check(in_order(L::kCheats, {"Cheats", "*"}), "Cheats: the switch, then the cheat list");
-  Check(in_order(L::kAdvanced, {"Frame counter", "Copy diagnostics"}), "Advanced: diagnostics");
+  Check(in_order(L::kAdvanced, {"PS2 movie folder", "Copy diagnostics"}), "Advanced: diagnostics");
   for (int p = 0; p < L::kPageCount; ++p) {
     // Every label once per page (rows are found by label), headings in one run each.
     std::map<std::string, int> seen;

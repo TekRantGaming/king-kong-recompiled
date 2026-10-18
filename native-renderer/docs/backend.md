@@ -1539,8 +1539,8 @@ shown only with `--native_stutter_stats`:
 - the log: `rexgpu-native: pipeline stutter so far: S of F frames (W waited for pipelines, T ms in all; K skipped D
   draws whose pipelines were not ready); worst wait X ms (frame N)` every 300 swaps with the other statistics,
   and `pipeline stutter at the end` when the game closes;
-- the overlay: a line `Pipeline stutter: S frames (W waited, K skipped), worst X ms` under the frame counter
-  (`kk_show_fps`, F2), from `nr_stutter_stats` (`plugin/native_stutter.h`), which reads a snapshot the backend takes
+- the overlay: a line `Pipeline stutter: S frames (W waited, K skipped), worst X ms` at the top right with the performance
+  metrics (`kk_performance_metrics`, F2; was `kk_show_fps`), from `nr_stutter_stats` (`plugin/native_stutter.h`), which reads a snapshot the backend takes
   after each Present (the overlay never reaches into the renderer).
 
 Tests: `Stutter_*` (a skip, a wait with its time, a pipeline made by the draw, nothing after a full prewarm).
@@ -1588,7 +1588,7 @@ On Windows (`kk-dev-vulkan`, from a Visual Studio x64 prompt):
    driver update the log says `driver changed (...)` and a `saved` line follows once the workers are done. Put
    the shader cache setting back afterwards.
 6. The launcher: `king_kong.exe --gpu_plugin=native --kk_launcher=true --native_launcher_prewarm=true
-   --native_vk_pipeline_cache=true --native_stutter_stats=true --kk_show_fps=true` (the player's recorded file under
+   --native_vk_pipeline_cache=true --native_stutter_stats=true --kk_performance_metrics=fps` (the player's recorded file under
    the cache root, or the list beside the game with `--native_pipeline_list=true`), wait in the launcher until the
    log has `launcher prewarm done`, press Play: the game's log has `driver pipeline cache ...: loaded` and lower
    pipeline creation times than a run that pressed Play at once (`launcher prewarm stopped`). Also Quit from the launcher while it runs (no hang, `stopped` in the

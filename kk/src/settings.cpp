@@ -73,7 +73,21 @@ REXCVAR_DEFINE_STRING(kk_button_prompts, "auto", "KK/Controls",
                       "Button pictures shown in the game: auto (matches your controller), xbox360, xbox_series, ps5, "
                       "ps2, steam_deck or keyboard")
     .allowed({"auto", "xbox360", "xbox_series", "ps5", "ps2", "steam_deck", "keyboard"});
-REXCVAR_DEFINE_BOOL(kk_show_fps, false, "KK/Video", "Show a frame-rate counter (toggle in game with F2)");
+// Beta 9: the frame counter became Performance metrics (kk_performance_metrics); an old true is moved over
+// once (MigrateFrameCounter) and this one is otherwise unused.
+REXCVAR_DEFINE_BOOL(kk_show_fps, false, "KK/Video", "Old: replaced by kk_performance_metrics (true = fps)");
+REXCVAR_DEFINE_STRING(kk_performance_metrics, "off", "KK/Video",
+                      "Performance metrics overlay while playing: off, fps (frame rate and frame time) or full "
+                      "(adds a frame time graph, GPU and CPU load, temperatures, clocks, memory, API and "
+                      "upscaler); F2 switches between them")
+    .allowed({"off", "fps", "full"});
+// Brightness and gamma (owner, 18 Oct; GitHub issue #44): the game's picture only, applied live by the native
+// renderer at Present (native-renderer/backend/picture_adjust.h). The defaults are the game's own picture.
+REXCVAR_DEFINE_INT32(kk_brightness, 0, "KK/Video",
+                     "Picture brightness (black level), -50 to 50; 0 = the game's own picture").range(-50, 50);
+REXCVAR_DEFINE_DOUBLE(kk_gamma, 1.0, "KK/Video",
+                      "Picture gamma (middle tones), 0.5 to 1.5; above 1 is brighter; 1 = the game's own picture")
+    .range(0.5, 1.5);
 REXCVAR_DEFINE_BOOL(kk_ps2_cutscenes, false, "KK/Gameplay",
                     "Play player-owned PS2 between-mission movies during story progression");
 REXCVAR_DEFINE_STRING(kk_ps2_movie_folder, "", "KK/Gameplay",
@@ -451,6 +465,18 @@ bool SaveSettings(const std::filesystem::path& path, bool include_temporary) {
   }
   file << out;
   return static_cast<bool>(file);
+}
+
+void MigrateFrameCounter() {
+  // Beta 9: Show FPS (kk_show_fps) became Performance metrics; a frame counter that was on is "FPS only",
+  // the same frame rate and frame time it showed. The old value then goes back to its default, so the
+  // settings file drops it at the next save.
+  if (!REXCVAR_GET(kk_show_fps)) return;
+  if (rex::cvar::GetFlagSource("kk_performance_metrics") == rex::cvar::Source::kDefault)
+    rex::cvar::SetFlagByName("kk_performance_metrics", "fps");
+  rex::cvar::SetFlagByName("kk_show_fps", "false");
+  REXLOG_INFO("KK: the frame counter setting moved to Performance metrics ({})",
+              rex::cvar::GetFlagByName("kk_performance_metrics"));
 }
 
 void MigrateSettings(const std::filesystem::path& config_path) {

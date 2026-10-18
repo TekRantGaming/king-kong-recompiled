@@ -31,7 +31,7 @@ def fail(message):
 table_text = ''
 for name in ('launcher_text_table.inc', 'debug_overlay_text_table.inc', 'benchmark_text_table.inc',
              'hdr_text_table.inc', 'launcher_layout_text_table.inc', 'workshop_text_table.inc',
-             'artbook_text_table.inc', 'mods_text_table.inc'):
+             'artbook_text_table.inc', 'mods_text_table.inc', 'picture_text_table.inc'):
     table_text += (src / name).read_text(encoding='utf-8') + '\n'
 STRING = r'"((?:[^"\\]|\\.)*)"'
 entries = {}
@@ -441,6 +441,47 @@ strings |= {
     'See the new graphics options', 'Back to New in this update.', 'Done', 'Update', 'New', 'Graphics',
     'PS2 cutscenes', 'Download', 'Watch progress', 'Yes, restore them', 'No thanks', 'Continue', 'Installed',
 }
+# Task 206 (owner, 18 Oct): brightness and gamma, Performance metrics (the old Frame counter), the pause menu's
+# greyed rows: every string in five languages, picked up from the code that draws them.
+_l206 = (src / 'launcher.cpp').read_text(encoding='utf-8')
+_m = re.search(r'void PictureItems\(std::vector<Item>& items\) \{(.*?)\n  \}\n', _l206, re.S)
+_picture = _m.group(1) if _m else ''
+if not _picture:
+    fail('206: Display > Picture (PictureItems) is missing')
+_texts206 = set()
+for _src in (re.sub(r'//[^\n]*', '', _picture), _l206[_l206.find('items.push_back(Section("Overlay"));'):][:1200]):
+    for _lit in re.findall(r'((?:"(?:[^"\\]|\\.)*"\s*)+)', _src):
+        _t = ''.join(re.findall(r'"((?:[^"\\]|\\.)*)"', _lit))
+        if len(_t) > 3 and re.search('[A-Za-z]{3}', _t) and '_' not in _t and '%' not in _t and _t not in ('true', 'false', 'off', 'fps', 'full'):
+            _texts206.add(_t.replace("\\'", "'"))
+strings |= _texts206
+if len(_texts206) < 6:
+    fail(f'206: only {len(_texts206)} texts found in PictureItems and the Overlay row')
+strings |= {'Brightness', 'Gamma', 'Picture', 'Overlay', 'Performance metrics', 'Off', 'FPS only', 'Full', 'game',
+            'No upscaler',
+            "This can't be changed while you play. Quit to the launcher's main menu and change it in Settings.",
+            'While you play, the change is made at once. FSR 1 and NIS are chosen in the launcher.'}
+for _needle, _why in (
+        ('static constexpr const char* kInLauncherOnly =\n      "This can\'t be changed while you play.', 'the pause menu note'),
+        ('if (it.type != ItemType::kSection && kRestartOnly.count(it.label)) Disable(it, true, kInLauncherOnly);',
+         'restart-only rows are greyed in the pause menu, not left out'),
+        ('if (in_game_ && spatial_now) Disable(it, true, kInLauncherOnly);', 'the upscaler greys out with FSR 1 / NIS in game'),
+        ('"kk_performance_metrics", {{"Off", "off"}, {"FPS only", "fps"}, {"Full", "full"}}', 'Performance metrics levels'),
+        ('"kk_brightness", -50, 50, 1,', 'the brightness slider'), ('"kk_gamma", 0.5f, 1.5f, 0.05f,', 'the gamma slider')):
+    if _needle not in _l206:
+        fail(f'206: {_why}')
+if 'e.push_back({"Graphics", [this] { OpenSettings(InGameSettings::kGraphics); }});' not in (src / 'pause_menu.cpp').read_text(encoding='utf-8'):
+    fail('206: the pause menu has no Graphics entry')
+if '"kk_show_fps"' in _l206 or '"Frame counter"' in _l206:
+    fail('206: the old Frame counter row is still in the launcher')
+_settings206 = (src / 'settings.cpp').read_text(encoding='utf-8')
+if 'void MigrateFrameCounter()' not in _settings206 or 'rex::cvar::SetFlagByName("kk_performance_metrics", "fps");' not in _settings206:
+    fail('206: an old Show FPS is not moved to Performance metrics')
+if 'kk::MigrateFrameCounter();' not in (src / 'king_kong_app.h').read_text(encoding='utf-8'):
+    fail('206: the Show FPS move is not run at start')
+_pt = (src / 'picture_text_table.inc').read_text(encoding='utf-8')
+if '\u2014' in _pt or '\u2013' in _pt:
+    fail('dash in picture_text_table.inc')
 for s in sorted(strings):
     if s == 'Home':
         continue  # never drawn as text

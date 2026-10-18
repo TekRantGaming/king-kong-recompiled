@@ -1,4 +1,4 @@
-// In-game overlays for the port (frame counter).
+// In-game overlays for the port (Performance metrics).
 
 #pragma once
 
@@ -8,7 +8,7 @@ class ImGuiDrawer;
 
 namespace kk {
 
-// Creates the frame-rate counter (shown when kk_show_fps is on; F2 toggles).
+// Creates the Performance metrics overlay (kk_performance_metrics: off, fps or full; F2 switches).
 void CreateFpsOverlay(rex::ui::ImGuiDrawer* drawer);
 
 }  // namespace kk

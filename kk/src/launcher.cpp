@@ -25,6 +25,7 @@
 #include "diagnostics.h"
 #include "dev_launcher_chain.h"
 #include "hooks/kk_native_ui.h"  // the temporal upscalers this PC runs
+#include "debug_overlay_logic.h"  // the upscalers the running game offers (as F8 lists them)
 
 #include <algorithm>
 #include <atomic>
@@ -389,6 +390,28 @@ OfferedUpscalers OfferedTemporalUpscalers() {
   o.fsr4 = c.fsr4;
   o.dlss = c.dlss;
   o.xess = c.xess;
+  return o;
+}
+
+// While the game runs (the pause menu): the upscalers the game's own device runs, as the graphics panel (F8)
+// lists them (debug_overlay_logic.h): never a new question, which would make a second device in the game.
+OfferedUpscalers OfferedWhilePlaying() {
+  OfferedUpscalers o;
+  if (!HasTemporalSetting() || !UsingNativeRenderer()) return o;
+  const NrEffectStats s = nr::kk::EffectTimes();
+  const nr::kk::UpscalerChoices c = nr::kk::PeekUpscalers();
+#if defined(_WIN32)
+  constexpr bool windows = true;
+#else
+  constexpr bool windows = false;
+#endif
+  o.known = true;
+  for (int i : panel::OfferedUpscalers(s.size ? s.api : 0, s.size ? s.vendor : 0,
+                                       {c.state == 2, c.dlss, c.fsr4, c.fsr3, c.xess}, windows)) {
+    const std::string_view v = panel::kUpscalers[i].value;
+    o.dlss = o.dlss || v == "dlss", o.fsr4 = o.fsr4 || v == "fsr4", o.fsr3 = o.fsr3 || v == "fsr3";
+    o.xess = o.xess || v == "xess";
+  }
   return o;
 }
 
@@ -1069,7 +1092,7 @@ class SettingsPages {
 #else
       const char* which = "AMD FSR 1 works on any graphics card.";
 #endif
-      const OfferedUpscalers offered = OfferedTemporalUpscalers();
+      const OfferedUpscalers offered = in_game_ ? OfferedWhilePlaying() : OfferedTemporalUpscalers();
       bool any_temporal = false;
       for (const TemporalUpscaler& t : kTemporalUpscalers) {
         if (offered.Has(t.value)) {
@@ -1084,6 +1107,12 @@ class SettingsPages {
         for (const Choice& c : choices) listed = listed || c.temporal == temporal;
         if (!listed) choices.push_back({F("{0} (settings file)", {temporal}), "bilinear", temporal});
       }
+      // In game: the renderer swaps temporal upscalers (and Off) while it runs; FSR 1 and NIS are the
+      // presenter's, chosen at the start, with a render quality below Native that is too.
+      const bool spatial_now = !temporal.empty() ? false
+                                                 : Get("present_effect") != "bilinear" || Get("kk_render_quality") != "native";
+      if (in_game_ && !spatial_now)
+        std::erase_if(choices, [](const Choice& c) { return c.present != "bilinear"; });
       Item it;
       it.type = ItemType::kChoice;
       it.label = "Upscaler";
@@ -1108,6 +1137,9 @@ class SettingsPages {
       if (it.index < 0) it.value_text = present;
       if (UsingNativeRenderer() && !offered.known && HasTemporalSetting())
         it.facts.push_back("Checking which other upscalers your graphics card runs...");
+      if (in_game_ && !spatial_now)
+        it.facts.push_back("While you play, the change is made at once. FSR 1 and NIS are chosen in the launcher.");
+      if (in_game_ && spatial_now) Disable(it, true, kInLauncherOnly);
       it.on_choice = [choices](int i) {
         const Choice& c = choices[size_t(i)];
         Set("present_effect", c.present);
@@ -1202,6 +1234,7 @@ class SettingsPages {
       if (const auto* flag = FindFlag("kk_render_quality"))
         for (int m = 0; m < 4; ++m)
           if (flag->default_value == kUpscalerModes[m]) it.default_text = kUpscalerModeNames[m];
+      Disable(it, in_game_, kInLauncherOnly);  // FSR 1 / NIS draw size: set at the start
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     } else {
       Item it;
@@ -1269,6 +1302,7 @@ class SettingsPages {
     items.push_back(CvarChoice("Aspect ratio",
                                "The game is 16:9. Letterbox keeps its shape on other screens; Stretch fills them.",
                                "present_letterbox", {{"Letterbox 16:9", "true"}, {"Stretch", "false"}}));
+    PictureItems(items);
     items.push_back(Section("Frame rate"));
     items.push_back(CvarToggle("VSync",
                                "On waits for the display for tear-free frames. Off has the lowest latency and lets "
@@ -1289,7 +1323,53 @@ class SettingsPages {
             "present_hdr_paper_white", 80, 500, 10, nits));
       }
     }
+    items.push_back(Section("Overlay"));
+    items.push_back(CvarChoice("Performance metrics",
+                               "Shows performance readings in the top left corner while you play. FPS only shows the "
+                               "frame rate and the frame time. Full adds a frame time graph, the graphics card's load, "
+                               "temperature, clock speed and memory, the processor's load, memory use, the graphics "
+                               "API and the upscaler. F2 switches between them while you play.",
+                               "kk_performance_metrics", {{"Off", "off"}, {"FPS only", "fps"}, {"Full", "full"}}));
     return items;
+  }
+
+  // Display > Picture (owner, 18 Oct; GitHub issue #44): brightness and gamma of the game's picture, applied
+  // by the renderer as it shows each frame (native-renderer/backend/picture_adjust.h), so they change at once
+  // in the launcher and in the pause menu. Only the game's picture changes: the launcher, the menus and the
+  // overlays stay as they are. The defaults are the game's own picture; with HDR, white stays at Paper white.
+  void PictureItems(std::vector<Item>& items) {
+    items.push_back(Section("Picture"));
+    const bool hdr = GetBool("present_hdr");
+    {
+      Item it = CvarSlider("Brightness",
+                           "Raises or lowers the darkest parts of the game's picture. Higher shows more in dark "
+                           "places, lower gives deeper blacks. White stays the same. The launcher and the menus do "
+                           "not change. 0 is the game's own picture.",
+                           "kk_brightness", -50, 50, 1, [](float v) {
+                             const int n = int(std::lround(v));
+                             return n > 0 ? "+" + std::to_string(n) : std::to_string(n);
+                           });
+      if (hdr) it.facts.push_back("With HDR, white stays at the Paper white brightness.");
+      items.push_back(std::move(it));
+    }
+    {
+      Item it = CvarSlider("Gamma",
+                           "Brightens or darkens the middle tones of the game's picture while black and white stay "
+                           "the same. Above 1.00 is brighter, below is darker. 1.00 is the game's own picture.",
+                           "kk_gamma", 0.5f, 1.5f, 0.05f, [](float v) {
+                             char b[16];
+                             std::snprintf(b, sizeof(b), "%.2f", std::round(v * 20.0f) / 20.0f);
+                             return std::string(b);
+                           });
+      // Saved as 0.05 steps ("1.05"), not the slider's float text.
+      it.on_value = [](float v) {
+        char b[16];
+        std::snprintf(b, sizeof(b), "%.2f", std::clamp(std::round(v * 20.0f) / 20.0f, 0.5f, 1.5f));
+        Set("kk_gamma", b);
+      };
+      if (hdr) it.facts.push_back("With HDR, white stays at the Paper white brightness.");
+      items.push_back(std::move(it));
+    }
   }
 
   // Keyboard & mouse shows the keys in the game's hints and turns the camera
@@ -1541,7 +1621,7 @@ class SettingsPages {
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
 
-    if (!in_game_) {
+    {
       Item it;
       it.label = "Recommended";
       it.description = "Detect your hardware and recommend render resolution, upscaling, ambient occlusion and global illumination. "
@@ -1960,8 +2040,6 @@ class SettingsPages {
     }
 
     items.push_back(Section("Diagnostics"));
-    items.push_back(CvarToggle("Frame counter", "Shows the game's frame rate in the corner. F2 toggles it while playing.",
-                               "kk_show_fps", "Hidden", "Shown"));
     return items;
   }
 
@@ -2374,19 +2452,21 @@ class SettingsPages {
   std::set<std::string> layout_logged_;
 #endif
 
-  // In game: the rows that change while the game runs. Left out (they need a restart, or only make
-  // sense before the game starts): the window, resolution, refresh rate and monitor, the frame rate
-  // cap and VSync, the upscaler and render quality, the look and preset, the renderer, the language
-  // and the startup logos. Sections left empty go too.
+  // In game (owner, 18 Oct: the pause menu shows as many settings as it can): every row the launcher has,
+  // and those that cannot change while the game runs greyed out with a note saying where to change them:
+  // the window, resolution, refresh rate and monitor, VSync (Vulkan picks its present mode when the
+  // swapchain is made), render quality and its internal resolution, the look and preset, Recommended, the
+  // graphics API and renderer, the language and the startup logos. The upscaler is live between the
+  // temporal upscalers and Off, greyed while FSR 1 or NIS is in use (UpscalingItems). Sections left empty go.
   static std::vector<Item> LiveOnly(std::vector<Item> items) {
     static const std::set<std::string> kRestartOnly = {
-        "Window mode", "Window size", "Resolution", "Refresh rate", "Monitor", "Frame rate", "VSync",
-        "Upscaler", "Upscaler mode", "Render quality", "Internal resolution", "Look", "Preset", "Renderer",
-          "Graphics API", "Language", "Startup logos"};
+        "Window mode", "Window size", "Resolution", "Refresh rate", "Monitor", "VSync", "Render quality",
+        "Internal resolution", "Look", "Preset", "Recommended", "Renderer", "Graphics API", "Language",
+        "Startup logos"};
     std::vector<Item> out;
     for (Item& it : items) {
-      if (it.type != ItemType::kSection && kRestartOnly.count(it.label)) continue;
       if (it.disabled_note == kSetByOriginal) it.disabled_note = kSetByOriginalInGame;
+      if (it.type != ItemType::kSection && kRestartOnly.count(it.label)) Disable(it, true, kInLauncherOnly);
       out.push_back(std::move(it));
     }
     std::vector<Item> kept;
@@ -2399,6 +2479,8 @@ class SettingsPages {
   }
   static constexpr const char* kSetByOriginalInGame =
       "Set by the Original Xbox 360 look. Change Look in the launcher to set it.";
+  static constexpr const char* kInLauncherOnly =
+      "This can't be changed while you play. Quit to the launcher's main menu and change it in Settings.";
 
   double preview_at_ = 0;
   std::vector<std::filesystem::path> sounds_;
@@ -5364,8 +5446,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     switch (page) {
       case kDisplay:
         return {"fullscreen", "kk_fullscreen_mode", "window_width", "window_height", "monitor", "kk_frame_rate",
-                "d3d12_allow_variable_refresh_rate_and_tearing", "present_letterbox",
-                "present_hdr", "present_hdr_peak", "present_hdr_paper_white"};
+                "d3d12_allow_variable_refresh_rate_and_tearing", "present_letterbox", "kk_brightness", "kk_gamma",
+                "present_hdr", "present_hdr_peak", "present_hdr_paper_white", "kk_performance_metrics"};
       case kGraphics:
         return {"kk_original_look", "kk_modern_settings", "kk_graphics_preset", "native_backend", "kk_renderer",
                 "swap_post_effect", "anisotropic_override",
@@ -5389,7 +5471,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                 "kk_toggle_aim", "kk_deadzone", "kk_vibration", "kk_vibration_strength", "kk_map_*",
                 "@Input/Keybinds/Controller"};
       case kAdvanced:
-        return {"kk_notify_downloads", "kk_show_fps", "kk_ps2_cutscenes", "kk_ps2_movie_folder"};
+        return {"kk_notify_downloads", "kk_ps2_cutscenes", "kk_ps2_movie_folder"};
       default:
         return {};
     }

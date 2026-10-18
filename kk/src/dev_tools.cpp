@@ -291,6 +291,12 @@ void TakeShots(double t) {
                              (milliseconds ? "shot_ms_" + std::to_string(int(*it * 1000 + 0.5))
                                            : "shot_" + std::to_string(int(*it * 10)));
     art::CaptureFrame(std::filesystem::path(dir && *dir ? dir : ".") / (name + art::kDevCaptureExtension));
+    // KK_DEV_SHOTS_LOG=1: also log "KK dev: shot <name>", so a test script can keep the whole window of its own
+    // game (PrintWindow: the overlays and menus over the game's frame) at the same moment.
+    if (const char* log = std::getenv("KK_DEV_SHOTS_LOG"); log && *log == '1') {
+      REXLOG_INFO("KK dev: shot win_{}", name);
+      rex::FlushLogging();
+    }
     it = times.erase(it);
   }
 }

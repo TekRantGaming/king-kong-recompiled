@@ -30,9 +30,11 @@ inline constexpr Row kDisplayRows[] = {
     {"Screen", "Window mode"},       {"Screen", "Monitor"},
     {"Screen", "Window size"},       {"Screen", "Resolution"},
     {"Screen", "Refresh rate"},      {"Screen", "Aspect ratio"},
+    {"Picture", "Brightness"},       {"Picture", "Gamma"},
     {"Frame rate", "VSync"},         {"Frame rate", "Frame rate"},
     {"HDR output", "HDR"},           {"HDR output", "Peak brightness (nits)"},
     {"HDR output", "Paper white (nits)"},
+    {"Overlay", "Performance metrics"},
 };
 
 inline constexpr Row kGraphicsRows[] = {
@@ -130,7 +132,6 @@ inline constexpr Row kAdvancedRows[] = {
     {"Cutscenes", "Download PS2 cutscenes"},
     {"Cutscenes", "Remove PS2 cutscenes"},
     {"Cutscenes", "PS2 movie folder"},
-    {"Diagnostics", "Frame counter"},
     {"Diagnostics", "Copy diagnostics"},
     {"Diagnostics", "Saved crash reports"},
 };

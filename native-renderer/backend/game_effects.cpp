@@ -96,6 +96,11 @@ void GameRenderer::UpdateEffects() {
   options_.fxaa = upscale_ ? 0u : s.fxaa;
   options_.effect_buffers = s.effect_buffers;
   options_.sharpness = std::min(s.sharpness, 3u);
+  if (s.picture != picture_) {
+    picture_ = s.picture;
+    Logf(LogLevel::kInfo, "rexgpu-native: picture brightness %.2f gamma %.2f%s", picture_.brightness, picture_.gamma,
+         picture_.identity() ? " (the game's own picture)" : "");
+  }
   if (s.anisotropic_override != options_.anisotropic_override) {
     options_.anisotropic_override = s.anisotropic_override;
     FlushSamplers();

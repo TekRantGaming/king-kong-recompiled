@@ -129,7 +129,7 @@ REXCVAR_DEFINE_BOOL(native_launcher_prewarm, false, "Native renderer",
 REXCVAR_DEFINE_BOOL(native_stutter_stats, false, "Native renderer",
                     "Pipeline stutter counter: frames in which a draw waited for its pipeline or was skipped "
                     "because it was not ready, and the worst wait, in the log (every 300 swaps and at the end) and "
-                    "under the frame counter (kk_show_fps, F2)")
+                    "with the performance metrics (kk_performance_metrics, F2)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_BOOL(native_diagnostics, false, "Native renderer",

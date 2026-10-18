@@ -52,6 +52,7 @@
 
 #include "pause_menu.h"
 #include "play_internal.h"
+#include "backend/picture_adjust.h"  // brightness and gamma on the kept frame
 
 #if defined(KK_DEV_TOOLS)
 namespace kk {
@@ -180,6 +181,13 @@ void RunPauseAction(PauseAction action) {
 std::mutex g_backdrop_mutex;
 std::vector<uint8_t> g_backdrop;
 int g_backdrop_w = 0, g_backdrop_h = 0, g_backdrop_version = 0;
+// Brightness and gamma (Display > Picture) as they were when the frame was kept: the pause menu's sliders
+// change the kept frame from these, since the game draws nothing while paused.
+nr::PictureAdjust PictureNow() {
+  return nr::PictureAdjust::FromSettings(std::atof(rex::cvar::GetFlagByName("kk_brightness").c_str()),
+                                         std::atof(rex::cvar::GetFlagByName("kk_gamma").c_str()));
+}
+nr::PictureAdjust g_backdrop_picture;
 std::function<bool(int&, int&, std::vector<uint8_t>&)> g_grab;
 
 void SetFrameGrabber(std::function<bool(int&, int&, std::vector<uint8_t>&)> grab) { g_grab = std::move(grab); }
@@ -197,6 +205,7 @@ void GrabBackdrop() {
   std::lock_guard lock(g_backdrop_mutex);
   g_backdrop = std::move(rgba);
   g_backdrop_w = w, g_backdrop_h = h;
+  g_backdrop_picture = PictureNow();
   ++g_backdrop_version;
   REXLOG_INFO("KK pause: kept the last frame of play ({}x{}, {:.0f} ms)", w, h,
               std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
@@ -220,10 +229,22 @@ class PauseBackdrop final : public rex::ui::ImGuiDialog {
     }
     {
       std::lock_guard lock(g_backdrop_mutex);
-      if (g_backdrop_version != version_ && !g_backdrop.empty() && immediate_) {
+      const nr::PictureAdjust picture = PictureNow();
+      if ((g_backdrop_version != version_ || picture != picture_) && !g_backdrop.empty() && immediate_) {
         version_ = g_backdrop_version;
+        picture_ = picture;
+        const uint8_t* pixels = g_backdrop.data();
+        std::vector<uint8_t> retouched;
+        if (picture != g_backdrop_picture) {  // the sliders moved while paused: show their picture
+          const auto lut = nr::PictureAdjust::RetouchTable(g_backdrop_picture, picture);
+          retouched = g_backdrop;
+          for (size_t i = 0; i + 3 < retouched.size(); i += 4)
+            retouched[i] = lut[retouched[i]], retouched[i + 1] = lut[retouched[i + 1]],
+            retouched[i + 2] = lut[retouched[i + 2]];
+          pixels = retouched.data();
+        }
         texture_ = immediate_->CreateTexture(uint32_t(g_backdrop_w), uint32_t(g_backdrop_h),
-                                             rex::ui::ImmediateTextureFilter::kLinear, false, g_backdrop.data());
+                                             rex::ui::ImmediateTextureFilter::kLinear, false, pixels);
         aspect_ = float(g_backdrop_w) / float(g_backdrop_h);
       }
     }
@@ -241,6 +262,7 @@ class PauseBackdrop final : public rex::ui::ImGuiDialog {
   rex::ui::ImmediateDrawer* immediate_;
   std::unique_ptr<rex::ui::ImmediateTexture> texture_;
   int version_ = 0;
+  nr::PictureAdjust picture_;
   float aspect_ = 16.0f / 9.0f;
 };
 }  // namespace

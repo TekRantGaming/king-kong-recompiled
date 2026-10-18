@@ -544,26 +544,33 @@ bool GameRenderer::Present(nvrhi::ICommandList* cl, uint32_t device, nvrhi::ITex
   // The display gamma ramp, when the game changed it.
   std::array<uint16_t, 768> ramp;
   for (uint32_t i = 0; i < 768; ++i) ramp[i] = LoadBE16(d.at(dev::kGammaRamp + i * 2));
-  bool identity = true;
-  for (uint32_t i = 0; i < 256 && identity; ++i)
-    identity = ramp[i] == i * 257 && ramp[256 + i] == i * 257 && ramp[512 + i] == i * 257;
-  bool all_zero = true;
-  for (uint16_t v : ramp) all_zero = all_zero && v == 0;
-  const bool use_ramp = !identity && !all_zero && !(options_.debug & 4);
-  if (use_ramp && (!gamma_ramp_uploaded_ || ramp != gamma_ramp_values_)) {
+  // The player's brightness and gamma (picture_adjust.h) go after the game's ramp; at the defaults the
+  // ramp is the game's alone (and no ramp at all when the game left it alone), exactly as before.
+  const bool game_ramp = PictureAdjust::GameRampChanged(ramp);
+  const bool picture = !picture_.identity();
+  const bool use_ramp = PictureAdjust::PresentUsesRamp(ramp, picture_) && !(options_.debug & 4);
+  if (picture && (picture_ != picture_composed_for_ || ramp != picture_composed_from_)) {
+    picture_composed_ = picture_.PresentRamp(ramp);  // only when the sliders or the game's ramp change
+    picture_composed_for_ = picture_;
+    picture_composed_from_ = ramp;
+  }
+  const std::array<uint16_t, 768>& effective = picture ? picture_composed_ : ramp;
+  if (use_ramp && (!gamma_ramp_uploaded_ || effective != gamma_ramp_values_)) {
     std::array<uint16_t, 1024> texels;
     for (uint32_t i = 0; i < 256; ++i) {
-      texels[i * 4 + 0] = ramp[i];
-      texels[i * 4 + 1] = ramp[256 + i];
-      texels[i * 4 + 2] = ramp[512 + i];
+      texels[i * 4 + 0] = effective[i];
+      texels[i * 4 + 1] = effective[256 + i];
+      texels[i * 4 + 2] = effective[512 + i];
       texels[i * 4 + 3] = 0xFFFF;
     }
     cl->writeTexture(gamma_ramp_, 0, 0, texels.data(), 256 * 8);
     cl->setTextureState(gamma_ramp_, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
-    gamma_ramp_values_ = ramp;
+    gamma_ramp_values_ = effective;
     gamma_ramp_uploaded_ = true;
-    Logf(LogLevel::kInfo, "rexgpu-native: gamma ramp %u %u %u %u %u (red 0, 64, 128, 192, 255)", ramp[0], ramp[64],
-         ramp[128], ramp[192], ramp[255]);
+    // The game's own ramp changes are logged; the player's sliders log in UpdateEffects instead.
+    if (!picture && game_ramp)
+      Logf(LogLevel::kInfo, "rexgpu-native: gamma ramp %u %u %u %u %u (red 0, 64, 128, 192, 255)", ramp[0], ramp[64],
+           ramp[128], ramp[192], ramp[255]);
   }
   // --native_show_texture=<guest address>: the texture a resolve wrote at that base instead of the
   // back buffer (from its top left, 1:1 in host pixels), so the game's own captures show an

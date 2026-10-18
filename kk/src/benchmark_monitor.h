@@ -5,6 +5,7 @@
 #include <atomic>
 #include <mutex>
 #include <thread>
+#include <memory>
 #include <condition_variable>
 
 namespace kk::benchmark {
@@ -53,6 +54,27 @@ struct MonitorView {
   uint64_t dropped = 0, samples = 0;
   double worker_ms = 0;
 };
+// The live system figures of the Performance metrics overlay (overlay.cpp), from the same counters the
+// benchmark's monitor reads. Each Sample() is one reading (call it from one thread, a few times a second
+// at most: the GPU engine counters list every process). -1: not available on this PC.
+struct SystemSample {
+  double gpu_load = -1;  // the whole graphics card's busiest engine, every program (Task Manager's GPU %)
+  double gpu_own = -1;   // the game's own busiest engine
+  double cpu_load = -1;  // every logical processor, every program
+  double cpu_game = -1;  // the game's process, as a share of all processors
+  double ram_game = -1, ram_used = -1, ram_total = -1;              // MiB
+  double gpu_clock = -1, gpu_temperature = -1, gpu_power = -1;      // NVIDIA cards only (the driver's NVML)
+};
+class SystemSampler {
+ public:
+  SystemSampler();
+  ~SystemSampler();
+  SystemSample Sample(uint32_t vendor);  // vendor: the GPU's PCI vendor (NrEffectStats)
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
+
 class Monitor {
  public:
   ~Monitor() { Stop(); }
