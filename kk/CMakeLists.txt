@@ -76,6 +76,7 @@ set(KINGKONG_SOURCES
     src/menu_hook.cpp
     src/glyphs.cpp
     src/crash_dump.cpp
+    src/exit_evidence.cpp
     src/diagnostics.cpp
     src/shader_pack.cpp
     src/native_shaders.cpp
@@ -280,6 +281,12 @@ if(KK_DEV_TOOLS)
     target_include_directories(kk-notify-tests PRIVATE src)
     rexglue_apply_target_settings(kk-notify-tests)
     add_test(NAME download-notifications COMMAND kk-notify-tests)
+    # Task 229: evidence when the program ends without a word (session marker, Windows' crash / hang events,
+    # rate-limited focus-loss lines).
+    add_executable(kk-exit-evidence-tests tests/exit_evidence_tests.cpp)
+    target_include_directories(kk-exit-evidence-tests PRIVATE src)
+    rexglue_apply_target_settings(kk-exit-evidence-tests)
+    add_test(NAME exit-evidence COMMAND kk-exit-evidence-tests)
     # Job J8: the Workshop page: its Markdown subset, cache (ETag / once a day), GitHub addresses, README
     # pictures and picture decoding (no network: a fake server).
     add_executable(kk-workshop-tests tests/workshop_tests.cpp src/workshop_markdown.cpp src/workshop_net.cpp)

@@ -26,6 +26,8 @@
 #include "discord_presence.h"
 #include "online.h"
 #include "diagnostics.h"
+#include "exit_evidence.h"
+#include "exit_evidence_logic.h"
 #include "dev_launcher_chain.h"
 #include "hooks/kk_native_ui.h"  // the temporal upscalers this PC runs
 #include "debug_overlay_logic.h"  // the upscalers the running game offers (as F8 lists them)
@@ -2797,7 +2799,22 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // a notification), e.g. for a finished download's pop-up after "Minimise and notify me".
     if (cb_.window_state) {
       const bool active = cb_.window_state().second;
-      if (active != pads_active_) REXLOG_INFO("KK: launcher controller input {}", active ? "on (window active)" : "ignored (window not active)");
+      // Task 229: a player's log had the window lose the foreground for 33 ms every 5.5 s. Log who took it,
+      // and after the first few changes one summary a minute (the log tail keeps only 200 lines).
+      const int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::steady_clock::now().time_since_epoch()).count();
+      if (active != pads_active_) {
+        if (!active) {
+          if (focus_log_.Lost(now_ms))
+            REXLOG_INFO("KK: launcher controller input ignored (window not active; in front: {})", ForegroundWindowOwner());
+        } else {
+          int64_t lost_ms = -1;
+          if (focus_log_.Gained(now_ms, lost_ms))
+            REXLOG_INFO("KK: launcher controller input on (window active{})",
+                        lost_ms >= 0 ? " again after " + std::to_string(lost_ms) + " ms" : std::string());
+        }
+      }
+      if (const std::string summary = focus_log_.Summary(now_ms); !summary.empty()) REXLOG_INFO("{}", summary);
       pads_active_ = active;
       input_.set_pads_active(active);
     }
@@ -6816,6 +6833,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
   // OnDraw: drawing (again).
   void NoteDrawn() {
+    exit_evidence::NoteFrame();  // task 229: logs\session-launcher.txt keeps the last frame's time
     if (!heartbeat_) return;
     heartbeat_->last_draw = SteadyTicks();
     if (stalled_since_ != std::chrono::steady_clock::time_point{}) {
@@ -7753,6 +7771,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   double free_space_at_ = -10;
   int setup_focus_ = 0;
   content::Stage content_last_[content::kKindCount] = {};  // TickContent: the stage last seen
+  exit_evidence::FocusLossLog focus_log_;  // task 229 (exit_evidence_logic.h)
   bool pads_active_ = true;  // the launcher's window is the active one: controllers count
 #if defined(KK_DEV_TOOLS)
   int dev_setup_ = -1;  // KK_DEV_LAUNCHER_SETUP: show a setup stage (screenshots)
@@ -7892,6 +7911,32 @@ bool MinimizeNativeWindow(void* handle) {
   for (int i = 0; i < count; ++i) done = SDL_MinimizeWindow(windows[i]) || done;
   SDL_free(windows);
   return done;
+#endif
+}
+
+std::string ForegroundWindowOwner() {
+#if defined(_WIN32)
+  const HWND hwnd = GetForegroundWindow();
+  if (!hwnd) return "no window";
+  wchar_t cls[128] = L"";
+  GetClassNameW(hwnd, cls, 128);
+  DWORD pid = 0;
+  GetWindowThreadProcessId(hwnd, &pid);
+  std::wstring exe = L"?";
+  if (pid == GetCurrentProcessId()) {
+    exe = L"this program";
+  } else if (HANDLE p = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)) {
+    wchar_t image[MAX_PATH];
+    DWORD size = MAX_PATH;
+    if (QueryFullProcessImageNameW(p, 0, image, &size)) {
+      const wchar_t* slash = wcsrchr(image, L'\\');
+      exe = slash ? slash + 1 : image;
+    }
+    CloseHandle(p);
+  }
+  return "class '" + std::filesystem::path(cls).string() + "' of " + std::filesystem::path(exe).string();
+#else
+  return {};
 #endif
 }
 

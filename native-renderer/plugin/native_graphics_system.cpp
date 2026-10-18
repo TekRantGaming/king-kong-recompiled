@@ -421,11 +421,16 @@ void NativeGraphicsSystem::Shutdown() {
   provider_.reset();
 }
 
-void NativeGraphicsSystem::OnHostGpuLoss(bool /*is_responsible*/) {
+void NativeGraphicsSystem::OnHostGpuLoss(bool is_responsible) {
   if (gpu_loss_reported_.test_and_set(std::memory_order_relaxed)) {
     return;
   }
   ReportStartupFailure("lost its graphics device during startup");
+  // Task 229: rex::FatalError writes only to stderr (nowhere in a windowed program) and aborts, so a lost
+  // device in the launcher, or in the game after startup, ended the program with nothing in the log.
+  REXGPU_ERROR("rexgpu-native: the graphics device was lost ({}); the program ends now",
+               is_responsible ? "the renderer's own work" : "the driver or another program");
+  rex::FlushLogging();
   rex::FatalError("Graphics device lost (native renderer)");
 }
 

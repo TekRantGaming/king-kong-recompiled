@@ -33,6 +33,7 @@
 #include "art.h"
 #include "benchmark.h"
 #include "crash_dump.h"
+#include "exit_evidence.h"
 #include "diagnostics.h"
 #include "discord_presence.h"
 #include "display_modes.h"
@@ -193,6 +194,13 @@ class KingKongApp : public rex::ReXApp {
     });
     // Decided once, in OnPreSetup (startup recovery arms only a process that runs the game).
     const bool show = show_launcher_ ? *show_launcher_ : LauncherWillShow(defaults.game_data_root);
+    {
+      // Task 229: last words for abort() and the like, and logs\session-<role>.txt for an end without any.
+      const std::filesystem::path log = REXCVAR_GET(log_file);
+      kk::exit_evidence::Install(log.has_parent_path() ? log.parent_path()
+                                                       : rex::filesystem::GetExecutableFolder() / "logs",
+                                 show ? "launcher" : "game");
+    }
     rex::cvar::ResetToDefault("kk_skip_launcher");  // never persist it
     if (!show) {
       std::error_code recommendation_ec;
@@ -229,6 +237,7 @@ class KingKongApp : public rex::ReXApp {
         kk::online::SetPlaying(true);
         kk::telemetry::SetGameRunning();
         kk::discord::SetPlaying(true);
+        kk::exit_evidence::SetRole("game");
         // The game starts in this process: startup recovery watches it from here.
         kk::startup::Begin(gpu_plugin_, true);
         resume(defaults);
@@ -300,6 +309,8 @@ class KingKongApp : public rex::ReXApp {
 
   // The launcher's process ends (Quit, or Play restarting the program for restart-only settings).
   void CloseLauncherProcess() {
+    REXLOG_INFO("KK: the launcher closes");
+    kk::exit_evidence::NoteCleanExit("launcher closed");
 #if defined(__linux__)
     // On Linux the SDK's normal quit (QuitFromUIThread, then the subsystems' teardown) never returned
     // after the launcher: the process stayed asleep in a futex wait with its relaunched game as a

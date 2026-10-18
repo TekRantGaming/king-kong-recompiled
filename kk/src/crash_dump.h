@@ -19,4 +19,8 @@ void InstallCrashDumps(const std::filesystem::path& logs_dir, const std::filesys
 // Called for every guest frame; feeds the hang watchdog.
 void NoteGuestFrame();
 
+// Task 229: a crash report for an end that raises no exception (abort(), std::terminate, an invalid C
+// runtime argument), with `reason` in the .txt. Once per process (shares the crash handler's guard).
+void WriteCrashReportNow(const char* reason);
+
 }  // namespace kk
