@@ -27,10 +27,9 @@ struct DownloadPage {
 
 inline constexpr DownloadPage kDownloadPages[] = {
     {content::Kind::kUhd, "TekRantGaming", "1.0", 4,
-     "Every texture in the game at up to four times its resolution. Rock, moss, forest ground, dirt, gravel, wood, "
-     "bark and rust use real photographed materials, recoloured to the game's look; everything else is AI upscaled "
-     "from the original textures. A download of {0} GB that takes {1} GB once installed. Needs about 1 GB of "
-     "graphics memory per chapter.",
+     // Task 221: what it changes, its size and what it needs are in its facts table (workshop_content.h).
+     "Every texture in the game at up to four times its resolution, mixing real photographed materials with AI "
+     "upscaling.",
      kUhdNote,
      "AI upscaling: 4x-UltraSharpV2 by Kim2091 (CC BY-NC-SA 4.0). Real materials: ambientCG and Poly Haven (CC0). "
      "Free to download, not for sale. The full list is in CREDITS.txt in its folder.",

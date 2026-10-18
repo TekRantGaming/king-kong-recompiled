@@ -115,7 +115,7 @@ FetchReply HttpFetch(const FetchRequest& request, const std::atomic<bool>* stop)
     return r;
   r.etag = Header(req.h, WINHTTP_QUERY_ETAG);
   r.last_modified = Header(req.h, WINHTTP_QUERY_LAST_MODIFIED);
-  if (status == 200) {
+  if (status == 200 || status == 206) {  // 206: a ranged request (task 221)
     for (DWORD avail = 0; WinHttpQueryDataAvailable(req.h, &avail) && avail;) {
       if ((stop && stop->load()) || r.body.size() + avail > request.max_bytes) {
         r.body.clear();
@@ -170,7 +170,7 @@ FetchReply HttpFetch(const FetchRequest& request, const std::atomic<bool>* stop)
   r.status = std::atoi(field(0).c_str());
   r.etag = field(1);
   r.last_modified = field(2);
-  if (r.status == 200) {
+  if (r.status == 200 || r.status == 206) {  // 206: a ranged request (task 221)
     if (size_t(at) > request.max_bytes) return FetchReply{};
     r.body.assign(out.begin(), out.begin() + std::ptrdiff_t(at));
   }

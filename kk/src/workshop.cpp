@@ -5,6 +5,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <random>
 #include <cmath>
 #include <condition_variable>
 #include <cstdlib>
@@ -421,6 +422,8 @@ struct Workshop::Impl {
   // scroll; `row` has the focus. `tile` is the project shown (the projects row's card).
   enum { kRowTextures = 0, kRowMods = 1, kRowProjects = 2, kRows = 3 };
   int row = 0, tile = 0;
+  // Task 221: the projects row's order (project indexes), shuffled each time the Workshop opens (OnOpen).
+  std::vector<int> order = ws::ShuffledOrder(ws::kProjectCount, [](int k) { return k - 1; });  // in order until opened
   int card[kRows] = {1, 0, 0};  // the texture packs row starts on the HD texture pack (after the original textures)
   float row_scroll[kRows] = {}, row_target[kRows] = {};
   std::vector<float> lift[kRows];
@@ -483,6 +486,19 @@ struct Workshop::Impl {
     worker = std::thread(RunWorker, shared);
     REXLOG_INFO("KK workshop: started ({} projects, cache {}{})", ws::kProjectCount, dir.string(),
                 shared->offline ? ", offline test" : "");
+  }
+
+  // Task 221: a fresh random order for the projects row, its focus back on the first card and the row scrolled
+  // to its start (each time the Workshop page opens; a project's page and back keeps it).
+  void Shuffle() {
+    static std::mt19937 rng(std::random_device{}() ^ uint32_t(std::chrono::steady_clock::now().time_since_epoch().count()));
+    order = ws::ShuffledOrder(ws::kProjectCount, [](int k) { return int(std::uniform_int_distribution<int>(0, k - 1)(rng)); });
+    card[kRowProjects] = 0;
+    row_scroll[kRowProjects] = row_target[kRowProjects] = 0;
+    lift[kRowProjects].clear();
+    std::string names;
+    for (const int i : order) names += (names.empty() ? "" : " | ") + std::string(ws::kProjects[size_t(i)].name);
+    REXLOG_INFO("KK workshop: opened; projects order {}", names);
   }
 
   void Queue(Job job, bool front) {
@@ -588,7 +604,7 @@ struct Workshop::Impl {
 
   void OpenDetail(int p) {
     detail = std::clamp(p, 0, ws::kProjectCount - 1);
-    tile = detail;
+    tile = ws::PositionOf(order, detail);
     scroll_y = scroll_y_target = 0;
     focus = 0;
     doc = Doc{};
@@ -900,7 +916,7 @@ struct Workshop::Impl {
 
   std::vector<RowCard> ProjectCards() {
     std::vector<RowCard> out;
-    for (int i = 0; i < ws::kProjectCount; ++i) {
+    for (const int i : order) {  // task 221: shuffled each time the Workshop opens
       const ProjectState& ps = projects[size_t(i)];
       RowCard rc;
       rc.key = std::to_string(i);
@@ -1185,7 +1201,8 @@ struct Workshop::Impl {
       in.Consume(Action::kPrevTab);
       in.Consume(Action::kNextTab);
       ui::Cue(ui::Sound::kTab);
-      OpenDetail((detail + dir + ws::kProjectCount) % ws::kProjectCount);
+      const int at = ws::PositionOf(order, detail);  // the next project in the row's order
+      OpenDetail(order[size_t((at + dir + ws::kProjectCount) % ws::kProjectCount)]);
     }
     // The modding guide uses the same page: its text instead of a README, one button (Open mods folder).
     const int p = guide ? kGuideDoc : detail;
@@ -1406,6 +1423,10 @@ struct Workshop::Impl {
                   "pictures, {} links; README pictures ready {} failed {} pending {}",
                   detail >= 0 ? ws::kProjects[detail].repo : "tiles", row, tile, focus, scroll_y, max_scroll,
                   doc.height, doc.runs.size(), doc.pics.size(), doc.targets.size(), ready, failed, pending);
+    } else if (c == "order") {  // task 221: the projects row's order
+      std::string names;
+      for (const int i : order) names += (names.empty() ? "" : " | ") + std::string(ws::kProjects[size_t(i)].name);
+      REXLOG_INFO("KK workshop: projects order {}", names);
     } else if (c.rfind("row:", 0) == 0) {  // task 209: the focused row (0 texture packs, 1 mods, 2 projects)
       row = std::clamp(std::atoi(c.c_str() + 4), 0, kRows - 1);
     } else if (c.rfind("card:", 0) == 0) {  // the focused row's card n
@@ -1456,7 +1477,11 @@ Workshop::Workshop(rex::ui::ImmediateDrawer* drawer, fs::path user_dir, fs::path
 
 Workshop::~Workshop() = default;
 
-void Workshop::SetHost(WorkshopHost host) { impl_->host = std::move(host); }
+void Workshop::SetHost(WorkshopHost host) {
+  impl_->host = std::move(host);
+  impl_->kong->SetArt(impl_->host.art);  // task 221: built-in mods' pictures
+}
+void Workshop::OnOpen() { impl_->Shuffle(); }
 bool Workshop::InDetail() const {
   return impl_->detail >= 0 || impl_->guide || impl_->kong->InDetail() || impl_->shelf->InDetail();
 }
@@ -1471,7 +1496,7 @@ bool Workshop::Back() {
     return true;
   }
   if (impl_->detail >= 0) {
-    impl_->card[Impl::kRowProjects] = impl_->detail;  // back on the project shown (LB / RB may have moved on)
+    impl_->card[Impl::kRowProjects] = ws::PositionOf(impl_->order, impl_->detail);  // back on the project shown (LB / RB may have moved on)
     impl_->detail = -1;
     return true;
   }

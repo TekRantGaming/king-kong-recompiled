@@ -20,6 +20,7 @@
 #include "settings.h"
 #include "texture_packs_logic.h"
 #include "workshop_net.h"
+#include "workshop_texpacks.h"
 
 namespace kk {
 
@@ -85,6 +86,16 @@ struct ScanResult {
 
 struct KongMods::Impl {
   rex::ui::ImmediateDrawer* drawer;
+  // Task 221: a built-in mod's picture made from a still of the player's game (WorkshopHost::art).
+  std::function<rex::ui::ImmediateTexture*(const std::string&, float*)> art;
+  rex::ui::ImmediateTexture* Tex(int i, float* aspect) {
+    rex::ui::ImmediateTexture* tex = textures.size() > size_t(i) ? textures[size_t(i)].get() : nullptr;
+    *aspect = aspects.size() > size_t(i) ? aspects[size_t(i)] : 16.0f / 9.0f;
+    if (!tex && art && size_t(i) < mods.size() && mods[size_t(i)].builtin) tex = art(mods[size_t(i)].id, aspect);
+    return tex;
+  }
+  // A built-in mod's description is ours: shown translated (workshop_text_table.inc); a player's mod as written.
+  static std::string Desc(const Mod& m) { return m.builtin ? std::string(T(m.description)) : m.description; }
   fs::path user_dir, config_path;
 
   // Worker: one scan at a time.
@@ -303,13 +314,14 @@ struct KongMods::Impl {
   }
 
   void Picture(ImDrawList* dl, const ui::Fonts& f, int i, ImVec2 a, ImVec2 b, float s, bool bright) {
-    rex::ui::ImmediateTexture* tex = textures.size() > size_t(i) ? textures[size_t(i)].get() : nullptr;
+    float aspect = 16.0f / 9.0f;
+    rex::ui::ImmediateTexture* tex = Tex(i, &aspect);
     if (!tex) {
       PlainPanel(dl, f, a, b, s, mods[size_t(i)].name);
       return;
     }
     // Cropped to the frame's shape.
-    const float view = (b.x - a.x) / std::max(1.0f, b.y - a.y), aspect = aspects[size_t(i)];
+    const float view = (b.x - a.x) / std::max(1.0f, b.y - a.y);
     float u0 = 0, v0 = 0, u1 = 1, v1 = 1;
     if (aspect > view) u0 = (1 - view / aspect) * 0.5f, u1 = 1 - u0;
     else v0 = (1 - aspect / view) * 0.5f, v1 = 1 - v0;
@@ -428,7 +440,8 @@ struct KongMods::Impl {
       const Mod& md = mods[size_t(order[size_t(tile)])];
       std::string line = TypeName(md.type);
       if (!md.description.empty()) {
-        std::string d = md.description.substr(0, md.description.find('\n'));
+        const std::string full = Desc(md);
+        std::string d = full.substr(0, full.find('\n'));
         line += (line.empty() ? "" : "   " KK_MODS_DOT "   ") + d;
       }
       dl->AddText(f.text, 14.5f * s, ImVec2(p0.x, y), color::kTextDim, ui::Ellipsize(f.text, 14.5f * s, line, avail).c_str());
@@ -490,9 +503,12 @@ struct KongMods::Impl {
     dl->AddText(f.text, 14.5f * s, ImVec2(bx, y + 1 * s), color::kTextDim, ui::Ellipsize(f.text, 14.5f * s, fl, p0.x + wrap - bx).c_str());
     y += 34 * s;
     if (!md.description.empty()) {
-      dl->AddText(f.text, 16 * s, ImVec2(p0.x, y), color::kText, md.description.c_str(), nullptr, wrap);
-      y += f.text->CalcTextSizeA(16 * s, FLT_MAX, wrap, md.description.c_str()).y + 16 * s;
+      const std::string desc = Desc(md);
+      dl->AddText(f.text, 16 * s, ImVec2(p0.x, y), color::kText, desc.c_str(), nullptr, wrap);
+      y += f.text->CalcTextSizeA(16 * s, FLT_MAX, wrap, desc.c_str()).y + 16 * s;
     }
+    // Task 221: what it changes, how it looks, what it goes well with, what it needs (built-in mods).
+    y = texpacks::DrawContentFacts(dl, md.id, {}, p0.x, y, wrap, s);
     auto caption = [&](const char* label) {
       const std::string up = text::Upper(label);
       ui::DrawTracked(dl, f.display, 13 * s, ImVec2(p0.x, y), color::kAccent, up, 2.2f * s);
@@ -502,7 +518,8 @@ struct KongMods::Impl {
       dl->AddText(f.text, 14.5f * s, ImVec2(p0.x, y), col, t.c_str(), nullptr, wrap);
       y += f.text->CalcTextSizeA(14.5f * s, FLT_MAX, wrap, t.c_str()).y + 6 * s;
     };
-    if (md.type == Type::kSettings && !md.settings.empty()) {
+    // A built-in mod's settings are ours: its facts table says what it changes in words (task 221).
+    if (md.type == Type::kSettings && !md.settings.empty() && !md.builtin) {
       caption(T("What it changes"));
       size_t shown = 0;
       for (const auto& set : md.settings) {
@@ -631,9 +648,8 @@ std::vector<KongMods::Card> KongMods::Cards() {
     c.name = m.name;
     c.author = m.author;
     c.version = m.version;
-    c.description = m.description;
-    c.picture = impl_->textures.size() > size_t(i) ? impl_->textures[size_t(i)].get() : nullptr;
-    c.aspect = impl_->aspects.size() > size_t(i) ? impl_->aspects[size_t(i)] : 16.0f / 9.0f;
+    c.description = Impl::Desc(m);
+    c.picture = impl_->Tex(i, &c.aspect);
     c.builtin = m.builtin;
     c.on = impl_->IsOn(m);
     c.position = impl_->Position(m);
@@ -679,6 +695,10 @@ KongMods::~KongMods() = default;
 bool KongMods::DrawRow(ImDrawList* dl, ImVec2 p0, ImVec2 p1, const ui::Metrics& m, ui::Input& in, bool active, bool focused) {
   return impl_->DrawRow(dl, p0, p1, m, in, active, focused);
 }
+void KongMods::SetArt(std::function<rex::ui::ImmediateTexture*(const std::string&, float*)> art) {
+  impl_->art = std::move(art);
+}
+
 void KongMods::SetFilter(Filter filter) {
   if (impl_->filter == filter) return;
   impl_->filter = filter;
