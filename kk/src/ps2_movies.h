@@ -22,5 +22,9 @@ void CreateMovieDialog(rex::ui::ImGuiDrawer* drawer, rex::ui::ImmediateDrawer* i
                   const std::filesystem::path& glyph_dir);
 // Called on the universe thread, immediately before the original level loader.
 bool BeforeLoad(const uint8_t* base, uint32_t g, bool starting, bool leaving);
+// Task 217: the level loader's waits for a cutscene (any thread): how many have ended, and whether one is
+// going on now. Telemetry leaves the frame that spans one out of the frame statistics.
+uint32_t LoaderWaitsEnded();
+bool LoaderWaiting();
 void Shutdown();
 }  // namespace kk::movies

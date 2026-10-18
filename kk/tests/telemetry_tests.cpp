@@ -301,6 +301,17 @@ void WorstFrames(const fs::path& out) {
   Check(!WorstFrameWanted(-1, 11200), "menus are not recorded");
   Check(!WorstFrameWanted(3, 249.9), "249.9 ms is under the threshold");
   Check(WorstFrameWanted(3, 250.0) && WorstFrameWanted(0, 11200), "250 ms and over are recorded");
+  {
+    // Task 217: the 11 s "load freezes" were PS2 cutscenes between story chapters; the frame that spans the
+    // level loader's wait for one is left out, the frames before and after it are not.
+    CutsceneFrames c;
+    Check(!c.Spans(0, false), "no cutscene: a normal frame");
+    Check(c.Spans(0, true), "a frame while the loader waits for a cutscene");
+    Check(c.Spans(1, false), "the frame in which the wait ended");
+    Check(!c.Spans(1, false), "the next frame counts again");
+    Check(c.Spans(3, false), "two waits since the last frame");
+    Check(!c.Spans(3, false), "and then normal frames");
+  }
   Check(!WorstFrameWanted(3, std::nan("")) && !WorstFrameWanted(3, INFINITY), "not finite: not recorded");
   std::vector<WorstFrame> list;
   AddWorstFrame(list, Frame(249.9));

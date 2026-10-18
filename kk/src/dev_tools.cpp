@@ -33,6 +33,7 @@
 //   KK_DEV_PROF_AT     per-function call counts (kk-prof preset, dev_prof.cpp)
 //   KK_DEV_CLOCK       the script and the menu-timed shots on the game's clock (MenuSeconds)
 //   KK_DEV_DT_LOG      the game's frame times, frame by frame (dev_frame_log.cpp)
+//   KK_DEV_GAME_WATCH  every thread's stack while no frame comes for a second (dev_game_watch.cpp)
 // Findings so far: the engine's heap layout differs between runs, so a value
 // found at one address must be reached through code (a hook) next time.
 

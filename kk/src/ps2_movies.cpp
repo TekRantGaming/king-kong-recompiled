@@ -403,6 +403,13 @@ void CreateMovieDialog(rex::ui::ImGuiDrawer* drawer, rex::ui::ImmediateDrawer* i
   dialog_ready = true;
 }
 
+namespace {
+std::atomic<uint32_t> loader_waits_ended{0};
+std::atomic<bool> loader_waiting{false};
+}  // namespace
+uint32_t LoaderWaitsEnded() { return loader_waits_ended.load(); }
+bool LoaderWaiting() { return loader_waiting.load(); }
+
 bool BeforeLoad(const uint8_t* base, uint32_t g, bool starting, bool leaving) {
   std::vector<std::filesystem::path> overrides;
   {
@@ -440,9 +447,12 @@ bool BeforeLoad(const uint8_t* base, uint32_t g, bool starting, bool leaving) {
   std::thread worker([job] { Decode(job); });
   // Only the level loader waits. The presenter continues painting on its UI
   // thread. No game time/AI dt is changed, and the original request is retained.
+  loader_waiting = true;
   std::unique_lock lock(job->mutex);
   const bool ended = job->cv.wait_for(lock, std::chrono::seconds(75), [&] { return job->done.load(); });
   lock.unlock();
+  loader_waits_ended.fetch_add(1);  // before clearing `waiting`: never a moment with neither (telemetry)
+  loader_waiting = false;
   if (!ended) End(job, "watchdog: continuing load");
   // Cancellation must immediately release the mission load even if an OS
   // decoder call is still returning; the worker retains its own shared state.

@@ -405,6 +405,22 @@ struct WorstFrame {
   }
 };
 
+// Task 217: a restored PS2 cutscene plays between story chapters while the level loader waits for it
+// (ps2_movies.cpp BeforeLoad), so the game swaps no frame for the clip's length (8-14 s). The player is
+// watching the cutscene, not a frozen game: the frame that spans it stays out of the chapter's statistics.
+class CutsceneFrames {
+ public:
+  // At each frame: `waits` = cutscene waits ended so far, `waiting` = one is in progress now.
+  bool Spans(uint32_t waits, bool waiting) {
+    const bool spans = waiting || waits != seen_;
+    seen_ = waits;
+    return spans;
+  }
+
+ private:
+  uint32_t seen_ = 0;
+};
+
 // Whether a frame gets its detail recorded: in a chapter, and at least kWorstFrameMs.
 inline bool WorstFrameWanted(int entry, double ms) { return entry >= 0 && std::isfinite(ms) && ms >= kWorstFrameMs; }
 

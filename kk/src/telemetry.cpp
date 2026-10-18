@@ -42,6 +42,7 @@
 #include "platform.h"
 #include "play_session.h"
 #include "photo_mode.h"
+#include "ps2_movies.h"
 #include "plugin/native_benchmark_stats.h"
 #include "settings.h"
 #include "hardware_recommendation.h"
@@ -629,7 +630,10 @@ void SetGameRunning() {
 void NoteFrame(double frame_ms, double swap_ms, double cap_wait_ms) {
   if (g_disabled) return;
   const int entry = g_entry.load(std::memory_order_relaxed);
-  const bool slow = WorstFrameWanted(entry, frame_ms);
+  // Task 217: a PS2 cutscene between chapters is not a frame (CutsceneFrames).
+  static CutsceneFrames cutscenes;
+  const bool cutscene = cutscenes.Spans(movies::LoaderWaitsEnded(), movies::LoaderWaiting());
+  const bool slow = !cutscene && WorstFrameWanted(entry, frame_ms);
   // Task 211: a slow frame's detail is finished kPendingFrames later, or sooner when the chapter changes or
   // another slow frame comes.
   if (g_pending.active && (entry != g_current.entry || slow || --g_pending.frames_left <= 0)) FinishPending();
@@ -647,6 +651,9 @@ void NoteFrame(double frame_ms, double swap_ms, double cap_wait_ms) {
     g_cpu_valid = false;  // the load's CPU time is not a frame's
     attribute = false;
     level_load = true;
+  } else if (cutscene) {
+    g_cpu_valid = false;
+    attribute = false;
   } else if (entry >= 0) {
     g_current.AddFrame(frame_ms);
     ++g_frames_since_sample;

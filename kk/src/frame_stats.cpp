@@ -40,8 +40,14 @@
 #include "crash_dump.h"
 #include "settings.h"
 #include "telemetry.h"
+#include "ps2_movies.h"
 
 namespace kk {
+#if defined(KK_DEV_TOOLS) && defined(_WIN32)
+namespace dev {
+void GameWatchFrame();  // dev_game_watch.cpp
+}
+#endif
 namespace {
 
 using Clock = std::chrono::steady_clock;
@@ -111,6 +117,9 @@ void RecordFrameTime(double frame_ms) {
 }
 
 void OnGuestSwap() {
+#if defined(KK_DEV_TOOLS) && defined(_WIN32)
+  dev::GameWatchFrame();  // task 217 (dev_game_watch.cpp)
+#endif
   benchmark::GuestSwap();
   NoteGuestFrame();
   RunDeferredIfDue(Clock::now());
@@ -122,7 +131,14 @@ void OnGuestSwap() {
   static Clock::time_point last_swap{};
   if (last_swap != Clock::time_point{}) {
     const double frame_ms = std::chrono::duration<double, std::milli>(now - last_swap).count();
-    if (frame_ms >= 50.0) REXLOG_INFO("Hitch: {:.0f} ms frame", frame_ms);
+    if (frame_ms >= 50.0) {
+      // Task 217: the level loader waited for a PS2 cutscene (the player watched it): not a stutter.
+      static uint32_t cutscenes_seen = 0;
+      const uint32_t cutscenes = movies::LoaderWaitsEnded();
+      if (cutscenes != cutscenes_seen) REXLOG_INFO("Hitch: {:.0f} ms frame (a PS2 cutscene played)", frame_ms);
+      else REXLOG_INFO("Hitch: {:.0f} ms frame", frame_ms);
+      cutscenes_seen = cutscenes;
+    }
     g_window_worst_ms = std::max(g_window_worst_ms, frame_ms);
     g_recent[g_recent_count++ % kRecentFrames] = float(frame_ms);
     RecordFrameTime(frame_ms);
