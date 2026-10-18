@@ -45,7 +45,7 @@ Plan steps 1, 2, 3, 5 built and checked in game (Vulkan + one D3D12 run). Step 4
 - KK_ULTRAWIDE_HUD_LOG=1 logs the first 300 distinct tagged draws (leaf, prim, count, vs, tex0, bounds, full).
   Seen: leaf 10 text (font tex 414FA7xx, pixel x 309..670), a full-screen untextured strip (vs 400FCE80, fade),
   a textured full-screen quad (vs 400F7B80) -> both kept full width. No other leaf drew in ch 7/8 starts.
-- Window check (runs\claude-231-toolsun.ps1 PrintWindow, must be DPI aware: 250 % scaling makes a 2560x1080
+- Window check (runs\claude-231-tools\run.ps1 PrintWindow, must be DPI aware: 250 % scaling makes a 2560x1080
   window 6400x2700 physical; non-aware capture shows only the top-left crop): window = full wide picture,
   same as the game frame, no letterbox, no squash (Vulkan, ch 7).
 - Test-script lessons: the shot clock starts at "gameplay reached" = when the held SKIP ends (or at the
