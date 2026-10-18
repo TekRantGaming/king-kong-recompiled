@@ -32,7 +32,8 @@ def fail(message):
 table_text = ''
 for name in ('launcher_text_table.inc', 'debug_overlay_text_table.inc', 'benchmark_text_table.inc',
              'hdr_text_table.inc', 'launcher_layout_text_table.inc', 'workshop_text_table.inc',
-             'artbook_text_table.inc', 'mods_text_table.inc', 'picture_text_table.inc', 'texture_packs_text_table.inc'):
+             'artbook_text_table.inc', 'mods_text_table.inc', 'picture_text_table.inc', 'texture_packs_text_table.inc',
+             'setup_pictures_text_table.inc'):
     table_text += (src / name).read_text(encoding='utf-8') + '\n'
 STRING = r'"((?:[^"\\]|\\.)*)"'
 entries = {}
@@ -299,9 +300,36 @@ strings |= {
     "No upscaler: the game is drawn at up to your screen's size and scaled plainly.",
     'Nothing to compare',
     'This option changes how the game runs, not how it looks.',
-    'Comparison picture not included',
-    'Release builds show a close-up from the game here: Original on the left, New on the right.',
     'New',
+    # Task 219: the pictures are made from the player's game files (no setup-art screenshots ship any more).
+    'Fewer pixels', 'More pixels', 'Upscaler', 'Off', 'On', 'From your game', 'No picture yet',
+    'Pictures from your copy of the game show here once its files are installed.',
+    'Made from a still of your game: drawn with fewer pixels on the left, more on the right.',
+    'Made from a still of your game: half the pixels scaled up plainly on the left, the full picture an upscaler '
+    'rebuilds on the right.',
+    'Made from a still of your game: as drawn on the left, sharpened on the right.',
+    'Made from a still of your game, enlarged: jagged edges on the left, smoothed edges on the right.',
+    'Made from a still of your game laid on a floor: the far floor blurs on the left and stays sharp with 16x '
+    'filtering on the right.',
+    "A picture from your copy of the game. This option's effect only shows in the game itself, as described below.",
+    # Task 219: HDR follows Windows (Display > HDR output).
+    'HDR output', 'HDR', 'Follow Windows',
+    'Follow Windows uses HDR when Windows HDR is on for the screen the game is on. On always asks for HDR, which also '
+    'needs Windows HDR. Off always uses SDR.',
+    'Windows HDR could not be detected, so Follow Windows uses SDR.', 'Windows HDR is on for this screen.',
+    'Windows HDR is off for this screen. It can be turned on in Windows Settings > System > Display.',
+    'Windows HDR is off for this screen.', 'HDR brightness',
+    'Automatic takes Peak brightness from Windows HDR Calibration and Paper white from the SDR content brightness in '
+    'Windows. Manual uses the sliders below.',
+    'Automatic (from Windows)', 'Manual', 'Windows HDR Calibration: {0} nits peak brightness.',
+    'No Windows HDR Calibration found. The screen reports {0} nits peak brightness.',
+    'No peak brightness found, so {0} nits is used.', 'SDR content brightness in Windows: {0} nits.',
+    'SDR content brightness in Windows not found, so {0} nits is used.',
+    'Set from Windows. Choose Manual under HDR brightness to change it.', 'Peak brightness (nits)',
+    'Paper white (nits)', 'Open Windows HDR Calibration',
+    'Opens the Windows HDR Calibration app to measure your screen. The values here are read again when you come back.',
+    'Opens the free Windows HDR Calibration app in the Microsoft Store. Install it, then select this again to measure '
+    'your screen.',
     'Graphics {0} of {1}',
     'Applies when the game starts.',
     'Your graphics card does not run this upscaler.',
@@ -729,7 +757,8 @@ if _game < 0 or body.find('return;', _game) > body.find('it.type = ItemType::kCh
 
 # Job J4: the graphics pages are setup stages 8 to 11 after the cutscene step, drawn by launcher_setup_graphics.inc
 # with the Settings rows (one source of truth), "Use recommended" and "change any time in Settings" on every page,
-# and the close-ups loaded from setup-art beside the program (never in git).
+# and the pictures made at run time from the player's game files (task 219: no setup-art folder, nothing
+# game-derived shipped).
 gfx = (src / 'launcher_setup_graphics.inc').read_text(encoding='utf-8')
 for needle, why in (
         ('#include "launcher_setup_graphics.inc"', 'launcher.cpp includes the graphics pages'),
@@ -741,13 +770,29 @@ for needle, why in (
 for needle, why in (
         ('std::string(T(kGfxIntros[page])) + " " + T(kChangeLater)', 'every page says it can be changed in Settings'),
         ('"Use recommended"', 'Use recommended row'), ('"Use recommended for my PC"', 'Use recommended for my PC row'),
-        ('/ "setup-art"', 'close-ups beside the program'), ('"-original.png"', 'Original close-up'), ('"-new.png"', 'New close-up'),
+        ('art::LoadLauncherArt(ArtDir()).backdrops', 'pictures from the game files'),
+        ('compare::Ground(floor, kW, kH, true)', '16x filtering picture made at run time'),
         ('DisplayItems()', 'Display rows from Settings'), ('GraphicsItems()', 'Graphics rows from Settings'),
 ):
     if needle not in gfx:
         fail(f'{why} ({needle})')
 if '—' in gfx or '–' in gfx:
     fail('dash in launcher_setup_graphics.inc')
+
+for banned in ('setup-art', '-original.png', '-new.png'):
+    if banned in gfx:
+        fail(f'task 219: the setup pages still load shipped screenshots ({banned})')
+# Task 219: HDR follows Windows: the Display rows, the calibration button, and present_hdr decided at start.
+_l219 = (src / 'launcher.cpp').read_text(encoding='utf-8')
+for needle, why in (
+        ('"kk_hdr", {{"Follow Windows", "auto"}, {"On", "on"}, {"Off", "off"}}', 'HDR row: Follow Windows / On / Off'),
+        ('"kk_hdr_levels", {{"Automatic (from Windows)", "auto"}, {"Manual", "manual"}}', 'HDR brightness row'),
+        ('[] { hdr::OpenCalibrationApp(); }', 'Open Windows HDR Calibration button'),
+        ('"kk_hdr", "kk_hdr_levels", "present_hdr"', 'Display reset includes the HDR modes')):
+    if needle not in _l219:
+        fail(f'219: {why}')
+if 'kk::hdr::Apply("start");' not in (src / 'king_kong_app.h').read_text(encoding='utf-8'):
+    fail('219: present_hdr is not decided at start')
 
 # Job J5: setup steps 9 and 10 come after the graphics pages (launcher_setup_end.inc): the button prompt cards
 # set kk_button_prompts (Keyboard and mouse through the Controls page's own input switch).

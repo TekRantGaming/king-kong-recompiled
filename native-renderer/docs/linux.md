@@ -126,8 +126,8 @@ of "Checking" for ever.
   `kk::movies::PlaybackAvailable()`; branches still using the old `kPs2MoviePlayback` constant hide them on
   Linux (the launcher job switches it). The content service itself downloads and installs the cutscenes on
   Linux (task 191 tour).
-- **Graphics close-ups** on the setup pages come from a `setup-art/` folder beside the program when the
-  package has one; `KK_PACKAGE_DIR` copies it into the AppImage.
+- **Graphics pictures** on the setup pages are made at run time from the player's own game files (chapter
+  pictures on Linux, as the movie stills need Media Foundation); nothing ships for them (task 219).
 
 ## What the AppImage contains (Beta 6 test, task 191)
 

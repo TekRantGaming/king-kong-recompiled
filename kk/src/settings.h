@@ -33,6 +33,8 @@ REXCVAR_DECLARE(bool, kk_show_fps);
 REXCVAR_DECLARE(std::string, kk_performance_metrics);
 REXCVAR_DECLARE(int32_t, kk_brightness);
 REXCVAR_DECLARE(double, kk_gamma);
+REXCVAR_DECLARE(std::string, kk_hdr);
+REXCVAR_DECLARE(std::string, kk_hdr_levels);
 REXCVAR_DECLARE(int32_t, kk_deadzone);
 REXCVAR_DECLARE(int32_t, kk_camera_sensitivity);
 REXCVAR_DECLARE(bool, kk_camera_modern);
@@ -172,6 +174,8 @@ void SetOfferedUpscalers(const std::string& offered);
 void MigrateSettings(const std::filesystem::path& config_path);
 // Beta 9: an old Show FPS (kk_show_fps = true) becomes Performance metrics "fps" (run after the settings load).
 void MigrateFrameCounter();
+// Beta 10: HDR follows Windows; an older file's HDR On stays On, moved Peak/Paper white sliders stay Manual.
+void MigrateHdrSettings();
 // Settings the player can't change (shader preparing is always Balanced).
 void ApplyFixedSettings();
 

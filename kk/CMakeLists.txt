@@ -32,6 +32,7 @@ set(KINGKONG_SOURCES
     src/game_sound.cpp
     src/steam_shortcut.cpp
     src/platform.cpp
+    src/hdr_display.cpp
     src/display_modes.cpp
     src/iso.cpp
     src/art.cpp
@@ -347,6 +348,13 @@ if(KK_DEV_TOOLS)
     target_include_directories(kk-perf-overlay-tests PRIVATE src ../native-renderer)
     rexglue_apply_target_settings(kk-perf-overlay-tests)
     add_test(NAME picture-and-metrics COMMAND kk-perf-overlay-tests)
+    # Task 219: HDR follows Windows (the default decision, the calibration profile's brightness, automatic
+    # levels; prints what this PC's screen reports) and the setup's comparison pictures made from the game files.
+    add_executable(kk-hdr-tests tests/hdr_tests.cpp src/hdr_display.cpp)
+    target_include_directories(kk-hdr-tests PRIVATE src)
+    target_link_libraries(kk-hdr-tests PRIVATE rex::runtime)
+    rexglue_apply_target_settings(kk-hdr-tests)
+    add_test(NAME hdr-follows-windows COMMAND kk-hdr-tests)
     add_test(NAME telemetry-gzip COMMAND "${Python3_EXECUTABLE}" -I
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/telemetry_gzip_tests.py" "${CMAKE_CURRENT_BINARY_DIR}/telemetry-test")
     set_tests_properties(telemetry-gzip PROPERTIES FIXTURES_REQUIRED telemetry_files)

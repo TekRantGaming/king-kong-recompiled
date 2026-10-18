@@ -17,7 +17,7 @@
 #
 # Files the AppImage ships that are not in git (the same files as the Windows zip): KK_PACKAGE_DIR = a staged
 # Windows package folder (KingKong/) to take kkpipelines.list, kkresources.list, benchmark-route.kkbr and
-# FREECAM.txt (and the setup-art/ close-ups folder, once the package has one) from; or each one by KK_PIPELINE_LIST / KK_RESOURCE_LIST / KK_EXTRA_FILES.
+# FREECAM.txt from; or each one by KK_PIPELINE_LIST / KK_RESOURCE_LIST / KK_EXTRA_FILES.
 #
 # Other settings: KK_LINUX_ROOT (work folder, default ~/kk-linux-beta), KK_DXC_FROM (an extracted DXC Linux
 # release), KK_APPIMAGETOOL (appimagetool already on disk; otherwise build_appimage.sh downloads the official
@@ -126,7 +126,7 @@ pick() { [ -n "$PKG" ] && [ -e "$PKG/$1" ] && echo "$PKG/$1" || true; }
 export KK_PIPELINE_LIST="${KK_PIPELINE_LIST:-$(pick kkpipelines.list)}"
 export KK_RESOURCE_LIST="${KK_RESOURCE_LIST:-$(pick kkresources.list)}"
 if [ -z "${KK_EXTRA_FILES:-}" ]; then
-  KK_EXTRA_FILES="$(pick benchmark-route.kkbr) $(pick FREECAM.txt) $(pick setup-art)"
+  KK_EXTRA_FILES="$(pick benchmark-route.kkbr) $(pick FREECAM.txt)"
 fi
 export KK_EXTRA_FILES
 export KK_SKIP_PACKAGES=ON KK_WORK="$WORKDIR" REXGLUE_SDK_DIR="$BASE/sdk" KK_DXC_DIR="$BASE/dxc" \
@@ -152,7 +152,7 @@ for f in usr/bin/king_kong usr/bin/librexgpu-native.so usr/bin/librexruntime.so 
   [ -e "$A/$f" ] || { echo "  MISSING $f"; fail=1; }
 done
 ls "$A/usr/bin/"libavcodec-kk.so.* >/dev/null 2>&1 || { echo "  MISSING the FFmpeg libraries"; fail=1; }
-for f in kkpipelines.list kkresources.list benchmark-route.kkbr FREECAM.txt setup-art; do
+for f in kkpipelines.list kkresources.list benchmark-route.kkbr FREECAM.txt; do
   [ -e "$A/usr/bin/$f" ] && echo "  has $f" || echo "  warning: no $f (KK_PACKAGE_DIR)"
 done
 # No frame generation (DECISIONS 11 Oct), no Windows files, no Classic renderer.

@@ -7,9 +7,9 @@
   // (dragged with the mouse, or LT and RT). Every page has "Use recommended" and says the options can be
   // changed later in Settings. Included inside class Launcher (launcher.cpp).
   //
-  // The close-ups come from the player's own copy of the game, so they are never in git: a developer script
-  // (kk/tools/setup_art.ps1) captures them in the game and the release package carries them in setup-art\
-  // beside the program (<key>-original.png, <key>-new.png). Without them (developer builds) the panel says so.
+  // The pictures are made at run time from stills of the player's own copy of the game (setup_compare.h): nothing
+  // game-derived is in git or in the release package (owner, 18 Oct; the shipped folder of screenshots is gone).
+  // Options whose effect shows on a still get a made pair; the rest show one still and say the game shows them.
 
   static constexpr int kGfxFirstStage = 8, kGfxPages = 4;
   static constexpr const char* kGfxTitles[kGfxPages] = {"Display", "Upscaling and sharpness", "Lighting and effects",
@@ -36,10 +36,16 @@
   bool gfx_dragging_ = false;
   std::string gfx_last_key_;     // the close-up shown while an action row has the focus
   struct CompareArt {
-    rex::ui::ImmediateTexture* original = nullptr;
+    rex::ui::ImmediateTexture* original = nullptr;  // a pair, with the slider
     rex::ui::ImmediateTexture* fresh = nullptr;
+    rex::ui::ImmediateTexture* still = nullptr;     // or one picture from the game
+    const char* left = "Original";
+    const char* right = "New";
+    const char* note = nullptr;  // what the picture shows (English; drawn translated)
   };
-  std::map<std::string, CompareArt> compare_art_;
+  std::map<std::string, CompareArt> compare_art_;  // made from the game files (setup_compare.h); cleared with the art
+  std::vector<art::Image> setup_stills_;
+  bool setup_stills_loaded_ = false;
 
   bool GraphicsSetupStage(int stage) const { return stage >= kGfxFirstStage && stage < kGfxFirstStage + kGfxPages; }
   int GfxPage() const { return std::clamp(SetupStage() - kGfxFirstStage, 0, kGfxPages - 1); }
@@ -461,25 +467,94 @@
     return {};
   }
 
-  static std::filesystem::path SetupArtDir() { return rex::filesystem::GetExecutableFolder() / "setup-art"; }
+  // The stills the pictures are made from, all from the player's own game files (nothing ships with the port):
+  // the movie stills the launcher extracted (Windows), else the chapter select's pictures, else the capture of
+  // the title screen from the first play.
+  const std::vector<art::Image>& SetupStills() {
+    if (!setup_stills_loaded_) {
+      setup_stills_loaded_ = true;
+      if (art::HasLauncherArt(ArtDir())) setup_stills_ = art::LoadLauncherArt(ArtDir()).backdrops;
+      for (uint32_t i = 0; setup_stills_.empty() && i < art::kChapterNames; ++i)
+        for (uint32_t j = i; j < art::kChapterNames && setup_stills_.size() < 6; ++j)
+          if (art::Image img = art::LoadImage(art::ChapterPicturePath(ArtDir(), int(j))); img && img.width >= 128)
+            setup_stills_.push_back(std::move(img));
+      if (setup_stills_.empty())
+        if (art::Image img = art::LoadImage(art::TitleCapturePath(paths_.user_dir)); img && img.width >= 64)
+          setup_stills_.push_back(std::move(img));
+      REXLOG_INFO("KK: setup: {} stills from the game files for the graphics pages", setup_stills_.size());
+    }
+    return setup_stills_;
+  }
 
+  // The picture for a key, made once: a pair (Original / New, with the slider) where an option's effect can be
+  // shown on a still (setup_compare.h), else the still alone with a note.
   const CompareArt& CompareFor(const std::string& key) {
     auto it = compare_art_.find(key);
-    if (it == compare_art_.end()) {
-      CompareArt art;
-      const art::Image a = art::LoadImage(SetupArtDir() / (key + "-original.png"));
-      const art::Image b = art::LoadImage(SetupArtDir() / (key + "-new.png"));
+    if (it != compare_art_.end()) return it->second;
+    CompareArt art;
+    const std::vector<art::Image>& stills = SetupStills();
+    static const char* const kOrder[] = {"resolution", "upscaler", "sharpening", "smaa", "filtering", "gi",
+                                         "ao", "shadows", "water", "shafts", "look"};
+    size_t index = 0;
+    for (size_t i = 0; i < std::size(kOrder); ++i)
+      if (key == kOrder[i]) index = i;
+    if (!stills.empty()) {
+      const auto t0 = std::chrono::steady_clock::now();
+      constexpr int kW = 768, kH = 432;
+      const art::Image still = compare::Fit(stills[index % stills.size()], kW, kH);
+      art::Image a, b;
+      if (key == "resolution") {
+        a = compare::FewerPixels(still, 2.0f);
+        b = still;
+        art.left = "Fewer pixels";
+        art.right = "More pixels";
+        art.note = "Made from a still of your game: drawn with fewer pixels on the left, more on the right.";
+      } else if (key == "upscaler") {
+        a = compare::FewerPixels(still, 2.0f);
+        b = still;
+        art.left = "Plain scaling";
+        art.right = "Upscaler";
+        art.note = "Made from a still of your game: half the pixels scaled up plainly on the left, the full "
+                   "picture an upscaler rebuilds on the right.";
+      } else if (key == "sharpening") {
+        a = still;
+        b = compare::Sharpen(still, 1.2f);
+        art.left = "Off";
+        art.right = "On";
+        art.note = "Made from a still of your game: as drawn on the left, sharpened on the right.";
+      } else if (key == "smaa") {
+        a = compare::Edges(stills[index % stills.size()], kW, kH, 6, 3, false);
+        b = compare::Edges(stills[index % stills.size()], kW, kH, 6, 3, true);
+        art.left = "Off";
+        art.right = "On";
+        art.note = "Made from a still of your game, enlarged: jagged edges on the left, smoothed edges on the right.";
+      } else if (key == "filtering") {
+        const art::Image floor = compare::Fit(stills[index % stills.size()], 512, 288);
+        a = compare::Ground(floor, kW, kH, false);
+        b = compare::Ground(floor, kW, kH, true);
+        art.left = "Off";
+        art.right = "On";
+        art.note = "Made from a still of your game laid on a floor: the far floor blurs on the left and stays sharp "
+                   "with 16x filtering on the right.";
+      } else {
+        art.still = MakeTexture(still);
+        art.note = "A picture from your copy of the game. This option's effect only shows in the game itself, as "
+                   "described below.";
+      }
       if (a && b) {
         art.original = MakeTexture(a);
         art.fresh = MakeTexture(b);
       }
-      REXLOG_INFO("KK: setup: close-up {} {}", key, art.original ? "loaded" : "not in this build (setup-art)");
-      it = compare_art_.emplace(key, art).first;
+      REXLOG_INFO("KK: setup: picture {} made from the game files ({} ms)", key,
+                  std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count());
+    } else {
+      REXLOG_INFO("KK: setup: picture {}: no stills from the game files yet", key);
     }
-    return it->second;
+    return compare_art_.emplace(key, art).first->second;
   }
 
-  // The close-up between p0 and p1: Original on the left, New on the right, the slider between them.
+  // The close-up between p0 and p1: Original on the left, New on the right, the slider between them; or one
+  // picture from the game; and the note saying what it shows.
   void DrawCompare(ImDrawList* dl, const std::string& key, ImVec2 p0, ImVec2 p1) {
     const float s = S();
     const ui::Fonts f = ui::GetFonts();
@@ -495,14 +570,25 @@
       ty += th + 12 * s;
       dl->AddText(f.text, 14.5f * s, ImVec2(tx, ty), color::kTextFaint, body.c_str(), nullptr, wrap);
     };
+    auto tag = [&](const char* english, bool left) {
+      const std::string t = Upper(T(english));
+      const float tw = ui::TrackedWidth(f.display, 12 * s, t, 2.4f * s), pad = 9 * s;
+      const float tx = left ? p0.x + 12 * s : p1.x - 12 * s - tw - pad * 2;
+      dl->AddRectFilled(ImVec2(tx, p0.y + 12 * s), ImVec2(tx + tw + pad * 2, p0.y + 12 * s + 26 * s),
+                        IM_COL32(8, 10, 13, 190), 4 * s);
+      ui::DrawTracked(dl, f.display, 12 * s, ImVec2(tx + pad, p0.y + 19 * s), left ? color::kTextDim : color::kAccent,
+                      t, 2.4f * s);
+    };
     const CompareArt* art = key.empty() ? nullptr : &CompareFor(key);
     if (key.empty()) {
       centred(T(std::string("Nothing to compare")),
               T(std::string("This option changes how the game runs, not how it looks.")));
+    } else if (art->still) {
+      dl->AddImageRounded(ui::Tex(art->still), p0, p1, ImVec2(0, 0), ImVec2(1, 1), IM_COL32_WHITE, r);
+      tag("From your game", true);
     } else if (!art->original) {
-      centred(T(std::string("Comparison picture not included")),
-              T(std::string("Release builds show a close-up from the game here: Original on the left, New on the "
-                            "right.")));
+      centred(T(std::string("No picture yet")),
+              T(std::string("Pictures from your copy of the game show here once its files are installed.")));
     } else {
       // The slider: dragged with the mouse (from a click on the picture), or LT and RT (DrawSetupGraphics).
       const ImGuiIO& io = ImGui::GetIO();
@@ -519,17 +605,15 @@
       const float aw = 5 * s, ah = 5 * s;
       dl->AddTriangleFilled(ImVec2(sx - 3 * s - aw, cy), ImVec2(sx - 3 * s, cy - ah), ImVec2(sx - 3 * s, cy + ah), color::kOnFocus);
       dl->AddTriangleFilled(ImVec2(sx + 3 * s + aw, cy), ImVec2(sx + 3 * s, cy - ah), ImVec2(sx + 3 * s, cy + ah), color::kOnFocus);
-      auto tag = [&](const char* english, bool left) {
-        const std::string t = Upper(T(english));
-        const float tw = ui::TrackedWidth(f.display, 12 * s, t, 2.4f * s), pad = 9 * s;
-        const float tx = left ? p0.x + 12 * s : p1.x - 12 * s - tw - pad * 2;
-        dl->AddRectFilled(ImVec2(tx, p0.y + 12 * s), ImVec2(tx + tw + pad * 2, p0.y + 12 * s + 26 * s),
-                          IM_COL32(8, 10, 13, 190), 4 * s);
-        ui::DrawTracked(dl, f.display, 12 * s, ImVec2(tx + pad, p0.y + 19 * s), left ? color::kTextDim : color::kAccent,
-                        t, 2.4f * s);
-      };
-      tag("Original", true);
-      tag("New", false);
+      tag(art->left, true);
+      tag(art->right, false);
+    }
+    if (art && art->note) {  // what the picture shows, along its bottom
+      const std::string note = T(std::string(art->note));
+      const float pad = 12 * s, wrap = w - pad * 2;
+      const float nh = ui::TextSize(f.text, 13 * s, note, wrap).y;
+      dl->AddRectFilled(ImVec2(p0.x, p1.y - nh - pad * 2), p1, IM_COL32(8, 10, 13, 200), r, ImDrawFlags_RoundCornersBottom);
+      dl->AddText(f.text, 13 * s, ImVec2(p0.x + pad, p1.y - nh - pad), color::kTextDim, note.c_str(), nullptr, wrap);
     }
     dl->AddRect(p0, p1, ui::WithAlpha(color::kText, 0.12f), r, 0, 1.0f * s);
   }

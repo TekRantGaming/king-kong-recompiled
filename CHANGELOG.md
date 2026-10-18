@@ -5,6 +5,12 @@ version's notes the first time you start it.
 
 ## v2.0.0-beta.10 (unreleased)
 
+### What's new
+- **HDR follows Windows**: HDR is on when Windows HDR is on for the screen the game is on, and off otherwise. Settings > Display > HDR has **Follow Windows** (the default), **On** and **Off**.
+- **HDR brightness from Windows**: by default, Peak brightness comes from the Windows HDR Calibration app and Paper white from the SDR content brightness in Windows. Choose **Manual** to use the sliders. The HDR rows show the values Windows reports.
+- **Open Windows HDR Calibration** button in Settings > Display (the Microsoft Store page when the app is not installed). The values are read again when you come back.
+- **Setup graphics pictures from your own game**: the first setup's graphics pages no longer use screenshots shipped with the download. Their pictures are made from your copy of the game while the launcher runs, and options that only show in the game itself show a still from your game with a description.
+
 ### Fixed
 - **Jack's arm and what he holds flickered with an upscaler on** (DLSS, FSR or XeSS). In some places, for example in the Hayes chapter, parts of the arm and of the gun, spear, bone or lever turned into flat patches in the colour of the fog for single frames. They are now drawn whole.
 

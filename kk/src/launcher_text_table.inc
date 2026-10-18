@@ -2815,6 +2815,7 @@ constexpr Entry kEntries[] = {
 #include "debug_overlay_text_table.inc"
 #include "benchmark_text_table.inc"
 #include "hdr_text_table.inc"
+#include "setup_pictures_text_table.inc"
 #include "launcher_layout_text_table.inc"
 #include "workshop_text_table.inc"
 #include "mods_text_table.inc"
