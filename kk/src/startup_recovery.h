@@ -29,7 +29,7 @@ void LauncherShown(bool preparing_shaders);
 // prepared shaders); empty otherwise or once CrashNoticeShown was called.
 std::string CrashNotice();
 void CrashNoticeShown();
-// kk_amd_shader_cache_offer is on (owner decision pending, off by default) and this PC has AMD
+// kk_amd_shader_cache_offer is on (on by default, owner 18 Oct) and this PC has AMD
 // driver shader cache folders.
 bool AmdCacheOffer();
 // The player agreed: the AMD driver shader caches are emptied at the next launcher start.

@@ -19,7 +19,7 @@ version's notes the first time you start it.
 - **Every setting explains itself.** The panel beside the settings, in the launcher and in the pause menu, now says what each setting does, what you will notice in the game, what each option changes, and shows its performance and video memory impact and when a change takes effect. In five languages.
 
 ### Fixed
-- **The launcher could crash again and again with a black screen on some AMD graphics cards** when the driver's own shader cache was damaged. The launcher now notices when it ended unexpectedly: the next start clears the game's own shader cache and explains how to empty the AMD shader cache folders, and after two such ends in a row it switches to the other graphics API (Vulkan or DirectX 12).
+- **The launcher could crash again and again with a black screen on some AMD graphics cards** when the driver's own shader cache was damaged. The launcher now notices when it ended unexpectedly: the next start clears the game's own shader cache, explains how to empty the AMD shader cache folders and offers to empty them for you if you agree, and after two such ends in a row it switches to the other graphics API (Vulkan or DirectX 12).
 - **The launcher or game could close without leaving a trace.** Every close now leaves evidence in the logs: a crash report with the reason, how long the launcher or game ran before it stopped, and what Windows recorded about it. This helps us find why some launchers closed by themselves.
 
 ## v2.0.0-beta.10 (18 October 2026)

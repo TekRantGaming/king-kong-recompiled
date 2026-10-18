@@ -31,9 +31,9 @@
 #endif
 
 REXCVAR_DEFINE_BOOL(kk_startup_child, false, "KK/Internal", "Internal startup monitor child").debug_only();
-// Task 228, OWNER DECISION PENDING: off = the launcher only tells the player how to empty the AMD
-// driver's shader caches by hand; on = it also offers to empty them (at the next start, with consent).
-REXCVAR_DEFINE_BOOL(kk_amd_shader_cache_offer, false, "KK/Internal",
+// Task 228, owner 18 Oct: on by default. The launcher explains how to empty the AMD driver's shader
+// caches by hand and also offers to empty them (at the next start, only with the player's consent).
+REXCVAR_DEFINE_BOOL(kk_amd_shader_cache_offer, true, "KK/Internal",
     "After a start that ended unexpectedly, offer to empty the AMD driver shader caches (VkCache, DxCache, "
     "DxcCache in LOCALAPPDATA/AMD) at the next start");
 #if defined(KK_DEV_TOOLS)
