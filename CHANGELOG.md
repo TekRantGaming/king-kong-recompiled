@@ -9,6 +9,7 @@ version's notes the first time you start it.
 
 ### What's new
 - **Brightness and gamma** in Settings > Display > Picture and in the pause menu. Brightness raises or lowers the darkest parts of the picture, Gamma the middle tones. Changes show at once, also while paused. Only the game's picture changes, not the launcher or the menus. At 0 and 1.00 the picture is exactly as before. With HDR, white stays at the Paper white brightness.
+- **Photo mode** in the pause menu: the game stays paused while you fly a free camera around (left stick and right stick, triggers down and up, or W A S D and the mouse), with roll and field of view. Jack's floating arms and the HUD are hidden. Looks (black and white, sepia, tints), exposure, contrast, saturation, white balance, depth of field, vignette, film grain, letterbox bars and a mirror, plus cel shading, sharpening, brightness and gamma for the picture only. **A** (Enter) saves a full-resolution picture without any menus in the screenshots folder of your user data. Nothing you change in photo mode is kept or changes your settings.
 - **Performance metrics** replace the frame counter (Settings > Display > Overlay, or **F2** while playing): Off, FPS only, or Full with a frame time graph, the graphics card's load, temperature, clock and memory, the processor and memory use, the graphics API and the upscaler. A frame counter that was on becomes FPS only.
 
 ### Fixed
