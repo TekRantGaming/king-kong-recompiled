@@ -333,12 +333,33 @@ uint16_t DevRawButtons() { return g_raw_buttons; }
 
 // IntMIG_wait: runs every frame in play; Start opens the pause page (its variable +0x1C becomes 1).
 REX_EXTERN(__imp__sub_824B44E8);
+REX_EXTERN(__imp__sub_8272B7E8);  // the game's button query (hooked below)
 REX_HOOK_RAW(sub_824B44E8) {
   using namespace kk::play;
   KK_PAGE_TRACE("IntMIG_wait");
   const uint32_t v = PageVars(base);
   const uint32_t before = v ? Load32(base, v + 0x1C) : 0;
+  // A gallery from Extras: on Start, IntMIG_wait leaves the bonus when G+0x5680 (the Extras row the
+  // original records to come back to its menu) is set and G+0x5674 (the alternate ending) is not, instead of
+  // opening its pause page (sub_824B44E8 at 0x824B4D04). That threw the player out to Extras with no pause
+  // menu (task 204). The row is hidden from that one check, so Start opens the game's pause page as in any
+  // level and the port's menu takes over; the row stays for the bonus's own end (its restore path).
+  const uint32_t g = Load32(base, kGamePtr);
+  uint32_t row = 0;
+  if (g && v && BonusLevelSession() && TakeoverOn() && InPlay(base) && !before && Load32(base, g + 0x5674) == 0 &&
+      (row = Load32(base, g + 0x5680)) != 0) {
+    PPCContext query = ctx;
+    query.r3.u64 = 9;  // Start, pressed this frame (the same query IntMIG_wait makes)
+    __imp__sub_8272B7E8(query, base);
+    if (query.r3.u32 && g_force_button < 0) {
+      Store32(base, g + 0x5680, 0);
+      REXLOG_INFO("KK pause: Start in a bonus gallery opens the pause menu (Extras row {} kept aside)", row);
+    } else {
+      row = 0;
+    }
+  }
   __imp__sub_824B44E8(ctx, base);
+  if (row) Store32(base, g + 0x5680, row);
   // Play goes on: whatever the port's menu was doing is over (Start again restarts the chapter without
   // a level load; its confirmation page does not come back to the pause page).
   if (v && !Load32(base, v + 0x1C) && g_phase == kConfirm && g_confirm_frames > 0 &&
@@ -362,7 +383,6 @@ REX_HOOK_RAW(sub_824B44E8) {
 }
 
 // The game's button query (pressed this frame): button r3 of the active pad.
-REX_EXTERN(__imp__sub_8272B7E8);
 REX_HOOK_RAW(sub_8272B7E8) {
   if (kk::play::g_force_button >= 0) {
     ctx.r3.u64 = int(ctx.r3.u32) == kk::play::g_force_button ? 1 : 0;

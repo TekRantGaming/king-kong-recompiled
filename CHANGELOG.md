@@ -10,8 +10,10 @@ version's notes the first time you start it.
 ### Fixed
 - **Vulkan crash when loading a chapter on AMD graphics cards.** The faster pipeline building added in Beta 7 is now used on NVIDIA cards only, where it was tested; other cards build pipelines the earlier way.
 - **Crash during shader setup on laptops with two graphics chips.** The shader setup, the launcher and the game now always use the more powerful graphics card instead of the built-in Intel or AMD chip. A graphics card chosen in the settings file is still respected.
+- **Pause menu in the Weta artwork galleries.** In a gallery started from Extras, **Start** or **Esc** threw you straight back to Extras. It now opens the pause menu, as in any chapter: **Resume**, **Settings**, **Return to main menu**. A gallery never writes to your save.
 
 ### Changed
+- **All bonus content is unlocked.** Every Extras item can be played straight away, with or without a save, the same way every chapter is open in Chapter select. It is not a cheat to the game: scores and completion are recorded as usual. The "All bonus content" cheat is gone: it isn't needed any more.
 - **Benchmark on the main menu** in place of About. About is the last tab in Settings.
 - **The Workshop opens a choice of three:** Mods, Texture packs (the HD texture pack, your own texture packs and texture pack mods) and Other TRG projects and games. Mods also has the modding guide and a button that opens your mods folder.
 - **Extras: every bonus is unlocked.** There is no save to choose any more, and the Artbook is first in the list.

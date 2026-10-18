@@ -49,6 +49,9 @@ bool CoverScreen();
 // Bonus movies use the game's movie player while the title stays covered. Let
 // its own skip input through during playback; the underlying menus stay hidden.
 bool BonusMovieActive();
+// A bonus level the launcher's Extras started that has no pause of its own: the eight Weta galleries and the
+// credits (their scripts leave on Start). The alternate ending is a normal level with the game's pause.
+bool BonusLevelSession();
 
 // The pause takeover's backdrop: the game draws a black screen while paused, so the last frame of play is
 // captured as the pause starts (`grab` fills RGBA pixels from the presenter's guest output; set by the

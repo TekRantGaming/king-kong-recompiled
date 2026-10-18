@@ -671,6 +671,7 @@ bool g_level_loaded = false;    // ... and has been carried out
 bool g_cheats_pending = false;
 bool g_extra_session = false;
 std::atomic<bool> g_extra_movie{false};
+std::atomic<bool> g_bonus_level{false};  // a gallery or the credits (not the alternate ending): see BonusLevelSession
 int64_t g_extra_movie_since = 0;
 int g_pending_save_slot = -1;   // a new save to write once the save system is idle
 int64_t g_pending_save_since = 0;
@@ -678,6 +679,7 @@ int64_t g_level_loaded_ms = 0;
 
 }  // namespace
 bool BonusMovieActive() { return g_extra_movie; }
+bool BonusLevelSession() { return g_bonus_level; }
 bool StartLevelLoading() {
   return !g_level_loaded && (g_starting || g_jump_requested || kk::benchmark::Active());
 }
@@ -941,10 +943,8 @@ void CarryOut(PPCContext& ctx, uint8_t* base, uint32_t g) {
   const auto slots = ListSaves(g_user_dir);
   if (g_extra_session) {
     const auto* extra = FindExtra(r.chapter);
-    auto progress = ReadExtraProgress(g_user_dir, r.slot);
-    progress.museum |= rex::cvar::GetFlagByName("kk_cheats") == "true" &&
-                       rex::cvar::GetFlagByName("kk_cheat_bonus") == "true";
-    if (!extra || extra->type == ExtraType::kMode || !ExtraUnlocked(*extra, progress)) {
+    // Every bonus is unlocked (extras.h, BonusUnlocked): no save is needed to play one.
+    if (!extra || extra->type == ExtraType::kMode || !BonusUnlocked(*extra)) {
       REXLOG_WARN("KK extras: refused unavailable bonus {}", r.chapter);
       ReturnToLauncher("the bonus is locked or unavailable", "extras");
       return;
@@ -954,6 +954,10 @@ void CarryOut(PPCContext& ctx, uint8_t* base, uint32_t g) {
         ReturnToLauncher("the bonus save could not be loaded", "extras");
         return;
       }
+      // A gallery or the credits never saves: with the slot set, the pause menu (which these bonuses now
+      // have, pause_hooks.cpp) would offer Save and its Quit would open the game's save page, writing the
+      // bonus's position into the player's save. The save's video modes are already loaded (task 204).
+      if (!extra->session_flag) Store32(base, g + 0x4E10, uint32_t(-1));
     } else {
       RegisterPlayer(ctx, base);
       Store32(base, g + 0x4E10, uint32_t(-1));
@@ -985,6 +989,7 @@ void CarryOut(PPCContext& ctx, uint8_t* base, uint32_t g) {
       ctx = saved;
     }
     RequestLevel(base, g, extra->level, extra->start_point);
+    g_bonus_level = !extra->session_flag;
     REXLOG_INFO("KK extras: starting bonus {} level {} start {}", extra->id, extra->level, extra->start_point);
     return;
   }

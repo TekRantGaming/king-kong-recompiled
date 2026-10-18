@@ -15,6 +15,14 @@
 //   KKsn1per    weapon 4, ammo[3] >= 50
 //   KKmuseum    P.flags (+3056) toggles 0x100
 // (KKst0ry, all chapters, is not offered: the launcher's chapter select opens every chapter.)
+// (KKmuseum, all bonus content, is not offered either: its flag is always on, see UnlockBonusContent.)
+//
+// The game's "cheats used" mark is G.flags 0x10000000, set by the gameplay codes only (fast healing,
+// one-hit kills, spears, ammo, weapons; never by KKst0ry or KKmuseum). It is read in two places: at the end
+// of a chapter-select run IntMIG_wait (sub_824B44E8, 0x824B4808) shows message 102 instead of recording the
+// run's score, and the pause page's Score item (sub_824BA560, 0x824BB0BC) shows message 103 instead of the
+// score page. G.flags is not in the save (the save descriptor has no G+0xBF0), so neither mark nor the
+// unlock flag ever reaches a save file.
 // (The names come from the AI function table at 0x828C9000: function, name,
 // key per entry.) The port makes the same changes, setting rather than
 // toggling, once the start menu page (IntMIG_Page_StartMain, sub_824BB670)
@@ -87,6 +95,19 @@ void GiveWeapon(uint8_t* base, uint32_t g, int n, uint32_t ammo) {
 
 bool g_applied = false;
 
+// All bonus content is unlocked for every player (owner, 18 Oct 2026): the game's own flag for it (KKmuseum,
+// profile flag 0x100) is kept on while the game runs, so its checks (the Video options' bonus modes, the
+// bonus availability tests sub_825EAC88 / sub_825E8E00 and the like) all pass. Not a cheat to the game, and
+// never saved (see the top of this file). Cheap enough for every frame: a universe re-init clears it.
+void UnlockBonusContent(uint8_t* base) {
+  const uint32_t p = Load32(base, kProfilePtr);
+  if (!p || (Load32(base, p + kFlags) & 0x100)) return;
+  SetFlags(base, p, 0x100);
+  static bool logged = false;
+  if (!logged) REXLOG_INFO("KK: all bonus content unlocked (the game's bonus flag is on; not a cheat)");
+  logged = true;
+}
+
 std::string State(const uint8_t* base, uint32_t g, uint32_t p) {
   return fmt::format("game flags {:08X}, weapon {}, ammo {}/{}/{}/{}; profile flags {:08X}", Load32(base, g + kFlags),
                      Load32(base, g + kWeapon), Load32(base, g + kAmmo[0]), Load32(base, g + kAmmo[1]),
@@ -134,7 +155,6 @@ void ApplyCheats(uint8_t* base) {
     ++count;
   }
 #endif
-  if (on("bonus")) SetFlags(base, p, 0x100);
   if (on("healing")) SetFlags(base, g, kCheatsUsed | 0x200);
   if (on("one_hit")) SetFlags(base, g, kCheatsUsed | 0x2);
   if (on("spears")) SetFlags(base, g, kCheatsUsed | 0x2000);
@@ -194,8 +214,7 @@ void WatchChanges(uint8_t* base) {
     bool profile;
     uint32_t bit;
   };
-  static constexpr Flag kFlagCheats[] = {
-      {"bonus", true, 0x100}, {"healing", false, 0x200}, {"one_hit", false, 0x2}, {"spears", false, 0x2000}};
+  static constexpr Flag kFlagCheats[] = {{"healing", false, 0x200}, {"one_hit", false, 0x2}, {"spears", false, 0x2000}};
   auto was_on = [&](const char* id) {
     for (size_t i = 0; i < kCheats.size(); ++i)
       if (std::string(kCheats[i].id) == id) return (g_applied_bits & (1u << 31)) && (g_applied_bits & (1u << i));
@@ -263,7 +282,12 @@ namespace kk::play {
 bool ApplyCheatsNow(uint8_t* base) {
   const uint32_t g = Load32(base, kGamePtr), p = Load32(base, kProfilePtr);
   if (!g || !p) return false;
+  kk::UnlockBonusContent(base);
   if (REXCVAR_GET(kk_cheats)) kk::ApplyCheats(base);
+  // For player logs and the scoring check (task 204): the game's own marks at the level start.
+  const uint32_t flags = Load32(base, g + kFlags);
+  REXLOG_INFO("KK: game flags {:08X} at the level start: cheats-used mark {}, all bonus content {}", flags,
+              (flags & kCheatsUsed) ? "ON (scores of this run are not recorded)" : "off", (flags & 0x100) ? "on" : "off");
   kk::g_applied = true;
   kk::g_applied_bits = kk::ChosenBits();
   return true;
@@ -280,6 +304,7 @@ REX_HOOK_RAW(sub_824BB670) {
   const auto now = std::chrono::steady_clock::now();
   if (now - last > std::chrono::seconds(2)) kk::g_applied = false;  // a new visit to the menu
   last = now;
+  kk::UnlockBonusContent(base);
   if (!kk::g_applied && REXCVAR_GET(kk_cheats)) {
     kk::ApplyCheats(base);
     kk::g_applied_bits = kk::ChosenBits();
@@ -291,6 +316,7 @@ REX_HOOK_RAW(sub_824BB670) {
 REX_EXTERN(__imp__sub_8272C320);
 REX_HOOK_RAW(sub_8272C320) {
   __imp__sub_8272C320(ctx, base);
+  kk::UnlockBonusContent(base);
   if (REXCVAR_GET(kk_cheats)) kk::WatchLoadout(base);
   kk::WatchChanges(base);
   kk::hardcore::Frame(base);

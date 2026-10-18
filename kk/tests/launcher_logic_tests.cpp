@@ -12,6 +12,7 @@
 #include "dev_launcher_chain.h"
 #include "dev_movie_input.h"
 #include "video_modes.h"
+#include "cheats.h"
 
 #include <bit>
 #include <chrono>
@@ -80,6 +81,8 @@ void ExtrasChecks() {
   for (const auto& e : kExtras) {
     Check(ids.emplace(e.id, true).second, "each retail bonus appears once");
     Check(ExtraUnlocked(e, fresh) == (e.id == 19 || e.id == 18), "new profile availability");
+    // Owner 18 Oct: every bonus is unlocked for every player, with no save at all (task 204).
+    Check(BonusUnlocked(e), "every bonus is unlocked without a save");
     ExtraProgress p;
     p.museum = true;
     Check(ExtraUnlocked(e, p), "the original museum cheat unlocks each bonus");
@@ -99,6 +102,10 @@ void ExtrasChecks() {
       if (e.score > 0) { --p.score; Check(!ExtraUnlocked(e, p), "score below threshold remains locked"); }
     }
   }
+  Check(kAllBonusesUnlocked, "all bonus content is unlocked by default");
+  for (const auto& c : kk::kCheats)
+    Check(std::string(c.id) != "bonus" && std::string(c.id) != "chapters",
+          "All bonus content and All chapters are not offered as cheats (both always on, never cheats)");
   const auto* ending = FindExtra(2);
   Check(ending && ending->level == 2003 && ending->score == 250000 && ending->progress == 100,
         "alternate ending uses its original level, score and completion requirements");
