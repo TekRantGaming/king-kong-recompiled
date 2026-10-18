@@ -59,6 +59,7 @@ REXCVAR_DECLARE(bool, kk_skip_intros);
 REXCVAR_DECLARE(bool, kk_ps2_cutscenes);
 REXCVAR_DECLARE(std::string, kk_ps2_movie_folder);
 REXCVAR_DECLARE(int32_t, kk_fov);
+REXCVAR_DECLARE(std::string, kk_aspect);
 REXCVAR_DECLARE(bool, kk_motion_blur);
 REXCVAR_DECLARE(bool, kk_fog);
 REXCVAR_DECLARE(bool, kk_big_blur);
@@ -116,19 +117,26 @@ int RenderScaleFor(std::string_view preset, int output_height);
 // The temporal upscaler's output size (DECISIONS 16 Oct): the resolution chosen in the launcher
 // (screen_w x screen_h: the fullscreen mode, the desktop's, or the window's size) as the largest 16:9
 // picture inside it (the game's shape: the presenter letterboxes or stretches it as before). Never above
-// the chosen resolution. cap_w/cap_h above 0 (a Custom render scale): at most that size too.
-std::pair<int, int> UpscalerOutputSize(int screen_w, int screen_h, int cap_w = 0, int cap_h = 0);
+// the chosen resolution. cap_w/cap_h above 0 (a Custom render scale): at most that size too. aspect: the
+// Ultrawide mod's shape (kk_aspect, ultrawide_logic.h) instead of 16:9.
+std::pair<int, int> UpscalerOutputSize(int screen_w, int screen_h, int cap_w = 0, int cap_h = 0,
+                                       double aspect = 16.0 / 9.0);
 // The same with the current settings: a Custom render quality's draw resolution scale is the cap.
-std::pair<int, int> UpscalerOutputFor(int screen_w, int screen_h);
+std::pair<int, int> UpscalerOutputFor(int screen_w, int screen_h, double aspect = 16.0 / 9.0);
 // The frame the game draws without a temporal upscaler (DECISIONS 16 Oct, late): the draw resolution
 // scale's size (draw_w x draw_h, 1280x720 times the scale), never above the chosen resolution's 16:9
 // picture (UpscalerOutputSize). Each axis is the smaller of the two, so a 1080p screen draws 1920x1080
 // where its Native scale (2) would draw 2560x1440. Below the chosen size it stays as it is (900p: 720p).
-std::pair<int, int> NoUpscalerFrameSize(int screen_w, int screen_h, int draw_w, int draw_h);
+// With the Ultrawide mod (aspect wider than 16:9) the draw size is widened to that shape first.
+std::pair<int, int> NoUpscalerFrameSize(int screen_w, int screen_h, int draw_w, int draw_h,
+                                        double aspect = 16.0 / 9.0);
 // Applies kk_render_quality for the given output size (call before the GPU starts). With a temporal
 // upscaler it also sets native_upscaler_output (not saved) to UpscalerOutputFor(the output size); without
 // one, native_frame_size (not saved) to NoUpscalerFrameSize(the output size, the draw resolution scale's).
+// With the Ultrawide mod (kk_aspect not 16:9) also native_display_aspect and UltrawideFactor.
 void ApplyRenderPreset(int output_width, int output_height);
+// How many times wider the game's 3D views are (the Ultrawide mod; 1 = unchanged), set by ApplyRenderPreset.
+float UltrawideFactor();
 
 // Writes the current settings (skipping command-line/env overrides) to `path`.
 bool SaveSettings(const std::filesystem::path& path, bool include_temporary = false);

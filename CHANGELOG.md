@@ -12,9 +12,14 @@ version's notes the first time you start it.
 - **HDR brightness from Windows**: by default, Peak brightness comes from the Windows HDR Calibration app and Paper white from the SDR content brightness in Windows. Choose **Manual** to use the sliders. The HDR rows show the values Windows reports.
 - **Open Windows HDR Calibration** button in Settings > Display (the Microsoft Store page when the app is not installed). The values are read again when you come back.
 - **Setup graphics pictures from your own game**: the first setup's graphics pages no longer use screenshots shipped with the download. Their pictures are made from your copy of the game while the launcher runs, and options that only show in the game itself show a still from your game with a description.
+- **Ultrawide (experimental)**, a built-in mod in the Workshop, off unless you switch it on: on a 21:9 or 32:9 screen or window the game fills the width and shows more on the sides instead of black bars, without stretching. It may not work as intended: the HUD, menus and some effects are not adapted yet. Without the mod nothing changes.
 
 ### Changed
 - **Every setting explains itself.** The panel beside the settings, in the launcher and in the pause menu, now says what each setting does, what you will notice in the game, what each option changes, and shows its performance and video memory impact and when a change takes effect. In five languages.
+
+### Fixed
+- **The launcher could crash again and again with a black screen on some AMD graphics cards** when the driver's own shader cache was damaged. The launcher now notices when it ended unexpectedly: the next start clears the game's own shader cache and explains how to empty the AMD shader cache folders, and after two such ends in a row it switches to the other graphics API (Vulkan or DirectX 12).
+- **The launcher or game could close without leaving a trace.** Every close now leaves evidence in the logs: a crash report with the reason, how long the launcher or game ran before it stopped, and what Windows recorded about it. This helps us find why some launchers closed by themselves.
 
 ## v2.0.0-beta.10 (18 October 2026)
 

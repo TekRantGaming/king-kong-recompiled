@@ -65,6 +65,7 @@ set(KINGKONG_SOURCES
     src/language.cpp
     src/intros.cpp
     src/fov.cpp
+    src/ultrawide.cpp
     src/freecam.cpp
     src/motion_blur.cpp
     src/fog.cpp

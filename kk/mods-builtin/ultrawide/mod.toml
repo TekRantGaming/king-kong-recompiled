@@ -1,0 +1,10 @@
+# Built-in mod (ships with the game). Format: MODDING.md.
+name = "Ultrawide (experimental)"
+author = "TekRantGaming"
+version = "0.1"
+description = "Experimental: it may not work as intended. Fills an ultrawide screen or window (21:9 up to 32:9) instead of showing black bars at the sides: the game shows more on the left and right and nothing is stretched. The HUD, menus and some effects may still look stretched or out of place. Switch it off and everything is exactly as before."
+type = "settings"
+min_game_version = "2.0.0-beta.10"
+
+[settings]
+kk_aspect = "auto"

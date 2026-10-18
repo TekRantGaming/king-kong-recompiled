@@ -4,6 +4,7 @@
 #include <mutex>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
@@ -19,6 +20,7 @@
 #include "platform.h"
 #include "hardware_recommendation.h"
 #include "graphics_presets.h"
+#include "ultrawide_logic.h"
 
 REXCVAR_DEFINE_BOOL(kk_launcher, true, "KK",
                     "Show the launcher before starting the game (hold Shift at start to force it)");
@@ -161,6 +163,10 @@ REXCVAR_DEFINE_STRING(kk_graphics_preset, "", "KK/Graphics",
                       "Internal: the chosen preset label when presets have identical values");
 REXCVAR_DEFINE_INT32(kk_fov, 69, "KK/Gameplay",
                      "Field of view in degrees for Jack's camera (69 = original); other cameras widen to match");
+REXCVAR_DEFINE_STRING(kk_aspect, "16:9", "KK/Video",
+                      "Experimental (the built-in Ultrawide mod): the picture's shape, 16:9 (the game's own: nothing "
+                      "changes), 21:9, 32:9 or auto (the chosen resolution's shape, 16:9 to 32:9); wider shows more "
+                      "on the sides");
 REXCVAR_DEFINE_BOOL(kk_skip_intros, true, "KK/Gameplay",
                     "Skip the Ubisoft, Universal and WingNut logo movies when the game starts");
 REXCVAR_DEFINE_BOOL(kk_toggle_aim, false, "KK/Controls",
@@ -307,11 +313,15 @@ bool TemporalUpscalerOn() {
 }
 }  // namespace
 
-std::pair<int, int> UpscalerOutputSize(int screen_w, int screen_h, int cap_w, int cap_h) {
+std::pair<int, int> UpscalerOutputSize(int screen_w, int screen_h, int cap_w, int cap_h, double aspect) {
   int w = std::max(screen_w, 1), h = std::max(screen_h, 1);
   if (cap_w > 0 && cap_h > 0) {
     w = std::min(w, cap_w);
     h = std::min(h, cap_h);
+  }
+  if (ultrawide::WidthFactor(aspect) != 1.0) {  // the Ultrawide mod: the largest picture of its shape
+    const auto [uw, uh] = ultrawide::LargestInside(w, h, aspect);
+    return {std::clamp(uw, 320, 10240), std::clamp(uh, 180, 5760)};
   }
   // The largest 16:9 inside w x h; rounding never goes past w or h (h * 16 / 9 <= w there, and the
   // other way round).
@@ -322,23 +332,32 @@ std::pair<int, int> UpscalerOutputSize(int screen_w, int screen_h, int cap_w, in
   return {std::clamp(ow, 320, 10240), std::clamp(oh, 180, 5760)};
 }
 
-std::pair<int, int> UpscalerOutputFor(int screen_w, int screen_h) {
+std::pair<int, int> UpscalerOutputFor(int screen_w, int screen_h, double aspect) {
   if (REXCVAR_GET(kk_render_quality) == "custom")
-    return UpscalerOutputSize(screen_w, screen_h, 1280 * DrawScaleAxis("draw_resolution_scale_x"),
-                              720 * DrawScaleAxis("draw_resolution_scale_y"));
-  return UpscalerOutputSize(screen_w, screen_h);
+    return UpscalerOutputSize(
+        screen_w, screen_h,
+        int(std::lround(1280 * DrawScaleAxis("draw_resolution_scale_x") * ultrawide::WidthFactor(aspect))),
+        720 * DrawScaleAxis("draw_resolution_scale_y"), aspect);
+  return UpscalerOutputSize(screen_w, screen_h, 0, 0, aspect);
 }
 
-std::pair<int, int> NoUpscalerFrameSize(int screen_w, int screen_h, int draw_w, int draw_h) {
-  const auto [pw, ph] = UpscalerOutputSize(screen_w, screen_h);
+std::pair<int, int> NoUpscalerFrameSize(int screen_w, int screen_h, int draw_w, int draw_h, double aspect) {
+  const auto [pw, ph] = UpscalerOutputSize(screen_w, screen_h, 0, 0, aspect);
+  // The Ultrawide mod: the draw resolution scale's height, as wide as the picture's shape.
+  if (const double a = ultrawide::WidthFactor(aspect); a != 1.0) draw_w = int(std::lround(draw_w * a));
   return {std::clamp(std::min(draw_w, pw), 320, 10240), std::clamp(std::min(draw_h, ph), 180, 5760)};
 }
 
 namespace {
+std::atomic<float> ultrawide_factor{1.0f};
+}
+float UltrawideFactor() { return ultrawide_factor.load(std::memory_order_relaxed); }
+
+namespace {
 // Without a temporal upscaler: the frame the native renderer draws (native_frame_size, read by its
 // native_render_scale=auto), the draw resolution scale's size but never above the chosen resolution.
-void SetNoUpscalerFrame(int output_width, int output_height, int scale_x, int scale_y) {
-  const auto [fw, fh] = NoUpscalerFrameSize(output_width, output_height, 1280 * scale_x, 720 * scale_y);
+void SetNoUpscalerFrame(int output_width, int output_height, int scale_x, int scale_y, double aspect) {
+  const auto [fw, fh] = NoUpscalerFrameSize(output_width, output_height, 1280 * scale_x, 720 * scale_y, aspect);
   SetCvarDefault("native_frame_size", std::to_string(fw) + "x" + std::to_string(fh));
   REXLOG_INFO("KK: no upscaler: frame {}x{} (draw resolution scale {}x{}: {}x{}; the chosen resolution {}x{}{})", fw,
               fh, scale_x, scale_y, 1280 * scale_x, 720 * scale_y, output_width, output_height,
@@ -352,8 +371,21 @@ void ApplyRenderPreset(int output_width, int output_height) {
   // itself; the renderer takes that size from native_upscaler_output (set as a default: not saved).
   std::string quality = REXCVAR_GET(kk_render_quality);
   const bool temporal = TemporalUpscalerOn();
+  // The Ultrawide mod (kk_aspect, ultrawide_logic.h): a wider picture, the presenter shown its shape
+  // (native_display_aspect, not saved) and the game's 3D views widened (ultrawide.cpp). 16:9: nothing changes.
+  const double aspect = ultrawide::AspectFor(REXCVAR_GET(kk_aspect), output_width, output_height);
+  const double factor = ultrawide::WidthFactor(aspect);
+  ultrawide_factor.store(float(factor), std::memory_order_relaxed);
+  if (factor != 1.0) {
+    const auto [pw, ph] = UpscalerOutputSize(output_width, output_height, 0, 0, aspect);
+    SetCvarDefault("native_display_aspect", std::to_string(pw) + "x" + std::to_string(ph));
+    REXLOG_INFO("KK: ultrawide (experimental): {} at {}x{} -> a {}x{} picture, views {:.3f} times wider",
+                REXCVAR_GET(kk_aspect), output_width, output_height, pw, ph, factor);
+  } else {
+    SetCvarDefault("native_display_aspect", "");
+  }
   if (temporal) {
-    const auto [ow, oh] = UpscalerOutputFor(output_width, output_height);
+    const auto [ow, oh] = UpscalerOutputFor(output_width, output_height, aspect);
     SetCvarDefault("native_upscaler_output", std::to_string(ow) + "x" + std::to_string(oh));
     REXLOG_INFO("KK: upscaler output {}x{} (the chosen resolution {}x{}{})", ow, oh, output_width, output_height,
                 quality == "custom" ? ", at most the custom render scale" : "");
@@ -364,7 +396,7 @@ void ApplyRenderPreset(int output_width, int output_height) {
   if (quality == "custom") {  // retain explicitly supplied render scales (without an upscaler: at most the screen)
     if (!temporal)
       SetNoUpscalerFrame(output_width, output_height, DrawScaleAxis("draw_resolution_scale_x"),
-                         DrawScaleAxis("draw_resolution_scale_y"));
+                         DrawScaleAxis("draw_resolution_scale_y"), aspect);
     return;
   }
   // With an upscaler the draw resolution scale no longer sets the native renderer's output (above); it is
@@ -374,7 +406,7 @@ void ApplyRenderPreset(int output_width, int output_height) {
   if (scale <= 0) {  // unknown preset: the player's resolution_scale is used as is (at most the screen)
     if (!temporal)
       SetNoUpscalerFrame(output_width, output_height, DrawScaleAxis("draw_resolution_scale_x"),
-                         DrawScaleAxis("draw_resolution_scale_y"));
+                         DrawScaleAxis("draw_resolution_scale_y"), aspect);
     return;
   }
   // The runtime only honours resolution_scale when it differs from its default,
@@ -388,7 +420,7 @@ void ApplyRenderPreset(int output_width, int output_height) {
   }
   REXLOG_INFO("KK: render preset {} at {}p output -> {}x ({}p)", quality,
               output_height, scale, scale * 720);
-  if (!temporal) SetNoUpscalerFrame(output_width, output_height, scale, scale);
+  if (!temporal) SetNoUpscalerFrame(output_width, output_height, scale, scale, aspect);
 }
 
 namespace {

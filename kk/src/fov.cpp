@@ -62,6 +62,11 @@ float LensFactor() {
 
 }  // namespace
 
+namespace kk::fov {
+// The menus show (their 3D pieces keep the game's own projection; the Ultrawide mod, ultrawide.cpp).
+bool InMenus() { return g_views_since_menu.load(std::memory_order_relaxed) < 8; }
+}  // namespace kk::fov
+
 REX_EXTERN(__imp__sub_82872DB8);
 REX_HOOK_RAW(sub_82872DB8) {
   const uint32_t view = ctx.r3.u32;

@@ -1,7 +1,9 @@
 #include "hardware_recommendation.h"
 #include "settings.h"
 #include "graphics_presets.h"
+#include "ultrawide_logic.h"
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <algorithm>
 #include <fstream>
@@ -17,6 +19,7 @@ REXCVAR_DEFINE_STRING(gpu_plugin, "native", "Test", "Test");
 REXCVAR_DEFINE_STRING(native_upscaler_quality, "quality", "Test", "Test");
 REXCVAR_DEFINE_STRING(native_upscaler_output, "", "Test", "Test");
 REXCVAR_DEFINE_STRING(native_frame_size, "", "Test", "Test");
+REXCVAR_DEFINE_STRING(native_display_aspect, "", "Test", "Test");
 REXCVAR_DEFINE_STRING(native_ao_quality, "auto", "Test", "Test");
 REXCVAR_DEFINE_INT32(native_ao_samples, 2, "Test", "Test");
 REXCVAR_DEFINE_INT32(ao_mode, 0, "Test", "Test");
@@ -198,6 +201,39 @@ int main() {
   Check(size(UpscalerOutputSize(1281, 721), 1281, 721), "odd window");
   Check(size(UpscalerOutputSize(1001, 777), 1001, 563), "odd window, taller than 16:9");
   Check(size(UpscalerOutputSize(800, 600), 800, 450), "4:3 window");
+  {
+    // The experimental Ultrawide mod (task 223, kk_aspect): the maths, then the sizes it gives the renderer.
+    namespace uw = kk::ultrawide;
+    auto near = [](double a, double b) { return std::abs(a - b) < 1e-6; };
+    Check(near(uw::AspectFor("16:9", 2560, 1080), 16.0 / 9.0), "kk_aspect 16:9");
+    Check(near(uw::AspectFor("", 2560, 1080), 16.0 / 9.0) && near(uw::AspectFor("4:3", 800, 600), 16.0 / 9.0),
+          "kk_aspect unknown: 16:9");
+    Check(near(uw::AspectFor("21:9", 1280, 720), 21.0 / 9.0) && near(uw::AspectFor("32:9", 0, 0), 32.0 / 9.0),
+          "kk_aspect 21:9 and 32:9 whatever the window");
+    Check(near(uw::AspectFor("auto", 2560, 1080), 2560.0 / 1080.0), "auto: the window's shape");
+    Check(near(uw::AspectFor("auto", 1920, 1200), 16.0 / 9.0) && near(uw::AspectFor("auto", 7680, 1080), 32.0 / 9.0),
+          "auto: 16:9 to 32:9");
+    Check(uw::WidthFactor(16.0 / 9.0) == 1.0 && uw::WidthFactor(1.7779) == 1.0, "16:9: factor exactly 1");
+    Check(near(uw::WidthFactor(21.0 / 9.0), 1.3125) && near(uw::WidthFactor(32.0 / 9.0), 2.0), "21:9 and 32:9 factors");
+    Check(uw::LargestInside(2560, 1080, 21.0 / 9.0) == std::pair{2520, 1080}, "21:9 inside 2560x1080");
+    Check(uw::LargestInside(1920, 1080, 21.0 / 9.0) == std::pair{1920, 823}, "21:9 inside 1080p: bars top and bottom");
+    float m[16] = {1.5f, 0, 0, 0, 0, -2.6f, 0, 0, 0.25f, 0, 1.0f, 1.0f, 0, 0, -0.1f, 0};
+    Check(uw::WidenProjection(m, 2.0f) && m[0] == 0.75f && m[8] == 0.125f && m[5] == -2.6f && m[10] == 1.0f,
+          "perspective: x halved, y and depth as they were");
+    float o[16] = {0.0015625f, 0, 0, 0, 0, -0.0027f, 0, 0, 0, 0, 1, 0, -1, 1, 0, 1};
+    Check(!uw::WidenProjection(o, 2.0f) && o[0] == 0.0015625f && o[12] == -1.0f, "orthographic: unchanged");
+    Check(!uw::WidenProjection(m, 1.0f) && m[0] == 0.75f, "factor 1: unchanged");
+    // The sizes: 16:9 stays exactly as before; wider shapes fill the chosen resolution.
+    const double a21 = 21.0 / 9.0, aw = 2560.0 / 1080.0;
+    Check(size(UpscalerOutputSize(2560, 1080, 0, 0, 16.0 / 9.0), 1920, 1080), "16:9 given: as before");
+    Check(size(UpscalerOutputSize(2560, 1080, 0, 0, aw), 2560, 1080), "auto at 2560x1080: the whole window");
+    Check(size(UpscalerOutputSize(2560, 1080, 0, 0, a21), 2520, 1080), "21:9 at 2560x1080");
+    Check(size(UpscalerOutputSize(3440, 1440, 0, 0, uw::AspectFor("auto", 3440, 1440)), 3440, 1440), "auto 3440x1440");
+    Check(size(UpscalerOutputSize(5120, 1440, 0, 0, 32.0 / 9.0), 5120, 1440), "32:9 at 5120x1440");
+    Check(size(NoUpscalerFrameSize(2560, 1080, 2560, 1440, aw), 2560, 1080), "no upscaler, native at 2560x1080");
+    Check(size(NoUpscalerFrameSize(2560, 1080, 1280, 720, aw), 1707, 720), "no upscaler, 720p scale, ultrawide");
+    Check(size(NoUpscalerFrameSize(2560, 1080, 2560, 1440), 1920, 1080), "no upscaler, 16:9: as before");
+  }
   Check(size(UpscalerOutputSize(200, 100), 320, 180), "tiny window: the renderer's smallest scale");
   Check(size(UpscalerOutputSize(0, 0), 320, 180), "no size");
   Check(size(UpscalerOutputSize(1920, 1080, 1280, 720), 1280, 720), "custom 1x caps 1080p at 720p");
@@ -463,5 +499,15 @@ int main() {
   const std::string recaptured_text((std::istreambuf_iterator<char>(recaptured_file)), {});
   Check(recaptured_text.find("native_ao_samples = 2") != std::string::npos, "new saved baseline replaces an older trial baseline");
   ClearTemporarySettingBaselines();
+  // Ultrawide mod: ApplyRenderPreset: 16:9 leaves the presenter's shape alone; auto at 2560x1080 sets it and the factor.
+  rex::cvar::ResetAllToDefaults();
+  ApplyRenderPreset(2560, 1080);
+  Equals("native_display_aspect", "");
+  Check(UltrawideFactor() == 1.0f, "16:9: factor 1");
+  rex::cvar::SetFlagByName("kk_aspect", "auto");
+  ApplyRenderPreset(2560, 1080);
+  Equals("native_display_aspect", "2560x1080");
+  Check(std::abs(UltrawideFactor() - float(2560.0 / 1080.0 / (16.0 / 9.0))) < 1e-5f, "auto at 2560x1080: factor 1.333");
+  rex::cvar::ResetAllToDefaults();
   std::cout << "PASS: " << checks << " hardware/settings checks; evidence " << dir.string() << '\n';
 }
