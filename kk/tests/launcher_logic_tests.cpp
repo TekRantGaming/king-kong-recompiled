@@ -14,8 +14,14 @@
 #include "dev_movie_input.h"
 #include "video_modes.h"
 #include "cheats.h"
+#include "startup_recovery_state.h"
+#include "amd_shader_cache.h"
 
 #include <bit>
+#include <cstdio>
+#if defined(_WIN32)
+#include <share.h>
+#endif
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -653,6 +659,80 @@ void WorkshopChecks() {
   Check(kk::WorkshopMoveTarget(tex, 2, 0) == -1 && kk::WorkshopMoveTarget(tex, 2, 2) == -1, "only one step at a time");
 }
 
+// Task 228: the launcher's start marker (startup_recovery_state.h) and emptying the AMD driver
+// shader caches (amd_shader_cache.h), in a made-up local app data folder.
+void LauncherGuardChecks() {
+  using kk::startup::LauncherGuard;
+  const fs::path dir = fs::temp_directory_path() /
+      ("kk-launcher-guard-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  const LauncherGuard guard(dir);
+  Check(guard.Read().count == 0, "no marker: the last launcher start finished");
+  Check(LauncherGuard::Next(guard.Read(), "vulkan") == 1, "a first unfinished start counts 1");
+  Check(guard.Write("vulkan", "window", 1), "the launcher's marker is written");
+  auto left = guard.Read();
+  Check(left.api == "vulkan" && left.phase == "window" && left.count == 1, "a marker left over is read back");
+  Check(!LauncherGuard::SwitchApi(left, "vulkan"), "one crash before the launcher showed does not switch API");
+  Check(LauncherGuard::Next(left, "vulkan") == 2, "a second start on the same API counts on");
+  Check(LauncherGuard::Next(left, "d3d12") == 1, "a start on the other API counts from 1");
+  guard.Write("vulkan", "window", 2);
+  left = guard.Read();
+  Check(LauncherGuard::SwitchApi(left, "vulkan"), "two crashes in a row before the launcher showed switch API");
+  Check(!LauncherGuard::SwitchApi(left, "d3d12"), "only the API that crashed is switched away from");
+  guard.Write("vulkan", "shaders", 5);
+  Check(!LauncherGuard::SwitchApi(guard.Read(), "vulkan"), "a crash while preparing shaders (both APIs) never switches");
+  Check(guard.Read().phase == "shaders", "the shader phase is kept");
+  guard.Clear();
+  Check(guard.Read().count == 0, "a clean exit clears the marker");
+  { std::ofstream(dir / "launcher.marker") << "classic window 1\n"; }
+  Check(guard.Read().count == 0, "a marker naming no native API is ignored");
+  { std::ofstream(dir / "launcher.marker") << "vulkan elsewhere 3\n"; }
+  Check(guard.Read().count == 0, "a marker with an unknown phase is ignored");
+  { std::ofstream(dir / "launcher.marker") << "vulkan"; }
+  Check(guard.Read().count == 0, "a cut-off marker is ignored");
+  std::error_code ec;
+  fs::remove_all(dir, ec);
+}
+
+void AmdShaderCacheChecks() {
+  namespace amd = kk::amd_cache;
+  const fs::path local = fs::temp_directory_path() /
+      ("kk-amd-cache-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  Check(!amd::Present(local), "no AMD folder: nothing to offer");
+  Check(amd::Clear(local).removed == 0, "no AMD folder: nothing is removed");
+  fs::create_directories(local / "AMD" / "Other");
+  Check(!amd::Present(local), "an AMD folder without the shader caches: nothing to offer");
+  auto put = [](const fs::path& p, size_t n) {
+    fs::create_directories(p.parent_path());
+    std::ofstream(p, std::ios::binary) << std::string(n, 'x');
+  };
+  put(local / "AMD" / "VkCache" / "a.parc", 100);
+  put(local / "AMD" / "VkCache" / "sub" / "b.parc", 50);
+  put(local / "AMD" / "DxCache" / "c.bin", 10);
+  put(local / "AMD" / "DxcCache" / "d.bin", 1);
+  put(local / "AMD" / "Other" / "keep.txt", 7);  // not a shader cache: never touched
+  put(local / "AMD" / "keep-root.txt", 3);
+  Check(amd::Present(local), "the AMD shader cache folders are found");
+#if defined(_WIN32)
+  // A file another program has open (no delete sharing) is kept and counted.
+  FILE* held = _wfsopen((local / "AMD" / "DxCache" / "held.bin").c_str(), L"wb", _SH_DENYRW);
+  Check(held != nullptr, "a held file is made");
+#endif
+  const auto r = amd::Clear(local);
+#if defined(_WIN32)
+  Check(r.kept == 1, "a file in use by another program is kept");
+  std::fclose(held);
+#endif
+  Check(r.removed == 4 && r.bytes == 161, "the three caches' files are removed");
+  Check(fs::is_directory(local / "AMD" / "VkCache") && fs::is_directory(local / "AMD" / "DxCache") &&
+            fs::is_directory(local / "AMD" / "DxcCache"),
+        "the cache folders themselves stay");
+  Check(!fs::exists(local / "AMD" / "VkCache" / "sub"), "emptied subfolders go");
+  Check(fs::exists(local / "AMD" / "Other" / "keep.txt") && fs::exists(local / "AMD" / "keep-root.txt"),
+        "nothing outside the three caches is touched");
+  std::error_code ec;
+  fs::remove_all(local, ec);
+}
+
 int main() {
   // Extras playback does not set either story-movie flag. SKIP must still
   // send Start, and must stop sending it once playback ends.
@@ -775,6 +855,8 @@ int main() {
   cursor.Mouse();
   Check(cursor.mouse, "mouse restores pointer");
   GraphicsPresetChecks();
+  LauncherGuardChecks();
+  AmdShaderCacheChecks();
   ExtrasChecks();
   ShaderProgressChecks();
   ShaderPreparedChecks();
