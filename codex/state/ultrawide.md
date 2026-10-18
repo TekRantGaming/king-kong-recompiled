@@ -1,44 +1,45 @@
-# Ultrawide mod (task 223): state, paused 18 Oct for the emergency, moves to Beta 11
+# Ultrawide mod (task 223): state after phase 1 (18 Oct, Beta 11 queue)
 
-Nothing implemented yet. Phase 1 research only. No game runs.
+Phase 1 done on branch ultrawide (commit 0754571 + this file; merged beta4-next 837a49d = Beta 10 first).
+Plan steps 1, 2, 3, 5 built and checked in game (Vulkan + one D3D12 run). Step 4 (HUD box) not started.
 
-## Found (code reading)
-- Projection: sub_82872DB8 copies the view (fov at view +172) into the camera (GDI = *(0x82CCAC30), camera at
-  GDI +208, fov at GDI +220), calls the projection callback at GDI +32 (sub_8278AB00, via bctrl), then builds
-  the view matrix (sub_827E5BB8) and sub_827E58D0(GDI+1040, GDI+432).
-- sub_8278AB00 perspective path (GDI+176 & 0x400 clear, & 1 set; loc_8278AEB8): cot = 1/tan(fov*0.5);
-  matrix at 0x83090510; if (GDI+176 & 4) m00 = cot*f28, m11 = -cot (vertical fov) else m00 = cot,
-  m11 = -cot/f28 (horizontal fov). f28 = height/width: table 0x828D3690[i] (i=1 when camera word0 bit0 is
-  clear; i=3 when *(0x82D62320+728) != 0; else GDI+204 if 1..3) or GDI+184. The matrix goes to
-  sub_820E0D08(r3 = *(0x828D1CD4), r4 = matrix): a projection matrix stack push (copies 16 floats).
-  Other paths call sub_8278A918 = orthographic off-centre (leave alone).
-- First-person weapon (sub_827C6660) and the photo-study element set GDI+220 and call the GDI+32 callback
-  directly, so a hook on sub_8278AB00 covers them too.
-- HUD: the screen-space display list sub_827FA2B0 called from lr 0x82873AB0 (freecam.cpp F10 hooks, 19 leaf
-  routines); the weapon pass sub_827C6660 runs inside it.
-- Renderer: native_render_scale already takes per-axis scales ("2560x1080" -> 2 x 1.5, render_scale.h);
-  AO/GI/cel/lighting use host_scale_x/y separately; the 320/640 effect buffers use min(x,y) (game_resources.cpp
-  ScaleFor). Frame/upscaler size comes from kk::UpscalerOutputSize (settings.cpp ~300, "largest 16:9 inside"),
-  written to native_upscaler_output / native_frame_size in ApplyRenderPreset, read by plugin AutoRenderScale.
-  Mods are applied (kk::mods::ApplyAtGameStart) before ApplyRenderPreset and before the GPU starts.
-- Draw records: DrawCall (backend/draw_sink.h) is filled on the game thread and copied by ThreadedSink, so a
-  per-draw tag from a guest-side flag can be captured there.
+## What is true now
+- cvar kk_aspect (KK/Video, settings.cpp): "16:9" default, "21:9", "32:9", "auto" (window shape clamped
+  16:9..32:9). Maths in kk/src/ultrawide_logic.h (AspectFor, WidthFactor, LargestInside, WidenProjection);
+  unit tests in kk/tests/hardware_recommendation_tests.cpp (ctest hardware-recommendation).
+- ApplyRenderPreset: factor A = aspect/(16:9). A == 1: nothing differs from Beta 10 (same code path, sizes
+  unchanged, native_display_aspect ""). A > 1: UpscalerOutputSize / NoUpscalerFrameSize give the largest
+  picture of that shape (no-upscaler draw width x A), native_display_aspect = "WxH" (plugin cvar, kInitOnly),
+  UltrawideFactor() = A, log line "KK: ultrawide (experimental): ...".
+- Plugin native_graphics_system.cpp OnSwap: passes native_display_aspect as the presenter's display shape
+  (instead of the guest's 1280x720), so the presenter fits the wide picture, not a 16:9 box.
+- kk/src/ultrawide.cpp: hooks sub_8278AB00 (thread-local "in projection") and sub_820E0D08 (projection
+  push); when r4 == 0x83090510 and perspective (m[11] != 0, m[15] == 0) and not kk::fov::InMenus(), column
+  0 (m[0,4,8,12]) /= A for the push, scratch matrix restored after. Log "KK: ultrawide: first 3D view widened".
+- Built-in mod kk/mods-builtin/ultrawide/mod.toml (kk_aspect = "auto"), name "Ultrawide (experimental)",
+  description says experimental / may not work as intended; translated in 5 languages via
+  mods_text_table.inc (workshop_mods.cpp now translates built-in mods' descriptions with T()).
+  MODDING.md row + built-in sentence; CHANGELOG "## v2.0.0-beta.11 (unreleased)" line.
 
-## Plan
-1. cvar kk_aspect = "16:9" (default, nothing changes) / "21:9" / "32:9" / "auto" (window aspect clamped to
-   16:9..32:9). A = aspect / (16/9). Pure maths in a header with unit tests.
-2. UpscalerOutputSize: largest picture of the chosen aspect instead of 16:9 (only when kk_aspect != 16:9).
-   Then the renderer draws e.g. 2560x1080 with scale 2 x 1.5 (guest stays 1280x720).
-3. Hor+: hook sub_8278AB00 (thread-local "in projection") + sub_820E0D08: when r4 == 0x83090510 and the
-   matrix is perspective (m[11] == 1, m[15] == 0), m00 /= A. Not inside the HUD list, not in menus
-   (fov.cpp g_views_since_menu). Culling follows (it uses the projection, as kk_fov showed).
-4. HUD in a centred 16:9 box: export nr_set_draw_tags from the plugin; kk sets a HUD bit while inside
-   sub_827FA2B0 from 0x82873AB0 (cleared inside sub_827C6660); the tracker copies it into DrawCall; for tagged
-   draws ComputeViewport divides ndcScale.x / ndcOffset.x by A. Risk: full-screen fades in that list would
-   cover only the centre (check in phase 2; maybe a full-screen quad test).
-5. Mod kk/mods-builtin/ultrawide/mod.toml (type settings, kk_aspect = "auto"), MODDING.md row, CHANGELOG line.
+## Game check (runs\claude-223-*, tools in runs\claude-223-tools: run.ps1, diff.py)
+- Chapter 7, KK_DEV_SHOTS 10/20/30 s. Window 2560x1080 gives chosen resolution 6400x2700 here (250% DPI,
+  pre-existing OutputSize behaviour), 1280x720 gives 3200x1800.
+- Mod off vs Beta 10 base exe (0167e76): same sizes (4800x2700, 3200x1800) and same log lines; pixels differ
+  1-2.7% (mean abs 0.6-1.1), the same as run-to-run noise (Vulkan mod vs D3D12 mod: 1.2-1.9%, 0.6-0.8).
+  Runs are not deterministic, so byte-identical frames cannot be shown; the off path is identical by code.
+- Mod on (Vulkan and D3D12): 6400x2700 frame, wider view, same height, Jack and the scenery not stretched.
+- Not seen yet: the presented window itself (only the game's frame was captured), the HUD (none in those
+  shots), culling at the new edges (nothing obviously missing in chapter 7's start).
 
-## Expected problems to check in phase 2
-Fades and full-screen overlays, loading screens, front-end menu 3D pieces, pause cover, subtitles, the game's
-blur/bloom taps (guest-pixel steps become wider horizontally), point sprites, Kong chapters' camera, freecam
-and photo mode (letterbox maths), PS2 movies (already aspect-fit with bars).
+## Phase 2 must check / fix
+1. HUD and 2D overlays (orthographic, sub_8278A918): drawn over the whole width = stretched by A. Plan step 4
+   (centred 16:9 box via draw tags, ComputeViewport ndc x / A); watch full-screen fades in that list.
+2. Culling: confirm the frustum (sub_827E5BB8 is the VIEW matrix; frustum builder not found) covers the
+   wider view: look for pop-in at the side edges while turning; if it pops, also widen the fov at
+   sub_82872DB8 and compensate m11 in the push.
+3. Presented window (PrintWindow of our own window): no 16:9 letterbox, no squash.
+4. Menus (front end 3D pieces kept 16:9 = stretched with the 2D), pause cover (pause_hooks.cpp fits the
+   game's output), loading screens, subtitles, fades, photo mode letterbox maths, freecam, PS2 movies.
+5. Screen-space effects with guest-pixel steps (blur/bloom taps, point sprites, 320/640 buffers use
+   min(x,y) scale) and AO/GI/cel at a non-16:9 frame.
+6. Launcher Display page still shows 16:9 sizes (the mod only applies at game start); fine for a mod.
