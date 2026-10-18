@@ -51,12 +51,28 @@ Plan steps 1, 2, 3, 5 built and checked in game (Vulkan + one D3D12 run). Step 4
 - Test-script lessons: the shot clock starts at "gameplay reached" = when the held SKIP ends (or at the
   pause); START in the script pauses and every later shot is the paused (black) game. Ch 8 intro ~29 s.
 
-## Still to do (phase 2)
-1. See the HUD in game: ammo / health tint / subtitles / pause cover / cutscene start, with shots after
-   gameplay reached (SKIP short, presses after it). The perspective-matrix untag (arms) is built + tested
-   (CTest) but not yet run in game.
-2. Mod off vs Beta 10 and one D3D12 run were not repeated for task 231 (off path unchanged by code: no tags
-   are ever sent at factor 1, the renderer only acts on tags).
-3. Culling at the edges while turning (phase 1 item 2): not checked.
-4. Menus (InMenus: no box, as phase 1), loading screens, photo mode letterbox, freecam, PS2 movies;
-   screen-space effects at non-16:9 (blur taps, point sprites, AO/GI/cel); launcher Display page sizes.
+## Task 236 in-game check (18 Oct, runs\claude-236-*, tools runs\claude-236-tools: run.ps1 -UserData, sheet.py, crop.py)
+- Test save copy with subtitles + aiming visor + inventory ON: runs\claude-236-tools\userdata-hud (patch.py sets
+  KKProfile.dat words 0x1154, 0x3CC4, 0x240, 0x3CCC to 1; the shared userdata has them all 0 = no HUD shown).
+- Use KK_DEV_SHOTS_FROM=menu: script and shots then share the clock (level loaded). Without it the shot clock
+  starts at "gameplay reached" = END OF THE WHOLE SCRIPT + 1 s (dev_tools.cpp), not the end of SKIP.
+- MAIN FINDING: the ammo counter ("30 / 0" + gun icon, top right) and the subtitles are NOT drawn by the
+  display list sub_827FA2B0 / its 19 leaves: never tagged (HUD log), and --kk_hide_hud=true does not hide them
+  either (log says "game HUD hidden"; run hide8). So they are stretched over the full width (ammo at 0.82-0.88
+  of the width, not in the 16:9 box). Same on D3D12. Next: find the system that draws them (text/sprite batch
+  flush or the IntMIG interface pages), tag it. Side effect: F10 / kk_hide_hud / photo mode probably leave the
+  ammo counter and subtitles on screen (pre-existing, not checked on Beta 10).
+- Arms untag (perspective in VS constants) works: in ch 8 the leaf-10 3D draws (vs 484B4C70, 984 idx) carry a
+  perspective at c0-c3 and are untagged; diagnostic patch runs\claude-236-tools\persp-diag.patch (logs the
+  register; not committed). Loading text draws (leaf 10, font tex 414FA7xx) had no perspective: tag kept.
+- Pause (native pause menu over the paused game): picture full width, list on the left: OK (PrintWindow).
+- Mod off vs Beta 10 (ch 7, 2560x1080): same sizes 4800x2700 / 6400x2700, same log lines, no ultrawide lines;
+  pixels 1.6-2.4 % (noise band). D3D12 mod on: 6400x2700 DLSS, wide picture, same HUD result as Vulkan.
+- Edge pop-in: ch 8 cave turning shots (4 frames) show nothing missing at the edges, but the spot is too dark
+  to judge; not conclusive. Health tint (no damage taken), fade (only seen as log) not seen on screen.
+
+## Still to do
+1. Ammo/subtitle draw path (above), then re-check ammo, subtitles, health tint, fades, cutscene start.
+2. Edge pop-in in a bright outdoor spot (e.g. ch 7 or a Kong level) with two shots per turn.
+3. Menus, loading screens, photo mode letterbox, freecam, PS2 movies; screen-space effects at non-16:9;
+   launcher Display page sizes.
