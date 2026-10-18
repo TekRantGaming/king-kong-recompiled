@@ -30,7 +30,7 @@ def fail(message):
 
 # All translation tables the launcher includes.
 table_text = ''
-for name in ('launcher_text_table.inc', 'debug_overlay_text_table.inc', 'benchmark_text_table.inc',
+for name in ('settings_help_text_table.inc', 'launcher_text_table.inc', 'debug_overlay_text_table.inc', 'benchmark_text_table.inc',
              'hdr_text_table.inc', 'launcher_layout_text_table.inc', 'workshop_text_table.inc',
              'artbook_text_table.inc', 'mods_text_table.inc', 'picture_text_table.inc', 'texture_packs_text_table.inc'):
     table_text += (src / name).read_text(encoding='utf-8') + '\n'
@@ -141,7 +141,7 @@ strings |= {
     'Remove texture pack',
     'PS2 cutscenes',
     'Download PS2 cutscenes',
-    'Plays the restored PS2 cutscenes in the game, between the missions where the Xbox 360 version has none. Download them in the launcher\'s Settings > Advanced. You can switch them at any time.',
+    'Plays the restored PS2 cutscenes in the game, between the missions where the Xbox 360 version has none. Download them from the main menu\'s Settings > Advanced. You can switch them at any time.',
     'Plays the restored PS2 cutscenes in the game, between the missions where the Xbox 360 version has none. Download them below, or choose a folder with your own BK_xxxx.mp4 files. You can switch them at any time.',
     'Downloading. Select to see the progress, pause or cancel. It continues where it stopped, also after closing the launcher.',
     'Paused. Select to continue or cancel the download.',
@@ -353,7 +353,7 @@ strings |= {'Mods', 'Texture packs', 'Other TRG projects and games', 'Not instal
             'Download the HD and UHD texture packs, import your own from a ZIP file, see what each one is and remove the '
             'ones you no longer want.',
             'A texture pack in a folder of your own (with its pack.txt). Choosing one switches it on.',
-            "No texture pack is on. Choose one in the launcher's Workshop.",
+            "No texture pack is on. Choose one in the Workshop from the main menu.",
             'Nothing is installed and everything you had stays as it was. Your ZIP file is kept.',
             'Your ZIP file is checked and unpacked. It carries on in the background if you leave this pop-up, and Cancel '
             'stops it without changing anything you have installed.',
@@ -545,7 +545,7 @@ _picture = _m.group(1) if _m else ''
 if not _picture:
     fail('206: Display > Picture (PictureItems) is missing')
 _texts206 = set()
-for _src in (re.sub(r'//[^\n]*', '', _picture), _l206[_l206.find('items.push_back(Section("Overlay"));'):][:1200]):
+for _src in (re.sub(r'//[^\n]*', '', _picture), _l206[_l206.find('items.push_back(Section("Overlay"));'):].split('return items;')[0]):
     for _lit in re.findall(r'((?:"(?:[^"\\]|\\.)*"\s*)+)', _src):
         _t = ''.join(re.findall(r'"((?:[^"\\]|\\.)*)"', _lit))
         if len(_t) > 3 and re.search('[A-Za-z]{3}', _t) and '_' not in _t and '%' not in _t and _t not in ('true', 'false', 'off', 'fps', 'full'):
@@ -555,11 +555,11 @@ if len(_texts206) < 6:
     fail(f'206: only {len(_texts206)} texts found in PictureItems and the Overlay row')
 strings |= {'Brightness', 'Gamma', 'Picture', 'Overlay', 'Performance metrics', 'Off', 'FPS only', 'Full', 'game',
             'No upscaler',
-            "This can't be changed while you play. Quit to the launcher's main menu and change it in Settings.",
-            'While you play, the change is made at once. FSR 1 and NIS are chosen in the launcher.'}
+            "This can't be changed while you play. Change it from the main menu.",
+            'While you play, the change is made at once. FSR 1 and NIS are chosen from the main menu.'}
 for _needle, _why in (
         ('static constexpr const char* kInLauncherOnly =\n      "This can\'t be changed while you play.', 'the pause menu note'),
-        ('if (it.type != ItemType::kSection && kRestartOnly.count(it.label)) Disable(it, true, kInLauncherOnly);',
+        ('if (it.type != ItemType::kSection && help::RestartOnly(it.label)) Disable(it, true, kInLauncherOnly);',
          'restart-only rows are greyed in the pause menu, not left out'),
         ('if (in_game_ && spatial_now) Disable(it, true, kInLauncherOnly);', 'the upscaler greys out with FSR 1 / NIS in game'),
         ('"kk_performance_metrics", {{"Off", "off"}, {"FPS only", "fps"}, {"Full", "full"}}', 'Performance metrics levels'),

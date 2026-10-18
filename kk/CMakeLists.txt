@@ -329,6 +329,9 @@ if(KK_DEV_TOOLS)
     # Task 144: settings categories' texts in five languages, no online reminder, one shader bar.
     add_test(NAME launcher-text COMMAND "${Python3_EXECUTABLE}" -I
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/launcher_text_tests.py" "${CMAKE_CURRENT_SOURCE_DIR}")
+    # Task 220: every settings row's description panel help (settings_help.h) in five languages, and its fit.
+    add_test(NAME settings-help-text COMMAND "${Python3_EXECUTABLE}" -I
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/settings_help_tests.py" "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME benchmark-text COMMAND "${Python3_EXECUTABLE}" -I
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/benchmark_text_tests.py" "${CMAKE_CURRENT_SOURCE_DIR}")
     # Task 194: the Beta 7 uploads (redaction, gzip, size limits, switch off = nothing sent), then Python's

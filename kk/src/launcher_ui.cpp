@@ -14,6 +14,7 @@
 #include "glyphs.h"
 #include "launcher_text.h"
 #include "platform.h"
+#include "settings_help.h"
 #include "toast.h"
 
 namespace kk::ui {
@@ -909,46 +910,180 @@ const Item* DrawList(ImDrawList* dl, std::vector<Item>& items, ListState& st, Im
   return st.focus >= 0 ? &items[size_t(st.focus)] : nullptr;
 }
 
-void DrawDescription(ImDrawList* dl, const Item* item, ImVec2 p0, ImVec2 p1, const Metrics& m) {
-  if (!item || item->type == ItemType::kSection) return;
+namespace {
+
+// The option notes a row shows (settings_help.h): for a choice, those of the options it offers, in the help's
+// order, each under the name the row gives it ("Strong (recommended)"); for a slider or an action, every note.
+// `current` is the note of the option chosen now (or -1).
+struct ShownNote {
+  std::string name;  // English (or already translated), translated as drawn
+  const char* note;
+};
+std::vector<ShownNote> ShownNotes(const Item& item, int* current) {
+  std::vector<ShownNote> out;
+  *current = -1;
+  if (!item.help) return out;
+  const std::string chosen =
+      item.type == ItemType::kChoice && item.index >= 0 && item.index < int(item.options.size())
+          ? item.options[size_t(item.index)]
+          : std::string();
+  for (const help::OptionNote& n : item.help->options) {
+    if (!n.option || !n.note) continue;
+    const std::string_view key(n.option);
+    std::string name = item.type == ItemType::kChoice ? std::string() : std::string(n.option);
+    for (const std::string& o : item.options)
+      if (name.empty() && std::string_view(o).substr(0, key.size()) == key) name = o;
+    if (name.empty()) continue;
+    if (!chosen.empty() && std::string_view(chosen).substr(0, key.size()) == key && *current < 0)
+      *current = int(out.size());
+    out.push_back({std::move(name), n.note});
+  }
+  return out;
+}
+
+// One impact label: a rounded box with, for a cost, a three-step meter before its text.
+float Chip(ImDrawList* dl, const std::string& text, int level, ImU32 text_color, ImVec2 at, float k, const Metrics& m,
+           bool draw) {
   const Fonts f = GetFonts();
-  const float s = m.s, w = p1.x - p0.x;
+  const float s = m.s, fs = 13 * s * k, h = 22 * s * k, pad = 8 * s * k;
+  const float meter = level >= 0 ? 16 * s * k : 0.0f;
+  const float w = pad * 2 + meter + TextSize(f.text, fs, text).x;
+  if (draw) {
+    dl->AddRectFilled(at, ImVec2(at.x + w, at.y + h), WithAlpha(color::kText, 0.05f), 4 * s);
+    dl->AddRect(at, ImVec2(at.x + w, at.y + h), color::kHairline, 4 * s);
+    if (level >= 0) {
+      const ImU32 on = level <= 1 ? color::kGood : level == 2 ? color::kWarn : color::kBad;
+      for (int i = 0; i < 3; ++i) {
+        const float bx = at.x + pad + float(i) * 4.5f * s * k, bh = (5.0f + 3.0f * float(i)) * s * k;
+        dl->AddRectFilled(ImVec2(bx, at.y + h * 0.5f + 5.5f * s * k - bh), ImVec2(bx + 3 * s * k, at.y + h * 0.5f + 5.5f * s * k),
+                          i < level ? on : WithAlpha(color::kText, 0.16f));
+      }
+    }
+    dl->AddText(f.text, fs, ImVec2(at.x + pad + meter, at.y + (h - fs) * 0.5f - 1 * s), text_color, text.c_str());
+  }
+  return w;
+}
+
+// Lays the panel out from p0 at width w and, when `dl` is set, draws it. Returns its height. `k` scales the
+// body text (a long German panel shrinks a little to fit); without `how` the help's second paragraph is left out.
+float LayoutDescription(ImDrawList* dl, const Item& item, ImVec2 p0, float w, const Metrics& m, float k, bool how) {
+  const Fonts f = GetFonts();
+  const bool draw = dl != nullptr;
+  const float s = m.s;
   float y = p0.y;
-  if (item->icon && item->tall) {
+  if (item.icon && item.tall) {
     const float ih = 84 * s;
-    dl->AddImage(Tex(item->icon), ImVec2(p0.x, y), ImVec2(p0.x + ih * item->icon_aspect, y + ih), ImVec2(0, 0),
-                 ImVec2(1, 1), item->icon_dim ? IM_COL32(120, 124, 132, 200) : IM_COL32_WHITE);
+    if (draw)
+      dl->AddImage(Tex(item.icon), ImVec2(p0.x, y), ImVec2(p0.x + ih * item.icon_aspect, y + ih), ImVec2(0, 0),
+                   ImVec2(1, 1), item.icon_dim ? IM_COL32(120, 124, 132, 200) : IM_COL32_WHITE);
     y += ih + 20 * s;
   }
-  const float ts = 25 * s;
-  const std::string label = T(item->label);
-  dl->AddText(f.display, ts, ImVec2(p0.x, y), color::kText, label.c_str(), nullptr, w);
-  y += TextSize(f.display, ts, label, w).y + 14 * s;
-  const float bs = 15.5f * s;
-  if (!item->description.empty()) {
-    const std::string desc = T(item->description);
-    dl->AddText(f.text, bs, ImVec2(p0.x, y), color::kTextDim, desc.c_str(), nullptr, w);
-    y += TextSize(f.text, bs, desc, w).y + 14 * s;
-  }
-  for (const std::string& english : item->facts) {
+  auto para = [&](ImFont* font, float size, ImU32 col, const std::string& text, float x, float width, float gap) {
+    if (draw) dl->AddText(font, size, ImVec2(x, y), col, text.c_str(), nullptr, width);
+    y += TextSize(font, size, text, width).y + gap;
+  };
+  para(f.display, 25 * s, color::kText, T(item.label), p0.x, w, 12 * s);
+  const float bs = 15.5f * s * k;
+  const bool structured = item.help != nullptr;
+  if (!item.description.empty())
+    para(f.text, bs, structured ? color::kText : color::kTextDim, T(item.description), p0.x, w, 10 * s * k);
+  if (structured && how && item.help->how) para(f.text, bs, color::kTextDim, T(item.help->how), p0.x, w, 10 * s * k);
+  if (structured) y += 2 * s * k;
+  for (const std::string& english : item.facts) {
     if (english.empty()) continue;
-    const std::string fact = T(english);
     const float indent = 16 * s;
-    dl->AddRectFilled(ImVec2(p0.x + 1 * s, y + bs * 0.5f - 1.5f * s), ImVec2(p0.x + 5 * s, y + bs * 0.5f + 2.5f * s),
-                      color::kAccent);
-    dl->AddText(f.text, bs, ImVec2(p0.x + indent, y), color::kText, fact.c_str(), nullptr, w - indent);
-    y += TextSize(f.text, bs, fact, w - indent).y + 8 * s;
+    if (draw)
+      dl->AddRectFilled(ImVec2(p0.x + 1 * s, y + bs * 0.5f - 1.5f * s), ImVec2(p0.x + 5 * s, y + bs * 0.5f + 2.5f * s),
+                        color::kAccent);
+    para(f.text, bs, color::kText, T(english), p0.x + indent, w - indent, 8 * s * k);
   }
-  if (!item->facts.empty()) y += 6 * s;
-  if (item->disabled && !item->disabled_note.empty()) {
-    const std::string note = T(item->disabled_note);
-    dl->AddText(f.text, bs, ImVec2(p0.x, y), color::kWarn, note.c_str(), nullptr, w);
-    y += TextSize(f.text, bs, note, w).y + 14 * s;
+  if (!item.facts.empty()) y += 6 * s * k;
+  if (item.disabled && !item.disabled_note.empty()) para(f.text, bs, color::kWarn, T(item.disabled_note), p0.x, w, 12 * s * k);
+
+  // Each option: its name in a column, then its note.
+  int current = -1;
+  const std::vector<ShownNote> notes = ShownNotes(item, &current);
+  if (!notes.empty()) {
+    const float os = 14 * s * k;
+    float col = 0;
+    for (const ShownNote& n : notes) col = std::max(col, TextSize(f.semibold, os, T(n.name)).x);
+    col = std::min(col + 14 * s * k, std::round(w * 0.36f));
+    for (size_t i = 0; i < notes.size(); ++i) {
+      const bool on = int(i) == current;
+      const std::string name = T(notes[i].name), note = T(notes[i].note);
+      const float name_h = TextSize(f.semibold, os, name, col - 10 * s * k).y;
+      const float note_h = TextSize(f.text, os, note, w - col).y;
+      if (draw) {
+        if (on) dl->AddRectFilled(ImVec2(p0.x - 10 * s, y + 2 * s), ImVec2(p0.x - 7 * s, y + os + 2 * s), color::kAccent);
+        dl->AddText(f.semibold, os, ImVec2(p0.x, y), on ? color::kAccent : color::kText, name.c_str(), nullptr,
+                    col - 10 * s * k);
+        dl->AddText(f.text, os, ImVec2(p0.x + col, y), on ? color::kText : color::kTextDim, note.c_str(), nullptr,
+                    w - col);
+      }
+      y += std::max(name_h, note_h) + 6 * s * k;
+    }
+    y += 6 * s * k;
   }
-  if (!item->default_text.empty()) {
-    const std::string d = text::F("Default: {0}", {T(item->default_text)});
-    dl->AddText(f.text, 14 * s, ImVec2(p0.x, y), color::kTextFaint, d.c_str(), nullptr, w);
+
+  // The impact labels, wrapping onto a second line when they don't fit.
+  struct Label {
+    std::string text;
+    int level;
+    ImU32 color;
+  };
+  std::vector<Label> labels;
+  if (structured) {
+    if (const char* p = help::PerfLabel(item.help->perf)) labels.push_back({T(p), help::Level(item.help->perf), color::kTextDim});
+    if (const char* v = help::VramLabel(item.help->vram)) labels.push_back({T(v), help::Level(item.help->vram), color::kTextDim});
   }
+  if (item.applies)
+    labels.push_back({T(item.applies), -1, std::string_view(item.applies) == help::kNotWhilePlaying ? color::kWarn : color::kTextDim});
+  if (!labels.empty()) {
+    const float h = 22 * s * k, gap = 6 * s;
+    float x = p0.x;
+    for (const Label& l : labels) {
+      const float lw = Chip(nullptr, l.text, l.level, l.color, ImVec2(x, y), k, m, false);
+      if (x > p0.x && x + lw > p0.x + w) {
+        x = p0.x;
+        y += h + gap;
+      }
+      x += Chip(dl, l.text, l.level, l.color, ImVec2(x, y), k, m, draw) + gap;
+    }
+    y += h + 12 * s * k;
+  }
+  if (!item.default_text.empty()) para(f.text, 14 * s * k, color::kTextFaint, text::F("Default: {0}", {T(item.default_text)}), p0.x, w, 0);
+  return y - p0.y;
+}
+
+// The largest layout that fits between p0 and p1: 0 at full size, 1 or 2 with smaller text, 3 without the help's
+// second paragraph, 4 when even that is too tall (drawn anyway).
+int FitDescription(const Item& item, ImVec2 p0, ImVec2 p1, const Metrics& m, float* k, bool* how) {
+  static constexpr float kScales[] = {1.0f, 0.93f, 0.87f};
+  const float w = p1.x - p0.x, avail = p1.y - p0.y;
+  for (int i = 0; i < 3; ++i)
+    if (LayoutDescription(nullptr, item, p0, w, m, kScales[i], true) <= avail) {
+      *k = kScales[i], *how = true;
+      return i;
+    }
+  *k = kScales[2], *how = false;
+  return LayoutDescription(nullptr, item, p0, w, m, *k, false) <= avail ? 3 : 4;
+}
+
+}  // namespace
+
+void DrawDescription(ImDrawList* dl, const Item* item, ImVec2 p0, ImVec2 p1, const Metrics& m) {
+  if (!item || item->type == ItemType::kSection) return;
+  float k = 1.0f;
+  bool how = true;
+  FitDescription(*item, p0, p1, m, &k, &how);
+  LayoutDescription(dl, *item, p0, p1.x - p0.x, m, k, how);
+}
+
+int DescriptionFit(const Item* item, ImVec2 p0, ImVec2 p1, const Metrics& m) {
+  if (!item || item->type == ItemType::kSection) return 0;
+  float k = 1.0f;
+  bool how = true;
+  return FitDescription(*item, p0, p1, m, &k, &how);
 }
 
 // ----------------------------------------------------------------- pop-up ---

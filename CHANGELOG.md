@@ -7,6 +7,9 @@ version's notes the first time you start it.
 
 **Beta 10**: an emergency fix update, from the beta channel (**About** > **Change version**). Your saves and settings are kept. Windows only for this beta.
 
+### Changed
+- **Every setting explains itself.** The panel beside the settings, in the launcher and in the pause menu, now says what each setting does, what you will notice in the game, what each option changes, and shows its performance and video memory impact and when a change takes effect. In five languages.
+
 ### Fixed
 - **Jack's arm and what he holds flickered with an upscaler on** (DLSS, FSR or XeSS). In some places, for example in the Hayes chapter, parts of the arm and of the gun, spear, bone or lever turned into flat patches in the colour of the fog for single frames. They are now drawn whole.
 - **A bug from the original game in the Hayes chapter**: the raptor that runs round to attack the sailor could stop for good on a ledge near the stone stairs, out of reach, so it could never be killed and Hayes never came down. Players often hit it with the machine gun cheat on, but it can also happen without any cheat. A raptor that stands still on its path there now carries on along it, so the fight always ends.

@@ -85,6 +85,7 @@
 #include "cheats.h"
 #include "platform.h"
 #include "settings.h"
+#include "settings_help.h"
 #include "settings_layout.h"
 #include "launcher_policy.h"
 #include "graphics_presets.h"
@@ -1027,23 +1028,19 @@ class SettingsPages {
     if (!NativeShaderPack::Wanted()) return;
     {
       Item it = CvarChoice("Shadows",
-                           "Original keeps the game's blocky shadows. High draws them at twice the detail with soft "
-                           "edges; Ultra at twice the detail, with edges that get softer the farther a shadow falls from "
-                           "what casts it.",
+                           "How sharp and detailed the game's shadows are.",
                            "native_shadow_quality", {{"Original", "original"}, {"High", "high"}, {"Ultra", "ultra"}});
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
     {
       Item it = CvarChoice("Water reflections",
-                           "Screen space reflects what is on screen in the water (rocks, trees, the ship), and keeps the "
-                           "game's own reflection where nothing is found.",
+                           "How the water reflects its surroundings.",
                            "native_water_reflections", {{"Original", "original"}, {"Screen space", "ssr"}});
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
     {
       Item it = CvarChoice("Light shafts",
-                           "Volumetric lights the game's mist and fog from the sun: shadows cut shafts of light through "
-                           "it. Only where the game has fog, so clear scenes stay clear. High is finer.",
+                           "Sunlight shines through the mist and fog in visible shafts.",
                            "native_volumetrics", {{"Original", "off"}, {"Volumetric low", "low"}, {"Volumetric high", "high"}});
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
@@ -1061,10 +1058,7 @@ class SettingsPages {
     for (const auto& o : opts) listed = listed || o.value == cur;
     if (!listed && !cur.empty()) opts.push_back({F("{0} FPS (settings file)", {cur}), cur});
     Item it = CvarChoice("Frame rate",
-                         "How many pictures the game draws a second (your screen's refresh rate is separate). 30 "
-                         "matches the Xbox 360 and keeps every animation right. Higher is smoother, but some "
-                         "character animations are not right above 30 yet. For the smoothest motion, pick a rate "
-                         "that divides your screen's evenly, such as 60 on a 120 Hz screen.",
+                         "How many pictures the game draws a second. Your screen's refresh rate is separate.",
                          "kk_frame_rate", opts);
     return std::move(Disable(it, GetBool("kk_original_look"), kSetByOriginal));
   }
@@ -1137,7 +1131,7 @@ class SettingsPages {
       if (UsingNativeRenderer() && !offered.known && HasTemporalSetting())
         it.facts.push_back("Checking which other upscalers your graphics card runs...");
       if (in_game_ && !spatial_now)
-        it.facts.push_back("While you play, the change is made at once. FSR 1 and NIS are chosen in the launcher.");
+        it.facts.push_back("While you play, the change is made at once. FSR 1 and NIS are chosen from the main menu.");
       if (in_game_ && spatial_now) Disable(it, true, kInLauncherOnly);
       it.on_choice = [choices](int i) {
         const Choice& c = choices[size_t(i)];
@@ -1175,10 +1169,7 @@ class SettingsPages {
       Item it;
       it.type = ItemType::kChoice;
       it.label = "Upscaler mode";
-      it.description =
-          "How many pixels the game draws before the upscaler rebuilds the picture at your screen's size. Native AA "
-          "draws every pixel and only smooths the edges (DLAA with DLSS); Quality, Balanced, Performance and Ultra "
-          "Performance draw fewer for more speed.";
+      it.description = "How many pixels the game draws before the upscaler rebuilds the picture at your screen's size.";
       const std::string cur = Get("native_upscaler_quality");
       it.index = -1;
       const auto [ow, oh] = UpscalerOutputFor(out_w, out_h);
@@ -1205,10 +1196,8 @@ class SettingsPages {
       Item it;
       it.type = ItemType::kChoice;
       it.label = "Upscaler mode";
-      it.description =
-          "How many pixels the game draws before the upscaler scales them to your screen. Native draws at your "
-          "screen's size and only sharpens; Quality, Balanced and Performance draw fewer for more speed. The game "
-          "draws in steps of its original 720p, so some modes can be the same at your screen size.";
+      it.description = "How many pixels the game draws before the upscaler scales them to your screen.";
+      it.help_key = "Upscaler mode (spatial)";
       it.options.assign(std::begin(kUpscalerModeNames), std::end(kUpscalerModeNames));
       const int mode = UpscalerMode();
       it.index = mode;
@@ -1239,10 +1228,7 @@ class SettingsPages {
       Item it;
       it.type = ItemType::kChoice;
       it.label = "Render quality";
-      it.description =
-          "How sharply the game is drawn compared with your screen. Native matches it; Quality, Balanced and the "
-          "Performance modes draw fewer pixels and scale up (an upscaler makes that sharper). The game renders in "
-          "steps of its original 720p.";
+      it.description = "How sharply the game is drawn compared with your screen.";
       const std::string cur = Get("kk_render_quality");
       std::vector<std::string> values;
       it.index = -1;
@@ -1299,13 +1285,12 @@ class SettingsPages {
       items.push_back(RefreshRateItem());
     }
     items.push_back(CvarChoice("Aspect ratio",
-                               "The game is 16:9. Letterbox keeps its shape on other screens; Stretch fills them.",
+                               "What the game's 16:9 picture does on a screen of another shape.",
                                "present_letterbox", {{"Letterbox 16:9", "true"}, {"Stretch", "false"}}));
     PictureItems(items);
     items.push_back(Section("Frame rate"));
     items.push_back(CvarToggle("VSync",
-                               "On waits for the display for tear-free frames. Off has the lowest latency and lets "
-                               "G-Sync and FreeSync displays run freely.",
+                               "Makes each frame wait for your screen's next refresh.",
                                "d3d12_allow_variable_refresh_rate_and_tearing", "Off", "On", /*invert=*/true));
     items.push_back(FrameRateItem());
     if (FindFlag("present_hdr")) {
@@ -1324,10 +1309,7 @@ class SettingsPages {
     }
     items.push_back(Section("Overlay"));
     items.push_back(CvarChoice("Performance metrics",
-                               "Shows performance readings in the top left corner while you play. FPS only shows the "
-                               "frame rate and the frame time. Full adds a frame time graph, the graphics card's load, "
-                               "temperature, clock speed and memory, the processor's load, memory use, the graphics "
-                               "API and the upscaler. F2 switches between them while you play.",
+                               "Readings in the top left corner while you play. F2 switches between them.",
                                "kk_performance_metrics", {{"Off", "off"}, {"FPS only", "fps"}, {"Full", "full"}}));
     return items;
   }
@@ -1342,8 +1324,8 @@ class SettingsPages {
     {
       Item it = CvarSlider("Brightness",
                            "Raises or lowers the darkest parts of the game's picture. Higher shows more in dark "
-                           "places, lower gives deeper blacks. White stays the same. The launcher and the menus do "
-                           "not change. 0 is the game's own picture.",
+                           "places, lower gives deeper blacks. White stays the same. The menus do not "
+                           "change. 0 is the game's own picture.",
                            "kk_brightness", -50, 50, 1, [](float v) {
                              const int n = int(std::lround(v));
                              return n > 0 ? "+" + std::to_string(n) : std::to_string(n);
@@ -1403,7 +1385,7 @@ class SettingsPages {
     Item it;
     it.type = ItemType::kChoice;
     it.label = "Window size";
-    it.description = "The window's size in windowed mode. Applies when the game starts.";
+    it.description = "The size of the game's window.";
     it.index = -1;
     it.value_text = Size(w, h);
     it.default_text = "Default";
@@ -1477,10 +1459,7 @@ class SettingsPages {
     Item it;
     it.type = ItemType::kChoice;
     it.label = "Window mode";
-    it.description =
-        "Windowed plays in a window. Borderless fills the screen with a window at your desktop's resolution, so "
-        "Alt+Tab and other windows switch instantly. Fullscreen changes your screen to the Resolution and Refresh "
-        "rate you pick below while the game runs.";
+    it.description = "How the game fills your screen: in a window, borderless or fullscreen.";
     it.options = {"Windowed", "Borderless", "Fullscreen"};
     it.index = !GetBool("fullscreen") ? 0 : ExclusiveFullscreen() ? 2 : 1;
     it.default_text = "Windowed";
@@ -1494,7 +1473,8 @@ class SettingsPages {
       Reset("fullscreen");
       if (cb_.set_fullscreen) cb_.set_fullscreen(GetBool("fullscreen"));
     };
-    if (it.index == 2) it.facts.push_back("The launcher stays borderless; the screen changes when the game starts.");
+    if (it.index == 2 && !in_game_)
+      it.facts.push_back("The launcher stays borderless; the screen changes when the game starts.");
     return it;
   }
 
@@ -1505,9 +1485,7 @@ class SettingsPages {
     Item it;
     it.type = ItemType::kChoice;
     it.label = "Resolution";
-    it.description =
-        "The size your screen switches to while the game runs, at the Refresh rate below. The render quality "
-        "follows it. Applies when the game starts.";
+    it.description = "The size your screen switches to while the game runs.";
     std::vector<std::pair<int, int>> sizes;
     for (const DisplayMode& m : display_modes_) {
       if (!sizes.empty() && sizes.back() == std::pair<int, int>{m.width, m.height}) continue;
@@ -1544,9 +1522,7 @@ class SettingsPages {
     Item it;
     it.type = ItemType::kChoice;
     it.label = "Refresh rate";
-    it.description =
-        "How many times a second your screen refreshes at the Resolution above: your screen's setting. How many "
-        "pictures the game draws a second is the Frame rate, below. Applies when the game starts.";
+    it.description = "How many times a second your screen refreshes while the game runs.";
     std::vector<float> rates = RatesAt(cur->width, cur->height);
     if (rates.empty()) rates.push_back(cur->refresh);
     it.index = -1;
@@ -1577,7 +1553,7 @@ class SettingsPages {
                           "  " KK_DOT "  " + Size(m.width, m.height),
                       std::to_string(i + 1)});
     }
-    return CvarChoice("Monitor", "Which display the game opens on. Applies when the game starts.", "monitor",
+    return CvarChoice("Monitor", "Which display the game opens on.", "monitor",
                       std::move(opts));
   }
 
@@ -1588,7 +1564,7 @@ class SettingsPages {
     items.push_back(Section("Preset"));
     {
       Item it = CvarChoice("Look",
-                           "Original keeps the Xbox 360 look. Remastered enables graphics presets and custom graphics settings. Its setup defaults are 60 FPS and Strong GTAO; Display sets the frame-rate cap.",
+                           "Original keeps the Xbox 360 look. Remastered unlocks the graphics settings below.",
                            "kk_original_look", {{"Original Xbox 360", "true"}, {"Remastered", "false"}});
       it.on_choice = [](int i) { SetOriginalLook(i == 0); };
       it.on_default = [] { SetOriginalLook(false); };
@@ -1598,7 +1574,8 @@ class SettingsPages {
       Item it;
       it.type = ItemType::kChoice;
       it.label = "Preset";
-      it.description = "Sets image quality, upscaling, ambient occlusion and global illumination. Changing a setting shows Custom.";
+      it.description = "Sets render quality, upscaling, anti-aliasing, texture filtering, ambient occlusion and global "
+                       "illumination together. Changing one of them shows Custom.";
       for (const auto& p : kGraphicsPresets) it.options.push_back(p.label);
       it.options.push_back("Custom");
       const int match = MatchGraphicsPreset();
@@ -1636,7 +1613,7 @@ class SettingsPages {
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
     {
-      Item it = CvarChoice("Sharpness", "Adaptive sharpening. Skipped when the upscaler's own sharpening is active.",
+      Item it = CvarChoice("Sharpness", "Makes fine detail crisper.",
                            "native_sharpness", {{"Off", "off"}, {"Low", "low"}, {"Medium", "medium"}, {"High", "high"}});
       it.type = ItemType::kSlider;
       it.lo = 0; it.hi = 3; it.step = 1;
@@ -1661,19 +1638,15 @@ class SettingsPages {
       // water, smoke, fire, fur and the sky drawn after it are never darkened (native-renderer/docs/ao.md).
       const bool native = NativeRendererAvailable() && UsingNativeRenderer();
       Item it = CvarChoice("Ambient occlusion",
-                           native ? "Soft shading where surfaces meet: in corners and creases, and on the ground under "
-                                    "rocks, grass and people (GTAO). Water, smoke, fire and the sky are never darkened. "
-                                    "Costs about 1 to 2 ms a frame at 4K."
-                                  : "Soft shading where surfaces meet: in corners and creases, and on the ground under "
-                                    "rocks, grass and people. Costs about 1 ms a frame at 4K.",
+                           "Soft shading where surfaces meet, in corners and under rocks and grass.",
                            "ao_mode", {{"Off", "0"}, {"On", "1"}});
+      if (!native) it.help_key = "Ambient occlusion (legacy)";
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
       if (GetInt("ao_mode", 0) != 0) {
         // GTAO: the shading's darkness (XeGTAO's final power 1.6, 2.2, 3.0) and how far it reaches from
         // each crease (6, 8, 12 near-plane distances). See docs/ao.md, "In the game".
         Item st = CvarChoice("AO strength",
-                             native ? "How dark the shading gets and how far it spreads from each corner. Strong is "
-                                      "recommended; Light and Medium are subtler."
+                             native ? "How dark the shading gets and how far it spreads from each corner."
                                     : "How dark the shading gets. Light is recommended.",
                              "ao_strength",
                              native ? std::vector<Option>{{"Light", "1"}, {"Medium", "2"}, {"Strong (recommended)", "3"}}
@@ -1681,7 +1654,7 @@ class SettingsPages {
         items.push_back(std::move(Disable(st, original, kSetByOriginal)));
         if (native) {
           Item quality = CvarChoice("AO quality",
-              "More samples reduce grain on hands and flat surfaces. Medium keeps the previous sample count. High costs more GPU time.",
+              "How many samples the shading uses.",
               "native_ao_samples", {{"Low", "1"}, {"Medium", "2"}, {"High", "3"}});
           items.push_back(std::move(Disable(quality, original, kSetByOriginal)));
         }
@@ -1691,13 +1664,11 @@ class SettingsPages {
       // Global illumination lives in the native renderer (native_gi, native-renderer/docs/gi.md). A build
       // without it has no such setting and ignores the line in the settings file.
       Item it = CvarChoice("Global illumination",
-                           "Light bouncing off sunlit surfaces into the shade beside them: sunlit rock tints the "
-                           "shadow next to it, the jungle's green reaches the people in it. Medium costs about 1 ms a "
-                           "frame at 1440p. On by default, following the graphics preset. Original keeps it off.",
+                           "Sunlight bounces off surfaces and softly lights the shade beside them.",
                            "native_gi", {{"Off", "off"}, {"Low", "low"}, {"Medium", "medium"}, {"High", "high"}});
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
       Item distance = CvarChoice("GI distance",
-          "Limits bounced light to nearby surfaces to save GPU time. Near: 16 m, Medium: 32 m, Far: 64 m. Full has no limit. Light fades smoothly over the final quarter of the distance.",
+          "How far from the camera bounced light is worked out.",
           "native_gi_distance", {{"Near", "near"}, {"Medium", "medium"}, {"Far", "far"}});  // Full: F8 only (owner, Beta 8)
       items.push_back(std::move(Disable(distance, original || Get("native_gi") == "off",
                                        original ? kSetByOriginal : "Switch Global illumination on to set its distance.")));
@@ -1714,17 +1685,13 @@ class SettingsPages {
     }
     {
       Item it = CvarToggle("Screen blur",
-                           "Some levels (Necropolis, Brontosaurus) blur the whole picture slightly. The blur is sized "
-                           "for the Xbox 360's 720p, so on a sharper screen it makes those levels look low resolution. "
-                           "Off keeps them sharp.",
+                           "Some levels (Necropolis, Brontosaurus) blur the whole picture slightly.",
                            "kk_big_blur");
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
     {
       Item it = CvarToggle("Distance fog",
-                           "The haze over far-away scenery. Off shows distant scenery clearly, but the fog is part of "
-                           "Skull Island's look and also hides the edges of each area, so some empty or unfinished "
-                           "backdrops can show.",
+                           "The haze over far-away scenery.",
                            "kk_fog");
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
     }
@@ -1782,7 +1749,7 @@ class SettingsPages {
                            "can switch it at any time, also from the pause menu, and it changes straight away.",
                            "native_texture_pack");
       items.push_back(std::move(Disable(it, !have && !GetBool("native_texture_pack"),
-                                        "No texture pack is on. Choose one in the launcher's Workshop.")));
+                                        "No texture pack is on. Choose one in the Workshop from the main menu.")));
       return;
     }
     {
@@ -1975,10 +1942,10 @@ class SettingsPages {
       api.type = ItemType::kChoice;
       api.label = "Graphics API";
 #if defined(__linux__)
-      api.description = "How the native renderer talks to your graphics card. Auto uses Vulkan. Changes apply when the game starts.";
+      api.description = "How the renderer talks to your graphics card.";
       api.options = {"Auto", "Vulkan"};
 #else
-      api.description = "Auto uses Vulkan. DirectX 12 is needed for AMD FSR 4. Changes apply when the game starts.";
+      api.description = "How the renderer talks to your graphics card.";
       api.options = {"Auto", "Vulkan", "DirectX 12"};
 #endif
       const std::string backend = Get("native_backend");
@@ -2015,7 +1982,7 @@ class SettingsPages {
       items.push_back(Section("Cutscenes"));
       items.push_back(CvarToggle("PS2 cutscenes",
           in_game_ ? "Plays the restored PS2 cutscenes in the game, between the missions where the Xbox 360 version has "
-                     "none. Download them in the launcher's Settings > Advanced. You can switch them at any time."
+                     "none. Download them from the main menu's Settings > Advanced. You can switch them at any time."
                    : "Plays the restored PS2 cutscenes in the game, between the missions where the Xbox 360 version has "
                      "none. Download them below, or choose a folder with your own BK_xxxx.mp4 files. You can switch "
                      "them at any time.",
@@ -2116,7 +2083,7 @@ class SettingsPages {
     }
     {
       Item it = CvarChoice("Button prompts",
-                           "Which controller's buttons the game and this launcher show in menus and hints. Automatic "
+                           "Which controller's buttons the game and its menus show in menus and hints. Automatic "
                            "matches the controller you're using.",
                            "kk_button_prompts",
                                {{"Automatic", "auto"},
@@ -2412,6 +2379,7 @@ class SettingsPages {
       // Every chapter is open in the Play menu's Chapter select (docs/menus.md): no "All chapters".
       if (std::string_view(cheat.id) == "chapters") continue;
       Item it = CvarToggle(cheat.label, "One of the game's own cheats.", std::string("kk_cheat_") + cheat.id);
+      it.help_key = "Cheat";
       it.facts.push_back(F("Code: {0}", {cheat.code}));
       items.push_back(std::move(Disable(it, !on, "Switch Cheats on to use it.")));
     }
@@ -2458,14 +2426,10 @@ class SettingsPages {
   // graphics API and renderer, the language and the startup logos. The upscaler is live between the
   // temporal upscalers and Off, greyed while FSR 1 or NIS is in use (UpscalingItems). Sections left empty go.
   static std::vector<Item> LiveOnly(std::vector<Item> items) {
-    static const std::set<std::string> kRestartOnly = {
-        "Window mode", "Window size", "Resolution", "Refresh rate", "Monitor", "VSync", "Render quality",
-        "Internal resolution", "Look", "Preset", "Recommended", "Renderer", "Graphics API", "Language",
-        "Startup logos"};
     std::vector<Item> out;
     for (Item& it : items) {
       if (it.disabled_note == kSetByOriginal) it.disabled_note = kSetByOriginalInGame;
-      if (it.type != ItemType::kSection && kRestartOnly.count(it.label)) Disable(it, true, kInLauncherOnly);
+      if (it.type != ItemType::kSection && help::RestartOnly(it.label)) Disable(it, true, kInLauncherOnly);
       out.push_back(std::move(it));
     }
     std::vector<Item> kept;
@@ -2477,9 +2441,33 @@ class SettingsPages {
     return kept;
   }
   static constexpr const char* kSetByOriginalInGame =
-      "Set by the Original Xbox 360 look. Change Look in the launcher to set it.";
+      "Set by the Original Xbox 360 look. Change Look from the main menu to set it.";
   static constexpr const char* kInLauncherOnly =
-      "This can't be changed while you play. Quit to the launcher's main menu and change it in Settings.";
+      "This can't be changed while you play. Change it from the main menu.";
+
+  // The description panel's structured help (settings_help.h, task 220) for each row, and when a change to it
+  // takes effect: in game, a row that can't change while playing says so; in the launcher, the rows the pause
+  // menu greys apply when the game starts and the others change at once (also while playing).
+  void AttachHelp(std::vector<Item>& items) const {
+    for (Item& it : items) {
+      if (it.type == ItemType::kSection) continue;
+      it.help = help::Find(it.help_key ? std::string_view(it.help_key) : std::string_view(it.label));
+      it.applies = nullptr;
+      if (in_game_ && it.disabled && it.disabled_note == kInLauncherOnly) {
+        it.applies = help::kNotWhilePlaying;
+        continue;
+      }
+      if (!it.help) continue;
+      help::Applies a = it.help->applies;
+      if (a == help::Applies::kAuto) a = help::RestartOnly(it.label) ? help::Applies::kGameStart : help::Applies::kAtOnce;
+      switch (a) {
+        case help::Applies::kAtOnce: it.applies = help::kChangesAtOnce; break;
+        case help::Applies::kGameStart: it.applies = in_game_ ? help::kNotWhilePlaying : help::kAppliesAtStart; break;
+        case help::Applies::kNextStart: it.applies = help::kNextStartLabel; break;
+        default: break;
+      }
+    }
+  }
 
   double preview_at_ = 0;
   std::vector<std::filesystem::path> sounds_;
@@ -5077,6 +5065,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     const float avail = w_ - Margin() * 2;
     const float list_w = std::round(avail * 0.56f);
     ui::ListState& st = lists_[page_ * 4 + sub_];
+    if (IsSettingsPage(page_) || page_ == kAbout) AttachHelp(items);
     const Item* focused = ui::DrawList(dl, items, st, ImVec2(x0, top), ImVec2(x0 + list_w, bottom), m_, input_,
                                        !modal_.open);
     const float dx = x0 + list_w + 76 * s;
@@ -5108,6 +5097,51 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
                     it.label);
       DevCheckLayout(p - kFirstSettingsPage, items, "launcher");
     }
+    sub_ = sub;
+  }
+
+  // Task 220: every Settings row's description panel in each language, measured with the real fonts at this
+  // window's size: "KK dev: descfit" lines for rows that need smaller text (1, 2), lose the help's second
+  // paragraph (3) or still overflow (4), rows without a description or help, then a summary per language.
+  void LogDescriptionFit() {
+    const SubPage sub = sub_;
+    sub_ = kNoSubPage;
+    const std::string language = Get("user_language");
+    const float s = m_.s;
+    const float top = o_.y + 104 * s, bottom = o_.y + h_ - 96 * s;
+    const float x0 = o_.x + Margin(), list_w = std::round((w_ - Margin() * 2) * 0.56f);
+    const ImVec2 p0(x0 + list_w + 76 * s, top + 18 * s), p1(o_.x + w_ - Margin(), bottom);
+    for (const char* lang : {"1", "3", "5", "4", "6"}) {
+      Set("user_language", lang);
+      int rows = 0, counts[5] = {};
+      for (int p = kFirstSettingsPage; p <= kAbout; ++p) {
+        std::vector<Item> items;
+        switch (Page(p)) {
+          case kDisplay: items = DisplayItems(); break;
+          case kGraphics: items = GraphicsItems(); break;
+          case kAudio: items = AudioItems(); break;
+          case kControls: items = ControlsItems(); break;
+          case kGameplay: items = GameplayItems(); break;
+          case kCheats: items = CheatItems(); break;
+          case kAdvanced: items = AdvancedPageItems(); break;
+          case kAbout: items = AboutItems(); break;
+          default: break;
+        }
+        AttachHelp(items);
+        for (const Item& it : items) {
+          if (it.type == ItemType::kSection) continue;
+          ++rows;
+          const int fit = ui::DescriptionFit(&it, p0, p1, m_);
+          ++counts[std::clamp(fit, 0, 4)];
+          if (fit > 0) REXLOG_INFO("KK dev: descfit {} {} '{}' fit {}", lang, kPageNames[p], it.label, fit);
+          if (it.description.empty()) REXLOG_INFO("KK dev: descfit {} {} '{}' no description", lang, kPageNames[p], it.label);
+          if (!it.help && p != kAbout) REXLOG_INFO("KK dev: descfit {} {} '{}' no help", lang, kPageNames[p], it.label);
+        }
+      }
+      REXLOG_INFO("KK dev: descfit {} done {} rows: {} full size, {} smaller, {} without how, {} overflow", lang, rows,
+                  counts[0], counts[1] + counts[2], counts[3], counts[4]);
+    }
+    Set("user_language", language);
     sub_ = sub;
   }
 #endif
@@ -7436,6 +7470,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       LogLayoutCheck();
       return;
     }
+    if (t == "desc-fit") {  // task 220: every description panel in the five languages
+      LogDescriptionFit();
+      return;
+    }
     if (t.rfind("language:", 0) == 0) { SetInt("user_language", std::atoi(t.c_str() + 9)); return; }
     auto at_point = [&](const std::string& xy) {
       const size_t colon = xy.find(':');
@@ -7662,6 +7700,7 @@ class InGameSettingsImpl final : public InGameSettings, private SettingsPages {
       default: break;
     }
     items = LiveOnly(std::move(items));
+    AttachHelp(items);
 #if defined(KK_DEV_TOOLS)
     if (sub_ == kNoSubPage) DevCheckLayout(int(page), items, "pause");
 #endif
