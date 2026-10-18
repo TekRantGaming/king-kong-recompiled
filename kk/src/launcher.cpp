@@ -1111,15 +1111,21 @@ class SettingsPages {
       Item it;
       it.type = ItemType::kChoice;
       it.label = "Upscaler";
-      std::string desc =
-          std::string("Scales the picture up to your screen and sharpens it, for a clearer image when the game draws "
-                      "fewer pixels than your screen has. ") +
-          which + " Off uses plain smooth scaling.";
-      if (any_temporal || !temporal.empty())
-        desc += " DLSS, FSR 4, FSR 3.1 and XeSS rebuild a sharp picture from several frames and smooth jagged edges "
-                "too; only those your graphics card supports are listed. The default is the best one it runs: DLSS "
-                "on NVIDIA cards, FSR 4 or FSR 3.1 on AMD cards, XeSS on Intel cards, FSR 3.1 on others, and FSR 1 "
-                "where none of them runs. Choosing one of them restarts the game when you press Play.";
+      // Translated sentence by sentence (task 222 game check: the whole text had no translation). In game the
+      // pause menu leaves out what does not apply there (FSR 1 / NIS are not listed, nothing restarts) so the
+      // strip fits at 1280 x 720.
+      std::string desc = T("Scales the picture up to your screen and sharpens it, for a clearer image when the game "
+                           "draws fewer pixels than your screen has.");
+      if (!in_game_ || spatial_now) desc += std::string(" ") + T(std::string(which));
+      desc += std::string(" ") + T("Off uses plain smooth scaling.");
+      if (any_temporal || !temporal.empty()) {
+        desc += std::string(" ") + T("DLSS, FSR 4, FSR 3.1 and XeSS rebuild a sharp picture from several frames and smooth jagged "
+                        "edges too; only those your graphics card supports are listed.");
+        if (!in_game_)
+          desc += std::string(" ") + T("The default is the best one it runs: DLSS on NVIDIA cards, FSR 4 or FSR 3.1 on AMD cards, "
+                          "XeSS on Intel cards, FSR 3.1 on others, and FSR 1 where none of them runs. Choosing one of "
+                          "them restarts the game when you press Play.");
+      }
       it.description = desc;
       it.index = -1;
       const std::string present = Get("present_effect");
