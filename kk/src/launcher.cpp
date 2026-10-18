@@ -10,6 +10,7 @@
 #include "launcher_art.h"
 #include "hdr_display.h"
 #include "setup_compare.h"
+#include "workshop_art.h"
 #include "launcher_music.h"
 #include "launcher_sounds.h"
 #include "launcher_text.h"
@@ -3038,6 +3039,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     compare_art_.clear();  // the setup's pictures (their textures were in textures_)
     setup_stills_.clear();
     setup_stills_loaded_ = false;
+    workshop_art_.clear();  // task 221 (their textures were in textures_)
     glyphs_.Reload();
     LoadArt();
   }
@@ -3293,8 +3295,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     extras_return_focus_ = -1;  // only the Graphics visit an Extras row opened returns there
     side_focus_ = -1;
     play_ = PlayView::kNone;
+    const bool opening_workshop = page == kWorkshop && page_ != kWorkshop;
     page_ = page;
     if (page == kWorkshop) EnsureWorkshop();  // task 209: one page with three rows
+    if (opening_workshop) workshop_->OnOpen();  // task 221: the projects row in a fresh random order
   }
 
   // ---------------------------------------------------------- bottom bar ---
@@ -5129,11 +5133,44 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       return sl.sharp;
     };
     h.save = [] { ++g_changes; };
+    h.art = [this](const std::string& key, float* aspect) { return WorkshopArt(key, aspect); };
+    h.texture = [this](int w, int h, const std::vector<uint8_t>& rgba) -> rex::ui::ImmediateTexture* {
+      art::Image img;
+      img.width = w;
+      img.height = h;
+      img.rgba = rgba;
+      return MakeTexture(img);
+    };
     workshop_->SetHost(std::move(h));
     texture_pack_choices_ = [this] { return workshop_->TexturePackChoices(); };
     texture_pack_active_ = [this] { return workshop_->ActiveTexturePack(); };
     texture_pack_enable_ = [this](const std::string& key) { workshop_->EnableTexturePack(key); };
     open_workshop_ = [this] { GoTo(kWorkshop); };
+  }
+
+  // Task 221: the Workshop's card pictures made from a still of the player's own game (workshop_art.h): the HD
+  // texture pack (original and sharper, side by side) and the Cel shading mod (its outlines and bands). Made once
+  // (a few ms each) and kept until the art is loaded again.
+  std::map<std::string, std::pair<rex::ui::ImmediateTexture*, float>> workshop_art_;
+  rex::ui::ImmediateTexture* WorkshopArt(const std::string& key, float* aspect) {
+    if (auto it = workshop_art_.find(key); it != workshop_art_.end()) {
+      *aspect = it->second.second;
+      return it->second.first;
+    }
+    const std::vector<art::Image>& stills = SetupStills();
+    if (stills.empty()) return nullptr;  // asked again later (the art may still be on its way)
+    const auto t0 = std::chrono::steady_clock::now();
+    const bool cel = key == "builtin:cel-shading";
+    const art::Image still = compare::Fit(stills[(cel ? 2 : 1) % stills.size()], 768, 432);
+    art::Image img;
+    if (key == "hd") img = workshop_art::HdSplit(still);
+    else if (cel) img = workshop_art::CelShade(still);
+    rex::ui::ImmediateTexture* tex = img ? MakeTexture(img) : nullptr;
+    workshop_art_[key] = {tex, 16.0f / 9.0f};
+    *aspect = 16.0f / 9.0f;
+    REXLOG_INFO("KK workshop: picture {} made from a still of the game ({} ms)", key,
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count());
+    return tex;
   }
 
   void DrawWorkshopHeader(ImDrawList* dl) {

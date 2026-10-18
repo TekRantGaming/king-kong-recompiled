@@ -10,6 +10,7 @@
 #pragma once
 
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -43,6 +44,8 @@ class KongMods {
   bool DrawRow(ImDrawList* dl, ImVec2 p0, ImVec2 p1, const ui::Metrics& m, ui::Input& in, bool active, bool focused);
   // Which mods the row shows (closes an open mod page when it changes).
   void SetFilter(Filter filter);
+  // Task 221: pictures for built-in mods without their own (made from a still of the player's game).
+  void SetArt(std::function<rex::ui::ImmediateTexture*(const std::string& id, float* aspect)> art);
   Counts GetCounts();
   // A mod's page is open.
   bool InDetail() const;

@@ -3,7 +3,9 @@
 // mods of the other types stay many at once in their load order.
 #include "texture_packs_logic.h"
 
+#include <algorithm>
 #include <iostream>
+#include <set>
 #include <iterator>
 #include <string>
 
@@ -11,6 +13,8 @@
 
 #include "launcher_text.h"
 #include "texture_packs_downloads.h"
+#include "workshop_art.h"
+#include "workshop_content.h"
 
 using namespace kk::texpacks;
 
@@ -142,6 +146,142 @@ static void DownloadTable() {
   CHECK(rex::cvar::SetFlagByName("user_language", "1"));
 }
 
+// Task 221: the Workshop's facts tables (workshop_content.h) in five languages, the pack picture read from a ZIP
+// with ranged reads (ReadZipPicture), and the card pictures made from a still (workshop_art.h).
+static void ContentFacts() {
+  using kk::workshop_content::FactsFor;
+  for (const char* key : {"original", "hd", "uhd", "comic", "folder", "builtin:cel-shading", "builtin:ultrawide"}) {
+    const auto* f = FactsFor(key);
+    CHECK(f && f->changes && f->needs);
+  }
+  CHECK(!FactsFor("mod:someone-else") && !FactsFor("import"));
+  // Kong Comic Book: the owner's wording only (DECISIONS 18 Oct), so no "how it looks" of ours.
+  CHECK(!FactsFor("comic")->looks && std::string(FactsFor("comic")->pairs).find("Cel shading") != std::string::npos);
+  CHECK(std::string(FactsFor("builtin:cel-shading")->pairs).find("Kong Comic Book") != std::string::npos);
+  // Task 232: the Ultrawide mod needs an ultrawide screen and keeps saying it is experimental.
+  CHECK(std::string(FactsFor("builtin:ultrawide")->needs).find("ultrawide screen") != std::string::npos);
+  CHECK(std::string(FactsFor("builtin:ultrawide")->looks).find("Experimental") != std::string::npos);
+  // The UHD and HD descriptions no longer repeat the size (it is the facts table's Size row).
+  for (const auto& page : kDownloadPages) CHECK(std::string(page.description).find("GB") == std::string::npos);
+  const char* langs[] = {"1", "3", "5", "4", "6"};
+  const char* cel = "A comic book look: ink outlines and flat bands of light and shade. Water, smoke, sky and the HUD "
+                    "stay as they are. Fine controls (outline, darkness, bands, strength) are in the F8 panel under Cel "
+                    "shading. The Original look switches it off.";
+  for (int l = 0; l < 5; ++l) {
+    CHECK(rex::cvar::SetFlagByName("user_language", langs[l]));
+    auto translated = [&](const char* t) {
+      if (!t) return;
+      const std::string x = kk::text::T(t);
+      CHECK(!HasDash(x) && (l == 0 ? x == t : x != t));
+      if (!(l == 0 ? x == t : x != t)) std::cerr << "  not translated (" << langs[l] << "): " << t << "\n";
+    };
+    for (const auto& f : kk::workshop_content::kFacts) {
+      translated(f.changes);
+      translated(f.looks);
+      translated(f.pairs);
+      translated(f.needs);
+    }
+    for (const char* label : {"What it changes", "How it looks", "Goes well with", "Size", "Needs"}) translated(label);
+    // Task 232: a German label that fits a texture pack as well as a mod ("Was sie ändert" did not).
+    if (l == 1) CHECK(kk::text::T("What it changes") == std::string("Was sich \xC3\xA4ndert"));
+    translated(cel);
+    translated("Sharper versions of the game's textures, made at four times their original size with AI upscaling, "
+               "keeping the game's own look.");
+    const std::string size = kk::text::F(kk::workshop_content::kSizeText, {"1.4", "5.3"});
+    CHECK(size.find("1.4") != std::string::npos && size.find("5.3") != std::string::npos && size.find('{') == std::string::npos);
+  }
+  CHECK(rex::cvar::SetFlagByName("user_language", "1"));
+}
+
+// A stored ZIP in memory: (name, bytes, method) entries, as the packs are laid out.
+struct FakeEntry {
+  std::string name, data;
+  uint16_t method = 0;
+};
+static std::vector<uint8_t> MakeZip(const std::vector<FakeEntry>& entries, bool bad_crc = false) {
+  std::vector<uint8_t> z, dir;
+  auto u16 = [](std::vector<uint8_t>& v, uint32_t x) { v.push_back(uint8_t(x)); v.push_back(uint8_t(x >> 8)); };
+  auto u32 = [&](std::vector<uint8_t>& v, uint32_t x) { u16(v, x & 0xFFFF); u16(v, x >> 16); };
+  for (const auto& e : entries) {
+    const uint32_t off = uint32_t(z.size());
+    uint32_t crc = kk::workshop_content::Crc32(reinterpret_cast<const uint8_t*>(e.data.data()), e.data.size());
+    if (bad_crc) crc ^= 1;
+    u32(z, 0x04034b50); u16(z, 20); u16(z, 0); u16(z, e.method); u16(z, 0); u16(z, 0);
+    u32(z, crc); u32(z, uint32_t(e.data.size())); u32(z, uint32_t(e.data.size()));
+    u16(z, uint32_t(e.name.size())); u16(z, 3);
+    z.insert(z.end(), e.name.begin(), e.name.end());
+    z.insert(z.end(), {0, 0, 0});  // a little extra field, as some tools write
+    z.insert(z.end(), e.data.begin(), e.data.end());
+    u32(dir, 0x02014b50); u16(dir, 20); u16(dir, 20); u16(dir, 0); u16(dir, e.method); u16(dir, 0); u16(dir, 0);
+    u32(dir, crc); u32(dir, uint32_t(e.data.size())); u32(dir, uint32_t(e.data.size()));
+    u16(dir, uint32_t(e.name.size())); u16(dir, 0); u16(dir, 0); u16(dir, 0); u16(dir, 0); u32(dir, 0); u32(dir, off);
+    dir.insert(dir.end(), e.name.begin(), e.name.end());
+  }
+  const uint32_t dir_off = uint32_t(z.size());
+  z.insert(z.end(), dir.begin(), dir.end());
+  u32(z, 0x06054b50); u16(z, 0); u16(z, 0); u16(z, uint32_t(entries.size())); u16(z, uint32_t(entries.size()));
+  u32(z, uint32_t(dir.size())); u32(z, dir_off); u16(z, 0);
+  return z;
+}
+static void ZipPicture() {
+  const std::string png = std::string("\x89PNG\r\n\x1a\n", 8) + std::string(5000, 'p');
+  int reads = 0;
+  auto reader = [&](const std::vector<uint8_t>& zip) {
+    return [&reads, &zip](uint64_t at, uint8_t* out, size_t n) {
+      ++reads;
+      if (at + n > zip.size()) return false;
+      std::copy_n(zip.begin() + std::ptrdiff_t(at), n, out);
+      return true;
+    };
+  };
+  std::vector<uint8_t> got;
+  std::string error;
+  const auto pack = MakeZip({{"Kong Comic Book/", ""}, {"Kong Comic Book/mod.toml", "name = \"x\"", 8},
+                             {"Kong Comic Book/picture.png", png}, {"Kong Comic Book/textures/picture.png", "no"}});
+  CHECK(kk::workshop_content::ReadZipPicture(reader(pack), pack.size(), got, error));
+  CHECK(std::string(got.begin(), got.end()) == png && reads <= 4);
+  const auto root = MakeZip({{"PICTURE.PNG", png}});
+  CHECK(kk::workshop_content::ReadZipPicture(reader(root), root.size(), got, error) && got.size() == png.size());
+  const auto deep = MakeZip({{"a/b/picture.png", png}});
+  CHECK(!kk::workshop_content::ReadZipPicture(reader(deep), deep.size(), got, error) && got.empty());
+  const auto packed = MakeZip({{"p/picture.png", png, 8}});
+  CHECK(!kk::workshop_content::ReadZipPicture(reader(packed), packed.size(), got, error) && error == "picture.png is compressed");
+  const auto crc = MakeZip({{"p/picture.png", png}}, true);
+  CHECK(!kk::workshop_content::ReadZipPicture(reader(crc), crc.size(), got, error) && got.empty());
+  const std::vector<uint8_t> junk(300, 7);
+  CHECK(!kk::workshop_content::ReadZipPicture(reader(junk), junk.size(), got, error));
+  // A server that answers nothing: no picture, no crash.
+  CHECK(!kk::workshop_content::ReadZipPicture([](uint64_t, uint8_t*, size_t) { return false; }, 1404861922ull, got, error));
+}
+
+static void CardArt() {
+  // A still: left half dark green, right half light sky, a smooth gradient down.
+  kk::art::Image still;
+  still.width = 64;
+  still.height = 36;
+  still.rgba.resize(size_t(64 * 36 * 4));
+  for (int y = 0; y < 36; ++y)
+    for (int x = 0; x < 64; ++x) {
+      uint8_t* p = &still.rgba[size_t((y * 64 + x) * 4)];
+      const int g = x < 32 ? 40 + y : 180 + y;
+      p[0] = uint8_t(g / 2), p[1] = uint8_t(g), p[2] = uint8_t(g * 3 / 4), p[3] = 255;
+    }
+  const kk::art::Image cel = kk::workshop_art::CelShade(still);
+  CHECK(cel.width == 64 && cel.height == 36 && cel.rgba.size() == still.rgba.size());
+  auto green = [](const kk::art::Image& im, int x, int y) { return int(im.rgba[size_t((y * im.width + x) * 4 + 1)]); };
+  // Ink on the edge between the halves, none in the flat parts.
+  CHECK(green(cel, 32, 18) < 40 && green(cel, 31, 18) < 40);
+  CHECK(green(cel, 10, 18) > 25 && green(cel, 50, 18) > 120);
+  // The smooth gradient becomes a few flat bands: few distinct values down a flat column.
+  std::set<int> levels;
+  for (int y = 2; y < 34; ++y) levels.insert(green(cel, 50, y));
+  CHECK(levels.size() <= 3);
+  const kk::art::Image hd = kk::workshop_art::HdSplit(still);
+  CHECK(hd.width == 64 && hd.height == 36);
+  CHECK(green(hd, 37, 0) == 235);  // the light divider at the top (58% across)
+  CHECK(!kk::workshop_art::CelShade(kk::art::Image{}) && !kk::workshop_art::HdSplit(kk::art::Image{}));
+}
+
 int main() {
   // Texture pack mods: Kong UHD Textures, an imported pack, a pack the player put in the mods folder.
   const IsTexturePackMod is_tex = [](const std::string& id) {
@@ -209,6 +349,9 @@ int main() {
 
   ThreePacks();
   DownloadTable();
+  ContentFacts();
+  ZipPicture();
+  CardArt();
   if (failures) std::cerr << failures << " check(s) failed\n";
   else std::cout << "texture pack rules: all checks passed\n";
   return failures ? 1 : 0;

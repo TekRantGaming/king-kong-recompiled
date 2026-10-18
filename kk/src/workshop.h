@@ -50,6 +50,11 @@ struct WorkshopHost {
   std::function<void(const std::string&)> open_url;  // in the browser
   // The launcher's stills from the game (its backdrops): the pictures of the cards that have none of their own.
   std::function<rex::ui::ImmediateTexture*(int index, float* aspect)> still;
+  // Task 221: a card picture made at run time from a still of the player's own game (workshop_art.h) for "hd"
+  // (the HD texture pack) and built-in mods ("builtin:cel-shading"); nullptr while there is no still.
+  std::function<rex::ui::ImmediateTexture*(const std::string& key, float* aspect)> art;
+  // Task 221: a texture from RGBA8 pixels (a download's own picture.png, read before the pack is downloaded).
+  std::function<rex::ui::ImmediateTexture*(int width, int height, const std::vector<uint8_t>& rgba)> texture;
   // The texture pack rule changed the settings: save them.
   std::function<void()> save;
 };
@@ -63,6 +68,8 @@ class Workshop {
   Workshop& operator=(const Workshop&) = delete;
 
   void SetHost(WorkshopHost host);
+  // The Workshop page was opened (from Home or elsewhere): the projects row gets a fresh random order (task 221).
+  void OnOpen();
   // A page inside the Workshop is open: a texture pack's, a mod's, a project's README or the modding guide.
   bool InDetail() const;
   // The page between p0 and p1 (below the top bar, above the prompts). Starts the network worker the first time.

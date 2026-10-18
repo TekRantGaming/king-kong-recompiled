@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
@@ -18,6 +19,21 @@
 #include <vector>
 
 namespace kk::workshop {
+
+// Task 221 (owner, 18 Oct): the "Other TRG projects and games" row in a fresh random order every time the
+// Workshop opens: 0..n-1 shuffled (Fisher-Yates) with `next(k)` giving a number in [0, k).
+template <typename Next>
+std::vector<int> ShuffledOrder(int n, Next&& next) {
+  std::vector<int> order(size_t(std::max(0, n)));
+  for (int i = 0; i < n; ++i) order[size_t(i)] = i;
+  for (int i = n - 1; i > 0; --i) std::swap(order[size_t(i)], order[size_t(next(i + 1))]);
+  return order;
+}
+inline int PositionOf(const std::vector<int>& order, int value) {
+  for (size_t k = 0; k < order.size(); ++k)
+    if (order[k] == value) return int(k);
+  return 0;
+}
 
 struct Project {
   const char* name;  // shown as is (owner, 17 Oct: these exact names; the South Park ones from each README's title)

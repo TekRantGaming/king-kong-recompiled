@@ -2,10 +2,13 @@
 // Job J8: the Workshop page without a window or network: GitHub addresses, the README's first picture,
 // the Markdown subset, the cache (ETag / Last-Modified, once a day) with a fake server, reply headers,
 // JSON facts and picture decoding (two tiny pictures made for this test).
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
+#include <random>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -395,6 +398,32 @@ void Pictures() {
   Check(!DecodePicture({}, 100), "nothing fails cleanly");
 }
 
+// Task 221: the projects row's order, shuffled each time the Workshop opens: always every project once, and
+// different orders come up.
+void Shuffle() {
+  using kk::workshop::kProjectCount;
+  using kk::workshop::PositionOf;
+  using kk::workshop::ShuffledOrder;
+  std::set<std::vector<int>> seen;
+  std::mt19937 rng(221);
+  for (int round = 0; round < 40; ++round) {
+    const std::vector<int> order =
+        ShuffledOrder(kProjectCount, [&](int k) { return std::uniform_int_distribution<int>(0, k - 1)(rng); });
+    std::vector<int> sorted = order;
+    std::sort(sorted.begin(), sorted.end());
+    bool all = int(sorted.size()) == kProjectCount;
+    for (int i = 0; all && i < kProjectCount; ++i) all = sorted[size_t(i)] == i;
+    Check(all, "a shuffle holds every project once");
+    for (int i = 0; i < kProjectCount; ++i) Check(order[size_t(PositionOf(order, i))] == i, "PositionOf finds each project");
+    seen.insert(order);
+  }
+  Check(seen.size() > 30, "the order changes from one opening to the next");
+  const std::vector<int> same = ShuffledOrder(kProjectCount, [](int k) { return k - 1; });
+  for (int i = 0; i < kProjectCount; ++i) Check(same[size_t(i)] == i, "no shuffle keeps the list order");
+  Check(ShuffledOrder(0, [](int) { return 0; }).empty() && ShuffledOrder(1, [](int) { return 0; }) == std::vector<int>{0},
+        "tiny lists");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -407,6 +436,7 @@ int main(int argc, char** argv) {
   CacheOnDisk(root);
   Markdown();
   Pictures();
+  Shuffle();
   if (failures) {
     std::printf("%d workshop check(s) failed\n", failures);
     return 1;

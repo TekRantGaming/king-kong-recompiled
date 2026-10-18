@@ -11,7 +11,7 @@
     {"Put your mods in {0}. MODDING.md explains how to make one.", "Lege deine Mods in {0} ab. MODDING.md erklärt, wie man eine erstellt.", "Coloca tus mods en {0}. MODDING.md explica cómo crear uno.", "Placez vos mods dans {0}. MODDING.md explique comment en créer un.", "Metti le tue mod in {0}. MODDING.md spiega come crearne una."},
     {"By {0}", "Von {0}", "Por {0}", "Par {0}", "Di {0}"},
     {"Version {0}", "Version {0}", "Versión {0}", "Version {0}", "Versione {0}"},
-    {"What it changes", "Was sie ändert", "Qué cambia", "Ce qu'il modifie", "Cosa cambia"},
+    {"What it changes", "Was sich ändert", "Qué cambia", "Ce qu'il modifie", "Cosa cambia"},
     {"On: number {0} in the load order", "An: Nummer {0} in der Ladereihenfolge", "Activado: número {0} en el orden de carga", "Activé : numéro {0} dans l'ordre de chargement", "Attivata: numero {0} nell'ordine di caricamento"},
     {"Changes apply the next time the game starts.", "Änderungen gelten beim nächsten Spielstart.", "Los cambios se aplican la próxima vez que se inicie el juego.", "Les modifications s'appliquent au prochain lancement du jeu.", "Le modifiche si applicano al prossimo avvio del gioco."},
     {"When two mods change the same thing, the one later in the load order wins.", "Wenn zwei Mods dasselbe ändern, gewinnt die spätere in der Ladereihenfolge.", "Si dos mods cambian lo mismo, gana el que está más tarde en el orden de carga.", "Si deux mods modifient la même chose, celui qui est chargé plus tard l'emporte.", "Se due mod cambiano la stessa cosa, vince quella più in basso nell'ordine di caricamento."},

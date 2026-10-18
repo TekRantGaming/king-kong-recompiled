@@ -6,7 +6,11 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
+#include <map>
+#include <mutex>
+#include <thread>
 
 #include <rex/cvar.h>
 #include <rex/logging.h>
@@ -17,7 +21,9 @@
 #include "texture_packs_downloads.h"
 #include "texture_packs_logic.h"
 #include "workshop.h"
+#include "workshop_content.h"
 #include "workshop_mods.h"
+#include "workshop_net.h"
 
 REXCVAR_DECLARE(std::string, kk_texture_pack_own_folder);
 
@@ -76,7 +82,87 @@ std::string ReadHead(const fs::path& file, size_t max) {
   return text;
 }
 
+// Task 221: a download's own picture.png (the UHD and Comic ZIPs carry one near their start, stored), read with
+// a few ranged requests (about 1.2 MB) before the pack is downloaded, and kept in <user data>/cache/workshop as
+// pack-<key>-<sha>.png. On a worker thread; the result is taken on the UI thread.
+struct RemotePicture {
+  std::mutex mutex;
+  bool done = false;
+  workshop::Picture pic;
+};
+
+std::vector<uint8_t> FetchZipPicture(content::Kind kind, const std::string& key, std::string& how) {
+  const content::Info& info = content::InfoFor(kind);
+  std::vector<uint8_t> bytes;
+  std::string error;
+#if defined(KK_DEV_TOOLS)
+  // Testing aid: a local ZIP instead of the download (KK_DEV_WORKSHOP_PACK_ZIP_<KEY>, the key in capitals).
+  std::string env = "KK_DEV_WORKSHOP_PACK_ZIP_";
+  for (const char c : key) env += char(std::toupper(static_cast<unsigned char>(c)));
+  if (const char* zip = std::getenv(env.c_str())) {
+    std::ifstream f(mods::FromU8(zip), std::ios::binary | std::ios::ate);
+    const uint64_t size = f ? uint64_t(f.tellg()) : 0;
+    auto read_at = [&](uint64_t at, uint8_t* out, size_t n) {
+      f.clear();
+      f.seekg(std::streamoff(at));
+      return bool(f.read(reinterpret_cast<char*>(out), std::streamsize(n)));
+    };
+    how = std::string("local test ZIP ") + zip;
+    if (!workshop_content::ReadZipPicture(read_at, size, bytes, error)) how += ": " + error;
+    return bytes;
+  }
+  if (std::getenv("KK_DEV_WORKSHOP_OFFLINE")) return how = "offline test", bytes;
+#endif
+  int requests = 0;
+  auto read_at = [&](uint64_t at, uint8_t* out, size_t n) {
+    if (n == 0) return true;
+    ++requests;
+    workshop::FetchRequest req;
+    req.url = info.url;
+    req.headers = {{"Range", "bytes=" + std::to_string(at) + "-" + std::to_string(at + n - 1)}};
+    req.max_bytes = n;
+    const workshop::FetchReply r = workshop::HttpFetch(req);
+    if (r.status != 206 || r.body.size() != n) return false;
+    std::copy(r.body.begin(), r.body.end(), out);
+    return true;
+  };
+  how = std::to_string(info.zip_size) + "-byte ZIP online";
+  if (!workshop_content::ReadZipPicture(read_at, info.zip_size, bytes, error)) how += ": " + error;
+  how += ", " + std::to_string(requests) + " requests";
+  return bytes;
+}
+
 }  // namespace
+
+// Task 221: the facts table of a texture pack's or a built-in mod's page (workshop_content.h): label on the left,
+// text on the right. Returns the y under it.
+float texpacks::DrawContentFacts(ImDrawList* dl, const std::string& key, const std::string& size, float x, float y,
+                                 float wrap, float s) {
+  const workshop_content::Facts* facts = workshop_content::FactsFor(key);
+  if (!facts && size.empty()) return y;
+  const ui::Fonts f = ui::GetFonts();
+  const float label_w = std::round(wrap * 0.27f), gap = 14 * s, text_w = wrap - label_w - gap;
+  const float fs = 14.5f * s, lfs = 11.5f * s;
+  auto row = [&](const char* label, const std::string& value) {
+    if (value.empty()) return;
+    const std::string up = text::Upper(T(label));
+    const float lh = f.display->CalcTextSizeA(lfs, FLT_MAX, label_w, up.c_str()).y;
+    dl->AddText(f.display, lfs, ImVec2(x, y + 2 * s), ui::WithAlpha(color::kAccent, 0.9f), up.c_str(), nullptr, label_w);
+    dl->AddText(f.text, fs, ImVec2(x + label_w + gap, y), color::kTextDim, value.c_str(), nullptr, text_w);
+    const float th = f.text->CalcTextSizeA(fs, FLT_MAX, text_w, value.c_str()).y;
+    y += std::max(lh + 2 * s, th) + 10 * s;
+  };
+  dl->AddLine(ImVec2(x, y), ImVec2(x + wrap, y), color::kHairline, 1.0f);
+  y += 12 * s;
+  if (facts) {
+    row("What it changes", T(facts->changes));
+    if (facts->looks) row("How it looks", T(facts->looks));
+    if (facts->pairs) row("Goes well with", T(facts->pairs));
+  }
+  row("Size", size);
+  if (facts) row("Needs", T(facts->needs));
+  return y + 6 * s;
+}
 
 struct TexturePackShelf::Impl {
   // kDownload: a Workshop download that installs as a texture pack mod (content::kModPacks: UHD, Comic).
@@ -110,6 +196,66 @@ struct TexturePackShelf::Impl {
   bool pending_folder = false;  // the HD texture pack was turned on before the mods scan was in
 
   Impl(fs::path u, KongMods* m) : user_dir(std::move(u)), mods(m) {}
+
+  // Task 221: the downloads' own pictures before they are installed (by card key).
+  std::map<std::string, std::shared_ptr<RemotePicture>> remote;
+  std::map<std::string, std::pair<rex::ui::ImmediateTexture*, float>> remote_tex;
+
+  rex::ui::ImmediateTexture* DownloadPicture(const content::ModPack& mp, float* aspect) {
+    if (auto it = remote_tex.find(mp.key); it != remote_tex.end()) {
+      if (it->second.first) *aspect = it->second.second;
+      return it->second.first;
+    }
+    auto& slot = remote[mp.key];
+    if (!slot) {
+      slot = std::make_shared<RemotePicture>();
+      const content::Info& info = content::InfoFor(mp.kind);
+      const fs::path cache = user_dir / "cache" / "workshop" /
+                             ("pack-" + std::string(mp.key) + "-" + std::string(info.sha256).substr(0, 12) + ".png");
+      std::thread([slot, cache, kind = mp.kind, key = std::string(mp.key)] {
+        const auto t0 = std::chrono::steady_clock::now();
+        std::vector<uint8_t> bytes;
+        std::string how = "cached";
+        {
+          std::ifstream f(cache, std::ios::binary);
+          if (f) bytes.assign(std::istreambuf_iterator<char>(f), {});
+        }
+        if (bytes.empty()) {
+          bytes = FetchZipPicture(kind, key, how);
+          if (!bytes.empty()) {
+            std::error_code ec;
+            fs::create_directories(cache.parent_path(), ec);
+            const fs::path part = cache.string() + ".part";
+            {
+              std::ofstream out(part, std::ios::binary | std::ios::trunc);
+              out.write(reinterpret_cast<const char*>(bytes.data()), std::streamsize(bytes.size()));
+            }
+            fs::rename(part, cache, ec);
+          }
+        }
+        workshop::Picture pic = bytes.empty() ? workshop::Picture{} : workshop::DecodePicture(bytes, 960);
+        REXLOG_INFO("KK texture packs: {} picture: {} bytes ({}), {}x{}, {} ms", key, bytes.size(), how, pic.width,
+                    pic.height,
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count());
+        std::lock_guard lock(slot->mutex);
+        slot->pic = std::move(pic);
+        slot->done = true;
+      }).detach();
+      return nullptr;
+    }
+    std::lock_guard lock(slot->mutex);
+    if (!slot->done) return nullptr;
+    rex::ui::ImmediateTexture* tex = nullptr;
+    float a = 16.0f / 9.0f;
+    if (slot->pic && host && host->texture) {
+      tex = host->texture(slot->pic.width, slot->pic.height, slot->pic.rgba);
+      a = float(slot->pic.width) / float(slot->pic.height);
+    }
+    remote_tex[mp.key] = {tex, a};
+    slot->pic = {};
+    if (tex) *aspect = a;
+    return tex;
+  }
 
   texpacks::IsTexturePackMod IsTex() {
     return [this](const std::string& id) { return id == pending_mod || mods->IsTexturePack(id); };
@@ -170,15 +316,16 @@ struct TexturePackShelf::Impl {
       p.name = T("HD texture pack");
       p.author = "TekRantGaming";
       p.st = ready ? service.Get(content::Kind::kTexturePack) : content::Status{};
-      const content::Info& info = content::InfoFor(content::Kind::kTexturePack);
-      p.description = F("Sharper versions of the game's textures, made at four times their original size with AI "
-                        "upscaling, keeping the game's own look. A download of {0} GB that takes {1} GB once installed.",
-                        {Gb(info.zip_size), Gb(info.unpacked)});
+      // Task 221: its size is in the page's facts table.
+      p.description = T("Sharper versions of the game's textures, made at four times their original size with AI "
+                        "upscaling, keeping the game's own look.");
       p.installed = p.st.installed;
       p.folder = mods::U8(p.st.folder);
       p.busy = p.st.Busy() || p.st.stage == content::Stage::kPaused;
       p.enabled = p.installed && active == "folder:" + p.folder;
-      p.picture = Still(3, &p.aspect);
+      // Task 221: the original look and the sharper one side by side, made from a still of the player's game.
+      if (host && host->art) p.picture = host->art("hd", &p.aspect);
+      if (!p.picture) p.picture = Still(3, &p.aspect);
       out.push_back(std::move(p));
     }
     // The Workshop's downloads that install as texture pack mods (content::kModPacks: Kong UHD Textures, Kong Comic
@@ -221,6 +368,7 @@ struct TexturePackShelf::Impl {
         p.picture = card->picture;
         p.aspect = card->aspect;
       }
+      if (!p.picture) p.picture = DownloadPicture(mp, &p.aspect);  // task 221: its own picture.png
       if (!p.picture) p.picture = Still(page->still, &p.aspect);
       out.push_back(std::move(p));
     }
@@ -590,6 +738,17 @@ struct TexturePackShelf::Impl {
       y += 24 * s;
     };
     para(p.description, 16, color::kText);
+    {
+      // Task 221: what it changes, how it looks, what it goes well with, its size, what it needs.
+      std::string size;
+      if (p.kind == Kind::kHd || p.kind == Kind::kDownload) {
+        const content::Info& info = content::InfoFor(p.content_kind);
+        size = F(workshop_content::kSizeText, {Gb(info.zip_size), Gb(info.unpacked)});
+      }
+      std::string key = p.key;
+      if (p.kind == Kind::kMod && p.builtin) key = p.mod_id;
+      y = texpacks::DrawContentFacts(dl, key, size, p0.x, y - 4 * s, wrap, s);
+    }
     if (p.page && p.page->note) {
       // Its note (UHD: the owner's note about the look, 18 Oct), on the page as well as before the download.
       const std::string note = T(p.page->note);

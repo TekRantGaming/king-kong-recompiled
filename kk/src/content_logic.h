@@ -179,6 +179,7 @@ struct ZipEntry {
   uint64_t size = 0, packed = 0;
   uint32_t crc = 0;
   uint16_t method = 0;
+  uint64_t local = 0;  // its local header's offset (task 221: one entry read on its own)
   bool directory = false;
   bool link = false;  // a symbolic link (Unix mode in the external attributes)
 };
@@ -292,6 +293,7 @@ bool ReadZipDirectory(ReadAt&& read_at, uint64_t file_size, std::vector<ZipEntry
     const uint32_t mode = attributes >> 16;
     entry.link = (made_by >> 8) == 3 && (mode & 0170000) == 0120000;
     if (local >= file_size) return error = "bad entry offset", false;
+    entry.local = local;
     out.push_back(std::move(entry));
     at += 46 + name_len + extra_len + comment_len;
   }

@@ -27,6 +27,13 @@ namespace kk {
 class KongMods;
 struct WorkshopHost;
 
+namespace texpacks {
+// Task 221: the facts table of a texture pack's or built-in mod's page (workshop_content.h: what it changes, how
+// it looks, what it goes well with, `size` when not empty, what it needs) at x, y, `wrap` wide. Returns the y under it.
+float DrawContentFacts(ImDrawList* dl, const std::string& key, const std::string& size, float x, float y, float wrap,
+                       float s);
+}  // namespace texpacks
+
 class TexturePackShelf {
  public:
   // A card of the row (workshop.cpp draws the row the same way for its three rows).
