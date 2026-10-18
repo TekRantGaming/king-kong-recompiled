@@ -44,6 +44,11 @@ focus highlight, controller / keyboard / mouse prompts), over the frozen, dimmed
 - **Settings**: the launcher's Display, Graphics, Controls (with remapping) and Cheats pages, showing only what
   can change live. Changes apply at once and are saved like in the launcher.
 - Start in a cutscene still skips it (not a pause). Loading screens: no menu.
+- Extras (task 204): the Weta galleries get the same menu. The game itself leaves a gallery on Start
+  (IntMIG_wait asks for the start menu while G+0x5680, the Extras row, is set); the port hides the row from that
+  one check so the game's pause page opens. Galleries and the credits drop the save slot (G+0x4E10 = -1) after
+  loading the save's video modes, so there is no Save item and Quit has no save page. The alternate ending is a
+  normal level with the game's pause. Movies and the credits have no pause: Start skips them back to Extras.
 
 ### What changes elsewhere
 
