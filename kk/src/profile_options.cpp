@@ -123,16 +123,13 @@ bool SetProfileOptionsInAllSaves(const std::filesystem::path& root, const Profil
   }
   if (std::none_of(changed.begin(), changed.end(), [](bool b) { return b; })) return true;
   std::lock_guard lock(g_options_mutex);
-  auto allowed = [&](int slot) {
+  auto allowed = [&](int) {
     auto set = changed;
-    auto p = ReadExtraProgress(root, slot);
-    p.museum |= rex::cvar::GetFlagByName("kk_cheats") == "true" &&
-                rex::cvar::GetFlagByName("kk_cheat_bonus") == "true";
-    if (!ExtraUnlocked(*FindExtra(1), p)) set[5] = false;
-    if (!ExtraUnlocked(*FindExtra(8), p)) set[6] = false;
+    if (!BonusUnlocked(*FindExtra(1))) set[5] = false;
+    if (!BonusUnlocked(*FindExtra(8))) set[6] = false;
     return set;
   };
-  // Each save keeps its own bonus locks. A global option change cannot enable a locked mode.
+  // The two bonus video modes are unlocked for everyone (extras.h, BonusUnlocked): any save may take them.
   int live = -1;
   if (g_live_options.available && g_live_slot >= 0 && g_live_slot < kSlotCount) {
     live = g_live_slot;

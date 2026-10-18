@@ -12,8 +12,9 @@ struct CheatInfo {
   const char* code;   // the game's own code for it, shown for reference
 };
 
-constexpr std::array<CheatInfo, 9> kCheats = {{
-    {"bonus", "All bonus content", "KKmuseum"},
+// "All bonus content" (KKmuseum) is not offered any more: every bonus is unlocked for everyone (extras.h,
+// owner 18 Oct 2026), so its flag is always on (cheats.cpp, UnlockBonusContent). kk_cheat_bonus is ignored.
+constexpr std::array<CheatInfo, 8> kCheats = {{
     {"healing", "Fast healing (Jack)", "8wonder"},
     {"one_hit", "One-hit kills (bullets)", "GrosBras"},
     {"ammo", "999 bullets", "KK 999 mun"},
