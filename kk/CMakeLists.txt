@@ -54,6 +54,7 @@ set(KINGKONG_SOURCES
     src/hfr_fish.cpp
     src/hfr_sway.cpp
     src/hfr_cam_ground.cpp
+    src/fix_raptor_path.cpp
     src/online.cpp
     src/telemetry.cpp
     src/telemetry_upload.cpp
@@ -135,7 +136,7 @@ list(APPEND KINGKONG_SOURCES ${KK_PS2_DECODER})
 option(KK_DEV_TOOLS "Build developer test aids such as KK_DEV_AUTOSKIP" OFF)
 if(KK_DEV_TOOLS)
     list(APPEND KINGKONG_SOURCES src/dev_lod.cpp src/dev_aa.cpp)
-    list(APPEND KINGKONG_SOURCES src/dev_tools.cpp src/dev_watch.cpp src/dev_ae.cpp src/dev_sound_trace.cpp src/dev_load_trace.cpp src/dev_frame_log.cpp src/dev_sample.cpp src/dev_venture.cpp src/dev_chapter_jump.cpp src/dev_pause.cpp src/dev_fish.cpp src/dev_clock_trace.cpp src/dev_camera_start.cpp src/dev_game_watch.cpp)
+    list(APPEND KINGKONG_SOURCES src/dev_tools.cpp src/dev_watch.cpp src/dev_ae.cpp src/dev_sound_trace.cpp src/dev_load_trace.cpp src/dev_frame_log.cpp src/dev_sample.cpp src/dev_venture.cpp src/dev_chapter_jump.cpp src/dev_pause.cpp src/dev_fish.cpp src/dev_clock_trace.cpp src/dev_camera_start.cpp src/dev_game_watch.cpp src/dev_teleport.cpp src/dev_trig_trace.cpp)
 endif()
 
 if(WIN32)
@@ -211,7 +212,7 @@ endif()
 # The port's version: shown in the launcher and compared with GitHub releases by the updater.
 # (-DKK_VERSION=x.y.z overrides it, to test the updater with an "older" build.)
 if(NOT DEFINED KK_VERSION)
-    set(KK_VERSION "2.0.0-beta.9")
+    set(KK_VERSION "2.0.0-beta.10")
 endif()
 target_compile_definitions(king_kong PRIVATE KK_VERSION="${KK_VERSION}" KK_VERSION_W=L"${KK_VERSION}")
 execute_process(COMMAND git describe --always --dirty --abbrev=12 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"

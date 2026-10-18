@@ -6148,7 +6148,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     std::string body = pack
                            ? F("{0} is a {1} GB download. After that it is checked and unpacked. "
                                "Depending on your connection this takes from a few minutes to an hour or more.",
-                               {pack->name, Gb(info.zip_size)})
+                               {pack->title, Gb(info.zip_size)})
                        : tex ? F("The HD texture pack is a {0} GB download. After that it is checked and unpacked. "
                                "Depending on your connection this takes from a few minutes to an hour or more.",
                                {Gb(info.zip_size)})
@@ -6280,7 +6280,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         return content::Service::Get().Get(content::Kind::kImport).target == content::ImportTarget::kMod ? "Mod" : "Texture pack";
       default: {
         const content::ModPack* pack = content::ModPackFor(kind);  // a Workshop mod pack: its name
-        return pack ? pack->name : "";
+        return pack ? pack->title : "";
       }
     }
   }
@@ -6309,7 +6309,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     else buttons = {"Run in background"};
     const int background = mode <= 1 ? 1 : 0;
     const std::string title = importing ? (mod_import ? "Installing your mod" : "Installing your texture pack")
-                              : IsModPack(kind) ? "Downloading " + std::string(ModPackFor(kind)->name)  // its own text row
+                              : IsModPack(kind) ? "Downloading " + std::string(ModPackFor(kind)->title)  // its own text row
                               : tex     ? "Downloading the HD texture pack"
                                         : "Downloading the PS2 cutscenes";
     OpenModal(title,
@@ -6421,7 +6421,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     }
     if (st.stage == Stage::kInstalled) {
       std::string title = imported ? (mod_import ? "Mod installed" : "Texture pack installed")
-                          : IsModPack(kind) ? std::string(ModPackFor(kind)->name) + " installed"  // its own text row
+                          : IsModPack(kind) ? std::string(ModPackFor(kind)->title) + " installed"  // its own text row
                           : tex ? "HD texture pack installed" : "PS2 cutscenes restored";
       std::string body =
           mod_import ? F("{0} is in your mods folder. Switch it on in the Workshop's Mods row.", {st.installed_name})
@@ -6824,7 +6824,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
           // Task 212: a Workshop download or an import says its own name (it said the PS2 cutscenes before).
           const content::ModPack* pack = content::ModPackFor(kind);
           Status(tex ? std::string("The HD texture pack is installed and turned on.")
-                 : pack ? std::string(pack->name) + " installed"
+                 : pack ? std::string(pack->title) + " installed"
                  : kind == content::Kind::kImport
                      ? std::string(st.target == content::ImportTarget::kMod ? "Mod installed" : "Texture pack installed")
                      : std::string("The PS2 cutscenes are restored and turned on."));

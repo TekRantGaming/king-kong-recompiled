@@ -41,11 +41,12 @@ constexpr bool Quiet(Kind kind) { return kind == Kind::kArtbook; }
 struct ModPack {
   Kind kind;
   const char* key;   // the Workshop card's key and dev-step name ("uhd" -> card "uhd", step download-uhd)
-  const char* name;  // the mod folder and the name in its mod.toml
+  const char* name;   // the mod folder and the name in its mod.toml (matches the downloaded ZIP)
+  const char* title;  // what players see (owner, 18 Oct: the comic pack is "Comic Book Texture Pack")
 };
 inline constexpr ModPack kModPacks[] = {
-    {Kind::kUhd, "uhd", "Kong UHD Textures"},
-    {Kind::kComic, "comic", "Kong Comic Book"},
+    {Kind::kUhd, "uhd", "Kong UHD Textures", "Kong UHD Textures"},
+    {Kind::kComic, "comic", "Kong Comic Book", "Comic Book Texture Pack"},
 };
 constexpr const ModPack* ModPackFor(Kind kind) {
   for (const ModPack& p : kModPacks)

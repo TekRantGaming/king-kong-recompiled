@@ -3,10 +3,17 @@
 Every release of the King Kong PC port, newest first. The launcher shows this on its About page, and a
 version's notes the first time you start it.
 
-## v2.0.0-beta.10 (unreleased)
+## v2.0.0-beta.10 (18 October 2026)
+
+**Beta 10**: an emergency fix update, from the beta channel (**About** > **Change version**). Your saves and settings are kept. Windows only for this beta.
 
 ### Fixed
 - **Jack's arm and what he holds flickered with an upscaler on** (DLSS, FSR or XeSS). In some places, for example in the Hayes chapter, parts of the arm and of the gun, spear, bone or lever turned into flat patches in the colour of the fog for single frames. They are now drawn whole.
+- **A bug from the original game in the Hayes chapter**: the raptor that runs round to attack the sailor could stop for good on a ledge near the stone stairs, out of reach, so it could never be killed and Hayes never came down. Players often hit it with the machine gun cheat on, but it can also happen without any cheat. A raptor that stands still on its path there now carries on along it, so the fight always ends.
+
+### Changed
+- **Kong Comic Book is now called Comic Book Texture Pack** in the Workshop.
+- **More shader data from players**: the list of graphics pipelines prepared at setup now includes those collected from players, so fewer short pauses the first time new effects appear.
 
 ## v2.0.0-beta.9 (18 October 2026)
 
@@ -17,7 +24,7 @@ version's notes the first time you start it.
 - **Photo mode** in the pause menu: the game stays paused while you fly a free camera around (left stick and right stick, triggers down and up, or W A S D and the mouse), with roll and field of view. Jack's floating arms and the HUD are hidden. Looks (black and white, sepia, tints), exposure, contrast, saturation, white balance, depth of field, vignette, film grain, letterbox bars and a mirror, plus cel shading, sharpening, brightness and gamma for the picture only. **A** (Enter) saves a full-resolution picture without any menus in the screenshots folder of your user data. Nothing you change in photo mode is kept or changes your settings.
 - **Texture packs in the Workshop**: every texture pack you have is a card with its picture, name, author and version and a clear **Enabled**, **Disabled** or **Not installed** badge: the original textures, the HD texture pack, **Kong UHD Textures** (new, a download in the Workshop), packs you imported and your own folder. Select a card for its page: Enable or Disable, Download, Remove (it asks first), its credits. **Only one texture pack is on at a time**: switching one on switches the one before off, everywhere (the Workshop, Settings > Graphics, the pause menu, after a download or import). Settings from an older version with several packs on keep one.
 - **Kong UHD Textures**: every texture at up to four times its resolution, with real photographed materials for rock, moss, ground, wood and more. Its page says plainly, before the download starts, that some of its materials were not made for this game, so the game will not look exactly as its developers intended.
-- **Kong Comic Book**: a comic book style texture pack, a second download in the Workshop's Texture packs row. We recommend also enabling the Cel shading mod: its page has a button that switches it on.
+- **Comic Book Texture Pack**: a comic book style texture pack, a second download in the Workshop's Texture packs row. We recommend also enabling the Cel shading mod: its page has a button that switches it on.
 - **Import texture pack** and **Import mod** buttons in the Workshop, for ZIP files laid out as MODDING.md describes. The ZIP is checked first: if something is wrong (no mod.toml, no pack.txt, folders where they are not allowed, a mod given to the texture pack button), it says what, and nothing is installed or changed. An imported texture pack keeps its name, picture and credits and becomes the one texture pack on; it never replaces the HD texture pack. A long import shows how far it is and can be cancelled. **Build your own mods and texture packs** opens the website's Mods page with the modding tools.
 - **Performance metrics** replace the frame counter (Settings > Display > Overlay, or **F2** while playing): Off, FPS only, or Full with a frame time graph, the graphics card's load, temperature, clock and memory, the processor and memory use, the graphics API and the upscaler. A frame counter that was on becomes FPS only.
 
