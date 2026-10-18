@@ -227,7 +227,7 @@ struct Item {
   float value = 0, lo = 0, hi = 1, step = 1;
   // Shown on the right (for kSlider, the formatted value).
   std::string value_text;
-  ImU32 value_color = 0;  // 0: the default color
+  ImU32 value_color = 0;  // 0: the default color (a section: its caption's colour)
   bool disabled = false;
   std::string disabled_note;  // why, in the description panel
   std::string default_text;   // "Default: ..." in the description panel

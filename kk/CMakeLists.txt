@@ -352,6 +352,11 @@ if(KK_DEV_TOOLS)
     target_include_directories(kk-perf-overlay-tests PRIVATE src ../native-renderer)
     rexglue_apply_target_settings(kk-perf-overlay-tests)
     add_test(NAME picture-and-metrics COMMAND kk-perf-overlay-tests)
+    # Task 222: the pause menu's layout (option A): entries, order, names, the quiet group, LB / RB.
+    add_executable(kk-pause-menu-tests tests/pause_menu_tests.cpp)
+    target_include_directories(kk-pause-menu-tests PRIVATE src)
+    target_compile_features(kk-pause-menu-tests PRIVATE cxx_std_20)
+    add_test(NAME pause-menu-layout COMMAND kk-pause-menu-tests)
     # Task 219: HDR follows Windows (the default decision, the calibration profile's brightness, automatic
     # levels; prints what this PC's screen reports) and the setup's comparison pictures made from the game files.
     add_executable(kk-hdr-tests tests/hdr_tests.cpp src/hdr_display.cpp)

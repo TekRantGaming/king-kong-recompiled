@@ -1,7 +1,9 @@
-// The port's pause menu (docs/menus.md, "In game: the pause menu"): drawn in the launcher's style
-// over the frozen, dimmed game frame while play::PauseMenuOpen(). Resume, Start again, Score,
-// Options and Quit game run the game's own items (play::RunPauseAction); Settings shows the
-// launcher's pages with only the rows that change live (ingame_settings.h).
+// The port's pause menu (docs/menus.md, "In game: the pause menu"; task 222, the owner's option A): a slim list
+// on the left over the paused, dimmed game while play::PauseMenuOpen(): Resume, Photo mode, the settings pages
+// (Display, Graphics, Audio, Controls, Gameplay: the launcher's rows, ingame_settings.h, each on its own page with
+// the rows that can't change while playing in a greyed "Change from the main menu" group), then the game's own
+// items (Restart chapter, Score, Save) and Quit to main menu / Quit game (play::RunPauseAction). A description
+// strip at the bottom left; layout logic in pause_menu_logic.h.
 
 #pragma once
 

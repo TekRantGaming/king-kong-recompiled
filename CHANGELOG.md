@@ -15,6 +15,7 @@ version's notes the first time you start it.
 
 ### Changed
 - **Every setting explains itself.** The panel beside the settings, in the launcher and in the pause menu, now says what each setting does, what you will notice in the game, what each option changes, and shows its performance and video memory impact and when a change takes effect. In five languages.
+- **New pause menu.** A slim list on the left over the paused game: Resume, Photo mode, Display, Graphics, Audio, Controls, Gameplay, Restart chapter and Quit to main menu. Each settings entry opens its own page, with the settings you can't change while playing greyed at the bottom under **Change from the main menu**. A strip at the bottom says what the selected item does. Works with a controller, keyboard and mouse.
 
 ## v2.0.0-beta.10 (18 October 2026)
 
