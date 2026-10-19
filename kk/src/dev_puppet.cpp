@@ -227,7 +227,7 @@ struct State {
   }
   bool Environment(const uint8_t* b, uint32_t w) const {
     return ready && !loading && w == world && Range(game, 28) &&
-           Load32(b, 0x82CC97C0) == game && Load32(b, 0x828E8378) == world &&
+           Load32(b, 0x82CC97C0) == game &&  // 0x828E8378 is not the world (Claude, run 14:25)
            Load32(b, game + 8) == level && Load32(b, game + 4) == 0 &&
            Load32(b, 0x82CCBF7C) == hero && !play::StartLevelLoading();
   }
@@ -402,6 +402,13 @@ void DevPuppetBeforeAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
     s.Abort("world-or-hero-unavailable-after-load"); return;
   }
   if (!s.Environment(b, w)) {
+    static int why = 0;
+    if (s.ready && why++ < 3)
+      REXLOG_INFO("PUPPET env-fail w={:08X} s.world={:08X} game={:08X}/{:08X} world828E8378={:08X} level={}/{} "
+                  "game+4={} hero={:08X}/{:08X} startloading={}", w, s.world, Load32(b, 0x82CC97C0), s.game,
+                  Load32(b, 0x828E8378), Range(s.game, 28) ? Load32(b, s.game + 8) : 0, s.level,
+                  Range(s.game, 28) ? Load32(b, s.game + 4) : 0, Load32(b, 0x82CCBF7C), s.hero,
+                  play::StartLevelLoading());
     if (s.ready) { s.Abort("world-level-load-or-hero-changed"); s.humans.clear(); s.ready = false; }
     return;
   }
