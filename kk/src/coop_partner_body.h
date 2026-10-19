@@ -4,7 +4,8 @@
 
 namespace kk {
 // Game-thread body service, included in shipping builds. Dev selectors use the
-// same census, lifetime checks and driver; spawn/probes remain KK_DEV_TOOLS only.
+// same census, lifetime checks and driver. Auto can use a native rigid copy;
+// explicit spawn selectors and rendering probes remain KK_DEV_TOOLS only.
 void PartnerBodyGameFrame(uint8_t* base);
 void PartnerBodyBeforeLoad();
 void PartnerBodyAfterLoad(const uint8_t* base, uint32_t game);

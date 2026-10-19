@@ -1,5 +1,5 @@
 // Shared partner body service. Automatic borrowing is the shipping default.
-// No transport calls, actor spawning or save writes in the automatic path.
+// No transport calls or save writes. Native copies are the last visible fallback.
 // KK_DEV_PUPPET=scan (or 1), borrow:nearest[:<max guest units>],
 // borrow:index:<zero-based active-table index>[:<action>:<item>], or the legacy
 // borrow:<hex key>:<ordinal>[:<action>:<item>]. Indices belong to the current epoch.
@@ -51,11 +51,12 @@ REX_EXTERN(__imp__sub_82711278);
 REX_EXTERN(__imp__sub_82401AA8);
 REX_EXTERN(__imp__sub_82850100);
 REX_EXTERN(__imp__sub_823F8AF0);
-#if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_82715AC8);
+REX_EXTERN(__imp__sub_826ECDF8);
+#if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_826EB8C0);
-REX_EXTERN(__imp__sub_8284B028);
 #endif
+REX_EXTERN(__imp__sub_8284B028);
 REX_EXTERN(__imp__sub_82881B70);
 REX_EXTERN(__imp__sub_82454690);
 REX_EXTERN(__imp__sub_8271E4E8);
@@ -206,7 +207,7 @@ bool ReadTracks(const uint8_t* b, Rig& r) {
     if (!Range(block, 24)) return false;
     const uint32_t fn = Load32(b, block + 20);
     r.tracks += fmt::format("{}{}:{:08X}@{:08X}", t == first ? "" : "|", t, fn, block);
-    r.dead_track |= fn == 0x826B95A0;  // H_ETAT_IA_mort (pause_hooks.cpp).
+    r.dead_track |= fn == 0x826B95A0 || fn == 0x826F7AD0;  // H / PNJInd death.
     r.following |= fn == 0x826C3A98;  // H_ETAT_IA_suivi.
     r.cinematic |= fn == 0x826C3668 || fn == 0x826ABE88 || fn == 0x826AB3A8 ||
         fn == 0x826AAF18 || fn == 0x826AC808;
@@ -339,6 +340,7 @@ struct Observation {
   bool bound = false;
   bool observed_ally = false;
   bool scheduled = false;
+  bool other_human = false;  // Natural PNJInd_Init, never inferred from a rig.
   std::set<uint32_t> actions;
   // Separate idle/moving examples of each tuple; never learn from a driven body.
   std::map<uint32_t, coop::puppet::Action> motion;
@@ -364,9 +366,13 @@ struct State {
   bool finish_pending = false, measure = false, transition_pending = false;
   bool partner_eligible = false, prepared = false;
   bool combat_publishing = false;
+  bool selected_copy = false;
+  int selected_tier = -1;
   unsigned missing_action_kind = 0;
   std::set<uint32_t> retired;
-  Clock::time_point retry_at{};
+  std::map<uint32_t, std::pair<uint32_t, uint32_t>> deferred_prg;
+  std::map<uint32_t, Clock::time_point> story_cooldown;
+  Clock::time_point retry_at{}, copy_wait_until{};
   uint64_t frame = 0, updated_frame = ~uint64_t{0}, updates = 0;
   coop::PuppetSnapshot partner;
   std::vector<coop::puppet::Action> observed_motion;
@@ -394,9 +400,9 @@ struct State {
     driving = false; finish_pending = false; measure = false; terminal = true;
     if (Opt().partner) {
       coop::SetPartnerBodyDriven(false);
-      REXLOG_INFO("PUPPET partner released reason={} epoch={} actor={:08X} held={} passed={} updates={}",
-                  reason, epoch, selected.actor, held, passed, updates);
-      if (Opt().spawn) {
+      REXLOG_INFO("PUPPET partner released reason={} epoch={} actor={:08X} tier={} copy={} held={} passed={} updates={} AI-resumes-at-current-spot={}",
+                  reason, epoch, selected.actor, selected_tier, selected_copy, held, passed, updates, !selected_copy);
+      if (Opt().spawn || selected_copy) {
         REXLOG_INFO("PUPPET spawn {} reason={} epoch={} actor={:08X} no-free script-quarantine={}",
                     selected.actor ? "released" : "refused", reason, epoch, selected.actor,
                     Opt().spawn_mode == Options::SpawnMode::Free ? "DISABLED-UNSAFE" : "until-unload");
@@ -406,9 +412,11 @@ struct State {
                   reason, epoch, selected.actor, held, passed);
     }
     selected = {};
+    selected_copy = false; selected_tier = -1;
     if (Opt().automatic) {
       terminal = attempted = false;
       retry_at = Clock::now() + std::chrono::seconds(1);
+      copy_wait_until = retry_at + std::chrono::milliseconds(250);
       // Replacements need fresh continuous membership. A census frozen during
       // driving must not certify that another actor stayed loaded all along.
       for (auto& [actor, obs] : humans) {
@@ -433,7 +441,7 @@ struct State {
   }
   bool Validate(const uint8_t* b, uint32_t w, Rig& now) {
     if (!Environment(b, w)) { Abort("world-level-load-or-hero-changed"); return false; }
-    if (Opt().spawn) {
+    if (Opt().spawn || selected_copy) {
       bool own = false;
       for (const auto& body : spawned) own |= body.rig.actor == selected.actor && SpawnIdentity(b, body);
       if (!own) { Abort("spawn-identity-changed"); return false; }
@@ -441,16 +449,15 @@ struct State {
     const auto it = humans.find(selected.actor);
     Rig jack;
     if (it == humans.end() || it->second.generation != selected_generation ||
-        !(Opt().spawn ? Registered(b, w, selected.actor) : Opt().automatic ?
+        !((Opt().spawn || selected_copy) ? Registered(b, w, selected.actor) : Opt().automatic ?
           AutoMembership(b, w, selected) : Member(b, w, selected.actor)) ||
         !ReadRig(b, selected.actor, now) || !Same(now, selected) ||
         !ReadRig(b, hero, jack) || *Qualify(b, now, jack) || !LegalAction(b, now, action)) {
       if (Opt().automatic) retired.insert(selected.actor);
       Abort("selection-identity-or-rig-changed"); return false;
     }
-    if (Opt().automatic) {
+    if (Opt().automatic && !selected_copy) {
       if (const char* reason = AutoSafety(b, w, now)) {
-        retired.insert(selected.actor);
         Abort(reason); return false;
       }
     }
@@ -639,7 +646,6 @@ float Frame(PPCContext& ctx, uint8_t* b, uint32_t actor) {
 
 // 82712D40 (.77:28379) and 82715438 (.32:28175): source, instance,
 // bookkeeping, in-use in each 16-byte record. Never change pool metadata here.
-#if defined(KK_DEV_TOOLS)
 constexpr uint32_t kPool = 0x82CC3100, kPoolCount = 0x82CCBFCC;
 constexpr uint32_t kCreationWorld = 0x828E8388, kCreating = 0x82CCAAAC;
 uint32_t Model(const uint8_t* b, uint32_t ai) { return Ptr(b, ai, 0, 16); }
@@ -727,7 +733,12 @@ uint32_t FindTemplate(const uint8_t* b, const Rig& source, uint32_t count) {
 
 bool SpawnCopy(PPCContext& ctx, uint8_t* b, uint32_t w, const Rig& source, const Rig& jack, Rig& copy) {
   auto& s = Get();
-  auto refuse = [&](const char* reason) { DevPuppetVariantReset(); s.Abort(reason); return false; };
+  auto refuse = [&](const char* reason) {
+#if defined(KK_DEV_TOOLS)
+    DevPuppetVariantReset();
+#endif
+    s.Abort(reason); return false;
+  };
   // This routine is called only from CensusAndSelect in BeforeAi, with the
   // caller, load+5s, scratch and one-attempt gates applied. Without an offset,
   // Connected/same-level gates also apply; offset mode uses the local environment.
@@ -781,7 +792,9 @@ bool SpawnCopy(PPCContext& ctx, uint8_t* b, uint32_t w, const Rig& source, const
   uint32_t actor = 0;
   {
     Scratch scratch(ctx, b);
+#if defined(KK_DEV_TOOLS)
     DevPuppetVariantBegin(b, source.actor, t, s.epoch);
+#endif
     ctx.r3.u64 = t; ctx.r4.u64 = scratch.Vector(position, 0x100);
     __imp__sub_82715AC8(ctx, b);
     actor = ctx.r3.u32;
@@ -797,10 +810,12 @@ bool SpawnCopy(PPCContext& ctx, uint8_t* b, uint32_t w, const Rig& source, const
   REXLOG_INFO("PUPPET spawn allocated actor={:08X} template={:08X} via={} epoch={} quarantine={} no-free",
               actor, t, pooled ? "pool" : "duplicate", s.epoch,
               Opt().spawn_mode == Options::SpawnMode::Free ? "DISABLED-UNSAFE" : "registered");
+#if defined(KK_DEV_TOOLS)
   DevPuppetMeshSpawnFixPreflight(b, source.actor, actor, s.epoch);
   // Arm read-only diagnostics even if an unseeded rig fails a later guard.
   // Free/hold deliberately retain the engine's initial action (possibly -1).
   if (PassiveSpawn()) DevPuppetMeshArm(b, source.actor, actor, s.epoch);
+#endif
   if (!copy.vars || copy.ai == source.ai || copy.ai == jack.ai ||
       copy.vars == source.vars || copy.vars == jack.vars) return refuse("creation-AI-not-independent");
   if (!coop::puppet::Independent(Mutable(copy), Mutable(source)) ||
@@ -815,10 +830,12 @@ bool SpawnCopy(PPCContext& ctx, uint8_t* b, uint32_t w, const Rig& source, const
   }
   if (Model(b, copy.ai) != Model(b, source.ai) || copy.table != source.table ||
       Load32(b, copy.anim + 4) != Load32(b, source.anim + 4)) return refuse("creation-resource-lineage-mismatch");
+#if defined(KK_DEV_TOOLS)
   {
     Scratch scratch(ctx, b);
     DevPuppetVariantEnd(ctx, b, actor, w);
   }
+#endif
   // 8286D690 (.57) resets the new animation action to -1. Only drive mode
   // seeds an observed tuple and uses the normal facing/position setters.
   if (!PassiveSpawn()) {
@@ -847,14 +864,12 @@ bool SpawnCopy(PPCContext& ctx, uint8_t* b, uint32_t w, const Rig& source, const
   REXLOG_INFO("PUPPET spawn trigger-policy={} CapaBit=ext+40 life=stimulus-test universal-exclusion=unproven no-capability-or-life-writes",
       Opt().spawn_mode == Options::SpawnMode::Free ? "pass-through-UNSAFE" : "filter-ObjOfAIModelInBV-only");
   REXLOG_INFO("PUPPET spawn source actor={:08X} ai={:08X} identity-transform-action=unchanged scheduled-dispatch=pass-through", source.actor, source.ai);
+#if defined(KK_DEV_TOOLS)
   if (!PassiveSpawn()) DevPuppetMeshArm(b, source.actor, actor, s.epoch);
+#endif
   return true;
 }
 
-#else
-bool SpawnIdentity(const uint8_t*, const Spawned&) { return false; }
-bool IsSpawned(uint32_t) { return false; }
-#endif
 
 struct ScriptEvidence {
   bool complete = false;
@@ -863,6 +878,8 @@ struct ScriptEvidence {
   // Actor -> first external owner retaining a reference. Scan every owner's
   // declared vars, not guessed object memory. Self references do not count.
   std::map<uint32_t, uint32_t> references;
+  std::set<uint32_t> current_references;
+  std::map<uint32_t, uint32_t> mission_distance;
   uint32_t skipped = 0;  // owners whose layout could not be read
 };
 ScriptEvidence script_evidence;
@@ -943,16 +960,30 @@ void RefreshScriptEvidence(const uint8_t* b, uint32_t world) {
   script_evidence.failure = "none"; script_evidence.owner = 0;
   RefreshRegistryEvidence(b, world);
 }
-coop::puppet::AutoCandidate AutoFacts(const Rig& r, bool valid, bool stable, float distance) {
+coop::puppet::AutoCandidate AutoFacts(const uint8_t* b, const Rig& r, bool valid, bool stable, float distance) {
   coop::puppet::AutoCandidate c;
   c.actor = r.actor; c.distance = distance;
-  c.natural_h = Get().humans.count(r.actor) != 0;
+  const auto observation = Get().humans.find(r.actor);
+  c.natural_h = observation != Get().humans.end() && !observation->second.other_human;
+  c.other_human = observation != Get().humans.end() && observation->second.other_human;
   c.rig_valid = valid; c.stable = stable;
   c.hero = r.actor == Get().hero;
-  c.ann = r.ann; c.dead = r.dead_track; c.grabbed = r.grabbed;
+  // Protect H's Ann slot even during shared H_CINE tracks, when no Ann-named
+  // callback is active. H_init uses vars+4 as the shared human registry slot.
+  c.ann = r.ann || (c.natural_h && Load32(b, r.vars+4) == 2);
+  c.dead = r.dead_track; c.grabbed = r.grabbed;
   c.following = r.following; c.cinematic = r.cinematic;
   c.script_evidence_complete = script_evidence.complete;
   c.script_reference = script_evidence.references.count(r.actor) != 0;
+  c.current_script_use = script_evidence.current_references.count(r.actor) != 0;
+  if (const auto it = Get().deferred_prg.find(r.actor); it != Get().deferred_prg.end()) {
+    const auto [vars, index] = it->second;
+    c.current_script_use |= Range(vars, 19820) && Load32(b, vars+19812) == index;
+  }
+  if (const auto it = Get().story_cooldown.find(r.actor); it != Get().story_cooldown.end())
+    c.current_script_use |= Clock::now() < it->second;
+  if (const auto it = script_evidence.mission_distance.find(r.actor); it != script_evidence.mission_distance.end())
+    c.mission_distance = it->second;
   const auto& e = registry_evidence;
   const auto member = e.members.find(r.actor), scheduled = e.scheduled.find(r.actor);
   c.scheduled = scheduled != e.scheduled.end() && scheduled->second == 1;
@@ -968,8 +999,9 @@ coop::puppet::AutoCandidate AutoFacts(const Rig& r, bool valid, bool stable, flo
     c.kind = coop::puppet::HumanKind::Ally;
   return c;
 }
-const char* AutoSafety(const uint8_t*, uint32_t, const Rig& r) {
-  return coop::puppet::AutoReject(AutoFacts(r, true, true, 0));
+const char* AutoSafety(const uint8_t* b, uint32_t, const Rig& r) {
+  const auto f = AutoFacts(b, r, true, true, 0);
+  return Get().selected_tier < 4 ? coop::puppet::AutoReject(f) : coop::puppet::FallbackReject(f);
 }
 bool AutoMembership(const uint8_t* b, uint32_t world, const Rig& r) {
   return Member(b, world, r.actor) ||
@@ -1084,29 +1116,66 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
   float closest = Opt().max_units;
   bool tied = false;
   std::vector<coop::puppet::AutoCandidate> facts;
+  Candidate hands_source;
   if (Opt().automatic) {
     for (const auto& c : candidates) {
-      auto f = AutoFacts(c.rig, !*c.reason && !s.retired.count(c.rig.actor),
+      auto f = AutoFacts(b, c.rig, !*c.reason && !s.retired.count(c.rig.actor),
           s.humans.at(c.rig.actor).stable >= 1, Distance(c.rig.pos, jack.pos));
       facts.push_back(f);
       if (log) REXLOG_INFO("PUPPET auto candidate epoch={} index={} actor={:08X} score={} tier={} scheduled={} registry-unclaimed={} movement-and-draw-confirmed={} kind={} distance={:.3f} external-ref={:08X} reason={}",
-          s.epoch, c.index, f.actor, coop::puppet::AutoScore(f), coop::puppet::AutoTier(f),
+          s.epoch, c.index, f.actor, coop::puppet::BodyScore(f), coop::puppet::BodyTier(f),
           f.scheduled, f.registry_unclaimed, f.unscheduled_setters_and_draw_confirmed,
           f.kind == coop::puppet::HumanKind::Ally ? "observed-ally" : "unknown", f.distance,
           script_evidence.references.count(f.actor) ? script_evidence.references.at(f.actor) : 0,
-          coop::puppet::AutoReject(f) ? coop::puppet::AutoReject(f) : "no-declared-script-reference");
+          coop::puppet::BodyTier(f) >= 0 ? "eligible" : coop::puppet::FallbackReject(f));
     }
-    if (const auto best = coop::puppet::SelectAuto(facts)) pick = &candidates[*best];
+    if (const auto best = coop::puppet::SelectBody(facts)) pick = &candidates[*best];
     if (!pick) {
-      REXLOG_INFO("PUPPET auto no-body epoch={} level={} candidates={} scripts-complete={} skipped-owners={} marker-only=true",
-          s.epoch, s.level, candidates.size(), script_evidence.complete, script_evidence.skipped);
-      s.attempted = false; s.retry_at = now + std::chrono::seconds(1);
-      return;
+      // Tier C: copy an intact natural human even when its story state prevents
+      // borrowing. Native duplication preserves the original; rigid head/props
+      // are an accepted visible stand-in until full skin copies are repaired.
+      for (const auto& c : candidates) {
+        const auto& o = s.humans.at(c.rig.actor);
+        if (*c.reason || o.other_human || AutoFacts(b, c.rig, true, true, 0).ann || c.rig.dead_track || c.rig.grabbed ||
+            o.stable < 1 || s.retired.count(c.rig.actor)) continue;
+        if (!pick || Distance(c.rig.pos, jack.pos) > Distance(pick->rig.pos, jack.pos)) pick = &c;
+      }
+      // The one-second retry may precede a full second of simulation samples
+      // by one or two frames. Give a level-human copy source a bounded grace
+      // interval before choosing Jack's arms (which can be outside a cinematic
+      // camera). Never relax the source's identity/stability requirement.
+      if (!pick && now < s.copy_wait_until) {
+        s.attempted = false; s.retry_at = now + std::chrono::milliseconds(100);
+        return;
+      }
+      if (!pick && jack_ok && Active(b, jack) && LegalAction(b, jack, jack.action)) {
+        // If this chapter has no other usable human, duplicate Jack's loaded
+        // rig as a hands/rigid-parts stand-in. The hero itself is never leased.
+        hands_source = {jack, 0, 0, ~0u, ""};
+        pick = &hands_source;
+        auto& observation = s.humans[s.hero];
+        if (!observation.bound) {
+          observation.rig = jack; observation.bound = true;
+          observation.generation = ++s.generation;
+          observation.other_human = true;  // No fabricated H initialization.
+        }
+        observation.actions.insert((jack.action << 8) | jack.item);
+      }
+      if (!pick) {
+        REXLOG_INFO("PUPPET auto no-body epoch={} level={} candidates={} scripts-complete={} skipped-owners={} reason=no-intact-non-Ann-copy-source",
+            s.epoch, s.level, candidates.size(), script_evidence.complete, script_evidence.skipped);
+        s.attempted = false; s.retry_at = now + std::chrono::seconds(1);
+        return;
+      }
+      s.selected_tier = 6;
+    } else {
+      s.selected_tier = coop::puppet::BodyTier(facts[pick-candidates.data()]);
     }
-    const auto& chosen = facts[pick-candidates.data()];
+    const auto chosen = pick == &hands_source ? coop::puppet::AutoCandidate{} : facts[pick-candidates.data()];
     REXLOG_INFO("PUPPET auto pick epoch={} level={} actor={:08X} index={} score={} tier={} reason={} scheduled={} kind={}",
-        s.epoch, s.level, pick->rig.actor, pick->index, coop::puppet::AutoScore(chosen),
-        coop::puppet::AutoTier(chosen), coop::puppet::AutoTierReason(chosen), chosen.scheduled,
+        s.epoch, s.level, pick->rig.actor, pick->index, coop::puppet::BodyScore(chosen),
+        s.selected_tier, s.selected_tier == 6 ? "C-native-rigid-copy" : s.selected_tier == 5 ? "B-PNJInd-human-rig" :
+        s.selected_tier == 4 ? "A-story-human-temporary-lease" : coop::puppet::AutoTierReason(chosen), chosen.scheduled,
         chosen.kind == coop::puppet::HumanKind::Ally ? "observed-ally" : "unknown");
   }
   for (const auto& c : candidates) {
@@ -1124,7 +1193,8 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
     }
   }
   if (!pick || tied) { s.Abort(tied ? "ambiguous-selector" : "no-qualified-selector-within-limit"); return; }
-  if (!(Opt().automatic ? AutoMembership(b, w, pick->rig) : Member(b, w, pick->rig.actor))) {
+  if (!(Opt().automatic && s.selected_tier == 6 ? Registered(b, w, pick->rig.actor) :
+        Opt().automatic ? AutoMembership(b, w, pick->rig) : Member(b, w, pick->rig.actor))) {
     s.Abort("duplicate-or-unconfirmed-membership"); return;
   }
   auto& obs = s.humans.at(pick->rig.actor);
@@ -1134,9 +1204,15 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
     s.Abort("action-item-not-naturally-observed-on-this-rig"); return;
   }
   Rig selected = pick->rig;
-#if defined(KK_DEV_TOOLS)
-  if (Opt().spawn && !SpawnCopy(ctx, b, w, pick->rig, jack, selected)) return;
-#endif
+  s.selected_copy = Opt().spawn || (Opt().automatic && s.selected_tier == 6);
+  if (s.selected_copy) {
+    bool reused = false;
+    if (Opt().automatic) for (const auto& copy : s.spawned) {
+      if (SpawnIdentity(b, copy) && ReadRig(b, copy.rig.actor, selected) &&
+          Same(selected, copy.rig) && !*s.Qualify(b, selected, jack)) { reused = true; break; }
+    }
+    if (!reused && !SpawnCopy(ctx, b, w, pick->rig, jack, selected)) return;
+  }
   if (PassiveSpawn()) {
     s.terminal = true;
     REXLOG_INFO("PUPPET spawn diagnostic-only actor={:08X} mode={} no-post-create-setters no-animation-requests",
@@ -1144,7 +1220,7 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
     return;
   }
   s.selected = selected; s.selected_generation = s.humans.at(selected.actor).generation;
-  if (Opt().spawn) { s.action = selected.action; s.item = selected.item; }
+  if (s.selected_copy) { s.action = selected.action; s.item = selected.item; }
   if (Opt().partner) {
     s.observed_motion.clear();
     for (const auto& [key, sample] : obs.motion) {
@@ -1194,7 +1270,7 @@ void PartnerBodyBeforeLoad() {
   auto& s = Get();
   if (s.driving || s.finish_pending) s.Abort("level-load-started");
   s.selected = {}; s.humans.clear(); s.keys.clear(); ++s.epoch;
-  s.retired.clear(); s.retry_at = {};
+  s.retired.clear(); s.deferred_prg.clear(); s.story_cooldown.clear(); s.retry_at = {}; s.copy_wait_until = {};
   script_evidence = {};
   registry_evidence = {};
   if (!s.spawned.empty()) REXLOG_INFO("PUPPET spawn unload count={} no-free script-quarantine=cleared", s.spawned.size());
@@ -1345,7 +1421,7 @@ void PartnerBodyAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   // Full H Post/AI remains held. Refresh only its audited perception publisher
   // under the body's native context, after committing the driven transform.
   const auto link = coop::EnemyLinkSnapshot();
-  if (Opt().partner && !Opt().spawn && link.connected && link.role == coop::Role::Host && coop::EnemyPartnerCombatReady() &&
+  if (Opt().partner && !s.selected_copy && !s.humans.at(rig.actor).other_human && link.connected && link.role == coop::Role::Host && coop::EnemyPartnerCombatReady() &&
       Range(rig.vars, 5152) && Range(Load32(b, 0x82CC9C30), 7144) &&
       Load32(b, rig.vars+4) >= 1 && Load32(b, rig.vars+4) <= 12) {
     Scratch scratch(ctx, b);
@@ -1412,7 +1488,7 @@ void PartnerBodyLateWorld(PPCContext& ctx, uint8_t* b, uint32_t w) {
 }
 
 // Natural init observation only. Never invoke H init to qualify an actor.
-void PuppetObserveInit(uint8_t* b, uint32_t actor, uint32_t ai) {
+void PuppetObserveInit(uint8_t* b, uint32_t actor, uint32_t ai, bool other_human = false) {
   if (!Enabled()) return;
   auto& s = Get();
   if (s.driving && actor == s.selected.actor) {
@@ -1429,6 +1505,7 @@ void PuppetObserveInit(uint8_t* b, uint32_t actor, uint32_t ai) {
   // identity on its first valid census, without losing this natural H proof.
   Observation observation;
   observation.rig = rig; observation.generation = ++s.generation;
+  observation.other_human = other_human;
   s.humans[actor] = std::move(observation);
 }
 #if defined(KK_DEV_TOOLS)
@@ -1438,8 +1515,9 @@ void PuppetObserveSpawner(uint8_t* b, uint32_t actor, uint32_t ai) {
   const uint32_t vars = Ptr(b, ai, 64, 8380);
   if (vars) Get().spawners[actor] = {ai, vars};
 }
+#endif
 bool HoldSpawned(PPCContext& ctx, uint8_t* b) {
-  if (!Opt().spawn || Opt().spawn_mode == Options::SpawnMode::Free || uint32_t(ctx.lr) != 0x8271D304) return false;
+  if (Opt().spawn_mode == Options::SpawnMode::Free || uint32_t(ctx.lr) != 0x8271D304) return false;
   auto& s = Get();
   const uint32_t actor = Load32(b, 0x82CCBF6C), ai = Load32(b, 0x82CCBF64);
   for (auto& body : s.spawned) {
@@ -1462,7 +1540,7 @@ bool HoldSpawned(PPCContext& ctx, uint8_t* b) {
   return false;
 }
 void FilterSpawnedTrigger(PPCContext& ctx, uint8_t* b, uint32_t output, uint32_t capacity) {
-  if (!Opt().spawn || Opt().spawn_mode == Options::SpawnMode::Free || capacity != 32 || ctx.r3.s32 <= 0 || ctx.r3.u32 > capacity ||
+  if (Opt().spawn_mode == Options::SpawnMode::Free || capacity != 32 || ctx.r3.s32 <= 0 || ctx.r3.u32 > capacity ||
       !Range(output, 4*capacity)) return;
   // Only called for TrigTest_ObjOfAIModelInBV's query return 8245D334.
   // .92: query with r4=32, r9=stack output; then loop over r3 actor pointers.
@@ -1478,11 +1556,8 @@ void FilterSpawnedTrigger(PPCContext& ctx, uint8_t* b, uint32_t output, uint32_t
   ctx.r3.u64 = kept;
   REXLOG_INFO("PUPPET spawn trigger-filter query=ObjOfAIModelInBV removed={} kept={}", count-kept, kept);
 }
-#endif
 bool PartnerBodyHold(PPCContext& ctx, uint8_t* b) {
-#if defined(KK_DEV_TOOLS)
   if (HoldSpawned(ctx, b)) return true;
-#endif
   if (Opt().spawn) {
     if (Get().driving) ++Get().passed;
     return false;
@@ -1504,26 +1579,26 @@ bool PartnerBodyHold(PPCContext& ctx, uint8_t* b) {
 }
 void PartnerBodyTriggerReference(const uint8_t* b, uint32_t record) {
   auto& s = Get();
-  if (!Opt().automatic || !s.driving || !Range(record, 108)) return;
+  if (!Opt().automatic || !s.driving || s.selected_copy || !Range(record, 108)) return;
   // Trigger/event payloads are 27 words (PRG_SSLoop and 8271E4E8).
   // CapaBit's explicit actor is payload+4; zero means the current actor.
   bool referenced = Load32(b, 0x82CCBF6C) == s.selected.actor;
   for (uint32_t off = 0; off < 108; off += 4)
     referenced |= Load32(b, record+off) == s.selected.actor;
   if (referenced) {
-    s.retired.insert(s.selected.actor);
+    s.story_cooldown[s.selected.actor] = Clock::now() + std::chrono::seconds(3);
     s.Abort("live-trigger-or-stimulus-reference");
   }
 }
 uint32_t PartnerBodyCombatActor(const uint8_t* b) {
   const auto& s = Get();
-  if (!Enabled() || !Opt().partner || Opt().spawn || !s.driving || !s.prepared ||
+  if (!Enabled() || !Opt().partner || s.selected_copy || !s.driving || !s.prepared ||
       !s.partner_eligible || !s.partner.fresh || !s.Environment(b, s.world)) return 0;
   const auto it = s.humans.find(s.selected.actor);
   Rig rig;
   // Read-only even when used by dev diagnostics. The normal before/after AI
   // validators own release; this snapshot never changes lease state.
-  return it != s.humans.end() && it->second.generation == s.selected_generation &&
+  return it != s.humans.end() && !it->second.other_human && it->second.generation == s.selected_generation &&
       Member(b, s.world, s.selected.actor) && ReadRig(b, s.selected.actor, rig) && Same(rig, s.selected) ? rig.actor : 0;
 }
 bool PartnerBodyStimulus(PPCContext& ctx, uint8_t* b) {
@@ -1563,13 +1638,27 @@ bool PartnerBodyStimulus(PPCContext& ctx, uint8_t* b) {
 }
 void PartnerBodyScriptRecord(const uint8_t* b) {
   auto& s = Get();
-  if (!Opt().automatic || !s.driving) return;
+  if (!Opt().automatic || !s.driving || s.selected_copy) return;
   const auto ai = Load32(b, 0x82CCBF64);
   const auto vars = Ptr(b, ai, 64, 19820);
   if (!vars || VarsSize(b, ai) < 19820 || Load32(b, vars+19812) >= 104) {
-    s.retired.insert(s.selected.actor); s.Abort("live-PRG-record-layout-unavailable"); return;
+    s.Abort("live-PRG-record-layout-unavailable"); return;
   }
-  PartnerBodyTriggerReference(b, vars+992+180*Load32(b, vars+19812));
+  const auto index = Load32(b, vars+19812);
+  // SSLoop can advance through several callbacks inside one native dispatch.
+  // Release conservatively before it enters ANY remaining record that refers
+  // to the body, so a same-dispatch successor cannot run while it is leased.
+  for (uint32_t i = index; i < 104; ++i) {
+    const uint32_t record = vars+920+180*i;
+    if (!Load32(b, record+4)) break;
+    for (uint32_t off = 72; off < 180; off += 4) {
+      if (Load32(b, record+off) != s.selected.actor) continue;
+      s.deferred_prg[s.selected.actor] = {vars, index};
+      REXLOG_INFO("PUPPET story-release actor={:08X} owner={:08X} current={} needed-record={} callback={:08X} reason=PRG-current-or-same-dispatch-successor",
+          s.selected.actor, Load32(b, 0x82CCBF6C), index, i, Load32(b, record+4));
+      s.Abort("PRG-current-or-same-dispatch-successor"); return;
+    }
+  }
 }
 }  // namespace kk
 
@@ -1611,6 +1700,15 @@ REX_HOOK_RAW(sub_8268D8E8) {
   __imp__sub_8268D8E8(ctx, base);
   if (on) kk::PuppetObserveInit(base, actor, ai);
 }
+// PNJInd_Init is the independently identified human-shaped native family.
+// KAnn is deliberately never observed into the candidate set.
+REX_HOOK_RAW(sub_826ECDF8) {
+  const bool on = kk::Enabled() && kk::Opt().automatic;
+  const uint32_t actor = on ? kk::hfr::Load32(base, 0x82CCBF6C) : 0;
+  const uint32_t ai = on ? kk::hfr::Load32(base, 0x82CCBF64) : 0;
+  __imp__sub_826ECDF8(ctx, base);
+  if (on) kk::PuppetObserveInit(base, actor, ai, true);
+}
 #if defined(KK_DEV_TOOLS)
 REX_HOOK_RAW(sub_826EB8C0) {
   const bool on = kk::Enabled() && kk::Opt().spawn;
@@ -1619,10 +1717,10 @@ REX_HOOK_RAW(sub_826EB8C0) {
   __imp__sub_826EB8C0(ctx, base);
   if (on) kk::PuppetObserveSpawner(base, actor, ai);
 }
+#endif
 REX_HOOK_RAW(sub_8284B028) {
-  const bool filter = kk::Opt().spawn && uint32_t(ctx.lr) == 0x8245D334;
+  const bool filter = !kk::Get().spawned.empty() && uint32_t(ctx.lr) == 0x8245D334;
   const uint32_t output = ctx.r9.u32, capacity = ctx.r4.u32;
   __imp__sub_8284B028(ctx, base);
   if (filter) kk::FilterSpawnedTrigger(ctx, base, output, capacity);
 }
-#endif
