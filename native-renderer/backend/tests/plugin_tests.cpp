@@ -54,6 +54,7 @@ REXCVAR_DEFINE_BOOL(native_diagnostics, false, "Native renderer", "Detailed nati
 // d3d12_host.cpp reads these (task 300).
 REXCVAR_DEFINE_BOOL(native_d3d12_placed_textures, false, "Native renderer", "D3D12 placed textures");
 REXCVAR_DEFINE_INT32(native_d3d12_upload_chunk_kib, 0, "Native renderer", "D3D12 upload chunk KiB");
+REXCVAR_DEFINE_BOOL(native_d3d12_buffer_pool, false, "Native renderer", "D3D12 guest buffer pool");
 
 using namespace nr;
 using namespace nr::test;

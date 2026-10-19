@@ -11,6 +11,7 @@
 #include <nvrhi/d3d12.h>
 #include <nvrhi/utils.h>
 
+#include "backend/buffer_pool.h"
 #include "backend/placed_textures.h"
 #include "backend/tests/check.h"
 #include "d3d12-placed-ranges.h"
@@ -202,6 +203,82 @@ TEST(D3D12PlacedTextures_WriteReadBackAndReuse) {
   rt.keepInitialState = true;
   CHECK(bool(device->createTexture(rt)));
   live.clear();
+  device->waitForIdle();
+  device->runGarbageCollection();
+  CHECK_EQ(messages.errors, 0);
+}
+
+TEST(D3D12BufferPool_RangesAlignRetireAndHoldData) {
+  Microsoft::WRL::ComPtr<ID3D12Device> native;
+  if (FAILED(D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&native)))) {
+    std::puts("SKIP: no D3D12 device");
+    return;
+  }
+  D3D12_COMMAND_QUEUE_DESC qd = {};
+  qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+  Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue;
+  CHECK(SUCCEEDED(native->CreateCommandQueue(&qd, IID_PPV_ARGS(&queue))));
+  Messages messages;
+  nvrhi::d3d12::DeviceDesc desc;
+  desc.pDevice = native.Get();
+  desc.pGraphicsCommandQueue = queue.Get();
+  desc.errorCB = &messages;
+  nvrhi::DeviceHandle device = nvrhi::d3d12::createDevice(desc);
+  CHECK(bool(device));
+  if (!device) return;
+  int blocks = 0;
+  nr::BufferPool pool([&](uint64_t bytes) {
+    ++blocks;
+    nvrhi::BufferDesc d;
+    d.byteSize = bytes;
+    d.canHaveRawViews = true;
+    d.initialState = nvrhi::ResourceStates::ShaderResource;
+    d.keepInitialState = true;
+    return device->createBuffer(d);
+  }, 1 << 20);
+  nr::BufferPool::Range a, b, c;
+  CHECK(pool.Allocate(100, a));
+  CHECK(pool.Allocate(1000, b));
+  CHECK_EQ(a.allocation.offset, 0u);
+  CHECK_EQ(b.allocation.offset, 256u);  // 256-byte aligned, no overlap
+  CHECK(!pool.Allocate((1 << 20) / 4 + 1, c));  // over a quarter block: its own buffer
+  CHECK_EQ(blocks, 1);
+  // A retired range is not handed out again before kRetireFrames frames have passed.
+  pool.Retire(a, 10);
+  pool.Release(10 + nr::BufferPool::kRetireFrames);
+  CHECK(pool.Allocate(100, c));
+  CHECK(c.allocation.offset != a.allocation.offset);
+  pool.Release(10 + nr::BufferPool::kRetireFrames + 1);
+  nr::BufferPool::Range d;
+  CHECK(pool.Allocate(100, d));
+  CHECK_EQ(d.allocation.offset, a.allocation.offset);
+  // Data written at a range's offset reads back there and leaves the neighbours alone.
+  nvrhi::CommandListHandle cl = device->createCommandList();
+  std::vector<uint32_t> one(32, 0x11111111u), two(250, 0x22222222u);
+  cl->open();
+  cl->writeBuffer(b.buffer, two.data(), two.size() * 4, b.allocation.offset);
+  cl->writeBuffer(d.buffer, one.data(), one.size() * 4, d.allocation.offset);
+  cl->setBufferState(b.buffer, nvrhi::ResourceStates::ShaderResource);
+  nvrhi::BufferDesc rd;
+  rd.byteSize = 2048;
+  rd.cpuAccess = nvrhi::CpuAccessMode::Read;
+  rd.initialState = nvrhi::ResourceStates::CopyDest;
+  rd.keepInitialState = true;
+  auto readback = device->createBuffer(rd);
+  cl->copyBuffer(readback, 0, b.buffer, 0, 2048);
+  cl->close();
+  device->executeCommandList(cl);
+  device->waitForIdle();
+  const auto* words = static_cast<const uint32_t*>(device->mapBuffer(readback, nvrhi::CpuAccessMode::Read));
+  CHECK(words != nullptr);
+  if (words) {
+    CHECK_EQ(words[0], 0x11111111u);
+    CHECK_EQ(words[31], 0x11111111u);
+    CHECK_EQ(words[32], 0u);  // the rest of d's 256 bytes: untouched (zero in a new block)
+    CHECK_EQ(words[256 / 4], 0x22222222u);
+    CHECK_EQ(words[256 / 4 + 249], 0x22222222u);
+    device->unmapBuffer(readback);
+  }
   device->waitForIdle();
   device->runGarbageCollection();
   CHECK_EQ(messages.errors, 0);

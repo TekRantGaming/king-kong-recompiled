@@ -119,6 +119,10 @@ Changes we make to vendored code are kept as small as possible and listed here:
   every command list's upload chunks are at least that big and made `CREATE_NOT_ZEROED` (refused on Windows before 10
   2004: made as before). Both default 0 = NVRHI's behaviour; `--native_d3d12_placed_textures` and
   `--native_d3d12_upload_chunk_kib` set them (`backend/d3d12_host.cpp`). Test: `backend/tests/d3d12_placed_textures_tests.cpp`.
+- `nvrhi/include/nvrhi/nvrhi.h`, `nvrhi/src/d3d12/d3d12-graphics.cpp` (task 309, pooled guest buffers):
+  `IndexBufferBinding::size`, the index buffer view's bytes from `offset` on D3D12 (0 = to the end of the buffer, as
+  before; part of `operator==`). A guest index buffer suballocated from a shared block (`backend/buffer_pool.h`) keeps
+  the view size its own buffer had, so indices past it still read as 0. Vulkan ignores it.
 
 ## SDKs used but not vendored
 
