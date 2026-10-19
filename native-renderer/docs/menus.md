@@ -60,7 +60,7 @@ Layout logic: `kk/src/pause_menu_logic.h` (tested by `pause-menu-layout`).
 
 - The "All chapters" cheat and its code go; the game's own chapter lock is not used (it is never shown).
 - After a chapter-select run ends (Score pages, then the game would load its menus), the port takes the player
-  back to the launcher's chapter select. Story runs (Continue / New game) go on to the next chapter as the game
+  back to the launcher's Play menu (owner 19 Oct). Story runs (Continue / New game) go on to the next chapter as the game
   does.
 - PS2 cutscenes (task 256, beta issue #3): the end of a chapter-select run plays the same between-chapter
   movie story play shows at that chapter's end (ps2_movies_logic.h MovieRun), then the Score pages, then the

@@ -25,7 +25,7 @@ version's notes the first time you start it.
 - **Field of view in the pause menu**: with a field of view wider than 69°, the game behind the pause menu zoomed in to 69° and a new field of view showed only after Resume. The paused picture now keeps your field of view, and changing it in the pause menu shows at once.
 - **Hide HUD and F10 now also hide the ammo counter and the subtitles.** Loading screens and fades still show.
 - **Ambient occlusion now shades Jack's hands** and the gun he holds in chapters where they were drawn without it (such as the Hayes chapters): the creases of his fingers and the gun are darker like the world around him. With ambient occlusion off nothing changes.
-- **Finishing a chapter from Chapter select now plays the PS2 cutscene that follows it** (when the PS2 cutscenes are restored), as in story play, before the Score pages and the return to the main menu's Chapter select.
+- **Finishing a chapter from Chapter select now plays the PS2 cutscene that follows it** (when the PS2 cutscenes are restored), as in story play, before the Score pages. Afterwards you are back in the main menu's Play menu.
 
 ### Changed
 - **Every setting explains itself.** The panel beside the settings, in the launcher and in the pause menu, now says what each setting does, what you will notice in the game, what each option changes, and shows its performance and video memory impact and when a change takes effect. In five languages.
