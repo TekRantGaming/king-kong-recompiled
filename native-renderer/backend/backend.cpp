@@ -589,6 +589,8 @@ bool Backend::Initialize(uint32_t width, uint32_t height, const GameSettings& ga
       renderer->options().chapter_trickle_mib = game.chapter_trickle_mib;
       renderer->options().pipeline_level_first = game.pipeline_level_first;
       renderer->options().pipeline_play_workers = game.pipeline_play_workers;
+      renderer->options().texture_pack_event_scan = game.texture_pack_event_scan;
+      renderer->options().texture_pack_reduce_mips = game.texture_pack_reduce_mips;
       REXLOG_INFO("rexgpu-native: pipelines not ready: {}", !game.async_pipelines ? "made on the draw thread"
                   : game.pipeline_wait ? "every draw waits (native_pipeline_wait / KK_DEV_PIPELINE_BLOCK=1)"
                                        : "scene draws skipped until ready, dependent draws wait (task 179)");

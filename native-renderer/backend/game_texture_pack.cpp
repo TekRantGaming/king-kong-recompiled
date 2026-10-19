@@ -6,10 +6,34 @@
 #include "kknr/nvrhi_format.h"
 
 namespace nr {
+namespace {
+// Task 284: adds the scope's wall time to a render-thread pack counter (milliseconds).
+// Task 284: how many of a replacement's most detailed levels to leave out so the rest fits room;
+// 0 when none needs to or nothing fits without going below the original's size (or off BC alignment).
+uint32_t PackMipsToDrop(const kknr::HostTextureData& data, const kknr::HostTexturePlan& original, uint64_t room) {
+  const uint32_t bs = kknr::GetHostFormatInfo(data.plan.format).block_size;
+  for (uint32_t k = 1; k < data.plan.levels; ++k) {
+    const uint32_t w = data.plan.width >> k, h = data.plan.height >> k;
+    if (w < original.width || h < original.height || !w || !h || (bs > 1 && ((w % bs) || (h % bs)))) return 0;
+    uint64_t bytes = 0;
+    for (const auto& sub : data.subresources) if (sub.level >= k) bytes += sub.size;
+    if (bytes <= room) return k;
+  }
+  return 0;
+}
+
+struct PackTimer {
+  double& total;
+  std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+  ~PackTimer() { total += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(); }
+};
+}  // namespace
+
 void GameRenderer::ReleasePackReplacement(HostTexture* original) {
   HostTexture* replacement = original->replacement;
   if (!replacement) return;
   original->replacement = nullptr;
+  pack_scan_ = true;
   if (replacement->pack_refs > 1) { --replacement->pack_refs; return; }
   pack_shared_.erase(replacement->pack_key);
   ReleaseHostTexture(replacement);  // retired: GPU lifetime + per-frame release budget (task 174)
@@ -35,6 +59,7 @@ void GameRenderer::CapTexturePack(HostTexture* original, uint64_t bytes) {
 
 void GameRenderer::UncapTexturePack(HostTexture* original) {
   if (!original->pack_capped) return;
+  pack_scan_ = true;
   original->pack_capped=false; original->pack_capped_bytes=0;
   pack_capped_ -= std::min<uint64_t>(pack_capped_, 1);
 }
@@ -86,6 +111,7 @@ void GameRenderer::SweepTexturePacks() {
 void GameRenderer::ServiceTexturePacks(nvrhi::ICommandList* cl) {
   if (pack_frame_ == frame_) return;
   pack_frame_ = frame_;
+  PackTimer service{stats_.pack_service_ms};
   if (options_.texture_pack_folder != texture_pack_folder_) {
     DropTexturePacks();
     for (auto* original : pack_originals_) {
@@ -94,6 +120,7 @@ void GameRenderer::ServiceTexturePacks(nvrhi::ICommandList* cl) {
     }
     pack_capped_=0; pack_capped_min_=UINT64_MAX;
     texture_pack_folder_ = options_.texture_pack_folder;
+    pack_scan_ = true;
     if (!texture_pack_stream_) {
       try { texture_pack_stream_ = std::make_unique<kknr::TexturePackStream>(TextureWorkerCount()); }
       catch (const std::exception& e) {
@@ -103,7 +130,7 @@ void GameRenderer::ServiceTexturePacks(nvrhi::ICommandList* cl) {
     texture_pack_stream_->Configure(texture_pack_folder_);
     Logf(LogLevel::kInfo,"rexgpu-native: texture pack folder changed: %s",texture_pack_folder_.c_str());
   }
-  if (pack_sweep_pending_ && frame_ >= pack_sweep_frame_) SweepTexturePacks();
+  if (pack_sweep_pending_ && frame_ >= pack_sweep_frame_) { PackTimer sweep{stats_.pack_sweep_ms}; SweepTexturePacks(); }
   if (!texture_pack_stream_ || texture_pack_folder_.empty() || pack_pressure_) return;
   // Capped originals ask again once room returns (replacements freed, or the
   // limit grew), but only as many as the free room holds, so a full limit never
@@ -120,7 +147,15 @@ void GameRenderer::ServiceTexturePacks(nvrhi::ICommandList* cl) {
   }
   // Prepare even when comparing Off, so switching On is just a descriptor choice.
   // The stream limits pending requests, decoded bytes and worker concurrency.
-  for (auto* original : pack_originals_) if (!original->render_target && !original->alias_source &&
+  // Task 284 (texture_pack_event_scan): nothing new can be found while the stream has finished no
+  // read batch and no original's pack state changed; at least every 60 frames anyway.
+  const uint64_t events = texture_pack_stream_->Events();
+  const bool scan = !options_.texture_pack_event_scan || pack_scan_ || events != pack_events_seen_ ||
+                    frame_ >= pack_scan_frame_ + 60;
+  if (scan) { pack_scan_ = false; pack_events_seen_ = events; pack_scan_frame_ = frame_; ++pack_scans_; }
+  {
+  PackTimer scan_time{stats_.pack_scan_ms};
+  if (scan) for (auto* original : pack_originals_) if (!original->render_target && !original->alias_source &&
       !original->replacement && !original->pack_unavailable && !original->pack_capped && !original->pack_swept &&
       original->pack_hash) {
     const PackKey key = PackKeyOf(*original);
@@ -137,17 +172,37 @@ void GameRenderer::ServiceTexturePacks(nvrhi::ICommandList* cl) {
     if (pack_upload_.replacement) continue;
     const uint64_t room = pack_limit_ > pack_bytes_ ? pack_limit_-pack_bytes_ : 0;
     uint64_t too_large = 0;
-    auto data = texture_pack_stream_->Take(original->pack_hash, original->plan, room, &too_large);
+    const bool reduce = options_.texture_pack_reduce_mips;
+    auto data = texture_pack_stream_->Take(original->pack_hash, original->plan, reduce ? UINT64_MAX : room, &too_large);
     if (too_large) { CapTexturePack(original, too_large); continue; }
     if (!data) continue;
+    uint32_t drop = 0;
+    if (reduce && data->bytes.size() > room) {
+      drop = PackMipsToDrop(*data, original->plan, room);
+      if (!drop) { CapTexturePack(original, data->bytes.size()); continue; }
+      ++pack_reduced_;
+      Logf(LogLevel::kInfo,"rexgpu-native: texture pack reduced %016llX %ux%u -> %ux%u (%u mips left out) to fit room=%llu",
+          (unsigned long long)original->pack_hash,data->plan.width,data->plan.height,
+          std::max(data->plan.width>>drop,1u),std::max(data->plan.height>>drop,1u),drop,(unsigned long long)room);
+    }
+    kknr::HostTexturePlan plan = data->plan;
+    if (drop) {
+      plan.width = std::max(plan.width >> drop, 1u);
+      plan.height = std::max(plan.height >> drop, 1u);
+      plan.levels -= drop;
+    }
     const auto support=device_->queryFormatSupport(kknr::ToNvrhi(data->plan.format));
     if ((support & nvrhi::FormatSupport::Texture) == nvrhi::FormatSupport::None ||
         (support & nvrhi::FormatSupport::ShaderSample) == nvrhi::FormatSupport::None) {
       original->pack_unavailable=true; continue;
     }
-    auto* replacement = CreateHostTexture(data->plan, false);
+    HostTexture* replacement;
+    {
+      PackTimer create{stats_.pack_create_ms};
+      replacement = CreateHostTexture(plan, false);
+      if (replacement) replacement->pack_allocation = device_->getTextureMemoryRequirements(replacement->texture).size;
+    }
     if (!replacement) { original->pack_unavailable=true; continue; }
-    replacement->pack_allocation = device_->getTextureMemoryRequirements(replacement->texture).size;
     if (replacement->pack_allocation > room) {
       const uint64_t bytes=replacement->pack_allocation;
       replacement->pack_allocation=0; ReleaseHostTexture(replacement); CapTexturePack(original, bytes); continue;
@@ -157,14 +212,37 @@ void GameRenderer::ServiceTexturePacks(nvrhi::ICommandList* cl) {
     replacement->pack_key = key; replacement->pack_refs = 1;
     pack_shared_.emplace(key, replacement);
     original->replacement = replacement;
-    pack_upload_ = {replacement,std::move(data),0,0};
+    uint32_t first = 0;
+    while (first < data->subresources.size() && data->subresources[first].level < drop) ++first;
+    pack_upload_ = {replacement,std::move(data),first,0,drop};
+  }
   }
   AdvanceTexturePack(cl);
   if (frame_%300==0) Logf(LogLevel::kInfo,
-      "rexgpu-native: texture pack frame %llu enabled=%u pressure=%u resident_bytes=%llu limit=%llu capped=%llu shared=%llu replacements=%zu status=%s",
+      "rexgpu-native: texture pack frame %llu enabled=%u pressure=%u resident_bytes=%llu limit=%llu capped=%llu shared=%llu replacements=%zu "
+      "originals=%zu reduced=%llu render thread %.3f ms/frame, scans %llu (300 frames) status=%s",
       (unsigned long long)frame_,unsigned(options_.texture_pack),unsigned(pack_pressure_),
       (unsigned long long)pack_bytes_,(unsigned long long)pack_limit_,(unsigned long long)pack_capped_,
-      (unsigned long long)pack_shared_attached_,pack_shared_.size(),texture_pack_stream_->Status().c_str());
+      (unsigned long long)pack_shared_attached_,pack_shared_.size(),pack_originals_.size(),(unsigned long long)pack_reduced_,
+      (stats_.pack_service_ms-pack_window_ms_)/300.0,(unsigned long long)(pack_scans_-pack_window_scans_),
+      texture_pack_stream_->Status().c_str());
+  if (frame_%300==0) { pack_window_ms_ = stats_.pack_service_ms; pack_window_scans_ = pack_scans_; }
+}
+
+void GameRenderer::LogTexturePackFrame() {
+  const double now[6] = {stats_.pack_service_ms, stats_.pack_create_ms, stats_.pack_strip_ms, stats_.pack_write_ms,
+                         stats_.pack_scan_ms, stats_.pack_sweep_ms};
+  const double ms = now[0] - pack_logged_ms_[0];
+  if (ms >= 2.0 && pack_frame_lines_ < 400) {
+    ++pack_frame_lines_;
+    Logf(LogLevel::kInfo,
+         "rexgpu-native: texture pack render thread frame %llu: %.2f ms (create %.2f, strips %.2f, writes %.2f, "
+         "scan %.2f, chapter sweep %.2f)%s",
+         (unsigned long long)frame_, ms, now[1] - pack_logged_ms_[1], now[2] - pack_logged_ms_[2],
+         now[3] - pack_logged_ms_[3], now[4] - pack_logged_ms_[4], now[5] - pack_logged_ms_[5],
+         resource_loading_ ? " loading" : "");
+  }
+  for (int i = 0; i < 6; ++i) pack_logged_ms_[i] = now[i];
 }
 
 void GameRenderer::AdvanceTexturePack(nvrhi::ICommandList* cl) {
@@ -186,7 +264,8 @@ void GameRenderer::AdvanceTexturePack(nvrhi::ICommandList* cl) {
     const uint32_t block_rows = (sub.height+bs-1)/bs;
     const uint64_t left = budget-spent;
     if (!pending.row && sub.size <= left) {
-      cl->writeTexture(replacement->texture,0,sub.level,data.bytes.data()+sub.offset,sub.row_pitch,sub.depth_pitch);
+      PackTimer write{stats_.pack_write_ms};
+      cl->writeTexture(replacement->texture,0,sub.level-pending.drop,data.bytes.data()+sub.offset,sub.row_pitch,sub.depth_pitch);
       ++pending.subresource; spent += sub.size;
       stats_.pack_upload_bytes += sub.size;
       continue;
@@ -198,12 +277,14 @@ void GameRenderer::AdvanceTexturePack(nvrhi::ICommandList* cl) {
     // alone in its frame.
     if (bs==4 && ((sub.width&3) || (sub.height&3))) {
       if (spent) break;
-      cl->writeTexture(replacement->texture,0,sub.level,data.bytes.data()+sub.offset,sub.row_pitch,sub.depth_pitch);
+      PackTimer write{stats_.pack_write_ms};
+      cl->writeTexture(replacement->texture,0,sub.level-pending.drop,data.bytes.data()+sub.offset,sub.row_pitch,sub.depth_pitch);
       ++pending.subresource;
       stats_.pack_upload_bytes += sub.size;
       break;
     }
     if (left < sub.row_pitch && spent) break;
+    PackTimer strip_time{stats_.pack_strip_ms};
     const uint32_t rows = std::min<uint32_t>(block_rows-pending.row,std::max<uint64_t>(1,left/sub.row_pitch));
     nvrhi::TextureDesc desc;
     desc.width=sub.width; desc.height=rows*bs;
@@ -216,12 +297,12 @@ void GameRenderer::AdvanceTexturePack(nvrhi::ICommandList* cl) {
         original->replacement = nullptr; original->pack_unavailable = true;
       }
       pack_shared_.erase(replacement->pack_key);
-      pending={}; ReleaseHostTexture(replacement); return;
+      pending={}; ReleaseHostTexture(replacement); pack_scan_ = true; return;
     }
     const auto* pixels=data.bytes.data()+sub.offset+size_t(pending.row)*sub.row_pitch;
     cl->writeTexture(strip,0,0,pixels,sub.row_pitch,sub.row_pitch*rows);
     nvrhi::TextureSlice dst,src;
-    dst.mipLevel=sub.level; dst.y=pending.row*bs; dst.width=src.width=sub.width;
+    dst.mipLevel=sub.level-pending.drop; dst.y=pending.row*bs; dst.width=src.width=sub.width;
     dst.height=src.height=rows*bs;
     cl->copyTexture(replacement->texture,dst,strip,src);
     RetireResource(strip);
@@ -235,9 +316,10 @@ void GameRenderer::AdvanceTexturePack(nvrhi::ICommandList* cl) {
     replacement->pack_ready=true;
     ++stats_.pack_textures_ready;
     Logf(LogLevel::kInfo,"rexgpu-native: texture pack ready %016llX %ux%u %s %u mips bytes=%llu",
-        (unsigned long long)replacement->pack_hash,data.plan.width,data.plan.height,
-        kknr::GetHostFormatInfo(data.plan.format).name,data.plan.levels,(unsigned long long)replacement->pack_allocation);
+        (unsigned long long)replacement->pack_hash,replacement->plan.width,replacement->plan.height,
+        kknr::GetHostFormatInfo(data.plan.format).name,replacement->plan.levels,(unsigned long long)replacement->pack_allocation);
     pending={};
+    pack_scan_ = true;  // the next waiting replacement can start
   }
 }
 }  // namespace nr

@@ -238,6 +238,17 @@ REXCVAR_DEFINE_INT32(native_pipeline_play_workers, 0, "Native renderer",
                      "limit (as in menus and loading), N = at most N, -1 = auto (PCs with 8 or fewer cores keep a "
                      "third of the workers). Draws' own pipelines always use every worker")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// Task 284: built with today's behaviour (owner rule). Proposed for Craig: native_texture_pack_event_scan
+// true; native_texture_pack_reduce_mips stays false.
+REXCVAR_DEFINE_BOOL(native_texture_pack_event_scan, false, "Native renderer",
+                    "Texture pack: look through the textures waiting for a replacement only when the pack reader "
+                    "finished a batch or a texture's pack state changed, at least every 60 frames (task 284; "
+                    "false = every frame, before task 284)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(native_texture_pack_reduce_mips, false, "Native renderer",
+                    "Texture pack: a replacement larger than the free pack memory leaves out its most detailed mips "
+                    "until it fits (never below the original size) instead of keeping the original (task 284)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_STRING(native_render_scale, "auto", "Native renderer",
                       "Render scale: the game's render targets, viewports, resolves and textures made from "

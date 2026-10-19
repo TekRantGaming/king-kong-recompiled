@@ -117,6 +117,13 @@ class GameRenderer {
     bool texture_tail_mips = false;
     bool texture_pack = false;
     std::string texture_pack_folder;
+    // Task 284: look through the waiting originals (Request/Take for each, every frame) only when the
+    // pack stream finished a read batch or an original's pack state changed, and at least every 60
+    // frames. Off: every frame (before task 284).
+    bool texture_pack_event_scan = false;
+    // Task 284: a replacement larger than the free pack limit drops its most detailed mips until it
+    // fits (never below the original's size) instead of keeping the original. Off: kept original.
+    bool texture_pack_reduce_mips = false;
     // Vertex buffers the game rewrites every frame stop being watched: each draw uploads the
     // vertices it reads instead. Watching them cost a write fault per 4 KB page and frame (340 a
     // frame in Venture: the game writes a 4 MB ring of particle vertices between its draws).
@@ -304,6 +311,10 @@ class GameRenderer {
     double texture_ms = 0;          // time spent converting and uploading textures
     uint64_t pack_textures_ready = 0;  // texture pack replacements finished uploading (task 211)
     uint64_t pack_upload_bytes = 0;    // texture pack bytes written to the GPU (task 211)
+    // Task 284: render-thread milliseconds in ServiceTexturePacks (all of it), of which creating
+    // replacement textures, creating/writing upload strips and whole-level writes.
+    double pack_service_ms = 0, pack_create_ms = 0, pack_strip_ms = 0, pack_write_ms = 0, pack_scan_ms = 0,
+           pack_sweep_ms = 0;
     double buffer_ms = 0;           // vertex and index buffers: finding, creating and uploading
     double target_ms = 0;           // render targets and framebuffers: finding and creating
   };
@@ -730,6 +741,12 @@ class GameRenderer {
     uint64_t trickled = 0, trickle_bytes = 0;
   } start_uploads_;
   void NoteStartUpload(const kknr::TextureFetch& fetch, uint64_t bytes, bool prepared);
+  // Task 284: a log line for a frame whose texture pack work on the render thread took >= 2 ms.
+  void LogTexturePackFrame();
+  double pack_logged_ms_[6] = {}, pack_window_ms_ = 0;
+  uint64_t pack_events_seen_ = ~0ull, pack_scan_frame_ = 0, pack_scans_ = 0, pack_window_scans_ = 0;
+  bool pack_scan_ = true;  // task 284: an original's pack state changed; look through them this frame
+  uint32_t pack_frame_lines_ = 0;
   void EndStartUploadFrame();
   std::unique_ptr<class ResourceUploadWorkers> resource_upload_workers_;
   std::atomic<uint64_t> resource_revision_{0};
@@ -1311,7 +1328,9 @@ class GameRenderer {
     HostTexture* replacement = nullptr;
     std::shared_ptr<const kknr::HostTextureData> data;
     uint32_t subresource = 0, row = 0;
+    uint32_t drop = 0;  // task 284: most detailed levels left out (texture_pack_reduce_mips)
   } pack_upload_;
+  uint64_t pack_reduced_ = 0;
   static PackKey PackKeyOf(const HostTexture& original) {
     return {original.pack_hash, uint32_t(original.plan.format), original.plan.width, original.plan.height};
   }

@@ -43,6 +43,8 @@ REXCVAR_DECLARE(int32_t, native_chapter_preload_mib);
 REXCVAR_DECLARE(int32_t, native_chapter_trickle_mib);
 REXCVAR_DECLARE(bool, native_pipeline_level_first);
 REXCVAR_DECLARE(int32_t, native_pipeline_play_workers);
+REXCVAR_DECLARE(bool, native_texture_pack_event_scan);
+REXCVAR_DECLARE(bool, native_texture_pack_reduce_mips);
 REXCVAR_DECLARE(bool, native_dynamic_vertex_buffers);
 REXCVAR_DECLARE(bool, native_render_thread);
 REXCVAR_DECLARE(int32_t, native_render_thread_presents);
@@ -340,6 +342,8 @@ GameSettings ReadGameSettings(bool vulkan) {
   game.chapter_trickle_mib = uint32_t(std::max(REXCVAR_GET(native_chapter_trickle_mib), 0));
   game.pipeline_level_first = REXCVAR_GET(native_pipeline_level_first);
   game.pipeline_play_workers = REXCVAR_GET(native_pipeline_play_workers);
+  game.texture_pack_event_scan = REXCVAR_GET(native_texture_pack_event_scan);
+  game.texture_pack_reduce_mips = REXCVAR_GET(native_texture_pack_reduce_mips);
   if (const char* frame_log = std::getenv("REX_DEV_FRAME_LOG")) game.frame_log = frame_log;
   game.render_scale = REXCVAR_GET(native_render_scale);
   if (game.render_scale == "auto") {
