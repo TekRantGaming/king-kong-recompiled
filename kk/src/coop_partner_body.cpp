@@ -371,7 +371,7 @@ struct State {
   std::set<uint32_t> retired;
   std::map<uint32_t, std::pair<uint32_t, uint32_t>> deferred_prg;
   std::map<uint32_t, Clock::time_point> story_cooldown;
-  Clock::time_point retry_at{};
+  Clock::time_point retry_at{}, copy_wait_until{};
   uint64_t frame = 0, updated_frame = ~uint64_t{0}, updates = 0;
   coop::PuppetSnapshot partner;
   std::vector<coop::puppet::Action> observed_motion;
@@ -415,6 +415,7 @@ struct State {
     if (Opt().automatic) {
       terminal = attempted = false;
       retry_at = Clock::now() + std::chrono::seconds(1);
+      copy_wait_until = retry_at + std::chrono::milliseconds(250);
       // Replacements need fresh continuous membership. A census frozen during
       // driving must not certify that another actor stayed loaded all along.
       for (auto& [actor, obs] : humans) {
@@ -1138,6 +1139,14 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
             o.stable < 1 || s.retired.count(c.rig.actor)) continue;
         if (!pick || Distance(c.rig.pos, jack.pos) > Distance(pick->rig.pos, jack.pos)) pick = &c;
       }
+      // The one-second retry may precede a full second of simulation samples
+      // by one or two frames. Give a level-human copy source a bounded grace
+      // interval before choosing Jack's arms (which can be outside a cinematic
+      // camera). Never relax the source's identity/stability requirement.
+      if (!pick && now < s.copy_wait_until) {
+        s.attempted = false; s.retry_at = now + std::chrono::milliseconds(100);
+        return;
+      }
       if (!pick && jack_ok && Active(b, jack) && LegalAction(b, jack, jack.action)) {
         // If this chapter has no other usable human, duplicate Jack's loaded
         // rig as a hands/rigid-parts stand-in. The hero itself is never leased.
@@ -1260,7 +1269,7 @@ void PartnerBodyBeforeLoad() {
   auto& s = Get();
   if (s.driving || s.finish_pending) s.Abort("level-load-started");
   s.selected = {}; s.humans.clear(); s.keys.clear(); ++s.epoch;
-  s.retired.clear(); s.deferred_prg.clear(); s.story_cooldown.clear(); s.retry_at = {};
+  s.retired.clear(); s.deferred_prg.clear(); s.story_cooldown.clear(); s.retry_at = {}; s.copy_wait_until = {};
   script_evidence = {};
   registry_evidence = {};
   if (!s.spawned.empty()) REXLOG_INFO("PUPPET spawn unload count={} no-free script-quarantine=cleared", s.spawned.size());
