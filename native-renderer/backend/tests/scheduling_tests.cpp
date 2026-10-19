@@ -2,6 +2,8 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <deque>
+#include <vector>
 #include <thread>
 #include "backend/pipeline_workers.h"
 #include "backend/tests/check.h"
@@ -21,6 +23,51 @@ TEST(HybridPlacementRespectsAllowedCoresAndSmt) {
   CHECK_EQ(PerformanceCoreMask(0, hybrid), uint64_t(0));
   CHECK_EQ(PerformanceCoreMask(0xF, {{0x3, 0}, {0xC, 0}}), uint64_t(0));
   CHECK_EQ(PerformanceCoreMask(0xF, {}), uint64_t(0));
+}
+
+// Task 276: background pipeline jobs while a level is played.
+TEST(PlayWorkersFollowTheSettingAndTheCores) {
+  // 0: no limit, as before task 276 (one worker kept for draws).
+  CHECK_EQ(PlayBackgroundPipelineWorkers(6, 16, 8, 0), 5u);
+  CHECK_EQ(PlayBackgroundPipelineWorkers(1, 4, 2, 0), 1u);
+  CHECK_EQ(BackgroundPipelineWorkers(0), 1u);
+  // N: at most N, at least 1, never more than the background workers.
+  CHECK_EQ(PlayBackgroundPipelineWorkers(6, 16, 8, 2), 2u);
+  CHECK_EQ(PlayBackgroundPipelineWorkers(4, 12, 6, 9), 3u);
+  // Auto: 8 cores or fewer keep a third of the workers (at least 1); more cores, no limit.
+  CHECK_EQ(PlayBackgroundPipelineWorkers(6, 16, 8, -1), 2u);   // 8 cores / 16 threads (handheld class)
+  CHECK_EQ(PlayBackgroundPipelineWorkers(6, 8, 8, -1), 2u);    // 8 cores, no SMT
+  CHECK_EQ(PlayBackgroundPipelineWorkers(4, 12, 6, -1), 1u);   // 6 cores / 12 threads
+  CHECK_EQ(PlayBackgroundPipelineWorkers(2, 4, 4, -1), 1u);
+  CHECK_EQ(PlayBackgroundPipelineWorkers(10, 24, 12, -1), 9u); // 12 cores: unchanged
+  CHECK_EQ(PlayBackgroundPipelineWorkers(14, 32, 16, -1), 13u);
+  CHECK_EQ(PlayBackgroundPipelineWorkers(6, 16, 0, -1), 2u);   // cores not known: half the logical CPUs
+  CHECK_EQ(PlayBackgroundPipelineWorkers(10, 24, 0, -1), 9u);
+}
+
+TEST(LevelJobsGoAheadInTheirOrder) {
+  struct Job {
+    int id;
+    bool urgent;
+    uint32_t level;
+  };
+  std::deque<Job> jobs{{1, false, 0}, {2, false, 5}, {3, true, 0}, {4, false, 7}, {5, false, 5}, {6, false, 0}};
+  const uint32_t tag = 5;
+  const auto first = [tag](const Job& j) { return j.urgent || j.level == tag; };
+  CHECK_EQ(MoveJobsAhead(jobs, first), size_t(3));
+  std::vector<int> order;
+  for (const Job& j : jobs) order.push_back(j.id);
+  CHECK(order == (std::vector<int>{2, 3, 5, 1, 4, 6}));
+  // A late job of the level joins its group; another goes to the back.
+  QueueJobBehind(jobs, Job{7, false, 5}, first);
+  QueueJobBehind(jobs, Job{8, false, 7}, first);
+  order.clear();
+  for (const Job& j : jobs) order.push_back(j.id);
+  CHECK(order == (std::vector<int>{2, 3, 5, 7, 1, 4, 6, 8}));
+  std::deque<Job> empty;
+  CHECK_EQ(MoveJobsAhead(empty, first), size_t(0));
+  QueueJobBehind(empty, Job{9, false, 5}, first);
+  CHECK_EQ(empty.size(), size_t(1));
 }
 
 TEST(SetupKeepsOneAllowedLogicalCpuFree) {

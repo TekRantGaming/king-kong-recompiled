@@ -26,7 +26,9 @@
 #include <cstdio>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace nr {
@@ -48,6 +50,9 @@ struct PipelineRecord {
   uint32_t poly_scale = 0;     // PA_SU_POLY_OFFSET_FRONT_SCALE, float bits (0 unless poly offset is on)
   uint32_t poly_offset = 0;    // PA_SU_POLY_OFFSET_FRONT_OFFSET, float bits
   uint32_t flags = 0;          // kRecordFlipFrontFace, kRecordScaled
+  // reserved[0]: task 276, the level the pipeline was first drawn in (RecordLevel / SetRecordLevel; 0 =
+  // not known, every record before task 276). Not part of the key: a tagged and an untagged record are
+  // the same pipeline, and a build before task 276 reads a tagged file as it always did.
   uint32_t reserved[2] = {};
   // The translations' input hashes (kkshaders::translationInputHash): the same microcode has
   // several translations in a pack (render scale aware or not, other interpolators), and the
@@ -70,6 +75,18 @@ constexpr uint32_t kRecordScaled = 1u << 1;
 // are the upscaler's built-ins. This layout does not use the game's scale constants.
 constexpr uint32_t kRecordMotion = 1u << 2;
 constexpr uint32_t kRecordTessellation = 1u << 3;
+
+// Task 276: the level tag in PipelineRecord::reserved[0]: the game's level number (the universe's requested
+// map, as the resource lists name it) with the top bit set, so level 0 is told apart from "not known".
+constexpr uint32_t kRecordLevelTagged = 0x80000000u;
+inline uint32_t LevelTag(uint32_t level) { return kRecordLevelTagged | (level & ~kRecordLevelTagged); }
+inline bool RecordLevel(const PipelineRecord& r, uint32_t* level = nullptr) {
+  if (!(r.reserved[0] & kRecordLevelTagged)) return false;
+  if (level) *level = r.reserved[0] & ~kRecordLevelTagged;
+  return true;
+}
+inline void SetRecordLevel(PipelineRecord& r, uint32_t level) { r.reserved[0] = LevelTag(level); }
+inline void ClearRecordLevel(PipelineRecord& r) { r.reserved[0] = 0; }
 PipelineRecord MotionPipelineRecord(const PipelineRecord& draw, uint32_t motion_format);
 
 constexpr uint32_t kPipelineCacheMagic = 0x4350474Bu;  // 'KGPC'
@@ -82,6 +99,9 @@ constexpr uint32_t kPipelineCacheVersion = 3;
 // field takes part, the translations' input hashes too: the same microcode drawn with its 1:1
 // and its render scale aware translation are two pipelines.
 uint64_t PipelineKey(const PipelineRecord& record);
+// Task 279: the key without the render scale flag and the translations' input hashes (the same draw state
+// and microcode at another render scale or translation): only for matching level tags, never a pipeline.
+uint64_t SimilarPipelineKey(const PipelineRecord& record);
 
 // Reads the records of a pipeline file of this version without changing it (a shipped list, or
 // the user's file read by another process). Whole records only, in file order, duplicates kept.
@@ -96,6 +116,10 @@ bool WritePipelineList(const std::string& path, const std::vector<PipelineRecord
 
 // Merges pipeline files into one list (the nr_pipelines tool): every record once, in the order first
 // seen, so the first input's pipelines are made first at start.
+// Task 276, level tags: each input naming a pipeline with a level is one vote for that level; the merged
+// record carries the level with the most votes (a tie: the one voted for first, the earliest input). An
+// untagged record takes the tag of a later input that has one. tags_only: inputs after the first add no
+// records, only their votes (tagging a list from a recorded play-through, nr_pipelines merge --tags-only).
 class PipelineListMerger {
  public:
   struct Input {
@@ -107,18 +131,33 @@ class PipelineListMerger {
     size_t duplicates = 0;   // already in the list
     size_t debug = 0;        // drawn with --native_flip_front_face (a debugging aid): left out
     size_t torn_bytes = 0;   // an incomplete last record, left out
+    size_t tagged = 0;       // records with a level tag
   };
   // keep_debug: also keep the records of runs with flipped faces.
-  explicit PipelineListMerger(bool keep_debug = false) : keep_debug_(keep_debug) {}
+  explicit PipelineListMerger(bool keep_debug = false, bool tags_only = false)
+      : keep_debug_(keep_debug), tags_only_(tags_only) {}
   Input Add(const std::string& path);
   // Adds records that are not files (tests).
   size_t AddRecords(const std::vector<PipelineRecord>& records);
   const std::vector<PipelineRecord>& records() const { return records_; }
+  // Task 279: tags the records still without a level from tagged records of a similar pipeline: the same
+  // record at another render scale or with other shader translations (SimilarPipelineKey), most voted level
+  // first. A recording of today's game has only render scale records, while a list also holds 1:1 ones (the
+  // prewarm adapts those to the run's kind). Returns the records tagged.
+  size_t TagFromSimilar();
 
  private:
+  enum class Added { kNew, kDuplicate, kDebug, kLeftOut };
+  Added AddOne(const PipelineRecord& record);
+  // SimilarPipelineKey -> level votes of every tagged record added (any input).
+  std::unordered_map<uint64_t, std::vector<std::pair<uint32_t, uint32_t>>> similar_votes_;
   bool keep_debug_;
+  bool tags_only_;
+  bool first_input_done_ = false;
   std::vector<PipelineRecord> records_;
-  std::unordered_set<uint64_t> keys_;
+  std::unordered_map<uint64_t, size_t> keys_;  // key -> index in records_
+  // Level votes of records_[i] (level tag, votes), in the order first voted for.
+  std::vector<std::vector<std::pair<uint32_t, uint32_t>>> votes_;
 };
 
 class PipelineCacheFile {

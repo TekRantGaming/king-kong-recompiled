@@ -227,6 +227,17 @@ REXCVAR_DEFINE_INT32(native_chapter_trickle_mib, 0, "Native renderer",
                      "After a loading screen, MiB per frame of the chapter's listed resources not yet on the GPU "
                      "prepared ahead of their first draw, for 10 s (task 280; 0 = off, before task 280)")
     .range(0, 32).lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// Task 276: built with today's behaviour (owner rule: behaviour-changing defaults ship off). Proposed for
+// Craig: native_pipeline_level_first true; native_pipeline_play_workers -1 (auto) pending a slow-CPU test.
+REXCVAR_DEFINE_BOOL(native_pipeline_level_first, false, "Native renderer",
+                    "When a level loads, prepare the listed pipelines tagged with that level before the rest of "
+                    "the list (task 276; false: list order). New pipelines are tagged with their level either way")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_INT32(native_pipeline_play_workers, 0, "Native renderer",
+                     "Background pipeline preparation jobs at once while a level is played (task 276): 0 = no "
+                     "limit (as in menus and loading), N = at most N, -1 = auto (PCs with 8 or fewer cores keep a "
+                     "third of the workers). Draws' own pipelines always use every worker")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_STRING(native_render_scale, "auto", "Native renderer",
                       "Render scale: the game's render targets, viewports, resolves and textures made from "
