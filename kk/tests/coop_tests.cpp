@@ -168,6 +168,50 @@ void Protocol() {
   Message reject; reject.type = MessageType::Reject;
   Check(!Encode(reject, bytes), "invalid rejection reason rejected");
 }
+void IntegratedMessageRouting() {
+  Pair pair; pair.Pump(0,.2);
+  Check(pair.host.State()==SessionState::Connected && pair.guest.State()==SessionState::Connected,
+      "protocol 9 integration handshake");
+  const EnemyState enemy{{123,0,EnemyFamily::Raptor},1,2,3,0,50};
+  Message ownership; ownership.type=MessageType::OwnershipChange; ownership.epoch=pair.host.Epoch();
+  ownership.ownership={{101,1,1},OwnershipPhase::Prepare,1,EnemyOwner::Guest,enemy};
+  Message life; life.type=MessageType::PlayerDowned; life.epoch=pair.guest.Epoch();
+  life.life={{1,101,1,0},77,1,1};
+  Message camera; camera.type=MessageType::CameraPose;
+  camera.camera.generation=1; camera.camera.level=101; camera.camera.cut=1; camera.camera.time=.3;
+  OwnershipMailbox host_ownership,guest_ownership;
+  CameraMailbox host_camera,guest_camera;
+  Check(host_ownership.Submit(ownership) && pair.guest.QueueFlow(life),
+      "ownership and downed event can be queued together");
+  Check(!pair.host.QueueFlow(ownership) && !pair.host.QueueFlow(camera) &&
+      !pair.guest.QueueOwnership(life) && !pair.guest.QueueCombat(life,.3),
+      "new protocol messages cannot enter each other's queues");
+  host_ownership.Exchange(pair.host);
+  host_camera.Publish(camera.camera); host_camera.Exchange(pair.host,.3);
+  pair.Pump(.3,.35);
+  guest_ownership.Exchange(pair.guest); guest_camera.Exchange(pair.guest,.35);
+  const auto received_ownership=guest_ownership.Take();
+  const auto received_life=pair.host.TakeFlow();
+  const auto received_camera=guest_camera.Sample(.35);
+  Check(received_ownership.size()==1 && received_ownership.front().type==MessageType::OwnershipChange &&
+      received_ownership.front().ownership.phase==OwnershipPhase::Prepare,
+      "ownership reaches its mailbox while camera and life traffic are active");
+  Check(received_life.size()==1 && received_life.front().type==MessageType::PlayerDowned &&
+      received_life.front().life.incarnation==77, "downed event reaches flow only");
+  Check(received_camera && received_camera->generation==1 && received_camera->level==101 &&
+      pair.guest.TakeFlow().empty() && pair.host.TakeOwnership().empty() &&
+      pair.host.TakeCombat().empty() && pair.guest.TakeCombat().empty(),
+      "camera remains separate from flow, ownership and combat");
+  life.type=MessageType::PlayerRevived; ++life.life.incarnation; ++life.life.number;
+  Check(pair.guest.QueueFlow(life),"revived event queues after downed event");
+  pair.Pump(.36,.4);
+  const auto revived=pair.host.TakeFlow();
+  Check(revived.size()==1 && revived.front().type==MessageType::PlayerRevived &&
+      revived.front().life.incarnation==78,"revival retains its distinct message ID");
+  pair.guest.End(.41); guest_ownership.Exchange(pair.guest); guest_camera.Exchange(pair.guest,.41);
+  Check(guest_ownership.Take().empty() && !guest_camera.Sample(.41),
+      "session end clears both merged mailboxes");
+}
 void CheatSets() {
   for (uint16_t bits = 0; bits <= 0x1ff; ++bits) {
     Message m; m.type = MessageType::Cheats; m.cheats = {bits};
@@ -646,6 +690,6 @@ void DisplayNames() {
 }
 }  // namespace
 int main() {
-  Protocol(); CheatSets(); Handshake(); Timeouts(); Poses(); PoseReadingAndDisplay(); Disabled(); PuppetPolicies(); PartnerSelection(); NameTags(); DisplayNames();
+  Protocol(); IntegratedMessageRouting(); CheatSets(); Handshake(); Timeouts(); Poses(); PoseReadingAndDisplay(); Disabled(); PuppetPolicies(); PartnerSelection(); NameTags(); DisplayNames();
   std::puts("co-op core tests passed");
 }

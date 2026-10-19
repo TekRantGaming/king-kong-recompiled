@@ -366,6 +366,7 @@ struct State {
   std::map<uint32_t, Pending> pending;
   std::map<EnemyId, Record> records;
   std::map<EnemyId, Authority> authority; // Always indexed by canonical host ID.
+  std::set<EnemyId> private_reseed;
   std::map<EnemyId, OwnershipChange> ownership_out, committed;
   std::map<EnemyId, double> matched_at;
   std::deque<Message> ownership_in;
@@ -417,6 +418,7 @@ struct State {
     aliases.clear(); retry.clear(); retry_diagnosed.clear(); shots = {}; shot_validator = {}; shooting = shot_resolved = false; shot = {};
     authority.clear(); ownership_out.clear(); committed.clear(); ownership_in.clear(); ownership_epoch = 0; next_ownership = 0;
     matched_at.clear();
+    private_reseed.clear();
     census_until = next_numbers = next_log = next_shot_log = error_sum = error_max = 0; error_count = 0;
     combat_epoch = incarnation = 0; combat_hero = combat_ai = combat_vars = 0;
     next_damage = next_status = 0; pending_damage.clear(); sent_status.reset();
@@ -447,6 +449,15 @@ struct PrivateSequences {
   ShotValidator shots;
   combat::StatusReplay status;
 } private_sequences;
+// C36 authority survives C37's private reload of the same logical world.
+// Retain value identities and transactions only, never native actor bindings.
+struct PrivateOwnership {
+  uint64_t epoch = 0;
+  std::map<EnemyId, EnemyId> aliases;
+  std::map<EnemyId, Authority> authority;
+  std::map<EnemyId, OwnershipChange> outgoing, committed;
+  std::deque<Message> incoming;
+} private_ownership;
 bool Connected() { return EnemyConnectionReady(); }
 bool Environment(const uint8_t* b, uint32_t w) {
   const auto& s = Get();
@@ -817,6 +828,13 @@ bool SendOwnership(const OwnershipChange& change) {
 }
 void OwnershipBeforeAi(PPCContext& ctx, uint8_t* b) {
   auto& s = Get(); const double now = Now();
+  for (auto it = s.private_reseed.begin(); it != s.private_reseed.end();) {
+    const auto a = s.authority.find(*it);
+    const auto* binding = CanonicalBinding(b, *it);
+    if (a == s.authority.end() || (binding && SeedAuthority(ctx, b, *binding, a->second.last)))
+      it = s.private_reseed.erase(it);
+    else ++it;
+  }
   for (auto& m : TakeOwnership()) {
     if (m.epoch == s.link.epoch && m.ownership.world == s.identity && s.ownership_in.size() < kMaxEnemies*2)
       s.ownership_in.push_back(std::move(m));
@@ -827,6 +845,7 @@ void OwnershipBeforeAi(PPCContext& ctx, uint8_t* b) {
     const auto* binding = CanonicalBinding(b, c.enemy.id);
     if (a == s.authority.end() || !binding) { it = s.ownership_in.erase(it); continue; }
     auto& authority = a->second;
+    if (s.private_reseed.contains(c.enemy.id)) { ++it; continue; }
     if (c.phase == OwnershipPhase::Matched && s.link.role == Role::Host) {
       if (authority.Accepts(c.enemy)) { authority.matched = true; s.matched_at[c.enemy.id] = now; }
       // A lost worker/game handoff can be recovered without inventing an owner.
@@ -865,6 +884,7 @@ void OwnershipBeforeAi(PPCContext& ctx, uint8_t* b) {
   // Observe native results only on the owner. A replica's old local life can
   // never veto the owner's outcome or resurrect an authoritative corpse.
   for (auto& [id, a] : s.authority) {
+    if (s.private_reseed.contains(id)) continue;
     const auto* binding = CanonicalBinding(b, id); if (!binding) continue;
     EnemyState local;
     if (a.Runs(Side()) && OwnedSample(b, *binding, local)) a.Observe(local);
@@ -895,7 +915,7 @@ void OwnershipBeforeAi(PPCContext& ctx, uint8_t* b) {
 void HoldReplicas(PPCContext& ctx, uint8_t* b, bool drive) {
   auto& s = Get();
   for (auto& [id, a] : s.authority) {
-    if (!a.Frozen() && a.owner == Side()) continue;
+    if (!a.Frozen() && a.owner == Side() && !s.private_reseed.contains(id)) continue;
     const auto* binding = CanonicalBinding(b, id); if (!binding) continue;
     const auto& state = a.Frozen() ? a.pending->enemy : a.last;
     if (state.life <= 0) {
@@ -1543,7 +1563,6 @@ void BeforeAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
 #if defined(KK_DEV_TOOLS)
   DevWakeTick(ctx, b, w);
   DevEnemyNear(b, w);
-  DevDie(ctx,b);
 #endif
   if (!REXCVAR_GET(kk_coop_enabled)) return;
   SessionReviveBeforeAi(ctx,b);
@@ -1560,6 +1579,7 @@ void BeforeAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   if (!Environment(b, w)) return;
   if (s.ownership_epoch != s.link.epoch) {
     s.authority.clear(); s.ownership_out.clear(); s.committed.clear(); s.ownership_in.clear(); s.matched_at.clear();
+    s.private_reseed.clear();
     s.ownership_epoch = s.link.epoch; s.next_ownership = 0;
   }
   Scan(b); s.prepared = true; s.prepared_at = Now();
@@ -1578,9 +1598,6 @@ void BeforeAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   }
   OwnerShots(ctx, b);
   CombatBeforeAi(ctx, b);
-#if defined(KK_DEV_TOOLS)
-  DevBait(ctx, b);
-#endif
 }
 void AfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   auto& s = Get();
@@ -1595,7 +1612,7 @@ void AfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
       if (r.kind == EnemyEventKind::Spawned && a->last.life > 0 && !a->dead) {
         if (a->owner == Side()) ++s.counts.owned_me; else ++s.counts.owned_partner;
       }
-      if (!a->Runs(Side())) continue;
+      if (!a->Runs(Side()) || s.private_reseed.contains(Canonical(local))) continue;
       Record owned = r; owned.enemy.id = Canonical(local);
       owned.enemy.owner = a->owner; owned.enemy.generation = a->generation;
       a->Observe(owned.enemy);
@@ -1668,6 +1685,15 @@ void Spawned(const uint8_t* b, uint32_t spawner, uint32_t source, uint32_t actor
   s.pending[actor] = {id, ai, matrix, LoadF(b, matrix+48), LoadF(b, matrix+52), LoadF(b, matrix+56)};
 }
 } // namespace
+#if defined(KK_DEV_TOOLS)
+void EnemyDevGameFrame(PPCContext& ctx, uint8_t* base) {
+  if (!REXCVAR_GET(kk_coop_enabled) || !base) return;
+  // Timers must advance even without the AI pass, a body lease or enemy matches.
+  // Each injector retains its own native actor/world validation before acting.
+  DevDie(ctx, base);
+  DevBait(ctx, base);
+}
+#endif
 std::optional<PlayerCondition> LocalPlayerCondition(const uint8_t* b) {
   const auto h=ReadHumanStatus(b); return h ? std::optional{h->condition} : std::nullopt;
 }
@@ -1697,10 +1723,12 @@ void EnemyBeforeLoad() {
   private_identity=SessionPrivateReload() ? std::optional{Get().identity} : std::nullopt;
   private_spawner_sequences.clear();
   private_sequences={};
+  private_ownership={};
   if (private_identity) {
     const auto& s=Get();
     for (const auto& [actor,sp] : s.spawners) private_spawner_sequences[sp.key]=sp.sequence;
     private_sequences={s.next_shot,s.next_damage,s.combat_epoch,s.shot_validator,s.status_replay};
+    private_ownership={s.ownership_epoch,s.aliases,s.authority,s.ownership_out,s.committed,s.ownership_in};
   }
   ClearCombat();
   ClearOwnership();
@@ -1719,6 +1747,16 @@ void EnemyAfterLoad(const uint8_t* b, uint32_t game) {
   if (private_identity && private_identity->level==level) {
     s.identity=*private_identity; s.next_shot=private_sequences.shot;
     s.shot_validator=private_sequences.shots;
+    const auto link=EnemyLinkSnapshot();
+    if (private_ownership.epoch && private_ownership.epoch==link.epoch) {
+      s.ownership_epoch=private_ownership.epoch;
+      s.aliases=std::move(private_ownership.aliases);
+      s.authority=std::move(private_ownership.authority);
+      s.ownership_out=std::move(private_ownership.outgoing);
+      s.committed=std::move(private_ownership.committed);
+      s.ownership_in=std::move(private_ownership.incoming);
+      for (const auto& [id,a] : s.authority) s.private_reseed.insert(id);
+    }
     if (EnemyLinkSnapshot().role==Role::Host) {
       s.next_damage=private_sequences.damage; s.combat_epoch=private_sequences.epoch;
       s.status_replay=private_sequences.status;
@@ -1726,6 +1764,7 @@ void EnemyAfterLoad(const uint8_t* b, uint32_t game) {
   }
   else s.identity = {level, start, ++s.visits[{level, start}]};
   private_identity.reset();
+  private_ownership={};
   s.capture = ValidEnemyWorld(s.identity);
 }
 void EnemyGameFrame() {

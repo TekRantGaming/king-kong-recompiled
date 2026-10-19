@@ -110,6 +110,7 @@ std::vector<uint8_t> Packet(MessageType type) {
   m.player_status = {{303, 3, 1}, 11, 2, 1, PlayerCondition::Hurt};
   m.ownership = {{303, 3, 1}, OwnershipPhase::Prepare, 1, EnemyOwner::Guest, enemy};
   m.life = {{1,303,3,0},11,2,3};
+  m.camera.generation = 1; m.camera.level = 303; m.camera.cut = 1;
     m.shot.world = {303, 3, 1}; m.shot.number = 1; m.shot.weapon = 1; m.shot.direction = {1, 0, 0};
   std::vector<uint8_t> bytes; Check(Encode(m, bytes), "encode backend fixture"); return bytes;
 }
@@ -150,13 +151,17 @@ void Messages() {
   Check(!host.Send(enemies, true) && !host.Send(event, false), "enemy channel misuse rejected");
   guest.Poll(.1);
   Check(guest.Receive(out) && out == event && guest.Receive(out) && out == enemies && !guest.Receive(out), "enemy transport framing preserved");
+  const auto camera = Packet(MessageType::CameraPose);
+  Check(host.Send(camera, false) && !host.Send(camera, true), "camera poses only use unreliable channel");
+  guest.Poll(.15);
+  Check(guest.Receive(out) && out == camera && !guest.Receive(out), "camera pose framing preserved");
     const auto shot = Packet(MessageType::ShotIntent);
     Check(host.Send(shot, true) && !host.Send(shot, false), "shot intent only uses reliable channel");
     guest.Poll(.2);
     Check(guest.Receive(out) && out == shot && !guest.Receive(out), "shot framing preserved");
   for (auto type : {MessageType::Cheats, MessageType::InventoryState, MessageType::DamageEvent, MessageType::PlayerStatus,
                     MessageType::OwnershipChange,
-      MessageType::PlayerDowned, MessageType::PlayerRevived}) {
+      MessageType::PlayerDowned, MessageType::PlayerRevived, MessageType::CameraCut}) {
     const auto packet = Packet(type);
     Check(host.Send(packet, true) && !host.Send(packet, false), "cheats, inventory and combat require reliable channel");
     guest.Poll(.3);

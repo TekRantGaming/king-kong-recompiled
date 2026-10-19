@@ -43,6 +43,7 @@
 #include "freecam.h"
 #include "photo_mode.h"
 #include "coop_runtime.h"
+#include "coop_enemies_game.h"
 #include "play_internal.h"
 
 #include <rex/logging.h>
@@ -131,6 +132,9 @@ void StartClock(uint8_t* base, float before) {
 // (KK_DEV_DT_LOG, dev_frame_log.cpp), which reads what it ended up as.
 REX_HOOK_RAW(sub_8272CA20) {
   kk::coop::GameFrame(base);
+#if defined(KK_DEV_TOOLS)
+  kk::coop::EnemyDevGameFrame(ctx, base);
+#endif
   kk::freecam::Frame(base);
   kk::photo::Frame(base);
   const float clock = kk::hfr::LoadF(base, kGameClock);

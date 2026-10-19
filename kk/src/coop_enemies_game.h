@@ -18,6 +18,7 @@ bool EnemyCombatReference(const uint8_t* base, uint32_t owner, uint32_t ai,
 bool PartnerBodyGrabRefusal(const uint8_t* base, uint32_t victim);
 bool EnemyPartnerCombatReady();
 #if defined(KK_DEV_TOOLS)
+void EnemyDevGameFrame(PPCContext& ctx, uint8_t* base);
 std::optional<ShotVector> EnemyAimTarget(const uint8_t* base, ShotVector origin);
 // Solo dev placement: initialized, living, unscheduled allowlisted actor only.
 std::optional<ShotVector> EnemyDormantTarget(const uint8_t* base, uint32_t world, ShotVector origin);
