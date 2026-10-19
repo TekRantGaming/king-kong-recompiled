@@ -166,6 +166,9 @@ strings |= {
     '{0} GB',
     'Unknown',
     'It goes into your user folder. Remove it at any time in Settings.',
+    # Settings > Advanced > Diagnostics: what happens to crash reports (task 318: the text report is sent with
+    # Online player count on; the minidump stays on the PC)
+    'Each crash saves a text report and a minidump on this PC. With Online player count on, the text report is sent, with your user name and personal folders removed. The minidump stays on this PC; it may contain private process memory, so review it before sharing.',
     # Progress, finished and error pop-ups, the strip (no "This can take a while" question, owner 19 Oct)
     'Watch progress',
     'Pause',

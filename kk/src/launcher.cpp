@@ -5087,7 +5087,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         }));
     if (Cached(crash_reports_cache_, 2.0, [this] { return HasCrashReports(paths_.user_dir); })) {
       items.push_back(ActionItem("Saved crash reports",
-          "A previous crash saved local diagnostics and a minidump. Dumps may contain private process memory. Review before sharing. Nothing is uploaded.",
+          "Each crash saves a text report and a minidump on this PC. With Online player count on, the text report is "
+          "sent, with your user name and personal folders removed. The minidump stays on this PC; it may contain "
+          "private process memory, so review it before sharing.",
           "Open folder", [this] { OpenInExplorer(paths_.user_dir / "crashes"); }));
     }
     return items;
