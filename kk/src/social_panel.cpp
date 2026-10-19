@@ -105,6 +105,7 @@ void SocialPanel::Draw(ImDrawList* dl, ImVec2 o, ImVec2 size, const Metrics& m, 
     Item item;
     const auto kind = row.key.kind;
     item.type = kind == SocialRowKind::Section ? ItemType::kSection :
+                kind == SocialRowKind::Text ? ItemType::kText :
                 kind == SocialRowKind::Member ? ItemType::kInfo : ItemType::kAction;
     const bool person = kind == SocialRowKind::Member || kind == SocialRowKind::Friend;
     item.label = row.label;

@@ -67,7 +67,7 @@ class SteamRuntime final : public ISocialService {
   void Shutdown();
 #if defined(KK_DEV_TOOLS)
   // Blocks caller, but all Steam calls still belong to the worker. Never signs in or starts Steam.
-  int SelfTest(std::function<void(const std::string&)> redacted_log);
+  int SelfTest(std::function<void(const std::string&)> redacted_log, bool loopback = false);
 #endif
  private:
   struct Impl;

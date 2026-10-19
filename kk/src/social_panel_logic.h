@@ -32,7 +32,7 @@ class SocialPanelState {
   bool open_ = false;
   float progress_ = 0;
 };
-enum class SocialRowKind { Section, Member, Accept, Decline, Create, Ready, Start, OverlayInvite, Leave, Friend };
+enum class SocialRowKind { Section, Member, Accept, Decline, Create, Ready, Start, OverlayInvite, Leave, Friend, Text };
 struct SocialRowKey {
   SocialRowKind kind = SocialRowKind::Section;
   SocialId id = 0;
@@ -42,7 +42,7 @@ struct SocialRow {
   SocialRowKey key;
   std::string label, detail;
   bool enabled = false;
-  bool focusable() const { return key.kind != SocialRowKind::Section; }
+  bool focusable() const { return key.kind != SocialRowKind::Section && key.kind != SocialRowKind::Text; }
 };
 std::vector<SocialRow> SocialRows(const SocialModel& model);
 // Retain identity across friend reordering, duplicate names, invite removal and translation changes.

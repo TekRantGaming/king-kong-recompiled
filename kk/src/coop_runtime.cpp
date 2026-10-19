@@ -41,6 +41,8 @@ REXCVAR_DEFINE_STRING(kk_coop_dev, "", "KK/Debug", "Local co-op test link: host:
     .debug_only().lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(kk_steam_selftest, false, "KK/Debug", "Test Steam services and exit without starting a game")
     .debug_only().lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(kk_steam_loopback_test, false, "KK/Debug", "Probe Steam self-send for every co-op message and exit")
+    .debug_only().lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(kk_social_fake, false, "KK/Debug", "Use an offline Social panel preview")
     .debug_only().lifecycle(rex::cvar::Lifecycle::kInitOnly);
 #endif
@@ -407,7 +409,7 @@ void Start(const std::filesystem::path& user_data) {
 #if defined(KK_DEV_TOOLS)
   if (service.Running()) return;
   if (social_preview) return;
-  if (REXCVAR_GET(kk_steam_selftest)) return;
+  if (SteamSelfTestRequested()) return;
   std::string address = REXCVAR_GET(kk_coop_dev);
   if (const char* env = std::getenv("KK_COOP_DEV"); address.empty() && env) address = env;
   const size_t colon = address.find(':');
@@ -650,10 +652,10 @@ void SetPartnerHead(std::optional<ShotVector> head, uint32_t level) {
   std::lock_guard lock(head_mutex); head_anchor = {head,level,Now()};
 }
 #if defined(KK_DEV_TOOLS)
-bool SteamSelfTestRequested() { return REXCVAR_GET(kk_steam_selftest); }
+bool SteamSelfTestRequested() { return REXCVAR_GET(kk_steam_selftest) || REXCVAR_GET(kk_steam_loopback_test); }
 int RunSteamSelfTest() {
-  if (!steam || DevRunning()) { REXLOG_INFO("Steam self-test: unavailable while dev link selected"); return 1; }
-  return steam->SelfTest([](const std::string& line) { REXLOG_INFO("{}", line); });
+  if (!steam || DevSelected() || social_preview) { REXLOG_INFO("Steam self-test: unavailable while dev link or preview selected"); return 1; }
+  return steam->SelfTest([](const std::string& line) { REXLOG_INFO("{}", line); }, REXCVAR_GET(kk_steam_loopback_test));
 }
 #endif
 }  // namespace kk::coop

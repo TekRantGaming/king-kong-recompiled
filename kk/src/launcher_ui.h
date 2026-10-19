@@ -223,6 +223,7 @@ enum class ItemType {
   kAction,   // does something when selected
   kLink,     // opens a sub-page
   kInfo,     // read-only (achievements)
+  kText,     // plain dim text, without focus or an action
 };
 
 struct Item {

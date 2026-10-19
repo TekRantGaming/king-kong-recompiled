@@ -2,11 +2,13 @@
 #include "steam_lobby.h"
 #include "steam_runtime.h"
 #include "steam_transport.h"
+#include "steam_loopback_test.h"
 
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
+#include <iterator>
 #include <limits>
 
 using namespace kk::coop;
@@ -187,6 +189,81 @@ void Messages() {
   SteamMessagesTransport invalid(failure, 0);
   Check(invalid.State() == TransportState::Failed, "zero partner invalid");
 }
+void EveryProtocolMessage() {
+  // Explicit expectations, independent of the adapter's Valid() fallback.
+  const MessageType reliable[] = {
+    MessageType::Hello, MessageType::HelloAck, MessageType::Reject, MessageType::Bye,
+    MessageType::EnemyEvent, MessageType::ShotIntent, MessageType::Cheats, MessageType::InventoryState,
+    MessageType::SessionStart, MessageType::SaveChunk, MessageType::LevelChange, MessageType::Loaded,
+    MessageType::LoadRelease, MessageType::Checkpoint, MessageType::ChapterFinished, MessageType::ReloadRequest,
+    MessageType::FlowAbort, MessageType::DamageEvent, MessageType::PlayerStatus, MessageType::OwnershipChange,
+    MessageType::PlayerDowned, MessageType::PlayerRevived, MessageType::CameraCut
+  };
+  const MessageType unreliable[] = {MessageType::Ping, MessageType::Pong, MessageType::PlayerPose,
+      MessageType::EnemySnapshot, MessageType::CameraPose};
+  static_assert(kProtocolVersion == 9 && std::size(reliable)+std::size(unreliable) == 28);
+  Backend a,b; a.self=1; b.self=2; a.remote=&b; b.remote=&a;
+  SteamMessagesTransport at(a,2),bt(b,1);
+  unsigned seen[29]{};
+  for (bool r : {true,false}) {
+    const auto types = r ? std::span<const MessageType>(reliable) : std::span<const MessageType>(unreliable);
+    for (auto type : types) {
+      ++seen[unsigned(type)];
+      std::vector<uint8_t> packet,out;
+      Check(Encode(SteamProbeMessage(type),packet) && packet.size()<=kMaxPacketBytes,"maximum probe fixture encodes within packet cap");
+      Check(at.Send(packet,r) && b.incoming.size()==1,"every protocol message reaches Steam backend");
+      Check(b.incoming.front().channel==(r ? 0 : 1) && b.incoming.front().reliable==r,"every type uses expected Steam channel and flag");
+      bt.Poll(0);
+      Check(bt.Receive(out) && out==packet && !bt.Receive(out),"every type preserves framing through Steam adapter");
+      if (type!=MessageType::Ping && type!=MessageType::Pong)
+        Check(!at.Send(packet,!r),"every non-heartbeat rejects the wrong channel");
+      if (type==MessageType::EnemySnapshot) Check(packet.size()==974,"full enemy batch fits unreliable message limit");
+      if (type==MessageType::SaveChunk) Check(packet.size()==798,"768-byte save chunk includes bounded framing");
+      if (type==MessageType::ShotIntent) Check(packet.size()==554,"maximum shotgun hits fit packet cap");
+    }
+  }
+  for (unsigned i=1;i<=28;++i) Check(seen[i]==1,"all 28 distinct protocol IDs covered");
+}
+void FullSaveOverMessages() {
+  Backend a,b; a.self=1; b.self=2; a.remote=&b; b.remote=&a;
+  SteamMessagesTransport at(a,2),bt(b,1);
+  CoopSession host({true,Role::Host,12345,Compatible()},at),guest({true,Role::Guest,0,Compatible()},bt);
+  FlowMailbox h,g;
+  std::vector<uint8_t> save(kSessionSaveBytes);
+  for (size_t i=0;i<save.size();++i) save[i]=uint8_t(i*37);
+  auto start=SteamProbeMessage(MessageType::SessionStart).start;
+  start.save_bytes=uint32_t(save.size()); start.save_hash=SessionSaveHash(save);
+  Check(h.Begin(start,save),"full host save queued before Steam handshake");
+  // Different PC steady-clock epochs must not be compared to each other.
+  auto tick=[&](unsigned i) {
+    const double t=i*.016;
+    host.Tick(1000+t); guest.Tick(20000+t); h.Exchange(host,1000+t); g.Exchange(guest,20000+t);
+  };
+  for (unsigned i=0;i<80;++i) tick(i);
+  Check(h.Snapshot().host && !g.Snapshot().host && g.Snapshot().start_ready && g.Snapshot().save==save,
+      "entire 0x8040 save and SessionStart cross real Steam adapter with skewed clocks");
+  Check(h.Submit(Message{.type=MessageType::Loaded,.flow=h.Snapshot().world}) &&
+      g.Submit(Message{.type=MessageType::Loaded,.flow=g.Snapshot().world}),"both loads queued");
+  for (unsigned i=80;i<100;++i) tick(i);
+  Check(h.Snapshot().phase==FlowPhase::Playing && g.Snapshot().phase==FlowPhase::Playing,"Steam reliable load barrier releases both peers");
+  h.Disconnect(); g.Disconnect();
+  Check(h.Snapshot().phase==FlowPhase::Failed && g.Snapshot().phase==FlowPhase::Failed,"leave keeps failure visible for game return");
+  Check(h.Begin(start,save),"fresh host can start after previous disconnect");
+  h.Disconnect();
+  Check(h.Begin(start,save),"cancelled pending save does not block subsequent lobby");
+  h.Disconnect();
+  // Reuse both mailboxes with swapped roles, as a newly created/joined lobby can.
+  Backend c,d; c.self=3; d.self=4; c.remote=&d; d.remote=&c;
+  SteamMessagesTransport ct(c,4),dt(d,3);
+  CoopSession new_guest({true,Role::Guest,0,Compatible()},ct),new_host({true,Role::Host,54321,Compatible()},dt);
+  Check(g.Begin(start,save),"former guest queues next host start");
+  for (unsigned i=0;i<80;++i) {
+    const double t=30000+i*.016;
+    new_host.Tick(t); new_guest.Tick(t); g.Exchange(new_host,t); h.Exchange(new_guest,t);
+  }
+  Check(!h.Snapshot().host && g.Snapshot().host && h.Snapshot().start_ready && h.Snapshot().save==save,
+      "new Steam session resets failed flow, role and save assembly");
+}
 void Stub() {
   unsigned paints = 0;
   SteamRuntimeOptions options; options.enabled = true; options.compatibility = Compatible();
@@ -198,6 +275,7 @@ void Stub() {
   Check(runtime.Snapshot().status_text == "Steam not available in this build" && paints == 1, "clear stub status and repaint");
   Check(runtime.SessionSnapshot().state == SessionState::Idle, "stub cannot start session");
   Check(runtime.SelfTest([](const std::string&) {}) == 1, "stub self-test fails cleanly");
+  Check(runtime.SelfTest([](const std::string&) {},true) == 1, "SDK-missing loopback probe fails cleanly");
   runtime.Shutdown(); Check(!runtime.Act({SocialAction::CreateLobby}), "shutdown rejects new work");
   SteamRuntime disabled(SteamRuntimeOptions{});
   Check(!disabled.Act({SocialAction::Open}) && disabled.Snapshot().status == SocialStatus::Disabled, "disabled runtime never opens Steam");
@@ -218,6 +296,6 @@ void SessionOverMessages() {
 }
 }
 int main() {
-  Keys(); Invites(); Social(); Messages(); SessionOverMessages(); Stub();
+  Keys(); Invites(); Social(); Messages(); EveryProtocolMessage(); FullSaveOverMessages(); SessionOverMessages(); Stub();
   std::printf("Steam service tests: %u checks OK\n", checks);
 }

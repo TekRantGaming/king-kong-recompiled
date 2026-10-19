@@ -197,6 +197,9 @@ void SoloAndObserver() {
   for (int chapter : {37,40}) {
     Flows observer(chapter); observer.Loaded();
     Check(observer.guest.View().policy==ChapterPolicy::Observer,"ending guest uses observer status");
+    Check(std::string_view(observer.host.View().status).empty() &&
+        std::string_view(observer.guest.View().status)=="Observer section. Following host progress.",
+        "only the observer guest is told it is following the host");
     observer.host.Local(Event(MessageType::LevelChange,{1,7,0,0}),3); Transfer(observer.host,observer.guest,3);
     Check(observer.guest.View().world.level==7 && observer.guest.View().world.generation==2,
         "observer follows without guest chapter finish");
