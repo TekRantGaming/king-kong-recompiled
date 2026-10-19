@@ -3,6 +3,8 @@
 
 #include <array>
 #include <chrono>
+#include <cstdint>
+#include <cstdio>
 #include <mutex>
 #include <utility>
 #include <vector>
@@ -17,6 +19,7 @@
 #include <rex/ui/d3d12/d3d12_provider.h>
 
 #include "backend/host_device.h"
+#include "backend/gpu_loss.h"
 #include "backend/cpu_profile.h"
 #include "backend/dev_gpu_stats.h"
 #include "backend/d3d12_requirements.h"
@@ -128,7 +131,17 @@ class D3D12Host final : public HostDevice {
         if (entry.first == completion) value = entry.second;
       }
     }
-    if (value == 0 || frame_fence_->GetCompletedValue() >= value) return;
+    const uint64_t completed = frame_fence_->GetCompletedValue();
+    if (completed == UINT64_MAX) {
+      // Task 266: a removed device reports every fence as UINT64_MAX (we never signal that value). Report
+      // it here (gpu_loss.h) instead of rendering on until the presenter notices.
+      char what[96];
+      std::snprintf(what, sizeof(what), "D3D12 frame wait: device removed (reason 0x%08X)",
+                    unsigned(provider_.GetDevice()->GetDeviceRemovedReason()));
+      ReportGpuLoss(what);
+      return;
+    }
+    if (value == 0 || completed >= value) return;
     // A null event blocks this thread until the fence reaches the value.
     frame_fence_->SetEventOnCompletion(value, nullptr);
   }

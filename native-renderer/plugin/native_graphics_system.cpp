@@ -44,6 +44,7 @@
 #include "backend/backend.h"
 #include "backend/draw_state.h"
 #include "backend/host_device.h"
+#include "backend/gpu_loss.h"
 #include "plugin/launcher_prewarm.h"
 #include "plugin/plugin_settings.h"
 #include "plugin/native_startup.h"
@@ -269,6 +270,13 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
     ReportStartupFailure("could not initialise its native device");
     return X_STATUS_UNSUCCESSFUL;
   }
+  // Task 266: a lost device found by the renderer's own submissions, waits or render thread (gpu_loss.h)
+  // takes the same path as one the presenter reports (startup recovery during startup, else the logged end).
+  SetGpuLossHandler([](const char* what) {
+    REXGPU_ERROR("rexgpu-native: graphics device error in the renderer: {}", what);
+    rex::FlushLogging();
+    if (NativeGraphicsSystem* self = Instance()) self->OnHostGpuLoss(true);
+  });
   rex::system::X_VIDEO_MODE video_mode;
   rex::kernel::xboxkrnl::VdQueryVideoMode(&video_mode);
   backend_ = std::make_unique<Backend>(std::move(host), memory_);
@@ -414,6 +422,7 @@ void NativeGraphicsSystem::Shutdown() {
     backend_->Shutdown();
     backend_.reset();
   }
+  SetGpuLossHandler(nullptr);
   if (presenter_) {
     if (app_context_) {
       app_context_->CallInUIThreadSynchronous([this]() { presenter_.reset(); });

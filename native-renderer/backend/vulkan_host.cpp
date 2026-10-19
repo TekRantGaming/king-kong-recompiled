@@ -33,6 +33,7 @@
 #include <rex/ui/vulkan/provider.h>
 
 #include "backend/host_device.h"
+#include "backend/gpu_loss.h"
 #include "backend/cpu_profile.h"
 #include "backend/dev_gpu_stats.h"
 #include "backend/output_blit.h"
@@ -203,7 +204,26 @@ class VulkanHost final : public HostDevice {
   void ExecuteCommandList(nvrhi::ICommandList* command_list) override {
     ExecuteFrameCommandList(command_list, nullptr);
   }
+  // Task 266: a Vulkan error thrown inside NVRHI here (vulkan.hpp: device lost, or out of memory on a
+  // submission) goes to the plugin's device-loss path (gpu_loss.h) instead of std::terminate, so a loss
+  // during startup reaches the startup recovery. The locks of `fn` are released before the report.
+  template <typename F>
+  void Guarded(const char* where, F&& fn) {
+    std::string what;
+    try {
+      fn();
+      return;
+    } catch (const std::system_error& e) {
+      if (!IsVulkanError(e) || !g_gpu_loss_handler.load()) throw;
+      what = std::string(where) + ": " + e.what();
+    }
+    ReportGpuLoss(what.c_str());
+  }
+
   void WaitFrame(nvrhi::IEventQuery* completion) override {
+    Guarded("Vulkan frame wait", [&] { WaitFrameUnguarded(completion); });
+  }
+  void WaitFrameUnguarded(nvrhi::IEventQuery* completion) {
     // Waiting on a timeline semaphore does not access VkQueue. Avoid the SDK's
     // queue lock here: its presenter may hold that lock while waiting for display.
     if (!queue_semaphore_ || !wait_semaphores_) {
@@ -225,9 +245,15 @@ class VulkanHost final : public HostDevice {
     info.semaphoreCount = 1;
     info.pSemaphores = &queue_semaphore_;
     info.pValues = &value;
-    wait_semaphores_(vk_device_, &info, UINT64_MAX);
+    // Task 266: the result was ignored; after a lost device the wait returns at once and the renderer went on
+    // as if the frame were done.
+    if (wait_semaphores_(vk_device_, &info, UINT64_MAX) == VK_ERROR_DEVICE_LOST)
+      ReportGpuLoss("vkWaitSemaphores: VK_ERROR_DEVICE_LOST");
   }
   void ExecuteFrameCommandList(nvrhi::ICommandList* command_list, nvrhi::IEventQuery* completion) override {
+    Guarded("Vulkan submission", [&] { ExecuteFrameCommandListUnguarded(command_list, completion); });
+  }
+  void ExecuteFrameCommandListUnguarded(nvrhi::ICommandList* command_list, nvrhi::IEventQuery* completion) {
     // Host access to a VkQueue must be externally synchronised: hold the SDK's
     // queue lock (recursive) while NVRHI submits.
     using clock = std::chrono::steady_clock;
@@ -262,15 +288,19 @@ class VulkanHost final : public HostDevice {
   DriverPipelineCache* pipeline_cache() override { return pipeline_cache_.get(); }
 
   void WaitForIdle() override {
-    auto acquisition = provider_.vulkan_device()->AcquireQueue(queue_family_, 0);
-    std::lock_guard execute_lock(execute_mutex_);
-    device_->waitForIdle();
+    Guarded("Vulkan wait for idle", [&] {
+      auto acquisition = provider_.vulkan_device()->AcquireQueue(queue_family_, 0);
+      std::lock_guard execute_lock(execute_mutex_);
+      device_->waitForIdle();
+    });
   }
   void RunExclusive(const std::function<void()>& fn) override {
-    auto acquisition = provider_.vulkan_device()->AcquireQueue(queue_family_, 0);
-    std::lock_guard execute_lock(execute_mutex_);
-    device_->waitForIdle();
-    fn();
+    Guarded("Vulkan exclusive work", [&] {
+      auto acquisition = provider_.vulkan_device()->AcquireQueue(queue_family_, 0);
+      std::lock_guard execute_lock(execute_mutex_);
+      device_->waitForIdle();
+      fn();
+    });
   }
 
   bool CopyToGuestOutput(rex::ui::Presenter::GuestOutputRefreshContext& context,
