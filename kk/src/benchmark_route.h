@@ -43,6 +43,46 @@ inline std::vector<RouteChapter> DefaultRoute(double duration = 45) {
   return {{2, duration, "Necropolis"}, {8, duration, "V-Rex"},
           {10, duration, "Kong"}, {1, duration, "Skull Island (coast)"}};
 }
+// A recording route other than the default (kk_benchmark_record_route, task 319): "<entry>:<seconds>"
+// items, comma-separated, e.g. "9:180" (chapter-select entry 9, Ann, for 180 game seconds). At most 4
+// chapters, entries 0-40, 1-600 seconds (what DecodeRecording accepts). Empty: the default route.
+// Throws std::invalid_argument when the text is not such a list.
+inline std::vector<RouteChapter> ParseRouteSpec(std::string_view spec, double default_duration = 45) {
+  auto bad = []() -> void { throw std::invalid_argument("benchmark route: expected entry:seconds[,entry:seconds]"); };
+  auto trim = [](std::string_view v) {
+    while (!v.empty() && (v.front() == ' ' || v.front() == '\t')) v.remove_prefix(1);
+    while (!v.empty() && (v.back() == ' ' || v.back() == '\t')) v.remove_suffix(1);
+    return v;
+  };
+  spec = trim(spec);
+  if (spec.empty()) return DefaultRoute(default_duration);
+  std::vector<RouteChapter> out;
+  while (true) {
+    const size_t comma = spec.find(',');
+    std::string_view item = trim(spec.substr(0, comma));
+    const size_t colon = item.find(':');
+    std::string_view entry_text = trim(item.substr(0, colon));
+    if (entry_text.empty() || entry_text.size() > 2) bad();
+    int entry = 0;
+    for (char ch : entry_text) { if (ch < '0' || ch > '9') bad(); entry = entry * 10 + (ch - '0'); }
+    double duration = default_duration;
+    if (colon != std::string_view::npos) {
+      const std::string seconds_text(trim(item.substr(colon + 1)));
+      if (seconds_text.empty()) bad();
+      std::istringstream in(seconds_text);
+      in.imbue(std::locale::classic());
+      if (!(in >> duration) || !in.eof()) bad();
+    }
+    if (entry > 40 || !std::isfinite(duration) || duration < 1 || duration > 600 || out.size() >= 4) bad();
+    std::string name = "Chapter-select entry " + std::to_string(entry);
+    for (const auto& d : DefaultRoute()) if (d.entry == entry) name = d.name;
+    if (entry == 9) name = "Ann";
+    out.push_back({entry, duration, std::move(name)});
+    if (comma == std::string_view::npos) break;
+    spec = spec.substr(comma + 1);
+  }
+  return out;
+}
 inline std::string EncodeRecording(const Recording& r) {
   std::ostringstream out;
   out.imbue(std::locale::classic());
@@ -116,7 +156,7 @@ inline Recording DecodeRecording(std::string_view text) {
       r.checkpoints.push_back(c);
     } else fail();
   }
-  if (!ended || (in >> token) || r.chapters.size() < 3) fail();
+  if (!ended || (in >> token) || r.chapters.empty()) fail();
   for (size_t chapter = 0; chapter < r.chapters.size(); ++chapter) {
     bool connected = false, checkpoint = false;
     double first = std::numeric_limits<double>::infinity(), last = 0;

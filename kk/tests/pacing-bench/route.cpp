@@ -163,9 +163,55 @@ void ReplayTests() {
       std::abs(stats.average_fps - count / seconds) < 1e-9, "total FPS weights chapter intervals, excludes load gaps");
 }
 
+void RouteSpecTests() {
+  auto throws = [](const char* spec) {
+    try { ParseRouteSpec(spec); return false; } catch (const std::invalid_argument&) { return true; }
+  };
+  const auto empty = ParseRouteSpec("");
+  Check(empty.size() == 4 && empty[0].entry == 2 && empty[3].entry == 1 && empty[0].duration == 45,
+      "empty route spec is the default route");
+  Check(ParseRouteSpec("  ", 30)[1].duration == 30, "blank spec keeps the default duration");
+  const auto ann = ParseRouteSpec("9:180");
+  Check(ann.size() == 1 && ann[0].entry == 9 && ann[0].duration == 180 && ann[0].name == "Ann", "9:180 is Ann for 180 s");
+  const auto two = ParseRouteSpec(" 9:90.5 , 8 ", 45);
+  Check(two.size() == 2 && two[0].duration == 90.5 && two[1].entry == 8 && two[1].duration == 45 &&
+      two[1].name == "V-Rex", "list, spaces, decimal seconds, default duration");
+  Check(throws("9:0") && throws("9:601") && throws("41:10") && throws("x:10") && throws("9:abc") &&
+      throws("9:10s") && throws("9:") && throws(",9") && throws("9,") && throws("1,2,3,4,5") && throws("-1:10"),
+      "invalid route specs rejected");
+  // A one-chapter recording (Ann) encodes, decodes and replays its own chapter.
+  Recording r;
+  r.complete = true;
+  r.build = "synthetic";
+  r.settings = "kk_frame_rate = 60\n";
+  r.chapters = ParseRouteSpec("9:4");
+  for (uint64_t frame = 0; frame <= 240; ++frame) {
+    PadSample s;
+    s.chapter = 0; s.frame = frame + 1; s.seconds = (frame + 1) / 60.0;
+    s.raw_dt = 1.0 / 60; s.scaled_dt = s.raw_dt; s.game_ms = uint32_t(frame * 1000 / 60);
+    s.state[4] = uint8_t(frame);
+    r.samples.push_back(s);
+  }
+  for (int second = 0; second <= 4; ++second) r.checkpoints.push_back({0, double(second), true, {1, 2, 3}});
+  try {
+    const auto text = EncodeRecording(r);
+    const auto decoded = DecodeRecording(text);
+    Check(decoded.chapters.size() == 1 && decoded.chapters[0].entry == 9 && EncodeRecording(decoded) == text,
+        "one-chapter recording round-trips");
+    RouteReplay replay;
+    replay.Attach(decoded);
+    replay.Reset(0);
+    uint32_t missed = 0;
+    const PadSample* at_two = replay.Read(0, 2.0, missed);
+    Check(at_two && at_two->chapter == 0 && std::abs(at_two->seconds - 2.0) < 1.0 / 60 + 1e-9,
+        "one-chapter recording replays its reads");
+  } catch (const std::exception& e) { Check(false, e.what()); }
+  Reject(r, [](auto& v) { v.chapters.clear(); }, "no chapters rejected");
+}
+
 int main(int argc, char** argv) {
   try {
-    FormatTests(); ReplayTests();
+    FormatTests(); ReplayTests(); RouteSpecTests();
     if (argc == 3 && std::string(argv[1]) == "--inspect") {
       std::ifstream file(argv[2], std::ios::binary);
       if (!file) throw std::runtime_error("Cannot open recording");
