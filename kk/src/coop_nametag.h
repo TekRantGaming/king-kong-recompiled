@@ -20,6 +20,28 @@ struct Projection {
   float x = 0, y = 0;  // Screen point, or a clamped edge point.
   float dx = 0, dy = 1;  // Unit screen direction for the edge arrow.
 };
+inline constexpr float kAboveHead = .3f;
+// Human rigs are already validated by the body service. Select their highest
+// central joint, rather than assigning anatomical meaning to an unproved tag 20.
+// This remains a geometric head estimate, bounded to reject arms/held objects.
+inline void ConsiderHead(Point root, Point bone, std::optional<Point>& highest) {
+  for (float f : {root.x,root.y,root.z,bone.x,bone.y,bone.z}) if (!std::isfinite(f)) return;
+  const float height = bone.z-root.z;
+  if (std::hypot(bone.x-root.x,bone.y-root.y) > .35f || height < 1.2f || height > 2.6f) return;
+  if (!highest || bone.z > highest->z) highest = bone;
+}
+inline Point AboveHead(Point root, const std::optional<Point>& head) {
+  const auto p = head.value_or(Point{root.x,root.y,root.z+1.8f});
+  return {p.x,p.y,p.z+kAboveHead};
+}
+// Measurement and projection must both be in ImGui logical coordinates. The
+// caller measures at the very same font size passed to AddText; DPI is applied
+// once by ImGui's renderer. Only picture-edge clipping may move the centre.
+inline Rect TextBounds(const Projection& p, float width, float height, Rect picture, float inset) {
+  const float left = picture.x+inset;
+  const float right = std::max(left,picture.x+picture.w-width-inset);
+  return {std::clamp(p.x-width*.5f,left,right),p.y-height,width,height};
+}
 inline bool Valid(const Camera& c) {
   for (const auto& m : {c.view, c.projection})
     for (float f : m) if (!std::isfinite(f)) return false;

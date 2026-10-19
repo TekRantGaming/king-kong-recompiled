@@ -511,6 +511,64 @@ void NameTags() {
   Check(Opacity(.5f) == 0 && Near(Opacity(2),.65) && Near(Opacity(45),.65) &&
       Near(Opacity(52.5f),.325) && Opacity(60) == 0 && Opacity(100) == 0, "close/far name and arrow fades");
   Check(FontScale(40) < FontScale(5), "name shrinks with distance");
+
+  const Point root{10,20,30};
+  std::optional<Point> head;
+  ConsiderHead(root,{10.1f,20,31.45f},head);  // Upper spine.
+  ConsiderHead(root,{10.55f,20,31.6f},head);  // Lateral shoulder/attachment.
+  Check(head && Near(head->z,31.45),"lateral joint cannot shift tag toward shoulder");
+  ConsiderHead(root,{10.1f,20.05f,31.85f},head);
+  ConsiderHead(root,{10,20,31.3f},head);
+  ConsiderHead(root,{10,20,33},head);
+  ConsiderHead(root,{10,20,std::numeric_limits<float>::quiet_NaN()},head);
+  const auto anchor = AboveHead(root,head);
+  Check(Near(anchor.x,10.1) && Near(anchor.y,20.05) && Near(anchor.z,32.15),
+      "highest central joint retains head XY and adds 0.3 world units exactly once");
+  const auto fallback = AboveHead(root,std::nullopt);
+  Check(Near(fallback.x,10) && Near(fallback.y,20) && Near(fallback.z,32.1),
+      "missing bones use body root plus human height and head clearance");
+  // Guest world Z is up; a camera facing +Y must move the tag up, never sideways.
+  c.view = {1,0,0,0, 0,0,1,0, 0,1,0,0, 0,0,0,1};
+  c.projection = {1,0,0,0, 0,2,0,0, 0,0,1.01f,1, 0,0,-.1f,0};
+  const auto skull = Project(c,{1,10,1.8f},screen,20);
+  const auto overhead = Project(c,AboveHead({1,10,0},Point{1,10,1.8f}),screen,20);
+  Check(skull && overhead && Near(skull->x,overhead->x) && Near(skull->y-overhead->y,18),
+      "0.3 world-unit head clearance projects vertically with no horizontal bias");
+
+  // Keep the known projection independent of output pixels and Windows DPI.
+  c.view = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+  c.projection = {1,0,0,0, 0,2,0,0, 0,0,1.01f,1, 0,0,-.1f,0};
+  for (float dpi : {1.f,1.25f,1.5f,1.875f,2.f}) {
+    for (float output_height : {1350.f,1500.f}) {
+      for (bool box : {false,true}) {
+        for (float aspect : {16.f/9.f,21.f/9.f,32.f/9.f}) {
+          c.projection[0] = (16.f/9.f)/aspect;
+          auto picture = Picture(2400/dpi,output_height/dpi,aspect,box);
+          picture.x += 37; picture.y += 19;  // Nonzero viewport origin.
+          const auto projected_head = Project(c,{.5f,.8f,10},picture,20/dpi);
+          Check(projected_head && projected_head->on_screen,"head stays in fitted picture across DPI/aspects");
+          for (float width : {25.f,70.f,210.f}) {
+            const auto bounds = TextBounds(*projected_head,width/dpi,20/dpi,picture,8/dpi);
+            Check(Near(bounds.x+bounds.w*.5f,projected_head->x) && Near(bounds.y+bounds.h,projected_head->y),
+                "tag centre and bottom meet projected anchor for short/long names at any DPI");
+            auto pixels = Picture(2400,output_height,aspect,box);
+            pixels.x += 37*dpi; pixels.y += 19*dpi;
+            const auto physical = Project(c,{.5f,.8f,10},pixels,20);
+            Check(physical && physical->on_screen,"physical head projection is valid");
+            const auto physical_bounds = TextBounds(*physical,width,20,pixels,8);
+            Check(Near(bounds.x*dpi,physical_bounds.x) && Near(bounds.y*dpi,physical_bounds.y),
+                "logical coordinates receive framebuffer DPI scale once");
+          }
+        }
+      }
+    }
+  }
+  Projection edge; edge.x=4; edge.y=100;
+  const auto left = TextBounds(edge,80,20,screen,8);
+  Check(Near(left.x,8),"left-edge text clamps full measured width");
+  edge.x=796;
+  Check(Near(TextBounds(edge,80,20,screen,8).x,712),"right-edge text clamps full measured width");
+  Check(Near(TextBounds(edge,900,20,screen,8).x,8),"overwide text avoids reversed clamp bounds");
 }
 void DisplayNames() {
   Check(SanitizeDisplayName("") == "Partner", "empty name has neutral fallback");

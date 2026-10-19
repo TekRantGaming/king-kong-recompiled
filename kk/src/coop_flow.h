@@ -5,41 +5,98 @@
 #include <array>
 #include <cmath>
 #include <utility>
+#if defined(KK_DEV_TOOLS)
+#include <charconv>
+#include <string_view>
+#endif
 
 namespace kk::coop {
 enum class ChapterPolicy { Together, SoloRegroup, Observer };
 struct ChapterRule { uint32_t level; ChapterPolicy policy; bool uncertain; };
-// C01 provisional classifications. No row has runtime certification. E rows use
-// the final fallback, a status screen, rather than inventing a camera stream.
+// C29 static-data recommendations: 22 together, 17 solo/regroup, 3 observer.
+// Confidence describes source/data evidence only. Every row remains uncertain
+// until runtime acceptance; observer currently provides a status screen.
 inline constexpr std::array<ChapterRule, 42> kChapterRules{{
-  {100,ChapterPolicy::SoloRegroup,true}, {101,ChapterPolicy::Together,true},
-  {201,ChapterPolicy::Together,true}, {203,ChapterPolicy::Together,true},
-  {204,ChapterPolicy::Together,true}, {301,ChapterPolicy::Together,true},
-  {302,ChapterPolicy::Together,true}, {303,ChapterPolicy::Together,true},
-  {305,ChapterPolicy::Together,true}, {306,ChapterPolicy::Together,true},
-  {304,ChapterPolicy::SoloRegroup,true}, {401,ChapterPolicy::Together,true},
-  {402,ChapterPolicy::Together,true}, {403,ChapterPolicy::Together,true},
-  {404,ChapterPolicy::Together,true}, {501,ChapterPolicy::SoloRegroup,true},
-  {502,ChapterPolicy::SoloRegroup,true}, {504,ChapterPolicy::SoloRegroup,true},
-  {702,ChapterPolicy::Together,true}, {705,ChapterPolicy::SoloRegroup,true},
-  {901,ChapterPolicy::Together,true}, {1002,ChapterPolicy::Together,true},
-  {1101,ChapterPolicy::Together,true}, {1200,ChapterPolicy::Together,true},
-  {1201,ChapterPolicy::Together,true}, {703,ChapterPolicy::Together,true},
-  {1401,ChapterPolicy::Together,true}, {1402,ChapterPolicy::Together,true},
-  {1501,ChapterPolicy::Together,true}, {1701,ChapterPolicy::Together,true},
-  {1702,ChapterPolicy::Together,true}, {1703,ChapterPolicy::SoloRegroup,true},
-  {1801,ChapterPolicy::Together,true}, {1803,ChapterPolicy::Together,true},
-  {1804,ChapterPolicy::Together,true}, {1805,ChapterPolicy::Together,true},
-  {1901,ChapterPolicy::SoloRegroup,true}, {1902,ChapterPolicy::SoloRegroup,true},
-  {2001,ChapterPolicy::SoloRegroup,true}, {2003,ChapterPolicy::SoloRegroup,true},
-  {2004,ChapterPolicy::Observer,true}, {7,ChapterPolicy::Observer,true}
+  {100,ChapterPolicy::SoloRegroup,true},   // 0: VERIFIED (data)
+  {101,ChapterPolicy::Together,true},      // 1: LIKELY
+  {201,ChapterPolicy::Together,true},      // 2: LIKELY
+  {203,ChapterPolicy::Together,true},      // 3: LIKELY
+  {204,ChapterPolicy::Together,true},      // 4: LIKELY
+  {301,ChapterPolicy::Together,true},      // 5: LIKELY
+  {302,ChapterPolicy::Together,true},      // 6: LIKELY
+  {303,ChapterPolicy::Together,true},      // 7: LIKELY
+  {305,ChapterPolicy::Together,true},      // 8: LIKELY
+  {306,ChapterPolicy::Together,true},      // 9: LIKELY
+  {304,ChapterPolicy::SoloRegroup,true},   // 10: VERIFIED (data)
+  {401,ChapterPolicy::Together,true},      // 11: LIKELY
+  {402,ChapterPolicy::Together,true},      // 12: LIKELY
+  {403,ChapterPolicy::SoloRegroup,true},   // 13: LIKELY
+  {404,ChapterPolicy::SoloRegroup,true},   // 14: VERIFIED (data)
+  {501,ChapterPolicy::SoloRegroup,true},   // 15: VERIFIED (data)
+  {502,ChapterPolicy::SoloRegroup,true},   // 16: VERIFIED (data)
+  {504,ChapterPolicy::SoloRegroup,true},   // 17: VERIFIED (data)
+  {702,ChapterPolicy::Together,true},      // 18: LIKELY
+  {705,ChapterPolicy::SoloRegroup,true},   // 19: VERIFIED (data)
+  {901,ChapterPolicy::SoloRegroup,true},   // 20: VERIFIED (data)
+  {1002,ChapterPolicy::SoloRegroup,true},  // 21: VERIFIED (data)
+  {1101,ChapterPolicy::Together,true},     // 22: LIKELY
+  {1200,ChapterPolicy::Together,true},     // 23: LIKELY
+  {1201,ChapterPolicy::Together,true},     // 24: LIKELY
+  {703,ChapterPolicy::Together,true},      // 25: LIKELY
+  {1401,ChapterPolicy::Together,true},     // 26: LIKELY
+  {1402,ChapterPolicy::SoloRegroup,true},  // 27: LIKELY (hero disputed)
+  {1501,ChapterPolicy::Together,true},     // 28: LIKELY
+  {1701,ChapterPolicy::Together,true},     // 29: LIKELY
+  {1702,ChapterPolicy::Together,true},     // 30: LIKELY
+  {1703,ChapterPolicy::SoloRegroup,true},  // 31: VERIFIED (data)
+  {1801,ChapterPolicy::SoloRegroup,true},  // 32: VERIFIED (data)
+  {1803,ChapterPolicy::SoloRegroup,true},  // 33: VERIFIED (data)
+  {1804,ChapterPolicy::Together,true},     // 34: LIKELY
+  {1805,ChapterPolicy::Together,true},     // 35: LIKELY
+  {1901,ChapterPolicy::SoloRegroup,true},  // 36: VERIFIED (data)
+  {1902,ChapterPolicy::Observer,true},     // 37: GUESS (playability unknown)
+  {2001,ChapterPolicy::SoloRegroup,true},  // 38: VERIFIED (data)
+  {2003,ChapterPolicy::SoloRegroup,true},  // 39: VERIFIED (data)
+  {2004,ChapterPolicy::Observer,true},     // 40: VERIFIED (data)
+  {7,ChapterPolicy::Observer,true}         // 41: VERIFIED (data)
 }};
+#if defined(KK_DEV_TOOLS)
+using PolicyOverrides = std::array<std::optional<ChapterPolicy>, kChapterRules.size()>;
+// Init-only cvar, installed before either worker starts. Never mutate during play.
+inline PolicyOverrides dev_policy_overrides{};
+inline std::optional<PolicyOverrides> ParsePolicyOverrides(std::string_view text) {
+  PolicyOverrides parsed{};
+  if (text.size() > 1024) return {};
+  while (!text.empty()) {
+    const auto comma = text.find(',');
+    const auto item = text.substr(0,comma);
+    const auto colon = item.find(':');
+    if (colon == std::string_view::npos || colon == 0) return {};
+    unsigned entry = 0;
+    const auto number = item.substr(0,colon);
+    const auto result = std::from_chars(number.data(),number.data()+number.size(),entry);
+    if (result.ec != std::errc{} || result.ptr != number.data()+number.size() || entry >= parsed.size()) return {};
+    const auto mode = item.substr(colon+1);
+    if (mode == "together") parsed[entry] = ChapterPolicy::Together;
+    else if (mode == "solo") parsed[entry] = ChapterPolicy::SoloRegroup;
+    else if (mode == "observer") parsed[entry] = ChapterPolicy::Observer;
+    else return {};
+    if (comma == std::string_view::npos) break;
+    text.remove_prefix(comma+1);
+    if (text.empty()) return {};
+  }
+  return parsed;  // Empty clears overrides; repeated entries use the last value.
+}
+#endif
 inline int FlowChapter(uint32_t level) {
   for (size_t i=0; i<kChapterRules.size(); ++i) if (kChapterRules[i].level == level) return int(i);
   return -1;
 }
 inline ChapterPolicy PolicyFor(uint32_t level) {
   const int c = FlowChapter(level);
+#if defined(KK_DEV_TOOLS)
+  if (c >= 0 && dev_policy_overrides[size_t(c)]) return *dev_policy_overrides[size_t(c)];
+#endif
   return c >= 0 ? kChapterRules[size_t(c)].policy : ChapterPolicy::Observer;
 }
 enum class FlowPhase { Idle, Preparing, Loading, Playing, Waiting, Failed };
