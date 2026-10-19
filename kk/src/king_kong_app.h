@@ -352,8 +352,10 @@ class KingKongApp : public rex::ReXApp {
       kk::startup::Begin(config.gpu_plugin, !*show_launcher_);
     }
     REXLOG_INFO("KK: renderer {} (kk_renderer {})", config.gpu_plugin, rex::cvar::GetFlagByName("kk_renderer"));
-    if (!config.audio_factory)
-      config.audio_factory = REX_AUDIO_BACKEND(kk::ScheduledAudioSystem);
+    // Task 286: always ours. The SDK's SetupPresentation sets its plain SDLAudioSystem before OnPreSetup, so
+    // the old "if (!config.audio_factory)" never chose this one (no audio thread scheduling since e360f6f,
+    // and none of task 285's slow audio-open lines).
+    config.audio_factory = REX_AUDIO_BACKEND(kk::ScheduledAudioSystem);
   }
 
   void OnPostSetup() override {
