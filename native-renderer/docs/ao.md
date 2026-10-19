@@ -257,9 +257,13 @@ buffer for that draw alone), depth EQUAL without writes, colour times the occlus
 occlusion). The lookup is scaled from the target's render scale to the occlusion's (after the upscale point
 0.667 with DLSS Quality). Because ALWAYS lets a farther part overwrite a nearer one in the pre-pass, the
 occlusion of some hand pixels belongs to a hidden surface: the shader compares the stored depth GTAO worked
-from (Gtao::raw_depth) with the pixel's and leaves mismatches, and pixels within the average's reach of one,
-at 1 (else sharp dark patches and thin dark lines). A depth-aware 3 x 3 average (5 x 5 with a temporal
-upscaler, whose noise the hands drawn after its point never see). Only colour draws after the occlusion went
+from (Gtao::raw_depth) with the pixel's. A tent-weighted 5 x 5 average (7 x 7 with a temporal upscaler,
+whose noise the hands drawn after its point never see) counts every mismatch, and every pixel next to one
+(its 3 x 3: where a hidden part meets the surface the depths agree for a pixel and the occlusion there is the
+hidden part's, near 0), as 1. Task 244 left mismatches at a hard 1 instead: the edges of those patches and
+thin unmatched strips between them showed as 1-pixel dark marks on the back of the hand (task 306; the
+patches themselves are large on the back of the hand). Developer views (ao_mode 2): KK_DEV_AO_HANDS_VIEW=1
+the occlusion unchecked, 2 green with mismatches red, 3 the occlusion used with the hidden share in red. Only colour draws after the occlusion went
 in are drawn again, so nothing is darkened twice: V-Rex (entry 8) with the machine gun drawn takes the same path
 as Hayes (task 247: ALWAYS pre-pass, colour after the AO moment), arms drawn before the moment are not touched.
 The redraw's pipeline is asked for with `PipelineDemand::kSoon` (queued with the draws' jobs, ahead of the
