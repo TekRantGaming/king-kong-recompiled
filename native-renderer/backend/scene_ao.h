@@ -17,6 +17,7 @@
 // The game renderer calls it from small hooks (game_ao.cpp). NVRHI only; the render thread.
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 
@@ -91,6 +92,24 @@ class SceneAo {
     uint32_t width = 0, height = 0;
   };
   AmbientView ambient_view() const { return ambient_view_; }
+  // The occlusion of `frame` once it went into the scene (or a scene copy), for a surface the game
+  // draws over it afterwards (the first-person hands, game_ao.cpp AoRedrawHands): the image, where it
+  // starts in its target and its size (as ambient_view), and that target's render scale. False otherwise.
+  struct AppliedView {
+    AmbientView image;
+    nvrhi::ITexture* depth = nullptr;  // the depth it was worked out from (Gtao::raw_depth: pixel i is image pixel step * i)
+    uint32_t step = 1;
+    float host_scale_x = 1.0f, host_scale_y = 1.0f;
+  };
+  bool applied_view(uint64_t frame, AppliedView& v) const {
+    if (!gtao_ || frame != frame_ || !computed_ || !applied_ || !gtao_->occlusion()) return false;
+    v.image = {gtao_->occlusion(), gtao_->origin_x(), gtao_->origin_y(), gtao_->width(), gtao_->height()};
+    v.depth = gtao_->raw_depth();
+    v.step = std::max(gtao_->step(), 1u);
+    v.host_scale_x = computed_scale_x_;
+    v.host_scale_y = computed_scale_y_;
+    return true;
+  }
   // Whether a pixel shader is on the ambient list.
   bool IsAmbientShader(uint64_t ucode_hash) const { return ambient_ && ambient_->find(ucode_hash); }
 
@@ -161,6 +180,7 @@ class SceneAo {
 
   uint64_t frame_ = UINT64_MAX;
   bool computed_ = false;        // this frame
+  float computed_scale_x_ = 1.0f, computed_scale_y_ = 1.0f;  // the render scale of the picture it was worked out for
   bool applied_ = false;         // the scene has its occlusion this frame (or a copy got it)
   bool ambient_ready_ = false;   // the listed shaders can read it this frame
   bool ambient_drawn_ = false;   // a listed shader drew in the scene after that

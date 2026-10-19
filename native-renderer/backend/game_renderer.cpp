@@ -2187,6 +2187,11 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
   PrepareDescriptorDraw(cl, *vs, ps.get());
   if (!NoteVolatileDraw(cl, false)) return;
   if (scene_ao_ || ao_constants_) AoDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
+  if (scene_ao_) {  // task 244: the pre-pass's depth-only ALWAYS geometry (the first-person hands)
+    bool writes_color = false;
+    for (uint32_t i = 0; i < record.color_count; ++i) writes_color = writes_color || record.color_mask[i];
+    AoNoteHandsDepth(call, record, writes_color);
+  }
   // GI hook (game_gi.cpp): at the end of the opaque pass the bounce light goes in (after the AO's occlusion).
   if (scene_gi_) GiDrawHook(cl, call, d, colors, depth, record, *vs, ps.get());
   // Cel hook (game_cel.cpp): at the end of the opaque pass the lines and bands go in (after AO and GI).
@@ -2651,6 +2656,8 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     cl->draw(args);
   }
   ++stats_.draws;
+  // AO on the first-person hands (game_ao.cpp): their colour drawn again, times the occlusion.
+  if (scene_ao_ && !ao_hands_.empty()) AoRedrawHands(cl, call, record, *vs, gs, args, indexed_draw, *size_from);
   if (tessellated) {
     tessellation_drawn_this_frame_=true;
     ++tessellation_draws_this_frame_;

@@ -21,6 +21,7 @@ version's notes the first time you start it.
 - **Closing the game now lets shader preparation finish first**, so the game no longer closes in the middle of it. This helps against the crash on some AMD graphics cards.
 - **Garbled letters in Settings**: the Language row showed "EspaÃ±ol" and "FranÃ§ais", and Field of view showed "69Â° (original)". They now read Español, Français and 69° (original).
 - **The Upscaler description is translated**, and in the pause menu it no longer says things that only apply in the main menu.
+- **Ambient occlusion now shades Jack's hands** and the gun he holds in chapters where they were drawn without it (such as the Hayes chapters): the creases of his fingers and the gun are darker like the world around him. With ambient occlusion off nothing changes.
 
 ### Changed
 - **Every setting explains itself.** The panel beside the settings, in the launcher and in the pause menu, now says what each setting does, what you will notice in the game, what each option changes, and shows its performance and video memory impact and when a change takes effect. In five languages.

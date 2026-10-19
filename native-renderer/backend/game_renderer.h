@@ -942,6 +942,28 @@ class GameRenderer {
                                  const ResolveCall& call, const HostTarget* source);
   void AoClearHook(const ClearCall& call, const HostTarget* depth);
   void AoPresentHook(nvrhi::ICommandList* cl);
+  // AO on the first-person hands (task 244, docs/ao.md): geometry the scene's depth pre-pass draws depth-only
+  // with depth func ALWAYS (Jack's arms, what he holds) is noted; when its opaque colour draw comes after the
+  // occlusion went into the scene, that draw is made a second time with ao_hands.hlsl (depth EQUAL, colour
+  // times the occlusion). Nothing runs with AO off.
+  void AoNoteHandsDepth(const DrawCall& call, const PipelineRecord& record, bool writes_color);
+  void AoRedrawHands(nvrhi::ICommandList* cl, const DrawCall& call, const PipelineRecord& record, const GameShader& vs,
+                     const nvrhi::GraphicsState& gs, const nvrhi::DrawArguments& args, bool indexed,
+                     const HostTarget& target);
+  uint32_t AoOcclusionSlot(nvrhi::ITexture* texture);  // the occlusion's slot in the 2D table (0: none)
+  uint32_t ao_hands_depth_slot_ = 0;  // the depth the occlusion was worked out from, in the 2D table
+  nvrhi::ITexture* ao_hands_depth_texture_ = nullptr;
+  struct AoHandsKey {
+    uint32_t index_buffer = 0, start = 0, count = 0;
+    int32_t base_vertex = 0;
+    bool operator==(const AoHandsKey&) const = default;
+  };
+  std::vector<AoHandsKey> ao_hands_;
+  uint64_t ao_hands_frame_ = UINT64_MAX;
+  nvrhi::ShaderHandle ao_hands_ps_;
+  struct AoHandsStats {
+    uint64_t noted = 0, drawn = 0, waiting = 0;
+  } ao_hands_stats_;
   std::unique_ptr<SceneAo> scene_ao_;
   std::unique_ptr<AoGpuTimer> ao_timer_;  // --native_ao_gpu_time
 
