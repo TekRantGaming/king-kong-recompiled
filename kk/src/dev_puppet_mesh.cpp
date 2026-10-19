@@ -89,6 +89,10 @@ struct Node {
   uint32_t resource = 0, skin = 0, skin_data = 0, skin_count = 0, skin_bytes = 0;
   bool links = false;
   bool external = false;
+  // First discovered reference, for evidence only. Resource reachability does
+  // not establish that this node is submitted by this root at render time.
+  uint32_t parent = 0, group = 0, entry = 0;
+  const char* origin = "root";
 };
 Node ReadNode(const uint8_t* b, uint32_t actor) {
   Node n;
@@ -199,7 +203,7 @@ uint64_t Hash(const uint8_t* b, uint32_t data, uint32_t bytes) {
   for (uint32_t i = 0; i < bytes; ++i) { hash ^= b[data+i]; hash *= 1099511628211ull; }
   return hash;
 }
-void Refresh(const uint8_t* b, Probe& p) {
+void Refresh(const uint8_t* b, Probe& p, bool inspect_resources = false) {
   p.owners.clear();
   std::vector<Watch> watches;
   const auto watch = [&](uint32_t owner, uint32_t data, uint32_t bytes) {
@@ -215,12 +219,18 @@ void Refresh(const uint8_t* b, Probe& p) {
   };
   for (auto& r : p.roots) {
     r.nodes.clear();
-    std::vector<uint32_t> pending{r.actor};
+    struct Reference {
+      uint32_t actor, parent, group, entry;
+      const char* origin;
+    };
+    std::vector<Reference> pending{{r.actor, 0, 0, 0, "root"}};
     std::set<uint32_t> seen;
     for (size_t i = 0; i < pending.size() && r.nodes.size() < kMaxNodes; ++i) {
-      const auto actor = pending[i];
+      const auto ref = pending[i];
+      const auto actor = ref.actor;
       if (!Range(actor, 36) || !seen.insert(actor).second) continue;
-      const Node n = ReadNode(b, actor);
+      Node n = ReadNode(b, actor);
+      n.parent = ref.parent; n.group = ref.group; n.entry = ref.entry; n.origin = ref.origin;
       r.nodes.push_back(n);
       const auto [it, inserted] = p.owners.emplace(actor, r.actor);
       if (!inserted && it->second != r.actor) it->second = 0;  // Shared nodes are ambiguous, never guess.
@@ -232,19 +242,19 @@ void Refresh(const uint8_t* b, Probe& p) {
           watch(r.actor, Ptr(b, anim, 92, 5120), std::min(live.count, 64u)*80);
           if (pending.size() < 2*kMaxNodes) for (uint32_t j = 0; j < live.count; ++j) {
             const auto child = Word(b, live.begin+8*j);
-            if (child && !(child & 3)) pending.push_back(child);
+            if (child && !(child & 3)) pending.push_back({child, actor, Word(b, anim, 8), live.begin+8*j, "live-hierarchy"});
           }
         }
       }
       // Resource groups also contain actors: 828689A8 (.40:34463..34484)
       // and load cleanup 8287E498 (.62:34376..34399). Do not assume anim+8
       // is the entire renderable graph. Shared resource nodes remain ambiguous.
-      if (DrawOn() && (n.flags & 0x800000)) {
+      if ((DrawOn() || inspect_resources) && (n.flags & 0x800000)) {
         const auto group = Hierarchy(b, n.resource);
         if (group.valid && pending.size() < 2*kMaxNodes)
           for (uint32_t j = 0; j < group.count; ++j) {
             const auto child = Word(b, group.begin+8*j);
-            if (child && !(child & 3)) pending.push_back(child);
+            if (child && !(child & 3)) pending.push_back({child, actor, n.resource, group.begin+8*j, "resource-group"});
           }
       }
       if (n.flags & 0x400000) watch(r.actor, Ptr(b, n.holder, 12, 80), 80);
@@ -283,7 +293,8 @@ void Refresh(const uint8_t* b, Probe& p) {
         if (!inserted && it->second != r.actor) { it->second = 0; ++p.ambiguous_links; continue; }
         if (std::any_of(r.nodes.begin(), r.nodes.end(), [&](const Node& old) { return old.actor == actor; })) continue;
         if (r.nodes.size() == kMaxNodes) { p.registry_capped = true; continue; }
-        n.external = true; r.nodes.push_back(n); ++p.external_nodes;
+        n.external = true; n.origin = "registry-skin-link"; n.entry = entry;
+        r.nodes.push_back(n); ++p.external_nodes;
       }
     }
   }
@@ -339,12 +350,12 @@ void LogDisplayEntries(const uint8_t* b, Probe& p) {
       const auto authored_n = ReadNode(b, (authored_node & 3) ? 0 : authored_node);
       const auto instance = (n.flags & 0x4000) ? n.component[0] : 0;
       const auto authored_instance = (authored_n.flags & 0x4000) ? authored_n.component[0] : 0;
-      REXLOG_INFO("PUPPET display-entry role={} epoch={} game-frame={} actor={:08X} node={:08X} origin={} slot={} authored-node={:08X} flags={:08X}/{:08X} instance={:08X} asset={:08X} type={} data24={:08X} identity64={:08X} authored-instance={:08X} authored-asset={:08X} skin={:08X} skin-data={:08X} skin-count={} links={}",
+      REXLOG_INFO("PUPPET display-entry role={} epoch={} game-frame={} actor={:08X} node={:08X} origin={} slot={} authored-node={:08X} flags={:08X}/{:08X} instance={:08X} asset={:08X} type={} data24={:08X} identity64={:08X} authored-instance={:08X} authored-asset={:08X} skin={:08X} skin-data={:08X} skin-count={} links={} parent={:08X} group={:08X} entry={:08X}",
           role ? "copy" : "source", p.epoch, p.list_frame, r.actor, n.actor,
-          old.external ? "registry-skin-link" : "hierarchy-or-resource", slot, authored_node,
+          old.origin, slot, authored_node,
           n.flags, n.flags4, instance, Word(b, instance), Word(b, Word(b, instance)),
           Word(b, instance, 24), Word(b, instance, 64), authored_instance, Word(b, authored_instance),
-          n.skin, n.skin_data, n.skin_count, n.links);
+          n.skin, n.skin_data, n.skin_count, n.links, old.parent, old.group, old.entry);
     }
   }
 }
@@ -695,6 +706,57 @@ void HierarchyCalled(uint32_t actor) {
   for (auto& r : p.roots) if (r.actor == actor) { r.hierarchy_frame = p.frame.load(); ++r.hierarchy_calls; }
 }
 }  // namespace
+
+void DevPuppetMeshSpawnFixPreflight(const uint8_t* b, uint32_t source, uint32_t copy, uint64_t epoch) {
+  static const bool requested = [] {
+    const char* v = std::getenv("KK_DEV_PUPPET_SPAWN_FIX");
+    return v && std::string(v) == "1";
+  }();
+  if (!requested) return;
+  // C16's two proposed targets have no skin component (C15 flags 00097001
+  // and 00015001). 8286FE40 preserves that layout; 8286D0E0 only rebinds
+  // EXISTING 0x200000 skin entries. Neither call invents a bone-index map.
+  // The copy reaches them through ext+12 resources, copied at 82870AB4,
+  // not through its private anim+8 hierarchy. Never edit the shared lists.
+  Probe snapshot;
+  snapshot.world = Word(b, 0x828E8388);
+  snapshot.roots[0].actor = source; snapshot.roots[1].actor = copy;
+  const auto source_node = ReadNode(b, source), copy_node = ReadNode(b, copy);
+  if (!source || source == copy || !(source_node.flags & 2) || !(copy_node.flags & 2)) {
+    REXLOG_INFO("PUPPET spawn-fix epoch={} source={:08X} copy={:08X} state=refused reason=invalid-distinct-rig-roots cloned=0 rebound=0 guest-writes=false",
+        epoch, source, copy);
+    return;
+  }
+  const auto source_anim = Ptr(b, source_node.holder, 0, 180);
+  const auto copy_anim = Ptr(b, copy_node.holder, 0, 180);
+  const auto source_live = Hierarchy(b, Word(b, source_anim, 8));
+  const auto copy_live = Hierarchy(b, Word(b, copy_anim, 8));
+  if (!source_anim || !copy_anim || source_anim == copy_anim || !source_live.valid || !copy_live.valid) {
+    REXLOG_INFO("PUPPET spawn-fix epoch={} source={:08X} copy={:08X} state=refused reason=invalid-or-aliased-live-hierarchy cloned=0 rebound=0 guest-writes=false",
+        epoch, source, copy);
+    return;
+  }
+  Refresh(b, snapshot, true);
+  uint32_t shared_meshes = 0;
+  for (const auto& n : snapshot.roots[1].nodes) {
+    const auto owner = snapshot.owners.find(n.actor);
+    if (!(n.flags & 0x4000) || owner == snapshot.owners.end() || owner->second) continue;
+    ++shared_meshes;
+    bool in_live = false;
+    for (uint32_t i = 0; i < copy_live.count; ++i)
+      in_live |= Word(b, copy_live.begin+8*i) == n.actor;
+    const char* reason = !(n.flags & 0x200000) ? "no-skin-component-no-bone-map" :
+        !n.links || !n.skin_data || !n.skin_count ? "no-valid-existing-skin-links" :
+        !in_live ? "resource-template-not-private-live-reference" : "shared-live-node-needs-ownership-proof";
+    REXLOG_INFO("PUPPET spawn-fix-node epoch={} copy={:08X} node={:08X} instance={:08X} flags={:08X} origin={} parent={:08X} group={:08X} entry={:08X} in-copy-live={} skin={:08X} skin-data={:08X} skin-count={} links={} mesh-constants={:08X} mesh-constant-count={} state=refused reason={} cloned=0 rebound=0 anatomy=unproven",
+        epoch, copy, n.actor, n.component[0], n.flags, n.origin, n.parent, n.group, n.entry,
+        in_live, n.skin, n.skin_data, n.skin_count, n.links,
+        Word(b, n.component[0], 48), Word(b, n.component[0], 36), reason);
+  }
+  REXLOG_INFO("PUPPET spawn-fix epoch={} source={:08X} copy={:08X} state=refused reason=no-proven-safe-body-node-clone shared-meshes={} source-live-tagged={} copy-live-tagged={} inventory-capped={} cloned=0 rebound=0 guest-writes=false",
+      epoch, source, copy, shared_meshes, source_live.tagged, copy_live.tagged,
+      snapshot.roots[0].nodes.size() == kMaxNodes || snapshot.roots[1].nodes.size() == kMaxNodes || snapshot.registry_capped);
+}
 
 void DevPuppetMeshReset() {
   if (!On()) return;

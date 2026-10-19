@@ -708,6 +708,7 @@ bool SpawnCopy(PPCContext& ctx, uint8_t* b, uint32_t w, const Rig& source, const
   REXLOG_INFO("PUPPET spawn allocated actor={:08X} template={:08X} via={} epoch={} quarantine={} no-free",
               actor, t, pooled ? "pool" : "duplicate", s.epoch,
               Opt().spawn_mode == Options::SpawnMode::Free ? "DISABLED-UNSAFE" : "registered");
+  DevPuppetMeshSpawnFixPreflight(b, source.actor, actor, s.epoch);
   // Arm read-only diagnostics even if an unseeded rig fails a later guard.
   // Free/hold deliberately retain the engine's initial action (possibly -1).
   if (PassiveSpawn()) DevPuppetMeshArm(b, source.actor, actor, s.epoch);
