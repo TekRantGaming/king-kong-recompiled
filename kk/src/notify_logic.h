@@ -10,7 +10,6 @@
 namespace kk::notify {
 
 struct Situation {
-  bool asked = false;           // "Minimise and notify me" was chosen for this download
   bool minimised = false;       // the launcher's window is minimised
   bool focused = true;          // the launcher's window is the active window
   bool setting_on = true;       // Settings: "Notify me when downloads finish" (kk_notify_downloads)
@@ -25,16 +24,13 @@ struct Plan {
 };
 
 // The ding plays in every case unless the launcher's sounds are muted (off or at 0%). A system
-// notification goes out when the player asked for it with "Minimise and notify me" (that choice wins over
-// the Settings switch: the button says it will notify), otherwise only with the switch on and the launcher
-// minimised or not the active window: when it is in front, its own pop-up is enough.
+// notification goes out only with the Settings switch on and the launcher minimised or not the active
+// window (e.g. the player chose Run in background and went elsewhere): when it is in front, its own pop-up
+// is enough. ("Minimise and notify me" was removed, owner 19 Oct.)
 inline Plan Decide(const Situation& s) {
   Plan p;
   p.ding = s.sounds_on && s.sounds_volume > 0;
-  if (s.asked) {
-    p.system = true;
-    p.why = "Minimise and notify me was chosen";
-  } else if (!s.setting_on) {
+  if (!s.setting_on) {
     p.why = "notifications are switched off in Settings";
   } else if (s.minimised) {
     p.system = true;

@@ -35,16 +35,6 @@ int main() {
   p = Decide(s);
   Check(p.ding && p.system, "not the active window: ding and notification");
 
-  // "Minimise and notify me": always a notification, even with the launcher back in front, and even with
-  // the Settings switch off (the button promised it).
-  s = {};
-  s.asked = true;
-  p = Decide(s);
-  Check(p.system, "asked, launcher in front: notification");
-  s.setting_on = false;
-  p = Decide(s);
-  Check(p.system, "asked wins over the switch");
-
   // The switch off: no notification when minimised or in the background; the ding still plays.
   s = {};
   s.setting_on = false;
@@ -64,7 +54,7 @@ int main() {
   Check(!p.ding && p.system, "sounds off: no ding, notification still sent");
   s = {};
   s.sounds_volume = 0;
-  s.asked = true;
+  s.minimised = true;
   p = Decide(s);
   Check(!p.ding && p.system, "volume 0: no ding");
   s = {};
@@ -74,16 +64,16 @@ int main() {
 
   // Every case has a reason for the log.
   for (int bits = 0; bits < 32; ++bits) {
+    if (bits & 1) continue;  // bit 0 was "Minimise and notify me" (removed, owner 19 Oct)
     Situation t;
-    t.asked = bits & 1;
     t.minimised = bits & 2;
     t.focused = bits & 4;
     t.setting_on = bits & 8;
     t.sounds_on = bits & 16;
     const auto q = Decide(t);
     Check(q.why && *q.why, "every decision has a reason");
-    // The full table: a notification exactly when asked, or switch on and (minimised or not active).
-    Check(q.system == (t.asked || (t.setting_on && (t.minimised || !t.focused))), "decision table");
+    // The full table: a notification exactly when the switch is on and (minimised or not active).
+    Check(q.system == (t.setting_on && (t.minimised || !t.focused)), "decision table");
     Check(q.ding == t.sounds_on, "ding follows the sounds switch");
   }
 
