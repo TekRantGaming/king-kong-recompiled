@@ -71,8 +71,8 @@ void SetupDtFloor(rex::memory::Memory* memory) {
   REX_EXTERN(__imp__sub_##addr);                                                  \
   REX_HOOK_RAW(sub_##addr) { kk::hfr::WithRealStep(ctx, base, __imp__sub_##addr); }
 
-// k_ETAT_grab (sub_825CA350) is hooked in hfr_step_decay.cpp, which calls WithRealStepFn.
-KK_DT_FLOOR_HOOK(8259D998)  // k_ETAT_grab_mashing
+// k_ETAT_grab (sub_825CA350) is hooked in hfr_step_decay.cpp and k_ETAT_grab_mashing (sub_8259D998) in
+// hfr_kong_lift.cpp; both call WithRealStepFn.
 KK_DT_FLOOR_HOOK(825B3288)  // k_ETAT_finished
 KK_DT_FLOOR_HOOK(825B62E0)  // k_ETAT_cine
 KK_DT_FLOOR_HOOK(824876F0)  // KT_ETAT_Finish
