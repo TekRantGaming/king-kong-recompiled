@@ -74,6 +74,7 @@ struct View {
   uint64_t shots_sent = 0;
   std::optional<CheatSet> host_cheats;
   std::string partner_name;
+  uint64_t epoch = 0;
 };
 std::mutex enemy_status_mutex;
 enemies::Counters enemy_status;
@@ -118,6 +119,7 @@ class Service {
         if (local && now - local->time > .25) { local.reset(); failure = "publish-expired"; }
         session.Tick(now, local, &frame, &cheats);
         shots_.Exchange(session);
+        combat_.Exchange(session, now);
         flow_.Exchange(session, now);
         View view{config.role, session.State(), session.Rejection(), session.Stats(), local, session.Partner(now), now};
         view.local_failure = failure; view.poses = session.Poses();
@@ -125,6 +127,7 @@ class Service {
         view.shots_sent = session.ShotsSent();
         view.host_cheats = session.HostCheats();
         view.partner_name = session.PartnerName();
+        view.epoch = session.Epoch();
         LogPoses(view, now, next_pose_log);
         { std::lock_guard lock(mutex_); view_ = std::move(view); }
         if (shown != session.State()) { shown = session.State(); RequestUiPaint(); }
@@ -147,6 +150,7 @@ class Service {
     if (worker_.joinable()) worker_.join();
     std::lock_guard lock(mutex_); local_ = {}; view_ = {}; enemies_ = {}; local_cheats_.reset();
     shots_.Clear();
+    combat_.Clear();
   }
   bool Running() const { return running_; }
   void Publish(PoseRead p) { std::lock_guard lock(mutex_); local_ = p; }
@@ -159,6 +163,9 @@ class Service {
   void PublishCheats(CheatSet cheats) { std::lock_guard lock(mutex_); local_cheats_ = cheats; }
   void PublishInventory(const InventoryState& inventory) { shots_.PublishInventory(inventory); }
   std::vector<ReceivedShot> TakeShots() { return shots_.Take(); }
+  bool SubmitCombat(Message m, double now) { return combat_.Submit(std::move(m), now); }
+  std::vector<ReceivedCombat> TakeCombat() { return combat_.Take(); }
+  void ClearCombat() { combat_.Clear(); }
   bool BeginFlow(SessionStart start, std::vector<uint8_t> save) { return flow_.Begin(start, std::move(save)); }
   bool SubmitFlow(Message m) { return flow_.Submit(std::move(m)); }
   FlowView FlowSnapshot() const { return flow_.Snapshot(); }
@@ -170,6 +177,7 @@ class Service {
   View view_;
   enemies::Frame enemies_;
   ShotMailbox shots_;
+  CombatMailbox combat_;
   std::optional<CheatSet> local_cheats_;
   FlowMailbox flow_;
 };
@@ -191,7 +199,7 @@ View CurrentView() {
 #endif
   if (!steam) return {};
   const auto v = steam->SessionSnapshot();
-  return {v.role, v.state, v.rejection, v.stats, v.local, v.partner, v.updated, v.local_failure, v.poses, v.enemies, v.enemies_sent, v.shots_sent, v.host_cheats, v.partner_name};
+  return {v.role, v.state, v.rejection, v.stats, v.local, v.partner, v.updated, v.local_failure, v.poses, v.enemies, v.enemies_sent, v.shots_sent, v.host_cheats, v.partner_name, v.epoch};
 }
 
 class PartnerOverlay final : public rex::ui::ImGuiDialog {
@@ -474,7 +482,7 @@ EnemyLink EnemyLinkSnapshot() {
   const auto v = CurrentView();
   const auto flow=SessionFlowSnapshot();
   if (flow.active && (flow.phase!=FlowPhase::Playing || flow.policy!=ChapterPolicy::Together)) return {};
-  return {v.state == SessionState::Connected && Now()-v.updated <= .5, v.role, v.enemies, v.enemies_sent, v.shots_sent, v.partner};
+  return {v.state == SessionState::Connected && Now()-v.updated <= .5, v.role, v.enemies, v.enemies_sent, v.shots_sent, v.partner, v.epoch};
 }
 bool EnemyConnectionReady() {
   if (!REXCVAR_GET(kk_coop_enabled)) return false;
@@ -528,6 +536,25 @@ std::vector<ReceivedShot> TakeShotIntents() {
   return steam ? steam->TakeShots() : std::vector<ReceivedShot>{};
 }
 void SetShotCounters(ShotCounters counts) { std::lock_guard lock(enemy_status_mutex); shot_status = counts; }
+bool SubmitCombat(Message message, double now) {
+  if (!EnemyConnectionReady()) return false;
+#if defined(KK_DEV_TOOLS)
+  if (service.Running()) return service.SubmitCombat(std::move(message), now);
+#endif
+  return steam && steam->SubmitCombat(std::move(message), now);
+}
+std::vector<ReceivedCombat> TakeCombat() {
+#if defined(KK_DEV_TOOLS)
+  if (service.Running()) return service.TakeCombat();
+#endif
+  return steam ? steam->TakeCombat() : std::vector<ReceivedCombat>{};
+}
+void ClearCombat() {
+#if defined(KK_DEV_TOOLS)
+  if (service.Running()) { service.ClearCombat(); return; }
+#endif
+  if (steam) steam->ClearCombat();
+}
 PuppetSnapshot PartnerBodySnapshot() {
   if (!REXCVAR_GET(kk_coop_enabled)) return {};
   const auto v = CurrentView();

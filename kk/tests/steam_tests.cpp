@@ -106,6 +106,8 @@ std::vector<uint8_t> Packet(MessageType type) {
   m.enemies = {{303, 3, 1}, 1, {enemy}};
   m.enemy_event = {{303, 3, 1}, EnemyEventKind::Spawned, enemy};
   m.cheats = {0x125}; m.inventory = {{303, 3, 1}, 1, 2, {0, 999, 0, 0}};
+  m.damage = {{303, 3, 1}, 11, 1, enemy.id, 16388, 6, {1, 0, 0}};
+  m.player_status = {{303, 3, 1}, 11, 2, 1, PlayerCondition::Hurt};
     m.shot.world = {303, 3, 1}; m.shot.number = 1; m.shot.weapon = 1; m.shot.direction = {1, 0, 0};
   std::vector<uint8_t> bytes; Check(Encode(m, bytes), "encode backend fixture"); return bytes;
 }
@@ -150,11 +152,11 @@ void Messages() {
     Check(host.Send(shot, true) && !host.Send(shot, false), "shot intent only uses reliable channel");
     guest.Poll(.2);
     Check(guest.Receive(out) && out == shot && !guest.Receive(out), "shot framing preserved");
-  for (auto type : {MessageType::Cheats, MessageType::InventoryState}) {
+  for (auto type : {MessageType::Cheats, MessageType::InventoryState, MessageType::DamageEvent, MessageType::PlayerStatus}) {
     const auto packet = Packet(type);
-    Check(host.Send(packet, true) && !host.Send(packet, false), "cheats and inventory require reliable channel");
+    Check(host.Send(packet, true) && !host.Send(packet, false), "cheats, inventory and combat require reliable channel");
     guest.Poll(.3);
-    Check(guest.Receive(out) && out == packet && !guest.Receive(out), "cheat/inventory framing preserved");
+    Check(guest.Receive(out) && out == packet && !guest.Receive(out), "cheat/inventory/combat framing preserved");
   }
   b.incoming.push_back({3, 0, true, false, hello});
   b.incoming.push_back({1, 0, true, true, {}});

@@ -33,6 +33,7 @@ struct SteamSessionView {
   uint64_t shots_sent = 0;
   std::optional<CheatSet> host_cheats;
   std::string partner_name;
+  uint64_t epoch = 0;
 };
 // Construction/configuration never loads Steam. First Open/Create/Accept starts a single
 // joined worker which owns init, every flat call, callbacks, lobby and CoopSession until shutdown.
@@ -49,6 +50,9 @@ class SteamRuntime final : public ISocialService {
   void PublishCheats(CheatSet cheats);
   void PublishInventory(const InventoryState& inventory);
   std::vector<ReceivedShot> TakeShots();
+  bool SubmitCombat(Message message, double now);
+  std::vector<ReceivedCombat> TakeCombat();
+  void ClearCombat();
   SteamSessionView SessionSnapshot() const;
   bool EnemyConnectionReady(double now) const;
   bool BeginFlow(SessionStart start, std::vector<uint8_t> save);

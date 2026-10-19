@@ -41,6 +41,7 @@ struct EnemyLink {
   uint64_t sent = 0;
   uint64_t shots_sent = 0;
   std::optional<PlayerPose> partner;
+  uint64_t epoch = 0;
 };
 EnemyLink EnemyLinkSnapshot();
 bool EnemyConnectionReady();
@@ -52,6 +53,9 @@ void PublishInventoryState(const InventoryState& inventory);
 void RefreshSessionCheats();
 std::vector<ReceivedShot> TakeShotIntents();
 void SetShotCounters(ShotCounters counters);
+bool SubmitCombat(Message message, double now);
+std::vector<ReceivedCombat> TakeCombat();
+void ClearCombat();
 // Value-only snapshot, including CoopSession's interpolated pose. No transport work.
 struct PuppetSnapshot {
   bool enabled = false, fresh = false;

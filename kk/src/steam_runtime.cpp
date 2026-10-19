@@ -151,6 +151,7 @@ struct SteamRuntime::Impl
   enemies::Frame local_enemies;
   std::optional<CheatSet> local_cheats;
   ShotMailbox shots;
+  CombatMailbox combat;
   FlowMailbox flow;
   const char* local_failure = "not-published";
 #if defined(KK_DEV_TOOLS)
@@ -311,6 +312,7 @@ struct SteamRuntime::Impl
     transport.reset(); partner = 0; last_session_state = SessionState::Idle;
     { std::lock_guard lock(mutex); session_view = {}; }
     shots.Clear();
+    combat.Clear();
   }
   void RetireCalls() {
     if (create_call) abandoned.emplace(create_call, LobbyCreated_t::k_iCallback);
@@ -585,6 +587,7 @@ struct SteamRuntime::Impl
     if (pose && now - pose->time > .25) { pose.reset(); failure = "publish-expired"; }
     session->Tick(now, pose, &enemy_frame, &cheats);
     shots.Exchange(*session);
+    combat.Exchange(*session, now);
     flow.Exchange(*session, now);
     SteamSessionView view{session->SessionRole(), session->State(), session->Rejection(), session->Stats(), pose, session->Partner(now), now};
     view.local_failure = failure; view.poses = session->Poses();
@@ -592,6 +595,7 @@ struct SteamRuntime::Impl
     view.shots_sent = session->ShotsSent();
     view.host_cheats = session->HostCheats();
     view.partner_name = session->PartnerName();
+    view.epoch = session->Epoch();
 #if defined(KK_DEV_TOOLS)
     if (view.state != SessionState::Connected) next_pose_log = now + 10;
     else if (now >= next_pose_log) {
@@ -726,6 +730,9 @@ bool SteamRuntime::BeginFlow(SessionStart start, std::vector<uint8_t> save) { re
 bool SteamRuntime::SubmitFlow(Message m) { return impl_->flow.Submit(std::move(m)); }
 FlowView SteamRuntime::FlowSnapshot() const { return impl_->flow.Snapshot(); }
 std::vector<ReceivedShot> SteamRuntime::TakeShots() { return impl_->shots.Take(); }
+bool SteamRuntime::SubmitCombat(Message m, double now) { return impl_->combat.Submit(std::move(m), now); }
+std::vector<ReceivedCombat> SteamRuntime::TakeCombat() { return impl_->combat.Take(); }
+void SteamRuntime::ClearCombat() { impl_->combat.Clear(); }
 void SteamRuntime::Shutdown() { impl_->Shutdown(); }
 #if defined(KK_DEV_TOOLS)
 int SteamRuntime::SelfTest(std::function<void(const std::string&)> log) {

@@ -4,8 +4,10 @@
 #include "coop_transport.h"
 #include "coop_enemies.h"
 #include "coop_shots.h"
+#include "coop_combat.h"
 
 #include <deque>
+#include <algorithm>
 #include <functional>
 #include <optional>
 #include <mutex>
@@ -36,6 +38,7 @@ struct PoseCounters {
   uint64_t sent = 0, received = 0;
   std::optional<uint32_t> remote_level;
 };
+struct ReceivedCombat { Message message; double received = 0; };
 class CoopSession {
  public:
   using StateCallback = std::function<void(SessionState)>;
@@ -46,6 +49,7 @@ class CoopSession {
   void End(double now);
   SessionState State() const { return state_; }
   Role SessionRole() const { return config_.role; }
+  uint64_t Epoch() const { return epoch_; }
   TransportStats Stats() const;
   RejectReason Rejection() const { return rejection_; }
   std::optional<PlayerPose> Partner(double now) const;
@@ -60,6 +64,8 @@ class CoopSession {
   uint64_t ShotsSent() const { return shots_sent_; }
   bool QueueFlow(const Message& message);
   std::vector<Message> TakeFlow();
+  bool QueueCombat(const Message& message, double submitted);
+  std::vector<ReceivedCombat> TakeCombat();
  private:
   void Transition(SessionState state);
   bool Send(Message message, bool reliable);
@@ -93,6 +99,63 @@ class CoopSession {
   bool cheat_seen_ = false, inventory_seen_ = false;
   std::deque<Message> outgoing_flow_;
   std::vector<Message> incoming_flow_;
+  std::deque<ReceivedCombat> outgoing_combat_;
+  std::vector<ReceivedCombat> incoming_combat_;
+};
+// Same bounded value-only handoff for UDP and Steam. Epoch checked again by the
+// session before sending, so old work cannot leak into a replacement connection.
+class CombatMailbox {
+ public:
+  bool Submit(Message m, double now) {
+    if (!IsCombatMessage(m.type) || !m.epoch || !std::isfinite(now)) return false;
+    std::vector<uint8_t> bytes; if (!Encode(m, bytes)) return false;
+    std::lock_guard lock(mutex_);
+    if (outgoing_.size() >= combat::kQueueLimit) return false;
+    outgoing_.push_back({std::move(m), now}); return true;
+  }
+  std::vector<ReceivedCombat> Take() {
+    std::lock_guard lock(mutex_); auto out = std::move(incoming_); incoming_.clear(); return out;
+  }
+  void Clear() { std::lock_guard lock(mutex_); outgoing_.clear(); incoming_.clear(); }
+  void Exchange(CoopSession& session, double now) {
+    if (session.State() != SessionState::Connected) { Clear(); return; }
+    std::lock_guard lock(mutex_);
+    while (!outgoing_.empty()) {
+      const auto& entry = outgoing_.front();
+      if (entry.message.epoch != session.Epoch() || !combat::Fresh(entry.received, now) ||
+          (entry.message.type == MessageType::DamageEvent ? session.SessionRole() != Role::Host : session.SessionRole() != Role::Guest)) {
+        outgoing_.pop_front(); continue;
+      }
+      if (!session.QueueCombat(entry.message, entry.received)) break;
+      outgoing_.pop_front();
+    }
+    for (auto& entry : session.TakeCombat()) {
+      if (entry.message.type == MessageType::PlayerStatus) {
+        // Reliable heartbeats keep the lease fresh. A paused game thread needs
+        // the latest observation, not an unbounded history of identical states.
+        auto prior = std::find_if(incoming_.begin(), incoming_.end(), [&](const auto& old) {
+          return old.message.type == MessageType::PlayerStatus && old.message.epoch == entry.message.epoch &&
+              old.message.player_status.world == entry.message.player_status.world &&
+              old.message.player_status.incarnation == entry.message.player_status.incarnation;
+        });
+        if (prior != incoming_.end()) {
+          const auto& a = prior->message.player_status; const auto& b = entry.message.player_status;
+          if (b.number > a.number && b.last_damage >= a.last_damage &&
+              (a.condition != PlayerCondition::Dead || b.condition == PlayerCondition::Dead)) *prior = std::move(entry);
+          continue;
+        }
+      }
+      if (incoming_.size() >= combat::kQueueLimit) {
+        // Reliable backpressure must fail closed instead of silently losing a hit.
+        session.End(now); outgoing_.clear(); incoming_.clear(); break;
+      }
+      incoming_.push_back(std::move(entry));
+    }
+  }
+ private:
+  std::mutex mutex_;
+  std::deque<ReceivedCombat> outgoing_;
+  std::vector<ReceivedCombat> incoming_;
 };
 // Both workers share the same bounded value-only handoff. No guest memory here.
 class ShotMailbox {

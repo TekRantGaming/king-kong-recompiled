@@ -1,4 +1,5 @@
 #include "coop_protocol.h"
+#include "coop_combat.h"
 
 #include <bit>
 #include <cmath>
@@ -158,9 +159,31 @@ bool ValidInventory(const InventoryState& i) {
   return true;
 }
 
+bool ValidDamageEvent(const DamageEvent& d) {
+  const float length = std::hypot(d.direction.x, d.direction.y, d.direction.z);
+  return ValidEnemyWorld(d.world) && d.incarnation && d.number && d.enemy.source &&
+      d.enemy.family == EnemyFamily::Raptor && combat::RaptorHit(d.flags, d.magnitude) &&
+      Point(d.direction) && length >= .9f && length <= 1.1f && std::isfinite(d.time) && d.time >= 0 && d.time < 1e12;
+}
+bool ValidPlayerStatus(const PlayerStatus& p) {
+  return ValidEnemyWorld(p.world) && p.incarnation && p.number &&
+      p.condition >= PlayerCondition::Alive && p.condition <= PlayerCondition::Dead;
+}
 bool Encode(const Message& m, std::vector<uint8_t>& out) {
   Writer payload;
   switch (m.type) {
+    case MessageType::DamageEvent:
+      if (!ValidDamageEvent(m.damage)) return false;
+      WriteWorld(payload, m.damage.world); payload.U(m.damage.incarnation, 8); payload.U(m.damage.number, 4);
+      payload.U(m.damage.enemy.source, 8); payload.U(m.damage.enemy.sequence, 4); payload.U(uint16_t(m.damage.enemy.family), 2);
+      payload.U(m.damage.flags, 4); payload.U(m.damage.magnitude, 4); WriteVector(payload, m.damage.direction);
+      payload.U(std::bit_cast<uint64_t>(m.damage.time), 8);
+      break;
+    case MessageType::PlayerStatus:
+      if (!ValidPlayerStatus(m.player_status)) return false;
+      WriteWorld(payload, m.player_status.world); payload.U(m.player_status.incarnation, 8);
+      payload.U(m.player_status.number, 4); payload.U(m.player_status.last_damage, 4);
+      payload.U(uint8_t(m.player_status.condition), 1); break;
     case MessageType::Cheats:
       if (!ValidCheatSet(m.cheats)) return false;
       payload.U(m.cheats.bits, 2); break;
@@ -263,6 +286,19 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
   m.sequence = uint32_t(r.U(4)); m.epoch = r.U(8);
   if (r.U(4) != bytes.size() - kHeaderBytes) return false;
   switch (m.type) {
+    case MessageType::DamageEvent:
+      m.damage.world = ReadWorld(r); m.damage.incarnation = r.U(8); m.damage.number = uint32_t(r.U(4));
+      m.damage.enemy = {r.U(8), uint32_t(r.U(4)), EnemyFamily(r.U(2))};
+      m.damage.flags = uint32_t(r.U(4)); m.damage.magnitude = uint32_t(r.U(4)); m.damage.direction = ReadVector(r);
+      m.damage.time = std::bit_cast<double>(r.U(8));
+      if (!ValidDamageEvent(m.damage)) return false;
+      break;
+    case MessageType::PlayerStatus:
+      m.player_status.world = ReadWorld(r); m.player_status.incarnation = r.U(8);
+      m.player_status.number = uint32_t(r.U(4)); m.player_status.last_damage = uint32_t(r.U(4));
+      m.player_status.condition = PlayerCondition(r.U(1));
+      if (!ValidPlayerStatus(m.player_status)) return false;
+      break;
     case MessageType::Cheats:
       m.cheats.bits = uint16_t(r.U(2));
       if (!ValidCheatSet(m.cheats)) return false;
