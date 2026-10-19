@@ -28,6 +28,10 @@ std::vector<Mod> Scan(const std::filesystem::path& user_data);
 // This build's version (KK_VERSION).
 const char* GameVersion();
 
+// Compatibility fingerprint of enabled settings mods, their order/content and effective values.
+// Texture packs and cutscene replacements are cosmetic and excluded. Not an authentication hash.
+std::string GameplayDigest(const std::filesystem::path& user_data);
+
 // At the game's start (before the GPU starts): applies the mods kk_mods enables. Settings mods' values go
 // over the player's settings for this run only (never saved); texture packs are added to the texture pack
 // folder list; cutscene folders go to the PS2 movie player. A mod that is missing or broken is skipped and

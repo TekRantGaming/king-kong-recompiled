@@ -21,6 +21,9 @@ set(KINGKONG_SOURCES
     src/benchmark_monitor.cpp
     src/sampler.cpp
     src/settings.cpp
+    src/coop_protocol.cpp
+    src/coop_session.cpp
+    src/coop_runtime.cpp
     src/input_remap.cpp
     src/launcher.cpp
     src/launcher_ui.cpp
@@ -139,6 +142,7 @@ list(APPEND KINGKONG_SOURCES ${KK_PS2_DECODER})
 option(KK_DEV_TOOLS "Build developer test aids such as KK_DEV_AUTOSKIP" OFF)
 if(KK_DEV_TOOLS)
     list(APPEND KINGKONG_SOURCES src/dev_lod.cpp src/dev_aa.cpp)
+    list(APPEND KINGKONG_SOURCES src/coop_transport_udp.cpp)
     list(APPEND KINGKONG_SOURCES src/dev_tools.cpp src/dev_watch.cpp src/dev_ae.cpp src/dev_sound_trace.cpp src/dev_load_trace.cpp src/dev_frame_log.cpp src/dev_sample.cpp src/dev_venture.cpp src/dev_chapter_jump.cpp src/dev_pause.cpp src/dev_fish.cpp src/dev_clock_trace.cpp src/dev_camera_start.cpp src/dev_game_watch.cpp src/dev_teleport.cpp src/dev_trig_trace.cpp)
 endif()
 
@@ -175,6 +179,9 @@ if(TARGET kk_ffmpeg)
 endif()
 if(WIN32)
     target_link_libraries(king_kong PRIVATE windowscodecs ole32 pdh psapi runtimeobject shell32)
+    if(KK_DEV_TOOLS)
+        target_link_libraries(king_kong PRIVATE ws2_32)
+    endif()
     # UTF-8 as the program's code page (src/king_kong.manifest, issue #37).
     target_link_options(king_kong PRIVATE "LINKER:/MANIFEST:EMBED" "LINKER:/MANIFESTUAC:NO"
                         "LINKER:/MANIFESTINPUT:${CMAKE_CURRENT_SOURCE_DIR}/src/king_kong.manifest")
@@ -222,10 +229,29 @@ execute_process(COMMAND git describe --always --dirty --abbrev=12 WORKING_DIRECT
     OUTPUT_VARIABLE KK_BENCH_BUILD OUTPUT_STRIP_TRAILING_WHITESPACE)
 target_compile_definitions(king_kong PRIVATE KK_BENCH_BUILD="${KK_BENCH_BUILD}-task115")
 
+# Include dirty source contents, not just the commit id, in co-op compatibility.
+set(KK_COOP_SOURCE_ID "${KK_BENCH_BUILD};${KK_VERSION};${CMAKE_CXX_COMPILER_ID};${CMAKE_CXX_COMPILER_VERSION};${CMAKE_BUILD_TYPE};${CMAKE_CXX_FLAGS};${KK_DEV_TOOLS}")
+foreach(source IN LISTS KINGKONG_SOURCES)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${source}")
+    file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/${source}" source_hash)
+    string(APPEND KK_COOP_SOURCE_ID ";${source_hash}")
+endforeach()
+file(GLOB KK_COOP_HEADERS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h")
+foreach(header IN LISTS KK_COOP_HEADERS)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${header}")
+    file(SHA256 "${header}" source_hash)
+    string(APPEND KK_COOP_SOURCE_ID ";${source_hash}")
+endforeach()
+string(SHA256 KK_COOP_BUILD "${KK_COOP_SOURCE_ID}")
+target_compile_definitions(king_kong PRIVATE KK_COOP_BUILD="${KK_COOP_BUILD}")
+
 if(KK_DEV_TOOLS)
     add_executable(kk-freecam-tests tests/freecam_tests.cpp)
-    target_include_directories(kk-freecam-tests PRIVATE src)
     enable_testing()
+    add_executable(kk-coop-tests tests/coop_tests.cpp src/coop_protocol.cpp src/coop_session.cpp)
+    target_include_directories(kk-coop-tests PRIVATE src)
+    add_test(NAME coop-net-core COMMAND kk-coop-tests)
+    target_include_directories(kk-freecam-tests PRIVATE src)
     add_test(NAME free-camera COMMAND kk-freecam-tests)
     # Task 208: photo mode's settings, camera limits, controller, hidden draws and grade colours; its text.
     add_executable(kk-photo-mode-tests tests/photo_mode_tests.cpp ../native-renderer/backend/photo_config.cpp)

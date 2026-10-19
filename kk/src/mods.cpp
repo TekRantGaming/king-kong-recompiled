@@ -189,6 +189,11 @@ std::vector<Mod> Scan(const fs::path& user_data) {
   return out;
 }
 
+std::string GameplayDigest(const fs::path& user_data) {
+  return GameplayFingerprint(Scan(user_data), ParseEnabled(REXCVAR_GET(kk_mods)),
+      [](const std::string& name) { return rex::cvar::GetFlagByName(name); });
+}
+
 void ApplyAtGameStart(const fs::path& user_data) {
   std::vector<std::string> ids = ParseEnabled(REXCVAR_GET(kk_mods));
   if (ids.empty()) return;

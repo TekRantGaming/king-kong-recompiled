@@ -145,6 +145,7 @@ inline void CheckGameVersion(Mod& m, std::string_view game) {
 // Settings a mod may never change: where files are, identity, online and update switches, the mod list itself,
 // and the settings that record what the setup has done.
 inline bool BlockedSetting(std::string_view name) {
+  if (name.starts_with("kk_coop_")) return true;
   static const std::set<std::string, std::less<>> kBlocked = {
       "kk_mods", "kk_install_id", "kk_online_count", "kk_online_asked", "kk_check_updates", "kk_update_channel",
       "kk_discord_status", "kk_discord_app_id", "kk_setup_version", "kk_settings_version", "kk_hardware_tier",
@@ -444,6 +445,25 @@ inline Plan BuildPlan(const std::vector<const Mod*>& enabled) {
     }
   }
   return p;
+}
+
+// Compatibility only, not authentication. Visual packs may differ between peers.
+inline std::string GameplayFingerprint(const std::vector<Mod>& all, const std::vector<std::string>& ids,
+    const std::function<std::string(const std::string&)>& effective_value) {
+  uint64_t hash = 14695981039346656037ull;
+  const auto add = [&](const std::string& s) {
+    for (unsigned char c : std::to_string(s.size()) + ":" + s) { hash ^= c; hash *= 1099511628211ull; }
+  };
+  for (const std::string& id : ids) {
+    const auto it = std::find_if(all.begin(), all.end(), [&](const Mod& m) { return m.id == id; });
+    if (it == all.end()) { add("missing"); add(id); continue; }
+    if (it->type != Type::kSettings) continue;
+    add(it->Usable() ? "settings" : "unusable"); add(id); add(it->version);
+    for (const auto& s : it->settings) { add(s.name); add(s.value); add(effective_value(s.name)); }
+  }
+  std::string digest(16, '0');
+  for (int i = 15; i >= 0; --i) { digest[size_t(i)] = "0123456789abcdef"[hash & 15]; hash >>= 4; }
+  return digest;
 }
 
 // native_texture_pack_folder with mods: the player's own pack (when it is on) first, then the mods' packs in

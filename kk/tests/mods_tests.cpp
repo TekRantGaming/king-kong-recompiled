@@ -176,6 +176,24 @@ void Conflicts() {
   Check(EnabledInOrder({broken}, {"x"}).empty(), "broken mods are skipped");
 }
 
+void CoopCompatibility() {
+  Mod gameplay;
+  gameplay.id = "hardcore"; gameplay.type = Type::kSettings; gameplay.version = "1";
+  gameplay.settings = {{"kk_no_healing", "true"}};
+  Mod pack; pack.id = "hd"; pack.type = Type::kTexturePack;
+  auto value = [](const std::string&) { return "true"; };
+  const auto a = GameplayFingerprint({gameplay, pack}, {"hardcore"}, value);
+  Check(a == GameplayFingerprint({gameplay, pack}, {"hd", "hardcore"}, value),
+      "texture pack choice does not change co-op compatibility");
+  Check(a != GameplayFingerprint({gameplay}, {}, value), "gameplay mod choice changes fingerprint");
+  gameplay.settings[0].value = "false";
+  Check(a != GameplayFingerprint({gameplay}, {"hardcore"}, value), "edited gameplay mod content changes fingerprint");
+  gameplay.settings[0].value = "true";
+  Check(a != GameplayFingerprint({gameplay}, {"hardcore"}, [](const std::string&) { return "false"; }),
+      "effective gameplay setting override changes fingerprint");
+  Check(BlockedSetting("kk_coop_enabled") && BlockedSetting("kk_coop_dev"), "mods cannot start co-op networking");
+}
+
 void Overlay() {
   OverlayEntry e{"120", 1, "30"};
   Check(ValueToSave(&e, "30") == "120", "mod value in place: the player's own is saved");
@@ -190,6 +208,7 @@ int main() {
   LoadOrder();
   Conflicts();
   Overlay();
+  CoopCompatibility();
   if (failures) {
     std::printf("%d failure(s)\n", failures);
     return 1;

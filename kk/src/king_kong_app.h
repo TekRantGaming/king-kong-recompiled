@@ -56,6 +56,7 @@ void InstallFpeGuard();  // fpe_guard.cpp
 #include "shader_pack.h"
 #include "launcher.h"
 #include "mods.h"
+#include "coop_runtime.h"
 #include "overlay.h"
 #include "ui_paint.h"
 #include "platform.h"
@@ -81,10 +82,11 @@ class KingKongApp : public rex::ReXApp {
         PPCImageConfig));
   }
 
-  ~KingKongApp() override { kk::FinishDisplayModePrefetch(); kk::movies::Shutdown(); kk::benchmark::Shutdown(); kk::SetUiPaintRequest({}); kk::startup::CleanExit(); }
+  ~KingKongApp() override { kk::coop::Shutdown(); kk::FinishDisplayModePrefetch(); kk::movies::Shutdown(); kk::benchmark::Shutdown(); kk::SetUiPaintRequest({}); kk::startup::CleanExit(); }
 
  protected:
   bool OnWindowCloseRequested() override {
+    kk::coop::Shutdown();
     // The SDK's accepted window close hard-exits without running our destructor.
     kk::benchmark::Shutdown();
     kk::play::FlushRendererFiles();
@@ -96,6 +98,7 @@ class KingKongApp : public rex::ReXApp {
   }
 
   void OnShutdown() override {
+    kk::coop::Shutdown();
     kk::benchmark::Shutdown();
     kk::play::FlushRendererFiles();
     kk::startup::CleanExit();
@@ -358,6 +361,7 @@ class KingKongApp : public rex::ReXApp {
   }
 
   void OnPostSetup() override {
+    kk::coop::Start(user_data_root_);
     kk::g_guest_base = runtime()->virtual_membase();
     kk::InstallFpeGuard();  // after the runtime's own signal handlers
     kk::TuneProcessScheduling();
@@ -435,6 +439,7 @@ class KingKongApp : public rex::ReXApp {
     kk::CreatePauseMenu(drawer, immediate_drawer(), config_path_, user_data_root_, game_data_root());
     kk::photo::CreatePanel(drawer, immediate_drawer(), user_data_root_);  // photo mode (photo_mode.cpp)
     kk::CreateFpsOverlay(drawer);
+    kk::coop::CreateOverlay(drawer);
     kk::CreateDebugOverlay(drawer, window(), config_path_, user_data_root_);
     kk::CreateCursorActivity(drawer, window());
     kk::freecam::Install(drawer, window());

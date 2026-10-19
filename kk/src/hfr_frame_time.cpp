@@ -42,6 +42,7 @@
 #include "benchmark.h"
 #include "freecam.h"
 #include "photo_mode.h"
+#include "coop_runtime.h"
 #include "play_internal.h"
 
 #include <rex/logging.h>
@@ -129,6 +130,7 @@ void StartClock(uint8_t* base, float before) {
 // The one hook on sub_8272CA20: the frame time as above, then the developer frame log
 // (KK_DEV_DT_LOG, dev_frame_log.cpp), which reads what it ended up as.
 REX_HOOK_RAW(sub_8272CA20) {
+  kk::coop::GameFrame(base);
   kk::freecam::Frame(base);
   kk::photo::Frame(base);
   const float clock = kk::hfr::LoadF(base, kGameClock);

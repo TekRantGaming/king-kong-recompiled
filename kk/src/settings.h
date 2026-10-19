@@ -17,6 +17,7 @@
 #include <rex/cvar.h>
 
 REXCVAR_DECLARE(bool, kk_launcher);
+REXCVAR_DECLARE(bool, kk_coop_enabled);
 REXCVAR_DECLARE(bool, kk_skip_launcher);
 REXCVAR_DECLARE(std::string, kk_start);
 REXCVAR_DECLARE(int32_t, kk_frame_rate);

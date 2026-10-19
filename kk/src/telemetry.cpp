@@ -647,7 +647,7 @@ void Configure(const fs::path& user_root, const fs::path& logs_dir, const fs::pa
   g_user_root = user_root;
   g_logs_dir = logs_dir;
   g_cache_root = cache_root.empty() ? user_root / "cache" : cache_root;
-  g_disabled = benchmark::Requested() || benchmark::Active();
+  g_disabled = benchmark::Requested() || benchmark::Active() || REXCVAR_GET(kk_coop_enabled);
 }
 
 void StartupUploads() {
