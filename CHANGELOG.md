@@ -16,6 +16,9 @@ version's notes the first time you start it.
 - **Photo mode's free camera turned the wrong way up and down with the mouse.** Moving the mouse up now looks up, as in play, and Mouse vertical in Settings > Controls turns it round. The F9 free camera is the same. The controller is unchanged.
 - **When the game saves**: in story play, the pause menu's Quit to main menu and Quit game questions now say that the game saves when you quit from that menu or choose Save game, not at checkpoints, so closing the window another way loses unsaved progress.
 
+### Changed
+- **More graphics prepared ahead of time**: the shipped list now has 14,638 graphics pipelines (258 more), from players who share them with Online players on, so fewer things hitch the first time you see them.
+
 ## v2.0.0-beta.11 (19 October 2026)
 
 **Beta 11**: new features and fixes, from the beta channel (**About** > **Change version**). Your saves and settings are kept. Windows only for this beta.
