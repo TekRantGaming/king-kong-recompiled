@@ -12,6 +12,7 @@ version's notes the first time you start it.
 - **Kong could get stuck lifting the stone slab away from the gate in The Skull Islanders** at 60 FPS and above, and the gang could not go on. The lift now works at any frame rate.
 - **The Cheats page in the pause menu no longer disappears** when the main Cheats switch is off, so you can switch it on again while you play.
 - **Keyboard and mouse pictures**: Settings > Controls shows the mouse buttons and the mouse as pictures (the keyboard bindings rows and the mouse rows), and photo mode shows the mouse for looking around.
+- **Keyboard and mouse: the game's stick prompts no longer flicker through key pictures.** "Right stick to aim" shows the mouse, and the move prompts show W A S D. Controller prompts are unchanged.
 - **Photo mode's free camera turned the wrong way up and down with the mouse.** Moving the mouse up now looks up, as in play, and Mouse vertical in Settings > Controls turns it round. The F9 free camera is the same. The controller is unchanged.
 - **When the game saves**: in story play, the pause menu's Quit to main menu and Quit game questions now say that the game saves when you quit from that menu or choose Save game, not at checkpoints, so closing the window another way loses unsaved progress.
 
