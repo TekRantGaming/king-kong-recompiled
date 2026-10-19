@@ -254,11 +254,11 @@ bool DrawTracker::FillCommon(DrawCall& call) {
   call.states = states_;
   call.conditional_id = conditional_id();
   call.tags = CurrentDrawTags();
-  if (call.tags & kDrawTagHud) {
+  if (call.tags & (kDrawTagHud | kDrawTagHideHud)) {
     // A 3D draw inside the HUD pass: its c0-c3 hold a perspective matrix and it is already widened, so it stays
     // out of the 16:9 HUD box (task 231). Only c0-c3: the other registers keep stale matrices of earlier 3D
     // draws, which untagged every 2D draw of the HUD (task 239).
-    if (LooksLikePerspectiveRows(call.vs_c0_c3.data())) call.tags &= ~kDrawTagHud;
+    if (LooksLikePerspectiveRows(call.vs_c0_c3.data())) call.tags &= ~(kDrawTagHud | kDrawTagHideHud);
   }
   return true;
 }

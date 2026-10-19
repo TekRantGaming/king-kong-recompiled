@@ -1933,7 +1933,8 @@ namespace {
 // Reads up to 64 of its vertices' positions; true when they span the viewport's width as pixels, or the clip
 // space through the c0-c3 rows (dp4 per row, as the game's 2D shaders do) spans -1..1. Logs the first distinct
 // tagged draws when KK_ULTRAWIDE_HUD_LOG=1.
-bool HudDrawCoversWidth(const DrawCall& c, const dev::DeviceView& d) {
+bool HudDrawCoversWidth(const DrawCall& c, const dev::DeviceView& d, bool* readable = nullptr) {
+  if (readable) *readable = false;
   if (!c.vertex_data || c.stride == 0 || c.count == 0) return false;
   const uint32_t format = DeclTypeFormat(c.position_type);
   // Xenos formats: 37 = 32_32_FLOAT, 57 = 32_32_32_FLOAT, 38 = 32_32_32_32_FLOAT.
@@ -1966,6 +1967,7 @@ bool HudDrawCoversWidth(const DrawCall& c, const dev::DeviceView& d) {
     ++n;
   }
   if (n == 0) return false;
+  if (readable) *readable = true;
   const uint32_t vte = d.u32(dev::kPaClVteCntl);
   const float vw = float(c.viewport.width ? c.viewport.width : 1280), vx = float(c.viewport.x);
   const bool pixels = (vte & 1) == 0 && x0 <= vx + 0.02f * vw && x1 >= vx + 0.98f * vw;
@@ -2030,6 +2032,12 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
     return;
   }
   if (PhotoHidesDraw(call, d, *vs, ps.get())) return;  // photo mode (game_photo.cpp): arms, weapon, pause cover
+  // Hide HUD / F10 (task 243, draw_tags.h): the HUD pass's textured 2D (the ammo counter, subtitles) is left
+  // out. Fades stay: untextured draws, full-width draws, and draws whose positions can't be read are kept.
+  if ((call.tags & kDrawTagHideHud) && call.textures[0]) {
+    bool readable = false;
+    if (!HudDrawCoversWidth(call, d, &readable) && readable) return;
+  }
 
   if (stop_at == 1) return;
   // The game's fog pass: its two AfterEffects fog pixel shaders (microcode

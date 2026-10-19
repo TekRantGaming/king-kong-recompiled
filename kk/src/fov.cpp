@@ -14,7 +14,7 @@
 // wide shots. The view's own value is put back after the call, so the game
 // never sees (or compounds) the wider angle. The first-person weapon is drawn
 // with its own fixed angle (sub_827C6660 sets 1.0 directly) and is unchanged.
-// The menus keep their own angle (see g_views_since_menu).
+// The menus keep their own angle (see g_views_since_menu); the port's pause menu does not (task 243).
 
 #include <algorithm>
 #include <atomic>
@@ -29,6 +29,7 @@
 #include "settings.h"
 #include "freecam.h"
 #include "photo_mode.h"
+#include "play_session.h"
 
 namespace {
 
@@ -50,7 +51,15 @@ void StoreF(uint8_t* base, uint32_t a, float f) {
 // screen hides the game): the front end's logo, chapter strip and other 3D
 // pieces sit in front of the menu camera, so the menus keep their own angle.
 // A frame draws up to three views, so a few views without it means play.
+// The port's pause menu (play::PauseMenuOpen, task 243) runs the same script but shows the game behind it (the
+// last frame of play, kept as the pause starts and again when the field of view changes there), so while it is
+// open the scene keeps the player's angle (and the Ultrawide mod its hor+): the paused picture matches play.
+// Photo mode and the game's own pages from the pause (Score, Save, Options) are not the port's menu.
 std::atomic<int> g_views_since_menu{0};
+
+bool MenusShow() {
+  return g_views_since_menu.load(std::memory_order_relaxed) < 8 && !kk::play::PauseMenuOpen();
+}
 
 // How much wider than the game's own angle (1 = unchanged).
 float LensFactor() {
@@ -64,7 +73,7 @@ float LensFactor() {
 
 namespace kk::fov {
 // The menus show (their 3D pieces keep the game's own projection; the Ultrawide mod, ultrawide.cpp).
-bool InMenus() { return g_views_since_menu.load(std::memory_order_relaxed) < 8; }
+bool InMenus() { return MenusShow(); }
 }  // namespace kk::fov
 
 REX_EXTERN(__imp__sub_82872DB8);
@@ -81,7 +90,7 @@ REX_HOOK_RAW(sub_82872DB8) {
   const float fov = LoadF(base, at);
   const int since_menu = g_views_since_menu.load(std::memory_order_relaxed);
   if (since_menu < 1000) g_views_since_menu.store(since_menu + 1, std::memory_order_relaxed);
-  const bool menus = since_menu < 8;
+  const bool menus = since_menu < 8 && !kk::play::PauseMenuOpen();
   // Photo mode: its own field of view for the scene view it flies (the pause's menu script runs meanwhile).
   if (freecam && kk::photo::Active() && fov > 0.01f && fov < 3.0f) {
     const float wide = k == 1.0f ? fov : 2.0f * std::atan(k * std::tan(fov * 0.5f));
