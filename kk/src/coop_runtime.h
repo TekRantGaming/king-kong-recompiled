@@ -25,7 +25,10 @@ EnemyLink EnemyLinkSnapshot();
 bool EnemyConnectionReady();
 void PublishEnemyFrame(const enemies::Frame& frame);
 void SetEnemyCounters(enemies::Counters counters);
-bool SubmitShotIntent(const ShotIntent& shot);
+bool SubmitShotIntent(const ShotIntent& shot, const InventoryState& inventory);
+void PublishInventoryState(const InventoryState& inventory);
+// UI/game callers publish own choices and apply the worker's value-only overlay.
+void RefreshSessionCheats();
 std::vector<ReceivedShot> TakeShotIntents();
 void SetShotCounters(ShotCounters counters);
 #if defined(KK_DEV_TOOLS)

@@ -1,4 +1,5 @@
 #include "coop_runtime.h"
+#include "cheats.h"
 #include "coop_session.h"
 #include "coop_pose.h"
 #include "settings.h"
@@ -70,6 +71,7 @@ struct View {
   enemies::Frame enemies;
   uint64_t enemies_sent = 0;
   uint64_t shots_sent = 0;
+  std::optional<CheatSet> host_cheats;
 };
 std::mutex enemy_status_mutex;
 enemies::Counters enemy_status;
@@ -92,6 +94,8 @@ class Service {
   void Start(SessionConfig config, uint16_t port) {
     if (running_.exchange(true)) return;
     stop_ = false;
+    { std::lock_guard lock(mutex_); local_cheats_ = config.cheats;
+      view_ = {}; view_.role = config.role; view_.state = SessionState::Connecting; view_.updated = Now(); }
     worker_ = std::thread([this, config = std::move(config), port] {
       auto transport = CreateDevUdp(config.role == Role::Host, port);
       CoopSession session(config, *transport, [](SessionState s) {
@@ -103,15 +107,18 @@ class Service {
         const double now = Now();
         std::optional<PlayerPose> local;
         enemies::Frame frame;
+        CheatSet cheats;
         const char* failure;
-        { std::lock_guard lock(mutex_); local = local_.pose; failure = local_.failure; frame = enemies_; }
+        { std::lock_guard lock(mutex_); local = local_.pose; failure = local_.failure; frame = enemies_;
+          cheats = local_cheats_.value_or(config.cheats); }
         if (local && now - local->time > .25) { local.reset(); failure = "publish-expired"; }
-        session.Tick(now, local, &frame);
+        session.Tick(now, local, &frame, &cheats);
         shots_.Exchange(session);
         View view{config.role, session.State(), session.Rejection(), session.Stats(), local, session.Partner(now), now};
         view.local_failure = failure; view.poses = session.Poses();
         view.enemies = session.Enemies(now); view.enemies_sent = session.EnemiesSent();
         view.shots_sent = session.ShotsSent();
+        view.host_cheats = session.HostCheats();
         LogPoses(view, now, next_pose_log);
         { std::lock_guard lock(mutex_); view_ = std::move(view); }
         if (shown != session.State()) { shown = session.State(); RequestUiPaint(); }
@@ -132,7 +139,7 @@ class Service {
     if (!running_.exchange(false)) return;
     stop_ = true;
     if (worker_.joinable()) worker_.join();
-    std::lock_guard lock(mutex_); local_ = {}; view_ = {}; enemies_ = {};
+    std::lock_guard lock(mutex_); local_ = {}; view_ = {}; enemies_ = {}; local_cheats_.reset();
     shots_.Clear();
   }
   bool Running() const { return running_; }
@@ -142,7 +149,9 @@ class Service {
     std::lock_guard lock(mutex_); return view_.state == SessionState::Connected && now-view_.updated <= .5;
   }
   void PublishEnemies(const enemies::Frame& frame) { std::lock_guard lock(mutex_); enemies_ = frame; }
-  bool SubmitShot(const ShotIntent& shot) { return shots_.Submit(shot); }
+  bool SubmitShot(const PendingShot& shot) { return shots_.Submit(shot); }
+  void PublishCheats(CheatSet cheats) { std::lock_guard lock(mutex_); local_cheats_ = cheats; }
+  void PublishInventory(const InventoryState& inventory) { shots_.PublishInventory(inventory); }
   std::vector<ReceivedShot> TakeShots() { return shots_.Take(); }
  private:
   std::atomic<bool> running_{false}, stop_{false};
@@ -152,6 +161,7 @@ class Service {
   View view_;
   enemies::Frame enemies_;
   ShotMailbox shots_;
+  std::optional<CheatSet> local_cheats_;
 };
 Service service;  // No thread, socket, guest reads, file access or allocation until explicitly started.
 #endif
@@ -171,7 +181,7 @@ View CurrentView() {
 #endif
   if (!steam) return {};
   const auto v = steam->SessionSnapshot();
-  return {v.role, v.state, v.rejection, v.stats, v.local, v.partner, v.updated, v.local_failure, v.poses, v.enemies, v.enemies_sent, v.shots_sent};
+  return {v.role, v.state, v.rejection, v.stats, v.local, v.partner, v.updated, v.local_failure, v.poses, v.enemies, v.enemies_sent, v.shots_sent, v.host_cheats};
 }
 
 class PartnerOverlay final : public rex::ui::ImGuiDialog {
@@ -205,8 +215,9 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
     dl->AddText(ImVec2(24, 112), IM_COL32(255, 230, 170, 255), text);
     ShotCounters shots;
     { std::lock_guard lock(enemy_status_mutex); shots = shot_status; }
-    std::snprintf(text, sizeof(text), "Shots: sent %llu | applied %llu | rejected %llu (%s)",
+    std::snprintf(text, sizeof(text), "Shots: sent %llu | applied %llu | late %llu | rejected %llu (%s)",
         static_cast<unsigned long long>(v.shots_sent), static_cast<unsigned long long>(shots.applied),
+        static_cast<unsigned long long>(shots.late),
         static_cast<unsigned long long>(shots.rejected), ShotRejectName(shots.last));
     dl->AddText(ImVec2(24, 136), IM_COL32(255, 230, 170, 255), text);
 #else
@@ -244,6 +255,7 @@ void Configure(const std::filesystem::path& user_data) {
   }
 #endif
   SteamRuntimeOptions options;
+  options.cheats = kk::OwnCheats();
   options.enabled = REXCVAR_GET(kk_coop_enabled);
   options.executable_folder = rex::filesystem::GetExecutableFolder();
   options.startup_lobby = CaptureStartupLobby();
@@ -275,6 +287,7 @@ void Start(const std::filesystem::path& user_data) {
   }
   SessionConfig config;
   config.enabled = true; config.role = role == "host" ? Role::Host : Role::Guest;
+  config.cheats = kk::OwnCheats();
   if (config.role == Role::Host) {
     std::random_device random;
     config.epoch = (uint64_t(random()) << 32) ^ random();
@@ -307,6 +320,7 @@ void Shutdown() {
   service.Stop();
 #endif
   if (steam) steam->Shutdown();
+  kk::SetSessionCheats({});
 }
 #if defined(KK_DEV_TOOLS)
 bool SocialFakeScenario(std::string_view scenario) {
@@ -316,6 +330,7 @@ bool SocialFakeScenario(std::string_view scenario) {
 }
 #endif
 void GameFrame(uint8_t* base) {
+  RefreshSessionCheats();
 #if defined(KK_DEV_TOOLS)
   kk::DevPuppetGameFrame(base);
 #endif
@@ -354,12 +369,32 @@ void PublishEnemyFrame(const enemies::Frame& frame) {
 void SetEnemyCounters(enemies::Counters counts) {
   std::lock_guard lock(enemy_status_mutex); enemy_status = counts;
 }
-bool SubmitShotIntent(const ShotIntent& shot) {
+void RefreshSessionCheats() {
+  if (!REXCVAR_GET(kk_coop_enabled)) { kk::SetSessionCheats({}); return; }
+  const auto own = kk::OwnCheats();
+#if defined(KK_DEV_TOOLS)
+  if (service.Running()) service.PublishCheats(own);
+  else
+#endif
+  if (steam) steam->PublishCheats(own);
+  const auto view = CurrentView();
+  const bool guest_session = view.role == Role::Guest && (view.state == SessionState::Connecting ||
+      view.state == SessionState::Connected || view.state == SessionState::Lost);
+  kk::SetSessionCheats(guest_session ? std::optional<CheatSet>(view.host_cheats.value_or(CheatSet{})) : std::nullopt);
+}
+bool SubmitShotIntent(const ShotIntent& shot, const InventoryState& inventory) {
   if (!EnemyConnectionReady()) return false;
 #if defined(KK_DEV_TOOLS)
-  if (service.Running()) return service.SubmitShot(shot);
+  if (service.Running()) return service.SubmitShot({shot, inventory});
 #endif
-  return steam && steam->SubmitShot(shot);
+  return steam && steam->SubmitShot({shot, inventory});
+}
+void PublishInventoryState(const InventoryState& inventory) {
+  if (!EnemyConnectionReady()) return;
+#if defined(KK_DEV_TOOLS)
+  if (service.Running()) { service.PublishInventory(inventory); return; }
+#endif
+  if (steam) steam->PublishInventory(inventory);
 }
 std::vector<ReceivedShot> TakeShotIntents() {
 #if defined(KK_DEV_TOOLS)

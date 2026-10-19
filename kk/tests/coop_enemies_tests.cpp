@@ -154,12 +154,14 @@ struct Transport final : ICoopTransport {
   std::deque<std::vector<uint8_t>> queue;
   bool block_events = false;
   bool block_shots = false;
-  size_t snapshots = 0, events = 0, shots = 0;
+  bool block_inventory = false;
+  size_t snapshots = 0, events = 0, shots = 0, inventories = 0;
   bool Send(std::span<const uint8_t> bytes, bool reliable) override {
     Message m; Check(Decode(bytes, m), "session emits valid packets");
     if (m.type == MessageType::EnemyEvent) { Check(reliable, "lifecycle reliable"); if (block_events) return false; ++events; }
     if (m.type == MessageType::EnemySnapshot) { Check(!reliable, "movement unreliable"); ++snapshots; }
     if (m.type == MessageType::ShotIntent) { Check(reliable, "shots reliable"); if (block_shots) return false; ++shots; }
+    if (m.type == MessageType::InventoryState) { Check(reliable, "inventory reliable"); if (block_inventory) return false; ++inventories; }
     if (peer) peer->queue.emplace_back(bytes.begin(), bytes.end()); return true;
   }
   bool Receive(std::vector<uint8_t>& out) override { if (queue.empty()) return false; out = std::move(queue.front()); queue.pop_front(); return true; }
@@ -228,6 +230,78 @@ ShotIntent Shot(uint32_t number = 1, double time = 100) {
   ShotIntent s; s.world = World(); s.number = number; s.weapon = 1; s.time = time;
   s.direction = {1, 0, 0}; s.hits.push_back({Enemy().id, {10, 0, 0}}); return s;
 }
+InventoryState Inventory(double time = 100, uint8_t weapon = 1, uint32_t ammo = 80) {
+  InventoryState i{World(), time, weapon}; i.ammo[weapon-1] = ammo; return i;
+}
+PendingShot Pending(ShotIntent shot) { return {shot, Inventory(shot.time, shot.weapon)}; }
+void GuestInventory() {
+  Message m; m.type = MessageType::InventoryState; m.inventory = Inventory(100, 2, 999);
+  auto bytes = Packet(m); Message out;
+  Check(bytes.size() == kHeaderBytes+37 && Decode(bytes, out) && out.inventory.weapon == 2 &&
+      out.inventory.ammo[1] == 999 && out.inventory.world == World(), "guest inventory codec round trip");
+  auto unchanged = m.inventory; unchanged.time += .1;
+  Check(SameInventory(m.inventory, unchanged), "unchanged inventory does not spam reliable updates");
+  unchanged.ammo[1]--; Check(!SameInventory(m.inventory, unchanged), "ammo consumption triggers an update");
+  for (size_t n = 0; n < bytes.size(); ++n) {
+    Message sentinel; sentinel.sequence = 999;
+    Check(!Decode(std::span(bytes.data(), n), sentinel) && sentinel.sequence == 999, "inventory truncation preserves output");
+  }
+  bytes.push_back(0); Check(!Decode(bytes, out), "inventory trailing byte refused");
+  m.inventory.weapon = 5; Check(!Encode(m, bytes), "inventory weapon bound");
+  m.inventory = Inventory(); m.inventory.ammo[0] = UINT32_MAX; Check(!Encode(m, bytes), "inventory ammo bound");
+  m.inventory = Inventory(); m.inventory.time = std::numeric_limits<double>::quiet_NaN();
+  Check(!Encode(m, bytes), "inventory nonfinite time refused");
+  m.inventory = Inventory(); bytes = Packet(m); bytes[kHeaderBytes+20] = 5;
+  Check(!Decode(bytes, out), "wire inventory bounds checked");
+  m.inventory = {World(), 100, 0}; bytes = Packet(m);
+  Check(Decode(bytes, out) && out.inventory.weapon == 0, "empty loadout can be reported");
+
+  PlayerPose peer{100, 303};
+  auto shot = Shot(); shot.weapon = 2;
+  ReceivedShot received{shot, 1, Inventory(100, 2, 1)};
+  ShotValidator validator;
+  Check(validator.Validate(received, World(), peer, 1) == ShotReject::None,
+      "guest machine gun accepted with its own last round independent of host weapon");
+  received.intent.number = 2; received.intent.time = 100.1;
+  Check(validator.Validate(received, World(), peer, 1.1) == ShotReject::Weapon, "same inventory cannot spend its last round twice");
+  received.inventory = Inventory(100.1, 2, 30); received.intent.number = 3;
+  Check(validator.Validate(received, World(), peer, 1.1) == ShotReject::None, "reported reload supplies guest ammo");
+  auto rejects = [&](std::optional<InventoryState> inventory) {
+    ShotValidator v; return v.Validate({shot, 1, inventory}, World(), peer, 1);
+  };
+  Check(rejects({}) == ShotReject::Weapon, "missing guest inventory rejected");
+  Check(rejects(Inventory(100, 1)) == ShotReject::Weapon, "shot must match guest selected weapon");
+  Check(rejects(Inventory(100, 2, 0)) == ShotReject::Weapon, "empty guest weapon rejected");
+  Check(rejects(Inventory(99, 2)) == ShotReject::Weapon, "stale guest inventory rejected");
+  Check(rejects(Inventory(100.1, 2)) == ShotReject::Weapon, "post-fire future inventory rejected");
+  auto wrong = Inventory(100, 2); wrong.world = World(2);
+  Check(rejects(wrong) == ShotReject::Weapon, "other checkpoint inventory rejected");
+
+  Transport a, b; a.peer = &b; b.peer = &a;
+  const Compatibility compatible{kProtocolVersion, "test", "build", "gameplay"};
+  CoopSession authority({true, Role::Host, 123, compatible}, a), guest({true, Role::Guest, 0, compatible}, b);
+  for (int i = 0; i < 40; ++i) { authority.Tick(i*.01); guest.Tick(i*.01); }
+  authority.PublishInventory(Inventory(.4)); authority.Tick(.4);
+  Check(a.inventories == 0, "host cannot send inventory authority for guest shots");
+  b.block_inventory = true;
+  guest.PublishInventory(Inventory(.4)); guest.Tick(.4);
+  Check(b.inventories == 0, "inventory change retained under backpressure");
+  b.block_inventory = false; guest.Tick(.41); authority.Tick(.41);
+  Check(b.inventories == 1, "inventory change retries without firing");
+  guest.PublishInventory(Inventory(.42)); guest.Tick(.42);
+  Check(b.inventories == 1, "identical inventory is coalesced regardless of sample time");
+  guest.PublishInventory(Inventory(.43, 2, 30)); guest.Tick(.43); authority.Tick(.43);
+  Check(b.inventories == 2, "weapon switch reports without firing");
+  Check(guest.QueueShot(Pending(Shot(1, .44))), "pre-fire inventory accompanies shot after a weapon switch");
+  guest.Tick(.44); authority.Tick(.44);
+  const auto first = authority.TakeShots();
+  Check(first.size() == 1 && first[0].inventory && first[0].inventory->weapon == 1,
+      "shot captures its ordered pre-fire snapshot instead of a later inventory");
+  auto mismatch = Pending(Shot(2, .45)); mismatch.inventory.world = World(2);
+  ShotMailbox mailbox;
+  Check(!guest.QueueShot(mismatch) && !mailbox.Submit(mismatch), "inconsistent inventory cannot poison either queue");
+  authority.End(.46); Check(authority.TakeShots().empty(), "session end drops remote shot inventory copies");
+}
 void ShotWireAndBounds() {
   Message m; m.type = MessageType::ShotIntent; m.shot = Shot();
   for (bool miss : {true, false}) {
@@ -264,10 +338,11 @@ void ShotWireAndBounds() {
 }
 void ShotValidation() {
   PlayerPose peer; peer.level = 303; peer.time = 100;
-  const ReceivedShot in{Shot(), 1};
+  const ReceivedShot in{Shot(), 1, Inventory()};
   auto valid = [&](ReceivedShot s, EnemyWorld world = World(), uint8_t weapon = 1,
                    std::optional<PlayerPose> p = PlayerPose{100, 303}, double now = 1.01) {
-    ShotValidator v; return v.Validate(s, world, weapon, p, now);
+    if (s.inventory) s.inventory->weapon = weapon;
+    ShotValidator v; return v.Validate(s, world, p, now);
   };
   Check(valid(in) == ShotReject::None, "different process clocks accepted using peer time and local arrival");
   Check(valid(in, World(2)) == ShotReject::World, "wrong visit rejected");
@@ -280,20 +355,24 @@ void ShotValidation() {
   auto bad = in; bad.intent.time = 98; Check(valid(bad) == ShotReject::Stale, "remote shot clock checked against pose");
   bad = in; bad.intent.origin.x = 4.01f; Check(valid(bad) == ShotReject::Origin, "origin too far from guest rejected");
   ShotValidator v;
-  Check(v.Validate(in, World(), 1, peer, 1) == ShotReject::None, "first shot accepted");
-  Check(v.Validate(in, World(), 1, peer, 1) == ShotReject::Sequence, "duplicate cannot damage twice");
-  bad = {Shot(2, 100.01), 1.01};
-  Check(v.Validate(bad, World(), 1, peer, 1.01) == ShotReject::Rate, "too-fast gun rejected");
-  bad = {Shot(3, 100.2), 1.2};
-  Check(v.Validate(bad, World(), 1, peer, 1.2) == ShotReject::None, "normal cadence accepted");
-  Check(v.Validate(bad, World(), 1, peer, 1.2) == ShotReject::Sequence, "rejected/accepted sequence stays consumed");
+  Check(v.Validate(in, World(), peer, 1) == ShotReject::None, "first shot accepted");
+  Check(v.Validate(in, World(), peer, 1) == ShotReject::Sequence, "duplicate cannot damage twice");
+  bad = {Shot(2, 100.01), 1.01, Inventory(100.01)};
+  Check(v.Validate(bad, World(), peer, 1.01) == ShotReject::Rate, "too-fast gun rejected");
+  bad = {Shot(3, 100.2), 1.2, Inventory(100.2)};
+  Check(v.Validate(bad, World(), peer, 1.2) == ShotReject::None, "normal cadence accepted");
+  Check(v.Validate(bad, World(), peer, 1.2) == ShotReject::Sequence, "rejected/accepted sequence stays consumed");
   v = {}; auto burst = in;
-  Check(v.Validate(burst, World(), 1, peer, 1) == ShotReject::None, "burst one");
-  burst.intent = Shot(2, 100.2); Check(v.Validate(burst, World(), 1, peer, 1) == ShotReject::None, "burst two allows batching");
-  burst.intent = Shot(3, 100.4); Check(v.Validate(burst, World(), 1, peer, 1) == ShotReject::Rate, "arrival rate blocks forged clock acceleration");
+  Check(v.Validate(burst, World(), peer, 1) == ShotReject::None, "burst one");
+  burst.intent = Shot(2, 100.2); Check(v.Validate(burst, World(), peer, 1) == ShotReject::None, "burst two allows batching");
+  burst.intent = Shot(3, 100.4); Check(v.Validate(burst, World(), peer, 1) == ShotReject::Rate, "arrival rate blocks forged clock acceleration");
   auto target = Enemy(); target.x = 10; target.y = target.z = 0;
   Check(ValidateShotHit(in.intent, in.intent.hits[0], target) == ShotReject::None, "live nearby claimed hit accepted");
-  target.life = 0; Check(ValidateShotHit(in.intent, in.intent.hits[0], target) == ShotReject::Target, "dead target rejected");
+  target.life = 0; Check(ValidateShotHit(in.intent, in.intent.hits[0], target) == ShotReject::Late, "confirmed dead target counted late");
+  target.x = 20;
+  Check(ValidateShotHit(in.intent, in.intent.hits[0], target) == ShotReject::Distance, "dead target still requires valid hit geometry");
+  ShotCounters counters; counters.Reject(ShotReject::Late);
+  Check(counters.late == 1 && counters.rejected == 0 && counters.last == ShotReject::None, "late is separate from rejection totals");
   target = Enemy(999); Check(ValidateShotHit(in.intent, in.intent.hits[0], target) == ShotReject::Target, "wrong generation/id rejected");
   target = Enemy(); target.x = 20; target.y = target.z = 0;
   Check(ValidateShotHit(in.intent, in.intent.hits[0], target) == ShotReject::Distance, "impact too far from host enemy rejected");
@@ -307,32 +386,36 @@ void ShotSessions() {
   const Compatibility compatible{kProtocolVersion, "test", "build", "gameplay"};
   CoopSession host({true, Role::Host, 123, compatible}, a), guest({true, Role::Guest, 0, compatible}, b);
   for (int i = 0; i < 40; ++i) { host.Tick(i*.01); guest.Tick(i*.01); }
-  Check(!host.QueueShot(Shot(1, .4)), "host cannot send guest intents");
-  Check(guest.QueueShot(Shot(1, .4)), "guest queues actual shot");
+  Check(!host.QueueShot(Pending(Shot(1, .4))), "host cannot send guest intents");
+  Check(guest.QueueShot(Pending(Shot(1, .4))), "guest queues actual shot");
+  b.block_inventory = true; guest.Tick(.395); host.Tick(.395);
+  Check(b.shots == 0 && host.TakeShots().empty(), "inventory backpressure prevents intent overtaking it");
+  b.block_inventory = false;
   b.block_shots = true; guest.Tick(.4); host.Tick(.4);
   Check(b.shots == 0 && host.TakeShots().empty(), "shot retained under backpressure");
   b.block_shots = false; guest.Tick(.41); host.Tick(.42);
   auto first = host.TakeShots();
   Check(b.shots == 1 && first.size() == 1 && guest.ShotsSent() == 1, "reliable shot retries once");
   ShotValidator validator; PlayerPose peer{.4, 303};
-  Check(validator.Validate(first[0], World(), 1, peer, .42) == ShotReject::None, "received shot reaches authority validator");
+  Check(first[0].inventory && first[0].inventory->ammo[0] == 80, "reliable pre-fire inventory precedes intent");
+  Check(validator.Validate(first[0], World(), peer, .42) == ShotReject::None, "received shot reaches authority validator");
   Message replay; replay.type = MessageType::ShotIntent; replay.epoch = 123; replay.shot = Shot(1, .4);
   a.queue.push_back(Packet(replay)); host.Tick(.43);
   auto duplicate = host.TakeShots();
-  Check(duplicate.size() == 1 && validator.Validate(duplicate[0], World(), 1, peer, .43) == ShotReject::Sequence,
+  Check(duplicate.size() == 1 && validator.Validate(duplicate[0], World(), peer, .43) == ShotReject::Sequence,
       "duplicate reaches counted game-thread rejection and cannot damage twice");
   replay.shot = Shot(2, .4); replay.epoch = 999; a.queue.push_back(Packet(replay)); host.Tick(.44);
   Check(host.TakeShots().empty(), "wrong epoch shot ignored");
   replay.epoch = 123; b.queue.push_back(Packet(replay)); guest.Tick(.45);
   Check(guest.TakeShots().empty(), "guest cannot receive authoritative shot requests");
-  for (size_t i = 0; i < kMaxQueuedShots; ++i) Check(guest.QueueShot(Shot(uint32_t(i+2), .46)), "bounded outgoing queue capacity");
-  Check(!guest.QueueShot(Shot(999, .46)), "outgoing queue refuses overflow");
+  for (size_t i = 0; i < kMaxQueuedShots; ++i) Check(guest.QueueShot(Pending(Shot(uint32_t(i+2), .46))), "bounded outgoing queue capacity");
+  Check(!guest.QueueShot(Pending(Shot(999, .46))), "outgoing queue refuses overflow");
   guest.Tick(1.1); host.Tick(1.1);
   Check(b.shots == 1 && host.TakeShots().empty(), "expired unsent shots discarded");
   ShotMailbox mailbox;
-  for (size_t i = 0; i < kMaxQueuedShots; ++i) Check(mailbox.Submit(Shot(uint32_t(i+100), 1.1)), "mailbox capacity");
-  Check(!mailbox.Submit(Shot(999, 1.1)), "mailbox overflow bounded");
-  mailbox.Clear(); Check(mailbox.Submit(Shot(100, 1.1)), "mailbox reset");
+  for (size_t i = 0; i < kMaxQueuedShots; ++i) Check(mailbox.Submit(Pending(Shot(uint32_t(i+100), 1.1))), "mailbox capacity");
+  Check(!mailbox.Submit(Pending(Shot(999, 1.1))), "mailbox overflow bounded");
+  mailbox.Clear(); Check(mailbox.Submit(Pending(Shot(100, 1.1))), "mailbox reset");
   mailbox.Exchange(guest); guest.Tick(1.11); host.Tick(1.12); mailbox.Exchange(host);
   Check(mailbox.Take().size() == 1 && mailbox.Take().empty(), "worker/game shot handoff drains once");
   host.End(1.13); mailbox.Exchange(host); Check(mailbox.Take().empty(), "disconnected mailbox cleared");
@@ -347,18 +430,18 @@ void MissThenHit() {
     const double time = .4 + (number-1)*.2;
     auto shot = Shot(number, time);
     if (number == 1) shot.hits.clear();
-    Check(guest.QueueShot(shot), "miss and following hit both queue");
+    Check(guest.QueueShot(Pending(shot)), "miss and following hit both queue");
     guest.Tick(time); host.Tick(time+.01);
     const auto received = host.TakeShots();
     Check(received.size() == 1 && guest.ShotsSent() == number, "miss counts as a sent intent, once");
     Check(received[0].intent.hits.size() == number-1, "miss never invents a target; following hit retains it");
-    Check(validator.Validate(received[0], World(), 1, PlayerPose{time, 303}, time+.01) == ShotReject::None,
+    Check(validator.Validate(received[0], World(), PlayerPose{time, 303}, time+.01) == ShotReject::None,
         "miss consumes cadence and sequence without blocking the next real hit");
   }
 }
 } // namespace
 int main() {
   IdentityAndMatching(); Wire(); LifecycleAndInterpolation(); SessionAuthority();
-  MatchingRetryAndTolerance(); ShotWireAndBounds(); ShotValidation(); ShotSessions(); MissThenHit();
+  MatchingRetryAndTolerance(); GuestInventory(); ShotWireAndBounds(); ShotValidation(); ShotSessions(); MissThenHit();
   std::puts("coop enemies tests passed");
 }

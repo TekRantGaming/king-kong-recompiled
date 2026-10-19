@@ -61,6 +61,10 @@ void CoopSession::Transition(SessionState s) {
   state_ = s;
   if (s != SessionState::Connected) {
     poses_.Clear(); enemies_.Clear(); outgoing_shots_.clear(); incoming_shots_.clear();
+    remote_inventory_.reset(); sent_cheats_.reset();
+    local_inventory_.reset(); sent_inventory_.reset();
+    // Keep host settings during a temporary loss. End/leave restores own choices.
+    if (s != SessionState::Lost) host_cheats_.reset();
   }
   if (changed_) changed_(s);
 }
@@ -99,6 +103,13 @@ void CoopSession::Receive(const Message& m, double now) {
     } else {
       if (state_ != SessionState::Connected && state_ != SessionState::Lost) return;
       switch (m.type) {
+        case MessageType::Cheats:
+          if (config_.role != Role::Guest || (cheat_seen_ && int32_t(m.sequence-cheat_sequence_) <= 0)) return;
+          cheat_seen_ = true; cheat_sequence_ = m.sequence; host_cheats_ = m.cheats; break;
+        case MessageType::InventoryState:
+          if (config_.role != Role::Host || state_ != SessionState::Connected ||
+              (inventory_seen_ && int32_t(m.sequence-inventory_sequence_) <= 0)) return;
+          inventory_seen_ = true; inventory_sequence_ = m.sequence; remote_inventory_ = m.inventory; break;
         case MessageType::Ping: {
           Message pong; pong.type = MessageType::Pong; pong.clock_ms = m.clock_ms; Send(pong, false); break;
         }
@@ -118,7 +129,7 @@ void CoopSession::Receive(const Message& m, double now) {
           if (config_.role != Role::Host || state_ != SessionState::Connected) return;
           // The game-thread validator owns sequence rejection and its reason
           // counter. Never silently apply or discard a replay in a second policy.
-          if (incoming_shots_.size() < kMaxQueuedShots) incoming_shots_.push_back({m.shot, now});
+          if (incoming_shots_.size() < kMaxQueuedShots) incoming_shots_.push_back({m.shot, now, remote_inventory_});
           else ++malformed_;
           break;
         default: return;
@@ -129,9 +140,10 @@ void CoopSession::Receive(const Message& m, double now) {
   if (state_ == SessionState::Connecting && hello_seen_ && ack_seen_) Transition(SessionState::Connected);
   else if (state_ == SessionState::Lost) Transition(SessionState::Connected);
 }
-void CoopSession::Tick(double now, const std::optional<PlayerPose>& local, const enemies::Frame* frame) {
+void CoopSession::Tick(double now, const std::optional<PlayerPose>& local, const enemies::Frame* frame, const CheatSet* cheats) {
   // Disabled is inert, including callbacks, polling, reads, writes and transport state queries.
   if (!config_.enabled || state_ == SessionState::Ended) return;
+  if (cheats && ValidCheatSet(*cheats)) config_.cheats = *cheats;
   if (state_ == SessionState::Idle) {
     if (config_.role == Role::Host && !epoch_) { Transition(SessionState::Ended); return; }
     started_ = last_receive_ = now; Transition(SessionState::Connecting);
@@ -162,6 +174,10 @@ void CoopSession::Tick(double now, const std::optional<PlayerPose>& local, const
     return;
   }
   if (now - last_receive_ >= 3) Transition(SessionState::Lost);
+  if (state_ == SessionState::Connected && config_.role == Role::Host && sent_cheats_ != config_.cheats) {
+    Message m; m.type = MessageType::Cheats; m.cheats = config_.cheats;
+    if (Send(m, true)) sent_cheats_ = config_.cheats;
+  }
   if (now - last_ping_ >= 1) {
     Message ping; ping.type = MessageType::Ping;
     ping.clock_ms = ping_stamp_ = uint64_t(now * 1000); ping_pending_ = true;
@@ -188,20 +204,32 @@ void CoopSession::Tick(double now, const std::optional<PlayerPose>& local, const
     }
   }
   if (state_ == SessionState::Connected && config_.role == Role::Guest) {
+    if (local_inventory_ && now-local_inventory_->time >= 0 && now-local_inventory_->time <= .5 &&
+        (!sent_inventory_ || !SameInventory(*local_inventory_, *sent_inventory_))) {
+      Message m; m.type = MessageType::InventoryState; m.inventory = *local_inventory_;
+      if (Send(m, true)) sent_inventory_ = local_inventory_;
+    }
     unsigned sent = 0;
     while (sent < 8 && !outgoing_shots_.empty()) {
-      Message m; m.type = MessageType::ShotIntent; m.shot = outgoing_shots_.front();
+      const auto& pending = outgoing_shots_.front();
+      Message m; m.type = MessageType::ShotIntent; m.shot = pending.intent;
       // Local steady clocks match between the worker and game thread.
       if (now-m.shot.time > .5) { outgoing_shots_.pop_front(); continue; }
+      Message inventory; inventory.type = MessageType::InventoryState; inventory.inventory = pending.inventory;
+      if (!Send(inventory, true)) break;
+      sent_inventory_ = pending.inventory;
       if (!Send(m, true)) break;
       outgoing_shots_.pop_front(); ++sent;
     }
   }
 }
-bool CoopSession::QueueShot(const ShotIntent& shot) {
+bool CoopSession::QueueShot(const PendingShot& shot) {
   if (state_ != SessionState::Connected || config_.role != Role::Guest ||
-      !ValidShotIntent(shot) || outgoing_shots_.size() >= kMaxQueuedShots) return false;
+      !ValidPendingShot(shot) || outgoing_shots_.size() >= kMaxQueuedShots) return false;
   outgoing_shots_.push_back(shot); return true;
+}
+void CoopSession::PublishInventory(const InventoryState& inventory) {
+  if (state_ == SessionState::Connected && config_.role == Role::Guest && ValidInventory(inventory)) local_inventory_ = inventory;
 }
 std::vector<ReceivedShot> CoopSession::TakeShots() { auto out = std::move(incoming_shots_); incoming_shots_.clear(); return out; }
 void CoopSession::End(double) {

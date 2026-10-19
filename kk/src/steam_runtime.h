@@ -16,6 +16,7 @@ struct SteamRuntimeOptions {
   std::function<Compatibility()> read_compatibility;
   SocialId startup_lobby = 0;
   std::function<void()> request_ui_paint;
+  CheatSet cheats;
 };
 struct SteamSessionView {
   Role role = Role::Host;
@@ -29,6 +30,7 @@ struct SteamSessionView {
   enemies::Frame enemies;
   uint64_t enemies_sent = 0;
   uint64_t shots_sent = 0;
+  std::optional<CheatSet> host_cheats;
 };
 // Construction/configuration never loads Steam. First Open/Create/Accept starts a single
 // joined worker which owns init, every flat call, callbacks, lobby and CoopSession until shutdown.
@@ -41,7 +43,9 @@ class SteamRuntime final : public ISocialService {
   // failure must be a static label (ReadJackPose), never guest data or a temporary string.
   void PublishPose(std::optional<PlayerPose> pose, const char* failure = "ok");
   void PublishEnemies(const enemies::Frame& frame);
-  bool SubmitShot(const ShotIntent& shot);
+  bool SubmitShot(const PendingShot& shot);
+  void PublishCheats(CheatSet cheats);
+  void PublishInventory(const InventoryState& inventory);
   std::vector<ReceivedShot> TakeShots();
   SteamSessionView SessionSnapshot() const;
   bool EnemyConnectionReady(double now) const;

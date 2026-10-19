@@ -4,6 +4,7 @@
 
 #include <array>
 #include <string_view>
+#include "coop_cheats.h"
 
 namespace kk {
 
@@ -29,5 +30,10 @@ constexpr std::array<CheatInfo, 8> kCheats = {{
 // True while the level being played switches cheat `id` off (cheat_rules.h: the weapon cheats in the Hayes
 // chapter and the two before it). The pause menu's Cheats page greys its row then; the setting itself is not changed.
 bool CheatSuppressedNow(std::string_view id);
+coop::CheatSet OwnCheats();
+coop::CheatSet EffectiveCheats();
+bool CheatsSetByHost();
+// Atomically changes only the runtime overlay, never the settings registry/file.
+void SetSessionCheats(std::optional<coop::CheatSet> host);
 
 }  // namespace kk

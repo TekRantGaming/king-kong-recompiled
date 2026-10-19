@@ -3,6 +3,7 @@
 #include "coop_session.h"
 #include "coop_pose.h"
 #include "coop_puppet.h"
+#include "cheat_rules.h"
 
 #include <bit>
 #include <cmath>
@@ -30,12 +31,16 @@ struct MemoryTransport final : ICoopTransport {
   MemoryTransport* peer = nullptr;
   std::deque<std::vector<uint8_t>> incoming;
   bool deliver = true;
+  bool block_cheats = false;
   mutable int calls = 0;
   int unreliable_poses = 0;
   TransportState state = TransportState::Ready;
   bool Send(std::span<const uint8_t> bytes, bool reliable) override {
     ++calls;
     Message m;
+    if (Decode(bytes, m) && m.type == MessageType::Cheats) {
+      Check(reliable, "host cheats reliable"); if (block_cheats) return false;
+    }
     if (Decode(bytes, m) && m.type == MessageType::PlayerPose) {
       Check(!reliable, "poses are unreliable"); ++unreliable_poses;
     }
@@ -124,6 +129,59 @@ void Protocol() {
   Check(!Encode(pose, bytes), "infinite local speed rejected");
   Message reject; reject.type = MessageType::Reject;
   Check(!Encode(reject, bytes), "invalid rejection reason rejected");
+}
+void CheatSets() {
+  for (uint16_t bits = 0; bits <= 0x1ff; ++bits) {
+    Message m; m.type = MessageType::Cheats; m.cheats = {bits};
+    const auto bytes = Packet(m); Message decoded;
+    Check(bytes.size() == kHeaderBytes+2 && Decode(bytes, decoded) && decoded.cheats == m.cheats,
+        "every gameplay cheat set round trips including master off");
+    for (size_t n = 0; n < bytes.size(); ++n) {
+      Message out; out.sequence = 999;
+      Check(!Decode(std::span(bytes.data(), n), out) && out.sequence == 999, "cheat truncation preserves output");
+    }
+  }
+  Message m; m.type = MessageType::Cheats; m.cheats = {0x200};
+  std::vector<uint8_t> bytes; Check(!Encode(m, bytes), "unknown cheat bit refused by encoder");
+  m.cheats = {}; bytes = Packet(m); bytes[kHeaderBytes] = 2;
+  Message out; out.sequence = 999;
+  Check(!Decode(bytes, out) && out.sequence == 999, "unknown wire cheat bit refused without mutation");
+  m.cheats = {0x121}; bytes = Packet(m); bytes.push_back(0);
+  Check(!Decode(bytes, out), "cheat trailing byte refused");
+
+  const CheatSet own{0x102}, host{0x125};
+  CheatOverride overlay;
+  Check(SessionCheats(own, overlay.Snapshot()) == own, "solo uses own choices");
+  Check(overlay.Apply(host) && SessionCheats(own, overlay.Snapshot()) == host, "host overlay applies all choices");
+  Check(own.bits == 0x102, "applying overlay never mutates own saved choices");
+  Check(overlay.Apply(CheatSet{}) && !SessionCheats(own, overlay.Snapshot()).Enabled(), "host master off defeats guest master on");
+  Check(!overlay.Apply(CheatSet{0x200}) && overlay.Snapshot() == CheatSet{}, "invalid overlay cannot replace active host choices");
+  overlay.Apply({});
+  Check(!overlay.Snapshot() && SessionCheats(own, overlay.Snapshot()) == own, "disconnect restores own choices without a settings write");
+  Check(cheat_rules::Suppressed("machine_gun", 303) && !cheat_rules::Suppressed("healing", 303),
+      "host weapon setting still subject to unchanged chapter rules");
+
+  Pair p;
+  const CheatSet first{0x125}, changed{0x109};
+  for (int i = 0; i < 40; ++i) { p.host.Tick(i*.01, {}, nullptr, &first); p.guest.Tick(i*.01); }
+  Check(p.guest.HostCheats() == first && !p.host.HostCheats(), "only guest receives initial host settings after handshake");
+  p.a.block_cheats = true;
+  p.host.Tick(.4, {}, nullptr, &changed); p.guest.Tick(.4);
+  Check(p.guest.HostCheats() == first, "backpressure retains previous host cheat set");
+  p.a.block_cheats = false;
+  p.host.Tick(.41, {}, nullptr, &changed); p.guest.Tick(.41);
+  Check(p.guest.HostCheats() == changed, "pause changes retry reliably");
+  m.cheats = first; m.epoch = 123456789; m.sequence = 1;
+  p.b.incoming.push_back(Packet(m)); p.guest.Tick(.42);
+  Check(p.guest.HostCheats() == changed, "older cheat packet cannot roll settings back");
+  m.sequence = 999; m.epoch = 42; p.b.incoming.push_back(Packet(m)); p.guest.Tick(.43);
+  Check(p.guest.HostCheats() == changed, "wrong epoch cheat packet refused");
+  m.epoch = 123456789; p.a.incoming.push_back(Packet(m)); p.host.Tick(.44);
+  Check(!p.host.HostCheats(), "guest cannot set host cheats");
+  p.guest.Tick(3.5);
+  Check(p.guest.State() == SessionState::Lost && p.guest.HostCheats() == changed, "temporary loss keeps host override");
+  p.guest.End(3.51);
+  Check(!p.guest.HostCheats(), "session end clears override");
 }
 void Handshake() {
   for (bool guest_first : {false, true}) {
@@ -336,6 +394,6 @@ void PuppetPolicies() {
 }
 }  // namespace
 int main() {
-  Protocol(); Handshake(); Timeouts(); Poses(); PoseReadingAndDisplay(); Disabled(); PuppetPolicies();
+  Protocol(); CheatSets(); Handshake(); Timeouts(); Poses(); PoseReadingAndDisplay(); Disabled(); PuppetPolicies();
   std::puts("co-op core tests passed");
 }

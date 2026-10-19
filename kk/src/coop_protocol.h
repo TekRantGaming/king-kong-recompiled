@@ -6,13 +6,14 @@
 #include <span>
 #include <string>
 #include <vector>
+#include "coop_cheats.h"
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-constexpr uint16_t kProtocolVersion = 4;
+constexpr uint16_t kProtocolVersion = 5;
 constexpr size_t kHeaderBytes = 24, kMaxPacketBytes = 1024;
 enum class MessageType : uint16_t { Hello = 1, HelloAck, Reject, Ping, Pong, PlayerPose, Bye,
-  EnemySnapshot, EnemyEvent, ShotIntent };
+  EnemySnapshot, EnemyEvent, ShotIntent, Cheats, InventoryState };
 enum class RejectReason : uint16_t { None, Protocol, Version, Build, GameplayMods, Handshake };
 struct Compatibility {
   uint16_t protocol = kProtocolVersion;
@@ -52,6 +53,18 @@ constexpr size_t kMaxEnemyBatch = 16, kMaxEnemies = 512;
 
 struct ShotVector { float x = 0, y = 0, z = 0; };
 struct ShotHit { EnemyId id; ShotVector point; };
+struct InventoryState {
+  EnemyWorld world;
+  double time = 0;
+  uint8_t weapon = 0;
+  uint32_t ammo[4]{};
+};
+bool ValidInventory(const InventoryState& inventory);
+inline bool SameInventory(const InventoryState& a, const InventoryState& b) {
+  if (a.world != b.world || a.weapon != b.weapon) return false;
+  for (unsigned i = 0; i < 4; ++i) if (a.ammo[i] != b.ammo[i]) return false;
+  return true;
+}
 // One normal firearm callback, including misses. Shotgun can hit several distinct actors.
 // No damage value, bone index, function or guest pointer is accepted from a peer.
 struct ShotIntent {
@@ -89,6 +102,8 @@ struct Message {
   EnemySnapshot enemies;
   EnemyEvent enemy_event;
   ShotIntent shot;
+  CheatSet cheats;
+  InventoryState inventory;
 };
 // Encoders also reject invalid input. Decoding leaves out untouched on failure.
 bool Encode(const Message& message, std::vector<uint8_t>& out);

@@ -1,3 +1,4 @@
+    {"Set by the host", "Vom Host festgelegt", "Definido por el anfitrión", "Défini par l'hôte", "Impostato dall'host"},
 // The pause menu's own text (task 222, option A; task 248, Settings sub-list; pause_menu_logic.h): its entries and
 // the description strip's sentence for each. In game the launcher is "the main menu" (owner, 18 Oct). Included by launcher_text_table.inc.
     {"Load last checkpoint", "Letzten Checkpoint laden", "Cargar último punto de control", "Charger le dernier point de contrôle", "Carica ultimo checkpoint"},

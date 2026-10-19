@@ -354,10 +354,12 @@ struct State {
   uint32_t next_shot = 0;
   bool shooting = false, shot_resolved = false;
   ShotIntent shot;
+  InventoryState shot_inventory;
 #if defined(KK_DEV_TOOLS)
   uint32_t shot_hit_object = 0;
   bool shot_matched = false;
   const char* shot_hit_reason = "no-hit";
+  unsigned shot_target_diagnostics = 0;
 #endif
   double census_until = 0, next_numbers = 0, next_shot_log = 0;
   double error_sum = 0, error_max = 0;
@@ -707,6 +709,8 @@ const char* BeginShot(const uint8_t* b) {
   if (s.next_shot == UINT32_MAX) return "sequence-exhausted";
   s.shot = {}; s.shot.world = s.identity; s.shot.number = ++s.next_shot;
   s.shot.weapon = uint8_t(weapon); s.shot.time = Now();
+  s.shot_inventory = {s.identity, s.shot.time, uint8_t(weapon)};
+  for (unsigned i = 0; i < 4; ++i) s.shot_inventory.ammo[i] = Load32(b, s.game+13432+i*72);
   s.shot.origin = Vector(b, matrix+48); s.shot.origin.z += 1.5f;
   const float x = -LoadF(b, matrix+16), y = -LoadF(b, matrix+20), length = std::hypot(x, y);
   if (!std::isfinite(length) || length < .01f) return "invalid-facing";
@@ -789,7 +793,7 @@ const char* EndShot(const uint8_t* b, bool fired) {
   // ammo delta to forward misses or a real shot whose ammo was replenished.
   if (!fired && !s.shot_resolved) return "no-native-shot";
   if (!ValidShotIntent(s.shot)) return "invalid-intent";
-  if (!SubmitShotIntent(s.shot)) { s.shots.Reject(ShotReject::Queue); return "queue-refused"; }
+  if (!SubmitShotIntent(s.shot, s.shot_inventory)) { s.shots.Reject(ShotReject::Queue); return "queue-refused"; }
   return nullptr;
 }
 #if defined(KK_DEV_TOOLS)
@@ -852,32 +856,48 @@ void HostShots(PPCContext& ctx, uint8_t* b) {
   auto& s = Get();
   for (const auto& received : TakeShotIntents()) {
     const auto& shot = received.intent;
-    const auto weapon = PoseAddress(s.game, 13652) ? Load32(b, s.game+13128) : 0;
-    auto reason = s.shot_validator.Validate(received, s.identity, weapon <= 4 ? uint8_t(weapon) : 0, s.link.partner, Now());
+    auto reason = s.shot_validator.Validate(received, s.identity, s.link.partner, Now());
     std::vector<Binding> all;
     for (const auto& [actor, binding] : s.bindings) all.push_back(binding);
-    std::vector<Binding> targets;
+    std::vector<std::pair<Binding, ShotHit>> targets;
+    bool late = false;
     if (reason == ShotReject::None) for (const auto& hit : shot.hits) {
       const auto* binding = Match(hit.id, all);
       Binding observed; EnemyState e;
-      if (!binding || !ValidBinding(b, *binding) || !Read(b, binding->actor, observed, e)) { reason = ShotReject::Target; break; }
+      const bool valid = binding && ValidBinding(b, *binding);
+      if (!valid || !Read(b, binding->actor, observed, e)) {
+        // Only a confirmed death tombstone can turn a missing binding into late.
+        const auto known = s.records.find(hit.id);
+        if (known != s.records.end() && known->second.enemy.life <= 0 &&
+            ValidateShotHit(shot, hit, known->second.enemy) == ShotReject::Late) { late = true; continue; }
+#if defined(KK_DEV_TOOLS)
+        if (s.shot_target_diagnostics++ < 64)
+          REXLOG_INFO("ENEMIES shot target rejected number={} id={:016X}/{}/{} detail={} known={} life={:.2f} cap=64",
+              shot.number, hit.id.source, hit.id.sequence, uint16_t(hit.id.family),
+              !binding ? "missing-binding" : !valid ? "invalid-binding" : "unreadable-target",
+              known != s.records.end(), known == s.records.end() ? -1.f : known->second.enemy.life);
+#endif
+        reason = ShotReject::Target; break;
+      }
       e.id = binding->id;
       reason = ValidateShotHit(shot, hit, e);
+      if (reason == ShotReject::Late) { late = true; reason = ShotReject::None; continue; }
       if (reason != ShotReject::None) break;
-      targets.push_back(*binding);
+      targets.push_back({*binding, hit});
     }
     bool applied = false;
     if (reason == ShotReject::None) for (size_t i = 0; i < targets.size(); ++i) {
-      if (!NativeShot(ctx, b, shot, shot.hits[i], targets[i])) { reason = ShotReject::Engine; break; }
+      if (!NativeShot(ctx, b, shot, targets[i].second, targets[i].first)) { reason = ShotReject::Engine; break; }
       applied = true;
     }
     if (applied) ++s.shots.applied; // queued normal native event; life outcome comes from Scan.
     if (reason != ShotReject::None) s.shots.Reject(reason);
+    else if (late) s.shots.Reject(ShotReject::Late);
 #if defined(KK_DEV_TOOLS)
     if (Now() >= s.next_shot_log) {
       s.next_shot_log = Now()+1;
-      REXLOG_INFO("ENEMIES shot number={} weapon={} hits={} applied={} reject={}",
-          shot.number, shot.weapon, shot.hits.size(), applied, ShotRejectName(reason));
+      REXLOG_INFO("ENEMIES shot number={} weapon={} hits={} applied={} late={} reject={}",
+          shot.number, shot.weapon, shot.hits.size(), applied, late, ShotRejectName(reason));
     }
 #endif
   }
@@ -902,7 +922,17 @@ void BeforeAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   }
   if (!Environment(b, w)) return;
   Scan(b); s.prepared = true; s.prepared_at = Now();
-  if (s.link.role == Role::Guest) Guest(ctx, b, false);
+  if (s.link.role == Role::Guest) {
+    Guest(ctx, b, false);
+    if (PoseAddress(s.game, 13652) && JackReady(b)) {
+      const auto weapon = Load32(b, s.game+13128);
+      if (weapon <= 4) {
+        InventoryState inventory{s.identity, Now(), uint8_t(weapon)};
+        for (unsigned i = 0; i < 4; ++i) inventory.ammo[i] = Load32(b, s.game+13432+i*72);
+        PublishInventoryState(inventory);
+      }
+    }
+  }
   else HostShots(ctx, b);
 }
 void AfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
@@ -932,9 +962,9 @@ void AfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
     REXLOG_INFO("ENEMIES status role={} sent={} matched={} unmatched={} driven={} tracked={}",
         s.link.role == Role::Host ? "host" : "guest", s.link.sent, s.counts.matched,
         s.counts.unmatched, s.counts.driven, s.records.size());
-    REXLOG_INFO("ENEMIES error samples={} max={:.4f} avg={:.4f} shots-sent={} applied={} rejected={} reason={}",
+    REXLOG_INFO("ENEMIES error samples={} max={:.4f} avg={:.4f} shots-sent={} applied={} late={} rejected={} reason={}",
         s.error_count, s.error_max, s.error_count ? s.error_sum/double(s.error_count) : 0,
-        s.link.shots_sent, s.shots.applied, s.shots.rejected, ShotRejectName(s.shots.last));
+        s.link.shots_sent, s.shots.applied, s.shots.late, s.shots.rejected, ShotRejectName(s.shots.last));
     s.error_sum = s.error_max = 0; s.error_count = 0;
     for (size_t i = 1; i < size_t(ShotReject::Count); ++i) if (s.shots.reasons[i])
       REXLOG_INFO("ENEMIES shots-rejected reason={} total={}", ShotRejectName(ShotReject(i)), s.shots.reasons[i]);

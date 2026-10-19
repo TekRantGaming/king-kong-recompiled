@@ -98,10 +98,26 @@ bool ValidShotIntent(const ShotIntent& s) {
   }
   return true;
 }
+bool ValidInventory(const InventoryState& i) {
+  if (!ValidEnemyWorld(i.world) || !std::isfinite(i.time) || i.time < 0 || i.time >= 1e12 ||
+      i.weapon > 4) return false;
+  for (auto ammo : i.ammo) if (ammo > 1000000) return false;
+  return true;
+}
 
 bool Encode(const Message& m, std::vector<uint8_t>& out) {
   Writer payload;
   switch (m.type) {
+    case MessageType::Cheats:
+      if (!ValidCheatSet(m.cheats)) return false;
+      payload.U(m.cheats.bits, 2); break;
+    case MessageType::InventoryState:
+      if (!ValidInventory(m.inventory)) return false;
+      WriteWorld(payload, m.inventory.world);
+      payload.U(std::bit_cast<uint64_t>(m.inventory.time), 8);
+      payload.U(m.inventory.weapon, 1);
+      for (auto ammo : m.inventory.ammo) payload.U(ammo, 4);
+      break;
     case MessageType::Hello:
       payload.U(m.hello.protocol, 2);
       if (!payload.Text(m.hello.version) || !payload.Text(m.hello.build) || !payload.Text(m.hello.gameplay_digest))
@@ -172,6 +188,16 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
   m.sequence = uint32_t(r.U(4)); m.epoch = r.U(8);
   if (r.U(4) != bytes.size() - kHeaderBytes) return false;
   switch (m.type) {
+    case MessageType::Cheats:
+      m.cheats.bits = uint16_t(r.U(2));
+      if (!ValidCheatSet(m.cheats)) return false;
+      break;
+    case MessageType::InventoryState:
+      m.inventory.world = ReadWorld(r); m.inventory.time = std::bit_cast<double>(r.U(8));
+      m.inventory.weapon = uint8_t(r.U(1));
+      for (auto& ammo : m.inventory.ammo) ammo = uint32_t(r.U(4));
+      if (!ValidInventory(m.inventory)) return false;
+      break;
     case MessageType::Hello:
       m.hello.protocol = uint16_t(r.U(2));
       if (!r.Text(m.hello.version) || !r.Text(m.hello.build) || !r.Text(m.hello.gameplay_digest)) return false;

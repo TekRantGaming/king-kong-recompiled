@@ -2502,6 +2502,9 @@ class SettingsPages {
   // ------------------------------------------------------------- Cheats ---
   // Settings' Cheats tab (settings_layout.h kCheatsRows), in the launcher and the pause menu.
   std::vector<Item> CheatItems() {
+    kk::coop::RefreshSessionCheats();
+    const bool host_control = kk::CheatsSetByHost();
+    const auto effective = kk::EffectiveCheats();
     std::vector<Item> items;
     items.push_back(Section("Cheats"));
     items.push_back(CvarToggle("Cheats",
@@ -2509,7 +2512,8 @@ class SettingsPages {
                                "codes on the game's Cheat screen. Changes made while playing apply at once. They "
                                "last until you quit the game.",
                                "kk_cheats"));
-    const bool on = GetBool("kk_cheats");
+    const bool on = effective.Enabled();
+    if (host_control) { items.back().index = on ? 1 : 0; Disable(items.back(), true, "Set by the host"); }
     items.push_back(Section("Cheat list"));
     for (const auto& cheat : kk::kCheats) {  // the list (cheats.h), not the Page
       // Every chapter is open in the Play menu's Chapter select (docs/menus.md): no "All chapters".
@@ -2523,6 +2527,11 @@ class SettingsPages {
       if (in_game_ && kk::CheatSuppressedNow(cheat.id)) {
         Disable(it, true, kk::cheat_rules::kNotInThisChapter);
         it.index = 0;  // shows "Off": it is off here (task 252); kk_cheat_<id> itself is unchanged
+      }
+      if (host_control) {
+        it.index = !(in_game_ && kk::CheatSuppressedNow(cheat.id)) &&
+            effective.Chosen(unsigned(&cheat - kk::kCheats.data())) ? 1 : 0;
+        Disable(it, true, "Set by the host");
       }
       items.push_back(std::move(it));
     }

@@ -148,6 +148,7 @@ struct SteamRuntime::Impl
   SteamSessionView session_view;
   std::optional<PlayerPose> local_pose;
   enemies::Frame local_enemies;
+  std::optional<CheatSet> local_cheats;
   ShotMailbox shots;
   const char* local_failure = "not-published";
 #if defined(KK_DEV_TOOLS)
@@ -572,15 +573,18 @@ struct SteamRuntime::Impl
     if (!session) return;
     std::optional<PlayerPose> pose;
     enemies::Frame enemy_frame;
+    CheatSet cheats;
     const char* failure;
-    { std::lock_guard lock(mutex); pose = local_pose; failure = local_failure; enemy_frame = local_enemies; }
+    { std::lock_guard lock(mutex); pose = local_pose; failure = local_failure; enemy_frame = local_enemies;
+      cheats = local_cheats.value_or(options.cheats); }
     if (pose && now - pose->time > .25) { pose.reset(); failure = "publish-expired"; }
-    session->Tick(now, pose, &enemy_frame);
+    session->Tick(now, pose, &enemy_frame, &cheats);
     shots.Exchange(*session);
     SteamSessionView view{session->SessionRole(), session->State(), session->Rejection(), session->Stats(), pose, session->Partner(now), now};
     view.local_failure = failure; view.poses = session->Poses();
     view.enemies = session->Enemies(now); view.enemies_sent = session->EnemiesSent();
     view.shots_sent = session->ShotsSent();
+    view.host_cheats = session->HostCheats();
 #if defined(KK_DEV_TOOLS)
     if (view.state != SessionState::Connected) next_pose_log = now + 10;
     else if (now >= next_pose_log) {
@@ -708,7 +712,9 @@ bool SteamRuntime::EnemyConnectionReady(double now) const {
 void SteamRuntime::PublishEnemies(const enemies::Frame& frame) {
   std::lock_guard lock(impl_->mutex); impl_->local_enemies = frame;
 }
-bool SteamRuntime::SubmitShot(const ShotIntent& shot) { return impl_->shots.Submit(shot); }
+bool SteamRuntime::SubmitShot(const PendingShot& shot) { return impl_->shots.Submit(shot); }
+void SteamRuntime::PublishCheats(CheatSet cheats) { std::lock_guard lock(impl_->mutex); impl_->local_cheats = cheats; }
+void SteamRuntime::PublishInventory(const InventoryState& inventory) { impl_->shots.PublishInventory(inventory); }
 std::vector<ReceivedShot> SteamRuntime::TakeShots() { return impl_->shots.Take(); }
 void SteamRuntime::Shutdown() { impl_->Shutdown(); }
 #if defined(KK_DEV_TOOLS)
