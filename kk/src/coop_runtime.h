@@ -15,6 +15,7 @@ void Start(const std::filesystem::path& user_data);
 // Available to the launcher before Play. Open is the explicit lazy Steam opt-in.
 ISocialService& Social();
 #if defined(KK_DEV_TOOLS)
+bool SocialFakeScenario(std::string_view scenario);
 // Value-only snapshot, including CoopSession's interpolated pose. No transport work.
 struct PuppetSnapshot {
   bool enabled = false, fresh = false;

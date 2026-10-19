@@ -27,6 +27,9 @@ set(KINGKONG_SOURCES
     src/steam_runtime.cpp
     src/steam_lobby.cpp
     src/steam_transport.cpp
+    src/social_panel.cpp
+    src/social_panel_logic.cpp
+    src/social_fake.cpp
     src/input_remap.cpp
     src/launcher.cpp
     src/launcher_ui.cpp
@@ -297,6 +300,11 @@ if(KK_DEV_TOOLS)
         target_link_libraries(kk-steam-tests PRIVATE shell32)
     endif()
     add_test(NAME coop-steam-services COMMAND kk-steam-tests)
+    add_executable(kk-social-tests tests/social_tests.cpp src/social_panel_logic.cpp src/social_fake.cpp
+        src/steam_lobby.cpp src/coop_protocol.cpp)
+    target_include_directories(kk-social-tests PRIVATE src)
+    target_compile_definitions(kk-social-tests PRIVATE KK_DEV_TOOLS=1)
+    add_test(NAME coop-social-panel COMMAND kk-social-tests)
     target_include_directories(kk-freecam-tests PRIVATE src)
     add_test(NAME free-camera COMMAND kk-freecam-tests)
     # Task 208: photo mode's settings, camera limits, controller, hidden draws and grade colours; its text.

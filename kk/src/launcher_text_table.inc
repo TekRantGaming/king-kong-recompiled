@@ -2,6 +2,7 @@
 // passes it (the key; {0}, {1}... are filled in), then German, Spanish,
 // French and Italian.
 constexpr Entry kEntries[] = {
+#include "launcher_social_text_table.inc"
     // Task 228: a start that ended unexpectedly (a damaged driver shader cache, mostly AMD).
     {"A damaged graphics driver shader cache can also cause this, most often on AMD graphics cards: close the game, empty the folders VkCache, DxCache and DxcCache in %LOCALAPPDATA%\\AMD, then start the game again.",
      "Auch ein beschädigter Shader-Cache des Grafiktreibers kann das verursachen, meist bei AMD-Grafikkarten: Schließe das Spiel, leere die Ordner VkCache, DxCache und DxcCache in %LOCALAPPDATA%\\AMD und starte das Spiel erneut.",

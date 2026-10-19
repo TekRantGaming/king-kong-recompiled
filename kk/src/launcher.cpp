@@ -15,6 +15,8 @@
 #include "launcher_sounds.h"
 #include "launcher_text.h"
 #include "launcher_ui.h"
+#include "social_panel.h"
+#include "coop_runtime.h"
 #include "notify_logic.h"
 #include "system_notify.h"
 #include "ps2_movies.h"
@@ -2870,6 +2872,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       pads_active_ = active;
       input_.set_pads_active(active);
     }
+    input_.set_social_triggers(GetBool("kk_coop_enabled") && play_ != PlayView::kArtbook);
     input_.Update();
     if (ui_sounds_) {
       const float volume = GetBool("kk_launcher_sounds") ? GetInt("kk_launcher_sounds_volume", 50) / 100.0f : 0.0f;
@@ -2948,6 +2951,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (files_ok_ && GetBool("kk_launcher_sounds") && !ui_sounds_)
       ui_sounds_ = std::make_unique<LauncherSounds>(paths_.game_dir);
 
+    social_.Update(GetBool("kk_coop_enabled"), SocialContext(), input_, coop::Social());
+    input_.set_social_blocking(social_.blocking());
     DrawBackdrop(dl);
     if (ShaderScreen()) {
       DrawShaderScreen(dl);
@@ -2958,7 +2963,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         open_benchmark_results_ = false;
         OpenBenchmarkResults();
       }
-      if (!modal_.open) HandleGlobalInput();
+      if (!PageInputBlocked()) HandleGlobalInput();
       if (play_ != PlayView::kNone) {
         DrawPlayHeader(dl);
         if (play_ == PlayView::kMenu) DrawPlayMenu(dl);
@@ -2970,8 +2975,12 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         else DrawSettings(dl);
       }
     }
-    ui::DrawModal(dl, modal_, o_, ImVec2(o_.x + w_, o_.y + h_), m_, input_);
-    DrawBottomBar(dl);  // over a pop-up's shade: its prompts stay clear
+    if (!social_.blocking()) {
+      ui::DrawModal(dl, modal_, o_, ImVec2(o_.x + w_, o_.y + h_), m_, input_);
+      DrawBottomBar(dl);  // over a pop-up's shade: its prompts stay clear
+    }
+    social_.Draw(dl, o_, ImVec2(w_, h_), m_, input_, glyphs_, PromptSet(), immediate_, coop::Social(),
+                 coop::SocialAllowed(GetBool("kk_coop_enabled"), SocialContext()));
     ImGui::End();
     NoteActivity(io);
     handoff::ContentDrawn();  // started by the game going back: it closes once this page is on screen
@@ -2990,7 +2999,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     const int view = int(page_) * 16 + int(play_) * 4 + int(sub_) + (modal_.open ? 1000 : 0) + SetupStage() * 10000 +
                      (ShaderScreen() ? 100000 : 0) + (leaving_ ? 1000000 : 0);
     active = active || view != last_view_ || (toast_ && toast_->NeedsContinuousPaint()) || native_pack_.Working() ||
-             installing_ || art_progress_.busy || (update_ && update_->busy) || status_focus_ != last_status_focus_;
+             installing_ || art_progress_.busy || (update_ && update_->busy) || status_focus_ != last_status_focus_ ||
+             social_.animating();
     last_view_ = view;
     last_status_focus_ = status_focus_;
     if (active) last_activity_ = ImGui::GetTime();
@@ -3297,7 +3307,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
           tab_names_lang_ = int(text::Current());
         }
         const int clicked = ui::DrawTabs(dl, glyphs_, PromptSet(), tab_names_, int(page_) - kFirstSettingsPage,
-                                         ImVec2(o_.x + Margin(), o_.y + 44 * s), m_, !modal_.open, &ux, &uw,
+                                         ImVec2(o_.x + Margin(), o_.y + 44 * s), m_, !PageInputBlocked(), &ux, &uw,
                                          w_ - Margin() * 2 - caption_width - 32 * s);
         if (clicked >= 0 && clicked != int(page_) - kFirstSettingsPage) {
           ui::Cue(ui::Sound::kTab);
@@ -3360,6 +3370,27 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   }
 
   // ---------------------------------------------------------- bottom bar ---
+  bool PageInputBlocked() const { return modal_.open || social_.blocking(); }
+  coop::SocialPage SocialContext() {
+    if (!capturing_.empty() || editing_name_) return coop::SocialPage::Capture;
+    if (modal_.open) return coop::SocialPage::Modal;
+    if (ShaderScreen()) return coop::SocialPage::Shaders;
+    if (InSetup()) return coop::SocialPage::Setup;
+    using P = coop::SocialPage;
+    switch (play_) {
+      case PlayView::kArtbook: return P::Artbook;
+      case PlayView::kMenu: return P::PlayMenu;
+      case PlayView::kLoad: return P::Load;
+      case PlayView::kNew: return P::NewGame;
+      case PlayView::kChapters: return P::Chapters;
+      case PlayView::kExtras: return P::Extras;
+      case PlayView::kNone: break;
+    }
+    static constexpr P pages[] = {P::Page, P::Display, P::Graphics, P::Audio, P::Controls, P::Gameplay,
+        P::Cheats, P::Advanced, P::About, P::Achievements, P::Workshop};
+    static_assert(std::size(pages) == kPageCount);
+    return pages[page_];
+  }
   void DrawBottomBar(ImDrawList* dl) {
     const float s = S();
     const float cy = o_.y + h_ - 42 * s;
@@ -3374,7 +3405,9 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       dl->AddText(f.text, 15 * s, ImVec2(o_.x + Margin(), cy - 9 * s), ui::WithAlpha(color::kTextFaint, a),
                   T("Settings saved"));
     }
-    const Action clicked = ui::DrawPrompts(dl, glyphs_, PromptSet(), Prompts(), o_.x + w_ - Margin(), cy, m_,
+    auto prompts = Prompts();
+    if (coop::SocialAllowed(GetBool("kk_coop_enabled"), SocialContext())) prompts.push_back({Action::kSocial, "Social"});
+    const Action clicked = ui::DrawPrompts(dl, glyphs_, PromptSet(), prompts, o_.x + w_ - Margin(), cy, m_,
                                            true);
     if (clicked != Action::kCount) pending_click_ = clicked;
   }
@@ -3518,7 +3551,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     focus = std::clamp(focus, 0, n - 1);
     const int focus_before = focus;
     menu_value_ = bool(entries[size_t(focus)].change);
-    const bool active = focusable && !modal_.open && side_focus_ < 0 && !status_focus_;
+    const bool active = focusable && !PageInputBlocked() && side_focus_ < 0 && !status_focus_;
     // Home: down from the last entry (or up from the first) moves to the shaders' status below.
     if (active && menu_to_status_ && n > 1 &&
         ((focus == n - 1 && input_.Pressed(Action::kDown)) || (focus == 0 && input_.Pressed(Action::kUp)))) {
@@ -3684,7 +3717,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
     // Controller and keyboard. Right is free unless the menu's entry uses it
     // for a value (Language).
-    if (!modal_.open) {
+    if (!PageInputBlocked()) {
       // Each panel's own button (X: Steam, Y: Discord) works from anywhere on this screen.
       for (int i = 0; i < n; ++i) {
         if (arrival(i) < 1.0f || !input_.Pressed(panels[size_t(i)].key)) continue;
@@ -3744,7 +3777,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
 
     // The mouse.
     int hovered = -1;
-    for (int i = 0; i < n && !modal_.open; ++i)
+    for (int i = 0; i < n && !PageInputBlocked(); ++i)
       if (arrival(i) >= 1.0f && ImGui::IsMouseHoveringRect(ImVec2(lefts[size_t(i)], row.y),
                                                            ImVec2(lefts[size_t(i)] + widths[size_t(i)], row.y + h), false))
         hovered = i;
@@ -3991,7 +4024,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     float x = o_.x + Margin();
     const std::string first = Upper(T(root));
     const float pw = ui::TrackedWidth(f.display, fs, first, tr);
-    const bool hot = sub && !modal_.open &&
+    const bool hot = sub && !PageInputBlocked() &&
                      ImGui::IsMouseHoveringRect(ImVec2(x - 10 * s, cy - 22 * s), ImVec2(x + pw + 10 * s, cy + 22 * s), false);
     const bool clicked = hot && ImGui::IsMouseClicked(0);
     if (clicked) ui::Cue(ui::Sound::kBack);
@@ -4152,7 +4185,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // The page's own buttons, on the focused row (last frame's): on Load game X deletes and Y opens
     // Chapter select with that save; on Chapter select Y changes the save.
     const int row = st.focus >= 0 && st.focus < int(row_data_.size()) ? row_data_[size_t(st.focus)] : -1;
-    if (!modal_.open && play_ == PlayView::kLoad && SlotUsed(row)) {
+    if (!PageInputBlocked() && play_ == PlayView::kLoad && SlotUsed(row)) {
       if (input_.Pressed(Action::kDefault)) {
         input_.Consume(Action::kDefault);
         ui::Cue(ui::Sound::kSelect);
@@ -4165,7 +4198,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         return;
       }
     }
-    if (!modal_.open && play_ == PlayView::kChapters && input_.Pressed(Action::kResetPage)) {
+    if (!PageInputBlocked() && play_ == PlayView::kChapters && input_.Pressed(Action::kResetPage)) {
       input_.Consume(Action::kResetPage);
       if (UsedSlots() > 1) {
         ui::Cue(ui::Sound::kChange);
@@ -4184,7 +4217,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     const float top = o_.y + 104 * s, bottom = o_.y + h_ - 96 * s;
     const float x0 = o_.x + Margin(), avail = w_ - Margin() * 2, list_w = std::round(avail * 0.56f);
     const Item* focused = ui::DrawList(dl, items, st, ImVec2(x0, top), ImVec2(x0 + list_w, bottom), m_, input_,
-                                       !modal_.open);
+                                       !PageInputBlocked());
     const ImVec2 d0(x0 + list_w + 76 * s, top + 18 * s), d1(o_.x + w_ - Margin(), bottom);
     if (play_ == PlayView::kChapters) {
       const int entry = st.focus >= 0 && st.focus < int(row_data_.size()) ? row_data_[size_t(st.focus)] : -1;
@@ -4444,7 +4477,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       status_focus_ = false;
       return;
     }
-    if (modal_.open || side_focus_ >= 0) return;
+    if (PageInputBlocked() || side_focus_ >= 0) return;
     const bool hovered = status_rect_[1].x > status_rect_[0].x &&
                          ImGui::IsMouseHoveringRect(status_rect_[0], status_rect_[1], false);
     if (input_.mouse_moved()) status_focus_ = hovered;
@@ -4609,12 +4642,12 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // Continue in the background: the panel's one button, with the focus.
     const float bw = std::max(300 * s, ui::TextSize(f.semibold, 16 * s, button).x + 60 * s);
     const ImVec2 b0(x1 - pad - bw, ty), b1(x1 - pad, ty + bh);
-    const bool hovered = !modal_.open && ImGui::IsMouseHoveringRect(b0, b1, false);
+    const bool hovered = !PageInputBlocked() && ImGui::IsMouseHoveringRect(b0, b1, false);
     dl->AddRectFilled(b0, b1, hovered ? IM_COL32_WHITE : color::kFocus, 4 * s);
     const ImVec2 ts = ui::TextSize(f.semibold, 16 * s, button);
     dl->AddText(f.semibold, 16 * s, ImVec2(b0.x + (bw - ts.x) * 0.5f, b0.y + (bh - ts.y) * 0.5f), color::kOnFocus,
                 button.c_str());
-    if (!modal_.open && (input_.Pressed(Action::kAccept) || (hovered && ImGui::IsMouseClicked(0)))) {
+    if (!PageInputBlocked() && (input_.Pressed(Action::kAccept) || (hovered && ImGui::IsMouseClicked(0)))) {
       input_.Consume(Action::kAccept);
       ContinueShadersInBackground();
     }
@@ -4897,7 +4930,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // The setup steps after the shaders show a download running in the background (setup-flow.md).
     if (stage == 6 || stage == 7) DrawContentStrip(dl, 1.0f, false);
     if (const int i = DrawMenu(dl, entries, setup_focus_, x, y, 1.0f); i >= 0) entries[size_t(i)].action();
-    if (!modal_.open && input_.Pressed(Action::kBack)) {
+    if (!PageInputBlocked() && input_.Pressed(Action::kBack)) {
       input_.Consume(Action::kBack);
       if (stage <= 1) ui::Cue(ui::Sound::kBack);
       if (stage == 0) OpenQuit();
@@ -5049,7 +5082,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
         const ImVec2 p0(cx - 12 * s, y - 9 * s), p1(cx + col_w - 22 * s, y + 67 * s);
         status_rect_[0] = p0;
         status_rect_[1] = p1;
-        const bool hovered = !modal_.open && ImGui::IsMouseHoveringRect(p0, p1, false);
+        const bool hovered = !PageInputBlocked() && ImGui::IsMouseHoveringRect(p0, p1, false);
         if (status_focus_ || hovered) {
           dl->AddRectFilled(p0, p1, ui::WithAlpha(IM_COL32(30, 33, 40, 255), 0.6f * alpha), 10 * s);
           dl->AddRect(p0, p1, ui::WithAlpha(color::kText, 0.22f * alpha), 10 * s, 0, 1.0f * s);
@@ -5244,7 +5277,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     EnsureWorkshop();
     const float s = S();
     workshop_->Draw(dl, ImVec2(o_.x + Margin(), o_.y + 96 * s), ImVec2(o_.x + w_ - Margin(), o_.y + h_ - 96 * s), m_,
-                    input_, !modal_.open);
+                    input_, !PageInputBlocked());
     focused_ = nullptr;
   }
 
@@ -5253,7 +5286,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (!artbook_) artbook_ = std::make_unique<Artbook>(immediate_, paths_.user_dir);
     const float s = S();
     artbook_->Draw(dl, ImVec2(o_.x + Margin(), o_.y + 96 * s), ImVec2(o_.x + w_ - Margin(), o_.y + h_ - 96 * s), o_,
-                   ImVec2(o_.x + w_, o_.y + h_), m_, input_, !modal_.open);
+                   ImVec2(o_.x + w_, o_.y + h_), m_, input_, !PageInputBlocked());
     focused_ = nullptr;
   }
 
@@ -5284,7 +5317,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     ui::ListState& st = lists_[page_ * 4 + sub_];
     if (IsSettingsPage(page_) || page_ == kAbout) AttachHelp(items);
     const Item* focused = ui::DrawList(dl, items, st, ImVec2(x0, top), ImVec2(x0 + list_w, bottom), m_, input_,
-                                       !modal_.open);
+                                       !PageInputBlocked());
     const float dx = x0 + list_w + 76 * s;
     ui::DrawDescription(dl, focused, ImVec2(dx, top + 18 * s), ImVec2(o_.x + w_ - Margin(), bottom), m_);
     // Kept for the prompts (the items live until the next frame's rebuild).
@@ -6770,7 +6803,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     const float right = o_.x + w_ - Margin();
     const float y0 = top ? o_.y + std::max(84 * s, h_ * 0.12f) : o_.y + h_ - 120 * s - 24 * s - h;
     const ImVec2 p0(right - w, y0), p1(right, y0 + h);
-    const bool hovered = !modal_.open && ImGui::IsMouseHoveringRect(p0, p1, false);
+    const bool hovered = !PageInputBlocked() && ImGui::IsMouseHoveringRect(p0, p1, false);
     dl->AddRectFilled(ImVec2(p0.x, p0.y + 5 * s), ImVec2(p1.x, p1.y + 5 * s), IM_COL32(0, 0, 0, int(40 * alpha)), r);
     dl->AddRectFilled(p0, p1, ui::WithAlpha(hovered ? IM_COL32(30, 33, 40, 255) : IM_COL32(16, 18, 22, 255), 0.72f * alpha), r);
     dl->AddRect(p0, p1, ui::WithAlpha(color::kText, (hovered ? 0.22f : 0.09f) * alpha), r, 0, 1.0f * s);
@@ -7484,6 +7517,11 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     std::string t = steps[next++];
     at = now + 0.45;
     REXLOG_INFO("KK dev: input {}", t);
+    // Preview states only touch the SDK-free fake selected at startup.
+    if (t.rfind("social:", 0) == 0) {
+      coop::SocialFakeScenario(t.substr(7));
+      return;
+    }
     if (t == "wait-modal") REXLOG_INFO("KK dev: pop-up '{}' buttons {}", modal_.title, modal_.buttons.size());
     if (t.rfind("shot:", 0) == 0) {
       REXLOG_INFO("KK dev: shot {}", t.substr(5));
@@ -7703,9 +7741,16 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     if (t.rfind("pad:", 0) == 0) d = ui::Device::kXbox, t = t.substr(4);
     else if (t.rfind("ps:", 0) == 0) d = ui::Device::kPlayStation, t = t.substr(3);
     else if (t.rfind("kb:", 0) == 0) t = t.substr(3);
+    if (t == "rt" && GetBool("kk_coop_enabled") && play_ != PlayView::kArtbook) {
+      input_.Inject(Action::kSocial, d);
+      return;
+    }
+    if (t == "lt" && GetBool("kk_coop_enabled") && play_ != PlayView::kArtbook) return;
     static const std::map<std::string, Action> kNames = {
         {"up", Action::kUp},          {"down", Action::kDown},       {"left", Action::kLeft},
-        {"right", Action::kRight},    {"lt", Action::kPageUp},       {"rt", Action::kPageDown},
+        {"right", Action::kRight},    {"lt", Action::kPageUp},
+        {"rt", Action::kPageDown},
+        {"f4", Action::kSocial},
         {"a", Action::kAccept},       {"b", Action::kBack},          {"x", Action::kDefault},
         {"y", Action::kResetPage},    {"lb", Action::kPrevTab},      {"rb", Action::kNextTab},
         {"start", Action::kPlay}};
@@ -7728,6 +7773,7 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   std::unique_ptr<Workshop> workshop_;  // job J8: made when the Workshop page first opens
   const Item* focused_ = nullptr;
   Action pending_click_ = Action::kCount;
+  ui::SocialPanel social_;
   int home_focus_ = 0;
   PlayView play_ = PlayView::kNone;      // the Play menu and its pages, over Home
   int play_focus_ = 0;

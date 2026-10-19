@@ -3,6 +3,7 @@
 #include "coop_pose.h"
 #include "settings.h"
 #include "steam_runtime.h"
+#include "social_fake.h"
 
 #include <atomic>
 #include <charconv>
@@ -34,12 +35,17 @@ REXCVAR_DEFINE_STRING(kk_coop_dev, "", "KK/Debug", "Local co-op test link: host:
     .debug_only().lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(kk_steam_selftest, false, "KK/Debug", "Test Steam services and exit without starting a game")
     .debug_only().lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(kk_social_fake, false, "KK/Debug", "Use an offline Social panel preview")
+    .debug_only().lifecycle(rex::cvar::Lifecycle::kInitOnly);
 #endif
 REXCVAR_DECLARE(bool, kk_hide_hud);
 
 namespace kk::coop {
 namespace {
 std::unique_ptr<SteamRuntime> steam;
+#if defined(KK_DEV_TOOLS)
+std::unique_ptr<ISocialPreview> social_preview;
+#endif
 bool configured = false;
 using Clock = std::chrono::steady_clock;
 double Now() { return std::chrono::duration<double>(Clock::now().time_since_epoch()).count(); }
@@ -200,6 +206,12 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
 void Configure(const std::filesystem::path& user_data) {
   if (configured) return;
   configured = true;
+#if defined(KK_DEV_TOOLS)
+  if (REXCVAR_GET(kk_coop_enabled) && REXCVAR_GET(kk_social_fake)) {
+    social_preview = MakeSocialPreview();
+    return;
+  }
+#endif
   SteamRuntimeOptions options;
   options.enabled = REXCVAR_GET(kk_coop_enabled);
   options.executable_folder = rex::filesystem::GetExecutableFolder();
@@ -216,6 +228,7 @@ void Start(const std::filesystem::path& user_data) {
   if (!REXCVAR_GET(kk_coop_enabled)) return;
 #if defined(KK_DEV_TOOLS)
   if (service.Running()) return;
+  if (social_preview) return;
   if (REXCVAR_GET(kk_steam_selftest)) return;
   std::string address = REXCVAR_GET(kk_coop_dev);
   if (const char* env = std::getenv("KK_COOP_DEV"); address.empty() && env) address = env;
@@ -253,6 +266,7 @@ ISocialService& Social() {
     bool Act(SocialCommand) override { return false; }
   };
   static DevSocial dev;
+  if (social_preview) return *social_preview;
   if (DevSelected()) return dev;
 #endif
   return steam ? static_cast<ISocialService&>(*steam) : static_cast<ISocialService&>(disabled);
@@ -263,6 +277,13 @@ void Shutdown() {
 #endif
   if (steam) steam->Shutdown();
 }
+#if defined(KK_DEV_TOOLS)
+bool SocialFakeScenario(std::string_view scenario) {
+  if (!social_preview || !social_preview->Scenario(scenario)) return false;
+  RequestUiPaint();
+  return true;
+}
+#endif
 void GameFrame(uint8_t* base) {
 #if defined(KK_DEV_TOOLS)
   kk::DevPuppetGameFrame(base);
