@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace nr {
 
@@ -98,16 +99,33 @@ void MotionHistory::BeginFrame(uint64_t frame) {
   if (frame == frame_) return;
   // Only a frame that follows directly keeps its predecessor: after a gap the "previous" draws are
   // older than one frame and their motion would be wrong.
-  if (frame_ != UINT64_MAX && frame == frame_ + 1) {
-    previous_.swap(current_);
-    previous_count_ = current_count_;
-  } else {
-    previous_.clear();
-    previous_count_ = 0;
-  }
-  current_.clear();
+  const bool follows = frame_ != UINT64_MAX && frame == frame_ + 1;
+  previous_.swap(current_);
+  previous_count_ = follows ? current_count_ : 0;
+  if (!follows) Recycle(previous_, false);
+  // current_ now holds the frame before last: its storage is reused (task 319). Clearing the maps
+  // freed every slot's constants each frame (4 KiB a draw, megabytes in a busy scene), and growing
+  // them again touched fresh pages: tens of thousands of page faults a second on the render thread.
+  Recycle(current_, true);
   current_count_ = 0;
   frame_ = frame;
+}
+
+void MotionHistory::Recycle(Map& m, bool drop_unused) {
+  // Slots keep their key and their vectors' capacity; a slot already empty (its key had no draw in
+  // that frame either) is dropped, so keys that stopped drawing do not pile up.
+  for (auto it = m.begin(); it != m.end();) {
+    std::vector<Slot>& list = it->second;
+    if (drop_unused)
+      list.erase(std::remove_if(list.begin(), list.end(), [](const Slot& s) { return s.constants.empty(); }),
+                 list.end());
+    for (Slot& s : list) {
+      s.constants.clear();
+      s.next_guess = 0;
+      s.common_prefix = SIZE_MAX;
+    }
+    it = list.empty() ? m.erase(it) : std::next(it);
+  }
 }
 
 const MotionHistory::Slot* MotionHistory::Find(const Map& m, const MotionDrawKey& key) {
@@ -145,18 +163,75 @@ const VsConstants* MotionHistory::FindPrevious(const MotionDrawKey& key, uint32_
   const size_t n = s->constants.size();
   if (n == 1) return &s->constants[0];
   if (final_count && final_count == n && ordinal < n) return &s->constants[ordinal];
-  // The instance set changed (culling): the closest constants.
-  size_t best = 0;
-  double best_d = INFINITY;
-  for (size_t i = 0; i < n; ++i) {
-    double d = 0;
+  // The instance set changed (culling): the closest constants (sum of absolute differences; the
+  // first of equals). The draw with the same ordinal is measured first: it is usually the closest
+  // or near it, so the others stop after a few registers (task 319: with a thousand draws of one
+  // key, measuring from the first draw cost the render thread tens of milliseconds a frame). The
+  // result is the same as measuring in order: sums only grow, the same registers are added in the
+  // same order, and an equal sum wins only for an earlier draw.
+  const size_t first = std::min<size_t>(ordinal, n - 1);
+  // The leading floats every draw shares (the camera's registers, typically) add the same terms in
+  // the same order for every draw: their sum is worked out once and each draw starts from it.
+  if (s->common_prefix == SIZE_MAX) {
+    size_t p = current.size();
+    const VsConstants& c0 = s->constants[0];
+    for (size_t i = 1; i < n && p; ++i) {
+      const VsConstants& c = s->constants[i];
+      size_t k = 0;
+      while (k < p && std::memcmp(&c[k], &c0[k], sizeof(float)) == 0) ++k;
+      p = k;
+    }
+    s->common_prefix = p;
+  }
+  const size_t prefix = s->common_prefix;
+  double prefix_d = 0;
+  for (size_t k = 0; k < prefix; ++k) prefix_d += std::fabs(double(s->constants[0][k]) - double(current[k]));
+  const auto distance = [&](size_t i, double limit, bool equal_continues) {
+    const auto go = [&](double d) { return d < limit || (equal_continues && d == limit); };
+    // The shared part: the same partial sums for every draw, so stopping inside it is stopping
+    // where the full loop would (the sums only grow; a stop there leaves a sum at or past the limit).
+    if (!go(prefix_d)) {
+      double d = 0;
+      for (size_t k = 0; k < prefix && go(d); ++k) d += std::fabs(double(s->constants[i][k]) - double(current[k]));
+      return d;
+    }
+    double d = prefix_d;
     const VsConstants& c = s->constants[i];
-    for (size_t k = 0; k < c.size() && d < best_d; ++k) d += std::fabs(double(c[k]) - double(current[k]));
-    if (d < best_d) {
+    for (size_t k = prefix; k < c.size() && go(d); ++k) d += std::fabs(double(c[k]) - double(current[k]));
+    return d;
+  };
+  size_t best = first;
+  double best_d = distance(first, INFINITY, false);
+  if (const size_t guess = s->next_guess; guess < n && guess != first && best_d > 0 && !std::isnan(best_d)) {
+    const double d = distance(guess, best_d, guess < best);
+    if (d < best_d || (guess < best && d == best_d)) best_d = d, best = guess;
+  }
+  if (std::isnan(best_d)) {
+    // Not a number in its constants (never seen): measure in order, as before.
+    best = 0;
+    best_d = INFINITY;
+    for (size_t i = 0; i < n; ++i)
+      if (const double d = distance(i, best_d, false); d < best_d) best_d = d, best = i;
+    return &s->constants[best];
+  }
+  for (size_t i = 0; i < n && best_d > 0; ++i) {
+    if (i == first) continue;
+    const bool earlier = i < best;
+    const double d = distance(i, best_d, earlier);
+    if (d < best_d || (earlier && d == best_d)) {
       best_d = d;
       best = i;
     }
   }
+  if (best_d == 0) {
+    // An exact match: the first of the exact matches, as measuring in order would give.
+    for (size_t i = 0; i < best; ++i)
+      if (distance(i, 0, true) == 0) {
+        best = i;
+        break;
+      }
+  }
+  s->next_guess = best + 1;
   return &s->constants[best];
 }
 
