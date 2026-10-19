@@ -355,6 +355,11 @@ if(KK_DEV_TOOLS)
     target_include_directories(kk-log-tail-tests PRIVATE src)
     rexglue_apply_target_settings(kk-log-tail-tests)
     add_test(NAME log-tail COMMAND kk-log-tail-tests)
+    # Task 297: the startup limits leave out shader compile time; the renderer's compile clock.
+    add_executable(kk-startup-clock-tests tests/startup_clock_tests.cpp)
+    target_include_directories(kk-startup-clock-tests PRIVATE src ../native-renderer)
+    rexglue_apply_target_settings(kk-startup-clock-tests)
+    add_test(NAME startup-clock COMMAND kk-startup-clock-tests)
     # Task 206: brightness and gamma (the renderer's picture curve), the Performance metrics overlay's logic.
     add_executable(kk-perf-overlay-tests tests/perf_overlay_tests.cpp)
     target_include_directories(kk-perf-overlay-tests PRIVATE src ../native-renderer)

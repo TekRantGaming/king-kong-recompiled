@@ -14,6 +14,7 @@
 
 #include "backend/backend.h"
 #include "backend/background_file_writer.h"
+#include "backend/compile_clock.h"
 #include "backend/pipeline_exit_gate.h"
 #include "plugin/launcher_prewarm.h"
 #include "plugin/native_api.h"
@@ -628,6 +629,12 @@ extern "C" REX_GPU_PLUGIN_EXPORT void nr_set_startup_failure_handler(nr::Startup
 
 extern "C" REX_GPU_PLUGIN_EXPORT void nr_set_startup_presented_handler(nr::StartupPresentedHandler handler) {
   nr::startup_presented_handler.store(handler, std::memory_order_release);
+}
+
+// Task 297: milliseconds spent compiling shaders the game waited for (backend/compile_clock.h); King
+// Kong leaves them out of its startup limits. 0 with a shader pack.
+extern "C" REX_GPU_PLUGIN_EXPORT uint64_t nr_shader_compile_milliseconds(void) {
+  return nr::CompileClock::Milliseconds();
 }
 
 extern "C" REX_GPU_PLUGIN_EXPORT const NrApi* nr_get_api(void) {
