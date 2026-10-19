@@ -505,6 +505,16 @@ const Info& InfoFor(Kind kind) {
       {"comic-textures", "comic-textures", "https://bobandersonv115.cypher.usbx.me/filebrowser/api/public/dl/A_vaZ0kx",
        "Kong-Comic-Book-1.0.zip", 1404861922ull, 5323466668ull,
        "840fa08f3c4e10664037a2cf9f459a4067d1469f8bb25a5be9a3c4c99faef68f"},
+      // Task 255 (owner, 19 Oct): Kong's Tropical Holiday and Kong Cartoon, texture pack mod ZIPs laid out like the
+      // Comic one (one top folder with mod.toml, picture.png, README.txt, CREDITS.txt, textures/pack.txt). Sizes from
+      // the links (ranged requests) and the ZIP directory; SHA-256 of the owner's local copies, whose size, first
+      // 64 KB and whole directory (every file's CRC) match the links.
+      {"tropical-textures", "tropical-textures", "https://bobandersonv115.cypher.usbx.me/filebrowser/api/public/dl/F55nz6Hg",
+       "Kong-Tropical-Holiday-1.0.zip", 2516526163ull, 5323855453ull,
+       "13d63d7d932c7029a276a62a81cc01878dcce12492620a1951f1d337ba7f0217"},
+      {"cartoon-textures", "cartoon-textures", "https://bobandersonv115.cypher.usbx.me/filebrowser/api/public/dl/zMfx2F-j",
+       "Kong-Cartoon-1.0.zip", 1473282349ull, 5323409958ull,
+       "ef86ae0a0df017124d7013fa5ab968a5274bedbdc2b77451648aa40d99b4961c"},
   };
   return kInfo[int(kind)];
 }

@@ -63,6 +63,12 @@ for spec in cel_exposure_cs:cs:cs_exposure cel_vs:vs:vs_main cel_ps:ps:ps_cel; d
   "$DXC" -nologo -T "${stage}_6_0" -E "$entry" -O3 -Fh "$out/${base}_dxil.h" -Vn "k_${base}_dxil" "$src"
   "$DXC" -nologo -T "${stage}_6_0" -E "$entry" -O3 -spirv -fspv-target-env=vulkan1.2     -fvk-t-shift 0 0 -fvk-s-shift 128 0 -fvk-b-shift 256 0 -fvk-u-shift 384 0     -Fh "$out/${base}_spirv.h" -Vn "k_${base}_spirv" "$src"
 done
+# AO on the first-person hands (ao_hands.hlsl, docs/ao.md): drawn with the game's vertex shaders, so built
+# like the translated shaders (the game's layout, no binding shifts), as compile_shaders.ps1 does.
+src="$here/ao_hands.hlsl"
+"$DXC" -nologo -T ps_6_0 -E main -HV 2021 -O3 -Gis -Qstrip_debug -Fh "$out/ao_hands_ps_dxil.h" -Vn "k_ao_hands_ps_dxil" "$src"
+"$DXC" -nologo -T ps_6_0 -E main -HV 2021 -O3 -Gis -Qstrip_debug -spirv -fspv-target-env=vulkan1.2 \
+  -fvk-use-dx-layout -Fh "$out/ao_hands_ps_spirv.h" -Vn "k_ao_hands_ps_spirv" "$src"
 # Photo mode (photo.hlsl, docs/photo-mode.md): one blob per entry point.
 src="$here/photo.hlsl"
 for spec in photo_vs:vs:vs_main photo_ps:ps:ps_photo; do

@@ -38,6 +38,17 @@ inline constexpr DownloadPage kDownloadPages[] = {
     {content::Kind::kComic, "TekRantGaming", "1.0", 2,
      "A comic book style texture pack for King Kong. We recommend also enabling the Cel shading mod.", nullptr,
      nullptr, "builtin:cel-shading"},
+    // Task 255 (owner, 19 Oct): the packs' own mod.toml descriptions (resolution, and what stays as it was, are in
+    // the facts table). Credits: their CREDITS.txt. Cartoon's mod.toml recommends the Cel shading mod.
+    {content::Kind::kTropical, "TekRantGaming", "1.0", 1,
+     "Skull Island on holiday: lush tropical greens, warm sandy stone, turquoise water, bright blue skies with fluffy "
+     "clouds and sunny colours everywhere, built on free CC0 photo materials where they fit. Just for fun.",
+     nullptr, nullptr, nullptr},
+    {content::Kind::kCartoon, "TekRantGaming", "1.0", 5,
+     "A bright, colourful cartoon look for the whole game: smooth flat colours, cheerful skies and soft outlines on "
+     "almost every texture, built on free CC0 photo materials where they fit. Just for fun. It also goes well with "
+     "the Cel shading mod.",
+     nullptr, nullptr, "builtin:cel-shading"},
 };
 
 constexpr const DownloadPage* DownloadPageFor(content::Kind kind) {

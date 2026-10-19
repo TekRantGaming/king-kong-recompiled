@@ -30,8 +30,9 @@ namespace kk::content {
 // folder): its status is the progress of the one running now.
 // Task 212 (owner, 18 Oct): kComic, the Kong Comic Book pack, a second Workshop download like kUhd. New kinds are
 // only ever added at the end: the numbers are array indexes, and what is saved on disk uses Info::id, not them.
-enum class Kind { kTexturePack = 0, kCutscenes = 1, kArtbook = 2, kUhd = 3, kImport = 4, kComic = 5 };
-constexpr int kKindCount = 6;
+// Task 255 (owner, 19 Oct): kTropical and kCartoon, Kong's Tropical Holiday and Kong Cartoon, two more like kComic.
+enum class Kind { kTexturePack = 0, kCutscenes = 1, kArtbook = 2, kUhd = 3, kImport = 4, kComic = 5, kTropical = 6, kCartoon = 7 };
+constexpr int kKindCount = 8;
 constexpr bool Quiet(Kind kind) { return kind == Kind::kArtbook; }
 
 // The Workshop's downloadable texture pack mods (task 212): each is a texture pack mod ZIP ("<name>/mod.toml",
@@ -47,6 +48,9 @@ struct ModPack {
 inline constexpr ModPack kModPacks[] = {
     {Kind::kUhd, "uhd", "Kong UHD Textures", "Kong UHD Textures"},
     {Kind::kComic, "comic", "Kong Comic Book", "Comic Book Texture Pack"},
+    // Task 255 (owner, 19 Oct): the owner's names for the two packs.
+    {Kind::kTropical, "tropical", "Kong Tropical Holiday", "Kong's Tropical Holiday Texture Pack"},
+    {Kind::kCartoon, "cartoon", "Kong Cartoon", "Kong Cartoon Texture Pack"},
 };
 constexpr const ModPack* ModPackFor(Kind kind) {
   for (const ModPack& p : kModPacks)

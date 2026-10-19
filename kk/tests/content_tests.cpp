@@ -829,7 +829,7 @@ static void ServerTest(const fs::path& work, const std::string& server) {
 // Book: the table, the kind numbers task 209 used, a download that installs into the mods folder as a texture pack
 // mod, records written before (UHD) that still load next to the new one, and Remove.
 static void ModPackTests(const fs::path& work) {
-  CHECK(std::size(kModPacks) == 2);
+  CHECK(std::size(kModPacks) == 4);
   CHECK(kModPacks[0].kind == Kind::kUhd && std::string(kModPacks[0].key) == "uhd" &&
         std::string(kModPacks[0].name) == "Kong UHD Textures");
   CHECK(kModPacks[1].kind == Kind::kComic && std::string(kModPacks[1].key) == "comic" &&
@@ -839,7 +839,27 @@ static void ModPackTests(const fs::path& work) {
   CHECK(ModPackFor(Kind::kComic) == &kModPacks[1] && !Quiet(Kind::kComic));
   // Task 209's numbers are kept (array indexes); new kinds only at the end.
   CHECK(int(Kind::kTexturePack) == 0 && int(Kind::kCutscenes) == 1 && int(Kind::kArtbook) == 2 &&
-        int(Kind::kUhd) == 3 && int(Kind::kImport) == 4 && int(Kind::kComic) == 5 && kKindCount == 6);
+        int(Kind::kUhd) == 3 && int(Kind::kImport) == 4 && int(Kind::kComic) == 5 && kKindCount == 8);
+  // Task 255 (owner, 19 Oct): Kong's Tropical Holiday and Kong Cartoon, the owner's links and the sizes of their ZIPs.
+  CHECK(int(Kind::kTropical) == 6 && int(Kind::kCartoon) == 7);
+  CHECK(kModPacks[2].kind == Kind::kTropical && std::string(kModPacks[2].key) == "tropical" &&
+        std::string(kModPacks[2].name) == "Kong Tropical Holiday" &&
+        std::string(kModPacks[2].title) == "Kong's Tropical Holiday Texture Pack");
+  CHECK(kModPacks[3].kind == Kind::kCartoon && std::string(kModPacks[3].key) == "cartoon" &&
+        std::string(kModPacks[3].name) == "Kong Cartoon" && std::string(kModPacks[3].title) == "Kong Cartoon Texture Pack");
+  CHECK(IsModPack(Kind::kTropical) && IsModPack(Kind::kCartoon) && !Quiet(Kind::kTropical) && !Quiet(Kind::kCartoon));
+  const Info& tropical = InfoFor(Kind::kTropical);
+  CHECK(std::string(tropical.id) == "tropical-textures" && std::string(tropical.folder) == "tropical-textures");
+  CHECK(std::string(tropical.url) == "https://bobandersonv115.cypher.usbx.me/filebrowser/api/public/dl/F55nz6Hg");
+  CHECK(std::string(tropical.zip_name) == "Kong-Tropical-Holiday-1.0.zip" && tropical.zip_size == 2516526163ull &&
+        tropical.unpacked == 5323855453ull);
+  CHECK(std::string(tropical.sha256) == "13d63d7d932c7029a276a62a81cc01878dcce12492620a1951f1d337ba7f0217");
+  const Info& cartoon = InfoFor(Kind::kCartoon);
+  CHECK(std::string(cartoon.id) == "cartoon-textures" && std::string(cartoon.folder) == "cartoon-textures");
+  CHECK(std::string(cartoon.url) == "https://bobandersonv115.cypher.usbx.me/filebrowser/api/public/dl/zMfx2F-j");
+  CHECK(std::string(cartoon.zip_name) == "Kong-Cartoon-1.0.zip" && cartoon.zip_size == 1473282349ull &&
+        cartoon.unpacked == 5323409958ull);
+  CHECK(std::string(cartoon.sha256) == "ef86ae0a0df017124d7013fa5ab968a5274bedbdc2b77451648aa40d99b4961c");
   const Info& comic = InfoFor(Kind::kComic);
   CHECK(std::string(comic.id) == "comic-textures" && std::string(comic.folder) == "comic-textures");
   CHECK(std::string(comic.url) == "https://bobandersonv115.cypher.usbx.me/filebrowser/api/public/dl/A_vaZ0kx");
