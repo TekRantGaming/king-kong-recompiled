@@ -16,6 +16,7 @@
 #include <rex/cvar.h>
 #include <rex/logging.h>
 #include "hooks/kk_native_ui.h"
+#include "startup_clock.h"
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -333,11 +334,34 @@ void Begin(const std::string& plugin, bool game) {
     REXLOG_INFO("KK recovery: startup armed for {}", api);
     std::ofstream journal(state->directory / "attempts.log", std::ios::app);
     journal << api << " crashes=" << state->crashes << " reason=" << state->reason << '\n';
-    // Startup also ends after a time limit, in case no frame is reported.
+    // Startup also ends after a time limit, in case no frame is reported. Task 297: time spent compiling
+    // shaders the game waited for (no shader pack: minutes of DXC on the game thread) is not counted, so a
+    // device loss right after such a start still recovers (startup_clock.h; capped at ten minutes).
     std::thread([generation] {
-      std::this_thread::sleep_for(std::chrono::seconds(kArmSeconds));
-      std::lock_guard lock(mutex);
-      if (generation == arm_generation) Disarm("time limit reached");
+      const auto clock_ms = [] {
+        return uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch()).count());
+      };
+      const startup_clock::Window window{clock_ms(), nr::kk::ShaderCompileMilliseconds()};
+      constexpr uint64_t limit = uint64_t(kArmSeconds) * 1000;
+      bool noted = false;
+      for (;;) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        const uint64_t now = clock_ms();
+        const uint64_t compiled = nr::kk::ShaderCompileMilliseconds();
+        std::lock_guard lock(mutex);
+        if (generation != arm_generation) return;  // disarmed (first frame, exit) or armed again
+        if (startup_clock::Reached(window, now, compiled, limit)) {
+          Disarm("time limit reached");
+          return;
+        }
+        if (!noted && startup_clock::ExtendedByCompile(window, now, compiled, limit)) {
+          noted = true;
+          REXLOG_INFO("KK recovery: startup window extended: {} s of the {} s so far went to compiling shaders "
+                      "(no shader pack); recovery keeps watching until {} s without compiling",
+                      startup_clock::CompiledMs(window, compiled) / 1000, (now - window.started) / 1000, kArmSeconds);
+        }
+      }
     }).detach();
   }
 #if defined(KK_DEV_TOOLS)

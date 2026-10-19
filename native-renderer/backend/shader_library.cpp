@@ -4,6 +4,7 @@
 #include <cstring>
 #include <vector>
 
+#include "backend/compile_clock.h"
 #include "backend/guest_layout.h"
 #include "backend/log.h"
 #include "kkshaders/tessellation.h"
@@ -266,7 +267,11 @@ std::shared_ptr<GameShader> ShaderLibrary::Build(const kkshaders::ShaderInfo& in
     }
     // Only the blob this device uses (the other one would double the compile time).
     const uint32_t target = device_->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN ? kkshaders::kBuildSpirv : kkshaders::kBuildDxil;
-    kkshaders::BuildResult built = kkshaders::buildShader(info, *compiler_, false, target);
+    kkshaders::BuildResult built;
+    {
+      CompileScope counted;  // task 297: the game waits for this (its startup limits leave it out)
+      built = kkshaders::buildShader(info, *compiler_, false, target);
+    }
     if (!built.ok) {
       failed_[key] = true;
       ++stats_.failed;

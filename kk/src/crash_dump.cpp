@@ -10,6 +10,8 @@
 #include "crash_dump.h"
 #include "diagnostics.h"
 #include "exit_evidence.h"
+#include "startup_clock.h"
+#include "hooks/kk_native_ui.h"
 
 #if defined(_WIN32)
 
@@ -203,6 +205,9 @@ std::atomic<ULONGLONG> g_last_frame{0};  // GetTickCount64 at the last guest fra
 // no first frame kStartupHangMs later, one startup hang report says where every thread waits.
 constexpr ULONGLONG kStartupHangMs = 60000;
 std::atomic<ULONGLONG> g_game_start{0};
+// Task 297: the renderer's shader compile clock (nr::kk::ShaderCompileMilliseconds) at g_game_start; the
+// time spent compiling shaders the game waited for (no shader pack) is not counted (startup_clock.h).
+std::atomic<ULONGLONG> g_compile_at_start{0};
 
 // Where each thread is right now: suspend it just long enough to read its
 // instruction pointer, and (with `stacks`) copy the top of its stack (nothing
@@ -323,6 +328,7 @@ void WatchForHangs() {
   ULONGLONG reported_at = 0;  // g_last_frame value the current report is about
   ULONGLONG hitch_at = 0;     // ... and the current hitch report
   bool startup_reported = false;  // task 285: once a process
+  bool startup_compile_noted = false;  // task 297: the log line, once
 #if defined(KK_DEV_TOOLS)
   // Wall time from the first guest frame, so the crash test lasts two minutes
   // of rendering and does not depend on menu input or compiler null-write UB.
@@ -348,7 +354,8 @@ void WatchForHangs() {
       ULONGLONG expected = last;
       if (last) g_last_frame.compare_exchange_strong(expected, now);
       ULONGLONG started = g_game_start.load(std::memory_order_relaxed);
-      if (started) g_game_start.compare_exchange_strong(started, now);
+      if (started && g_game_start.compare_exchange_strong(started, now))
+        g_compile_at_start.store(nr::kk::ShaderCompileMilliseconds(), std::memory_order_relaxed);
       previous_tick = now;
       continue;
     }
@@ -356,8 +363,18 @@ void WatchForHangs() {
     if (!last) {  // no frame yet (launcher, startup)
       const ULONGLONG started = g_game_start.load(std::memory_order_relaxed);
       if (started && !startup_reported && now - started >= kStartupHangMs) {
-        startup_reported = true;
-        WriteHangReport(now - started, true);
+        // Task 297: shader compiles the game waited for (no shader pack) are not a freeze.
+        const startup_clock::Window window{started, g_compile_at_start.load(std::memory_order_relaxed)};
+        const uint64_t compiled = nr::kk::ShaderCompileMilliseconds();
+        if (startup_clock::Reached(window, now, compiled, kStartupHangMs)) {
+          startup_reported = true;
+          WriteHangReport(startup_clock::CountedMs(window, now, compiled), true);
+        } else if (!startup_compile_noted && startup_clock::ExtendedByCompile(window, now, compiled, kStartupHangMs)) {
+          startup_compile_noted = true;
+          REXLOG_INFO("KK: no first game frame yet after {} s, but {} s of it went to compiling shaders (no "
+                      "shader pack): the startup hang report does not count that time",
+                      (now - started) / 1000, startup_clock::CompiledMs(window, compiled) / 1000);
+        }
       }
       continue;
     }
@@ -392,7 +409,9 @@ void SetCrashReportApi(int api) { g_api.store(api, std::memory_order_relaxed); }
 
 void NoteGameStarting() {
   ULONGLONG expected = 0;
-  g_game_start.compare_exchange_strong(expected, GetTickCount64(), std::memory_order_relaxed);
+  const uint64_t compiled = nr::kk::ShaderCompileMilliseconds();  // 0 before the plugin loads
+  if (g_game_start.compare_exchange_strong(expected, GetTickCount64(), std::memory_order_relaxed))
+    g_compile_at_start.store(compiled, std::memory_order_relaxed);
 }
 
 void NoteGuestFrame() {

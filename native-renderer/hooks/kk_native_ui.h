@@ -9,6 +9,9 @@ namespace nr::kk {
 void SetStartupFailureHandler(int (*handler)(const char*));
 // Called once, when the game's first frame has been shown.
 void SetStartupPresentedHandler(void (*handler)());
+// Task 297: milliseconds the renderer has spent compiling shaders the game waited for (no shader pack:
+// DXC on the game thread); 0 without the plugin or with a pack. Only differences mean anything.
+unsigned long long ShaderCompileMilliseconds();
 }
 
 #include <filesystem>
