@@ -89,6 +89,14 @@ void RefreshRegistryEvidence(const uint8_t* b, uint32_t world) {
       // All resident owners protect a human, including sleeping PRGs and
       // cached outputs. Classification is diagnostic, never a lease exemption.
       script_evidence.references.try_emplace(human, owner);
+      if (prg && off >= 920 && off < 920 + 104 * 180 && size >= 19820 && current < 104) {
+        const uint32_t index = (off - 920) / 180;
+        const uint32_t distance = index > current ? index-current : current-index;
+        auto [it, added] = script_evidence.mission_distance.emplace(human, distance);
+        if (!added) it->second = std::min(it->second, distance);
+        if (index == current && e.scheduled.count(owner) && Load32(b, vars+924+180*index))
+          script_evidence.current_references.insert(human);
+      }
       if (e.refs.size() == 512) { ++e.refs_dropped; continue; }
       RegistryEvidence::Reference ref;
       ref.human = human; ref.owner = owner; ref.ai = ai;

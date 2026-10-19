@@ -322,7 +322,9 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
     const auto camera = nametag::Snapshot();
     if (!camera || Now()-camera->time > .15 || camera->level != v.local->level) return;
     const float distance = PartnerDistance(*v.local,*v.partner);
-    const float alpha = nametag::Opacity(distance);
+    // A nearby stand-in must keep its username even when players overlap.
+    const float alpha = partner_body_driven.load() && distance < 2.f ?
+        std::max(.35f, nametag::Opacity(distance)) : nametag::Opacity(distance);
     if (alpha <= 0 || v.partner_name.empty()) return;
     auto head = nametag::AboveHead({v.partner->x,v.partner->y,v.partner->z},std::nullopt);
     {

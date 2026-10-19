@@ -553,6 +553,36 @@ void PartnerSelection() {
   resident_tie.script_reference = true;
   const AutoCandidate reclaimed[]{resident_tie, background};
   Check(SelectAuto(reclaimed) == 1, "new resident claim revokes tier zero before fallback selection");
+
+  auto story = spare; story.script_reference = true; story.mission_distance = 10;
+  Check(BodyTier(story) == 4, "referenced H is a tier A fallback");
+  const AutoCandidate safe_first[]{story, spare};
+  Check(SelectBody(safe_first) == 1, "safe tiers always precede story borrowing");
+  auto distant_record = story; distant_record.actor = 104; distant_record.mission_distance = 30;
+  const AutoCandidate mission_rank[]{story, distant_record};
+  Check(SelectBody(mission_rank) == 1, "tier A prefers references farther from the current record");
+  distant_record.cinematic = true;
+  const AutoCandidate state_rank[]{story, distant_record};
+  Check(SelectBody(state_rank) == 0, "avoid a cinematic even if its mission reference is farther away");
+  auto native = spare; native.natural_h = false; native.other_human = true;
+  const AutoCandidate human_fallback[]{native, story};
+  Check(BodyTier(native) == 5 && SelectBody(human_fallback) == 1, "PNJInd is tier B after story H");
+  auto leased = story; leased.current_script_use = true;
+  const AutoCandidate waiting[]{leased, native};
+  Check(SelectBody(waiting) == 1, "current PRG or wait releases H to the next tier");
+  leased.current_script_use = false;
+  Check(BodyTier(leased) == 4, "story H may be borrowed again once free");
+  for (auto excluded : {story, native}) {
+    excluded.ann = true; Check(BodyTier(excluded) == -1, "Ann never enters fallback tiers");
+    excluded.ann = false; excluded.hero = true;
+    Check(BodyTier(excluded) == -1, "hero never enters fallback tiers");
+    excluded.hero = false; excluded.grabbed = true;
+    Check(BodyTier(excluded) == -1, "grabbed rigs never enter fallback tiers");
+    excluded.grabbed = false; excluded.dead = true;
+    Check(BodyTier(excluded) == -1, "dead rigs never enter fallback tiers");
+  }
+  native.other_human = false;
+  Check(BodyTier(native) == -1, "a generic non-H rig is not proof of a human family");
 }
 void NameTags() {
   using namespace kk::coop::nametag;
