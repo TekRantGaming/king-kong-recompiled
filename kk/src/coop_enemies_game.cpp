@@ -8,6 +8,7 @@
 #include "play_internal.h"
 #include "photo_mode.h"
 #include "dev_puppet.h"
+#include <algorithm>
 #include <rex/logging.h>
 #include <chrono>
 #include <cstdlib>
@@ -29,8 +30,12 @@ REX_EXTERN(__imp__sub_8243A3C0);
 REX_EXTERN(__imp__sub_82634428);
 REX_EXTERN(__imp__sub_82419C38);
 #if defined(KK_DEV_TOOLS)
+REX_EXTERN(__imp__sub_8250EE50);
+REX_EXTERN(__imp__sub_8250EDE8);
 namespace kk {
 void DevSampleTick(PPCContext*, uint8_t*, uint32_t);
+double DevSecondsSinceMenu();
+bool DevTeleportJack(PPCContext&, uint8_t*, uint32_t, coop::ShotVector, float, float);
 }
 #endif
 
@@ -102,7 +107,7 @@ bool Read(const uint8_t* b, uint32_t actor, Binding& bind, EnemyState& e) {
 }
 #if defined(KK_DEV_TOOLS)
 struct DevEnemy {
-  uint32_t actor = 0, state = 0;
+  uint32_t actor = 0, state = 0, ai = 0, matrix = 0;
   EnemyFamily family = EnemyFamily::None;
   ShotVector position;
   float distance = 0, life = -1;
@@ -138,6 +143,7 @@ std::vector<DevEnemy> DevEnemies(const uint8_t* b, uint32_t w, ShotVector origin
     e.family = Tracks(b, ai, e.state, spawner, &e.initializing);
     const auto matrix = Ptr(b, e.actor, 12, 64);
     if (spawner || e.family == EnemyFamily::None || !matrix) continue;
+    e.ai = ai; e.matrix = matrix;
     e.position = {LoadF(b, matrix+48), LoadF(b, matrix+52), LoadF(b, matrix+56)};
     if (!AuthoredKey(uint32_t(e.family), e.position.x, e.position.y, e.position.z)) continue;
     if (!e.initializing) {
@@ -150,6 +156,134 @@ std::vector<DevEnemy> DevEnemies(const uint8_t* b, uint32_t w, ShotVector origin
     out.push_back(e);
   }
   return out;
+}
+// C22: opt-in, one native volume visit per process, on the solo/host only.
+// C20's level-203 Gao at 01BD96A3 has an identity basis, XYZ (-48,146,12)
+// at +78 and local bounds (-9.213,-1.490,-1.337)..(.346,4.247,1.503)
+// at +98. Visit the bounds' midpoint rather than the nearby wave event pivot.
+// This is a source-backed candidate for Scorpion_00 at start 5, not proof of
+// the script's prerequisites or activation. The logs must establish those.
+// Other starts have no recovered route here and are explicitly refused.
+struct DevWake {
+  enum Phase { Waiting, Visiting, Observing, Done } phase = Waiting;
+  bool enabled = false;
+  double due = 0, next = 0, finish = 0;
+  uint32_t game = 0, world = 0, hero = 0;
+  DevEnemy target;
+  ShotVector home;
+  float fx = 0, fy = 1;
+  unsigned activity = 0;
+  DevWake() {
+    const char* value = std::getenv("KK_DEV_WAKE");
+    if (!value || !*value) return;
+    char* end = nullptr;
+    due = std::strtod(value, &end);
+    enabled = end != value && !*end && std::isfinite(due) && due >= 0;
+    if (!enabled) REXLOG_WARN("KK dev wake: invalid KK_DEV_WAKE, expected nonnegative finite seconds");
+  }
+};
+DevWake& Wake() { static DevWake wake; return wake; }
+void DevWakeBeforeLoad() {
+  auto& wake = Wake();
+  if (wake.phase == DevWake::Visiting || wake.phase == DevWake::Observing) {
+    wake.phase = DevWake::Done;
+    REXLOG_WARN("KK dev wake: load interrupted visit/observation; discarded saved placement");
+  }
+}
+void DevWakeActivity(uint32_t actor, uint32_t off, const char* name) {
+  auto& wake = Wake();
+  if (!wake.enabled || (wake.phase != DevWake::Visiting && wake.phase != DevWake::Observing) ||
+      wake.activity >= 32) return;
+  ++wake.activity;
+  REXLOG_INFO("KK dev wake: native {} actor={:08X} off={} selected-target={}",
+      name, actor, off, actor == wake.target.actor);
+}
+void DevWakeTick(PPCContext& ctx, uint8_t* b, uint32_t w) {
+  auto& wake = Wake();
+  if (!wake.enabled || wake.phase == DevWake::Done) return;
+  const double t = kk::DevSecondsSinceMenu();
+  if (t < wake.due || !DevWorld(b, w)) return;
+  const auto game = Load32(b, 0x82CC97C0);
+  const auto jack = ReadJackPose([&](uint32_t p) { return Load32(b, p); },
+      [&](uint32_t p) { return Load16(b, p); }, [&](uint32_t p) { return LoadF(b, p); }, t);
+  if (!jack.pose) return;
+  const auto& p = *jack.pose;
+  const ShotVector origin{p.x, p.y, p.z};
+  const auto hero = Load32(b, 0x82CCBF7C);
+  if (wake.phase == DevWake::Waiting) {
+    if (REXCVAR_GET(kk_coop_enabled)) {
+      const auto link = EnemyLinkSnapshot();
+      if (!link.connected) {
+        if (t > wake.due+10) {
+          wake.phase = DevWake::Done;
+          REXLOG_WARN("KK dev wake: expired waiting for connected host authority");
+        }
+        return;
+      }
+      if (link.role != Role::Host) {
+        wake.phase = DevWake::Done;
+        REXLOG_WARN("KK dev wake: refused on guest, host authority only");
+        return;
+      }
+    }
+    const auto all = DevEnemies(b, w, origin);
+    const DevEnemy* nearest = nullptr;
+    for (const auto& e : all)
+      if (!e.scheduled && (e.initializing || e.life > 0) && e.distance <= 200 &&
+          (!nearest || e.distance < nearest->distance)) nearest = &e;
+    if (!nearest) {
+      wake.phase = DevWake::Done;
+      REXLOG_WARN("KK dev wake: no dormant enemy within 200 units");
+      return;
+    }
+    if (p.level != 203 || Load32(b, game+12) != 5 || nearest->family != EnemyFamily::Scorpion ||
+        ShotDistance(nearest->position, {51.110620f, 132.907700f, 19.930140f}) > .5f) {
+      wake.phase = DevWake::Done;
+      REXLOG_WARN("KK dev wake: no recovered trigger route for nearest dormant actor={:08X} level={} start={} pos=({:.3f},{:.3f},{:.3f}); supported=203/5-Scorpion_00",
+          nearest->actor, p.level, Load32(b, game+12), nearest->position.x, nearest->position.y, nearest->position.z);
+      return;
+    }
+    const auto m = Ptr(b, hero, 12, 64);
+    if (!m) return;
+    wake.fx = -LoadF(b, m+16); wake.fy = -LoadF(b, m+20);
+    wake.home = origin; wake.target = *nearest;
+    wake.game = game; wake.world = w; wake.hero = hero;
+    const ShotVector interior{-52.4335f, 147.3785f, 12.083f};
+    if (!kk::DevTeleportJack(ctx, b, hero, interior, wake.fx, wake.fy)) return;
+    wake.phase = DevWake::Visiting; wake.next = t+2;
+    REXLOG_INFO("KK dev wake: at {:.2f} s visit 01_EVT_Scorpions_Activator_BV interior=({:.3f},{:.3f},{:.3f}) via 82538B70 for 2 s; target={:08X} init={} life={:.2f} home=({:.3f},{:.3f},{:.3f})",
+        t, interior.x, interior.y, interior.z, nearest->actor, nearest->initializing, nearest->life, origin.x, origin.y, origin.z);
+    return;
+  }
+  if (game != wake.game || w != wake.world || hero != wake.hero || p.level != 203 || Load32(b, game+12) != 5) {
+    wake.phase = DevWake::Done;
+    REXLOG_WARN("KK dev wake: world/player changed; discarded saved placement");
+    return;
+  }
+  if (t < wake.next) return;
+  if (wake.phase == DevWake::Visiting) {
+    if (!kk::DevTeleportJack(ctx, b, hero, wake.home, wake.fx, wake.fy)) return;
+    wake.phase = DevWake::Observing; wake.finish = t+10;
+    REXLOG_INFO("KK dev wake: at {:.2f} s returned Jack; activation remains native, observing target for 10 s", t);
+  }
+  wake.next = t+1;
+  const auto all = DevEnemies(b, w, origin);
+  const auto found = std::find_if(all.begin(), all.end(), [&](const auto& e) {
+    return e.actor == wake.target.actor && e.ai == wake.target.ai && e.matrix == wake.target.matrix;
+  });
+  if (found == all.end()) {
+    REXLOG_WARN("KK dev wake: target disappeared or changed components; result=unknown");
+    wake.phase = DevWake::Done;
+    return;
+  }
+  const auto& e = *found;
+  const bool awake = e.scheduled && !e.initializing && e.life > 0;
+  REXLOG_INFO("KK dev wake: after actor={:08X} status={} init={} life={:.2f} state={:08X} awake={} native-activity-calls={}",
+      e.actor, e.scheduled ? "live" : "dormant", e.initializing, e.life, e.state, awake, wake.activity);
+  if (t >= wake.finish) {
+    wake.phase = DevWake::Done;
+    if (!awake) REXLOG_WARN("KK dev wake: visit did not establish a living scheduled target; inspect KK_DEV_TRIG_TRACE");
+  }
 }
 void DevEnemyNear(const uint8_t* b, uint32_t w) {
   static const bool enabled = [] {
@@ -680,6 +814,7 @@ void BeforeAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   auto& s = Get(); s.prepared = false; s.driving.clear();
   if (uint32_t(ctx.lr) != 0x82881CF0) return;
 #if defined(KK_DEV_TOOLS)
+  DevWakeTick(ctx, b, w);
   DevEnemyNear(b, w);
 #endif
   if (!REXCVAR_GET(kk_coop_enabled)) return;
@@ -772,6 +907,9 @@ void Spawned(const uint8_t* b, uint32_t spawner, uint32_t source, uint32_t actor
 }
 } // namespace
 void EnemyBeforeLoad() {
+#if defined(KK_DEV_TOOLS)
+  DevWakeBeforeLoad();
+#endif
   if (!REXCVAR_GET(kk_coop_enabled)) return;
   Get().ResetWorld(); PublishEnemyFrame({}); SetEnemyCounters({}); SetShotCounters({});
 }
@@ -821,6 +959,28 @@ std::optional<ShotVector> EnemyAimTarget(const uint8_t* b, ShotVector origin) {
 }
 #endif
 } // namespace kk::coop
+
+#if defined(KK_DEV_TOOLS)
+// Observe the real scripts' activation execution, without changing their
+// conditions, arguments or result. See TrigExec_SetActivity (.115:18091) and
+// TrigExec_SetActiveAndVisible (.25:19027): +4=actor, +84=off.
+REX_HOOK_RAW(sub_8250EE50) {
+  const auto record = ctx.r3.u32;
+  const bool readable = kk::coop::PoseAddress(record, 88);
+  const auto actor = readable ? kk::hfr::Load32(base, record+4) : 0;
+  const auto off = readable ? kk::hfr::Load32(base, record+84) : 0;
+  __imp__sub_8250EE50(ctx, base);
+  if (readable) kk::coop::DevWakeActivity(actor, off, "SetActivity");
+}
+REX_HOOK_RAW(sub_8250EDE8) {
+  const auto record = ctx.r3.u32;
+  const bool readable = kk::coop::PoseAddress(record, 88);
+  const auto actor = readable ? kk::hfr::Load32(base, record+4) : 0;
+  const auto off = readable ? kk::hfr::Load32(base, record+84) : 0;
+  __imp__sub_8250EDE8(ctx, base);
+  if (readable) kk::coop::DevWakeActivity(actor, off, "SetActiveAndVisible");
+}
+#endif
 
 // One owner for each shared hook in both dev and production builds.
 REX_HOOK_RAW(sub_8271D498) {

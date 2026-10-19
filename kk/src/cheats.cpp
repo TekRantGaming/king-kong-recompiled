@@ -63,6 +63,9 @@
 
 #include "play_internal.h"
 #include "settings.h"
+#if defined(KK_DEV_TOOLS)
+#include "coop_pose.h"
+#endif
 
 namespace kk::hardcore {
 void Frame(uint8_t* base);  // hardcore.cpp: every frame (the input poll)
@@ -235,12 +238,57 @@ void ApplyCheats(uint8_t* base) {
 bool g_loadout_cleared = false;
 std::chrono::steady_clock::time_point g_loadout_seen{};
 
+#if defined(KK_DEV_TOOLS)
+// A synthetic checkpoint can clear the early cheat grant and never supply a
+// nonempty authored loadout. Keep the normal player's checkpoint watcher intact:
+// only KK_DEV_START_POINT opts into this empty-but-playable fallback.
+bool DevEmptyLoadoutReady(const uint8_t* base, bool empty) {
+  static const bool enabled = [] {
+    const char* value = std::getenv("KK_DEV_START_POINT");
+    if (!value || !*value) return false;
+    char* end = nullptr;
+    const auto start = std::strtol(value, &end, 10);
+    return end != value && !*end && start >= 0 && start <= 10000;
+  }();
+  if (!enabled) return false;
+  static std::chrono::steady_clock::time_point since{};
+  static uint32_t previous_game = 0, previous_actor = 0;
+  if (!empty || !g_applied || play::StartLevelLoading()) {
+    since = {};
+    return false;
+  }
+  const uint32_t game = Load32(base, kGamePtr), actor = Load32(base, 0x82CCBF7C);
+  const auto pose = coop::ReadJackPose([&](uint32_t p) { return Load32(base, p); },
+      [&](uint32_t p) { return uint16_t(Load32(base, p & ~3u) >> ((p & 2u) ? 0 : 16)); },
+      [&](uint32_t p) { return std::bit_cast<float>(Load32(base, p)); }, 0);
+  if (!pose.pose || game != previous_game || actor != previous_actor) since = {};
+  previous_game = game; previous_actor = actor;
+  if (!pose.pose) return false;
+  const auto now = std::chrono::steady_clock::now();
+  if (since == std::chrono::steady_clock::time_point{}) since = now;
+  if (now - since < std::chrono::seconds(1)) return false;
+  since = {};
+  return true;
+}
+#endif
+
 void WatchLoadout(uint8_t* base) {
   const uint32_t g = Load32(base, kGamePtr), p = Load32(base, kProfilePtr);
   if (!g || !p) return;
   bool empty = Load32(base, g + kWeapon) == 0;
   for (uint32_t a : kAmmo) empty = empty && Load32(base, g + a) == 0;
   const auto now = std::chrono::steady_clock::now();
+#if defined(KK_DEV_TOOLS)
+  if (DevEmptyLoadoutReady(base, empty)) {
+    const std::string before = State(base, g, p);
+    const int count = ApplyLoadoutCheats(base, g);
+    g_loadout_cleared = false;
+    g_loadout_seen = {};
+    REXLOG_INFO("KK dev: synthetic start stayed playable with an empty loadout for 1 s; re-applied {} loadout cheats. Before: {}. After: {}",
+                count, before, State(base, g, p));
+    return;
+  }
+#endif
   if (empty) {
     g_loadout_cleared = true;
     g_loadout_seen = {};

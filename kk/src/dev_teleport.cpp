@@ -76,6 +76,38 @@ bool Ok(uint32_t a) { return a >= 0x40000000 && a < 0xA0000000 && (a & 3) == 0; 
 
 }  // namespace
 
+// Shared by the explicit teleport script and the wake-volume visit. Only Jack
+// moves; the native path updates his transform, controller and camera together.
+bool DevTeleportJack(PPCContext& ctx, uint8_t* base, uint32_t actor,
+                     coop::ShotVector position, float fx, float fy) {
+  const uint32_t sp = ctx.r1.u32;
+  if ((sp & 15) || sp < 0x40010200 || sp >= 0xA0000000 || !Ok(actor)) return false;
+  const PPCContext saved = ctx;
+  const uint32_t start = sp - 512;
+  uint8_t stack[512];
+  std::memcpy(stack, base + start, sizeof(stack));
+  std::memset(base + start, 0, sizeof(stack));
+  constexpr uint32_t globals[] = {0x82CCBF64, 0x82CCBF68, 0x82CCBF6C, 0x82CCBF70};
+  uint32_t values[4];
+  for (unsigned i = 0; i < 4; ++i) values[i] = Load32(base, globals[i]);
+  const uint32_t trigger = start + 0x100, dest = start + 0x120, mat = start + 0x140;
+  Store32(base, trigger + 4, actor);
+  Store32(base, trigger + 8, dest);
+  Store32(base, dest + 12, mat);
+  const float len = std::hypot(fx, fy);
+  fx = len > 0 ? fx / len : 0; fy = len > 0 ? fy / len : 1;
+  StoreF(base, mat, fy); StoreF(base, mat + 4, -fx);
+  StoreF(base, mat + 16, -fx); StoreF(base, mat + 20, -fy);
+  StoreF(base, mat + 40, 1); StoreF(base, mat + 60, 1);
+  StoreF(base, mat + 48, position.x); StoreF(base, mat + 52, position.y); StoreF(base, mat + 56, position.z);
+  ctx.r1.u64 = start; ctx.r3.u64 = trigger;
+  __imp__sub_82538B70(ctx, base);
+  for (unsigned i = 0; i < 4; ++i) Store32(base, globals[i], values[i]);
+  std::memcpy(base + start, stack, sizeof(stack));
+  ctx = saved;
+  return true;
+}
+
 // KK_DEV_KILL="t,obj/t2,obj2" (same clock; obj = guest address of a raptor from sample.csv; the heap
 // layout repeats between runs of the same start): sets its AI life (vars +20, float) to 0, as a lethal
 // hit leaves it; the raptor's own states then see it (PNJ_Raptor states test +20 == 0).
@@ -153,32 +185,7 @@ void DevTeleportTick(PPCContext* ctx, uint8_t* base, uint32_t world) {
     if ((sp & 15) || sp < 0x40010200) return;
     h.done = true;
     const float bx = LoadF(base, m + 48), by = LoadF(base, m + 52), bz = LoadF(base, m + 56);
-    const PPCContext saved = *ctx;
-    const uint32_t start = sp - 512;
-    uint8_t stack[512];
-    std::memcpy(stack, base + start, sizeof(stack));
-    std::memset(base + start, 0, sizeof(stack));
-    const uint32_t trigger = start + 0x100, dest = start + 0x120, mat = start + 0x140;
-    Store32(base, trigger + 4, actor);
-    Store32(base, trigger + 8, dest);
-    Store32(base, dest + 12, mat);
-    const float len = std::sqrt(h.fx * h.fx + h.fy * h.fy);
-    const float fx = len > 0 ? h.fx / len : 0, fy = len > 0 ? h.fy / len : 1;
-    // Rows: x axis = right of forward, y axis = -forward (the getter negates it), z up.
-    StoreF(base, mat + 0, fy);
-    StoreF(base, mat + 4, -fx);
-    StoreF(base, mat + 16, -fx);
-    StoreF(base, mat + 20, -fy);
-    StoreF(base, mat + 40, 1);
-    StoreF(base, mat + 60, 1);
-    StoreF(base, mat + 48, h.x);
-    StoreF(base, mat + 52, h.y);
-    StoreF(base, mat + 56, h.z);
-    ctx->r1.u64 = start;
-    ctx->r3.u64 = trigger;
-    __imp__sub_82538B70(*ctx, base);
-    std::memcpy(base + start, stack, sizeof(stack));
-    *ctx = saved;
+    if (!DevTeleportJack(*ctx, base, actor, {h.x, h.y, h.z}, h.fx, h.fy)) continue;
     const uint32_t m2 = Load32(base, actor + 12);
     REXLOG_INFO("KK dev teleport: at {:.2f} s Jack {:08X} ({:.2f},{:.2f},{:.2f}) -> ({:.2f},{:.2f},{:.2f}), now ({:.2f},{:.2f},{:.2f})",
                 t, actor, bx, by, bz, h.x, h.y, h.z, Ok(m2) ? LoadF(base, m2 + 48) : 0.f,
