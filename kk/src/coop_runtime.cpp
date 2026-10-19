@@ -116,13 +116,16 @@ class Service {
       SessionState shown = SessionState::Idle;
       double next_pose_log = Now() + 10;
       while (!stop_.load()) {
-        const double now = Now();
+        const double copy_started = Now();
         std::optional<PlayerPose> local;
         enemies::Frame frame;
         CheatSet cheats;
         const char* failure;
         { std::lock_guard lock(mutex_); local = local_.pose; failure = local_.failure; frame = enemies_;
           cheats = local_cheats_.value_or(config.cheats); }
+        // Copying a frame may wait for the game thread or allocator. Stamp
+        // received packets with the time we actually poll, not before that wait.
+        const double now = Now();
         if (local && now - local->time > .25) { local.reset(); failure = "publish-expired"; }
         session.Tick(now, local, &frame, &cheats);
         shots_.Exchange(session);
@@ -140,6 +143,10 @@ class Service {
         view.epoch = session.Epoch();
         LogPoses(view, now, next_pose_log);
         { std::lock_guard lock(mutex_); view_ = std::move(view); }
+        if (now-copy_started>.5) {
+          static unsigned logged=0;
+          if (logged++<8) REXLOG_INFO("KK co-op worker: shared snapshot waited {:.3f}s; packet clock sampled after wait",now-copy_started);
+        }
         if (shown != session.State()) { shown = session.State(); RequestUiPaint(); }
         if (session.State() == SessionState::Ended) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(5));

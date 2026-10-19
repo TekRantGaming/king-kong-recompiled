@@ -591,7 +591,7 @@ struct SteamRuntime::Impl
       api.SteamAPI_ManualDispatch_FreeLastCallback(pipe);
     }
   }
-  void TickSession(double now) {
+  void TickSession() {
     if (!session) return;
     std::optional<PlayerPose> pose;
     enemies::Frame enemy_frame;
@@ -599,6 +599,9 @@ struct SteamRuntime::Impl
     const char* failure;
     { std::lock_guard lock(mutex); pose = local_pose; failure = local_failure; enemy_frame = local_enemies;
       cheats = local_cheats.value_or(options.cheats); }
+    // Snapshot copies can wait for the game thread. Keep heartbeat/receive
+    // timestamps current when polling resumes after a native frame stall.
+    const double now = Now();
     if (pose && now - pose->time > .25) { pose.reset(); failure = "publish-expired"; }
     session->Tick(now, pose, &enemy_frame, &cheats);
     shots.Exchange(*session);
@@ -720,7 +723,7 @@ struct SteamRuntime::Impl
       if (!self_test) {
         if (now >= next_friends) { Friends(); next_friends = now + 5; }
         if (model.lobby && now >= next_lobby) { RefreshLobby(); next_lobby = now + .5; }
-        TickSession(now);
+        TickSession();
       }
       std::unique_lock lock(mutex);
       wake.wait_for(lock, std::chrono::milliseconds(16), [&] { return stop || !commands.empty(); });
