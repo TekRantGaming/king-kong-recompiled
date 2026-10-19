@@ -443,8 +443,11 @@ bool IndependentControllers(const uint8_t* b, const Rig& copy, const Rig& source
 bool SpawnIdentity(const uint8_t* b, const Spawned& body) {
   const auto& s = Get();
   const auto& r = body.rig;
-  return !s.loading && s.ready && s.world == body.world && s.game == body.game &&
-      s.level == body.level && s.Environment(b, body.world) &&
+  // Quarantine outlives pose eligibility. A changed hero, a level request or
+  // an invalid driving environment must not let this copy start story scripts
+  // before DevPuppetBeforeLoad clears it at the synchronous unload boundary.
+  return !s.loading && Load32(b, kCreationWorld) == body.world &&
+      Load32(b, 0x82CC97C0) == body.game &&
       Registered(b, body.world, r.actor) &&
       Ptr(b, Ptr(b, r.actor, 24, 48), 4, 88) == r.ai &&
       Ptr(b, r.ai, 64, 8) == r.vars && Model(b, r.ai) == body.model;
@@ -562,13 +565,14 @@ bool SpawnCopy(PPCContext& ctx, uint8_t* b, uint32_t w, const Rig& source, const
   if (!Range(actor, 32) || existing.count(actor) || actor == t || IsSpawned(actor) ||
       (pooled && actor != pooled)) return refuse("creation-return-not-new-instance");
   ReadRig(b, actor, copy);
-  // Quarantine immediately, even if the rig fails the checks below. Only a new
-  // actor with independent AI/vars is eligible, never the original or the hero.
-  if (!copy.ai || !copy.vars || copy.ai == source.ai || copy.ai == jack.ai ||
-      copy.vars == source.vars || copy.vars == jack.vars) return refuse("creation-AI-not-independent");
+  // Quarantine a new actor as soon as its AI is readable, even on refusal.
+  // Matching actor + AI holds only the copy if an alias check below fails.
+  if (!copy.ai) return refuse("creation-AI-unavailable");
   s.spawned.push_back({copy, w, s.game, s.level, Model(b, copy.ai), s.epoch});
   REXLOG_INFO("PUPPET spawn allocated actor={:08X} template={:08X} via={} epoch={} quarantine=registered no-free",
               actor, t, pooled ? "pool" : "duplicate", s.epoch);
+  if (!copy.vars || copy.ai == source.ai || copy.ai == jack.ai ||
+      copy.vars == source.vars || copy.vars == jack.vars) return refuse("creation-AI-not-independent");
   if (!coop::puppet::Independent(Mutable(copy), Mutable(source)) ||
       !coop::puppet::Independent(Mutable(copy), Mutable(jack)) ||
       !IndependentControllers(b, copy, source) || !IndependentControllers(b, copy, jack))
