@@ -156,11 +156,11 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
 };
 }  // namespace
 void Start(const std::filesystem::path& user_data) {
-  if (!REXCVAR_GET(kk_coop_enabled) || service.Running()) return;
+  if (!REXCVAR_GET(kk_coop_enabled) || service.Running()) return;  // off: not even a log line
   std::string address = REXCVAR_GET(kk_coop_dev);
   if (const char* env = std::getenv("KK_COOP_DEV"); address.empty() && env) address = env;
   const size_t colon = address.find(':');
-  if (colon == std::string::npos) return;
+  if (colon == std::string::npos) { REXLOG_INFO("KK co-op: enabled, no dev link set"); return; }
   const std::string role = address.substr(0, colon);
   unsigned port = 0;
   const char* begin = address.data() + colon + 1;
@@ -177,6 +177,7 @@ void Start(const std::filesystem::path& user_data) {
     if (!config.epoch) config.epoch = 1;
   }
   config.compatibility = {kProtocolVersion, KK_VERSION, KK_COOP_BUILD, mods::GameplayDigest(user_data)};
+  REXLOG_INFO("KK co-op: dev link {} on 127.0.0.1:{}", role, port);
   service.Start(std::move(config), uint16_t(port));
 }
 void Shutdown() { service.Stop(); }
