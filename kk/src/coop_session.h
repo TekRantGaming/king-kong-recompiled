@@ -66,6 +66,8 @@ class CoopSession {
   std::vector<Message> TakeFlow();
   bool QueueCombat(const Message& message, double submitted);
   std::vector<ReceivedCombat> TakeCombat();
+  bool QueueOwnership(const Message& message);
+  std::vector<Message> TakeOwnership();
  private:
   void Transition(SessionState state);
   bool Send(Message message, bool reliable);
@@ -101,6 +103,44 @@ class CoopSession {
   std::vector<Message> incoming_flow_;
   std::deque<ReceivedCombat> outgoing_combat_;
   std::vector<ReceivedCombat> incoming_combat_;
+  std::deque<Message> outgoing_ownership_;
+  std::vector<Message> incoming_ownership_;
+};
+inline bool OwnershipSender(OwnershipPhase phase, Role role) {
+  return (phase == OwnershipPhase::Prepare || phase == OwnershipPhase::Commit) == (role == Role::Host);
+}
+class OwnershipMailbox {
+ public:
+  bool Submit(Message m) {
+    if (m.type != MessageType::OwnershipChange || !m.epoch || !ValidOwnershipChange(m.ownership)) return false;
+    std::lock_guard lock(mutex_);
+    if (outgoing_.size() >= kMaxEnemies*2) return false;
+    outgoing_.push_back(std::move(m)); return true;
+  }
+  std::vector<Message> Take() {
+    std::lock_guard lock(mutex_); auto out = std::move(incoming_); incoming_.clear(); return out;
+  }
+  void Clear() { std::lock_guard lock(mutex_); outgoing_.clear(); incoming_.clear(); }
+  void Exchange(CoopSession& session) {
+    if (session.State() != SessionState::Connected) { Clear(); return; }
+    std::lock_guard lock(mutex_);
+    while (!outgoing_.empty()) {
+      const auto& m = outgoing_.front();
+      if (m.epoch != session.Epoch() || !OwnershipSender(m.ownership.phase, session.SessionRole())) {
+        outgoing_.pop_front(); continue;
+      }
+      if (!session.QueueOwnership(m)) break;
+      outgoing_.pop_front();
+    }
+    for (auto& m : session.TakeOwnership()) {
+      if (incoming_.size() >= kMaxEnemies*2) { session.End(0); incoming_.clear(); outgoing_.clear(); break; }
+      incoming_.push_back(std::move(m));
+    }
+  }
+ private:
+  std::mutex mutex_;
+  std::deque<Message> outgoing_;
+  std::vector<Message> incoming_;
 };
 // Same bounded value-only handoff for UDP and Steam. Epoch checked again by the
 // session before sending, so old work cannot leak into a replacement connection.

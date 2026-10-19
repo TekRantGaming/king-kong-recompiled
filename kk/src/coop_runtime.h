@@ -56,6 +56,9 @@ void SetShotCounters(ShotCounters counters);
 bool SubmitCombat(Message message, double now);
 std::vector<ReceivedCombat> TakeCombat();
 void ClearCombat();
+bool SubmitOwnership(Message message);
+std::vector<Message> TakeOwnership();
+void ClearOwnership();
 // Value-only snapshot, including CoopSession's interpolated pose. No transport work.
 struct PuppetSnapshot {
   bool enabled = false, fresh = false;

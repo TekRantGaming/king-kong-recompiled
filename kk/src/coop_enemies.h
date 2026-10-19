@@ -102,7 +102,7 @@ struct Frame {
   double time = 0;
   std::vector<Record> records;  // Includes terminal tombstones until load; bounded by kMaxEnemies.
 };
-struct Counters { uint64_t sent = 0; uint32_t matched = 0, unmatched = 0, driven = 0; };
+struct Counters { uint64_t sent = 0; uint32_t matched = 0, unmatched = 0, driven = 0, owned_me = 0, owned_partner = 0; };
 
 // Worker-owned, SDK/game-free replication policy. Reliable events retry on backpressure.
 class Channel {
@@ -113,6 +113,15 @@ class Channel {
         frame.records.size() > kMaxEnemies) return;
     if (frame.world != world_) { Clear(); world_ = frame.world; }
     time_ = frame.time;
+    // A former owner must stop publishing, including already queued live/death
+    // events. Handover's reliable final state replaces its old local history.
+    auto retained = [&](const EnemyId& id, uint32_t generation) {
+      return std::any_of(frame.records.begin(), frame.records.end(), [&](const auto& r) {
+        return r.enemy.id == id && r.enemy.generation == generation;
+      });
+    };
+    std::erase_if(local_, [&](const auto& entry) { return !retained(entry.first, entry.second.enemy.generation); });
+    std::erase_if(pending_, [&](const auto& e) { return !retained(e.enemy.id, e.enemy.generation); });
     for (const auto& r : frame.records) {
       if (!ValidEnemy(r.enemy)) continue;
       auto it = local_.find(r.enemy.id);
@@ -167,6 +176,8 @@ class Channel {
         it = remote_.emplace(e.id, Remote{}).first;
       }
       auto& r = it->second;
+      if (r.record.enemy.id.source && e.generation < r.record.enemy.generation) return;
+      if (r.record.enemy.id.source && e.generation > r.record.enemy.generation) r = {};
       // Reliable death/removal wins over any late unreliable live snapshot or spawn event.
       if (event) {
         if (kind == EnemyEventKind::Spawned && r.terminal) return;

@@ -122,6 +122,7 @@ class Service {
         session.Tick(now, local, &frame, &cheats);
         shots_.Exchange(session);
         combat_.Exchange(session, now);
+        ownership_.Exchange(session);
         flow_.Exchange(session, now);
         View view{config.role, session.State(), session.Rejection(), session.Stats(), local, session.Partner(now), now};
         view.local_failure = failure; view.poses = session.Poses();
@@ -153,6 +154,7 @@ class Service {
     std::lock_guard lock(mutex_); local_ = {}; view_ = {}; enemies_ = {}; local_cheats_.reset();
     shots_.Clear();
     combat_.Clear();
+    ownership_.Clear();
   }
   bool Running() const { return running_; }
   void Publish(PoseRead p) { std::lock_guard lock(mutex_); local_ = p; }
@@ -168,6 +170,9 @@ class Service {
   bool SubmitCombat(Message m, double now) { return combat_.Submit(std::move(m), now); }
   std::vector<ReceivedCombat> TakeCombat() { return combat_.Take(); }
   void ClearCombat() { combat_.Clear(); }
+  bool SubmitOwnership(Message m) { return ownership_.Submit(std::move(m)); }
+  std::vector<Message> TakeOwnership() { return ownership_.Take(); }
+  void ClearOwnership() { ownership_.Clear(); }
   bool BeginFlow(SessionStart start, std::vector<uint8_t> save) { return flow_.Begin(start, std::move(save)); }
   bool SubmitFlow(Message m) { return flow_.Submit(std::move(m)); }
   FlowView FlowSnapshot() const { return flow_.Snapshot(); }
@@ -180,6 +185,7 @@ class Service {
   enemies::Frame enemies_;
   ShotMailbox shots_;
   CombatMailbox combat_;
+  OwnershipMailbox ownership_;
   std::optional<CheatSet> local_cheats_;
   FlowMailbox flow_;
 };
@@ -259,8 +265,8 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
     dl->AddText(ImVec2(24, 88), IM_COL32(255, 230, 170, 255), text);
     enemies::Counters counts;
     { std::lock_guard lock(enemy_status_mutex); counts = enemy_status; }
-    std::snprintf(text, sizeof(text), "Enemies: sent %llu | matched %u | unmatched %u | driven %u",
-        static_cast<unsigned long long>(v.enemies_sent), counts.matched, counts.unmatched, counts.driven);
+    std::snprintf(text, sizeof(text), "Enemies: owned-by-me %u | owned-by-partner %u | matched %u | unmatched %u | driven %u",
+        counts.owned_me, counts.owned_partner, counts.matched, counts.unmatched, counts.driven);
     dl->AddText(ImVec2(24, 112), IM_COL32(255, 230, 170, 255), text);
     ShotCounters shots;
     { std::lock_guard lock(enemy_status_mutex); shots = shot_status; }
@@ -555,6 +561,25 @@ void ClearCombat() {
   if (service.Running()) { service.ClearCombat(); return; }
 #endif
   if (steam) steam->ClearCombat();
+}
+bool SubmitOwnership(Message message) {
+  if (!EnemyConnectionReady()) return false;
+#if defined(KK_DEV_TOOLS)
+  if (service.Running()) return service.SubmitOwnership(std::move(message));
+#endif
+  return steam && steam->SubmitOwnership(std::move(message));
+}
+std::vector<Message> TakeOwnership() {
+#if defined(KK_DEV_TOOLS)
+  if (service.Running()) return service.TakeOwnership();
+#endif
+  return steam ? steam->TakeOwnership() : std::vector<Message>{};
+}
+void ClearOwnership() {
+#if defined(KK_DEV_TOOLS)
+  if (service.Running()) { service.ClearOwnership(); return; }
+#endif
+  if (steam) steam->ClearOwnership();
 }
 PuppetSnapshot PartnerBodySnapshot() {
   if (!REXCVAR_GET(kk_coop_enabled)) return {};

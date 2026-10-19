@@ -152,6 +152,7 @@ struct SteamRuntime::Impl
   std::optional<CheatSet> local_cheats;
   ShotMailbox shots;
   CombatMailbox combat;
+  OwnershipMailbox ownership;
   FlowMailbox flow;
   const char* local_failure = "not-published";
 #if defined(KK_DEV_TOOLS)
@@ -313,6 +314,7 @@ struct SteamRuntime::Impl
     { std::lock_guard lock(mutex); session_view = {}; }
     shots.Clear();
     combat.Clear();
+    ownership.Clear();
   }
   void RetireCalls() {
     if (create_call) abandoned.emplace(create_call, LobbyCreated_t::k_iCallback);
@@ -588,6 +590,7 @@ struct SteamRuntime::Impl
     session->Tick(now, pose, &enemy_frame, &cheats);
     shots.Exchange(*session);
     combat.Exchange(*session, now);
+    ownership.Exchange(*session);
     flow.Exchange(*session, now);
     SteamSessionView view{session->SessionRole(), session->State(), session->Rejection(), session->Stats(), pose, session->Partner(now), now};
     view.local_failure = failure; view.poses = session->Poses();
@@ -733,6 +736,9 @@ std::vector<ReceivedShot> SteamRuntime::TakeShots() { return impl_->shots.Take()
 bool SteamRuntime::SubmitCombat(Message m, double now) { return impl_->combat.Submit(std::move(m), now); }
 std::vector<ReceivedCombat> SteamRuntime::TakeCombat() { return impl_->combat.Take(); }
 void SteamRuntime::ClearCombat() { impl_->combat.Clear(); }
+bool SteamRuntime::SubmitOwnership(Message m) { return impl_->ownership.Submit(std::move(m)); }
+std::vector<Message> SteamRuntime::TakeOwnership() { return impl_->ownership.Take(); }
+void SteamRuntime::ClearOwnership() { impl_->ownership.Clear(); }
 void SteamRuntime::Shutdown() { impl_->Shutdown(); }
 #if defined(KK_DEV_TOOLS)
 int SteamRuntime::SelfTest(std::function<void(const std::string&)> log) {

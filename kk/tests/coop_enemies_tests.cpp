@@ -1,5 +1,6 @@
 // Pure tests only. No guest memory, SDK, sockets, clocks or game executable.
 #include "coop_enemies.h"
+#include "coop_ownership.h"
 #include "coop_session.h"
 #include <cstdio>
 #include <cstdlib>
@@ -66,7 +67,7 @@ void Wire() {
   auto batch = Snapshot(Enemy()); batch.enemies.enemies.clear();
   for (size_t i = 0; i < kMaxEnemyBatch; ++i) batch.enemies.enemies.push_back(Enemy(i+1));
   auto bytes = Packet(batch);
-  Check(bytes.size() == kHeaderBytes+22+53*kMaxEnemyBatch && bytes.size() <= kMaxPacketBytes && Decode(bytes, out), "maximum batch within datagram cap");
+  Check(bytes.size() == kHeaderBytes+22+58*kMaxEnemyBatch && bytes.size() <= kMaxPacketBytes && Decode(bytes, out), "maximum batch within datagram cap");
   batch.enemies.enemies.push_back(Enemy(999)); Check(!Encode(batch, bytes), "oversized local batch rejected");
   batch = Snapshot(Enemy()); batch.enemies.enemies.push_back(Enemy()); Check(!Encode(batch, bytes), "duplicate encode refused");
   batch = Snapshot(Enemy()); bytes = Packet(batch);
@@ -155,9 +156,11 @@ struct Transport final : ICoopTransport {
   bool block_events = false;
   bool block_shots = false;
   bool block_inventory = false;
+  bool block_ownership = false;
   size_t snapshots = 0, events = 0, shots = 0, inventories = 0;
   bool Send(std::span<const uint8_t> bytes, bool reliable) override {
     Message m; Check(Decode(bytes, m), "session emits valid packets");
+    if (m.type == MessageType::OwnershipChange) { Check(reliable, "ownership reliable"); if (block_ownership) return false; }
     if (m.type == MessageType::EnemyEvent) { Check(reliable, "lifecycle reliable"); if (block_events) return false; ++events; }
     if (m.type == MessageType::EnemySnapshot) { Check(!reliable, "movement unreliable"); ++snapshots; }
     if (m.type == MessageType::ShotIntent) { Check(reliable, "shots reliable"); if (block_shots) return false; ++shots; }
@@ -282,7 +285,7 @@ void GuestInventory() {
   CoopSession authority({true, Role::Host, 123, compatible}, a), guest({true, Role::Guest, 0, compatible}, b);
   for (int i = 0; i < 40; ++i) { authority.Tick(i*.01); guest.Tick(i*.01); }
   authority.PublishInventory(Inventory(.4)); authority.Tick(.4);
-  Check(a.inventories == 0, "host cannot send inventory authority for guest shots");
+  Check(a.inventories == 1, "host inventory is available to guest-owned enemies");
   b.block_inventory = true;
   guest.PublishInventory(Inventory(.4)); guest.Tick(.4);
   Check(b.inventories == 0, "inventory change retained under backpressure");
@@ -316,7 +319,7 @@ void ShotWireAndBounds() {
   m.shot = Shot(); m.shot.weapon = 3; m.shot.hits.clear();
   for (size_t i = 0; i < kMaxShotHits; ++i) m.shot.hits.push_back({Enemy(i+1).id, {10, float(i)*.1f, 0}});
   Message out; auto bytes = Packet(m);
-  Check(bytes.size() == kHeaderBytes+50+26*kMaxShotHits && bytes.size() <= kMaxPacketBytes && Decode(bytes, out), "maximum shotgun intent bounded");
+  Check(bytes.size() == kHeaderBytes+50+30*kMaxShotHits && bytes.size() <= kMaxPacketBytes && Decode(bytes, out), "maximum shotgun intent bounded");
   m.shot.hits.push_back({Enemy(999).id, {10, 0, 0}}); Check(!Encode(m, bytes), "too many shotgun impacts refused");
   m.shot = Shot(); m.shot.hits.push_back({Enemy(456).id, {10, 0, 0}}); Check(!Encode(m, bytes), "single ray weapon cannot send multiple targets");
   m.shot.weapon = 3; m.shot.hits[1].id = m.shot.hits[0].id; Check(!Encode(m, bytes), "repeated shotgun target refused");
@@ -386,7 +389,8 @@ void ShotSessions() {
   const Compatibility compatible{kProtocolVersion, "test", "build", "gameplay"};
   CoopSession host({true, Role::Host, 123, compatible}, a), guest({true, Role::Guest, 0, compatible}, b);
   for (int i = 0; i < 40; ++i) { host.Tick(i*.01); guest.Tick(i*.01); }
-  Check(!host.QueueShot(Pending(Shot(1, .4))), "host cannot send guest intents");
+  auto invalid = Pending(Shot(1, .4)); invalid.intent.number = 0;
+  Check(!host.QueueShot(invalid), "host also validates outgoing intents");
   Check(guest.QueueShot(Pending(Shot(1, .4))), "guest queues actual shot");
   b.block_inventory = true; guest.Tick(.395); host.Tick(.395);
   Check(b.shots == 0 && host.TakeShots().empty(), "inventory backpressure prevents intent overtaking it");
@@ -407,7 +411,7 @@ void ShotSessions() {
   replay.shot = Shot(2, .4); replay.epoch = 999; a.queue.push_back(Packet(replay)); host.Tick(.44);
   Check(host.TakeShots().empty(), "wrong epoch shot ignored");
   replay.epoch = 123; b.queue.push_back(Packet(replay)); guest.Tick(.45);
-  Check(guest.TakeShots().empty(), "guest cannot receive authoritative shot requests");
+  Check(guest.TakeShots().size() == 1, "guest can receive requests for its owned enemies");
   for (size_t i = 0; i < kMaxQueuedShots; ++i) Check(guest.QueueShot(Pending(Shot(uint32_t(i+2), .46))), "bounded outgoing queue capacity");
   Check(!guest.QueueShot(Pending(Shot(999, .46))), "outgoing queue refuses overflow");
   guest.Tick(1.1); host.Tick(1.1);
@@ -439,9 +443,174 @@ void MissThenHit() {
         "miss consumes cadence and sequence without blocking the next real hit");
   }
 }
+void OwnershipDecision() {
+  Proximity p;
+  Check(!p.Decide(EnemyOwner::Host, 40, 10, 0, true), "closer guest starts dwell");
+  Check(!p.Decide(EnemyOwner::Host, 40, 10, 1, true), "exactly one second cannot transfer");
+  Check(p.Decide(EnemyOwner::Host, 40, 10, 1.01, true) == EnemyOwner::Guest, "guest clearly closer for over one second");
+  Check(!p.Decide(EnemyOwner::Guest, 11, 10, 2, true) &&
+        !p.Decide(EnemyOwner::Guest, 9, 10, 4, true), "hysteresis holds through equal-distance jitter");
+  Check(!p.Decide(EnemyOwner::Guest, 7, 10, 5, true) &&
+        p.Decide(EnemyOwner::Guest, 7, 10, 6.01, true) == EnemyOwner::Host, "closer host takes back after dwell");
+  Check(!p.Decide(EnemyOwner::Host, 100, 25, 10, true) &&
+        !p.Decide(EnemyOwner::Host, 100, 26, 12, true), "25-unit grant radius is strict");
+  Check(!p.Decide(EnemyOwner::Host, 40, 10, 20, true), "new dwell");
+  Check(!p.Decide(EnemyOwner::Host, 40, 10, 21, false) &&
+        !p.Decide(EnemyOwner::Host, 40, 10, 21.1, true), "ineligible sample resets dwell");
+  Check(!p.Decide(EnemyOwner::Host, 40, 10, 19, true), "backward clock restarts dwell");
+  Check(!p.Decide(EnemyOwner::Host, std::numeric_limits<float>::infinity(), 1, 30, true), "invalid distance resets dwell");
+  Check(!p.Decide(EnemyOwner::Guest, 29, 31, 40, true) &&
+        p.Decide(EnemyOwner::Guest, 29, 31, 41.01, true) == EnemyOwner::Host, "out-of-range guest returns authority with dwell");
+}
+void OwnershipWire() {
+  for (auto phase : {OwnershipPhase::Matched, OwnershipPhase::Prepare, OwnershipPhase::Ready, OwnershipPhase::Commit}) {
+    Message m; m.type = MessageType::OwnershipChange;
+    m.ownership = {World(), phase, phase == OwnershipPhase::Matched ? 0u : 1u,
+                   phase == OwnershipPhase::Matched ? EnemyOwner::Host : EnemyOwner::Guest, Enemy()};
+    if (phase == OwnershipPhase::Commit) { m.ownership.enemy.owner = EnemyOwner::Guest; m.ownership.enemy.generation = 1; }
+    auto bytes = Packet(m); Message out;
+    Check(bytes.size() == 100 && Decode(bytes, out) && Packet(out) == bytes, "ownership phase round trip with final state");
+    for (size_t n = 0; n < bytes.size(); ++n) {
+      Message sentinel; sentinel.sequence = 77;
+      Check(!Decode(std::span(bytes.data(), n), sentinel) && sentinel.sequence == 77, "ownership truncations preserve output");
+    }
+    bytes[kHeaderBytes+12] = 255; Check(!Decode(bytes, out), "unknown ownership phase rejected");
+    bytes = Packet(m); bytes[kHeaderBytes+17] = 2; Check(!Decode(bytes, out), "unknown owner rejected");
+    bytes = Packet(m); bytes.push_back(0); Check(!Decode(bytes, out), "ownership trailing byte rejected");
+    m.ownership.enemy.x = std::numeric_limits<float>::quiet_NaN(); Check(!Encode(m, bytes), "invalid handover transform refused");
+  }
+  Message m; m.type = MessageType::OwnershipChange;
+  m.ownership = {World(), OwnershipPhase::Prepare, 0, EnemyOwner::Guest, Enemy()};
+  std::vector<uint8_t> bytes;
+  Check(!Encode(m, bytes), "prepare needs a new generation");
+  m.ownership.generation = 2; Check(!Encode(m, bytes), "skipped prepare generation refused");
+  m.ownership.generation = 1; m.ownership.owner = EnemyOwner::Host;
+  Check(!Encode(m, bytes), "prepare must change the owner");
+  m.ownership.owner = EnemyOwner::Guest; m.ownership.world.serial = 0;
+  Check(!Encode(m, bytes), "handover requires checkpoint scope");
+  m.type = MessageType::ShotIntent; m.shot = Shot(); m.shot.hits[0].generation = 123;
+  Message decoded; Check(Decode(Packet(m), decoded) && decoded.shot.hits[0].generation == 123, "shot generation crosses wire");
+}
+void OwnershipSequencing() {
+  Authority host, guest; host.last = guest.last = Enemy();
+  Check(!host.Begin(World(), EnemyOwner::Guest, Enemy()), "unmatched cannot transfer");
+  host.matched = true;
+  auto unsupported = Enemy(); unsupported.id.family = EnemyFamily::None;
+  Check(!host.Begin(World(), EnemyOwner::Guest, unsupported), "unknown family cannot transfer");
+  const ShotHit initial{Enemy().id, {10, 0, 0}, 0};
+  Check(RoutesShot(host, EnemyOwner::Host, initial) && !RoutesShot(host, EnemyOwner::Guest, initial), "default host shot route");
+  const auto prepare = host.Begin(World(), EnemyOwner::Guest, Enemy());
+  Check(prepare && host.Frozen() && !host.Runs(EnemyOwner::Host), "old host freezes before sending prepare");
+  Check(!RoutesShot(host, EnemyOwner::Host, initial), "freeze refuses damage");
+  auto wrong_local = Enemy(); wrong_local.x = 999;
+  const auto ready = guest.Prepare(*prepare, wrong_local);
+  Check(ready && ready->enemy.x == Enemy().x && guest.Frozen(), "nonowner seeds host final pose, ignores divergent local copy");
+  const auto commit = host.Ready(*ready);
+  Check(commit && host.owner == EnemyOwner::Host && !guest.Runs(EnemyOwner::Guest), "Ready cannot grant authority");
+  auto stale = *commit; stale.generation = stale.enemy.generation = 99;
+  Check(!guest.Commit(stale), "unrequested future generation refused");
+  Check(host.Commit(*commit) && guest.Commit(*commit), "only Commit changes both owners");
+  Check(!guest.Commit(*commit) && !guest.Prepare(*prepare, Enemy()), "duplicate commit and old prepare cannot rewind");
+  Check(host.owner == EnemyOwner::Guest && guest.Runs(EnemyOwner::Guest) && !host.Runs(EnemyOwner::Host), "exactly one native AI runs");
+  Check(combat::FilterVictim(4, 10, 20, 10, true, !guest.Runs(EnemyOwner::Guest), false) == combat::VictimAction::Pass,
+      "guest-owned native hit on guest Jack passes");
+  Check(combat::FilterVictim(4, 10, 20, 10, true, !host.Runs(EnemyOwner::Host), false) == combat::VictimAction::SuppressDuplicate,
+      "host replica cannot hurt host Jack");
+  Check(combat::FilterVictim(4, 20, 20, 10, true, false, false) == combat::VictimAction::ProtectBody,
+      "borrowed-body protection remains in force");
+  auto hit = initial; hit.generation = 1;
+  Check(RoutesShot(guest, EnemyOwner::Guest, hit) && !RoutesShot(host, EnemyOwner::Host, hit) &&
+        !RoutesShot(guest, EnemyOwner::Guest, initial), "shots follow owner and expire across generations");
+  auto final = guest.last; final.x = 42; final.life = 37;
+  Check(guest.Observe(final), "guest observes native movement and damage");
+  const auto back = host.Begin(World(), EnemyOwner::Host, host.last);
+  Check(back.has_value(), "host requests return using latest received pose");
+  const auto guest_ready = guest.Prepare(*back, final);
+  Check(guest_ready && guest_ready->enemy.x == 42 && guest_ready->enemy.life == 37, "old guest supplies final native state");
+  const auto return_commit = host.Ready(*guest_ready);
+  Check(return_commit && return_commit->enemy.x == 42 && !host.Runs(EnemyOwner::Host), "new host stays held until commit of guest final state");
+  Check(host.Commit(*return_commit) && guest.Commit(*return_commit) && host.Runs(EnemyOwner::Host), "return handover completes");
+  auto dead = host.last; dead.life = 0;
+  Check(host.Observe(dead) && !host.Begin(World(), EnemyOwner::Guest, dead), "authoritative death is final");
+  auto live = dead; live.life = 50;
+  Check(!host.Observe(live), "live sample cannot resurrect corpse");
+
+  // Last hit on the old guest just before it sees Prepare cancels the flip.
+  Authority h, g; h.last = g.last = commit->enemy; h.owner = g.owner = EnemyOwner::Guest;
+  h.generation = g.generation = 1; h.matched = true;
+  const auto death_prepare = h.Begin(World(), EnemyOwner::Host, h.last);
+  auto last_hit = g.last; last_hit.life = 0;
+  const auto death_ready = g.Prepare(*death_prepare, last_hit);
+  const auto death_commit = h.Ready(*death_ready);
+  Check(death_commit && death_commit->owner == EnemyOwner::Guest && death_commit->enemy.life == 0, "handover death keeps old owner");
+  Check(h.Commit(*death_commit) && g.Commit(*death_commit) && h.dead && g.dead, "handover publishes death once on both sides");
+  Authority overflow; overflow.matched = true; overflow.last = Enemy();
+  overflow.generation = overflow.last.generation = UINT32_MAX;
+  Check(!overflow.Begin(World(), EnemyOwner::Guest, overflow.last), "authority generations never wrap");
+}
+void OwnershipStreams() {
+  Channel channel;
+  auto old = Enemy(); channel.Receive(Snapshot(old, 1, 1), 1);
+  auto current = old; current.owner = EnemyOwner::Guest; current.generation = 1; current.x = 40;
+  channel.Receive(Snapshot(current, 2, 2), 2);
+  old.life = 0; auto late = Event(old, EnemyEventKind::Died); late.sequence = 3;
+  channel.Receive(late, 2.01);
+  const auto sample = channel.Sample(2.02);
+  Check(sample.records.size() == 1 && sample.records[0].enemy.generation == 1 && sample.records[0].enemy.x == 40 &&
+        sample.records[0].enemy.life > 0, "late former-owner death cannot poison new history");
+  channel.Clear(); channel.Publish({World(), 1, {{Enemy()}}});
+  Check(channel.Event(), "initial local event queued");
+  channel.Publish({World(), 2, {}});
+  Check(!channel.Event() && channel.Snapshots()[0].enemies.empty(), "former owner drops queued events and snapshots");
+}
+void OwnershipSessions() {
+  Transport a, b; a.peer = &b; b.peer = &a;
+  const Compatibility compatible{kProtocolVersion, "test", "build", "gameplay"};
+  CoopSession host({true, Role::Host, 123, compatible}, a), guest({true, Role::Guest, 0, compatible}, b);
+  for (int i = 0; i < 40; ++i) { host.Tick(i*.01); guest.Tick(i*.01); }
+  Message prepare; prepare.type = MessageType::OwnershipChange; prepare.epoch = 123;
+  prepare.ownership = {World(), OwnershipPhase::Prepare, 1, EnemyOwner::Guest, Enemy()};
+  Check(!guest.QueueOwnership(prepare) && host.QueueOwnership(prepare), "only host proposes ownership");
+  a.block_ownership = true; host.Tick(.4); guest.Tick(.4);
+  Check(guest.TakeOwnership().empty() && host.TakeOwnership().empty(), "prepare waits for reliable backpressure");
+  a.block_ownership = false; host.Tick(.41); guest.Tick(.42);
+  Check(guest.TakeOwnership().size() == 1 && guest.TakeOwnership().empty(), "prepare drains once");
+  Message ready = prepare; ready.ownership.phase = OwnershipPhase::Ready;
+  Check(!host.QueueOwnership(ready) && guest.QueueOwnership(ready), "only guest acknowledges freeze");
+  guest.Tick(.43); host.Tick(.44); Check(host.TakeOwnership().size() == 1, "ready returns to host");
+  auto commit = prepare; commit.ownership.phase = OwnershipPhase::Commit;
+  commit.ownership.enemy.owner = EnemyOwner::Guest; commit.ownership.enemy.generation = 1;
+  Check(host.QueueOwnership(commit), "host queues commit");
+  a.block_ownership = true; host.Tick(.45);
+  Check(host.TakeOwnership().empty(), "queueing or blocked send cannot grant local authority");
+  a.block_ownership = false; host.Tick(.46); guest.Tick(.47);
+  Check(host.TakeOwnership().size() == 1 && guest.TakeOwnership().size() == 1, "successful reliable commit reaches both game threads");
+  auto wrong = commit; wrong.epoch = 999; Check(!host.QueueOwnership(wrong), "wrong epoch cannot queue transfer");
+  b.queue.push_back(Packet(wrong)); guest.Tick(.48); Check(guest.TakeOwnership().empty(), "wrong epoch cannot change owner");
+  // Guest-owned movement and native outcomes flow back to the host.
+  auto e = commit.ownership.enemy; e.x = 45;
+  Frame frame{World(), .5, {{e}}}; guest.Tick(.5, {}, &frame); host.Tick(.51);
+  Check(host.Enemies(.51).records.size() == 1 && host.Enemies(.51).records[0].enemy.owner == EnemyOwner::Guest,
+      "guest-owned snapshots arrive at host");
+  e.life = 0; frame = {World(), .6, {{e, EnemyEventKind::Died}}}; guest.Tick(.6, {}, &frame); host.Tick(.61);
+  Check(host.Enemies(.61).records[0].enemy.life == 0, "guest native death is reliable authority");
+  auto shot = Shot(1, .62); shot.hits[0].generation = 1;
+  Check(host.QueueShot(Pending(shot)), "host queues shot for current guest owner");
+  host.Tick(.62); guest.Tick(.63); const auto requests = guest.TakeShots();
+  Check(requests.size() == 1 && requests[0].inventory && requests[0].intent.hits[0].generation == 1,
+      "host shot and pre-fire inventory reach guest together");
+  ShotValidator validator;
+  Check(validator.Validate(requests[0], World(), PlayerPose{.62, 303}, .63) == ShotReject::None,
+      "guest uses same remote shot validation as host");
+  OwnershipMailbox mailbox; Check(mailbox.Submit(prepare), "bounded ownership mailbox accepts values");
+  mailbox.Exchange(host); host.Tick(.64); guest.Tick(.65); mailbox.Exchange(guest);
+  Check(mailbox.Take().size() == 1 && mailbox.Take().empty(), "ownership worker/game handoff drains once");
+  host.End(.66); mailbox.Exchange(host); Check(mailbox.Take().empty(), "disconnect clears ownership handoff");
+}
 } // namespace
 int main() {
   IdentityAndMatching(); Wire(); LifecycleAndInterpolation(); SessionAuthority();
   MatchingRetryAndTolerance(); GuestInventory(); ShotWireAndBounds(); ShotValidation(); ShotSessions(); MissThenHit();
+  OwnershipDecision(); OwnershipWire(); OwnershipSequencing(); OwnershipStreams(); OwnershipSessions();
   std::puts("coop enemies tests passed");
 }

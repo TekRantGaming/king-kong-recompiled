@@ -66,6 +66,7 @@ void CoopSession::Transition(SessionState s) {
     remote_inventory_.reset(); sent_cheats_.reset();
     local_inventory_.reset(); sent_inventory_.reset();
     outgoing_combat_.clear(); incoming_combat_.clear();
+    outgoing_ownership_.clear(); incoming_ownership_.clear();
     // Keep host settings during a temporary loss. End/leave restores own choices.
     if (s != SessionState::Lost) host_cheats_.reset();
     if (s == SessionState::Ended) { outgoing_flow_.clear(); incoming_flow_.clear(); }
@@ -110,6 +111,10 @@ void CoopSession::Receive(const Message& m, double now) {
     } else {
       if (state_ != SessionState::Connected && state_ != SessionState::Lost) return;
       switch (m.type) {
+        case MessageType::OwnershipChange:
+          if (state_ != SessionState::Connected || OwnershipSender(m.ownership.phase, config_.role)) return;
+          if (incoming_ownership_.size() >= kMaxEnemies*2) { End(now); return; }
+          incoming_ownership_.push_back(m); break;
         case MessageType::DamageEvent: case MessageType::PlayerStatus:
           if (state_ != SessionState::Connected ||
               (m.type == MessageType::DamageEvent ? config_.role != Role::Guest : config_.role != Role::Host)) return;
@@ -119,7 +124,7 @@ void CoopSession::Receive(const Message& m, double now) {
           if (config_.role != Role::Guest || (cheat_seen_ && int32_t(m.sequence-cheat_sequence_) <= 0)) return;
           cheat_seen_ = true; cheat_sequence_ = m.sequence; host_cheats_ = m.cheats; break;
         case MessageType::InventoryState:
-          if (config_.role != Role::Host || state_ != SessionState::Connected ||
+          if (state_ != SessionState::Connected ||
               (inventory_seen_ && int32_t(m.sequence-inventory_sequence_) <= 0)) return;
           inventory_seen_ = true; inventory_sequence_ = m.sequence; remote_inventory_ = m.inventory; break;
         case MessageType::Ping: {
@@ -135,10 +140,14 @@ void CoopSession::Receive(const Message& m, double now) {
           poses_.Push(m.pose, now); break;
         case MessageType::Bye: Transition(SessionState::Ended); return;
         case MessageType::EnemySnapshot: case MessageType::EnemyEvent:
-          if (config_.role != Role::Guest || state_ != SessionState::Connected) return;
+          if (state_ != SessionState::Connected) return;
+          if (m.type == MessageType::EnemyEvent) {
+            if ((m.enemy_event.enemy.owner == EnemyOwner::Host) == (config_.role == Role::Host)) return;
+          } else for (const auto& e : m.enemies.enemies)
+            if ((e.owner == EnemyOwner::Host) == (config_.role == Role::Host)) return;
           enemies_.Receive(m, now); break;
         case MessageType::ShotIntent:
-          if (config_.role != Role::Host || state_ != SessionState::Connected) return;
+          if (state_ != SessionState::Connected) return;
           // The game-thread validator owns sequence rejection and its reason
           // counter. Never silently apply or discard a replay in a second policy.
           if (incoming_shots_.size() < kMaxQueuedShots) incoming_shots_.push_back({m.shot, now, remote_inventory_});
@@ -202,6 +211,17 @@ void CoopSession::Tick(double now, const std::optional<PlayerPose>& local, const
     if (!Send(outgoing_flow_.front(), true)) break;
     outgoing_flow_.pop_front();
   }
+  if (state_ == SessionState::Connected) for (unsigned n = 0; n < 16 && !outgoing_ownership_.empty(); ++n) {
+    const auto& m = outgoing_ownership_.front();
+    if (!Send(m, true)) break;
+    // The host also switches on the successfully sent Commit, through the same
+    // game-thread message path as the guest. Queueing a packet is not a grant.
+    if (m.ownership.phase == OwnershipPhase::Commit) {
+      if (incoming_ownership_.size() >= kMaxEnemies*2) { End(now); return; }
+      incoming_ownership_.push_back(m);
+    }
+    outgoing_ownership_.pop_front();
+  }
   if (state_ == SessionState::Connected) for (unsigned n = 0; n < 8 && !outgoing_combat_.empty(); ++n) {
     const auto& entry = outgoing_combat_.front();
     if (entry.message.epoch != epoch_ || !combat::Fresh(entry.received, now)) { outgoing_combat_.pop_front(); continue; }
@@ -212,15 +232,22 @@ void CoopSession::Tick(double now, const std::optional<PlayerPose>& local, const
     Message pose; pose.type = MessageType::PlayerPose; pose.pose = *local;
     Send(pose, false); last_pose_ = now;
   }
-  if (state_ == SessionState::Connected && config_.role == Role::Host) {
+  if (state_ == SessionState::Connected) {
     const bool fresh = frame && now-frame->time >= 0 && now-frame->time <= .25 && ValidEnemyWorld(frame->world);
-    if (fresh) enemies_.Publish(*frame);
+    enemies::Frame owned;
+    if (fresh) {
+      owned = *frame;
+      std::erase_if(owned.records, [&](const auto& r) {
+        return (r.enemy.owner == EnemyOwner::Host) != (config_.role == Role::Host);
+      });
+      enemies_.Publish(owned);
+    }
     for (int i = 0; i < 8 && enemies_.Event(); ++i) {
       Message event; event.type = MessageType::EnemyEvent; event.enemy_event = *enemies_.Event();
       if (!Send(event, true)) break;
       enemies_.SentEvent();
     }
-    if (fresh && now-last_enemies_ >= .08) {
+    if (fresh && !owned.records.empty() && now-last_enemies_ >= .08) {
       for (auto& batch : enemies_.Snapshots()) {
         Message snapshot; snapshot.type = MessageType::EnemySnapshot; snapshot.enemies = std::move(batch);
         Send(snapshot, false);
@@ -228,7 +255,7 @@ void CoopSession::Tick(double now, const std::optional<PlayerPose>& local, const
       last_enemies_ = now;
     }
   }
-  if (state_ == SessionState::Connected && config_.role == Role::Guest) {
+  if (state_ == SessionState::Connected) {
     if (local_inventory_ && now-local_inventory_->time >= 0 && now-local_inventory_->time <= .5 &&
         (!sent_inventory_ || !SameInventory(*local_inventory_, *sent_inventory_))) {
       Message m; m.type = MessageType::InventoryState; m.inventory = *local_inventory_;
@@ -249,12 +276,21 @@ void CoopSession::Tick(double now, const std::optional<PlayerPose>& local, const
   }
 }
 bool CoopSession::QueueShot(const PendingShot& shot) {
-  if (state_ != SessionState::Connected || config_.role != Role::Guest ||
+  if (state_ != SessionState::Connected ||
       !ValidPendingShot(shot) || outgoing_shots_.size() >= kMaxQueuedShots) return false;
   outgoing_shots_.push_back(shot); return true;
 }
 void CoopSession::PublishInventory(const InventoryState& inventory) {
-  if (state_ == SessionState::Connected && config_.role == Role::Guest && ValidInventory(inventory)) local_inventory_ = inventory;
+  if (state_ == SessionState::Connected && ValidInventory(inventory)) local_inventory_ = inventory;
+}
+bool CoopSession::QueueOwnership(const Message& m) {
+  if (state_ != SessionState::Connected || m.type != MessageType::OwnershipChange || m.epoch != epoch_ ||
+      !ValidOwnershipChange(m.ownership) || !OwnershipSender(m.ownership.phase, config_.role) ||
+      outgoing_ownership_.size() >= kMaxEnemies*2) return false;
+  outgoing_ownership_.push_back(m); return true;
+}
+std::vector<Message> CoopSession::TakeOwnership() {
+  auto out = std::move(incoming_ownership_); incoming_ownership_.clear(); return out;
 }
 bool CoopSession::QueueFlow(const Message& m) {
   if (state_ != SessionState::Connected || !IsFlowMessage(m.type) || outgoing_flow_.size() >= 64) return false;
