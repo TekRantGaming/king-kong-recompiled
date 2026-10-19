@@ -18,6 +18,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <set>
 #include <utility>
@@ -1115,8 +1116,12 @@ void CombatBeforeAi(PPCContext& ctx, uint8_t* b) {
 #if defined(KK_DEV_TOOLS)
 void DevDie(PPCContext& ctx, uint8_t* b) {
   struct Die {
-    double due=-1; bool done=false;
+    double due=-1, next_log=0; bool done=false, host=false, hurt=false;
+    unsigned queued=0;
+    uint32_t world=0, hero=0, vars=0;
+    std::optional<PlayerCondition> observed;
     Die() {
+      const char* role=std::getenv("KK_DEV_DIE_HOST"); host=role && std::strcmp(role,"1")==0;
       const char* value=std::getenv("KK_DEV_DIE"); if (!value || !*value) return;
       char* end=nullptr; const double t=std::strtod(value,&end);
       if (end!=value && !*end && std::isfinite(t) && t>=0 && t<=3600) due=t;
@@ -1126,24 +1131,124 @@ void DevDie(PPCContext& ctx, uint8_t* b) {
   static Die die;
   if (die.done || die.due<0) return;
   const double t=kk::DevSecondsSinceMenu(); if (t<die.due) return;
-  if (t>die.due+10) { die.done=true; REXLOG_WARN("KK dev die: expired waiting for Jack"); return; }
+  const auto link=EnemyLinkSnapshot();
+  if (link.role!=(die.host ? Role::Host : Role::Guest)) return;
+  if (t>die.due+30) {
+    die.done=true;
+    REXLOG_WARN("KK dev die: expired role={} queued={} hurt-observed={} death-observed=false",
+        die.host ? "host" : "guest",die.queued,die.hurt); return;
+  }
+  const auto flow=SessionFlowSnapshot();
+  const auto world=Load32(b,0x828E8388);
+  if (!link.connected || !flow.active || flow.phase!=FlowPhase::Playing ||
+      flow.policy!=ChapterPolicy::Together || !DevWorld(b,world)) return;
   const auto h=ReadHumanStatus(b);
-  if (!h || h->condition==PlayerCondition::Dead || !JackReady(b) || !Scratch::CanUse(ctx)) return;
+  if (!h) return;
+  if (die.queued && (die.world!=world || die.hero!=h->hero || die.vars!=h->vars)) {
+    die.done=true; REXLOG_WARN("KK dev die: stopped, world/Jack changed before observed death"); return;
+  }
+  if (die.observed!=h->condition) {
+    REXLOG_INFO("KK dev die: at {:.2f} role={} observed condition={}->{} value={:.3f} queued={} dead={:.3f} hurt={:.3f} recovered={:.3f}",
+        t,die.host ? "host" : "guest",die.observed ? int(*die.observed) : 0,int(h->condition),
+        h->value,die.queued,h->dead,h->hurt,h->recovered);
+    die.observed=h->condition;
+  }
+  if (h->condition==PlayerCondition::Dead) {
+    die.done=true;
+    REXLOG_INFO("KK dev die: native death observed after {} queued bites; inspect PlayerDowned/private-load/teleport/PlayerRevived",die.queued);
+    return;
+  }
+  if (die.queued==1 && h->condition==PlayerCondition::Hurt) die.hurt=true;
+  if (die.queued==2) return; // Queue acceptance is not proof of native death.
+  const float immunity=LoadF(b,h->vars+3232), allowed=LoadF(b,0x8203BFF0);
+  const float clock=LoadF(b,0x82CCAE1C)-LoadF(b,0x82CCC02C);
+  const float elapsed=clock-LoadF(b,h->vars+11852);
+  const float repeat_delay=LoadF(b,0x820B0CF0), recovery=LoadF(b,h->vars+13288);
+  // 826A0B58 ignores self-sourced damage when V+2724==0, before fatal flags.
+  // 826A0BC0 requires immunity's native zero; 826A0DBC gates repeat damage.
+  // Hit again after that delay, while still hurt, BEFORE timed healing at 826CB6B8.
+  const bool timing=std::isfinite(immunity) && std::isfinite(allowed) && immunity==allowed &&
+      (!die.queued || (die.hurt && h->condition==PlayerCondition::Hurt && std::isfinite(elapsed) &&
+        std::isfinite(repeat_delay) && repeat_delay>=0 && elapsed>=repeat_delay &&
+        std::isfinite(recovery) && elapsed<recovery));
+  const auto flags=Load32(b,h->bank+3056);
+  const auto state=Load32(b,h->vars+2712);
+  const bool ready=!(flags&0x201) && !Load32(b,h->vars+13180) && !Load32(b,h->vars+13492) &&
+      !Load32(b,h->vars+15228) && !Load32(b,h->vars+13208) && state!=610 && state!=709 &&
+      (die.queued || h->condition==PlayerCondition::Alive);
+  if (!timing || !ready || !JackReady(b) || !Scratch::CanUse(ctx)) {
+    if (t>=die.next_log) {
+      die.next_log=t+1;
+      REXLOG_INFO("KK dev die: waiting step={} condition={} immunity={:.3f} allowed={:.3f} hit-age={:.3f} repeat-delay={:.3f} heal-delay={:.3f} cheats={:08X} state={} gates={}/{}/{}/{}",
+          die.queued+1,int(h->condition),immunity,allowed,elapsed,repeat_delay,recovery,flags,state,
+          Load32(b,h->vars+13180),Load32(b,h->vars+13492),Load32(b,h->vars+15228),Load32(b,h->vars+13208));
+    }
+    return;
+  }
+  const auto matrix=Ptr(b,h->hero,12,64);
+  const auto origin=Vector(b,matrix+48);
+  uint32_t source=0, source_ai=0, source_matrix=0;
+  float nearest=std::numeric_limits<float>::max();
+  for (const auto& e : DevEnemies(b,world,origin)) {
+    if (!e.initializing && e.life>0 && e.distance<nearest) {
+      nearest=e.distance; source=e.actor; source_ai=e.ai; source_matrix=e.matrix;
+    }
+  }
+  // Entry 2 may have no live enemy yet. A registered, living H is also a valid
+  // native source. Never use Jack, a spawner or an actor outside the registry.
+  if (!source) {
+    uint32_t begin,end;
+    if (Table(b,world,begin,end,true)) for (auto p=begin;p<end;p+=8) {
+      const auto actor=Load32(b,p);
+      if (actor==h->hero || !PoseAddress(actor,32) || (Load32(b,actor)&0x00400001)) continue;
+      const auto ai=Ptr(b,Ptr(b,actor,24,8),4,88), m=Ptr(b,actor,12,64);
+      if (!ai || !m) continue;
+      const auto first=Load16(b,ai+80), last=Load16(b,ai+82);
+      if (first>last || last>4096 || !PoseAddress(ai,(first+7)*4)) continue;
+      const auto tag=Ptr(b,ai,(first+6)*4,24), vars=Ptr(b,ai,64,8);
+      if (!tag || Load32(b,tag+20)!=0x826718B8 || !vars || ai==h->ai || vars==h->vars || m==matrix) continue;
+      const auto id=Load32(b,vars+4);
+      if (id<1 || id>12 || !PoseAddress(h->bank,7096+4*id)) continue;
+      const auto life=LoadF(b,h->bank+7092+4*id);
+      if (!std::isfinite(life) || life==h->dead) continue;
+      const float distance=ShotDistance(origin,Vector(b,m+48));
+      if (std::isfinite(distance) && distance<nearest) {
+        nearest=distance; source=actor; source_ai=ai; source_matrix=m;
+      }
+    }
+  }
+  if (!source) {
+    if (t>=die.next_log) { die.next_log=t+1; REXLOG_WARN("KK dev die: waiting for a live non-Jack damage source"); }
+    return;
+  }
   constexpr uint32_t pool=0x82C8EF30;
   const auto count=Load32(b,pool+12);
   const float duration=LoadF(b,0x820B0E48);
   if (!count || count>4096 || Load32(b,pool+8)>=count || !Ptr(b,pool,0,count*116) ||
       !std::isfinite(duration) || duration<=0 || duration>10) return;
   Scratch scratch(ctx,b);
+  constexpr uint32_t globals[]={0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
+  uint32_t saved[4]; for (unsigned i=0;i<4;++i) saved[i]=Load32(b,globals[i]);
+  Store32(b,globals[0],source_ai); Store32(b,globals[1],source_ai);
+  Store32(b,globals[2],source); Store32(b,globals[3],source);
+  auto direction=Direction(Vector(b,source_matrix+48),origin);
+  if (ShotDistance(direction,{})<.001f) direction={1,0,0};
   const auto result=scratch.Vec(0,0,0,0x100);
-  Store32(b,result,UINT32_MAX); Store32(b,result+4,0); StoreF(b,ctx.r1.u32+88,0);
-  ctx.r3.u64=result; ctx.r4.s64=-1; ctx.r5.u64=0x200; // native fatal flag, .29:826A0FAC
-  ctx.r6.u64=h->hero; ctx.r8.u64=h->hero; ctx.r9.u64=1000;
-  ctx.r10.u64=uint64_t(std::bit_cast<uint32_t>(1.f))<<32; ctx.f1.f64=duration;
+  Store32(b,result,UINT32_MAX); Store32(b,result+4,0); StoreF(b,ctx.r1.u32+88,direction.z);
+  ctx.r3.u64=result; ctx.r4.s64=-1; ctx.r5.u64=0x4004;
+  ctx.r6.u64=source; ctx.r8.u64=h->hero; ctx.r9.u64=6;
+  ctx.r10.u64=(uint64_t(std::bit_cast<uint32_t>(direction.x))<<32)|std::bit_cast<uint32_t>(direction.y);
+  ctx.f1.f64=duration;
   auto& s=Get(); const bool injecting=s.injecting_damage; s.injecting_damage=true;
   __imp__sub_8261DE68(ctx,b); s.injecting_damage=injecting;
-  die.done=Load32(b,result)!=UINT32_MAX && Load32(b,result+4)!=0;
-  if (die.done) REXLOG_INFO("KK dev die: at {:.2f} native fatal event queued for local Jack, flags=200; death must be observed",t);
+  for (unsigned i=0;i<4;++i) Store32(b,globals[i],saved[i]);
+  const bool queued=Load32(b,result)!=UINT32_MAX && Load32(b,result+4)!=0;
+  if (queued) {
+    ++die.queued; die.world=world; die.hero=h->hero; die.vars=h->vars;
+    REXLOG_INFO("KK dev die: at {:.2f} role={} bite step={} queued source={:08X} victim={:08X} flags=00004004 magnitude=6 handle={:08X}/{} condition={} hit-age={:.3f} repeat-delay={:.3f} heal-delay={:.3f}; awaiting native transition",
+        t,die.host ? "host" : "guest",die.queued,source,h->hero,Load32(b,result),Load32(b,result+4),
+        int(h->condition),elapsed,repeat_delay,recovery);
+  }
 }
 void DevBait(PPCContext& ctx, uint8_t* b) {
   struct Bait {

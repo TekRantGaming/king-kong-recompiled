@@ -53,6 +53,12 @@ void PublishLife(const FlowView& v, bool down, double now) {
   Message m; m.type=down ? MessageType::PlayerDowned : MessageType::PlayerRevived;
   m.life={v.world,life_incarnation,life_number+1,local_checkpoint};
   if (SubmitFlowMessage(std::move(m))) {
+#if defined(KK_DEV_TOOLS)
+    if (!life_sent || down!=sent_downed)
+      REXLOG_INFO("KK co-op revive: {} queued role={} incarnation={} number={} checkpoint={} initial={}",
+          down ? "PlayerDowned" : "PlayerRevived",v.host ? "host" : "guest",
+          life_incarnation,life_number+1,local_checkpoint,!life_sent);
+#endif
     ++life_number; life_sent=true; sent_downed=down; next_life=now+.5;
   }
 }
