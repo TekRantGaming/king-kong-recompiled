@@ -254,7 +254,7 @@ class VulkanHost final : public HostDevice {
   }
   void ExecuteFrameCommandListUnguarded(nvrhi::ICommandList* command_list, nvrhi::IEventQuery* completion) {
 #if defined(KK_DEV_TOOLS)
-    if (completion && DevGpuLossNow(dev_loss_frames_)) DevThrowVulkanDeviceLost();  // KK_DEV_GPU_LOSS_AFTER
+    if (completion && DevGpuLossNow(dev_loss_frames_, "vulkan")) DevThrowVulkanDeviceLost();  // KK_DEV_GPU_LOSS_AFTER
 #endif
     // Host access to a VkQueue must be externally synchronised: hold the SDK's
     // queue lock (recursive) while NVRHI submits.

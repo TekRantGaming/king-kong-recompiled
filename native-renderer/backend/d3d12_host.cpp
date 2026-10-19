@@ -161,7 +161,7 @@ class D3D12Host final : public HostDevice {
     const uint64_t cpu_start = (REXCVAR_GET(native_debug) & 32768) ? CurrentThreadCpuMicroseconds() : 0;
     const auto t0 = clock::now();
 #if defined(KK_DEV_TOOLS)
-    if (completion && DevGpuLossNow(dev_loss_frames_)) {  // KK_DEV_GPU_LOSS_AFTER
+    if (completion && DevGpuLossNow(dev_loss_frames_, "d3d12")) {  // KK_DEV_GPU_LOSS_AFTER
       ReportGpuLoss("D3D12 submission: device removed (developer injection)");
       return;
     }

@@ -153,7 +153,7 @@ int main() {
     Check(seen, "dev injection looks like vk::DeviceLostError");
     std::atomic<uint64_t> frames{0};
     int fired = 0;
-    for (int i = 0; i < 10; ++i) fired += DevGpuLossNow(frames) ? 1 : 0;
+    for (int i = 0; i < 10; ++i) fired += DevGpuLossNow(frames, "vulkan") ? 1 : 0;
     Check(fired == (DevGpuLossAfter() && DevGpuLossAfter() <= 10 ? 1 : 0), "dev hook fires once at its frame");
   }
 #endif

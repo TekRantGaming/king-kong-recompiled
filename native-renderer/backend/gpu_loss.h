@@ -99,13 +99,22 @@ inline uint64_t DevGpuLossAfter() {
   }();
   return frames;
 }
+// KK_DEV_GPU_LOSS_API=vulkan|d3d12 limits the injection to that API (unset: both). The startup recovery's
+// restart on the other API inherits the environment and must run clean (task 271).
+inline bool DevGpuLossApi(const char* api) {
+  static const std::string only = [] {
+    const char* v = std::getenv("KK_DEV_GPU_LOSS_API");
+    return std::string(v ? v : "");
+  }();
+  return only.empty() || only == api;
+}
 #if defined(_MSC_VER) && !defined(__clang__)
 #pragma warning(pop)
 #endif
-// True exactly once, on the frame submission the variable names.
-inline bool DevGpuLossNow(std::atomic<uint64_t>& frames) {
+// True exactly once, on the frame submission the variable names (api: "vulkan" or "d3d12").
+inline bool DevGpuLossNow(std::atomic<uint64_t>& frames, const char* api) {
   const uint64_t after = DevGpuLossAfter();
-  return after && frames.fetch_add(1, std::memory_order_relaxed) + 1 == after;
+  return after && DevGpuLossApi(api) && frames.fetch_add(1, std::memory_order_relaxed) + 1 == after;
 }
 [[noreturn]] inline void DevThrowVulkanDeviceLost() {
   static const DevVkResultCategory category;
