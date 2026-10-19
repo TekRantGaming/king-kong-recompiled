@@ -16,6 +16,9 @@ SessionStart Start(int chapter=1) {
   s.save_hash=SessionSaveHash({}); return s;
 }
 Message Event(MessageType type,FlowEvent world) { Message m; m.type=type; m.flow=world; return m; }
+Message Life(MessageType type,FlowEvent world,uint64_t incarnation=1,uint32_t number=1) {
+  Message m; m.type=type; m.life={world,incarnation,number,world.start}; return m;
+}
 void Transfer(SessionFlow& from,SessionFlow& to,double now=1) {
   while (!from.Outgoing().empty()) {
     auto m=from.Outgoing().front(); from.Sent();
@@ -64,6 +67,56 @@ void Codecs() {
   Check(!Encode(bad,out),"chunk end overflow"); bad.save_chunk={0,{}}; Check(!Encode(bad,out),"empty chunk");
   bad.type=MessageType::SessionStart; bad.start=Start(); Check(Encode(bad,out),"valid metadata encode");
   out[kHeaderBytes+10]=2; Check(!Decode(out,bad),"noncanonical bool rejects");
+  for (auto type : {MessageType::PlayerDowned,MessageType::PlayerRevived}) {
+    auto life=Life(type,{1,201,1,0}); Message decoded; std::vector<uint8_t> wire;
+    Check(Encode(life,wire) && wire.size()==60 && Decode(wire,decoded),"life events have fixed bounded roundtrip");
+    Check(decoded.type==type && decoded.life.incarnation==1 && decoded.life.checkpoint==1,"life fields preserved");
+    for (size_t n=0;n<wire.size();++n) {
+      decoded.type=MessageType::Bye;
+      Check(!Decode(std::span(wire).first(n),decoded) && decoded.type==MessageType::Bye,"life truncations preserve output");
+    }
+    auto extra=wire; extra.push_back(0); ++extra[23]; Check(!Decode(extra,decoded),"life trailing data rejects");
+    life.life.incarnation=0; Check(!Encode(life,out),"life zero incarnation rejects");
+    life=Life(type,{0,201,1,0}); Check(!Encode(life,out),"life missing generation rejects");
+    life=Life(type,{1,201,1,0},1,0); Check(!Encode(life,out),"life zero sequence rejects");
+    life=Life(type,{1,201,1,0}); life.life.checkpoint=10001; Check(!Encode(life,out),"life checkpoint bounded");
+    wire[59]=0xff; wire[58]=0xff; Check(!Decode(wire,decoded),"wire checkpoint bounds enforced");
+  }
+}
+void LifeObservations() {
+  Flows f(2); f.Loaded(); const auto world=f.host.View().world;
+  auto alive=Life(MessageType::PlayerRevived,world);
+  f.host.Remote(alive,3);
+  Check(f.host.View().partner_life.Fresh(4.5) && !f.host.View().partner_life.Fresh(4.501),"life heartbeat age is bounded");
+  Check(f.host.View().partner_life.notice==0,"initial alive heartbeat is silent");
+  f.host.Remote(alive,4); Check(f.host.View().partner_life.received==3,"duplicate cannot refresh life freshness");
+  auto down=Life(MessageType::PlayerDowned,world,1,2); f.host.Remote(down,4);
+  Check(f.host.View().partner_life.downed && f.host.View().partner_life.notice==1,"death changes notice once");
+  down.life.number=3; f.host.Remote(down,4.5);
+  Check(f.host.View().partner_life.notice==1 && f.host.View().world.generation==world.generation &&
+      f.host.View().phase==FlowPhase::Playing,"down heartbeat never reloads living peer");
+  alive.life.number=4; f.host.Remote(alive,5);
+  Check(f.host.View().partner_life.downed,"same life cannot reverse death");
+  alive.life.incarnation=2; alive.life.number=1; f.host.Remote(alive,5);
+  Check(!f.host.View().partner_life.downed && f.host.View().partner_life.notice==2,"private reload and placement announce new life");
+  down.life.number=99; f.host.Remote(down,5.1);
+  Check(!f.host.View().partner_life.downed,"delayed old death cannot kill a new life");
+  for (auto stale : {FlowEvent{2,201,1,0},FlowEvent{1,101,1,0},FlowEvent{1,201,2,0}}) {
+    down=Life(MessageType::PlayerDowned,stale,99,99); f.host.Remote(down,6);
+    Check(!f.host.View().partner_life.downed,"wrong load generation, level or start cannot affect revive");
+  }
+  // Either role can publish its own condition. No authority is given to load a
+  // partner by sending Downed/Revived, even when both observations say down.
+  f.host.Local(Life(MessageType::PlayerDowned,world,3,1),6); Transfer(f.host,f.guest,6);
+  f.guest.Local(Life(MessageType::PlayerDowned,world,3,1),6); Transfer(f.guest,f.host,6);
+  Check(f.host.View().partner_life.downed && f.guest.View().partner_life.downed &&
+      f.guest.View().phase==FlowPhase::Playing,"bidirectional life messages leave reload policy on game thread");
+  f.host.Local(Event(MessageType::ReloadRequest,world),7); Transfer(f.host,f.guest,7);
+  Check(!f.host.View().partner_life.life.incarnation && !f.guest.View().partner_life.life.incarnation,
+      "coordinated reload invalidates old peer life");
+  Flows solo(10); solo.Loaded();
+  solo.host.Remote(Life(MessageType::PlayerDowned,solo.host.View().world),3);
+  Check(!solo.host.View().partner_life.life.incarnation,"solo missions retain coordinated reload fallback");
 }
 void SaveTransfer() {
   SessionFlow host(true),guest(false); auto s=Start(2);
@@ -255,12 +308,20 @@ void WorkerHandoff() {
       shots[0].intent.number==1,"inventory and shot IDs do not collide with flow control");
   Check(guest.HostCheats()==hc.cheats && g.Snapshot().checkpoint==5 && guest.PartnerName()=="Host",
       "checkpoint and live cheat update preserve partner identity");
+  Check(g.Submit(Life(MessageType::PlayerDowned,g.Snapshot().world)),"guest down queued in common handoff");
+  Check(h.Submit(Life(MessageType::PlayerDowned,h.Snapshot().world)),"host down queued in common handoff");
+  for (int i=180;i<195;++i) { const double t=i*.01; host.Tick(t);guest.Tick(t);h.Exchange(host,t);g.Exchange(guest,t); }
+  Check(h.Snapshot().partner_life.downed && g.Snapshot().partner_life.downed,"both roles deliver reliable life events through CoopSession");
+  auto forged=Life(MessageType::PlayerRevived,h.Snapshot().world,99,1); forged.epoch=56;
+  std::vector<uint8_t> wire; Check(Encode(forged,wire),"old epoch fixture"); a.incoming.push_back(wire);
+  host.Tick(1.96); h.Exchange(host,1.96);
+  Check(h.Snapshot().partner_life.downed,"wrong epoch life event rejected by session");
   host.End(2); h.Exchange(host,2);
   Check(h.Snapshot().phase==FlowPhase::Failed,"disconnect cannot leave game waiting forever");
 }
 }
 int main() {
-  Codecs(); SaveTransfer(); BarriersAndFollow(); SoloAndObserver(); PoliciesAndBehind(); PersonalProgress(); WorkerHandoff();
+  Codecs(); LifeObservations(); SaveTransfer(); BarriersAndFollow(); SoloAndObserver(); PoliciesAndBehind(); PersonalProgress(); WorkerHandoff();
 #if defined(KK_DEV_TOOLS)
   PolicyOverrideTests();
 #endif

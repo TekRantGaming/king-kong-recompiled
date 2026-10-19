@@ -22,7 +22,8 @@ enum class MessageType : uint16_t {
   EnemySnapshot = 8, EnemyEvent = 9, ShotIntent = 10, Cheats = 11, InventoryState = 12,
   SessionStart = 13, SaveChunk = 14, LevelChange = 15, Loaded = 16, LoadRelease = 17,
   Checkpoint = 18, ChapterFinished = 19, ReloadRequest = 20, FlowAbort = 21,
-  DamageEvent = 22, PlayerStatus = 23, OwnershipChange = 24
+  DamageEvent = 22, PlayerStatus = 23, OwnershipChange = 24,
+  PlayerDowned = 25, PlayerRevived = 26
 };
 
 // Session control is reliable and scoped by the packet epoch and a load generation.
@@ -41,6 +42,17 @@ struct FlowEvent {
   uint32_t generation = 0, level = 0, start = 0;
   uint64_t completed = 0;  // chapter entries completed in this session only
 };
+// Life observations use the shared load generation, not native pointers or the
+// number of private reloads. Both peers publish a reliable heartbeat every .5 s.
+struct PlayerLife {
+  FlowEvent world;
+  uint64_t incarnation = 0;
+  uint32_t number = 0, checkpoint = 0;
+};
+bool ValidPlayerLife(const PlayerLife& life);
+inline bool IsLifeMessage(MessageType t) {
+  return t == MessageType::PlayerDowned || t == MessageType::PlayerRevived;
+}
 struct SaveChunk { uint32_t offset = 0; std::vector<uint8_t> bytes; };
 bool ValidSessionStart(const SessionStart& start);
 bool ValidFlowEvent(const FlowEvent& event);
@@ -180,6 +192,7 @@ struct Message {
   SessionStart start;
   SaveChunk save_chunk;
   FlowEvent flow;
+  PlayerLife life;
 };
 // Encoders also reject invalid input. Decoding leaves out untouched on failure.
 bool Encode(const Message& message, std::vector<uint8_t>& out);

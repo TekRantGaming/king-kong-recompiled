@@ -121,7 +121,10 @@ uint64_t SessionSaveHash(std::span<const uint8_t> bytes) {
   for (uint8_t b : bytes) { hash ^= b; hash *= 1099511628211ull; }
   return hash;
 }
-bool IsFlowMessage(MessageType t) { return t >= MessageType::SessionStart && t <= MessageType::FlowAbort; }
+bool IsFlowMessage(MessageType t) { return (t >= MessageType::SessionStart && t <= MessageType::FlowAbort) || IsLifeMessage(t); }
+bool ValidPlayerLife(const PlayerLife& p) {
+  return ValidFlowEvent(p.world) && p.incarnation && p.number && p.checkpoint <= 10000;
+}
 bool ValidSessionStart(const SessionStart& s) {
   return s.chapter < 42 && s.level > 0 && s.level <= 100000 && s.start <= 10000 &&
       s.cheats <= 0x1ff && s.difficulty <= 1 &&
@@ -189,6 +192,12 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
       WriteWorld(payload, m.ownership.world); payload.U(uint8_t(m.ownership.phase), 1);
       payload.U(m.ownership.generation, 4); payload.U(uint8_t(m.ownership.owner), 1);
       WriteEnemy(payload, m.ownership.enemy); break;
+    case MessageType::PlayerDowned: case MessageType::PlayerRevived:
+      if (!ValidPlayerLife(m.life)) return false;
+      payload.U(m.life.world.generation, 4); payload.U(m.life.world.level, 4);
+      payload.U(m.life.world.start, 4); payload.U(m.life.world.completed, 8);
+      payload.U(m.life.incarnation, 8); payload.U(m.life.number, 4); payload.U(m.life.checkpoint, 4);
+      break;
     case MessageType::DamageEvent:
       if (!ValidDamageEvent(m.damage)) return false;
       WriteWorld(payload, m.damage.world); payload.U(m.damage.incarnation, 8); payload.U(m.damage.number, 4);
@@ -308,6 +317,11 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       m.ownership.generation = uint32_t(r.U(4)); m.ownership.owner = EnemyOwner(r.U(1));
       m.ownership.enemy = ReadEnemy(r);
       if (!ValidOwnershipChange(m.ownership)) return false;
+      break;
+    case MessageType::PlayerDowned: case MessageType::PlayerRevived:
+      m.life.world = {uint32_t(r.U(4)), uint32_t(r.U(4)), uint32_t(r.U(4)), r.U(8)};
+      m.life.incarnation = r.U(8); m.life.number = uint32_t(r.U(4)); m.life.checkpoint = uint32_t(r.U(4));
+      if (!ValidPlayerLife(m.life)) return false;
       break;
     case MessageType::DamageEvent:
       m.damage.world = ReadWorld(r); m.damage.incarnation = r.U(8); m.damage.number = uint32_t(r.U(4));

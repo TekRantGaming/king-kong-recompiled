@@ -30,6 +30,9 @@ bool SessionBeforeGo(PPCContext& ctx, uint8_t* base, uint32_t g);
 void SessionAfterGo(uint8_t* base, uint32_t g, bool loaded);
 void SessionCheckpoint(uint32_t level, uint32_t checkpoint);
 void SessionReloadFrame(uint8_t* base);
+// Private death reload does not advance the shared load barrier or enemy visit.
+bool SessionPrivateReload();
+void SessionReviveBeforeAi(PPCContext& ctx, uint8_t* base);
 int SessionCheats();  // -1 outside a C24 launch, otherwise immutable host settings
 void StopSessionFlow();
 bool MoveToPartnerOffered();

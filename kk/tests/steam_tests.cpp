@@ -109,6 +109,7 @@ std::vector<uint8_t> Packet(MessageType type) {
   m.damage = {{303, 3, 1}, 11, 1, enemy.id, 16388, 6, {1, 0, 0}};
   m.player_status = {{303, 3, 1}, 11, 2, 1, PlayerCondition::Hurt};
   m.ownership = {{303, 3, 1}, OwnershipPhase::Prepare, 1, EnemyOwner::Guest, enemy};
+  m.life = {{1,303,3,0},11,2,3};
     m.shot.world = {303, 3, 1}; m.shot.number = 1; m.shot.weapon = 1; m.shot.direction = {1, 0, 0};
   std::vector<uint8_t> bytes; Check(Encode(m, bytes), "encode backend fixture"); return bytes;
 }
@@ -154,7 +155,8 @@ void Messages() {
     guest.Poll(.2);
     Check(guest.Receive(out) && out == shot && !guest.Receive(out), "shot framing preserved");
   for (auto type : {MessageType::Cheats, MessageType::InventoryState, MessageType::DamageEvent, MessageType::PlayerStatus,
-                    MessageType::OwnershipChange}) {
+                    MessageType::OwnershipChange,
+      MessageType::PlayerDowned, MessageType::PlayerRevived}) {
     const auto packet = Packet(type);
     Check(host.Send(packet, true) && !host.Send(packet, false), "cheats, inventory and combat require reliable channel");
     guest.Poll(.3);

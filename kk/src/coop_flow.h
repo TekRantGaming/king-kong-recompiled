@@ -1,6 +1,7 @@
 #pragma once
 
 #include "coop_session.h"
+#include "coop_revive.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -110,6 +111,7 @@ struct FlowView {
   uint64_t completed = 0;
   ChapterPolicy policy = ChapterPolicy::Together;
   const char* status = "";
+  revive::PeerLife partner_life;
 };
 // Continuous evidence only; loading, stale poses or solo policy reset the timer.
 class BehindRule {
@@ -168,6 +170,7 @@ class SessionFlow {
     view_.policy=PolicyFor(f.level); view_.phase=FlowPhase::Loading;
     view_.status="Loading co-op. Waiting for partner..."; deadline_=now;
     local_loaded_=remote_loaded_=local_finished_=remote_finished_=false;
+    view_.partner_life = {};
   }
   bool Match(const FlowEvent& f) const { return f.generation==view_.world.generation && f.level==view_.world.level; }
   void Release() {
@@ -194,6 +197,15 @@ class SessionFlow {
       return;
     }
     if (!view_.active || view_.phase==FlowPhase::Failed) return;
+    if (IsLifeMessage(m.type)) {
+      if (view_.phase != FlowPhase::Playing || view_.policy != ChapterPolicy::Together) return;
+      if (local) {
+        if (!ValidPlayerLife(m.life) || !Match(m.life.world) || m.life.world.start != view_.world.start) return;
+        if (outgoing_.size() >= 64) { Fail("Co-op control queue full. Return to the launcher."); return; }
+        outgoing_.push_back(m);
+      } else view_.partner_life.Accept(m,view_.world,now);
+      return;
+    }
     if (m.type==MessageType::SaveChunk) {
       if (local || view_.host || view_.start_ready || m.save_chunk.offset!=view_.save.size() ||
           m.save_chunk.bytes.empty() || m.save_chunk.bytes.size()>kSaveChunkBytes ||

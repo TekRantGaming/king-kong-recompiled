@@ -89,11 +89,12 @@ void Protocol() {
       MessageType::SaveChunk, MessageType::LevelChange, MessageType::Loaded,
       MessageType::LoadRelease, MessageType::Checkpoint, MessageType::ChapterFinished,
       MessageType::ReloadRequest, MessageType::FlowAbort, MessageType::DamageEvent, MessageType::PlayerStatus,
-      MessageType::OwnershipChange};
+      MessageType::OwnershipChange,
+      MessageType::PlayerDowned, MessageType::PlayerRevived};
   for (size_t i = 0; i < types.size(); ++i) {
     const auto type = types[i];
     Check(uint16_t(type) == i+1, "protocol 8 message IDs have no collisions or gaps");
-    Check(IsFlowMessage(type) == (i >= 12 && i <= 20), "flow range excludes combat, cheats and inventory");
+    Check(IsFlowMessage(type) == ((i >= 12 && i <= 20) || i == 24 || i == 25), "flow includes life events and excludes combat");
     Message input;
     input.type = type; input.sequence = 0x12345678; input.epoch = 0x0123456789ABCDEFull;
     input.hello = Compatible(); input.reason = RejectReason::GameplayMods;
@@ -112,6 +113,7 @@ void Protocol() {
     input.damage = {{101, 1, 1}, 77, 3, enemy.id, 16388, 6, {1, 0, 0}};
     input.player_status = {{101, 1, 1}, 77, 4, 3, PlayerCondition::Hurt};
     input.ownership = {{101, 1, 1}, OwnershipPhase::Prepare, 1, EnemyOwner::Guest, enemy};
+    input.life = {input.flow,77,4,5};
     const auto bytes = Packet(input);
     Check(bytes[0] == 'K' && bytes[1] == 'K' && bytes[2] == 'C' && bytes[3] == '1', "wire magic");
     Check(bytes[4] == 0 && bytes[5] == 8 && bytes[6] == 0 && bytes[7] == i+1,

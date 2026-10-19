@@ -1,6 +1,7 @@
 // Source-only handoff. No game memory, native calls, SDK, sockets or wall clock.
 #include "coop_session.h"
 #include "coop_stimulus_debug.h"
+#include "coop_revive.h"
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
@@ -146,18 +147,34 @@ void VictimsAndLease() {
   Check(!CandidateReference(6244, 0) && !CandidateReference(6248, 1) && !CandidateReference(6244, 21), "invalid/unoccupied candidate slots refuse");
 }
 void Deaths() {
-  DeathPolicy fallback;
-  Check(fallback.Step(false, false, 1) == DeathAction::None, "living players unchanged");
-  Check(fallback.Step(true, false, 2) == DeathAction::ReloadBoth, "production lone-death C24 fallback retained");
-  Check(fallback.Step(true, true, 2) == DeathAction::ReloadBoth, "both dead reload immediately");
-  DeathPolicy future;
-  Check(future.Step(true, false, 10, true) == DeathAction::Wait && future.Step(true, false, 12.99, true) == DeathAction::Wait,
-      "an audited future revive must wait three seconds");
-  Check(future.Step(true, true, 13, true) == DeathAction::ReloadBoth, "both dead always wins over due revive");
-  Check(future.Step(false, false, 14, true) == DeathAction::None && future.Step(true, false, 20, true) == DeathAction::Wait,
-      "new death starts a fresh timer");
-  Check(future.Step(true, false, 23, true) == DeathAction::Revive, "future safe revive delay bound");
-  Check(future.Step(true, false, 1, true) == DeathAction::Wait, "clock rollback restarts timer");
+  using namespace revive;
+  Recovery r;
+  Check(r.Step(false,false,false,false,1)==Action::None,"living player never reloads for missing status");
+  Check(r.Step(true,true,false,false,10)==Action::Wait && r.Downed(),"lone death starts delay");
+  Check(r.Step(true,true,false,true,12.99)==Action::Wait,"native reset cannot shorten three seconds");
+  Check(r.Step(true,true,false,false,13)==Action::LoadLocal,"reset latch permits one private load at delay");
+  Check(r.Step(true,true,false,true,13.1)==Action::Wait,"repeated reset cannot request another load");
+  r.Loaded(); Check(r.Step(false,true,false,false,14)==Action::Place,"native load alone is not a completed revive");
+  Check(r.Downed(),"announce down until placement completes");
+  r.Placed(); Check(!r.Downed() && r.Step(false,true,false,false,15)==Action::None,"placement completes life");
+  Check(r.Step(true,true,false,true,20)==Action::Wait,"second death has independent delay");
+  Check(r.Step(true,true,true,true,23)==Action::ReloadBoth,"both dead wins exactly when revive is due");
+  r={}; r.Step(true,true,false,true,1); r.Step(true,true,false,false,4); r.Loaded();
+  Check(r.Step(false,true,true,false,5)==Action::ReloadBoth,"peer dying during private load prevents placement");
+  for (bool reset : {false,true}) {
+    r={}; Check(r.Step(true,false,false,reset,1)==Action::ReloadBoth,"away, stale, disconnected or different-level peer reloads both");
+  }
+  r={}; r.Step(true,true,false,false,1);
+  Check(r.Step(true,true,false,false,17)==Action::ReloadBoth,"missing native death completion has bounded fallback");
+  r={}; r.Step(true,true,false,true,1); r.Step(true,true,false,false,4);
+  Check(r.Step(false,true,false,false,125)==Action::ReloadBoth,"load/placement timeout cannot strand Jack");
+  r={}; r.Step(true,true,false,false,10);
+  Check(r.Step(true,true,false,false,9)==Action::ReloadBoth,"clock rollback fails closed");
+  r={}; Check(r.Step(true,true,false,true,std::numeric_limits<double>::quiet_NaN())==Action::None && !r.Downed(),"NaN cannot mutate recovery");
+  PlayerPose p; p.x=10; p.y=20; p.z=7; p.facing=0;
+  auto position=Beside(p); Check(position.x==8.5f && position.y==20 && position.z==7,"1.5 units behind at peer height");
+  p.facing=1.57079632679f; position=Beside(p);
+  Check(std::abs(position.x-10)<.001f && std::abs(position.y-18.5f)<.001f && position.z==7,"offset follows facing, not local dead camera");
 }
 struct Transport : ICoopTransport {
   Transport* peer = nullptr;
