@@ -75,7 +75,9 @@ void RotationAndBuffer() {
   Check(!buffer.Push(a,2.13),"out of order camera rejected");
   Check(!buffer.Push(b,2.13),"duplicate camera cannot refresh lease");
   Check(buffer.Sample(2.3) && Near(buffer.Sample(2.3)->x,10),"loss holds latest, no extrapolation");
-  Check(!buffer.Sample(2.61),"camera expires after half second");
+  Check(buffer.Sample(8.4) && Near(buffer.Sample(8.4)->x,10),"6.3 second frame hitch freezes last camera");
+  Check(buffer.Sample(10.1) && !buffer.Sample(10.101),"camera expires only after eight seconds");
+  Check(!buffer.Push(b,10.2) && !buffer.Sample(10.2),"duplicate cannot revive expired stream");
   Check(!buffer.Sample(1.9),"backwards local clock rejected");
   auto next=b; next.time+=.1; next.cut++; next.x=12;
   Check(buffer.Push(next,2.2) && Near(buffer.Sample(2.2)->x,12),"cut snaps without interpolating through scene");
@@ -83,6 +85,8 @@ void RotationAndBuffer() {
   Check(buffer.Push(next,2.3) && buffer.Sample(2.3)->generation==2,"same-level reload clears prior visit");
   b.time=999; Check(!buffer.Push(b,2.4),"late previous generation cannot replace camera");
   next.time+=.1; next.level=103; Check(!buffer.Push(next,2.4),"level cannot change inside same generation");
+  next.level=102; next.x=21;
+  Check(buffer.Push(next,12) && Near(buffer.Sample(12)->x,21),"resumed stream snaps across long receipt gap");
   buffer.Clear(); Check(!buffer.Sample(2.4),"disconnect clears interpolation history");
 }
 struct Transport final : ICoopTransport {
@@ -131,9 +135,28 @@ void Sessions() {
   forged.epoch=1234; forged.sequence=0;
   gt.incoming.push_back(Packet(forged)); guest.Tick(1.53);
   Check(guest.HostCamera(1.53)->x!=999,"reordered camera sequence rejected");
+  auto info=guest.CameraInfo();
+  Check(info.rejected_count>=2 && info.sequence==0 && info.accepted_sequence!=0 &&
+      std::string(info.rejection)=="old/duplicate sequence","sequence rejection diagnostics copied");
+  forged.sequence=9001; forged.camera=Pose(1.4);
+  gt.incoming.push_back(Packet(forged)); guest.Tick(1.54);
+  Check(std::string(guest.CameraInfo().rejection)=="duplicate/backwards source clock" &&
+      Near(guest.CameraInfo().accepted,info.accepted),"source clock rejection does not renew receipt lease");
   host.PublishCamera({}); host.Tick(2.1); guest.Tick(2.1); receive.Exchange(guest,2.1);
-  Check(!receive.Sample(2.1),"expired source not kept alive by worker ticks");
-  guest.End(2.2); receive.Exchange(guest,2.2); Check(!receive.Sample(2.2),"session end clears camera mailbox");
+  Check(receive.Sample(2.1).has_value(),"brief publication gap freezes last accepted camera");
+  Check(receive.Sample(7.8) && !receive.Sample(9.501),"stalled mailbox worker cannot extend packet lease");
+  for (unsigned i=43;i<=200;++i) {
+    const double now=i*.05; host.Tick(now); guest.Tick(now); receive.Exchange(guest,now);
+  }
+  Check(host.State()==SessionState::Connected && guest.State()==SessionState::Connected &&
+      !receive.Sample(10),"non-camera traffic keeps connection but cannot renew camera lease");
+  p=Pose(10.01); p.cut=2; p.scripted=true; p.skip=1; p.x=20;
+  host.PublishCamera(p); host.Tick(10.01); guest.Tick(10.01); receive.Exchange(guest,10.01);
+  sample=receive.Sample(10.01);
+  Check(sample && Near(sample->x,20),"fresh host pose automatically recovers after prolonged camera loss");
+  Check(receive.Info().accepted_count>info.accepted_count && Near(receive.Info().accepted,10.01),
+      "mailbox carries actual accepted receipt time and counters");
+  guest.End(10.02); receive.Exchange(guest,10.02); Check(!receive.Sample(10.02),"session end clears camera mailbox");
   auto disabled=Config(Role::Host); disabled.enabled=false; Transport dt; CoopSession off(disabled,dt);
   off.PublishCamera(Pose(1)); off.Tick(1); Check(!dt.poses && !dt.cuts,"co-op off emits no camera");
 }

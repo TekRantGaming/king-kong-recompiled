@@ -170,10 +170,17 @@ void SoloAndObserver() {
     for (bool guest_first : {false,true}) {
       Flows f(chapter); f.Loaded(); auto next=f.host.View().world;
       next.level=kChapterRules[size_t(chapter+1)].level; next.start=chapter+1==40 ? 49 : 1;
-      if (guest_first) { f.guest.Local(Event(MessageType::ChapterFinished,f.guest.View().world),3); Transfer(f.guest,f.host,3); }
-      f.host.Local(Event(MessageType::LevelChange,next),4); Transfer(f.host,f.guest,4);
+      if (guest_first) {
+        f.guest.Local(Event(MessageType::ChapterFinished,f.guest.View().world),3); Transfer(f.guest,f.host,3);
+        Check(f.guest.View().phase==FlowPhase::Waiting && f.host.View().phase==FlowPhase::Playing,
+            "guest first waits while unfinished host keeps playing");
+        f.guest.Tick(1000); Check(f.guest.View().phase==FlowPhase::Waiting,"guest finish wait has no load deadline");
+      }
+      const double host_finish=guest_first ? 1001 : 4;
+      f.host.Local(Event(MessageType::LevelChange,next),host_finish); Transfer(f.host,f.guest,host_finish);
       if (!guest_first) {
         Check(f.host.View().phase==FlowPhase::Waiting && f.host.View().world.level==Start(chapter).level,"first finisher waits at solo boundary");
+        Check(f.guest.View().phase==FlowPhase::Playing,"unfinished guest keeps playing when host finishes first");
         f.host.Tick(1000); Check(f.host.View().phase==FlowPhase::Waiting,"solo completion wait has no load deadline");
         f.guest.Local(Event(MessageType::ChapterFinished,f.guest.View().world),1001); Transfer(f.guest,f.host,1001); Transfer(f.host,f.guest,1001);
       }
@@ -181,9 +188,13 @@ void SoloAndObserver() {
       Check(f.host.View().policy==PolicyFor(next.level) && f.guest.View().policy==PolicyFor(next.level),
           "consecutive solo chapters remain separate until next together chapter");
       Check((f.guest.View().completed & (uint64_t(1)<<chapter))!=0,"solo completion credited only after both finish");
+      Check(f.host.View().phase==FlowPhase::Loading && f.guest.View().phase==FlowPhase::Loading &&
+          f.host.View().world.generation==2 && f.guest.View().world.generation==2,
+          "both solo finish orders enter exactly one shared load barrier");
+      f.Loaded(1002);
     }
   }
-  for (int chapter : {37,40,41}) {
+  for (int chapter : {37,40}) {
     Flows observer(chapter); observer.Loaded();
     Check(observer.guest.View().policy==ChapterPolicy::Observer,"ending guest uses observer status");
     observer.host.Local(Event(MessageType::LevelChange,{1,7,0,0}),3); Transfer(observer.host,observer.guest,3);
@@ -192,8 +203,64 @@ void SoloAndObserver() {
   }
   Flows same_level(10); same_level.Loaded(); auto restart=same_level.host.View().world; restart.start=5;
   same_level.host.Local(Event(MessageType::LevelChange,restart),3); Transfer(same_level.host,same_level.guest,3);
-  Check(same_level.guest.View().world.generation==2 && same_level.guest.View().completed==0,
-      "same-level solo transition is a load, not a chapter finish wait");
+  Check(same_level.guest.View().world.generation==1 && same_level.host.View().world.generation==1 &&
+      same_level.host.View().phase==FlowPhase::Playing && same_level.guest.View().completed==0,
+      "same-level solo retry is local, not a shared load or chapter finish");
+}
+void DeathRouting() {
+  for (size_t chapter=0;chapter<kChapterRules.size();++chapter) {
+    const auto policy=kChapterRules[chapter].policy;
+    Check(DeathRouteFor(policy)==(policy==ChapterPolicy::Together ? DeathRoute::TogetherRecovery : DeathRoute::LocalCheckpoint),
+        "every chapter routes deaths by policy, independent of hero type");
+    for (bool host_dies : {false,true}) {
+      Flows f{int(chapter)}; f.Loaded();
+      auto& dead=host_dies ? f.host : f.guest;
+      auto checkpoint=f.host.View().world; checkpoint.start=7;
+      f.host.Local(Event(MessageType::Checkpoint,checkpoint),3); Transfer(f.host,f.guest,3);
+      // The frame hook never emits this for local policy. Also exercise the
+      // worker guard against an accidental or delayed peer reload request.
+      dead.Local(Event(MessageType::ReloadRequest,dead.View().world),4);
+      if (policy!=ChapterPolicy::Together) Check(dead.Outgoing().empty(),"independent death emits no shared reload packet");
+      Transfer(f.guest,f.host,4); Transfer(f.host,f.guest,4);
+      if (policy==ChapterPolicy::Together) {
+        Check(f.host.View().world.generation==2 && f.guest.View().world.generation==2 &&
+            f.host.View().world.start==7 && f.guest.View().world.start==7,
+            "either together role retains coordinated host-checkpoint fallback");
+      } else {
+        Check(f.host.View().world.generation==1 && f.guest.View().world.generation==1 &&
+            f.host.View().phase==FlowPhase::Playing && f.guest.View().phase==FlowPhase::Playing &&
+            f.host.View().completed==0 && f.guest.View().completed==0,
+            "either independent death leaves both flow generations and phases unchanged");
+        f.host.Remote(Event(MessageType::ReloadRequest,f.host.View().world),5);
+        f.guest.Remote(Event(MessageType::ReloadRequest,f.guest.View().world),5);
+        Check(f.host.Outgoing().empty() && f.guest.Outgoing().empty() &&
+            f.host.View().world.generation==1 && f.guest.View().world.generation==1,
+            "independent policy rejects peer reloads without forwarding or generation bump");
+      }
+    }
+  }
+  for (bool guest_first : {false,true}) {
+    Flows f(10); f.Loaded();
+    auto next=f.host.View().world; next.level=401;
+    auto& first=guest_first ? f.guest : f.host;
+    first.Local(Event(guest_first ? MessageType::ChapterFinished : MessageType::LevelChange,
+        guest_first ? first.View().world : next),3);
+    Transfer(f.guest,f.host,3); Transfer(f.host,f.guest,3);
+    f.host.Local(Event(MessageType::ReloadRequest,f.host.View().world),4);
+    f.guest.Local(Event(MessageType::ReloadRequest,f.guest.View().world),4);
+    f.host.Remote(Event(MessageType::ReloadRequest,f.host.View().world),4);
+    f.guest.Remote(Event(MessageType::ReloadRequest,f.guest.View().world),4);
+    Check(first.View().phase==FlowPhase::Waiting && first.View().world.generation==1 &&
+        f.host.Outgoing().empty() && f.guest.Outgoing().empty(),
+        "local or peer deaths cannot cancel a solo finisher's wait");
+    if (guest_first) f.host.Local(Event(MessageType::LevelChange,next),5);
+    else f.guest.Local(Event(MessageType::ChapterFinished,f.guest.View().world),5);
+    Transfer(f.guest,f.host,5); Transfer(f.host,f.guest,5);
+    Check(f.host.View().world.level==401 && f.guest.View().world.level==401 &&
+        f.host.View().world.generation==2 && f.guest.View().world.generation==2,
+        "either finisher order still regroups after independent deaths");
+    f.Loaded(6);
+  }
 }
 void PoliciesAndBehind() {
   Check(kChapterRules.size()==42,"42 policy rows");
@@ -321,7 +388,7 @@ void WorkerHandoff() {
 }
 }
 int main() {
-  Codecs(); LifeObservations(); SaveTransfer(); BarriersAndFollow(); SoloAndObserver(); PoliciesAndBehind(); PersonalProgress(); WorkerHandoff();
+  Codecs(); LifeObservations(); SaveTransfer(); BarriersAndFollow(); SoloAndObserver(); DeathRouting(); PoliciesAndBehind(); PersonalProgress(); WorkerHandoff();
 #if defined(KK_DEV_TOOLS)
   PolicyOverrideTests();
 #endif

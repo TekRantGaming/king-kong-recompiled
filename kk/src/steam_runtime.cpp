@@ -739,6 +739,7 @@ bool SteamRuntime::BeginFlow(SessionStart start, std::vector<uint8_t> save) { re
 bool SteamRuntime::SubmitFlow(Message m) { return impl_->flow.Submit(std::move(m)); }
 void SteamRuntime::PublishCamera(std::optional<CameraPose> camera) { impl_->camera.Publish(std::move(camera)); }
 std::optional<CameraPose> SteamRuntime::HostCamera(double now) const { return impl_->camera.Sample(now); }
+CameraDiagnostics SteamRuntime::CameraInfo() const { return impl_->camera.Info(); }
 FlowView SteamRuntime::FlowSnapshot() const { return impl_->flow.Snapshot(); }
 std::vector<ReceivedShot> SteamRuntime::TakeShots() { return impl_->shots.Take(); }
 bool SteamRuntime::SubmitCombat(Message m, double now) { return impl_->combat.Submit(std::move(m), now); }

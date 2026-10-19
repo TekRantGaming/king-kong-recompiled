@@ -75,6 +75,7 @@ class CoopSession {
   std::optional<CameraPose> HostCamera(double now) const {
     return state_==SessionState::Connected && config_.role==Role::Guest ? cameras_.Sample(now) : std::nullopt;
   }
+  CameraDiagnostics CameraInfo() const { return camera_info_; }
  private:
   void Transition(SessionState state);
   bool Send(Message message, bool reliable);
@@ -116,6 +117,7 @@ class CoopSession {
   std::vector<Message> incoming_story_;
   std::optional<CameraPose> local_camera_, sent_camera_cut_;
   CameraBuffer cameras_;
+  CameraDiagnostics camera_info_;
   double last_camera_=-1;
   uint32_t camera_sequence_=0;
   bool camera_seen_=false;
@@ -200,11 +202,14 @@ class CameraMailbox {
   }
   std::optional<CameraPose> Sample(double now) const {
     std::lock_guard lock(mutex_);
-    return now>=updated_ && now-updated_<=.25 ? remote_ : std::nullopt;
+    return now>=updated_ && info_.accepted>=0 && now>=info_.accepted &&
+        now-info_.accepted<=kCameraExpirySeconds ? remote_ : std::nullopt;
   }
-  void Clear() { std::lock_guard lock(mutex_); local_.reset(); remote_.reset(); }
+  CameraDiagnostics Info() const { std::lock_guard lock(mutex_); return info_; }
+  void Clear() { std::lock_guard lock(mutex_); local_.reset(); remote_.reset(); info_={}; }
   void Exchange(CoopSession& session,double now) {
     std::lock_guard lock(mutex_);
+    info_=session.CameraInfo();
     if (session.State()!=SessionState::Connected) { local_.reset(); remote_.reset(); return; }
     session.PublishCamera(local_ && now>=local_->time && now-local_->time<=.25 ? local_ : std::nullopt);
     remote_=session.HostCamera(now); updated_=now;
@@ -213,6 +218,7 @@ class CameraMailbox {
   mutable std::mutex mutex_;
   std::optional<CameraPose> local_,remote_;
   double updated_=0;
+  CameraDiagnostics info_;
 };
 // Same bounded value-only handoff for UDP and Steam. Epoch checked again by the
 // session before sending, so old work cannot leak into a replacement connection.

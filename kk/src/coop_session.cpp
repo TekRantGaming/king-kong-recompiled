@@ -89,6 +89,11 @@ bool CoopSession::Send(Message m, bool reliable) {
   return true;
 }
 void CoopSession::Receive(const Message& m, double now) {
+  const bool camera=m.type==MessageType::CameraPose || m.type==MessageType::CameraCut;
+  auto reject_camera=[&](const char* why) {
+    ++camera_info_.rejected_count; camera_info_.rejected_at=now; camera_info_.rejection=why;
+  };
+  if (camera) { camera_info_.received=now; camera_info_.sequence=m.sequence; }
   if (m.type == MessageType::Hello && state_ == SessionState::Connecting) {
     rejection_ = m.protocol != m.hello.protocol ? RejectReason::Protocol :
         CheckCompatibility(config_.compatibility, m.hello);
@@ -107,11 +112,17 @@ void CoopSession::Receive(const Message& m, double now) {
     if (m.epoch != epoch_ || !epoch_) return;
     rejection_ = m.reason; Transition(SessionState::Ended); return;
   } else {
-    if (!epoch_ || m.epoch != epoch_ || m.protocol != config_.compatibility.protocol) return;
+    if (!epoch_ || m.epoch != epoch_ || m.protocol != config_.compatibility.protocol) {
+      if (camera) reject_camera("wrong epoch/protocol");
+      return;
+    }
     if (m.type == MessageType::HelloAck && state_ == SessionState::Connecting) {
       ack_seen_ = true;
     } else {
-      if (state_ != SessionState::Connected && state_ != SessionState::Lost) return;
+      if (state_ != SessionState::Connected && state_ != SessionState::Lost) {
+        if (camera) reject_camera("session not connected");
+        return;
+      }
       switch (m.type) {
         case MessageType::StoryEvent: case MessageType::TriggerRequest:
           if (state_!=SessionState::Connected || StorySender(m.type,config_.role)) return;
@@ -122,9 +133,14 @@ void CoopSession::Receive(const Message& m, double now) {
           if (incoming_ownership_.size() >= kMaxEnemies*2) { End(now); return; }
           incoming_ownership_.push_back(m); break;
         case MessageType::CameraPose: case MessageType::CameraCut:
-          if (config_.role!=Role::Guest || state_!=SessionState::Connected ||
-              (camera_seen_ && int32_t(m.sequence-camera_sequence_)<=0)) return;
-          if (!cameras_.Push(m.camera,now)) return;
+          if (config_.role!=Role::Guest || state_!=SessionState::Connected) {
+            reject_camera("wrong role/session state"); return;
+          }
+          if (camera_seen_ && int32_t(m.sequence-camera_sequence_)<=0) {
+            reject_camera("old/duplicate sequence"); return;
+          }
+          if (!cameras_.Push(m.camera,now)) { reject_camera(cameras_.Rejection()); return; }
+          ++camera_info_.accepted_count; camera_info_.accepted=now; camera_info_.accepted_sequence=m.sequence;
           camera_seen_=true; camera_sequence_=m.sequence; break;
         case MessageType::DamageEvent: case MessageType::PlayerStatus:
           if (state_ != SessionState::Connected ||
