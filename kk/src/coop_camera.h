@@ -9,6 +9,15 @@
 namespace kk::coop {
 // Pure camera math/buffering, shared by transport, native integration and tests.
 using CameraAxes = std::array<std::array<float,3>,3>;
+// Freeze through chapter-start/render hitches; receipt time, never host clock,
+// owns the lease. A repeated source timestamp cannot renew it.
+inline constexpr double kCameraExpirySeconds=8.0;
+struct CameraDiagnostics {
+  double received=-1, accepted=-1, rejected_at=-1;
+  uint32_t sequence=0, accepted_sequence=0;
+  uint64_t accepted_count=0, rejected_count=0;
+  const char* rejection="none";
+};
 inline float CameraDot(const CameraPose& a,const CameraPose& b) {
   return a.qx*b.qx+a.qy*b.qy+a.qz*b.qz+a.qw*b.qw;
 }
@@ -64,18 +73,26 @@ inline CameraPose BlendCamera(const CameraPose& a,const CameraPose& b,float t) {
 class CameraBuffer {
  public:
   bool Push(CameraPose p,double received) {
-    if (!ValidCameraPose(p) || !std::isfinite(received)) return false;
+    auto reject=[&](const char* why) { rejection_=why; return false; };
+    if (!ValidCameraPose(p) || !std::isfinite(received)) return reject("invalid pose/receipt clock");
     if (!poses_.empty()) {
       const auto& last=poses_.back().pose;
-      if (p.generation<last.generation || (p.generation==last.generation &&
-          (p.level!=last.level || p.time<=last.time || p.cut<last.cut || p.skip<last.skip))) return false;
-      if (p.generation!=last.generation || p.cut!=last.cut || p.scripted!=last.scripted ||
+      if (received<poses_.back().received) return reject("receipt clock went backwards");
+      if (p.generation<last.generation) return reject("old generation");
+      if (p.generation==last.generation) {
+        if (p.level!=last.level) return reject("level changed within generation");
+        if (p.time<=last.time) return reject("duplicate/backwards source clock");
+        if (p.cut<last.cut || p.skip<last.skip) return reject("cut/skip went backwards");
+      }
+      if (received-poses_.back().received>.5 ||
+          p.generation!=last.generation || p.cut!=last.cut || p.scripted!=last.scripted ||
           std::hypot(p.x-last.x,p.y-last.y,p.z-last.z)>25) poses_.clear();
     }
     poses_.push_back({p,received}); while (poses_.size()>32) poses_.pop_front(); return true;
   }
   std::optional<CameraPose> Sample(double now) const {
-    if (poses_.empty() || !std::isfinite(now) || now<poses_.back().received || now-poses_.back().received>.5) return {};
+    if (poses_.empty() || !std::isfinite(now) || now<poses_.back().received ||
+        now-poses_.back().received>kCameraExpirySeconds) return {};
     const auto& last=poses_.back();
     const double target=last.pose.time+(now-last.received)-.075;
     if (target<=poses_.front().pose.time) return poses_.front().pose;
@@ -86,7 +103,9 @@ class CameraBuffer {
     return last.pose; // Hold through loss, never extrapolate a camera through geometry.
   }
   void Clear() { poses_.clear(); }
+  const char* Rejection() const { return rejection_; }
  private:
+  const char* rejection_="none";
   struct Entry { CameraPose pose; double received; };
   std::deque<Entry> poses_;
 };

@@ -179,6 +179,7 @@ class Service {
   void ClearOwnership() { ownership_.Clear(); }
   void PublishCamera(std::optional<CameraPose> camera) { camera_.Publish(std::move(camera)); }
   std::optional<CameraPose> HostCamera(double now) const { return camera_.Sample(now); }
+  CameraDiagnostics CameraInfo() const { return camera_.Info(); }
   bool BeginFlow(SessionStart start, std::vector<uint8_t> save) { return flow_.Begin(start, std::move(save)); }
   bool SubmitFlow(Message m) { return flow_.Submit(std::move(m)); }
   FlowView FlowSnapshot() const { return flow_.Snapshot(); }
@@ -526,6 +527,13 @@ bool CameraConnectionReady() {
   if (!REXCVAR_GET(kk_coop_enabled)) return false;
   const auto v=CurrentView();
   return v.state==SessionState::Connected && Now()-v.updated<=.5;
+}
+CameraDiagnostics HostCameraDiagnostics() {
+  if (!REXCVAR_GET(kk_coop_enabled)) return {};
+#if defined(KK_DEV_TOOLS)
+  if (service.Running()) return service.CameraInfo();
+#endif
+  return steam ? steam->CameraInfo() : CameraDiagnostics{};
 }
 void CreateOverlay(rex::ui::ImGuiDrawer* drawer) {
   if (REXCVAR_GET(kk_coop_enabled)) new PartnerOverlay(drawer);

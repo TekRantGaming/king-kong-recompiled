@@ -90,6 +90,8 @@ FlowView Wait(uint32_t generation, bool load_barrier) {
       REXLOG_INFO("KK co-op flow: chapter finished role={} generation {} level {}; waiting for partner to finish",
           v.host ? "host" : "guest",generation,v.world.level);
     }
+    if (!load_barrier && v.phase==FlowPhase::Playing && !v.host &&
+        v.policy==ChapterPolicy::Observer && !observer::HoldWorld()) return v;
     const bool chapter_wait=v.phase==FlowPhase::Waiting || (v.policy==ChapterPolicy::Observer && !v.host && v.phase==FlowPhase::Playing);
     if (Now()>=until && !chapter_wait) { Send(MessageType::FlowAbort,v.world); return v; }
     if (Now()>=paint) { RequestUiPaint(); paint=Now()+.1; }

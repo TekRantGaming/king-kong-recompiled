@@ -23,6 +23,8 @@ std::atomic<const char*> status{"Observer: waiting for host camera."};
 uint32_t generation=0, normal_matrix=0, normal_actor=0, parked_actor=0, parked_matrix=0;
 uint32_t local_checkpoint=0;
 double began=0,last_camera=0,normal_time=0,mismatch_since=0,checkpoint_mismatch=0,skip_until=0;
+double camera_timeout_since=0,host_capture_time=0;
+const char* host_capture_reason="no scene view";
 std::optional<CameraPose> host_previous,remote;
 uint32_t cut=1,skip=0,consumed_skip=0;
 bool start_down=false,local_scripted=false,parked=false;
@@ -51,6 +53,7 @@ void Reset() {
   parked=false; host_previous.reset(); remote.reset(); cut=1; skip=consumed_skip=0;
   start_down=false; local_scripted=false; mismatch_since=skip_until=0; failed=false; observing=false; screen=true;
   began=Now(); last_camera=0; checkpoint_mismatch=0; status="Observer: waiting for host camera.";
+  camera_timeout_since=host_capture_time=0; host_capture_reason="no scene view";
 }
 }
 void SetPartnerSpectating(bool enabled) {
@@ -62,16 +65,37 @@ void Checkpoint(uint32_t level,uint32_t checkpoint) {
   const auto v=SessionFlowSnapshot();
   if (!v.host && v.policy==ChapterPolicy::Observer && v.world.level==level) local_checkpoint=checkpoint;
 }
-bool HoldWorld() { return observing && failed; }
+bool HoldWorld() {
+  // The load-boundary wait polls here even when no native GameFrame can run.
+  // Only packet expiry is recoverable; script/movie/parking failures stay held.
+  if (observing && failed && camera_timeout_since && CameraConnectionReady()) {
+    const auto v=SessionFlowSnapshot();
+    const auto p=HostCameraSnapshot(Now());
+    const auto info=HostCameraDiagnostics();
+    if (v.active && !v.host && v.phase==FlowPhase::Playing && v.world.generation==generation && p &&
+        p->generation==generation && p->level==v.world.level && info.accepted>camera_timeout_since) {
+      remote=p; last_camera=info.accepted; camera_timeout_since=0; mismatch_since=0;
+      failed=false; screen=false; status=p->paused ? "Watching host. Host is paused." : "Watching host.";
+      REXLOG_INFO("KK co-op observer: host camera recovered, generation {} sequence {}",generation,info.accepted_sequence);
+    }
+  }
+  return observing && failed;
+}
 bool StatusScreen() { return screen.load(); }
 bool Active() { return observing.load(); }
 const char* Status() { return status.load(); }
 bool SuppressLook() { return REXCVAR_GET(kk_coop_enabled) && observing.load(); }
 bool HideWeapon() { return SuppressLook(); }
 void Fallback(const char* why) {
-  if (!observing || failed.exchange(true)) return;
+  const bool was_timeout=camera_timeout_since!=0;
+  camera_timeout_since=0;
+  if (!observing || (failed.exchange(true) && !was_timeout)) return;
   screen=true; status="Observer view unavailable. Following host progress.";
-  REXLOG_WARN("KK co-op observer: status fallback, generation {}: {}",generation,why);
+  const auto info=HostCameraDiagnostics(); const double now=Now();
+  REXLOG_WARN("KK co-op observer: status fallback, generation {}: {} packet-age={:.3f}s accepted-age={:.3f}s sequence={}/{} accepted={} rejected={} last-reject={} reject-age={:.3f}s",
+      generation,why,info.received>=0 ? now-info.received : -1,info.accepted>=0 ? now-info.accepted : -1,
+      info.sequence,info.accepted_sequence,info.accepted_count,info.rejected_count,info.rejection,
+      info.rejected_at>=0 ? now-info.rejected_at : -1);
 }
 void GameFrame(uint8_t* b) {
   const auto v=SessionFlowSnapshot();
@@ -90,12 +114,13 @@ void GameFrame(uint8_t* b) {
   if (wanted && !observing) {
     // Re-entering a temporary downed view starts a new lease, even in the same chapter.
     failed=false; began=Now(); last_camera=0; mismatch_since=0; remote.reset();
+    camera_timeout_since=0;
     REXLOG_INFO("KK co-op observer: camera follow enabled, generation {} level {} temporary={}",
         generation,v.world.level,temporary.load());
   }
   observing=wanted;
   if (!observing) { screen=false; return; }
-  if (failed) return;
+  if (failed && HoldWorld()) return;
   if (!b || !World(b,v) || play::StartLevelLoading() || play::CoverScreen()) return;
   // Native movie playback is a separate presentation path. Its scene matrix
   // cannot establish matching movie identity or playback time on the guest.
@@ -117,12 +142,14 @@ void GameFrame(uint8_t* b) {
       REXLOG_INFO("KK co-op observer: host camera acquired, generation {} level {} cut {}",
           generation,remote->level,remote->cut);
     }
-    last_camera=Now();
+    last_camera=HostCameraDiagnostics().accepted;
     if (!failed) { screen=false; status=remote->paused ? "Watching host. Host is paused." : "Watching host."; }
   } else {
     remote.reset(); screen=true; status="Observer: waiting for host camera.";
-    if (Now()-(last_camera ? last_camera : began)>(last_camera ? 2.0 : 8.0))
+    if (Now()-(last_camera>0 ? last_camera : began)>kCameraExpirySeconds) {
       Fallback("Observer unavailable: host camera expired or no scene camera in this chapter.");
+      camera_timeout_since=Now();
+    }
   }
 }
 void NormalCamera(const uint8_t* b,uint32_t actor,uint32_t caller) {
@@ -139,6 +166,9 @@ bool View(uint8_t* b,uint32_t view,uint32_t caller,std::array<uint8_t,68>& saved
   if (play::PauseMenuOpen() || play::GamePausePageUp()) return false;
   local_scripted=!NormalView(b,view) || Movie(b);
   if (v.host) {
+    // Other scene passes must never invalidate the opaque camera publication.
+    if (caller!=0x8287390C) return false;
+    if (photo::Active() || freecam::Active()) { host_capture_reason="photo/free camera"; return false; }
     CameraPose p; p.generation=v.world.generation; p.level=v.world.level; p.time=Now();
     p.x=hfr::LoadF(b,view+48); p.y=hfr::LoadF(b,view+52); p.z=hfr::LoadF(b,view+56);
     p.fov=hfr::LoadF(b,view+172);
@@ -146,21 +176,32 @@ bool View(uint8_t* b,uint32_t view,uint32_t caller,std::array<uint8_t,68>& saved
     p.scripted=local_scripted; p.skip=skip;
     CameraAxes axes{};
     for (unsigned i=0;i<3;++i) for (unsigned j=0;j<3;++j) axes[i][j]=hfr::LoadF(b,view+16*i+4*j);
-    if (!CameraRotation(p,axes)) { PublishHostCamera({}); return false; }
+    if (!CameraRotation(p,axes)) { host_capture_reason="invalid scene rotation"; return false; }
     // Capture just the opaque scene setup, before free/photo camera and aspect widening.
-    if (caller!=0x8287390C || photo::Active() || freecam::Active()) return false;
     if (host_previous && (p.scripted!=host_previous->scripted ||
         std::hypot(p.x-host_previous->x,p.y-host_previous->y,p.z-host_previous->z)>10 ||
         std::abs(CameraDot(p,*host_previous))<.5f)) ++cut;
     p.cut=cut;
-    if (ValidCameraPose(p)) { host_previous=p; PublishHostCamera(p); }
+    if (ValidCameraPose(p)) {
+      if (host_capture_time && p.time-host_capture_time>.5)
+        REXLOG_INFO("KK co-op observer: host capture resumed after {:.3f}s, previous={} caller={:08X}",
+            p.time-host_capture_time,host_capture_reason,caller);
+      host_capture_time=p.time; host_capture_reason="scene capture/frame gap";
+      host_previous=p; PublishHostCamera(p);
+    } else host_capture_reason="invalid scene pose/lens";
     return false;
   }
   if (!observing || failed || !remote || remote->generation!=v.world.generation || remote->level!=v.world.level ||
       play::PauseMenuOpen() || play::GamePausePageUp()) return false;
   // Local script cameras must enter/leave naturally from the same load. A stream
   // cannot repair a divergent script world. Do not invoke an arbitrary script from wire.
-  if (!temporary && !remote->paused && caller==0x8287390C) {
+  // A frozen stream cannot track a still-running local cutscene. Resume the
+  // divergence grace period when fresh packets return, rather than latching a
+  // script failure solely because the host's render thread hitched.
+  const auto info=HostCameraDiagnostics();
+  const bool fresh=info.accepted>=0 && Now()-info.accepted<=.5;
+  if (!fresh) mismatch_since=0;
+  if (!temporary && fresh && !remote->paused && caller==0x8287390C) {
     bool diverged=local_scripted!=remote->scripted;
     if (local_scripted && remote->scripted) {
       CameraPose local;
