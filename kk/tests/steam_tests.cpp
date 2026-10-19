@@ -102,6 +102,9 @@ void Social() {
 }
 std::vector<uint8_t> Packet(MessageType type) {
   Message m; m.type = type; m.hello = Compatible();
+  EnemyState enemy{{123, 0, EnemyFamily::Raptor}, 1, 2, 3, 0, 50};
+  m.enemies = {{303, 3, 1}, 1, {enemy}};
+  m.enemy_event = {{303, 3, 1}, EnemyEventKind::Spawned, enemy};
   std::vector<uint8_t> bytes; Check(Encode(m, bytes), "encode backend fixture"); return bytes;
 }
 struct Backend final : ISteamMessagesBackend {
@@ -136,6 +139,11 @@ void Messages() {
   guest.Poll(0);
   std::vector<uint8_t> out;
   Check(guest.Receive(out) && out == hello && guest.Receive(out) && out == pose && !guest.Receive(out), "framing preserved");
+  const auto enemies = Packet(MessageType::EnemySnapshot), event = Packet(MessageType::EnemyEvent);
+  Check(host.Send(enemies, false) && host.Send(event, true), "enemy snapshot/event channels accepted");
+  Check(!host.Send(enemies, true) && !host.Send(event, false), "enemy channel misuse rejected");
+  guest.Poll(.1);
+  Check(guest.Receive(out) && out == event && guest.Receive(out) && out == enemies && !guest.Receive(out), "enemy transport framing preserved");
   b.incoming.push_back({3, 0, true, false, hello});
   b.incoming.push_back({1, 0, true, true, {}});
   b.incoming.push_back({1, 0, true, false, {1, 2, 3}});

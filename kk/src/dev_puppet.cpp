@@ -37,7 +37,6 @@
 #include "settings.h"
 
 REX_EXTERN(__imp__sub_8268D8E8);
-REX_EXTERN(__imp__sub_8271CCB8);
 REX_EXTERN(__imp__sub_827117E0);
 REX_EXTERN(__imp__sub_82711278);
 REX_EXTERN(__imp__sub_82401AA8);
@@ -1191,9 +1190,6 @@ REX_HOOK_RAW(sub_8268D8E8) {
   const uint32_t ai = on ? kk::hfr::Load32(base, 0x82CCBF64) : 0;
   __imp__sub_8268D8E8(ctx, base);
   if (on) kk::PuppetObserveInit(base, actor, ai);
-}
-REX_HOOK_RAW(sub_8271CCB8) {
-  if (!kk::PuppetHold(ctx, base)) __imp__sub_8271CCB8(ctx, base);
 }
 REX_HOOK_RAW(sub_826EB8C0) {
   const bool on = kk::Enabled() && kk::Opt().spawn;

@@ -6,7 +6,7 @@ namespace {
 bool Valid(std::span<const uint8_t> bytes, bool reliable) {
   Message message;
   if (bytes.size() > kMaxPacketBytes || !Decode(bytes, message)) return false;
-  if (message.type == MessageType::PlayerPose) return !reliable;
+  if (message.type == MessageType::PlayerPose || message.type == MessageType::EnemySnapshot) return !reliable;
   // C03 intentionally sends Ping/Pong unreliably. Preserve that existing transport contract.
   if (message.type == MessageType::Ping || message.type == MessageType::Pong) return true;
   return reliable;
