@@ -97,6 +97,11 @@ void GameFrame(uint8_t* b) {
   if (!observing) { screen=false; return; }
   if (failed) return;
   if (!b || !World(b,v) || play::StartLevelLoading() || play::CoverScreen()) return;
+  // Native movie playback is a separate presentation path. Its scene matrix
+  // cannot establish matching movie identity or playback time on the guest.
+  if (!temporary && Movie(b)) {
+    Fallback("Observer unavailable: movie playback has no validated host start/skip synchronization."); return;
+  }
   const bool menu=play::PauseMenuOpen() || play::GamePausePageUp();
   if (menu) mismatch_since=checkpoint_mismatch=0;
   if (!menu && !temporary && v.checkpoint!=local_checkpoint) {
