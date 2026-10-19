@@ -21,6 +21,18 @@
      machine gun comes back (log "apply again as set").
   5. Continue / launcher Continue into 303 from a save: no cheat weapon. Launcher Settings > Cheats: not greyed.
 
+## Task 252 game check (19 Oct, kk-dev-vulkan + one D3D12 run; runs\claude-252-*; runner runs\claude-252-tools)
+- PASS entry 7 + MG (Vulkan and D3D12): loadout weapon 1 ammo 5/0/0/0 (no MG), suppression line, pause > Cheats
+  four weapon rows greyed + "Not available in this chapter.", Revolver can't be switched on (a/right: stays
+  false), other rows normal. FIX: a greyed row showed "On" when chosen; now shows "Off" (launcher.cpp, setting kept).
+- PASS Load last checkpoint in 303 (menu open, then "checkpoint" step): still weapon 1 ammo 5, no "given again".
+- PASS entries 6 and 8 + MG: given at start as before (302 starts with an empty loadout, MG gone until a loadout
+  arrives: same in the base build); 305: MG + "given again" line, no suppression line.
+- OPEN story 302 -> 303: dev jump (KK_DEV_START_END=25 + KK_DEV_VRAM_TOUR=1, MG set in play) kept weapon 2
+  ammo 500 in 303 (the jump skips the game's end-of-chapter flow). Player log 013 (real transition): 303 start
+  had weapon 2 ammo 0/0/0/0 before our re-give, i.e. the game empties ammo but keeps weapon id 2. So with 251 a
+  real story player has no cheat ammo in 303; the dev-jump path does keep it. A real end-of-302 run is not done.
+
 ## Result of task 224 (18 Oct 21:25)
 - Stall = raptor 1 (42657DD0) right after waking stops in PNJ_Raptor_ETAT_VALA (sub_825E06B0) on the ledge
   (214.6,73.1,-1.0): path list (+7028, count +6776) keeps being rebuilt 1 <-> 9 waypoints, next waypoint

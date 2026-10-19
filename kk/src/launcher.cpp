@@ -2467,7 +2467,10 @@ class SettingsPages {
       // In game, a cheat this chapter switches off (cheat_rules.h; the Hayes chapter's weapon cheats, owner
       // 19 Oct) is greyed in place and can't be switched on; its setting is kept for the other chapters.
       Disable(it, !on, "Switch Cheats on to use it.");
-      Disable(it, in_game_ && kk::CheatSuppressedNow(cheat.id), kk::cheat_rules::kNotInThisChapter);
+      if (in_game_ && kk::CheatSuppressedNow(cheat.id)) {
+        Disable(it, true, kk::cheat_rules::kNotInThisChapter);
+        it.index = 0;  // shows "Off": it is off here (task 252); kk_cheat_<id> itself is unchanged
+      }
       items.push_back(std::move(it));
     }
     return items;
