@@ -56,19 +56,18 @@ REXCVAR_DEFINE_BOOL(native_validation, false, "Native renderer",
                     "Wrap the NVRHI device in NVRHI's validation layer (slow; for debugging)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-// Task 300: D3D12 allocation cost, built off (today's behaviour). Proposed for Craig after a game check:
-// native_d3d12_placed_textures true, native_d3d12_upload_chunk_kib 4096. Vulkan ignores both.
-REXCVAR_DEFINE_BOOL(native_d3d12_placed_textures, false, "Native renderer",
+// Task 300/304: D3D12 allocation cost. On by default (owner, 19 Oct). Vulkan ignores both.
+REXCVAR_DEFINE_BOOL(native_d3d12_placed_textures, true, "Native renderer",
                     "D3D12: place sampled-only textures in pooled 64 MiB heaps instead of one committed resource "
                     "each (task 300; about 10x less CPU per texture made or released; false = before task 300)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_INT32(native_d3d12_upload_chunk_kib, 0, "Native renderer",
+REXCVAR_DEFINE_INT32(native_d3d12_upload_chunk_kib, 4096, "Native renderer",
                      "D3D12: smallest upload buffer chunk in KiB, made without OS zeroing (task 300; 0 = NVRHI's "
                      "64 KiB, so every larger texture upload made a new upload buffer: before task 300)")
     .range(0, 65536).lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
-// Task 309: built off (today's behaviour). Proposed for Craig after the game check: true. Vulkan ignores it.
-REXCVAR_DEFINE_BOOL(native_d3d12_buffer_pool, false, "Native renderer",
+// Task 309: on by default (owner, 19 Oct). Vulkan ignores it.
+REXCVAR_DEFINE_BOOL(native_d3d12_buffer_pool, true, "Native renderer",
                     "D3D12: guest vertex and index buffers share large 32 MiB buffers instead of one committed "
                     "resource each (task 309; false = before task 309)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
@@ -234,20 +233,19 @@ REXCVAR_DEFINE_DOUBLE(native_pipeline_must_wait_ms, 4.0, "Native renderer",
                       "of draws later draws depend on (depth-only, stencil, screen-space) before those are skipped "
                       "too (task 267; -1: no limit, the old behaviour)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-// Task 280: built with the pre-280 defaults (owner rule: behaviour-changing defaults ship off). Proposed for
-// Craig: native_chapter_preload_mib 256 and native_chapter_trickle_mib 8 (REPORT-280: chapter-start texture
-// time e.g. entry 8 D3D12 111 -> 46 ms over frames 1-10).
-REXCVAR_DEFINE_INT32(native_chapter_preload_mib, 64, "Native renderer",
+// Task 280: 256 MiB preload + 8 MiB/frame trickle, on by default (owner, 19 Oct; REPORT-280: chapter-start
+// texture time e.g. entry 8 D3D12 111 -> 46 ms over frames 1-10). 64 / 0 = before task 280.
+REXCVAR_DEFINE_INT32(native_chapter_preload_mib, 256, "Native renderer",
                      "MiB of a chapter's listed textures and buffers prepared before their first draw, on the loading "
                      "screen and in the trickle (task 280; 64 = before task 280; GPU memory pressure keeps 64)")
     .range(64, 1024).lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_INT32(native_chapter_trickle_mib, 0, "Native renderer",
+REXCVAR_DEFINE_INT32(native_chapter_trickle_mib, 8, "Native renderer",
                      "After a loading screen, MiB per frame of the chapter's listed resources not yet on the GPU "
                      "prepared ahead of their first draw, for 10 s (task 280; 0 = off, before task 280)")
     .range(0, 32).lifecycle(rex::cvar::Lifecycle::kInitOnly);
-// Task 276: built with today's behaviour (owner rule: behaviour-changing defaults ship off). Proposed for
-// Craig: native_pipeline_level_first true; native_pipeline_play_workers -1 (auto) pending a slow-CPU test.
-REXCVAR_DEFINE_BOOL(native_pipeline_level_first, false, "Native renderer",
+// Task 276/279: level_first on by default (owner, 19 Oct). native_pipeline_play_workers stays 0 until it is tested
+// on a slow CPU (owner, 19 Oct).
+REXCVAR_DEFINE_BOOL(native_pipeline_level_first, true, "Native renderer",
                     "When a level loads, prepare the listed pipelines tagged with that level before the rest of "
                     "the list (task 276; false: list order). New pipelines are tagged with their level either way")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);

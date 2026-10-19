@@ -129,8 +129,8 @@ REXCVAR_DEFINE_BOOL(kk_invert_ls_y, false, "KK/Controls", "Invert left stick ver
 REXCVAR_DEFINE_STRING(kk_original_look_keep, "", "KK/Debug",
                       "Settings (comma-separated cvar names) the Original look leaves as given, e.g. "
                       "ao_mode,ao_strength,kk_frame_rate (testing)");
-// Task 295: proposed default 1 for Craig to decide (REPORT-295); stays 0 (today's behaviour) until he says so.
-REXCVAR_DEFINE_INT32(kk_cpu_priority, 0, "KK/Performance",
+// Task 295: default 1 (owner, 19 Oct; REPORT-295).
+REXCVAR_DEFINE_INT32(kk_cpu_priority, 1, "KK/Performance",
                      "Favour the game's own threads when other programs load the CPU (task 295): 0 off (before), "
                      "1 game/render/vsync/audio threads above normal, 2 also Windows' multimedia scheduler (MMCSS "
                      "Games/Audio), 3 also the process above normal")

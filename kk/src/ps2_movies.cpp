@@ -54,8 +54,8 @@
 
 // Task 293 (REPORT-269's idea): at a story chapter boundary, load the next level while the PS2 cutscene plays
 // instead of after it (removes the game's LOADING screen after the clip). Off: the loader waits for the clip
-// first, as before. Proposed default for Craig: see REPORT-293 (pending a game check of clip smoothness).
-REXCVAR_DEFINE_BOOL(kk_ps2_cutscene_load_during, false, "KK/Gameplay",
+// first, as before. On by default (owner, 19 Oct; REPORT-294: all game checks passed).
+REXCVAR_DEFINE_BOOL(kk_ps2_cutscene_load_during, true, "KK/Gameplay",
                     "Load the next chapter while its PS2 cutscene plays (task 293; off: after the cutscene, as before). "
                     "The game's own sound is held silent until the cutscene ends");
 // The SDK's live mute (its audio callback reads it every buffer): the game's sound while the level loads under
