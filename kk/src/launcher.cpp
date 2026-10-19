@@ -3898,6 +3898,16 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       ui::Cue(ui::Sound::kDeny);
       return;
     }
+    const auto lobby=coop::Social().Snapshot();
+    if (lobby.lobby && lobby.members.size()==2) {
+      if (request.kind!=play::StartKind::kContinue && request.kind!=play::StartKind::kChapter) {
+        OpenModal("Co-op", "Choose Continue or Chapter select for co-op.", {"OK"}, 0, {});
+        return;
+      }
+      coop::SelectSessionStart(request);
+      OpenModal("Co-op", "Chapter selected. Open Social and press Start when both players are Ready.", {"OK"}, 0, {});
+      return;
+    }
     play::SetStartRequest(request);
     REXLOG_INFO("KK: Play menu: start kind {} slot {} chapter {}", int(request.kind), request.slot, request.chapter);
     Play();
@@ -4203,6 +4213,8 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     // The page's own buttons, on the focused row (last frame's): on Load game X deletes and Y opens
     // Chapter select with that save; on Chapter select Y changes the save.
     const int row = st.focus >= 0 && st.focus < int(row_data_.size()) ? row_data_[size_t(st.focus)] : -1;
+    if (play_==PlayView::kChapters && row>=0)
+      coop::SelectSessionStart({play::StartKind::kChapter,ChapterSlot(),row,{}});
     if (!PageInputBlocked() && play_ == PlayView::kLoad && SlotUsed(row)) {
       if (input_.Pressed(Action::kDefault)) {
         input_.Consume(Action::kDefault);
@@ -6269,6 +6281,20 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       needs_restart = true;
     }
     FlushProfileOptions();
+    if (coop::SessionInProcess()) {
+      // A live peer and its worker cannot survive a restart. SessionStart is
+      // consumed in-process; new-device settings take effect on the next run.
+      if (needs_restart) for (size_t i=0;i<std::size(kRestartCvars);++i) {
+        if (Get(kRestartCvars[i])==restart_baseline_[i]) continue;
+        if (std::string_view(kRestartCvars[i])=="native_upscaler" &&
+            !UpscalerNeedsNewDevice(restart_baseline_[i],Get("native_upscaler"))) continue;
+        // The existing transient-setting overlay retains the user's saved
+        // choice while this process keeps the configuration of its live device.
+        SetModSetting(kRestartCvars[i],restart_baseline_[i]);
+      }
+      needs_restart=false;
+      paths_.user_dir=coop::SessionUserDir(paths_.user_dir);
+    }
     auto action = benchmark_pending_ ? cb_.benchmark : needs_restart ? cb_.restart_and_play : cb_.play;
     // The pause menu for the game about to start (the app makes it too when the launcher is skipped).
     if (!needs_restart && !benchmark_pending_) CreatePauseMenu(imgui_drawer(), immediate_, paths_.config_path, paths_.user_dir, paths_.game_dir);
@@ -7254,6 +7280,10 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
   // runs from the heartbeat while nothing is drawn (task 173), so a minimised launcher's setup goes on.
   void TickState() {
     const double now = ImGui::GetTime();
+    if (!played_ && !InSetup() && !ShaderScreen() && CanPlay()) {
+      play::StartRequest launch;
+      if (coop::TakeSessionLaunch(launch)) { play::SetStartRequest(launch); Play(); return; }
+    }
 #if defined(KK_DEV_TOOLS)
     DevNotifyTest();
 #endif
@@ -7535,6 +7565,14 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
     std::string t = steps[next++];
     at = now + 0.45;
     REXLOG_INFO("KK dev: input {}", t);
+    // Same SessionStart path as the Social Start action, no direct game boot.
+    if (t.rfind("session:",0)==0) {
+      const auto value=t.substr(8);
+      coop::SelectSessionStart(value=="continue" ? play::StartRequest{play::StartKind::kContinue,-1,-1,{}} :
+          play::StartRequest{play::StartKind::kChapter,ChapterSlot(),std::atoi(value.c_str()),{}});
+      if (!coop::RequestSessionStart()) { --next; at=now+0.5; }
+      return;
+    }
     // Preview states only touch the SDK-free fake selected at startup.
     if (t.rfind("social:", 0) == 0) {
       // Appended command files may contain trailing whitespace. Do not silently ignore a failed scene.

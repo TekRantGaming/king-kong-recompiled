@@ -75,6 +75,8 @@ extern char** environ;
 #include "profile_save_file.h"
 #include "dev_puppet.h"
 #include "coop_enemies_game.h"
+#include "coop_runtime.h"
+#include "coop_progress.h"
 
 namespace kk {
 #if defined(KK_DEV_TOOLS)
@@ -410,6 +412,51 @@ int MostRecentSave(const std::vector<SaveSlot>& slots) {
   return best;
 }
 
+std::vector<uint8_t> ExportSessionSave(const std::filesystem::path& root, int slot) {
+  if (slot < 0 || slot >= kSlotCount) return {};
+  auto bytes = ReadAll(SlotFile(root, slot));
+  if (bytes.size() != kSaveFileSize || BE32(bytes.data()+0x28)==0) return {};
+  return bytes;
+}
+namespace {
+bool WriteVerified(const std::filesystem::path& path, const std::vector<uint8_t>& bytes, bool replace) {
+  std::error_code ec;
+  std::filesystem::create_directories(path.parent_path(),ec); if (ec) return false;
+  auto pending=path; pending += ".coop-pending";
+  { std::ofstream f(pending,std::ios::binary|std::ios::trunc); f.write(reinterpret_cast<const char*>(bytes.data()),std::streamsize(bytes.size())); if (!f) return false; }
+  if (ReadAll(pending)!=bytes) return false;
+#if defined(_WIN32)
+  return MoveFileExW(pending.c_str(),path.c_str(),MOVEFILE_WRITE_THROUGH | (replace ? MOVEFILE_REPLACE_EXISTING : 0))!=0;
+#else
+  if (!replace && std::filesystem::exists(path,ec)) return false;
+  std::filesystem::rename(pending,path,ec); return !ec;
+#endif
+}
+}
+bool ImportSessionSave(const std::filesystem::path& root, const std::vector<uint8_t>& bytes) {
+  if (bytes.empty()) return true;
+  if (bytes.size()!=kSaveFileSize || BE32(bytes.data()+0x28)==0) return false;
+  return WriteVerified(SlotFile(root,0),bytes,false);
+}
+bool ApplyTogetherProgress(const std::filesystem::path& root, int slot, uint64_t completed) {
+  if ((completed>>42)!=0) return false;
+  // Preserve a separate completion record even when the guest has no personal slot.
+  const auto journal=root/"coop-progress"/"chapters-finished-together.txt";
+  std::error_code ec; std::filesystem::create_directories(journal.parent_path(),ec); if (ec) return false;
+  { std::ofstream f(journal,std::ios::app); f << completed << '\n'; f.flush(); if (!f) return false; }
+  if (slot<0 || slot>=kSlotCount) return true;
+  auto bytes=ExportSessionSave(root,slot); if (bytes.empty()) return false;
+  const auto before=bytes;
+  if (!kk::coop::GrantTogetherProgress(bytes,completed)) return false;
+  if (bytes==before) return true;
+  const auto backup=root/"coop-progress"/("slot-"+std::to_string(slot)+"-"+std::to_string(NowMs())+".sav");
+  std::filesystem::copy_file(SlotFile(root,slot),backup,std::filesystem::copy_options::none,ec); if (ec) return false;
+  if (ReadAll(SlotFile(root,slot))!=before) return false;
+  // Only these four bytes differ; the serialized world, continue point and all
+  // scores/options remain personal. Runtime saves are under another root.
+  return WriteVerified(SlotFile(root,slot),bytes,true);
+}
+
 bool BackupSaves(const std::filesystem::path& user_dir, const std::string& reason) {
   std::error_code ec;
   const auto title = TitleDir(user_dir);
@@ -508,7 +555,7 @@ StartRequest GetStartRequest() {
 void SetUserDir(const std::filesystem::path& user_dir) { g_user_dir = user_dir; }
 const std::filesystem::path& UserDir() { return g_user_dir; }
 std::filesystem::path ProfileFilePath(const std::filesystem::path& user_dir, int slot) {
-  return slot >= 0 && slot < kSlotCount ? SlotFile(user_dir, slot) : std::filesystem::path{};
+  return slot >= 0 && slot < kSlotCount ? SlotFile(kk::coop::SessionUserDir(user_dir), slot) : std::filesystem::path{};
 }
 ExtraProgress ReadExtraProgress(const std::filesystem::path& user_dir, int slot) {
   if (slot < 0 || slot >= kSlotCount) return {};
@@ -1072,6 +1119,23 @@ bool OnGameMenuPage(const char* page) {
   if (benchmark::Active()) { benchmark::Interrupted(); return true; }
   if (!g_session) return false;
   if (g_extra_movie) return true;
+  if (kk::coop::SessionInProcess()) {
+    const auto flow=kk::coop::SessionFlowSnapshot();
+    if (flow.active && flow.phase!=kk::coop::FlowPhase::Failed) {
+      if (!LeftByQuit() && kk::g_guest_base) {
+        const auto g=Load32(kk::g_guest_base,kGamePtr);
+        if (g) {
+          // Keep the lobby across the game's direct end-of-chapter menu route.
+          // uni_go's co-op boundary supplies the next chapter/regroup decision.
+          Store32(kk::g_guest_base,g+8,kStartMenuLevel);
+          Store32(kk::g_guest_base,g+12,0); Store32(kk::g_guest_base,g+4,1);
+          return true;
+        }
+      }
+      kk::coop::Message stop; stop.type=kk::coop::MessageType::FlowAbort; stop.flow=flow.world;
+      kk::coop::SubmitFlowMessage(std::move(stop));
+    }
+  }
   if (!g_leaving) {
     // A chapter-select run that has ended (its Score pages and save question are over) and anything
     // else go back to the Play menu (owner 19 Oct).
@@ -1182,6 +1246,7 @@ REX_HOOK_RAW(sub_8253DB80) {
         TrySendPendingSave(ctx, base);  // before the load (a story start's load plays the Intro movie)
       }
     }
+    if (kk::coop::SessionBeforeGo(ctx, base, g)) return;
     // In a session the launcher started, the start menu (level 3) means: back to the launcher.
     if (g_session && Load32(base, g + 4) != 0 && Load32(base, g + 8) == kStartMenuLevel) {
       Store32(base, g + 4, 0);
@@ -1206,6 +1271,7 @@ REX_HOOK_RAW(sub_8253DB80) {
   if (request) kk::DevPuppetBeforeLoad();
 #endif
   __imp__sub_8253DB80(ctx, base);
+  kk::coop::SessionAfterGo(base, g, request);
   if (request) kk::coop::EnemyAfterLoad(base, g);
 #if defined(KK_DEV_TOOLS)
   if (request) {

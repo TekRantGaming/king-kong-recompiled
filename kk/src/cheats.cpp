@@ -62,6 +62,7 @@
 #include <rex/logging.h>
 
 #include "play_internal.h"
+#include "coop_runtime.h"
 #include "settings.h"
 #if defined(KK_DEV_TOOLS)
 #include "coop_pose.h"
@@ -109,6 +110,10 @@ namespace {
 // every frame from the input poll (ChosenBits), and the by-name lookup built a string and took the cvar
 // registry's lock (shared with the launcher and pause menu UI) 8 times a frame. Unknown ids are false, as before.
 bool Chosen(std::string_view id) {
+  if (const int host=coop::SessionCheats(); host>=0) {
+    for (size_t i=0;i<kCheats.size();++i) if (id==kCheats[i].id) return (host & (1u<<i))!=0;
+    return false;
+  }
   if (id == "healing") return REXCVAR_GET(kk_cheat_healing);
   if (id == "one_hit") return REXCVAR_GET(kk_cheat_one_hit);
   if (id == "ammo") return REXCVAR_GET(kk_cheat_ammo);
@@ -118,6 +123,10 @@ bool Chosen(std::string_view id) {
   if (id == "shotgun") return REXCVAR_GET(kk_cheat_shotgun);
   if (id == "sniper") return REXCVAR_GET(kk_cheat_sniper);
   return false;
+}
+bool CheatsEnabled() {
+  const int host=coop::SessionCheats();
+  return host>=0 ? (host & 0x100)!=0 : REXCVAR_GET(kk_cheats);
 }
 
 // The level key last loaded (G+8): set by the game when a level load is asked for, so it is already the new
@@ -306,7 +315,7 @@ void WatchLoadout(uint8_t* base) {
 
 // The cheats chosen now, as bits (kCheats order), to see changes made in the pause menu.
 uint32_t ChosenBits() {
-  uint32_t bits = REXCVAR_GET(kk_cheats) ? 1u << 31 : 0;
+  uint32_t bits = CheatsEnabled() ? 1u << 31 : 0;
   for (size_t i = 0; i < kCheats.size(); ++i)
     if (Chosen(kCheats[i].id)) bits |= 1u << i;
   return bits;
@@ -322,7 +331,7 @@ void WatchChanges(uint8_t* base) {
   const uint32_t g = Load32(base, kGamePtr), p = Load32(base, kProfilePtr);
   if (!g || !p) return;
   const std::string before = State(base, g, p);
-  const bool all_on = REXCVAR_GET(kk_cheats);
+  const bool all_on = CheatsEnabled();
   auto clear = [&](uint32_t obj, uint32_t bit) { Store32(base, obj + kFlags, Load32(base, obj + kFlags) & ~bit); };
   struct Flag {
     const char* id;
@@ -369,7 +378,7 @@ void DevGunfire(uint8_t* base) {
     const char* value = std::getenv("KK_DEV_GUNFIRE");
     return value && *value == '1';
   }();
-  if (!enabled || !REXCVAR_GET(kk_cheats) || !Chosen("ammo") || !Chosen("machine_gun")) return;
+  if (!enabled || !CheatsEnabled() || !Chosen("ammo") || !Chosen("machine_gun")) return;
   const uint32_t g = Load32(base, kGamePtr);
   if (!g || Load32(base, g + kWeapon) != 2) return;
   const uint32_t ammo = Load32(base, g + kAmmo[1]);
@@ -403,7 +412,7 @@ bool ApplyCheatsNow(uint8_t* base) {
   const uint32_t g = Load32(base, kGamePtr), p = Load32(base, kProfilePtr);
   if (!g || !p) return false;
   kk::UnlockBonusContent(base);
-  if (REXCVAR_GET(kk_cheats)) kk::ApplyCheats(base);
+  if (kk::CheatsEnabled()) kk::ApplyCheats(base);
   // For player logs and the scoring check (task 204): the game's own marks at the level start.
   const uint32_t flags = Load32(base, g + kFlags);
   REXLOG_INFO("KK: game flags {:08X} at the level start: cheats-used mark {}, all bonus content {}", flags,
@@ -425,7 +434,7 @@ REX_HOOK_RAW(sub_824BB670) {
   if (now - last > std::chrono::seconds(2)) kk::g_applied = false;  // a new visit to the menu
   last = now;
   kk::UnlockBonusContent(base);
-  if (!kk::g_applied && REXCVAR_GET(kk_cheats)) {
+  if (!kk::g_applied && kk::CheatsEnabled()) {
     kk::ApplyCheats(base);
     kk::g_applied_bits = kk::ChosenBits();
   }
@@ -438,7 +447,7 @@ REX_HOOK_RAW(sub_8272C320) {
   __imp__sub_8272C320(ctx, base);
   kk::UnlockBonusContent(base);
   kk::WatchLevel(base);
-  if (REXCVAR_GET(kk_cheats)) kk::WatchLoadout(base);
+  if (kk::CheatsEnabled()) kk::WatchLoadout(base);
   kk::WatchChanges(base);
   kk::hardcore::Frame(base);
 #if defined(KK_DEV_TOOLS)

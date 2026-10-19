@@ -2,6 +2,7 @@
 #include "launcher_text.h"
 #include "ui_paint.h"
 #include "toast.h"
+#include "coop_runtime.h"
 #include <rex/ui/immediate_drawer.h>
 #include <algorithm>
 
@@ -56,9 +57,7 @@ void SocialPanel::Update(bool enabled, SocialPage page, Input& in, ISocialServic
 void SocialPanel::Activate(const SocialRow& row, ISocialService& service) {
   const auto command = SocialRowCommand(row, service.Snapshot());
   if (!command) { Cue(Sound::kDeny); return; }
-  // C06 has a transport handshake, but no safe chapter/save/load handoff yet.
-  // Keep the lobby usable until that path exists; never boot a solo chapter as co-op.
-  if (command->action == SocialAction::Start) notice_ = "Starting co-op is not ready yet";
+  if (command->action == SocialAction::Start) notice_ = RequestSessionStart() ? "Starting co-op..." : "Choose Continue or a chapter before starting co-op";
   else if (!service.Act(*command)) notice_ = "Could not complete Social action";
   else if (command->action == SocialAction::Invite) notice_ = "Inviting...";
   else notice_.clear();

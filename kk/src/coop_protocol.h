@@ -9,10 +9,33 @@
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-constexpr uint16_t kProtocolVersion = 4;
+constexpr uint16_t kProtocolVersion = 5;
 constexpr size_t kHeaderBytes = 24, kMaxPacketBytes = 1024;
 enum class MessageType : uint16_t { Hello = 1, HelloAck, Reject, Ping, Pong, PlayerPose, Bye,
-  EnemySnapshot, EnemyEvent, ShotIntent };
+  EnemySnapshot, EnemyEvent, ShotIntent, SessionStart, SaveChunk, LevelChange, Loaded,
+  LoadRelease, Checkpoint, ChapterFinished, ReloadRequest, FlowAbort };
+
+// Session control is reliable and scoped by the packet epoch and a load generation.
+// Saves are bounded opaque game data, never addresses or paths supplied by a peer.
+constexpr uint32_t kSessionSaveBytes = 0x8040, kSaveChunkBytes = 768;
+struct SessionStart {
+  uint16_t chapter = 0;
+  uint32_t level = 100, start = 0;
+  bool chapter_select = true;
+  uint16_t cheats = 0;  // bit 8: enabled; bits 0..7: healing, one-hit, ammo, spears, four guns
+  uint8_t difficulty = 0;  // 0 normal, 1 port hardcore
+  uint32_t save_bytes = 0;
+  uint64_t save_hash = 14695981039346656037ull;  // FNV-1a of empty data, integrity only
+};
+struct FlowEvent {
+  uint32_t generation = 0, level = 0, start = 0;
+  uint64_t completed = 0;  // chapter entries completed in this session only
+};
+struct SaveChunk { uint32_t offset = 0; std::vector<uint8_t> bytes; };
+bool ValidSessionStart(const SessionStart& start);
+bool ValidFlowEvent(const FlowEvent& event);
+uint64_t SessionSaveHash(std::span<const uint8_t> bytes);
+bool IsFlowMessage(MessageType type);
 enum class RejectReason : uint16_t { None, Protocol, Version, Build, GameplayMods, Handshake };
 struct Compatibility {
   uint16_t protocol = kProtocolVersion;
@@ -89,6 +112,9 @@ struct Message {
   EnemySnapshot enemies;
   EnemyEvent enemy_event;
   ShotIntent shot;
+  SessionStart start;
+  SaveChunk save_chunk;
+  FlowEvent flow;
 };
 // Encoders also reject invalid input. Decoding leaves out untouched on failure.
 bool Encode(const Message& message, std::vector<uint8_t>& out);

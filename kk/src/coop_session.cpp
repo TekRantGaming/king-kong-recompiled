@@ -61,6 +61,7 @@ void CoopSession::Transition(SessionState s) {
   state_ = s;
   if (s != SessionState::Connected) {
     poses_.Clear(); enemies_.Clear(); outgoing_shots_.clear(); incoming_shots_.clear();
+    if (s == SessionState::Ended) { outgoing_flow_.clear(); incoming_flow_.clear(); }
   }
   if (changed_) changed_(s);
 }
@@ -121,7 +122,10 @@ void CoopSession::Receive(const Message& m, double now) {
           if (incoming_shots_.size() < kMaxQueuedShots) incoming_shots_.push_back({m.shot, now});
           else ++malformed_;
           break;
-        default: return;
+        default:
+          if (!IsFlowMessage(m.type) || incoming_flow_.size() >= 64) return;
+          incoming_flow_.push_back(m);
+          break;
       }
     }
     last_receive_ = now;
@@ -167,6 +171,10 @@ void CoopSession::Tick(double now, const std::optional<PlayerPose>& local, const
     ping.clock_ms = ping_stamp_ = uint64_t(now * 1000); ping_pending_ = true;
     Send(ping, false); last_ping_ = now;
   }
+  if (state_ == SessionState::Connected) for (int n = 0; n < 8 && !outgoing_flow_.empty(); ++n) {
+    if (!Send(outgoing_flow_.front(), true)) break;
+    outgoing_flow_.pop_front();
+  }
   if (local && now - last_pose_ >= .05 && state_ == SessionState::Connected) {
     Message pose; pose.type = MessageType::PlayerPose; pose.pose = *local;
     Send(pose, false); last_pose_ = now;
@@ -203,6 +211,12 @@ bool CoopSession::QueueShot(const ShotIntent& shot) {
       !ValidShotIntent(shot) || outgoing_shots_.size() >= kMaxQueuedShots) return false;
   outgoing_shots_.push_back(shot); return true;
 }
+bool CoopSession::QueueFlow(const Message& m) {
+  if (state_ != SessionState::Connected || !IsFlowMessage(m.type) || outgoing_flow_.size() >= 64) return false;
+  std::vector<uint8_t> bytes; if (!Encode(m, bytes)) return false;
+  outgoing_flow_.push_back(m); return true;
+}
+std::vector<Message> CoopSession::TakeFlow() { auto out = std::move(incoming_flow_); incoming_flow_.clear(); return out; }
 std::vector<ReceivedShot> CoopSession::TakeShots() { auto out = std::move(incoming_shots_); incoming_shots_.clear(); return out; }
 void CoopSession::End(double) {
   if (!config_.enabled || state_ == SessionState::Idle || state_ == SessionState::Ended) return;

@@ -69,6 +69,11 @@ struct StartRequest {
 // The launcher sets it before Play; the game side carries it out on the title screen (one frame, no menu).
 void SetStartRequest(const StartRequest& request);
 StartRequest GetStartRequest();
+// C24: the guest imports only into a fresh private runtime root. Personal progress
+// application edits only header chapter_reached, never the host's world or options.
+std::vector<uint8_t> ExportSessionSave(const std::filesystem::path& root, int slot);
+bool ImportSessionSave(const std::filesystem::path& private_root, const std::vector<uint8_t>& bytes);
+bool ApplyTogetherProgress(const std::filesystem::path& personal_root, int slot, uint64_t completed);
 
 ExtraProgress ReadExtraProgress(const std::filesystem::path& user_dir, int slot);
 

@@ -108,6 +108,7 @@ class Service {
         if (local && now - local->time > .25) { local.reset(); failure = "publish-expired"; }
         session.Tick(now, local, &frame);
         shots_.Exchange(session);
+        flow_.Exchange(session, now);
         View view{config.role, session.State(), session.Rejection(), session.Stats(), local, session.Partner(now), now};
         view.local_failure = failure; view.poses = session.Poses();
         view.enemies = session.Enemies(now); view.enemies_sent = session.EnemiesSent();
@@ -144,6 +145,9 @@ class Service {
   void PublishEnemies(const enemies::Frame& frame) { std::lock_guard lock(mutex_); enemies_ = frame; }
   bool SubmitShot(const ShotIntent& shot) { return shots_.Submit(shot); }
   std::vector<ReceivedShot> TakeShots() { return shots_.Take(); }
+  bool BeginFlow(SessionStart start, std::vector<uint8_t> save) { return flow_.Begin(start, std::move(save)); }
+  bool SubmitFlow(Message m) { return flow_.Submit(std::move(m)); }
+  FlowView FlowSnapshot() const { return flow_.Snapshot(); }
  private:
   std::atomic<bool> running_{false}, stop_{false};
   std::thread worker_;
@@ -152,6 +156,7 @@ class Service {
   View view_;
   enemies::Frame enemies_;
   ShotMailbox shots_;
+  FlowMailbox flow_;
 };
 Service service;  // No thread, socket, guest reads, file access or allocation until explicitly started.
 #endif
@@ -179,6 +184,34 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
   explicit PartnerOverlay(rex::ui::ImGuiDrawer* drawer) : ImGuiDialog(drawer) {}
  protected:
   void OnDraw(ImGuiIO&) override {
+    if (REXCVAR_GET(kk_coop_enabled)) {
+      const auto flow=SessionFlowSnapshot();
+      if (flow.active && *flow.status) {
+        auto* draw=ImGui::GetForegroundDrawList();
+        const bool waiting=flow.phase!=FlowPhase::Playing || (flow.policy==ChapterPolicy::Observer && !flow.host);
+        if (waiting) draw->AddRectFilled(ImVec2(0,0),ImGui::GetIO().DisplaySize,IM_COL32(10,12,16,255));
+        char status[256];
+        std::string line=flow.status;
+        if (flow.phase==FlowPhase::Waiting) {
+          const auto social=Social().Snapshot();
+          for (const auto& member : social.members) if (member.id!=social.self) { line="Waiting for "+member.name+" to finish this chapter..."; break; }
+        }
+        std::snprintf(status,sizeof(status),"%s\nHost chapter %d | level %u | checkpoint %u",line.c_str(),
+            FlowChapter(flow.world.level)+1,flow.world.level,flow.checkpoint);
+        draw->AddText(ImVec2(36,40),IM_COL32(240,240,240,255),status);
+        if (waiting || flow.policy!=ChapterPolicy::Together) return;
+      }
+      if (MoveToPartnerOffered()) {
+        ImGui::SetNextWindowPos(ImVec2(24,190),ImGuiCond_Always);
+        ImGui::SetNextWindowBgAlpha(.9f);
+        if (ImGui::Begin("##coop-catchup",nullptr,ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDecoration)) {
+          ImGui::TextUnformatted("Your partner is far ahead.");
+          ImGui::TextUnformatted("Recovery reloads both players at the host's last checkpoint.");
+          if (ImGui::Button("Move to partner")) MoveToPartner();
+        }
+        ImGui::End();
+      }
+    }
     if (!REXCVAR_GET(kk_coop_enabled) || photo::Active() || freecam::HideHud() ||
         freecam::HideGameHud() || REXCVAR_GET(kk_hide_hud) || play::CoverScreen()) return;
     const View v = CurrentView();  // UI reads copied values only, never guest memory.
@@ -253,6 +286,9 @@ void Configure(const std::filesystem::path& user_data) {
   };
   if (options.enabled) options.compatibility = {kProtocolVersion, KK_VERSION, KK_COOP_BUILD, mods::GameplayDigest(user_data)};
   steam = std::make_unique<SteamRuntime>(std::move(options));
+#if defined(KK_DEV_TOOLS)
+  if (DevSelected()) Start(user_data);
+#endif
 }
 void Start(const std::filesystem::path& user_data) {
   Configure(user_data);
@@ -292,9 +328,19 @@ ISocialService& Social() {
   class DevSocial final : public ISocialService {
    public:
     SocialModel Snapshot() const override {
-      SocialModel m; m.status = SocialStatus::Disabled; m.status_text = "Local dev link selected"; return m;
+      const auto v=CurrentView();
+      SocialModel m; m.self=v.role==Role::Host ? 1 : 2; m.owner=1; m.lobby=1;
+      const bool connected=v.state==SessionState::Connected;
+      m.status=connected ? SocialStatus::Lobby : SocialStatus::Starting;
+      m.status_text=connected ? "Local dev partner connected" : "Waiting for local dev partner";
+      m.members={{1,"Dev host",connected},{2,"Dev guest",connected}};
+      // Dev peers opt into readiness when selecting the explicit local link.
+      m.can_start=connected && v.role==Role::Host; return m;
     }
-    bool Act(SocialCommand) override { return false; }
+    bool Act(SocialCommand c) override {
+      if (c.action==SocialAction::Start) return CanStartLobby(Snapshot());
+      return c.action==SocialAction::Open || c.action==SocialAction::SetReady;
+    }
   };
   static DevSocial dev;
   if (social_preview) return *social_preview;
@@ -302,7 +348,26 @@ ISocialService& Social() {
 #endif
   return steam ? static_cast<ISocialService&>(*steam) : static_cast<ISocialService&>(disabled);
 }
+FlowView SessionFlowSnapshot() {
+#if defined(KK_DEV_TOOLS)
+  if (service.Running()) return service.FlowSnapshot();
+#endif
+  return steam ? steam->FlowSnapshot() : FlowView{};
+}
+bool BeginSessionFlow(SessionStart start, std::vector<uint8_t> save) {
+#if defined(KK_DEV_TOOLS)
+  if (service.Running()) return service.BeginFlow(start, std::move(save));
+#endif
+  return steam && steam->BeginFlow(start, std::move(save));
+}
+bool SubmitFlowMessage(Message m) {
+#if defined(KK_DEV_TOOLS)
+  if (service.Running()) return service.SubmitFlow(std::move(m));
+#endif
+  return steam && steam->SubmitFlow(std::move(m));
+}
 void Shutdown() {
+  StopSessionFlow();
 #if defined(KK_DEV_TOOLS)
   service.Stop();
 #endif
@@ -320,6 +385,7 @@ void GameFrame(uint8_t* base) {
   kk::DevPuppetGameFrame(base);
 #endif
   if (!REXCVAR_GET(kk_coop_enabled)) return;
+  SessionReloadFrame(base);
   EnemyGameFrame();
 #if defined(KK_DEV_TOOLS)
   if (service.Running()) service.Publish(ReadJack(base));
@@ -336,10 +402,14 @@ void CreateOverlay(rex::ui::ImGuiDrawer* drawer) {
 EnemyLink EnemyLinkSnapshot() {
   if (!REXCVAR_GET(kk_coop_enabled)) return {};
   const auto v = CurrentView();
+  const auto flow=SessionFlowSnapshot();
+  if (flow.active && (flow.phase!=FlowPhase::Playing || flow.policy!=ChapterPolicy::Together)) return {};
   return {v.state == SessionState::Connected && Now()-v.updated <= .5, v.role, v.enemies, v.enemies_sent, v.shots_sent, v.partner};
 }
 bool EnemyConnectionReady() {
   if (!REXCVAR_GET(kk_coop_enabled)) return false;
+  const auto flow=SessionFlowSnapshot();
+  if (flow.active && (flow.phase!=FlowPhase::Playing || flow.policy!=ChapterPolicy::Together)) return false;
 #if defined(KK_DEV_TOOLS)
   if (service.Running()) return service.EnemyReady(Now());
 #endif
@@ -372,6 +442,8 @@ void SetShotCounters(ShotCounters counts) { std::lock_guard lock(enemy_status_mu
 PuppetSnapshot PartnerBodySnapshot() {
   if (!REXCVAR_GET(kk_coop_enabled)) return {};
   const auto v = CurrentView();
+  const auto flow=SessionFlowSnapshot();
+  if (flow.active && (flow.phase!=FlowPhase::Playing || flow.policy!=ChapterPolicy::Together)) return {};
   return {true, Now() - v.updated <= .5, v.state, v.local, v.partner};
 }
 void SetPartnerBodyDriven(bool driven) { partner_body_driven.store(driven); }

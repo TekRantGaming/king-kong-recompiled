@@ -52,6 +52,8 @@ class CoopSession {
   bool QueueShot(const ShotIntent& shot);
   std::vector<ReceivedShot> TakeShots();
   uint64_t ShotsSent() const { return shots_sent_; }
+  bool QueueFlow(const Message& message);
+  std::vector<Message> TakeFlow();
  private:
   void Transition(SessionState state);
   bool Send(Message message, bool reliable);
@@ -77,6 +79,8 @@ class CoopSession {
   std::deque<ShotIntent> outgoing_shots_;
   std::vector<ReceivedShot> incoming_shots_;
   uint64_t shots_sent_ = 0;
+  std::deque<Message> outgoing_flow_;
+  std::vector<Message> incoming_flow_;
 };
 // Both workers share the same bounded value-only handoff. No guest memory here.
 class ShotMailbox {
