@@ -199,6 +199,10 @@ void KeepFilterInFront() {
 
 constexpr ULONGLONG kHangMs = 20000;
 std::atomic<ULONGLONG> g_last_frame{0};  // GetTickCount64 at the last guest frame; 0 before the first
+// Task 285: GetTickCount64 when the game started in this process (NoteGameStarting); 0 = not started. With
+// no first frame kStartupHangMs later, one startup hang report says where every thread waits.
+constexpr ULONGLONG kStartupHangMs = 60000;
+std::atomic<ULONGLONG> g_game_start{0};
 
 // Where each thread is right now: suspend it just long enough to read its
 // instruction pointer, and (with `stacks`) copy the top of its stack (nothing
@@ -284,26 +288,32 @@ void WriteHitchReport(ULONGLONG stalled_ms) {
   REXLOG_WARN("KK: no frame for {} ms, wrote {}", stalled_ms, std::filesystem::path(path).filename().string());
 }
 
-void WriteHangReport(ULONGLONG stalled_ms) {
+// startup (task 285): no first frame yet since the game started; the thread list then has likely callers.
+void WriteHangReport(ULONGLONG stalled_ms, bool startup = false) {
   wchar_t base[MAX_PATH + 64];
-  ReportBase(L"hang", base);
+  ReportBase(startup ? L"hang-startup" : L"hang", base);
   wchar_t path[MAX_PATH + 80];
   swprintf(path, MAX_PATH + 80, L"%ls.txt", base);
   if (FILE* f = _wfopen(path, L"w")) {
-    std::fwprintf(f, L"King Kong stopped drawing frames for %llu seconds (a freeze).\n"
-                     L"Version: " KK_VERSION_W L"\n"
-                     L"Please attach this file, the .dmp file next to it and logs\\king_kong.log to a bug report.\n\n"
-                     L"Threads:\n",
+    std::fwprintf(f, startup ? L"King Kong started the game but drew no first frame in %llu seconds (a freeze at startup).\n"
+                             : L"King Kong stopped drawing frames for %llu seconds (a freeze).\n",
                   stalled_ms / 1000);
+    std::fwprintf(f, L"Version: " KK_VERSION_W L"\n"
+                     L"Please attach this file, the .dmp file next to it and logs\\king_kong.log to a bug report.\n\n"
+                     L"Threads:\n");
     if (const char* api = ApiName()) std::fwprintf(f, L"Graphics API: %hs\n", api);
-    WriteThreadList(f);
+    WriteThreadList(f, startup);
     std::fputs("\n", f);
     WriteLogTail(f);
     std::fclose(f);
   }
   WriteMiniDump(base, nullptr);
-  REXLOG_WARN("KK: no frame for {} s, wrote hang report {}", stalled_ms / 1000,
-              std::filesystem::path(base).filename().string());
+  if (startup)
+    REXLOG_WARN("KK: no first game frame {} s after the game started; wrote startup hang report {} (where every "
+                "thread waits)", stalled_ms / 1000, std::filesystem::path(base).filename().string());
+  else
+    REXLOG_WARN("KK: no frame for {} s, wrote hang report {}", stalled_ms / 1000,
+                std::filesystem::path(base).filename().string());
 }
 
 void WatchForHangs() {
@@ -312,6 +322,7 @@ void WatchForHangs() {
   ULONGLONG filter_tick = previous_tick;
   ULONGLONG reported_at = 0;  // g_last_frame value the current report is about
   ULONGLONG hitch_at = 0;     // ... and the current hitch report
+  bool startup_reported = false;  // task 285: once a process
 #if defined(KK_DEV_TOOLS)
   // Wall time from the first guest frame, so the crash test lasts two minutes
   // of rendering and does not depend on menu input or compiler null-write UB.
@@ -336,11 +347,20 @@ void WatchForHangs() {
       // paused (e.g. a debugger). Not a game freeze; start counting again.
       ULONGLONG expected = last;
       if (last) g_last_frame.compare_exchange_strong(expected, now);
+      ULONGLONG started = g_game_start.load(std::memory_order_relaxed);
+      if (started) g_game_start.compare_exchange_strong(started, now);
       previous_tick = now;
       continue;
     }
     previous_tick = now;
-    if (!last) continue;  // no frame yet (launcher, startup)
+    if (!last) {  // no frame yet (launcher, startup)
+      const ULONGLONG started = g_game_start.load(std::memory_order_relaxed);
+      if (started && !startup_reported && now - started >= kStartupHangMs) {
+        startup_reported = true;
+        WriteHangReport(now - started, true);
+      }
+      continue;
+    }
 #if defined(KK_DEV_TOOLS)
     if (!test_started) test_started = now;
     if (test_seconds > 0 && now - test_started >= test_seconds * 1000) {
@@ -369,6 +389,11 @@ void WatchForHangs() {
 }  // namespace
 
 void SetCrashReportApi(int api) { g_api.store(api, std::memory_order_relaxed); }
+
+void NoteGameStarting() {
+  ULONGLONG expected = 0;
+  g_game_start.compare_exchange_strong(expected, GetTickCount64(), std::memory_order_relaxed);
+}
 
 void NoteGuestFrame() {
   g_last_frame.store(GetTickCount64(), std::memory_order_relaxed);
@@ -423,6 +448,7 @@ void InstallCrashDumps(const std::filesystem::path& logs_dir, const std::filesys
 
 namespace kk {
 void NoteGuestFrame() {}
+void NoteGameStarting() {}
 void SetCrashReportApi(int) {}
 void WriteCrashReportNow(const char*) {}
 void InstallCrashDumps(const std::filesystem::path&, const std::filesystem::path&) {}

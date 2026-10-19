@@ -29,6 +29,7 @@ version's notes the first time you start it.
 - **Fewer long freezes when a chapter starts while shaders are still being prepared.** The game no longer waits long for a missing shader: some things may appear a moment later instead.
 - **Graphics driver resets and running out of video memory** no longer crash the game silently. If it happens while the game starts, it starts again on the other graphics API and tells you; during play it closes with a crash report. The launcher no longer closes when shader preparation hits a graphics error.
 - **Photo mode pictures are no longer much darker than the game**: the photo mode view and the saved pictures are as bright as the game in play. Very bright sunlit scenes can come out slightly brighter.
+- **A rare hang when pressing Play in the main menu** while the sound device was being opened again: the game now keeps the sound system running across the switch, and the game's own sound scheduling now works as intended.
 
 ### Changed
 - **Every setting explains itself.** The panel beside the settings, in the launcher and in the pause menu, now says what each setting does, what you will notice in the game, what each option changes, and shows its performance and video memory impact and when a change takes effect. In five languages.
