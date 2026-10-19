@@ -1,6 +1,7 @@
 #include "hdr_display.h"
 
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <mutex>
@@ -241,6 +242,17 @@ void Apply(const char* why) {
     changed |= SetIfDifferent("present_hdr_peak", std::to_string(int(l.peak)), true);
     changed |= SetIfDifferent("present_hdr_paper_white", std::to_string(int(l.paper_white)), true);
   }
+  {
+    // Task 262 (SDK patch 0044): unknown cvars are ignored by older SDKs.
+    const DisplayRange r = AutoRange(info);
+    char black[32];
+    std::snprintf(black, sizeof(black), "%.4f", r.black);
+    if (rex::cvar::GetFlagInfo("present_hdr_black")) {
+      if (std::abs(std::atof(rex::cvar::GetFlagByName("present_hdr_black").c_str()) - r.black) > 1e-4)
+        changed |= rex::cvar::SetFlagByName("present_hdr_black", black);
+      changed |= SetIfDifferent("present_hdr_full_frame", std::to_string(int(r.full_frame)), true);
+    }
+  }
   bool first = false, screen_changed = false;
   {
     std::lock_guard lock(g_mutex);
@@ -251,10 +263,13 @@ void Apply(const char* why) {
     g_last_time = std::chrono::steady_clock::now();
   }
   if (first || changed || screen_changed)
-    REXLOG_INFO("KK: HDR ({}): {}; kk_hdr={} kk_hdr_levels={} -> present_hdr={} peak={} paper white={}", why,
+    REXLOG_INFO("KK: HDR ({}): {}; kk_hdr={} kk_hdr_levels={} -> present_hdr={} peak={} paper white={} black={} "
+                "full frame={} highlights={} knee={} cap={}", why,
                 Describe(info), rex::cvar::GetFlagByName("kk_hdr"), automatic ? "auto" : "manual",
                 rex::cvar::GetFlagByName("present_hdr"), rex::cvar::GetFlagByName("present_hdr_peak"),
-                rex::cvar::GetFlagByName("present_hdr_paper_white"));
+                rex::cvar::GetFlagByName("present_hdr_paper_white"), rex::cvar::GetFlagByName("present_hdr_black"),
+                rex::cvar::GetFlagByName("present_hdr_full_frame"), rex::cvar::GetFlagByName("present_hdr_highlights"),
+                rex::cvar::GetFlagByName("present_hdr_knee"), rex::cvar::GetFlagByName("present_hdr_peak_cap"));
 }
 
 void ApplyIfStale() {
