@@ -6,6 +6,13 @@
 //       game as kkpipelines.list, lets a fresh install make every pipeline at start
 //       (--native_pipeline_list). Records of runs with --native_flip_front_face are left out unless
 //       --keep-debug. Nothing is written when an input is absent or of another version.
+//       Task 276, level tags: a record carries the level it was first drawn in (PipelineRecord::reserved[0]);
+//       each input naming a pipeline with a level is a vote, the merged record keeps the most voted level
+//       (a tie: the earliest input's). Lists from before task 276 have no tags and merge as before.
+//   nr_pipelines merge --tags-only -o <out> <list> <recording>...
+//       Tags a list from recorded play-throughs (the pipeline cache file of a run with a fresh cache, e.g. a
+//       VRAM tour or benchmark run on a build with task 276): <list>'s records in its order, each with the
+//       level the recordings voted for; the recordings add no records.
 //   nr_pipelines info <file>...
 //       What a pipeline file holds.
 //
@@ -13,6 +20,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <set>
 #include <string>
 #include <utility>
@@ -24,14 +32,14 @@ namespace {
 
 int Usage() {
   std::fprintf(stderr,
-               "usage: nr_pipelines merge [--keep-debug] -o <out> <file>...\n"
+               "usage: nr_pipelines merge [--keep-debug] [--tags-only] -o <out> <file>...\n"
                "       nr_pipelines info <file>...\n");
   return 1;
 }
 
 int Merge(int argc, char** argv) {
   std::string out;
-  bool keep_debug = false;
+  bool keep_debug = false, tags_only = false;
   std::vector<std::string> inputs;
   for (int i = 0; i < argc; ++i) {
     const std::string a = argv[i];
@@ -39,6 +47,8 @@ int Merge(int argc, char** argv) {
       out = argv[++i];
     } else if (a == "--keep-debug") {
       keep_debug = true;
+    } else if (a == "--tags-only") {
+      tags_only = true;
     } else if (!a.empty() && a[0] == '-') {
       return Usage();
     } else {
@@ -46,7 +56,7 @@ int Merge(int argc, char** argv) {
     }
   }
   if (out.empty() || inputs.empty()) return Usage();
-  nr::PipelineListMerger merger(keep_debug);
+  nr::PipelineListMerger merger(keep_debug, tags_only);
   bool all_read = true;
   for (const std::string& path : inputs) {
     const nr::PipelineListMerger::Input in = merger.Add(path);
@@ -58,6 +68,7 @@ int Merge(int argc, char** argv) {
     std::printf("%s: %zu records, %zu new, %zu already listed", path.c_str(), in.records, in.added, in.duplicates);
     if (in.debug) std::printf(", %zu with flipped faces left out", in.debug);
     if (in.torn_bytes) std::printf(", an incomplete last record (%zu bytes) left out", in.torn_bytes);
+    if (in.tagged) std::printf(", %zu with a level", in.tagged);
     std::printf("\n");
   }
   if (!all_read) {
@@ -70,7 +81,9 @@ int Merge(int argc, char** argv) {
     std::fprintf(stderr, "%s\n", error.c_str());
     return 3;
   }
-  std::printf("%s: %zu pipelines\n", out.c_str(), merger.records().size());
+  size_t tagged = 0;
+  for (const nr::PipelineRecord& r : merger.records()) tagged += nr::RecordLevel(r) ? 1 : 0;
+  std::printf("%s: %zu pipelines, %zu with a level\n", out.c_str(), merger.records().size(), tagged);
   return 0;
 }
 
@@ -90,7 +103,9 @@ int Info(int argc, char** argv) {
     unique.AddRecords(records);
     size_t scaled = 0, flipped = 0, depth_only = 0;
     std::set<std::pair<uint64_t, uint64_t>> vs, ps;
+    std::map<uint32_t, size_t> levels;  // task 276: pipelines per level tag
     for (const nr::PipelineRecord& r : unique.records()) {
+      if (uint32_t level = 0; nr::RecordLevel(r, &level)) ++levels[level];
       if (r.flags & nr::kRecordScaled) ++scaled;
       if (r.flags & nr::kRecordFlipFrontFace) ++flipped;
       if (!r.ps_hash) ++depth_only;
@@ -103,6 +118,13 @@ int Info(int argc, char** argv) {
                 unique.records().size() - scaled, scaled, flipped, depth_only, vs.size(), ps.size());
     if (torn) std::printf(", an incomplete last record (%zu bytes)", torn);
     std::printf("\n");
+    if (!levels.empty()) {
+      size_t tagged = 0;
+      for (const auto& [level, count] : levels) tagged += count;
+      std::printf("  %zu with a level tag (level=pipelines):", tagged);
+      for (const auto& [level, count] : levels) std::printf(" %u=%zu", level, count);
+      std::printf("\n");
+    }
   }
   return result;
 }

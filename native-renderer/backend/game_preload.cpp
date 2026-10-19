@@ -91,6 +91,7 @@ void GameRenderer::PreloadResources(nvrhi::ICommandList* cl, bool loading, uint3
   if (loading && (!resource_loading_ || changed)) {
     // A different chapter: the previous one's unused pack replacements are freed after this load.
     if (changed) TexturePackLoadStarted();
+    PipelineLevelLoading(level);  // task 276: level tags, its pipelines first, all workers while loading
     SaveResourcePreload();
     preload_level_ = level; preload_start_ = start;
     preload_cursor_ = 0; preload_reserved_bytes_ = 0;
@@ -130,6 +131,7 @@ void GameRenderer::PreloadResources(nvrhi::ICommandList* cl, bool loading, uint3
          level, start, preload_records_.size(), local, preload_records_.size() - local);
   } else if (!loading && resource_loading_) {
     TexturePackLoadEnded();
+    PipelineLevelPlaying();  // task 276: fewer background workers while playing (native_pipeline_play_workers)
     // The universe can clear/change its request fields as loading ends. Keep
     // the map/start captured while that request's loading screen was up.
     resource_learning_ = !resource_cache_path_.empty();

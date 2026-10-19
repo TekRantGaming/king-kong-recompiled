@@ -1,5 +1,6 @@
 #include "backend/pipeline_cache.h"
 
+#include <algorithm>
 #include <cstring>
 #include <filesystem>
 
@@ -55,6 +56,7 @@ PipelineRecord MotionPipelineRecord(const PipelineRecord& draw, uint32_t motion_
   r.poly_scale = draw.poly_scale;
   r.poly_offset = draw.poly_offset;
   r.flags = (draw.flags & (kRecordFlipFrontFace | kRecordTessellation)) | kRecordMotion;
+  r.reserved[0] = draw.reserved[0];  // task 276: drawn in the same level
   return r;
 }
 
@@ -108,6 +110,33 @@ bool WritePipelineList(const std::string& path, const std::vector<PipelineRecord
   return ok;
 }
 
+PipelineListMerger::Added PipelineListMerger::AddOne(const PipelineRecord& r) {
+  if ((r.flags & kRecordFlipFrontFace) && !keep_debug_) return Added::kDebug;
+  const uint64_t key = PipelineKey(r);
+  auto known = keys_.find(key);
+  if (known == keys_.end()) {
+    if (tags_only_ && first_input_done_) return Added::kLeftOut;
+    keys_.emplace(key, records_.size());
+    records_.push_back(r);
+    votes_.emplace_back();
+    if (RecordLevel(r)) votes_.back().push_back({r.reserved[0], 1});
+    return Added::kNew;
+  }
+  // Task 276: a duplicate is one more vote for its level; the record carries the most voted (a tie: the
+  // first voted for, i.e. the earliest input naming it with a level).
+  if (RecordLevel(r)) {
+    auto& votes = votes_[known->second];
+    auto vote = std::find_if(votes.begin(), votes.end(), [&](const auto& v) { return v.first == r.reserved[0]; });
+    if (vote == votes.end()) votes.push_back({r.reserved[0], 1});
+    else ++vote->second;
+    auto best = votes.begin();
+    for (auto v = votes.begin(); v != votes.end(); ++v)
+      if (v->second > best->second) best = v;
+    records_[known->second].reserved[0] = best->first;
+  }
+  return Added::kDuplicate;
+}
+
 PipelineListMerger::Input PipelineListMerger::Add(const std::string& path) {
   Input in;
   in.path = path;
@@ -120,27 +149,23 @@ PipelineListMerger::Input PipelineListMerger::Add(const std::string& path) {
   }
   in.records = records.size();
   for (const PipelineRecord& r : records) {
-    if ((r.flags & kRecordFlipFrontFace) && !keep_debug_) {
-      ++in.debug;
-    } else if (keys_.insert(PipelineKey(r)).second) {
-      records_.push_back(r);
-      ++in.added;
-    } else {
-      ++in.duplicates;
+    if (RecordLevel(r)) ++in.tagged;
+    switch (AddOne(r)) {
+      case Added::kNew: ++in.added; break;
+      case Added::kDuplicate: ++in.duplicates; break;
+      case Added::kDebug: ++in.debug; break;
+      case Added::kLeftOut: break;
     }
   }
+  first_input_done_ = true;
   return in;
 }
 
 size_t PipelineListMerger::AddRecords(const std::vector<PipelineRecord>& records) {
   size_t added = 0;
-  for (const PipelineRecord& r : records) {
-    if ((r.flags & kRecordFlipFrontFace) && !keep_debug_) continue;
-    if (keys_.insert(PipelineKey(r)).second) {
-      records_.push_back(r);
-      ++added;
-    }
-  }
+  for (const PipelineRecord& r : records)
+    if (AddOne(r) == Added::kNew) ++added;
+  first_input_done_ = true;
   return added;
 }
 

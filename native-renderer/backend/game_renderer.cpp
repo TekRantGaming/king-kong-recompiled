@@ -1124,8 +1124,9 @@ void GameRenderer::PipelineWorker() {
     {
       std::unique_lock lock(pipeline_mutex_);
       pipeline_cv_.wait(lock, [&] {
-        // Reserve one compiler for demand work while prewarm has a backlog.
-        const unsigned background = std::max(1u, unsigned(pipeline_threads_.size()) - 1);
+        // Reserve one compiler for demand work while prewarm has a backlog. Task 276: fewer while a level is
+        // being played when --native_pipeline_play_workers says so (draws' jobs still take any worker).
+        const unsigned background = pipelines_playing_ ? play_background_ : all_background_;
         return pipeline_stop_ || (!pipeline_jobs_.empty() &&
             (pipeline_jobs_.front().urgent || unsigned(pipelines_active_) < background));
       });
@@ -1586,19 +1587,68 @@ void GameRenderer::EnsureWorkers() {
   // With pipeline_mutex_ held. A few workers: drivers compile pipelines in parallel.
   if (!pipeline_threads_.empty()) return;
   const unsigned n = ProcessPipelineWorkerCount();
-  Logf(LogLevel::kInfo, "rexgpu-native: pipeline compiler workers %u (process affinity)", n);
+  const ProcessCpus cpus = ProcessCpuCounts();
+  all_background_ = BackgroundPipelineWorkers(n);
+  play_background_ = PlayBackgroundPipelineWorkers(n, cpus.logical, cpus.cores, options_.pipeline_play_workers);
+  Logf(LogLevel::kInfo,
+       "rexgpu-native: pipeline compiler workers %u (process affinity; %u logical CPUs, %u cores); background jobs "
+       "%u at once, %u while a level is played (native_pipeline_play_workers %d)",
+       n, cpus.logical, cpus.cores, all_background_, play_background_, options_.pipeline_play_workers);
   for (unsigned i = 0; i < n; ++i) pipeline_threads_.emplace_back([this] { PipelineWorker(); });
+}
+
+// Task 276: a level's loading screen started. New records are tagged with the level from now on; with
+// pipeline_level_first the prewarm's jobs of the records tagged with it go ahead of the rest of the list
+// (behind the draws' jobs), and the background workers run at full speed until the level is played.
+void GameRenderer::PipelineLevelLoading(uint32_t level) {
+  record_level_tag_ = LevelTag(level);
+  const auto start = std::chrono::steady_clock::now();
+  size_t ahead = 0, queued = 0;
+  {
+    std::lock_guard lock(pipeline_mutex_);
+    pipelines_playing_ = false;
+    if (options_.pipeline_level_first) {
+      const uint32_t tag = priority_level_tag_ = LevelTag(level);
+      ahead = MoveJobsAhead(pipeline_jobs_, [tag](const PipelineJob& j) { return j.urgent || j.level == tag; });
+      queued = pipeline_jobs_.size();
+    }
+  }
+  pipeline_cv_.notify_all();
+  if (options_.pipeline_level_first && queued) {
+    Logf(LogLevel::kInfo, "rexgpu-native: pipelines of level %u first: %zu of %zu queued jobs ahead (in %.1f ms)",
+         level, ahead, queued,
+         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+  }
+}
+
+void GameRenderer::PipelineLevelPlaying() {
+  size_t queued = 0;
+  {
+    std::lock_guard lock(pipeline_mutex_);
+    pipelines_playing_ = true;
+    queued = pipeline_jobs_.size();
+  }
+  pipeline_cv_.notify_all();
+  if (play_background_ < all_background_ && queued && !play_workers_logged_) {
+    play_workers_logged_ = true;
+    Logf(LogLevel::kInfo, "rexgpu-native: while a level is played, %u background pipeline jobs at once (of %u); %zu queued",
+         play_background_, all_background_, queued);
+  }
 }
 
 void GameRenderer::NoteRecord(const PipelineRecord& record, uint64_t key) {
   if (!cache_recording_.load(std::memory_order_relaxed)) return;
   if (!noted_keys_.insert(key).second) return;  // the render thread's own set: no lock for a known pipeline
+  // Task 276: the level it is first drawn in (not known before the first loading screen).
+  PipelineRecord tagged = record;
+  tagged.reserved[0] = record_level_tag_;
   std::lock_guard lock(cache_mutex_);
-  if (cache_file_.is_open() && cache_file_.Append(record)) ++stats_.cache_recorded;
+  if (cache_file_.is_open() && cache_file_.Append(tagged)) ++stats_.cache_recorded;
 }
 
 bool GameRenderer::QueuePrewarm(const PipelineRecord& record) {
   PipelineRecord adapted = record;
+  ClearRecordLevel(adapted);  // task 276: the tag orders the job, it is not part of the pipeline
   if (!(record.flags & kRecordMotion))
     adapted.flags = (record.flags & ~kRecordScaled) | (RecordFlags() & kRecordScaled);
   const kkshaders::ShaderKind vk = kkshaders::ShaderKind::Vertex, pk = kkshaders::ShaderKind::Pixel;
@@ -1631,7 +1681,12 @@ bool GameRenderer::QueuePrewarm(const PipelineRecord& record) {
   pipelines_pending_[key] = true;
   PipelineJob job{key, std::move(desc), framebuffer};
   job.build = PipelineBuild::kPrewarm;
-  pipeline_jobs_.push_back(std::move(job));
+  job.level = record.reserved[0];
+  // Task 276: a record of the level being loaded or played (its shaders came late) joins its level's group.
+  if (const uint32_t tag = priority_level_tag_; tag && job.level == tag)
+    QueueJobBehind(pipeline_jobs_, std::move(job), [tag](const PipelineJob& j) { return j.urgent || j.level == tag; });
+  else
+    pipeline_jobs_.push_back(std::move(job));
   pipeline_cv_.notify_one();
   ++stats_.prewarm_queued;
   return true;

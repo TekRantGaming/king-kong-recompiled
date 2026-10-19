@@ -159,6 +159,14 @@ class GameRenderer {
     // pre-267 behaviour; --native_pipeline_must_wait_ms=-1). pipeline_wait (block-all) never has a cap.
     double pipeline_must_wait_ms = 4.0;
     double pipeline_loading_wait_ms = 100.0;
+    // Task 276: when a level's loading screen starts, the prewarm's jobs of the records tagged with that level
+    // (PipelineRecord level tags) go ahead of the rest of the list (behind draws' jobs). False: list order (the
+    // behaviour before task 276). New records are tagged with the level whatever this says.
+    bool pipeline_level_first = false;
+    // Task 276: background (prewarm) compile jobs at once while a level is being played (not loading):
+    // PlayBackgroundPipelineWorkers (pipeline_workers.h): 0 = no limit (before task 276), N = at most N,
+    // -1 = auto (few-core PCs keep a third of the workers). Menus and loading screens always run them all.
+    int32_t pipeline_play_workers = 0;
     // The driver's pipeline cache (SetDriverPipelineCache) is saved when the workers run out of work
     // with at least this many new pipelines made since the last save, or with any after
     // driver_cache_save_seconds. A rebuild (the file was another driver's) is saved when the workers
@@ -782,6 +790,7 @@ class GameRenderer {
     nvrhi::FramebufferInfo framebuffer;
     bool urgent = false;
     PipelineBuild build = PipelineBuild::kWhole;
+    uint32_t level = 0;  // task 276: the listed record's level tag (PipelineRecord::reserved[0]; 0 = none)
   };
   struct DonePipeline {
     uint64_t key = 0;
@@ -824,6 +833,15 @@ class GameRenderer {
   uint64_t must_wait_frame_ = ~0ull;  // task 267: the frame must_wait_ms_ counts (render thread)
   double must_wait_ms_ = 0;           // this frame's waits of draws later draws depend on
   int dev_compile_delay_ms_ = 0;      // KK_DEV_PIPELINE_DELAY_MS (dev): a slow PC's cold compiles
+  // Task 276: level tags and the workers while playing.
+  void PipelineLevelLoading(uint32_t level);  // render thread: a level's loading screen started
+  void PipelineLevelPlaying();                // render thread: its loading screen ended
+  uint32_t record_level_tag_ = 0;   // the tag new records get (render thread; 0 before the first level)
+  uint32_t priority_level_tag_ = 0;  // the level whose prewarm jobs go first (pipeline_mutex_)
+  bool pipelines_playing_ = false;   // a level is being played: play_background_ applies (pipeline_mutex_)
+  unsigned play_background_ = 1;     // background jobs at once while playing (EnsureWorkers)
+  unsigned all_background_ = 1;      // and otherwise
+  bool play_workers_logged_ = false;
   std::vector<DonePipeline> pipelines_done_;
   std::unordered_map<uint64_t, bool> pipelines_pending_;
   bool pipeline_stop_ = false;

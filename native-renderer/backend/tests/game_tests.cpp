@@ -3938,4 +3938,59 @@ TEST(Scale_SmallEffectsKeepAspectAndHaveOriginalOption) {
   }
 }
 
+// Task 276: a new record carries the level it is first drawn in (none before the first loading screen).
+TEST(PipelineCache_RecordsTheLevelOfTheFirstDraw) {
+  const std::string path = CachePath("record_level");
+  {
+    Fixture f;
+    if (!f.Init()) return;
+    CHECK(f.game->SetPipelineCache(path));
+    const uint32_t rt = f.BindMainSurface();
+    auto p = f.MakeColorPipeline();
+    DrawQuadrantFrame(f, rt, p);  // before any level
+    ServicePreload(f, true, 305);
+    ServicePreload(f, false, 305);
+    DrawQuadrantFrame(f, rt, p);  // known already: keeps no tag
+    f.Reg(dev::kRbColorMask, 0x7777);  // another pipeline, first drawn in level 305
+    DrawQuadrantFrame(f, rt, p);
+    CHECK_EQ(f.game->stats().cache_recorded, uint64_t(2));
+  }
+  PipelineCacheFile file;
+  CHECK(file.Open(path));
+  CHECK_EQ(file.loaded().size(), size_t(2));
+  if (file.loaded().size() == 2) {
+    CHECK(!RecordLevel(file.loaded()[0]));
+    uint32_t level = 0;
+    CHECK(RecordLevel(file.loaded()[1], &level));
+    CHECK_EQ(level, 305u);
+  }
+}
+
+// Task 276: a tagged list prewarms as an untagged one (the tag is not part of the pipeline), with its level first.
+TEST(PipelineList_ATaggedListPrewarmsTheSamePipelines) {
+  const std::string list = ShipTheScene("ship_tagged");
+  std::vector<PipelineRecord> records;
+  CHECK(ReadPipelineList(list, records));
+  for (PipelineRecord& r : records) SetRecordLevel(r, 305);
+  CHECK(WritePipelineList(list, records));
+  const std::string pack = MakePack("ship_tagged");
+  Fixture f;
+  if (!f.Init()) return;
+  f.shaders->Initialize(pack, NR_TEST_DXC_DIR);
+  f.game->options().async_pipelines = true;
+  f.game->options().pipeline_level_first = true;
+  f.game->options().pipeline_play_workers = 1;
+  CHECK(f.game->LoadPipelineList(list));
+  CHECK_EQ(f.game->stats().prewarm_queued, uint64_t(1));
+  ServicePreload(f, true, 305);
+  ServicePreload(f, false, 305);
+  f.game->WaitForPrewarm();
+  const uint32_t rt = f.BindMainSurface();
+  auto p = f.MakeColorPipeline();
+  Pixels px = DrawQuadrantFrame(f, rt, p);
+  f.CheckQuadrantColors(px, __LINE__);
+  CHECK_EQ(f.game->stats().skipped_pending, uint64_t(0));
+  CHECK_EQ(f.game->stats().draw_pipelines, uint64_t(1));  // the prewarm's, nothing made at the draw
+}
+
 NR_TEST_MAIN()
