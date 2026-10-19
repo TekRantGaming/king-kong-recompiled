@@ -209,6 +209,7 @@ class KingKongApp : public rex::ReXApp {
       // Kong mods: over the player's settings for this run only (never saved), before the Original look
       // (which wins) and before the GPU starts.
       if (!kk::benchmark::Active()) kk::mods::ApplyAtGameStart(defaults.user_data_root);
+      kk::NoteGameStarting();  // task 285: a startup hang report if no first frame follows
       kk::EnforceOriginalLook();
       kk::ApplyFullscreenMode(window());
       kk::ApplyRendererChoice();  // the renderer, and with it the default upscaler
@@ -240,6 +241,7 @@ class KingKongApp : public rex::ReXApp {
         kk::exit_evidence::SetRole("game");
         // The game starts in this process: startup recovery watches it from here.
         kk::startup::Begin(gpu_plugin_, true);
+        kk::NoteGameStarting();  // task 285: a startup hang report if no first frame follows
         resume(defaults);
       });
     };

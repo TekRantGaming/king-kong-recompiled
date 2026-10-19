@@ -73,6 +73,7 @@
 
 #include <imgui.h>
 #include <SDL3/SDL_dialog.h>
+#include <SDL3/SDL_init.h>
 #include <SDL3/SDL_stdinc.h>
 #include <SDL3/SDL_video.h>
 #include <toml++/toml.hpp>
@@ -8089,6 +8090,13 @@ std::string ApplyRendererChoice() {
 
 void ShowLauncher(rex::ui::ImGuiDrawer* drawer, rex::ui::ImmediateDrawer* immediate, LauncherPaths paths,
                   LauncherCallbacks callbacks) {
+  // Task 285: one SDL audio reference for this process's life, taken here on the main thread. Without it
+  // the launcher's music and sounds were SDL's only audio users: closing the launcher for Play (the game
+  // in this process) shut Windows audio down completely on this thread, and a second later the game thread
+  // started it again and opened the device (SDL asks for both on the main thread). A restarted game once
+  // stalled at exactly that open (REPORT-271, run l1dx). Now the game's open finds SDL audio running.
+  static const bool audio_kept = SDL_InitSubSystem(SDL_INIT_AUDIO);
+  (void)audio_kept;
   new Launcher(drawer, immediate, std::move(paths), std::move(callbacks));
 }
 
