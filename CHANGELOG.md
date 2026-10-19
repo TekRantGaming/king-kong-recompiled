@@ -33,6 +33,8 @@ version's notes the first time you start it.
 
 ### Changed
 - **Smoother chapter starts.** Each chapter's own shaders are prepared first when it loads, the textures it needs are prepared ahead on the loading screen, and on DirectX 12 textures and buffers are made far faster. Fewer hitches in the first seconds of a chapter.
+- **Simpler downloads.** A texture pack or the PS2 cutscenes start downloading straight away and show their progress with Pause, Run in background and Cancel; there is no longer a question first. With **Notify me when downloads finish** on, a notification still tells you when a download running in the background has finished.
+- **No more crash report pop-up when the launcher starts.** Crash reports are still saved (and sent with the online switch on, as before); Settings > Advanced > **Saved crash reports** opens their folder.
 - **No loading screen after the PS2 cutscenes.** When the restored PS2 cutscenes play between chapters, the next chapter now loads while the cutscene plays.
 - **The game stays smooth when other programs are busy.** The game's own threads now get priority over background work on your PC.
 - **Every setting explains itself.** The panel beside the settings, in the launcher and in the pause menu, now says what each setting does, what you will notice in the game, what each option changes, and shows its performance and video memory impact and when a change takes effect. In five languages.

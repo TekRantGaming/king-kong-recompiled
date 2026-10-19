@@ -143,11 +143,6 @@ static void DownloadTable() {
         CHECK(!HasDash(x) && x.find(name) != std::string::npos && (l == 0 ? x == t : x != t));
       }
     }
-    const std::string body = kk::text::F("{0} is a {1} GB download. After that it is checked and unpacked. Depending on your "
-                                         "connection this takes from a few minutes to an hour or more.",
-                                         {"Kong Comic Book", "1.4"});
-    CHECK(body.find("Kong Comic Book") == 0 && body.find("1.4") != std::string::npos && body.find('{') == std::string::npos);
-    CHECK(l == 0 || body.find("connection") == std::string::npos);  // translated
     const std::string on = kk::text::F("Switch on {0}", {"Cel shading"}), is_on = kk::text::F("{0} is on", {"Cel shading"});
     CHECK(on.find("Cel shading") != std::string::npos && is_on.find("Cel shading") != std::string::npos);
     CHECK(l == 0 ? on == "Switch on Cel shading" : on != "Switch on Cel shading");

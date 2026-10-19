@@ -292,7 +292,6 @@ class KingKongApp : public rex::ReXApp {
     cb.desktop_mode = [this](int monitor) { return kk::DesktopDisplayMode(monitor, window()); };
     cb.post_to_ui = [this](std::function<void()> f) { app_context().CallInUIThreadDeferred(std::move(f)); };
     cb.recover_presentation = [this] { RecoverPresentation(nullptr); };
-    cb.minimize = [this] { return window() && kk::MinimizeNativeWindow(window()->GetNativeWindowHandle()); };
     cb.window_state = [this] {
       return window() ? kk::NativeWindowState(window()->GetNativeWindowHandle()) : std::pair<bool, bool>{false, false};
     };

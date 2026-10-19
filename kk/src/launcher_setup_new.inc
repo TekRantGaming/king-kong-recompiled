@@ -102,7 +102,7 @@
         sec.buttons.push_back({"Download", new_tex_answer_ == 0, [this] {
                                  new_tex_answer_ = 0;
                                  REXLOG_INFO("KK: New in this update: texture pack Download");
-                                 AskContentDownload(Kind::kTexturePack, 0);
+                                 StartContentDownload(Kind::kTexturePack, 0);
                                }});
         sec.buttons.push_back({"I already have one", new_tex_answer_ == 1, [this] {
                                  new_tex_answer_ = 1;
@@ -135,7 +135,7 @@
         sec.buttons.push_back({"Yes, restore them", new_cut_answer_ == 0, [this] {
                                  new_cut_answer_ = 0;
                                  REXLOG_INFO("KK: New in this update: PS2 cutscenes Yes");
-                                 AskContentDownload(Kind::kCutscenes, 0);
+                                 StartContentDownload(Kind::kCutscenes, 0);
                                }});
         sec.buttons.push_back({"No thanks", new_cut_answer_ == 1, [this] {
                                  new_cut_answer_ = 1;
