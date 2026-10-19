@@ -59,8 +59,8 @@ class BehindRule {
  public:
   bool Tick(double now, const std::optional<PlayerPose>& local, const std::optional<PlayerPose>& host) {
     if (!local || !host || now-local->time > .5 || !std::isfinite(now)) { since_.reset(); return false; }
-    const bool far = local->level != host->level || std::hypot(local->x-host->x, local->y-host->y, local->z-host->z) > 100.f;
-    if (!far) { since_.reset(); return false; }
+    const bool is_far = local->level != host->level || std::hypot(local->x-host->x, local->y-host->y, local->z-host->z) > 100.f;
+    if (!is_far) { since_.reset(); return false; }
     if (!since_ || now < *since_) since_ = now;
     if (now-*since_ < 8) return false;
     since_.reset(); return true;
