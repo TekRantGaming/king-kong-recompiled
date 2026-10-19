@@ -801,7 +801,7 @@ struct TexturePackShelf::Impl {
       const std::string up = text::Upper(buttons[size_t(k)].label);
       const float lfs = 15 * s, tw = ui::TrackedWidth(f.display, lfs, up, 2 * s);
       ImU32 col = lit ? color::kOnFocus : color::kText;
-      if (!on) col = lit ? color::kOnFocusDim : color::kTextFaint;
+      if (!on) col = lit ? color::kText : color::kTextFaint;  // on the faint bar (task 261)
       ui::DrawTracked(dl, f.display, lfs, ImVec2(a.x + std::max(10 * s, (pw - tw) * 0.5f), a.y + (bh - lfs) * 0.5f), col, up, 2 * s);
       ry += bh + 10 * s;
     }

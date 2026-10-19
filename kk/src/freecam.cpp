@@ -26,6 +26,10 @@ REXCVAR_DEFINE_BOOL(kk_hide_hud, false, "KK",
                     "Hide the game's HUD all the time (saved; the Hardcore mod). F10 still hides the rest for "
                     "screenshots. The weapon in Jack's hands stays");
 
+namespace kk::fov {
+bool InMenus();  // fov.cpp: the game's menu script runs (not under the port's pause menu)
+}
+
 namespace kk::freecam {
 namespace {
 using Clock = std::chrono::steady_clock;
@@ -324,8 +328,14 @@ bool PhotoActive() { return photo.load(); }
 bool HideHud() { return (hidden.load() && InPlay()) || photo.load(); }
 // Also under the port's pause menu (task 243): its kept frame of the paused game is taken again when the field
 // of view changes there, and must look like play (the game's black cover hides the rest meanwhile).
+// Never on the game's own menu pages (task 261): Score, Save, Options and their confirmation pages from the pause,
+// the Score pages at a chapter's end. They draw in the same HUD pass, and play stays "in play" while they show;
+// their menu script runs (fov::InMenus, which is false under the port's own pause menu).
 bool HideGameHud() {
-  return ((hidden.load() || REXCVAR_GET(kk_hide_hud)) && (InPlay() || play::PauseMenuOpen())) || photo.load();
+  if (photo.load()) return true;
+  if (!hidden.load() && !REXCVAR_GET(kk_hide_hud)) return false;
+  if (kk::fov::InMenus()) return false;
+  return InPlay() || play::PauseMenuOpen();
 }
 void Pad(uint32_t user, uint8_t *state, bool connected) {
   if (user >= pads.size()) {

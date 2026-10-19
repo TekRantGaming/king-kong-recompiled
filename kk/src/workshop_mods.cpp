@@ -589,7 +589,7 @@ struct KongMods::Impl {
       const std::string up = text::Upper(label);
       const float lfs = 15 * s, tw = ui::TrackedWidth(f.display, lfs, up, 2 * s);
       ImU32 col = lit ? color::kOnFocus : color::kText;
-      if (!enabled_button[b]) col = lit ? color::kOnFocusDim : color::kTextFaint;
+      if (!enabled_button[b]) col = lit ? color::kText : color::kTextFaint;  // on the faint bar (task 261)
       ui::DrawTracked(dl, f.display, lfs, ImVec2(a.x + (pw - tw) * 0.5f, a.y + (bh - lfs) * 0.5f), col, up, 2 * s);
       ry += bh + 10 * s;
     }
