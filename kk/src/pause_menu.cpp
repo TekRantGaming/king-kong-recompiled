@@ -631,7 +631,7 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
 #if defined(KK_DEV_TOOLS)
   // Developer-only: KK_DEV_PAUSE_INPUT="pad:down,pad:a,shot:name,..." presses buttons once the
   // menu is open, as the launcher's KK_DEV_LAUNCHER_INPUT does (pad:/ps:/kb: a b x y lb rb start
-  // up down left right lt rt; move:X:Y and click:X:Y at 1280 x 720 positions), logging
+  // up down left right lt rt; move:X:Y, click:X:Y and rclick:X:Y (right button) at 1280 x 720 positions), logging
   // "KK dev: pause input <step>" and, for shot:<name>, "KK dev: shot <name>" (then holds for capture).
   // page:<name> (or settings:<name>) opens a page (display, graphics, audio, cheats in the Settings list;
   // controls, gameplay in the main list) and logs its rows in the pause menu's order; list:settings / list:main
@@ -640,10 +640,10 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
   // how wide every breadcrumb is (task 248).
   void DevInput() {
     ImGuiIO& io = ImGui::GetIO();
-    static bool release = false;
-    if (release) {
-      io.AddMouseButtonEvent(0, false);
-      release = false;
+    static int release = -1;
+    if (release >= 0) {
+      io.AddMouseButtonEvent(release, false);
+      release = -1;
     }
     static std::vector<std::string> steps = [] {
       std::vector<std::string> out;
@@ -660,6 +660,11 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
     if (next >= steps.size() || now < at) return;
     std::string t = steps[next++];
     at = now + 0.45;
+    // Where the menu is before this step (the result of the previous one), for scripted Back-target checks.
+    REXLOG_INFO("KK dev: pause state {} focus {}",
+                view_ == View::kPage ? std::string("page ") + InGameSettings::PageName(page_)
+                                     : std::string(view_ == View::kSettings ? "settings" : "main"),
+                pause::Label(view_ == View::kSettings ? settings_focus_ : focus_entry_));
     REXLOG_INFO("KK dev: pause input {}", t);
     if (t.rfind("shot:", 0) == 0) {
       REXLOG_INFO("KK dev: shot {}", t.substr(5));
@@ -716,10 +721,10 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
       io.AddMousePosEvent(o_.x + std::stof(xy.substr(0, colon)) * m_.s, o_.y + std::stof(xy.substr(colon + 1)) * m_.s);
     };
     if (t.rfind("move:", 0) == 0) return at_point(t.substr(5));
-    if (t.rfind("click:", 0) == 0) {
-      at_point(t.substr(6));
-      io.AddMouseButtonEvent(0, true);
-      release = true;
+    if (t.rfind("click:", 0) == 0 || t.rfind("rclick:", 0) == 0) {
+      release = t[0] == 'r' ? 1 : 0;
+      at_point(t.substr(t.find(':') + 1));
+      io.AddMouseButtonEvent(release, true);
       return;
     }
     ui::Device d = ui::Device::kKeyboard;
