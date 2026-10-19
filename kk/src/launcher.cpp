@@ -32,6 +32,7 @@
 #include "dev_launcher_chain.h"
 #include "hooks/kk_native_ui.h"  // the temporal upscalers this PC runs
 #include "debug_overlay_logic.h"  // the upscalers the running game offers (as F8 lists them)
+#include "ultrawide_logic.h"  // the Ultrawide mod's picture shape (task 311)
 
 #include <algorithm>
 #include <atomic>
@@ -1070,10 +1071,26 @@ class SettingsPages {
     return std::move(Disable(it, GetBool("kk_original_look"), kSetByOriginal));
   }
 
+  // The experimental Ultrawide mod (task 311): the shape of the picture the game draws for out_w x out_h (16:9
+  // when the mod is off, so every size below is as before). In game: the shape the running game draws
+  // (UltrawideFactor, set at the start). In the main menu: the shape the next start gives (kk_aspect, or "auto"
+  // while the built-in Ultrawide mod is switched on: its value, put over the player's at the start).
+  double PictureAspect(int out_w, int out_h) const {
+    if (in_game_) return ultrawide::kGameAspect * double(UltrawideFactor());
+    std::string setting = Get("kk_aspect");
+    if (ultrawide::WidthFactor(ultrawide::AspectFor(setting, out_w, out_h)) == 1.0) {
+      const std::string mods = "|" + Get("kk_mods") + "|";
+      if (mods.find("|builtin:ultrawide|") != std::string::npos) setting = "auto";
+    }
+    const double aspect = ultrawide::AspectFor(setting, out_w, out_h);
+    return ultrawide::WidthFactor(aspect) == 1.0 ? ultrawide::kGameAspect : aspect;
+  }
+
   // Display > Upscaling (Beta 2: from the Graphics page): the upscaler and how many pixels the game
   // draws for the screen, which the Resolution above decides.
   void UpscalingItems(std::vector<Item>& items) {
     const auto [out_w, out_h] = cb_.output_size ? cb_.output_size() : std::pair<int, int>{1280, 720};
+    const double aspect = PictureAspect(out_w, out_h);  // 16:9 unless the Ultrawide mod is on
     const bool original = GetBool("kk_original_look");
     const char* draws = GetBool("fullscreen") ? "Draws {0} for your {1} screen." : "Draws {0} for your {1} window.";
     items.push_back(Section("Upscaling"));
@@ -1185,7 +1202,7 @@ class SettingsPages {
       it.description = "How many pixels the game draws before the upscaler rebuilds the picture at your screen's size.";
       const std::string cur = Get("native_upscaler_quality");
       it.index = -1;
-      const auto [ow, oh] = UpscalerOutputFor(out_w, out_h);
+      const auto [ow, oh] = UpscalerOutputFor(out_w, out_h, aspect);
       for (size_t m = 0; m < std::size(kTemporalModes); ++m) {
         it.options.push_back(kTemporalModes[m].label);
         if (cur == kTemporalModes[m].value) {
@@ -1216,12 +1233,12 @@ class SettingsPages {
       it.index = mode;
       if (mode >= 0) {
         const int scale = RenderScaleFor(kUpscalerModes[mode], out_h);
-        const auto [fw, fh] = NoUpscalerFrameSize(out_w, out_h, 1280 * scale, 720 * scale);
+        const auto [fw, fh] = NoUpscalerFrameSize(out_w, out_h, 1280 * scale, 720 * scale, aspect);
         it.facts.push_back(F(draws, {Size(fw, fh), Size(out_w, out_h)}));
         std::string same;
         for (int m = 0; m < 4; ++m) {
           const int ms = RenderScaleFor(kUpscalerModes[m], out_h);
-          if (m == mode || NoUpscalerFrameSize(out_w, out_h, 1280 * ms, 720 * ms) != std::pair{fw, fh}) continue;
+          if (m == mode || NoUpscalerFrameSize(out_w, out_h, 1280 * ms, 720 * ms, aspect) != std::pair{fw, fh}) continue;
           same += same.empty() ? T(std::string(kUpscalerModeNames[m]))
                                : " " + T(std::string("and")) + " " + T(std::string(kUpscalerModeNames[m]));
         }
@@ -1249,7 +1266,7 @@ class SettingsPages {
         const int scale = RenderScaleFor(p.id, out_h);
         if (cur == p.id) {
           it.index = int(values.size());
-          const auto [fw, fh] = NoUpscalerFrameSize(out_w, out_h, 1280 * scale, 720 * scale);
+          const auto [fw, fh] = NoUpscalerFrameSize(out_w, out_h, 1280 * scale, 720 * scale, aspect);
           it.facts.push_back(F(draws, {Size(fw, fh), Size(out_w, out_h)}));
         }
         it.options.push_back(p.label);
@@ -1278,7 +1295,7 @@ class SettingsPages {
       {
         // Never above the chosen resolution without an upscaler (settings.h, NoUpscalerFrameSize).
         const int s = std::clamp(std::atoi(Get("resolution_scale").c_str()), 1, 8);
-        const auto [fw, fh] = NoUpscalerFrameSize(out_w, out_h, 1280 * s, 720 * s);
+        const auto [fw, fh] = NoUpscalerFrameSize(out_w, out_h, 1280 * s, 720 * s, aspect);
         it.facts.push_back(F(draws, {Size(fw, fh), Size(out_w, out_h)}));
       }
       items.push_back(std::move(Disable(it, original, kSetByOriginal)));
@@ -1298,9 +1315,24 @@ class SettingsPages {
       items.push_back(ResolutionItem());
       items.push_back(RefreshRateItem());
     }
-    items.push_back(CvarChoice("Aspect ratio",
-                               "What the game's 16:9 picture does on a screen of another shape.",
-                               "present_letterbox", {{"Letterbox 16:9", "true"}, {"Stretch", "false"}}));
+    {
+      // The Ultrawide mod on (task 311): the picture is already wider than 16:9 (its shape, up to 32:9), so the
+      // row says so instead of "Letterbox 16:9"; the setting still decides what a screen wider still shows.
+      const auto [out_w, out_h] = cb_.output_size ? cb_.output_size() : std::pair<int, int>{1280, 720};
+      const double aspect = PictureAspect(out_w, out_h);
+      if (aspect == ultrawide::kGameAspect) {
+        items.push_back(CvarChoice("Aspect ratio",
+                                   "What the game's 16:9 picture does on a screen of another shape.",
+                                   "present_letterbox", {{"Letterbox 16:9", "true"}, {"Stretch", "false"}}));
+      } else {
+        Item it = CvarChoice("Aspect ratio",
+                             "What the game's wider picture (the Ultrawide mod) does on a screen of another shape.",
+                             "present_letterbox", {{"Letterbox", "true"}, {"Stretch", "false"}});
+        const auto [pw, ph] = ultrawide::LargestInside(out_w, out_h, aspect);
+        it.facts.push_back(F("The Ultrawide mod (experimental) is on: the game's picture is {0}.", {Size(pw, ph)}));
+        items.push_back(std::move(it));
+      }
+    }
     PictureItems(items);
     items.push_back(Section("Frame rate"));
     items.push_back(CvarToggle("VSync",
