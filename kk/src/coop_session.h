@@ -3,10 +3,12 @@
 #include "coop_protocol.h"
 #include "coop_transport.h"
 #include "coop_enemies.h"
+#include "coop_shots.h"
 
 #include <deque>
 #include <functional>
 #include <optional>
+#include <mutex>
 
 namespace kk::coop {
 enum class Role { Host, Guest };
@@ -47,6 +49,9 @@ class CoopSession {
   PoseCounters Poses() const { return pose_counters_; }
   enemies::Frame Enemies(double now) const { return state_ == SessionState::Connected ? enemies_.Sample(now) : enemies::Frame{}; }
   uint64_t EnemiesSent() const { return enemies_sent_; }
+  bool QueueShot(const ShotIntent& shot);
+  std::vector<ReceivedShot> TakeShots();
+  uint64_t ShotsSent() const { return shots_sent_; }
  private:
   void Transition(SessionState state);
   bool Send(Message message, bool reliable);
@@ -69,5 +74,31 @@ class CoopSession {
   enemies::Channel enemies_;
   double last_enemies_ = -1;
   uint64_t enemies_sent_ = 0;
+  std::deque<ShotIntent> outgoing_shots_;
+  std::vector<ReceivedShot> incoming_shots_;
+  uint64_t shots_sent_ = 0;
+};
+// Both workers share the same bounded value-only handoff. No guest memory here.
+class ShotMailbox {
+ public:
+  bool Submit(const ShotIntent& shot) {
+    std::lock_guard lock(mutex_);
+    if (!ValidShotIntent(shot) || outgoing_.size() >= kMaxQueuedShots) return false;
+    outgoing_.push_back(shot); return true;
+  }
+  std::vector<ReceivedShot> Take() {
+    std::lock_guard lock(mutex_); auto out = std::move(incoming_); incoming_.clear(); return out;
+  }
+  void Clear() { std::lock_guard lock(mutex_); outgoing_.clear(); incoming_.clear(); }
+  void Exchange(CoopSession& session) {
+    if (session.State() != SessionState::Connected) { Clear(); return; }
+    std::lock_guard lock(mutex_);
+    while (!outgoing_.empty() && session.QueueShot(outgoing_.front())) outgoing_.pop_front();
+    for (auto& shot : session.TakeShots()) if (incoming_.size() < kMaxQueuedShots) incoming_.push_back(std::move(shot));
+  }
+ private:
+  std::mutex mutex_;
+  std::deque<ShotIntent> outgoing_;
+  std::vector<ReceivedShot> incoming_;
 };
 }  // namespace kk::coop

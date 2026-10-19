@@ -59,7 +59,9 @@ CoopSession::CoopSession(SessionConfig c, ICoopTransport& t, StateCallback f)
 void CoopSession::Transition(SessionState s) {
   if (state_ == s) return;
   state_ = s;
-  if (s != SessionState::Connected) { poses_.Clear(); enemies_.Clear(); }
+  if (s != SessionState::Connected) {
+    poses_.Clear(); enemies_.Clear(); outgoing_shots_.clear(); incoming_shots_.clear();
+  }
   if (changed_) changed_(s);
 }
 bool CoopSession::Send(Message m, bool reliable) {
@@ -70,6 +72,7 @@ bool CoopSession::Send(Message m, bool reliable) {
   if (!Encode(m, bytes) || !transport_.Send(bytes, reliable)) return false;
   if (m.type == MessageType::PlayerPose) ++pose_counters_.sent;
   if (m.type == MessageType::EnemySnapshot) enemies_sent_ += m.enemies.enemies.size();
+  if (m.type == MessageType::ShotIntent) ++shots_sent_;
   return true;
 }
 void CoopSession::Receive(const Message& m, double now) {
@@ -111,6 +114,13 @@ void CoopSession::Receive(const Message& m, double now) {
         case MessageType::EnemySnapshot: case MessageType::EnemyEvent:
           if (config_.role != Role::Guest || state_ != SessionState::Connected) return;
           enemies_.Receive(m, now); break;
+        case MessageType::ShotIntent:
+          if (config_.role != Role::Host || state_ != SessionState::Connected) return;
+          // The game-thread validator owns sequence rejection and its reason
+          // counter. Never silently apply or discard a replay in a second policy.
+          if (incoming_shots_.size() < kMaxQueuedShots) incoming_shots_.push_back({m.shot, now});
+          else ++malformed_;
+          break;
         default: return;
       }
     }
@@ -177,7 +187,23 @@ void CoopSession::Tick(double now, const std::optional<PlayerPose>& local, const
       last_enemies_ = now;
     }
   }
+  if (state_ == SessionState::Connected && config_.role == Role::Guest) {
+    unsigned sent = 0;
+    while (sent < 8 && !outgoing_shots_.empty()) {
+      Message m; m.type = MessageType::ShotIntent; m.shot = outgoing_shots_.front();
+      // Local steady clocks match between the worker and game thread.
+      if (now-m.shot.time > .5) { outgoing_shots_.pop_front(); continue; }
+      if (!Send(m, true)) break;
+      outgoing_shots_.pop_front(); ++sent;
+    }
+  }
 }
+bool CoopSession::QueueShot(const ShotIntent& shot) {
+  if (state_ != SessionState::Connected || config_.role != Role::Guest ||
+      !ValidShotIntent(shot) || outgoing_shots_.size() >= kMaxQueuedShots) return false;
+  outgoing_shots_.push_back(shot); return true;
+}
+std::vector<ReceivedShot> CoopSession::TakeShots() { auto out = std::move(incoming_shots_); incoming_shots_.clear(); return out; }
 void CoopSession::End(double) {
   if (!config_.enabled || state_ == SessionState::Idle || state_ == SessionState::Ended) return;
   Message bye; bye.type = MessageType::Bye; Send(bye, true);

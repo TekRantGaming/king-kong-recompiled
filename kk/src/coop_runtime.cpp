@@ -69,9 +69,11 @@ struct View {
   PoseCounters poses;
   enemies::Frame enemies;
   uint64_t enemies_sent = 0;
+  uint64_t shots_sent = 0;
 };
 std::mutex enemy_status_mutex;
 enemies::Counters enemy_status;
+ShotCounters shot_status;
 #if defined(KK_DEV_TOOLS)
 std::atomic<bool> partner_body_driven{false};
 void LogPoses(const View& v, double now, double& next) {
@@ -105,9 +107,11 @@ class Service {
         { std::lock_guard lock(mutex_); local = local_.pose; failure = local_.failure; frame = enemies_; }
         if (local && now - local->time > .25) { local.reset(); failure = "publish-expired"; }
         session.Tick(now, local, &frame);
+        shots_.Exchange(session);
         View view{config.role, session.State(), session.Rejection(), session.Stats(), local, session.Partner(now), now};
         view.local_failure = failure; view.poses = session.Poses();
         view.enemies = session.Enemies(now); view.enemies_sent = session.EnemiesSent();
+        view.shots_sent = session.ShotsSent();
         LogPoses(view, now, next_pose_log);
         { std::lock_guard lock(mutex_); view_ = std::move(view); }
         if (shown != session.State()) { shown = session.State(); RequestUiPaint(); }
@@ -129,6 +133,7 @@ class Service {
     stop_ = true;
     if (worker_.joinable()) worker_.join();
     std::lock_guard lock(mutex_); local_ = {}; view_ = {}; enemies_ = {};
+    shots_.Clear();
   }
   bool Running() const { return running_; }
   void Publish(PoseRead p) { std::lock_guard lock(mutex_); local_ = p; }
@@ -137,6 +142,8 @@ class Service {
     std::lock_guard lock(mutex_); return view_.state == SessionState::Connected && now-view_.updated <= .5;
   }
   void PublishEnemies(const enemies::Frame& frame) { std::lock_guard lock(mutex_); enemies_ = frame; }
+  bool SubmitShot(const ShotIntent& shot) { return shots_.Submit(shot); }
+  std::vector<ReceivedShot> TakeShots() { return shots_.Take(); }
  private:
   std::atomic<bool> running_{false}, stop_{false};
   std::thread worker_;
@@ -144,6 +151,7 @@ class Service {
   PoseRead local_;
   View view_;
   enemies::Frame enemies_;
+  ShotMailbox shots_;
 };
 Service service;  // No thread, socket, guest reads, file access or allocation until explicitly started.
 #endif
@@ -163,7 +171,7 @@ View CurrentView() {
 #endif
   if (!steam) return {};
   const auto v = steam->SessionSnapshot();
-  return {v.role, v.state, v.rejection, v.stats, v.local, v.partner, v.updated, v.local_failure, v.poses, v.enemies, v.enemies_sent};
+  return {v.role, v.state, v.rejection, v.stats, v.local, v.partner, v.updated, v.local_failure, v.poses, v.enemies, v.enemies_sent, v.shots_sent};
 }
 
 class PartnerOverlay final : public rex::ui::ImGuiDialog {
@@ -195,6 +203,12 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
     std::snprintf(text, sizeof(text), "Enemies: sent %llu | matched %u | unmatched %u | driven %u",
         static_cast<unsigned long long>(v.enemies_sent), counts.matched, counts.unmatched, counts.driven);
     dl->AddText(ImVec2(24, 112), IM_COL32(255, 230, 170, 255), text);
+    ShotCounters shots;
+    { std::lock_guard lock(enemy_status_mutex); shots = shot_status; }
+    std::snprintf(text, sizeof(text), "Shots: sent %llu | applied %llu | rejected %llu (%s)",
+        static_cast<unsigned long long>(v.shots_sent), static_cast<unsigned long long>(shots.applied),
+        static_cast<unsigned long long>(shots.rejected), ShotRejectName(shots.last));
+    dl->AddText(ImVec2(24, 136), IM_COL32(255, 230, 170, 255), text);
 #else
     auto* dl = ImGui::GetForegroundDrawList();
 #endif
@@ -212,7 +226,7 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
       const size_t used = std::char_traits<char>::length(text);
       std::snprintf(text + used, sizeof(text) - used, " (body)");
     }
-    constexpr float partner_y = 136;
+    constexpr float partner_y = 160;
 #else
     constexpr float partner_y = 88;
 #endif
@@ -322,7 +336,7 @@ void CreateOverlay(rex::ui::ImGuiDrawer* drawer) {
 EnemyLink EnemyLinkSnapshot() {
   if (!REXCVAR_GET(kk_coop_enabled)) return {};
   const auto v = CurrentView();
-  return {v.state == SessionState::Connected && Now()-v.updated <= .5, v.role, v.enemies, v.enemies_sent};
+  return {v.state == SessionState::Connected && Now()-v.updated <= .5, v.role, v.enemies, v.enemies_sent, v.shots_sent, v.partner};
 }
 bool EnemyConnectionReady() {
   if (!REXCVAR_GET(kk_coop_enabled)) return false;
@@ -340,6 +354,20 @@ void PublishEnemyFrame(const enemies::Frame& frame) {
 void SetEnemyCounters(enemies::Counters counts) {
   std::lock_guard lock(enemy_status_mutex); enemy_status = counts;
 }
+bool SubmitShotIntent(const ShotIntent& shot) {
+  if (!EnemyConnectionReady()) return false;
+#if defined(KK_DEV_TOOLS)
+  if (service.Running()) return service.SubmitShot(shot);
+#endif
+  return steam && steam->SubmitShot(shot);
+}
+std::vector<ReceivedShot> TakeShotIntents() {
+#if defined(KK_DEV_TOOLS)
+  if (service.Running()) return service.TakeShots();
+#endif
+  return steam ? steam->TakeShots() : std::vector<ReceivedShot>{};
+}
+void SetShotCounters(ShotCounters counts) { std::lock_guard lock(enemy_status_mutex); shot_status = counts; }
 #if defined(KK_DEV_TOOLS)
 PuppetSnapshot PartnerBodySnapshot() {
   if (!REXCVAR_GET(kk_coop_enabled)) return {};

@@ -49,6 +49,7 @@ void WriteEnemy(Writer& w, const EnemyState& e) {
   w.U(e.id.source, 8); w.U(e.id.sequence, 4); w.U(uint16_t(e.id.family), 2);
   for (float v : {e.x, e.y, e.z, e.facing, e.life}) w.U(std::bit_cast<uint32_t>(v), 4);
   w.U(e.state, 4); w.U(e.action, 2); w.U(e.item, 1);
+  for (float v : {e.spawn_x, e.spawn_y, e.spawn_z}) w.U(std::bit_cast<uint32_t>(v), 4);
 }
 EnemyState ReadEnemy(Reader& r) {
   EnemyState e;
@@ -57,7 +58,21 @@ EnemyState ReadEnemy(Reader& r) {
   e.z = std::bit_cast<float>(uint32_t(r.U(4))); e.facing = std::bit_cast<float>(uint32_t(r.U(4)));
   e.life = std::bit_cast<float>(uint32_t(r.U(4)));
   e.state = uint32_t(r.U(4)); e.action = uint16_t(r.U(2)); e.item = uint8_t(r.U(1));
+  e.spawn_x = std::bit_cast<float>(uint32_t(r.U(4)));
+  e.spawn_y = std::bit_cast<float>(uint32_t(r.U(4)));
+  e.spawn_z = std::bit_cast<float>(uint32_t(r.U(4)));
   return e;
+}
+bool Point(ShotVector p) {
+  return std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z) &&
+      std::abs(p.x) < 1000000 && std::abs(p.y) < 1000000 && std::abs(p.z) < 1000000;
+}
+void WriteVector(Writer& w, ShotVector p) {
+  for (float v : {p.x, p.y, p.z}) w.U(std::bit_cast<uint32_t>(v), 4);
+}
+ShotVector ReadVector(Reader& r) {
+  return {std::bit_cast<float>(uint32_t(r.U(4))), std::bit_cast<float>(uint32_t(r.U(4))),
+      std::bit_cast<float>(uint32_t(r.U(4)))};
 }
 }  // namespace
 bool ValidEnemyWorld(const EnemyWorld& w) {
@@ -67,7 +82,21 @@ bool ValidEnemy(const EnemyState& e) {
   return e.id.source && e.id.family >= EnemyFamily::Raptor && e.id.family <= EnemyFamily::Scorpion &&
       std::isfinite(e.x) && std::isfinite(e.y) && std::isfinite(e.z) && std::isfinite(e.facing) &&
       std::isfinite(e.life) && std::abs(e.x) < 1000000 && std::abs(e.y) < 1000000 &&
-      std::abs(e.z) < 1000000 && std::abs(e.facing) <= 3.1416f && std::abs(e.life) < 1000000;
+      std::abs(e.z) < 1000000 && std::abs(e.facing) <= 3.1416f && std::abs(e.life) < 1000000 &&
+      Point({e.spawn_x, e.spawn_y, e.spawn_z});
+}
+bool ValidShotIntent(const ShotIntent& s) {
+  if (!ValidEnemyWorld(s.world) || !s.number || s.weapon < 1 || s.weapon > 4 ||
+      !std::isfinite(s.time) || s.time < 0 || s.time >= 1e12 || !Point(s.origin) || !Point(s.direction) ||
+      s.hits.size() > (s.weapon == 3 ? kMaxShotHits : 1)) return false;
+  const float length = std::hypot(s.direction.x, s.direction.y, s.direction.z);
+  if (length < .99f || length > 1.01f) return false;
+  for (size_t i = 0; i < s.hits.size(); ++i) {
+    const auto& hit = s.hits[i];
+    if (!hit.id.source || hit.id.family < EnemyFamily::Raptor || hit.id.family > EnemyFamily::Scorpion || !Point(hit.point)) return false;
+    for (size_t j = 0; j < i; ++j) if (s.hits[j].id == hit.id) return false;
+  }
+  return true;
 }
 
 bool Encode(const Message& m, std::vector<uint8_t>& out) {
@@ -111,6 +140,17 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
           m.enemy_event.kind < EnemyEventKind::Spawned || m.enemy_event.kind > EnemyEventKind::Removed) return false;
       WriteWorld(payload, m.enemy_event.world); payload.U(uint8_t(m.enemy_event.kind), 1);
       WriteEnemy(payload, m.enemy_event.enemy);
+      break;
+    case MessageType::ShotIntent:
+      if (!ValidShotIntent(m.shot)) return false;
+      WriteWorld(payload, m.shot.world); payload.U(m.shot.number, 4); payload.U(m.shot.weapon, 1);
+      payload.U(std::bit_cast<uint64_t>(m.shot.time), 8);
+      WriteVector(payload, m.shot.origin); WriteVector(payload, m.shot.direction);
+      payload.U(m.shot.hits.size(), 1);
+      for (const auto& hit : m.shot.hits) {
+        payload.U(hit.id.source, 8); payload.U(hit.id.sequence, 4); payload.U(uint16_t(hit.id.family), 2);
+        WriteVector(payload, hit.point);
+      }
       break;
     default: return false;
   }
@@ -157,7 +197,7 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       m.enemies.world = ReadWorld(r); m.enemies.time = std::bit_cast<double>(r.U(8));
       const size_t count = size_t(r.U(2));
       if (!ValidEnemyWorld(m.enemies.world) || !std::isfinite(m.enemies.time) || m.enemies.time < 0 ||
-          m.enemies.time >= 1e12 || count > kMaxEnemyBatch || count * 41 != bytes.size() - r.at) return false;
+          m.enemies.time >= 1e12 || count > kMaxEnemyBatch || count * 53 != bytes.size() - r.at) return false;
       for (size_t i = 0; i < count; ++i) {
         auto e = ReadEnemy(r); if (!ValidEnemy(e)) return false;
         for (const auto& prior : m.enemies.enemies) if (prior.id == e.id) return false;
@@ -171,6 +211,18 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       if (!ValidEnemyWorld(m.enemy_event.world) || !ValidEnemy(m.enemy_event.enemy) ||
           m.enemy_event.kind < EnemyEventKind::Spawned || m.enemy_event.kind > EnemyEventKind::Removed) return false;
       break;
+    case MessageType::ShotIntent: {
+      m.shot.world = ReadWorld(r); m.shot.number = uint32_t(r.U(4)); m.shot.weapon = uint8_t(r.U(1));
+      m.shot.time = std::bit_cast<double>(r.U(8)); m.shot.origin = ReadVector(r); m.shot.direction = ReadVector(r);
+      const size_t count = size_t(r.U(1));
+      if (!r.ok || count > kMaxShotHits || count * 26 != bytes.size()-r.at) return false;
+      for (size_t i = 0; i < count; ++i) {
+        ShotHit hit; hit.id = {r.U(8), uint32_t(r.U(4)), EnemyFamily(r.U(2))}; hit.point = ReadVector(r);
+        m.shot.hits.push_back(hit);
+      }
+      if (!ValidShotIntent(m.shot)) return false;
+      break;
+    }
     default: return false;
   }
   if (!r.ok || r.at != bytes.size()) return false;

@@ -46,7 +46,7 @@ struct Binding {
   EnemyId id;
   uint32_t actor = 0, ai = 0, vars = 0, matrix = 0;
 };
-// Refuse ambiguity, including aliased mutable identity. Never nearest-position match.
+// Refuse ambiguity, including aliased mutable identity.
 inline const Binding* Match(const EnemyId& id, std::span<const Binding> bindings) {
   const Binding* found = nullptr;
   for (const auto& b : bindings) if (b.id == id) {
@@ -57,9 +57,45 @@ inline const Binding* Match(const EnemyId& id, std::span<const Binding> bindings
       (b.actor == found->actor || b.ai == found->ai || b.vars == found->vars || b.matrix == found->matrix)) return nullptr;
   return found;
 }
+struct MatchCandidate {
+  Binding binding;
+  float x = 0, y = 0, z = 0; // Immutable authored spawn point.
+  bool available = true;
+};
+struct MatchRetry {
+  double first = -1;
+  bool ToleranceAllowed(double now) {
+    if (first < 0) first = now;
+    return now >= first && now-first <= 10;
+  }
+};
+// Exact matches remain retryable indefinitely (including dormant/late activation).
+// Tolerance is only for authored IDs, and requires ONE candidate in the entire
+// radius, never just the nearest. Include reserved/ambiguous candidates to refuse ties.
+inline const Binding* MatchAuthored(const EnemyState& host, std::span<const MatchCandidate> candidates, bool tolerance) {
+  const MatchCandidate* exact = nullptr;
+  unsigned exact_count = 0;
+  for (const auto& c : candidates) if (c.binding.id == host.id) { exact = &c; ++exact_count; }
+  const MatchCandidate* found = exact;
+  if (exact_count > 1) return nullptr;
+  if (!exact_count) {
+    if (!tolerance || host.id.sequence) return nullptr;
+    unsigned count = 0;
+    for (const auto& c : candidates) if (!c.binding.id.sequence && c.binding.id.family == host.id.family &&
+        std::hypot(c.x-host.spawn_x, c.y-host.spawn_y, c.z-host.spawn_z) <= .25f) { found = &c; ++count; }
+    if (count != 1) return nullptr;
+  }
+  if (!found || !found->available) return nullptr;
+  const auto& b = found->binding;
+  if (!b.actor || !b.ai || !b.vars || !b.matrix) return nullptr;
+  for (const auto& c : candidates) if (&c != found &&
+      (c.binding.actor == b.actor || c.binding.ai == b.ai || c.binding.vars == b.vars || c.binding.matrix == b.matrix)) return nullptr;
+  return &found->binding;
+}
 struct Record {
   EnemyState enemy;
   EnemyEventKind kind = EnemyEventKind::Spawned; // Spawned means present, possibly alive.
+  EnemyState latest; // Uninterpolated host sample, diagnostics only.
 };
 struct Frame {
   EnemyWorld world;
@@ -164,6 +200,7 @@ class Channel {
       // Terminal events persist until unload. Live positions expire after 500 ms.
       if (!r.terminal && (r.history.empty() || now - r.received > .5)) continue;
       Record record = r.record;
+      record.latest = r.record.enemy;
       if (!r.terminal) {
         const double target = r.history.back().time + (now-r.received) - .1;
         record.enemy = r.history.front().enemy;

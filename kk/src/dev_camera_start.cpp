@@ -3,6 +3,8 @@
 // KK_DEV_FACE_PARTNER=<seconds>[:<repeat seconds>] separately turns Jack and his
 // normal first-person camera toward a fresh same-level co-op partner, with level
 // pitch and no position writes. Due requests wait for a usable pose/camera.
+// KK_DEV_FACE_ENEMY=<seconds>[:<repeat seconds>] takes precedence and aims at
+// the nearest matched live enemy on the guest, including pitch at camera commit.
 //
 // KK_DEV_CAMERA_START=<s> with KK_DEV_SAMPLE_DIR writes, for the first <s> seconds on the dev script
 // clock (from when the chapter's level has loaded; dev_tools.cpp DevSecondsSinceMenu):
@@ -33,6 +35,7 @@
 
 #include "coop_pose.h"
 #include "coop_runtime.h"
+#include "coop_enemies_game.h"
 #include "freecam.h"
 #include "hfr.h"
 #include "photo_mode.h"
@@ -46,12 +49,14 @@ namespace {
 // Separate from the dev script clock: rearmed after every actual level load.
 struct FacePartner {
   using Clock = std::chrono::steady_clock;
-  bool enabled = false, loaded = false, done = false;
+  bool enabled = false, loaded = false, done = false, enemy = false, logged = false;
   double first = 0, repeat = 0, next = 0;
   Clock::time_point load_time{};
 
   FacePartner() {
-    const char* value = std::getenv("KK_DEV_FACE_PARTNER");
+    const char* value = std::getenv("KK_DEV_FACE_ENEMY");
+    enemy = value && *value;
+    if (!enemy) value = std::getenv("KK_DEV_FACE_PARTNER");
     if (!value || !*value) return;
     const std::string s(value);
     const size_t colon = s.find(':');
@@ -63,7 +68,7 @@ struct FacePartner {
               first >= 0;
     if (colon != std::string::npos)
       enabled = enabled && number(s.data() + colon + 1, s.data() + s.size(), repeat) && repeat > 0;
-    if (!enabled) REXLOG_WARN("KK dev: invalid KK_DEV_FACE_PARTNER (expected seconds[:positive-repeat])");
+    if (!enabled) REXLOG_WARN("KK dev: invalid {} (expected seconds[:positive-repeat])", enemy ? "KK_DEV_FACE_ENEMY" : "KK_DEV_FACE_PARTNER");
   }
 };
 FacePartner& Face() { static FacePartner face; return face; }
@@ -74,6 +79,7 @@ void DevFacePartnerLevelLoaded() {
   if (!f.enabled) return;
   f.loaded = true;
   f.done = false;
+  f.logged = false;
   f.next = f.first;
   f.load_time = FacePartner::Clock::now();
 }
@@ -89,13 +95,13 @@ void DevFacePartnerCamera(PPCContext& ctx, uint8_t* base) {
   if (elapsed < f.next || play::StartLevelLoading() || photo::Active() || freecam::Active()) return;
   const auto snapshot = coop::PartnerBodySnapshot();
   if (!snapshot.enabled || !snapshot.fresh || snapshot.state != coop::SessionState::Connected ||
-      !snapshot.local || !snapshot.partner) return;
+      !snapshot.local || (!f.enemy && !snapshot.partner)) return;
   using namespace hfr;
   const auto local = coop::ReadJackPose(
       [&](uint32_t a) { return Load32(base, a); },
       [&](uint32_t a) { return Load16(base, a); },
       [&](uint32_t a) { return LoadF(base, a); }, elapsed);
-  if (!local.pose || local.pose->level != snapshot.partner->level ||
+  if (!local.pose || (!f.enemy && local.pose->level != snapshot.partner->level) ||
       local.pose->level != snapshot.local->level) return;
   const uint32_t hero = Load32(base, 0x82CCBF7C);
   const uint32_t script = Load32(base, 0x82CCBF64);
@@ -108,19 +114,30 @@ void DevFacePartnerCamera(PPCContext& ctx, uint8_t* base) {
       !coop::PoseAddress(camera, 28) || (Load32(base, camera) & 0x00400001u) ||
       !coop::PoseAddress(Load32(base, camera + 12), 64) ||
       forward != ctx.r1.u32 + 112 || !coop::PoseAddress(forward, 12) || up != cm + 208) return;
-  const float dx = snapshot.partner->x - local.pose->x, dy = snapshot.partner->y - local.pose->y;
+  const auto matrix = Load32(base, camera+12);
+  const coop::ShotVector eye = f.enemy ? coop::ShotVector{LoadF(base, matrix+48), LoadF(base, matrix+52), LoadF(base, matrix+56)} :
+      coop::ShotVector{local.pose->x, local.pose->y, local.pose->z};
+  auto target = f.enemy ? coop::EnemyAimTarget(base, eye) :
+      std::optional<coop::ShotVector>{coop::ShotVector{snapshot.partner->x, snapshot.partner->y, eye.z}};
+  if (!target) return; // Due requests wait for a matched live enemy and normal Jack camera.
+  const float dx = target->x - eye.x, dy = target->y - eye.y, dz = f.enemy ? target->z-eye.z : 0;
   const float horizontal = std::hypot(dx, dy);
-  const float distance = coop::PartnerDistance(*local.pose, *snapshot.partner);
+  const float distance = std::hypot(horizontal, dz);
   // An overlapping partner has no useful yaw. Keep the due request pending.
   if (!std::isfinite(horizontal) || horizontal < .01f || !std::isfinite(distance)) return;
-  StoreF(base, forward, dx / horizontal);
-  StoreF(base, forward + 4, dy / horizontal);
-  StoreF(base, forward + 8, 0);
+  StoreF(base, forward, dx / distance);
+  StoreF(base, forward + 4, dy / distance);
+  StoreF(base, forward + 8, dz / distance);
   StoreF(base, up, 0);
   StoreF(base, up + 4, 0);
   StoreF(base, up + 8, 1);
   StoreF(base, cm + 168, 0);  // CM_Cam's accumulated pitch in its constrained-view branch.
-  REXLOG_INFO("KK dev: face partner yaw={:.4f} pitch=0.0000 distance={:.3f}", std::atan2(dy, dx), distance);
+  // Repeated enemy aiming commits pitch with the same native orientation setter;
+  // its following call turns Jack using the horizontal forward vector (.52:20959).
+  if (!f.logged || !f.enemy || f.repeat >= 1)
+    REXLOG_INFO("KK dev: face {} yaw={:.4f} pitch={:.4f} distance={:.3f}", f.enemy ? "enemy" : "partner",
+        std::atan2(dy, dx), std::atan2(dz, horizontal), distance);
+  f.logged = true;
   if (f.repeat > 0) {
     // Skip missed intervals, preserving the load-relative cadence without bursts.
     f.next = elapsed + (f.repeat - std::fmod(elapsed - f.first, f.repeat));

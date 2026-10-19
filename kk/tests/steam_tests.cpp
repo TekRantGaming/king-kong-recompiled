@@ -105,6 +105,7 @@ std::vector<uint8_t> Packet(MessageType type) {
   EnemyState enemy{{123, 0, EnemyFamily::Raptor}, 1, 2, 3, 0, 50};
   m.enemies = {{303, 3, 1}, 1, {enemy}};
   m.enemy_event = {{303, 3, 1}, EnemyEventKind::Spawned, enemy};
+    m.shot.world = {303, 3, 1}; m.shot.number = 1; m.shot.weapon = 1; m.shot.direction = {1, 0, 0};
   std::vector<uint8_t> bytes; Check(Encode(m, bytes), "encode backend fixture"); return bytes;
 }
 struct Backend final : ISteamMessagesBackend {
@@ -144,6 +145,10 @@ void Messages() {
   Check(!host.Send(enemies, true) && !host.Send(event, false), "enemy channel misuse rejected");
   guest.Poll(.1);
   Check(guest.Receive(out) && out == event && guest.Receive(out) && out == enemies && !guest.Receive(out), "enemy transport framing preserved");
+    const auto shot = Packet(MessageType::ShotIntent);
+    Check(host.Send(shot, true) && !host.Send(shot, false), "shot intent only uses reliable channel");
+    guest.Poll(.2);
+    Check(guest.Receive(out) && out == shot && !guest.Receive(out), "shot framing preserved");
   b.incoming.push_back({3, 0, true, false, hello});
   b.incoming.push_back({1, 0, true, true, {}});
   b.incoming.push_back({1, 0, true, false, {1, 2, 3}});

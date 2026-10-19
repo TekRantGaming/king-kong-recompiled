@@ -18,11 +18,16 @@ struct EnemyLink {
   Role role = Role::Host;
   enemies::Frame remote;
   uint64_t sent = 0;
+  uint64_t shots_sent = 0;
+  std::optional<PlayerPose> partner;
 };
 EnemyLink EnemyLinkSnapshot();
 bool EnemyConnectionReady();
 void PublishEnemyFrame(const enemies::Frame& frame);
 void SetEnemyCounters(enemies::Counters counters);
+bool SubmitShotIntent(const ShotIntent& shot);
+std::vector<ReceivedShot> TakeShotIntents();
+void SetShotCounters(ShotCounters counters);
 #if defined(KK_DEV_TOOLS)
 bool SocialFakeScenario(std::string_view scenario);
 // Value-only snapshot, including CoopSession's interpolated pose. No transport work.
