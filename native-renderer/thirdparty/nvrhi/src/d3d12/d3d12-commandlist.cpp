@@ -34,7 +34,7 @@ namespace nvrhi::d3d12
         , m_Device(device)
         , m_Queue(device->getQueue(params.queueType))
 		, m_LifetimeTracker(params.lifetimeTracker)
-        , m_UploadManager(context, m_Queue, params.uploadChunkSize, 0, false)
+        , m_UploadManager(context, m_Queue, std::max<size_t>(params.uploadChunkSize, size_t(context.minUploadChunkSize)), 0, false)
         , m_DxrScratchManager(context, m_Queue, params.scratchChunkSize, params.scratchMaxMemory, true)
         , m_StateTracker(context.messageCallback)
         , m_Desc(params)

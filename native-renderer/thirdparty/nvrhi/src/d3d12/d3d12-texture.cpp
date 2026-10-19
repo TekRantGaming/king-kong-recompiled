@@ -141,6 +141,13 @@ namespace nvrhi::d3d12
 
     Texture::~Texture()
     {
+        if (placedRange.valid() && m_Resources.placedTextures)
+        {
+            // The resource goes before its range can be used again.
+            resource = nullptr;
+            m_Resources.placedTextures->release(placedRange);
+        }
+
         for (auto pair : m_RenderTargetViews)
             m_Resources.renderTargetViewHeap.releaseDescriptor(pair.second);
 
@@ -330,6 +337,38 @@ namespace nvrhi::d3d12
             rd.Layout = D3D12_TEXTURE_LAYOUT_64KB_UNDEFINED_SWIZZLE;
         }
 
+        // KK task 300 (DeviceDesc::placedTextureHeapSize): a sampled-only texture goes into a pooled heap.
+        ID3D12Heap* placedHeap = nullptr;
+        PlacedRanges::Allocation placedRange;
+        const D3D12_RESOURCE_FLAGS notPlaced = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET |
+            D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS |
+            D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS | D3D12_RESOURCE_FLAG_ALLOW_CROSS_ADAPTER;
+        if (m_Resources.placedTextures && d.allowPlacedMemory && !isShared && !d.isTiled && !d.isVirtual && rd.SampleDesc.Count <= 1 &&
+            (rd.Flags & notPlaced) == 0)
+        {
+            D3D12_RESOURCE_ALLOCATION_INFO info = m_Context.device->GetResourceAllocationInfo(
+                0, 1, reinterpret_cast<D3D12_RESOURCE_DESC const*>(&rd));
+            if (info.SizeInBytes <= D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT)
+            {
+                // Its most detailed level fits in 64 KiB, so 4 KiB placement may be allowed (the driver says).
+                D3D12_RESOURCE_DESC1 smallDesc = rd;
+                smallDesc.Alignment = D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT;
+                const D3D12_RESOURCE_ALLOCATION_INFO smallInfo = m_Context.device->GetResourceAllocationInfo(
+                    0, 1, reinterpret_cast<D3D12_RESOURCE_DESC const*>(&smallDesc));
+                if (smallInfo.Alignment == D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT && smallInfo.SizeInBytes != UINT64_MAX)
+                {
+                    rd.Alignment = smallDesc.Alignment;
+                    info = smallInfo;
+                }
+            }
+            if (info.SizeInBytes == 0 || info.SizeInBytes == UINT64_MAX ||
+                !m_Resources.placedTextures->allocate(info.SizeInBytes, info.Alignment, &placedHeap, placedRange))
+            {
+                placedHeap = nullptr;
+                rd.Alignment = 0;
+            }
+        }
+
         Texture* texture = new Texture(m_Context, m_Resources, d, rd);
 
         D3D12_CLEAR_VALUE clearValue = convertTextureClearValue(d);
@@ -369,7 +408,48 @@ namespace nvrhi::d3d12
         {
             heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
 
-            if (m_EnhancedBarriersSupported)
+            bool placed = false;
+            if (placedHeap)
+            {
+                if (m_EnhancedBarriersSupported)
+                {
+                    hr = m_Context.device10->CreatePlacedResource2(
+                        placedHeap, placedRange.offset,
+                        &texture->resourceDesc,
+                        initialLayout,
+                        d.useClearValue ? &clearValue : nullptr,
+                        0, nullptr,
+                        IID_PPV_ARGS(&texture->resource));
+                }
+                else
+                {
+                    hr = m_Context.device->CreatePlacedResource(
+                        placedHeap, placedRange.offset,
+                        reinterpret_cast<D3D12_RESOURCE_DESC const*>(&texture->resourceDesc),
+                        initialState,
+                        d.useClearValue ? &clearValue : nullptr,
+                        IID_PPV_ARGS(&texture->resource));
+                }
+                if (SUCCEEDED(hr))
+                {
+                    texture->placedRange = placedRange;
+                    placed = true;
+                }
+                else
+                {
+                    // Committed after all, with the usual alignment.
+                    m_Resources.placedTextures->release(placedRange);
+                    delete texture;
+                    rd.Alignment = 0;
+                    texture = new Texture(m_Context, m_Resources, d, rd);
+                }
+            }
+
+            if (placed)
+            {
+                // made above
+            }
+            else if (m_EnhancedBarriersSupported)
             {
                 hr = m_Context.device10->CreateCommittedResource3(
                     &heapProps,

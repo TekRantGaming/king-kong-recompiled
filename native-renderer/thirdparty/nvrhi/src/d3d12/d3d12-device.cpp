@@ -120,6 +120,72 @@ namespace nvrhi::d3d12
         , timerQueries(desc.maxTimerQueries, true)
         , m_Context(context)
     {
+        if (desc.placedTextureHeapSize)
+            placedTextures = std::make_unique<PlacedTexturePool>(context, desc.placedTextureHeapSize);
+    }
+
+    // Every texture is gone by now (as for the descriptor heaps), so every pooled heap is empty.
+    DeviceResources::~DeviceResources() = default;
+
+    // KK task 300 (DeviceDesc::placedTextureHeapSize).
+    bool PlacedTexturePool::allocate(uint64_t size, uint64_t alignment, ID3D12Heap** heap, PlacedRanges::Allocation& out)
+    {
+        if (size > maxResourceSize())
+            return false;
+        std::lock_guard lock(m_Mutex);
+        if (m_Failed)
+            return false;
+        if (!m_Ranges.allocate(size, alignment, out))
+        {
+            D3D12_HEAP_DESC desc = {};
+            desc.SizeInBytes = m_Ranges.blockSize();
+            desc.Properties.Type = D3D12_HEAP_TYPE_DEFAULT;
+            desc.Alignment = D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT;
+            // Works on resource heap tier 1 too. The textures are written in full before use (as a
+            // reused range would hold an old texture's texels anyway), so the OS need not zero it.
+            desc.Flags = D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES;
+            RefCountPtr<ID3D12Heap> made;
+            HRESULT hr = E_FAIL;
+            if (m_NotZeroed)
+            {
+                D3D12_HEAP_DESC notZeroed = desc;
+                notZeroed.Flags |= D3D12_HEAP_FLAG_CREATE_NOT_ZEROED;
+                hr = m_Context.device->CreateHeap(&notZeroed, IID_PPV_ARGS(&made));
+                if (FAILED(hr))
+                    m_NotZeroed = false; // Windows before 10 2004
+            }
+            if (!made)
+                hr = m_Context.device->CreateHeap(&desc, IID_PPV_ARGS(&made));
+            if (FAILED(hr) || !made)
+            {
+                // Out of memory or refused: committed textures from now on (each fails on its own).
+                m_Failed = true;
+                m_Context.error("Placed texture pool: CreateHeap failed; textures are committed from now on");
+                return false;
+            }
+            const uint32_t block = m_Ranges.addBlock();
+            if (block >= m_Heaps.size())
+                m_Heaps.resize(block + 1);
+            m_Heaps[block] = made;
+            made->SetName(L"Placed texture pool");
+            if (!m_Ranges.allocate(size, alignment, out))
+                return false;
+        }
+        *heap = m_Heaps[out.block];
+        return true;
+    }
+
+    void PlacedTexturePool::release(const PlacedRanges::Allocation& allocation)
+    {
+        std::lock_guard lock(m_Mutex);
+        if (!m_Ranges.release(allocation))
+            return;
+        // Keep one empty heap for the next burst; release the others.
+        if (m_Ranges.emptyBlocks() > 1)
+        {
+            m_Ranges.removeBlock(allocation.block);
+            m_Heaps[allocation.block] = nullptr;
+        }
     }
 
     Queue::Queue(const Context& context, ID3D12CommandQueue* queue, CommandListLifetimeTrackerHandle&& lifetimeTracker)
@@ -205,6 +271,7 @@ namespace nvrhi::d3d12
     {
         m_Context.device = desc.pDevice;
         m_Context.logBufferLifetime = desc.logBufferLifetime;
+        m_Context.minUploadChunkSize = desc.minUploadChunkSize;
         m_Context.messageCallback = desc.errorCB;
 
         if (desc.pGraphicsCommandQueue)

@@ -518,6 +518,10 @@ namespace nvrhi
         // On DX12, the texture resource is created at the time of memory binding.
         bool isVirtual = false;
         bool isTiled = false;
+        // King Kong change (task 304, thirdparty/NOTES.md): the application writes every subresource before
+        // reading it, so on D3D12 the texture may go into the placed texture pool (memory not zeroed,
+        // d3d12::DeviceDesc::placedTextureHeapSize). Ignored elsewhere.
+        bool allowPlacedMemory = false;
 
         Color clearValue;
         bool useClearValue = false;

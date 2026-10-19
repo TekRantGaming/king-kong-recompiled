@@ -77,6 +77,13 @@ if(NR_HAS_D3D12)
     add_executable(nr_bindless_sampler_tests bindless_sampler_tests.cpp)
     target_link_libraries(nr_bindless_sampler_tests PRIVATE nvrhi nvrhi_d3d12 d3d12)
     add_test(NAME nr_bindless_sampler_tests COMMAND nr_bindless_sampler_tests)
+    # Task 300: the placed texture pool and upload chunks in the vendored NVRHI.
+    add_executable(nr_d3d12_placed_textures_tests d3d12_placed_textures_tests.cpp)
+    target_include_directories(nr_d3d12_placed_textures_tests PRIVATE "${NR_ROOT}"
+        "${NR_ROOT}/thirdparty/nvrhi/src/d3d12")
+    target_link_libraries(nr_d3d12_placed_textures_tests PRIVATE nvrhi nvrhi_d3d12 d3d12)
+    target_compile_features(nr_d3d12_placed_textures_tests PRIVATE cxx_std_23)
+    add_test(NAME nr_d3d12_placed_textures_tests COMMAND nr_d3d12_placed_textures_tests)
 endif()
 
 add_executable(nr_draw_tests draw_tests.cpp)
