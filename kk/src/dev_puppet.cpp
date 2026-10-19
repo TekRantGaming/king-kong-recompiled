@@ -4,6 +4,9 @@
 // borrow:<hex key>:<ordinal>[:<action>:<item>]. Indices belong to the current epoch.
 // partner:index:<n> or partner:nearest[:<max>] follows the copied partner pose.
 // partner:spawn:<n> creates an independent engine copy of that loaded human.
+// KK_DEV_PUPPET_SPAWN_MODE=drive (default), hold, or free (UNSAFE story scripts).
+// KK_DEV_PUPPET_SPAWN_OFFSET=x,y,z uses source+offset, permits solo diagnosis,
+// and gives drive mode a stationary target at that creation point.
 #if defined(KK_DEV_TOOLS)
 
 #include "dev_puppet.h"
@@ -71,6 +74,10 @@ float Distance(Vec a, Vec b) {
 std::string XYZ(Vec v) { return fmt::format("({:.4f},{:.4f},{:.4f})", v.x, v.y, v.z); }
 
 struct Options {
+  enum class SpawnMode { Drive, Free, Hold };
+  SpawnMode spawn_mode = SpawnMode::Drive;
+  bool spawn_offset_set = false;
+  Vec spawn_offset;
   bool on = false, borrow = false, partner = false, spawn = false, nearest = false, index = false, valid = true, action_set = false;
   uint32_t key = 0, ordinal = 0, census_index = 0, action = 0, item = 0;
   float max_units = 15.0f;
@@ -104,6 +111,29 @@ struct Options {
       return;
     }
     spawn = partner && fields[1] == "spawn";
+    if (spawn) {
+      if (const char* mode = std::getenv("KK_DEV_PUPPET_SPAWN_MODE")) {
+        const std::string value(mode);
+        if (value == "free") spawn_mode = SpawnMode::Free;
+        else if (value == "hold") spawn_mode = SpawnMode::Hold;
+        else if (!value.empty() && value != "drive") { valid = false; return; }
+      }
+      if (const char* offset = std::getenv("KK_DEV_PUPPET_SPAWN_OFFSET")) {
+        const std::string value(offset);
+        const auto a = value.find(','), c = a == std::string::npos ? a : value.find(',', a+1);
+        if (a == std::string::npos || c == std::string::npos || value.find(',', c+1) != std::string::npos) {
+          valid = false; return;
+        }
+        auto component = [&](size_t begin, size_t end, float& out) {
+          const auto r = std::from_chars(value.data()+begin, value.data()+end, out);
+          return begin != end && r.ec == std::errc{} && r.ptr == value.data()+end;
+        };
+        valid = component(0, a, spawn_offset.x) && component(a+1, c, spawn_offset.y) &&
+                component(c+1, value.size(), spawn_offset.z) && Finite(spawn_offset);
+        if (!valid) return;
+        spawn_offset_set = true;
+      }
+    }
     index = fields[1] == "index" || spawn;
     if (partner && (!index || fields.size() != 3)) { valid = false; return; }
     valid = (fields.size() == 3 || fields.size() == 5) &&
@@ -117,7 +147,13 @@ struct Options {
   }
 };
 const Options& Opt() { static const Options options; return options; }
-bool Enabled() { return Opt().on && (!Opt().partner || REXCVAR_GET(kk_coop_enabled)); }
+bool OffsetSpawn() { return Opt().spawn && Opt().spawn_offset_set; }
+bool PassiveSpawn() { return Opt().spawn && Opt().spawn_mode != Options::SpawnMode::Drive; }
+const char* SpawnModeName() {
+  return Opt().spawn_mode == Options::SpawnMode::Free ? "free" :
+         Opt().spawn_mode == Options::SpawnMode::Hold ? "hold" : "drive";
+}
+bool Enabled() { return Opt().on && (!Opt().partner || OffsetSpawn() || REXCVAR_GET(kk_coop_enabled)); }
 
 struct Rig {
   uint32_t actor = 0, ai = 0, vars = 0, matrix = 0, rig = 0, anim = 0, table = 0, layer = 0;
@@ -290,9 +326,11 @@ struct State {
   std::vector<coop::puppet::Action> observed_motion;
   Clock::time_point loaded{}, census_at{}, tick_at{};
   std::map<uint32_t, Observation> humans;
-  // Retain only script quarantine after release. No old transform is restored
-  // and no guest destructor/pool-return function is called. Clear before unload.
+  // Retain script quarantine after release except in explicit unsafe free mode.
+  // No transform restore or destructor/pool return. Clear before unload.
   std::vector<Spawned> spawned;
+  Rig bone_source, bone_copy;
+  Clock::time_point bones_at{};
   std::map<uint32_t, Spawner> spawners;
   std::map<uint32_t, uint32_t> keys;
   Rig selected;
@@ -313,8 +351,9 @@ struct State {
       REXLOG_INFO("PUPPET partner released reason={} epoch={} actor={:08X} held={} passed={} updates={}",
                   reason, epoch, selected.actor, held, passed, updates);
       if (Opt().spawn) {
-        REXLOG_INFO("PUPPET spawn {} reason={} epoch={} actor={:08X} no-free script-quarantine=until-unload",
-                    selected.actor ? "released" : "refused", reason, epoch, selected.actor);
+        REXLOG_INFO("PUPPET spawn {} reason={} epoch={} actor={:08X} no-free script-quarantine={}",
+                    selected.actor ? "released" : "refused", reason, epoch, selected.actor,
+                    Opt().spawn_mode == Options::SpawnMode::Free ? "DISABLED-UNSAFE" : "until-unload");
       }
     } else {
       REXLOG_INFO("PUPPET abort reason={} epoch={} actor={:08X} held={} passed={} reload-required",
@@ -357,11 +396,94 @@ struct State {
 };
 State& Get() { static State state; return state; }
 
+// Read-only reconstruction of the position chain in 8270FCE0 (.4:27633+),
+// with the owner walk from 8286CC40 (.43:33799+). Never refresh dirty matrices.
+bool BoneWorldPosition(const uint8_t* b, uint32_t actor, Vec& out) {
+  if (!Range(actor, 32)) return false;
+  auto position = [&](uint32_t a) {
+    const auto m = Ptr(b, a, 12, 80);
+    if (!m) return false;
+    out = ReadVec(b, m+48);
+    return Finite(out);
+  };
+  if (!(Load32(b, actor) & 1)) return position(actor);
+  const auto local = Ptr(b, Ptr(b, actor, 20, 16), 12, 88);
+  if (!local) return false;
+  if (!Load32(b, local+84)) return position(actor);
+  uint32_t root = actor;
+  std::set<uint32_t> seen;
+  while (Load32(b, root) & 1) {
+    if (seen.size() >= 64 || !seen.insert(root).second) return false;
+    const auto m = Ptr(b, Ptr(b, root, 20, 16), 12, 88);
+    root = Ptr(b, m, 80, 32);
+    if (!root) return false;
+  }
+  auto transform = [&](uint32_t m) {
+    const Vec x = ReadVec(b, m), y = ReadVec(b, m+16), z = ReadVec(b, m+32), t = ReadVec(b, m+48);
+    out = {out.x*x.x + out.y*y.x + out.z*z.x + t.x,
+           out.x*x.y + out.y*y.y + out.z*z.y + t.y,
+           out.x*x.z + out.y*y.z + out.z*z.z + t.z};
+    return Finite(out);
+  };
+  out = {};
+  seen.clear();
+  for (uint32_t node = actor; node != root;) {
+    if (seen.size() >= 64 || !seen.insert(node).second) return false;
+    const auto m = Ptr(b, Ptr(b, node, 20, 16), 12, 88);
+    if (!m || !transform(m)) return false;
+    node = Ptr(b, m, 84, 32);
+    if (!node) return false;
+  }
+  const auto world = Ptr(b, root, 12, 80);
+  return world && transform(world);
+}
+void LogSpawnBones(const uint8_t* b) {
+  auto& s = Get();
+  if (!s.bone_copy.actor || s.loading || !s.Environment(b, s.world)) return;
+  const auto now = Clock::now();
+  if (s.bones_at != Clock::time_point{} && now-s.bones_at < std::chrono::seconds(1)) return;
+  s.bones_at = now;
+  unsigned role = 0;
+  for (const auto& r : {s.bone_source, s.bone_copy}) {
+    const char* name = role++ ? "copy" : "source";
+    if (Ptr(b, r.actor, 12, 80) != r.matrix || Ptr(b, r.actor, 20, 16) != r.rig ||
+        Ptr(b, r.rig, 0, 176) != r.anim) {
+      REXLOG_INFO("PUPPET bone-world stopped role={} identity-changed", name);
+      s.bone_copy = {}; return;
+    }
+    const auto list = Ptr(b, Ptr(b, r.anim, 8, 4), 0, 20);
+    const uint32_t begin = list ? Load32(b, list+16) : 0, end = list ? Load32(b, list+4) : 0;
+    const uint32_t count = end >= begin ? (end-begin)/8 : 0;
+    if (!list || end < begin || (end-begin)%8 || count > 128 || !Range(begin, count*8)) {
+      REXLOG_INFO("PUPPET bone-world role={} actor={:08X} unavailable=hierarchy", name, r.actor);
+      continue;
+    }
+    // 8286A660 maps human foot tag 60 through anim+84's byte map (+4).
+    // H_callback_after_blend uses foot tags 60/80 (.22:38824+).
+    const auto tags = Ptr(b, r.anim, 84, count+4);
+    uint32_t foot = count;
+    for (uint32_t i = 0; i < count; ++i) if ((tags ? b[tags+4+i] : i) == 60) { foot = i; break; }
+    const uint32_t indices[]{0, 5, foot};
+    const char* labels[]{"root-candidate", "spine-candidate", "foot-tag60"};
+    for (unsigned j = 0; j < 3; ++j) {
+      const auto index = indices[j];
+      const auto bone = index < count ? Load32(b, begin+8*index) : 0;
+      const auto matrix = Ptr(b, bone, 12, 80);
+      Vec world;
+      const bool valid = matrix && BoneWorldPosition(b, bone, world);
+      REXLOG_INFO("PUPPET bone-world role={} actor={:08X} sample={} index={} tag={} bone={:08X} matrix={:08X} actor-xyz={} world={} cached-matrix={} valid={} read-only-no-dirty-refresh",
+          name, r.actor, labels[j], index, index < count ? int(tags ? b[tags+4+index] : index) : -1,
+          bone, matrix, XYZ(ReadVec(b, r.matrix+48)), valid ? XYZ(world) : "unavailable",
+          matrix ? XYZ(ReadVec(b, matrix+48)) : "unavailable", valid);
+    }
+  }
+}
+
 // Called only on the game thread. The runtime supplies mutex-protected values
 // already interpolated by CoopSession; this function never calls the transport.
 bool PartnerReady(const uint8_t* b, uint32_t w) {
   auto& s = Get();
-  s.partner = coop::PartnerBodySnapshot();
+  if (!OffsetSpawn()) s.partner = coop::PartnerBodySnapshot();
   const auto& v = s.partner;
   const bool loading = s.loading || play::StartLevelLoading() ||
       (Range(s.game, 28) && Load32(b, s.game + 4) != 0) ||
@@ -370,8 +492,10 @@ bool PartnerReady(const uint8_t* b, uint32_t w) {
   // level used by ReadJackPose and the network. Check both, without equating them.
   const bool same = v.local && v.partner && v.local->level == v.partner->level &&
       Range(s.game, 28) && v.local->level == Load32(b, s.game + 0x18);
-  const char* reason = coop::puppet::ReleaseReason({v.enabled, v.state, v.fresh,
-      bool(v.local), bool(v.partner), same, photo::Active(), loading, s.Environment(b, w)});
+  const char* reason = OffsetSpawn() ?
+      (loading ? "load" : photo::Active() ? "photo-mode" : !s.Environment(b, w) ? "world-level-or-hero-changed" : nullptr) :
+      coop::puppet::ReleaseReason({v.enabled, v.state, v.fresh,
+          bool(v.local), bool(v.partner), same, photo::Active(), loading, s.Environment(b, w)});
   if (reason) {
     if (s.driving) s.Abort(reason);
     s.partner_eligible = false;
@@ -388,7 +512,9 @@ bool PartnerReady(const uint8_t* b, uint32_t w) {
     ++s.epoch;
     // Do not classify the release/teleport displacement as natural locomotion.
     for (auto& [actor, obs] : s.humans) obs.sampled = false;
-    REXLOG_INFO("PUPPET partner epoch={} ready level={}", s.epoch, v.local->level);
+    if (OffsetSpawn()) REXLOG_INFO("PUPPET spawn offset epoch={} ready solo=true mode={} offset={}",
+        s.epoch, SpawnModeName(), XYZ(Opt().spawn_offset));
+    else REXLOG_INFO("PUPPET partner epoch={} ready level={}", s.epoch, v.local->level);
   }
   return true;
 }
@@ -515,8 +641,9 @@ bool SpawnCopy(PPCContext& ctx, uint8_t* b, uint32_t w, const Rig& source, const
   auto& s = Get();
   auto refuse = [&](const char* reason) { s.Abort(reason); return false; };
   // This routine is called only from CensusAndSelect in BeforeAi, with the
-  // caller, load+5s, Connected/same-level, scratch and one-attempt gates applied.
-  if (!PartnerReady(b, w) || !s.partner.partner) return refuse("partner-not-ready-before-spawn");
+  // caller, load+5s, scratch and one-attempt gates applied. Without an offset,
+  // Connected/same-level gates also apply; offset mode uses the local environment.
+  if (!PartnerReady(b, w) || (!OffsetSpawn() && !s.partner.partner)) return refuse("partner-not-ready-before-spawn");
   if (Load32(b, kCreationWorld) != w || Load32(b, kCreating)) return refuse("creation-world-or-busy");
   if (!Model(b, source.ai)) return refuse("source-AI-model-unavailable");
   for (const auto& body : s.spawned) if (body.epoch == s.epoch) return refuse("already-created-this-epoch");
@@ -553,9 +680,16 @@ bool SpawnCopy(PPCContext& ctx, uint8_t* b, uint32_t w, const Rig& source, const
     }
   }
   if (!pooled && count == 512) return refuse("pool-full-avoid-cleanup");
-  const auto& p = *s.partner.partner;
-  const Vec position{p.x, p.y, p.z};
-  if (!Finite(position) || !std::isfinite(p.facing)) return refuse("invalid-partner-spawn-pose");
+  const Vec position = OffsetSpawn() ? Vec{source.pos.x + Opt().spawn_offset.x,
+      source.pos.y + Opt().spawn_offset.y, source.pos.z + Opt().spawn_offset.z} :
+      Vec{s.partner.partner->x, s.partner.partner->y, s.partner.partner->z};
+  const float facing = OffsetSpawn() ? std::atan2(source.forward.y, source.forward.x) : s.partner.partner->facing;
+  if (!Finite(position) || !std::isfinite(facing)) return refuse("invalid-spawn-pose");
+  REXLOG_INFO("PUPPET spawn diagnostic mode={} offset={} target={} script-hold={} setters={} animation-requests={}",
+      SpawnModeName(), OffsetSpawn(), XYZ(position), Opt().spawn_mode != Options::SpawnMode::Free,
+      !PassiveSpawn(), !PassiveSpawn());
+  if (Opt().spawn_mode == Options::SpawnMode::Free)
+    REXLOG_WARN("PUPPET UNSAFE FREE COPY: story scripts and triggers run normally; disposable diagnosis only, reload afterwards");
   uint32_t actor = 0;
   {
     Scratch scratch(ctx, b);
@@ -566,12 +700,17 @@ bool SpawnCopy(PPCContext& ctx, uint8_t* b, uint32_t w, const Rig& source, const
   if (!Range(actor, 32) || existing.count(actor) || actor == t || IsSpawned(actor) ||
       (pooled && actor != pooled)) return refuse("creation-return-not-new-instance");
   ReadRig(b, actor, copy);
-  // Quarantine a new actor as soon as its AI is readable, even on refusal.
-  // Matching actor + AI holds only the copy if an alias check below fails.
+  // Record a new actor as soon as its AI is readable, even on refusal.
+  // Matching actor + AI quarantines only the copy, except in explicit free mode.
   if (!copy.ai) return refuse("creation-AI-unavailable");
   s.spawned.push_back({copy, w, s.game, s.level, Model(b, copy.ai), s.epoch});
-  REXLOG_INFO("PUPPET spawn allocated actor={:08X} template={:08X} via={} epoch={} quarantine=registered no-free",
-              actor, t, pooled ? "pool" : "duplicate", s.epoch);
+  s.bone_source = source; s.bone_copy = copy; s.bones_at = {};
+  REXLOG_INFO("PUPPET spawn allocated actor={:08X} template={:08X} via={} epoch={} quarantine={} no-free",
+              actor, t, pooled ? "pool" : "duplicate", s.epoch,
+              Opt().spawn_mode == Options::SpawnMode::Free ? "DISABLED-UNSAFE" : "registered");
+  // Arm read-only diagnostics even if an unseeded rig fails a later guard.
+  // Free/hold deliberately retain the engine's initial action (possibly -1).
+  if (PassiveSpawn()) DevPuppetMeshArm(b, source.actor, actor, s.epoch);
   if (!copy.vars || copy.ai == source.ai || copy.ai == jack.ai ||
       copy.vars == source.vars || copy.vars == jack.vars) return refuse("creation-AI-not-independent");
   if (!coop::puppet::Independent(Mutable(copy), Mutable(source)) ||
@@ -586,19 +725,19 @@ bool SpawnCopy(PPCContext& ctx, uint8_t* b, uint32_t w, const Rig& source, const
   }
   if (Model(b, copy.ai) != Model(b, source.ai) || copy.table != source.table ||
       Load32(b, copy.anim + 4) != Load32(b, source.anim + 4)) return refuse("creation-resource-lineage-mismatch");
-  // 8286D690 (.57) resets the new animation action to -1. Seed it with a tuple
-  // observed on the source rig, using the normal setter before its first AI pass.
-  {
+  // 8286D690 (.57) resets the new animation action to -1. Only drive mode
+  // seeds an observed tuple and uses the normal facing/position setters.
+  if (!PassiveSpawn()) {
     Scratch scratch(ctx, b);
     ctx.r3.u64 = actor; ctx.r4.u64 = source.action; ctx.r5.u64 = source.item; ctx.r6.u64 = 0;
     __imp__sub_82850100(ctx, b);
-    ctx.r3.u64 = actor; ctx.r4.u64 = scratch.Vector({std::cos(p.facing), std::sin(p.facing), 0}, 0x110);
+    ctx.r3.u64 = actor; ctx.r4.u64 = scratch.Vector({std::cos(facing), std::sin(facing), 0}, 0x110);
     __imp__sub_82711278(ctx, b);
     ctx.r3.u64 = actor; ctx.r4.u64 = scratch.Vector(position, 0x100);
     __imp__sub_82401AA8(ctx, b);
   }
-  if (!ReadRig(b, actor, copy) || !Registered(b, w, actor) || *s.Qualify(b, copy, jack) ||
-      !LegalAction(b, copy, copy.action)) return refuse("creation-rig-not-ready");
+  if (!PassiveSpawn() && (!ReadRig(b, actor, copy) || !Registered(b, w, actor) || *s.Qualify(b, copy, jack) ||
+      !LegalAction(b, copy, copy.action))) return refuse("creation-rig-not-ready");
   Rig original;
   if (!ReadRig(b, source.actor, original) || !Same(source, original) ||
       Distance(source.pos, original.pos) != 0 || Distance(source.forward, original.forward) != 0 ||
@@ -609,10 +748,12 @@ bool SpawnCopy(PPCContext& ctx, uint8_t* b, uint32_t w, const Rig& source, const
   obs.rig = copy; obs.bound = true; obs.generation = ++s.generation;
   s.humans.emplace(actor, std::move(obs));
   REXLOG_INFO("PUPPET spawn ok actor={:08X} template={:08X} via={} epoch={} source={:08X} ai={:08X} vars={:08X} xyz={} active-ai={}",
-              actor, t, pooled ? "pool" : "duplicate", s.epoch, source.actor, copy.ai, copy.vars, XYZ(copy.pos), Member(b, w, actor));
-  REXLOG_INFO("PUPPET spawn trigger-policy=filter-ObjOfAIModelInBV-only CapaBit=ext+40 life=stimulus-test universal-exclusion=unproven no-capability-or-life-writes");
+              actor, t, pooled ? "pool" : "duplicate", s.epoch, source.actor, copy.ai, copy.vars,
+              XYZ(ReadVec(b, copy.matrix+48)), Member(b, w, actor));
+  REXLOG_INFO("PUPPET spawn trigger-policy={} CapaBit=ext+40 life=stimulus-test universal-exclusion=unproven no-capability-or-life-writes",
+      Opt().spawn_mode == Options::SpawnMode::Free ? "pass-through-UNSAFE" : "filter-ObjOfAIModelInBV-only");
   REXLOG_INFO("PUPPET spawn source actor={:08X} ai={:08X} identity-transform-action=unchanged scheduled-dispatch=pass-through", source.actor, source.ai);
-  DevPuppetMeshArm(b, source.actor, actor, s.epoch);
+  if (!PassiveSpawn()) DevPuppetMeshArm(b, source.actor, actor, s.epoch);
   return true;
 }
 
@@ -727,6 +868,12 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
   }
   Rig selected = pick->rig;
   if (Opt().spawn && !SpawnCopy(ctx, b, w, pick->rig, jack, selected)) return;
+  if (PassiveSpawn()) {
+    s.terminal = true;
+    REXLOG_INFO("PUPPET spawn diagnostic-only actor={:08X} mode={} no-post-create-setters no-animation-requests",
+        selected.actor, SpawnModeName());
+    return;
+  }
   s.selected = selected; s.selected_generation = s.humans.at(selected.actor).generation;
   if (Opt().spawn) { s.action = selected.action; s.item = selected.item; }
   if (Opt().partner) {
@@ -756,7 +903,7 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
 void DevPuppetGameFrame(uint8_t* b) {
   if (!Opt().on || !Opt().partner) return;
   auto& s = Get();
-  if (!REXCVAR_GET(kk_coop_enabled)) {
+  if (!Enabled()) {
     if (s.driving) s.Abort("coop-disabled");
     s.partner_eligible = false;
     return;
@@ -775,6 +922,7 @@ void DevPuppetBeforeLoad() {
   s.selected = {}; s.humans.clear(); s.keys.clear(); ++s.epoch;
   if (!s.spawned.empty()) REXLOG_INFO("PUPPET spawn unload count={} no-free script-quarantine=cleared", s.spawned.size());
   s.spawned.clear(); s.spawners.clear();
+  s.bone_source = {}; s.bone_copy = {}; s.bones_at = {};
   s.world = s.hero = s.game = 0; s.loading = true; s.ready = false;
   s.census_at = {}; s.tick_at = {};
   s.env_fail_logs = 0;
@@ -795,7 +943,7 @@ void DevPuppetBeforeAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   if (!Enabled()) return;
   auto& s = Get();
   s.prepared = false;
-  if (!Opt().valid) { s.Abort("invalid-KK_DEV_PUPPET-syntax"); return; }
+  if (!Opt().valid) { s.Abort("invalid-KK_DEV_PUPPET-or-spawn-option-syntax"); return; }
   if (Opt().partner && s.driving && !PartnerReady(b, w)) return;
   if (s.loading || !s.game || play::StartLevelLoading()) return;
   // 82881B70 passes its saved world in r3 at this call (.124, return 82881CF0).
@@ -837,7 +985,13 @@ void DevPuppetAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   if (!s.Validate(b, w, rig)) return;
   if (!Scratch::CanUse(ctx)) { s.Abort("invalid-guest-scratch-stack"); return; }
   if (Opt().partner) {
-    const auto& p = *s.partner.partner;
+    // Offset diagnosis keeps driving a stationary target at the creation point.
+    // It never requires or follows a network pose, even if a partner connects.
+    coop::PlayerPose p{};
+    if (OffsetSpawn()) {
+      p.x = s.origin.x; p.y = s.origin.y; p.z = s.origin.z;
+      p.facing = std::atan2(s.initial_forward.y, s.initial_forward.x);
+    } else p = *s.partner.partner;
     const auto step = coop::puppet::ClampStep({rig.pos.x, rig.pos.y, rig.pos.z}, {p.x, p.y, p.z});
     if (!step) { s.Abort("invalid-partner-position"); return; }
     if (step->teleport) REXLOG_INFO("PUPPET partner teleport epoch={} from={} to={} threshold=5",
@@ -909,6 +1063,7 @@ void DevPuppetAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
 void DevPuppetLateWorld(PPCContext& ctx, uint8_t* b, uint32_t w) {
   if (!Enabled()) return;
   DevPuppetMeshTick(b);
+  LogSpawnBones(b);
   auto& s = Get();
   if (!s.measure) return;
   if (Opt().partner && !PartnerReady(b, w)) return;
@@ -927,7 +1082,9 @@ void DevPuppetLateWorld(PPCContext& ctx, uint8_t* b, uint32_t w) {
                 s.elapsed, XYZ(s.desired), XYZ(rig.pos), XYZ(s.facing), XYZ(rig.forward), rig.action, rig.item,
                 Frame(ctx, b, rig.actor), XYZ(s.early_pos), XYZ(s.early_forward), s.early_frame,
                 Distance(s.desired, rig.pos), s.max_late_error, s.max_forward_error);
-    if (Opt().partner) REXLOG_INFO("PUPPET partner driving epoch={} updates={} game-frame={} speed={:.3f} remote-action={} remote-item={} late-error={:.6f} late-z-error={:.6f} large-late-error={}",
+    if (OffsetSpawn()) REXLOG_INFO("PUPPET spawn offset driving epoch={} updates={} game-frame={} target={} late-error={:.6f}",
+        s.epoch, s.updates, s.frame, XYZ(s.desired), Distance(s.desired, rig.pos));
+    else if (Opt().partner) REXLOG_INFO("PUPPET partner driving epoch={} updates={} game-frame={} speed={:.3f} remote-action={} remote-item={} late-error={:.6f} late-z-error={:.6f} large-late-error={}",
         s.epoch, s.updates, s.frame, s.partner.partner->speed, s.partner.partner->action, s.partner.partner->item,
         Distance(s.desired, rig.pos), std::abs(s.desired.z-rig.pos.z), Distance(s.desired, rig.pos) > .25f);
   }
@@ -965,7 +1122,7 @@ void PuppetObserveSpawner(uint8_t* b, uint32_t actor, uint32_t ai) {
   if (vars) Get().spawners[actor] = {ai, vars};
 }
 bool HoldSpawned(PPCContext& ctx, uint8_t* b) {
-  if (!Opt().spawn || uint32_t(ctx.lr) != 0x8271D304) return false;
+  if (!Opt().spawn || Opt().spawn_mode == Options::SpawnMode::Free || uint32_t(ctx.lr) != 0x8271D304) return false;
   auto& s = Get();
   const uint32_t actor = Load32(b, 0x82CCBF6C), ai = Load32(b, 0x82CCBF64);
   for (auto& body : s.spawned) {
@@ -988,7 +1145,7 @@ bool HoldSpawned(PPCContext& ctx, uint8_t* b) {
   return false;
 }
 void FilterSpawnedTrigger(PPCContext& ctx, uint8_t* b, uint32_t output, uint32_t capacity) {
-  if (!Opt().spawn || capacity != 32 || ctx.r3.s32 <= 0 || ctx.r3.u32 > capacity ||
+  if (!Opt().spawn || Opt().spawn_mode == Options::SpawnMode::Free || capacity != 32 || ctx.r3.s32 <= 0 || ctx.r3.u32 > capacity ||
       !Range(output, 4*capacity)) return;
   // Only called for TrigTest_ObjOfAIModelInBV's query return 8245D334.
   // .92: query with r4=32, r9=stack output; then loop over r3 actor pointers.
