@@ -4,6 +4,9 @@
 #include <chrono>
 #include <cstdint>
 #include <thread>
+#if defined(_M_X64) || defined(__x86_64__)
+#include <immintrin.h>
+#endif
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -87,8 +90,18 @@ class Waiter {
     }
     // Recheck the wall clock after every yield. No timer-resolution change,
     // additional frame queue, or wait when the renderer already missed the cap.
-    while (Clock::now() < deadline) std::this_thread::yield();
+    // Task 295 (tail_spin, kk_cpu_priority >= 1): a yield under CPU load can hand the rest of the time
+    // slice to another program's thread and overshoot by a scheduler quantum; the <= 0.5 ms tail
+    // pauses the core instead.
+    while (Clock::now() < deadline) {
+#if defined(_M_X64) || defined(__x86_64__)
+      if (tail_spin) { _mm_pause(); continue; }
+#endif
+      std::this_thread::yield();
+    }
   }
+
+  bool tail_spin = false;
 
  private:
   Clock::duration guard_ = std::chrono::microseconds(100);
@@ -100,7 +113,8 @@ class Waiter {
 
 class Limiter {
  public:
-  void Wait(int fps) {
+  void Wait(int fps, bool tail_spin = false) {
+    waiter_.tail_spin = tail_spin;
     const auto deadline = schedule_.Deadline(fps, Clock::now());
     if (fps > 0) waiter_.Until(deadline);
     schedule_.Released(Clock::now());

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <cstdint>
 #include <thread>
@@ -87,6 +88,37 @@ inline bool SetThreadEcoQos(bool background) {
 }
 #endif
 
+// Task 295 (kk_cpu_priority): how much the game's critical threads (game, render, vsync, ring skimmer,
+// audio) are favoured over other programs' and our own background threads under CPU load.
+//   0: before task 295 (normal priority; audio above normal).
+//   1: critical threads above normal, audio highest; a draw's pipeline compile above normal.
+//   2: 1 + MMCSS "Games" ("Audio" for audio): Windows' multimedia scheduler, which keeps 20 % for the
+//      rest of the system (no realtime class).
+//   3: 2 + the process in the ABOVE_NORMAL class.
+// One value per binary (the exe and the renderer DLL each set it before their threads start).
+inline std::atomic<int>& CpuPriorityLevel() {
+  static std::atomic<int> level{0};
+  return level;
+}
+inline void SetCpuPriorityLevel(int level) {
+  CpuPriorityLevel().store(std::clamp(level, 0, 3), std::memory_order_relaxed);
+#ifdef _WIN32
+  if (level >= 3) SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
+#endif
+}
+
+#ifdef _WIN32
+// MMCSS for the calling thread for its lifetime; false when avrt.dll or the task is unavailable.
+inline bool JoinMmcssTask(const wchar_t* task) {
+  static HMODULE avrt = LoadLibraryW(L"avrt.dll");
+  if (!avrt) return false;
+  using Fn = HANDLE(WINAPI*)(LPCWSTR, LPDWORD);
+  static const auto join = reinterpret_cast<Fn>(reinterpret_cast<void*>(GetProcAddress(avrt, "AvSetMmThreadCharacteristicsW")));
+  DWORD index = 0;
+  return join && join(task, &index) != nullptr;
+}
+#endif
+
 // Call once on the actual worker, after the SDK has started it. Homogeneous CPUs
 // retain the OS's placement; hybrid CPUs use all allowed performance cores.
 inline void ScheduleCriticalThread(bool audio = false) {
@@ -94,16 +126,21 @@ inline void ScheduleCriticalThread(bool audio = false) {
   SetThreadEcoQos(false);
   if (const uint64_t mask = ProcessPerformanceCoreMask())
     SetThreadAffinityMask(GetCurrentThread(), DWORD_PTR(mask));
-  const int priority = audio ? THREAD_PRIORITY_ABOVE_NORMAL : THREAD_PRIORITY_NORMAL;
+  const int level = CpuPriorityLevel().load(std::memory_order_relaxed);
+  int priority = audio ? THREAD_PRIORITY_ABOVE_NORMAL : THREAD_PRIORITY_NORMAL;
+  if (level >= 1) priority = audio ? THREAD_PRIORITY_HIGHEST : THREAD_PRIORITY_ABOVE_NORMAL;
   if (GetThreadPriority(GetCurrentThread()) < priority)
     SetThreadPriority(GetCurrentThread(), priority);
+  if (level >= 2) JoinMmcssTask(audio ? L"Audio" : L"Games");
 #endif
 }
 
 // Demand work must not inherit background EcoQoS/priority when a draw waits for it.
 inline void SchedulePipelineCompiler(bool urgent) {
 #ifdef _WIN32
-  SetThreadPriority(GetCurrentThread(), urgent ? THREAD_PRIORITY_NORMAL : THREAD_PRIORITY_BELOW_NORMAL);
+  const int demand = CpuPriorityLevel().load(std::memory_order_relaxed) >= 1 ? THREAD_PRIORITY_ABOVE_NORMAL
+                                                                             : THREAD_PRIORITY_NORMAL;
+  SetThreadPriority(GetCurrentThread(), urgent ? demand : THREAD_PRIORITY_BELOW_NORMAL);
   SetThreadEcoQos(!urgent);
 #endif
 }

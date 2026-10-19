@@ -8,6 +8,7 @@
 // developer Direct3D tracer hooks the same functions and is no longer built.
 
 #include <atomic>
+#include <cstdlib>
 
 #include <rex/cvar.h>
 #include <rex/hook.h>
@@ -91,8 +92,24 @@ const NrApi* Api() {
 
 void ScheduleGameThreadOnce() {
   // Present identifies the game/draw thread without pinning asset-loader threads.
-  thread_local const bool scheduled = [] { nr::ScheduleCriticalThread(); return true; }();
+  thread_local const bool scheduled = [] {
+    // Task 295: kk_cpu_priority for this binary's threads (the game thread here, audio).
+    static const bool level = [] {
+      nr::SetCpuPriorityLevel(std::atoi(rex::cvar::GetFlagByName("kk_cpu_priority").c_str()));
+      return true;
+    }();
+    (void)level;
+    nr::ScheduleCriticalThread();
+    return true;
+  }();
   (void)scheduled;
+  // The guest may set its own thread priority later (KeSetBasePriorityThread): raise it again.
+  thread_local uint32_t presents = 0;
+  if (++presents % 600 == 0 && nr::CpuPriorityLevel().load(std::memory_order_relaxed) >= 1 &&
+      GetThreadPriority(GetCurrentThread()) < THREAD_PRIORITY_ABOVE_NORMAL) {
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+    REXLOG_INFO("rexgpu-native: game thread priority restored to above normal (kk_cpu_priority)");
+  }
 }
 
 nr::hooks::GuestArgs ArgsFrom(const PPCContext& ctx) {

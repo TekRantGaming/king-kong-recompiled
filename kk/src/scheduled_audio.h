@@ -1,6 +1,9 @@
 #pragma once
 
+#include <cstdlib>
+
 #include <rex/audio/sdl/sdl_audio_system.h>
+#include <rex/cvar.h>
 #include "backend/thread_scheduling.h"
 
 namespace kk {
@@ -15,6 +18,7 @@ class ScheduledAudioSystem : public rex::audio::sdl::SDLAudioSystem {
 
  protected:
   void Initialize() override {
+    nr::SetCpuPriorityLevel(std::atoi(rex::cvar::GetFlagByName("kk_cpu_priority").c_str()));  // task 295
     nr::ScheduleCriticalThread(true);
     SDLAudioSystem::Initialize();
   }

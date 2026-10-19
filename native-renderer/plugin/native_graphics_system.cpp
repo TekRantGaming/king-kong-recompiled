@@ -149,6 +149,9 @@ NativeGraphicsSystem::NativeGraphicsSystem(HostApi api)
     : api_(api), registers_(std::make_unique<std::array<uint32_t, kRegisterCount>>()) {
   registers_->fill(0);
   instance_ = this;
+  // Task 295: the renderer DLL's threads (render, vsync, ring skimmer, pipeline compiles) start after this.
+  SetCpuPriorityLevel(std::atoi(rex::cvar::GetFlagByName("kk_cpu_priority").c_str()));
+  REXGPU_INFO("rexgpu-native: kk_cpu_priority {}", CpuPriorityLevel().load());
   REXGPU_INFO("rexgpu-native: created ({})", api == HostApi::kD3D12 ? "Direct3D 12" : "Vulkan");
 }
 
