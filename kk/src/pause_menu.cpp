@@ -59,10 +59,11 @@ int GetInt(const char* name, int fallback) {
   }
 }
 
-// The pause menu, option A (owner, 18 Oct; task 222): a slim list on the left over the paused game (Resume,
-// Photo mode, Display, Graphics, Audio, Controls, Gameplay, then the game's items and Quit to main menu). Each
-// settings entry opens its page in the same column ("PAUSED / DISPLAY"); Back returns to the list on the same
-// entry. A page shows the rows that change while playing first, then the greyed "Change from the main menu"
+// The pause menu, option A (owner, 18 Oct; task 222), shortened with a Settings list (owner, 19 Oct; task 248): a
+// slim list on the left over the paused game (Resume, Photo mode, Controls, Gameplay, Settings, then the game's
+// items and the ways out). Settings opens a second list in the same column ("PAUSED / SETTINGS": Display,
+// Graphics, Audio, Cheats while on, Options in developer builds). Each page opens in the same column ("PAUSED /
+// CONTROLS", "PAUSED / SETTINGS / DISPLAY"); Back returns to the list that opened it, on the same entry. A page shows the rows that change while playing first, then the greyed "Change from the main menu"
 // group. A description strip at the bottom left says what the focused entry or row does; the game stays
 // visible on the right, so a change like Brightness shows at once.
 class PauseMenu final : public rex::ui::ImGuiDialog {
@@ -134,8 +135,8 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
 
     DrawShade(dl);
     ui::Modal& modal = settings_->modal();
-    if (view_ == View::kList) DrawMainList(dl);
-    else DrawPage(dl);
+    if (view_ == View::kPage) DrawPage(dl);
+    else DrawEntryList(dl, view_ == View::kSettings);
     ui::DrawModal(dl, modal, o_, ImVec2(o_.x + w_, o_.y + h_), m_, in);
     DrawFooter(dl);
     ImGui::End();
@@ -143,7 +144,7 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
   }
 
  private:
-  enum class View { kList, kPage };
+  enum class View { kList, kSettings, kPage };
 
   // The left column: where it starts, how wide the main list and a page are, and the strip's top.
   float X() const { return o_.x + 72 * m_.s; }
@@ -156,6 +157,7 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
     opened_frame_ = ImGui::GetFrameCount();
     view_ = View::kList;
     focus_entry_ = Entry::kResume;
+    settings_focus_ = Entry::kDisplay;
     offsets_.clear();
     settings_->modal().open = false;
     settings_->LeaveSubPage();
@@ -212,6 +214,7 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
     switch (e) {
       case Entry::kResume: return play::RunPauseAction(PauseAction::kResume);
       case Entry::kPhotoMode: return photo::Enter();
+      case Entry::kSettings: return OpenSettingsList(Entry::kDisplay);
       case Entry::kGameOptions: return play::RunPauseAction(PauseAction::kGameOptions);
       case Entry::kLoadCheckpoint:
         return Confirm("Load last checkpoint", "Go back to the last checkpoint? Your progress since then is lost.",
@@ -252,30 +255,92 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
     settings_->LeaveSubPage();
   }
 
-  // Back from a page: to the list, on the entry that opened it.
-  void BackToList() {
-    view_ = View::kList;
-    for (const pause::Listed& l : pause::Entries(Availability()))
-      if (pause::PageOf(l.entry) == int(page_)) focus_entry_ = l.entry;
+  void OpenSettingsList(Entry focus) {
+    view_ = View::kSettings;
+    settings_focus_ = focus;
+    offsets_.clear();
   }
 
-  // ----------------------------------------------------------------------------------------- main list ---
-  void DrawMainList(ImDrawList* dl) {
+  void OpenMainList(Entry focus) {
+    view_ = View::kList;
+    focus_entry_ = focus;
+    offsets_.clear();
+  }
+
+  // Back from a page: to the list that opened it (the Settings list or the main list), on the page's entry.
+  void BackToList() {
+    const Entry e = pause::EntryOfPage(Availability(), int(page_));
+    if (pause::InSettings(e)) OpenSettingsList(e);
+    else OpenMainList(e);
+  }
+
+  // The breadcrumb at the top of a list or page: "PAUSED / SETTINGS / DISPLAY". Every part but the last is small
+  // and dim and goes back there when clicked (returns its index, else -1); the last is the gold, underlined title.
+  // With `dl` null it only measures: the width goes to `*width`.
+  int DrawBreadcrumb(ImDrawList* dl, const std::vector<const char*>& parts, bool active, float* width = nullptr) {
+    const float s = m_.s, x = X(), cy = o_.y + 72 * s;
+    const ui::Fonts f = ui::GetFonts();
+    int clicked = -1;
+    float px = x;
+    for (size_t i = 0; i < parts.size(); ++i) {
+      const std::string name = text::Upper(T(parts[i]));
+      if (i + 1 < parts.size()) {
+        const float rs = 15 * s, rtr = 5 * s, rw = ui::TrackedWidth(f.display, rs, name, rtr);
+        if (dl) {
+          const bool hover = active && ImGui::IsMouseHoveringRect(ImVec2(px - 6 * s, cy - 16 * s),
+                                                                  ImVec2(px + rw + 6 * s, cy + 16 * s), false);
+          if (hover && ImGui::IsMouseClicked(0)) clicked = int(i);
+          ui::DrawTracked(dl, f.display, rs, ImVec2(px, cy - rs * 0.5f), hover ? color::kText : color::kTextDim, name,
+                          rtr);
+          dl->AddText(f.display, 22 * s, ImVec2(px + rw + 22 * s, cy - 11 * s), color::kTextFaint, "/");
+        }
+        px += rw + 48 * s;
+      } else {
+        const float ns = 22 * s, ntr = 1.5f * s, nw = ui::TrackedWidth(f.display, ns, name, ntr);
+        if (dl) {
+          ui::DrawTracked(dl, f.display, ns, ImVec2(px, cy - ns * 0.5f), color::kAccent, name, ntr);
+          dl->AddRectFilled(ImVec2(px, cy + 17 * s), ImVec2(px + nw, cy + 19 * s), color::kAccent);
+        }
+        px += nw;
+      }
+    }
+    if (width) *width = px - x;
+    return clicked;
+  }
+
+  // The breadcrumb's parts for a page: PAUSED / SETTINGS / DISPLAY, or PAUSED / CONTROLS.
+  std::vector<const char*> PageCrumbs(InGameSettings::Page page) const {
+    if (pause::InSettings(pause::EntryOfPage(Availability(), int(page))))
+      return {"Paused", pause::Label(Entry::kSettings), InGameSettings::PageName(page)};
+    return {"Paused", InGameSettings::PageName(page)};
+  }
+
+  // ----------------------------------------------------------------------------------------- the lists ---
+  // The main list (PAUSED caption) or the Settings list ("PAUSED / SETTINGS" breadcrumb), the same look.
+  void DrawEntryList(ImDrawList* dl, bool sub) {
     const float s = m_.s;
     const ui::Fonts f = ui::GetFonts();
     ui::Input& in = settings_->input();
     const bool active = !settings_->modal().open;
-    const std::vector<pause::Listed> list = pause::Entries(Availability());
+    const pause::Available a = Availability();
+    const std::vector<pause::Listed> list = sub ? pause::SettingsEntries(a) : pause::Entries(a);
+    Entry& focus_entry = sub ? settings_focus_ : focus_entry_;
     const int n = int(list.size());
     int focus = 0;
     for (int i = 0; i < n; ++i)
-      if (list[size_t(i)].entry == focus_entry_) focus = i;
+      if (list[size_t(i)].entry == focus_entry) focus = i;
     const int focus_before = focus;
 
     const float x = X();
     const float cy = o_.y + 72 * s;
-    ui::DrawTracked(dl, f.display, 15 * s, ImVec2(x, cy - 7.5f * s), color::kAccent, text::Upper(T("Paused")), 5 * s);
-    dl->AddRectFilled(ImVec2(x, cy + 17 * s), ImVec2(x + 44 * s, cy + 19 * s), ui::WithAlpha(color::kAccent, 0.7f));
+    bool back = false;
+    if (sub) {
+      back = DrawBreadcrumb(dl, {"Paused", pause::Label(Entry::kSettings)}, active) == 0;
+      if (active && ImGui::IsMouseClicked(1)) back = true;  // the right mouse button goes back, as on a page
+    } else {
+      ui::DrawTracked(dl, f.display, 15 * s, ImVec2(x, cy - 7.5f * s), color::kAccent, text::Upper(T("Paused")), 5 * s);
+      dl->AddRectFilled(ImVec2(x, cy + 17 * s), ImVec2(x + 44 * s, cy + 19 * s), ui::WithAlpha(color::kAccent, 0.7f));
+    }
 
     // The entries share the room between the caption and the strip; the gap before the game's items is 0.4 rows.
     int gaps = 0;
@@ -310,14 +375,21 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
       iy += item_h;
     }
     if (focus != focus_before) ui::Cue(ui::Sound::kMove);
-    if (n > 0) focus_entry_ = list[size_t(std::clamp(focus, 0, n - 1))].entry;
-    DrawStrip(dl, nullptr, T(pause::What(focus_entry_)), ListWidth(), true);
+    if (n > 0) focus_entry = list[size_t(std::clamp(focus, 0, n - 1))].entry;
+    DrawStrip(dl, nullptr, T(pause::What(focus_entry)), ListWidth(), true);
 
     if (active && in.Pressed(Action::kAccept)) chosen = focus;
-    if (active && (in.Pressed(Action::kBack) || in.Pressed(Action::kPlay))) {
+    // Start resumes from anywhere; B / Esc resumes on the main list and goes back on the Settings list.
+    if (active && (in.Pressed(Action::kPlay) || (!sub && in.Pressed(Action::kBack)))) {
       in.ConsumeAll();
       ui::Cue(ui::Sound::kBack);
       play::RunPauseAction(play::PauseAction::kResume);
+      return;
+    }
+    if (active && sub && (back || in.Pressed(Action::kBack))) {
+      in.ConsumeAll();
+      ui::Cue(ui::Sound::kBack);
+      OpenMainList(Entry::kSettings);
       return;
     }
     if (chosen >= 0) {
@@ -355,13 +427,14 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
 
   void DrawPage(ImDrawList* dl) {
     const float s = m_.s;
-    const ui::Fonts f = ui::GetFonts();
     ui::Input& in = settings_->input();
     const bool active = !settings_->modal().open;
-    // LB / RB: the previous or next settings page of the list.
+    // LB / RB: the previous or next page of the same list (the Settings pages among themselves; Controls and
+    // Gameplay between themselves).
     if (active && (in.Pressed(Action::kPrevTab) || in.Pressed(Action::kNextTab))) {
       const int dir = in.Pressed(Action::kNextTab) ? 1 : -1;
-      const int next = pause::NextPage(pause::Entries(Availability()), int(page_), dir);
+      const pause::Available a = Availability();
+      const int next = pause::NextPage(pause::ListWithPage(a, int(page_)), int(page_), dir);
       if (next != int(page_)) {
         page_ = InGameSettings::Page(next);
         settings_->LeaveSubPage();
@@ -371,22 +444,19 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
       in.Consume(Action::kNextTab);
     }
 
-    // The breadcrumb: PAUSED (click it to go back) / the page's name, underlined.
-    const float x = X(), cy = o_.y + 72 * s;
-    bool back = false;
-    {
-      const std::string root = text::Upper(T("Paused"));
-      const float rs = 15 * s, rtr = 5 * s, rw = ui::TrackedWidth(f.display, rs, root, rtr);
-      const bool hover = active && ImGui::IsMouseHoveringRect(ImVec2(x - 6 * s, cy - 16 * s), ImVec2(x + rw + 6 * s, cy + 16 * s), false);
-      if (hover && ImGui::IsMouseClicked(0)) back = true;
-      ui::DrawTracked(dl, f.display, rs, ImVec2(x, cy - rs * 0.5f), hover ? color::kText : color::kTextDim, root, rtr);
-      const float sx = x + rw + 22 * s;
-      dl->AddText(f.display, 22 * s, ImVec2(sx, cy - 11 * s), color::kTextFaint, "/");
-      const std::string name = text::Upper(T(InGameSettings::PageName(page_)));
-      const float ns = 22 * s, ntr = 1.5f * s, nx = sx + 26 * s, nw = ui::TrackedWidth(f.display, ns, name, ntr);
-      ui::DrawTracked(dl, f.display, ns, ImVec2(nx, cy - ns * 0.5f), color::kAccent, name, ntr);
-      dl->AddRectFilled(ImVec2(nx, cy + 17 * s), ImVec2(nx + nw, cy + 19 * s), color::kAccent);
+    // The breadcrumb: PAUSED (/ SETTINGS) / the page's name, underlined. A click on PAUSED goes to the main list
+    // (on Settings for a Settings page), a click on SETTINGS to the Settings list (on this page).
+    const float x = X();
+    const std::vector<const char*> crumbs = PageCrumbs(page_);
+    const int crumb = DrawBreadcrumb(dl, crumbs, active);
+    if (crumb == 0 && crumbs.size() == 3) {
+      in.ConsumeAll();
+      ui::Cue(ui::Sound::kBack);
+      settings_->LeaveSubPage();
+      OpenMainList(Entry::kSettings);
+      return;
     }
+    bool back = crumb >= 0;
 
     items_ = Arrange(settings_->Items(page_));
     const float top = o_.y + 112 * s, bottom = StripTop() - 14 * s;
@@ -399,8 +469,12 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
     if (active && (in.Pressed(Action::kBack) || back)) {
       in.Consume(Action::kBack);
       ui::Cue(ui::Sound::kBack);
-      if (settings_->SubPage() != 0) settings_->LeaveSubPage();
-      else BackToList();
+      if (settings_->SubPage() != 0 && crumb < 0) {
+        settings_->LeaveSubPage();
+      } else {
+        settings_->LeaveSubPage();
+        BackToList();
+      }
     }
     if (active && in.Pressed(Action::kResetPage) && settings_->CanResetPage(page_)) {
       in.Consume(Action::kResetPage);
@@ -524,6 +598,7 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
       return p;
     }
     if (view_ == View::kList) return {{Action::kAccept, "Select"}, {Action::kBack, "Resume"}};
+    if (view_ == View::kSettings) return {{Action::kAccept, "Select"}, {Action::kPlay, "Resume"}, {Action::kBack, "Back"}};
     std::vector<ui::Prompt> p;
     if (has_focused_) {
       if ((focused_.type == ItemType::kChoice || focused_.type == ItemType::kSlider) && !focused_.disabled)
@@ -556,17 +631,19 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
 #if defined(KK_DEV_TOOLS)
   // Developer-only: KK_DEV_PAUSE_INPUT="pad:down,pad:a,shot:name,..." presses buttons once the
   // menu is open, as the launcher's KK_DEV_LAUNCHER_INPUT does (pad:/ps:/kb: a b x y lb rb start
-  // up down left right lt rt; move:X:Y and click:X:Y at 1280 x 720 positions), logging
+  // up down left right lt rt; move:X:Y, click:X:Y and rclick:X:Y (right button) at 1280 x 720 positions), logging
   // "KK dev: pause input <step>" and, for shot:<name>, "KK dev: shot <name>" (then holds for capture).
-  // page:<name> (or settings:<name>) opens a page and logs its rows in the pause menu's order; focus:<row>
-  // focuses a row; language:<n> sets user_language; strip-fit logs how every row's strip fits in the five
-  // languages (task 222, like the launcher's desc-fit).
+  // page:<name> (or settings:<name>) opens a page (display, graphics, audio, cheats in the Settings list;
+  // controls, gameplay in the main list) and logs its rows in the pause menu's order; list:settings / list:main
+  // opens that list and logs its entries (task 248); focus:<row> focuses a row; language:<n> sets user_language;
+  // strip-fit logs how every row's strip fits in the five languages (task 222, like the launcher's desc-fit) and
+  // how wide every breadcrumb is (task 248).
   void DevInput() {
     ImGuiIO& io = ImGui::GetIO();
-    static bool release = false;
-    if (release) {
-      io.AddMouseButtonEvent(0, false);
-      release = false;
+    static int release = -1;
+    if (release >= 0) {
+      io.AddMouseButtonEvent(release, false);
+      release = -1;
     }
     static std::vector<std::string> steps = [] {
       std::vector<std::string> out;
@@ -583,6 +660,11 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
     if (next >= steps.size() || now < at) return;
     std::string t = steps[next++];
     at = now + 0.45;
+    // Where the menu is before this step (the result of the previous one), for scripted Back-target checks.
+    REXLOG_INFO("KK dev: pause state {} focus {}",
+                view_ == View::kPage ? std::string("page ") + InGameSettings::PageName(page_)
+                                     : std::string(view_ == View::kSettings ? "settings" : "main"),
+                pause::Label(view_ == View::kSettings ? settings_focus_ : focus_entry_));
     REXLOG_INFO("KK dev: pause input {}", t);
     if (t.rfind("shot:", 0) == 0) {
       REXLOG_INFO("KK dev: shot {}", t.substr(5));
@@ -607,6 +689,16 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
       REXLOG_INFO("KK dev: pause page FAIL {}", want);
       return;
     }
+    if (t == "list:settings" || t == "list:main") {
+      const bool sub = t == "list:settings";
+      if (sub) OpenSettingsList(Entry::kDisplay);
+      else OpenMainList(Entry::kResume);
+      const pause::Available a = Availability();
+      for (const pause::Listed& l : sub ? pause::SettingsEntries(a) : pause::Entries(a))
+        REXLOG_INFO("KK dev: pause list {} entry {}{}", sub ? "settings" : "main", pause::Label(l.entry),
+                    l.gap_before ? " (gap)" : "");
+      return;
+    }
     if (t.rfind("focus:", 0) == 0) {
       const auto rows = Arrange(settings_->Items(page_));
       for (size_t i = 0; i < rows.size(); ++i) if (rows[i].label == t.substr(6) && rows[i].type != ItemType::kSection) {
@@ -629,10 +721,10 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
       io.AddMousePosEvent(o_.x + std::stof(xy.substr(0, colon)) * m_.s, o_.y + std::stof(xy.substr(colon + 1)) * m_.s);
     };
     if (t.rfind("move:", 0) == 0) return at_point(t.substr(5));
-    if (t.rfind("click:", 0) == 0) {
-      at_point(t.substr(6));
-      io.AddMouseButtonEvent(0, true);
-      release = true;
+    if (t.rfind("click:", 0) == 0 || t.rfind("rclick:", 0) == 0) {
+      release = t[0] == 'r' ? 1 : 0;
+      at_point(t.substr(t.find(':') + 1));
+      io.AddMouseButtonEvent(release, true);
       return;
     }
     ui::Device d = ui::Device::kKeyboard;
@@ -666,16 +758,35 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
       };
       pause::Available all;
       all.photo = all.cheats = all.checkpoint = all.score = all.save = true;
-      for (const pause::Listed& l : pause::Entries(all))
+      std::vector<pause::Listed> entries = pause::Entries(all), sub = pause::SettingsEntries(all);
+      entries.insert(entries.end(), sub.begin(), sub.end());
+      for (const pause::Listed& l : entries)
         check(nullptr, T(pause::What(l.entry)), ListWidth(), "list", pause::Label(l.entry));
-      for (const pause::Listed& l : pause::Entries(all)) {
+      // The breadcrumbs ("PAUSED / SETTINGS / DISPLAY") must end inside the dark band on the left.
+      const float band = PageWidth() + 40 * m_.s;
+      int crumbs = 0, wide = 0;
+      auto crumb = [&](const std::vector<const char*>& parts) {
+        float width = 0;
+        DrawBreadcrumb(nullptr, parts, false, &width);
+        ++crumbs;
+        if (width > band) {
+          ++wide;
+          REXLOG_INFO("KK dev: crumbfit {} '{}' width {:.0f} band {:.0f}", lang, parts.back(), width, band);
+        }
+      };
+      crumb({"Paused", pause::Label(Entry::kSettings)});
+      for (const pause::Listed& l : entries) {
         const int p = pause::PageOf(l.entry);
         if (p < 0) continue;
+        if (pause::InSettings(l.entry))
+          crumb({"Paused", pause::Label(Entry::kSettings), InGameSettings::PageName(InGameSettings::Page(p))});
+        else crumb({"Paused", InGameSettings::PageName(InGameSettings::Page(p))});
         for (const Item& it : Arrange(settings_->Items(InGameSettings::Page(p))))
           if (it.type != ItemType::kSection) check(&it, std::string(), PageWidth(), InGameSettings::PageName(InGameSettings::Page(p)), it.label);
       }
       REXLOG_INFO("KK dev: stripfit {} rows {} full {} smaller {} no-note {} too-tall {}", lang, rows, counts[0],
                   counts[1] + counts[2], counts[3], counts[4]);
+      REXLOG_INFO("KK dev: crumbfit {} crumbs {} too-wide {}", lang, crumbs, wide);
     }
     rex::cvar::SetFlagByName("user_language", language);
   }
@@ -692,6 +803,7 @@ class PauseMenu final : public rex::ui::ImGuiDialog {
   double open_time_ = 0;
   View view_ = View::kList;
   Entry focus_entry_ = Entry::kResume;
+  Entry settings_focus_ = Entry::kDisplay;
   std::vector<float> offsets_;
   InGameSettings::Page page_ = InGameSettings::kDisplay;
   std::map<int, ui::ListState> lists_;

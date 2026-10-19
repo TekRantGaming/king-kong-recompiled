@@ -1,10 +1,11 @@
-// The pause menu's own text (task 222, option A; pause_menu_logic.h): its entries and the description strip's
-// sentence for each. In game the launcher is "the main menu" (owner, 18 Oct). Included by launcher_text_table.inc.
+// The pause menu's own text (task 222, option A; task 248, Settings sub-list; pause_menu_logic.h): its entries and
+// the description strip's sentence for each. In game the launcher is "the main menu" (owner, 18 Oct). Included by launcher_text_table.inc.
     {"Load last checkpoint", "Letzten Checkpoint laden", "Cargar último punto de control", "Charger le dernier point de contrôle", "Carica ultimo checkpoint"},
     {"Quit to main menu", "Zurück zum Hauptmenü", "Salir al menú principal", "Quitter vers le menu principal", "Esci al menu principale"},
     {"Save game", "Spiel speichern", "Guardar partida", "Sauvegarder", "Salva partita"},
     {"Go back to the game where you left off.", "Zurück ins Spiel, genau dort, wo du aufgehört hast.", "Vuelve al juego justo donde lo dejaste.", "Reprenez la partie là où vous l'avez laissée.", "Torna al gioco dove eri rimasto."},
     {"Freeze the game and take pictures with a free camera.", "Das Spiel anhalten und mit einer freien Kamera Bilder machen.", "Congela el juego y haz fotos con una cámara libre.", "Figez le jeu et prenez des photos avec une caméra libre.", "Blocca il gioco e scatta foto con una telecamera libera."},
+    {"Display, graphics and audio settings.", "Anzeige-, Grafik- und Audioeinstellungen.", "Ajustes de pantalla, gráficos y audio.", "Réglages de l'affichage, des graphismes et de l'audio.", "Impostazioni di schermo, grafica e audio."},
     {"Brightness, gamma, the frame rate cap, HDR, field of view and camera shake.", "Helligkeit, Gamma, FPS-Limit, HDR, Sichtfeld und Kamerawackeln.", "Brillo, gamma, límite de FPS, HDR, campo de visión y vibración de cámara.", "Luminosité, gamma, limite de FPS, HDR, champ de vision et tremblement de caméra.", "Luminosità, gamma, limite FPS, HDR, campo visivo e tremolio della telecamera."},
     {"Upscaling, anti-aliasing, lighting, effects and the texture pack.", "Hochskalierung, Kantenglättung, Beleuchtung, Effekte und das Texturpaket.", "Reescalado, antialiasing, iluminación, efectos y el paquete de texturas.", "Mise à l'échelle, anticrénelage, éclairage, effets et pack de textures.", "Upscaling, anti-aliasing, illuminazione, effetti e pacchetto texture."},
     {"The game's volumes and the menu sounds.", "Die Lautstärken des Spiels und die Menütöne.", "Los volúmenes del juego y los sonidos del menú.", "Les volumes du jeu et les sons du menu.", "I volumi del gioco e i suoni del menu."},

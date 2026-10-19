@@ -38,12 +38,15 @@ Whatever is chosen, the game starts with no logos, no title screen and no menus.
 Start (Esc) in play opens the port's pause menu instead of the game's: launcher look (same fonts, colours,
 focus highlight, controller / keyboard / mouse prompts), over the frozen, dimmed game frame:
 
-Task 222 (owner, 18 Oct, option A): a slim list on the left over the paused game (dark band on the left, the
-game visible on the right): **Resume**, **Photo mode**, **Display**, **Graphics**, **Audio**, **Controls**,
-**Gameplay** (and **Cheats** while the cheats are on), then after a gap the game's items when it offers them
-(**Restart chapter** = the game's Start again, **Score**, **Save game**), **Quit to main menu** and **Quit game**.
-Each settings entry opens its page in the same column ("PAUSED / DISPLAY"); Back returns to the list on the same
-entry; LB / RB move between the listed pages. A description strip at the bottom left says what the entry or row
+Task 222 (owner, 18 Oct, option A), shortened by task 248 (owner, 19 Oct): a slim list on the left over the paused
+game (dark band on the left, the game visible on the right): **Resume**, **Photo mode**, **Controls**, **Gameplay**,
+**Settings**, then after a gap the game's items when it offers them (**Load last checkpoint**, **Score**, **Save
+game**), **Quit to main menu** and **Quit game**. **Settings** opens a second list in the same column ("PAUSED /
+SETTINGS"): **Display**, **Graphics**, **Audio**, **Cheats** (while the cheats are on) and **Options** (the game's
+own pages, developer builds only). Each page opens in the same column ("PAUSED / CONTROLS", "PAUSED / SETTINGS /
+DISPLAY"); Back returns to the list that opened it, on the same entry (from the Settings list: to the main list on
+Settings); LB / RB move between the pages of the same list (Display, Graphics, Audio, Cheats among themselves;
+Controls and Gameplay between themselves). A description strip at the bottom left says what the entry or row
 does (task 220's help: what, the chosen option's note, then when it applies, performance, video memory, default).
 Layout logic: `kk/src/pause_menu_logic.h` (tested by `pause-menu-layout`).
 - Start in a cutscene still skips it (not a pause). Loading screens: no menu.
@@ -151,9 +154,13 @@ again" option; Reinstall game (About) runs the full setup again and keeps the se
 
 `CreatePauseMenu` (`pause_menu.h`) makes one ImGui dialog for the session (the launcher makes it at Play; the app
 should also make it when the launcher is skipped). While `play::PauseMenuOpen()` it draws the list above
-(`PAUSED`, entries from `pause::Entries`, the game's items when `PauseActionAvailable`). Restart chapter, Quit to
-main menu and Quit game ask first (Cancel focused); on the list B, Esc or Start resume; on a page Start resumes, B,
-Esc, the right mouse button or a click on `PAUSED` go back. The game's own Options pages: developer builds only.
+(`PAUSED`, entries from `pause::Entries`, the game's items when `PauseActionAvailable`; the Settings list from
+`pause::SettingsEntries`). Load last checkpoint, Quit to main menu and Quit game ask first (Cancel focused); on the
+main list B, Esc or Start resume; on the Settings list and on a page Start resumes, B, Esc, the right mouse button
+or a click on a breadcrumb part (`PAUSED`, `SETTINGS`) go back. The game's own Options pages: developer builds only.
+Developer steps (`KK_DEV_PAUSE_INPUT`): `page:<name>` opens any page directly, `list:settings` / `list:main` open a
+list and log its entries, `strip-fit` also logs how wide every breadcrumb is (`crumbfit`). `KK_DEV_PAUSE_ACTIONS`
+only opens and closes the menu (`open`, `close`), so it needs nothing new for the Settings list.
 
 **Pages**: the launcher's Settings rows (`SettingsPages`, shared code; `settings_layout.h` order) for Display,
 Graphics, Audio, Controls (with Button remapping and Keyboard bindings), Gameplay and Cheats; Advanced is not in

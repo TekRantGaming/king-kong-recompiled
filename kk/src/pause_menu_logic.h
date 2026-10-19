@@ -1,5 +1,6 @@
-// The pause menu's layout (task 222, owner's option A, 18 Oct), without ImGui or the game: which entries the
-// slim list on the left has and in what order, what the description strip says for each, which settings page an
+// The pause menu's layout (task 222, owner's option A, 18 Oct; task 248, owner 19 Oct: a shorter list with a
+// Settings sub-list), without ImGui or the game: which entries the slim list on the left and the Settings list have
+// and in what order, what the description strip says for each, which settings page an
 // entry opens, the order of a page's rows (the rows that change while playing first, then the quiet "Change from
 // the main menu" group). pause_menu.cpp draws it; tests/pause_menu_tests.cpp checks it.
 //
@@ -15,13 +16,16 @@ namespace kk::pause {
 enum class Entry {
   kResume,
   kPhotoMode,
+  kControls,
+  kGameplay,
+  kSettings,      // opens the Settings list (task 248)
+  // The Settings list:
   kDisplay,
   kGraphics,
   kAudio,
-  kControls,
-  kGameplay,
-  kCheats,        // only while the cheats are switched on (the owner's list has no Cheats entry)
-  kGameOptions,   // the game's own Options pages: developer builds only
+  kCheats,        // only while the cheats are switched on (coordinator's placement, owner 19 Oct)
+  kGameOptions,   // "Options", the game's own Options pages: developer builds only
+  // After the gap in the main list:
   kLoadCheckpoint,  // "Load last checkpoint" (owner 18 Oct, replaces the chapter restart): the reload a death makes
   kScore,         // the game's Score page (chapter-select runs)
   kSave,          // the game's Save (story runs)
@@ -46,16 +50,14 @@ struct Listed {
   bool gap_before;  // a little space above it: the game's own items after the settings pages
 };
 
-// The list: Resume, Photo mode, Display, Graphics, Audio, Controls, Gameplay, then (after a gap) the game's items
-// and the ways out.
+// The main list (owner 19 Oct): Resume, Photo mode, Controls, Gameplay, Settings, then (after a gap) Load last
+// checkpoint, Score, Save game (next to Score, when the game offers it), Quit to main menu, Quit game.
 inline std::vector<Listed> Entries(const Available& a) {
   std::vector<Listed> out;
   auto add = [&](Entry e, bool gap = false) { out.push_back({e, gap}); };
   add(Entry::kResume);
   if (a.photo) add(Entry::kPhotoMode);
-  for (Entry e : {Entry::kDisplay, Entry::kGraphics, Entry::kAudio, Entry::kControls, Entry::kGameplay}) add(e);
-  if (a.cheats) add(Entry::kCheats);
-  if (a.game_options) add(Entry::kGameOptions);
+  for (Entry e : {Entry::kControls, Entry::kGameplay, Entry::kSettings}) add(e);
   bool gap = true;
   auto lower = [&](bool on, Entry e) {
     if (!on) return;
@@ -70,16 +72,32 @@ inline std::vector<Listed> Entries(const Available& a) {
   return out;
 }
 
+// The Settings list ("PAUSED / SETTINGS"): Display, Graphics, Audio, Cheats (while on), Options (developer builds).
+inline std::vector<Listed> SettingsEntries(const Available& a) {
+  std::vector<Listed> out;
+  for (Entry e : {Entry::kDisplay, Entry::kGraphics, Entry::kAudio}) out.push_back({e, false});
+  if (a.cheats) out.push_back({Entry::kCheats, false});
+  if (a.game_options) out.push_back({Entry::kGameOptions, false});
+  return out;
+}
+
+// Whether the entry sits in the Settings list (its page's breadcrumb is "PAUSED / SETTINGS / <page>").
+inline bool InSettings(Entry e) {
+  return e == Entry::kDisplay || e == Entry::kGraphics || e == Entry::kAudio || e == Entry::kCheats ||
+         e == Entry::kGameOptions;
+}
+
 // The entry's name (English, translated as drawn). Settings pages use the launcher's tab names.
 inline const char* Label(Entry e) {
   switch (e) {
     case Entry::kResume: return "Resume";
     case Entry::kPhotoMode: return "Photo mode";
+    case Entry::kControls: return settings_layout::kPageNames[settings_layout::kControls];
+    case Entry::kGameplay: return settings_layout::kPageNames[settings_layout::kGameplay];
+    case Entry::kSettings: return "Settings";
     case Entry::kDisplay: return settings_layout::kPageNames[settings_layout::kDisplay];
     case Entry::kGraphics: return settings_layout::kPageNames[settings_layout::kGraphics];
     case Entry::kAudio: return settings_layout::kPageNames[settings_layout::kAudio];
-    case Entry::kControls: return settings_layout::kPageNames[settings_layout::kControls];
-    case Entry::kGameplay: return settings_layout::kPageNames[settings_layout::kGameplay];
     case Entry::kCheats: return settings_layout::kPageNames[settings_layout::kCheats];
     case Entry::kGameOptions: return "Options";
     case Entry::kLoadCheckpoint: return "Load last checkpoint";
@@ -96,6 +114,7 @@ inline const char* What(Entry e) {
   switch (e) {
     case Entry::kResume: return "Go back to the game where you left off.";
     case Entry::kPhotoMode: return "Freeze the game and take pictures with a free camera.";
+    case Entry::kSettings: return "Display, graphics and audio settings.";
     case Entry::kDisplay: return "Brightness, gamma, the frame rate cap, HDR, field of view and camera shake.";
     case Entry::kGraphics: return "Upscaling, anti-aliasing, lighting, effects and the texture pack.";
     case Entry::kAudio: return "The game's volumes and the menu sounds.";
@@ -125,7 +144,24 @@ inline int PageOf(Entry e) {
   }
 }
 
-// LB / RB on a page: the next or previous settings page in the list (wrapping), or `page` if it isn't listed.
+// The list a page belongs to: the Settings list for Display, Graphics, Audio and Cheats, else the main list
+// (Controls, Gameplay).
+inline std::vector<Listed> ListWithPage(const Available& a, int page) {
+  std::vector<Listed> settings = SettingsEntries(a);
+  for (const Listed& l : settings)
+    if (PageOf(l.entry) == page) return settings;
+  return Entries(a);
+}
+
+// The entry that opens `page` in its list, or kResume if none does.
+inline Entry EntryOfPage(const Available& a, int page) {
+  for (const Listed& l : ListWithPage(a, page))
+    if (PageOf(l.entry) == page) return l.entry;
+  return Entry::kResume;
+}
+
+// LB / RB on a page: the next or previous page of the same list (wrapping), or `page` if it isn't listed. Pass
+// ListWithPage(a, page): Settings pages move among themselves, Controls and Gameplay between themselves.
 inline int NextPage(const std::vector<Listed>& list, int page, int dir) {
   std::vector<int> pages;
   for (const Listed& l : list)
