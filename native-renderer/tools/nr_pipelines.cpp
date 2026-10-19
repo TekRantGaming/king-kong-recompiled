@@ -12,7 +12,9 @@
 //   nr_pipelines merge --tags-only -o <out> <list> <recording>...
 //       Tags a list from recorded play-throughs (the pipeline cache file of a run with a fresh cache, e.g. a
 //       VRAM tour or benchmark run on a build with task 276): <list>'s records in its order, each with the
-//       level the recordings voted for; the recordings add no records.
+//       level the recordings voted for; the recordings add no records. A record the recordings do not name
+//       takes the level of a recorded similar pipeline (task 279: the same draw at another render scale or
+//       with other shader translations; today's game records only render scale records).
 //   nr_pipelines info <file>...
 //       What a pipeline file holds.
 //
@@ -75,6 +77,11 @@ int Merge(int argc, char** argv) {
     std::fprintf(stderr, "nothing written: every input must be a pipeline file of version %u\n",
                  nr::kPipelineCacheVersion);
     return 2;
+  }
+  if (tags_only) {
+    // Task 279: the list's 1:1 records (and other translations) take the level of the recorded similar pipeline.
+    const size_t similar = merger.TagFromSimilar();
+    std::printf("%zu more tagged from a similar recorded pipeline (another render scale or translation)\n", similar);
   }
   std::string error;
   if (!nr::WritePipelineList(out, merger.records(), &error)) {

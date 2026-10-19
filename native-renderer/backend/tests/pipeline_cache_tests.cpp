@@ -425,6 +425,30 @@ TEST(PipelineListMerger_LevelVotes) {
   }
 }
 
+// Task 279: a list's 1:1 record takes the level of the recorded render scale twin (other translations).
+TEST(PipelineListMerger_TagFromSimilar) {
+  PipelineRecord one = Sample(1), other = Sample(2);
+  one.ps_input = 0x10;
+  PipelineRecord scaled = one;
+  scaled.flags |= kRecordScaled;
+  scaled.ps_input = 0x20;
+  scaled.vs_input = 0x30;
+  CHECK(PipelineKey(scaled) != PipelineKey(one));
+  CHECK_EQ(SimilarPipelineKey(scaled), SimilarPipelineKey(one));
+  CHECK(SimilarPipelineKey(other) != SimilarPipelineKey(one));
+  SetRecordLevel(scaled, 401);
+  PipelineListMerger tags(false, true);
+  tags.AddRecords({one, other});
+  tags.AddRecords({scaled});
+  CHECK(!RecordLevel(tags.records()[0]));
+  CHECK_EQ(tags.TagFromSimilar(), size_t(1));
+  uint32_t level = 0;
+  CHECK(RecordLevel(tags.records()[0], &level));
+  CHECK_EQ(level, 401u);
+  CHECK(!RecordLevel(tags.records()[1]));
+  CHECK_EQ(PipelineKey(tags.records()[0]), PipelineKey(one));  // still the list's own pipeline
+}
+
 TEST(PipelinesTool_TagsOnly) {
   const std::string list = TempPath("tool_tag_list"), run = TempPath("tool_tag_run"), out = TempPath("tool_tag_out");
   CHECK(WritePipelineList(list, {Sample(1), Sample(2)}));

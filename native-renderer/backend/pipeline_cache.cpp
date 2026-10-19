@@ -40,6 +40,14 @@ uint64_t PipelineKey(const PipelineRecord& r) {
   return h;
 }
 
+uint64_t SimilarPipelineKey(const PipelineRecord& record) {
+  PipelineRecord r = record;
+  r.flags &= ~kRecordScaled;
+  r.vs_input = 0;
+  r.ps_input = 0;
+  return PipelineKey(r);
+}
+
 PipelineRecord MotionPipelineRecord(const PipelineRecord& draw, uint32_t motion_format) {
   PipelineRecord r;
   r.vs_hash = draw.vs_hash;
@@ -110,8 +118,24 @@ bool WritePipelineList(const std::string& path, const std::vector<PipelineRecord
   return ok;
 }
 
+namespace {
+
+// Task 276: one more vote for `tag`; returns the most voted tag (a tie: the first voted for).
+uint32_t Vote(std::vector<std::pair<uint32_t, uint32_t>>& votes, uint32_t tag) {
+  auto vote = std::find_if(votes.begin(), votes.end(), [&](const auto& v) { return v.first == tag; });
+  if (vote == votes.end()) votes.push_back({tag, 1});
+  else ++vote->second;
+  auto best = votes.begin();
+  for (auto v = votes.begin(); v != votes.end(); ++v)
+    if (v->second > best->second) best = v;
+  return best->first;
+}
+
+}  // namespace
+
 PipelineListMerger::Added PipelineListMerger::AddOne(const PipelineRecord& r) {
   if ((r.flags & kRecordFlipFrontFace) && !keep_debug_) return Added::kDebug;
+  if (RecordLevel(r)) Vote(similar_votes_[SimilarPipelineKey(r)], r.reserved[0]);
   const uint64_t key = PipelineKey(r);
   auto known = keys_.find(key);
   if (known == keys_.end()) {
@@ -124,17 +148,23 @@ PipelineListMerger::Added PipelineListMerger::AddOne(const PipelineRecord& r) {
   }
   // Task 276: a duplicate is one more vote for its level; the record carries the most voted (a tie: the
   // first voted for, i.e. the earliest input naming it with a level).
-  if (RecordLevel(r)) {
-    auto& votes = votes_[known->second];
-    auto vote = std::find_if(votes.begin(), votes.end(), [&](const auto& v) { return v.first == r.reserved[0]; });
-    if (vote == votes.end()) votes.push_back({r.reserved[0], 1});
-    else ++vote->second;
-    auto best = votes.begin();
-    for (auto v = votes.begin(); v != votes.end(); ++v)
-      if (v->second > best->second) best = v;
-    records_[known->second].reserved[0] = best->first;
-  }
+  if (RecordLevel(r)) records_[known->second].reserved[0] = Vote(votes_[known->second], r.reserved[0]);
   return Added::kDuplicate;
+}
+
+size_t PipelineListMerger::TagFromSimilar() {
+  size_t tagged = 0;
+  for (PipelineRecord& r : records_) {
+    if (RecordLevel(r)) continue;
+    const auto similar = similar_votes_.find(SimilarPipelineKey(r));
+    if (similar == similar_votes_.end() || similar->second.empty()) continue;
+    auto best = similar->second.begin();
+    for (auto v = similar->second.begin(); v != similar->second.end(); ++v)
+      if (v->second > best->second) best = v;
+    r.reserved[0] = best->first;
+    ++tagged;
+  }
+  return tagged;
 }
 
 PipelineListMerger::Input PipelineListMerger::Add(const std::string& path) {

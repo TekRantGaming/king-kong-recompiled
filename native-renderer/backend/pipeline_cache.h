@@ -99,6 +99,9 @@ constexpr uint32_t kPipelineCacheVersion = 3;
 // field takes part, the translations' input hashes too: the same microcode drawn with its 1:1
 // and its render scale aware translation are two pipelines.
 uint64_t PipelineKey(const PipelineRecord& record);
+// Task 279: the key without the render scale flag and the translations' input hashes (the same draw state
+// and microcode at another render scale or translation): only for matching level tags, never a pipeline.
+uint64_t SimilarPipelineKey(const PipelineRecord& record);
 
 // Reads the records of a pipeline file of this version without changing it (a shipped list, or
 // the user's file read by another process). Whole records only, in file order, duplicates kept.
@@ -137,10 +140,17 @@ class PipelineListMerger {
   // Adds records that are not files (tests).
   size_t AddRecords(const std::vector<PipelineRecord>& records);
   const std::vector<PipelineRecord>& records() const { return records_; }
+  // Task 279: tags the records still without a level from tagged records of a similar pipeline: the same
+  // record at another render scale or with other shader translations (SimilarPipelineKey), most voted level
+  // first. A recording of today's game has only render scale records, while a list also holds 1:1 ones (the
+  // prewarm adapts those to the run's kind). Returns the records tagged.
+  size_t TagFromSimilar();
 
  private:
   enum class Added { kNew, kDuplicate, kDebug, kLeftOut };
   Added AddOne(const PipelineRecord& record);
+  // SimilarPipelineKey -> level votes of every tagged record added (any input).
+  std::unordered_map<uint64_t, std::vector<std::pair<uint32_t, uint32_t>>> similar_votes_;
   bool keep_debug_;
   bool tags_only_;
   bool first_input_done_ = false;
