@@ -22,6 +22,10 @@ void CreateMovieDialog(rex::ui::ImGuiDrawer* drawer, rex::ui::ImmediateDrawer* i
                   const std::filesystem::path& glyph_dir);
 // Called on the universe thread, immediately before the original level loader.
 bool BeforeLoad(const uint8_t* base, uint32_t g, bool starting, bool leaving);
+// Task 293: called on the same thread right after the original level loader. With kk_ps2_cutscene_load_during
+// the level loaded while the clip played: this waits for the clip's end (and lets the game's sound go again).
+// Nothing otherwise.
+void AfterLoad();
 // Task 217: the level loader's waits for a cutscene (any thread): how many have ended, and whether one is
 // going on now. Telemetry leaves the frame that spans one out of the frame statistics.
 uint32_t LoaderWaitsEnded();

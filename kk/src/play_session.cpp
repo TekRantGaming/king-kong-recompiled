@@ -1199,6 +1199,7 @@ REX_HOOK_RAW(sub_8253DB80) {
   if (request && g_jump_requested) REXLOG_INFO("KK play: uni_go loads level {}", int32_t(Load32(base, g + 8)));
   const bool ps2_movie = request && kk::movies::BeforeLoad(base, g, g_starting, g_leaving);
   __imp__sub_8253DB80(ctx, base);
+  if (ps2_movie) kk::movies::AfterLoad();  // task 293: the clip's end, when the level loaded under it
   // The chapter being played, for the per-chapter performance summary (a level change's frames left out).
   if (g) kk::telemetry::NoteChapter(ChapterOfLevel(int32_t(Load32(base, g + 0x18))), request);
   if (g_extra_movie) {
