@@ -7633,6 +7633,14 @@ class Launcher final : public rex::ui::ImGuiDialog, private SettingsPages {
       Play();
       return;
     }
+    if (t == "quit") {  // task 286: the Quit pop-up's Quit
+      Quit();
+      return;
+    }
+    if (t.rfind("set:", 0) == 0) {  // task 286: "set:<cvar>=<value>" as a settings row would (e.g. a restart-only one)
+      if (const size_t eq = t.find('=', 4); eq != std::string::npos) Set(t.substr(4, eq - 4).c_str(), t.substr(eq + 1));
+      return;
+    }
     if (t == "notify-history") {
       notify::LogHistory();
       return;

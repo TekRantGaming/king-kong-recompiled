@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <memory>
 #include <thread>
 
@@ -36,6 +37,14 @@ class ScheduledAudioSystem : public rex::audio::sdl::SDLAudioSystem {
                       "audio endpoint, on the game thread; the game does not go on until it opens)", s);
       }
     }).detach();
+#if defined(KK_DEV_TOOLS)
+    // Task 286 test aid: KK_DEV_AUDIO_OPEN_DELAY=<s> holds the open that long (the "still waiting" lines and,
+    // from 60 s, the startup hang report).
+    if (const char* d = std::getenv("KK_DEV_AUDIO_OPEN_DELAY"); d && std::atoi(d) > 0) {
+      REXLOG_INFO("KK dev: holding the audio device open for {} s", std::atoi(d));
+      std::this_thread::sleep_for(std::chrono::seconds(std::atoi(d)));
+    }
+#endif
     const rex::X_STATUS status = SDLAudioSystem::CreateDriver(index, semaphore, out_driver);
     done->store(true);
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
