@@ -281,6 +281,25 @@ void Disabled() {
 }
 void PuppetPolicies() {
   using namespace kk::coop::puppet;
+  const MutableRig original{1, 2, 3, 4, 5, 6, 7}, copy{8, 9, 10, 11, 12, 13, 14};
+  Check(Independent(copy, original), "new body owns all mutable components");
+  for (std::size_t i = 0; i < copy.size(); ++i) {
+    auto alias = copy; alias[i] = original[i];
+    Check(!Independent(alias, original), "reject each shared mutable component");
+    alias = copy; alias[i] = 0;
+    Check(!Independent(alias, original), "reject each absent mutable component");
+  }
+  auto alias = copy; alias[1] = original[2];
+  Check(!Independent(alias, original), "reject cross-component alias to original vars");
+  alias = copy; alias[2] = alias[1];
+  Check(!Independent(alias, original), "reject internally aliased copy");
+  std::array<uint32_t, 5> actors{3, 8, 4, 9, 5};
+  const uint32_t hidden[]{8, 9};
+  Check(FilterActors(actors, hidden) == 3 && actors[0] == 3 && actors[1] == 4 && actors[2] == 5,
+      "volume query removes only spawned bodies and preserves original actor order");
+  Check(FilterActors(std::span(actors.data(), 3), {}) == 3, "empty quarantine leaves query alone");
+  std::array<uint32_t, 3> all_hidden{8, 8, 9};
+  Check(FilterActors(all_hidden, hidden) == 0, "volume query can exclude every spawned result");
   const Action observed[] = {{41, 3, 0}, {22, 3, 1}, {35, 4, 4}};
   Check(ChooseAction(.09f, observed)->action == 41, "observed idle below threshold");
   Check(ChooseAction(.1f, observed)->action == 22, "threshold chooses observed moving tuple");

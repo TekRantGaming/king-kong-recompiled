@@ -1,8 +1,9 @@
-// Disposable, dev-only H-rig experiment. No spawning, transport calls or save writes.
+// Disposable, dev-only H-rig experiment. No transport calls or save writes.
 // KK_DEV_PUPPET=scan (or 1), borrow:nearest[:<max guest units>],
 // borrow:index:<zero-based active-table index>[:<action>:<item>], or the legacy
 // borrow:<hex key>:<ordinal>[:<action>:<item>]. Indices belong to the current epoch.
 // partner:index:<n> or partner:nearest[:<max>] follows the copied partner pose.
+// partner:spawn:<n> creates an independent engine copy of that loaded human.
 #if defined(KK_DEV_TOOLS)
 
 #include "dev_puppet.h"
@@ -38,6 +39,9 @@ REX_EXTERN(__imp__sub_82711278);
 REX_EXTERN(__imp__sub_82401AA8);
 REX_EXTERN(__imp__sub_82850100);
 REX_EXTERN(__imp__sub_823F8AF0);
+REX_EXTERN(__imp__sub_82715AC8);
+REX_EXTERN(__imp__sub_826EB8C0);
+REX_EXTERN(__imp__sub_8284B028);
 
 namespace kk {
 namespace {
@@ -66,7 +70,7 @@ float Distance(Vec a, Vec b) {
 std::string XYZ(Vec v) { return fmt::format("({:.4f},{:.4f},{:.4f})", v.x, v.y, v.z); }
 
 struct Options {
-  bool on = false, borrow = false, partner = false, nearest = false, index = false, valid = true, action_set = false;
+  bool on = false, borrow = false, partner = false, spawn = false, nearest = false, index = false, valid = true, action_set = false;
   uint32_t key = 0, ordinal = 0, census_index = 0, action = 0, item = 0;
   float max_units = 15.0f;
   Options() {
@@ -98,7 +102,8 @@ struct Options {
       }
       return;
     }
-    index = fields[1] == "index";
+    spawn = partner && fields[1] == "spawn";
+    index = fields[1] == "index" || spawn;
     if (partner && (!index || fields.size() != 3)) { valid = false; return; }
     valid = (fields.size() == 3 || fields.size() == 5) &&
             (index ? number(fields[2], census_index, 10) :
@@ -120,6 +125,9 @@ struct Rig {
   std::string tracks;
   bool dead_track = false;
 };
+coop::puppet::MutableRig Mutable(const Rig& r) {
+  return {r.actor, r.ai, r.vars, r.matrix, r.rig, r.anim, r.layer};
+}
 bool Same(const Rig& a, const Rig& b) {
   return a.actor == b.actor && a.ai == b.ai && a.vars == b.vars && a.matrix == b.matrix &&
          a.rig == b.rig && a.anim == b.anim && a.table == b.table;
@@ -208,6 +216,16 @@ bool Member(const uint8_t* b, uint32_t world, uint32_t actor) {
   for (uint32_t p = begin; p < end; p += 8) n += Load32(b, p) == actor;
   return n == 1;
 }
+bool Registered(const uint8_t* b, uint32_t world, uint32_t actor) {
+  // 82847300 (.46) inserts into world+24's 8-byte object registry immediately.
+  // Its begin/end are world+40/+28. The AI census at +304/+292 is separate.
+  if (!Range(world, 44)) return false;
+  const uint32_t begin = Load32(b, world + 40), end = Load32(b, world + 28);
+  if (end < begin || end-begin > 8*20000 || ((end-begin) & 7) || !Range(begin, end-begin)) return false;
+  unsigned n = 0;
+  for (uint32_t p = begin; p < end; p += 8) n += Load32(b, p) == actor;
+  return n == 1;
+}
 
 // Resource lookup, not an instance identity: 827061B0 (.88) uses these tables
 // via 82732250 (.0). Live actors need not be registered at a loaded file address.
@@ -251,6 +269,13 @@ struct Observation {
   bool sampled = false;
 };
 struct Candidate { Rig rig; uint32_t key = 0, ordinal = 0, index = 0; const char* reason = ""; };
+struct Spawned {
+  Rig rig;
+  uint32_t world = 0, game = 0, level = 0, model = 0;
+  uint64_t epoch = 0, held = 0;
+};
+struct Spawner { uint32_t ai = 0, vars = 0; };
+bool SpawnIdentity(const uint8_t* b, const Spawned& body);
 
 struct State {
   uint64_t epoch = 0, generation = 0, held = 0, passed = 0;
@@ -264,6 +289,10 @@ struct State {
   std::vector<coop::puppet::Action> observed_motion;
   Clock::time_point loaded{}, census_at{}, tick_at{};
   std::map<uint32_t, Observation> humans;
+  // Retain only script quarantine after release. No old transform is restored
+  // and no guest destructor/pool-return function is called. Clear before unload.
+  std::vector<Spawned> spawned;
+  std::map<uint32_t, Spawner> spawners;
   std::map<uint32_t, uint32_t> keys;
   Rig selected;
   uint64_t selected_generation = 0;
@@ -282,6 +311,10 @@ struct State {
       coop::SetPartnerBodyDriven(false);
       REXLOG_INFO("PUPPET partner released reason={} epoch={} actor={:08X} held={} passed={} updates={}",
                   reason, epoch, selected.actor, held, passed, updates);
+      if (Opt().spawn) {
+        REXLOG_INFO("PUPPET spawn {} reason={} epoch={} actor={:08X} no-free script-quarantine=until-unload",
+                    selected.actor ? "released" : "refused", reason, epoch, selected.actor);
+      }
     } else {
       REXLOG_INFO("PUPPET abort reason={} epoch={} actor={:08X} held={} passed={} reload-required",
                   reason, epoch, selected.actor, held, passed);
@@ -305,10 +338,16 @@ struct State {
   }
   bool Validate(const uint8_t* b, uint32_t w, Rig& now) {
     if (!Environment(b, w)) { Abort("world-level-load-or-hero-changed"); return false; }
+    if (Opt().spawn) {
+      bool own = false;
+      for (const auto& body : spawned) own |= body.rig.actor == selected.actor && SpawnIdentity(b, body);
+      if (!own) { Abort("spawn-identity-changed"); return false; }
+    }
     const auto it = humans.find(selected.actor);
     Rig jack;
     if (it == humans.end() || it->second.generation != selected_generation ||
-        !Member(b, w, selected.actor) || !ReadRig(b, selected.actor, now) || !Same(now, selected) ||
+        !(Opt().spawn ? Registered(b, w, selected.actor) : Member(b, w, selected.actor)) ||
+        !ReadRig(b, selected.actor, now) || !Same(now, selected) ||
         !ReadRig(b, hero, jack) || *Qualify(b, now, jack) || !LegalAction(b, now, action)) {
       Abort("selection-identity-or-rig-changed"); return false;
     }
@@ -384,6 +423,193 @@ float Frame(PPCContext& ctx, uint8_t* b, uint32_t actor) {
   return float(ctx.r3.s32) / 60.0f;
 }
 
+// 82712D40 (.77:28379) and 82715438 (.32:28175): source, instance,
+// bookkeeping, in-use in each 16-byte record. Never change pool metadata here.
+constexpr uint32_t kPool = 0x82CC3100, kPoolCount = 0x82CCBFCC;
+constexpr uint32_t kCreationWorld = 0x828E8388, kCreating = 0x82CCAAAC;
+uint32_t Model(const uint8_t* b, uint32_t ai) { return Ptr(b, ai, 0, 16); }
+bool IndependentControllers(const uint8_t* b, const Rig& copy, const Rig& source) {
+  // 82401AA8 can write through this optional controller chain. An absent
+  // controller is legal; a shared extension/controller/data/target is not.
+  uint32_t a = Ptr(b, copy.actor, 24, 48), c = Ptr(b, source.actor, 24, 48);
+  if (!a || !c || a == c) return false;
+  a = Ptr(b, a, 0, 8); c = Ptr(b, c, 0, 8);
+  if (a && a == c) return false;
+  a = Ptr(b, a, 4, 60); c = Ptr(b, c, 4, 60);
+  if (a && a == c) return false;
+  a = Ptr(b, a, 56, 60); c = Ptr(b, c, 56, 60);
+  return !a || a != c;
+}
+bool SpawnIdentity(const uint8_t* b, const Spawned& body) {
+  const auto& s = Get();
+  const auto& r = body.rig;
+  return !s.loading && s.ready && s.world == body.world && s.game == body.game &&
+      s.level == body.level && s.Environment(b, body.world) &&
+      Registered(b, body.world, r.actor) &&
+      Ptr(b, Ptr(b, r.actor, 24, 48), 4, 88) == r.ai &&
+      Ptr(b, r.ai, 64, 8) == r.vars && Model(b, r.ai) == body.model;
+}
+bool IsSpawned(uint32_t actor) {
+  for (const auto& body : Get().spawned) if (body.rig.actor == actor) return true;
+  return false;
+}
+bool CompatibleTemplate(const uint8_t* b, const Rig& source, uint32_t actor) {
+  Rig t;
+  // Templates may be inactive and need no natural H init of their own. Require
+  // the exact model, mesh resource, action bank and human variant of the proven H.
+  return ReadRig(b, actor, t) && Model(b, t.ai) == Model(b, source.ai) &&
+      t.table == source.table && Load32(b, t.anim + 4) == Load32(b, source.anim + 4) &&
+      Load32(b, t.vars) == Load32(b, source.vars) &&
+      Load32(b, t.vars + 4) == Load32(b, source.vars + 4);
+}
+uint32_t FindTemplate(const uint8_t* b, const Rig& source, uint32_t count) {
+  uint32_t found = 0;
+  for (uint32_t i = 0; i < count; ++i) {
+    const uint32_t p = kPool + 16*i;
+    if (Load32(b, p + 4) != source.actor) continue;
+    const uint32_t t = Load32(b, p);
+    if (!CompatibleTemplate(b, source, t)) continue;
+    if (found && found != t) return 0;  // Refuse ambiguous pool lineage.
+    found = t;
+  }
+  if (found) {
+    REXLOG_INFO("PUPPET template actor={:08X} template={:08X} origin=pool-source-backlink", source.actor, found);
+    return found;
+  }
+  unsigned listed = 0;
+  const auto& s = Get();
+  for (const auto& [actor, spawner] : s.spawners) {
+    if (Ptr(b, Ptr(b, actor, 24, 8), 4, 88) != spawner.ai ||
+        Ptr(b, spawner.ai, 64, 1780) != spawner.vars) continue;
+    // Spawner_generate .84:27324-27370 loads its two alternative sources.
+    for (const uint32_t offset : {1592u, 1776u}) {
+      const uint32_t t = Ptr(b, spawner.vars, offset, 32);
+      const uint32_t ai = Ptr(b, Ptr(b, t, 24, 8), 4, 88);
+      const uint32_t model = Model(b, ai);
+      bool human = false;
+      for (const auto& [h, obs] : s.humans) human |= model && Model(b, obs.rig.ai) == model;
+      if (!human) continue;
+      const bool matches = CompatibleTemplate(b, source, t);
+      REXLOG_INFO("PUPPET template-list spawner={:08X} offset={} template={:08X} model={:08X} selected-compatible={}",
+                  actor, offset, t, model, matches);
+      ++listed;
+    }
+  }
+  REXLOG_INFO("PUPPET template-list count={} spawners-observed={}", listed, s.spawners.size());
+  // Compatible spawner sources are diagnostic candidates, not an exact
+  // backlink to this NPC. Prefer an exact engine copy of the proven live rig.
+  // No immutable actor-template backlink was established. This is still the
+  // engine's supported source ABI: 8286FE40 (.102:34117) reads a loaded actor's
+  // flags/components, duplicates its rig and calls 8271DC78 to allocate/reset AI.
+  // It never requires a special template tag. Do not memcpy or call H init.
+  REXLOG_INFO("PUPPET template actor={:08X} template={:08X} origin=live-duplicate-source backlink=not-found",
+              source.actor, source.actor);
+  return source.actor;
+}
+
+bool SpawnCopy(PPCContext& ctx, uint8_t* b, uint32_t w, const Rig& source, const Rig& jack, Rig& copy) {
+  auto& s = Get();
+  auto refuse = [&](const char* reason) { s.Abort(reason); return false; };
+  // This routine is called only from CensusAndSelect in BeforeAi, with the
+  // caller, load+5s, Connected/same-level, scratch and one-attempt gates applied.
+  if (!PartnerReady(b, w) || !s.partner.partner) return refuse("partner-not-ready-before-spawn");
+  if (Load32(b, kCreationWorld) != w || Load32(b, kCreating)) return refuse("creation-world-or-busy");
+  if (!Model(b, source.ai)) return refuse("source-AI-model-unavailable");
+  for (const auto& body : s.spawned) if (body.epoch == s.epoch) return refuse("already-created-this-epoch");
+  const uint32_t count = Load32(b, kPoolCount);
+  if (count > 512) return refuse("invalid-pool-count");
+  uint32_t begin, end;
+  if (!Table(b, w, begin, end)) return refuse("active-table-unavailable-before-spawn");
+  std::set<uint32_t> existing;
+  for (uint32_t p = begin; p < end; p += 8) existing.insert(Load32(b, p));
+  const uint32_t t = FindTemplate(b, source, count);
+  if (!t) return refuse("ambiguous-template-lineage");
+  uint32_t pooled = 0;
+  bool pool_match = false;
+  for (uint32_t i = 0; i < count; ++i) {
+    const uint32_t p = kPool + 16*i;
+    if (Load32(b, p) == t && !Load32(b, p + 12)) {
+      pool_match = true; pooled = Load32(b, p + 4); break;
+    }
+  }
+  if (pool_match && !pooled) return refuse("invalid-pool-instance");
+  if (pooled && (!Range(pooled, 32) || existing.count(pooled) || IsSpawned(pooled) ||
+      pooled == t || s.humans.count(pooled))) return refuse("pool-instance-not-spare");
+  if (pooled) {
+    Rig spare;
+    if (!ReadRig(b, pooled, spare) || !coop::puppet::Independent(Mutable(spare), Mutable(source)) ||
+        !coop::puppet::Independent(Mutable(spare), Mutable(jack)) ||
+        !IndependentControllers(b, spare, source) || !IndependentControllers(b, spare, jack))
+      return refuse("pool-components-not-independent");
+    for (const uint32_t other : existing) {
+      Rig r;
+      if (ReadRig(b, other, r) && (!coop::puppet::Independent(Mutable(spare), Mutable(r)) ||
+          !IndependentControllers(b, spare, r)))
+        return refuse("pool-aliases-loaded-rig");
+    }
+  }
+  if (!pooled && count == 512) return refuse("pool-full-avoid-cleanup");
+  const auto& p = *s.partner.partner;
+  const Vec position{p.x, p.y, p.z};
+  if (!Finite(position) || !std::isfinite(p.facing)) return refuse("invalid-partner-spawn-pose");
+  uint32_t actor = 0;
+  {
+    Scratch scratch(ctx, b);
+    ctx.r3.u64 = t; ctx.r4.u64 = scratch.Vector(position, 0x100);
+    __imp__sub_82715AC8(ctx, b);
+    actor = ctx.r3.u32;
+  }
+  if (!Range(actor, 32) || existing.count(actor) || actor == t || IsSpawned(actor) ||
+      (pooled && actor != pooled)) return refuse("creation-return-not-new-instance");
+  ReadRig(b, actor, copy);
+  // Quarantine immediately, even if the rig fails the checks below. Only a new
+  // actor with independent AI/vars is eligible, never the original or the hero.
+  if (!copy.ai || !copy.vars || copy.ai == source.ai || copy.ai == jack.ai ||
+      copy.vars == source.vars || copy.vars == jack.vars) return refuse("creation-AI-not-independent");
+  s.spawned.push_back({copy, w, s.game, s.level, Model(b, copy.ai), s.epoch});
+  REXLOG_INFO("PUPPET spawn allocated actor={:08X} template={:08X} via={} epoch={} quarantine=registered no-free",
+              actor, t, pooled ? "pool" : "duplicate", s.epoch);
+  if (!coop::puppet::Independent(Mutable(copy), Mutable(source)) ||
+      !coop::puppet::Independent(Mutable(copy), Mutable(jack)) ||
+      !IndependentControllers(b, copy, source) || !IndependentControllers(b, copy, jack))
+    return refuse("creation-components-not-independent");
+  for (const uint32_t other : existing) {
+    Rig r;
+    if (ReadRig(b, other, r) && (!coop::puppet::Independent(Mutable(copy), Mutable(r)) ||
+        !IndependentControllers(b, copy, r)))
+      return refuse("creation-aliases-loaded-rig");
+  }
+  if (Model(b, copy.ai) != Model(b, source.ai) || copy.table != source.table ||
+      Load32(b, copy.anim + 4) != Load32(b, source.anim + 4)) return refuse("creation-resource-lineage-mismatch");
+  // 8286D690 (.57) resets the new animation action to -1. Seed it with a tuple
+  // observed on the source rig, using the normal setter before its first AI pass.
+  {
+    Scratch scratch(ctx, b);
+    ctx.r3.u64 = actor; ctx.r4.u64 = source.action; ctx.r5.u64 = source.item; ctx.r6.u64 = 0;
+    __imp__sub_82850100(ctx, b);
+    ctx.r3.u64 = actor; ctx.r4.u64 = scratch.Vector({std::cos(p.facing), std::sin(p.facing), 0}, 0x110);
+    __imp__sub_82711278(ctx, b);
+    ctx.r3.u64 = actor; ctx.r4.u64 = scratch.Vector(position, 0x100);
+    __imp__sub_82401AA8(ctx, b);
+  }
+  if (!ReadRig(b, actor, copy) || !Registered(b, w, actor) || *s.Qualify(b, copy, jack) ||
+      !LegalAction(b, copy, copy.action)) return refuse("creation-rig-not-ready");
+  Rig original;
+  if (!ReadRig(b, source.actor, original) || !Same(source, original) ||
+      Distance(source.pos, original.pos) != 0 || Distance(source.forward, original.forward) != 0 ||
+      source.action != original.action || source.item != original.item)
+    return refuse("creation-changed-original-readback");
+  // The copy is proven by native duplication lineage, not a fabricated H init.
+  Observation obs;
+  obs.rig = copy; obs.bound = true; obs.generation = ++s.generation;
+  s.humans.emplace(actor, std::move(obs));
+  REXLOG_INFO("PUPPET spawn ok actor={:08X} template={:08X} via={} epoch={} source={:08X} ai={:08X} vars={:08X} xyz={} active-ai={}",
+              actor, t, pooled ? "pool" : "duplicate", s.epoch, source.actor, copy.ai, copy.vars, XYZ(copy.pos), Member(b, w, actor));
+  REXLOG_INFO("PUPPET spawn trigger-policy=filter-ObjOfAIModelInBV-only CapaBit=ext+40 life=stimulus-test universal-exclusion=unproven no-capability-or-life-writes");
+  REXLOG_INFO("PUPPET spawn source actor={:08X} ai={:08X} identity-transform-action=unchanged scheduled-dispatch=pass-through", source.actor, source.ai);
+  return true;
+}
+
 void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
   auto& s = Get();
   if (!s.Environment(b, w)) return;
@@ -401,6 +627,7 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
   for (uint32_t p = begin; p < end; p += 8) ++membership[Load32(b, p)];
   for (uint32_t p = begin; p < end; p += 8) {
     const uint32_t actor = Load32(b, p);
+    if (IsSpawned(actor)) continue;  // Never learn natural motion or clone a prior copy.
     const uint32_t index = (p-begin)/8;
     auto it = s.humans.find(actor);
     if (it == s.humans.end()) {
@@ -492,7 +719,10 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
   if (!obs.actions.count((s.action << 8) | s.item) || !LegalAction(b, pick->rig, s.action)) {
     s.Abort("action-item-not-naturally-observed-on-this-rig"); return;
   }
-  s.selected = pick->rig; s.selected_generation = obs.generation;
+  Rig selected = pick->rig;
+  if (Opt().spawn && !SpawnCopy(ctx, b, w, pick->rig, jack, selected)) return;
+  s.selected = selected; s.selected_generation = s.humans.at(selected.actor).generation;
+  if (Opt().spawn) { s.action = selected.action; s.item = selected.item; }
   if (Opt().partner) {
     s.observed_motion.clear();
     for (const auto& [key, sample] : obs.motion) {
@@ -503,13 +733,13 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
     }
     REXLOG_INFO("PUPPET partner observed-set count={} actor={:08X}", s.observed_motion.size(), pick->rig.actor);
   }
-  s.transition_pending = s.action != pick->rig.action || s.item != pick->rig.item;
-  s.origin = pick->rig.pos; s.initial_forward = pick->rig.forward;
+  s.transition_pending = s.action != selected.action || s.item != selected.item;
+  s.origin = selected.pos; s.initial_forward = selected.forward;
   const float len = std::hypot(s.initial_forward.x, s.initial_forward.y);
   s.initial_forward = {s.initial_forward.x / len, s.initial_forward.y / len, 0};
   s.desired = s.origin; s.facing = s.initial_forward; s.elapsed = 0; s.driving = true;
   REXLOG_INFO("PUPPET select epoch={} mode={} key={:08X} ordinal={} index={} actor={:08X} ai={:08X} vars={:08X} matrix={:08X} anim={:08X} generation={} human={}/{} distance={:.3f} units=guest nearest-limit={} action={} item={} observed-action={} observed-item={}",
-              s.epoch, Opt().nearest ? "nearest" : Opt().index ? "index" : "key", pick->key, pick->ordinal, pick->index,
+              s.epoch, Opt().spawn ? "spawn" : Opt().nearest ? "nearest" : Opt().index ? "index" : "key", pick->key, pick->ordinal, pick->index,
               s.selected.actor, s.selected.ai, s.selected.vars, s.selected.matrix, s.selected.anim,
               s.selected_generation, Load32(b, s.selected.vars), Load32(b, s.selected.vars + 4),
               Distance(s.origin, jack.pos), Opt().nearest ? Opt().max_units : 0.0f, s.action, s.item,
@@ -531,10 +761,12 @@ void DevPuppetGameFrame(uint8_t* b) {
 }
 
 void DevPuppetBeforeLoad() {
-  if (!Enabled()) return;
+  if (!Enabled() && Get().spawned.empty()) return;
   auto& s = Get();
   if (s.driving || s.finish_pending) s.Abort("level-load-started");
   s.selected = {}; s.humans.clear(); s.keys.clear(); ++s.epoch;
+  if (!s.spawned.empty()) REXLOG_INFO("PUPPET spawn unload count={} no-free script-quarantine=cleared", s.spawned.size());
+  s.spawned.clear(); s.spawners.clear();
   s.world = s.hero = s.game = 0; s.loading = true; s.ready = false;
   s.census_at = {}; s.tick_at = {};
   s.env_fail_logs = 0;
@@ -717,7 +949,58 @@ void PuppetObserveInit(uint8_t* b, uint32_t actor, uint32_t ai) {
   observation.rig = rig; observation.generation = ++s.generation;
   s.humans[actor] = std::move(observation);
 }
+void PuppetObserveSpawner(uint8_t* b, uint32_t actor, uint32_t ai) {
+  if (!Enabled() || !Opt().spawn) return;
+  if (Ptr(b, Ptr(b, actor, 24, 8), 4, 88) != ai) return;
+  const uint32_t vars = Ptr(b, ai, 64, 8380);
+  if (vars) Get().spawners[actor] = {ai, vars};
+}
+bool HoldSpawned(PPCContext& ctx, uint8_t* b) {
+  if (!Opt().spawn || uint32_t(ctx.lr) != 0x8271D304) return false;
+  auto& s = Get();
+  const uint32_t actor = Load32(b, 0x82CCBF6C), ai = Load32(b, 0x82CCBF64);
+  for (auto& body : s.spawned) {
+    if (body.rig.actor != actor || body.rig.ai != ai || !SpawnIdentity(b, body)) continue;
+    ++body.held;
+    // Release stops network writes, but this allocated copy must never begin
+    // scheduled story scripts. Only this exact actor + independent AI is held.
+    if (s.driving && s.selected.actor == actor) {
+      if (!Enabled() || !PartnerReady(b, s.world)) {
+        if (s.driving) s.Abort("coop-disabled");
+      } else {
+        s.last_block = ctx.r3.u32; s.last_track = ctx.r4.u32; ++s.held;
+      }
+    }
+    if (body.held == 1 || body.held % 1200 == 0)
+      REXLOG_INFO("PUPPET spawn hold actor={:08X} ai={:08X} count={} driving={}", actor, ai, body.held, s.driving && s.selected.actor == actor);
+    ctx.r3.u64 = 0;
+    return true;
+  }
+  return false;
+}
+void FilterSpawnedTrigger(PPCContext& ctx, uint8_t* b, uint32_t output, uint32_t capacity) {
+  if (!Opt().spawn || capacity != 32 || ctx.r3.s32 <= 0 || ctx.r3.u32 > capacity ||
+      !Range(output, 4*capacity)) return;
+  // Only called for TrigTest_ObjOfAIModelInBV's query return 8245D334.
+  // .92: query with r4=32, r9=stack output; then loop over r3 actor pointers.
+  std::vector<uint32_t> hidden;
+  for (const auto& body : Get().spawned) if (SpawnIdentity(b, body)) hidden.push_back(body.rig.actor);
+  if (hidden.empty()) return;
+  std::array<uint32_t, 32> actors{};
+  const uint32_t count = ctx.r3.u32;
+  for (uint32_t i = 0; i < count; ++i) actors[i] = Load32(b, output + 4*i);
+  const auto kept = coop::puppet::FilterActors(std::span(actors.data(), count), hidden);
+  if (kept == count) return;
+  for (uint32_t i = 0; i < count; ++i) Store32(b, output + 4*i, i < kept ? actors[i] : 0);
+  ctx.r3.u64 = kept;
+  REXLOG_INFO("PUPPET spawn trigger-filter query=ObjOfAIModelInBV removed={} kept={}", count-kept, kept);
+}
 bool PuppetHold(PPCContext& ctx, uint8_t* b) {
+  if (HoldSpawned(ctx, b)) return true;
+  if (Opt().spawn) {
+    if (Get().driving) ++Get().passed;
+    return false;
+  }
   if (!Enabled()) return false;
   auto& s = Get();
   if (!s.driving) return false;
@@ -744,5 +1027,18 @@ REX_HOOK_RAW(sub_8268D8E8) {
 }
 REX_HOOK_RAW(sub_8271CCB8) {
   if (!kk::PuppetHold(ctx, base)) __imp__sub_8271CCB8(ctx, base);
+}
+REX_HOOK_RAW(sub_826EB8C0) {
+  const bool on = kk::Enabled() && kk::Opt().spawn;
+  const uint32_t actor = on ? kk::hfr::Load32(base, 0x82CCBF6C) : 0;
+  const uint32_t ai = on ? kk::hfr::Load32(base, 0x82CCBF64) : 0;
+  __imp__sub_826EB8C0(ctx, base);
+  if (on) kk::PuppetObserveSpawner(base, actor, ai);
+}
+REX_HOOK_RAW(sub_8284B028) {
+  const bool filter = kk::Opt().spawn && uint32_t(ctx.lr) == 0x8245D334;
+  const uint32_t output = ctx.r9.u32, capacity = ctx.r4.u32;
+  __imp__sub_8284B028(ctx, base);
+  if (filter) kk::FilterSpawnedTrigger(ctx, base, output, capacity);
 }
 #endif

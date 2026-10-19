@@ -2,11 +2,34 @@
 
 // Pure policy shared by the dev driver and SDK/game-free unit tests.
 #include "coop_session.h"
+#include <array>
+#include <cstddef>
 #include <cmath>
 #include <optional>
 #include <span>
 
 namespace kk::coop::puppet {
+// Shared resources (AI model/action table) are intentionally absent. Every
+// mutable component of an engine-created body must belong to the new body.
+using MutableRig = std::array<uint32_t, 7>;  // actor, AI, vars, matrix, rig, anim, layer
+inline bool Independent(const MutableRig& copy, const MutableRig& original) {
+  for (const auto a : copy) {
+    if (!a) return false;
+    for (const auto b : original) if (a == b) return false;
+  }
+  for (std::size_t i = 0; i < copy.size(); ++i)
+    for (std::size_t j = i + 1; j < copy.size(); ++j) if (copy[i] == copy[j]) return false;
+  return true;
+}
+inline std::size_t FilterActors(std::span<uint32_t> actors, std::span<const uint32_t> hidden) {
+  std::size_t kept = 0;
+  for (const auto actor : actors) {
+    bool hide = false;
+    for (const auto body : hidden) hide |= actor == body;
+    if (!hide) actors[kept++] = actor;
+  }
+  return kept;
+}
 constexpr float kIdleSpeed = .1f;
 struct Action {
   uint16_t action = 0;
