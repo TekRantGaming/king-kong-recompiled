@@ -46,6 +46,7 @@
 #include <rex/logging.h>
 
 #include "hfr.h"
+#include "dev_puppet.h"
 
 REX_EXTERN(__imp__sub_823F8AF0);  // the animation frame of an object's layer
 
@@ -347,8 +348,11 @@ void DevSampleTick(PPCContext* ctx, uint8_t* base, uint32_t world) {
 
 REX_EXTERN(__imp__sub_8271D498);
 REX_HOOK_RAW(sub_8271D498) {
+  const uint32_t world = ctx.r3.u32;
   kk::DevSampleTick(&ctx, base, ctx.r3.u32);
+  kk::DevPuppetBeforeAi(ctx, base, world);
   __imp__sub_8271D498(ctx, base);
+  kk::DevPuppetAfterAi(ctx, base, world);
 }
 
 #endif

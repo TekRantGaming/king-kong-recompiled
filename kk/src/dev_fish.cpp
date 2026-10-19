@@ -41,6 +41,7 @@
 #include <rex/logging.h>
 
 #include "hfr.h"
+#include "dev_puppet.h"
 
 namespace kk {
 double DevSecondsSinceMenu();  // dev_tools.cpp
@@ -163,7 +164,9 @@ REX_HOOK_RAW(sub_8243B2C8) {
 REX_EXTERN(__imp__sub_82538B70);  // the game's teleport trigger: (trigger) -> [+4] object to [+8] destination
 REX_EXTERN(__imp__sub_82881B70);
 REX_HOOK_RAW(sub_82881B70) {
+  const uint32_t world = ctx.r3.u32;
   __imp__sub_82881B70(ctx, base);
+  kk::DevPuppetLateWorld(ctx, base, world);
   using namespace kk;
   static const bool wanted = [] {
     const char* v = std::getenv("KK_DEV_FISH_VIEW");
