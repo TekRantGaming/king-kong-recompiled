@@ -504,8 +504,10 @@ bool BeforeLoad(const uint8_t* base, uint32_t g, bool starting, bool leaving) {
   // keep waiting before the load.
   if (REXCVAR_GET(kk_ps2_cutscene_load_during) && Word(base, g + 0x5668) == 0) {
     HoldGameAudio(true);
-    if (pending.worker.joinable()) pending.worker.detach();  // never: AfterLoad always follows the loader
-    pending = PendingClip{job, std::move(worker), started};
+    // Task 294: let the decoder go now (it keeps its own Job, as WaitForClip does). A joinable std::thread
+    // parked in this static would call std::terminate if the program ended while the level loads.
+    worker.detach();
+    pending = PendingClip{job, std::thread{}, started};
     REXLOG_INFO("PS2 movie: the level loads during the clip (kk_ps2_cutscene_load_during){}",
                 holding_audio ? "; the game's sound is held until it ends" : "");
     return true;
