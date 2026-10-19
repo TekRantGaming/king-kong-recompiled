@@ -338,6 +338,9 @@ void DrawTracker::Draw(uint32_t device, uint32_t primitive, uint32_t start_verte
 
 void DrawTracker::Present(uint32_t device) {
   ++stats_.presents;
+#if defined(KK_DEV_TOOLS)
+  puppet_probe::Presented(frame_);
+#endif
   if (sink_) {
     sink_->OnPresent(frame_, render_targets_[0], device);
   }

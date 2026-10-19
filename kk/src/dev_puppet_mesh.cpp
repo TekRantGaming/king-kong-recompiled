@@ -1,4 +1,5 @@
-// C11 read-only comparison. KK_DEV_PUPPET_MESH=1 with partner:spawn:<index>.
+// C11/C14 read-only comparison. KK_DEV_PUPPET_MESH=1 with partner:spawn:<index>.
+// Add KK_DEV_PUPPET_DRAWS=1 for 120 render frames and actor mesh-entry inventories.
 // Guest layouts: 8286D690 (.57), 82869310 (.70), 8286D0E0 (.12),
 // 8286FE40 (.102). Never call initialization, change flags, or step animation.
 #if defined(KK_DEV_TOOLS)
@@ -44,6 +45,10 @@ bool On() {
   static const bool on = [] { const char* v = std::getenv("KK_DEV_PUPPET_MESH"); return v && std::string(v) == "1"; }();
   return on;
 }
+bool DrawOn() {
+  static const bool on = [] { const char* v = std::getenv("KK_DEV_PUPPET_DRAWS"); return v && std::string(v) == "1"; }();
+  return on;
+}
 bool Range(uint32_t p, uint32_t bytes) {
   return p >= 0x40000000 && p < 0xA0000000 && !(p & 3) && bytes <= 0xA0000000 - p;
 }
@@ -75,6 +80,7 @@ struct Node {
   uint32_t component[5]{};
   uint32_t resource = 0, skin = 0, skin_data = 0, skin_count = 0, skin_bytes = 0;
   bool links = false;
+  bool external = false;
 };
 Node ReadNode(const uint8_t* b, uint32_t actor) {
   Node n;
@@ -115,6 +121,10 @@ struct Probe {
   const NrPuppetProbeApi* api = nullptr;
   Root roots[2];
   uint64_t epoch = 0;
+  uint32_t world = 0, lists_left = 0;
+  uint64_t list_frame = kUnknown;
+  uint32_t registry_entries = 0, external_nodes = 0, ambiguous_links = 0;
+  bool registry_valid = false, registry_capped = false;
   Clock::time_point next{};
   std::map<uint32_t, uint32_t> owners;
   // Address of a matrix in an engine preparation buffer -> exact preparing actor.
@@ -143,7 +153,7 @@ const NrPuppetProbeApi* FindApi() {
 #endif
   const auto* api = get ? get() : nullptr;
   return api && api->version == kNrPuppetProbeVersion && api->size == sizeof(NrPuppetProbeApi) &&
-         api->scope && api->read && api->reset ? api : nullptr;
+         api->scope && api->read && api->reset && api->capture && api->drain ? api : nullptr;
 }
 bool Identity(const uint8_t* b, const Root& r) {
   return r.actor && Ptr(b, r.actor, 20, 20) == r.holder && Ptr(b, r.holder, 0, 180) == r.anim &&
@@ -191,11 +201,117 @@ void Refresh(const uint8_t* b, Probe& p) {
           }
         }
       }
+      // Resource groups also contain actors: 828689A8 (.40:34463..34484)
+      // and load cleanup 8287E498 (.62:34376..34399). Do not assume anim+8
+      // is the entire renderable graph. Shared resource nodes remain ambiguous.
+      if (DrawOn() && (n.flags & 0x800000)) {
+        const auto group = Hierarchy(b, n.resource);
+        if (group.valid && pending.size() < 2*kMaxNodes)
+          for (uint32_t j = 0; j < group.count; ++j) {
+            const auto child = Word(b, group.begin+8*j);
+            if (child && !(child & 3)) pending.push_back(child);
+          }
+      }
       if (n.flags & 0x400000) watch(r.actor, Ptr(b, n.holder, 12, 80), 80);
       if (!n.links) watch(r.actor, n.skin_data, n.skin_bytes);
     }
   }
+  // C14: a level may register drawable skin instances separately from anim+8.
+  // Only exact {matrix, actor, bone} links establish ownership, never a shared VB.
+  // World registry ABI: 82847300 (.46:33964+); skin links: 8286D0E0 (.12:34873+).
+  p.registry_entries = p.external_nodes = p.ambiguous_links = 0;
+  p.registry_valid = p.registry_capped = false;
+  if (DrawOn()) {
+    const auto begin = Word(b, p.world, 40), end = Word(b, p.world, 28);
+    p.registry_valid = end >= begin && !((end-begin) & 7) && end-begin <= 8*20000 && Range(begin, end-begin);
+    if (p.registry_valid) for (uint32_t entry = begin; entry < end; entry += 8) {
+      ++p.registry_entries;
+      const auto actor = Word(b, entry);
+      if (!Range(actor, 36) || (actor & 3)) continue;
+      auto n = ReadNode(b, actor);
+      if (!(n.flags & 0x4000) || !n.links || !n.skin_data || !n.skin_count) continue;
+      for (auto& r : p.roots) {
+        if (Word(b, r.actor) & 0x1000000) continue;  // The owner must store matrices, not links.
+        const auto skin = Ptr(b, r.holder, 16, 8);
+        const auto count = Word(b, skin), data = Word(b, skin, 4);
+        if (!count || count > 256 || !Range(data, count*80)) continue;
+        bool mentions = false, exact = true;
+        for (uint32_t i = 0; i < n.skin_count; ++i) {
+          const auto link = n.skin_data+12*i;
+          const auto owner = Word(b, link, 4), bone = Word(b, link, 8);
+          mentions |= owner == r.actor;
+          exact &= owner == r.actor && bone < count && Word(b, link) == data+80*bone;
+        }
+        if (!mentions) continue;
+        if (!exact) { ++p.ambiguous_links; continue; }
+        const auto [it, inserted] = p.owners.emplace(actor, r.actor);
+        if (!inserted && it->second != r.actor) { it->second = 0; ++p.ambiguous_links; continue; }
+        if (std::any_of(r.nodes.begin(), r.nodes.end(), [&](const Node& old) { return old.actor == actor; })) continue;
+        if (r.nodes.size() == kMaxNodes) { p.registry_capped = true; continue; }
+        n.external = true; r.nodes.push_back(n); ++p.external_nodes;
+      }
+    }
+  }
+  for (const auto& r : p.roots) p.registry_capped |= r.nodes.size() == kMaxNodes;
   p.watches = std::move(watches);
+}
+void DrainDraws(Probe& p) {
+  if (!DrawOn() || !p.api) return;
+  NrPuppetDrawEvent events[256];
+  // The plugin queue holds at most 16384 records. Drain on each game frame,
+  // never retain guest or DrawCall pointers and never log from the render worker.
+  for (unsigned batch = 0; batch < 64; ++batch) {
+    const auto count = p.api->drain(events, 256);
+    for (uint32_t i = 0; i < count; ++i) {
+      const auto& e = events[i];
+      if (e.kind == 1) {
+        REXLOG_INFO("PUPPET draw-frame epoch={} render-frame={} source={} copy={} unattributed={} dropped={} counts=decoded-all-passes-not-pixels", p.epoch, e.frame, e.source_draws, e.copy_draws, e.unattributed, e.dropped);
+        continue;
+      }
+      const auto role = e.owner == p.roots[0].actor ? 0u : 1u;
+      uint32_t instance = 0, asset = 0;
+      for (const auto& n : p.roots[role].nodes) if (n.actor == e.mesh && (n.flags & 0x4000)) {
+        instance = n.component[0];
+        // Asset identity is supplied by the per-frame display-entry logs below.
+        asset = n.resource;
+        break;
+      }
+      REXLOG_INFO("PUPPET draw role={} epoch={} render-frame={} ordinal={} actor={:08X} node={:08X} instance={:08X} resource={:08X} vb={:08X} vb-physical={:08X} ib={:08X} ib-physical={:08X} vs={:08X} ps={:08X} declaration={:08X} stride={} indexed={} primitive={} base={} start={} count={} rt={:08X} depth={:08X} conditional={}",
+          role ? "copy" : "source", p.epoch, e.frame, e.ordinal, e.owner, e.mesh, instance, asset,
+          e.vertex_buffer, e.vertex_physical, e.index_buffer, e.index_physical,
+          e.vertex_shader, e.pixel_shader, e.declaration, e.stride, e.indexed, e.primitive,
+          e.base_vertex, e.start, e.count, e.target, e.depth, e.conditional);
+    }
+    if (count < 256) break;
+  }
+}
+void LogDisplayEntries(const uint8_t* b, Probe& p) {
+  if (!DrawOn() || !p.lists_left || p.list_frame == p.frame.load()) return;
+  p.list_frame = p.frame.load(); --p.lists_left;
+  REXLOG_INFO("PUPPET display-lists epoch={} game-frame={} registry-valid={} registry-entries={} external-nodes={} ambiguous-links={} capped={} entries=actor-mesh-inventory-not-submitted-draws",
+      p.epoch, p.list_frame, p.registry_valid, p.registry_entries, p.external_nodes, p.ambiguous_links, p.registry_capped);
+  for (unsigned role = 0; role < 2; ++role) {
+    const auto& r = p.roots[role];
+    const auto live = Hierarchy(b, Ptr(b, r.anim, 8, 4));
+    const auto authored = Hierarchy(b, Ptr(b, r.anim, 4, 4));
+    for (const auto& old : r.nodes) {
+      const auto n = ReadNode(b, old.actor);
+      if (n.actor != r.actor && !(n.flags & 0x4000)) continue;
+      uint32_t slot = ~0u, authored_node = 0;
+      if (live.valid) for (uint32_t i = 0; i < live.count; ++i)
+        if (Word(b, live.begin+8*i) == n.actor) { slot = i; break; }
+      if (authored.valid && slot < authored.count) authored_node = Word(b, authored.begin+8*slot);
+      const auto authored_n = ReadNode(b, (authored_node & 3) ? 0 : authored_node);
+      const auto instance = (n.flags & 0x4000) ? n.component[0] : 0;
+      const auto authored_instance = (authored_n.flags & 0x4000) ? authored_n.component[0] : 0;
+      REXLOG_INFO("PUPPET display-entry role={} epoch={} game-frame={} actor={:08X} node={:08X} origin={} slot={} authored-node={:08X} flags={:08X}/{:08X} instance={:08X} asset={:08X} type={} data24={:08X} identity64={:08X} authored-instance={:08X} authored-asset={:08X} skin={:08X} skin-data={:08X} skin-count={} links={}",
+          role ? "copy" : "source", p.epoch, p.list_frame, r.actor, n.actor,
+          old.external ? "registry-skin-link" : "hierarchy-or-resource", slot, authored_node,
+          n.flags, n.flags4, instance, Word(b, instance), Word(b, Word(b, instance)),
+          Word(b, instance, 24), Word(b, instance, 64), authored_instance, Word(b, authored_instance),
+          n.skin, n.skin_data, n.skin_count, n.links);
+    }
+  }
 }
 std::string Stamp(uint64_t frame) { return frame == kUnknown ? "unknown" : std::to_string(frame); }
 void LogModifiers(const uint8_t* b, const Root& r, const char* role) {
@@ -250,7 +366,7 @@ void Log(const uint8_t* b, Probe& p) {
       REXLOG_INFO("PUPPET mesh-node role={} actor={:08X} node={:08X} shared={} flags={:08X}/{:08X} matrix={:08X} bounds={:08X} holder={:08X} components={:08X},{:08X},{:08X},{:08X},{:08X} mesh={:08X} ext={:08X} resource={:08X} resource-data={:08X} lifecycle-flags={} importance={} descriptor-flags={:04X} skin={:08X} skin-data={:08X} skin-count={} skin-links={} renderer-seen={} renderer-delta={} draw-frame={} vb={:08X} ib={:08X} vs={:08X} start={} count={}",
           role ? "copy" : "source", r.actor, n.actor, owner != p.owners.end() && !owner->second,
           n.flags, n.flags4, n.matrix, n.bounds, n.holder, n.component[0], n.component[1], n.component[2], n.component[3], n.component[4],
-          Word(b, n.component[0]), n.ext, n.resource, Word(b, n.resource), b[n.actor+31], b[n.actor+28], n.ext ? Load16(b, n.ext+46) : 0,
+          (n.flags & 0x4000) ? Word(b, n.component[0]) : 0, n.ext, n.resource, Word(b, n.resource), b[n.actor+31], b[n.actor+28], n.ext ? Load16(b, n.ext+46) : 0,
           n.skin, n.skin_data, n.skin_count, n.links, d.seen, d.seen-r.previous_draws[n.actor], d.last_frame,
           d.vertex_buffer, d.index_buffer, d.vertex_shader, d.start, d.count);
       r.previous_draws[n.actor] = d.seen;
@@ -273,7 +389,8 @@ void Log(const uint8_t* b, Probe& p) {
 struct RenderScope {
   NrPuppetMeshScope previous = preparing;
   bool entered = false;
-  explicit RenderScope(uint32_t actor) {
+  RenderScope(const uint8_t* b, uint32_t actor, uint32_t hook, bool enabled = true) {
+    if (!enabled) return;
     auto& p = Get();
     if (!p.active.load(std::memory_order_acquire)) return;
     entered = true; ++preparation_depth;
@@ -284,6 +401,13 @@ struct RenderScope {
       if (it != p.owners.end() && it->second) {
         next = {it->second, actor};
         for (auto& r : p.roots) if (r.actor == next.owner) ++r.scope_calls;
+        if (DrawOn() && p.lists_left) {
+          const auto n = ReadNode(b, actor);
+          const auto instance = (n.flags & 0x4000) ? n.component[0] : 0;
+          REXLOG_INFO("PUPPET draw-prepare role={} epoch={} game-frame={} actor={:08X} node={:08X} hook={:08X} instance={:08X} asset={:08X} data24={:08X}",
+              next.owner == p.roots[0].actor ? "source" : "copy", p.epoch, p.frame.load(),
+              next.owner, actor, hook, instance, Word(b, instance), Word(b, instance, 24));
+        }
       }
     }
     preparing = next;  // Nested, unrelated and shared scopes must also clear it.
@@ -314,7 +438,13 @@ void MatrixPrepared(const uint8_t* b, uint32_t context, uint32_t offset, uint32_
   }
   buffer = {data, index+1};
   if (!preparing.owner) p.prepared.erase(address);
-  else if (p.prepared.size() < 16384 || p.prepared.contains(address)) p.prepared[address] = preparing;
+  else {
+    if (p.prepared.size() < 16384 || p.prepared.contains(address)) p.prepared[address] = preparing;
+    if (DrawOn() && p.lists_left)
+      REXLOG_INFO("PUPPET draw-list-matrix role={} epoch={} game-frame={} actor={:08X} node={:08X} context={:08X} array-offset={} index={} entry={:08X}",
+          preparing.owner == p.roots[0].actor ? "source" : "copy", p.epoch, p.frame.load(),
+          preparing.owner, preparing.mesh, context, offset, index, address);
+  }
 }
 void MatrixWritten(uint32_t destination) {
   auto& p = Get();
@@ -356,16 +486,24 @@ void DevPuppetMeshReset() {
   std::lock_guard lock(p.mutex);
   p.owners.clear(); p.watches.clear(); p.prepared.clear(); p.buffers.clear();
   p.draw_queries = p.provenance_hits = 0;
+  p.world = p.lists_left = 0; p.list_frame = kUnknown;
   for (auto& r : p.roots) r = {};
   if (p.api) p.api->reset();
 }
-void DevPuppetMeshFrame(uint64_t frame) { if (On()) Get().frame.store(frame); }
+void DevPuppetMeshFrame(uint64_t frame) {
+  if (!On()) return;
+  auto& p = Get(); p.frame.store(frame);
+  if (!p.active.load(std::memory_order_acquire)) return;
+  std::lock_guard lock(p.mutex);
+  DrainDraws(p);
+}
 void DevPuppetMeshArm(const uint8_t* b, uint32_t source, uint32_t copy, uint64_t epoch) {
   if (!On()) return;
   DevPuppetMeshReset();
   auto& p = Get();
   std::lock_guard lock(p.mutex);
   p.api = FindApi(); p.epoch = epoch;
+  p.world = Ptr(b, 0x828E8388, 0, 44);
   const uint32_t actors[]{source, copy};
   for (unsigned i = 0; i < 2; ++i) {
     auto& r = p.roots[i];
@@ -374,6 +512,11 @@ void DevPuppetMeshArm(const uint8_t* b, uint32_t source, uint32_t copy, uint64_t
     if (!r.anim || !r.ext || !r.matrix) { REXLOG_INFO("PUPPET mesh refused invalid-root role={}", i); return; }
   }
   Refresh(b, p); Log(b, p); p.next = Clock::now()+std::chrono::seconds(1);
+  if (DrawOn()) {
+    p.lists_left = 120;
+    if (p.api) p.api->capture(source, copy, 120);
+    REXLOG_INFO("PUPPET draw-capture epoch={} frames=120 plugin-version={} connected={} display-entry-frames=120 anatomy=unknown-match-assets-and-ranges", p.epoch, kNrPuppetProbeVersion, p.api != nullptr);
+  }
   REXLOG_INFO("PUPPET mesh armed read-only=true preparation=82876D00/82876FA0 matrix-provenance=820E0B78/820E0C40 renderer-counts=decoded-backend-received-not-GPU-visible matrix-write-coverage=partial");
   p.active.store(true, std::memory_order_release);
 }
@@ -381,14 +524,19 @@ void DevPuppetMeshTick(const uint8_t* b) {
   auto& p = Get();
   if (!p.active.load(std::memory_order_acquire)) return;
   std::lock_guard lock(p.mutex);
-  if (Clock::now() < p.next) return;
-  p.next = Clock::now()+std::chrono::seconds(1);
-  if (!Identity(b, p.roots[0]) || !Identity(b, p.roots[1])) {
+  if (Word(b, 0x828E8388) != p.world || !Identity(b, p.roots[0]) || !Identity(b, p.roots[1])) {
     p.active.store(false, std::memory_order_release);
     p.owners.clear(); p.watches.clear(); p.prepared.clear(); p.buffers.clear();
+    if (p.api) p.api->reset();
     REXLOG_INFO("PUPPET mesh stopped root-identity-changed no-stale-reads");
     return;
   }
+  // Refresh membership before reading per-frame entries, including separate
+  // registry skins, rather than carrying their addresses across scene changes.
+  if (DrawOn() && p.lists_left) Refresh(b, p);
+  LogDisplayEntries(b, p);
+  if (Clock::now() < p.next) return;
+  p.next = Clock::now()+std::chrono::seconds(1);
   Refresh(b, p); Log(b, p);
 }
 uint64_t DevPuppetMeshDrawBegin(const uint8_t* b) {
@@ -424,13 +572,30 @@ void DevPuppetMeshDrawEnd(uint64_t previous) {
 
 REX_EXTERN(__imp__sub_82876D00);
 REX_HOOK_RAW(sub_82876D00) {
-  kk::RenderScope scope(ctx.r3.u32);
+  kk::RenderScope scope(base, ctx.r3.u32, 0x82876D00);
   __imp__sub_82876D00(ctx, base);
 }
 REX_EXTERN(__imp__sub_82876FA0);
 REX_HOOK_RAW(sub_82876FA0) {
-  kk::RenderScope scope(ctx.r3.u32);
+  kk::RenderScope scope(base, ctx.r3.u32, 0x82876FA0);
   __imp__sub_82876FA0(ctx, base);
+}
+// C14 covers hierarchy and modifier preparation in addition to leaf meshes.
+// The actor renderer dispatches these (.1:34107,34133,34147).
+REX_EXTERN(__imp__sub_82872168);
+REX_HOOK_RAW(sub_82872168) {
+  kk::RenderScope scope(base, ctx.r3.u32, 0x82872168, kk::DrawOn());
+  __imp__sub_82872168(ctx, base);
+}
+REX_EXTERN(__imp__sub_82876C60);
+REX_HOOK_RAW(sub_82876C60) {
+  kk::RenderScope scope(base, ctx.r3.u32, 0x82876C60, kk::DrawOn());
+  __imp__sub_82876C60(ctx, base);
+}
+REX_EXTERN(__imp__sub_82855908);
+REX_HOOK_RAW(sub_82855908) {
+  kk::RenderScope scope(base, ctx.r3.u32, 0x82855908, kk::DrawOn());
+  __imp__sub_82855908(ctx, base);
 }
 REX_EXTERN(__imp__sub_82728BC0);
 REX_HOOK_RAW(sub_82728BC0) {
