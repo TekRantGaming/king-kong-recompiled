@@ -146,7 +146,7 @@ option(KK_DEV_TOOLS "Build developer test aids such as KK_DEV_AUTOSKIP" OFF)
 if(KK_DEV_TOOLS)
     list(APPEND KINGKONG_SOURCES src/dev_lod.cpp src/dev_aa.cpp)
     list(APPEND KINGKONG_SOURCES src/coop_transport_udp.cpp)
-    list(APPEND KINGKONG_SOURCES src/dev_puppet.cpp)
+    list(APPEND KINGKONG_SOURCES src/dev_puppet.cpp src/dev_puppet_mesh.cpp)
     list(APPEND KINGKONG_SOURCES src/dev_tools.cpp src/dev_watch.cpp src/dev_ae.cpp src/dev_sound_trace.cpp src/dev_load_trace.cpp src/dev_frame_log.cpp src/dev_sample.cpp src/dev_venture.cpp src/dev_chapter_jump.cpp src/dev_pause.cpp src/dev_fish.cpp src/dev_clock_trace.cpp src/dev_camera_start.cpp src/dev_game_watch.cpp src/dev_teleport.cpp src/dev_trig_trace.cpp)
 endif()
 
@@ -192,6 +192,7 @@ set(NR_PLUGIN_COPY_BESIDE king_kong)
 add_subdirectory(../native-renderer native-renderer)
 if(KK_DEV_TOOLS)
     target_compile_definitions(rexgpu-native PRIVATE KK_DEV_TOOLS=1)
+    target_compile_definitions(nr_draw PRIVATE KK_DEV_TOOLS=1)
 endif()
 target_sources(king_kong PRIVATE ../native-renderer/hooks/kk_native_hooks.cpp
                                  ../native-renderer/hooks/kk_native_ui.cpp
@@ -281,6 +282,11 @@ if(KK_DEV_TOOLS)
     add_executable(kk-coop-tests tests/coop_tests.cpp src/coop_protocol.cpp src/coop_session.cpp)
     target_include_directories(kk-coop-tests PRIVATE src)
     add_test(NAME coop-net-core COMMAND kk-coop-tests)
+    add_executable(kk-puppet-mesh-tests tests/puppet_mesh_probe_tests.cpp)
+    target_include_directories(kk-puppet-mesh-tests PRIVATE ../native-renderer)
+    target_compile_features(kk-puppet-mesh-tests PRIVATE cxx_std_20)
+    target_link_libraries(kk-puppet-mesh-tests PRIVATE nr_draw Threads::Threads)
+    add_test(NAME coop-puppet-mesh COMMAND kk-puppet-mesh-tests)
     # Always SDK-free, including the real runtime's compile-time unavailable branch.
     add_executable(kk-steam-tests tests/steam_tests.cpp src/steam_lobby.cpp src/steam_transport.cpp
         src/steam_runtime.cpp src/coop_protocol.cpp src/coop_session.cpp)

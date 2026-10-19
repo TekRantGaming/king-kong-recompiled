@@ -25,6 +25,9 @@
 
 #include "hooks/hook_table.h"
 #include "backend/thread_scheduling.h"
+#if defined(KK_DEV_TOOLS)
+#include "../../kk/src/dev_puppet_mesh.h"
+#endif
 
 namespace {
 
@@ -128,11 +131,28 @@ nr::hooks::GuestArgs ArgsFrom(const PPCContext& ctx) {
 
 }  // namespace
 
+#if defined(KK_DEV_TOOLS)
+namespace {
+struct PuppetDrawScope {
+  bool draw;
+  uint64_t previous = 0;
+  PuppetDrawScope(nr::hooks::Kind kind, const uint8_t* base) : draw(kind == nr::hooks::Kind::kDraw) {
+    if (draw) previous = kk::DevPuppetMeshDrawBegin(base);
+  }
+  ~PuppetDrawScope() { if (draw) kk::DevPuppetMeshDrawEnd(previous); }
+};
+}
+#define NR_PUPPET_SCOPE(entry, base) PuppetDrawScope puppet_scope((entry)->kind, base)
+#else
+#define NR_PUPPET_SCOPE(entry, base)
+#endif
+
 #define NR_HOOK(ADDR)                                                                     \
   REX_EXTERN(__imp__sub_##ADDR);                                                         \
   REX_HOOK_RAW(sub_##ADDR) {                                                             \
     if constexpr (0x##ADDR == 0x821147B8) ScheduleGameThreadOnce();                       \
     static const nr::hooks::HookEntry* entry = nr::hooks::Find(0x##ADDR);                \
+    NR_PUPPET_SCOPE(entry, base);                                                     \
     nr::hooks::Run(*entry, Api(), ArgsFrom(ctx), [&] {                                \
       __imp__sub_##ADDR(ctx, base);                                                   \
       return uint32_t(ctx.r3.u32);                                                    \
@@ -185,6 +205,7 @@ nr::hooks::GuestArgs ArgsFrom(const PPCContext& ctx) {
   X(82120028)
 
 NR_HOOK_LIST(NR_HOOK)
+#undef NR_PUPPET_SCOPE
 
 // Checked at load: every hook has a table entry (Find would return null).
 namespace {

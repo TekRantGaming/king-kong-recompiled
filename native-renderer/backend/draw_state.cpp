@@ -1,4 +1,7 @@
 #include "backend/draw_state.h"
+#if defined(KK_DEV_TOOLS)
+#include "backend/puppet_mesh_probe.h"
+#endif
 
 #include <algorithm>
 
@@ -304,6 +307,10 @@ void DrawTracker::DrawIndexed(uint32_t device, uint32_t primitive, int32_t base_
     return;
   }
   if (sink_) {
+#if defined(KK_DEV_TOOLS)
+    // Decoded successfully; still on the issuing thread, before ThreadedSink queues it.
+    puppet_probe::Seen(call);
+#endif
     sink_->OnDraw(call);
   }
 }
@@ -322,6 +329,9 @@ void DrawTracker::Draw(uint32_t device, uint32_t primitive, uint32_t start_verte
     return;
   }
   if (sink_) {
+#if defined(KK_DEV_TOOLS)
+    puppet_probe::Seen(call);
+#endif
     sink_->OnDraw(call);
   }
 }

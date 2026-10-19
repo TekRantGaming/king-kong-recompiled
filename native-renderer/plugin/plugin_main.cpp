@@ -25,6 +25,9 @@
 #include "plugin/native_effect_stats.h"
 #include "plugin/native_benchmark_stats.h"
 #include "plugin/upscaler_query.h"
+#if defined(KK_DEV_TOOLS)
+#include "backend/puppet_mesh_probe.h"
+#endif
 
 // Shared graphics settings are owned here; the emulation plugin is never loaded.
 REXCVAR_DEFINE_BOOL(vsync, false, "GPU", "Enable vertical sync");
@@ -665,6 +668,12 @@ extern "C" REX_GPU_PLUGIN_EXPORT uint64_t nr_shader_compile_milliseconds(void) {
 extern "C" REX_GPU_PLUGIN_EXPORT const NrApi* nr_get_api(void) {
   return nr::NativeGraphicsSystem::GetApi();
 }
+
+#if defined(KK_DEV_TOOLS)
+extern "C" REX_GPU_PLUGIN_EXPORT const NrPuppetProbeApi* nr_get_puppet_probe(void) {
+  return &nr::puppet_probe::api;
+}
+#endif
 
 // The launcher's prewarm (native_prewarm.h).
 extern "C" REX_GPU_PLUGIN_EXPORT uint32_t nr_prewarm_start(const NrPrewarmRequest* request) {

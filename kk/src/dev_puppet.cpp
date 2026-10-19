@@ -7,6 +7,7 @@
 #if defined(KK_DEV_TOOLS)
 
 #include "dev_puppet.h"
+#include "dev_puppet_mesh.h"
 
 #include <algorithm>
 #include <charconv>
@@ -611,6 +612,7 @@ bool SpawnCopy(PPCContext& ctx, uint8_t* b, uint32_t w, const Rig& source, const
               actor, t, pooled ? "pool" : "duplicate", s.epoch, source.actor, copy.ai, copy.vars, XYZ(copy.pos), Member(b, w, actor));
   REXLOG_INFO("PUPPET spawn trigger-policy=filter-ObjOfAIModelInBV-only CapaBit=ext+40 life=stimulus-test universal-exclusion=unproven no-capability-or-life-writes");
   REXLOG_INFO("PUPPET spawn source actor={:08X} ai={:08X} identity-transform-action=unchanged scheduled-dispatch=pass-through", source.actor, source.ai);
+  DevPuppetMeshArm(b, source.actor, actor, s.epoch);
   return true;
 }
 
@@ -760,11 +762,13 @@ void DevPuppetGameFrame(uint8_t* b) {
     return;
   }
   ++s.frame;
+  DevPuppetMeshFrame(s.frame);
   // Also release while photo mode or loading prevents normal AI passes.
   if (s.ready) PartnerReady(b, s.world);
 }
 
 void DevPuppetBeforeLoad() {
+  DevPuppetMeshReset();
   if (!Enabled() && Get().spawned.empty()) return;
   auto& s = Get();
   if (s.driving || s.finish_pending) s.Abort("level-load-started");
@@ -904,6 +908,7 @@ void DevPuppetAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
 
 void DevPuppetLateWorld(PPCContext& ctx, uint8_t* b, uint32_t w) {
   if (!Enabled()) return;
+  DevPuppetMeshTick(b);
   auto& s = Get();
   if (!s.measure) return;
   if (Opt().partner && !PartnerReady(b, w)) return;
