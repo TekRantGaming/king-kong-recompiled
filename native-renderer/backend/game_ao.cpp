@@ -391,8 +391,16 @@ void GameRenderer::AoRedrawHands(nvrhi::ICommandList* cl, const DrawCall& call, 
   k[8] = float(v.step);
   k[9] = 0.002f;  // the largest depth difference of the same surface (stored depth units; upscaled pixel centres)
   // With a temporal upscaler the occlusion is left noisy for it to settle, but the hands drawn after its point
-  // never go through it: a 5 x 5 average of the same surface's occlusion instead (3 x 3 otherwise).
-  k[10] = s.temporal_upscaler ? 2.0f : 1.0f;
+  // never go through it: a wider average then. The tent-weighted average fades the pixels of hidden surfaces
+  // (counted as 1) in over its radius: 7 x 7 with a temporal upscaler, 5 x 5 otherwise (task 306).
+  k[10] = s.temporal_upscaler ? 3.0f : 2.0f;
+  // Developer view (ao_mode 2 only, ao_hands.hlsl c2.w): KK_DEV_AO_HANDS_VIEW=1 the pixel's own occlusion
+  // unchecked, 2 the same with the depth mismatches in red.
+  static const float dev_view = [] {
+    const char* e = std::getenv("KK_DEV_AO_HANDS_VIEW");
+    return e ? float(std::atoi(e)) : 0.0f;
+  }();
+  k[11] = s.mode == 2 ? dev_view : 0.0f;
   // Both images are read through the bindless table, which tracks no states: shader resources before the draw.
   cl->setTextureState(v.image.texture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
   cl->setTextureState(v.depth, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
