@@ -50,9 +50,12 @@
 
 #include <rex/input/mnk/mnk_input_driver.h>
 
+#include "hooks/kk_native_photo.h"
 #include "pause_menu.h"
 #include "photo_mode.h"
+#include "photo_mode_logic.h"
 #include "play_internal.h"
+#include "settings.h"
 #include "backend/picture_adjust.h"  // brightness and gamma on the kept frame
 
 #if defined(KK_DEV_TOOLS)
@@ -217,22 +220,75 @@ std::function<bool(int&, int&, std::vector<uint8_t>&)> g_grab;
 void SetFrameGrabber(std::function<bool(int&, int&, std::vector<uint8_t>&)> grab) { g_grab = std::move(grab); }
 
 namespace {
-void GrabBackdrop() {
-  if (!g_grab) return;
+std::atomic<int> g_backdrop_fov{-1};  // kk_fov when the frame was kept
+
+// `paused`: the frame comes from the paused game with its black cover left out (below); a frame that is still
+// all black (the cover not yet left out) is not kept.
+bool GrabBackdrop(bool paused = false) {
+  if (!g_grab) return false;
   int w = 0, h = 0;
   std::vector<uint8_t> rgba;
   const auto t0 = std::chrono::steady_clock::now();
+  const int fov = REXCVAR_GET(kk_fov);
   if (!g_grab(w, h, rgba)) {
     REXLOG_WARN("KK pause: the last frame could not be captured");
-    return;
+    return false;
+  }
+  if (paused) {
+    bool lit = false;
+    for (size_t i = 0; i + 3 < rgba.size() && !lit; i += 4 * 97) lit = rgba[i] | rgba[i + 1] | rgba[i + 2];
+    if (!lit) return false;
   }
   std::lock_guard lock(g_backdrop_mutex);
   g_backdrop = std::move(rgba);
   g_backdrop_w = w, g_backdrop_h = h;
   g_backdrop_picture = PictureNow();
+  g_backdrop_fov = fov;
   ++g_backdrop_version;
-  REXLOG_INFO("KK pause: kept the last frame of play ({}x{}, {:.0f} ms)", w, h,
+  REXLOG_INFO("KK pause: kept the {} ({}x{}, {:.0f} ms)", paused ? "paused frame again (field of view " +
+              std::to_string(fov) + ")" : std::string("last frame of play"), w, h,
               std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+  return true;
+}
+
+// Field of view changed on the pause menu's Display page (task 243): the game still draws the paused scene
+// every frame (with the new angle, fov.cpp) and covers it with one black quad, which the renderer leaves out
+// for a few frames (photo mode's "hide the pause cover", nothing else) while the frame is kept again. The kept
+// frame stays on screen meanwhile, so nothing flickers. Game thread (the pad read, FilterPad).
+constexpr int64_t kRegrabWaitMs = 150, kRegrabGiveUpMs = 1500;
+int64_t g_regrab_since = -1;  // the cover is being left out since then; -1 not
+
+void EndRegrab() {
+  g_regrab_since = -1;
+  if (!photo::Active()) nr::kk::SetPhoto(photo::ToRenderer(photo::Values{}, false));
+}
+
+void ServiceBackdropFov() {
+  const bool menu = PauseMenuOpen() && g_pending < 0;
+  if (g_regrab_since >= 0) {
+    if (photo::Active()) {  // photo mode sends its own settings now
+      g_regrab_since = -1;
+      return;
+    }
+    const int64_t waited = NowMs() - g_regrab_since;
+    if (!menu) {
+      EndRegrab();
+    } else if (waited >= kRegrabWaitMs && (GrabBackdrop(true) || waited > kRegrabGiveUpMs)) {
+      if (waited > kRegrabGiveUpMs) REXLOG_WARN("KK pause: the paused frame could not be kept again");
+      g_backdrop_fov = REXCVAR_GET(kk_fov);
+      EndRegrab();
+    }
+    return;
+  }
+  const int fov = REXCVAR_GET(kk_fov);
+  if (!menu || g_backdrop_fov < 0 || fov == g_backdrop_fov) return;
+  photo::Values cover_only;
+  cover_only.hide_arms = false;
+  if (!nr::kk::SetPhoto(photo::ToRenderer(cover_only, true))) {  // not the native renderer: shows after Resume
+    g_backdrop_fov = fov;
+    return;
+  }
+  g_regrab_since = NowMs();
 }
 
 // Under every dialog (the background draw list): the kept frame, while the port's menu is open (or the
@@ -311,6 +367,7 @@ void FilterPad(uint32_t user, uint8_t* state) {
     if (menu != was_menu) kk::RequestUiPaint();
     was_menu = menu;
   }
+  if (user == 0) ServiceBackdropFov();
   if (user == 0 && menu) {
     auto s16 = [&](int at) { return int16_t(uint16_t(state[at] << 8 | state[at + 1])); };
     kk::PauseMenuPad(uint16_t(buttons & ~held_at_open), s16(8), s16(10), state[6], state[7]);

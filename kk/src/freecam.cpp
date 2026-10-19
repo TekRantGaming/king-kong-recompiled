@@ -322,7 +322,11 @@ void PhotoResetView() {
 }
 bool PhotoActive() { return photo.load(); }
 bool HideHud() { return (hidden.load() && InPlay()) || photo.load(); }
-bool HideGameHud() { return ((hidden.load() || REXCVAR_GET(kk_hide_hud)) && InPlay()) || photo.load(); }
+// Also under the port's pause menu (task 243): its kept frame of the paused game is taken again when the field
+// of view changes there, and must look like play (the game's black cover hides the rest meanwhile).
+bool HideGameHud() {
+  return ((hidden.load() || REXCVAR_GET(kk_hide_hud)) && (InPlay() || play::PauseMenuOpen())) || photo.load();
+}
 void Pad(uint32_t user, uint8_t *state, bool connected) {
   if (user >= pads.size()) {
     std::memset(state + 4, 0, 12);
