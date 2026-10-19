@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -73,6 +74,23 @@ inline void ApplyBrightnessLut(const BrightnessLut& lut, uint8_t* rgba, size_t p
 // The curve's gain at mid grey (for the log).
 inline double BrightnessLutGain(const BrightnessLut& lut) {
   return (lut[0][64] + lut[1][64] + lut[2][64]) / (3.0 * 64.0);
+}
+
+// Task 272, photo mode: the dimming as one gain on the output values (it is nearly linear and alike in the
+// three channels): play's frame's mean over the paused frame's (`play` and `paused` RGBA, same size; every
+// second pixel and row). Within 1..6; 1 when the paused frame is black.
+inline double MeanUndim(const uint8_t* play, const uint8_t* paused, int width, int height) {
+  if (!play || !paused || width <= 0 || height <= 0) return 1.0;
+  uint64_t a = 0, b = 0;
+  for (int y = 0; y < height; y += 2) {
+    const size_t row = size_t(y) * size_t(width) * 4;
+    for (int x = 0; x < width; x += 2) {
+      const size_t i = row + size_t(x) * 4;
+      a += uint64_t(play[i]) + play[i + 1] + play[i + 2];
+      b += uint64_t(paused[i]) + paused[i + 1] + paused[i + 2];
+    }
+  }
+  return b ? std::clamp(double(a) / double(b), 1.0, 6.0) : 1.0;
 }
 
 }  // namespace kk::play

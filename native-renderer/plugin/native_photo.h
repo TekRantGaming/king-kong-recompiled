@@ -24,6 +24,8 @@ typedef struct NrPhotoSettings {
   float brightness;   // -50..50 (the player's kk_brightness meaning); NAN: the player's setting
   float gamma;        // 0.5..1.5 (kk_gamma); NAN: the player's setting
   uint32_t seed;      // the grain's pattern (kept while the picture is still)
+  float undim;        // the paused game's own dimming taken back first (task 272): output values times this
+                      // (1 none, up to 6; 0 counts as 1)
 } NrPhotoSettings;
 #ifdef __cplusplus
 namespace nr {

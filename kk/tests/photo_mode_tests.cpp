@@ -237,8 +237,30 @@ int main() {
     kk::play::ApplyBrightnessLut(lut, again.data(), again.size() / 4);
     Check(std::abs(int(again[(size_t(40) * w + 100) * 4]) - int(play[(size_t(40) * w + 100) * 4])) <= 3,
           "frame taken again matches play");
+    // Task 272: photo mode takes the same dimming back with one gain on the output values.
+    Check(std::abs(kk::play::MeanUndim(play.data(), paused.data(), w, h) - 2.5) < 0.05, "photo mode's gain undoes 0.4");
     std::vector<uint8_t> flat(play.size(), 0);
     Check(!kk::play::BuildBrightnessLut(play.data(), flat.data(), w, h, lut), "no curve from a black frame");
+  }
+
+  // Task 272: the grade takes the paused game's dimming back ahead of the filters.
+  {
+    Check(kk::photo::ToRenderer(kk::photo::Values{}, true).undim == 1.f, "photo settings start without a gain");
+    NrPhotoSettings s = nr::SanitizePhotoSettings(kk::photo::ToRenderer(kk::photo::Values{}, true));
+    s.undim = 2.5f;
+    s = nr::SanitizePhotoSettings(s);
+    Check(nr::PhotoGradeNeeded(s), "the paused game's dimming taken back needs the grade pass");
+    const auto lifted = nr::PhotoGradeColour(s, {0.4f * 0.5f, 0.4f * 0.3f, 0.4f * 0.1f});
+    Check(std::abs(lifted[0] - 0.5f) < 1e-3 && std::abs(lifted[1] - 0.3f) < 1e-3 && std::abs(lifted[2] - 0.1f) < 1e-3,
+          "the dimmed colours come back to play's");
+    s.look = 1;
+    const auto bw = nr::PhotoGradeColour(s, {0.2f, 0.2f, 0.2f});
+    Check(std::abs(bw[0] - 0.5f) < 1e-3 && bw[0] == bw[1], "filters work on play's brightness");
+    NrPhotoSettings junk = s;
+    junk.undim = 0.f;
+    Check(nr::SanitizePhotoSettings(junk).undim == 1.f, "no gain from an older caller");
+    junk.undim = 100.f;
+    Check(nr::SanitizePhotoSettings(junk).undim == 6.f, "the gain stays within 6");
   }
 
   std::printf("%s (%d failures)\n", failures ? "FAIL" : "PASS", failures);

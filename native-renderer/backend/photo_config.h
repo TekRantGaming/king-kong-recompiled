@@ -40,6 +40,9 @@ NrPhotoSettings SanitizePhotoSettings(const NrPhotoSettings& in);
 NrPhotoSettings NeutralPhotoSettings();
 // Photo mode changes the colours at all (the grade pass runs).
 bool PhotoGradeNeeded(const NrPhotoSettings& s);
+// The grade's gain in linear light: the exposure, and the paused game's dimming taken back first (task 272;
+// the dimming scales the output values, so its inverse is undim ^ 2.2 in the grade's 2.2 light).
+float PhotoExposureGain(const NrPhotoSettings& s);
 
 // The look presets' colour (the tint a fully applied look multiplies the luminance with).
 std::array<float, 3> PhotoLookColour(uint32_t look);

@@ -113,7 +113,7 @@ bool PhotoGrade::Apply(nvrhi::ICommandList* cl, nvrhi::ITexture* target, uint32_
   Constants k;
   k.size[0] = float(width);
   k.size[1] = float(height);
-  k.grade[0] = std::exp2(s.exposure);
+  k.grade[0] = PhotoExposureGain(s);
   k.grade[1] = s.contrast;
   k.grade[2] = s.saturation;
   k.grade[3] = s.temperature;
