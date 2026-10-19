@@ -92,7 +92,7 @@ class ShotValidator {
 };
 inline ShotReject ValidateShotHit(const ShotIntent& shot, const ShotHit& hit, const EnemyState& target) {
   if (!ValidShotIntent(shot)) return ShotReject::Bounds;
-  if (!ValidEnemy(target) || hit.id != target.id) return ShotReject::Target;
+  if (!ValidEnemy(target) || hit.id != target.id || hit.generation != target.generation) return ShotReject::Target;
   const float distance = ShotDistance(shot.origin, hit.point);
   if (!std::isfinite(distance) || distance < .01f || distance > (shot.weapon == 3 ? 80.f : 300.f) ||
       ShotDistance(hit.point, {target.x, target.y, target.z}) > 6) return ShotReject::Distance;

@@ -11,7 +11,7 @@
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-constexpr uint16_t kProtocolVersion = 7;
+constexpr uint16_t kProtocolVersion = 8;
 constexpr size_t kMaxDisplayNameBytes = 32;
 // Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.
 // Empty or wholly invalid input becomes "Partner". Never log the input or result.
@@ -22,7 +22,7 @@ enum class MessageType : uint16_t {
   EnemySnapshot = 8, EnemyEvent = 9, ShotIntent = 10, Cheats = 11, InventoryState = 12,
   SessionStart = 13, SaveChunk = 14, LevelChange = 15, Loaded = 16, LoadRelease = 17,
   Checkpoint = 18, ChapterFinished = 19, ReloadRequest = 20, FlowAbort = 21,
-  DamageEvent = 22, PlayerStatus = 23
+  DamageEvent = 22, PlayerStatus = 23, OwnershipChange = 24
 };
 
 // Session control is reliable and scoped by the packet epoch and a load generation.
@@ -59,6 +59,7 @@ struct PlayerPose {
   uint8_t item = 0;  // Diagnostic only: first-person IDs are not body animation IDs.
 };
 enum class EnemyFamily : uint16_t { None, Raptor, Worm, Scorpion };
+enum class EnemyOwner : uint8_t { Host, Guest };
 // source is a signature of family + authored spawn point, or spawner + template.
 // sequence is zero for authored actors, successful creation number for waves.
 // No component contains a guest address. IDs are scoped to EnemyWorld + session epoch.
@@ -80,7 +81,20 @@ struct EnemyState {
   uint16_t action = 0;
   uint8_t item = 0;
   float spawn_x = 0, spawn_y = 0, spawn_z = 0; // Immutable identity evidence, never latest XYZ.
+  EnemyOwner owner = EnemyOwner::Host;
+  uint32_t generation = 0; // Authority generation, independent of actor/spawn sequence.
 };
+// Prepare freezes both copies; Ready returns the old owner's final pose. Only
+// the host's Commit changes authority. Matched confirms a usable guest binding.
+enum class OwnershipPhase : uint8_t { Matched = 1, Prepare, Ready, Commit };
+struct OwnershipChange {
+  EnemyWorld world;
+  OwnershipPhase phase = OwnershipPhase::Matched;
+  uint32_t generation = 0;
+  EnemyOwner owner = EnemyOwner::Host; // proposed/new owner
+  EnemyState enemy; // last state, tagged with the OLD owner/generation until Commit
+};
+bool ValidOwnershipChange(const OwnershipChange& change);
 constexpr size_t kMaxEnemyBatch = 16, kMaxEnemies = 512;
 
 struct ShotVector { float x = 0, y = 0, z = 0; };
@@ -107,7 +121,7 @@ bool ValidPlayerStatus(const PlayerStatus& status);
 inline bool IsCombatMessage(MessageType t) {
   return t == MessageType::DamageEvent || t == MessageType::PlayerStatus;
 }
-struct ShotHit { EnemyId id; ShotVector point; };
+struct ShotHit { EnemyId id; ShotVector point; uint32_t generation = 0; };
 struct InventoryState {
   EnemyWorld world;
   double time = 0;
@@ -160,6 +174,7 @@ struct Message {
   ShotIntent shot;
   DamageEvent damage;
   PlayerStatus player_status;
+  OwnershipChange ownership;
   CheatSet cheats;
   InventoryState inventory;
   SessionStart start;

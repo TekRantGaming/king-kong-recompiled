@@ -1,6 +1,7 @@
-// Host-authoritative creature replication. Guest memory is accessed on the game thread only.
+// Per-enemy authority. Native memory is accessed on the game thread only.
 #include "coop_enemies_game.h"
 #include "coop_enemies.h"
+#include "coop_ownership.h"
 #include "coop_runtime.h"
 #include "coop_pose.h"
 #include "hfr.h"
@@ -363,6 +364,12 @@ struct State {
   std::map<uint32_t, Binding> bindings;
   std::map<uint32_t, Pending> pending;
   std::map<EnemyId, Record> records;
+  std::map<EnemyId, Authority> authority; // Always indexed by canonical host ID.
+  std::map<EnemyId, OwnershipChange> ownership_out, committed;
+  std::map<EnemyId, double> matched_at;
+  std::deque<Message> ownership_in;
+  uint64_t ownership_epoch = 0;
+  double next_ownership = 0;
   std::map<uint32_t, Record> driving;
   std::set<EnemyId> unmatched_logged;
   std::set<EnemyId> death_applied, death_refused;
@@ -407,6 +414,8 @@ struct State {
     death_applied.clear(); death_refused.clear();
     orphan_logged.clear(); unbound = 0;
     aliases.clear(); retry.clear(); retry_diagnosed.clear(); shots = {}; shot_validator = {}; shooting = shot_resolved = false; shot = {};
+    authority.clear(); ownership_out.clear(); committed.clear(); ownership_in.clear(); ownership_epoch = 0; next_ownership = 0;
+    matched_at.clear();
     census_until = next_numbers = next_log = next_shot_log = error_sum = error_max = 0; error_count = 0;
     combat_epoch = incarnation = 0; combat_hero = combat_ai = combat_vars = 0;
     next_damage = next_status = 0; pending_damage.clear(); sent_status.reset();
@@ -418,6 +427,17 @@ struct State {
   }
 };
 State& Get() { static State s; return s; }
+EnemyOwner Side() { return Get().link.role == Role::Host ? EnemyOwner::Host : EnemyOwner::Guest; }
+EnemyId Canonical(EnemyId local) {
+  const auto& s = Get();
+  if (s.link.role == Role::Host) return local;
+  for (const auto& [host, id] : s.aliases) if (id == local) return host;
+  return {};
+}
+Authority* AuthorityFor(EnemyId local) {
+  auto& all = Get().authority; const auto it = all.find(Canonical(local));
+  return it == all.end() ? nullptr : &it->second;
+}
 bool Connected() { return EnemyConnectionReady(); }
 bool Environment(const uint8_t* b, uint32_t w) {
   const auto& s = Get();
@@ -474,9 +494,9 @@ void Capture(const uint8_t* b, uint32_t w, bool initial = true) {
 }
 void Scan(const uint8_t* b) {
   auto& s = Get();
-  // A guest must also bind initialized dormant actors. Driving a transform does
-  // not activate/schedule them. Host authority still samples scheduled actors.
-  uint32_t begin, end; if (!Table(b, s.world, begin, end, s.link.role == Role::Guest)) return;
+  // Retain known host actors through sleep/handover. Guest discovery still
+  // includes dormant candidates; host discovery starts only when scheduled.
+  uint32_t begin, end; if (!Table(b, s.world, begin, end, true)) return;
   std::set<EnemyId> present;
   s.unbound = 0;
   auto unbound = [&](uint32_t actor, EnemyFamily family) {
@@ -489,6 +509,7 @@ void Scan(const uint8_t* b) {
     Binding binding; EnemyState e;
     if (!Read(b, actor, binding, e)) continue;
     auto existing = s.bindings.find(actor);
+    if (s.link.role == Role::Host && existing == s.bindings.end() && !Member(b, s.world, actor)) continue;
     if (existing != s.bindings.end()) {
       const auto& old = existing->second;
       if (old.ai != binding.ai || old.vars != binding.vars || old.matrix != binding.matrix || old.id.family != e.id.family) {
@@ -521,6 +542,15 @@ void Scan(const uint8_t* b) {
     if (it != s.records.end()) {
       e.spawn_x = it->second.enemy.spawn_x; e.spawn_y = it->second.enemy.spawn_y; e.spawn_z = it->second.enemy.spawn_z;
     }
+    if (s.link.role == Role::Host) {
+      s.aliases[e.id] = e.id;
+      auto [a, inserted] = s.authority.try_emplace(e.id);
+      if (inserted) a->second.last = e;
+    }
+    if (auto* a = AuthorityFor(binding.id)) {
+      e.owner = a->owner; e.generation = a->generation;
+      if (a->dead) e.life = 0;
+    }
     s.records[e.id] = {e, e.life <= 0 ? EnemyEventKind::Died : EnemyEventKind::Spawned};
   }
   // Leaving the scheduled AI table can mean sleep/deactivation, not destruction.
@@ -544,7 +574,7 @@ void Scan(const uint8_t* b) {
 }
 bool ValidBinding(const uint8_t* b, const Binding& binding) {
   Binding now; EnemyState e;
-  return Member(b, Get().world, binding.actor, Get().link.role == Role::Guest) && Read(b, binding.actor, now, e) &&
+  return Member(b, Get().world, binding.actor, true) && Read(b, binding.actor, now, e) &&
       now.ai == binding.ai && now.vars == binding.vars && now.matrix == binding.matrix && e.id.family == binding.id.family;
 }
 bool RetainedDamageSource(const uint8_t* b, const Binding& source) {
@@ -626,10 +656,13 @@ bool Drive(PPCContext& ctx, uint8_t* b, const Binding& binding, const EnemyState
   }
   return true;
 }
-void Guest(PPCContext& ctx, uint8_t* b, bool drive) {
+void Replicas(PPCContext& ctx, uint8_t* b, bool drive) {
   auto& s = Get(); s.driving.clear(); s.counts = {};
   s.counts.unmatched = s.unbound;
-  if (s.link.remote.world != s.identity) { s.counts.unmatched += uint32_t(s.bindings.size()); return; }
+  if (s.link.remote.world != s.identity) {
+    if (s.link.role == Role::Guest) s.counts.unmatched += uint32_t(s.bindings.size());
+    return;
+  }
   std::vector<Binding> bindings;
   for (const auto& [actor, binding] : s.bindings) bindings.push_back(binding);
   const double now = Now();
@@ -643,6 +676,7 @@ void Guest(PPCContext& ctx, uint8_t* b, bool drive) {
   for (const auto& r : s.link.remote.records) {
     const Binding* binding = nullptr;
     auto alias = s.aliases.find(r.enemy.id);
+    if (s.link.role == Role::Host && alias == s.aliases.end()) continue;
     if (alias != s.aliases.end()) binding = Match(alias->second, bindings);
     else {
       std::vector<MatchCandidate> candidates;
@@ -701,9 +735,18 @@ void Guest(PPCContext& ctx, uint8_t* b, bool drive) {
       continue;
     }
     matched.insert(binding->actor); ++s.counts.matched;
+    auto a = s.authority.find(r.enemy.id);
+    if (a == s.authority.end()) {
+      if (s.link.role != Role::Guest || r.enemy.owner != EnemyOwner::Host || r.enemy.generation) continue;
+      a = s.authority.try_emplace(r.enemy.id).first; a->second.last = r.enemy;
+    }
+    auto& authority = a->second;
+    if (!authority.Accepts(r.enemy) || authority.owner == Side() || authority.Frozen()) continue;
+    authority.Observe(r.latest.id.source ? r.latest : r.enemy);
+    if (authority.dead && r.enemy.life > 0) continue;
     const bool dead = r.kind != EnemyEventKind::Spawned || r.enemy.life <= 0;
     if (!dead && (!ControllerSafe(b, binding->actor) || !Scratch::CanUse(ctx))) continue;
-    // Host life is authority. Dead creatures run their normal local death dispatches.
+    // Only the nonowner receives raw life. Corpses run native death dispatches.
     StoreF(b, binding->vars+LifeOffset(binding->id.family), dead ? 0 : r.enemy.life);
     if (dead) { DeathTransition(ctx, b, *binding); continue; }
     if (!drive || Drive(ctx, b, *binding, r.enemy)) {
@@ -716,8 +759,8 @@ void Guest(PPCContext& ctx, uint8_t* b, bool drive) {
           const float error = std::hypot(host.x-local.x, host.y-local.y, host.z-local.z);
           s.error_sum += error; s.error_max = std::max(s.error_max, double(error)); ++s.error_count;
 #if defined(KK_DEV_TOOLS)
-          REXLOG_INFO("ENEMIES guest id={:016X}/{}/{} host=({:.3f},{:.3f},{:.3f}) local=({:.3f},{:.3f},{:.3f}) err={:.4f} life={:.2f}/{:.2f} action={}/{}",
-              r.enemy.id.source, r.enemy.id.sequence, uint16_t(r.enemy.id.family), host.x, host.y, host.z,
+          REXLOG_INFO("ENEMIES replica role={} id={:016X}/{}/{} owner=({:.3f},{:.3f},{:.3f}) local=({:.3f},{:.3f},{:.3f}) err={:.4f} life={:.2f}/{:.2f} action={}/{}",
+              s.link.role == Role::Host ? "host" : "guest", r.enemy.id.source, r.enemy.id.sequence, uint16_t(r.enemy.id.family), host.x, host.y, host.z,
               local.x, local.y, local.z, error, host.life, local.life, host.action, local.action);
 #endif
         }
@@ -725,10 +768,137 @@ void Guest(PPCContext& ctx, uint8_t* b, bool drive) {
     }
   }
   for (const auto& binding : bindings) if (!matched.contains(binding.actor) && ValidBinding(b, binding)) {
+    if (const auto* a = AuthorityFor(binding.id); a && a->owner == Side()) continue;
     ++s.counts.unmatched;
     if (s.unmatched_logged.insert(binding.id).second)
       REXLOG_INFO("ENEMIES unmatched guest source={:016X} sequence={} family={} leave-alone=true",
           binding.id.source, binding.id.sequence, uint16_t(binding.id.family));
+  }
+}
+const Binding* CanonicalBinding(const uint8_t* b, EnemyId id) {
+  auto& s = Get();
+  const auto alias = s.aliases.find(id); if (alias == s.aliases.end()) return nullptr;
+  const Binding* found = nullptr;
+  for (const auto& [actor, binding] : s.bindings) if (binding.id == alias->second) {
+    if (found || !ValidBinding(b, binding)) return nullptr;
+    found = &binding;
+  }
+  if (found) for (const auto& [actor, binding] : s.bindings) if (&binding != found &&
+      (binding.ai == found->ai || binding.vars == found->vars || binding.matrix == found->matrix)) return nullptr;
+  return found;
+}
+bool OwnedSample(const uint8_t* b, const Binding& binding, EnemyState& e) {
+  auto* a = AuthorityFor(binding.id); Binding observed;
+  if (!a || !Read(b, binding.actor, observed, e) || !ValidBinding(b, binding)) return false;
+  e.id = Canonical(binding.id); e.owner = a->owner; e.generation = a->generation;
+  e.spawn_x = a->last.spawn_x; e.spawn_y = a->last.spawn_y; e.spawn_z = a->last.spawn_z;
+  if (a->dead) e.life = 0;
+  return ValidEnemy(e);
+}
+bool SeedAuthority(PPCContext& ctx, uint8_t* b, const Binding& binding, const EnemyState& e) {
+  if (e.life > 0 && !Drive(ctx, b, binding, e)) return false;
+  StoreF(b, binding.vars+LifeOffset(binding.id.family), e.life);
+  if (e.life <= 0) DeathTransition(ctx, b, binding);
+  return true;
+}
+bool SendOwnership(const OwnershipChange& change) {
+  Message m; m.type = MessageType::OwnershipChange; m.epoch = Get().link.epoch; m.ownership = change;
+  return SubmitOwnership(std::move(m));
+}
+void OwnershipBeforeAi(PPCContext& ctx, uint8_t* b) {
+  auto& s = Get(); const double now = Now();
+  for (auto& m : TakeOwnership()) {
+    if (m.epoch == s.link.epoch && m.ownership.world == s.identity && s.ownership_in.size() < kMaxEnemies*2)
+      s.ownership_in.push_back(std::move(m));
+  }
+  for (auto it = s.ownership_in.begin(); it != s.ownership_in.end();) {
+    const auto& c = it->ownership;
+    auto a = s.authority.find(c.enemy.id);
+    const auto* binding = CanonicalBinding(b, c.enemy.id);
+    if (a == s.authority.end() || !binding) { it = s.ownership_in.erase(it); continue; }
+    auto& authority = a->second;
+    if (c.phase == OwnershipPhase::Matched && s.link.role == Role::Host) {
+      if (authority.Accepts(c.enemy)) { authority.matched = true; s.matched_at[c.enemy.id] = now; }
+      // A lost worker/game handoff can be recovered without inventing an owner.
+      if (c.generation < authority.generation) {
+        if (const auto prior = s.committed.find(c.enemy.id); prior != s.committed.end()) SendOwnership(prior->second);
+      }
+    } else if (c.phase == OwnershipPhase::Prepare && s.link.role == Role::Guest) {
+      EnemyState local; auto trial = authority;
+      if (OwnedSample(b, *binding, local)) if (auto ready = trial.Prepare(c, local)) {
+        if (!SeedAuthority(ctx, b, *binding, ready->enemy)) { ++it; continue; }
+        authority = trial; s.ownership_out[c.enemy.id] = *ready; SendOwnership(*ready);
+      }
+    } else if (c.phase == OwnershipPhase::Ready && s.link.role == Role::Host) {
+      if (auto commit = authority.Ready(c)) {
+        if (!SeedAuthority(ctx, b, *binding, commit->enemy)) { ++it; continue; }
+        auto final = commit->enemy; final.owner = authority.owner; final.generation = authority.generation;
+        authority.pending->enemy = final; authority.last = final;
+        s.ownership_out[c.enemy.id] = *commit; SendOwnership(*commit);
+      }
+    } else if (c.phase == OwnershipPhase::Commit) {
+      auto trial = authority;
+      if (trial.Commit(c)) {
+        if (!SeedAuthority(ctx, b, *binding, c.enemy)) { ++it; continue; }
+        const auto old = authority.owner;
+        authority = trial; s.ownership_out.erase(c.enemy.id); s.committed[c.enemy.id] = c;
+        // Do not let a delayed old live sample drive this new generation.
+        s.driving.erase(binding->actor);
+        REXLOG_INFO("OWNERSHIP id={:016X}/{} generation={} from={} to={} life={:.2f} pos=({:.3f},{:.3f},{:.3f})",
+            c.enemy.id.source, c.enemy.id.sequence, c.generation,
+            old == EnemyOwner::Host ? "host" : "guest", c.owner == EnemyOwner::Host ? "host" : "guest",
+            c.enemy.life, c.enemy.x, c.enemy.y, c.enemy.z);
+      }
+    }
+    it = s.ownership_in.erase(it);
+  }
+  // Observe native results only on the owner. A replica's old local life can
+  // never veto the owner's outcome or resurrect an authoritative corpse.
+  for (auto& [id, a] : s.authority) {
+    const auto* binding = CanonicalBinding(b, id); if (!binding) continue;
+    EnemyState local;
+    if (a.Runs(Side()) && OwnedSample(b, *binding, local)) a.Observe(local);
+    if (s.link.role != Role::Host || !s.link.partner || !a.matched) continue;
+    const auto jack = ReadJackPose([&](uint32_t p) { return Load32(b, p); },
+        [&](uint32_t p) { return Load16(b, p); }, [&](uint32_t p) { return LoadF(b, p); }, now);
+    if (!jack.pose) continue;
+    const float host = ShotDistance({a.last.x, a.last.y, a.last.z}, {jack.pose->x, jack.pose->y, jack.pose->z});
+    const float guest = ShotDistance({a.last.x, a.last.y, a.last.z}, {s.link.partner->x, s.link.partner->y, s.link.partner->z});
+    const bool eligible = !a.Frozen() && !a.dead && a.last.life > 0 &&
+        s.link.partner->level == s.identity.level && now-s.matched_at[id] < 1.5 &&
+        EnemyPartnerCombatReady();
+    if (const auto target = a.proximity.Decide(a.owner, host, guest, now, eligible)) {
+      if (auto prepare = a.Begin(s.identity, *target, a.last)) {
+        s.ownership_out[id] = *prepare; SendOwnership(*prepare);
+      }
+    }
+  }
+  if (now < s.next_ownership) return;
+  s.next_ownership = now+.5;
+  for (const auto& [id, c] : s.ownership_out) SendOwnership(c);
+  if (s.link.role == Role::Guest) for (auto& [id, a] : s.authority) {
+    if (!CanonicalBinding(b, id)) continue;
+    // A heartbeat confirms both binding availability and generation reception.
+    SendOwnership({s.identity, OwnershipPhase::Matched, a.generation, a.owner, a.last});
+  }
+}
+void HoldReplicas(PPCContext& ctx, uint8_t* b, bool drive) {
+  auto& s = Get();
+  for (auto& [id, a] : s.authority) {
+    if (!a.Frozen() && a.owner == Side()) continue;
+    const auto* binding = CanonicalBinding(b, id); if (!binding) continue;
+    const auto& state = a.Frozen() ? a.pending->enemy : a.last;
+    if (state.life <= 0) {
+      StoreF(b, binding->vars+LifeOffset(binding->id.family), 0);
+      DeathTransition(ctx, b, *binding); continue;
+    }
+    // Keep known replicas held even after live snapshots expire. Native AI
+    // resumes only on a Commit, or when the connection/load guard releases it.
+    if (a.Frozen() || !s.driving.contains(binding->actor)) {
+      if (drive && !Drive(ctx, b, *binding, state)) continue;
+      StoreF(b, binding->vars+LifeOffset(binding->id.family), state.life);
+      s.driving[binding->actor] = {state, EnemyEventKind::Spawned, state};
+    }
   }
 }
 ShotVector Vector(const uint8_t* b, uint32_t p) { return {LoadF(b, p), LoadF(b, p+4), LoadF(b, p+8)}; }
@@ -1116,7 +1286,6 @@ void ObserveHumanConsumption(PPCContext& ctx, uint8_t* b) {
 const char* BeginShot(const uint8_t* b) {
   auto& s = Get();
   if (!Connected()) return "disconnected";
-  if (s.link.role != Role::Guest) return "not-guest";
   if (s.shooting) return "nested-callback";
   if (!Environment(b, s.world) || !PoseAddress(s.game, 13652)) return "world-not-ready";
   if (!JackReady(b)) return "jack-not-ready";
@@ -1168,9 +1337,9 @@ void ShotRay(const uint8_t* b, uint32_t origin, uint32_t point, uint32_t object,
   (void)object;
 #endif
 }
-bool GuestShotEvent(PPCContext& ctx, uint8_t* b) {
+bool ForwardShotEvent(PPCContext& ctx, uint8_t* b) {
   auto& s = Get();
-  if (!s.shooting || !Connected() || s.link.role != Role::Guest || !Environment(b, s.world) ||
+  if (!s.shooting || !Connected() || !Environment(b, s.world) ||
       ctx.r6.u32 != Load32(b, 0x82CCBF7C)) return false;
   const uint32_t lr = uint32_t(ctx.lr);
   if (lr != 0x82696E74 && lr != 0x82697494 && lr != 0x82697970 && lr != 0x82698C00) return false;
@@ -1181,10 +1350,12 @@ bool GuestShotEvent(PPCContext& ctx, uint8_t* b) {
   if (it == s.bindings.end() || !ValidBinding(b, it->second)) return false;
   auto alias = std::find_if(s.aliases.begin(), s.aliases.end(), [&](const auto& a) { return a.second == it->second.id; });
   if (alias == s.aliases.end()) return false;
+  const auto* authority = AuthorityFor(it->second.id);
+  if (!authority || authority->Runs(Side())) return false; // Native local-owner damage stays local.
   // Builder's caller stack+96 is the resolved impact, +80 its normal/vector.
   // See .47:26501-26539 and .39:23618-23652. No damage/bone value goes on wire.
   if (PoseAddress(ctx.r1.u32, 108) && s.shot.hits.size() < (s.shot.weapon == 3 ? kMaxShotHits : 1)) {
-    const ShotHit hit{alias->first, Vector(b, ctx.r1.u32+96)};
+    const ShotHit hit{alias->first, Vector(b, ctx.r1.u32+96), authority->generation};
     const bool duplicate = std::any_of(s.shot.hits.begin(), s.shot.hits.end(), [&](const auto& h) { return h.id == hit.id; });
     auto copy = s.shot;
     if (copy.hits.empty()) copy.direction = Direction(copy.origin, hit.point);
@@ -1234,7 +1405,8 @@ void DevShotLog(const uint8_t* b, bool guest, bool observed, uint32_t weapon,
 #endif
 bool NativeShot(PPCContext& ctx, uint8_t* b, const ShotIntent& shot, const ShotHit& hit, const Binding& target) {
   auto& s = Get();
-  if (s.link.role != Role::Host || !Connected() || !Environment(b, s.world) ||
+  const auto* authority = AuthorityFor(target.id);
+  if (!authority || !RoutesShot(*authority, Side(), hit) || !Connected() || !Environment(b, s.world) ||
       !Scratch::CanUse(ctx) || !ValidBinding(b, target) || !PoseAddress(s.game, 18500) || !JackReady(b)) return false;
   const auto hero = Load32(b, 0x82CCBF7C), ai = Ptr(b, Ptr(b, hero, 24, 8), 4, 88);
   if (!ai || !Ptr(b, ai, 64, 13652) || !Ptr(b, hero, 12, 64)) return false;
@@ -1249,7 +1421,7 @@ bool NativeShot(PPCContext& ctx, uint8_t* b, const ShotIntent& shot, const ShotH
   uint32_t saved[4]; for (unsigned i = 0; i < 4; ++i) saved[i] = Load32(b, globals[i]);
   Store32(b, globals[0], ai); Store32(b, globals[1], ai);
   Store32(b, globals[2], hero); Store32(b, globals[3], hero);
-  // Use the HOST's weapon tables/one-hit setting. No host life or ammo writes.
+  // Both sides use native weapon tables and the host's replicated cheat choices.
   const float distance = ShotDistance(shot.origin, hit.point);
   ctx.r3.u64 = shot.weapon; ctx.f1.f64 = double(distance)*distance;
   __imp__sub_82419C38(ctx, b);
@@ -1273,24 +1445,23 @@ bool NativeShot(PPCContext& ctx, uint8_t* b, const ShotIntent& shot, const ShotH
   for (unsigned i = 0; i < 4; ++i) Store32(b, globals[i], saved[i]);
   return queued;
 }
-void HostShots(PPCContext& ctx, uint8_t* b) {
+void OwnerShots(PPCContext& ctx, uint8_t* b) {
   auto& s = Get();
   for (const auto& received : TakeShotIntents()) {
     const auto& shot = received.intent;
     auto reason = s.shot_validator.Validate(received, s.identity, s.link.partner, Now());
-    std::vector<Binding> all;
-    for (const auto& [actor, binding] : s.bindings) all.push_back(binding);
     std::vector<std::pair<Binding, ShotHit>> targets;
     bool late = false;
     if (reason == ShotReject::None) for (const auto& hit : shot.hits) {
-      const auto* binding = Match(hit.id, all);
+      const auto a = s.authority.find(hit.id);
+      if (a == s.authority.end() || !RoutesShot(a->second, Side(), hit)) { reason = ShotReject::Target; break; }
+      const auto* binding = CanonicalBinding(b, hit.id);
       Binding observed; EnemyState e;
       const bool valid = binding && ValidBinding(b, *binding);
       if (!valid || !Read(b, binding->actor, observed, e)) {
         // Only a confirmed death tombstone can turn a missing binding into late.
-        const auto known = s.records.find(hit.id);
-        if (known != s.records.end() && known->second.enemy.life <= 0 &&
-            ValidateShotHit(shot, hit, known->second.enemy) == ShotReject::Late) { late = true; continue; }
+        const auto known = s.records.find(binding ? binding->id : hit.id);
+        if (a->second.dead && ValidateShotHit(shot, hit, a->second.last) == ShotReject::Late) { late = true; continue; }
 #if defined(KK_DEV_TOOLS)
         if (s.shot_target_diagnostics++ < 64)
           REXLOG_INFO("ENEMIES shot target rejected number={} id={:016X}/{}/{} detail={} known={} life={:.2f} cap=64",
@@ -1300,7 +1471,8 @@ void HostShots(PPCContext& ctx, uint8_t* b) {
 #endif
         reason = ShotReject::Target; break;
       }
-      e.id = binding->id;
+      e.id = hit.id; e.owner = a->second.owner; e.generation = a->second.generation;
+      if (a->second.dead) e.life = 0;
       reason = ValidateShotHit(shot, hit, e);
       if (reason == ShotReject::Late) { late = true; reason = ShotReject::None; continue; }
       if (reason != ShotReject::None) break;
@@ -1342,9 +1514,15 @@ void BeforeAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
     REXLOG_INFO("ENEMIES waiting reason=no-connected-load-identity restart-both-and-load-while-connected=true");
   }
   if (!Environment(b, w)) return;
+  if (s.ownership_epoch != s.link.epoch) {
+    s.authority.clear(); s.ownership_out.clear(); s.committed.clear(); s.ownership_in.clear(); s.matched_at.clear();
+    s.ownership_epoch = s.link.epoch; s.next_ownership = 0;
+  }
   Scan(b); s.prepared = true; s.prepared_at = Now();
-  if (s.link.role == Role::Guest) {
-    Guest(ctx, b, false);
+  Replicas(ctx, b, false);
+  OwnershipBeforeAi(ctx, b);
+  HoldReplicas(ctx, b, false);
+  {
     if (PoseAddress(s.game, 13652) && JackReady(b)) {
       const auto weapon = Load32(b, s.game+13128);
       if (weapon <= 4) {
@@ -1354,7 +1532,7 @@ void BeforeAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
       }
     }
   }
-  else HostShots(ctx, b);
+  OwnerShots(ctx, b);
   CombatBeforeAi(ctx, b);
 #if defined(KK_DEV_TOOLS)
   DevBait(ctx, b);
@@ -1363,19 +1541,31 @@ void BeforeAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
 void AfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   auto& s = Get();
   if (!s.prepared || !Connected() || !Environment(b, w)) { s.driving.clear(); return; }
-  if (s.link.role == Role::Guest) Guest(ctx, b, true);
-  else {
-    Scan(b);
-    s.counts = {}; s.counts.unmatched = s.unbound;
+  Scan(b);
+  Replicas(ctx, b, true);
+  HoldReplicas(ctx, b, true);
+  {
     Frame frame{s.identity, Now(), {}};
-    for (const auto& [id, r] : s.records) frame.records.push_back(r);
+    for (const auto& [local, r] : s.records) {
+      auto* a = AuthorityFor(local); if (!a) continue;
+      if (r.kind == EnemyEventKind::Spawned && a->last.life > 0 && !a->dead) {
+        if (a->owner == Side()) ++s.counts.owned_me; else ++s.counts.owned_partner;
+      }
+      if (!a->Runs(Side())) continue;
+      Record owned = r; owned.enemy.id = Canonical(local);
+      owned.enemy.owner = a->owner; owned.enemy.generation = a->generation;
+      a->Observe(owned.enemy);
+      frame.records.push_back(owned);
+    }
     PublishEnemyFrame(frame);
 #if defined(KK_DEV_TOOLS)
     if (Now() >= s.next_numbers) {
       s.next_numbers = Now()+1;
       for (const auto& [id, r] : s.records) if (r.kind != EnemyEventKind::Removed)
-        REXLOG_INFO("ENEMIES host id={:016X}/{}/{} pos=({:.3f},{:.3f},{:.3f}) life={:.2f} action={}",
-            id.source, id.sequence, uint16_t(id.family), r.enemy.x, r.enemy.y, r.enemy.z, r.enemy.life, r.enemy.action);
+        REXLOG_INFO("ENEMIES local role={} id={:016X}/{}/{} pos=({:.3f},{:.3f},{:.3f}) life={:.2f} action={} owner={} generation={}",
+            s.link.role == Role::Host ? "host" : "guest", id.source, id.sequence, uint16_t(id.family),
+            r.enemy.x, r.enemy.y, r.enemy.z, r.enemy.life, r.enemy.action,
+            r.enemy.owner == EnemyOwner::Host ? "host" : "guest", r.enemy.generation);
     }
 #endif
   }
@@ -1385,9 +1575,9 @@ void AfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
 #if defined(KK_DEV_TOOLS)
   if (Now() >= s.next_log) {
     s.next_log = Now()+5;
-    REXLOG_INFO("ENEMIES status role={} sent={} matched={} unmatched={} driven={} tracked={}",
+    REXLOG_INFO("ENEMIES status role={} sent={} matched={} unmatched={} driven={} tracked={} owned-by-me={} owned-by-partner={}",
         s.link.role == Role::Host ? "host" : "guest", s.link.sent, s.counts.matched,
-        s.counts.unmatched, s.counts.driven, s.records.size());
+        s.counts.unmatched, s.counts.driven, s.records.size(), s.counts.owned_me, s.counts.owned_partner);
     REXLOG_INFO("ENEMIES error samples={} max={:.4f} avg={:.4f} shots-sent={} applied={} late={} rejected={} reason={}",
         s.error_count, s.error_max, s.error_count ? s.error_sum/double(s.error_count) : 0,
         s.link.shots_sent, s.shots.applied, s.shots.late, s.shots.rejected, ShotRejectName(s.shots.last));
@@ -1399,7 +1589,7 @@ void AfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
 }
 bool Hold(PPCContext& ctx, uint8_t* b) {
   auto& s = Get();
-  if (!s.prepared || s.link.role != Role::Guest || s.driving.empty() || uint32_t(ctx.lr) != 0x8271D304 ||
+  if (!s.prepared || s.driving.empty() || uint32_t(ctx.lr) != 0x8271D304 ||
       Now()-s.prepared_at > .5 || !Connected()) return false;
   const auto actor = Load32(b, 0x82CCBF6C), ai = Load32(b, 0x82CCBF64);
   const auto it = s.driving.find(actor); if (it == s.driving.end()) return false;
@@ -1440,6 +1630,7 @@ void EnemyBeforeLoad() {
 #endif
   if (!REXCVAR_GET(kk_coop_enabled)) return;
   ClearCombat();
+  ClearOwnership();
   Get().ResetWorld(); PublishEnemyFrame({}); SetEnemyCounters({}); SetShotCounters({});
 }
 void EnemyAfterLoad(const uint8_t* b, uint32_t game) {
@@ -1484,13 +1675,15 @@ bool EnemyDamageEnqueue(PPCContext& ctx, uint8_t* b, uint32_t body) {
   if (!REXCVAR_GET(kk_coop_enabled) || ctx.r4.u32 != 4 || !PoseAddress(ctx.r6.u32, 108)) return false;
   const auto payload = ctx.r6.u32, source = ctx.r3.u32, victim = Load32(b, payload+4);
   bool matched_source = false;
-  if (s.prepared && s.link.role == Role::Guest && Connected() && Environment(b, s.world) && Now()-s.prepared_at <= .5) {
+  if (s.prepared && Connected() && Environment(b, s.world) && Now()-s.prepared_at <= .5) {
     const auto it = s.bindings.find(source);
-    if (it != s.bindings.end() && RetainedDamageSource(b, it->second))
-      for (const auto& [host, local] : s.aliases) matched_source |= local == it->second.id;
+    if (it != s.bindings.end() && RetainedDamageSource(b, it->second)) {
+      const auto* a = AuthorityFor(it->second.id);
+      matched_source = a && !a->Runs(Side());
+    }
   }
   const auto action = combat::FilterVictim(4, victim, body, Load32(b, 0x82CCBF7C),
-      s.link.role == Role::Guest, matched_source, s.injecting_damage);
+      true, matched_source, s.injecting_damage);
   if (action == combat::VictimAction::Pass) return false;
   if (action == combat::VictimAction::ProtectBody) {
     ++s.hits_produced;
@@ -1501,6 +1694,7 @@ bool EnemyDamageEnqueue(PPCContext& ctx, uint8_t* b, uint32_t body) {
     damage.time = Now();
     if (binding != s.bindings.end()) damage.enemy = binding->second.id;
     const bool audited = binding != s.bindings.end() &&
+        AuthorityFor(binding->second.id) && AuthorityFor(binding->second.id)->Runs(EnemyOwner::Host) &&
         binding->second.id.family == EnemyFamily::Raptor && ValidBinding(b, binding->second) &&
         uint32_t(ctx.lr) == 0x8261DEEC && source == Load32(b, 0x82CCBF6C) &&
         combat::RaptorHit(damage.flags, damage.magnitude);
@@ -1551,19 +1745,17 @@ std::optional<ShotVector> EnemyDormantTarget(const uint8_t* b, uint32_t w, ShotV
 }
 std::optional<ShotVector> EnemyAimTarget(const uint8_t* b, ShotVector origin) {
   auto& s = Get();
-  if (!Connected() || s.link.role != Role::Guest || !Environment(b, s.world) || Now()-s.prepared_at > .5) return {};
+  if (!Connected() || !Environment(b, s.world) || Now()-s.prepared_at > .5) return {};
   std::optional<ShotVector> best; float distance = 300;
   EnemyId best_id{}; uint32_t best_actor = 0;
-  for (const auto& [actor, record] : s.driving) {
-    const auto it = s.bindings.find(actor);
-    const auto alias = s.aliases.find(record.enemy.id);
-    if (it == s.bindings.end() || record.kind != EnemyEventKind::Spawned || record.enemy.life <= 0 ||
-        alias == s.aliases.end() || alias->second != it->second.id || !ValidBinding(b, it->second)) continue;
-    const auto m = it->second.matrix;
+  for (const auto& [actor, binding] : s.bindings) {
+    const auto* a = AuthorityFor(binding.id);
+    if (!a || a->dead || a->last.life <= 0 || !ValidBinding(b, binding)) continue;
+    const auto m = binding.matrix;
     ShotVector point = Vector(b, m+48);
-    point.z += it->second.id.family == EnemyFamily::Raptor ? 1.2f : .4f;
+    point.z += binding.id.family == EnemyFamily::Raptor ? 1.2f : .4f;
     const float d = ShotDistance(origin, point);
-    if (d > .1f && d < distance) { distance = d; best = point; best_id = record.enemy.id; best_actor = actor; }
+    if (d > .1f && d < distance) { distance = d; best = point; best_id = a->last.id; best_actor = actor; }
   }
   static double next_log = 0;
   static unsigned lines = 0;
@@ -1695,5 +1887,5 @@ REX_HOOK_RAW(sub_8243A3C0) {
   kk::coop::ShotRay(base, origin, point, object, caller);
 }
 REX_HOOK_RAW(sub_82634428) {
-  if (!kk::coop::GuestShotEvent(ctx, base)) __imp__sub_82634428(ctx, base);
+  if (!kk::coop::ForwardShotEvent(ctx, base)) __imp__sub_82634428(ctx, base);
 }

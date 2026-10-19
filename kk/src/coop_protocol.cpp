@@ -51,6 +51,7 @@ void WriteEnemy(Writer& w, const EnemyState& e) {
   for (float v : {e.x, e.y, e.z, e.facing, e.life}) w.U(std::bit_cast<uint32_t>(v), 4);
   w.U(e.state, 4); w.U(e.action, 2); w.U(e.item, 1);
   for (float v : {e.spawn_x, e.spawn_y, e.spawn_z}) w.U(std::bit_cast<uint32_t>(v), 4);
+  w.U(uint8_t(e.owner), 1); w.U(e.generation, 4);
 }
 EnemyState ReadEnemy(Reader& r) {
   EnemyState e;
@@ -62,6 +63,7 @@ EnemyState ReadEnemy(Reader& r) {
   e.spawn_x = std::bit_cast<float>(uint32_t(r.U(4)));
   e.spawn_y = std::bit_cast<float>(uint32_t(r.U(4)));
   e.spawn_z = std::bit_cast<float>(uint32_t(r.U(4)));
+  e.owner = EnemyOwner(r.U(1)); e.generation = uint32_t(r.U(4));
   return e;
 }
 bool Point(ShotVector p) {
@@ -137,7 +139,17 @@ bool ValidEnemy(const EnemyState& e) {
       std::isfinite(e.x) && std::isfinite(e.y) && std::isfinite(e.z) && std::isfinite(e.facing) &&
       std::isfinite(e.life) && std::abs(e.x) < 1000000 && std::abs(e.y) < 1000000 &&
       std::abs(e.z) < 1000000 && std::abs(e.facing) <= 3.1416f && std::abs(e.life) < 1000000 &&
-      Point({e.spawn_x, e.spawn_y, e.spawn_z});
+      Point({e.spawn_x, e.spawn_y, e.spawn_z}) && e.owner <= EnemyOwner::Guest;
+}
+bool ValidOwnershipChange(const OwnershipChange& c) {
+  if (!ValidEnemyWorld(c.world) || !ValidEnemy(c.enemy) || c.owner > EnemyOwner::Guest ||
+      c.phase < OwnershipPhase::Matched || c.phase > OwnershipPhase::Commit) return false;
+  if (c.phase == OwnershipPhase::Matched)
+    return c.generation == c.enemy.generation && c.owner == c.enemy.owner;
+  if (!c.generation) return false;
+  if (c.phase == OwnershipPhase::Commit)
+    return c.generation == c.enemy.generation && c.owner == c.enemy.owner;
+  return c.enemy.generation != UINT32_MAX && c.generation == c.enemy.generation+1 && c.owner != c.enemy.owner;
 }
 bool ValidShotIntent(const ShotIntent& s) {
   if (!ValidEnemyWorld(s.world) || !s.number || s.weapon < 1 || s.weapon > 4 ||
@@ -172,6 +184,11 @@ bool ValidPlayerStatus(const PlayerStatus& p) {
 bool Encode(const Message& m, std::vector<uint8_t>& out) {
   Writer payload;
   switch (m.type) {
+    case MessageType::OwnershipChange:
+      if (!ValidOwnershipChange(m.ownership)) return false;
+      WriteWorld(payload, m.ownership.world); payload.U(uint8_t(m.ownership.phase), 1);
+      payload.U(m.ownership.generation, 4); payload.U(uint8_t(m.ownership.owner), 1);
+      WriteEnemy(payload, m.ownership.enemy); break;
     case MessageType::DamageEvent:
       if (!ValidDamageEvent(m.damage)) return false;
       WriteWorld(payload, m.damage.world); payload.U(m.damage.incarnation, 8); payload.U(m.damage.number, 4);
@@ -263,7 +280,7 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
       payload.U(m.shot.hits.size(), 1);
       for (const auto& hit : m.shot.hits) {
         payload.U(hit.id.source, 8); payload.U(hit.id.sequence, 4); payload.U(uint16_t(hit.id.family), 2);
-        WriteVector(payload, hit.point);
+        WriteVector(payload, hit.point); payload.U(hit.generation, 4);
       }
       break;
     default: return false;
@@ -286,6 +303,12 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
   m.sequence = uint32_t(r.U(4)); m.epoch = r.U(8);
   if (r.U(4) != bytes.size() - kHeaderBytes) return false;
   switch (m.type) {
+    case MessageType::OwnershipChange:
+      m.ownership.world = ReadWorld(r); m.ownership.phase = OwnershipPhase(r.U(1));
+      m.ownership.generation = uint32_t(r.U(4)); m.ownership.owner = EnemyOwner(r.U(1));
+      m.ownership.enemy = ReadEnemy(r);
+      if (!ValidOwnershipChange(m.ownership)) return false;
+      break;
     case MessageType::DamageEvent:
       m.damage.world = ReadWorld(r); m.damage.incarnation = r.U(8); m.damage.number = uint32_t(r.U(4));
       m.damage.enemy = {r.U(8), uint32_t(r.U(4)), EnemyFamily(r.U(2))};
@@ -361,7 +384,7 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       m.enemies.world = ReadWorld(r); m.enemies.time = std::bit_cast<double>(r.U(8));
       const size_t count = size_t(r.U(2));
       if (!ValidEnemyWorld(m.enemies.world) || !std::isfinite(m.enemies.time) || m.enemies.time < 0 ||
-          m.enemies.time >= 1e12 || count > kMaxEnemyBatch || count * 53 != bytes.size() - r.at) return false;
+          m.enemies.time >= 1e12 || count > kMaxEnemyBatch || count * 58 != bytes.size() - r.at) return false;
       for (size_t i = 0; i < count; ++i) {
         auto e = ReadEnemy(r); if (!ValidEnemy(e)) return false;
         for (const auto& prior : m.enemies.enemies) if (prior.id == e.id) return false;
@@ -379,9 +402,10 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       m.shot.world = ReadWorld(r); m.shot.number = uint32_t(r.U(4)); m.shot.weapon = uint8_t(r.U(1));
       m.shot.time = std::bit_cast<double>(r.U(8)); m.shot.origin = ReadVector(r); m.shot.direction = ReadVector(r);
       const size_t count = size_t(r.U(1));
-      if (!r.ok || count > kMaxShotHits || count * 26 != bytes.size()-r.at) return false;
+      if (!r.ok || count > kMaxShotHits || count * 30 != bytes.size()-r.at) return false;
       for (size_t i = 0; i < count; ++i) {
         ShotHit hit; hit.id = {r.U(8), uint32_t(r.U(4)), EnemyFamily(r.U(2))}; hit.point = ReadVector(r);
+        hit.generation = uint32_t(r.U(4));
         m.shot.hits.push_back(hit);
       }
       if (!ValidShotIntent(m.shot)) return false;

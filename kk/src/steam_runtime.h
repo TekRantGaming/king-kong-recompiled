@@ -53,6 +53,9 @@ class SteamRuntime final : public ISocialService {
   bool SubmitCombat(Message message, double now);
   std::vector<ReceivedCombat> TakeCombat();
   void ClearCombat();
+  bool SubmitOwnership(Message message);
+  std::vector<Message> TakeOwnership();
+  void ClearOwnership();
   SteamSessionView SessionSnapshot() const;
   bool EnemyConnectionReady(double now) const;
   bool BeginFlow(SessionStart start, std::vector<uint8_t> save);
