@@ -7,7 +7,7 @@
 #include "settings.h"
 #include "play_internal.h"
 #include "photo_mode.h"
-#include "dev_puppet.h"
+#include "coop_partner_body.h"
 #include <algorithm>
 #include <rex/logging.h>
 #include <chrono>
@@ -1099,20 +1099,16 @@ REX_HOOK_RAW(sub_8271D498) {
   const uint32_t world = ctx.r3.u32;
 #if defined(KK_DEV_TOOLS)
   kk::DevSampleTick(&ctx, base, world);
-  kk::DevPuppetBeforeAi(ctx, base, world);
 #endif
+  kk::PartnerBodyBeforeAi(ctx, base, world);
   kk::coop::BeforeAi(ctx, base, world);
   __imp__sub_8271D498(ctx, base);
-#if defined(KK_DEV_TOOLS)
-  kk::DevPuppetAfterAi(ctx, base, world);
-#endif
+  kk::PartnerBodyAfterAi(ctx, base, world);
   kk::coop::AfterAi(ctx, base, world);
 }
 REX_HOOK_RAW(sub_8271CCB8) {
   if (kk::coop::Hold(ctx, base)) return;
-#if defined(KK_DEV_TOOLS)
-  if (kk::PuppetHold(ctx, base)) return;
-#endif
+  if (kk::PartnerBodyHold(ctx, base)) return;
   __imp__sub_8271CCB8(ctx, base);
 }
 REX_HOOK_RAW(sub_82715AC8) {

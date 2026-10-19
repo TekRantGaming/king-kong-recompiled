@@ -24,6 +24,7 @@ set(KINGKONG_SOURCES
     src/coop_protocol.cpp
     src/coop_session.cpp
     src/coop_runtime.cpp
+    src/coop_partner_body.cpp
     src/coop_enemies_game.cpp
     src/steam_runtime.cpp
     src/steam_lobby.cpp
@@ -150,7 +151,7 @@ option(KK_DEV_TOOLS "Build developer test aids such as KK_DEV_AUTOSKIP" OFF)
 if(KK_DEV_TOOLS)
     list(APPEND KINGKONG_SOURCES src/dev_lod.cpp src/dev_aa.cpp)
     list(APPEND KINGKONG_SOURCES src/coop_transport_udp.cpp)
-    list(APPEND KINGKONG_SOURCES src/dev_puppet.cpp src/dev_puppet_mesh.cpp)
+    list(APPEND KINGKONG_SOURCES src/dev_puppet_mesh.cpp)
     list(APPEND KINGKONG_SOURCES src/dev_tools.cpp src/dev_watch.cpp src/dev_ae.cpp src/dev_sound_trace.cpp src/dev_load_trace.cpp src/dev_frame_log.cpp src/dev_sample.cpp src/dev_venture.cpp src/dev_chapter_jump.cpp src/dev_pause.cpp src/dev_fish.cpp src/dev_clock_trace.cpp src/dev_camera_start.cpp src/dev_game_watch.cpp src/dev_teleport.cpp src/dev_trig_trace.cpp)
 endif()
 

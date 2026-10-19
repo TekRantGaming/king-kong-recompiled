@@ -1,6 +1,6 @@
 #pragma once
 
-// Pure policy shared by the dev driver and SDK/game-free unit tests.
+// Pure policy shared by the shipping/dev driver and SDK/game-free unit tests.
 #include "coop_session.h"
 #include <array>
 #include <cstddef>

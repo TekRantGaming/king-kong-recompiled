@@ -76,6 +76,11 @@ KK_TRIG(82453358, "Paf")
 KK_TRIG(824763E0, "Spawner")
 KK_TRIG(8244F020, "IsNearEnough")
 KK_TRIG(82466878, "On_Screen")
-KK_TRIG(82449F18, "CapaBit")
+// Shared body service owns CapaBit in both builds; retain this dev trace there.
+namespace kk {
+void DevTrigCapaResult(uint8_t* base, uint32_t record, uint32_t caller, uint32_t result) {
+  if (On()) DevTrigNote("CapaBit", base, record, caller, result);
+}
+}
 
 #endif

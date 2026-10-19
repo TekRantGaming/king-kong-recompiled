@@ -28,9 +28,7 @@
 #include "play_internal.h"
 #include "ui_paint.h"
 #include "coop_enemies_game.h"
-#if defined(KK_DEV_TOOLS)
-#include "dev_puppet.h"
-#endif
+#include "coop_partner_body.h"
 
 #if defined(KK_DEV_TOOLS)
 REXCVAR_DEFINE_STRING(kk_coop_dev, "", "KK/Debug", "Local co-op test link: host:<port> or join:<port>")
@@ -76,8 +74,8 @@ struct View {
 std::mutex enemy_status_mutex;
 enemies::Counters enemy_status;
 ShotCounters shot_status;
-#if defined(KK_DEV_TOOLS)
 std::atomic<bool> partner_body_driven{false};
+#if defined(KK_DEV_TOOLS)
 void LogPoses(const View& v, double now, double& next) {
   if (v.state != SessionState::Connected) { next = now + 10; return; }
   if (now < next) return;
@@ -331,9 +329,7 @@ bool SocialFakeScenario(std::string_view scenario) {
 #endif
 void GameFrame(uint8_t* base) {
   RefreshSessionCheats();
-#if defined(KK_DEV_TOOLS)
-  kk::DevPuppetGameFrame(base);
-#endif
+  kk::PartnerBodyGameFrame(base);
   if (!REXCVAR_GET(kk_coop_enabled)) return;
   EnemyGameFrame();
 #if defined(KK_DEV_TOOLS)
@@ -403,13 +399,13 @@ std::vector<ReceivedShot> TakeShotIntents() {
   return steam ? steam->TakeShots() : std::vector<ReceivedShot>{};
 }
 void SetShotCounters(ShotCounters counts) { std::lock_guard lock(enemy_status_mutex); shot_status = counts; }
-#if defined(KK_DEV_TOOLS)
 PuppetSnapshot PartnerBodySnapshot() {
   if (!REXCVAR_GET(kk_coop_enabled)) return {};
   const auto v = CurrentView();
   return {true, Now() - v.updated <= .5, v.state, v.local, v.partner};
 }
 void SetPartnerBodyDriven(bool driven) { partner_body_driven.store(driven); }
+#if defined(KK_DEV_TOOLS)
 bool SteamSelfTestRequested() { return REXCVAR_GET(kk_steam_selftest); }
 int RunSteamSelfTest() {
   if (!steam || DevRunning()) { REXLOG_INFO("Steam self-test: unavailable while dev link selected"); return 1; }

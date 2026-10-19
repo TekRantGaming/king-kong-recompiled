@@ -31,8 +31,6 @@ void PublishInventoryState(const InventoryState& inventory);
 void RefreshSessionCheats();
 std::vector<ReceivedShot> TakeShotIntents();
 void SetShotCounters(ShotCounters counters);
-#if defined(KK_DEV_TOOLS)
-bool SocialFakeScenario(std::string_view scenario);
 // Value-only snapshot, including CoopSession's interpolated pose. No transport work.
 struct PuppetSnapshot {
   bool enabled = false, fresh = false;
@@ -41,6 +39,8 @@ struct PuppetSnapshot {
 };
 PuppetSnapshot PartnerBodySnapshot();
 void SetPartnerBodyDriven(bool driven);
+#if defined(KK_DEV_TOOLS)
+bool SocialFakeScenario(std::string_view scenario);
 bool SteamSelfTestRequested();
 int RunSteamSelfTest();
 #endif
