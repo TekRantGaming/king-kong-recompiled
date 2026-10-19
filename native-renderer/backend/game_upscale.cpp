@@ -526,6 +526,18 @@ void GameRenderer::UpscaleRecordMotion(const DrawCall& call, const dev::DeviceVi
   u.motion_draws.push_back(std::move(m));
 }
 
+namespace {
+// Last frame's constants of a motion draw, looked up once per frame (both lookups come after the
+// frame's last draw was recorded, so the draw counts they use are final).
+const VsConstants* PreviousConstants(const GameUpscale& u, const GameUpscale::MotionDraw& m) {
+  if (!m.previous_known) {
+    m.previous = u.history.FindPrevious(m.key, m.ordinal, m.constants, u.history.CountThisFrame(m.key));
+    m.previous_known = true;
+  }
+  return m.previous;
+}
+}  // namespace
+
 void GameRenderer::UpscaleBeginClear(nvrhi::ICommandList* cl, const ClearCall& call, uint64_t color_key,
                                      uint64_t depth_key, bool covers_target) {
   GameUpscale& u = *upscale_;
@@ -746,7 +758,7 @@ void GameRenderer::UpscaleMotionPass(nvrhi::ICommandList* cl, HostTarget* depth_
   const nvrhi::TextureDesc& md = u.motion->getDesc();
   for (const GameUpscale::MotionDraw& m : u.motion_draws) {
     if (m.camera_only && (u.config.debug & 1024)) continue;  // debugging: their camera motion only
-    const VsConstants* prev = u.history.FindPrevious(m.key, m.ordinal, m.constants, u.history.CountThisFrame(m.key));
+    const VsConstants* prev = PreviousConstants(u, m);
     if (!prev) continue;
     nvrhi::IShader* mvs = (m.pipeline.flags&kRecordTessellation) ? m.vs->handle.Get() : shaders_->MotionVariant(*m.vs);
     if (!mvs) {
@@ -890,7 +902,7 @@ void GameRenderer::RunUpscale(nvrhi::ICommandList* cl, UpscaleFrameTracker::Trig
   uint32_t matched = 0, changed = 0, objects = 0, objects_matched = 0;
   for (const GameUpscale::MotionDraw& m : u.motion_draws) {
     if (!m.camera_only) ++objects;
-    const VsConstants* prev = u.history.FindPrevious(m.key, m.ordinal, m.constants, u.history.CountThisFrame(m.key));
+    const VsConstants* prev = PreviousConstants(u, m);
     if (!prev) continue;
     ++matched;
     if (!m.camera_only) ++objects_matched;

@@ -75,10 +75,17 @@ class MotionHistory {
   struct Slot {
     MotionDrawKey key;
     std::vector<VsConstants> constants;  // in draw order
+    // The closest-constants search's last answer + 1: draws keep their order when some are culled,
+    // so the next draw's match is usually there (only where the search starts; task 319).
+    mutable size_t next_guess = 0;
+    // How many leading floats all its draws share (bit for bit; SIZE_MAX: not measured yet).
+    mutable size_t common_prefix = SIZE_MAX;
   };
   using Map = std::unordered_map<uint64_t, std::vector<Slot>>;  // hash -> keys with that hash
   static const Slot* Find(const Map& m, const MotionDrawKey& key);
   static Slot& FindOrAdd(Map& m, const MotionDrawKey& key);
+  // Empties every slot, keeping its storage; with drop_unused, removes slots already empty.
+  static void Recycle(Map& m, bool drop_unused);
   Map current_, previous_;
   size_t current_count_ = 0, previous_count_ = 0;
   uint64_t frame_ = UINT64_MAX;

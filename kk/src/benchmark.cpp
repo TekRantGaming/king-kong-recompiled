@@ -52,6 +52,9 @@
 REXCVAR_DEFINE_BOOL(kk_benchmark, false, "KK", "Run the built-in benchmark once (not saved)");
 REXCVAR_DEFINE_BOOL(kk_benchmark_record, false, "KK", "Record a controller benchmark route (not saved)");
 REXCVAR_DEFINE_STRING(kk_benchmark_route, "", "KK", "Override benchmark-route.kkbr beside the game (not saved)");
+REXCVAR_DEFINE_STRING(kk_benchmark_record_route, "", "KK",
+                      "With kk_benchmark_record: the chapters to record, entry:seconds[,entry:seconds] (e.g. 9:180, Ann for "
+                      "180 game seconds; at most 4); empty: the default route (not saved)");
 REXCVAR_DEFINE_INT32(kk_benchmark_passes, 1, "KK",
     "How many times the benchmark plays the whole route; results are the median of the passes (1-5, not saved)");
 REXCVAR_DEFINE_STRING(kk_benchmark_from, "", "KK",
@@ -596,6 +599,7 @@ std::filesystem::path Prepare(const std::filesystem::path& root) {
   const auto stamp = std::chrono::duration_cast<std::chrono::microseconds>(
       std::chrono::system_clock::now().time_since_epoch()).count();
   recording_route = REXCVAR_GET(kk_benchmark_record);
+  const std::string route_spec = REXCVAR_GET(kk_benchmark_record_route);  // read before the reset below
   passes = std::clamp(REXCVAR_GET(kk_benchmark_passes), 1, kMaxPasses);
   from_settings = std::string(REXCVAR_GET(kk_benchmark_from)) == "settings";
   settle_seconds = std::clamp(REXCVAR_GET(kk_benchmark_settle), 0.0, 20.0);
@@ -626,7 +630,7 @@ std::filesystem::path Prepare(const std::filesystem::path& root) {
     throw std::runtime_error("Could not create private benchmark user data");
   phase = Phase::kLoading;
   for (const char* name : {"kk_benchmark", "kk_benchmark_record", "kk_benchmark_route", "kk_benchmark_passes",
-                           "kk_benchmark_settle", "kk_benchmark_from"})
+                           "kk_benchmark_settle", "kk_benchmark_from", "kk_benchmark_record_route"})
     rex::cvar::ResetToDefault(name);
   if (recording_route) {
     double duration = 45;
@@ -634,7 +638,15 @@ std::filesystem::path Prepare(const std::filesystem::path& root) {
     if (const char* s = std::getenv("KK_DEV_BENCH_SECONDS"); s && *s)
       duration = std::clamp(std::atof(s), 1.0, 120.0);
 #endif
-    recording.chapters = DefaultRoute(duration);
+    try {
+      recording.chapters = ParseRouteSpec(route_spec, duration);
+    } catch (const std::exception& e) {
+      REXLOG_WARN("KK benchmark recording: kk_benchmark_record_route '{}' not used ({}); the default route", route_spec,
+                  e.what());
+      recording.chapters = DefaultRoute(duration);
+    }
+    for (const auto& c : recording.chapters)
+      REXLOG_INFO("KK benchmark recording: route chapter entry {} ({}), {} game seconds", c.entry, c.name, c.duration);
     recording.build = KK_VERSION " / " KK_BENCH_BUILD " / " __DATE__ " " __TIME__;
     recording.samples.reserve(262144);
   }

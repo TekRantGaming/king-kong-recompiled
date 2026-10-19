@@ -69,6 +69,10 @@ struct GameUpscale {
     // Its vertex buffer is one the game rewrites and moves (streamed geometry, the V-Rex dinosaur):
     // matched by shader and size alone (native_upscaler_debug 1024: camera motion only, not replayed).
     bool camera_only = false;
+    // Last frame's constants (MotionHistory::FindPrevious), looked up once (task 319): the camera
+    // vote and the motion pass both need them.
+    mutable bool previous_known = false;
+    mutable const VsConstants* previous = nullptr;
     nvrhi::IndexBufferBinding index;
     nvrhi::DrawArguments args;
     nvrhi::Viewport viewport;

@@ -3,8 +3,10 @@
 // the upscaler runs.
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <random>
 #include <set>
+#include <vector>
 
 #include "backend/tests/check.h"
 #include "backend/upscale_config.h"
@@ -295,6 +297,82 @@ TEST(Motion_HistoryMatchesDrawsAcrossFrames) {
   h.BeginFrame(15);
   CHECK_EQ(h.previous_draws(), size_t(0));
   CHECK(h.FindPrevious(a, 0, constants(1), 1) == nullptr);
+}
+
+// Task 319: the closest-constants search measures the same-ordinal draw first; the answer must be
+// what measuring every draw in order gives (the first of equal sums), ties and exact matches included.
+TEST(Motion_ClosestSearchMatchesInOrderSearch) {
+  auto reference = [](const std::vector<VsConstants>& last, const VsConstants& cur) {
+    size_t best = 0;
+    double best_d = INFINITY;
+    for (size_t i = 0; i < last.size(); ++i) {
+      double d = 0;
+      for (size_t k = 0; k < cur.size() && d < best_d; ++k) d += std::fabs(double(last[i][k]) - double(cur[k]));
+      if (d < best_d) best_d = d, best = i;
+    }
+    return best;
+  };
+  std::mt19937 rng(319);
+  MotionDrawKey key;
+  key.vs_hash = 0x319;
+  int mismatches = 0;
+  for (int round = 0; round < 2000; ++round) {
+    MotionHistory h;
+    h.BeginFrame(1);
+    const size_t n = 2 + rng() % 40;
+    const int levels = 1 + int(rng() % 4);  // few distinct values: many equal sums
+    std::vector<VsConstants> last(n);
+    for (auto& c : last) {
+      c.fill(0);
+      for (int k = 0; k < 24; ++k) c[size_t(rng() % 1024)] = float(int(rng() % levels));
+      if (round % 2) for (int k = 0; k < 16; ++k) c[size_t(k)] = 0.25f * float(k);  // shared camera registers
+      h.Record(key, c);
+    }
+    h.BeginFrame(2);
+    VsConstants cur{};
+    if (round % 5 == 0) cur = last[rng() % n];  // an exact match exists
+    else
+      for (int k = 0; k < 24; ++k) cur[size_t(rng() % 1024)] = float(int(rng() % levels));
+    if (round % 4 == 1) for (int k = 0; k < 16; ++k) cur[size_t(k)] = 0.25f * float(k) + 0.125f * float(rng() % 3);
+    const uint32_t ordinal = uint32_t(rng() % (n + 3));
+    const VsConstants* got = h.FindPrevious(key, ordinal, cur, uint32_t(n + 1));  // counts differ
+    const size_t want = reference(last, cur);
+    if (!got || std::memcmp(got->data(), last[want].data(), sizeof(VsConstants)) != 0) ++mismatches;
+  }
+  CHECK_EQ(mismatches, 0);
+}
+
+// Task 319: a frame's records reuse the storage of the frame before last (no allocation per draw in a
+// steady scene); keys that stop drawing are dropped; a gap still forgets everything.
+TEST(Motion_HistoryReusesStorage) {
+  MotionHistory h;
+  MotionDrawKey a, b;
+  a.vs_hash = 1;
+  b.vs_hash = 2;
+  VsConstants c{};
+  std::set<const VsConstants*> seen;
+  for (uint64_t f = 1; f <= 6; ++f) {
+    h.BeginFrame(f);
+    for (int i = 0; i < 50; ++i) {
+      c[0] = float(f * 100 + i);
+      h.Record(a, c);
+    }
+    if (f == 1) h.Record(b, c);
+    if (f >= 3) {
+      // Last frame's records, still readable, from at most two buffers in all.
+      const VsConstants* p = h.FindPrevious(a, 0, c, 50);
+      CHECK(p && (*p)[0] == float((f - 1) * 100));
+      seen.insert(p);
+    }
+  }
+  CHECK(seen.size() <= 2u);
+  // b drew only in frame 1: gone from the previous frame's draws.
+  CHECK(h.FindPrevious(b, 0, c, 1) == nullptr);
+  CHECK_EQ(h.previous_draws(), size_t(50));
+  h.BeginFrame(9);
+  CHECK_EQ(h.previous_draws(), size_t(0));
+  CHECK(h.FindPrevious(a, 0, c, 50) == nullptr);
+  CHECK_EQ(h.CountThisFrame(a), 0u);
 }
 
 // ---------------------------------------------------------------- camera motion
