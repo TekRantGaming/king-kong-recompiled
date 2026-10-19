@@ -359,6 +359,9 @@ struct WorstFrame {
   // The settings at the time.
   int frame_cap = -1, vsync = -1, hfr = -1;
   std::string upscaler;  // a fixed word from the renderer ("dlss", "fsr3", ...); cut to 16
+  // Task 270: video memory as the frame ended (MiB; -1 not known) and the likely cause (HitchName).
+  int64_t vram_mib = -1, budget_mib = -1;
+  std::string cause;
 
   static std::string Word(std::string_view s) {  // letters, digits and '-' only, at most 16
     std::string out;
@@ -401,6 +404,8 @@ struct WorstFrame {
     if (vsync >= 0) s += b("vsync", vsync != 0);
     if (hfr >= 0) s += b("hfr", hfr != 0);
     if (const std::string w = Word(upscaler); !w.empty()) s += ",\"upscaler\":\"" + w + "\"";
+    if (vram_mib >= 0 && budget_mib > 0) s += u("vramMiB", uint64_t(vram_mib)) + u("budgetMiB", uint64_t(budget_mib));
+    if (const std::string w = Word(cause); !w.empty()) s += ",\"cause\":\"" + w + "\"";
     return s + "}";
   }
 };
@@ -444,6 +449,109 @@ inline void AddWorstFrame(std::vector<WorstFrame>& list, const WorstFrame& f) {
   if (list.size() > kMaxWorstFrames) list.resize(kMaxWorstFrames);
 }
 
+// ------------------------------------------------------------------------------------- hitch causes ---
+
+// Task 270 (perf target 5): frames over 50 ms and under kWorstFrameMs get no detail, only a count per likely
+// cause, so a chapter with many 50-250 ms hitches says what kind they are. Fixed words only.
+enum class Hitch { kPipeline, kCompile, kTexture, kRead, kGpu, kGame, kPresent, kFocus, kUnknown, kCount };
+inline constexpr size_t kHitchCauses = size_t(Hitch::kCount);
+inline constexpr const char* kHitchNames[kHitchCauses] = {"pipeline", "compile", "texture", "read",   "gpu",
+                                                          "game",     "present", "focus",   "unknown"};
+inline const char* HitchName(Hitch h) { return h < Hitch::kCount ? kHitchNames[size_t(h)] : "unknown"; }
+inline constexpr double kHitchMs = 50.0;  // as ChapterStats::over50: more than this
+
+// Whether a frame is counted by cause: in a chapter, over 50 ms and under kWorstFrameMs.
+inline bool HitchWanted(int entry, double ms) {
+  return entry >= 0 && std::isfinite(ms) && ms > kHitchMs && ms < kWorstFrameMs;
+}
+
+// The likely cause of a slow frame, from what WorstFrame measured (the renderer's figures cover the frame and
+// the 2 after it). In order: the window lost focus or the PC slept; the largest directly measured wait
+// (pipeline waits on the draw thread, texture upload + preparation, the longest single file read, the render
+// thread waiting for the GPU, present/submit) when it is at least a quarter of the frame (8 ms minimum); the
+// game thread's own work when it is at least half the frame; background pipeline creation; the game's swap
+// call waiting for the renderer; otherwise unknown.
+inline Hitch ClassifyHitch(const WorstFrame& f) {
+  if (f.sleep_ms > 0 || f.focus_changed || f.focus > 0) return Hitch::kFocus;
+  const double enough = std::max(8.0, 0.25 * f.ms);
+  const std::pair<Hitch, double> direct[] = {
+      {Hitch::kPipeline, f.native ? f.pipe_wait_ms : 0.0},
+      {Hitch::kTexture, f.native ? f.tex_ms + f.prepare_ms : 0.0},
+      {Hitch::kRead, f.read_max_ms},
+      {Hitch::kGpu, f.native ? f.gpu_wait_ms : 0.0},
+      {Hitch::kPresent, f.native ? f.submit_ms : 0.0},
+  };
+  const auto* best = &direct[0];
+  for (const auto& d : direct)
+    if (d.second > best->second) best = &d;
+  if (std::isfinite(best->second) && best->second >= enough) return best->first;
+  if (f.swap_ms >= 0 && f.cap_wait_ms >= 0 && f.ms - f.swap_ms - f.cap_wait_ms >= 0.5 * f.ms) return Hitch::kGame;
+  if (f.native && f.pipes_made > 0 && f.compile_ms >= enough) return Hitch::kCompile;
+  if (f.swap_ms >= enough) return Hitch::kPresent;
+  return Hitch::kUnknown;
+}
+
+// ------------------------------------------------------------------------------------- crash reports ---
+
+// Task 270: the graphics API of the session a crash or hang report came from (not the session that uploads
+// it): the report's "Graphics API: <api>" line (crash_dump.cpp), else the "native_backend = <api>" setting
+// in its diagnostics; empty when neither says vulkan or d3d12.
+inline std::string ReportApi(std::string_view text) {
+  for (const std::string_view key : {std::string_view("Graphics API: "), std::string_view("native_backend = ")}) {
+    for (size_t at = text.find(key); at != std::string_view::npos; at = text.find(key, at + 1)) {
+      if (at != 0 && text[at - 1] != '\n' && text[at - 1] != ' ') continue;
+      const std::string_view value = text.substr(at + key.size(), 6);
+      if (value.substr(0, 6) == "vulkan") return "vulkan";
+      if (value.substr(0, 5) == "d3d12") return "d3d12";
+    }
+  }
+  return {};
+}
+
+// ----------------------------------------------------------------------------------- thread CPU time ---
+
+// Task 270: Windows counts a thread's CPU time (GetThreadTimes) in clock ticks of 15.6 ms, too coarse for
+// one frame. The thread's cycle count (QueryThreadCycleTime) converted with the processor's cycle rate
+// (measured against QueryPerformanceCounter) has full resolution. This checks the two against each other
+// over each second or more of thread time and drops the cycle count for good when they disagree (a VM,
+// Wine, a processor whose cycle counter does not run at a fixed rate).
+class PreciseCpuClock {
+ public:
+  static constexpr double kMinCalibrationMs = 1000;  // QPC time between the two rate readings
+  static constexpr double kCheckMs = 1000;           // coarse thread time per comparison
+  // Cycles per ms from two (cycle counter, QPC ms) readings: 0 while they are too close, -1 when nonsense.
+  static double Rate(uint64_t tsc0, double ms0, uint64_t tsc1, double ms1) {
+    const double ms = ms1 - ms0;
+    if (!(ms >= kMinCalibrationMs)) return ms >= 0 ? 0 : -1;
+    if (tsc1 <= tsc0) return -1;
+    const double rate = double(tsc1 - tsc0) / ms;  // 100 MHz to 10 GHz
+    return rate >= 1e5 && rate <= 1e7 ? rate : -1;
+  }
+  bool Trusted() const { return !failed_; }
+  void Fail() { failed_ = true; }
+  // Once a second: the cycle-based time and GetThreadTimes' now (ms). False from the first disagreement on.
+  bool Check(double precise_ms, double coarse_ms) {
+    if (failed_) return false;
+    if (!std::isfinite(precise_ms) || !std::isfinite(coarse_ms) || precise_ms < 0 || coarse_ms < 0) return true;
+    if (precise_base_ < 0) {
+      precise_base_ = precise_ms;
+      coarse_base_ = coarse_ms;
+      return true;
+    }
+    const double dp = precise_ms - precise_base_, dc = coarse_ms - coarse_base_;
+    if (dc < kCheckMs) return true;
+    const double ratio = dp / dc;  // the coarse figure is within 2 ticks (31 ms) of the truth
+    if (!(ratio >= 0.8 && ratio <= 1.25)) failed_ = true;
+    precise_base_ = precise_ms;
+    coarse_base_ = coarse_ms;
+    return !failed_;
+  }
+
+ private:
+  double precise_base_ = -1, coarse_base_ = -1;
+  bool failed_ = false;
+};
+
 // ------------------------------------------------------------------------------------------- frame stats ---
 
 // One chapter's frames in a session. Updated on the game thread per frame (a few additions; a 0.5 ms
@@ -464,6 +572,26 @@ struct ChapterStats {
   uint64_t game_cpu_frames = 0;  // ...this many frames
   double pipeline_wait_ms = 0;
   std::vector<WorstFrame> worst;  // task 211: the slowest frames' detail (AddWorstFrame)
+  // Task 270: 50-250 ms frames by likely cause (ClassifyHitch), and video memory (MiB, -1 not known): the
+  // chapter's highest use with the budget then, and both at its worst frame.
+  std::array<uint32_t, kHitchCauses> hitches{};
+  int64_t vram_peak_mib = -1, vram_peak_budget_mib = -1, vram_worst_mib = -1, vram_worst_budget_mib = -1;
+
+  void AddHitch(Hitch h) {
+    if (h < Hitch::kCount) ++hitches[size_t(h)];
+  }
+  // A frame's video memory (-1: not known); `is_worst`: the frame just became the chapter's worst.
+  void AddVram(int64_t used, int64_t budget, bool is_worst) {
+    const bool known = used >= 0 && budget > 0;
+    if (known && used > vram_peak_mib) {
+      vram_peak_mib = used;
+      vram_peak_budget_mib = budget;
+    }
+    if (is_worst) {
+      vram_worst_mib = known ? used : -1;
+      vram_worst_budget_mib = known ? budget : -1;
+    }
+  }
 
   void AddFrame(double ms) {
     if (!(ms > 0) || !std::isfinite(ms)) return;
@@ -499,6 +627,15 @@ struct ChapterStats {
     return ms > 0 ? 1000.0 * double(got) / ms : 0;
   }
   void Merge(const ChapterStats& o) {
+    if (o.frames && o.worst_ms > worst_ms) {
+      vram_worst_mib = o.vram_worst_mib;
+      vram_worst_budget_mib = o.vram_worst_budget_mib;
+    }
+    if (o.vram_peak_mib > vram_peak_mib) {
+      vram_peak_mib = o.vram_peak_mib;
+      vram_peak_budget_mib = o.vram_peak_budget_mib;
+    }
+    for (size_t i = 0; i < kHitchCauses; ++i) hitches[i] += o.hitches[i];
     frames += o.frames;
     total_ms += o.total_ms;
     worst_ms = std::max(worst_ms, o.worst_ms);
@@ -521,6 +658,17 @@ struct ChapterStats {
     if (gpu_samples) s += ",\"gpuMs\":" + JsonNumber(gpu_ms_sum / gpu_samples, 2);
     if (game_cpu_frames) s += ",\"cpuGameMs\":" + JsonNumber(game_cpu_ms / double(game_cpu_frames), 2);
     s += ",\"pipelineWaitMs\":" + JsonNumber(pipeline_wait_ms, 1);
+    std::string hitch;
+    for (size_t i = 0; i < kHitchCauses; ++i)
+      if (hitches[i])
+        hitch += std::string(hitch.empty() ? "" : ",") + "\"" + kHitchNames[i] + "\":" + std::to_string(hitches[i]);
+    if (!hitch.empty()) s += ",\"hitch\":{" + hitch + "}";
+    if (vram_peak_mib >= 0)
+      s += ",\"vramPeakMiB\":" + std::to_string(vram_peak_mib) +
+           ",\"vramPeakBudgetMiB\":" + std::to_string(vram_peak_budget_mib);
+    if (vram_worst_mib >= 0)
+      s += ",\"vramWorstMiB\":" + std::to_string(vram_worst_mib) +
+           ",\"vramWorstBudgetMiB\":" + std::to_string(vram_worst_budget_mib);
     if (details && !worst.empty()) {
       s += ",\"worst\":[";
       for (size_t i = 0; i < worst.size(); ++i) s += (i ? "," : "") + worst[i].Json();
@@ -547,6 +695,10 @@ struct PerfSummary {
   std::vector<std::pair<std::string, std::string>> settings;
   std::vector<ChapterStats> chapters;
   bool pipeline_library = false, startup_fallback = false;
+  // Task 270: the session's highest video memory use and the budget then (MiB, -1 not known), and whether
+  // texture pack replacements were actually loaded (-1 not known; settings.texturePack is the switch).
+  int64_t vram_peak_mib = -1, vram_peak_budget_mib = -1;
+  int texture_pack_used = -1;
 };
 
 // The summary's JSON, within kMaxPerfBytes: strings cut to 128 bytes, at most 64 chapters (the longest
@@ -581,8 +733,13 @@ inline std::string PerfJson(const PerfSummary& in) {
     head += (n++ ? "," : "") + JsonString(key, 32) + ":" + (value.size() > 130 ? std::string("null") : value);
   }
   head += "}";
-  const std::string tail = std::string(",\"pipelineLibrary\":") + (in.pipeline_library ? "true" : "false") +
-                           ",\"startupFallback\":" + (in.startup_fallback ? "true" : "false") + "}";
+  std::string tail = std::string(",\"pipelineLibrary\":") + (in.pipeline_library ? "true" : "false") +
+                     ",\"startupFallback\":" + (in.startup_fallback ? "true" : "false");
+  if (in.vram_peak_mib >= 0 && in.vram_peak_budget_mib > 0)
+    tail += ",\"vramPeakMiB\":" + std::to_string(in.vram_peak_mib) +
+            ",\"vramPeakBudgetMiB\":" + std::to_string(in.vram_peak_budget_mib);
+  if (in.texture_pack_used >= 0) tail += std::string(",\"texturePackUsed\":") + (in.texture_pack_used ? "true" : "false");
+  tail += "}";
   // Too long: the worst-frame detail goes first (from the shortest chapter up), then the shortest chapters.
   size_t detailed = chapters.size();
   for (;;) {

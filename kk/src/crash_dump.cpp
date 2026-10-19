@@ -45,6 +45,12 @@ LPTOP_LEVEL_EXCEPTION_FILTER g_previous = nullptr;
 // The filter that was there before ours was first installed (KeepFilterInFront may change g_previous).
 LPTOP_LEVEL_EXCEPTION_FILTER g_original_previous = nullptr;
 volatile LONG g_crashing = 0;
+std::atomic<int> g_api{0};  // task 270: SetCrashReportApi
+
+const char* ApiName() {
+  const int api = g_api.load(std::memory_order_relaxed);
+  return api == 1 ? "vulkan" : api == 2 ? "d3d12" : nullptr;
+}
 
 // logs\<kind>-<time> (no extension).
 void ReportBase(const wchar_t* kind, wchar_t (&base)[MAX_PATH + 64]) {
@@ -121,6 +127,7 @@ void WriteCrashFiles(EXCEPTION_POINTERS* info, DWORD thread, const char* reason)
     std::fprintf(f, "King Kong crashed.\nException 0x%08X at %p\nThread %lu\n",
                  rec->ExceptionCode, rec->ExceptionAddress, thread);
     if (reason) std::fprintf(f, "Reason: %s\n", reason);
+    if (const char* api = ApiName()) std::fprintf(f, "Graphics API: %s\n", api);
     // Module + offset (with king_kong.map, the game function), and the caller chain from the unwind
     // tables: the server groups identical crashes by the code and the first three of these.
     WriteCrashStack(f, info);
@@ -288,6 +295,7 @@ void WriteHangReport(ULONGLONG stalled_ms) {
                      L"Please attach this file, the .dmp file next to it and logs\\king_kong.log to a bug report.\n\n"
                      L"Threads:\n",
                   stalled_ms / 1000);
+    if (const char* api = ApiName()) std::fwprintf(f, L"Graphics API: %hs\n", api);
     WriteThreadList(f);
     std::fputs("\n", f);
     WriteLogTail(f);
@@ -360,6 +368,8 @@ void WatchForHangs() {
 
 }  // namespace
 
+void SetCrashReportApi(int api) { g_api.store(api, std::memory_order_relaxed); }
+
 void NoteGuestFrame() {
   g_last_frame.store(GetTickCount64(), std::memory_order_relaxed);
   exit_evidence::NoteFrame();
@@ -413,6 +423,7 @@ void InstallCrashDumps(const std::filesystem::path& logs_dir, const std::filesys
 
 namespace kk {
 void NoteGuestFrame() {}
+void SetCrashReportApi(int) {}
 void WriteCrashReportNow(const char*) {}
 void InstallCrashDumps(const std::filesystem::path&, const std::filesystem::path&) {}
 }  // namespace kk
