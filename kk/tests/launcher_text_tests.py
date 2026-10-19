@@ -594,8 +594,8 @@ for _needle, _why in (
         ('"kk_brightness", -50, 50, 1,', 'the brightness slider'), ('"kk_gamma", 0.5f, 1.5f, 0.05f,', 'the gamma slider')):
     if _needle not in _l206:
         fail(f'206: {_why}')
-# Task 222 (owner, 18 Oct, option A): the pause menu is a slim list (Resume, Photo mode, Display, Graphics, Audio,
-# Controls, Gameplay, then Load last checkpoint and Quit to main menu), each settings entry opening its own page; the old
+# Task 222 (owner, 18 Oct, option A): the pause menu is a slim list (task 248: Resume, Photo mode, Controls, Gameplay,
+# Settings, then Load last checkpoint and Quit to main menu), each settings entry opening its own page; the old
 # layout (tabs across the top, a Settings entry, the logo) is gone; in game nothing says "launcher".
 _pm = (src / 'pause_menu.cpp').read_text(encoding='utf-8')
 _pl = (src / 'pause_menu_logic.h').read_text(encoding='utf-8')
@@ -607,8 +607,8 @@ _whats = dict(re.findall(r'case Entry::(\w+): return "([^"]+)";', _m.group(1))) 
 for _dev in ('kGameOptions',):  # developer builds only
     _labels.pop(_dev, None)
     _whats.pop(_dev, None)
-if set(_whats) != {'kResume', 'kPhotoMode', 'kDisplay', 'kGraphics', 'kAudio', 'kControls', 'kGameplay', 'kCheats',
-                   'kLoadCheckpoint', 'kScore', 'kSave', 'kQuitToMainMenu', 'kQuitGame'}:
+if set(_whats) != {'kResume', 'kPhotoMode', 'kControls', 'kGameplay', 'kSettings', 'kDisplay', 'kGraphics', 'kAudio',
+                   'kCheats', 'kLoadCheckpoint', 'kScore', 'kSave', 'kQuitToMainMenu', 'kQuitGame'}:
     fail(f'222: the strip sentences cover {sorted(_whats)}')
 strings |= set(_labels.values()) | set(_whats.values())
 strings |= {'Change from the main menu', 'Photo mode', 'Go back to the last checkpoint? Your progress since then is lost.',
@@ -632,14 +632,34 @@ for _bad in ('19900', '19904', '0x4DBC', '0x4DC0'):
         fail('237: Load last checkpoint touches a death counter')
 if _labels.get('kQuitToMainMenu') != 'Quit to main menu':
     fail('222: no "Quit to main menu" entry')
-for _needle, _why in (('ui::DrawTabs(', 'the old tab bar is still drawn'), ('"Settings"', 'the old Settings entry is back'),
+# Task 248 (owner 19 Oct): the main list is Resume, Photo mode, Controls, Gameplay, Settings, then the game's items;
+# Settings opens a second list (Display, Graphics, Audio, Cheats while on, Options in developer builds).
+if _labels.get('kSettings') != 'Settings' or _whats.get('kSettings') != 'Display, graphics and audio settings.':
+    fail('248: no Settings entry with its strip sentence')
+_m = re.search(r'inline std::vector<Listed> Entries\(const Available& a\) \{(.*?)\n\}', _pl, re.S)
+if not _m or 'Entry::kDisplay' in _m.group(1) or 'Entry::kCheats' in _m.group(1) or \
+        '{Entry::kControls, Entry::kGameplay, Entry::kSettings}' not in _m.group(1):
+    fail('248: the main list is not Resume, Photo mode, Controls, Gameplay, Settings')
+_m = re.search(r'inline std::vector<Listed> SettingsEntries\(const Available& a\) \{(.*?)\n\}', _pl, re.S)
+if not _m or '{Entry::kDisplay, Entry::kGraphics, Entry::kAudio}' not in _m.group(1) or \
+        'a.cheats' not in _m.group(1) or 'a.game_options' not in _m.group(1):
+    fail('248: the Settings list is not Display, Graphics, Audio (+ Cheats, Options)')
+for _needle, _why in (('DrawEntryList(dl, view_ == View::kSettings)', 'no Settings list view'),
+                      ('pause::SettingsEntries(', 'the Settings list is not drawn from SettingsEntries'),
+                      ('pause::ListWithPage(a, int(page_))', 'LB / RB do not stay in the page\'s own list'),
+                      ('OpenMainList(Entry::kSettings)', 'Back from Settings does not return to the main list on Settings'),
+                      ('pause::Label(Entry::kSettings), InGameSettings::PageName(page)', 'no "PAUSED / SETTINGS / page" breadcrumb'),
+                      ('t == "list:settings"', 'no list:settings developer step')):
+    if _needle not in _pm:
+        fail(f'248: {_why}')
+for _needle, _why in (('ui::DrawTabs(', 'the old tab bar is still drawn'),
                       ('LoadLogo', 'the old logo is still drawn'), ('"Return to main menu"', 'the old "Return to main menu" entry')):
     if _needle in _pm:
         fail(f'222: {_why}')
 for _needle, _why in (('pause::PageOrder(kinds)', 'pages are not ordered live rows first, then the quiet group'),
                       ('caption.label = pause::kQuietCaption;', 'no "Change from the main menu" group'),
                       ('DrawStrip(dl, focused,', 'a page has no description strip'),
-                      ('DrawStrip(dl, nullptr, T(pause::What(focus_entry_))', 'the list has no description strip'),
+                      ('DrawStrip(dl, nullptr, T(pause::What(focus_entry))', 'the list has no description strip'),
                       ('pause::NextPage(', 'LB / RB do not move between pages'),
                       ('BackToList()', 'Back does not return to the list on the same entry')):
     if _needle not in _pm:
