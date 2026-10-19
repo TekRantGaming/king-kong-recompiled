@@ -78,6 +78,7 @@ extern char** environ;
 namespace kk {
 #if defined(KK_DEV_TOOLS)
 void DevStartScriptClock();                                         // dev_tools.cpp
+void DevFacePartnerLevelLoaded();                                   // dev_camera_start.cpp
 void DevUniGoTick(uint8_t* base, uint32_t g, bool request, bool started);  // dev_chapter_jump.cpp
 void DevDumpTexts(const uint8_t* base, const char* name);                   // dev_chapter_jump.cpp
 #endif
@@ -1204,7 +1205,10 @@ REX_HOOK_RAW(sub_8253DB80) {
 #endif
   __imp__sub_8253DB80(ctx, base);
 #if defined(KK_DEV_TOOLS)
-  if (request) kk::DevPuppetAfterLoad(base, g);
+  if (request) {
+    kk::DevPuppetAfterLoad(base, g);
+    kk::DevFacePartnerLevelLoaded();
+  }
 #endif
   if (ps2_movie) kk::movies::AfterLoad();  // task 293: the clip's end, when the level loaded under it
   // The chapter being played, for the per-chapter performance summary (a level change's frames left out).

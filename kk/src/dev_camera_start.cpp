@@ -1,5 +1,8 @@
 // Developer-only: the camera at a chapter's start, to compare frame rates and the console (task 163;
-// based on task 028's tracer on branch codex-camera). No guest state is written.
+// based on task 028's tracer on branch codex-camera). The tracing is read-only.
+// KK_DEV_FACE_PARTNER=<seconds>[:<repeat seconds>] separately turns Jack and his
+// normal first-person camera toward a fresh same-level co-op partner, with level
+// pitch and no position writes. Due requests wait for a usable pose/camera.
 //
 // KK_DEV_CAMERA_START=<s> with KK_DEV_SAMPLE_DIR writes, for the first <s> seconds on the dev script
 // clock (from when the chapter's level has loaded; dev_tools.cpp DevSecondsSinceMenu):
@@ -17,6 +20,9 @@
 #if defined(KK_DEV_TOOLS)
 
 #include <bit>
+#include <charconv>
+#include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -25,9 +31,103 @@
 #include <rex/hook.h>
 #include <rex/logging.h>
 
+#include "coop_pose.h"
+#include "coop_runtime.h"
+#include "freecam.h"
+#include "hfr.h"
+#include "photo_mode.h"
+#include "play_internal.h"
+
 namespace kk {
 double DevSecondsSinceMenu();
 void DevCameraGround(const uint8_t* base, uint32_t hero, uint32_t out, float speed_game, float speed_used);
+
+namespace {
+// Separate from the dev script clock: rearmed after every actual level load.
+struct FacePartner {
+  using Clock = std::chrono::steady_clock;
+  bool enabled = false, loaded = false, done = false;
+  double first = 0, repeat = 0, next = 0;
+  Clock::time_point load_time{};
+
+  FacePartner() {
+    const char* value = std::getenv("KK_DEV_FACE_PARTNER");
+    if (!value || !*value) return;
+    const std::string s(value);
+    const size_t colon = s.find(':');
+    auto number = [](const char* begin, const char* end, double& out) {
+      const auto r = std::from_chars(begin, end, out);
+      return begin != end && r.ec == std::errc{} && r.ptr == end && std::isfinite(out);
+    };
+    enabled = number(s.data(), s.data() + (colon == std::string::npos ? s.size() : colon), first) &&
+              first >= 0;
+    if (colon != std::string::npos)
+      enabled = enabled && number(s.data() + colon + 1, s.data() + s.size(), repeat) && repeat > 0;
+    if (!enabled) REXLOG_WARN("KK dev: invalid KK_DEV_FACE_PARTNER (expected seconds[:positive-repeat])");
+  }
+};
+FacePartner& Face() { static FacePartner face; return face; }
+}  // namespace
+
+void DevFacePartnerLevelLoaded() {
+  auto& f = Face();
+  if (!f.enabled) return;
+  f.loaded = true;
+  f.done = false;
+  f.next = f.first;
+  f.load_time = FacePartner::Clock::now();
+}
+
+// Called at CM_Cam's normal orientation commit, after ground tilt, before the
+// original 82711328. Its next call (8247161C) uses this same forward vector to
+// orient Jack horizontally. Both setters preserve position; no teleport occurs.
+void DevFacePartnerCamera(PPCContext& ctx, uint8_t* base) {
+  if (uint32_t(ctx.lr) != 0x824715FC) return;
+  auto& f = Face();
+  if (!f.enabled || !f.loaded || f.done) return;
+  const double elapsed = std::chrono::duration<double>(FacePartner::Clock::now() - f.load_time).count();
+  if (elapsed < f.next || play::StartLevelLoading() || photo::Active() || freecam::Active()) return;
+  const auto snapshot = coop::PartnerBodySnapshot();
+  if (!snapshot.enabled || !snapshot.fresh || snapshot.state != coop::SessionState::Connected ||
+      !snapshot.local || !snapshot.partner) return;
+  using namespace hfr;
+  const auto local = coop::ReadJackPose(
+      [&](uint32_t a) { return Load32(base, a); },
+      [&](uint32_t a) { return Load16(base, a); },
+      [&](uint32_t a) { return LoadF(base, a); }, elapsed);
+  if (!local.pose || local.pose->level != snapshot.partner->level ||
+      local.pose->level != snapshot.local->level) return;
+  const uint32_t hero = Load32(base, 0x82CCBF7C);
+  const uint32_t script = Load32(base, 0x82CCBF64);
+  if (!coop::PoseAddress(script, 68)) return;
+  const uint32_t cm = Load32(base, script + 64);
+  const uint32_t camera = ctx.r3.u32, forward = ctx.r4.u32, up = ctx.r5.u32;
+  // Bind to this live Jack camera, never a cinematic or another actor's setter.
+  if (!coop::PoseAddress(cm, 232) || Load32(base, cm) != hero ||
+      camera != Load32(base, 0x82CCBF6C) || camera == hero ||
+      !coop::PoseAddress(camera, 28) || (Load32(base, camera) & 0x00400001u) ||
+      !coop::PoseAddress(Load32(base, camera + 12), 64) ||
+      forward != ctx.r1.u32 + 112 || !coop::PoseAddress(forward, 12) || up != cm + 208) return;
+  const float dx = snapshot.partner->x - local.pose->x, dy = snapshot.partner->y - local.pose->y;
+  const float horizontal = std::hypot(dx, dy);
+  const float distance = coop::PartnerDistance(*local.pose, *snapshot.partner);
+  // An overlapping partner has no useful yaw. Keep the due request pending.
+  if (!std::isfinite(horizontal) || horizontal < .01f || !std::isfinite(distance)) return;
+  StoreF(base, forward, dx / horizontal);
+  StoreF(base, forward + 4, dy / horizontal);
+  StoreF(base, forward + 8, 0);
+  StoreF(base, up, 0);
+  StoreF(base, up + 4, 0);
+  StoreF(base, up + 8, 1);
+  StoreF(base, cm + 168, 0);  // CM_Cam's accumulated pitch in its constrained-view branch.
+  REXLOG_INFO("KK dev: face partner yaw={:.4f} pitch=0.0000 distance={:.3f}", std::atan2(dy, dx), distance);
+  if (f.repeat > 0) {
+    // Skip missed intervals, preserving the load-relative cadence without bursts.
+    f.next = elapsed + (f.repeat - std::fmod(elapsed - f.first, f.repeat));
+  } else {
+    f.done = true;
+  }
+}
 
 namespace {
 uint32_t Word(const uint8_t* base, uint32_t a) {

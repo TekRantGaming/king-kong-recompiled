@@ -35,6 +35,7 @@
 #if defined(KK_DEV_TOOLS)
 namespace kk {
 void DevCameraGround(const uint8_t* base, uint32_t hero, uint32_t out, float speed_game, float speed_used);
+void DevFacePartnerCamera(PPCContext& ctx, uint8_t* base);
 }
 #endif
 
@@ -163,5 +164,8 @@ REX_HOOK_RAW(sub_824008D0) {
 REX_EXTERN(__imp__sub_82711328);
 REX_HOOK_RAW(sub_82711328) {
   if (g.saved_addr && uint32_t(ctx.lr) == 0x824715FC) Restore(base);
+#if defined(KK_DEV_TOOLS)
+  kk::DevFacePartnerCamera(ctx, base);
+#endif
   __imp__sub_82711328(ctx, base);
 }
