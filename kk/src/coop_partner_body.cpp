@@ -51,6 +51,7 @@ REX_EXTERN(__imp__sub_82711278);
 REX_EXTERN(__imp__sub_82401AA8);
 REX_EXTERN(__imp__sub_82850100);
 REX_EXTERN(__imp__sub_823F8AF0);
+REX_EXTERN(__imp__sub_823F8FB0);
 REX_EXTERN(__imp__sub_82715AC8);
 REX_EXTERN(__imp__sub_826ECDF8);
 #if defined(KK_DEV_TOOLS)
@@ -231,7 +232,10 @@ bool ReadRig(const uint8_t* b, uint32_t actor, Rig& r) {
   r.anim = Ptr(b, r.rig, 0, 176);
   r.table = Ptr(b, r.anim, 88, 16);
   r.layer = Ptr(b, r.anim, 132, 8);
-  if (!r.matrix || !r.vars || !r.table || !r.layer || !Ptr(b, r.layer, 4, 4)) return false;
+  if (!r.matrix || !r.vars || !r.table || !r.layer ||
+      !coop::puppet::AnimationEventHeader(r.anim, [&](uint32_t p, uint32_t off, uint32_t size) {
+        return Ptr(b, p, off, size);
+      })) return false;
   r.action = Load16(b, r.anim + 156);
   r.item = b[r.anim + 160];
   r.pos = ReadVec(b, r.matrix + 48);
@@ -1661,6 +1665,27 @@ void PartnerBodyScriptRecord(const uint8_t* b) {
   }
 }
 }  // namespace kk
+
+REX_HOOK_RAW(sub_823F8FB0) {
+  if (REXCVAR_GET(kk_coop_enabled)) {
+    const auto actor = ctx.r3.u32;
+    const auto rig = kk::Ptr(base, actor, 20, 16);
+    const auto animation = kk::Ptr(base, rig, 0, 176);
+    const auto header = kk::coop::puppet::AnimationEventHeader(animation,
+        [&](uint32_t p, uint32_t off, uint32_t size) { return kk::Ptr(base, p, off, size); });
+    if (!header) {
+      // Match the native missing-layer result instead of dereferencing its
+      // temporarily empty descriptor. Do not manufacture animation events.
+      static unsigned logged = 0;
+      if (logged++ < 16) REXLOG_INFO("PUPPET animation event lookup deferred actor={:08X} hero={} borrowed={} event={} caller={:08X} reason=missing-layer-header",
+          actor, actor == kk::hfr::Load32(base, 0x82CCBF7C), actor == kk::Get().selected.actor,
+          ctx.r4.u32, uint32_t(ctx.lr));
+      ctx.r3.u64 = 0;
+      return;
+    }
+  }
+  __imp__sub_823F8FB0(ctx, base);
+}
 
 REX_HOOK_RAW(sub_82454690) {
   kk::PartnerBodyScriptRecord(base);

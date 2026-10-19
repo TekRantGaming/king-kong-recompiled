@@ -424,6 +424,19 @@ void Disabled() {
 }
 void PuppetPolicies() {
   using namespace kk::coop::puppet;
+  std::map<uint32_t, uint32_t> animation_memory{{100 + 132, 300}, {300 + 4, 400}, {400, 500}};
+  const auto pointer = [&](uint32_t p, uint32_t off, uint32_t) {
+    // Invalid or absent pointers must never cause the next memory read.
+    if (!p) return uint32_t{0};
+    const auto it = animation_memory.find(p + off);
+    return it == animation_memory.end() ? uint32_t{0} : it->second;
+  };
+  Check(AnimationEventHeader(100, pointer) == 500, "complete animation event metadata remains usable");
+  for (const auto address : {232u, 304u, 400u}) {
+    const auto saved = animation_memory[address]; animation_memory[address] = 0;
+    Check(!AnimationEventHeader(100, pointer), "missing animation metadata returns no event instead of reading null");
+    animation_memory[address] = saved;
+  }
   const MutableRig original{1, 2, 3, 4, 5, 6, 7}, copy{8, 9, 10, 11, 12, 13, 14};
   Check(Independent(copy, original), "new body owns all mutable components");
   for (std::size_t i = 0; i < copy.size(); ++i) {
