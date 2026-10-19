@@ -2,6 +2,7 @@
 #include "coop_protocol.h"
 #include "coop_session.h"
 #include "coop_pose.h"
+#include "coop_puppet.h"
 
 #include <bit>
 #include <cmath>
@@ -74,7 +75,7 @@ void Protocol() {
     input.type = type; input.sequence = 0x12345678; input.epoch = 0x0123456789ABCDEFull;
     input.hello = Compatible(); input.reason = RejectReason::GameplayMods;
     input.clock_ms = 0x123456789ABCDEFull;
-    input.pose = {12.75, 1402, 1.25f, -9.5f, 33.75f, 2.5f, 7.125f, 65535};
+    input.pose = {12.75, 1402, 1.25f, -9.5f, 33.75f, 2.5f, 7.125f, 65535, 255};
     const auto bytes = Packet(input);
     Check(bytes[0] == 'K' && bytes[1] == 'K' && bytes[2] == 'C' && bytes[3] == '1', "wire magic");
     Check(bytes[8] == 0x12 && bytes[11] == 0x78 && bytes[12] == 1 && bytes[19] == 0xEF,
@@ -88,7 +89,7 @@ void Protocol() {
       Check(CheckCompatibility(input.hello, output.hello) == RejectReason::None, "Hello fields");
     if (type == MessageType::PlayerPose)
       Check(Near(output.pose.time, 12.75) && output.pose.level == 1402 && Near(output.pose.y, -9.5) &&
-          output.pose.action == 65535, "pose fields");
+          output.pose.action == 65535 && output.pose.item == 255, "pose fields including diagnostic item");
     // Every possible truncation, including incomplete string lengths and floats.
     for (size_t size = 0; size < bytes.size(); ++size) {
       Message sentinel; sentinel.sequence = 99;
@@ -179,11 +180,14 @@ void Poses() {
   PoseBuffer buffer;
   Check(!buffer.Sample(0), "empty interpolation buffer");
   PlayerPose a{1000, 101, 0, 2, 3, 3.10f, 4, 10}, b = a;
-  b.time = 1000.2; b.x = 20; b.facing = -3.10f; b.action = 20;
+  b.time = 1000.2; b.x = 20; b.facing = -3.10f; b.action = 20; b.item = 7;
   buffer.Push(a, 1); buffer.Push(b, 1.2);
   auto middle = buffer.Sample(1.2);
   Check(middle && Near(middle->x, 10) && std::abs(middle->facing) > 3,
       "100 ms interpolation, independent remote clock and shortest facing arc");
+  Check(buffer.Sample(1.19)->action == a.action && buffer.Sample(1.19)->item == a.item &&
+      buffer.Sample(1.21)->action == b.action && buffer.Sample(1.21)->item == b.item,
+      "interpolation changes diagnostic action/item together, without blending IDs");
   buffer.Push(a, 1.25);
   Check(Near(buffer.Sample(1.2)->x, 10), "out of order sample ignored");
   Check(buffer.Sample(1.5)->x == 20 && !buffer.Sample(1.71), "holds without extrapolation then expires");
@@ -222,11 +226,13 @@ void Poses() {
 }
 void PoseReadingAndDisplay() {
   constexpr uint32_t g = 0x40000100, actor = 0x40001000, ext = 0x40002000,
-      ai = 0x40003000, block = 0x40004000, matrix = 0x40005000, vars = 0x40006000;
+      ai = 0x40003000, block = 0x40004000, matrix = 0x40005000, vars = 0x40006000,
+      rig = 0x4000A000, animation = 0x4000B000;
   std::map<uint32_t, uint32_t> words{
       {0x82CC97C0, g}, {g + 0x18, 201}, {0x82CCBF7C, actor}, {actor + 24, ext},
       {ext + 4, ai}, {ai + 24, block}, {block + 20, 0x826718B8},
-      {actor + 12, matrix}, {ai + 64, vars}, {0x828E3B48, 1}};
+      {actor + 12, matrix}, {ai + 64, vars}, {0x828E3B48, 1},
+      {actor + 20, rig}, {rig, animation}, {animation + 156, 123}, {animation + 160, 0xAB123456}};
   std::map<uint32_t, float> floats{{matrix + 20, -1}, {matrix + 48, 3},
       {matrix + 52, 4}, {matrix + 56, 5}};
   auto read = [&] {
@@ -240,6 +246,7 @@ void PoseReadingAndDisplay() {
   auto pose = read();
   Check(pose.pose && pose.pose->level == 201 && pose.pose->x == 3 &&
       std::string_view(pose.failure) == "ok", "retained load-page mode does not suppress a loaded Jack");
+  Check(pose.pose->action == 123 && pose.pose->item == 0xAB, "read diagnostic action and big-endian item byte");
   words[g + 4] = 1; words[actor] = 1;
   check("level-request");  // First failure, before touching the actor.
   words[g + 4] = 0; words[actor] = 0;
@@ -272,8 +279,44 @@ void Disabled() {
   Check(session.State() == SessionState::Idle && callbacks == 0 && trap.calls == 0,
       "disabled: zero transport methods, callbacks, sends, polls or state transitions");
 }
+void PuppetPolicies() {
+  using namespace kk::coop::puppet;
+  const Action observed[] = {{41, 3, 0}, {22, 3, 1}, {35, 4, 4}};
+  Check(ChooseAction(.09f, observed)->action == 41, "observed idle below threshold");
+  Check(ChooseAction(.1f, observed)->action == 22, "threshold chooses observed moving tuple");
+  Check(ChooseAction(1.2f, observed)->action == 22, "walk uses closest observed speed");
+  Check(ChooseAction(-4.5f, observed)->action == 35 && ChooseAction(4.5f, observed)->item == 4,
+      "run uses observed tuple, including its own item");
+  Check(!ChooseAction(3, std::span(observed, 1)), "no observed moving action requests keeping current");
+  Check(!ChooseAction(0, std::span(observed + 1, 2)), "no idle observation never invents action zero");
+  Check(!ChooseAction(1, {}) && !ChooseAction(std::numeric_limits<float>::quiet_NaN(), observed),
+      "empty and invalid speed never request animation");
+  const Point origin{};
+  Check(!ClampStep(origin, {3, 4, 0})->teleport, "five unit boundary is normal motion");
+  const auto jump = ClampStep(origin, {3, 4, .1f});
+  Check(jump && jump->teleport && jump->target.z == .1f && jump->target.x == 3,
+      "over five units permits exact teleport and preserves partner height");
+  Check(!ClampStep(origin, {std::numeric_limits<float>::infinity(), 0, 0}), "invalid teleport rejected");
+  Check(!ClampStep({1000000, 0, 0}, origin), "invalid prior position rejected");
+  Conditions ready{true, SessionState::Connected, true, true, true, true, false, false, true};
+  Check(!ReleaseReason(ready), "connected matching level may drive");
+  auto expect = [&](Conditions c, const char* reason) {
+    Check(ReleaseReason(c) && std::string_view(ReleaseReason(c)) == reason, "puppet release reason");
+  };
+  auto c = ready; c.enabled = false; expect(c, "coop-disabled");
+  c = ready; c.state = SessionState::Lost; expect(c, "lost");
+  c = ready; c.state = SessionState::Ended; expect(c, "ended");
+  c = ready; c.state = SessionState::Connecting; expect(c, "not-connected");
+  c = ready; c.fresh = false; expect(c, "snapshot-expired");
+  c = ready; c.local = false; expect(c, "local-pose-unavailable");
+  c = ready; c.partner = false; expect(c, "partner-pose-unavailable");
+  c = ready; c.same_level = false; expect(c, "different-level");
+  c = ready; c.photo = true; expect(c, "photo-mode");
+  c = ready; c.loading = true; expect(c, "load");
+  c = ready; c.environment = false; expect(c, "world-level-or-hero-changed");
+}
 }  // namespace
 int main() {
-  Protocol(); Handshake(); Timeouts(); Poses(); PoseReadingAndDisplay(); Disabled();
+  Protocol(); Handshake(); Timeouts(); Poses(); PoseReadingAndDisplay(); Disabled(); PuppetPolicies();
   std::puts("co-op core tests passed");
 }

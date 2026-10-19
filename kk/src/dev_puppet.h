@@ -6,6 +6,7 @@
 
 namespace kk {
 // All calls run on the guest update thread. The existing hooks retain ownership.
+void DevPuppetGameFrame(uint8_t* base);
 void DevPuppetBeforeLoad();
 void DevPuppetAfterLoad(const uint8_t* base, uint32_t game);
 void DevPuppetBeforeAi(PPCContext& ctx, uint8_t* base, uint32_t world);

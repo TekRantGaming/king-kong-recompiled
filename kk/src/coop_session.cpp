@@ -49,7 +49,7 @@ std::optional<PlayerPose> PoseBuffer::Sample(double now) const {
     p.x += (b.x - a.x) * t; p.y += (b.y - a.y) * t; p.z += (b.z - a.z) * t;
     p.speed += (b.speed - a.speed) * t;
     p.facing += std::remainder(b.facing - a.facing, 6.28318530718f) * t;
-    if (t >= .5f) p.action = b.action;
+    if (t >= .5f) { p.action = b.action; p.item = b.item; }
     return p;
   }
   return poses_.back().pose;  // hold, never extrapolate through a wall

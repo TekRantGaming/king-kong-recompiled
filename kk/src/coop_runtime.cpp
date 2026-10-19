@@ -25,6 +25,9 @@
 #include "photo_mode.h"
 #include "play_internal.h"
 #include "ui_paint.h"
+#if defined(KK_DEV_TOOLS)
+#include "dev_puppet.h"
+#endif
 
 #if defined(KK_DEV_TOOLS)
 REXCVAR_DEFINE_STRING(kk_coop_dev, "", "KK/Debug", "Local co-op test link: host:<port> or join:<port>")
@@ -59,6 +62,7 @@ struct View {
   PoseCounters poses;
 };
 #if defined(KK_DEV_TOOLS)
+std::atomic<bool> partner_body_driven{false};
 void LogPoses(const View& v, double now, double& next) {
   if (v.state != SessionState::Connected) { next = now + 10; return; }
   if (now < next) return;
@@ -181,6 +185,10 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
     if (PartnerHere(partner_distance)) std::snprintf(text, sizeof(text), "Partner: here");
     else std::snprintf(text, sizeof(text), "Partner: %.0f m, %s (Jack facing)", partner_distance, directions[sector]);
 #if defined(KK_DEV_TOOLS)
+    if (partner_body_driven.load()) {
+      const size_t used = std::char_traits<char>::length(text);
+      std::snprintf(text + used, sizeof(text) - used, " (body)");
+    }
     constexpr float partner_y = 112;
 #else
     constexpr float partner_y = 88;
@@ -256,6 +264,9 @@ void Shutdown() {
   if (steam) steam->Shutdown();
 }
 void GameFrame(uint8_t* base) {
+#if defined(KK_DEV_TOOLS)
+  kk::DevPuppetGameFrame(base);
+#endif
   if (!REXCVAR_GET(kk_coop_enabled)) return;
 #if defined(KK_DEV_TOOLS)
   if (service.Running()) service.Publish(ReadJack(base));
@@ -270,6 +281,12 @@ void CreateOverlay(rex::ui::ImGuiDrawer* drawer) {
   if (REXCVAR_GET(kk_coop_enabled)) new PartnerOverlay(drawer);
 }
 #if defined(KK_DEV_TOOLS)
+PuppetSnapshot PartnerBodySnapshot() {
+  if (!REXCVAR_GET(kk_coop_enabled)) return {};
+  const auto v = CurrentView();
+  return {true, Now() - v.updated <= .5, v.state, v.local, v.partner};
+}
+void SetPartnerBodyDriven(bool driven) { partner_body_driven.store(driven); }
 bool SteamSelfTestRequested() { return REXCVAR_GET(kk_steam_selftest); }
 int RunSteamSelfTest() {
   if (!steam || DevRunning()) { REXLOG_INFO("Steam self-test: unavailable while dev link selected"); return 1; }

@@ -3,6 +3,9 @@
 #include <cstdint>
 #include <filesystem>
 #include "steam_lobby.h"
+#if defined(KK_DEV_TOOLS)
+#include "coop_session.h"
+#endif
 
 namespace rex::ui { class ImGuiDrawer; }
 namespace kk::coop {
@@ -12,6 +15,14 @@ void Start(const std::filesystem::path& user_data);
 // Available to the launcher before Play. Open is the explicit lazy Steam opt-in.
 ISocialService& Social();
 #if defined(KK_DEV_TOOLS)
+// Value-only snapshot, including CoopSession's interpolated pose. No transport work.
+struct PuppetSnapshot {
+  bool enabled = false, fresh = false;
+  SessionState state = SessionState::Idle;
+  std::optional<PlayerPose> local, partner;
+};
+PuppetSnapshot PartnerBodySnapshot();
+void SetPartnerBodyDriven(bool driven);
 bool SteamSelfTestRequested();
 int RunSteamSelfTest();
 #endif

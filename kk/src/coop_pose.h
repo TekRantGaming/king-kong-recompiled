@@ -48,7 +48,10 @@ PoseRead ReadJackPose(U32 load32, U16 load16, F32 loadf, double now) {
   const uint32_t animation_base = load32(actor + 20);
   if (PoseAddress(animation_base)) {
     const uint32_t animation = load32(animation_base);
-    if (PoseAddress(animation, 160)) p.action = load16(animation + 156);
+    if (PoseAddress(animation, 164)) {
+      p.action = load16(animation + 156);
+      p.item = uint8_t(load32(animation + 160) >> 24);  // Big-endian first byte.
+    }
   }
   Message check; check.type = MessageType::PlayerPose; check.pose = p;
   std::vector<uint8_t> bytes;

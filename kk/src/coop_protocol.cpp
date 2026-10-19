@@ -65,6 +65,7 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
       for (float v : {m.pose.x, m.pose.y, m.pose.z, m.pose.facing, m.pose.speed})
         payload.U(std::bit_cast<uint32_t>(v), 4);
       payload.U(m.pose.action, 2);
+      payload.U(m.pose.item, 1);
       break;
     case MessageType::HelloAck: case MessageType::Bye: break;
     default: return false;
@@ -104,6 +105,7 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       m.pose.facing = std::bit_cast<float>(uint32_t(r.U(4)));
       m.pose.speed = std::bit_cast<float>(uint32_t(r.U(4)));
       m.pose.action = uint16_t(r.U(2));
+      m.pose.item = uint8_t(r.U(1));
       if (!ValidPose(m.pose)) return false;
       break;
     case MessageType::HelloAck: case MessageType::Bye: break;

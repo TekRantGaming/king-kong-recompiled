@@ -7,7 +7,7 @@
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-constexpr uint16_t kProtocolVersion = 1;
+constexpr uint16_t kProtocolVersion = 2;
 constexpr size_t kHeaderBytes = 24, kMaxPacketBytes = 1024;
 enum class MessageType : uint16_t { Hello = 1, HelloAck, Reject, Ping, Pong, PlayerPose, Bye };
 enum class RejectReason : uint16_t { None, Protocol, Version, Build, GameplayMods, Handshake };
@@ -20,6 +20,7 @@ struct PlayerPose {
   uint32_t level = 0;
   float x = 0, y = 0, z = 0, facing = 0, speed = 0;
   uint16_t action = 0;
+  uint8_t item = 0;  // Diagnostic only: first-person IDs are not body animation IDs.
 };
 struct Message {
   MessageType type = MessageType::Hello;

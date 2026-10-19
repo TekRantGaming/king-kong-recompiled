@@ -1,7 +1,8 @@
-// Disposable, dev-only H-rig experiment. No spawning, networking or save writes.
+// Disposable, dev-only H-rig experiment. No spawning, transport calls or save writes.
 // KK_DEV_PUPPET=scan (or 1), borrow:nearest[:<max guest units>],
 // borrow:index:<zero-based active-table index>[:<action>:<item>], or the legacy
 // borrow:<hex key>:<ordinal>[:<action>:<item>]. Indices belong to the current epoch.
+// partner:index:<n> or partner:nearest[:<max>] follows the copied partner pose.
 #if defined(KK_DEV_TOOLS)
 
 #include "dev_puppet.h"
@@ -25,6 +26,10 @@
 
 #include "hfr.h"
 #include "play_internal.h"
+#include "coop_puppet.h"
+#include "coop_runtime.h"
+#include "photo_mode.h"
+#include "settings.h"
 
 REX_EXTERN(__imp__sub_8268D8E8);
 REX_EXTERN(__imp__sub_8271CCB8);
@@ -61,7 +66,7 @@ float Distance(Vec a, Vec b) {
 std::string XYZ(Vec v) { return fmt::format("({:.4f},{:.4f},{:.4f})", v.x, v.y, v.z); }
 
 struct Options {
-  bool on = false, borrow = false, nearest = false, index = false, valid = true, action_set = false;
+  bool on = false, borrow = false, partner = false, nearest = false, index = false, valid = true, action_set = false;
   uint32_t key = 0, ordinal = 0, census_index = 0, action = 0, item = 0;
   float max_units = 15.0f;
   Options() {
@@ -79,7 +84,8 @@ struct Options {
       const auto r = std::from_chars(f.data(), f.data() + f.size(), n, radix);
       return !f.empty() && r.ec == std::errc{} && r.ptr == f.data() + f.size();
     };
-    valid = s.back() != ':' && fields.size() >= 2 && fields[0] == "borrow";
+    partner = fields[0] == "partner";
+    valid = s.back() != ':' && fields.size() >= 2 && (fields[0] == "borrow" || partner);
     if (!valid) return;
     if (fields[1] == "nearest") {
       nearest = true;
@@ -93,6 +99,7 @@ struct Options {
       return;
     }
     index = fields[1] == "index";
+    if (partner && (!index || fields.size() != 3)) { valid = false; return; }
     valid = (fields.size() == 3 || fields.size() == 5) &&
             (index ? number(fields[2], census_index, 10) :
              number(fields[1], key, 16) && key != 0 && number(fields[2], ordinal, 10));
@@ -104,6 +111,7 @@ struct Options {
   }
 };
 const Options& Opt() { static const Options options; return options; }
+bool Enabled() { return Opt().on && (!Opt().partner || REXCVAR_GET(kk_coop_enabled)); }
 
 struct Rig {
   uint32_t actor = 0, ai = 0, vars = 0, matrix = 0, rig = 0, anim = 0, table = 0, layer = 0;
@@ -236,6 +244,11 @@ struct Observation {
   bool present = false;
   bool bound = false;
   std::set<uint32_t> actions;
+  // Separate idle/moving examples of each tuple; never learn from a driven body.
+  std::map<uint32_t, coop::puppet::Action> motion;
+  Vec previous;
+  uint32_t previous_tuple = 0;
+  bool sampled = false;
 };
 struct Candidate { Rig rig; uint32_t key = 0, ordinal = 0, index = 0; const char* reason = ""; };
 
@@ -244,6 +257,11 @@ struct State {
   uint32_t world = 0, game = 0, level = 0, hero = 0;
   bool loading = true, ready = false, driving = false, attempted = false, terminal = false;
   bool finish_pending = false, measure = false, transition_pending = false;
+  bool partner_eligible = false, prepared = false;
+  unsigned missing_action_kind = 0;
+  uint64_t frame = 0, updated_frame = ~uint64_t{0}, updates = 0;
+  coop::PuppetSnapshot partner;
+  std::vector<coop::puppet::Action> observed_motion;
   Clock::time_point loaded{}, census_at{}, tick_at{};
   std::map<uint32_t, Observation> humans;
   std::map<uint32_t, uint32_t> keys;
@@ -260,8 +278,14 @@ struct State {
   void Abort(const char* reason) {
     if (terminal) return;
     driving = false; finish_pending = false; measure = false; terminal = true;
-    REXLOG_INFO("PUPPET abort reason={} epoch={} actor={:08X} held={} passed={} reload-required",
-                reason, epoch, selected.actor, held, passed);
+    if (Opt().partner) {
+      coop::SetPartnerBodyDriven(false);
+      REXLOG_INFO("PUPPET partner released reason={} epoch={} actor={:08X} held={} passed={} updates={}",
+                  reason, epoch, selected.actor, held, passed, updates);
+    } else {
+      REXLOG_INFO("PUPPET abort reason={} epoch={} actor={:08X} held={} passed={} reload-required",
+                  reason, epoch, selected.actor, held, passed);
+    }
     selected = {};
   }
   bool Environment(const uint8_t* b, uint32_t w) const {
@@ -292,6 +316,42 @@ struct State {
   }
 };
 State& Get() { static State state; return state; }
+
+// Called only on the game thread. The runtime supplies mutex-protected values
+// already interpolated by CoopSession; this function never calls the transport.
+bool PartnerReady(const uint8_t* b, uint32_t w) {
+  auto& s = Get();
+  s.partner = coop::PartnerBodySnapshot();
+  const auto& v = s.partner;
+  const bool loading = s.loading || play::StartLevelLoading() ||
+      (Range(s.game, 28) && Load32(b, s.game + 4) != 0) ||
+      (Load32(b, 0x82D64080) && (Load32(b, 0x82D64080 + 12) == 1 || Load32(b, 0x82D64080 + 12) == 2));
+  // G+8 is the request slot used by the borrow epoch; G+0x18 is the live
+  // level used by ReadJackPose and the network. Check both, without equating them.
+  const bool same = v.local && v.partner && v.local->level == v.partner->level &&
+      Range(s.game, 28) && v.local->level == Load32(b, s.game + 0x18);
+  const char* reason = coop::puppet::ReleaseReason({v.enabled, v.state, v.fresh,
+      bool(v.local), bool(v.partner), same, photo::Active(), loading, s.Environment(b, w)});
+  if (reason) {
+    if (s.driving) s.Abort(reason);
+    s.partner_eligible = false;
+    return false;
+  }
+  if (!s.partner_eligible) {
+    s.partner_eligible = true;
+    s.attempted = s.terminal = false;
+    s.finish_pending = s.measure = false;
+    s.held = s.passed = s.updates = 0;
+    s.updated_frame = ~uint64_t{0};
+    s.missing_action_kind = 0;
+    s.max_late_error = s.max_forward_error = 0;
+    ++s.epoch;
+    // Do not classify the release/teleport displacement as natural locomotion.
+    for (auto& [actor, obs] : s.humans) obs.sampled = false;
+    REXLOG_INFO("PUPPET partner epoch={} ready level={}", s.epoch, v.local->level);
+  }
+  return true;
+}
 
 // Helpers use a separate guest frame and guest vectors. Preserve the whole
 // context and the entire reserved region, including callee frames below r1.
@@ -371,7 +431,26 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
     const char* reason = jack_ok ? s.Qualify(b, rig, jack) : "hero-rig-unavailable";
     if (!*reason && duplicate) reason = "duplicate-active-membership";
     if (!*reason && obs.stable < 1.0) reason = "not-stable-one-second";
-    if (LegalAction(b, rig, rig.action)) obs.actions.insert((rig.action << 8) | rig.item);
+    if (LegalAction(b, rig, rig.action)) {
+      const uint32_t tuple = (rig.action << 8) | rig.item;
+      obs.actions.insert(tuple);
+      if (Opt().partner && obs.sampled && obs.previous_tuple == tuple && s.dt > 0 &&
+          obs.present && !duplicate && obs.stable >= 1.0) {
+        const float delta = std::hypot(rig.pos.x-obs.previous.x, rig.pos.y-obs.previous.y);
+        const float speed = delta / s.dt;
+        if (delta <= 5 && speed < 10000) {
+          const bool moving = speed >= coop::puppet::kIdleSpeed;
+          const uint32_t sample_key = (tuple << 1) | uint32_t(moving);
+          auto [sample, added] = obs.motion.emplace(sample_key,
+              coop::puppet::Action{uint16_t(rig.action), uint8_t(rig.item), speed});
+          // Retain the fastest natural example to distinguish walk from run.
+          sample->second.speed = std::max(sample->second.speed, speed);
+          if (added) REXLOG_INFO("PUPPET observed actor={:08X} action={} item={} motion={} speed={:.3f}",
+              actor, rig.action, rig.item, moving ? "moving" : "idle", speed);
+        }
+      }
+      obs.previous = rig.pos; obs.previous_tuple = tuple; obs.sampled = true;
+    } else obs.sampled = false;
     if (log) {
       REXLOG_INFO("PUPPET census epoch={} world={:08X} level={} hero={:08X} index={} key={:08X} ordinal={} actor={:08X} ai={:08X} vars={:08X} matrix={:08X} rig={:08X} anim={:08X} table={:08X} layer={:08X} human={}/{} xyz={} distance={:.3f} tracks={} action={} item={} frame={:.3f} qualified={} reason={}",
                   s.epoch, w, s.level, s.hero, (p-begin)/8, key, ordinal, actor, rig.ai, rig.vars,
@@ -386,7 +465,8 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
   }
   if (log && seen.empty()) REXLOG_INFO("PUPPET census epoch={} world={:08X} level={} hero={:08X} candidates=0 reason=no-natural-H-init-in-active-table",
                                       s.epoch, w, s.level, s.hero);
-  if (!Opt().borrow || s.attempted || s.terminal || now - s.loaded < std::chrono::seconds(5)) return;
+  if (!Opt().borrow || (Opt().partner && !s.partner_eligible) || s.attempted || s.terminal ||
+      now - s.loaded < std::chrono::seconds(5)) return;
   s.attempted = true;
   const Candidate* pick = nullptr;
   float closest = Opt().max_units;
@@ -413,6 +493,16 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
     s.Abort("action-item-not-naturally-observed-on-this-rig"); return;
   }
   s.selected = pick->rig; s.selected_generation = obs.generation;
+  if (Opt().partner) {
+    s.observed_motion.clear();
+    for (const auto& [key, sample] : obs.motion) {
+      s.observed_motion.push_back(sample);
+      REXLOG_INFO("PUPPET partner observed-set actor={:08X} action={} item={} speed={:.3f} motion={}",
+          pick->rig.actor, sample.action, sample.item, sample.speed,
+          sample.speed < coop::puppet::kIdleSpeed ? "idle" : "moving");
+    }
+    REXLOG_INFO("PUPPET partner observed-set count={} actor={:08X}", s.observed_motion.size(), pick->rig.actor);
+  }
   s.transition_pending = s.action != pick->rig.action || s.item != pick->rig.item;
   s.origin = pick->rig.pos; s.initial_forward = pick->rig.forward;
   const float len = std::hypot(s.initial_forward.x, s.initial_forward.y);
@@ -427,26 +517,46 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
 }
 }  // namespace
 
+void DevPuppetGameFrame(uint8_t* b) {
+  if (!Opt().on || !Opt().partner) return;
+  auto& s = Get();
+  if (!REXCVAR_GET(kk_coop_enabled)) {
+    if (s.driving) s.Abort("coop-disabled");
+    s.partner_eligible = false;
+    return;
+  }
+  ++s.frame;
+  // Also release while photo mode or loading prevents normal AI passes.
+  if (s.ready) PartnerReady(b, s.world);
+}
+
 void DevPuppetBeforeLoad() {
-  if (!Opt().on) return;
+  if (!Enabled()) return;
   auto& s = Get();
   if (s.driving || s.finish_pending) s.Abort("level-load-started");
   s.selected = {}; s.humans.clear(); s.keys.clear(); ++s.epoch;
   s.world = s.hero = s.game = 0; s.loading = true; s.ready = false;
   s.census_at = {}; s.tick_at = {};
   s.env_fail_logs = 0;
+  if (Opt().partner) {
+    s.partner_eligible = false; s.attempted = s.terminal = false;
+    s.prepared = false;
+    coop::SetPartnerBodyDriven(false);
+  }
 }
 void DevPuppetAfterLoad(const uint8_t* b, uint32_t game) {
-  if (!Opt().on) return;
+  if (!Enabled()) return;
   auto& s = Get();
   s.game = game; s.level = Range(game, 28) ? Load32(b, game + 8) : 0;
   s.loading = false; s.loaded = Clock::now();
 }
 
 void DevPuppetBeforeAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
-  if (!Opt().on) return;
+  if (!Enabled()) return;
   auto& s = Get();
+  s.prepared = false;
   if (!Opt().valid) { s.Abort("invalid-KK_DEV_PUPPET-syntax"); return; }
+  if (Opt().partner && s.driving && !PartnerReady(b, w)) return;
   if (s.loading || !s.game || play::StartLevelLoading()) return;
   // 82881B70 passes its saved world in r3 at this call (.124, return 82881CF0).
   // Check the caller before binding an epoch to the supplied world.
@@ -466,29 +576,62 @@ void DevPuppetBeforeAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
     if (s.ready) { s.Abort("world-level-load-or-hero-changed"); s.humans.clear(); s.ready = false; }
     return;
   }
+  if (Opt().partner) {
+    PartnerReady(b, w);
+    if (s.updated_frame == s.frame || photo::Active()) return;
+  }
   s.dt = FrameTime(b);
   if (!std::isfinite(s.dt) || s.dt < 0 || s.dt > 0.25f) { s.Abort("invalid-simulation-dt"); return; }
   if (!Scratch::CanUse(ctx)) { s.Abort("invalid-guest-scratch-stack"); return; }
   if (s.driving) { Rig rig; s.Validate(b, w, rig); }
   else if (!s.terminal) CensusAndSelect(ctx, b, w);
+  s.prepared = true;
 }
 
 void DevPuppetAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
-  if (!Opt().on) return;
+  if (!Enabled()) return;
   auto& s = Get();
   if (!s.driving) return;
+  if (Opt().partner && (!s.prepared || !PartnerReady(b, w) || s.updated_frame == s.frame)) return;
   Rig rig;
   if (!s.Validate(b, w, rig)) return;
   if (!Scratch::CanUse(ctx)) { s.Abort("invalid-guest-scratch-stack"); return; }
-  s.elapsed = std::min(8.0, s.elapsed + double(s.dt));
-  const float move = s.elapsed <= 2 ? 0 : s.elapsed < 4 ? float((s.elapsed-2)/2) :
-                     s.elapsed <= 6 ? 1 : float((8-s.elapsed)/2);
-  const float turn = s.elapsed <= 4 ? 0 : s.elapsed < 6 ? float((s.elapsed-4)/2) : float((8-s.elapsed)/2);
-  const float angle = turn * 1.57079632679f;
-  s.desired = {s.origin.x + s.initial_forward.x * 0.5f * move,
-               s.origin.y + s.initial_forward.y * 0.5f * move, s.origin.z};
-  s.facing = {s.initial_forward.x * std::cos(angle) - s.initial_forward.y * std::sin(angle),
-              s.initial_forward.x * std::sin(angle) + s.initial_forward.y * std::cos(angle), 0};
+  if (Opt().partner) {
+    const auto& p = *s.partner.partner;
+    const auto step = coop::puppet::ClampStep({rig.pos.x, rig.pos.y, rig.pos.z}, {p.x, p.y, p.z});
+    if (!step) { s.Abort("invalid-partner-position"); return; }
+    if (step->teleport) REXLOG_INFO("PUPPET partner teleport epoch={} from={} to={} threshold=5",
+        s.epoch, XYZ(rig.pos), XYZ({p.x, p.y, p.z}));
+    s.desired = {step->target.x, step->target.y, step->target.z};
+    s.facing = {std::cos(p.facing), std::sin(p.facing), 0};
+    const auto choice = coop::puppet::ChooseAction(p.speed, s.observed_motion);
+    if (choice) {
+      s.action = choice->action; s.item = choice->item;
+      s.transition_pending = rig.action != s.action || rig.item != s.item;
+      s.missing_action_kind = 0;
+      if (s.transition_pending) REXLOG_INFO("PUPPET partner action={} item={} speed={:.3f} restart=0",
+          s.action, s.item, p.speed);
+    } else {
+      s.action = rig.action; s.item = rig.item; s.transition_pending = false;
+      const unsigned kind = std::abs(p.speed) < coop::puppet::kIdleSpeed ? 1 : 2;
+      if (s.missing_action_kind != kind) REXLOG_INFO("PUPPET partner keep-current reason=no-observed-{}-action action={} item={}",
+          std::abs(p.speed) < coop::puppet::kIdleSpeed ? "idle" : "moving", s.action, s.item);
+      s.missing_action_kind = kind;
+    }
+    s.elapsed += double(s.dt);
+    s.updated_frame = s.frame;
+    ++s.updates;
+  } else {
+    s.elapsed = std::min(8.0, s.elapsed + double(s.dt));
+    const float move = s.elapsed <= 2 ? 0 : s.elapsed < 4 ? float((s.elapsed-2)/2) :
+                       s.elapsed <= 6 ? 1 : float((8-s.elapsed)/2);
+    const float turn = s.elapsed <= 4 ? 0 : s.elapsed < 6 ? float((s.elapsed-4)/2) : float((8-s.elapsed)/2);
+    const float angle = turn * 1.57079632679f;
+    s.desired = {s.origin.x + s.initial_forward.x * 0.5f * move,
+                 s.origin.y + s.initial_forward.y * 0.5f * move, s.origin.z};
+    s.facing = {s.initial_forward.x * std::cos(angle) - s.initial_forward.y * std::sin(angle),
+                s.initial_forward.x * std::sin(angle) + s.initial_forward.y * std::cos(angle), 0};
+  }
   {
     Scratch scratch(ctx, b);
     const uint32_t xyz = scratch.Vector(s.desired, 0x100), forward = scratch.Vector(s.facing, 0x110);
@@ -512,13 +655,15 @@ void DevPuppetAfterAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
   if (rig.action != s.action || rig.item != s.item) { s.Abort("action-item-readback-mismatch"); return; }
   s.early_pos = rig.pos; s.early_forward = rig.forward; s.early_frame = Frame(ctx, b, rig.actor);
   s.measure = true;
-  if (s.elapsed >= 8) { s.driving = false; s.finish_pending = true; }
+  if (Opt().partner) coop::SetPartnerBodyDriven(true);
+  else if (s.elapsed >= 8) { s.driving = false; s.finish_pending = true; }
 }
 
 void DevPuppetLateWorld(PPCContext& ctx, uint8_t* b, uint32_t w) {
-  if (!Opt().on) return;
+  if (!Enabled()) return;
   auto& s = Get();
   if (!s.measure) return;
+  if (Opt().partner && !PartnerReady(b, w)) return;
   s.measure = false;
   Rig rig;
   if (!s.Validate(b, w, rig)) return;
@@ -534,6 +679,9 @@ void DevPuppetLateWorld(PPCContext& ctx, uint8_t* b, uint32_t w) {
                 s.elapsed, XYZ(s.desired), XYZ(rig.pos), XYZ(s.facing), XYZ(rig.forward), rig.action, rig.item,
                 Frame(ctx, b, rig.actor), XYZ(s.early_pos), XYZ(s.early_forward), s.early_frame,
                 Distance(s.desired, rig.pos), s.max_late_error, s.max_forward_error);
+    if (Opt().partner) REXLOG_INFO("PUPPET partner driving epoch={} updates={} game-frame={} speed={:.3f} remote-action={} remote-item={} late-error={:.6f} late-z-error={:.6f} large-late-error={}",
+        s.epoch, s.updates, s.frame, s.partner.partner->speed, s.partner.partner->action, s.partner.partner->item,
+        Distance(s.desired, rig.pos), std::abs(s.desired.z-rig.pos.z), Distance(s.desired, rig.pos) > .25f);
   }
   if (s.finish_pending) {
     if (!s.held) { s.Abort("no-selected-scheduled-dispatch-held"); return; }
@@ -547,7 +695,7 @@ void DevPuppetLateWorld(PPCContext& ctx, uint8_t* b, uint32_t w) {
 
 // Natural init observation only. Never invoke H init to qualify an actor.
 void PuppetObserveInit(uint8_t* b, uint32_t actor, uint32_t ai) {
-  if (!Opt().on) return;
+  if (!Enabled()) return;
   auto& s = Get();
   if (s.driving && actor == s.selected.actor) s.Abort("selected-H-reinitialized");
   Rig rig;
@@ -563,11 +711,15 @@ void PuppetObserveInit(uint8_t* b, uint32_t actor, uint32_t ai) {
   s.humans[actor] = std::move(observation);
 }
 bool PuppetHold(PPCContext& ctx, uint8_t* b) {
-  if (!Opt().on) return false;
+  if (!Enabled()) return false;
   auto& s = Get();
   if (!s.driving) return false;
   if (uint32_t(ctx.lr) != 0x8271D304 || Load32(b, 0x82CCBF64) != s.selected.ai ||
       Load32(b, 0x82CCBF6C) != s.selected.actor) { ++s.passed; return false; }
+  if (Opt().partner && (photo::Active() || !PartnerReady(b, s.world))) {
+    if (s.driving) { s.Abort("photo-mode"); s.partner_eligible = false; }
+    return false;
+  }
   Rig rig;
   if (!s.Validate(b, s.world, rig)) return false;
   s.last_block = ctx.r3.u32; s.last_track = ctx.r4.u32; ++s.held;
@@ -577,7 +729,7 @@ bool PuppetHold(PPCContext& ctx, uint8_t* b) {
 }  // namespace kk
 
 REX_HOOK_RAW(sub_8268D8E8) {
-  const bool on = kk::Opt().on;
+  const bool on = kk::Enabled();
   const uint32_t actor = on ? kk::hfr::Load32(base, 0x82CCBF6C) : 0;
   const uint32_t ai = on ? kk::hfr::Load32(base, 0x82CCBF64) : 0;
   __imp__sub_8268D8E8(ctx, base);
