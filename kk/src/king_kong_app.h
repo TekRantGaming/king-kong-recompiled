@@ -157,6 +157,15 @@ class KingKongApp : public rex::ReXApp {
       defaults.user_data_root = kk::benchmark::Prepare(input_paths.user_data_root);
     user_data_root_ = defaults.user_data_root;
     config_path_ = defaults.config_path;
+    // Services belong to the app, including the launcher before the guest runtime exists.
+    kk::coop::Configure(user_data_root_);
+#if defined(KK_DEV_TOOLS)
+    if (kk::coop::SteamSelfTestRequested()) {
+      const int result = kk::coop::RunSteamSelfTest();
+      kk::coop::Shutdown();
+      std::exit(result);
+    }
+#endif
     kk::SetDebugOverlayConfigPath(defaults.config_path);
     kk::InitDiagnostics();
     {

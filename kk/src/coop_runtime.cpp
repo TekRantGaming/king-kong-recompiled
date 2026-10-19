@@ -1,8 +1,8 @@
 #include "coop_runtime.h"
 #include "coop_session.h"
 #include "settings.h"
+#include "steam_runtime.h"
 
-#if defined(KK_DEV_TOOLS)
 #include <atomic>
 #include <charconv>
 #include <chrono>
@@ -15,6 +15,7 @@
 
 #include <imgui.h>
 #include <rex/logging.h>
+#include <rex/filesystem.h>
 #include <rex/ui/imgui_dialog.h>
 
 #include "freecam.h"
@@ -24,12 +25,18 @@
 #include "play_internal.h"
 #include "ui_paint.h"
 
+#if defined(KK_DEV_TOOLS)
 REXCVAR_DEFINE_STRING(kk_coop_dev, "", "KK/Debug", "Local co-op test link: host:<port> or join:<port>")
     .debug_only().lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(kk_steam_selftest, false, "KK/Debug", "Test Steam services and exit without starting a game")
+    .debug_only().lifecycle(rex::cvar::Lifecycle::kInitOnly);
+#endif
 REXCVAR_DECLARE(bool, kk_hide_hud);
 
 namespace kk::coop {
 namespace {
+std::unique_ptr<SteamRuntime> steam;
+bool configured = false;
 using Clock = std::chrono::steady_clock;
 double Now() { return std::chrono::duration<double>(Clock::now().time_since_epoch()).count(); }
 bool Address(uint32_t a, uint32_t size = 4) {
@@ -76,6 +83,7 @@ struct View {
   std::optional<PlayerPose> local, partner;
   double updated = 0;
 };
+#if defined(KK_DEV_TOOLS)
 class Service {
  public:
   ~Service() { Stop(); }
@@ -127,22 +135,46 @@ class Service {
   View view_;
 };
 Service service;  // No thread, socket, guest reads, file access or allocation until explicitly started.
+#endif
+
+#if defined(KK_DEV_TOOLS)
+bool DevRunning() {
+  return service.Running();
+}
+bool DevSelected() {
+  const char* env = std::getenv("KK_COOP_DEV");
+  return !REXCVAR_GET(kk_coop_dev).empty() || (env && *env);
+}
+#endif
+View CurrentView() {
+#if defined(KK_DEV_TOOLS)
+  if (service.Running()) return service.Snapshot();
+#endif
+  if (!steam) return {};
+  const auto v = steam->SessionSnapshot();
+  return {v.role, v.state, v.rejection, v.stats, v.local, v.partner, v.updated};
+}
 
 class PartnerOverlay final : public rex::ui::ImGuiDialog {
  public:
   explicit PartnerOverlay(rex::ui::ImGuiDrawer* drawer) : ImGuiDialog(drawer) {}
  protected:
   void OnDraw(ImGuiIO&) override {
-    if (!REXCVAR_GET(kk_coop_enabled) || !service.Running() || photo::Active() || freecam::HideHud() ||
+    if (!REXCVAR_GET(kk_coop_enabled) || photo::Active() || freecam::HideHud() ||
         freecam::HideGameHud() || REXCVAR_GET(kk_hide_hud) || play::CoverScreen()) return;
-    const View v = service.Snapshot();  // UI reads copied values only, never guest memory.
+    const View v = CurrentView();  // UI reads copied values only, never guest memory.
+    if (v.state == SessionState::Idle) return;
     if (Now() - v.updated > .5 && v.state != SessionState::Ended) return;
     char text[256];
+#if defined(KK_DEV_TOOLS)
     std::snprintf(text, sizeof(text), "Co-op %s: %s | %.0f ms | loss %.1f%% | invalid %llu | %s",
         v.role == Role::Host ? "host" : "guest", StateName(v.state), v.stats.ping_ms, v.stats.loss * 100,
         static_cast<unsigned long long>(v.stats.malformed), RejectName(v.rejection));
     auto* dl = ImGui::GetForegroundDrawList();
     dl->AddText(ImVec2(24, 64), IM_COL32(255, 230, 170, 255), text);
+#else
+    auto* dl = ImGui::GetForegroundDrawList();
+#endif
     if (v.state != SessionState::Connected || !v.local || !v.partner || v.local->level != v.partner->level ||
         freecam::Active()) return;
     const float dx = v.partner->x - v.local->x, dy = v.partner->y - v.local->y, dz = v.partner->z - v.local->z;
@@ -155,12 +187,30 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
   }
 };
 }  // namespace
+void Configure(const std::filesystem::path& user_data) {
+  if (configured) return;
+  configured = true;
+  SteamRuntimeOptions options;
+  options.enabled = REXCVAR_GET(kk_coop_enabled);
+  options.executable_folder = rex::filesystem::GetExecutableFolder();
+  options.startup_lobby = CaptureStartupLobby();
+  options.request_ui_paint = [] { RequestUiPaint(); };
+  options.read_compatibility = [user_data] {
+    return Compatibility{kProtocolVersion, KK_VERSION, KK_COOP_BUILD, mods::GameplayDigest(user_data)};
+  };
+  if (options.enabled) options.compatibility = {kProtocolVersion, KK_VERSION, KK_COOP_BUILD, mods::GameplayDigest(user_data)};
+  steam = std::make_unique<SteamRuntime>(std::move(options));
+}
 void Start(const std::filesystem::path& user_data) {
-  if (!REXCVAR_GET(kk_coop_enabled) || service.Running()) return;  // off: not even a log line
+  Configure(user_data);
+  if (!REXCVAR_GET(kk_coop_enabled)) return;
+#if defined(KK_DEV_TOOLS)
+  if (service.Running()) return;
+  if (REXCVAR_GET(kk_steam_selftest)) return;
   std::string address = REXCVAR_GET(kk_coop_dev);
   if (const char* env = std::getenv("KK_COOP_DEV"); address.empty() && env) address = env;
   const size_t colon = address.find(':');
-  if (colon == std::string::npos) { REXLOG_INFO("KK co-op: enabled, no dev link set"); return; }
+  if (colon == std::string::npos) return;
   const std::string role = address.substr(0, colon);
   unsigned port = 0;
   const char* begin = address.data() + colon + 1;
@@ -179,22 +229,46 @@ void Start(const std::filesystem::path& user_data) {
   config.compatibility = {kProtocolVersion, KK_VERSION, KK_COOP_BUILD, mods::GameplayDigest(user_data)};
   REXLOG_INFO("KK co-op: dev link {} on 127.0.0.1:{}", role, port);
   service.Start(std::move(config), uint16_t(port));
+#endif
 }
-void Shutdown() { service.Stop(); }
+ISocialService& Social() {
+  // A pre-configuration caller can show disabled state, but cannot initialize Steam early.
+  static SteamRuntime disabled(SteamRuntimeOptions{});
+#if defined(KK_DEV_TOOLS)
+  class DevSocial final : public ISocialService {
+   public:
+    SocialModel Snapshot() const override {
+      SocialModel m; m.status = SocialStatus::Disabled; m.status_text = "Local dev link selected"; return m;
+    }
+    bool Act(SocialCommand) override { return false; }
+  };
+  static DevSocial dev;
+  if (DevSelected()) return dev;
+#endif
+  return steam ? static_cast<ISocialService&>(*steam) : static_cast<ISocialService&>(disabled);
+}
+void Shutdown() {
+#if defined(KK_DEV_TOOLS)
+  service.Stop();
+#endif
+  if (steam) steam->Shutdown();
+}
 void GameFrame(uint8_t* base) {
   if (!REXCVAR_GET(kk_coop_enabled)) return;
+#if defined(KK_DEV_TOOLS)
   if (service.Running()) service.Publish(ReadJack(base));
+  else
+#endif
+  if (steam && steam->SessionSnapshot().state != SessionState::Idle) steam->PublishPose(ReadJack(base));
 }
 void CreateOverlay(rex::ui::ImGuiDrawer* drawer) {
   if (REXCVAR_GET(kk_coop_enabled)) new PartnerOverlay(drawer);
 }
-}  // namespace kk::coop
-#else
-// Steam transport will use the same protocol/session in C05. No dev link or worker in shipping builds.
-namespace kk::coop {
-void Start(const std::filesystem::path&) {}
-void Shutdown() {}
-void GameFrame(uint8_t*) {}
-void CreateOverlay(rex::ui::ImGuiDrawer*) {}
-}  // namespace kk::coop
+#if defined(KK_DEV_TOOLS)
+bool SteamSelfTestRequested() { return REXCVAR_GET(kk_steam_selftest); }
+int RunSteamSelfTest() {
+  if (!steam || DevRunning()) { REXLOG_INFO("Steam self-test: unavailable while dev link selected"); return 1; }
+  return steam->SelfTest([](const std::string& line) { REXLOG_INFO("{}", line); });
+}
 #endif
+}  // namespace kk::coop

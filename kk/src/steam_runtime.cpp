@@ -1,0 +1,690 @@
+#include "steam_runtime.h"
+#include "steam_transport.h"
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cstdlib>
+#include <cstring>
+#include <deque>
+#include <mutex>
+#include <random>
+#include <thread>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <shellapi.h>
+#elif defined(__APPLE__)
+#include <crt_externs.h>
+#else
+#include <fstream>
+#endif
+#if KK_HAS_STEAM
+#include <steam/steam_api.h>
+#include <steam/steam_api_flat.h>
+#ifndef _WIN32
+#include <dlfcn.h>
+#endif
+#endif
+
+namespace kk::coop {
+SocialId CaptureStartupLobby() {
+  std::vector<std::string> args;
+#ifdef _WIN32
+  int count = 0;
+  auto argv = CommandLineToArgvW(GetCommandLineW(), &count);
+  if (!argv) return 0;
+  for (int i = 1; i < count; ++i) {
+    std::string s;
+    for (const wchar_t* p = argv[i]; *p && s.size() < 128; ++p) s += *p < 128 ? char(*p) : '?';
+    args.push_back(std::move(s));
+  }
+  LocalFree(argv);
+#elif defined(__APPLE__)
+  for (int i = 1; i < *_NSGetArgc(); ++i) args.emplace_back((*_NSGetArgv())[i]);
+#else
+  std::ifstream in("/proc/self/cmdline", std::ios::binary);
+  std::string s; std::getline(in, s, '\0');
+  while (args.size() < 4096 && std::getline(in, s, '\0')) args.push_back(s);
+#endif
+  return ConsumeLobbyArgument(args);
+}
+namespace {
+constexpr size_t kMaxCommands = 64;
+#if KK_HAS_STEAM
+double Now() {
+  return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+constexpr size_t kMaxInvites = 16, kMaxFriends = 256;
+// Declarations/types come from SDK 1.65. Every invocation goes through a resolved pointer.
+#define KK_STEAM_EXPORTS(X) \
+ X(SteamAPI_InitFlat) X(SteamAPI_Shutdown) X(SteamAPI_GetHSteamPipe) \
+ X(SteamAPI_ManualDispatch_Init) X(SteamAPI_ManualDispatch_RunFrame) \
+ X(SteamAPI_ManualDispatch_GetNextCallback) X(SteamAPI_ManualDispatch_FreeLastCallback) \
+ X(SteamAPI_ManualDispatch_GetAPICallResult) \
+ X(SteamAPI_SteamUser_v023) X(SteamAPI_SteamFriends_v018) X(SteamAPI_SteamUtils_v011) \
+ X(SteamAPI_SteamMatchmaking_v009) X(SteamAPI_SteamNetworkingMessages_SteamAPI_v002) \
+ X(SteamAPI_SteamNetworkingUtils_SteamAPI_v004) \
+ X(SteamAPI_ISteamUser_GetSteamID) X(SteamAPI_ISteamUser_BLoggedOn) \
+ X(SteamAPI_ISteamUtils_GetAppID) X(SteamAPI_ISteamUtils_IsOverlayEnabled) \
+ X(SteamAPI_ISteamUtils_GetImageSize) X(SteamAPI_ISteamUtils_GetImageRGBA) \
+ X(SteamAPI_ISteamFriends_GetFriendCount) X(SteamAPI_ISteamFriends_GetFriendByIndex) \
+ X(SteamAPI_ISteamFriends_GetPersonaState) X(SteamAPI_ISteamFriends_GetFriendPersonaName) \
+ X(SteamAPI_ISteamFriends_GetFriendPersonaState) X(SteamAPI_ISteamFriends_GetFriendRelationship) \
+ X(SteamAPI_ISteamFriends_GetFriendGamePlayed) X(SteamAPI_ISteamFriends_GetSmallFriendAvatar) \
+ X(SteamAPI_ISteamFriends_GetFriendRichPresence) X(SteamAPI_ISteamFriends_RequestFriendRichPresence) \
+ X(SteamAPI_ISteamFriends_SetRichPresence) X(SteamAPI_ISteamFriends_ClearRichPresence) \
+ X(SteamAPI_ISteamFriends_ActivateGameOverlayInviteDialog) \
+ X(SteamAPI_ISteamMatchmaking_CreateLobby) X(SteamAPI_ISteamMatchmaking_JoinLobby) \
+ X(SteamAPI_ISteamMatchmaking_LeaveLobby) X(SteamAPI_ISteamMatchmaking_RequestLobbyData) \
+ X(SteamAPI_ISteamMatchmaking_GetLobbyData) X(SteamAPI_ISteamMatchmaking_SetLobbyData) \
+ X(SteamAPI_ISteamMatchmaking_GetNumLobbyMembers) X(SteamAPI_ISteamMatchmaking_GetLobbyMemberByIndex) \
+ X(SteamAPI_ISteamMatchmaking_GetLobbyMemberData) X(SteamAPI_ISteamMatchmaking_SetLobbyMemberData) \
+ X(SteamAPI_ISteamMatchmaking_GetLobbyOwner) X(SteamAPI_ISteamMatchmaking_SetLobbyJoinable) \
+ X(SteamAPI_ISteamMatchmaking_InviteUserToLobby) \
+ X(SteamAPI_ISteamNetworkingMessages_SendMessageToUser) \
+ X(SteamAPI_ISteamNetworkingMessages_ReceiveMessagesOnChannel) \
+ X(SteamAPI_ISteamNetworkingMessages_AcceptSessionWithUser) \
+ X(SteamAPI_ISteamNetworkingMessages_CloseSessionWithUser) \
+ X(SteamAPI_ISteamNetworkingMessages_GetSessionConnectionInfo) \
+ X(SteamAPI_ISteamNetworkingUtils_InitRelayNetworkAccess) X(SteamAPI_ISteamNetworkingUtils_SetConfigValue)
+struct Api {
+#define DECLARE(name) decltype(&::name) name = nullptr;
+  KK_STEAM_EXPORTS(DECLARE)
+#undef DECLARE
+  // Deliberately retained until process exit: Steam shutdown does not unhook the overlay.
+  void* module = nullptr;
+  bool Load(const std::filesystem::path& folder) {
+    if (folder.empty() || !folder.is_absolute()) return false;
+#ifdef _WIN32
+    module = LoadLibraryExW((folder / "steam_api64.dll").c_str(), nullptr,
+                           LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+    auto symbol = [&](const char* name) { return reinterpret_cast<void*>(GetProcAddress(static_cast<HMODULE>(module), name)); };
+#else
+#ifdef __APPLE__
+    const auto file = folder / "libsteam_api.dylib";
+#else
+    const auto file = folder / "libsteam_api.so";
+#endif
+    module = dlopen(file.c_str(), RTLD_NOW | RTLD_LOCAL);
+    auto symbol = [&](const char* name) { return dlsym(module, name); };
+#endif
+    if (!module) return false;
+#define RESOLVE(name) name = reinterpret_cast<decltype(name)>(symbol(#name)); if (!name) return false;
+    KK_STEAM_EXPORTS(RESOLVE)
+#undef RESOLVE
+    return true;
+  }
+};
+std::string Text(const char* s, size_t limit = 128) {
+  if (!s) return {};
+  size_t n = 0; while (n <= limit && s[n]) ++n;
+  return n <= limit ? std::string(s, n) : std::string{};
+}
+template<class T> bool Callback(const CallbackMsg_t& m, T& out) {
+  if (m.m_iCallback != T::k_iCallback || m.m_cubParam != sizeof(T) || !m.m_pubParam) return false;
+  std::memcpy(&out, m.m_pubParam, sizeof(T)); return true;
+}
+#endif
+}
+
+struct SteamRuntime::Impl
+#if KK_HAS_STEAM
+    final : ISteamMessagesBackend
+#endif
+{
+  SteamRuntimeOptions options;
+  mutable std::mutex mutex;
+  std::condition_variable wake;
+  SocialModel published;
+  SteamSessionView session_view;
+  std::optional<PlayerPose> local_pose;
+  struct PendingCommand { SocialCommand command; std::optional<Compatibility> compatibility; };
+  std::deque<PendingCommand> commands;
+  std::thread worker;
+  bool used = false, stopped = false;
+  std::atomic<bool> stop{false};
+  bool self_test = false;
+  int test_result = 1;
+  std::function<void(const std::string&)> test_log;
+  explicit Impl(SteamRuntimeOptions o) : options(std::move(o)) {
+    published.status = options.enabled ? SocialStatus::Dormant : SocialStatus::Disabled;
+    published.status_text = options.enabled ? "Open Social to connect to Steam" : "Co-op is disabled";
+    if (options.startup_lobby) published.pending_invites.push_back({options.startup_lobby, 0});
+  }
+  ~Impl() { Shutdown(); }
+  void Shutdown() {
+    { std::lock_guard lock(mutex); stopped = true; stop = true; commands.clear(); }
+    wake.notify_all();
+    if (worker.joinable()) worker.join();
+  }
+  void Paint() { if (options.request_ui_paint) options.request_ui_paint(); }
+  bool Enqueue(SocialCommand c, std::optional<Compatibility> compatibility) {
+    std::unique_lock lock(mutex);
+    if ((!used || published.status == SocialStatus::Unavailable) && !stopped && c.action == SocialAction::Decline) {
+      std::erase_if(published.pending_invites, [&](auto i) { return i.lobby == c.id; });
+      lock.unlock(); Paint(); return true;
+    }
+    if (!options.enabled || stopped || commands.size() >= kMaxCommands) return false;
+#if !KK_HAS_STEAM
+    (void)compatibility;
+    published.status = SocialStatus::Unavailable; published.status_text = "Steam not available in this build";
+    published.last_error = published.status_text;
+    lock.unlock(); Paint(); return false;
+#else
+    if (used && published.status == SocialStatus::Unavailable) return false;
+    if (!used && c.action != SocialAction::Open && c.action != SocialAction::CreateLobby && c.action != SocialAction::Accept) return false;
+    commands.push_back({c, std::move(compatibility)});
+    if (!used) { used = true; worker = std::thread([this] { Run(); }); }
+    lock.unlock(); wake.notify_all(); return true;
+#endif
+  }
+#if KK_HAS_STEAM
+  Api api;
+  ISteamUser* user = nullptr;
+  ISteamFriends* friends = nullptr;
+  ISteamUtils* utils = nullptr;
+  ISteamMatchmaking* matchmaking = nullptr;
+  ISteamNetworkingMessages* messages = nullptr;
+  ISteamNetworkingUtils* networking = nullptr;
+  HSteamPipe pipe = 0;
+  bool initialized = false;
+  SocialModel model;
+  uint64_t epoch = 0, generation = 1, recorded_owner = 0, joining = 0, joining_owner = 0, validating = 0, partner = 0;
+  SteamAPICall_t create_call = 0, join_call = 0;
+  std::map<SteamAPICall_t, int> abandoned;
+  double operation_deadline = 0, next_friends = 0, next_lobby = 0, next_invite = 0;
+  std::string ready_token;
+  std::unique_ptr<SteamMessagesTransport> transport;
+  std::unique_ptr<CoopSession> session;
+  SessionState last_session_state = SessionState::Idle;
+  void Publish() {
+    model.can_start = CanStartLobby(model);
+    { std::lock_guard lock(mutex); published = model; }
+    Paint();
+  }
+  void Error(const char* text) { model.last_error = text; Publish(); }
+  void Status(SocialStatus status, const char* text) { model.status = status; model.status_text = text; Publish(); }
+  bool Friend(uint64_t id) { return id && api.SteamAPI_ISteamFriends_GetFriendRelationship(friends, id) == k_EFriendRelationshipFriend; }
+  bool Init() {
+#ifdef _WIN32
+    if (!SetEnvironmentVariableW(L"SteamAppId", L"480") || !SetEnvironmentVariableW(L"SteamGameId", L"480")) return false;
+#else
+    if (setenv("SteamAppId", "480", 1) || setenv("SteamGameId", "480", 1)) return false;
+#endif
+    if (!api.Load(options.executable_folder)) return false;
+    SteamErrMsg error{};
+    if (api.SteamAPI_InitFlat(&error) != k_ESteamAPIInitResult_OK) return false;
+    initialized = true;
+    api.SteamAPI_ManualDispatch_Init(); pipe = api.SteamAPI_GetHSteamPipe();
+    user = api.SteamAPI_SteamUser_v023(); friends = api.SteamAPI_SteamFriends_v018();
+    utils = api.SteamAPI_SteamUtils_v011(); matchmaking = api.SteamAPI_SteamMatchmaking_v009();
+    messages = api.SteamAPI_SteamNetworkingMessages_SteamAPI_v002();
+    networking = api.SteamAPI_SteamNetworkingUtils_SteamAPI_v004();
+    if (!pipe || !user || !friends || !utils || !matchmaking || !messages || !networking ||
+        api.SteamAPI_ISteamUtils_GetAppID(utils) != 480 || !api.SteamAPI_ISteamUser_BLoggedOn(user)) return false;
+    model.self = api.SteamAPI_ISteamUser_GetSteamID(user);
+    if (!model.self) return false;
+    const int32_t no_ice = 0, buffer = 64 * int32_t(kMaxPacketBytes), max_message = int32_t(kMaxPacketBytes), max_messages = 64;
+    if (!api.SteamAPI_ISteamNetworkingUtils_SetConfigValue(networking, k_ESteamNetworkingConfig_P2P_Transport_ICE_Enable,
+        k_ESteamNetworkingConfig_Global, 0, k_ESteamNetworkingConfig_Int32, &no_ice) ||
+        !api.SteamAPI_ISteamNetworkingUtils_SetConfigValue(networking, k_ESteamNetworkingConfig_SendBufferSize,
+        k_ESteamNetworkingConfig_Global, 0, k_ESteamNetworkingConfig_Int32, &buffer) ||
+        !api.SteamAPI_ISteamNetworkingUtils_SetConfigValue(networking, k_ESteamNetworkingConfig_RecvMaxMessageSize,
+        k_ESteamNetworkingConfig_Global, 0, k_ESteamNetworkingConfig_Int32, &max_message) ||
+        !api.SteamAPI_ISteamNetworkingUtils_SetConfigValue(networking, k_ESteamNetworkingConfig_RecvBufferSize,
+        k_ESteamNetworkingConfig_Global, 0, k_ESteamNetworkingConfig_Int32, &buffer) ||
+        !api.SteamAPI_ISteamNetworkingUtils_SetConfigValue(networking, k_ESteamNetworkingConfig_RecvBufferMessages,
+        k_ESteamNetworkingConfig_Global, 0, k_ESteamNetworkingConfig_Int32, &max_messages)) return false;
+    api.SteamAPI_ISteamNetworkingUtils_InitRelayNetworkAccess(networking);
+    model.overlay_available = api.SteamAPI_ISteamUtils_IsOverlayEnabled(utils);
+    if (!self_test) api.SteamAPI_ISteamFriends_SetRichPresence(friends, kPresenceKey, kProductValue);
+    return true;
+  }
+  void Friends() {
+    // Refresh at most every five seconds; no per-frame avatar allocation or rich-presence request.
+    std::vector<SocialFriend> list;
+    const int count = std::clamp(api.SteamAPI_ISteamFriends_GetFriendCount(friends, k_EFriendFlagImmediate), 0, int(kMaxFriends));
+    for (int i = 0; i < count; ++i) {
+      SocialFriend f; f.id = api.SteamAPI_ISteamFriends_GetFriendByIndex(friends, i, k_EFriendFlagImmediate);
+      f.name = Text(api.SteamAPI_ISteamFriends_GetFriendPersonaName(friends, f.id));
+      const auto state = api.SteamAPI_ISteamFriends_GetFriendPersonaState(friends, f.id);
+      f.state = state == k_EPersonaStateOffline || state == k_EPersonaStateInvisible ? FriendState::Offline :
+          state == k_EPersonaStateAway || state == k_EPersonaStateSnooze ? FriendState::Away :
+          state == k_EPersonaStateBusy ? FriendState::Busy : FriendState::Online;
+      FriendGameInfo_t game{};
+      if (f.state == FriendState::Online && api.SteamAPI_ISteamFriends_GetFriendGamePlayed(friends, f.id, &game)) f.state = FriendState::InGame;
+      f.in_our_game = Text(api.SteamAPI_ISteamFriends_GetFriendRichPresence(friends, f.id, kPresenceKey)) == kProductValue;
+      auto old = std::find_if(model.friends.begin(), model.friends.end(), [&](const auto& p) { return p.id == f.id; });
+      if (old == model.friends.end()) api.SteamAPI_ISteamFriends_RequestFriendRichPresence(friends, f.id);
+      const int avatar = api.SteamAPI_ISteamFriends_GetSmallFriendAvatar(friends, f.id);
+      uint32 w = 0, h = 0;
+      if (avatar > 0 && api.SteamAPI_ISteamUtils_GetImageSize(utils, avatar, &w, &h) && w && h && w <= 64 && h <= 64) {
+        f.avatar_rgba.resize(size_t(w) * h * 4);
+        if (api.SteamAPI_ISteamUtils_GetImageRGBA(utils, avatar, f.avatar_rgba.data(), int(f.avatar_rgba.size()))) {
+          f.avatar_width = w; f.avatar_height = h;
+        } else f.avatar_rgba.clear();
+      }
+      list.push_back(std::move(f));
+    }
+    model.friends = std::move(list); Publish();
+  }
+  LobbyKeys ReadKeys(uint64_t lobby) {
+    LobbyKeys keys;
+    for (const char* key : {kProductKey, "kkrc_protocol", "kkrc_version", "kkrc_build", "kkrc_mods"})
+      keys[key] = Text(api.SteamAPI_ISteamMatchmaking_GetLobbyData(matchmaking, lobby, key));
+    return keys;
+  }
+  std::string Data(uint64_t lobby, const char* key) { return Text(api.SteamAPI_ISteamMatchmaking_GetLobbyData(matchmaking, lobby, key)); }
+  bool SetData(const char* key, const std::string& value) {
+    return api.SteamAPI_ISteamMatchmaking_SetLobbyData(matchmaking, model.lobby, key, value.c_str());
+  }
+  void StopSession() {
+    if (session) {
+      session->End(Now());
+      // Give reliable Bye a bounded best-effort flush before closing the underlying session.
+      const double until = Now() + .2;
+      while (transport && transport->State() == TransportState::Ready && Now() < until) {
+        transport->Poll(Now()); std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      }
+    }
+    session.reset();
+    if (transport) transport->Close();
+    transport.reset(); partner = 0; last_session_state = SessionState::Idle;
+    { std::lock_guard lock(mutex); session_view = {}; }
+  }
+  void RetireCalls() {
+    if (create_call) abandoned.emplace(create_call, LobbyCreated_t::k_iCallback);
+    if (join_call) abandoned.emplace(join_call, LobbyEnter_t::k_iCallback);
+    create_call = join_call = 0;
+  }
+  void Leave(const char* reason = nullptr) {
+    StopSession();
+    if (model.lobby) api.SteamAPI_ISteamMatchmaking_LeaveLobby(matchmaking, model.lobby);
+    api.SteamAPI_ISteamFriends_ClearRichPresence(friends);
+    if (!self_test && !stop) api.SteamAPI_ISteamFriends_SetRichPresence(friends, kPresenceKey, kProductValue);
+    model.lobby = model.owner = recorded_owner = epoch = validating = joining = joining_owner = 0;
+    model.members.clear(); model.start_requested = false; ready_token.clear();
+    RetireCalls();
+    model.status = reason ? SocialStatus::Ended : SocialStatus::Idle;
+    model.status_text = reason ? reason : "Steam connected";
+    if (reason) model.last_error = reason;
+    Publish();
+  }
+  bool RefreshLobby() {
+    if (!model.lobby) return false;
+    const auto owner = api.SteamAPI_ISteamMatchmaking_GetLobbyOwner(matchmaking, model.lobby);
+    if (owner != recorded_owner) { Leave("The host left the lobby"); return false; }
+    if (!CompatibleLobby(ReadKeys(model.lobby), options.compatibility) || Data(model.lobby, "kkrc_epoch") != std::to_string(epoch)) {
+      Leave("Lobby compatibility changed"); return false;
+    }
+    const int count = api.SteamAPI_ISteamMatchmaking_GetNumLobbyMembers(matchmaking, model.lobby);
+    if (count < 1 || count > 2) { Leave("Invalid lobby membership"); return false; }
+    std::vector<SocialMember> members;
+    bool self_seen = false, owner_seen = false;
+    for (int i = 0; i < count; ++i) {
+      const auto id = api.SteamAPI_ISteamMatchmaking_GetLobbyMemberByIndex(matchmaking, model.lobby, i);
+      self_seen |= id == model.self; owner_seen |= id == recorded_owner;
+      if (!id || (id != model.self && !Friend(id)) || (!members.empty() && members.front().id == id)) {
+        Leave("Lobby contains an unapproved member"); return false;
+      }
+      members.push_back({id, Text(api.SteamAPI_ISteamFriends_GetFriendPersonaName(friends, id)), false});
+    }
+    if (!self_seen || !owner_seen) { Leave("The host left the lobby"); return false; }
+    std::sort(members.begin(), members.end(), [](auto& a, auto& b) { return a.id < b.id; });
+    if (!ParseLobbyId(Data(model.lobby, "kkrc_generation"), generation)) { Leave("Invalid ready generation"); return false; }
+    std::string token = std::to_string(epoch) + ":" + std::to_string(generation);
+    for (const auto& m : members) token += ":" + std::to_string(m.id);
+    if (!ready_token.empty() && token != ready_token && model.start_requested) { Leave("The partner left the session"); return false; }
+    if (token != ready_token)
+      api.SteamAPI_ISteamMatchmaking_SetLobbyMemberData(matchmaking, model.lobby, kReadyKey, "0");
+    ready_token = token;
+    for (auto& m : members) m.ready = Text(api.SteamAPI_ISteamMatchmaking_GetLobbyMemberData(matchmaking, model.lobby, m.id, kReadyKey)) == ready_token;
+    model.members = std::move(members); model.owner = owner;
+    const auto phase = Data(model.lobby, "kkrc_phase");
+    if (phase == "starting" && !model.start_requested) {
+      if (model.members.size() != 2 || !model.members[0].ready || !model.members[1].ready) {
+        Leave("The lobby was not ready to start"); return false;
+      }
+      StartSession();
+    } else if (phase != "waiting" && phase != "starting") { Leave("Invalid lobby phase"); return false; }
+    Publish(); return true;
+  }
+  void StartSession() {
+    if (session || model.members.size() != 2) return;
+    for (const auto& m : model.members) if (m.id != model.self) partner = m.id;
+    if (!partner || !Friend(partner)) return;
+    transport = std::make_unique<SteamMessagesTransport>(*this, partner);
+    SessionConfig config{true, model.self == recorded_owner ? Role::Host : Role::Guest,
+                         model.self == recorded_owner ? epoch : 0, options.compatibility};
+    session = std::make_unique<CoopSession>(config, *transport);
+    model.start_requested = true;
+    api.SteamAPI_ISteamFriends_SetRichPresence(friends, "connect", nullptr);
+    Status(SocialStatus::Starting, "Connecting to partner");
+  }
+  void Created(const LobbyCreated_t& c, bool failed) {
+    create_call = 0;
+    if (failed || c.m_eResult != k_EResultOK || !c.m_ulSteamIDLobby) {
+      Status(SocialStatus::Idle, "Steam connected"); Error("Could not create lobby"); if (self_test) stop = true; return;
+    }
+    if (stop) { api.SteamAPI_ISteamMatchmaking_LeaveLobby(matchmaking, c.m_ulSteamIDLobby); return; }
+    model.lobby = c.m_ulSteamIDLobby; model.owner = recorded_owner = model.self;
+    std::random_device random; epoch = (uint64_t(random()) << 32) ^ random(); if (!epoch) epoch = 1;
+    bool ok = api.SteamAPI_ISteamMatchmaking_SetLobbyJoinable(matchmaking, model.lobby, false);
+    const auto keys = EncodeLobbyKeys(options.compatibility);
+    ok = ok && !keys.empty();
+    for (const auto& [key, value] : keys) ok = SetData(key.c_str(), value) && ok;
+    ok = SetData("kkrc_epoch", std::to_string(epoch)) && ok;
+    generation = 1;
+    ok = SetData("kkrc_generation", "1") && ok;
+    ok = SetData("kkrc_phase", "waiting") && ok;
+    api.SteamAPI_ISteamMatchmaking_SetLobbyMemberData(matchmaking, model.lobby, kReadyKey, "0");
+    if (!ok) { Leave("Could not publish lobby compatibility"); if (self_test) stop = true; return; }
+    if (self_test) {
+      const bool same = ReadKeys(model.lobby) == keys && Data(model.lobby, "kkrc_epoch") == std::to_string(epoch) &&
+          Data(model.lobby, "kkrc_generation") == "1" && Data(model.lobby, "kkrc_phase") == "waiting";
+      test_log("Steam self-test: lobby created hash=" + ShortSocialHash(model.lobby));
+      test_log(same ? "Steam self-test: lobby keys OK" : "Steam self-test: lobby keys failed");
+      test_result = same ? 0 : 1; Leave(); stop = true; return;
+    }
+    if (!api.SteamAPI_ISteamMatchmaking_SetLobbyJoinable(matchmaking, model.lobby, true)) { Leave("Could not open lobby"); return; }
+    api.SteamAPI_ISteamFriends_SetRichPresence(friends, kPresenceKey, kProductValue);
+    const auto connect = "+connect_lobby " + std::to_string(model.lobby);
+    api.SteamAPI_ISteamFriends_SetRichPresence(friends, "connect", connect.c_str());
+    Status(SocialStatus::Lobby, "Lobby open"); RefreshLobby();
+  }
+  void Joined(const LobbyEnter_t& c, bool failed) {
+    join_call = 0;
+    if (failed || c.m_EChatRoomEnterResponse != k_EChatRoomEnterResponseSuccess || c.m_ulSteamIDLobby != joining) {
+      if (c.m_ulSteamIDLobby && c.m_EChatRoomEnterResponse == k_EChatRoomEnterResponseSuccess)
+        api.SteamAPI_ISteamMatchmaking_LeaveLobby(matchmaking, c.m_ulSteamIDLobby);
+      joining = 0; Status(SocialStatus::Idle, "Steam connected"); Error("Could not join lobby"); return;
+    }
+    if (stop) { api.SteamAPI_ISteamMatchmaking_LeaveLobby(matchmaking, c.m_ulSteamIDLobby); return; }
+    model.lobby = joining; joining = 0;
+    recorded_owner = api.SteamAPI_ISteamMatchmaking_GetLobbyOwner(matchmaking, model.lobby);
+    if (recorded_owner != joining_owner || !Friend(recorded_owner) ||
+        !ParseLobbyId(Data(model.lobby, "kkrc_epoch"), epoch) || Data(model.lobby, "kkrc_phase") != "waiting") {
+      Leave("Lobby unavailable or incompatible"); return;
+    }
+    api.SteamAPI_ISteamMatchmaking_SetLobbyMemberData(matchmaking, model.lobby, kReadyKey, "0");
+    std::erase_if(model.pending_invites, [&](auto i) { return i.lobby == model.lobby; });
+    api.SteamAPI_ISteamFriends_SetRichPresence(friends, kPresenceKey, kProductValue);
+    Status(SocialStatus::Lobby, "Joined lobby"); RefreshLobby();
+  }
+  void Invite(uint64_t lobby, uint64_t inviter) {
+    if (!CSteamID(lobby).IsLobby() || !CSteamID(lobby).IsValid() || (inviter && !Friend(inviter))) return;
+    if (std::none_of(model.pending_invites.begin(), model.pending_invites.end(), [&](auto i) { return i.lobby == lobby; })) {
+      if (model.pending_invites.size() == kMaxInvites) model.pending_invites.erase(model.pending_invites.begin());
+      model.pending_invites.push_back({lobby, inviter}); Publish();
+    }
+  }
+  void Validated(const LobbyDataUpdate_t& d) {
+    if (d.m_ulSteamIDLobby != validating || d.m_ulSteamIDMember != validating) return;
+    const auto lobby = validating; validating = 0;
+    const auto owner = api.SteamAPI_ISteamMatchmaking_GetLobbyOwner(matchmaking, lobby);
+    if (!d.m_bSuccess || !Friend(owner) || !CompatibleLobby(ReadKeys(lobby), options.compatibility) ||
+        Data(lobby, "kkrc_phase") != "waiting" || api.SteamAPI_ISteamMatchmaking_GetNumLobbyMembers(matchmaking, lobby) != 1) {
+      Status(SocialStatus::Idle, "Steam connected"); Error("Lobby unavailable or incompatible"); return;
+    }
+    joining = lobby; joining_owner = owner; join_call = api.SteamAPI_ISteamMatchmaking_JoinLobby(matchmaking, lobby);
+    if (!join_call) { joining = 0; Status(SocialStatus::Idle, "Steam connected"); Error("Could not request lobby join"); }
+  }
+  void Command(SocialCommand c) {
+    if (c.action == SocialAction::Decline) { std::erase_if(model.pending_invites, [&](auto i) { return i.lobby == c.id; }); Publish(); return; }
+    if (c.action == SocialAction::Leave) { Leave(); return; }
+    if (c.action == SocialAction::Open) { Publish(); return; }
+    if (create_call || join_call || validating) return;
+    if (abandoned.size() >= 8) { Error("Steam requests are still pending; restart to retry"); return; }
+    switch (c.action) {
+      case SocialAction::CreateLobby:
+        if (model.lobby) return;
+        model.last_error.clear(); create_call = api.SteamAPI_ISteamMatchmaking_CreateLobby(matchmaking,
+            self_test ? k_ELobbyTypeInvisible : k_ELobbyTypeFriendsOnly, 2);
+        operation_deadline = Now() + 20;
+        if (create_call) Status(SocialStatus::Creating, "Creating lobby");
+        else { Error("Could not request lobby creation"); if (self_test) stop = true; }
+        return;
+      case SocialAction::Accept:
+        if (model.lobby || std::none_of(model.pending_invites.begin(), model.pending_invites.end(), [&](auto i) { return i.lobby == c.id; })) return;
+        if (!CSteamID(c.id).IsLobby() || !CSteamID(c.id).IsValid()) { Error("Invalid lobby invite"); return; }
+        validating = c.id; operation_deadline = Now() + 20; model.last_error.clear();
+        if (!api.SteamAPI_ISteamMatchmaking_RequestLobbyData(matchmaking, validating)) { validating = 0; Error("Could not inspect invited lobby"); }
+        else Status(SocialStatus::Joining, "Checking invited lobby");
+        return;
+      case SocialAction::Invite:
+        if (!model.lobby || model.status != SocialStatus::Lobby || !Friend(c.id) || Now() < next_invite) return;
+        next_invite = Now() + 2;
+        if (!api.SteamAPI_ISteamMatchmaking_InviteUserToLobby(matchmaking, model.lobby, c.id)) Error("Could not send invite");
+        return;
+      case SocialAction::OverlayInvite:
+        if (model.lobby && model.status == SocialStatus::Lobby && model.overlay_available)
+          api.SteamAPI_ISteamFriends_ActivateGameOverlayInviteDialog(friends, model.lobby);
+        else Error("Steam overlay is unavailable");
+        return;
+      case SocialAction::SetReady:
+        if (model.status != SocialStatus::Lobby || !RefreshLobby()) return;
+        api.SteamAPI_ISteamMatchmaking_SetLobbyMemberData(matchmaking, model.lobby, kReadyKey, c.ready ? ready_token.c_str() : "0");
+        RefreshLobby(); return;
+      case SocialAction::Start:
+        if (!RefreshLobby() || !CanStartLobby(model)) { Error("Both players must be ready"); return; }
+        if (!api.SteamAPI_ISteamMatchmaking_SetLobbyJoinable(matchmaking, model.lobby, false) || !SetData("kkrc_phase", "starting")) {
+          Leave("Could not start lobby"); return;
+        }
+        StartSession(); return;
+      default: return;
+    }
+  }
+  void Dispatch(const CallbackMsg_t& m) {
+    SteamAPICallCompleted_t completed{};
+    if (Callback(m, completed)) {
+      bool failed = true;
+      const auto old = abandoned.find(completed.m_hAsyncCall);
+      if (old != abandoned.end()) {
+        uint64_t lobby = 0;
+        if (old->second == LobbyCreated_t::k_iCallback) {
+          LobbyCreated_t value{};
+          if (api.SteamAPI_ManualDispatch_GetAPICallResult(pipe, old->first, &value, sizeof(value), LobbyCreated_t::k_iCallback, &failed) &&
+              !failed && value.m_eResult == k_EResultOK) lobby = value.m_ulSteamIDLobby;
+        } else {
+          LobbyEnter_t value{};
+          if (api.SteamAPI_ManualDispatch_GetAPICallResult(pipe, old->first, &value, sizeof(value), LobbyEnter_t::k_iCallback, &failed) &&
+              !failed && value.m_EChatRoomEnterResponse == k_EChatRoomEnterResponseSuccess) lobby = value.m_ulSteamIDLobby;
+        }
+        if (lobby && lobby != model.lobby && lobby != joining) api.SteamAPI_ISteamMatchmaking_LeaveLobby(matchmaking, lobby);
+        abandoned.erase(old); return;
+      }
+      if (create_call && completed.m_hAsyncCall == create_call) {
+        LobbyCreated_t value{};
+        const bool ok = completed.m_iCallback == LobbyCreated_t::k_iCallback && completed.m_cubParam == sizeof(value) &&
+            api.SteamAPI_ManualDispatch_GetAPICallResult(pipe, create_call, &value, sizeof(value), LobbyCreated_t::k_iCallback, &failed);
+        Created(value, !ok || failed);
+      } else if (join_call && completed.m_hAsyncCall == join_call) {
+        LobbyEnter_t value{};
+        const bool ok = completed.m_iCallback == LobbyEnter_t::k_iCallback && completed.m_cubParam == sizeof(value) &&
+            api.SteamAPI_ManualDispatch_GetAPICallResult(pipe, join_call, &value, sizeof(value), LobbyEnter_t::k_iCallback, &failed);
+        Joined(value, !ok || failed);
+      }
+      return;
+    }
+    LobbyDataUpdate_t data{};
+    if (Callback(m, data)) { Validated(data); if (data.m_ulSteamIDLobby == model.lobby) RefreshLobby(); return; }
+    LobbyChatUpdate_t chat{};
+    if (Callback(m, chat)) {
+      if (chat.m_ulSteamIDLobby == model.lobby) {
+        // Even leave/rejoin between polls must invalidate the previous ready acknowledgements.
+        if (model.start_requested) { Leave("Lobby membership changed during the session"); return; }
+        if (recorded_owner == model.self) {
+          if (++generation == 0 || !SetData("kkrc_generation", std::to_string(generation))) { Leave("Could not reset lobby readiness"); return; }
+        }
+        api.SteamAPI_ISteamMatchmaking_SetLobbyMemberData(matchmaking, model.lobby, kReadyKey, "0");
+        RefreshLobby();
+      }
+      return;
+    }
+    GameLobbyJoinRequested_t join{};
+    if (Callback(m, join)) { Invite(join.m_steamIDLobby.ConvertToUint64(), join.m_steamIDFriend.ConvertToUint64()); return; }
+    LobbyInvite_t invite{};
+    if (Callback(m, invite)) { if (invite.m_ulGameID == 480) Invite(invite.m_ulSteamIDLobby, invite.m_ulSteamIDUser); return; }
+    GameRichPresenceJoinRequested_t rich{};
+    if (Callback(m, rich)) {
+      SocialId id = 0;
+      if (ParseLobbyConnect(Text(rich.m_rgchConnect, sizeof(rich.m_rgchConnect) - 1), id)) Invite(id, rich.m_steamIDFriend.ConvertToUint64()); return;
+    }
+    SteamNetworkingMessagesSessionRequest_t request{};
+    if (Callback(m, request)) {
+      const auto id = request.m_identityRemote.GetSteamID64();
+      if (Friend(id) && RefreshLobby() && transport) transport->SessionRequest(id);
+      else api.SteamAPI_ISteamNetworkingMessages_CloseSessionWithUser(messages, request.m_identityRemote);
+      return;
+    }
+    SteamNetworkingMessagesSessionFailed_t failure{};
+    if (Callback(m, failure)) { if (transport) transport->SessionFailed(failure.m_info.m_identityRemote.GetSteamID64()); return; }
+    if (m.m_iCallback == SteamServersDisconnected_t::k_iCallback || m.m_iCallback == SteamShutdown_t::k_iCallback) {
+      stop = true; Leave("Steam is needed for co-op");
+      Status(SocialStatus::Unavailable, "Steam is needed for co-op");
+    }
+  }
+  void Pump() {
+    api.SteamAPI_ManualDispatch_RunFrame(pipe);
+    CallbackMsg_t callback{};
+    for (unsigned i = 0; i < 256 && api.SteamAPI_ManualDispatch_GetNextCallback(pipe, &callback); ++i) {
+      Dispatch(callback);
+      api.SteamAPI_ManualDispatch_FreeLastCallback(pipe);
+    }
+  }
+  void TickSession(double now) {
+    if (!session) return;
+    std::optional<PlayerPose> pose;
+    { std::lock_guard lock(mutex); pose = local_pose; }
+    if (pose && now - pose->time > .25) pose.reset();
+    session->Tick(now, pose);
+    SteamSessionView view{session->SessionRole(), session->State(), session->Rejection(), session->Stats(), pose, session->Partner(now), now};
+    { std::lock_guard lock(mutex); session_view = view; }
+    if (session->State() == SessionState::Ended) { Leave("Co-op session ended"); return; }
+    if (session->State() != last_session_state) {
+      last_session_state = session->State();
+      if (last_session_state == SessionState::Connected) Status(SocialStatus::Connected, "Partner connected");
+      else if (last_session_state == SessionState::Lost) Status(SocialStatus::Connected, "Partner connection lost");
+      else Publish();
+    }
+  }
+  void Run() {
+    { std::lock_guard lock(mutex); model = published; }
+    if (!Init()) {
+      model.last_error = "Steam is needed for co-op";
+      Status(SocialStatus::Unavailable, "Steam is needed for co-op");
+      if (self_test) test_log("Steam self-test: init failed");
+      if (initialized) api.SteamAPI_Shutdown();
+      return;
+    }
+    Status(SocialStatus::Idle, "Steam connected");
+    if (self_test) {
+      test_log("Steam self-test: init OK");
+      test_log("Steam self-test: friend count=" + std::to_string(std::max(0, api.SteamAPI_ISteamFriends_GetFriendCount(friends, k_EFriendFlagImmediate))));
+      test_log("Steam self-test: persona state=" + std::to_string(int(api.SteamAPI_ISteamFriends_GetPersonaState(friends))));
+      Command({SocialAction::CreateLobby});
+    }
+    while (!stop) {
+      std::deque<PendingCommand> pending;
+      { std::lock_guard lock(mutex); pending.swap(commands); }
+      for (auto& p : pending) {
+        if (stop) break;
+        if (p.compatibility && CheckCompatibility(options.compatibility, *p.compatibility) != RejectReason::None) {
+          const bool had_lobby = model.lobby || create_call || join_call || validating;
+          if (had_lobby) Leave("Gameplay settings changed; open a new lobby");
+          options.compatibility = std::move(*p.compatibility);
+          if (had_lobby) continue;
+        }
+        Command(p.command);
+      }
+      Pump();
+      const auto now = Now();
+      if ((create_call || join_call || validating) && now > operation_deadline) {
+        // Keep a bounded list so late successes are left, while allowing a fresh request.
+        validating = joining = joining_owner = 0; RetireCalls();
+        Status(SocialStatus::Idle, "Steam connected"); Error("Steam lobby request timed out");
+        if (self_test) stop = true;
+      }
+      if (!self_test) {
+        if (now >= next_friends) { Friends(); next_friends = now + 5; }
+        if (model.lobby && now >= next_lobby) { RefreshLobby(); next_lobby = now + .5; }
+        TickSession(now);
+      }
+      std::unique_lock lock(mutex);
+      wake.wait_for(lock, std::chrono::milliseconds(16), [&] { return stop || !commands.empty(); });
+    }
+    if (model.lobby) Leave();
+    else StopSession();
+    api.SteamAPI_ISteamFriends_ClearRichPresence(friends);
+    // Drain late async successes during a bounded shutdown window, always freeing callback memory.
+    const auto until = Now() + .2;
+    while ((create_call || join_call || !abandoned.empty()) && Now() < until) { Pump(); std::this_thread::sleep_for(std::chrono::milliseconds(5)); }
+    api.SteamAPI_Shutdown(); initialized = false;
+    if (self_test) test_log(test_result == 0 ? "Steam self-test: shutdown OK" : "Steam self-test: failed; shutdown OK");
+  }
+  bool Send(uint64_t peer, int channel, std::span<const uint8_t> bytes, bool reliable) override {
+    SteamNetworkingIdentity id{}; id.SetSteamID64(peer);
+    const auto result = api.SteamAPI_ISteamNetworkingMessages_SendMessageToUser(messages, id, bytes.data(), uint32(bytes.size()),
+        reliable ? k_nSteamNetworkingSend_ReliableNoNagle : k_nSteamNetworkingSend_UnreliableNoDelay, channel);
+    return result == k_EResultOK || (!reliable && result == k_EResultIgnored);
+  }
+  bool Receive(int channel, SteamBackendMessage& out) override {
+    SteamNetworkingMessage_t* msg = nullptr;
+    if (api.SteamAPI_ISteamNetworkingMessages_ReceiveMessagesOnChannel(messages, channel, &msg, 1) <= 0 || !msg) return false;
+    out.peer = msg->m_identityPeer.GetSteamID64(); out.channel = msg->m_nChannel;
+    out.reliable = (msg->m_nFlags & k_nSteamNetworkingSend_Reliable) != 0;
+    out.oversized = msg->m_cbSize <= 0 || msg->m_cbSize > int(kMaxPacketBytes) || !msg->m_pData;
+    if (!out.oversized) { const auto* p = static_cast<const uint8_t*>(msg->m_pData); out.bytes.assign(p, p + msg->m_cbSize); }
+    msg->Release(); return true;
+  }
+  bool Accept(uint64_t peer) override {
+    SteamNetworkingIdentity id{}; id.SetSteamID64(peer);
+    return api.SteamAPI_ISteamNetworkingMessages_AcceptSessionWithUser(messages, id);
+  }
+  void Close(uint64_t peer) override {
+    SteamNetworkingIdentity id{}; id.SetSteamID64(peer); api.SteamAPI_ISteamNetworkingMessages_CloseSessionWithUser(messages, id);
+  }
+  TransportStats Stats(uint64_t peer) const override {
+    SteamNetworkingIdentity id{}; id.SetSteamID64(peer); SteamNetConnectionRealTimeStatus_t quick{};
+    api.SteamAPI_ISteamNetworkingMessages_GetSessionConnectionInfo(messages, id, nullptr, &quick);
+    TransportStats s; s.ping_ms = std::max(0, quick.m_nPing);
+    s.loss = quick.m_flConnectionQualityLocal >= 0 ? std::clamp(1.0 - quick.m_flConnectionQualityLocal, 0.0, 1.0) : 0;
+    return s;
+  }
+#endif
+};
+
+SteamRuntime::SteamRuntime(SteamRuntimeOptions options) : impl_(std::make_unique<Impl>(std::move(options))) {}
+SteamRuntime::~SteamRuntime() = default;
+SocialModel SteamRuntime::Snapshot() const { std::lock_guard lock(impl_->mutex); return impl_->published; }
+bool SteamRuntime::Act(SocialCommand command) {
+  std::optional<Compatibility> current;
+  if (impl_->options.enabled && impl_->options.read_compatibility &&
+      (command.action == SocialAction::CreateLobby || command.action == SocialAction::Accept ||
+       command.action == SocialAction::SetReady || command.action == SocialAction::Start)) current = impl_->options.read_compatibility();
+  return impl_->Enqueue(command, std::move(current));
+}
+void SteamRuntime::PublishPose(std::optional<PlayerPose> pose) { std::lock_guard lock(impl_->mutex); impl_->local_pose = pose; }
+SteamSessionView SteamRuntime::SessionSnapshot() const { std::lock_guard lock(impl_->mutex); return impl_->session_view; }
+void SteamRuntime::Shutdown() { impl_->Shutdown(); }
+#if defined(KK_DEV_TOOLS)
+int SteamRuntime::SelfTest(std::function<void(const std::string&)> log) {
+#if KK_HAS_STEAM
+  { std::lock_guard lock(impl_->mutex);
+    if (impl_->used || impl_->stopped || !impl_->options.enabled) { log("Steam self-test: disabled or already used"); return 1; }
+    impl_->used = impl_->self_test = true; impl_->test_log = std::move(log);
+    impl_->worker = std::thread([p = impl_.get()] { p->Run(); });
+  }
+  impl_->worker.join();
+  return impl_->test_result;
+#else
+  log("Steam self-test: Steam not available in this build"); return 1;
+#endif
+}
+#endif
+}  // namespace kk::coop

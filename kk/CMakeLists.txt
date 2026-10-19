@@ -24,6 +24,9 @@ set(KINGKONG_SOURCES
     src/coop_protocol.cpp
     src/coop_session.cpp
     src/coop_runtime.cpp
+    src/steam_runtime.cpp
+    src/steam_lobby.cpp
+    src/steam_transport.cpp
     src/input_remap.cpp
     src/launcher.cpp
     src/launcher_ui.cpp
@@ -154,6 +157,32 @@ endif()
 
 rexglue_setup_target(king_kong)
 
+# Optional Steamworks SDK, kept outside the checkout. No import library is linked.
+set(KK_STEAMWORKS_DEFAULT "")
+if(EXISTS "F:/kk-native-coop/sdk/steamworks_sdk_165/sdk/public/steam/steam_api_flat.h")
+    set(KK_STEAMWORKS_DEFAULT "F:/kk-native-coop/sdk/steamworks_sdk_165/sdk")
+endif()
+set(KK_STEAMWORKS_SDK "${KK_STEAMWORKS_DEFAULT}" CACHE PATH "External Steamworks SDK sdk folder (empty disables Steam)")
+if(WIN32)
+    set(KK_STEAM_REDIST "${KK_STEAMWORKS_SDK}/redistributable_bin/win64/steam_api64.dll")
+elseif(APPLE)
+    set(KK_STEAM_REDIST "${KK_STEAMWORKS_SDK}/redistributable_bin/osx/libsteam_api.dylib")
+else()
+    set(KK_STEAM_REDIST "${KK_STEAMWORKS_SDK}/redistributable_bin/linux64/libsteam_api.so")
+endif()
+set(KK_HAS_STEAM 0)
+if(KK_STEAMWORKS_SDK AND EXISTS "${KK_STEAMWORKS_SDK}/public/steam/steam_api_flat.h"
+        AND EXISTS "${KK_STEAMWORKS_SDK}/public/steam/steam_api.h" AND EXISTS "${KK_STEAM_REDIST}")
+    set(KK_HAS_STEAM 1)
+    target_include_directories(king_kong SYSTEM PRIVATE "${KK_STEAMWORKS_SDK}/public")
+    add_custom_command(TARGET king_kong POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${KK_STEAM_REDIST}" "$<TARGET_FILE_DIR:king_kong>"
+        VERBATIM)
+endif()
+target_compile_definitions(king_kong PRIVATE KK_HAS_STEAM=${KK_HAS_STEAM})
+find_package(Threads REQUIRED)
+target_link_libraries(king_kong PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+
 # All game builds use the native renderer.
 option(NR_BUILD_TESTS "Build native renderer tests" OFF)
 set(NR_BUILD_PLUGIN ON CACHE BOOL "" FORCE)
@@ -230,7 +259,7 @@ execute_process(COMMAND git describe --always --dirty --abbrev=12 WORKING_DIRECT
 target_compile_definitions(king_kong PRIVATE KK_BENCH_BUILD="${KK_BENCH_BUILD}-task115")
 
 # Include dirty source contents, not just the commit id, in co-op compatibility.
-set(KK_COOP_SOURCE_ID "${KK_BENCH_BUILD};${KK_VERSION};${CMAKE_CXX_COMPILER_ID};${CMAKE_CXX_COMPILER_VERSION};${CMAKE_BUILD_TYPE};${CMAKE_CXX_FLAGS};${KK_DEV_TOOLS}")
+set(KK_COOP_SOURCE_ID "${KK_BENCH_BUILD};${KK_VERSION};${CMAKE_CXX_COMPILER_ID};${CMAKE_CXX_COMPILER_VERSION};${CMAKE_BUILD_TYPE};${CMAKE_CXX_FLAGS};${KK_DEV_TOOLS};${KK_HAS_STEAM}")
 foreach(source IN LISTS KINGKONG_SOURCES)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${source}")
     file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/${source}" source_hash)
@@ -251,6 +280,16 @@ if(KK_DEV_TOOLS)
     add_executable(kk-coop-tests tests/coop_tests.cpp src/coop_protocol.cpp src/coop_session.cpp)
     target_include_directories(kk-coop-tests PRIVATE src)
     add_test(NAME coop-net-core COMMAND kk-coop-tests)
+    # Always SDK-free, including the real runtime's compile-time unavailable branch.
+    add_executable(kk-steam-tests tests/steam_tests.cpp src/steam_lobby.cpp src/steam_transport.cpp
+        src/steam_runtime.cpp src/coop_protocol.cpp src/coop_session.cpp)
+    target_include_directories(kk-steam-tests PRIVATE src)
+    target_compile_definitions(kk-steam-tests PRIVATE KK_HAS_STEAM=0 KK_DEV_TOOLS=1)
+    target_link_libraries(kk-steam-tests PRIVATE Threads::Threads)
+    if(WIN32)
+        target_link_libraries(kk-steam-tests PRIVATE shell32)
+    endif()
+    add_test(NAME coop-steam-services COMMAND kk-steam-tests)
     target_include_directories(kk-freecam-tests PRIVATE src)
     add_test(NAME free-camera COMMAND kk-freecam-tests)
     # Task 208: photo mode's settings, camera limits, controller, hidden draws and grade colours; its text.
