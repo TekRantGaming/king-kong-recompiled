@@ -113,6 +113,7 @@ std::vector<uint8_t> Packet(MessageType type) {
   m.ownership = {{303, 3, 1}, OwnershipPhase::Prepare, 1, EnemyOwner::Guest, enemy};
   m.life = {{1,303,3,0},11,2,3};
   m.camera.generation = 1; m.camera.level = 303; m.camera.cut = 1;
+  m.story = {1,303,1,123,456,1,kStoryRecords,StoryPhase::Armed};
     m.shot.world = {303, 3, 1}; m.shot.number = 1; m.shot.weapon = 1; m.shot.direction = {1, 0, 0};
   std::vector<uint8_t> bytes; Check(Encode(m, bytes), "encode backend fixture"); return bytes;
 }
@@ -197,14 +198,15 @@ void EveryProtocolMessage() {
     MessageType::SessionStart, MessageType::SaveChunk, MessageType::LevelChange, MessageType::Loaded,
     MessageType::LoadRelease, MessageType::Checkpoint, MessageType::ChapterFinished, MessageType::ReloadRequest,
     MessageType::FlowAbort, MessageType::DamageEvent, MessageType::PlayerStatus, MessageType::OwnershipChange,
-    MessageType::PlayerDowned, MessageType::PlayerRevived, MessageType::CameraCut
+    MessageType::PlayerDowned, MessageType::PlayerRevived, MessageType::CameraCut,
+    MessageType::StoryEvent, MessageType::TriggerRequest
   };
   const MessageType unreliable[] = {MessageType::Ping, MessageType::Pong, MessageType::PlayerPose,
       MessageType::EnemySnapshot, MessageType::CameraPose};
-  static_assert(kProtocolVersion == 9 && std::size(reliable)+std::size(unreliable) == 28);
+  static_assert(kProtocolVersion == 12 && std::size(reliable)+std::size(unreliable) == 30);
   Backend a,b; a.self=1; b.self=2; a.remote=&b; b.remote=&a;
   SteamMessagesTransport at(a,2),bt(b,1);
-  unsigned seen[29]{};
+  unsigned seen[31]{};
   for (bool r : {true,false}) {
     const auto types = r ? std::span<const MessageType>(reliable) : std::span<const MessageType>(unreliable);
     for (auto type : types) {
@@ -215,14 +217,70 @@ void EveryProtocolMessage() {
       Check(b.incoming.front().channel==(r ? 0 : 1) && b.incoming.front().reliable==r,"every type uses expected Steam channel and flag");
       bt.Poll(0);
       Check(bt.Receive(out) && out==packet && !bt.Receive(out),"every type preserves framing through Steam adapter");
-      if (type!=MessageType::Ping && type!=MessageType::Pong)
+      if (type!=MessageType::Ping && type!=MessageType::Pong) {
         Check(!at.Send(packet,!r),"every non-heartbeat rejects the wrong channel");
+        const auto malformed=bt.Stats().malformed;
+        b.incoming.push_back({a.self,r ? 1 : 0,!r,false,packet});
+        bt.Poll(0);
+        Check(!bt.Receive(out) && bt.Stats().malformed==malformed+1,
+            "every non-heartbeat rejects incoming traffic on the wrong channel");
+      }
       if (type==MessageType::EnemySnapshot) Check(packet.size()==974,"full enemy batch fits unreliable message limit");
       if (type==MessageType::SaveChunk) Check(packet.size()==798,"768-byte save chunk includes bounded framing");
       if (type==MessageType::ShotIntent) Check(packet.size()==554,"maximum shotgun hits fit packet cap");
     }
   }
-  for (unsigned i=1;i<=28;++i) Check(seen[i]==1,"all 28 distinct protocol IDs covered");
+  for (unsigned i=1;i<=30;++i) Check(seen[i]==1,"all 30 distinct protocol IDs covered");
+}
+void StoryOverMessages() {
+  Backend a,b; a.self=1; b.self=2; a.remote=&b; b.remote=&a;
+  SteamMessagesTransport at(a,2),bt(b,1);
+  CoopSession host({true,Role::Host,12345,Compatible()},at),guest({true,Role::Guest,0,Compatible()},bt);
+  for (unsigned i=0;i<20;++i) { host.Tick(i*.01); guest.Tick(i*.01); }
+  Check(host.State()==SessionState::Connected && guest.State()==SessionState::Connected,
+      "protocol 12 story session handshakes over Steam adapter");
+  StoryMailbox h,g;
+  uint32_t number=0;
+  double now=.2;
+  for (auto phase : {StoryPhase::Armed,StoryPhase::Started,StoryPhase::Advance,
+      StoryPhase::Finished,StoryPhase::Recovery,StoryPhase::Checksum}) {
+    auto event=SteamProbeMessage(MessageType::StoryEvent);
+    event.story.number=++number; event.story.phase=phase;
+    if (phase!=StoryPhase::Armed && phase!=StoryPhase::Started) event.story.record=7;
+    Check(h.Submit(event),"host submits each story phase including checksum");
+    h.Exchange(host); host.Tick(now);
+    const auto pending=std::find_if(b.incoming.begin(),b.incoming.end(),[](const auto& packet) {
+      Message m; return Decode(packet.bytes,m) && m.type==MessageType::StoryEvent;
+    });
+    Check(pending!=b.incoming.end() && pending->channel==0 && pending->reliable,
+        "all story phases including checksum use reliable Steam channel 0");
+    guest.Tick(now); g.Exchange(guest);
+    const auto received=g.Take();
+    Check(received.size()==1 && received[0].type==event.type && received[0].story==event.story,
+        "each host story phase reaches guest game mailbox unchanged");
+    if (ValidStoryRequest(phase)) {
+      auto request=event; request.type=MessageType::TriggerRequest;
+      if (phase==StoryPhase::Checksum) ++request.story.record;
+      Check(g.Submit(request),"guest submits activation or differing checksum reply");
+      g.Exchange(guest); guest.Tick(now+.001);
+      const auto reply=std::find_if(a.incoming.begin(),a.incoming.end(),[](const auto& packet) {
+        Message m; return Decode(packet.bytes,m) && m.type==MessageType::TriggerRequest;
+      });
+      Check(reply!=a.incoming.end() && reply->channel==0 && reply->reliable,
+          "trigger requests and checksum replies use reliable Steam channel 0");
+      host.Tick(now+.002); h.Exchange(host);
+      const auto returned=h.Take();
+      Check(returned.size()==1 && returned[0].type==request.type && returned[0].story==request.story,
+          "guest activation and differing checksum reach host game mailbox unchanged");
+    }
+    now+=.01;
+  }
+  auto stale=SteamProbeMessage(MessageType::StoryEvent); ++stale.epoch;
+  Check(h.Submit(stale),"stale story work can enter game mailbox before reconnect check");
+  h.Exchange(host); host.Tick(now); guest.Tick(now); g.Exchange(guest);
+  Check(g.Take().empty(),"stale story epoch never crosses the Steam session");
+  host.End(now+.01); guest.Tick(now+.01); h.Exchange(host); g.Exchange(guest);
+  Check(h.Take().empty() && g.Take().empty(),"Steam disconnect clears both story mailboxes");
 }
 void FullSaveOverMessages() {
   Backend a,b; a.self=1; b.self=2; a.remote=&b; b.remote=&a;
@@ -296,6 +354,6 @@ void SessionOverMessages() {
 }
 }
 int main() {
-  Keys(); Invites(); Social(); Messages(); EveryProtocolMessage(); FullSaveOverMessages(); SessionOverMessages(); Stub();
+  Keys(); Invites(); Social(); Messages(); EveryProtocolMessage(); StoryOverMessages(); FullSaveOverMessages(); SessionOverMessages(); Stub();
   std::printf("Steam service tests: %u checks OK\n", checks);
 }

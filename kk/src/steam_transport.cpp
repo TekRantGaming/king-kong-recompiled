@@ -10,6 +10,8 @@ bool Valid(std::span<const uint8_t> bytes, bool reliable) {
       message.type == MessageType::CameraPose) return !reliable;
   // C03 intentionally sends Ping/Pong unreliably. Preserve that existing transport contract.
   if (message.type == MessageType::Ping || message.type == MessageType::Pong) return true;
+  // StoryEvent and TriggerRequest include checksum samples/replies. Like all
+  // other control events they require reliable channel 0 in both directions.
   return reliable;
 }
 }

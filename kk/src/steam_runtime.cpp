@@ -636,16 +636,17 @@ struct SteamRuntime::Impl
   }
 #if defined(KK_DEV_TOOLS)
   int LoopbackCheck() {
-    // The SDK does not promise self-send support on every Steam client. Probe it
-    // through the real DLL and adapter; failure is never replaced by a fake echo.
+    // Steam self-send was unsupported in the C47 run. Keep the real DLL probe
+    // for diagnostics; a failed round trip requires testing with two accounts.
     transport = std::make_unique<SteamMessagesTransport>(*this, model.self);
-    for (unsigned i=1;i<=unsigned(MessageType::CameraCut);++i) {
+    for (unsigned i=1;i<=unsigned(MessageType::TriggerRequest);++i) {
       const auto type=MessageType(i);
       const bool reliable=type!=MessageType::Ping && type!=MessageType::Pong &&
           type!=MessageType::PlayerPose && type!=MessageType::EnemySnapshot && type!=MessageType::CameraPose;
       std::vector<uint8_t> expected;
       if (!Encode(SteamProbeMessage(type),expected) || !transport->Send(expected,reliable)) {
-        test_log("Steam loopback: send failed type="+std::to_string(i)); return 1;
+        test_log("Steam loopback: send failed type="+std::to_string(i)+
+                 "; Steam self-send is unsupported; two Steam accounts are needed for message-path testing"); return 1;
       }
       const double until=Now()+(i==1 ? 10 : 3);
       double retry=Now()+.1;
@@ -664,12 +665,12 @@ struct SteamRuntime::Impl
       }
       if (!received) {
         test_log("Steam loopback: no self-send round trip type="+std::to_string(i)+
-                 "; this client/route may not support self-send"); return 1;
+                 "; Steam self-send is unsupported; two Steam accounts are needed for message-path testing"); return 1;
       }
       test_log("Steam loopback: OK type="+std::to_string(i)+" channel="+
                std::to_string(reliable ? 0 : 1)+" bytes="+std::to_string(expected.size()));
     }
-    test_log("Steam loopback: all 28 types OK; two-PC lobby and relay testing still required");
+    test_log("Steam loopback: all 30 types OK; two-account lobby and relay testing still required");
     return 0;
   }
 #endif
