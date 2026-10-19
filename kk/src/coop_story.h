@@ -1,5 +1,6 @@
 #pragma once
 #include "coop_enemies.h"
+#include <deque>
 #include <map>
 
 namespace kk::coop::story {
@@ -28,6 +29,67 @@ struct Cursor {
     record=after;
     return observed;
   }
+};
+// Native scripts may reach a host hint before or after its packet arrives.
+// Runs order activations; record numbers only order work within the same run.
+struct Progress : Cursor {
+  uint32_t started=0, finished=0;
+  bool Reached(const StoryEvent& e) const {
+    if (run!=e.run) return run>e.run;
+    switch (e.phase) {
+      case StoryPhase::Armed: return true;
+      case StoryPhase::Started: return started>=e.run;
+      case StoryPhase::Advance: return record>e.record;
+      case StoryPhase::Finished: return finished>=e.run;
+      default: return false;
+    }
+  }
+};
+class Hints {
+ public:
+  void Remember(const StoryEvent& e) {
+    // Hints never gate native execution. Coalesce old evidence under pressure.
+    if (pending_.size()==kStoryQueue) pending_.pop_front();
+    pending_.push_back(e);
+  }
+  template<class F> void Converge(const Progress& p,F note) {
+    for (auto it=pending_.begin();it!=pending_.end();)
+      if (p.Reached(*it)) { note(*it); it=pending_.erase(it); } else ++it;
+  }
+  std::size_t Pending() const { return pending_.size(); }
+ private:
+  std::deque<StoryEvent> pending_;
+};
+// Only repeated checksum evidence of a stationary, behind guest counts as
+// divergence. Host progress, guest-ahead samples and a lost reply do not count.
+class Lag {
+ public:
+  enum class Stage { Clear, Waiting, Move, AfterMove, Reload };
+  Stage Sample(const Cursor& authority,const Cursor& guest,double now) {
+    if (!std::isfinite(now) || now<0) return stage_;
+    const bool behind=guest.run<authority.run ||
+        (guest.run==authority.run && guest.record<authority.record);
+    if (!behind) { *this={}; return stage_; }
+    const bool progressed=guest.run>local_.run || (guest.run==local_.run && guest.record>local_.record);
+    if (stage_==Stage::Clear || progressed || guest.run<local_.run ||
+        (guest.run==local_.run && guest.record<local_.record) || now<sampled_ || now-sampled_>10) {
+      stage_=Stage::Waiting; since_=now;
+    }
+    local_=guest; sampled_=now;
+    if (stage_==Stage::Waiting && now-since_>20) stage_=Stage::Move;
+    if (stage_==Stage::AfterMove && now-since_>20) stage_=Stage::Reload;
+    return stage_;
+  }
+  void Moved(double now) {
+    if (stage_==Stage::Move && std::isfinite(now) && now>=sampled_) { stage_=Stage::AfterMove; since_=now; }
+  }
+  Stage State(double now) const {
+    return std::isfinite(now) && now>=sampled_ && now-sampled_<=10 ? stage_ : Stage::Clear;
+  }
+ private:
+  Stage stage_=Stage::Clear;
+  Cursor local_;
+  double since_=0, sampled_=0;
 };
 // A reliable request is sent once per activation, including while it is pending
 // or after authority refuses it. Only a new run or a new world permits another.

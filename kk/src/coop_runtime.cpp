@@ -253,10 +253,11 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
         ImGui::SetNextWindowPos(ImVec2(24,190),ImGuiCond_Always);
         ImGui::SetNextWindowBgAlpha(.9f);
         if (ImGui::Begin("##coop-catchup",nullptr,ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDecoration)) {
-          ImGui::TextUnformatted(StoryBehind() ? "Your world needs to catch up with the host." : "Your partner is far ahead.");
-          ImGui::TextUnformatted("Recovery reloads both players at the host's last checkpoint.");
-          if (StoryBehind()) ImGui::TextUnformatted("Story events could not be applied. Checkpoint recovery is available.");
-          if (ImGui::Button("Move to partner")) MoveToPartner();
+          const bool checkpoint_recovery=StoryBehind();
+          ImGui::TextUnformatted(checkpoint_recovery || StoryNeedsMove() ? "Your world needs to catch up with the host." : "Your partner is far ahead.");
+          ImGui::TextUnformatted(checkpoint_recovery ? "Recovery reloads both players at the host's last checkpoint." :
+              "Move beside the host and let your story catch up.");
+          if (ImGui::Button(checkpoint_recovery ? "Recover checkpoint" : "Move to partner")) MoveToPartner(checkpoint_recovery);
         }
         ImGui::End();
       }

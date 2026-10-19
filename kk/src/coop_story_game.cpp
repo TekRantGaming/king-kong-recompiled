@@ -1,5 +1,5 @@
-// C41: host owns SSDetect/SSLoop. Native memory and callbacks stay on the game
-// thread. Unsupported records stop guest story and offer C24 checkpoint recovery.
+// Safe door/activation scripts replay exactly. Other scripts run natively on
+// both peers; host events are convergence hints, never arbitrary native calls.
 #include "coop_story_game.h"
 #include "coop_story.h"
 #include "coop_runtime.h"
@@ -37,12 +37,14 @@ using story::Binding;
 constexpr uint32_t kDetect=0x82476848, kLoop=0x82454690, kPivot=0x8244F0E8;
 constexpr uint32_t kNothing=0x824FC2D0, kActivity=0x8250EE50, kVisible=0x8250EDE8, kDoor=0x82543CA0;
 constexpr uint32_t kDetectRecord=kStoryRecords;
-struct Script : story::Cursor {
+struct Script : story::Progress {
   Binding binding;
   story::RequestLatch requested;
   std::optional<StoryEvent> request;
   double request_until=0;
-  uint32_t recovery_run=0;
+  story::Hints hints;
+  story::Lag lag;
+  bool exact=false;
   bool saw_detect=false, saw_loop=false;
 };
 std::map<uint32_t,Script> scripts;
@@ -60,6 +62,10 @@ bool checksum_sweep=false;
 unsigned request_count=0;
 bool host=false, failed=false, disconnected=false, recovery_pending=false;
 std::atomic<bool> behind{false};
+std::atomic<bool> needs_move{false};
+uint32_t waiting_number=0;
+double waiting_since=0;
+bool SafeRequest(const uint8_t* b,const Script& s);
 // Only wraps the exact safe native predicate call. No hero/global pointer swap.
 thread_local uint32_t forced_pivot=0;
 double Now() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
@@ -148,8 +154,7 @@ void Census(const uint8_t* b) {
     if (!vars || (it==scripts.end() && !Tracks(b,ai,kDetect) && !Tracks(b,ai,kLoop))) continue;
     if (it!=scripts.end() && (it->second.binding.ai!=ai || it->second.binding.vars!=vars)) {
       FinishRequest(it->second,"request refused","script allocation reused");
-      Refuse("script allocation reused");
-      if (!host) continue;
+      Note("local identity retired",{},"script allocation reused; native continues");
       scripts.erase(it); it=scripts.end();
     }
     if (it==scripts.end()) {
@@ -160,6 +165,9 @@ void Census(const uint8_t* b) {
       if (!source) continue;
       Script s; s.binding={source,shape,actor,ai,vars};
       s.Baseline(Load32(b,vars+19812));
+      // Cache the policy before native callbacks mutate their payloads. Mixed
+      // chains stay native too: gating their detector would gate unsafe records.
+      s.exact=SafeRequest(b,s);
       if (const auto run=runs.find(source); run!=runs.end()) s.run=run->second;
       it=scripts.emplace(actor,s).first;
     }
@@ -173,17 +181,18 @@ void World(const FlowView& v,uint64_t session_epoch) {
     for (auto& [actor,s] : scripts) FinishRequest(s,"request refused","world retired");
     epoch=session_epoch; generation=v.world.generation; level=v.world.level; host=v.host;
     number=request_number=last_request=last_loaded=0; scripts.clear(); bindings.clear(); runs.clear(); outgoing.clear();
-    ordered.Reset(generation,level); behind=false; failed=disconnected=recovery_pending=false;
+    ordered.Reset(generation,level); behind=needs_move=false; failed=disconnected=recovery_pending=false;
+    waiting_number=0; waiting_since=0;
     request_count=0; request_window=next_census=0;
     checksums={}; next_checksum=Now()+3; checksum_actor=0; checksum_sweep=false;
   }
 }
 bool Ensure(uint8_t* b) {
-  if (!REXCVAR_GET(kk_coop_enabled) || !SessionInProcess()) { behind=false; return false; }
+  if (!REXCVAR_GET(kk_coop_enabled) || !SessionInProcess()) { behind=needs_move=false; return false; }
   const auto v=SessionFlowSnapshot();
   if (!v.active || v.policy!=ChapterPolicy::Together ||
       !story::Observing(v.world.generation,v.world.level,v.phase==FlowPhase::Playing)) {
-    behind=false; return false;
+    behind=needs_move=false; return false;
   }
   const auto link=EnemyLinkSnapshot();
   if (!link.epoch) return false;
@@ -206,15 +215,14 @@ Script* Current(const uint8_t* b) {
 }
 Script* ObservedScript(const uint8_t* b) {
   if (auto* s=Current(b)) return s;
-  if (!host) return nullptr;
-  // A new/different local allocation or callback layout is authority evidence,
-  // not evidence that the guest differs. Rebind only our own metadata.
+  // A new/different local allocation or callback layout is local evidence,
+  // not proof of divergence. Rebind only our own metadata.
   const auto actor=Load32(b,0x82CCBF6C);
   if (const auto it=scripts.find(actor); it!=scripts.end())
     FinishRequest(it->second,"request refused","script identity rebound");
   scripts.erase(actor); Census(b);
   auto* s=Current(b);
-  Note("authority script re-baselined",{},s ? "local identity rebound" : "identity unavailable; native continues");
+  Note("local script re-baselined",{},s ? "local identity rebound" : "identity unavailable; native continues");
   return s;
 }
 StoryEvent Event(const Script& s,StoryPhase phase,uint32_t record) {
@@ -291,11 +299,12 @@ bool ReplaySafe(const uint8_t* b,const Script& s,uint32_t index) {
   const auto fn=Load32(b,s.binding.vars+924+180*index);
   return fn && (SafeAction(b,fn,payload) || (fn==kPivot && HeroPivot(b,payload)));
 }
-void UnsafeRecord(const uint8_t* b,const Script& s,const StoryEvent& e) {
-  Note("unsupported record",e,"checkpoint recovery required");
-  if (Trace()) REXLOG_INFO("KK co-op story: unsupported callback={:08X} actor={:08X} ai={:08X} vars={:08X} detect-seen={} loop-seen={}",
-      e.record<kStoryRecords ? Load32(b,s.binding.vars+924+180*e.record) : 0,
-      s.binding.actor,s.binding.ai,s.binding.vars,s.saw_detect,s.saw_loop);
+void Native(Script& s,const StoryEvent& e,const char* reason) {
+  s.exact=false;
+  Note("native fallback",e,reason);
+}
+void Converge(Script& s) {
+  s.hints.Converge(s,[](const StoryEvent& e){ Note("native hint converged",e); });
 }
 bool NativeInside(PPCContext& ctx,uint8_t* b,uint32_t volume,const PlayerPose& pose) {
   // 82847478 only reads volume flags, bound data, and the second object's XYZ.
@@ -355,19 +364,45 @@ void OrderedFailure(uint8_t* b) {
 }
 void ChecksumFrame(uint8_t* b,double now) {
   if (!host) {
-    for (unsigned budget=0;budget<16 && !failed;++budget) {
+    // Drain native hints immediately, even if that script never schedules.
+    // Exact scripts alone may wait for their local detector/loop hook.
+    for (unsigned budget=0;budget<kStoryQueue && !failed;++budget) {
       const auto* front=ordered.Front();
-      if (!front || front->phase!=StoryPhase::Checksum) break;
+      if (!front) break;
       const auto e=*front;
       const auto* bind=story::Match(e.source,e.script,bindings);
-      if (!bind) break; // Ordered's apply deadline handles an actually missing script.
-      const auto& s=scripts.at(bind->actor);
-      if (Vars(b,bind->ai,19824)!=bind->vars || Shape(b,bind->vars)!=bind->script) break;
+      if (!bind || Vars(b,bind->ai,19824)!=bind->vars || Shape(b,bind->vars)!=bind->script) {
+        Note("hint identity unavailable",e,"native continues; no comparable checksum");
+        ordered.Applied(now); continue;
+      }
+      auto& s=scripts.at(bind->actor);
+      if (e.phase==StoryPhase::Recovery) {
+        Note("legacy recovery hint ignored",e,"only persistent checksum lag requests recovery");
+        ordered.Applied(now); continue;
+      }
+      if (e.phase!=StoryPhase::Checksum) {
+        if (s.exact) {
+          if (waiting_number!=e.number) { waiting_number=e.number; waiting_since=now; }
+          if (now-waiting_since<=5) break;
+          Native(s,e,"exact hook did not progress; allow native scheduling before comparing checksums");
+        }
+        Note("native hint recorded",e);
+        s.hints.Remember(e); Converge(s);
+        ordered.Applied(now); continue;
+      }
       auto reply=e; reply.run=s.run; reply.record=Load32(b,bind->vars+19812);
       if (!ValidStoryEvent(reply) || outgoing.size()>=kStoryQueue) break;
       Message m; m.type=MessageType::TriggerRequest; m.epoch=epoch; m.story=reply;
-      outgoing.push_back(m); Applied(e);
-      if (reply.run!=e.run || reply.record!=e.record) Refuse("checksum record/run mismatch",reply);
+      outgoing.push_back(m); ordered.Applied(now);
+      const auto before=s.lag.State(now);
+      const auto stage=s.lag.Sample({e.run,e.record},{reply.run,reply.record},now);
+      if (stage!=before) {
+        const char* what=stage==story::Lag::Stage::Clear ? "native checksum converged" :
+            stage==story::Lag::Stage::Move ? "persistent lag: move offered" :
+            stage==story::Lag::Stage::Reload ? "lag after soft fix: checkpoint recovery offered" : "checksum lag grace started";
+        Note(what,e,"guest must remain behind without advancing for more than 20 seconds");
+      }
+      if (reply.run!=e.run || reply.record!=e.record) Note("checksum differs (hint)",reply);
       else Note("checksum matched",reply);
     }
     return;
@@ -396,6 +431,15 @@ void ChecksumFrame(uint8_t* b,double now) {
 } // namespace
 
 bool StoryBehind() { return behind.load(); }
+bool StoryNeedsMove() { return needs_move.load(); }
+void StoryPartnerMoved() {
+  const double now=Now();
+  for (auto& [actor,s] : scripts) if (s.lag.State(now)==story::Lag::Stage::Move) {
+    s.lag.Moved(now);
+    Note("soft fix complete",Event(s,StoryPhase::Checksum,s.record),"native teleport; allow another 20 seconds of stationary checksum lag");
+  }
+  needs_move=false;
+}
 void StoryLoaded(uint8_t* b) {
   const auto v=SessionFlowSnapshot();
   if (!v.active || v.policy!=ChapterPolicy::Together || !v.world.generation || !v.world.level) return;
@@ -442,8 +486,7 @@ void StoryGameFrame(uint8_t* b) {
     if (e.phase==StoryPhase::Checksum) {
       const auto result=checksums.Compare(e);
       if (result==story::Checksums::Result::Mismatch) {
-        Note("checksum diverged",e,"guest reported different record/run");
-        auto recovery=e; recovery.phase=StoryPhase::Recovery; Emit(recovery);
+        Note("checksum differs (hint)",e,"guest monitors persistent lag; no immediate recovery");
       } else if (result==story::Checksums::Result::Match) Note("checksum matched",e);
       continue;
     }
@@ -464,22 +507,18 @@ void StoryGameFrame(uint8_t* b) {
     FinishRequest(s,"request refused","script not scheduled before request deadline");
   ChecksumFrame(b,now);
   if (!host && SessionFlowSnapshot().phase==FlowPhase::Playing) {
-    // A gated detector may never schedule SSLoop. Diagnose an unsupported
-    // authoritative record immediately, without waiting for that local hook.
-    if (const auto* front=ordered.Front(); front && front->phase==StoryPhase::Advance) {
-      const auto e=*front;
-      if (const auto* bind=story::Match(e.source,e.script,bindings);
-          bind && Vars(b,bind->ai,19824)==bind->vars && Shape(b,bind->vars)==bind->script) {
-        const auto& s=scripts.at(bind->actor);
-        if (!ReplaySafe(b,s,e.record)) {
-          UnsafeRecord(b,s,e);
-          Refuse("unsupported story callback; use checkpoint recovery",e);
-        }
-      }
-    }
-    ordered.Tick(now);
+    // Present heads are consumed as hints or given a native fallback above.
+    // Only a genuine reliable-delivery gap uses Ordered's short deadline.
+    if (!ordered.Front()) ordered.Tick(now);
     OrderedFailure(b);
-    if (const auto* e=ordered.Front(); e && e->phase==StoryPhase::Recovery) Refuse("host requested checkpoint catch-up",*e);
+    bool move=false, reload=false;
+    for (auto& [actor,s] : scripts) {
+      Converge(s);
+      const auto stage=s.lag.State(now);
+      move|=stage==story::Lag::Stage::Move;
+      reload|=stage==story::Lag::Stage::Reload;
+    }
+    needs_move=move; behind=failed || reload;
   }
   Flush();
 }
@@ -488,13 +527,13 @@ void StoryGameFrame(uint8_t* b) {
 bool StoryDetect(PPCContext& ctx,uint8_t* b) {
   if (!Ensure(b)) return false;
   auto* s=ObservedScript(b);
-  if (!s) { Refuse("unmatched detection script"); if (host) return false; ctx.r3.u32=0; return true; }
+  if (!s) return false; // Unknown scripts retain native behavior.
   if (!s->saw_detect) { s->saw_detect=true; Note("native detect scheduled",Event(*s,StoryPhase::Armed,kDetectRecord)); }
   const auto flag=Load32(b,0x82CCBF60),vars=s->binding.vars;
-  if (!PoseAddress(flag)) { Refuse("detection state missing"); if (host) return false; ctx.r3.u32=0; return true; }
+  if (!PoseAddress(flag)) return false;
   const auto before=Load32(b,flag);
-  if (host) {
-    if (s->request) {
+  if (host || !s->exact) {
+    if (host && s->request) {
       if (Now()>s->request_until) FinishRequest(*s,"request refused","request deadline elapsed");
       else if (failed || !story::DetectIdle(before) || s->run==UINT32_MAX || s->request->run!=s->run+1)
         FinishRequest(*s,"request refused","script already armed or activation changed");
@@ -515,12 +554,16 @@ bool StoryDetect(PPCContext& ctx,uint8_t* b) {
       if (s->run==UINT32_MAX) Refuse("script run overflow");
       else {
         ++s->run; runs[s->binding.source]=s->run;
-        FinishRequest(*s,"request applied","native detection armed");
-        Emit(Event(*s,StoryPhase::Armed,kDetectRecord));
+        if (host) {
+          FinishRequest(*s,"request applied","native detection armed");
+          Emit(Event(*s,StoryPhase::Armed,kDetectRecord));
+        }
       }
     } else if (story::DetectStarted(before,ctx.r3.u32,LoopProgram(b))) {
-      s->record=Load32(b,vars+19812); Emit(Event(*s,StoryPhase::Started,kDetectRecord));
+      s->record=Load32(b,vars+19812); s->started=s->run;
+      if (host) Emit(Event(*s,StoryPhase::Started,kDetectRecord));
     }
+    if (!host) Converge(*s);
     return true;
   }
   ctx.r3.u32=0;
@@ -529,16 +572,20 @@ bool StoryDetect(PPCContext& ctx,uint8_t* b) {
   if (For(front,*s,StoryPhase::Armed)) {
     const auto e=*front;
     if (!story::DetectIdle(before) || e.run!=s->run+1 || Load32(b,vars+20)!=kPivot || !HeroPivot(b,vars+88) || Load32(b,vars+8)) {
-      Refuse("detection callback or state is not replay-safe",e); return true;
+      Native(*s,e,"detection callback or state is not replay-safe");
+      // Re-enter once under the native policy to observe any immediate Armed
+      // transition too. Returning to the raw hook would lose that activation.
+      return StoryDetect(ctx,b);
     }
     forced_pivot=vars+88; __imp__sub_82476848(ctx,b); forced_pivot=0;
     if (Load32(b,flag)==1) { s->run=e.run; runs[s->binding.source]=s->run; Applied(e); }
+    else Native(*s,e,"native detection did not arm");
   } else if (For(front,*s,StoryPhase::Started)) {
     const auto e=*front;
-    if (before!=1 || e.run!=s->run) { Refuse("detection start state mismatch",e); return true; }
+    if (before!=1 || e.run!=s->run) { Native(*s,e,"detection start state mismatch"); return StoryDetect(ctx,b); }
     __imp__sub_82476848(ctx,b);
-    if (story::DetectStarted(before,ctx.r3.u32,LoopProgram(b))) { s->record=Load32(b,vars+19812); Applied(e); }
-    else Refuse("native script start refused",e);
+    if (story::DetectStarted(before,ctx.r3.u32,LoopProgram(b))) { s->record=Load32(b,vars+19812); s->started=s->run; Applied(e); }
+    else Native(*s,e,"native script start deferred");
   } else if (story::DetectIdle(before)) Request(ctx,b,*s);
   return true;
 }
@@ -546,31 +593,22 @@ bool StoryDetect(PPCContext& ctx,uint8_t* b) {
 bool StoryLoop(PPCContext& ctx,uint8_t* b) {
   if (!Ensure(b)) return false;
   auto* s=ObservedScript(b);
-  if (!s) { Refuse("unmatched loop script"); if (host) return false; ctx.r3.u32=0; return true; }
+  if (!s) return false;
   if (!s->saw_loop) { s->saw_loop=true; Note("native loop scheduled",Event(*s,StoryPhase::Advance,Load32(b,s->binding.vars+19812))); }
   const auto vars=s->binding.vars,before=Load32(b,vars+19812);
-  if (host) {
+  if (host || !s->exact) {
     __imp__sub_82454690(ctx,b);
     if (failed) return true;
     const auto after=Load32(b,vars+19812);
+    s->started=s->run;
+    if (ctx.r3.u32==5) s->finished=s->run;
     if (!s->ObserveLoop(before,after)) {
-      Note("authority script re-baselined",Event(*s,StoryPhase::Checksum,after),"loop jump or unobserved activation");
+      Note("local script re-baselined",Event(*s,StoryPhase::Checksum,after),"loop jump or unobserved activation");
       return true; // No synthetic callbacks. The next checksum compares actual guest state.
     }
+    if (!host) { Converge(*s); return true; }
     for (uint32_t i=before;i<after;++i) {
-      auto e=Event(*s,StoryPhase::Advance,i);
-      if (!ReplaySafe(b,*s,i)) {
-        // Native authority keeps running. An unsafe action cannot be replayed
-        // by a guest whose detector is still gated. Send an explicit recovery
-        // boundary rather than an event that can only time out off-schedule.
-        if (s->recovery_run!=s->run) {
-          e.number=number==UINT32_MAX ? number : number+1;
-          UnsafeRecord(b,*s,e); s->recovery_run=s->run;
-          e.phase=StoryPhase::Recovery; Emit(e);
-        }
-        break;
-      }
-      Emit(e);
+      Emit(Event(*s,StoryPhase::Advance,i));
     }
     if (ctx.r3.u32==5) Emit(Event(*s,StoryPhase::Finished,after));
     return true;
@@ -584,14 +622,15 @@ bool StoryLoop(PPCContext& ctx,uint8_t* b) {
     if (!front || front->source!=s->binding.source || front->script!=s->binding.script || !story::LoopEvent(*front)) break;
     const auto e=*front;
     const auto index=Load32(b,vars+19812);
-    if (e.run!=s->run || e.record!=index || index>kStoryRecords) { Refuse("record/run mismatch",e); break; }
+    if (e.run!=s->run || e.record!=index || index>kStoryRecords) { Native(*s,e,"record/run mismatch"); return StoryLoop(ctx,b); }
     const auto record=vars+920+180*index,payload=record+72,fn=Load32(b,record+4);
     if (e.phase==StoryPhase::Finished) {
-      if (fn) { Refuse("terminator mismatch",e); break; }
-      ctx.r3.u32=Load32(b,0x82CC9B0C); __imp__sub_826F9E70(ctx,b); ctx.r3.u32=5; Applied(e); return true;
+      if (fn) { Native(*s,e,"terminator mismatch"); return StoryLoop(ctx,b); }
+      ctx.r3.u32=Load32(b,0x82CC9B0C); __imp__sub_826F9E70(ctx,b); ctx.r3.u32=5;
+      s->finished=s->run; Applied(e); return true;
     }
     if (e.phase!=StoryPhase::Advance || !ReplaySafe(b,*s,index)) {
-      Refuse("unsupported story callback; use checkpoint recovery",e); break;
+      Native(*s,e,"unsupported callback runs natively"); return StoryLoop(ctx,b);
     }
     Store32(b,payload,Load32(b,0x82CCBF6C));
     kk::PartnerBodyTriggerReference(b,payload);
@@ -605,7 +644,9 @@ bool StoryLoop(PPCContext& ctx,uint8_t* b) {
         Store32(b,payload+20,Load32(b,0x82CCBF7C)); ctx.r3.u32=1; break;
     }
     const bool ok=ctx.r3.u32!=0; ctx=saved;
-    if (!ok || Load32(b,vars+19812)!=index) { Refuse("native callback refused or changed index",e); break; }
+    if (!ok || Load32(b,vars+19812)!=index) {
+      Native(*s,e,"native callback deferred or changed index"); return true;
+    }
     Store32(b,vars+19812,index+1); Store32(b,vars+19816,0);
     s->record=index+1;
     // Native initialization of the next record's payload word +100.

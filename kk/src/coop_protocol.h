@@ -30,8 +30,10 @@ enum class MessageType : uint16_t {
 // Values only. source is an immutable authored-position/script signature, never
 // an actor address. number orders ALL scripts within one shared load generation.
 // run distinguishes repeated activations of the same script in that generation.
-// Checksum is an ordered host sample and a guest reply carrying its actual
-// run/record at that exact event boundary. It never executes a native callback.
+// Checksum is an ordered host sample and a guest reply with its actual local
+// run/record on receipt. Native scripts may lag or lead that host boundary.
+// It never executes a native callback. Recovery is retained for old v11 codecs;
+// C46 uses persistent local checksum evidence and soft catch-up instead.
 enum class StoryPhase : uint8_t { Armed = 1, Started, Advance, Finished, Recovery, Checksum };
 constexpr uint32_t kStoryRecords = 104, kStoryQueue = 256;
 struct StoryEvent {

@@ -215,8 +215,8 @@ void LoadBaselineAndChecksums() {
   Check(checksums.Compare(reply)==story::Checksums::Result::Ignored,"wrong identity cannot claim a mismatch");
   reply=sample; reply.record++;
   Check(events.Push(sample,6.1),"guest receives comparison for current boundary");
-  if (checksums.Compare(reply)==story::Checksums::Result::Mismatch) events.Refuse();
-  Check(events.Behind(),"compared guest record mismatch requires recovery");
+  Check(checksums.Compare(reply)==story::Checksums::Result::Mismatch && !events.Behind(),
+      "one differing checksum is diagnostic evidence, not immediate recovery");
   sample.number=4; Check(checksums.Remember(sample,9),"outstanding sample tracked");
   checksums.Expire(19.01);
   Check(checksums.Compare(sample)==story::Checksums::Result::Ignored,"missing observations/replies expire without declaring divergence");
@@ -226,6 +226,77 @@ void LoadBaselineAndChecksums() {
   Check(!checksums.Remember(sample,20),"checksum pressure defers samples rather than evicting native events");
   checksums={}; sample.number=1; sample.generation++;
   Check(checksums.Compare(sample)==story::Checksums::Result::Ignored,"load reset discards old checksum samples");
+}
+void LenientConvergence() {
+  story::Progress local; local.Baseline(0);
+  story::Hints hints;
+  story::Ordered events; events.Reset(2,203);
+  auto armed=Event(1); armed.run=2;
+  auto started=armed; started.number=2; started.phase=StoryPhase::Started;
+  auto advance=armed; advance.number=3; advance.phase=StoryPhase::Advance; advance.record=0;
+  auto finished=advance; finished.number=4; finished.phase=StoryPhase::Finished; finished.record=1;
+  for (const auto& e : {armed,started,advance,finished}) Check(events.Push(e,1),"native script hints arrive in transport order");
+  while (const auto* e=events.Front()) { hints.Remember(*e); events.Applied(1.1); }
+  events.Tick(40);
+  Check(!events.Behind() && !events.Front() && hints.Pending()==4,
+      "unsupported native script consumes hints without holding global replay or a five-second apply deadline");
+  unsigned converged=0;
+  auto collect=[&](const StoryEvent&){ ++converged; };
+  hints.Converge(local,collect); Check(!converged,"host hints never claim the guest's callback ran");
+  ++local.run; hints.Converge(local,collect);
+  Check(converged==1 && hints.Pending()==3,"native Armed converges independently of a native start");
+  local.started=local.run; hints.Converge(local,collect);
+  Check(converged==2,"native start converges without invoking any received callback");
+  local.ObserveLoop(0,1); hints.Converge(local,collect);
+  Check(converged==3 && hints.Pending()==1,"native record advance converges but does not invent completion");
+  local.finished=local.run; hints.Converge(local,collect);
+  Check(converged==4 && !hints.Pending(),"native completion converges");
+  hints.Remember(advance); hints.Converge(local,collect);
+  Check(converged==5 && !hints.Pending(),"guest that reaches the record before the packet converges immediately");
+  ++local.run; local.record=0; hints.Remember(finished); hints.Converge(local,collect);
+  Check(converged==6,"later natural activation also proves the old record passed");
+  local={};
+  for (uint32_t n=0;n<kStoryQueue+40;++n) { advance.number=n+1; hints.Remember(advance); }
+  Check(hints.Pending()==kStoryQueue,"unconverged hints are bounded without blocking native execution");
+  hints={}; Check(!hints.Pending(),"new world discards old hint evidence");
+}
+void PersistentLagAndSoftFix() {
+  using Stage=story::Lag::Stage;
+  story::Cursor authority{2,9},guest{2,1};
+  story::Lag lag;
+  Check(lag.Sample(authority,guest,0)==Stage::Waiting,"first behind checksum starts a grace period");
+  for (double t : {3.,6.,9.,12.,15.,18.,20.})
+    Check(lag.Sample(authority,guest,t)==Stage::Waiting,"stationary lag must persist more than twenty seconds");
+  Check(lag.Sample(authority,guest,21)==Stage::Move,"persistent lag offers soft catch-up first");
+  for (double t=24;t<120;t+=3)
+    Check(lag.Sample(authority,guest,t)==Stage::Move,"waiting for player to accept a move never escalates to reload");
+  lag.Moved(120);
+  for (double t : {120.,123.,126.,129.,132.,135.,138.,140.})
+    Check(lag.Sample(authority,guest,t)==Stage::AfterMove,"native teleport grants a second full convergence interval");
+  Check(lag.Sample(authority,guest,141)==Stage::Reload,"only stationary lag after completed soft fix offers checkpoint recovery");
+  guest.record=2;
+  Check(lag.Sample(authority,guest,144)==Stage::Waiting,"any guest record progress resets recovery stages even while behind");
+  guest=authority;
+  Check(lag.Sample(authority,guest,147)==Stage::Clear,"natural convergence clears all recovery state");
+  ++guest.record;
+  Check(lag.Sample(authority,guest,150)==Stage::Clear,"guest ahead of captured host boundary never counts as divergence");
+  guest={1,100}; authority={2,0};
+  Check(lag.Sample(authority,guest,153)==Stage::Waiting,"activation run orders a reset record index");
+  guest={2,0};
+  Check(lag.Sample(authority,guest,156)==Stage::Clear,"native activation catches up after index reset");
+  guest={2,0}; authority={2,9};
+  Check(lag.Sample(authority,guest,160)==Stage::Waiting,"new mismatch starts independently");
+  Check(lag.Sample(authority,guest,185)==Stage::Waiting,"a missing checksum interval cannot establish persistent lag");
+  for (double t : {188.,191.,194.,197.,200.}) lag.Sample(authority,guest,t);
+  Check(lag.Sample(authority,guest,206)==Stage::Move,"continuous comparison resumes after a gap");
+  Check(lag.State(217)==Stage::Clear,"stale comparison cannot offer recovery during camera/menu/network stalls");
+  lag={}; lag.Moved(0);
+  Check(lag.Sample(authority,guest,0)==Stage::Waiting,"unsolicited move cannot bypass the first grace period");
+  for (double t : {3.,6.,9.,12.,15.,18.,21.}) lag.Sample(authority,guest,t);
+  guest.record++;
+  Check(lag.Sample(authority,guest,24)==Stage::Waiting,"guest making slow progress gets a fresh twenty-second window");
+  Check(lag.Sample(authority,guest,std::numeric_limits<double>::quiet_NaN())==Stage::Waiting,
+      "invalid timing evidence never escalates recovery");
 }
 struct Transport final : ICoopTransport {
   Transport* peer=nullptr;
@@ -293,4 +364,4 @@ void TransportAndMailbox() {
   Check(CheckCompatibility(hc.compatibility,old)==RejectReason::Protocol,"v10 peers rejected at handshake");
 }
 }
-int main() { Codec(); Ordering(); Requests(); Identity(); LoadBaselineAndChecksums(); TransportAndMailbox(); std::puts("co-op story tests passed"); }
+int main() { Codec(); Ordering(); Requests(); Identity(); LoadBaselineAndChecksums(); LenientConvergence(); PersistentLagAndSoftFix(); TransportAndMailbox(); std::puts("co-op story tests passed"); }
