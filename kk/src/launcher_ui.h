@@ -44,6 +44,7 @@ constexpr ImU32 kHairline = IM_COL32(255, 255, 255, 20);
 constexpr ImU32 kFocus = IM_COL32(232, 227, 216, 255);  // bone
 constexpr ImU32 kOnFocus = IM_COL32(15, 17, 21, 255);
 constexpr ImU32 kOnFocusDim = IM_COL32(96, 98, 102, 255);
+constexpr ImU32 kOnFocusGreyed = IM_COL32(40, 43, 48, 255);  // a greyed row under the focus bar (task 261)
 constexpr ImU32 kAccent = IM_COL32(201, 160, 94, 255);  // aged brass
 constexpr ImU32 kGood = IM_COL32(136, 184, 142, 255);
 constexpr ImU32 kWarn = IM_COL32(222, 168, 96, 255);
