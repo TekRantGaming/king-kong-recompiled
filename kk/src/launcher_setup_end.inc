@@ -215,16 +215,8 @@
     std::string binds;
     for (const auto& [b, cvar] : kBinds)
       if (button == b) binds = Get(cvar);
-    std::stringstream in(binds);
     bool first = true;
-    for (std::string k; std::getline(in, k, ',');) {
-      if (const size_t plus = k.rfind('+'); plus != std::string::npos) k = k.substr(plus + 1);
-      k.erase(0, k.find_first_not_of(' '));
-      k.erase(k.find_last_not_of(' ') + 1);
-      if (k == "LMB") k = "Mouse_Left";
-      else if (k == "RMB") k = "Mouse_Right";
-      else if (k == "MMB") k = "Mouse_Middle";
-      if (k.empty()) continue;
+    for (const std::string& k : kk::key_glyphs::PictureNames(binds)) {  // the mouse buttons' pictures too
       if (first && key) *key = k;
       first = false;
       if (auto* t = glyphs_.Named("keyboard", k, aspect)) return t;

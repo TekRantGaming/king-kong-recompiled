@@ -611,6 +611,8 @@ if set(_whats) != {'kResume', 'kPhotoMode', 'kControls', 'kGameplay', 'kSettings
 strings |= set(_labels.values()) | set(_whats.values())
 strings |= {'Change from the main menu', 'Photo mode', 'Go back to the last checkpoint? Your progress since then is lost.',
             'Leave the game and go back to the main menu?', 'Leave the game and close it?', 'Leave', 'Quit', 'Cancel',
+            # Beta 12: the Quit confirmations in a story run say when the game saves
+            re.search(r'kQuitToMainMenuSaves =\s*"([^"]+)"', _pl).group(1), re.search(r'kQuitGameSaves = "([^"]+)"', _pl).group(1),
             'Paused', 'Select', 'Back', 'Change', 'Default', 'Resume', 'Reset page', 'Default: {0}'}
 # Task 237 (owner 18 Oct): "Load last checkpoint" replaces "Restart chapter". It does what the pause page's own
 # item 6 does (the reload request a death makes, without the death counters) and never the chapter's Start again.
@@ -631,7 +633,8 @@ for _bad in ('19900', '19904', '0x4DBC', '0x4DC0'):
 if _labels.get('kQuitToMainMenu') != 'Quit to main menu':
     fail('222: no "Quit to main menu" entry')
 # Task 248 (owner 19 Oct): the main list is Resume, Photo mode, Controls, Gameplay, Settings, then the game's items;
-# Settings opens a second list (Display, Graphics, Audio, Cheats while on, Options in developer builds).
+# Settings opens a second list (Display, Graphics, Audio, Cheats, Options in developer builds). Beta 12: Cheats is
+# always listed, so the main Cheats switch can be switched on again in game.
 if _labels.get('kSettings') != 'Settings' or _whats.get('kSettings') != 'Display, graphics and audio settings.':
     fail('248: no Settings entry with its strip sentence')
 _m = re.search(r'inline std::vector<Listed> Entries\(const Available& a\) \{(.*?)\n\}', _pl, re.S)
@@ -639,9 +642,9 @@ if not _m or 'Entry::kDisplay' in _m.group(1) or 'Entry::kCheats' in _m.group(1)
         '{Entry::kControls, Entry::kGameplay, Entry::kSettings}' not in _m.group(1):
     fail('248: the main list is not Resume, Photo mode, Controls, Gameplay, Settings')
 _m = re.search(r'inline std::vector<Listed> SettingsEntries\(const Available& a\) \{(.*?)\n\}', _pl, re.S)
-if not _m or '{Entry::kDisplay, Entry::kGraphics, Entry::kAudio}' not in _m.group(1) or \
-        'a.cheats' not in _m.group(1) or 'a.game_options' not in _m.group(1):
-    fail('248: the Settings list is not Display, Graphics, Audio (+ Cheats, Options)')
+if not _m or '{Entry::kDisplay, Entry::kGraphics, Entry::kAudio, Entry::kCheats}' not in _m.group(1) or \
+        'a.cheats' in _m.group(1) or 'a.game_options' not in _m.group(1):
+    fail('248: the Settings list is not Display, Graphics, Audio, Cheats (+ Options)')
 for _needle, _why in (('DrawEntryList(dl, view_ == View::kSettings)', 'no Settings list view'),
                       ('pause::SettingsEntries(', 'the Settings list is not drawn from SettingsEntries'),
                       ('pause::ListWithPage(a, int(page_))', 'LB / RB do not stay in the page\'s own list'),

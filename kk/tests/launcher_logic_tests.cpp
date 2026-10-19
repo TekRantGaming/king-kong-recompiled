@@ -11,6 +11,7 @@
 #include "slider_input.h"
 #include "extras.h"
 #include "dev_launcher_chain.h"
+#include "key_glyphs.h"
 #include "dev_movie_input.h"
 #include "video_modes.h"
 #include "cheats.h"
@@ -761,6 +762,20 @@ void AmdShaderCacheChecks() {
   fs::remove_all(local, ec);
 }
 
+// Beta 12: the keyboard set's pictures for bound keys (key_glyphs.h): the mouse buttons are the mouse's pictures,
+// modifiers and spaces dropped, every key of a binding in order, and the mouse movement picture.
+void KeyGlyphChecks() {
+  using namespace kk::key_glyphs;
+  Check(PictureName("LMB") == "Mouse_Left" && PictureName("RMB") == "Mouse_Right" && PictureName("MMB") == "Mouse_Middle",
+        "mouse buttons use the mouse pictures");
+  Check(PictureName(" Ctrl+E ") == "E" && PictureName("Space") == "Space" && PictureName("").empty(),
+        "keys keep their names without modifiers");
+  Check(PictureNames("LMB,E") == std::vector<std::string>{"Mouse_Left", "E"}, "the default fire binding");
+  Check(PictureNames("MMB, Z") == std::vector<std::string>{"Mouse_Middle", "Z"} && PictureNames("").empty(),
+        "zoom binding, empty binding");
+  Check(std::string(kMouseMove) == "Mouse_Simple" && PictureName("RMB") == kMouseRight, "mouse movement picture");
+}
+
 int main() {
   // Extras playback does not set either story-movie flag. SKIP must still
   // send Start, and must stop sending it once playback ends.
@@ -892,6 +907,7 @@ int main() {
   WhatsNewChecks();
   AllSavesChecks();
   WorkshopChecks();
+  KeyGlyphChecks();
   std::cout << checks << " launcher checks passed\n";
   return 0;
 }

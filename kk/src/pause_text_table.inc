@@ -3,6 +3,17 @@
     {"Load last checkpoint", "Letzten Checkpoint laden", "Cargar último punto de control", "Charger le dernier point de contrôle", "Carica ultimo checkpoint"},
     {"Quit to main menu", "Zurück zum Hauptmenü", "Salir al menú principal", "Quitter vers le menu principal", "Esci al menu principale"},
     {"Save game", "Spiel speichern", "Guardar partida", "Sauvegarder", "Salva partita"},
+    // The Quit confirmations in a story run say when the game saves (Beta 12; pause_menu_logic.h kQuitGameSaves).
+    {"Leave the game and go back to the main menu? The game saves when you quit from this menu or choose Save game, not at checkpoints. Closing the window another way loses unsaved progress.",
+     "Das Spiel verlassen und zum Hauptmenü zurückkehren? Das Spiel speichert, wenn du über dieses Menü beendest oder Spiel speichern wählst, nicht an Checkpoints. Wenn du das Fenster anders schließt, geht nicht gespeicherter Fortschritt verloren.",
+     "¿Salir del juego y volver al menú principal? El juego guarda cuando sales desde este menú o eliges Guardar partida, no en los puntos de control. Si cierras la ventana de otra forma, pierdes el progreso no guardado.",
+     "Quitter le jeu et retourner au menu principal ? Le jeu sauvegarde quand vous quittez depuis ce menu ou choisissez Sauvegarder, pas aux points de contrôle. Fermer la fenêtre autrement fait perdre la progression non sauvegardée.",
+     "Uscire dal gioco e tornare al menu principale? Il gioco salva quando esci da questo menu o scegli Salva partita, non ai checkpoint. Chiudere la finestra in altro modo fa perdere i progressi non salvati."},
+    {"Leave the game and close it? The game saves when you quit from this menu or choose Save game, not at checkpoints. Closing the window another way loses unsaved progress.",
+     "Das Spiel verlassen und schließen? Das Spiel speichert, wenn du über dieses Menü beendest oder Spiel speichern wählst, nicht an Checkpoints. Wenn du das Fenster anders schließt, geht nicht gespeicherter Fortschritt verloren.",
+     "¿Salir del juego y cerrarlo? El juego guarda cuando sales desde este menú o eliges Guardar partida, no en los puntos de control. Si cierras la ventana de otra forma, pierdes el progreso no guardado.",
+     "Quitter le jeu et le fermer ? Le jeu sauvegarde quand vous quittez depuis ce menu ou choisissez Sauvegarder, pas aux points de contrôle. Fermer la fenêtre autrement fait perdre la progression non sauvegardée.",
+     "Uscire dal gioco e chiuderlo? Il gioco salva quando esci da questo menu o scegli Salva partita, non ai checkpoint. Chiudere la finestra in altro modo fa perdere i progressi non salvati."},
     // A cheat this chapter switches off (cheat_rules.h; the weapon cheats in the Hayes chapter, owner 19 Oct).
     {"Not available in this chapter.", "In diesem Kapitel nicht verfügbar.", "No disponible en este capítulo.", "Non disponible dans ce chapitre.", "Non disponibile in questo capitolo."},
     {"Go back to the game where you left off.", "Zurück ins Spiel, genau dort, wo du aufgehört hast.", "Vuelve al juego justo donde lo dejaste.", "Reprenez la partie là où vous l'avez laissée.", "Torna al gioco dove eri rimasto."},

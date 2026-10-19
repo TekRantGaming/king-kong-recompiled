@@ -94,6 +94,12 @@ struct Camera {
                                (slow ? .25f : 1.f) * std::clamp(dt, 0.f, .1f));
   }
 };
+// The mouse's turn (window movement dx right, dy down), the same way as the mouse turns Jack's camera in play
+// (mouse_look.cpp): moving it up looks up, moving it right turns right; kk_mouse_invert_y (`invert_y`) turns the
+// vertical round. (Visible forward is -Forward(), so looking up is a negative dy for Camera::Look, as the stick's.)
+inline void MouseLook(Camera &camera, float dx, float dy, float scale, bool invert_y) {
+  camera.Look(dx * scale, -dy * scale * (invert_y ? -1.f : 1.f));
+}
 } // namespace kk::freecam
 namespace kk::freecam {
 // Photo mode's controller on top of ConsumePad's: the triggers go down (left) and up (right) instead of

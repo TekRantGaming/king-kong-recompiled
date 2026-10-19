@@ -48,6 +48,7 @@ std::array<PadInput, 4> pads{};
 std::array<uint8_t, 16> test_pad{};
 std::atomic<unsigned> trace_stage{0};
 std::atomic<uint64_t> pad_polls{0}, pad_leaks{0};
+bool dev_mouse_log = false;  // DevMouse: log the next mouse turn
 #endif
 Camera camera;
 uint32_t captured_generation = 0, level = 0;
@@ -321,6 +322,14 @@ void PhotoParams(float roll, float speed, bool mouse_look) {
   photo_speed = std::clamp(speed, 0.1f, 100.f);
   photo_mouse = mouse_look;
 }
+#if defined(KK_DEV_TOOLS)
+void DevMouse(double dx, double dy) {
+  std::lock_guard lock(input_mutex);
+  mouse_x += dx;
+  mouse_y += dy;
+  dev_mouse_log = true;
+}
+#endif
 void PhotoResetView() {
   ++generation;
 }
@@ -418,9 +427,20 @@ bool OverrideView(uint8_t *base, uint32_t view, uint32_t caller,
       const float sensitivity =
           float(std::clamp(REXCVAR_GET(kk_mouse_sensitivity), .05, 10.0) *
                 .0011519173);
-      camera.Look(float(mouse_x) * sensitivity,
-                  float(mouse_y) * sensitivity *
-                      (REXCVAR_GET(kk_mouse_invert_y) ? -1.f : 1.f));
+      // Beta 12 (owner 19 Oct, a player): the same way as in play; it used to look down as the mouse moved up.
+#if defined(KK_DEV_TOOLS)
+      const float yaw0 = camera.yaw, pitch0 = camera.pitch;
+#endif
+      MouseLook(camera, float(mouse_x), float(mouse_y), sensitivity, REXCVAR_GET(kk_mouse_invert_y));
+#if defined(KK_DEV_TOOLS)
+      if (dev_mouse_log) {
+        dev_mouse_log = false;
+        REXLOG_INFO("KK dev: photo mouse dx={:.1f} dy={:.1f} yaw {:.4f} -> {:.4f} pitch {:.4f} -> {:.4f} "
+                    "(view up {:.4f} -> {:.4f}, invert_y={})",
+                    mouse_x, mouse_y, yaw0, camera.yaw, pitch0, camera.pitch, -std::sin(pitch0),
+                    -camera.Forward().z, REXCVAR_GET(kk_mouse_invert_y));
+      }
+#endif
       if (photo) camera.speed = photo_speed.load();
       else camera.Wheel(float(wheel));
       PadInput pad;

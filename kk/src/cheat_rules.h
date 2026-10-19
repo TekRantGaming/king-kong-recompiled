@@ -1,8 +1,9 @@
 // Cheats that are off in some chapters whatever the player chose (owner, 19 Oct 2026; task 251).
 //
 // The weapon cheats could leave the Hayes chapter's raptor fight stuck (codex\state\hayes-dino.md), so in
-// that level they stop applying: no weapon is given when the chapter or a checkpoint starts (the chapter's own
-// loadout is what the player has), and the pause menu's Cheats page greys their rows. The player's settings
+// that level and the two before it (Sacrifice 301, On Kong's tracks 302; Beta 12) they stop applying: no weapon
+// is given when the chapter or a checkpoint starts (the chapter's own loadout is what the player has), and the
+// pause menu's Cheats page greys their rows. The player's settings
 // (kk_cheat_<id>) are never changed: in any other level the cheats apply again as before.
 //
 // One small table: to switch off another cheat there (e.g. "ammo", 999 bullets) add its kCheats id (cheats.h)
@@ -24,8 +25,14 @@ struct LevelCheatsOff {
   std::string_view cheats[8];   // kCheats ids (cheats.h); unused slots stay empty
 };
 
+// Beta 12 (owner 19 Oct, a player): also the two chapters before Hayes. A weapon cheat switched on in On Kong's
+// tracks stayed in the inventory into Hayes (the story goes on from 302 to 303 without emptying it), so the cheat
+// guns are never given in 301 or 302 either: nothing can be carried into 303. (The game takes Jack's weapons away
+// in Sacrifice itself, so a gun from the chapters before that does not reach 302.)
 inline constexpr LevelCheatsOff kLevelCheatsOff[] = {
-    {303, "Hayes", {"revolver", "machine_gun", "shotgun", "sniper"}},  // chapter select entry 7
+    {301, "Sacrifice", {"revolver", "machine_gun", "shotgun", "sniper"}},         // chapter select entry 5
+    {302, "On Kong's tracks", {"revolver", "machine_gun", "shotgun", "sniper"}},  // chapter select entry 6
+    {303, "Hayes", {"revolver", "machine_gun", "shotgun", "sniper"}},             // chapter select entry 7
 };
 
 // The note on a greyed row in the pause menu (5 languages: pause_text_table.inc).

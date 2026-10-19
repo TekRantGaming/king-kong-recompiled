@@ -26,6 +26,7 @@
 #include "steam_shortcut.h"
 #include "update.h"
 #include "glyphs.h"
+#include "key_glyphs.h"
 #include "discord_presence.h"
 #include "online.h"
 #include "diagnostics.h"
@@ -2272,6 +2273,11 @@ class SettingsPages {
     const bool mnk = GetBool("mnk_mode");
     const char* mnk_note = "Used when Input is Keyboard & mouse.";
     items.push_back(Section("Keyboard & mouse"));
+    // The mouse rows show the mouse's picture (Beta 12: moving the mouse turns the camera and aims).
+    auto mouse_icon = [this](Item& it) {
+      it.icon = glyphs_.Named("keyboard", kk::key_glyphs::kMouseMove, &it.icon_aspect);
+      it.icon_dim = it.disabled;
+    };
     {
       Item it = CvarSlider("Mouse sensitivity",
                            "How far the camera turns as you move the mouse. It turns the same however fast you move "
@@ -2281,18 +2287,21 @@ class SettingsPages {
                              std::snprintf(buf, sizeof(buf), "%.2f" KK_TIMES, v);
                              return std::string(buf);
                            });
-      items.push_back(std::move(Disable(it, !mnk, mnk_note)));
+      mouse_icon(Disable(it, !mnk, mnk_note));
+      items.push_back(std::move(it));
     }
     {
       Item it = CvarToggle("Mouse camera",
                            "Turn the camera with the mouse. Off, it turns with the keys bound to the right stick.",
                            "mnk_mouse");
-      items.push_back(std::move(Disable(it, !mnk, mnk_note)));
+      mouse_icon(Disable(it, !mnk, mnk_note));
+      items.push_back(std::move(it));
     }
     {
       Item it = CvarToggle("Mouse vertical", "Which way moving the mouse up and down moves the camera.",
                            "kk_mouse_invert_y", "Normal", "Inverted");
-      items.push_back(std::move(Disable(it, !mnk || !GetBool("mnk_mouse"), mnk_note)));
+      mouse_icon(Disable(it, !mnk || !GetBool("mnk_mouse"), mnk_note));
+      items.push_back(std::move(it));
     }
 
     items.push_back(Section("Mapping"));
@@ -2324,6 +2333,14 @@ class SettingsPages {
     }
 
     return items;
+  }
+
+  // The picture of the first key bound in `binds` that has one (key_glyphs.h: the mouse buttons are the mouse's
+  // pictures), for the Keyboard bindings rows; nullptr if none has.
+  rex::ui::ImmediateTexture* KeyGlyph(const std::string& binds, float* aspect) {
+    for (const std::string& key : kk::key_glyphs::PictureNames(binds))
+      if (auto* t = glyphs_.Named("keyboard", key, aspect)) return t;
+    return nullptr;
   }
 
   // The picture for a controller button on remapping rows.
@@ -2431,6 +2448,7 @@ class SettingsPages {
                              modal_ = std::move(m);
                            });
       it.value_color = color::kText;
+      it.icon = KeyGlyph(e->getter(), &it.icon_aspect);
       it.on_default = [name = e->name] { Reset(name.c_str()); };
       it.default_text = e->default_value.empty() ? "None" : pretty(e->default_value);
       items.push_back(std::move(it));

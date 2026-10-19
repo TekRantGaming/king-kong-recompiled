@@ -30,6 +30,11 @@ void PhotoStart(float radius);
 void PhotoStop();
 void PhotoParams(float roll, float speed, bool mouse_look);
 void PhotoResetView();
+#if defined(KK_DEV_TOOLS)
+// Photo mode test (KK_DEV_PHOTO_STEPS mouse:<dx>/<dy>): a mouse move of dx right, dy down (window pixels);
+// the next frame logs the camera's yaw and pitch before and after it.
+void DevMouse(double dx, double dy);
+#endif
 bool PhotoActive();
 // Save/override the game view before its normal camera/frustum setup; restore
 // afterwards.
