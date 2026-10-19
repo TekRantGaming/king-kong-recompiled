@@ -38,6 +38,8 @@ struct PuppetSnapshot {
 };
 PuppetSnapshot PartnerBodySnapshot();
 void SetPartnerBodyDriven(bool driven);
+// Game-thread copied head anchor; cleared whenever body driving stops.
+void SetPartnerHead(std::optional<ShotVector> head, uint32_t level);
 bool SteamSelfTestRequested();
 int RunSteamSelfTest();
 #endif

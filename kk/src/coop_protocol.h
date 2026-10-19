@@ -5,11 +5,16 @@
 #include <cstddef>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-constexpr uint16_t kProtocolVersion = 4;
+constexpr uint16_t kProtocolVersion = 5;
+constexpr size_t kMaxDisplayNameBytes = 32;
+// Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.
+// Empty or wholly invalid input becomes "Partner". Never log the input or result.
+std::string SanitizeDisplayName(std::string_view name);
 constexpr size_t kHeaderBytes = 24, kMaxPacketBytes = 1024;
 enum class MessageType : uint16_t { Hello = 1, HelloAck, Reject, Ping, Pong, PlayerPose, Bye,
   EnemySnapshot, EnemyEvent, ShotIntent };
@@ -83,6 +88,7 @@ struct Message {
   uint32_t sequence = 0;
   uint64_t epoch = 0;
   Compatibility hello;
+  std::string display_name = "Partner";  // Hello only, separate from compatibility/lobby metadata.
   RejectReason reason = RejectReason::None;
   uint64_t clock_ms = 0;
   PlayerPose pose;

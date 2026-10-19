@@ -31,6 +31,7 @@
 #include <rex/hook.h>
 
 #include "hfr.h"
+#include "coop_nametag.h"
 
 #if defined(KK_DEV_TOOLS)
 namespace kk {
@@ -163,9 +164,11 @@ REX_HOOK_RAW(sub_824008D0) {
 // First call after the ground branch (824715F8): orient the camera. The branch has used speed' by now.
 REX_EXTERN(__imp__sub_82711328);
 REX_HOOK_RAW(sub_82711328) {
+  const uint32_t actor = ctx.r3.u32, caller = uint32_t(ctx.lr);
   if (g.saved_addr && uint32_t(ctx.lr) == 0x824715FC) Restore(base);
 #if defined(KK_DEV_TOOLS)
   kk::DevFacePartnerCamera(ctx, base);
 #endif
   __imp__sub_82711328(ctx, base);
+  kk::coop::nametag::NormalCamera(base, actor, caller);
 }

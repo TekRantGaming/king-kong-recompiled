@@ -29,6 +29,7 @@ struct SteamSessionView {
   enemies::Frame enemies;
   uint64_t enemies_sent = 0;
   uint64_t shots_sent = 0;
+  std::string partner_name;
 };
 // Construction/configuration never loads Steam. First Open/Create/Accept starts a single
 // joined worker which owns init, every flat call, callbacks, lobby and CoopSession until shutdown.

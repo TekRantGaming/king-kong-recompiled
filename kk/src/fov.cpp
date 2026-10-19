@@ -33,6 +33,7 @@
 
 #include "settings.h"
 #include "freecam.h"
+#include "coop_nametag.h"
 #include "photo_mode.h"
 #include "play_session.h"
 
@@ -101,6 +102,12 @@ bool InMenus() { return MenusShow(); }
 REX_EXTERN(__imp__sub_82872DB8);
 REX_HOOK_RAW(sub_82872DB8) {
   const uint32_t view = ctx.r3.u32;
+  const uint32_t caller = uint32_t(ctx.lr);
+  auto draw = [&] {
+    const bool capture = kk::coop::nametag::BeginView(base, view, caller);
+    __imp__sub_82872DB8(ctx, base);
+    if (capture) kk::coop::nametag::EndView(base);
+  };
   std::array<uint8_t, 68> saved;
   const bool freecam = kk::freecam::OverrideView(base, view, uint32_t(ctx.lr), saved);
   struct RestoreView {
@@ -127,17 +134,17 @@ REX_HOOK_RAW(sub_82872DB8) {
     const float shown = scene < 2.9f ? WidenAngle(scene, uw) : scene;
     ViewWidenedScope widened(shown == scene ? 1.0f : uw);
     StoreF(base, at, shown);
-    __imp__sub_82872DB8(ctx, base);
+    draw();
     StoreF(base, at, fov);
     return;
   }
   if ((k == 1.0f && uw == 1.0f) || menus || !(fov > 0.01f && fov < 3.0f)) {
-    __imp__sub_82872DB8(ctx, base);
+    draw();
     return;
   }
   ViewWidenedScope widened(uw);
   StoreF(base, at, WidenAngle(2.0f * std::atan(k * std::tan(fov * 0.5f)), uw));
-  __imp__sub_82872DB8(ctx, base);
+  draw();
   StoreF(base, at, fov);
 }
 
