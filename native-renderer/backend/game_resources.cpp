@@ -430,6 +430,7 @@ GameRenderer::HostTexture* GameRenderer::UploadTexture(nvrhi::ICommandList* cl,
   textures_.OnUploaded(entry, physical_);
   ++stats_.texture_uploads;
   stats_.upload_bytes += data.bytes.size();
+  NoteStartUpload(fetch, data.bytes.size(), false);
   return host;
 }
 
@@ -942,7 +943,7 @@ void GameRenderer::PrepareResourceRequests(nvrhi::ICommandList* cl,
     if (jobs.size() >= 32 || output < UploadBatch::kMinBytes ||
         input > UploadBatch::kFrameBytes - snapshot_bytes ||
         output > UploadBatch::kFrameBytes - upload_bytes) return false;
-    if (preload && output + upload_bytes > kChapterPreloadBytes - preload_reserved_bytes_) return false;
+    if (preload && output + upload_bytes + preload_reserved_bytes_ > ChapterPreloadBytes()) return false;
     if (!upload_batch_) upload_batch_ = std::make_unique<UploadBatch>(device_, options_.upload_submit);
     return upload_batch_->CanPrepare(upload_bytes + output,
         std::min(unsigned(jobs.size()) + 1, TextureWorkerCount() + 1));
@@ -1145,6 +1146,7 @@ void GameRenderer::PrepareResourceRequests(nvrhi::ICommandList* cl,
       job.texture->host = job.host_texture.release();
       textures_.OnUploaded(*job.texture, job.hash);
       ++stats_.texture_uploads;
+      if (!preload) NoteStartUpload(job.fetch, job.upload_bytes, true);
     } else {
       if (!job.index) {
         job.host_buffer->slot = AllocateSlot(kBuffers);

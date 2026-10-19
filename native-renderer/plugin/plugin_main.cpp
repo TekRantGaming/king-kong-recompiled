@@ -216,6 +216,14 @@ REXCVAR_DEFINE_DOUBLE(native_pipeline_must_wait_ms, 4.0, "Native renderer",
                       "of draws later draws depend on (depth-only, stencil, screen-space) before those are skipped "
                       "too (task 267; -1: no limit, the old behaviour)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_INT32(native_chapter_preload_mib, 256, "Native renderer",
+                     "MiB of a chapter's listed textures and buffers prepared before their first draw, on the loading "
+                     "screen and in the trickle (task 280; 64 = before task 280; GPU memory pressure keeps 64)")
+    .range(64, 1024).lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_INT32(native_chapter_trickle_mib, 8, "Native renderer",
+                     "After a loading screen, MiB per frame of the chapter's listed resources not yet on the GPU "
+                     "prepared ahead of their first draw, for 10 s (task 280; 0 = off, before task 280)")
+    .range(0, 32).lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_STRING(native_render_scale, "auto", "Native renderer",
                       "Render scale: the game's render targets, viewports, resolves and textures made from "

@@ -3871,6 +3871,44 @@ TEST(Preload_ChapterMemoryAndFrameBudgets) {
   CHECK(f.game->stats().preloaded_resources < records.size());
 }
 
+// Task 280: a larger chapter cap, then after the loading screen the first frame's sweep (full frame
+// allowance) and the trickle (its own smaller allowance per frame) prepare the rest of the list.
+TEST(Preload_ChapterSweepAndTrickleAfterLoading) {
+  Fixture f;
+  if (!f.Init()) return;
+  f.game->options().chapter_preload_mib = 256;
+  f.game->options().chapter_trickle_mib = 8;
+  const auto path = PreloadTestPath("trickle");
+  CHECK(f.game->SetPipelineCache(path));
+  std::vector<ResourcePreloadRecord> records;
+  for (uint32_t i = 0; i < 80; ++i) {
+    auto r = ResourcePreloadRecord::Buffer(0, (1u << 20) + i * 4096, false, false);
+    const kknr::GuestRange ranges[2] = {{0, r.words[1]}, {}};
+    const uint8_t* data[2] = {f.mem.Physical(0), nullptr};
+    r.hash = kknr::HashGuestRanges(ranges, data);
+    records.push_back(r);
+  }
+  CHECK(ResourcePreloadFile::Write(path + ".resources-305-0", records));
+  ServicePreload(f, true);
+  f.game->EndFrame();
+  const auto loaded = f.game->stats().preload_bytes;
+  CHECK(loaded <= (32u << 20));
+  CHECK_EQ(f.game->stats().trickled_resources, 0u);
+  ServicePreload(f, false);  // first gameplay frame: the sweep
+  f.game->EndFrame();
+  const auto swept = f.game->stats().preload_bytes;
+  CHECK(swept - loaded <= (32u << 20));
+  if (TextureWorkerCount()) CHECK(f.game->stats().trickled_resources > 0u);
+  for (unsigned frame = 0; frame < 40; ++frame) {
+    const auto before = f.game->stats().preload_bytes;
+    ServicePreload(f, false);
+    CHECK(f.game->stats().preload_bytes - before <= (8u << 20));
+    f.game->EndFrame();
+  }
+  CHECK(f.game->stats().preload_bytes <= (256u << 20));
+  if (TextureWorkerCount()) CHECK_EQ(f.game->stats().preloaded_resources, uint64_t(records.size()));
+}
+
 TEST(Cas_ConstantBlackAndWhiteAndMidtoneEdges) {
   for (uint32_t aa : {0u, 1u}) {
     Fixture f;
