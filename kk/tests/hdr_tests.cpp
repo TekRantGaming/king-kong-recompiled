@@ -9,6 +9,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -150,6 +151,29 @@ void DecisionTests() {
   Check(AutoPeakSource(d) == PeakSource::kDefault && Near(AutoLevels(d).peak, kPeakDefault), "nothing: the default peak");
   d.sdr_white_nits = 0;
   Check(Near(AutoLevels(d).paper_white, kPaperDefault), "no SDR white level: the default paper white");
+
+  // Task 262: black level and full-frame brightness: calibration, else DXGI, else 0 (not known).
+  {
+    DisplayInfo r = hdr;
+    r.dxgi_min_nits = 0.05f;
+    r.dxgi_full_frame_nits = 350;
+    Luminance c;
+    c.calibrated = true;
+    c.min_nits = 0.002f;
+    c.max_nits = 800;
+    c.full_frame_nits = 300;
+    r.profile = c;
+    Check(Near(AutoRange(r).black, 0.002f) && Near(AutoRange(r).full_frame, 300), "range from the calibration");
+    r.profile->calibrated = false;
+    Check(Near(AutoRange(r).black, 0.05f) && Near(AutoRange(r).full_frame, 350), "range from DXGI");
+    r.detected = false;
+    r.profile.reset();
+    Check(AutoRange(r).black == 0 && AutoRange(r).full_frame == 0, "nothing known: 0 (no black lift, no cap)");
+    r.detected = true;
+    r.dxgi_min_nits = std::numeric_limits<float>::quiet_NaN();
+    r.dxgi_full_frame_nits = 20;
+    Check(AutoRange(r).black == 0 && AutoRange(r).full_frame == 0, "broken values ignored");
+  }
   d.sdr_white_nits = 480;
   d.dxgi_max_nits = 20000;
   Check(Near(AutoLevels(d).peak, kPeakMax) && Near(AutoLevels(d).paper_white, 480), "peak clamped to 10000 nits");

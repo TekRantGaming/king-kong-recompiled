@@ -132,4 +132,23 @@ inline Levels AutoLevels(const DisplayInfo& info) {
   return l;
 }
 
+// Task 262: the display's black level and full-frame (large area) brightness for the presenter's highlight
+// expansion (present_hdr_black, present_hdr_full_frame), in Automatic and Manual alike (they describe the screen,
+// not a preference): the Windows HDR Calibration profile when calibrated, else what DXGI reports, else 0 (= not
+// known: no black lift, and large bright areas may reach Peak brightness).
+struct DisplayRange {
+  float black = 0, full_frame = 0;
+};
+inline DisplayRange AutoRange(const DisplayInfo& info) {
+  DisplayRange r;
+  const bool cal = info.profile && info.profile->calibrated;
+  const float black = cal && detail::Finite(info.profile->min_nits) && info.profile->max_nits > 0
+                          ? info.profile->min_nits : info.detected ? info.dxgi_min_nits : 0;
+  const float full = cal && detail::Finite(info.profile->full_frame_nits) && info.profile->full_frame_nits >= kPaperMin
+                         ? info.profile->full_frame_nits : info.detected ? info.dxgi_full_frame_nits : 0;
+  r.black = detail::Finite(black) ? std::clamp(black, 0.0f, 5.0f) : 0;
+  r.full_frame = detail::Finite(full) && full >= kPaperMin ? std::min(full, kPeakMax) : 0;
+  return r;
+}
+
 }  // namespace kk::hdr
