@@ -81,8 +81,8 @@ bool RunGuarded(const char* where, F&& fn) {
 // Task 268 dev hook (developer builds only): KK_DEV_GPU_LOSS_AFTER=<frames> makes the host device's frame
 // submission number <frames> fail as a lost device: on Vulkan thrown the way vulkan.hpp throws it (a
 // std::system_error of the "vk::Result" category, VK_ERROR_DEVICE_LOST = -4) through the guarded path, on
-// D3D12 reported as a removed device. 0 or unset: off. The startup recovery takes a failure in the first
-// frames (about 30 with the launcher hand-over); later ones end the game with the logged abort.
+// D3D12 reported as a removed device. 0 or unset: off. 1 fails the first frame submission (inside startup:
+// the startup recovery, until the first game frame); a few hundred lands in play (the logged abort).
 class DevVkResultCategory final : public std::error_category {
  public:
   const char* name() const noexcept override { return "vk::Result"; }
