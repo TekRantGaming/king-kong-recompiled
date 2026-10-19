@@ -264,11 +264,12 @@ void Apply(const char* why) {
   }
   if (first || changed || screen_changed)
     REXLOG_INFO("KK: HDR ({}): {}; kk_hdr={} kk_hdr_levels={} -> present_hdr={} peak={} paper white={} black={} "
-                "full frame={} highlights={}", why,
+                "full frame={} highlights={} knee={} cap={}", why,
                 Describe(info), rex::cvar::GetFlagByName("kk_hdr"), automatic ? "auto" : "manual",
                 rex::cvar::GetFlagByName("present_hdr"), rex::cvar::GetFlagByName("present_hdr_peak"),
                 rex::cvar::GetFlagByName("present_hdr_paper_white"), rex::cvar::GetFlagByName("present_hdr_black"),
-                rex::cvar::GetFlagByName("present_hdr_full_frame"), rex::cvar::GetFlagByName("present_hdr_highlights"));
+                rex::cvar::GetFlagByName("present_hdr_full_frame"), rex::cvar::GetFlagByName("present_hdr_highlights"),
+                rex::cvar::GetFlagByName("present_hdr_knee"), rex::cvar::GetFlagByName("present_hdr_peak_cap"));
 }
 
 void ApplyIfStale() {
