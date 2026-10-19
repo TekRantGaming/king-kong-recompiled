@@ -27,6 +27,10 @@ struct SessionConfig {
   uint64_t epoch = 0;  // host supplies a fresh, nonzero epoch for each session
   Compatibility compatibility;
 };
+struct PoseCounters {
+  uint64_t sent = 0, received = 0;
+  std::optional<uint32_t> remote_level;
+};
 class CoopSession {
  public:
   using StateCallback = std::function<void(SessionState)>;
@@ -39,6 +43,7 @@ class CoopSession {
   TransportStats Stats() const;
   RejectReason Rejection() const { return rejection_; }
   std::optional<PlayerPose> Partner(double now) const;
+  PoseCounters Poses() const { return pose_counters_; }
  private:
   void Transition(SessionState state);
   void Send(Message message, bool reliable);
@@ -57,5 +62,6 @@ class CoopSession {
   double ping_ms_ = 0;
   uint64_t malformed_ = 0;
   PoseBuffer poses_;
+  PoseCounters pose_counters_;
 };
 }  // namespace kk::coop

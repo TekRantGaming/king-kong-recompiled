@@ -176,6 +176,9 @@ REX_HOOK_RAW(sub_821074E8) {
     return;
   }
   if (kk::g_dev_pad_input && state_ptr && kk::g_dev_pad_input(user, base + state_ptr)) {
+    // The dev virtual pad is injected AFTER the native SDL/XInput read, including
+    // its focus suppression. Do not move this behind the native success check:
+    // background tests must also work without a physical controller connected.
     ctx.r3.u64 = 0;  // ERROR_SUCCESS: a pad is connected
     if (kk::g_dev_pad_filter) kk::g_dev_pad_filter(user, base + state_ptr);
     if (kk::DebugOverlayFilterPad(user, base + state_ptr)) {

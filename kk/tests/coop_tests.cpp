@@ -1,6 +1,7 @@
 // No game, SDK, windows, sockets, sleeps or wall-clock dependencies.
 #include "coop_protocol.h"
 #include "coop_session.h"
+#include "coop_pose.h"
 
 #include <bit>
 #include <cmath>
@@ -8,6 +9,8 @@
 #include <cstdlib>
 #include <deque>
 #include <limits>
+#include <map>
+#include <string_view>
 #include <utility>
 
 using namespace kk::coop;
@@ -188,6 +191,12 @@ void Poses() {
   Check(buffer.Sample(2)->level == 202 && buffer.Sample(2)->x == 99, "level transition clears old samples");
   buffer.Clear(); Check(!buffer.Sample(2), "explicit clear");
 
+  // Also exercise a receiver clock far ahead of the sender and exact local expiry.
+  a.time = 2; b = a; b.time = 2.2; b.x = 20;
+  buffer.Push(a, 9000); buffer.Push(b, 9000.2);
+  Check(Near(buffer.Sample(9000.2)->x, 10), "receiver clock ahead does not expire a remote-clock pose");
+  Check(buffer.Sample(9000.7).has_value() && !buffer.Sample(9000.701), "expiry uses last local arrival, inclusive 500 ms");
+
   Pair pair; pair.Pump(0, .4);
   PlayerPose local{.5, 101, 5, 6, 7, .4f, 8, 9};
   pair.host.Tick(.5, local); pair.guest.Tick(.51);
@@ -195,6 +204,8 @@ void Poses() {
   const int count = pair.a.unreliable_poses;
   pair.host.Tick(.51, local);
   Check(pair.a.unreliable_poses == count, "pose rate capped at twenty Hz");
+  Check(pair.host.Poses().sent == 1 && pair.guest.Poses().received == 1 &&
+      pair.guest.Poses().remote_level == 101, "pose counters and last remote level follow accepted packets");
   // A malformed packet and old-epoch pose cannot change the interpolated partner.
   pair.b.incoming.push_back({1, 2, 3});
   Message stale; stale.type = MessageType::PlayerPose; stale.epoch = 55; stale.pose = local; stale.pose.x = 999;
@@ -206,6 +217,49 @@ void Poses() {
   newer.sequence = 499; newer.pose.time = .7; newer.pose.x = 999;
   pair.b.incoming.push_back(Packet(newer)); pair.guest.Tick(.61);
   Check(pair.guest.Partner(.8)->x == 50, "reordered pose sequence cannot overwrite newer state");
+  Check(pair.guest.Poses().received == 2 && pair.guest.Poses().remote_level == 101,
+      "malformed, old epoch and reordered packets do not count as received poses");
+}
+void PoseReadingAndDisplay() {
+  constexpr uint32_t g = 0x40000100, actor = 0x40001000, ext = 0x40002000,
+      ai = 0x40003000, block = 0x40004000, matrix = 0x40005000, vars = 0x40006000;
+  std::map<uint32_t, uint32_t> words{
+      {0x82CC97C0, g}, {g + 0x18, 201}, {0x82CCBF7C, actor}, {actor + 24, ext},
+      {ext + 4, ai}, {ai + 24, block}, {block + 20, 0x826718B8},
+      {actor + 12, matrix}, {ai + 64, vars}, {0x828E3B48, 1}};
+  std::map<uint32_t, float> floats{{matrix + 20, -1}, {matrix + 48, 3},
+      {matrix + 52, 4}, {matrix + 56, 5}};
+  auto read = [&] {
+    return ReadJackPose([&](uint32_t a) { return words[a]; },
+        [&](uint32_t a) { return uint16_t(words[a]); }, [&](uint32_t a) { return floats[a]; }, 50);
+  };
+  auto check = [&](const char* failure) {
+    const auto result = read();
+    Check(!result.pose && std::string_view(result.failure) == failure, failure);
+  };
+  auto pose = read();
+  Check(pose.pose && pose.pose->level == 201 && pose.pose->x == 3 &&
+      std::string_view(pose.failure) == "ok", "retained load-page mode does not suppress a loaded Jack");
+  words[g + 4] = 1; words[actor] = 1;
+  check("level-request");  // First failure, before touching the actor.
+  words[g + 4] = 0; words[actor] = 0;
+  words[0x82D64080] = 123;
+  for (uint32_t state : {1u, 2u}) { words[0x82D64080 + 12] = state; check("loading-screen"); }
+  words[0x82D64080] = 0;
+  words[actor] = 1; check("actor-flags"); words[actor] = 0;
+  words[ai + 80] = 1; check("track-range"); words[ai + 80] = 0;
+  words[block + 20] = 0; check("jack-track"); words[block + 20] = 0x826718B8;
+  words[actor + 12] = 0x9FFFFFC4; check("matrix-span"); words[actor + 12] = matrix;
+  words[ai + 64] = 0x9FFFFFFC; check("vars-span"); words[ai + 64] = vars;
+  floats[matrix + 20] = 0; check("facing"); floats[matrix + 20] = -1;
+  floats[matrix + 48] = std::numeric_limits<float>::quiet_NaN(); check("pose-values");
+
+  PlayerPose local, partner;
+  Check(PartnerHere(PartnerDistance(local, partner)), "identical start positions show Partner: here");
+  partner.x = .6f; partner.y = .8f;
+  Check(PartnerHere(PartnerDistance(local, partner)), "one unit is here");
+  partner.z = .1f;
+  Check(!PartnerHere(PartnerDistance(local, partner)), "here uses full three-dimensional distance");
 }
 void Disabled() {
   MemoryTransport trap;
@@ -220,6 +274,6 @@ void Disabled() {
 }
 }  // namespace
 int main() {
-  Protocol(); Handshake(); Timeouts(); Poses(); Disabled();
+  Protocol(); Handshake(); Timeouts(); Poses(); PoseReadingAndDisplay(); Disabled();
   std::puts("co-op core tests passed");
 }

@@ -67,7 +67,8 @@ void CoopSession::Send(Message m, bool reliable) {
   m.sequence = ++sequence_;
   m.epoch = epoch_;
   std::vector<uint8_t> bytes;
-  if (Encode(m, bytes)) transport_.Send(bytes, reliable);
+  if (Encode(m, bytes) && transport_.Send(bytes, reliable) && m.type == MessageType::PlayerPose)
+    ++pose_counters_.sent;
 }
 void CoopSession::Receive(const Message& m, double now) {
   if (m.type == MessageType::Hello && state_ == SessionState::Connecting) {
@@ -102,6 +103,7 @@ void CoopSession::Receive(const Message& m, double now) {
         case MessageType::PlayerPose:
           if (pose_seen_ && int32_t(m.sequence - pose_sequence_) <= 0) return;
           pose_seen_ = true; pose_sequence_ = m.sequence;
+          ++pose_counters_.received; pose_counters_.remote_level = m.pose.level;
           poses_.Push(m.pose, now); break;
         case MessageType::Bye: Transition(SessionState::Ended); return;
         default: return;

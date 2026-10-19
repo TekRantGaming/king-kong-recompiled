@@ -1,5 +1,9 @@
 #include "steam_runtime.h"
 #include "steam_transport.h"
+#include "coop_pose.h"
+#if defined(KK_DEV_TOOLS) && KK_HAS_STEAM
+#include <rex/logging.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -143,6 +147,10 @@ struct SteamRuntime::Impl
   SocialModel published;
   SteamSessionView session_view;
   std::optional<PlayerPose> local_pose;
+  const char* local_failure = "not-published";
+#if defined(KK_DEV_TOOLS)
+  double next_pose_log = 0;
+#endif
   struct PendingCommand { SocialCommand command; std::optional<Compatibility> compatibility; };
   std::deque<PendingCommand> commands;
   std::thread worker;
@@ -560,10 +568,23 @@ struct SteamRuntime::Impl
   void TickSession(double now) {
     if (!session) return;
     std::optional<PlayerPose> pose;
-    { std::lock_guard lock(mutex); pose = local_pose; }
-    if (pose && now - pose->time > .25) pose.reset();
+    const char* failure;
+    { std::lock_guard lock(mutex); pose = local_pose; failure = local_failure; }
+    if (pose && now - pose->time > .25) { pose.reset(); failure = "publish-expired"; }
     session->Tick(now, pose);
     SteamSessionView view{session->SessionRole(), session->State(), session->Rejection(), session->Stats(), pose, session->Partner(now), now};
+    view.local_failure = failure; view.poses = session->Poses();
+#if defined(KK_DEV_TOOLS)
+    if (view.state != SessionState::Connected) next_pose_log = now + 10;
+    else if (now >= next_pose_log) {
+      next_pose_log = now + 10;
+      const float distance = view.local && view.partner && view.local->level == view.partner->level ?
+          PartnerDistance(*view.local, *view.partner) : -1;
+      REXLOG_INFO("KK co-op poses: local={} check={} sent={} received={} remote-level={} distance={:.1f}",
+          view.local ? "yes" : "no", failure, view.poses.sent, view.poses.received,
+          view.poses.remote_level ? std::to_string(*view.poses.remote_level) : "none", distance);
+    }
+#endif
     { std::lock_guard lock(mutex); session_view = view; }
     if (session->State() == SessionState::Ended) { Leave("Co-op session ended"); return; }
     if (session->State() != last_session_state) {
@@ -669,7 +690,9 @@ bool SteamRuntime::Act(SocialCommand command) {
        command.action == SocialAction::SetReady || command.action == SocialAction::Start)) current = impl_->options.read_compatibility();
   return impl_->Enqueue(command, std::move(current));
 }
-void SteamRuntime::PublishPose(std::optional<PlayerPose> pose) { std::lock_guard lock(impl_->mutex); impl_->local_pose = pose; }
+void SteamRuntime::PublishPose(std::optional<PlayerPose> pose, const char* failure) {
+  std::lock_guard lock(impl_->mutex); impl_->local_pose = pose; impl_->local_failure = failure;
+}
 SteamSessionView SteamRuntime::SessionSnapshot() const { std::lock_guard lock(impl_->mutex); return impl_->session_view; }
 void SteamRuntime::Shutdown() { impl_->Shutdown(); }
 #if defined(KK_DEV_TOOLS)

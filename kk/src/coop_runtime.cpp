@@ -1,5 +1,6 @@
 #include "coop_runtime.h"
 #include "coop_session.h"
+#include "coop_pose.h"
 #include "settings.h"
 #include "steam_runtime.h"
 
@@ -39,41 +40,13 @@ std::unique_ptr<SteamRuntime> steam;
 bool configured = false;
 using Clock = std::chrono::steady_clock;
 double Now() { return std::chrono::duration<double>(Clock::now().time_since_epoch()).count(); }
-bool Address(uint32_t a, uint32_t size = 4) {
-  return a >= 0x40000000 && a <= 0xA0000000 - size && (a & 3) == 0;
-}
-// Same flags, extended AI and H_TRACK_tagoff validation as dev_teleport.cpp, with bounds for each span.
-std::optional<PlayerPose> ReadJack(const uint8_t* base) {
-  using namespace hfr;
-  if (!base || play::CoverScreen()) return {};
-  const uint32_t g = Load32(base, 0x82CC97C0);
-  if (!Address(g, 0x1C) || Load32(base, 0x828E3B48) != 0) return {};
-  const uint32_t actor = Load32(base, 0x82CCBF7C);
-  if (!Address(actor, 28) || (Load32(base, actor) & 0x00400001u)) return {};
-  const uint32_t ext = Load32(base, actor + 24);
-  if (!Address(ext, 8)) return {};
-  const uint32_t ai = Load32(base, ext + 4);
-  if (!Address(ai, 84)) return {};
-  const uint32_t first = Load16(base, ai + 80);
-  if (first > Load16(base, ai + 82) || first > 4096 || !Address(ai, (first + 7) * 4)) return {};
-  const uint32_t block = Load32(base, ai + (first + 6) * 4);
-  if (!Address(block, 24) || Load32(base, block + 20) != 0x826718B8) return {};
-  const uint32_t matrix = Load32(base, actor + 12), vars = Load32(base, ai + 64);
-  if (!Address(matrix, 64) || !Address(vars, 11672)) return {};
-  PlayerPose p;
-  p.time = Now(); p.level = Load32(base, g + 0x18);
-  p.x = LoadF(base, matrix + 48); p.y = LoadF(base, matrix + 52); p.z = LoadF(base, matrix + 56);
-  const float fx = -LoadF(base, matrix + 16), fy = -LoadF(base, matrix + 20);
-  if (!std::isfinite(fx) || !std::isfinite(fy) || std::hypot(fx, fy) < .1f) return {};
-  p.facing = std::atan2(fy, fx); p.speed = LoadF(base, vars + 11668);
-  const uint32_t animation_base = Load32(base, actor + 20);
-  if (Address(animation_base)) {
-    const uint32_t animation = Load32(base, animation_base);
-    if (Address(animation, 160)) p.action = Load16(base, animation + 156);
-  }
-  Message check; check.type = MessageType::PlayerPose; check.pose = p;
-  std::vector<uint8_t> bytes;
-  return Encode(check, bytes) ? std::optional<PlayerPose>(p) : std::nullopt;
+// Same validated reader in runtime and sparse-memory unit tests.
+PoseRead ReadJack(const uint8_t* base) {
+  if (!base) return {{}, "no-base"};
+  if (play::CoverScreen()) return {{}, "cover"};
+  return ReadJackPose([base](uint32_t a) { return hfr::Load32(base, a); },
+      [base](uint32_t a) { return hfr::Load16(base, a); },
+      [base](uint32_t a) { return hfr::LoadF(base, a); }, Now());
 }
 struct View {
   Role role = Role::Host;
@@ -82,8 +55,20 @@ struct View {
   TransportStats stats;
   std::optional<PlayerPose> local, partner;
   double updated = 0;
+  const char* local_failure = "not-published";
+  PoseCounters poses;
 };
 #if defined(KK_DEV_TOOLS)
+void LogPoses(const View& v, double now, double& next) {
+  if (v.state != SessionState::Connected) { next = now + 10; return; }
+  if (now < next) return;
+  next = now + 10;
+  const float distance = v.local && v.partner && v.local->level == v.partner->level ?
+      PartnerDistance(*v.local, *v.partner) : -1;
+  REXLOG_INFO("KK co-op poses: local={} check={} sent={} received={} remote-level={} distance={:.1f}",
+      v.local ? "yes" : "no", v.local_failure, v.poses.sent, v.poses.received,
+      v.poses.remote_level ? std::to_string(*v.poses.remote_level) : "none", distance);
+}
 class Service {
  public:
   ~Service() { Stop(); }
@@ -96,13 +81,17 @@ class Service {
         REXLOG_INFO("KK co-op: {}", StateName(s));
       });
       SessionState shown = SessionState::Idle;
+      double next_pose_log = Now() + 10;
       while (!stop_.load()) {
         const double now = Now();
         std::optional<PlayerPose> local;
-        { std::lock_guard lock(mutex_); local = local_; }
-        if (local && now - local->time > .25) local.reset();
+        const char* failure;
+        { std::lock_guard lock(mutex_); local = local_.pose; failure = local_.failure; }
+        if (local && now - local->time > .25) { local.reset(); failure = "publish-expired"; }
         session.Tick(now, local);
         View view{config.role, session.State(), session.Rejection(), session.Stats(), local, session.Partner(now), now};
+        view.local_failure = failure; view.poses = session.Poses();
+        LogPoses(view, now, next_pose_log);
         { std::lock_guard lock(mutex_); view_ = std::move(view); }
         if (shown != session.State()) { shown = session.State(); RequestUiPaint(); }
         if (session.State() == SessionState::Ended) break;
@@ -122,16 +111,16 @@ class Service {
     if (!running_.exchange(false)) return;
     stop_ = true;
     if (worker_.joinable()) worker_.join();
-    std::lock_guard lock(mutex_); local_.reset(); view_ = {};
+    std::lock_guard lock(mutex_); local_ = {}; view_ = {};
   }
   bool Running() const { return running_; }
-  void Publish(std::optional<PlayerPose> p) { std::lock_guard lock(mutex_); local_ = p; }
+  void Publish(PoseRead p) { std::lock_guard lock(mutex_); local_ = p; }
   View Snapshot() { std::lock_guard lock(mutex_); return view_; }
  private:
   std::atomic<bool> running_{false}, stop_{false};
   std::thread worker_;
   std::mutex mutex_;
-  std::optional<PlayerPose> local_;
+  PoseRead local_;
   View view_;
 };
 Service service;  // No thread, socket, guest reads, file access or allocation until explicitly started.
@@ -152,7 +141,7 @@ View CurrentView() {
 #endif
   if (!steam) return {};
   const auto v = steam->SessionSnapshot();
-  return {v.role, v.state, v.rejection, v.stats, v.local, v.partner, v.updated};
+  return {v.role, v.state, v.rejection, v.stats, v.local, v.partner, v.updated, v.local_failure, v.poses};
 }
 
 class PartnerOverlay final : public rex::ui::ImGuiDialog {
@@ -172,18 +161,31 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
         static_cast<unsigned long long>(v.stats.malformed), RejectName(v.rejection));
     auto* dl = ImGui::GetForegroundDrawList();
     dl->AddText(ImVec2(24, 64), IM_COL32(255, 230, 170, 255), text);
+    const float distance = v.local && v.partner && v.local->level == v.partner->level ?
+        PartnerDistance(*v.local, *v.partner) : -1;
+    std::snprintf(text, sizeof(text), "Pose: %s (%s) | sent %llu recv %llu | level %s | distance %.1f",
+        v.local ? "yes" : "no", v.local_failure,
+        static_cast<unsigned long long>(v.poses.sent), static_cast<unsigned long long>(v.poses.received),
+        v.poses.remote_level ? std::to_string(*v.poses.remote_level).c_str() : "none", distance);
+    dl->AddText(ImVec2(24, 88), IM_COL32(255, 230, 170, 255), text);
 #else
     auto* dl = ImGui::GetForegroundDrawList();
 #endif
     if (v.state != SessionState::Connected || !v.local || !v.partner || v.local->level != v.partner->level ||
         freecam::Active()) return;
-    const float dx = v.partner->x - v.local->x, dy = v.partner->y - v.local->y, dz = v.partner->z - v.local->z;
-    const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
+    const float dx = v.partner->x - v.local->x, dy = v.partner->y - v.local->y;
+    const float partner_distance = PartnerDistance(*v.local, *v.partner);
     const float angle = std::remainder(std::atan2(dy, dx) - v.local->facing, 6.28318530718f);
     const char* directions[] = {"ahead", "ahead-left", "left", "behind-left", "behind", "behind-right", "right", "ahead-right"};
     const int sector = (int(std::lround(angle / .7853981634f)) + 8) % 8;
-    std::snprintf(text, sizeof(text), "Partner: %.0f m, %s (Jack facing)", distance, directions[sector]);
-    dl->AddText(ImVec2(24, 88), IM_COL32(180, 255, 210, 255), text);
+    if (PartnerHere(partner_distance)) std::snprintf(text, sizeof(text), "Partner: here");
+    else std::snprintf(text, sizeof(text), "Partner: %.0f m, %s (Jack facing)", partner_distance, directions[sector]);
+#if defined(KK_DEV_TOOLS)
+    constexpr float partner_y = 112;
+#else
+    constexpr float partner_y = 88;
+#endif
+    dl->AddText(ImVec2(24, partner_y), IM_COL32(180, 255, 210, 255), text);
   }
 };
 }  // namespace
@@ -259,7 +261,10 @@ void GameFrame(uint8_t* base) {
   if (service.Running()) service.Publish(ReadJack(base));
   else
 #endif
-  if (steam && steam->SessionSnapshot().state != SessionState::Idle) steam->PublishPose(ReadJack(base));
+  if (steam && steam->SessionSnapshot().state != SessionState::Idle) {
+    const auto read = ReadJack(base);
+    steam->PublishPose(read.pose, read.failure);
+  }
 }
 void CreateOverlay(rex::ui::ImGuiDrawer* drawer) {
   if (REXCVAR_GET(kk_coop_enabled)) new PartnerOverlay(drawer);

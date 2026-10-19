@@ -9,6 +9,8 @@
 // KK_DEV_SCRIPT="12:LB+RB+LT+RT/6,12.5:DOWN,..." (with KK_DEV_AUTOSKIP): replaces
 // the presses after the save menu with this list: seconds after the menu
 // opened, buttons joined by '+', optional "/hold seconds" (default 0.12).
+// With --kk_start, this clock starts when the requested level finishes loading.
+// Input is injected after the native pad's focus gate, so it also works in background windows.
 // Buttons: A B X Y START BACK UP DOWN LEFT RIGHT LB RB LT RT LS RS, the sticks
 // RSUP RSDOWN RSLEFT RSRIGHT (RSHALF) and LSUP LSDOWN LSLEFT LSRIGHT (LSHALF), SKIP.
 //
@@ -536,6 +538,11 @@ bool AutoskipPad(uint32_t user, uint8_t* state) {
     return u && *u ? uint32_t(std::atoi(u)) : 0u;
   }();
   if (user != pad_user) return false;
+  static const bool logged = [] {
+    REXLOG_INFO("KK dev: virtual pad active, script steps {}, wander {}", g_script.size(), g_wander ? 1 : 0);
+    return true;
+  }();
+  (void)logged;
   SkipFreezes(NowMs());
   const int64_t now = ScriptNowMs();
   if (NowMs() < g_pause_start_until.load()) {
@@ -603,9 +610,14 @@ bool AutoskipPad(uint32_t user, uint8_t* state) {
       }
     }
   }
-  if (static uint16_t last_buttons = 0; buttons != last_buttons) {
-    last_buttons = buttons;
-    if (std::getenv("KK_DEV_PAD_LOG")) REXLOG_INFO("KK dev pad: {:.3f} s buttons {:04X}", (now - g_menu_ms.load()) / 1000.0, buttons);
+  const uint32_t log_held = held | buttons;
+  if (static uint32_t last_held = 0; log_held != last_held) {
+    last_held = log_held;
+    if (std::getenv("KK_DEV_PAD_LOG")) {
+      const DevSticks sticks = DevScriptSticks(held);
+      REXLOG_INFO("KK dev pad: {:.3f} s buttons {:04X} LS {},{} RS {},{}",
+          (now - g_menu_ms.load()) / 1000.0, buttons, sticks.lx, sticks.ly, sticks.rx, sticks.ry);
+    }
   }
   std::memset(state, 0, 16);
   StoreBE<uint32_t>(state, uint32_t(now / 50));  // changes whenever the buttons might
