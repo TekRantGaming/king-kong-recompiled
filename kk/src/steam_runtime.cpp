@@ -148,6 +148,7 @@ struct SteamRuntime::Impl
   SteamSessionView session_view;
   std::optional<PlayerPose> local_pose;
   enemies::Frame local_enemies;
+  ShotMailbox shots;
   const char* local_failure = "not-published";
 #if defined(KK_DEV_TOOLS)
   double next_pose_log = 0;
@@ -305,6 +306,7 @@ struct SteamRuntime::Impl
     if (transport) transport->Close();
     transport.reset(); partner = 0; last_session_state = SessionState::Idle;
     { std::lock_guard lock(mutex); session_view = {}; }
+    shots.Clear();
   }
   void RetireCalls() {
     if (create_call) abandoned.emplace(create_call, LobbyCreated_t::k_iCallback);
@@ -574,9 +576,11 @@ struct SteamRuntime::Impl
     { std::lock_guard lock(mutex); pose = local_pose; failure = local_failure; enemy_frame = local_enemies; }
     if (pose && now - pose->time > .25) { pose.reset(); failure = "publish-expired"; }
     session->Tick(now, pose, &enemy_frame);
+    shots.Exchange(*session);
     SteamSessionView view{session->SessionRole(), session->State(), session->Rejection(), session->Stats(), pose, session->Partner(now), now};
     view.local_failure = failure; view.poses = session->Poses();
     view.enemies = session->Enemies(now); view.enemies_sent = session->EnemiesSent();
+    view.shots_sent = session->ShotsSent();
 #if defined(KK_DEV_TOOLS)
     if (view.state != SessionState::Connected) next_pose_log = now + 10;
     else if (now >= next_pose_log) {
@@ -704,6 +708,8 @@ bool SteamRuntime::EnemyConnectionReady(double now) const {
 void SteamRuntime::PublishEnemies(const enemies::Frame& frame) {
   std::lock_guard lock(impl_->mutex); impl_->local_enemies = frame;
 }
+bool SteamRuntime::SubmitShot(const ShotIntent& shot) { return impl_->shots.Submit(shot); }
+std::vector<ReceivedShot> SteamRuntime::TakeShots() { return impl_->shots.Take(); }
 void SteamRuntime::Shutdown() { impl_->Shutdown(); }
 #if defined(KK_DEV_TOOLS)
 int SteamRuntime::SelfTest(std::function<void(const std::string&)> log) {

@@ -28,6 +28,7 @@ struct SteamSessionView {
   PoseCounters poses;
   enemies::Frame enemies;
   uint64_t enemies_sent = 0;
+  uint64_t shots_sent = 0;
 };
 // Construction/configuration never loads Steam. First Open/Create/Accept starts a single
 // joined worker which owns init, every flat call, callbacks, lobby and CoopSession until shutdown.
@@ -40,6 +41,8 @@ class SteamRuntime final : public ISocialService {
   // failure must be a static label (ReadJackPose), never guest data or a temporary string.
   void PublishPose(std::optional<PlayerPose> pose, const char* failure = "ok");
   void PublishEnemies(const enemies::Frame& frame);
+  bool SubmitShot(const ShotIntent& shot);
+  std::vector<ReceivedShot> TakeShots();
   SteamSessionView SessionSnapshot() const;
   bool EnemyConnectionReady(double now) const;
   void Shutdown();

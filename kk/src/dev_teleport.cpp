@@ -7,6 +7,10 @@
 // where Jack faces (default north, +y). Jack is load32(0x82CCBF7C) (the camera's actor), checked to run
 // the player track H_TRACK_tagoff (0x826718B8). Runs from the AI pass hook (dev_sample.cpp), before the
 // AI step; the whole PPCContext and the guest scratch frame below r1 are restored afterwards.
+// KK_DEV_TELEPORT="t,enemy[,stand-off]" approaches the nearest initialized living
+// dormant allowlisted enemy (default 10 units away, range 3..30). Same-level,
+// within 200 units and at most 2 units of elevation difference. It never wakes
+// or schedules an enemy itself. Ground, triggers and line of sight need a run.
 #if defined(KK_DEV_TOOLS)
 
 #include <cmath>
@@ -22,6 +26,8 @@
 #include <rex/logging.h>
 
 #include "hfr.h"
+#include "coop_enemies_game.h"
+#include "coop_pose.h"
 
 REX_EXTERN(__imp__sub_82538B70);
 
@@ -39,6 +45,9 @@ struct Hop {
   double t;
   float x, y, z, fx, fy;
   bool done;
+  bool enemy = false;
+  float stand_off = 10;
+  double retry = 0;
 };
 
 std::vector<Hop> Parse() {
@@ -48,7 +57,17 @@ std::vector<Hop> Parse() {
   std::stringstream all(v);
   for (std::string s; std::getline(all, s, '/');) {
     Hop h{0, 0, 0, 0, 0, 1, false};
-    if (std::sscanf(s.c_str(), "%lf,%f,%f,%f,%f,%f", &h.t, &h.x, &h.y, &h.z, &h.fx, &h.fy) >= 4) out.push_back(h);
+    const auto comma = s.find(',');
+    if (comma != std::string::npos && s.compare(comma+1, 5, "enemy") == 0) {
+      char tail = 0;
+      const auto suffix = s.substr(comma+1);
+      const bool valid_suffix = suffix == "enemy" ||
+          std::sscanf(suffix.c_str(), "enemy,%f%c", &h.stand_off, &tail) == 1;
+      if (valid_suffix && std::sscanf(s.substr(0, comma).c_str(), "%lf%c", &h.t, &tail) == 1 &&
+          std::isfinite(h.t) && h.t >= 0 && std::isfinite(h.stand_off) && h.stand_off >= 3 && h.stand_off <= 30) {
+        h.enemy = true; out.push_back(h);
+      } else REXLOG_WARN("KK dev teleport: invalid enemy placement '{}'", s);
+    } else if (std::sscanf(s.c_str(), "%lf,%f,%f,%f,%f,%f", &h.t, &h.x, &h.y, &h.z, &h.fx, &h.fy) >= 4) out.push_back(h);
   }
   return out;
 }
@@ -94,6 +113,14 @@ void DevTeleportTick(PPCContext* ctx, uint8_t* base, uint32_t world) {
   if (t < 0) return;
   for (Hop& h : hops) {
     if (h.done || t < h.t) continue;
+    if (h.enemy) {
+      if (uint32_t(ctx->lr) != 0x82881CF0) continue;
+      if (t > h.t+10) {
+        h.done = true; REXLOG_WARN("KK dev teleport: enemy placement expired, no eligible placement"); continue;
+      }
+      if (t < h.retry) continue;
+      h.retry = t+1;
+    }
     const uint32_t actor = Load32(base, 0x82CCBF7C);
     if (!Ok(actor) || (Load32(base, actor) & 0x00400001u)) return;
     const uint32_t ext = Load32(base, actor + 24);
@@ -106,6 +133,22 @@ void DevTeleportTick(PPCContext* ctx, uint8_t* base, uint32_t world) {
     if (!Ok(block) || Load32(base, block + 20) != 0x826718B8) return;  // H_TRACK_tagoff: Jack
     const uint32_t m = Load32(base, actor + 12);
     if (!Ok(m)) return;
+    if (h.enemy) {
+      const auto jack = coop::ReadJackPose([&](uint32_t p) { return Load32(base, p); },
+          [&](uint32_t p) { return Load16(base, p); }, [&](uint32_t p) { return LoadF(base, p); }, t);
+      if (!jack.pose) continue;
+      const auto& p = *jack.pose;
+      const auto target = coop::EnemyDormantTarget(base, world, {p.x, p.y, p.z});
+      if (!target) continue;
+      const float dx = target->x-p.x, dy = target->y-p.y, distance = std::hypot(dx, dy);
+      if (distance <= h.stand_off) {
+        h.done = true; REXLOG_INFO("KK dev teleport: dormant enemy already within stand-off, no move"); continue;
+      }
+      h.fx = dx/distance; h.fy = dy/distance;
+      h.x = target->x-h.fx*h.stand_off; h.y = target->y-h.fy*h.stand_off; h.z = target->z;
+      REXLOG_INFO("KK dev teleport: synthetic enemy approach target=({:.3f},{:.3f},{:.3f}) stand-off={:.1f}",
+          target->x, target->y, target->z, h.stand_off);
+    }
     const uint32_t sp = ctx->r1.u32;
     if ((sp & 15) || sp < 0x40010200) return;
     h.done = true;
