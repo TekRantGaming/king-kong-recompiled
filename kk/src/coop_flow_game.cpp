@@ -24,6 +24,7 @@ namespace {
 std::filesystem::path personal, private_root;
 play::StartRequest selected{play::StartKind::kContinue,-1,-1,{}};
 bool requested=false, launched=false;
+SocialId requested_lobby=0;
 int progress_slot=-1;
 std::atomic<int> session_cheats{-1};
 std::atomic<bool> stopping{false};
@@ -179,11 +180,14 @@ bool RequestSessionStart() {
   // Steam starts the handshake here; dev link is already connected in the launcher.
   if (!social.Act({SocialAction::Start})) return false;
   if (!BeginSessionFlow(s,std::move(save))) return false;
-  selected=r; requested=true; return true;
+  selected=r; requested=true; requested_lobby=model.lobby; return true;
 }
 bool TakeSessionLaunch(play::StartRequest& r) {
   if (launched || !REXCVAR_GET(kk_coop_enabled)) return false;
   const auto v=SessionFlowSnapshot();
+  // An asynchronous Steam Start can fail or be left before either game launches.
+  // Let the launcher select/start again after that lobby has ended.
+  if (requested && Social().Snapshot().lobby!=requested_lobby) requested=false;
   if (!v.start_ready || v.phase==FlowPhase::Failed) return false;
   personal=play::UserDir(); progress_slot=play::MostRecentSave(play::ListSaves(personal));
   if (!v.host) {
@@ -348,6 +352,14 @@ void SessionReloadFrame(uint8_t* base) {
     observer::SetPartnerSpectating(false); return;
   }
   const auto v=SessionFlowSnapshot();
+  if (v.active && v.phase==FlowPhase::Failed) {
+    // Disconnects can arrive while normal gameplay never calls uni_go. Use
+    // the regular save-aware launcher return instead of waiting for a load.
+    observer::SetPartnerSpectating(false);
+    RecordProgress(v);
+    play::ReturnToLauncher("co-op session ended","play");
+    return;
+  }
   if (!v.active || v.phase!=FlowPhase::Playing) {
     observer::SetPartnerSpectating(false); return;
   }

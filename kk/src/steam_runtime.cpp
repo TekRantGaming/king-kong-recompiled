@@ -3,6 +3,7 @@
 #include "coop_pose.h"
 #if defined(KK_DEV_TOOLS) && KK_HAS_STEAM
 #include <rex/logging.h>
+#include "steam_loopback_test.h"
 #endif
 
 #include <algorithm>
@@ -166,6 +167,9 @@ struct SteamRuntime::Impl
   bool used = false, stopped = false;
   std::atomic<bool> stop{false};
   bool self_test = false;
+#if defined(KK_DEV_TOOLS)
+  bool loopback_test = false;
+#endif
   int test_result = 1;
   std::function<void(const std::string&)> test_log;
   explicit Impl(SteamRuntimeOptions o) : options(std::move(o)) {
@@ -563,6 +567,11 @@ struct SteamRuntime::Impl
     SteamNetworkingMessagesSessionRequest_t request{};
     if (Callback(m, request)) {
       const auto id = request.m_identityRemote.GetSteamID64();
+#if defined(KK_DEV_TOOLS)
+      if (self_test && loopback_test && id == model.self && transport) {
+        transport->SessionRequest(id); return;
+      }
+#endif
       if (Friend(id) && RefreshLobby() && transport) transport->SessionRequest(id);
       else api.SteamAPI_ISteamNetworkingMessages_CloseSessionWithUser(messages, request.m_identityRemote);
       return;
@@ -625,6 +634,45 @@ struct SteamRuntime::Impl
       else Publish();
     }
   }
+#if defined(KK_DEV_TOOLS)
+  int LoopbackCheck() {
+    // The SDK does not promise self-send support on every Steam client. Probe it
+    // through the real DLL and adapter; failure is never replaced by a fake echo.
+    transport = std::make_unique<SteamMessagesTransport>(*this, model.self);
+    for (unsigned i=1;i<=unsigned(MessageType::CameraCut);++i) {
+      const auto type=MessageType(i);
+      const bool reliable=type!=MessageType::Ping && type!=MessageType::Pong &&
+          type!=MessageType::PlayerPose && type!=MessageType::EnemySnapshot && type!=MessageType::CameraPose;
+      std::vector<uint8_t> expected;
+      if (!Encode(SteamProbeMessage(type),expected) || !transport->Send(expected,reliable)) {
+        test_log("Steam loopback: send failed type="+std::to_string(i)); return 1;
+      }
+      const double until=Now()+(i==1 ? 10 : 3);
+      double retry=Now()+.1;
+      bool received=false;
+      while (!stop && Now()<until && transport->State()==TransportState::Ready) {
+        Pump(); transport->Poll(Now());
+        std::vector<uint8_t> bytes;
+        while (transport->Receive(bytes)) if (bytes==expected) received=true;
+        if (received) break;
+        // Unreliable loss is allowed; repeat only the current synthetic packet.
+        if (!reliable && Now()>=retry) {
+          if (!transport->Send(expected,false)) break;
+          retry=Now()+.1;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      }
+      if (!received) {
+        test_log("Steam loopback: no self-send round trip type="+std::to_string(i)+
+                 "; this client/route may not support self-send"); return 1;
+      }
+      test_log("Steam loopback: OK type="+std::to_string(i)+" channel="+
+               std::to_string(reliable ? 0 : 1)+" bytes="+std::to_string(expected.size()));
+    }
+    test_log("Steam loopback: all 28 types OK; two-PC lobby and relay testing still required");
+    return 0;
+  }
+#endif
   void Run() {
     { std::lock_guard lock(mutex); model = published; }
     if (!Init()) {
@@ -637,9 +685,15 @@ struct SteamRuntime::Impl
     Status(SocialStatus::Idle, "Steam connected");
     if (self_test) {
       test_log("Steam self-test: init OK");
-      test_log("Steam self-test: friend count=" + std::to_string(std::max(0, api.SteamAPI_ISteamFriends_GetFriendCount(friends, k_EFriendFlagImmediate))));
-      test_log("Steam self-test: persona state=" + std::to_string(int(api.SteamAPI_ISteamFriends_GetPersonaState(friends))));
-      Command({SocialAction::CreateLobby});
+#if defined(KK_DEV_TOOLS)
+      if (loopback_test) { test_result=LoopbackCheck(); stop=true; }
+      else
+#endif
+      {
+        test_log("Steam self-test: friend count=" + std::to_string(std::max(0, api.SteamAPI_ISteamFriends_GetFriendCount(friends, k_EFriendFlagImmediate))));
+        test_log("Steam self-test: persona state=" + std::to_string(int(api.SteamAPI_ISteamFriends_GetPersonaState(friends))));
+        Command({SocialAction::CreateLobby});
+      }
     }
     while (!stop) {
       std::deque<PendingCommand> pending;
@@ -752,16 +806,18 @@ bool SteamRuntime::SubmitStory(Message m) { return impl_->story.Submit(std::move
 std::vector<Message> SteamRuntime::TakeStory() { return impl_->story.Take(); }
 void SteamRuntime::Shutdown() { impl_->Shutdown(); }
 #if defined(KK_DEV_TOOLS)
-int SteamRuntime::SelfTest(std::function<void(const std::string&)> log) {
+int SteamRuntime::SelfTest(std::function<void(const std::string&)> log, bool loopback) {
 #if KK_HAS_STEAM
   { std::lock_guard lock(impl_->mutex);
     if (impl_->used || impl_->stopped || !impl_->options.enabled) { log("Steam self-test: disabled or already used"); return 1; }
     impl_->used = impl_->self_test = true; impl_->test_log = std::move(log);
+    impl_->loopback_test = loopback;
     impl_->worker = std::thread([p = impl_.get()] { p->Run(); });
   }
   impl_->worker.join();
   return impl_->test_result;
 #else
+  (void)loopback;
   log("Steam self-test: Steam not available in this build"); return 1;
 #endif
 }

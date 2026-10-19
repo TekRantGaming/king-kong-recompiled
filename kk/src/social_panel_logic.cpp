@@ -62,7 +62,7 @@ std::vector<SocialRow> SocialRows(const SocialModel& m) {
   const bool lobby = m.status == SocialStatus::Lobby && m.lobby != 0;
   const bool free = idle && !m.lobby;
   add(SocialRowKind::Section, 1, "Invites");
-  if (m.pending_invites.empty()) add(SocialRowKind::Section, 2, "No invites");
+  if (m.pending_invites.empty()) add(SocialRowKind::Text, 2, "No invites");
   for (const auto& invite : m.pending_invites) {
     auto f = std::find_if(m.friends.begin(), m.friends.end(), [&](const auto& f) { return f.id == invite.inviter; });
     const std::string name = f == m.friends.end() ? "" : f->name;

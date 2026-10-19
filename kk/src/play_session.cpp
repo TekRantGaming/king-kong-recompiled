@@ -634,7 +634,14 @@ bool RelaunchWith(const std::wstring& extra) {
   }
 #endif
   std::vector<std::wstring> kept;
-  for (auto& a : args) {
+  for (size_t i=0;i<args.size();++i) {
+    auto& a=args[i];
+    // A cold-start invite belongs to this process. Returning to the launcher
+    // must not recreate an invite to the session we just left.
+    if (a==L"+connect_lobby") {
+      if (i+1<args.size() && !args[i+1].starts_with(L"--") && args[i+1]!=L"+connect_lobby") ++i;
+      continue;
+    }
     if (dropped(a)) continue;
 #if defined(KK_DEV_TOOLS)
     // Developer runs give --log_file: the new process writes beside it, not over it.

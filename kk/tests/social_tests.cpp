@@ -87,6 +87,9 @@ void FocusAndActions() {
   Check(fake->Scenario("host"), "host preview");
   m = fake->Snapshot(); rows = SocialRows(m);
   Check(!Find(rows, SocialRowKind::Start).enabled, "one member cannot Start");
+  const auto& empty_invites = Find(rows, SocialRowKind::Text, 2);
+  Check(empty_invites.label == "No invites" && !empty_invites.focusable() &&
+      !SocialRowCommand(empty_invites, m), "empty invites are plain text and cannot take focus or act");
   Check(Find(rows, SocialRowKind::Ready).enabled, "host may ready");
   Check(Find(rows, SocialRowKind::OverlayInvite).enabled, "available overlay may invite");
   m.overlay_available = false;

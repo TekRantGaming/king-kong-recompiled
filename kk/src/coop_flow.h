@@ -180,7 +180,7 @@ class SessionFlow {
   void Release() {
     view_.phase=FlowPhase::Playing;
     view_.status=view_.policy==ChapterPolicy::SoloRegroup ? "Solo section. Finish to regroup with partner." :
-        view_.policy==ChapterPolicy::Observer ? "Observer section. Following host progress." : "";
+        view_.policy==ChapterPolicy::Observer && !view_.host ? "Observer section. Following host progress." : "";
   }
   void Advance(double now) {
     if (!view_.host || !next_ || !local_finished_ || !remote_finished_) return;
@@ -286,9 +286,15 @@ class SessionFlow {
 
 class FlowMailbox {
  public:
-  void Disconnect() { std::lock_guard lock(mutex_); flow_.Fail("Partner disconnected. Return to the launcher."); }
+  void Disconnect() {
+    std::lock_guard lock(mutex_);
+    // Keep the failure visible to a running game, but discard work from this
+    // connection. The next session must learn its own role and start afresh.
+    flow_.Fail("Partner disconnected. Return to the launcher.");
+    pending_.reset(); local_.clear(); initialized_=false;
+  }
   bool Begin(SessionStart start, std::vector<uint8_t> save) {
-    std::lock_guard lock(mutex_); if (pending_ || flow_.View().active) return false;
+    std::lock_guard lock(mutex_); if (pending_ || (initialized_ && flow_.View().active)) return false;
     pending_=std::pair{start,std::move(save)}; return true;
   }
   bool Submit(Message m) {

@@ -602,6 +602,12 @@ RowGeom Geometry(const Item& it, float x0, float x1, const Metrics& m, const Fon
 void DrawItem(ImDrawList* dl, const Item& it, float x0, float y0, float x1, float h, bool band, bool focused,
               const Metrics& m, const Fonts& f, Glyphs* glyphs, const std::string& set) {
   const float s = m.s;
+  if (it.type == ItemType::kText) {
+    const float fs = 16.5f * s;
+    dl->AddText(f.text, fs, ImVec2(x0 + 18 * s, y0 + (h - fs) * .5f), color::kTextDim,
+                Ellipsize(f.text, fs, it.literal_label ? it.label : T(it.label), std::max(1.0f, x1 - x0 - 36 * s)).c_str());
+    return;
+  }
   if (it.type == ItemType::kSection) {
     const float fs = 13 * s, ty = y0 + h - 16 * s - fs;
     const std::string caption = text::Upper(T(it.label));
@@ -722,7 +728,8 @@ const Item* DrawList(ImDrawList* dl, std::vector<Item>& items, ListState& st, Im
     height[size_t(i)] = h;
     total += h;
   }
-  auto focusable = [&](int i) { return i >= 0 && i < count && items[size_t(i)].type != ItemType::kSection; };
+  auto focusable = [&](int i) { return i >= 0 && i < count && items[size_t(i)].type != ItemType::kSection &&
+      items[size_t(i)].type != ItemType::kText; };
   if (!st.focus_label.empty() && (!focusable(st.focus) || items[size_t(st.focus)].label != st.focus_label)) {
     for (int i = 0; i < count; ++i) {
       if (focusable(i) && items[size_t(i)].label == st.focus_label) {
