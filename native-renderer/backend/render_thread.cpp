@@ -319,7 +319,7 @@ void ThreadedSink::Run() {
     } catch (const std::system_error& e) {
       // Task 266: a Vulkan error thrown inside NVRHI on this thread (a lost device while recording or
       // submitting) goes to the device-loss path (gpu_loss.h); anything else keeps its old path.
-      if (!IsVulkanError(e) || !g_gpu_loss_handler.load()) throw;
+      if (!IsVulkanError(e) || !GpuLossReporting()) throw;
       gpu_error = std::string("render thread: ") + e.what();
     }
     SnapshotGuestMemory::SetCurrent(nullptr);

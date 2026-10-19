@@ -19,6 +19,7 @@
 #include "backend/diagnostics.h"
 #include "backend/cpu_profile.h"
 #include "backend/frame_log.h"
+#include "backend/gpu_loss.h"
 #include "backend/log.h"
 #include "backend/render_scale.h"
 #if NR_GAME_RENDERER
@@ -88,7 +89,9 @@ struct CallTimer {
   std::chrono::steady_clock::time_point start_;
 };
 
-// Records every renderer call under the backend's lock.
+// Records every renderer call under the backend's lock. Task 268: each call is guarded (gpu_loss.h): a Vulkan
+// error thrown inside NVRHI on the calling thread (the game's when the render thread is off) goes to the
+// device-loss path with the lock already released; nothing changes while nothing fails.
 class LockedSink final : public DrawSink {
  public:
   LockedSink(DrawSink& inner, std::mutex& mutex, const GuestMemory& memory, ShaderLibrary* shaders)
@@ -105,8 +108,10 @@ class LockedSink final : public DrawSink {
 #endif
   }
   void OnVertexShaderPatched(uint32_t shader, uint32_t microcode, uint32_t declaration) override {
-    std::lock_guard lock(mutex_);
-    inner_.OnVertexShaderPatched(shader, microcode, declaration);
+    RunGuarded("renderer (shader patch)", [&] {
+      std::lock_guard lock(mutex_);
+      inner_.OnVertexShaderPatched(shader, microcode, declaration);
+    });
   }
   void OnClear(const ClearCall& c) override {
     if (Dump(c.frame)) {
@@ -115,8 +120,10 @@ class LockedSink final : public DrawSink {
                   c.render_target0, c.depth_stencil);
     }
     CallTimer timer(1);
-    std::lock_guard lock(mutex_);
-    inner_.OnClear(c);
+    RunGuarded("renderer (clear)", [&] {
+      std::lock_guard lock(mutex_);
+      inner_.OnClear(c);
+    });
   }
   void OnDraw(const DrawCall& d) override {
     if (Dump(d.frame)) {
@@ -136,8 +143,10 @@ class LockedSink final : public DrawSink {
           m[15]);
     }
     CallTimer timer(0);
-    std::lock_guard lock(mutex_);
-    inner_.OnDraw(d);
+    RunGuarded("renderer (draw)", [&] {
+      std::lock_guard lock(mutex_);
+      inner_.OnDraw(d);
+    });
   }
   void OnResolve(const ResolveCall& r) override {
     if (Dump(r.frame)) {
@@ -145,8 +154,10 @@ class LockedSink final : public DrawSink {
                   r.flags, r.dest_texture, r.render_target0);
     }
     CallTimer timer(2);
-    std::lock_guard lock(mutex_);
-    inner_.OnResolve(r);
+    RunGuarded("renderer (resolve)", [&] {
+      std::lock_guard lock(mutex_);
+      inner_.OnResolve(r);
+    });
   }
   void OnPresent(uint32_t frame, uint32_t rt0, uint32_t device) override {
     if (Dump(frame)) {
@@ -156,8 +167,10 @@ class LockedSink final : public DrawSink {
                                             : std::chrono::steady_clock::time_point{};
     {
       CallTimer timer(3);
-      std::lock_guard lock(mutex_);
-      inner_.OnPresent(frame, rt0, device);
+      RunGuarded("renderer (present)", [&] {
+        std::lock_guard lock(mutex_);
+        inner_.OnPresent(frame, rt0, device);
+      });
     }
     RecordFrame(start);
   }
@@ -435,7 +448,7 @@ class Backend::PresentThread {
       const Args a = request_;
       pending_ = false;
       lock.unlock();
-      backend_.PresentNow(a.presenter, a.fw, a.fh, a.dw, a.dh);
+      RunGuarded("present thread", [&] { backend_.PresentNow(a.presenter, a.fw, a.fh, a.dw, a.dh); });
       lock.lock();
     }
   }
@@ -719,7 +732,7 @@ void Backend::Present(rex::ui::Presenter* presenter, uint32_t frontbuffer_width,
     present_thread_->Request(presenter, frontbuffer_width, frontbuffer_height, display_width, display_height);
     return;
   }
-  PresentNow(presenter, frontbuffer_width, frontbuffer_height, display_width, display_height);
+  RunGuarded("present", [&] { PresentNow(presenter, frontbuffer_width, frontbuffer_height, display_width, display_height); });
 }
 
 void Backend::set_async_submit(bool on) {

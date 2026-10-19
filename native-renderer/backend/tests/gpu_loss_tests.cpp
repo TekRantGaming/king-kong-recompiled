@@ -1,6 +1,10 @@
 // Task 266: the renderer's own device-loss report (gpu_loss.h). Only errors of the "vk::Result" category (the one
 // vulkan.hpp throws, vk::SystemError) count as a device error; without a handler the caller keeps its old path.
 #include "backend/gpu_loss.h"
+#include <atomic>
+#include <memory>
+#include <stdexcept>
+#include <thread>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -71,6 +75,88 @@ int main() {
   Check(guarded(false) == "rethrown", "guard without handler rethrows");
   const int before = g_calls;
   Check(guarded(true).rfind("render thread: submit", 0) == 0 && g_calls == before + 1, "guard with handler reports once");
+
+  // Task 268: RunGuarded reports a Vulkan error once (after the scope's locks), rethrows others.
+  {
+    const int calls = g_calls;
+    static std::atomic<bool> held{false};
+    static bool locked_in_report = false;
+    struct Lock {
+      Lock() { held = true; }
+      ~Lock() { held = false; }
+    };
+    SetGpuLossHandler([](const char* what) {
+      Record(what);
+      if (held.load()) locked_in_report = true;
+    });
+    const bool finished = RunGuarded("Vulkan submission", [] {
+      Lock lock;
+      throw std::system_error(std::error_code(-4, kVk), "submit");
+    });
+    Check(!finished && g_calls == calls + 1, "RunGuarded reports a Vulkan error");
+    Check(g_seen.rfind("Vulkan submission: submit", 0) == 0, "RunGuarded names where");
+    Check(!locked_in_report, "RunGuarded reports after the scope's lock is released");
+    bool other = false;
+    try {
+      RunGuarded("x", [] { throw std::system_error(std::make_error_code(std::errc::io_error), "io"); });
+    } catch (const std::system_error&) {
+      other = true;
+    }
+    Check(other && g_calls == calls + 1, "RunGuarded rethrows a non-Vulkan error");
+    Check(RunGuarded("x", [] {}), "RunGuarded: nothing thrown, finished");
+  }
+  // A device-owning thread: nothing reported, the error is rethrown to its own handler.
+  SetGpuLossHandler(&Record);
+  {
+    const int calls = g_calls;
+    bool rethrown = false;
+    {
+      OwnDeviceErrors own;
+      Check(!GpuLossReporting(), "own-device thread: not reporting");
+      Check(!ReportGpuLoss("x"), "own-device thread: ReportGpuLoss refuses");
+      try {
+        RunGuarded("prewarm", [] { throw std::system_error(std::error_code(-4, kVk), "lost"); });
+      } catch (const std::system_error&) {
+        rethrown = true;
+      }
+    }
+    Check(rethrown && g_calls == calls, "own-device thread: rethrown, handler not called");
+    Check(GpuLossReporting(), "own-device scope restored");
+    std::thread other_thread([] { OwnDeviceErrors own; });
+    other_thread.join();
+    Check(GpuLossReporting(), "another thread's scope does not touch this one");
+  }
+  // BuildOrEmpty: a Vulkan error makes an empty result and keeps the text; others propagate.
+  {
+    std::string error;
+    auto ok = BuildOrEmpty([] { return std::make_unique<int>(7); }, &error);
+    Check(ok && *ok == 7 && error.empty(), "BuildOrEmpty: normal build unchanged");
+    auto empty = BuildOrEmpty([]() -> std::unique_ptr<int> { throw std::system_error(std::error_code(-2, kVk), "oom"); }, &error);
+    Check(!empty && error.rfind("oom", 0) == 0, "BuildOrEmpty: Vulkan error -> empty + text");
+    bool propagated = false;
+    try {
+      (void)BuildOrEmpty([]() -> std::unique_ptr<int> { throw std::runtime_error("bug"); }, nullptr);
+    } catch (const std::runtime_error&) {
+      propagated = true;
+    }
+    Check(propagated, "BuildOrEmpty: other exceptions propagate");
+  }
+#if defined(KK_DEV_TOOLS)
+  {
+    // The dev hook's thrown error is recognised as a Vulkan error; DevGpuLossNow fires once at the frame named.
+    bool seen = false;
+    try {
+      DevThrowVulkanDeviceLost();
+    } catch (const std::system_error& e) {
+      seen = IsVulkanError(e) && e.code().value() == -4;
+    }
+    Check(seen, "dev injection looks like vk::DeviceLostError");
+    std::atomic<uint64_t> frames{0};
+    int fired = 0;
+    for (int i = 0; i < 10; ++i) fired += DevGpuLossNow(frames) ? 1 : 0;
+    Check(fired == (DevGpuLossAfter() && DevGpuLossAfter() <= 10 ? 1 : 0), "dev hook fires once at its frame");
+  }
+#endif
 
   SetGpuLossHandler(nullptr);
   std::printf("gpu_loss: %d cases passed\n", cases);

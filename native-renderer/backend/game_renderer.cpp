@@ -3,6 +3,7 @@
 #include <nvrhi/vulkan.h>
 #endif
 #include "plugin/native_benchmark_stats.h"
+#include "backend/gpu_loss.h"
 #include "backend/resource_upload_workers.h"
 #include "backend/upload_batch.h"
 #include "kkshaders/tessellation.h"
@@ -292,8 +293,8 @@ bool GameRenderer::Initialize() {
     UpscaleConfig probe;
     probe.kind = UpscalerKind::kDlss;
     dlss_warm_ = std::async(std::launch::async, [device = device_, probe] {
-      std::string why;
-      return CreateDlssUpscaler(device, probe, &why);
+      std::string why, error;
+      return BuildOrEmpty([&] { return CreateDlssUpscaler(device, probe, &why); }, &error);
     });
   }
   shaders_->SetMotionPrewarm(bool(upscale_));

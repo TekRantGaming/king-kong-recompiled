@@ -17,6 +17,7 @@
 #endif
 
 #include "backend/backend.h"
+#include "backend/gpu_loss.h"
 #include "backend/host_device.h"
 #include "backend/pipeline_exit_gate.h"
 #include "backend/render_scale.h"
@@ -123,6 +124,20 @@ class LauncherPrewarm {
   }
 
   void Run() {
+    // Task 268: this thread's own device. A Vulkan error thrown inside NVRHI on it (a lost device, out of
+    // memory) ends the prewarm as failed (the game makes what is left) instead of std::terminate ending the
+    // launcher; never the game's device-loss path (gpu_loss.h OwnDeviceErrors).
+    OwnDeviceErrors own;
+    try {
+      RunPrewarm();
+    } catch (const std::system_error& e) {
+      if (!IsVulkanError(e)) throw;
+      REXLOG_WARN("rexgpu-native: launcher prewarm: graphics device error ({}); prewarm stopped", e.what());
+      Finish(NR_PREWARM_FAILED);
+    }
+  }
+
+  void RunPrewarm() {
     // The SDK's provider as the game's start makes it (the same GPU and features), without
     // presentation.
     PreferHighPerformanceGpu(GpuApi::kVulkan);  // the game's GPU, not adapter 0 (task 203)

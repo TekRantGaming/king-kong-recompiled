@@ -135,16 +135,23 @@ class D3D12Host final : public HostDevice {
     if (completed == UINT64_MAX) {
       // Task 266: a removed device reports every fence as UINT64_MAX (we never signal that value). Report
       // it here (gpu_loss.h) instead of rendering on until the presenter notices.
-      char what[96];
-      std::snprintf(what, sizeof(what), "D3D12 frame wait: device removed (reason 0x%08X)",
-                    unsigned(provider_.GetDevice()->GetDeviceRemovedReason()));
-      ReportGpuLoss(what);
+      ReportIfRemoved("D3D12 frame wait");
       return;
     }
     if (value == 0 || completed >= value) return;
     // A null event blocks this thread until the fence reaches the value.
     frame_fence_->SetEventOnCompletion(value, nullptr);
   }
+  // Task 268: reports a removed device with its reason (gpu_loss.h). A lost device's fence signal, idle
+  // wait and frame wait all lead here; one GetDeviceRemovedReason call, never in a normal frame.
+  void ReportIfRemoved(const char* where) {
+    const HRESULT reason = provider_.GetDevice()->GetDeviceRemovedReason();
+    if (SUCCEEDED(reason)) return;
+    char what[128];
+    std::snprintf(what, sizeof(what), "%s: device removed (reason 0x%08X)", where, unsigned(reason));
+    ReportGpuLoss(what);
+  }
+
   void ExecuteFrameCommandList(nvrhi::ICommandList* command_list, nvrhi::IEventQuery* completion) override {
     // ID3D12CommandQueue is thread safe, NVRHI's queue is not: executeCommandList records the list as in
     // flight and runGarbageCollection retires finished ones from the same list. The submission thread
@@ -153,7 +160,14 @@ class D3D12Host final : public HostDevice {
     using clock = std::chrono::steady_clock;
     const uint64_t cpu_start = (REXCVAR_GET(native_debug) & 32768) ? CurrentThreadCpuMicroseconds() : 0;
     const auto t0 = clock::now();
-    std::lock_guard lock(execute_mutex_);
+#if defined(KK_DEV_TOOLS)
+    if (completion && DevGpuLossNow(dev_loss_frames_)) {  // KK_DEV_GPU_LOSS_AFTER
+      ReportGpuLoss("D3D12 submission: device removed (developer injection)");
+      return;
+    }
+#endif
+    bool signal_failed = false;
+    std::unique_lock lock(execute_mutex_);
     const auto t1 = clock::now();
     device_->executeCommandList(command_list);
     if (completion) {
@@ -162,6 +176,8 @@ class D3D12Host final : public HostDevice {
       if (frame_fence_ && SUCCEEDED(provider_.GetDirectQueue()->Signal(frame_fence_, frame_fence_value_ + 1))) {
         ++frame_fence_value_;
         RecordFrameValue(completion, frame_fence_value_);
+      } else if (frame_fence_) {
+        signal_failed = true;
       }
     }
     const auto t2 = clock::now();
@@ -175,6 +191,8 @@ class D3D12Host final : public HostDevice {
     times_.garbage_us += us(t2, t3);
     if (cpu_start) times_.cpu_us += CurrentThreadCpuMicroseconds() - cpu_start;
     ++times_.count;
+    lock.unlock();
+    if (signal_failed) ReportIfRemoved("D3D12 submission");
   }
   SubmitTimes submit_times() const override {
     std::lock_guard lock(execute_mutex_);
@@ -182,13 +200,19 @@ class D3D12Host final : public HostDevice {
   }
 
   void WaitForIdle() override {
-    std::lock_guard lock(execute_mutex_);
-    device_->waitForIdle();
+    {
+      std::lock_guard lock(execute_mutex_);
+      device_->waitForIdle();
+    }
+    ReportIfRemoved("D3D12 wait for idle");
   }
   void RunExclusive(const std::function<void()>& fn) override {
-    std::lock_guard lock(execute_mutex_);
-    device_->waitForIdle();
-    fn();
+    {
+      std::lock_guard lock(execute_mutex_);
+      device_->waitForIdle();
+      fn();
+    }
+    ReportIfRemoved("D3D12 exclusive work");
   }
 
   bool CopyToGuestOutput(rex::ui::Presenter::GuestOutputRefreshContext& context,
@@ -296,6 +320,9 @@ class D3D12Host final : public HostDevice {
   nvrhi::DeviceHandle device_;
   ID3D12Fence* frame_fence_ = nullptr;
   uint64_t frame_fence_value_ = 0;
+#if defined(KK_DEV_TOOLS)
+  std::atomic<uint64_t> dev_loss_frames_{0};
+#endif
   std::vector<std::pair<nvrhi::IEventQuery*, uint64_t>> frame_values_;
   std::array<Wrapped, 4> wrapped_;
   size_t next_slot_ = 0;

@@ -205,18 +205,17 @@ class VulkanHost final : public HostDevice {
     ExecuteFrameCommandList(command_list, nullptr);
   }
   // Task 266: a Vulkan error thrown inside NVRHI here (vulkan.hpp: device lost, or out of memory on a
-  // submission) goes to the plugin's device-loss path (gpu_loss.h) instead of std::terminate, so a loss
-  // during startup reaches the startup recovery. The locks of `fn` are released before the report.
+  // submission) goes to the plugin's device-loss path (gpu_loss.h RunGuarded) instead of std::terminate, so a
+  // loss during startup reaches the startup recovery. The locks of `fn` are released before the report.
   template <typename F>
   void Guarded(const char* where, F&& fn) {
-    std::string what;
-    try {
-      fn();
-      return;
-    } catch (const std::system_error& e) {
-      if (!IsVulkanError(e) || !g_gpu_loss_handler.load()) throw;
-      what = std::string(where) + ": " + e.what();
-    }
+    RunGuarded(where, std::forward<F>(fn));
+  }
+  // NVRHI's waitForIdle catches DEVICE_LOST itself and returns false (task 268: that was ignored). Reported
+  // by the caller once its locks are released.
+  static void ReportIdleLoss(bool lost, const char* where) {
+    if (!lost) return;
+    const std::string what = std::string(where) + ": VK_ERROR_DEVICE_LOST";
     ReportGpuLoss(what.c_str());
   }
 
@@ -254,6 +253,9 @@ class VulkanHost final : public HostDevice {
     Guarded("Vulkan submission", [&] { ExecuteFrameCommandListUnguarded(command_list, completion); });
   }
   void ExecuteFrameCommandListUnguarded(nvrhi::ICommandList* command_list, nvrhi::IEventQuery* completion) {
+#if defined(KK_DEV_TOOLS)
+    if (completion && DevGpuLossNow(dev_loss_frames_)) DevThrowVulkanDeviceLost();  // KK_DEV_GPU_LOSS_AFTER
+#endif
     // Host access to a VkQueue must be externally synchronised: hold the SDK's
     // queue lock (recursive) while NVRHI submits.
     using clock = std::chrono::steady_clock;
@@ -288,19 +290,23 @@ class VulkanHost final : public HostDevice {
   DriverPipelineCache* pipeline_cache() override { return pipeline_cache_.get(); }
 
   void WaitForIdle() override {
+    bool lost = false;
     Guarded("Vulkan wait for idle", [&] {
       auto acquisition = provider_.vulkan_device()->AcquireQueue(queue_family_, 0);
       std::lock_guard execute_lock(execute_mutex_);
-      device_->waitForIdle();
+      lost = !device_->waitForIdle();
     });
+    ReportIdleLoss(lost, "Vulkan wait for idle");
   }
   void RunExclusive(const std::function<void()>& fn) override {
+    bool lost = false;
     Guarded("Vulkan exclusive work", [&] {
       auto acquisition = provider_.vulkan_device()->AcquireQueue(queue_family_, 0);
       std::lock_guard execute_lock(execute_mutex_);
-      device_->waitForIdle();
+      lost = !device_->waitForIdle();
       fn();
     });
+    ReportIdleLoss(lost, "Vulkan exclusive work");
   }
 
   bool CopyToGuestOutput(rex::ui::Presenter::GuestOutputRefreshContext& context,
@@ -470,6 +476,9 @@ class VulkanHost final : public HostDevice {
   VkDevice vk_device_ = VK_NULL_HANDLE;
   VkSemaphore queue_semaphore_ = VK_NULL_HANDLE;
   PFN_vkWaitSemaphores wait_semaphores_ = nullptr;
+#if defined(KK_DEV_TOOLS)
+  std::atomic<uint64_t> dev_loss_frames_{0};
+#endif
   std::vector<std::pair<nvrhi::IEventQuery*, uint64_t>> frame_values_;
   std::unique_ptr<OutputBlit> output_blit_;
   std::array<Wrapped, 4> wrapped_;
