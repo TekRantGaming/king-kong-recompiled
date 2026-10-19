@@ -58,6 +58,8 @@ class CoopSession {
   std::optional<CheatSet> HostCheats() const { return host_cheats_; }
   std::vector<ReceivedShot> TakeShots();
   uint64_t ShotsSent() const { return shots_sent_; }
+  bool QueueFlow(const Message& message);
+  std::vector<Message> TakeFlow();
  private:
   void Transition(SessionState state);
   bool Send(Message message, bool reliable);
@@ -89,6 +91,8 @@ class CoopSession {
   std::optional<InventoryState> local_inventory_, sent_inventory_;
   uint32_t cheat_sequence_ = 0, inventory_sequence_ = 0;
   bool cheat_seen_ = false, inventory_seen_ = false;
+  std::deque<Message> outgoing_flow_;
+  std::vector<Message> incoming_flow_;
 };
 // Both workers share the same bounded value-only handoff. No guest memory here.
 class ShotMailbox {

@@ -151,6 +151,7 @@ struct SteamRuntime::Impl
   enemies::Frame local_enemies;
   std::optional<CheatSet> local_cheats;
   ShotMailbox shots;
+  FlowMailbox flow;
   const char* local_failure = "not-published";
 #if defined(KK_DEV_TOOLS)
   double next_pose_log = 0;
@@ -296,6 +297,7 @@ struct SteamRuntime::Impl
     return api.SteamAPI_ISteamMatchmaking_SetLobbyData(matchmaking, model.lobby, key, value.c_str());
   }
   void StopSession() {
+    flow.Disconnect();
     if (session) {
       session->End(Now());
       // Give reliable Bye a bounded best-effort flush before closing the underlying session.
@@ -583,6 +585,7 @@ struct SteamRuntime::Impl
     if (pose && now - pose->time > .25) { pose.reset(); failure = "publish-expired"; }
     session->Tick(now, pose, &enemy_frame, &cheats);
     shots.Exchange(*session);
+    flow.Exchange(*session, now);
     SteamSessionView view{session->SessionRole(), session->State(), session->Rejection(), session->Stats(), pose, session->Partner(now), now};
     view.local_failure = failure; view.poses = session->Poses();
     view.enemies = session->Enemies(now); view.enemies_sent = session->EnemiesSent();
@@ -719,6 +722,9 @@ void SteamRuntime::PublishEnemies(const enemies::Frame& frame) {
 bool SteamRuntime::SubmitShot(const PendingShot& shot) { return impl_->shots.Submit(shot); }
 void SteamRuntime::PublishCheats(CheatSet cheats) { std::lock_guard lock(impl_->mutex); impl_->local_cheats = cheats; }
 void SteamRuntime::PublishInventory(const InventoryState& inventory) { impl_->shots.PublishInventory(inventory); }
+bool SteamRuntime::BeginFlow(SessionStart start, std::vector<uint8_t> save) { return impl_->flow.Begin(start, std::move(save)); }
+bool SteamRuntime::SubmitFlow(Message m) { return impl_->flow.Submit(std::move(m)); }
+FlowView SteamRuntime::FlowSnapshot() const { return impl_->flow.Snapshot(); }
 std::vector<ReceivedShot> SteamRuntime::TakeShots() { return impl_->shots.Take(); }
 void SteamRuntime::Shutdown() { impl_->Shutdown(); }
 #if defined(KK_DEV_TOOLS)

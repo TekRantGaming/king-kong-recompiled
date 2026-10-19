@@ -23,9 +23,10 @@ set(KINGKONG_SOURCES
     src/settings.cpp
     src/coop_protocol.cpp
     src/coop_session.cpp
+    src/coop_flow_game.cpp
     src/coop_runtime.cpp
     src/coop_partner_body.cpp
-  src/coop_nametag.cpp
+    src/coop_nametag.cpp
     src/coop_enemies_game.cpp
     src/steam_runtime.cpp
     src/steam_lobby.cpp
@@ -288,6 +289,9 @@ if(KK_DEV_TOOLS)
     add_executable(kk-coop-tests tests/coop_tests.cpp src/coop_protocol.cpp src/coop_session.cpp)
     target_include_directories(kk-coop-tests PRIVATE src)
     add_test(NAME coop-net-core COMMAND kk-coop-tests)
+    add_executable(kk-session-tests tests/coop_flow_tests.cpp src/coop_protocol.cpp src/coop_session.cpp)
+    target_include_directories(kk-session-tests PRIVATE src)
+    add_test(NAME coop-session-flow COMMAND kk-session-tests)
     add_executable(kk-enemies-tests tests/coop_enemies_tests.cpp src/coop_protocol.cpp src/coop_session.cpp)
     target_include_directories(kk-enemies-tests PRIVATE src)
     add_test(NAME coop-enemies COMMAND kk-enemies-tests)

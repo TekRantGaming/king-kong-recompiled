@@ -1,5 +1,6 @@
 #pragma once
 #include "coop_session.h"
+#include "coop_flow.h"
 #include "steam_lobby.h"
 
 #include <filesystem>
@@ -50,6 +51,9 @@ class SteamRuntime final : public ISocialService {
   std::vector<ReceivedShot> TakeShots();
   SteamSessionView SessionSnapshot() const;
   bool EnemyConnectionReady(double now) const;
+  bool BeginFlow(SessionStart start, std::vector<uint8_t> save);
+  bool SubmitFlow(Message message);
+  FlowView FlowSnapshot() const;
   void Shutdown();
 #if defined(KK_DEV_TOOLS)
   // Blocks caller, but all Steam calls still belong to the worker. Never signs in or starts Steam.

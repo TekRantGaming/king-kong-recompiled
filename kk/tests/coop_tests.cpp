@@ -8,6 +8,7 @@
 #include "coop_nametag.h"
 
 #include <bit>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -25,7 +26,9 @@ void Check(bool ok, const char* what) {
 bool Near(double a, double b) { return std::abs(a - b) < .002; }
 Compatibility Compatible() { return {kProtocolVersion, "test-version", "test-build", "test-gameplay"}; }
 SessionConfig Config(Role role) {
-  return {true, role, role == Role::Host ? 123456789ull : 0, Compatible(), role == Role::Host ? "Host" : "Guest"};
+  SessionConfig config{true, role, role == Role::Host ? 123456789ull : 0, Compatible()};
+  config.display_name = role == Role::Host ? "Host" : "Guest";
+  return config;
 }
 std::vector<uint8_t> Packet(Message m) {
   std::vector<uint8_t> out;
@@ -78,15 +81,37 @@ struct Pair {
   }
 };
 void Protocol() {
-  for (MessageType type : {MessageType::Hello, MessageType::HelloAck, MessageType::Reject,
-      MessageType::Ping, MessageType::Pong, MessageType::PlayerPose, MessageType::Bye}) {
+  static_assert(kProtocolVersion == 6);
+  constexpr std::array types{MessageType::Hello, MessageType::HelloAck, MessageType::Reject,
+      MessageType::Ping, MessageType::Pong, MessageType::PlayerPose, MessageType::Bye,
+      MessageType::EnemySnapshot, MessageType::EnemyEvent, MessageType::ShotIntent,
+      MessageType::Cheats, MessageType::InventoryState, MessageType::SessionStart,
+      MessageType::SaveChunk, MessageType::LevelChange, MessageType::Loaded,
+      MessageType::LoadRelease, MessageType::Checkpoint, MessageType::ChapterFinished,
+      MessageType::ReloadRequest, MessageType::FlowAbort};
+  for (size_t i = 0; i < types.size(); ++i) {
+    const auto type = types[i];
+    Check(uint16_t(type) == i+1, "protocol 6 message IDs have no collisions or gaps");
+    Check(IsFlowMessage(type) == (i >= 12), "flow range excludes cheats and inventory");
     Message input;
     input.type = type; input.sequence = 0x12345678; input.epoch = 0x0123456789ABCDEFull;
     input.hello = Compatible(); input.reason = RejectReason::GameplayMods;
     input.clock_ms = 0x123456789ABCDEFull;
     input.pose = {12.75, 1402, 1.25f, -9.5f, 33.75f, 2.5f, 7.125f, 65535, 255};
+    input.display_name = "Host\xC3\xA9";
+    const EnemyState enemy{{123, 0, EnemyFamily::Raptor}, 1, 2, 3, 0, 50};
+    input.enemies = {{101, 1, 1}, 1, {enemy}};
+    input.enemy_event = {{101, 1, 1}, EnemyEventKind::Spawned, enemy};
+    input.shot.world = {101, 1, 1}; input.shot.number = 1;
+    input.shot.weapon = 1; input.shot.direction = {1, 0, 0};
+    input.cheats = {0x125}; input.inventory = {{101, 1, 1}, 1, 2, {0, 99, 0, 0}};
+    input.start.chapter = 1; input.start.level = 101; input.start.start = 1;
+    input.start.cheats = 0x125; input.start.difficulty = 1;
+    input.save_chunk = {0, {1, 2, 3}}; input.flow = {9, 101, 5, 2};
     const auto bytes = Packet(input);
     Check(bytes[0] == 'K' && bytes[1] == 'K' && bytes[2] == 'C' && bytes[3] == '1', "wire magic");
+    Check(bytes[4] == 0 && bytes[5] == 6 && bytes[6] == 0 && bytes[7] == i+1,
+        "protocol 6 and message ID in wire header");
     Check(bytes[8] == 0x12 && bytes[11] == 0x78 && bytes[12] == 1 && bytes[19] == 0xEF,
         "header byte order independent of host endianness");
     Message output;
@@ -95,7 +120,8 @@ void Protocol() {
         "fixed header round trip");
     Check(Packet(output) == bytes, "canonical full payload round trip");
     if (type == MessageType::Hello)
-      Check(CheckCompatibility(input.hello, output.hello) == RejectReason::None, "Hello fields");
+      Check(CheckCompatibility(input.hello, output.hello) == RejectReason::None &&
+          output.display_name == input.display_name, "unified Hello compatibility and display name");
     if (type == MessageType::PlayerPose)
       Check(Near(output.pose.time, 12.75) && output.pose.level == 1402 && Near(output.pose.y, -9.5) &&
           output.pose.action == 65535 && output.pose.item == 255, "pose fields including diagnostic item");

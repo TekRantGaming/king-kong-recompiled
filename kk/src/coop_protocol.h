@@ -11,14 +11,40 @@
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-constexpr uint16_t kProtocolVersion = 5;
+constexpr uint16_t kProtocolVersion = 6;
 constexpr size_t kMaxDisplayNameBytes = 32;
 // Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.
 // Empty or wholly invalid input becomes "Partner". Never log the input or result.
 std::string SanitizeDisplayName(std::string_view name);
 constexpr size_t kHeaderBytes = 24, kMaxPacketBytes = 1024;
-enum class MessageType : uint16_t { Hello = 1, HelloAck, Reject, Ping, Pong, PlayerPose, Bye,
-  EnemySnapshot, EnemyEvent, ShotIntent, Cheats, InventoryState };
+enum class MessageType : uint16_t {
+  Hello = 1, HelloAck = 2, Reject = 3, Ping = 4, Pong = 5, PlayerPose = 6, Bye = 7,
+  EnemySnapshot = 8, EnemyEvent = 9, ShotIntent = 10, Cheats = 11, InventoryState = 12,
+  SessionStart = 13, SaveChunk = 14, LevelChange = 15, Loaded = 16, LoadRelease = 17,
+  Checkpoint = 18, ChapterFinished = 19, ReloadRequest = 20, FlowAbort = 21
+};
+
+// Session control is reliable and scoped by the packet epoch and a load generation.
+// Saves are bounded opaque game data, never addresses or paths supplied by a peer.
+constexpr uint32_t kSessionSaveBytes = 0x8040, kSaveChunkBytes = 768;
+struct SessionStart {
+  uint16_t chapter = 0;
+  uint32_t level = 100, start = 0;
+  bool chapter_select = true;
+  uint16_t cheats = 0;  // bit 8: enabled; bits 0..7: healing, one-hit, ammo, spears, four guns
+  uint8_t difficulty = 0;  // 0 normal, 1 port hardcore
+  uint32_t save_bytes = 0;
+  uint64_t save_hash = 14695981039346656037ull;  // FNV-1a of empty data, integrity only
+};
+struct FlowEvent {
+  uint32_t generation = 0, level = 0, start = 0;
+  uint64_t completed = 0;  // chapter entries completed in this session only
+};
+struct SaveChunk { uint32_t offset = 0; std::vector<uint8_t> bytes; };
+bool ValidSessionStart(const SessionStart& start);
+bool ValidFlowEvent(const FlowEvent& event);
+uint64_t SessionSaveHash(std::span<const uint8_t> bytes);
+bool IsFlowMessage(MessageType type);
 enum class RejectReason : uint16_t { None, Protocol, Version, Build, GameplayMods, Handshake };
 struct Compatibility {
   uint16_t protocol = kProtocolVersion;
@@ -110,6 +136,9 @@ struct Message {
   ShotIntent shot;
   CheatSet cheats;
   InventoryState inventory;
+  SessionStart start;
+  SaveChunk save_chunk;
+  FlowEvent flow;
 };
 // Encoders also reject invalid input. Decoding leaves out untouched on failure.
 bool Encode(const Message& message, std::vector<uint8_t>& out);

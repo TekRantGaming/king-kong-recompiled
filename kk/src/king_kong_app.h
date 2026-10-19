@@ -241,6 +241,7 @@ class KingKongApp : public rex::ReXApp {
     cb.play = [this, resume, defaults] {
       app_context().CallInUIThreadDeferred([this, resume, defaults] {
         kk::mods::ApplyAtGameStart(defaults.user_data_root);  // Kong mods, for this run only
+        kk::coop::ApplySessionSettings();
         kk::EnforceOriginalLook();  // the Original look still wins over a settings mod
         // The Resolution (Display page) before the render quality, which follows it.
         kk::ApplyFullscreenMode(window());
@@ -254,7 +255,10 @@ class KingKongApp : public rex::ReXApp {
         // The game starts in this process: startup recovery watches it from here.
         kk::startup::Begin(gpu_plugin_, true);
         kk::NoteGameStarting();  // task 285: a startup hang report if no first frame follows
-        resume(defaults);
+        auto session_paths=defaults;
+        session_paths.user_data_root=kk::coop::SessionUserDir(defaults.user_data_root);
+        kk::play::SetUserDir(session_paths.user_data_root);
+        resume(session_paths);
       });
     };
     cb.restart_and_play = [this] {

@@ -113,6 +113,21 @@ std::string SanitizeDisplayName(std::string_view name) {
   }
   return out.empty() ? "Partner" : out;
 }
+uint64_t SessionSaveHash(std::span<const uint8_t> bytes) {
+  uint64_t hash = 14695981039346656037ull;
+  for (uint8_t b : bytes) { hash ^= b; hash *= 1099511628211ull; }
+  return hash;
+}
+bool IsFlowMessage(MessageType t) { return t >= MessageType::SessionStart && t <= MessageType::FlowAbort; }
+bool ValidSessionStart(const SessionStart& s) {
+  return s.chapter < 42 && s.level > 0 && s.level <= 100000 && s.start <= 10000 &&
+      s.cheats <= 0x1ff && s.difficulty <= 1 &&
+      (s.save_bytes == 0 || s.save_bytes == kSessionSaveBytes) &&
+      (s.save_bytes != 0 || s.save_hash == SessionSaveHash({}));
+}
+bool ValidFlowEvent(const FlowEvent& f) {
+  return f.generation > 0 && f.level > 0 && f.level <= 100000 && f.start <= 10000 && (f.completed >> 42) == 0;
+}
 bool ValidEnemyWorld(const EnemyWorld& w) {
   return w.level > 0 && w.level <= 100000 && w.start <= 10000 && w.serial > 0;
 }
@@ -155,6 +170,24 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
       payload.U(std::bit_cast<uint64_t>(m.inventory.time), 8);
       payload.U(m.inventory.weapon, 1);
       for (auto ammo : m.inventory.ammo) payload.U(ammo, 4);
+      break;
+    case MessageType::SessionStart:
+      if (!ValidSessionStart(m.start)) return false;
+      payload.U(m.start.chapter, 2); payload.U(m.start.level, 4); payload.U(m.start.start, 4);
+      payload.U(m.start.chapter_select, 1); payload.U(m.start.cheats, 2); payload.U(m.start.difficulty, 1);
+      payload.U(m.start.save_bytes, 4); payload.U(m.start.save_hash, 8);
+      break;
+    case MessageType::SaveChunk:
+      if (m.save_chunk.bytes.empty() || m.save_chunk.bytes.size() > kSaveChunkBytes ||
+          m.save_chunk.offset > kSessionSaveBytes || m.save_chunk.bytes.size() > kSessionSaveBytes - m.save_chunk.offset) return false;
+      payload.U(m.save_chunk.offset, 4); payload.U(m.save_chunk.bytes.size(), 2);
+      payload.bytes.insert(payload.bytes.end(), m.save_chunk.bytes.begin(), m.save_chunk.bytes.end());
+      break;
+    case MessageType::LevelChange: case MessageType::Loaded: case MessageType::LoadRelease:
+    case MessageType::Checkpoint: case MessageType::ChapterFinished: case MessageType::ReloadRequest:
+    case MessageType::FlowAbort:
+      if (!ValidFlowEvent(m.flow)) return false;
+      payload.U(m.flow.generation, 4); payload.U(m.flow.level, 4); payload.U(m.flow.start, 4); payload.U(m.flow.completed, 8);
       break;
     case MessageType::Hello:
       payload.U(m.hello.protocol, 2);
@@ -239,6 +272,27 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       m.inventory.weapon = uint8_t(r.U(1));
       for (auto& ammo : m.inventory.ammo) ammo = uint32_t(r.U(4));
       if (!ValidInventory(m.inventory)) return false;
+      break;
+    case MessageType::SessionStart: {
+      m.start.chapter = uint16_t(r.U(2)); m.start.level = uint32_t(r.U(4)); m.start.start = uint32_t(r.U(4));
+      const auto chapter = r.U(1); if (chapter > 1) return false;
+      m.start.chapter_select = chapter != 0; m.start.cheats = uint16_t(r.U(2)); m.start.difficulty = uint8_t(r.U(1));
+      m.start.save_bytes = uint32_t(r.U(4)); m.start.save_hash = r.U(8);
+      if (!ValidSessionStart(m.start)) return false;
+      break;
+    }
+    case MessageType::SaveChunk: {
+      m.save_chunk.offset = uint32_t(r.U(4)); const size_t count = size_t(r.U(2));
+      if (!r.ok || !count || count > kSaveChunkBytes || count != bytes.size() - r.at ||
+          m.save_chunk.offset > kSessionSaveBytes || count > kSessionSaveBytes - m.save_chunk.offset) return false;
+      m.save_chunk.bytes.assign(bytes.begin() + r.at, bytes.end()); r.at += count;
+      break;
+    }
+    case MessageType::LevelChange: case MessageType::Loaded: case MessageType::LoadRelease:
+    case MessageType::Checkpoint: case MessageType::ChapterFinished: case MessageType::ReloadRequest:
+    case MessageType::FlowAbort:
+      m.flow = {uint32_t(r.U(4)), uint32_t(r.U(4)), uint32_t(r.U(4)), r.U(8)};
+      if (!ValidFlowEvent(m.flow)) return false;
       break;
     case MessageType::Hello: {
       m.hello.protocol = uint16_t(r.U(2));

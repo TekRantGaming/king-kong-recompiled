@@ -56,6 +56,7 @@
 #include "photo_mode.h"
 #include "photo_mode_logic.h"
 #include "play_internal.h"
+#include "coop_runtime.h"
 #include "settings.h"
 #include "backend/picture_adjust.h"  // brightness and gamma on the kept frame
 
@@ -915,7 +916,9 @@ void CreatePauseStandIn(rex::ui::ImGuiDrawer* drawer) {
 }
 }  // namespace kk
 
-// Test aid (task 241): log each checkpoint the game takes (ES_CheckPoint: G+0xC = its start point, then the
+#endif
+
+// Log and replicate each checkpoint (ES_CheckPoint: G+0xC = its start point, then the
 // universe snapshot that Load last checkpoint and a death go back to).
 REX_EXTERN(__imp__sub_826437D0);
 REX_HOOK_RAW(sub_826437D0) {
@@ -923,12 +926,13 @@ REX_HOOK_RAW(sub_826437D0) {
   const int32_t before = g ? int32_t(kk::play::Load32(base, g + 0xC)) : -1;
   __imp__sub_826437D0(ctx, base);
   const int32_t after = g ? int32_t(kk::play::Load32(base, g + 0xC)) : -1;
+  if (g && after>=0) kk::coop::SessionCheckpoint(kk::play::Load32(base,g+0x18),uint32_t(after));
+#if defined(KK_DEV_TOOLS)
   static int calls = 0;
   if (before != after || ++calls <= 2)
     REXLOG_INFO("KK dev: checkpoint taken (ES_CheckPoint): start point {} -> {}", before, after);
-}
-
 #endif
+}
 
 // The save menu page (IntMIG_Page_Memcard): in play it shows the game's save pages (Save, and the save that
 // Quit game makes in a story run). They are the game's: shown and answered by the player, the port's menu
