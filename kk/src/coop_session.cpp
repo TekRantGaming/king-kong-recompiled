@@ -62,6 +62,7 @@ void CoopSession::Transition(SessionState s) {
   if (state_ == s) return;
   state_ = s;
   if (s != SessionState::Connected) {
+    cameras_.Clear(); local_camera_.reset(); sent_camera_cut_.reset();
     poses_.Clear(); enemies_.Clear(); outgoing_shots_.clear(); incoming_shots_.clear();
     remote_inventory_.reset(); sent_cheats_.reset();
     local_inventory_.reset(); sent_inventory_.reset();
@@ -115,6 +116,11 @@ void CoopSession::Receive(const Message& m, double now) {
           if (state_ != SessionState::Connected || OwnershipSender(m.ownership.phase, config_.role)) return;
           if (incoming_ownership_.size() >= kMaxEnemies*2) { End(now); return; }
           incoming_ownership_.push_back(m); break;
+        case MessageType::CameraPose: case MessageType::CameraCut:
+          if (config_.role!=Role::Guest || state_!=SessionState::Connected ||
+              (camera_seen_ && int32_t(m.sequence-camera_sequence_)<=0)) return;
+          if (!cameras_.Push(m.camera,now)) return;
+          camera_seen_=true; camera_sequence_=m.sequence; break;
         case MessageType::DamageEvent: case MessageType::PlayerStatus:
           if (state_ != SessionState::Connected ||
               (m.type == MessageType::DamageEvent ? config_.role != Role::Guest : config_.role != Role::Host)) return;
@@ -198,6 +204,19 @@ void CoopSession::Tick(double now, const std::optional<PlayerPose>& local, const
     return;
   }
   if (now - last_receive_ >= 3) Transition(SessionState::Lost);
+  if (state_==SessionState::Connected && config_.role==Role::Host && local_camera_ &&
+      now>=local_camera_->time && now-local_camera_->time<=.25 && ValidCameraPose(*local_camera_)) {
+    const auto& p=*local_camera_;
+    if (!sent_camera_cut_ || p.generation!=sent_camera_cut_->generation || p.cut!=sent_camera_cut_->cut ||
+        p.skip!=sent_camera_cut_->skip || p.paused!=sent_camera_cut_->paused) {
+      Message m; m.type=MessageType::CameraCut; m.camera=p;
+      if (Send(m,true)) sent_camera_cut_=p;
+    }
+    if (now-last_camera_>=1.0/30.0) {
+      Message m; m.type=MessageType::CameraPose; m.camera=p;
+      if (Send(m,false)) last_camera_=now;
+    }
+  }
   if (state_ == SessionState::Connected && config_.role == Role::Host && sent_cheats_ != config_.cheats) {
     Message m; m.type = MessageType::Cheats; m.cheats = config_.cheats;
     if (Send(m, true)) sent_cheats_ = config_.cheats;

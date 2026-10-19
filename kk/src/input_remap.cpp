@@ -28,6 +28,7 @@
 #include "benchmark.h"
 #include "settings.h"
 #include "freecam.h"
+#include "coop_observer.h"
 #if defined(KK_DEV_TOOLS)
 #include "coop_runtime.h"
 #endif
@@ -319,6 +320,7 @@ REX_HOOK_RAW(sub_8272C610) {
   // Keyboard & mouse: the mouse's turn this frame (mouse_look.cpp).
   float x = LoadF(base + out), y = LoadF(base + out + 4);
   kk::mouse_look::OnCameraStick(x, y);
+  if (kk::coop::observer::SuppressLook()) x=y=0;
   StoreF(base + out, x);
   StoreF(base + out + 4, y);
 }
@@ -344,11 +346,13 @@ double CameraGain() {
 REX_EXTERN(__imp__sub_82711950);
 REX_HOOK_RAW(sub_82711950) {
   if (uint32_t(ctx.lr) == kCamYawReturn) ctx.f1.f64 = kk::mouse_look::Yaw(ctx.f1.f64 * CameraGain());
+  if (uint32_t(ctx.lr) == kCamYawReturn && kk::coop::observer::SuppressLook()) ctx.f1.f64=0;
   __imp__sub_82711950(ctx, base);
 }
 
 REX_EXTERN(__imp__sub_82712300);
 REX_HOOK_RAW(sub_82712300) {
   if (uint32_t(ctx.lr) == kCamPitchReturn) ctx.f1.f64 = kk::mouse_look::Pitch(ctx.f1.f64 * CameraGain());
+  if (uint32_t(ctx.lr) == kCamPitchReturn && kk::coop::observer::SuppressLook()) ctx.f1.f64=0;
   __imp__sub_82712300(ctx, base);
 }

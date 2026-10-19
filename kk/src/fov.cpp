@@ -34,6 +34,7 @@
 #include "settings.h"
 #include "freecam.h"
 #include "coop_nametag.h"
+#include "coop_observer.h"
 #include "photo_mode.h"
 #include "play_session.h"
 
@@ -109,12 +110,17 @@ REX_HOOK_RAW(sub_82872DB8) {
     if (capture) kk::coop::nametag::EndView(base);
   };
   std::array<uint8_t, 68> saved;
-  const bool freecam = kk::freecam::OverrideView(base, view, uint32_t(ctx.lr), saved);
+  float saved_fov=0;
+  const bool observer=kk::coop::observer::View(base,view,caller,saved,saved_fov,LensFactor());
+  const bool freecam = !observer && kk::freecam::OverrideView(base, view, uint32_t(ctx.lr), saved);
   struct RestoreView {
-    uint8_t* base; uint32_t view; const std::array<uint8_t,68>& saved; bool restore;
-    ~RestoreView() { if (restore) std::memcpy(base+view,saved.data(),saved.size()); }
-  } restore{base,view,saved,freecam};
-  const float k = LensFactor();
+    uint8_t* base; uint32_t view; const std::array<uint8_t,68>& saved; bool restore,observer; float fov;
+    ~RestoreView() {
+      if (restore) std::memcpy(base+view,saved.data(),saved.size());
+      if (observer) StoreF(base,view+172,fov);
+    }
+  } restore{base,view,saved,freecam || observer,observer,saved_fov};
+  const float k = observer ? 1.f : LensFactor();
   const uint32_t at = ctx.r3.u32 + 172;
   const float fov = LoadF(base, at);
   const int since_menu = g_views_since_menu.load(std::memory_order_relaxed);

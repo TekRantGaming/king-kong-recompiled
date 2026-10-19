@@ -3,6 +3,7 @@
 #include "coop_session.h"
 #include "coop_pose.h"
 #include "coop_nametag.h"
+#include "coop_observer.h"
 #include "settings.h"
 #include "steam_runtime.h"
 #include "social_fake.h"
@@ -124,6 +125,7 @@ class Service {
         shots_.Exchange(session);
         combat_.Exchange(session, now);
         ownership_.Exchange(session);
+        camera_.Exchange(session, now);
         flow_.Exchange(session, now);
         View view{config.role, session.State(), session.Rejection(), session.Stats(), local, session.Partner(now), now};
         view.local_failure = failure; view.poses = session.Poses();
@@ -156,6 +158,7 @@ class Service {
     shots_.Clear();
     combat_.Clear();
     ownership_.Clear();
+    camera_.Clear();
   }
   bool Running() const { return running_; }
   void Publish(PoseRead p) { std::lock_guard lock(mutex_); local_ = p; }
@@ -174,6 +177,8 @@ class Service {
   bool SubmitOwnership(Message m) { return ownership_.Submit(std::move(m)); }
   std::vector<Message> TakeOwnership() { return ownership_.Take(); }
   void ClearOwnership() { ownership_.Clear(); }
+  void PublishCamera(std::optional<CameraPose> camera) { camera_.Publish(std::move(camera)); }
+  std::optional<CameraPose> HostCamera(double now) const { return camera_.Sample(now); }
   bool BeginFlow(SessionStart start, std::vector<uint8_t> save) { return flow_.Begin(start, std::move(save)); }
   bool SubmitFlow(Message m) { return flow_.Submit(std::move(m)); }
   FlowView FlowSnapshot() const { return flow_.Snapshot(); }
@@ -187,6 +192,7 @@ class Service {
   ShotMailbox shots_;
   CombatMailbox combat_;
   OwnershipMailbox ownership_;
+  CameraMailbox camera_;
   std::optional<CheatSet> local_cheats_;
   FlowMailbox flow_;
 };
@@ -218,12 +224,15 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
   void OnDraw(ImGuiIO& io) override {
     if (REXCVAR_GET(kk_coop_enabled)) {
       const auto flow=SessionFlowSnapshot();
-      if (flow.active && *flow.status) {
+      if (flow.active && (*flow.status || observer::Active())) {
         auto* draw=ImGui::GetForegroundDrawList();
-        const bool waiting=flow.phase!=FlowPhase::Playing || (flow.policy==ChapterPolicy::Observer && !flow.host);
-        if (waiting) draw->AddRectFilled(ImVec2(0,0),ImGui::GetIO().DisplaySize,IM_COL32(10,12,16,255));
+        const bool waiting=flow.phase!=FlowPhase::Playing ||
+            (!flow.host && (flow.policy==ChapterPolicy::Observer || observer::Active()) && observer::StatusScreen());
+        if (waiting && !play::PauseMenuOpen() && !play::GamePausePageUp())
+          draw->AddRectFilled(ImVec2(0,0),ImGui::GetIO().DisplaySize,IM_COL32(10,12,16,255));
         char status[256];
-        std::string line=flow.status;
+        std::string line=flow.phase==FlowPhase::Playing && !flow.host &&
+            (flow.policy==ChapterPolicy::Observer || observer::Active()) ? observer::Status() : flow.status;
         if (flow.phase==FlowPhase::Waiting) {
           const auto social=Social().Snapshot();
           for (const auto& member : social.members) if (member.id!=social.self) { line="Waiting for "+member.name+" to finish this chapter..."; break; }
@@ -231,7 +240,7 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
         std::snprintf(status,sizeof(status),"%s\nHost chapter %d | level %u | checkpoint %u",line.c_str(),
             FlowChapter(flow.world.level)+1,flow.world.level,flow.checkpoint);
         draw->AddText(ImVec2(36,40),IM_COL32(240,240,240,255),status);
-        if (waiting || flow.policy!=ChapterPolicy::Together) return;
+        if (waiting || observer::Active() || flow.policy!=ChapterPolicy::Together) return;
       }
       if (MoveToPartnerOffered()) {
         ImGui::SetNextWindowPos(ImVec2(24,190),ImGuiCond_Always);
@@ -487,8 +496,9 @@ bool SocialFakeScenario(std::string_view scenario) {
 void GameFrame(uint8_t* base) {
   RefreshSessionCheats();
   kk::PartnerBodyGameFrame(base);
-  if (!REXCVAR_GET(kk_coop_enabled)) return;
+  if (!REXCVAR_GET(kk_coop_enabled)) { observer::GameFrame(base); return; }
   SessionReloadFrame(base);
+  observer::GameFrame(base);
   EnemyGameFrame();
 #if defined(KK_DEV_TOOLS)
   if (service.Running()) service.Publish(ReadJack(base));
@@ -498,6 +508,24 @@ void GameFrame(uint8_t* base) {
     const auto read = ReadJack(base);
     steam->PublishPose(read.pose, read.failure);
   }
+}
+void PublishHostCamera(std::optional<CameraPose> camera) {
+#if defined(KK_DEV_TOOLS)
+  if (service.Running()) { service.PublishCamera(std::move(camera)); return; }
+#endif
+  if (steam) steam->PublishCamera(std::move(camera));
+}
+std::optional<CameraPose> HostCameraSnapshot(double now) {
+  if (!REXCVAR_GET(kk_coop_enabled)) return {};
+#if defined(KK_DEV_TOOLS)
+  if (service.Running()) return service.HostCamera(now);
+#endif
+  return steam ? steam->HostCamera(now) : std::nullopt;
+}
+bool CameraConnectionReady() {
+  if (!REXCVAR_GET(kk_coop_enabled)) return false;
+  const auto v=CurrentView();
+  return v.state==SessionState::Connected && Now()-v.updated<=.5;
 }
 void CreateOverlay(rex::ui::ImGuiDrawer* drawer) {
   if (REXCVAR_GET(kk_coop_enabled)) new PartnerOverlay(drawer);

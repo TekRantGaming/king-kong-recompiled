@@ -1,6 +1,7 @@
 #include "coop_runtime.h"
 #include "coop_pose.h"
 #include "coop_enemies_game.h"
+#include "coop_observer.h"
 #include "play_internal.h"
 #include "hfr.h"
 #include "settings.h"
@@ -70,7 +71,7 @@ FlowView Wait(uint32_t generation, bool load_barrier) {
   for (;;) {
     auto v=SessionFlowSnapshot();
     if (stopping || !v.active || v.phase==FlowPhase::Failed || v.world.generation!=generation ||
-        (load_barrier && v.phase==FlowPhase::Playing && !(v.policy==ChapterPolicy::Observer && !v.host))) return v;
+        (load_barrier && v.phase==FlowPhase::Playing)) return v;
     const bool chapter_wait=v.phase==FlowPhase::Waiting || (v.policy==ChapterPolicy::Observer && !v.host && v.phase==FlowPhase::Playing);
     if (Now()>=until && !chapter_wait) { Send(MessageType::FlowAbort,v.world); return v; }
     if (Now()>=paint) { RequestUiPaint(); paint=Now()+.1; }
@@ -99,7 +100,7 @@ void MoveToPartner() {
   if (move_offer.exchange(false) && !v.host && v.phase==FlowPhase::Playing && v.policy==ChapterPolicy::Together)
     Send(MessageType::ReloadRequest,v.world);
 }
-void StopSessionFlow() { stopping=true; }
+void StopSessionFlow() { stopping=true; observer::SetPartnerSpectating(false); }
 bool SessionInProcess() { return launched; }
 bool SessionPrivateReload() { return private_load; }
 void ApplySessionSettings() {
@@ -206,6 +207,13 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
     REXLOG_INFO("KK co-op revive: private load generation {} level {} partner checkpoint {}",v.world.generation,v.world.level,local_checkpoint);
     return false; // bypass the shared LevelChange/Loaded barrier for this load
   }
+  if (!v.host && v.policy==ChapterPolicy::Observer && observer::HoldWorld()) {
+    Store32(base,g+4,0);
+    v=Wait(v.world.generation,false);
+    RecordProgress(v);
+    if (v.world.generation>loaded_generation) { AskLoad(base,g,v); return false; }
+    return true;
+  }
   if (!v.host && v.checkpoint!=recorded_checkpoint && v.policy==ChapterPolicy::Together) {
     recorded_checkpoint=v.checkpoint; Store32(base,g+12,v.checkpoint);
     local_checkpoint=v.checkpoint;
@@ -220,6 +228,8 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
       level=kChapterRules[size_t(next)].level; start=next==40 ? 49 : next==41 ? 0 : 1;
     }
     Store32(base,g+4,0);
+    if (!v.host && v.policy==ChapterPolicy::Observer)
+      observer::Fallback("Observer unavailable: local scripts requested a different load before the host.");
     if (v.host) Send(MessageType::LevelChange,{v.world.generation,level,start,v.completed});
     else if (v.policy==ChapterPolicy::SoloRegroup)
       Send(level==v.world.level ? MessageType::ReloadRequest : MessageType::ChapterFinished,v.world);
@@ -250,6 +260,7 @@ void SessionAfterGo(uint8_t* base,uint32_t g,bool loaded) {
   if (v.world.generation!=loading_generation) return;
   if (hfr::Load32(base,g+0x18)!=v.world.level) { Send(MessageType::FlowAbort,v.world); return; }
   loaded_generation=loading_generation; loading_generation=0;
+  observer::LevelLoaded();
   RecordProgress(v);
   Send(MessageType::Loaded,v.world);
   REXLOG_INFO("KK co-op flow: loaded generation {}, waiting for both",loaded_generation);
@@ -259,15 +270,21 @@ void SessionAfterGo(uint8_t* base,uint32_t g,bool loaded) {
 }
 void SessionCheckpoint(uint32_t level,uint32_t checkpoint) {
   if (!launched) return;
+  observer::Checkpoint(level,checkpoint);
   const auto v=SessionFlowSnapshot();
   if (v.phase==FlowPhase::Playing && v.world.level==level && checkpoint<=10000) local_checkpoint=checkpoint;
   if (v.host && v.phase==FlowPhase::Playing && v.world.level==level && checkpoint<=10000)
     Send(MessageType::Checkpoint,{v.world.generation,level,checkpoint,v.completed});
 }
 void SessionReloadFrame(uint8_t* base) {
-  if (!REXCVAR_GET(kk_coop_enabled) || !launched || !base) return;
+  if (!REXCVAR_GET(kk_coop_enabled) || !launched || !base) {
+    observer::SetPartnerSpectating(false); return;
+  }
   const auto v=SessionFlowSnapshot();
-  if (!v.active || v.phase!=FlowPhase::Playing) return;
+  if (!v.active || v.phase!=FlowPhase::Playing) {
+    observer::SetPartnerSpectating(false); return;
+  }
+  observer::SetPartnerSpectating(false);
   if (recovery_generation!=v.world.generation) {
     recovery_generation=v.world.generation; recovery={}; private_load=private_request=reload_sent=false;
     local_checkpoint=v.checkpoint;
@@ -280,6 +297,7 @@ void SessionReloadFrame(uint8_t* base) {
     const bool dead=condition && *condition==PlayerCondition::Dead;
     const auto link=EnemyLinkSnapshot();
     const auto action=recovery.Step(dead,PartnerAliveHere(v,link,now),v.partner_life.downed,reset,now);
+    observer::SetPartnerSpectating(!v.host && recovery.Downed() && action!=revive::Action::ReloadBoth);
     if (condition || recovery.Downed()) PublishLife(v,dead || recovery.Downed(),now);
     if (action==revive::Action::LoadLocal) private_request=true;
     if (action==revive::Action::ReloadBoth) {
@@ -301,6 +319,10 @@ void SessionReloadFrame(uint8_t* base) {
   // Intercept here, before its re-init, not later in uni_go after consumption.
   if (!reset) return;
   hfr::Store32(base,0x82CCAA80,0); hfr::Store32(base,0x82CCBFD4,0);
+  if (!v.host && v.policy==ChapterPolicy::Observer) {
+    observer::Fallback("Observer unavailable: local Jack died or local scripts requested a reset.");
+    return;
+  }
   Send(MessageType::ReloadRequest,v.world);
   REXLOG_INFO("KK co-op flow: death/reload fallback, both reload the host checkpoint");
 }
@@ -311,6 +333,7 @@ void SessionReviveBeforeAi(PPCContext& ctx,uint8_t* base) {
       !PartnerAliveHere(v,link,Now())) { recovery.phase=revive::Phase::ReloadBoth; return; }
   if (!ReviveTeleport(ctx,base,*link.partner)) return;
   recovery.Placed(); private_load=false;
+  observer::SetPartnerSpectating(false);
   ++life_incarnation; life_number=0; life_sent=false;
   PublishLife(v,false,Now());
   REXLOG_INFO("KK co-op revive: native load and teleport complete, 1.5 behind partner at partner height");

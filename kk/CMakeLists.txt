@@ -27,6 +27,7 @@ set(KINGKONG_SOURCES
     src/coop_runtime.cpp
     src/coop_partner_body.cpp
     src/coop_nametag.cpp
+    src/coop_observer.cpp
     src/coop_enemies_game.cpp
     src/steam_runtime.cpp
     src/steam_lobby.cpp
@@ -289,6 +290,9 @@ if(KK_DEV_TOOLS)
     add_executable(kk-coop-tests tests/coop_tests.cpp src/coop_protocol.cpp src/coop_session.cpp)
     target_include_directories(kk-coop-tests PRIVATE src)
     add_test(NAME coop-net-core COMMAND kk-coop-tests)
+    add_executable(kk-camera-tests tests/coop_camera_tests.cpp src/coop_protocol.cpp src/coop_session.cpp)
+    target_include_directories(kk-camera-tests PRIVATE src)
+    add_test(NAME coop-observer-camera COMMAND kk-camera-tests)
     add_executable(kk-session-tests tests/coop_flow_tests.cpp src/coop_protocol.cpp src/coop_session.cpp)
     target_include_directories(kk-session-tests PRIVATE src)
     target_compile_definitions(kk-session-tests PRIVATE KK_DEV_TOOLS=1)

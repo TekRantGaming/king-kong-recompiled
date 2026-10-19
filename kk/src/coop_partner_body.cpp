@@ -38,6 +38,7 @@
 #include "coop_partner_selection.h"
 #include "coop_runtime.h"
 #include "coop_nametag.h"
+#include "coop_observer.h"
 #include "coop_enemies_game.h"
 #include "photo_mode.h"
 #include "settings.h"
@@ -1552,6 +1553,7 @@ REX_HOOK_RAW(sub_82881B70) {
   const uint32_t world = ctx.r3.u32;
   __imp__sub_82881B70(ctx, base);
   kk::PartnerBodyLateWorld(ctx, base, world);
+  kk::coop::observer::LateWorld(ctx, base);
 #if defined(KK_DEV_TOOLS)
   kk::DevFishAfterWorld(ctx, base);
 #endif

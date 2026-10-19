@@ -24,6 +24,9 @@ FlowView SessionFlowSnapshot();
 bool SubmitFlowMessage(Message message);
 std::filesystem::path SessionUserDir(const std::filesystem::path& personal);
 bool SessionInProcess();
+void PublishHostCamera(std::optional<CameraPose> camera);
+std::optional<CameraPose> HostCameraSnapshot(double now);
+bool CameraConnectionReady();
 void ApplySessionSettings();  // transient host settings after mods, never persisted
 // Game-thread control at the synchronous uni_go load boundary.
 bool SessionBeforeGo(PPCContext& ctx, uint8_t* base, uint32_t g);

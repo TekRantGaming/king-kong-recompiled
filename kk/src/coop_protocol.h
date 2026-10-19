@@ -11,7 +11,7 @@
 
 namespace kk::coop {
 constexpr uint32_t kMagic = 0x4B4B4331;  // KKC1, network byte order throughout
-constexpr uint16_t kProtocolVersion = 8;
+constexpr uint16_t kProtocolVersion = 9;
 constexpr size_t kMaxDisplayNameBytes = 32;
 // Valid UTF-8, no controls or invisible direction/line formatting, bounded at a codepoint.
 // Empty or wholly invalid input becomes "Partner". Never log the input or result.
@@ -23,7 +23,7 @@ enum class MessageType : uint16_t {
   SessionStart = 13, SaveChunk = 14, LevelChange = 15, Loaded = 16, LoadRelease = 17,
   Checkpoint = 18, ChapterFinished = 19, ReloadRequest = 20, FlowAbort = 21,
   DamageEvent = 22, PlayerStatus = 23, OwnershipChange = 24,
-  PlayerDowned = 25, PlayerRevived = 26
+  PlayerDowned = 25, PlayerRevived = 26, CameraPose = 27, CameraCut = 28
 };
 
 // Session control is reliable and scoped by the packet epoch and a load generation.
@@ -70,6 +70,19 @@ struct PlayerPose {
   uint16_t action = 0;
   uint8_t item = 0;  // Diagnostic only: first-person IDs are not body animation IDs.
 };
+// Native scene camera with the host lens, before aspect widening. Quaternion rotates the
+// guest right/forward/up basis. No native pointer or script address is on wire.
+// CameraCut carries the same state reliably at a cut or host skip; poses are 30 Hz unreliable.
+struct CameraPose {
+  uint32_t generation = 0, level = 0, cut = 0, skip = 0;
+  double time = 0;
+  float x = 0, y = 0, z = 0;
+  float qx = 0, qy = 0, qz = 0, qw = 1;
+  float fov = 1.2f;  // horizontal radians, host lens before aspect widening
+  bool scripted = false;
+  bool paused = false;
+};
+bool ValidCameraPose(const CameraPose& camera);
 enum class EnemyFamily : uint16_t { None, Raptor, Worm, Scorpion };
 enum class EnemyOwner : uint8_t { Host, Guest };
 // source is a signature of family + authored spawn point, or spawner + template.
@@ -181,6 +194,7 @@ struct Message {
   RejectReason reason = RejectReason::None;
   uint64_t clock_ms = 0;
   PlayerPose pose;
+  CameraPose camera;
   EnemySnapshot enemies;
   EnemyEvent enemy_event;
   ShotIntent shot;
