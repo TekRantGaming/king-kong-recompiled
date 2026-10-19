@@ -128,7 +128,16 @@ uint32_t Level(const uint8_t* base, uint32_t g) { return g ? Load32(base, g + 8)
 std::atomic<uint32_t> g_level{0};
 
 // Chosen and not switched off in this level (cheat_rules.h).
-bool Applies(const char* id, uint32_t level) { return Chosen(id) && !cheat_rules::Suppressed(id, level); }
+// Co-op test aid (dev builds only): KK_DEV_CHEATS_ANYWHERE=1 lifts the per-chapter cheat rules (cheat_rules.h),
+// so a scripted test can arm Jack where the awake raptors are (Hayes). Players never get this.
+bool RuleOff(std::string_view id, uint32_t level) {
+#if KK_DEV_TOOLS
+  static const bool anywhere = [] { const char* v = std::getenv("KK_DEV_CHEATS_ANYWHERE"); return v && *v == '1'; }();
+  if (anywhere) return false;
+#endif
+  return cheat_rules::Suppressed(id, level);
+}
+bool Applies(const char* id, uint32_t level) { return Chosen(id) && !RuleOff(id, level); }
 
 // One line when a level that switches cheats off starts or ends (whatever the player chose: the settings stay).
 void WatchLevel(const uint8_t* base) {
@@ -345,7 +354,7 @@ void WatchChanges(uint8_t* base) {
     // Weapons and ammo newly chosen: given now (unless this level switches them off).
     for (size_t i = 0; i < kCheats.size(); ++i) {
       if (!(bits & (1u << i)) || (g_applied_bits & (1u << 31) && g_applied_bits & (1u << i))) continue;
-      if (cheat_rules::Suppressed(kCheats[i].id, Level(base, g))) continue;  // off in this level (cheat_rules.h)
+      if (RuleOff(kCheats[i].id, Level(base, g))) continue;  // off in this level (cheat_rules.h)
       const std::string id = kCheats[i].id;
       if (id == "revolver") GiveWeapon(base, g, 1, 80);
       else if (id == "machine_gun") GiveWeapon(base, g, 2, 500);
@@ -395,7 +404,7 @@ void DevGunfire(uint8_t* base) {
 }  // namespace kk
 
 namespace kk {
-bool CheatSuppressedNow(std::string_view id) { return cheat_rules::Suppressed(id, g_level.load()); }
+bool CheatSuppressedNow(std::string_view id) { return RuleOff(id, g_level.load()); }
 }  // namespace kk
 
 namespace kk::play {
