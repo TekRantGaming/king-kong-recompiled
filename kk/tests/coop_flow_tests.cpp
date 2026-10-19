@@ -1,8 +1,11 @@
 #include "coop_flow.h"
 #include "coop_progress.h"
+#include <array>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <string>
+#include <string_view>
 
 using namespace kk::coop;
 namespace {
@@ -110,22 +113,30 @@ void BarriersAndFollow() {
   Check(f.guest.View().phase==FlowPhase::Failed,"timeout propagated to peer");
 }
 void SoloAndObserver() {
-  for (bool guest_first : {false,true}) {
-    Flows f(10); f.Loaded(); auto next=f.host.View().world; next.level=401;
-    if (guest_first) { f.guest.Local(Event(MessageType::ChapterFinished,f.guest.View().world),3); Transfer(f.guest,f.host,3); }
-    f.host.Local(Event(MessageType::LevelChange,next),4); Transfer(f.host,f.guest,4);
-    if (!guest_first) {
-      Check(f.host.View().phase==FlowPhase::Waiting && f.host.View().world.level==304,"first finisher waits at solo boundary");
-      f.host.Tick(1000); Check(f.host.View().phase==FlowPhase::Waiting,"solo completion wait has no load deadline");
-      f.guest.Local(Event(MessageType::ChapterFinished,f.guest.View().world),1001); Transfer(f.guest,f.host,1001); Transfer(f.host,f.guest,1001);
+  for (int chapter : {0,10,13,14,15,16,17,19,20,21,27,31,32,33,36,38,39}) {
+    for (bool guest_first : {false,true}) {
+      Flows f(chapter); f.Loaded(); auto next=f.host.View().world;
+      next.level=kChapterRules[size_t(chapter+1)].level; next.start=chapter+1==40 ? 49 : 1;
+      if (guest_first) { f.guest.Local(Event(MessageType::ChapterFinished,f.guest.View().world),3); Transfer(f.guest,f.host,3); }
+      f.host.Local(Event(MessageType::LevelChange,next),4); Transfer(f.host,f.guest,4);
+      if (!guest_first) {
+        Check(f.host.View().phase==FlowPhase::Waiting && f.host.View().world.level==Start(chapter).level,"first finisher waits at solo boundary");
+        f.host.Tick(1000); Check(f.host.View().phase==FlowPhase::Waiting,"solo completion wait has no load deadline");
+        f.guest.Local(Event(MessageType::ChapterFinished,f.guest.View().world),1001); Transfer(f.guest,f.host,1001); Transfer(f.host,f.guest,1001);
+      }
+      Check(f.host.View().world.level==next.level && f.guest.View().world.level==next.level,"both solo completion orders advance");
+      Check(f.host.View().policy==PolicyFor(next.level) && f.guest.View().policy==PolicyFor(next.level),
+          "consecutive solo chapters remain separate until next together chapter");
+      Check((f.guest.View().completed & (uint64_t(1)<<chapter))!=0,"solo completion credited only after both finish");
     }
-    Check(f.host.View().world.level==401 && f.guest.View().world.level==401,"both solo completion orders regroup");
-    Check((f.guest.View().completed & (uint64_t(1)<<10))!=0,"solo completion credited only after both finish");
   }
-  Flows observer(40); observer.Loaded();
-  Check(observer.guest.View().policy==ChapterPolicy::Observer,"ending guest uses observer status");
-  observer.host.Local(Event(MessageType::LevelChange,{1,7,0,0}),3); Transfer(observer.host,observer.guest,3);
-  Check(observer.guest.View().world.level==7,"observer follows without guest chapter finish");
+  for (int chapter : {37,40,41}) {
+    Flows observer(chapter); observer.Loaded();
+    Check(observer.guest.View().policy==ChapterPolicy::Observer,"ending guest uses observer status");
+    observer.host.Local(Event(MessageType::LevelChange,{1,7,0,0}),3); Transfer(observer.host,observer.guest,3);
+    Check(observer.guest.View().world.level==7 && observer.guest.View().world.generation==2,
+        "observer follows without guest chapter finish");
+  }
   Flows same_level(10); same_level.Loaded(); auto restart=same_level.host.View().world; restart.start=5;
   same_level.host.Local(Event(MessageType::LevelChange,restart),3); Transfer(same_level.host,same_level.guest,3);
   Check(same_level.guest.View().world.generation==2 && same_level.guest.View().completed==0,
@@ -133,11 +144,21 @@ void SoloAndObserver() {
 }
 void PoliciesAndBehind() {
   Check(kChapterRules.size()==42,"42 policy rows");
+  constexpr uint32_t levels[] = {100,101,201,203,204,301,302,303,305,306,304,401,402,403,404,501,502,504,
+      702,705,901,1002,1101,1200,1201,703,1401,1402,1501,1701,1702,1703,1801,1803,1804,1805,1901,1902,2001,2003,2004,7};
+  constexpr std::string_view policies = "STTTTTTTTTSTTSSSSSTSSSTTTTTSTTTSSSTTSOSSOO";
+  static_assert(policies.size()==42);
+  std::array<unsigned,3> counts{};
   for (size_t i=0;i<kChapterRules.size();++i) {
+    const auto expected = policies[i]=='T' ? ChapterPolicy::Together :
+        policies[i]=='S' ? ChapterPolicy::SoloRegroup : ChapterPolicy::Observer;
+    Check(kChapterRules[i].level==levels[i] && PolicyFor(levels[i])==expected,"every C29 entry/level/policy matches");
+    ++counts[size_t(kChapterRules[i].policy)];
     Check(FlowChapter(kChapterRules[i].level)==int(i),"unique policy level and entry mapping");
     Check(kChapterRules[i].uncertain,"no unverified chapter claimed certified");
   }
-  Check(PolicyFor(1402)==ChapterPolicy::Together && PolicyFor(1703)==ChapterPolicy::SoloRegroup &&
+  Check(counts==std::array<unsigned,3>{22,17,3},"C29 counts: 22 together, 17 solo-regroup, 3 observer");
+  Check(PolicyFor(1402)==ChapterPolicy::SoloRegroup && PolicyFor(1703)==ChapterPolicy::SoloRegroup &&
       PolicyFor(2004)==ChapterPolicy::Observer && PolicyFor(99999)==ChapterPolicy::Observer,"provisional and unknown fallback policies");
   BehindRule behind; PlayerPose local,host; local.level=host.level=101; host.x=101;
   local.time=0; Check(!behind.Tick(0,local,host),"behind interval starts");
@@ -151,6 +172,35 @@ void PoliciesAndBehind() {
   local.time=27; Check(behind.Tick(27,local,host),"different level catches up");
   Check(!behind.Tick(std::numeric_limits<double>::infinity(),local,host),"invalid clock ignored");
 }
+#if defined(KK_DEV_TOOLS)
+void PolicyOverrideTests() {
+  const auto parsed = ParsePolicyOverrides("13:together,27:observer,37:solo,41:together");
+  Check(bool(parsed),"multiple dev policy overrides parse");
+  dev_policy_overrides = *parsed;
+  Check(PolicyFor(403)==ChapterPolicy::Together && PolicyFor(1402)==ChapterPolicy::Observer &&
+      PolicyFor(1902)==ChapterPolicy::SoloRegroup && PolicyFor(7)==ChapterPolicy::Together,
+      "dev overrides address chapter entries, not level IDs");
+  Check(PolicyFor(101)==ChapterPolicy::Together && PolicyFor(99999)==ChapterPolicy::Observer,
+      "unspecified and unknown levels retain defaults");
+  Flows f(27); f.Loaded();
+  Check(f.host.View().policy==ChapterPolicy::Observer && f.guest.View().policy==ChapterPolicy::Observer,
+      "both flow controllers consume dev policy at load");
+  f.host.Local(Event(MessageType::LevelChange,{1,1902,1,0}),3); Transfer(f.host,f.guest,3);
+  Check(f.host.View().policy==ChapterPolicy::SoloRegroup && f.guest.View().policy==ChapterPolicy::SoloRegroup,
+      "dev policy also applies on chapter transition");
+  for (const auto text : {"42:solo","-1:solo","101:solo",":solo","1:","1:Solo","1:solo-regroup",
+      "1:solo,","1:solo,,2:together","1:solo,2:bogus","1x:solo","+1:solo"," 1:solo","1:solo:observer",
+      "9999999999999999999999999:solo"})
+    Check(!ParsePolicyOverrides(text),"malformed override rejected as a whole");
+  Check(!ParsePolicyOverrides(std::string(1025,'0')),"override input bounded");
+  const auto duplicate = ParsePolicyOverrides("1:solo,1:together");
+  Check(duplicate && (*duplicate)[1]==ChapterPolicy::Together,"last duplicate entry wins");
+  const auto cleared = ParsePolicyOverrides("");
+  Check(bool(cleared),"empty dev override is valid"); dev_policy_overrides = *cleared;
+  Check(PolicyFor(403)==ChapterPolicy::SoloRegroup && PolicyFor(1902)==ChapterPolicy::Observer,
+      "empty override restores C29 defaults");
+}
+#endif
 void PersonalProgress() {
   std::vector<uint8_t> save(kSessionSaveBytes,0xa5);
   save[0x28]=save[0x29]=0; save[0x2a]=1; save[0x2b]=1;
@@ -211,5 +261,8 @@ void WorkerHandoff() {
 }
 int main() {
   Codecs(); SaveTransfer(); BarriersAndFollow(); SoloAndObserver(); PoliciesAndBehind(); PersonalProgress(); WorkerHandoff();
+#if defined(KK_DEV_TOOLS)
+  PolicyOverrideTests();
+#endif
   std::cout<<"coop session flow tests passed\n";
 }

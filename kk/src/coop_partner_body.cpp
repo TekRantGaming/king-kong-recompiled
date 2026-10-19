@@ -14,6 +14,7 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <chrono>
 #include <cmath>
@@ -35,6 +36,7 @@
 #include "coop_puppet.h"
 #include "coop_partner_selection.h"
 #include "coop_runtime.h"
+#include "coop_nametag.h"
 #include "photo_mode.h"
 #include "settings.h"
 
@@ -447,8 +449,6 @@ struct State {
 };
 State& Get() { static State state; return state; }
 
-#if defined(KK_DEV_TOOLS)
-
 // Read-only reconstruction of the position chain in 8270FCE0 (.4:27633+),
 // with the owner walk from 8286CC40 (.43:33799+). Never refresh dirty matrices.
 bool BoneWorldPosition(const uint8_t* b, uint32_t actor, Vec& out) {
@@ -464,9 +464,14 @@ bool BoneWorldPosition(const uint8_t* b, uint32_t actor, Vec& out) {
   if (!local) return false;
   if (!Load32(b, local+84)) return position(actor);
   uint32_t root = actor;
-  std::set<uint32_t> seen;
+  std::array<uint32_t,64> seen{};
+  size_t seen_count = 0;
+  auto visit = [&](uint32_t node) {
+    if (seen_count == seen.size() || std::find(seen.begin(),seen.begin()+seen_count,node) != seen.begin()+seen_count) return false;
+    seen[seen_count++] = node; return true;
+  };
   while (Load32(b, root) & 1) {
-    if (seen.size() >= 64 || !seen.insert(root).second) return false;
+    if (!visit(root)) return false;
     const auto m = Ptr(b, Ptr(b, root, 20, 16), 12, 88);
     root = Ptr(b, m, 80, 32);
     if (!root) return false;
@@ -479,9 +484,9 @@ bool BoneWorldPosition(const uint8_t* b, uint32_t actor, Vec& out) {
     return Finite(out);
   };
   out = {};
-  seen.clear();
+  seen_count = 0;
   for (uint32_t node = actor; node != root;) {
-    if (seen.size() >= 64 || !seen.insert(node).second) return false;
+    if (!visit(node)) return false;
     const auto m = Ptr(b, Ptr(b, node, 20, 16), 12, 88);
     if (!m || !transform(m)) return false;
     node = Ptr(b, m, 84, 32);
@@ -491,24 +496,23 @@ bool BoneWorldPosition(const uint8_t* b, uint32_t actor, Vec& out) {
   return world && transform(world);
 }
 std::optional<coop::ShotVector> PartnerHead(const uint8_t* b, const Rig& r) {
+  const coop::nametag::Point root{r.pos.x,r.pos.y,r.pos.z};
+  std::optional<coop::nametag::Point> highest;
   const auto list = Ptr(b, Ptr(b, r.anim, 8, 4), 0, 20);
   const uint32_t begin = list ? Load32(b,list+16) : 0, end = list ? Load32(b,list+4) : 0;
-  if (!list || end <= begin || (end-begin)%8 || (end-begin)/8 > 128 || !Range(begin,end-begin)) return {};
-  const uint32_t count = (end-begin)/8;
-  const auto tags = Ptr(b,r.anim,84,count+4);
-  // Human tag 20 is a head candidate, not an assumed universal bone index.
-  // Require a central point at human head height; incompatible rigs fall back
-  // to the network pose +1.8 in the overlay. No dirty refresh or engine call.
-  for (uint32_t i = 0; i < count; ++i) {
-    if ((tags ? b[tags+4+i] : i) != 20) continue;
-    Vec head;
-    if (!BoneWorldPosition(b,Load32(b,begin+8*i),head) ||
-        std::hypot(head.x-r.pos.x,head.y-r.pos.y) > .65f ||
-        head.z-r.pos.z < .8f || head.z-r.pos.z > 2.4f) return {};
-    return coop::ShotVector{head.x,head.y,head.z+.25f};
+  if (list && end > begin && (end-begin)%8 == 0 && (end-begin)/8 <= 128 && Range(begin,end-begin)) {
+    for (uint32_t i = 0; i < (end-begin)/8; ++i) {
+      Vec joint;
+      if (BoneWorldPosition(b,Load32(b,begin+8*i),joint))
+        coop::nametag::ConsiderHead(root,{joint.x,joint.y,joint.z},highest);
+    }
   }
-  return {};
+  // Even without readable bones, anchor to the rendered body's root, not the
+  // separately interpolated network pose. No dirty refresh or guest writes.
+  const auto anchor = coop::nametag::AboveHead(root,highest);
+  return coop::ShotVector{anchor.x,anchor.y,anchor.z};
 }
+#if defined(KK_DEV_TOOLS)
 void LogSpawnBones(const uint8_t* b) {
   auto& s = Get();
   if (!s.bone_copy.actor || s.loading || !s.Environment(b, s.world)) return;
@@ -1300,9 +1304,7 @@ void PartnerBodyLateWorld(PPCContext& ctx, uint8_t* b, uint32_t w) {
   s.measure = false;
   Rig rig;
   if (!s.Validate(b, w, rig)) return;
-#if defined(KK_DEV_TOOLS)
   if (Opt().partner) coop::SetPartnerHead(PartnerHead(b,rig), s.partner.partner->level);
-#endif
   if (!Scratch::CanUse(ctx)) { s.Abort("invalid-guest-scratch-stack"); return; }
   const auto now = Clock::now();
   s.max_late_error = std::max(s.max_late_error, Distance(s.desired, rig.pos));

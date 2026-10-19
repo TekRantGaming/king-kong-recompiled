@@ -33,6 +33,8 @@
 #include "coop_partner_body.h"
 
 #if defined(KK_DEV_TOOLS)
+REXCVAR_DEFINE_STRING(kk_coop_policy_override, "", "KK/Debug", "Chapter policies: entry:together|solo|observer,... (same on both peers)")
+    .debug_only().lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_STRING(kk_coop_dev, "", "KK/Debug", "Local co-op test link: host:<port> or join:<port>")
     .debug_only().lifecycle(rex::cvar::Lifecycle::kInitOnly);
 REXCVAR_DEFINE_BOOL(kk_steam_selftest, false, "KK/Debug", "Test Steam services and exit without starting a game")
@@ -79,9 +81,9 @@ std::mutex enemy_status_mutex;
 enemies::Counters enemy_status;
 ShotCounters shot_status;
 std::atomic<bool> partner_body_driven{false};
-#if defined(KK_DEV_TOOLS)
 std::mutex head_mutex;
 struct HeadAnchor { std::optional<ShotVector> point; uint32_t level = 0; double time = 0; } head_anchor;
+#if defined(KK_DEV_TOOLS)
 void LogPoses(const View& v, double now, double& next) {
   if (v.state != SessionState::Connected) { next = now + 10; return; }
   if (now < next) return;
@@ -285,16 +287,13 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
     const float distance = PartnerDistance(*v.local,*v.partner);
     const float alpha = nametag::Opacity(distance);
     if (alpha <= 0 || v.partner_name.empty()) return;
-    nametag::Point head{v.partner->x,v.partner->y,v.partner->z+1.8f};
-#if defined(KK_DEV_TOOLS)
+    auto head = nametag::AboveHead({v.partner->x,v.partner->y,v.partner->z},std::nullopt);
     {
       std::lock_guard lock(head_mutex);
       if (partner_body_driven.load() && head_anchor.point && head_anchor.level == v.partner->level &&
-          Now()-head_anchor.time <= .15 &&
-          std::hypot(head_anchor.point->x-head.x,head_anchor.point->y-head.y,head_anchor.point->z-head.z) < 2.f)
+          Now()-head_anchor.time <= .15)
         head = {head_anchor.point->x,head_anchor.point->y,head_anchor.point->z};
     }
-#endif
     const auto* viewport = ImGui::GetMainViewport();
     const auto picture = nametag::Picture(io.DisplaySize.x,io.DisplaySize.y,
         (16.f/9.f)*kk::UltrawideFactor(), REXCVAR_GET(present_letterbox));
@@ -310,9 +309,8 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
     dl->PushClipRect(ImVec2(rect.x,rect.y),ImVec2(rect.x+rect.w,rect.y+rect.h),true);
     if (projected->on_screen) {
       // Clamp the full glyph bounds, so a long name at the edge stays readable.
-      const float x = std::clamp(projected->x-measure.x*.5f,rect.x+8*ui_scale,
-          std::max(rect.x+8*ui_scale,rect.x+rect.w-measure.x-8*ui_scale));
-      const ImVec2 pos(x,projected->y-measure.y-5*ui_scale);
+      const auto bounds = nametag::TextBounds(*projected,measure.x,measure.y,rect,8*ui_scale);
+      const ImVec2 pos(bounds.x,bounds.y);
       dl->AddText(font,size,ImVec2(pos.x+ui_scale,pos.y+ui_scale),shadow,v.partner_name.c_str());
       dl->AddText(font,size,pos,white,v.partner_name.c_str());
     } else {
@@ -338,6 +336,9 @@ void Configure(const std::filesystem::path& user_data) {
   if (configured) return;
   configured = true;
 #if defined(KK_DEV_TOOLS)
+  if (const auto overrides = ParsePolicyOverrides(REXCVAR_GET(kk_coop_policy_override)))
+    dev_policy_overrides = *overrides;
+  else REXLOG_WARN("KK co-op: invalid policy override; using C29 defaults");
   if (REXCVAR_GET(kk_coop_enabled) && REXCVAR_GET(kk_social_fake)) {
     social_preview = MakeSocialPreview();
     return;
@@ -537,14 +538,12 @@ PuppetSnapshot PartnerBodySnapshot() {
 }
 void SetPartnerBodyDriven(bool driven) {
   partner_body_driven.store(driven);
-#if defined(KK_DEV_TOOLS)
   if (!driven) { std::lock_guard lock(head_mutex); head_anchor = {}; }
-#endif
 }
-#if defined(KK_DEV_TOOLS)
 void SetPartnerHead(std::optional<ShotVector> head, uint32_t level) {
   std::lock_guard lock(head_mutex); head_anchor = {head,level,Now()};
 }
+#if defined(KK_DEV_TOOLS)
 bool SteamSelfTestRequested() { return REXCVAR_GET(kk_steam_selftest); }
 int RunSteamSelfTest() {
   if (!steam || DevRunning()) { REXLOG_INFO("Steam self-test: unavailable while dev link selected"); return 1; }
