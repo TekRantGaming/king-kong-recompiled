@@ -92,6 +92,7 @@ struct GameSettings {
   bool effect_buffers = true;
   uint32_t sharpness = 0;
   double pipeline_wait_budget_ms = 0.0;
+  double pipeline_must_wait_ms = 4.0;  // task 267, see GameRenderer::Options
   std::string frame_log;       // REX_DEV_FRAME_LOG: "<seconds>[,<frames>]", empty = off
   // Render scale (backend/render_scale.h): "1", "1.5", "2", "1920x1080". shadow_scale: 0 like the
   // render scale, else its own (a number).

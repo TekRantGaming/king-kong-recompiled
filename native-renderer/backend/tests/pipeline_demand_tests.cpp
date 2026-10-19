@@ -72,6 +72,10 @@ int main() {
   Check(PromoteDrawJob(q, 1, false) && q[2].key == 1, "already a draw's job: stays");
   Check(!PromoteDrawJob(q, 999, false), "not queued");
   Check(q.size() == 6, "nothing duplicated or lost");
+  // Task 267: the hard cap on waits for draws later draws depend on.
+  Check(MustDrawWaitLeft(-1.0, 50.0) < 0, "no cap: waits as long as it takes");
+  Check(MustDrawWaitLeft(4.0, 1.0) == 3.0, "what is left of the frame's cap");
+  Check(MustDrawWaitLeft(4.0, 4.5) == 0.0 && MustDrawWaitLeft(0.0, 0.0) == 0.0, "cap used up: no wait");
   std::printf("nr_pipeline_demand_tests: %d cases passed\n", cases);
   return 0;
 }

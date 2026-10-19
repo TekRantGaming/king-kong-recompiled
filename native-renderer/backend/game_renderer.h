@@ -152,6 +152,13 @@ class GameRenderer {
     // Without pipeline_wait: the time a frame may spend waiting for skippable draws' pipelines before
     // they are skipped (milliseconds, all draws of the frame together; 0 skips at once, the default).
     double pipeline_wait_budget_ms = 0.0;
+    // Task 267: the hard cap on a frame's waits for draws later draws depend on (depth-only, stencil
+    // writes, screen-space), milliseconds, all such draws of the frame together; after it they are
+    // skipped until their pipeline is ready (pop-in for a frame or two instead of a freeze). While the
+    // game loads (its last frame may stay on screen) pipeline_loading_wait_ms. Negative: no cap (the
+    // pre-267 behaviour; --native_pipeline_must_wait_ms=-1). pipeline_wait (block-all) never has a cap.
+    double pipeline_must_wait_ms = 4.0;
+    double pipeline_loading_wait_ms = 100.0;
     // The driver's pipeline cache (SetDriverPipelineCache) is saved when the workers run out of work
     // with at least this many new pipelines made since the last save, or with any after
     // driver_cache_save_seconds. A rebuild (the file was another driver's) is saved when the workers
@@ -219,6 +226,7 @@ class GameRenderer {
     uint64_t pipeline_waits = 0;     // draws that waited for their pipeline (pipeline_wait)
     double pipeline_wait_ms = 0;
     uint64_t pipeline_budget_waits = 0;  // draws drawn after waiting within pipeline_wait_budget_ms
+    uint64_t must_draw_skips = 0;        // task 267: draws that wait, skipped once the frame's cap was used
     // Task 179: waits by why the draw had to wait (PipelineMissClass; kScene = within the budget), and
     // the pipelines skipped draws missed: how many, and how long (frames, ms) until they were drawn.
     std::array<uint64_t, size_t(PipelineMissClass::kCount)> pipeline_waits_by_class{};
@@ -813,6 +821,9 @@ class GameRenderer {
   std::mutex pipeline_mutex_;
   std::condition_variable pipeline_cv_;
   std::deque<PipelineJob> pipeline_jobs_;
+  uint64_t must_wait_frame_ = ~0ull;  // task 267: the frame must_wait_ms_ counts (render thread)
+  double must_wait_ms_ = 0;           // this frame's waits of draws later draws depend on
+  int dev_compile_delay_ms_ = 0;      // KK_DEV_PIPELINE_DELAY_MS (dev): a slow PC's cold compiles
   std::vector<DonePipeline> pipelines_done_;
   std::unordered_map<uint64_t, bool> pipelines_pending_;
   bool pipeline_stop_ = false;
