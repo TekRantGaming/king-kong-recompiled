@@ -59,16 +59,18 @@ CoopSession::CoopSession(SessionConfig c, ICoopTransport& t, StateCallback f)
 void CoopSession::Transition(SessionState s) {
   if (state_ == s) return;
   state_ = s;
-  if (s != SessionState::Connected) poses_.Clear();
+  if (s != SessionState::Connected) { poses_.Clear(); enemies_.Clear(); }
   if (changed_) changed_(s);
 }
-void CoopSession::Send(Message m, bool reliable) {
+bool CoopSession::Send(Message m, bool reliable) {
   m.protocol = config_.compatibility.protocol;
   m.sequence = ++sequence_;
   m.epoch = epoch_;
   std::vector<uint8_t> bytes;
-  if (Encode(m, bytes) && transport_.Send(bytes, reliable) && m.type == MessageType::PlayerPose)
-    ++pose_counters_.sent;
+  if (!Encode(m, bytes) || !transport_.Send(bytes, reliable)) return false;
+  if (m.type == MessageType::PlayerPose) ++pose_counters_.sent;
+  if (m.type == MessageType::EnemySnapshot) enemies_sent_ += m.enemies.enemies.size();
+  return true;
 }
 void CoopSession::Receive(const Message& m, double now) {
   if (m.type == MessageType::Hello && state_ == SessionState::Connecting) {
@@ -106,6 +108,9 @@ void CoopSession::Receive(const Message& m, double now) {
           ++pose_counters_.received; pose_counters_.remote_level = m.pose.level;
           poses_.Push(m.pose, now); break;
         case MessageType::Bye: Transition(SessionState::Ended); return;
+        case MessageType::EnemySnapshot: case MessageType::EnemyEvent:
+          if (config_.role != Role::Guest || state_ != SessionState::Connected) return;
+          enemies_.Receive(m, now); break;
         default: return;
       }
     }
@@ -114,7 +119,7 @@ void CoopSession::Receive(const Message& m, double now) {
   if (state_ == SessionState::Connecting && hello_seen_ && ack_seen_) Transition(SessionState::Connected);
   else if (state_ == SessionState::Lost) Transition(SessionState::Connected);
 }
-void CoopSession::Tick(double now, const std::optional<PlayerPose>& local) {
+void CoopSession::Tick(double now, const std::optional<PlayerPose>& local, const enemies::Frame* frame) {
   // Disabled is inert, including callbacks, polling, reads, writes and transport state queries.
   if (!config_.enabled || state_ == SessionState::Ended) return;
   if (state_ == SessionState::Idle) {
@@ -155,6 +160,22 @@ void CoopSession::Tick(double now, const std::optional<PlayerPose>& local) {
   if (local && now - last_pose_ >= .05 && state_ == SessionState::Connected) {
     Message pose; pose.type = MessageType::PlayerPose; pose.pose = *local;
     Send(pose, false); last_pose_ = now;
+  }
+  if (state_ == SessionState::Connected && config_.role == Role::Host) {
+    const bool fresh = frame && now-frame->time >= 0 && now-frame->time <= .25 && ValidEnemyWorld(frame->world);
+    if (fresh) enemies_.Publish(*frame);
+    for (int i = 0; i < 8 && enemies_.Event(); ++i) {
+      Message event; event.type = MessageType::EnemyEvent; event.enemy_event = *enemies_.Event();
+      if (!Send(event, true)) break;
+      enemies_.SentEvent();
+    }
+    if (fresh && now-last_enemies_ >= .08) {
+      for (auto& batch : enemies_.Snapshots()) {
+        Message snapshot; snapshot.type = MessageType::EnemySnapshot; snapshot.enemies = std::move(batch);
+        Send(snapshot, false);
+      }
+      last_enemies_ = now;
+    }
   }
 }
 void CoopSession::End(double) {

@@ -147,6 +147,7 @@ struct SteamRuntime::Impl
   SocialModel published;
   SteamSessionView session_view;
   std::optional<PlayerPose> local_pose;
+  enemies::Frame local_enemies;
   const char* local_failure = "not-published";
 #if defined(KK_DEV_TOOLS)
   double next_pose_log = 0;
@@ -568,12 +569,14 @@ struct SteamRuntime::Impl
   void TickSession(double now) {
     if (!session) return;
     std::optional<PlayerPose> pose;
+    enemies::Frame enemy_frame;
     const char* failure;
-    { std::lock_guard lock(mutex); pose = local_pose; failure = local_failure; }
+    { std::lock_guard lock(mutex); pose = local_pose; failure = local_failure; enemy_frame = local_enemies; }
     if (pose && now - pose->time > .25) { pose.reset(); failure = "publish-expired"; }
-    session->Tick(now, pose);
+    session->Tick(now, pose, &enemy_frame);
     SteamSessionView view{session->SessionRole(), session->State(), session->Rejection(), session->Stats(), pose, session->Partner(now), now};
     view.local_failure = failure; view.poses = session->Poses();
+    view.enemies = session->Enemies(now); view.enemies_sent = session->EnemiesSent();
 #if defined(KK_DEV_TOOLS)
     if (view.state != SessionState::Connected) next_pose_log = now + 10;
     else if (now >= next_pose_log) {
@@ -694,6 +697,13 @@ void SteamRuntime::PublishPose(std::optional<PlayerPose> pose, const char* failu
   std::lock_guard lock(impl_->mutex); impl_->local_pose = pose; impl_->local_failure = failure;
 }
 SteamSessionView SteamRuntime::SessionSnapshot() const { std::lock_guard lock(impl_->mutex); return impl_->session_view; }
+bool SteamRuntime::EnemyConnectionReady(double now) const {
+  std::lock_guard lock(impl_->mutex);
+  return impl_->session_view.state == SessionState::Connected && now-impl_->session_view.updated <= .5;
+}
+void SteamRuntime::PublishEnemies(const enemies::Frame& frame) {
+  std::lock_guard lock(impl_->mutex); impl_->local_enemies = frame;
+}
 void SteamRuntime::Shutdown() { impl_->Shutdown(); }
 #if defined(KK_DEV_TOOLS)
 int SteamRuntime::SelfTest(std::function<void(const std::string&)> log) {

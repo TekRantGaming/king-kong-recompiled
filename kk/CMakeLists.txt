@@ -24,6 +24,7 @@ set(KINGKONG_SOURCES
     src/coop_protocol.cpp
     src/coop_session.cpp
     src/coop_runtime.cpp
+    src/coop_enemies_game.cpp
     src/steam_runtime.cpp
     src/steam_lobby.cpp
     src/steam_transport.cpp
@@ -282,6 +283,9 @@ if(KK_DEV_TOOLS)
     add_executable(kk-coop-tests tests/coop_tests.cpp src/coop_protocol.cpp src/coop_session.cpp)
     target_include_directories(kk-coop-tests PRIVATE src)
     add_test(NAME coop-net-core COMMAND kk-coop-tests)
+    add_executable(kk-enemies-tests tests/coop_enemies_tests.cpp src/coop_protocol.cpp src/coop_session.cpp)
+    target_include_directories(kk-enemies-tests PRIVATE src)
+    add_test(NAME coop-enemies COMMAND kk-enemies-tests)
     add_executable(kk-puppet-mesh-tests tests/puppet_mesh_probe_tests.cpp)
     target_include_directories(kk-puppet-mesh-tests PRIVATE ../native-renderer)
     target_compile_features(kk-puppet-mesh-tests PRIVATE cxx_std_20)

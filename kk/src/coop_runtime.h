@@ -3,9 +3,8 @@
 #include <cstdint>
 #include <filesystem>
 #include "steam_lobby.h"
-#if defined(KK_DEV_TOOLS)
+#include "coop_enemies.h"
 #include "coop_session.h"
-#endif
 
 namespace rex::ui { class ImGuiDrawer; }
 namespace kk::coop {
@@ -14,6 +13,16 @@ void Configure(const std::filesystem::path& user_data);
 void Start(const std::filesystem::path& user_data);
 // Available to the launcher before Play. Open is the explicit lazy Steam opt-in.
 ISocialService& Social();
+struct EnemyLink {
+  bool connected = false;
+  Role role = Role::Host;
+  enemies::Frame remote;
+  uint64_t sent = 0;
+};
+EnemyLink EnemyLinkSnapshot();
+bool EnemyConnectionReady();
+void PublishEnemyFrame(const enemies::Frame& frame);
+void SetEnemyCounters(enemies::Counters counters);
 #if defined(KK_DEV_TOOLS)
 // Value-only snapshot, including CoopSession's interpolated pose. No transport work.
 struct PuppetSnapshot {

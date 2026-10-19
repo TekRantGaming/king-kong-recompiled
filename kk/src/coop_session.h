@@ -2,6 +2,7 @@
 
 #include "coop_protocol.h"
 #include "coop_transport.h"
+#include "coop_enemies.h"
 
 #include <deque>
 #include <functional>
@@ -36,7 +37,7 @@ class CoopSession {
   using StateCallback = std::function<void(SessionState)>;
   CoopSession(SessionConfig config, ICoopTransport& transport, StateCallback changed = {});
   // Deterministic clock in seconds. Runtime calls on its worker; unit tests use an in-memory transport.
-  void Tick(double now, const std::optional<PlayerPose>& local = {});
+  void Tick(double now, const std::optional<PlayerPose>& local = {}, const enemies::Frame* frame = nullptr);
   void End(double now);
   SessionState State() const { return state_; }
   Role SessionRole() const { return config_.role; }
@@ -44,9 +45,11 @@ class CoopSession {
   RejectReason Rejection() const { return rejection_; }
   std::optional<PlayerPose> Partner(double now) const;
   PoseCounters Poses() const { return pose_counters_; }
+  enemies::Frame Enemies(double now) const { return state_ == SessionState::Connected ? enemies_.Sample(now) : enemies::Frame{}; }
+  uint64_t EnemiesSent() const { return enemies_sent_; }
  private:
   void Transition(SessionState state);
-  void Send(Message message, bool reliable);
+  bool Send(Message message, bool reliable);
   void Receive(const Message& message, double now);
   SessionConfig config_;
   ICoopTransport& transport_;
@@ -63,5 +66,8 @@ class CoopSession {
   uint64_t malformed_ = 0;
   PoseBuffer poses_;
   PoseCounters pose_counters_;
+  enemies::Channel enemies_;
+  double last_enemies_ = -1;
+  uint64_t enemies_sent_ = 0;
 };
 }  // namespace kk::coop

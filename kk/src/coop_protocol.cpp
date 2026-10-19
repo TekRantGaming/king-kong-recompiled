@@ -43,7 +43,32 @@ bool ValidPose(const PlayerPose& p) {
       std::abs(p.speed) < 10000 && std::abs(p.facing) <= 3.1416f;
 }
 bool ReasonValid(RejectReason r) { return r >= RejectReason::Protocol && r <= RejectReason::Handshake; }
+void WriteWorld(Writer& w, const EnemyWorld& v) { w.U(v.level, 4); w.U(v.start, 4); w.U(v.serial, 4); }
+EnemyWorld ReadWorld(Reader& r) { return {uint32_t(r.U(4)), uint32_t(r.U(4)), uint32_t(r.U(4))}; }
+void WriteEnemy(Writer& w, const EnemyState& e) {
+  w.U(e.id.source, 8); w.U(e.id.sequence, 4); w.U(uint16_t(e.id.family), 2);
+  for (float v : {e.x, e.y, e.z, e.facing, e.life}) w.U(std::bit_cast<uint32_t>(v), 4);
+  w.U(e.state, 4); w.U(e.action, 2); w.U(e.item, 1);
+}
+EnemyState ReadEnemy(Reader& r) {
+  EnemyState e;
+  e.id = {r.U(8), uint32_t(r.U(4)), EnemyFamily(r.U(2))};
+  e.x = std::bit_cast<float>(uint32_t(r.U(4))); e.y = std::bit_cast<float>(uint32_t(r.U(4)));
+  e.z = std::bit_cast<float>(uint32_t(r.U(4))); e.facing = std::bit_cast<float>(uint32_t(r.U(4)));
+  e.life = std::bit_cast<float>(uint32_t(r.U(4)));
+  e.state = uint32_t(r.U(4)); e.action = uint16_t(r.U(2)); e.item = uint8_t(r.U(1));
+  return e;
+}
 }  // namespace
+bool ValidEnemyWorld(const EnemyWorld& w) {
+  return w.level > 0 && w.level <= 100000 && w.start <= 10000 && w.serial > 0;
+}
+bool ValidEnemy(const EnemyState& e) {
+  return e.id.source && e.id.family >= EnemyFamily::Raptor && e.id.family <= EnemyFamily::Scorpion &&
+      std::isfinite(e.x) && std::isfinite(e.y) && std::isfinite(e.z) && std::isfinite(e.facing) &&
+      std::isfinite(e.life) && std::abs(e.x) < 1000000 && std::abs(e.y) < 1000000 &&
+      std::abs(e.z) < 1000000 && std::abs(e.facing) <= 3.1416f && std::abs(e.life) < 1000000;
+}
 
 bool Encode(const Message& m, std::vector<uint8_t>& out) {
   Writer payload;
@@ -68,6 +93,25 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
       payload.U(m.pose.item, 1);
       break;
     case MessageType::HelloAck: case MessageType::Bye: break;
+    case MessageType::EnemySnapshot:
+      if (!ValidEnemyWorld(m.enemies.world) || !std::isfinite(m.enemies.time) || m.enemies.time < 0 ||
+          m.enemies.time >= 1e12 || m.enemies.enemies.size() > kMaxEnemyBatch) return false;
+      WriteWorld(payload, m.enemies.world);
+      payload.U(std::bit_cast<uint64_t>(m.enemies.time), 8);
+      payload.U(m.enemies.enemies.size(), 2);
+      for (size_t i = 0; i < m.enemies.enemies.size(); ++i) {
+        const auto& e = m.enemies.enemies[i];
+        if (!ValidEnemy(e)) return false;
+        for (size_t j = 0; j < i; ++j) if (m.enemies.enemies[j].id == e.id) return false;
+        WriteEnemy(payload, e);
+      }
+      break;
+    case MessageType::EnemyEvent:
+      if (!ValidEnemyWorld(m.enemy_event.world) || !ValidEnemy(m.enemy_event.enemy) ||
+          m.enemy_event.kind < EnemyEventKind::Spawned || m.enemy_event.kind > EnemyEventKind::Removed) return false;
+      WriteWorld(payload, m.enemy_event.world); payload.U(uint8_t(m.enemy_event.kind), 1);
+      WriteEnemy(payload, m.enemy_event.enemy);
+      break;
     default: return false;
   }
   Writer packet;
@@ -109,6 +153,24 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       if (!ValidPose(m.pose)) return false;
       break;
     case MessageType::HelloAck: case MessageType::Bye: break;
+    case MessageType::EnemySnapshot: {
+      m.enemies.world = ReadWorld(r); m.enemies.time = std::bit_cast<double>(r.U(8));
+      const size_t count = size_t(r.U(2));
+      if (!ValidEnemyWorld(m.enemies.world) || !std::isfinite(m.enemies.time) || m.enemies.time < 0 ||
+          m.enemies.time >= 1e12 || count > kMaxEnemyBatch || count * 41 != bytes.size() - r.at) return false;
+      for (size_t i = 0; i < count; ++i) {
+        auto e = ReadEnemy(r); if (!ValidEnemy(e)) return false;
+        for (const auto& prior : m.enemies.enemies) if (prior.id == e.id) return false;
+        m.enemies.enemies.push_back(e);
+      }
+      break;
+    }
+    case MessageType::EnemyEvent:
+      m.enemy_event.world = ReadWorld(r); m.enemy_event.kind = EnemyEventKind(r.U(1));
+      m.enemy_event.enemy = ReadEnemy(r);
+      if (!ValidEnemyWorld(m.enemy_event.world) || !ValidEnemy(m.enemy_event.enemy) ||
+          m.enemy_event.kind < EnemyEventKind::Spawned || m.enemy_event.kind > EnemyEventKind::Removed) return false;
+      break;
     default: return false;
   }
   if (!r.ok || r.at != bytes.size()) return false;
