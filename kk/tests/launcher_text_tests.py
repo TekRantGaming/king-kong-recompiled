@@ -166,13 +166,7 @@ strings |= {
     '{0} GB',
     'Unknown',
     'It goes into your user folder. Remove it at any time in Settings.',
-    # This can take a while, progress, finished and error pop-ups, the strip
-    'This can take a while',
-    'The HD texture pack is a {0} GB download. After that it is checked and unpacked. Depending on your connection this takes from a few minutes to an hour or more.',
-    'The restored PS2 cutscenes are a {0} GB download. After that they are checked and unpacked. Depending on your connection this takes from a few minutes to an hour or more.',
-    'It runs in the background, so you can carry on meanwhile. If the connection drops or you close the launcher, it continues from where it stopped.',
-    'It starts when the download before it has finished.',
-    'Minimise and notify me',
+    # Progress, finished and error pop-ups, the strip (no "This can take a while" question, owner 19 Oct)
     'Watch progress',
     'Pause',
     'Continue',
@@ -385,8 +379,6 @@ strings |= {'Mods', 'Texture packs', 'Other TRG projects and games', 'Not instal
             'Nothing is installed and everything you had stays as it was. Your ZIP file is kept.',
             'Your ZIP file is checked and unpacked. It carries on in the background if you leave this pop-up, and Cancel '
             'stops it without changing anything you have installed.',
-            '{0} is a {1} GB download. After that it is checked and unpacked. Depending on your connection '
-            'this takes from a few minutes to an hour or more.',
             'Comic Book Texture Pack', 'Downloading Comic Book Texture Pack', 'Comic Book Texture Pack installed', 'Switch on {0}', '{0} is on',
             "Kong's Tropical Holiday Texture Pack", "Downloading Kong's Tropical Holiday Texture Pack",
             "Kong's Tropical Holiday Texture Pack installed", 'Kong Cartoon Texture Pack',
@@ -807,7 +799,8 @@ for needle, why in (
         ('{"Skip", true,', 'the texture pack page lost Skip'),
         ('{"Yes, restore them", true,', 'the cutscene page lost Yes'),
         ('{"No thanks", true,', 'the cutscene page lost No thanks'),
-        ('{"Minimise and notify me", "Watch progress"}', 'the This can take a while buttons differ'),
+        ('    content::Service::Get().Download(kind);\n    REXLOG_INFO("KK content: {} download started ({}); watching the progress"',
+         'a download does not go straight to its progress pop-up (owner 19 Oct)'),
         ('{"Pause", "Run in background", "Cancel"}', 'the progress pop-up buttons differ'),
         ('if (st.stage != content::Stage::kUnpacking)', 'the UI thread logs while unpacking'),
         ('void NotifyContentDone(', 'no notification hook for job J3'),
@@ -940,7 +933,7 @@ for needle, why in (
         ('{"See the new graphics options", false, [this] { OpenNewGraphics(); }}', 'the graphics pages from the New screen'),
         ('{"Continue", false, [this] { DismissNewScreen(); }}', 'Continue'),
         ('Set("kk_setup_version", KK_VERSION);', 'dismissed for good'),
-        ('AskContentDownload(Kind::kTexturePack, 0);', 'the download asks first, as from Settings'),
+        ('StartContentDownload(Kind::kTexturePack, 0);', 'the download starts as from Settings'),
 ):
     if needle not in new_src:
         fail(f'J6: {why} ({needle})')

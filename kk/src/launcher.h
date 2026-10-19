@@ -36,9 +36,6 @@ struct LauncherCallbacks {
   // window can be drawn again.
   std::function<void(std::function<void()>)> post_to_ui;
   std::function<void()> recover_presentation;
-  // Job J2, "Minimise and notify me": minimises the launcher's window without bringing another forward.
-  // False where it cannot be done.
-  std::function<bool()> minimize;
   // Job J3, notifications when a download ends: the window's {minimised, active} state, and restore
   // (a click on a notification: the window comes back and is asked to the front).
   std::function<std::pair<bool, bool>()> window_state;
@@ -54,9 +51,6 @@ struct LauncherPaths {
 // Whether a window (the SDK's native handle: an HWND on Windows) can be drawn to now: shown, not
 // minimised, some client area. True where the platform is not asked (the presenter checks the size).
 bool NativeWindowDrawable(void* handle);
-// Minimises a window (the SDK's native handle). Windows: SW_MINIMIZE when it is the active window, else
-// without activating anything. Linux: SDL's windows. False when nothing was minimised.
-bool MinimizeNativeWindow(void* handle);
 // {minimised, active (has the keyboard focus)} for a window (the SDK's native handle). Linux: SDL's windows.
 std::pair<bool, bool> NativeWindowState(void* handle);
 // Task 229: the window in front now, for the log: "no window", or its class and program file name (never
