@@ -26,6 +26,7 @@ std::filesystem::path SessionUserDir(const std::filesystem::path& personal);
 bool SessionInProcess();
 void PublishHostCamera(std::optional<CameraPose> camera);
 std::optional<CameraPose> HostCameraSnapshot(double now);
+CameraDiagnostics HostCameraDiagnostics();
 bool CameraConnectionReady();
 void ApplySessionSettings();  // transient host settings after mods, never persisted
 // Game-thread control at the synchronous uni_go load boundary.

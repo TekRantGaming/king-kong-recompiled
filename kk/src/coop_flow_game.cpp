@@ -78,6 +78,8 @@ FlowView Wait(uint32_t generation, bool load_barrier) {
     auto v=SessionFlowSnapshot();
     if (stopping || !v.active || v.phase==FlowPhase::Failed || v.world.generation!=generation ||
         (load_barrier && v.phase==FlowPhase::Playing)) return v;
+    if (!load_barrier && v.phase==FlowPhase::Playing && !v.host &&
+        v.policy==ChapterPolicy::Observer && !observer::HoldWorld()) return v;
     const bool chapter_wait=v.phase==FlowPhase::Waiting || (v.policy==ChapterPolicy::Observer && !v.host && v.phase==FlowPhase::Playing);
     if (Now()>=until && !chapter_wait) { Send(MessageType::FlowAbort,v.world); return v; }
     if (Now()>=paint) { RequestUiPaint(); paint=Now()+.1; }

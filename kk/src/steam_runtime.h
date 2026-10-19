@@ -58,6 +58,7 @@ class SteamRuntime final : public ISocialService {
   void ClearOwnership();
   void PublishCamera(std::optional<CameraPose> camera);
   std::optional<CameraPose> HostCamera(double now) const;
+  CameraDiagnostics CameraInfo() const;
   SteamSessionView SessionSnapshot() const;
   bool EnemyConnectionReady(double now) const;
   bool BeginFlow(SessionStart start, std::vector<uint8_t> save);
