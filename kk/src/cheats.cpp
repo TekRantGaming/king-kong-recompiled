@@ -38,10 +38,16 @@
 // would undo the weapon and ammo cheats. So the port watches for that from the
 // game's input poll (sub_8272C320, every frame) and gives them again once the
 // loadout is in.
+//
+// Some cheats are off in some levels (cheat_rules.h; owner 19 Oct 2026: the weapon cheats in the Hayes
+// chapter, level 303): there they are never given, at the chapter start, after a checkpoint or when switched
+// on in play, so the chapter's own loadout is what the player has. The settings are not changed.
 
 #include "cheats.h"
+#include "cheat_rules.h"
 
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <chrono>
 #include <cstdint>
@@ -83,6 +89,38 @@ void Store32(uint8_t* base, uint32_t addr, uint32_t v) {
 
 bool Chosen(const char* id) { return rex::cvar::GetFlagByName(std::string("kk_cheat_") + id) == "true"; }
 
+// The level key last loaded (G+8): set by the game when a level load is asked for, so it is already the new
+// level when that level's loadout arrives. 0 before the game is set up.
+uint32_t Level(const uint8_t* base, uint32_t g) { return g ? Load32(base, g + 8) : 0; }
+
+// The level the input poll saw last, for the pause menu (CheatSuppressedNow).
+std::atomic<uint32_t> g_level{0};
+
+// Chosen and not switched off in this level (cheat_rules.h).
+bool Applies(const char* id, uint32_t level) { return Chosen(id) && !cheat_rules::Suppressed(id, level); }
+
+// One line when a level that switches cheats off starts or ends (whatever the player chose: the settings stay).
+void WatchLevel(const uint8_t* base) {
+  const uint32_t g = Load32(base, kGamePtr);
+  const uint32_t level = Level(base, g);
+  const uint32_t before = g_level.exchange(level);
+  const cheat_rules::LevelCheatsOff *was = cheat_rules::RuleFor(before), *now = cheat_rules::RuleFor(level);
+  if (was == now) return;
+  if (was)
+    REXLOG_INFO("KK: cheats switched off in level {} ({}) apply again as set (now level {})", was->level, was->chapter,
+                level);
+  if (now) {
+    std::string ids;
+    for (std::string_view id : now->cheats) {
+      if (id.empty()) continue;
+      const bool chosen = Chosen(std::string(id).c_str());
+      ids += fmt::format("{}{}{}", ids.empty() ? "" : ", ", id, chosen ? " (chosen)" : "");
+    }
+    REXLOG_INFO("KK: level {} ({}): these cheats are off in this chapter, settings unchanged: {}", now->level,
+                now->chapter, ids);
+  }
+}
+
 void SetFlags(uint8_t* base, uint32_t obj, uint32_t bits) { Store32(base, obj + kFlags, Load32(base, obj + kFlags) | bits); }
 
 // Gives weapon n (1-4) with at least `ammo` rounds, as its code does.
@@ -114,8 +152,9 @@ std::string State(const uint8_t* base, uint32_t g, uint32_t p) {
                      Load32(base, g + kAmmo[2]), Load32(base, g + kAmmo[3]), Load32(base, p + kFlags));
 }
 
-// The weapon and ammo cheats. Returns how many are switched on.
+// The weapon and ammo cheats, those that apply in this level. Returns how many are switched on.
 int ApplyLoadoutCheats(uint8_t* base, uint32_t g) {
+  const uint32_t level = Level(base, g);
   int count = 0;
   // Weapons: the last one switched on is the one Jack holds, like typing the codes in this order.
   static constexpr struct {
@@ -124,11 +163,11 @@ int ApplyLoadoutCheats(uint8_t* base, uint32_t g) {
     uint32_t ammo;
   } kWeapons[] = {{"revolver", 1, 80}, {"machine_gun", 2, 500}, {"shotgun", 3, 50}, {"sniper", 4, 50}};
   for (const auto& w : kWeapons) {
-    if (!Chosen(w.id)) continue;
+    if (!Applies(w.id, level)) continue;
     GiveWeapon(base, g, w.weapon, w.ammo);
     ++count;
   }
-  if (Chosen("ammo")) {
+  if (Applies("ammo", level)) {
     for (uint32_t a : kAmmo) Store32(base, g + a, 999);
     SetFlags(base, g, kCheatsUsed);
     ++count;
@@ -143,7 +182,7 @@ void ApplyCheats(uint8_t* base) {
   const std::string before = State(base, g, p);
   int count = 0;
   auto on = [&](const char* id) {
-    const bool chosen = Chosen(id);
+    const bool chosen = Applies(id, Level(base, g));
     count += chosen;
     return chosen;
   };
@@ -221,15 +260,16 @@ void WatchChanges(uint8_t* base) {
     return false;
   };
   for (const Flag& f : kFlagCheats) {
-    const bool want = all_on && Chosen(f.id);
+    const bool want = all_on && Applies(f.id, Level(base, g));
     const uint32_t obj = f.profile ? p : g;
     if (want) SetFlags(base, obj, f.profile ? f.bit : (kCheatsUsed | f.bit));
     else if (was_on(f.id)) clear(obj, f.bit);  // only what the port switched on
   }
   if (all_on) {
-    // Weapons and ammo newly chosen: given now.
+    // Weapons and ammo newly chosen: given now (unless this level switches them off).
     for (size_t i = 0; i < kCheats.size(); ++i) {
       if (!(bits & (1u << i)) || (g_applied_bits & (1u << 31) && g_applied_bits & (1u << i))) continue;
+      if (cheat_rules::Suppressed(kCheats[i].id, Level(base, g))) continue;  // off in this level (cheat_rules.h)
       const std::string id = kCheats[i].id;
       if (id == "revolver") GiveWeapon(base, g, 1, 80);
       else if (id == "machine_gun") GiveWeapon(base, g, 2, 500);
@@ -278,6 +318,10 @@ void DevGunfire(uint8_t* base) {
 }  // namespace
 }  // namespace kk
 
+namespace kk {
+bool CheatSuppressedNow(std::string_view id) { return cheat_rules::Suppressed(id, g_level.load()); }
+}  // namespace kk
+
 namespace kk::play {
 bool ApplyCheatsNow(uint8_t* base) {
   const uint32_t g = Load32(base, kGamePtr), p = Load32(base, kProfilePtr);
@@ -317,6 +361,7 @@ REX_EXTERN(__imp__sub_8272C320);
 REX_HOOK_RAW(sub_8272C320) {
   __imp__sub_8272C320(ctx, base);
   kk::UnlockBonusContent(base);
+  kk::WatchLevel(base);
   if (REXCVAR_GET(kk_cheats)) kk::WatchLoadout(base);
   kk::WatchChanges(base);
   kk::hardcore::Frame(base);

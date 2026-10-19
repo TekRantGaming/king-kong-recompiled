@@ -1,6 +1,39 @@
-# Hayes stuck dinosaur (task 224, 18 Oct 2026) - RESCUE FIX IN (kk/src/fix_raptor_path.cpp)
+# Hayes stuck dinosaur (tasks 224, 251) - Beta 10 rescue did NOT fix it; Beta 11: weapon cheats off in 303
 
-## Result (21:25)
+## Task 251 (19 Oct, branch hayes-cheats): weapon cheats switched off in level 303 (owner; NO root-fix work)
+- A player confirmed the 224 rescue did not fix the softlock (Beta 10). Owner: stop the root fix; in level 303 the
+  Revolver / Machine gun / Shotgun / Sniper rifle cheats stop applying; settings kk_cheat_<id> unchanged.
+- Table: kk/src/cheat_rules.h kLevelCheatsOff {303, "Hayes", {ids}} (add "ammo" there if the owner asks).
+  cheats.cpp: Applies(id, level) = chosen and not suppressed, level = G+8 at the moment of giving: ApplyCheats
+  (start menu / launcher Play), WatchLoadout (re-give after chapter or checkpoint start) and WatchChanges (switched
+  on in play) skip suppressed ids. WatchLevel (input poll) logs "KK: level 303 (Hayes): these cheats are off ..."
+  and "... apply again as set (now level N)"; keeps g_level for the pause menu (kk::CheatSuppressedNow).
+- Pause menu: launcher.cpp CheatItems greys the rows in place (in_game_ only) with "Not available in this
+  chapter." (5 languages, pause_text_table.inc). Test: kk-cheat-rules-tests (ctest cheat-rules).
+- Assumption to check in game: the game empties weapon/ammo at the 303 start (cheats.cpp header says every chapter
+  and checkpoint start does), so a cheat machine gun from 302 is gone and the chapter loadout is what Jack has.
+- GAME CHECK LIST (not run yet, code-only job):
+  1. Chapter select entry 7 with Cheats + Machine gun on: no machine gun, chapter loadout; pause > Cheats: the
+     four weapon rows greyed with the note, can't be switched on; healing/ammo/spears rows unchanged; log line.
+  2. Entry 6 and entry 8 with Machine gun on: machine gun given as before (no suppression line).
+  3. In 303, Load last checkpoint: still no cheat weapon (no "given again" log line).
+  4. Story play 302 with Machine gun on -> 303: weapon is the chapter's own after the transition; 303 -> 304: the
+     machine gun comes back (log "apply again as set").
+  5. Continue / launcher Continue into 303 from a save: no cheat weapon. Launcher Settings > Cheats: not greyed.
+
+## Task 252 game check (19 Oct, kk-dev-vulkan + one D3D12 run; runs\claude-252-*; runner runs\claude-252-tools)
+- PASS entry 7 + MG (Vulkan and D3D12): loadout weapon 1 ammo 5/0/0/0 (no MG), suppression line, pause > Cheats
+  four weapon rows greyed + "Not available in this chapter.", Revolver can't be switched on (a/right: stays
+  false), other rows normal. FIX: a greyed row showed "On" when chosen; now shows "Off" (launcher.cpp, setting kept).
+- PASS Load last checkpoint in 303 (menu open, then "checkpoint" step): still weapon 1 ammo 5, no "given again".
+- PASS entries 6 and 8 + MG: given at start as before (302 starts with an empty loadout, MG gone until a loadout
+  arrives: same in the base build); 305: MG + "given again" line, no suppression line.
+- OPEN story 302 -> 303: dev jump (KK_DEV_START_END=25 + KK_DEV_VRAM_TOUR=1, MG set in play) kept weapon 2
+  ammo 500 in 303 (the jump skips the game's end-of-chapter flow). Player log 013 (real transition): 303 start
+  had weapon 2 ammo 0/0/0/0 before our re-give, i.e. the game empties ammo but keeps weapon id 2. So with 251 a
+  real story player has no cheat ammo in 303; the dev-jump path does keep it. A real end-of-302 run is not done.
+
+## Result of task 224 (18 Oct 21:25)
 - Stall = raptor 1 (42657DD0) right after waking stops in PNJ_Raptor_ETAT_VALA (sub_825E06B0) on the ledge
   (214.6,73.1,-1.0): path list (+7028, count +6776) keeps being rebuilt 1 <-> 9 waypoints, next waypoint
   42660288 (210.5,82.8,-2.9) is never walked to, raptor stands still forever; Hayes waits (CapaBit on all three).
@@ -58,10 +91,4 @@
   KK_DEV_SAMPLE=0,220,0.25" -Extra '--kk_cheats=true|--kk_cheat_healing=true|--kk_cheat_machine_gun=true'
 
 ## Next steps
-1. Repeat mg60 / mg30 several times (add KK_DEV_SAMPLE_VARS=8254BCB0) to see how often raptor 1 sticks in VALA at
-   (214.5,73.1) per frame rate; dump its vars (6776, 2556, 6804, 7148/7168, 5236.., 6448 dest) while stuck and
-   find which VALA exit condition never comes true (frame-rate dependent? way_move arrival test?).
-2. Teleport Jack next to (214.5,73.1) while stuck, take shots: is it behind the rock at the stairs, can it be hit?
-3. Root fix in that path, or rescue: a raptor stuck in VALA/out of reach for N s is put back on its path/teleported
-   (TrigExec_Teleport raptor branch) or killed so Hayes's CapaBit test passes. Never throttle the AI step.
-4. Verify 30/60 VK + D3D12; CHANGELOG line under v2.0.0-beta.10 (Fixed); PNGs to E:\KK-documentry\documentary\hayes-dino\.
+- Owner 19 Oct: no more root-fix work. Run the game check list above in a game step (task 251 follow-up).

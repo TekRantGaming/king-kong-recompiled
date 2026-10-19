@@ -87,6 +87,7 @@
 #include "art.h"
 #include "changelog.h"
 #include "content.h"
+#include "cheat_rules.h"
 #include "cheats.h"
 #include "platform.h"
 #include "settings.h"
@@ -2463,7 +2464,14 @@ class SettingsPages {
       Item it = CvarToggle(cheat.label, "One of the game's own cheats.", std::string("kk_cheat_") + cheat.id);
       it.help_key = "Cheat";
       it.facts.push_back(F("Code: {0}", {cheat.code}));
-      items.push_back(std::move(Disable(it, !on, "Switch Cheats on to use it.")));
+      // In game, a cheat this chapter switches off (cheat_rules.h; the Hayes chapter's weapon cheats, owner
+      // 19 Oct) is greyed in place and can't be switched on; its setting is kept for the other chapters.
+      Disable(it, !on, "Switch Cheats on to use it.");
+      if (in_game_ && kk::CheatSuppressedNow(cheat.id)) {
+        Disable(it, true, kk::cheat_rules::kNotInThisChapter);
+        it.index = 0;  // shows "Off": it is off here (task 252); kk_cheat_<id> itself is unchanged
+      }
+      items.push_back(std::move(it));
     }
     return items;
   }

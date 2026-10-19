@@ -3,6 +3,8 @@
     {"Load last checkpoint", "Letzten Checkpoint laden", "Cargar último punto de control", "Charger le dernier point de contrôle", "Carica ultimo checkpoint"},
     {"Quit to main menu", "Zurück zum Hauptmenü", "Salir al menú principal", "Quitter vers le menu principal", "Esci al menu principale"},
     {"Save game", "Spiel speichern", "Guardar partida", "Sauvegarder", "Salva partita"},
+    // A cheat this chapter switches off (cheat_rules.h; the weapon cheats in the Hayes chapter, owner 19 Oct).
+    {"Not available in this chapter.", "In diesem Kapitel nicht verfügbar.", "No disponible en este capítulo.", "Non disponible dans ce chapitre.", "Non disponibile in questo capitolo."},
     {"Go back to the game where you left off.", "Zurück ins Spiel, genau dort, wo du aufgehört hast.", "Vuelve al juego justo donde lo dejaste.", "Reprenez la partie là où vous l'avez laissée.", "Torna al gioco dove eri rimasto."},
     {"Freeze the game and take pictures with a free camera.", "Das Spiel anhalten und mit einer freien Kamera Bilder machen.", "Congela el juego y haz fotos con una cámara libre.", "Figez le jeu et prenez des photos avec une caméra libre.", "Blocca il gioco e scatta foto con una telecamera libera."},
     {"Display, graphics and audio settings.", "Anzeige-, Grafik- und Audioeinstellungen.", "Ajustes de pantalla, gráficos y audio.", "Réglages de l'affichage, des graphismes et de l'audio.", "Impostazioni di schermo, grafica e audio."},

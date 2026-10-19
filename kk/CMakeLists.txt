@@ -365,6 +365,11 @@ if(KK_DEV_TOOLS)
     target_include_directories(kk-pause-menu-tests PRIVATE src)
     target_compile_features(kk-pause-menu-tests PRIVATE cxx_std_20)
     add_test(NAME pause-menu-layout COMMAND kk-pause-menu-tests)
+    # Task 251: cheats that are off in some chapters (the weapon cheats in Hayes, level 303) and the greyed note.
+    add_executable(kk-cheat-rules-tests tests/cheat_rules_tests.cpp)
+    target_include_directories(kk-cheat-rules-tests PRIVATE src)
+    target_compile_features(kk-cheat-rules-tests PRIVATE cxx_std_20)
+    add_test(NAME cheat-rules COMMAND kk-cheat-rules-tests)
     # Task 219: HDR follows Windows (the default decision, the calibration profile's brightness, automatic
     # levels; prints what this PC's screen reports) and the setup's comparison pictures made from the game files.
     add_executable(kk-hdr-tests tests/hdr_tests.cpp src/hdr_display.cpp)
