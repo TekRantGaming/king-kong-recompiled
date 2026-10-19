@@ -825,6 +825,7 @@ struct ScriptEvidence {
   // Actor -> first external owner retaining a reference. Scan every owner's
   // declared vars, not guessed object memory. Self references do not count.
   std::map<uint32_t, uint32_t> references;
+  uint32_t skipped = 0;  // owners whose layout could not be read
 };
 ScriptEvidence script_evidence;
 
@@ -839,43 +840,44 @@ void RefreshScriptEvidence(const uint8_t* b, uint32_t world) {
   uint32_t begin, end;
   if (!Table(b, world, begin, end)) return;
   size_t budget = 8 * 1024 * 1024;
-  for (uint32_t p = begin; p < end; p += 8) {
-    const uint32_t owner = Load32(b, p);
+  // An owner whose layout can't be read is skipped (counted), not a reason to refuse every human: only a
+  // positive reference rules a candidate out (Claude, run c25 19:35: one unreadable owner gave no body).
+  auto scan_owner = [&](uint32_t owner) -> bool {
     script_evidence.owner = owner;
     script_evidence.failure = "actor-or-extension";
-    if (!Range(owner, 32)) return;
+    if (!Range(owner, 32)) return false;
     const auto ext = Load32(b, owner+24);
-    if (!ext) continue;  // Non-AI objects cannot run mission records.
-    if (!Range(ext, 8)) return;
+    if (!ext) return true;  // Non-AI objects cannot run mission records.
+    if (!Range(ext, 8)) return false;
     const auto ai = Load32(b, ext + 4);
-    if (!ai) continue;
-    if (!Range(ai, 88)) return;
+    if (!ai) return true;
+    if (!Range(ai, 88)) return false;
     script_evidence.failure = "vars-layout-or-budget";
     const auto size = VarsSize(b, ai);
-    if (size > 1024 * 1024 || size > budget) return;
+    if (size > 1024 * 1024 || size > budget) return false;
     budget -= size;
     const auto vars = Load32(b, ai + 64);
-    if (size && !Range(vars, size)) return;
+    if (size && !Range(vars, size)) return false;
     script_evidence.failure = "track-layout";
     const auto first = Load16(b, ai + 80), last = Load16(b, ai + 82);
-    if (first > last || last > 4096 || last-first >= 64 || !Range(ai, (last+12)*4)) return;
+    if (first > last || last > 4096 || last-first >= 64 || !Range(ai, (last+12)*4)) return false;
     for (uint32_t t = first; t <= last; ++t) {
       const auto block = Load32(b, ai + (t+6)*4);
       if (!block) continue;
-      if (!Range(block, 24)) return;
+      if (!Range(block, 24)) return false;
       const auto fn = Load32(b, block+20);
       // The interpreted fallback may have references outside declared vars.
       // Without a decoded bytecode contract it is not evidence of absence.
-      if (!fn) { script_evidence.failure = "interpreted-track"; return; }
+      if (!fn) { script_evidence.failure = "interpreted-track"; return false; }
       if (fn == 0x82454690) {
         // PRG_SSLoop (.128): vars+19812 is the persistent record index;
         // record=vars+920+180*i, callback=+4, payload=+72 (27 words).
         script_evidence.failure = "PRG-record-layout";
-        if (size < 19820) return;
+        if (size < 19820) return false;
         const auto index = Load32(b, vars+19812);
-        if (index >= 104) return;
+        if (index >= 104) return false;
         const auto record = vars+920+180*index;
-        if (!Range(record, 180)) return;
+        if (!Range(record, 180)) return false;
         // The full declared-vars scan below includes current AND future records,
         // including CapaBit's payload+4 actor and Hayes-style stored waits.
       }
@@ -884,7 +886,15 @@ void RefreshScriptEvidence(const uint8_t* b, uint32_t world) {
       const auto ref = Load32(b, vars+off);
       if (ref != owner && Get().humans.count(ref)) script_evidence.references.try_emplace(ref, owner);
     }
+    return true;
+  };
+  uint32_t skipped = 0;
+  for (uint32_t p = begin; p < end; p += 8) {
+    const uint32_t owner = Load32(b, p);
+    script_evidence.owner = owner;
+    if (!scan_owner(owner)) ++skipped;
   }
+  script_evidence.skipped = skipped;
   script_evidence.complete = true;
   script_evidence.failure = "none"; script_evidence.owner = 0;
 }
@@ -1020,8 +1030,8 @@ void CensusAndSelect(PPCContext& ctx, uint8_t* b, uint32_t w) {
     }
     if (const auto best = coop::puppet::SelectAuto(facts)) pick = &candidates[*best];
     if (!pick) {
-      REXLOG_INFO("PUPPET auto no-body epoch={} level={} candidates={} scripts-complete={} evidence-failure={} owner={:08X} marker-only=true",
-          s.epoch, s.level, candidates.size(), script_evidence.complete, script_evidence.failure, script_evidence.owner);
+      REXLOG_INFO("PUPPET auto no-body epoch={} level={} candidates={} scripts-complete={} skipped-owners={} marker-only=true",
+          s.epoch, s.level, candidates.size(), script_evidence.complete, script_evidence.skipped);
       s.attempted = false; s.retry_at = now + std::chrono::seconds(1);
       return;
     }
