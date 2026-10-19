@@ -476,6 +476,39 @@ void PartnerSelection() {
   Check(!SelectAuto(live), "no replacement when remaining candidate dies");
   live = {background, spare};
   Check(SelectAuto(live) == 0, "new load observations permit fresh selection");
+
+  auto resident = spare; resident.actor = 200; resident.registry_unclaimed = true;
+  resident.kind = HumanKind::Ally; resident.distance = 0;
+  const AutoCandidate tiers[]{background, resident, farther};
+  Check(SelectAuto(tiers) == 1 && AutoTier(resident) == 0,
+      "fully audited unclaimed resident precedes every scheduled kind and distance");
+  c = resident; c.registry_unclaimed = false;
+  Check(AutoTier(c) == 3 && AutoTier(background) == 1 && AutoTier(spare) == 2,
+      "incomplete resident audit falls back to the existing scheduled kind tiers");
+  auto dormant = resident; dormant.scheduled = false;
+  reject(dormant, "unscheduled-movement-and-draw-unconfirmed");
+  const AutoCandidate dormant_fallback[]{dormant, background};
+  Check(SelectAuto(dormant_fallback) == 1, "unconfirmed dormant human cannot displace a scheduled body");
+  dormant.registry_unclaimed = false;
+  dormant.unscheduled_setters_and_draw_confirmed = true;
+  reject(dormant, "unscheduled-not-unclaimed");
+  dormant.registry_unclaimed = true;
+  Check(AutoTier(dormant) == 0, "dormant policy requires both a full unclaimed audit and native evidence");
+  dormant.script_reference = true;
+  reject(dormant, "mission-or-trigger-reference");
+  c = resident; c.cinematic = true; reject(c, "cinematic");
+  c = resident; c.following = true; reject(c, "following-Jack");
+  c = resident; c.dead = true; reject(c, "dead");
+  c = resident; c.natural_h = false; reject(c, "not-natural-H");
+  c = resident; c.stable = false; reject(c, "not-stable-one-second");
+  c = resident; c.hero = true; reject(c, "hero-or-alias");
+  c = resident; c.rig_valid = false; reject(c, "invalid-rig-or-membership");
+  auto resident_tie = resident; resident_tie.actor = 199;
+  const AutoCandidate resident_ties[]{resident, resident_tie};
+  Check(SelectAuto(resident_ties) == 1, "resident tier ties keep deterministic actor ordering");
+  resident_tie.script_reference = true;
+  const AutoCandidate reclaimed[]{resident_tie, background};
+  Check(SelectAuto(reclaimed) == 1, "new resident claim revokes tier zero before fallback selection");
 }
 void NameTags() {
   using namespace kk::coop::nametag;
