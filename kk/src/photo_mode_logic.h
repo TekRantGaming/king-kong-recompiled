@@ -94,6 +94,7 @@ inline NrPhotoSettings ToRenderer(const Values& v, bool active) {
   s.brightness = v.brightness != v.player_brightness ? v.brightness : NAN;
   s.gamma = v.gamma != v.player_gamma ? v.gamma : NAN;
   s.seed = v.seed;
+  s.undim = 1.f;  // photo_mode.cpp sets the paused game's own (task 272)
   return s;
 }
 

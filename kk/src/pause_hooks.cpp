@@ -221,10 +221,28 @@ std::function<bool(int&, int&, std::vector<uint8_t>&)> g_grab;
 void SetFrameGrabber(std::function<bool(int&, int&, std::vector<uint8_t>&)> grab) { g_grab = std::move(grab); }
 
 namespace {
+// Photo mode (task 272): the paused game's dimming as one gain (0 not measured), and whether this pause's
+// measurement is over (measured, or not possible: a field of view changed first, not the native renderer).
+std::atomic<float> g_undim_measured{0.0f};
+std::atomic<bool> g_dim_known{true};
+}  // namespace
+
+float PhotoUndim() {
+  const float measured = g_undim_measured.load();
+  return measured >= 1.0f ? measured : 1.0f;  // not measured: left as it is (the dimming varies too much to guess)
+}
+
+bool PhotoDimKnown() { return g_dim_known.load(); }
+
+namespace {
 std::atomic<int> g_backdrop_fov{-1};  // kk_fov when the frame was kept
 // The paused game's brightness against play's (pause_backdrop_logic.h), measured once a pause (task 264).
 enum class Calibration { kToDo, kDone };
 Calibration g_calibration = Calibration::kDone;
+void SetCalibration(Calibration c) {
+  g_calibration = c;
+  g_dim_known = c == Calibration::kDone;
+}
 BrightnessLut g_lut;
 bool g_lut_ok = false;
 
@@ -267,8 +285,9 @@ bool Calibrate() {
   g_lut_ok = w == g_backdrop_w && h == g_backdrop_h && g_backdrop.size() == rgba.size() &&
              BuildBrightnessLut(g_backdrop.data(), rgba.data(), w, h, g_lut);
   if (g_lut_ok) {
+    g_undim_measured = float(MeanUndim(g_backdrop.data(), rgba.data(), w, h));
     REXLOG_INFO("KK pause: the paused game is drawn darker than play; frames taken again are brightened (x{:.2f} "
-                "at dark grey)", BrightnessLutGain(g_lut));
+                "at dark grey; photo mode x{:.2f})", BrightnessLutGain(g_lut), g_undim_measured.load());
   } else {
     REXLOG_WARN("KK pause: the paused game's brightness could not be measured");
   }
@@ -285,8 +304,9 @@ bool GrabBackdrop(bool paused = false) {
   const int fov = REXCVAR_GET(kk_fov);
   if (!CaptureFrame(paused, w, h, rgba)) return false;
   if (!paused) {
-    g_calibration = Calibration::kToDo;  // a new pause: measured again
+    SetCalibration(Calibration::kToDo);  // a new pause: measured again
     g_lut_ok = false;
+    g_undim_measured = 0.0f;
   } else if (g_lut_ok) {
     ApplyBrightnessLut(g_lut, rgba.data(), rgba.size() / 4);
   }
@@ -334,11 +354,11 @@ void ServiceBackdropFov() {
       EndRegrab();
     } else if (g_regrab_calibrates) {
       if (fov != g_backdrop_fov) {  // changed before it was measured: no curve this pause; the new view is kept
-        g_calibration = Calibration::kDone;
+        SetCalibration(Calibration::kDone);
         g_regrab_calibrates = false;
         g_regrab_since = NowMs();
       } else if (waited >= kRegrabWaitMs && (Calibrate() || waited > kRegrabGiveUpMs)) {
-        g_calibration = Calibration::kDone;
+        SetCalibration(Calibration::kDone);
         EndRegrab();
       }
     } else if (waited >= kRegrabWaitMs && (GrabBackdrop(true) || waited > kRegrabGiveUpMs)) {
@@ -355,11 +375,11 @@ void ServiceBackdropFov() {
   photo::Values cover_only;
   cover_only.hide_arms = false;
   if (!nr::kk::SetPhoto(photo::ToRenderer(cover_only, true))) {  // not the native renderer: shows after Resume
-    g_calibration = Calibration::kDone;
+    SetCalibration(Calibration::kDone);
     g_backdrop_fov = fov;
     return;
   }
-  if (!calibrate) g_calibration = Calibration::kDone;  // a new view before the measurement: none this pause
+  if (!calibrate) SetCalibration(Calibration::kDone);  // a new view before the measurement: none this pause
   g_regrab_calibrates = calibrate;
   g_regrab_since = NowMs();
 }
