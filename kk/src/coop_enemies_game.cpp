@@ -418,7 +418,9 @@ void EnemyBeforeLoad() {
   Get().ResetWorld(); PublishEnemyFrame({}); SetEnemyCounters({});
 }
 void EnemyAfterLoad(const uint8_t* b, uint32_t game) {
-  if (!Connected() || !PoseAddress(game, 28)) return;
+  // Record every load while co-op is on, not only while Connected: the host usually loads before the guest
+  // joins (Claude, run c18 17:53: "no-connected-load-identity"). Matching still waits for Connected.
+  if (!REXCVAR_GET(kk_coop_enabled) || !PoseAddress(game, 28)) return;
   auto& s = Get();
   const auto level = Load32(b, game+8), start = Load32(b, game+12);
   if (level < 100 || level > 100000 || start > 10000) return;
