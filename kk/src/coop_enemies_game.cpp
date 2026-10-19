@@ -36,6 +36,7 @@ REX_EXTERN(__imp__sub_82419C38);
 REX_EXTERN(__imp__sub_8261DE68);
 REX_EXTERN(__imp__sub_826A0920);
 REX_EXTERN(__imp__sub_82548BC0);
+REX_EXTERN(__imp__sub_82538B70);
 #if defined(KK_DEV_TOOLS)
 REX_EXTERN(__imp__sub_8254A8F8);
 REX_EXTERN(__imp__sub_82569A70);
@@ -418,6 +419,14 @@ struct State {
   }
 };
 State& Get() { static State s; return s; }
+std::optional<EnemyWorld> private_identity;
+std::map<uint64_t,uint32_t> private_spawner_sequences;
+struct PrivateSequences {
+  uint32_t shot=0, damage=0;
+  uint64_t epoch=0;
+  ShotValidator shots;
+  combat::StatusReplay status;
+} private_sequences;
 bool Connected() { return EnemyConnectionReady(); }
 bool Environment(const uint8_t* b, uint32_t w) {
   const auto& s = Get();
@@ -457,6 +466,7 @@ void Capture(const uint8_t* b, uint32_t w, bool initial = true) {
     const auto vars = Ptr(b, ai, 64, 1780);
     if (!spawner || !vars) continue;
     Spawner sp{key, ai, vars, 0, {}};
+    if (const auto old=private_spawner_sequences.find(key); old!=private_spawner_sequences.end()) sp.sequence=old->second;
     for (const auto off : {1592u, 1776u}) {
       const auto source = Ptr(b, vars, off, 32);
       if (source) sp.sources[source] = Mix(key, off); // authored template selector, not source pointer
@@ -913,6 +923,38 @@ void CombatBeforeAi(PPCContext& ctx, uint8_t* b) {
   }
 }
 #if defined(KK_DEV_TOOLS)
+void DevDie(PPCContext& ctx, uint8_t* b) {
+  struct Die {
+    double due=-1; bool done=false;
+    Die() {
+      const char* value=std::getenv("KK_DEV_DIE"); if (!value || !*value) return;
+      char* end=nullptr; const double t=std::strtod(value,&end);
+      if (end!=value && !*end && std::isfinite(t) && t>=0 && t<=3600) due=t;
+      else REXLOG_WARN("KK dev die: invalid KK_DEV_DIE, expected seconds in 0..3600");
+    }
+  };
+  static Die die;
+  if (die.done || die.due<0) return;
+  const double t=kk::DevSecondsSinceMenu(); if (t<die.due) return;
+  if (t>die.due+10) { die.done=true; REXLOG_WARN("KK dev die: expired waiting for Jack"); return; }
+  const auto h=ReadHumanStatus(b);
+  if (!h || h->condition==PlayerCondition::Dead || !JackReady(b) || !Scratch::CanUse(ctx)) return;
+  constexpr uint32_t pool=0x82C8EF30;
+  const auto count=Load32(b,pool+12);
+  const float duration=LoadF(b,0x820B0E48);
+  if (!count || count>4096 || Load32(b,pool+8)>=count || !Ptr(b,pool,0,count*116) ||
+      !std::isfinite(duration) || duration<=0 || duration>10) return;
+  Scratch scratch(ctx,b);
+  const auto result=scratch.Vec(0,0,0,0x100);
+  Store32(b,result,UINT32_MAX); Store32(b,result+4,0); StoreF(b,ctx.r1.u32+88,0);
+  ctx.r3.u64=result; ctx.r4.s64=-1; ctx.r5.u64=0x200; // native fatal flag, .29:826A0FAC
+  ctx.r6.u64=h->hero; ctx.r8.u64=h->hero; ctx.r9.u64=1000;
+  ctx.r10.u64=uint64_t(std::bit_cast<uint32_t>(1.f))<<32; ctx.f1.f64=duration;
+  auto& s=Get(); const bool injecting=s.injecting_damage; s.injecting_damage=true;
+  __imp__sub_8261DE68(ctx,b); s.injecting_damage=injecting;
+  die.done=Load32(b,result)!=UINT32_MAX && Load32(b,result+4)!=0;
+  if (die.done) REXLOG_INFO("KK dev die: at {:.2f} native fatal event queued for local Jack, flags=200; death must be observed",t);
+}
 void DevBait(PPCContext& ctx, uint8_t* b) {
   struct Bait {
     double due = -1;
@@ -1329,8 +1371,10 @@ void BeforeAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
 #if defined(KK_DEV_TOOLS)
   DevWakeTick(ctx, b, w);
   DevEnemyNear(b, w);
+  DevDie(ctx,b);
 #endif
   if (!REXCVAR_GET(kk_coop_enabled)) return;
+  SessionReviveBeforeAi(ctx,b);
   // Capture before connection, at the first AI pass of this load. Waiting for
   // the peer could otherwise hash actors that already moved locally.
   if (s.capture) Capture(b, w);
@@ -1434,11 +1478,40 @@ void Spawned(const uint8_t* b, uint32_t spawner, uint32_t source, uint32_t actor
   s.pending[actor] = {id, ai, matrix, LoadF(b, matrix+48), LoadF(b, matrix+52), LoadF(b, matrix+56)};
 }
 } // namespace
+std::optional<PlayerCondition> LocalPlayerCondition(const uint8_t* b) {
+  const auto h=ReadHumanStatus(b); return h ? std::optional{h->condition} : std::nullopt;
+}
+bool ReviveTeleport(PPCContext& ctx,uint8_t* b,const PlayerPose& partner) {
+  const auto h=ReadHumanStatus(b);
+  if (!h || h->condition!=PlayerCondition::Alive || !JackReady(b) ||
+      !ControllerSafe(b,h->hero) || !Scratch::CanUse(ctx)) return false;
+  const auto position=revive::Beside(partner);
+  Scratch scratch(ctx,b);
+  constexpr uint32_t globals[]={0x82CCBF64,0x82CCBF68,0x82CCBF6C,0x82CCBF70};
+  uint32_t saved[4]; for (unsigned i=0;i<4;++i) saved[i]=Load32(b,globals[i]);
+  const uint32_t trigger=ctx.r1.u32+0x100,dest=trigger+0x20,mat=trigger+0x40;
+  Store32(b,trigger+4,h->hero); Store32(b,trigger+8,dest); Store32(b,dest+12,mat);
+  const float fx=std::cos(partner.facing),fy=std::sin(partner.facing);
+  StoreF(b,mat,fy); StoreF(b,mat+4,-fx); StoreF(b,mat+16,-fx); StoreF(b,mat+20,-fy);
+  StoreF(b,mat+40,1); StoreF(b,mat+60,1);
+  StoreF(b,mat+48,position.x); StoreF(b,mat+52,position.y); StoreF(b,mat+56,position.z);
+  ctx.r3.u64=trigger; __imp__sub_82538B70(ctx,b);
+  for (unsigned i=0;i<4;++i) Store32(b,globals[i],saved[i]);
+  return true;
+}
 void EnemyBeforeLoad() {
 #if defined(KK_DEV_TOOLS)
   DevWakeBeforeLoad();
 #endif
   if (!REXCVAR_GET(kk_coop_enabled)) return;
+  private_identity=SessionPrivateReload() ? std::optional{Get().identity} : std::nullopt;
+  private_spawner_sequences.clear();
+  private_sequences={};
+  if (private_identity) {
+    const auto& s=Get();
+    for (const auto& [actor,sp] : s.spawners) private_spawner_sequences[sp.key]=sp.sequence;
+    private_sequences={s.next_shot,s.next_damage,s.combat_epoch,s.shot_validator,s.status_replay};
+  }
   ClearCombat();
   Get().ResetWorld(); PublishEnemyFrame({}); SetEnemyCounters({}); SetShotCounters({});
 }
@@ -1449,7 +1522,19 @@ void EnemyAfterLoad(const uint8_t* b, uint32_t game) {
   auto& s = Get();
   const auto level = Load32(b, game+8), start = Load32(b, game+12);
   if (level < 100 || level > 100000 || start > 10000) return;
-  s.game = game; s.identity = {level, start, ++s.visits[{level, start}]};
+  s.game = game;
+  // A private player recovery is the same logical world/visit. Native actor
+  // pointers are rebuilt, but the living peer's events keep their scope.
+  if (private_identity && private_identity->level==level) {
+    s.identity=*private_identity; s.next_shot=private_sequences.shot;
+    s.shot_validator=private_sequences.shots;
+    if (EnemyLinkSnapshot().role==Role::Host) {
+      s.next_damage=private_sequences.damage; s.combat_epoch=private_sequences.epoch;
+      s.status_replay=private_sequences.status;
+    }
+  }
+  else s.identity = {level, start, ++s.visits[{level, start}]};
+  private_identity.reset();
   s.capture = ValidEnemyWorld(s.identity);
 }
 void EnemyGameFrame() {
@@ -1475,6 +1560,8 @@ bool EnemyCombatReference(const uint8_t* b, uint32_t owner, uint32_t ai, uint32_
 }
 bool EnemyPartnerCombatReady() {
   const auto& s = Get(); const auto& p = s.status_replay.Status();
+  const auto flow=SessionFlowSnapshot();
+  if (flow.active && flow.partner_life.downed) return false;
   return s.link.role == Role::Host && s.prepared && Connected() && s.combat_epoch == s.link.epoch &&
       p.world == s.identity && p.incarnation && p.condition != PlayerCondition::Dead &&
       combat::Fresh(s.partner_status_time, Now()) && s.link.partner && s.link.partner->level == s.identity.level;

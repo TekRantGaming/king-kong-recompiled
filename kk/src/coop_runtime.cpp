@@ -31,6 +31,7 @@
 #include "ui_paint.h"
 #include "coop_enemies_game.h"
 #include "coop_partner_body.h"
+#include "launcher_text.h"
 
 #if defined(KK_DEV_TOOLS)
 REXCVAR_DEFINE_STRING(kk_coop_policy_override, "", "KK/Debug", "Chapter policies: entry:together|solo|observer,... (same on both peers)")
@@ -241,6 +242,18 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
         freecam::HideGameHud() || REXCVAR_GET(kk_hide_hud) || play::CoverScreen() ||
         !play::SessionActive() || play::StartLevelLoading() || play::PauseMenuOpen() || play::GamePausePageUp()) return;
     const View v = CurrentView();  // UI reads copied values only, never guest memory.
+    const auto life_flow=SessionFlowSnapshot();
+    if (notice_epoch_!=v.epoch || notice_generation_!=life_flow.world.generation) {
+      notice_epoch_=v.epoch; notice_generation_=life_flow.world.generation;
+      notice_number_=0; notice_until_=0;
+    }
+    const auto& life=life_flow.partner_life;
+    if (life.notice!=notice_number_) {
+      notice_number_=life.notice; notice_until_=Now()+4;
+      notice_=text::F(life.downed ? "{0} is down" : "{0} is back",
+          {v.partner_name.empty() ? "Partner" : v.partner_name});
+    }
+    if (Now()<notice_until_) ImGui::GetForegroundDrawList()->AddText(ImVec2(36,40),IM_COL32(240,240,240,255),notice_.c_str());
     if (v.state == SessionState::Idle) return;
     if (Now() - v.updated > .5 && v.state != SessionState::Ended) return;
 #if defined(KK_DEV_TOOLS)
@@ -338,6 +351,11 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
     }
     dl->PopClipRect();
   }
+ private:
+  uint64_t notice_epoch_=0, notice_number_=0;
+  uint32_t notice_generation_=0;
+  double notice_until_=0;
+  std::string notice_;
 };
 }  // namespace
 void Configure(const std::filesystem::path& user_data) {

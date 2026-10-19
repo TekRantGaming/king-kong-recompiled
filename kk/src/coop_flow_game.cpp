@@ -1,5 +1,6 @@
 #include "coop_runtime.h"
 #include "coop_pose.h"
+#include "coop_enemies_game.h"
 #include "play_internal.h"
 #include "hfr.h"
 #include "settings.h"
@@ -28,6 +29,12 @@ std::atomic<bool> move_offer{false};
 uint32_t loaded_generation=0, loading_generation=0, recorded_checkpoint=0;
 uint64_t applied_progress=0;
 BehindRule behind;
+revive::Recovery recovery;
+uint32_t recovery_generation=0, life_number=0, local_checkpoint=0;
+uint64_t life_incarnation=1;
+bool private_load=false, private_request=false, reload_sent=false;
+bool sent_downed=false, life_sent=false;
+double next_life=0;
 double Now() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 bool EffectiveFlag(const char* name,const mods::Plan& plan) {
   auto value=rex::cvar::GetFlagByName(name);
@@ -38,7 +45,20 @@ bool EffectiveFlag(const char* name,const mods::Plan& plan) {
 }
 constexpr const char* cheats[]={"kk_cheat_healing","kk_cheat_one_hit","kk_cheat_ammo","kk_cheat_spears",
     "kk_cheat_revolver","kk_cheat_machine_gun","kk_cheat_shotgun","kk_cheat_sniper"};
-void Send(MessageType type, FlowEvent f) { Message m; m.type=type; m.flow=f; SubmitFlowMessage(std::move(m)); }
+bool Send(MessageType type, FlowEvent f) { Message m; m.type=type; m.flow=f; return SubmitFlowMessage(std::move(m)); }
+void PublishLife(const FlowView& v, bool down, double now) {
+  if (life_sent && down==sent_downed && now<next_life) return;
+  if (life_number==UINT32_MAX) { Send(MessageType::FlowAbort,v.world); return; }
+  Message m; m.type=down ? MessageType::PlayerDowned : MessageType::PlayerRevived;
+  m.life={v.world,life_incarnation,life_number+1,local_checkpoint};
+  if (SubmitFlowMessage(std::move(m))) {
+    ++life_number; life_sent=true; sent_downed=down; next_life=now+.5;
+  }
+}
+bool PartnerAliveHere(const FlowView& v, const EnemyLink& link, double now) {
+  return link.connected && v.partner_life.Fresh(now) && !v.partner_life.downed &&
+      link.partner && link.partner->level==v.world.level;
+}
 void RecordProgress(const FlowView& v) {
   if (v.host || v.completed==applied_progress) return;
   if (play::ApplyTogetherProgress(personal,progress_slot,v.completed)) applied_progress=v.completed;
@@ -81,6 +101,7 @@ void MoveToPartner() {
 }
 void StopSessionFlow() { stopping=true; }
 bool SessionInProcess() { return launched; }
+bool SessionPrivateReload() { return private_load; }
 void ApplySessionSettings() {
   if (!launched) return;
   const auto v=SessionFlowSnapshot();
@@ -159,9 +180,35 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
     play::ReturnToLauncher("co-op session ended","play"); Store32(base,g+4,0); return false;
   }
   RecordProgress(v);
-  if (v.world.generation>loaded_generation) { AskLoad(base,g,v); return false; }
+  if (v.world.generation>loaded_generation) {
+    private_load=private_request=false;
+    AskLoad(base,g,v); return false;
+  }
+  // An authored transition or the user's Quit request takes precedence over
+  // recovery. Its normal flow handler below advances/ends the session.
+  if (private_request && Load32(base,g+4)==0) {
+    private_request=false;
+    const auto link=EnemyLinkSnapshot();
+    if (!PartnerAliveHere(v,link,Now())) {
+      recovery.phase=revive::Phase::ReloadBoth;
+      return true; // frame hook queues C24 reload; do not run a stale private request
+    }
+    // Deliberate fallback: native full load restores the authored player tracks,
+    // health, control, camera and checkpoint inventory. No death-state writes.
+    // The host's Checkpoint message is newer than an older heartbeat. If the
+    // host is dead, use the living guest's latest observed checkpoint instead.
+    local_checkpoint=v.host ? v.partner_life.life.checkpoint : v.checkpoint;
+    Store32(base,g+8,v.world.level); Store32(base,g+12,local_checkpoint);
+    Store32(base,g+4,1); Store32(base,g+0x5F1C,0); Store32(base,g+0x5668,0);
+    Store32(base,0x828E3B48,1);
+    Store32(base,0x82CCAA80,0); Store32(base,0x82CCBFD4,0);
+    private_load=true; move_offer=false;
+    REXLOG_INFO("KK co-op revive: private load generation {} level {} partner checkpoint {}",v.world.generation,v.world.level,local_checkpoint);
+    return false; // bypass the shared LevelChange/Loaded barrier for this load
+  }
   if (!v.host && v.checkpoint!=recorded_checkpoint && v.policy==ChapterPolicy::Together) {
     recorded_checkpoint=v.checkpoint; Store32(base,g+12,v.checkpoint);
+    local_checkpoint=v.checkpoint;
     const auto saved=ctx; __imp__sub_82413190(ctx,base); ctx=saved;
   }
   if (Load32(base,g+4)!=0) {
@@ -193,6 +240,11 @@ bool SessionBeforeGo(PPCContext& ctx,uint8_t* base,uint32_t g) {
   return false;
 }
 void SessionAfterGo(uint8_t* base,uint32_t g,bool loaded) {
+  if (private_load && loaded) {
+    if (hfr::Load32(base,g+0x18)==SessionFlowSnapshot().world.level) recovery.Loaded();
+    else recovery.phase=revive::Phase::ReloadBoth;
+    return; // living partner keeps simulating; no Loaded or LoadRelease
+  }
   if (!launched || !loaded || !loading_generation) return;
   auto v=SessionFlowSnapshot();
   if (v.world.generation!=loading_generation) return;
@@ -208,18 +260,59 @@ void SessionAfterGo(uint8_t* base,uint32_t g,bool loaded) {
 void SessionCheckpoint(uint32_t level,uint32_t checkpoint) {
   if (!launched) return;
   const auto v=SessionFlowSnapshot();
+  if (v.phase==FlowPhase::Playing && v.world.level==level && checkpoint<=10000) local_checkpoint=checkpoint;
   if (v.host && v.phase==FlowPhase::Playing && v.world.level==level && checkpoint<=10000)
     Send(MessageType::Checkpoint,{v.world.generation,level,checkpoint,v.completed});
 }
 void SessionReloadFrame(uint8_t* base) {
-  if (!launched || !base) return;
+  if (!REXCVAR_GET(kk_coop_enabled) || !launched || !base) return;
   const auto v=SessionFlowSnapshot();
   if (!v.active || v.phase!=FlowPhase::Playing) return;
+  if (recovery_generation!=v.world.generation) {
+    recovery_generation=v.world.generation; recovery={}; private_load=private_request=reload_sent=false;
+    local_checkpoint=v.checkpoint;
+    ++life_incarnation; life_number=0; life_sent=false; next_life=0;
+  }
+  const double now=Now();
+  const bool reset=hfr::Load32(base,0x82CCAA80)==1 && hfr::Load32(base,0x82CCBFD4)<=30;
+  if (v.policy==ChapterPolicy::Together) {
+    const auto condition=LocalPlayerCondition(base);
+    const bool dead=condition && *condition==PlayerCondition::Dead;
+    const auto link=EnemyLinkSnapshot();
+    const auto action=recovery.Step(dead,PartnerAliveHere(v,link,now),v.partner_life.downed,reset,now);
+    if (condition || recovery.Downed()) PublishLife(v,dead || recovery.Downed(),now);
+    if (action==revive::Action::LoadLocal) private_request=true;
+    if (action==revive::Action::ReloadBoth) {
+      hfr::Store32(base,0x82CCAA80,0); hfr::Store32(base,0x82CCBFD4,0);
+      if (!reload_sent) {
+        reload_sent=Send(MessageType::ReloadRequest,v.world);
+        if (reload_sent) REXLOG_INFO("KK co-op revive: C24 reload, both dead or partner unavailable");
+      }
+      return;
+    }
+    if (recovery.Downed()) {
+      // The original death track still runs/fades. Suppress every repeated
+      // native reset until the private load or coordinated recovery owns it.
+      hfr::Store32(base,0x82CCAA80,0); hfr::Store32(base,0x82CCBFD4,0);
+      return;
+    }
+  }
   // sub_82857F28 calls the frame-time hook, then consumes this reset flag.
   // Intercept here, before its re-init, not later in uni_go after consumption.
-  if (hfr::Load32(base,0x82CCAA80)!=1 || hfr::Load32(base,0x82CCBFD4)>30) return;
+  if (!reset) return;
   hfr::Store32(base,0x82CCAA80,0); hfr::Store32(base,0x82CCBFD4,0);
   Send(MessageType::ReloadRequest,v.world);
   REXLOG_INFO("KK co-op flow: death/reload fallback, both reload the host checkpoint");
+}
+void SessionReviveBeforeAi(PPCContext& ctx,uint8_t* base) {
+  if (!REXCVAR_GET(kk_coop_enabled) || !launched || recovery.phase!=revive::Phase::Placing) return;
+  const auto v=SessionFlowSnapshot(); const auto link=EnemyLinkSnapshot();
+  if (!v.active || v.phase!=FlowPhase::Playing || v.world.generation!=recovery_generation ||
+      !PartnerAliveHere(v,link,Now())) { recovery.phase=revive::Phase::ReloadBoth; return; }
+  if (!ReviveTeleport(ctx,base,*link.partner)) return;
+  recovery.Placed(); private_load=false;
+  ++life_incarnation; life_number=0; life_sent=false;
+  PublishLife(v,false,Now());
+  REXLOG_INFO("KK co-op revive: native load and teleport complete, 1.5 behind partner at partner height");
 }
 }  // namespace kk::coop

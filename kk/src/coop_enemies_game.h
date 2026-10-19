@@ -5,6 +5,8 @@
 #include <optional>
 
 namespace kk::coop {
+std::optional<PlayerCondition> LocalPlayerCondition(const uint8_t* base);
+bool ReviveTeleport(PPCContext& ctx, uint8_t* base, const PlayerPose& partner);
 void EnemyBeforeLoad();
 void EnemyAfterLoad(const uint8_t* base, uint32_t game);
 void EnemyGameFrame();

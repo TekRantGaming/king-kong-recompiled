@@ -68,20 +68,4 @@ class StatusReplay {
   EnemyWorld world_;
   PlayerStatus status_;
 };
-// The native teleport path is known, but a safe reset of death tracks/control is
-// not. Production therefore retains C24's both-reload fallback. Keep the delay
-// policy explicit so a future audited native revive cannot revive both-dead.
-enum class DeathAction { None, Wait, Revive, ReloadBoth };
-class DeathPolicy {
- public:
-  DeathAction Step(bool local_dead, bool partner_dead, double now, bool revive_safe = false) {
-    if (!std::isfinite(now)) return DeathAction::None;
-    if (!local_dead) { since_ = -1; return DeathAction::None; }
-    if (partner_dead || !revive_safe) return DeathAction::ReloadBoth;
-    if (since_ < 0 || now < since_) since_ = now;
-    return now-since_ >= 3 ? DeathAction::Revive : DeathAction::Wait;
-  }
- private:
-  double since_ = -1;
-};
 } // namespace kk::coop::combat
