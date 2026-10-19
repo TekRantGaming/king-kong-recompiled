@@ -159,6 +159,13 @@ class GameRenderer {
     // pre-267 behaviour; --native_pipeline_must_wait_ms=-1). pipeline_wait (block-all) never has a cap.
     double pipeline_must_wait_ms = 4.0;
     double pipeline_loading_wait_ms = 100.0;
+    // Task 280 (chapter-start texture burst): the chapter's learned/shipped resources (resource
+    // lists, game_preload.cpp) prepared ahead of their first draw. chapter_preload_mib: new uploads per
+    // chapter (loading screen + trickle) in MiB; 64 = before task 280; GPU budget pressure keeps 64.
+    // chapter_trickle_mib: after the loading screen, for the 10 s the list is learned from, MiB of
+    // still-missing listed resources prepared per frame (0 = only during loading, before task 280).
+    uint32_t chapter_preload_mib = 64;
+    uint32_t chapter_trickle_mib = 0;
     // The driver's pipeline cache (SetDriverPipelineCache) is saved when the workers run out of work
     // with at least this many new pipelines made since the last save, or with any after
     // driver_cache_save_seconds. A rebuild (the file was another driver's) is saved when the workers
@@ -256,6 +263,7 @@ class GameRenderer {
     uint64_t early_upload_bytes = 0, early_upload_batches = 0;
     uint64_t prepared_resources = 0, prepared_discarded = 0;
     uint64_t preloaded_resources = 0, preload_hits = 0, preload_hash_misses = 0, preload_bytes = 0;
+    uint64_t trickled_resources = 0, trickle_bytes = 0;  // task 280: preloaded after the loading screen
     double resource_prepare_ms = 0;  // render-thread wall time of joined first-use batches
     uint64_t draw_constant_uploads = 0, draw_constant_identical = 0;
     // Draws (and upscaler motion draws) recorded in one list since it opened or last completed:
@@ -698,6 +706,23 @@ class GameRenderer {
   uint64_t resource_poll_frame_ = ~0ull, preload_reserved_bytes_ = 0;
   std::chrono::steady_clock::time_point resource_learn_start_;
   static constexpr uint64_t kChapterPreloadBytes = 64ull << 20;
+  // Task 280: the new-upload cap of this chapter's preparation (options_.chapter_preload_mib, 64 MiB
+  // under GPU budget pressure) and the gameplay trickle window after its loading screen.
+  uint64_t ChapterPreloadBytes() const;
+  std::chrono::steady_clock::time_point resource_trickle_until_;
+  bool resource_trickle_ = false, resource_sweep_ = false;
+  static constexpr int kChapterSweepMs = 40;
+  // Task 280 diagnostics: the guest textures the first gameplay frames after a loading screen still
+  // upload at their draw (log lines "chapter start frame"), and whether the chapter list had them.
+  struct StartUploads {
+    uint32_t frames_left = 0, frame = 0;
+    uint32_t textures = 0, listed = 0, prepared = 0;
+    uint64_t bytes = 0, listed_bytes = 0;
+    double texture_ms = 0, prepare_ms = 0;
+    uint64_t trickled = 0, trickle_bytes = 0;
+  } start_uploads_;
+  void NoteStartUpload(const kknr::TextureFetch& fetch, uint64_t bytes, bool prepared);
+  void EndStartUploadFrame();
   std::unique_ptr<class ResourceUploadWorkers> resource_upload_workers_;
   std::atomic<uint64_t> resource_revision_{0};
   void TryPrepareResourceUploads(nvrhi::ICommandList* cl);

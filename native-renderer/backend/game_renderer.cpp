@@ -980,6 +980,7 @@ void GameRenderer::EndFrame() {
   if (scene_gi_ || scene_lighting_ || scene_cel_)
     for (auto& [key, target] : targets_) if (target) target->clear_only = false;
   ProfileResources();
+  EndStartUploadFrame();
   FlushUploads();
   if (upload_batch_) upload_batch_->EndFrame();
   if (tessellation_timer_) tessellation_timer_->FrameEnd();

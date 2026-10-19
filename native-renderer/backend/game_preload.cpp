@@ -95,6 +95,8 @@ void GameRenderer::PreloadResources(nvrhi::ICommandList* cl, bool loading, uint3
     preload_level_ = level; preload_start_ = start;
     preload_cursor_ = 0; preload_reserved_bytes_ = 0;
     resource_learning_ = false;
+    resource_trickle_ = false;
+    start_uploads_ = {};
     resource_cache_dirty_ = false;
     learned_resources_.clear(); preload_records_.clear();
     resource_seen_.clear();
@@ -134,9 +136,34 @@ void GameRenderer::PreloadResources(nvrhi::ICommandList* cl, bool loading, uint3
     // the map/start captured while that request's loading screen was up.
     resource_learning_ = !resource_cache_path_.empty();
     resource_learn_start_ = now;
-    Logf(LogLevel::kInfo, "rexgpu-native: resource loading ended: level %u start %u, %llu resources, %llu bytes (run totals)",
+    // Task 280: how much of the chapter's list is on the GPU when its first gameplay frame starts.
+    size_t textures = 0, resident = 0;
+    uint64_t missing_bytes = 0;
+    for (const auto& r : preload_records_) {
+      if (r.kind != ResourcePreloadRecord::Texture) continue;
+      ++textures;
+      const auto fetch = kknr::TextureFetch::FromWords(r.words.data());
+      const auto* known = textures_.Find(fetch);
+      if (known && known->host) { ++resident; continue; }
+      const auto ranges = kknr::GetTextureRanges(fetch, TextureOptions());
+      missing_bytes += uint64_t(ranges.base_bytes) + ranges.mip_bytes;
+    }
+    resource_trickle_ = options_.chapter_trickle_mib > 0 && !preload_records_.empty() &&
+                        preload_reserved_bytes_ < ChapterPreloadBytes();
+    resource_trickle_until_ = now + std::chrono::seconds(10);
+    resource_sweep_ = resource_trickle_;
+    start_uploads_ = {};
+    start_uploads_.frames_left = 240;
+    start_uploads_.texture_ms = stats_.texture_ms;
+    start_uploads_.prepare_ms = stats_.resource_prepare_ms;
+    start_uploads_.trickled = stats_.trickled_resources;
+    start_uploads_.trickle_bytes = stats_.trickle_bytes;
+    Logf(LogLevel::kInfo, "rexgpu-native: resource loading ended: level %u start %u, %llu resources, %llu bytes (run totals); "
+         "this chapter: %.1f of %.0f MiB prepared, listed textures resident %zu of %zu (%.1f MiB guest bytes missing)%s",
          preload_level_, preload_start_, static_cast<unsigned long long>(stats_.preloaded_resources),
-         static_cast<unsigned long long>(stats_.preload_bytes));
+         static_cast<unsigned long long>(stats_.preload_bytes), double(preload_reserved_bytes_) / 1048576.0,
+         double(ChapterPreloadBytes()) / 1048576.0, resident, textures, double(missing_bytes) / 1048576.0,
+         resource_trickle_ ? "; trickle on" : "");
   }
   resource_loading_ = loading;
   UpdateEffects();
@@ -145,31 +172,126 @@ void GameRenderer::PreloadResources(nvrhi::ICommandList* cl, bool loading, uint3
     resource_learning_ = false;
     SaveResourcePreload();
   }
-  if (!loading || preload_records_.empty() || preload_reserved_bytes_ >= kChapterPreloadBytes) return;
+  if (resource_trickle_ && (loading || now >= resource_trickle_until_ ||
+                            preload_reserved_bytes_ >= ChapterPreloadBytes())) resource_trickle_ = false;
+  const bool trickle = !loading && resource_trickle_;
+  if ((!loading && !trickle) || preload_records_.empty() || preload_reserved_bytes_ >= ChapterPreloadBytes()) return;
 
   ProcessInvalidations();
   FlushUploads();
   // Limit polling/copying/hashing as well as successful uploads. A mismatch is
   // retried on a later loading frame, so bytes still being loaded can become a
   // candidate without a write-watch callback doing work in a fault handler.
+  // Task 280: resources already on the GPU are passed over without using the allowance (a lookup only).
+  // Returns how many listed resources are still missing; requests gets the next ones that fit.
+  auto collect = [&](uint64_t frame_bytes, size_t frame_requests, std::vector<ResourcePreloadRecord>& requests) {
+    uint64_t scanned = 0;
+    size_t missing = 0;
+    for (size_t n = 0; n < preload_records_.size() && requests.size() < frame_requests; ++n) {
+      const auto& r = preload_records_[preload_cursor_];
+      uint64_t bytes = 0;
+      bool resident = false;
+      if (r.kind == ResourcePreloadRecord::Texture) {
+        const auto fetch = kknr::TextureFetch::FromWords(r.words.data());
+        const auto* known = textures_.Find(fetch);
+        resident = known && (known->host || known->gpu_written);
+        const auto ranges = kknr::GetTextureRanges(fetch, TextureOptions());
+        bytes = ((uint64_t(ranges.base_bytes) + 4095) & ~uint64_t(4095)) +
+                ((uint64_t(ranges.mip_bytes) + 4095) & ~uint64_t(4095));
+      } else {
+        const bool index = r.kind != ResourcePreloadRecord::Vertex;
+        const auto* known = (index ? index_buffers_ : vertex_buffers_)
+            .Find(r.words[0], r.words[1], index ? kknr::IndexConversionId(r.kind == ResourcePreloadRecord::Index32) : 0);
+        resident = known && known->host;
+        bytes = (uint64_t(r.words[1]) + 4095) & ~uint64_t(4095);
+      }
+      if (resident) {
+        preload_cursor_ = (preload_cursor_ + 1) % preload_records_.size();
+        continue;
+      }
+      ++missing;
+      if (bytes <= frame_bytes && bytes > frame_bytes - scanned) break;
+      preload_cursor_ = (preload_cursor_ + 1) % preload_records_.size();
+      if (!bytes || bytes > frame_bytes) continue;
+      scanned += bytes;
+      requests.push_back(r);
+    }
+    return missing;
+  };
   std::vector<ResourcePreloadRecord> requests;
-  uint64_t scanned = 0;
-  for (size_t n = 0; n < preload_records_.size() && requests.size() < 32; ++n) {
-    const auto& r = preload_records_[preload_cursor_];
-    uint64_t bytes = 0;
-    if (r.kind == ResourcePreloadRecord::Texture) {
-      const auto fetch = kknr::TextureFetch::FromWords(r.words.data());
-      const auto ranges = kknr::GetTextureRanges(fetch, TextureOptions());
-      bytes = ((uint64_t(ranges.base_bytes) + 4095) & ~uint64_t(4095)) +
-              ((uint64_t(ranges.mip_bytes) + 4095) & ~uint64_t(4095));
-    } else bytes = (uint64_t(r.words[1]) + 4095) & ~uint64_t(4095);
-    if (bytes <= UploadBatch::kFrameBytes && bytes > UploadBatch::kFrameBytes - scanned) break;
-    preload_cursor_ = (preload_cursor_ + 1) % preload_records_.size();
-    if (!bytes || bytes > UploadBatch::kFrameBytes) continue;
-    scanned += bytes;
-    requests.push_back(r);
+  if (!trickle) {
+    collect(UploadBatch::kFrameBytes, 32, requests);
+    PrepareResourceRequests(cl, requests, true);
+    return;
   }
-  PrepareResourceRequests(cl, requests, true);
+  const uint64_t before = stats_.preload_bytes, resources = stats_.preloaded_resources;
+  if (resource_sweep_) {
+    // The first gameplay frame: the game has finished writing the chapter, so what the loading screen
+    // could not match yet is prepared now in full batches (all workers at once) before this frame's
+    // draws, instead of draw by draw. Bounded by time, the chapter cap and one pass over the list.
+    resource_sweep_ = false;
+    const auto sweep_start = std::chrono::steady_clock::now();
+    for (size_t pass = 0; pass <= preload_records_.size() / 32 + 1; ++pass) {
+      requests.clear();
+      if (!collect(UploadBatch::kFrameBytes, 32, requests) || requests.empty()) break;
+      const uint64_t done = stats_.preloaded_resources + stats_.prepared_discarded + stats_.preload_hash_misses;
+      PrepareResourceRequests(cl, requests, true);
+      FlushUploads();
+      if (stats_.preloaded_resources + stats_.prepared_discarded + stats_.preload_hash_misses == done ||
+          preload_reserved_bytes_ >= ChapterPreloadBytes() ||
+          std::chrono::steady_clock::now() - sweep_start >= std::chrono::milliseconds(kChapterSweepMs)) break;
+    }
+  } else {
+    const size_t missing = collect(std::min<uint64_t>(uint64_t(options_.chapter_trickle_mib) << 20,
+                                                      UploadBatch::kFrameBytes), 8, requests);
+    if (!missing) {
+      resource_trickle_ = false;  // everything listed is on the GPU (or larger than the allowance)
+      return;
+    }
+    PrepareResourceRequests(cl, requests, true);
+  }
+  stats_.trickled_resources += stats_.preloaded_resources - resources;
+  stats_.trickle_bytes += stats_.preload_bytes - before;
+}
+
+uint64_t GameRenderer::ChapterPreloadBytes() const {
+  if (pack_pressure_) return kChapterPreloadBytes;
+  return std::max<uint64_t>(kChapterPreloadBytes, uint64_t(options_.chapter_preload_mib) << 20);
+}
+
+void GameRenderer::NoteStartUpload(const kknr::TextureFetch& fetch, uint64_t bytes, bool prepared) {
+  if (!start_uploads_.frames_left || resource_loading_) return;
+  ++start_uploads_.textures;
+  start_uploads_.bytes += bytes;
+  if (prepared) ++start_uploads_.prepared;
+  const auto record = ResourcePreloadRecord::Tex(fetch);
+  for (const auto& r : preload_records_) if (r.SameResource(record)) {
+    ++start_uploads_.listed;
+    start_uploads_.listed_bytes += bytes;
+    break;
+  }
+}
+
+void GameRenderer::EndStartUploadFrame() {
+  StartUploads& s = start_uploads_;
+  if (!s.frames_left || resource_loading_) return;
+  --s.frames_left;
+  ++s.frame;
+  const double tex = stats_.texture_ms - s.texture_ms, prep = stats_.resource_prepare_ms - s.prepare_ms;
+  const uint64_t trickled = stats_.trickled_resources - s.trickled, trickle_bytes = stats_.trickle_bytes - s.trickle_bytes;
+  if (s.textures || trickled || tex + prep >= 2.0) {
+    Logf(LogLevel::kInfo,
+         "rexgpu-native: chapter start frame %u: %u textures uploaded at their draw (%u batched), %.2f MiB, "
+         "%u of them listed (%.2f MiB); %.1f ms textures, %.1f ms prepare; trickle %llu resources %.2f MiB",
+         s.frame, s.textures, s.prepared, double(s.bytes) / 1048576.0, s.listed, double(s.listed_bytes) / 1048576.0,
+         tex, prep, static_cast<unsigned long long>(trickled), double(trickle_bytes) / 1048576.0);
+  }
+  s.textures = s.listed = s.prepared = 0;
+  s.bytes = s.listed_bytes = 0;
+  s.texture_ms = stats_.texture_ms;
+  s.prepare_ms = stats_.resource_prepare_ms;
+  s.trickled = stats_.trickled_resources;
+  s.trickle_bytes = stats_.trickle_bytes;
 }
 
 }  // namespace nr
