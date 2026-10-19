@@ -99,18 +99,22 @@ class Udp final : public DirectUdpTransport {
     const int exclusive=1;
     if (setsockopt(socket_,SOL_SOCKET,SO_EXCLUSIVEADDRUSE,reinterpret_cast<const char*>(&exclusive),sizeof(exclusive))!=0) return;
 #endif
+    bool routed_join=false;
     if (!options_.host) {
       peer_=local; peer_length_=length; has_address_=true;
-      // Joining loopback stays loopback. Public joins use the matching local family.
+      // Joining loopback stays explicitly loopback. Public joins let UDP connect select
+      // one local route/interface instead of opening a wildcard listener.
       if (family==AF_INET) {
         auto& a=reinterpret_cast<sockaddr_in&>(local); a.sin_port=0;
-        if ((ntohl(a.sin_addr.s_addr)>>24)!=127) a.sin_addr.s_addr=htonl(INADDR_ANY);
+        routed_join=(ntohl(a.sin_addr.s_addr)>>24)!=127;
       } else {
         auto& a=reinterpret_cast<sockaddr_in6&>(local); a.sin6_port=0;
-        if (!IN6_IS_ADDR_LOOPBACK(&a.sin6_addr)) { a.sin6_addr=in6addr_any; a.sin6_scope_id=0; }
+        routed_join=!IN6_IS_ADDR_LOOPBACK(&a.sin6_addr);
       }
     }
-    if (bind(socket_,reinterpret_cast<sockaddr*>(&local),length)!=0) return;
+    if (routed_join) {
+      if (connect(socket_,reinterpret_cast<const sockaddr*>(&peer_),peer_length_)!=0) return;
+    } else if (bind(socket_,reinterpret_cast<sockaddr*>(&local),length)!=0) return;
     AddressLength bound_length=sizeof(local);
     if (getsockname(socket_,reinterpret_cast<sockaddr*>(&local),&bound_length)!=0) return;
     local_port_=family==AF_INET ? ntohs(reinterpret_cast<sockaddr_in&>(local).sin_port) :
