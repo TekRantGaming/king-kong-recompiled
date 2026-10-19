@@ -1322,7 +1322,7 @@ void PartnerBodyBeforeAi(PPCContext& ctx, uint8_t* b, uint32_t w) {
     return;
   }
   if (Opt().partner) {
-    PartnerReady(b, w);
+    if (!PartnerReady(b, w)) return;
     if (s.updated_frame == s.frame || photo::Active()) return;
   }
   s.dt = FrameTime(b);

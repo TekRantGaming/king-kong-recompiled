@@ -153,22 +153,34 @@ void LogRegistry(const uint8_t* b) {
   for (const auto& [actor, n] : e.members) {
     if (!Range(actor, 32)) continue;
     const auto observation = s.humans.find(actor);
-    Rig r;
-    const bool intact = ReadRig(b, actor, r);
-    const auto model = Ptr(b, r.ai, 0, 4);
+    const auto spawner = s.spawners.find(actor);
+    // Registry membership does not prove a human animation/AI layout. In the
+    // raft chapter, decoding an unrelated actor followed an unmapped pointer.
+    if (observation == s.humans.end() && spawner == s.spawners.end()) {
+      ++logged_other; continue;
+    }
+    const auto ai = Ptr(b, Ptr(b, actor, 24, 8), 4, 88);
+    const auto current_vars = Ptr(b, ai, 64, 8);
+    if (!ai || !current_vars ||
+        (observation != s.humans.end() && (ai != observation->second.rig.ai || current_vars != observation->second.rig.vars)) ||
+        (spawner != s.spawners.end() && (ai != spawner->second.ai || current_vars != spawner->second.vars))) {
+      ++logged_other; continue;
+    }
+    const auto model = Ptr(b, ai, 0, 4);
     const bool h_model = human_models.count(model) != 0, spawner_model = spawner_models.count(model) != 0;
-    const auto vars_bytes = VarsSize(b, r.ai);
-    if (spawner_model && vars_bytes >= 1780 && vars_bytes <= 1024 * 1024 && Ptr(b, r.ai, 64, 1780)) {
+    const auto vars_bytes = VarsSize(b, ai);
+    const auto vars = Ptr(b, ai, 64, 1780);
+    if (spawner != s.spawners.end() && vars == spawner->second.vars &&
+        vars_bytes >= 1780 && vars_bytes <= 1024 * 1024 && vars) {
       if (logged_spawners++ < 128) for (uint32_t off : {1592u, 1776u})
         REXLOG_INFO("PUPPET registry spawner owner={:08X} ai={:08X} model={:08X} vars-offset={} source={:08X} init-observed={} registered=true scheduled={}",
-            actor, r.ai, model, off, Load32(b, r.vars + off), s.spawners.count(actor) != 0, e.scheduled.count(actor) != 0);
+            actor, ai, model, off, Load32(b, vars + off), true, e.scheduled.count(actor) != 0);
     }
-    // Also expose rig-bearing non-H actors without inventing family/model IDs.
-    if (observation == s.humans.end() && !h_model && !spawner_model && !Ptr(b, actor, 20, 16)) continue;
-    if (observation != s.humans.end() || h_model) { if (logged_humans++ >= 256) continue; }
-    else if (logged_other++ >= 128) continue;
-    bool tracks_valid = true;
-    if (!intact) { r.tracks.clear(); tracks_valid = ReadTracks(b, r); }
+    if (observation == s.humans.end()) continue;
+    if (logged_humans++ >= 256) continue;
+    Rig r;
+    const bool intact = ReadRig(b, actor, r);
+    const bool tracks_valid = intact;
     const auto ext = Ptr(b, actor, 24, 48);
     const bool initialized = observation != s.humans.end() && r.ai == observation->second.rig.ai &&
         r.vars == observation->second.rig.vars && (!observation->second.bound || Same(r, observation->second.rig));
@@ -188,9 +200,9 @@ void LogRegistry(const uint8_t* b) {
     REXLOG_INFO("PUPPET registry pool record={} source={:08X} instance={:08X} field8={:08X} in-use={} source-init={} instance-init={}",
         i, source, copy, Load32(b, p + 8), Load32(b, p + 12), s.humans.count(source) != 0, s.humans.count(copy) != 0);
   }
-  REXLOG_INFO("PUPPET registry limits human-lines={} human-lines-dropped={} other-rig-lines-dropped={} spawner-lines-dropped={} unscheduled-policy=skip-without-native-movement-and-body-draw-proof activation=none",
+  REXLOG_INFO("PUPPET registry limits human-lines={} human-lines-dropped={} unproved-layouts-skipped={} spawner-lines-dropped={} unscheduled-policy=skip-without-native-movement-and-body-draw-proof activation=none",
       std::min(logged_humans, 256u), logged_humans > 256 ? logged_humans - 256 : 0,
-      logged_other > 128 ? logged_other - 128 : 0,
+      logged_other,
       logged_spawners > 128 ? logged_spawners - 128 : 0);
 }
 #endif
