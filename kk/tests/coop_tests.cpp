@@ -3,6 +3,7 @@
 #include "coop_session.h"
 #include "coop_pose.h"
 #include "coop_puppet.h"
+#include "coop_partner_selection.h"
 
 #include <bit>
 #include <cmath>
@@ -334,8 +335,53 @@ void PuppetPolicies() {
   c = ready; c.loading = true; expect(c, "load");
   c = ready; c.environment = false; expect(c, "world-level-or-hero-changed");
 }
+void PartnerSelection() {
+  using namespace kk::coop::puppet;
+  AutoCandidate spare;
+  spare.actor = 100; spare.natural_h = spare.stable = spare.rig_valid = true;
+  spare.script_evidence_complete = true; spare.distance = 80;
+  Check(!AutoReject(spare), "distant stable human with script evidence may be borrowed");
+  auto ally = spare; ally.actor = 101; ally.kind = HumanKind::Ally; ally.distance = 400;
+  auto background = spare; background.actor = 102; background.kind = HumanKind::Background; background.distance = 0;
+  const AutoCandidate ranked[]{ally, spare, background};
+  Check(SelectAuto(ranked) == 2, "positive background evidence beats distant ally and unknown");
+  Check(SelectAuto(std::span(ranked, 2)) == 1, "unknown human preferred over identified ally");
+  auto farther = spare; farther.actor = 103; farther.distance = 90;
+  const AutoCandidate distances[]{spare, farther};
+  Check(SelectAuto(distances) == 1, "distance is a preference, never a maximum teleport range");
+  auto tie = spare; tie.actor = 99;
+  const AutoCandidate ties[]{spare, tie};
+  Check(SelectAuto(ties) == 1, "equal scores use stable actor tie break");
+  auto reject = [&](AutoCandidate c, const char* reason) {
+    const AutoCandidate one[]{c};
+    Check(AutoReject(c) && std::string_view(AutoReject(c)) == reason && !SelectAuto(one), reason);
+  };
+  auto c = spare; c.hero = true; reject(c, "hero-or-alias");
+  c = spare; c.ann = true; reject(c, "Ann");
+  c = spare; c.natural_h = false; reject(c, "not-natural-H");
+  c = spare; c.actor = 0; reject(c, "not-natural-H");
+  c = spare; c.stable = false; reject(c, "not-stable-one-second");
+  c = spare; c.rig_valid = false; reject(c, "invalid-rig-or-membership");
+  c = spare; c.dead = true; reject(c, "dead");
+  c = spare; c.grabbed = true; reject(c, "grabbed-or-carried");
+  c = spare; c.cinematic = true; reject(c, "cinematic");
+  c = spare; c.following = true; reject(c, "following-Jack");
+  c = spare; c.script_reference = true; reject(c, "mission-or-trigger-reference");
+  c = spare; c.script_evidence_complete = false; reject(c, "script-evidence-unavailable");
+  c = spare; c.distance = std::numeric_limits<float>::quiet_NaN(); reject(c, "invalid-distance");
+  c = spare; c.distance = -1; reject(c, "invalid-distance");
+  Check(!SelectAuto({}), "no candidates leaves marker only");
+  std::array<AutoCandidate, 2> live{background, spare};
+  Check(SelectAuto(live) == 0, "initial selection");
+  live[0].script_reference = true;
+  Check(SelectAuto(live) == 1, "new script wait releases first choice and permits another");
+  live[1].dead = true;
+  Check(!SelectAuto(live), "no replacement when remaining candidate dies");
+  live = {background, spare};
+  Check(SelectAuto(live) == 0, "new load observations permit fresh selection");
+}
 }  // namespace
 int main() {
-  Protocol(); Handshake(); Timeouts(); Poses(); PoseReadingAndDisplay(); Disabled(); PuppetPolicies();
+  Protocol(); Handshake(); Timeouts(); Poses(); PoseReadingAndDisplay(); Disabled(); PuppetPolicies(); PartnerSelection();
   std::puts("co-op core tests passed");
 }
