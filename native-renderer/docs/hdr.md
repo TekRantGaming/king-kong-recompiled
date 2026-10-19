@@ -90,3 +90,25 @@ one final FP16 image after 1800 HDR presents, including host UI. This explicitly
 requested developer capture waits for its GPU copy and writes width, height
 and tightly packed HALF RGBA pixels. Normal play allocates no readback buffer
 and adds no fence wait. The evidence tool's `capture` mode exports it to EXR.
+
+## Highlight expansion (task 262 prototype, SDK patch 0044, off by default)
+
+The game renders only 8-bit 0..1 colour targets (frame logs of V-Rex, chapters 4/12, Kong, swamps: every colour
+draw is `k_8_8_8_8`, the only other target is `k_32_FLOAT` depth copies; no 7e3/FP16 targets, no exposure pass),
+so there is no scene radiance above 1.0 to keep. `present_hdr_highlights` (0..1, default 0) instead expands
+the SDR picture's highlights in the presenter's HDR pass (`guest_output_hdr.hlsl`, `MapHighlights`):
+
+- level = luminance lifted halfway toward the largest component (fire and coloured lights count too);
+- at or below `present_hdr_knee` (linear, default 0.5 = sRGB byte 187) a pixel is exactly `c * paper`;
+- above it the gain rises in log2 as t^2 (C1 at the knee) to ceiling / paper at SDR white; RGB scaled together;
+- ceiling = peak, moved toward `present_hdr_full_frame` when the surroundings (12 taps on rings at 3% / 8% of
+  the height) are bright too, so skies, white fades and bright sea stay at the display's full-frame brightness;
+- `present_hdr_black` (the display's black, nits) lifts black with a BT.2390-style toe that fades by paper white;
+- one code value of triangular dither in the expanded range (not on clipped white) against 8-bit banding.
+
+At 0 the task 127 path runs unchanged (byte-identical FP16 output, checked on both APIs). The game sets
+`present_hdr_black` / `present_hdr_full_frame` from the Windows HDR Calibration profile, else DXGI, else 0
+(`kk::hdr::AutoRange`); peak and paper white still come from `kk_hdr_levels` (task 219). F8 shows the two new
+sliders only with an SDK that has the cvars. Build: `native-renderer/tests/build-sdk-262.py` (private
+`sdk-src-real-hdr-262` -> `sdk-vulkan-real-hdr-262`); evidence: `native-renderer/tests/hdr-highlights-262.py`.
+Known limit: the guest HUD/subtitles are inside the game image, so pure white text also expands toward peak.

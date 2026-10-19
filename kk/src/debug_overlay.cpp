@@ -133,6 +133,11 @@ const std::vector<Setting>& Settings() {
        Show::kAlways, "Highlight ceiling, limited to the display's reported peak brightness."},
       {"HDR output", "Paper white (nits)", "present_hdr_paper_white", Kind::kSlider, {}, 80, 500, "%.0f", false,
        Show::kAlways, "Brightness of neutral whites and menus. Limited by peak brightness."},
+      // Task 262 prototype (SDK patch 0044; hidden when the SDK has no such cvar). 0 = task 127's HDR picture.
+      {"HDR output", "Highlight expansion", "present_hdr_highlights", Kind::kSlider, {}, 0, 1, "%.2f", false,
+       Show::kAlways, "Makes the brightest parts of the picture brighter than paper white, up to peak brightness. 0 = off."},
+      {"HDR output", "Highlight knee", "present_hdr_knee", Kind::kSlider, {}, 0.2f, 0.9f, "%.2f", false,
+       Show::kAlways, "Where highlight expansion starts. Lower = more of the picture gets brighter."},
       // Upscaling.
       {"Upscaling", "Upscaler", "native_upscaler", Kind::kUpscaler, {}, 0, 1, "", true, Show::kAlways,
        "Temporal upscalers rebuild a sharp picture from several frames. Only those this PC runs are listed."},
