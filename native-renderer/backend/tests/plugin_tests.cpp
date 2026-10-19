@@ -51,6 +51,13 @@ REXCVAR_DEFINE_INT32(native_dump_frame, -1, "Native renderer", "Log every call o
 // The host/backend also read these plugin-defined flags when linked into this fixture.
 REXCVAR_DEFINE_INT32(native_debug, 0, "Native renderer", "Native renderer debug flags");
 REXCVAR_DEFINE_BOOL(native_diagnostics, false, "Native renderer", "Detailed native renderer diagnostics");
+// d3d12_host.cpp reads these (task 300).
+REXCVAR_DEFINE_BOOL(native_d3d12_placed_textures, false, "Native renderer", "D3D12 placed textures");
+REXCVAR_DEFINE_INT32(native_d3d12_upload_chunk_kib, 0, "Native renderer", "D3D12 upload chunk KiB");
+REXCVAR_DEFINE_BOOL(native_d3d12_buffer_pool, false, "Native renderer", "D3D12 guest buffer pool");
+// vulkan_host.cpp reads these (task 313).
+REXCVAR_DEFINE_BOOL(native_vk_texture_pool, false, "Native renderer", "Vulkan texture pool");
+REXCVAR_DEFINE_BOOL(native_vk_buffer_pool, false, "Native renderer", "Vulkan guest buffer pool");
 
 using namespace nr;
 using namespace nr::test;

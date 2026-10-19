@@ -3,6 +3,7 @@
 #include <nvrhi/vulkan.h>
 #endif
 #include "plugin/native_benchmark_stats.h"
+#include "backend/gpu_loss.h"
 #include "backend/resource_upload_workers.h"
 #include "backend/upload_batch.h"
 #include "kkshaders/tessellation.h"
@@ -146,7 +147,9 @@ GameRenderer::GameRenderer(nvrhi::IDevice* device, const GuestMemory& memory,
   auto release_buffer = [this](kknr::BufferCache::Entry& e) {
     auto* h = static_cast<HostBuffer*>(e.host);
     if (h && h->slot) RetireSlot(kBuffers, h->slot);
-    if (h) RetireResource(h->buffer);
+    // Task 309: a pooled range goes back to its pool kRetireFrames later (buffer_pool.h).
+    if (h && h->pool) h->pool->Retire(h->range, frame_);
+    else if (h) RetireResource(h->buffer);
     descriptor_buffers_.erase(h);
     delete h;
     e.host = nullptr;
@@ -252,6 +255,12 @@ bool GameRenderer::Initialize() {
       if (shader) QueueShaderParts(kind == kkshaders::ShaderKind::Vertex, shader->handle);
     });
   }
+  // Dev (task 267): a slow PC's cold compiles on a fast one (A/B runs; the cap: --native_pipeline_must_wait_ms).
+  if (const char* v = std::getenv("KK_DEV_PIPELINE_DELAY_MS"); v && *v) {
+    dev_compile_delay_ms_ = std::clamp(std::atoi(v), 0, 2000);
+    Logf(LogLevel::kInfo, "rexgpu-native: KK_DEV_PIPELINE_DELAY_MS: each worker compile takes %d ms longer (dev)",
+         dev_compile_delay_ms_);
+  }
   // Keep the scale-aware shader ABI at the native-resolution floor too. It
   // was selected before shader creation for these initially scaled runs.
   memory_floor_x_ = std::min(options_.render_scale_x, 1.0f);
@@ -273,6 +282,27 @@ bool GameRenderer::Initialize() {
     }
   }
   const nvrhi::GraphicsAPI api = device_->getGraphicsAPI();
+  if (g_buffer_pool_enabled.load(std::memory_order_relaxed)) {
+    // Task 309 (buffer_pool.h): guest vertex and index buffers from shared blocks (D3D12 and, task 313, Vulkan:
+    // set by the host from --native_d3d12_buffer_pool / --native_vk_buffer_pool).
+    auto block = [this](bool index) {
+      return [this, index](uint64_t bytes) {
+        nvrhi::BufferDesc d;
+        d.byteSize = bytes;
+        d.canHaveRawViews = !index;
+        d.isIndexBuffer = index;
+        d.initialState = index ? nvrhi::ResourceStates::IndexBuffer : nvrhi::ResourceStates::ShaderResource;
+        d.keepInitialState = true;
+        d.debugName = index ? "Guest indices (pool)" : "Guest vertex data (pool)";
+        nvrhi::BufferHandle b = device_->createBuffer(d);
+        Logf(b ? LogLevel::kInfo : LogLevel::kWarning, "rexgpu-native: buffer pool: %s block of %llu MiB %s",
+             index ? "index" : "vertex", static_cast<unsigned long long>(bytes >> 20), b ? "made" : "NOT made");
+        return b;
+      };
+    };
+    vertex_pool_ = std::make_unique<BufferPool>(block(false));
+    index_pool_ = std::make_unique<BufferPool>(block(true));
+  }
   if (options_.table_capacities != kNativeTableCapacities && options_.upscale.enabled()) {
     // Motion replay retains indices until the upscale point, beyond a possible
     // descriptor drain. Keep them disabled for prewarm and standalone users too.
@@ -292,8 +322,8 @@ bool GameRenderer::Initialize() {
     UpscaleConfig probe;
     probe.kind = UpscalerKind::kDlss;
     dlss_warm_ = std::async(std::launch::async, [device = device_, probe] {
-      std::string why;
-      return CreateDlssUpscaler(device, probe, &why);
+      std::string why, error;
+      return BuildOrEmpty([&] { return CreateDlssUpscaler(device, probe, &why); }, &error);
     });
   }
   shaders_->SetMotionPrewarm(bool(upscale_));
@@ -709,6 +739,8 @@ void GameRenderer::ReleaseRetiredResources() {
     }
   }
   const auto start = std::chrono::steady_clock::now();
+  if (vertex_pool_) vertex_pool_->Release(frame_);
+  if (index_pool_) index_pool_->Release(frame_);
   // Under memory pressure the memory matters more than the frame: release all of them, as before.
   const bool all = pack_pressure_ || retire_budget_.budget_ms <= 0;
   const RetireRelease r = ReleaseRetired(retired_resources_, frame_, 8, all, retire_budget_);
@@ -973,6 +1005,8 @@ void GameRenderer::EndFrame() {
   if (scene_gi_ || scene_lighting_ || scene_cel_)
     for (auto& [key, target] : targets_) if (target) target->clear_only = false;
   ProfileResources();
+  EndStartUploadFrame();
+  LogTexturePackFrame();
   FlushUploads();
   if (upload_batch_) upload_batch_->EndFrame();
   if (tessellation_timer_) tessellation_timer_->FrameEnd();
@@ -1118,8 +1152,9 @@ void GameRenderer::PipelineWorker() {
     {
       std::unique_lock lock(pipeline_mutex_);
       pipeline_cv_.wait(lock, [&] {
-        // Reserve one compiler for demand work while prewarm has a backlog.
-        const unsigned background = std::max(1u, unsigned(pipeline_threads_.size()) - 1);
+        // Reserve one compiler for demand work while prewarm has a backlog. Task 276: fewer while a level is
+        // being played when --native_pipeline_play_workers says so (draws' jobs still take any worker).
+        const unsigned background = pipelines_playing_ ? play_background_ : all_background_;
         return pipeline_stop_ || (!pipeline_jobs_.empty() &&
             (pipeline_jobs_.front().urgent || unsigned(pipelines_active_) < background));
       });
@@ -1138,6 +1173,10 @@ void GameRenderer::PipelineWorker() {
     if (job.urgent && build != PipelineBuild::kReplace && build != PipelineBuild::kParts)
       build = pipeline_library_ ? PipelineBuild::kLinked : PipelineBuild::kWhole;
     const auto start = std::chrono::steady_clock::now();
+    // Dev (task 267): KK_DEV_PIPELINE_DELAY_MS=N adds N ms to each worker compile (not a link), as a slow PC's
+    // cold driver compiles: a laptop's chapter-start backlog reproduced on a fast PC.
+    if (dev_compile_delay_ms_ > 0 && build != PipelineBuild::kLinked)
+      std::this_thread::sleep_for(std::chrono::milliseconds(dev_compile_delay_ms_));
     nvrhi::GraphicsPipelineHandle p;
     if (build == PipelineBuild::kParts) {
       const bool made = PrepareLibraryParts(job.desc, job.framebuffer);
@@ -1351,23 +1390,42 @@ nvrhi::IGraphicsPipeline* GameRenderer::GetPipeline(const nvrhi::GraphicsPipelin
     if (optional) return nullptr;
     const char* demand_kind = was_pending ? "pending" : "new";
     if (demand == PipelineDemand::kMustDraw) {
-      // Wait for the worker that has this pipeline (the draw's own job, or the prewarm's).
-      const auto start = std::chrono::steady_clock::now();
-      pipeline_done_cv_.wait(lock, [&] {
+      // Wait for the worker that has this pipeline (the draw's own job, at the front, or the prewarm's). Task 267:
+      // within a hard cap per frame (all such draws together); after it the draw is skipped until it is ready.
+      if (must_wait_frame_ != frame_) {
+        must_wait_frame_ = frame_;
+        must_wait_ms_ = 0;
+      }
+      const double cap = miss_class == PipelineMissClass::kBlockAll ? -1.0
+                         : miss_class == PipelineMissClass::kLoading ? options_.pipeline_loading_wait_ms
+                                                                     : options_.pipeline_must_wait_ms;
+      const double left = MustDrawWaitLeft(cap, must_wait_ms_);
+      auto ready = [&] {
         DrainDonePipelinesLocked();
         return pipelines_.count(key) != 0 || pipeline_stop_;
-      });
-      ++stats_.pipeline_waits;
-      ++stats_.pipeline_waits_by_class[size_t(miss_class)];
+      };
+      const auto start = std::chrono::steady_clock::now();
+      if (left < 0) {
+        pipeline_done_cv_.wait(lock, ready);
+      } else if (left > 0) {
+        pipeline_done_cv_.wait_for(lock, std::chrono::duration<double, std::milli>(left), ready);
+      } else {
+        ready();
+      }
       const double waited = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+      must_wait_ms_ += waited;
       stats_.pipeline_wait_ms += waited;
-      NoteFrameWait(waited);
       auto found = pipelines_.find(key);
-      if (pipeline_log_ || !pipeline_log_checked_)
-        LogPipelineDemand(key, demand_kind, waited, found != pipelines_.end() && found->second, miss_class);
-      return found != pipelines_.end() ? found->second.Get() : nullptr;
-    }
-    if (options_.pipeline_wait_budget_ms > 0) {
+      if (found != pipelines_.end() || pipeline_stop_ || waited > 0.05) NoteFrameWait(waited);
+      if (found != pipelines_.end() || pipeline_stop_) {
+        ++stats_.pipeline_waits;
+        ++stats_.pipeline_waits_by_class[size_t(miss_class)];
+        if (pipeline_log_ || !pipeline_log_checked_)
+          LogPipelineDemand(key, demand_kind, waited, found != pipelines_.end() && found->second, miss_class);
+        return found != pipelines_.end() ? found->second.Get() : nullptr;
+      }
+      ++stats_.must_draw_skips;  // not ready within the cap: skipped below as a scene draw (its job stays first)
+    } else if (options_.pipeline_wait_budget_ms > 0) {
       // Wait within what is left of this frame's budget.
       if (wait_budget_frame_ != frame_) {
         wait_budget_frame_ = frame_;
@@ -1436,7 +1494,8 @@ void GameRenderer::LogPipelineMisses(bool final) {
   const Stats& s = stats_;
   const Stats& p = miss_log_previous_;
   if (!final && s.skipped_pending == p.skipped_pending && s.pipeline_waits == p.pipeline_waits &&
-      s.pipeline_budget_waits == p.pipeline_budget_waits && s.pipelines_missed_ready == p.pipelines_missed_ready)
+      s.pipeline_budget_waits == p.pipeline_budget_waits && s.pipelines_missed_ready == p.pipelines_missed_ready &&
+      s.must_draw_skips == p.must_draw_skips)
     return;
   if (final && s.skipped_pending == 0 && s.pipeline_waits == 0 && s.pipeline_budget_waits == 0) return;
   miss_log_previous_ = stats_;
@@ -1445,11 +1504,17 @@ void GameRenderer::LogPipelineMisses(bool final) {
     std::lock_guard lock(stutter_mutex_);
     frames_skipped = stutter_.frames_skipped;
   }
+  size_t queued = 0;
+  {
+    std::lock_guard lock(pipeline_mutex_);
+    queued = pipeline_jobs_.size();
+  }
   const auto& w = s.pipeline_waits_by_class;
   Logf(LogLevel::kInfo,
        "rexgpu-native: pipelines not ready %s frame %llu: %llu draws skipped in %llu frames, %llu pipelines missed "
        "(%llu ready after avg %.1f max %llu frames, max %.0f ms); waits %llu (depth-only %llu, stencil %llu, "
-       "screen-space %llu, loading %llu, block-all %llu, budget %llu), %.0f ms",
+       "screen-space %llu, loading %llu, block-all %llu, budget %llu), %.0f ms; %llu skipped after the wait cap; "
+       "%zu jobs queued",
        final ? "at the end," : "so far,", static_cast<unsigned long long>(frame_),
        static_cast<unsigned long long>(s.skipped_pending), static_cast<unsigned long long>(frames_skipped),
        static_cast<unsigned long long>(s.pipelines_missed), static_cast<unsigned long long>(s.pipelines_missed_ready),
@@ -1461,7 +1526,8 @@ void GameRenderer::LogPipelineMisses(bool final) {
        static_cast<unsigned long long>(w[size_t(PipelineMissClass::kScreenSpace)]),
        static_cast<unsigned long long>(w[size_t(PipelineMissClass::kLoading)]),
        static_cast<unsigned long long>(w[size_t(PipelineMissClass::kBlockAll)]),
-       static_cast<unsigned long long>(w[size_t(PipelineMissClass::kScene)]), s.pipeline_wait_ms);
+       static_cast<unsigned long long>(w[size_t(PipelineMissClass::kScene)]), s.pipeline_wait_ms,
+       static_cast<unsigned long long>(s.must_draw_skips), queued);
 }
 
 GameRenderer::PipelineLibraryStats GameRenderer::PipelineLibraryCounts() const {
@@ -1549,19 +1615,68 @@ void GameRenderer::EnsureWorkers() {
   // With pipeline_mutex_ held. A few workers: drivers compile pipelines in parallel.
   if (!pipeline_threads_.empty()) return;
   const unsigned n = ProcessPipelineWorkerCount();
-  Logf(LogLevel::kInfo, "rexgpu-native: pipeline compiler workers %u (process affinity)", n);
+  const ProcessCpus cpus = ProcessCpuCounts();
+  all_background_ = BackgroundPipelineWorkers(n);
+  play_background_ = PlayBackgroundPipelineWorkers(n, cpus.logical, cpus.cores, options_.pipeline_play_workers);
+  Logf(LogLevel::kInfo,
+       "rexgpu-native: pipeline compiler workers %u (process affinity; %u logical CPUs, %u cores); background jobs "
+       "%u at once, %u while a level is played (native_pipeline_play_workers %d)",
+       n, cpus.logical, cpus.cores, all_background_, play_background_, options_.pipeline_play_workers);
   for (unsigned i = 0; i < n; ++i) pipeline_threads_.emplace_back([this] { PipelineWorker(); });
+}
+
+// Task 276: a level's loading screen started. New records are tagged with the level from now on; with
+// pipeline_level_first the prewarm's jobs of the records tagged with it go ahead of the rest of the list
+// (behind the draws' jobs), and the background workers run at full speed until the level is played.
+void GameRenderer::PipelineLevelLoading(uint32_t level) {
+  record_level_tag_ = LevelTag(level);
+  const auto start = std::chrono::steady_clock::now();
+  size_t ahead = 0, queued = 0;
+  {
+    std::lock_guard lock(pipeline_mutex_);
+    pipelines_playing_ = false;
+    if (options_.pipeline_level_first) {
+      const uint32_t tag = priority_level_tag_ = LevelTag(level);
+      ahead = MoveJobsAhead(pipeline_jobs_, [tag](const PipelineJob& j) { return j.urgent || j.level == tag; });
+      queued = pipeline_jobs_.size();
+    }
+  }
+  pipeline_cv_.notify_all();
+  if (options_.pipeline_level_first && queued) {
+    Logf(LogLevel::kInfo, "rexgpu-native: pipelines of level %u first: %zu of %zu queued jobs ahead (in %.1f ms)",
+         level, ahead, queued,
+         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+  }
+}
+
+void GameRenderer::PipelineLevelPlaying() {
+  size_t queued = 0;
+  {
+    std::lock_guard lock(pipeline_mutex_);
+    pipelines_playing_ = true;
+    queued = pipeline_jobs_.size();
+  }
+  pipeline_cv_.notify_all();
+  if (play_background_ < all_background_ && queued && !play_workers_logged_) {
+    play_workers_logged_ = true;
+    Logf(LogLevel::kInfo, "rexgpu-native: while a level is played, %u background pipeline jobs at once (of %u); %zu queued",
+         play_background_, all_background_, queued);
+  }
 }
 
 void GameRenderer::NoteRecord(const PipelineRecord& record, uint64_t key) {
   if (!cache_recording_.load(std::memory_order_relaxed)) return;
   if (!noted_keys_.insert(key).second) return;  // the render thread's own set: no lock for a known pipeline
+  // Task 276: the level it is first drawn in (not known before the first loading screen).
+  PipelineRecord tagged = record;
+  tagged.reserved[0] = record_level_tag_;
   std::lock_guard lock(cache_mutex_);
-  if (cache_file_.is_open() && cache_file_.Append(record)) ++stats_.cache_recorded;
+  if (cache_file_.is_open() && cache_file_.Append(tagged)) ++stats_.cache_recorded;
 }
 
 bool GameRenderer::QueuePrewarm(const PipelineRecord& record) {
   PipelineRecord adapted = record;
+  ClearRecordLevel(adapted);  // task 276: the tag orders the job, it is not part of the pipeline
   if (!(record.flags & kRecordMotion))
     adapted.flags = (record.flags & ~kRecordScaled) | (RecordFlags() & kRecordScaled);
   const kkshaders::ShaderKind vk = kkshaders::ShaderKind::Vertex, pk = kkshaders::ShaderKind::Pixel;
@@ -1594,7 +1709,12 @@ bool GameRenderer::QueuePrewarm(const PipelineRecord& record) {
   pipelines_pending_[key] = true;
   PipelineJob job{key, std::move(desc), framebuffer};
   job.build = PipelineBuild::kPrewarm;
-  pipeline_jobs_.push_back(std::move(job));
+  job.level = record.reserved[0];
+  // Task 276: a record of the level being loaded or played (its shaders came late) joins its level's group.
+  if (const uint32_t tag = priority_level_tag_; tag && job.level == tag)
+    QueueJobBehind(pipeline_jobs_, std::move(job), [tag](const PipelineJob& j) { return j.urgent || j.level == tag; });
+  else
+    pipeline_jobs_.push_back(std::move(job));
   pipeline_cv_.notify_one();
   ++stats_.prewarm_queued;
   return true;
@@ -2570,7 +2690,8 @@ void GameRenderer::Draw(nvrhi::ICommandList* cl, const DrawCall& call) {
       gs.indexBuffer = nvrhi::IndexBufferBinding()
                            .setBuffer(host->buffer)
                            .setFormat(ib.index32 ? nvrhi::Format::R32_UINT : nvrhi::Format::R16_UINT)
-                           .setOffset(0);
+                           .setOffset(uint32_t(BufferOffset(host)))
+                           .setSize(host->range.valid() ? host->view_bytes : 0);  // task 309: a pooled range
       args.vertexCount = call.count;
       args.startIndexLocation = call.start;
     } else {

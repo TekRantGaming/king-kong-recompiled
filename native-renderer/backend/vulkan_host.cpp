@@ -33,6 +33,7 @@
 #include <rex/ui/vulkan/provider.h>
 
 #include "backend/host_device.h"
+#include "backend/gpu_loss.h"
 #include "backend/cpu_profile.h"
 #include "backend/dev_gpu_stats.h"
 #include "backend/output_blit.h"
@@ -40,11 +41,15 @@
 #include "backend/vk_pipeline_library.h"
 #include "backend/vulkan_dispatch.h"
 #include "backend/vulkan_requirements.h"
+#include "backend/buffer_pool.h"
+#include "backend/placed_textures.h"
 
 REXCVAR_DECLARE(bool, native_validation);
 REXCVAR_DECLARE(bool, native_vk_pipeline_cache);
 REXCVAR_DECLARE(bool, native_vk_pipeline_library);
 REXCVAR_DECLARE(int32_t, native_debug);
+REXCVAR_DECLARE(bool, native_vk_texture_pool);
+REXCVAR_DECLARE(bool, native_vk_buffer_pool);
 REXCVAR_DECLARE(bool, native_vk_small_tables);
 REXCVAR_DECLARE(bool, native_vk_minimum_tables);
 
@@ -146,6 +151,17 @@ class VulkanHost final : public HostDevice {
         REXLOG_INFO("rexgpu-native: Vulkan graphics pipeline library off ({}): pipelines are compiled whole", why);
       }
     }
+    // Task 313: NVRHI gives every Vulkan texture and buffer its own vkAllocateMemory. Pooled textures share
+    // 64 MiB blocks (vendored NVRHI, thirdparty/NOTES.md); pooled guest buffers share 32 MiB buffers
+    // (buffer_pool.h, the game renderer).
+    if (REXCVAR_GET(native_vk_texture_pool)) desc.pooledTextureBlockSize = 64ull << 20;
+    g_texture_memory_not_zeroed.store(desc.pooledTextureBlockSize != 0, std::memory_order_relaxed);
+    g_buffer_pool_enabled.store(REXCVAR_GET(native_vk_buffer_pool), std::memory_order_relaxed);
+    if (desc.pooledTextureBlockSize || REXCVAR_GET(native_vk_buffer_pool)) {
+      REXLOG_INFO("rexgpu-native: Vulkan allocation: textures {}, guest buffers {}",
+                  desc.pooledTextureBlockSize ? "pooled in 64 MiB blocks" : "one allocation each",
+                  REXCVAR_GET(native_vk_buffer_pool) ? "pooled in 32 MiB buffers" : "one allocation each");
+    }
     nvrhi::vulkan::DeviceHandle vulkan_nvrhi = nvrhi::vulkan::createDevice(desc);
     device_ = vulkan_nvrhi;
     g_dev_gpu_stats_enabled.store((REXCVAR_GET(native_debug) & 32768) != 0, std::memory_order_relaxed);
@@ -203,7 +219,25 @@ class VulkanHost final : public HostDevice {
   void ExecuteCommandList(nvrhi::ICommandList* command_list) override {
     ExecuteFrameCommandList(command_list, nullptr);
   }
+  // Task 266: a Vulkan error thrown inside NVRHI here (vulkan.hpp: device lost, or out of memory on a
+  // submission) goes to the plugin's device-loss path (gpu_loss.h RunGuarded) instead of std::terminate, so a
+  // loss during startup reaches the startup recovery. The locks of `fn` are released before the report.
+  template <typename F>
+  void Guarded(const char* where, F&& fn) {
+    RunGuarded(where, std::forward<F>(fn));
+  }
+  // NVRHI's waitForIdle catches DEVICE_LOST itself and returns false (task 268: that was ignored). Reported
+  // by the caller once its locks are released.
+  static void ReportIdleLoss(bool lost, const char* where) {
+    if (!lost) return;
+    const std::string what = std::string(where) + ": VK_ERROR_DEVICE_LOST";
+    ReportGpuLoss(what.c_str());
+  }
+
   void WaitFrame(nvrhi::IEventQuery* completion) override {
+    Guarded("Vulkan frame wait", [&] { WaitFrameUnguarded(completion); });
+  }
+  void WaitFrameUnguarded(nvrhi::IEventQuery* completion) {
     // Waiting on a timeline semaphore does not access VkQueue. Avoid the SDK's
     // queue lock here: its presenter may hold that lock while waiting for display.
     if (!queue_semaphore_ || !wait_semaphores_) {
@@ -225,9 +259,18 @@ class VulkanHost final : public HostDevice {
     info.semaphoreCount = 1;
     info.pSemaphores = &queue_semaphore_;
     info.pValues = &value;
-    wait_semaphores_(vk_device_, &info, UINT64_MAX);
+    // Task 266: the result was ignored; after a lost device the wait returns at once and the renderer went on
+    // as if the frame were done.
+    if (wait_semaphores_(vk_device_, &info, UINT64_MAX) == VK_ERROR_DEVICE_LOST)
+      ReportGpuLoss("vkWaitSemaphores: VK_ERROR_DEVICE_LOST");
   }
   void ExecuteFrameCommandList(nvrhi::ICommandList* command_list, nvrhi::IEventQuery* completion) override {
+    Guarded("Vulkan submission", [&] { ExecuteFrameCommandListUnguarded(command_list, completion); });
+  }
+  void ExecuteFrameCommandListUnguarded(nvrhi::ICommandList* command_list, nvrhi::IEventQuery* completion) {
+#if defined(KK_DEV_TOOLS)
+    if (completion && DevGpuLossNow(dev_loss_frames_, "vulkan")) DevThrowVulkanDeviceLost();  // KK_DEV_GPU_LOSS_AFTER
+#endif
     // Host access to a VkQueue must be externally synchronised: hold the SDK's
     // queue lock (recursive) while NVRHI submits.
     using clock = std::chrono::steady_clock;
@@ -262,15 +305,23 @@ class VulkanHost final : public HostDevice {
   DriverPipelineCache* pipeline_cache() override { return pipeline_cache_.get(); }
 
   void WaitForIdle() override {
-    auto acquisition = provider_.vulkan_device()->AcquireQueue(queue_family_, 0);
-    std::lock_guard execute_lock(execute_mutex_);
-    device_->waitForIdle();
+    bool lost = false;
+    Guarded("Vulkan wait for idle", [&] {
+      auto acquisition = provider_.vulkan_device()->AcquireQueue(queue_family_, 0);
+      std::lock_guard execute_lock(execute_mutex_);
+      lost = !device_->waitForIdle();
+    });
+    ReportIdleLoss(lost, "Vulkan wait for idle");
   }
   void RunExclusive(const std::function<void()>& fn) override {
-    auto acquisition = provider_.vulkan_device()->AcquireQueue(queue_family_, 0);
-    std::lock_guard execute_lock(execute_mutex_);
-    device_->waitForIdle();
-    fn();
+    bool lost = false;
+    Guarded("Vulkan exclusive work", [&] {
+      auto acquisition = provider_.vulkan_device()->AcquireQueue(queue_family_, 0);
+      std::lock_guard execute_lock(execute_mutex_);
+      lost = !device_->waitForIdle();
+      fn();
+    });
+    ReportIdleLoss(lost, "Vulkan exclusive work");
   }
 
   bool CopyToGuestOutput(rex::ui::Presenter::GuestOutputRefreshContext& context,
@@ -440,6 +491,9 @@ class VulkanHost final : public HostDevice {
   VkDevice vk_device_ = VK_NULL_HANDLE;
   VkSemaphore queue_semaphore_ = VK_NULL_HANDLE;
   PFN_vkWaitSemaphores wait_semaphores_ = nullptr;
+#if defined(KK_DEV_TOOLS)
+  std::atomic<uint64_t> dev_loss_frames_{0};
+#endif
   std::vector<std::pair<nvrhi::IEventQuery*, uint64_t>> frame_values_;
   std::unique_ptr<OutputBlit> output_blit_;
   std::array<Wrapped, 4> wrapped_;

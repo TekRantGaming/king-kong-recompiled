@@ -98,7 +98,11 @@ void SendToRenderer() {
     std::lock_guard lock(g_values_mutex);
     v = g_values;
   }
-  nr::kk::SetPhoto(ToRenderer(v, g_active.load()));
+  const bool active = g_active.load();
+  NrPhotoSettings s = ToRenderer(v, active);
+  // The paused game dims its world (task 272): taken back first, so the view and the pictures look like play.
+  if (active) s.undim = play::PhotoUndim();
+  nr::kk::SetPhoto(s);
 }
 
 }  // namespace
@@ -107,11 +111,46 @@ bool Active() { return g_active.load(); }
 
 bool Available() { return !g_active.load() && play::PauseMenuOpen(); }
 
+namespace {
+// Task 272: chosen in the first moments of a pause, photo mode opens once the paused game's dimming has been
+// measured (pause_hooks.cpp, 1.5 s into the pause, only while the pause menu shows), at most this long after.
+constexpr int64_t kDimWaitMs = 2500;
+std::atomic<int64_t> g_enter_waiting_since{-1};
+int64_t SteadyMs() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+void EnterNow();
+// The pause menu's frame (the panel's OnDraw, before photo mode is on): open it when the measurement is in.
+void ServiceWaitingEnter() {
+  const int64_t since = g_enter_waiting_since.load();
+  if (since < 0 || g_active.load()) return;
+  if (!Available()) {
+    g_enter_waiting_since = -1;  // the pause menu went away meanwhile
+  } else if (play::PhotoDimKnown() || SteadyMs() - since > kDimWaitMs) {
+    g_enter_waiting_since = -1;
+    EnterNow();
+  }
+}
+}  // namespace
+
 void Enter() {
   if (!Available()) {
     REXLOG_WARN("KK photo mode: not available now");
     return;
   }
+  if (!play::PhotoDimKnown()) {
+    int64_t none = -1;
+    if (g_enter_waiting_since.compare_exchange_strong(none, SteadyMs()))
+      REXLOG_INFO("KK photo mode: opens once the paused game's brightness is measured");
+    return;
+  }
+  g_enter_waiting_since = -1;
+  EnterNow();
+}
+
+namespace {
+void EnterNow() {
   std::random_device rd;
   {
     std::lock_guard lock(g_values_mutex);
@@ -124,8 +163,9 @@ void Enter() {
   freecam::PhotoParams(0, g_values.speed, false);
   SendToRenderer();
   RequestUiPaint();
-  REXLOG_INFO("KK photo mode: opened (the game stays paused)");
+  REXLOG_INFO("KK photo mode: opened (the game stays paused; its dimming taken back x{:.2f})", play::PhotoUndim());
 }
+}  // namespace
 
 void Exit(bool resume_game) {
   if (!g_active.exchange(false)) return;
@@ -198,6 +238,7 @@ class Panel final : public rex::ui::ImGuiDialog {
 #if defined(KK_DEV_TOOLS)
     DevSteps();
 #endif
+    ServiceWaitingEnter();
     if (!g_active.load()) return;
     {
       std::lock_guard lock(g_pad.lock);

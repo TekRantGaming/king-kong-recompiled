@@ -1343,6 +1343,19 @@ first sessions.
   them. Decided: the player's file still records everything the run draws, also what the list holds (it is the
   player's history, and the input of the next merge). A list from runs at several render scales holds both
   kinds; each run makes its own. Without `--native_pipeline_cache` the list still loads (it needs no cache root).
+- Task 276, level tags: a new record carries the level it was first drawn in (`PipelineRecord::reserved[0]` =
+  `0x80000000 | level`, the universe's requested map as the resource lists name it; 0 = not known, all records
+  before task 276 and those drawn before the first loading screen). Not part of the key, version 3 unchanged: old
+  lists read as untagged and older builds read tagged lists as before. `merge` keeps the most voted level per
+  pipeline (a tie: the earliest input's); `merge --tags-only -o <out> <list> <recording>...` tags a list from
+  recordings without adding records, and (task 279) gives a record the recordings do not name the level of a
+  recorded similar pipeline (`SimilarPipelineKey`: the key without the render scale flag and the translations'
+  input hashes; today's game records only render scale records); `info` prints pipelines per level. Task 279's
+  tagging run (each of the 42 chapter-select entries for ~30 s with `KK_DEV_WANDER=1`, one private cache) tagged
+  6576 of the Beta 11 list's 13916 records (`pipelines\kkpipelines-beta11-tagged.list`, game-derived, not in git). `--native_pipeline_level_first` (default
+  off) moves the loading level's tagged prewarm jobs ahead of the rest (behind draws' jobs; a late job of that
+  level joins the group). `--native_pipeline_play_workers` (default 0 = no limit; N; -1 auto: 8 cores or fewer
+  keep a third of the workers) caps background jobs while a level is played (not during its loading screen).
 - Tests: `PipelineList_*` (a fresh install draws its first frame with every pipeline made and the list
   unchanged; with the player's file each pipeline is queued once; an absent or version 2 list is refused),
   `PipelineListMerger_*`, `PipelinesTool_MergeAndInfo` (runs the tool), `PipelineList_ReadLeavesTheFileAlone`.

@@ -14,6 +14,7 @@
 
 #include "backend/backend.h"
 #include "backend/background_file_writer.h"
+#include "backend/compile_clock.h"
 #include "backend/pipeline_exit_gate.h"
 #include "plugin/launcher_prewarm.h"
 #include "plugin/native_api.h"
@@ -53,6 +54,32 @@ REXCVAR_DEFINE_BOOL(native_draws, true, "Native renderer",
 
 REXCVAR_DEFINE_BOOL(native_validation, false, "Native renderer",
                     "Wrap the NVRHI device in NVRHI's validation layer (slow; for debugging)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+// Task 300/304: D3D12 allocation cost. On by default (owner, 19 Oct). Vulkan ignores both.
+REXCVAR_DEFINE_BOOL(native_d3d12_placed_textures, true, "Native renderer",
+                    "D3D12: place sampled-only textures in pooled 64 MiB heaps instead of one committed resource "
+                    "each (task 300; about 10x less CPU per texture made or released; false = before task 300)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_INT32(native_d3d12_upload_chunk_kib, 4096, "Native renderer",
+                     "D3D12: smallest upload buffer chunk in KiB, made without OS zeroing (task 300; 0 = NVRHI's "
+                     "64 KiB, so every larger texture upload made a new upload buffer: before task 300)")
+    .range(0, 65536).lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+// Task 309: on by default (owner, 19 Oct). Vulkan ignores it.
+REXCVAR_DEFINE_BOOL(native_d3d12_buffer_pool, true, "Native renderer",
+                    "D3D12: guest vertex and index buffers share large 32 MiB buffers instead of one committed "
+                    "resource each (task 309; false = before task 309)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+
+// Task 313: Vulkan allocation cost. Both on by default (owner, 19 Oct).
+REXCVAR_DEFINE_BOOL(native_vk_texture_pool, true, "Native renderer",
+                    "Vulkan: guest textures share 64 MiB device memory blocks instead of one vkAllocateMemory each "
+                    "(task 313; false = before task 313)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(native_vk_buffer_pool, true, "Native renderer",
+                    "Vulkan: guest vertex and index buffers share 32 MiB buffers instead of one allocation each "
+                    "(task 313; false = before task 313)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_BOOL(native_wvp_transpose, false, "Native renderer",
@@ -210,6 +237,43 @@ REXCVAR_DEFINE_BOOL(native_present_unlocked, true, "Native renderer",
 REXCVAR_DEFINE_DOUBLE(native_pipeline_wait_budget_ms, 4.0, "Native renderer",
                       "Without native_pipeline_wait: milliseconds a frame may wait in all for scene draws' "
                       "pipelines being created before those draws are skipped (0: skip at once, never wait)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_DOUBLE(native_pipeline_must_wait_ms, 4.0, "Native renderer",
+                      "Without native_pipeline_wait: milliseconds a gameplay frame may wait in all for the pipelines "
+                      "of draws later draws depend on (depth-only, stencil, screen-space) before those are skipped "
+                      "too (task 267; -1: no limit, the old behaviour)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// Task 280: 256 MiB preload + 8 MiB/frame trickle, on by default (owner, 19 Oct; REPORT-280: chapter-start
+// texture time e.g. entry 8 D3D12 111 -> 46 ms over frames 1-10). 64 / 0 = before task 280.
+REXCVAR_DEFINE_INT32(native_chapter_preload_mib, 256, "Native renderer",
+                     "MiB of a chapter's listed textures and buffers prepared before their first draw, on the loading "
+                     "screen and in the trickle (task 280; 64 = before task 280; GPU memory pressure keeps 64)")
+    .range(64, 1024).lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_INT32(native_chapter_trickle_mib, 8, "Native renderer",
+                     "After a loading screen, MiB per frame of the chapter's listed resources not yet on the GPU "
+                     "prepared ahead of their first draw, for 10 s (task 280; 0 = off, before task 280)")
+    .range(0, 32).lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// Task 276/279: level_first on by default (owner, 19 Oct). native_pipeline_play_workers stays 0 until it is tested
+// on a slow CPU (owner, 19 Oct).
+REXCVAR_DEFINE_BOOL(native_pipeline_level_first, true, "Native renderer",
+                    "When a level loads, prepare the listed pipelines tagged with that level before the rest of "
+                    "the list (task 276; false: list order). New pipelines are tagged with their level either way")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_INT32(native_pipeline_play_workers, 0, "Native renderer",
+                     "Background pipeline preparation jobs at once while a level is played (task 276): 0 = no "
+                     "limit (as in menus and loading), N = at most N, -1 = auto (PCs with 8 or fewer cores keep a "
+                     "third of the workers). Draws' own pipelines always use every worker")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+// Task 284: built with today's behaviour (owner rule). Proposed for Craig: native_texture_pack_event_scan
+// true; native_texture_pack_reduce_mips stays false.
+REXCVAR_DEFINE_BOOL(native_texture_pack_event_scan, false, "Native renderer",
+                    "Texture pack: look through the textures waiting for a replacement only when the pack reader "
+                    "finished a batch or a texture's pack state changed, at least every 60 frames (task 284; "
+                    "false = every frame, before task 284)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(native_texture_pack_reduce_mips, false, "Native renderer",
+                    "Texture pack: a replacement larger than the free pack memory leaves out its most detailed mips "
+                    "until it fits (never below the original size) instead of keeping the original (task 284)")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 REXCVAR_DEFINE_STRING(native_render_scale, "auto", "Native renderer",
@@ -590,6 +654,12 @@ extern "C" REX_GPU_PLUGIN_EXPORT void nr_set_startup_failure_handler(nr::Startup
 
 extern "C" REX_GPU_PLUGIN_EXPORT void nr_set_startup_presented_handler(nr::StartupPresentedHandler handler) {
   nr::startup_presented_handler.store(handler, std::memory_order_release);
+}
+
+// Task 297: milliseconds spent compiling shaders the game waited for (backend/compile_clock.h); King
+// Kong leaves them out of its startup limits. 0 with a shader pack.
+extern "C" REX_GPU_PLUGIN_EXPORT uint64_t nr_shader_compile_milliseconds(void) {
+  return nr::CompileClock::Milliseconds();
 }
 
 extern "C" REX_GPU_PLUGIN_EXPORT const NrApi* nr_get_api(void) {

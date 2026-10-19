@@ -518,6 +518,10 @@ namespace nvrhi
         // On DX12, the texture resource is created at the time of memory binding.
         bool isVirtual = false;
         bool isTiled = false;
+        // King Kong change (task 304, thirdparty/NOTES.md): the application writes every subresource before
+        // reading it, so on D3D12 the texture may go into the placed texture pool (memory not zeroed,
+        // d3d12::DeviceDesc::placedTextureHeapSize). Ignored elsewhere.
+        bool allowPlacedMemory = false;
 
         Color clearValue;
         bool useClearValue = false;
@@ -2767,18 +2771,23 @@ namespace nvrhi
         IBuffer* buffer = nullptr;
         Format format;
         uint32_t offset;
+        // King Kong change (task 309, thirdparty/NOTES.md): bytes of the view from offset on D3D12
+        // (indices past it read as 0); 0 = to the end of the buffer, as before. Vulkan ignores it.
+        uint32_t size = 0;
 
         bool operator ==(const IndexBufferBinding& b) const
         {
             return buffer == b.buffer
                 && format == b.format
-                && offset == b.offset;
+                && offset == b.offset
+                && size == b.size;
         }
         bool operator !=(const IndexBufferBinding& b) const { return !(*this == b); }
 
         IndexBufferBinding& setBuffer(IBuffer* value) { buffer = value; return *this; }
         IndexBufferBinding& setFormat(Format value) { format = value; return *this; }
         IndexBufferBinding& setOffset(uint32_t value) { offset = value; return *this; }
+        IndexBufferBinding& setSize(uint32_t value) { size = value; return *this; }
     };
 
     typedef static_vector<IBindingSet*, c_MaxBindingLayouts> BindingSetVector;

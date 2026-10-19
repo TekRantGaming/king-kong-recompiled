@@ -1,9 +1,13 @@
 // NVRHI on the SDK's D3D12Provider device and direct queue, and the hand-over
 // of a frame to the D3D12Presenter's guest output resource.
 
+#include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdint>
+#include <cstdio>
 #include <mutex>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -17,16 +21,24 @@
 #include <rex/ui/d3d12/d3d12_provider.h>
 
 #include "backend/host_device.h"
+#include "backend/gpu_loss.h"
 #include "backend/cpu_profile.h"
 #include "backend/dev_gpu_stats.h"
+#include "backend/buffer_pool.h"
+#include "backend/placed_textures.h"
 #include "backend/d3d12_requirements.h"
 
 REXCVAR_DECLARE(bool, native_validation);
 REXCVAR_DECLARE(int32_t, native_debug);
+REXCVAR_DECLARE(bool, native_d3d12_placed_textures);
+REXCVAR_DECLARE(int32_t, native_d3d12_upload_chunk_kib);
+REXCVAR_DECLARE(bool, native_d3d12_buffer_pool);
 
 namespace nr {
 
 namespace {
+
+constexpr uint64_t kPlacedTextureHeapBytes = 64ull << 20;
 
 class D3D12Host final : public HostDevice {
  public:
@@ -84,7 +96,22 @@ class D3D12Host final : public HostDevice {
     // most 2,048.
     desc.shaderResourceViewHeapSize = 65536;
     desc.samplerHeapSize = 2048;
+    // Task 300: a committed texture costs ~0.3 ms to make and ~0.13 ms to release on an RTX 4070 Ti
+    // against ~0.03 ms placed; a new upload buffer ~0.2-0.8 ms (thirdparty/NOTES.md).
+    if (REXCVAR_GET(native_d3d12_placed_textures)) desc.placedTextureHeapSize = kPlacedTextureHeapBytes;
+    desc.minUploadChunkSize = uint64_t(std::max(REXCVAR_GET(native_d3d12_upload_chunk_kib), 0)) << 10;
+    if (desc.placedTextureHeapSize || desc.minUploadChunkSize) {
+      REXLOG_INFO("rexgpu-native: D3D12 allocation: textures {}, upload chunks {}",
+                  desc.placedTextureHeapSize ? "placed in pooled 64 MiB heaps" : "committed",
+                  desc.minUploadChunkSize ? std::to_string(desc.minUploadChunkSize >> 10) + " KiB minimum, not zeroed"
+                                          : std::string("NVRHI's default"));
+    }
     device_ = nvrhi::d3d12::createDevice(desc);
+    // Task 304: the game renderer zeroes the subresources a guest texture upload leaves out.
+    g_texture_memory_not_zeroed.store(desc.placedTextureHeapSize != 0, std::memory_order_relaxed);
+    // Task 309: the game renderer suballocates guest vertex and index buffers (buffer_pool.h).
+    g_buffer_pool_enabled.store(REXCVAR_GET(native_d3d12_buffer_pool), std::memory_order_relaxed);
+    if (REXCVAR_GET(native_d3d12_buffer_pool)) REXLOG_INFO("rexgpu-native: D3D12 guest buffers: pooled in 32 MiB buffers");
     g_dev_gpu_stats_enabled.store((REXCVAR_GET(native_debug) & 32768) != 0, std::memory_order_relaxed);
     if (!device_) {
       return false;
@@ -128,10 +155,27 @@ class D3D12Host final : public HostDevice {
         if (entry.first == completion) value = entry.second;
       }
     }
-    if (value == 0 || frame_fence_->GetCompletedValue() >= value) return;
+    const uint64_t completed = frame_fence_->GetCompletedValue();
+    if (completed == UINT64_MAX) {
+      // Task 266: a removed device reports every fence as UINT64_MAX (we never signal that value). Report
+      // it here (gpu_loss.h) instead of rendering on until the presenter notices.
+      ReportIfRemoved("D3D12 frame wait");
+      return;
+    }
+    if (value == 0 || completed >= value) return;
     // A null event blocks this thread until the fence reaches the value.
     frame_fence_->SetEventOnCompletion(value, nullptr);
   }
+  // Task 268: reports a removed device with its reason (gpu_loss.h). A lost device's fence signal, idle
+  // wait and frame wait all lead here; one GetDeviceRemovedReason call, never in a normal frame.
+  void ReportIfRemoved(const char* where) {
+    const HRESULT reason = provider_.GetDevice()->GetDeviceRemovedReason();
+    if (SUCCEEDED(reason)) return;
+    char what[128];
+    std::snprintf(what, sizeof(what), "%s: device removed (reason 0x%08X)", where, unsigned(reason));
+    ReportGpuLoss(what);
+  }
+
   void ExecuteFrameCommandList(nvrhi::ICommandList* command_list, nvrhi::IEventQuery* completion) override {
     // ID3D12CommandQueue is thread safe, NVRHI's queue is not: executeCommandList records the list as in
     // flight and runGarbageCollection retires finished ones from the same list. The submission thread
@@ -140,7 +184,14 @@ class D3D12Host final : public HostDevice {
     using clock = std::chrono::steady_clock;
     const uint64_t cpu_start = (REXCVAR_GET(native_debug) & 32768) ? CurrentThreadCpuMicroseconds() : 0;
     const auto t0 = clock::now();
-    std::lock_guard lock(execute_mutex_);
+#if defined(KK_DEV_TOOLS)
+    if (completion && DevGpuLossNow(dev_loss_frames_, "d3d12")) {  // KK_DEV_GPU_LOSS_AFTER
+      ReportGpuLoss("D3D12 submission: device removed (developer injection)");
+      return;
+    }
+#endif
+    bool signal_failed = false;
+    std::unique_lock lock(execute_mutex_);
     const auto t1 = clock::now();
     device_->executeCommandList(command_list);
     if (completion) {
@@ -149,6 +200,8 @@ class D3D12Host final : public HostDevice {
       if (frame_fence_ && SUCCEEDED(provider_.GetDirectQueue()->Signal(frame_fence_, frame_fence_value_ + 1))) {
         ++frame_fence_value_;
         RecordFrameValue(completion, frame_fence_value_);
+      } else if (frame_fence_) {
+        signal_failed = true;
       }
     }
     const auto t2 = clock::now();
@@ -162,6 +215,8 @@ class D3D12Host final : public HostDevice {
     times_.garbage_us += us(t2, t3);
     if (cpu_start) times_.cpu_us += CurrentThreadCpuMicroseconds() - cpu_start;
     ++times_.count;
+    lock.unlock();
+    if (signal_failed) ReportIfRemoved("D3D12 submission");
   }
   SubmitTimes submit_times() const override {
     std::lock_guard lock(execute_mutex_);
@@ -169,13 +224,19 @@ class D3D12Host final : public HostDevice {
   }
 
   void WaitForIdle() override {
-    std::lock_guard lock(execute_mutex_);
-    device_->waitForIdle();
+    {
+      std::lock_guard lock(execute_mutex_);
+      device_->waitForIdle();
+    }
+    ReportIfRemoved("D3D12 wait for idle");
   }
   void RunExclusive(const std::function<void()>& fn) override {
-    std::lock_guard lock(execute_mutex_);
-    device_->waitForIdle();
-    fn();
+    {
+      std::lock_guard lock(execute_mutex_);
+      device_->waitForIdle();
+      fn();
+    }
+    ReportIfRemoved("D3D12 exclusive work");
   }
 
   bool CopyToGuestOutput(rex::ui::Presenter::GuestOutputRefreshContext& context,
@@ -283,6 +344,9 @@ class D3D12Host final : public HostDevice {
   nvrhi::DeviceHandle device_;
   ID3D12Fence* frame_fence_ = nullptr;
   uint64_t frame_fence_value_ = 0;
+#if defined(KK_DEV_TOOLS)
+  std::atomic<uint64_t> dev_loss_frames_{0};
+#endif
   std::vector<std::pair<nvrhi::IEventQuery*, uint64_t>> frame_values_;
   std::array<Wrapped, 4> wrapped_;
   size_t next_slot_ = 0;

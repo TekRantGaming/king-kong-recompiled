@@ -1,5 +1,7 @@
 #include "hooks/kk_native_ui.h"
 
+#include <atomic>
+#include <cstdint>
 #include <cstdio>
 
 #if defined(_WIN32)
@@ -66,6 +68,18 @@ void SetStartupFailureHandler(int (*handler)(const char*)) {
 void SetStartupPresentedHandler(void (*handler)()) {
   using Set = void (*)(void (*)());
   if (auto set = reinterpret_cast<Set>(FindExport("nr_set_startup_presented_handler"))) set(handler);
+}
+
+unsigned long long ShaderCompileMilliseconds() {
+  using Get = uint64_t (*)();
+  // Looked up until found (the plugin may load after the first call), then kept.
+  static std::atomic<Get> get{nullptr};
+  Get f = get.load(std::memory_order_acquire);
+  if (!f) {
+    f = reinterpret_cast<Get>(FindExport("nr_shader_compile_milliseconds"));
+    if (f) get.store(f, std::memory_order_release);
+  }
+  return f ? f() : 0;
 }
 
 void StopLauncherPrewarm() {

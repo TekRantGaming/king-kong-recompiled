@@ -139,6 +139,16 @@ namespace nvrhi::d3d12
         // Enable D3D12 Enhanced Barriers, if supported.
         // Use device->queryFeatureSupport(Feature::EnhancedBarriers) to query the actual support.
         bool enableEnhancedBarriers = true;
+
+        // King Kong change (task 300, thirdparty/NOTES.md). Non-zero: textures that are not render
+        // targets, UAVs, shared, tiled or virtual (and at most a quarter of this size) are placed
+        // resources suballocated from pooled heaps of this many bytes instead of one committed
+        // resource each (about 10x less CPU to make and release on an RTX 4070 Ti). 0: as before.
+        uint64_t placedTextureHeapSize = 0;
+        // King Kong change (task 300). Non-zero: every command list's upload chunks are at least this
+        // big (NVRHI's default is 64 KiB, so each larger texture got its own new upload buffer) and
+        // are made with D3D12_HEAP_FLAG_CREATE_NOT_ZEROED. 0: as before.
+        uint64_t minUploadChunkSize = 0;
     };
 
     NVRHI_API DeviceHandle createDevice(const DeviceDesc& desc);

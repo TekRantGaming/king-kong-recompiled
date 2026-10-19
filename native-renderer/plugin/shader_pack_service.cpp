@@ -32,6 +32,7 @@
 #endif
 
 #include "backend/render_scale.h"
+#include "backend/gpu_loss.h"
 #include "backend/host_device.h"
 #include "backend/pipeline_prewarm.h"
 #include "backend/pipeline_exit_gate.h"
@@ -288,7 +289,7 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
               job->force ? "rebuilding (asked for)" : "checking",
               nr::ToUtf8(kkshaders::packPath(job->options)), kkshaders::packBackendName(job->options.backend),
               job->options.scaled ? ", render scale variants" : "", job->options.threads);
-  job->thread = std::thread([job] {
+  auto run = [job] {
     const auto selected_backend = job->options.backend;
     kkshaders::PackBuildResult r;
     bool current = true;
@@ -539,6 +540,25 @@ NrShaderPackJob* StartJob(const char* cache_dir, const char* game_dir, uint32_t 
     std::lock_guard lock(job->mutex);
     job->result = std::move(r);
     job->finished = true;
+  };
+  job->thread = std::thread([job, run] {
+    // Task 268: the job's own (headless) devices. A Vulkan error thrown inside NVRHI on this thread (a lost
+    // device, out of memory) ends the setup as not built (the launcher reports it, the next start tries again)
+    // instead of std::terminate ending the launcher; never the game's device-loss path (gpu_loss.h).
+    nr::OwnDeviceErrors own;
+    try {
+      run();
+    } catch (const std::system_error& e) {
+      if (!nr::IsVulkanError(e)) throw;
+      REXLOG_WARN("rexgpu-native: setup: graphics device error ({}); shader preparation stopped", e.what());
+      kkshaders::PackBuildResult r;
+      r.ok = r.upToDate = false;
+      r.error = std::string("graphics device error: ") + e.what();
+      job->preparing = false;
+      std::lock_guard lock(job->mutex);
+      job->result = std::move(r);
+      job->finished = true;
+    }
   });
   return job;
 }

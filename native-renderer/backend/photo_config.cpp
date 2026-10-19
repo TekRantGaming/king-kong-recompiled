@@ -59,6 +59,7 @@ NrPhotoSettings NeutralPhotoSettings() {
   s.sharpness = -1;
   s.brightness = NAN;
   s.gamma = NAN;
+  s.undim = 1.0f;
   return s;
 }
 
@@ -85,6 +86,7 @@ NrPhotoSettings SanitizePhotoSettings(const NrPhotoSettings& in) {
   s.sharpness = in.sharpness < 0 ? -1 : std::min(in.sharpness, 3);
   s.brightness = std::isfinite(in.brightness) ? std::clamp(in.brightness, -50.0f, 50.0f) : NAN;
   s.gamma = std::isfinite(in.gamma) ? std::clamp(in.gamma, 0.5f, 1.5f) : NAN;
+  s.undim = Clamp(in.undim, 1.0f, 6.0f, 1.0f);  // the paused game's dimming taken back (task 272)
   return s;
 }
 
@@ -92,7 +94,12 @@ bool PhotoGradeNeeded(const NrPhotoSettings& s) {
   if (!s.active) return false;
   return (s.look && s.look_strength > 0.0f) || s.exposure != 0.0f || s.contrast != 1.0f || s.saturation != 1.0f ||
          s.temperature != 0.0f || s.vignette > 0.0f || s.grain > 0.0f || s.letterbox > 0.0f || s.flip ||
-         s.dof > 0.0f;
+         s.dof > 0.0f || s.undim != 1.0f;
+}
+
+float PhotoExposureGain(const NrPhotoSettings& s) {
+  const float undim = std::isfinite(s.undim) && s.undim > 1.0f ? std::min(s.undim, 6.0f) : 1.0f;
+  return std::exp2(s.exposure) * std::pow(undim, 2.2f);
 }
 
 std::array<float, 3> PhotoLookColour(uint32_t look) {
@@ -109,7 +116,7 @@ std::array<float, 3> PhotoLookColour(uint32_t look) {
 
 std::array<float, 3> PhotoGradeColour(const NrPhotoSettings& s, std::array<float, 3> c) {
   constexpr float kW[3] = {0.2126f, 0.7152f, 0.0722f};
-  const float gain = std::exp2(s.exposure);
+  const float gain = PhotoExposureGain(s);
   const float warm[3] = {1.0f + 0.10f * s.temperature, 1.0f + 0.01f * s.temperature, 1.0f - 0.10f * s.temperature};
   for (int i = 0; i < 3; ++i) {
     float lin = std::pow(std::max(c[i], 0.0f), 2.2f) * gain * warm[i];

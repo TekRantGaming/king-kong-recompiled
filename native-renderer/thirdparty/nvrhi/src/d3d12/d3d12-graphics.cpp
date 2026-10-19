@@ -375,7 +375,7 @@ namespace nvrhi::d3d12
                 Buffer* buffer = checked_cast<Buffer*>(state.indexBuffer.buffer);
 
                 IBV.Format = getDxgiFormatMapping(state.indexBuffer.format).srvFormat;
-                IBV.SizeInBytes = (UINT)(buffer->desc.byteSize - state.indexBuffer.offset);
+                IBV.SizeInBytes = state.indexBuffer.size ? state.indexBuffer.size : (UINT)(buffer->desc.byteSize - state.indexBuffer.offset);
                 IBV.BufferLocation = buffer->gpuVA + state.indexBuffer.offset;
 
                 m_Instance->referencedResources.push_back(state.indexBuffer.buffer);

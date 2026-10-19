@@ -332,6 +332,149 @@ TEST(PipelineListMerger_EveryPipelineOnceInTheOrderFirstSeen) {
   std::remove(b.c_str());
 }
 
+// Task 276: the level tag lives in reserved[0], outside the key; files before it read as untagged.
+TEST(PipelineRecord_LevelTagIsNotPartOfThePipeline) {
+  PipelineRecord r = Sample(1);
+  CHECK(!RecordLevel(r));
+  const uint64_t key = PipelineKey(r);
+  SetRecordLevel(r, 0);  // level 0 is a level, told apart from "not known"
+  uint32_t level = 99;
+  CHECK(RecordLevel(r, &level));
+  CHECK_EQ(level, 0u);
+  SetRecordLevel(r, 303);
+  CHECK(RecordLevel(r, &level));
+  CHECK_EQ(level, 303u);
+  CHECK_EQ(PipelineKey(r), key);
+  ClearRecordLevel(r);
+  CHECK(!RecordLevel(r));
+  // A motion record is drawn in its draw's level.
+  SetRecordLevel(r, 7);
+  CHECK(RecordLevel(MotionPipelineRecord(r, 1), &level));
+  CHECK_EQ(level, 7u);
+}
+
+TEST(PipelineList_LevelTagsSurviveWriteReadAndTheCacheFile) {
+  const std::string list = TempPath("tags_list"), cache = TempPath("tags_cache");
+  PipelineRecord a = Sample(1), b = Sample(2);
+  SetRecordLevel(b, 305);
+  CHECK(WritePipelineList(list, {a, b}));
+  std::vector<PipelineRecord> read;
+  CHECK(ReadPipelineList(list, read));
+  CHECK_EQ(read.size(), size_t(2));
+  if (read.size() == 2) {
+    CHECK(!RecordLevel(read[0]));
+    uint32_t level = 0;
+    CHECK(RecordLevel(read[1], &level));
+    CHECK_EQ(level, 305u);
+  }
+  {
+    PipelineCacheFile file;
+    CHECK(file.Open(cache));
+    CHECK(file.Append(b));
+    PipelineRecord again = b;
+    SetRecordLevel(again, 9);  // the same pipeline in another level: already known, the first level stays
+    CHECK(!file.Append(again));
+    CHECK(file.Known(Sample(2)));
+  }
+  PipelineCacheFile file;
+  CHECK(file.Open(cache));
+  CHECK_EQ(file.loaded().size(), size_t(1));
+  if (file.loaded().size() == 1) CHECK(file.loaded()[0] == b);
+  file.Close();
+  std::remove(list.c_str());
+  std::remove(cache.c_str());
+}
+
+TEST(PipelineListMerger_LevelVotes) {
+  const auto tagged = [](uint64_t vs, uint32_t level) {
+    PipelineRecord r = Sample(vs);
+    SetRecordLevel(r, level);
+    return r;
+  };
+  const auto level_of = [](const PipelineRecord& r) {
+    uint32_t level = 0;
+    return RecordLevel(r, &level) ? int64_t(level) : int64_t(-1);
+  };
+  PipelineListMerger merger;
+  // Sample(1): untagged first, then 5, 6, 6 -> 6 (most votes). Sample(2): 3 then 4 -> 3 (a tie: the earliest).
+  // Sample(3): never tagged. Sample(4): 8 alone.
+  merger.AddRecords({Sample(1), tagged(2, 3), Sample(3)});
+  merger.AddRecords({tagged(1, 5), tagged(2, 4), Sample(3), tagged(4, 8)});
+  merger.AddRecords({tagged(1, 6)});
+  CHECK_EQ(merger.records().size(), size_t(4));
+  if (merger.records().size() == 4) {
+    CHECK_EQ(level_of(merger.records()[0]), int64_t(5));  // 5 and 6 tie so far: the first voted for
+    CHECK_EQ(level_of(merger.records()[1]), int64_t(3));
+    CHECK_EQ(level_of(merger.records()[2]), int64_t(-1));
+    CHECK_EQ(level_of(merger.records()[3]), int64_t(8));
+  }
+  merger.AddRecords({tagged(1, 6)});
+  CHECK_EQ(level_of(merger.records()[0]), int64_t(6));  // now 6 has more votes
+  // The order and the keys are those of an untagged merge.
+  CHECK_EQ(PipelineKey(merger.records()[0]), PipelineKey(Sample(1)));
+  CHECK_EQ(PipelineKey(merger.records()[3]), PipelineKey(Sample(4)));
+
+  // tags_only: the first input's records, the others only vote.
+  PipelineListMerger tags(false, true);
+  CHECK_EQ(tags.AddRecords({Sample(1), Sample(2)}), size_t(2));
+  CHECK_EQ(tags.AddRecords({tagged(2, 11), tagged(9, 12)}), size_t(0));
+  CHECK_EQ(tags.records().size(), size_t(2));
+  if (tags.records().size() == 2) {
+    CHECK_EQ(level_of(tags.records()[0]), int64_t(-1));
+    CHECK_EQ(level_of(tags.records()[1]), int64_t(11));
+  }
+}
+
+// Task 279: a list's 1:1 record takes the level of the recorded render scale twin (other translations).
+TEST(PipelineListMerger_TagFromSimilar) {
+  PipelineRecord one = Sample(1), other = Sample(2);
+  one.ps_input = 0x10;
+  PipelineRecord scaled = one;
+  scaled.flags |= kRecordScaled;
+  scaled.ps_input = 0x20;
+  scaled.vs_input = 0x30;
+  CHECK(PipelineKey(scaled) != PipelineKey(one));
+  CHECK_EQ(SimilarPipelineKey(scaled), SimilarPipelineKey(one));
+  CHECK(SimilarPipelineKey(other) != SimilarPipelineKey(one));
+  SetRecordLevel(scaled, 401);
+  PipelineListMerger tags(false, true);
+  tags.AddRecords({one, other});
+  tags.AddRecords({scaled});
+  CHECK(!RecordLevel(tags.records()[0]));
+  CHECK_EQ(tags.TagFromSimilar(), size_t(1));
+  uint32_t level = 0;
+  CHECK(RecordLevel(tags.records()[0], &level));
+  CHECK_EQ(level, 401u);
+  CHECK(!RecordLevel(tags.records()[1]));
+  CHECK_EQ(PipelineKey(tags.records()[0]), PipelineKey(one));  // still the list's own pipeline
+}
+
+TEST(PipelinesTool_TagsOnly) {
+  const std::string list = TempPath("tool_tag_list"), run = TempPath("tool_tag_run"), out = TempPath("tool_tag_out");
+  CHECK(WritePipelineList(list, {Sample(1), Sample(2)}));
+  PipelineRecord r2 = Sample(2), r3 = Sample(3);
+  SetRecordLevel(r2, 305);
+  SetRecordLevel(r3, 306);
+  CHECK(WritePipelineList(run, {r3, r2}));
+  CHECK_EQ(RunTool("merge --tags-only -o " + Quoted(out) + " " + Quoted(list) + " " + Quoted(run)), 0);
+  std::vector<PipelineRecord> merged;
+  CHECK(ReadPipelineList(out, merged));
+  CHECK_EQ(merged.size(), size_t(2));
+  if (merged.size() == 2) {
+    CHECK(!RecordLevel(merged[0]));
+    CHECK(merged[1] == r2);
+  }
+  CHECK_EQ(RunTool("info " + Quoted(out)), 0);
+  // Without --tags-only the recording's new pipeline is added too.
+  CHECK_EQ(RunTool("merge -o " + Quoted(out) + " " + Quoted(list) + " " + Quoted(run)), 0);
+  merged.clear();
+  CHECK(ReadPipelineList(out, merged));
+  CHECK_EQ(merged.size(), size_t(3));
+  std::remove(list.c_str());
+  std::remove(run.c_str());
+  std::remove(out.c_str());
+}
+
 TEST(PipelinesTool_MergeAndInfo) {
   const std::string a = TempPath("tool_a"), b = TempPath("tool_b"), out = TempPath("tool_out.list");
   CHECK(WritePipelineList(a, {Sample(1), Sample(2)}));

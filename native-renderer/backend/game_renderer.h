@@ -51,6 +51,7 @@
 #include "backend/scene_gi.h"
 #include "backend/scene_lighting.h"
 #include "backend/memory_budget.h"
+#include "backend/buffer_pool.h"
 #include "backend/retire_budget.h"
 #include "backend/draw_sink.h"
 #include "backend/driver_pipeline_cache.h"
@@ -117,6 +118,13 @@ class GameRenderer {
     bool texture_tail_mips = false;
     bool texture_pack = false;
     std::string texture_pack_folder;
+    // Task 284: look through the waiting originals (Request/Take for each, every frame) only when the
+    // pack stream finished a read batch or an original's pack state changed, and at least every 60
+    // frames. Off: every frame (before task 284).
+    bool texture_pack_event_scan = false;
+    // Task 284: a replacement larger than the free pack limit drops its most detailed mips until it
+    // fits (never below the original's size) instead of keeping the original. Off: kept original.
+    bool texture_pack_reduce_mips = false;
     // Vertex buffers the game rewrites every frame stop being watched: each draw uploads the
     // vertices it reads instead. Watching them cost a write fault per 4 KB page and frame (340 a
     // frame in Venture: the game writes a 4 MB ring of particle vertices between its draws).
@@ -152,6 +160,28 @@ class GameRenderer {
     // Without pipeline_wait: the time a frame may spend waiting for skippable draws' pipelines before
     // they are skipped (milliseconds, all draws of the frame together; 0 skips at once, the default).
     double pipeline_wait_budget_ms = 0.0;
+    // Task 267: the hard cap on a frame's waits for draws later draws depend on (depth-only, stencil
+    // writes, screen-space), milliseconds, all such draws of the frame together; after it they are
+    // skipped until their pipeline is ready (pop-in for a frame or two instead of a freeze). While the
+    // game loads (its last frame may stay on screen) pipeline_loading_wait_ms. Negative: no cap (the
+    // pre-267 behaviour; --native_pipeline_must_wait_ms=-1). pipeline_wait (block-all) never has a cap.
+    double pipeline_must_wait_ms = 4.0;
+    double pipeline_loading_wait_ms = 100.0;
+    // Task 280 (chapter-start texture burst): the chapter's learned/shipped resources (resource
+    // lists, game_preload.cpp) prepared ahead of their first draw. chapter_preload_mib: new uploads per
+    // chapter (loading screen + trickle) in MiB; 64 = before task 280; GPU budget pressure keeps 64.
+    // chapter_trickle_mib: after the loading screen, for the 10 s the list is learned from, MiB of
+    // still-missing listed resources prepared per frame (0 = only during loading, before task 280).
+    uint32_t chapter_preload_mib = 64;
+    uint32_t chapter_trickle_mib = 0;
+    // Task 276: when a level's loading screen starts, the prewarm's jobs of the records tagged with that level
+    // (PipelineRecord level tags) go ahead of the rest of the list (behind draws' jobs). False: list order (the
+    // behaviour before task 276). New records are tagged with the level whatever this says.
+    bool pipeline_level_first = false;
+    // Task 276: background (prewarm) compile jobs at once while a level is being played (not loading):
+    // PlayBackgroundPipelineWorkers (pipeline_workers.h): 0 = no limit (before task 276), N = at most N,
+    // -1 = auto (few-core PCs keep a third of the workers). Menus and loading screens always run them all.
+    int32_t pipeline_play_workers = 0;
     // The driver's pipeline cache (SetDriverPipelineCache) is saved when the workers run out of work
     // with at least this many new pipelines made since the last save, or with any after
     // driver_cache_save_seconds. A rebuild (the file was another driver's) is saved when the workers
@@ -219,6 +249,7 @@ class GameRenderer {
     uint64_t pipeline_waits = 0;     // draws that waited for their pipeline (pipeline_wait)
     double pipeline_wait_ms = 0;
     uint64_t pipeline_budget_waits = 0;  // draws drawn after waiting within pipeline_wait_budget_ms
+    uint64_t must_draw_skips = 0;        // task 267: draws that wait, skipped once the frame's cap was used
     // Task 179: waits by why the draw had to wait (PipelineMissClass; kScene = within the budget), and
     // the pipelines skipped draws missed: how many, and how long (frames, ms) until they were drawn.
     std::array<uint64_t, size_t(PipelineMissClass::kCount)> pipeline_waits_by_class{};
@@ -248,6 +279,7 @@ class GameRenderer {
     uint64_t early_upload_bytes = 0, early_upload_batches = 0;
     uint64_t prepared_resources = 0, prepared_discarded = 0;
     uint64_t preloaded_resources = 0, preload_hits = 0, preload_hash_misses = 0, preload_bytes = 0;
+    uint64_t trickled_resources = 0, trickle_bytes = 0;  // task 280: preloaded after the loading screen
     double resource_prepare_ms = 0;  // render-thread wall time of joined first-use batches
     uint64_t draw_constant_uploads = 0, draw_constant_identical = 0;
     // Draws (and upscaler motion draws) recorded in one list since it opened or last completed:
@@ -280,6 +312,10 @@ class GameRenderer {
     double texture_ms = 0;          // time spent converting and uploading textures
     uint64_t pack_textures_ready = 0;  // texture pack replacements finished uploading (task 211)
     uint64_t pack_upload_bytes = 0;    // texture pack bytes written to the GPU (task 211)
+    // Task 284: render-thread milliseconds in ServiceTexturePacks (all of it), of which creating
+    // replacement textures, creating/writing upload strips and whole-level writes.
+    double pack_service_ms = 0, pack_create_ms = 0, pack_strip_ms = 0, pack_write_ms = 0, pack_scan_ms = 0,
+           pack_sweep_ms = 0;
     double buffer_ms = 0;           // vertex and index buffers: finding, creating and uploading
     double target_ms = 0;           // render targets and framebuffers: finding and creating
   };
@@ -652,7 +688,10 @@ class GameRenderer {
   // extra_lod_bias: added to the fetch constant's (the upscalers' mip bias for the scene's draws).
   uint32_t BindSampler(const uint32_t words[6], const kkshaders::SamplerBinding& binding, float extra_lod_bias = 0.0f);
   struct HostBuffer {
-    nvrhi::BufferHandle buffer;
+    nvrhi::BufferHandle buffer;  // a pooled one's block (task 309)
+    BufferPool::Range range;     // pooled (--native_d3d12_buffer_pool): the bytes of `buffer` it owns
+    BufferPool* pool = nullptr;  // the pool `range` is from
+    uint32_t view_bytes = 0;     // bytes of its view (the size its own buffer would have had)
     uint32_t slot = 0;  // kBuffers descriptor (vertex data)
     uint32_t bytes = 0;
     // Dynamic vertex data (Options::dynamic_vertex_buffers): re-uploaded in consecutive frames.
@@ -662,6 +701,14 @@ class GameRenderer {
     bool preloaded = false;
     kknr::BufferCache::Entry* entry = nullptr;
   };
+  // Task 309: the guest buffer's memory, pooled when --native_d3d12_buffer_pool is on (buffer_pool.h).
+  bool MakeHostBuffer(HostBuffer* host, const nvrhi::BufferDesc& desc, bool index);
+  uint64_t BufferOffset(const HostBuffer* host) const { return host->range.valid() ? host->range.allocation.offset : 0; }
+  nvrhi::BindingSetItem VertexView(const HostBuffer* host) const;
+  // A pooled range's bytes past the upload (up to view_bytes) hold an old owner's data: zeroed, as a
+  // new buffer's were.
+  void ZeroPooledTail(nvrhi::ICommandList* list, const HostBuffer* host, uint64_t written);
+  std::unique_ptr<BufferPool> vertex_pool_, index_pool_;
   std::unordered_set<HostTexture*> descriptor_textures_;
   std::unordered_set<HostBuffer*> descriptor_buffers_;
   // used_begin / used_end: the bytes of the buffer this draw reads (a dynamic buffer uploads only
@@ -690,6 +737,29 @@ class GameRenderer {
   uint64_t resource_poll_frame_ = ~0ull, preload_reserved_bytes_ = 0;
   std::chrono::steady_clock::time_point resource_learn_start_;
   static constexpr uint64_t kChapterPreloadBytes = 64ull << 20;
+  // Task 280: the new-upload cap of this chapter's preparation (options_.chapter_preload_mib, 64 MiB
+  // under GPU budget pressure) and the gameplay trickle window after its loading screen.
+  uint64_t ChapterPreloadBytes() const;
+  std::chrono::steady_clock::time_point resource_trickle_until_;
+  bool resource_trickle_ = false, resource_sweep_ = false;
+  static constexpr int kChapterSweepMs = 40;
+  // Task 280 diagnostics: the guest textures the first gameplay frames after a loading screen still
+  // upload at their draw (log lines "chapter start frame"), and whether the chapter list had them.
+  struct StartUploads {
+    uint32_t frames_left = 0, frame = 0;
+    uint32_t textures = 0, listed = 0, prepared = 0;
+    uint64_t bytes = 0, listed_bytes = 0;
+    double texture_ms = 0, prepare_ms = 0;
+    uint64_t trickled = 0, trickle_bytes = 0;
+  } start_uploads_;
+  void NoteStartUpload(const kknr::TextureFetch& fetch, uint64_t bytes, bool prepared);
+  // Task 284: a log line for a frame whose texture pack work on the render thread took >= 2 ms.
+  void LogTexturePackFrame();
+  double pack_logged_ms_[6] = {}, pack_window_ms_ = 0;
+  uint64_t pack_events_seen_ = ~0ull, pack_scan_frame_ = 0, pack_scans_ = 0, pack_window_scans_ = 0;
+  bool pack_scan_ = true;  // task 284: an original's pack state changed; look through them this frame
+  uint32_t pack_frame_lines_ = 0;
+  void EndStartUploadFrame();
   std::unique_ptr<class ResourceUploadWorkers> resource_upload_workers_;
   std::atomic<uint64_t> resource_revision_{0};
   void TryPrepareResourceUploads(nvrhi::ICommandList* cl);
@@ -774,6 +844,7 @@ class GameRenderer {
     nvrhi::FramebufferInfo framebuffer;
     bool urgent = false;
     PipelineBuild build = PipelineBuild::kWhole;
+    uint32_t level = 0;  // task 276: the listed record's level tag (PipelineRecord::reserved[0]; 0 = none)
   };
   struct DonePipeline {
     uint64_t key = 0;
@@ -813,6 +884,18 @@ class GameRenderer {
   std::mutex pipeline_mutex_;
   std::condition_variable pipeline_cv_;
   std::deque<PipelineJob> pipeline_jobs_;
+  uint64_t must_wait_frame_ = ~0ull;  // task 267: the frame must_wait_ms_ counts (render thread)
+  double must_wait_ms_ = 0;           // this frame's waits of draws later draws depend on
+  int dev_compile_delay_ms_ = 0;      // KK_DEV_PIPELINE_DELAY_MS (dev): a slow PC's cold compiles
+  // Task 276: level tags and the workers while playing.
+  void PipelineLevelLoading(uint32_t level);  // render thread: a level's loading screen started
+  void PipelineLevelPlaying();                // render thread: its loading screen ended
+  uint32_t record_level_tag_ = 0;   // the tag new records get (render thread; 0 before the first level)
+  uint32_t priority_level_tag_ = 0;  // the level whose prewarm jobs go first (pipeline_mutex_)
+  bool pipelines_playing_ = false;   // a level is being played: play_background_ applies (pipeline_mutex_)
+  unsigned play_background_ = 1;     // background jobs at once while playing (EnsureWorkers)
+  unsigned all_background_ = 1;      // and otherwise
+  bool play_workers_logged_ = false;
   std::vector<DonePipeline> pipelines_done_;
   std::unordered_map<uint64_t, bool> pipelines_pending_;
   bool pipeline_stop_ = false;
@@ -1257,7 +1340,9 @@ class GameRenderer {
     HostTexture* replacement = nullptr;
     std::shared_ptr<const kknr::HostTextureData> data;
     uint32_t subresource = 0, row = 0;
+    uint32_t drop = 0;  // task 284: most detailed levels left out (texture_pack_reduce_mips)
   } pack_upload_;
+  uint64_t pack_reduced_ = 0;
   static PackKey PackKeyOf(const HostTexture& original) {
     return {original.pack_hash, uint32_t(original.plan.format), original.plan.width, original.plan.height};
   }

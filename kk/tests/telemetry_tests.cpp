@@ -189,7 +189,7 @@ void Uploads(const fs::path& out) {
   };
   WriteFile(c.pipelines_file, "KGPC" + std::string(4000, 'p'));
   WriteFile(root / "user" / "crashes" / "crash-20261017-100000-000-1.txt",
-            "King Kong crashed.\nException 0xC0000005 at 0000\nStack:\n  king_kong.exe + 0x1234\n"
+            "King Kong crashed.\nException 0xC0000005 at 0000\nGraphics API: vulkan\nStack:\n  king_kong.exe + 0x1234\n"
             "King Kong PC port diagnostics\nVersion: 2.0.0-beta.7\nlog C:\\Users\\TekRa\\Documents\\king_kong\\x.log "
             "by TekRa\n");
   WriteFile(root / "user" / "crashes" / "crash-20261001-100000-000-1.txt", "King Kong crashed.\nVersion: 2.0.0-beta.6\n");
@@ -251,11 +251,12 @@ void Uploads(const fs::path& out) {
   sent.clear();
   Check(SendCrashReports(c, 1) == 1 && sent.size() == 1, "one report per start");
   Check(sent[0].path == "/v1/crash" && Header(sent[0], "X-KK-Kind") == "crash" &&
-            Header(sent[0], "X-KK-Install") == c.install_id && Header(sent[0], "X-KK-Api") == "d3d12",
-        "crash request headers");
+            Header(sent[0], "X-KK-Install") == c.install_id && Header(sent[0], "X-KK-Api") == "vulkan",
+        "crash request headers (task 270: the crashed session's API, not the uploader's d3d12)");
   WriteFile(out / "crash-body.gz", sent[0].body);
   Check(PendingReports(c).size() == 1, "the crash report is remembered as sent");
   Check(SendCrashReports(c, 1) == 1 && Header(sent.back(), "X-KK-Kind") == "hang", "then the hang report");
+  Check(Header(sent.back(), "X-KK-Api") == "d3d12", "a report that names no API: the uploader's");
   Check(PendingReports(c).empty() && SendCrashReports(c, 5) == 0, "nothing left to send");
 
   // The summary: kept until the server takes it.
@@ -409,6 +410,166 @@ void WorstFrames(const fs::path& out) {
   WriteFile(out / "perf-worst.json", json);
 }
 
+// Task 270: crash report API, hitch causes, video memory, the precise CPU clock.
+void Task270(const fs::path& out) {
+  // The crashed session's API.
+  Same(ReportApi("King Kong crashed.\nGraphics API: d3d12\nStack:\n"), "d3d12", "report API line");
+  Same(ReportApi("x\r\nGraphics API: vulkan\r\n"), "vulkan", "report API line (CRLF)");
+  Same(ReportApi("Settings:\n  native_backend = d3d12\n"), "d3d12", "the backend setting when no API line");
+  Same(ReportApi("Graphics API: vulkan\n  native_backend = d3d12\n"), "vulkan", "the API line wins");
+  Same(ReportApi("  native_backend = auto\nmy_native_backend = d3d12\n"), "", "auto / another key: not known");
+  Same(ReportApi("Graphics API: "), "", "cut short");
+
+  // Hitch causes.
+  Check(!HitchWanted(3, 50.0) && HitchWanted(3, 50.1) && HitchWanted(3, 249.9) && !HitchWanted(3, 250.0),
+        "hitches are over 50 and under 250 ms");
+  Check(!HitchWanted(-1, 100) && !HitchWanted(3, std::nan("")), "menus and non-finite frames are not hitches");
+  const auto hitch = [](double ms) {
+    WorstFrame f;
+    f.ms = ms;
+    f.swap_ms = 2, f.cap_wait_ms = 0, f.focus = 0, f.native = true;
+    return f;
+  };
+  const auto cause = [](const WorstFrame& f) { return std::string(HitchName(ClassifyHitch(f))); };
+  WorstFrame f = hitch(100);
+  Same(cause(f), "game", "the game thread's own time");
+  f.pipe_wait_ms = 30;
+  Same(cause(f), "pipeline", "a pipeline wait of a quarter of the frame");
+  f.tex_ms = 20, f.prepare_ms = 20;
+  Same(cause(f), "texture", "the largest measured wait wins");
+  f.read_max_ms = 60;
+  Same(cause(f), "read", "a long file read");
+  f.gpu_wait_ms = 70;
+  Same(cause(f), "gpu", "waiting for the GPU");
+  f.submit_ms = 80;
+  Same(cause(f), "present", "present/submit");
+  f.focus_changed = true;
+  Same(cause(f), "focus", "focus change comes first");
+  f = hitch(100);
+  f.focus = 1;
+  Same(cause(f), "focus", "in the background");
+  f = hitch(100);
+  f.sleep_ms = 500;
+  Same(cause(f), "focus", "the PC slept");
+  f = hitch(100);
+  f.pipe_wait_ms = 20;  // under a quarter: not the cause; the game thread is
+  Same(cause(f), "game", "small waits do not count");
+  f = hitch(100);
+  f.swap_ms = 70;
+  Same(cause(f), "present", "the swap call waiting for the renderer");
+  f.pipes_made = 3, f.compile_ms = 40;
+  Same(cause(f), "compile", "background pipeline creation before the swap wait");
+  f = hitch(100);
+  f.native = false, f.pipe_wait_ms = 90, f.swap_ms = 60;
+  Same(cause(f), "present", "no renderer figures: renderer causes are not used");
+  f = hitch(100);
+  f.swap_ms = -1, f.cap_wait_ms = -1;
+  Same(cause(f), "unknown", "nothing measured");
+
+  // Per-chapter counters, merged, in the JSON only when not zero.
+  ChapterStats a, b;
+  a.entry = b.entry = 9;
+  for (int i = 0; i < 600; ++i) a.AddFrame(1000.0 / 60);
+  a.AddHitch(Hitch::kPipeline), a.AddHitch(Hitch::kPipeline), a.AddHitch(Hitch::kGame);
+  b.AddFrame(16), b.AddHitch(Hitch::kPipeline), b.AddHitch(Hitch::kUnknown);
+  a.Merge(b);
+  Check(a.hitches[size_t(Hitch::kPipeline)] == 3 && a.hitches[size_t(Hitch::kUnknown)] == 1, "hitch counts merge");
+  std::string json = a.Json();
+  Check(json.find(",\"hitch\":{\"pipeline\":3,\"game\":1,\"unknown\":1}") != std::string::npos, "hitch JSON: " + json);
+  Check(ChapterStats{}.Json().find("hitch") == std::string::npos, "no hitches: no hitch field");
+
+  // Video memory: the chapter's peak (with the budget then) and the value at the worst frame.
+  ChapterStats v;
+  v.entry = 2;
+  v.AddFrame(16), v.AddVram(3000, 8000, true);
+  v.AddFrame(120), v.AddVram(5000, 7900, true);  // the worst frame so far
+  v.AddFrame(16), v.AddVram(7000, 7800, false);  // the peak
+  v.AddFrame(16), v.AddVram(-1, -1, false);      // not known: nothing changes
+  Check(v.vram_peak_mib == 7000 && v.vram_peak_budget_mib == 7800, "VRAM peak and its budget");
+  Check(v.vram_worst_mib == 5000 && v.vram_worst_budget_mib == 7900, "VRAM at the worst frame");
+  ChapterStats w;  // a later part of the chapter with a slower frame whose VRAM is not known
+  w.entry = 2;
+  w.AddFrame(200), w.AddVram(-1, -1, true);
+  ChapterStats v2 = v;
+  v2.Merge(w);
+  Check(v2.vram_worst_mib == -1 && v2.vram_peak_mib == 7000, "a slower frame without VRAM figures: not known");
+  ChapterStats x;
+  x.entry = 2;
+  x.AddFrame(20), x.AddVram(7500, 7600, true);
+  v.Merge(x);
+  Check(v.vram_peak_mib == 7500 && v.vram_peak_budget_mib == 7600 && v.vram_worst_mib == 5000,
+        "merge: higher peak taken, worst frame kept");
+  json = v.Json();
+  Check(json.find("\"vramPeakMiB\":7500,\"vramPeakBudgetMiB\":7600,\"vramWorstMiB\":5000,\"vramWorstBudgetMiB\":7900") !=
+            std::string::npos,
+        "VRAM JSON: " + json);
+  WorstFrame wf;
+  wf.ms = 300, wf.vram_mib = 6100, wf.budget_mib = 6144, wf.cause = "texture";
+  json = wf.Json();
+  Check(json.find("\"vramMiB\":6100,\"budgetMiB\":6144") != std::string::npos && json.find("\"cause\":\"texture\"") != std::string::npos,
+        "worst frame VRAM and cause: " + json);
+  wf.cause = "C:\\Users\\x";
+  Check(wf.Json().find('\\') == std::string::npos && wf.Json().find("\"cause\":\"CUsersx\"") != std::string::npos,
+        "the cause is a plain word");
+
+  // The summary: session peak and whether pack textures were loaded; absent when not known.
+  PerfSummary s;
+  s.install_id = "0123abcd-0000-4000-8000-0000000000ff", s.version = "2.0.0-beta.11", s.api = "vulkan";
+  ChapterStats ch = a;
+  ch.total_ms = 60000;
+  s.chapters.push_back(ch);
+  json = PerfJson(s);
+  Check(json.find("vramPeak") == std::string::npos, "no session VRAM when not known");
+  Check(json.find("texturePackUsed") == std::string::npos, "pack use not known: left out");
+  s.vram_peak_mib = 7900, s.vram_peak_budget_mib = 8000, s.texture_pack_used = 1;
+  json = PerfJson(s);
+  Check(json.find("\"startupFallback\":false,\"vramPeakMiB\":7900,\"vramPeakBudgetMiB\":8000,\"texturePackUsed\":true}") !=
+            std::string::npos,
+        "session VRAM and pack use: " + json.substr(json.size() > 120 ? json.size() - 120 : 0));
+  WriteFile(out / "perf-task270.json", json);
+
+  // A full summary still fits 16 KB: 64 chapters with every new field.
+  PerfSummary big = s;
+  big.chapters.clear();
+  for (int i = 0; i < 64; ++i) {
+    ChapterStats c = ch;
+    c.entry = i;
+    for (size_t k = 0; k < kHitchCauses; ++k) c.hitches[k] = 1000 + uint32_t(k);
+    c.vram_peak_mib = c.vram_worst_mib = 12000, c.vram_peak_budget_mib = c.vram_worst_budget_mib = 12288;
+    for (double ms : {11200.0, 900.0, 300.0}) {
+      WorstFrame fr = Frame(ms);
+      fr.vram_mib = 12000, fr.budget_mib = 12288, fr.cause = "pipeline";
+      AddWorstFrame(c.worst, fr);
+    }
+    big.chapters.push_back(c);
+  }
+  json = PerfJson(big);
+  Check(!json.empty() && json.size() <= kMaxPerfBytes, "64 full chapters within 16 KB: " + std::to_string(json.size()));
+
+  // The precise CPU clock: calibration and the check against the coarse thread time.
+  Check(PreciseCpuClock::Rate(0, 0, 3000000, 999) == 0, "under a second: no rate yet");
+  Check(std::abs(PreciseCpuClock::Rate(1000, 10, 3000001000ull, 1010) - 3e6) < 1, "3 GHz over a second");
+  Check(PreciseCpuClock::Rate(5, 0, 5, 2000) < 0 && PreciseCpuClock::Rate(0, 0, 1000, 2000) < 0,
+        "a cycle counter that does not move: nonsense");
+  Check(PreciseCpuClock::Rate(0, 2000, 10, 0) < 0, "time going back: nonsense");
+  PreciseCpuClock clock;
+  Check(clock.Check(100.0, 93.6) && clock.Check(600.3, 593.0), "agreeing figures, under the check window");
+  Check(clock.Check(1120.4, 1124.0) && clock.Trusted(), "agreeing over a second: trusted");
+  Check(clock.Check(2130.0, 2140.0) && clock.Trusted(), "quantised coarse figures still agree");
+  Check(!clock.Check(2200.0, 3200.0) && !clock.Trusted(), "a big disagreement: dropped");
+  Check(!clock.Check(4000.0, 4000.0) && !clock.Trusted(), "dropped for good");
+  PreciseCpuClock wine;
+  wine.Check(0, 0);
+  Check(!wine.Check(10000.0, 1000.0), "a cycle count 10x too fast is dropped");
+  PreciseCpuClock failed;
+  failed.Fail();
+  Check(!failed.Trusted() && !failed.Check(1, 1), "Fail: never trusted again");
+  // Resolution: a 3 ms frame of CPU time is seen as 3 ms, not 0 or 15.6.
+  const double rate = 3e6;
+  Check(std::abs((uint64_t(1000 * rate + 3 * rate) / rate - uint64_t(1000 * rate) / rate) - 3.0) < 1e-6,
+        "3 ms of cycles is 3 ms");
+}
+
 int main(int argc, char** argv) {
   const fs::path out = argc > 1 ? argv[1] : "telemetry-test";
   fs::create_directories(out);
@@ -417,6 +578,7 @@ int main(int argc, char** argv) {
   Stats();
   Perf(out);
   WorstFrames(out);
+  Task270(out);
   GzipSamples(out);
   Uploads(out);
   if (failures) return 1;

@@ -20,6 +20,7 @@ REXCVAR_DECLARE(bool, kk_launcher);
 REXCVAR_DECLARE(bool, kk_skip_launcher);
 REXCVAR_DECLARE(std::string, kk_start);
 REXCVAR_DECLARE(int32_t, kk_frame_rate);
+REXCVAR_DECLARE(int32_t, kk_cpu_priority);  // task 295
 REXCVAR_DECLARE(std::string, kk_render_quality);
 REXCVAR_DECLARE(std::string, kk_button_prompts);
 REXCVAR_DECLARE(bool, kk_check_updates);
@@ -140,6 +141,9 @@ float UltrawideFactor();
 
 // Writes the current settings (skipping command-line/env overrides) to `path`.
 bool SaveSettings(const std::filesystem::path& path, bool include_temporary = false);
+// Task 293: audio_mute is held on by a PS2 cutscene the next level loads under (ps2_movies.cpp): SaveSettings
+// leaves it out meanwhile (it is never the player's choice then). Any thread.
+void SetAudioMuteHeld(bool held);
 // Temporary overlay trials are excluded from every ordinary settings save.
 void SetTemporarySettingBaseline(const std::string& name, const std::string& value);
 void SetTemporarySettingTrialValue(const std::string& name, const std::string& value);

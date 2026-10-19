@@ -129,6 +129,12 @@ REXCVAR_DEFINE_BOOL(kk_invert_ls_y, false, "KK/Controls", "Invert left stick ver
 REXCVAR_DEFINE_STRING(kk_original_look_keep, "", "KK/Debug",
                       "Settings (comma-separated cvar names) the Original look leaves as given, e.g. "
                       "ao_mode,ao_strength,kk_frame_rate (testing)");
+// Task 295: default 1 (owner, 19 Oct; REPORT-295).
+REXCVAR_DEFINE_INT32(kk_cpu_priority, 1, "KK/Performance",
+                     "Favour the game's own threads when other programs load the CPU (task 295): 0 off (before), "
+                     "1 game/render/vsync/audio threads above normal, 2 also Windows' multimedia scheduler (MMCSS "
+                     "Games/Audio), 3 also the process above normal")
+    .range(0, 3).lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_INT32(kk_hitch_report_ms, 0, "KK/Debug",
                      "Write logs/hitch-*.txt (where every thread was) when a frame takes longer than this (0 = off)");
 REXCVAR_DEFINE_BOOL(kk_cheats, false, "KK/Cheats", "Switch on the cheats chosen below when the game starts");
@@ -461,6 +467,11 @@ void ClearModSettings() {
   std::lock_guard lock(temporary_mutex);
   mod_overlay.clear();
 }
+namespace {
+std::atomic<bool> g_audio_mute_held{false};  // task 293 (SetAudioMuteHeld)
+}  // namespace
+void SetAudioMuteHeld(bool held) { g_audio_mute_held = held; }
+
 bool SaveSettings(const std::filesystem::path& path, bool include_temporary) {
   std::lock_guard lock(temporary_mutex);
   // Like rex::cvar::SaveConfig, but values that came from the command line or
@@ -476,6 +487,8 @@ bool SaveSettings(const std::filesystem::path& path, bool include_temporary) {
     if (source == rex::cvar::Source::kCommandLine || source == rex::cvar::Source::kEnvironment) continue;
     // Set by the port at every start (ApplyRuntimeOverrides).
     if (e.name == "video_mode_width" || e.name == "video_mode_height") continue;
+    // Task 293: held on by a PS2 cutscene the level loads under, never the player's choice.
+    if (e.name == "audio_mute" && g_audio_mute_held.load()) continue;
     // Set from kk_hdr and kk_hdr_levels at every start (hdr_display.cpp, HDR follows Windows).
     if (e.name == "present_hdr" || ((e.name == "present_hdr_peak" || e.name == "present_hdr_paper_white") &&
                                     REXCVAR_GET(kk_hdr_levels) != "manual"))

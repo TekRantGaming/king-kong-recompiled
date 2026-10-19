@@ -6,6 +6,7 @@
 
 #include "backend/game_renderer.h"
 #include "backend/log.h"
+#include "backend/placed_textures.h"
 #include "backend/texture_workers.h"
 #include "backend/upload_batch.h"
 #include "backend/resource_upload_workers.h"
@@ -239,6 +240,38 @@ nvrhi::IFramebuffer* GameRenderer::GetFramebuffer(const std::array<HostTarget*, 
 
 // ---------------------------------------------------------------- textures
 
+namespace {
+// Task 304 (placed_textures.h): with texture memory that is not zeroed, the subresources a conversion
+// leaves unwritten get zeros, as a committed texture's would have. Nothing happens otherwise.
+void ZeroUnwrittenSubresources(nvrhi::ICommandList* list, nvrhi::ITexture* texture, const kknr::HostTextureData& data) {
+  if (!g_texture_memory_not_zeroed.load(std::memory_order_relaxed)) return;
+  const nvrhi::TextureDesc& d = texture->getDesc();
+  const bool volume = d.dimension == nvrhi::TextureDimension::Texture3D;
+  const uint32_t layers = volume ? 1u : std::max(d.arraySize, 1u);
+  if (data.subresources.size() >= size_t(d.mipLevels) * layers) return;
+  std::vector<std::pair<uint32_t, uint32_t>> written;
+  for (const kknr::HostSubresource& sub : data.subresources) written.emplace_back(sub.level, sub.layer);
+  const auto missing = MissingSubresources(d.mipLevels, layers, written);
+  if (missing.empty()) return;
+  const nvrhi::FormatInfo& f = nvrhi::getFormatInfo(d.format);
+  const uint32_t block = std::max<uint32_t>(f.blockSize, 1);
+  static thread_local std::vector<uint8_t> zeros;
+  for (const auto& [level, layer] : missing) {
+    const uint32_t w = std::max(d.width >> level, 1u), h = std::max(d.height >> level, 1u);
+    const uint32_t depth = volume ? std::max(d.depth >> level, 1u) : 1u;
+    const size_t row = size_t((w + block - 1) / block) * f.bytesPerBlock;
+    const size_t slice = row * ((h + block - 1) / block);
+    if (zeros.size() < slice * depth) zeros.resize(slice * depth, 0);
+    list->writeTexture(texture, layer, level, zeros.data(), row, slice);
+  }
+  static std::atomic<uint32_t> logged{0};
+  if (logged.fetch_add(1, std::memory_order_relaxed) < 20) {
+    Logf(LogLevel::kInfo, "rexgpu-native: texture %ux%u, %u levels x %u layers: %zu unwritten subresources zeroed "
+         "(placed texture memory is not zeroed)", d.width, d.height, d.mipLevels, layers, missing.size());
+  }
+}
+}  // namespace
+
 GameRenderer::HostTexture* GameRenderer::CreateHostTexture(const kknr::HostTexturePlan& plan,
                                                            bool render_target, float scale_x, float scale_y,
                                                            kknr::ResourceWork* profile) {
@@ -271,6 +304,9 @@ GameRenderer::HostTexture* GameRenderer::CreateHostTexture(const kknr::HostTextu
       break;
   }
   desc.isRenderTarget = render_target;
+  // Task 304: guest textures and pack replacements are written in full before use (unwritten
+  // subresources get zeros: ZeroUnwrittenSubresources), so D3D12 may place them in the pool.
+  desc.allowPlacedMemory = !render_target;
   desc.initialState = nvrhi::ResourceStates::ShaderResource;
   desc.keepInitialState = true;
   desc.debugName = render_target ? "Resolved texture" : "Guest texture";
@@ -408,7 +444,7 @@ GameRenderer::HostTexture* GameRenderer::UploadTexture(nvrhi::ICommandList* cl,
   host->pack_unavailable = host->pack_swept = false;
   host->pack_used_frame = frame_;
   UncapTexturePack(host);
-  if (host->pack_hash) pack_originals_.insert(host);
+  if (host->pack_hash) { pack_originals_.insert(host); pack_scan_ = true; }
   else pack_originals_.erase(host);
   if (texture_pack_stream_ && host->pack_hash) texture_pack_stream_->Request(host->pack_hash, host->plan);
   // Only a new resource can be moved ahead of this frame's earlier draws. The
@@ -424,12 +460,14 @@ GameRenderer::HostTexture* GameRenderer::UploadTexture(nvrhi::ICommandList* cl,
     upload->writeTexture(host->texture, sub.layer, sub.level, data.bytes.data() + sub.offset, sub.row_pitch,
                      sub.depth_pitch);
   }
+  if (created) ZeroUnwrittenSubresources(upload, host->texture, data);
   upload->setTextureState(host->texture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
   }
   host->alias_source = nullptr;
   textures_.OnUploaded(entry, physical_);
   ++stats_.texture_uploads;
   stats_.upload_bytes += data.bytes.size();
+  NoteStartUpload(fetch, data.bytes.size(), false);
   return host;
 }
 
@@ -562,7 +600,7 @@ uint32_t GameRenderer::BindTexture(nvrhi::ICommandList* cl, const uint32_t words
   bound_scale_y_ = host->scale_y;
   // Chapter-change bookkeeping: a bound original keeps (or asks again for) its replacement.
   host->pack_used_frame = frame_;
-  host->pack_swept = false;
+  if (host->pack_swept) { host->pack_swept = false; pack_scan_ = true; }
   if (options_.texture_pack && !pack_pressure_ && !r.entry->gpu_written && !host->alias_source &&
       host->replacement && host->replacement->pack_ready)
     host = host->replacement;
@@ -688,6 +726,32 @@ uint32_t GameRenderer::BindSampler(const uint32_t words[6], const kkshaders::Sam
 
 // ---------------------------------------------------------------- buffers
 
+bool GameRenderer::MakeHostBuffer(HostBuffer* host, const nvrhi::BufferDesc& desc, bool index) {
+  host->view_bytes = uint32_t(desc.byteSize);
+  BufferPool* pool = index ? index_pool_.get() : vertex_pool_.get();
+  if (pool && pool->Allocate(desc.byteSize, host->range)) {
+    host->pool = pool;
+    host->buffer = host->range.buffer;
+    return true;
+  }
+  host->buffer = device_->createBuffer(desc);
+  return bool(host->buffer);
+}
+
+nvrhi::BindingSetItem GameRenderer::VertexView(const HostBuffer* host) const {
+  if (!host->range.valid()) return VertexView(host);
+  return nvrhi::BindingSetItem::RawBuffer_SRV(host->slot, host->buffer,
+                                              nvrhi::BufferRange(host->range.allocation.offset, host->view_bytes));
+}
+
+void GameRenderer::ZeroPooledTail(nvrhi::ICommandList* list, const HostBuffer* host, uint64_t written) {
+  if (!host->range.valid() || written >= host->view_bytes) return;
+  static thread_local std::vector<uint8_t> zeros;
+  const uint64_t n = host->view_bytes - written;  // usually under 16: view_bytes is the upload rounded up to 16
+  if (zeros.size() < n) zeros.resize(n, 0);
+  list->writeBuffer(host->buffer, zeros.data(), n, BufferOffset(host) + written);
+}
+
 nvrhi::ICommandList* GameRenderer::EarlyUpload(uint64_t bytes) {
   if (!options_.upload_submit) return nullptr;
   if (!upload_batch_) upload_batch_ = std::make_unique<UploadBatch>(device_, options_.upload_submit);
@@ -721,7 +785,7 @@ GameRenderer::HostBuffer* GameRenderer::BindVertexBuffer(nvrhi::ICommandList* cl
       auto* host = static_cast<HostBuffer*>(known->host);
       if (host && host->dynamic && host->buffer && !host->slot) {
         host->slot = AllocateSlot(kBuffers);
-        if (host->slot) WriteSlot(kBuffers, nvrhi::BindingSetItem::RawBuffer_SRV(host->slot, host->buffer));
+        if (host->slot) WriteSlot(kBuffers, VertexView(host));
       }
       if (host && host->dynamic && host->buffer && host->slot) {
         TouchSlot(kBuffers, host->slot);
@@ -738,7 +802,7 @@ GameRenderer::HostBuffer* GameRenderer::BindVertexBuffer(nvrhi::ICommandList* cl
           }
           {
             kknr::ResourceWorkTimer timer(resource_profile_, kknr::ResourceWork::BufferStage);
-            cl->writeBuffer(host->buffer, src, end - begin, begin);
+            cl->writeBuffer(host->buffer, src, end - begin, BufferOffset(host) + begin);
           }
           stats_.dynamic_vertex_bytes += end - begin;
           stats_.upload_bytes += end - begin;
@@ -766,12 +830,12 @@ GameRenderer::HostBuffer* GameRenderer::BindVertexBuffer(nvrhi::ICommandList* cl
     d.debugName = "Guest vertex data";
     {
       kknr::ResourceWorkTimer timer(resource_profile_, kknr::ResourceWork::BufferCreate);
-      host->buffer = device_->createBuffer(d);
+      MakeHostBuffer(host, d, false);
     }
     host->bytes = bytes;
     if (host->buffer) {
       host->slot = AllocateSlot(kBuffers);
-      if (host->slot) WriteSlot(kBuffers, nvrhi::BindingSetItem::RawBuffer_SRV(host->slot, host->buffer));
+      if (host->slot) WriteSlot(kBuffers, VertexView(host));
     }
     r.entry->host = host;
     r.action = kknr::BindAction::kCreateAndUpload;
@@ -779,7 +843,7 @@ GameRenderer::HostBuffer* GameRenderer::BindVertexBuffer(nvrhi::ICommandList* cl
   descriptor_buffers_.insert(host);
   if (host->buffer && !host->slot) {
     host->slot = AllocateSlot(kBuffers);
-    if (host->slot) WriteSlot(kBuffers, nvrhi::BindingSetItem::RawBuffer_SRV(host->slot, host->buffer));
+    if (host->slot) WriteSlot(kBuffers, VertexView(host));
   }
   if (!host->buffer || !host->slot) return nullptr;
   TouchSlot(kBuffers, host->slot);
@@ -800,7 +864,8 @@ GameRenderer::HostBuffer* GameRenderer::BindVertexBuffer(nvrhi::ICommandList* cl
     if (!upload) upload = cl;
     {
       kknr::ResourceWorkTimer timer(resource_profile_, kknr::ResourceWork::BufferStage);
-      upload->writeBuffer(host->buffer, data, (uint64_t(bytes) + 3) & ~uint64_t(3));
+      upload->writeBuffer(host->buffer, data, (uint64_t(bytes) + 3) & ~uint64_t(3), BufferOffset(host));
+      if (created) ZeroPooledTail(upload, host, (uint64_t(bytes) + 3) & ~uint64_t(3));
     }
     upload->setBufferState(host->buffer, nvrhi::ResourceStates::ShaderResource);
     stats_.upload_bytes += (uint64_t(bytes) + 3) & ~uint64_t(3);
@@ -841,7 +906,7 @@ GameRenderer::HostBuffer* GameRenderer::BindIndexBuffer(nvrhi::ICommandList* cl,
     d.debugName = "Guest indices";
     {
       kknr::ResourceWorkTimer timer(resource_profile_, kknr::ResourceWork::BufferCreate);
-      host->buffer = device_->createBuffer(d);
+      MakeHostBuffer(host, d, true);
     }
     host->bytes = bytes;
     r.entry->host = host;
@@ -858,7 +923,8 @@ GameRenderer::HostBuffer* GameRenderer::BindIndexBuffer(nvrhi::ICommandList* cl,
     if (!upload) upload = cl;
     {
       kknr::ResourceWorkTimer timer(resource_profile_, kknr::ResourceWork::BufferStage);
-      upload->writeBuffer(host->buffer, converted.data(), converted.size());
+      upload->writeBuffer(host->buffer, converted.data(), converted.size(), BufferOffset(host));
+      if (created) ZeroPooledTail(upload, host, converted.size());
     }
     upload->setBufferState(host->buffer, nvrhi::ResourceStates::IndexBuffer);
     stats_.upload_bytes += converted.size();
@@ -942,7 +1008,7 @@ void GameRenderer::PrepareResourceRequests(nvrhi::ICommandList* cl,
     if (jobs.size() >= 32 || output < UploadBatch::kMinBytes ||
         input > UploadBatch::kFrameBytes - snapshot_bytes ||
         output > UploadBatch::kFrameBytes - upload_bytes) return false;
-    if (preload && output + upload_bytes > kChapterPreloadBytes - preload_reserved_bytes_) return false;
+    if (preload && output + upload_bytes + preload_reserved_bytes_ > ChapterPreloadBytes()) return false;
     if (!upload_batch_) upload_batch_ = std::make_unique<UploadBatch>(device_, options_.upload_submit);
     return upload_batch_->CanPrepare(upload_bytes + output,
         std::min(unsigned(jobs.size()) + 1, TextureWorkerCount() + 1));
@@ -1074,7 +1140,7 @@ void GameRenderer::PrepareResourceRequests(nvrhi::ICommandList* cl,
       desc.debugName = job.index ? "Guest indices" : "Guest vertex data";
       {
         kknr::ResourceWorkTimer timer(profile, kknr::ResourceWork::BufferCreate);
-        job.host_buffer->buffer = device_->createBuffer(desc);
+        MakeHostBuffer(job.host_buffer.get(), desc, job.index);
       }
       job.host_buffer->bytes = job.buffer->bytes;
       job.host_buffer->last_upload_frame = frame_;
@@ -1094,11 +1160,13 @@ void GameRenderer::PrepareResourceRequests(nvrhi::ICommandList* cl,
         for (const auto& sub : scratch.texture.subresources)
           upload->writeTexture(job.host_texture->texture, sub.layer, sub.level,
               scratch.texture.bytes.data() + sub.offset, sub.row_pitch, sub.depth_pitch);
+        ZeroUnwrittenSubresources(upload, job.host_texture->texture, scratch.texture);
         upload->setTextureState(job.host_texture->texture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
       } else {
         kknr::ResourceWorkTimer timer(profile, kknr::ResourceWork::BufferStage);
         const auto& data = job.index ? scratch.indices : scratch.source;
-        upload->writeBuffer(job.host_buffer->buffer, data.data(), job.upload_bytes);
+        upload->writeBuffer(job.host_buffer->buffer, data.data(), job.upload_bytes, BufferOffset(job.host_buffer.get()));
+        ZeroPooledTail(upload, job.host_buffer.get(), job.upload_bytes);
         upload->setBufferState(job.host_buffer->buffer,
             job.index ? nvrhi::ResourceStates::IndexBuffer : nvrhi::ResourceStates::ShaderResource);
       }
@@ -1139,17 +1207,19 @@ void GameRenderer::PrepareResourceRequests(nvrhi::ICommandList* cl,
       job.host_texture->pack_used_frame = frame_;
       if (job.host_texture->pack_hash) {
         pack_originals_.insert(job.host_texture.get());
+        pack_scan_ = true;
         if (texture_pack_stream_) texture_pack_stream_->Request(job.host_texture->pack_hash, job.host_texture->plan);
       }
       cl->beginTrackingTextureState(job.host_texture->texture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);
       job.texture->host = job.host_texture.release();
       textures_.OnUploaded(*job.texture, job.hash);
       ++stats_.texture_uploads;
+      if (!preload) NoteStartUpload(job.fetch, job.upload_bytes, true);
     } else {
       if (!job.index) {
         job.host_buffer->slot = AllocateSlot(kBuffers);
         if (job.host_buffer->slot) WriteSlot(kBuffers,
-            nvrhi::BindingSetItem::RawBuffer_SRV(job.host_buffer->slot, job.host_buffer->buffer));
+            VertexView(job.host_buffer.get()));
       }
       job.buffer->host = job.host_buffer.release();
       (job.index ? index_buffers_ : vertex_buffers_).OnUploaded(*job.buffer, job.hash);

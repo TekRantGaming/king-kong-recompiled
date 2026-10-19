@@ -3,15 +3,19 @@
 // (radius, roll), the controller mapping, the picture names, and the renderer's side: which draws it leaves
 // out (only Jack's arms, never by shader alone) and the photo grade's colour function (the GPU pass does the
 // same, shaders/photo.hlsl).
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <vector>
 
 #include "backend/photo_config.h"
 #include "backend/picture_adjust.h"
 #include "freecam_math.h"
+#include "pause_backdrop_logic.h"
 #include "photo_mode_logic.h"
 
 namespace {
@@ -203,6 +207,61 @@ int main() {
   junk.letterbox = 0.2f;
   const NrPhotoSettings clean = nr::SanitizePhotoSettings(junk);
   Check(Near(clean.contrast, 1) && clean.look == 0 && Near(clean.dof, 1) && clean.letterbox == 0, "sanitised");
+
+  // Task 264: the pause menu's frame taken again is brought back to play's brightness. Play = a gradient, the
+  // paused frame = 0.4 times it with a few "HUD" pixels that only play has; the curve undoes the 0.4.
+  {
+    const int w = 1024, h = 256;
+    std::vector<uint8_t> play(size_t(w) * h * 4), paused(play.size());
+    for (int y = 0; y < h; ++y)
+      for (int x = 0; x < w; ++x) {
+        uint8_t* a = &play[(size_t(y) * w + x) * 4];
+        uint8_t* b = &paused[(size_t(y) * w + x) * 4];
+        for (int c = 0; c < 3; ++c) {
+          a[c] = uint8_t((x * 2 + c * 3) % 250);
+          b[c] = uint8_t(a[c] * 0.4 + 0.5);
+        }
+        if (x < 6 && y < 6) a[0] = a[1] = a[2] = 255;  // the ammo counter, only in play
+      }
+    kk::play::BrightnessLut lut{};
+    Check(kk::play::BuildBrightnessLut(play.data(), paused.data(), w, h, lut), "brightness curve built");
+    int worst = 0;
+    for (int v = 0; v <= 99; ++v)
+      for (int c = 0; c < 3; ++c) worst = std::max(worst, std::abs(int(lut[c][v]) - int(v / 0.4 + 0.5)));
+    Check(worst <= 3, "brightness curve undoes 0.4");
+    bool rising = true;
+    for (int c = 0; c < 3; ++c)
+      for (int v = 1; v < 256; ++v) rising = rising && lut[c][v] >= lut[c][v - 1];
+    Check(rising && lut[0][255] == 255, "brightness curve never goes down, top stays white");
+    std::vector<uint8_t> again = paused;
+    kk::play::ApplyBrightnessLut(lut, again.data(), again.size() / 4);
+    Check(std::abs(int(again[(size_t(40) * w + 100) * 4]) - int(play[(size_t(40) * w + 100) * 4])) <= 3,
+          "frame taken again matches play");
+    // Task 272: photo mode takes the same dimming back with one gain on the output values.
+    Check(std::abs(kk::play::MeanUndim(play.data(), paused.data(), w, h) - 2.5) < 0.05, "photo mode's gain undoes 0.4");
+    std::vector<uint8_t> flat(play.size(), 0);
+    Check(!kk::play::BuildBrightnessLut(play.data(), flat.data(), w, h, lut), "no curve from a black frame");
+  }
+
+  // Task 272: the grade takes the paused game's dimming back ahead of the filters.
+  {
+    Check(kk::photo::ToRenderer(kk::photo::Values{}, true).undim == 1.f, "photo settings start without a gain");
+    NrPhotoSettings s = nr::SanitizePhotoSettings(kk::photo::ToRenderer(kk::photo::Values{}, true));
+    s.undim = 2.5f;
+    s = nr::SanitizePhotoSettings(s);
+    Check(nr::PhotoGradeNeeded(s), "the paused game's dimming taken back needs the grade pass");
+    const auto lifted = nr::PhotoGradeColour(s, {0.4f * 0.5f, 0.4f * 0.3f, 0.4f * 0.1f});
+    Check(std::abs(lifted[0] - 0.5f) < 1e-3 && std::abs(lifted[1] - 0.3f) < 1e-3 && std::abs(lifted[2] - 0.1f) < 1e-3,
+          "the dimmed colours come back to play's");
+    s.look = 1;
+    const auto bw = nr::PhotoGradeColour(s, {0.2f, 0.2f, 0.2f});
+    Check(std::abs(bw[0] - 0.5f) < 1e-3 && bw[0] == bw[1], "filters work on play's brightness");
+    NrPhotoSettings junk = s;
+    junk.undim = 0.f;
+    Check(nr::SanitizePhotoSettings(junk).undim == 1.f, "no gain from an older caller");
+    junk.undim = 100.f;
+    Check(nr::SanitizePhotoSettings(junk).undim == 6.f, "the gain stays within 6");
+  }
 
   std::printf("%s (%d failures)\n", failures ? "FAIL" : "PASS", failures);
   return failures ? 1 : 0;

@@ -209,6 +209,7 @@ class KingKongApp : public rex::ReXApp {
       // Kong mods: over the player's settings for this run only (never saved), before the Original look
       // (which wins) and before the GPU starts.
       if (!kk::benchmark::Active()) kk::mods::ApplyAtGameStart(defaults.user_data_root);
+      kk::NoteGameStarting();  // task 285: a startup hang report if no first frame follows
       kk::EnforceOriginalLook();
       kk::ApplyFullscreenMode(window());
       kk::ApplyRendererChoice();  // the renderer, and with it the default upscaler
@@ -240,6 +241,7 @@ class KingKongApp : public rex::ReXApp {
         kk::exit_evidence::SetRole("game");
         // The game starts in this process: startup recovery watches it from here.
         kk::startup::Begin(gpu_plugin_, true);
+        kk::NoteGameStarting();  // task 285: a startup hang report if no first frame follows
         resume(defaults);
       });
     };
@@ -350,8 +352,10 @@ class KingKongApp : public rex::ReXApp {
       kk::startup::Begin(config.gpu_plugin, !*show_launcher_);
     }
     REXLOG_INFO("KK: renderer {} (kk_renderer {})", config.gpu_plugin, rex::cvar::GetFlagByName("kk_renderer"));
-    if (!config.audio_factory)
-      config.audio_factory = REX_AUDIO_BACKEND(kk::ScheduledAudioSystem);
+    // Task 286: always ours. The SDK's SetupPresentation sets its plain SDLAudioSystem before OnPreSetup, so
+    // the old "if (!config.audio_factory)" never chose this one (no audio thread scheduling since e360f6f,
+    // and none of task 285's slow audio-open lines).
+    config.audio_factory = REX_AUDIO_BACKEND(kk::ScheduledAudioSystem);
   }
 
   void OnPostSetup() override {

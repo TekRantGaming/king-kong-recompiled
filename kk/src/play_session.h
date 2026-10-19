@@ -90,6 +90,13 @@ const std::vector<ChapterInfo>& Chapters();
 // game reads an empty pad).
 bool PauseMenuOpen();
 
+// Photo mode (task 272): the gain on the output values that takes back the paused game's own dimming (while
+// paused it dims its world, often to about 0.4 of play, sometimes not at all): play's last frame over the
+// paused one, measured 1.5 s into the pause (pause_backdrop_logic.h MeanUndim); 1 when not measured.
+float PhotoUndim();
+// This pause's dimming has been measured, or cannot be (photo mode waits for it, up to a moment).
+bool PhotoDimKnown();
+
 // What the pause menu's items do, carried out the game's own way (its page code, its confirmations).
 // kQuitToLauncher ("Return to main menu"): the game's Quit game (its save behaviour), then the program
 // restarts into the launcher's Play menu. kQuitToDesktop ("Quit game"): the same, then the program exits.

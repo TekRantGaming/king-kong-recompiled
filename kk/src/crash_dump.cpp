@@ -10,6 +10,8 @@
 #include "crash_dump.h"
 #include "diagnostics.h"
 #include "exit_evidence.h"
+#include "startup_clock.h"
+#include "hooks/kk_native_ui.h"
 
 #if defined(_WIN32)
 
@@ -45,6 +47,12 @@ LPTOP_LEVEL_EXCEPTION_FILTER g_previous = nullptr;
 // The filter that was there before ours was first installed (KeepFilterInFront may change g_previous).
 LPTOP_LEVEL_EXCEPTION_FILTER g_original_previous = nullptr;
 volatile LONG g_crashing = 0;
+std::atomic<int> g_api{0};  // task 270: SetCrashReportApi
+
+const char* ApiName() {
+  const int api = g_api.load(std::memory_order_relaxed);
+  return api == 1 ? "vulkan" : api == 2 ? "d3d12" : nullptr;
+}
 
 // logs\<kind>-<time> (no extension).
 void ReportBase(const wchar_t* kind, wchar_t (&base)[MAX_PATH + 64]) {
@@ -121,6 +129,7 @@ void WriteCrashFiles(EXCEPTION_POINTERS* info, DWORD thread, const char* reason)
     std::fprintf(f, "King Kong crashed.\nException 0x%08X at %p\nThread %lu\n",
                  rec->ExceptionCode, rec->ExceptionAddress, thread);
     if (reason) std::fprintf(f, "Reason: %s\n", reason);
+    if (const char* api = ApiName()) std::fprintf(f, "Graphics API: %s\n", api);
     // Module + offset (with king_kong.map, the game function), and the caller chain from the unwind
     // tables: the server groups identical crashes by the code and the first three of these.
     WriteCrashStack(f, info);
@@ -192,6 +201,13 @@ void KeepFilterInFront() {
 
 constexpr ULONGLONG kHangMs = 20000;
 std::atomic<ULONGLONG> g_last_frame{0};  // GetTickCount64 at the last guest frame; 0 before the first
+// Task 285: GetTickCount64 when the game started in this process (NoteGameStarting); 0 = not started. With
+// no first frame kStartupHangMs later, one startup hang report says where every thread waits.
+constexpr ULONGLONG kStartupHangMs = 60000;
+std::atomic<ULONGLONG> g_game_start{0};
+// Task 297: the renderer's shader compile clock (nr::kk::ShaderCompileMilliseconds) at g_game_start; the
+// time spent compiling shaders the game waited for (no shader pack) is not counted (startup_clock.h).
+std::atomic<ULONGLONG> g_compile_at_start{0};
 
 // Where each thread is right now: suspend it just long enough to read its
 // instruction pointer, and (with `stacks`) copy the top of its stack (nothing
@@ -277,25 +293,32 @@ void WriteHitchReport(ULONGLONG stalled_ms) {
   REXLOG_WARN("KK: no frame for {} ms, wrote {}", stalled_ms, std::filesystem::path(path).filename().string());
 }
 
-void WriteHangReport(ULONGLONG stalled_ms) {
+// startup (task 285): no first frame yet since the game started; the thread list then has likely callers.
+void WriteHangReport(ULONGLONG stalled_ms, bool startup = false) {
   wchar_t base[MAX_PATH + 64];
-  ReportBase(L"hang", base);
+  ReportBase(startup ? L"hang-startup" : L"hang", base);
   wchar_t path[MAX_PATH + 80];
   swprintf(path, MAX_PATH + 80, L"%ls.txt", base);
   if (FILE* f = _wfopen(path, L"w")) {
-    std::fwprintf(f, L"King Kong stopped drawing frames for %llu seconds (a freeze).\n"
-                     L"Version: " KK_VERSION_W L"\n"
-                     L"Please attach this file, the .dmp file next to it and logs\\king_kong.log to a bug report.\n\n"
-                     L"Threads:\n",
+    std::fwprintf(f, startup ? L"King Kong started the game but drew no first frame in %llu seconds (a freeze at startup).\n"
+                             : L"King Kong stopped drawing frames for %llu seconds (a freeze).\n",
                   stalled_ms / 1000);
-    WriteThreadList(f);
+    std::fwprintf(f, L"Version: " KK_VERSION_W L"\n"
+                     L"Please attach this file, the .dmp file next to it and logs\\king_kong.log to a bug report.\n\n"
+                     L"Threads:\n");
+    if (const char* api = ApiName()) std::fwprintf(f, L"Graphics API: %hs\n", api);
+    WriteThreadList(f, startup);
     std::fputs("\n", f);
     WriteLogTail(f);
     std::fclose(f);
   }
   WriteMiniDump(base, nullptr);
-  REXLOG_WARN("KK: no frame for {} s, wrote hang report {}", stalled_ms / 1000,
-              std::filesystem::path(base).filename().string());
+  if (startup)
+    REXLOG_WARN("KK: no first game frame {} s after the game started; wrote startup hang report {} (where every "
+                "thread waits)", stalled_ms / 1000, std::filesystem::path(base).filename().string());
+  else
+    REXLOG_WARN("KK: no frame for {} s, wrote hang report {}", stalled_ms / 1000,
+                std::filesystem::path(base).filename().string());
 }
 
 void WatchForHangs() {
@@ -304,6 +327,8 @@ void WatchForHangs() {
   ULONGLONG filter_tick = previous_tick;
   ULONGLONG reported_at = 0;  // g_last_frame value the current report is about
   ULONGLONG hitch_at = 0;     // ... and the current hitch report
+  bool startup_reported = false;  // task 285: once a process
+  bool startup_compile_noted = false;  // task 297: the log line, once
 #if defined(KK_DEV_TOOLS)
   // Wall time from the first guest frame, so the crash test lasts two minutes
   // of rendering and does not depend on menu input or compiler null-write UB.
@@ -328,11 +353,31 @@ void WatchForHangs() {
       // paused (e.g. a debugger). Not a game freeze; start counting again.
       ULONGLONG expected = last;
       if (last) g_last_frame.compare_exchange_strong(expected, now);
+      ULONGLONG started = g_game_start.load(std::memory_order_relaxed);
+      if (started && g_game_start.compare_exchange_strong(started, now))
+        g_compile_at_start.store(nr::kk::ShaderCompileMilliseconds(), std::memory_order_relaxed);
       previous_tick = now;
       continue;
     }
     previous_tick = now;
-    if (!last) continue;  // no frame yet (launcher, startup)
+    if (!last) {  // no frame yet (launcher, startup)
+      const ULONGLONG started = g_game_start.load(std::memory_order_relaxed);
+      if (started && !startup_reported && now - started >= kStartupHangMs) {
+        // Task 297: shader compiles the game waited for (no shader pack) are not a freeze.
+        const startup_clock::Window window{started, g_compile_at_start.load(std::memory_order_relaxed)};
+        const uint64_t compiled = nr::kk::ShaderCompileMilliseconds();
+        if (startup_clock::Reached(window, now, compiled, kStartupHangMs)) {
+          startup_reported = true;
+          WriteHangReport(startup_clock::CountedMs(window, now, compiled), true);
+        } else if (!startup_compile_noted && startup_clock::ExtendedByCompile(window, now, compiled, kStartupHangMs)) {
+          startup_compile_noted = true;
+          REXLOG_INFO("KK: no first game frame yet after {} s, but {} s of it went to compiling shaders (no "
+                      "shader pack): the startup hang report does not count that time",
+                      (now - started) / 1000, startup_clock::CompiledMs(window, compiled) / 1000);
+        }
+      }
+      continue;
+    }
 #if defined(KK_DEV_TOOLS)
     if (!test_started) test_started = now;
     if (test_seconds > 0 && now - test_started >= test_seconds * 1000) {
@@ -359,6 +404,15 @@ void WatchForHangs() {
 }
 
 }  // namespace
+
+void SetCrashReportApi(int api) { g_api.store(api, std::memory_order_relaxed); }
+
+void NoteGameStarting() {
+  ULONGLONG expected = 0;
+  const uint64_t compiled = nr::kk::ShaderCompileMilliseconds();  // 0 before the plugin loads
+  if (g_game_start.compare_exchange_strong(expected, GetTickCount64(), std::memory_order_relaxed))
+    g_compile_at_start.store(compiled, std::memory_order_relaxed);
+}
 
 void NoteGuestFrame() {
   g_last_frame.store(GetTickCount64(), std::memory_order_relaxed);
@@ -413,6 +467,8 @@ void InstallCrashDumps(const std::filesystem::path& logs_dir, const std::filesys
 
 namespace kk {
 void NoteGuestFrame() {}
+void NoteGameStarting() {}
+void SetCrashReportApi(int) {}
 void WriteCrashReportNow(const char*) {}
 void InstallCrashDumps(const std::filesystem::path&, const std::filesystem::path&) {}
 }  // namespace kk

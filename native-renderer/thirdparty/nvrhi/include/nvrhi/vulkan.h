@@ -116,6 +116,12 @@ namespace nvrhi::vulkan
         // Then GraphicsPipelineDesc::vulkanLibraryLink pipelines are linked from cached parts
         // (Feature::GraphicsPipelineLibrary). False: every pipeline is compiled whole.
         bool graphicsPipelineLibrary = false;
+
+        // King Kong change (task 313, thirdparty/NOTES.md). Non-zero: textures that allow it
+        // (TextureDesc::allowPlacedMemory; not render targets, UAVs, shared, tiled, virtual or multisampled,
+        // at most a quarter of this size) are bound to ranges of pooled device-local allocations of this many
+        // bytes instead of one dedicated vkAllocateMemory each. 0: as before.
+        uint64_t pooledTextureBlockSize = 0;
     };
 
     NVRHI_API DeviceHandle createDevice(const DeviceDesc& desc);

@@ -44,6 +44,7 @@
 #include "backend/backend.h"
 #include "backend/draw_state.h"
 #include "backend/host_device.h"
+#include "backend/gpu_loss.h"
 #include "plugin/launcher_prewarm.h"
 #include "plugin/plugin_settings.h"
 #include "plugin/native_startup.h"
@@ -148,6 +149,9 @@ NativeGraphicsSystem::NativeGraphicsSystem(HostApi api)
     : api_(api), registers_(std::make_unique<std::array<uint32_t, kRegisterCount>>()) {
   registers_->fill(0);
   instance_ = this;
+  // Task 295: the renderer DLL's threads (render, vsync, ring skimmer, pipeline compiles) start after this.
+  SetCpuPriorityLevel(std::atoi(rex::cvar::GetFlagByName("kk_cpu_priority").c_str()));
+  REXGPU_INFO("rexgpu-native: kk_cpu_priority {}", CpuPriorityLevel().load());
   REXGPU_INFO("rexgpu-native: created ({})", api == HostApi::kD3D12 ? "Direct3D 12" : "Vulkan");
 }
 
@@ -269,6 +273,13 @@ X_STATUS NativeGraphicsSystem::SetupGuestGpu(rex::runtime::FunctionDispatcher* f
     ReportStartupFailure("could not initialise its native device");
     return X_STATUS_UNSUCCESSFUL;
   }
+  // Task 266: a lost device found by the renderer's own submissions, waits or render thread (gpu_loss.h)
+  // takes the same path as one the presenter reports (startup recovery during startup, else the logged end).
+  SetGpuLossHandler([](const char* what) {
+    REXGPU_ERROR("rexgpu-native: graphics device error in the renderer: {}", what);
+    rex::FlushLogging();
+    if (NativeGraphicsSystem* self = Instance()) self->OnHostGpuLoss(true);
+  });
   rex::system::X_VIDEO_MODE video_mode;
   rex::kernel::xboxkrnl::VdQueryVideoMode(&video_mode);
   backend_ = std::make_unique<Backend>(std::move(host), memory_);
@@ -414,6 +425,7 @@ void NativeGraphicsSystem::Shutdown() {
     backend_->Shutdown();
     backend_.reset();
   }
+  SetGpuLossHandler(nullptr);
   if (presenter_) {
     if (app_context_) {
       app_context_->CallInUIThreadSynchronous([this]() { presenter_.reset(); });
@@ -427,12 +439,25 @@ void NativeGraphicsSystem::OnHostGpuLoss(bool is_responsible) {
   if (gpu_loss_reported_.test_and_set(std::memory_order_relaxed)) {
     return;
   }
-  ReportStartupFailure("lost its graphics device during startup");
+  // Task 268: on D3D12 the removed reason on every path (the presenter's too), before the recovery ends the
+  // process.
+  std::string reason;
+#if NR_HAS_D3D12
+  if (api_ == HostApi::kD3D12 && provider_) {
+    auto* d3d12 = static_cast<rex::ui::d3d12::D3D12Provider*>(provider_.get());
+    if (ID3D12Device* device = d3d12->GetDevice()) {
+      const HRESULT removed = device->GetDeviceRemovedReason();
+      reason = fmt::format("; D3D12 removed reason 0x{:08X}", unsigned(removed));
+    }
+  }
+#endif
   // Task 229: rex::FatalError writes only to stderr (nowhere in a windowed program) and aborts, so a lost
   // device in the launcher, or in the game after startup, ended the program with nothing in the log.
-  REXGPU_ERROR("rexgpu-native: the graphics device was lost ({}); the program ends now",
-               is_responsible ? "the renderer's own work" : "the driver or another program");
+  // Task 268: logged before the startup recovery (which ends the process at once during startup).
+  REXGPU_ERROR("rexgpu-native: the graphics device was lost ({}); the program ends now{}",
+               is_responsible ? "the renderer's own work" : "the driver or another program", reason);
   rex::FlushLogging();
+  ReportStartupFailure("lost its graphics device during startup");
   rex::FatalError("Graphics device lost (native renderer)");
 }
 

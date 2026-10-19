@@ -66,13 +66,30 @@ namespace nvrhi::d3d12
         bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         if (m_IsScratchBuffer) bufferDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
-        HRESULT hr = m_Context.device->CreateCommittedResource(
-            &heapProps,
-            D3D12_HEAP_FLAG_NONE,
-            &bufferDesc,
-            m_IsScratchBuffer ? D3D12_RESOURCE_STATE_COMMON: D3D12_RESOURCE_STATE_GENERIC_READ,
-            nullptr,
-            IID_PPV_ARGS(&chunk->buffer));
+        HRESULT hr = E_FAIL;
+        if (m_Context.minUploadChunkSize && !m_IsScratchBuffer)
+        {
+            // KK task 300: every byte a copy reads from a chunk was written by the CPU first (chunks are
+            // reused without clearing anyway), so the OS need not zero new ones. Older Windows refuses
+            // the flag: then made as before.
+            hr = m_Context.device->CreateCommittedResource(
+                &heapProps,
+                D3D12_HEAP_FLAG_CREATE_NOT_ZEROED,
+                &bufferDesc,
+                D3D12_RESOURCE_STATE_GENERIC_READ,
+                nullptr,
+                IID_PPV_ARGS(&chunk->buffer));
+        }
+        if (!chunk->buffer)
+        {
+            hr = m_Context.device->CreateCommittedResource(
+                &heapProps,
+                D3D12_HEAP_FLAG_NONE,
+                &bufferDesc,
+                m_IsScratchBuffer ? D3D12_RESOURCE_STATE_COMMON: D3D12_RESOURCE_STATE_GENERIC_READ,
+                nullptr,
+                IID_PPV_ARGS(&chunk->buffer));
+        }
 
         if (FAILED(hr))
             return nullptr;

@@ -595,9 +595,11 @@ void DrawItem(ImDrawList* dl, const Item& it, float x0, float y0, float x1, floa
                 color::kHairline, 1.0f);
     return;
   }
-  const ImU32 text = band ? (it.disabled ? color::kOnFocusDim : color::kOnFocus)
+  // A greyed row under the focus bar: dark enough to read on the bone bar, still lighter than a live row (task 261).
+  const ImU32 text = band ? (it.disabled ? color::kOnFocusGreyed : color::kOnFocus)
                           : (it.disabled ? color::kTextFaint : color::kText);
-  const ImU32 dim = band ? color::kOnFocusDim : (it.disabled ? color::kTextFaint : color::kTextDim);
+  const ImU32 dim = band ? (it.disabled ? color::kOnFocusGreyed : color::kOnFocusDim)
+                         : (it.disabled ? color::kTextFaint : color::kTextDim);
   const float cy = y0 + h * 0.5f;
   float lx = x0 + 18 * s;
   if (it.icon) {

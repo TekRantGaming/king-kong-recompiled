@@ -92,6 +92,12 @@ struct GameSettings {
   bool effect_buffers = true;
   uint32_t sharpness = 0;
   double pipeline_wait_budget_ms = 0.0;
+  double pipeline_must_wait_ms = 4.0;  // task 267, see GameRenderer::Options
+  uint32_t chapter_preload_mib = 64, chapter_trickle_mib = 0;  // task 280 (proposed 256 / 8), see GameRenderer::Options
+  bool pipeline_level_first = false;   // task 276, see GameRenderer::Options
+  int32_t pipeline_play_workers = 0;   // task 276, see GameRenderer::Options
+  bool texture_pack_event_scan = false;  // task 284 (proposed: true), see GameRenderer::Options
+  bool texture_pack_reduce_mips = false;  // task 284 (proposed: false)
   std::string frame_log;       // REX_DEV_FRAME_LOG: "<seconds>[,<frames>]", empty = off
   // Render scale (backend/render_scale.h): "1", "1.5", "2", "1920x1080". shadow_scale: 0 like the
   // render scale, else its own (a number).
