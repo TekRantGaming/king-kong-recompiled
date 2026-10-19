@@ -51,6 +51,7 @@
 #include <rex/input/mnk/mnk_input_driver.h>
 
 #include "hooks/kk_native_photo.h"
+#include "pause_backdrop_logic.h"
 #include "pause_menu.h"
 #include "photo_mode.h"
 #include "photo_mode_logic.h"
@@ -221,15 +222,29 @@ void SetFrameGrabber(std::function<bool(int&, int&, std::vector<uint8_t>&)> grab
 
 namespace {
 std::atomic<int> g_backdrop_fov{-1};  // kk_fov when the frame was kept
+// The paused game's brightness against play's (pause_backdrop_logic.h), measured once a pause (task 264).
+enum class Calibration { kToDo, kDone };
+Calibration g_calibration = Calibration::kDone;
+BrightnessLut g_lut;
+bool g_lut_ok = false;
 
-// `paused`: the frame comes from the paused game with its black cover left out (below); a frame that is still
-// all black (the cover not yet left out) is not kept.
-bool GrabBackdrop(bool paused = false) {
+#if defined(KK_DEV_TOOLS)
+void DevLogMean(const std::vector<uint8_t>& rgba, int w, int h, const char* what, int fov) {
+  double crop = 0;
+  size_t n = 0;
+  for (int y = h / 4; y < 3 * h / 4; y += 4)
+    for (int x = w / 2; x < w * 7 / 8; x += 4, ++n) {
+      const uint8_t* p = &rgba[(size_t(y) * w + x) * 4];
+      crop += (p[0] + p[1] + p[2]) / 3.0;
+    }
+  REXLOG_INFO("KK dev: backdrop {} crop mean {:.1f} (field of view {})", what, n ? crop / n : 0.0, fov);
+}
+#endif
+
+// The guest output now. `paused`: from the paused game with its black cover left out (below); a frame that is
+// still all black (the cover not yet left out) is refused.
+bool CaptureFrame(bool paused, int& w, int& h, std::vector<uint8_t>& rgba) {
   if (!g_grab) return false;
-  int w = 0, h = 0;
-  std::vector<uint8_t> rgba;
-  const auto t0 = std::chrono::steady_clock::now();
-  const int fov = REXCVAR_GET(kk_fov);
   if (!g_grab(w, h, rgba)) {
     REXLOG_WARN("KK pause: the last frame could not be captured");
     return false;
@@ -239,6 +254,45 @@ bool GrabBackdrop(bool paused = false) {
     for (size_t i = 0; i + 3 < rgba.size() && !lit; i += 4 * 97) lit = rgba[i] | rgba[i + 1] | rgba[i + 2];
     if (!lit) return false;
   }
+  return true;
+}
+
+// The paused frame at play's field of view against the kept last frame of play: the curve that brings frames
+// taken again in this pause back to play's brightness. False while the cover still shows.
+bool Calibrate() {
+  int w = 0, h = 0;
+  std::vector<uint8_t> rgba;
+  if (!CaptureFrame(true, w, h, rgba)) return false;
+  std::lock_guard lock(g_backdrop_mutex);
+  g_lut_ok = w == g_backdrop_w && h == g_backdrop_h && g_backdrop.size() == rgba.size() &&
+             BuildBrightnessLut(g_backdrop.data(), rgba.data(), w, h, g_lut);
+  if (g_lut_ok) {
+    REXLOG_INFO("KK pause: the paused game is drawn darker than play; frames taken again are brightened (x{:.2f} "
+                "at dark grey)", BrightnessLutGain(g_lut));
+  } else {
+    REXLOG_WARN("KK pause: the paused game's brightness could not be measured");
+  }
+#if defined(KK_DEV_TOOLS)
+  DevLogMean(rgba, w, h, "paused, not brightened", REXCVAR_GET(kk_fov));
+#endif
+  return true;
+}
+
+bool GrabBackdrop(bool paused = false) {
+  int w = 0, h = 0;
+  std::vector<uint8_t> rgba;
+  const auto t0 = std::chrono::steady_clock::now();
+  const int fov = REXCVAR_GET(kk_fov);
+  if (!CaptureFrame(paused, w, h, rgba)) return false;
+  if (!paused) {
+    g_calibration = Calibration::kToDo;  // a new pause: measured again
+    g_lut_ok = false;
+  } else if (g_lut_ok) {
+    ApplyBrightnessLut(g_lut, rgba.data(), rgba.size() / 4);
+  }
+#if defined(KK_DEV_TOOLS)
+  DevLogMean(rgba, w, h, paused ? "taken again" : "first", fov);
+#endif
   std::lock_guard lock(g_backdrop_mutex);
   g_backdrop = std::move(rgba);
   g_backdrop_w = w, g_backdrop_h = h;
@@ -255,8 +309,12 @@ bool GrabBackdrop(bool paused = false) {
 // every frame (with the new angle, fov.cpp) and covers it with one black quad, which the renderer leaves out
 // for a few frames (photo mode's "hide the pause cover", nothing else) while the frame is kept again. The kept
 // frame stays on screen meanwhile, so nothing flickers. Game thread (the pad read, FilterPad).
-constexpr int64_t kRegrabWaitMs = 150, kRegrabGiveUpMs = 1500;
-int64_t g_regrab_since = -1;  // the cover is being left out since then; -1 not
+// Task 264: the game dims the world when it pauses (smoothly, to about 0.4 times play's brightness: half way in
+// about 0.25 s, settled after about 1.2 s; the black cover hides it). So once a pause, after the dimming has
+// settled and while the field of view is still play's, the cover is also left out to measure it (Calibrate).
+constexpr int64_t kRegrabWaitMs = 150, kRegrabGiveUpMs = 1500, kDimSettledMs = 1500;
+int64_t g_regrab_since = -1;       // the cover is being left out since then; -1 not
+bool g_regrab_calibrates = false;  // for the brightness measurement, not a new field of view
 
 void EndRegrab() {
   g_regrab_since = -1;
@@ -265,6 +323,7 @@ void EndRegrab() {
 
 void ServiceBackdropFov() {
   const bool menu = PauseMenuOpen() && g_pending < 0;
+  const int fov = REXCVAR_GET(kk_fov);
   if (g_regrab_since >= 0) {
     if (photo::Active()) {  // photo mode sends its own settings now
       g_regrab_since = -1;
@@ -273,6 +332,15 @@ void ServiceBackdropFov() {
     const int64_t waited = NowMs() - g_regrab_since;
     if (!menu) {
       EndRegrab();
+    } else if (g_regrab_calibrates) {
+      if (fov != g_backdrop_fov) {  // changed before it was measured: no curve this pause; the new view is kept
+        g_calibration = Calibration::kDone;
+        g_regrab_calibrates = false;
+        g_regrab_since = NowMs();
+      } else if (waited >= kRegrabWaitMs && (Calibrate() || waited > kRegrabGiveUpMs)) {
+        g_calibration = Calibration::kDone;
+        EndRegrab();
+      }
     } else if (waited >= kRegrabWaitMs && (GrabBackdrop(true) || waited > kRegrabGiveUpMs)) {
       if (waited > kRegrabGiveUpMs) REXLOG_WARN("KK pause: the paused frame could not be kept again");
       g_backdrop_fov = REXCVAR_GET(kk_fov);
@@ -280,14 +348,19 @@ void ServiceBackdropFov() {
     }
     return;
   }
-  const int fov = REXCVAR_GET(kk_fov);
-  if (!menu || g_backdrop_fov < 0 || fov == g_backdrop_fov) return;
+  if (!menu || g_backdrop_fov < 0) return;
+  const bool calibrate = g_calibration == Calibration::kToDo && fov == g_backdrop_fov;
+  if (calibrate && NowMs() - g_pause_started_ms.load() < kDimSettledMs) return;
+  if (!calibrate && fov == g_backdrop_fov) return;
   photo::Values cover_only;
   cover_only.hide_arms = false;
   if (!nr::kk::SetPhoto(photo::ToRenderer(cover_only, true))) {  // not the native renderer: shows after Resume
+    g_calibration = Calibration::kDone;
     g_backdrop_fov = fov;
     return;
   }
+  if (!calibrate) g_calibration = Calibration::kDone;  // a new view before the measurement: none this pause
+  g_regrab_calibrates = calibrate;
   g_regrab_since = NowMs();
 }
 
