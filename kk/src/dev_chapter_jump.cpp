@@ -29,6 +29,7 @@
 
 #include "art.h"
 #include "guest.h"
+#include "coop_runtime.h"
 
 namespace kk {
 void DevStartScriptClock();  // dev_tools.cpp
@@ -194,7 +195,11 @@ void DevUniGoTick(uint8_t* base, uint32_t g, bool request, bool started) {
   }
   if (!g) return;
   static std::chrono::steady_clock::time_point loaded{};
-  if (started && loaded == std::chrono::steady_clock::time_point{}) loaded = std::chrono::steady_clock::now();
+  if (started && loaded == std::chrono::steady_clock::time_point{}) {
+    loaded = std::chrono::steady_clock::now();
+    if (const char* end = std::getenv("KK_DEV_START_END"); end && *end)
+      REXLOG_INFO("KK dev jump: chapter-end aid armed, delay={} seconds level {} (any hero/vehicle)",end,Load32(base,g+0x18));
+  }
   if (loaded == std::chrono::steady_clock::time_point{}) return;
   const auto since = std::chrono::steady_clock::now() - loaded;
   // KK_DEV_JUMP_DUMPG=<seconds>: that long after the start request's level loaded, write the universe
@@ -223,6 +228,12 @@ void DevUniGoTick(uint8_t* base, uint32_t g, bool request, bool started) {
   if (static bool ended = false; !ended && std::getenv("KK_DEV_START_END") && *std::getenv("KK_DEV_START_END") &&
                                  Load32(base, g + 4) == 0 &&
                                  since > std::chrono::duration<double>(std::atof(std::getenv("KK_DEV_START_END")))) {
+    // Submit co-op completion now, rather than leaving G+4 vulnerable to a
+    // local death re-init before the next uni_go. Uses no Jack actor paths.
+    if (kk::coop::SessionInProcess()) {
+      ended = kk::coop::SessionDevChapterEnd();
+      return;
+    }
     ended = true;
     // The entry after the one being played (a story run: the entry of the current level).
     int next = int(Load32(base, g + 0x5670)) + 1;

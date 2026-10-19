@@ -33,6 +33,9 @@ bool SessionBeforeGo(PPCContext& ctx, uint8_t* base, uint32_t g);
 void SessionAfterGo(uint8_t* base, uint32_t g, bool loaded);
 void SessionCheckpoint(uint32_t level, uint32_t checkpoint);
 void SessionReloadFrame(uint8_t* base);
+#if defined(KK_DEV_TOOLS)
+bool SessionDevChapterEnd();  // same finish messages as a native chapter exit, no hero dependency
+#endif
 // Private death reload does not advance the shared load barrier or enemy visit.
 bool SessionPrivateReload();
 void SessionReviveBeforeAi(PPCContext& ctx, uint8_t* base);

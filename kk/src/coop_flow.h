@@ -13,6 +13,10 @@
 
 namespace kk::coop {
 enum class ChapterPolicy { Together, SoloRegroup, Observer };
+enum class DeathRoute { LocalCheckpoint, TogetherRecovery };
+inline constexpr DeathRoute DeathRouteFor(ChapterPolicy policy) {
+  return policy==ChapterPolicy::Together ? DeathRoute::TogetherRecovery : DeathRoute::LocalCheckpoint;
+}
 struct ChapterRule { uint32_t level; ChapterPolicy policy; bool uncertain; };
 // C29 static-data recommendations: 22 together, 17 solo/regroup, 3 observer.
 // Confidence describes source/data evidence only. Every row remains uncertain
@@ -222,6 +226,8 @@ class SessionFlow {
       if (!authority) return;
       if (local) {
         if (m.flow.generation!=view_.world.generation || view_.phase!=FlowPhase::Playing) return;
+        // Independent checkpoint retries never become shared world changes.
+        if (m.flow.level==view_.world.level && DeathRouteFor(view_.policy)==DeathRoute::LocalCheckpoint) return;
         next_=m.flow; local_finished_=true;
         if (view_.policy==ChapterPolicy::SoloRegroup && m.flow.level!=view_.world.level) {
           view_.phase=FlowPhase::Waiting; view_.status="Waiting for partner to finish this chapter...";
@@ -255,6 +261,9 @@ class SessionFlow {
         if (local) Emit(m.type,m.flow);
         break;
       case MessageType::ReloadRequest:
+        // Also reject a delayed/accidental peer request while a solo finisher
+        // waits. It must not cancel completion or restart the living partner.
+        if (DeathRouteFor(view_.policy)==DeathRoute::LocalCheckpoint) return;
         if (local) Emit(m.type,view_.world);
         if (view_.host && (view_.phase==FlowPhase::Playing || view_.phase==FlowPhase::Waiting)) {
           auto f=view_.world; ++f.generation; f.start=view_.checkpoint;
