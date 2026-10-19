@@ -30,6 +30,7 @@ struct SessionConfig {
   uint64_t epoch = 0;  // host supplies a fresh, nonzero epoch for each session
   Compatibility compatibility;
   CheatSet cheats;
+  std::string display_name = "Partner";
 };
 struct PoseCounters {
   uint64_t sent = 0, received = 0;
@@ -49,6 +50,7 @@ class CoopSession {
   RejectReason Rejection() const { return rejection_; }
   std::optional<PlayerPose> Partner(double now) const;
   PoseCounters Poses() const { return pose_counters_; }
+  const std::string& PartnerName() const { return partner_name_; }
   enemies::Frame Enemies(double now) const { return state_ == SessionState::Connected ? enemies_.Sample(now) : enemies::Frame{}; }
   uint64_t EnemiesSent() const { return enemies_sent_; }
   bool QueueShot(const PendingShot& shot);
@@ -75,6 +77,7 @@ class CoopSession {
   uint64_t malformed_ = 0;
   PoseBuffer poses_;
   PoseCounters pose_counters_;
+  std::string partner_name_;
   enemies::Channel enemies_;
   double last_enemies_ = -1;
   uint64_t enemies_sent_ = 0;

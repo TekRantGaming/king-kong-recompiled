@@ -77,7 +77,8 @@ constexpr size_t kMaxInvites = 16, kMaxFriends = 256;
  X(SteamAPI_ISteamUtils_GetAppID) X(SteamAPI_ISteamUtils_IsOverlayEnabled) \
  X(SteamAPI_ISteamUtils_GetImageSize) X(SteamAPI_ISteamUtils_GetImageRGBA) \
  X(SteamAPI_ISteamFriends_GetFriendCount) X(SteamAPI_ISteamFriends_GetFriendByIndex) \
- X(SteamAPI_ISteamFriends_GetPersonaState) X(SteamAPI_ISteamFriends_GetFriendPersonaName) \
+ X(SteamAPI_ISteamFriends_GetPersonaState) X(SteamAPI_ISteamFriends_GetPersonaName) \
+ X(SteamAPI_ISteamFriends_GetFriendPersonaName) \
  X(SteamAPI_ISteamFriends_GetFriendPersonaState) X(SteamAPI_ISteamFriends_GetFriendRelationship) \
  X(SteamAPI_ISteamFriends_GetFriendGamePlayed) X(SteamAPI_ISteamFriends_GetSmallFriendAvatar) \
  X(SteamAPI_ISteamFriends_GetFriendRichPresence) X(SteamAPI_ISteamFriends_RequestFriendRichPresence) \
@@ -373,6 +374,8 @@ struct SteamRuntime::Impl
     transport = std::make_unique<SteamMessagesTransport>(*this, partner);
     SessionConfig config{true, model.self == recorded_owner ? Role::Host : Role::Guest,
                          model.self == recorded_owner ? epoch : 0, options.compatibility};
+    // Flat SDK call owned by this worker. Persona stays out of logs and lobby metadata.
+    config.display_name = SanitizeDisplayName(Text(api.SteamAPI_ISteamFriends_GetPersonaName(friends)));
     session = std::make_unique<CoopSession>(config, *transport);
     model.start_requested = true;
     api.SteamAPI_ISteamFriends_SetRichPresence(friends, "connect", nullptr);
@@ -585,6 +588,7 @@ struct SteamRuntime::Impl
     view.enemies = session->Enemies(now); view.enemies_sent = session->EnemiesSent();
     view.shots_sent = session->ShotsSent();
     view.host_cheats = session->HostCheats();
+    view.partner_name = session->PartnerName();
 #if defined(KK_DEV_TOOLS)
     if (view.state != SessionState::Connected) next_pose_log = now + 10;
     else if (now >= next_pose_log) {

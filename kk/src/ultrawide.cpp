@@ -52,6 +52,7 @@
 #include "photo_mode.h"
 #include "settings.h"
 #include "ultrawide_logic.h"
+#include "coop_nametag.h"
 
 namespace kk::fov {
 bool InMenus();
@@ -158,9 +159,17 @@ REX_HOOK_RAW(sub_8278AB00) {
 
 REX_EXTERN(__imp__sub_820E0D08);
 REX_HOOK_RAW(sub_820E0D08) {
+  // Capture precisely the matrix copied to the projection stack, including all
+  // FOV/hor+ adjustments. Every early return below must go through this call.
+  const uint32_t matrix = ctx.r4.u32;
+  auto push = [&] {
+    if (g_in_projection && matrix == kProjectionScratch)
+      kk::coop::nametag::ProjectionPush(base, matrix);
+    __imp__sub_820E0D08(ctx, base);
+  };
   const float factor = kk::UltrawideFactor();
   if (factor == 1.0f || g_in_projection == 0 || ctx.r4.u32 != kProjectionScratch || kk::fov::InMenus()) {
-    __imp__sub_820E0D08(ctx, base);
+    push();
     return;
   }
   std::array<uint8_t, 64> saved;
@@ -174,7 +183,7 @@ REX_HOOK_RAW(sub_820E0D08) {
   if (g_view_widened != 1.0f) {
     // The angle was widened (fov.cpp): x is already right. Put the height back when it shrank with it.
     if (m[11] == 0.0f || m[15] != 0.0f || m[0] == 0.0f) {
-      __imp__sub_820E0D08(ctx, base);
+      push();
       return;
     }
     const float ratio = std::fabs(m[5] / m[0]);
@@ -184,12 +193,12 @@ REX_HOOK_RAW(sub_820E0D08) {
       REXLOG_INFO("KK: ultrawide: view angle widened {:.3f} times for culling; y/x {:.3f}, height {}", g_view_widened,
                   ratio, shorter ? "put back" : "kept");
     if (!shorter) {
-      __imp__sub_820E0D08(ctx, base);
+      push();
       return;
     }
     for (int i : {1, 5, 9, 13}) m[i] *= g_view_widened;
   } else if (!kk::ultrawide::WidenProjection(m.data(), factor)) {
-    __imp__sub_820E0D08(ctx, base);
+    push();
     return;
   }
   for (size_t i = 0; i < m.size(); ++i) {
@@ -198,6 +207,6 @@ REX_HOOK_RAW(sub_820E0D08) {
   }
   if (!g_logged.exchange(true))
     REXLOG_INFO("KK: ultrawide: first 3D view widened {:.3f} times (hor+)", factor);
-  __imp__sub_820E0D08(ctx, base);
+  push();
   std::memcpy(base + kProjectionScratch, saved.data(), saved.size());
 }

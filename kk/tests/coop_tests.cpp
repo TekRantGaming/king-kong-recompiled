@@ -5,6 +5,7 @@
 #include "coop_puppet.h"
 #include "cheat_rules.h"
 #include "coop_partner_selection.h"
+#include "coop_nametag.h"
 
 #include <bit>
 #include <cmath>
@@ -23,7 +24,9 @@ void Check(bool ok, const char* what) {
 }
 bool Near(double a, double b) { return std::abs(a - b) < .002; }
 Compatibility Compatible() { return {kProtocolVersion, "test-version", "test-build", "test-gameplay"}; }
-SessionConfig Config(Role role) { return {true, role, role == Role::Host ? 123456789ull : 0, Compatible()}; }
+SessionConfig Config(Role role) {
+  return {true, role, role == Role::Host ? 123456789ull : 0, Compatible(), role == Role::Host ? "Host" : "Guest"};
+}
 std::vector<uint8_t> Packet(Message m) {
   std::vector<uint8_t> out;
   Check(Encode(m, out), "encode test packet"); return out;
@@ -190,10 +193,12 @@ void Handshake() {
     pair.Pump(0, .4, guest_first);
     Check(pair.host.State() == SessionState::Connected && pair.guest.State() == SessionState::Connected,
         "compatible handshake, either scheduler order");
+    Check(pair.host.PartnerName() == "Guest" && pair.guest.PartnerName() == "Host", "Hello names cross roles");
     pair.Pump(.41, 2);
     Check(pair.host.Stats().ping_ms > 0 && pair.guest.Stats().ping_ms > 0, "ping and pong update RTT");
     pair.host.End(2.01); pair.guest.Tick(2.02);
     Check(pair.guest.State() == SessionState::Ended, "clean Bye ends peer");
+    Check(pair.guest.PartnerName().empty(), "ended session forgets persona");
   }
   for (RejectReason reason : {RejectReason::Protocol, RejectReason::Version, RejectReason::Build,
       RejectReason::GameplayMods}) {
@@ -438,8 +443,84 @@ void PartnerSelection() {
   live = {background, spare};
   Check(SelectAuto(live) == 0, "new load observations permit fresh selection");
 }
+void NameTags() {
+  using namespace kk::coop::nametag;
+  Camera c;
+  c.view = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+  c.projection = {1,0,0,0, 0,2,0,0, 0,0,1.01f,1, 0,0,-.1f,0};
+  const Rect screen{0,0,800,600};
+  auto p = Project(c,{0,0,10},screen,20);
+  Check(p && p->on_screen && !p->behind && Near(p->x,400) && Near(p->y,300), "camera forward projects to centre");
+  p = Project(c,{5,1,10},screen,20);
+  Check(p && p->on_screen && Near(p->x,600) && Near(p->y,240), "known right/up point with horizontal and vertical FOV");
+  // A translated camera looking along +world X, with +world Y as screen right.
+  c.view = {0,0,1,0, 1,0,0,0, 0,1,0,0, -20,-30,-10,1};
+  p = Project(c,{20,25,31},screen,20);
+  Check(p && p->on_screen && Near(p->x,600) && Near(p->y,240), "world-to-view rotation and eye translation precede projection");
+  c.view = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+  p = Project(c,{2,0,1},screen,20);
+  Check(p && !p->on_screen && !p->behind && Near(p->x,780) && Near(p->y,300), "right edge clamp leaves inset");
+  p = Project(c,{2,2,1},screen,20);
+  Check(p && !p->on_screen && Near(p->y,20) && p->x > 400 && p->x < 780, "diagonal clamp preserves aspect-correct bearing");
+  p = Project(c,{1,0,-10},screen,20);
+  Check(p && p->behind && !p->on_screen && Near(p->x,780) && p->dx > 0, "behind-camera right target never mirrors to left");
+  p = Project(c,{0,0,-10},screen,20);
+  Check(p && p->behind && Near(p->x,400) && Near(p->y,580), "exactly behind has deterministic bottom arrow");
+  p = Project(c,{1,0,0},screen,20);
+  Check(p && !p->on_screen && Near(p->x,780), "camera-plane point clamps without division by zero");
+  const auto letterbox = Picture(1920,1200,16.f/9.f,true);
+  Check(Near(letterbox.x,0) && Near(letterbox.y,60) && Near(letterbox.h,1080), "letterbox uses displayed picture");
+  const auto stretch = Picture(1920,1200,16.f/9.f,false);
+  Check(Near(stretch.h,1200) && Near(stretch.y,0), "stretch fills output regardless of render scale");
+  c.projection[0] /= 2;  // Hor+ retains projection Y and doubles horizontal coverage.
+  p = Project(c,{5,1,10},{100,50,1600,600},20);
+  Check(p && Near(p->x,1100) && Near(p->y,290), "ultrawide projection and nonzero picture origin");
+  c.projection[0] *= 2; c.projection[5] *= -1; c.view[5] = -1;
+  p = Project(c,{5,1,10},screen,20);
+  Check(p && Near(p->x,600) && Near(p->y,240), "signed guest camera/projection pair is retained");
+  c.projection[0] = std::numeric_limits<float>::quiet_NaN();
+  Check(!Project(c,{0,0,10},screen,20), "invalid camera cannot reach ImGui");
+  c.projection[0] = 1;
+  Check(!Project(c,{0,0,10},{0,0,10,10},20), "empty inset cannot clamp invalid bounds");
+  Check(Opacity(.5f) == 0 && Near(Opacity(2),.65) && Near(Opacity(45),.65) &&
+      Near(Opacity(52.5f),.325) && Opacity(60) == 0 && Opacity(100) == 0, "close/far name and arrow fades");
+  Check(FontScale(40) < FontScale(5), "name shrinks with distance");
+}
+void DisplayNames() {
+  Check(SanitizeDisplayName("") == "Partner", "empty name has neutral fallback");
+  Check(SanitizeDisplayName(" \t  Host\n  Player \r") == "Host Player", "trim and collapse whitespace");
+  Check(SanitizeDisplayName(std::string("A\0B",3)) == "AB", "embedded NUL removed");
+  Check(SanitizeDisplayName("A\x7F\xC2\x85" "B") == "AB", "ASCII and Unicode controls removed");
+  Check(SanitizeDisplayName("A\xE2\x80\xAE" "B\xE2\x81\xA6" "C\xEF\xBB\xBF") == "ABC", "bidi and invisible formatting removed");
+  Check(SanitizeDisplayName("\xC0\xAF\xED\xA0\x80\xF4\x90\x80\x80") == "Partner", "overlong UTF-8, surrogate and above Unicode rejected");
+  Check(SanitizeDisplayName("A\xE2\x82") == "A", "incomplete UTF-8 tail removed");
+  const std::string unicode = "Ren\xC3\xA9 \xE7\x8E\x8B \xF0\x9F\xA6\x8D";
+  Check(SanitizeDisplayName(unicode) == unicode, "valid multibyte persona preserved");
+  Check(SanitizeDisplayName(std::string(31,'a')+"\xC3\xA9") == std::string(31,'a'), "32-byte limit never splits codepoint");
+  Check(SanitizeDisplayName(std::string(30,'a')+"\xC3\xA9") == std::string(30,'a')+"\xC3\xA9", "exact 32-byte UTF-8 name retained");
+  Message hello; hello.hello = Compatible(); hello.display_name = unicode;
+  auto bytes = Packet(hello); Message out;
+  Check(Decode(bytes,out) && out.display_name == unicode, "UTF-8 Hello round trip");
+  // Mutate the final name bytes without changing packet framing: strict wire validation.
+  bytes.back() = 0;
+  Check(!Decode(bytes,out), "wire names with NUL are rejected");
+  hello.display_name = "A"; bytes = Packet(hello);
+  bytes[bytes.size()-2] = 33;
+  Check(!Decode(bytes,out), "over-limit wire name rejected before any read");
+  hello.display_name = std::string(33,'a');
+  Check(!Encode(hello,bytes), "over-limit local Hello rejected");
+  hello.display_name = "A\nB";
+  Check(!Encode(hello,bytes), "unsanitised local Hello rejected");
+  MemoryTransport transport;
+  auto config = Config(Role::Host); config.display_name = " A\nB ";
+  CoopSession session(config,transport); session.Tick(0);
+  // With no peer, inspect the outbound Hello using a loopback receiver.
+  transport.peer = &transport; session.Tick(.5);
+  Check(!transport.incoming.empty() && Decode(transport.incoming.front(),out) && out.display_name == "A B",
+      "session sanitises local identity before sending Hello");
+}
 }  // namespace
 int main() {
-  Protocol(); CheatSets(); Handshake(); Timeouts(); Poses(); PoseReadingAndDisplay(); Disabled(); PuppetPolicies(); PartnerSelection();
+  Protocol(); CheatSets(); Handshake(); Timeouts(); Poses(); PoseReadingAndDisplay(); Disabled(); PuppetPolicies(); PartnerSelection(); NameTags(); DisplayNames();
   std::puts("co-op core tests passed");
 }

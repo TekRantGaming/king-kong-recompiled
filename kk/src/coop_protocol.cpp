@@ -75,6 +75,44 @@ ShotVector ReadVector(Reader& r) {
       std::bit_cast<float>(uint32_t(r.U(4)))};
 }
 }  // namespace
+std::string SanitizeDisplayName(std::string_view name) {
+  std::string out;
+  bool space = false;
+  // Bound work as well as output, even for a local persona made entirely of controls.
+  name = name.substr(0, 512);
+  for (size_t i = 0; i < name.size();) {
+    const size_t begin = i;
+    const auto first = uint8_t(name[i++]);
+    uint32_t cp = first;
+    size_t extra = 0;
+    if (first >= 0xC2 && first <= 0xDF) { cp &= 0x1F; extra = 1; }
+    else if (first >= 0xE0 && first <= 0xEF) { cp &= 0x0F; extra = 2; }
+    else if (first >= 0xF0 && first <= 0xF4) { cp &= 7; extra = 3; }
+    else if (first >= 0x80) continue;
+    bool valid = i + extra <= name.size();
+    for (size_t j = 0; valid && j < extra; ++j) {
+      const auto c = uint8_t(name[i+j]);
+      if ((c & 0xC0) != 0x80) valid = false;
+      else cp = (cp << 6) | (c & 0x3F);
+    }
+    if (!valid) continue;
+    i += extra;
+    if ((extra == 1 && cp < 0x80) || (extra == 2 && cp < 0x800) ||
+        (extra == 3 && cp < 0x10000) || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) continue;
+    if (cp == 32 || cp == 9 || cp == 10 || cp == 13 || cp == 0xA0 || cp == 0x3000) {
+      space = !out.empty(); continue;
+    }
+    if (cp < 32 || (cp >= 0x7F && cp <= 0x9F) || cp == 0xAD || cp == 0x61C ||
+        cp == 0x180E || (cp >= 0x2000 && cp <= 0x200F) || (cp >= 0x2028 && cp <= 0x202F) ||
+        (cp >= 0x2060 && cp <= 0x206F) || cp == 0xFEFF || (cp & 0xFFFF) >= 0xFFFE ||
+        (cp >= 0xFFF9 && cp <= 0xFFFB) || (cp >= 0xE0000 && cp <= 0xE007F)) continue;
+    if (out.size() + size_t(space) + i - begin > kMaxDisplayNameBytes) break;
+    if (space) out += ' ';
+    space = false;
+    out.append(name.substr(begin, i-begin));
+  }
+  return out.empty() ? "Partner" : out;
+}
 bool ValidEnemyWorld(const EnemyWorld& w) {
   return w.level > 0 && w.level <= 100000 && w.start <= 10000 && w.serial > 0;
 }
@@ -122,6 +160,10 @@ bool Encode(const Message& m, std::vector<uint8_t>& out) {
       payload.U(m.hello.protocol, 2);
       if (!payload.Text(m.hello.version) || !payload.Text(m.hello.build) || !payload.Text(m.hello.gameplay_digest))
         return false;
+      if (m.display_name.size() > kMaxDisplayNameBytes || SanitizeDisplayName(m.display_name) != m.display_name)
+        return false;
+      payload.U(m.display_name.size(), 1);
+      payload.bytes.insert(payload.bytes.end(), m.display_name.begin(), m.display_name.end());
       break;
     case MessageType::Reject:
       if (!ReasonValid(m.reason)) return false;
@@ -198,10 +240,16 @@ bool Decode(std::span<const uint8_t> bytes, Message& out) {
       for (auto& ammo : m.inventory.ammo) ammo = uint32_t(r.U(4));
       if (!ValidInventory(m.inventory)) return false;
       break;
-    case MessageType::Hello:
+    case MessageType::Hello: {
       m.hello.protocol = uint16_t(r.U(2));
       if (!r.Text(m.hello.version) || !r.Text(m.hello.build) || !r.Text(m.hello.gameplay_digest)) return false;
+      const size_t n = size_t(r.U(1));
+      if (!r.ok || !n || n > kMaxDisplayNameBytes || n > bytes.size()-r.at) return false;
+      m.display_name.assign(reinterpret_cast<const char*>(bytes.data()+r.at), n);
+      r.at += n;
+      if (SanitizeDisplayName(m.display_name) != m.display_name) return false;
       break;
+    }
     case MessageType::Reject:
       m.reason = RejectReason(r.U(2));
       if (!ReasonValid(m.reason)) return false;

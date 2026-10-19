@@ -41,6 +41,8 @@ PuppetSnapshot PartnerBodySnapshot();
 void SetPartnerBodyDriven(bool driven);
 #if defined(KK_DEV_TOOLS)
 bool SocialFakeScenario(std::string_view scenario);
+// Game-thread copied head anchor; cleared whenever body driving stops.
+void SetPartnerHead(std::optional<ShotVector> head, uint32_t level);
 bool SteamSelfTestRequested();
 int RunSteamSelfTest();
 #endif

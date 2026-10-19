@@ -490,6 +490,25 @@ bool BoneWorldPosition(const uint8_t* b, uint32_t actor, Vec& out) {
   const auto world = Ptr(b, root, 12, 80);
   return world && transform(world);
 }
+std::optional<coop::ShotVector> PartnerHead(const uint8_t* b, const Rig& r) {
+  const auto list = Ptr(b, Ptr(b, r.anim, 8, 4), 0, 20);
+  const uint32_t begin = list ? Load32(b,list+16) : 0, end = list ? Load32(b,list+4) : 0;
+  if (!list || end <= begin || (end-begin)%8 || (end-begin)/8 > 128 || !Range(begin,end-begin)) return {};
+  const uint32_t count = (end-begin)/8;
+  const auto tags = Ptr(b,r.anim,84,count+4);
+  // Human tag 20 is a head candidate, not an assumed universal bone index.
+  // Require a central point at human head height; incompatible rigs fall back
+  // to the network pose +1.8 in the overlay. No dirty refresh or engine call.
+  for (uint32_t i = 0; i < count; ++i) {
+    if ((tags ? b[tags+4+i] : i) != 20) continue;
+    Vec head;
+    if (!BoneWorldPosition(b,Load32(b,begin+8*i),head) ||
+        std::hypot(head.x-r.pos.x,head.y-r.pos.y) > .65f ||
+        head.z-r.pos.z < .8f || head.z-r.pos.z > 2.4f) return {};
+    return coop::ShotVector{head.x,head.y,head.z+.25f};
+  }
+  return {};
+}
 void LogSpawnBones(const uint8_t* b) {
   auto& s = Get();
   if (!s.bone_copy.actor || s.loading || !s.Environment(b, s.world)) return;
@@ -1281,6 +1300,9 @@ void PartnerBodyLateWorld(PPCContext& ctx, uint8_t* b, uint32_t w) {
   s.measure = false;
   Rig rig;
   if (!s.Validate(b, w, rig)) return;
+#if defined(KK_DEV_TOOLS)
+  if (Opt().partner) coop::SetPartnerHead(PartnerHead(b,rig), s.partner.partner->level);
+#endif
   if (!Scratch::CanUse(ctx)) { s.Abort("invalid-guest-scratch-stack"); return; }
   const auto now = Clock::now();
   s.max_late_error = std::max(s.max_late_error, Distance(s.desired, rig.pos));

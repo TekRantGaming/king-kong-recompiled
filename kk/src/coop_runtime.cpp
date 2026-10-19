@@ -2,11 +2,13 @@
 #include "cheats.h"
 #include "coop_session.h"
 #include "coop_pose.h"
+#include "coop_nametag.h"
 #include "settings.h"
 #include "steam_runtime.h"
 #include "social_fake.h"
 
 #include <atomic>
+#include <algorithm>
 #include <charconv>
 #include <chrono>
 #include <cmath>
@@ -39,6 +41,7 @@ REXCVAR_DEFINE_BOOL(kk_social_fake, false, "KK/Debug", "Use an offline Social pa
     .debug_only().lifecycle(rex::cvar::Lifecycle::kInitOnly);
 #endif
 REXCVAR_DECLARE(bool, kk_hide_hud);
+REXCVAR_DECLARE(bool, present_letterbox);
 
 namespace kk::coop {
 namespace {
@@ -70,12 +73,15 @@ struct View {
   uint64_t enemies_sent = 0;
   uint64_t shots_sent = 0;
   std::optional<CheatSet> host_cheats;
+  std::string partner_name;
 };
 std::mutex enemy_status_mutex;
 enemies::Counters enemy_status;
 ShotCounters shot_status;
 std::atomic<bool> partner_body_driven{false};
 #if defined(KK_DEV_TOOLS)
+std::mutex head_mutex;
+struct HeadAnchor { std::optional<ShotVector> point; uint32_t level = 0; double time = 0; } head_anchor;
 void LogPoses(const View& v, double now, double& next) {
   if (v.state != SessionState::Connected) { next = now + 10; return; }
   if (now < next) return;
@@ -117,6 +123,7 @@ class Service {
         view.enemies = session.Enemies(now); view.enemies_sent = session.EnemiesSent();
         view.shots_sent = session.ShotsSent();
         view.host_cheats = session.HostCheats();
+        view.partner_name = session.PartnerName();
         LogPoses(view, now, next_pose_log);
         { std::lock_guard lock(mutex_); view_ = std::move(view); }
         if (shown != session.State()) { shown = session.State(); RequestUiPaint(); }
@@ -179,32 +186,33 @@ View CurrentView() {
 #endif
   if (!steam) return {};
   const auto v = steam->SessionSnapshot();
-  return {v.role, v.state, v.rejection, v.stats, v.local, v.partner, v.updated, v.local_failure, v.poses, v.enemies, v.enemies_sent, v.shots_sent, v.host_cheats};
+  return {v.role, v.state, v.rejection, v.stats, v.local, v.partner, v.updated, v.local_failure, v.poses, v.enemies, v.enemies_sent, v.shots_sent, v.host_cheats, v.partner_name};
 }
 
 class PartnerOverlay final : public rex::ui::ImGuiDialog {
  public:
   explicit PartnerOverlay(rex::ui::ImGuiDrawer* drawer) : ImGuiDialog(drawer) {}
  protected:
-  void OnDraw(ImGuiIO&) override {
+  void OnDraw(ImGuiIO& io) override {
     if (!REXCVAR_GET(kk_coop_enabled) || photo::Active() || freecam::HideHud() ||
-        freecam::HideGameHud() || REXCVAR_GET(kk_hide_hud) || play::CoverScreen()) return;
+        freecam::HideGameHud() || REXCVAR_GET(kk_hide_hud) || play::CoverScreen() ||
+        !play::SessionActive() || play::StartLevelLoading() || play::PauseMenuOpen() || play::GamePausePageUp()) return;
     const View v = CurrentView();  // UI reads copied values only, never guest memory.
     if (v.state == SessionState::Idle) return;
     if (Now() - v.updated > .5 && v.state != SessionState::Ended) return;
-    char text[256];
 #if defined(KK_DEV_TOOLS)
+    char text[256];
     std::snprintf(text, sizeof(text), "Co-op %s: %s | %.0f ms | loss %.1f%% | invalid %llu | %s",
         v.role == Role::Host ? "host" : "guest", StateName(v.state), v.stats.ping_ms, v.stats.loss * 100,
         static_cast<unsigned long long>(v.stats.malformed), RejectName(v.rejection));
     auto* dl = ImGui::GetForegroundDrawList();
     dl->AddText(ImVec2(24, 64), IM_COL32(255, 230, 170, 255), text);
-    const float distance = v.local && v.partner && v.local->level == v.partner->level ?
+    const float status_distance = v.local && v.partner && v.local->level == v.partner->level ?
         PartnerDistance(*v.local, *v.partner) : -1;
     std::snprintf(text, sizeof(text), "Pose: %s (%s) | sent %llu recv %llu | level %s | distance %.1f",
         v.local ? "yes" : "no", v.local_failure,
         static_cast<unsigned long long>(v.poses.sent), static_cast<unsigned long long>(v.poses.received),
-        v.poses.remote_level ? std::to_string(*v.poses.remote_level).c_str() : "none", distance);
+        v.poses.remote_level ? std::to_string(*v.poses.remote_level).c_str() : "none", status_distance);
     dl->AddText(ImVec2(24, 88), IM_COL32(255, 230, 170, 255), text);
     enemies::Counters counts;
     { std::lock_guard lock(enemy_status_mutex); counts = enemy_status; }
@@ -223,6 +231,7 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
 #endif
     if (v.state != SessionState::Connected || !v.local || !v.partner || v.local->level != v.partner->level ||
         freecam::Active()) return;
+#if defined(KK_DEV_TOOLS)
     const float dx = v.partner->x - v.local->x, dy = v.partner->y - v.local->y;
     const float partner_distance = PartnerDistance(*v.local, *v.partner);
     const float angle = std::remainder(std::atan2(dy, dx) - v.local->facing, 6.28318530718f);
@@ -230,16 +239,65 @@ class PartnerOverlay final : public rex::ui::ImGuiDialog {
     const int sector = (int(std::lround(angle / .7853981634f)) + 8) % 8;
     if (PartnerHere(partner_distance)) std::snprintf(text, sizeof(text), "Partner: here");
     else std::snprintf(text, sizeof(text), "Partner: %.0f m, %s (Jack facing)", partner_distance, directions[sector]);
-#if defined(KK_DEV_TOOLS)
     if (partner_body_driven.load()) {
       const size_t used = std::char_traits<char>::length(text);
       std::snprintf(text + used, sizeof(text) - used, " (body)");
     }
-    constexpr float partner_y = 160;
-#else
-    constexpr float partner_y = 88;
+    dl->AddText(ImVec2(24, 160), IM_COL32(180, 255, 210, 255), text);
+    std::snprintf(text,sizeof(text),"Tag camera: %s",nametag::Status());
+    dl->AddText(ImVec2(24, 184), IM_COL32(180, 255, 210, 255), text);
 #endif
-    dl->AddText(ImVec2(24, partner_y), IM_COL32(180, 255, 210, 255), text);
+    const auto camera = nametag::Snapshot();
+    if (!camera || Now()-camera->time > .15 || camera->level != v.local->level) return;
+    const float distance = PartnerDistance(*v.local,*v.partner);
+    const float alpha = nametag::Opacity(distance);
+    if (alpha <= 0 || v.partner_name.empty()) return;
+    nametag::Point head{v.partner->x,v.partner->y,v.partner->z+1.8f};
+#if defined(KK_DEV_TOOLS)
+    {
+      std::lock_guard lock(head_mutex);
+      if (partner_body_driven.load() && head_anchor.point && head_anchor.level == v.partner->level &&
+          Now()-head_anchor.time <= .15 &&
+          std::hypot(head_anchor.point->x-head.x,head_anchor.point->y-head.y,head_anchor.point->z-head.z) < 2.f)
+        head = {head_anchor.point->x,head_anchor.point->y,head_anchor.point->z};
+    }
+#endif
+    const auto* viewport = ImGui::GetMainViewport();
+    const auto picture = nametag::Picture(io.DisplaySize.x,io.DisplaySize.y,
+        (16.f/9.f)*kk::UltrawideFactor(), REXCVAR_GET(present_letterbox));
+    nametag::Rect rect{viewport->Pos.x+picture.x,viewport->Pos.y+picture.y,picture.w,picture.h};
+    const float ui_scale = std::clamp(io.DisplaySize.y/720.f,.65f,2.f);
+    const auto projected = nametag::Project(*camera,head,rect,32.f*ui_scale);
+    if (!projected) return;
+    ImFont* font = ImGui::GetFont();
+    const float size = ImGui::GetFontSize()*ui_scale*nametag::FontScale(distance);
+    const ImU32 white = IM_COL32(245,245,240,int(alpha*255));
+    const ImU32 shadow = IM_COL32(0,0,0,int(alpha*180));
+    const ImVec2 measure = font->CalcTextSizeA(size,1e6f,0,v.partner_name.c_str());
+    dl->PushClipRect(ImVec2(rect.x,rect.y),ImVec2(rect.x+rect.w,rect.y+rect.h),true);
+    if (projected->on_screen) {
+      // Clamp the full glyph bounds, so a long name at the edge stays readable.
+      const float x = std::clamp(projected->x-measure.x*.5f,rect.x+8*ui_scale,
+          std::max(rect.x+8*ui_scale,rect.x+rect.w-measure.x-8*ui_scale));
+      const ImVec2 pos(x,projected->y-measure.y-5*ui_scale);
+      dl->AddText(font,size,ImVec2(pos.x+ui_scale,pos.y+ui_scale),shadow,v.partner_name.c_str());
+      dl->AddText(font,size,pos,white,v.partner_name.c_str());
+    } else {
+      const float x = projected->x, y = projected->y, dx = projected->dx, dy = projected->dy;
+      const float length = 11*ui_scale, half = 4*ui_scale;
+      dl->AddTriangleFilled(ImVec2(x+dx*length*.5f,y+dy*length*.5f),
+          ImVec2(x-dx*length*.5f-dy*half,y-dy*length*.5f+dx*half),
+          ImVec2(x-dx*length*.5f+dy*half,y-dy*length*.5f-dx*half),white);
+      char metres[32]; std::snprintf(metres,sizeof(metres),"%.0f m",distance);
+      const auto extent = font->CalcTextSizeA(size,1e6f,0,metres);
+      const float tx = std::clamp(x-dx*22*ui_scale-extent.x*.5f,rect.x+4*ui_scale,
+          std::max(rect.x+4*ui_scale,rect.x+rect.w-extent.x-4*ui_scale));
+      const float ty = std::clamp(y-dy*22*ui_scale-extent.y*.5f,rect.y+4*ui_scale,
+          std::max(rect.y+4*ui_scale,rect.y+rect.h-extent.y-4*ui_scale));
+      dl->AddText(font,size,ImVec2(tx+ui_scale,ty+ui_scale),shadow,metres);
+      dl->AddText(font,size,ImVec2(tx,ty),white,metres);
+    }
+    dl->PopClipRect();
   }
 };
 }  // namespace
@@ -286,6 +344,7 @@ void Start(const std::filesystem::path& user_data) {
   SessionConfig config;
   config.enabled = true; config.role = role == "host" ? Role::Host : Role::Guest;
   config.cheats = kk::OwnCheats();
+  config.display_name = config.role == Role::Host ? "Host" : "Guest";
   if (config.role == Role::Host) {
     std::random_device random;
     config.epoch = (uint64_t(random()) << 32) ^ random();
@@ -404,8 +463,16 @@ PuppetSnapshot PartnerBodySnapshot() {
   const auto v = CurrentView();
   return {true, Now() - v.updated <= .5, v.state, v.local, v.partner};
 }
-void SetPartnerBodyDriven(bool driven) { partner_body_driven.store(driven); }
+void SetPartnerBodyDriven(bool driven) {
+  partner_body_driven.store(driven);
 #if defined(KK_DEV_TOOLS)
+  if (!driven) { std::lock_guard lock(head_mutex); head_anchor = {}; }
+#endif
+}
+#if defined(KK_DEV_TOOLS)
+void SetPartnerHead(std::optional<ShotVector> head, uint32_t level) {
+  std::lock_guard lock(head_mutex); head_anchor = {head,level,Now()};
+}
 bool SteamSelfTestRequested() { return REXCVAR_GET(kk_steam_selftest); }
 int RunSteamSelfTest() {
   if (!steam || DevRunning()) { REXLOG_INFO("Steam self-test: unavailable while dev link selected"); return 1; }

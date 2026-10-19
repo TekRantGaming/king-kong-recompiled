@@ -25,6 +25,7 @@ set(KINGKONG_SOURCES
     src/coop_session.cpp
     src/coop_runtime.cpp
     src/coop_partner_body.cpp
+  src/coop_nametag.cpp
     src/coop_enemies_game.cpp
     src/steam_runtime.cpp
     src/steam_lobby.cpp

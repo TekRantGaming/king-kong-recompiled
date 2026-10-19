@@ -55,7 +55,9 @@ std::optional<PlayerPose> PoseBuffer::Sample(double now) const {
   return poses_.back().pose;  // hold, never extrapolate through a wall
 }
 CoopSession::CoopSession(SessionConfig c, ICoopTransport& t, StateCallback f)
-    : config_(std::move(c)), transport_(t), changed_(std::move(f)), epoch_(config_.epoch) {}
+    : config_(std::move(c)), transport_(t), changed_(std::move(f)), epoch_(config_.epoch) {
+  config_.display_name = SanitizeDisplayName(config_.display_name);
+}
 void CoopSession::Transition(SessionState s) {
   if (state_ == s) return;
   state_ = s;
@@ -66,9 +68,11 @@ void CoopSession::Transition(SessionState s) {
     // Keep host settings during a temporary loss. End/leave restores own choices.
     if (s != SessionState::Lost) host_cheats_.reset();
   }
+  if (s == SessionState::Ended) partner_name_.clear();
   if (changed_) changed_(s);
 }
 bool CoopSession::Send(Message m, bool reliable) {
+  if (m.type == MessageType::Hello) m.display_name = config_.display_name;
   m.protocol = config_.compatibility.protocol;
   m.sequence = ++sequence_;
   m.epoch = epoch_;
@@ -90,6 +94,7 @@ void CoopSession::Receive(const Message& m, double now) {
       Message reject; reject.type = MessageType::Reject; reject.reason = rejection_;
       Send(reject, true); Transition(SessionState::Ended); return;
     }
+    partner_name_ = m.display_name;
     hello_seen_ = true;
     Message ack; ack.type = MessageType::HelloAck; Send(ack, true);
     last_receive_ = now;
