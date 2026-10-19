@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <cstring>
+#include <string>
 
 #include "backend/cpu_profile.h"
+#include "backend/gpu_loss.h"
 #include "backend/guest_device.h"
 #include "backend/thread_scheduling.h"
 
@@ -80,6 +82,10 @@ ThreadedSink::~ThreadedSink() {
     stop_ = true;
   }
   work_cv_.notify_all();
+  // Task 266: a thread waiting for room or for a ticket also wakes on stop_ (its wait checks it), but was
+  // never told: one whose ticket never came stayed blocked on a condition variable about to be destroyed.
+  room_cv_.notify_all();
+  done_cv_.notify_all();
   thread_.join();
 }
 
@@ -302,13 +308,22 @@ void ThreadedSink::Run() {
       c->snapshot.device_address = c->device_address;
     }
     SnapshotGuestMemory::SetCurrent(&c->snapshot);
-    switch (c->kind) {
-      case Kind::kClear: inner_.OnClear(c->clear); break;
-      case Kind::kDraw: inner_.OnDraw(c->draw); break;
-      case Kind::kResolve: inner_.OnResolve(c->resolve); break;
-      case Kind::kPresent: inner_.OnPresent(c->present_frame, c->present_rt0, c->present_device); break;
+    std::string gpu_error;
+    try {
+      switch (c->kind) {
+        case Kind::kClear: inner_.OnClear(c->clear); break;
+        case Kind::kDraw: inner_.OnDraw(c->draw); break;
+        case Kind::kResolve: inner_.OnResolve(c->resolve); break;
+        case Kind::kPresent: inner_.OnPresent(c->present_frame, c->present_rt0, c->present_device); break;
+      }
+    } catch (const std::system_error& e) {
+      // Task 266: a Vulkan error thrown inside NVRHI on this thread (a lost device while recording or
+      // submitting) goes to the device-loss path (gpu_loss.h); anything else keeps its old path.
+      if (!IsVulkanError(e) || !GpuLossReporting()) throw;
+      gpu_error = std::string("render thread: ") + e.what();
     }
     SnapshotGuestMemory::SetCurrent(nullptr);
+    if (!gpu_error.empty()) ReportGpuLoss(gpu_error.c_str());
     const bool was_present = c->kind == Kind::kPresent;
     lock.lock();
     if (free_.size() < kMaxFreeCommands) free_.push_back(std::move(c));

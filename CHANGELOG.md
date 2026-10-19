@@ -27,6 +27,7 @@ version's notes the first time you start it.
 - **Ambient occlusion now shades Jack's hands** and the gun he holds in chapters where they were drawn without it (such as the Hayes chapters): the creases of his fingers and the gun are darker like the world around him. With ambient occlusion off nothing changes.
 - **Finishing a chapter from Chapter select now plays the PS2 cutscene that follows it** (when the PS2 cutscenes are restored), as in story play, before the Score pages. Afterwards you are back in the main menu's Play menu.
 - **Fewer long freezes when a chapter starts while shaders are still being prepared.** The game no longer waits long for a missing shader: some things may appear a moment later instead.
+- **Graphics driver resets and running out of video memory**: the game now restarts safely (on the other graphics API if needed, with a notice) instead of crashing silently, and the launcher no longer closes when shader preparation hits a graphics error.
 
 ### Changed
 - **Every setting explains itself.** The panel beside the settings, in the launcher and in the pause menu, now says what each setting does, what you will notice in the game, what each option changes, and shows its performance and video memory impact and when a change takes effect. In five languages.

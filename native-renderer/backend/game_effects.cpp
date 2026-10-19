@@ -21,6 +21,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "backend/gpu_loss.h"
 #include "backend/game_renderer.h"
 #include "backend/game_upscale.h"
 #include "backend/log.h"
@@ -161,15 +162,21 @@ void GameRenderer::UpdateUpscaler(UpscaleConfig want) {
         const auto start = std::chrono::steady_clock::now();
         PreparedUpscaler p;
         p.config = want;
-        p.upscaler = CreateUpscaler(device, want, &p.chosen, &p.why);
-        if (p.upscaler) {
-          // The SDK's context too, for the sizes UpscaleSetup will give it (the frame's).
-          const UpscalerSize out{RoundSize(gw, sx), RoundSize(gh, sy)};
-          UpscalerSize in = p.upscaler->InputSize(out);
-          in.width = std::clamp(in.width, 1u, out.width);
-          in.height = std::clamp(in.height, 1u, out.height);
-          p.upscaler->Prepare(in, out);
-        }
+        std::string error;
+        p.upscaler = BuildOrEmpty([&] {
+          std::unique_ptr<Upscaler> made = CreateUpscaler(device, want, &p.chosen, &p.why);
+          if (made) {
+            // The SDK's context too, for the sizes UpscaleSetup will give it (the frame's).
+            const UpscalerSize out{RoundSize(gw, sx), RoundSize(gh, sy)};
+            UpscalerSize in = made->InputSize(out);
+            in.width = std::clamp(in.width, 1u, out.width);
+            in.height = std::clamp(in.height, 1u, out.height);
+            made->Prepare(in, out);
+          }
+          return made;
+        }, &error);
+        // Task 268: a Vulkan error while making it: none (the bilinear stretch, as when nothing is available).
+        if (!error.empty()) p.why += (p.why.empty() ? "" : "; ") + std::string("graphics device error: ") + error;
         p.ms = MsSince(start);
         return p;
       });
@@ -281,8 +288,13 @@ void GameRenderer::UpdateGi(const GiConfig& want) {
   } else if (!gi_build_.valid() && !gi_build_failed_) {
     gi_build_ = std::async(std::launch::async, [this, device = device_, config = want, rules = options_.ao.rules] {
       std::shared_lock creation_lock(creation_mutex_);
-      auto scene = std::make_unique<SceneGi>(device, config, rules);
-      if (!scene->Initialize()) scene.reset();
+      std::string error;
+      auto scene = BuildOrEmpty([&] {
+        auto made = std::make_unique<SceneGi>(device, config, rules);
+        if (!made->Initialize()) made.reset();
+        return made;
+      }, &error);
+      if (!error.empty()) Logf(LogLevel::kWarning, "rexgpu-native: GI build: graphics device error (%s)", error.c_str());
       return scene;
     });
   }
@@ -353,8 +365,13 @@ void GameRenderer::UpdateLighting(const LightingConfig& want, float shadow_scale
     config.gpu_time = true;
     lighting_build_ = std::async(std::launch::async, [this, device = device_, config] {
       std::shared_lock creation_lock(creation_mutex_);
-      auto scene = std::make_unique<SceneLighting>(device, config);
-      if (!scene->Initialize()) scene.reset();
+      std::string error;
+      auto scene = BuildOrEmpty([&] {
+        auto made = std::make_unique<SceneLighting>(device, config);
+        if (!made->Initialize()) made.reset();
+        return made;
+      }, &error);
+      if (!error.empty()) Logf(LogLevel::kWarning, "rexgpu-native: lighting build: graphics device error (%s)", error.c_str());
       return scene;
     });
   }

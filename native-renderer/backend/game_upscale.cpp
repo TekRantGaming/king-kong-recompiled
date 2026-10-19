@@ -872,6 +872,13 @@ void GameRenderer::RunUpscale(nvrhi::ICommandList* cl, UpscaleFrameTracker::Trig
     u.framebuffers.clear();
     u.pass_sets.clear();
   }
+  if (!u.output) {
+    // Task 266: out of video memory (e.g. a 4 GB card at 4K output) left a null output that went into the
+    // upscaler's evaluate and the copy below. Skip the upscale this frame, as when the inputs are missing.
+    u.running = false;
+    if (u.timer) u.timer->End(cl);
+    return;
+  }
   const UpscalerSize out_size{std::min(RoundSize(options_.guest_frame_width, u.out_x), uint32_t(od.width)),
                               std::min(RoundSize(options_.guest_frame_height, u.out_y), uint32_t(od.height))};
 

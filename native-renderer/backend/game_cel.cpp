@@ -6,6 +6,7 @@
 
 #include <chrono>
 
+#include "backend/gpu_loss.h"
 #include "backend/game_renderer.h"
 #include "backend/log.h"
 #include "kknr/render_targets.h"
@@ -103,8 +104,13 @@ void GameRenderer::UpdateCel(const CelConfig& want) {
   } else if (!cel_build_.valid() && !cel_build_failed_) {
     cel_build_ = std::async(std::launch::async, [this, device = device_, config = options_.cel, rules = options_.ao.rules] {
       std::shared_lock creation_lock(creation_mutex_);
-      auto scene = std::make_unique<SceneCel>(device, config, rules);
-      if (!scene->Initialize()) scene.reset();
+      std::string error;
+      auto scene = BuildOrEmpty([&] {
+        auto made = std::make_unique<SceneCel>(device, config, rules);
+        if (!made->Initialize()) made.reset();
+        return made;
+      }, &error);
+      if (!error.empty()) Logf(LogLevel::kWarning, "rexgpu-native: cel shading build: graphics device error (%s)", error.c_str());
       return scene;
     });
   }
