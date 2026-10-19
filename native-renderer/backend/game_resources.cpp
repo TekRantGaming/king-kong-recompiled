@@ -408,7 +408,7 @@ GameRenderer::HostTexture* GameRenderer::UploadTexture(nvrhi::ICommandList* cl,
   host->pack_unavailable = host->pack_swept = false;
   host->pack_used_frame = frame_;
   UncapTexturePack(host);
-  if (host->pack_hash) pack_originals_.insert(host);
+  if (host->pack_hash) { pack_originals_.insert(host); pack_scan_ = true; }
   else pack_originals_.erase(host);
   if (texture_pack_stream_ && host->pack_hash) texture_pack_stream_->Request(host->pack_hash, host->plan);
   // Only a new resource can be moved ahead of this frame's earlier draws. The
@@ -563,7 +563,7 @@ uint32_t GameRenderer::BindTexture(nvrhi::ICommandList* cl, const uint32_t words
   bound_scale_y_ = host->scale_y;
   // Chapter-change bookkeeping: a bound original keeps (or asks again for) its replacement.
   host->pack_used_frame = frame_;
-  host->pack_swept = false;
+  if (host->pack_swept) { host->pack_swept = false; pack_scan_ = true; }
   if (options_.texture_pack && !pack_pressure_ && !r.entry->gpu_written && !host->alias_source &&
       host->replacement && host->replacement->pack_ready)
     host = host->replacement;
@@ -1140,6 +1140,7 @@ void GameRenderer::PrepareResourceRequests(nvrhi::ICommandList* cl,
       job.host_texture->pack_used_frame = frame_;
       if (job.host_texture->pack_hash) {
         pack_originals_.insert(job.host_texture.get());
+        pack_scan_ = true;
         if (texture_pack_stream_) texture_pack_stream_->Request(job.host_texture->pack_hash, job.host_texture->plan);
       }
       cl->beginTrackingTextureState(job.host_texture->texture, nvrhi::AllSubresources, nvrhi::ResourceStates::ShaderResource);

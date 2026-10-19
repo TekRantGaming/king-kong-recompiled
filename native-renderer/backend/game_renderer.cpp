@@ -981,6 +981,7 @@ void GameRenderer::EndFrame() {
     for (auto& [key, target] : targets_) if (target) target->clear_only = false;
   ProfileResources();
   EndStartUploadFrame();
+  LogTexturePackFrame();
   FlushUploads();
   if (upload_batch_) upload_batch_->EndFrame();
   if (tessellation_timer_) tessellation_timer_->FrameEnd();

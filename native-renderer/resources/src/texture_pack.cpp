@@ -1,6 +1,7 @@
 #include "kknr/texture_pack.h"
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <charconv>
 #include <cmath>
 #include <condition_variable>
@@ -334,6 +335,7 @@ struct TexturePackStream::Impl {
   std::condition_variable work;
   bool stop = false, configure = false;
   uint64_t generation = 0, ready_bytes = 0;
+  std::atomic<uint64_t> events{0};  // task 284: TexturePackStream::Events
   std::string folder, status;
   std::deque<Request> requests;
   std::set<std::string> seen;
@@ -411,6 +413,7 @@ struct TexturePackStream::Impl {
           const auto bytes=r.data->bytes.size();
           if (ready.emplace(batch[i].key,std::move(r.data)).second) ready_bytes+=bytes;
         }
+        events.fetch_add(1, std::memory_order_release);
       }
     }
   }
@@ -459,4 +462,5 @@ void TexturePackStream::Cancel(uint64_t hash, const HostTexturePlan& original) {
   impl_->seen.erase(key);
 }
 std::string TexturePackStream::Status() const { std::lock_guard lock(impl_->mutex); return impl_->status; }
+uint64_t TexturePackStream::Events() const { return impl_->events.load(std::memory_order_acquire); }
 }  // namespace kknr
